@@ -40,8 +40,9 @@ export interface BuildPayloadOpts {
   toolChoice?: 'auto' | 'none' | { type: 'function'; function: { name: string } };
   attachments?: any[];
   thinkingLevel?: ThinkingLevel;
-  /** Fast 档(会话键 fast):直连 Codex 订阅且模型目录声明了这一档时,请求带 service_tier=priority。托管面忽略。 */
-  fast?: boolean;
+  /** Fast 档(会话键 fast):直连 provider 的 fastTiers 列了这个模型时上 wire(Codex 订阅 / 官方 OpenAI / 官方 Anthropic,见 multiBrain)。
+   *  'ultra' = 极速档,只对 ultrafastTiers 列了的模型(官方 OpenAI astra / 6.1-sol)生效,其余按 Fast。托管面忽略。 */
+  fast?: boolean | 'ultra';
   stream?: boolean;
   /** 缓存路由键(传 sessionId):OpenAI 官方 API 的 prompt_cache_key,同会话请求粘到同一推理机提升前缀缓存命中。 */
   cacheKey?: string;
@@ -198,7 +199,7 @@ export interface ModelsBrain {
    * 本地直连 provider 列表(BYO-key,桌面/TUI 模型选择器用;绝不含 apiKey,baseUrl 仅供 UI 展示)。
    * 可选:仅 standalone 的 multiBrain 实现;forsionSeams/httpBrain 不实现 → 调用方跳过。
    */
-  listDirectProviders?(): Array<{ providerId: string; baseUrl?: string; modelIds?: string[]; imageModelIds?: string[]; ttsModelIds?: string[]; noVisionModelIds?: string[]; fastTiers?: Record<string, string> }>;
+  listDirectProviders?(): Array<{ providerId: string; baseUrl?: string; modelIds?: string[]; imageModelIds?: string[]; ttsModelIds?: string[]; noVisionModelIds?: string[]; fastTiers?: Record<string, string>; ultrafastTiers?: Record<string, string> }>;
   /**
    * modelId 是否命中本地直连 provider(`<providerId>/<模型>` 或 modelIds 精确匹配)。
    * 可选:仅 standalone 的 multiBrain 实现。agentLoop 据此在云端不可达(未登录 Forsion)时
@@ -283,7 +284,9 @@ export interface AgentFilePutBody {
 /** paths = 服务端回带的、它认识的可选路径族('human' = agent 文件夹里的 HUMAN.md;'human-folder' = 人的文件夹 __human__ 整个槽位;'widget-data' = 小组件的记录 WidgetData/<id>/data.db)。老服务端不回带 → 那一族本次不同步(推上去只会 400)。
  *  反方向同理:客户端请求清单时声明自己认识哪些族,服务端只对声明了的客户端列出那些文件(老客户端见到不认识的路径会判整次同步失败)。 */
 /** legacy:这个账号还有谁在用人的资料的旧位置(目前只有 'user-md' = 云端 USER.md);服务端没说 = 不知道。legacySeenAt:最后一次见到旧客户端(毫秒)。 */
-export type AgentManifest = Array<{ slug: string; files: AgentFileMeta[] }> & { paths?: string[]; legacy?: string[]; legacySeenAt?: number | null };
+/** agentArchive:这个账号云端的 Agent 数据进了存档(老账号 B,2026-11-06);有它就不再碰任何 Agent,只同步 human/。
+ *  只有声明了 agent-archive 的客户端拿得到;没声明的旧客户端在已存档账号上整轮收到 410。 */
+export type AgentManifest = Array<{ slug: string; files: AgentFileMeta[] }> & { paths?: string[]; legacy?: string[]; legacySeenAt?: number | null; agentArchive?: { state: string; at: number | null } };
 export interface AgentFilesBrain {
   getManifest(userId: string, opts?: { signal?: AbortSignal }): Promise<AgentManifest>;
   getFile(userId: string, slug: string, relPath: string, opts?: { signal?: AbortSignal }): Promise<AgentFileContent | null>;
@@ -319,7 +322,21 @@ export interface ImageGenRequest {
    *  'xhigh'/'max' 仅 gpt-image-2.5+ 有,档位直接换算成 output_tokens(实测 low 425 → xhigh 1650)。
    *  ⚠️不传就不发这个字段 —— 让上游用自己的缺省,别在这里替用户选贵档。 */
   quality?: string;
+  outputFormat?: 'png' | 'gif';
+  frameCount?: number;
+  frameDurationMs?: number;
+  complexity?: 'low' | 'medium' | 'high';
   signal?: AbortSignal;
+}
+
+/** Fields shared by the hosted JSON, direct JSON and direct multipart image requests. */
+export function imageOutputFields(req: ImageGenRequest) {
+  return {
+    ...(req.outputFormat ? { output_format: req.outputFormat } : {}),
+    ...(req.outputFormat === 'gif' && req.frameCount !== undefined ? { frame_count: req.frameCount } : {}),
+    ...(req.outputFormat === 'gif' && req.frameDurationMs !== undefined ? { frame_duration_ms: req.frameDurationMs } : {}),
+    ...(req.complexity ? { complexity: req.complexity } : {}),
+  };
 }
 export interface ImageGenResult {
   /** `mime` must describe the bytes: Seedream answers JPEG even when everything else is PNG, and edit_image
@@ -486,6 +503,9 @@ export interface GitHostingBrain {
   info(opts?: { signal?: AbortSignal }): Promise<GitHostingInfo>;
   /** 给当前用户发一枚这台设备专用的访问令牌(password)。同一个设备名再要一次,旧的那枚作废;服务端对同一用户限次。 */
   credential(device: string, opts?: { signal?: AbortSignal }): Promise<{ webUrl: string; username: string; password: string }>;
+  /** 当前用户所在、开了 Forsion Git 的商业版组织(`/api/org/me` + `/api/git/orgs/:id`):gitName = 站上的组织名,name = 组织显示名。
+   *  云端没有商业版 / 没开 Forsion Git → [];连不上 / 5xx → 抛 GitHostingError(调用方当作读不到,不是「没有」)。 */
+  orgs?(opts?: { signal?: AbortSignal }): Promise<Array<{ gitName: string; name: string }>>;
 }
 
 // ── 绑定的 GitHub 账号(对端 server microserver/github 的 /api/github/{status,credential};绑定 / 解绑只在账户中心做)──

@@ -10,7 +10,7 @@ import './MarketUpgrade.css'
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import {
   AlertCircle, ArrowLeft, ArrowRight, Bot, Check, Clock, Coins, Compass, Crown, Download, ExternalLink,
-  GitBranch, Globe, LayoutGrid, Library, Loader2, Monitor, Package, PackageOpen, Palette, Puzzle,
+  GitBranch, Globe, KeyRound, LayoutGrid, Library, Loader2, Monitor, Package, PackageOpen, Palette, Puzzle,
   RefreshCw, Search, Send, Settings, ShieldCheck, Sparkles, Trash2, Wrench, X, ChevronDown, Plug,
 } from 'lucide-react'
 import { Skeleton, useNativeChromeClaim, useNativeChromeInstalled } from '@lcl/engine'
@@ -18,7 +18,7 @@ import { registerMessages, useI18n } from '../i18n'
 import { formatDate as formatDateLabel } from '../format/time'
 import { useApp } from '../stores/appStore'
 import { Markdown } from './Markdown'
-import { listMarket, getMarketDetail, installMarket, listInstalled, onInstallProgress, isDesktopOnlyItem, DESKTOP_ONLY_TAG, type InstalledItem } from '../services/marketService'
+import { listMarket, getMarketDetail, installMarket, listInstalled, onInstallProgress, isDesktopOnlyItem, isReservedMarketTag, itemEntitlement, type InstalledItem } from '../services/marketService'
 import { forgetUserSpace, loadUserSpaces } from '../userSpaces'
 import { useTheme } from '../stores/themeStore'
 import { pluginVaultFolder, pluginWanted, runningDependents, unmetPluginDeps, usePluginStore } from '@amadeus/plugins/pluginStore'
@@ -40,7 +40,8 @@ import type { MarketCard, MarketDetail, MarketInstallProgress } from '../types'
 import { PluginSettingsView, RequiredPlugins, type RequiredPluginsStore } from './AmadeusPluginsTab'
 import { isPlacedSettingsView, pluginDisplayName } from '../amadeus/plugins/display'
 import { installableDeps, planDeps, type DepPlan } from '../marketDeps'
-import { MarketPluginAutoUpdate, useMarketPluginUpdates } from './MarketPluginAutoUpdate'
+import { AutoUpdateAllRow, PinnedChip, PluginVersionBlock, useMarketPluginUpdates } from './MarketPluginAutoUpdate'
+import { ipcErrorText } from '../ipcError'
 import { compareMarketVersions } from '../../../shared/marketPluginUpdates'
 import { ConnectorStore } from './Connectors'
 import { connectorsSupported } from '../services/connectorService'
@@ -326,8 +327,29 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
   }
   const isInstalled = (c: MarketCard): boolean => !!installedEntry(c)
   const hasUpdate = (c: MarketCard): boolean => isNewer(c.latestVersion, installedEntry(c)?.version ?? null)
-  const autoUpdate = (c: MarketCard) => (c.type === 'plugin' || c.type === 'amadeus-plugin') && isInstalled(c)
-    ? <MarketPluginAutoUpdate id={c.id} item={pluginUpdates.items.find((x) => x.id === c.id)} disabled={!!installing[c.id] || uninstalling === c.id} onError={(text) => toast(text, true)} /> : null
+  const updateItem = (c: MarketCard) => pluginUpdates.items.find((x) => x.id === c.id)
+  /** 本机版本库里这一项留着的旧版本(按真实装在哪个插件目录找)。 */
+  const keptOf = (c: MarketCard) => {
+    const info = installedInfo(c)
+    return updateItem(c)?.keptVersions ?? pluginUpdates.local.find((x) => x.type === info?.realType && x.slug === c.installSlug)?.keptVersions ?? []
+  }
+  /** 回退到本机留着的版本:换目录、不联网;之后走和安装同一条装后重载。 */
+  const onRollback = async (c: MarketCard, version: string): Promise<void> => {
+    const info = installedInfo(c)
+    if (!info || !window.tangu?.marketRollback) return
+    setNotice(null)
+    try {
+      const res = await window.tangu.marketRollback(info.realType, c.installSlug, version, { id: c.id, name: c.name })
+      if (res.deferred) { toast(t('market.rollbackDeferred', { name: c.name, version: `v${version}` })); return }
+      const { restart } = await afterMarketInstall(res.type, res, true, toast)
+      if (restart) offerRestart(t('market.pluginInstalledRestartHint'))
+      else toast(t('market.rolledBack', { name: c.name, version: `v${version}` }))
+      await scanCatalog()
+    } catch (e) { toast(t('market.rollbackFailed', { error: ipcErrorText(e) }), true) }
+  }
+  const versionBlock = (c: MarketCard) => (c.type === 'plugin' || c.type === 'amadeus-plugin') && isInstalled(c)
+    ? <PluginVersionBlock id={c.id} item={updateItem(c)} installedVersion={installedEntry(c)?.version} kept={keptOf(c)} autoUpdateAll={pluginUpdates.autoUpdateAll}
+      disabled={!!installing[c.id] || uninstalling === c.id} onError={(text) => toast(text, true)} onRollback={(version) => onRollback(c, version)} /> : null
 
   const canOpenSettings = (c: MarketCard): boolean => {
     const realType = installedInfo(c)?.realType
@@ -566,8 +588,17 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
   const desktopOnlyHere = (c: MarketCard): boolean => isDesktopOnlyItem(c) && !!window.tangu?.mobile
   const desktopBadge = (c: MarketCard) => isDesktopOnlyItem(c)
     ? <span className="mk-desktop-badge" data-market-desktop-only={c.id} title={t('market.desktopOnlyHint')}><Monitor size={11} />{t('market.desktopOnly')}</span> : null
+  /** 需要账号权益的包(保留标签 entitlement:<name>):一枚标记,不挡安装。 */
+  const entitlementLabel = (c: MarketCard): string | null => {
+    const name = itemEntitlement(c)
+    return !name ? null : name === 'business' ? t('market.requiresBusiness') : t('market.requiresEntitlement', { name })
+  }
+  const entitlementBadge = (c: MarketCard) => {
+    const label = entitlementLabel(c)
+    return label ? <span className="mk-desktop-badge" data-market-entitlement={c.id} title={t('market.requiresHint')}><KeyRound size={11} />{label}</span> : null
+  }
   /** 给人看的标签:保留标签已经画成标记了,不再当普通标签重复一遍。 */
-  const shownTags = (c: MarketCard): string[] => (c.tags || []).filter((tag) => tag !== DESKTOP_ONLY_TAG)
+  const shownTags = (c: MarketCard): string[] => (c.tags || []).filter((tag) => !isReservedMarketTag(tag))
 
   const installBtn = (c: MarketCard, extraClass = '') => {
     // 「仅桌面」先判:通用兼容性也把这枚保留标签算作 platform,排在前面的话手机上只剩一句「当前端不可用」,
@@ -736,8 +767,10 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
         <div className="mk-card-eyeline">
           <span>{kindLabel[c.type]}</span>
           {isInstalled(c) && <span className="mk-installed-badge"><Check size={11} />{t('market.installed')}</span>}
+          {isInstalled(c) && <PinnedChip item={updateItem(c)} />}
           {waitingDeps(c) && <span className="mk-waiting-badge" data-market-waiting={c.id}>{t('settings.amadeusPlugins.waitingDeps')}</span>}
           {desktopBadge(c)}
+          {entitlementBadge(c)}
           {/* 「未声明」对挑插件没帮助，只在详情页的「Forsion 版本要求」里写(DESIGN §6 插件商店) */}
           {marketplaceCompatibility(c, appVersion, marketPlatform()) !== 'unknown' && <MarketRequirements item={c} version={appVersion} />}
         </div>
@@ -749,7 +782,6 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
           {installBtn(c)}
           {uninstallBtn(c)}
         </div>
-        {autoUpdate(c)}
       </div>
     </article>
   )
@@ -842,7 +874,7 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
           onConfirm={(opts) => { const a = asking; void uninstallForsionPlugin(a.plugin, a.c.name, opts, { engine: true }).then((ok) => { if (ok) return afterDialogUninstall(a.c, 'amadeus-plugin', a.c.installSlug) }) }} />}
 
         {!storeOnly && !detail && !detailLoading && !storeView && tab !== 'connector' && <div className="mk-upgrade-filters">
-          <label className="mk-filter-pill"><span>{t('market.tagLabel')}</span><select aria-label={t('market.tagLabel')} value={tagFilter} onChange={e => setTagFilter(e.target.value)}><option value="">{t('market.tagAllShort')}</option>{[...new Set(catalog.flatMap(c => c.tags || []))].sort().map(tag => <option key={tag} value={tag}>{tag}</option>)}</select><ChevronDown size={13} aria-hidden="true" /></label>
+          <label className="mk-filter-pill"><span>{t('market.tagLabel')}</span><select aria-label={t('market.tagLabel')} value={tagFilter} onChange={e => setTagFilter(e.target.value)}><option value="">{t('market.tagAllShort')}</option>{[...new Set(catalog.flatMap(c => shownTags(c)))].sort().map(tag => <option key={tag} value={tag}>{tag}</option>)}</select><ChevronDown size={13} aria-hidden="true" /></label>
           <button type="button" className="mk-filter-chip" aria-pressed={compatibleOnly} data-market-compat-filter onClick={() => setCompatibleOnly(!compatibleOnly)}><Check size={13} aria-hidden="true" />{t('market.compatibleOnly')}</button>
           <span className="mk-filter-version">Forsion {appVersion}</span>
         </div>}
@@ -853,14 +885,14 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
               <div className="mk-detail-hero"><div className="mk-detail-icon"><ItemIcon url={detail.iconUrl} type={detail.type} size={36} /></div><div className="mk-detail-intro"><span className="mk-detail-kind">{kindLabel[detail.type]}</span><h2>{detail.name}</h2><p>{detail.summary || t('market.summaryFallback')}</p><div className="mk-detail-byline">{t('market.author')} {detail.author}<span aria-hidden="true"> · </span>{t('market.downloads', { n: detail.downloads })}</div></div></div>
               <div className="mk-detail-layout">
                 <main className="mk-detail-main"><nav className="mk-detail-tabs" aria-label={t('market.viewDetails')}>{['overview', 'comments', 'versions'].map(tab => <button key={tab} className={`btn sm ghost ${detailTab === tab ? 'active' : ''}`} aria-pressed={detailTab === tab} onClick={() => setDetailTab(tab)}>{t(`market.${tab}`)}</button>)}</nav>
-                  {detailTab === 'comments' ? <MarketDiscussion key={detail.id} item={detail} /> : detailTab === 'versions' ? <MarketVersions key={detail.id} item={detail} appVersion={appVersion} installing={!!installing[detail.id]} onInstall={version => void onInstall(detail, version)} /> : <><div className="mk-detail-section-title">{t('market.overview')}</div>{!!shownTags(detail).length && <div className="mk-tags">{shownTags(detail).map(tag => <span key={tag}>{tag}</span>)}</div>}{detail.description && <p className="mk-description">{detail.description}</p>}<div className="mk-readme md-body">{detail.readme ? <Markdown content={detail.readme} /> : <span className="mk-muted">{t('market.readmeEmpty')}</span>}</div></>}
+                  {detailTab === 'comments' ? <MarketDiscussion key={detail.id} item={detail} /> : detailTab === 'versions' ? <MarketVersions key={detail.id} item={detail} appVersion={appVersion} installing={!!installing[detail.id]} onInstall={version => void onInstall(detail, version)} installedVersion={installedEntry(detail)?.version} pinnedVersion={updateItem(detail)?.pinnedVersion} kept={keptOf(detail)} onRollback={version => void onRollback(detail, version)} /> : <><div className="mk-detail-section-title">{t('market.overview')}</div>{!!shownTags(detail).length && <div className="mk-tags">{shownTags(detail).map(tag => <span key={tag}>{tag}</span>)}</div>}{detail.description && <p className="mk-description">{detail.description}</p>}<div className="mk-readme md-body">{detail.readme ? <Markdown content={detail.readme} /> : <span className="mk-muted">{t('market.readmeEmpty')}</span>}</div></>}
                 </main>
                 <aside className="mk-detail-sidebar">
-                  <div className="mk-detail-actions">{installBtn(detail, 'mk-wide-btn')}{uninstallBtn(detail, true)}{canOpenSettings(detail) && <button className="btn sm mk-wide-btn" onClick={() => openPluginSettings(detail)}><Settings size={13} />{t('market.openSettings')}</button>}{autoUpdate(detail)}</div>
+                  <div className="mk-detail-actions">{installBtn(detail, 'mk-wide-btn')}{uninstallBtn(detail, true)}{canOpenSettings(detail) && <button className="btn sm mk-wide-btn" onClick={() => openPluginSettings(detail)}><Settings size={13} />{t('market.openSettings')}</button>}{versionBlock(detail)}</div>
                   {detailPlugin && <RequiredPlugins p={detailPlugin} store={depsStore(detailPlugin)} />}
                   {detail.type === 'skill' && !isInstalled(detail) && <SkillAgentPicker hint agents={skillAgents} choice={skillChoice[detail.id] ?? null} disabled={!!installing[detail.id]} onChange={(next) => setSkillChoice((m) => ({ ...m, [detail.id]: next }))} />}
                   <div className="mk-trust-row"><ShieldCheck size={17} /><div><strong>{t('market.reviewed')}</strong><span>{t('market.reviewedHint')}</span></div></div>
-                  <MarketRequirements item={detail} version={appVersion} /><dl className="mk-facts"><div><dt>{t('market.forsionVersion')}</dt><dd>{requirementsText(detail)}</dd></div><div><dt>ID</dt><dd className="mk-id-value">{detail.id}<button className="btn sm ghost" onClick={() => void navigator.clipboard.writeText(detail.id)}>{t('market.copyId')}</button></dd></div>{!!detail.platforms?.length && <div><dt>{t('market.platform')}</dt><dd>{detail.platforms.join(' · ')}</dd></div>}<div><dt>{t('market.type')}</dt><dd>{kindLabel[detail.type]}</dd></div><div><dt>{t('market.version')}</dt><dd>{detail.latestVersion ? `v${detail.latestVersion}` : t('market.unknown')}</dd></div>{isDesktopOnlyItem(detail) && <div><dt>{t('market.platform')}</dt><dd>{t('market.desktopOnly')}</dd></div>}<div><dt>{t('market.source')}</dt><dd>{detail.source === 'github' ? 'GitHub' : detail.source === 'npm' ? 'npm' : t('market.sourceUpload')}</dd></div>{!!formatDate(detail.updatedAt || detail.createdAt) && <div><dt>{t('market.updated')}</dt><dd>{formatDate(detail.updatedAt || detail.createdAt)}</dd></div>}</dl>
+                  <MarketRequirements item={detail} version={appVersion} /><dl className="mk-facts"><div><dt>{t('market.forsionVersion')}</dt><dd>{requirementsText(detail)}</dd></div><div><dt>ID</dt><dd className="mk-id-value">{detail.id}<button className="btn sm ghost" onClick={() => void navigator.clipboard.writeText(detail.id)}>{t('market.copyId')}</button></dd></div>{!!detail.platforms?.length && <div><dt>{t('market.platform')}</dt><dd>{detail.platforms.join(' · ')}</dd></div>}<div><dt>{t('market.type')}</dt><dd>{kindLabel[detail.type]}</dd></div><div><dt>{t('market.version')}</dt><dd>{detail.latestVersion ? `v${detail.latestVersion}` : t('market.unknown')}</dd></div>{isDesktopOnlyItem(detail) && <div><dt>{t('market.platform')}</dt><dd>{t('market.desktopOnly')}</dd></div>}{!!entitlementLabel(detail) && <div data-market-entitlement-fact={detail.id}><dt>{t('market.access')}</dt><dd title={t('market.requiresHint')}>{entitlementLabel(detail)}</dd></div>}<div><dt>{t('market.source')}</dt><dd>{detail.source === 'github' ? 'GitHub' : detail.source === 'npm' ? 'npm' : t('market.sourceUpload')}</dd></div>{!!formatDate(detail.updatedAt || detail.createdAt) && <div><dt>{t('market.updated')}</dt><dd>{formatDate(detail.updatedAt || detail.createdAt)}</dd></div>}</dl>
                   {detail.npmPackage && <a className="mk-repo-link" href={`https://www.npmjs.com/package/${encodeURIComponent(detail.npmPackage)}`} target="_blank" rel="noreferrer"><Package size={14} />{detail.npmPackage}<ExternalLink size={12} /></a>}
                   {detail.githubRepoUrl && <a className="mk-repo-link" href={detail.githubRepoUrl} target="_blank" rel="noreferrer"><GitBranch size={14} />{t('market.openRepo')}<ExternalLink size={12} /></a>}
                 </aside>
@@ -889,7 +921,7 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
               ? <PluginSettingsView pluginId={submissionView.pluginId} def={submissionView.item} bare />
               : <section className="mk-submit"><div className="mk-submit-copy"><span>{t('market.submitKicker')}</span><h2>{t('market.submitTitle')}</h2><p>{t('market.submitHint')}</p><button className="btn primary" onClick={() => void window.tangu?.openAccountCenter?.('submission')}><ExternalLink size={15} />{t('market.submitOpen')}</button></div><div className="mk-submit-art"><PackageOpen size={44} /><strong>{t('market.submitArtTitle')}</strong><span>{t('market.submitArtHint')}</span></div></section>
             ) : (
-              <section className="mk-section">{/* 只有一个分区:页标题已说了是哪一类、计数在副标题里，不再画分区标题;「可更新」只留检查按钮 */}{tab === 'updates' && window.tangu?.marketCheckUpdates && <div className="mk-section-head mk-section-tools"><button className="btn sm" disabled={pluginUpdates.checking} onClick={() => void window.tangu!.marketCheckUpdates!().then(scanCatalog).catch((error) => toast(String(error?.message || error), true))}><RefreshCw size={14} />{t('market.autoUpdateCheck')}</button></div>}{tab === 'updates' && !scanning && updatable.length === 0 && !query ? <div className="mk-state-card"><Check size={28} /><strong>{t('market.allUpToDate')}</strong><span>{t('market.allUpToDateHint')}</span></div> : catalogState(visibleCatalog)}</section>
+              <section className="mk-section">{/* 只有一个分区:页标题已说了是哪一类、计数在副标题里，不再画分区标题;「可更新」只留检查按钮 */}{tab === 'updates' && window.tangu?.marketCheckUpdates && <div className="mk-section-head mk-section-tools"><AutoUpdateAllRow state={pluginUpdates} onError={(text) => toast(text, true)}><button className="btn sm" disabled={pluginUpdates.checking} onClick={() => void window.tangu!.marketCheckUpdates!().then(scanCatalog).catch((error) => toast(String(error?.message || error), true))}><RefreshCw size={14} />{t('market.autoUpdateCheck')}</button></AutoUpdateAllRow></div>}{tab === 'updates' && !scanning && updatable.length === 0 && !query ? <div className="mk-state-card"><Check size={28} /><strong>{t('market.allUpToDate')}</strong><span>{t('market.allUpToDateHint')}</span></div> : catalogState(visibleCatalog)}</section>
             )}
         </div>
       </section>

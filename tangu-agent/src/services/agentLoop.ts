@@ -30,7 +30,7 @@ import path from 'node:path';
 import { agentsDir, DEFAULT_AGENT_SLUG, engineLibDir } from '../core/tanguHome.js';
 import { renderAboutHuman } from '../agents/humanFolder.js';
 import { getRun, updateRunStatus, appendStep, listPendingRunsForRecovery, failStaleRuns } from './runStore.js';
-import { getToolDefinitions, executeTool, getToolCapabilities, listDeferredTools, deferredUnlocksFromHistory, type ToolContext } from '../tools/registry.js';
+import { getToolDefinitions, executeTool, getToolCapabilities, listDeferredTools, deferredCatalogSection, deferredUnlocksFromHistory, type ToolContext } from '../tools/registry.js';
 import { actionDeliveryNudgeNeeded, ACTION_DELIVERY_CHECK } from './actionDeliveryCheck.js';
 import { declaredPersistPlaceholder } from '../tools/toolRegistry.js';
 import type { DisplayFileItem } from '../tools/toolTypes.js';
@@ -54,7 +54,7 @@ import {
   ContextUsageTracker, CompactionAttemptGuard, assistantTurnOf, markLossy, HISTORY_MSG_MAX_CHARS,
 } from './contextBudget.js';
 import {
-  getLatestSummary, compactWorkingMessages, compactSession, summaryMessage, rowCoverage,
+  getLatestSummary, compactWorkingMessages, compactSession, summaryMessage, rowCoverage, idleCompactionDue,
   tagMessageSource, messageSource, persistCheckpoint, messageTimestamp, type CompactBoundary,
 } from './compaction.js';
 import { compactionSettingsFor, type CompactionSettings } from './compactionSettings.js';
@@ -93,6 +93,8 @@ import { listPluginMetas } from '../plugins/registry.js';
 import { isPluginEnabledSync } from '../plugins/settingsStore.js';
 import { prepareAgentFilesForRun, scheduleAgentFilesSync } from './agentFileSync.js';
 import { buildAgentMemoryContext } from './memoryRecall.js';
+import { filterTaggedEntries, filterTaggedText, foldNote } from '../contracts/deviceTags.js';
+import { runTagContext, textForThisDevice } from './deviceTagContext.js';
 import { buildProjectMemoryContext, resolveProjectMemory } from './projectMemory.js';
 import { computerHistoryDigest, computerHistoryRecallHide } from './computerHistory.js';
 import { takeWorkspaceUploads, withUploadRefs } from './workspaceUploads.js';
@@ -1527,7 +1529,12 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // 换 CODING_CONTRACT_SECTION。用户显式选择的自定义 agent 不受影响(人格照注,契约叠加)。
     const suppressCompanionPersona = ps.persona === 'suppress' && activeAgentSlug === DEFAULT_AGENT_SLUG;
     const notesApply = execMode === 'host' && !inlineMemberDef && !suppressCompanionPersona;
-    const harnessEntries = notesApply ? await loadHarness(activeAgentSlug).catch(() => []) : [];
+    // 按条标适用范围(11-06,contracts/deviceTags.ts):指令、人格、工作笔记、记忆里标了别台 / 别的系统的,这一轮不拼进来,折成一行。
+    // 本机引擎 = 这台电脑;云端 run 不在任何一台电脑上,标了的一律折起来。每个 run 现读(同步页上改了名,下一轮就对得上)。
+    const tagCtx = runTagContext(!!profile.capabilities.hostExec);
+    const harnessTagged = filterTaggedEntries(notesApply ? await loadHarness(activeAgentSlug).catch(() => []) : [], (e) => e.title, tagCtx);
+    // 标题没标、正文里有标了别台的行:正文也按本机挑(Codex 评审 11-06),折掉的算进同一行
+    const harnessEntries = harnessTagged.kept.map((e) => { const b = filterTaggedText(e.body, tagCtx); harnessTagged.skipped.push(...b.skipped); return b.skipped.length ? { ...e, body: b.text } : e; }); // 别台的装备条目也不收起本机的工具
     const shelved = shelvedOf(harnessEntries);
     // 启用技能的装载（渐进式披露:目录进 prompt、全文按需 use_skill）——见 services/skillLoadout.ts。
     const skillLoadout = await loadSkillLoadout(userId, appId, agentConfig, shelved.skills);
@@ -1568,10 +1575,10 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // (suppressCompanionPersona 在本 run 开头读工作笔记处已定义:coding 预设 × 默认 agent 时人格与笔记一并跳过。)
     // 系统块按「稳定 → 易变」排布,让记忆改写只失效最短后缀(单 pin 单断点,见末尾 pinMessage)。
     // 1) developer_instructions(config.toml;身份/稳定)
-    if (agentConfig.systemPrompt && !suppressCompanionPersona) systemParts.push(String(agentConfig.systemPrompt));
+    if (agentConfig.systemPrompt && !suppressCompanionPersona) systemParts.push(textForThisDevice(String(agentConfig.systemPrompt), tagCtx));
     // 2) SOUL.md 人格(身份/稳定)
     if (agentConfig.soul && String(agentConfig.soul).trim() && !suppressCompanionPersona) {
-      systemParts.push('## Persona\nThe following is your persona; act according to its tone and values, but do not recite it verbatim.\n\n' + String(agentConfig.soul).trim());
+      systemParts.push('## Persona\nThe following is your persona; act according to its tone and values, but do not recite it verbatim.\n\n' + textForThisDevice(String(agentConfig.soul).trim(), tagCtx));
     }
     // 2') 身份段(当前名字 / 简介):人格正文常写死旧名,不注入则改名后模型仍自称旧名(09-18)。随人格一起被 coding 预设抑制。
     if (agentProfile && !suppressCompanionPersona) systemParts.push(agentIdentitySection(agentProfile));
@@ -1593,7 +1600,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     //     随人格一起被 coding 预设抑制。
     //     条目在本 run 开头已读好(harnessEntries,见 loadSkillLoadout 上方)。
     const harnessBlock = renderHarnessSection(harnessEntries);
-    if (harnessBlock) systemParts.push(harnessBlock);
+    const harnessFold = foldNote(harnessTagged.skipped);
+    if (harnessBlock || harnessFold) systemParts.push([harnessBlock || '## My Evolution Record (self-curated)', harnessFold].filter(Boolean).join('\n'));
     ctxMark('harness');
     // HUMAN is collaboration context, including projectless Chat and Coding. It never
     // changes tool permissions. All documents are read anew at each user turn.
@@ -1756,7 +1764,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       // (P1 · M1A,G7)。run 自己带远程污点时不藏 —— 远端内容回到远端 run 不是洗白。显式的 search_sessions / read_session 另见工具。
       // 远程污点只存在于本机引擎(hostExec):云端 / thin worker 不带这个键,免得 PG 谓词与网关路由为一个恒空的集合跑一遍。
       const hideRemoteSessions = profile.capabilities.hostExec && !effectiveRemote({ remote, runId });
-      const memoryContext = await buildAgentMemoryContext({ userId, appId, agentSlug: activeAgentSlug,
+      const memoryContext = await buildAgentMemoryContext({ userId, appId, agentSlug: activeAgentSlug, deviceTags: tagCtx,
         query: typeof input.message === 'string' ? input.message : '', excludeSessionId: sessionId, hideSessionsWithTool, hideRemoteSessions, signal: ac.signal });
       if (volatilePlacement === 'system') {
         if (memoryContext.content) systemParts.push(MEMORY_BLOCK_HEADER + memoryContext.content);
@@ -1783,7 +1791,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // deferred 工具目录(P0-2,借 pi deferred-tools):defer 工具的定义不进 defs,系统提示只留
     // 一行/工具的目录(列全量、不随解锁状态变——稳定文本护前缀缓存);模型经 load_tools 按需解锁,
     // 解锁只活在本 run(与 use_skill 每-run 按需同模式;hydrate 不带 tool_calls,历史重放无数据源)。
-    // 系统驱动的 run(Muse/自动化)不吃这套:registry 全量可见,目录段也不注入。
+    // 系统驱动的 run(Muse/自动化)的内置工具不吃这套:registry 全量可见;MCP 工具照样按需(11-06,见 toolRegistry.isMcpDeferred)。
     const toolsMode = agentConfig.toolsMode === 'allow' || agentConfig.toolsMode === 'deny' ? agentConfig.toolsMode : undefined;
     const toolsList = Array.isArray(agentConfig.toolsList)
       ? (agentConfig.toolsList as unknown[]).filter((t): t is string => typeof t === 'string').map(canonicalToolName)
@@ -1802,6 +1810,38 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     const projectRef = profile.capabilities.hostExec ? await resolveProjectMemory(userId, sessionId) : null;
     const projectScoped = projectRef ? true : undefined;
     const projectPath = projectRef?.project;
+    // MCP 工具(deps().mcp 仅 standalone/TUI 装配):run 开始取一次快照、run 内冻结——
+    // server 集/工具集变更只对之后的 run 生效,杜绝 run 中途 defs 漂移打爆前缀缓存。
+    // agent_config.enabledMcpServers(string[],缺省=全部已连接 server)做会话级过滤。
+    // 取在门禁字段之前(11-06):MCP 缺省按需加载,下面拼「Additional Tools」目录时就要知道有哪些 MCP 工具。
+    let mcpTools: Map<string, import('../mcp/toolBridge.js').LoadedMcpTool> | undefined;
+    if (deps().mcp && !planMode && ps.externalTools) {
+      const enabledMcp = Array.isArray(agentConfig.enabledMcpServers) ? agentConfig.enabledMcpServers : undefined;
+      await deps().mcp!.reloadConfig?.();
+      const snapshot = deps().mcp!.toolsForRun(enabledMcp);
+      if (snapshot.size) {
+        mcpTools = snapshot;
+        console.log(`[agent-core] run=${runId} mcp tools: ${[...snapshot.keys()].join(', ')}`);
+      }
+    }
+
+    // 自定义工具（HTTP/JS）：从 custom_tools 表 + 启用技能自带工具加载，喂给 LLM 并在云端执行。
+    // 计划模式下整体跳过(外部副作用不可知,不属于只读集);chat 同(PRESET_TABLE.externalTools=false)。
+    // profile.features.customTools=false 的 app(Connect manifest / admin 覆盖)同样整体跳过:此前该开关无人读。
+    // 同 MCP 取在门禁字段之前(11-06):目录 / defs / load_tools 的撞名判定要看同一份自定义工具名。
+    let customTools: Map<string, LoadedCustomTool> | undefined;
+    if (!planMode && ps.externalTools && profile.features.customTools) {
+      try {
+        const loaded = await loadCustomTools(appId, agentConfig);
+        if (loaded.length) {
+          customTools = new Map(loaded.map((t) => [t.name, t]));
+          console.log(`[agent-core] run=${runId} custom tools: ${loaded.map((t) => `${t.name}(${t.executor})`).join(', ')}`);
+        }
+      } catch (e) {
+        console.warn('[agent-core] loadCustomTools failed:', e);
+      }
+    }
+
     const toolGateCtx = {
       userId, sessionId, appId, runId, client: clientTag, channelSession, channelUnknown, preset, uiCommands, uiSettings, uiCards, clientCapabilities, projectScoped, projectPath,
       visuals: visualsPref, // run 冻结的可视化档位:与上面拼提示用的同一个值,set_ui_setting 中途改了也到下一次 run 才生效
@@ -1826,6 +1866,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       inDiscussion: isTeamMember || undefined, // 团队成员不可再起讨论 / 派遣 / 界面动作(防裂变;与旧群聊发言人同款)
       ephemeral: !!inlineMemberDef || undefined, // 临时成员:记忆 / 日志 / 人格 / 工作笔记等持久写面全关(没有自己的文件夹可写)
       computerUseUnavailable: undefined as NoImagesReason | undefined, // 见下
+      customTools, mcpTools, // 目录(listDeferredTools)要列按需加载的 MCP、按自定义工具判撞名;toolCtx 原样展开
     };
     // 这一 run 里确有 Computer Use 工具才等上面那次判定(没有就无事可做,不为它多等)。
     // ponytail: 最多等 2s、可中止 —— 网络卡住时不能让「停止」和首帧陪着等到 HTTP 超时。没等到 = 这一 run 照旧给工具
@@ -1837,16 +1878,13 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         new Promise<''>((res) => { const t = setTimeout(res, 2000, ''); t.unref?.(); ac.signal.addEventListener('abort', () => res(''), { once: true }); }),
       ])) || undefined;
     }
-    const deferredCatalog = deferBypass ? [] : listDeferredTools(toolGateCtx as ToolContext);
+    // Muse / 自动化 run 的内置工具全量可见,目录里只剩按需加载的 MCP(与 getToolDefinitions 的 deferBypass 同一判据)。
+    // canUnlock:下面 toolCtx 一定挂 unlockTools,这里的 toolGateCtx 还没有。
+    const deferredCatalog = listDeferredTools(toolGateCtx as ToolContext, { builtins: !deferBypass, canUnlock: true });
     // 历史里用过的 deferred 工具延续解锁(见 deferredUnlocksFromHistory);目录文本不变,只影响 defs。
     const unlockedTools = deferredUnlocksFromHistory(history, deferredCatalog);
-    if (deferredCatalog.length) {
-      systemParts.push(
-        '## Additional Tools (load on demand)\n' +
-          'These tools exist but are not loaded into context yet. When a task needs one, FIRST call `load_tools` with the exact tool names (one call may load several), wait for its result, then call the loaded tools normally. Do not invent parameters for tools you have not loaded.\n' +
-          deferredCatalog.map((d) => `- ${d.name}: ${d.hint}`).join('\n'),
-      );
-    }
+    const deferSection = deferredCatalogSection(deferredCatalog);
+    if (deferSection) systemParts.push(deferSection);
     // 工具不在工具面里,模型自己只会说「用不了」甚至「请启用插件」—— 把真正的原因和出路写给它,由它告诉用户。
     // 只在这类 run 出现(别的 run 系统提示一个字节不变);列出名字是因为技能 / 用户会按名字提到它们。
     // 名字在这里**重新核一次**:上面那次等待期间 run 可能被远端 steer 染上远程污点、插件可能被停用 —— 那时这组工具是被别的闸
@@ -2324,36 +2362,6 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         newAssistantId: currentAssistantId,
       });
     };
-
-    // 自定义工具（HTTP/JS）：从 custom_tools 表 + 启用技能自带工具加载，喂给 LLM 并在云端执行。
-    // 计划模式下整体跳过(外部副作用不可知,不属于只读集);chat 同(PRESET_TABLE.externalTools=false)。
-    // profile.features.customTools=false 的 app(Connect manifest / admin 覆盖)同样整体跳过:此前该开关无人读。
-    let customTools: Map<string, LoadedCustomTool> | undefined;
-    if (!planMode && ps.externalTools && profile.features.customTools) {
-      try {
-        const loaded = await loadCustomTools(appId, agentConfig);
-        if (loaded.length) {
-          customTools = new Map(loaded.map((t) => [t.name, t]));
-          console.log(`[agent-core] run=${runId} custom tools: ${loaded.map((t) => `${t.name}(${t.executor})`).join(', ')}`);
-        }
-      } catch (e) {
-        console.warn('[agent-core] loadCustomTools failed:', e);
-      }
-    }
-
-    // MCP 工具(deps().mcp 仅 standalone/TUI 装配):run 开始取一次快照、run 内冻结——
-    // server 集/工具集变更只对之后的 run 生效,杜绝 run 中途 defs 漂移打爆前缀缓存。
-    // agent_config.enabledMcpServers(string[],缺省=全部已连接 server)做会话级过滤。
-    let mcpTools: Map<string, import('../mcp/toolBridge.js').LoadedMcpTool> | undefined;
-    if (deps().mcp && !planMode && ps.externalTools) {
-      const enabledMcp = Array.isArray(agentConfig.enabledMcpServers) ? agentConfig.enabledMcpServers : undefined;
-      await deps().mcp!.reloadConfig?.();
-      const snapshot = deps().mcp!.toolsForRun(enabledMcp);
-      if (snapshot.size) {
-        mcpTools = snapshot;
-        console.log(`[agent-core] run=${runId} mcp tools: ${[...snapshot.keys()].join(', ')}`);
-      }
-    }
 
     // view_image 等工具产出的图片回流:工具把 data URL 交回这里,本轮工具跑完后物化成一条
     // user 图像消息追加到对话尾部(尾部追加 → 不动前缀,缓存安全;复用 toImageParts)。
@@ -2866,7 +2874,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
      * 摘要失败退机械折叠(compactContext,如实标 fallback);成功即按边界落检查点(已落库部分立刻落,
      * 本 run 尚未落库的段等 finalize)。返回本次是否改动了上下文。
      */
-    const runCompaction = async (reason: 'threshold' | 'overflow', beforeTokens: number, iteration: number): Promise<boolean> => {
+    const runCompaction = async (reason: 'threshold' | 'overflow' | 'idle', beforeTokens: number, iteration: number): Promise<boolean> => {
       const pcV = await runHooks('PreCompact', { source: 'auto', session_id: sessionId, run_id: runId, cwd, agent_slug: activeAgentSlug }, hookCtx());
       if (pcV.stop) {
         hookVetoedCompaction = true;
@@ -2878,17 +2886,23 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       const measured = contextUsage.measured(workingMessages);
       const cr = compactionCfg.enabled
         ? await compactWorkingMessages(workingMessages, callModelId, appId, ac.signal, {
-          settings: compactionCfg, runThinking: thinkingLevel, windowTokens: ctxWindowTokens, force: true,
+          // idle 不是越线:没有保留段之外的内容就不压(force=false)
+          settings: compactionCfg, runThinking: thinkingLevel, windowTokens: ctxWindowTokens, force: reason !== 'idle',
           overheadTokens: toolsOverhead,
           measuredTokens: reason === 'overflow' ? Math.max(measured ?? 0, ctxWindowTokens) : measured,
         })
         : { ok: false, reason: 'llm compaction disabled' }; // enabled=false:不做摘要,只走下面的机械兜底
       let changed = false;
+      if (reason === 'idle' && !(cr.ok && cr.summary)) {
+        // 按时间压缩只为省缓存未命中,没越线:摘要不成就原样发,不走下面为越线准备的机械折叠 / 裁剪
+        console.warn(`[agent-core] run=${runId} 空闲压缩未成: ${cr.reason}`);
+        return false;
+      }
       if (cr.ok && cr.summary) {
         changed = true;
         contextUsage.invalidate();
         const persisted = await recordBoundary(cr.summary, cr.boundary);
-        void publish(runId, 'status', { phase: 'compacted', forced: true, reason, persisted, summarized: cr.summarizedCount, iteration });
+        void publish(runId, 'status', { phase: 'compacted', forced: true, reason, persisted, summarized: cr.summarizedCount, iteration, ...(reason === 'idle' ? { idleMinutes: compactionCfg.idleMinutes } : {}) });
       } else {
         // 上游拒收时实测的下界 = 窗口(与摘要那边同一口径):估算可能还在触发线下,但 provider 已经说装不下了 → 照裁。
         const floor = reason === 'overflow' ? Math.max(measured ?? 0, ctxWindowTokens) : measured;
@@ -2970,6 +2984,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       const estPrompt = contextUsage.estimate(workingMessages, toolsOverhead);
       if (modelId && estPrompt > compactAt && compactionGuard.shouldAttempt(estPrompt, workingMessages)) {
         await runCompaction('threshold', estPrompt, iteration); // enabled=false 时里面只走机械兜底
+      } else if (modelId && iteration === 0 && idleCompactionDue(workingMessages, compactionCfg, estPrompt, Date.now(), input.userMessageId)) {
+        await runCompaction('idle', estPrompt, iteration);
       }
 
       // 最后一轮强制不再调工具，逼模型产出最终文本（避免以 tool_calls 收尾、finalContent 为空）
@@ -3010,7 +3026,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         attachments: [],
         thinkingLevel,
         // Fast 档只给主循环:压缩 / Historian / 子代理等后台调用不跟(多数模型的 Fast 额度消耗更快)。
-        fast: agentConfig.fast === true,
+        fast: agentConfig.fast === 'ultra' ? 'ultra' : agentConfig.fast === true,
         stream: true,
         cacheKey: sessionId, // OpenAI prompt_cache_key:同会话粘同机,提升自动前缀缓存命中(P2)
         // B4 两个实验闸的身份载体(缺省档两者都不读它们,行为零变化):

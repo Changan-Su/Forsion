@@ -24,6 +24,15 @@ describe('sanitizeCatalog', () => {
     expect(out[1].oauth).toEqual({ clientId: 'c', scopes: ['r'] })
     expect(out[0]).toMatchObject({ auth: { type: 'user-key' }, alwaysAsk: ['ride'] })
     expect(() => sanitizeCatalog({})).toThrow()
+    // 图标:https 或后台存的内嵌图片;别的 data: 和超长的丢掉,条目本身留着
+    const png = 'data:image/png;base64,iVBORw0KGgo='
+    const icons = sanitizeCatalog({ connectors: [
+      { ...entry({ id: 'a' }), iconUrl: png },
+      { ...entry({ id: 'b' }), iconUrl: 'data:text/html;base64,PHNjcmlwdD4=' },
+      { ...entry({ id: 'c' }), iconUrl: `data:image/png;base64,${'A'.repeat(80_000)}` },
+      { ...entry({ id: 'd' }), iconUrl: 'https://cdn.example/icon.png' },
+    ] })
+    expect(icons.map((c) => [c.id, c.iconUrl ?? null])).toEqual([['a', png], ['b', null], ['c', null], ['d', 'https://cdn.example/icon.png']])
   })
 })
 

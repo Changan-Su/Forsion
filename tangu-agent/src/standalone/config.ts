@@ -3,10 +3,12 @@
  */
 import type { DirectProvider } from '../llm/providerRegistry.js';
 import { getRawSection } from '../core/config.js';
+import { readTokenFile } from './tokenFile.js';
 
 export interface StandaloneConfig {
   cloudUrl: string; // Forsion 云端地址(brain API 所在),如 https://api.forsion.net
   token: string; // Forsion cloud credential; local authentication may use a separate host token.
+  tokenFile?: string; // 云端令牌文件(`{"token":...}` 或纯文本):每次调云端现读,见 tokenFile.ts。token 是启动时读到的那一份。
   localToken?: string; // Optional private local HTTP credential (Unit never reuses its cloud account token).
   databaseUrl: string; // 可选:外部 Postgres 连接串;留空则用嵌入式 SQLite/WAL(零安装,落 state.db)
   dataDir: string; // 嵌入式 SQLite 落盘文件(databaseUrl 为空时用;默认 ~/.tangu/state.db,'memory'=内存)
@@ -52,6 +54,7 @@ export function parseConfig(argv: string[]): StandaloneConfig {
   const cfg: StandaloneConfig = {
     cloudUrl: process.env.TANGU_CLOUD_URL ?? cloud.url ?? '',
     token: process.env.TANGU_TOKEN ?? cloud.token ?? '',
+    tokenFile: process.env.TANGU_TOKEN_FILE || (typeof cloud.tokenFile === 'string' && cloud.tokenFile) || undefined,
     localToken: process.env.TANGU_LOCAL_TOKEN || undefined,
     databaseUrl: process.env.TANGU_DATABASE_URL ?? process.env.DATABASE_URL ?? db.url ?? '',
     dataDir: process.env.TANGU_DATA_DIR ?? db.dataDir ?? '',
@@ -79,6 +82,7 @@ export function parseConfig(argv: string[]): StandaloneConfig {
     switch (k) {
       case '--cloud-url': cfg.cloudUrl = v; break;
       case '--token': cfg.token = v; break;
+      case '--token-file': cfg.tokenFile = v; break;
       case '--db': case '--database-url': cfg.databaseUrl = v; break;
       case '--data-dir': cfg.dataDir = v; break;
       case '--model': cfg.defaultModelId = v; break;
@@ -113,6 +117,8 @@ export function parseConfig(argv: string[]): StandaloneConfig {
       imageModelIds: inline.imageModels ? inline.imageModels.split(',').map((s) => s.trim()).filter(Boolean) : undefined,
     });
   }
+  // 启动时读一次:校验与本地鉴权要的是字符串(本地口令不随云端换发变动);读不到就留着配的 token。
+  if (cfg.tokenFile) cfg.token = readTokenFile(cfg.tokenFile) || cfg.token;
   return cfg;
 }
 
@@ -122,6 +128,7 @@ export const HELP = `Tangu Agent — standalone(云端大脑客户端，HTTP/SSE
 
   --cloud-url <url>   可选 Forsion 云端地址(brain API),env TANGU_CLOUD_URL
   --token <token>     forsion_token(调云端 + 缺省本地鉴权),env TANGU_TOKEN
+  --token-file <path> 云端令牌文件,每次调云端现读(换发不用重启),env TANGU_TOKEN_FILE
                      宿主可用 TANGU_LOCAL_TOKEN 单独提供本地鉴权,无需云端账号
   --db <url>          可选:外部 Postgres 连接串;留空=嵌入式 SQLite/WAL,env TANGU_DATABASE_URL
   --data-dir <path>   嵌入式 SQLite 落盘文件(默认 ~/.tangu/state.db,'memory'=内存),env TANGU_DATA_DIR

@@ -19,7 +19,7 @@
  *   8  档位下拉随 panel resize;New Session / 一级行共用 6px 点击外框,筛选胶囊对齐 20px 图标列
  *   9  点击独立 Agent 不展开「不在项目中」,也不改变一级活动排序;切出再切回 Tangu 不强开已收起项目
  *  10  Project 行 hover 的 `…` 在 `+` 左边;Project / Agent / Engine / TEAM 等全部一级行整行右键打开各自 `…` 菜单;
- *      全部一级行可 Pin,Pin 区按最近激活排序并持久化
+ *      全部一级行可 Pin,Pin 区按最近激活排序并持久化(展开折叠不算激活)
  *  11  亮 / 暗 / 375px 三张真实截图(DESIGN.md §8:几何断言全绿 ≠ 看起来对,自己看)
  *
  * 跑法:npm run build && npm run check:orbitside(单实例锁:先退掉 dev 版 Electron)。
@@ -386,7 +386,8 @@ async function run(app, win) {
   const cloudRows = await win.locator('.t2o .t2o-row', { hasText: 'Cloud One' }).count()
   if (cloudRows) await win.locator('.t2o .t2o-row', { hasText: 'Cloud One' }).first().click()
   await sleep(600)
-  const pickedPills = await win.locator('.agent-pill.selected').allTextContents()
+  // 新对话的收件人芯片(输入卡工具行,11-02 起)写的就是选中的那位
+  const pickedPills = await win.locator('.agent-select-strip .compact-chat-picker-name').allTextContents()
   check('3h 云端 agent(无 libraryDir)行在场;点击开新对话并选中它,不打 /agent/solo',
     cloudRows === 1 && SOLO_HITS.length === soloBefore && pickedPills.some((x) => x.includes('Cloud One')),
     JSON.stringify({ cloudRows, solo: SOLO_HITS.slice(soloBefore), pickedPills }))
@@ -520,14 +521,27 @@ async function run(app, win) {
   check('10a 所有一级类型共用 Pin:后 Pin 的 Agent 位于先 Pin 的 Project 之前,并显示 Pin 标记',
     pinState.order[0] === 'Xyra' && pinState.order[1] === 'Orbit Project' && pinState.marks >= 2, JSON.stringify(pinState))
 
-  // 点已 Pin Project 是 Pin 区的“最近激活”,只改变 Pin 时间,不会改消息 updated_at。
-  await orbitProject.locator('.t2s-group-toggle').click()
-  await sleep(350)
-  pinState = await win.evaluate(`(() => ({
+  // 展开 / 折叠已 Pin 的 Project 不算激活(11-03 用户:置顶区不许因为展开折叠换顺序)。
+  const readPins = () => win.evaluate(`(() => ({
     order: Array.from(document.querySelectorAll('.t2o [data-pinned="true"]')).map((e) => ((e.querySelector('.t2o-name, .t2s-group-label') || e).textContent || '').trim()),
     saved: localStorage.getItem('forsion_orbits_pinned_entries_v1'),
   }))()`)
-  check('10b Pin 区按最近激活排序:再次激活 Project 后它移到 Pin 区首位',
+  for (let i = 0; i < 2; i++) {
+    await orbitProject.locator('.t2s-group-toggle').click()
+    await sleep(350)
+  }
+  pinState = await readPins()
+  check('10b 展开折叠 Pin 的 Project:Pin 区顺序不变',
+    pinState.order[0] === 'Xyra' && pinState.order[1] === 'Orbit Project', JSON.stringify(pinState))
+  // 打开组里的会话才是 Pin 区的“最近激活”,只改变 Pin 时间,不会改消息 updated_at。
+  const pinnedSession = win.locator('.t2o .t2s-srow', { hasText: '项目会话一' }).first()
+  if (!(await pinnedSession.isVisible().catch(() => false))) { await orbitProject.locator('.t2s-group-toggle').click(); await sleep(350) }
+  pinState = await readPins()
+  check('10b1 再展开一次:Pin 区顺序仍不变', pinState.order[0] === 'Xyra', JSON.stringify(pinState))
+  await pinnedSession.click()
+  await sleep(350)
+  pinState = await readPins()
+  check('10b2 Pin 区按最近激活排序:打开 Project 里的会话后它移到 Pin 区首位',
     pinState.order[0] === 'Orbit Project' && pinState.order[1] === 'Xyra', JSON.stringify(pinState))
   check('10c Pin 状态已持久化', !!pinState.saved && pinState.saved.includes('ws:') && pinState.saved.includes('row:agent:xyra'), pinState.saved)
 

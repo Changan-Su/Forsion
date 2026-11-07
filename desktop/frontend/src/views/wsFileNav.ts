@@ -46,35 +46,56 @@ export function getTransientTarget(key: string): PreviewTarget | undefined {
  *  ⚠️ 库内媒体不走这里 —— WsFileView 把整份文件读成 base64 再 Blob(还带 tooLarge 上限),
  *     GB 级视频当场变「文件过大」;库内走 amadeusNav.openMedia(amadeus-asset:// 流式)。 */
 export function openWsFile(target: PreviewTarget, opts?: { newTab?: boolean; line?: number; endLine?: number; t?: number; tTo?: number }): void {
-  const ws = useWorkspace.getState()
-  const api = (ws as unknown as { api?: { panels: PanelLike[] } }).api
-  if (target.path) {
-    // 本地 .html 交给内置浏览器(file:// 直开,页面里的相对资源/跳转都对);wsfile 预览器只会把它
-    // 当文本渲染。内置浏览器被关掉 → openLocalHtml 返 false,照旧落 wsfile 预览。
-    // 带行锚(引用条)例外:浏览器渲染页里没有「第 N 行」,进 wsfile 源码视图才有落点。
-    if (!opts?.line && /\.html?$/i.test(target.path) && openLocalHtml(target.path)) return
-    const hit = opts?.newTab ? null : api?.panels.find((p) => p.params?.__type === 'wsfile' && p.params?.path === target.path)
-    if (hit) {
-      ws.activateLeaf(hit.id)
-      // 带行锚 → 就地跳;**不带** → 发 clear:上一次引用把 csv/diff 锁在源码高亮态,普通方式
-      // 重开同一文件必须能回到表格/对比视图(Codex 二审:focus 只设不清 = 永久锁死)。
-      window.dispatchEvent(new CustomEvent('amadeus:wsfile-goto', opts?.line
-        ? { detail: { path: target.path, line: opts.line, endLine: opts.endLine } }
-        : typeof opts?.t === 'number'
-          ? { detail: { path: target.path, t: opts.t, tTo: opts.tTo } }
-          : { detail: { path: target.path, clear: true } }))
+  const path = target.path
+  if (path) {
+    // 本机的 .pdf 听「默认打开方式」:插件(声明了 external)认领库外 PDF 就进它的视图,没认领照旧 wsfile 预览。
+    // 懒加载两个模块:pluginStore / amadeusNav 静态引进来会和 tanguSlice 绕出环;非 PDF 一个微任务都不多等。
+    if (/\.pdf$/i.test(path)) {
+      void Promise.all([import('../amadeus/plugins/pluginStore'), import('../amadeusNav'), import('../openFileInstall')]).then(([ps, nav, ofi]) => {
+        // 库里的那份按库内路径开:按绝对路径会另开一份库外视图,两份写同一个批注文件,后写的盖掉先写的
+        const file = ofi.vaultRelOf(path) ?? path
+        if (!ps.matchFileType(file)) { openHostTab(target, path, opts); return }
+        // 同 wsfile 的开法:同一份已开着就聚焦,否则新标签 —— openFile 缺省是就地换掉当前标签,不能让它顶掉用户正看着的那页
+        const api = (useWorkspace.getState() as unknown as { api?: { panels: PanelLike[] } }).api
+        const open = !opts?.newTab && !!api?.panels.some((p) => p.params?.__type === 'amadeus-plugin-file' && p.params?.filePath === file)
+        nav.openFile(file, open ? undefined : { newTab: true })
+      }).catch(() => openHostTab(target, path, opts))
       return
     }
-    const params: Record<string, unknown> = { path: target.path, name: target.name }
-    if (opts?.line) { params.line = opts.line; if (opts.endLine) params.endLine = opts.endLine }
-    if (typeof opts?.t === 'number') { params.t = opts.t; if (typeof opts.tTo === 'number') params.tTo = opts.tTo }
-    ws.openView('wsfile', params, 'main', { newTab: true })
+    openHostTab(target, path, opts)
     return
   }
+  const api = (useWorkspace.getState() as unknown as { api?: { panels: PanelLike[] } }).api
   // 清掉不再被任何已开 panel 引用的瞬态目标(闭包可能持有整份文件字节,别让它随关闭的标签滞留)。
   const alive = new Set(api?.panels.map((p) => p.params?.tkey).filter(Boolean) ?? [])
   for (const k of transient.keys()) if (!alive.has(k)) transient.delete(k)
   const key = `t${++seq}`
   transient.set(key, target)
-  ws.openView('wsfile', { tkey: key, name: target.name }, 'main', { newTab: true })
+  useWorkspace.getState().openView('wsfile', { tkey: key, name: target.name }, 'main', { newTab: true })
+}
+
+/** 有本机路径的那一支:参数只存 {path,name};同路径已开就聚焦(带落点就地跳),否则开 wsfile 标签。 */
+function openHostTab(target: PreviewTarget, path: string, opts?: Parameters<typeof openWsFile>[1]): void {
+  const ws = useWorkspace.getState()
+  const api = (ws as unknown as { api?: { panels: PanelLike[] } }).api
+  // 本地 .html 交给内置浏览器(file:// 直开,页面里的相对资源/跳转都对);wsfile 预览器只会把它
+  // 当文本渲染。内置浏览器被关掉 → openLocalHtml 返 false,照旧落 wsfile 预览。
+  // 带行锚(引用条)例外:浏览器渲染页里没有「第 N 行」,进 wsfile 源码视图才有落点。
+  if (!opts?.line && /\.html?$/i.test(path) && openLocalHtml(path)) return
+  const hit = opts?.newTab ? null : api?.panels.find((p) => p.params?.__type === 'wsfile' && p.params?.path === path)
+  if (hit) {
+    ws.activateLeaf(hit.id)
+    // 带行锚 → 就地跳;**不带** → 发 clear:上一次引用把 csv/diff 锁在源码高亮态,普通方式
+    // 重开同一文件必须能回到表格/对比视图(Codex 二审:focus 只设不清 = 永久锁死)。
+    window.dispatchEvent(new CustomEvent('amadeus:wsfile-goto', opts?.line
+      ? { detail: { path, line: opts.line, endLine: opts.endLine } }
+      : typeof opts?.t === 'number'
+        ? { detail: { path, t: opts.t, tTo: opts.tTo } }
+        : { detail: { path, clear: true } }))
+    return
+  }
+  const params: Record<string, unknown> = { path, name: target.name }
+  if (opts?.line) { params.line = opts.line; if (opts.endLine) params.endLine = opts.endLine }
+  if (typeof opts?.t === 'number') { params.t = opts.t; if (typeof opts.tTo === 'number') params.tTo = opts.tTo }
+  ws.openView('wsfile', params, 'main', { newTab: true })
 }

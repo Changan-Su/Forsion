@@ -6,7 +6,7 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, shell } from 'electron'
-import { IPC, gatePluginManifest, sanitizeOnboarding, sanitizeEvents, sanitizeRequiresPlugins, PLUGIN_CAPABILITIES, type ExternalPluginSource, type PluginBundleInfo } from '@amadeus-shared/ipc'
+import { IPC, gatePluginManifest, sanitizeGuide, sanitizeOnboarding, sanitizeEvents, sanitizeRequiresPlugins, PLUGIN_CAPABILITIES, type ExternalPluginSource, type PluginBundleInfo } from '@amadeus-shared/ipc'
 import { installedPluginFields, type InstalledPluginManifest } from '@amadeus-shared/pluginSource'
 import { isSafePluginExt } from '@amadeus-shared/pluginFiles'
 import { VaultManager } from './fs/vaultManager'
@@ -167,6 +167,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
   restartSync: () => Promise<void>
   stopSync: () => Promise<void>
   readExternalPlugins: () => Promise<ExternalPluginSource[]>
+  devPluginRoots: () => Promise<Array<{ id: string; dir: string }>>
   vaultFace: VaultFace
 } {
   const vault = new VaultManager({
@@ -682,7 +683,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
     type DevManifest = {
       id?: unknown; name?: unknown; nameEn?: unknown; version?: unknown; description?: unknown; descriptionEn?: unknown
       main?: unknown; apiVersion?: unknown; minAppVersion?: unknown; requiresApp?: unknown; requiresPlugins?: unknown
-      capabilities?: unknown; onboarding?: unknown; events?: unknown; fileExtensions?: unknown
+      capabilities?: unknown; onboarding?: unknown; guide?: unknown; events?: unknown; fileExtensions?: unknown
     }
     for (const product of products) {
       const pdir = product.root
@@ -751,6 +752,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
         readme,
         changelog,
         onboarding: sanitizeOnboarding(m?.onboarding),
+        guide: sanitizeGuide(m?.guide),
         events: sanitizeEvents(m?.events),
         // fileExtensions 刻意不透出:声明了就已经 blocked,再把它传下去只会让下游误以为这套后缀受保护。
         blocked: blocked ?? undefined,
@@ -1053,6 +1055,9 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
     restartSync: () => cloud?.restartAllSync() ?? Promise.resolve(),
     stopSync: () => cloud?.stopAllSync() ?? Promise.resolve(),
     readExternalPlugins,
+    /** 开发副本(插件沙箱 / 开发态加载)的根目录:Space 清单据此收它们带的 spaces/,并遮住同 id 的安装版。拒载的不算。 */
+    devPluginRoots: async (): Promise<Array<{ id: string; dir: string }>> =>
+      (await readDevPlugins(new Set())).flatMap((s) => (!s.blocked && s.devRoot ? [{ id: s.id, dir: s.devRoot }] : [])),
     // Unit 设备页的本地 vault 面(unitWeb /vault/*):白名单在 unitWeb.ts(default-deny),这里只管派发。
     vaultFace: {
       call: async (channel, args, origin) => {

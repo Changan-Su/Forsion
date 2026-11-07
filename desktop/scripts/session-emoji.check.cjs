@@ -95,7 +95,10 @@ async function main() {
     sessions[0].emoji = '🗄️'; activity.push({ id: 'icon-auto-1', action: 'icon_updated', detail: '🗄️', session_ref: 'emoji-one', created_at: '2026-09-30T21:00:00Z' })
     await row('emoji-one').locator('[data-session-emoji="🗄️"]').waitFor({ timeout: 10000 })
     check('Historian 延迟产出的图标自动刷新', true)
-    await win.locator('.t2s-viewmore').first().click()
+    // 「查看更多」改成左栏原地展开后,工作区页走组菜单「在主区打开」
+    const wsGroup = win.locator('.t2s-group', { hasText: 'Emoji Workspace' }).first()
+    await wsGroup.hover(); await wsGroup.locator('.t2s-group-add').first().click()
+    await win.locator('.ctx-menu [data-act="ws-open-main"]').click()
     const card = win.locator('.wsd-card', { hasText: '园艺会话' })
     await card.waitFor()
     check('工作区卡片显示会话图标', await card.locator('[data-session-emoji="🌱"]').count() === 1)

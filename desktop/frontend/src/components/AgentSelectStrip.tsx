@@ -6,22 +6,22 @@
  * 语义(§4 表):0 选 = 默认 Agent(清 agentSlug/engineId/groupChat,今天的行为);1 选 = `agentSlug`
  * (**仍是项目会话,不是私聊**);≥2 选 = 本会话进入**团队模式**(groupChat + groupAgents 按点选序;
  * 没有模式与轮数字段,成员各自以 DONE 表态收场),降回 1 立刻撤(引擎侧 <2 人整条 run failed,前端必须守 ≥2)。
- * 右键 / 长按 pill = 「私聊」(Agent 轨道的入口,与侧栏私聊行同一张表)。
+ * 右键行 = 「私聊」(Agent 轨道的入口,与侧栏私聊行同一张表)+「设为默认」(名册的默认项,同 Agent 资料页)。
  *
- * 样式复用既有 `.engine-picker` / `.engine-pill` / `.agent-pill-avatar` 一套(base.css 不动;序号徽章 / 竖线在 agentSelectStrip.css):
- * `.agent-pill` / `.agent-select-strip` 只是**仪器与结构的抓手**,视觉仍由 `.engine-pill` 提供;
- * 窄栏(≤520px 容器查询)折叠成单个 `CompactChatPicker` 也是白拿 —— 见 components/compactChatPicker.css,
- * 它按 `.newchat-pickers > .engine-picker > .engine-picker-bar/-hint` 收起,故根节点必须留在那个位置。
+ * 2026-11-02 起(方案页 docs/ToBeImproved/主页生成式组件方案_2026-11-02/agent.html,用户选 A):输入框上方那一排首字胶囊 + 状态句
+ * 删掉,换成 Composer2 工具行里模式芯片右边的**收件人芯片**(`recipientChip` 槽,宽窄同一枚)。点开 = `CompactChatPicker` 的浮层
+ * (顶上搜索、最多 8 行、↑↓ ↵ Esc);触屏抽屉、安卓原生勾选清单照旧。⌘⇧A / 命令面板「换 Agent」= `openAgentPicker`。
+ * 团队仍是一种模式:模式芯片照写「团队 · N 人」,这里只叠头像写「X 等 N 位」。
+ * `.agent-select-strip` / `.compact-chat-picker` 两个类名是仪器的抓手(check:chatlayout、phone-stage、session-mode)。
  */
 import React, { useMemo, useState, useRef, useEffect } from 'react'
-import { Loader2, MessageCircle } from 'lucide-react'
+import { Loader2, MessageCircle, Star, Users } from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
-import { nativeSheetPresenter, presentNativeChecklist } from '@lcl/engine'
+import { commandHotkeyText, nativeSheetPresenter, presentNativeChecklist } from '@lcl/engine'
 import { registerMessages, useI18n } from '../i18n'
 import { EngineIcon } from './EngineIcon'
-import { PillBar } from './EnginePicker'
 import { CompactChatPicker, type ChatPickItem } from './CompactChatPicker'
-import { ContextMenu, menuPos, type CtxMenu } from './RightPanel'
+import { ContextMenu, type CtxItem, type CtxMenu } from './RightPanel'
 import { useApp } from '../stores/appStore'
 import { newChatProjectPath } from '../tangu/store/tanguSlice'
 import { currentPlatform } from '../services/agentRunService'
@@ -29,9 +29,10 @@ import { projectDefaultsForNewSession } from '../stores/projectSettings'
 import { draftDispatch } from './agentSelectStatus'
 import { AgentAvatar, initialFor } from './AgentAvatar'
 import { openSolo } from '../sessionNav'
+import { putAgentsMeta } from '../services/backendService'
+import { homeTarget } from '../services/engine/targets'
 import type { AgentConfig } from '../types'
-import { agentName } from '../agentName'
-import './agentSelectStrip.css'
+import { agentName, agentNames } from '../agentName'
 
 registerMessages({
   'agentSelect.title': { zh: '选择 Agent', en: 'Pick agents' },
@@ -39,19 +40,35 @@ registerMessages({
   'agentSelect.hintDefault': { zh: '由默认 Agent {name} 处理', en: 'Handled by the default agent, {name}' },
   'agentSelect.hintDefaultAnon': { zh: '由默认 Agent 处理', en: 'Handled by the default agent' },
   'agentSelect.hintOne': { zh: '{name} 将处理这条消息', en: '{name} will handle this message' },
-  'agentSelect.removeHint': { zh: '再次点击移除', en: 'Click again to remove' },
   'agentSelect.team': { zh: '团队模式 · {n} 人', en: 'Team mode · {n} people' },
-  'agentSelect.picked': { zh: '已选', en: 'Picked' },
+  // 芯片上的团队:zh 说总人数,en 说另外几位(方案页定稿的两种写法,故占位符不同:n = 总数,m = n - 1)
+  'agentSelect.chipTeam': { zh: '{name} 等 {n} 位', en: '{name} +{m}' },
   'agentSelect.default': { zh: '默认 Agent', en: 'Default agent' },
   'agentSelect.defaultTag': { zh: '默认', en: 'Default' },
+  'agentSelect.sessionTag': { zh: '本会话', en: 'This session' },
   'agentSelect.direct': { zh: '私聊', en: 'Direct chat' },
+  'agentSelect.makeDefault': { zh: '设为默认', en: 'Set as default' },
+  'agentSelect.search': { zh: '找 Agent 或引擎', en: 'Find an agent or engine' },
+  'agentSelect.switch': { zh: '换 Agent', en: 'Switch agent' },
 })
+
+/**
+ * ⌘⇧A / 命令面板「换 Agent」:点开当前看得见的那枚芯片 —— 已开着的优先(再按一次 = 收起),其次焦点所在的输入卡,再次第一枚。
+ * 没有芯片(会话已开聊 / Chat 预设)就什么都不做:会话中换人照旧走模式菜单「普通模式 ›」。
+ * ponytail: 按 DOM 找芯片,不另设广播;分屏里两张输入卡都空着时焦点不在卡里就取第一张。
+ */
+export function openAgentPicker(): void {
+  const chips = Array.from(document.querySelectorAll<HTMLButtonElement>('.agent-select-strip .compact-chat-picker')).filter((el) => el.getClientRects().length > 0)
+  const card = document.activeElement?.closest('.t2c-card')
+  ;(chips.find((el) => el.getAttribute('aria-expanded') === 'true') ?? chips.find((el) => card?.contains(el)) ?? chips[0])?.click()
+}
 
 /** 进团队模式的人数下限(引擎侧 <2 人整条 run failed);也是「画发言序号」的门槛 —— 单选没有顺序可言。 */
 const TEAM_MIN = 2
 
 type Candidate =
-  | { id: string; kind: 'agent'; slug: string; name: string; description?: string; system?: boolean }
+  // session = 名册里没有、只活在本会话的(临时成员 / 已删的):排在顶上带「本会话」标,能取消
+  | { id: string; kind: 'agent'; slug: string; name: string; names: string[]; description?: string; system?: boolean; session?: boolean }
   | { id: string; kind: 'engine'; engineId: string; name: string }
 
 const agentId = (slug: string): string => `agent:${slug}` // §9 前缀隔离:slug 与 engineId 可能同名(codex)
@@ -72,7 +89,7 @@ export function pickedAgentSlugs(cfg: AgentConfig): string[] {
  * @param cfg 该会话/新对话的**有效**配置(ChatView 的 mvCfg / 主页的 config)。
  */
 export function AgentSelectStrip({ sessionId, cfg }: { sessionId: string | null; cfg: AgentConfig }): React.ReactElement | null {
-  const { t, locale } = useI18n()
+  const { t } = useI18n()
   const [menu, setMenu] = useState<CtxMenu>(null)
   const s = useApp(useShallow((state) => ({
     agentDefs: state.agentDefs,
@@ -95,23 +112,28 @@ export function AgentSelectStrip({ sessionId, cfg }: { sessionId: string | null;
   const engineId = cfg.engineId || ''
   const pickedSlugs = pickedAgentSlugs(cfg)
   const pickedIds = engineId ? [engineKey(engineId)] : pickedSlugs.map(agentId)
-  // 引擎预热(探测能力,npx 冷启)期间照 EnginePicker 的老规矩:本 pill 转圈,其余禁用。
+  // 引擎预热(探测能力,npx 冷启)期间:那一行(和芯片)转圈,其余行禁用。
   const warming = engineId && !s.engineCaps[engineId] ? engineId : ''
 
   const items = useMemo<Candidate[]>(() => {
-    const list: Candidate[] = s.agentDefs.map((a) => ({
-      id: agentId(a.slug), kind: 'agent', slug: a.slug, name: agentName(a), description: a.description, system: a.createdBy === 'system',
+    // Keep disabled agents visible when the current session still uses them.
+    const roster: Candidate[] = s.agentDefs.filter((a) => !a.disabled || a.slug === cfg.agentSlug || !!cfg.groupAgents?.includes(a.slug)).map((a) => ({
+      id: agentId(a.slug), kind: 'agent', slug: a.slug, name: agentName(a), names: agentNames(a), description: a.description, system: a.createdBy === 'system',
     }))
+    const known = (slug: string): boolean => roster.some((i) => i.id === agentId(slug))
+    const extras: Candidate[] = []
     // 老群聊会话里的临时 / 已删 agent 也要能显示与移除 —— 过滤掉等于下一次写入时静默丢成员。
     for (const slug of cfg.groupAgents ?? []) {
-      if (list.some((i) => i.id === agentId(slug))) continue
+      if (known(slug) || extras.some((i) => i.id === agentId(slug))) continue
       const temp = cfg.groupTempAgents?.find((a) => a.slug === slug)
-      list.push({ id: agentId(slug), kind: 'agent', slug, name: agentName(temp) || slug, description: temp?.description })
+      const name = agentName(temp) || slug
+      extras.push({ id: agentId(slug), kind: 'agent', slug, name, names: [name], description: temp?.description, session: true })
     }
     // 已钉住但已被删的单个 agent 同理:不画出来用户就退不掉它(会话仍按它跑)。
-    if (cfg.agentSlug && !list.some((i) => i.id === agentId(cfg.agentSlug!))) {
-      list.push({ id: agentId(cfg.agentSlug), kind: 'agent', slug: cfg.agentSlug, name: cfg.agentSlug })
+    if (cfg.agentSlug && !known(cfg.agentSlug) && !extras.some((i) => i.id === agentId(cfg.agentSlug!))) {
+      extras.push({ id: agentId(cfg.agentSlug), kind: 'agent', slug: cfg.agentSlug, name: cfg.agentSlug, names: [], session: true })
     }
+    const list = [...extras, ...roster]
     // 外部引擎只在 host 会话里当候选(§11 ⑦:CLI 视作特殊的独立 Agent);
     // 已经选中的那一枚无论如何都要在场,否则用户退不掉它。
     if (cfg.execMode === 'host') {
@@ -124,9 +146,8 @@ export function AgentSelectStrip({ sessionId, cfg }: { sessionId: string | null;
   }, [s.agentDefs, s.engines, engineId, cfg.execMode, cfg.groupAgents, cfg.groupTempAgents, cfg.agentSlug])
 
   const byId = useMemo(() => new Map(items.map((i) => [i.id, i])), [items])
-  const agentNames = useMemo(() => items.filter((i) => i.kind === 'agent').map((i) => i.name), [items])
+  const siblingNames = useMemo(() => items.filter((i) => i.kind === 'agent').map((i) => i.name), [items])
   const picked = pickedIds.map((id) => byId.get(id)).filter((i): i is Candidate => !!i)
-  const candidates = items.filter((i) => !pickedIds.includes(i.id))
   const teamCount = cfg.groupChat ? pickedSlugs.length : 0
 
   /** 写入已选 Agent 集合(顺序即发言序);≥2 进团队模式,≤1 撤销。 */
@@ -172,18 +193,7 @@ export function AgentSelectStrip({ sessionId, cfg }: { sessionId: string | null;
     }
   }
 
-  // 切换后把键盘焦点还给同一枚 pill:pill 在「已选 / 候选」两段间移动会被 React 重挂(两段是不同的 children 槽位),焦点会掉到 body。
-  const refocusId = useRef<string | null>(null)
-  const rootRef = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    const id = refocusId.current
-    if (!id) return
-    refocusId.current = null
-    const el = rootRef.current?.querySelector<HTMLElement>(`[data-pill-id="${CSS.escape(id)}"]`)
-    el?.focus()
-  })
   const toggle = (item: Candidate): void => {
-    refocusId.current = item.id
     if (item.kind === 'engine') { applyEngine(item.engineId === engineId ? '' : item.engineId); return }
     const next = pickedSlugs.includes(item.slug) ? pickedSlugs.filter((x) => x !== item.slug) : [...pickedSlugs, item.slug]
     applyAgents(next)
@@ -201,42 +211,29 @@ export function AgentSelectStrip({ sessionId, cfg }: { sessionId: string | null;
   const pillIcon = (item: Candidate): React.ReactNode => {
     if (item.kind === 'engine') return warming === item.engineId ? <Loader2 size={16} className="spin" /> : <EngineIcon engineId={item.engineId} size={16} />
     // 首字一律中性底色(09-25 拍板);同姓撞字靠 initialFor 在同屏名字里取不同的字。
-    return <AgentAvatar name={item.name} url={s.agentAvatars[item.slug]} siblings={agentNames} imgClassName="agent-pill-avatar" initialClassName="agent-pill-initial" />
+    return <AgentAvatar name={item.name} url={s.agentAvatars[item.slug]} siblings={siblingNames} imgClassName="agent-pill-avatar" initialClassName="agent-pill-initial" />
   }
 
-  const pillTitle = (item: Candidate, isPicked: boolean): string => {
-    const base = item.kind === 'agent' && item.description ? `${item.name} — ${item.description}` : item.name
-    if (isPicked) return `${base} · ${t('agentSelect.removeHint')}`
-    if (item.kind === 'agent' && item.slug === s.defaultAgentSlug) return `${base} · ${t('agentSelect.defaultTag')}`
-    return base
+  // 「设为默认」= Agent 资料页名册里的同一个操作(AgentProfileView.setDefault)。
+  const makeDefault = async (slug: string): Promise<void> => {
+    try {
+      const meta = await putAgentsMeta(homeTarget(), { defaultSlug: slug })
+      useApp.setState({ defaultAgentSlug: meta.defaultSlug })
+      window.dispatchEvent(new Event('forsion:agents-changed'))
+      window.tangu?.requestMainAction?.('agents-changed')
+    } catch (error) {
+      useApp.getState().toast(String((error as Error)?.message || error), true)
+    }
   }
-
-  const renderPill = (item: Candidate, order: number | null): React.ReactElement => {
-    const isPicked = order !== null
-    const warmingThis = item.kind === 'engine' && warming === item.engineId
-    return (
-      <button
-        key={item.id}
-        type="button"
-        aria-pressed={isPicked}
-        data-pill-id={item.id}
-        className={`engine-pill agent-pill${isPicked ? ' selected' : ''}`}
-        data-agent-slug={item.kind === 'agent' ? item.slug : undefined}
-        data-engine-id={item.kind === 'engine' ? item.engineId : undefined}
-        title={pillTitle(item, isPicked)}
-        disabled={!!warming && !warmingThis}
-        onClick={() => { if (!warming || warmingThis) toggle(item) }}
-        onContextMenu={(e) => {
-          e.preventDefault() // 触屏长按在 Chromium 同样发 contextmenu,两种入口共用这一条
-          setMenu({ ...menuPos(e), items: [{ label: t('agentSelect.direct'), icon: <MessageCircle size={13} />, run: () => openDirect(item) }] })
-        }}
-      >
-        {isPicked && picked.length >= TEAM_MIN && <span className="agent-pill-index">{(order as number) + 1}</span>}
-        <span className="engine-pill-icon">{pillIcon(item)}</span>
-        <span className="engine-pill-label">{item.name}</span>
-        {item.kind === 'agent' && item.system && <span className="agent-badge-system">{t('agent.badge.system')}</span>}
-      </button>
-    )
+  const rowMenu = (id: string, at: { x: number; y: number }, close: () => void): void => {
+    const item = byId.get(id)
+    if (!item) return
+    const entries: CtxItem[] = [{ label: t('agentSelect.direct'), icon: <MessageCircle size={13} />, run: () => { close(); openDirect(item) } }]
+    // 只给名册里的人:临时 / 已删的没法当默认
+    if (item.kind === 'agent' && !item.session) {
+      entries.push({ label: t('agentSelect.makeDefault'), icon: <Star size={13} />, disabled: item.slug === s.defaultAgentSlug, run: () => void makeDefault(item.slug) })
+    }
+    setMenu({ ...at, items: entries })
   }
 
   // 原生清单开着时会话可能被换掉 / 本组件被卸掉:回来的结果只认发起它的那一轮,且用最新的 applyAgents 写(评审 10-24)。
@@ -248,40 +245,52 @@ export function AgentSelectStrip({ sessionId, cfg }: { sessionId: string | null;
   // Chat 预设恒 sandbox + 无 agent(applyPreset 会抹掉 agentSlug/cwd),不露选择条;没有任何候选同理。
   if (cfg.preset === 'chat' || !items.length) return null
 
-  // 状态句:≥2 人 = 团队行;1 人 = 谁来接;0 人 = 发送时实际接手的人(项目默认 Agent / 团队,再兜全局默认)。
-  // 「再点移除」只留在已选 pill 的 title 里。
+  // 状态句(浮层底部 / 抽屉标题下 / 原生清单脚注):≥2 人 = 团队行;1 人 = 谁来接;
+  // 0 人 = 发送时实际接手的人(项目默认 Agent / 团队,再兜全局默认)。
   const dispatch = draftDispatch(cfg, sessionId ? {} : projectDefaultsForNewSession(draftProject, Array.isArray(s.teams) ? s.teams : []).config, s.defaultAgentSlug)
-  const defaultName = dispatch.kind === 'agent' && dispatch.slug ? agentName(s.agentDefs.find((a) => a.slug === dispatch.slug)) : undefined
+  const defaultAgent = dispatch.kind === 'agent' && dispatch.slug ? byId.get(agentId(dispatch.slug)) : undefined
   const statusLine = teamCount >= TEAM_MIN
     ? t('agentSelect.team', { n: teamCount })
     : picked.length === 1
       ? t('agentSelect.hintOne', { name: picked[0].name })
       : dispatch.kind === 'team'
         ? t('agentSelect.team', { n: dispatch.count })
-        : defaultName ? t('agentSelect.hintDefault', { name: defaultName }) : t('agentSelect.hintDefaultAnon')
-  // 什么都没选 = 走默认:主页不再常驻这句(10-02 用户拍板 v8,悬停头像的提示里有「默认」);选了 / 组队时它在报状态,照常显示。
-  const isDefaultLine = teamCount < TEAM_MIN && picked.length !== 1 && dispatch.kind !== 'team'
+        : defaultAgent ? t('agentSelect.hintDefault', { name: defaultAgent.name }) : t('agentSelect.hintDefaultAnon')
 
-  // 窄栏芯片 + 浮层 / 抽屉(方案页 docs/ToBeImproved/窄栏Agent选择器方案_2026-10-23,用户选 B+C):
-  // 行只放头像 + 名字,勾 / 团队序号可见;点行 = 宽栏点 pill 的同一个 toggle,浮层不收。
+  // 芯片写的是「谁在接」:团队叠头像(最多 3)+「X 等 N 位」(不再说「团队」—— 模式芯片已在说);
+  // 没选 = 默认那位的头像 + 名字;项目默认是团队时方案没画,用团队图标 + 状态句兜住。
   const isTeam = picked.length >= TEAM_MIN
-  const compactIcon = isTeam
+  const chipIcon = isTeam
     ? <span className="chat-pick-stack">{picked.slice(0, 3).map((item) => <React.Fragment key={item.id}>{pillIcon(item)}</React.Fragment>)}</span>
-    : picked[0] ? pillIcon(picked[0]) : <EngineIcon engineId="" size={16} />
-  const compactName = picked.length ? picked.map((i) => i.name).join(locale === 'zh' ? '、' : ', ') : t('agentSelect.default')
+    : picked[0] ? pillIcon(picked[0])
+      : dispatch.kind === 'team' ? <Users size={13} />
+        : defaultAgent ? pillIcon(defaultAgent) : <EngineIcon engineId="" size={16} />
+  const chipName = isTeam ? t('agentSelect.chipTeam', { name: picked[0].name, n: picked.length, m: picked.length - 1 })
+    : picked[0] ? picked[0].name
+      : dispatch.kind === 'team' ? t('agentSelect.team', { n: dispatch.count })
+        : defaultAgent?.name || t('agentSelect.default')
   const markOf = (id: string): true | number | undefined => {
     const at = pickedIds.indexOf(id)
     return at < 0 ? undefined : isTeam ? at + 1 : true
   }
+  const tag = (text: string): React.ReactElement => <span key={text} className="agent-badge-system">{text}</span>
+  const badgeOf = (i: Candidate): React.ReactNode => {
+    if (i.kind !== 'agent') return undefined
+    if (i.session) return tag(t('agentSelect.sessionTag'))
+    const tags = [i.slug === s.defaultAgentSlug && tag(t('agentSelect.defaultTag')), i.system && tag(t('agent.badge.system'))].filter(Boolean)
+    return tags.length ? tags : undefined
+  }
+  // 行:头像 + 名字 + 默认 / 后台 / 本会话标 + 勾或序号;简介进说明区。点行 = toggle,浮层不收。
   const pickItems: ChatPickItem[] = [
     { id: '', name: t('agentSelect.default'), icon: <EngineIcon engineId="" size={18} />, mark: picked.length ? undefined : true, disabled: !!warming, separatorAfter: items.length > 0 },
     ...items.map((i): ChatPickItem => ({
       id: i.id,
       name: i.name,
       description: i.kind === 'agent' ? i.description : undefined,
+      keywords: i.kind === 'agent' ? [i.slug, ...i.names] : [i.engineId],
       icon: pillIcon(i),
       mark: markOf(i.id),
-      badge: i.kind === 'agent' && i.system ? <span className="agent-badge-system">{t('agent.badge.system')}</span> : undefined,
+      badge: badgeOf(i),
       disabled: !!warming && i.id !== engineKey(warming),
       section: i.kind === 'engine' ? t('chatPicker.engines') : undefined,
       direct: true,
@@ -297,7 +306,7 @@ export function AgentSelectStrip({ sessionId, cfg }: { sessionId: string | null;
     const agents = items.filter((i): i is Extract<Candidate, { kind: 'agent' }> => i.kind === 'agent')
     void presentNativeChecklist({
       title: t('agentSelect.title'),
-      items: agents.map((a) => ({ id: a.id, label: a.name, icon: initialFor(a.name, agentNames) })),
+      items: agents.map((a) => ({ id: a.id, label: a.name, icon: initialFor(a.name, siblingNames) })),
       checked: pickedIds.filter((id) => agents.some((a) => a.id === id)),
       footer: statusLine,
       done: t('chatPicker.done'),
@@ -311,13 +320,11 @@ export function AgentSelectStrip({ sessionId, cfg }: { sessionId: string | null;
     return true
   }
   return (
-    <div ref={rootRef} className="engine-picker agent-picker agent-select-strip" role="group" aria-label={t('agentSelect.title')}>
-      {/* 窄栏芯片的前缀要短,故用既有的「Agent」词条;整条的可访问名走根节点 aria-label。 */}
+    <span className="agent-select-strip t2c-capsule-peer" role="group" aria-label={t('agentSelect.title')}>
       <CompactChatPicker
-        label={isTeam ? t('chatPicker.team') : t('chatPicker.agent')}
         title={t('agentSelect.title')}
-        icon={compactIcon}
-        name={compactName}
+        icon={chipIcon}
+        name={chipName}
         status={statusLine}
         items={pickItems}
         onPick={(id) => {
@@ -330,18 +337,12 @@ export function AgentSelectStrip({ sessionId, cfg }: { sessionId: string | null;
         onDirect={(id) => { const item = byId.get(id); if (item) openDirect(item) }}
         directLabel={t('agentSelect.direct')}
         onNative={openNative}
+        onRowMenu={rowMenu}
+        searchLabel={t('agentSelect.search')}
+        hotkeyHint={commandHotkeyText('switch-agent') || undefined} // features/tangu 注册的那条;分平台、跟用户改过的键走
         busy={!!warming}
       />
-      <PillBar label={t('agentSelect.title')} role="group">
-        {/* 单一 children 数组(同一键空间):pill 从候选段挪到已选段时 React 移动节点而不是重挂。 */}
-        {[
-          ...picked.map((item, i) => renderPill(item, i)),
-          ...(picked.length > 0 ? [<span key="sep" className="agent-select-sep" aria-hidden="true" />] : []),
-          ...candidates.map((item) => renderPill(item, null)),
-        ]}
-      </PillBar>
-      <div className={`engine-picker-hint${teamCount >= TEAM_MIN ? ' agent-select-team' : ''}${isDefaultLine ? ' is-default' : ''}`}>{statusLine}</div>
       {menu && <ContextMenu menu={menu} onClose={() => setMenu(null)} />}
-    </div>
+    </span>
   )
 }

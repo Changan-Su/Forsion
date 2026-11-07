@@ -62,3 +62,5 @@
   .amx-qf-wide { width: min(680px, 92vw); }
   .amx-qf-preview { display: none; }
 }
+/* Mini 窗(11-03 加的文件搜索):顶上那条透明拖拽区会穿过遮罩接住点击,开着面板时整窗不拖,点遮罩才关得掉。 */
+[data-window='mini'] .amx-qf-scrim { -webkit-app-region: no-drag; }

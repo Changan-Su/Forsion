@@ -180,6 +180,10 @@ const box = ctx.tangu?.mountComposer?.(el, {
 - 没有 Tangu Space 的宿主(单品档案)上按发送不动;没有对话能力的宿主 / 旧宿主上整个缺席:`ctx.tangu?.mountComposer`。
 - `dispose()` 之后 `el` 立刻还给你;插件被禁用 / 重载时宿主统一卸掉。
 
+### 代填通道凭据:connectChannel(2026-10-31 起)
+
+`ctx.tangu.connectChannel?.(kind, fields, { modelId })` 给**本包捆绑的引擎插件**注册的通道存凭据并连接,回 `{ ok: true, accountId, label, sessionId }` 或 `{ ok: false, error }`。`fields` 只收通道 `fields` 声明过的键。只在有本机引擎的桌面上有,先判存在;别的插件的通道一律拒绝,判定在宿主。重复调用幂等。
+
 ## 正文 AI:ctx.tangu.complete 与 registerSelectionAction(2026-09-28 起)
 
 **别再直连 `POST /agent/runs` 做「改写这段」**:那是 Agent 的 run(带工具、落会话、slash 结果还有 8192 字符上限),又重又会

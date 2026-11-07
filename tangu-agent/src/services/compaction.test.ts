@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   extractFileOps, formatFileOps, parseFileOps, compactionRange, buildTranscript, rowCoverage,
-  summaryMessage, isSummaryMessage, compactSystemPrompt, type FileOps,
+  summaryMessage, isSummaryMessage, compactSystemPrompt, idleCompactionDue, tagMessageSource, type FileOps,
 } from './compaction.js';
 import { estimateMessageTokens } from './contextBudget.js';
 import type { ChatMessage } from '../core/types.js';
@@ -244,5 +244,25 @@ describe('compactSystemPrompt — 增量 PRESERVE/UPDATE 指令 + 可配指令 /
     expect(p).toContain('UPDATE it instead of restarting');
     expect(p).toContain('Additional focus: always keep ticket ids\nfocus on the migration');
     expect(compactSystemPrompt(false, {}, '')).not.toContain('Additional focus');
+  });
+});
+
+describe('idleCompactionDue — 隔久了先压(提示缓存已凉)', () => {
+  const cfg = { enabled: true, idleMinutes: 60, keepRecentTokens: 20_000 };
+  const now = 10 * 3600_000;
+  const msgs = (lastTs: number): ChatMessage[] => [
+    tagMessageSource(mk('user', 'a'), { id: 'u1', ts: lastTs - 1000 }),
+    tagMessageSource(mk('assistant', 'b'), { id: 'a1', ts: lastTs }),
+    tagMessageSource(mk('user', 'now'), { id: 'cur', ts: now }), // 本轮那条:不算「上一条」
+  ];
+  it('上一条超过 idleMinutes 且历史够大才压', () => {
+    expect(idleCompactionDue(msgs(now - 61 * 60_000), cfg, 50_000, now, 'cur')).toBe(true);
+    expect(idleCompactionDue(msgs(now - 59 * 60_000), cfg, 50_000, now, 'cur')).toBe(false);
+    expect(idleCompactionDue(msgs(now - 61 * 60_000), cfg, 30_000, now, 'cur')).toBe(false); // 不到 2× keepRecent
+  });
+  it('本轮 user 不排除就永远不空闲;idleMinutes=0 / enabled=false 关掉', () => {
+    expect(idleCompactionDue(msgs(now - 61 * 60_000), cfg, 50_000, now)).toBe(false);
+    expect(idleCompactionDue(msgs(now - 61 * 60_000), { ...cfg, idleMinutes: 0 }, 50_000, now, 'cur')).toBe(false);
+    expect(idleCompactionDue(msgs(now - 61 * 60_000), { ...cfg, enabled: false }, 50_000, now, 'cur')).toBe(false);
   });
 });

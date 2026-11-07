@@ -55,6 +55,8 @@ import { HISTORIAN_EMOJI_FIELD } from '../core/sessionEmoji.js';
 import { applyHistorianEmoji } from './sessionEmoji.js';
 import { sessionRemoteTainted } from './remoteTaint.js';
 import { judgeTriggerBlock } from './judgeSignals.js';
+import { deviceTagContext, hasLocalPath, textForThisDevice } from './deviceTagContext.js';
+import { tagOf, withTag } from '../contracts/deviceTags.js';
 export { parseRawLines } from './memoryCandidates.js';
 const historianSignal = new AsyncLocalStorage<AbortSignal>();
 
@@ -69,6 +71,8 @@ const RAW_MAX_AGE_DAYS = 7;
 const RAW_MAX_PER_ROUND = 5;
 const HARNESS_RAW_MAX_PER_ROUND = 3;
 const PROJECT_FACTS_MAX_PER_ROUND = 3;
+/** 判官的项目候选里收哪几类(11-03);progress / content 和没标类别的不写进项目记忆。 */
+const PROJECT_FACT_KINDS = new Set(['command', 'location', 'convention', 'landmine', 'request']);
 // 会话级 Historian 互斥(Codex 评审 08-03 Critical):onUserRunDone 是 fire-and-forget,下一 run 的
 // done 可能在上一轮维护(judge/fork/整固)还在飞时到来——everyRounds=1 时必然。并发双跑会重复追加
 // LOG/候选、竞态覆盖标题/摘要。锁忙=直接跳过本轮(维护是尽力而为,下个到点轮自然补),绝不能把
@@ -128,8 +132,16 @@ function judgeFieldSpecs(wantTitle: boolean, wantLog: boolean, wantMemory: boole
     );
     if (wantProject) {
       fields.push(
-        '"project_memory_candidates": an array of NEW facts that hold only inside this project (usually empty): its commands, layout and conventions proven to work here, ' +
-        'landmines found here, what the user asked for in this project. Same gate and same form as memory_candidates; at most 3 entries. ' +
+        // 11-03:笔记库那类项目里,判官把「讲到哪了」和讲义内容记成了项目记忆 —— 光说「别记进度」(上面的负面清单)没拦住。
+        // 改成每条必须先标类别,只收前五类;进度、内容和没标类别的都不写(见下面 PROJECT_FACT_KINDS)。
+        '"project_memory_candidates": an array (usually empty) of NEW facts that hold only inside this project, each an object {"kind": K, "fact": "one sentence"}. ' +
+        'K is one of: "command" (a command or workflow proven to work here), "location" (the path of a file, folder or tool of this project), "convention" (how things are done here), ' +
+        '"landmine" (a trap found here), "request" (what the user wants agents to do or avoid in this project), ' +
+        '"progress" (where a task, lesson, reading or document stands or stopped, what was done or covered, where to continue), ' +
+        '"content" (subject matter itself: what a paper, lecture, note or file says, or which chapter, section or page of a source it corresponds to). ' +
+        'Test each entry: would an agent starting an unrelated task in this project next month need it? A fact about one document, lesson or session is "progress" or "content", never "location". ' +
+        'Label every entry honestly: only the first five kinds are saved; "progress" and "content" entries are dropped, which is the expected outcome for them. ' +
+        'Same gate and same form for "fact" as memory_candidates; at most 3 entries. ' +
         'Skip whatever a [Project memory] block below already says. ' +
         'An entry is saved for every agent working in this project without anyone reviewing it, so include only what this conversation clearly established.',
       );
@@ -743,10 +755,16 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
           .map((c) => redactSecrets(String(c ?? '').replace(/\s*[\r\n]+\s*/g, '; ').trim()).slice(0, 300))
           .filter((c) => c.length >= 4 && c.toUpperCase() !== 'NOTHING')
           .slice(0, max);
-        // 项目那组只在项目会话里收(非项目会话里模型硬给也不认);同一句两组都交了 → 算项目级,不进 agent 级 raw 层。
-        const projectFacts = projectRef && Array.isArray((j as any).project_memory_candidates) ? cleanCands((j as any).project_memory_candidates, PROJECT_FACTS_MAX_PER_ROUND) : [];
-        const candidates = cleanCands(rawCands, RAW_MAX_PER_ROUND + projectFacts.length)
-          .filter((c) => !projectFacts.some((f) => normalizeMemoryFact(f) === normalizeMemoryFact(c)))
+        // 项目那组只在项目会话里收(非项目会话里模型硬给也不认);同一句两组都交了 → 算项目级,不进 agent 级 raw 层(没收的那几条也算)。
+        const projectRaw: unknown[] = projectRef && Array.isArray((j as any).project_memory_candidates) ? (j as any).project_memory_candidates : [];
+        const factOf = (c: unknown): unknown => (c && typeof c === 'object' ? (c as any).fact : c);
+        const projectAll = cleanCands(projectRaw.map(factOf), projectRaw.length); // 排除 agent 级时看全部,写入才封顶(Codex 评审 11-03)
+        // 只收约定类;进度、内容、没标类别的(旧格式的裸字符串)都不写 —— 没标类别就没过这道闸,不能当约定收
+        const projectFacts = cleanCands(projectRaw.filter((c) => !!c && typeof c === 'object' && PROJECT_FACT_KINDS.has(String((c as any).kind))).map(factOf), PROJECT_FACTS_MAX_PER_ROUND);
+        const dropped = projectRaw.filter((c) => !(c && typeof c === 'object' && PROJECT_FACT_KINDS.has(String((c as any).kind))));
+        if (dropped.length) log(`项目记忆候选没收 ${dropped.length} 条(进度 / 内容 / 没标类别):${dropped.map((c) => (c && typeof c === 'object' ? `${String((c as any).kind).slice(0, 20)}:` : 'bare:') + redactSecrets(String(factOf(c) ?? '')).slice(0, 60)).join(' | ')}`);
+        const candidates = cleanCands(rawCands, RAW_MAX_PER_ROUND + projectAll.length)
+          .filter((c) => !projectAll.some((f) => normalizeMemoryFact(f) === normalizeMemoryFact(c)))
           .slice(0, RAW_MAX_PER_ROUND);
         const okShort = (s: string) => !!s && s.toUpperCase() !== 'NOTHING' && s.length >= 2 && s.length <= 400;
         log(`判断: title="${title}" log="${logText.slice(0, 30)}" 候选=${candidates.length} 条`);
@@ -787,6 +805,15 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
           historianSignal.getStore()?.throwIfAborted();
           await deps().brain.memory.appendLogEntry(userId, logText, { signal: historianSignal.getStore() });
           await logActivity(userId, 'log_appended', logText, sessionId);
+        }
+        // 带本机绝对路径的候选(11-06,按条标适用范围):不进所有设备共用的 Agent 记忆 —— 路径到了别的电脑上不成立。
+        // 项目会话里转进项目记忆(和判官的项目候选走下面同一道形状闸);没有项目就标上这台的名字(`[MacBook Pro] …`)再进 raw 层。
+        const pathy = judgeMemory ? candidates.filter((c) => hasLocalPath(c)) : [];
+        if (pathy.length) {
+          for (const c of pathy) candidates.splice(candidates.indexOf(c), 1);
+          if (projectRef) projectFacts.push(...pathy.filter((c) => !projectFacts.some((f) => normalizeMemoryFact(f) === normalizeMemoryFact(c))));
+          else { const here = deviceTagContext(); candidates.push(...pathy.map((c) => tagOf(c, here) ? c : withTag(c, here.self, here))); }
+          log(`${pathy.length} 条记忆候选带本机路径,${projectRef ? `转进项目记忆(${projectRef.name})` : '标上这台的名字'}`);
         }
         historianSignal.getStore()?.throwIfAborted();
         if (judgeMemory && stillClean && candidates.length) {
@@ -985,7 +1012,8 @@ async function startAssistDiscussion(opts: {
 
     // 当前记忆/今日日志随开场白注入,主 Agent 据此判断「是否已记过/是否值得记」。
     // 此刻 ALS 已是本会话的记忆域(onUserRunDone 顶部 enterRunContext),直接读即为主 Agent 的文件。
-    const mem = String((await deps().brain.memory.getMemory(userId).catch(() => ({ content: '' })))?.content || '').trim();
+    // 别台的条目折成一行(11-06):主 Agent 在这台上判断记不记,别台的条目它也不该去改
+    const mem = textForThisDevice(String((await deps().brain.memory.getMemory(userId).catch(() => ({ content: '' })))?.content || '').trim(), deviceTagContext(), 'entry');
     const todayLog = String((await deps().brain.memory.getLog(userId).catch(() => ({ content: '' } as any)))?.content || '').trim();
 
     const topics = [opts.wantLog ? 'the daily LOG' : '', opts.wantMemory ? 'the long-term MEMORY' : ''].filter(Boolean).join(' and ');

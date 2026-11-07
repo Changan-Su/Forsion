@@ -10,7 +10,7 @@
  *   - 只在本机执行形态(mode:'host')露出:config.json 是本机文件,云端会话没有它。
  * 写完发 `app_settings_changed`:桌面端缓存着这份配置(desktopConfig / cfg),不通知它,界面显示的和随 run 带过来的还是旧值。
  */
-import type { ToolProvider } from '../toolRegistry.js';
+import { resolveTools, type ToolProvider } from '../toolRegistry.js';
 import type { ToolContext } from '../toolTypes.js';
 import { publish } from '../../services/eventBus.js';
 import { READABLE_SECTIONS, WRITABLE_SECTIONS, renderAppSettings, updateAppSettings } from '../../services/appSettings.js';
@@ -23,6 +23,13 @@ function enabledFor(_p: unknown, ctx: ToolContext): boolean {
 }
 /** 这条 run 能不能改(通道来的 / 远程污点的只读)。 */
 const canWrite = (ctx: ToolContext): boolean => ctx.runOrigin !== 'channel' && !effectiveRemote(ctx);
+/** 发起端能不能开设置页:本 run 真的拿得到 run_ui_command,且客户端目录里有 open-settings(web / 手机未必有)。
+ *  「拿得到」问 resolveTools(defs / 目录 / 按名执行同一个判定源):GUI 门禁之外还有严格工具白名单、部署级内置白名单、
+ *  计划模式、preset、宿主沙箱 —— 只看 uiSurfaceEnabledFor 会在白名单不含它时照样教模型去调(Codex 评审)。
+ *  不满足就不提这条路 —— 指向一个不存在的工具 / 命令,模型只会撞一次拒绝。 */
+const canOpenSettingsPages = (ctx: ToolContext): boolean =>
+  (ctx.uiCommands || []).some((c) => c.id === 'open-settings')
+  && resolveTools(ctx.profile ?? deps().profile, ctx).has('run_ui_command');
 
 export const appSettingsProvider: ToolProvider = {
   id: 'builtin:app_settings',
@@ -50,7 +57,7 @@ export const appSettingsProvider: ToolProvider = {
           },
         },
       },
-      execute: (args, ctx) => renderAppSettings({ section: typeof args?.section === 'string' ? args.section : undefined, writable: canWrite(ctx) }),
+      execute: (args, ctx) => renderAppSettings({ section: typeof args?.section === 'string' ? args.section : undefined, writable: canWrite(ctx), canOpenPages: canOpenSettingsPages(ctx) }),
     },
     {
       name: 'update_app_settings',

@@ -25,6 +25,7 @@ export function mcpSettingsPreview(args: Record<string, any>): string {
     return `MCP ${action}\n${rows.join('\n\n')}${args.reason ? `\nreason: ${String(args.reason).slice(0, 200)}` : ''}`;
   } catch { return `MCP ${action}: ${name || '(invalid configuration; validation will reject it)'}`; }
 }
+const originsOnly = (text: string): string => text.replace(/https?:\/\/[^\s"']+/g, (raw) => { try { return new URL(raw).origin; } catch { return '(invalid URL)'; } });
 export function readMcpSettings(name?: string): string {
   const configs = loadRawMcpServers();
   const manager = deps().mcp;
@@ -42,7 +43,8 @@ export function readMcpSettings(name?: string): string {
       ...(c?.timeoutMs ? { timeoutMs: c.timeoutMs } : {}),
       credentialKeys: { env: Object.keys(c?.env ?? {}), headers: Object.keys(c?.headers ?? {}) },
       toolCount: s?.toolCount ?? 0,
-      ...(s?.status === 'needs-login' ? { note: 'The user must sign in to this server under Settings → MCP servers.' } : s?.error ? { error: 'Connection failed. Open MCP settings for details.' } : {}),
+      // 原因交给模型才能自己改配置(D30):manager 已按值遮过密钥,这里再把地址收成 origin(查询串里常带令牌)
+      ...(s?.status === 'needs-login' ? { note: 'The user must sign in to this server under Settings → MCP servers.' } : s?.error ? { error: `Connection failed: ${originsOnly(s.error).slice(0, 300)}` } : {}),
       ...(s?.origin ? { origin: s.origin } : {}),
     };
   });
@@ -54,6 +56,8 @@ export function writeMcpSettings(action: string, args: Record<string, any>, guar
   const name = typeof args.name === 'string' ? args.name : '';
   if (!['add', 'update', 'enable', 'disable', 'delete'].includes(action)) throw new Error('Unknown MCP action');
   if (action !== 'add') validateMcpName(name);
+  // 按工具的审批 / 关闭是用户在连接器设置里定的:Agent 改不了(删掉就等于自己放开限制,完全通行档下还不弹卡)。新加的条目带着只会更严,照收
+  if (action === 'update' && args.config && typeof args.config === 'object' && Object.hasOwn(args.config, 'tools')) throw new Error('Per-tool approval settings can only be changed by the user in Settings → Connectors.');
   const incoming = action === 'add' ? parseMcpInput(args.config, name) : undefined;
   const pluginNames = new Set((deps().mcp?.listStatus() ?? []).filter(s => s.origin).map(s => s.name));
   const names = incoming ? Object.keys(incoming) : [name];

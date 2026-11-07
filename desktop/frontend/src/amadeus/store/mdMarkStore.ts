@@ -155,7 +155,8 @@ export function useMdMarks(): MdMark[] {
     const t = setTimeout(() => { void useMdMarkStore.getState().load() }, 250)
     return () => clearTimeout(t)
   }, [vaultRoot, activePage])
-  return useMemo(() => withOverlay(marks, overlay), [marks, overlay])
+  // 没写 @ 的子任务(parentId + 空日期)只给插件画父项里的子任务;宿主自己的待办 / 日历 / 仪表盘照旧「没有 @ 不进视图」
+  return useMemo(() => withOverlay(marks.filter((m) => !m.parentId || m.due), overlay), [marks, overlay])
 }
 
 function withOverlay(marks: MdMark[], overlay: Record<string, MarkPatch>): MdMark[] {

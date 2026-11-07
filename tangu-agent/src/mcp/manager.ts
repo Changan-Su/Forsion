@@ -129,7 +129,8 @@ export interface McpManager {
   /** Reconcile saved user settings only while the host has no active runs. Never rebind an old tool snapshot. */
   reloadConfig(): Promise<void>;
   /** 本 run 的工具快照(已按 server 名过滤;Map 键=桥接名)。run 开始取一次,run 内不变。 */
-  toolsForRun(enabledServerNames?: string[]): Map<string, LoadedMcpTool>;
+  /** includeOff:连 mcp.json 里按工具关掉的也给(只给设置页列清单,别拿去下发)。 */
+  toolsForRun(enabledServerNames?: string[], opts?: { includeOff?: boolean }): Map<string, LoadedMcpTool>;
   callTool(bridged: LoadedMcpTool, args: Record<string, any>, signal?: AbortSignal): Promise<McpCallResult>;
   listStatus(): McpServerStatus[];
   /** 连接(启动时调用一次;失败的 server 记错误不阻断其他,转后台重试)。 */
@@ -143,6 +144,8 @@ export interface McpManager {
   login(name: string): Promise<{ url?: string }>;
   /** 断开:删掉本机令牌,置「待登录」。 */
   logout(name: string): Promise<void>;
+  /** 设置里「测试连接」:按这份(还没保存的)配置连一次、列工具后断开,不影响已登记的 server。 */
+  probe(cfg: McpServerConfig): Promise<{ ok: true; tools: string[] } | { ok: false; error: string; needsLogin?: boolean }>;
   /** 「用户自带 Key」型:存 Key(本机 connector-auth.json)并重连。返回重连后的状态。 */
   setKey(name: string, key: string): Promise<{ status: McpServerStatus['status']; error?: string }>;
   dispose(): Promise<void>;
@@ -171,6 +174,27 @@ export function sessionGone(e: unknown, hadSession: boolean): boolean {
   }
 }
 
+const SECRET_NAME = /token|secret|passw|api[-_]?key|access[-_]?key|private[-_]?key|auth|credential|cookie|session/i;
+/** 开关 / 数字这类值:名字像密钥也不遮,遮了会把正常结果里的 true、8080 一起改掉 */
+const PLAIN_VALUE = /^(?:true|false|yes|no|on|off|\d{1,6})$/i;
+/**
+ * 配置里的密钥值按值遮掉(D30):名字像密钥的 env 与 header(Authorization / Cookie / X-Api-Key……),
+ * header 再拆出去掉 Bearer / Basic 前缀的那段和 Cookie 里每个值。服务器把令牌回显进结果或报错时,
+ * 不带 sk- / Bearer 特征的裸令牌出站规则认不出,这里先遮。Content-Type 这类普通 header 不动。
+ */
+export function redactSecrets(text: string, cfg: Pick<McpServerConfig, 'env' | 'headers'>): string {
+  const values = new Set<string>();
+  for (const [k, v] of Object.entries(cfg.env ?? {})) if (typeof v === 'string' && SECRET_NAME.test(k)) values.add(v);
+  for (const [k, v] of Object.entries(cfg.headers ?? {})) {
+    if (typeof v !== 'string' || !SECRET_NAME.test(k)) continue;
+    values.add(v);
+    values.add(v.replace(/^(?:bearer|basic|token)\s+/i, ''));
+    for (const pair of v.split(';')) values.add(pair.slice(pair.indexOf('=') + 1).trim());
+  }
+  for (const v of [...values].filter((v) => v.length >= 3 && !PLAIN_VALUE.test(v)).sort((a, b) => b.length - a.length)) text = text.split(v).join('<redacted>');
+  return text;
+}
+
 export function createMcpManager(configFile?: string, opts: McpManagerOptions = {}): McpManager {
   const servers: ServerEntry[] = [];
   let exitHook = false;
@@ -197,18 +221,24 @@ export function createMcpManager(configFile?: string, opts: McpManagerOptions = 
   const nameOwner = new Map<string, string>();
   /** removeServers 里还没关完的 server:dispose 要等它们,否则停用后马上退出会留下 stdio 子进程。 */
   const closing = new Set<Promise<void>>();
+  /** 在飞的「测试连接」:dispose 一并关掉。 */
+  const probing = new Set<Client>();
   /** start() 之前就到的插件 server:等 mcp.json 的登记完再加。 */
   const queued: Array<[{ id: string; name: string }, Record<string, McpServerConfig>]> = [];
   /** 在飞的交互登录:dispose 时放掉回环端口。 */
   const logins = new AbortController();
-  /** 报错 / 日志里的 Key 换回 `{userKey}`。 */
-  const red = (entry: ServerEntry, text: string): string => redactKey(text, entry.userKey);
+  /** 报错 / 日志 / 结果里的 Key 换回 `{userKey}`,配置里的密钥值按值遮掉(D30)。 */
+  const red = (entry: ServerEntry, text: string): string => redactSecrets(redactKey(text, entry.userKey), entry.cfg);
   // 连接器目录的 alwaysAsk:桥接名 → 持有它的 mcp.json 条目 → 目录缓存。认领时才有 remoteName,所以由这里答、不在审批侧反推。
   const unregisterApproval = setMcpApprovalLookup((bridged) => {
     const serverName = owner.get(bridged);
     const entry = serverName === undefined ? undefined : servers.find((s) => s.name === serverName && !s.origin);
-    if (!entry?.cfg.connector) return undefined;
-    return connectorToolAlwaysAsk(entry.cfg.connector, entry.boundRemote.get(bridged)) ? 'always' : undefined;
+    if (!entry) return undefined;
+    const remotes = entry.boundRemote.get(bridged);
+    // 用户按工具设的「每次都问」:任一指过的远端名被设了就算(只收紧);目录的 alwaysAsk 照样在下面兜着
+    if (remotes && [...remotes].some((r) => entry.cfg.tools?.[r] === 'ask')) return 'always';
+    if (!entry.cfg.connector) return undefined;
+    return connectorToolAlwaysAsk(entry.cfg.connector, remotes) ? 'always' : undefined;
   });
 
   function newEntry(name: string, c: McpServerConfig, origin?: ServerEntry['origin']): ServerEntry {
@@ -436,6 +466,40 @@ export function createMcpManager(configFile?: string, opts: McpManagerOptions = 
   }
 
   const api: McpManager = {
+    async probe(cfg) {
+      // 只连一次、列完工具就关:不登记名字、不认领桥接名、不排重试,运行中的 server 一概不碰(D29)
+      if (disposed) return { ok: false, error: 'disposed' };
+      // 不走 newEntry:那里会登记名字归属和 servers 列表
+      const entry: ServerEntry = {
+        name: '(probe)', cfg, transport: inferTransport(cfg), client: null, tools: [], status: 'connecting',
+        connecting: null, pendingClient: null, retryTimer: null, retryAttempt: 0, connectedAt: 0, configError: false, needsLogin: false, boundRemote: new Map(),
+      };
+      if (entry.transport !== 'stdio' && isUserKeyUrl(cfg.url)) {
+        entry.userKey = loadUserKey(cfg.url!);
+        if (!entry.userKey) return { ok: false, needsLogin: true, error: 'needs-key' };
+      }
+      let client: Client | null = null;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        if (isHostSandboxRestricted()) throw new Error('MCP servers are unavailable while the local sandbox is enabled');
+        const c = new Client({ name: 'tangu-agent', version: '1.0.0' });
+        client = c;
+        probing.add(c); // dispose 要能关掉它,否则引擎退出时留下 stdio 子进程
+        const timeout = new Promise<never>((_, rej) => {
+          timer = setTimeout(() => rej(new Error(`connect timed out (${connectTimeoutMs / 1000}s)`)), connectTimeoutMs);
+          timer.unref?.();
+        });
+        const listed = await Promise.race([(async () => { await c.connect(buildTransport(entry)); return c.listTools(); })(), timeout]);
+        if (entry.needsLogin) return { ok: false, needsLogin: true, error: 'needs-login' };
+        return { ok: true, tools: (listed.tools ?? []).map((t) => t.name).sort() };
+      } catch (e: any) {
+        return entry.needsLogin ? { ok: false, needsLogin: true, error: 'needs-login' } : { ok: false, error: red(entry, String(e?.message || e)).slice(0, 500) };
+      } finally {
+        if (timer) clearTimeout(timer);
+        if (client) probing.delete(client);
+        await client?.close().catch(() => {});
+      }
+    },
     async start() {
       // 磁盘视图:保留名的 server 也列出来(error + 原因),用户在 MCP 设置里看得到它为什么没起来
       const raw = loadRawMcpServers(configFile);
@@ -452,12 +516,20 @@ export function createMcpManager(configFile?: string, opts: McpManagerOptions = 
 
     reloadConfig() {
       if (reloading) return reloading;
-      if (disposed || !started || (opts.canReload && !opts.canReload())) return Promise.resolve();
+      if (disposed || !started) return Promise.resolve();
       const raw = loadRawMcpServers(configFile);
+      // 按工具的限制不等空闲:有 run 在跑也立刻换上(关 = 这一刻起调用就拒;ask 下一次调用就问)。只换 tools,不动连接
+      for (const s of servers) {
+        if (!s.origin && raw[s.name] && JSON.stringify(raw[s.name].tools) !== JSON.stringify(s.cfg.tools)) s.cfg = { ...s.cfg, tools: raw[s.name].tools };
+      }
+      if (opts.canReload && !opts.canReload()) return Promise.resolve();
       const fingerprint = JSON.stringify(raw);
       if (fingerprint === configSnapshot) return Promise.resolve();
       configSnapshot = fingerprint;
-      const gone = servers.filter(s => !s.origin && (!raw[s.name] || raw[s.name].enabled === false || JSON.stringify(raw[s.name]) !== JSON.stringify(s.cfg)));
+      // 只改了按工具设置(tools)的不算变:原地换 cfg,不断线重连(登录态、在跑的连接都留着)
+      const sansTools = (c: McpServerConfig): string => JSON.stringify({ ...c, tools: undefined });
+      const gone = servers.filter(s => !s.origin && (!raw[s.name] || raw[s.name].enabled === false || sansTools(raw[s.name]) !== sansTools(s.cfg)));
+      for (const s of servers) if (!s.origin && raw[s.name] && !gone.includes(s)) s.cfg = raw[s.name];
       const added = Object.entries(raw).filter(([name, c]) => c.enabled !== false && !servers.some(s => !s.origin && s.name === name && !gone.includes(s)));
       // Remove before awaiting close. A stale run snapshot must fail, never dispatch to a replacement endpoint.
       for (const s of gone) { servers.splice(servers.indexOf(s), 1); s.configError = true; }
@@ -493,14 +565,20 @@ export function createMcpManager(configFile?: string, opts: McpManagerOptions = 
       try { await p; } finally { closing.delete(p); }
     },
 
-    toolsForRun(enabledServerNames?: string[]) {
+    toolsForRun(enabledServerNames?: string[], opts?: { includeOff?: boolean }) {
       // 只给桥接名的持有者(owner 表):持有者掉线 / 被 enabledServerNames 滤掉时,这个名字本 run 就没有,
       // 绝不改指别的 server。start() 首批认领之前(没有 run 会在这时开始)一律为空 —— fail closed。
       const out = new Map<string, LoadedMcpTool>();
       for (const s of servers) {
         if (s.status !== 'connected') continue;
         if (enabledServerNames && !enabledServerNames.includes(s.name)) continue;
-        for (const t of s.tools) if (owner.get(t.name) === s.name) { snapshotEntries.set(t, s); out.set(t.name, t); }
+        for (const t of s.tools) {
+          if (owner.get(t.name) !== s.name) continue;
+          if (!opts?.includeOff && s.cfg.tools?.[t.remoteName] === 'off') continue; // 用户在连接器设置里关掉的:Agent 看不到
+          // 配置 deferLoading:false → 本 run 快照里的这一份标成常驻(副本也要登记归属,callTool 按对象认 server)
+          const v: LoadedMcpTool = s.cfg.deferLoading === false ? { ...t, deferLoading: false } : t;
+          snapshotEntries.set(v, s); out.set(t.name, v);
+        }
       }
       return out;
     },
@@ -512,6 +590,10 @@ export function createMcpManager(configFile?: string, opts: McpManagerOptions = 
       if (bound && !servers.includes(bound)) return { text: 'Error: MCP settings changed. Start a new run to use the new configuration.', isError: true };
       if (!entry) return { text: `Error: MCP server "${bridged.serverName}" is not configured`, isError: true };
       if (signal?.aborted) return ABORTED;
+      // run 开始后才被关掉的工具:快照里还有,调用这一刻照样拒(关 = 立刻生效,不等下一轮);等完重连再查一次
+      const turnedOff = () => entry.cfg.tools?.[bridged.remoteName] === 'off';
+      const offResult = { text: `Error: the user turned off the MCP tool "${bridged.remoteName}" in settings`, isError: true };
+      if (turnedOff()) return offResult;
       if (entry.needsLogin) return needsLoginResult(entry.name, isUserKeyUrl(entry.cfg.url));
       // 懒重连:server 断线 / 初次没连上时,调用前按冷却(15s)尝试重连一次(后台重试正在连就搭它的车)——
       // 避免「server 挂了不重连、工具一直 hang 到 timeout」。冷却防对死 server 每调必连。
@@ -525,6 +607,7 @@ export function createMcpManager(configFile?: string, opts: McpManagerOptions = 
           return { text: `Error: MCP server "${bridged.serverName}" is not connected`, isError: true };
         }
       }
+      if (turnedOff()) return offResult;
       const timeoutMs = entry.cfg.timeoutMs && entry.cfg.timeoutMs > 0 ? entry.cfg.timeoutMs : DEFAULT_CALL_TIMEOUT_MS;
       const invoke = (c: Client) => c.callTool(
         { name: bridged.remoteName, arguments: args },
@@ -639,7 +722,7 @@ export function createMcpManager(configFile?: string, opts: McpManagerOptions = 
       unregisterApproval();
       for (const s of servers) clearRetry(s);
       // 在飞的 initialize 一并关掉(connect 随之失败),再等它们收尾 —— 返回时不留子进程、不再起新连接
-      await Promise.all(servers.flatMap((s) => [s.client, s.pendingClient]).map((c) => c?.close().catch(() => {})));
+      await Promise.all([...servers.flatMap((s) => [s.client, s.pendingClient]), ...probing].map((c) => c?.close().catch(() => {})));
       // 等收尾有上限:SSE 流开了却迟迟不发 endpoint 时,close 不会让 SDK 的 start() 结束,干等会拖满连接超时。
       // 超时后照样返回 —— 迟到的连接在 doConnect 里见 disposed 自己关掉。
       let cap: ReturnType<typeof setTimeout> | undefined;

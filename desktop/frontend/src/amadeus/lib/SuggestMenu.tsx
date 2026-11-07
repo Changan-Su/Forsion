@@ -14,6 +14,8 @@ interface Props {
   left: number
   top: number
   anchorTop?: number
+  /** 首选方向(同 OverlayAt);缺省在光标下方,放不下再翻面。 */
+  prefer?: 'below' | 'above'
   className?: string
   /** 变了就把高亮挪回第一行(查询串)。 */
   resetKey?: unknown
@@ -23,7 +25,7 @@ interface Props {
   focused?: () => boolean
 }
 
-export function SuggestMenu({ items, left, top, anchorTop, className = '', resetKey, onPick, onClose, focused }: Props) {
+export function SuggestMenu({ items, left, top, anchorTop, prefer, className = '', resetKey, onPick, onClose, focused }: Props) {
   const [active, setActive] = useState(0)
   useEffect(() => { setActive(0) }, [resetKey])
   const total = items.length
@@ -55,7 +57,7 @@ export function SuggestMenu({ items, left, top, anchorTop, className = '', reset
   if (total === 0) return null
   const reveal = (i: number) => (i === active ? (el: HTMLButtonElement | null) => el?.scrollIntoView({ block: 'nearest' }) : undefined)
   return (
-    <OverlayAt className={`wiki-suggest ${className}`} x={left} y={top} anchorTop={anchorTop} role="menu" onMouseDown={(e) => e.preventDefault()}>
+    <OverlayAt className={`wiki-suggest ${className}`} x={left} y={top} anchorTop={anchorTop} prefer={prefer} role="menu" onMouseDown={(e) => e.preventDefault()}>
       {items.map((item, i) => (
         <button
           key={item.key}

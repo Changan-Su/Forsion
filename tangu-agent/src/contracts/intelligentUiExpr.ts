@@ -1,6 +1,6 @@
 /** Forsion Intelligent UI v2 expressions: a small pure language over a fixed list of functions.
  * Shared by the engine validator and the native renderer. An expression reads only the document's
- * inputs, state and derived values; it cannot reach the network, the clock, randomness, the DOM or any
+ * inputs, state and derived values, and a widget's saved records; it cannot reach the network, the clock, randomness, the DOM or any
  * object it was not handed. Runs in the app's renderer process (not a sandbox), hence the own-property
  * reads and the caps on every value it produces. */
 import type { UIDocument, UISetStep } from './intelligentUi.js'
@@ -222,8 +222,42 @@ const FNS = new Map<string, Fn>([
   ['each', { min: 3, max: 3, run: () => null }], ['filter', { min: 3, max: 3, run: () => null }], ['sortBy', { min: 3, max: 3, run: () => null }],
 ])
 export const UI_FUNCTIONS: readonly string[] = [...FNS.keys()]
+/** 小组件的记录(data.db 的行):文档里在哪都能读。宿主绑定优先,声明是退路:
+ *  宿主传了行(哪怕空列表)= 绑定,records 读这些行,盖过文档自己声明的同名 input / state / derived;
+ *  没传 = 没绑定(普通对话卡、旧聊天记录、引擎的初值检查),声明了照旧读自己的,没声明读空列表。
+ *  ⚠️不拒收声明:模型写账本卡爱自己声明 state records(live 10-31、11-03 都见过),旧聊天记录里的卡也有,拒了旧卡就画不出来、新卡首调必败。 */
+export const UI_RECORDS = 'records'
 /** Names a document may not declare. Function names stay free: a call is written name(…), a value bare. */
 export const reservedUIName = (id: string): boolean => KEYWORDS.has(id) || FORBIDDEN.has(id)
+/** One data.db row; cells are whatever the file holds, so they are checked again here. */
+export type UIRecordRow = { id: string; cells: Record<string, unknown> }
+/** Same bounds as a stored state value (uiValueIssue): a field read directly skips sized(), so a 1 MB note
+ * shown in many places would otherwise cost no steps (Codex 11-03). Display only; data.db is not touched. */
+const RECORD_TEXT = 1000, RECORD_FIELDS = 32
+const clip = (x: string): string => x.length > RECORD_TEXT ? `${x.slice(0, RECORD_TEXT - 1)}…` : x
+function cellValue(x: unknown): UIValue | undefined {
+  if (x === null || typeof x === 'boolean' || (typeof x === 'number' && Number.isFinite(x))) return x
+  if (typeof x === 'string') return clip(x)
+  if (Array.isArray(x) && x.every(v => typeof v === 'string')) return x.slice(0, EXPR_LIMITS.list).map(clip)
+  return undefined
+}
+/** Rows as the documents read them: {id, field: value}. The row id wins over a field named id. Values that
+ * are not text, numbers, true/false, null or lists of text are left out; long text is cut to 1000 characters,
+ * lists to 200 items, a record to its first 32 fields.
+ * ponytail: rows are not capped; past 200 rows each() hits the list limit and the totals show "—". */
+export function uiRecords(rows: readonly UIRecordRow[]): UIValue[] {
+  return rows.map(r => {
+    const out: { [key: string]: UIValue } = {}
+    let n = 0
+    for (const [k, v] of Object.entries(r.cells || {})) {
+      if (n >= RECORD_FIELDS) break
+      const value = FORBIDDEN.has(k) || k === 'id' || k.length > 80 ? undefined : cellValue(v)
+      if (value !== undefined) { out[k] = value; n++ }
+    }
+    out.id = r.id
+    return out
+  })
+}
 
 // ── static check ──
 export type ExprScope = { inputs: ReadonlySet<string>; names: ReadonlySet<string> }
@@ -277,7 +311,7 @@ export function compileExpr(src: unknown, scope: ExprScope): Node {
 
 // ── evaluation ──
 export type ExprEnv = {
-  /** Input, state or derived value; throws when a derived value failed. */
+  /** Input, state, derived value or records; throws when a derived value failed. */
   name(id: string): UIValue
   locale: 'zh' | 'en'
   budget: { steps: number }
@@ -381,23 +415,33 @@ export type DocumentEnv = ExprEnv & {
   slots(markdown: string): { markdown: string; values: string[] }
 }
 export function documentScope(doc: Pick<UIDocument, 'inputs' | 'state' | 'derived'>): ExprScope {
-  return { inputs: new Set(doc.inputs.map(i => i.id)), names: new Set([...(doc.state || []).map(s => s.id), ...(doc.derived || []).map(d => d.id)]) }
+  return { inputs: new Set(doc.inputs.map(i => i.id)), names: new Set([UI_RECORDS, ...(doc.state || []).map(s => s.id), ...(doc.derived || []).map(d => d.id)]) }
 }
 /** Values for one render: inputs as the user set them, state as stored, derived computed lazily once.
- * One step budget covers the whole render. */
-export function documentEnv(doc: Pick<UIDocument, 'inputs' | 'state' | 'derived'>, inputs: Record<string, string | number>, vars: ReadonlyMap<string, UIValue>, locale: 'zh' | 'en'): DocumentEnv {
+ * One step budget covers the whole render. records: the widget's data.db rows when the host has them
+ * (bound: they win over a declared records); undefined = not bound, a declared records reads as before. */
+export function documentEnv(doc: Pick<UIDocument, 'inputs' | 'state' | 'derived'>, inputs: Record<string, string | number>, vars: ReadonlyMap<string, UIValue>, locale: 'zh' | 'en', records?: readonly UIRecordRow[]): DocumentEnv {
   const scope = documentScope(doc)
   const derived = new Map((doc.derived || []).map(d => [d.id, d.expr]))
-  const memo = new Map<string, UICell>()
+  const memo = new Map<string, UICell>(), busy = new Set<string>()
+  let list: UIValue[] | undefined // 一次渲染一份:uiWeight 的缓存和比较都按对象算
   const env: DocumentEnv = {
     locale, budget: { steps: 0 },
     name: id => {
+      if (id === UI_RECORDS && records) return (list ??= uiRecords(records))
       if (Object.hasOwn(inputs, id)) return inputs[id]
       if (vars.has(id)) return vars.get(id)!
       const src = derived.get(id)
+      if (src === undefined && id === UI_RECORDS) return (list ??= [])
       if (src === undefined) throw new Error(`unknown name ${id}`)
       let c = memo.get(id)
-      if (!c) { c = env.cell(src); memo.set(id, c) }
+      if (!c) {
+        // 别的 derived 只能读排在前面的;records 不声明也在作用域里,于是「前面读 records、后面声明 derived records」能绕成圈
+        if (busy.has(id)) throw new Error(`${id} depends on itself`)
+        busy.add(id)
+        try { c = env.cell(src) } finally { busy.delete(id) }
+        memo.set(id, c)
+      }
       if (!c.ok) throw new Error(`${id}: ${c.error}`)
       return c.value
     },
@@ -431,11 +475,13 @@ export function uiTableRows(value: UIValue, columns: number): string[][] {
 }
 
 /** Runs a set button's steps in order, each seeing the state the previous one left. All or nothing:
- * any failing step throws and the caller keeps the old state. */
-export function applyUISteps(doc: Pick<UIDocument, 'inputs' | 'state' | 'derived'>, steps: UISetStep[], inputs: Record<string, string | number>, vars: ReadonlyMap<string, UIValue>, locale: 'zh' | 'en'): Map<string, UIValue> {
+ * any failing step throws and the caller keeps the old state. records: as in documentEnv.
+ * ponytail: with records bound, a step targeting a declared records state still writes that state, but
+ * records keeps reading the rows; the button looks like it does nothing. */
+export function applyUISteps(doc: Pick<UIDocument, 'inputs' | 'state' | 'derived'>, steps: UISetStep[], inputs: Record<string, string | number>, vars: ReadonlyMap<string, UIValue>, locale: 'zh' | 'en', records?: readonly UIRecordRow[]): Map<string, UIValue> {
   const next = new Map(vars), initial = new Map((doc.state || []).map(s => [s.id, s.initial]))
   for (const step of steps) {
-    const env = documentEnv(doc, inputs, next, locale)
+    const env = documentEnv(doc, inputs, next, locale, records)
     const value = (src: string): UIValue => { const c = env.cell(src); if (!c.ok) throw new Error(c.error); return c.value }
     const target = 'set' in step ? step.set : 'toggle' in step ? step.toggle : 'append' in step ? step.append : 'remove' in step ? step.remove : step.reset
     const current = next.get(target) ?? null

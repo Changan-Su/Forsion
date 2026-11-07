@@ -180,21 +180,28 @@ describe('生图结果的 mime 跟字节走', () => {
     expect(imageMimeOf('AAAA')).toBe('image/png');
   });
 
-  it('JPEG 结果 → .jpg 文件名 + image/jpeg dataUrl', async () => {
+  it.each([
+    { b64: JPEG, mime: 'image/jpeg', ext: '.jpg', options: {} },
+    { b64: 'R0lGODlh', mime: 'image/gif', ext: '.gif', options: { output_format: 'gif', frame_count: 6, frame_duration_ms: 150 } },
+  ])('displays $mime bytes with the matching file name and data URL', async ({ b64, mime, ext, options }) => {
     const { configureTangu } = await import('../../seams/runtime.js');
     const { createTanguProfile } = await import('../../profiles/index.js');
     const { imageGenProvider } = await import('./imageTools.js');
+    const generate = vi.fn(async () => ({ images: [{ b64, mime }] }));
     configureTangu({
       host: {} as any, billing: {} as any, profile: createTanguProfile({ sandboxMode: 'none' }),
       brain: {
         models: { listModelsForProject: async () => ({ models: [], imageModelId: 'seedream', reachable: true }) },
-        images: { generate: async () => ({ images: [{ b64: JPEG, mime: 'image/jpeg' }] }) },
+        images: { generate },
       } as any,
     } as any);
     const shown: any[] = [];
-    await imageGenProvider.tools()[0].execute({ prompt: 'x' }, { appId: 'tangu', displayFile: (f: any) => shown.push(f) } as any);
-    expect(shown[0].name).toMatch(/\.jpg$/);
-    expect(shown[0].mime).toBe('image/jpeg');
-    expect(shown[0].dataUrl.startsWith('data:image/jpeg;base64,')).toBe(true);
+    await imageGenProvider.tools()[0].execute({ prompt: 'x', ...options }, { appId: 'tangu', displayFile: (f: any) => shown.push(f) } as any);
+    expect(shown[0].name.endsWith(ext)).toBe(true);
+    expect(shown[0].mime).toBe(mime);
+    expect(shown[0].dataUrl).toBe(`data:${mime};base64,${b64}`);
+    if (options.output_format) {
+      expect(generate).toHaveBeenCalledWith(expect.objectContaining({ outputFormat: 'gif', size: 'auto', frameCount: 6, frameDurationMs: 150 }));
+    }
   });
 });

@@ -23,7 +23,8 @@ vi.mock('./service.js', () => ({
   ChannelService: class {
     kind: string;
     driver: any;
-    constructor(opts: any) { this.kind = opts.kind; this.driver = opts.driver; }
+    opts: any;
+    constructor(opts: any) { this.kind = opts.kind; this.driver = opts.driver; this.opts = opts; }
     syncApprovalMode = vi.fn(async (mode: string, opts?: any) => {
       if (state.syncFails > 0) { state.syncFails -= 1; throw new Error('db locked'); }
       state.synced.push([this.kind, mode, opts ?? {}]);
@@ -156,6 +157,20 @@ describe('插件通道(ctx.registerChannel)', () => {
     expect(() => channelHub.registerChannel({ ...spec(), driver: { ...spec().driver, kind: 'WeCom' } })).toThrow(/invalid channel kind/);
     expect(() => channelHub.registerChannel(spec('qq'))).toThrow(/already registered/);
     for (const k of ['we', 'tg', 'constructor']) expect(() => channelHub.registerChannel(spec(k))).toThrow(/reserved/); // Codex 评审 10-25
+  });
+
+  it('multiPeer 交给 service,状态里带上;归属只认注册方给的,spec 里写的不算', async () => {
+    const off = channelHub.registerChannel({ ...spec(), multiPeer: true, owner: { engine: 'forged', bundle: 'forged' } } as any, { engine: 'chat-engine', bundle: 'acme' });
+    expect((channelHub.service('wecom') as any).opts.multiPeer).toBe(true);
+    const st = (await channelHub.statusAll('u1')).find((c) => c.kind === 'wecom');
+    expect(st.plugin.multiPeer).toBe(true);
+    expect(st.plugin.owner).toEqual({ engine: 'chat-engine', bundle: 'acme' });
+    off();
+    offs.push(channelHub.registerChannel({ ...spec(), multiPeer: 'yes' } as any));
+    expect((channelHub.service('wecom') as any).opts).not.toHaveProperty('multiPeer');
+    const plain = (await channelHub.statusAll('u1')).find((c) => c.kind === 'wecom');
+    expect(plain.plugin.multiPeer).toBe(false);
+    expect(plain.plugin.owner).toBeNull();
   });
 
   it('插件把 appId 声明成 secret:状态里不回显', async () => {

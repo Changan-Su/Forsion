@@ -6,7 +6,7 @@ import { textareaCaretRect } from '../../components/chatbox/textareaCaret'
 import { SuggestMenu } from '../lib/SuggestMenu'
 import { HostLocaleProvider, registerMessages, useI18n } from '../../i18n'
 import { ChatBox as ChatBoxBase, mountHostReact, type ChatBoxProps as BaseChatBoxProps } from '@lcl/components'
-import { matchChatBoxSuggest, type ChatBoxSuggestMatch, type PluginChatBoxHandle, type PluginChatBoxOptions, type PluginChatBoxSuggestItem } from '../../../../shared/chatBox'
+import { matchChatBoxSuggest, type ChatBoxSuggestMatch, type PluginChatBoxHandle, type PluginChatBoxOptions, type PluginChatBoxSuggest, type PluginChatBoxSuggestItem } from '../../../../shared/chatBox'
 
 registerMessages({
   'chatbox.label': { zh: '输入内容', en: 'Message' },
@@ -25,6 +25,7 @@ interface BoxProps { options: PluginChatBoxOptions; revision: number; host: Host
 
 interface SuggestMenuState {
   match: ChatBoxSuggestMatch
+  trigger: string
   items: PluginChatBoxSuggestItem[]
   left: number
   top: number
@@ -40,22 +41,29 @@ function useChatBoxSuggest({ options, host }: BoxProps, replace: (match: ChatBox
   const close = () => { request.current++; setMenu(null) }
   /** Only called when the user changed the text: moving the caret onto an old tag must not open the menu and trap ↑↓. */
   const evaluate = (value: string) => {
-    const suggest = options.suggest
     const el = host.input.current
     const collapsed = !!el && el.selectionStart === el.selectionEnd
-    const match = suggest && el && collapsed && !composing.current && !options.disabled
-      ? matchChatBoxSuggest(value, el.selectionStart, suggest.trigger)
-      : null
-    if (!match) { dismissedAt.current = null; close(); return }
+    // Several triggers: the one nearest the caret wins (`#a [[b` → `[[`). Plugin input: skip malformed entries.
+    let picked: PluginChatBoxSuggest | undefined
+    let match: ChatBoxSuggestMatch | null = null
+    if (el && collapsed && !composing.current && !options.disabled) {
+      for (const s of ([] as PluginChatBoxSuggest[]).concat(options.suggest ?? [])) {
+        if (!s || typeof s.trigger !== 'string' || typeof s.items !== 'function') continue
+        const m = matchChatBoxSuggest(value, el.selectionStart, s.trigger, s.mention)
+        if (m && (!match || m.from > match.from)) { match = m; picked = s }
+      }
+    }
+    if (!match || !picked) { dismissedAt.current = null; close(); return }
     if (dismissedAt.current === match.from) { close(); return }
-    setMenu(cur => (cur ? { ...cur, match } : null)) // keep the range current while new items load
+    const suggest = picked, found0 = match
+    setMenu(cur => (cur ? { ...cur, match: found0, trigger: suggest.trigger } : null)) // keep the range current while new items load
     const id = ++request.current
-    void Promise.resolve().then(() => suggest!.items(match.query)).then(found => {
+    void Promise.resolve().then(() => suggest.items(found0.query)).then(found => {
       if (id !== request.current) return
       const items = (Array.isArray(found) ? found : []).filter(i => typeof i?.label === 'string' && typeof i?.value === 'string').slice(0, SUGGEST_LIMIT)
       if (!items.length || !el) { setMenu(null); return }
-      const at = textareaCaretRect(el, match.to)
-      setMenu({ match, items, left: at.left, top: at.bottom, anchorTop: at.top })
+      const at = textareaCaretRect(el, found0.to)
+      setMenu({ match: found0, trigger: suggest.trigger, items, left: at.left, top: at.bottom, anchorTop: at.top })
     }).catch(e => {
       console.error('[amadeus] plugin Chat Box suggest failed', e)
       if (id === request.current) setMenu(null)
@@ -80,9 +88,11 @@ function useChatBoxSuggest({ options, host }: BoxProps, replace: (match: ChatBox
           left={menu.left}
           top={menu.top}
           anchorTop={menu.anchorTop}
+          // Prompt boxes usually sit at the bottom of a view: in the lower half the menu opens upward, over the list.
+          prefer={menu.anchorTop > window.innerHeight / 2 ? 'above' : 'below'}
           onPick={i => {
             const m = menu.match
-            const typed = `${options.suggest?.trigger ?? ''}${m.query}`
+            const typed = `${menu.trigger}${m.query}`
             close()
             // update({ value }) may have swapped the draft since the menu opened: the range no longer means anything.
             if (host.input.current?.value.slice(m.from, m.to) === typed) replace(m, `${menu.items[i].value} `)

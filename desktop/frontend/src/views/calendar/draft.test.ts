@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest'
 import { draftRange, draftValue, pickDraftDb } from './draft'
 
 describe('calendar draft', () => {
-  it('click = default hour from the snapped start, pulled back before midnight', () => {
-    expect(draftRange(13 * 60 + 30, 13 * 60 + 30, true)).toEqual([810, 870])
-    expect(draftRange(23 * 60 + 30, 23 * 60 + 30, true)).toEqual([1380, 1440])
+  it('double-click = default 30 minutes from the snapped start, pulled back before midnight', () => {
+    expect(draftRange(13 * 60 + 30, 13 * 60 + 30, true)).toEqual([810, 840])
+    expect(draftRange(23 * 60 + 30, 23 * 60 + 30, true)).toEqual([1410, 1440])
   })
   it('drag sorts the ends and keeps at least 15 minutes', () => {
     expect(draftRange(15 * 60 + 30, 13 * 60, false)).toEqual([780, 930])

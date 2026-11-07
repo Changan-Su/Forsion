@@ -5,7 +5,7 @@
  * host 会话把图片写进 cwd/generated/ 并以路径展示(可在工作区找到、无 base64 膨胀);沙箱/无 cwd 时以 dataUrl 内联展示。
  */
 import fs from 'node:fs/promises';
-import { makeImageEditTool, imageQuality, sha256 } from './imageEdit.js';
+import { makeImageEditTool, imageQuality, imageOutputSchema, imageOutputOptions, imageOutputExtension, assertImageOutputFormat, sha256 } from './imageEdit.js';
 import path from 'node:path';
 import { deps } from '../../seams/runtime.js';
 import type { ToolProvider } from '../toolRegistry.js';
@@ -57,15 +57,16 @@ export const imageGenProvider: ToolProvider = {
           name: 'generate_image',
           description:
             'Generate an image from a text prompt and show it to the user inline in the chat (rendered as a clickable thumbnail they can enlarge). ' +
-            'Use when the user asks to draw, paint, illustrate, render, or generate a picture. Write a vivid, concrete English `prompt`. ' +
+            'Use when the user asks to draw, paint, illustrate, render, or generate a picture or animated GIF. Write a vivid, concrete English `prompt`. ' +
             'After the image lands, give a one-sentence caption — do NOT re-describe it in detail, and do NOT call display_file afterwards (it is already shown).',
           parameters: {
             type: 'object',
             properties: {
               prompt: { type: 'string', description: 'Vivid, concrete description of the image to generate.' },
-              size: { type: 'string', description: 'Aspect/size: "1:1" | "2:3" | "3:2" | "16:9" | "9:16". Default "1:1".' },
+              size: { type: 'string', description: 'Aspect/size: "1:1" | "2:3" | "3:2" | "16:9" | "9:16". Omit for square still images or automatic GIF sizing.' },
               n: { type: 'integer', description: 'How many images (1-4). Default 1.' },
               transparent_background: { type: 'boolean', description: 'Transparent background (PNG). Default false.' },
+              ...imageOutputSchema,
               quality: {
                 type: 'string',
                 enum: ['low', 'medium', 'high', 'xhigh', 'max', 'auto'],
@@ -107,11 +108,13 @@ export const imageGenProvider: ToolProvider = {
         const n = Math.min(Math.max(1, Number(args.n) || 1), 4);
         let images: Array<{ b64: string; mime: string }>;
         try {
+          const options = imageOutputOptions(args);
           const r = await brain.images.generate({
-            model: modelId, prompt, size: String(args.size || '1:1'), n,
-            transparentBackground: !!args.transparent_background, quality: imageQuality(args.quality), signal: ctx.signal,
+            model: modelId, prompt, size: String(args.size || (options.outputFormat === 'gif' ? 'auto' : '1:1')), n,
+            transparentBackground: !!args.transparent_background, quality: imageQuality(args.quality), signal: ctx.signal, ...options,
           });
           images = r.images || [];
+          assertImageOutputFormat(options.outputFormat, images);
         } catch (e: any) {
           // 工具错误只回给模型,不进日志 → 用户反馈「作图不能用」时诊断包里一条线索都没有。这里补上。
           console.warn(`[generate_image] 生图失败(model=${modelId}):`, e?.message || e);
@@ -129,7 +132,7 @@ export const imageGenProvider: ToolProvider = {
         for (let i = 0; i < images.length; i++) {
           const buf = Buffer.from(images[i].b64, 'base64');
           const mime = images[i].mime || 'image/png';
-          const ext = mime === 'image/jpeg' ? 'jpg' : mime === 'image/webp' ? 'webp' : mime === 'image/gif' ? 'gif' : 'png';
+          const ext = imageOutputExtension(mime);
           const name = `${stamp}${images.length > 1 ? `-${i + 1}` : ''}.${ext}`;
           const rel = `generated/${name}`;
           names.push(name);
@@ -147,7 +150,9 @@ export const imageGenProvider: ToolProvider = {
           ctx.displayFile({ name, mime, dataUrl: `data:${mime};base64,${images[i].b64}`, source: 'generate_image' });
           shown.push(name);
         }
-        return `Generated ${shown.length} image(s), shown in the chat (${shown.join(', ')}). To edit one later, pass its file name (${names.join(', ')}) in edit_image previous_outputs. ` +
+        const stillNames = names.filter((_, index) => images[index].mime !== 'image/gif');
+        const reuse = stillNames.length ? ` To edit a still image later, pass its file name (${stillNames.join(', ')}) in edit_image previous_outputs.` : '';
+        return `Generated ${shown.length} image(s), shown in the chat (${shown.join(', ')}).${reuse} ` +
           'Give a one-sentence caption; do not re-describe the image and do not call display_file.';
       },
     },

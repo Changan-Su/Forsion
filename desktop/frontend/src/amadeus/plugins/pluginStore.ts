@@ -4,6 +4,9 @@
 // (Forsion) plugins are discovered from ~/.forsion/plugins/ and evaluated here.
 //
 import { leaseAccountResponse } from './accountResponse'
+import { pushMobileBack } from '../lib/mobileBack'
+import { desktopAccount } from './desktopAccount'
+import { readEntitlement } from './entitlement'
 import { setPluginViewHead, setPluginViewModes } from './pluginViewModes'
 import { registerFont as registerHostFont } from '../../fontPresets'
 import { registerAppearance, clearPluginAppearance, useAppearance } from '../../appearance/store'
@@ -14,7 +17,7 @@ import { registerAppearance, clearPluginAppearance, useAppearance } from '../../
 import { create } from 'zustand'
 import { toAssetUrl } from '@amadeus-shared/assets'
 import { pluginHostPath } from './hostPaths'
-import { pluginRequestPath, type PluginRequestOptions } from './engineRequest'
+import { ownedChannelPatch, pluginRequestPath, type ChannelOwnership, type PluginRequestOptions } from './engineRequest'
 import { request as engineJsonRequest } from '../../services/backendService'
 
 /** window.tangu,在没有 window 的环境(vitest node 环境、云端 worker)返回 undefined 而不是抛 ReferenceError。 */
@@ -52,7 +55,7 @@ import { defineMessages, hostListSource, isPluginText, pluginText } from './plug
 import { checkPluginIcon, pluginIconElement } from './pluginIcon'
 import { pluginListEmpty, setHostListEmpty } from '../../views/hostListEmpty'
 import { createDropIndicator, land as landDrop, landCancel, landWhenMoved } from '@lcl/engine/dropIndicator'
-import { setActiveSpace, useCommandStore, useSpaceStore, nativeHaptic, nativeHapticAvailable, claimNativeChrome, nativeChromeInstalled } from '@lcl/engine'
+import { setActiveSpace, useCommandStore, useSpaceStore, nativeHaptic, nativeHapticAvailable, claimNativeChrome, listFirstNow, nativeChromeInstalled, useWorkspace } from '@lcl/engine'
 import { AUTO_WORK_FOLDER_KEY, pluginDisplayName } from './display'
 // 自动化播种 / 禁用即关规则:backendService 依赖图干净(http / agentRunService / localInbox,均不引 appStore),
 // 可静态 import;cfg 必须经 tanguSeam 探针的 waitBackend 拿(appStore 与本模块有 import 环)。
@@ -70,6 +73,7 @@ import { clearSpaceProgressOf, setSpaceDot, setSpaceProgress } from '../../store
 import { getSync, markSyncDecided, refreshSync, resolveNotes, runSyncNow, setSync, startSyncSetup, subscribeSync } from '../../services/syncSetup'
 import { POPUP_PRIORITY, queuePopup, releasePopupsOf } from '../../stores/popupQueue'
 import { closeSpotlight, showSpotlight } from './guideSpotlight'
+import { registerGuideTips, requestTip, tipState, unregisterGuideTips } from './guideTips'
 import { watchAccountName } from '../../services/accountName'
 import { fetchBingWallpapers } from '../../views/homepageWallpaper'
 import { getAggDb } from '../store/dbAggregateStore'
@@ -108,6 +112,7 @@ import { gatePluginManifest, type ExternalPluginSource } from '@amadeus-shared/i
 import { createEffectScope, type EffectRecord, type EffectScope } from './effectScope'
 import { dependentsOf, topoOrder, unmetDependencies, type UnmetDependency } from './pluginDeps'
 import { LIST_CAPABILITIES } from './listTree'
+import { CHAT_BOX_CAPABILITIES } from '../../../../shared/chatBox'
 import { windowKind } from '../../windowKind'
 import { addRibbonAction } from './ribbonAction'
 import { compileDashboardRecipe } from '@amadeus-shared/dashboardRecipe'
@@ -578,6 +583,10 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
     // 插件侧的可选链只挡得住「宿主没这个方法」,挡不住「方法在但 window.amadeus 是 undefined」,
     // 也挡不住主进程 requireRoot() 抛。一半空值一半异常是最难写对的 API。
     listPages: () => listCached('pages'),
+    listTags: async () => {
+      if (!amadeus?.listTags) return []
+      try { return (await amadeus.listTags() || []).filter((t) => t.count > 0).map((t) => ({ tag: t.tag, count: t.count })).sort((a, b) => b.count - a.count) } catch { return [] }
+    },
     listFiles: () => listCached('files'),
     searchVault: async (q) => {
       if (!amadeus?.search) return []
@@ -798,10 +807,12 @@ function pluginMeta(src: ExternalPluginSource): Omit<AmadeusPlugin, 'setup'> {
     minAppVersion: src.minAppVersion,
     requiresApp: src.requiresApp,
     requiresPlugins: src.requiresPlugins,
+    entitlement: src.entitlement,
     capabilities: src.capabilities,
     readme: src.readme,
     changelog: src.changelog,
     onboarding: src.onboarding,
+    guide: src.guide,
     blocked: src.blocked,
     blockedReason: src.blockedReason,
     isDesktopOnly: src.isDesktopOnly,
@@ -1486,6 +1497,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
       const e = o as import('./types').PluginEmptyState
       if (!e || typeof e !== 'object' || !isPluginText(e.title)) throw new TypeError('mountEmptyState needs { title }')
       iconName(e.icon, 'mountEmptyState'); iconName(e.action?.icon, 'mountEmptyState')
+      if (e.examples !== undefined && !Array.isArray(e.examples)) throw new TypeError('mountEmptyState examples must be an array')
       return e
     }
     // 网页卡片卡身(10-28,网页卡片 A + D):形状错同步抛;按钮行 / 菜单行整理成宿主形状,update 的补丁同样整理。
@@ -1665,7 +1677,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
     const localData: LocalData | null = amadeus?.readPluginData && amadeus?.writePluginData
       ? { read: () => Promise.resolve(amadeus.readPluginData!(pluginId)).catch(() => null), write: (text) => amadeus.writePluginData!(pluginId, text) }
       : null
-    const hostAccount = hostTangu()?.account
+    const hostAccount = hostTangu()?.account ?? desktopAccount(hostTangu())
     const scopedAccount: PluginContext['account'] = hostAccount ? {
       status: async () => { const value = ctxAlive() ? await hostAccount.status() : { loggedIn: false }; return ctxAlive() ? value : { loggedIn: false } },
       login: () => ctxAlive() ? hostAccount.login() : Promise.reject(new Error('plugin disabled')),
@@ -1686,6 +1698,8 @@ export const usePluginStore = create<PluginState>((set, get) => {
       },
       ...(hostAccount.saveDownload ? { saveDownload: (blob: Blob, name: string) => ctxAlive()
         ? hostAccount.saveDownload!(blob, name) : Promise.resolve({ ok: false, error: 'plugin disabled' }) } : {}),
+      // Built here, over the scoped request, so all three hosts answer alike and teardown revokes it with the rest.
+      entitlements: () => readEntitlement((path) => scopedAccount!.request(path), get().plugins.find((p) => p.id === pluginId)?.entitlement),
       subscribe: (listener) => ctxAlive() ? scope.own('subscription', hostAccount.subscribe((status) => {
         if (ctxAlive()) listener(status)
       }), 'account') : () => {},
@@ -1961,10 +1975,21 @@ export const usePluginStore = create<PluginState>((set, get) => {
     // 与 table/dashboard 一样动态 import 破环;形态错误同步抛,让插件能当场走自己的降级 UI。
     ...(typeof document !== 'undefined' ? { ui: {
       ...(nativeHapticAvailable() ? { haptic: (kind: 'tick') => { if (ctxAlive() && kind === 'tick') nativeHaptic(kind) } } : {}),
-      ...(nativeChromeInstalled() ? { claimHeader: (opts: { title: string; back: string; onBack(): void }) => {
+      ...(nativeChromeInstalled() ? { claimHeader: (opts: { title: string; back: string; onBack(): void; toList?: boolean }) => {
         if (!ctxAlive()) return { dispose() {} }
-        const handle = claimNativeChrome({ mode: 'page', title: String(opts.title), back: String(opts.back), onBack: () => { if (ctxAlive()) opts.onBack() } })
-        return { dispose: scope.own('mount', () => handle.release(), 'nativeHeader') }
+        const toList = !!opts.toList && listFirstNow()
+        const onBack = (): void => {
+          if (!ctxAlive()) return
+          if (toList && listFirstNow()) useWorkspace.getState().toggleSidebar('left')
+          else opts.onBack()
+        }
+        const handle = claimNativeChrome({ mode: 'page', title: String(opts.title), back: String(opts.back), onBack })
+        // 两级导航:这一页不占返回栈,返回链照常滑出列表层,边缘手势才跟手(占了栈系统返回就只能等松手);
+        // 列表一出来(手势、返回键、页内横滑、顶栏箭头都走到这)插件才收尾。放弃手势不改 leftVisible,什么都不发生
+        const off = toList
+          ? useWorkspace.subscribe((s, prev) => { if (s.leftVisible && !prev.leftVisible && listFirstNow() && ctxAlive()) { off(); handle.release(); opts.onBack() } }) // 旋转成宽屏自动并排左栏不算返回
+          : pushMobileBack(onBack) // 系统返回和顶栏箭头同一件事
+        return { dispose: scope.own('mount', () => { off(); handle.release() }, 'nativeHeader') }
       } } : {}),
       // 行编辑字段(10-17):写的是用户的表 → 和 ctx.databases 同一道闸,没声明 'databases' 就没有这个成员。
       ...(get().plugins.find((p) => p.id === pluginId)?.capabilities?.includes('databases')
@@ -2017,16 +2042,26 @@ export const usePluginStore = create<PluginState>((set, get) => {
         if (!cancelled) {
           // 调用这一刻就认领 el:动态 import 落地时 el 已经交给了后来的挂载 → 这次作废(见 claimHostMount)
           const mine = claimHostMount(el)
-          void import('./markdownEditorSurface').then(m => {
-            if (cancelled) return
-            if (!mine()) { dispose(); return }
-            mounted = m.mountPluginMarkdownEditor(el, pending)
-            if (focusPending) mounted.focus()
-          }).catch(e => {
+          const fail = (e: unknown): void => {
             console.error('[amadeus] Markdown editor mount failed', e)
             if (cancelled || !mine()) return
             failure = mountHostReact(el, String(e))
-          })
+          }
+          void import('./markdownEditorSurface').then(m => {
+            // 插件常在自己的浮层 / 卡片进页面之前就挂(宿主 popover 的内容也是异步放进去的):Milkdown 在脱离文档的元素上建起来,
+            // 第一阵输入只改了 DOM、进不了编辑器状态(onChange 一次不来,下一笔事务还会把字抹掉)。等 el 进了文档再建。
+            // ponytail: 每帧看一眼,dispose / 被接走即停;永远不进文档的 el 就一直等着
+            const start = (): void => {
+              if (cancelled) return
+              if (!mine()) { dispose(); return }
+              if (!el.isConnected) { requestAnimationFrame(start); return }
+              try {
+                mounted = m.mountPluginMarkdownEditor(el, pending)
+                if (focusPending) mounted.focus()
+              } catch (e) { fail(e) }
+            }
+            start()
+          }).catch(fail)
         }
         return {
           getValue() { return mounted?.getValue() ?? pending.value },
@@ -2035,6 +2070,21 @@ export const usePluginStore = create<PluginState>((set, get) => {
           focus() { if (!cancelled) { focusPending = true; mounted?.focus() } },
           dispose,
         }
+      },
+      mountMarkdown: (el, opts) => {
+        if (!(el instanceof HTMLElement) || typeof opts?.markdown !== 'string') throw new TypeError('mountMarkdown needs an HTMLElement and Markdown')
+        if (!ctxAlive()) return { update() {}, dispose() {} }
+        const pending = { ...opts }
+        let mounted: import('../../../../shared/markdownEditor').PluginMarkdownHandle | null = null
+        let cancelled = false
+        const dispose = scope.own('mount', () => { cancelled = true; mounted?.dispose(); mounted = null }, 'markdown')
+        const mine = claimHostMount(el)
+        void import('./markdownSurface').then(m => {
+          if (cancelled) return
+          if (!mine()) { dispose(); return }
+          mounted = m.mountPluginMarkdown(el, pending)
+        }).catch(e => console.error(`[amadeus] plugin "${pluginId}" Markdown mount failed`, e))
+        return { update(patch) { if (!cancelled) { Object.assign(pending, patch); mounted?.update(patch) } }, dispose }
       },
       mountModelPicker: (el, opts) => {
         if (!ctxAlive()) return { update() {}, dispose() {} }
@@ -2061,6 +2111,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
       mountWebCard: uiMountWebCard,
       setViewHead: uiSetViewHead,
       mount: uiMount as NonNullable<PluginContext['ui']>['mount'],
+      chatBoxCapabilities: CHAT_BOX_CAPABILITIES,
       mountChatBox: (el, opts) => {
         if (!ctxAlive()) return { update() {}, focus() {}, insertText() {}, dispose() {} }
         if (!(el instanceof HTMLElement)) throw new TypeError('mountChatBox needs an HTMLElement')
@@ -2195,6 +2246,42 @@ export const usePluginStore = create<PluginState>((set, get) => {
           dispose,
         }
       },
+      // 工具岛(见 toolIslandSurface.tsx):和 FloatingToc 一样叠一层、不接管 root,不走 claimHostMount。row 在这里同步建好
+      // (句柄一返回插件就往里画),装好之前的 showRow / setActive / update 攒着。
+      mountToolIsland: (root, opts) => {
+        const row = document.createElement('div')
+        if (!ctxAlive()) return { row, showRow() {}, setActive() {}, update() {}, dispose() {} }
+        if (!(root instanceof HTMLElement)) throw new TypeError('mountToolIsland needs an HTMLElement')
+        if (!opts || typeof opts !== 'object' || !Array.isArray(opts.tools) || typeof opts.onPick !== 'function') throw new TypeError('mountToolIsland needs { tools: [...], onPick(id) }')
+        const checkSlots = (s: unknown): void => {
+          if (s == null) return
+          if (typeof s !== 'object') throw new TypeError('mountToolIsland slots must be an object')
+          for (const v of Object.values(s)) if (v != null && !(v instanceof HTMLElement)) throw new TypeError('mountToolIsland slots must be HTMLElements')
+        }
+        checkSlots(opts.slots)
+        const pending = { ...opts }
+        let open = false
+        let mounted: import('./types').PluginToolIslandHandle | null = null
+        let cancelled = false
+        const dispose = scope.own('mount', () => { cancelled = true; mounted?.dispose(); mounted = null }, 'toolIsland')
+        void import('./toolIslandSurface').then((m) => {
+          if (cancelled) return
+          mounted = m.mountPluginToolIsland(root, pluginId, row, pending)
+          if (open) mounted.showRow(true)
+        }).catch((e) => { console.error(`[amadeus] plugin "${pluginId}" tool island mount failed`, e) })
+        return {
+          row,
+          showRow(o) { if (cancelled) return; open = !!o; mounted?.showRow(open) },
+          setActive(id) { if (cancelled) return; pending.active = id; mounted?.setActive(id) },
+          update(patch) {
+            if (cancelled || !patch || typeof patch !== 'object') return
+            checkSlots(patch.slots)
+            Object.assign(pending, patch)
+            mounted?.update(patch)
+          },
+          dispose,
+        }
+      },
       // 白板层:宿主的白板引擎当成一张透明、无界面的层挂进插件的元素(见 boardSurface.tsx)。视口归调用方,所以这里
       // 只校验它的形状;引擎(6 MB)在第一次用到时才装。句柄同步可用:装载期间的 update 攒着,装好一起生效。
       mountBoard: (el, opts) => {
@@ -2317,6 +2404,11 @@ export const usePluginStore = create<PluginState>((set, get) => {
       isClaimed: (id) => !!useAchievements.getState().claimed[`plugin:${pluginId}:${id}`],
       claim: (id) => { if (ctxAlive()) useAchievements.getState().claim(`plugin:${pluginId}:${id}`) },
     },
+    // 上手提示(2026-11-02):提示声明在 manifest guide.tips,出不出由宿主 guideTips 定;这里只给「请出一条」和读状态。
+    guide: {
+      show: (id) => { if (ctxAlive()) requestTip(pluginId, String(id ?? '')) },
+      state: (id) => tipState(pluginId, String(id ?? '')),
+    },
     // 收件箱(2026-10-17):只给首方内置包 —— 一封「系统消息」长得和宿主自己发的一样,不能让任意插件往用户面前塞。
     ...(get().plugins.find((p) => p.id === pluginId)?.locked
       ? {
@@ -2420,6 +2512,30 @@ export const usePluginStore = create<PluginState>((set, get) => {
                   if (!ctxAlive()) throw new Error('plugin disabled')
                   return result
                 } finally { opts.signal?.removeEventListener('abort', onAbort); stop.forget() }
+              },
+            } : {}),
+            ...(automationHost() && !hostTangu()?.mobile ? {
+              connectChannel: async (kind: string, fields: Partial<Record<'appId' | 'appSecret' | 'botToken', string>>, options?: { modelId?: string }) => {
+                try {
+                  if (!ctxAlive()) throw new Error('plugin disabled')
+                  if (typeof kind !== 'string' || !/^[a-z][a-z0-9-]{1,15}$/.test(kind)) throw new Error('Invalid channel kind')
+                  if (!readTangu()?.hostExecution?.()) throw new Error('A local engine is required')
+                  const cfg = await readTangu()?.waitBackend?.(15_000)
+                  if (!ctxAlive()) throw new Error('plugin disabled')
+                  if (!cfg || !readTangu()?.hostExecution?.()) throw new Error('Local engine is unavailable')
+                  const target = connectionTarget(cfg)
+                  const { channels } = await engineJsonRequest<{ channels: ChannelOwnership[] }>(target, '/agent/channels')
+                  const bundle = get().plugins.find((p) => p.id === pluginId)?.bundle
+                  const channel = channels.find((c) => c.kind === kind)
+                  const patch = ownedChannelPatch(channel, fields, bundle?.dir ?? pluginId, bundle?.enginePlugins ?? [])
+                  if (!ctxAlive()) throw new Error('plugin disabled')
+                  // Only fills an empty slot: a model the user picked in the channel's settings stays.
+                  const modelId = typeof options?.modelId === 'string' && !channel?.modelId ? options.modelId : ''
+                  await engineJsonRequest(target, `/agent/channels/${kind}/config`, { method: 'PUT', body: JSON.stringify(modelId ? { ...patch, modelId } : patch) })
+                  if (!ctxAlive()) throw new Error('plugin disabled')
+                  const r = await engineJsonRequest<{ accountId: string; label: string; sessionId: string }>(target, `/agent/channels/${kind}/connect`, { method: 'POST', body: '{}' })
+                  return { ok: true as const, accountId: r.accountId, label: r.label, sessionId: r.sessionId }
+                } catch (e) { return { ok: false as const, error: String((e as Error)?.message || e) } }
               },
             } : {}),
             ...(readTangu()?.openSession ? {
@@ -2694,6 +2810,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
     clearSpaceProgressOf(id) // 停用 / 换代时 Ribbon 上别留着一个不再更新的进度环 / 红点
     releasePopupsOf(`plugin:${id}:`) // 排着的 / 正在显示的弹窗号一并让出,别堵住队列
     closeSpotlight(id) // 圈注同理
+    unregisterGuideTips(id) // 上手提示同理
     lastEnsure.delete(id) // 旧规则集不随重新启用被重放;再启用时插件自己 setup 里会重新 ensure
     dropPluginTriggers(id) // 注销触发源;相关规则暂停并写明原因,再启用时 setup 登记回来就恢复
     set((s) => ({
@@ -2721,6 +2838,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
     set((s) => ({ settings: [...s.settings, { pluginId: id, item: workFolderSetting(id) }] }))
     const ctx = makeContext(id)
     const scope = liveScopes.get(id)!
+    registerGuideTips(id, plugin.guide?.tips) // 上手提示(manifest guide):teardown 里撤
     const fail = (e: unknown): void => {
       console.error(`[amadeus] plugin "${id}" setup failed`, e)
       useUiStore.getState().notify(translate('pluginhost.setupFailed', { name: plugin.name }))
@@ -2815,6 +2933,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
       const src = sources.find((x) => x.id === cur.id)
       if (keep(cur, src)) {
         next.push({ ...pluginMeta(src), setup: cur.setup })
+        if (s0.activeIds.includes(cur.id)) registerGuideTips(cur.id, src.guide?.tips) // 只改了 manifest 的更新:新加的提示不等重启
         continue
       }
       reset.push(cur.id)

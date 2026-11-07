@@ -12,7 +12,7 @@ registerMessages({
   'agentLog.older': { zh: '更早的 {count} 天', en: '{count} earlier days' },
   'agentLog.today': { zh: '今天', en: 'Today' },
   'agentLog.editDay': { zh: '编辑 {date} 的日志', en: 'Edit the log for {date}' },
-  'agentLog.rawHint': { zh: '这是这一天的原文。每条以「### 09:30」这样的时间行开头；「@」后面那一串是写入设备的标记，不用改。', en: 'This is the raw file for the day. Each entry starts with a time line like "### 09:30"; the code after "@" marks the device that wrote it and can stay as it is.' },
+  'agentLog.rawHint': { zh: '这是这一天的原文。每条以「### 09:30 · 设备名」这样的时间行开头；「@」后面那一串是写入设备的标记，不用改。', en: 'This is the raw file for the day. Each entry starts with a time line like "### 09:30 · device name"; the code after "@" marks the device that wrote it and can stay as it is.' },
   'agentLog.error': { zh: '日志操作失败', en: 'The log could not be updated' },
   'agentLog.changed': { zh: '这一天的日志已有新版本，这次没有保存。', en: 'This day’s log has a newer version, so nothing was saved.' },
   'agentLog.discardAndReload': { zh: '放弃草稿并载入当前版本', en: 'Discard draft and load the current version' },
@@ -27,7 +27,8 @@ const todayLocal = (): string => { const d = new Date(); return `${d.getFullYear
  *  ponytail: 不解析 Markdown —— 围栏代码块里恰好同形状的两行也会被去掉;只影响显示,真碰到了再换成按块处理。
  *  编辑时看到的仍是磁盘原文。 */
 export const logForReading = (content: string): string =>
-  content.replace(/^# \d{4}-\d{2}-\d{2}[ \t]*\n+/, '').replace(/^(### \d{2}:\d{2}\n)@[0-9a-f]{8} /gm, '$1')
+  // 11-06 起本机写的块标题带设备名(`### 09:30 · MacBook Pro`):名字留着给人看,`@设备号` 照旧去掉;老块没有名字就只有时间,不退回显示设备号
+  content.replace(/^# \d{4}-\d{2}-\d{2}[ \t]*\n+/, '').replace(/^(### \d{2}:\d{2}(?: · [^\n]*)?\n)@[0-9a-f]{8} /gm, '$1')
 
 type Props = { cfg: TanguDesktopConfig; slug: string; /** 面板常驻挂载时由外面告知是否正被看着:再次切回来会重读 */ active?: boolean }
 

@@ -48,16 +48,25 @@ async function main() {
   // ── 行内:块级公式 $$…$$ ──
   let p = await open(`seed=${encodeURIComponent('前面一句\n\n$$\\frac{1}{2}$$\n\n后面一句')}`)
   check('S1 块级公式渲染出 KaTeX', (await p.locator('.math-rendered--block .katex').count()) > 0)
-  let b = await btnState(p, '.math-rendered--block .amx-src-btn')
+  let b = await btnState(p, '.math-rendered--block .amx-src-btn:not(.amx-src-btn--copy)')
   check('S1 公式上挂了 `</>` 按钮', !!b && b.text === '</>', JSON.stringify(b))
   check('S1 不悬停时透明且不吃点击', !!b && b.opacity === 0 && b.pe === 'none', JSON.stringify(b))
   await p.hover('.math-rendered--block')
   await p.waitForTimeout(300)
-  b = await btnState(p, '.math-rendered--block .amx-src-btn')
+  b = await btnState(p, '.math-rendered--block .amx-src-btn:not(.amx-src-btn--copy)')
   check('S1 悬停后浮现且可点', !!b && b.opacity === 1 && b.pe === 'auto', JSON.stringify(b))
+  // 复制键:同一排、在 `</>` 左边,一起浮现
+  const cp = await p.evaluate(() => {
+    const host = document.querySelector('.math-rendered--block')
+    const c = host?.querySelector(':scope > .amx-src-btn--copy'), s = host?.querySelector(':scope > .amx-src-btn:not(.amx-src-btn--copy)')
+    if (!c || !s) return null
+    const rc = c.getBoundingClientRect(), rs = s.getBoundingClientRect()
+    return { left: rc.right <= rs.left, sameRow: Math.abs(rc.top - rs.top) < 2, opacity: Number(getComputedStyle(c).opacity) }
+  })
+  check('S1 复制键在 `</>` 左边、同排、同时浮现', !!cp && cp.left && cp.sameRow && cp.opacity === 1, JSON.stringify(cp))
 
   // 点它 → 源码露出(该行的公式装饰撤掉,字面 $$…$$ 可见),且光标落在源码里
-  await p.click('.math-rendered--block .amx-src-btn')
+  await p.click('.math-rendered--block .amx-src-btn:not(.amx-src-btn--copy)')
   await p.waitForTimeout(350)
   const after = await p.evaluate(() => {
     const s = window.getSelection()

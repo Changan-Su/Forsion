@@ -210,13 +210,15 @@ async function main(): Promise<void> {
     page.on('pageerror', (e) => errors.push(e.message))
     const consoleLines: string[] = []
     page.on('console', (m) => { if (m.type() === 'error' || m.type() === 'warning') consoleLines.push(m.text().slice(0, 200)) })
-    // 登录回跳(= /auth 登完带 token 回来),页面自己核身份、存进标签页会话
+    // 登录回跳(= /auth 登完带 token 回来),页面自己核身份;官方入口存进 Unit 自己的 localStorage 键(跨标签保持,unitAccount.ts)
     await page.goto(gateway ? `${base}/?ui=desktop` : `${base}/web/`)
     await page.locator('.rb').first().waitFor()
     await page.waitForTimeout(1500)
-    check('旧 Web 登录经 Unit 验证后继承，旧数据不清空，URL 无 token', await page.evaluate(([instance]) =>
-      sessionStorage.getItem(`unit:${instance}:account`) === 'tok-visitor' &&
-      localStorage.getItem('legacy-note-cache') === 'old note stays intact' && !new URL(location.href).searchParams.has('token'), [INSTANCE]))
+    const inherited = await page.evaluate(([instance]) => ({
+      local: localStorage.getItem(`unit:${instance}:account`), tab: sessionStorage.getItem(`unit:${instance}:account`),
+      legacy: localStorage.getItem('legacy-note-cache'), urlToken: new URL(location.href).searchParams.has('token') }), [INSTANCE])
+    check('旧 Web 登录经 Unit 验证后继承，旧数据不清空，URL 无 token', inherited.local === 'tok-visitor' && inherited.tab === null &&
+      inherited.legacy === 'old note stays intact' && !inherited.urlToken, JSON.stringify(inherited))
     const bridge = await page.evaluate(() => { const t = (window as any).tangu; return { entry: t?.unitPublicEntry, unitPage: t?.unitPage, fetch: typeof t?.cloudFetch, invoke: typeof t?.cloudInvoke, market: typeof t?.marketList } })
     check('① 网页主入口标志在,cloudFetch / cloudInvoke 没挂到 window.tangu', bridge.entry === true && bridge.unitPage === true && bridge.fetch === 'undefined' && bridge.invoke === 'undefined' && bridge.market === 'function', JSON.stringify(bridge))
 

@@ -42,6 +42,8 @@ When a plugin's bundled Space is missing from the ribbon, check the plugin's car
 
 Trying a plugin in the sandbox (2026-10-23+, desktop): when you ask the agent to write a desktop plugin, it runs it in the **plugin sandbox** first instead of installing it straight into your Forsion. The sandbox is a separate Forsion on your computer with its own empty vault, signed out and without the Tangu engine, where only this plugin is loaded (as a development copy that reloads when its files are saved). The agent looks at screenshots, reads the plugin's own console and runs the commands it registered. You can try it yourself with **Open sandbox window** on the sandbox card in the chat; if something is off, use **Report a problem** at the top of that window and what you write lands in the input box of the chat that started it. When you are happy with it, **Install in my Forsion** asks you once, then copies the plugin into your plugins folder (without `node_modules`). The sandbox has no engine, so a bundle's engine plugins, agents and skills are tried after installing. Only one sandbox runs at a time, and it stops by itself after 15 minutes without use while its window is not in front. The Sandbox panel in Coding Studio has the same two tiers: **Isolated sandbox** (the default) and **My Forsion**, the earlier loader that puts the development copy straight into the Forsion you are using and is not isolated.
 
+Since 2026-11-03 the sandbox also works like this: only this plugin is loaded, and of the built-in plugins only those it lists in `requiresPlugins` (list Forsion Extend there if you depend on it). The ribbon shows only this plugin's Spaces and the window opens on its first Space; the window title reads "Forsion sandbox · plugin name". The agent can use the plugin the way a person does: read which buttons and fields are on screen, click, type, press keys, scroll and switch Spaces, looking at a screenshot and at the console lines and toasts after each step. When something needs a file, it prepares test files from the plugin folder first, so clicking **Choose file** does not open the system picker. The chat that started the sandbox also gets a sandbox card in the summary panel on the right: the thumbnail is the agent's latest screenshot (click it to open the sandbox window), with the number of views, the Space, console errors and the last step below it. When the sandbox stops the card turns grey; **Start again** brings it back.
+
 An engine plugin tool declares whether the user is asked first with `capabilities.approval`. Leave it out for read-only tools (never asked). `'command'` puts the tool in the same class as running a command: asked every time in "ask me to approve" mode, and no longer asked once the user picks "always allow" or turns on full access. `'always'` means the user confirms every single call on the approval card themselves: full access, "always allow" and the user's own allow rules cannot skip it, chat and cloud sessions show the card as well, and automations, Muse background runs and remote sessions are refused outright. Use `'always'` for actions that spend something the user owns or send something out on their behalf. Split reading and writing into two tool names and declare it only on the writing one. The card shows the arguments of that call, so keep one call to one action.
 
 Three things are for official plugins only (2026-10-27+): `ctx.cloud` (calls Forsion with the user's Forsion account, limited to two endpoints: the Store's "my listings" and submitting an update), a tool's `capabilities.approvalPreview` (the plugin writes the text on its own approval card), and the tool surface of Chat sessions. Official means the plugin sits in a bundle signed by Forsion: the bundle's root `SIGNATURE` verifies against a public key built into the engine, and the plugin's manifest and entry file are covered by it. For third-party plugins `ctx.cloud` is `undefined`, `approvalPreview` is ignored (the card shows the call's arguments as before), and their tools stay out of Chat sessions.
@@ -94,6 +96,8 @@ When you submit, you can add tags (up to 8), a long description, supported platf
 
 To ship a new version or change the Store details, select your item under Submissions: drop a new ZIP, or for GitHub and npm publish the new version there first and choose "Check for a new version". The version is only ever read from the package or upstream (for skills, `version` or `metadata.version` in SKILL.md) and must be higher than the Store's current one. The package is checked before anything is submitted: you see the type, version, icon and README that were read, and it is submitted only after you confirm. Summary, tags, long description and version requirements can be edited on their own, without a package. Every change to a published item is reviewed; until it passes, the Store keeps showing the current one, and the review result goes to your inbox.
 
+On the user side (desktop 2.13.8 and later), Store plugins **auto-update by default**: a new version downloads in the background and applies the next time Forsion starts. Users can turn this off for everything on the Updates page, or for one plugin on its page. Before a version is replaced, the desktop keeps the old one on the device (the 2 most recent per plugin, under `~/.forsion/.plugin-versions/`), so users can roll back in one click. Rolling back, or installing an older version from the Versions tab, pins the plugin at that version until the user chooses "Resume auto-update". **Rolling back only swaps your plugin's files; your data (work folder, `plugin-data`, settings) stays as it is.** When a new version changes a data format, make sure an older version can still read it (ignore unknown fields, never rewrite old data in place into a shape the old version cannot read), or write the new format to a new file. Core plugins (Extend, Calendar, Computer Use) follow the desktop version and are not affected.
+
 ## Secret settings
 
 Engine plugin text settings can declare `secret: true`, and the host renders a password input (a `textarea` also becomes a single-line password input). This masks the UI only: values still use the existing local plugin settings store and the authenticated settings API; no encryption is added. Older hosts ignore this optional field.
@@ -104,7 +108,7 @@ A Space inside a plugin can declare a dedicated Mini view that offers only quick
 
 A plugin can also skip the full Space and open a registered compact view directly with `ctx.openMiniPanel?.(viewId, options)`; `mainViewId` sets where "Show in main panel" goes. For a wide standalone tool page, use `ctx.openFloatingPanel?.(viewId, options)`. The host adds the plugin namespace automatically and owns the window lifecycle. See [Floating Panel development](./floating-panel-development.md).
 
-When a View needs an input box with model selection, use `ctx.ui.mountChatBox`; it reuses the host component, and the plugin handles submission explicitly. Pass `modelPicker: false` to drop the model selection, `toolbar` for controls in the bottom row, `suggest` for completion such as `#`, and call `insertText` to insert at the caret. See [Reusable UI components](./ui-components.md).
+When a View needs an input box with model selection, use `ctx.ui.mountChatBox`; it reuses the host component, and the plugin handles submission explicitly. Pass `modelPicker: false` to drop the model selection, `toolbar` for controls in the bottom row, `suggest` for completion such as `#` (since 2026-11-02 it can be a list, for example one for `#` and one for `[[`; pass a list only when `ctx.ui.chatBoxCapabilities` includes `'suggestMany'`; when the box sits in the lower half of the window the suggestions open upward), and call `insertText` to insert at the caret. See [Reusable UI components](./ui-components.md).
 
 Settings-like pages (account, quota and credits, diagnostics, preferences) hand the host a description of the whole page through `ctx.ui.mountSettingsPage(el, { groups })`: each group has an icon, title, description, top-right buttons and items (switch, value, buttons, input, segmented, select, pick-to-run choice, stepper, code with copy, usage meters, empty / loading / error, custom block). The plugin supplies only the text, values and callbacks; the host draws them with its own settings parts and lays them out per device — on phones switches, values and single buttons stay at the right, inputs, steppers and two or more buttons move to the next line, and a pick-to-run choice becomes one button and a half sheet. Put anything outside that list in a `custom` block and mount single parts there with `ctx.ui.mountSettingsItem`. Stop copying the host's settings CSS; hosts before 2026-10-17 lack both methods, so feature-detect and keep your own page there. See [Reusable UI components](./ui-components.md).
 
@@ -143,9 +147,11 @@ ctx.registerSelectionAction({ id, title, run })
 ctx.ui?.mountSelectionBar?.(root, { tools, source, ask, watch })
 ```
 
+A "hold a tool and work" view (PDF annotation and the like) switches tools with the host's tool island: `ctx.ui?.mountToolIsland?.(root, { tools, active, onPick, slots })` sits centred at the top (docked at the bottom below 520 px), selection is controlled (call `setActive` from `onPick`), and the handle's `row` is the row under the island for you to fill. On older hosts draw your own bar. See "The tool island" in [Reusable UI components](./ui-components.en.md).
+
 ## Tables and note tasks
 
-Calendar, to-do and habit plugins need to read and edit the tables in your vault and the dated tasks in your notes (`- [ ] Send report @2026-10-20`). A plugin gets them only if its manifest declares `databases` (tables) or `noteTasks` (note tasks); plugins that do not declare them cannot see this data. Once granted, a plugin changing a cell or ticking a task goes the same way as your own edit in the table or the note: open tables update at once, and note-view properties are written into that note. A plugin can undo deleting a row from a classic table; a note-view row is a note, so a plugin can only move it to the recycle bin. The plugin's detail page lists what it declared in one line, "This plugin can: …" (reading the front window through `activeWindow` is listed there too). API details are in the `ctx.databases` / `ctx.noteTasks` section of the plugin development skill.
+Calendar, to-do and habit plugins need to read and edit the tables in your vault and the dated tasks in your notes (`- [ ] Send report @2026-10-20`). A plugin gets them only if its manifest declares `databases` (tables) or `noteTasks` (note tasks); plugins that do not declare them cannot see this data. Once granted, a plugin changing a cell or ticking a task goes the same way as your own edit in the table or the note: open tables update at once, and note-view properties are written into that note. A plugin can undo deleting a row from a classic table; a note-view row is a note, so a plugin can only move it to the recycle bin. The plugin's detail page lists what it declared in one line, "This plugin can: …" (reading the front window through `activeWindow` is listed there too). Since 2026-11-02, `- [ ]` lines indented under a task with an `@` date reach plugins as its subtasks (up to two levels; a subtask without its own `@` never shows up as a separate task), and every task carries the `#tags` on its line. Plugins can also read and write a table row's record body (the same text as "Open record", checked against what is there before writing) and add a column to a table (for example a multi-select "Tags" column the first time tags are used). Since 2026-11-04 a plugin can also change a whole table in one go (rename columns, add options, reorder rows, create views) through the same write path the table itself uses: open tables update at once and edits not yet saved are kept. The first column, autonumbers and created / edited times stay with the host, and a change that breaks the rules is refused as a whole. API details are in the `ctx.databases` / `ctx.noteTasks` section of the plugin development skill.
 
 ### Calendar overlays and calendar settings
 
@@ -159,13 +165,19 @@ Three smaller pieces: plugins can read the signed-in name (`ctx.app.watchAccount
 
 ## Bundled MCP servers, hooks and file events
 
-A plugin can ship its own MCP servers (only ones that run on this computer). Once it is installed and enabled, Tangu gains those tools; disabling the plugin stops them. Settings → MCP lists them with the plugin they come from; to turn them off, disable the plugin in plugin settings. A plugin can also ship hooks that are notified when a session starts, when a tool has run and when an answer ends, for auditing or archiving. These hooks only watch: they cannot block anything or add to the conversation. Settings → Hooks lists them too, marked "Observe only".
+A plugin can ship its own MCP servers (only ones that run on this computer). Once it is installed and enabled, Tangu gains those tools; disabling the plugin stops them. Settings → MCP lists them with the plugin they come from; to turn them off, disable the plugin in plugin settings. Like MCP servers the user adds, these tools load on demand by default: each request carries one catalog line per tool (its name and the first line of its description), and the AI loads a tool before calling it. Make the first line of each description say on its own what the tool does. For a server needed on every turn, set `"deferLoading": false` in its declaration to keep its tools loaded. A plugin can also ship hooks that are notified when a session starts, when a tool has run and when an answer ends, for auditing or archiving. These hooks only watch: they cannot block anything or add to the conversation. Settings → Hooks lists them too, marked "Observe only".
 
 Plugins can also receive file events in your vault: files created, deleted, renamed or moved in Forsion, changed by another program or by Tangu, and switching vaults. Backlink and tidy-up plugins use this to keep up with changes without rescanning the vault again and again. For the API, see the plugin development skill's sections on bundled MCP servers and hooks and on vault file events (`ctx.app.onVaultEvent`); how a plugin command hands query results back to Tangu is in the "`invoke`" section.
 
 ## IM channels
 
 An engine plugin can bring in another chat app (WeCom, for example) and reuse everything the built-in WeChat, Telegram and QQ channels have: a fresh session on connect, remote approvals, commands such as `/new` and `/model`, inbox forwarding, and the channel folder in the sidebar. Once installed, Settings → Channels shows a card for it; fill in the credentials the plugin asks for and click Connect. Disabling the plugin stops the channel and keeps the sessions it was bound to. For the API, see `ctx.registerChannel` in the engine plugin section of the plugin development skill; the WeCom plugin is a working example.
+
+One account can also serve many contacts: with `multiPeer: true`, each contact gets its own binding, session and working folder, so their conversations stay apart. They all use the same agent under the same account, so agent memory is shared, and these sessions have no project memory. The working folder only keeps files apart and is not a sandbox: tools running on the host can still read other folders, so be careful about who may talk and how tools are approved. The driver decides who may talk. These contacts do not own the channel, so `/stop` is the only command, inbox messages are not forwarded, and the desktop cannot switch the connected session. Older engines silently ignore the key, so check `ctx.channelCapabilities?.multiPeer` first. An inbound message can carry `agentSlug` to pin an agent for that contact.
+
+For an unattended deployment whose credentials are written straight into the config, with nobody to press Connect, add `selfConnect: true`: on an account that has never connected, the first contact your driver hands over connects it for the local user. An account the user disconnected stays disconnected.
+
+When a driver implements `sendApproval`, approvals stop being text cards: the driver receives the tool name, arguments and preview, draws them itself, and answers through `respond`. Chat text can neither approve nor dismiss such a card, and it is rejected after 10 minutes with no answer. Implement `settleApproval` to learn how a card ended. A plugin's UI can fill in and connect a channel from its own bundle with `ctx.tangu.connectChannel(kind, fields, { modelId })`. This is desktop only, and other plugins' channels are refused. `modelId` becomes the channel's default model when it has none yet; a model the user chose stays.
 
 ## Automation triggers
 
@@ -289,6 +301,62 @@ if (turn) await turn.ready
 showMyDialog({ onClose: () => turn?.done() })
 ```
 
+### First-use tips (since 2026-11-02)
+
+When someone reaches a feature of your plugin, the host shows a one-time tip on how to use it, and stops once they have used it. You declare tips in the manifest; the host decides when they show, so you don't track "seen" yourself.
+
+```json
+"guide": {
+  "tips": [
+    {
+      "id": "drag-to-calendar",
+      "at": "todo-row",
+      "style": "ring",
+      "platform": "desktop",
+      "when": { "visible": ["calendar-grid"] },
+      "done": ["todo.schedule"],
+      "title": "拖到日历上排时间",
+      "text": "按住这条待办拖进日历的时间格，就排成那半小时。",
+      "en": { "title": "Drag onto the calendar to schedule", "text": "Drop it on a time slot to book half an hour." }
+    }
+  ]
+}
+```
+
+- `at`: the `data-guide-anchor="<name>"` of an element in one of your own views. The host only looks inside your views, so names can't clash with other plugins. A tip can only show while that element is on screen.
+- `style`: `line` puts one line on the anchor's top edge (good for inputs); `ring` rings the anchor with a small card beside it and needs a `title`.
+- `when`, one of: `{ "open": "<view id>", "times": 1 }` how often that view has been opened; `{ "count": "<event>", "atLeast": 3 }` a counter reached a number; `{ "visible": ["<anchor>", …] }` these anchors are on screen together. No `when` = it only shows when you call `ctx.guide.show(id)`.
+- `done`: once any of these counters is ≥ 1 the tip counts as learned and never shows again. Counters are `ctx.achievements.track('<event>')`: report it once when the user actually does the thing. Bare names are your own tracked events; an `app:` prefix reads an official host event (for example `app:note.wikilink`).
+- `platform`: `desktop` / `mobile`; leave it out for both. Dragging, hovering and shortcuts have no phone equivalent, so mark those `desktop`.
+- Text: Chinese `title` / `text` plus the `en` mirror. **In an English interface a tip without `en` doesn't show** rather than falling back to Chinese. Keep titles to about 16 Chinese characters and bodies to about 40.
+- Ids use lowercase letters, digits and `-`; up to 12 tips. A malformed tip is dropped on its own and the rest still work.
+
+The host sets the pace: one tip at a time across the whole app (shared with the user guide's spotlight); at most 3 a day; a tip waits 2 seconds after its anchor appears and 1.5 seconds after the user stops typing; at most one per view opening; it waits while a popup is queued or open, or while first-run onboarding is open. Got it / × / Esc marks a tip as seen; "Don't show again" turns off all of your plugin's tips; Settings → Notifications → Tips turns tips off or resets them. Seen and turned-off state is stored on this device only.
+
+**When a new version adds a feature**, give it a tip with a **new id**. Tips are recorded per plugin id + tip id, so people who upgrade see the new one when they get there, while old tips they have seen stay hidden. Don't rename an existing tip's id; that makes everyone see it again.
+
+At runtime:
+
+```js
+inputEl.dataset.guideAnchor = 'todo-input'   // mark an anchor
+ctx.achievements.track('todo.tag')            // the user really did the thing
+ctx.guide?.show('tags')                        // ask for a tip when its condition can't be written in the manifest (pace and records still apply)
+ctx.guide?.state('tags')                       // 'waiting' | 'seen' | 'learned' | 'muted' | 'off'
+```
+
+**Examples in an empty state**: `ctx.ui.mountEmptyState` now takes `examples` (up to 3). Clicking one should usually put that sentence into your input so people watch it get recognised and send it themselves, rather than creating something for them:
+
+```js
+ctx.ui.mountEmptyState(el, {
+  icon: 'list-todo', title: 'No to-dos yet', line: 'Just type one below.',
+  examples: [{ label: 'Tomorrow 3pm send weekly report #work', note: 'Dates and tags work as you type', run: () => box.insertText('Tomorrow 3pm send weekly report #work') }],
+})
+```
+
+To see tips again while developing, run "Reset tips" from the command palette or use Settings → Notifications → Tips → Reset, then call `ctx.guide.show(id)` to bring up a specific tip. If a tip never shows, check in the developer tools that the element carries `data-guide-anchor` and sits inside your own view, and that its condition actually holds.
+
+How this differs from the requirement gate (manifest `onboarding.requires`): a gate means the plugin can't work until something is done; a tip means it works and here is a trick. Older hosts ignore `guide` and show nothing; always call `ctx.guide` with `?.`.
+
 ## On-demand native main companions
 
 `registerView` can declare `mainCompanions`. `amadeus-editor` / `chat-panel` are supported, keys start with the plugin id plus `-`, and there are at most three entries. `view.setCompanionsVisible?.(true)` on the view's mount context expands them on demand; `false` folds these native views into this view's tab group, keeping the document content, chat drafts and split sizes. Narrow windows and phones use native tabs. Other views are never closed or rewritten, and the Space is not rebuilt. Older hosts lack this method, so important reading layouts can still stay in the Space recipe.
@@ -315,7 +383,17 @@ Plugins that declare both `databases` and `calendar` receive `human://CALENDAR.d
 
 ### Shared account
 
-Unit web account hosts and the mobile app may provide `ctx.account`. Check that it exists before using `status()`, `login()`, `logout()`, `request(path, init)` and `subscribe(listener)`. `request` only reaches the account API and accepts no other origin; the host supplies credentials and preserves FormData/Blob file uploads. Switching accounts cancels old requests and makes reads from old response bodies fail; plugins must still cancel their own deferred tasks and clear the previous account's UI. The optional `saveDownload(blob, name)` returns `{ ok, error? }`: Android saves to the system Downloads, and browsers save a download file. Never store, import or forward account tokens.
+Desktop (with Forsion Extend loaded), Unit web account hosts and the mobile app all provide `ctx.account`, so the same plugin code runs on all three. Check that it exists before using `status()`, `login()`, `logout()`, `request(path, init)` and `subscribe(listener)`. `request` only reaches the account API and accepts no other origin; the host supplies credentials and preserves FormData/Blob file uploads. Switching accounts cancels old requests and makes reads from old response bodies fail; plugins must still cancel their own deferred tasks and clear the previous account's UI. The optional `saveDownload(blob, name)` returns `{ ok, error? }`: Android saves to the system Downloads, and browsers save a download file. Never store, import or forward account tokens.
+
+On desktop, `request` is sent by the main process, which brings a few limits: request bodies must be JSON strings (FormData and Blob throw; use a presigned URL for large files), responses are JSON only, custom headers do not travel, each call has a 120-second cap, and DELETE sends no body. `abort` rejects at once, but a request already sent runs to completion and its result is dropped. Desktop `status()` has no `userId`. Paths are always relative to `/api`.
+
+### Account entitlements
+
+When a plugin needs the user to hold an entitlement, write `"requires": { "entitlement": "<name>" }` in the manifest. The array form still works. The plugin activates as usual and draws its own onboarding page: `ctx.account.entitlements()` returns `{ granted }`, where `true` means they have it, `false` means the server said they do not, and `null` means unknown (offline, signed out, an older server). Do not treat `null` as no. With nothing declared it returns `true`. The real gate is on the server. `requires.plugins` is Unit's package dependency list; desktop and mobile prerequisites stay in `requiresPlugins`. A store tag `entitlement:<name>` shows as a badge on the card and does not block installing.
+
+### Space ribbon position and phone layout
+
+In `space.json`, `"ribbon": { "after": "<spaceId>" }` places the icon after that Space the first time it appears, and leaves any position the user already chose alone. `"mobile": { "listFirst": true }` opens the left list first on phones, and picking an item opens the main view. Use it only when the left panel really is such a list; by default the main view comes first and the left panel is a drawer. When the main view takes over the native header, use `ctx.ui.claimHeader?.({ title, back, onBack, toList: true })`: back slides the list in, following the finger on an edge swipe, and `onBack` runs once the list is showing. A cancelled swipe calls nothing. Without `toList` the system back gesture and the header arrow only call `onBack`, which suits an overlay.
 
 ### External PDF file views (2026-10-29, feature branch)
 

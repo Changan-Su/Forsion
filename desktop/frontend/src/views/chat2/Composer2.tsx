@@ -19,7 +19,7 @@ import { THINKING_LEVELS } from '../../../../../tangu-agent/src/contracts/client
 
 // context 视图已知注入段 key(与引擎 agentLoop ctxMark 调用一一对应);未知 key 显示原样
 import type { AgentConfig, Attachment, CtxInfo, DefaultModelSlot, MessageRecord, ModelInfo, ModelsResponse, NormalAgentDef, SkillInfo } from '../../../../../tangu-agent/src/contracts/clientTypes'
-import { nativeHaptic, nativeSheetPresenter, openNativeSheetMenu, useEdgeNudge, useExitGhost, useNativeChromeInstalled, useWorkspace, type SheetMenuItem, type SheetMenuSection } from '@lcl/engine'
+import { nativeHaptic, nativeSheetPresenter, openNativeSheetMenu, useEdgeNudge, useNativeChromeInstalled, useWorkspace, type SheetMenuItem, type SheetMenuSection } from '@lcl/engine'
 import { ModelPill, contextRingWindow, type ModelPillGroup } from '../../components/ModelPill'
 import { UltraConfirmDialog, ultraConfirmSkipped } from './UltraConfirmDialog'
 import { registerMessages, useI18n } from '../../i18n'
@@ -49,6 +49,7 @@ import { RefChipView } from './RefChipView'
 import { catOf, moveRefCat, pickerMatches, refCats, type RefCand, type RefCat } from './refPicker'
 import { expandRuns, findRuns, freeRunName, inlineRun, plainRuns, runTouching, trimDraftEnd } from './inlineRefs'
 import { InlineRefMirror } from './InlineRefMirror'
+import { findTokens, tokenTouching } from './composerTokens'
 import { APPREF_EVENT, APPREF_TARGET_ATTR, ensureAppRefCommand, type AppRefDelivery } from './appRefCommand'
 import { appRefToken, type AppRef, type AppRefList } from '../../../../shared/appRefs'
 import { AppRefIcon } from '../../components/appRefs'
@@ -376,8 +377,8 @@ export const Composer2: React.FC<{
   /** 会话的 Ultra 开关(对标 Codex Ultra:max + 主动并行派子代理)。 */
   ultra?: boolean
   /** 会话的 Fast 开关(对标 Codex /fast);药丸只在当前模型目录有 Fast 档时露出。 */
-  fast?: boolean
-  onFastChange?: (fast: boolean) => void
+  fast?: boolean | 'ultra'
+  onFastChange?: (fast: boolean | 'ultra') => void
   defaultModelIds?: Partial<Record<DefaultModelSlot, string>>
   onDefaultModelChange?: (slot: DefaultModelSlot, modelId: string) => void
   /** 模型菜单「上下文上限」:写本机该模型的窗口覆盖(null = 交还默认 272k)。只在本机引擎下传。 */
@@ -412,6 +413,8 @@ export const Composer2: React.FC<{
   /** 对话中切换 Agent(拍板 ⑪:入口 = 模式菜单「普通模式 ›」的二级面板,见 NormalModeItem)。给了才渲染;团队模式 / 引擎会话 / chat 预设不渲染。 */
   onAgentSwitch?: (slug: string) => void
   currentAgentSlug?: string
+  /** 收件人芯片(AgentSelectStrip):工具行里模式芯片右边。宿主按「新对话 / 空会话」门控好再传,不传不画。 */
+  recipientChip?: React.ReactNode
   onNewSession?: () => void
   onBranch?: () => void
   onOpenSettings?: () => void
@@ -477,7 +480,7 @@ export const Composer2: React.FC<{
   verifyCommand, onVerifyCommandChange,
   preset, onPresetChange, planMode, onPlanModeChange, voiceMode, onVoiceModeChange, liveOwner, liveSessionKey, prepareLiveSession, skills,
   groupChat, groupAgents, groupTempAgents, onGroupChange, onAddAgent, onNormalWork,
-  agents, onAgentSwitch, currentAgentSlug, mentionProjects, onNewSession, onBranch, onOpenSettings,
+  agents, onAgentSwitch, currentAgentSlug, recipientChip, mentionProjects, onNewSession, onBranch, onOpenSettings,
   onExecConfigChange, onSend, onStop,
   quotes = NO_QUOTES, quoteNotes, onRemoveQuote, onClearQuote, onBtw, onQuoteNote,
   contextWindow, ctxTokens, sessionTokens, runCost, costLimit, ctxInfo, onCompact,
@@ -835,7 +838,6 @@ export const Composer2: React.FC<{
   // 视口兜底:这些菜单是 absolute-in-relative + 固定宽度,窄屏时仍可能被边缘夹住。
   // mode 的外层会先占住 224px 最终宽度,避免胶囊展开时 right:0 锚点横移。见 menuAnchor.useEdgeNudge。
   const modeFix = useEdgeNudge(openMenu === 'mode' && !layout.compact, { boundary: '.t2-chat-view' })
-  useExitGhost(modeFix.ref, openMenu === 'mode') // 关掉时留替身放 80ms 退场(走查续八 8.4)
   // 上下文占比的详情浮层:同款 absolute + 固定宽,窄屏也会捅出边缘。
   // 右边缘贴输入卡右边缘,不越出输入卡(走查 5.13):边界 = 输入卡、边距 0。
   const ctxPopFix = useEdgeNudge(openMenu === 'ctx' && !layout.compact, { boundary: '.t2c-card', margin: 0 })
@@ -1153,7 +1155,7 @@ export const Composer2: React.FC<{
   const mentionPool = useMemo<NormalAgentDef[]>(() => {
     // 私聊:候选 = 项目(借 NormalAgentDef 的 slug/name/description 三个字段承载,slug = 路径;不进 delegate 池)。
     if (projectMode) return (mentionProjects || []).map((p) => ({ slug: p.path, name: p.name, description: p.path } as NormalAgentDef))
-    if (!inGroup) return agents || []
+    if (!inGroup) return (agents || []).filter((a) => !a.disabled) // 停用的不进 @ 候选
     const saved = (agents || []).filter((a) => groupAgents!.includes(a.slug))
     const seen = new Set(saved.map((a) => a.slug))
     return [...saved, ...(groupTempAgents || []).filter((a) => !seen.has(a.slug))]
@@ -1321,6 +1323,13 @@ export const Composer2: React.FC<{
   const rawRefChips = useMemo(() => (autoChip ? [autoChip, ...refChips] : refChips), [autoChip, refChips])
   const runChips = useMemo(() => runChipOwners(refChips), [refChips])
   const inlineRuns = useMemo(() => findRuns(draft, (run) => runChips.has(run)), [draft, runChips])
+  // 认得出的斜杠命令 / 选过的 @ 提及:输入框里画成一枚(InlineRefMirror),退格整枚删(见 ./composerTokens)
+  const slashNames = useMemo(() => new Set(slashItems.map((it) => it.cmd.split(' ')[0])), [slashItems])
+  const pickedMentions = useMemo(() => {
+    const slugs = new Set([...mentionAgents, mentionedSlug].filter(Boolean))
+    return [...mentionPool.filter((a) => slugs.has(a.slug)).map((a) => agentName(a)), ...mentionedProjects.map((p) => p.name)]
+  }, [mentionAgents, mentionedSlug, mentionedProjects, mentionPool])
+  const tokenMarks = useMemo(() => findTokens(draft, slashNames, pickedMentions, inlineRuns), [draft, slashNames, pickedMentions, inlineRuns])
   /** 「已选择」里显示、发送时算数的引用:从 `[[` 选进来的那些,句子里的那段删光了就不算(撤销 / 粘贴回来又算上)。 */
   const allRefChips = useMemo(() => {
     const inText = new Set(inlineRuns.map((r) => runChips.get(r.name)!.token))
@@ -1742,7 +1751,7 @@ export const Composer2: React.FC<{
   const normalProps = {
     active: !planMode && !groupActive && approval === 'auto-edit',
     disabled: running,
-    agents: agents || [],
+    agents: (agents || []).filter((a) => !a.disabled || a.slug === currentAgentSlug),
     currentAgentSlug,
     onNormalWork: onNormalWork || (() => {}),
     onAgentSwitch: !isEngine && !groupActive ? onAgentSwitch : undefined,
@@ -1832,7 +1841,7 @@ export const Composer2: React.FC<{
       <CallHint ready={callable && inputEmpty && !running && !inCall} cloud={realtimeModel === cloudCallModel?.id} />
       {groupSetupOpen && (
         <GroupChatSetup
-          agents={agents || []}
+          agents={(agents || []).filter((a) => !a.disabled || !!groupAgents?.includes(a.slug))}
           models={models}
           initialAgents={groupAgents || []}
           initialTempAgents={groupTempAgents}
@@ -1986,6 +1995,26 @@ export const Composer2: React.FC<{
                 const run = ta.selectionStart === ta.selectionEnd ? runTouching(inlineRuns, ta.selectionStart, e.key === 'Backspace' ? 'back' : 'fwd') : undefined
                 if (run) { e.preventDefault(); removeRun(run.start, run.end); return }
               }
+              if ((e.key === 'Backspace' || e.key === 'Delete') && tokenMarks.length && !e.nativeEvent.isComposing && !e.metaKey && !e.ctrlKey && !e.altKey) {
+                const ta = e.currentTarget
+                const tok = ta.selectionStart === ta.selectionEnd ? tokenTouching(tokenMarks, ta.value, ta.selectionStart, e.key === 'Backspace' ? 'back' : 'fwd') : undefined
+                if (tok) {
+                  e.preventDefault()
+                  const word = ta.value.slice(tok.start, tok.end).trim()
+                  removeRun(tok.start, tok.end)
+                  // 整枚删走不经 onChange:删掉的是提及、草稿里也没有别的同名 @ 了,就把它从派遣对象里摘掉(否则照样发给它)
+                  if (word.startsWith('@')) {
+                    const name = word.slice(1)
+                    if (!findTokens(taRef.current?.value ?? '', new Set(), [name]).length) {
+                      const slugs = mentionPool.filter((a) => agentName(a) === name).map((a) => a.slug)
+                      setMentionAgents((prev) => prev.filter((x) => !slugs.includes(x)))
+                      if (slugs.includes(mentionedSlug)) setMentionedSlug('')
+                      setMentionedProjects((prev) => prev.filter((x) => x.name !== name))
+                    }
+                  }
+                  return
+                }
+              }
               if (refActive) {
                 const count = refMatches.length
                 if (e.key === 'ArrowDown') { e.preventDefault(); if (count) setRefIndex((i) => (i + 1) % count); return }
@@ -2053,7 +2082,7 @@ export const Composer2: React.FC<{
               if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send() }
             }}
           />
-          <InlineRefMirror text={draft} runs={inlineRuns} chipOf={(run) => runChips.get(run)} />
+          <InlineRefMirror text={draft} runs={inlineRuns} marks={tokenMarks} chipOf={(run) => runChips.get(run)} />
           {showSuggestion && <div className="t2c-suggestion" aria-hidden="true"><span>{suggestion}</span>{' '}<span className="t2c-suggestion-key">{t('input.suggestionHint')}</span></div>}</div></>)}
           {slashOpen && (
             <div className="t2c-menu">
@@ -2221,6 +2250,7 @@ export const Composer2: React.FC<{
                 )}
               </span>
             )}
+            {recipientChip}
             <span className="t2c-grow" />
             {uploadGate && (
               <span className="t2c-upstatus" data-failed={uploadGate === 'failed' || undefined} role="status">
@@ -2283,6 +2313,7 @@ export const Composer2: React.FC<{
                 supportedThinking={isEngine ? undefined : models?.find((m) => m.id === modelId)?.thinkingLevels}
                 fast={fast}
                 fastTier={isEngine ? undefined : models?.find((m) => m.id === modelId)?.fastTier}
+                ultrafastTier={isEngine ? undefined : models?.find((m) => m.id === modelId)?.ultrafastTier}
                 onFastChange={isEngine ? undefined : onFastChange}
                 effectiveThinking={
                   // 只在 requested 与当前选档一致时才显示生效档——刚改档还没跑新 run 时,旧 effective 不对应当前选择

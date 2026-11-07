@@ -33,7 +33,8 @@ const sessionFixtures = (projectDir, defaultDir, aliasDir) => {
     { ...base, id: 'pd-main', title: 'Demo main', updated_at: '2026-09-22 11:00:00', agent_config: { agentSlug: 'xyra', execMode: 'host', cwd: projectDir } },
     { ...base, id: 'pd-coder', title: 'Coder work', updated_at: '2026-09-22 10:00:00', agent_config: { agentSlug: 'coder', execMode: 'host', cwd: projectDir } },
     { ...base, id: 'pd-team', title: 'Demo party', updated_at: '2026-09-21 10:00:00', agent_config: { groupChat: true, groupAgents: ['xyra', 'coder'], execMode: 'host', cwd: projectDir } },
-    // 默认工作区的会话(09-23 用户:「默认文件夹也是 Project」):harness 种了 localVault,默认目录 = <vault>/Sessions
+    // 默认工作区的会话(09-23 用户:「默认文件夹也是 Project」):harness 种了 localVault 并建好 <vault>/Sessions,扮老用户 ——
+    // 10-30 起新用户落 <workspace>/Sessions,库里已有 Sessions/ 的才沿用它(main.ts ensureDefaultWorkspaceDir),不建就成了普通项目
     { ...base, id: 'pd-default', title: 'Default chat', updated_at: '2026-09-18 10:00:00', project_path: defaultDir, project_name: '默认工作区', agent_config: { agentSlug: 'xyra', execMode: 'host', cwd: defaultDir } },
     // 默认目录换过位置:旧会话按 project_name(各语言的「默认工作区」)归入默认组,但它们的真实目录是别名 —— 面板必须跟会话自己的目录走;
     // 别名恰好是家目录时引擎拒收,照旧 Agent 详情(codex 评审 09-23 的两条 P2)
@@ -56,7 +57,7 @@ function contextFixture(projectDir) {
     plans: [{ name: 'plan-20260921-101500.md', path: path.join(projectDir, '.tangu', 'plans', 'plan-20260921-101500.md'), mtimeMs: Date.now() - 86_400_000, size: 1200, title: 'Ship v1' }],
     settings: null,
     // 项目记忆(10-04):形状 = 引擎 services/projectMemory.ts 的 ProjectMemoryView;一条长的看折行
-    memory: { version: 'v1', limit: 8000, chars: 212, entries: [
+    memory: { version: 'v1', limit: 4000, chars: 212, file: path.join(projectDir, '.memory-fixture', 'MEMORY.md'), entries: [
       { id: 'pm-1', content: '这个仓的测试用 npm run test:unit 跑，npm test 是故意坏的。', updatedAt: Date.now() - 3_600_000 },
       { id: 'pm-2', content: 'Release builds are cut only from the release-2026 branch; never tag from main. The changelog entry is written before the tag, and the build number comes from the CI run rather than from package.json.', updatedAt: Date.now() - 1_800_000 },
       { id: 'pm-3', content: '这个项目的界面文案一律先写中文稿，再补英文。', updatedAt: Date.now() - 600_000 },
@@ -252,14 +253,31 @@ async function run(app, win, stub, seen, home, ctx) {
   await memCard.scrollIntoViewIfNeeded()
   await win.waitForTimeout(200)
   await memCard.screenshot({ path: shots.memoryLight = shot('project-memory-zh-light') })
-  await memCard.locator('[data-project-memory-entry="pm-1"] button').click()
+  check('4f2 有记忆时卡头带「打开记忆文件夹」(不点:真 Electron 里会弹出 Finder)', await memCard.locator('button[aria-label="打开记忆文件夹"]').count() === 1)
+  await memCard.locator('[data-project-memory-entry="pm-1"] button.danger').click()
   await memCard.locator('[data-project-memory-entry="pm-1"]').waitFor({ state: 'detached' })
   const forget = seen.memoryForgets[0]
   check('4g 点删除 → DELETE /agent/project-context/memory 带 sessionId + 条目 id + 读出时的版本;该条消失、其余还在', !!forget && forget.sessionId === 'pd-main' && forget.id === 'pm-1' && forget.expectedVersion === 'v1' && await memRows.count() === 2, JSON.stringify(forget))
   seen.memoryConflictOnce = true
-  await memCard.locator('[data-project-memory-entry="pm-3"] button').click()
+  await memCard.locator('[data-project-memory-entry="pm-3"] button.danger').click()
   await profile.locator('.agent-profile-error').waitFor()
   check('4h 别处刚改过(409)→ 提示重新载入、这一条没被删', (await profile.locator('.agent-profile-error').textContent()).includes('重新载入') && await memRows.count() === 2 && seen.memoryForgets.length === 2, `forgets=${seen.memoryForgets.length}`)
+  // ── 4h2 原地改一条(11-03):点铅笔 → 输入框 → 回车 → PATCH 带 sessionId + id + 新句子 + 读出时的版本;Esc 放弃不发请求 ──
+  const editRow = memCard.locator('[data-project-memory-entry="pm-3"]')
+  await editRow.locator('button[aria-label="修改这条记忆"]').click()
+  await editRow.locator('textarea.project-memory-edit').press('Escape')
+  const escaped = await editRow.locator('textarea.project-memory-edit').count() === 0 && seen.memoryEdits.length === 0
+  await editRow.locator('button[aria-label="修改这条记忆"]').click()
+  const editBox = editRow.locator('textarea.project-memory-edit')
+  await editBox.fill('这个项目的界面文案先写中文稿，再补英文；两种都要给。')
+  await memCard.screenshot({ path: shots.memoryEditing = shot('project-memory-editing-zh-light') })
+  await editBox.press('Enter')
+  await editRow.locator('span').waitFor()
+  const edit = seen.memoryEdits[0]
+  check('4h2 改一条:Esc 放弃不发请求;回车 → PATCH 带 sessionId + id + 新句子 + 版本;那一行换成新句子、提示已保存',
+    escaped && !!edit && edit.sessionId === 'pd-main' && edit.id === 'pm-3' && edit.fact === '这个项目的界面文案先写中文稿，再补英文；两种都要给。' && typeof edit.expectedVersion === 'string' && Object.keys(edit).length === 4
+      && (await editRow.locator('span').textContent()).includes('两种都要给') && (await profile.locator('.profile-save-notice, .agent-profile-notice').first().textContent().catch(() => '')).includes('已保存'),
+    JSON.stringify({ escaped, edit }))
   // ── 4i 待确认候选:记忆卡里另起一组,逐条「采纳 / 丢弃」;采纳才进记忆,那条不在了就重载 ──
   const pending = memCard.locator('[data-project-memory-candidates]')
   const pendRows = pending.locator('[data-project-memory-candidate]')
@@ -418,7 +436,9 @@ async function run(app, win, stub, seen, home, ctx) {
   const firstCommit = await profile.locator('[data-project-git-commits] .project-git-commit strong').first().textContent().catch(() => '')
   check('6g 再点提交 → POST git/commit { sessionId, 手改后的信息, expect = 新清单的指纹 };提交框收起,最近提交第一条是它,改动清空', closed && seen.gitCommits.length === 2 && seen.gitCommits[1].sessionId === 'pd-main' && seen.gitCommits[1].message === 'fix: 手改过的提交信息' && seen.gitCommits[1].expect === 'tok-2' && firstCommit === 'fix: 手改过的提交信息' && await profile.locator('[data-project-git-changes]').count() === 0, JSON.stringify({ commits: seen.gitCommits, firstCommit }))
   await writeRow.locator('[data-git-action="branch"]').click()
-  const promptInput = win.locator('.dialog .dialog-input')
+  // 刚关掉的那个框还留着 80ms 退场替身(useExitGhost,带着原来的输入值),只认活的那个
+  const liveDialog = win.locator('.dialog-overlay:not([data-lcl-exit]) .dialog')
+  const promptInput = liveDialog.locator('.dialog-input')
   await promptInput.waitFor()
   check('6h 新建分支:对话框预填「设置 → Git」里的前缀 tangu/', (await promptInput.inputValue()) === 'tangu/', await promptInput.inputValue())
   await promptInput.fill('tangu/demo-x')
@@ -570,7 +590,7 @@ async function run(app, win, stub, seen, home, ctx) {
   await details.screenshot({ path: shots.gitPublish = shot('project-git-publish-zh-light') })
   await publishBtn.click()
   await promptInput.waitFor()
-  check('6q3 对话框预填由文件夹名整理出来的仓库名(Demo Project → Demo-Project),并说明会建私有仓库、推到哪个站', (await promptInput.inputValue()) === 'Demo-Project' && /私有仓库/.test(await win.locator('.dialog').textContent()) && /git\.forsion\.example/.test(await win.locator('.dialog').textContent()), await win.locator('.dialog').textContent())
+  check('6q3 对话框预填由文件夹名整理出来的仓库名(Demo Project → Demo-Project),并说明会建私有仓库、推到哪个站', (await promptInput.inputValue()) === 'Demo-Project' && /私有仓库/.test(await liveDialog.textContent()) && /git\.forsion\.example/.test(await liveDialog.textContent()), await liveDialog.textContent())
   await promptInput.fill('我的项目')
   await promptInput.press('Enter')
   await until(async () => /仓库名/.test((await gitError.textContent().catch(() => '')) || '')) // 错误条上可能还留着上一条(6l3),等到是这一条
@@ -649,7 +669,7 @@ async function run(app, win, stub, seen, home, ctx) {
   await sleep(400) // 等 hosting 重读回来(按钮文案不变,没有可等的 DOM 变化)
   await publishGithubBtn.click()
   await promptInput.waitFor()
-  check('6s5 绑了 → 对话框预填仓库名,写明在 @dave-gh 下建私有仓库', (await promptInput.inputValue()) === 'Demo-Project' && /@dave-gh/.test(await win.locator('.dialog').textContent()) && /私有仓库/.test(await win.locator('.dialog').textContent()), await win.locator('.dialog').textContent())
+  check('6s5 绑了 → 对话框预填仓库名,写明在 @dave-gh 下建私有仓库', (await promptInput.inputValue()) === 'Demo-Project' && /@dave-gh/.test(await liveDialog.textContent()) && /私有仓库/.test(await liveDialog.textContent()), await liveDialog.textContent())
   await promptInput.press('Enter')
   await until(async () => seen.gitGithubPublishes.length === 1)
   await until(async () => (await publishGithubBtn.count()) === 0)
@@ -1033,19 +1053,33 @@ async function run(app, win, stub, seen, home, ctx) {
   await win.waitForTimeout(400)
   check('11d Agent 行「查看详情」→ 右栏显示 Coder、主区不动;切会话后自动回到跟随', agentShown && await win.locator('[data-details-subject]').count() === 0 && await details.locator('[data-project-profile]').count() === 1)
 
-  // 11e 删除 Agent:勾「同时删除相关文件」→ DELETE ?keepFiles=1(引擎先挪)→ 挪到的目录进废纸篓;侧栏行消失
+  // 11e 删除 Agent(10-28 起统一卸载框):先问引擎 uninstall-preview,逐行写清去向(文件进回收站 / 私聊归档 / 团队成员位移出 / 自动化暂停);
+  // 勾「一并删除这些私聊」→ DELETE ?deleteChats=1 → 引擎回 trashId → 侧栏行消失、6 秒「撤销」拿 trashId 恢复,行回来
+  const agentDlg = win.locator('[data-uninstall-dialog] .dialog-overlay:not([data-lcl-exit]) .dialog')
   await orbitRow('Coder').click({ button: 'right' })
   await menuItem('agent-delete').click()
-  await dialog.waitFor()
-  const agentDialog = await dialog.evaluate((el) => ({ title: el.querySelector('.dialog-title').textContent, msg: el.querySelector('.dialog-msg').textContent, check: (el.querySelector('.dialog-check') || {}).textContent || '' }))
+  await agentDlg.locator('[data-un-row="deleteChats"]').waitFor()
+  const chatsPill = () => agentDlg.locator('[data-un-row="deleteChats"] .un-pill').textContent()
+  const agentDialog = await agentDlg.evaluate((el) => ({ title: el.querySelector('.dialog-title').textContent, rows: [...el.querySelectorAll('.un-row')].map((r) => r.textContent) }))
+  agentDialog.chatsBefore = await chatsPill()
+  await agentDlg.locator('[data-un-row="deleteChats"] input').check()
+  agentDialog.chatsAfter = await chatsPill()
   await win.waitForTimeout(350) // 对话框入场动画走完再截
   await win.screenshot({ path: shots.removeAgent = shot('remove-agent-dialog-zh-light') })
-  await dialog.locator('.dialog-check input').check()
-  await dialog.locator('.dialog-btn[data-danger]').click()
-  for (let i = 0; i < 30 && !(seen.agentDeletes.length && fs.existsSync(trashDir) && fs.readdirSync(trashDir).some((n) => n.endsWith('coder-kept'))); i++) await sleep(150)
+  await agentDlg.locator('.dialog-btn[data-danger]').click()
+  for (let i = 0; i < 30 && !seen.agentDeletes.length; i++) await sleep(150)
   await orbitRow('Coder').waitFor({ state: 'detached', timeout: 5_000 }).catch(() => {})
-  const del = seen.agentDeletes[0]
-  check('11e 删除 Agent:对话框(名册与侧栏移除、文件默认留在 agents/.removed/、勾选项);勾上确认 → DELETE ?keepFiles=1、挪到的目录进废纸篓、侧栏 Coder 行消失', /删除 Agent「Coder」/.test(agentDialog.title) && /agents\/\.removed\//.test(agentDialog.msg) && /同时删除相关文件/.test(agentDialog.check) && del?.slug === 'coder' && del.keepFiles && !fs.existsSync(del.keptAt) && fs.readdirSync(trashDir).some((n) => n.endsWith('coder-kept')) && await orbitRow('Coder').count() === 0, JSON.stringify({ agentDialog, del }))
+  const undo = win.locator('.ntf-action').filter({ hasText: '撤销' })
+  await undo.waitFor({ timeout: 5_000 }).catch(() => {})
+  const del = { ...seen.agentDeletes[0], rowGone: await orbitRow('Coder').count() === 0, undo: await undo.count() }
+  await undo.click().catch(() => {})
+  for (let i = 0; i < 30 && !seen.trashRestores.length; i++) await sleep(150)
+  await orbitRow('Coder').waitFor({ timeout: 5_000 }).catch(() => {})
+  del.restores = seen.trashRestores
+  del.rowBack = await orbitRow('Coder').count() === 1
+  const rowsOk = agentDialog.rows.length === 4 && /定义、记忆与 Library.*回收站 · 30 天/.test(agentDialog.rows[0]) && /团队「Duo」里的成员位.*移出团队/.test(agentDialog.rows[2]) && /用它的自动化 · 1 个.*Daily digest.*暂停/.test(agentDialog.rows[3])
+  check('11e 删除 Agent:统一卸载框(四行去向、私聊缺省归档,勾上变删除);确认 → DELETE ?deleteChats=1、侧栏 Coder 行消失;「撤销」按引擎回的 trashId 恢复,行回来', /删除 Agent「Coder」/.test(agentDialog.title) && rowsOk && /历史私聊 · 2 条/.test(agentDialog.rows[1]) && agentDialog.chatsBefore === '归档（只读）' && agentDialog.chatsAfter === '删除'
+    && del.slug === 'coder' && del.deleteChats && del.rowGone && del.undo === 1 && del.restores.join() === 'trash-coder-1' && del.rowBack, JSON.stringify({ agentDialog, del }))
 
   // 11f 移除工作区:勾「同时删除相关文件」→ 三个会话删掉、项目里的 .tangu 进废纸篓、项目文件夹本身还在
   await groupHead('Demo Project').click({ button: 'right' })
@@ -1074,9 +1108,9 @@ async function main() {
   const userData = path.join(home, 'userData')
   const vault = path.join(home, 'vault')
   const projectDir = path.join(home, 'Demo Project')
-  for (const dir of [userData, `${userData}-dev`, vault, projectDir]) fs.mkdirSync(dir, { recursive: true })
+  for (const dir of [userData, `${userData}-dev`, path.join(vault, 'Sessions'), projectDir]) fs.mkdirSync(dir, { recursive: true })
   const ctx = contextFixture(projectDir)
-  const seen = { memoryForgets: [], memoryConflictOnce: false, memoryCandidates: [], memoryCandidateGoneOnce: false, memoryCandidateBusyOnce: false, memoryRestores: [], memoryRestoreGoneOnce: false, compactedActivity: false, candidatesActivity: false, ctxGets: [], init: 0, docPuts: [], settingsPuts: [], skills: [], sessionsCreated: 0, iconPosts: [], iconGets: 0, iconDeletes: [], sessionDeletes: [], agentDeletes: [],
+  const seen = { memoryEdits: [], memoryForgets: [], memoryConflictOnce: false, memoryCandidates: [], memoryCandidateGoneOnce: false, memoryCandidateBusyOnce: false, memoryRestores: [], memoryRestoreGoneOnce: false, compactedActivity: false, candidatesActivity: false, ctxGets: [], init: 0, docPuts: [], settingsPuts: [], skills: [], sessionsCreated: 0, iconPosts: [], iconGets: 0, iconDeletes: [], sessionDeletes: [], agentDeletes: [], agentTrash: {}, trashRestores: [],
     gitMessages: [], gitCommits: [], gitBranches: [], gitPushes: [], gitPulls: [], gitInits: [], gitSettingsPuts: [], gitPendings: [], gitTrusts: [], pushGate: false, hostingGets: [], hosting: null, gitPublishes: [], github: null, pushGithubUnlinkedOnce: false, gitRemotes: [], gitGithubPublishes: [], accountsGets: 0, gitPushTargets: [], pushOwnOnce: false, pushDeniedOnce: false, gitClones: [], cloneExistsOnce: false,
     repos: { forsion: [{ fullName: 'dave/notes', private: true, cloneUrl: 'https://git.forsion.example/dave/notes.git', updatedAt: '2026-10-10T08:00:00Z' }, { fullName: 'dave/plugin-demo', private: false, cloneUrl: 'https://git.forsion.example/dave/plugin-demo.git', updatedAt: null }], github: 'unlinked' },
     accounts: { forsionGit: { webUrl: 'https://git.forsion.example', username: 'dave' }, github: { linked: false }, identity: { name: 'Dave', email: 'dave@noreply.git.forsion.example', source: 'forsion' } } }
@@ -1237,6 +1271,13 @@ async function main() {
       return { settings: gitSettings }
     }
     // 删一条项目记忆:同引擎,带版本;版本对不上(或被要求演一次冲突)→ 409,什么都不删
+    if (route === '/agent/project-context/memory' && method === 'PATCH') {
+      const b = await body(); seen.memoryEdits.push(b)
+      if (b.expectedVersion !== ctx.memory.version) return { __code: 409, body: { detail: 'Memory changed since it was read', code: 'MEMORY_VERSION_CONFLICT' } }
+      const entries = ctx.memory.entries.map((e) => (e.id === b.id ? { ...e, content: b.fact, updatedAt: Date.now() } : e))
+      ctx.memory = { ...ctx.memory, version: `ve${seen.memoryEdits.length}`, entries, chars: entries.reduce((n, e) => n + e.content.length, 0) }
+      return { memory: ctx.memory }
+    }
     if (route === '/agent/project-context/memory' && method === 'DELETE') {
       const b = await body(); seen.memoryForgets.push(b)
       if (seen.memoryConflictOnce) { seen.memoryConflictOnce = false; ctx.memory = { ...ctx.memory, version: 'v-changed' }; return { __code: 409, body: { detail: 'Memory changed since it was read', code: 'MEMORY_VERSION_CONFLICT' } } }
@@ -1284,14 +1325,23 @@ async function main() {
       }
     }
     if (/^\/agent\/sessions\/[^/]+$/.test(route) && method === 'DELETE') { const id = route.split('/')[3]; seen.sessionDeletes.push(id); const i = sessions.findIndex((x) => x.id === id); if (i >= 0) sessions.splice(i, 1); return { ok: true } }
-    // 删 Agent:?keepFiles=1 = 引擎把目录挪走并回 keptAt(这里造一个真目录,桌面随后把它移进 e2e 废纸篓);名册同步去掉它
+    // 删 Agent(10-28 起整份进引擎回收站):?deleteChats=1 = 私聊一起删;回 trashId,桌面的「撤销」拿它 POST /agent/trash/<id>/restore
     if (/^\/agent\/agents\/[^/]+$/.test(route) && method === 'DELETE') {
-      const slug = route.split('/')[3], keepFiles = url.searchParams.get('keepFiles') === '1'
-      const keptAt = keepFiles ? path.join(home, 'removed', `${slug}-kept`) : undefined
-      if (keptAt) { fs.mkdirSync(keptAt, { recursive: true }); fs.writeFileSync(path.join(keptAt, 'MEMORY.md'), '- x\n') }
-      seen.agentDeletes.push({ slug, keepFiles, keptAt })
-      const i = AGENTS.findIndex((a) => a.slug === slug); if (i >= 0) AGENTS.splice(i, 1)
-      return { ok: true, ...(keptAt ? { keptAt } : {}) }
+      const slug = route.split('/')[3], i = AGENTS.findIndex((a) => a.slug === slug)
+      seen.agentDeletes.push({ slug, deleteChats: url.searchParams.get('deleteChats') === '1' })
+      if (i >= 0) seen.agentTrash[`trash-${slug}-1`] = AGENTS.splice(i, 1)[0]
+      return { ok: true, trashId: `trash-${slug}-1` }
+    }
+    if (/^\/agent\/trash\/[^/]+\/restore$/.test(route) && method === 'POST') {
+      const id = decodeURIComponent(route.split('/')[3]), def = seen.agentTrash[id]
+      seen.trashRestores.push(id)
+      if (def) { AGENTS.push(def); delete seen.agentTrash[id] }
+      return { ok: true, slug: def?.slug }
+    }
+    // 卸载框的预览(引擎 services/agentUninstall,形状同 AgentUninstallPreview):两条私聊、一个团队成员位、一个自动化 → 四行都画出来
+    if (/^\/agent\/agents\/[^/]+\/uninstall-preview$/.test(route) && method === 'GET') {
+      const slug = route.split('/')[3]
+      return { slug, name: AGENTS.find((a) => a.slug === slug)?.name || slug, blocked: null, size: 4096, chats: 2, cloud: false, teams: [{ slug: 'duo', name: 'Duo', dissolve: false }], automations: [{ id: 'auto-1', desc: 'Daily digest' }] }
     }
     return undefined
   } })

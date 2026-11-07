@@ -26,9 +26,14 @@ export function parseBlock(block: string): { time: string; body: string } {
   return { time: m ? m[1] : '00:00', body };
 }
 
-/** 合并日志块:union + 按归一化块串去重,按 time 升序。 */
+/** 块的身份:标题只认 `### HH:MM`,后面的尾巴(11-06 起本机写的块带设备名 `### 09:30 · MacBook Pro`)不算 ——
+ *  同一块经云端 Brain 转一圈回来没了尾巴,不能当成两块。正文(含 `@deviceId`)照旧逐字比。 */
+export function blockKey(block: string): string {
+  return block.replace(/\s+$/, '').replace(/^(###\s+\d{2}:\d{2})[^\n]*/, '$1');
+}
+/** 合并日志块:union + 按块身份去重(先到的那份留下),按 time 升序。 */
 export function mergeBlocks(a: string[], b: string[]): { merged: string[]; onlyInA: string[]; onlyInB: string[] } {
-  const norm = (s: string): string => s.replace(/\s+$/, '');
+  const norm = blockKey;
   const setB = new Set(b.map(norm));
   const setA = new Set(a.map(norm));
   const onlyInA = a.filter((x) => !setB.has(norm(x)));

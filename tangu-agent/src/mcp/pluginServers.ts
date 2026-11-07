@@ -44,6 +44,7 @@ export function sanitizePluginMcpServers(raw: unknown, pluginId: string, pluginD
     const env = strMap(c.env);
     if (env) cfg.env = Object.fromEntries(Object.entries(env).map(([k, v]) => [k, expand(v)]));
     if (typeof c.timeoutMs === 'number' && c.timeoutMs > 0) cfg.timeoutMs = Math.min(c.timeoutMs, 600_000);
+    if (c.deferLoading === false) cfg.deferLoading = false;
     if (c.enabled === false) continue; // 声明了但关着 = 不起
     out[name] = cfg;
   }

@@ -34,6 +34,9 @@ import { PageScopeCtx, setActivePageScope, usePageStore, useScopedPageStore } fr
 import { BlockHost } from '@amadeus/components/BlockHost'
 import { askString } from '@amadeus/components/askString'
 import { dashBaseName, parseWidget, webviewUrlAllowed, widgetSource } from '@amadeus-shared/dashboard'
+import { parseWidgetRef } from '@amadeus-shared/widgetBoard'
+import { WidgetHost } from '../components/WidgetHost'
+import { useWidgets } from '../services/widgetClient'
 import {
   DASH3_COLS, DASH3_DEFAULT, DASH3_DEFAULT_MINI, DASH3_DEFAULT_TEXT, DASH3_GAP_PX,
   DASH3_MAX_ROWS, DASH3_ROW_PX, DASH3_SIZES, colsForWidth, dash3BucketOf, dash3MinCell, dash3Size,
@@ -226,7 +229,11 @@ const WIDGET_PROFILES: Record<string, CardProfile> = {
 const minOf = (profile: CardProfile): { w: number; h: number } => profile.min ?? dash3MinCell(profile.sizes)
 
 /** 卡片类型 → 真正支持的尺寸与视觉表面。未知 view 缺省 lg/full 两档 + 视图通用下界。 */
+/** 小组件(对话里做的卡,```widget 围栏只写 id):和内置卡分开,表格 / 合计要地方,缺省「大」。 */
+const WIDGET_REF_PROFILE: CardProfile = { sizes: ['md', 'wide', 'lg', 'full'], defaultSize: 'lg', surface: 'summary', min: { w: 3, h: 3 } }
+
 function profileOf(content: string): CardProfile {
+  if (parseWidgetRef(content)) return WIDGET_REF_PROFILE
   const widget = parseWidget(content)
   if (widget?.kind === 'view') {
     const card = getView(widget.opts.type ?? '')?.dashboard
@@ -321,6 +328,9 @@ function GridInner({ leaf }: ViewProps) {
 
   const read3 = useMemo(() => readDash3Layout(fmExtra), [fmExtra])
   const layout: Dash3Layout = read3.ok ? read3.layout : {}
+  // 板上的小组件:卡头标题读原件(同一份缓存,原件改了跟着变)
+  const refIds = ids.flatMap((id) => parseWidgetRef(blocks[id]?.content ?? '')?.id ?? [])
+  const refStates = useWidgets(refIds)
   // 「自由摆位 → 自动排版」的迁移横幅住在**画布版**里(路由把带 dashboard2: 的老文件送去那边),
   // 这里不会遇到待迁移的文件。
   const stale = read3.ok && grid3IsStale(layout, ids)
@@ -860,6 +870,11 @@ function GridInner({ leaf }: ViewProps) {
   if (!dashPath) return <div className="amx-draw-state">{t('dashgrid.noFile')}</div>
 
   const cardOf = (id: string): { widget: ReturnType<typeof parseWidget>; title: string | null; Icon: typeof LayoutGrid | null; openable: null | (() => void) } => {
+    const ref = parseWidgetRef(blocks[id]?.content ?? '')
+    if (ref) {
+      const st = refStates[refIds.indexOf(ref.id)]
+      return { widget: null, title: st?.status === 'ok' ? st.widget.title || st.widget.name : t('widget.kind'), Icon: LayoutGrid, openable: null }
+    }
     const widget = parseWidget(blocks[id]?.content ?? '')
     if (widget?.kind !== 'view') return { widget, title: null, Icon: null, openable: null }
     const vt = widget.opts.type ?? ''
@@ -875,6 +890,8 @@ function GridInner({ leaf }: ViewProps) {
   }
 
   const renderBody = (id: string, size: DashboardCardSize): ReactNode => {
+    const ref = parseWidgetRef(blocks[id]?.content ?? '')
+    if (ref) return <div className="dash-widget wgt-dash-body"><WidgetHost id={ref.id} onRemove={() => removeCard(id)} /></div>
     const widget = parseWidget(blocks[id]?.content ?? '')
     if (widget?.kind === 'view') {
       const vt = widget.opts.type ?? ''
@@ -1127,7 +1144,7 @@ function GridInner({ leaf }: ViewProps) {
                         snap={!!reduceMotion || landingRef.current === id}
                         locked={locked}
                         chrome={isChrome(meta.widget?.kind)}
-                        kind={meta.widget?.kind ?? 'text'}
+                        kind={parseWidgetRef(blocks[id]?.content ?? '') ? 'widget' : meta.widget?.kind ?? 'text'}
                         surface={profileOf(blocks[id]?.content ?? '').surface}
                         size={size}
                         dragging={dragId === id}

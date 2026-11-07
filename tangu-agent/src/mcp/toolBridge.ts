@@ -19,6 +19,9 @@ export interface LoadedMcpTool {
   /** server 侧原始工具名(callTool 用)。 */
   remoteName: string;
   definition: Tool;
+  /** false = 这个 server 的工具每次请求都整份下发(配置 `deferLoading: false`)。缺省按需加载:系统提示只列一行目录,
+   *  模型经 load_tools 装上再调(registry.isMcpDeferred)。只由 manager.toolsForRun 按 server 配置填。 */
+  deferLoading?: false;
 }
 
 const NAME_MAX = 64;

@@ -6,7 +6,7 @@
  * 样式全在 sidebar2.css(t2s- 前缀,token 驱动);右键菜单复用 base.css 的 .ctx-menu。
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { Plus, MoreHorizontal, Pencil, Archive, ArchiveRestore, Trash2, ChevronRight, Folder, FolderOpen, Cloud, FolderPlus, SquarePen, Smartphone, Send, MessagesSquare, MessageSquare, Bot, GitBranch, Pin, PinOff, Info, NotebookPen, Smile, CircleAlert } from 'lucide-react'
+import { Plus, MoreHorizontal, Pencil, Archive, ArchiveRestore, Trash2, ChevronRight, Folder, FolderOpen, Cloud, FolderPlus, SquarePen, Smartphone, Send, MessagesSquare, MessageSquare, Bot, GitBranch, Pin, PinOff, Info, NotebookPen, Smile, CircleAlert, Check, PanelTop } from 'lucide-react'
 import { SessionIcon, SessionIconPicker } from '../../components/SessionIcon'
 import { folderPadLeft, rowPadLeft } from '@amadeus/lib/treeIndent'
 import { SidebarRow } from '../../components/SidebarRow'
@@ -25,11 +25,12 @@ import { setChatRefDrag } from '../../components/chatDragRef'
 import { isOrbitPinned, orderOrbitEntries, type OrbitPinTimes } from './orbitPins'
 import { displaySessionTitle, workspaceGroupLabel } from '../../sessionTitle'
 import '../../styles/sidebar2.css'
-import { OverlayAt, nativeSheetPresenter, presentNativePrompt, useNativeChromeSpaces, useNativeSheetMenu, type SheetMenuItem } from '@lcl/engine'
+import { OverlayAt, nativeSheetPresenter, presentNativePrompt, useNativeChromeSpaces, useNativeSheetMenu, useSegDir, type SheetMenuItem } from '@lcl/engine'
 import { CtxMenuButtons } from '../../components/CtxMenuButtons'
 import { AttentionDot, StatusMark } from './AttentionDot'
 import { ProjectRelinkDialog, onProjectRelinked, swapKey, useMissingProjects } from './ProjectRelink'
 import { SessionBgMark } from './BackgroundProcs'
+import { EXPAND_STEPS, WS_EXPAND_EVENT, expandStepOf, expandedExtra, setExpandStep, setExpandedExtra } from './wsExpand'
 import { mergeStatus, nestSessions, rowStatus, type RowStatus, type TreeNode } from './sessionTree'
 import { homeTarget } from '../../services/engine/targets'
 import { canTurnChatIntoNote, turnChatIntoNote } from './chatToNote'
@@ -59,6 +60,9 @@ registerMessages({
   'sidebar.ws.removeFiles': { zh: '同时删除相关文件：项目里的 .tangu 文件夹（Tangu 的指令、技能、计划），移到废纸篓', en: "Also delete related files: the project's .tangu folder (Tangu instructions, skills and plans), moved to the Trash" },
   'sidebar.ws.removeAction': { zh: '移除', en: 'Remove' },
   'sidebar.kids': { zh: '{n} 个子会话 · 点一下收起或展开', en: '{n} child sessions · click to collapse or expand' },
+  'sidebar.showLess': { zh: '收起', en: 'Show less' },
+  'sidebar.ws.openMain': { zh: '在主区打开', en: 'Open in main area' },
+  'sidebar.ws.expandStep': { zh: '每次展开 {n} 条', en: 'Show {n} more per click' },
 })
 
 const COLLAPSE_KEY = 'forsion_tangu_collapsed_projects'
@@ -198,6 +202,13 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
     const onChange = (): void => { try { setSessionLimit(Math.max(1, Number(localStorage.getItem('tangu_ws_session_limit')) || 5)) } catch { /* ignore */ } }
     window.addEventListener('tangu:wslimit', onChange)
     return () => window.removeEventListener('tangu:wslimit', onChange)
+  }, [])
+  // 「查看更多」分段展开:数存在 wsExpand 的模块级 Map 里(重启收回),这里只负责触发重渲。
+  const [, bumpExpand] = useState(0)
+  useEffect(() => {
+    const onChange = (): void => bumpExpand((x) => x + 1)
+    window.addEventListener(WS_EXPAND_EVENT, onChange)
+    return () => window.removeEventListener(WS_EXPAND_EVENT, onChange)
   }, [])
   const [showArchived, setShowArchived] = useState(false)
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(loadCollapsed)
@@ -445,6 +456,13 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
     if (p.onShowWorkspaceDetails && isProjectWorkspace(w.ws) && [...allSessions, ...allArchived].some((s) => s.project_path === w.ws.path && !s.projectless)) {
       items.push({ id: 'ws-details', act: 'ws-details', label: t('sidebar.ws.details'), icon: <Info size={13} />, run: () => { const ws = w.ws; setWsMenu(null); p.onShowWorkspaceDetails?.(ws) } })
     }
+    if (!p.flat) {
+      items.push({ id: 'ws-open-main', act: 'ws-open-main', label: t('sidebar.ws.openMain'), icon: <PanelTop size={13} />, run: () => { const key = w.ws.key; setWsMenu(null); p.onOpenWorkspace(key) } })
+      const step = expandStepOf(w.ws.key)
+      for (const n of EXPAND_STEPS) {
+        items.push({ id: `ws-step-${n}`, act: 'ws-step', checked: n === step, label: t('sidebar.ws.expandStep', { n }), icon: n === step ? <Check size={13} /> : <span className="t2s-menu-blank" />, run: () => { setExpandStep(w.ws.key, n); setWsMenu(null) } })
+      }
+    }
     if (!w.ws.system) {
       items.push({ id: 'ws-rename', label: t('sidebar.ws.rename'), icon: <Pencil size={13} />, run: () => { const ws = w.ws; setWsMenu(null); startWsRename(ws) } })
       items.push({ id: 'ws-remove', act: 'ws-remove', danger: true, label: t('sidebar.ws.remove'), icon: <Trash2 size={13} />, run: () => { setWsRemoving(w.ws); setWsMenu(null) } })
@@ -615,6 +633,8 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
   // 宿主在屏幕底部浮着一条 Dock 时(Android 原生外壳)这一块改放在列表末尾、跟着滚:钉在底部的话它要么被 Dock 盖住,
   // 要么把列表挡在 Dock 之上,列表就没法从 Dock 底下穿过去。
   const dockHost = useNativeChromeSpaces()
+  /** Chat | Work 胶囊滑块往哪边拉(写进 data-dir,后沿晚出发;见 sidebar2.css .t2s-vaultseg-thumb)。 */
+  const modeDir = useSegDir(p.mode === 'work' ? 1 : 0)
   const foot = ((window.tangu?.pickDirectory && !p.flat) || p.archivedSessions.length > 0) && (
     <div className="t2s-foot">
       {window.tangu?.pickDirectory && !p.flat && <button className="t2s-add-ws" onClick={p.onAddWorkspace}><FolderPlus size={14} /> {t('sidebar.addLocalWorkspace')}</button>}
@@ -649,7 +669,7 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
               <SpecialRow icon={<SquarePen />} title={t('sidebar.newChat')} active={false} onClick={p.onNewChat} act="new-chat" />
               {p.mode && p.onModeChange && (
                 <div className="t2s-vaultseg t2s-mode" role="tablist" aria-label={t('sidebar.mode.tip')} title={t('sidebar.mode.tip')}>
-                  <div className="t2s-vaultseg-thumb" data-side={p.mode} />
+                  <div className="t2s-vaultseg-thumb" data-side={p.mode} data-dir={modeDir} />
                   {(['chat', 'work'] as const).map((m) => (
                     <button key={m} type="button" role="tab" aria-selected={p.mode === m} data-mode={m} className={p.mode === m ? 'on' : undefined} onClick={() => p.onModeChange!(m)}>
                       {t(m === 'chat' ? 'sidebar.mode.chat' : 'sidebar.mode.work')}
@@ -678,6 +698,8 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
               // 平铺(Chat 模式):整组直接铺开,不画组头、不折叠、不限条数(聊天列表就该是整份)。
               if (p.flat) return <div key={ws.key} className="t2s-group-sessions t2s-flat">{nodes.map(renderNode)}</div>
               const isCollapsed = collapsedGroups.has(ws.key)
+              const extra = expandedExtra.get(ws.key) || 0
+              const shown = sessionLimit + extra
               // 组内会话行也认这一组的落点(否则松手落在会话行上 = 什么都没发生)。
               // 刻意不挂 dragLeave:落点粘住最后悬停过的组,松手落在组间那 4.5px 外边距里也照样成立
               // (列表级兜底见 .t2s-scroll 的 onDragOver/onDrop)。
@@ -740,7 +762,7 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
                       </div>
                     ) : ws.kind === 'channel' ? (
                       // 通道文件夹:纯展开折叠(与普通工作区一致)。行尾连接状态点。
-                      <button className="t2s-group-toggle t2s-folder-row" onClick={() => { p.onActivateEntry?.(en.key); isCollapsed ? enterGroup(ws.key) : toggleGroup(ws.key) }}>
+                      <button className="t2s-group-toggle t2s-folder-row" onClick={() => { isCollapsed ? enterGroup(ws.key) : toggleGroup(ws.key) }}>
                         {wsLead(ws, isCollapsed)}
                         <span className="t2s-group-label">{workspaceGroupLabel(ws, t)}</span>
                         {pinned && <Pin className="t2o-pin-mark" aria-hidden="true" />}
@@ -748,26 +770,28 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
                       </button>
                     ) : (
                       // 点组头 = 纯展开/折叠,**不跳主区**(用户拍板;进工作区详情走「查看更多」或组菜单)。
+                      // 也**不算激活**(11-03 用户:置顶区不许因为展开折叠换顺序);开组里的会话才算(见会话行 onClick)。
                       // 已展开再点 = 折叠(toggleGroup 不动 activeWorkspaceKey,不会被联动 effect 弹回);收起时点 = 展开自己。
-                      <button className="t2s-group-toggle t2s-folder-row" onClick={() => { p.onActivateEntry?.(en.key); isCollapsed ? enterGroup(ws.key) : toggleGroup(ws.key) }}>
+                      <button className="t2s-group-toggle t2s-folder-row" onClick={() => { isCollapsed ? enterGroup(ws.key) : toggleGroup(ws.key) }}>
                         {wsLead(ws, isCollapsed)}
                         <span className={`t2s-group-label${isMissing(ws) ? ' t2s-missing-name' : ''}`}>{workspaceGroupLabel(ws, t)}</span>
                         {isMissing(ws) && <span className="t2s-missing"><CircleAlert aria-hidden="true" />{t('relink.missing')}</span>}
                         {pinned && <Pin className="t2o-pin-mark" aria-hidden="true" />}
                       </button>
                     )}
-                    {/* 行尾顺序:… 在左、+ 在右(同笔记树)。 */}
-                    {(!ws.system || p.onTogglePinned || (p.onShowWorkspaceDetails && isProjectWorkspace(ws))) && (
-                      <button type="button" className="t2s-group-add" title={t('sidebar.ws.menu')} onClick={(e) => openWsMenu(e, ws)}><MoreHorizontal size={14} /></button>
-                    )}
+                    {/* 行尾顺序:… 在左、+ 在右(同笔记树)。每组都有「在主区打开」与每次展开数,系统组也给菜单钮。 */}
+                    <button type="button" className="t2s-group-add" title={t('sidebar.ws.menu')} onClick={(e) => openWsMenu(e, ws)}><MoreHorizontal size={14} /></button>
                     <button type="button" className="t2s-group-add" title={t('sidebar.newChatIn', { name: workspaceGroupLabel(ws, t) })} onClick={() => p.onNewInWorkspace(ws)}><Plus size={14} /></button>
                   </div>
                   <AnimatedCollapse open={!isCollapsed}>
                     <div className={`t2s-group-sessions${after && !isCollapsed ? ' drag-over-end' : ''}`} {...dropOn}>
-                      {nodes.slice(0, sessionLimit).map(renderNode)}
-                      {nodes.length > sessionLimit && (
-                        // 数字是**余下几条**(U-37):列表里已经摆着 sessionLimit 条,再报总数会读成「还有这么多」。
-                        <button className="t2s-viewmore" onClick={() => p.onOpenWorkspace(ws.key)}>{t('sidebar.viewMore')} · {nodes.length - sessionLimit}</button>
+                      {nodes.slice(0, shown).map(renderNode)}
+                      {(nodes.length > shown || extra > 0) && (
+                        <div className="t2s-viewmore-row">
+                          {/* 原地分段展开(不再跳主区;进主区走组菜单「在主区打开」)。数字是**余下几条**(U-37)。 */}
+                          {nodes.length > shown && <button className="t2s-viewmore" onClick={() => setExpandedExtra(ws.key, (expandedExtra.get(ws.key) || 0) + expandStepOf(ws.key))}>{t('sidebar.viewMore')} · {nodes.length - shown}</button>}
+                          {extra > 0 && <button className="t2s-viewmore" onClick={() => setExpandedExtra(ws.key, 0)}>{t('sidebar.showLess')}</button>}
+                        </div>
                       )}
                     </div>
                   </AnimatedCollapse>

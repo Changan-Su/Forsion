@@ -6,6 +6,7 @@ import { AnimatePresence, motion } from 'framer-motion'
 import { X, Check, Info, AlertTriangle, AlertCircle } from 'lucide-react'
 import { useNotifications, type NotifyLevel } from '../stores/notificationStore'
 import { useSpaceStore } from '@lcl/engine'
+import { motion as motionTokens } from '../theme/motionTokens'
 
 // 级别用小图标(带级别色)传达,替代旧的左侧竖条高亮 —— 卡片本体保持与整体一致的中性风。
 const LEVEL_ICON: Record<NotifyLevel, typeof Info> = { info: Info, success: Check, warning: AlertTriangle, error: AlertCircle }
@@ -44,7 +45,7 @@ export function NotificationHost() {
             layout="position"
             initial={{ x: 6, opacity: 0 }}
             animate={{ x: 0, opacity: 1 }}
-            exit={{ x: 16, opacity: 0, transition: { duration: 0.16, ease: [0.4, 0, 1, 1] } }}
+            exit={n.settle ? { opacity: 0, transition: { duration: motionTokens.s('base') } } : { x: 16, opacity: 0, transition: { duration: 0.16, ease: [0.4, 0, 1, 1] } }}
             transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
             className={`ntf ntf-${n.level}`}
           >
@@ -61,8 +62,10 @@ export function NotificationHost() {
                 <button
                   className="ntf-action"
                   onClick={() => {
+                    const before = n.action
                     try { n.action?.run() } catch { /* 插件 action 抛错不砸宿主 */ }
-                    dismiss(n.id)
+                    // 动作自己把这条换成了结果(日历撤销 → 「已撤销」,settle):留着,到点淡出
+                    if (useNotifications.getState().items.find((x) => x.id === n.id)?.action === before) dismiss(n.id)
                   }}
                 >
                   {n.action.label}

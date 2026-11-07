@@ -101,7 +101,7 @@ button { font:inherit; border:0; }
   const openW = trace.at(-1)[1]
   const mids = trace.filter(([t, w]) => t > 35 && t < 155 && w > closedW + 8 && w < openW - 8).length
   const xs = trace.map((f) => f[2])
-  check('宽栏添加胶囊直接到位，不补宽度动画', mids === 0, `${closedW.toFixed(1)} → ${openW.toFixed(1)}，中间帧 ${mids}`)
+  check('宽栏添加胶囊展开补宽度，跟菜单进场同一只表(11-02 撤回走查续八 8.4)', mids > 0, `${closedW.toFixed(1)} → ${openW.toFixed(1)}，中间帧 ${mids}`)
   check('添加菜单锚点不随胶囊横移', Math.max(...xs) - Math.min(...xs) < 3, `漂移 ${(Math.max(...xs) - Math.min(...xs)).toFixed(1)}px`)
 
   await page.evaluate(() => document.querySelectorAll('.add-pill-btn,.composer-menu--add,.add-menu-sub').forEach((el) => el.getAnimations().forEach((a) => a.finish())))

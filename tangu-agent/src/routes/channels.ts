@@ -128,7 +128,8 @@ router.post('/agent/channels/:kind/sessions/new', authMiddleware, async (req: Au
     channelHub.ensureAvailable();
     const svc = channelHub.service(kind);
     const id = await svc.createChannelSession(req.user!.userId, str(req.body?.model_id), str(req.body?.title));
-    if (req.body?.connect !== false) await svc.setConnectedSession(req.user!.userId, id);
+    // multiPeer 的会话各归各的 peer:这里只新建一条普通会话,不去挪绑定。
+    if (req.body?.connect !== false && !svc.multiPeer) await svc.setConnectedSession(req.user!.userId, id);
     res.json({ sessionId: id });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'channel session create failed' });

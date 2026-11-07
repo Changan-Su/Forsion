@@ -13,6 +13,7 @@ import { createLocalHost } from '../adapters/standalone/localHost.js';
 import { createSqliteHost } from '../adapters/standalone/sqliteHost.js';
 import { createEmbeddedHost } from '../adapters/standalone/embeddedHost.js';
 import { createHttpBrain } from '../adapters/standalone/httpBrain.js';
+import { cloudCredential } from './tokenFile.js';
 import { createMultiBrain } from '../adapters/standalone/multiBrain.js';
 import { withOutboundMasking } from '../llm/outboundMask.js';
 import { withPluginModelProviders } from '../llm/pluginModels.js';
@@ -124,7 +125,7 @@ export async function setupHost(
  * httpBrain 仍构造(供同步服务调用云端 memory/log 端点),但不再是运行时 memory 来源。
  */
 export function buildBrain(cfg: StandaloneConfig): { brain: CloudBrainServices; providers: DirectProvider[] } {
-  const httpBrain = createHttpBrain({ cloudUrl: cfg.cloudUrl, token: cfg.token });
+  const httpBrain = createHttpBrain({ cloudUrl: cfg.cloudUrl, token: cloudCredential(cfg) });
   const providers = loadProviders(cfg);
   const base = withPluginModelProviders(providers.length ? createMultiBrain(httpBrain, createProviderRegistry(providers)) : httpBrain);
   const localMemory = createLocalMemoryBrain();

@@ -23,6 +23,7 @@ import { PLUGIN_VIEW_HOST_ATTR, clearPluginViewModes, pluginViewHeadOf, pluginVi
 import { pluginText } from '@amadeus/plugins/pluginText'
 import { setPluginCompanions } from './pluginCompanions'
 import { EmptyState } from './components/EmptyState'
+import { noteViewOpen } from '@amadeus/plugins/guideTips'
 
 registerMessages({
   'pluginview.mountFailed': { zh: '插件视图加载失败', en: 'Plugin view failed to load' },
@@ -69,6 +70,8 @@ export const PluginViewHost: React.FC<ViewProps & { def: ViewContribution; plugi
   // 「No vault is open」(2026-10-02 视频工作室 0.8 × 主页启动缺省,真 Electron 抓到)。与 WorkspaceView 同一处方;
   // 动态 import:amadeusPlugins 静态引了本文件(syncPluginViews)。
   useEffect(() => { if (amadeusAvailable()) void import('./amadeusPlugins').then((m) => m.ensureAmadeusReady()) }, [])
+  // 上手提示 manifest `when.open`:这个插件的这个 View 打开过几次(没声明提示的插件不记)
+  useEffect(() => { if (pluginId) noteViewOpen(pluginId, def.id) }, [pluginId, def.id])
   // Plugin views may own Electron webviews/canvases. Passive effect cleanup can run
   // after the first paint of the next Space, leaving the old surface visible briefly.
   // Keep mounting passive, but dispose the live surface during React's unmount commit.
@@ -146,7 +149,7 @@ export const PluginViewHost: React.FC<ViewProps & { def: ViewContribution; plugi
     <>
       {/* 有头行时挂载点要 position: relative:插件根常是 absolute inset:0(谛听),不然会盖到头行上 */}
       {(modes || head) && <ViewHead leafId={leaf.id} title={headTitle}>{modes && <HostSlot el={modes.actions} />}{head && <HostSlot el={head.actions} />}</ViewHead>}
-      <div ref={hostRef} {...{ [PLUGIN_VIEW_HOST_ATTR]: '' }} hidden={failed != null} style={modes || head ? { height: 'calc(100% - 32px)', overflow: 'auto', position: 'relative' } : { height: '100%', overflow: 'auto' }} />
+      <div ref={hostRef} {...{ [PLUGIN_VIEW_HOST_ATTR]: '' }} data-guide-owner={pluginId} hidden={failed != null} style={modes || head ? { height: 'calc(100% - 32px)', overflow: 'auto', position: 'relative' } : { height: '100%', overflow: 'auto' }} />
       {failed != null && <div data-plugin-view-failed="" style={{ height: modes || head ? 'calc(100% - 32px)' : '100%', display: 'flex', flexDirection: 'column', overflow: 'auto' }}>
         <EmptyState icon={TriangleAlert} title={t('pluginview.mountFailed')} line={failed || undefined}
           action={{ label: t('pluginview.retry'), icon: RotateCw, action: 'plugin-view-retry', onClick: retry }} />
