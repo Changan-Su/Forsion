@@ -8,6 +8,11 @@ on:
       - 'desktop/frontend/src/amadeus/blocks/markdown/MarkdownBlock.tsx'
 permissions:
   contents: read
+# PR 再推送就取消上一轮;main / tag / 手动运行各按 run_id 自成一组,不排队、不被取消。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
 jobs:
   full-unit:
     runs-on: ubuntu-latest
@@ -17,6 +22,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            tangu-agent/package-lock.json
+            desktop/package-lock.json
       - name: Install engine and desktop
         run: |
           npm ci --prefix tangu-agent --no-audit --no-fund
@@ -28,6 +37,8 @@ jobs:
           npm test
       - name: Complete desktop typecheck and unit gate
         working-directory: desktop
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096 # desktop 的 tsc 吃 ~2.5 GB,缺省堆会间歇 OOM(同 check-unit)
         run: |
           npm run typecheck
           npm test

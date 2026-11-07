@@ -93,6 +93,13 @@ export const CLASSIFICATION = {
   'GET /agent/human/SOUL.md/move': [D, 'host portrait move card (the route itself also refuses remote origin)'],
   'POST /agent/human/SOUL.md/move/scan': [D, 'starts the user-requested scan of Agent memories (the route itself also refuses remote origin)'],
   'POST /agent/human/SOUL.md/move/items/:id': [D, 'moves or keeps one Agent memory entry for the portrait (the route itself also refuses remote origin)'],
+  // 从其他 AI 导入(services/externalImport):读这台电脑上别家 AI 的文件、写画像 / 协作说明 / 项目记忆 / 技能;路由自己也拒远端
+  'GET /agent/import/scan': [D, 'lists other AI tools found in local files (the route itself also refuses remote origin)'],
+  'GET /agent/import/plan': [D, 'reads the sorted import list built from local files (the route itself also refuses remote origin)'],
+  'POST /agent/import/plan': [D, 'starts sorting local files and pasted text with the background model (the route itself also refuses remote origin)'],
+  'POST /agent/import/apply': [D, 'writes ticked items into the portrait, AGENT.md, project memory and skills (the route itself also refuses remote origin)'],
+  'POST /agent/import/undo': [D, 'undoes one import (the route itself also refuses remote origin)'],
+  'POST /agent/import/ignore': [D, 'marks what was found as seen (the route itself also refuses remote origin)'],
   'POST /agent/agents/:slug/memory/promote': [D, 'moves an Agent memory entry into host human/AGENT.md (the route itself also refuses remote origin)'],
 
   // ── widgets.ts:小组件原件和记录是本机文件,和 human/ 同一个边界 ──
@@ -201,6 +208,7 @@ export const CLASSIFICATION = {
   'POST /agent/mcp/:name/login': [D, 'MCP OAuth sign-in: loopback callback and tokens are local to this computer'],
   'POST /agent/mcp/:name/logout': [D, 'MCP OAuth sign-out deletes a local token'],
   'POST /agent/mcp/:name/key': [D, 'connector user key: stored only on this computer (connector-auth.json)'],
+  'POST /agent/mcp/probe': [D, 'MCP connection test: starts the given stdio command or contacts the URL from this computer'],
 
   // ── agents.ts ──
   'GET /agent/agents': [A, 'Agent roster; remote callers get no persona / developer instructions and the approval mode clamped to the remote cap (P1-M1A projection)'],
@@ -288,6 +296,7 @@ export const CLASSIFICATION = {
   'POST /agent/project-context/git/publish-github': [D, 'creates a GitHub repository with the linked account, adds a remote and pushes'],
   'POST /agent/project-context/git/remote': [D, 'writes the repo config and contacts the remote (may send the signed-in account credentials)'],
   'GET /agent/project-context/git/hosting': [D, 'host-only: whether this project can be published to Forsion Git (the publish action is host-only)'],
+  'GET /agent/project-context/git/reviews': [D, 'host-only: asks Forsion Git with the signed-in account credentials (merge requests awaiting review)'],
   'POST /agent/project-context/git/pending': [D, 'may run trusted repo filters (trust=true)'],
   'POST /agent/project-context/git/message': [D, 'spends model quota; may run trusted repo filters'],
   'POST /agent/git/clone': [D, 'clones a repository onto the host disk with the signed-in account credentials'],
@@ -315,6 +324,7 @@ export const CLASSIFICATION = {
   // ── special.ts(Historian / Muse / 自动化 / 日程 / 异步审批)──
   'GET /agent/special/config': [A, 'renderer auth probe; remote callers get only on/off + two cadence values (P1-K10b projection)'],
   'POST /agent/special/config': [D, 'special-agent config write (design appendix C)'],
+  'POST /agent/special/muse/intro': ['deny-remote', 'first-run onboarding answers write free text into Muse memory; local only'],
   'GET /agent/special/historian/activity': [A, 'Historian activity'],
   'GET /agent/special/muse/todos': [A, 'Muse todos'],
   'GET /agent/special/muse/todos/:id': [A, 'Muse todo'],

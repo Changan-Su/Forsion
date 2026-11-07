@@ -71,4 +71,16 @@ describe('provider probe routes', () => {
     expect(calls[0]).toMatchObject({ url: 'https://api.siliconflow.cn/v1/models', headers: { Authorization: 'Bearer k' } });
     expect(calls[0].headers['x-api-key']).toBeUndefined();
   });
+
+  it('OpenCode Go:探测带会话头(否则错 key 被报成 MissingSessionID);别家不带', async () => {
+    stubUpstream(() => ({ status: 401, json: { error: { message: 'Invalid credential' } } }));
+    const r = await post('/agent/providers/test', { baseUrl: 'https://opencode.ai/inference/go/v1/', apiKey: 'bad', modelId: 'glm-5.3' });
+    expect(r).toEqual({ success: false, message: '端点返回 401: Invalid credential' });
+    const chat = calls.find((c) => c.url === 'https://opencode.ai/inference/go/v1/chat/completions')!;
+    expect(chat.headers['x-opencode-session']).toMatch(/^[0-9a-f-]{36}$/);
+    expect(chat.headers['User-Agent']).toMatch(/^forsion-/);
+    calls.length = 0;
+    await post('/agent/providers/fetch-models', { baseUrl: 'https://api.siliconflow.cn/v1', apiKey: 'k' });
+    expect(calls[0].headers['x-opencode-session']).toBeUndefined();
+  });
 });

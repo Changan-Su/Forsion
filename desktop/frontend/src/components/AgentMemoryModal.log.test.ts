@@ -55,6 +55,10 @@ it('log saves include the loaded version; a conflict leaves the editable draft a
   expect(host.textContent).not.toContain('settings.agents.memSaved')
 })
 
+it('logForReading keeps the device name on the time line (11-06) and still drops the device id', () => {
+  expect(logForReading('# 2026-11-06\n\n### 09:30 · MacBook Pro\n@a1b2c3d4 did a thing\n\n### 10:00\n@0f9e8d7c old block\n')).toBe('### 09:30 · MacBook Pro\ndid a thing\n\n### 10:00\nold block\n')
+})
+
 it('logForReading drops the date title and the per-entry device marker, and leaves everything else alone', () => {
   expect(logForReading('# 2026-09-08\n\n### 09:30\n@a1b2c3d4 did a thing\n\n### 10:00\n@0f9e8d7c mailed @alice\n')).toBe('### 09:30\ndid a thing\n\n### 10:00\nmailed @alice\n')
   // 手写的条目以 @某人 开头:不是设备号的形状,原样留着

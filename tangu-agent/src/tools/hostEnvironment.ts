@@ -95,8 +95,10 @@ export function pathTools(
   return out;
 }
 
-/** Read once per process: these lines sit in the system prompt prefix, and a device rename or a new PATH entry
- *  mid-run should not change it (prompt cache). Only the vault can appear later (first-run setup creates it). */
+/** Read once per process: these lines sit in the system prompt prefix, and a new PATH entry mid-run should not change it
+ *  (prompt cache). Only the vault can appear later (first-run setup creates it). The device name is read at each call (one
+ *  small file, once per run): memory lines are tagged with it (`[MacBook Pro] …`, contracts/deviceTags.ts), so after a rename
+ *  on the sync page the next run must name this computer the way its tags do. A rename is rare; the cache cost is one miss. */
 let machineCache: Omit<MachineFacts, 'vault'> | null = null;
 
 export function machineFacts(vault: string | null): MachineFacts {
@@ -105,7 +107,7 @@ export function machineFacts(vault: string | null): MachineFacts {
     const { tools, missing } = pathTools(process.env, process.platform, shell);
     machineCache = { platform: process.platform, system: systemLabel(), deviceName: deviceName(), shell, home: os.homedir(), tools, missing };
   }
-  return { ...machineCache, vault };
+  return { ...machineCache, deviceName: deviceName(), vault };
 }
 
 /** The lines that go into the host environment section. */

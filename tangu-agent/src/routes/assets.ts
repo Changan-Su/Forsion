@@ -11,7 +11,8 @@ import { Router } from 'express';
 import { authMiddleware, AuthRequest } from '../core/http.js';
 import { deps } from '../seams/runtime.js';
 import { parseRemoteOrigin } from '../services/remoteOrigin.js';
-import { resolveTools } from '../tools/toolRegistry.js';
+import { resolveTools, isMcpDeferred, mcpCatalogHint } from '../tools/toolRegistry.js';
+import type { LoadedMcpTool } from '../mcp/toolBridge.js';
 import type { ToolContext } from '../tools/toolTypes.js';
 
 import { runWithAgentSlug } from '../seams/runContext.js';
@@ -171,10 +172,17 @@ router.delete('/agent/skills/user/:id', authMiddleware, async (req: AuthRequest,
   }
 });
 
-/** 工具定义每个请求大约占多少 token:名字 + 描述 + 参数 schema 序列化成 JSON,按约 4 字符 = 1 token(不调分词器,界面标「约」)。
- *  MCP 工具今天全量进 defs(getToolDefinitions),没有按需加载的那种 —— 以后给 MCP 加了 deferred,这里要把它们剔掉。 */
+/** 工具定义每个请求大约占多少 token:名字 + 描述 + 参数 schema 序列化成 JSON,按约 4 字符 = 1 token(不调分词器,界面标「约」)。 */
 export function approxToolTokens(defs: unknown[]): number {
   return Math.ceil(defs.reduce<number>((n, d) => n + JSON.stringify(d).length, 0) / 4);
+}
+
+/** MCP server 每次请求的实际开销:常驻的算整份定义;按需加载的(11-06 起缺省)平时只占「Additional Tools」目录里一行
+ *  (与 agentLoop 拼目录同一格式),装上之后那一 run 才多出整份定义。设置页「每次请求约 N token」据此不再虚高。 */
+export function approxMcpServerTokens(live: LoadedMcpTool[]): number {
+  const always = live.filter((t) => !isMcpDeferred(t)).map((t) => t.definition);
+  const catalog = live.filter((t) => isMcpDeferred(t)).reduce<number>((n, t) => n + `- ${t.name}: ${mcpCatalogHint(t)}\n`.length, 0);
+  return approxToolTokens(always) + Math.ceil(catalog / 4);
 }
 
 router.get('/agent/tools', authMiddleware, async (req: AuthRequest, res) => {
@@ -228,7 +236,7 @@ router.get('/agent/tools', authMiddleware, async (req: AuthRequest, res) => {
               remoteName: t.remoteName, // 远端原名:目录 alwaysAsk 按它记,桥接名经 sanitize 改写过、反推不回来
               description: t.definition.function.description || '',
             })),
-            approxTokens: approxToolTokens(live.map((t) => t.definition)),
+            approxTokens: approxMcpServerTokens(live),
           };
         })
       : [];
@@ -265,5 +273,14 @@ router.post('/agent/mcp/:name/login', authMiddleware, (req: AuthRequest, res) =>
 // 「用户自带 Key」:Key 只进本机 connector-auth.json,不回显、不进日志(报错里也只给模板)
 router.post('/agent/mcp/:name/key', authMiddleware, (req: AuthRequest, res) => mcpAuthAction(req, res, (mcp, name) => mcp.setKey(name, String(req.body?.key ?? ''))));
 router.post('/agent/mcp/:name/logout', authMiddleware, (req: AuthRequest, res) => mcpAuthAction(req, res, async (mcp, name) => { await mcp.logout(name); return {}; }));
+// 「测试连接」(D29):按导入框里还没保存的配置连一次、列工具后断开。stdio 会起本机命令 = 和保存后自动连接同一件事,所以同样只给本机
+router.post('/agent/mcp/probe', authMiddleware, async (req: AuthRequest, res) => {
+  if (parseRemoteOrigin(req.headers)) return res.status(403).json({ code: 'LOCAL_ONLY', detail: 'MCP connection tests run only on the computer running the engine.' });
+  const mcp = deps().mcp;
+  if (!mcp) return res.status(404).json({ detail: 'MCP is not available in this engine' });
+  const cfg = req.body?.config;
+  if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg) || (!cfg.command && !cfg.url)) return res.status(400).json({ detail: 'config needs a command or url' });
+  res.json(await mcp.probe(cfg));
+});
 
 export default router;

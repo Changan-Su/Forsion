@@ -34,6 +34,10 @@ on:
       - 'tangu-agent/src/contracts/**' # Tangu 的契约目录:渲染层只经这里用引擎的代码(check:tanguboundary 钉着)
       - 'lcl/**'                    # @lcl(Space-View 框架)
       - 'mobile/src/**'             # @mobile(手机端壳,web 按 UA 装载)
+      - 'desktop/package.json'      # typecheck 从 desktop / mobile 的 node_modules 解析被复用源码的三方类型;
+      - 'desktop/package-lock.json' # check-unit 的 web typecheck 在 PR 上让给这里,依赖升级也得进这道闸
+      - 'mobile/package.json'
+      - 'mobile/package-lock.json'
       - '.github/workflows/build-web.yml'
       # ⚠️ 以上须与 web/Dockerfile 的 COPY 源保持一致,新增 COPY 记得补这里。
   # PR 只跑 typecheck 这道闸(含真 Extend 台架),不出镜像:原来只在 main 上跑,台架红了要等合并后才看见。
@@ -43,6 +47,11 @@ on:
 permissions:
   contents: read
   packages: write
+
+# PR 再推送就取消上一轮;main / tag / 手动运行各按 run_id 自成一组,不排队、不被取消。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
 
 jobs:
   # 部署前类型闸(2026-08-06 评审 Q4):vite build 用 esbuild 剥类型、完全不做类型检查,
@@ -55,6 +64,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: npm
+          cache-dependency-path: |
+            desktop/package-lock.json
+            mobile/package-lock.json
+            web/package-lock.json
       # web 经 vite/tsconfig paths 复用 desktop 渲染层与 lcl,aliased 源码的三方类型
       # 从 desktop/node_modules 解析 → 必须先装 desktop 依赖(同 build-desktop 的 android 模式)。
       # 已知局限(Codex 评审 2026-08-06):typecheck 的依赖解析面(desktop lock)与 Docker 镜像
@@ -62,24 +76,28 @@ jobs:
       # 的 mobile typecheck 同一性质;根治=两端锁版本对齐,记录在评审报告 P2。
       - name: Install desktop deps (aliased renderer)
         working-directory: desktop
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
       # web 手机视口装载 @mobile 壳(mobile/src/**),tsc 从 mobile/src 向上找 node_modules —— 走的是
       # mobile 自己那份,不是 web/desktop 的。不装它:framer-motion/zustand/react 全报 TS2307。
       # (镜像里无此问题:依赖装在公共祖先 /app,mobile/src 向上就能命中。)
       - name: Install mobile deps (@mobile shell)
         working-directory: mobile
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
       - name: Typecheck web
         working-directory: web
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096 # 同 check-unit:缺省堆贴着 tsc 的用量
         run: |
-          npm install --no-audit --no-fund
+          npm ci --no-audit --no-fund
           npm run typecheck
       - name: Check public Unit deployment gate
         run: node --test web/scripts/check-unit-upstream.test.mjs
+      # 不带 --with-deps:那一步走 apt 装系统库,镜像慢时一次就卡 5–7 分钟(实测 21 MB @ 50 kB/s);
+      # ubuntu-latest 镜像自带 Chrome,Chromium 要的系统库已在。
       - name: Verify the real signed Extend on the public Unit entry
         run: |
           cd desktop
-          npx --no-install playwright-core install --with-deps chromium
+          npx --no-install playwright-core install chromium
           node scripts/build-unit-web.mjs
           mkdir -p "$RUNNER_TEMP/public-extend" "$RUNNER_TEMP/public-extend-shots"
           tar -xzf ../mobile/vendor/extend-mobile.tgz -C "$RUNNER_TEMP/public-extend" --strip-components=1

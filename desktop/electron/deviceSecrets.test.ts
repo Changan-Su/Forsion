@@ -217,6 +217,37 @@ describe('deviceSecrets 门控与读写', () => {
     expect(ds.publicStatus().locked).toEqual([])
   })
 
+  it('电脑历史钥匙 fail-closed:Linux 明文降级 / macOS 钥匙串不可用 → 存不住(false)且不落盘;os 时写后读回核对、文件里没有钥匙原文;锁定不进渲染层的锁定列表', async () => {
+    const HEX = 'ab'.repeat(32)
+    const plain = world({ shell: { mode: 'managed' }, backend: 'basic_text' })
+    const dsP = plain.boot()
+    await dsP.init(plain.shellDeps)
+    expect(await dsP.computerHistoryKey()).toEqual({ state: 'ok', value: null })
+    expect(await dsP.storeComputerHistoryKey(HEX)).toBe(false)
+    expect(plain.files.has(STORE)).toBe(false)
+
+    const mac = world({ shell: { mode: 'managed' }, platform: 'darwin' })
+    mac.c.st.available = false
+    const dsM = mac.boot()
+    await dsM.init(mac.shellDeps)
+    expect(await dsM.storeComputerHistoryKey(HEX)).toBe(false)
+    expect(mac.files.has(STORE)).toBe(false)
+
+    const os = world({ shell: { mode: 'managed' }, platform: 'darwin' })
+    const ds = os.boot()
+    await ds.init(os.shellDeps)
+    expect(await ds.storeComputerHistoryKey(HEX)).toBe(true)
+    expect(os.files.get(STORE)!.includes(HEX)).toBe(false)
+    expect(await ds.computerHistoryKey()).toEqual({ state: 'ok', value: HEX })
+    // 下次启动解密失败(钥匙串被重置):锁定 —— 不是「没有」,电脑历史据此不铸新钥匙;渲染层的设备凭据提示不受牵连
+    os.c.st.decryptOverride = () => { throw new Error('denied') }
+    const ds2 = os.boot()
+    await ds2.init(os.shellDeps)
+    expect(await ds2.computerHistoryKey()).toEqual({ state: 'locked' })
+    expect(ds2.status().locked).toContain('computerHistoryKey')
+    expect(ds2.publicStatus().locked).toEqual([])
+  })
+
   it('external token:同值不重写;空串 = 清掉', async () => {
     const w = world({ shell: { mode: 'external' } })
     const ds = w.boot()

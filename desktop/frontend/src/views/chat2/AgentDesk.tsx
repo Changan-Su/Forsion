@@ -156,7 +156,11 @@ function DeskFilePane({ item, allowNative }: { item: DeskItem; allowNative: bool
   const vaultRoot = usePageStore((s) => s.vaultRoot)
   const fileTypes = usePluginStore((s) => s.fileTypes)
   const rel = vaultRelOf(item.path, vaultRoot)
-  if (!rel) return <DeskPane item={item} />
+  if (!rel) {
+    // 库外本机 .pdf 听「默认打开方式」:声明了 external 的插件认领了就进它的视图(findFileType 自己看本机路径 + external)
+    if (/\.pdf$/i.test(item.path) && findFileType(fileTypes, item.path)) return <DeskShimView type="amadeus-plugin-file" params={{ filePath: item.path }} k={`desk-ft:${item.path}`} />
+    return <DeskPane item={item} />
+  }
   const kind = claimKind(rel, fileTypes)
   if (kind) return allowNative ? <DeskClaimPane item={item} rel={rel} /> : <DeskPane item={item} />
   // 白板在 Desk 上是只读预览 + 「在白板中打开」(走查续七 7.7 A),要画就进主区那块。

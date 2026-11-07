@@ -90,6 +90,9 @@ export interface NormalAgentDef {
   cloudSync?: boolean;
   /** 允许读用户活动日志(read_activity 工具);默认/false=仅 Muse 可读。 */
   activityAccess?: boolean;
+  /** 停用(config.toml `disabled = true`):从侧栏 / @ / 选择器 / 其他 Agent 的名册里收起,文件、记忆、私聊都留着,随时打开。
+   *  ≠ 删除。默认 Agent 不能停用(同 agentUndeletableReason 的 'default');Muse 走后台 Agent 开关,不走这里。 */
+  disabled?: boolean;
   /** 上下文压缩旋钮(config.toml 的 `[compaction]` 表,已归一化;字段见 services/compactionSettings)。
    *  作为 run 级层并入 agentConfig.compaction,压过 config.json 的同名段。 */
   compaction?: Record<string, unknown>;
@@ -284,6 +287,7 @@ export function parseAgentConfig(slug: string, tomlRaw: string, soul: string): N
     shareDefaultMemory: !!meta.share_default_memory,
     cloudSync: !!meta.cloud_sync,
     activityAccess: !!meta.activity_access,
+    ...(meta.disabled === true ? { disabled: true } : {}),
     toolsStrict: meta.tools_strict === true,
     toolsMode: meta.tools_mode === 'allow' || meta.tools_mode === 'deny' ? meta.tools_mode : undefined,
     toolsList: Array.isArray(meta.tools_list)
@@ -324,6 +328,7 @@ export function serializeAgentConfig(def: NormalAgentDef): string {
   if (def.shareDefaultMemory) obj.share_default_memory = true;
   if (def.cloudSync) obj.cloud_sync = true;
   if (def.activityAccess) obj.activity_access = true;
+  if (def.disabled) obj.disabled = true;
   if (def.toolsStrict) obj.tools_strict = true;
   if (def.toolsMode && def.toolsList) { // allow+空数组=全禁,合法;缺 mode 不落盘
     obj.tools_mode = def.toolsMode;
@@ -868,6 +873,8 @@ export interface SaveAgentInput {
   cloudSync?: boolean;
   /** 允许读用户活动日志;缺省保留已有。 */
   activityAccess?: boolean;
+  /** 停用:从侧栏 / @ / 选择器 / 其他 Agent 的名册里收起,文件与记忆都留着;缺省保留已有。 */
+  disabled?: boolean;
   /** 内置工具名单模式;null=清除(回到不限制),缺省保留已有。 */
   toolsMode?: 'allow' | 'deny' | null;
   /** 内置工具名单;null=清除,缺省保留已有。 */
@@ -969,6 +976,7 @@ export function buildAgentDef(slug: string, existing: NormalAgentDef | null, inp
     shareDefaultMemory: input.shareDefaultMemory !== undefined ? input.shareDefaultMemory : existing?.shareDefaultMemory,
     cloudSync: input.cloudSync !== undefined ? input.cloudSync : existing?.cloudSync,
     activityAccess: input.activityAccess !== undefined ? input.activityAccess : existing?.activityAccess,
+    disabled: (input.disabled !== undefined ? input.disabled : existing?.disabled) || undefined,
     toolsStrict: existing?.toolsStrict,
     toolsMode: input.toolsMode !== undefined
       ? (input.toolsMode === 'allow' || input.toolsMode === 'deny' ? input.toolsMode : undefined)
@@ -1051,6 +1059,7 @@ export function mergeAgentPatch(cur: NormalAgentDef, patch: AgentPatch): SaveAge
     shareDefaultMemory: pick('shareDefaultMemory', cur.shareDefaultMemory),
     cloudSync: pick('cloudSync', cur.cloudSync),
     activityAccess: pick('activityAccess', cur.activityAccess),
+    disabled: pick('disabled', cur.disabled),
     toolsMode: pick('toolsMode', cur.toolsMode),
     toolsList: pick('toolsList', cur.toolsList),
   };

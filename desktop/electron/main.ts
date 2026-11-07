@@ -15,8 +15,8 @@ import { createMiniResizeQueue } from './miniResizeQueue'
 import { miniResizeShape } from './miniResizeShape'
 import { protectWindowsAudioClock } from './windowsAudioClock'
 import { startMiniAutoPanel } from './miniAutoPanel'
-import { createPluginSandbox, type PluginSandboxUiSeed } from './pluginSandbox'
-import { sandboxSelf, startSandboxChild, sandboxForward } from './sandboxChild'
+import { createPluginSandbox, sandboxRequiredPlugins, type PluginSandboxUiSeed } from './pluginSandbox'
+import { sandboxSelf, startSandboxChild, sandboxForward, SANDBOX_SWITCHES } from './sandboxChild'
 import { normalizeMiniOpenOptions, normalizeMiniSessionContext, type MiniSessionContext, type MiniOpenOptions, type MainPanelTarget } from '../shared/miniPanel'
 import { normalizeFloatingPanelOpenOptions, normalizeMainAction, type FloatingPanelOpenOptions } from '../shared/floatingPanel'
 import { normalizeUiAppearance, normalizeUiSync, UI_APPEARANCE_CHANNEL, UI_LOCALE_CHANNEL } from '../shared/uiSync'
@@ -53,15 +53,16 @@ import { createMcpLifecycle, startForsionMcp } from './mcpServer'
 import { randomBytes } from 'node:crypto'
 import { loadTanguCreds, saveTanguCreds, assertTanguCredsWritable, forsionAccountId, loadAccountCloudSettings, saveAccountCloudSettings } from './forsionAuth'
 import { createAccountCore } from './accountCore'
-import { importMcp, importSkills, scanAll } from './discovery'
+import { importMcp, scanAll } from './discovery'
 import { localProvidersFor, scanLocalProviders, type LocalProviderCandidate } from './discovery/providers'
-import { checkForUpdates, downloadUpdate, installUpdate, canInstallUpdate, betaChannelOn, getUpdaterStatus, updateSourcePref, detectMainland, switchUpdateSource, openUpdateInstaller } from './updater'
+import { checkForUpdates, downloadUpdate, installUpdate, canInstallUpdate, betaChannelOn, getUpdaterStatus, updateSourcePref, detectMainland, switchUpdateSource, openUpdateInstaller, channelChanged } from './updater'
 import { parseSourcePref } from '../shared/updateSource'
 import { fetchWebsiteReleases } from './websiteReleases'
 import { createRestartGuard, readRestartActivity } from './restartGuard'
 import { createTray, MINI_ACCELERATOR, mergeTrayReports, refreshTrayMenu, sanitizeTraySessions, setTrayIndicator, setTraySessions, traySessions, trayLang } from './tray'
 import { initMainLocale, mainLocale, mt } from './mainI18n'
 import { createQuitGuards } from './quitGuard'
+import { createContentFlush } from './contentSyncFlush'
 import { createUiLocaleSync, UI_LOCALE_FILE } from './uiLocaleSync' // P1-KF:主进程文案跟渲染层的生效语言
 import { createApprovalDelivery, engineFromBackend } from './approvalDelivery' // P1-K3
 import { APPROVAL_OPEN_CHANNEL } from '../shared/approvalOpen' // P1-K3
@@ -73,6 +74,7 @@ import { readThemesDir, seedDefaultThemes } from './themes'
 import { builtinBundleSources, builtinPluginIds, bundleOff, bundleRestartPending, initBundleSwitches, lockedPluginIds, seedBuiltinBundles, setBundleOff } from './builtinPlugins'
 import { createCorePluginUpdater, prefetchOnFirstBoot } from './corePluginUpdates'
 import { createMarketPluginUpdater, type MarketUpdateItem } from './marketPluginUpdates'
+import { compareMarketVersions } from '../shared/marketPluginUpdates'
 import { BUILTIN_BUNDLES } from './builtinPlugins'
 import { checkBuiltinUpdates, NPM_OFFICIAL, registryOrder } from './builtinUpdates'
 import { checkEngineUpdate, setupEngineOverlay, ENGINE_PACKAGE, ENGINE_UPDATE_ID, type EngineOverlayHandle } from './engineUpdates'
@@ -95,7 +97,7 @@ import { appIconDataUrls } from './appIcons'
 import { chooseSide, makeRoom, panelRectFor, startDockFollow, DOCK_PANEL_WIDTH, DOCK_PANEL_MIN_WIDTH, DOCK_PANEL_MIN_HEIGHT, normalizeProbe } from './appDock'
 import { normalizeDockCandidates, normalizeDockSelection, normalizeDockWindow, type DockState, type DockWindow } from '../shared/appDock'
 import { permissionHelperAppPath, registerDesktopPermissions } from './desktopPermissions'
-import { ComputerHistory, readSelfBundleId, registerComputerHistoryIpc, stopComputerHistoryForWipe, type ComputerHistoryConfig } from './computerHistory'
+import { ComputerHistory, readSelfBundleId, registerComputerHistoryIpc, stopComputerHistoryForWipe, type ChKeyVault, type ComputerHistoryConfig } from './computerHistory'
 import { createWindowsRecorderResolver, launchWindowsRecorder, recorderBinDir, windowsRecorderSource } from './computerHistoryWin'
 import { COMPUTER_HISTORY_DESKTOP_CONFIG_FILE } from '../shared/computerHistory'
 // Amadeus Space:vendored 笔记后端(vault IPC + 资产协议)。renderImport 别名后保持 verbatim。
@@ -138,6 +140,7 @@ setDevMode(!app.isPackaged) // dev 数据目录 ~/.forsion-dev,与正式版隔�
 /** 本进程是插件沙箱(用户那份 Forsion 按需另起的,见 pluginSandbox.ts)。沙箱不碰整机共享的东西:协议注册、托盘、全局快捷键、
  *  CLI、MCP 固定端口、更新检查、自动 Mini;关窗即退出。数据目录由父进程经 --user-data-dir / TANGU_HOME / FORSION_WORKSPACE_DIR 指进去。 */
 const SANDBOX = sandboxSelf()
+if (SANDBOX) for (const sw of SANDBOX_SWITCHES) app.commandLine.appendSwitch(sw) // 压在底下的沙箱窗口照样出新帧(截图不截到旧画面)
 // dev 与安装版的 Electron userData 默认共用同一目录 appData/forsion-desktop(app.getName() 取 package.json
 // name="forsion-desktop";electron-builder 的 productName 只改 .app 包名/CFBundleName「Forsion」,不动 userData)。
 // → 二者抢同一把 userData/SingletonLock,后启者 requestSingleInstanceLock() 返 false 被下方 app.exit(0)(即
@@ -952,6 +955,8 @@ const backend = new BackendManager()
 let mainWindow: BrowserWindow | null = null
 // 托盘常驻:关窗默认只隐藏;仅托盘「退出」/before-quit 置 true 后才放行真正关闭。
 let isQuitting = false
+// 新同步的冲刷时机(electron/contentSyncFlush.ts):切走窗口 1 秒后 / 合盖前 / 退出前,让还在静默期里的改动立刻推
+const contentFlush = createContentFlush({ focused: () => !!BrowserWindow.getFocusedWindow(), log: (m) => console.warn(m) })
 // 退出前问一次(electron/quitGuard.ts):内置包的主进程半身经 CloudHost.addQuitGuard 登记「还有事没做完」
 const quitGuards = createQuitGuards({
   locale: mainLocale,
@@ -1028,6 +1033,7 @@ const clipEntranceOn = (): boolean => process.env.FORSION_CLIP_ENTRANCE !== '0'
 /** 配对在途表:门铃收下的请求,打开互联后由正式服务交出令牌(两者共用这一份)。 */
 const unitPairStore = newPairStore()
 let amadeusReadPlugins: (() => Promise<ExternalPluginSource[]>) | null = null // registerAmadeusIpc 返回时赋上
+let amadeusDevPluginRoots: (() => Promise<Array<{ id: string; dir: string }>>) | null = null
 let amadeusVaultFace: import('./amadeus/ipc').VaultFace | null = null // 同上;unitWeb /vault/* 的本地库面
 // 登录成功后踢一次 Amadeus 云同步引擎(值由 registerAmadeusIpc 返回时赋上)。否则引擎状态卡在
 // auth-required:云端登录提示不消失 + 双向同步不启动(引擎凭据只有 restart 会重读,登录路径原本不触发)。
@@ -1108,7 +1114,7 @@ function unitLanUrl(): string | null {
  *  ~/.tangu/spaces/<slug>/space.json + 插件捆绑包内嵌 plugins/<id>/spaces/<slug>/space.json。
  *  设备页(B 端渲染)没有这份数据就装不出插件 Space → Ribbon 上一个插件图标都没有(2026-08-24 实测),
  *  而方案 §拍板口径是「A 看到 B 的完整 Forsion(含 Ribbon/Space)」。 */
-async function readSpacesList(): Promise<Array<{ slug: string; json: string; plugin?: string; iconUrl?: string }>> {
+async function readSpacesList(opts: { dev?: boolean } = {}): Promise<Array<{ slug: string; json: string; plugin?: string; iconUrl?: string }>> {
   const out: Array<{ slug: string; json: string; plugin?: string; iconUrl?: string }> = []
   // 自绘图标(space.json 的 iconFile)在这里读成 data URL 随清单带回去:设备页同源拿到,渲染层不必再开一条 IPC。
   // ponytail: 每枚 ≤256KB 的 base64 直接进清单;插件多到拖慢 loadUserSpaces 再改走 amadeus-asset: 协议按需取。
@@ -1117,12 +1123,26 @@ async function readSpacesList(): Promise<Array<{ slug: string; json: string; plu
     const iconUrl = await readSpaceIconDataUrl(json, plugin ? [dir, plugin.dir] : [dir])
     out.push({ slug, json, ...(plugin ? { plugin: plugin.id } : {}), ...(iconUrl ? { iconUrl } : {}) })
   }
+  const bundled = async (id: string, pdir: string): Promise<void> => {
+    try {
+      const sroot = join(pdir, 'spaces')
+      for (const e of (await readdir(sroot, { withFileTypes: true })).filter((x) => x.isDirectory())) {
+        try { await entry(e.name, join(sroot, e.name), { id, dir: pdir }) } catch { /* 无 space.json 跳过 */ }
+      }
+    } catch { /* 无 spaces/ 子目录 */ }
+  }
   try {
     const base = join(tanguHomeDir(), 'spaces')
     for (const e of (await readdir(base, { withFileTypes: true })).filter((x) => x.isDirectory())) {
       try { await entry(e.name, join(base, e.name)) } catch { /* 无 manifest 跳过 */ }
     }
   } catch { /* 目录不存在 = 空 */ }
+  // 开发副本(插件沙箱 / 开发态加载)排在安装版前面、遮住同 id 的安装版:与 readExternalPlugins 同一口径。
+  // 以前这里只扫安装目录,沙箱里插件带的 Space 永远列不出来(11-03 反馈)。设备页(unitWeb)不带开发来源。
+  const shadowed = new Set<string>()
+  if (opts.dev && amadeusDevPluginRoots) {
+    for (const p of await amadeusDevPluginRoots().catch(() => [])) { shadowed.add(p.id); await bundled(p.id, p.dir) }
+  }
   try {
     const proot = join(tanguHomeDir(), 'plugins')
     const SAFE_PID = /^[a-z0-9][a-z0-9-]{0,63}$/ // 与 amadeus/ipc.ts pluginIdOf 同一门禁(归属 id 须两侧一致)
@@ -1134,12 +1154,8 @@ async function readSpacesList(): Promise<Array<{ slug: string; json: string; plu
         if (!SAFE_PID.test(cand)) continue // manifest id 与目录名皆非法 → 与拒载口径一致
         pid = cand
       } catch { continue } // 无 manifest.json = 非插件目录,跳过
-      try {
-        const sroot = join(proot, p.name, 'spaces')
-        for (const e of (await readdir(sroot, { withFileTypes: true })).filter((x) => x.isDirectory())) {
-          try { await entry(e.name, join(sroot, e.name), { id: pid, dir: join(proot, p.name) }) } catch { /* 无 space.json 跳过 */ }
-        }
-      } catch { /* 无 spaces/ 子目录 */ }
+      if (shadowed.has(pid)) continue
+      await bundled(pid, join(proot, p.name))
     }
   } catch { /* plugins 目录不存在 = 无捆绑包 */ }
   return out
@@ -2072,6 +2088,24 @@ let miniAutoPanel: ReturnType<typeof startMiniAutoPanel> | null = null
 /** 电脑历史控制器(只在带 agent 后端的形态建;见 electron/computerHistory.ts)。 */
 let computerHistory: ComputerHistory | null = null
 
+/**
+ * 电脑历史数据钥匙的保管处 = 设备凭据 device-secrets.json 的 computerHistoryKey 槽(safeStorage:macOS 钥匙串 / Windows DPAPI)。
+ * 读不出(锁定 / 系统加密这次用不了 / 文件读不懂)报 unavailable,控制器据此不录 —— 绝不当「没有」去铸新的盖掉旧钥匙。
+ * dev 台架:TANGU_CH_TEST_KEY(64 位 hex)直接当钥匙用、不碰钥匙串(台架零改动、不弹框;e2e 拿同一把解日文件)。**打包版无视它。**
+ */
+function computerHistoryKeyVault(): ChKeyVault {
+  const testKey = app.isPackaged ? '' : (process.env.TANGU_CH_TEST_KEY || '').trim()
+  if (testKey) return { read: async () => ({ state: 'ok', hex: testKey }), store: async () => false }
+  return {
+    read: async () => {
+      const r = await deviceSecrets.computerHistoryKey() // 内部先等 init(配置队列的第一个使用者)
+      if (r.state === 'ok') return { state: 'ok', hex: r.value }
+      return { state: 'unavailable', reason: deviceSecrets.status().lastError || (r.state === 'insecure' ? 'secret-store-insecure' : 'secret-locked') }
+    },
+    store: (hex) => deviceSecrets.storeComputerHistoryKey(hex),
+  }
+}
+
 /** 电脑历史落盘后踢一下引擎巡检:「打开 Steam 时」不用等 5 分钟。不带任何内容,引擎自己重读磁盘判定;窗口关着也要到,所以不经渲染层。
  *  ≥5s 节流(切 App 很频繁),最后一次不丢;失败无所谓,下一个巡检周期照样看到。 */
 const COMPUTER_KICK_MS = 5_000
@@ -2594,6 +2628,9 @@ app.whenReady().then(async () => {
         refreshTrayMenu()
       },
       onSignal: kickAutomationForComputer,
+      keyVault: computerHistoryKeyVault(),
+      // 钥匙到手就交给引擎(stdin 私有通道;之后每次拉起引擎也会重发)
+      onKey: (hex) => backend.setComputerHistoryKey(hex),
     })
     registerComputerHistoryIpc(computerHistory, isTrustedSender)
   }
@@ -2728,6 +2765,14 @@ app.whenReady().then(async () => {
       if (!r.ok) throw new Error(`resolve: HTTP ${r.status}`)
       return await r.json() as MarketUpdateItem
     },
+    // 默认自动更新(11-06):旧版装上、还没记进 state.json 的商店插件按安装目录名认领(撞名的不认)。
+    catalog: async () => {
+      const base = await marketBase()
+      const r = await fetch(`${base}/api/market/items`, { headers: { 'User-Agent': MARKET_UA }, signal: AbortSignal.timeout(30_000) })
+      if (!r.ok) throw new Error(`resolve: HTTP ${r.status}`)
+      const data = await r.json() as { items?: MarketUpdateItem[] }
+      return Array.isArray(data.items) ? data.items : []
+    },
     download: async (item) => {
       const { info, buf } = await downloadMarketPackage(item.id)
       if (info.installSlug !== item.installSlug || info.type !== item.type) throw new Error('resolve: market identity changed')
@@ -2738,10 +2783,17 @@ app.whenReady().then(async () => {
     },
   })
   if (PRODUCT.market) await marketPluginUpdater.init().catch((e) => console.warn('[market-updates] initialization failed:', e))
+  // 手动拷进插件目录的插件:每出现一个新版本就留一份,换版后能在 设置 → 插件 里回退。后台跑,排在安装 / 卸载同一条队列里。
+  if (PRODUCT.market) void marketPluginUpdater.exclusive(() => marketPluginUpdater.keepLocalVersions()).catch((e) => console.warn('[market-updates] keep local versions:', e))
   await seedDefaultThemes(themesDir()) // 首次运行种入 soft 示例主题(themes/ 已存在则跳过;内部吞错不阻塞启动)
   // 内置插件捆绑包(电脑操作 / Forsion Extend)播种进 <home>/plugins/:须在 ensureBackend 之前 await 完 —— 引擎只在启动时扫一次
   // bundle 根;随包版本更新才替换,不降级;逐包吞错不阻塞启动(见 builtinPlugins.ts)。单品变体不捆内置包 → 不播。
-  const bundleSources = builtinBundleSources({ isPackaged: app.isPackaged, resourcesPath: process.resourcesPath, appPath: app.getAppPath(), agentBackend: PRODUCT.agentBackend, spaces: PRODUCT.spaces })
+  const allBundleSources = builtinBundleSources({ isPackaged: app.isPackaged, resourcesPath: process.resourcesPath, appPath: app.getAppPath(), agentBackend: PRODUCT.agentBackend, spaces: PRODUCT.spaces })
+  // 插件沙箱只装被测插件 requiresPlugins 点名的内置包:别的(Extend / 日历 / 电脑操作)会把自己的 Space、Ribbon 图标带进来,
+  // 沙箱里看到的就不是「只有这一个插件」(11-03 反馈)。旧版沙箱播种过的也撤掉 —— 删的是沙箱自己的 home。
+  const sandboxNeeds = SANDBOX ? await sandboxRequiredPlugins(SANDBOX.dir) : null
+  if (sandboxNeeds && /[\\/]sandbox[\\/][a-z0-9-]+[\\/]home$/.test(forsionHomeDir())) for (const s of allBundleSources) if (!sandboxNeeds.has(s.id)) await rm(join(forsionHomeDir(), 'plugins', s.id), { recursive: true, force: true }).catch(() => {})
+  const bundleSources = sandboxNeeds ? allBundleSources.filter((s) => sandboxNeeds.has(s.id)) : allBundleSources
   // 云端账号面(个人中心 / 会员 / 额度 / 反馈 / cloud:fetch)住在 Forsion Extend 的主进程半身里(cloudHost.ts):播种后、开窗前
   // 验签装载;缺席 / 验签失败就没有这一面,preload 按 `cloud:present` 删键,渲染层门控自动隐藏。
   // 记下 Extend 实际注册的通道:preload 只保留有人接的桥键(账号面 / Connect 各自独立,Extend 版本与宿主接缝不同步时不会留下悬空键)。
@@ -2852,6 +2904,8 @@ app.whenReady().then(async () => {
       },
       // ── 0.10 起:退出前问一次(蓬洲云还有文件在传)──
       addQuitGuard: (fn) => quitGuards.add(fn),
+      // ── 2.13.8 起(新同步频率 F2):失焦 / 合盖 / 退出时叫一次 ──
+      addFlushHook: (fn) => contentFlush.add(fn),
       // ── 2.13.8 起:帮助改进 Forsion 的宿主事件(崩溃 / 性能 / 功能使用),见 telemetryHost.ts ──
       telemetry: telemetry.seam,
       contentSync: {
@@ -2924,12 +2978,14 @@ app.whenReady().then(async () => {
       isQuitting = true
       // Stop before relaunch/quitAndInstall so before-quit cannot bypass either with app.exit.
       try {
+        await contentFlush.quit() // 还在静默期里的改动先推上去(最多等 5 秒);冲过了,紧跟着的 before-quit 不再冲
         await backend.stop()
         if (install) installUpdate()
         else { app.relaunch(); app.quit() }
       } catch (error) {
         isQuitting = false
         quitGuards.reset()
+        contentFlush.reset()
         throw error
       }
     },
@@ -3033,6 +3089,7 @@ app.whenReady().then(async () => {
   // Windows 在用户主动睡眠时终止电源请求,唤醒后手里的 id 已失效 → 重新申请(macOS 断言跨睡眠保留,重申无害)。
   // 设备互联通道:合盖期间的出站长连多半已是半开连接(不报错也收不到东西)→ 唤醒即重拨,别等 45s 读看门狗。
   // 睡眠会让「暂停到点」的计时器迟到 → keepAwake 重排;电脑历史采集器重新核一次状态。
+  powerMonitor.on('suspend', () => contentFlush.suspend()) // 合盖前把还在静默期里的改动推上去(来不及等,能推多少推多少)
   powerMonitor.on('resume', () => {
     keepAwake.rearm()
     computerHistory?.recheck()
@@ -3776,12 +3833,9 @@ app.whenReady().then(async () => {
     return { ok: true }
   })
 
-  // ── 跨生态 agent 资产发现/导入(~/.claude、~/.codex、~/.hermes → ~/.tangu)──
-  // 导入的 MCP 一律 enabled:false(绝不自动运行外来命令),故**不**触发后端重启;
-  // 技能落盘 ~/.tangu/skills/ 后由后端按 mtime 重扫即时生效。
+  // ── 跨生态 MCP 发现/导入(~/.claude、~/.codex、~/.hermes → ~/.tangu;记忆 / 偏好 / 技能走引擎 /agent/import)──
+  // 导入的 MCP 一律 enabled:false(绝不自动运行外来命令),故**不**触发后端重启。
   ipcMain.handle('discovery:scan', () => scanAll())
-  ipcMain.handle('discovery:importSkills', (_e, ids: string[]) =>
-    importSkills(Array.isArray(ids) ? ids.filter((x) => typeof x === 'string') : [], tanguDataDir()))
   // 两次导入并发会在同一个 legacy mcp.json 上互相覆盖 → 整段串行(不能用 configQueue:里面要 saveHomeSection,会自等死锁)
   const importMcpQueue = createSerialQueue()
   ipcMain.handle('discovery:importMcp', (_e, names: string[]) => importMcpQueue(async () => {
@@ -4029,6 +4083,9 @@ app.whenReady().then(async () => {
   }
   app.on('browser-window-focus', syncAppRefAccelerator)
   app.on('browser-window-blur', () => setImmediate(syncAppRefAccelerator)) // 失焦那一刻 getFocusedWindow 可能还是它
+  // 新同步:切走 1 秒后才冲刷(1 秒内回到本应用任一窗口就不算)
+  app.on('browser-window-blur', () => contentFlush.blur())
+  app.on('browser-window-focus', () => contentFlush.focus())
   // 按下快捷键时那扇窗口的截图(附进输入框,同 ChatGPT)。只截这次运行里经手过的窗口(按快捷键 / 列候选时记下的);
   // macOS 由助手截(屏幕录制权限在它身上;没授权就没有图,绝不为此弹框),Windows 用系统自带的窗口截图。截不到 → null,只挂引用。
   ipcMain.handle('appRefs:snapshot', async (e, raw: unknown) => {
@@ -4086,6 +4143,7 @@ app.whenReady().then(async () => {
   ipcMain.handle('updater:getBeta', () => betaChannelOn())
   ipcMain.handle('updater:setBeta', async (_e, on: boolean) => {
     await saveHomeSection('updater', (sec: any) => ({ ...sec, beta: !!on }))
+    channelChanged(!!on)
     return { ok: true }
   })
   // 下载来源:auto(按地区:大陆官网、其他地区 GitHub)/ website / github。同样落 updater 段、每次现读。
@@ -4204,6 +4262,8 @@ app.whenReady().then(async () => {
     // (slug = 内置 id,或目录里的 manifest 是内置 id)时,覆盖再回滚会把它连同用户数据一起删掉。
     const occupant = await readFile(join(dest, 'manifest.json'), 'utf8').then((s) => JSON.parse(s)?.id, () => undefined)
     if (builtinPluginIds().has(info.installSlug) || (typeof occupant === 'string' && builtinPluginIds().has(occupant))) throw new Error('install: builtin')
+    // 解压是原地覆盖:先把装着的那一版留进版本库(.plugin-versions),之后能一键回退。
+    if (effType === 'plugin' || effType === 'amadeus-plugin') await marketPluginUpdater.keepBeforeInstall(effType, info.installSlug, info.version)
     const files = await extractZipToDir(buf, dest, MARKET_MANIFEST[effType] || [])
     // 插件家族:清掉同 slug 在「另一插件目录」里那份**误装的旧副本**(修复前 Forsion 插件被装进引擎位等),
     // 消除 split-brain 双份。⚠ 身份守卫:若那份带对方类型的合法 manifest(是恰好同 slug 的**另一个合法插件**),
@@ -4228,7 +4288,14 @@ app.whenReady().then(async () => {
       await rm(dest, { recursive: true, force: true }).catch(() => {})
       throw new Error('install: builtin')
     }
-    await marketPluginUpdater.forget(effType, info.installSlug, false)
+    if (effType === 'plugin' || effType === 'amadeus-plugin') {
+      // 从版本页装了比最新版旧的 = 固定在这一版(自动更新对它关掉,「恢复自动更新」解除)。查不到最新版时按用户点名的版本算固定。
+      // 解析失败(网络 / JSON)也不能跳过登记:文件已经覆盖了,登记才会清掉旧的待换版本、按需固定。
+      const latest = await fetch(`${await marketBase()}/api/market/items/${encodeURIComponent(id)}`, { headers: { 'User-Agent': MARKET_UA }, signal: AbortSignal.timeout(15_000) })
+        .then(async (r) => r.ok ? await r.json() as MarketUpdateItem : null).catch(() => null)
+      const pinned = !!version && (compareMarketVersions(version, latest?.latestVersion) ?? -1) < 0
+      await marketPluginUpdater.recordInstall({ id, name: latest?.name, type: effType, slug: info.installSlug, pinned })
+    } else await marketPluginUpdater.forget(effType, info.installSlug, false)
     return { ok: true, path: dest, files, type: effType, slug: info.installSlug, ...(pluginId ? { id: pluginId } : {}) }
   }))
 
@@ -4242,6 +4309,25 @@ app.whenReady().then(async () => {
     if (on) void marketPluginUpdater.check().catch((err) => console.warn('[market-updates]', err))
     return state
   })
+  ipcMain.handle('market:setAutoUpdateAll', async (e, on: boolean) => {
+    if (!isTrustedSender(e)) throw new Error('Untrusted sender')
+    const state = await marketPluginUpdater.setAutoUpdateAll(on)
+    if (on) void marketPluginUpdater.check().catch((err) => console.warn('[market-updates]', err))
+    return state
+  })
+  // 回退到本机留着的旧版本(.plugin-versions):换目录,不联网。商店插件随之固定在这一版。
+  // 返回值与 market:install 同形(type / slug / Forsion 插件的装载 id),渲染层走同一条装后重载。
+  ipcMain.handle('market:rollback', async (e, type: string, slug: string, version: string, market?: { id?: unknown; name?: unknown }) => marketPluginUpdater.exclusive(async () => {
+    if (!isTrustedSender(e)) throw new Error('Untrusted sender')
+    // 商店页知道这一项的商店 ID:还没被目录认领的也先登记上,回退后的固定才落得了盘。
+    const identity = market && typeof market.id === 'string' && /^[a-zA-Z0-9_-]{1,128}$/.test(market.id) ? { id: market.id, name: typeof market.name === 'string' ? market.name.slice(0, 200) : undefined } : undefined
+    const r = await marketPluginUpdater.rollback(type, slug, version, identity)
+    const dest = marketItemDir(tanguHomeDir(), r.type, r.slug)!
+    const pluginId = r.type === 'amadeus-plugin'
+      ? effectivePluginId(r.slug, await readFile(join(dest, 'manifest.json'), 'utf8').then((s) => JSON.parse(s)?.id, () => undefined))
+      : null
+    return { ...r, path: dest, ...(pluginId ? { id: pluginId } : {}) }
+  }))
   ipcMain.handle('market:checkUpdates', (e) => {
     if (!isTrustedSender(e)) throw new Error('Untrusted sender')
     return marketPluginUpdater.check()
@@ -4290,7 +4376,7 @@ app.whenReady().then(async () => {
   // ── 用户自定义 Space:~/.tangu/spaces/<slug>/space.json(纯数据布局配方;market type='space' 装到同目录)──
   // 另汇入 Forsion 插件捆绑包内嵌的 Space(plugins/<id>/spaces/<slug>/space.json,带 plugin=manifest id):
   // 用户目录条目在前(同 spec id 先到先得,用户版本胜);渲染层按插件启停显隐、不提供单独删除。
-  ipcMain.handle('spaces:list', () => readSpacesList())
+  ipcMain.handle('spaces:list', () => readSpacesList({ dev: true }))
   ipcMain.handle('spaces:save', async (_e, slug: string, json: string) => {
     if (!isSafeSlug(slug)) throw new Error('invalid-space-id') // 原因码,渲染层 ipcErrorText 译
     JSON.parse(json) // 落盘前校验合法 JSON,防写入损坏配方
@@ -4740,8 +4826,9 @@ app.whenReady().then(async () => {
     },
   })
   // Amadeus Space:装载 vault IPC(暴露给 window.amadeus)+ 资产协议(指向当前 vault 根)。
-  const { getVaultRoot, resolveSharedAsset, restartSync, stopSync, readExternalPlugins, vaultFace } = registerAmadeusIpc(() => mainWindow, amadeusSyncFactory)
+  const { getVaultRoot, resolveSharedAsset, restartSync, stopSync, readExternalPlugins, devPluginRoots, vaultFace } = registerAmadeusIpc(() => mainWindow, amadeusSyncFactory)
   amadeusReadPlugins = readExternalPlugins
+  amadeusDevPluginRoots = devPluginRoots
   amadeusVaultFace = vaultFace
   void refreshUnitHost() // 「允许其他设备连接本机」开着就恢复出站通道
   restartAmadeusSync = restartSync
@@ -4820,6 +4907,7 @@ if (pluginSandbox) {
     })
   })
   ipcMain.handle('pluginSandbox:state', (e) => (isTrustedSender(e) ? pluginSandbox.state() : { running: false }))
+  ipcMain.handle('pluginSandbox:lastShot', (e, sessionId: unknown) => (isTrustedSender(e) && typeof sessionId === 'string' ? pluginSandbox.lastShot(sessionId) : null))
   ipcMain.handle('pluginSandbox:show', (e) => (isTrustedSender(e) ? pluginSandbox.show() : false))
   ipcMain.handle('pluginSandbox:stop', (e) => (isTrustedSender(e) ? pluginSandbox.stop() : undefined))
   ipcMain.handle('pluginSandbox:reset', (e) => (isTrustedSender(e) ? pluginSandbox.reset() : { ok: false }))
@@ -4859,7 +4947,10 @@ function installHostTelemetry(): void {
   })
 }
 
+// 退出收尾链(冲刷新同步 → 停后端 → app.exit)正在走:再按退出只等它,不重复收尾、不提前退(提前退会掐断还在推的改动)
+let exitChain: Promise<void> | null = null
 app.on('before-quit', (e) => {
+  if (exitChain) { e.preventDefault(); return }
   // 第一件事:有插件说还没做完就拦下问(别先做下面那些收尾 —— 取消的话应用还要接着用)。
   // 托盘「退出」在 app.quit() 之前就把 isQuitting 置了 true:拦下时还原,否则取消后关窗就真关了
   if (quitGuards.intercept()) { e.preventDefault(); isQuitting = false; return }
@@ -4876,11 +4967,16 @@ app.on('before-quit', (e) => {
   remoteSafety.dispose() // P1-K2:断活动流、注销急停热键、放掉强制防休眠(锁文件原样留着 = 锁跨重启)
   flushAllNoteEdits() // 活动日志:5 分钟合并窗口内未落盘的 note.edit 冲出去
   void computerHistory?.dispose() // 电脑历史:断订阅、缓冲同步落盘、state 改成非录制态(同步部分当场做完,不等返回的 promise)
+  // 新同步还在静默期里的改动先推上去(最多等 5 秒;没有要推的 = null,不等)。要在停后端之前:合并、通知引擎都要它在
+  const flushing = contentFlush.quit()
   // 优雅停后端(SIGTERM→3s→SIGKILL);停完再真正退出。
   const st = backend.getStatus().state
-  if (st === 'ready' || st === 'starting') {
+  if (flushing || st === 'ready' || st === 'starting') {
     e.preventDefault()
-    void backend.stop().finally(() => app.exit(0))
+    exitChain = (flushing ?? Promise.resolve())
+      .then(() => { const now = backend.getStatus().state; return now === 'ready' || now === 'starting' ? backend.stop() : undefined })
+      .finally(() => app.exit(0))
+    void exitChain
   }
 })
 

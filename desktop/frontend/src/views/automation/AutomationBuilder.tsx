@@ -152,6 +152,29 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, s
   }, [kind, editing, source?.defaultCooldownHours])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [conflict, setConflict] = useState(false)
+  // 打开时那份规则的版本:列表轮询会换掉 editing,比对必须用打开编辑器那一刻的(D28)
+  const openedRev = useRef(editing?.rev)
+  // 有没有没保存的修改:用户动手之前,挂载期副作用对状态的归一都算进基线;动手之后跟基线比
+  const touched = useRef(false)
+  const snapshot = JSON.stringify([desc, enabled, kind, sourceId, paramValues, onlyDraft, timerMode, time, datetime, ivlN, ivlUnit, match, path, n, dbPath, dbEvent, dbColumnIds, dbEquals, dbWhere, steps, musePrompt, wakeMuse, cooldown])
+  const baseline = useRef(snapshot)
+  if (!touched.current) baseline.current = snapshot
+  const dirtyRef = useRef(false)
+  dirtyRef.current = touched.current && snapshot !== baseline.current
+  useEffect(() => {
+    const { setLeaveGuard } = useAutomation.getState()
+    setLeaveGuard(() => !dirtyRef.current || window.confirm(t('automation.builder.discardConfirm')))
+    return () => setLeaveGuard(null)
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  const touch = (): void => { touched.current = true }
+  /** 用户主动关掉构建器(取消 / 放弃修改):有没保存的修改先问,答应了才走。 */
+  const leave = (ask = true): void => {
+    if (ask && dirtyRef.current && !window.confirm(t('automation.builder.discardConfirm'))) return
+    dirtyRef.current = false
+    if (onCancel) onCancel(); else st.closeBuilder()
+  }
+  const lastMode = useRef<'observe' | undefined>(undefined)
 
   const addStep = (type: StepDraft['type']): void => {
     if (steps.length >= 24) return
@@ -191,7 +214,7 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, s
           <div className="auto-hint">{t('automation.builder.unsupported')}</div>
         </div>
         <div className="auto-builder-actions">
-          <button className="btn ghost" onClick={() => (onCancel ? onCancel() : st.closeBuilder())}>{t('common.cancel')}</button>
+          <button className="btn ghost" onClick={() => leave()}>{t('common.cancel')}</button>
         </div>
       </div>
     )
@@ -240,7 +263,7 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, s
   // 编辑观察中的规则:保存后还是观察,转成启用只走规则卡头的三段控件,不会被顺手转正。
   const keepsObserving = !!editing?.observe && enabled && canObserve(condType)
 
-  const save = async (mode?: 'observe'): Promise<void> => {
+  const save = async (mode?: 'observe', force = false): Promise<void> => {
     if (!canSave || busy) return
     // 预检:编辑器开久了 at 时刻悄悄过期(mount 时的 expiredAt 不会重算)——引擎同口径(5min 容忍)本地先拒
     if (condType === 'at' && (parseLocalDatetime(datetime)?.getTime() ?? 0) < Date.now() - 5 * 60_000) {
@@ -259,10 +282,12 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, s
     }
     setBusy(true)
     setError('')
+    setConflict(false)
     const actions = toSpec(steps, catalog)
     try {
       const saved = await saveMuseTrigger(homeTarget(), {
         id: editing?.id,
+        ...(editing?.id && openedRev.current && !force ? { expectedRev: openedRev.current } : {}),
         // actor='user':构建器保存是显式意图(与面板拨开关同档),可以把引擎自动停用的规则开回来。
         actor: 'user',
         desc: desc.trim(),
@@ -295,7 +320,8 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, s
       st.acceptSaved(saved)
       useApp.getState().toast(t('automation.ux.saved'))
     } catch (e: any) {
-      setError(String(e?.message || e))
+      if (e?.status === 409) { setConflict(true); setError(t('automation.builder.conflict')); lastMode.current = mode }
+      else setError(String(e?.message || e))
     } finally {
       setBusy(false)
     }
@@ -326,10 +352,10 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, s
   </>
 
   return (
-    <div className={`auto-builder auto-workflow-builder ${fixedManual ? 'auto-builder-embedded' : ''}`}>
+    <div className={`auto-builder auto-workflow-builder ${fixedManual ? 'auto-builder-embedded' : ''}`} onPointerDownCapture={touch} onKeyDownCapture={touch}>
       <div className="auto-builder-title">
         <Workflow size={17} /><span>{editing ? t('automation.builder.editTitle') : t('automation.builder.title')}</span>
-        <button className="btn ghost sm" disabled={busy} onClick={() => (onCancel ? onCancel() : st.closeBuilder())}>{t('common.cancel')}</button>
+        <button className="btn ghost sm" disabled={busy} onClick={() => leave()}>{t('common.cancel')}</button>
       </div>
       <div className="auto-builder-workspace" hidden={!extendView && inspectorOpen}>
         <WorkflowCanvas nodes={flowNodes} selected={inspectorOpen ? selected : ''} onSelect={setSelected}>{additions}</WorkflowCanvas>
@@ -763,6 +789,10 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, s
         <div className="auto-save-status" aria-live="polite">
           {error ? <span role="alert">{error}</span> : issues.length ? <button onClick={() => setSelected(issues[0].node)}>{issues[0].text}{issues.length > 1 ? ` (+${issues.length - 1})` : ''}</button> : <span>{t('automation.ux.allReady')}</span>}
         </div>
+        {conflict && <>
+          <button className="btn ghost sm" disabled={busy} onClick={() => { st.bump(); leave(false) }}>{t('automation.builder.discardEdits')}</button>
+          <button className="btn ghost sm" disabled={!canSave || busy} onClick={() => void save(lastMode.current, true)}>{t('automation.builder.saveAnyway')}</button>
+        </>}
         <button className="btn ghost sm" onClick={() => setSelected('review')}>{t('automation.ux.review')}</button>
         {canObserve(condType) && !keepsObserving && <button className="btn ghost sm" disabled={!canSave || busy} onClick={() => void save('observe')}>{t('automation.ux.saveObserve')}</button>}
         <button className="btn sm" disabled={!canSave || busy} onClick={() => void save()}>{busy ? '…' : t(keepsObserving ? 'automation.ux.saveObserve' : enabled ? 'automation.ux.saveEnabled' : 'automation.ux.savePaused')}</button>

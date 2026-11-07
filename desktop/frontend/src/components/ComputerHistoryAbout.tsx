@@ -17,7 +17,7 @@ export function ComputerHistoryAbout({ view, summary }: { view: ComputerHistoryV
       <div className="ch-about-row"><dt>{t('computerHistory.about.recordedLabel')}</dt><dd>{t(windows ? 'computerHistory.win.recorded' : 'computerHistory.about.recorded')}</dd></div>
       <div className="ch-about-row"><dt>{t('computerHistory.about.neverLabel')}</dt><dd>{t(windows ? 'computerHistory.win.never' : 'computerHistory.about.never')}</dd></div>
       {!summary && <>
-        <div className="ch-about-row"><dt>{t('computerHistory.about.storageLabel')}</dt><dd>{t('computerHistory.about.storage', { path: view.root, days: view.keepDays })}</dd></div>
+        <div className="ch-about-row"><dt>{t('computerHistory.about.storageLabel')}</dt><dd>{t(windows ? 'computerHistory.win.storage' : 'computerHistory.about.storage', { path: view.root, days: view.keepDays })}</dd></div>
         <div className="ch-about-row"><dt>{t('computerHistory.about.accessLabel')}</dt><dd>{t('computerHistory.about.access')}</dd></div>
         <div className="ch-about-row"><dt>{t('computerHistory.about.permissionLabel')}</dt><dd>{t(windows ? 'computerHistory.win.permission' : 'computerHistory.about.permission')}</dd></div>
       </>}
