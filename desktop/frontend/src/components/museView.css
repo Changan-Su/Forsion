@@ -1,0 +1,70 @@
+/* Muse 面板(Muse Space 右栏 + 后台智能体详情页)。11-07 右栏改版,方案页 docs/ToBeImproved/MuseSpace优化方案_2026-11-07/panel.html 的 A。
+   层次只靠字重 / 字色 / 间距:区块不加框、不加底(DESIGN「卡片描边纪律」),只有审批卡沿用 .approval-card 的线框。
+   行操作悬停 / 键盘聚焦才露,触屏(没有悬停)常显。 */
+.mv { display: flex; flex-direction: column; gap: 20px; min-width: 0; color: var(--text); font-size: var(--ui-font-body); line-height: var(--ui-line-body); }
+
+.mv-hd { display: flex; align-items: center; gap: 4px; min-height: 30px; }
+.mv-hd .icon-btn { width: 26px; height: 26px; border-radius: var(--radius-sm); }
+.mv-av { flex: none; display: inline-grid; place-items: center; width: 22px; height: 22px; margin-right: 2px; border-radius: 50%; background: color-mix(in srgb, var(--accent-ink) 12%, transparent); color: var(--accent-ink); }
+.mv-name { font-size: var(--ui-font-heading); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mv-sp { flex: 1; }
+.mv > .muse-off-line { margin-top: -12px; }
+
+/* 状态:一行字 + 一行说明,点只是读状态的记号,不做胶囊 */
+.mv-st { display: flex; flex-direction: column; gap: 3px; margin-top: -10px; }
+.mv-st-line { display: flex; align-items: center; gap: 7px; font-weight: 500; }
+.mv-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--text-muted); }
+.mv-dot[data-state='running'] { background: var(--accent-ink); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-ink) 20%, transparent); }
+.mv-dot[data-state='pending'] { background: var(--accent-ink); }
+.mv-dot[data-state='sleeping'] { background: transparent; box-shadow: inset 0 0 0 1.5px var(--text-muted); }
+.mv-meta { padding-left: 14px; color: var(--text-muted); font-size: var(--ui-font-meta); line-height: var(--ui-line-meta); }
+
+/* 区块:小标题 + 计数 / 右侧链接 */
+.mv-sec { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.mv-sh { display: flex; align-items: baseline; gap: 6px; }
+.mv-sh b { color: var(--text-muted); font-size: var(--ui-font-meta); font-weight: 600; }
+.mv-sh span { color: var(--text-muted); font-size: var(--ui-font-caption); line-height: var(--ui-line-caption); }
+.mv-link { align-self: flex-start; padding: 0; border: 0; background: none; color: var(--accent-ink); font: inherit; font-size: var(--ui-font-meta); line-height: var(--ui-line-meta); font-weight: 500; cursor: pointer; }
+.mv-link:hover { text-decoration: underline; text-underline-offset: 2px; }
+.mv-link.r { margin-left: auto; }
+.mv-hint { color: var(--text-muted); font-size: var(--ui-font-meta); line-height: var(--ui-line-meta); }
+
+/* 上一轮在想:正文,5 行截断,展开就地放开 */
+.mv-think { margin: 0; font-family: var(--font-body); line-height: 1.65; white-space: normal; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 5; -webkit-box-orient: vertical; overflow: hidden; }
+.mv-think.open { display: block; overflow: visible; white-space: pre-wrap; }
+.mv-think.live, .mv-think.muted { color: var(--text-muted); }
+
+/* 行:待办 / 它排的 / 叫醒它的,同一套 */
+.mv-rows { display: flex; flex-direction: column; gap: 1px; margin: 0 -6px; }
+.mv-row { position: relative; display: flex; align-items: flex-start; gap: 8px; min-width: 0; padding: 5px 6px; border-radius: var(--radius-sm); transition: background var(--duration-fast); }
+.mv-row:hover, .mv-row:focus-within { background: var(--overlay-light); }
+.mv-row.on { background: var(--sel-fill, var(--overlay-light)); }
+.mv-ric { flex: none; margin-top: 2px; color: var(--text-muted); }
+.mv-check { flex: none; width: 14px; height: 14px; margin: 2px 0 0; cursor: pointer; }
+.mv-rt { display: flex; flex: 1; flex-direction: column; min-width: 0; }
+.mv-rt b { font-weight: 500; overflow-wrap: anywhere; }
+/* 说明行缺省两行;待办详情点开(.open)看全文 */
+.mv-rt i { font-style: normal; color: var(--text-muted); font-size: var(--ui-font-meta); line-height: var(--ui-line-meta); overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.mv-rt-btn { padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.mv-rt-btn.open i { display: block; overflow: visible; white-space: pre-line; }
+.mv-time { flex: none; margin-top: 1px; color: var(--text-muted); font-size: var(--ui-font-meta); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.mv-row.tl .mv-time { min-width: 80px; }
+.mv-row.paused .mv-rt, .mv-row.paused .mv-ric { opacity: 0.55; }
+.mv-acts { position: absolute; top: 2px; right: 4px; display: flex; padding: 1px; border-radius: var(--radius-sm); background: var(--bg-card); box-shadow: var(--icon-shadow); opacity: 0; pointer-events: none; transition: opacity var(--duration-fast); }
+.mv-acts .icon-btn { width: 24px; height: 24px; border-radius: var(--radius-sm); }
+/* 行操作浮在行右上,不占宽:不悬停时标题能用满一行 */
+.mv-row:hover .mv-acts, .mv-row:focus-within .mv-acts { opacity: 1; pointer-events: auto; }
+/* 触屏没有悬停:放回行尾常显 */
+@media (hover: none) { .mv-acts { position: static; flex: none; margin: -4px -4px -4px 0; padding: 0; background: none; box-shadow: none; opacity: 1; pointer-events: auto; } }
+
+/* 勾了待办才出的那条:放进会话 / 新对话里做 */
+.mv-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding-top: 4px; }
+.mv-bar-n { width: 100%; color: var(--text-muted); font-size: var(--ui-font-meta); line-height: var(--ui-line-meta); }
+.mv-bar-pick { flex: 1 1 100%; min-width: 0; }
+
+/* 要你批准:第一件整张卡,其余一行一件 */
+.mv .muse-approval { display: flex; flex-direction: column; gap: 6px; }
+.mv-ap-row { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 5px 6px; margin: 0 -6px; width: calc(100% + 12px); border: 0; border-radius: var(--radius-sm); background: none; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.mv-ap-row:hover { background: var(--overlay-light); }
+.mv-ap-row > svg { flex: none; color: var(--text-muted); }
+.mv-ap-row .mv-n { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
