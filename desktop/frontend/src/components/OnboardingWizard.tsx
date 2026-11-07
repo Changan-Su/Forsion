@@ -9,6 +9,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { ArrowLeft, ArrowRight, CircleAlert, Loader2, RotateCcw } from 'lucide-react'
 import { useI18n } from '../i18n'
+import { useReducedMotionPref } from '../theme/motionTheme'
 import { PRODUCT } from '../product'
 import { APP_VERSION } from '../changelog'
 import { ChangelogEntries } from '../views/ChangelogView'
@@ -184,7 +185,7 @@ export const OnboardingWizard: React.FC<{
     : step === 'start' && !connected ? t('ob3.skipConnect') : t('ob3.next')
   const hint = step === 'start' ? t('ob3.changeLater') : step === 'theme' ? t('ob3.theme.fontHint')
     : step === 'you' ? t('ob3.you.skipHint') : step === 'team' ? t('ob3.team.skipHint') : ''
-  const reduceMotion = typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+  const reduceMotion = useReducedMotionPref()
 
   const screen = (): React.ReactNode => {
     switch (step) {

@@ -10,7 +10,8 @@ import { ViewErrorBoundary } from './Skeleton'
 import './miniCard.css'
 import { useEngineI18n } from './i18nSeam'
 import { currentMiniChrome, useMiniChromeSlot } from './miniChrome'
-import { emergeDroplet, type Droplet } from './droplet'
+import { type Droplet } from './droplet'
+import { openPanel } from './panelMotion'
 
 interface DirectMiniViewTarget { type: string; params?: Record<string, unknown> }
 
@@ -69,7 +70,7 @@ export const MiniColumnHost: React.FC<{
     drop.current?.cancel(); drop.current = null; dropClosing.current = false
     const el = popRef.current
     const src = capRef.current?.querySelector<HTMLElement>(openMenu === 'space' ? '.mini-card-space' : '.mini-card-picker')
-    if (openMenu && el && src) drop.current = emergeDroplet(src, el)
+    if (openMenu && el && src) drop.current = openPanel(src, el) // 按动效主题:液滴 / 拉伸 / 淡入微缩
   }
   // 再点同一颗 = 收;正倒放着又点它 = 从这一帧掉头、停在打开(同悬浮目录)
   const toggleMenu = (which: 'space' | 'picker'): void => {

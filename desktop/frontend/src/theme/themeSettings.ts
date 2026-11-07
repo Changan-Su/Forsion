@@ -9,6 +9,7 @@
  * 每种类型都收敛到受限值域,key 不合规整条丢弃。纯函数部分无 DOM 依赖,便于 vitest 覆盖。
  */
 import type { ThemeEntry, ThemeSetting } from './manifest';
+import { isMotionToken } from './motionGuard';
 
 const KEY_RE = /^--[a-z0-9-]+$/i;
 const HEX_RE = /^#(?:[0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
@@ -21,6 +22,8 @@ export function usableSettings(entry: ThemeEntry | null | undefined): ThemeSetti
   if (!Array.isArray(list)) return [];
   return list.filter((s) => {
     if (!s || typeof s !== 'object' || !KEY_RE.test(String(s.key)) || typeof s.label !== 'string') return false;
+    // 动效 token 不许做成就地调参(动效收口:动效归宿主管,见 motionGuard.ts)
+    if (isMotionToken(String(s.key))) return false;
     switch (s.type) {
       case 'number':
         return Number.isFinite(s.default) && Number.isFinite(s.min) && Number.isFinite(s.max) && s.min < s.max;

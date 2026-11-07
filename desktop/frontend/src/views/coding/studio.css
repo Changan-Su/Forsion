@@ -157,7 +157,9 @@
   .csu-versions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 28px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .csu *, .csu *::before, .csu *::after { animation: none !important; transition-duration: 0s !important; transition-delay: 0s !important; }
+  @layer forsion-guard { /* 在护栏层里(styles/layers.css):否则 base.css 的「减少动态效果」(层内 !important)会压过这条「一下到位」 */
+    .csu *, .csu *::before, .csu *::after { animation: none !important; transition-duration: 0s !important; transition-delay: 0s !important; }
+  }
 }
 
 /* —— 版本(git)——:安装引导、自动版本标签、旧快照折叠区。版本行本身复用 .csu-version / .csu-versions。 */

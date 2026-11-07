@@ -1,0 +1,5 @@
+/* 层序只在这里定:必须是每个入口第一份 CSS(main.tsx / mobileEntry.tsx 的第一条样式 import)。
+ * 对 !important 来说**最先声明的层最大**:forsion-guard 里的「减少动态效果」压过任何不分层的 !important,
+ * 磁盘主题写什么都压不过(动效收口,见 theme/motionGuard.ts;主题自己的层名会被加前缀,塞不进这一层)。
+ * 之后才轮到 Root 依赖图里的 @layer reset(Astryx)等。台架 check:motiontheme 在运行时核对层序。 */
+@layer forsion-guard;

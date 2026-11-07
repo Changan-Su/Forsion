@@ -23,6 +23,11 @@ export interface NativeSheetTheme {
   danger: string
   /** "Waiting for you" (the attention dot of the Space bar). Hosts older than this field fall back to `danger`. */
   warning: string
+  /** The motion theme (<html data-motion-theme>, desktop theme/motionTheme.tsx): the phone's native dock moves its
+   *  selection the same way. Hosts older than these fields ignore them. */
+  motionTheme?: string
+  /** "Fade only" (<html data-motion-fade="on">): the native dock moves nothing. */
+  motionFade?: boolean
 }
 
 export interface NativeMenuTrailing<I = NativeIconSource> { id: string; label: string; icon?: I }
@@ -185,7 +190,7 @@ const clipSearch = (s: NativeMenuSearch): NativeMenuSearch => ({ placeholder: cl
 // ── theme ──────────────────────────────────────────────────────────────────────
 
 type Rgba = [number, number, number, number]
-const LIGHT: Record<keyof Omit<NativeSheetTheme, 'dark'>, Rgba> = {
+const LIGHT: Record<keyof Omit<NativeSheetTheme, 'dark' | 'motionTheme' | 'motionFade'>, Rgba> = {
   background: [248, 247, 246, 1], surface: [255, 255, 255, 1], text: [32, 33, 36, 1], muted: [110, 112, 118, 1],
   border: [0, 0, 0, 0.1], accent: [77, 135, 148, 1], onAccent: [255, 255, 255, 1], danger: [208, 64, 64, 1],
   warning: [128, 96, 0, 1],
@@ -290,7 +295,15 @@ export function readNativeTheme(): NativeSheetTheme {
     onAccent: toArgbHex(pick('onAccent')),
     danger: toArgbHex(pick('danger')),
     warning: toArgbHex(over(pick('warning'), background)),
+    ...motionFields(),
   }
+}
+
+function motionFields(): Pick<NativeSheetTheme, 'motionTheme' | 'motionFade'> {
+  try {
+    const d = document.documentElement.dataset
+    return { motionTheme: d.motionTheme || 'genesis', motionFade: d.motionFade === 'on' }
+  } catch { return {} }
 }
 
 // ── presentation ───────────────────────────────────────────────────────────────

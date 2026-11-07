@@ -13,10 +13,10 @@
  *
  * 样式全在 `chat2/orbits.css`(`.t2o-` 前缀,不改 `sidebar2.css` 本体);几何见该文件头注。
  */
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { Archive, Info, MoreHorizontal, Pencil, Pin, PinOff, Plus, Settings, SquarePen, Trash2, UserPlus, Users, UsersRound, FolderPlus, MessageSquarePlus } from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
-import { OverlayAt, setActiveSpace, useCommandStore, useListFirst, useNativeChromeExtras, useNativeSheetMenu, useSegDir, useSpaceStore, type SheetMenuItem } from '@lcl/engine'
+import { OverlayAt, setActiveSpace, useCommandStore, useListFirst, useNativeChromeExtras, useNativeSheetMenu, useSegDir, useSpaceStore, useSegFlow, type SheetMenuItem } from '@lcl/engine'
 import { CtxMenuButtons } from '../components/CtxMenuButtons'
 import { SidebarPane, sessionActivityAt } from './chat2/SidebarPane'
 import { SidebarRow } from '../components/SidebarRow'
@@ -543,6 +543,8 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
   const filterAt = FILTERS.indexOf(filter)
   /** 筛选胶囊滑块往哪边拉(写进 data-dir,后沿晚出发;见 sidebar2.css .t2s-vaultseg-thumb)。 */
   const filterDir = useSegDir(filterAt)
+  const filterThumb = useRef<HTMLDivElement>(null)
+  useSegFlow(filterAt, filterThumb) // 动效主题是水滴时滑块流过去
   const pickFilter = (kind: typeof filter): void => { setFilter(kind); localStorage.setItem('forsion_orbits_filter', kind) }
   const newSession = (): void => { s.setSessionMode('work'); openNewChat() }
   const primaryCreate = {
@@ -559,7 +561,7 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
       {/* 格数 / 当前格走 --seg-n / --seg-i(同 ⌘P 四格),滑块按左右两条边定位 —— 别在滑块上写 transform / width。 */}
       {!phone && <div className="t2o-filters t2s-vaultseg" role="tablist" aria-label={t('orbits.filter.label')}
         style={{ '--seg-n': FILTERS.length, '--seg-i': filterAt } as React.CSSProperties}>
-        <div className="t2s-vaultseg-thumb" data-dir={filterDir} />
+        <div ref={filterThumb} className="t2s-vaultseg-thumb" data-dir={filterDir} />
         {FILTERS.map((kind) => <button key={kind} role="tab" type="button"
           data-filter={kind} aria-selected={filter === kind} className={filter === kind ? 'on' : undefined}
           onClick={() => pickFilter(kind)}>{t(`orbits.filter.${kind}`)}</button>)}

@@ -24,6 +24,9 @@ export interface ThemeManifest {
    */
   colorScheme?: 'system' | 'light' | 'dark';
   tags?: string[];
+  /** 建议的动效主题(theme/motionTheme.tsx):'genesis' | 'droplet' | 'stretch' | 'glide'。只在用户从没选过动效主题时生效;
+   *  不认识的名字当没写。主题包不能自己定义动效(见 motionGuard.ts),只能在内置几套里挑一套建议。 */
+  motionTheme?: string;
   /** 主题激活时懒加载的 Google Fonts(离线环境会静默失败,主题需有本地字体回退)。 */
   fonts?: { google?: string[] };
   /** 主题自曝的可调参数;渲染在设置→主题里选中卡的下方,值落 :root 内联 CSS 变量。见 ThemeSetting。 */
@@ -76,6 +79,10 @@ export interface ThemeEntry {
   manifest: ThemeManifest;
   /** bundle 主题:Vite 资源 URL,走 <link>。 */
   cssUrl?: string;
-  /** 磁盘主题:主进程读回的 CSS 文本,走 <style>(CSP 禁 file://)。 */
+  /** 磁盘主题:主进程读回的 CSS 文本,走 <style>(CSP 禁 file://)。已过动效收口(motionGuard.ts)。 */
   cssText?: string;
+  /** 磁盘主题里被动效收口删掉的动效 token(主题卡下面提示一行;动效归宿主管)。 */
+  motionIgnored?: string[];
+  /** 收口后浏览器再读一遍仍有漏网的(或收口出错):这套主题的样式整套不加载,cssText 为空,主题卡下面说一句。 */
+  cssRejected?: boolean;
 }

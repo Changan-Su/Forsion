@@ -8,7 +8,7 @@ import { DEFAULT_APPROVAL, DEFAULT_THINKING } from '../../../../tangu-agent/src/
 import { thinkingLabel } from '../components/thinkingLabel'
 import { APPROVAL_MODE_ORDER, MODE_KEY } from '../approvalReason'
 import { isCoarsePointer } from '../touch'
-import { zoomOf } from '@lcl/engine'
+import { zoomOf, reducedMotion } from '@lcl/engine'
 import { moveOptionFocus, type SelectOption as ProfileSelectOption } from '../components/SelectField'
 import './agentProfileMessages'
 import './profileControls.css'
@@ -22,7 +22,7 @@ export function useSectionNavSlide<T extends HTMLElement = HTMLElement>(selected
     const cur = ref.current?.querySelector<HTMLElement>(':scope > .selected') ?? null
     const old = prev.current
     prev.current = cur
-    if (!cur || !old || old === cur || !old.isConnected || matchMedia('(prefers-reduced-motion: reduce)').matches) return
+    if (!cur || !old || old === cur || !old.isConnected || reducedMotion()) return
     // 矩形是视口 px(含界面缩放),动画写的是元素自己的 CSS px:按累计 zoom 换算,否则 120% 下会冲过头再一跳
     const z = zoomOf(cur), from = old.getBoundingClientRect(), to = cur.getBoundingClientRect()
     if (!to.width) return
