@@ -13,6 +13,7 @@ import {
   type IDockviewHeaderActionsProps,
   type DockviewTheme,
 } from 'dockview-react'
+import { SpaceFloatLayer } from './SpaceFloatLayer'
 import { X, Plus, PanelLeft, PanelRight, PanelBottom, RotateCcwSquare, ArrowLeft, ArrowRight, AppWindow, PictureInPicture2, Columns2, Rows2, ListX, ArrowRightToLine, CopyX, SquareArrowOutUpRight } from 'lucide-react'
 import { createPortal } from 'react-dom'
 import 'dockview-react/dist/styles/dockview.css'
@@ -780,6 +781,8 @@ export const WorkspaceHost: React.FC<{
                     * 程序化移动/分屏不受 disableDnd 影响,故落子照常;提示与落子同源 computeDropTarget → 天生一致。 */
         onReady={onReady}
       />
+      {/* Space 作用域的浮层(floatLayer.ts):盖在三栏之上、分隔条之上,切 Space 时按 id 藏。 */}
+      <SpaceFloatLayer />
       {/* 右上角浮钮组:恢复默认布局 → 小窗(仅桌面)→ 底部面板 → 右栏(用户指定的次序);折叠钮收起后都仍在原处,可重开。 */}
       <div className="dv-edge-actions" ref={edgeRef}>
         <button

@@ -441,7 +441,7 @@ html.rb-pointer-dragging, html.rb-pointer-dragging * { cursor: grabbing !importa
 .cmd-overlay {
   position: fixed;
   inset: 0;
-  z-index: 1000;
+  z-index: var(--z-palette, 1000);
   /* 压住底下 .rb/.t2s-side/tab 栏的拖窗区(拖窗区无视 z-index,见 base.css「Electron 拖窗区兜底」)。 */
   -webkit-app-region: no-drag;
   display: flex;

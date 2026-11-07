@@ -12,7 +12,7 @@ import {
 import { joinVoiceText, useVoiceInput } from '../../hooks/useVoiceInput'
 import { CALL_TEXT_MAX, getCallPresence, onCallEvent, openCallLayer, sendTextToCall, subscribeCallPresence, useRealtimeConfig } from '../../services/realtimeCall'
 import { resolveRealtimeCall } from '../../services/realtimeModel'
-import { CallHint, markCallHintSeen } from './CallHint'
+import { CALL_HINT_ANCHOR, CallHint, markCallHintSeen } from './CallHint'
 import { claimComposerPrefill, subscribeComposerPrefill } from '../../amadeus/plugins/tanguSeam'
 import { VoiceRecordingBar } from './VoiceRecordingBar'
 import { THINKING_LEVELS } from '../../../../../tangu-agent/src/contracts/clientTypes'
@@ -1836,6 +1836,8 @@ export const Composer2: React.FC<{
     // 照 ChatGPT:输入框空着时发送键就是通话键,打了字变回发送。通话中再按 = 叫回 Mini 卡片(不重拨)。
     <ChatBoxSubmit
       className="t2c-live-control"
+      // 通话键首次提示的锚点(CallHint.tsx → 宿主上手提示):只在它真是「开始通话」时挂,通话中按它是叫回 Mini,不提示
+      data-guide-anchor={inCall ? undefined : CALL_HINT_ANCHOR}
       onClick={() => { void startVoiceCall() }}
       disabled={!!disabled || callStarting}
       title={t(inCall ? 'livecall.return' : 'livecall.start')}
@@ -1867,7 +1869,7 @@ export const Composer2: React.FC<{
 
   return (
     <div className="t2c">
-      <CallHint ready={callable && inputEmpty && !running && !inCall} cloud={realtimeModel === cloudCallModel?.id} />
+      <CallHint cloud={realtimeModel === cloudCallModel?.id} />
       {groupSetupOpen && (
         <GroupChatSetup
           agents={(agents || []).filter((a) => !a.disabled || !!groupAgents?.includes(a.slug))}
