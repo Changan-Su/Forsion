@@ -1,5 +1,6 @@
 /**
- * check:first-run —— 首启引导四屏(开始 / 外观 / 关于你 / 认识你的 Agents 团队,11-05 定稿)在真 Electron 里走一遍。
+ * check:first-run —— 首启引导四屏(开始 / 外观 / 关于你 / 认识你的 Agents 团队,11-05 定稿,11-06 第四轮 A4)在真 Electron 里走一遍。
+ * 跳过引导 → 主页输入框下面「电脑历史还没开」那一行(出现、同意说明、✕ 不再提醒;动过电脑历史的不出)也在这里。
  * 隔离 home + 桩引擎(模型、卜算子配置、human/MEMORY.md、Agent 名单都由桩回,写入全记下来核对)。不登录、不授任何权限。
  * - 电脑历史连的是真主进程:macOS 指向不存在的 socket,Windows 指向不存在的助手可执行文件,绝不拉起这台机器上真的
  *   Computer Use 助手;「开始使用」之后那一下请辅助功能(permissions:request)在主进程里换成只记账的桩,不弹系统设置。
@@ -163,6 +164,33 @@ async function main() {
       }
     }
 
+    // ①b 跳过引导 → 主页输入框下面再问一次电脑历史(这时电脑历史还从没动过);✕ 之后不再出。② 之前做:② 会开了又关(dataGen +1)
+    await setLocale('zh'); await size(1280, 800); await fresh()
+    await next(); await ready.theme(); await next(); await ready.you(); await next(); await ready.team()
+    const historyOffered = await win.locator('[data-ob-history]').count() > 0
+    await win.locator('.ob-skip').click(); await win.waitForSelector('.ob-flow', { state: 'detached' })
+    assert.equal(await win.evaluate(() => localStorage.getItem('forsion_ch_ask')), 'pending', 'skipping the guide marks computer history as not asked')
+    if (historyOffered) {
+      const ask = win.locator('[data-ch-ask]')
+      await ask.waitFor({ timeout: 20000 })
+      await win.waitForTimeout(600)
+      const placed = await ask.evaluate((el) => {
+        const r = el.getBoundingClientRect(), composer = document.querySelector('.hp-composer')?.getBoundingClientRect()
+        return { inView: r.top >= 0 && r.bottom <= innerHeight && r.left >= 0 && r.right <= innerWidth, belowComposer: !composer || r.top >= composer.bottom - 1 }
+      })
+      assert(placed.inView && placed.belowComposer, `home ask row sits under the composer, inside the window: ${JSON.stringify(placed)}`)
+      await win.screenshot({ path: path.join(OUT, 'zh-home-ask.png') })
+      await ask.locator('[data-ch-ask-enable]').click(); await win.waitForSelector('.ob-history-dialog[open] .ob-history-consent')
+      await win.waitForTimeout(350)
+      await win.screenshot({ path: path.join(OUT, 'zh-home-ask-consent.png') })
+      await win.locator('.ob-history-dialog-foot .btn.ghost').click(); await win.waitForSelector('.ob-history-dialog[open]', { state: 'detached' })
+      assert.equal(await historyEnabled(), false, 'cancelling the consent writes nothing')
+      await ask.locator('[data-ch-ask-dismiss]').click(); await ask.waitFor({ state: 'detached' })
+      assert.equal(await win.evaluate(() => localStorage.getItem('forsion_ch_ask')), 'dismissed')
+      console.log('PASS home ask: skipping the guide → row under the composer → consent → dismissed for good')
+    } else console.log('SKIP home ask row: computer history not offered on this host')
+    await win.evaluate(() => localStorage.removeItem('forsion_ch_ask'))
+
     // ② 中文 1280×800 真走一遍,核对写进去的东西
     await setLocale('zh'); await size(1280, 800); await fresh()
     assert.equal(await win.locator('[data-ob-title]').innerText(), '欢迎使用 Forsion')
@@ -177,13 +205,16 @@ async function main() {
     assert.deepEqual(humanWrites.map((w) => [w.content, w.expectedVersion]), [['我叫小鹿,做产品设计。', 'h1']], 'About you saved once with the version it was read at')
     const museText = await win.locator('[data-ob-muse]').innerText()
     assert(museText.includes('卜算子') && !museText.includes('Muse'), `Muse shows one name by UI language: ${museText.slice(0, 80)}`)
-    assert(await win.locator('[data-ob-muse-model].need').count(), 'signed out: the model row asks for a pick')
-    assert.equal(await win.locator('[data-agent="xyra"] [role="switch"]').isDisabled(), true, 'default agent is locked on')
+    // 没登录:模型行显示引擎实际会用的默认模型(桩的 defaultModelId = 第一个),不黄底、不替用户写
+    assert.equal(await win.locator('[data-ob-muse-model].need').count(), 0, 'signed out with a default model: no pick is demanded')
+    assert.match(await win.locator('[data-ob-muse-model] select option').first().innerText(), /GPT-6 Luna · 默认/)
+    // 名单一行只介绍,没有开关;主动程度不问
+    assert.equal(await win.locator('[data-ob-roster] [role="switch"]').count(), 0, 'the roster has no switches')
+    assert.equal(await win.locator('[data-ob-muse] .ob3-q').count(), 2, 'two questions')
     await win.locator('[data-ob-muse-model] select').selectOption('local/qwen')
-    await win.locator('[data-ob-muse] .ob3-pill', { hasText: '非常' }).click()
-    await win.locator('[data-agent="coder"] [role="switch"]').click()
-    const historyOffered = await win.locator('[data-ob-history]').count() > 0
+    await win.locator('[data-ob-muse] .ob3-pill', { hasText: '学习' }).click()
     if (historyOffered) {
+      assert.match(await win.locator('[data-ob-ch-example]').innerText(), /开了之后，比如/)
       await win.waitForSelector('[data-ob-history][data-ch-draft="on"]')
       assert.equal(await historyEnabled(), false, 'the pre-switched draft is not written before Get started')
       await win.locator('[data-ob-history] .ob3-link').click(); await win.waitForSelector('.ob-history-dialog[open]')
@@ -203,9 +234,9 @@ async function main() {
     await win.locator('[data-ob-primary]').click()
     await win.waitForSelector('.ob-flow', { state: 'detached' })
     assert.deepEqual(specialWrites.at(-1), { muse: { modelId: 'local/qwen' } })
-    assert.deepEqual(introWrites, [{ proactivity: 'high' }], 'only the changed question is sent')
-    assert.deepEqual(agentPatches.at(-1), { slug: 'coder', disabled: true })
-    assert.equal(specialConfig.muse.heartbeatMinutes, 120, 'the stub records; the engine maps proactivity (covered by museCards.test)')
+    assert.deepEqual(introWrites, [{ focus: ['study'] }], 'only the changed question is sent; proactivity is not asked')
+    assert.deepEqual(agentPatches, [], 'the guide no longer turns agents off')
+    assert.equal(await win.evaluate(() => localStorage.getItem('forsion_ch_ask')), null, 'finishing the guide: Home does not ask again')
     if (historyOffered) {
       assert.equal(await historyEnabled(), true, 'Get started turns computer history on')
       const requested = await app.evaluate(() => globalThis.__permissionRequests)
@@ -213,7 +244,7 @@ async function main() {
       await win.evaluate(() => window.tangu.computerHistory.setEnabled(false))
     }
     assert.equal(await win.evaluate(() => localStorage.getItem('forsion_tangu_onboarding_done')), '1')
-    console.log('PASS walk-through: About you, Muse model / proactivity, agent switch, computer history written on Get started')
+    console.log('PASS walk-through: About you, Muse model / focus, read-only roster, computer history written on Get started')
 
     // ③ 英文深色、窄窗、110% 缩放(用户实际用的缩放)
     await setLocale('en'); await size(1024, 720); await fresh()
@@ -237,7 +268,12 @@ async function main() {
     await win.locator('.ob-skip').click()
     await win.waitForSelector('.ob-flow', { state: 'detached' })
     assert.deepEqual({ intro: introWrites.length, agents: agentPatches.length }, before, 'skipping writes nothing')
-    if (historyOffered) assert.equal(await historyEnabled(), false, 'skipping leaves computer history off')
+    if (historyOffered) {
+      assert.equal(await historyEnabled(), false, 'skipping leaves computer history off')
+      // 电脑历史在 ② 里开过又关(动过了):跳过也不在主页再问
+      await win.waitForSelector('.hp-composer', { timeout: 20000 }); await win.waitForTimeout(1200)
+      assert.equal(await win.locator('[data-ch-ask]').count(), 0, 'someone who has touched computer history is not asked on Home')
+    }
 
     // ④ 升级:上次看引导早于 2.13.8 → 完整引导、「欢迎回来」;2.13.8 及以后 → 只有「更新了什么」
     await win.evaluate(() => { localStorage.setItem('forsion_tangu_onboarding_done', '1'); localStorage.setItem('forsion_tangu_onboarding_version', '2.13.4') })
