@@ -143,9 +143,9 @@ Without `forms` every look works, as before. With it, anything left out is unsup
 
 **Fallback rules** (when the asked-for look is unsupported):
 
-1. Docked: the place sets the look; `form` is ignored. Unsupported → the next place on the ladder: main → right → bottom; left / right → main → bottom; bottom → right → main. Hosts without a bottom panel (phones, satellite windows) use right for bottom. A view with no docked look at all (only `mini`) floats over the current Space instead.
+1. Docked: the place sets the look; `form` is ignored. Unsupported → the next place on the ladder: main → right → bottom; left / right → main → bottom; bottom → right → main. Hosts without a bottom panel (phones, satellite windows) use right for bottom. A view with no docked look at all (only `mini`) floats over the current Space instead; with no `mini` either (for example `forms: {}`) the result is `'unsupported'`.
 2. Floating: `form` defaults to `'mini'`; `'side'` / `'bottom'` count as `'main'`. `mini` unsupported → `main`; the view itself unsupported → `mini`.
-3. The Mini look shows `forms.mini.view` (the view itself if that one is not registered, or when `mini` is not an object).
+3. The Mini look shows `forms.mini.view` (the view itself if that one is not registered, or when `mini` is not an object). Only compact views of your own plugin count. A view without `forms` opened with `openMiniPanel` behaves as in 2.13.7: the Mini shows the view itself.
 4. Web has no Mini window: the Mini look of `{ float: 'desktop' }` becomes a card floating in the window. On phones it is a half-height sheet along the bottom, and the main look docks in the main area (a panel filling the phone screen is the main area). Space cards on phones sit just above the bottom bar.
 5. Windows without a workbench (Mini windows, Floating Panel windows) cannot open the `space` / `window` / `view` layers.
 

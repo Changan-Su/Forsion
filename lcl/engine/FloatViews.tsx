@@ -46,7 +46,10 @@ function FloatViewCard({ rec }: { rec: FloatViewRec }): ReactElement | null {
   const showInMain = getView(rec.mainView.type) ? (): void => {
     const main = rec.mainView
     const carry = main.type === rec.view.type ? paramsRef.current : { ...main.params, ...paramsRef.current }
-    useWorkspace.getState().openView(main.type, carry, 'main')
+    const leaf = useWorkspace.getState().openView(main.type, carry, 'main')
+    if (!leaf) return // 没开成(没有工作台)就别收卡
+    // singleton 复用时 openView 不改参数(同 multiWindow 的主面板交接):补一笔,否则停在主区原来那份上
+    leaf.setParams({ ...leaf.params, ...carry })
     rec.close()
   } : undefined
   return (

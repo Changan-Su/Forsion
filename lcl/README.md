@@ -81,7 +81,7 @@ Genesis 当前使用这份 LCL。`apps/Archived/Forsion-LCL` 是早期组合引�
 - `{ dock: 'main' | 'left' | 'right' | 'bottom' }` → `useWorkspace.openView`(样子由位置定,左右 = `side`)。
 - `{ float: 'desktop', pin? }` → 壳层接缝 `setDesktopOpener({ mini, panel })`(桌面 = `window.tangu.openMini` / `openFloatingPanel`,网页只有 panel;接线在 `desktop/frontend/src/workspaceOpenHost.ts`,用的时候现装)。没接上 = 降级:Mini → 窗口作用域(手机 = 半屏抽屉),main → 停靠主区。
 - `{ float: 'view' | 'space' | 'window', anchor?, host? }` → `openFloat` 开一块浮层,`FloatViews.tsx`(随 `SpaceFloatLayer` 挂)用合成 leaf 把 View 经 portal 渲染进去:卡头(标题、在主面板显示、关闭)+ View。不进布局、不进 singleton 计数,View 类型反注册就收;同 View + key 再开 = 同一张卡换参数。没挂 FloatViews 的窗口(Mini、Floating Panel)回 `unavailable`。
-- `ViewDefinition.forms`(`{ main?, side?, bottom?, mini?: true | { view } }`)声明能用的样子;**不写 = 全都行**。回落规则全在纯函数 `planOpen` 与文件头注里,单测 `desktop/frontend/src/workspaceOpen.test.ts`;Mini 样子的紧凑视图取法:`forms.mini.view` → 某个 Space 的 `mini.mainView` 是它就走那个 Space → 视图本身。
+- `ViewDefinition.forms`(`{ main?, side?, bottom?, mini?: true | { view } }`)声明能用的样子;**不写 = 全都行**。回落规则全在纯函数 `planOpen` 与文件头注里,单测 `desktop/frontend/src/workspaceOpen.test.ts`;Mini 样子的紧凑视图取法:`forms.mini.view` → 某个 Space 的 `mini.mainView` 是它就走那个 Space → 视图本身(紧凑视图只认同一个主人:插件视图不落到别的插件的紧凑视图上)。
 - 旧入口一个不删:插件 `ctx.openView` / `openMiniPanel` / `openFloatingPanel` 内部转到这里;插件新入口 `ctx.workspace.open`。真 Electron 台架 `desktop` → `npm run check:workspaceopen`。
 - 留到下一步:浮层卡的位置跟 Space 布局 / View 参数一起记(现在只记用户拖到的锚点,重启不恢复)、Mini 的 `pin: false`(Mini 恒置顶)。
 

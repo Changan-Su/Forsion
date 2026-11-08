@@ -130,7 +130,7 @@ import type {
 import { validateTableSpec } from './tableSpec'
 import { clearDevRecords, devConsoleFor, dropDevRecords } from './devRecords'
 import { gatePluginManifest, type ExternalPluginSource } from '@amadeus-shared/ipc'
-import { createEffectScope, type EffectRecord, type EffectScope } from './effectScope'
+import { createEffectScope, type EffectHandle, type EffectRecord, type EffectScope } from './effectScope'
 import { dependentsOf, topoOrder, unmetDependencies, type UnmetDependency } from './pluginDeps'
 import { LIST_CAPABILITIES } from './listTree'
 import { CHAT_BOX_CAPABILITIES } from '../../../../shared/chatBox'
@@ -1418,6 +1418,16 @@ export const usePluginStore = create<PluginState>((set, get) => {
     const ownView = (viewId: string): ViewContribution | undefined => get().views.find((item) => item.pluginId === pluginId && item.item.id === viewId)?.item
     const openOwn = (viewId: string, params: Record<string, unknown> | undefined, opts: OpenOptions): Promise<OpenResult> =>
       hostWorkspaceOpen({ type: `plugin:${pluginId}:${viewId}`, params }, opts)
+    // 浮在窗口里的卡一张记一笔账(同一张卡再开复用同一个 close,不重复记);卡收掉(谁收的都算)就划掉
+    const ownedFloats = new Map<() => void, EffectHandle>()
+    const ownFloat = (close: () => void, closed: Promise<void> | undefined): EffectHandle => {
+      const had = ownedFloats.get(close)
+      if (had) return had
+      const h = scope.own('mount', close, 'workspace.open')
+      ownedFloats.set(close, h)
+      void closed?.then(() => { if (ownedFloats.get(close) === h) ownedFloats.delete(close); h.forget() })
+      return h
+    }
     // 设置零件两个挂载(整页 / 单件)同一条路:认领 el → 动态 import → 落地时 el 还归这次才挂;关账统一卸。
     type SettingsSurface = typeof import('./settingsPageSurface')
     const mountSettingsParts = <T, H extends { update(next: T): void; dispose(): void }>(
@@ -1953,8 +1963,9 @@ export const usePluginStore = create<PluginState>((set, get) => {
         const def = ownView(viewId)
         if (!def || !ctxAlive()) return
         // 2.13.8 起多开:同一 viewId(+ key)再开 = 叫出已开的那扇;满了由 openMiniWindow 提示用户。
-        // 给了 mainViewId / mainViewParams = 插件点名 viewId 就是紧凑视图(旧写法,原样);没给 = 按 forms.mini 挑
-        const explicitMain = opts?.mainViewId || opts?.mainViewParams
+        // 给了 mainViewId / mainViewParams,或这个视图没声明 forms = 插件点名 viewId 就是紧凑视图(2.13.7 的写法,
+        // 实体键仍是 view:<类型>,不被某个 Space 的 Mini 映射改道);声明了 forms 又没点名主视图 = 按 forms.mini 挑
+        const explicitMain = opts?.mainViewId || opts?.mainViewParams || !def.forms
           ? { type: `plugin:${pluginId}:${opts?.mainViewId || viewId}`, params: opts?.mainViewParams } : undefined
         void openOwn(viewId, opts?.params, { layer: { float: 'desktop' }, form: 'mini', key: cleanKey(opts?.key),
           title: opts?.title || pluginText(def.title), mainView: explicitMain })
@@ -1976,7 +1987,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
           title: typeof opts?.title === 'string' ? opts.title.trim().slice(0, 128) || undefined : undefined }).then((r) => {
           if (!r.ok) return { ok: false as const, reason: r.reason, ...(r.limit != null ? { limit: r.limit } : {}) }
           // 浮在窗口里的卡归插件管:停用 / 重载一并收掉(视图类型反注册时引擎也会收,这里是两道保险)
-          const close = r.close && 'float' in r.layer && r.layer.float !== 'desktop' ? scope.own('mount', r.close, 'workspace.open') : r.close
+          const close = r.close && 'float' in r.layer && r.layer.float !== 'desktop' ? ownFloat(r.close, r.closed) : r.close
           return { ok: true as const, layer: r.layer, form: r.form, ...(close ? { close: () => { if (ctxAlive()) close() } } : {}) }
         })
       },

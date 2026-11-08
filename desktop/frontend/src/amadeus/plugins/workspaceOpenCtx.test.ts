@@ -3,13 +3,14 @@
 // 参数照旧;新入口 ctx.workspace.open 只开自己的视图、形状不对同步抛、浮在窗口里的卡随插件停用收掉。
 // 规则本身(回落、复用、反注册收卡)在 frontend/src/workspaceOpen.test.ts。
 // 负对照(11-08 已实跑红):workspace.open 里不 scope.own →「浮在窗口里的卡:插件停用时宿主收掉」红;openMiniPanel 无条件传
-// mainView →「openMiniPanel → { float: desktop } + mini …没点名主视图时按 forms 挑」红。
+// mainView →「声明了 forms 又没点名主视图 = 按 forms 挑」红;没声明 forms 时不传 mainView →「没声明 forms 的视图:mainView
+// = 它自己」红(Codex 评审 P1:会被某个 Space 的 Mini 映射改道、实体键变了);每次都 scope.own →「同一张卡再开只记一笔账」红。
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const open = vi.fn()
 vi.mock('../../workspaceOpenHost', () => ({ hostWorkspaceOpen: (...a: unknown[]) => open(...a) }))
 
-const { usePluginStore } = await import('./pluginStore')
+const { usePluginStore, pluginFootprint } = await import('./pluginStore')
 type Ctx = import('./types').PluginContext
 
 function ctxOf(id: string): Ctx {
@@ -19,6 +20,7 @@ function ctxOf(id: string): Ctx {
     ref = c
     c.registerView({ id: 'v', title: 'Tasks', mount() {} })
     c.registerView({ id: 'full', title: 'Full', mount() {} })
+    c.registerView({ id: 'board', title: 'Board', mount() {}, forms: { main: true, mini: { view: 'v' } } })
   } }])
   return ref!
 }
@@ -43,11 +45,17 @@ describe('old entry points forward to workspace.open', () => {
     expect(opener).toHaveBeenCalledTimes(1)
     expect(open).not.toHaveBeenCalled()
   })
-  it('openMiniPanel → { float: desktop } + mini,key 去空白;没点名主视图时按 forms 挑(不传 mainView)', () => {
+  it('openMiniPanel → { float: desktop } + mini,key 去空白;没声明 forms 的视图:mainView = 它自己(2.13.7 的实体键不变)', () => {
     const ctx = ctxOf('p')
     ctx.openMiniPanel!('v', { key: ' k1 ', params: { day: 3 } })
     expect(open).toHaveBeenLastCalledWith({ type: 'plugin:p:v', params: { day: 3 } },
-      { layer: { float: 'desktop' }, form: 'mini', key: 'k1', title: 'Tasks', mainView: undefined })
+      { layer: { float: 'desktop' }, form: 'mini', key: 'k1', title: 'Tasks', mainView: { type: 'plugin:p:v', params: undefined } })
+  })
+  it('openMiniPanel:声明了 forms 又没点名主视图 = 按 forms 挑(不传 mainView)', () => {
+    const ctx = ctxOf('p')
+    ctx.openMiniPanel!('board')
+    expect(open).toHaveBeenLastCalledWith({ type: 'plugin:p:board', params: undefined },
+      { layer: { float: 'desktop' }, form: 'mini', key: undefined, title: 'Board', mainView: undefined })
   })
   it('openMiniPanel 点名了 mainViewId:viewId 就是紧凑视图,原样(旧写法)', () => {
     const ctx = ctxOf('p')
@@ -97,6 +105,22 @@ describe('ctx.workspace.open', () => {
     expect(close).toHaveBeenCalledTimes(1)
     if (r.ok) r.close?.()
     expect(close).toHaveBeenCalledTimes(1)
+  })
+  it('同一张卡再开只记一笔账;卡自己收掉(点了关闭)就划掉', async () => {
+    const ctx = ctxOf('p')
+    const close = vi.fn()
+    let done!: () => void
+    const closed = new Promise<void>((r) => { done = r })
+    open.mockResolvedValue({ ok: true, layer: { float: 'space' }, form: 'mini', close, closed })
+    const before = pluginFootprint('p').effects.length
+    for (let i = 0; i < 5; i++) await ctx.workspace!.open('v', { layer: { float: 'space' } })
+    expect(pluginFootprint('p').effects.length).toBe(before + 1)
+    done()
+    await closed
+    await Promise.resolve()
+    expect(pluginFootprint('p').effects.length).toBe(before)
+    usePluginStore.getState().disable('p')
+    expect(close).not.toHaveBeenCalled()
   })
   it('停用之后的 ctx:resolve disabled,不开', async () => {
     const ctx = ctxOf('p')

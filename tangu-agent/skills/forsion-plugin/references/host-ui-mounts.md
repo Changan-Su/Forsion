@@ -348,7 +348,7 @@ const r = await ctx.workspace?.open('board', { layer: { float: 'space' } })     
 ```
 
 - `registerView({ …, forms: { main: true, side: true, mini: { view: 'board-mini' } } })`: which looks the view supports. No `forms` = everything (as before). `mini.view` = this plugin's compact view (relative id) shown whenever the view opens in the Mini look; "Show in main panel" goes back to the view.
-- Fallback: docked → the place decides the look (`form` ignored); unsupported → main → right → bottom / left·right → main → bottom / bottom → right → main; no bottom panel = right; mini-only views float over the current Space. Floating → `form` defaults to `'mini'` (`side` / `bottom` = `main`); mini unsupported → main, the view itself unsupported → mini.
+- Fallback: docked → the place decides the look (`form` ignored); unsupported → main → right → bottom / left·right → main → bottom / bottom → right → main; no bottom panel = right; mini-only views float over the current Space; no usable look at all (e.g. `forms: {}`) → `'unsupported'`. Compact views must belong to your plugin; a view without `forms` opened with `openMiniPanel` still shows itself (as in 2.13.7). Floating → `form` defaults to `'mini'` (`side` / `bottom` = `main`); mini unsupported → main, the view itself unsupported → mini.
 - Web has no Mini window: `{ float: 'desktop' }` + mini becomes a window card. Phones: a half-height sheet; `form: 'main'` docks in the main area. Mini / Floating Panel windows cannot open the in-window layers (`unavailable`).
 - Only your own views. `{ float: 'desktop' }` is just Mini / Floating Panel; `ctx.ui.float` still has no desktop scope. Bad shapes throw `TypeError`.
 

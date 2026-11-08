@@ -143,9 +143,9 @@ ctx.registerView({ id: 'board', title, mount, forms: { main: true, side: true, m
 
 **回落规则**(要的样子不支持时):
 
-1. 停靠:位置决定样子,传的 `form` 不看。不支持就按梯子换位置:主区 → 右栏 → 底部;左 / 右 → 主区 → 底部;底部 → 右栏 → 主区。没有底部面板的宿主(手机、卫星窗)底部当右栏。一个停靠样子都不支持(只有 `mini`)时,浮在当前 Space 之上。
+1. 停靠:位置决定样子,传的 `form` 不看。不支持就按梯子换位置:主区 → 右栏 → 底部;左 / 右 → 主区 → 底部;底部 → 右栏 → 主区。没有底部面板的宿主(手机、卫星窗)底部当右栏。一个停靠样子都不支持(只有 `mini`)时,浮在当前 Space 之上;连 `mini` 也没有(比如 `forms: {}`)就回 `'unsupported'`。
 2. 浮起来:`form` 缺省 `'mini'`,`'side'` / `'bottom'` 当 `'main'`。`mini` 不支持 → `main`;视图本身不支持 → `mini`。
-3. Mini 样子里显示 `forms.mini.view`(没注册就用视图本身);没写就是视图本身。
+3. Mini 样子里显示 `forms.mini.view`(没注册就用视图本身);没写就是视图本身。紧凑视图只认本插件的。没写 `forms` 的视图用 `openMiniPanel` 打开时和 2.13.7 一样,Mini 里就是它自己。
 4. 网页没有 Mini 窗口:`{ float: 'desktop' }` 的 Mini 样子降成浮在窗口里的卡;手机上是贴底的半屏抽屉,`main` 样子停靠主区(手机上占满一屏的面板就是主区)。Space 作用域的卡在手机上贴在底栏上方。
 5. Mini 窗、Floating Panel 窗这类没有工作台的窗口里,`space` / `window` / `view` 三档打不开。
 
