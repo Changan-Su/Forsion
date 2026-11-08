@@ -66,10 +66,10 @@ registerMessages({
     zh: '第一次从「{name}」安装。它不经过 Forsion 审核，内容由来源作者维护。',
     en: 'This is your first install from "{name}". It isn\'t reviewed by Forsion. The source\'s author maintains it.',
   },
-  'market.sources.confirmText': { zh: '这是{kind}（文字说明），不会运行代码。', en: 'This is a {kind} (written instructions). It doesn\'t run code.' },
+  'market.sources.confirmText': { zh: '这是{kind}，装上后不会自己运行代码。', en: 'This is a {kind}. It doesn\'t run code on its own.' },
   'market.sources.confirmCode': {
-    zh: '这是插件，会在 Forsion 里运行代码。只装你信得过的作者的插件。',
-    en: 'This is a plugin. It runs code inside Forsion. Only install plugins from authors you trust.',
+    zh: '这是{kind}，可能在 Forsion 里运行代码或命令。只装你信得过的作者做的。',
+    en: 'This is a {kind}. It may run code or commands inside Forsion. Only install it if you trust the author.',
   },
   'market.sources.confirmInstall': { zh: '确认安装', en: 'Install' },
   'market.sources.factSource': { zh: '{name} · {kind}', en: '{name} · {kind}' },
@@ -122,7 +122,8 @@ export function sourceIcon(s: Pick<StoreSourceInfo, 'icon' | 'kind'>): typeof Pa
   return s.kind === 'npm' ? Package : s.kind === 'url' ? Globe : GitBranch
 }
 const shortUri = (uri: string) => uri.replace(/^https?:\/\//, '')
-export const CODE_TYPES = new Set(['plugin', 'amadeus-plugin'])
+/** 会运行代码的类型:插件本身、可带工具 / MCP 命令的 Agent、可捆插件的 Space。每项第一次装前都确认。 */
+export const CODE_TYPES = new Set(['plugin', 'amadeus-plugin', 'agent', 'space'])
 
 /** 来源表 + 来源装过的东西;主进程广播变化(插件开关在主窗、商店在独立浮窗)时重读。 */
 export function useStoreSources() {
@@ -292,7 +293,7 @@ export function SourceConfirm({ sourceTitle, kindLabel, code, first, busy, onCan
   return (
     <div className="mk-src-confirm" data-store-source-confirm-install>
       {first && <div>{t('market.sources.confirmFirst', { name: sourceTitle })}</div>}
-      <div>{code ? t('market.sources.confirmCode') : t('market.sources.confirmText', { kind: kindLabel })}</div>
+      <div>{t(code ? 'market.sources.confirmCode' : 'market.sources.confirmText', { kind: kindLabel })}</div>
       <div className="mk-src-acts">
         <button type="button" className="btn sm" disabled={busy} onClick={onCancel}>{t('market.sources.cancel')}</button>
         <button type="button" className="btn sm primary" disabled={busy} data-store-source-install onClick={onConfirm}>{busy ? <Loader2 size={13} className="mk-spin" /> : <Download size={13} />}{t('market.sources.confirmInstall')}</button>

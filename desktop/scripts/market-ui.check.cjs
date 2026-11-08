@@ -260,7 +260,7 @@ async function main() {
     await page.locator('.mk-detail-actions .mk-wide-btn').first().click()
     await page.locator('[data-store-source-confirm-install]').waitFor()
     const confirmText = await page.locator('[data-store-source-confirm-install]').textContent()
-    check('未信任来源的第一次安装先在侧栏原地确认,点名来源', /图片 Skills 大全/.test(confirmText || '') && /不会运行代码/.test(confirmText || ''), (confirmText || '').slice(0, 80))
+    check('未信任来源的第一次安装先在侧栏原地确认,点名来源', /图片 Skills 大全/.test(confirmText || '') && /不会自己运行代码/.test(confirmText || ''), (confirmText || '').slice(0, 80))
     await page.mouse.move(1350, 880)
     await page.screenshot({ path: SHOTS.sourceConfirm, fullPage: true })
     await page.locator('[data-store-source-install]').click()

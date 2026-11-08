@@ -98,6 +98,49 @@ To ship a new version or change the Store details, select your item under Submis
 
 On the user side (desktop 2.13.8 and later), Store plugins **auto-update by default**: a new version downloads in the background and applies the next time Forsion starts. Users can turn this off for everything on the Updates page, or for one plugin on its page. Before a version is replaced, the desktop keeps the old one on the device (the 2 most recent per plugin, under `~/.forsion/.plugin-versions/`), so users can roll back in one click. Rolling back, or installing an older version from the Versions tab, pins the plugin at that version until the user chooses "Resume auto-update". **Rolling back only swaps your plugin's files; your data (work folder, `plugin-data`, settings) stays as it is.** When a new version changes a data format, make sure an older version can still read it (ignore unknown fields, never rewrite old data in place into a shape the old version cannot read), or write the new format to a new file. Core plugins (Extend, Calendar, Computer Use) follow the desktop version and are not affected.
 
+## Store sources (from 2026-11-08)
+
+A plugin can add an entry to the store's **Sources** group in the left column, pointing at a catalog you maintain, `forsion-store.json`. **A source only supplies the catalog**: the store draws the cards and details and handles download, checks, install, updates and uninstall as usual. You don't draw any UI, and you don't get a page slot in the store (`registerStoreView` is still Extend-only). Users can also click + next to Sources and paste an address themselves, no plugin needed.
+
+Declare it in the manifest (up to 4 per plugin):
+
+```json
+"storeSources": [
+  { "id": "main", "title": { "zh": "图片 Skills 大全", "en": "Image skills" }, "index": "github:pixel-lab/image-skills", "icon": "image" }
+]
+```
+
+- `id`: unique within the plugin, `^[a-z0-9][a-z0-9-]{0,31}$`. `title` is a string or `{ zh, en }`. `icon` is optional: pick one of `image` / `sparkles` / `palette` / `wrench` / `bot` / `package` / `globe` / `crown` / `coins`. Anything else gets a default icon for the address type.
+- `index`: where the catalog lives. `github:owner/repo` reads `forsion-store.json` at the root of the default branch; `https://github.com/owner/repo/tree/<ref>/<folder>` picks a branch and folder. `npm:<package>` reads `forsion-store.json` at the package root of the `latest` version, checked against the registry's sha512. An `https://` address points straight at the JSON. Private `forsion-git:` repositories come in a later step; for now they show "not available yet".
+- The source appears while your plugin is turned on and goes away when it's turned off or uninstalled. Users can switch your source off from "⋯" on the source page. When a source is gone, what was installed from it stays, but no longer updates automatically.
+
+`forsion-store.json`:
+
+```json
+{
+  "schema": 1,
+  "title": { "zh": "图片 Skills 大全", "en": "Image skills" },
+  "author": "Pixel Lab",
+  "description": "Posters, product shots, covers…",
+  "items": [
+    {
+      "id": "poster", "type": "skill", "version": "1.2.0",
+      "name": { "zh": "海报排版", "en": "Poster layout" },
+      "summary": "Lays out an event poster by size and hierarchy rules.",
+      "tags": ["poster", "layout"], "icon": "icons/poster.png", "readme": "# Poster layout\n…",
+      "minAppVersion": "2.13.8",
+      "package": { "github": "pixel-lab/image-skills", "ref": "v1.2.0", "path": "skills/poster" }
+    }
+  ]
+}
+```
+
+- `type` uses the same set as store submissions: `skill` / `amadeus-plugin` / `plugin` / `agent` / `space` / `theme`. `id` is unique within the catalog, `^[a-z0-9][a-z0-9-]{0,47}$`. **Don't change it once published**: the local install folder and updates are both keyed on it.
+- `package` is one of: `{ "github", "ref", "path"? }` downloads the repository archive at that ref, and `path` keeps just one folder of it. `{ "npm", "version", "integrity"? }` must match the item's `version`; without `integrity`, the registry's sha512 for that version is used. `{ "url", "sha256" }` requires the sha256. `{ "forsionGit", "ref", "path"? }` comes in a later step.
+- A relative `icon` resolves against where the catalog lives. npm sources have no such location, so use a full `https://` address there. Up to 1000 items and 64 KB of README per item are read; a broken item is skipped without affecting the rest. Version and platform requirements in the package manifest still apply, the same as for store items.
+- Updates: change the item's `version` and `package` in the catalog. The store updates it according to the user's auto-update settings. **If the package's origin changes (another repository, npm package name or download host), the automatic update stops** and waits for the user to click.
+- The local identity is `src-<source hash>-<item id>`, so the `market` field in `requiresPlugins` can't point at source items. The store asks once in the detail sidebar before the first install from a source, and before each item that runs code (plugins, Agents, Spaces). Source items are marked "Not reviewed by Forsion".
+
 ## Platform accounts and sign-ins (desktop 2.13.8+)
 
 Some content only loads for signed-in users (members-only, HD or rate-limited Bilibili videos). `ctx.app.platformAccounts` lets a plugin use **the account the user signed in to in the built-in browser**. Your plugin never stores the sign-in itself:
