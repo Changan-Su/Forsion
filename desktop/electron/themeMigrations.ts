@@ -13,7 +13,7 @@
  *
  * 写盘次序:先就地改 theme.json(原子替换),再写标记,最后整目录改名。任何一步之后崩了,下次启动照同一流程续上。
  */
-import { createHash } from 'crypto'
+import { createHash, randomBytes } from 'crypto'
 import { lstat, readFile, rename, rm, writeFile } from 'fs/promises'
 import { join } from 'path'
 
@@ -75,14 +75,17 @@ async function probe(path: string): Promise<'absent' | 'present' | 'unknown'> {
   try { await lstat(path); return 'present' } catch (e) { return errCode(e) === 'ENOENT' ? 'absent' : 'unknown' }
 }
 
-/** 同目录写临时文件再 rename:写到一半断电不会留下半截的 theme.json。 */
+/** 同目录写临时文件再 rename:写到一半断电不会留下半截的 theme.json。
+ *  临时名随机 + 独占创建('wx'):碰上同名文件 / 符号链接就失败,不截断也不顺着链接写;只清理自己建出来的那份。 */
 async function writeAtomic(file: string, text: string): Promise<void> {
-  const tmp = `${file}.tmp-${process.pid}`
+  const tmp = `${file}.tmp-${process.pid}-${randomBytes(6).toString('hex')}`
+  let created = false
   try {
-    await writeFile(tmp, text, 'utf8')
+    await writeFile(tmp, text, { encoding: 'utf8', flag: 'wx' })
+    created = true
     await rename(tmp, file)
   } catch (e) {
-    await rm(tmp, { force: true }).catch(() => {})
+    if (created) await rm(tmp, { force: true }).catch(() => {})
     throw e
   }
 }
