@@ -14,7 +14,7 @@ vi.mock('../services/backendService', () => ({
 vi.mock('../services/humanCollaboration', () => ({ getHumanDocument: vi.fn(), saveHumanDocument: vi.fn() }))
 const sync = vi.hoisted(() => ({ snap: null as null | Record<string, any> }))
 vi.mock('../services/syncSetup', () => ({
-  applySyncChoices: vi.fn(), getSync: () => sync.snap, refreshSync: vi.fn(async () => {}), subscribeSync: () => () => {},
+  applyOnboardingSync: vi.fn(), getSync: () => sync.snap, refreshSync: vi.fn(async () => {}), subscribeSync: () => () => {},
 }))
 vi.mock('../views/agentProfileNav', () => ({ openAgentsSpace: vi.fn() }))
 vi.mock('../achievements/store', () => ({ track: vi.fn() }))
@@ -37,7 +37,7 @@ const human = await import('../services/humanCollaboration')
 const { PRODUCT } = await import('../product')
 const { openAgentsSpace } = await import('../views/agentProfileNav')
 const { CH_ASK_KEY } = await import('./computerHistoryAskMark')
-const { applySyncChoices } = await import('../services/syncSetup')
+const { applyOnboardingSync } = await import('../services/syncSetup')
 
 let host: HTMLDivElement
 let root: Root
@@ -488,7 +488,7 @@ it('start: signed in, sync is marked Beta and off by default; an untouched choic
     expect(boxes.every((b) => !b.checked)).toBe(true)
     await walkToEnd()
     // 只交出和现状不一样的那一项:插件同步原来算开着,这次按缺省关
-    expect(applySyncChoices).toHaveBeenCalledExactlyOnceWith({ notes: false, agents: false, plugins: false }, ['plugins'])
+    expect(applyOnboardingSync).toHaveBeenCalledExactlyOnceWith({ notes: false, agents: false, plugins: false }, ['plugins'])
   } finally { delete (window as any).remoteSync }
 })
 
@@ -501,7 +501,7 @@ it('start: sync that is already on stays ticked, so finishing does not switch it
     const boxes = [...host.querySelectorAll<HTMLInputElement>('[data-ob-sync] input[type="checkbox"]')]
     expect(boxes.map((b) => b.checked)).toEqual([true, true])
     await walkToEnd()
-    expect(applySyncChoices).toHaveBeenCalledExactlyOnceWith({ notes: true, agents: true, plugins: true }, [])
+    expect(applyOnboardingSync).toHaveBeenCalledExactlyOnceWith({ notes: true, agents: true, plugins: true }, [])
   } finally { delete (window as any).remoteSync }
 })
 
@@ -515,7 +515,7 @@ it('start: when the notes sync state could not be read, its box is hidden and fi
     const labels = [...host.querySelectorAll('[data-ob-sync] label')].map((l) => l.textContent)
     expect(labels).toEqual([translate('onboarding.connect.sync.plugins')])
     await walkToEnd()
-    expect(applySyncChoices).toHaveBeenCalledExactlyOnceWith(expect.anything(), [])
+    expect(applyOnboardingSync).toHaveBeenCalledExactlyOnceWith(expect.anything(), [])
   } finally { delete (window as any).remoteSync }
 })
 
@@ -527,7 +527,7 @@ it('start: when the sync state cannot be read, no boxes are shown and finishing 
     await render()
     expect(host.querySelectorAll('[data-ob-sync] input[type="checkbox"]')).toHaveLength(0)
     await walkToEnd()
-    expect(applySyncChoices).not.toHaveBeenCalled()
+    expect(applyOnboardingSync).not.toHaveBeenCalled()
   } finally { delete (window as any).remoteSync }
 })
 
