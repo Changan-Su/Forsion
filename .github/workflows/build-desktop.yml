@@ -534,6 +534,13 @@ jobs:
             if (m.sbom.identical && m.sbom.sha256 !== own) { console.error("release-sbom.json " + own + " != build SBOM " + m.sbom.sha256); process.exit(1); }
             const stray = fs.readdirSync("artifacts").filter(n => /^build-.+-materials\.json$/.test(n));
             if (stray.length) { console.error("Unmerged build materials: " + stray.join(", ")); process.exit(1); }
+            // 每件要发的安装包 / feed 都得有构建机记下的同名同哈希(构建证据上传失败而 APK 照发 = 丢了出处,Codex 评审 11-08)。
+            const built = new Map();
+            for (const p of Object.values(m.platforms)) for (const a of p.artifacts) built.set(a.name, a.sha256);
+            const rel = JSON.parse(fs.readFileSync("artifacts/release-materials.json", "utf8")).artifacts;
+            const keep = /\.(AppImage|dmg|exe|blockmap|apk)$|^(latest|beta).*\.yml$/;
+            const bad = rel.filter(a => keep.test(a.name) && built.get(a.name) !== a.sha256).map(a => a.name);
+            if (bad.length) { console.error("No matching build evidence for: " + bad.join(", ")); process.exit(1); }
           '
           ls -la artifacts
       - name: Attest release artifacts
