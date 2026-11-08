@@ -374,17 +374,8 @@ export const AccountCard: React.FC<{
   )
 
   const webItems = accountItems(quota, quotaErr)
-  const menuEl = menu ? createPortal(
-    <OverlayAt
-      className="account-pop"
-      innerRef={(el) => { popRef.current = el }}
-      x={menu.x}
-      y={menu.y}
-      anchorTop={menu.anchorTop}
-      prefer="above"
-      margin={8}
-      onPointerDown={(e) => e.stopPropagation()}
-    >
+  // Keep a single fade target, including rows that mount while the panel is animating.
+  const menuContent = menu && <div>
       {/* 头部 = 进「Forsion 云端 → 账号」(资料、会员、安全都在那);没有那几页的宿主只是个标题 */}
       <div
         className={`ap-head${loggedIn && hasCloudPages ? ' ap-head--link' : ''}`}
@@ -474,6 +465,19 @@ export const AccountCard: React.FC<{
       {webItems.logout && <button className="ap-item ap-danger" onClick={webItems.logout.run}>
         {webItems.logout.icon}<span>{webItems.logout.label}</span>
       </button>}
+  </div>
+  const menuEl = menu ? createPortal(
+    <OverlayAt
+      className="account-pop"
+      innerRef={(el) => { popRef.current = el }}
+      x={menu.x}
+      y={menu.y}
+      anchorTop={menu.anchorTop}
+      prefer="above"
+      margin={8}
+      onPointerDown={(e) => e.stopPropagation()}
+    >
+      {menuContent}
     </OverlayAt>,
     document.body,
   ) : null
