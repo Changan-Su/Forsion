@@ -59,6 +59,10 @@ ctx.openMiniPanel?.('note', {
 
 普通 Mini 最多同时开 6 扇（藏起来的也算，语音通话那扇不算）。满了宿主不开新窗，自己提示用户先关掉一扇；调用不会抛错，插件不用处理。⌘⇧M 开合最近用过的那扇；托盘菜单「全部 Mini」列出开着的每一扇。
 
+### 用 `ctx.workspace.open` 打开(2.13.8 起)
+
+`ctx.workspace.open(viewId, { layer: { float: 'desktop' } })` 和 `openMiniPanel` 是同一扇 Mini(实体同上表:视图 + `key`)。区别是紧凑视图由主视图的 `forms.mini.view` 决定:注册 `board` 时写 `forms: { main: true, mini: { view: 'board-mini' } }`,之后打开 `board` 的 Mini 样子显示的就是 `board-mini`,「在主面板显示」回到 `board`,标题缺省用 `board` 的标题。`openMiniPanel('board-mini', { mainViewId: 'board' })` 指的是同一个实体,开出来是同一扇。同一个视图也能以 Mini 样子浮在窗口里(`{ float: 'space' }` / `'window'`),网页和手机上 `{ float: 'desktop' }` 自己降成这种卡(手机是半屏抽屉)。完整规则见[插件开发](./plugin-development.md)「统一打开入口」。
+
 ## 插件上下文
 
 `ctx.registerView({id, title, mount(el, view)})` 的第二个参数新增以下可选成员；旧宿主应先检测存在性。

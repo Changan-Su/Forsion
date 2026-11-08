@@ -24,6 +24,7 @@ import { pluginText } from '@amadeus/plugins/pluginText'
 import { setPluginCompanions } from './pluginCompanions'
 import { EmptyState } from './components/EmptyState'
 import { noteViewOpen } from '@amadeus/plugins/guideTips'
+import { openDockedView } from './workspaceOpenHost'
 
 registerMessages({
   'pluginview.mountFailed': { zh: '插件视图加载失败', en: 'Plugin view failed to load' },
@@ -232,7 +233,7 @@ export function syncPluginViews(): void {
   usePluginStore.getState().setViewOpener((type, loc, params) => {
     // P2:放开停靠位(此前写死 'main',插件 view 进侧栏只能靠 space.json 声明)。2026-10-02 起含底部面板。
     const at = loc === 'left' || loc === 'right' ? loc : loc === 'bottom' ? (hasBottom ? 'bottom' : 'right') : 'main'
-    useWorkspace.getState().openView(type, params ?? {}, at)
+    openDockedView(type, at, params) // 第三期:经 workspace.open(View 声明了 forms 时按回落规则换位置)
   }, !main ? ['main'] : hasBottom ? ['main', 'left', 'right', 'bottom'] : ['main', 'left', 'right'])
   // 关 / 换自己的视图(ctx.closeView / ctx.replaceView):两种 store 都有这两个方法,卫星窗只有一个主区,同样照办。
   usePluginStore.getState().setViewControls({

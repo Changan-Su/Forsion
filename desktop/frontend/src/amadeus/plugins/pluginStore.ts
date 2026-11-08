@@ -22,8 +22,6 @@ import { pluginHostPath } from './hostPaths'
 import { ownedChannelPatch, pluginRequestPath, type ChannelOwnership, type PluginRequestOptions } from './engineRequest'
 import { request as engineJsonRequest } from '../../services/backendService'
 
-/** ctx.openView 的 location → 停靠位(没写 / 认不得 = 主区,同 2.13.7 的 viewOpener)。 */
-const dockOf = (loc: unknown): 'main' | 'left' | 'right' | 'bottom' => (loc === 'left' || loc === 'right' || loc === 'bottom' ? loc : 'main')
 /** Mini / 浮层的身份:去空白、限长;空 = 没有。 */
 const cleanKey = (key: unknown): string | undefined => (typeof key === 'string' ? key.trim().slice(0, 128) || undefined : undefined)
 /** 插件给的 layer → 引擎的 layer。只认 dock 四位、desktop(只是 Mini / Floating Panel 换个写法)和 view / space / window
@@ -1934,12 +1932,10 @@ export const usePluginStore = create<PluginState>((set, get) => {
       set((s) => ({ toolResultRenderers: [...s.toolResultRenderers, { pluginId, item }] }))
     },
     // 打开自己的视图:类型名由宿主统一命名空间(plugin:<id>:<viewId>),防跨插件顶替。
-    // 2.13.8 起(LCL 表面规范第三期)一律经 workspace.open(lcl/engine/workspaceOpen.ts):openView / openMiniPanel /
-    // openFloatingPanel 拼好 layer / form 转过去,没声明 forms 的视图行为不变;声明了按同一套回落规则走。
-    openView: (viewId, opts) => {
-      if (!ctxAlive() || !get().viewOpener) return // 没有工作台的宿主照旧 no-op
-      void openOwn(String(viewId), opts?.params, { layer: { dock: dockOf(opts?.location) } })
-    },
+    // 2.13.8 起(LCL 表面规范第三期)一律经 workspace.open(lcl/engine/workspaceOpen.ts):openMiniPanel / openFloatingPanel
+    // 在这里拼好 layer / form 转过去,openView 经壳层打开器转;没声明 forms 的视图行为不变,声明了按同一套回落规则走。
+    // openView 照旧经宿主注入的打开器(viewOpener,没有工作台的宿主 = no-op);壳层的打开器转到 workspace.open(workspaceOpenHost.openDockedView)
+    openView: (viewId, opts) => { if (ctxAlive()) get().viewOpener?.(`plugin:${pluginId}:${viewId}`, opts?.location, opts?.params) },
     get viewLocations() { return get().viewLocations ?? undefined },
     listCapabilities: LIST_CAPABILITIES,
     // 关 / 换同样按这一代判活:视图类型名按插件 id 命名空间、新旧两代共用,旧一代迟到的回调会关掉 / 换掉新一代开着的视图。

@@ -59,6 +59,10 @@ After the user switches Space or session inside a Mini, the window counts as wha
 
 At most 6 ordinary Mini windows can be open at once (hidden ones count, the voice call window doesn't). When that's reached the host opens nothing and tells the user to close one first; the call never throws and the plugin has nothing to handle. ⌘⇧M shows or hides the most recently used one; the tray menu's "All Mini windows" lists every open one.
 
+### Opening with `ctx.workspace.open` (2.13.8+)
+
+`ctx.workspace.open(viewId, { layer: { float: 'desktop' } })` opens the same Mini window as `openMiniPanel` (same entity as in the table above: view + `key`). The difference is that the compact view comes from the main view's `forms.mini.view`: register `board` with `forms: { main: true, mini: { view: 'board-mini' } }`, and opening `board` in the Mini look shows `board-mini`, "Show in main panel" goes back to `board`, and the title defaults to `board`'s. `openMiniPanel('board-mini', { mainViewId: 'board' })` names the same entity and opens the same window. The same view can also float inside the window in the Mini look (`{ float: 'space' }` / `'window'`); on web and phones `{ float: 'desktop' }` turns into such a card by itself (a half-height sheet on phones). Full rules: "One way to open views" in [Plugin development](./plugin-development.md).
+
 ## Plugin context
 
 The second argument of `ctx.registerView({id, title, mount(el, view)})` gains the following optional members; check that they exist first on older hosts.

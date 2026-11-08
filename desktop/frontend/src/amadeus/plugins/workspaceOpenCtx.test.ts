@@ -32,17 +32,15 @@ beforeEach(() => {
 })
 
 describe('old entry points forward to workspace.open', () => {
-  it('openView → { dock: location },缺省 / 认不得的位置 = 主区', () => {
+  it('openView 照旧经宿主的打开器(壳层的打开器再转 workspace.open,见 workspaceOpenHost.test);没有工作台的宿主照旧 no-op', () => {
+    const opener = vi.fn()
+    usePluginStore.getState().setViewOpener(opener, ['main', 'right'])
     const ctx = ctxOf('p')
     ctx.openView('v', { location: 'right', params: { a: 1 } })
-    expect(open).toHaveBeenLastCalledWith({ type: 'plugin:p:v', params: { a: 1 } }, { layer: { dock: 'right' } })
-    ctx.openView('v', { location: 'top' as never })
-    expect(open).toHaveBeenLastCalledWith({ type: 'plugin:p:v', params: undefined }, { layer: { dock: 'main' } })
-  })
-  it('没有工作台的宿主:openView 照旧 no-op', () => {
-    const ctx = ctxOf('p')
+    expect(opener).toHaveBeenLastCalledWith('plugin:p:v', 'right', { a: 1 })
     usePluginStore.getState().setViewOpener(null)
     ctx.openView('v')
+    expect(opener).toHaveBeenCalledTimes(1)
     expect(open).not.toHaveBeenCalled()
   })
   it('openMiniPanel → { float: desktop } + mini,key 去空白;没点名主视图时按 forms 挑(不传 mainView)', () => {

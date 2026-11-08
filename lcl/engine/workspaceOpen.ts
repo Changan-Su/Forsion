@@ -301,7 +301,9 @@ export async function workspaceOpen(target: OpenTarget, opts: OpenOptions = {}):
     }
     case 'mini': {
       // params 照旧 openMiniPanel 的口径:顶层也带一份(Mini 应用目标时它盖在视图参数之上;Space 那条路只认它)
-      const r = await desktop!.mini!({ view: plan.view, mainView: plan.mainView, spaceId: plan.spaceId, params: target.params, key: opts.key, title: opts.title })
+      // 标题缺省 = 主视图的名字(紧凑视图的名字是实现细节;走 Space 那条路时 Mini 自己用 Space 的 mini 名)
+      const title = opts.title || (plan.spaceId ? undefined : displayTitle(plan.mainView.type))
+      const r = await desktop!.mini!({ view: plan.view, mainView: plan.mainView, spaceId: plan.spaceId, params: target.params, key: opts.key, title })
       if (r && !r.ok) return { ok: false, reason: 'limit', limit: r.limit }
       return { ok: true, layer: { float: 'desktop' }, form: 'mini' }
     }

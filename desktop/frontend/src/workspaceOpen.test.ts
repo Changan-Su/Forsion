@@ -145,7 +145,7 @@ describe('workspaceOpen', () => {
     const panel = vi.fn()
     setDesktopOpener({ mini, panel })
     expect(await workspaceOpen({ type: 'v', params: { a: 1 } }, { layer: { float: 'desktop' }, form: 'mini', key: 'k' })).toEqual({ ok: false, reason: 'limit', limit: 6 })
-    expect(mini).toHaveBeenCalledWith({ view: { type: 'v', params: { a: 1 } }, mainView: { type: 'v', params: { a: 1 } }, spaceId: undefined, params: { a: 1 }, key: 'k', title: undefined })
+    expect(mini).toHaveBeenCalledWith({ view: { type: 'v', params: { a: 1 } }, mainView: { type: 'v', params: { a: 1 } }, spaceId: undefined, params: { a: 1 }, key: 'k', title: 'V' })
     expect(await workspaceOpen({ type: 'v' }, { layer: { float: 'desktop', pin: true }, form: 'main', key: 'k' })).toEqual({ ok: true, layer: { float: 'desktop' }, form: 'main' })
     expect(panel).toHaveBeenCalledWith({ view: { type: 'v', params: undefined }, title: 'V', pin: true, key: 'k', size: undefined })
   })

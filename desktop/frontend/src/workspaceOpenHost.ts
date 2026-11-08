@@ -7,7 +7,7 @@
  * 用的时候现装(幂等):插件宿主、命令都经 hostWorkspaceOpen 进来,不依赖哪个入口先跑,手机 / 网页 / 桌面同一条路
  * (别在 main.tsx / Root.tsx 各加一行 —— 手机那份是重写的,会漏)。
  */
-import { setDesktopOpener, workspaceOpen, type OpenOptions, type OpenResult, type OpenTarget } from '@lcl/engine'
+import { getView, setDesktopOpener, useWorkspace, workspaceOpen, type OpenOptions, type OpenResult, type OpenTarget, type ViewLocation } from '@lcl/engine'
 import { openMiniWindow } from './mini/openMiniWindow'
 import { openWebFloatingPanel } from './pluginPanelSeam'
 import type { FloatingPanelOpenOptions } from '../../shared/floatingPanel'
@@ -48,6 +48,14 @@ export function installWorkspaceOpenHost(): void {
 export function hostWorkspaceOpen(target: OpenTarget, opts?: OpenOptions): Promise<OpenResult> {
   installWorkspaceOpenHost()
   return workspaceOpen(target, opts)
+}
+
+/** 插件 ctx.openView 的打开器(pluginStore.viewOpener,syncPluginViews 注入,三端同一份):停靠经 workspace.open,
+ *  View 声明了 forms 时按回落规则换位置。还没注册的类型照旧直接 openView(2.13.7 的行为:布局里先占位、注册后补上),
+ *  不让 workspace.open 的 unknown-view 把它变成 no-op。 */
+export function openDockedView(type: string, at: ViewLocation, params?: Record<string, unknown>): void {
+  if (!getView(type)) { useWorkspace.getState().openView(type, params ?? {}, at); return }
+  void hostWorkspaceOpen({ type, params: params ?? {} }, { layer: { dock: at } })
 }
 
 /** 测试用。 */
