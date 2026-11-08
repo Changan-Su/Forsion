@@ -1079,7 +1079,10 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     const left = sideTabsFor('left')
     const right = sideTabsFor('right')
     if (!sideEq(get().leftTabs, left)) set({ leftTabs: left })
-    if (!sideEq(get().rightTabs, right)) set({ rightTabs: right })
+    if (!sideEq(get().rightTabs, right)) {
+      dockTrace('rightTabs', { from: get().rightTabs.map((t) => t.type), to: right.map((t) => t.type), visible: get().rightVisible })
+      set({ rightTabs: right })
+    }
     // 主区前台视图的组变了 → 右栏按主视图规则对账(推一拍,见 queueRightRules)
     const rg = rightRulesOn() ? rightGroupNow(api, get().sidebarDefaults.right) : null
     if (rg && rg.key !== rightKey) queueRightRules()
@@ -1376,6 +1379,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   openView(type, params = {}, loc = 'main', opts) {
     const api = get().api
     if (!api) return null
+    if (type === 'sidebar-empty' || loc === 'right') dockTrace('openView', { type, loc })
     // 独立视图窗只装主区:视图自己往侧栏开东西(Agent 资料页挂载时开名册、对话的「在项目详情中打开」)一律不开,
     // 否则左右栏又长出来、开关钮还藏着收不回去(Codex 评审)。见 uiMode.IS_VIEW_WINDOW。
     if (IS_VIEW_WINDOW && (loc === 'left' || loc === 'right')) return null
