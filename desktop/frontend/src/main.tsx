@@ -53,8 +53,10 @@ try { document.documentElement.dataset.window = kind } catch { /* ignore */ }
 // 首屏即按持久化 locale 设 <html lang>(同 FOUC 主题)。
 try { document.documentElement.lang = resolveInitialLocale() === 'zh' ? 'zh-CN' : 'en' } catch { /* ignore */ }
 
-// macOS hiddenInset 标题栏:交通灯浮在左上,ribbon 顶部已留白。
-try { if (window.tangu?.platform === 'darwin') document.documentElement.dataset.platform = 'mac' } catch { /* ignore */ }
+// macOS 标题栏为交通灯留白，Windows 的后台进程视图使用内置等宽字体。
+const platform = window.tangu?.platform
+if (platform === 'darwin') document.documentElement.dataset.platform = 'mac'
+if (platform === 'win32') document.documentElement.dataset.platform = 'win'
 
 // index.html 的 FOUC 脚本已设 data-theme/data-skin/data-bg/.dark;这里接管为 registry 校验过的 语言×主题色×背景色 并激活其 CSS。
 let initSeed: string | undefined

@@ -47,7 +47,7 @@ const UI_STACK = resolveFontStack(UI_ID), MONO_STACK = resolveFontStack(MONO_ID)
 if (!UI_STACK || !MONO_STACK) throw new Error('探针预设不存在,先看 fontPresets.ts 的 BUILTIN')
 
 // 真源:base.css 的 token 底 + 两个 LCL 基座(lovable 带 [data-skin] 变体、soft 用 --font/--mono 词汇)。
-const CSS = [read('styles/base.css'), read('amadeus/theme/lcl/tangu.css'), read('amadeus/theme/lcl/tanguSoft.css')].join('\n')
+const CSS = [read('styles/base.css'), read('amadeus/theme/lcl/tangu.css'), read('amadeus/theme/lcl/tanguSoft.css'), read('views/chat2/chat2.css')].join('\n')
 
 // 每个探针都住在真实的祖先链下,量的就是「主题重定义之后我还压不压得住」。
 const PAGE = `<!doctype html><html><head><meta charset="utf-8"><style>
@@ -59,6 +59,9 @@ body { margin: 0; }
   <div class="am-app tangu-lovable" data-skin="qbird"><div id="qbird">qbird</div></div>
   <div class="am-app tangu-lovable" data-skin="custom"><div id="custom">custom</div></div>
   <div class="am-app tangu-soft"><div id="soft">soft</div></div>
+  <div class="t2-bg-cmd">npm run dev</div>
+  <div class="t2-proclog-cmd">npm run dev</div>
+  <pre class="t2-proclog-out">ready in 412 ms</pre>
 </body></html>`
 
 const PROBES = ['plain', 'lovable', 'qbird', 'custom', 'soft']
@@ -120,6 +123,22 @@ const PROBES = ['plain', 'lovable', 'qbird', 'custom', 'soft']
   check('C 清空后回到主题原值(不留残影)',
     PROBES.every((id) => restored[id]['--font-ui'] === base[id]['--font-ui']),
     PROBES.map((id) => `${id}=${restored[id]['--font-ui'] === base[id]['--font-ui'] ? 'ok' : 'drift'}`).join(' '))
+
+  const processFonts = () => p.locator('.t2-bg-cmd, .t2-proclog-cmd, .t2-proclog-out').evaluateAll(
+    (nodes) => nodes.map((node) => getComputedStyle(node).fontFamily))
+  const themeFonts = await processFonts()
+  await p.evaluate(() => { document.documentElement.dataset.platform = 'win' })
+  const windowsFonts = await processFonts()
+  check('Windows 后台命令和输出默认首选内置 JetBrains Mono',
+    windowsFonts.every((font) => /^"?JetBrains Mono Variable"?,/.test(font)), windowsFonts)
+  await inject(buildFontCss({ mono: 'system-mono' }))
+  const customFonts = await processFonts()
+  check('Windows 显式选择的等宽预设优先', customFonts.every((font) => font === 'ui-monospace, monospace'), customFonts)
+  await inject('')
+  check('Windows 恢复默认后重新使用内置等宽字体', (await processFonts()).every((font, i) => font === windowsFonts[i]))
+  await p.evaluate(() => { document.documentElement.dataset.platform = 'mac' })
+  check('macOS 后台进程仍使用主题等宽字体',
+    (await processFonts()).every((font, i) => font === themeFonts[i] && font !== windowsFonts[i]))
 
   await browser.close()
   const bad = results.filter((r) => !r.ok)
