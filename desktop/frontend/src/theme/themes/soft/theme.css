@@ -1,0 +1,52 @@
+/**
+ * Soft · 柔影 —— 设计语言:结构层(分层浮卡)。
+ * Ribbon、侧栏、主区各是一张独立圆角卡,浮在比主区纸面深一档的舞台上。层次和 Genesis 是同一套角色
+ * (舞台 < 侧栏 < 纸 < 对话里的卡),只是外框从「连成一片」变成「分开浮着」。
+ *
+ * 只管结构:圆角、字体、间距、谁铺哪一层。不声明任何颜色 token(三轴模型,DESIGN §1),舞台也是拿 --bg
+ * 推出来的;阴影走 base.css 的全局淡阴影(DESIGN §3),本文件不声明 --card-shadow 一族。
+ * 面板间距 8px 由 theme.json 的 panelGap 给(Root 据此给 Shell 加间距)。
+ */
+[data-theme='soft'] {
+  --radius-sm: 10px;
+  --radius-md: 14px;
+  --radius-lg: 18px;
+  --radius-chat-surface: var(--radius-lg);
+  --radius-chat-card: var(--radius-md);
+  --font-ui: 'Plus Jakarta Sans', 'Nunito', ui-rounded, 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+  --panel-blur: none;
+  /* 舞台:主区纸面往黑里混一点(亮 6%、暗 20%)。拿 --bg 推,不拿 --sidebar-bg —— 柔青 / 自定义的暗色里
+     侧栏比主区亮,以侧栏为准舞台会比卡亮,读成凹槽。 */
+  --soft-stage: color-mix(in oklab, var(--bg) 94%, black);
+}
+.dark[data-theme='soft'] { --soft-stage: color-mix(in oklab, var(--bg) 80%, black); }
+
+[data-theme='soft'] .shell { background: var(--soft-stage); padding: 8px; gap: 8px; }
+[data-theme='soft'] .shell-top { background: transparent; gap: 8px; }
+[data-theme='soft'] .shell-work { background: transparent; }
+/* Ribbon 卡:不描边(DESIGN §5),靠台阶 + 间距 + 全局淡阴影分开。宽度不写,展开态归引擎管。 */
+[data-theme='soft'] .rb { background: var(--sidebar-bg); border-radius: var(--radius-lg); box-shadow: var(--card-shadow); }
+/* mac 交通灯落在 Ribbon 卡顶上:卡从 8px 起,按钮让到窗口 30px 以下(和 Genesis 同一条避让线) */
+[data-platform='mac'][data-theme='soft'] .rb { padding-top: 22px; }
+
+/* 停靠组:每个组是一张卡。侧栏组(图标标签)铺侧栏色。
+   不给 --dv-activegroup-visiblepanel-tab-background-color 上色:engine.css 写明,上了色 Dockview 会把方形底
+   铺到外层 .dv-tab 上,主区获焦后标签变方块。 */
+[data-theme='soft'] .dockview-theme-lcl {
+  --dv-background-color: transparent;
+  --dv-group-view-background-color: transparent;
+  --dv-tabs-and-actions-container-background-color: transparent;
+}
+[data-theme='soft'] .dockview-theme-lcl .dv-groupview { border-radius: var(--radius-lg); box-shadow: var(--card-shadow); overflow: hidden; }
+[data-theme='soft'] .dockview-theme-lcl .dv-groupview:has(.wb-tab--icon) { background: var(--sidebar-bg); }
+/* 主区:Genesis 在组里垫一圈 --sidebar-bg 再画圆角纸卡;Soft 的组本身就是纸卡,拆掉那两层,标签栏直接在纸上。
+   底部仍让出状态栏高度(--sb-h,同 engine.css)。 */
+[data-theme='soft'] .dockview-theme-lcl .dv-groupview:not(:has(.wb-tab--icon)) { background: var(--bg); }
+[data-theme='soft'] .dockview-theme-lcl .dv-groupview:not(:has(.wb-tab--icon)) .dv-content-container {
+  background: transparent;
+  padding: 0 0 var(--sb-h, 0px);
+}
+[data-theme='soft'] .dockview-theme-lcl .dv-groupview:not(:has(.wb-tab--icon)) .dv-content-container > .dv-react-part {
+  border-radius: 0;
+  background: transparent;
+}

@@ -60,7 +60,7 @@ try { if (window.tangu?.platform === 'darwin') document.documentElement.dataset.
 let initSeed: string | undefined
 let persistedLang: string | null = null
 try { initSeed = localStorage.getItem('forsion_theme_seed') || undefined } catch { /* private mode */ }
-// 在 applyTheme 覆写 forsion_theme_lang 之前先抓住原始值:磁盘语言(soft/用户主题)首屏未加载会被回退到 lovable,
+// 在 applyTheme 覆写 forsion_theme_lang 之前先抓住原始值:磁盘语言(用户主题)首屏未加载会被回退到 lovable,
 // initThemes 据此把它接回来。
 try { persistedLang = localStorage.getItem('forsion_theme_lang') } catch { /* private mode */ }
 // Tangu 入口:打包版从引擎选中的目录取界面包(界面热更新 4b,coreTangu/load.ts),其余动态 import 编进宿主的那份。
@@ -79,7 +79,7 @@ function boot(activateTangu: Parameters<typeof installEngine>[0]): void {
     applyTheme(resolveInitialLang(), resolveInitialSkin(), resolveInitialBg(), resolveInitialEffectiveMode(), { customColor: initSeed })
     preloadAllThemes()
     document.documentElement.style.removeProperty('background') // 交还给主题 CSS
-    // 合并 ~/.tangu/themes 的磁盘主题(soft 也在其中),并把首屏被回退的磁盘语言接回来。
+    // 合并 <home>/themes 的磁盘主题,并把首屏被回退的磁盘语言接回来(迁移出来的 soft-custom 也在这里接管一次)。
     void useTheme.getState().initThemes(persistedLang)
     // ⚠️**先接翻译再注册引擎**:appStore 的缺省 `tr` 是 `(k) => k`,而 LocaleProvider 要等 React 挂载
     // 才 setTr。installEngine() 里的 registerSpaces() → Space.build() → openView() 就发生在这之前,

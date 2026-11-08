@@ -8,10 +8,7 @@ const { chromium } = require('playwright-core')
 
 const DESKTOP = path.resolve(__dirname, '..')
 const SHOT_DIR = process.env.SHADOW_SHOT_DIR || path.join(os.tmpdir(), 'forsion-shadow-audit')
-require('sucrase/register/ts')
-const { SEED_THEMES } = require(path.join(DESKTOP, 'electron/seedThemes.ts'))
-const softCss = SEED_THEMES.find((theme) => theme.id === 'soft')?.css
-if (!softCss) throw new Error('缺少第一方 soft 磁盘种子主题')
+const softCss = fs.readFileSync(path.join(DESKTOP, 'frontend/src/theme/themes/soft/theme.css'), 'utf8')
 
 function findChromium() {
   if (process.env.CHROMIUM_EXE) return process.env.CHROMIUM_EXE
