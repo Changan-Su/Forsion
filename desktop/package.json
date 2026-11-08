@@ -73,6 +73,7 @@
     "check:plugindata": "node scripts/plugin-data.e2e.cjs",
     "e2e:recall": "node scripts/recall-rewind.e2e.cjs",
     "e2e:chatevents": "node scripts/chat-events.e2e.cjs",
+    "check:agentstream": "node scripts/agent-stream-performance.check.cjs",
     "e2e:nested": "node scripts/nested-sessions.e2e.cjs",
     "e2e:anchors": "node scripts/branch-anchors.e2e.cjs",
     "e2e:chatcanvas": "node scripts/chat-canvas.e2e.cjs",

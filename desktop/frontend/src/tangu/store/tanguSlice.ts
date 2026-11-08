@@ -7,6 +7,7 @@
  * 不 import appStore 的值 —— 它是组装点,反过来引会成环。
  */
 import { useChildChat } from '../../stores/childChatStore'
+import { createRunEventBatch } from './runEventBatch'
 import type { ProjectSettings, AgentConfig, AgentRunEvent, Attachment, CtxInfo, ModelsResponse, NormalAgentDef, MsgSeg, SessionRecord, SketchItem, SubChat, TanguDesktopConfig, ToolEvent, UiMessage, WorkspaceDescriptor, StoredDesktopConfig, TeamDef, ThinkingLevel } from '../../../../../tangu-agent/src/contracts/clientTypes'
 import { clearDeviceSticky, noteDeviceRefusal } from '../../services/deviceMarks' // P1-K7a
 import { DEFAULT_CLOUD_PROJECT, DEFAULT_LOCAL_WORKSPACE_KEY, ROOTLESS_WORKSPACE_KEY, cloudProjectKey, isHomeSession, isIndependentOrbitConfig, isTeamImageAvatar, sessionWorkspaceKey, SHOW_SYSTEM_PROMPT_KEY, THINKING_LEVELS } from '../../../../../tangu-agent/src/contracts/clientTypes'
@@ -1936,6 +1937,9 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     const ac = new AbortController()
     runAborts.set(runId, ac)
     const assistantRef = { current: assistantId }
+    const events = createRunEventBatch((ev) => get().reduceEvent(sessionId, runId, assistantRef, ev))
+    const closeEvents = () => events.close()
+    ac.signal.addEventListener('abort', closeEvents, { once: true })
     set((s) => {
       // 起点 = 紧挨着的触发用户消息时间:发送时就是此刻,刷新重挂时是库里那条的时间(否则会从重挂那一刻重新计时)。
       // 前面不是用户消息(Muse/自动化触发)→ 退到助手消息自己的时间(库里那条 ≈ run 开始;新补的占位 = 此刻)。
@@ -1968,6 +1972,10 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
       // 后端已不跑此 run,但 UI 还卡 streaming → 重载消息收尾。
       let rec: any
       try { rec = (await api.listMessages(targetForSession(sessionId), sessionId)).find((r: any) => r.id === assistantRef.current) } catch { return }
+      if (ac.signal.aborted || stoppedRuns.has(runId) || get().runningBySession[sessionId] !== runId) return
+      // Persisted content is authoritative. Flush BEFORE applying it: aborting after the
+      // snapshot must not append an already-persisted buffered delta a second time.
+      events.flush()
       get().patchMessage(sessionId, assistantRef.current, (m) => {
         const content = rec?.content || m.content
         return content
@@ -1979,14 +1987,16 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
       expireRunPrompts(set, sessionId, runId) // 引擎查实已不跑:它那边的审批早没了,托盘里别留死卡
       endRun(set, get, sessionId, runId)
     })() }, 30000))
-    void subscribeRunEvents(targetForSession(sessionId), runId, (ev) => get().reduceEvent(sessionId, runId, assistantRef, ev), ac.signal)
+    void subscribeRunEvents(targetForSession(sessionId), runId, events.push, ac.signal)
       .catch((e) => {
+        events.flush() // buffered output precedes transport failure, just as it precedes an SSE error
         if (get().runningBySession[sessionId] !== runId || stoppedRuns.has(runId)) return
         if (!stoppedRuns.has(runId)) {
           get().patchMessage(sessionId, assistantRef.current, (m) => ({ ...m, status: 'error', error: e?.message || get().tr('app.eventStreamInterrupted') }))
         }
         endRun(set, get, sessionId, runId)
       })
+      .finally(() => { events.close(); ac.signal.removeEventListener('abort', closeEvents) })
   },
 
   refreshSessions: async (c) => {

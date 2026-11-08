@@ -26,6 +26,7 @@ import { ChatLinkWithCard } from './ChatLinkCard'
 import { ChatEmbed, type EmbedCtx } from './ChatEmbed'
 import { whenNear } from '../lib/nearViewport'
 import { installCopyTex } from './selectionBar/selectionMarkdown'
+import { markdownSnapshot, remarkHeadingAnchors, type MarkdownSnapshot } from './streamingMarkdown'
 
 /** 网页链接的悬停预览卡(ChatLinkCard)。⚠️ 缺省关、只由聊天回答开:本组件还给市场 README / 收件箱 / 更新日志渲第三方文本,
  *  那里的链接不该一悬停就让引擎去问 GitHub。 */
@@ -36,6 +37,7 @@ const LinkCardContext = React.createContext(false)
 
 /** 代码块细表头(语言 + 复制,走查续六 6.2 A)。⚠️ 缺省关、只由聊天回答开:别处的代码块各有自己的底色,表头的样式只写在 .t2-content 里。 */
 const CodeHeadContext = React.createContext(false)
+const StreamingContext = React.createContext(false)
 
 registerMessages({
   'code.copy': { zh: '复制', en: 'Copy' },
@@ -116,6 +118,7 @@ const hastText = (n: HastNode | undefined): string => n?.type === 'text' ? (n as
 /** 语法高亮等到代码块离视口一屏以内才做(长会话一打开不用把每个代码块都高亮一遍,高亮出的几十个 span 也晚点进 DOM)。
  *  高亮前是同字体同行高的原文,高亮只换颜色、不改排版,所以不会跳;做过一次就不撤。认不得的语言 / 没写语言照旧不高亮。 */
 function useHighlighted(preRef: React.RefObject<HTMLPreElement | null>, node: unknown): React.ReactNode | null {
+  const streaming = useContext(StreamingContext)
   const [near, setNear] = useState(false)
   useEffect(() => {
     const el = preRef.current
@@ -123,7 +126,7 @@ function useHighlighted(preRef: React.RefObject<HTMLPreElement | null>, node: un
     return whenNear(el, () => setNear(true))
   }, [near, preRef])
   const lang = fenceLang(node)
-  const text = near && lang && lowlight.registered(lang) ? hastText((node as HastNode | undefined)?.children?.find((n) => n.tagName === 'code')) : null
+  const text = !streaming && near && lang && lowlight.registered(lang) ? hastText((node as HastNode | undefined)?.children?.find((n) => n.tagName === 'code')) : null
   return useMemo(() => (text == null || !lang ? null
     : <code className={`hljs language-${lang}`}>{toJsxRuntime(lowlight.highlight(lang, text) as never, { Fragment, jsx, jsxs })}</code>), [lang, text])
 }
@@ -266,37 +269,62 @@ const Th = tableCell('th')
  * anchorPrefix:传入时给 h1/h2/h3 渲染稳定 id(`${anchorPrefix}-${第n个标题}`)+ data-toc-level,
  * 供右侧「目录」扫描跳转。不传则零影响(记忆/日志面板等普通渲染)。
  */
-export const Markdown: React.FC<{ content: string; anchorPrefix?: string; /** shell 代码块「运行」的回传与工作目录(聊天消息给;缺省=只跑不回传)。 */ run?: { onRun?: (r: RunResult) => void; cwd?: string }; /** 只读文档可隐藏运行入口，仍保留复制代码。 */ allowRun?: boolean; /** 开内联嵌入(独占一段的 `![[…]]`);缺省关,见 EmbedContext。 */ embeds?: EmbedCtx; /** 网页链接悬停出预览卡;缺省关,见 LinkCardContext。 */ linkCards?: boolean; /** 代码块细表头;缺省关,见 CodeHeadContext。 */ codeHead?: boolean; /** 段内单个换行就换行(Amadeus 笔记写法);缺省按标准 Markdown 当空格。 */ breaks?: boolean }> = React.memo(
-  ({ content, anchorPrefix, run, allowRun = true, embeds, linkCards = false, codeHead = false, breaks = false }) => {
-    const components: Record<string, any> = { pre: CodeBlock, a: WikiAnchor, p: Para, td: Td, th: Th, img: MdImage, div: MathBox }
-    if (anchorPrefix) {
-      const counter = { i: 0 }
-      const heading = (level: 1 | 2 | 3) => {
-        const Tag = `h${level}` as 'h1' | 'h2' | 'h3'
-        return ({ children, node, ...rest }: any) => (
-          <Tag id={`${anchorPrefix}-${counter.i++}`} data-toc-level={String(level)} {...rest}>
-            {children}
-          </Tag>
-        )
-      }
-      components.h1 = heading(1)
-      components.h2 = heading(2)
-      components.h3 = heading(3)
-    }
+type MarkdownProps = {
+  content: string
+  anchorPrefix?: string
+  /** Shell command result callback and session working directory. */
+  run?: { onRun?: (r: RunResult) => void; cwd?: string }
+  /** Read-only documents can hide execution while keeping code copy. */
+  allowRun?: boolean
+  /** Opt-in local embeds; never enabled for third-party README content. */
+  embeds?: EmbedCtx
+  linkCards?: boolean
+  codeHead?: boolean
+  /** Preserve single line breaks (Amadeus notes). */
+  breaks?: boolean
+  /** Live chat: cache stable blocks and defer highlighting of the growing tail. */
+  streaming?: boolean
+}
+const MD_COMPONENTS = { pre: CodeBlock, a: WikiAnchor, p: Para, td: Td, th: Th, img: MdImage, div: MathBox }
+
+/** Memoized parser/render boundary: stable blocks keep their React tree and DOM while the
+ * trailing Markdown changes. Reference-style links/footnotes use the full-document path. */
+const MarkdownPart = React.memo(({ content, anchorPrefix, headingStart = 0, breaks, streaming = false }: Pick<MarkdownProps, 'content' | 'anchorPrefix' | 'breaks' | 'streaming'> & { headingStart?: number }) => (
+  <StreamingContext.Provider value={streaming}>
+    <ReactMarkdown
+      remarkPlugins={[remarkMath, remarkGfm, remarkCjkFriendly, remarkCjkFriendlyStrikethrough, remarkWiki,
+        ...(breaks ? [remarkSoftBreaks] : []), [remarkHeadingAnchors, { prefix: anchorPrefix, start: headingStart }]]}
+      rehypePlugins={[[rehypeKatex, { throwOnError: false }], rehypeMathBox]}
+      components={MD_COMPONENTS}
+      urlTransform={urlTransform}
+    >{content}</ReactMarkdown>
+  </StreamingContext.Provider>
+))
+
+export const Markdown: React.FC<MarkdownProps> = React.memo(
+  ({ content, anchorPrefix, run, allowRun = true, embeds, linkCards = false, codeHead = false, breaks = false, streaming = false }) => {
+    const previous = React.useRef<MarkdownSnapshot | undefined>(undefined)
+    const normalized = useMemo(() => normalizeMath(content), [content])
+    const snapshot = useMemo(() => {
+      if (!streaming && !previous.current) return undefined // history/README: parse once as before
+      const next = markdownSnapshot(normalized, streaming ? previous.current : undefined)
+      previous.current = next // completion reparses the whole source; unchanged block keys preserve DOM
+      return next
+    }, [normalized, streaming])
+    const runValue = useMemo(() => ({ ...run, allowRun }), [run, allowRun])
     return (
-      <RunContext.Provider value={{ ...run, allowRun }}>
+      <RunContext.Provider value={runValue}>
         <EmbedContext.Provider value={embeds}>
           <LinkCardContext.Provider value={linkCards}>
-          <CodeHeadContext.Provider value={codeHead}>
-            <ReactMarkdown
-              remarkPlugins={breaks ? [remarkMath, remarkGfm, remarkCjkFriendly, remarkCjkFriendlyStrikethrough, remarkWiki, remarkSoftBreaks] : [remarkMath, remarkGfm, remarkCjkFriendly, remarkCjkFriendlyStrikethrough, remarkWiki]}
-              rehypePlugins={[[rehypeKatex, { throwOnError: false }], rehypeMathBox]}
-              components={components}
-              urlTransform={urlTransform}
-            >
-              {normalizeMath(content)}
-            </ReactMarkdown>
-          </CodeHeadContext.Provider>
+            <CodeHeadContext.Provider value={codeHead}>
+              {snapshot && !snapshot.whole ? snapshot.chunks.map((part, i) => (
+                <React.Fragment key={part.offset}>
+                  {i > 0 && '\n'}
+                  <MarkdownPart content={part.content} anchorPrefix={anchorPrefix} headingStart={part.headingStart} breaks={breaks}
+                    streaming={streaming && i >= snapshot.chunks.length - 2} />
+                </React.Fragment>
+              )) : <MarkdownPart content={normalized} anchorPrefix={anchorPrefix} breaks={breaks} streaming={streaming} />}
+            </CodeHeadContext.Provider>
           </LinkCardContext.Provider>
         </EmbedContext.Provider>
       </RunContext.Provider>
