@@ -120,7 +120,8 @@ function categoryTabsFor(types: MarketType[]): Tab[] {
   ]
 }
 
-interface WebApp { name: string; summary: string; handle: string; slug: string; url: string; updatedAt?: string }
+/** url 是后端那一侧的相对路径(老客户端拼 base);publicUrl 是 server 给的规范地址(forsion.app 上线后是 forsion.app/<地址>/<作品>/),老 server 没有、没配时是相对路径 */
+interface WebApp { name: string; summary: string; handle: string; slug: string; url: string; publicUrl?: string; updatedAt?: string }
 
 function TypeGlyph({ type, size = 20 }: { type: MarketType | 'webapp' | 'connector'; size?: number }) {
   const Icon = type === 'connector' ? Plug : type === 'skill' ? Wrench
@@ -769,7 +770,7 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
 
   const openWebApp = (w: WebApp): void => {
     if (!webApps) return
-    openBrowser(webApps.base + w.url)
+    openBrowser(w.publicUrl && /^https?:\/\//i.test(w.publicUrl) ? w.publicUrl : webApps.base + w.url)
     close()
   }
 

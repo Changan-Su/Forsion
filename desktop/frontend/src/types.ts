@@ -780,7 +780,7 @@ declare global {
       connectorsConnect?(id: string, taken?: string[]): Promise<{ name: string; added: boolean }>
       /** 断开的最后一步:从 MCP 配置删掉这条(只删带连接器标记的)。 */
       connectorsRemove?(name: string): Promise<void>
-      connectStore?(): Promise<{ ok: boolean; detail?: string; base?: string; items?: Array<{ name: string; summary: string; handle: string; slug: string; url: string; updatedAt?: string }> }>
+      connectStore?(): Promise<{ ok: boolean; detail?: string; base?: string; items?: Array<{ name: string; summary: string; handle: string; slug: string; url: string; publicUrl?: string; updatedAt?: string }> }>
       /** 写回文本文件(工作区 .md 编辑):原子写;expectedMtimeMs 不符返回 conflict。 */
       writeHostFile?(filePath: string, content: string, expectedMtimeMs?: number, createNew?: boolean): Promise<{ ok?: boolean; conflict?: boolean; mtimeMs: number }>
       /** 本机工作区文件操作(host 模式)。 */
