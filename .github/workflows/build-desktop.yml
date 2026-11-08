@@ -42,7 +42,7 @@ jobs:
           node-version: 24.22.1
 
       - name: Independent release policy tests
-        run: node --test scripts/engine-release-gate.test.mjs ../desktop/scripts/release-channel.test.mjs ../mobile/scripts/update-fixture.test.mjs
+        run: node --test scripts/engine-release-gate.test.mjs ../desktop/scripts/release-channel.test.mjs ../desktop/scripts/release-merge-materials.test.mjs ../mobile/scripts/update-fixture.test.mjs
 
       # Desktop and engine versions are independent; validate the bundled engine in its own release history.
       - name: Desktop and bundled engine release identities
@@ -305,9 +305,17 @@ jobs:
             desktop/dist/latest*.yml
             desktop/dist/beta*.yml
             desktop/dist/*.blockmap
+          if-no-files-found: ignore
+
+      # 构建证据单独成 artifact(名字不以 forsion- 开头,release 不会原样挂上去),由 release-metadata 合并成一份。
+      - name: Upload build materials
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # actions/upload-artifact@v4
+        with:
+          name: materials-${{ matrix.os }}-${{ matrix.distribution }}
+          path: |
             desktop/dist/build-*-materials.json
             desktop/dist/build-*-sbom.json
-          if-no-files-found: ignore
+          if-no-files-found: error
 
   # Android APK(Capacitor):随桌面 release 顺便出包。
   # 签名:配了 ANDROID_KEYSTORE_B64/_PASSWORD/_ALIAS/_KEY_PASSWORD 四个 secrets → 正式签名 release 包;
@@ -436,10 +444,58 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # actions/upload-artifact@v4
         with:
           name: forsion-android
+          path: mobile/android/Forsion-Tangu-*.apk
+
+      - name: Upload Android build materials
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # actions/upload-artifact@v4
+        with:
+          name: materials-android
           path: |
-            mobile/android/Forsion-Tangu-*.apk
             mobile/android/build-android-materials.json
             mobile/android/build-android-sbom.json
+          if-no-files-found: error
+
+  # 把各构建 job 的证据(每个平台一对 materials + sbom)并成一份 build-materials.json(11-08)。
+  # 以前 7 对原样挂进 Release:7 份 sbom 字节完全相同(源锁清单,同一 commit 必然相同),同一份 2 MB 挂 7 遍。
+  # 现在:各平台 materials 原样收进 platforms[<平台>];sbom 全相同就一份不挂(release-sbom.json 就是它,哈希记在这里),不同才逐平台保留。
+  # 推 tag 与手动预跑都跑这一步(只读、只下几十 KB),所以预跑就能看到 Release 将要挂的资产单。
+  release-metadata:
+    needs: [build, build-android]
+    if: always() && needs.build.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # actions/checkout@v4
+      - name: Download build materials
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # actions/download-artifact@v8.0.2
+        with:
+          path: evidence
+          pattern: materials-*
+          merge-multiple: true
+      - name: Merge build materials
+        run: node desktop/scripts/release-merge-materials.cjs evidence release-metadata
+      - name: Expected release assets
+        run: |
+          node -e '
+            const m = require("./release-metadata/build-materials.json");
+            const keep = /\.(AppImage|dmg|exe|blockmap|apk)$|^(latest|beta).*\.yml$/;
+            const names = new Set(["build-materials.json", "release-materials.json", "release-sbom.json"]);
+            for (const p of Object.values(m.platforms)) for (const a of p.artifacts) if (keep.test(a.name)) names.add(a.name);
+            for (const f of require("fs").readdirSync("release-metadata")) names.add(f);
+            const list = [...names].sort();
+            const md = ["### Release 将挂的资产(" + list.length + " 件)", "", ...list.map(n => "- `" + n + "`"), "",
+              "sbom:" + (m.sbom.identical ? "各平台相同,只挂 release-sbom.json(sha256 " + m.sbom.sha256 + ")" : "各平台不同,逐平台保留")];
+            require("fs").appendFileSync(process.env.GITHUB_STEP_SUMMARY, md.join("\n") + "\n");
+            console.log(md.join("\n"));
+          '
+      - name: Upload release metadata
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # actions/upload-artifact@v4
+        with:
+          name: forsion-release-metadata
+          path: release-metadata/
+          if-no-files-found: error
 
   # 仅在推 v* tag 时(手动触发一律不发,哪怕 ref 选的是 tag):收集三平台 × 两种桌面发行版(+APK)→ 创建/更新对应 Release 并附件。
   # APK 是「顺便」:build-android 失败不挡桌面发版(always + 只硬依赖 test、unit-tests、build 成功)。
@@ -449,9 +505,9 @@ jobs:
       contents: write
       id-token: write
       attestations: write
-    needs: [test, unit-tests, build, build-android]
+    needs: [test, unit-tests, build, build-android, release-metadata]
     # 只认 tag 的 push:手动触发也能选 tag 当 ref(--ref v2.13.8-beta.4),光看 ref 会让预跑把 Release 发出去(Codex 评审 11-08)。
-    if: always() && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && needs.test.result == 'success' && needs.unit-tests.result == 'success' && needs.build.result == 'success'
+    if: always() && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && needs.test.result == 'success' && needs.unit-tests.result == 'success' && needs.build.result == 'success' && needs.release-metadata.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     concurrency:
@@ -464,10 +520,22 @@ jobs:
         with:
           path: artifacts
           pattern: forsion-*
-          merge-multiple: true   # 六个桌面 artifact + APK;安装包和 feed 名均区分发行版,不互相覆盖
+          merge-multiple: true   # 六个桌面 artifact + APK + forsion-release-metadata;安装包和 feed 名均区分发行版,不互相覆盖
 
       - name: Record release materials
         run: node desktop/scripts/release-materials.cjs artifacts
+      # 各平台 sbom 没挂上去的前提是「和这份 release-sbom.json 字节相同」:release 与构建检出的是同一个 commit 才成立,不同就别发。
+      - name: Check release SBOM matches the build SBOMs
+        run: |
+          node -e '
+            const fs = require("fs"), crypto = require("crypto");
+            const m = JSON.parse(fs.readFileSync("artifacts/build-materials.json", "utf8"));
+            const own = crypto.createHash("sha256").update(fs.readFileSync("artifacts/release-sbom.json")).digest("hex");
+            if (m.sbom.identical && m.sbom.sha256 !== own) { console.error("release-sbom.json " + own + " != build SBOM " + m.sbom.sha256); process.exit(1); }
+            const stray = fs.readdirSync("artifacts").filter(n => /^build-.+-materials\.json$/.test(n));
+            if (stray.length) { console.error("Unmerged build materials: " + stray.join(", ")); process.exit(1); }
+          '
+          ls -la artifacts
       - name: Attest release artifacts
         uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661 # v3
         with:
