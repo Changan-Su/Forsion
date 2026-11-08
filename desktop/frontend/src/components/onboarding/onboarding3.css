@@ -84,7 +84,7 @@ html.dark .ob3-paper { --hpw-grain-blend: screen; --hpw-halo: 16%; --hpw-halo-mi
 .ob3-tele small { display: block; color: var(--text-faint); font-size: var(--ui-font-meta, 12px); }
 .ob3-info { display: inline-grid; place-items: center; width: 18px; height: 18px; padding: 0; margin-left: 2px; vertical-align: -4px; border: 0; border-radius: 50%; background: transparent; color: var(--text-faint); cursor: pointer; }
 .ob3-info[aria-expanded='true'] { background: var(--overlay-medium, rgba(127, 127, 127, .14)); color: var(--text); }
-.ob3-pop { position: absolute; z-index: 3; left: 96px; bottom: 36px; width: min(300px, calc(100% - 24px)); padding: 14px 16px; background: var(--bg-card); border-radius: var(--radius-md); box-shadow: var(--card-shadow); display: grid; gap: 8px; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); line-height: 1.55; }
+.ob3-pop { position: absolute; z-index: 3; left: 96px; bottom: 36px; width: min(300px, calc(100% - 24px)); padding: 14px 16px; background: var(--surface-menu, var(--bg-card)); backdrop-filter: var(--surface-blur, none); border-radius: var(--radius-md); box-shadow: var(--card-shadow); display: grid; gap: 8px; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); line-height: 1.55; }
 .ob3-pop b { color: var(--text); font-size: var(--ui-font-body, 13px); font-weight: 600; }
 .ob3-pop ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 3px; }
 .ob3-pop li { display: flex; gap: 6px; } .ob3-pop li svg { flex: none; margin-top: 2px; color: var(--text-faint); }

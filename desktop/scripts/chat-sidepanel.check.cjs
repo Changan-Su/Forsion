@@ -676,6 +676,37 @@ async function main() {
 
   // ── 23-24 卡片不描边 / glass 输入卡真的是磨砂 ─────────────────────────────────
   // 颜色可能被 Chrome 报成 `color(srgb r g b / a)`(color-mix 的结果),不只有 rgba() 那一种写法。
+  // 样式表里所有读 --surface-menu / --surface-float 的规则,按类名链各插一颗探针、量计算后的底色与模糊。
+  // 新浮层只要读了 token 就自动被量到 —— 不再只靠手写表(11-08 检修:10 月后新加的十几个浮层没进手写表,
+  // 在 Glass 下是实色,检查照样绿)。带属性 / 伪类 / 子代组合子的选择器交给手写表;
+  // 懒加载还没进场的样式表(Amadeus 一部分)由 surfaceTokens.test.ts 静态兜住。
+  // 自动探针只量「还读 token」的规则 —— 某个浮层退回实色就悄悄掉出探针表。常驻样式表里这几个必须一直在(Codex 评审 11-08)。
+  const SURFACE_REQUIRED = ['.modal', '.memv-modal-box', '.ctx-menu', '.ui-popover', '.composer-menu', '.cm-sub', '.account-pop', '.ntf', '.ui-zoom-hud', '.cmd-panel', '.lcl-tip', '.lcl-hovercard', '.lcl-ftoc-panel']
+  const SURFACE_PROBES = `const surfaceProbes = () => {
+  const auto = {}
+  const walk = (rules) => {
+    for (const r of rules) {
+      if (r.cssRules && !r.selectorText) { walk(r.cssRules); continue }
+      if (!r.selectorText) continue
+      const tierName = r.cssText.includes('var(--surface-menu') ? 'menu' : r.cssText.includes('var(--surface-float') ? 'float' : null
+      if (!tierName) continue
+      for (const raw of r.selectorText.split(',')) {
+        const sel = raw.trim()
+        if (auto[sel] || /[\\[:>+~*]/.test(sel)) continue
+        const chain = sel.split(/\\s+/).map((c) => c.split('.').filter(Boolean))
+        if (chain.some((c) => !c.length || !sel.startsWith('.'))) continue
+        let host = document.body
+        const made = []
+        for (const cls of chain) { const el = document.createElement('div'); el.className = cls.join(' '); host.appendChild(el); made.push(el); host = el }
+        const cs = getComputedStyle(host)
+        auto[sel] = { b: (cs.backdropFilter || cs.webkitBackdropFilter) !== 'none', a: alphaOf(cs.backgroundColor), tier: tierName }
+        made[0].remove()
+      }
+    }
+  }
+  for (const sh of document.styleSheets) { try { walk(sh.cssRules) } catch { /* 跨源样式表读不了 */ } }
+  return auto
+}`
   const ALPHA = `const alphaOf = (c) => { const m = /\\/\\s*([0-9.]+)\\s*\\)/.exec(c) || /rgba\\(\\s*[\\d.]+\\s*,\\s*[\\d.]+\\s*,\\s*[\\d.]+\\s*,\\s*([0-9.]+)\\s*\\)/.exec(c); return m ? parseFloat(m[1]) : 1 }`
   const rings = await win.evaluate(`(() => {
     ${ALPHA}
@@ -699,6 +730,22 @@ async function main() {
     JSON.stringify(rings) + '(值 = 描边色 alpha,须全 0)',
   )
 
+  // 25d:缺省语言(Genesis)下所有读 --surface-* 的浮层都是实底、不模糊。11-08 用户报协议更新弹窗在 Genesis 下半透明:
+  // .modal 原先用 --bg-glass(九成不透明)+ --panel-blur,而 Genesis 的 --panel-blur 是 none —— 半透又不糊。
+  // Amadeus 的命令面板在所有主题下都自带一层模糊(它自己的设计),单独放行。
+  const solidGenesis = await win.evaluate(`(() => {
+    ${ALPHA}
+    ${SURFACE_PROBES}
+    return { theme: document.documentElement.dataset.theme, auto: surfaceProbes() }
+  })()`)
+  const genesisBad = Object.entries(solidGenesis.auto).filter(([k, v]) => k !== '.am-app .cmd-panel' && (v.b || v.a !== 1))
+  check(
+    '25d 缺省语言:所有读 --surface-* 的浮层都是实底、不模糊(协议弹窗不再半透)',
+    Object.keys(solidGenesis.auto).length >= 30 && genesisBad.length === 0 && SURFACE_REQUIRED.every((k) => k in solidGenesis.auto),
+    `${solidGenesis.theme} · ${Object.keys(solidGenesis.auto).length} 个探针;不合格:` + (genesisBad.map(([k, v]) => `${k}:${v.b ? '糊' : '实'}/${v.a}`).join(' ') || '无')
+      + ';缺:' + (SURFACE_REQUIRED.filter((k) => !(k in solidGenesis.auto)).join(' ') || '无'),
+  )
+
   // glass 主题只能这样验:启用它的样式表 + 打 data-theme(与 loader 做的事一致),等一帧再量。
   // Glass 输入卡与菜单分档:输入卡主区 50% 看景深,菜单用可调 float 保证侧栏/portal 可读。
   await win.evaluate(`(() => {
@@ -709,6 +756,7 @@ async function main() {
   await win.waitForTimeout(1200)
   const glass = await win.evaluate(`(() => {
     ${ALPHA}
+    ${SURFACE_PROBES}
     const card = document.querySelector('.t2c-card')
     if (!card) return null
     const shell = getComputedStyle(card)
@@ -740,7 +788,6 @@ async function main() {
       ['ntf', 'ntf', '', 'float'],
       ['wsfile-panel', 'wsfile-panel', '', 'float'],
       ['unitsw-menu', 'unitsw-menu', '', 'fallback'],
-      ['t2sw-plug-menu', 't2sw-plug-menu', '', 'fallback'],
       ['selbar', 'ui-popover selbar', '', 'menu'],
       ['selbar-dense', 'ui-popover selbar', '', 'fallback', 'data-dense'],
       ['lcl-tip', 'lcl-tip', '', 'fallback'],
@@ -766,6 +813,25 @@ async function main() {
       menus[name] = { b: (s.backdropFilter || s.webkitBackdropFilter) !== 'none', a: alphaOf(s.backgroundColor), tier: tierName }
       p.remove()
     }
+    const auto = surfaceProbes()
+    // 25c:非 mac(Windows / Linux / 浏览器)没有原生玻璃,外壳 / 侧栏要回实色,菜单的 CSS 磨砂照旧。
+    const root = document.documentElement
+    const platform = root.dataset.platform
+    delete root.dataset.platform
+    const groups = [...document.querySelectorAll('.dv-groupview')]
+    const paneG = groups.find((g) => g.querySelector('.wb-tab--icon'))
+    const chromeG = groups.find((g) => !g.querySelector('.wb-tab--icon'))
+    const probeMenu = document.createElement('div')
+    probeMenu.className = 'ctx-menu'
+    document.body.appendChild(probeMenu)
+    const pm = getComputedStyle(probeMenu)
+    const nonMac = {
+      pane: paneG ? alphaOf(getComputedStyle(paneG).backgroundColor) : null,
+      chrome: chromeG ? alphaOf(getComputedStyle(chromeG).backgroundColor) : null,
+      menu: { b: pm.backdropFilter !== 'none', a: alphaOf(pm.backgroundColor) },
+    }
+    probeMenu.remove()
+    if (platform) root.dataset.platform = platform
     const sideGroup = [...document.querySelectorAll('.dv-groupview')].find((g) => g.querySelector('.wb-tab--icon'))
     if (sideGroup) {
       const p = document.createElement('div')
@@ -781,6 +847,8 @@ async function main() {
       borderAlpha: alphaOf(shell.borderTopColor),
       tier,
       menus,
+      auto,
+      nonMac,
     }
   })()`)
   // 侧栏那边**不能**也是薄档:08-14 实测,侧栏的 backdrop 里没有 app 画的不透明像素
@@ -803,6 +871,18 @@ async function main() {
       return m.b && m.a >= lo && m.a <= hi
     }),
     glass ? Object.entries(glass.menus).map(([k, v]) => `${k}:${v.tier}/${v.b ? '糊' : '实色'}/${v.a}`).join(' ') : 'no probe',
+  )
+  const autoBad = glass ? Object.entries(glass.auto).filter(([, v]) => !(v.b && v.a >= 0.5 && v.a <= 0.92)) : []
+  check(
+    '25b glass 主题:所有读 --surface-* 的浮层都有磨砂、既非实色也非透明薄片(按样式表自动插探针)',
+    !!glass && Object.keys(glass.auto).length >= 30 && autoBad.length === 0 && SURFACE_REQUIRED.every((k) => k in glass.auto),
+    glass ? `${Object.keys(glass.auto).length} 个探针;不合格:` + (autoBad.map(([k, v]) => `${k}:${v.tier}/${v.b ? '糊' : '实色'}/${v.a}`).join(' ') || '无')
+      + ';缺:' + (SURFACE_REQUIRED.filter((k) => !(k in glass.auto)).join(' ') || '无') : 'no probe',
+  )
+  check(
+    '25c glass 主题 · 非 mac:外壳 / 侧栏回实色,菜单仍是磨砂',
+    !!glass && glass.nonMac.pane === 1 && glass.nonMac.chrome === 1 && glass.nonMac.menu.b && glass.nonMac.menu.a < 0.9,
+    JSON.stringify(glass && glass.nonMac),
   )
 
   await app.close()

@@ -55,7 +55,7 @@
 /* slash / @ 菜单(浮在卡上方) */
 .t2c-menu {
   position: absolute; bottom: 100%; left: 0; right: 0; margin-bottom: 6px;
-  background: var(--bg-card, var(--bg)); border: var(--border-width, 1px) solid var(--border);
+  background: var(--surface-menu, var(--bg-card, var(--bg))); backdrop-filter: var(--surface-blur, none); border: var(--border-width, 1px) solid var(--surface-edge, var(--border));
   border-radius: var(--radius-md, 12px); max-height: 260px; overflow-y: auto; z-index: 30;
   box-shadow: var(--card-shadow, 0 8px 28px rgba(0, 0, 0, 0.18)); padding: 6px;
 }
@@ -202,8 +202,8 @@
   min-width: 0;
   max-width: calc(100cqw - 16px);
   padding: 5px;
-  background: var(--bg-card, var(--bg));
-  border: var(--border-width, 1px) solid var(--border);
+  background: var(--surface-menu, var(--bg-card, var(--bg))); backdrop-filter: var(--surface-blur, none);
+  border: var(--border-width, 1px) solid var(--surface-edge, var(--border));
   border-radius: var(--radius-lg);
   box-shadow: var(--card-shadow);
   animation: pop 0.16s var(--ease-spring);
@@ -298,7 +298,7 @@
 .t2c-ctxring-pop {
   position: absolute; bottom: calc(100% + 8px); left: 0; z-index: 30;
   display: none; flex-direction: column; gap: 7px; padding: 11px 12px; width: 300px; max-width: calc(100vw - 32px); box-sizing: border-box;
-  background: var(--bg-card, var(--bg)); border: var(--border-width, 1px) solid var(--border);
+  background: var(--surface-menu, var(--bg-card, var(--bg))); backdrop-filter: var(--surface-blur, none); border: var(--border-width, 1px) solid var(--surface-edge, var(--border));
   border-radius: var(--radius-md, 12px); box-shadow: var(--card-shadow, 0 8px 28px rgba(0, 0, 0, 0.18));
   font-size: var(--ui-font-meta, 12px); font-family: var(--font-ui); color: var(--text-muted); text-align: left;
 }

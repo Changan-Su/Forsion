@@ -7,7 +7,7 @@
   left: 0;
   top: 0;
   pointer-events: none; /* 浮层不吃鼠标:贴着触发点弹出时自己抢走 hover 会闪 */
-  background: var(--bg-card, var(--bg));
+  background: var(--surface-menu, var(--bg-card, var(--bg))); backdrop-filter: var(--surface-blur, none);
   color: var(--text);
   box-shadow: var(--card-shadow);
   font-family: var(--font-ui);

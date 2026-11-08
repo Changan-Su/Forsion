@@ -100,8 +100,8 @@
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-width: none; /* 展开时定位到当前项会闪一下系统滚动条,贴着液体的边很硬;位置已由刻度表示 */
-  background: var(--bg-card, var(--bg));
-  border: var(--border-width, 1px) solid var(--border);
+  background: var(--surface-float, var(--bg-card, var(--bg))); backdrop-filter: var(--surface-blur, none);
+  border: var(--border-width, 1px) solid var(--surface-edge, var(--border));
   border-radius: var(--radius-md, 12px);
   box-shadow: var(--card-shadow);
 }
