@@ -1341,7 +1341,7 @@ button.hp-organizer-mark:hover { color: var(--text); background: var(--bg-hover)
 .hp-root.hp-organizer-host { position: fixed; inset: 0; z-index: 120; display: block; padding: 0; background: transparent; -webkit-app-region: no-drag; }
 
 /* ───────── 主页第四轮:左右栏小组件 + 下排 + 编辑态(桌面;手机不渲染这些节点) ─────────
- * 三条轨道各占各的:外边 16 · 侧栏 256 · 中间固定 840,之间至少 32(门槛与让位在 HomeWidgetParts.tsx 算)。
+ * 三条轨道各占各的:外边 16 · 侧栏 216–256(--hp-rail-w,放不下先缩再收)· 中间固定 840,之间至少 32(门槛与让位在 HomeWidgetParts.tsx 算)。
  * 卡面和近况卡同一种玻璃;空位是淡底,不画虚线。放在文件末尾:同特异性的覆盖块要压住前面的基础规则(DESIGN §7)。 */
 .hp-stack { left: 0; }
 .hp-rail {
@@ -1349,7 +1349,7 @@ button.hp-organizer-mark:hover { color: var(--text); background: var(--bg-hover)
   z-index: 3;
   top: calc(var(--hp-chrome-top, 0px) + 96px);
   bottom: calc(var(--hp-chrome-bottom, 0px) + 24px);
-  width: 256px;
+  width: var(--hp-rail-w, 256px);
   display: flex;
   flex-direction: column;
   gap: 12px;

@@ -146,12 +146,41 @@ async function main() {
     await captureWindow(app, path.join(OUT, 'edit-mode.png'))
     await win.locator('.hp-edit-done').first().click(); await sleep(500)
 
-    // ── 窄窗:收成图标条,用各自的图标 ──
+    // ── 窗口变窄(11-08:空栏不占地方、栏先缩到 216 再收;原来 1280 窗就收成图标条)──
     await win.evaluate((k) => { localStorage.removeItem(k); window.dispatchEvent(new StorageEvent('storage', { key: k })) }, KEY)
+    const geo = () => win.evaluate(() => {
+      const root = document.querySelector('.hp-root'), c = document.querySelector('.hp-stack')?.getBoundingClientRect(), r = document.querySelector('.hp-rail-right')?.getBoundingClientRect()
+      return { home: root?.offsetWidth, rails: root?.getAttribute('data-rails'), railW: r ? Math.round(r.width) : null, gap: c && r ? Math.round(r.left - c.right) : null }
+    })
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1280, 800)); await sleep(1200)
+    const g1280 = await geo()
+    check('1280 窗(左栏空):右栏照样展开,不收成图标条', /-open$/.test(g1280.rails || '') && g1280.railW >= 216 && g1280.gap >= 31, JSON.stringify(g1280))
+    await captureWindow(app, path.join(OUT, 'rail-1280.png'))
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1200, 800)); await sleep(1200)
+    const g1200 = await geo()
+    check('1200 窗:右栏先变窄(216–255)再说,和中间仍隔 ≥32', /-open$/.test(g1200.rails || '') && g1200.railW >= 216 && g1200.railW < 256 && g1200.gap >= 31, JSON.stringify(g1200))
+    await captureWindow(app, path.join(OUT, 'rail-1200.png'))
+
+    // ── 窄窗:收成图标条,用各自的图标 ──
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1100, 800)); await sleep(1200)
     const strip = await win.evaluate(() => [...document.querySelectorAll('.hp-rail-right.hp-strip .hp-strip-btn')].map((b) => (b.querySelector('img') ? 'img' : b.querySelector('svg')?.getAttribute('class') || '')))
-    check('窄窗:右栏收成三颗图标(插件用插件图标)', strip.length === 3, JSON.stringify(strip))
-    await captureWindow(app, path.join(OUT, 'strip-1280.png'))
+    check('窄窗(1100):右栏收成三颗图标(插件用插件图标)', strip.length === 3, `${JSON.stringify(strip)} ${JSON.stringify(await geo())}`)
+    await captureWindow(app, path.join(OUT, 'strip-1100.png'))
+
+    // ── 两栏都有卡:1460 窗(主页 < 1448)两栏缩窄后照样都展开 ──
+    await win.evaluate((k) => {
+      const l = JSON.parse(localStorage.getItem(k) || 'null')
+      localStorage.setItem(k, JSON.stringify({ ...(l || {}), left: ['builtin:inbox'], right: ['plugin:forsion-calendar/today', 'plugin:forsion-calendar/todo', 'builtin:muse'], center: (l && l.center) || ['clock', 'composer', 'row', 'dock'], row: (l && l.row) || [{ id: 'builtin:status', w: 4 }] }))
+      window.dispatchEvent(new StorageEvent('storage', { key: k }))
+    }, KEY)
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1460, 860)); await sleep(1200)
+    const both = await win.evaluate(() => {
+      const root = document.querySelector('.hp-root'), c = document.querySelector('.hp-stack')?.getBoundingClientRect()
+      const l = document.querySelector('.hp-rail-left')?.getBoundingClientRect(), r = document.querySelector('.hp-rail-right')?.getBoundingClientRect()
+      return { home: root?.offsetWidth, rails: root?.getAttribute('data-rails'), lw: l && Math.round(l.width), rw: r && Math.round(r.width), gapL: c && l ? Math.round(c.left - l.right) : null, gapR: c && r ? Math.round(r.left - c.right) : null }
+    })
+    check('两栏都有卡(1460 窗):缩窄后两栏都展开,两边和中间都隔 ≥32', both.rails === 'open-open' && both.lw >= 216 && both.gapL >= 31 && both.gapR >= 31, JSON.stringify(both))
+    await captureWindow(app, path.join(OUT, 'both-1460.png'))
   } finally {
     await ctx.close()
   }
