@@ -11,7 +11,7 @@ import { amadeusAvailable } from './features/runtime'
  */
 import React, { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState, useSyncExternalStore } from 'react'
 import { Puzzle, RotateCw, TriangleAlert, type LucideIcon } from 'lucide-react'
-import { registerView, unregisterView, useWorkspace, getActiveSpace, getView, showInMainPanel, useViewModes, ViewHead, type ViewProps, type ViewModeOption } from '@lcl/engine'
+import { registerView, unregisterView, useWorkspace, getActiveSpace, getView, showInMainPanel, useViewModes, ViewHead, type ViewForms, type ViewProps, type ViewModeOption } from '@lcl/engine'
 import { notePluginGesture, usePluginStore } from '@amadeus/plugins/pluginStore'
 import { recordDevMountError } from '@amadeus/plugins/devRecords'
 import { setDevViewBridge } from '@amadeus/plugins/devSandbox'
@@ -35,7 +35,7 @@ registerMessages({
  *  `pluginId` 只在经插件命名空间注册时有(见下方 factory);带上它,挂载失败才能按插件记账 —— 控制台里
  *  那行 `[plugin-view] mount failed` 谁都看得见,但开发者看不见「是我的插件炸的」。
  *  `onMountError`:挂载抛错时额外通知调用方(Muse Space 主槽拿它回写给 Muse);走 ref,换了回调身份不重挂。 */
-export const PluginViewHost: React.FC<ViewProps & { def: ViewContribution; pluginId?: string; onMountError?: (e: unknown) => void }> = ({ def, pluginId, onMountError, extendView, leaf, params }) => {
+export const PluginViewHost: React.FC<ViewProps & { def: ViewContribution; pluginId?: string; onMountError?: (e: unknown) => void }> = ({ def, pluginId, onMountError, extendView, leaf, params, surface }) => {
   const ref = useRef<HTMLDivElement>(null)
   // ctx.ui.setViewModes:插件报的看法 → 头行(胶囊在左、插件的按钮在右)+ 同原生视图的 ⌥⌘V / 命令面板 / 手机顶栏
   const [hostEl, setHostEl] = useState<HTMLDivElement | null>(null)
@@ -63,6 +63,9 @@ export const PluginViewHost: React.FC<ViewProps & { def: ViewContribution; plugi
   const disposeBeforePaint = useRef<(() => void) | null>(null)
   const current = useRef({ leaf, params })
   current.current = { leaf, params }
+  // workspace.open 浮在窗口里的那一份(引擎 FloatViews 给):按样子报 surface,「在主面板显示」走它给的。走 ref,每次渲染换对象不重挂
+  const floatSurface = useRef(surface)
+  floatSurface.current = surface
   const listeners = useRef(new Set<(params: Readonly<Record<string, unknown>>) => void>())
   useLayoutEffect(() => { for (const notify of listeners.current) notify(params) }, [params])
   // 插件视图读写库内路径(ctx.app.readFile / listFiles…),而库是惰性恢复的:只有左栏工作区、聊天、Agent Desk 这些
@@ -83,8 +86,9 @@ export const PluginViewHost: React.FC<ViewProps & { def: ViewContribution; plugi
     let alive = true
     const check = (): void => { if (!alive) throw new Error('View has been disposed') }
     const kind = windowKind()
-    const isMini = kind === 'mini'
-    const isFloating = kind === 'floating' || !!el.closest('.floating-panel-window')
+    const floated = floatSurface.current
+    const isMini = kind === 'mini' || floated?.form === 'mini'
+    const isFloating = !isMini && (kind === 'floating' || !!el.closest('.floating-panel-window') || !!floated)
     // 记下「用户刚在这个插件的视图里点过 / 按过键」(捕获阶段、只认 isTrusted):ctx.agent.updateTodo 的手势闸只认它
     const gestureEvents = ['pointerdown', 'click', 'keydown'] as const
     const onGesture = (e: Event): void => { if (e.isTrusted && pluginId) notePluginGesture(pluginId) }
@@ -105,10 +109,10 @@ export const PluginViewHost: React.FC<ViewProps & { def: ViewContribution; plugi
         extendView, surface: isMini ? 'mini' : isFloating ? 'floating' : 'main',
         getParams: () => { check(); return { ...(useWorkspace.getState().leafById(current.current.leaf.id)?.params ?? current.current.params) } },
         setParams: (patch) => { check(); current.current.leaf.setParams({ ...(useWorkspace.getState().leafById(current.current.leaf.id)?.params ?? current.current.params), ...patch }) },
-        setCompanionsVisible: (visible) => { check(); if (kind === 'main' && !isFloating) setPluginCompanions(pluginId, current.current.leaf.id, def, visible) },
+        setCompanionsVisible: (visible) => { check(); if (kind === 'main' && !isFloating && !isMini) setPluginCompanions(pluginId, current.current.leaf.id, def, visible) },
         close: () => { check(); current.current.leaf.close() },
         onParamsChanged: (listener) => { check(); listeners.current.add(listener); return () => { listeners.current.delete(listener) } },
-        showInMainPanel: isMini ? () => {
+        showInMainPanel: floated ? (floated.showInMain ? () => { check(); floatSurface.current?.showInMain?.() } : undefined) : isMini ? () => {
           check()
           const space = getActiveSpace()
           if (space?.mini) showInMainPanel({ spaceId: space.id, type: space.mini.mainView.type,
@@ -194,6 +198,20 @@ function viewIcon(name: string | undefined): LucideIcon {
   if (!Glyph) return Puzzle
   return (({ size, className }: { size?: number; className?: string }) => <Glyph width={size} height={size} className={className} />) as unknown as LucideIcon
 }
+
+/** 插件声明的样子(ViewContribution.forms)→ 引擎的 ViewForms:紧凑视图是本插件的相对 id,前缀由宿主拼(只能指自己的)。
+ *  形状不对的项当没写(不支持);整个不是对象 = 没声明(全都行)。 */
+export function pluginForms(pid: string, raw: unknown): ViewForms | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined
+  const f = raw as Record<string, unknown>
+  const m = f.mini
+  const mini = m === true ? true
+    : m && typeof m === 'object' && typeof (m as { view?: unknown }).view === 'string' && (m as { view: string }).view.trim()
+      ? { view: { type: `plugin:${pid}:${(m as { view: string }).view.trim()}`, params: plainParams((m as { params?: unknown }).params) } }
+      : undefined
+  return { main: f.main === true, side: f.side === true, bottom: f.bottom === true, ...(mini ? { mini } : {}) }
+}
+const plainParams = (p: unknown): Record<string, unknown> | undefined => (p && typeof p === 'object' && !Array.isArray(p) ? p as Record<string, unknown> : undefined)
 
 function closeLeafsOfType(type: string): void {
   useWorkspace.getState().closeViewsOfType(type, true) // 反注册清场:固定 View 也得关(类型都没了)
@@ -312,6 +330,7 @@ export function syncPluginViews(): void {
         rightCompanions: Array.isArray(def.rightCompanions)
           ? def.rightCompanions.filter((t): t is string => typeof t === 'string' && !!t).map((t) => ({ type: t, params: {} }))
           : undefined,
+        forms: pluginForms(type.split(':')[1], def.forms),
       })
     }
   }
