@@ -1,24 +1,25 @@
 /**
- * Dev-only visual harness:设置 → 电脑历史 —— 真 ComputerHistorySettings + 生产 CSS;window.tangu.computerHistory 与
- * 权限快照都是桩,不连主进程、不碰 helper。?dark / ?lang=en / ?status=<ComputerHistoryStatus> / ?empty(无最近 App 与会话)
+ * Dev-only visual harness:电脑历史 —— 真组件 + 生产 CSS;window.tangu.computerHistory 与权限快照都是桩,不连主进程、不碰 helper。
+ * 缺省 = 设置 → 电脑历史(真 ComputerHistorySettings)。?dark / ?lang=en / ?status=<ComputerHistoryStatus> / ?empty(无最近 App 与会话)
  * / ?skin=<cream|coral|teal|lavender|zhi>(主题色与背景色同取这一套;缺省 cream)/ ?platform=win32(Windows 版:无权限卡、Windows 文案)。
- * / ?onboarding(首次引导「权限与数据」里的那一页:真 OnboardingComputerHistory 放在引导的外壳里;?status=off 是它的缺省情形)。
- * / ?onboarding&improve(同一外壳里的「帮助改进」页签:真 OnboardingImprove,Extend 的 telemetry:get / set 是桩;?improve=off 缺省关)。
+ * / ?ask(主页输入框下面那一行:真 ComputerHistoryAsk,本机记号预置成 pending;「开启…」弹共用的 ComputerHistoryDialog 同意说明。
+ *   它只在电脑历史关着、从没动过时出现 → 配 ?status=off;?touched = 动过(dataGen 1,那一行不出);?failEnable = 「开启记录」写失败)。
+ * / ?dialog(首启引导团队屏「详情」那一下:同一个 ComputerHistoryDialog 只看说明,一进来就开着;关掉后 [data-open-details] 再打开)。
+ * 桩把 desktopPermissionRequest 的调用记在 window.__permissionRequests(主页那一行开成后,macOS 接着请辅助功能)。
  * 截图:浏览器打开 /computer-history-harness.html,或用 Playwright 按上面的参数逐张拍(DESIGN §8:观感改动交付前看真截图)。
- * 引导那一页的几何检查:npm run check:onboardinghistory。
+ * 检查:设置页 npm run check:computerhistory;主页那一行 + 共用弹窗 npm run check:onboardinghistory。
  */
 import { createRoot } from 'react-dom/client'
+import { useState } from 'react'
 import { LocaleProvider, setLocaleGlobal } from './i18n'
 import './i18n.generated'
 import './styles/base.css'
 import { applyTheme } from './theme/loader'
 import { ComputerHistorySettings } from './components/ComputerHistorySettings'
-import { OnboardingComputerHistory } from './components/OnboardingComputerHistory'
-import { OnboardingImprove, type TelemetryView } from './components/OnboardingImprove'
-import { useState } from 'react'
-import { translate } from './i18n'
-import './components/onboardingMessages'
-import './components/onboarding.css'
+import { ComputerHistoryAsk } from './components/ComputerHistoryAsk'
+import { ComputerHistoryDialog } from './components/ComputerHistoryDialog'
+import { CH_ASK_KEY } from './components/computerHistoryAskMark'
+import { useComputerHistory } from './components/useComputerHistory'
 import type {
   ComputerHistoryApi, ComputerHistoryExclude, ComputerHistorySession, ComputerHistoryStatus, ComputerHistoryView,
 } from '../../shared/computerHistory'
@@ -40,15 +41,12 @@ let enabled = status !== 'off'
 let pausedUntil: number | null = status === 'paused' ? now + 45 * MIN : null
 let current: ComputerHistoryStatus = status
 
+const touched = params.has('touched')
+const failEnable = params.has('failEnable')
+
 let rev = 0
-let telemetry: TelemetryView = { available: true, enabled: params.get('improve') !== 'off', noticeSeen: false }
-const improveTab = params.has('improve')
-function ImprovePane() {
-  const [view, setView] = useState(telemetry)
-  return <OnboardingImprove view={view} onChange={setView} onBusyChange={() => {}} />
-}
 const view = (): ComputerHistoryView => ({
-  state: { v: 1, enabled, pausedUntil, status: current, since: now - 95 * MIN, updatedAt: now, platform, dataGen: 0, userTurnedOff: false },
+  state: { v: 1, enabled, pausedUntil, status: current, since: now - 95 * MIN, updatedAt: now, platform, dataGen: touched ? 1 : 0, userTurnedOff: false },
   exclude: { apps: [...exclude.apps], domains: [...exclude.domains] },
   root: '/Users/me/.forsion-dev/computer-history',
   keepDays: 7,
@@ -83,11 +81,16 @@ const fakeIcon = (color: string): string =>
   `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect x="2" y="2" width="28" height="28" rx="7" fill="${color}"/></svg>`)}`
 const FAKE_ICONS: Record<string, string> = { 'com.microsoft.VSCode': fakeIcon('#2f80ed'), 'com.google.Chrome': fakeIcon('#e8453c') }
 
+const harnessWindow = window as unknown as { __chGets?: number; __chSetEnabled?: number; __permissionRequests?: string[] }
 const listeners = new Set<(v: ComputerHistoryView) => void>()
 const push = (): ComputerHistoryView => { const v = view(); for (const cb of listeners) cb(v); return v }
 const computerHistory: ComputerHistoryApi = {
-  get: async () => view(),
-  setEnabled: async (on) => { enabled = on; pausedUntil = null; current = on ? (status === 'off' ? 'recording' : status) : 'off'; return push() },
+  // 读了几次:台架等「读回来了、那一行仍没出」时靠它,不靠干等
+  get: async () => { harnessWindow.__chGets = (harnessWindow.__chGets || 0) + 1; return view() },
+  setEnabled: async (on) => {
+    harnessWindow.__chSetEnabled = (harnessWindow.__chSetEnabled || 0) + 1 // 只看说明不该写:台架核它为 0
+    if (on && failEnable) throw new Error('simulated write failure')
+    enabled = on; pausedUntil = null; current = on ? (status === 'off' ? 'recording' : status) : 'off'; return push() },
   pause: async (until) => { pausedUntil = until === 'tomorrow' ? new Date(now).setHours(24, 0, 0, 0) : Date.now() + until; current = 'paused'; return push() },
   resume: async () => { pausedUntil = null; current = 'recording'; return push() },
   clear: async () => view(),
@@ -110,56 +113,43 @@ const snapshot: DesktopPermissionsSnapshot = {
     microphone: 'granted', camera: 'granted', screen: 'granted',
   },
 }
+const permissionRequests: string[] = []
+harnessWindow.__permissionRequests = permissionRequests
 window.tangu = {
   platform,
   computerHistory,
   desktopPermissionsStatus: async () => snapshot,
-  desktopPermissionRequest: async () => snapshot,
+  desktopPermissionRequest: async (id: string) => { permissionRequests.push(id); return snapshot },
   desktopPermissionsCloseGuide: async () => {},
-  // 帮助改进的桩:Extend 的 telemetry:get / set(真通道在 Forsion Extend 里)
-  telemetryReport: () => {},
-  cloudInvoke: async (channel: string, patch?: { enabled?: boolean }) => {
-    if (channel === 'telemetry:set' && typeof patch?.enabled === 'boolean') telemetry = { ...telemetry, enabled: patch.enabled }
-    return telemetry
-  },
 } as unknown as NonNullable<Window['tangu']>
 
-// 引导那一页:外壳、标题区、分页条、底栏照 OnboardingWizard 的标记摆(只为量几何与看观感;流程本身由 check:first-run 在真应用里走)。
-const onboardingPage = (
-  <div className="ob-shell ob-flow" data-step="permissions" style={{ position: 'fixed', inset: 0, background: 'var(--bg)' }}>
-    <aside className="ob-rail" />
-    <main className="ob-stage">
-      <header className="ob-step-head">
-        <div className="ob-step-title"><div className="ob-step-kicker">{translate('onboarding.guide.stepOf', { n: 7, total: 8 })}</div>
-          <h1>{translate('onboarding.step.permissions.title')}</h1><p>{translate(improveTab ? 'onboarding.step.permissions.descriptionImprove' : 'onboarding.step.permissions.description')}</p></div>
-        <button type="button" className="ob-skip">{translate('onboarding.nav.skip')}</button>
-      </header>
-      <div className="ob-content">
-        <div className="ob-permission-layout">
-          <div className="seg ob-sections">
-            <button>{translate('onboarding.guide.computer')}</button><button className={improveTab ? '' : 'active'}>{translate('onboarding.guide.history')}</button><button>{translate('onboarding.guide.media')}</button>
-            {improveTab && <button className="active">{translate('onboarding.guide.improve')}</button>}
-          </div>
-          <div className="ob-permission-pane">{improveTab ? <ImprovePane /> : <OnboardingComputerHistory mode={dark ? 'dark' : 'light'} onBusyChange={() => {}} onUnsupported={() => {}} />}</div>
-        </div>
-      </div>
-      <footer className="ob-footer"><div className="ob-footer-row">
-        <button className="btn ghost">{translate('onboarding.nav.prev')}</button><span className="ob-footer-hint">{translate('onboarding.guide.changeLater')}</span>
-        <button className="btn primary">{translate('onboarding.nav.next')}</button>
-      </div></footer>
-    </main>
-  </div>
-)
+/** 首启引导团队屏「详情」那一下:只看说明(consent={false}),一进来就开着。 */
+function DetailsDialog() {
+  const history = useComputerHistory()
+  const [open, setOpen] = useState(true)
+  return <>
+    <button type="button" className="btn ghost" data-open-details="" onClick={() => setOpen(true)}>Details</button>
+    <ComputerHistoryDialog history={history} consent={false} open={open} onClose={() => setOpen(false)} />
+  </>
+}
+
+const mode = params.has('ask') ? 'ask' : params.has('dialog') ? 'dialog' : 'settings'
+// 主页那一行只给「跳过了带团队屏的引导」的人:每次进来都把本机记号摆回 pending(上一轮点过 ✕ / 开过也重来)
+if (mode === 'ask') localStorage.setItem(CH_ASK_KEY, 'pending')
 
 createRoot(document.getElementById('root')!).render(
-  params.has('onboarding') ? <LocaleProvider>{onboardingPage}</LocaleProvider> :
   <LocaleProvider>
-    <section className="settings-main" style={{ maxWidth: 820, margin: '0 auto' }}>
-      <div className="settings-body">
-        <div className="settings-sub settings-sub--computer-history">
-          <ComputerHistorySettings mode={dark ? 'dark' : 'light'} anchor="computer-history" />
-        </div>
-      </div>
-    </section>
+    {mode === 'settings'
+      ? <section className="settings-main" style={{ maxWidth: 820, margin: '0 auto' }}>
+          <div className="settings-body">
+            <div className="settings-sub settings-sub--computer-history">
+              <ComputerHistorySettings mode={dark ? 'dark' : 'light'} anchor="computer-history" />
+            </div>
+          </div>
+        </section>
+      // 主页中间那一栏固定 840 宽,那一行在输入框下面、占满一栏
+      : <main data-harness={mode} style={{ width: 'min(840px, calc(100% - 32px))', margin: '160px auto 0' }}>
+          {mode === 'ask' ? <ComputerHistoryAsk /> : <DetailsDialog />}
+        </main>}
   </LocaleProvider>,
 )
