@@ -220,10 +220,16 @@ async function main() {
     stopInput(); await focusMain(); run = await send(); await focusExternal(); startInput(); await until(autoVisible)
     await win.evaluate(() => window.tangu.openMini()) // Same toggle as Cmd+Shift+M.
     await until(async () => (await autoWindows()).length === 0)
-    await manual.waitForSelector(`.mini-tangu [data-session-id="${run.sessionId}"]`)
-    check('manual toggle takes over the exact automatic conversation', true)
+    // 11-07 Mini 多开(LCL 表面规范第二期):接管的会话是另一个实体,开在它自己那一扇;藏着的笔记 Mini 原样留着
+    const takeover = await until(async () => {
+      for (const w of app.windows()) if (!w.isClosed() && w.url().includes('window=mini') && !w.url().includes('transient=1')
+        && await w.locator(`.mini-tangu [data-session-id="${run.sessionId}"]`).count().catch(() => 0)) return w
+    })
+    check('manual toggle takes over the exact automatic conversation, in its own Mini', takeover !== manual
+      && await manual.locator('.mini-card-shell[data-space="amadeus"]').count() === 1)
+    const takeoverId = await (await app.browserWindow(takeover)).evaluate((w) => w.id)
     backend.emit(run, 'done', {}); await pause(500)
-    check('run completion leaves the taken-over manual Mini open', await app.evaluate(({ BrowserWindow }, id) => BrowserWindow.fromId(id)?.isVisible(), manualState.id))
+    check('run completion leaves the taken-over manual Mini open', await app.evaluate(({ BrowserWindow }, id) => BrowserWindow.fromId(id)?.isVisible(), takeoverId))
     check('no renderer errors', errors.length === 0)
     console.log(`SCREENSHOTS ${shots}`)
   } catch (e) {

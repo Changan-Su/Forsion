@@ -42,12 +42,23 @@ async function main() {
     win.on('pageerror', (e) => errors.push(`main: ${e.message}`))
     await win.waitForSelector('.dv-groupview', { timeout: 30000, state: 'attached' })
     check('main window left onboarding', await skipOnboarding(win))
+    // 11-07 Mini 多开(LCL 表面规范第二期):两条会话各开一扇,同一实体再开才复用(细节见 check:minimulti)。
+    // 这份台架往下只跟 mini-latest 那一扇走,mini-first 那扇看过就关掉。
+    const miniPages = () => app.windows().filter((w) => !w.isClosed() && w.url().includes('window=mini'))
+    const miniWith = async (selector) => {
+      for (let i = 0; i < 300; i++) {
+        for (const w of miniPages()) if (await w.locator(selector).count().catch(() => 0)) return w
+        await pause(100)
+      }
+      throw new Error(`no Mini shows ${selector}`)
+    }
     await win.evaluate(() => { window.tangu.openMini({ sessionId: 'mini-first' }); window.tangu.openMini({ sessionId: 'mini-latest' }) })
-    for (let i = 0; i < 200; i++) { mini = app.windows().find((w) => w.url().includes('window=mini')); if (mini) break; await pause(50) }
-    if (!mini) throw new Error('Mini window missing')
+    mini = await miniWith('.mini-tangu [data-session-id="mini-latest"]')
     mini.on('pageerror', (e) => errors.push(`mini: ${e.message}`))
-    await mini.waitForSelector('.mini-tangu [data-session-id="mini-latest"]', { timeout: 30000 })
-    check('latest session target in one Mini window', app.windows().filter((w) => w.url().includes('window=mini')).length === 1)
+    const firstMini = await miniWith('.mini-tangu [data-session-id="mini-first"]')
+    check('two sessions open side by side, each in its own Mini', miniPages().length === 2 && firstMini !== mini)
+    await firstMini.getByRole('button', { name: '关闭 Mini Panel', exact: true }).click()
+    for (let i = 0; i < 100 && miniPages().length > 1; i++) await pause(50)
     check('independent of mobile UI', !mini.url().includes('ui=mobile'))
     check('Mini window never mounts the Forsion startup splash', await mini.locator('#tangu-splash').count() === 0)
     await mini.waitForTimeout(500)
@@ -75,7 +86,7 @@ async function main() {
     check('main panel receives exact session', true)
     const switchTo = async (name) => { await mini.locator('.mini-card-space').click(); await mini.locator('.mini-card-popover').getByRole('button', { name, exact: true }).click() }
     await mini.locator('.mini-card-space').click()
-    const labels = await mini.locator('.mini-card-popover .mini-card-row').allTextContents()
+    const labels = await mini.locator('.mini-card-popover .mini-card-row:not(.mini-card-row-duplicate)').allTextContents()
     check('only adapted native and plugin Spaces', labels.length === 5 && labels.includes('ToDo List') && labels.includes('待办') && labels.includes('Mini 探针'), JSON.stringify(labels))
     await mini.screenshot({ path: path.join(shots, 'spaces.png') }); await mini.keyboard.press('Escape')
     await switchTo('待办')
@@ -120,19 +131,21 @@ async function main() {
     await mini.getByRole('button', { name: '在主面板显示', exact: true }).click()
     await win.waitForFunction(() => document.querySelector('.mini-probe-full')?.textContent === 'Item: 42')
     check('plugin handoff preserves entity params', true)
+    // 多开:插件直开的视图是另一个实体,开在自己那一扇里,不顶掉这扇 Space 卡片
     await win.getByRole('button', { name: 'Open direct Mini', exact: true }).click()
-    await mini.waitForSelector('.mini-card-shell[data-space="direct"]')
-    await mini.waitForFunction(() => document.querySelector('.mini-probe-mini')?.textContent === 'Item: 99')
-    check('plugin can open a direct Mini without a Space', await mini.locator('.mini-card-space', { hasText: 'Direct Mini' }).count() === 1)
-    await win.evaluate(() => window.tangu.openMini({ spaceId: 'calendar' }))
-    await mini.waitForSelector('.mini-card-shell[data-space="calendar"]')
+    const direct = await miniWith('.mini-card-shell[data-space="direct"]')
+    await direct.waitForFunction(() => document.querySelector('.mini-probe-mini')?.textContent === 'Item: 99')
+    check('plugin can open a direct Mini without a Space, in its own window', direct !== mini
+      && await direct.locator('.mini-card-space', { hasText: 'Direct Mini' }).count() === 1 && await mini.locator('.mini-probe-mini').textContent() === 'Item: 42')
+    await direct.getByRole('button', { name: '关闭 Mini Panel', exact: true }).click()
+    for (let i = 0; i < 100 && miniPages().length > 1; i++) await pause(50)
     await switchTo('ToDo List')
     check('plugin disposal revokes context', await mini.evaluate(() => { try { window.__miniProbe.oldView.setParams({ itemId: 'stale' }); return false } catch { return window.__miniProbe.disposes === 1 } }))
     await switchTo('Mini 探针')
     await win.evaluate(() => localStorage.setItem('amadeus.plugins.disabled', JSON.stringify(['mini-probe', 'uninstalled-plugin'])))
     await mini.waitForSelector('.mini-card-shell[data-space="tangu"]')
     await mini.locator('.mini-card-space').click()
-    const afterDisable = await mini.locator('.mini-card-popover .mini-card-row').allTextContents()
+    const afterDisable = await mini.locator('.mini-card-popover .mini-card-row:not(.mini-card-row-duplicate)').allTextContents()
     check('disabling in main removes the active Mini plugin', afterDisable.length === 4 && afterDisable.includes('待办') && !afterDisable.includes('Mini 探针'), JSON.stringify(afterDisable))
     check('cross-window sync preserves other disabled IDs', await mini.evaluate(() => JSON.parse(localStorage.getItem('amadeus.plugins.disabled')).includes('uninstalled-plugin')))
     await mini.keyboard.press('Escape')
@@ -141,6 +154,8 @@ async function main() {
     await mini.locator('.mini-card-popover').getByRole('button', { name: 'Mini 探针', exact: true }).waitFor()
     check('reenabling restores the Mini adapter without reload', true)
     await mini.keyboard.press('Escape')
+    // 多开:窗里换到的 Space 报给主进程,重载回到现在显示的这个(不是最初打开的会话)
+    await switchTo('ToDo List'); await pause(300)
     await mini.evaluate(() => localStorage.setItem('forsion_theme_pref', 'dark'))
     await mini.reload()
     await mini.waitForSelector('.mini-card-shell[data-space="calendar"]')
@@ -263,6 +278,8 @@ async function main() {
     check('the bottom edge cannot be dragged off the screen', tallest.height > 160 && tallest.y + tallest.height <= area.y + area.height, JSON.stringify({ area, tallest }))
     await dragEdge('s', 0, -9999); await mini.mouse.up()
     await dragEdge('e', 120, 0); await mini.mouse.up(); await dragEdge('s', 0, 140); await mini.mouse.up()
+    // 多开后位置和大小按实体记:关之前切回 ToDo List,下面重开的同一个实体(calendar)才该沿用这个大小
+    await switchTo('ToDo List'); await mini.waitForSelector('.mini-todo .amx-todo'); await pause(300)
     const kept = await bounds()
     await mini.getByRole('button', { name: '关闭 Mini Panel', exact: true }).click()
     for (let i = 0; i < 100 && app.windows().some((w) => w.url().includes('window=mini')); i++) await pause(50)

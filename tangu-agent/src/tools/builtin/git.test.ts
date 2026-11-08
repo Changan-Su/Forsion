@@ -119,6 +119,11 @@ describe('git 工具', () => {
     const out = await run('git_push', cwd);
     expect(out.startsWith('Error:')).toBe(true);
     expect(json(out)).toMatchObject({ action: 'push', error: 'no_remote' });
+    // 没远端时指向 git_publish,不把用户打发去项目详情(11-08 反馈:模型要地址、再让用户自己去 Git 页发布)
+    expect(out).toContain('git_publish');
+    expect(out).not.toContain('project details');
+    const status = json(await run('git_status', cwd)) as { notes?: string[] };
+    expect(status.notes?.some((n) => n.includes('git_publish'))).toBe(true);
   });
 
   it('pull → 已一致时 updated:false', async () => {

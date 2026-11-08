@@ -35,3 +35,18 @@ ctx.openMiniPanel?.('mini-counter', {
 ```
 
 `viewId` / `mainViewId` 都写**本插件相对 id**，宿主自动加 `plugin:<pluginId>:`，省略 `mainViewId` 就把同一视图交回主面板。仍须先 `registerView`；Web/mobile 或旧宿主可能没有原生 Mini，务必可选链并保留 `ctx.openView()` 回退。
+
+**多开(2.13.8 起)**:桌面能同时开几扇 Mini,宿主按实体认窗口 —— 同一个实体再开 = 叫出已开的那扇并更新参数,不同实体各开一扇(沿屏幕右缘往下排)。`openMiniPanel` 的实体是「本插件的 `viewId` + `opts.key`」:
+
+- 不传 `key`:一个 `viewId` 只有一扇,再调用只换参数(和旧宿主每次调用的效果一样)。
+- 要让不同内容各占一扇(每篇笔记、每个任务一扇),传**稳定**的 `key`(同一个东西永远同一个值;别放时间戳 / 随机数,否则每调一次多开一扇)。旧宿主忽略它。
+
+```js
+ctx.openMiniPanel?.('note', { key: notePath, params: { notePath }, title: noteTitle })
+```
+
+- Space 的 `mini` 适配:一个 Space 一扇(Tangu 对话按会话分)。用户在 Mini 里换了 Space / 会话,窗口按现在显示的认。
+- 同一实体的第二扇由用户在胶囊左边下拉里点「复制一扇」(Duplicate window),插件别自己做这个入口。
+- 普通 Mini 最多 6 扇(藏起来的也算,语音通话那扇不算)。满了宿主不开、自己提示用户;调用不抛错,插件不用处理。
+- 不要假设「只有一扇 Mini」:不同窗口各有一份插件实例,跨窗口的状态走数据层(库文件 / `ctx.saveData`),别靠模块变量。
+
