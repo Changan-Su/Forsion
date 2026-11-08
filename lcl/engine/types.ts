@@ -44,6 +44,22 @@ export interface ViewProps {
   extendView?: ExtendViewController
   leaf: Leaf
   params: Record<string, unknown>
+  /** 只在 workspace.open 挂进浮层(View / Space / 窗口作用域)时给:这一份按什么样子显示,以及「在主面板显示」怎么去。
+   *  工作台面板、Mini 窗、Floating Panel 里都没有(它们按窗口种类判)。 */
+  surface?: { form: ViewForm; showInMain?(): void }
+}
+
+/** 样子(LCL 表面规范方案 B「形态」):同一个 View 以多大、什么样子出现。左右是位置不是样子:停靠在左 / 右栏都是 side。 */
+export type ViewForm = 'main' | 'side' | 'bottom' | 'mini'
+
+/** View 声明自己能用哪几种样子(第三期,workspaceOpen.ts 按它回落)。**不写 = 全都行**(今天的行为,一个不收紧)。
+ *  写了:没列出的就是不支持。mini: true = Mini 里显示 View 本身;`{ view }` = 另配一个紧凑视图
+ *  (取代 SpaceDefinition.mini 里「哪个紧凑视图配哪个主视图」那一半;Space 的 mini 照旧工作)。 */
+export interface ViewForms {
+  main?: boolean
+  side?: boolean
+  bottom?: boolean
+  mini?: boolean | { view: { type: string; params?: Record<string, unknown> } }
 }
 
 /** 视图分类(View 基座统一化,正典 docs/ToBeImproved/View基座统一化方案_2026-08-25.md):
@@ -112,6 +128,8 @@ export interface ViewDefinition {
    *  (主区对话跟着当前会话走:不钉的话副本 / 新窗口会跟随到别的会话)。拿到的是去掉引擎私有键的用户参数;缺省 = 原样带走。
    *  返回 null = 此刻做不出一份不同的副本(新对话还没有会话可钉):菜单不给拆分 / 在新窗口打开;搬走(移到新窗口 / 拖出)照原参数走。 */
   copyParams?: (params: Record<string, unknown>) => Record<string, unknown> | null
+  /** 能用哪几种样子(见 ViewForms)。缺省 = 全都行。workspace.open 按它挑紧凑视图、按回落规则换位置。 */
+  forms?: ViewForms
 }
 
 /**

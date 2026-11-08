@@ -48,6 +48,8 @@ ctx.registerCommand({
 
 On this surface `mount(el, view)` receives `view.surface === 'floating'`. `getParams`, `setParams` and `onParamsChanged` behave as in the main panel; `showInMainPanel()` hands the current parameters back to the main workspace. Floating does not provide `extendView`. When the window closes or the plugin is disabled, the host calls the cleanup function returned by `mount`; clean up all subscriptions there. When an open plugin view is unregistered, its window or Web overlay closes automatically.
 
+Since 2.13.8 the same window can be opened with `ctx.workspace.open(viewId, { layer: { float: 'desktop' }, form: 'main' })` (the window id is the view type, plus the `key` when given). A Floating Panel is **not** kept on top by default: write `layer: { float: 'desktop', pin: true }` to keep it above other apps' windows; opening it again without `pin` takes that away. If the view declares `forms` without `main`, this call falls back to the Mini look. Rules: "One way to open views" in [Plugin development](./plugin-development.md).
+
 Feature-detect `ctx.openFloatingPanel?.(...)` for compatibility with older hosts. Desktop and Web both support Floating today; mobile has no desktop floating semantics, so keep providing a normal main view as a fallback.
 
 ## Verification

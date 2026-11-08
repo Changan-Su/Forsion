@@ -43,7 +43,7 @@ import { StatusMark } from './AttentionDot'
 import { rowStatus, type RowStatus } from './sessionTree'
 import { splitLeadingRefs } from './RefChipView'
 import { splitLeadingQuotes } from './quotes'
-import { buildTurnTree, readSteps, type KidSpec, type TurnTree } from './canvasTree'
+import { buildTurnTree, findRunFolds, readSteps, type KidSpec, type RunFold, type TurnTree } from './canvasTree'
 import { ContextMenu, type CtxItem, type CtxMenu } from '../../components/RightPanel'
 import { SELBAR_VIEWPORT_MOVED } from '../../components/selectionBar/ViewSelectionBar'
 
@@ -105,6 +105,12 @@ registerMessages({
   'chatcanvas.help': { zh: '画布怎么用', en: 'How the canvas works' },
   'chatcanvas.menu.handOn': { zh: '抓手（拖到哪都是平移）', en: 'Hand tool (drag anywhere to pan)' },
   'chatcanvas.menu.handOff': { zh: '关掉抓手', en: 'Turn off hand tool' },
+  'chatcanvas.menu.autofoldOn': { zh: '自动折叠长直线', en: 'Auto-collapse long runs' },
+  'chatcanvas.menu.autofoldOff': { zh: '不再自动折叠长直线', en: 'Stop auto-collapsing long runs' },
+  'chatcanvas.run.folded': { zh: '折叠了 {n} 轮', en: 'Collapsed turns: {n}' },
+  'chatcanvas.run.expand': { zh: '全部展开', en: 'Expand all' },
+  'chatcanvas.run.more': { zh: '还有 {n} 轮', en: '{n} more' },
+  'chatcanvas.run.collapse': { zh: '收起 {n} 轮', en: 'Collapse turns ({n})' },
 })
 
 // 缩略图:Tangu 画布自己记,缺省关(在「视图」里开);Amadeus 画布那份(canvasPrefs)不受影响
@@ -122,6 +128,13 @@ const setKidsPref = (on: boolean): void => {
   for (const f of kidsSubs) f()
 }
 export const useCanvasKids = (): boolean => useSyncExternalStore((f) => { kidsSubs.add(f); return () => { kidsSubs.delete(f) } }, () => kidsNow)
+// 长直线自动折叠(方案 画布直线折叠方案_2026-11-07,C 目录卡):全局一份,缺省开(在「视图」里关)
+const AUTOFOLD_KEY = 'tangu.chatCanvas.autofold'
+const autoFoldPref = (): boolean => { try { return localStorage.getItem(AUTOFOLD_KEY) !== '0' } catch { return true } }
+const setAutoFoldPref = (on: boolean): void => { try { localStorage.setItem(AUTOFOLD_KEY, on ? '1' : '0') } catch { /* 隐私模式:本次照样生效 */ } }
+/** 目录卡在排版里的 key:`~run:<这一段第一张卡>`(真卡的 key 是 `会话:消息`,撞不上) */
+const RUN = '~run:'
+const RUN_ROWS = 5 // 目录卡最多列几行;再多就列前 4 行 +「还有 N 轮」
 
 // 左上那几行说明:前几次打开画布时露出来,之后收进胶囊上的「?」
 const HINTS_KEY = 'tangu.chatCanvas.hintsSeen', HINTS_TIMES = 3
@@ -139,6 +152,8 @@ export interface CanvasPref {
   draft: CanvasDraft | null
   /** 收起了下面子树的卡 key */
   fold: string[]
+  /** 自动折叠的长直线里,用户展开过的那几段(记段首那张卡的 key) */
+  unfold: string[]
 }
 const PREF_KEY = 'tangu.chatCanvas'
 const NO_ORDER: Record<string, string[]> = Object.freeze({}) as Record<string, string[]>
@@ -167,7 +182,8 @@ export function useChatCanvasPref(rootId: string | null): [CanvasPref, (patch: P
   const saved = rootId ? all[rootId] : undefined
   const order = saved?.order && typeof saved.order === 'object' ? saved.order : NO_ORDER // 同一个空对象:排版的 memo 认它,每次新建会死循环
   const fold = Array.isArray(saved?.fold) ? saved.fold : NO_FOLD
-  return [{ on: !!saved?.on, dir: saved?.dir === 'h' ? 'h' : 'v', order, draft: isDraft(saved?.draft) ? saved.draft : null, fold }, set]
+  const unfold = Array.isArray(saved?.unfold) ? saved.unfold : NO_FOLD
+  return [{ on: !!saved?.on, dir: saved?.dir === 'h' ? 'h' : 'v', order, draft: isDraft(saved?.draft) ? saved.draft : null, fold, unfold }, set]
 }
 
 // ── 自动排版 ──
@@ -412,9 +428,6 @@ export function ChatCanvas({ rootId, activeId, dir, onDir, onChat, exiting, onEx
     const rest = pref.fold.filter((x) => x !== k && tree.cards.has(x)) // 顺手清掉已经不在树里的
     setPref({ fold: on ? [...rest, k] : rest })
   }
-  const boxes = useMemo(() => layoutTree(tree, heights, dir, kidsOf), [tree, heights, dir, kidsOf])
-  const boxesRef = useRef(boxes)
-  boxesRef.current = boxes
 
   // ── 选中 / 当前这一支 / 阅读栏 ──
   const activePath = tree.paths[activeId] ?? []
@@ -434,6 +447,56 @@ export function ChatCanvas({ rootId, activeId, dir, onDir, onChat, exiting, onEx
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
   const [reading, setReading] = useState<string | null>(null)
   const readCard = reading ? tree.cards.get(reading) : undefined
+
+  // ── 长直线自动折叠(C 目录卡):一段超过 3 轮 → 留开头 1 + 末尾 2,中间换成一张目录卡 ──
+  // 永不折:选中的、阅读栏开着的、在生成的、刚写完还展开着的、草稿挂着的(草稿让那张卡变成分叉,天然是一段的终点)、当前这一支最后两张
+  const [autoFold, setAutoFold] = useState(autoFoldPref)
+  const pinKey = [selected, reading, ...activePath.slice(-2), ...expanded,
+    ...[...tree.cards.values()].filter((c) => c.answers.some((m) => m.status === 'streaming')).map((c) => c.key)]
+    .filter(Boolean).sort().join('\n')
+  const opened = useMemo(() => new Set(pref.unfold), [pref.unfold])
+  const runs = useMemo(() => {
+    if (!autoFold) return []
+    const pinned = new Set(pinKey.split('\n'))
+    return findRunFolds(tree.roots, kidsOf, (k) => pinned.has(k), opened, (k) => k !== DRAFT)
+  }, [autoFold, tree.roots, kidsOf, pinKey, opened])
+  const foldAt = useMemo(() => new Map(runs.filter((r) => r.folded).map((r) => [r.head, r])), [runs])
+  /** 排版用的孩子:折起来的段首 → 目录卡 → 这一段倒数第二张 */
+  const shownKids = useCallback((k: string): string[] => {
+    if (k.startsWith(RUN)) { const r = foldAt.get(k.slice(RUN.length)); return r ? [r.next] : [] }
+    return foldAt.has(k) ? [RUN + k] : kidsOf(k)
+  }, [kidsOf, foldAt])
+  const boxes = useMemo(() => layoutTree(tree, heights, dir, shownKids), [tree, heights, dir, shownKids])
+  const boxesRef = useRef(boxes)
+  boxesRef.current = boxes
+  /** 画出来的父子(连线、「上面量完了没」都按它走:被收进目录卡的卡没有框) */
+  const shownParent = useMemo(() => {
+    const m = new Map<string, string>()
+    for (const k of boxes.keys()) for (const c of shownKids(k)) m.set(c, k)
+    return m
+  }, [boxes, shownKids])
+  const closeReadingRef = useRef<() => void>(() => {})
+  const userFoldAct = useRef(false) // 这次折 / 展是点出来的:镜头不补(内容从那里往下长,本来就在眼前)
+  const [runReveal, setRunReveal] = useState<string | null>(null) // 点目录卡一行:展开后把那张卡露出来
+  const openRun = (head: string): void => {
+    userFoldAct.current = true
+    setPref({ unfold: [...pref.unfold.filter((h) => h !== head && tree.cards.has(h)), head] }) // 顺手清掉已经不在树里的
+  }
+  const closeRun = (r: RunFold): void => {
+    userFoldAct.current = true
+    setPref({ unfold: pref.unfold.filter((h) => h !== r.head && tree.cards.has(h)) })
+    // 选中 / 正读着的卡在这一截里:放掉,不然它撑着这一段收不起来
+    if (sel && r.mid.includes(sel.key)) setSel(null)
+    if (reading && r.mid.includes(reading)) closeReadingRef.current()
+  }
+  /** 目录卡上点一行:这一段展开、选中那一张、量到以后露出来 */
+  const jumpRun = (head: string, key: string): void => { openRun(head); pick(key); setRunReveal(key) }
+  // 被收起的卡被选中了(阅读栏跳轮、点了别处跳过来):这一段记成展开,别等选别的卡时又收回去
+  useEffect(() => {
+    const r = runs.find((x) => !x.opened && x.mid.some((k) => k === selected || k === reading))
+    if (r) setPref({ unfold: [...pref.unfold.filter((h) => tree.cards.has(h)), r.head] })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runs, selected, reading])
   const [readDir, setReadDir] = useState(0) // 换轮是往下(1)还是往上(-1):正文按这个方向滑进来;0 = 刚打开,不滑
   const [leaving, setLeaving] = useState<string | null>(null) // 刚关掉、还在往右淡出的那一张
   const paneCard = readCard ?? (leaving ? tree.cards.get(leaving) : undefined)
@@ -644,6 +707,7 @@ export function ChatCanvas({ rootId, activeId, dir, onDir, onChat, exiting, onEx
     }
     setReading(null)
   }
+  closeReadingRef.current = closeReading
   /** 打开:一个卡框从那张卡长到阅读栏的位置,栏里的字最后淡进来 */
   const growFrom = (key: string): void => {
     const pane = readRef.current, root = pane?.parentElement
@@ -733,13 +797,51 @@ export function ChatCanvas({ rootId, activeId, dir, onDir, onChat, exiting, onEx
     if (Math.abs(next.x - cur.x) > 0.5 || Math.abs(next.y - cur.y) > 0.5 || Math.abs(next.z - cur.z) > 1e-3) chase(next, undefined, same)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [boxes, streamKey, follow])
+  // 自动折 / 展(新的一轮让一段长到 4 轮、切了支、关了开关):正看着的那张卡在屏幕上不动,镜头按它的位移补回去。
+  // 目录卡先按估高排、量到真高再排一次:改了以后一小段时间里每次重排都补。点出来的折 / 展不补(内容从那里往下长);
+  // 跟着生成时归跟随管;第一次落位那 1.5s 归落位管。
+  const foldSig = runs.map((r) => (r.folded ? `${r.head}:${r.mid.length}` : '')).join(',')
+  const lastFoldSig = useRef(foldSig)
+  const anchorAt = useRef<{ key: string; x: number; y: number } | null>(null)
+  const compUntil = useRef(0)
+  useLayoutEffect(() => {
+    if (lastFoldSig.current !== foldSig) {
+      lastFoldSig.current = foldSig
+      compUntil.current = userFoldAct.current || !landed.current ? 0 : performance.now() + 800
+      userFoldAct.current = false
+    }
+    const k = selected
+    const b = k ? boxes.get(k) : undefined
+    const was = anchorAt.current
+    const s = settle.current, g = afterglow.current, now = performance.now()
+    // 跟随在管的时候(在生成,或刚写完那 1.5s 的余晖)别再补一遍:跟随已经按新排版贴好了,再补就挪两次(Codex 评审)
+    const following = followRef.current && (!!streamKey || !!(g && now < g.until))
+    if (b && was && was.key === k && now < compUntil.current && !following && !(s && now < s.until)) {
+      const dx = b.x - was.x, dy = b.y - was.y
+      if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) {
+        const cur = view.vpRef.current
+        view.setVp({ z: cur.z, x: cur.x - dx * cur.z, y: cur.y - dy * cur.z })
+        const goal = flyTo.current
+        if (goal) flyTo.current = { z: goal.z, x: goal.x - dx * goal.z, y: goal.y - dy * goal.z } // 正在飞:落点跟着挪
+      }
+    }
+    anchorAt.current = b && k ? { key: k, x: b.x, y: b.y } : null
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [boxes])
+  // 点了目录卡的一行:展开、量到那张卡以后把它露出来
+  useLayoutEffect(() => {
+    if (!runReveal || !boxes.has(runReveal) || !heights.has(runReveal)) return
+    setRunReveal(null)
+    reveal(runReveal, true)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [boxes, heights, runReveal])
   // 第一次打开(这棵树、这个排法没记过视口):同 Chat View 打开在末尾 —— 这一支最后一张卡的卡底落在阅读线上,
   // 上面露出前几轮;卡比视口高就卡顶留一点边
   useLayoutEffect(() => {
     if (!selected || streamKey) return
     const s = settle.current
     if (landed.current && !(s && s.key === selected && performance.now() < s.until)) return
-    for (let k: string | null = selected; k; k = tree.cards.get(k)?.parent ?? null) if (!heights.has(k)) return // 上面的卡还没量完,位置还会变
+    for (let k: string | undefined = selected; k; k = shownParent.get(k)) if (!heights.has(k)) return // 上面的卡(含目录卡)还没量完,位置还会变
     const b = boxes.get(selected)
     const { w, h } = hostSize(host.current)
     if (!b || !w) return
@@ -771,7 +873,9 @@ export function ChatCanvas({ rootId, activeId, dir, onDir, onChat, exiting, onEx
   useLayoutEffect(() => {
     if (entered.current || !landed.current || !enterFrom) return
     const key = cardOf(enterFrom.msgId)
-    for (let k: string | null | undefined = key; k; k = tree.cards.get(k)?.parent) if (!heights.has(k)) return // 位置还没落定
+    // 对齐的那张收在目录卡里(对话停在折起的那几轮):这次不播,别等它日后被展开时突然补播一遍(Codex 评审)
+    if (key && !boxes.has(key)) { entered.current = true; return }
+    for (let k: string | undefined = key; k; k = shownParent.get(k)) if (!heights.has(k)) return // 位置还没落定
     entered.current = true
     const start = key ? alignVp(key, enterFrom) : null
     if (!key || !start) return
@@ -976,6 +1080,8 @@ export function ChatCanvas({ rootId, activeId, dir, onDir, onChat, exiting, onEx
     void useApp.getState().archiveSession(c.sid, true)
   }
   const menuFor = (key: string | null, part: 'q' | 'a'): CtxItem[] => {
+    const run = key?.startsWith(RUN) ? foldAt.get(key.slice(RUN.length)) : undefined
+    if (run) return [{ label: t('chatcanvas.run.expand'), icon: <ChevronsUpDown size={14} />, run: () => openRun(run.head) }]
     const c = key && key !== DRAFT ? tree.cards.get(key) : undefined
     if (!c) {
       return [
@@ -990,6 +1096,7 @@ export function ChatCanvas({ rootId, activeId, dir, onDir, onChat, exiting, onEx
           if (from) useApp.getState().setActiveId(from)
           setKidsPref(!kidsOn)
         } },
+        { label: t(autoFold ? 'chatcanvas.menu.autofoldOff' : 'chatcanvas.menu.autofoldOn'), icon: <ChevronsDownUp size={14} />, run: () => { setAutoFold(!autoFold); setAutoFoldPref(!autoFold) } },
         { label: t(hand ? 'chatcanvas.menu.handOff' : 'chatcanvas.menu.handOn'), icon: <Hand size={14} />, run: () => setHand((v) => !v) },
       ]
     }
@@ -1120,7 +1227,15 @@ export function ChatCanvas({ rootId, activeId, dir, onDir, onChat, exiting, onEx
   const tailText = tail ? (tail.user ? questionText(tail.user) : tail.answers[0]?.content || '') : ''
   const vp = view.vp
   const items = [...boxes].map(([key, box]) => ({ key, kind: 'card' as const, box }))
-  const parentOf = (k: string): string | null => (k === DRAFT ? draft?.parent ?? null : tree.cards.get(k)?.parent ?? null)
+  /** 目录卡:里面收着的卡有一张在亮着的路上就算亮;子会话那一截的灰线同理 */
+  const edgeClass = (k: string): string | undefined => {
+    if (k === DRAFT) return 'draft'
+    const ks = k.startsWith(RUN) ? foldAt.get(k.slice(RUN.length))?.mid ?? [] : [k]
+    if (ks.some((x) => hot.has(x))) return 'hot'
+    return ks.some((x) => kidSet.has(tree.cards.get(x)?.sid ?? '')) ? 'kid' : undefined
+  }
+  const turnNo = (k: string): number => { let n = 0; for (let x: string | null = k; x; x = tree.cards.get(x)?.parent ?? null) n++; return n }
+  const unfoldPill = new Map(runs.filter((r) => r.opened && !r.folded).map((r) => [r.mid[0], r])) // 用户展开着的段:「收起」挂在原来目录卡的位置
   const draftBox = draft ? boxes.get(DRAFT) : undefined
   const draftParent = draft ? tree.cards.get(draft.parent) : undefined
   // 说明只在左上角真空着时露出来:有卡挪进那块就淡掉(上一帧量到的大小,够用)
@@ -1149,11 +1264,11 @@ export function ChatCanvas({ rootId, activeId, dir, onDir, onChat, exiting, onEx
         <div className="t2cv-world" style={{ transform: `translate(${vp.x}px, ${vp.y}px) scale(${vp.z})` }}>
           <svg className="t2cv-edges" aria-hidden="true">
             {[...boxes.keys()].map((k) => {
-              const pk = parentOf(k)
+              const pk = shownParent.get(k)
               const a = pk ? boxes.get(pk) : undefined
               const b = boxes.get(k)
               if (!a || !b || !pk) return null
-              return <path key={k} className={k === DRAFT ? 'draft' : hot.has(k) ? 'hot' : kidSet.has(tree.cards.get(k)?.sid ?? '') ? 'kid' : undefined} d={edgePath(a, b, dir, aTops.get(pk) ?? 0)} />
+              return <path key={k} className={edgeClass(k)} d={edgePath(a, b, dir, aTops.get(pk) ?? 0)} />
             })}
           </svg>
           {[...tree.cards.values()].map((c) => {
@@ -1197,6 +1312,11 @@ export function ChatCanvas({ rootId, activeId, dir, onDir, onChat, exiting, onEx
                   pick(c.key, el.closest('[data-cv-part="q"]') ? 'q' : 'a')
                 }}
               >
+                {unfoldPill.has(c.key) && (
+                  <button type="button" className="t2cv-foldpill t2cv-runclose" data-testid="cv-runclose" onClick={() => closeRun(unfoldPill.get(c.key)!)}>
+                    <ChevronsDownUp size={12} aria-hidden="true" />{t('chatcanvas.run.collapse', { n: unfoldPill.get(c.key)!.mid.length })}
+                  </button>
+                )}
                 {c.user && (
                   <div className="t2cv-card t2cv-qcard" data-cv-part="q" data-sel={isSel && selPart === 'q' ? '' : undefined}>
                     {renaming === c.key ? (
@@ -1261,6 +1381,43 @@ export function ChatCanvas({ rootId, activeId, dir, onDir, onChat, exiting, onEx
                 {foldN > 0 && (
                   <button type="button" className="t2cv-foldpill" data-testid="cv-foldpill" title={t('chatcanvas.menu.unfold', { n: foldN })} aria-label={t('chatcanvas.menu.unfold', { n: foldN })} onClick={() => setFold(c.key, false)}>+{foldN}</button>
                 )}
+              </div>
+            )
+          })}
+          {/* 长直线中间收起来的那几轮:一张目录卡,一行一问,点哪行展开并落到哪张 */}
+          {runs.filter((r) => r.folded).map((r) => {
+            const fk = RUN + r.head
+            const b = boxes.get(fk)
+            if (!b) return null
+            const rows = r.mid.length > RUN_ROWS ? r.mid.slice(0, RUN_ROWS - 1) : r.mid
+            return (
+              <div
+                key={fk} ref={track} className="t2cv-turn t2cv-runfold" data-cv-node={fk} data-testid="cv-runfold"
+                data-hot={r.mid.some((k) => hot.has(k)) ? '' : undefined}
+                data-dim={focus && !r.mid.some((k) => activePath.includes(k)) ? '' : undefined}
+                data-measured={heights.has(fk) ? '' : undefined}
+                style={{ left: b.x, top: b.y, width: b.w }}
+              >
+                <div className="t2cv-card t2cv-index">
+                  <div className="t2cv-index-h">
+                    <ChevronsUpDown size={12} aria-hidden="true" />
+                    <b>{t('chatcanvas.run.folded', { n: r.mid.length })}</b>
+                    <button type="button" data-testid="cv-runfold-open" onClick={() => openRun(r.head)}>{t('chatcanvas.run.expand')}</button>
+                  </div>
+                  {rows.map((k) => {
+                    const c = tree.cards.get(k)
+                    const q = c ? (c.user ? questionText(c.user) : answerLead(c)) : ''
+                    const n = turnNo(k)
+                    return (
+                      <button type="button" key={k} className="t2cv-index-row" data-testid="cv-runfold-row" title={q} aria-label={`${t('chatcanvas.read.turnN', { n })} ${q}`} onClick={() => jumpRun(r.head, k)}>
+                        <i aria-hidden="true">{n}</i><span>{q}</span>
+                      </button>
+                    )
+                  })}
+                  {r.mid.length > rows.length && (
+                    <button type="button" className="t2cv-index-more" onClick={() => openRun(r.head)}>{t('chatcanvas.run.more', { n: r.mid.length - rows.length })}</button>
+                  )}
+                </div>
               </div>
             )
           })}

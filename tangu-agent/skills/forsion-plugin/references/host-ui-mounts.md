@@ -332,7 +332,25 @@ else { f.el.append(card); head.dataset.floatDrag = '' }         // content goes 
 - `role`: `'panel'` (default) stays at its anchor, later panels on top. `'notice'` stacks with other notices at the same anchor (8 px apart, first nearest the corner) and is announced (`role="status"`). Changing numbers (progress) → `'panel'`.
 - `bare: true` = no host card skin. `id` = remember the user's dragged corner on this device (namespaced by plugin id). Drag needs 4 px, ignores buttons / inputs, snaps to the nearest anchor on release; `onAnchorChange(a)` reports it, `f.move(a)` moves it.
 - Never takes focus, never closes itself. Enter/exit use the shared toast motion. Stacking: view floats < Space floats < window floats < menus < guide tips < dialogs < palette — never write literal z-index, use `var(--z-*)`.
-- Wrong shapes throw `TypeError`; a disabled plugin gets a no-op handle. Desktop-level floats (over other apps) and multiple Minis are later phases.
+- Wrong shapes throw `TypeError`; a disabled plugin gets a no-op handle. Desktop-level floats (over other apps) are host-only: no `'desktop'` scope for plugins.
+- To float a whole registered **view** (not DOM you draw), use `ctx.workspace.open(viewId, { layer: { float: 'space' | 'window' | 'view', anchor } })` (2.13.8+; `'view'` needs `host`). Same layers and anchors; the host draws the card head (title, "Show in main panel", close) and your `mount` gets `view.surface` `'mini'` (Mini look, default) or `'floating'` (`form: 'main'`). Same view + `key` reopens that card with new params. Closed on disable / reload / unregister / `close()`. Not restored after restart.
+
+### Opening views: ctx.workspace.open (2.13.8+)
+
+Where (`layer`) and what it looks like (`form`) written apart; `openView` / `openMiniPanel` / `openFloatingPanel` are fixed forms of it and keep working. Feature-detect `ctx.workspace?.open`.
+
+```js
+await ctx.workspace?.open('board', { layer: { dock: 'right' } })                     // = openView(…, { location: 'right' })
+await ctx.workspace?.open({ view: 'board', params }, { layer: { float: 'desktop' } }) // Mini window (always on top, reused by view + key)
+await ctx.workspace?.open('board', { layer: { float: 'desktop', pin: true }, form: 'main' }) // Floating Panel, on top only with pin
+const r = await ctx.workspace?.open('board', { layer: { float: 'space' } })           // card over the current Space
+// r: { ok: true, layer, form, close? } (where it actually went) | { ok: false, reason: 'unknown-view' | 'unsupported' | 'unavailable' | 'limit' | 'disabled' }
+```
+
+- `registerView({ …, forms: { main: true, side: true, mini: { view: 'board-mini' } } })`: which looks the view supports. No `forms` = everything (as before). `mini.view` = this plugin's compact view (relative id) shown whenever the view opens in the Mini look; "Show in main panel" goes back to the view.
+- Fallback: docked → the place decides the look (`form` ignored); unsupported → main → right → bottom / left·right → main → bottom / bottom → right → main; no bottom panel = right; mini-only views float over the current Space; no usable look at all (e.g. `forms: {}`) → `'unsupported'`. Compact views must belong to your plugin; a view without `forms` opened with `openMiniPanel` still shows itself (as in 2.13.7). Floating → `form` defaults to `'mini'` (`side` / `bottom` = `main`); mini unsupported → main, the view itself unsupported → mini.
+- Web has no Mini window: `{ float: 'desktop' }` + mini becomes a window card. Phones: a half-height sheet; `form: 'main'` docks in the main area. Mini / Floating Panel windows cannot open the in-window layers (`unavailable`).
+- Only your own views. `{ float: 'desktop' }` is just Mini / Floating Panel; `ctx.ui.float` still has no desktop scope. Bad shapes throw `TypeError`.
 
 ### Settings parts: ctx.ui.mountSettingsPage / mountSettingsItem (2026-10-17+)
 

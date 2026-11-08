@@ -145,3 +145,44 @@ export function readSteps(n: number, cur: number): number[] {
   const keep = [...new Set([0, 1, cur - 1, cur, cur + 1, n - 1])].filter((i) => i >= 0 && i < n).sort((a, b) => a - b)
   return keep.flatMap((i, j) => (!j || i - keep[j - 1] === 1 ? [i] : i - keep[j - 1] === 2 ? [i - 1, i] : [-1, i]))
 }
+
+/** 一段长直线折起来的那一截(方案 docs/ToBeImproved/画布直线折叠方案_2026-11-07,C 目录卡)。 */
+export interface RunFold {
+  /** 这一段的第一张(留着);折叠物挂在它下面 */
+  head: string
+  /** 收进目录卡的那几张(按先后) */
+  mid: string[]
+  /** 目录卡下面接着的那张(这一段倒数第二张,留着) */
+  next: string
+  /** true = 这次真折起来了;false = 够长但被展开 / 被保留的卡撑开着(展开了的段才挂「收起」) */
+  folded: boolean
+  /** 用户点过「全部展开」(展开记在偏好里) */
+  opened: boolean
+}
+/** 超过这么多轮的一段直线才折:留开头 1 + 末尾 2,中间收起 */
+export const RUN_FOLD_OVER = 3
+/**
+ * 找出排版树里的长直线。一段 = 从树根或分叉处开始、中间每张卡都只有一个孩子、到 0 个或多个孩子的卡为止;
+ * 分叉卡永远是一段的终点,所以分叉点永远看得见。kids 是排版用的孩子(已按左右顺序排好、手动收起的卡没有孩子);
+ * 只有草稿一个孩子也算这一段到头(草稿挂的卡要看得见)。keep 里的卡落在中间时这一段不折(在生成 / 选中 / 阅读中…)。
+ */
+export function findRunFolds(roots: readonly string[], kids: (k: string) => readonly string[], keep: (k: string) => boolean,
+  opened: ReadonlySet<string>, isReal: (k: string) => boolean = () => true): RunFold[] {
+  const out: RunFold[] = []
+  const walk = (start: string): void => {
+    const run = [start]
+    for (;;) {
+      const ks = kids(run[run.length - 1])
+      if (ks.length !== 1 || !isReal(ks[0])) break
+      run.push(ks[0])
+    }
+    if (run.length > RUN_FOLD_OVER) {
+      const mid = run.slice(1, -2)
+      const open = opened.has(start)
+      out.push({ head: start, mid, next: run[run.length - 2], opened: open, folded: !open && !mid.some(keep) })
+    }
+    for (const c of kids(run[run.length - 1])) if (isReal(c)) walk(c)
+  }
+  for (const r of roots) walk(r)
+  return out
+}

@@ -1,10 +1,13 @@
 /**
  * Muse 面板(Muse Space 右栏 + 后台智能体详情页共用)。2026-11-07 右栏改版(方案页 docs/ToBeImproved/MuseSpace优化方案_2026-11-07/
  * panel.html,用户选 B、按建议先上 A):头行 = 名字 + 打开 Library + 设置 → 状态一行字(在想 / 等你批准 / 在睡 / 空闲)+ 一行下次醒来与权限档
- * → 要你批准(有才出,只展开第一件)→ 上一轮在想(正文、不加框、5 行 + 展开)→ 待办 → 它给自己排的 → 什么时候叫醒它。
+ * → 要你批准(有才出,只展开第一件)→ 上一轮在想(正文、不加框、5 行 + 展开)→ 待办 → 它给自己排的 → 什么时候叫醒它 → 最近几轮。
  * 行操作悬停 / 键盘聚焦才出;待办勾了才出「放进会话 / 新对话里做」那条。没开:只留一行「未开启 · 去设置」,下面什么都不摆
  * (主区已经是「Muse 还没开」空态,不在侧栏再讲一遍,DESIGN §6 空态)。
- * 主区换成宿主模板(方案 D)那天,Space 右栏切到 B:待办、追踪中挪去主区,这里加「最近几轮」。外层容器负责 padding / 滚动。
+ * 11-08 先上了方案 B 里不等主区的两件:状态行右边的「叫醒」(空闲 / 在睡时才出;引擎 POST /muse/wake)和「最近几轮」
+ * (引擎 GET /muse/rounds;点一条打开那一轮的会话)。不设「全部」:每轮一个会话,自动化 Space 的 Muse 页只看得到最新一轮,
+ * 链过去名不副实;要看触发规则走「什么时候叫醒它」那节的「自动化 →」。旧引擎没有这两条路 → 两块都不画。
+ * 主区换成宿主模板(方案 D)那天,Space 右栏切到 B:待办、追踪中挪去主区。外层容器负责 padding / 滚动。
  */
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Sparkles, Check, X, Trash2, ShieldQuestion, MessageSquarePlus, FolderOpen, Settings, Pause, Play, Pencil, HeartPulse, AlarmClock, Zap, ChevronRight } from 'lucide-react'
@@ -12,11 +15,11 @@ import { setActiveSpace, useWorkspace } from '@lcl/engine'
 import { syncAgentSpace } from '../builtins/agentSpaceSync'
 import {
   getMuseStatus, getMuseTodos, patchMuseTodo, injectMuseTodos, listMessages, getMuseTriggers, deleteMuseTrigger, saveMuseTrigger,
-  listMuseApprovals, decideMuseApproval, getAgentSchedules, deleteAgentScheduleEntry, postMuseFeedback,
+  listMuseApprovals, decideMuseApproval, getAgentSchedules, deleteAgentScheduleEntry, postMuseFeedback, wakeMuse, getMuseRounds,
 } from '../services/backendService'
 import { useApp } from '../stores/appStore'
 import { openNewChat } from '../sessionNav'
-import type { AgentScheduleEntry, MuseStatusInfo, MuseTodo, MuseTriggerInfo, PendingApprovalInfo, SessionRecord, TanguDesktopConfig } from '../types'
+import type { AgentScheduleEntry, MuseRoundInfo, MuseStatusInfo, MuseTodo, MuseTriggerInfo, PendingApprovalInfo, SessionRecord, TanguDesktopConfig } from '../types'
 import { registerMessages, useI18n } from '../i18n'
 import { formatDateTime, formatDayTime, formatMessageTime, formatRelative } from '../format/time'
 import { formatRepeat } from '../format/repeat'
@@ -28,7 +31,7 @@ import '../views/automation/messages'
 import { homeTarget, targetForSession } from '../services/engine/targets'
 import { previewNeedsScrollHint } from './approvalText'
 import { SelectField } from './SelectField'
-import { colTime, trackWhen } from './museViewFormat'
+import { colTime, roundDuration, roundOutcome, roundTrigger, trackWhen } from './museViewFormat'
 import './museView.css'
 
 registerMessages({
@@ -75,6 +78,32 @@ registerMessages({
   'musePanel.heartbeat': { zh: '心跳', en: 'Heartbeat' },
   'musePanel.heartbeatOff': { zh: '心跳关着，只有规则和它排的日程会叫醒它', en: 'Heartbeat is off. Only rules and its schedule wake it' },
   'musePanel.rulesEmpty': { zh: '还没有规则。在私聊里跟它说「打开 Steam 时提醒我先做题」就能加一条。', en: 'No rules yet. Tell it "remind me to study when I open Steam" in your chat to add one.' },
+  'musePanel.wakeNow': { zh: '叫醒', en: 'Wake' },
+  'musePanel.wakeQueued': { zh: '叫醒了，马上开始', en: 'Waking it now' },
+  'musePanel.wakeWaitUser': { zh: '你那边有对话在跑，跑完它就醒', en: 'Waits for your running chat, then wakes' },
+  'musePanel.wakeWaitLocked': { zh: '急停开着，解锁后它就醒', en: 'Emergency stop is on. It wakes once you unlock' },
+  'musePanel.wakeNoBudget': { zh: '这段时间的额度用完了，没叫醒', en: 'Its budget for this period is used up, so it stayed asleep' },
+  'musePanel.wakeNoRestarts': { zh: '这段时间醒的次数到上限了，没叫醒', en: 'It hit its wake limit for this period, so it stayed asleep' },
+  'musePanel.wakeNoModel': { zh: '没有可用的模型，没叫醒', en: 'No model is available, so it stayed asleep' },
+  'musePanel.wakeFail': { zh: '没叫醒：{e}', en: 'Could not wake it: {e}' },
+  'musePanel.rounds': { zh: '最近几轮', en: 'Recent rounds' },
+  'musePanel.roundsEmpty': { zh: '它醒过之后，这里会列出最近几轮。', en: 'Its recent rounds show up here once it has woken.' },
+  'musePanel.roundUnknown': { zh: '一轮', en: 'A round' },
+  'musePanel.by.manual': { zh: '你叫醒的', en: 'You woke it' },
+  'musePanel.by.heartbeat': { zh: '心跳', en: 'Heartbeat' },
+  'musePanel.by.rule': { zh: '规则「{name}」', en: 'Rule "{name}"' },
+  'musePanel.by.ruleAny': { zh: '规则', en: 'A rule' },
+  'musePanel.by.schedule': { zh: '日程「{name}」', en: 'Schedule "{name}"' },
+  'musePanel.dur.s': { zh: '{n} 秒', en: '{n}s' },
+  'musePanel.dur.m': { zh: '{n} 分钟', en: '{n} min' },
+  'musePanel.dur.h': { zh: '{h} 小时 {m} 分', en: '{h}h {m}m' },
+  'musePanel.files1': { zh: '写了 1 个文件', en: 'Wrote 1 file' },
+  'musePanel.filesN': { zh: '写了 {n} 个文件', en: 'Wrote {n} files' },
+  'musePanel.todos1': { zh: '提了 1 条待办', en: 'Added 1 to-do' },
+  'musePanel.todosN': { zh: '提了 {n} 条待办', en: 'Added {n} to-dos' },
+  'musePanel.roundQuiet': { zh: '没写文件，也没提待办', en: 'No files written, no to-dos' },
+  'musePanel.roundFailed': { zh: '没跑完：{e}', en: 'Did not finish: {e}' },
+  'musePanel.roundAborted': { zh: '被停下了', en: 'Stopped' },
 })
 
 const arr = <T,>(v: unknown): T[] => (Array.isArray(v) ? v : [])
@@ -94,9 +123,13 @@ const reasonText = (raw: string | null, t: (k: string, v?: Record<string, string
 /** 时间型规则画闹钟,其余(看到某个活动、文件变化、插件事件)画闪电。 */
 const TIME_CONDS: ReadonlySet<string> = new Set(['daily_at', 'at', 'every'])
 
+/** 叫醒作废的原因 → 说法(让位 / 急停那两种请求还留着,走 wakePending 那条)。 */
+const WAKE_DROPPED: Record<string, string> = { budget: 'musePanel.wakeNoBudget', restartCap: 'musePanel.wakeNoRestarts', noModel: 'musePanel.wakeNoModel' }
+
 export const MuseView: React.FC<{
   cfg: TanguDesktopConfig
   sessions: SessionRecord[]
+  /** 打开某个会话:注入待办后跳过去、「最近几轮」点一条都走它(两个挂载点传的都是 openSession)。 */
   onInjected: (sessionId: string) => void
 }> = ({ cfg, sessions, onInjected }) => {
   const { t, locale } = useI18n()
@@ -118,6 +151,12 @@ export const MuseView: React.FC<{
   const [target, setTarget] = useState<string>('')
   const [msg, setMsg] = useState('')
   const [busy, setBusy] = useState<string>('') // 正在裁决的审批 id(approve 会同步执行工具)
+  // 最近几轮:null = 还没取到 / 旧引擎没有这条读口(整块不画)
+  const [rounds, setRounds] = useState<MuseRoundInfo[] | null>(null)
+  const roundsKey = useRef({ key: '', at: 0 }) // 上次拉「最近几轮」时的状态签名(见 load)
+  const [waking, setWaking] = useState(false)
+  const [wakeAsk, setWakeAsk] = useState(0) // 这个面板里点「叫醒」的时刻:作废原因只在点过之后的两分钟里说
+  const [wakeErr, setWakeErr] = useState('')
   // 本面板只列 Muse 的时机:叫醒它的规则(无动作链/无执行者;legacy 落盘可能有显式 agentSlug:'muse'=同义)
   // 和只做直接提醒的规则;别的自动化在自动化 Space 统一管理
   useAutomation((s) => s.refreshNonce) // 删除进入 / 撤出撤销窗口时重渲
@@ -136,6 +175,16 @@ export const MuseView: React.FC<{
     // 旧引擎无此端点 → 404 → 空列表(读端兜底,面板不红)。
     setApprovals(arr(await listMuseApprovals(homeTarget(), 'pending').catch(() => [])))
     setTracks(await getAgentSchedules(homeTarget()).then((all) => arr<AgentScheduleEntry>(arr<{ slug: string; entries?: AgentScheduleEntry[] }>(all).find((s) => s.slug === 'muse')?.entries).filter((e) => e.auto)).catch(() => []))
+    // 多取一条:在跑的那轮不进列表(状态行已经说了「正在想」)。旧引擎 404 → 整块不画;别的偶发失败留着上一份,不闪。
+    // 不跟 4 秒轮询每次都拉(引擎要翻 agent_runs 和待办):起停了一轮(会话 / 在跑 / 上次醒来变了)才拉,另外每分钟补一次。
+    const key = `${st?.sessionId ?? ''}|${st?.running ? 1 : 0}|${st?.lastCycleAt ?? ''}`
+    const rk = roundsKey.current
+    if (rk.key !== key || Date.now() - rk.at > 60_000) {
+      await getMuseRounds(homeTarget(), 4).then(
+        (rs) => { setRounds(arr<MuseRoundInfo>(rs)); roundsKey.current = { key, at: Date.now() } },
+        (e: any) => { if (e?.status === 404) { setRounds(null); roundsKey.current = { key, at: Date.now() } } },
+      )
+    }
     if (st?.sessionId) {
       const ms = arr<{ role: string; content?: unknown; timestamp?: unknown }>(await listMessages(targetForSession(st.sessionId), st.sessionId, 6).catch(() => []))
       const lastAssistant = [...ms].reverse().find((m) => m.role === 'assistant' || m.role === 'model')
@@ -240,6 +289,11 @@ export const MuseView: React.FC<{
   const openRule = (id: string): void => { useApp.getState().closeSettings(); setActiveSpace('automation'); void useAutomation.getState().openRule(id) }
   const openAutomation = (): void => { useApp.getState().closeSettings(); setActiveSpace('automation') }
   const openSettings = (): void => useApp.getState().openSettings('agents/ag-special/muse')
+  const openRound = (sessionId: string): void => onInjected(sessionId)
+  const wake = async (): Promise<void> => {
+    setWaking(true); setWakeAsk(Date.now()); setWakeErr('')
+    try { setStatus(await wakeMuse(homeTarget())) } catch (e: any) { setWakeErr(t('musePanel.wakeFail', { e: e?.message || e })) } finally { setWaking(false) }
+  }
   const condText = (tg: MuseTriggerInfo): string =>
     'params' in tg.cond ? ruleCondText(t, tg.cond) : tg.cond.type === 'file_chars_gte'
       ? t('special.muse.trigFile', { path: tg.cond.path.split(/[\\/]/).pop() || tg.cond.path, n: tg.cond.n })
@@ -272,6 +326,14 @@ export const MuseView: React.FC<{
     modeText,
   ].filter(Boolean).join(' · ')
   const lastError = !running && !thinking && status?.lastError ? status.lastError : ''
+  // 叫醒:新引擎才有 wakePending 字段(远程来源的投影也没有 → 不出);空闲 / 在睡时出,在想 / 等你批准时不出
+  const canWake = !!status?.enabled && typeof status.wakePending === 'boolean' && (stateKey === 'idle' || stateKey === 'sleeping') && !status.wakePending && !waking
+  const dropped = status?.wakeBlocked ? WAKE_DROPPED[status.wakeBlocked] : undefined
+  const wakeNote = !status || running ? ''
+    : status.wakePending ? t(status.wakeBlocked === 'userActive' ? 'musePanel.wakeWaitUser' : status.wakeBlocked === 'locked' ? 'musePanel.wakeWaitLocked' : 'musePanel.wakeQueued')
+      : wakeErr || (dropped && wakeAsk && Date.now() - wakeAsk < 120_000 ? t(dropped) : '')
+  const doneRounds = (rounds || []).filter((r) => r.status !== 'running' && r.status !== 'queued').slice(0, 3)
+  const ruleName = (id: string): string | undefined => triggers.find((x) => x.id === id)?.desc
   const shownApproval = approvals.find((a) => a.id === openApproval) ? openApproval : approvals[0]?.id
   const allSelected = todos.length > 0 && sel.size === todos.length
 
@@ -294,8 +356,12 @@ export const MuseView: React.FC<{
       ) : <>
         {status && (
           <div className="mv-st" data-state={stateKey} title={stateKey === 'sleeping' && status.sleepReason ? t('special.muse.sleepingTitle', { reason: status.sleepReason }) : undefined}>
-            <div className="mv-st-line"><i className="mv-dot" data-state={stateKey} />{stateLine}</div>
+            <div className="mv-st-line">
+              <i className="mv-dot" data-state={stateKey} />{stateLine}
+              {canWake && <button type="button" className="mv-link r" data-action="muse-wake" onClick={() => void wake()}>{t('musePanel.wakeNow')}</button>}
+            </div>
             {stateMeta && <div className="mv-meta">{stateMeta}</div>}
+            {wakeNote && <div className="mv-meta" data-wake-note="" role="status">{wakeNote}</div>}
           </div>
         )}
 
@@ -440,6 +506,26 @@ export const MuseView: React.FC<{
           </div>
           {museTriggers.length === 0 && <div className="mv-hint">{t('musePanel.rulesEmpty')}</div>}
         </section>
+
+        {/* 最近几轮:时间 · 怎么醒的 · 用了多久,下一行写了几个文件 / 提了几条待办(引擎从检查点与待办表数,不让模型另写摘要)。
+            点一条打开那一轮的会话。 */}
+        {status?.enabled && rounds && (
+          <section className="mv-sec" data-section="rounds">
+            <div className="mv-sh"><b>{t('musePanel.rounds')}</b></div>
+            {doneRounds.length === 0 && <div className="mv-hint">{t('musePanel.roundsEmpty')}</div>}
+            {doneRounds.length > 0 && <div className="mv-rows">
+              {doneRounds.map((r) => {
+                const head = [roundTrigger(r.trigger, t, ruleName), r.endedAt ? roundDuration(r.endedAt - r.startedAt, t) : ''].filter(Boolean).join(' · ')
+                return (
+                  <button key={r.runId} type="button" className="mv-row tl mv-round" data-round-id={r.runId} data-round-status={r.status} onClick={() => openRound(r.sessionId)}>
+                    <span className="mv-time">{colTime(formatDayTime(r.startedAt))}</span>
+                    <span className="mv-rt"><b>{head || t('musePanel.roundUnknown')}</b><i>{roundOutcome(r, t)}</i></span>
+                  </button>
+                )
+              })}
+            </div>}
+          </section>
+        )}
       </>}
     </div>
   )

@@ -3,6 +3,7 @@
  * 桌面(Electron)注入真身(→ window.tangu 多窗 IPC);web/移动留空(无 OS 窗口 → 拖出/跨窗为 no-op)。
  * 引擎(WorkspaceHost / tab 右键菜单)只调此缝,不 import 任何平台代码 —— 与 i18nSeam 同范式。
  */
+import { WINDOW_SPACE_ID } from './uiMode'
 export interface ViewRef { type: string; params?: Record<string, unknown> }
 
 export interface DetachApi {
@@ -10,6 +11,8 @@ export interface DetachApi {
   detach(views: ViewRef[], at?: { screenX: number; screenY: number }): void
   /** 把整个 Space 开到它自己的窗口里(一个 Space 一扇,已开着就叫到前面);at 同上。没有 OS 窗口的宿主不提供。 */
   openSpace?(spaceId: string, at?: { screenX: number; screenY: number }): void
+  /** 给这个 Space 在系统桌面放一个快捷方式,双击 = 开在它自己的窗口里(不露出主窗)。能写桌面快捷方式的宿主才提供。 */
+  addSpaceToDesktop?(spaceId: string): void
   /** Windows host avoids the native HTML drag loop for Ribbon Spaces. */
   ribbonPointerDrag?: boolean
   /** Snapshot OS cursor DIP coordinates at release, including mixed-DPI monitors. */
@@ -23,3 +26,9 @@ export interface DetachApi {
 let current: DetachApi | null = null
 export function setDetachApi(api: DetachApi | null): void { current = api }
 export function getDetachApi(): DetachApi | null { return current }
+
+/** 这个 Space 点一下会开到它自己的窗口去(本窗口是锁在别的 Space 上的 Space 窗口,宿主能开窗)。
+ *  打开 Space 的入口据此决定要不要先放就地切换的动效、后面还要不要在本窗口接着开东西。 */
+export function spaceOpensElsewhere(id: string): boolean {
+  return !!WINDOW_SPACE_ID && WINDOW_SPACE_ID !== id && !!current?.openSpace
+}

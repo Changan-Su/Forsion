@@ -306,7 +306,8 @@ else { f.el.append(card); card.querySelector('.head').dataset.floatDrag = '' }
 - A float never takes focus and never closes itself; `f.anchor` / `f.closed` are readable. Enter and exit use the host's shared motion (`data-motion="toast"`); no movement under reduced motion.
 - There is one stacking table (DESIGN §3, floats and layers): view floats < Space floats (inside the Space area, only above its splitters) < window floats < menus / popovers < guide tips < dialogs < command palette. Don't write literal z-index values; use `var(--z-*)` if you must.
 - Wrong shapes (unknown `scope`, `'view'` without a connected `host`, unknown `anchor` / `role`) throw `TypeError` synchronously. A disabled plugin gets a handle that does nothing.
-- Desktop-level floats (a capsule over other apps) and multiple Mini windows are not in this phase; don't open OS windows of your own for them yet.
+- Desktop-level floats (a capsule over other apps) are host-only: there is no `'desktop'` scope here, and don't open OS windows of your own for them.
+- When what should float is your whole registered **view** (not a card you draw), use `ctx.workspace.open(viewId, { layer: { float: 'space' } })`: the same scopes and anchors, with the card head and "Show in main panel" drawn by the host. See "One way to open views" in [Plugin development](./plugin-development.md) (2.13.8+).
 
 ### Settings parts (2026-10-17)
 

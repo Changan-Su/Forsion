@@ -12,6 +12,8 @@ vi.mock('../services/backendService', () => ({
   getAgentMemorySnapshot: vi.fn(), putAgentMemory: vi.fn(), mutateAgentMemoryEntry: vi.fn(), listAgentMemoryRevisions: vi.fn(), restoreAgentMemory: vi.fn(),
   getAgentMemoryDream: vi.fn(), configureAgentMemoryDream: vi.fn(), startAgentMemoryDream: vi.fn(), cancelAgentMemoryDream: vi.fn(),
 }))
+// 遗忘理由行(FeedbackReasons)只在勾「附上原文」/ 发原文时读 store;真 store 会把 syncSetup → pluginStore 整条链拉进来,这里只给它要的两样
+vi.mock('../stores/appStore', () => ({ useApp: { getState: () => ({ authInfo: null, toast: () => {} }) } }))
 function deferred<T>() {
   let resolve!: (value: T) => void
   let reject!: (reason: unknown) => void
@@ -74,6 +76,7 @@ describe('Agent memory management', () => {
     await act(async () => old.resolve(snapshot('OLD_ACCOUNT_SECRET')))
     expect(host.textContent).not.toContain('OLD_ACCOUNT_SECRET')
     await click('agentMemory.forget')
+    await click('reason.memorySkip')
     const call = vi.mocked(api.mutateAgentMemoryEntry).mock.calls.at(-1)!
     expect(await tokenOf(call[0])).toBe('account-b')
     expect(call.slice(1)).toEqual(['beta', { action: 'forget', id: 'fact-1', expectedVersion: 'v1' }])
@@ -89,6 +92,7 @@ describe('Agent memory management', () => {
     expect(host.textContent).not.toContain('agentMemory.revisions')
     expect(host.querySelector('textarea[aria-label="agentMemory.document"]')).toBeTruthy()
     await click('agentMemory.forget')
+    await click('reason.memorySkip')
     expect(vi.mocked(api.mutateAgentMemoryEntry).mock.calls.at(-1)!.slice(1)).toEqual(['alpha', { action: 'forget', id: 'fact-1', expectedVersion: '3:h3' }])
   })
   it('read failures are visible and never become editable empty memory', async () => {
@@ -120,7 +124,9 @@ describe('Agent memory management', () => {
     const write = deferred<AgentMemorySnapshot>()
     vi.mocked(api.mutateAgentMemoryEntry).mockReturnValue(write.promise)
     await render()
-    const forget = button('agentMemory.forget')
+    // 遗忘先开理由行,真正发写的是「直接遗忘」:连点它只发一次
+    await click('agentMemory.forget')
+    const forget = button('reason.memorySkip')
     await act(async () => { forget.click(); forget.click() })
     expect(api.mutateAgentMemoryEntry).toHaveBeenCalledTimes(1)
     expect(forget.disabled).toBe(true)

@@ -156,6 +156,24 @@ describe('daily_memory', () => {
     expect(cell('daily_memory', 'userRestoreDreamRetired', 'xyra')).toBe(1);
   });
 
+  it('遗忘理由(P3):只跟 forget 走,按 agentRole 计;认不得的当没给', async () => {
+    const e = { id: 'x', content: 'The user likes tea.', source: { kind: 'explicit' }, createdAt: new Date(Date.now() - 30 * 86_400_000).toISOString() } as any;
+    noteUserEntryEdit('xyra', 'forget', e, 'wrong');
+    noteUserEntryEdit('xyra', 'forget', e, 'stale');
+    noteUserEntryEdit('my-private-agent', 'forget', e, 'duplicate');
+    noteUserEntryEdit('xyra', 'forget', e, 'the user lives in Paris');
+    noteUserEntryEdit('xyra', 'forget', e, { reason: 'wrong' });
+    noteUserEntryEdit('xyra', 'update', e, 'wrong');
+    await settle();
+    expect(cell('daily_memory', 'userForget', 'xyra')).toBe(4);
+    expect(cell('daily_memory', 'userForgetWrong', 'xyra')).toBe(1);
+    expect(cell('daily_memory', 'userForgetStale', 'xyra')).toBe(1);
+    expect(cell('daily_memory', 'userForgetDuplicate', 'custom')).toBe(1);
+    expect(cell('daily_memory', 'userForgetUnwanted', 'xyra')).toBeUndefined();
+    const all = db.prepare(`SELECT dim, field FROM telemetry_ledger`).all() as any[];
+    expect(all.some((r) => /Paris|private/.test(r.field + r.dim))).toBe(false);
+  });
+
   it('Dream:来源、结局、调用次数、结构化的数;核验不过记 dreamVerifyFail', async () => {
     configureMemoryDream('recita', { modelId: 'test-model' });
     repoOf('recita').add('Existing fact');

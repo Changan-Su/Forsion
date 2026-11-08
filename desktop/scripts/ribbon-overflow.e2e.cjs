@@ -214,7 +214,7 @@ async function electronRun() {
     assert.equal((await ids(page, 'bottom')).length, 5)
     await page.locator('.rb-bottom .rb-more').click()
     await page.waitForTimeout(SETTLE)
-    assert.deepEqual([...await rows(page, 'bottom'), ...await ids(page, 'bottom')], ['rb-achievements', 'rb-unit', 'rb-feedback', 'rb-market', 'rb-cmd', 'rb-settings', 'rb-mode'])
+    assert.deepEqual([...await rows(page, 'bottom'), ...await ids(page, 'bottom')], ['rb-achievements', 'rb-unit', 'rb-mode', 'rb-market', 'rb-feedback', 'rb-cmd', 'rb-settings'])
     await capsuleHit(page)
     await page.keyboard.press('Escape')
     await page.waitForTimeout(SETTLE)

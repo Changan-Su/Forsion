@@ -83,7 +83,13 @@ export function TanguDetailsView({ extendView }: Pick<ViewProps, 'extendView'>) 
   // 侧栏「查看详情」:临时显示指定的项目 / Agent,不切会话;右栏跟随的主会话变了就作废(store 订阅也会清)
   const subject = useDetailsSubject((d) => (d.subject && d.subject.from === sessionId ? d.subject : null))
   const subjectProject = useProjectSubject(subject?.kind === 'project' ? subject.path : null)
-  const carrier = useApp((a) => (subjectProject ? a.sessions.find((x) => x.id === subjectProject.carrierId) || a.archivedSessions.find((x) => x.id === subjectProject.carrierId) : undefined))
+  // 从 Git 卡跳来的:用卡片所在的会话读(它的额外文件夹决定清单里有哪些仓);找不到再用项目缺省的那个
+  const carrierWant = subject?.kind === 'project' && subject.gitSession ? subject.gitSession : subjectProject?.carrierId
+  const carrier = useApp((a) => {
+    if (!subjectProject) return undefined
+    const find = (id?: string) => (id ? a.sessions.find((x) => x.id === id) || a.archivedSessions.find((x) => x.id === id) : undefined)
+    return find(carrierWant) || find(subjectProject.carrierId)
+  })
   const carrierConfig = useApp((a) => (carrier ? a.configBySession[carrier.id] : undefined))
   const subjectAgent = subject?.kind === 'agent' ? s.agents.find((a) => a.slug === subject.slug) : undefined
   const viewing = subjectProject && carrier ? 'project' : subjectAgent ? 'agent' : null
@@ -91,7 +97,7 @@ export function TanguDetailsView({ extendView }: Pick<ViewProps, 'extendView'>) 
     <div className="agent-profile-panel-title">{t('agentProfile.title')}
       {viewing && <button type="button" className="profile-text-action" data-act="details-back" onClick={() => useDetailsSubject.setState({ subject: null })}>{t('agentProfile.backToCurrent')}</button>}</div>
     {viewing === 'project' && subjectProject && carrier ? <ProjectProfile key={`subject:${subjectProject.workspace.path}`} session={carrier} config={carrierConfig || carrier.agent_config || EMPTY_CONFIG}
-        workspace={subjectProject.workspace} humanJump={subject?.human} recordJump={subject?.records} gitJump={subject?.git} currentSessionId={sessionId} renderAgent={renderMember} renderTeam={renderTeam} />
+        workspace={subjectProject.workspace} humanJump={subject?.human} recordJump={subject?.records} gitJump={subject?.git} gitRepo={subject?.gitRepo} currentSessionId={sessionId} renderAgent={renderMember} renderTeam={renderTeam} />
       : viewing === 'agent' && subjectAgent ? <AgentProfile key={`subject:${subjectAgent.slug}`} agent={subjectAgent} compact extendView={extendView} humanJump={subject?.human} evolutionJumpAt={subject?.evolution || 0} recordJump={subject?.records} rewriteSessionId={sessionId} />
       : project && s.session ? <ProjectProfile key={project.path} session={s.session} config={config} workspace={project} renderAgent={renderMember} renderTeam={renderTeam} />
       : config.groupChat || config.teamSlug ? <TeamProfile key={`${sessionId}:${config.teamSlug || ''}`} session={s.session} config={config} renderMember={renderMember} /> : config.engineId || config.soloEngineId ? <section className="agent-profile-team"><h3>{s.engines.find((e) => e.id === (config.engineId || config.soloEngineId))?.name || config.engineId || config.soloEngineId}</h3><div className="agent-current-session"><strong>{s.session?.title}</strong><span>{s.session?.project_name || config.cwd}</span></div></section> : agent ? <AgentProfile key={agent.slug} agent={agent} compact sessionId={sessionId} extendView={extendView} /> : <p className="agent-profile-muted">{t('agentProfile.noAgent')}</p>}

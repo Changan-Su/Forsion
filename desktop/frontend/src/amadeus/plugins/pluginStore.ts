@@ -3,7 +3,8 @@
 // themes) that the UI subscribes to. Built-in plugins are registered on init(); external
 // (Forsion) plugins are discovered from ~/.forsion/plugins/ and evaluated here.
 //
-import { openMiniWindow } from '../../mini/openMiniWindow'
+import { hostWorkspaceOpen } from '../../workspaceOpenHost'
+import type { OpenLayer, OpenOptions, OpenResult } from '@lcl/engine/workspaceOpen'
 import { leaseAccountResponse } from './accountResponse'
 import { pushMobileBack } from '../lib/mobileBack'
 import { desktopAccount } from './desktopAccount'
@@ -21,6 +22,22 @@ import { pluginHostPath } from './hostPaths'
 import { ownedChannelPatch, pluginRequestPath, type ChannelOwnership, type PluginRequestOptions } from './engineRequest'
 import { request as engineJsonRequest } from '../../services/backendService'
 
+/** Mini / 浮层的身份:去空白、限长;空 = 没有。 */
+const cleanKey = (key: unknown): string | undefined => (typeof key === 'string' ? key.trim().slice(0, 128) || undefined : undefined)
+/** 插件给的 layer → 引擎的 layer。只认 dock 四位、desktop(只是 Mini / Floating Panel 换个写法)和 view / space / window
+ *  三档浮层;Space 作用域只给当前 Space(不让插件点名别的 Space)。形状不对同步抛,和 ctx.ui.float 一个口径。 */
+function pluginLayer(raw: unknown): OpenLayer | undefined {
+  if (raw == null) return undefined
+  if (typeof raw !== 'object') throw new TypeError('workspace.open layer must be { dock } or { float }')
+  const l = raw as Record<string, unknown>
+  if ('dock' in l) return { dock: l.dock as 'main' } // 值由引擎的 checkOpenOptions 核
+  if (l.float === 'desktop') return { float: 'desktop', pin: l.pin === true }
+  if (l.float === 'view' || l.float === 'space' || l.float === 'window') {
+    const anchor = l.anchor as FloatAnchor | undefined // 值由引擎的 checkOpenOptions 核
+    return l.float === 'view' ? { float: 'view', host: l.host as HTMLElement, anchor } : { float: l.float, anchor }
+  }
+  throw new TypeError("workspace.open layer must be { dock }, { float: 'desktop' }, or { float: 'view' | 'space' | 'window' }")
+}
 /** window.tangu,在没有 window 的环境(vitest node 环境、云端 worker)返回 undefined 而不是抛 ReferenceError。 */
 const hostTangu = (): typeof window.tangu => (typeof window !== 'undefined' ? window.tangu : undefined)
 /** 这个宿主有没有「自动化规则」这回事:探针给得出后端配置,且宿主没有声明「这里没有本机引擎」。
@@ -52,12 +69,12 @@ import { registerSummaryCard, revokeSummaryCards, type SummaryCardContribution, 
 import { currentPlatform } from '../../services/agentRunService'
 import { UI_MODE } from '@lcl/engine/uiMode'
 import { attachTooltip } from '@lcl/engine/hoverSurface'
-import { openFloat, FLOAT_ANCHORS, type FloatOptions } from '@lcl/engine/floatLayer'
+import { openFloat, FLOAT_ANCHORS, type FloatAnchor, type FloatOptions } from '@lcl/engine/floatLayer'
 import { defineMessages, hostListSource, isPluginText, pluginText } from './pluginText'
 import { checkPluginIcon, pluginIconElement } from './pluginIcon'
 import { pluginListEmpty, setHostListEmpty } from '../../views/hostListEmpty'
 import { createDropIndicator, land as landDrop, landCancel, landWhenMoved } from '@lcl/engine/dropIndicator'
-import { setActiveSpace, useCommandStore, useSpaceStore, nativeHaptic, nativeHapticAvailable, claimNativeChrome, listFirstNow, nativeChromeInstalled, useWorkspace } from '@lcl/engine'
+import { openObject, useCommandStore, useSpaceStore, nativeHaptic, nativeHapticAvailable, claimNativeChrome, listFirstNow, nativeChromeInstalled, useWorkspace } from '@lcl/engine'
 import { AUTO_WORK_FOLDER_KEY, pluginDisplayName } from './display'
 // 自动化播种 / 禁用即关规则:backendService 依赖图干净(http / agentRunService / localInbox,均不引 appStore),
 // 可静态 import;cfg 必须经 tanguSeam 探针的 waitBackend 拿(appStore 与本模块有 import 环)。
@@ -113,7 +130,7 @@ import type {
 import { validateTableSpec } from './tableSpec'
 import { clearDevRecords, devConsoleFor, dropDevRecords } from './devRecords'
 import { gatePluginManifest, type ExternalPluginSource } from '@amadeus-shared/ipc'
-import { createEffectScope, type EffectRecord, type EffectScope } from './effectScope'
+import { createEffectScope, type EffectHandle, type EffectRecord, type EffectScope } from './effectScope'
 import { dependentsOf, topoOrder, unmetDependencies, type UnmetDependency } from './pluginDeps'
 import { LIST_CAPABILITIES } from './listTree'
 import { CHAT_BOX_CAPABILITIES } from '../../../../shared/chatBox'
@@ -605,10 +622,11 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
     vaultRoot: () => usePageStore.getState().vaultRoot || null,
     // 切 Space / 跑命令 / 开 forsion:// 链接(2026-10-17,使用指南的「带我去」)。deepLinkInstall 动态 import:它经 amadeusNav
     // 反向引本模块,静态引会绕出模块环。切 Space 同步换整个布局,推一帧再 resolve(同 resolveDeepLink 的 view 分支)。
+    // 走对象层的打开(objects/space.tsx):认 Space 窗口锁 —— 锁着的窗口里开到那个 Space 自己的窗口,不把这扇窗切走。
     openSpace: async (id) => {
       if (!ok() || typeof id !== 'string') return false
       if (!useSpaceStore.getState().spaces.some((x) => x.id === id)) return false
-      setActiveSpace(id)
+      if (!(await openObject({ type: 'space', id }, 'here', { kind: 'plugin', container: pluginId })).ok) return false
       await new Promise((r) => requestAnimationFrame(() => r(null)))
       return true
     },
@@ -1413,6 +1431,20 @@ export const usePluginStore = create<PluginState>((set, get) => {
     // registerCompanion 不再挂新伴随面、旧 handle 变哑。语言 / 模型 / 账号订阅、仪表盘 / 原生表 / 宿主 UI 挂载、
     // 字体、伴随面……插件自己能撤,但**最终责任人是宿主**:全记在 scope 上,关账统一撤(codex 评审 2026-08-14 起的纪律)。
     const ctxAlive = (): boolean => scope.alive()
+    // workspace.open 的插件这一半(第三期):只开自己的视图(类型名宿主拼命名空间)、层级白名单在 pluginLayer。
+    const ownView = (viewId: string): ViewContribution | undefined => get().views.find((item) => item.pluginId === pluginId && item.item.id === viewId)?.item
+    const openOwn = (viewId: string, params: Record<string, unknown> | undefined, opts: OpenOptions): Promise<OpenResult> =>
+      hostWorkspaceOpen({ type: `plugin:${pluginId}:${viewId}`, params }, opts)
+    // 浮在窗口里的卡一张记一笔账(同一张卡再开复用同一个 close,不重复记);卡收掉(谁收的都算)就划掉
+    const ownedFloats = new Map<() => void, EffectHandle>()
+    const ownFloat = (close: () => void, closed: Promise<void> | undefined): EffectHandle => {
+      const had = ownedFloats.get(close)
+      if (had) return had
+      const h = scope.own('mount', close, 'workspace.open')
+      ownedFloats.set(close, h)
+      void closed?.then(() => { if (ownedFloats.get(close) === h) ownedFloats.delete(close); h.forget() })
+      return h
+    }
     // 设置零件两个挂载(整页 / 单件)同一条路:认领 el → 动态 import → 落地时 el 还归这次才挂;关账统一卸。
     type SettingsSurface = typeof import('./settingsPageSurface')
     const mountSettingsParts = <T, H extends { update(next: T): void; dispose(): void }>(
@@ -1927,6 +1959,9 @@ export const usePluginStore = create<PluginState>((set, get) => {
       set((s) => ({ toolResultRenderers: [...s.toolResultRenderers, { pluginId, item }] }))
     },
     // 打开自己的视图:类型名由宿主统一命名空间(plugin:<id>:<viewId>),防跨插件顶替。
+    // 2.13.8 起(LCL 表面规范第三期)一律经 workspace.open(lcl/engine/workspaceOpen.ts):openMiniPanel / openFloatingPanel
+    // 在这里拼好 layer / form 转过去,openView 经壳层打开器转;没声明 forms 的视图行为不变,声明了按同一套回落规则走。
+    // openView 照旧经宿主注入的打开器(viewOpener,没有工作台的宿主 = no-op);壳层的打开器转到 workspace.open(workspaceOpenHost.openDockedView)
     openView: (viewId, opts) => { if (ctxAlive()) get().viewOpener?.(`plugin:${pluginId}:${viewId}`, opts?.location, opts?.params) },
     get viewLocations() { return get().viewLocations ?? undefined },
     listCapabilities: LIST_CAPABILITIES,
@@ -1935,26 +1970,45 @@ export const usePluginStore = create<PluginState>((set, get) => {
     replaceView: (fromViewId, toViewId, opts) =>
       (ctxAlive() ? get().viewControls?.replace(`plugin:${pluginId}:${fromViewId}`, `plugin:${pluginId}:${toViewId}`, opts?.params) ?? 0 : 0),
     ...(!hostTangu()?.mobile ? { openFloatingPanel: (viewId: string, opts?: import('./types').PluginFloatingPanelOptions) => {
-      const type = `plugin:${pluginId}:${viewId}`
-      const def = get().views.find((item) => item.pluginId === pluginId && item.item.id === viewId)?.item
+      const def = ownView(viewId)
       if (!def || !ctxAlive()) return
-      const target = { id: type, title: opts?.title || pluginText(def.title), view: { type, params: opts?.params },
-        width: opts?.width, height: opts?.height, minWidth: opts?.minWidth, minHeight: opts?.minHeight }
-      if (hostTangu()?.openFloatingPanel) void hostTangu()?.openFloatingPanel?.(target)
-      else openWebFloatingPanel(target)
+      void openOwn(viewId, opts?.params, { layer: { float: 'desktop' }, form: 'main', title: opts?.title || pluginText(def.title),
+        size: { width: opts?.width, height: opts?.height, minWidth: opts?.minWidth, minHeight: opts?.minHeight } })
     } } : {}),
     ...(hostTangu()?.openMini ? {
       openMiniPanel: (viewId: string, opts?: import('./types').PluginMiniPanelOptions) => {
-        const type = `plugin:${pluginId}:${viewId}`
-        const def = get().views.find((item) => item.pluginId === pluginId && item.item.id === viewId)?.item
+        const def = ownView(viewId)
         if (!def || !ctxAlive()) return
-        const mainType = `plugin:${pluginId}:${opts?.mainViewId || viewId}`
-        // 2.13.8 起多开:同一 viewId(+ key)再开 = 叫出已开的那扇;满了由 openMiniWindow 提示用户
-        const key = typeof opts?.key === 'string' ? opts.key.trim().slice(0, 128) || undefined : undefined
-        void openMiniWindow({ title: opts?.title || pluginText(def.title), params: opts?.params, key,
-          view: { type, params: opts?.params }, mainView: { type: mainType, params: opts?.mainViewParams } })
+        // 2.13.8 起多开:同一 viewId(+ key)再开 = 叫出已开的那扇;满了由 openMiniWindow 提示用户。
+        // 给了 mainViewId / mainViewParams,或这个视图没声明 forms = 插件点名 viewId 就是紧凑视图(2.13.7 的写法,
+        // 实体键仍是 view:<类型>,不被某个 Space 的 Mini 映射改道);声明了 forms 又没点名主视图 = 按 forms.mini 挑
+        const explicitMain = opts?.mainViewId || opts?.mainViewParams || !def.forms
+          ? { type: `plugin:${pluginId}:${opts?.mainViewId || viewId}`, params: opts?.mainViewParams } : undefined
+        void openOwn(viewId, opts?.params, { layer: { float: 'desktop' }, form: 'mini', key: cleanKey(opts?.key),
+          title: opts?.title || pluginText(def.title), mainView: explicitMain })
       },
     } : {}),
+    // 统一入口(2.13.8+):位置(layer)和样子(form)分开写。插件只能开自己的视图;浮在窗口里的卡随插件停用 / 重载收掉。
+    workspace: {
+      open: (target, opts) => {
+        const t = typeof target === 'string' ? { view: target } : target
+        if (!t || typeof t !== 'object' || typeof t.view !== 'string' || !t.view.trim()) {
+          throw new TypeError("workspace.open needs one of your view ids: open('my-view') or open({ view: 'my-view', params })")
+        }
+        if (opts != null && typeof opts !== 'object') throw new TypeError('workspace.open options must be an object')
+        const layer = pluginLayer(opts?.layer)
+        if (!ctxAlive()) return Promise.resolve({ ok: false as const, reason: 'disabled' as const })
+        if (!get().viewOpener) return Promise.resolve({ ok: false as const, reason: 'unavailable' as const })
+        const params = t.params && typeof t.params === 'object' && !Array.isArray(t.params) ? t.params : undefined
+        return openOwn(t.view.trim(), params, { layer, form: opts?.form, key: cleanKey(opts?.key),
+          title: typeof opts?.title === 'string' ? opts.title.trim().slice(0, 128) || undefined : undefined }).then((r) => {
+          if (!r.ok) return { ok: false as const, reason: r.reason, ...(r.limit != null ? { limit: r.limit } : {}) }
+          // 浮在窗口里的卡归插件管:停用 / 重载一并收掉(视图类型反注册时引擎也会收,这里是两道保险)
+          const close = r.close && 'float' in r.layer && r.layer.float !== 'desktop' ? ownFloat(r.close, r.closed) : r.close
+          return { ok: true as const, layer: r.layer, form: r.form, ...(close ? { close: () => { if (ctxAlive()) close() } } : {}) }
+        })
+      },
+    },
     // 宿主 UI 当前语言(2026-08-14 起):插件自带双语词表,用它挑。只报变化,初值走 getLocale()。
     getLocale: () => currentLocale(),
     // 8.20:插件自己的双语词表 → t(key, vars),回退链同宿主;8.19:样式表随插件停用 / 重载摘掉

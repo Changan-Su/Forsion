@@ -216,7 +216,6 @@ async function main() {
     await win.locator(`.rb-recent .rb-recent-slot[data-recent-id="${H[0]}"] .rb-btn`).click({ button: 'right' })
     check('W3d 中间的最近使用图标右键也是这一项', (await win.locator('.rb-menu button:text-is("在新窗口中打开")').count()) === 1)
     await win.keyboard.press('Escape').catch(() => {})
-    await win.locator('.rb-menu-backdrop').click({ position: { x: 600, y: 300 } }).catch(() => {})
 
     // 设置浮窗里改个数 → 主窗跟上(跨窗口 storage 事件)
     const sp = await expectWindow(() => win.keyboard.press(`${mod}+Comma`), 20000)

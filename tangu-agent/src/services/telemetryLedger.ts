@@ -39,6 +39,7 @@ export const LEDGER_FIELDS = {
   daily_muse_card: [
     'created', 'accept', 'observe', 'edit', 'dismiss', 'open', 'apply', 'yes', 'later', 'ignore', 'ack', 'item',
     'enable', 'extend', 'pause', 'answer', 'skip', 'ok', 'remove', 'installed', 'gone',
+    'dismissIrrelevant', 'dismissTiming', 'dismissFrequent', 'dismissKnown',
     'decideSecTotal', 'decidedRemote', 'gPendingOver3d',
   ],
   daily_memory: [
@@ -46,6 +47,7 @@ export const LEDGER_FIELDS = {
     'moveScope', 'srcExplicit', 'srcHistorian', 'srcDream', 'srcManual', 'srcRestore', 'srcExternalEdit', 'srcSync', 'srcMigration',
     'errFull', 'errVersionConflict', 'errPortraitFull',
     'userEditAgentWritten7d', 'userForgetAgentWritten7d', 'userRestoreDreamRetired', 'userEdit', 'userForget', 'userAdd',
+    'userForgetWrong', 'userForgetStale', 'userForgetUnwanted', 'userForgetDuplicate',
     'retellExisting', 'retellForgotten', 'candidatesAdded',
     'dreamAuto', 'dreamManual', 'dreamArchive', 'dreamCompleted', 'dreamSkipped', 'dreamFailed', 'dreamCancelled',
     'dreamCalls', 'dreamSources', 'dreamGroups', 'dreamMerges', 'dreamDiscarded', 'dreamToPortrait', 'dreamPending',

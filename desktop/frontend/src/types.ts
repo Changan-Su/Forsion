@@ -7,7 +7,7 @@ import type { DesktopPermissionId, DesktopPermissionRequestOptions, DesktopPermi
 import type { ComputerHistoryApi } from '../../shared/computerHistory'
 export type { DesktopPermissionId, DesktopPermissionRequestOptions, DesktopPermissionsSnapshot, DesktopPermissionState } from '../../shared/desktopPermissions'
 // 核心插件化第 2b 步:与 Tangu 共用的数据形状搬进了契约(tangu-agent/src/contracts/clientTypes.ts),这里原样转出,宿主的 import 方不动。
-export type { ThinkingLevel, DefaultModelSlot, VisionMode, TanguDesktopConfig, AgentRunEvent, SubChatSeg, SubChat, SessionRecord, PendingApprovalInfo, HistorianActivityItem, AutomationActionSpec, AutomationWhere, MuseTriggerInfo, AgentScheduleEntry, TeamDef, NormalAgentDef, AgentConfig, ChannelKind, WorkspaceDescriptor, MessageRecord, ModelInfo, ModelsResponse, ProviderQuota, ProjectSettings, ProjectDocInfo, ProjectSkillInfo, ProjectPlanInfo, GitRemoteInfo, GitCommitInfo, GitChangeInfo, GitSummary, GitIdentity, ProjectContext, ProjectMemoryView, SkillInfo, SkillCatalogEntry, ToolsResponse, WorkspaceFileMeta, Attachment, DisplayFile, CtxInfo, ToolEvent, MsgSeg, ApprovalRequest, AnswerBy, ApprovalRemote, ApprovalReason, ApprovalPreviewI18n, InquiryRequest, SketchItem, TodoItem, TeamWork, LiveWait, UiMessage, BackendStatusInfo, StoredDesktopConfig, UnitInfo } from '../../../tangu-agent/src/contracts/clientTypes'
+export type { ThinkingLevel, DefaultModelSlot, VisionMode, TanguDesktopConfig, AgentRunEvent, SubChatSeg, SubChat, SessionRecord, PendingApprovalInfo, HistorianActivityItem, AutomationActionSpec, AutomationWhere, MuseTriggerInfo, AgentScheduleEntry, TeamDef, NormalAgentDef, AgentConfig, ChannelKind, WorkspaceDescriptor, MessageRecord, ModelInfo, ModelsResponse, ProviderQuota, ProjectSettings, ProjectDocInfo, ProjectSkillInfo, ProjectPlanInfo, GitRemoteInfo, GitCommitInfo, GitChangeInfo, GitSummary, GitIdentity, ProjectContext, ProjectRepoInfo, ProjectMemoryView, SkillInfo, SkillCatalogEntry, ToolsResponse, WorkspaceFileMeta, Attachment, DisplayFile, CtxInfo, ToolEvent, MsgSeg, ApprovalRequest, AnswerBy, ApprovalRemote, ApprovalReason, ApprovalPreviewI18n, InquiryRequest, SketchItem, TodoItem, TeamWork, LiveWait, UiMessage, BackendStatusInfo, StoredDesktopConfig, UnitInfo } from '../../../tangu-agent/src/contracts/clientTypes'
 export { THINKING_LEVELS, isHomeSession, SHOW_SYSTEM_PROMPT_KEY, isTeamImageAvatar, isIndependentOrbitConfig, CLOUD_WORKSPACE_KEY, ROOTLESS_WORKSPACE_KEY, DEFAULT_LOCAL_WORKSPACE_KEY, DEFAULT_CLOUD_PROJECT, cloudProjectKey, sessionWorkspaceKey, isProjectIconFile } from '../../../tangu-agent/src/contracts/clientTypes'
 import type { AgentScheduleEntry, AutomationActionSpec, AutomationWhere, BackendStatusInfo, MuseTriggerInfo, StoredDesktopConfig, UnitInfo } from '../../../tangu-agent/src/contracts/clientTypes'
 
@@ -142,6 +142,24 @@ export interface MuseStatusInfo {
   /** Muse 自己定的休眠(set_next_wake,2026-09-24):心跳暂停到这个时刻;null = 醒着。旧引擎无此字段。 */
   sleepUntil?: number | null
   sleepReason?: string | null
+  /** 面板点了「叫醒」、那一轮还没起(2026-11-08)。旧引擎 / 远程来源没有这个字段 → 面板不出「叫醒」。 */
+  wakePending?: boolean
+  /** 上一次叫醒在等什么(userActive / locked,请求还留着)或为什么作废(budget / restartCap / noModel / disabled)。 */
+  wakeBlocked?: 'locked' | 'userActive' | 'budget' | 'restartCap' | 'disabled' | 'noModel' | null
+}
+
+/** GET /agent/special/muse/rounds 的一行(面板「最近几轮」,2026-11-08)。trigger = 引擎 cycleTrigger 的原串:
+ *  manual / heartbeat / rule:<id>+<id> / schedule:<名字>+<名字>;升级前跑的轮次没记 → null。 */
+export interface MuseRoundInfo {
+  runId: string
+  sessionId: string
+  status: string
+  trigger: string | null
+  startedAt: number
+  endedAt: number | null
+  files: number
+  todos: number
+  error: string | null
 }
 
 /** POST /agent/special/muse/triggers 的 upsert 入参(snake_case 对齐引擎校验)。
@@ -627,7 +645,7 @@ declare global {
        *  只有 Extend 注册了 telemetry:get 才有这个键 —— 引导第 7 步「帮助改进」页签据此同步判断本机有没有这一页。 */
       telemetryReport?(kind: import('../../shared/telemetryKeys').RendererReportKind, props: Record<string, unknown>): void
       /** 提交反馈到 Forsion 反馈中心(会话日志 JSON 随附为附件;token 留主进程)。 */
-      submitFeedback?(input: { description: string; sessionLogJson?: string; sessionLogName?: string }): Promise<{ ok: boolean; id?: string | null; error?: string; attachmentSkipped?: boolean }>
+      submitFeedback?(input: { description: string; sessionLogJson?: string; sessionLogName?: string; expectedAccountId?: string }): Promise<{ ok: boolean; id?: string | null; error?: string; attachmentSkipped?: boolean }>
       appVersion?(): Promise<string>
       /** 应用内自动更新:检查 / 下载 / 重启安装(mac 的 download/install 为 no-op,改用 openUpdateInstaller)。 */
       getCorePluginUpdates?(): Promise<CorePluginUpdates>
@@ -780,7 +798,7 @@ declare global {
       connectorsConnect?(id: string, taken?: string[]): Promise<{ name: string; added: boolean }>
       /** 断开的最后一步:从 MCP 配置删掉这条(只删带连接器标记的)。 */
       connectorsRemove?(name: string): Promise<void>
-      connectStore?(): Promise<{ ok: boolean; detail?: string; base?: string; items?: Array<{ name: string; summary: string; handle: string; slug: string; url: string; updatedAt?: string }> }>
+      connectStore?(): Promise<{ ok: boolean; detail?: string; base?: string; items?: Array<{ name: string; summary: string; handle: string; slug: string; url: string; publicUrl?: string; updatedAt?: string }> }>
       /** 写回文本文件(工作区 .md 编辑):原子写;expectedMtimeMs 不符返回 conflict。 */
       writeHostFile?(filePath: string, content: string, expectedMtimeMs?: number, createNew?: boolean): Promise<{ ok?: boolean; conflict?: boolean; mtimeMs: number }>
       /** 本机工作区文件操作(host 模式)。 */
@@ -939,6 +957,8 @@ declare global {
       detachedReady?(id: string): Promise<Array<{ type: string; params?: Record<string, unknown> }>>
       /** 开一个独立窗承载给定视图(右键「移到新窗口」/拖到空桌面);screen 坐标可选(拖出落点)。 */
       openDetached?(views: Array<{ type: string; params?: Record<string, unknown> }>, at?: { screenX: number; screenY: number }, opts?: { space?: string }): Promise<{ id: string }>
+      /** Space「添加到桌面」(仅桌面宿主):快捷方式双击后这个 Space 开在自己的独立窗口里,不露出主窗。 */
+      addSpaceToDesktop?(input: { id: string; name: string; fallbackName?: string; iconPng?: string }): Promise<{ ok: true; path: string } | { ok: false; code: string; detail?: string }>
       cursorScreenPoint?(): { screenX: number; screenY: number }
       /** 开 / 叫出一扇 Mini 悬浮卡片(2.13.8 起多开:同一实体再开 = 叫出那扇,duplicate 才另开;普通 Mini 满 6 扇不开,
        *  结果 { ok: false, reason: 'limit' } 由调用方提示,用 openMiniWindow() 就带提示)。不带参数 = ⌘⇧M:开合最近用过的那扇。 */

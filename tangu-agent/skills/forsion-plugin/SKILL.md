@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.102.0
+  version: 1.103.0
   author: Forsion
   category: Forsion
 ---
@@ -308,7 +308,7 @@ A bundle can declare stdio MCP servers and observe-only hooks in its manifest: r
 
 Forsion Android App 也跑 Forsion 插件(同一份 `pluginStore`、同一个 `ctx`),**只经市场装**、只装 `amadeus-plugin` 类;插件住在 App 私有目录,`ctx.loadData` / `ctx.saveData` 照常可用。
 - 依赖桌面才有的东西(本机程序 / Node / `ctx.app.hostPath` 必须非 null / 引擎插件 / 浮窗)且没有降级路径的,manifest 写 `"isDesktopOnly": true`(只认布尔 `true`):手机市场拒装并说明原因,已在列表里的显示「仅支持桌面端」且代码不执行。桌面上这个字段不影响任何行为。
-- 能在手机上跑的,照「能力判断运行环境」写:`openFloatingPanel` / `openMiniPanel` 手机没有(可选链),状态栏项手机不显示,捆绑包里的引擎插件 / Agent / 技能手机不装(手机上没有本机引擎)。
+- 能在手机上跑的,照「能力判断运行环境」写:`openFloatingPanel` / `openMiniPanel` 手机没有(可选链;`ctx.workspace.open` 的 `{ float: 'desktop' }` 在手机上自己降成半屏抽屉 / 主区),状态栏项手机不显示,捆绑包里的引擎插件 / Agent / 技能手机不装(手机上没有本机引擎)。
 - 捆绑包里的 **Space**(`spaces/<slug>/space.json`)手机上照常注册(2026-10-09 起;此前不装),出现在底部导航栏,图标用 `iconFile` 那张 PNG(没有或是 SVG 就用 `icon` 的线条图标)。手机是单列:进这个 Space 先看到 `layout.main` 的第一个视图,`left` / `right` 是从顶栏按钮拉出来的抽屉,`bottom` 不开 —— 主视图要在约 400px 宽里独立可用,别把必经的操作只放在左栏或底部面板里。
 - 手机上插件包的上限:下载 25 MB、解压 64 MB、2000 个文件。
 - 手机的**主页只有一页、不开标签**(2026-10-11 起):用户停在主页时,命令里 `openView` 打开的视图会被带到「主人」那个 Space 去开 —— 主人 = `layout.main` 里列着这个视图的 Space(插件自带的 Space 就是这么认的)。没有任何 Space 列着它的视图仍然盖在主页上打开,但用户下次回到主页时会被宿主关掉:这类视图别攒没保存的状态,要长驻就给插件带一个 Space。
@@ -344,6 +344,7 @@ Your Space renders your own status, TODOs, schedule and Library from `ctx.agent`
 | `registerView` | 独立标签页(`ctx.openView(id)` 打开) | `title` 2026-10-26 起收 PluginText;**DOM 挂载**(`mount(el, view?)` 返 disposer;可以是 async —— resolve 出的就是 disposer,reject 算挂载失败;`view.extendView` 可开临时扩展),外置插件的主力;加 `rightCompanions` 声明它到前台时右栏要的那组(见「右栏:主视图规则」);`workspaceSource` 只对没写 `mode` 的老配方的左栏生效。**样式不隔离**:选择器挂自家根类名,配色只用 `var(--bg)` / `--bg-card` / `--text` / `--text-muted` / `--border` / `--accent`(自造的变量名宿主没有,会落到你写死的兜底色) |
 | `openFloatingPanel` | 第六种 Floating Panel | 先注册 view，再按相对 id 打开；桌面是真原生窗口，Web 是不可拖动居中面板；可选链兼容旧宿主 |
 | `openMiniPanel` | Mini Panel（默认 320×420，用户可改大小；2.13.8 起可多开） | 不建 Space 也能直开紧凑 view；用 `mainViewId` 声明回主面板的目标；同一 `viewId` + `key` 复用一扇，不同 `key` 各开一扇（见 references/mini-panel.md「多开」）；仅原生桌面宿主提供 |
+| `ctx.workspace.open(target, { layer, form })` | 统一打开入口(2.13.8 起) | 位置 `layer`(`{ dock }` / `{ float: 'desktop', pin? }` / `{ float: 'space' \| 'window' \| 'view' }`)和样子 `form`(`main` / `side` / `bottom` / `mini`)分开写;上面 `openView` / `openFloatingPanel` / `openMiniPanel` 就是它的固定写法、照旧可用。浮在窗口里的三档挂的是你的**整个视图**(宿主画卡头),随停用收掉;`registerView` 写 `forms` 声明支持的样子(`mini: { view }` 配紧凑视图),不支持按回落规则换;结果告诉你实际落到哪;可选链(见 references/host-ui-mounts.md「Opening views」) |
 | `registerListSource` | **统一左栏**里的一条列表(收藏/任务/订阅…) | 宿主渲染,与会话/笔记行同一套 UI;⚠️`subscribe()` 里**必须重读一次数据**,见下。`title` / 动作 `label` 2026-10-26 起收 PluginText(`() => t('…')` 或 `{ zh, en }`,切语言即变;字符串在注册那一刻定格);`empty: { icon, title, line?, action? }` 让侧栏在你的 Space 里不写「暂无内容」、手机整屏列表画这份空态 |
 | `registerFileType` | 自定义 `.x.md` 文件类型;`override: true` 可接管内置的 `.pdf` | 撞内置后缀返回 **`false`** → 整体退让(判定写 `=== false`) |
 | `registerFileCreator` | 文件树右键 + 新建标签页启动器 | 与文件类型配套;**四条新建路径都要注册**,少一条用户就会问「为什么这儿没有」 |
@@ -505,7 +506,7 @@ ctx.registerCommand({
 | `ctx.app.openSettings?(target)` | 打开设置到某一页 / 子页(2026-09-28 起) | 口径同宿主深链,如 `'model/m-providers'`;旧宿主没有,一律 `?.` 调 |
 | `ctx.app.watchAccountName?(cb)` | 当前登录的名字(有昵称用昵称,2026-10-18 起) | 先回调一次当前值,换账号 / 登出再回调,没登录 = 空串;只给名字,不给令牌和账号 id;返回退订,停用时宿主也会退 |
 | `ctx.wallpaper.bing(locale?)` | 必应每日壁纸最近 8 张(2026-10-18 起) | `{ id, url, thumbnailUrl, title?, copyright?, startDate? }`;宿主代拉(桌面经主进程,插件直连必应会被 CSP 拦);拿不到 → reject;老宿主没有 → `ctx.wallpaper?.bing(…)` |
-| `ctx.app.openSpace?(id)` | 切到某个 Space(2026-10-17 起) | resolve 在新 Space 布局建好之后,接着 `ctx.openView(…, { location: 'right' })` 就落在新 Space 里;不认识的 id → `false`;旧宿主没有 → `?.` |
+| `ctx.app.openSpace?(id)` | 切到某个 Space(2026-10-17 起) | resolve 在新 Space 布局建好之后,接着 `ctx.openView(…, { location: 'right' })` 就落在新 Space 里;不认识的 id → `false`;旧宿主没有 → `?.`。2.13.8 起认 Space 窗口锁:锁在别的 Space 上的窗口里,开到那个 Space 自己的窗口、本窗口不切走(之后的 openView 仍落在本窗口);锁着又开不了新窗口 → `false` |
 | `ctx.app.openLink?(url)` | 在应用内打开一条 `forsion://` 链接(2026-10-17 起) | 口径同系统唤起的深链,只导航不执行;插件页 / 收件箱信 / 笔记正文里的 `<a href="forsion://…">` 宿主本来就在应用内接住,这条给按钮用 |
 | `ctx.app.setSpaceProgress?(spaceId, progress)` | 在 Ribbon 上自己 Space 的图标外画一圈进度环(2026-10-18 起) | 只认本插件随包带的 Space,别人的 / 内置的恒 `false`;`0–1`,`null` 收起;按整百分比画,每 0.5 秒报一次也不会重渲;那个 Space 有未读角标时让给角标;插件停用时宿主收掉;Space 收进 Ribbon 文件夹 / 「⋯」时看不到环;旧宿主没有 → `?.` |
 | `ctx.app.setSpaceDot?(spaceId, on)` | 在 Ribbon 上自己 Space 的图标右上角挂提示红点(2026-10-19 起;服务器管理插件给「反馈中心」挂提醒用) | 只认本插件随包带的 Space,别人的 / 内置的恒 `false`;`true` 挂、`false` 收,没变不重渲;红点和收件箱未读角标同一种红,有角标时让给角标,和进度环同时有时只画红点;插件停用时宿主收掉;挂着时图标读屏名带「有新提醒」;列表行的未读仍用 `ListItem.unread`(指示色,不是红),要在别的 Space 也看得到就配上它;旧宿主没有 → `?.` |

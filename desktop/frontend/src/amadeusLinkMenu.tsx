@@ -2,7 +2,8 @@
  * 笔记里渲染出来的双链的右键菜单(2026-10-13 用户定:双链是一个文件,右键出这份文件的操作,不是文字编辑菜单)。
  *
  * 双链部件(amadeus/blocks/markdown/wikilink.ts)在 contextmenu 时向上派 `amadeus:wikilink-menu`;这里在 window 上接:
- * 认得出目标就 preventDefault(部件据此不出系统菜单)并弹菜单,外链不接(照旧系统菜单)。来源页读链接所在那个编辑器
+ * 认得出目标就 preventDefault(部件据此不出系统菜单)并弹菜单,外链不接(照旧系统菜单)。嵌入层(unified/embedLayer)右键一块嵌入
+ * 也派这一枚(detail.embed):文件嵌入同双链的菜单,网页嵌入给「浏览器 / 复制链接 / 编辑链接」。来源页读链接所在那个编辑器
  * 钉在根上的 `data-amx-src`(与点击、悬停预览同一个源:嵌在别的笔记里的内容按它自己的所有者解析),没钉的宿主退回当前活动页。
  * 另管一件:按下双链时把它所在的那一栏设成活动栏(见 activatePaneOf),点击的「开在旁边」和菜单里的两项才有准头。
  *
@@ -31,6 +32,8 @@ registerMessages({
   'linkmenu.copyPath': { zh: '复制路径', en: 'Copy path' },
   'linkmenu.edit': { zh: '编辑链接', en: 'Edit link' },
   'linkmenu.create': { zh: '创建笔记', en: 'Create note' },
+  'linkmenu.browser': { zh: '在浏览器中打开', en: 'Open in browser' },
+  'linkmenu.copyLink': { zh: '复制链接', en: 'Copy link' },
 })
 
 /** 把 el 所在的那一栏设成活动栏。双链部件吃掉了 mousedown(不落光标),焦点进不了这一栏,Dockview 就不知道用户在这儿:
@@ -43,8 +46,9 @@ function activatePaneOf(el: Element): void {
   if (front && (front.params as { __loc?: string } | undefined)?.__loc === 'main' && group.id !== api?.activeGroup?.id) front.api.setActive()
 }
 
-interface MenuDetail { inner?: string; x?: number; y?: number; edit?: () => void }
-interface LinkMenu { x: number; y: number; inner: string; src?: string; target: Exclude<WikiTarget, { kind: 'external' }>; edit?: () => void; host: HTMLElement }
+/** embed = 右键的是一块嵌入(embedLayer 派的):网页嵌入也接,给「浏览器 / 复制链接 / 编辑」;正文里的外链照旧交系统菜单。 */
+interface MenuDetail { inner?: string; x?: number; y?: number; edit?: () => void; embed?: boolean; attachment?: boolean }
+interface LinkMenu { x: number; y: number; inner: string; src?: string; target: WikiTarget; edit?: () => void; host: HTMLElement; attachment?: boolean }
 
 export function WikiLinkMenuHost(): ReactElement | null {
   const { t } = useI18n()
@@ -59,12 +63,14 @@ export function WikiLinkMenuHost(): ReactElement | null {
       const el = e.target as HTMLElement | null
       const src = el?.closest?.<HTMLElement>('[data-amx-src]')?.dataset.amxSrc || st.activePage || undefined
       const target = resolveWikiTarget(inner, st.pages, st.files, src)
-      if (target.kind === 'external') return
+      if (target.kind === 'external' && !d.embed) return
       // 找不到的 PDF / 媒体链接没有「创建笔记」可言(openWikiLink 对它们直接返回);连「编辑链接」也没有(只读)就不接。
-      if (target.kind === 'missing' && !d.edit && (isPdfLinkInner(inner) || !!parseMediaLinkInner(inner))) return
+      // 嵌入层标明的非笔记嵌入(附件 / 多维表 / 画板 / 插件文件):丢了也没「创建」可言(按类别判,不猜扩展名)
+      const attachment = !!d.embed && !!d.attachment
+      if (target.kind === 'missing' && !d.edit && (isPdfLinkInner(inner) || !!parseMediaLinkInner(inner) || attachment)) return
       e.preventDefault()
       // 挂到链接所在的 .am-app 下:菜单的主题作用域与编辑器自己的块菜单一致(同 OverlayPortal 的做法)。
-      setMenu({ x: d.x, y: d.y, inner, src, target, edit: d.edit, host: el?.closest?.<HTMLElement>('.am-app') ?? document.body })
+      setMenu({ x: d.x, y: d.y, inner, src, target, edit: d.edit, attachment, host: el?.closest?.<HTMLElement>('.am-app') ?? document.body })
     }
     // 捕获阶段:赶在部件自己的 mousedown(当场就开)之前,左键 / 中键 / 右键都算。
     const onDown = (e: MouseEvent): void => {
@@ -113,7 +119,20 @@ export function WikiLinkMenuHost(): ReactElement | null {
   // 「新标签页 / 分屏」只给应用里开得成标签的目标:交系统程序的文件给了也是空话。单列壳(手机)没有分屏;图片不分屏(用户定)。
   const asTab = target.kind === 'note' || (target.kind === 'file' && opensAsTab(target.path))
   const canSplit = asTab && !!useWorkspace.getState().api && !(target.kind === 'file' && extHit(target.path, 'amadeus-image'))
-  const creatable = target.kind === 'missing' && !isPdfLinkInner(inner) && !parseMediaLinkInner(inner)
+  // 嵌入的附件丢了(`![[设计稿.zip]]` 文件被删):不给「创建笔记」—— 那会建出一篇叫 `设计稿.zip` 的笔记。只剩「编辑链接」。
+  const creatable = target.kind === 'missing' && !isPdfLinkInner(inner) && !parseMediaLinkInner(inner) && !menu.attachment
+
+  if (target.kind === 'external') {
+    const browse = (): void => { if (window.tangu?.openExternal) void window.tangu.openExternal(inner); else window.open(inner, '_blank', 'noopener') }
+    return createPortal(
+      <OverlayAt className="ctx-menu amx-link-menu" role="menu" aria-label={t('linkmenu.aria')} x={menu.x} y={menu.y} onClick={(e) => e.stopPropagation()}>
+        <button data-act="browser" onClick={run(browse)}><ExternalLink size={13} /> {t('linkmenu.browser')}</button>
+        <button data-act="copylink" onClick={run(() => void navigator.clipboard?.writeText(inner).catch(() => {}))}><Copy size={13} /> {t('linkmenu.copyLink')}</button>
+        {menu.edit && <button data-act="edit" onClick={run(menu.edit)}><Pencil size={13} /> {t('linkmenu.edit')}</button>}
+      </OverlayAt>,
+      menu.host,
+    )
+  }
 
   return createPortal(
     <OverlayAt className="ctx-menu amx-link-menu" role="menu" aria-label={t('linkmenu.aria')} x={menu.x} y={menu.y} onClick={(e) => e.stopPropagation()}>
