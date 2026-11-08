@@ -1466,6 +1466,17 @@ button.t2-bg-url:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.
 .t2-child-row:hover .t2-child-chev { opacity: 1; }
 .t2-child-sub { grid-column: 2 / 4; margin-top: 2px; font-size: var(--ui-font-meta, 12px); color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .t2-child-actions { grid-column: 2 / 4; margin-top: 7px; }
+/* 子会话 / 任务卡上的模型芯片(11-08):和开它的会话用的不是同一个模型才画。不描边,淡底胶囊 */
+.t2-model-chip {
+  display: inline-flex; align-items: center; gap: 4px; max-width: 18ch; padding: 1px 7px; border-radius: 999px;
+  background: var(--overlay-medium); color: var(--text-muted); font-size: var(--ui-font-meta, 12px); line-height: 1.5; white-space: nowrap; flex: none;
+}
+.t2-model-chip > svg { flex: none; }
+.t2-model-chip > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.t2-child-state > .t2-model-chip { margin-right: 6px; }
+/* hand_off_task 挪出去的那一块(11-08 P2-A):同子会话块的壳,头行带个分叉图标 */
+.t2-handoff { margin-top: 8px; margin-bottom: 10px; }
+.t2-handoff .t2-childs-head > svg { flex: none; color: var(--text-muted); }
 /* <child_sessions_update> 落库行(子会话结果送回主会话):一行说明谁回来了 */
 .t2-child-update { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 4px 8px; margin: 4px 0; color: var(--text-muted); }
 .t2-child-update > svg { color: var(--accent-ink); flex: none; }
@@ -1479,6 +1490,9 @@ button.t2-bg-url:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.
 .t2-session-msg-head > a { color: var(--accent-ink); cursor: pointer; text-decoration: none; }
 .t2-session-msg-head > a:hover { text-decoration: underline; }
 .t2-session-msg-body { max-width: min(560px, 100%); color: var(--text-muted); white-space: pre-wrap; overflow-wrap: anywhere; text-align: left; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+/* 树外的会话发来的(relation=peer,11-08 P4-A):正文下一行淡字说明「不是你说的」。字号随 .t2-sys(同审批结局行下面那句),只用最淡的颜色 */
+.t2-session-msg-note { display: flex; align-items: center; justify-content: center; gap: 5px; margin-top: 2px; color: var(--text-faint, var(--text-muted)); }
+.t2-session-msg-note > svg { flex: none; }
 /* 子会话顶上「来自 主会话」:按一段文字排(窄的子会话面板里会折行,不能是 flex —— 那样每一截各自竖着挤成一列) */
 .t2-child-from { display: block; text-align: center; margin: 0 0 10px; color: var(--text-muted); }
 .t2-child-from > svg { vertical-align: -2px; margin-right: 4px; }

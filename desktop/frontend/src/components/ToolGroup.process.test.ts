@@ -88,4 +88,18 @@ describe('ToolGroup as the process line', () => {
     await act(async () => head().click())
     expect([...host.querySelectorAll('.tool-row-copy-text')].map((e) => e.textContent)).toEqual(['子会话查 Obsidian Sync', '子会话查 Notion 离线'])
   })
+
+  it('hand_off_task has its own summary (11-08 new topic): 把手头的活挪到了子会话, row = 挪到子会话 + title', async () => {
+    const ev = (name: string, args: object, id = 'h1'): ToolEvent => ({ id, name, arguments: JSON.stringify(args), done: true, result: 'Moved the unfinished task to a new session "写草稿" (id 5c1e0000-0000-4000-8000-000000000000).' })
+    expect(describeTool(ev('hand_off_task', { title: '写草稿', brief: 'b' }))).toMatchObject({ kind: 'handoff', verbKey: 'tool.verb.handoff', target: '写草稿' })
+    await render({ events: [ev('hand_off_task', { title: '写草稿', brief: 'b' })] })
+    expect(longSum()).toBe('把手头的活挪到了子会话')
+    expect(host.querySelector('.tool-group-sum-short')?.textContent).toBe('把手头的活挪到了子会话')
+    await act(async () => head().click())
+    expect([...host.querySelectorAll('.tool-row-copy-text')].map((e) => e.textContent)).toEqual(['挪到子会话写草稿'])
+    // 和别的工具混在一组:长摘要各报各的,短摘要只报个数
+    await render({ events: [read, ev('hand_off_task', { title: '写草稿', brief: 'b' })] })
+    expect(longSum()).toBe('读取 1 项 · 把手头的活挪到了子会话')
+    expect(host.querySelector('.tool-group-sum-short')?.textContent).toBe('2 个工具')
+  })
 })

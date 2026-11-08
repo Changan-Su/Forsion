@@ -138,6 +138,13 @@ export function remoteApprovalCap(): CapMode {
 }
 
 /** 档位取小。'custom' 原样返回(规则层的钳制在审批闸里做);未设 → cap(未设在闸里等于免审批)。 */
+/** 两个上限里较严的那个(都没有 = undefined)。远程污点上限与会话消息上限(跨树互发)叠加时用。 */
+export function minCapMode(a: CapMode | undefined, b: CapMode | undefined): CapMode | undefined {
+  if (!a) return b;
+  if (!b) return a;
+  return RANK[a] <= RANK[b] ? a : b;
+}
+
 export function clampApprovalMode(mode: string | undefined, cap: CapMode): CapMode | 'custom' {
   if (mode === 'custom') return mode;
   if (mode === 'readonly' || mode === 'auto-edit' || mode === 'full-auto') return RANK[mode] <= RANK[cap] ? mode : cap;

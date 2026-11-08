@@ -1089,13 +1089,13 @@ export function ChatView({ leaf, params }: ViewProps) {
           onExecConfigChange={teamSid && teamCfg
             ? (patch) => { if (patch.approvalMode) s.setExecConfig({ approvalMode: patch.approvalMode }, teamSid) }
             : (patch) => s.setExecConfig(patch, activeId)}
-          onSend={async (text, attachments, workspaceFiles, skillIds, mentions) => {
+          onSend={async (text, attachments, workspaceFiles, skillIds, mentions, opts) => {
             if (studioChat) {
               const target = useCodeStudio.getState().prepareRun()
               if (!target) return false
-              return useApp.getState().send(text, attachments, workspaceFiles, skillIds, mentions, target.sessionId, false, true)
+              return useApp.getState().send(text, attachments, workspaceFiles, skillIds, mentions, target.sessionId, false, true, opts)
             }
-            return s.send(text, attachments, workspaceFiles, skillIds, mentions, activeId, false, true)
+            return s.send(text, attachments, workspaceFiles, skillIds, mentions, activeId, false, true, opts)
           }}
           onStop={() => s.stop(activeId)}
           quotes={quotes}

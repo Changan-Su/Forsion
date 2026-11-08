@@ -10,7 +10,7 @@ import { getMuseTodo } from '../../services/backendService'
 import { homeTarget } from '../../services/engine/targets'
 import type { UiMessage } from '../../../../../tangu-agent/src/contracts/clientTypes'
 import { splitSuggestions, type TaskCard } from './suggest'
-import { ChildSessionsBlock } from './ChildSessions'
+import { ChildSessionsBlock, ModelChip } from './ChildSessions'
 import { markTaskHandled, taskDoneKey, taskHandled, useTaskHandledVersion, TASK_CARD_TTL_MS, type TaskLanding } from './pendingTasks'
 import './chat2.css'
 import '../../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
@@ -246,6 +246,7 @@ export function TaskCards({ tasks, ownerId, onTask, noHere = false, todoStatus, 
           <div key={key} className={`t2-taskcard${done || locked || gone ? ' done' : ''}${busy ? ' busy' : ''}`} data-task-state={gone || done || (c.ask ? 'ask' : 'open')}>
             <div className="t2-taskcard-head">
               <ClipboardList size={13} /> <b>{c.title}</b>
+              {c.model && <ModelChip model={c.model} />}
               {c.track && <span className="t2-taskcard-tag">{t('chat.task.trackTag')}</span>}
               {!done && !gone && !locked && (c.ask || createdAt) ? <span className="t2-taskcard-expire">{t(c.ask ? 'chat.task.askTag' : 'chat.task.valid')}</span> : null}
             </div>

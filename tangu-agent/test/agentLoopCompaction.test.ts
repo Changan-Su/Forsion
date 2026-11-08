@@ -195,6 +195,20 @@ describe('run 内自动压缩 → 持久检查点(行内切点)→ 下个 run �
     expect(text).toContain('TIE-AFTER');
   });
 
+  it('「另起话题」的 steer:这一轮的上下文里带 <new_topic> 提示,落库的那条只有用户原话(会话互通升级 11-08)', async () => {
+    script = [
+      () => { enqueueSteer('R1', { id: 'S1', content: 'NEW-Q what is the ssh port', newTopic: true }); return reply('WORKING', [call('t1')])(); },
+      reply('ANSWERED'),
+    ];
+    expect((await launch('R1', 'A1', 'U1', 'write the notes')).status).toBe('done');
+    const text = JSON.stringify(lastCtx());
+    expect(text).toContain('NEW-Q what is the ssh port');
+    expect(text).toContain('<new_topic>');
+    expect(text).toContain('hand_off_task');
+    const [row] = await query<any[]>(`SELECT content FROM chat_messages WHERE id = 'S1'`);
+    expect(String(row.content)).toBe('NEW-Q what is the ssh port');
+  });
+
   it('压缩覆盖到未落库的第 1 轮后被 steer 拆段:检查点落在段 A(t1),steer 消息与段 B 原样回放', async () => {
     const TURN2 = 'TURN2-MARKER ' + 'b'.repeat(3_000);
     script = [

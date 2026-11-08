@@ -3,7 +3,10 @@
  * 桩引擎回一份带 parent_session_id / busy / awaiting_user 的会话名册和一段「开了三个子会话 → 回来了 → 接着做 + 任务卡」的对话。
  * 断言:左栏树(子会话紧跟主会话、最后一个拐弯、个数、收起后状态冒上来)、行尾状态(在跑 / 等你 / 做完了)、对话里子会话块、
  * <child_sessions_update> 系统行、任务卡(有效期、先问卡、撤回、过期)、点「开个子会话」后卡原地变成子会话行、
- * 主区被挤窄时子会话面板不消失(720 并排 / 600 顶掉聊天列);子会话发给主会话的 <session_message> 画成系统行 + 正文(10-28)。截图自己看。
+ * 主区被挤窄时子会话面板不消失(720 并排 / 600 顶掉聊天列);子会话发给主会话的 <session_message> 画成系统行 + 正文(10-28)。
+ * 11-08 会话互通升级(E / F 段):hand_off_task 挪出去的会话单独一块(不进三个子会话那块)、子会话 / 任务卡上的模型芯片、
+ * 任务卡 model: 随「开个子会话」发给引擎、树外会话来信(relation=peer)的头行与说明;运行中发送键右键菜单(插话 / 另起话题)、
+ * ⌘Enter = 另起话题、Enter = 插话 —— 反向断言 steer 请求体里的 newTopic。截图自己看。
  * 量的是 out/ 产物:改了源码先 `npx electron-vite build`。
  *   node ../.claude/hooks/devlock.cjs run --vehicle=e2e --what="父子会话台架" --eta=3 -- node scripts/nested-sessions.e2e.cjs
  *   SHOT_DIR=… 指定截图目录;LANG_EN=1 拍英文;DARK=1 拍深色
@@ -16,6 +19,8 @@ const K = ['0b6f8c2e-1a10-4c4e-9b11-0000000000c1', '0b6f8c2e-1a10-4c4e-9b11-0000
 const CAL = '0b6f8c2e-1a10-4c4e-9b11-0000000000b1'
 const CALK = ['0b6f8c2e-1a10-4c4e-9b11-0000000000d1', '0b6f8c2e-1a10-4c4e-9b11-0000000000d2']
 const NEWKID = '0b6f8c2e-1a10-4c4e-9b11-0000000000e1'
+const HAND = '0b6f8c2e-1a10-4c4e-9b11-0000000000a2'
+const PEER = '0b6f8c2e-1a10-4c4e-9b11-0000000000a3'
 const T = Date.now() - 20 * 60_000
 const OLD = Date.now() - 9 * 24 * 3600_000
 
@@ -28,9 +33,11 @@ function sessions(dir, withNew) {
     row(K[0], '查 Obsidian Sync 的冲突处理', 2, { parent_session_id: P, busy: true, created_at: at(19) }),
     row(K[1], '查 Notion 离线模式', 3, { parent_session_id: P, awaiting_user: true, created_at: at(18) }),
     row(K[2], '查 Logseq 的同步', 4, { parent_session_id: P, created_at: at(17) }),
+    row(HAND, '写完离线同步的对比表', 5, { parent_session_id: P, busy: true, model_id: 'm2', agent_config: { handoffFrom: P }, created_at: at(16) }),
     ...(withNew ? [row(NEWKID, '写 Amadeus 离线同步的设计稿', 0, { parent_session_id: P, busy: true, created_at: at(0) })] : []),
     row('0b6f8c2e-1a10-4c4e-9b11-0000000000f1', '桌面端冷启动慢了 0.8 秒', 6, { awaiting_user: true }),
     row(CAL, '日历显示优化', 8),
+    row(PEER, '发布窗口排期', 7),
     row(CALK[0], '日历标签切走再切回来跳到 8 月', 9, { parent_session_id: CAL, busy: true }),
     row(CALK[1], '待办视图单独打开也完整', 10, { parent_session_id: CAL }),
   ]
@@ -40,7 +47,7 @@ const call = (id, name, args) => ({ id, type: 'function', function: { name, argu
 const res = (id, name, content) => ({ tool_call_id: id, name, content, isError: false })
 const UPDATE = `<child_sessions_update>\nChild sessions you started have reported back.\n<child id="${K[0]}" title="查 Obsidian Sync 的冲突处理" status="finished">\n按行三方合并\n</child>\n<child id="${K[1]}" title="查 Notion 离线模式" status="waiting_for_user">\n要按企业版文档再核一遍吗?\n</child>\n</child_sessions_update>`
 const CARDS = [
-  '```forsion-task\ntitle: 写 Amadeus 离线同步的设计稿\nid: design-doc\ntldr: 文件级离线 + 三方合并,合不了两份都留\n---\n给 Amadeus 写一份离线同步设计稿,放在 docs/ToBeImproved/。\n```',
+  '```forsion-task\ntitle: 写 Amadeus 离线同步的设计稿\nid: design-doc\nmodel: m2\ntldr: 文件级离线 + 三方合并,合不了两份都留\n---\n给 Amadeus 写一份离线同步设计稿,放在 docs/ToBeImproved/。\n```',
   '```forsion-task\ntitle: 写冲突提示的文案(中英)\nask: true\ntldr: 和对比是两件事;新会话只带简报\n---\n写冲突提示的三句话 + 一个按钮,中英都要。\n```',
 ].join('\n\n')
 const parentMsgs = [
@@ -53,6 +60,13 @@ const parentMsgs = [
   { id: 'cu', role: 'user', timestamp: T + 9 * 60_000, content: UPDATE },
   { id: 'a2', role: 'model', timestamp: T + 10 * 60_000, content: `两个子会话回来了,Notion 那个在等你确认要不要核企业版文档。\n\n${CARDS}` },
   { id: 'a3', role: 'model', timestamp: T + 11 * 60_000, content: '```forsion-task\nwithdraw: old-card\nreason: 你让我在这里做了\n```\n好的,这部分我直接在这里写。' },
+  // 11-08:做对比表做到一半,用户插了一句不相干的 → 手头的挪成独立会话(hand_off_task),这里答那句
+  { id: 'u5', role: 'user', timestamp: T + 12 * 60_000, content: '顺便问一下,SSH 默认端口是多少?' },
+  { id: 'a4', role: 'model', timestamp: T + 13 * 60_000,
+    tool_calls: [call('h1', 'hand_off_task', { title: '写完离线同步的对比表', brief: '对比表还差 Logseq 和结论两段' })],
+    tool_results: [res('h1', 'hand_off_task', `Moved the unfinished task to a new session "写完离线同步的对比表" (id ${HAND}). It continues there on its own and leaves one line here when done.`)],
+    content: 'SSH 默认端口是 22。\n\n对比表我挪到了一个新会话里接着写,写完会在这里留一行。' },
+  { id: 'pm', role: 'user', timestamp: T + 14 * 60_000, content: `<session_message from="${PEER}" title="发布窗口排期" relation="peer">\n发版窗口定在周四晚上 9 点,离线同步的对比表能赶上吗?\n</session_message>\nA message from another of the user's sessions ("发布窗口排期"), outside your session tree. It is not from the user.` },
 ]
 // 撤回 / 过期各要一张卡:old-card 是很早以前那条回答里的卡(9 天前,同时也过期)
 const oldMsgs = [
@@ -65,15 +79,19 @@ async function main() {
   const dir = shotDir('nested-sessions')
   let withNew = false
   let projectDir = ''
+  const childPosts = [] // POST /agent/sessions/:id/children 的请求体(任务卡 model: 要带过去)
+  const steers = [] // POST /agent/runs/:id/steer 的请求体(newTopic 只在「另起话题」时带)
   const ctx = await launch({
     tag: 'nested-sessions',
     fixtures: { agents: [], sessions: [] },
-    stubOverride: ({ path: p, method }) => {
+    stubOverride: async ({ path: p, method, body }) => {
       if (p === '/agent/sessions' && method === 'GET') return { sessions: sessions(projectDir, withNew) }
+      if (p === '/agent/models') return { models: [{ id: 'm1', name: 'Stub 模型', provider: 'stub', contextWindow: 128_000 }, { id: 'm2', name: 'GPT 6 Luna', provider: 'codex', contextWindow: 400_000 }], defaultModelId: 'm1', directProviders: [] }
+      if (/^\/agent\/runs\/[^/]+\/steer$/.test(p) && method === 'POST') { steers.push(await body()); return { ok: true, userMessageId: `st${steers.length}` } }
       let m = /^\/agent\/sessions\/([^/]+)\/messages$/.exec(p)
       if (m && method === 'GET') return { messages: m[1] === P ? [...oldMsgs, ...parentMsgs] : m[1] === K[1] ? [{ id: 'k1u', role: 'user', timestamp: T + 70_000, content: '查 Notion 离线模式(简报)' }, { id: 'k1a', role: 'model', timestamp: T + 8 * 60_000, content: '冲突那块官方有两种说法,要我按企业版文档再核一遍吗?' }] : [] }
       m = /^\/agent\/sessions\/([^/]+)\/children$/.exec(p)
-      if (m && method === 'POST') { withNew = true; return { sessionId: NEWKID, runId: 'r-new', title: '写 Amadeus 离线同步的设计稿' } }
+      if (m && method === 'POST') { childPosts.push(await body()); withNew = true; return { sessionId: NEWKID, runId: 'r-new', title: '写 Amadeus 离线同步的设计稿' } }
       m = /^\/agent\/sessions\/([^/]+)\/detail$/.exec(p)
       if (m) { const s = sessions(projectDir, withNew).find((x) => x.id === m[1]); if (s) return { session: { ...s, kind: 'user' } } }
       return undefined
@@ -101,9 +119,13 @@ async function main() {
       const ids = rows.map((e) => e.dataset.selId)
       const q = (id) => document.querySelector(`.t2s-srow[data-sel-id="${id}"]`)
       const st = (id) => q(id)?.querySelector('.t2s-st')?.className.replace('t2s-st', '').trim() || ''
-      const after = getComputedStyle(q(K[2]), '::after')
+      let lastId = null
+      for (let i = ids.indexOf(P) + 1; i < ids.length && q(ids[i])?.classList.contains('t2s-kid'); i++) lastId = ids[i]
+      const after = getComputedStyle(q(lastId || K[2]), '::after')
       return {
-        order: ids.indexOf(P) >= 0 && K.every((k, i) => ids[ids.indexOf(P) + 1 + i] === k),
+        // 挪出去的那条(HAND)也挂在 P 下面:三个子会话按原序紧跟,中间 / 后面多它一行不算错
+        order: ids.indexOf(P) >= 0 && (() => { const kids = []; for (let i = ids.indexOf(P) + 1; i < ids.length && q(ids[i])?.classList.contains('t2s-kid'); i++) kids.push(ids[i]); return K.every((k) => kids.includes(k)) && kids.filter((k) => K.includes(k)).join() === K.join() })(),
+        lastKid: (() => { let last = null; for (let i = ids.indexOf(P) + 1; i < ids.length && q(ids[i])?.classList.contains('t2s-kid'); i++) last = ids[i]; return last })(),
         kidCls: K.map((k) => q(k)?.className || ''),
         parentKids: q(P)?.querySelector('.t2s-kids')?.textContent || '',
         st: { run: st(K[0]), wait: st(K[1]), done: st(K[2]), parent: st(P) },
@@ -113,9 +135,10 @@ async function main() {
       }
     }, { P, K, CAL, CALK })
     r.check('A1 子会话紧跟在主会话下面', tree.order, JSON.stringify(tree.kidCls))
-    r.check('A2 子会话带 t2s-kid,最后一个带 last 并画拐弯', tree.kidCls.every((c) => c.includes('t2s-kid')) && tree.kidCls[2].includes('last') && tree.lastElbow === '1px', tree.lastElbow)
+    const lastCls = await row(tree.lastKid).getAttribute('class').catch(() => '')
+    r.check('A2 子会话带 t2s-kid,最后一个带 last 并画拐弯', tree.kidCls.every((c) => c.includes('t2s-kid')) && /\blast\b/.test(lastCls || '') && tree.lastElbow === '1px', `${tree.lastElbow} last=${tree.lastKid}`)
     r.check('A3 子会话比主会话缩进', tree.padKid > tree.padParent + 10, `${tree.padParent} → ${tree.padKid}`)
-    r.check('A4 主会话行尾有子会话个数 3', tree.parentKids.trim() === '3', tree.parentKids)
+    r.check('A4 主会话行尾有子会话个数 4(三个子会话 + 挪出去的一个)', tree.parentKids.trim() === '4', tree.parentKids)
     r.check('A5 行尾状态:在跑 / 等你 / 做完了没看', tree.st.run === 'run' && tree.st.wait === 'wait' && tree.st.done === 'done', JSON.stringify(tree.st))
     r.check('A6 状态不再贴在图标角上', tree.noCornerDot, '')
     r.check('A7 收起的主会话藏起子会话,状态冒上来(在跑)', tree.calHidden && tree.calSt === 'run', tree.calSt)
@@ -155,23 +178,104 @@ async function main() {
     r.check('C1 任务卡:普通卡带「7 天内有效」,先问卡带说明', chat.valid && chat.askNote && JSON.stringify(chat.cards) === '["open","ask"]', JSON.stringify(chat.cards))
     r.check('C2 撤回的卡写「已撤回 · 理由」,过期的卡写「已过期」', /withdrawn:.*你让我在这里做了/.test(chat.old[0] || '') && /^expired:/.test(chat.old[1] || ''), JSON.stringify(chat.old))
     r.check('C3 撤回围栏本身不出现在正文里', chat.withdrawFenceHidden, '')
+    // ── E:挪出去 / 树外来信 / 模型芯片(11-08 会话互通升级)──
+    await win.locator('#tocmsg-a4 .t2-handoff').waitFor({ timeout: 10_000 }).catch(() => {})
+    const e = await win.evaluate(({ HAND, PEER, K }) => {
+      const hb = document.querySelector('#tocmsg-a4 .t2-handoff')
+      const sm = document.querySelector(`[data-session-message="${PEER}"]`)
+      const kidSm = document.querySelector(`[data-session-message="${K[2]}"]`)
+      return {
+        handRows: hb ? [...hb.querySelectorAll('.t2-child-row')].map((x) => x.dataset.childSession) : [],
+        handHead: hb?.querySelector('.t2-childs-head')?.textContent || '',
+        handElsewhere: document.querySelectorAll(`.t2-child-row[data-child-session="${HAND}"]`).length,
+        chip: hb?.querySelector('.t2-model-chip')?.textContent || '',
+        chipModel: hb?.querySelector('.t2-model-chip')?.dataset.model || '',
+        kidChips: document.querySelectorAll('#tocmsg-a1 .t2-model-chip').length,
+        tool: document.querySelector('#tocmsg-a4')?.textContent || '',
+        peerHead: sm?.querySelector('.t2-session-msg-head')?.textContent || '',
+        peerNote: sm?.querySelector('.t2-session-msg-note')?.textContent || '',
+        peerRel: sm?.dataset.relation || '',
+        kidNote: !!kidSm?.querySelector('.t2-session-msg-note'),
+        // 任务卡 10-23 起挪进输入框上方的托盘(一次一张),不在那条回答里 → 整页找
+        cardChip: document.querySelector('.t2-taskcard .t2-model-chip')?.textContent || '',
+      }
+    }, { HAND, PEER, K })
+    r.check('E1 挪出去的会话在那条回答下面单独一块,不进三个子会话那块', JSON.stringify(e.handRows) === JSON.stringify([HAND]) && e.handElsewhere === 1 && /挪到了这里/.test(e.handHead), `${e.handHead} ${JSON.stringify(e.handRows)} ×${e.handElsewhere}`)
+    r.check('E2 挪出去的会话换了模型 → 行上有模型芯片(显示名);跟主会话同模型的子会话没有', e.chipModel === 'm2' && /GPT 6 Luna/.test(e.chip) && e.kidChips === 0, `${e.chip} / kids ${e.kidChips}`)
+    r.check('E3 hand_off_task 的过程行有说法', /把手头的活挪到了子会话|挪到子会话/.test(e.tool), '')
+    r.check('E4 树外会话来信:头行写「另一个会话「…」」+ 一行说明;同树的来信没有说明', e.peerRel === 'peer' && /另一个会话「发布窗口排期」/.test(e.peerHead) && /不是你说的/.test(e.peerNote) && !e.kidNote, `${e.peerHead} | ${e.peerNote}`)
+    r.check('E5 任务卡写了 model: → 卡上有模型芯片', /GPT 6 Luna/.test(e.cardChip), e.cardChip)
+    await win.locator('#tocmsg-a4').scrollIntoViewIfNeeded()
+    await win.screenshot({ path: path.join(dir, 'handoff.png') })
+    await win.locator(`[data-session-message="${PEER}"]`).scrollIntoViewIfNeeded()
+    await win.screenshot({ path: path.join(dir, 'peer-message.png') })
     await win.mouse.move(1400, 880) // 别悬停在会话行上(悬停时图标换成开合箭头)
     await win.waitForTimeout(300)
     await win.screenshot({ path: path.join(dir, 'sidebar.png'), clip: { x: 40, y: 110, width: 270, height: 260 } })
     await win.locator('#tocmsg-a1 .t2-childs').scrollIntoViewIfNeeded()
     await win.screenshot({ path: path.join(dir, 'chat-block.png') })
-    await win.locator('[data-session-message]').scrollIntoViewIfNeeded()
+    await win.locator(`[data-session-message="${K[2]}"]`).scrollIntoViewIfNeeded()
     await win.screenshot({ path: path.join(dir, 'session-message.png') })
     await win.locator('#tocmsg-a2 .t2-tasks').scrollIntoViewIfNeeded()
     await win.screenshot({ path: path.join(dir, 'cards.png') })
 
     // 点「开个子会话」→ 卡原地变成子会话行
     // 点不到也别中断整轮:下面 C4 照样记红,D 段(子会话面板)继续跑
-    await win.locator('#tocmsg-a2 .t2-taskcard[data-task-state="open"] .t2-taskcard-actions button.primary').click({ timeout: 10_000 }).catch(() => {})
+    // 10-23 起卡在托盘里:回答里那张找不到就点托盘里的(C4/C5 的断言仍按旧位置写,10-28 记过「台架没跟上」)
+    const inMsg = win.locator('#tocmsg-a2 .t2-taskcard[data-task-state="open"] .t2-taskcard-actions button.primary')
+    await ((await inMsg.count()) ? inMsg : win.locator('.t2-taskcard[data-task-state="open"] .t2-taskcard-actions button.primary').first()).click({ timeout: 10_000 }).catch(() => {})
     await win.locator(`#tocmsg-a2 .t2-tasks .t2-childs .t2-child-row[data-child-session="${NEWKID}"]`).waitFor({ timeout: 10_000 }).catch(() => {})
     r.check('C4 点「开个子会话」后卡原地变成子会话行', await win.locator(`#tocmsg-a2 .t2-child-row[data-child-session="${NEWKID}"]`).count() === 1, '')
     r.check('C5 新开的子会话进了左栏、挂在主会话下面', await row(NEWKID).evaluate((e) => e.classList.contains('t2s-kid')).catch(() => false), '')
     await win.screenshot({ path: path.join(dir, 'card-started.png') })
+    r.check('C6 任务卡的 model: 随「开个子会话」发给引擎', childPosts.some((b) => b && b.model === 'm2'), JSON.stringify(childPosts.map((b) => b && b.model)))
+
+    // ── F:运行中发送键 —— 右键 / 长按出「插话 / 另起话题」,⌘Enter = 另起话题,Enter = 插话(11-08)──
+    ctx.stub.script([{ type: '__hold' }])
+    const ta = win.locator('.t2c-ta').first()
+    const sendKey = win.locator('button.t2c-send[aria-haspopup="menu"]').first() // 侧栏「…」等也带 aria-haspopup,只认输入框的发送键
+    const type = async (text) => { await ta.click(); await ta.fill(text); await win.waitForTimeout(200) }
+    await type('把三家的对比表写完')
+    await win.keyboard.press('Enter')
+    await win.locator('.t2c-stop').first().waitFor({ timeout: 10_000 }).catch(() => {})
+    const runId = ctx.stub.seen.runs.at(-1)?.runId
+    console.log(`[F] runs=${JSON.stringify(ctx.stub.seen.runs.map((x) => [x.runId, x.sessionId, String(x.message).slice(0, 20)]))} stop=${await win.locator('.t2c-stop').count()} ta=${await ta.count()}`)
+    await win.screenshot({ path: path.join(dir, 'f-running.png') })
+    await type('SSH 默认端口是多少?')
+    await sendKey.waitFor({ timeout: 5000 }).catch(() => {})
+    await sendKey.click({ button: 'right' }).catch(() => {})
+    const menu = win.locator('.t2c-send-menu')
+    await menu.waitFor({ timeout: 5000 }).catch(() => {})
+    const items = await menu.locator('[role="menuitem"], button, .ctx-item').allTextContents().catch(() => [])
+    r.check('F1 运行中右键发送键 → 菜单两项:插话 / 另起话题(各带一行说明)', /插话/.test(items.join('|')) && /另起话题/.test(items.join('|')) && /挪到子会话/.test(items.join('|')), items.join(' | ').slice(0, 160))
+    const mb = await menu.boundingBox().catch(() => null)
+    const kb = await sendKey.boundingBox().catch(() => null)
+    r.check('F2 菜单往上开、不盖住发送键', !!mb && !!kb && mb.y + mb.height <= kb.y + 1, JSON.stringify({ mb, kb }))
+    if (mb) await win.screenshot({ path: path.join(dir, 'send-menu.png'), clip: { x: Math.max(0, mb.x - 420), y: Math.max(0, mb.y - 20), width: Math.min(1440, mb.width + 480), height: Math.min(900 - Math.max(0, mb.y - 20), (kb ? kb.y + kb.height : mb.y + mb.height) - mb.y + 60) } })
+    await menu.getByText('另起话题', { exact: true }).click().catch(() => {})
+    await win.waitForTimeout(800)
+    r.check('F3 点「另起话题」→ steer 请求带 newTopic', steers.length === 1 && steers[0].newTopic === true && steers[0].message === 'SSH 默认端口是多少?', JSON.stringify(steers))
+    await type('顺便把 README 的错字改了')
+    await win.keyboard.press('Meta+Enter')
+    await win.waitForTimeout(800)
+    r.check('F4 运行中 ⌘Enter → 另起话题', steers.length === 2 && steers[1].newTopic === true, JSON.stringify(steers[1] || null))
+    await type('对比表加一列价格')
+    await win.keyboard.press('Enter')
+    await win.waitForTimeout(800)
+    r.check('F5 运行中 Enter → 普通插话(不带 newTopic)', steers.length === 3 && !('newTopic' in (steers[2] || {})), JSON.stringify(steers[2] || null))
+    // 长按 ≥500ms 出菜单,松手后那一下 click 不能顺手发出去
+    await type('长按试试')
+    const kb2 = await sendKey.boundingBox().catch(() => null)
+    if (kb2) {
+      await win.mouse.move(kb2.x + kb2.width / 2, kb2.y + kb2.height / 2)
+      await win.mouse.down(); await win.waitForTimeout(700); await win.mouse.up()
+    }
+    await win.waitForTimeout(500)
+    r.check('F6 长按出菜单,松手不顺手发出去', (await menu.count()) === 1 && steers.length === 3, `menu=${await menu.count()} steers=${steers.length}`)
+    await win.keyboard.press('Escape')
+    await ta.fill('')
+    if (runId) ctx.stub.finish(runId)
+    await win.waitForTimeout(800)
 
     // 点子会话行 → 右侧子会话面板,顶上「来自 主会话」
     await win.locator(`#tocmsg-a1 .t2-child-row[data-child-session="${K[1]}"]`).click()

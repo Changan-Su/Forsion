@@ -586,3 +586,8 @@
 .t2c-ta[data-voice-pending] { color: transparent; caret-color: transparent; }
 .t2c-mirror[data-voice-pending] { color: var(--text); }
 .t2c-voice-pending { color: var(--text-muted); }
+
+/* 运行中发送键的右键 / 长按菜单(插话 / 另起话题,11-08):两行说明要读完,不按选择菜单的 224px 截断。
+   [role='menu'] 抬到 (0,3,0),压过 base.css 的 .ctx-menu:has(.ctx-detail)(0,2,0),不靠加载先后。 */
+.ctx-menu.t2c-send-menu[role='menu'] { width: 280px; max-width: min(280px, calc(100vw - 16px)); }
+.t2c-send-menu .ctx-text > .ctx-detail { white-space: normal; }

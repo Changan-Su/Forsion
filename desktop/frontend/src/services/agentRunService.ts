@@ -216,15 +216,17 @@ export async function abortRunAndWait(t: EngineTarget, runId: string, sessionId:
   throw new Error(translate('agentrun.stopUnconfirmed'))
 }
 
-/** 运行时转向:把消息注入仍在跑的 run(下一迭代生效)。run 已结束 → 409 返回 {ok:false,reason:'not_active'},前端回退起新 run。 */
+/** 运行时转向:把消息注入仍在跑的 run(下一迭代生效)。run 已结束 → 409 返回 {ok:false,reason:'not_active'},前端回退起新 run。
+ *  newTopic(11-08「另起话题」):引擎让模型先把手头没做完的活 hand_off_task 挪进新会话,这里把这句当新话题答;
+ *  只在要的时候才放进请求体(旧引擎不认这个字段,照常当插话处理)。409 回退起新 run 时它自然作废(没有手头的活可挪)。 */
 export async function steerRun(
   t: EngineTarget,
   runId: string,
-  params: { message: string; attachments?: Attachment[] },
+  params: { message: string; attachments?: Attachment[]; newTopic?: boolean },
 ): Promise<{ ok: boolean; reason?: string; userMessageId?: string }> {
   const r = await engineRequest(t, `/agent/runs/${encodeURIComponent(runId)}/steer`, {
     method: 'POST',
-    body: JSON.stringify({ message: params.message, attachments: params.attachments || [] }),
+    body: JSON.stringify({ message: params.message, attachments: params.attachments || [], ...(params.newTopic ? { newTopic: true } : {}) }),
   })
   if (r.status === 409) return { ok: false, reason: 'not_active' }
   if (!r.ok) throw new Error((await r.text().catch(() => '')) || `HTTP ${r.status}`)
