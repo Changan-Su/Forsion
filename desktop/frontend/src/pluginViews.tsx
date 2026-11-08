@@ -269,13 +269,20 @@ export function syncPluginViews(): void {
       }) : undefined
       dockTrace('closeView', { type, collapse: !!opts?.collapse, side: side ?? null, leftVisible: ws.leftVisible, rightVisible: ws.rightVisible,
         rightTabs: ws.rightTabs.map((t) => t.type), live: (ws.api?.panels ?? []).map((p) => `${((p.params ?? {}) as { __loc?: string }).__loc ?? 'main'}:${((p.params ?? {}) as { __type?: string }).__type ?? ''}`) })
-      if (!side) { ws.closeViewsOfType(type); return }
+      if (!side && (!opts?.collapse || !ws.api)) { ws.closeViewsOfType(type); return } // 单列 store 没有 Dockview api:照旧
+      // 收起已经在途的那一侧(toggleSidebar 先把 visible 置假,panel 留到 200ms 补间结束才关):它的 panel 归补间收尾,
+      // 这里不再 closeLeaf —— 否则「侧栏最后一个」补出空占位,收起变成一个开着的空侧栏。蓬洲云进 Space 时 closeView(collapse)
+      // 连着来两次(视图挂载一次、落到概览再一次),第二次晚 ~90ms 落在补间里就中招:2.13.8-beta.4 打包验收 mac / Windows /
+      // Ubuntu 间歇红,dockTrace 时间线实证(收起 → 92ms 后第二次 → closeViewsOfType → 补占位)。
+      const collapsing = (loc: string | undefined): boolean =>
+        !!opts?.collapse && (loc === 'left' ? !ws.leftVisible : loc === 'right' ? !ws.rightVisible : false)
       // 别处的同类实例(主区标签、另一侧 / 底部)照常关,只有这一侧收起(Codex 评审 #4)
       for (const p of [...(ws.api?.panels ?? [])]) { // 先拍下名单:closeLeaf 会就地改 api.panels
         const m = (p.params ?? {}) as { __type?: string; __loc?: string }
-        if ((m.__type || (p as { component?: string }).component) === type && m.__loc !== side) ws.closeLeaf(p.id)
+        if ((m.__type || (p as { component?: string }).component) === type && m.__loc !== side && !collapsing(m.__loc)) ws.closeLeaf(p.id)
       }
-      ws.toggleSidebar(side)
+      if (side) ws.toggleSidebar(side)
+      else ws.refreshTabs()
     },
     replace: (from, to, params) => useWorkspace.getState().replaceViewsOfType(from, to, params),
   })
