@@ -589,6 +589,9 @@ const api = {
     ipcRenderer.invoke('window:detachedReady', id),
   openDetached: (views: Array<{ type: string; params?: Record<string, unknown> }>, at?: { screenX: number; screenY: number }, opts?: { space?: string }): Promise<{ id: string }> =>
     ipcRenderer.invoke('window:openDetached', views, at, opts),
+  /** Space「添加到桌面」:双击快捷方式 = 这个 Space 开在自己的独立窗口里(spaceShortcut.ts)。iconPng = 渲染层画好的 PNG data URL。 */
+  addSpaceToDesktop: (input: { id: string; name: string; fallbackName?: string; iconPng?: string }): Promise<{ ok: true; path: string } | { ok: false; code: string; detail?: string }> =>
+    ipcRenderer.invoke('spaces:addToDesktop', input),
   /** 开 / 叫出一扇 Mini(同一实体复用、满了不开):结果里 ok:false + reason:'limit' 时调用方负责提示用户。 */
   openMini: (opts?: import('../shared/miniPanel').MiniOpenOptions): Promise<import('../shared/miniPanel').MiniOpenResult | undefined> =>
     ipcRenderer.invoke('window:openMini', opts),

@@ -939,6 +939,8 @@ declare global {
       detachedReady?(id: string): Promise<Array<{ type: string; params?: Record<string, unknown> }>>
       /** 开一个独立窗承载给定视图(右键「移到新窗口」/拖到空桌面);screen 坐标可选(拖出落点)。 */
       openDetached?(views: Array<{ type: string; params?: Record<string, unknown> }>, at?: { screenX: number; screenY: number }, opts?: { space?: string }): Promise<{ id: string }>
+      /** Space「添加到桌面」(仅桌面宿主):快捷方式双击后这个 Space 开在自己的独立窗口里,不露出主窗。 */
+      addSpaceToDesktop?(input: { id: string; name: string; fallbackName?: string; iconPng?: string }): Promise<{ ok: true; path: string } | { ok: false; code: string; detail?: string }>
       cursorScreenPoint?(): { screenX: number; screenY: number }
       /** 开 / 叫出一扇 Mini 悬浮卡片(2.13.8 起多开:同一实体再开 = 叫出那扇,duplicate 才另开;普通 Mini 满 6 扇不开,
        *  结果 { ok: false, reason: 'limit' } 由调用方提示,用 openMiniWindow() 就带提示)。不带参数 = ⌘⇧M:开合最近用过的那扇。 */
