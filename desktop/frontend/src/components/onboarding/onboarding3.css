@@ -145,7 +145,7 @@ html.dark .ob3-paper { --hpw-grain-blend: screen; --hpw-halo: 16%; --hpw-halo-mi
 .ob3-style small { color: var(--text-faint); font-size: var(--ui-font-meta, 12px); line-height: 1.45; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
 /* 明暗:LCL 的看法胶囊(ViewModeSwitch,滑块会流过去,跟着动效主题走);语言锁了明暗时灰着不让点 */
 .ob3-mode { justify-self: start; display: grid; gap: 4px; }
-.ob3-mode.locked .lcl-vmode { opacity: .6; pointer-events: none; }
+.ob3-mode.locked .lcl-vmode { opacity: .6; }
 .ob3-sw { display: flex; flex-wrap: wrap; gap: 6px 10px; }
 .ob3-sw button { border: 0; background: transparent; padding: 0; display: grid; justify-items: center; gap: 4px; font: inherit; font-size: var(--ui-font-caption, 11px); color: var(--text-muted); width: 38px; cursor: pointer; }
 .ob3-sw button i { width: 24px; height: 24px; border-radius: 50%; display: block; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 14%, transparent);

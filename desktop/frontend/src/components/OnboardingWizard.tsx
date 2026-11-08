@@ -22,7 +22,7 @@ import { LocaleToggle } from './LocaleToggle'
 import { ErrorBoundary } from './ErrorBoundary'
 import { needsFullGuide, stepOrder, updateOrder, type Step } from './onboardingFlow'
 import { readTelemetry } from './OnboardingImprove'
-import { StartScreen, ImproveRow } from './onboarding/StartScreen'
+import { StartScreen, ImproveRow, type SyncBase } from './onboarding/StartScreen'
 import { ThemeScreen } from './onboarding/ThemeScreen'
 import { YouScreen } from './onboarding/YouScreen'
 import { TeamScreen } from './onboarding/TeamScreen'
@@ -112,6 +112,9 @@ export const OnboardingWizard: React.FC<{
   // 不然收尾时「没勾的关」会关掉用户自己开的);读不到就一直是 null,收尾不动同步。
   // Agents 那个勾在旧同步里是账号总闸;11-06 第四轮从界面拿掉(新同步里逐个选),初值照现状原样传回去,不替用户开也不替他关。
   const [syncPick, setSyncPick] = useState<Record<SyncKind, boolean> | null>(null)
+  /** 读到的现状:收尾只把和它不一样的那几项交给 applySyncChoices(没露出来的智库那项不动)。 */
+  const [syncBase, setSyncBase] = useState<SyncBase | null>(null)
+  const onSyncSeed = useCallback((pick: Record<SyncKind, boolean>, base: SyncBase) => { setSyncPick(pick); setSyncBase(base) }, [])
   const syncSeen = useRef(false)
   const onSyncSeen = useCallback(() => { syncSeen.current = true }, [])
   /** 团队屏「在 Agents 里管理」:引导盖在最上面,点了先记下,引导关掉之后再去 Agents。 */
@@ -153,7 +156,10 @@ export const OnboardingWizard: React.FC<{
       localStorage.setItem(ONBOARDING_VERSION_KEY, version)
     } catch { /* 隐私窗口里可能写不了 */ }
     // 后台去开,不挡收尾(第二台电脑要用户定的,蓬洲云「同步」页会挂着等)
-    if (pick && window.remoteSync) void applySyncChoices(pick)
+    if (pick && syncBase && window.remoteSync) {
+      const kinds = (['notes', 'plugins'] as const).filter((k) => (k !== 'notes' || syncBase.notesShown) && pick[k] !== syncBase[k])
+      void applySyncChoices(pick, kinds)
+    }
     onFinish()
     if (openAgents.current) setTimeout(() => openAgentsSpace(), 0)
   }
@@ -223,7 +229,7 @@ export const OnboardingWizard: React.FC<{
         <section className="ob3-card ob3-update changelog"><ChangelogEntries /></section>
         {improveNotice && signedIn && <section className="ob3-card"><ImproveRow signedIn={signedIn} /></section>}
       </div>
-      case 'start': return <StartScreen resolveTarget={onboardingTarget} returning={returning} syncPick={syncPick} onSyncPick={setSyncPick} onSyncSeen={onSyncSeen}
+      case 'start': return <StartScreen resolveTarget={onboardingTarget} returning={returning} syncPick={syncPick} syncBase={syncBase} onSyncPick={setSyncPick} onSyncSeed={onSyncSeed} onSyncSeen={onSyncSeen}
         onConnected={onConnected} onSignedIn={onSignedIn} onReconnect={onReconnect} onBusyChange={onBusyChange} />
       case 'theme': return <ThemeScreen themeLang={themeLang} themeSkin={themeSkin} themeMode={themeMode} themeModePref={themeModePref} themeSeed={themeSeed}
         onThemeChange={onThemeChange} onSeedChange={onSeedChange} />

@@ -30,7 +30,11 @@ export interface StartProps {
   returning: boolean
   /** 登录后的同步勾;null = 还没读到现在的同步状态(读到之前不露勾,收尾时也不按它开关)。 */
   syncPick: Record<SyncKind, boolean> | null
+  /** 读到的现状(收尾只动和它不一样的那几项);智库那项读到了才露勾。 */
+  syncBase: SyncBase | null
   onSyncPick: (next: Record<SyncKind, boolean>) => void
+  /** 读到现状时种一次:勾的初值 + 现状。 */
+  onSyncSeed: (pick: Record<SyncKind, boolean>, base: SyncBase) => void
   /** 同步那三个勾真露出来过(没看到就不替用户开)。 */
   onSyncSeen: () => void
   onConnected: (connected: boolean) => void
@@ -38,6 +42,9 @@ export interface StartProps {
   onReconnect: () => void
   onBusyChange: (busy: boolean) => void
 }
+
+/** 读到的同步现状。notesShown = 智库同步的状态真读到了(读不到时快照会把它当成「关」,不能拿来当底)。 */
+export interface SyncBase { notes: boolean; plugins: boolean; notesShown: boolean }
 
 export function StartScreen(p: StartProps): React.ReactNode {
   const { t } = useI18n()
@@ -73,7 +80,8 @@ export function StartScreen(p: StartProps): React.ReactNode {
   // 同步勾(11-08 用户定:缺省关、标 Beta)。收尾是「勾着的开、没勾的关」,所以初值按现在的状态:已经开着的显示开
   // (不然点「开始使用」会把用户自己开的同步关掉);插件同步没人定过时也算「开」(没关掉的记号),按新缺省显示关。
   // 读到之前不露勾:读失败 ≠ 全关。初值只种一次(存在外壳里),回到这一屏不把用户勾过的冲掉。
-  const { syncPick, onSyncPick } = p
+  // 智库那一项:快照读不到 remoteSync 状态时 notes.available 为假、notes.on 也是假的「关」,这时不露那个勾(Codex 评审 P1)。
+  const { syncPick, syncBase, onSyncPick, onSyncSeed } = p
   useEffect(() => {
     if (!signedIn || syncPick) return
     let done = false
@@ -81,12 +89,13 @@ export function StartScreen(p: StartProps): React.ReactNode {
       const s = getSync()
       if (done || !s?.signedIn) return
       done = true
-      onSyncPick({ notes: s.notes.on, agents: s.agents.on, plugins: s.decided && s.plugins.on })
+      onSyncSeed({ notes: s.notes.on, agents: s.agents.on, plugins: s.decided && s.plugins.on },
+        { notes: s.notes.on, plugins: s.plugins.on, notesShown: s.notes.available })
     }
     const off = subscribeSync(seed)
     void refreshSync().then(seed, () => {})
     return () => { done = true; off() }
-  }, [signedIn, syncPick, onSyncPick])
+  }, [signedIn, syncPick, onSyncSeed])
 
   const login = async (): Promise<void> => {
     if (!window.tangu?.forsionLogin) return
@@ -122,7 +131,7 @@ export function StartScreen(p: StartProps): React.ReactNode {
         <span>{t('ob3.sync.betaHint')}</span></span>
         {syncPick && <SyncSeen onSeen={p.onSyncSeen} />}
         {syncPick && ([['notes', 'onboarding.connect.sync.notes'], ['plugins', 'onboarding.connect.sync.plugins']] as const)
-          .filter(([k]) => k !== 'notes' || !!window.remoteSync).map(([k, label]) => (
+          .filter(([k]) => k !== 'notes' || (!!window.remoteSync && !!syncBase?.notesShown)).map(([k, label]) => (
             <label key={k}><input type="checkbox" checked={syncPick[k]} onChange={(e) => onSyncPick({ ...syncPick, [k]: e.target.checked })} />{t(label)}</label>
           ))}
         {/* 引导盖在最上面,这里只说去哪儿选,不做成点了没反应的链接 */}

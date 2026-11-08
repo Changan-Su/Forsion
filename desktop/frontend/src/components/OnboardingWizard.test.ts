@@ -465,7 +465,7 @@ it('start: signed in, the sync choices no longer offer an Agents box and point t
 })
 
 const snapshot = (over: Record<string, any> = {}) => ({
-  signedIn: true, decided: false, notes: { on: false }, agents: { on: false }, plugins: { on: true }, ...over,
+  signedIn: true, decided: false, notes: { on: false, available: true }, agents: { on: false }, plugins: { on: true }, ...over,
 })
 async function walkToEnd() {
   await next(); await next(); await next()
@@ -487,20 +487,35 @@ it('start: signed in, sync is marked Beta and off by default; an untouched choic
     expect(boxes).toHaveLength(2)
     expect(boxes.every((b) => !b.checked)).toBe(true)
     await walkToEnd()
-    expect(applySyncChoices).toHaveBeenCalledExactlyOnceWith({ notes: false, agents: false, plugins: false })
+    // 只交出和现状不一样的那一项:插件同步原来算开着,这次按缺省关
+    expect(applySyncChoices).toHaveBeenCalledExactlyOnceWith({ notes: false, agents: false, plugins: false }, ['plugins'])
   } finally { delete (window as any).remoteSync }
 })
 
 it('start: sync that is already on stays ticked, so finishing does not switch it off', async () => {
   vi.mocked(window.tangu!.authStatus!).mockResolvedValue({ loggedIn: true, nickname: 'Q' } as any)
   ;(window as any).remoteSync = {}
-  sync.snap = snapshot({ decided: true, notes: { on: true }, agents: { on: true }, plugins: { on: true } })
+  sync.snap = snapshot({ decided: true, notes: { on: true, available: true }, agents: { on: true }, plugins: { on: true } })
   try {
     await render()
     const boxes = [...host.querySelectorAll<HTMLInputElement>('[data-ob-sync] input[type="checkbox"]')]
     expect(boxes.map((b) => b.checked)).toEqual([true, true])
     await walkToEnd()
-    expect(applySyncChoices).toHaveBeenCalledExactlyOnceWith({ notes: true, agents: true, plugins: true })
+    expect(applySyncChoices).toHaveBeenCalledExactlyOnceWith({ notes: true, agents: true, plugins: true }, [])
+  } finally { delete (window as any).remoteSync }
+})
+
+it('start: when the notes sync state could not be read, its box is hidden and finishing never touches it', async () => {
+  vi.mocked(window.tangu!.authStatus!).mockResolvedValue({ loggedIn: true, nickname: 'Q' } as any)
+  ;(window as any).remoteSync = {}
+  // 快照读不到 remoteSync 时 notes 是假的「关」(available 也是假):不能拿来当底,否则状态恢复后会把开着的智库同步关掉
+  sync.snap = snapshot({ decided: true, notes: { on: false, available: false }, plugins: { on: true } })
+  try {
+    await render()
+    const labels = [...host.querySelectorAll('[data-ob-sync] label')].map((l) => l.textContent)
+    expect(labels).toEqual([translate('onboarding.connect.sync.plugins')])
+    await walkToEnd()
+    expect(applySyncChoices).toHaveBeenCalledExactlyOnceWith(expect.anything(), [])
   } finally { delete (window as any).remoteSync }
 })
 
@@ -548,6 +563,18 @@ it('theme: light / dark / system is the shared view-mode capsule', async () => {
   expect(tabs[0].getAttribute('aria-selected')).toBe('true')
   await act(async () => tabs[1].click())
   expect(props.onThemeChange).toHaveBeenCalledWith('lovable', 'cream', 'dark')
+})
+
+it('team: closing the model menu gives focus back to the picker, so Enter does not finish the guide', async () => {
+  await toTeam()
+  await act(async () => modelBtn().click())
+  expect(document.querySelector('.composer-menu')).not.toBeNull()
+  await act(async () => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })) })
+  expect(document.querySelector('.composer-menu')).toBeNull()
+  expect(document.activeElement).toBe(modelBtn())
+  await pickModel('Model one')
+  expect(document.activeElement).toBe(modelBtn())
+  expect(props.onFinish).not.toHaveBeenCalled()
 })
 
 it('team: Muse shows its own avatar (the uploaded picture, or its initial), not a star', async () => {

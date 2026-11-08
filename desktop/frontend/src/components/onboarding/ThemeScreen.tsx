@@ -44,12 +44,13 @@ export function ThemeScreen(p: ThemeProps): React.ReactNode {
           </div></div>
         <div className="ob3-field"><span>{t('onboarding.theme.modeLabel')}</span>
           <div className={`ob3-mode${forced ? ' locked' : ''}`} data-ob-mode="" title={forced ? t('settings.theme.modeLocked') : undefined}>
-            <ViewModeSwitch spec={{
+            {/* 锁住时整颗 inert:点不到、Tab 不进、读屏器也不当成能用的控件(下面那行说明照读) */}
+            <div inert={!!forced}><ViewModeSwitch spec={{
               value: mode, ariaLabel: t('onboarding.theme.modeLabel'),
               modes: [{ value: 'light', label: t('onboarding.theme.light'), icon: Sun }, { value: 'dark', label: t('onboarding.theme.dark'), icon: Moon },
                 { value: 'system', label: t('settings.theme.system'), icon: MonitorCog }],
               onChange: (v) => { if (!forced) p.onThemeChange(p.themeLang, p.themeSkin, v as 'light' | 'dark' | 'system') },
-            }} />
+            }} /></div>
             {forced && <small className="ob3-note">{t('settings.theme.modeLockedHint')}</small>}
           </div></div>
         <div className="ob3-field"><span>{t('settings.theme.accentLabel')}</span>

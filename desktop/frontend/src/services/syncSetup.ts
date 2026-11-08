@@ -290,16 +290,19 @@ export async function setSync(kind: SyncKind, on: boolean, who?: string | null):
 }
 
 /** 首登卡片 / 引导那一步:勾着的开、没勾的关(智库只关蓬洲云这一种,自己配的 WebDAV 等不动);不管成没成都记「点过了」。
- *  中途换了账号就停:剩下的步骤会落到另一个账号上。 */
-export async function applySyncChoices(choices: Record<SyncKind, boolean>): Promise<SyncResult[]> {
+ *  中途换了账号就停:剩下的步骤会落到另一个账号上。
+ *  kinds = 只动这几项。首登卡片缺省三项都按勾的来;引导只传和读到的现状不一样的那几项(11-08:缺省关之后,
+ *  没读到的那项照勾的写会把用户开着的同步关掉 —— 读失败 ≠ 关着)。 */
+export async function applySyncChoices(choices: Record<SyncKind, boolean>, kinds: readonly SyncKind[] = ['agents', 'plugins', 'notes']): Promise<SyncResult[]> {
   if (!snap) await refreshSync() // 引导收尾时可能还没读过:不读就不知道是哪个账号,「点过了」记不上
   const who = account
   const out: SyncResult[] = []
   if(snap?.contentRules){
     if(!(await sameAccount(who)))return [{ok:false,error:'account-changed'}]
-    out.push(await setSync('plugins',choices.plugins,who));markSyncDecided();openPenzorSync();return out
+    if(kinds.includes('plugins'))out.push(await setSync('plugins',choices.plugins,who));markSyncDecided();openPenzorSync();return out
   }
   for (const kind of ['agents', 'plugins', 'notes'] as const) {
+    if (!kinds.includes(kind)) continue
     if (account !== who) { out.push({ ok: false, error: 'account-changed' }); return out }
     if (kind === 'notes' && !choices.notes && snap?.notes.backend !== 'penzor') continue
     out.push(await setSync(kind, choices[kind], who))

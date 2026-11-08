@@ -63,7 +63,8 @@ export function ModelSelect({ models, value, onChange, icon, cloudDefaultId, dis
   useEffect(() => {
     if (!open) { setQuery(''); return }
     const onDown = (e: MouseEvent) => { if (!wrapRef.current?.contains(e.target as Node) && !menuRef.current?.contains(e.target as Node)) setOpen(false) }
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
+    // Esc 收起时焦点还给按钮:菜单(含搜索框)一卸掉焦点就落到 body,首启引导里这时按回车会直接「开始使用」(Codex 评审)
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { setOpen(false); btnRef.current?.focus() } }
     document.addEventListener('mousedown', onDown)
     document.addEventListener('keydown', onKey)
     return () => { document.removeEventListener('mousedown', onDown); document.removeEventListener('keydown', onKey) }
@@ -80,7 +81,7 @@ export function ModelSelect({ models, value, onChange, icon, cloudDefaultId, dis
   const groups = groupModelsByProvider(
     q ? models.filter((m) => m.name.toLowerCase().includes(q) || m.id.toLowerCase().includes(q)) : models, prefs,
   )
-  const pick = (id: string): void => { onChange(id); setOpen(false) }
+  const pick = (id: string): void => { onChange(id); setOpen(false); btnRef.current?.focus() }
 
   return (
     <div ref={wrapRef} className="model-select" data-cmenu>
