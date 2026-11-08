@@ -487,6 +487,16 @@ const api = {
   pluginsUserInstalled: (): Promise<Array<{ id: string; slug: string }>> => ipcRenderer.invoke('plugins:userInstalled'),
   pluginsUninstall: (id: string, movedSlug?: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('plugins:uninstall', id, movedSlug),
   marketForget: (type: string, slug: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('market:forget', type, slug),
+  // ── 商店来源(第三方目录;主进程 electron/storeSources.ts)──
+  marketSourcesList: (locale?: string): Promise<import('../shared/storeSources').StoreSourceInfo[]> => ipcRenderer.invoke('marketSources:list', locale),
+  marketSourcesProbe: (input: string, locale?: string): Promise<{ uri: string; kind: string; title: string; count: number; duplicate?: string }> => ipcRenderer.invoke('marketSources:probe', input, locale),
+  marketSourcesAdd: (input: string, locale?: string): Promise<import('../shared/storeSources').StoreSourceInfo> => ipcRenderer.invoke('marketSources:add', input, locale),
+  marketSourcesRemove: (id: string): Promise<void> => ipcRenderer.invoke('marketSources:remove', id),
+  marketSourcesSetDisabled: (id: string, on: boolean): Promise<void> => ipcRenderer.invoke('marketSources:setDisabled', id, on),
+  marketSourcesTrust: (id: string): Promise<void> => ipcRenderer.invoke('marketSources:trust', id),
+  marketSourcesSetDeclared: (list: import('../shared/storeSources').DeclaredStoreSource[]): Promise<void> => ipcRenderer.invoke('marketSources:setDeclared', list),
+  marketSourcesCatalog: (id: string, opts?: { refresh?: boolean; locale?: string }): Promise<import('../shared/storeSources').StoreSourceCatalog> => ipcRenderer.invoke('marketSources:catalog', id, opts),
+  marketSourcesInstalls: (locale?: string): Promise<import('../shared/storeSources').StoreSourceInstall[]> => ipcRenderer.invoke('marketSources:installs', locale),
   // ── 用户自定义 Space(~/.tangu/spaces;数据化布局配方,market type='space' 同目录)──
   spacesList: (): Promise<Array<{ slug: string; json: string; plugin?: string; iconUrl?: string }>> => ipcRenderer.invoke('spaces:list'),
   spacesSave: (slug: string, json: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('spaces:save', slug, json),
@@ -796,7 +806,7 @@ const AGENT_KEYS = [
   'remoteSafety', // 急停 / 远程锁定管的是本机引擎上的远程 / 通道 / 无人值守 run
 ] as const
 if (!PRODUCT.agentBackend) for (const k of AGENT_KEYS) delete (api as Record<string, unknown>)[k]
-if (!PRODUCT.market) for (const k of ['marketList', 'marketRead', 'marketDetail', 'marketInstall', 'onMarketInstallProgress', 'marketInstalled', 'marketUninstall', 'marketForget', 'marketUpdateStatus', 'marketSetAutoUpdate', 'marketSetAutoUpdateAll', 'marketRollback', 'marketCheckUpdates', 'onMarketUpdateStatus'] as const) delete (api as Record<string, unknown>)[k]
+if (!PRODUCT.market) for (const k of ['marketList', 'marketRead', 'marketDetail', 'marketInstall', 'onMarketInstallProgress', 'marketInstalled', 'marketUninstall', 'marketForget', 'marketUpdateStatus', 'marketSetAutoUpdate', 'marketSetAutoUpdateAll', 'marketRollback', 'marketCheckUpdates', 'onMarketUpdateStatus', 'marketSourcesList', 'marketSourcesProbe', 'marketSourcesAdd', 'marketSourcesRemove', 'marketSourcesSetDisabled', 'marketSourcesTrust', 'marketSourcesSetDeclared', 'marketSourcesCatalog', 'marketSourcesInstalls'] as const) delete (api as Record<string, unknown>)[k]
 // 云端账号面(个人中心 / 会员页 / 额度与重置卡 / 反馈 / cloud:fetch)由内置包 Forsion Extend 的主进程半身提供
 // (electron/cloudHost.ts);没装载(验签失败 / 单品变体 / 没捆)就删键 —— 调了会 reject "No handler registered",
 // 删掉键渲染层按同一套 window.tangu?.X 门控自动隐藏。主进程在开窗前就答好 cloud:present(Extend 实际注册的通道名),

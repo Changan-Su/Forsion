@@ -80,6 +80,8 @@ import { readThemesDir, seedDefaultThemes } from './themes'
 import { builtinBundleSources, builtinPluginIds, bundleOff, bundleRestartPending, initBundleSwitches, lockedPluginIds, seedBuiltinBundles, setBundleOff } from './builtinPlugins'
 import { createCorePluginUpdater, prefetchOnFirstBoot } from './corePluginUpdates'
 import { createMarketPluginUpdater, type MarketUpdateItem } from './marketPluginUpdates'
+import { createStoreSources, packageManifestId, type StoreSources } from './storeSources'
+import { isSourceCardId } from '../shared/storeSources'
 import { compareMarketVersions } from '../shared/marketPluginUpdates'
 import { BUILTIN_BUNDLES } from './builtinPlugins'
 import { checkBuiltinUpdates, NPM_OFFICIAL, registryOrder } from './builtinUpdates'
@@ -2832,7 +2834,33 @@ const marketBase = async (): Promise<string> => {
 const MARKET_UA = 'Forsion-Tangu'
 const marketPlatform = () => process.platform === 'darwin' ? 'macos' : process.platform === 'win32' ? 'windows' : 'linux'
 
-async function downloadMarketPackage(id: string, report: (phase: 'resolve' | 'download' | 'install', progress?: DownloadProgress) => void = () => {}, version?: string): Promise<{ info: { type: string; installSlug: string; downloadUrl: string; source: string; minAppVersion?: string; maxAppVersion?: string; platforms?: string[]; tags?: string[] } & NpmInstallSnapshot; buf: Buffer }> {
+/** Store sources (third-party catalogs in the store's left column): created at startup, before the plugin updater. */
+let storeSources: StoreSources | undefined
+/** Download an item from a store source and run the same package checks as a Forsion store item. */
+async function downloadSourcePackage(id: string, opts: { version?: string; auto?: boolean; report?: (phase: 'resolve' | 'download' | 'install', progress?: DownloadProgress) => void } = {}) {
+  if (!storeSources) throw new Error('resolve: source-removed')
+  const report = opts.report ?? (() => {})
+  const r = await storeSources.download(id, { version: opts.version, auto: opts.auto, onProgress: (p) => report('download', p) })
+  assertMarketplaceRequirements(r.info, app.getVersion(), marketPlatform())
+  await checkMarketPackage(r.buf, await detectMarketType(r.buf, r.info.type), app.getVersion(), marketPlatform(), builtinPluginIds())
+  return r
+}
+
+/** Loader ids of the plugins installed in one plugin root (folder names can differ from ids). */
+async function installedPluginIds(type: 'plugin' | 'amadeus-plugin'): Promise<Array<{ slug: string; id: string }>> {
+  const base = join(tanguHomeDir(), MARKET_SUBDIR[type])
+  const ents = await readdir(base, { withFileTypes: true }).catch(() => [])
+  const out: Array<{ slug: string; id: string }> = []
+  for (const e of ents) {
+    if (!e.isDirectory() && !e.isSymbolicLink()) continue
+    const id = await readInstalledPluginId(type, join(base, e.name))
+    if (id) out.push({ slug: e.name, id })
+  }
+  return out
+}
+
+async function downloadMarketPackage(id: string, report: (phase: 'resolve' | 'download' | 'install', progress?: DownloadProgress) => void = () => {}, version?: string): Promise<{ info: { type: string; installSlug: string; downloadUrl: string; source: string; version?: string; minAppVersion?: string; maxAppVersion?: string; platforms?: string[]; tags?: string[] } & Partial<NpmInstallSnapshot>; buf: Buffer; origin?: string }> {
+  if (isSourceCardId(id)) return downloadSourcePackage(id, { version, report })
   const base = await marketBase()
   // 服务端解析 github 源时要问 api.github.com(服务端在大陆,也会慢);没有超时 = 按钮一直转。
   // 错误消息只放语言中立的原因码(`resolve: …`),界面层自己套中英文案(frontend/src/services/marketService.ts 的 unwrapIpcError)。
@@ -3023,10 +3051,22 @@ app.whenReady().then(async () => {
   void remoteSessions.init() // P1-K4:迁移 / 读盘(isEnabled 依赖 K5 状态,须在它之后);K5 状态一变就重播视图
   deviceSecrets.onStatusChange(() => remoteSessions.notifyChanged())
   const storeUpdateTele = storeUpdateTelemetry({ update: (p) => telemetry.emit('update', p), setting: (k, v) => telemetry.setting(k, v) }) // 匿名遥测
+  // 商店来源(第三方目录):来源表落盘,插件声明的那份也在里面 —— 更新器启动就要按它认来源装的插件,等不到窗口同步。
+  storeSources = createStoreSources({
+    home: forsionHomeDir(),
+    mirror: async () => (await loadConfig()).mirror || '',
+    githubProxy: () => process.env.TANGU_GITHUB_PROXY || '',
+    fetchFor: (url) => (/^https:\/\/([^/]*\.)?(github\.com|githubusercontent\.com)\//.test(url) || url.startsWith(NPM_OFFICIAL) ? (u, init) => net.fetch(u, init) : (u, init) => fetch(u, init)),
+    defaultLocale: () => mainLocale(),
+  })
+  const sources = storeSources
   const marketPluginUpdater = createMarketPluginUpdater({
     home: forsionHomeDir(), appVersion: app.getVersion(),
     protectedIds: () => new Set([...builtinPluginIds(), ...BUILTIN_BUNDLES.map((x) => x.id)]),
+    // 来源被移除 / 停用:它装的插件不再更新(不报错,安静地停)。
+    paused: (id) => sources.updatesPaused(id),
     lookup: async (id) => {
+      if (isSourceCardId(id)) return sources.lookup(id)
       const base = await marketBase()
       const r = await fetch(`${base}/api/market/items/${encodeURIComponent(id)}`, { headers: { 'User-Agent': MARKET_UA }, signal: AbortSignal.timeout(30_000) })
       if (!r.ok) throw new Error(`resolve: HTTP ${r.status}`)
@@ -3041,7 +3081,7 @@ app.whenReady().then(async () => {
       return Array.isArray(data.items) ? data.items : []
     },
     download: async (item) => {
-      const { info, buf } = await downloadMarketPackage(item.id)
+      const { info, buf } = isSourceCardId(item.id) ? await downloadSourcePackage(item.id, { auto: true }) : await downloadMarketPackage(item.id)
       if (info.installSlug !== item.installSlug || info.type !== item.type) throw new Error('resolve: market identity changed')
       return buf
     },
@@ -4518,6 +4558,8 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('market:read', async (e, id: string, resource: string, offset = 0) => {
     if (!isTrustedSender(e) || !/^[a-zA-Z0-9_-]{1,128}$/.test(id) || (!['comments', 'versions'].includes(resource) && !/^comments\/[a-zA-Z0-9_-]{1,128}\/replies$/.test(resource))) throw new Error('Invalid market request')
+    // 来源条目没有评论,也只列一个版本:别把它的 id 拿去问 Forsion 服务器。
+    if (isSourceCardId(id)) return { comments: [], versions: [], items: [], total: 0 }
     const base = await marketBase()
     const r = await fetch(`${base}/api/market/items/${encodeURIComponent(id)}/${resource}?offset=${Math.max(0, Math.min(100000, Number(offset) || 0))}`, { signal: AbortSignal.timeout(15000) })
     if (!r.ok) throw new Error(`HTTP ${r.status}`)
@@ -4525,6 +4567,7 @@ app.whenReady().then(async () => {
   })
 
   ipcMain.handle('market:detail', async (_e, id: string) => {
+    if (isSourceCardId(id)) return storeSources!.detail(id, mainLocale())
     const base = await marketBase()
     const r = await fetch(`${base}/api/market/items/${encodeURIComponent(id)}`, { headers: { 'User-Agent': MARKET_UA } })
     if (!r.ok) throw new Error(`加载失败 HTTP ${r.status}`)
@@ -4543,7 +4586,7 @@ app.whenReady().then(async () => {
       if (!e.sender.isDestroyed()) e.sender.send('market:installProgress', { id, phase, ...p })
     }
     report('resolve')
-    const { info, buf } = await downloadMarketPackage(id, report, version)
+    const { info, buf, origin } = await downloadMarketPackage(id, report, version)
     report('install')
     // 后端 category 对插件家族可能误标(Forsion 插件标成引擎 'plugin')→ 按包内 manifest 实测重定,
     // 否则装进错误目录后两边加载器都不认。返回 effType 让渲染层走对应的装后流程(引擎重扫 / amadeus 重载)。
@@ -4553,6 +4596,11 @@ app.whenReady().then(async () => {
     // (slug = 内置 id,或目录里的 manifest 是内置 id)时,覆盖再回滚会把它连同用户数据一起删掉。
     const occupant = await readFile(join(dest, 'manifest.json'), 'utf8').then((s) => JSON.parse(s)?.id, () => undefined)
     if (builtinPluginIds().has(info.installSlug) || (typeof occupant === 'string' && builtinPluginIds().has(occupant))) throw new Error('install: builtin')
+    // 来源装的插件:包里的 id 和已装的另一个插件撞了就拒(两份同 id 谁先被扫到谁生效),在写盘之前判。
+    if (isSourceCardId(id) && (effType === 'plugin' || effType === 'amadeus-plugin')) {
+      const incoming = effectivePluginId(info.installSlug, await packageManifestId(buf, effType))
+      if (incoming && (await installedPluginIds(effType)).some((x) => x.id === incoming && x.slug !== info.installSlug)) throw new Error('install: plugin id taken')
+    }
     // 解压是原地覆盖:先把装着的那一版留进版本库(.plugin-versions),之后能一键回退。
     if (effType === 'plugin' || effType === 'amadeus-plugin') await marketPluginUpdater.keepBeforeInstall(effType, info.installSlug, info.version)
     const files = await extractZipToDir(buf, dest, MARKET_MANIFEST[effType] || [])
@@ -4582,11 +4630,17 @@ app.whenReady().then(async () => {
     if (effType === 'plugin' || effType === 'amadeus-plugin') {
       // 从版本页装了比最新版旧的 = 固定在这一版(自动更新对它关掉,「恢复自动更新」解除)。查不到最新版时按用户点名的版本算固定。
       // 解析失败(网络 / JSON)也不能跳过登记:文件已经覆盖了,登记才会清掉旧的待换版本、按需固定。
-      const latest = await fetch(`${await marketBase()}/api/market/items/${encodeURIComponent(id)}`, { headers: { 'User-Agent': MARKET_UA }, signal: AbortSignal.timeout(15_000) })
+      const latest = isSourceCardId(id) ? await storeSources!.lookup(id).catch(() => null) : await fetch(`${await marketBase()}/api/market/items/${encodeURIComponent(id)}`, { headers: { 'User-Agent': MARKET_UA }, signal: AbortSignal.timeout(15_000) })
         .then(async (r) => r.ok ? await r.json() as MarketUpdateItem : null).catch(() => null)
       const pinned = !!version && (compareMarketVersions(version, latest?.latestVersion) ?? -1) < 0
       await marketPluginUpdater.recordInstall({ id, name: latest?.name, type: effType, slug: info.installSlug, pinned })
     } else await marketPluginUpdater.forget(effType, info.installSlug, false)
+    // 来源装的(所有类型):记下出处,「已安装」页靠它画来源角标与「来源已移除」。
+    if (isSourceCardId(id) && origin) {
+      const named = await storeSources!.lookup(id).catch(() => null)
+      await storeSources!.recordInstall({ cardId: id, type: effType, slug: info.installSlug, name: named?.name || info.installSlug, version: info.version ?? null, origin })
+        .catch((err) => console.warn('[store-sources] record install:', err))
+    }
     return { ok: true, path: dest, files, type: effType, slug: info.installSlug, ...(pluginId ? { id: pluginId } : {}) }
   }))
 
@@ -4661,6 +4715,7 @@ app.whenReady().then(async () => {
     const spaceId = type === 'space' && /^market-[0-9a-f-]{36}$/.test(slug) ? slug : type === 'space' ? await readFile(join(dir, 'space.json'), 'utf8').then((s) => JSON.parse(s)?.id, () => undefined) : undefined
     await rm(dir, { recursive: true, force: true })
     await marketPluginUpdater.forget(type, slug)
+    await storeSources?.forget(type, slug).catch(() => {})
     return { ok: true, path: dir, type, ...(typeof spaceId === 'string' && spaceId ? { id: spaceId } : {}) }
   }))
 
@@ -4691,10 +4746,11 @@ app.whenReady().then(async () => {
     if (!isSafeSlug(id)) throw new Error('invalid-plugin-id') // 原因码,渲染层 ipcErrorText 译
     const hit = (await readUserPluginDirs(join(tanguDataDir(), 'plugins'))).find((p) => p.id === id)
     if (!hit) {
-      if (typeof movedSlug === 'string' && isSafeSlug(movedSlug)) { await marketPluginUpdater.forget('plugin', movedSlug); return { ok: true } }
+      if (typeof movedSlug === 'string' && isSafeSlug(movedSlug)) { await marketPluginUpdater.forget('plugin', movedSlug); await storeSources?.forget('plugin', movedSlug).catch(() => {}); return { ok: true } }
       throw new Error('not-user-plugin') // 内置/首方插件不可卸载
     }
     await marketPluginUpdater.forget('plugin', hit.slug)
+    await storeSources?.forget('plugin', hit.slug).catch(() => {})
     await moveToDesktopTrash({ ref: id, name: id, paths: [{ path: join(tanguDataDir(), 'plugins', hit.slug), role: 'files' }], extra: { engine: true } })
     return { ok: true }
   }))
@@ -4703,8 +4759,23 @@ app.whenReady().then(async () => {
     if (!isTrustedSender(e)) throw new Error('Untrusted sender')
     if (!marketItemDir(tanguHomeDir(), type, slug)) throw new Error('invalid-plugin-id') // 原因码,渲染层 ipcErrorText 译
     await marketPluginUpdater.forget(type, slug)
+    await storeSources?.forget(type, slug).catch(() => {})
     return { ok: true }
   }))
+
+  // ── 商店来源(第三方目录;规则见 shared/storeSources.ts、electron/storeSources.ts)──
+  // 读目录会出站到第三方地址,读和写一律只认本应用的窗口。
+  const trusted = (e: Electron.IpcMainInvokeEvent) => { if (!isTrustedSender(e)) throw new Error('Untrusted sender') }
+  const sourceLocale = (l: unknown) => (l === 'zh' || l === 'en' ? l : mainLocale())
+  ipcMain.handle('marketSources:list', (e, locale?: string) => { trusted(e); return storeSources!.list(sourceLocale(locale)) })
+  ipcMain.handle('marketSources:probe', (e, input: string, locale?: string) => { trusted(e); return storeSources!.probe(input, sourceLocale(locale)) })
+  ipcMain.handle('marketSources:add', (e, input: string, locale?: string) => { trusted(e); return storeSources!.add(input, sourceLocale(locale)) })
+  ipcMain.handle('marketSources:remove', (e, id: string) => { trusted(e); return storeSources!.remove(id) })
+  ipcMain.handle('marketSources:setDisabled', (e, id: string, on: boolean) => { trusted(e); return storeSources!.setDisabled(id, on === true) })
+  ipcMain.handle('marketSources:trust', (e, id: string) => { trusted(e); return storeSources!.trust(id) })
+  ipcMain.handle('marketSources:setDeclared', (e, list: unknown) => { trusted(e); return storeSources!.setDeclared(list) })
+  ipcMain.handle('marketSources:catalog', (e, id: string, opts?: { refresh?: boolean; locale?: string }) => { trusted(e); return storeSources!.catalog(id, { refresh: opts?.refresh === true, locale: sourceLocale(opts?.locale) }) })
+  ipcMain.handle('marketSources:installs', (e, locale?: string) => { trusted(e); return storeSources!.installs(sourceLocale(locale)) })
 
   // provider OAuth(xAI 等):动态 import 包 dist 的 providerOAuth(dev=包根 dist,打包=resources/tangu-server/dist),
   // 与 `tangu login <provider>` 同一实现、同一份 ~/.tangu/provider-auth.json。

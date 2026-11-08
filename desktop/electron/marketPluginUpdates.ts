@@ -51,6 +51,8 @@ export function createMarketPluginUpdater(o: {
   download: (item: MarketUpdateItem) => Promise<Buffer>
   broadcast: (state: MarketPluginUpdates) => void
   platform?: string
+  /** Items not to update now (a store source that was removed or switched off). */
+  paused?: (id: string) => boolean
 }) {
   const root = join(o.home, '.market-updates'), stateFile = join(root, 'state.json')
   const versionsRoot = join(o.home, '.plugin-versions')
@@ -384,7 +386,7 @@ export function createMarketPluginUpdater(o: {
       do {
         recheck = false
         for (const remembered of [...items]) {
-          if (!active(remembered.id)) continue
+          if (!active(remembered.id) || o.paused?.(remembered.id)) continue
           const x = items.find((it) => it.id === remembered.id)!
           const staging = join(root, x.type, `.${x.slug}.staging-${randomUUID()}`)
           try {

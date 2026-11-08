@@ -53,6 +53,52 @@ export interface StoreIndex {
   truncated: boolean
 }
 
+/** What the store shows (main process → renderer). */
+export interface StoreSourceInfo {
+  id: string
+  title: string
+  origin: 'user' | 'plugin'
+  pluginId?: string
+  uri: string
+  kind: StoreSourceRef['kind']
+  icon?: string
+  trusted: boolean
+  disabled: boolean
+}
+export interface StoreSourceCard {
+  id: string
+  type: StoreItemType
+  source: 'github' | 'npm' | 'zip'
+  name: string
+  summary: string
+  author: string
+  installSlug: string
+  downloads: number
+  iconUrl: string | null
+  latestVersion: string
+  tags: string[]
+  minAppVersion?: string
+  maxAppVersion?: string
+  platforms?: string[]
+  createdAt: null
+  updatedAt: string | null
+  githubRepoUrl?: string
+  npmPackage?: string
+  origin: { sourceId: string; sourceTitle: string }
+}
+export interface StoreSourceCatalog {
+  source: StoreSourceInfo
+  items: StoreSourceCard[]
+  fetchedAt: number | null
+  /** Shown from the last copy on this computer because fetching failed. */
+  stale: boolean
+  error?: string
+  truncated: boolean
+  description?: string
+}
+export interface StoreSourceInstall {
+  cardId: string; type: string; slug: string; name: string; version: string | null; sourceId: string; sourceTitle: string | null; removed: boolean
+}
 /** A source declared in a plugin manifest (`storeSources`). */
 export interface DeclaredStoreSource { pluginId: string; id: string; title: LocalText; index: string; icon?: string }
 
