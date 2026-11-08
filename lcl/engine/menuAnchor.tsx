@@ -211,7 +211,9 @@ export function useClampedMenu(xOpt: number, yOpt: number, opts: AnchorOpts & Fo
   useLayoutEffect(() => {
     const el = ref.current
     if (!el) return
+    // 换成不带锚点的摆法(插件 show() 先给 getRect 后又只给快照)时,上一份锚点留下的标记要清掉,否则浮层一直透明、不吃指针
     if (anchor) el.setAttribute('data-anchor-follow', '')
+    else { el.removeAttribute('data-anchor-follow'); el.removeAttribute('data-anchor-hidden') }
     const apply = (): void => {
       let x = xOpt, y = yOpt, anchorTop = anchorTopOpt, bL = boundLeft, bR = boundRight
       if (anchor) {
@@ -245,8 +247,9 @@ export function useClampedMenu(xOpt: number, yOpt: number, opts: AnchorOpts & Fo
       if (kept) {
         const hKeepV = Math.min(hV, (kept.offsetHeight + el.offsetHeight - el.clientHeight) * z)
         const restV = hV - hKeepV
-        if (restV > 0.5) {
-          const k = keptPlacement(clampMenu(x - left, y - top, wV, hKeepV, vw, vh, place).top, hKeepV, restV, place.anchorTop ?? y - top, margin)
+        const k = restV > 0.5 ? keptPlacement(clampMenu(x - left, y - top, wV, hKeepV, vw, vh, place).top, hKeepV, restV, place.anchorTop ?? y - top, margin) : null
+        // 钉住那一行、面板往外长,前提是整块放得下;上下都放不下就照旧整块夹取(行会动,但面板不伸出窗口)
+        if (k && k.top >= margin - 0.5 && k.top + hV <= vh - margin + 0.5) {
           v.top = k.top
           el.dataset.grow = k.grow
         } else delete el.dataset.grow

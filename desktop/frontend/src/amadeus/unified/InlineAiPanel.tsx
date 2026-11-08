@@ -157,6 +157,8 @@ export function InlineAiPanel({ x, y, anchorTop, anchor, title, hasSelection, as
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       if (e.isComposing || e.keyCode === 229) return
+      // 卡藏着(目标那段字滚出可见区 / 视图被摘下,textAnchor):看不见的卡不接管 Esc / Enter —— 否则在别处按回车会把结果写进笔记
+      if (panelRef.current?.hasAttribute('data-anchor-hidden')) return
       if (e.key === 'Escape' && ownsFocus(false)) {
         e.preventDefault()
         e.stopPropagation()

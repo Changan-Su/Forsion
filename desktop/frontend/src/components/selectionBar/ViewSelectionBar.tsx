@@ -157,7 +157,13 @@ export function ViewSelectionBar(p: ViewSelectionBarProps): ReactElement | null 
     // 冒泡阶段挂在 document 上,排在 el 自己的 read 后面。
     const onUp = (): void => { fromBar = false }
     let sized = false
-    const ro = new ResizeObserver(() => { if (sized) moved(); else sized = true }) // 第一次回调是 observe 本身,不算
+    // 第一次回调是 observe 本身,不算。视图被摘下 / 藏起(切标签,盒子没了):条照旧收 —— 选区已经不在用户眼前,切回来也不该
+    // 自己冒出来(方案 B §7);开着的结果卡是另一份状态,由它的锚点藏起、切回来还在。只是尺寸变了(拖分栏、缩窗口)才按 moved 走。
+    const ro = new ResizeObserver(() => {
+      if (!sized) { sized = true; return }
+      if (!el.isConnected || !el.getClientRects().length) clear()
+      else moved()
+    })
     ro.observe(el)
     el.addEventListener('mouseup', read)
     document.addEventListener('mouseup', onUp)
@@ -187,7 +193,11 @@ export function ViewSelectionBar(p: ViewSelectionBarProps): ReactElement | null 
   // 条和卡各一个锚点(同一段字);那段字没了 → 收。随选区 / 卡换新,旧的在下面的 effect 里收拾
   const barAnchor = useMemo(() => anchorOf(ownerEl, sel, () => dismissRef.current()), [ownerEl, sel])
   useEffect(() => () => barAnchor?.dispose(), [barAnchor])
-  const cardAnchor = useMemo(() => anchorOf(ownerEl, card, () => setCard(null)), [ownerEl, card])
+  // 只随那段字本身(range / getRect)重建:卡头换语言会换一个 card 对象,而切标签回来之后 card.range 这份活 Range 已经塌缩,
+  // 拿它重建会被当成「字没了」把卡收掉;锚点自己记的起止节点没丢,沿用它。
+  const cardSrc = card ? { range: card.range, getRect: card.getRect } : null
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const cardAnchor = useMemo(() => anchorOf(ownerEl, cardSrc, () => setCard(null)), [ownerEl, !!card, card?.range, card?.getRect])
   useEffect(() => () => cardAnchor?.dispose(), [cardAnchor])
   /** 收起并清掉选区(动作把这段文字拿走了)。 */
   const done = (): void => { dismiss(); window.getSelection()?.removeAllRanges() }
