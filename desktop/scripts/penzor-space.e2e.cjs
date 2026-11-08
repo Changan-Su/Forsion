@@ -428,7 +428,17 @@ async function main() {
     check('① 统一根展示八个来源和总量', await win.locator('.pz-rows .row').count() === 8 && total === '4.2 GB', total)
     check('① T2 提醒且历史不计', /只是提醒/.test(await win.locator('.pz-unified-quota').textContent()) && /历史版本不算/.test(await win.locator('.pz-unified-quota').textContent()))
     await win.waitForTimeout(900)
-    check('① 概览时右栏收起(不是空占位)', (await sideWidth()) < 40 && !(await win.locator('.dv-groupview .sidebar-empty, [data-view-type="sidebar-empty"]').count()), `side=${await sideWidth()}`)
+    {
+      // 这一条红时要能从产物里看出右栏里是什么(2.13.8-beta.4 mac / Windows 打包验收红过,本机源码跑复现不出)
+      const right = await win.evaluate(() => ({
+        viewTypes: [...document.querySelectorAll('[data-view-type]')].map((e) => e.getAttribute('data-view-type')),
+        sidebarEmpty: document.querySelectorAll('.dv-groupview .sidebar-empty').length,
+        pzSide: !!document.querySelector('.pz-side'),
+        groups: [...document.querySelectorAll('.dv-groupview')].map((g) => ({ w: Math.round(g.getBoundingClientRect().width), x: Math.round(g.getBoundingClientRect().left), empty: !!g.querySelector('.sidebar-empty') })),
+      }))
+      fs.writeFileSync(path.join(SHOTS, 'overview-right.json'), JSON.stringify(right, null, 2))
+      check('① 概览时右栏收起(不是空占位)', (await sideWidth()) < 40 && !right.sidebarEmpty && !(await win.locator('[data-view-type="sidebar-empty"]').count()), `side=${await sideWidth()} empty=${right.sidebarEmpty}`)
+    }
     await setMode('light'); await shot('overview')
     await setMode('dark'); await shot('overview-dark'); await setMode('light')
 
