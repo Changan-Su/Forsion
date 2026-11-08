@@ -176,4 +176,16 @@ describe('human/ folder, step 1', () => {
     }
     expect(existsSync(join(humanDir(), 'notes.txt'))).toBe(false);
   });
+
+  it('the default calendar stays write-protected, and the refusal points to the calendar tools instead of the human', () => {
+    const ctx = { userId: 'owner', sessionId: 'rootless', appId: 'tangu', cwd: home, execMode: 'host' } as const;
+    for (const f of ['CALENDAR.db', 'calendar.DB']) {
+      const v = checkWritePath(ctx, join(humanDir(), f));
+      expect(v).toMatchObject({ ok: false, hardDeny: true });
+      expect(v.reason).toMatch(/amadeus_create_event/);
+      expect(v.reason).toMatch(/to-do/);
+      expect(v.reason).not.toMatch(/changed by the human/);
+    }
+    expect(checkWritePath(ctx, join(humanDir(), 'notes.txt')).reason).toMatch(/changed by the human/); // 其余文件照旧
+  });
 });
