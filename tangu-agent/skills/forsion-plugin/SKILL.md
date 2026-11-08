@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.102.0
+  version: 1.103.0
   author: Forsion
   category: Forsion
 ---
@@ -314,7 +314,7 @@ Forsion Android App 也跑 Forsion 插件(同一份 `pluginStore`、同一个 `c
 - 手机的**主页只有一页、不开标签**(2026-10-11 起):用户停在主页时,命令里 `openView` 打开的视图会被带到「主人」那个 Space 去开 —— 主人 = `layout.main` 里列着这个视图的 Space(插件自带的 Space 就是这么认的)。没有任何 Space 列着它的视图仍然盖在主页上打开,但用户下次回到主页时会被宿主关掉:这类视图别攒没保存的状态,要长驻就给插件带一个 Space。
 - 手机没有 ribbon:插件的 `registerCommand` 命令由宿主按插件分节列进顶栏「⋯」菜单(节标题 = 插件展示名),`checked` 开关在那里显示为勾选态 —— 命令 `title` 要能独立看懂(手机上它就是菜单行文案)。
 
-## Agent 自建 Space(2026-09-11 起;Muse 首例)
+## Agent 自建 Space(2026-09-11 起;Muse 11-08 起改用布局,见下)
 
 一个 agent 自己的 Space = 它目录下的一个桌面插件:`<tangu>/agents/<slug>/Space/{manifest.json, main.js}`,与普通桌面插件**同一份契约**(manifest + main.js,`registerView` / `registerCommand` / `registerStatusItem` / `registerSetting` / `notify` / `loadData` 都能用),但有五条不同:
 
@@ -329,6 +329,10 @@ Forsion Android App 也跑 Forsion 插件(同一份 `pluginStore`、同一个 `c
 ### `ctx.agent`:读写你自己的数据(2026-09-27 起,**只有 agent 自建 Space 有**)
 
 Your Space renders your own status, TODOs, schedule and Library from `ctx.agent` instead of hardcoding them: the member table, the click-only `updateTodo` rule and an example are in [references/tangu-host-apis.md](references/tangu-host-apis.md), section `ctx.agent`. Read it before the Space shows any of that data.
+
+### Muse: Today's brief layout (from 2026-11-08, Muse only)
+
+Muse's Space no longer loads `main.js` (it stays on disk; do not edit it): the desktop draws the "Today's brief" template from two local files. `agents/muse/Space/space.json` is Muse's part (the one-line message, ≤160 characters, may link `[[Library path]]`; up to 3 prepared Library files; proposed cards), written with the `muse_space` tool: read first, then update only what changes, with `expectedRev`. `<tangu home>/ui/muse-space.json` is the user's grid (order, hidden, placed cards, tombstones of rejected proposals): Muse cannot write it, move or remove cards, or re-propose a rejected key. At most one message change and one proposal per cycle; `muse_space widget` creates Muse's own native widget to propose. A broken `space.json` is shown from its last valid version and never repaired automatically.
 
 ## 桌面插件:贡献点全表(动手前先看这张表)
 

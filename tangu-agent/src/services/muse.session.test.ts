@@ -30,7 +30,7 @@ vi.mock('../seams/runtime.js', () => ({
 
 import {
   shouldRotateMuseSession, MUSE_SESSION_MAX_MESSAGES, getMuseSessionId, ensureMuseSession,
-  tokensInWindow, buildCycleMessages, museChatSection, museAgentConfig, museLibraryDir, readLastCycleAt, writeLastCycleAt, museStateFile,
+  tokensInWindow, buildCycleMessages, museChatSection, museAgentConfig, museLibraryDir, readLastCycleAt, writeLastCycleAt, museStateFile, SPACE_LAYOUT_NOTE,
 } from './muse.js';
 import { readMuseSessionId } from './museState.js';
 import { SPECIAL_AGENTS_DEFAULTS } from './specialAgentsConfig.js';
@@ -134,7 +134,7 @@ describe('C1b kickoff 拆分', () => {
     const { message } = buildCycleMessages(cfg, dynA);
     expect(message.length).toBeLessThan(MAX_KICKOFF);
     expect(message).toContain('Permission tier: ask');
-    expect(message).toContain('Your Space:');
+    expect(message).toContain('Your Space is a layout the desktop draws');
     expect(message).toContain('add_muse_todo');
   });
 
@@ -169,36 +169,47 @@ describe('C1b kickoff 拆分', () => {
     expect(s).toContain('will not see this conversation');
     expect(s).toContain('remember for a lasting preference, log_event for a one-off request');
     expect(s).toContain('your background permission tier applies to your cycles only');
-    expect(s).toContain('Do not wrap the file in function setup(ctx)');
-    expect(s).toContain('It is reloaded after your turn ends');
-    // 聊天里先装技能再动 Space;周期那份仍是「不够用才装」(落库前缀逐字稳定)
-    expect(s).toContain('load the "forsion-plugin" skill before you create it or change how it is built');
-    expect(s).not.toContain('only if you need more of the plugin API');
-    expect(buildCycleMessages(cfg, {}).message).toContain('load the "forsion-plugin" skill only if you need more of the plugin API than this');
+    // 11-08:Space 是布局,聊天里同一份契约,按「这一轮」计;用户要挪卡 → 告诉他在页上自己改
+    expect(s).toContain('Call muse_space read first');
+    expect(s).toContain('at most once per turn');
+    expect(s).toContain('you cannot move or remove them');
+    expect(s).toContain('edit button at the top');
+    // 旧 main.js 契约与「先装 forsion-plugin 技能」都不该再出现
+    expect(s).not.toContain('registerView');
+    expect(s).not.toContain('forsion-plugin');
     // Journal 给绝对路径、不说「Library 就是这次对话的工作文件夹」:在项目会话里点名 Muse 时 cwd 是项目,相对路径会读到项目里的 Journal
     expect(s).toContain(`your journal (${path.join(museLibraryDir(), 'Journal', '<date>.md')})`);
     expect(s).not.toContain('working folder');
-    // 周期那份的措辞不许被聊天版带偏(落库前缀逐字稳定)
-    expect(buildCycleMessages(cfg, {}).message).toContain('It is reloaded after your cycle ends;');
+    // 周期那份按「周期」计(落库前缀逐字稳定,不被聊天版带偏)
+    expect(buildCycleMessages(cfg, {}).message).toContain('at most once per cycle');
+    expect(buildCycleMessages(cfg, {}).message).not.toContain('once per turn');
   });
 
-  it('Space 契约写死两条(09-27 实机:包成 function setup 不调用=空白 16 天;以为 Space 要审批=只敢改文案)', () => {
+  it('Space 契约(11-08 方案 D:布局、只交差量、那句话每轮一次 ≤160、不为刷新时间重写、墓碑不再提、格子归用户、main.js 不再显示)', () => {
     for (const mode of ['ask', 'agent', 'auto'] as const) {
       const { message } = buildCycleMessages({ ...cfg, mode }, {});
       expect(message).toMatch(/Library and your Space folder|authorized folders and your Space folder/);
-      expect(message).toContain('call ctx.registerView({ id: "home", ... }) at the top level');
-      expect(message).toContain('Do not wrap the file in function setup(ctx)');
-      expect(message).toContain('ctx.agent.todos("pending")'); // 09-27:从数据渲染,别写死
-      // 09-27 dev 首个 ctx.agent 版 Space:不给返回字段就猜 status().status;不给变量表就用宿主没有的 --panel
-      expect(message).toContain('ctx.agent.status() → { running, lastCycleAt');
-      expect(message).toContain('var(--bg-card)');
-      expect(message).toContain('subscribe(cb) returns an unsubscribe function right away'); // 同步返回,不是 Promise(Codex 复核)
-      expect(message).toContain('a later runtime error (with its main.js line)'); // 挂载后的运行时错误也回写(09-27)
-      expect(message).not.toMatch(/--panel|--surface|--card\b/);
-      expect(message).toContain('never edit it just to refresh status or timestamps');
-      expect(message).toContain('works only inside a click handler');
+      expect(message).toContain('Call muse_space read first');
+      expect(message).toContain('submit only what changes');
+      expect(message).toContain('Keep the message filled: when it is empty or no longer true, write one line'); // live 首跑:只给上限时空着也不写
+      expect(message).toContain('Change it at most once per cycle, at most 160 characters');
+      expect(message).toContain('never rewrite it just to refresh times');
+      expect(message).toContain('List up to 3 files you prepared');
+      expect(message).toContain('Propose at most one new card per cycle and never re-propose a key the user rejected');
+      expect(message).toContain('you cannot move or remove them');
+      expect(message).toContain('is no longer shown — do not edit it');
+      // 旧契约整段退场:不再教它写插件、不再叫它装 84KB 的技能
+      for (const gone of ['registerView', 'ctx.agent', 'forsion-plugin', 'var(--', 'function setup']) expect(message).not.toContain(gone);
       expect(message.length).toBeLessThan(MAX_KICKOFF);
     }
+  });
+
+  it('升级提示只走 ephemeralHint(落库前缀不变),出现在入门提示之后', () => {
+    const a = buildCycleMessages(cfg, { onboardingNote: '\n\n(onboarding)', spaceNote: SPACE_LAYOUT_NOTE });
+    expect(a.message).toBe(buildCycleMessages(cfg, {}).message);
+    expect(a.ephemeralHint).toContain('Your Space changed');
+    expect(a.ephemeralHint.indexOf('(onboarding)')).toBeLessThan(a.ephemeralHint.indexOf('Your Space changed'));
+    expect(buildCycleMessages(cfg, {}).ephemeralHint).not.toContain('Your Space changed');
   });
 
   it('时点数据只在 ephemeralHint 里(顺序:安静 → 待批 → 触发 → 摘要)', () => {

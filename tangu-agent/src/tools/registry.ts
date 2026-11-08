@@ -41,6 +41,7 @@ import { displayFileProvider } from './builtin/displayTools.js';
 import { teamSayProvider } from './builtin/teamSay.js';
 import { museWakeProvider } from './builtin/museWake.js';
 import { museMessageProvider } from './builtin/museMessage.js';
+import { museSpaceToolProvider } from './builtin/museSpaceTool.js';
 import { museInboxProvider } from './builtin/museInbox.js';
 import { museSettingsProvider } from './builtin/museSettings.js';
 import { deskPresentProvider } from './builtin/deskPresent.js';
@@ -587,3 +588,4 @@ function editDistance(a: string, b: string): number {
 registerToolProvider(intelligentUiProvider); // Native document renderer, explicit client capability.
 registerToolProvider(childSessionsProvider); // host-only:start_session + send_to_session(deferred)(父子会话;append 末尾,保前缀缓存)
 registerToolProvider(museStartersProvider); // Muse 的新对话开场建议;仅 ctx.muse 且 muse.chatStarters 开着可见(append 末尾,保前缀缓存)
+registerToolProvider(museSpaceToolProvider); // 仅 Muse(周期与手聊,子代理与远程除外):muse_space 读 / 改今日简报布局、建自己的小组件(append 末尾,普通 run 不可见,快照不变)

@@ -405,7 +405,9 @@ ctx.automation?.emit('build-finished', { project: 'site', status: 'ok' })
 ### `ctx.agent`:读写你自己的数据(2026-09-27 起,**只有 agent 自建 Space 有**)
 
 Space 应该**从数据渲染**,别把状态、时间、待办写死在 main.js 里、每个周期改一遍 —— 那既浪费你的额度,用户看到的也永远是旧的。
-`ctx.agent` 只在 `agent-<slug>` 插件上存在、只能碰你自己这个 agent(普通插件整个没有;今天只有 Muse 有数据源):
+`ctx.agent` 只在 `agent-<slug>` 插件上存在、只能碰你自己这个 agent(普通插件整个没有)。
+⚠️ 2026-11-08 起 **Muse 的 Space 不再是插件**:主区是宿主画的「今日简报」,Muse 改的是 `Space/space.json`(用 `muse_space` 工具),
+`agent-muse` 不再装载(旧 main.js 留在原处不删)。这一节的接口留给以后自建 Space 的 agent;今天没有 agent 用它。
 
 | 成员 | 说明 |
 |---|---|
