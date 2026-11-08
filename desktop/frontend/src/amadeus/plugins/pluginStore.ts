@@ -967,6 +967,22 @@ export function isPagePipelinePath(p: string): boolean {
 const liveScopes = new Map<string, EffectScope>()
 /** 匿名遥测 plugin_load:这个窗口里已经报过激活结果的插件(同一插件同一次启动只报一次;主进程按公开 id 再去重一遍)。 */
 const loadReported = new Set<string>()
+/** Plugins whose current setup generation settled successfully (sync return, or async resolve while still alive).
+ *  Host clean-ups that act on "this plugin no longer declares X" wait for it, so a half-registered plugin (async
+ *  setup still awaiting, sibling views not yet registered) is never read as its final declaration. */
+const settledSetups = new Set<string>()
+const settleListeners = new Set<(id: string) => void>()
+export const pluginSetupSettled = (id: string): boolean => settledSetups.has(id)
+export function onPluginSetupSettled(fn: (id: string) => void): () => void {
+  settleListeners.add(fn)
+  return () => { settleListeners.delete(fn) }
+}
+function markSetupSettled(id: string): void {
+  settledSetups.add(id)
+  for (const fn of [...settleListeners]) {
+    try { fn(id) } catch (e) { console.error(`[amadeus] setup-settled listener failed`, e) }
+  }
+}
 /** 匿名遥测 plugin_lifecycle 的 blocked:门禁挡下(接口版本 / 最低版本 / 清单坏 / 开发源声明文件扩展名)或用户想开但前置没齐的插件,
  *  同一插件同一原因这个窗口只报一次(主进程再去重)。 */
 const blockedReported = new Set<string>()
@@ -2961,6 +2977,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
   /** 拆一个插件(不碰偏好):先跑它自己的 disposer(此时 ctx 还活着,收尾要用),再关账 —— 判死、杀 facade、
    *  后进先出逐条撤宿主环境里的副作用、每条各自 try/catch —— 最后一次 set 摘掉它在各切片里的贡献。 */
   const teardown = (id: string): void => {
+    settledSetups.delete(id)
     agentLive.delete(id) // 拆掉了就不再是「正在运行的那一版」(agentSpaceSourceUrl)
     try {
       get().disposers[id]?.()
@@ -2995,6 +3012,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
    *  reject 且这一代还活着 → 与同步抛错同一条回滚,再对齐一轮(依赖它的跟着停)。过期那一代的结果一律不认。 */
   const start = (plugin: AmadeusPlugin): boolean => {
     const id = plugin.id
+    settledSetups.delete(id)
     // 匿名遥测 plugin_load(契约 §9):给 setup 计时(async setup 到落定),同步 / 异步失败都算 error;只在主窗报,同一插件这个窗口只报一次。
     const t0 = performance.now()
     const loaded = (outcome: 'ok' | 'error', e?: unknown): void => {
@@ -3033,7 +3051,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
     }
     if (r && typeof (r as PromiseLike<unknown>).then === 'function') {
       void Promise.resolve(r).then((d) => {
-        if (scope.alive()) loaded('ok')
+        if (scope.alive()) { loaded('ok'); markSetupSettled(id) }
         if (typeof d !== 'function') return
         if (scope.alive()) set((s) => ({ disposers: { ...s.disposers, [id]: d } }))
         else try { d() } catch (e) { console.error(`[amadeus] plugin "${id}" stale disposer failed`, e) }
@@ -3050,6 +3068,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
       disposers: { ...s.disposers, [id]: typeof r === 'function' ? r : undefined },
       lastSetupError: { ...s.lastSetupError, [id]: undefined as unknown as string },
     }))
+    if (!(r && typeof (r as PromiseLike<unknown>).then === 'function')) markSetupSettled(id)
     // locked 包:旧开关拨下的「关」留在 localStorage 里没意义(它跟主进程开关走),跑起来就顺手擦掉。
     if (plugin.locked && get().disabledIds.includes(id)) {
       set((s) => ({ disabledIds: s.disabledIds.filter((x) => x !== id) }))

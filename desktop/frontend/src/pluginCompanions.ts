@@ -2,14 +2,57 @@ import { getView, useWorkspace } from '@lcl/engine'
 import { withPreservedSideWidths } from '@lcl/engine/dockviewStore'
 import type { ViewContribution } from './amadeus/plugins/types'
 
+const COMPANION_TYPES: readonly string[] = ['amadeus-editor', 'chat-panel']
+
+/** The companions a view may declare: at most three, native host views only, keys inside the plugin's namespace. */
+function companionSpecs(pluginId: string, def: ViewContribution): NonNullable<ViewContribution['mainCompanions']> {
+  return (def.mainCompanions || []).slice(0, 3).filter(s =>
+    COMPANION_TYPES.includes(s.type) && typeof s.key === 'string' && s.key.startsWith(pluginId + '-') && ['right','down'].includes(s.split))
+}
+
+/** Close companion tabs a plugin view no longer declares (a newer plugin version dropped them; plugins cannot close
+ *  host panels themselves, so without this they live in the saved layout forever).
+ *  Only tabs the host created are candidates: they carry the `__companionOwner` marker AND keep the id the host gave
+ *  them (`${owner}:${key}`). A tab the user opened, even on the same note, has no marker; a split of a companion
+ *  copies the marker but gets a fresh id. A candidate is closed when its owner is this leaf, or its owner leaf is gone (an
+ *  in-session upgrade closes the old owner and the Space reopens a new one), AND no registered view of this plugin
+ *  still declares its (type, key). Keys belonging to a longer plugin id (`foo-bar-x` vs plugin `foo`) are skipped.
+ *  Callers run this only once the owner view mounted and the plugin's setup settled (all its views registered): a
+ *  plugin that is still loading or failed to load never prunes. The single-column store (no Dockview api) opens companions
+ *  without the marker; those cannot be told apart from user tabs and are left alone. */
+export function pruneStalePluginCompanions(pluginId: string | undefined, ownerId: string, def: ViewContribution,
+  plugin: { views: readonly ViewContribution[]; knownPluginIds: readonly string[] }): number {
+  if (!pluginId) return 0
+  const ws = useWorkspace.getState(), api = ws.api
+  if (!api) return 0
+  const ownerType = `plugin:${pluginId}:${def.id}`
+  if (ws.leafById(ownerId)?.type !== ownerType || !getView(ownerType)) return 0
+  const declared = new Set([def, ...plugin.views].flatMap(v => companionSpecs(pluginId, v)).map(s => `${s.type}\n${s.key}`))
+  const longer = plugin.knownPluginIds.filter(id => id !== pluginId && id.startsWith(pluginId + '-'))
+  const stale = api.panels.filter(p => {
+    const q = (p.params ?? {}) as Record<string, unknown>
+    const owner = q.__companionOwner, key = q.reuseKey, type = q.__type
+    if (q.__loc !== 'main' || typeof owner !== 'string' || typeof key !== 'string' || typeof type !== 'string') return false
+    if (!COMPANION_TYPES.includes(type) || !key.startsWith(pluginId + '-') || longer.some(id => key.startsWith(id + '-'))) return false
+    // The host names every companion it creates `${owner}:${key}`. A split of a companion copies its params
+    // (marker included) but gets a fresh id — that copy is the user's, never pruned.
+    if (p.id !== `${owner}:${key}`) return false
+    if (owner !== ownerId && ws.leafById(owner)) return false // another live owner handles its own companions
+    return !declared.has(`${type}\n${key}`)
+  })
+  if (!stale.length) return 0
+  for (const p of stale) ws.closeLeaf(p.id, true)
+  ws.saveCurrent()
+  return stale.length
+}
+
 /** Native panels stay mounted while the collection form is focused. Never close an editor/chat
  *  to simulate a layout change, and never replace the full workspace layout. */
 export function setPluginCompanions(pluginId: string | undefined, ownerId: string, def: ViewContribution, visible: boolean): void {
   if (!pluginId) return
   const ws = useWorkspace.getState(), owner = ws.leafById(ownerId)
   if (!owner) return
-  const specs = (def.mainCompanions || []).slice(0, 3).filter(s =>
-    ['amadeus-editor', 'chat-panel'].includes(s.type) && s.key.startsWith(pluginId + '-') && ['right','down'].includes(s.split))
+  const specs = companionSpecs(pluginId, def)
   const api = ws.api
   if (!api) {
     if (visible) for (const spec of specs) {
