@@ -194,6 +194,9 @@ export interface FollowOpts {
   /** 钉住的那一截(选择器):按它的高度贴着锚点摆,其余部分往远离锚点的一侧长(在锚点上方 = 往上长,打 data-grow="up");
    *  那一侧放不下才往另一侧。划线条的 ⋯ 面板靠它:展开时那一行不跳。 */
   keep?: string
+  /** 横向夹在哪(视口 px,每次摆位现量;覆盖 boundLeft / boundRight)。笔记格式栏夹在编辑器面板里:分栏拖动、窗口缩放后面板边变了,
+   *  跟着变,不按打开那一刻的快照夹。只在有 anchor 时生效。 */
+  bounds?: () => { left?: number; right?: number } | null | undefined
 }
 
 /** 挂在 fixed 浮层根上:量真实尺寸 → 夹取/翻面 → 反补偿 zoom。useLayoutEffect 在绘制前定位,故无闪。
@@ -202,7 +205,7 @@ export function useClampedMenu(xOpt: number, yOpt: number, opts: AnchorOpts & Fo
   ref: RefObject<HTMLDivElement | null>
   style: CSSProperties
 } {
-  const { anchorTop: anchorTopOpt, prefer, flip, center, alignEnd, margin = 8, boundLeft, boundRight, boundary, anchor, gap = 8, keep } = opts
+  const { anchorTop: anchorTopOpt, prefer, flip, center, alignEnd, margin = 8, boundLeft, boundRight, boundary, anchor, gap = 8, keep, bounds } = opts
   const ref = useRef<HTMLDivElement>(null)
   const [pos, setPos] = useState({ left: xOpt, top: yOpt, maxWidth: undefined as number | undefined, maxHeight: undefined as number | undefined })
   useLayoutEffect(() => {
@@ -210,7 +213,7 @@ export function useClampedMenu(xOpt: number, yOpt: number, opts: AnchorOpts & Fo
     if (!el) return
     if (anchor) el.setAttribute('data-anchor-follow', '')
     const apply = (): void => {
-      let x = xOpt, y = yOpt, anchorTop = anchorTopOpt
+      let x = xOpt, y = yOpt, anchorTop = anchorTopOpt, bL = boundLeft, bR = boundRight
       if (anchor) {
         const r = anchor.read()
         // 看不见:藏起来、停在上一次的位置(回来时从这里接着摆,不从角落飞过来)
@@ -219,6 +222,8 @@ export function useClampedMenu(xOpt: number, yOpt: number, opts: AnchorOpts & Fo
         x = center ? (r.left + r.right) / 2 : alignEnd ? r.right : r.left
         y = r.bottom + gap
         anchorTop = r.top - gap
+        const b = bounds?.()
+        if (b) { bL = b.left ?? bL; bR = b.right ?? bR }
       }
       const z = zoomOf(el)
       // offsetWidth/Height = 未缩放局部 px(且不含 pop-in 的 scale 动画)→ ×z 换到视口 px 再比。
@@ -233,7 +238,7 @@ export function useClampedMenu(xOpt: number, yOpt: number, opts: AnchorOpts & Fo
         : undefined
       const wV = Math.min(el.offsetWidth * z, availableWidth)
       const hV = Math.min(el.offsetHeight * z, maxHeight === undefined ? Infinity : maxHeight * z)
-      const place = { anchorTop: anchorTop === undefined ? undefined : anchorTop - top, prefer, flip, center, alignEnd, margin, boundLeft: boundLeft === undefined ? undefined : boundLeft - left, boundRight: boundRight === undefined ? undefined : boundRight - left }
+      const place = { anchorTop: anchorTop === undefined ? undefined : anchorTop - top, prefer, flip, center, alignEnd, margin, boundLeft: bL === undefined ? undefined : bL - left, boundRight: bR === undefined ? undefined : bR - left }
       const v = clampMenu(x - left, y - top, wV, hV, vw, vh, place)
       // keep:按钉住那一截的高度贴锚点,其余往远离锚点的一侧长(⋯ 展开时那一行不跳,方案 B §7.5)
       const kept = keep ? el.querySelector<HTMLElement>(keep) : null
@@ -272,7 +277,7 @@ export function useClampedMenu(xOpt: number, yOpt: number, opts: AnchorOpts & Fo
       document.removeEventListener('scroll', apply, true)
       unfollow?.()
     }
-  }, [xOpt, yOpt, anchorTopOpt, prefer, flip, center, alignEnd, margin, boundLeft, boundRight, boundary, anchor, gap, keep])
+  }, [xOpt, yOpt, anchorTopOpt, prefer, flip, center, alignEnd, margin, boundLeft, boundRight, boundary, anchor, gap, keep, bounds])
   return { ref, style: { left: pos.left, top: pos.top, maxWidth: pos.maxWidth, maxHeight: pos.maxHeight } }
 }
 
@@ -499,6 +504,7 @@ export function OverlayAt({
   anchor,
   gap,
   keep,
+  bounds,
   innerRef,
   className,
   style,
@@ -522,7 +528,7 @@ export function OverlayAt({
   style?: CSSProperties
   children?: ReactNode
 } & Omit<HTMLAttributes<HTMLDivElement>, 'style' | 'className' | 'children'>) {
-  const p = useClampedMenu(x, y, { anchorTop, prefer, flip, center, alignEnd, margin, boundLeft, boundRight, boundary, anchor, gap, keep })
+  const p = useClampedMenu(x, y, { anchorTop, prefer, flip, center, alignEnd, margin, boundLeft, boundRight, boundary, anchor, gap, keep, bounds })
   useExitGhost(p.ref)
   return (
     <div

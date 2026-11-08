@@ -1634,6 +1634,10 @@ body.amx-marquee-active * {
   max-height: 300px;
   overflow-y: auto;
 }
+/* 面板往上长(划线菜单方案 B):格式栏在选区上方时,⋯ / AI ▾ / 转换为 / 颜色展开后 .itb-row 钉住不动、面板长在它上面
+   (useClampedMenu 的 keep 打 data-grow,同聊天那条 .selbar[data-grow='up']);上面放不下才往下长,同以前。 */
+.am-app .inline-toolbar[data-grow='up'] { display: flex; flex-direction: column-reverse; }
+.am-app .inline-toolbar[data-grow='up'] > .itb-panel { border-top: 0; border-bottom: 1px solid var(--border); }
 .am-app .itb-menu-item {
   text-align: left;
   border: none;
