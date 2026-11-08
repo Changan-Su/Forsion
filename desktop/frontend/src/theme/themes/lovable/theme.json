@@ -7,7 +7,6 @@
   "author": "Forsion",
   "supportsDarkMode": true,
   "tags": ["lcl", "paper", "mono"],
-  "fonts": { "google": ["Hanken Grotesk:wght@400;500;600;700"] },
   "preview": {
     "shape": "paper",
     "background": {
