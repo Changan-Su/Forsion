@@ -159,8 +159,11 @@ async function backpack(c: CloudAccountBrain, ctx: ToolContext): Promise<string>
 }
 
 export const formatBytes = (b: number): string => (b < 1024 * 1024 ? `${Math.max(1, Math.ceil(b / 1024))} KB` : `${(b / 1024 / 1024).toFixed(1)} MB`);
-/** server 列表回 publicBase(给人打开的站点源);老 server 没有就给相对路径。 */
-export const pageUrl = (base: unknown, handle: unknown, slug: unknown): string => `${typeof base === 'string' ? base.replace(/\/+$/, '') : ''}/apps/${handle}/${slug}/`;
+/** 给人打开的链接:server 每一行回的 publicUrl(forsion.app 上线后是 forsion.app/<地址>/<作品>/)优先;
+ *  老 server 没有就按 publicBase(给人打开的站点源)拼,再老的给相对路径。 */
+export const pageUrl = (base: unknown, handle: unknown, slug: unknown, publicUrl?: unknown): string =>
+  typeof publicUrl === 'string' && /^https?:\/\//i.test(publicUrl) ? publicUrl
+    : `${typeof base === 'string' ? base.replace(/\/+$/, '') : ''}/apps/${handle}/${slug}/`;
 
 /** 用户在 Forsion Connect 上发布的网页(publish_web_page 发的、Coding Space 发布对话框发的都在这里)。 */
 async function webPages(c: CloudAccountBrain, ctx: ToolContext): Promise<string> {
@@ -174,7 +177,7 @@ async function webPages(c: CloudAccountBrain, ctx: ToolContext): Promise<string>
   if (!apps.length) return `${head} None yet; publish one with publish_web_page.`;
   return [head, ...apps.map((a) => {
     const extra = [a.status === 'disabled' ? 'disabled by a Forsion administrator' : '', a.listing_status ? `store listing ${a.listing_status}` : ''].filter(Boolean);
-    return `  - ${a.name} — ${pageUrl(j.publicBase, j.handle, a.slug)} (slug ${a.slug}, ${formatBytes(toNum(a.total_bytes) ?? 0)}, updated ${String(a.updated_at ?? '').slice(0, 10)})${extra.length ? ` — ${extra.join(', ')}` : ''}`;
+    return `  - ${a.name} — ${pageUrl(j.publicBase, j.handle, a.slug, a.publicUrl)} (slug ${a.slug}, ${formatBytes(toNum(a.total_bytes) ?? 0)}, updated ${String(a.updated_at ?? '').slice(0, 10)})${extra.length ? ` — ${extra.join(', ')}` : ''}`;
   }), 'Publish to an existing slug to update that page, or take one down, with publish_web_page.'].join('\n');
 }
 

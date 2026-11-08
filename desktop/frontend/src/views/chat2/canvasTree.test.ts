@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { SessionRecord, UiMessage } from '../../types'
-import { buildTurnTree, readSteps, splitTurns } from './canvasTree'
+import { buildTurnTree, findRunFolds, readSteps, splitTurns } from './canvasTree'
 
 const u = (id: string, content: string, ts = 0): UiMessage => ({ id, role: 'user', content, status: 'done', timestamp: ts })
 const a = (id: string, content: string, ts = 0): UiMessage => ({ id, role: 'assistant', content, status: 'done', timestamp: ts })
@@ -138,5 +138,31 @@ describe('readSteps(阅读栏顶上的轮次)', () => {
     expect(readSteps(12, 0)).toEqual([0, 1, -1, 11])
     expect(readSteps(12, 5)).toEqual([0, 1, -1, 4, 5, 6, -1, 11])
     expect(readSteps(12, 3)).toEqual([0, 1, 2, 3, 4, -1, 11])
+  })
+})
+
+describe('findRunFolds', () => {
+  // 1 → 2 → 3 → 4 → 5 → 6,6 分叉成 7a → 8a → 9a 和 7b;另有 2 的旁支 g
+  const K: Record<string, string[]> = { 1: ['2'], 2: ['3', 'g'], 3: ['4'], 4: ['5'], 5: ['6'], 6: ['7a', '7b'], '7a': ['8a'], '8a': ['9a'], '9a': ['10a'] }
+  const kids = (k: string): string[] => K[k] ?? []
+  const none = (): boolean => false
+  it('超过 3 轮才折:留开头 1 + 末尾 2;分叉卡是一段的终点', () => {
+    const f = findRunFolds(['1'], kids, none, new Set())
+    expect(f.map((x) => [x.head, x.mid, x.next, x.folded])).toEqual([
+      ['3', ['4'], '5', true], // 3 4 5 6:6 分叉,留 3 和 5 6
+      ['7a', ['8a'], '9a', true], // 7a 8a 9a 10a
+    ])
+  })
+  it('正好 3 轮不折;1 → 2 那段(2 分叉)也不折', () => {
+    const f = findRunFolds(['1'], (k) => (k === '9a' ? [] : kids(k)), none, new Set())
+    expect(f.map((x) => x.head)).toEqual(['3'])
+  })
+  it('中间有要保留的卡(选中 / 在生成)或用户展开过:不折,但仍报出来(挂「收起」要用)', () => {
+    const f = findRunFolds(['1'], kids, (k) => k === '4', new Set(['7a']))
+    expect(f.map((x) => [x.head, x.folded, x.opened])).toEqual([['3', false, false], ['7a', false, true]])
+  })
+  it('只有草稿一个孩子 = 到头(草稿挂的卡要看得见);草稿不往下走', () => {
+    const f = findRunFolds(['1'], (k) => (k === '8a' ? ['draft'] : kids(k)), none, new Set(), (k) => k !== 'draft')
+    expect(f.map((x) => x.head)).toEqual(['3']) // 7a 8a 只剩两张
   })
 })

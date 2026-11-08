@@ -6,6 +6,7 @@
  * 安全口径(§4.3):只产出「导航意图」;绝对路径/越级段拒收;`__` 前缀查询参数丢弃
  * (__type/__loc 是 Dockview 内部键,外部 URL 不许注入)。view 白名单在 resolver(那里有注册表)。
  */
+import { SPACE_ID_RE } from '../../shared/spaceAppearance' // 纯常量模块,不破「零依赖」;Space id 只认这一份口径
 
 export interface DeepLinkIntent {
   kind: 'note' | 'session' | 'space' | 'agent' | 'view'
@@ -51,7 +52,7 @@ export function parseDeepLink(raw: string): DeepLinkIntent | null {
   switch (host) {
     case 'note': return isSafeVaultPath(path) ? { kind: 'note', ref: path, params } : null
     case 'session': return isSafeId(path, 128) ? { kind: 'session', ref: path, params } : null
-    case 'space': return isSafeId(path, 64) ? { kind: 'space', ref: path, params } : null
+    case 'space': return SPACE_ID_RE.test(path) ? { kind: 'space', ref: path, params } : null
     case 'agent': return isSafeId(path, 64) ? { kind: 'agent', ref: path, params } : null
     case 'open': {
       const view = params.view
@@ -59,7 +60,7 @@ export function parseDeepLink(raw: string): DeepLinkIntent | null {
       const space = params.space
       delete params.space
       if (!view || !isSafeId(view, 128)) return null
-      if (space !== undefined && !isSafeId(space, 64)) return null
+      if (space !== undefined && !SPACE_ID_RE.test(space)) return null
       return { kind: 'view', view, space, params }
     }
     default: return null // 未知实体段:报「需要升级」由调用方处理;这里不猜

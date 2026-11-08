@@ -1317,7 +1317,7 @@ export async function gateToolCall(
 
   // 控制面调用因保护配置而问(完全放行档改默认工作目录)时,卡上同样先放引擎自己读到的事实,不只是模型写的那句。
   const base = control || (protectedAsk && isControl) ? await controlPreview(call)
-    : name === 'git_commit' || name === 'git_push' || name === 'git_pull' ? await gitPreview(call, ctx.projectPath, ctx.profile)
+    : name === 'git_commit' || name === 'git_push' || name === 'git_pull' || name === 'git_publish' ? await gitPreview(call, ctx.projectPath, ctx.profile, ctx.extraRoots)
     : approvalPreview(call, { profile: ctx.profile });
   const preview = protectedAsk
     ? '⚠ Protected config or credentials · ' + base
@@ -1371,11 +1371,11 @@ export async function gateToolCall(
 
 /** git_commit / git_push / git_pull 的卡面:提交哪些文件、推到哪个站哪个仓库用谁的账号(tools/builtin/git.ts gitApprovalPreview)。
  *  限时 3 秒(它挡在审批卡前面),读不到 / 出错退回参数。动态 import:git 工具模块经 registry 回连这里。 */
-async function gitPreview(call: ToolCall, cwd: string | undefined, profile: AppProfile | undefined): Promise<string> {
+async function gitPreview(call: ToolCall, cwd: string | undefined, profile: AppProfile | undefined, extraRoots?: string[]): Promise<string> {
   try {
     const { gitApprovalPreview } = await import('../tools/builtin/git.js');
     const timeout = new Promise<null>((resolve) => { setTimeout(() => resolve(null), 3000).unref(); });
-    const text = await Promise.race([gitApprovalPreview(call.function.name, parseCallArgs(call), cwd), timeout]);
+    const text = await Promise.race([gitApprovalPreview(call.function.name, parseCallArgs(call), cwd, extraRoots), timeout]);
     if (text) return previewText(text);
   } catch { /* 退回参数 */ }
   return approvalPreview(call, { profile });

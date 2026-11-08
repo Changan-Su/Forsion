@@ -24,8 +24,11 @@
  *   npm run live:harness -- --only selfmodel --rounds 5 --model xai/grok-4.7   # 主体性探针(10-02):自己的资料库 vs 用户目录 / 提醒真落盘 / 教训落哪个存储 / 自我认知,按轮出通过率;改 Personal Folder 段 / 记忆·协作·工作笔记段后跑
  *   npm run live:harness -- --only selfschedule             # 自己的日程 vs 用户的日历(10-02):人设 agent 答应的约定进 SCHEDULE.db、用户日历不动;负对照「记进我的日历」须走 amadeus。改 Personal Folder 段 / 日程·日历工具措辞后跑
  *                                                           #   额度用完时先跑离线接线证据:node scripts/rename-identity.smoke.mjs(假模型端点,截获系统提示词)
+ *   npm run live:harness -- --only caltodo [--calendar-plugin <Calendar 插件检出>] [--rounds 3]   # 用户的待办(11-07):「帮我添加两条待办」几步之内进默认日历、没日期没勾、不写笔记,再列出、勾掉;
+ *                                                           #   --calendar-plugin 放进 calendar-todos 技能(桌面形态)。云端 run 用 --only cloudtodo(同 cloudcal 那样指 server scripts/calendar-local.mts)。改日历 / 待办工具定义后跑
  *   npm run live:harness -- --only chat,tool,muse            # 子集(historian→dream→recall 三连有先后依赖)
  *   npm run live:harness -- --only mask [--mask-off]          # 发给模型前脱敏(10-28,借鉴 magpie 方案 1):读 .env → run_bash 带 key 的 curl 打台架里的回显服务 → 问模型看到的值是不是 sk-proj- 开头、是不是占位符。
+ *   npm run live:harness -- --only filechange               # 变动感知(11-07):读过的文件被用户改了 → 下一轮开头 / run 内续调前都带 diff 告诉模型,且不拿旧副本覆盖。改 tools/readState.ts / tools/fileChangeNotice.ts / agentLoop 那两处注入后跑;负对照 TANGU_FILE_CHANGE_NOTICE=off(①② 须红)
  *                                                           #   判据:回显服务收到真 key(工具参数换回了)、模型答「不是 sk-proj- 开头 / 是占位符」、engine.log 有 [mask]。--mask-off = 负对照(config 里关掉,须红)。改 llm/outboundMask.ts 后跑
  *   npm run live:harness -- --only chat,tool,loop            # loop = 轮数耗尽末轮收尾(改 agentLoop 末轮/收尾提示后跑)
  *   npm run live:harness -- --only imageedit                 # edit_image 图源(10-19,改图跨轮取图方案 B1 + B2):同会话三轮 —— 附两张图先别动 → 不带附件让它合成 → 改刚合成的那张;假生图后端核上传的是哪几张。改 imageEdit.ts / hydrate 的带图消息 / 展示文件 source 后跑
@@ -117,6 +120,8 @@
  *   npm run live:harness -- --only storeview                 # 商店左栏的插件页(10-05):ctx.registerStoreView 只给首方内置包。第三方作者问「怎么往商店左栏加一页」→ 须装载手册、
  *                                                           #   说清这条路不对普通插件开放,不许教他照着注册(注册了也不显示)。改 skills/forsion-plugin 那一行后跑。
  *   npm run live:harness -- --only creation                  # 进造物(09-27):要做「拿来用的东西」→ 回复带 forsion-creation 作品卡;只问概念 / 一次性脚本 → 不出卡。改 skills/forsion-creations 后跑
+ *   npm run live:harness -- --only gitpublish                # 发布到 Forsion Git(11-08 用户反馈):中文名项目、有提交没远端,「帮我上传Forsion Git」→ 模型自己起英文名调 git_publish,不要地址;审批卡拒掉,不真发
+ *   npm run live:harness -- --only multirepo                 # 多仓 Git(11-07):项目文件夹不是仓、里面两个仓;不点名工具,看状况后只提交 alpha —— 判据看磁盘与 git_commit 的 repo 参数(改 tools/builtin/git.ts / services/gitRepos.ts 后跑)
  *   npm run live:harness -- --only git                       # 「设置 → Git」(09-26):agent 自己起的分支名带前缀、提交照提交说明;PROJECT 详情「提交…」生成的信息也照做并能提交。
  *                                                           #   改 runtimeContext.gitPreferenceLines / gitActions 的提交信息提示词后跑;负对照 --git-prefs off(不写设置,须红)
  *   npm run live:harness -- --only refine                    # 自进化闭环(10-04 改判):自己总结的做法 → 后台提名直接采纳(或前台自己写)→ 新会话系统提示带上 → rollback 可撤;用户立的规矩去了哪只记数。改 judgeFieldSpecs / autoAdoptable / adoptHarnessNomination 后跑
@@ -229,6 +234,7 @@ import { layersLive } from './lib/layers-live.mjs';
 import { accountLive, startFakeCloud } from './lib/account-live.mjs';
 import { webPublishLive, startConnectLocal } from './lib/webpublish-live.mjs';
 import { cloudCalLive } from './lib/cloudcal-live.mjs';
+import { calTodoLive, plantCalendarSkill } from './lib/caltodo-live.mjs';
 import { plantPlugin, pluginDiagLive, registeredViews, STUB_SELFTEST } from './lib/plugin-diag-live.mjs';
 import { plantNotebookPlugin, notebookLive, notebookSelftest } from './lib/notebook-live.mjs';
 import { cuVisionSetup, cuVisionLive, defaultFixture as cuDefaultFixture } from './lib/cu-vision-live.mjs';
@@ -247,7 +253,7 @@ const opt = (name, def) => { const i = argv.indexOf(`--${name}`); return i >= 0 
 const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const MODEL = opt('model', process.env.TANGU_LIVE_MODEL || 'codex/gpt-5.6-luna');
 const AUTH = resolve(opt('auth', process.env.TANGU_LIVE_AUTH || join(homedir(), '.forsion-dev', 'provider-auth.json')));
-const KEYS = ['realtime', 'voiceclone', 'personas', 'names', 'rename', 'selfschedule', 'selfmodel', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'parkedask', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'suggest', 'browsertabs', 'officedoc', 'ultra', 'fast', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'gitpush', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask', 'plugin', 'skillpick', 'pluginlook', 'settingsnav', 'appsettings', 'imgwindow', 'viewimage', 'imgtools', 'account', 'webpublish', 'nested', 'branch', 'musedm', 'humandims', 'pluginsandbox', 'musestarters', 'pluginui'];
+const KEYS = ['realtime', 'voiceclone', 'personas', 'names', 'rename', 'selfschedule', 'selfmodel', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'parkedask', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'suggest', 'browsertabs', 'officedoc', 'ultra', 'fast', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'gitpush', 'multirepo', 'gitpublish', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask', 'plugin', 'skillpick', 'pluginlook', 'settingsnav', 'appsettings', 'imgwindow', 'viewimage', 'imgtools', 'account', 'webpublish', 'nested', 'branch', 'musedm', 'humandims', 'pluginsandbox', 'musestarters', 'pluginui'];
 KEYS.push('bluebird');
 KEYS.push('nestedmsg');
 KEYS.push('signals');
@@ -302,9 +308,10 @@ const GIT_PREFIX = 'livetest/'; const GIT_TAG = '[LIVE]';
 // opt-in:缺省全量跑里**不带**这几个 —— cache 7 个 run / churn 6 个 run(都慢),cache 与 recall-unprompted
 // 还会往隔离 home 播记忆行(会进别的场景的系统提示);deferred 要真装 liteparse 解析文档;
 // grant 是两个委派 run(慢),且只在动过 delegate.grantTools / 子代理管理面闸时才有信息量。
-const OPT_IN = new Set(['pluginsandbox', 'humandims', 'nested', 'branch', 'musedm', 'realtime', 'remember', 'musewake', 'personas', 'rename', 'selfschedule', 'selfmodel', 'teamapproval', 'parked', 'parkedask', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'fast', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'gitpush', 'creation', 'human', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'appsettings', 'control', 'phone']);
+const OPT_IN = new Set(['pluginsandbox', 'humandims', 'nested', 'branch', 'musedm', 'realtime', 'remember', 'musewake', 'personas', 'rename', 'selfschedule', 'selfmodel', 'teamapproval', 'parked', 'parkedask', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'fast', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'gitpush', 'multirepo', 'gitpublish', 'creation', 'human', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'appsettings', 'control', 'phone']);
 KEYS.push('mcpsettings'); OPT_IN.add('mcpsettings');
 KEYS.push('cloudcal');
+KEYS.push('caltodo', 'cloudtodo');
 KEYS.push('subresume'); OPT_IN.add('subresume'); // --only subresume:改 delegate.resume / 子代理续用后跑(两条腿共五个 run)
 KEYS.push('taskoutcomes'); OPT_IN.add('taskoutcomes'); // --only taskoutcomes: actual hashes / approval identity / duplicate writes, classified separately from model narration.
 OPT_IN.add('bluebird'); // --only bluebird --plugin-src <bundle>: real instruction-following on supplied transcripts
@@ -370,6 +377,7 @@ OPT_IN.add('pluginicon'); // 一个 run;只在动 forsion-plugin 手册「Startu
 OPT_IN.add('storeview'); // 一个 run;只在动 forsion-plugin 手册里 registerStoreView 那行、或商店左栏的插件页接缝时才有信息量。
 OPT_IN.add('skillcreate'); // 四个 run;只在动 manage_skill / use_skill / 随包的 skill-creator 技能时才有信息量。
 OPT_IN.add('account'); // --only account:五个 run;引擎的云端地址指向台架里的假 Forsion 云端 —— 只在显式跑它时才指,别的场景照旧连不上云端。
+OPT_IN.add('caltodo').add('cloudtodo'); // --only caltodo / cloudtodo(11-07):用户的待办 = 带勾选列的日历表里的行,可以没有日期;加两条无日期待办 → 列出 → 勾掉,本机 / 云端各一份。判据与负对照见 lib/caltodo-live.mjs。
 OPT_IN.add('cloudcal'); // --only cloudcal:三个 run;云端 run 的默认日历 × 真路由。要 TANGU_LIVE_CLOUD_URL / TOKEN 指向 server scripts/calendar-local.mts,判据与负对照见 lib/cloudcal-live.mjs。
 OPT_IN.add('webpublish'); // --only webpublish:三个 run,同用 account 那个假云端(Forsion Connect 的列表 / 发布 / 下线也在里面)。
 // --only webpublishreal --connect-server <server 检出> [--extend-pkg <签好的 Extend 包目录>]:同 webpublish 三个 run + 公开链接实开,
@@ -386,6 +394,7 @@ OPT_IN.add('import'); // 从其他 AI 导入(11-03):后台模型拆条 / 归位 
 OPT_IN.add('portraitmove'); // 搬家的后台模型挑得准不准(10-30):不跑对话,只有人点的那几个接口;动了 agents/portraitMove.ts 的提示才有信息量。
 OPT_IN.add('humanreal'); // 协作说明写成什么样:每轮 6 个 run + 1 次判官(--rounds);只在动 HUMAN_GUIDANCE / manage_human 时才有信息量。
 OPT_IN.add('mask'); KEYS.push('mask'); // 两个 run + 本地回显服务;只在动 llm/outboundMask.ts(发给模型前脱敏)时才有信息量。
+OPT_IN.add('filechange'); KEYS.push('filechange'); // 四个 run;只在动 tools/readState.ts 的变动感知 / tools/fileChangeNotice.ts / agentLoop 的两处注入时才有信息量。负对照:TANGU_FILE_CHANGE_NOTICE=off
 OPT_IN.add('streamoverflow'); KEYS.push('streamoverflow'); // 注入:真 Codex 路径上流里回 context_length_exceeded(lib/llm-fault-preload.mjs);只在动流内报错归类 / agentLoop 的超长压缩重试时跑
 OPT_IN.add('foreignreasoning'); KEYS.push('foreignreasoning'); // 注入:回灌的加密推理被拒(400 invalid_encrypted_content);只在动 historyReplay 的推理绑定 / agentLoop 的拿掉重发时跑
 OPT_IN.add('relay'); KEYS.push('relay'); // 假提供方只回 429 usage_limit_reached;只在动 llm/quotaRelay.ts / agentLoop 的接力分支时跑。--relay-mode auto|ask|none
@@ -1059,6 +1068,10 @@ if (CU_JEV || CU_WEB_KEYS.some((k) => ONLY.has(k))) cuJevSetup({ bundle: opt('cu
 // 开发机真实的 ~/Forsion/Amadeus —— 负对照那一腿真会往里写事件,所以只在跑这个场景时注入,且一定指进产物目录。
 const SELF_SCHED_VAULT = join(OUT, 'vault');
 const SELF_SCHED_CAL = join(SELF_SCHED_VAULT, 'Calendar.db');
+// caltodo 也要一个隔离的空笔记库:日历工具在本机没有笔记库时直接说「没有 Amadeus」,而缺省那个是开发机真实的 ~/Forsion/Amadeus。
+// 带 --calendar-plugin <Calendar 插件检出> 时把它的 manifest + skills/ 放进隔离共享域的 plugins/forsion-calendar(= 桌面装了插件的样子)。
+if (ONLY.has('caltodo')) mkdirSync(SELF_SCHED_VAULT, { recursive: true });
+const CALTODO_SKILL = ONLY.has('caltodo') ? plantCalendarSkill({ src: opt('calendar-plugin', ''), shared }) : null;
 if (ONLY.has('selfschedule') || ONLY.has('selfmodel')) {
   mkdirSync(SELF_SCHED_VAULT, { recursive: true });
   writeFileSync(SELF_SCHED_CAL, JSON.stringify({ version: 1, name: '我的日历', columns: [{ id: 'c1', name: '名称', type: 'text' }, { id: 'c2', name: '日期', type: 'calendarDate' }], rows: [{ id: 'r1', cells: { c1: '既有会议', c2: '2026-07-08T14:00' } }] }, null, 2));
@@ -1446,7 +1459,7 @@ const child = spawn(process.execPath, [
   ...(ONLY.has('fast') ? { TANGU_LLM_DEBUG: '1' } : {}),
   // cumusic / cusend:Jev 每次请求的图和回答落进产物目录(不含密钥),场景跑完挪进自己的 <key>-evidence/jev/
   ...(CU_JEV ? { TANGU_JEV_EVIDENCE_DIR: join(OUT, JEV_REQUESTS_DIR) } : {}),
-  ...(ONLY.has('selfschedule') || ONLY.has('selfmodel') ? { FORSION_AMADEUS_VAULT: SELF_SCHED_VAULT } : {}),
+  ...(ONLY.has('selfschedule') || ONLY.has('selfmodel') || ONLY.has('caltodo') ? { FORSION_AMADEUS_VAULT: SELF_SCHED_VAULT } : {}),
   // P1-K1 remotecaller:unitWeb 盖章的密钥(桌面主进程每次启动生成,这里随机一枚);只在跑这个场景时注入,别的场景环境不变
   ...(ONLY.has('remotecaller') || ONLY.has('remotesession') ? { TANGU_REMOTE_MARK_SECRET: REMOTE_MARK } : {}),
   // P1-K2 estop:桌面主进程独占的锁文件(隔离 home 下);只在跑这个场景时注入 —— 别的场景的引擎没有桌面锁概念(env 没设 = 未锁)
@@ -3171,6 +3184,69 @@ try {
     };
   });
 
+  // filechange(11-07,Agent 对变动文件的感知):读过的文件被「文件工具之外」改了(用户在编辑器里接着写)→ 下一次调模型前带 diff 告诉它。
+  //   ① 读 notes.md → 台架像用户一样往里加一段(带第二个码)→ 下一轮**不许用工具**问「现在有哪些码」:只有通知里有第二个码,答得出 = 通知到了;
+  //   ② 一个 run 里先跑 sleep 20,台架在它跑的时候再加一段(第三个码)→ 不重读就答:须答出第三个码,engine.log 有这个 run 的 mid-run 行;
+  //   ③ 再加一段(第四个码)后让它只改标题、其余不动 → 盘上四个码与用户写的段都在(不许拿旧副本整篇覆盖)。
+  //   负对照:TANGU_FILE_CHANGE_NOTICE=off(引擎不发通知)→ ①② 须红,③ 靠写闸照样绿。
+  await scenario('filechange', 'filechange 读过的文件被用户改了:下一轮 / run 内都知道,且不覆盖', async () => {
+    const dir = join(workspace, 'filechange-live');
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, 'notes.md');
+    const tag = () => randomUUID().replace(/-/g, '').slice(0, 6).toUpperCase();
+    const [c1, c2, c3, c4] = [`ALPHA-${tag()}`, `BRAVO-${tag()}`, `CHARLIE-${tag()}`, `DELTA-${tag()}`];
+    writeFileSync(file, `# Trip notes\n\nWe meet at the station at nine.\ncode: ${c1}\n`);
+    const userAppend = (text) => writeFileSync(file, readFileSync(file, 'utf8') + text);
+    const logAt = () => (existsSync(engineLog) ? readFileSync(engineLog, 'utf8').length : 0);
+    const logSince = (n) => (existsSync(engineLog) ? readFileSync(engineLog, 'utf8').slice(n) : '');
+    const sid = `live-filechange-${Date.now()}`;
+    const cfg = { cwd: dir };
+    const a = await run(sid, 'Read the file notes.md with a tool and reply with just the value after "code:".', 180_000, cfg);
+    userAppend(`\n## Added by me\nSecond code: ${c2}\n`); // 像用户在编辑器里接着写
+    let at = logAt();
+    const b = await run(sid, 'Without using any tools: list every code that notes.md contains right now (values shaped like WORD-XXXXXX), one per line, nothing else.', 120_000, cfg);
+    const logB = logSince(at);
+    at = logAt();
+    // 第三段在 run 里写:等命令真跑起来(它先 touch 一个标记)再落盘 → 开头那次扫描已经过了,只能由续调前那次扫描报
+    const flag = join(dir, 'started.flag');
+    rmSync(flag, { force: true });
+    let stopWatch = false;
+    const midEdit = (async () => {
+      const t0 = Date.now();
+      while (!stopWatch && Date.now() - t0 < 230_000) {
+        if (existsSync(flag)) { userAppend(`\nThird code: ${c3}\n`); return true; }
+        await sleep(250);
+      }
+      return false;
+    })();
+    let c;
+    try {
+      c = await run(sid, 'First run this exact shell command with run_bash: `touch started.flag && sleep 20`. After it finishes, do NOT read notes.md again or run any other command: just list every code notes.md contains right now, one per line, nothing else.', 240_000, cfg);
+    } finally { stopWatch = true; }
+    const editedMidRun = await midEdit;
+    const logC = logSince(at);
+    userAppend(`\n## Packing\n- passport (${c4})\n`);
+    const d = await run(sid, 'Change the title line of notes.md to "# Final trip notes". Leave everything else in the file exactly as it is.', 180_000, cfg);
+    const final = readFileSync(file, 'utf8');
+    const turnLine = new RegExp(`\\[filechange\\] run=${b.runId} turn-start: 1 change`).test(logB);
+    const midLine = new RegExp(`\\[filechange\\] run=${c.runId} mid-run: `).test(logC);
+    const bKnows = b.content.includes(c1) && b.content.includes(c2) && b.toolCalls.length === 0;
+    // 除了那条 sleep,任何工具调用(read_file / 带 notes.md 的命令 / 别的命令)都算自己又去看了
+    const reread = c.toolArgs.some((t) => t.name !== 'run_bash' || !/sleep\s+20/.test(t.args) || /notes\.md/.test(t.args));
+    const cKnows = editedMidRun && c.content.includes(c3) && !reread;
+    const kept = [c1, c2, c3, c4, '## Added by me', '## Packing'].every((x) => final.includes(x));
+    const titled = /^# Final trip notes\s*$/m.test(final) && !/^# Trip notes\s*$/m.test(final);
+    const evidence = { codes: [c1, c2, c3, c4], a: a.content, b: b.content, bTools: b.toolCalls, c: c.content, cTools: c.toolArgs.map((t) => ({ name: t.name, args: t.args })), d: d.content, dTools: d.toolArgs.map((t) => ({ name: t.name, args: t.args.slice(0, 300) })), final, editedMidRun, turnLine, midLine, logB: logB.split('\n').filter((l) => l.includes('[filechange]')), logC: logC.split('\n').filter((l) => l.includes('[filechange]')) };
+    writeFileSync(join(OUT, 'filechange-evidence.json'), JSON.stringify(evidence, null, 2));
+    const errs = [a, b, c, d].map((x) => x.error).filter(Boolean);
+    return {
+      ok: !errs.length && a.content.includes(c1) && bKnows && turnLine && cKnows && midLine && kept && titled,
+      detail: errs.join(';') || `① 不用工具答出用户加的码:${bKnows ? '是' : `否(工具 ${b.toolCalls.join(',') || '无'})`};turn-start 行:${turnLine ? '有' : '无'};② run 内改动不重读答出:${cKnows ? '是' : !editedMidRun ? '否(命令没跑起来,台架没改成)' : reread ? '否(重读了)' : '否'};mid-run 行:${midLine ? '有' : '无'};③ 用户写的都在:${kept ? '是' : '否'},标题改了:${titled ? '是' : '否'}(工具 ${d.toolCalls.join(',') || '无'})`,
+      output: `A: ${a.content}\n---\nB: ${b.content}\n---\nC: ${c.content}\n---\nD: ${d.content}\n---\nfinal notes.md:\n${final}`,
+      tokens: [a, b, c, d].reduce((n, x) => n + (tokensOf(x) || 0), 0), toolCalls: [...a.toolCalls, ...b.toolCalls, ...c.toolCalls, ...d.toolCalls],
+    };
+  });
+
   // foreignreasoning(10-28,借鉴 magpie 第三轮 19):换了账号,旧会话回灌的加密推理被上游以 400 invalid_encrypted_content 拒掉(厂商原文,见 lib/llm-fault-preload.mjs)。
   //   第一轮让模型用一次工具(跨 run 回灌的只有工具轮的推理);第二轮起注入:带着第一轮那批 encrypted_content 的请求一律 400(像换了号:旧推理全被拒,新产出的照常可用)。
   //   修好 = 认出 → 拿掉推理重发,只被拒 1 次、发 reasoning_dropped、重发里不再带旧推理、答出口令。负对照(--kind base,没修)= 400 不可重试,这一轮报错收场。
@@ -4303,6 +4379,74 @@ Then reply with only the command output.`,
       detail: full.ev.error || auto.ev.error || `${line('完全通行', full)}${okFull ? ' ✓' : ' ✗'} | ${line('替我批准', auto)}${okAuto ? ' ✓' : ' ✗'}`,
       output: `--- 完全通行 ---\n${full.ev.content}\n\n--- 替我批准 ---\n${auto.ev.content}\n\n--- 推送审批说明 ---\n${auto.ev.approvalList.map((a) => a.preview).join('\n---\n')}`,
       ttftMs: ttft(full.ev), tokens: tokensOf(full.ev), toolCalls: [...full.ev.toolCalls, '|', ...auto.ev.toolCalls],
+    };
+  });
+
+  // 多仓 Git(11-07,仓根 docs/ToBeImproved/多仓Git方案_2026-11-07 方案 C;tools/builtin/git.ts 的 repo 参数):
+  // 项目文件夹本身不是仓、里面 Project/ 下有两个仓(用户 11-07 那份反馈的场景)。消息不点名工具:先看两个仓的状况,再只提交 alpha。
+  // 判据看磁盘:alpha 多了一个提交且干净、beta 一个字节没动;git_commit 带了指向 alpha 的 repo;没在 run_bash 里自己跑 git commit。
+  // 负对照 = 没有这次改动的旧代码(--kind base):git_status 只回「不是仓库」,模型要么停下要么绕去 run_bash。
+  await scenario('multirepo', '多仓 Git:项目不是仓、里面两个仓 → 看状况后只提交指定的那个', async () => {
+    const proj = join(workspace, `multirepo-${Date.now()}`);
+    const mk = (name, file, body) => {
+      const dir = join(proj, 'Project', name);
+      mkdirSync(dir, { recursive: true });
+      const g = (...a) => execFileSync('git', ['-C', dir, ...a], { encoding: 'utf8' }).trim();
+      g('init', '-q', '-b', 'main');
+      g('config', 'user.name', 'Live Harness'); g('config', 'user.email', 'live@example.com');
+      writeFileSync(join(dir, 'README.md'), `# ${name}\n`);
+      g('add', '.'); g('commit', '-qm', 'Initial commit');
+      writeFileSync(join(dir, file), body);
+      return { dir, g };
+    };
+    const alpha = mk('alpha', 'greet.js', 'export const greet = (name) => `Hello, ${name}!`\n');
+    const beta = mk('beta', 'draft.md', '# Draft\n\nNot ready yet.\n');
+    const { session } = await api('/agent/sessions', { method: 'POST', body: JSON.stringify({ title: 'multirepo', model_id: MODEL, project_path: proj }) });
+    const ev = await run(session.id, '看看这个项目里 Project 下面那两个仓现在什么状况,然后只把 alpha 里的改动提交了(提交说明你来写),beta 先别动。', 240_000, { cwd: proj, approvalMode: 'full-auto' });
+    const alphaOk = alpha.g('status', '--porcelain') === '' && alpha.g('log', '-1', '--format=%s') !== 'Initial commit';
+    const betaOk = beta.g('log', '-1', '--format=%s') === 'Initial commit' && beta.g('status', '--porcelain') === '?? draft.md';
+    const commits = ev.toolArgs.filter((t) => t.name === 'git_commit');
+    const repoArg = commits.map((t) => { try { return JSON.parse(t.args).repo ?? '(无)'; } catch { return '(解析不了)'; } });
+    const aimed = repoArg.some((r) => typeof r === 'string' && /alpha\/?$/.test(r));
+    const bashGit = ev.toolArgs.filter((t) => t.name === 'run_bash' && /\bgit\b[^\n]*\bcommit\b/.test(t.args)).length;
+    const statusCalls = ev.toolCalls.filter((t) => t === 'git_status').length;
+    return {
+      ok: !ev.error && alphaOk && betaOk && aimed && bashGit === 0 && statusCalls > 0,
+      detail: ev.error || `alpha ${alphaOk ? '已提交且干净' : `没提交好(${alpha.g('status', '--porcelain') || '干净'} / ${alpha.g('log', '-1', '--format=%s')})`};beta ${betaOk ? '没动' : '被动了'};git_status ${statusCalls} 次;git_commit 的 repo = ${repoArg.join(', ') || '没调'}${bashGit ? `;run_bash 里跑了 ${bashGit} 次 git commit` : ''}`,
+      output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls,
+    };
+  });
+
+  // 发布到 Forsion Git(11-08 用户反馈 tangu-feedback-1e24ee8a):项目文件夹是中文名、已经有一个提交、没有远端,用户原话「帮我上传Forsion Git」。
+  // 当时模型看完 git_status 回「把仓库地址发给我」,用户说「你帮我创建一个仓库吧」又被指去项目详情的 Git 页。
+  // 判据:模型自己调 git_publish,并带一个合规的英文仓库名(文件夹名整理不出名字);没在 run_bash 里自己 git remote add / push。
+  // 审批:带合规名字的那张卡拒掉(台架里没有 Forsion Git,也不许碰 git.forsion.net);名字不合规的那张放行,让它吃 invalid_repo_name 再改。
+  // 负对照 = 没有这次改动的旧代码(--kind base):提示里只说「去项目详情」,看模型是不是照样要地址。
+  await scenario('gitpublish', '发布到 Forsion Git:中文名项目没远端 → 自己起英文名调 git_publish', async () => {
+    // 唯一性放在父目录:文件夹名本身得整理不出仓库名(带时间戳的话 forsionRepoName 会整理出一串数字,不传 name 也合法 —— Codex 评审)
+    const dir = join(workspace, `gitpublish-${Date.now()}`, '马里奥赛车');
+    mkdirSync(dir, { recursive: true });
+    const g = (...a) => execFileSync('git', ['-C', dir, ...a], { encoding: 'utf8' }).trim();
+    g('init', '-q', '-b', 'main');
+    g('config', 'user.name', 'Live Harness'); g('config', 'user.email', 'live@example.com');
+    writeFileSync(join(dir, 'index.html'), '<!doctype html><title>Kart</title><canvas id="track"></canvas>\n');
+    g('add', '.'); g('commit', '-qm', 'Initial commit');
+    // 和发布服务同一条规则(services/forsionGitPublish.ts:非空且整理后不变),别自己写一条宽松的正则
+    const { forsionRepoName } = await import('../dist/services/forsionGitPublish.js');
+    const valid = (n) => !!n && forsionRepoName(n) === n;
+    const nameOf = (args) => { try { const n = JSON.parse(args || '{}').name; return typeof n === 'string' ? n.trim() : ''; } catch { return ''; } };
+    const { session } = await api('/agent/sessions', { method: 'POST', body: JSON.stringify({ title: 'gitpublish', model_id: MODEL, project_path: dir }) });
+    const ev = await run(session.id, '帮我上传Forsion Git', 240_000, { cwd: dir, approvalMode: 'auto-edit' },
+      undefined, (p) => (p.name === 'git_publish' && valid(nameOf(p.arguments)) ? 'reject' : undefined));
+    const pubs = ev.approvalList.filter((a) => a.name === 'git_publish');
+    const named = pubs.map((a) => nameOf(a.args)).filter(valid);
+    const bashRemote = ev.toolArgs.filter((t) => t.name === 'run_bash' && /\bgit\b[^\n]*\b(remote\s+add|push)\b/.test(t.args)).length;
+    const remotes = g('remote');
+    return {
+      ok: !ev.error && named.length > 0 && bashRemote === 0 && remotes === '',
+      detail: ev.error || `git_publish ${pubs.length ? `问了 ${pubs.length} 次,名字 ${pubs.map((a) => nameOf(a.args) || '(没给)').join(' / ')}` : '没调'}${named.length ? ' ✓' : ' ✗'};工具 ${ev.toolCalls.join(',') || '无'}${bashRemote ? `;run_bash 里自己跑了 ${bashRemote} 次 git remote add / push` : ''};远端 ${remotes || '无'}`,
+      output: `${ev.content}\n\n--- 审批说明 ---\n${pubs.map((a) => a.preview).join('\n---\n')}`,
+      ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls,
     };
   });
 
@@ -7937,6 +8081,14 @@ Then reply with only the command output.`,
   await scenario('account', 'account 「我还剩多少」:账号额度 + 本对话余量,账号动作逐次确认', async () => {
     if (!FAKE_CLOUD) return { ok: false, detail: '给了 TANGU_LIVE_CLOUD_URL:这个场景要用台架自带的假云端(数是已知的),去掉那个环境变量再跑' };
     return accountLive({ run, api, sleep, cloud: FAKE_CLOUD });
+  });
+  // caltodo / cloudtodo(11-07):「帮我添加两条待办」几步之内进默认日历、没日期没勾、不写笔记;再列出、勾掉。判据与负对照见 lib/caltodo-live.mjs。
+  await scenario('caltodo', 'caltodo 用户的待办(本机):加两条无日期待办 → 新会话列出 → 勾掉', async () =>
+    calTodoLive({ run, rounds: Number(opt('rounds', 1)), home, workspace, vault: SELF_SCHED_VAULT, skill: CALTODO_SKILL }));
+  await scenario('cloudtodo', 'cloudtodo 用户的待办(云端 run):加两条无日期待办 → 新会话列出 → 勾掉', async () => {
+    const cloud = process.env.TANGU_LIVE_CLOUD_URL;
+    if (!cloud) return { ok: false, detail: '要 TANGU_LIVE_CLOUD_URL / TANGU_LIVE_CLOUD_TOKEN 指向 server scripts/calendar-local.mts(打印的 url 与 token)' };
+    return calTodoLive({ run, rounds: Number(opt('rounds', 1)), cloud, token: TOKEN });
   });
   // cloudcal(10-30):云端 run(sandbox 形态)经真路由读写默认日历 human/CALENDAR.db。判据与负对照见 lib/cloudcal-live.mjs。
   await scenario('cloudcal', 'cloudcal 云端 Agent 的默认日历:新用户首建、新会话改、老库种子不动不列', async () => {

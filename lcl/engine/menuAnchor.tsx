@@ -10,6 +10,11 @@
  *
  * 【定则】视口坐标 x 要落地 → 写 `left: x / 元素自身的 currentCSSZoom`;跟视口尺寸比大小前,
  * 局部 px 先 `× zoom`。别自己再写一遍,一律走这里。仪器:`npm run check:overlay`。
+ *
+ * 【选哪个】React 里、按坐标开(右键、光标)→ `<OverlayAt>` / `useClampedMenu`;
+ * 贴着一个元素开、浮层不归 React 管(原生 popover、命令式 DOM)→ `followAnchor`;
+ * CSS 已定位只怕横向出界 → `useEdgeNudge`。在别处直接拿 `innerHeight` 算浮层位置会被
+ * `overlayPlacement.guard.test.ts` 拦下(那份名单里是存量,只减不增)。
  */
 import React, { useLayoutEffect, useRef, useState, type CSSProperties, type HTMLAttributes, type ReactNode, type RefObject } from 'react'
 
@@ -65,6 +70,100 @@ export function clampMenu(
   for (const t of order) if (fits(t)) return { left, top: t }
   // 两侧都放不下(菜单比视口还高 / 锚点在视口外):退回夹取首选方向的那个候选。
   return { left, top: Math.max(margin, Math.min(order[0], vh - h - margin)) }
+}
+
+/** fitAnchored / followAnchor 的落位选项(局部 px 的 gap / margin 由 followAnchor 乘 zoom 后传进来)。 */
+export interface FitAnchoredOpts {
+  /** 首选方向,放不下翻到另一侧。缺省 'below'。 */
+  prefer?: 'below' | 'above'
+  /** 右缘对齐锚点右缘(「⋯」按钮下方往左展开),缺省左缘对齐。 */
+  alignEnd?: boolean
+  /** 浮层与锚点的间距。缺省 4。 */
+  gap?: number
+  margin?: number
+}
+
+/**
+ * 锚在**元素**上的浮层落点,全部视口 px。与 clampMenu 同一套翻面语义,另外多给一个 `maxHeight`:
+ * 先试首选一侧,放不下翻到另一侧;两侧都放不下就放在空间大的那侧,高度封顶到那侧可用高度(浮层 overflow:auto 滚)。
+ * 锚点自己滚出 / 挤出窗口时也夹回窗口内 —— 结果恒在视口里,这是本函数唯一的承诺。
+ */
+export function fitAnchored(
+  r: { left: number; right: number; top: number; bottom: number },
+  w: number,
+  h: number,
+  vw: number,
+  vh: number,
+  opts: FitAnchoredOpts = {},
+): { left: number; top: number; maxHeight: number } {
+  const { prefer = 'below', alignEnd = false, gap = 4, margin = 8 } = opts
+  const left = Math.max(margin, Math.min(alignEnd ? r.right - w : r.left, vw - w - margin))
+  const below = vh - margin - (r.bottom + gap)
+  const above = r.top - gap - margin
+  const at = (side: 'below' | 'above', size: number): { top: number; maxHeight: number } =>
+    side === 'below' ? { top: r.bottom + gap, maxHeight: below } : { top: r.top - gap - size, maxHeight: above }
+  const order: Array<'below' | 'above'> = prefer === 'above' ? ['above', 'below'] : ['below', 'above']
+  const room = (s: 'below' | 'above'): number => (s === 'below' ? below : above)
+  const fit = order.find((s) => h <= room(s))
+  const v = fit ? at(fit, h) : at(room('below') >= room('above') ? 'below' : 'above', Math.max(0, Math.max(below, above)))
+  const maxHeight = Math.max(0, Math.min(v.maxHeight, vh - 2 * margin))
+  const top = Math.max(margin, Math.min(v.top, vh - margin - Math.min(h, maxHeight)))
+  return { left, top, maxHeight }
+}
+
+/**
+ * 命令式版本:让一个**已挂进 DOM 的 fixed 浮层**(原生 popover、插件 `ctx.ui.popover`、portal 出去的 div)贴住 `anchor`
+ * 并一直贴着 —— 内容晚到(React 在 toggle 之后才渲染、列表异步加载)、窗口缩放、端级 zoom、滚动,都重新落位并改写 maxHeight。
+ * 返回停止跟随的函数,浮层关掉时调。
+ *
+ * ⚠️ 为什么不能「打开后 rAF 量一次高度」:popover 打开那一刻 React 内容往往还没提交,量到的是空壳 → 永远判
+ * 「下面放得下」,锚点在窗口底部(吸底输入框)时整个掉出窗口(2026-11-08 日历待办的日期 / 关联笔记两个弹层)。
+ * 高度一律量 `scrollHeight`(不受上一轮写入的 maxHeight 截断),否则会在「截断 → 判放得下 → 放开 → 放不下」之间来回翻。
+ */
+export function followAnchor(el: HTMLElement, anchor: Element, opts: FitAnchoredOpts = {}): () => void {
+  let last = ''
+  const place = (): void => {
+    if (!anchor.isConnected || !el.isConnected) return
+    // 浮层 CSS 自带的高度上限(如 .plugin-popover 的 min(70vh, 520px))只许往下收、不许被这里放大,且要跟着当前窗口算:
+    // 每次都临时撤掉自己写的内联值读计算值、立刻还原 —— 只做样式重算不做布局,滚动位置不会被夹回去。百分比 / none 当没有上限。
+    const inline = el.style.maxHeight
+    el.style.maxHeight = ''
+    const cs = getComputedStyle(el)
+    const cssMax = cs.maxHeight
+    el.style.maxHeight = inline
+    // max-height 在 content-box 下不含内边距和边框:换算成整框高度来比、写回时再减掉,否则封顶后仍多出这一截压到锚点
+    const chrome = cs.boxSizing === 'content-box'
+      ? ['paddingTop', 'paddingBottom', 'borderTopWidth', 'borderBottomWidth'].reduce((s, k) => s + (parseFloat(cs[k as 'paddingTop']) || 0), 0)
+      : 0
+    const cap = cssMax.endsWith('px') ? parseFloat(cssMax) + chrome : Infinity
+    // 缩放取浮层自己的:它可能挂在 body / dialog 下,与锚点的累计 zoom 不同(手机抽屉里多一层 1.15)。
+    // 还没显示的 popover(display:none)读自己的 currentCSSZoom 恒为 1,这时先借锚点的,显示后 ResizeObserver 会再落一次。
+    const z = el.getClientRects().length ? zoomOf(el) : zoomOf(anchor)
+    const h = Math.min(el.scrollHeight + el.offsetHeight - el.clientHeight, cap) * z
+    const v = fitAnchored(anchor.getBoundingClientRect(), el.offsetWidth * z, h, window.innerWidth, window.innerHeight, {
+      ...opts,
+      gap: (opts.gap ?? 4) * z,
+      margin: (opts.margin ?? 8) * z,
+    })
+    const key = `${v.left}|${v.top}|${v.maxHeight}`
+    if (key === last) return // 写 maxHeight 会再触发一次 ResizeObserver;同值就停,不进循环
+    last = key
+    el.style.left = `${v.left / z}px`
+    el.style.top = `${v.top / z}px`
+    el.style.maxHeight = `${Math.max(0, Math.min(v.maxHeight / z, cap) - chrome)}px`
+  }
+  place()
+  const ro = new ResizeObserver(place) // 首次回调在首帧绘制之前 → 不会先闪在错的位置
+  ro.observe(el)
+  window.addEventListener('resize', place)
+  window.addEventListener(UI_ZOOM_EVENT, place)
+  document.addEventListener('scroll', place, true)
+  return () => {
+    ro.disconnect()
+    window.removeEventListener('resize', place)
+    window.removeEventListener(UI_ZOOM_EVENT, place)
+    document.removeEventListener('scroll', place, true)
+  }
 }
 
 /** 挂在 fixed 浮层根上:量真实尺寸 → 夹取/翻面 → 反补偿 zoom。useLayoutEffect 在绘制前定位,故无闪。

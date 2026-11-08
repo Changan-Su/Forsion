@@ -60,6 +60,19 @@ describe('EditorialMessage inline Sketch ordering', () => {
     ])
   })
 
+  it('splits consecutive git calls into one card per repository (multi-repo git)', () => {
+    const g = (id: string, name: string, repo: string): ToolEvent => ({ id, name, done: true, arguments: JSON.stringify({ repo }), result: '{}' })
+    const events = [g('a1', 'git_status', 'A'), g('a2', 'git_commit', 'A'), g('b1', 'git_commit', 'B'), done('run', 'run_bash')]
+    const parts = partitionToolSegment(events)
+    expect(parts.map((part) => part.t === 'tools' ? `tools:${part.events.map((ev) => ev.id).join(',')}` : part.t === 'git' ? `git:${part.events.map((ev) => ev.id).join(',')}` : part.t)).toEqual([
+      'tools:a1,a2',
+      'git:a1,a2',
+      'tools:b1',
+      'git:b1',
+      'tools:run',
+    ])
+  })
+
   it('places every completed Sketch immediately after its own tool call', () => {
     const events = [done('read1', 'read_file'), done('sk1', 'sketch'), done('run1', 'run_bash'), done('sk2', 'sketch')]
     const sketches: SketchItem[] = [

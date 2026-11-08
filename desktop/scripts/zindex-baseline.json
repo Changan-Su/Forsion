@@ -2,7 +2,7 @@
   "../lcl/components/selectionBar.css": 1,
   "../lcl/components/toolIsland.css": 1,
   "../lcl/engine/dropIndicator.css": 1,
-  "../lcl/engine/engine.css": 11,
+  "../lcl/engine/engine.css": 10,
   "../lcl/engine/hoverSurface.css": 2,
   "../lcl/engine/lineSelection.css": 1,
   "../lcl/engine/miniCard.css": 5,

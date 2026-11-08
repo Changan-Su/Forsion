@@ -306,7 +306,8 @@ else { f.el.append(card); card.querySelector('.head').dataset.floatDrag = '' }
 - 浮层不抢焦点,也不自己关;`f.anchor` / `f.closed` 可读。入场退场走宿主的统一动效(`data-motion="toast"`),减少动态效果时不位移。
 - 层级只有一张表(DESIGN §3「浮层与层级」):视图内浮层 < Space 浮层(在 Space 区那一层里,只比分隔条高)< 窗口浮层 < 菜单 / 弹出 < 上手提示 < 弹窗 < 命令面板。别写字面 z-index,要用就用 `var(--z-*)`。
 - 形状不对(`scope` 不认识、`'view'` 没给挂在文档里的 `host`、`anchor` / `role` 不认识)同步抛 `TypeError`。插件已停用时返回一个什么都不做的句柄。
-- 桌面级浮层(盖在别的应用之上的胶囊)和多开的 Mini 不在这一期,先别自己开系统窗口做。
+- 桌面级浮层(盖在别的应用之上的胶囊)只给宿主,插件这里没有 `'desktop'` 档,也别自己开系统窗口做。
+- 要浮起来的是你注册的**整个视图**(不是一块自己画的卡)时,用 `ctx.workspace.open(viewId, { layer: { float: 'space' } })`:同一套作用域与锚点,卡头和「在主面板显示」由宿主画,见[插件开发](./plugin-development.md)「统一打开入口」(2.13.8 起)。
 
 ### 设置零件 (2026-10-17)
 

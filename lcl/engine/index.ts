@@ -16,6 +16,8 @@ export type {
   SpaceDefinition,
   SpaceIcon,
   SidebarDefaults,
+  ViewForm,
+  ViewForms,
 } from './types'
 export { label } from './types'
 
@@ -42,7 +44,7 @@ export { useRibbonStore, addRibbonIcon, removeRibbonIcon, setRibbonActions, RIBB
 /** 拖拽重排的公共语义(悬停谁就顶掉谁);侧栏等 app 层的可排序列表复用同一个,别再各写一份 splice。 */
 export { moveTo, rankIds } from './ribbonRegistry'
 export type { RibbonFolder, RibbonZone } from './ribbonRegistry'
-export { useSpaceStore, registerSpace, unregisterSpace, setActiveSpace, setActiveSpaceCold, adoptSpaceLayoutCold, seedSpaceWindowLayout, resetSpaceLayouts, spaceLayoutsWereReset, BOOT_ACTIVE_SPACE_ID, getActiveSpace, spaceLayoutName, setSpacePinHandler, pinSpaceToHome, openRedirectType, landOnMainPage } from './spaceRegistry'
+export { useSpaceStore, registerSpace, unregisterSpace, setActiveSpace, setActiveSpaceCold, adoptSpaceLayoutCold, seedSpaceWindowLayout, resetSpaceLayouts, spaceLayoutsWereReset, BOOT_ACTIVE_SPACE_ID, getActiveSpace, spaceLayoutName, setSpacePinHandler, pinSpaceToHome, canPinSpaceToHome, openRedirectType, landOnMainPage } from './spaceRegistry'
 export { isPinned } from './pinnedViews'
 export type { PinnedViews } from './pinnedViews'
 export { useNav, recordNav } from './navStore'
@@ -60,14 +62,17 @@ export {
 } from './layoutPersist'
 export type { PersistedPanel, LayoutBlob } from './layoutPersist'
 /** 视口锚定的 fixed 浮层(右键菜单/补全/弹出层):自带 CSS zoom 反补偿 + 越界翻面。别再手写 left/top。 */
-export { OverlayAt, useExitGhost, removeOverlayWithExit, useClampedMenu, clampMenu, useEdgeNudge, nestedPanelPlacement, nestedPanelTop, zoomOf, UI_ZOOM_EVENT } from './menuAnchor'
+export { OverlayAt, useExitGhost, removeOverlayWithExit, useClampedMenu, clampMenu, fitAnchored, followAnchor, useEdgeNudge, nestedPanelPlacement, nestedPanelTop, zoomOf, UI_ZOOM_EVENT } from './menuAnchor'
 export type { NestedPanelPlacement } from './menuAnchor'
-export type { AnchorOpts } from './menuAnchor'
+export type { AnchorOpts, FitAnchoredOpts } from './menuAnchor'
 // 液滴展开(DESIGN §3):小按钮长出贴着的面板。宿主组件(账号卡)用;插件暂不开放。
 export { emergeDroplet } from './droplet'
 export { openFloat, nearestAnchor, savedAnchor, registerSpaceFloatLayer, FLOAT_ANCHORS, FLOAT_SCOPES, FLOAT_ROLES } from './floatLayer'
 export type { FloatScope, FloatAnchor, FloatRole, FloatOptions, FloatHandle } from './floatLayer'
 export { SpaceFloatLayer } from './SpaceFloatLayer'
+/** 统一打开入口(第三期):位置(layer)和样子(form)分开写;回落规则在 workspaceOpen.ts 头注。 */
+export { workspace, workspaceOpen, planOpen, dockFallback, setDesktopOpener } from './workspaceOpen'
+export type { OpenTarget, OpenOptions, OpenLayer, OpenResult, OpenPlan, OpenEnv, OpenFailure, ResolvedLayer, FloatOpenScope, DesktopOpener } from './workspaceOpen'
 export type { Droplet, DropletOptions } from './droplet'
 /** 落点提示(拖动时的落点线 / 放进去的描边):换落点原地淡出淡入。见 dropIndicator.ts 顶注。 */
 export { createDropIndicator, createsFixedContainingBlock, dropRetarget, dropHide,DROP_IN_MS, DROP_OUT_MS, land, landCancel, landWhenMoved, landOffset, dragGrab, releasePoint, LAND_MS } from './dropIndicator'
@@ -88,7 +93,21 @@ export type {
   FloatingTocOptions,
   FloatingTocProps,
 } from './FloatingToc'
-export { setDetachApi, getDetachApi } from './detachSeam'
+/** 对象层:对象类型 + 按类型登记的动作 + 执行层 + 共用菜单(仓根 docs/ToBeImproved/LCL对象动作统一方案_2026-11-07)。 */
+export {
+  registerObjectType, registerObjectAction, getObjectType, getObjectAction, objectInfo, objectActions, objectKey,
+  executeAction, openObject, freezeRefs, buildObjectMenu, menuHasItems, setObjectHost, objectCaps, subscribeObjects,
+  OBJECT_REASON, ACTION_GROUPS,
+} from './objects'
+export type {
+  ObjectRef, ObjectInfo, ObjectIcon, OpenMode, Place, ObjectCaps, ObjectContext, ActionResult, ObjectTypeDefinition,
+  ActionGroup, ConfirmRequest, ObjectAction, ObjectHost, FrozenRef, ObjectMenuRequest,
+} from './objects'
+export { claimObjectFocus, focusedObjects, subscribeObjectFocus } from './objectFocus'
+export type { FocusedObjects, ObjectFocusClaim } from './objectFocus'
+export { MenuSurface, MenuRows, openMenu, closeMenu, menuIsOpen, openObjectMenu, objectContextMenuHandler, useObjectMenu, bindObject } from './objectMenu'
+export type { MenuAt, OpenMenuRequest, ObjectMenuBinding } from './objectMenu'
+export { setDetachApi, getDetachApi, spaceOpensElsewhere } from './detachSeam'
 export type { DetachApi, ViewRef } from './detachSeam'
 
 export type { ExtendViewController, ExtendViewOptions, ExtendViewHandle, ExtendViewSide, ExtendViewCloseReason } from './extendView'

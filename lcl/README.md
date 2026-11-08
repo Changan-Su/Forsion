@@ -26,6 +26,15 @@ Genesis 当前使用这份 LCL。`apps/Archived/Forsion-LCL` 是早期组合引�
 - 插件：`ctx.ui.mountChatBox`；详见 [公共契约](../docs/customization/ui-components.md)。
 - 桌面 / Web 卡内容宽 ≤480px 时，模型显示短名称与档位，模型 / 添加 / 模式入口展开不改变宽度；≤260px 时上下文与语音通过添加菜单访问。窄菜单用同层返回并保留完整模型名、审批说明和额度；原生手机沿用自身布局。`desktop` 的 `check:composernarrow` 与 `check:composernarrow:electron` 覆盖真实组件 / 构建后 ChatView。
 
+## 对象与动作(Objects)
+
+同一个东西(Space、笔记……)在哪儿右键都该是同一份菜单。LCL 原来只按出口登记(Ribbon 图标、命令、视图),动作挂在出口上,离开就没了;现在按对象登记。
+
+- `@lcl/engine` 的 `engine/objects.ts`:`registerObjectType`(它是谁:id 校验、名字图标缓存、怎么打开、执行前怎么核「还是那个」)、`registerObjectAction`(按类型登记一次;分组固定为 打开 → 编辑 → 整理 → 本处 → 分享 → 危险)、`executeAction`(唯一执行口:菜单弹出时冻结目标,执行前重验,确认后再验,防连点,失败交宿主上报)、`openObject`(= 点一下,窗口锁这类规矩写在类型里一次)、`setObjectHost`(宿主给能力 `caps`、确认框、失败上报)。`when` 只管列不列,不是授权。注册都返回 dispose,同 id 先到先得。
+- `engine/objectMenu.tsx`:共用菜单渲染器 `openMenu` / `MenuSurface`(一份 `SheetMenu`,桌面画 `.ctx-menu`,Android 走原生半屏;行为照笔记树菜单:焦点进第一项、↑↓、Esc 还焦点、按外面关),对象接入 `useObjectMenu` / `bindObject` / `objectContextMenuHandler`。界面只给 `refs`、`place` 和本处项 `placeSections`;没有可列的项时不拦右键。
+- `engine/objectFocus.ts`:焦点对象底座(按窗口 / View 范围、owner token 申领释放),第二期给命令面板与快捷键用。
+- 宿主那半(Space、笔记的类型与动作)住应用层,装配期登记。新界面别再手写对象菜单。
+
 ## 划线条(Selection bar)
 
 选中文字后浮出来的那一条,全应用一份。
@@ -73,7 +82,17 @@ Genesis 当前使用这份 LCL。`apps/Archived/Forsion-LCL` 是早期组合引�
 - z 只有一张表:`desktop/frontend/src/styles/base.css :root` 的 `--z-view-float / --z-space-float / --z-window-float / --z-menu / --z-hint / --z-dialog / --z-palette`(值等于原来的梯子),LCL 样式只写同值兜底。新写的字面 z-index 被 `npm run check:zindex` 的棘轮挡住(基线 `scripts/zindex-baseline.json`,进 `npm test`)。
 - 插件:`ctx.ui.float`;详见 [公共契约](../docs/customization/ui-components.md)「浮层」。宿主自己的第一个用户:蓬洲云传输卡(Extend,Space 作用域)。
 - 上手提示不是浮层:宿主自己的一次性提示(如通话键首次提示)走 `guideTips.ts` 的 `registerHostTip`,和插件提示同一套节奏。
-- 还没做:Mini 多开、`workspace.open(layer, form)`、桌面级浮层(盖在别的应用上的胶囊)。
+- Mini 多开(第二期)在主进程;桌面级浮层(第四期,`desktop/electron/desktopFloat.ts`)只给宿主。
+
+## 统一打开入口 `workspace.open`(第三期,2026-11-08)
+
+`engine/workspaceOpen.ts`:`workspace.open({ type, params }, { layer, form, key?, title? })`,位置(`layer`)和样子(`form`)分开写。
+- `{ dock: 'main' | 'left' | 'right' | 'bottom' }` → `useWorkspace.openView`(样子由位置定,左右 = `side`)。
+- `{ float: 'desktop', pin? }` → 壳层接缝 `setDesktopOpener({ mini, panel })`(桌面 = `window.tangu.openMini` / `openFloatingPanel`,网页只有 panel;接线在 `desktop/frontend/src/workspaceOpenHost.ts`,用的时候现装)。没接上 = 降级:Mini → 窗口作用域(手机 = 半屏抽屉),main → 停靠主区。
+- `{ float: 'view' | 'space' | 'window', anchor?, host? }` → `openFloat` 开一块浮层,`FloatViews.tsx`(随 `SpaceFloatLayer` 挂)用合成 leaf 把 View 经 portal 渲染进去:卡头(标题、在主面板显示、关闭)+ View。不进布局、不进 singleton 计数,View 类型反注册就收;同 View + key 再开 = 同一张卡换参数。没挂 FloatViews 的窗口(Mini、Floating Panel)回 `unavailable`。
+- `ViewDefinition.forms`(`{ main?, side?, bottom?, mini?: true | { view } }`)声明能用的样子;**不写 = 全都行**。回落规则全在纯函数 `planOpen` 与文件头注里,单测 `desktop/frontend/src/workspaceOpen.test.ts`;Mini 样子的紧凑视图取法:`forms.mini.view` → 某个 Space 的 `mini.mainView` 是它就走那个 Space → 视图本身(紧凑视图只认同一个主人:插件视图不落到别的插件的紧凑视图上)。
+- 旧入口一个不删:插件 `ctx.openView` / `openMiniPanel` / `openFloatingPanel` 内部转到这里;插件新入口 `ctx.workspace.open`。真 Electron 台架 `desktop` → `npm run check:workspaceopen`。
+- 留到下一步:浮层卡的位置跟 Space 布局 / View 参数一起记(现在只记用户拖到的锚点,重启不恢复)、Mini 的 `pin: false`(Mini 恒置顶)。
 
 ## English contract
 
@@ -87,9 +106,15 @@ Compact desktop/Web Chat Boxes keep trigger widths stable and show a short model
 
 `OverlayAt` and `useClampedMenu` accept an optional DOM `boundary`. Portalled menus are clamped to its intersection with the viewport, with width/height caps and the existing cumulative zoom compensation. Callers provide scrolling on constrained surfaces. Omit it to retain viewport placement. Resize and scroll observers are removed on unmount.
 
+`followAnchor(el, anchor, { prefer, alignEnd, gap, margin })` is the imperative counterpart for overlays React does not own (native `popover`, `ctx.ui.popover`, imperative DOM): it keeps `el` attached to `anchor` and re-places it whenever its size changes (content that renders after the toggle, async lists), on resize, UI zoom and scroll. It flips to the other side when the preferred one is too short and, when neither side fits, caps `max-height` to the roomier side (the overlay scrolls), never raising the overlay's own CSS cap. The pure part is `fitAnchored`. Do not measure an overlay once after opening it: the content is usually not rendered yet, so it always "fits below" and falls off the window from an anchor at the bottom. `overlayPlacement.guard.test.ts` ratchets raw `innerHeight` / `showPopover(` use outside `menuAnchor.tsx`. Regression: `desktop` → `npm run check:followanchor` (real Chromium, zoom 1 and 1.1; `FOLLOW_ANCHOR_NEG=1` swaps in the measure-once version and must fail).
+
 `engine/lineSelection.ts` provides opt-in `mountLineSelection(root, options)`. It paints continuous visual-line bands outside the content DOM while preserving native Selection, focus and clipboard behavior. Chat and watched plugin readers mount it through ViewSelectionBar; Markdown editors also supply composition suspension and pending AI ranges. Dispose the handle with its owning view. Custom selection layers and coarse pointers keep native paint. Regression: `desktop` → `npm run check:selectionlines` at 100% and 110% zoom after a fresh build.
 
+Objects: `engine/objects.ts` registers object types (identity, cached info, open, execution-time verify) and per-type actions; every action runs through `executeAction` (targets frozen when the menu opens, re-verified before and after confirmation, double-run guarded, failures reported by the host). `engine/objectMenu.tsx` is the shared menu renderer (`openMenu`, web `.ctx-menu` or the Android native sheet) plus `useObjectMenu` / `bindObject`; surfaces pass only `refs`, `place` and place-specific sections. `when` decides listing, not authorization.
+
 Floats are a layer attribute (`engine/floatLayer.ts`, `openFloat`): scope `view` (inside a host element), `space` (over the whole Space, inside `.shell-host` isolation, hidden while another Space is open; `SpaceFloatLayer` in WorkspaceHost and SingleColumnHost) or `window` (body); six anchors; role `panel` or `notice` (stacked, `role=status`). Roles govern behaviour, not stacking. Stacking comes from one token table in `base.css :root` (`--z-view-float` … `--z-palette`); `npm run check:zindex` ratchets literal z-index values. Plugins use `ctx.ui.float`.
+
+`engine/workspaceOpen.ts` is the single way to open a view: `workspace.open({ type, params }, { layer, form })` writes where (`{ dock }`, `{ float: 'desktop', pin? }`, `{ float: 'view' | 'space' | 'window' }`) apart from what it looks like (`main | side | bottom | mini`). Docking calls `openView`; the desktop layer goes through the shell seam `setDesktopOpener` (Mini / Floating Panel; web and phones fall back to an in-window card, a half-height sheet on phones); in-window layers render the view with a synthetic leaf in a float (`FloatViews.tsx`). `ViewDefinition.forms` declares supported looks (absent = all); the fallback rules live in the pure `planOpen`. Plugin `openView` / `openMiniPanel` / `openFloatingPanel` forward to it; plugins also get `ctx.workspace.open`. Electron harness: `desktop` → `npm run check:workspaceopen`.
 
 Space owns layout; View owns a navigable feature; UI components compose the inside of a View. Amadeus document Blocks and Dashboard Cards have different responsibilities. Use `@lcl/components` for host-independent primitives and application adapters for services. Inputs and callbacks are explicit; a component must not implicitly target the active session. DOM plugins consume `ctx.ui` mounts, with lifecycle cleanup owned by the host. Settings parts (panels, rows, switches, buttons, inputs, meters, steppers, sheets) currently live in the application layer (`components/SettingsPrimitives`, `components/SettingsPage`) because their CSS source of truth is `base.css`; plugins reach them through `ctx.ui.mountSettingsPage` / `mountSettingsItem`. Keep types, documentation, consumers, and lifecycle coverage together when changing public APIs.
 

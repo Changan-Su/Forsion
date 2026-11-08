@@ -10,7 +10,9 @@ export interface SpaceAppearance {
 
 export interface SpaceAppearanceUpdate { id: string; appearance: SpaceAppearance }
 export const SPACE_APPEARANCE_PREFIX = 'forsion_space_appearance.'
-const ID = /^[A-Za-z0-9._-]{1,128}$/
+/** Space id 的形状(主进程进 URL 参数 / 布局键 / 快捷方式之前都过这一道)。 */
+export const SPACE_ID_RE = /^[A-Za-z0-9._-]{1,128}$/
+const ID = SPACE_ID_RE
 const AXIS = /^[A-Za-z0-9._-]{1,64}$/
 const HEX = /^#[0-9a-f]{6}$/i
 
