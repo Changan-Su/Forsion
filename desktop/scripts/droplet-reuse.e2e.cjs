@@ -25,17 +25,19 @@ const LAYERS_JXA = `ObjC.import('CoreGraphics'); function run(a) { return JSON.s
 const layersOf = (pid) => JSON.parse(require('child_process').execFileSync('osascript', ['-l', 'JavaScript', '-e', LAYERS_JXA, String(pid)]).toString())
 
 /** 等 sel 出现后逐帧记状态 ms 毫秒。act:在页面里先做的动作(点哪个元素),省掉 Playwright 自己约 100ms 的点击开销。 */
-const sample = (page, sel, { ms = 650, act = null, key = null, layerSel = '.lcl-droplet' } = {}) => page.evaluate(async ({ sel, ms, act, key, layerSel }) => {
+const sample = (page, sel, { ms = 650, act = null, key = null, layerSel = '.lcl-droplet', afterLayout = false } = {}) => page.evaluate(async ({ sel, ms, act, key, layerSel, afterLayout }) => {
+  const opening = !key && !document.querySelector(sel)
   if (act) document.querySelector(act)?.click()
   if (key) window.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }))
   const raf = () => new Promise(requestAnimationFrame)
   const t0 = performance.now()
-  if (!act && !key) while (!document.querySelector(sel) && performance.now() - t0 < 1500) await raf()
+  if (opening) while (!document.querySelector(sel) && performance.now() - t0 < 1500) await raf()
   const t1 = performance.now(), frames = []
   while (performance.now() - t1 < ms) {
     await raf()
-    // ResizeObserver runs after rAF. Read the geometry the browser actually paints.
-    await new Promise((resolve) => setTimeout(resolve, 0))
+    // ResizeObserver runs after rAF. Use a post-layout task for resize checks only,
+    // since the timer can be throttled in the background Mini window.
+    if (afterLayout) await new Promise((resolve) => setTimeout(resolve, 0))
     const p = document.querySelector(sel), layer = document.querySelector(layerSel)
     const cs = p && getComputedStyle(p), before = p && getComputedStyle(p, '::before')
     frames.push({ t: Math.round(performance.now() - t1), exists: !!p, pouring: !!p?.classList.contains('lcl-droplet-pouring'),
@@ -56,11 +58,11 @@ const sample = (page, sel, { ms = 650, act = null, key = null, layerSel = '.lcl-
       drop: (() => { const i = layer?.querySelector('i'); if (!i) return null; const r = i.getBoundingClientRect(); return { cx: r.x + r.width / 2, cy: r.y + r.height / 2 } })() })
   }
   return frames
-}, { sel, ms, act, key, layerSel })
+}, { sel, ms, act, key, layerSel, afterLayout })
 
 async function verifyAccountResize(app, win) {
   // Exercise the real AccountSwitcher mount and OverlayAt repositioning while the panel is opening.
-  await app.evaluate(({ BrowserWindow, ipcMain }) => {
+  await app.evaluate(({ ipcMain }) => {
     ipcMain.removeHandler('auth:status')
     ipcMain.handle('auth:status', () => ({ loggedIn: true, username: 'Motion test', tokenValid: true }))
     ipcMain.removeHandler('auth:accounts')
@@ -68,13 +70,14 @@ async function verifyAccountResize(app, win) {
       await new Promise((resolve) => setTimeout(resolve, 120))
       return [{ id: 'motion', cloudUrl: 'https://example.test', username: 'Motion test', active: true }]
     })
-    BrowserWindow.getAllWindows()[0].webContents.send('auth:changed', { loggedIn: true })
   })
+  const mainWindow = await app.browserWindow(win)
+  await mainWindow.evaluate((w) => w.webContents.send('auth:changed', { loggedIn: true }))
   const avatar = '.ribbon-account, .account-card'
-  await win.waitForFunction((sel) => document.querySelector(sel)?.title === 'Motion test', avatar)
+  await win.waitForFunction((sel) => document.querySelector(sel)?.title === 'Motion test', avatar, { timeout: 5000 })
   for (const [theme, layerSel] of [['genesis', '.lcl-droplet'], ['stretch', '.lcl-stretch']]) {
     await win.evaluate((theme) => { document.documentElement.dataset.motionTheme = theme }, theme)
-    const opening = await sample(win, '.account-pop', { act: avatar, layerSel })
+    const opening = await sample(win, '.account-pop', { act: avatar, layerSel, afterLayout: true })
     const before = opening.find((f) => f.pouring && !f.accounts)
     const after = opening.filter((f) => f.pouring && f.accounts)
     check(`账号卡(${theme}): 切换账号在动效中途出现，底板和内容仍然对齐`,
