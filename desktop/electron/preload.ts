@@ -3,6 +3,7 @@
  * agent 调用 renderer 直连 HTTP,不经主进程。
  */
 import type { OpenVoiceInput, VoiceInputStreamEvent } from '../shared/voiceInputStream'
+import { DICTATION_CHANNELS, type DictationState } from '../shared/dictation'
 import type { ActiveWindowSample } from '../shared/activeWindow'
 import type { AppearancePatch, StartupAppearance } from '../shared/startupAppearance'
 import type { DocumentTaskClaimsApi } from '../shared/documentTasks'
@@ -210,8 +211,9 @@ const api = {
   accountUseResetCard: (type?: string): Promise<{ status: number; json: any }> => ipcRenderer.invoke('account:useResetCard', type),
   accountBgConvert: (percent: number): Promise<{ status: number; json: any }> => ipcRenderer.invoke('account:bgConvert', percent),
   accountBgAutoMain: (enabled: boolean): Promise<{ status: number; json: any }> => ipcRenderer.invoke('account:bgAutoMain', enabled),
-  /** 提交反馈到 Forsion 反馈中心(会话日志 JSON 随附为附件;token 留主进程)。 */
-  submitFeedback: (input: { description: string; sessionLogJson?: string; sessionLogName?: string }): Promise<{ ok: boolean; id?: string | null; error?: string; attachmentSkipped?: boolean }> =>
+  /** 提交反馈到 Forsion 反馈中心(会话日志 JSON 随附为附件;token 留主进程)。
+   *  expectedAccountId(auth:status 的 accountId):只用这个账号发,换了号回 account-changed、不发(Extend 2026-11-07 起;老 Extend 不认 = 照旧)。 */
+  submitFeedback: (input: { description: string; sessionLogJson?: string; sessionLogName?: string; expectedAccountId?: string }): Promise<{ ok: boolean; id?: string | null; error?: string; attachmentSkipped?: boolean }> =>
     ipcRenderer.invoke('feedback:submit', input),
   appVersion: (): Promise<string> => ipcRenderer.invoke('app:version'),
   // ── 应用内自动更新(检查 → 下载 → 重启安装;mac 仅检测,引导手动下载)──
@@ -499,6 +501,23 @@ const api = {
   // ── 桌面级共享语音转写(任意功能复用:聊天框、Amadeus…;主进程本地/自带-key,不经引擎)──
   // timestamps 不传 = 回纯文本(语音输入);传 true = 回 { text, segments }(视频转录要的分段时间戳)。
   openVoiceInput,
+  /** 全局语音输入(官方「语音输入」插件用的窄接口;主进程 electron/dictation/)。只能开关服务、换快捷键、读状态、请辅助功能授权 ——
+   *  没有一条能往别的应用写字:写字只发生在用户按快捷键开出来的那次听写里,文字只认胶囊交回来的。macOS / Windows 才有。 */
+  ...(process.platform === 'darwin' || process.platform === 'win32' ? {
+    dictation: {
+      state: (): Promise<DictationState> => ipcRenderer.invoke(DICTATION_CHANNELS.state),
+      /** 挂租约:本窗口在,服务就开着;本窗口关 / 重载 / 再调一次 attach(false) 就撤。 */
+      attach: (on: boolean): Promise<DictationState> => ipcRenderer.invoke(DICTATION_CHANNELS.attach, on === true),
+      setHotkey: (hotkey: string): Promise<DictationState> => ipcRenderer.invoke(DICTATION_CHANNELS.setHotkey, String(hotkey).slice(0, 64)),
+      /** macOS:弹系统的辅助功能授权提示(往别的应用粘贴要它)。 */
+      allowAccessibility: (): Promise<DictationState> => ipcRenderer.invoke(DICTATION_CHANNELS.allow),
+      onChange: (cb: (s: DictationState) => void): (() => void) => {
+        const h = (_e: unknown, s: DictationState) => cb(s)
+        ipcRenderer.on(DICTATION_CHANNELS.changed, h)
+        return () => { ipcRenderer.removeListener(DICTATION_CHANNELS.changed, h) }
+      },
+    },
+  } : {}),
   transcribeAudio: (req: { audioBase64: string; mime?: string; modelId?: string; backend?: 'local' | 'cloud'; language?: string; timestamps?: boolean }): Promise<string | { text: string; segments?: Array<{ start: number; end: number; text: string }> }> =>
     ipcRenderer.invoke('asr:transcribe', req),
   // 按路径转写:几十 MB 的视频音轨不该走 base64 过 IPC,主进程直接读盘。
@@ -574,7 +593,17 @@ const api = {
   /** Space「添加到桌面」:双击快捷方式 = 这个 Space 开在自己的独立窗口里(spaceShortcut.ts)。iconPng = 渲染层画好的 PNG data URL。 */
   addSpaceToDesktop: (input: { id: string; name: string; fallbackName?: string; iconPng?: string }): Promise<{ ok: true; path: string } | { ok: false; code: string; detail?: string }> =>
     ipcRenderer.invoke('spaces:addToDesktop', input),
-  openMini: (opts?: import('../shared/miniPanel').MiniOpenOptions): void => ipcRenderer.send('window:openMini', opts),
+  /** 开 / 叫出一扇 Mini(同一实体复用、满了不开):结果里 ok:false + reason:'limit' 时调用方负责提示用户。 */
+  openMini: (opts?: import('../shared/miniPanel').MiniOpenOptions): Promise<import('../shared/miniPanel').MiniOpenResult | undefined> =>
+    ipcRenderer.invoke('window:openMini', opts),
+  /** Mini 窗报自己现在显示的实体(换了 Space / 会话之后),主进程据此认「同一个再开」。 */
+  miniEntity: (target: import('../shared/miniPanel').MiniOpenOptions): void => ipcRenderer.send('window:miniEntity', target),
+  /** 同一实体被再开一次:这扇被叫到前面,轻跳一下。 */
+  onMiniNudge: (cb: () => void): (() => void) => {
+    const listener = (): void => cb()
+    ipcRenderer.on('window:miniNudge', listener)
+    return () => ipcRenderer.removeListener('window:miniNudge', listener)
+  },
   openFloatingPanel: (opts: import('../shared/floatingPanel').FloatingPanelOpenOptions): Promise<{ id: string } | undefined> =>
     ipcRenderer.invoke('window:openFloating', opts),
   floatingReady: (id: string): Promise<import('../shared/floatingPanel').FloatingPanelOpenOptions | undefined> =>

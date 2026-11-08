@@ -1,0 +1,16 @@
+/* 拒绝 / 遗忘时的「为什么」(FeedbackReasons.tsx):原地换掉动作行。
+   药丸照 .t2-taskcard-actions 的样子另写一份 —— 记忆面板里不一定有 chat2.css。没有底色、描边以外的装饰,不加阴影。 */
+.fr-prompt { display: flex; flex-direction: column; gap: 6px; min-width: 0; margin-top: 2px; }
+.fr-q { color: var(--text-muted); font-size: var(--ui-font-meta, 12px); }
+.fr-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.fr-chips > button {
+  border: var(--border-width, 1px) solid var(--border); border-radius: var(--radius-pill, 999px); background: transparent; color: var(--text);
+  font-family: var(--font-ui); font-size: var(--ui-font-meta, 12px); line-height: 1.4; padding: 4px 11px; cursor: pointer;
+  transition: background var(--duration-fast, .15s);
+}
+.fr-chips > button:hover { background: var(--overlay-light, rgba(127,127,127,.1)); }
+.fr-chips > button.fr-plain { border-color: transparent; color: var(--text-muted); padding-inline: 6px; }
+.fr-chips > button.fr-plain:hover { background: transparent; color: var(--text); }
+.fr-chips > button:disabled { opacity: .45; cursor: progress; }
+.fr-share { display: flex; align-items: flex-start; gap: 6px; color: var(--text-muted); font-size: var(--ui-font-caption, 11px); line-height: 1.5; cursor: pointer; }
+.fr-share > input { flex: none; margin: 2px 0 0; }

@@ -18,7 +18,7 @@ import { isPdfLinkInner, parseBlockSubpath, parseMediaLinkInner, splitLinkInner 
 import { toAssetUrl } from '@amadeus-shared/assets'
 import { buildBlockString } from './mathLivePreview'
 import { editorFocused } from './editorFocus'
-import { attachSourceButton, revealSource } from './sourceToggle'
+import { attachOpenButton, attachSourceButton, revealSource } from './sourceToggle'
 import { attachResizeHandle } from '../../lib/imageResize'
 import { armImageDrag } from './imageDrag'
 import { watchBrokenImage } from './brokenMedia'
@@ -37,6 +37,21 @@ function fileIconEl(kind: keyof typeof FILE_ICON): SVGSVGElement {
 }
 /** 与 prosemirror-keymap / unified/keyboard 判「Mod 是 Cmd 还是 Ctrl」同一口径;mac 上 Ctrl+点击是右键手势。 */
 export const IS_MAC_PLATFORM = typeof navigator !== 'undefined' && /Mac|iP(hone|[oa]d)/.test(navigator.platform)
+
+/** 小图门槛(显示宽度,px):夹在字里的图标 / 缩略图只留一颗缩小版 `</>`,两颗键比图还宽时会压到左边的字(11-07 用户选 5A)。 */
+const TINY_IMG_PX = 80
+/** 按图片**实际显示宽度**打 `amx-img-tiny`(改 `|宽度`、拖把手、换图都会变,所以盯尺寸而不是只看 load)。加载失败的不算。 */
+function watchTinyImage(wrap: HTMLElement, img: HTMLImageElement): void {
+  const mark = (): void => {
+    const w = img.getBoundingClientRect().width
+    wrap.classList.toggle('amx-img-tiny', img.naturalWidth > 0 && w > 0 && w < TINY_IMG_PX)
+  }
+  img.addEventListener('load', mark)
+  const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(mark) : null
+  ro?.observe(img)
+  // widget 销毁时由装饰的 destroy 调(见图片 widget 的 spec)
+  ;(wrap as HTMLElement & { __tinyStop?: () => void }).__tinyStop = () => { ro?.disconnect(); img.removeEventListener('load', mark) }
+}
 
 /** 打开双链的回调:newTab = ⌘/Ctrl+点击、中键(L-11),或「在新标签页打开光标处链接」命令。 */
 export type WikiOpen = (name: string, opts?: { newTab?: boolean }) => void
@@ -145,6 +160,7 @@ function buildDecorations(
   onOpen: WikiOpen,
   isResolved: (name: string) => boolean,
   iconOf?: (name: string) => string | undefined,
+  canOpen: () => boolean = () => true,
 ): DecorationSet {
   const focus = editorFocused(state)
   const sourceFrom = wikiKey.getState(state)?.sourceFrom ?? null
@@ -263,6 +279,9 @@ function buildDecorations(
                 view.dispatch(tr)
                 view.focus()
               }) // 悬停 `</>` → 显式进入 `![[…]]` 源码
+              // 悬停「打开」→ 应用内图片视图(⌘/Ctrl+点击新标签页);须挂在 `</>` 之后,见 attachOpenButton。
+              if (canOpen()) attachOpenButton(wrap, view, (newTab) => onOpen(img.name, newTab ? { newTab: true } : undefined))
+              watchTinyImage(wrap, el)
               return wrap
             },
             // ⚠️ key **不带**选中位:同 key 的 widget DOM 会被 PM 复用,带上 picked 就等于
@@ -272,7 +291,10 @@ function buildDecorations(
             // 选中态改由 syncPicked 在 view.update 里就地打/摘属性,DOM 全程同一个节点。
             // key 也不带位置(P-04):带 from 的话上方打一个字,下游每张图都换 DOM、重新加载;standalone 进 key ——
             // 它决定点击选段落还是选源码,闭包里捕获的是构建那一刻的值。
-            { side: -1, ignoreSelection: true, key: `i:${standalone ? 1 : 0}:${m![0]}` },
+            {
+              side: -1, ignoreSelection: true, key: `i:${standalone ? 1 : 0}:${m![0]}`,
+              destroy: (node) => (node as HTMLElement & { __tinyStop?: () => void }).__tinyStop?.(),
+            },
           ),
         )
         continue
@@ -483,6 +505,8 @@ export function wikilinkPlugin(
   onOpen: WikiOpen,
   isResolved: (name: string) => boolean = () => true,
   iconOf?: (name: string) => string | undefined,
+  /** onOpen 真能打开东西吗;false = 图片不挂「打开」键(无 vault 的记录正文传的是 noop)。 */
+  canOpen: () => boolean = () => true,
 ) {
   return $prose(
     () =>
@@ -522,7 +546,7 @@ export function wikilinkPlugin(
             view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, pos)).scrollIntoView())
             return true
           },
-          decorations: (state) => buildDecorations(state, onOpen, isResolved, iconOf),
+          decorations: (state) => buildDecorations(state, onOpen, isResolved, iconOf, canOpen),
           // 编辑中的双链源码右键 = 同一份文件菜单(渲染态部件自己派,见 widget 里的 contextmenu);已在源码态,不给「编辑」。
           handleDOMEvents: {
             contextmenu: (_view, e) => {

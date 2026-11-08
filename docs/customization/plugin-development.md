@@ -106,7 +106,7 @@ ctx.ui.mountWebCard(el, { name, status, address, note, thumbnail, actions, menu 
 
 插件内的 Space 可以声明专用 Mini 视图，只提供当前能力的快捷操作；宿主的“在主面板显示”会携带当前实体参数。未适配的 Space 不出现在 Mini 中，随插件禁用的适配会自动撤下。见 [Mini Panel 开发](./mini-panel-development.md)。
 
-插件也可以不创建完整 Space，直接用 `ctx.openMiniPanel?.(viewId, options)` 打开已注册的紧凑视图；`mainViewId` 指定“在主面板显示”的去向。需要宽屏独立工具页时用 `ctx.openFloatingPanel?.(viewId, options)`。宿主自动添加插件命名空间并负责窗口生命周期。见 [Floating Panel 开发](./floating-panel-development.md)。
+插件也可以不创建完整 Space，直接用 `ctx.openMiniPanel?.(viewId, options)` 打开已注册的紧凑视图；`mainViewId` 指定“在主面板显示”的去向。2.13.8 起桌面能同时开几扇 Mini：同一个 `viewId` 再开是叫出已开的那扇，想让不同内容各占一扇就传稳定的 `key`；满 6 扇时宿主自己提示用户，见 [Mini Panel 开发](./mini-panel-development.md)「多开」。需要宽屏独立工具页时用 `ctx.openFloatingPanel?.(viewId, options)`。宿主自动添加插件命名空间并负责窗口生命周期。见 [Floating Panel 开发](./floating-panel-development.md)。
 
 View 内需要输入框和模型选择时，使用 `ctx.ui.mountChatBox`；它复用宿主组件，并由插件显式处理提交。不要模型选择时传 `modelPicker: false`；底排工具栏用 `toolbar`，`#` 这类补全用 `suggest`（2026-11-02 起可以传一组，例如 `#` 与 `[[` 各一份，传之前先看 `ctx.ui.chatBoxCapabilities` 里有没有 `'suggestMany'`；输入框在窗口下半部分时候选朝上开），在光标处插入文字用 `insertText`。见 [可复用 UI 组件](./ui-components.md)。
 

@@ -72,7 +72,7 @@ import { listApprovals, decideApproval, getApproval } from '../services/pendingA
 import { APPROVAL_LOCAL_ONLY_BODY } from '../services/approvals.js';
 import { museLibraryDir } from '../services/muse.js';
 import { recordRemoteCreated } from '../services/remoteCreated.js'; // P1-K2
-import { appendMuseFeedback, applyOnboardingIntro, countObservedHits, decideMuseCard, getMuseCard, listMuseCards, recordMessageFeedback } from '../services/museCards.js';
+import { appendMuseFeedback, applyOnboardingIntro, countObservedHits, decideMuseCard, getMuseCard, listMuseCards, museDismissReason, recordMessageFeedback } from '../services/museCards.js';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { ledger } from '../services/telemetryLedger.js';
@@ -766,6 +766,8 @@ router.post('/agent/special/muse/cards/:id/decide', authMiddleware, async (req: 
       index: typeof b.index === 'number' ? b.index : undefined,
       expected: typeof b.expected === 'string' ? b.expected : undefined,
       remote: !!parseRemoteOrigin(req.headers),
+      // 拒绝理由(帮助改进 P3):只是一个枚举,手机上点的也收;认不得的当没给
+      reason: b.action === 'dismiss' ? museDismissReason(b.reason) : undefined,
     });
     if (!r.ok) return res.status(r.status).json({ error: r.error, detail: r.detail });
     if (r.card.kind === 'settings' || r.card.kind === 'intro') kickMuse(); // 心跳 / 作息变了:巡检节奏下一轮就跟上

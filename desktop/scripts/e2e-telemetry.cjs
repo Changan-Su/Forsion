@@ -1,17 +1,22 @@
 /**
  * 帮助改进 Forsion(匿名遥测)端到端,契约 v2:真 Electron(隔离 home)× 本地构建并签名的 Forsion Extend × 本地收件桩(兼商店夹具)。
- * 隔离 home 预置一份假登录(auth.json:cloudUrl = 收件桩、假 token):Extend 11-05 起没登录一条都不发。
- *   ① 首启引导四屏(开始 / 外观 / 关于你 / 团队):开始那屏「帮助改进」那行登录后自动弹详情 = 看过告知、开关开 → 走完
+ * 隔离 home 预置一份假登录(auth.json:cloudUrl = 收件桩、JWT 形状的假 token):Extend 11-05 起没登录一条都不发。
+ *   ① 首启引导四屏(开始 / 外观 / 关于你 / 团队):开始那屏「帮助改进」那行(StartScreen 的 ImproveRow)登录后开关开、
+ *      详情不自己弹,这一行进了可视区就记看过告知(11-07)→ 走完
  *   ② ⌘P 快速查找打开、Esc 关 → app_counts searchOpen / searchCloseEmpty + command_use quick-find / hotkey
  *   ③ 商店装一个夹具条目(安装信息接口回 404)→ plugin_install { id: 商店条目 UUID, stage: resolve, outcome: error, errorClass: http }
  *   ④ 渲染层抛错(带主目录、引号、密钥样式)→ crash 不带原文
  *   ⑤ 宿主 → Extend 这一侧(FORSION_TELEMETRY_TRACE 旁路,main.ts):上面这些都交出去了、形状对
  *   ⑥ Extend 第一跳(启动后 60 s)→ 收件桩:onboarding / plugin_install / crash 到了,和宿主交出的逐字段一致;请求里没有凭据、原文
  *   ⑦ 退出:before-quit 把本小时的计数交给 Extend、落进它的 queue.jsonl → 同一个 home 再起:第一跳带上 app_counts / command_use + startup
- * 负对照:NEG=1 不带 FORSION_TELEMETRY=force(= 开发版)→ 宿主照样交出(旁路里有),收件桩一批都收不到、Extend 不落队列。
+ * 负对照(都要实跑):
+ *   NEG=1         不带 FORSION_TELEMETRY=force(= 开发版)→ 宿主照样交出(旁路里有),收件桩一批都收不到、Extend 不落队列。
+ *   NEG=signedout 从头到尾不登录(带 force):引导里那一行开关灰着也是关、写「登录后才能开」、详情不弹、Extend 不记看过告知;
+ *                 之后把告知直接记成看过、只留「没登录」这一道闸 → 收件桩一批都收不到、Extend 不落队列。
  *
- *   EXTEND=<Forsion-Extend 检出(遥测 v2,已 build + sign)> [OUT=<截图目录>] [NEG=1] npm run e2e:telemetry
- *   先在 DESK 里 npx electron-vite build;跑的时候占 GUI 锁(devlock.cjs run --vehicle=e2e)。整轮约 3 分钟(Extend 两次第一跳各 60 s)。
+ *   EXTEND=<Forsion-Extend 检出(遥测 v2,已 build + sign)> [OUT=<截图目录>] [NEG=1|signedout] npm run e2e:telemetry
+ *   先在 DESK 里 npx electron-vite build;跑的时候占 GUI 锁(node ../../.claude/hooks/devlock.cjs run --vehicle=e2e -- npm run e2e:telemetry)。
+ *   整轮约 3 分钟(Extend 两次第一跳各 60 s)。
  */
 const fs = require('fs')
 const os = require('os')
@@ -21,8 +26,11 @@ const assert = require('assert/strict')
 const DESK = process.env.DESK || path.resolve(__dirname, '..')
 const EXTEND = process.env.EXTEND
 const OUT = process.env.OUT
-const NEG = process.env.NEG === '1'
+const NEG = process.env.NEG || ''
 if (!EXTEND) { console.error('need EXTEND=<Forsion-Extend checkout, built and signed>'); process.exit(2) }
+if (!['', '1', 'signedout'].includes(NEG)) { console.error('NEG must be 1 or signedout'); process.exit(2) }
+const DEV_BUILD = NEG === '1'
+const SIGN_IN = NEG !== 'signedout'
 const electron = require(path.join(DESK, 'scripts/lib/launch-electron.cjs'))
 const { startStubEngine } = require(path.join(DESK, 'scripts/lib/stub-engine.cjs'))
 
@@ -30,7 +38,12 @@ const { startStubEngine } = require(path.join(DESK, 'scripts/lib/stub-engine.cjs
 const ITEM = { id: '7d3f0c52-6a41-4c8e-9f0b-2e5d8a1c4b67', name: 'Telemetry Fixture', type: 'amadeus-plugin', installSlug: 'telemetry-fixture', source: 'github',
   latestVersion: '1.0.0', author: 'Fixture', summary: 'Telemetry e2e fixture', downloads: 0, tags: [] }
 
-/** 收件桩:POST /api/telemetry/batch 记下请求头与请求体;商店列表 / 详情给夹具,安装信息 404;别的路径 404。 */
+/** JWT 形状的假 token:账号核心按 payload.userId 认账号,不是 JWT 形状就当没有账号(同 extend-seam.e2e)。 */
+const b64 = (o) => Buffer.from(JSON.stringify(o)).toString('base64url')
+const TOKEN = `${b64({ alg: 'HS256', typ: 'JWT' })}.${b64({ userId: 'e2e-telemetry-user', username: 'e2e_user', iat: Math.floor(Date.now() / 1000) })}.e2e`
+
+/** 收件桩(兼假云端):POST /api/telemetry/batch 记下请求头与请求体;带 token 的 whoami 回一个用户(401/403 会被当成失效转登出);
+ *  商店列表 / 详情给夹具,安装信息 404;别的路径 404。 */
 function startSink() {
   const batches = []
   const server = http.createServer((req, res) => {
@@ -40,12 +53,17 @@ function startSink() {
       const u = new URL(req.url, 'http://sink')
       const send = (status, obj) => res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(obj))
       if (req.method === 'POST' && u.pathname === '/api/telemetry/batch') { batches.push({ headers: req.headers, body: JSON.parse(body) }); return res.writeHead(204).end() }
+      if (req.method === 'GET' && u.pathname === '/api/brain/users/me' && /^Bearer \S+/.test(req.headers.authorization || '')) {
+        return send(200, { id: 'e2e-telemetry-user', username: 'e2e_user', role: 'USER', nickname: 'E2E', avatar: null, email: null, emailVerified: false, phone: null, phoneVerified: false, membershipTier: 'free' })
+      }
       if (u.pathname === '/api/market/items') return send(200, { items: !u.searchParams.get('type') || u.searchParams.get('type') === ITEM.type ? [ITEM] : [] })
       if (u.pathname === `/api/market/items/${ITEM.id}`) return send(200, { ...ITEM, readme: '# Fixture' })
       send(404, {})
     })
   })
-  return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve({ url: `http://127.0.0.1:${server.address().port}`, batches, close: () => server.close() })))
+  return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve({
+    url: `http://127.0.0.1:${server.address().port}`, batches, close: () => { server.closeAllConnections(); server.close() },
+  })))
 }
 
 /** 按 package.json files 白名单把 Extend 包拷进隔离 home 的 plugins/forsion-extend(同用户 dev 的装法)。 */
@@ -68,7 +86,7 @@ async function main() {
   const sink = await startSink()
   const trace = path.join(home, 'telemetry-trace.jsonl')
   const queue = path.join(home, 'telemetry', 'queue.jsonl')
-  fs.writeFileSync(path.join(home, 'auth.json'), JSON.stringify({ cloudUrl: sink.url, token: 'e2e-telemetry-fake-token' }), { mode: 0o600 })
+  if (SIGN_IN) fs.writeFileSync(path.join(home, 'auth.json'), JSON.stringify({ cloudUrl: sink.url, token: TOKEN }), { mode: 0o600 })
   // 团队那屏读 / 写 /agent/special/config、写第一次见面(muse/intro);桩引擎缺省没有这几条 → 那屏卡住
   const specialConfig = {
     historian: { enabled: true, modelId: '', everyRounds: 7, firstRoundTrigger: true, autoEmoji: false, mode: 'independent', prompt: '', harnessCandidates: true },
@@ -83,24 +101,56 @@ async function main() {
   try {
     const launch = () => electron.launch({ args: [`--user-data-dir=${path.join(home, 'userdata')}`, '--lang=zh-CN', DESK], cwd: DESK,
       env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: stub.url, TANGU_CLOUD_URL: sink.url, TANGU_HARNESS_QUIET: '',
-        PI_CU_SOCKET_PATH: path.join(home, 'bridge.sock'), FORSION_TELEMETRY: NEG ? '' : 'force', FORSION_TELEMETRY_TRACE: trace }, timeout: 45000 })
+        PI_CU_SOCKET_PATH: path.join(home, 'no-helper.sock'), PI_COMPUTER_USE_WINDOWS_HELPER_PATH: path.join(home, 'no-helper.exe'),
+        FORSION_TELEMETRY: DEV_BUILD ? '' : 'force', FORSION_TELEMETRY_TRACE: trace }, timeout: 45000 })
     app = await launch()
     const win = await app.firstWindow()
     win.setDefaultTimeout(20000)
     await win.waitForSelector('.ob-flow')
     await win.waitForFunction(() => !document.getElementById('tangu-splash'), null, { timeout: 30000 })
     await app.evaluate(({ BrowserWindow }) => { const b = BrowserWindow.getAllWindows().find((x) => x.isVisible()); b.setContentSize(1280, 800) })
+    // 团队屏「开始使用」之后那一下请辅助功能:换成只记账的桩,不弹系统设置(同首启台架;等界面出来再换,主进程已注册过自己的)
+    await app.evaluate(({ ipcMain }) => {
+      ipcMain.removeHandler('permissions:request')
+      ipcMain.handle('permissions:request', () => ({ platform: process.platform, appName: 'Forsion', computerUseAvailable: true, helperInstalled: false, helperRunning: false,
+        permissions: { computerAccessibility: 'unknown', computerScreen: 'unknown', microphone: 'not-determined', camera: 'not-determined', screen: 'not-determined' } }))
+    })
+    const telemetryView = () => win.evaluate(() => window.tangu.cloudInvoke('telemetry:get'))
+    /** telemetry:set 是异步落盘的:轮询 telemetry:get 直到满足(最多 10 s)。 */
+    const viewUntil = async (pred, what) => {
+      const end = Date.now() + 10_000
+      let v
+      while (Date.now() < end) { v = await telemetryView(); if (pred(v)) return v; await win.waitForTimeout(200) }
+      throw new Error(`${what}: ${JSON.stringify(v)}`)
+    }
 
     // ① 引导四屏
     const step = () => win.evaluate(() => document.querySelector('.ob-flow')?.getAttribute('data-step') ?? null)
     assert.equal(await step(), 'start', 'fresh install starts at the start screen')
-    const improve = win.locator('[data-ob-improve] [role="switch"]')
+    const row = win.locator('[data-ob-improve]')
+    const improve = row.locator('[role="switch"]')
     await improve.waitFor({ timeout: 20000 })
-    await win.waitForFunction(() => document.querySelector('[data-ob-improve] [role="switch"]')?.getAttribute('aria-checked') === 'true', null, { timeout: 20000 })
-    // 登录了、没看过告知:这一行露出来就记 noticeSeen,详情不自动弹(11-07);后面能发出去就证明记上了
-    await win.waitForTimeout(800)
-    assert.equal(await win.locator('.ob3-pop').count(), 0, 'help-improve details do not open on their own')
-    await shot(win, 'onboarding-start-improve')
+    if (SIGN_IN) {
+      await win.waitForFunction(() => document.querySelector('[data-ob-improve] [role="switch"]')?.getAttribute('aria-checked') === 'true', null, { timeout: 20000 })
+      // 登录了、没看过告知:这一行露出来就记 noticeSeen,详情不自动弹(11-07);后面能发出去就证明记上了
+      await win.waitForTimeout(800)
+      assert.equal(await win.locator('.ob3-pop').count(), 0, 'help-improve details do not open on their own')
+      await shot(win, 'onboarding-start-improve')
+    } else {
+      // 没登录:开关灰着也是关、写「登录后才能开」、详情不弹、不记看过告知
+      await win.waitForTimeout(800) // 读 telemetry:get 是异步的:给它一个机会再断言
+      assert.equal(await improve.getAttribute('aria-checked'), 'false', 'signed out: switch off')
+      assert.ok(await improve.isDisabled(), 'signed out: switch disabled')
+      assert.ok((await row.innerText()).includes('登录后才能开'), 'signed out: says sign in first')
+      assert.equal(await win.locator('.ob3-pop').count(), 0, 'signed out: details not opened')
+      const v = await telemetryView()
+      assert.equal(v.signedIn, false, 'Extend: not signed in')
+      assert.equal(v.noticeSeen, false, 'Extend: signed out does not count as notice seen')
+      await shot(win, 'onboarding-start-signed-out')
+      // 只留「没登录」这一道闸:告知记成看过(开关缺省开)。不这样的话负对照分不出拦住发送的是登录还是告知。
+      await win.evaluate(() => window.tangu.cloudInvoke('telemetry:set', { noticeSeen: true }))
+      await viewUntil((x) => x.noticeSeen === true, 'signed out: notice marked seen')
+    }
     const seen = []
     for (let i = 0; i < 6; i++) {
       const s = await step()
@@ -145,7 +195,7 @@ async function main() {
     const onboarding = traced('onboarding')
     assert.equal(onboarding.length, 1, `one onboarding event: ${JSON.stringify(onboarding)}`)
     const ob = onboarding[0].props
-    assert.equal(ob.mode, 'full'); assert.equal(ob.outcome, 'finish'); assert.equal(ob.screens, 4); assert.equal(ob.backJumps, 0); assert.equal(ob.signedIn, true)
+    assert.equal(ob.mode, 'full'); assert.equal(ob.outcome, 'finish'); assert.equal(ob.screens, 4); assert.equal(ob.backJumps, 0); assert.equal(ob.signedIn, SIGN_IN)
     for (const k of ['msStart', 'msTheme', 'msYou', 'msTeam']) assert.ok(Number.isInteger(ob[k]) && ob[k] >= 0, `${k} = ${ob[k]}`)
     const inst = traced('plugin_install')
     assert.equal(inst.length, 1, `one plugin_install: ${JSON.stringify(inst)}`)
@@ -153,7 +203,7 @@ async function main() {
     const crash = traced('crash').find((e) => e.props.process === 'renderer')
     assert.ok(crash, 'renderer crash handed to Extend')
     const hostRaw = fs.readFileSync(trace, 'utf8')
-    assert.ok(!hostRaw.includes('e2e-telemetry-fake-token') && !hostRaw.includes(sink.url), 'no token / cloud url in host events')
+    assert.ok(!hostRaw.includes(TOKEN) && !hostRaw.includes('e2e-telemetry-user') && !hostRaw.includes(sink.url), 'no token / account / cloud url in host events')
     assert.ok(!hostRaw.includes('boom') && !hostRaw.includes('my title') && !hostRaw.includes('sk-abcdef'), 'host hands over stack frames only (no message head)')
     const features = traced('feature').map((e) => e.props.name === 'setting_change' ? `setting_change:${e.props.key}=${e.props.value}` : e.props.name)
     // 启动 / 跨窗同步不许冒出 setting_change(只有用户真改了才报)。唯一允许的一条:新装机团队那屏电脑历史预先开着,
@@ -162,15 +212,20 @@ async function main() {
     assert.ok(changes.every((f) => f === 'setting_change:computerHistory.enabled=on'), `only user-confirmed setting changes: ${JSON.stringify(changes)}`)
     console.log(`host → Extend (launch 1): ${JSON.stringify(readJsonl(trace).map((e) => e.event))}; features ${JSON.stringify(features)}`)
 
+    // 发送前先核闸:正向四道全开;两个负对照各只关一道(开发版 = 不是正式包;signedout = 没登录),其余都开着
+    const view = await telemetryView()
+    assert.deepEqual({ signedIn: view.signedIn, enabled: view.enabled, noticeSeen: view.noticeSeen, packaged: view.packaged, active: view.active },
+      { signedIn: SIGN_IN, enabled: true, noticeSeen: true, packaged: !DEV_BUILD, active: !NEG }, 'telemetry gates before sending')
+
     // ⑥ 等 Extend 第一跳(启动后 60 s)
     const deadline = Date.now() + 120_000
     while (!sink.batches.length && Date.now() < deadline) await win.waitForTimeout(2000)
     if (NEG) {
-      assert.equal(sink.batches.length, 0, 'dev build (no force) sends nothing')
-      assert.ok(!fs.existsSync(queue), 'dev build queues nothing')
+      assert.equal(sink.batches.length, 0, DEV_BUILD ? 'dev build (no force) sends nothing' : 'signed out sends nothing')
+      assert.ok(!fs.existsSync(queue), DEV_BUILD ? 'dev build queues nothing' : 'signed out queues nothing')
       await app.close(); app = null
       assert.ok(traced('app_counts').length >= 1, 'host still flushed its counts at quit (Extend drops them)')
-      console.log(`NEG ok: host handed over ${readJsonl(trace).length} events, sink got 0 batches, no queue file`)
+      console.log(`NEG=${NEG} ok: host handed over ${readJsonl(trace).length} events, sink got 0 batches, no queue file`)
       return
     }
     assert.ok(sink.batches.length >= 1, 'a batch reached the sink')
@@ -184,7 +239,7 @@ async function main() {
       }
       const raw = JSON.stringify(batches)
       assert.ok(!raw.includes(os.homedir()), 'home dir scrubbed')
-      assert.ok(!raw.includes('sk-abcdef') && !raw.includes('e2e-telemetry-fake-token'), 'no key / token')
+      assert.ok(!raw.includes('sk-abcdef') && !raw.includes(TOKEN) && !raw.includes('e2e-telemetry-user'), 'no key / token / account id')
       assert.ok(!raw.includes('my title') && !raw.includes('secret/notes') && !raw.includes('boom'), 'error text (message + stack head) not sent')
       return batches.flatMap((b) => b.body.events)
     }

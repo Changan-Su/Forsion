@@ -3,8 +3,9 @@ import { activeMainPanel, useWorkspace } from '@lcl/engine'
 import { useApp } from './appStore'
 
 /** evolution = 一次性跳到 Agent 详情「成长 › 进化」的令牌(对话里的工作笔记更新卡点「查看」);records 再往下落到具体那几条;
- *  git = 跳到项目详情的「Git」页(对话里的 Git 卡点「在项目详情中打开」)。 */
-export type DetailsSubject = ({ kind: 'project'; path: string } | { kind: 'agent'; slug: string }) & { human?: import('../services/humanCollaboration').HumanJump; evolution?: number; records?: import('../services/recordJump').RecordJump; git?: number }
+ *  git = 跳到项目详情的「Git」页(对话里的 Git 卡点「在项目详情中打开」);gitRepo = 落到哪个仓(ProjectRepoInfo.id,多仓 Git),不给 = 仓库清单 / 唯一那个仓;
+ *  gitSession = 卡片所在的会话:额外文件夹是按会话记的,换个同项目的会话读,清单里就没有那个仓了。 */
+export type DetailsSubject = ({ kind: 'project'; path: string } | { kind: 'agent'; slug: string }) & { human?: import('../services/humanCollaboration').HumanJump; evolution?: number; records?: import('../services/recordJump').RecordJump; git?: number; gitRepo?: string; gitSession?: string }
 
 /** 侧栏「查看详情」:右栏 Tangu 详情临时显示这个项目 / Agent,不切当前会话。
  *  `from` = 设下时右栏跟随的主会话;主会话一变(切会话 / 新对话 / 换到钉住别的会话的主标签)就清掉,右栏回到跟随。

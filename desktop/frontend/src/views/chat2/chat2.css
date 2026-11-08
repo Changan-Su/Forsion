@@ -1864,6 +1864,24 @@ html[data-chat-avatars='off'] .t2-username { display: none; }
 .t2-musefb { display: flex; align-items: center; gap: 12px; margin-top: 4px; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); }
 .t2-musefb button { border: none; background: transparent; padding: 0; color: inherit; font: inherit; cursor: pointer; }
 .t2-musefb button:hover { color: var(--text); }
+/* 插件卡点了「不感兴趣」:理由行(FeedbackReasons.tsx)挂在卡下面 */
+.t2-musecard-reasons { margin: 6px 0 4px; }
+/* Muse 卡片「不需要」的理由行(FeedbackReasons.tsx):原地换掉动作行。和记忆面板那份(components/feedbackReasons.css 的 .fr-*)同一个样子,
+   Tangu 包不能引宿主的新样式文件,所以这里另写一份。没有底色、描边以外的装饰,不加阴影。 */
+.t2-reason { display: flex; flex-direction: column; gap: 6px; min-width: 0; margin-top: 2px; }
+.t2-reason-q { color: var(--text-muted); font-size: var(--ui-font-meta, 12px); }
+.t2-reason-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.t2-reason-chips > button {
+  border: var(--border-width, 1px) solid var(--border); border-radius: var(--radius-pill, 999px); background: transparent; color: var(--text);
+  font-family: var(--font-ui); font-size: var(--ui-font-meta, 12px); line-height: 1.4; padding: 4px 11px; cursor: pointer;
+  transition: background var(--duration-fast, .15s);
+}
+.t2-reason-chips > button:hover { background: var(--overlay-light, rgba(127,127,127,.1)); }
+.t2-reason-chips > button.t2-reason-plain { border-color: transparent; color: var(--text-muted); padding-inline: 6px; }
+.t2-reason-chips > button.t2-reason-plain:hover { background: transparent; color: var(--text); }
+.t2-reason-chips > button:disabled { opacity: .45; cursor: progress; }
+.t2-reason-share { display: flex; align-items: flex-start; gap: 6px; color: var(--text-muted); font-size: var(--ui-font-caption, 11px); line-height: 1.5; cursor: pointer; }
+.t2-reason-share > input { flex: none; margin: 2px 0 0; }
 
 /* 编辑重发:提问原地变可改的气泡(EditBubble.tsx,方案 编辑重发分支与编辑框方案_2026-10-28 A)。同气泡底色 / 圆角 / 字号,
    宽度撑到提问最大宽、不随字缩;高 12 行后内部滚;不加描边、不加焦点框。放文件末尾:要压过上面 520px 断点里的 .t2-user-col。 */
@@ -1884,3 +1902,34 @@ html[data-chat-avatars='off'] .t2-username { display: none; }
   .t2-edit-key { display: none; } /* 窄栏 / 手机:没有键盘可提示,只留两颗按钮 */
 }
 .mb-shell .t2-edit-foot .t2-btn { min-height: 36px; padding-inline: 16px; }
+
+/* ── 长直线自动折叠(方案 docs/ToBeImproved/画布直线折叠方案_2026-11-07,C 目录卡) ──
+   卡面 = 回答卡(.t2cv-card);一行一问,悬停垫浅底(同菜单行),不画框。 */
+.t2cv-runfold { animation: t2cv-in var(--collapse-duration) var(--ease-calm) both; }
+.t2cv-index { padding: 8px 6px 6px; }
+.t2cv-index-h { display: flex; align-items: center; gap: 6px; padding: 0 8px 4px; font-size: var(--ui-font-caption, 11px); line-height: var(--ui-line-meta, 18px); color: var(--text-muted); }
+.t2cv-index-h > svg { flex: none; }
+.t2cv-index-h > b { font-weight: 500; }
+.t2cv-index-h > button, .t2cv-index-more {
+  border: 0; border-radius: var(--radius-pill, 999px); background: transparent; font: inherit; font-size: var(--ui-font-caption, 11px); color: var(--text-sec); cursor: pointer;
+}
+.t2cv-index-h > button { margin-left: auto; padding: 0 8px; }
+.t2cv-index-h > button:hover, .t2cv-index-more:hover { background: var(--overlay-light, rgba(0, 0, 0, 0.035)); color: var(--accent-ink); }
+.t2cv-index-row {
+  display: flex; align-items: baseline; gap: 8px; width: 100%; box-sizing: border-box; padding: 4px 8px; border: 0; border-radius: var(--radius-sm, 6px);
+  background: transparent; font: inherit; font-size: var(--ui-font-body, 13px); line-height: var(--ui-line-body, 18px); color: var(--text); text-align: left; cursor: pointer;
+}
+.t2cv-index-row > i { flex: none; min-width: 16px; font-style: normal; font-size: var(--ui-font-caption, 11px); color: var(--text-faint); text-align: right; font-variant-numeric: tabular-nums; }
+.t2cv-index-row > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.t2cv-index-row:hover { background: var(--overlay-light, rgba(0, 0, 0, 0.035)); }
+.t2cv-index-row:focus-visible, .t2cv-index-h > button:focus-visible, .t2cv-index-more:focus-visible { outline: 1px solid var(--accent-ink); outline-offset: -1px; }
+.t2cv-index-more { display: block; margin: 2px 0 0 26px; padding: 1px 8px; }
+/* 展开着的一段:「收起 N 轮」挂在原来目录卡的位置 = 第一张展开的卡上面那段连线正中(竖排 56 / 2,横排 72 / 2) */
+.t2cv-foldpill.t2cv-runclose {
+  position: absolute; left: 50%; top: -28px; z-index: 2; margin: 0; transform: translate(-50%, -50%);
+  display: inline-flex; align-items: center; gap: 5px; white-space: nowrap;
+}
+.t2cv[data-dir="h"] .t2cv-foldpill.t2cv-runclose { left: -36px; top: 24px; }
+@media (prefers-reduced-motion: reduce) {
+  .t2cv-runfold { animation: none; }
+}

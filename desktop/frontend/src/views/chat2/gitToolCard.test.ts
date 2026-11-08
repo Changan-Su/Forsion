@@ -5,7 +5,7 @@
  *   - 远端那行「用谁的账号」:Forsion Git 上组织的仓库写「<组织>组织」,个人仓库照旧写「你的 Forsion 账号」
  */
 import { describe, expect, it } from 'vitest'
-import { gitStatusSuperseded, onForsionSite, parseGitResult, isGitTool } from './GitToolCard'
+import { gitRepoInfo, gitRepoKey, gitStatusSuperseded, onForsionSite, parseGitResult, isGitTool, splitGitRuns } from './GitToolCard'
 import { describeTool } from '../../components/ToolGroup'
 import { remoteAuthText } from '../ProjectGitRemotes'
 import { translateFor } from '../../i18n'
@@ -57,5 +57,29 @@ describe('Git 卡', () => {
     expect(isGitTool({ name: 'run_bash' })).toBe(false)
     expect(describeTool({ id: 'c', name: 'git_commit', done: true, arguments: JSON.stringify({ message: 'feat: cards\n\nbody' }) })).toMatchObject({ verbKey: 'tool.verb.gitCommit', target: 'feat: cards' })
     expect(describeTool({ id: 'p', name: 'git_push', done: true, arguments: '{}' })).toMatchObject({ verbKey: 'tool.verb.gitPush', target: '' })
+  })
+  it('多仓:按仓切卡(结果的 repoInfo → 参数 repo → 项目自己);状态卡只被同一个仓后面的写动作顶掉', () => {
+    const ev = (id: string, name: string, repo?: string, info?: { id: string; name: string; label: string }) => ({
+      id, name, done: true, arguments: JSON.stringify(repo ? { repo } : {}), result: JSON.stringify({ action: name.slice(4), repo: true, ...(info ? { repoInfo: info } : {}) }),
+    })
+    const cham = { id: 'Project/cham', name: 'cham', label: 'Project/cham' }
+    const a1 = ev('a1', 'git_status', 'Project/cham', cham)
+    const a2 = ev('a2', 'git_commit', undefined, cham) // 没点名、结果里认出是同一个仓
+    const b1 = ev('b1', 'git_commit', 'Project/test')
+    const own = ev('o1', 'git_push')
+    expect(gitRepoKey(a2)).toBe('Project/cham')
+    expect(gitRepoKey(b1)).toBe('Project/test')
+    expect(gitRepoKey(own)).toBe('.')
+    expect(gitRepoInfo(a1)).toEqual(cham)
+    expect(gitRepoInfo(own)).toBeNull() // git_status 的 repo 是 true/false,不当仓的标识
+    expect(splitGitRuns([a1, a2, b1, own]).map((r) => r.map((e) => e.id))).toEqual([['a1', 'a2'], ['b1'], ['o1']])
+    expect(gitStatusSuperseded([a1], [a1, b1])).toBe(false) // 后面是别的仓的提交
+    expect(gitStatusSuperseded([a1], [a1, a2])).toBe(true)
+  })
+
+  it('git_publish 进卡,工具行写发布到哪个名字', () => {
+    expect(isGitTool({ name: 'git_publish' })).toBe(true)
+    expect(describeTool({ id: 'pb', name: 'git_publish', done: true, arguments: JSON.stringify({ repo: 'Project/test', name: 'demo' }) })).toMatchObject({ verbKey: 'tool.verb.gitPublish', target: 'demo' })
+    expect(translateFor('en', 'tool.verb.gitPublish')).toBe('Publish to Forsion Git')
   })
 })

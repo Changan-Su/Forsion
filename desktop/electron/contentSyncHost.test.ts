@@ -1,10 +1,10 @@
 import {afterEach,beforeEach,describe,expect,it,vi} from 'vitest'
 import {createHash} from 'node:crypto'
-import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,rmSync} from 'node:fs'
+import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,rmSync,existsSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 vi.mock('./amadeus/fs/vaultHandlers',()=>({withTextWriteLock:async(_p:string,fn:()=>Promise<void>)=>fn()}))
-import {setOfflineContentOwner,mergeSyncContent,withContentWriteLock,agentContentHooks} from './contentSyncHost'
+import {setOfflineContentOwner,mergeSyncContent,withContentWriteLock,agentContentHooks,contentSyncOwnership} from './contentSyncHost'
 import {createMemoryRepository} from '../../tangu-agent/src/services/memoryRepository'
 import {mergeTombstoneLists,parseTombstones,serializeTombstones} from '../../tangu-agent/src/contracts/agentSyncRules'
 import {cloudAccountScope,agentSyncDefault,setAgentSyncDefault} from '../../tangu-agent/src/services/cloudSyncAccount'
@@ -93,5 +93,86 @@ describe('agent files on the new sync use the same rules and memory repository a
   expect(await hooks.baseline('agents/christen/config.toml')).toEqual({seq:2,hash:'b'.repeat(64),pending:false})
   expect((await hooks.baseline('agents/christen/SOUL.md'))?.pending).toBe(true)
   expect(await agentContentHooks(home,()=>'https://cloud.test/api::two').baseline('agents/christen/MEMORY.md')).toBe(null)
+ })
+})
+
+describe('content sync ownership at the desktop host boundary', () => {
+ const a = 'http://127.0.0.1:9/api::a'
+ const b = 'http://127.0.0.1:9/api::b'
+ const gate = () => {
+  let release!: () => void
+  const wait = new Promise<void>(resolve => { release = resolve })
+  return { wait, release }
+ }
+
+ function ownership() {
+  let account = a
+  const host = {
+   accountId: () => account,
+   ensureBackend: async () => {},
+   backendStatus: () => ({ state: 'ready', url: 'http://127.0.0.1:9' }),
+   engineToken: () => 'local-fixture',
+   loadConfig: async () => ({ mode: 'managed' }),
+   dataDir: () => home,
+   stopSync: vi.fn(async () => {}),
+   restartSync: vi.fn(async () => {}),
+  }
+  const fetchFixture = vi.fn<typeof fetch>(async () => new Response('{}'))
+  vi.stubGlobal('fetch', fetchFixture)
+  return { host, fetchFixture, owner: contentSyncOwnership(host), switchAccount: () => { account = b } }
+ }
+
+ afterEach(() => vi.unstubAllGlobals())
+
+ it('stale managed claim waits for startup but cannot claim the replacement account', async () => {
+  const f = ownership(), startup = gate()
+  f.host.ensureBackend = () => startup.wait
+  const pending = f.owner.claim(true, a)
+  f.switchAccount()
+  startup.release()
+  await expect(pending).rejects.toThrow('account_changed')
+  expect(f.fetchFixture).not.toHaveBeenCalled()
+  expect(f.host.stopSync).not.toHaveBeenCalled()
+ })
+
+ it('stale external claim cannot write an offline ownership record after reading mode', async () => {
+  const f = ownership(), entered = gate(), resume = gate()
+  f.host.backendStatus = () => ({ state: 'stopped', url: '' })
+  f.host.loadConfig = async () => { entered.release(); await resume.wait; return { mode: 'external' } }
+  const pending = f.owner.claim(true, a)
+  await entered.wait
+  f.switchAccount()
+  resume.release()
+  await expect(pending).rejects.toThrow('account_changed')
+  expect(existsSync(join(home, 'agents/.cloudsync-default.json'))).toBe(false)
+  expect(f.host.stopSync).not.toHaveBeenCalled()
+ })
+
+ it('sends the captured account for both managed operations and checks it after the reply', async () => {
+  const f = ownership(), entered = gate(), resume = gate()
+  await f.owner.claim(true)
+  expect(JSON.parse(String(f.fetchFixture.mock.calls[0][1]?.body))).toEqual({ enabled: true, expectedAccount: a })
+  f.fetchFixture.mockImplementationOnce(async () => { entered.release(); await resume.wait; return new Response('{}') })
+  const pending = f.owner.changed(a)
+  await entered.wait
+  f.switchAccount()
+  resume.release()
+  await expect(pending).rejects.toThrow('account_changed')
+  expect(JSON.parse(String(f.fetchFixture.mock.calls[1][1]?.body))).toEqual({ enabled: true, expectedAccount: a })
+  await expect(f.owner.changed(a)).rejects.toThrow('account_changed')
+  expect(f.fetchFixture).toHaveBeenCalledTimes(2)
+ })
+
+ it('keeps external ownership local and compatible when the caller omits an expected account', async () => {
+  const f = ownership()
+  f.host.backendStatus = () => ({ state: 'stopped', url: '' })
+  f.host.loadConfig = async () => ({ mode: 'external' })
+  await f.owner.claim(true)
+  const scope = cloudAccountScope('http://127.0.0.1:9/api', 'a')
+  const before = JSON.parse(readFileSync(join(home, 'agents/.cloudsync-default.json'), 'utf8'))
+  expect(before.accounts[scope].owner).toBe('content')
+  await f.owner.claim(false, a)
+  expect(f.host.restartSync).toHaveBeenCalledOnce()
+  expect(f.fetchFixture).not.toHaveBeenCalled()
  })
 })

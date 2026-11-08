@@ -29,6 +29,7 @@ export const MAIN_MESSAGES = defineMainMessages({
   'main.crash.reload': { zh: '重新加载', en: 'Reload' },
   'main.crash.quit': { zh: '退出', en: 'Quit' },
   'main.download.done': { zh: '下载完成', en: 'Download complete' },
+  'main.mini.limit': { zh: '最多同时开 {n} 个 Mini 窗口，先关掉一个再开', en: 'Up to {n} Mini windows can be open at once. Close one first.' },
   'main.dialog.pickWorkdir': { zh: '选择 Agent 工作目录', en: "Choose the Agent's working folder" },
   'main.dialog.pickPaths': { zh: '添加文件或文件夹', en: 'Add files or folders' },
   'main.dialog.export': { zh: '导出', en: 'Export' },

@@ -164,6 +164,16 @@ describe('forsion_account web_pages', () => {
       '  - 坦克 — https://api.forsion.net/apps/changan/tank/ (slug tank, 3.0 MB, updated 2026-07-27) — disabled by a Forsion administrator',
       'Publish to an existing slug to update that page, or take one down, with publish_web_page.',
     ]);
+    // server 配了 forsion.app:每一行带 publicUrl,用它,不再拼 publicBase + /apps/(相对的 publicUrl 不认)
+    routes['GET /api/connect/apps'] = { status: 200, json: {
+      used: 2, limit: 5, handle: 'changan', publicBase: 'https://api.forsion.net', publicOrigin: 'https://forsion.app',
+      apps: [
+        { slug: 'book-club', name: 'Book club', total_bytes: 6300, updated_at: '2026-10-23T12:00:00.000Z', status: 'active', publicUrl: 'https://forsion.app/changan/book-club/' },
+        { slug: 'tank', name: 'Tank', total_bytes: 900, updated_at: '2026-07-27T16:04:04.008Z', status: 'active', publicUrl: '/apps/changan/tank/' },
+      ] } };
+    const lines = (await call('forsion_account', { section: 'web_pages' })).split('\n');
+    expect(lines[1]).toBe('  - Book club — https://forsion.app/changan/book-club/ (slug book-club, 7 KB, updated 2026-10-23)');
+    expect(lines[2]).toBe('  - Tank — https://api.forsion.net/apps/changan/tank/ (slug tank, 1 KB, updated 2026-07-27)');
     routes['GET /api/connect/apps'] = { status: 200, json: { apps: [], limit: 1, handle: null } };
     expect(await call('forsion_account', { section: 'web_pages' })).toBe("Published web pages: 0 of 1 allowed on the user's plan. None yet; publish one with publish_web_page.");
   });

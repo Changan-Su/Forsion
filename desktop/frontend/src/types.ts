@@ -7,7 +7,7 @@ import type { DesktopPermissionId, DesktopPermissionRequestOptions, DesktopPermi
 import type { ComputerHistoryApi } from '../../shared/computerHistory'
 export type { DesktopPermissionId, DesktopPermissionRequestOptions, DesktopPermissionsSnapshot, DesktopPermissionState } from '../../shared/desktopPermissions'
 // 核心插件化第 2b 步:与 Tangu 共用的数据形状搬进了契约(tangu-agent/src/contracts/clientTypes.ts),这里原样转出,宿主的 import 方不动。
-export type { ThinkingLevel, DefaultModelSlot, VisionMode, TanguDesktopConfig, AgentRunEvent, SubChatSeg, SubChat, SessionRecord, PendingApprovalInfo, HistorianActivityItem, AutomationActionSpec, AutomationWhere, MuseTriggerInfo, AgentScheduleEntry, TeamDef, NormalAgentDef, AgentConfig, ChannelKind, WorkspaceDescriptor, MessageRecord, ModelInfo, ModelsResponse, ProviderQuota, ProjectSettings, ProjectDocInfo, ProjectSkillInfo, ProjectPlanInfo, GitRemoteInfo, GitCommitInfo, GitChangeInfo, GitSummary, GitIdentity, ProjectContext, ProjectMemoryView, SkillInfo, SkillCatalogEntry, ToolsResponse, WorkspaceFileMeta, Attachment, DisplayFile, CtxInfo, ToolEvent, MsgSeg, ApprovalRequest, AnswerBy, ApprovalRemote, ApprovalReason, ApprovalPreviewI18n, InquiryRequest, SketchItem, TodoItem, TeamWork, LiveWait, UiMessage, BackendStatusInfo, StoredDesktopConfig, UnitInfo } from '../../../tangu-agent/src/contracts/clientTypes'
+export type { ThinkingLevel, DefaultModelSlot, VisionMode, TanguDesktopConfig, AgentRunEvent, SubChatSeg, SubChat, SessionRecord, PendingApprovalInfo, HistorianActivityItem, AutomationActionSpec, AutomationWhere, MuseTriggerInfo, AgentScheduleEntry, TeamDef, NormalAgentDef, AgentConfig, ChannelKind, WorkspaceDescriptor, MessageRecord, ModelInfo, ModelsResponse, ProviderQuota, ProjectSettings, ProjectDocInfo, ProjectSkillInfo, ProjectPlanInfo, GitRemoteInfo, GitCommitInfo, GitChangeInfo, GitSummary, GitIdentity, ProjectContext, ProjectRepoInfo, ProjectMemoryView, SkillInfo, SkillCatalogEntry, ToolsResponse, WorkspaceFileMeta, Attachment, DisplayFile, CtxInfo, ToolEvent, MsgSeg, ApprovalRequest, AnswerBy, ApprovalRemote, ApprovalReason, ApprovalPreviewI18n, InquiryRequest, SketchItem, TodoItem, TeamWork, LiveWait, UiMessage, BackendStatusInfo, StoredDesktopConfig, UnitInfo } from '../../../tangu-agent/src/contracts/clientTypes'
 export { THINKING_LEVELS, isHomeSession, SHOW_SYSTEM_PROMPT_KEY, isTeamImageAvatar, isIndependentOrbitConfig, CLOUD_WORKSPACE_KEY, ROOTLESS_WORKSPACE_KEY, DEFAULT_LOCAL_WORKSPACE_KEY, DEFAULT_CLOUD_PROJECT, cloudProjectKey, sessionWorkspaceKey, isProjectIconFile } from '../../../tangu-agent/src/contracts/clientTypes'
 import type { AgentScheduleEntry, AutomationActionSpec, AutomationWhere, BackendStatusInfo, MuseTriggerInfo, StoredDesktopConfig, UnitInfo } from '../../../tangu-agent/src/contracts/clientTypes'
 
@@ -627,7 +627,7 @@ declare global {
        *  只有 Extend 注册了 telemetry:get 才有这个键 —— 引导第 7 步「帮助改进」页签据此同步判断本机有没有这一页。 */
       telemetryReport?(kind: import('../../shared/telemetryKeys').RendererReportKind, props: Record<string, unknown>): void
       /** 提交反馈到 Forsion 反馈中心(会话日志 JSON 随附为附件;token 留主进程)。 */
-      submitFeedback?(input: { description: string; sessionLogJson?: string; sessionLogName?: string }): Promise<{ ok: boolean; id?: string | null; error?: string; attachmentSkipped?: boolean }>
+      submitFeedback?(input: { description: string; sessionLogJson?: string; sessionLogName?: string; expectedAccountId?: string }): Promise<{ ok: boolean; id?: string | null; error?: string; attachmentSkipped?: boolean }>
       appVersion?(): Promise<string>
       /** 应用内自动更新:检查 / 下载 / 重启安装(mac 的 download/install 为 no-op,改用 openUpdateInstaller)。 */
       getCorePluginUpdates?(): Promise<CorePluginUpdates>
@@ -780,7 +780,7 @@ declare global {
       connectorsConnect?(id: string, taken?: string[]): Promise<{ name: string; added: boolean }>
       /** 断开的最后一步:从 MCP 配置删掉这条(只删带连接器标记的)。 */
       connectorsRemove?(name: string): Promise<void>
-      connectStore?(): Promise<{ ok: boolean; detail?: string; base?: string; items?: Array<{ name: string; summary: string; handle: string; slug: string; url: string; updatedAt?: string }> }>
+      connectStore?(): Promise<{ ok: boolean; detail?: string; base?: string; items?: Array<{ name: string; summary: string; handle: string; slug: string; url: string; publicUrl?: string; updatedAt?: string }> }>
       /** 写回文本文件(工作区 .md 编辑):原子写;expectedMtimeMs 不符返回 conflict。 */
       writeHostFile?(filePath: string, content: string, expectedMtimeMs?: number, createNew?: boolean): Promise<{ ok?: boolean; conflict?: boolean; mtimeMs: number }>
       /** 本机工作区文件操作(host 模式)。 */
@@ -832,6 +832,14 @@ declare global {
       /** 桌面级共享语音转写:音频(base64)→ 文本。任意功能复用;主进程本地/自带-key,不经引擎。 */
       /** timestamps 不传 = 回纯文本(语音输入);传 true = 回 { text, segments }(视频转录要分段时间戳)。 */
       openVoiceInput?: import('../../shared/voiceInputStream').OpenVoiceInput
+      /** 全局语音输入的窄接口(官方「语音输入」插件用;macOS / Windows 桌面才有)。没有一条能往别的应用写字。 */
+      dictation?: {
+        state(): Promise<import('../../shared/dictation').DictationState>
+        attach(on: boolean): Promise<import('../../shared/dictation').DictationState>
+        setHotkey(hotkey: string): Promise<import('../../shared/dictation').DictationState>
+        allowAccessibility(): Promise<import('../../shared/dictation').DictationState>
+        onChange(cb: (s: import('../../shared/dictation').DictationState) => void): () => void
+      }
       transcribeAudio?(req: { audioBase64: string; mime?: string; modelId?: string; backend?: 'local' | 'cloud'; language?: string }): Promise<string>
       transcribeAudio?(req: { audioBase64: string; mime?: string; modelId?: string; backend?: 'local' | 'cloud'; language?: string; timestamps: true }): Promise<AsrTimedResult>
       /** 按路径转写(几十 MB 音轨不走 base64;主进程直接读盘)。 */
@@ -934,8 +942,11 @@ declare global {
       /** Space「添加到桌面」(仅桌面宿主):快捷方式双击后这个 Space 开在自己的独立窗口里,不露出主窗。 */
       addSpaceToDesktop?(input: { id: string; name: string; fallbackName?: string; iconPng?: string }): Promise<{ ok: true; path: string } | { ok: false; code: string; detail?: string }>
       cursorScreenPoint?(): { screenX: number; screenY: number }
-      /** 开/切换 mini 悬浮卡片。带 sessionId 时定向显示该正式会话,不另建临时会话。 */
-      openMini?(opts?: import('../../shared/miniPanel').MiniOpenOptions): void
+      /** 开 / 叫出一扇 Mini 悬浮卡片(2.13.8 起多开:同一实体再开 = 叫出那扇,duplicate 才另开;普通 Mini 满 6 扇不开,
+       *  结果 { ok: false, reason: 'limit' } 由调用方提示,用 openMiniWindow() 就带提示)。不带参数 = ⌘⇧M:开合最近用过的那扇。 */
+      openMini?(opts?: import('../../shared/miniPanel').MiniOpenOptions): Promise<import('../../shared/miniPanel').MiniOpenResult | undefined> | void
+      miniEntity?(target: import('../../shared/miniPanel').MiniOpenOptions): void
+      onMiniNudge?(cb: () => void): () => void
       /** Open/focus a native Floating Panel window. Undefined on Web/mobile. */
       openFloatingPanel?(opts: import('../../shared/floatingPanel').FloatingPanelOpenOptions): Promise<{ id: string } | undefined>
       floatingReady?(id: string): Promise<import('../../shared/floatingPanel').FloatingPanelOpenOptions | undefined>
