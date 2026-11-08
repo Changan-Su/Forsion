@@ -7,6 +7,7 @@
 // 跑:node ../../.claude/hooks/devlock.cjs run --vehicle=e2e --what="whats-new" --eta=3 -- node scripts/whats-new.check.cjs
 // 截图写到 OUT(缺省 /tmp/whats-new-check)。默认模式需要能上 forsion.net。
 // WHATS_NEW_COMBINED=1:仅用本地 IPC release fixture,验合并版本/官网旧缓存/离线/skip真实版本;不请求官网。
+// WHATS_NEW_SWITCH=1:检查默认宽度的关于页和更新弹窗都能实际点击下载换源。
 // WHATS_NEW_DESKTOP=/path/to/desktop 可对另一个已构建工作树验收。
 const fs = require('fs'); const os = require('os'); const path = require('path')
 const DESK = path.resolve(process.env.WHATS_NEW_DESKTOP || path.join(__dirname, '..'))
@@ -14,6 +15,41 @@ const electron = require('./lib/launch-electron.cjs')
 const OUT = process.env.OUT || path.join(os.tmpdir(), 'whats-new-check'); fs.mkdirSync(OUT, { recursive: true })
 const fails = []
 const ok = (cond, msg) => { console.log(`${cond ? '✓' : '✗'} ${msg}`); if (!cond) fails.push(msg) }
+
+async function checkSwitch(app, win) {
+  const { skipOnboarding } = require('./lib/skip-onboarding.cjs')
+  await win.evaluate(() => localStorage.setItem('tangu_locale', 'en'))
+  await win.reload()
+  await win.waitForSelector('#root')
+  if (!await skipOnboarding(win, 20000)) throw new Error('Main window did not leave onboarding')
+  await app.evaluate(({ ipcMain }) => {
+    globalThis.updateSwitchCalls = []
+    ipcMain.removeHandler('updater:switchSource')
+    ipcMain.handle('updater:switchSource', event => { globalThis.updateSwitchCalls.push(event.sender.id); return true })
+  })
+  const [about] = await Promise.all([
+    app.waitForEvent('window', { timeout: 15000 }),
+    win.evaluate(() => window.tangu.openFloatingPanel({ id: 'settings', title: 'Settings', builtin: 'settings', params: { tab: 'about' } })),
+  ])
+  await about.getByTestId('about-whats-new').waitFor()
+  await app.evaluate(({ BrowserWindow }) => {
+    const settings = BrowserWindow.getAllWindows().find(w => w.webContents.getURL().includes('window=floating'))
+    if (!settings) throw new Error('Settings BrowserWindow is missing')
+    settings.setContentSize(1024, 688)
+    for (const w of BrowserWindow.getAllWindows()) w.webContents.send('updater:status', {
+      phase: 'downloading', version: '99.0.0', source: 'website', transferred: 28 * 1048576,
+      total: 461841453, percent: 6, canSwitch: true,
+    })
+  })
+  const buttonName = 'Use GitHub instead'
+  await about.getByRole('button', { name: buttonName }).click({ timeout: 8000 })
+  await about.screenshot({ path: path.join(OUT, 'switch-about.png') })
+  await about.getByTestId('about-whats-new').click()
+  await win.locator('.wn-modal').getByRole('button', { name: buttonName }).click({ timeout: 8000 })
+  await win.screenshot({ path: path.join(OUT, 'switch-dialog.png') })
+  const calls = await app.evaluate(() => globalThis.updateSwitchCalls)
+  ok(calls.length === 2 && calls[0] !== calls[1], '关于和更新弹窗的真实按钮分别调用换源 IPC')
+}
 
 /** Local service fixture only: the real dialog, grouping and update actions stay mounted. */
 async function checkCombined(app, win) {
@@ -91,15 +127,18 @@ async function checkCombined(app, win) {
 }
 
 async function main() {
+  const switchCheck = process.env.WHATS_NEW_SWITCH === '1'
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-whatsnew-'))
   const app = await electron.launch({
     args: [`--user-data-dir=${path.join(home, 'userdata')}`, '--lang=zh-CN', DESK], cwd: DESK,
     env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: 'http://127.0.0.1:1', TANGU_HARNESS_QUIET: '1' },
   })
+  const fixtureProcess = app.process()
   try {
     const win = await app.firstWindow()
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1512, 950))
     await win.waitForSelector('#root', { timeout: 60_000 }); await win.waitForTimeout(2500)
+    if (switchCheck) { await checkSwitch(app, win); process.exitCode = fails.length ? 1 : 0; return }
     if (process.env.WHATS_NEW_COMBINED === '1') { await checkCombined(app, win); process.exitCode = fails.length ? 1 : 0; return }
     const skipOb = win.locator('text=跳过引导').first(); if (await skipOb.count().catch(() => 0)) await skipOb.click().catch(() => {})
     await win.waitForSelector('.dv-groupview', { timeout: 60_000 }); await win.waitForTimeout(1200)
@@ -167,7 +206,9 @@ async function main() {
     ok((await caption()) === '从 GitHub 下载 · 427 MB', `有新版:小字写来源和大小(${await caption()})`)
     await send({ phase: 'downloading', version: '9.9.8', releaseNotes: '- 演示', percent: 7, source: 'github', fallbackFrom: 'website', transferred: 31 * 1048576, total: 447947415, canSwitch: true })
     await win.waitForTimeout(300)
-    ok((await caption()) === '官网下不动，已改从 GitHub 重新下 · 31 MB / 427 MB换官网', `自动换源:小字 + 「换官网」(${await caption()})`)
+    ok((await caption()) === '官网下不动，已改从 GitHub 重新下 · 31 MB / 427 MB' &&
+      await win.locator('.wn-foot').getByRole('button', { name: '换官网', exact: true }).count() === 1,
+    `自动换源:小字 + 「换官网」(${await caption()})`)
     await win.screenshot({ path: path.join(OUT, '5-source-fallback.png') })
     await send({ phase: 'available', version: '9.9.8', releaseNotes: '- 演示', source: 'website', size: 509163663, opened: true })
     await win.waitForTimeout(300)
@@ -191,8 +232,24 @@ async function main() {
         await sw3.screenshot({ path: path.join(OUT, '6-settings-source.png') })
       }
     }
-  } finally { await app.close() }
+  } finally {
+    if (switchCheck) {
+      const { once } = require('node:events')
+      const exited = () => fixtureProcess.exitCode !== null || fixtureProcess.signalCode !== null
+      if (!exited()) {
+        const stop = once(fixtureProcess, 'exit')
+        await app.evaluate(({ app }) => { setImmediate(() => app.exit(0)) }).catch(() => {})
+        await Promise.race([stop, new Promise(resolve => setTimeout(resolve, 5000))])
+        if (!exited()) {
+          fixtureProcess.kill()
+          throw new Error('The isolated switch-button fixture did not exit')
+        }
+      }
+    } else await app.close()
+  }
   console.log(fails.length ? `\n✗ ${fails.length} 项失败` : `\n✓ 全部通过;截图在 ${OUT}`)
   process.exitCode = fails.length ? 1 : 0
 }
-main().catch((e) => { console.error(e); process.exit(1) })
+main().then(() => {
+  if (process.env.WHATS_NEW_SWITCH === '1') process.exit(process.exitCode ?? 0)
+}, e => { console.error(e); process.exit(1) })
