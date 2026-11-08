@@ -3,12 +3,12 @@
  *  卡片 fixed 贴在草稿块旁;时间格横竖都会滚,滚动 / 窗口变化时跟着草稿块重算,草稿块滚出可视区就先藏起来。 */
 import { useLayoutEffect, useState, type RefObject } from 'react'
 import { Check } from 'lucide-react'
-import { zoomOf, UI_MODE, useNativeChromeClaim } from '@lcl/engine'
+import { zoomOf, UI_MODE, UI_ZOOM_EVENT, useNativeChromeClaim } from '@lcl/engine'
 import { parseCalDate } from '@amadeus-shared/db/calDate'
 import { CalDateFields } from '../../amadeus/blocks/database/propertyTypes.builtins'
 import { pasteCalendarEvent, useCalendarClipboard } from './eventClipboard'
 import { calendarScope } from './eventActions'
-import { cardPos } from './EventCard'
+import { useCardPlacement, type Anchor } from './EventCard'
 import { draftValue, pickDraftDb } from './draft'
 import { eventTimeSummary, addMinutes, toLocalDate, wallDiffMin } from './dateUtils'
 import { useCalendarNav } from '../../amadeus/store/calendarNavStore'
@@ -27,8 +27,7 @@ registerMessages({
   'calside.hint': { zh: '标题在格子里直接打。Enter 保存，Esc 取消；没写标题不会新建。', en: 'Type the title right in the grid. Enter saves, Esc cancels; nothing is created without a title.' },
 })
 
-const W = 300
-const H = 300
+const W = 300 // 与 .amx-cal-draftcard 的 CSS 宽同步(横向翻面用;高度量真实尺寸)
 
 /** rootRef = 日历主区:卡片放不下时翻到草稿块左边,不盖右栏。 */
 export function DraftCard({ rootRef, onPasted }: { rootRef: RefObject<HTMLElement | null>; onPasted?: (key: string) => void }) {
@@ -40,7 +39,8 @@ export function DraftCard({ rootRef, onPasted }: { rootRef: RefObject<HTMLElemen
   const members = useCalendarMembers()
   const vault = usePageStore((s) => s.vaultRoot) ?? ''
   const byVault = useCalendarConfig((s) => s.byVault)
-  const [pos, setPos] = useState<{ left: number; top: number } | null>(null)
+  const [pos, setPos] = useState<{ at: Anchor; maxRight?: number } | null>(null)
+  const place = useCardPlacement(pos?.at ?? null, { w: W, maxRight: pos?.maxRight })
   const geom = draft ? `${draft.day}|${draft.endDay}|${draft.startMin}|${draft.endMin}` : ''
   const close = (): void => { if (!draft?.title.trim() || window.confirm(t('calside.discard'))) api?.cancel() }
   useNativeChromeClaim(mobile && draft ? { mode: 'page', title: t('calside.newEvent'), back: t('calside.cancel'), onBack: close } : null)
@@ -59,12 +59,16 @@ export function DraftCard({ rootRef, onPasted }: { rootRef: RefObject<HTMLElemen
       const port = host?.closest<HTMLElement>('.amx-cal-tscroll, .amx-cal-mscroll')?.getBoundingClientRect()
       const r = host?.getBoundingClientRect()
       if (!r || !port || r.bottom < port.top || r.top > port.bottom || r.right < port.left || r.left > port.right) { setPos(null); return }
-      setPos(cardPos({ left: r.left, top: r.top, right: r.right, bottom: r.bottom, zoom: zoomOf(host!) || 1 }, { w: W, h: H, maxRight: rootRef.current?.getBoundingClientRect().right }))
+      const at = { left: r.left, top: r.top, right: r.right, bottom: r.bottom, zoom: zoomOf(host!) || 1 }
+      const maxRight = rootRef.current?.getBoundingClientRect().right
+      // 同值不换对象:滚动时每帧都量,换了对象会白白重渲染
+      setPos((p) => p && p.maxRight === maxRight && (Object.keys(at) as Array<keyof Anchor>).every((k) => p.at[k] === at[k]) ? p : { at, maxRight })
     }
     measure()
     window.addEventListener('scroll', measure, true)
     window.addEventListener('resize', measure)
-    return () => { window.removeEventListener('scroll', measure, true); window.removeEventListener('resize', measure) }
+    window.addEventListener(UI_ZOOM_EVENT, measure) // 改端级 zoom 不发 resize,草稿块的视口位置却变了
+    return () => { window.removeEventListener('scroll', measure, true); window.removeEventListener('resize', measure); window.removeEventListener(UI_ZOOM_EVENT, measure) }
   }, [geom, rootRef])
 
   if (!draft || (!pos && !mobile)) return null
@@ -77,7 +81,7 @@ export function DraftCard({ rootRef, onPasted }: { rootRef: RefObject<HTMLElemen
   }
   const keep = (e: { preventDefault(): void }): void => e.preventDefault() // 点卡片不夺走格子里标题框的焦点
   return (
-    <section className={`amx-cal-cardwrap amx-cal-draftcard${mobile ? ' amx-cal-drawer' : ''}`} data-kb-rise={mobile ? 'bar' : undefined} style={mobile ? undefined : pos!} role="dialog" aria-modal="false" aria-label={t('calside.newEvent')} onMouseDown={mobile ? undefined : keep} onPointerDown={(e) => e.stopPropagation()}>
+    <section className={`amx-cal-cardwrap amx-cal-draftcard${mobile ? ' amx-cal-drawer' : ''}`} data-kb-rise={mobile ? 'bar' : undefined} ref={mobile ? undefined : place.ref} style={mobile ? undefined : place.style} role="dialog" aria-modal="false" aria-label={t('calside.newEvent')} onMouseDown={mobile ? undefined : keep} onPointerDown={(e) => e.stopPropagation()}>
       {mobile ? <>
         <button className="amx-cal-drawer-grab" aria-label={t('calside.cancel')} onClick={close}><span /></button>
         <input className="amx-cal-card-title" value={draft.title} placeholder={t('calside.newEvent')} aria-label={t('calside.newEvent')}

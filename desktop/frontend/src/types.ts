@@ -142,6 +142,24 @@ export interface MuseStatusInfo {
   /** Muse 自己定的休眠(set_next_wake,2026-09-24):心跳暂停到这个时刻;null = 醒着。旧引擎无此字段。 */
   sleepUntil?: number | null
   sleepReason?: string | null
+  /** 面板点了「叫醒」、那一轮还没起(2026-11-08)。旧引擎 / 远程来源没有这个字段 → 面板不出「叫醒」。 */
+  wakePending?: boolean
+  /** 上一次叫醒在等什么(userActive / locked,请求还留着)或为什么作废(budget / restartCap / noModel / disabled)。 */
+  wakeBlocked?: 'locked' | 'userActive' | 'budget' | 'restartCap' | 'disabled' | 'noModel' | null
+}
+
+/** GET /agent/special/muse/rounds 的一行(面板「最近几轮」,2026-11-08)。trigger = 引擎 cycleTrigger 的原串:
+ *  manual / heartbeat / rule:<id>+<id> / schedule:<名字>+<名字>;升级前跑的轮次没记 → null。 */
+export interface MuseRoundInfo {
+  runId: string
+  sessionId: string
+  status: string
+  trigger: string | null
+  startedAt: number
+  endedAt: number | null
+  files: number
+  todos: number
+  error: string | null
 }
 
 /** POST /agent/special/muse/triggers 的 upsert 入参(snake_case 对齐引擎校验)。
@@ -717,6 +735,13 @@ declare global {
       /** 用系统默认应用打开(预览不支持的类型)。 */
       openHostPath?(p: string): Promise<{ ok: boolean; error?: string }>
       /** Forsion Clip 手动安装(设置 › 浏览器):复制出包的扩展文件夹 / 打开 Chrome / Edge 扩展页;拖拽用 startHostDrag。 */
+      platformAccounts?: {
+        status(platform: string): Promise<unknown>
+        connect(platform: string, pluginId: string, pluginName: string): Promise<unknown>
+        paste(platform: string, pluginId: string, text: string): Promise<unknown>
+        disconnect(platform: string): Promise<unknown>
+        cookie(platform: string, pluginId: string, pluginName: string): Promise<string | null>
+      }
       clipExtension?: {
         /** update=false 只补缺不动已有副本;用户要(重新)装时传 true 换成随包版本(bundled)。 */
         prepare(update?: boolean): Promise<{ dir: string; version: string; bundled: string } | { error: string }>

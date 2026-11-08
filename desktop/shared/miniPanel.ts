@@ -14,6 +14,9 @@ export interface MiniOpenOptions {
   key?: string
   /** "Duplicate window": open another window for this target even when one is already open. */
   duplicate?: boolean
+  /** `false` = not always on top (and no edge folding: a folded card behind other windows is unreachable). Absent = on top,
+   *  as every Mini has been. Applies to the window this call opens or brings back; not part of the window's identity. */
+  pin?: false
 }
 /** What `window.tangu.openMini` resolves to (2.13.8+; older hosts resolve nothing). */
 export type MiniOpenResult =
@@ -43,7 +46,8 @@ export function normalizeMiniOpenOptions(raw: unknown): MiniOpenOptions | undefi
   const title = typeof r.title === 'string' ? r.title.trim().slice(0, 128) || undefined : undefined
   const key = typeof r.key === 'string' ? r.key.trim().slice(0, 256) || undefined : undefined
   const duplicate = r.duplicate === true || undefined
-  return sessionId || spaceId || view ? { sessionId, spaceId, params, view, mainView, title, key, duplicate } : undefined
+  const pin = r.pin === false ? false as const : undefined
+  return sessionId || spaceId || view ? { sessionId, spaceId, params, view, mainView, title, key, duplicate, ...(pin === false ? { pin } : {}) } : undefined
 }
 
 /** Which Mini window a target belongs to: Space + view + identity. The same key reopens = focus that window.

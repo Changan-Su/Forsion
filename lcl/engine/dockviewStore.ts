@@ -27,6 +27,7 @@ import { mainOpensBeside, noteBesideTarget } from './openBeside'
 import { useNav } from './navStore'
 import { ribbonActions } from './ribbonRegistry'
 import { engineTr } from './i18nSeam'
+import { floatPersistence, setFloatLayoutHost } from './floatPersistSeam'
 import { reducedMotion } from './spring'
 import {
   LAYOUT_KEY, saveLayout, loadLayout, clearLayout, saveNamedLayout, loadNamedLayout, listNamedLayouts, layoutIsBlank,
@@ -601,11 +602,24 @@ let restoredOwner: string | null | undefined
 /** 屏上这份布局是给哪个 Space 摆的(= 存盘时写进信封的归属)。null = 不知道(老存档,或还没有任何 Space 画像)。 */
 export const liveLayoutOwner = (): string | null => restoredOwner === undefined ? useWorkspace.getState().sideProfileKey : restoredOwner
 
+/** 这个 Space 开着的浮层卡(workspace.open 的 Space 作用域,经 floatPersistSeam 问)。归属不明不记;问挂了也不连累布局。 */
+function floatsOf(space: string | null): LayoutEnvelopeV4['floats'] {
+  if (!space) return undefined
+  try { const f = floatPersistence()?.collect(space); return f?.length ? f : undefined } catch (e) { console.error('[lcl] collect floats failed', e); return undefined }
+}
+/** 布局换上来以后把它记着的卡开回来,开进 `into` 那个 Space(缺省 = 信封记的归属;没有归属的布局不动卡)。 */
+function restoreFloats(blob: Pick<LayoutEnvelopeV4, 'space' | 'floats'>, into: string | null | undefined = blob.space): void {
+  if (!into) return
+  try { floatPersistence()?.restore(into, blob.floats) } catch (e) { console.error('[lcl] restore floats failed', e) }
+}
+
 function envelope(api: DockviewApi, state: Pick<WorkspaceState, 'leftVisible' | 'rightVisible' | 'stash' | 'sideProfileKey'>): LayoutEnvelopeV4 {
   const space = restoredOwner === undefined ? state.sideProfileKey : restoredOwner
+  const floats = floatsOf(space)
   return {
     version: 4,
     ...(space ? { space } : {}),
+    ...(floats ? { floats } : {}),
     dockview: withoutTransientPanels(api.toJSON(), Object.fromEntries(Object.values(extensions).filter((lease) => lease.previousId).map((lease) => [lease.id, lease.previousId!]))),
     sidebars: {
       // 真实 panel 是唯一真源；状态事件可能落后于 Dockview 的异步布局沉降。
@@ -652,6 +666,7 @@ export function scheduleWorkspaceSave(): void {
     useWorkspace.getState().saveCurrent()
   }, 100)
 }
+setFloatLayoutHost({ save: scheduleWorkspaceSave, owner: liveLayoutOwner }) // 浮层卡开 / 关 / 拖动 / 改参数 → 存布局(floatPersistSeam)
 
 /** 主区 leaf 的轻量快照,供顶栏内嵌标签条渲染(Obsidian 式单行标签)。 */
 export interface MainTab {
@@ -1298,9 +1313,12 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       try { snap = { env: envelope(api, get()), api, profile: get().sideProfileKey, owner: restoredOwner, stashActive: { ...get().stashActive } } } catch { snap = null }
     }
     dropLayoutUndo() // 旧快照(连同它的提示)先作废:自动重置不给撤销,手动重置换一份新的
+    // 用户亲手「恢复默认布局」:这个 Space 浮着的卡也是布局的一部分,一起收(快照里记着,撤销会开回来)。自动重置不碰卡
+    const floatOwner = opts?.undoable ? liveLayoutOwner() : null
     dismissExtensions()
     try { api.clear() } catch { /* ignore */ }
     clearLayout()
+    if (floatOwner) { try { floatPersistence()?.clear(floatOwner) } catch (e) { console.error('[lcl] clear floats failed', e) } }
     restoredOwner = undefined // 默认布局是按当前画像的 Space 建的,不再是启动时还原出来的那份
     useNav.getState().reset() // 布局重建,旧 leaf id 全失效
     lastMainGroupId = null // 组 id 同样会被新布局复用
@@ -1616,6 +1634,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   applyNamed(name) {
     const blob = loadNamedLayout(name)
     // 空白存档当没存过(调用方落到「照默认重建」):已经被写坏的 `space:<id>` 槽靠这条自己好回来,见 layoutIsBlank。
+    // 只剩浮层卡的(停靠的全关了)Dockview 图照样重建默认,卡照样开回来 —— 不然下一次存就把它们丢了
+    if (get().api && blob && layoutIsBlank(blob)) restoreFloats(blob, liveLayoutOwner() ?? blob.space)
     if (!get().api || !blob || layoutIsBlank(blob)) return false
     dropLayoutUndo() // 换了一整份布局(切 Space 走这里):之前的「恢复默认」快照作废
     return get().applyLayout(blob)
@@ -1649,6 +1669,9 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       // mainTabs 刷成终态(那时记下的栈底刚被上面的 reset 清掉),直接 refreshTabs 会判「无变化」不 set(探针实测)。
       set({ mainTabs: [] })
       get().refreshTabs()
+      // 这份布局记着的浮层卡(开着的不动),开进**现在**这个 Space:切 Space 时画像已先换好(= 目标);别的 Space 存的命名布局
+      // 套到这里,卡也跟着停靠的视图落在这里,不回到存它的那个 Space 藏着
+      restoreFloats(blob, liveLayoutOwner() ?? blob.space)
       return true
     } catch {
       return false // 损坏布局:调用方回退 resetLayout
@@ -1788,8 +1811,13 @@ function restoreLayout(api: DockviewApi): boolean {
       : api.panels.find((p) => panelType(p) === 'chat')
     useWorkspace.getState().setFocusedLeaf(focused)
     pinSides(api)
-    if (!api.panels.length) return false
+    if (!api.panels.length) {
+      // Dockview 图是空的(停靠的全关了,只剩浮层卡):照默认重建,但卡是这个 Space 的,照样开回来,别让下一次存丢掉
+      if (ownedHere) restoreFloats(layout)
+      return false
+    }
     restoredOwner = layout.space || null
+    restoreFloats(layout)
     return true
   } catch {
     return false

@@ -98,6 +98,25 @@ To ship a new version or change the Store details, select your item under Submis
 
 On the user side (desktop 2.13.8 and later), Store plugins **auto-update by default**: a new version downloads in the background and applies the next time Forsion starts. Users can turn this off for everything on the Updates page, or for one plugin on its page. Before a version is replaced, the desktop keeps the old one on the device (the 2 most recent per plugin, under `~/.forsion/.plugin-versions/`), so users can roll back in one click. Rolling back, or installing an older version from the Versions tab, pins the plugin at that version until the user chooses "Resume auto-update". **Rolling back only swaps your plugin's files; your data (work folder, `plugin-data`, settings) stays as it is.** When a new version changes a data format, make sure an older version can still read it (ignore unknown fields, never rewrite old data in place into a shape the old version cannot read), or write the new format to a new file. Core plugins (Extend, Calendar, Computer Use) follow the desktop version and are not affected.
 
+## Platform accounts and sign-ins (desktop 2.14.0+)
+
+Some content only loads for signed-in users (members-only, HD or rate-limited Bilibili videos). `ctx.app.platformAccounts` lets a plugin use **the account the user signed in to in the built-in browser**. Your plugin never stores the sign-in itself:
+
+```js
+const acc = ctx.app.platformAccounts            // missing on web, mobile and older hosts → show no account UI
+const st = await acc?.status('bilibili')        // { state: 'connected' | 'expired' | 'none', name? }
+await acc.connect('bilibili')                   // call only from a click: opens Bilibili's own sign-in page (QR code) and closes when done
+const cookie = await acc.cookie('bilibili')     // the Cookie header; null if not signed in or the user declined
+```
+
+- Only `bilibili` for now (`platforms()` lists what this host supports). The host owns the platform list; you cannot pass arbitrary domains.
+- The sign-in lives in the built-in browser only (shared with the built-in browser's own sign-in state). It never goes into the vault and never syncs. `pasteCookie(platform, text)` is an advanced fallback that also writes into the built-in browser. `disconnect` signs the built-in browser out of that platform and withdraws every plugin's permission.
+- Permission is per plugin and platform: when the user connects or pastes from your plugin, your plugin is allowed. A plugin that was never allowed gets a host dialog the first time it calls `cookie()`.
+- **Never write the sign-in to the vault, logs, plugin data or a prompt.** To hand it to a script the agent runs, put it in `secret_env` on `POST /agent/runs` (for example `{ "BLUEBIRD_COOKIE": cookie }`). It stays in memory and only that run's `run_bash` processes see it. If the script prints it, the value is replaced with `[REDACTED:NAME]` before the model sees the output. Remote runs drop it. Names must be upper case (`^[A-Z][A-Z0-9_]{2,63}$`), at most 8, and reserved names such as `PATH`, `TANGU_*` and `FORSION_*` are refused. Older engines ignore the field, so the fetch simply runs without the sign-in. In the prompt, only tell the model that the variable is already set and must not be printed.
+- Only `run_bash` gets `secret_env`; processes started with `run_background` do not. Cookie-style values (`a=b; c=d`) are also redacted item by item. Redaction stops accidental printing. The value still goes to a shell the model can program, so deliberate encoding can get past it: only pass what a script you trust needs.
+- Plugins run inside the host renderer. Per-plugin permission is a consent prompt for the user, not an isolation boundary between plugins.
+- Only send the sign-in to a local engine (`127.0.0.1` / `localhost`), never to an external engine. Check the **real hostname** before handing it over, and have the script send the cookie only to that platform's hosts.
+
 ## Secret settings
 
 Engine plugin text settings can declare `secret: true`, and the host renders a password input (a `textarea` also becomes a single-line password input). This masks the UI only: values still use the existing local plugin settings store and the authenticated settings API; no encryption is added. Older hosts ignore this optional field.
@@ -126,12 +145,17 @@ if (open) {
 | `layer` | Where it goes |
 |---|---|
 | `{ dock: 'main' \| 'left' \| 'right' \| 'bottom' }` | Docked in the workbench, like `openView`'s `location`; the place sets the look (either side panel is `side`) |
-| `{ float: 'desktop', pin? }` | A small system window: `form: 'mini'` (default) is the Mini Panel (always on top, several at once, reused by `key`); `'main'` is the Floating Panel (not on top unless `pin: true`) |
+| `{ float: 'desktop', pin? }` | A small system window: `form: 'mini'` (default) is the Mini Panel (on top by default; `pin: false` keeps it level with other windows and it no longer folds away at the screen edge; several at once, reused by `key`, position and size remembered per entity across restarts); `'main'` is the Floating Panel (not on top unless `pin: true`) |
 | `{ float: 'space', anchor? }` | A card floating over the current Space; hidden while another Space is shown, back as it was on return |
 | `{ float: 'window', anchor? }` | A card floating over the whole window; stays across Space switches |
 | `{ float: 'view', host, anchor? }` | A card floating inside one element (`host`) of your view |
 
-The last three are the same floating layer as `ctx.ui.float` (six anchors, the person can drag the card to another corner, remembered on this device per scope + view + key). The difference is that the card holds your whole registered **view**, not DOM you draw: the host draws the card head (title, "Show in main panel", close) and your view's `mount` gets its `view` as usual (`surface` is `'mini'` or `'floating'`; `showInMainPanel()` opens the main area with the current params and closes the card). Cards are not part of the layout and do not come back after a restart. They close when your plugin is disabled or reloaded, when the view is unregistered, when you call `close()`, or when the person closes them. Opening the same view with the same `key` again brings up that card with the new params; params never count as identity.
+The last three are the same floating layer as `ctx.ui.float` (six anchors, the person can drag the card to another corner). The difference is that the card holds your whole registered **view**, not DOM you draw: the host draws the card head (title, "Show in main panel", close) and your view's `mount` gets its `view` as usual (`surface` is `'mini'` or `'floating'`; `showInMainPanel()` opens the main area with the current params and closes the card). Cards close when your plugin is disabled or reloaded, when the view is unregistered, when you call `close()`, or when the person closes them. Opening the same view with the same `key` again brings up that card with the new params; params never count as identity.
+
+Where cards are remembered (2.13.8+):
+- `space`: the cards open in a Space (view, current params including those your view changed with `view.setParams`, look, `key`, anchor) are saved with that Space's layout. They come back after a restart, when the person returns to that Space, and when they undo "Reset layout". If your plugin loads after the layout, the card opens as soon as its view registers. "Reset layout" closes them. A card closed and opened again goes back to the corner the person last dragged it to in that Space. Cards closed because the plugin was disabled do not come back when it is enabled again.
+- `window`: the anchor is remembered on this device per view + `key`; the card itself does not survive a restart.
+- `view`: the card belongs to your view, which opens it again each time it mounts; the anchor is remembered on this device per view + `key` and is not written into the host view's params.
 
 **Declare looks with `forms`**: pass `forms` to `registerView` to say which looks the view supports:
 

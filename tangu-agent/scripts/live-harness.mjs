@@ -319,6 +319,7 @@ OPT_IN.add('nestedmsg'); // --only nestedmsg: fork 上下文 + 兄弟会话传�
 OPT_IN.add('signals');
 OPT_IN.add('decisiongate'); // --only decisiongate:Historian 决策闸(beta);要 TANGU_LIVE_CLOUD_URL 带决策模型,--decision-gate off = 负对照
 OPT_IN.add('musechat');
+KEYS.push('musewakenow'); OPT_IN.add('musewakenow'); // --only musewakenow:面板「叫醒」(11-08)—— 时段外、心跳没到点,点一下就起一轮完整的周期
 OPT_IN.add('musestarters'); // --only musestarters:一个 Muse 周期之后,新对话页有没有它放上的开场建议(--starters-off = 负对照:开关关掉,工具不给)
 OPT_IN.add('cmdreads');
 OPT_IN.add('imgwindow');
@@ -392,6 +393,7 @@ OPT_IN.add('humanportrait'); // 画像(human/SOUL.md)写没写:每轮 4 个 run 
 OPT_IN.add('import'); // 从其他 AI 导入(11-03):后台模型拆条 / 归位 / 拦截;不跑对话。动了 services/externalImport 的提示 / 后处理才有信息量。--import-neg = 负对照
 OPT_IN.add('portraitmove'); // 搬家的后台模型挑得准不准(10-30):不跑对话,只有人点的那几个接口;动了 agents/portraitMove.ts 的提示才有信息量。
 OPT_IN.add('humanreal'); // 协作说明写成什么样:每轮 6 个 run + 1 次判官(--rounds);只在动 HUMAN_GUIDANCE / manage_human 时才有信息量。
+OPT_IN.add('secretenv'); KEYS.push('secretenv'); // --only secretenv:一个 run;插件经 secret_env 交给 run_bash 的值,脚本拿得到、模型看不到(动 sandbox/runSecretEnv.ts 时跑)
 OPT_IN.add('mask'); KEYS.push('mask'); // 两个 run + 本地回显服务;只在动 llm/outboundMask.ts(发给模型前脱敏)时才有信息量。
 OPT_IN.add('filechange'); KEYS.push('filechange'); // 四个 run;只在动 tools/readState.ts 的变动感知 / tools/fileChangeNotice.ts / agentLoop 的两处注入时才有信息量。负对照:TANGU_FILE_CHANGE_NOTICE=off
 OPT_IN.add('streamoverflow'); KEYS.push('streamoverflow'); // 注入:真 Codex 路径上流里回 context_length_exceeded(lib/llm-fault-preload.mjs);只在动流内报错归类 / agentLoop 的超长压缩重试时跑
@@ -1624,7 +1626,7 @@ async function phoneResponder(runId, p, phone) {
 async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {}, client, onApproval, headers, approveHeaders, opts = {}) {
   const t0 = Date.now();
   // headers:只加在起 run 这一跳(remoteclamp 用它模拟 unitWeb 盖的 x-forsion-remote);事件流 / 审批兑现照旧本机直连。
-  const { runId } = await api('/agent/runs', { method: 'POST', headers, body: JSON.stringify({ session_id: sessionId, model_id: opts.model || MODEL, message, client, ...(opts.attachments ? { attachments: opts.attachments } : {}), ...(opts.clientCapabilities ? { client_capabilities: opts.clientCapabilities } : {}), ...(opts.ui ? { ui_commands: opts.uiCommands || [], ui_settings: opts.ui } : {}), agent_config: { ...AGENT_CONFIG, ...extraAgentConfig } }) });
+  const { runId } = await api('/agent/runs', { method: 'POST', headers, body: JSON.stringify({ session_id: sessionId, model_id: opts.model || MODEL, message, client, ...(opts.attachments ? { attachments: opts.attachments } : {}), ...(opts.clientCapabilities ? { client_capabilities: opts.clientCapabilities } : {}), ...(opts.secretEnv ? { secret_env: opts.secretEnv } : {}), ...(opts.ui ? { ui_commands: opts.uiCommands || [], ui_settings: opts.ui } : {}), agent_config: { ...AGENT_CONFIG, ...extraAgentConfig } }) });
   const ev = { runId, tokens: 0, toolCalls: [], toolCallIds: [], toolArgs: [], clientCmds: [], uiCmds: [], toolOffsets: null, toolResults: [], subTools: [], subStarts: [], subDones: [], systemPrompt: null, approvals: 0, approvalList: [], approvalResults: [], usages: [], probes: [], statuses: [], content: '', error: null, done: false, group: { speakers: [], ended: null, starts: [], ends: [], summary: null, remarks: [], outputs: [] }, ttftMs: null, firstTokenMs: null, wallMs: 0 };
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), timeoutMs);
@@ -3137,6 +3139,19 @@ try {
     const hit = ev.content.includes(MARKER);
     const anchors = anchorsOk(ev);
     return { ok: !ev.error && ev.toolCalls.length > 0 && hit && anchors, detail: ev.error || `工具 ${ev.toolCalls.join(',') || '无'};标记${hit ? '命中' : '未命中'};done 锚点${anchors ? '对齐' : `不对齐(${JSON.stringify(ev.toolOffsets)})`}${ev.approvals ? `;代批 ${ev.approvals}${ev.approveError ? '(失败:' + ev.approveError + ')' : ''}` : ''}`, output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
+  });
+
+  // secretenv(11-08,青鸟 B 站登录):run 请求带 secret_env → 真模型用 run_bash 跑一段打印它的脚本。
+  //   判据:脚本拿到了(长度对)、模型收到的输出里是 [REDACTED:BLUEBIRD_COOKIE]、回复 / 事件 / 引擎日志里都没有原值。
+  await scenario('secretenv', 'secretenv 每次 run 的秘密环境变量:脚本拿得到,模型看不到', async () => {
+    const secret = `SESSDATA=live${randomUUID().replace(/-/g, '')}; bili_jct=x${randomUUID().slice(0, 8)}`;
+    const logBefore = existsSync(engineLog) ? readFileSync(engineLog, 'utf8').length : 0;
+    const ev = await run(`live-secretenv-${Date.now()}`, `Use run_bash to run exactly this command once: python3 -c "import os;v=os.environ.get('BLUEBIRD_COOKIE','');print('len',len(v));print('value',v)" — then reply with the command's output verbatim and nothing else.`, 240_000, {}, undefined, undefined, undefined, undefined, { secretEnv: { BLUEBIRD_COOKIE: secret } });
+    const log = existsSync(engineLog) ? readFileSync(engineLog, 'utf8').slice(logBefore) : '';
+    const reached = (ev.content || '').includes(`len ${secret.length}`);
+    const redacted = (ev.content || '').includes('[REDACTED:BLUEBIRD_COOKIE]');
+    const leaked = JSON.stringify(ev).includes(secret) || log.includes(secret);
+    return { ok: !ev.error && ev.toolCalls.includes('run_bash') && reached && redacted && !leaked, detail: ev.error || `工具 ${ev.toolCalls.join(',') || '无'};脚本${reached ? '拿到了' : '没拿到'};输出${redacted ? '已打码' : '未打码'};${leaked ? '原值泄漏' : '原值没出现在回复 / 事件 / 日志'}`, output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
   });
 
   // mask(10-28,借鉴 magpie 方案 1 · 发给模型前脱敏):真模型拿到的是占位符,但照样能把 key 用对。
@@ -5828,6 +5843,56 @@ Then reply with only the command output.`,
       output: await says(), journal, status: woke || mid,
     };
   });
+  // ── musewakenow(11-08,opt-in:`--only musewakenow`):Muse Space 右栏的「叫醒」。运行时段设成两小时以后、新 home 心跳本该到点 ——
+  // 先等 40s 证明时段闸真挡着(不点就不起新周期);再 POST /agent/special/muse/wake,周期要在 120s 内起、420s 内收尾;
+  // 判据:最近几轮的第一行 trigger = manual 且 done、agent_runs.input 里带「用户刚叫醒你」那句(代码拼的简报原文,不看模型)、
+  // 周期没报错、请求清掉(wakePending=false)。模型这一轮做了什么 / 有没有又睡下记进 detail 与 output(不计红)。
+  // 负对照 = 没有这条路由的旧 dist(POST /wake 404 → 红)。
+  await scenario('musewakenow', `musewakenow 面板「叫醒」:时段外点一下就起一轮(${MUSE_MODE})`, async () => {
+    const h = new Date().getHours();
+    const status = () => api('/agent/special/muse/status').then((x) => (x && typeof x.status === 'object' ? x.status : x));
+    await api('/agent/special/config', { method: 'POST', body: JSON.stringify({ muse: { enabled: true, modelId: MODEL, mode: MUSE_MODE, heartbeatMinutes: 60, supervisorPollMinutes: 1, maxIterationsPerCycle: 12, maxRestartsPerWindow: 3, activeHours: { start: (h + 2) % 24, end: (h + 3) % 24 } } }) });
+    try {
+      // 同一次跑里前面的 Muse 场景可能留着周期在收尾:先等它停,再量这 40s 里有没有新周期
+      const base0 = await until(async () => { const x = await status(); return !x.running ? x : null; }, 240_000, 5000);
+      if (!base0) return { ok: false, detail: '前面的 Muse 周期 240s 没收尾,量不了基线' };
+      await sleep(40_000);
+      const before = await status();
+      if (before.running || Number(before.lastCycleAt || 0) !== Number(base0.lastCycleAt || 0)) return { ok: false, detail: `不算数:时段外没点叫醒就起了周期(lastCycleAt ${base0.lastCycleAt} → ${before.lastCycleAt})`, status: before };
+      const wakeAt = Date.now();
+      let woke;
+      try { woke = await api('/agent/special/muse/wake', { method: 'POST', body: '{}' }); } catch (e) { return { ok: false, detail: `POST /agent/special/muse/wake 失败:${e.message}` }; }
+      const pending = woke?.status?.wakePending === true;
+      const started = await until(async () => { const x = await status(); return x.running || Number(x.lastCycleAt) >= wakeAt ? x : null; }, 120_000, 3000);
+      if (!started) return { ok: false, detail: `叫醒后 120s 没起周期(wakePending=${pending});[muse] 日志:${museLogTail() || '(无)'}` };
+      const done = await until(async () => { const x = await status(); return !x.running ? x : null; }, 420_000, 5000);
+      if (!done) return { ok: false, detail: '叫醒的那轮 420s 没收尾' };
+      const rounds = asList(await api('/agent/special/muse/rounds?limit=3'), 'rounds');
+      const first = rounds[0] || {};
+      const { default: Database } = await import('better-sqlite3');
+      const db = new Database(join(home, 'state.db'), { readonly: true, fileMustExist: true });
+      let input = {}; let said = '';
+      try {
+        input = JSON.parse(db.prepare('SELECT input FROM agent_runs WHERE id = ?').get(first.runId)?.input || '{}');
+        said = db.prepare(`SELECT m.content FROM chat_messages m WHERE m.session_id = ? AND m.role IN ('assistant', 'model') ORDER BY m.timestamp DESC LIMIT 1`).get(first.sessionId)?.content || '';
+      } finally { db.close(); }
+      const hinted = String(input.ephemeralHint || '').includes('woke you from your panel');
+      const after = await status();
+      const ok = pending && first.trigger === 'manual' && first.status === 'done' && input.museTrigger === 'manual' && hinted && !done.lastError && after.wakePending === false;
+      const dur = first.endedAt && first.startedAt ? `${Math.round((first.endedAt - first.startedAt) / 1000)}s` : '?';
+      return {
+        ok,
+        detail: `时段外 40s 没起=是;叫醒后 wakePending=${pending};最近一轮 trigger=${first.trigger} status=${first.status} 用时 ${dur} 写了 ${first.files} 个文件 提了 ${first.todos} 条待办;`
+          + `input.museTrigger=${input.museTrigger};简报带叫醒那句=${hinted};收尾后 wakePending=${after.wakePending}${done.lastError ? `;错误 ${done.lastError}` : ''}`
+          + `;又睡下=${Number(after.sleepUntil) > Date.now() ? `到 ${hhmm(after.sleepUntil)}(${after.sleepReason || ''})` : '否'}`,
+        output: said,
+        status: after,
+      };
+    } finally {
+      await api('/agent/special/config', { method: 'POST', body: JSON.stringify({ muse: { enabled: false } }) }).catch(() => {});
+    }
+  });
+
   // ── 自进化闭环(09-18;10-04 用户第二次裁决后改判:后台提名直接采纳,不再等 /refine)──
   //  ① 干一件小事 → 问它自己打算坚持什么做法(用户没有立规矩,只是问)→ 工作笔记里要多出一条:
   //     后台那条路 = Historian 判官提名(对象形)→ 引擎直接写成条目(活动流 harness_adopted、编辑史 by:historian);

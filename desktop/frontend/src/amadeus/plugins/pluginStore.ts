@@ -31,7 +31,8 @@ function pluginLayer(raw: unknown): OpenLayer | undefined {
   if (typeof raw !== 'object') throw new TypeError('workspace.open layer must be { dock } or { float }')
   const l = raw as Record<string, unknown>
   if ('dock' in l) return { dock: l.dock as 'main' } // 值由引擎的 checkOpenOptions 核
-  if (l.float === 'desktop') return { float: 'desktop', pin: l.pin === true }
+  // pin 只认布尔、没给就不带:缺省各归各(Mini 置顶、Floating Panel 不置顶),不能在这里替插件填成 false
+  if (l.float === 'desktop') return typeof l.pin === 'boolean' ? { float: 'desktop', pin: l.pin } : { float: 'desktop' }
   if (l.float === 'view' || l.float === 'space' || l.float === 'window') {
     const anchor = l.anchor as FloatAnchor | undefined // 值由引擎的 checkOpenOptions 核
     return l.float === 'view' ? { float: 'view', host: l.host as HTMLElement, anchor } : { float: l.float, anchor }
@@ -109,6 +110,7 @@ import type {
   FileTypeContribution,
   PanelContribution,
   PluginAppApi,
+  PlatformAccountStatus,
   PluginContext,
   PropertyTypeContribution,
   SettingContribution,
@@ -564,6 +566,26 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
       fileUnsubs.add(wrapped)
       return wrapped
     },
+    // 平台账号(electron/platformAccounts.ts):桥缺席(web / 手机 / 台架)= undefined,插件据此隐藏入口。
+    // 插件 ID 由宿主填,插件传不了别人的;读登录信息的授权框在主进程弹。
+    platformAccounts: (() => {
+      const bridge = hostTangu()?.platformAccounts
+      if (!bridge) return undefined
+      const st = (v: unknown): PlatformAccountStatus => {
+        const o = (v && typeof v === 'object' ? v : {}) as Record<string, unknown>
+        const state = o.state === 'connected' || o.state === 'expired' || o.state === 'invalid' ? o.state : 'none'
+        return { platform: String(o.platform ?? ''), state, ...(typeof o.name === 'string' ? { name: o.name } : {}), ...(typeof o.expiresAt === 'number' ? { expiresAt: o.expiresAt } : {}) }
+      }
+      const gone = (): Error => new Error('plugin-disposed')
+      return {
+        platforms: () => ['bilibili'],
+        status: async (platform) => { if (!ok()) throw gone(); return st(await bridge.status(platform)) },
+        connect: async (platform) => { if (!ok()) throw gone(); return st(await bridge.connect(platform, pluginId, getName())) },
+        pasteCookie: async (platform, text) => { if (!ok()) throw gone(); return st(await bridge.paste(platform, pluginId, String(text ?? ''))) },
+        disconnect: async (platform) => { if (!ok()) throw gone(); return st(await bridge.disconnect(platform)) },
+        cookie: async (platform) => { if (!ok()) return null; return (await bridge.cookie(platform, pluginId, getName())) ?? null },
+      }
+    })(),
     // New defaults use stable ASCII identity; existing display-name folders stay readable
     // until the plugin opts into schema-aware migration. Never persist this as a user override.
     workFolder: (options) => {

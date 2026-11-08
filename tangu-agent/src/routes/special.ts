@@ -9,6 +9,8 @@
  *   POST     /agent/special/muse/todos/:id/approve     批准 TODO → 一次性、此刻到期的 Muse 日程(收件箱任务卡「交给 Muse 执行」)
  *   POST     /agent/special/muse/todos/inject { todoIds, sessionId }  注入选中 TODO 到会话并起 run
  *   GET      /agent/special/muse/status                Muse 运行态 + 本窗口预算余量
+ *   POST     /agent/special/muse/wake                  面板「叫醒」:下一次巡检当作到点(清休眠、不看心跳与运行时段;额度 / 次数 / 让位 / 急停照守;只认本机)
+ *   GET      /agent/special/muse/rounds?limit=3        最近几轮周期(怎么醒的 / 用时 / 写了几个文件 / 提了几条待办;只认本机)
  *   GET      /agent/special/muse/triggers              自动化规则列表(manage_automation 工具/构建器写入;附 nextRunAt)
  *   POST     /agent/special/automation/triggers/:id/fire  立即执行(origin=manual 试跑 / button 按钮点击,不动 lastFiredAt)
  *   POST     /agent/special/automation/kick            唤醒巡检(桌面写完 .db 后踢一下,db_changed 从 5min 降到 ~2s;{scope:'computer'} = 电脑历史落盘后踢,没有电脑类规则就不醒)
@@ -55,7 +57,7 @@ import { parseRemoteOrigin, sanitizeRemoteAgentConfig, remoteCwdViolation, remot
 import { enqueueRun } from '../services/agentLoop.js';
 import { loadSpecialAgentsConfig, saveSpecialAgentsConfig, DEFAULT_HISTORIAN_PROMPT, legacyMusePrompt, SPECIAL_AGENTS_DEFAULTS, type SpecialAgentsConfig } from '../services/specialAgentsConfig.js';
 import { loadUserHistorianConfig, saveUserHistorianConfig, type UserHistorianConfig } from '../services/historianConfig.js';
-import { museStatus, kickMuse, getAutomationNotices } from '../services/muse.js';
+import { museStatus, kickMuse, getAutomationNotices, requestMuseWake, museRecentRounds } from '../services/muse.js';
 import { listActiveStarters, markStarter } from '../services/museStarters.js';
 import { loadTriggers, removeTrigger, validateTriggerInput, upsertTrigger, nextRunAt, isPluginTriggerId, precheckWatchCols, needsWatchColPrecheck, triggerUnmet, triggerRev, type DbLike, type MuseTrigger } from '../services/museTriggers.js';
 import { getTriggerSource, listTriggerSources } from '../services/triggerRegistry.js';
@@ -422,6 +424,31 @@ router.get('/agent/special/muse/status', authMiddleware, async (req: AuthRequest
     res.json({ status: await museStatus() });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'status failed' });
+  }
+});
+
+// 面板「叫醒」(11-08,Muse Space 右栏方案 B):记一笔、催一次巡检,回最新状态(wakePending / wakeBlocked)。
+// 远程来源一律拒:急停的语义是「不是在这台电脑前发起的一律停」,叫醒也一样。
+router.post('/agent/special/muse/wake', authMiddleware, async (req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  if (parseRemoteOrigin(req.headers)) return void res.status(403).json({ detail: 'Only on this computer' });
+  try {
+    if (!loadSpecialAgentsConfig().muse.enabled) return void res.status(409).json({ detail: 'Muse is off' });
+    const kicked = requestMuseWake();
+    res.status(kicked ? 200 : 202).json({ status: await museStatus() });
+  } catch (e: any) {
+    res.status(500).json({ detail: e?.message || 'wake failed' });
+  }
+});
+
+// 最近几轮(面板「最近几轮」):只认本机 —— 带运行错误原文,远程投影本来就不回 lastError。
+router.get('/agent/special/muse/rounds', authMiddleware, async (req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  if (parseRemoteOrigin(req.headers)) return void res.status(403).json({ detail: 'Only on this computer' });
+  try {
+    res.json({ rounds: await museRecentRounds(Number(req.query.limit) || 3) });
+  } catch (e: any) {
+    res.status(500).json({ detail: e?.message || 'rounds failed' });
   }
 });
 

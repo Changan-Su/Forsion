@@ -7,7 +7,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { ArrowUpRight, ChevronDown, ChevronUp, Copy, Square } from 'lucide-react'
-import { getView, useWorkspace, type ViewProps } from '@lcl/engine'
+import { followAnchor, getView, useWorkspace, type ViewProps } from '@lcl/engine'
 import { registerMessages, useI18n } from '../../i18n'
 import { useApp } from '../../stores/appStore'
 import { deskAcceptsFiles } from '../../amadeus/plugins/deskCompanion'
@@ -177,13 +177,16 @@ export function BgStrip({ sessionId }: { sessionId: string }) {
   const running = procs.filter((p) => p.status === 'running')
   const [open, setOpen] = useState(false)
   const btn = useRef<HTMLButtonElement>(null)
-  const [at, setAt] = useState<{ x: number; bottom: number } | null>(null)
+  const pop = useRef<HTMLDivElement>(null)
   useEffect(() => { setOpen(false) }, [sessionId])
+  // 浮层贴着按钮往上开(放不下翻到下面),量真实高度、随内容 / 缩放 / 滚动重落;两侧都放不下时封顶,超出部分在浮层里滚。
+  // 依赖「还有没有在跑的」:最后一条跑完时整条 strip 摘掉、按钮换了,再出现时重新挂。
+  useLayoutEffect(() => {
+    if (!open || !pop.current || !btn.current) return
+    return followAnchor(pop.current, btn.current, { prefer: 'above', gap: 6 })
+  }, [open, running.length > 0])
   useEffect(() => {
     if (!open) return
-    const r = btn.current?.getBoundingClientRect()
-    const z = (btn.current as (HTMLElement & { currentCSSZoom?: number }) | null)?.currentCSSZoom || 1
-    if (r) setAt({ x: r.left / z, bottom: (window.innerHeight - r.top) / z + 6 })
     const close = (e: Event): void => { if (!(e.target as Element)?.closest?.('.t2-bgpop, .t2-bgstrip')) setOpen(false) }
     const esc = (e: KeyboardEvent): void => { if (e.key === 'Escape') setOpen(false) }
     window.addEventListener('pointerdown', close, true)
@@ -206,8 +209,8 @@ export function BgStrip({ sessionId }: { sessionId: string }) {
           </button>
         )}
       </div>
-      {open && at && createPortal(
-        <div className="t2-bgpop" role="dialog" aria-label={t('bg.stripTitle')} style={{ left: at.x, bottom: at.bottom }}>
+      {open && createPortal(
+        <div ref={pop} className="t2-bgpop" role="dialog" aria-label={t('bg.stripTitle')}>
           <div className="t2-bgpop-title">{t('bg.stripTitle')}</div>
           {running.map((p) => <BgRow key={p.id} p={p} sessionId={sessionId} onOpen={() => setOpen(false)} />)}
         </div>,

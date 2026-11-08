@@ -3,7 +3,7 @@
 // 桌面档接到 Mini(window.tangu.openMini)与 Floating Panel(openFloatingPanel,窗口 id = 视图类型 + key,带 pin);
 // 手机两样都不接(引擎自己降级)。引擎侧规则在 workspaceOpen.test.ts。
 // 负对照(11-08 已实跑红):openDockedView 不判注册、一律走 workspace.open →「还没注册的类型照旧直接 openView」红;
-// panel 不带 key 拼 id →「Floating Panel 的窗口 id = 类型 + key」红。
+// panel 不带 key 拼 id →「Floating Panel 的窗口 id = 类型 + key」红;mini 不转 pin:false → 桌面那条红。
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const engine = vi.hoisted(() => ({
@@ -54,6 +54,10 @@ describe('installWorkspaceOpenHost', () => {
     expect(tangu.openMini).toHaveBeenLastCalledWith({ view: { type: 'c' }, mainView: { type: 'm' }, params: { x: 1 }, key: 'k', title: 'T' })
     await o.mini!({ view: { type: 'mini-todo' }, mainView: { type: 'todo-list' }, spaceId: 'calendar', params: { d: 1 } })
     expect(tangu.openMini).toHaveBeenLastCalledWith({ spaceId: 'calendar', params: { d: 1 }, key: undefined, title: undefined })
+    await o.mini!({ view: { type: 'c' }, mainView: { type: 'c' }, pin: false })
+    expect(tangu.openMini).toHaveBeenLastCalledWith(expect.objectContaining({ view: { type: 'c' }, pin: false }))
+    await o.mini!({ spaceId: 'calendar', view: { type: 'mini-todo' }, mainView: { type: 'todo-list' }, pin: false })
+    expect(tangu.openMini).toHaveBeenLastCalledWith(expect.objectContaining({ spaceId: 'calendar', pin: false }))
     tangu.openMini.mockResolvedValueOnce({ ok: false, reason: 'limit', limit: 6 } as never)
     expect(await o.mini!({ view: { type: 'c' }, mainView: { type: 'c' } })).toEqual({ ok: false, reason: 'limit', limit: 6 })
     o.panel!({ view: { type: 'plugin:p:v' }, title: 'V', pin: true, key: 'a', size: { width: 500 } })

@@ -9,6 +9,7 @@
  * （见 services/approvals.ts）；本文件只管「真去做」，不含审批逻辑。
  */
 import { spawnHostShell, hostSandboxEnabled, remoteShellSeatbeltApplies } from '../sandbox/hostSandbox.js';
+import { redactRunSecrets } from '../sandbox/runSecretEnv.js';
 import { RemoteShellProtectionError, remoteShellNotes } from '../sandbox/remoteShellSeatbelt.js';
 import { fromShellPath, hostShell, hostShellName, hostShellQuoting } from './hostShell.js';
 import { pinSystemFindstr } from './cmdReadOnly.js';
@@ -180,7 +181,7 @@ function runBash(
     // 触发 → Promise 永不 resolve → 整个 run 挂死(本次修复的根因)。
     let child;
     try {
-      child = spawnHostShell(ctx || { cwd }, command);
+      child = spawnHostShell(ctx || { cwd }, command, { runSecrets: true });
     } catch (e: any) {
       // 远程写保护起不来(P1 · G5):命令没跑,按工具错误回给模型(失败即关)
       if (e instanceof RemoteShellProtectionError) { resolve({ stdout: '', stderr: '', code: -1, timedOut: false, aborted: false, refused: e.message }); return; }
@@ -286,7 +287,8 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
       } else if (r.aborted) {
         out += ' (aborted)';
       }
-      return truncateBashOutput(out.trim() || '(no output)');
+      // 本 run 的秘密变量(secret_env)万一被脚本打印出来,不进模型上下文,也不进截断落盘的那份
+      return truncateBashOutput(redactRunSecrets(ctx, out.trim()) || '(no output)');
     },
   },
 

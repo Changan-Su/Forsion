@@ -33,6 +33,8 @@ export interface AnchorOpts {
   anchorTop?: number
   /** 首选方向:'below'(默认,锚点下方展开)/ 'above'(锚点上方,放不下再翻到下方)。 */
   prefer?: 'below' | 'above'
+  /** false = 不翻面,首选位置放不下就整体夹回视口(贴在锚点**旁边**的侧卡:顶边对齐锚点、太靠下就往上推)。缺省 true。 */
+  flip?: boolean
   /** 水平以 x 为中心(行内工具栏那种居中浮条),缺省是左对齐 x。 */
   center?: boolean
   /** 右缘对齐 x(「⋯」按钮下方往左展开的菜单),缺省是左缘对齐 x。 */
@@ -58,7 +60,7 @@ export function clampMenu(
   vh: number,
   opts: AnchorOpts = {},
 ): { left: number; top: number } {
-  const { anchorTop = y, prefer = 'below', center = false, alignEnd = false, margin = 8, boundLeft, boundRight } = opts
+  const { anchorTop = y, prefer = 'below', flip = true, center = false, alignEnd = false, margin = 8, boundLeft, boundRight } = opts
   let lo = Math.max(0, boundLeft ?? 0)
   let hi = Math.min(vw, boundRight ?? vw)
   if (hi - lo < w + 2 * margin) { lo = 0; hi = vw }
@@ -67,7 +69,7 @@ export function clampMenu(
   const below = y
   const above = anchorTop - h
   const order = prefer === 'above' ? [above, below] : [below, above]
-  for (const t of order) if (fits(t)) return { left, top: t }
+  for (const t of flip ? order : order.slice(0, 1)) if (fits(t)) return { left, top: t }
   // 两侧都放不下(菜单比视口还高 / 锚点在视口外):退回夹取首选方向的那个候选。
   return { left, top: Math.max(margin, Math.min(order[0], vh - h - margin)) }
 }
@@ -140,16 +142,23 @@ export function followAnchor(el: HTMLElement, anchor: Element, opts: FitAnchored
     // 还没显示的 popover(display:none)读自己的 currentCSSZoom 恒为 1,这时先借锚点的,显示后 ResizeObserver 会再落一次。
     const z = el.getClientRects().length ? zoomOf(el) : zoomOf(anchor)
     const h = Math.min(el.scrollHeight + el.offsetHeight - el.clientHeight, cap) * z
-    const v = fitAnchored(anchor.getBoundingClientRect(), el.offsetWidth * z, h, window.innerWidth, window.innerHeight, {
+    const r = anchor.getBoundingClientRect()
+    const v = fitAnchored(r, el.offsetWidth * z, h, window.innerWidth, window.innerHeight, {
       ...opts,
       gap: (opts.gap ?? 4) * z,
       margin: (opts.margin ?? 8) * z,
     })
-    const key = `${v.left}|${v.top}|${v.maxHeight}`
+    // 开在锚点上方时钉**底边**:内容再长高(编辑器异步渲染、列表加载)是往上长、离开锚点;钉顶边的话,在 ResizeObserver
+    // 重落之前那一帧会往下盖住锚点 —— 悬停预览就会「盖住链接 → 链接 mouseleave 关卡 → 再弹」来回闪(2026-11-08 实测)。
+    const bottom = v.top + Math.min(h, v.maxHeight)
+    const up = bottom <= r.top + 0.5
+    // 钉底边时内边距跟着窗口高变:窗口高也进 key,否则锚点没动、窗口变高时浮层会随窗口底边漂走、压到锚点(Codex 评审)
+    const key = `${v.left}|${v.top}|${v.maxHeight}|${z}|${up ? window.innerHeight : ''}`
     if (key === last) return // 写 maxHeight 会再触发一次 ResizeObserver;同值就停,不进循环
     last = key
     el.style.left = `${v.left / z}px`
-    el.style.top = `${v.top / z}px`
+    el.style.top = up ? 'auto' : `${v.top / z}px`
+    el.style.bottom = up ? `${(window.innerHeight - bottom) / z}px` : 'auto'
     el.style.maxHeight = `${Math.max(0, Math.min(v.maxHeight / z, cap) - chrome)}px`
   }
   place()
@@ -172,7 +181,7 @@ export function useClampedMenu(x: number, y: number, opts: AnchorOpts & { bounda
   ref: RefObject<HTMLDivElement | null>
   style: CSSProperties
 } {
-  const { anchorTop, prefer, center, alignEnd, margin = 8, boundLeft, boundRight, boundary } = opts
+  const { anchorTop, prefer, flip, center, alignEnd, margin = 8, boundLeft, boundRight, boundary } = opts
   const ref = useRef<HTMLDivElement>(null)
   const [pos, setPos] = useState({ left: x, top: y, maxWidth: undefined as number | undefined, maxHeight: undefined as number | undefined })
   useLayoutEffect(() => {
@@ -192,7 +201,7 @@ export function useClampedMenu(x: number, y: number, opts: AnchorOpts & { bounda
         : undefined
       const wV = Math.min(el.offsetWidth * z, availableWidth)
       const hV = Math.min(el.offsetHeight * z, maxHeight === undefined ? Infinity : maxHeight * z)
-      const v = clampMenu(x - left, y - top, wV, hV, vw, vh, { anchorTop: anchorTop === undefined ? undefined : anchorTop - top, prefer, center, alignEnd, margin, boundLeft: boundLeft === undefined ? undefined : boundLeft - left, boundRight: boundRight === undefined ? undefined : boundRight - left })
+      const v = clampMenu(x - left, y - top, wV, hV, vw, vh, { anchorTop: anchorTop === undefined ? undefined : anchorTop - top, prefer, flip, center, alignEnd, margin, boundLeft: boundLeft === undefined ? undefined : boundLeft - left, boundRight: boundRight === undefined ? undefined : boundRight - left })
       // 比视口还宽(窄屏 × 固定宽度浮层):夹取只能贴左边、右边照样被裁 → 给个局部 px 的上限。
       const maxWidth = boundary || el.offsetWidth * z > availableWidth ? availableWidth / z : undefined
       const next = { left: (v.left + left) / z, top: (v.top + top) / z, maxWidth, maxHeight }
@@ -217,7 +226,7 @@ export function useClampedMenu(x: number, y: number, opts: AnchorOpts & { bounda
       ro.disconnect()
       document.removeEventListener('scroll', apply, true)
     }
-  }, [x, y, anchorTop, prefer, center, alignEnd, margin, boundLeft, boundRight, boundary])
+  }, [x, y, anchorTop, prefer, flip, center, alignEnd, margin, boundLeft, boundRight, boundary])
   return { ref, style: { left: pos.left, top: pos.top, maxWidth: pos.maxWidth, maxHeight: pos.maxHeight } }
 }
 
@@ -434,6 +443,7 @@ export function OverlayAt({
   y,
   anchorTop,
   prefer,
+  flip,
   center,
   alignEnd,
   margin,
@@ -450,6 +460,7 @@ export function OverlayAt({
   y: number
   anchorTop?: number
   prefer?: 'below' | 'above'
+  flip?: boolean
   center?: boolean
   alignEnd?: boolean
   margin?: number
@@ -462,7 +473,7 @@ export function OverlayAt({
   style?: CSSProperties
   children?: ReactNode
 } & Omit<HTMLAttributes<HTMLDivElement>, 'style' | 'className' | 'children'>) {
-  const p = useClampedMenu(x, y, { anchorTop, prefer, center, alignEnd, margin, boundLeft, boundRight, boundary })
+  const p = useClampedMenu(x, y, { anchorTop, prefer, flip, center, alignEnd, margin, boundLeft, boundRight, boundary })
   useExitGhost(p.ref)
   return (
     <div

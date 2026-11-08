@@ -4,7 +4,8 @@
 // 规则本身(回落、复用、反注册收卡)在 frontend/src/workspaceOpen.test.ts。
 // 负对照(11-08 已实跑红):workspace.open 里不 scope.own →「浮在窗口里的卡:插件停用时宿主收掉」红;openMiniPanel 无条件传
 // mainView →「声明了 forms 又没点名主视图 = 按 forms 挑」红;没声明 forms 时不传 mainView →「没声明 forms 的视图:mainView
-// = 它自己」红(Codex 评审 P1:会被某个 Space 的 Mini 映射改道、实体键变了);每次都 scope.own →「同一张卡再开只记一笔账」红。
+// = 它自己」红(Codex 评审 P1:会被某个 Space 的 Mini 映射改道、实体键变了);每次都 scope.own →「同一张卡再开只记一笔账」红;
+// pin 没给填成 false →「desktop 的 pin 只认布尔」红(真 Electron 台架 ⑦ 抓到的:插件开的 Mini 缺省成了不置顶)。
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const open = vi.fn()
@@ -81,6 +82,15 @@ describe('ctx.workspace.open', () => {
     expect(open).toHaveBeenLastCalledWith({ type: 'plugin:p:v', params: undefined }, { layer: { float: 'desktop', pin: true }, form: 'main', key: undefined, title: undefined })
     await ctx.workspace!.open({ view: 'v', params: { a: 1 } }, { layer: { float: 'space', anchor: 'top-end' }, key: 'x' })
     expect(open).toHaveBeenLastCalledWith({ type: 'plugin:p:v', params: { a: 1 } }, { layer: { float: 'space', anchor: 'top-end' }, form: undefined, key: 'x', title: undefined })
+  })
+  it('desktop 的 pin 只认布尔、没给就不带(Mini 缺省置顶):不能替插件填成 false', async () => {
+    const ctx = ctxOf('p')
+    await ctx.workspace!.open('v', { layer: { float: 'desktop' } })
+    expect((open.mock.calls.at(-1)![1] as { layer: object }).layer).toEqual({ float: 'desktop' })
+    await ctx.workspace!.open('v', { layer: { float: 'desktop', pin: false } })
+    expect((open.mock.calls.at(-1)![1] as { layer: object }).layer).toEqual({ float: 'desktop', pin: false })
+    await ctx.workspace!.open('v', { layer: { float: 'desktop', pin: 'yes' } as never })
+    expect((open.mock.calls.at(-1)![1] as { layer: object }).layer).toEqual({ float: 'desktop' })
   })
   it('形状不对同步抛', () => {
     const ctx = ctxOf('p')
