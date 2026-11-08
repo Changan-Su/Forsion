@@ -54,6 +54,8 @@
 /* Embedded source controls share the title line. Reserve their space at rest,
    so hovering never covers the count or moves the database title. */
 .am-app .unified-embed.amx-has-src-btn > .unified-embed-body > .amx-db > .amx-db-head { padding-inline-end: 48px; }
+/* 「打开」+ `</>` 两颗键并排(只读只有「打开」一颗,48px 够)。 */
+.am-app .unified-embed.amx-has-src-btn:has(> .amx-open-btn:not(.amx-src-btn--solo)) > .unified-embed-body > .amx-db > .amx-db-head { padding-inline-end: 80px; }
 .am-app .unified-embed:has(> .unified-embed-body > .amx-db) > .amx-src-btn--block { top: 10px; }
 .am-app .block-host[data-embed]:has(> .amx-src-btn) > .block-body > .amx-db > .amx-db-head { padding-inline-end: 80px; }
 .amx-db .amx-db-thbtn:focus-visible { outline: var(--focus-ring, 1px) solid var(--sel-line, var(--border)); outline-offset: -1px; }
