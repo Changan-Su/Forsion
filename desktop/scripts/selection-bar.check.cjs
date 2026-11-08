@@ -181,7 +181,7 @@ const textRect = (win, rootSel, text) => win.evaluate(({ rootSel, text }) => {
   }
   return null
 }, { rootSel, text })
-/** 滚 sel 所在的滚动容器(往上找第一个能滚的祖先;sel 自己能滚就是它),返回实际滚了多少。 */
+/** 滚 sel 所在的滚动容器(往上找第一个能滚的祖先;sel 自己能滚就是它),返回实际滚了多少(缩放前的局部 px;屏上的位移要 × ZOOM)。 */
 const scrollIn = (win, sel, dy) => win.evaluate(({ sel, dy }) => {
   let el = document.querySelector(sel)
   while (el && !(el.scrollHeight > el.clientHeight + 4 && /(auto|scroll)/.test(getComputedStyle(el).overflowY))) el = el.parentElement
@@ -344,7 +344,7 @@ async function main() {
       const d1 = await scrollIn(win, CHAT, -80) // 往上滚 80 = 字往下走 80
       await frames(win)
       const s1 = await selRect(win), b1 = await barState(win)
-      check('聊天区滚动:条不收,跟着那段字走(位移 = 滚动量,仍在选区上方居中)', !!b0 && d1 < -40 && !!b1 && !b1.hidden && hugs(b1, s1) && Math.abs((b1.top - b0.top) + d1) <= 2, JSON.stringify({ d1, b0, b1, s1 }))
+      check('聊天区滚动:条不收,跟着那段字走(位移 = 滚动量,仍在选区上方居中)', !!b0 && d1 < -40 && !!b1 && !b1.hidden && hugs(b1, s1) && Math.abs((b1.top - b0.top) + d1 * ZOOM) <= 2, JSON.stringify({ d1, b0, b1, s1 }))
       const d2 = await scrollIn(win, CHAT, 4000)
       await frames(win)
       const b2 = await barState(win)
@@ -480,7 +480,7 @@ async function main() {
       const d1 = await scrollIn(win, '.selprobe', 50)
       await frames(win)
       const s1 = await selRect(win), b1 = await barState(win)
-      check('插件视图滚动:条不收,跟着那段字走', !!b0 && d1 > 30 && !!b1 && !b1.hidden && hugs(b1, s1) && Math.abs((b0.top - b1.top) - d1) <= 2, JSON.stringify({ d1, b0, b1, s1 }))
+      check('插件视图滚动:条不收,跟着那段字走', !!b0 && d1 > 30 && !!b1 && !b1.hidden && hugs(b1, s1) && Math.abs((b0.top - b1.top) - d1 * ZOOM) <= 2, JSON.stringify({ d1, b0, b1, s1 }))
       const d2 = await scrollIn(win, '.selprobe', 900)
       await frames(win)
       const b2 = await barState(win)
@@ -559,7 +559,7 @@ async function main() {
       const gd = await scrollIn(win, '.selprobe', 40)
       await frames(win)
       const g1 = await barState(win)
-      check('show({ getRect }):滚动时宿主现量,条跟着走、不收', !!g0 && gd > 20 && !!g1 && !g1.hidden && Math.abs((g0.top - g1.top) - gd) <= 2 && (await win.evaluate(() => window.__getRectCalls)) > 0, JSON.stringify({ gd, g0, g1 }))
+      check('show({ getRect }):滚动时宿主现量,条跟着走、不收', !!g0 && gd > 20 && !!g1 && !g1.hidden && Math.abs((g0.top - g1.top) - gd * ZOOM) <= 2 && (await win.evaluate(() => window.__getRectCalls)) > 0, JSON.stringify({ gd, g0, g1 }))
       await win.evaluate(() => { window.__selprobe.bar.hide(); document.querySelector('.selprobe').scrollTop = 0 })
       await until(async () => !(await barState(win)), 3000)
       await win.evaluate(() => { window.__selprobe.bar.dispose(); window.__selprobe.bar.show({ text: 'after dispose', rect: { left: 420, right: 620, top: 500, bottom: 520 } }) })
