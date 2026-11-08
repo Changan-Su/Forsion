@@ -11,6 +11,7 @@ import { homeTarget } from '../../services/engine/targets'
 import { openNewChat, openSession } from '../../sessionNav'
 import { useApp } from '../../stores/appStore'
 import { translate } from '../../i18n'
+import { nextOccurrence } from '../../components/agentScheduleLib'
 import type { AgentScheduleEntry, MusePlacementOp, MuseSpaceView, MuseStatusInfo, MuseTodo } from '../../types'
 
 /** 串行轮询:上一次结束后再等 ms;fn 抛错 = 留着上一份,不清空(读失败 ≠ 空)。 */
@@ -59,6 +60,8 @@ export function useMuseSpaceView(): {
     if (!cur) return false
     try {
       setLocal(await postMuseSpacePlacement(homeTarget(), cur.rev.placement, op))
+      // 写之前发出的那轮轮询还在路上:refresh 让它作废(usePolled 按代数丢旧结果),否则它回来会把刚摆好的盖回去
+      void refresh()
       return true
     } catch (e) {
       if ((e as { status?: number }).status === 409) { await refresh(); return false }
@@ -76,12 +79,18 @@ export function useMuseTodosLive(ms = 10_000): { todos: MuseTodo[] | undefined; 
   return { todos: data, refresh }
 }
 
-/** 在跟的 = 卜算子自己日程里 auto 的条目(任务卡「交给 Muse 追踪」/ 它自己排的后续),按时间先后。 */
+/** 在跟的 = 卜算子自己日程里 auto 的条目(任务卡「交给 Muse 追踪」/ 它自己排的后续),按下一次发生先后;
+ *  引擎按写入顺序给,不排就截前几条会漏掉刚加的明天那条。没有下一次的(一次性已过 / 没日期)排最后。 */
+export const sortTracks = (entries: AgentScheduleEntry[], now = Date.now()): AgentScheduleEntry[] =>
+  entries
+    .map((e) => ({ e, at: nextOccurrence(e, now)?.getTime() ?? Number.POSITIVE_INFINITY }))
+    .sort((a, b) => a.at - b.at)
+    .map((x) => x.e)
 export function useMuseTracksLive(ms = 30_000): AgentScheduleEntry[] | undefined {
   const { data } = usePolled(async () => {
     const all = await getAgentSchedules(homeTarget())
     const muse = (Array.isArray(all) ? all : []).find((s: { slug?: string }) => s.slug === 'muse') as { entries?: AgentScheduleEntry[] } | undefined
-    return (Array.isArray(muse?.entries) ? muse!.entries : []).filter((e) => e.auto)
+    return sortTracks((Array.isArray(muse?.entries) ? muse!.entries : []).filter((e) => e.auto))
   }, ms)
   return data
 }
@@ -170,26 +179,40 @@ export function splitJournal(md: string, max = 4): JournalSegment[] {
   return out.slice(-max)
 }
 
-/** 待办的完成 / 略过(CAS 在引擎:已经被别处处理掉的回 409,当成功处理 —— 下一轮轮询它就不在了)。 */
+/** 待办的完成 / 略过:只从 pending 改(CAS 在引擎;别处刚交给 Agent / 处理掉的回 409,当成功处理 —— 下一轮轮询它就不在了)。 */
 export async function setTodoStatus(id: string, status: 'done' | 'dismissed'): Promise<void> {
-  try { await patchMuseTodo(homeTarget(), id, status) } catch (e) { if ((e as { status?: number }).status !== 409) throw e }
+  try { await patchMuseTodo(homeTarget(), id, status, 'pending') } catch (e) { if ((e as { status?: number }).status !== 409) throw e }
 }
 
 /**
  * 「交给 Agent」:放进一个已有会话(引擎把待办注入那个会话并标 injected),或开新会话照原样发出去。
  * 和右栏原来的「注入所选到会话」/「新对话里做」同一条路(MuseView.inject / runInNew)。
  */
-export async function handTodosToAgent(todos: MuseTodo[], target: string | 'new'): Promise<void> {
-  if (!todos.length) return
+export async function handTodosToAgent(todos: MuseTodo[], target: string | 'new'): Promise<boolean> {
+  if (!todos.length) return false
   if (target !== 'new') {
     await injectMuseTodos(homeTarget(), todos.map((x) => x.id), target)
     openSession(target)
-    return
+    return true
   }
   const message = `${translate('special.muse.injectPrefix')}\n\n` + todos.map((x, i) => `${i + 1}. ${x.title}${x.detail ? `\n   ${x.detail}` : ''}`).join('\n\n')
   openNewChat()
   const ok = await useApp.getState().send(message, [], undefined, undefined, undefined, null)
-  if (!ok) return
-  for (const x of todos) await patchMuseTodo(homeTarget(), x.id, 'injected').catch(() => {})
+  if (!ok) return false // 没发出去(没模型 / 被拦):发送那边已经提示过了,这里不再报「已交给」
+  for (const x of todos) await patchMuseTodo(homeTarget(), x.id, 'injected', 'pending').catch(() => {})
   void postMuseFeedback(homeTarget(), `todos run in a new session by user: ${todos.map((x) => `"${x.title}"`).join('; ')}`).catch(() => {})
+  return true
+}
+
+/** 小组件放进格子用的键:已经有一张指着它(藏着的 / 正提议的)就用那个键,不另起一张;
+ *  否则按名字起一个合法键(`w-` 开头,避开内置卡名),撞了加 -2、-3。 */
+export function widgetCardKey(view: Pick<MuseSpaceView, 'cards' | 'hidden' | 'proposed'>, w: { id: string; name: string }): string {
+  const all = [...view.cards, ...view.hidden, ...view.proposed]
+  const same = all.find((c) => 'widgetId' in c.ref && c.ref.widgetId === w.id)
+  if (same) return same.key
+  const taken = new Set(all.map((c) => c.key))
+  const base = `w-${(w.name || '').toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '') || 'widget'}`.slice(0, 44).replace(/-+$/, '')
+  let key = base
+  for (let i = 2; taken.has(key); i++) key = `${base}-${i}`
+  return key
 }

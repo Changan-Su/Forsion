@@ -28,7 +28,8 @@ import { wakeMuse } from '../../services/backendService'
 import { homeTarget } from '../../services/engine/targets'
 import type { MusePlacementOp, MuseSpaceCard, MuseSpaceProposal, MuseSpaceView, MuseStatusInfo } from '../../types'
 import { SegmentLine, StatusBody, TodayBody, TodosBody, TrackingBody } from './museBriefCards'
-import { useMuseJournalToday, useMuseSpaceView, useMuseStatusLive } from './museBriefData'
+import { useMuseJournalToday, useMuseSpaceView, useMuseStatusLive, widgetCardKey } from './museBriefData'
+import { wakeSettle } from './museBriefCards'
 import './museBrief.css'
 
 registerMessages({
@@ -149,7 +150,7 @@ function Hero({ view, status, off }: { view: MuseSpaceView | null | undefined; s
         <div className="msb-row">
           {(status?.wakePending || waking)
             ? <span className="msb-note" role="status">{t('museBrief.waking')}</span>
-            : canWake && <button type="button" className="msb-pill solid" data-action="muse-wake" onClick={() => { setWaking(true); void wakeMuse(homeTarget()).catch((e) => { setWaking(false); panelToast(t('museBrief.failed', { e: e instanceof Error ? e.message : String(e) }), true) }) }}>{t('museBrief.wake')}</button>}
+            : canWake && <button type="button" className="msb-pill solid" data-action="muse-wake" onClick={() => { setWaking(true); void wakeMuse(homeTarget()).then(() => wakeSettle(setWaking), (e) => { setWaking(false); panelToast(t('museBrief.failed', { e: e instanceof Error ? e.message : String(e) }), true) }) }}>{t('museBrief.wake')}</button>}
           <button type="button" className="msb-pill ghost" onClick={openMuseSettings}>{t('museBrief.what')}</button>
         </div>
       )}
@@ -253,7 +254,7 @@ function AddPopover({ view, widgets, onAdd, onClose }: { view: MuseSpaceView; wi
       <div className="msb-pop-h">{t('museBrief.pop.muse')}</div>
       {widgets === null && <div className="msb-pop-empty" aria-busy="true" />}
       {widgets && !widgets.length && <div className="msb-pop-empty">{t('museBrief.pop.museEmpty')}</div>}
-      {widgets?.map((w) => row(w.id, <LayoutGrid size={14} />, w.title || w.name, w.updatedAt ? formatRelative(Date.parse(w.updatedAt)) : '', placedWidgets.has(w.id), { key: w.name.slice(0, 48), ref: { widgetId: w.id } }))}
+      {widgets?.map((w) => row(w.id, <LayoutGrid size={14} />, w.title || w.name, w.updatedAt ? formatRelative(Date.parse(w.updatedAt)) : '', placedWidgets.has(w.id), { key: widgetCardKey(view, w), ref: { widgetId: w.id } }))}
     </div>
   )
 }
@@ -274,6 +275,8 @@ export function MuseBriefView(_props: ViewProps): React.JSX.Element {
   const proposed = view?.proposed ?? []
   const sections = view?.sections ?? { prepared: true, today: true }
   const problems = view?.problems ?? []
+  // 旧引擎没有布局读口(view = null)时 Library 根从状态里拿,手记 / 卡里的链接照样能打开
+  const libRoot = view?.libraryRoot || status?.libraryDir || undefined
 
   const run = (op: MusePlacementOp): void => {
     void apply(op).catch((e) => panelToast(t('museBrief.failed', { e: e instanceof Error ? e.message : String(e) }), true))
@@ -286,7 +289,9 @@ export function MuseBriefView(_props: ViewProps): React.JSX.Element {
   const addCard = (card: MuseSpaceCard): void => {
     // 卜算子正提议的就是这张 → 等于点了「放上」(同一个 key,不另起一张)
     const pending = 'widgetId' in card.ref ? proposed.find((p) => 'widgetId' in p.ref && p.ref.widgetId === (card.ref as { widgetId: string }).widgetId) : undefined
-    run(pending ? { type: 'accept', key: pending.key } : { type: 'add', card })
+    // 藏着的那张(同一个键)→ 显示回来,不另加
+    const hidden = view?.hidden.some((h) => h.key === card.key)
+    run(pending ? { type: 'accept', key: pending.key } : hidden ? { type: 'show', key: card.key } : { type: 'add', card })
   }
   // 格子拖动:只读格子位(#378 的判定),落点线画在指针所在那张卡的前沿;松手发一次 move
   const grip = (key: string) => (e: React.PointerEvent): void => {
@@ -389,11 +394,11 @@ export function MuseBriefView(_props: ViewProps): React.JSX.Element {
           {adding && view && <AddPopover view={view} widgets={widgets} onAdd={addCard} onClose={() => setAdding(false)} />}
           <div className="msb-grid3 msb-wrow" ref={gridRef}>
             {cards.map((c) => (
-              <CardShell key={c.key} card={c} editing={editing} off={off} status={status} root={view?.libraryRoot}
+              <CardShell key={c.key} card={c} editing={editing} off={off} status={status} root={libRoot}
                 onHide={canEdit ? () => run({ type: 'hide', key: c.key }) : undefined} onGrip={canEdit ? grip(c.key) : undefined} />
             ))}
             {!editing && proposed.map((p) => (
-              <CardShell key={`p:${p.key}`} card={p} editing={false} off={off} status={status} root={view?.libraryRoot} proposal={p}
+              <CardShell key={`p:${p.key}`} card={p} editing={false} off={off} status={status} root={libRoot} proposal={p}
                 onAccept={() => run({ type: 'accept', key: p.key })} onReject={() => run({ type: 'reject', key: p.key })} />
             ))}
           </div>
@@ -410,7 +415,7 @@ export function MuseBriefView(_props: ViewProps): React.JSX.Element {
             <SectionHead title={t('museBrief.today')} note={journal?.segments.length ? t('museBrief.todayNote', { n: journal.segments.length }) : undefined}
               editing={editing && canEdit} hidden={!sections.today} onToggle={() => run({ type: sections.today ? 'hide' : 'show', key: 'section:today' })} />
             {sections.today && (journal?.segments.length
-              ? <button type="button" className="msb-tl" onClick={() => openLibraryFile(view?.libraryRoot, journal.path)}>
+              ? <button type="button" className="msb-tl" onClick={() => openLibraryFile(libRoot, journal.path)}>
                 {journal.segments.map((s, i) => <div key={i} className="msb-tli"><i aria-hidden /><SegmentLine s={s} /></div>)}
               </button>
               : journal && <div className="msb-blank left">{t('museBrief.todayEmpty')}</div>)}

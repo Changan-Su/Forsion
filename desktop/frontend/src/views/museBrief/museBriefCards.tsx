@@ -51,6 +51,9 @@ registerMessages({
 
 const SKIP_SESSIONS_KIND = new Set(['muse', 'historian'])
 
+/** 叫醒成功后「正在叫醒」只撑到下一轮状态轮询接手(那时 wakePending / running 会说真话),不一直挂着。 */
+export const wakeSettle = (set: (v: boolean) => void): void => { setTimeout(() => set(false), 10_000) }
+
 /** 「交给 Agent」那颗按钮:点开菜单,新会话 + 最近 6 个会话。 */
 function HandButton({ todos, disabled, label }: { todos: MuseTodo[]; disabled?: boolean; label?: boolean }): React.JSX.Element {
   const { t } = useI18n()
@@ -58,7 +61,7 @@ function HandButton({ todos, disabled, label }: { todos: MuseTodo[]; disabled?: 
   const [menu, setMenu] = useState<CtxMenu>(null)
   const go = (target: string | 'new', name: string): void => {
     void handTodosToAgent(todos, target)
-      .then(() => panelToast(t('museBrief.todos.handed', { name })))
+      .then((ok) => { if (ok) panelToast(t('museBrief.todos.handed', { name })) })
       .catch((e) => panelToast(t('museBrief.todos.failed', { e: e instanceof Error ? e.message : String(e) }), true))
   }
   const recent = sessions.filter((s) => !SKIP_SESSIONS_KIND.has(String((s as { kind?: string }).kind || ''))).slice(0, 6)
@@ -171,7 +174,7 @@ export function StatusBody({ status }: { status: MuseStatusInfo | null | undefin
         <div className="msb-foot">
           {status.wakePending || waking
             ? <span>{t('museBrief.waking')}</span>
-            : <button type="button" className="msb-pill" data-action="muse-wake" onClick={() => { setWaking(true); void wakeMuse(homeTarget()).catch(() => setWaking(false)) }}><ArrowUpRight size={12} />{t('museBrief.wake')}</button>}
+            : <button type="button" className="msb-pill" data-action="muse-wake" onClick={() => { setWaking(true); void wakeMuse(homeTarget()).then(() => wakeSettle(setWaking), () => setWaking(false)) }}><ArrowUpRight size={12} />{t('museBrief.wake')}</button>}
         </div>
       )}
     </>
