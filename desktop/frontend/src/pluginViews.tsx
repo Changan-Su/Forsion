@@ -12,7 +12,7 @@ import { amadeusAvailable } from './features/runtime'
 import React, { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState, useSyncExternalStore } from 'react'
 import { Puzzle, RotateCw, TriangleAlert, type LucideIcon } from 'lucide-react'
 import { registerView, unregisterView, useWorkspace, getActiveSpace, getView, showInMainPanel, useViewModes, ViewHead, type ViewProps, type ViewModeOption } from '@lcl/engine'
-import { notePluginGesture, usePluginStore } from '@amadeus/plugins/pluginStore'
+import { notePluginGesture, onPluginSetupSettled, pluginSetupSettled, usePluginStore } from '@amadeus/plugins/pluginStore'
 import { recordDevMountError } from '@amadeus/plugins/devRecords'
 import { setDevViewBridge } from '@amadeus/plugins/devSandbox'
 import type { ViewContribution } from '@amadeus/plugins/types'
@@ -100,6 +100,27 @@ export const PluginViewHost: React.FC<ViewProps & { def: ViewContribution; plugi
       // 也派给窗口 error:agent 自建 Space 的清理抛错由 builtins/agentSpaceSync 按栈帧认领、回写给 agent(别的插件只多一行日志)
       try { fn() } catch (e) { console.error(`[plugin-view] cleanup "${def.id}" failed`, e); globalThis.reportError?.(e) }
     }
+    // Companion tabs this view no longer declares (dropped by a newer plugin version) are closed by the host —
+    // only after the mount succeeded and the plugin's setup settled (every view registered; a plugin still loading
+    // or one that failed never prunes). Deferred a tick: closing panels mid-mount re-enters Dockview.
+    let offSettled: (() => void) | null = null
+    const pruneCompanions = (): void => {
+      if (!pluginId || kind !== 'main' || isFloating) return
+      const run = (): void => {
+        const st = usePluginStore.getState()
+        if (!alive || !pluginSetupSettled(pluginId) || !st.activeIds.includes(pluginId) || st.lastSetupError[pluginId]) return
+        pruneStalePluginCompanions(pluginId, current.current.leaf.id, def, {
+          views: st.views.filter((v) => v.pluginId === pluginId).map((v) => v.item),
+          knownPluginIds: st.plugins.map((p) => p.id),
+        })
+      }
+      if (pluginSetupSettled(pluginId)) { queueMicrotask(run); return }
+      offSettled = onPluginSetupSettled((id) => {
+        if (id !== pluginId) return
+        offSettled?.(); offSettled = null
+        queueMicrotask(run)
+      })
+    }
     try {
       const mounted = def.mount(el, {
         extendView, surface: isMini ? 'mini' : isFloating ? 'floating' : 'main',
@@ -125,21 +146,10 @@ export const PluginViewHost: React.FC<ViewProps & { def: ViewContribution; plugi
       // 现在:resolve 出的函数就是清理(视图已卸载就当场调用);reject 与同步抛错同一条失败路径(已卸载的不报)。
       if (mounted && typeof (mounted as PromiseLike<unknown>).then === 'function') {
         (mounted as PromiseLike<unknown>).then(
-          (d) => { if (typeof d !== 'function') return; if (alive) cleanup = d as () => void; else runCleanup(d as () => void) },
+          (d) => { if (alive) pruneCompanions(); if (typeof d !== 'function') return; if (alive) cleanup = d as () => void; else runCleanup(d as () => void) },
           (e) => { if (alive) fail(e) },
         )
-      } else cleanup = mounted as (() => void) | void
-      // Companion tabs this view no longer declares (dropped by a newer plugin version) are closed by the host.
-      // Deferred a tick: closing panels in the middle of a mount re-enters Dockview. Only for an active plugin
-      // whose view actually mounted — a plugin still loading or one that failed never reaches this line.
-      if (pluginId && kind === 'main' && !isFloating) queueMicrotask(() => {
-        const st = usePluginStore.getState()
-        if (!alive || !st.activeIds.includes(pluginId) || st.lastSetupError[pluginId]) return
-        pruneStalePluginCompanions(pluginId, current.current.leaf.id, def, {
-          views: st.views.filter((v) => v.pluginId === pluginId).map((v) => v.item),
-          knownPluginIds: st.plugins.map((p) => p.id),
-        })
-      })
+      } else { cleanup = mounted as (() => void) | void; pruneCompanions() }
     } catch (e) {
       fail(e)
     }
@@ -148,6 +158,7 @@ export const PluginViewHost: React.FC<ViewProps & { def: ViewContribution; plugi
       if (disposed) return
       disposed = true
       alive = false
+      offSettled?.(); offSettled = null
       listeners.current.clear()
       for (const t of gestureEvents) el.removeEventListener(t, onGesture, true)
       if (typeof cleanup === 'function') runCleanup(cleanup)

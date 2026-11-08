@@ -97,16 +97,21 @@ describe('stale plugin companions', () => {
     expect(mock.state.closeLeaf).not.toHaveBeenCalled()
   })
   it('closes orphans whose owner is gone, but leaves companions of another live owner alone', () => {
-    panels[1].params.__companionOwner = 'closed-owner'
+    panels[1].params.__companionOwner = 'closed-owner'; panels[1].id = 'closed-owner:bluebird-document'
     leaves.other = { id: 'other', type: 'plugin:bluebird:folder' }
-    panels[2].params.__companionOwner = 'other'
+    panels[2].params.__companionOwner = 'other'; panels[2].id = 'other:bluebird-chat'
     pruneStalePluginCompanions('bluebird', 'owner', current, opts())
-    expect(closed()).toEqual(['owner:bluebird-document'])
+    expect(closed()).toEqual(['closed-owner:bluebird-document'])
+  })
+  it('keeps a tab the user split off a companion (marker copied, fresh id)', () => {
+    panels.push(companion('amadeus-editor#2', { ...panels[1].params }))
+    pruneStalePluginCompanions('bluebird', 'owner', current, opts())
+    expect(closed()).toEqual(['owner:bluebird-document', 'owner:bluebird-chat'])
   })
   it('skips keys that belong to a longer plugin id', () => {
-    panels.push(companion('x:bluebird-pro-chat', { __type: 'chat-panel', reuseKey: 'bluebird-pro-chat', __companionOwner: 'gone' }))
+    panels.push(companion('gone:bluebird-pro-chat', { __type: 'chat-panel', reuseKey: 'bluebird-pro-chat', __companionOwner: 'gone' }))
     pruneStalePluginCompanions('bluebird', 'owner', current, { views: [current], knownPluginIds: ['bluebird', 'bluebird-pro'] })
-    expect(closed()).not.toContain('x:bluebird-pro-chat')
+    expect(closed()).not.toContain('gone:bluebird-pro-chat')
   })
   it('does nothing while the plugin view is not registered (still loading or failed to load)', () => {
     mock.registered = (type) => type !== OWNER_TYPE

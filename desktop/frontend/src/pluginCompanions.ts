@@ -12,12 +12,13 @@ function companionSpecs(pluginId: string, def: ViewContribution): NonNullable<Vi
 
 /** Close companion tabs a plugin view no longer declares (a newer plugin version dropped them; plugins cannot close
  *  host panels themselves, so without this they live in the saved layout forever).
- *  Only tabs carrying the host's own `__companionOwner` marker are candidates — a tab the user opened, even on the
- *  same note, never has it. A candidate is closed when its owner is this leaf, or its owner leaf is gone (an
+ *  Only tabs the host created are candidates: they carry the `__companionOwner` marker AND keep the id the host gave
+ *  them (`${owner}:${key}`). A tab the user opened, even on the same note, has no marker; a split of a companion
+ *  copies the marker but gets a fresh id. A candidate is closed when its owner is this leaf, or its owner leaf is gone (an
  *  in-session upgrade closes the old owner and the Space reopens a new one), AND no registered view of this plugin
  *  still declares its (type, key). Keys belonging to a longer plugin id (`foo-bar-x` vs plugin `foo`) are skipped.
- *  Callers run this only once the owner view is registered and mounted: a plugin that is still loading or failed
- *  to load never mounts its view, so it never prunes. The single-column store (no Dockview api) opens companions
+ *  Callers run this only once the owner view mounted and the plugin's setup settled (all its views registered): a
+ *  plugin that is still loading or failed to load never prunes. The single-column store (no Dockview api) opens companions
  *  without the marker; those cannot be told apart from user tabs and are left alone. */
 export function pruneStalePluginCompanions(pluginId: string | undefined, ownerId: string, def: ViewContribution,
   plugin: { views: readonly ViewContribution[]; knownPluginIds: readonly string[] }): number {
@@ -33,6 +34,9 @@ export function pruneStalePluginCompanions(pluginId: string | undefined, ownerId
     const owner = q.__companionOwner, key = q.reuseKey, type = q.__type
     if (q.__loc !== 'main' || typeof owner !== 'string' || typeof key !== 'string' || typeof type !== 'string') return false
     if (!COMPANION_TYPES.includes(type) || !key.startsWith(pluginId + '-') || longer.some(id => key.startsWith(id + '-'))) return false
+    // The host names every companion it creates `${owner}:${key}`. A split of a companion copies its params
+    // (marker included) but gets a fresh id — that copy is the user's, never pruned.
+    if (p.id !== `${owner}:${key}`) return false
     if (owner !== ownerId && ws.leafById(owner)) return false // another live owner handles its own companions
     return !declared.has(`${type}\n${key}`)
   })
