@@ -55,17 +55,28 @@ export function runSecretEnv(ctx: { runId?: string; remote?: unknown } | undefin
   return e ? { ...e.env } : {};
 }
 
-/** 把本 run 的秘密值从文本里抹掉。长的先替换,免得短值是长值的一部分时留下半截。 */
+/** 一个秘密值拆出的需要单独抹掉的片段:整串,以及 `a=b; c=d` 这种 Cookie 里的每一项和每个值
+ *  (脚本只打印 `${VAR%%;*}` 也不会露出 SESSDATA)。 */
+function secretPieces(value: string): string[] {
+  const out = new Set<string>([value]);
+  for (const part of value.split(';')) {
+    const p = part.trim();
+    out.add(p);
+    const i = p.indexOf('=');
+    if (i > 0) out.add(p.slice(i + 1).trim());
+  }
+  return [...out].filter((x) => x.length >= MIN_REDACT);
+}
+
+/** 把本 run 的秘密值从文本里抹掉。长的先替换,免得短值是长值的一部分时留下半截。
+ *  这挡的是「脚本 / 模型无意中打印出来」;模型存心编码(base64 等)绕得过 —— 秘密本就交给了模型能编程的 shell。 */
 export function redactRunSecrets(ctx: { runId?: string } | undefined, text: string): string {
   if (!text || !ctx?.runId) return text;
   const e = store.get(ctx.runId);
   if (!e) return text;
+  const pieces = Object.entries(e.env).flatMap(([k, v]) => secretPieces(v.trim()).map((p) => [k, p] as const));
   let out = text;
-  for (const [k, v] of Object.entries(e.env).sort((a, b) => b[1].length - a[1].length)) {
-    const value = v.trim();
-    if (value.length < MIN_REDACT) continue;
-    out = out.split(value).join(`[REDACTED:${k}]`);
-  }
+  for (const [k, p] of pieces.sort((a, b) => b[1].length - a[1].length)) out = out.split(p).join(`[REDACTED:${k}]`);
   return out;
 }
 

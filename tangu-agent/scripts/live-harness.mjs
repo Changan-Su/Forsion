@@ -384,6 +384,7 @@ OPT_IN.add('humanportrait'); // 画像(human/SOUL.md)写没写:每轮 4 个 run 
 OPT_IN.add('import'); // 从其他 AI 导入(11-03):后台模型拆条 / 归位 / 拦截;不跑对话。动了 services/externalImport 的提示 / 后处理才有信息量。--import-neg = 负对照
 OPT_IN.add('portraitmove'); // 搬家的后台模型挑得准不准(10-30):不跑对话,只有人点的那几个接口;动了 agents/portraitMove.ts 的提示才有信息量。
 OPT_IN.add('humanreal'); // 协作说明写成什么样:每轮 6 个 run + 1 次判官(--rounds);只在动 HUMAN_GUIDANCE / manage_human 时才有信息量。
+OPT_IN.add('secretenv'); KEYS.push('secretenv'); // --only secretenv:一个 run;插件经 secret_env 交给 run_bash 的值,脚本拿得到、模型看不到(动 sandbox/runSecretEnv.ts 时跑)
 OPT_IN.add('mask'); KEYS.push('mask'); // 两个 run + 本地回显服务;只在动 llm/outboundMask.ts(发给模型前脱敏)时才有信息量。
 OPT_IN.add('streamoverflow'); KEYS.push('streamoverflow'); // 注入:真 Codex 路径上流里回 context_length_exceeded(lib/llm-fault-preload.mjs);只在动流内报错归类 / agentLoop 的超长压缩重试时跑
 OPT_IN.add('foreignreasoning'); KEYS.push('foreignreasoning'); // 注入:回灌的加密推理被拒(400 invalid_encrypted_content);只在动 historyReplay 的推理绑定 / agentLoop 的拿掉重发时跑
@@ -1611,7 +1612,7 @@ async function phoneResponder(runId, p, phone) {
 async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {}, client, onApproval, headers, approveHeaders, opts = {}) {
   const t0 = Date.now();
   // headers:只加在起 run 这一跳(remoteclamp 用它模拟 unitWeb 盖的 x-forsion-remote);事件流 / 审批兑现照旧本机直连。
-  const { runId } = await api('/agent/runs', { method: 'POST', headers, body: JSON.stringify({ session_id: sessionId, model_id: opts.model || MODEL, message, client, ...(opts.attachments ? { attachments: opts.attachments } : {}), ...(opts.clientCapabilities ? { client_capabilities: opts.clientCapabilities } : {}), ...(opts.ui ? { ui_commands: opts.uiCommands || [], ui_settings: opts.ui } : {}), agent_config: { ...AGENT_CONFIG, ...extraAgentConfig } }) });
+  const { runId } = await api('/agent/runs', { method: 'POST', headers, body: JSON.stringify({ session_id: sessionId, model_id: opts.model || MODEL, message, client, ...(opts.attachments ? { attachments: opts.attachments } : {}), ...(opts.clientCapabilities ? { client_capabilities: opts.clientCapabilities } : {}), ...(opts.secretEnv ? { secret_env: opts.secretEnv } : {}), ...(opts.ui ? { ui_commands: opts.uiCommands || [], ui_settings: opts.ui } : {}), agent_config: { ...AGENT_CONFIG, ...extraAgentConfig } }) });
   const ev = { runId, tokens: 0, toolCalls: [], toolCallIds: [], toolArgs: [], clientCmds: [], uiCmds: [], toolOffsets: null, toolResults: [], subTools: [], subStarts: [], subDones: [], systemPrompt: null, approvals: 0, approvalList: [], approvalResults: [], usages: [], probes: [], statuses: [], content: '', error: null, done: false, group: { speakers: [], ended: null, starts: [], ends: [], summary: null, remarks: [], outputs: [] }, ttftMs: null, firstTokenMs: null, wallMs: 0 };
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), timeoutMs);
@@ -3124,6 +3125,19 @@ try {
     const hit = ev.content.includes(MARKER);
     const anchors = anchorsOk(ev);
     return { ok: !ev.error && ev.toolCalls.length > 0 && hit && anchors, detail: ev.error || `工具 ${ev.toolCalls.join(',') || '无'};标记${hit ? '命中' : '未命中'};done 锚点${anchors ? '对齐' : `不对齐(${JSON.stringify(ev.toolOffsets)})`}${ev.approvals ? `;代批 ${ev.approvals}${ev.approveError ? '(失败:' + ev.approveError + ')' : ''}` : ''}`, output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
+  });
+
+  // secretenv(11-08,青鸟 B 站登录):run 请求带 secret_env → 真模型用 run_bash 跑一段打印它的脚本。
+  //   判据:脚本拿到了(长度对)、模型收到的输出里是 [REDACTED:BLUEBIRD_COOKIE]、回复 / 事件 / 引擎日志里都没有原值。
+  await scenario('secretenv', 'secretenv 每次 run 的秘密环境变量:脚本拿得到,模型看不到', async () => {
+    const secret = `SESSDATA=live${randomUUID().replace(/-/g, '')}; bili_jct=x${randomUUID().slice(0, 8)}`;
+    const logBefore = existsSync(engineLog) ? readFileSync(engineLog, 'utf8').length : 0;
+    const ev = await run(`live-secretenv-${Date.now()}`, `Use run_bash to run exactly this command once: python3 -c "import os;v=os.environ.get('BLUEBIRD_COOKIE','');print('len',len(v));print('value',v)" — then reply with the command's output verbatim and nothing else.`, 240_000, {}, undefined, undefined, undefined, undefined, { secretEnv: { BLUEBIRD_COOKIE: secret } });
+    const log = existsSync(engineLog) ? readFileSync(engineLog, 'utf8').slice(logBefore) : '';
+    const reached = (ev.content || '').includes(`len ${secret.length}`);
+    const redacted = (ev.content || '').includes('[REDACTED:BLUEBIRD_COOKIE]');
+    const leaked = JSON.stringify(ev).includes(secret) || log.includes(secret);
+    return { ok: !ev.error && ev.toolCalls.includes('run_bash') && reached && redacted && !leaked, detail: ev.error || `工具 ${ev.toolCalls.join(',') || '无'};脚本${reached ? '拿到了' : '没拿到'};输出${redacted ? '已打码' : '未打码'};${leaked ? '原值泄漏' : '原值没出现在回复 / 事件 / 日志'}`, output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
   });
 
   // mask(10-28,借鉴 magpie 方案 1 · 发给模型前脱敏):真模型拿到的是占位符,但照样能把 key 用对。

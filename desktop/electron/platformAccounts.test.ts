@@ -97,6 +97,28 @@ describe('platform account IPC', () => {
     expect(h.asked).toBe(1)
   })
 
+  it('connect while already signed in still asks a plugin that was never allowed', async () => {
+    await fresh()
+    await call('paste', 'bilibili', 'bluebird', 'SESSDATA=s1')
+    h.answer = 1
+    expect((await call('connect', 'bilibili', 'other', 'Other') as { state: string }).state).toBe('connected')
+    expect(h.asked).toBe(1)
+    expect(await call('cookie', 'bilibili', 'other', 'Other')).toBeNull() // 拒绝过 → 没授权,读时再问
+    expect(h.asked).toBe(2)
+    expect((await call('connect', 'bilibili', 'bluebird', 'Bluebird') as { state: string }).state).toBe('connected')
+    expect(h.asked).toBe(2) // 已授权的插件不再问
+  })
+
+  it('concurrent grants all land', async () => {
+    await fresh()
+    await call('paste', 'bilibili', 'bluebird', 'SESSDATA=s1')
+    h.answer = 0
+    await Promise.all(['p1', 'p2', 'p3', 'p4'].map((p) => call('cookie', 'bilibili', p, p)))
+    const { readFileSync } = await import('node:fs')
+    const saved = JSON.parse(readFileSync(path.join(h.userData, 'platform-account-grants.json'), 'utf8'))
+    expect(Object.keys(saved).sort()).toEqual(['bluebird\nbilibili', 'p1\nbilibili', 'p2\nbilibili', 'p3\nbilibili', 'p4\nbilibili'])
+  })
+
   it('a sign-in the platform no longer accepts reads as expired', async () => {
     await fresh()
     await call('paste', 'bilibili', 'bluebird', 'SESSDATA=s1')

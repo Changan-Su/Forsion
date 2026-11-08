@@ -387,7 +387,7 @@ const api = {
   /** 平台账号(platformAccounts.ts):内置浏览器里某个平台的登录信息,插件经 ctx.app.platformAccounts 用。 */
   platformAccounts: {
     status: (platform: string): Promise<unknown> => ipcRenderer.invoke('platformAccounts:status', platform),
-    connect: (platform: string, pluginId: string): Promise<unknown> => ipcRenderer.invoke('platformAccounts:connect', platform, pluginId),
+    connect: (platform: string, pluginId: string, pluginName: string): Promise<unknown> => ipcRenderer.invoke('platformAccounts:connect', platform, pluginId, pluginName),
     paste: (platform: string, pluginId: string, text: string): Promise<unknown> => ipcRenderer.invoke('platformAccounts:paste', platform, pluginId, text),
     disconnect: (platform: string): Promise<unknown> => ipcRenderer.invoke('platformAccounts:disconnect', platform),
     cookie: (platform: string, pluginId: string, pluginName: string): Promise<string | null> => ipcRenderer.invoke('platformAccounts:cookie', platform, pluginId, pluginName),

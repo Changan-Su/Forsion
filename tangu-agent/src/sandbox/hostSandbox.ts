@@ -183,9 +183,10 @@ export function spawnHostCommand(ctx: HostExecContext, argv: string[], options: 
  *  远程写保护那条路(macOS)同样是 `/bin/sh -c command` —— 与 Node 在 darwin 上 shell:true 的展开一致,只是外面多一层 sandbox-exec。
  *  Windows 不 detached + windowsHide,两个必须成对:detached 是 DETACHED_PROCESS,cmd.exe 没有控制台,它起的 python.exe
  *  等控制台程序就各自弹一个可见窗口,而单加 windowsHide(CREATE_NO_WINDOW)与它同用时被系统忽略。win32 的终止本来就不靠进程组。 */
-export function spawnHostShell(ctx: HostExecContext, command: string): ChildProcess {
-  // 本 run 的秘密变量(runSecretEnv.ts):只给本机 run 的 run_bash,远程污点(含 steer 染色)一律不给
-  const secrets = effectiveRemote(ctx) ? {} : runSecretEnv(ctx);
+export function spawnHostShell(ctx: HostExecContext, command: string, opts: { runSecrets?: boolean } = {}): ChildProcess {
+  // 本 run 的秘密变量(runSecretEnv.ts):只给本机 run 的 run_bash(调用方显式要)—— run_background 不给:
+  // 后台进程活得比 run 久、输出走 read_process_output 不经打码。远程污点(含 steer 染色)一律不给。
+  const secrets = opts.runSecrets && !effectiveRemote(ctx) ? runSecretEnv(ctx) : {};
   if (!hostSandboxEnabled(ctx) && !shellWriteProtectApplies(ctx)) {
     const shell = hostShell();
     if (shell.kind === 'bash' && shell.bin) {

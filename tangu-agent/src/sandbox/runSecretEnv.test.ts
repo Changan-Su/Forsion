@@ -40,6 +40,9 @@ describe('per-run store', () => {
     setRunSecretEnv('r1', { BLUEBIRD_COOKIE: SECRET });
     expect(redactRunSecrets({ runId: 'r1' }, `got ${SECRET} ok`)).toBe('got [REDACTED:BLUEBIRD_COOKIE] ok');
     expect(redactRunSecrets({ runId: 'r2' }, `got ${SECRET}`)).toBe(`got ${SECRET}`);
+    // 只露出其中一项、或只露出值,也抹掉
+    expect(redactRunSecrets({ runId: 'r1' }, 'a SESSDATA=abc123def456 b')).not.toContain('abc123def456');
+    expect(redactRunSecrets({ runId: 'r1' }, 'v=abc123def456')).toBe('v=[REDACTED:BLUEBIRD_COOKIE]');
   });
 });
 
@@ -51,6 +54,18 @@ describe('run_bash', () => {
     expect(out).toContain(`len=${SECRET.length}`);
     expect(out).toContain('[REDACTED:BLUEBIRD_COOKIE]');
     expect(out).not.toContain('abc123def456');
+  });
+  it.skipIf(process.platform === 'win32')('background processes do not get it', async () => {
+    const { startBackgroundProcess, disposeAllProcesses } = await import('../tools/processRegistry.js');
+    const { mkdtempSync, readFileSync, existsSync } = await import('node:fs');
+    const path = await import('node:path');
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'secret-bg-'));
+    setRunSecretEnv('r1', { BLUEBIRD_COOKIE: SECRET });
+    startBackgroundProcess('s', `printf "len=%s" "\${#BLUEBIRD_COOKIE}" > "${dir}/out.txt"`, dir, ctx('r1'));
+    for (let i = 0; i < 40 && !existsSync(`${dir}/out.txt`); i++) await new Promise((r) => setTimeout(r, 50));
+    await new Promise((r) => setTimeout(r, 100));
+    disposeAllProcesses();
+    expect(readFileSync(`${dir}/out.txt`, 'utf8')).toBe('len=0');
   });
   it.skipIf(process.platform === 'win32')('other runs do not see it', async () => {
     setRunSecretEnv('r1', { BLUEBIRD_COOKIE: SECRET });

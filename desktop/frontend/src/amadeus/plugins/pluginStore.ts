@@ -562,7 +562,7 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
       return {
         platforms: () => ['bilibili'],
         status: async (platform) => { if (!ok()) throw gone(); return st(await bridge.status(platform)) },
-        connect: async (platform) => { if (!ok()) throw gone(); return st(await bridge.connect(platform, pluginId)) },
+        connect: async (platform) => { if (!ok()) throw gone(); return st(await bridge.connect(platform, pluginId, getName())) },
         pasteCookie: async (platform, text) => { if (!ok()) throw gone(); return st(await bridge.paste(platform, pluginId, String(text ?? ''))) },
         disconnect: async (platform) => { if (!ok()) throw gone(); return st(await bridge.disconnect(platform)) },
         cookie: async (platform) => { if (!ok()) return null; return (await bridge.cookie(platform, pluginId, getName())) ?? null },

@@ -181,7 +181,7 @@ function runBash(
     // 触发 → Promise 永不 resolve → 整个 run 挂死(本次修复的根因)。
     let child;
     try {
-      child = spawnHostShell(ctx || { cwd }, command);
+      child = spawnHostShell(ctx || { cwd }, command, { runSecrets: true });
     } catch (e: any) {
       // 远程写保护起不来(P1 · G5):命令没跑,按工具错误回给模型(失败即关)
       if (e instanceof RemoteShellProtectionError) { resolve({ stdout: '', stderr: '', code: -1, timedOut: false, aborted: false, refused: e.message }); return; }

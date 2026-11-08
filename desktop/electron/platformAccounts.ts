@@ -140,20 +140,30 @@ async function readGrants(): Promise<Grants> {
   return grantsCache
 }
 async function writeGrants(g: Grants): Promise<void> {
-  grantsCache = g
-  const tmp = `${grantsFile()}.tmp`
+  const tmp = `${grantsFile()}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`
   await fs.writeFile(tmp, JSON.stringify(g), { mode: 0o600 })
   await fs.rename(tmp, grantsFile())
+  grantsCache = g // 落盘成功才算数
 }
-async function grant(pluginId: string, id: PlatformId): Promise<void> {
-  const g = await readGrants()
-  if (g[grantKey(pluginId, id)]) return
-  await writeGrants({ ...g, [grantKey(pluginId, id)]: true })
+// 授权的读-改-写整段串行:两个窗口同时连接 / 断开不会互相覆盖
+let grantChain: Promise<unknown> = Promise.resolve()
+function serialGrants<T>(fn: () => Promise<T>): Promise<T> {
+  const next = grantChain.then(fn, fn)
+  grantChain = next.catch(() => {})
+  return next
 }
-async function revokePlatform(id: PlatformId): Promise<void> {
-  const g = await readGrants()
-  const next = Object.fromEntries(Object.entries(g).filter(([k]) => !k.endsWith(`\n${id}`))) as Grants
-  await writeGrants(next)
+function grant(pluginId: string, id: PlatformId): Promise<void> {
+  return serialGrants(async () => {
+    const g = await readGrants()
+    if (g[grantKey(pluginId, id)]) return
+    await writeGrants({ ...g, [grantKey(pluginId, id)]: true })
+  })
+}
+function revokePlatform(id: PlatformId): Promise<void> {
+  return serialGrants(async () => {
+    const g = await readGrants()
+    await writeGrants(Object.fromEntries(Object.entries(g).filter(([k]) => !k.endsWith(`\n${id}`))) as Grants)
+  })
 }
 
 defineMainMessages({
@@ -186,11 +196,10 @@ async function askGrant(win: BrowserWindow | null, pluginName: string, id: Platf
 }
 
 // ── 登录窗口 ──────────────────────────────────────────────────────────────────────
-const loginWindows = new Map<PlatformId, Promise<boolean>>()
+/** 同一平台同时只开一个登录窗口;initiator = 打开它的插件(只有它在登好后自动得到授权)。 */
+const loginWindows = new Map<PlatformId, { initiator: string; done: Promise<boolean> }>()
 
-function openLoginWindow(parent: BrowserWindow | null, s: Session, id: PlatformId): Promise<boolean> {
-  const running = loginWindows.get(id)
-  if (running) return running
+function openLoginWindow(parent: BrowserWindow | null, s: Session, id: PlatformId, initiator: string): Promise<boolean> {
   const def = PLATFORMS[id]
   const work = new Promise<boolean>((resolve) => {
     const win = new BrowserWindow({
@@ -224,7 +233,7 @@ function openLoginWindow(parent: BrowserWindow | null, s: Session, id: PlatformI
     win.once('ready-to-show', () => win.show())
     void win.loadURL(def.loginUrl).catch(() => { if (!win.isDestroyed()) win.show() })
   }).finally(() => loginWindows.delete(id))
-  loginWindows.set(id, work)
+  loginWindows.set(id, { initiator, done: work })
   return work
 }
 
@@ -239,17 +248,31 @@ export function registerPlatformAccountsIpc(): void {
     return accountStatus(browserSession(), id)
   })
   /** 已登录就直接回;没登录打开平台自己的登录页,登好自动关。用户从这个插件发起 = 同意这个插件使用。 */
-  ipcMain.handle('platformAccounts:connect', async (e, id: unknown, pluginId: unknown) => {
+  ipcMain.handle('platformAccounts:connect', async (e, id: unknown, pluginId: unknown, pluginName: unknown) => {
     if (!isPlatformId(id) || !validPluginId(pluginId)) throw new Error('bad-request')
     const s = browserSession()
     let st = await accountStatus(s, id)
-    if (st.state !== 'connected') {
-      if (st.state === 'expired') await clearPlatform(s, id)
-      const ok = await openLoginWindow(senderWindow(e), s, id)
-      if (!ok) return accountStatus(s, id)
-      st = await accountStatus(s, id)
+    if (st.state === 'connected') {
+      // 已经登录(比如在内置浏览器里登过):插件调一下 connect 不能就此拿到授权 —— 没授权过的照样弹框问
+      if (!(await readGrants())[grantKey(pluginId, id)]) {
+        if (!(await askGrant(senderWindow(e), cleanPluginName(pluginName, pluginId), id))) return st
+        await grant(pluginId, id)
+      }
+      return st
     }
-    if (st.state === 'connected') await grant(pluginId, id)
+    if (st.state === 'expired') await clearPlatform(s, id)
+    // 用户在弹出的平台登录页里亲手登完 = 同意**打开这个窗口的**插件使用;中途搭车的别的插件照样要问
+    const running = loginWindows.get(id)
+    const mine = !running || running.initiator === pluginId
+    const ok = await (running ? running.done : openLoginWindow(senderWindow(e), s, id, pluginId))
+    if (!ok) return accountStatus(s, id)
+    st = await accountStatus(s, id)
+    if (st.state !== 'connected') return st
+    if (mine) await grant(pluginId, id)
+    else if (!(await readGrants())[grantKey(pluginId, id)]) {
+      if (!(await askGrant(senderWindow(e), cleanPluginName(pluginName, pluginId), id))) return st
+      await grant(pluginId, id)
+    }
     return st
   })
   ipcMain.handle('platformAccounts:paste', async (_e, id: unknown, pluginId: unknown, text: unknown) => {
