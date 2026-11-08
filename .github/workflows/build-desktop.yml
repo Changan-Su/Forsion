@@ -116,6 +116,7 @@ jobs:
       #    electron-builder 配置**装载即验**该产物(unit 捆包闸),缺了直接 throw。
       - name: Build desktop shell
         working-directory: desktop
+        timeout-minutes: 15 # 正常 1–3 分钟
         # ⚠️ 必须钉 bash:Windows 默认 pwsh **前一条命令失败不中断**,build:unitweb 挂了照样往下跑、
         #    步骤报 success,真正的错要等到几十行外的 Package installer 才以「缺 unit-web-dist」现形
         #    (2026-08-30 被它误导过两轮)。bash 的 -e 让它当场红在正确的位置。
@@ -181,6 +182,8 @@ jobs:
 
       - name: Package installer
         working-directory: desktop
+        # 正常 2–7 分钟(Windows 慢机器 ~7 分钟)。11-08 卡死在解 tar.bz2 上:单步封顶,卡住 20 分钟内就红,不等整个 job。
+        timeout-minutes: 20
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: npx electron-builder --config electron-builder.config.cjs ${{ matrix.ebargs }} --publish never
@@ -269,6 +272,7 @@ jobs:
 
       - name: Packaged Extend upgrade and cloud UI acceptance
         if: runner.os != 'Windows' || steps.extendpin.outputs.run != 'false'
+        timeout-minutes: 15 # 正常 0.5–5 分钟
         working-directory: desktop
         shell: bash
         run: |
