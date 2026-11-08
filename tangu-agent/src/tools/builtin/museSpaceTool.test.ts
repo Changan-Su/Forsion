@@ -156,3 +156,9 @@ describe('widget', () => {
     expect(await call({ action: 'widget', name: 'dup', document: UI_DOC })).toMatch(/^Error: a widget named "dup" already exists/);
   });
 });
+
+describe('Codex 11-08 评审', () => {
+  it('只在宿主执行:沙箱会话的审批门会直接放行非宿主工具,widget 的写文件审批就被绕过', () => {
+    expect(tool.mode).toBe('host');
+  });
+});

@@ -17,11 +17,12 @@
  * 不 import services/muse.ts:工具要用这里,而 muse.ts 经 agentLoop → registry 反向依赖工具,直接 import 成环。
  * Library / Space 两个目录因此住在这里,muse.ts 转出口。
  */
-import { promises as fs } from 'node:fs';
+import { promises as fs, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { agentsDir, tanguHome } from '../core/tanguHome.js';
 import { MUSE_AGENT_SLUG } from '../agents/agentRegistry.js';
 import { atomicSyncWrite, readSyncBytes } from './agentSyncPaths.js';
+import { withWriteLock } from '../tools/writeLock.js';
 import { loadSpecialAgentsConfig } from './specialAgentsConfig.js';
 import { readLastCycleAt } from './museState.js';
 import {
@@ -37,20 +38,21 @@ export function museLibraryDir(): string {
 export function museSpaceDir(): string {
   return path.join(agentsDir(), MUSE_AGENT_SLUG, 'Space');
 }
-export const museSpaceDocFile = (): string => path.join(museSpaceDir(), 'space.json');
-export const musePlacementFile = (): string => path.join(tanguHome(), 'ui', 'muse-space.json');
-const docGoodFile = (): string => path.join(tanguHome(), 'ui', 'muse-space.doc.good.json');
-const placementGoodFile = (): string => path.join(tanguHome(), 'ui', 'muse-space.good.json');
+/** 读写用的根按真实路径算:家目录本身可以是软链(~/.tangu → ~/.forsion/tangu 是支持的布局),而 atomicSyncWrite / readSyncBytes
+ *  的围栏从根开始逐段 lstat、见软链就拒 —— 拿软链当根,摆放永远写不进、最后有效的永远刷不了。根以下的软链照旧拒。 */
+const real = (p: string): string => { try { return realpathSync(p); } catch { return p; } };
+const homeRoot = (): string => real(tanguHome());
+const agentsRoot = (): string => real(agentsDir());
+export const museSpaceDocFile = (): string => path.join(agentsRoot(), MUSE_AGENT_SLUG, 'Space', 'space.json');
+export const musePlacementFile = (): string => path.join(homeRoot(), 'ui', 'muse-space.json');
+const docGoodFile = (): string => path.join(homeRoot(), 'ui', 'muse-space.doc.good.json');
+const placementGoodFile = (): string => path.join(homeRoot(), 'ui', 'muse-space.good.json');
 
 export type MuseSpaceProblem = MuseSpaceView['problems'][number];
 
-let chain: Promise<unknown> = Promise.resolve();
-/** 两份文件共用的一把锁(单进程:引擎是唯一的写者;卜算子 write_file 直改不走这里,读时校验兜住)。 */
-function locked<T>(fn: () => Promise<T>): Promise<T> {
-  const next = chain.then(fn, fn);
-  chain = next.catch(() => {});
-  return next;
-}
+/** 两份文件的锁 = 宿主写盘的全局写锁(可重入):卜算子 edit_file / write_file 直改 space.json 也在这把锁里做「读-改-写」,
+ *  分两把锁的话,它读到 rev 1 → 这边提交 rev 2 → 它拿 rev 1 的快照写回,rev 2 就丢了(Codex 11-08 评审 P1)。 */
+const locked = <T,>(fn: () => Promise<T>): Promise<T> => withWriteLock(fn);
 
 interface FileRead<T> {
   /** 手里这份有效的(本份或最后一份有效的);null = 没有 */
@@ -64,7 +66,7 @@ const jsonText = (v: unknown): string => `${JSON.stringify(v, null, 2)}\n`;
 
 function readGood<T>(file: string, sanitize: (raw: unknown) => SanitizeResult<T>): T | null {
   try {
-    const bytes = readSyncBytes(tanguHome(), file);
+    const bytes = readSyncBytes(homeRoot(), file);
     if (!bytes) return null;
     const r = sanitize(JSON.parse(bytes.toString('utf8')));
     return r.ok ? r.value : null;
@@ -74,9 +76,9 @@ function readGood<T>(file: string, sanitize: (raw: unknown) => SanitizeResult<T>
 function refreshGood(file: string, value: unknown): void {
   const text = jsonText(value);
   try {
-    const cur = readSyncBytes(tanguHome(), file);
+    const cur = readSyncBytes(homeRoot(), file);
     if (cur && cur.toString('utf8') === text) return;
-    atomicSyncWrite(tanguHome(), file, text);
+    atomicSyncWrite(homeRoot(), file, text);
   } catch (e) { console.warn(`[muse-space] 刷新 ${path.basename(file)} 失败:${errText(e)}`); }
 }
 
@@ -99,8 +101,8 @@ function readOne<T>(root: string, file: string, goodFile: string, sanitize: (raw
 interface Both { doc: FileRead<MuseSpaceDoc>; placement: FileRead<MuseSpacePlacement> }
 function readBoth(): Both {
   return {
-    doc: readOne(agentsDir(), museSpaceDocFile(), docGoodFile(), sanitizeMuseSpaceDoc),
-    placement: readOne(tanguHome(), musePlacementFile(), placementGoodFile(), sanitizeMuseSpacePlacement),
+    doc: readOne(agentsRoot(), museSpaceDocFile(), docGoodFile(), sanitizeMuseSpaceDoc),
+    placement: readOne(homeRoot(), musePlacementFile(), placementGoodFile(), sanitizeMuseSpacePlacement),
   };
 }
 function problemsOf(b: Both): MuseSpaceProblem[] {
@@ -111,11 +113,11 @@ function problemsOf(b: Both): MuseSpaceProblem[] {
 }
 
 function writeDoc(doc: MuseSpaceDoc): void {
-  atomicSyncWrite(agentsDir(), museSpaceDocFile(), jsonText(doc));
+  atomicSyncWrite(agentsRoot(), museSpaceDocFile(), jsonText(doc));
   refreshGood(docGoodFile(), doc);
 }
 function writePlacement(p: MuseSpacePlacement): void {
-  atomicSyncWrite(tanguHome(), musePlacementFile(), jsonText(p));
+  atomicSyncWrite(homeRoot(), musePlacementFile(), jsonText(p));
   refreshGood(placementGoodFile(), p);
 }
 

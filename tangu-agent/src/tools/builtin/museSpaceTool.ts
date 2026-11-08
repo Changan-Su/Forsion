@@ -239,7 +239,8 @@ export const museSpaceToolProvider: ToolProvider = {
   tools: () => [
     {
       name: 'muse_space',
-      mode: 'both',
+      // 只在宿主执行:它写的是宿主上的文件,沙箱会话里的审批门把非宿主工具直接放行,widget 那道写文件审批就被绕过了(Codex 11-08 P1)
+      mode: 'host',
       isEnabledFor: (profile, ctx) => !!profile.capabilities.hostExec && isMuse(ctx),
       capabilities: { sideEffect: 'write', parallel: false, defaultTimeoutMs: 10_000 },
       definition: {

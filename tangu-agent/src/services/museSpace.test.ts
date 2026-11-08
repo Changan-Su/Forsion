@@ -12,6 +12,7 @@ import { join } from 'node:path';
 import { applyMusePlacement, emptyMuseDoc, museLibraryDir, musePlacementFile, museSpaceDocFile, museSpaceDir, museSpaceView, readMuseSpaceState, updateMuseDoc } from './museSpace.js';
 import { saveSpecialAgentsConfig } from './specialAgentsConfig.js';
 import type { MuseSpaceDoc } from '../contracts/museSpace.js';
+import { withWriteLock } from '../tools/writeLock.js';
 
 let home: string;
 const prevHome = process.env.TANGU_HOME;
@@ -181,5 +182,47 @@ describe('写', () => {
     expect(s.doc?.proposed).toHaveLength(1);
     await setDoc({ hero: { text: 'new', at: new Date(NOW).toISOString() } }, 1);
     expect(JSON.parse(readFileSync(museSpaceDocFile(), 'utf8')).proposed).toEqual([]);
+  });
+});
+
+describe('Codex 11-08 评审', () => {
+  it('卜算子 edit_file 直改 space.json 与这边的写共用全局写锁:它的「读-改-写」做完之前这边不提交,rev 2 不会被它的旧快照盖掉', async () => {
+    await setDoc({ hero: { text: 'a', at: new Date(NOW).toISOString() } });
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const edit = withWriteLock(async () => { // 等同 hostFileOps 的 edit_file:锁里读 → 改 → 写回
+      const text = readFileSync(museSpaceDocFile(), 'utf8');
+      await gate;
+      writeFileSync(museSpaceDocFile(), text.replace('"a"', '"edited"'));
+    });
+    let done = false;
+    const upd = updateMuseDoc(1, (st) => ({ ok: true, doc: { ...st.doc!, hero: { text: 'b', at: new Date(NOW).toISOString() } } })).then((r) => { done = true; return r; });
+    await new Promise((r) => setTimeout(r, 40));
+    expect(done).toBe(false); // 排在 edit 后面
+    release(); await edit;
+    const r = await upd;
+    expect(r.ok).toBe(true);
+    expect(JSON.parse(readFileSync(museSpaceDocFile(), 'utf8'))).toMatchObject({ rev: 2, hero: { text: 'b' } });
+  });
+
+  it('家目录本身是软链(~/.tangu → 真目录,支持的布局):摆放照常写进、最后有效的照常刷新,不报问题', async () => {
+    const realHome = mkdtempSync(join(tmpdir(), 'tangu-muse-real-'));
+    const link = join(tmpdir(), `tangu-muse-link-${process.pid}-${Date.now()}`);
+    symlinkSync(realHome, link);
+    process.env.TANGU_HOME = link;
+    try {
+      saveSpecialAgentsConfig({ muse: { enabled: true } } as any);
+      const r = await applyMusePlacement(0, { type: 'hide', key: 'tracking' });
+      expect(r.ok).toBe(true);
+      expect(existsSync(join(realHome, 'ui', 'muse-space.json'))).toBe(true);
+      expect(existsSync(join(realHome, 'ui', 'muse-space.good.json'))).toBe(true);
+      const v = await museSpaceView();
+      expect(v.problems).toEqual([]);
+      expect(v.hidden.map((c) => c.key)).toEqual(['tracking']);
+    } finally {
+      process.env.TANGU_HOME = home;
+      rmSync(link, { force: true });
+      rmSync(realHome, { recursive: true, force: true });
+    }
   });
 });
