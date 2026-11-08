@@ -24,11 +24,11 @@ export type FontSlot = 'ui' | 'body' | 'mono'
 
 const STORAGE_KEY: Record<FontSlot, string> = { ui: FONT_UI_KEY, body: FONT_BODY_KEY, mono: FONT_MONO_KEY }
 
-/** 每档要盖的变量。--font / --mono 是 Amadeus soft 基座自己的词汇(有 17 处直接 var() 消费)。 */
+/** 每档要盖的变量。--font / --mono 供 Amadeus soft 使用，--font-mono-preference 让有局部默认值的界面也能尊重显式选择。 */
 const VARS: Record<FontSlot, string[]> = {
   ui: ['--font-ui', '--font'],
   body: ['--font-body'],
-  mono: ['--font-mono', '--mono'],
+  mono: ['--font-mono', '--mono', '--font-mono-preference'],
 }
 
 /** 真正重定义过字体变量的元素(grep `--font-ui:` / `--font:` 得来)。 */
