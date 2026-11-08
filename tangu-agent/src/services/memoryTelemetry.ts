@@ -8,6 +8,7 @@ import { ledger, agentRoleOf, type AgentRole } from './telemetryLedger.js';
 import { isMemoryTombstoneActive, memoryFactFingerprint, normalizeMemoryFact, setMemoryCommitObserver, type MemoryEntry, type MemorySnapshot, type MemorySource } from './memoryRepository.js';
 import { getAgent } from '../agents/agentRegistry.js';
 import { noteColdstartPersonWrite } from './humanTelemetry.js';
+import { MEMORY_FORGET_REASONS, type MemoryForgetReason } from '../contracts/clientTypes.js';
 
 const WEEK = 7 * 86_400_000;
 
@@ -108,7 +109,13 @@ const agentWrittenRecently = (e: MemoryEntry | undefined, now = Date.now()): boo
   !!e && e.source?.kind !== 'manual' && now - Number(e.createdAt) <= WEEK;
 
 /** 记忆页上逐条改(POST /agent/agents/:slug/memory/entries)。 */
-export function noteUserEntryEdit(slug: string, action: string, old: MemoryEntry | undefined): void {
+/** 遗忘理由 → 账本字段(daily_memory,按 agentRole)。 */
+const FORGET_REASON_FIELD = { wrong: 'userForgetWrong', stale: 'userForgetStale', unwanted: 'userForgetUnwanted', duplicate: 'userForgetDuplicate' } as const satisfies Record<MemoryForgetReason, string>;
+/** 客户端传来的遗忘理由:只认表里的四个,别的(含非字符串)当没给。 */
+export function memoryForgetReason(x: unknown): MemoryForgetReason | undefined {
+  return typeof x === 'string' && (MEMORY_FORGET_REASONS as readonly string[]).includes(x) ? (x as MemoryForgetReason) : undefined;
+}
+export function noteUserEntryEdit(slug: string, action: string, old: MemoryEntry | undefined, reason?: unknown): void {
   try {
     const dim = agentRoleOf(slug);
     if (action === 'add') ledger.inc('daily_memory', 'userAdd', { dim });
@@ -118,6 +125,8 @@ export function noteUserEntryEdit(slug: string, action: string, old: MemoryEntry
     } else if (action === 'forget') {
       ledger.inc('daily_memory', 'userForget', { dim });
       if (agentWrittenRecently(old)) ledger.inc('daily_memory', 'userForgetAgentWritten7d', { dim });
+      const why = memoryForgetReason(reason);
+      if (why) ledger.inc('daily_memory', FORGET_REASON_FIELD[why], { dim });
     }
   } catch { /* 同上 */ }
 }

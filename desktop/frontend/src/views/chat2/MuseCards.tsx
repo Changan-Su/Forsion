@@ -15,7 +15,9 @@ import { currentClientId } from '../../services/agentRunService'
 import { useInbox } from '../../stores/inboxStore'
 import { setActiveSpace, useWorkspace } from '@lcl/engine'
 import { HOME_REF, sameRef, targetForSession } from '../../services/engine/targets'
-import type { MuseCardInfo, ToolEvent } from '../../../../../tangu-agent/src/contracts/clientTypes'
+import type { MuseCardInfo, MuseDismissReason, ToolEvent } from '../../../../../tangu-agent/src/contracts/clientTypes'
+import { MUSE_DISMISS_REASONS } from '../../../../../tangu-agent/src/contracts/clientTypes'
+import { ReasonPrompt, canShareOriginal, sendOriginal } from './FeedbackReasons'
 import { MarketPluginCards } from '../../components/MarketPluginCards'
 import { useAutomation } from '../../stores/automationStore'
 import { canObserve, condText, onlyText } from '../automation/lib'
@@ -183,17 +185,52 @@ function useDecide(sessionId: string | undefined) {
 /** 功能卡的 feature 引擎发卡时已按 MUSE_FEATURES 校验过(都是设置页 id)。 */
 const openSettingsTab = (tab: string): void => useApp.getState().openSettings(tab as Parameters<ReturnType<typeof useApp.getState>['openSettings']>[0])
 
+/** 规则卡「做」那一行怎么念(卡上和附原文共用)。 */
+function ruleActText(r: any, t: Tr): string {
+  const step = r.actions?.[0]
+  return step?.type === 'remind' ? t('museCard.ruleRemind', { text: step.title })
+    : step?.type === 'notify' ? t('museCard.ruleNotify', { text: step.title })
+    : r.prompt ? t('museCard.ruleWakeWith', { text: r.prompt }) : t('museCard.ruleWake')
+}
+
+/** 附原文时发的就是这张卡上看得到的字,payload 里别的东西不带。 */
+function cardText(card: MuseCardInfo, t: Tr): string {
+  const p = card.payload || {}
+  if (card.kind === 'rule') {
+    const r = p.rule ?? {}
+    return [r.desc, r.cond ? `${t('museCard.ruleWhen')}: ${condText(t, r.cond)}` : '', `${t('museCard.ruleDo')}: ${ruleActText(r, t)}`].filter(Boolean).join('\n')
+  }
+  if (card.kind === 'plugin') return [p.item?.name, p.item?.summary || p.item?.description].filter(Boolean).join('\n')
+  if (card.kind === 'settings') return ((p.changes || []) as SettingChange[]).map((c) => `${t(`museCard.field.${c.field}`)}: ${settingValue(c.field, c.from, t)} → ${settingValue(c.field, c.to, t)}`).join('\n')
+  if (card.kind === 'channel') return [t('museCard.channel'), p.why].filter(Boolean).join('\n')
+  return [p.title, p.why].filter(Boolean).join('\n')
+}
+
+/** 「不感兴趣 / 不用」之后的理由行(帮助改进 P3):理由跟着 dismiss 那一次走;勾了「附上原文」,收卡成功之后再随账号发这张卡上的字。 */
+function DismissReasons({ card, sessionId, onCancel }: { card: MuseCardInfo; sessionId?: string; onCancel: () => void }) {
+  const { t } = useI18n()
+  const { busy, decide } = useDecide(sessionId)
+  const pick = async (reason: MuseDismissReason | null, share: boolean): Promise<void> => {
+    const ok = await decide(card, 'dismiss', reason ? { reason } : undefined)
+    if (ok && share) void sendOriginal({ reasonLabel: reason ? t(`museReason.${reason}`) : null, tag: `muse-card:${card.kind}`, body: cardText(card, t) })
+  }
+  return (
+    <ReasonPrompt reasons={MUSE_DISMISS_REASONS.map((id) => ({ id, label: t(`museReason.${id}`) }))}
+      busy={busy} shareable={canShareOriginal()} onPick={(r, s) => void pick(r, s)} onCancel={onCancel} />
+  )
+}
+
 /** 卡片堆里的一张。 */
 export function MuseDeckCard({ card, sessionId }: { card: MuseCardInfo; sessionId?: string }) {
   const { t } = useI18n()
   const { busy, decide } = useDecide(sessionId)
+  // 点了「不感兴趣 / 不用」:动作行原地换成理由行,选了(或「直接关掉」)才真的收卡
+  const [asking, setAsking] = useState(false)
+  const reasons = <DismissReasons card={card} sessionId={sessionId} onCancel={() => setAsking(false)} />
   if (card.kind === 'rule') {
     const r = card.payload.rule ?? {}
     const only = onlyText(t, r, true)
-    const step = r.actions?.[0]
-    const act = step?.type === 'remind' ? t('museCard.ruleRemind', { text: step.title })
-      : step?.type === 'notify' ? t('museCard.ruleNotify', { text: step.title })
-      : r.prompt ? t('museCard.ruleWakeWith', { text: r.prompt }) : t('museCard.ruleWake')
+    const act = ruleActText(r, t)
     const row = (k: string, v: string) => <div className="t2-rulecard-row"><span>{k}</span><span>{v}</span></div>
     return (
       <div className="t2-tasks"><div className="t2-taskcard" data-muse-card="rule">
@@ -201,12 +238,12 @@ export function MuseDeckCard({ card, sessionId }: { card: MuseCardInfo; sessionI
         {row(t('museCard.ruleWhen'), r.cond ? condText(t, r.cond) : '—')}
         {!!only && row(t('museCard.ruleOnly'), only)}
         {row(t('museCard.ruleDo'), act)}
-        <div className="t2-taskcard-actions">
+        {asking ? reasons : <div className="t2-taskcard-actions">
           <button type="button" className="primary" disabled={busy} onClick={() => void decide(card, 'accept')}>{t('museCard.ruleOk')}</button>
           {!!r.cond && canObserve(r.cond.type) && <button type="button" disabled={busy} onClick={() => void decide(card, 'observe')}>{t('museCard.ruleObserve')}</button>}
           <button type="button" disabled={busy} onClick={() => { void decide(card, 'edit').then((id) => { if (typeof id === 'string') { setActiveSpace('automation'); void useAutomation.getState().openRule(id) } }) }}>{t('museCard.ruleEdit')}</button>
-          <button type="button" disabled={busy} onClick={() => void decide(card, 'dismiss')}>{t('museCard.ruleNo')}</button>
-        </div>
+          <button type="button" disabled={busy} onClick={() => setAsking(true)}>{t('museCard.ruleNo')}</button>
+        </div>}
       </div></div>
     )
   }
@@ -230,10 +267,10 @@ export function MuseDeckCard({ card, sessionId }: { card: MuseCardInfo; sessionI
       <div className="t2-tasks"><div className="t2-taskcard" data-muse-card="feature">
         <div className="t2-taskcard-head"><Settings size={14} /><b>{card.payload.title}</b></div>
         {!!card.payload.why && <div className="t2-taskcard-tldr">{card.payload.why}</div>}
-        <div className="t2-taskcard-actions">
+        {asking ? reasons : <div className="t2-taskcard-actions">
           <button type="button" className="primary" disabled={busy} onClick={() => { void decide(card, 'open').then((ok) => { if (ok) openSettingsTab(card.payload.feature) }) }}>{t('museCard.open')}</button>
-          <button type="button" disabled={busy} onClick={() => void decide(card, 'dismiss')}>{t('museCard.notInterested')}</button>
-        </div>
+          <button type="button" disabled={busy} onClick={() => setAsking(true)}>{t('museCard.notInterested')}</button>
+        </div>}
       </div></div>
     )
   }
@@ -260,10 +297,10 @@ export function MuseDeckCard({ card, sessionId }: { card: MuseCardInfo; sessionI
         {changes.map((c) => (
           <div key={c.field} className="t2-musecard-row"><div><b>{t(`museCard.field.${c.field}`)}</b><span>{settingValue(c.field, c.from, t)} → {settingValue(c.field, c.to, t)}</span></div></div>
         ))}
-        <div className="t2-taskcard-actions">
+        {asking ? reasons : <div className="t2-taskcard-actions">
           <button type="button" className="primary" disabled={busy} onClick={() => void decide(card, 'apply')}>{t('museCard.change')}</button>
-          <button type="button" disabled={busy} onClick={() => void decide(card, 'dismiss')}>{t('museCard.noThanks')}</button>
-        </div>
+          <button type="button" disabled={busy} onClick={() => setAsking(true)}>{t('museCard.noThanks')}</button>
+        </div>}
       </div></div>
     )
   }
@@ -272,10 +309,10 @@ export function MuseDeckCard({ card, sessionId }: { card: MuseCardInfo; sessionI
       <div className="t2-tasks"><div className="t2-taskcard" data-muse-card="channel">
         <div className="t2-taskcard-head"><MessageCircle size={14} /><b>{t('museCard.channel')}</b></div>
         {!!card.payload.why && <div className="t2-taskcard-tldr">{card.payload.why}</div>}
-        <div className="t2-taskcard-actions">
+        {asking ? reasons : <div className="t2-taskcard-actions">
           <button type="button" className="primary" disabled={busy} onClick={() => { void decide(card, 'open').then((ok) => { if (ok) openSettingsTab('channels') }) }}>{t('museCard.connect')}</button>
-          <button type="button" disabled={busy} onClick={() => void decide(card, 'dismiss')}>{t('museCard.noThanks')}</button>
-        </div>
+          <button type="button" disabled={busy} onClick={() => setAsking(true)}>{t('museCard.noThanks')}</button>
+        </div>}
       </div></div>
     )
   }
@@ -444,7 +481,7 @@ export function MuseCardLine({ id, sessionId, onJump }: { id: string; sessionId?
   const cfg = useApp((s) => s.cfg)
   const decided = useDecided((s) => s.n)
   const [card, setCard] = useState<MuseCardInfo | null>(null)
-  const { decide } = useDecide(sessionId)
+  const [asking, setAsking] = useState(false) // 插件卡点了「不感兴趣」:卡下面出理由行
   useEffect(() => {
     if (!sessionId) return
     let alive = true
@@ -460,8 +497,14 @@ export function MuseCardLine({ id, sessionId, onJump }: { id: string; sessionId?
     return <div className={`t2-dim t2-dm-receipt${r.ok ? ' ok' : ''}`} data-muse-card-line={card.status}>{r.ok ? <CircleCheck size={12} /> : <CircleX size={12} />}<span>{r.text}</span></div>
   }
   // 从 Muse 卡装成:回写卡片结果 installed(契约 §7 / §9;算「Muse 推荐 → 真装上」的转化)。老引擎不认这个动作 → 静默忽略,不弹错。
-  if (event) return <MarketPluginCards event={event} entry="muse-card" onDismiss={() => void decide(card, 'dismiss')}
-    onInstalled={() => { if (sessionId) void decideMuseCard(targetForSession(sessionId), card.id, 'installed').then(() => useDecided.getState().bump(), () => {}) }} />
+  // 「不感兴趣」不马上生效:卡下面出理由行(帮助改进 P3),理由跟着那一次 dismiss 走。
+  if (event) return (
+    <>
+      <MarketPluginCards event={event} entry="muse-card" onDismiss={() => setAsking(true)}
+        onInstalled={() => { if (sessionId) void decideMuseCard(targetForSession(sessionId), card.id, 'installed').then(() => useDecided.getState().bump(), () => {}) }} />
+      {asking && <div className="t2-musecard-reasons"><DismissReasons card={card} sessionId={sessionId} onCancel={() => setAsking(false)} /></div>}
+    </>
+  )
   return (
     <button type="button" className="t2-dim t2-tasktrace t2-tasktrace-jump" data-muse-card-line="pending" onClick={onJump}>
       <Puzzle size={13} /><span>{t('museCard.inDeck', { title: cardTitle(card, t) })}</span><ArrowDown size={12} />
