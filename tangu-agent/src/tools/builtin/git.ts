@@ -93,7 +93,7 @@ export function renderStatus(s: GitSummary, login: string | null | undefined, re
   if (s.changesUnread) notes.push('The list of changes could not be read without running the repository\'s own filters; it is not necessarily clean.');
   if (s.detached) notes.push('HEAD is detached; switch to a branch before committing or pushing.');
   // 没有远端时点名 git_publish:不然模型只会让用户「去项目详情的 Git 页发布」或者要一个地址(11-08 用户反馈)
-  if (!s.remoteList?.length) notes.push('No remote yet. To put this repository online, git_publish creates a private repository on the user\'s Forsion Git and pushes to it; do not ask the user for an address first.');
+  if (!s.remoteList?.length) notes.push('No remote yet. When the user asks to upload or publish it without naming another host, git_publish creates a private repository on their Forsion Git and pushes to it; no address is needed.');
   if ((s.remoteList?.length ?? 0) > 1 && !s.pushRemote) notes.push('Several remotes and none is the push target: pass `remote` to git_push, or ask the user which one.');
   return {
     repo: true,
@@ -119,7 +119,7 @@ export function renderStatus(s: GitSummary, login: string | null | undefined, re
 const NEXT_STEP: Partial<Record<string, string>> = {
   untrusted_config: 'Ask the user to trust this repository in the project details (Git tab), then try again.',
   credential_denied: 'The account used for this remote has no write access. Tell the user which account was used and suggest linking a different GitHub account in the account centre, or pushing to a remote they own.',
-  no_remote: 'There is no remote. Use git_publish to create a private repository on the user\'s Forsion Git and push there; only if the user wants a different host, ask them for its address.',
+  no_remote: 'There is no remote. To put the repository online, use git_publish (a private repository on the user\'s Forsion Git); if the user wants a different host, ask them for its address.',
   invalid_repo_name: 'Pick a name with only letters, digits, - _ and . (for a folder name without Latin letters, a short English name that describes the project) and call git_publish again.',
   forsion_git_needs_setup: 'The user has no Forsion Git account yet: ask them to open the site in the detail once and sign in with their Forsion account, then try again.',
   forsion_git_unavailable: 'Forsion Git cannot be used right now (not signed in to Forsion, or the site is unreachable). Tell the user; nothing was published.',

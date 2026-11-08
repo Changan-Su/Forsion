@@ -4348,20 +4348,23 @@ Then reply with only the command output.`,
   // 审批:带合规名字的那张卡拒掉(台架里没有 Forsion Git,也不许碰 git.forsion.net);名字不合规的那张放行,让它吃 invalid_repo_name 再改。
   // 负对照 = 没有这次改动的旧代码(--kind base):提示里只说「去项目详情」,看模型是不是照样要地址。
   await scenario('gitpublish', '发布到 Forsion Git:中文名项目没远端 → 自己起英文名调 git_publish', async () => {
-    const dir = join(workspace, `马里奥赛车-${Date.now()}`);
+    // 唯一性放在父目录:文件夹名本身得整理不出仓库名(带时间戳的话 forsionRepoName 会整理出一串数字,不传 name 也合法 —— Codex 评审)
+    const dir = join(workspace, `gitpublish-${Date.now()}`, '马里奥赛车');
     mkdirSync(dir, { recursive: true });
     const g = (...a) => execFileSync('git', ['-C', dir, ...a], { encoding: 'utf8' }).trim();
     g('init', '-q', '-b', 'main');
     g('config', 'user.name', 'Live Harness'); g('config', 'user.email', 'live@example.com');
     writeFileSync(join(dir, 'index.html'), '<!doctype html><title>Kart</title><canvas id="track"></canvas>\n');
     g('add', '.'); g('commit', '-qm', 'Initial commit');
-    const VALID = /^[A-Za-z0-9_](?:[A-Za-z0-9._-]*[A-Za-z0-9_])?$/;
+    // 和发布服务同一条规则(services/forsionGitPublish.ts:非空且整理后不变),别自己写一条宽松的正则
+    const { forsionRepoName } = await import('../dist/services/forsionGitPublish.js');
+    const valid = (n) => !!n && forsionRepoName(n) === n;
     const nameOf = (args) => { try { const n = JSON.parse(args || '{}').name; return typeof n === 'string' ? n.trim() : ''; } catch { return ''; } };
     const { session } = await api('/agent/sessions', { method: 'POST', body: JSON.stringify({ title: 'gitpublish', model_id: MODEL, project_path: dir }) });
     const ev = await run(session.id, '帮我上传Forsion Git', 240_000, { cwd: dir, approvalMode: 'auto-edit' },
-      undefined, (p) => (p.name === 'git_publish' && VALID.test(nameOf(p.arguments)) && !/\.\./.test(nameOf(p.arguments)) ? 'reject' : undefined));
+      undefined, (p) => (p.name === 'git_publish' && valid(nameOf(p.arguments)) ? 'reject' : undefined));
     const pubs = ev.approvalList.filter((a) => a.name === 'git_publish');
-    const named = pubs.map((a) => nameOf(a.args)).filter((n) => VALID.test(n) && !/\.\./.test(n));
+    const named = pubs.map((a) => nameOf(a.args)).filter(valid);
     const bashRemote = ev.toolArgs.filter((t) => t.name === 'run_bash' && /\bgit\b[^\n]*\b(remote\s+add|push)\b/.test(t.args)).length;
     const remotes = g('remote');
     return {
