@@ -18,6 +18,7 @@ const ROOT = path.resolve(__dirname, '..')
 const ENGINE = path.resolve(ROOT, '../tangu-agent/dist')
 const load = (name) => import(pathToFileURL(path.join(ENGINE, name)).href)
 const checks = []
+const SHARE_ACCOUNT = 'https://api.forsion.test::u-memory'
 function check(name, ok) { assert.ok(ok, name); checks.push(name); console.log(`PASS ${name}`) }
 
 async function main() {
@@ -89,6 +90,17 @@ async function main() {
       env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: url } })
     let win = await app.firstWindow()
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1280, 960))
+    await win.waitForSelector('#root')
+    // 「附上这条原文，随账号发给 Forsion」:auth:status 报一个登录着的账号(渲染层 authInfo.accountId 从这来),
+    // feedback:submit 在主进程里接住、只记下收到的入参(真的 Extend 会用它核对发送时的账号,那一半在 Extend 单测里钉)。改完重载一次让 authInfo 拿到它。
+    await app.evaluate(({ ipcMain }, acct) => {
+      globalThis.__feedbackSubmits = []
+      try { ipcMain.removeHandler('auth:status') } catch { /* 没注册过 */ }
+      ipcMain.handle('auth:status', () => ({ loggedIn: true, tokenValid: null, cloudUrl: 'https://api.forsion.test', accountId: acct, username: 'e2e', nickname: null, avatar: null, membershipTier: null, tokenSource: 'tangu-login', backendState: null }))
+      try { ipcMain.removeHandler('feedback:submit') } catch { /* 没注册过 */ }
+      ipcMain.handle('feedback:submit', (_e, input) => { globalThis.__feedbackSubmits.push(input); return { ok: true, id: 'fb-1' } })
+    }, SHARE_ACCOUNT)
+    await win.reload({ waitUntil: 'domcontentloaded' })
     await win.waitForSelector('#root')
     await win.waitForTimeout(1600)
     for (const label of ['跳过引导', 'Skip']) {
@@ -187,9 +199,15 @@ async function main() {
     await editor.fill(cleanDoc)
     await summary('编辑原文').click()
     await initialEntry.getByRole('button', { name: '遗忘', exact: true }).click()
+    await initialEntry.locator('[data-reason-share]').check() // 勾的这一刻记下登录的账号
     await initialEntry.locator('[data-reason="stale"]').click()
     await wait(() => alpha.snapshot().entries.length === 0, 'entry forgotten')
     check('Forget removes active memory and records its tombstone', alpha.snapshot().tombstones.length > 0)
+    const feedbackSubmits = () => app.evaluate(() => globalThis.__feedbackSubmits)
+    await wait(async () => (await feedbackSubmits()).length === 1, 'shared original sent')
+    const shared = (await feedbackSubmits())[0]
+    check('Ticking "send this text" sends the forgotten entry once, bound to the account signed in at tick time',
+      shared.expectedAccountId === SHARE_ACCOUNT && /\[memory:custom:/.test(shared.description) && shared.description.includes('Alpha 私有事实'))
     await wait(() => ledgerCell('userForgetStale', 'custom') === 1, 'forget reason counted')
     check('The chosen reason lands in the local telemetry ledger as an enum count only', ledgerCell('userForget', 'custom') === 1 && ledgerCell('userForgetStale', 'custom') === 1
       && db.prepare("SELECT COUNT(*) AS n FROM telemetry_ledger WHERE dim NOT IN ('', 'custom') OR field LIKE '%Alpha%'").get().n === 0)

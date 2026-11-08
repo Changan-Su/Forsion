@@ -627,7 +627,7 @@ declare global {
        *  只有 Extend 注册了 telemetry:get 才有这个键 —— 引导第 7 步「帮助改进」页签据此同步判断本机有没有这一页。 */
       telemetryReport?(kind: import('../../shared/telemetryKeys').RendererReportKind, props: Record<string, unknown>): void
       /** 提交反馈到 Forsion 反馈中心(会话日志 JSON 随附为附件;token 留主进程)。 */
-      submitFeedback?(input: { description: string; sessionLogJson?: string; sessionLogName?: string }): Promise<{ ok: boolean; id?: string | null; error?: string; attachmentSkipped?: boolean }>
+      submitFeedback?(input: { description: string; sessionLogJson?: string; sessionLogName?: string; expectedAccountId?: string }): Promise<{ ok: boolean; id?: string | null; error?: string; attachmentSkipped?: boolean }>
       appVersion?(): Promise<string>
       /** 应用内自动更新:检查 / 下载 / 重启安装(mac 的 download/install 为 no-op,改用 openUpdateInstaller)。 */
       getCorePluginUpdates?(): Promise<CorePluginUpdates>

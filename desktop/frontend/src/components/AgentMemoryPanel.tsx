@@ -12,7 +12,7 @@ import { homeTarget, connectionKey } from '../services/engine/targets'
 import { AppliesToSelect, deviceTagsOf, ScopedText, splitScoped } from './DeviceScope'
 import type { AppliesTo } from '../../../../tangu-agent/src/contracts/deviceTags'
 import { MEMORY_FORGET_REASONS, type MemoryForgetReason } from '../../../../tangu-agent/src/contracts/clientTypes'
-import { ReasonPrompt, canShareOriginal, sendOriginal } from './FeedbackReasons'
+import { ReasonPrompt, canShareOriginal, sendOriginal, type ShareConsent } from './FeedbackReasons'
 
 registerMessages({
   'agentMemory.search': { zh: '搜索记忆', en: 'Search memory' },
@@ -161,10 +161,10 @@ const AgentMemoryPanelBody: React.FC<Props> = ({ cfg, slug, shareDefaultMemory, 
     applySnapshot(next, true); ++revisionRequest.current; setRevisions(null); setEditing(null); setForgetting(null); setNewFact(''); setNewScope('all'); setNotice(t('agentMemory.saved'))
   }
   /** 遗忘一条:理由跟着这一次写走;勾了「附上原文」,遗忘成功之后再随账号发这条的正文(不带设备标记)。 */
-  const forget = (entry: AgentMemorySnapshot['entries'][number], version: string, reason: MemoryForgetReason | null, share: boolean) => void action(async () => {
+  const forget = (entry: AgentMemorySnapshot['entries'][number], version: string, reason: MemoryForgetReason | null, share: ShareConsent | null) => void action(async () => {
     await update(() => mutateAgentMemoryEntry(homeTarget(), slug, { action: 'forget', id: entry.id, expectedVersion: version, ...(reason ? { reason } : {}) }))
     if (share) void sendOriginal({ title: t('reason.ticketMemory'), reasonLabel: reason ? t(`reason.memory.${reason}`) : null,
-      tag: `memory:${agentRole(slug)}:${entry.source.kind}`, body: splitScoped(entry.content, deviceTagsOf(snapshot)).body })
+      tag: `memory:${agentRole(slug)}:${entry.source.kind}`, body: splitScoped(entry.content, deviceTagsOf(snapshot)).body, consent: share })
   })
   const forgetPrompt = (entry: AgentMemorySnapshot['entries'][number], version: string) => (
     <ReasonPrompt question={t('reason.memoryQuestion')} reasons={MEMORY_FORGET_REASONS.map((id) => ({ id, label: t(`reason.memory.${id}`) }))}
