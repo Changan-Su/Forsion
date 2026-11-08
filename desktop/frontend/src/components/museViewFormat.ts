@@ -27,3 +27,40 @@ export function trackWhen(raw: string, now = Date.now()): string {
   if (splitSide(c.start).date === splitSide(c.end).date) return a.timed && b.timed ? `${left}–${formatTime(b.d)}` : left
   return `${left} → ${one(b)}`
 }
+
+type Tr = (k: string, v?: Record<string, string | number>) => string
+
+/** 一轮用了多久:不到一分钟写秒,不到一小时写分钟,再长写几小时几分。负数 / 读不出 → ''。 */
+export function roundDuration(ms: number, t: Tr): string {
+  if (!Number.isFinite(ms) || ms < 0) return ''
+  const s = Math.round(ms / 1000)
+  if (s < 60) return t('musePanel.dur.s', { n: Math.max(1, s) })
+  const m = Math.round(s / 60)
+  if (m < 60) return t('musePanel.dur.m', { n: m })
+  return t('musePanel.dur.h', { h: Math.floor(m / 60), m: m % 60 })
+}
+
+/** 怎么醒的(引擎 cycleTrigger 的原串 → 一句话)。规则按 id 查当前规则表,删掉了的只写「规则」;日程写第一条的名字;
+ *  升级前跑的轮次没记(null)/ 认不出 → ''。 */
+export function roundTrigger(trigger: string | null, t: Tr, ruleName: (id: string) => string | undefined): string {
+  if (!trigger) return ''
+  if (trigger === 'manual') return t('musePanel.by.manual')
+  if (trigger === 'heartbeat') return t('musePanel.by.heartbeat')
+  if (trigger.startsWith('rule:')) {
+    const name = ruleName(trigger.slice(5).split('+')[0])
+    return name ? t('musePanel.by.rule', { name }) : t('musePanel.by.ruleAny')
+  }
+  if (trigger.startsWith('schedule:')) return t('musePanel.by.schedule', { name: trigger.slice(9).split('+')[0] })
+  return ''
+}
+
+/** 第二行:这一轮做了什么(写了几个文件、提了几条待办,引擎从检查点和待办表数出来,不让模型另写摘要)/ 为什么没做完。 */
+export function roundOutcome(r: { status: string; files: number; todos: number; error: string | null }, t: Tr): string {
+  if (r.status === 'failed') return t('musePanel.roundFailed', { e: (r.error || '').slice(0, 120) || '—' })
+  if (r.status === 'aborted') return t('musePanel.roundAborted')
+  const parts = [
+    r.files > 0 ? (r.files === 1 ? t('musePanel.files1') : t('musePanel.filesN', { n: r.files })) : '',
+    r.todos > 0 ? (r.todos === 1 ? t('musePanel.todos1') : t('musePanel.todosN', { n: r.todos })) : '',
+  ].filter(Boolean)
+  return parts.length ? parts.join(' · ') : t('musePanel.roundQuiet')
+}

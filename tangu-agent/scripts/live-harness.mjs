@@ -319,6 +319,7 @@ OPT_IN.add('nestedmsg'); // --only nestedmsg: fork 上下文 + 兄弟会话传�
 OPT_IN.add('signals');
 OPT_IN.add('decisiongate'); // --only decisiongate:Historian 决策闸(beta);要 TANGU_LIVE_CLOUD_URL 带决策模型,--decision-gate off = 负对照
 OPT_IN.add('musechat');
+KEYS.push('musewakenow'); OPT_IN.add('musewakenow'); // --only musewakenow:面板「叫醒」(11-08)—— 时段外、心跳没到点,点一下就起一轮完整的周期
 OPT_IN.add('musestarters'); // --only musestarters:一个 Muse 周期之后,新对话页有没有它放上的开场建议(--starters-off = 负对照:开关关掉,工具不给)
 OPT_IN.add('cmdreads');
 OPT_IN.add('imgwindow');
@@ -5828,6 +5829,56 @@ Then reply with only the command output.`,
       output: await says(), journal, status: woke || mid,
     };
   });
+  // ── musewakenow(11-08,opt-in:`--only musewakenow`):Muse Space 右栏的「叫醒」。运行时段设成两小时以后、新 home 心跳本该到点 ——
+  // 先等 40s 证明时段闸真挡着(不点就不起新周期);再 POST /agent/special/muse/wake,周期要在 120s 内起、420s 内收尾;
+  // 判据:最近几轮的第一行 trigger = manual 且 done、agent_runs.input 里带「用户刚叫醒你」那句(代码拼的简报原文,不看模型)、
+  // 周期没报错、请求清掉(wakePending=false)。模型这一轮做了什么 / 有没有又睡下记进 detail 与 output(不计红)。
+  // 负对照 = 没有这条路由的旧 dist(POST /wake 404 → 红)。
+  await scenario('musewakenow', `musewakenow 面板「叫醒」:时段外点一下就起一轮(${MUSE_MODE})`, async () => {
+    const h = new Date().getHours();
+    const status = () => api('/agent/special/muse/status').then((x) => (x && typeof x.status === 'object' ? x.status : x));
+    await api('/agent/special/config', { method: 'POST', body: JSON.stringify({ muse: { enabled: true, modelId: MODEL, mode: MUSE_MODE, heartbeatMinutes: 60, supervisorPollMinutes: 1, maxIterationsPerCycle: 12, maxRestartsPerWindow: 3, activeHours: { start: (h + 2) % 24, end: (h + 3) % 24 } } }) });
+    try {
+      // 同一次跑里前面的 Muse 场景可能留着周期在收尾:先等它停,再量这 40s 里有没有新周期
+      const base0 = await until(async () => { const x = await status(); return !x.running ? x : null; }, 240_000, 5000);
+      if (!base0) return { ok: false, detail: '前面的 Muse 周期 240s 没收尾,量不了基线' };
+      await sleep(40_000);
+      const before = await status();
+      if (before.running || Number(before.lastCycleAt || 0) !== Number(base0.lastCycleAt || 0)) return { ok: false, detail: `不算数:时段外没点叫醒就起了周期(lastCycleAt ${base0.lastCycleAt} → ${before.lastCycleAt})`, status: before };
+      const wakeAt = Date.now();
+      let woke;
+      try { woke = await api('/agent/special/muse/wake', { method: 'POST', body: '{}' }); } catch (e) { return { ok: false, detail: `POST /agent/special/muse/wake 失败:${e.message}` }; }
+      const pending = woke?.status?.wakePending === true;
+      const started = await until(async () => { const x = await status(); return x.running || Number(x.lastCycleAt) >= wakeAt ? x : null; }, 120_000, 3000);
+      if (!started) return { ok: false, detail: `叫醒后 120s 没起周期(wakePending=${pending});[muse] 日志:${museLogTail() || '(无)'}` };
+      const done = await until(async () => { const x = await status(); return !x.running ? x : null; }, 420_000, 5000);
+      if (!done) return { ok: false, detail: '叫醒的那轮 420s 没收尾' };
+      const rounds = asList(await api('/agent/special/muse/rounds?limit=3'), 'rounds');
+      const first = rounds[0] || {};
+      const { default: Database } = await import('better-sqlite3');
+      const db = new Database(join(home, 'state.db'), { readonly: true, fileMustExist: true });
+      let input = {}; let said = '';
+      try {
+        input = JSON.parse(db.prepare('SELECT input FROM agent_runs WHERE id = ?').get(first.runId)?.input || '{}');
+        said = db.prepare(`SELECT m.content FROM chat_messages m WHERE m.session_id = ? AND m.role IN ('assistant', 'model') ORDER BY m.timestamp DESC LIMIT 1`).get(first.sessionId)?.content || '';
+      } finally { db.close(); }
+      const hinted = String(input.ephemeralHint || '').includes('woke you from your panel');
+      const after = await status();
+      const ok = pending && first.trigger === 'manual' && first.status === 'done' && input.museTrigger === 'manual' && hinted && !done.lastError && after.wakePending === false;
+      const dur = first.endedAt && first.startedAt ? `${Math.round((first.endedAt - first.startedAt) / 1000)}s` : '?';
+      return {
+        ok,
+        detail: `时段外 40s 没起=是;叫醒后 wakePending=${pending};最近一轮 trigger=${first.trigger} status=${first.status} 用时 ${dur} 写了 ${first.files} 个文件 提了 ${first.todos} 条待办;`
+          + `input.museTrigger=${input.museTrigger};简报带叫醒那句=${hinted};收尾后 wakePending=${after.wakePending}${done.lastError ? `;错误 ${done.lastError}` : ''}`
+          + `;又睡下=${Number(after.sleepUntil) > Date.now() ? `到 ${hhmm(after.sleepUntil)}(${after.sleepReason || ''})` : '否'}`,
+        output: said,
+        status: after,
+      };
+    } finally {
+      await api('/agent/special/config', { method: 'POST', body: JSON.stringify({ muse: { enabled: false } }) }).catch(() => {});
+    }
+  });
+
   // ── 自进化闭环(09-18;10-04 用户第二次裁决后改判:后台提名直接采纳,不再等 /refine)──
   //  ① 干一件小事 → 问它自己打算坚持什么做法(用户没有立规矩,只是问)→ 工作笔记里要多出一条:
   //     后台那条路 = Historian 判官提名(对象形)→ 引擎直接写成条目(活动流 harness_adopted、编辑史 by:historian);
