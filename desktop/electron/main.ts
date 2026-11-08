@@ -4638,7 +4638,7 @@ app.whenReady().then(async () => {
     // 来源装的(所有类型):记下出处,「已安装」页靠它画来源角标与「来源已移除」。
     if (isSourceCardId(id) && origin) {
       const named = await storeSources!.lookup(id).catch(() => null)
-      await storeSources!.recordInstall({ cardId: id, type: effType, slug: info.installSlug, name: named?.name || info.installSlug, version: info.version ?? null, origin })
+      await storeSources!.recordInstall({ cardId: id, type: effType, slug: info.installSlug, name: named?.name || info.installSlug, version: info.version ?? null, origin, summary: named?.summary, author: named?.author })
         .catch((err) => console.warn('[store-sources] record install:', err))
     }
     return { ok: true, path: dest, files, type: effType, slug: info.installSlug, ...(pluginId ? { id: pluginId } : {}) }

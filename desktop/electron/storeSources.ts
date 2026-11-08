@@ -30,7 +30,7 @@ type FetchFn = (url: string, init: { signal: AbortSignal; headers?: Record<strin
 
 interface UserSource { id: string; uri: string; title?: LocalText; addedAt: number }
 interface PluginSource { id: string; pluginId: string; declId: string; uri: string; title: LocalText; icon?: string }
-interface InstallRecord { cardId: string; type: string; slug: string; name: string; version: string | null; origin: string; at: number }
+interface InstallRecord { cardId: string; type: string; slug: string; name: string; version: string | null; origin: string; at: number; summary?: string; author?: string }
 interface State { user: UserSource[]; declared: PluginSource[]; disabled: string[]; trusted: string[]; installs: InstallRecord[] }
 
 export interface SourceDownload {
@@ -354,10 +354,10 @@ export function createStoreSources(o: {
   }
 
   /** For the plugin updater: the latest version a source lists for an installed item. */
-  async function lookup(cardId: string): Promise<{ id: string; name: string; type: string; installSlug: string; latestVersion: string }> {
+  async function lookup(cardId: string): Promise<{ id: string; name: string; type: string; installSlug: string; latestVersion: string; summary: string; author: string }> {
     const { s, index, it } = await itemOf(cardId)
     const c = card(s, index, it, o.defaultLocale())
-    return { id: c.id, name: c.name, type: c.type, installSlug: c.installSlug, latestVersion: c.latestVersion }
+    return { id: c.id, name: c.name, type: c.type, installSlug: c.installSlug, latestVersion: c.latestVersion, summary: c.summary, author: c.author }
   }
 
   /** The updater leaves items alone whose source is gone or switched off ("no longer updated"). */
@@ -417,7 +417,8 @@ export function createStoreSources(o: {
     }
   }
 
-  async function recordInstall(r: { cardId: string; type: string; slug: string; name: string; version: string | null; origin: string }): Promise<void> {
+  /** summary / author are copied in so "Installed" can still describe the item after its source is gone. */
+  async function recordInstall(r: { cardId: string; type: string; slug: string; name: string; version: string | null; origin: string; summary?: string; author?: string }): Promise<void> {
     await save((s) => { s.installs = [...s.installs.filter((x) => !(x.type === r.type && x.slug === r.slug) && x.cardId !== r.cardId), { ...r, at: Date.now() }] })
   }
   async function forget(type: string, slug: string): Promise<void> {
@@ -430,7 +431,8 @@ export function createStoreSources(o: {
     return state.installs.map((x) => {
       const sourceId = splitSourceCardId(x.cardId)!.source
       const s = find(sourceId)
-      return { cardId: x.cardId, type: x.type, slug: x.slug, name: x.name, version: x.version, sourceId, sourceTitle: s ? titleOf(s, locale) : null, removed: !s || state.disabled.includes(sourceId) }
+      const text = (v: unknown, max: number) => (typeof v === 'string' && v ? v.slice(0, max) : undefined)
+      return { cardId: x.cardId, type: x.type, slug: x.slug, name: x.name, version: x.version, sourceId, sourceTitle: s ? titleOf(s, locale) : null, removed: !s || state.disabled.includes(sourceId), summary: text(x.summary, 400), author: text(x.author, 80) }
     })
   }
 

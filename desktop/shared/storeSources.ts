@@ -98,6 +98,8 @@ export interface StoreSourceCatalog {
 }
 export interface StoreSourceInstall {
   cardId: string; type: string; slug: string; name: string; version: string | null; sourceId: string; sourceTitle: string | null; removed: boolean
+  /** Copied from the catalog at install time. */
+  summary?: string; author?: string
 }
 /** A source declared in a plugin manifest (`storeSources`). */
 export interface DeclaredStoreSource { pluginId: string; id: string; title: LocalText; index: string; icon?: string }

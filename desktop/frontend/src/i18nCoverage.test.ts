@@ -365,6 +365,8 @@ describe('i18n 覆盖', () => {
     const ALLOW: Record<string, string> = {
       'websearch.name.tavily': '搜索服务品牌名',
       'about.update.sourceGithub': '下载来源里的 GitHub 是网站名,和「官网」并列',
+      'market.sources.kind.github': '商店来源的类型:GitHub 是网站名,和「网址」并列',
+      'market.sources.kind.npm': '商店来源的类型:npm 是包管理器名,不译',
       'websearch.name.duckduckgo': '搜索服务品牌名',
       'websearch.name.deepseek': '搜索服务产品名(DeepSeek 官方叫法)',
       'websearch.key': 'API Key 是服务商控制台里的原词,用户按它去找',
