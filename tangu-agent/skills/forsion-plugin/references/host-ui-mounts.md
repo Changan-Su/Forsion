@@ -242,8 +242,9 @@ ctx.registerView({ id: 'reader', title: 'Reader', mount(el) {
 - By default the host watches the DOM selection inside the element you pass: the bar shows on mouse-up and goes
   away when the selection collapses, the user clicks elsewhere or presses Esc. Selections in `<input>` /
   `<textarea>` / `contenteditable` never show it. On scroll, resize or zoom the bar (and a result card opened from
-  it) follows the text, hides while the text is off screen or the view is behind another tab, and comes back with
-  it (2026-11-08+; older hosts close it on scroll).
+  it) follows the text, hides while the text is off screen and comes back with it; behind another tab the
+  selection is lost so the bar closes, while an open result card hides until the view returns (2026-11-08+; older
+  hosts close it on scroll).
 - Content the host cannot see into (an `<iframe>`, a canvas, a PDF text layer you position yourself): pass
   `watch: false` and drive it — `bar.show({ text, rect })` with the selection's bounding box in **viewport pixels**
   (`range.getBoundingClientRect()` works as is; do not divide by zoom, the host compensates), `bar.hide()` when it
