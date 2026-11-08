@@ -2,7 +2,11 @@
  *  ① Space 作用域浮层挂 View(取 forms.mini 的紧凑视图,surface = mini),同一份再开不另开、换参数;切走 Space 就藏、回来再出;
  *  ② 窗口作用域 + main 样子(surface = floating);③「在主面板显示」→ 主区开主视图、卡收掉;
  *  ④ 停靠回落(只能在侧栏的视图开主区 → 右栏);⑤ 桌面 Mini:workspace.open 和旧 openMiniPanel 指同一实体 = 同一扇;
- *  ⑥ Floating Panel:pin:true 置顶,旧 openFloatingPanel 再开同一扇且撤掉置顶;⑦ 没有渲染层报错。
+ *  ⑥ Floating Panel:pin:true 置顶,旧 openFloatingPanel 再开同一扇且撤掉置顶;
+ *  ⑦ Mini pin:false 不置顶、拖到屏幕边不折起来(对照:置顶的那扇会折);同一扇不带 pin 再开 = 回到置顶;贴着边折起来的那扇
+ *     用 pin:false 再开 = 先展开再撤置顶;
+ *  ⑧⑨ 重启(同一份 userData):Space 作用域的卡按布局开回来(插件晚到也等得到,锚点 / 参数是退出前那样);Mini 按实体键回到
+ *     退出前的位置(userData/mini-windows.json);⑩ 没有渲染层报错。
  *  npx electron-vite build && npm run check:workspaceopen(上锁:node ../../.claude/hooks/devlock.cjs run --vehicle=e2e -- npm run check:workspaceopen)。
  *  隔离的假引擎 / 笔记库 / 插件;不往别的应用发任何输入。插件停用收卡在单测(workspaceOpenCtx / workspaceOpen.test)。 */
 const fs = require('fs'), os = require('os'), path = require('path')
@@ -38,15 +42,16 @@ async function main() {
   fs.writeFileSync(path.join(userData + '-dev', 'tangu-desktop-config.json'), JSON.stringify({ mode: 'external', backendUrl: stub.url, token: 'wo-token' }))
   let app
   const errors = []
+  const launch = () => electron.launch({ args: [`--user-data-dir=${userData}`, '--lang=zh-CN', ROOT], cwd: ROOT,
+    env: { ...process.env, TANGU_HOME: temp, TANGU_BACKEND_URL: stub.url, TANGU_HARNESS_QUIET: '1', PI_CU_SOCKET_PATH: path.join(temp, 'bridge.sock') } })
   try {
-    app = await electron.launch({ args: [`--user-data-dir=${userData}`, '--lang=zh-CN', ROOT], cwd: ROOT,
-      env: { ...process.env, TANGU_HOME: temp, TANGU_BACKEND_URL: stub.url, TANGU_HARNESS_QUIET: '1', PI_CU_SOCKET_PATH: path.join(temp, 'bridge.sock') } })
-    const win = await app.firstWindow()
+    app = await launch()
+    let win = await app.firstWindow()
     win.on('pageerror', (e) => errors.push(`main: ${e.message}`))
     await win.waitForSelector('.dv-groupview', { timeout: 30000, state: 'attached' })
     check('main window left onboarding', await skipOnboarding(win))
     await win.waitForFunction(() => !!window.__probeCtx?.workspace?.open, null, { timeout: 30000 })
-    const wopen = (target, opts) => win.evaluate(([t, o]) => window.__probeCtx.workspace.open(t, o).then((r) => ({ ...r, close: !!r.close })), [target, opts])
+    const wopen = (target, opts) => win.evaluate(([t, o]) => window.__probeCtx.workspace.open(t, o).then((r) => ({ ...r, close: !!r.close, closed: undefined })), [target, opts])
     const cards = (scope) => win.locator(`.lcl-float-layer[data-scope="${scope}"] > .lcl-float[data-view-float]`)
 
     // ① Space 作用域:紧凑视图、surface = mini、再开同一张
@@ -123,6 +128,64 @@ async function main() {
     await pause(500)
     const fl2 = await floating()
     check('old openFloatingPanel reopens that window and it is no longer on top (desktop ≠ on top)', fl2.length === 1 && fl2[0].id === fl[0]?.id && fl2[0].top === false, JSON.stringify(fl2))
+
+    // ⑦ Mini pin:false
+    const miniWins = () => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().filter((w) => !w.isDestroyed() && w.webContents.getURL().includes('window=mini'))
+      .map((w) => ({ id: w.id, top: w.isAlwaysOnTop(), ...w.getBounds() })))
+    const pinnedId = (await miniWins())[0]?.id
+    const r7 = await wopen({ view: 'board', params: { item: '7' } }, { layer: { float: 'desktop', pin: false }, key: 'loose' })
+    let loose = null
+    for (let i = 0; i < 100 && !loose; i++) { loose = (await miniWins()).find((w) => w.id !== pinnedId) ?? null; if (!loose) await pause(100) }
+    check('desktop + mini with pin:false opens a Mini that is not on top (the other stays on top)', r7.ok && !!loose && loose.top === false
+      && (await miniWins()).find((w) => w.id === pinnedId)?.top === true, JSON.stringify({ r7, list: await miniWins() }))
+    const area = await app.evaluate(({ screen }) => screen.getPrimaryDisplay().workArea)
+    const toEdge = (id) => app.evaluate(({ BrowserWindow }, [id, area]) => { const w = BrowserWindow.fromId(id); const b = w.getBounds(); w.setBounds({ x: area.x + area.width - b.width, y: b.y }) }, [id, area])
+    const boundsOf = async (id) => (await miniWins()).find((w) => w.id === id)
+    await toEdge(loose.id); await toEdge(pinnedId)
+    await pause(1200)
+    const looseAtEdge = await boundsOf(loose.id), pinnedAtEdge = await boundsOf(pinnedId)
+    check('dragged to the screen edge: the pinned Mini folds, the unpinned one does not', pinnedAtEdge.x + pinnedAtEdge.width > area.x + area.width + 40
+      && looseAtEdge.x + looseAtEdge.width === area.x + area.width, JSON.stringify({ area, pinnedAtEdge, looseAtEdge }))
+    await wopen({ view: 'board', params: { item: '7' } }, { layer: { float: 'desktop' }, key: 'loose' })
+    await pause(400)
+    check('reopening that Mini without pin puts it back on top', (await boundsOf(loose.id))?.top === true)
+    await wopen({ view: 'board', params: { item: '5' } }, { layer: { float: 'desktop', pin: false } })
+    await pause(1200)
+    const unfolded = await boundsOf(pinnedId)
+    check('reopening the folded Mini with pin:false unfolds it first, then drops on-top', unfolded && unfolded.top === false && unfolded.x + unfolded.width <= area.x + area.width, JSON.stringify(unfolded))
+
+    // ⑧ 退出前:Space 作用域开一张卡(锚点 / 参数 / key);那扇不置顶的 Mini 挪到空处
+    await wopen({ view: 'board', params: { item: '8' } }, { layer: { float: 'space', anchor: 'top-start' }, key: 'keep' })
+    await win.locator('.lcl-float-layer[data-scope="space"] .wo-probe-board-mini').waitFor({ timeout: 10000 })
+    await wopen({ view: 'board', params: { item: '7' } }, { layer: { float: 'desktop', pin: false }, key: 'loose' })
+    const spot = { x: area.x + 180, y: area.y + 160 }
+    await app.evaluate(({ BrowserWindow }, [id, spot]) => BrowserWindow.fromId(id).setBounds(spot), [loose.id, spot])
+    await pause(1200) // 判贴边 200ms + 记位置 + 400ms 去抖落盘 + 布局 100ms 去抖
+    const looseBefore = await boundsOf(loose.id)
+    await app.close()
+    app = null
+    const files = [path.join(userData, 'mini-windows.json'), path.join(userData + '-dev', 'mini-windows.json')].filter((f) => fs.existsSync(f))
+    const saved = files.length ? JSON.parse(fs.readFileSync(files[0], 'utf8')) : {}
+    const savedLoose = saved['view:plugin:wo-probe:board-mini#key:loose']
+    check('Mini positions are written to userData/mini-windows.json by entity', !!savedLoose && savedLoose.x === looseBefore.x && savedLoose.y === looseBefore.y, JSON.stringify({ files, saved, looseBefore }))
+
+    // ⑨ 重启
+    app = await launch()
+    win = await app.firstWindow()
+    win.on('pageerror', (e) => errors.push(`main(2): ${e.message}`))
+    await win.waitForSelector('.dv-groupview', { timeout: 30000, state: 'attached' })
+    await win.waitForFunction(() => !!window.__probeCtx?.workspace?.open, null, { timeout: 30000 })
+    await win.locator('.lcl-float-layer[data-scope="space"] .wo-probe-board-mini').waitFor({ timeout: 15000 }).catch(() => {})
+    const back = cards('space')
+    check('after a restart the Space card comes back with its params and anchor (plugin views register late)', await back.count() === 1
+      && /item 8/.test(await win.locator('.lcl-float-layer[data-scope="space"] .wo-probe-board-mini').textContent().catch(() => ''))
+      && await back.first().getAttribute('data-anchor') === 'top-start', JSON.stringify({ n: await back.count() }))
+    await pause(600)
+    await win.screenshot({ path: path.join(shots, 'restored-space-float.png') })
+    await wopen({ view: 'board', params: { item: '7' } }, { layer: { float: 'desktop', pin: false }, key: 'loose' })
+    let again = null
+    for (let i = 0; i < 100 && !again; i++) { again = (await miniWins())[0] ?? null; if (!again) await pause(100) }
+    check('after a restart the same Mini entity reopens where it was', !!again && again.x === looseBefore.x && again.y === looseBefore.y && again.top === false, JSON.stringify({ again, looseBefore }))
 
     check('no renderer errors', errors.length === 0, JSON.stringify(errors))
     console.log(`SCREENSHOTS ${shots}`)

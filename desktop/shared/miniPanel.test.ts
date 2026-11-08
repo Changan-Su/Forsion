@@ -44,4 +44,11 @@ describe('miniEntityKey (Mini 多开:按实体复用)', () => {
     expect(normalizeMiniOpenOptions({ spaceId: 'calendar', key: '  a ', duplicate: true })).toMatchObject({ key: 'a', duplicate: true })
     expect(normalizeMiniOpenOptions({ spaceId: 'calendar', duplicate: 'yes' })?.duplicate).toBeUndefined()
   })
+  // 负对照(11-08 已实跑红):normalize 不带 pin → 第一条红;pin 进实体键 → 最后一条红
+  it('pin: only an explicit false survives (absent = on top, as every Mini has been); not part of identity', () => {
+    expect(normalizeMiniOpenOptions({ view: { type: 'v' }, pin: false })?.pin).toBe(false)
+    expect('pin' in normalizeMiniOpenOptions({ view: { type: 'v' }, pin: true })!).toBe(false)
+    expect('pin' in normalizeMiniOpenOptions({ view: { type: 'v' }, pin: 'no' })!).toBe(false)
+    expect(miniEntityKey(normalizeMiniOpenOptions({ view: { type: 'v' }, pin: false }))).toBe(miniEntityKey({ view: { type: 'v' } }))
+  })
 })

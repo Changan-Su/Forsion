@@ -126,12 +126,17 @@ if (open) {
 | `layer` | 落到哪 |
 |---|---|
 | `{ dock: 'main' \| 'left' \| 'right' \| 'bottom' }` | 停靠在工作台里,同 `openView` 的 `location`;样子由位置定(左右栏都是 `side`) |
-| `{ float: 'desktop', pin? }` | 系统小窗:`form: 'mini'`(缺省)是 Mini Panel(恒置顶、可多开、按 `key` 复用),`'main'` 是 Floating Panel(缺省不置顶,`pin: true` 才盖在别的应用上) |
+| `{ float: 'desktop', pin? }` | 系统小窗:`form: 'mini'`(缺省)是 Mini Panel(缺省置顶,`pin: false` 不置顶、拖到屏幕边也不折起来;可多开、按 `key` 复用,位置和大小按实体记、重启后还在),`'main'` 是 Floating Panel(缺省不置顶,`pin: true` 才盖在别的应用上) |
 | `{ float: 'space', anchor? }` | 一张卡浮在当前 Space 的三栏之上;切到别的 Space 时藏起来,回来原样 |
 | `{ float: 'window', anchor? }` | 一张卡浮在整个窗口之上,切 Space 也留着 |
 | `{ float: 'view', host, anchor? }` | 一张卡浮在你视图里的某个元素(`host`)里 |
 
-后三种和 `ctx.ui.float` 是同一套浮层(六个锚点、用户可拖到别的角、按「作用域 + 视图 + key」记在本机),区别是里面挂的是你注册的**整个视图**,不是一块自己画的 DOM:宿主画卡头(标题、「在主面板显示」、关闭),视图的 `mount` 照常拿到 `view`(`surface` 是 `'mini'` 或 `'floating'`;`showInMainPanel()` 把当前参数带去主区打开、收掉这张卡)。卡不进布局,重启不恢复;插件停用或重载、视图被反注册、你调 `close()`、用户点关闭,都会收掉。同一视图 + 同一 `key` 再开 = 叫出那张、换成新参数,参数本身不算身份。
+后三种和 `ctx.ui.float` 是同一套浮层(六个锚点、用户可拖到别的角),区别是里面挂的是你注册的**整个视图**,不是一块自己画的 DOM:宿主画卡头(标题、「在主面板显示」、关闭),视图的 `mount` 照常拿到 `view`(`surface` 是 `'mini'` 或 `'floating'`;`showInMainPanel()` 把当前参数带去主区打开、收掉这张卡)。插件停用或重载、视图被反注册、你调 `close()`、用户点关闭,都会收掉。同一视图 + 同一 `key` 再开 = 叫出那张、换成新参数,参数本身不算身份。
+
+卡记在哪(2.13.8 起):
+- `space`:这个 Space 开着哪些卡(视图、当前参数 —— 包括视图自己用 `view.setParams` 改的、样子、`key`、锚点)跟这个 Space 的布局一起存。重启、切回这个 Space、撤销「恢复默认布局」时开回来;你的插件晚于布局加载也没关系,视图注册上来那一刻再开。用户点「恢复默认布局」时一起收。关掉再开,回到用户上次在这个 Space 拖到的角。插件停用时收掉的卡,重新启用后不会自己回来。
+- `window`:锚点按「视图 + key」记在本机;卡本身不跨重启。
+- `view`:卡归你的视图管,视图每次挂上时自己再开;锚点按「视图 + key」记在本机,不写进宿主视图的参数。
 
 **声明样子 `forms`**:`registerView` 时写 `forms`,说明这个视图能以哪几种样子出现:
 

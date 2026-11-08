@@ -25,6 +25,7 @@ export function installWorkspaceOpenHost(): void {
         const r = await openMiniWindow({
           ...(req.spaceId ? { spaceId: req.spaceId } : { view: req.view, mainView: req.mainView }),
           params: req.params, key: req.key, title: req.title,
+          ...(req.pin === false ? { pin: false as const } : {}),
         })
         if (r && !r.ok) return r
         return r ? { ok: true as const } : undefined
