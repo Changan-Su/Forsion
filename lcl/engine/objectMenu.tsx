@@ -88,9 +88,19 @@ export function MenuSurface({ menu, x, y, zIndex, returnFocus, className, onClos
         if (b && !b.disabled && b !== document.activeElement && e.currentTarget.contains(b)) b.focus({ preventScroll: true })
       }}
     >
+      <MenuRows menu={menu} onPick={() => close.current()} />
+    </OverlayAt>
+  )
+}
+
+/** 一份 `SheetMenu` 画成 `.ctx-menu` 里的行(分节之间画分隔线)。`MenuSurface` 用它;自己有特殊行的菜单(笔记「⋯」的排版行)
+ *  把对象那几项也经它画,接在自己的行后面(`leadingSeparator`)。点了先 `onPick`(关菜单)再执行。 */
+export function MenuRows({ menu, onPick, leadingSeparator }: { menu: SheetMenu; onPick: () => void; leadingSeparator?: boolean }): React.ReactElement {
+  return (
+    <>
       {menu.sections.filter((s) => s.items.length).map((s, si) => (
         <React.Fragment key={si}>
-          {si > 0 && <div className="ctx-separator" role="separator" />}
+          {(si > 0 || leadingSeparator) && <div className="ctx-separator" role="separator" />}
           {s.title && <div className="ctx-head">{s.title}</div>}
           {s.items.map((it) => (
             <button
@@ -102,14 +112,14 @@ export function MenuSurface({ menu, x, y, zIndex, returnFocus, className, onClos
               disabled={it.disabled || !it.run}
               title={it.detail}
               data-act={it.act}
-              onClick={() => { close.current(); it.run?.() }}
+              onClick={() => { onPick(); it.run?.() }}
             >
               {it.icon}{it.label}{it.checked ? <Check size={12} className="ctx-check" aria-hidden="true" /> : null}
             </button>
           ))}
         </React.Fragment>
       ))}
-    </OverlayAt>
+    </>
   )
 }
 

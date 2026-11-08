@@ -46,7 +46,13 @@ export interface ObjectCaps {
   singleColumn: boolean
 }
 
-export interface ObjectContext { place: Place; caps: ObjectCaps }
+export interface ObjectContext {
+  place: Place
+  caps: ObjectCaps
+  /** 执行时由 executeAction 填:用户发起时一共选了几个。重验会滤掉已经不在的,`confirm` / `run` 拿到的 refs 可能更少 ——
+   *  「批量就得先问」这类规矩按它判,别按滤剩下的个数(批量删两个、其中一个被别处删了,剩下那个照样要问)。 */
+  batch?: number
+}
 
 export type ActionResult = { ref: ObjectRef; ok: true } | { ref: ObjectRef; ok: false; reason: string }
 
@@ -102,6 +108,8 @@ export interface ObjectAction {
   when?(refs: ObjectRef[], cx: ObjectContext): boolean
   /** 列出来但灰掉的原因(悬停看)。 */
   disabledReason?(refs: ObjectRef[], cx: ObjectContext): string | undefined
+  /** 开关类动作(收藏、固定…)此刻是不是开着。菜单里靠 title 翻转表达;手机底部 sheet 拿它给那一行高亮。 */
+  on?(refs: ObjectRef[], cx: ObjectContext): boolean
   /** 显式声明才进命令面板(第二期接)。 */
   palette?: boolean
   /** 要确认的给出确认框内容;执行层弹、执行层在确认后再验一次。 */
@@ -218,8 +226,9 @@ const inflight = new Set<string>()
 
 /** 一切对象动作的唯一执行口:重验 → 确认 → 再验 → 执行 → 逐项结果,失败交给宿主上报。
  *  `targets` 传冻结的(菜单弹出时 freezeRefs 的结果);直接传 ObjectRef 视为当场冻结。 */
-export async function executeAction(actionId: string, targets: Array<FrozenRef | ObjectRef>, cx: ObjectContext): Promise<ActionResult[]> {
+export async function executeAction(actionId: string, targets: Array<FrozenRef | ObjectRef>, cx0: ObjectContext): Promise<ActionResult[]> {
   const frozen = targets.map((t) => ('ref' in t ? t : freezeRefs([t])[0]))
+  const cx: ObjectContext = { ...cx0, batch: frozen.length }
   const refs = frozen.map((f) => f.ref)
   const a = actions.get(actionId)?.a
   if (!a || !listed(a, refs, cx)) {
@@ -297,6 +306,10 @@ export interface ObjectMenuRequest {
   /** 本处特有的项(移出收纳夹、主位放哪个 Space…),排在「整理」与「分享」之间;不走对象动作表。 */
   placeSections?: SheetMenuSection[]
   title?: string
+  /** 动作图标的尺寸;缺省 13(桌面菜单),手机 sheet 传 16。 */
+  iconSize?: number
+  /** 某条对象动作执行完(含失败、取消)后回调,给发起处收尾(多选删完清掉选区…)。 */
+  onDone?: (actionId: string, results: ActionResult[]) => void
 }
 
 /** 把对象动作 + 本处项排成一份菜单(web 与 Android 原生半屏共用同一份 SheetMenu)。目标在这一刻冻结。
@@ -314,11 +327,15 @@ export function buildObjectMenu(req: ObjectMenuRequest): SheetMenu {
       return {
         id: a.id,
         label,
-        ...(a.icon ? { icon: createElement(a.icon, { size: 13 }) } : {}),
+        ...(a.icon ? { icon: createElement(a.icon, { size: req.iconSize ?? 13 }) } : {}),
         ...(g === 'danger' ? { danger: true } : {}),
         ...(reason ? { disabled: true, detail: reason } : {}),
         act: a.id,
-        run: () => { void executeAction(a.id, frozen, cx) },
+        run: () => {
+          void executeAction(a.id, frozen, cx).then((rs) => {
+            try { req.onDone?.(a.id, rs) } catch (e) { console.error(`[objects] onDone after "${a.id}" threw`, e) }
+          })
+        },
       }
     }),
   })
