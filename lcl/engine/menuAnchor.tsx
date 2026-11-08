@@ -152,7 +152,8 @@ export function followAnchor(el: HTMLElement, anchor: Element, opts: FitAnchored
     // 重落之前那一帧会往下盖住锚点 —— 悬停预览就会「盖住链接 → 链接 mouseleave 关卡 → 再弹」来回闪(2026-11-08 实测)。
     const bottom = v.top + Math.min(h, v.maxHeight)
     const up = bottom <= r.top + 0.5
-    const key = `${v.left}|${v.top}|${v.maxHeight}|${up}`
+    // 钉底边时内边距跟着窗口高变:窗口高也进 key,否则锚点没动、窗口变高时浮层会随窗口底边漂走、压到锚点(Codex 评审)
+    const key = `${v.left}|${v.top}|${v.maxHeight}|${z}|${up ? window.innerHeight : ''}`
     if (key === last) return // 写 maxHeight 会再触发一次 ResizeObserver;同值就停,不进循环
     last = key
     el.style.left = `${v.left / z}px`
