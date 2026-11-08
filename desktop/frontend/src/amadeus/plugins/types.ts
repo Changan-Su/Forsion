@@ -1391,8 +1391,9 @@ export interface PluginSelectionBarOptions {
    *  `path` is a vault-relative path when the content is a vault file. */
   source?(sel: PluginSelectionBarSelection): { title?: string; path?: string; page?: number } | undefined
   /** Default `true`: the host watches the DOM selection inside the element you passed (bar on mouse-up; gone when
-   *  the selection collapses, the element scrolls or resizes, or the user clicks elsewhere). Set `false` when the
-   *  text lives where the host cannot see it (an iframe, a canvas) and drive the bar with `show()` / `hide()`.
+   *  the selection collapses or the user clicks elsewhere; it follows the text when the element scrolls or resizes).
+   *  Set `false` when the text lives where the host cannot see it (an iframe, a canvas) and drive the bar with
+   *  `show()` / `hide()`.
    *  Watched reading surfaces share the host's continuous line selection paint; native Selection/copy are preserved.
    *  Custom PDF/code-editor layers and coarse pointers retain native paint. `watch:false` keeps custom paint. */
   watch?: boolean
@@ -1400,8 +1401,15 @@ export interface PluginSelectionBarOptions {
 
 export interface PluginSelectionBarHandle {
   /** Show the bar for this text. `rect` is the selection's bounding box in viewport pixels (a `DOMRect` works):
-   *  the bar sits centred above it, or below when there is no room. */
-  show(sel: { text: string; markdown?: string; rect: { left: number; right: number; top: number; bottom: number } }): void
+   *  the bar sits centred above it, or below when there is no room.
+   *
+   *  `getRect` (optional) lets the bar follow the text: the host calls it on every frame something may have moved
+   *  (scroll, resize, zoom, your view's own size or content) and places the bar — and a result card opened from
+   *  it — against what it returns. Return the selection's current box in viewport pixels, or `null` while the
+   *  text is not on screen (scrolled away, page not rendered): the bar fades out and comes back when you return a
+   *  box again. Keep it cheap and side-effect free; a throw counts as `null`. Without `getRect` the bar only knows
+   *  `rect`, so hide it yourself when the view scrolls or resizes. */
+  show(sel: { text: string; markdown?: string; rect: { left: number; right: number; top: number; bottom: number }; getRect?: () => { left: number; right: number; top: number; bottom: number } | null }): void
   /** Hide the bar (an open result card closes too when the host was watching the selection itself). */
   hide(): void
   update(opts: Partial<PluginSelectionBarOptions>): void

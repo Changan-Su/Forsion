@@ -54,11 +54,10 @@ const excluded = 'input, textarea, select, button, [data-native-selection], .tex
 const blockSelector = 'p,li,h1,h2,h3,h4,h5,h6,pre,td,th,blockquote,.katex-display'
 const elementOf = (n: Node): Element | null => n.nodeType === 1 ? n as Element : n.parentElement
 
-function measure(root: HTMLElement, range: Range): SelectionRect[] {
-  const doc = root.ownerDocument, win = doc.defaultView!
+/** 元素真正露在屏上的那块(视口 ∩ 每层 overflow 祖先的内容盒,视口 px)。缓存只活一次量(clips / styles 由调用方给)。
+ *  选区高亮按它裁每一行;文字锚点(textAnchor.ts)按它判断那段字还看不看得见。 */
+export function makeClipper(win: Window, style: (el: Element) => CSSStyleDeclaration = (el) => win.getComputedStyle(el), clips = new Map<Element, SelectionRect>()): (el: Element) => SelectionRect {
   const viewport = { left: 0, top: 0, right: win.innerWidth, bottom: win.innerHeight }
-  const clips = new Map<Element, SelectionRect>(), styles = new Map<Element, CSSStyleDeclaration>()
-  const style = (el: Element): CSSStyleDeclaration => { let cs = styles.get(el); if (!cs) { cs = win.getComputedStyle(el); styles.set(el, cs) } return cs }
   const clipOf = (el: Element): SelectionRect => {
     const cached = clips.get(el); if (cached) return cached
     let clip = el.parentElement ? { ...clipOf(el.parentElement) } : { ...viewport }
@@ -72,6 +71,14 @@ function measure(root: HTMLElement, range: Range): SelectionRect[] {
     }
     clips.set(el, clip); return clip
   }
+  return clipOf
+}
+
+function measure(root: HTMLElement, range: Range): SelectionRect[] {
+  const doc = root.ownerDocument, win = doc.defaultView!
+  const styles = new Map<Element, CSSStyleDeclaration>()
+  const style = (el: Element): CSSStyleDeclaration => { let cs = styles.get(el); if (!cs) { cs = win.getComputedStyle(el); styles.set(el, cs) } return cs }
+  const clipOf = makeClipper(win, style)
   // Bounds are not a clip when overflow is visible (canvas cards can extend beyond their PM root).
   const rootClip = clipOf(root)
   const fragments: SelectionFragment[] = []

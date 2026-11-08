@@ -301,6 +301,56 @@ it('ctx.ui.mountSelectionBar(缺省看选区):show() 报的也随滚动收;右�
   expect(errors).toEqual([])
 })
 
+// 划线菜单方案 B(2026-11-08):show() 带 getRect → 宿主每帧现量,条跟着那段字走、滚动不收;getRect 返回 null 只藏不收;
+// 抛错按 null 算、只报一次(报的是插件,不是宿主)。负对照(实跑):selectionBarSurface 不把 getRect 交给 ViewSelectionBar → getRect 没被调、条不跟着走,红。
+it('ctx.ui.mountSelectionBar:show() 带 getRect 时跟着走 —— 滚动不收、看不见只藏、抛错只报一次', async () => {
+  const { mountPluginSelectionBar } = await import('./selectionBarSurface')
+  const bar = () => document.querySelector<HTMLElement>('[data-testid="selection-bar"]')
+  vi.spyOn(el, 'getClientRects').mockReturnValue([{}] as unknown as DOMRectList) // happy-dom 没有排版:给视图一个盒子
+  type Box = { left: number; right: number; top: number; bottom: number }
+  let box: Box | null | 'throw' = { left: 10, right: 60, top: 300, bottom: 320 }
+  const getRect = vi.fn((): Box | null => { if (box === 'throw') throw new Error('plugin bug'); return box })
+  const scroll = () => act(async () => {
+    el.dispatchEvent(new Event('scroll'))
+    await new Promise((r) => requestAnimationFrame(() => r(null)))
+    await new Promise((r) => setTimeout(r, 0))
+  })
+  const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+  let handle!: ReturnType<typeof mountPluginSelectionBar>
+  await act(async () => { handle = mountPluginSelectionBar(el, 'follow', { ask: false, watch: false, tools: [{ id: 'note', title: 'Note', icon: 'annotate', run: () => {} }] }) })
+  await act(async () => { handle.show({ text: 'hello', rect: { left: 10, right: 60, top: 300, bottom: 320 }, getRect }) })
+  expect(bar()).not.toBeNull()
+  const top0 = bar()!.style.top
+
+  box = { left: 10, right: 60, top: 200, bottom: 220 } // 往上滚了 100px
+  await scroll()
+  expect(bar(), '滚动不收').not.toBeNull()
+  expect(getRect).toHaveBeenCalled()
+  expect(bar()!.style.top, '跟着那段字走').not.toBe(top0)
+  expect(bar()!.hasAttribute('data-anchor-hidden')).toBe(false)
+
+  box = null // 滚出了视图
+  await scroll()
+  expect(bar(), '看不见只藏不收').not.toBeNull()
+  expect(bar()!.hasAttribute('data-anchor-hidden')).toBe(true)
+
+  box = { left: 10, right: 60, top: 200, bottom: 220 }
+  await scroll()
+  expect(bar()!.hasAttribute('data-anchor-hidden'), '回来再出现').toBe(false)
+
+  box = 'throw'
+  await scroll()
+  await scroll()
+  expect(bar()!.hasAttribute('data-anchor-hidden'), '抛错按看不见算').toBe(true)
+  expect(err.mock.calls.filter((c) => String(c[0]).includes('getRect() threw')), '只报一次、报的是插件').toHaveLength(1)
+  // 藏着的时候换一次只给快照的 show():上一份锚点的隐藏标记要清掉(评审:复用同一个浮层,条会一直透明)
+  await act(async () => { handle.show({ text: 'snapshot', rect: { left: 10, right: 60, top: 300, bottom: 320 } }) })
+  expect(bar()!.hasAttribute('data-anchor-hidden'), '换成快照后看得见').toBe(false)
+  await act(async () => { handle.dispose() })
+  err.mockRestore()
+  expect(errors).toEqual([])
+})
+
 // 自己报选区的视图(PDF 阅读器)滚动 / 缩放时都要 hide():只收条,已经开着的结果卡留着(和聊天里滚动时一样)。
 // 负对照(2026-10-14 实跑):hide() 照旧无条件重挂 → 「卡还在」红。
 it('ctx.ui.mountSelectionBar({ watch: false }):hide() 只收条,开着的结果卡不跟着没', async () => {

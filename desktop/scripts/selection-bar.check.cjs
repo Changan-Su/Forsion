@@ -3,7 +3,9 @@
  *   聊天 —— 条在选区上方居中、不越出视口,外壳是圆角矩形(不是胶囊);组成 = 引用 / 在侧栏提问 / 顺便问 / 翻译(+ ⋯);
  *           「引用」照旧挂卡;翻译开**只读**结果卡(没有「替换」),目标语言按界面语言定,缺省走目录里的机器翻译模型,
  *           卡上写明谁译的,卡头换语言重译,点卡外面收;自动选上的机器翻译模型失败时落回聊天模型;
- *           插件动作按 scope / when 进 ⋯;输入框里的选区不出;滚动 / 点到外面收。
+ *           插件动作按 scope / when 进 ⋯;输入框里的选区不出;点到外面收。
+ *   跟着那段字走(划线菜单方案 B,2026-11-08)—— 聊天 / 插件视图滚动时条跟着走、滚出可见区只藏不收、滚回来原样出现;
+ *           ⋯ 展开时那一行不动、面板往远离选区的一侧长;不经鼠标切标签时结果卡藏起、切回来还在;插件 show({ getRect }) 也跟。
  *   插件视图 —— ctx.ui.mountSelectionBar:自己的工具(颜色点 / 图标钮)+ 宿主的动作区;接管「问 Tangu」;source 交给动作;
  *           output:'none' 不出卡;show() / hide();输入框里不出;排法设置(工具在前 / 动作在前);dispose 后不再出。
  * 笔记那一半(格式工具栏里的动作区)在浏览器台架 `npm run check:editorai -- --group=H`。
@@ -41,7 +43,12 @@ async function until(fn, ms = 8000) { const end = Date.now() + ms; for (;;) { co
 const now = Date.now()
 const SESSIONS = [{ id: 'sess-main', title: 'Parser 重构', model_id: 'm1', created_at: now, updated_at: now, projectless: true }]
 const REPLY = '好的,代号 AZURE-FALCON 已记下。接下来重构解析器的词法阶段,先把记号流和错误恢复拆开,再补一组边界用例。'
+/** 一段长的历史回复:让聊天区真能滚(跟随那几段要真滚动,不是派一个假的 scroll 事件)。FOLLOW 在中间,上下都有余量。 */
+const FOLLOW = '跟随锚点这一句用来看划线条跟不跟着滚动'
+const HISTORY = Array.from({ length: 50 }, (_, i) => (i === 20 ? `${FOLLOW},后面还有几个字。` : `第 ${i + 1} 条历史:这是一段用来把聊天撑高的回复,里面没有台架要找的字。`)).join('\n\n')
 const MESSAGES = [
+  { id: 'u0', role: 'user', content: '先给我一份长一点的历史记录。', timestamp: now - 900 },
+  { id: 'a0', role: 'model', content: HISTORY, timestamp: now - 800 },
   { id: 'u1', role: 'user', content: '记住:项目代号是 AZURE-FALCON。', timestamp: now - 500 },
   { id: 'a1', role: 'model', content: `${REPLY}\n\nThe lexer should stay a pure function of its input.`, timestamp: now - 400 },
 ]
@@ -54,7 +61,7 @@ ctx.registerSelectionAction({ id: 'everywhere', title: '到处', scope: 'all', i
 ctx.registerSelectionAction({ id: 'long', title: '长的才有', scope: ['chat'], when: function (cx) { return cx.length >= 15 }, run: function () { return 'x' } })
 ctx.registerSelectionAction({ id: 'own', title: '只在自己的视图', scope: 'own', output: 'none', run: function (cx) { window.__selprobe.ran.push(cx.text + '|' + cx.view + '|' + (cx.source && cx.source.page)) } })
 ctx.registerView({ id: 'reader', title: 'Sel Probe', mount: function (el) {
-  el.innerHTML = '<div class="selprobe" style="height:100%;overflow:auto;padding:120px 60px;font-size:15px;line-height:1.7;color:var(--text)"><p id="selprobe-p">Plugin view paragraph for the selection bar check.</p><input id="selprobe-in" value="text inside an input" style="width:260px"/><div style="height:1600px"></div></div>'
+  el.innerHTML = '<div class="selprobe" style="height:100%;overflow:auto;padding:260px 60px 120px;font-size:15px;line-height:1.7;color:var(--text)"><p id="selprobe-p">Plugin view paragraph for the selection bar check.</p><input id="selprobe-in" value="text inside an input" style="width:260px"/><div style="height:1600px"></div></div>'
   var bar = ctx.ui && ctx.ui.mountSelectionBar ? ctx.ui.mountSelectionBar(el, {
     view: 'reader',
     tools: [
@@ -132,6 +139,10 @@ const barState = (win) => win.evaluate(() => {
     radius: parseFloat(cs.borderTopLeftRadius), position: cs.position, inBody: el.parentElement === document.body,
     row: [...el.querySelectorAll('.selbar-row > *')].map((x) => (x.classList.contains('selbar-sep') ? '|' : x.getAttribute('data-act') || '?')),
     vw: innerWidth, vh: innerHeight,
+    // 跟随(方案 B):看不见时只藏(data-anchor-hidden,透明);⋯ 展开时 .selbar-row 钉住、面板往哪边长(data-grow)
+    hidden: el.hasAttribute('data-anchor-hidden'), opacity: cs.opacity, grow: el.dataset.grow ?? null,
+    rowBox: (() => { const r = el.querySelector('.selbar-row')?.getBoundingClientRect(); return r ? { top: r.top, bottom: r.bottom } : null })(),
+    panelBox: (() => { const r = el.querySelector('.selbar-panel')?.getBoundingClientRect(); return r ? { top: r.top, bottom: r.bottom } : null })(),
   }
 })
 const card = (win) => win.evaluate(() => {
@@ -145,8 +156,66 @@ const card = (win) => win.evaluate(() => {
     lang: el.querySelector('[data-testid="inline-ai-lang"]')?.value ?? null,
     hint: el.querySelector('[data-testid="inline-ai-hint"]')?.textContent ?? null,
     title: el.querySelector('.am-ai-title')?.textContent ?? null,
+    hidden: el.hasAttribute('data-anchor-hidden'), opacity: getComputedStyle(el).opacity,
   }
 })
+/** 当前 DOM 选区的外接矩形(没有 / 收起 = null)。 */
+const selRect = (win) => win.evaluate(() => {
+  const s = window.getSelection()
+  if (!s || !s.rangeCount || s.isCollapsed) return null
+  const b = s.getRangeAt(0).getBoundingClientRect()
+  return { left: b.left, right: b.right, top: b.top, bottom: b.bottom }
+})
+/** 某段字现在的外接矩形(选区没了也能量:切标签回来后用它比卡的位置)。 */
+const textRect = (win, rootSel, text) => win.evaluate(({ rootSel, text }) => {
+  for (const root of document.querySelectorAll(rootSel)) {
+    const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
+    let n
+    while ((n = w.nextNode())) {
+      const i = n.data.indexOf(text)
+      if (i < 0) continue
+      const r = document.createRange(); r.setStart(n, i); r.setEnd(n, i + text.length)
+      const b = r.getBoundingClientRect()
+      return { left: b.left, right: b.right, top: b.top, bottom: b.bottom }
+    }
+  }
+  return null
+}, { rootSel, text })
+/** 滚 sel 所在的滚动容器(往上找第一个能滚的祖先;sel 自己能滚就是它),返回实际滚了多少(缩放前的局部 px;屏上的位移要 × ZOOM)。 */
+const scrollIn = (win, sel, dy) => win.evaluate(({ sel, dy }) => {
+  let el = document.querySelector(sel)
+  while (el && !(el.scrollHeight > el.clientHeight + 4 && /(auto|scroll)/.test(getComputedStyle(el).overflowY))) el = el.parentElement
+  if (!el) return 0
+  const before = el.scrollTop
+  el.scrollTop += dy
+  return el.scrollTop - before
+}, { sel, dy })
+/** 等锚点重摆(一帧合并)+ 藏 / 现的淡入淡出(100ms)放完。 */
+const frames = (win) => win.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(r, 250)))))
+/** 条贴着选区:水平居中 ±2,在上方(或放不下翻到下方)离开不到 16px。 */
+const hugs = (b, s) => !!b && !!s && Math.abs((b.left + b.right) / 2 - (s.left + s.right) / 2) <= 2 &&
+  ((b.bottom <= s.top + 1 && s.top - b.bottom < 16) || (b.top >= s.bottom - 1 && b.top - s.bottom < 16))
+/** 引导结束有时停在别的 Space(蓬洲云页)而不是 Tangu:进不了聊天就点回 Tangu;还是不行就留证据(截图 + 当时的 Space 与页面字)再抛。 */
+async function ensureTangu(win, shotsDir) {
+  const ta = win.locator('.t2c-ta').first()
+  if (!(await ta.isVisible().catch(() => false))) {
+    await win.waitForTimeout(800)
+    await win.evaluate(() => document.querySelector('[data-space-id="tangu"]')?.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+  }
+  await ta.waitFor({ timeout: 30000 }).catch(async (e) => {
+    if (shotsDir) await win.screenshot({ path: path.join(shotsDir, 'fail-boot.png') }).catch(() => {})
+    console.log(`DIAG boot | ${JSON.stringify(await win.evaluate(() => ({ spaces: [...document.querySelectorAll('[data-space-id]')].map((x) => x.dataset.spaceId), body: document.body.innerText.slice(0, 300) })).catch(() => null))}`)
+    throw e
+  })
+}
+/** 不经鼠标切到某个标签(Agent / 命令面板开视图就是这样;只派 pointer 事件 + click,不派 mousedown —— 那算「点到外面」)。 */
+const switchTab = (win, title) => win.evaluate((title) => {
+  const tab = [...document.querySelectorAll('.dv-tab')].find((t) => (t.textContent || '').includes(title))
+  if (!tab) return false
+  for (const type of ['pointerdown', 'pointerup']) tab.dispatchEvent(new PointerEvent(type, { bubbles: true, button: 0, pointerType: 'mouse', isPrimary: true }))
+  tab.click()
+  return true
+}, title)
 const cardDone = (win) => until(async () => { const c = await card(win); return c && (c.phase === 'done' || c.phase === 'error') ? c : null }, 10000)
 /** 浮层的入场动效(180ms 从透明淡入)放完再往下:假引擎秒回,不等的话拍到的是半透明的那一帧。 */
 // 封顶 1 秒:页面上要是有转个不停的动画(连接中的圈之类),它的 finished 永远不来,不封顶整条台架就挂在这儿。
@@ -242,7 +311,7 @@ async function main() {
     check('主窗离开首启引导', await skipOnboarding(win))
     await win.addStyleTag({ content: '.sync-setup-backdrop { display: none !important; }' }) // 登录后首次同步卡 2.5s 后弹、会盖住划线条(同 btw.check)
     const input = win.locator('.t2c-ta').first()
-    await input.waitFor({ timeout: 30000 })
+    await ensureTangu(win, shots)
     await win.locator('text=Parser 重构').first().click()
     await win.locator('.t2-content', { hasText: 'AZURE-FALCON 已记下' }).first().waitFor({ timeout: 15000 })
     if (ZOOM !== 1) check(`界面缩放 ${ZOOM} 已生效`, Math.abs((await win.evaluate(() => document.body.currentCSSZoom || 1)) - ZOOM) < 0.01)
@@ -267,9 +336,27 @@ async function main() {
     if (region.strip === 'drag') check('条不算窗口拖拽区(压到标签栏上也点得动)', region.bar === 'no-drag', JSON.stringify(region))
     else console.log(`SKIP 拖拽区的计算值读不出来,这一条没验 | ${JSON.stringify(region)}`)
 
-    // ── 输入区里的选区不出;滚动 / 点到外面收 ──
-    await win.locator('.t2-stream').first().evaluate((el) => { el.scrollTop = Math.max(0, el.scrollTop - 1); el.dispatchEvent(new Event('scroll')) })
-    check('聊天区一滚动条就收', (await until(async () => !(await barState(win)), 3000)) === true)
+    // ── 滚动:条跟着那段字走(划线菜单方案 B,2026-11-08);滚出可见区只藏不收,滚回来原样出现 ──
+    // 负对照(实跑):ViewSelectionBar 里 followRef 恒为 false(滚动 / 盒子变了就收的旧路)→ 这一段红。
+    await step('聊天里滚动跟着走', async () => {
+      await dragSelect(win, CHAT, FOLLOW)
+      const b0 = await barReady(win)
+      const d1 = await scrollIn(win, CHAT, -80) // 往上滚 80 = 字往下走 80
+      await frames(win)
+      const s1 = await selRect(win), b1 = await barState(win)
+      check('聊天区滚动:条不收,跟着那段字走(位移 = 滚动量,仍在选区上方居中)', !!b0 && d1 < -40 && !!b1 && !b1.hidden && hugs(b1, s1) && Math.abs((b1.top - b0.top) + d1 * ZOOM) <= 2, JSON.stringify({ d1, b0, b1, s1 }))
+      const d2 = await scrollIn(win, CHAT, 4000)
+      await frames(win)
+      const b2 = await barState(win)
+      check('那段字滚出可见区:条只藏不收(还挂着、透明),选区还在', d2 > 400 && !!b2 && b2.hidden && b2.opacity === '0' && !!(await selRect(win)), JSON.stringify({ d2, b2 }))
+      await scrollIn(win, CHAT, -d2)
+      await frames(win)
+      const s3 = await selRect(win), b3 = await barState(win)
+      check('滚回来:条原样出现、贴着那段字', !!b3 && !b3.hidden && b3.opacity === '1' && hugs(b3, s3), JSON.stringify({ b3, s3 }))
+      await shot(win, path.join(shots, 'chat-bar-follow.png'))
+    })
+
+    // ── 输入区里的选区不出;点到外面收 ──
     await dragSelect(win, CHAT, 'AZURE-FALCON 已记下')
     await until(() => barState(win), 5000)
     await input.click() // 输入框:在消息流外面,点了哪儿也不去
@@ -385,6 +472,56 @@ async function main() {
       check('插件视图的输入框里也不出条', !(await barState(win)))
     })
 
+    // 插件视图里滚动同样跟着走;⋯ 展开时那一行不动(方案 B)
+    await step('插件视图跟着走 + ⋯ 行不动', async () => {
+      await win.evaluate(() => { document.querySelector('.selprobe').scrollTop = 0 })
+      await dragSelect(win, '.selprobe', 'paragraph for the selection')
+      const b0 = await barReady(win)
+      const d1 = await scrollIn(win, '.selprobe', 50)
+      await frames(win)
+      const s1 = await selRect(win), b1 = await barState(win)
+      check('插件视图滚动:条不收,跟着那段字走', !!b0 && d1 > 30 && !!b1 && !b1.hidden && hugs(b1, s1) && Math.abs((b0.top - b1.top) - d1 * ZOOM) <= 2, JSON.stringify({ d1, b0, b1, s1 }))
+      const d2 = await scrollIn(win, '.selprobe', 900)
+      await frames(win)
+      const b2 = await barState(win)
+      check('插件视图里那段字滚出去:条只藏不收', d2 > 200 && !!b2 && b2.hidden, JSON.stringify({ d2, b2 }))
+      await scrollIn(win, '.selprobe', -(d1 + d2))
+      await frames(win)
+      const s3 = await selRect(win), b3 = await barReady(win)
+      check('插件视图滚回来:条原样出现', !!b3 && !b3.hidden && hugs(b3, s3), JSON.stringify({ b3, s3 }))
+      await win.locator('[data-testid="selection-bar"] [data-act="more"]').click()
+      await win.locator('[data-testid="selbar-more"]').waitFor({ timeout: 3000 })
+      await frames(win)
+      const b4 = await barState(win)
+      check('⋯ 展开:那一行不动(±1px),面板长在行上方(往远离选区的一侧)', !!b3?.rowBox && !!b4?.rowBox && !!b4.panelBox && Math.abs(b4.rowBox.top - b3.rowBox.top) <= 1 && b4.grow === 'up' && b4.panelBox.bottom <= b4.rowBox.top + 1, JSON.stringify({ before: b3?.rowBox, b4 }))
+      await shot(win, path.join(shots, 'plugin-more-up.png'))
+      await win.keyboard.press('Escape')
+      await win.evaluate(() => window.getSelection().removeAllRanges())
+      await until(async () => !(await barState(win)), 3000)
+    })
+
+    // 不经鼠标切标签(Agent / 命令面板开视图):结果卡藏起、切回来还在(方案 B §7)。用鼠标点标签那一下按「点外面」收,不在这里验。
+    await step('切标签时结果卡藏起又回来', async () => {
+      check('切回聊天标签', await switchTab(win, 'Parser 重构'))
+      await win.locator(CHAT, { hasText: 'AZURE-FALCON' }).first().waitFor({ timeout: 10000 })
+      await dragSelect(win, CHAT, '重构解析器的词法阶段')
+      await win.locator('[data-testid="selection-translate"]').click({ timeout: 8000 })
+      await cardDone(win)
+      await win.evaluate(() => window.__selprobe.open())
+      await win.locator('#selprobe-p').waitFor({ timeout: 10000 })
+      await frames(win)
+      const away = await card(win)
+      check('切到别的标签:结果卡藏起(还挂着、透明),不浮在别的视图上', !!away && away.hidden && away.opacity === '0', JSON.stringify(away))
+      await switchTab(win, 'Parser 重构')
+      await frames(win)
+      const back = await card(win), t = await textRect(win, CHAT, '重构解析器的词法阶段')
+      check('切回来:卡原样出现、贴着那段字', !!back && !back.hidden && back.opacity === '1' && !!t && ((back.top >= t.bottom - 1 && back.top - t.bottom < 16) || (back.bottom <= t.top + 1 && t.top - back.bottom < 16)), JSON.stringify({ back, t }))
+      await win.keyboard.press('Escape')
+      await until(async () => !(await card(win)), 3000)
+      await win.evaluate(() => window.__selprobe.open())
+      await win.locator('#selprobe-p').waitFor({ timeout: 10000 })
+    })
+
     // 排法设置:动作在前
     await step('排法设置', async () => {
       await win.evaluate(() => localStorage.setItem('forsion_selection_bar_order', 'actions'))
@@ -410,6 +547,21 @@ async function main() {
       await until(() => barState(win), 5000)
       await win.evaluate(() => window.__selprobe.bar.hide())
       check('hide() 收条', (await until(async () => !(await barState(win)), 3000)) === true)
+      // show({ getRect }):宿主每帧现量,自己报的选区也跟着走(方案 B 第四步)
+      await win.evaluate(() => {
+        document.querySelector('.selprobe').scrollTop = 0
+        const p = document.getElementById('selprobe-p')
+        const box = () => { const b = p.getBoundingClientRect(); return { left: b.left, right: b.left + 240, top: b.top, bottom: b.bottom } }
+        window.__getRectCalls = 0
+        window.__selprobe.bar.show({ text: 'live text', rect: box(), getRect: () => { window.__getRectCalls++; return box() } })
+      })
+      const g0 = await barReady(win)
+      const gd = await scrollIn(win, '.selprobe', 40)
+      await frames(win)
+      const g1 = await barState(win)
+      check('show({ getRect }):滚动时宿主现量,条跟着走、不收', !!g0 && gd > 20 && !!g1 && !g1.hidden && Math.abs((g0.top - g1.top) - gd * ZOOM) <= 2 && (await win.evaluate(() => window.__getRectCalls)) > 0, JSON.stringify({ gd, g0, g1 }))
+      await win.evaluate(() => { window.__selprobe.bar.hide(); document.querySelector('.selprobe').scrollTop = 0 })
+      await until(async () => !(await barState(win)), 3000)
       await win.evaluate(() => { window.__selprobe.bar.dispose(); window.__selprobe.bar.show({ text: 'after dispose', rect: { left: 420, right: 620, top: 500, bottom: 520 } }) })
       await win.waitForTimeout(300)
       check('dispose() 之后不再出条', !(await barState(win)))
@@ -423,6 +575,7 @@ async function main() {
       win = second.win
       check('深色 + 英文的实例离开首启引导', await skipOnboarding(win))
       await win.addStyleTag({ content: '.sync-setup-backdrop { display: none !important; }' })
+      await ensureTangu(win, shots)
       const row = win.locator('.t2s-srow', { hasText: 'Parser 重构' }).first()
       await row.waitFor({ timeout: 30000 })
       await row.click()

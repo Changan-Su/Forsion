@@ -240,7 +240,20 @@ export interface SelRect {
   bg?: string
   /** 鼠标拖选松手时的拖动方向(工具栏顺着它滑进来,同聊天划线条 .selbar;走查续八 8.1)。双击 / 三击 / 键盘选区没有。 */
   dir?: 'forward' | 'backward'
+  /** 跟着那段字走(划线菜单方案 B,2026-11-08):滚动、窗口尺寸、分栏拖动后按这次的选区现量,不收。上面的 left / top / bottom
+   *  只是挂上那一刻的初值;测试里手挂的工具栏不带它,照旧按初值摆。 */
+  follow?: SelFollow
 }
+export interface SelFollow {
+  /** 那段字的归属(编辑器根):视图被摘下 / 藏起来时格式栏只藏不收。 */
+  owner: HTMLElement
+  /** 选区现在在哪(视口 px):横向是中心点左右各 1px(中心同 left),纵向是首尾两端的上下沿;量不出 = null。 */
+  rect: () => { left: number; top: number; right: number; bottom: number } | null
+  /** 编辑器面板现在的左右边(视口 px):格式栏横向夹在这里面。 */
+  pane: () => { left?: number; right?: number } | null
+}
+/** 编辑器面板(Dockview 的内容区 / 移动端主区):格式栏横向不出它、横向中心只算露在它里面的行。 */
+const paneOf = (view: EditorView): DOMRect | undefined => view.dom.closest('.dv-content-container, .mb-main')?.getBoundingClientRect()
 /** 选中的是不是「一张图」—— 两种形态都算:md 图片节点(NodeSelection),以及 `![[pic.png|200]]`
  *  那段被整体选中的源码文本(wikilink.ts 的选中态就是这么表示的)。
  *  行内格式工具栏据此让位:对图片来说 B/I/U 毫无意义,浮条还会盖住正文(截图自查发现)。 */
@@ -289,6 +302,43 @@ function selectionCenterX(view: EditorView, from: number, to: number, pane: DOMR
     return r > l ? (l + r) / 2 : null
   } catch {
     return null
+  }
+}
+
+/** 格式栏的现量(SelRect.follow)。纵向每次按 coordsAtPos 现量(滚动只改它);横向中心记成相对编辑器左边的偏移 ——
+ *  滚动不改它,不必每帧把整段选区的文字逐个量一遍(⌘A 一篇长文时那是几千个文本节点);编辑器变宽变窄(窗口、分栏)
+ *  文字会重排,这时才重算一次。from / to 是这次报告时的选区:选区一变 compute 会重报一份新的。 */
+function followSelection(view: EditorView, from: number, to: number, centerX: number): SelFollow {
+  const dom = view.dom
+  const r0 = dom.getBoundingClientRect()
+  let width = r0.width
+  let offset = centerX - r0.left
+  return {
+    owner: dom,
+    rect: () => {
+      if (view.isDestroyed) return null
+      const size = view.state.doc.content.size
+      const f = Math.min(from, size), t = Math.min(to, size)
+      let a: { top: number; bottom: number; left: number }
+      let b: { top: number; bottom: number; left: number }
+      try {
+        a = view.coordsAtPos(f)
+        b = view.coordsAtPos(t)
+      } catch {
+        return null
+      }
+      const d = dom.getBoundingClientRect()
+      if (Math.abs(d.width - width) > 0.5) {
+        width = d.width
+        offset = (selectionCenterX(view, f, t, paneOf(view)) ?? (a.left + b.left) / 2) - d.left
+      }
+      const cx = d.left + offset
+      return { left: cx - 1, right: cx + 1, top: Math.min(a.top, b.top), bottom: Math.max(a.bottom, b.bottom) }
+    },
+    pane: () => {
+      const p = paneOf(view)
+      return p ? { left: p.left, right: p.right } : null
+    },
   }
 }
 
@@ -374,8 +424,9 @@ export function selectionToolbarPlugin(report: (r: SelRect | null) => void) {
               })
               return vals.size === 1 ? [...vals][0] || undefined : undefined
             }
-            const pane = view.dom.closest('.dv-content-container, .mb-main')?.getBoundingClientRect()
-            report({ from, to, active, align, shape: toolbarShape(editContextOf(selection)), fg: uniform('amadeusColor', 'color'), bg: uniform('amadeusBg', 'bg'), dir: fromDrag ? (selection.head < selection.anchor ? 'backward' : 'forward') : undefined, left: selectionCenterX(view, from, to, pane) ?? (a.left + b.left) / 2, top: Math.min(a.top, b.top), bottom: Math.max(a.bottom, b.bottom), paneLeft: pane?.left, paneRight: pane?.right, kind: spans ? translate('wikiac.multiBlocks') : blockLabel(chain) })
+            const pane = paneOf(view)
+            const centerX = selectionCenterX(view, from, to, pane) ?? (a.left + b.left) / 2
+            report({ from, to, active, align, shape: toolbarShape(editContextOf(selection)), fg: uniform('amadeusColor', 'color'), bg: uniform('amadeusBg', 'bg'), dir: fromDrag ? (selection.head < selection.anchor ? 'backward' : 'forward') : undefined, left: centerX, top: Math.min(a.top, b.top), bottom: Math.max(a.bottom, b.bottom), paneLeft: pane?.left, paneRight: pane?.right, kind: spans ? translate('wikiac.multiBlocks') : blockLabel(chain), follow: followSelection(view, from, to, centerX) })
     }
     return new Plugin({
       key: toolbarDismissKey,

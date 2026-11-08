@@ -23,7 +23,8 @@
 //       complete 收到对话记录 + 指令,新建以模型一级标题命名的笔记(标题剥出正文)、重名加 -2、没有 complete 时入口不出现。
 //   H = 划线条(2026-10-13):工具栏 = 本视图的工具 + 动作区(问 Tangu、翻译、⋯ 里的插件动作);翻译进同一张预览卡、
 //       目标语言按界面语言定且卡头能换、卡上写明谁译的;排法设置(工具在前 / 动作在前);插件动作的 scope / when / output;
-//       H4 选两行时工具栏按选区各行的并集居中(走查续六 6.8;夹在编辑器面板内由 lcl menuAnchor.test 的 boundLeft/Right 钉)。
+//       H4 选两行时工具栏按选区各行的并集居中(走查续六 6.8;夹在编辑器面板内由 lcl menuAnchor.test 的 boundLeft/Right 钉);
+//       H5 跟着那段字走(划线菜单方案 B,2026-11-08):滚动不收、滚出可见区只藏、窗口变窄不收、展开面板时那一行不动、可写结果卡跟着走。
 // 宿主接缝用台架假探针顶替(tanguSeam.setTanguProbe;与生产同一模块实例)。探针的 complete 是假的(流式吐 __aiReply),
 // 真模型那半在 tangu-agent 的 live 台架 `--only inline`。
 // 用法:npm run check:editorai(由 e2e-editor 自起/复用 Vite;worktree 里设 HARNESS_URL)。
@@ -1254,6 +1255,82 @@ async function groupH(browser) {
       return { lines: new Set(rs.map((x) => Math.round(x.top))).size, union: Math.round((l + r) / 2), tb: tb ? Math.round(tb.left + tb.width / 2) : null }
     })
     check('H4 选两行以上:划线菜单按各行矩形的并集居中(不按首尾两点的中点)', g.lines >= 2 && g.tb !== null && Math.abs(g.tb - g.union) <= 2, JSON.stringify(g))
+    await page.close()
+  }
+  // H5 划线菜单方案 B(2026-11-08):格式栏跟着那段字走 —— 滚动不收、滚出可见区只藏、滚回来原样出现;窗口变窄不收;
+  //   展开「转换为」时那一行不动、面板往远离选区的一侧长;可写结果卡跟着目标那段字走。
+  //   负对照(实跑):MarkdownBlock 加回「窗口里任何滚动都收」那份监听 → H5a 红;InlineToolbar 不传 keep → H5e 红。
+  {
+    const TARGET = '选中这一句看格式栏跟不跟'
+    const paras = Array.from({ length: 40 }, (_, i) => (i === 14 ? `第 15 段:${TARGET},后面还有几个字。` : `第 ${i + 1} 段:这是一段用来把页面撑高的正文,滚动时格式栏应该贴着选中的那几个字。`))
+    const page = await open(browser, `# 跟随\n\n${paras.join('\n\n')}\n`)
+    await installProbe(page, { complete: true })
+    await page.evaluate(({ PM, text }) => {
+      const p = [...document.querySelectorAll(PM + ' > *')].find((x) => (x.textContent ?? '').includes(text))
+      p?.scrollIntoView({ block: 'center' })
+    }, { PM, text: TARGET })
+    await page.waitForTimeout(300)
+    await selectText(page, TARGET)
+    const geo = () => page.evaluate((PM) => {
+      const box = (b) => (b ? { left: b.left, right: b.right, top: b.top, bottom: b.bottom } : null)
+      const tb = document.querySelector('[data-testid="inline-toolbar"]:not([data-lcl-exit])')
+      const s = window.getSelection()
+      const card = document.querySelector('[data-testid="inline-ai-panel"]:not([data-lcl-exit])')
+      return {
+        tb: box(tb?.getBoundingClientRect()), hidden: !!tb?.hasAttribute('data-anchor-hidden'), opacity: tb ? getComputedStyle(tb).opacity : null, grow: tb?.dataset.grow ?? null,
+        row: box(tb?.querySelector('.itb-row')?.getBoundingClientRect()), panel: box(tb?.querySelector('.itb-panel')?.getBoundingClientRect()),
+        sel: s && s.rangeCount && !s.isCollapsed ? box(s.getRangeAt(0).getBoundingClientRect()) : null,
+        card: box(card?.getBoundingClientRect()), cardHidden: !!card?.hasAttribute('data-anchor-hidden'), target: box(document.querySelector(PM + ' .am-ai-target')?.getBoundingClientRect()),
+      }
+    }, PM)
+    /** 滚正文的滚动容器(往上找第一个能滚的祖先,找不到就是文档),返回实际滚了多少。 */
+    const scrollBy = (dy) => page.evaluate(({ PM, dy }) => {
+      let el = document.querySelector(PM)
+      while (el && el !== document.body && !(el.scrollHeight > el.clientHeight + 4 && /(auto|scroll)/.test(getComputedStyle(el).overflowY))) el = el.parentElement
+      const s = el && el !== document.body ? el : document.scrollingElement
+      const before = s.scrollTop
+      s.scrollTop += dy
+      return s.scrollTop - before
+    }, { PM, dy })
+    const frames = () => page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(r, 200)))))
+    const hugs = (g) => !!g.tb && !!g.sel && Math.abs((g.tb.left + g.tb.right) / 2 - (g.sel.left + g.sel.right) / 2) <= 2 &&
+      ((g.tb.bottom <= g.sel.top + 1 && g.sel.top - g.tb.bottom < 16) || (g.tb.top >= g.sel.bottom - 1 && g.tb.top - g.sel.bottom < 16))
+    const g0 = await geo()
+    const d1 = await scrollBy(80)
+    await frames()
+    const g1 = await geo()
+    check('H5a 滚动:格式栏不收,跟着那段字走(仍在选区上方居中,位移 = 滚动量)', !!g0.tb && d1 > 40 && !!g1.tb && !g1.hidden && hugs(g1) && Math.abs((g0.tb.top - g1.tb.top) - d1) <= 2, JSON.stringify({ d1, g0, g1 }))
+    const d2 = await scrollBy(4000)
+    await frames()
+    const g2 = await geo()
+    check('H5b 那段字滚出可见区:格式栏只藏不收(还挂着、透明),选区还在', d2 > 400 && !!g2.tb && g2.hidden && g2.opacity === '0' && !!g2.sel, JSON.stringify({ d2, g2 }))
+    await scrollBy(-d2)
+    await frames()
+    const g3 = await geo()
+    check('H5c 滚回来:格式栏原样出现、贴着那段字', !!g3.tb && !g3.hidden && g3.opacity === '1' && hugs(g3), JSON.stringify(g3))
+    await page.setViewportSize({ width: 960, height: 900 })
+    await frames()
+    const g4 = await geo()
+    await page.setViewportSize({ width: 1200, height: 900 })
+    await frames()
+    check('H5d 窗口变窄:格式栏不收,按新排版重摆', !!g4.tb && !g4.hidden && hugs(g4), JSON.stringify(g4))
+    const g5a = await geo()
+    const turn = await page.$('[data-testid="inline-toolbar"] [data-panel="turn"]')
+    if (turn) { const bb = await turn.boundingBox(); await page.mouse.click(bb.x + bb.width / 2, bb.y + bb.height / 2) }
+    await frames()
+    const g5 = await geo()
+    check('H5e 展开「转换为」:那一行不动(±1px),面板长在行上方(往远离选区的一侧)', !!turn && !!g5a.row && !!g5.row && !!g5.panel && Math.abs(g5.row.top - g5a.row.top) <= 1 && g5.grow === 'up' && g5.panel.bottom <= g5.row.top + 1 && hugs(g5), JSON.stringify({ before: g5a.row, g5 }))
+    // 直接换一段选(不按 Esc:鼠标开的面板焦点不在格式栏里,一下 Esc 就整条收掉并记成「这个选区不再弹」,
+    // 第二下落进编辑器成了块选择,之后拖选不再是文字选区)
+    await selectText(page, '后面还有几个字')
+    await page.click('[data-testid="inline-toolbar"] [data-act="translate"]', { timeout: 5000 })
+    await waitPhase(page, 'done')
+    await frames()
+    const g6 = await geo()
+    const d3 = await scrollBy(-60)
+    await frames()
+    const g7 = await geo()
+    check('H5f 可写结果卡跟着目标那段字走(位移 = 滚动量,仍贴在目标下面)', !!g6.card && !!g7.card && !!g7.target && d3 < -30 && !g7.cardHidden && Math.abs((g7.card.top - g6.card.top) + d3) <= 2 && g7.card.top >= g7.target.bottom - 1 && g7.card.top - g7.target.bottom < 14, JSON.stringify({ d3, g6: { card: g6.card, target: g6.target }, g7: { card: g7.card, target: g7.target } }))
     await page.close()
   }
 }

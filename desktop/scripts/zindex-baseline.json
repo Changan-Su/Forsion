@@ -1,5 +1,4 @@
 {
-  "../lcl/components/selectionBar.css": 1,
   "../lcl/components/toolIsland.css": 1,
   "../lcl/engine/dropIndicator.css": 1,
   "../lcl/engine/engine.css": 10,
@@ -16,9 +15,8 @@
   "frontend/src/amadeus/pdf/pdfAnnotator.css": 1,
   "frontend/src/amadeus/plugins/pluginParts.css": 1,
   "frontend/src/amadeus/plugins/tableSurface.css": 1,
-  "frontend/src/amadeus/styles.css": 32,
+  "frontend/src/amadeus/styles.css": 31,
   "frontend/src/amadeus/theme/lcl/tanguSoft.css": 1,
-  "frontend/src/amadeus/unified/inlineAiPanel.css": 1,
   "frontend/src/amadeus/unified/UnifiedPage.tsx": 1,
   "frontend/src/builtins/browserView.tsx": 1,
   "frontend/src/components/AgentMemoryModal.tsx": 1,
