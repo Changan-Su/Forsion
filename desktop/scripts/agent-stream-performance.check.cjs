@@ -48,6 +48,23 @@ async function main() {
     active.add(run.runId)
   }
   fs.mkdirSync(path.dirname(reportPath), { recursive: true })
+  const waitForTail = () => win.waitForFunction(() => {
+    const chat = [...document.querySelectorAll('.t2-chat-view')].find((el) => el.checkVisibility())
+    const scroll = chat?.querySelector('.t2-stream')
+    const bodies = scroll?.querySelectorAll('.t2-content') ?? []
+    const tail = bodies[bodies.length - 1]?.lastElementChild
+    if (!scroll || !tail || scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight >= 40) return false
+    const walker = document.createTreeWalker(tail, NodeFilter.SHOW_TEXT)
+    let last, node
+    while ((node = walker.nextNode())) if (node.textContent.trim()) last = node
+    if (!last) return false
+    const range = document.createRange()
+    range.setStart(last, Math.max(0, last.length - 1)); range.setEnd(last, last.length)
+    const r = range.getBoundingClientRect(), viewport = scroll.getBoundingClientRect()
+    const composer = chat.querySelector('.composer-anchor')?.getBoundingClientRect()
+    const bottom = Math.min(viewport.bottom, composer?.top ?? viewport.bottom)
+    return r.height > 0 && r.top >= viewport.top && r.bottom <= bottom + 1
+  }, null, { timeout: 10000 })
   try {
     await U.boot(app, win, { space: 'tangu', width: 1440, height: 900 })
     report.runtime = await app.evaluate(() => ({ electron: process.versions.electron, chrome: process.versions.chrome }))
@@ -128,6 +145,9 @@ async function main() {
           const active = !!(await win.locator('.t2-asst[data-streaming]').count())
           if (!active) report.switchFinishedAfterRun = true
           if (!baseline) assert(active, 'switches must occur during the run')
+          // A quick activation alone is insufficient: the latest actual text must be
+          // on screen at the bottom, not waiting behind an estimated/offscreen block.
+          await waitForTail()
         }
         await win.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0))))
         report.switches.push({ space, ms: Date.now() - start, activationMs: activated - start })
@@ -149,12 +169,38 @@ async function main() {
     report.frames = stats(sample.frames)
     report.longTasks = stats(sample.longTasks)
     report.switchLatency = stats(report.switches.map((x) => x.ms))
+    report.returnToChat = stats(report.switches.filter((x) => x.space === 'tangu').map((x) => x.ms))
     report.samples = sample
+    if (!baseline) {
+      assert(await win.locator('.t2-asst[data-streaming]').count(), 'scroll hold must be checked while output continues')
+      const scroll = win.locator('.t2-stream').first()
+      await scroll.evaluate((el) => {
+        window.__scrollTrace = []
+        for (const type of ['wheel', 'scroll']) el.addEventListener(type, (e) => {
+          window.__scrollTrace.push({ type, at: performance.now(), delta: e.deltaY, top: el.scrollTop, height: el.scrollHeight, client: el.clientHeight })
+          if (window.__scrollTrace.length > 200) window.__scrollTrace.shift()
+        }, { passive: true })
+      })
+      await scroll.hover()
+      await win.mouse.wheel(0, -800)
+      await sleep(500)
+      report.readingGap = await scroll.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight)
+      assert(report.readingGap > 300, 'new text must not pull a reader back to the bottom')
+      await win.locator('.t2-jump').first().click()
+      await waitForTail()
+      report.followRestored = true
+      await scroll.hover(); await win.mouse.wheel(0, -800); await sleep(500)
+      assert(await scroll.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight > 300), 'second upward gesture must release follow')
+      await win.mouse.wheel(0, 3000); await sleep(700)
+      await waitForTail()
+      report.downwardFollowRestored = true
+    }
     await win.waitForFunction(() => !document.querySelector('.t2-asst[data-streaming]') && [...document.querySelectorAll('.t2-content')].some((el) => el.textContent.includes('SWITCH_COMPLETE')), null, { timeout: 60000 })
     active.clear()
     const switched = (await win.locator('.t2-content').allTextContents()).join('\n').match(/switch\d+/g)
     assert.deepEqual(switched, Array.from({ length: 1000 }, (_, i) => `switch${i}`), 'background output must be complete after switching back')
     assert.equal(await ta.inputValue(), draft)
+    await waitForTail()
     report.screenshot = reportPath.replace(/\.json$/, '') + '.png'
     await win.screenshot({ path: report.screenshot })
     assert.equal(errors.length, 0, 'no uncaught renderer errors')
@@ -167,6 +213,7 @@ async function main() {
   } catch (e) {
     report.passed = false
     report.failure = e.stack || String(e)
+    report.scrollTrace = await win.evaluate(() => window.__scrollTrace).catch(() => undefined)
     await win.screenshot({ path: reportPath + '.failure.png' }).catch(() => {})
     throw e
   } finally {

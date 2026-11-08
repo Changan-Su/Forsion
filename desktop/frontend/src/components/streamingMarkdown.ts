@@ -1,13 +1,5 @@
-import { unified } from 'unified'
-import remarkParse from 'remark-parse'
-import remarkGfm from 'remark-gfm'
-import remarkMath from 'remark-math'
-import remarkCjkFriendly from 'remark-cjk-friendly/parseOnly'
-import remarkCjkFriendlyStrikethrough from 'remark-cjk-friendly-gfm-strikethrough/parseOnly'
 import type { Root, RootContent } from 'mdast'
-
-const parser = unified().use(remarkParse).use(remarkMath).use(remarkGfm)
-  .use(remarkCjkFriendly).use(remarkCjkFriendlyStrikethrough)
+import { parseMarkdown } from './markdownParse'
 
 export interface MarkdownChunk {
   offset: number
@@ -37,7 +29,7 @@ export function markdownSnapshot(source: string, previous?: MarkdownSnapshot): M
   const stable = append ? previous.chunks.slice(0, -2) : []
   const offset = stable.length ? previous!.chunks[stable.length].offset : 0
   const tail = source.slice(offset)
-  const tree = parser.parse(tail) as Root
+  const tree: Root = parseMarkdown(tail)
   if (hasGlobalDefinition(tree)) return { source, chunks: [chunk(source)], whole: true }
   let headingStart = stable.reduce((n, c) => n + c.headings, 0)
   const groups: Array<{ start: number; headings: number }> = []

@@ -4,17 +4,11 @@
  */
 import React, { useContext, useEffect, useMemo, useState } from 'react'
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
-import remarkGfm from 'remark-gfm'
-// 模型最爱写 `**注意：**后面`(CJK 标点贴闭合定界符),CommonMark 判不成立、显示字面 `**`。
-// 只换解析、不落盘;须排在 remarkGfm 之后(删除线那个要压过 gfm 的 `~`)。理由同 amadeus/blocks/markdown/cjkFriendly.ts。
-// 直接引包而不引那个模块:那边带 @milkdown/kit,聊天气泡在主 chunk,别把 milkdown 拖进来。
-import remarkCjkFriendly from 'remark-cjk-friendly/parseOnly'
-import remarkCjkFriendlyStrikethrough from 'remark-cjk-friendly-gfm-strikethrough/parseOnly'
-import remarkMath from 'remark-math'
+import { remarkCachedParse } from './markdownParse'
 import { common, createLowlight } from 'lowlight'
 import { toJsxRuntime } from 'hast-util-to-jsx-runtime'
 import { Fragment, jsx, jsxs } from 'react/jsx-runtime'
-import rehypeKatex from 'rehype-katex'
+import { rehypeCachedKatex } from './rehypeCachedKatex'
 import 'katex/dist/katex.min.css'
 import { Copy, Check, Play, ImageOff } from 'lucide-react'
 import { registerMessages, useI18n } from '../i18n'
@@ -292,9 +286,9 @@ const MD_COMPONENTS = { pre: CodeBlock, a: WikiAnchor, p: Para, td: Td, th: Th, 
 const MarkdownPart = React.memo(({ content, anchorPrefix, headingStart = 0, breaks, streaming = false }: Pick<MarkdownProps, 'content' | 'anchorPrefix' | 'breaks' | 'streaming'> & { headingStart?: number }) => (
   <StreamingContext.Provider value={streaming}>
     <ReactMarkdown
-      remarkPlugins={[remarkMath, remarkGfm, remarkCjkFriendly, remarkCjkFriendlyStrikethrough, remarkWiki,
+      remarkPlugins={[remarkCachedParse, remarkWiki,
         ...(breaks ? [remarkSoftBreaks] : []), [remarkHeadingAnchors, { prefix: anchorPrefix, start: headingStart }]]}
-      rehypePlugins={[[rehypeKatex, { throwOnError: false }], rehypeMathBox]}
+      rehypePlugins={[rehypeCachedKatex, rehypeMathBox]}
       components={MD_COMPONENTS}
       urlTransform={urlTransform}
     >{content}</ReactMarkdown>

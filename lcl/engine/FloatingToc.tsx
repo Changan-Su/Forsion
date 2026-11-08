@@ -148,6 +148,9 @@ function measurable(target: HTMLElement): HTMLElement {
 /** The pending scrollToElement correction per scroll root: one at a time, the newer jump wins. */
 const settling = new WeakMap<Element, () => void>()
 
+/** Root-scoped navigation intent, before any scroll/layout events (used by chat auto-follow). */
+export const SCROLL_TO_ELEMENT_EVENT = 'lcl:scroll-to-element'
+
 /** Stops a pending scrollToElement correction on `root`. */
 export function cancelScrollToElement(root: Element): void {
   settling.get(root)?.()
@@ -161,6 +164,7 @@ export function cancelScrollToElement(root: Element): void {
  *  `onLanded` runs once the target has settled in place (not when the user or a newer jump cut it short). */
 export function scrollToElement(root: Element, target: Element, offset = 0, onLanded?: () => void): void {
   cancelScrollToElement(root)
+  root.dispatchEvent(new Event(SCROLL_TO_ELEMENT_EVENT))
   const delta = (): number => target.getBoundingClientRect().top - root.getBoundingClientRect().top - offset
   root.scrollTo({ top: Math.max(0, root.scrollTop + delta()), behavior: 'smooth' })
   let user = false, tries = 0, frames = 0, still = 0, last = -1

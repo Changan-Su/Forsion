@@ -10,13 +10,11 @@ export function useComposerLayout(ref: RefObject<HTMLElement | null>) {
   useLayoutEffect(() => {
     const card = ref.current?.closest<HTMLElement>('.t2c-card')
     if (!card || card.classList.contains('t2c-card--phone')) return
-    const update = () => {
-      const style = getComputedStyle(card)
-      const next = card.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)
-      setWidth(prev => prev === next ? prev : next)
-    }
-    update()
-    const observer = new ResizeObserver(update)
+    // ResizeObserver already supplies the content box, including the first layout.
+    // Reading clientWidth here forces the whole newly mounted chat to lay out early.
+    const observer = new ResizeObserver(([entry]) => {
+      if (entry) setWidth(entry.contentRect.width)
+    })
     observer.observe(card)
     return () => observer.disconnect()
   }, [ref])

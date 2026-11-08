@@ -27,6 +27,7 @@ import { ToolCardDeskContext, toolCardDeskFor } from '../components/PluginToolCa
 import { ErrorBoundary } from '../components/ErrorBoundary'
 import { EditorialMessage, type MessageHandlers, type PendingSend } from './chat2/EditorialMessage'
 import { EditBubble } from './chat2/EditBubble'
+import { expandUserFold } from './chat2/UserFold'
 import { ApprovalTray, DeckPill, type DeckItem } from './chat2/ApprovalTray'
 import { pendingCreationCardsOf, pendingHumanCardsOf, pendingTaskCardsOf, tasksOf, useTaskHandledVersion } from './chat2/pendingTasks'
 import { useHumanAckVersion } from '../components/HumanUpdateCard'
@@ -54,7 +55,7 @@ import { newSessionPreset, amadeusLandingRoot, type QueueItem } from '../tangu/s
 import { settleModes } from '../stores/projectSettings'
 import { currentPlatform } from '../services/agentRunService'
 import { hasChatRef, readChatRefs } from '../components/chatDragRef'
-import { useWorkspace, useSpaceStore, UI_MODE, Skeleton, scrollToElement, cancelScrollToElement, useViewModes, ViewHead, inSingleColumnShell } from '@lcl/engine'
+import { useWorkspace, useSpaceStore, UI_MODE, Skeleton, scrollToElement, cancelScrollToElement, SCROLL_TO_ELEMENT_EVENT, useViewModes, ViewHead, inSingleColumnShell } from '@lcl/engine'
 import { useTailFirst } from './chat2/useTailFirst'
 import { AgentDesk, DeskCard, useDeskHome } from './chat2/AgentDesk'
 import { HistorianStatus } from './chat2/HistorianStatus'
@@ -474,7 +475,7 @@ export function ChatView({ leaf, params }: ViewProps) {
       return // 消息还没渲染出来:等下一次 activeMessages 变更再试
     }
     // 命中可能在长提问折叠起来的那截里(不知道落在哪一段):跳到用户消息先展开
-    el.querySelector<HTMLButtonElement>('.t2-user-more[aria-expanded="false"]')?.click()
+    expandUserFold(el)
     const root = chatScrollRef.current
     // 不随 effect 清理:下一行 clearJumpTarget 改了依赖、effect 立刻重跑,清理会把这个定时器掐掉 → 类永远摘不掉,再跳到同一条就不闪了
     const flash = (): void => { el.classList.add('t2-jump-flash'); window.setTimeout(() => el.classList.remove('t2-jump-flash'), 1100) }
@@ -517,53 +518,67 @@ export function ChatView({ leaf, params }: ViewProps) {
     const content = el?.querySelector('.t2-stream-inner')
     if (!el || !content) return
     let raf = 0
-    let previousTop = el.scrollTop
-    let previousMax = el.scrollHeight - el.clientHeight
+    // Geometry changes cannot tell user scrolling from content-visibility corrections.
+    // Only explicit gestures/navigation release follow; a downward gesture at the end
+    // (or scrollToBottom) restores it. No initial geometry read during the Space commit.
+    let previousTop: number | undefined
     let pointerDown = false
+    let resumeOnDown = false
+    const release = (): void => { stickToBottom.current = false; resumeOnDown = false; setShowJump(true) }
     const update = (): void => {
-      const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40
-      const max = el.scrollHeight - el.clientHeight
-      const up = el.scrollTop < previousTop
-      // 在底部且不是自己往上走(往上但最大距离变小 = 内容变短把位置夹下来,照旧算在底部)才重新吸底:从底部起跳的平滑滚动
-      // (画布双击、目录、搜索跳转)第一帧只挪 1px、还在 40px 里,原来这一下就把吸底挂回去,follow 随即拽回底部、
-      // scrollToElement 的补正也被一帧帧抵掉(10-20 画布双击第 1 / 2 轮实测)
-      if (atBottom && (!up || max < previousMax)) stickToBottom.current = true
-      // 往上挪了、可滚的最大距离却没变小(变小 = 布局把位置夹下来,不算):目录跳转这类程序滚动也松开。
-      // 消息带 content-visibility,往上一滚,刚进视口的才量出真实高度 → 内容变高 → 不松开就被 follow 拽回底部(10-16 实测)
-      else if (up && (pointerDown || max >= previousMax)) stickToBottom.current = false
-      previousTop = el.scrollTop
-      previousMax = max
+      const top = el.scrollTop
+      const atBottom = el.scrollHeight - top - el.clientHeight < 40
+      if (pointerDown && previousTop !== undefined) {
+        if (top < previousTop) release()
+        else if (top > previousTop) resumeOnDown = true
+      }
+      if (atBottom && resumeOnDown) stickToBottom.current = true
+      previousTop = top
       setShowJump(!atBottom && !stickToBottom.current)
     }
-    const release = (): void => { stickToBottom.current = false; setShowJump(true) }
-    const onWheel = (e: WheelEvent): void => { if (e.deltaY < 0) release() }
+    const onWheel = (e: WheelEvent): void => { if (e.deltaY < 0) release(); else if (e.deltaY > 0) resumeOnDown = true }
     let touchY = 0
     const onTouchStart = (e: TouchEvent): void => { touchY = e.touches[0]?.clientY || 0 }
-    const onTouchMove = (e: TouchEvent): void => { if ((e.touches[0]?.clientY || 0) > touchY) release() }
-    const down = (): void => { pointerDown = true }
+    const onTouchMove = (e: TouchEvent): void => {
+      const y = e.touches[0]?.clientY || 0
+      if (y > touchY) release(); else if (y < touchY) resumeOnDown = true
+      touchY = y
+    }
+    const down = (e: PointerEvent): void => { pointerDown = e.pointerType !== 'touch'; previousTop = el.scrollTop }
     const up = (): void => { pointerDown = false }
-    const onKey = (e: KeyboardEvent): void => { if (['ArrowUp', 'PageUp', 'Home'].includes(e.key) && !(e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLInputElement)) release() }
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLInputElement || (e.target as HTMLElement)?.isContentEditable) return
+      if (['ArrowUp', 'PageUp', 'Home'].includes(e.key) || (e.key === ' ' && e.shiftKey)) release()
+      else if (['ArrowDown', 'PageDown', 'End', ' '].includes(e.key)) resumeOnDown = true
+    }
     const follow = (): void => {
-      // previousMax 跟 previousTop 同一次采样:否则「长高被 follow 跟到底、下一次 scroll 前又变短被夹下来」会被 update 当成自己往上走而松开吸底
-      if (stickToBottom.current) { el.scrollTop = el.scrollHeight; previousTop = el.scrollTop; previousMax = el.scrollHeight - el.clientHeight; setShowJump(false) }
+      if (stickToBottom.current) {
+        el.scrollTop = el.scrollHeight
+        setShowJump(false)
+      }
     }
     const ro = new ResizeObserver(() => { cancelAnimationFrame(raf); raf = requestAnimationFrame(follow) })
     ro.observe(content)
     ro.observe(el)
-    follow()
+    // ResizeObserver handles the first delivered size and later changes; no duplicate
+    // synchronous follow here while React is still committing the new page.
     el.addEventListener('scroll', update, { passive: true })
     el.addEventListener('wheel', onWheel, { passive: true })
     el.addEventListener('touchstart', onTouchStart, { passive: true })
     el.addEventListener('touchmove', onTouchMove, { passive: true })
     el.addEventListener('pointerdown', down)
     el.addEventListener('keydown', onKey)
+    el.addEventListener(SCROLL_TO_ELEMENT_EVENT, release)
     window.addEventListener('pointerup', up)
+    window.addEventListener('pointercancel', up)
     return () => {
       ro.disconnect(); cancelAnimationFrame(raf)
       el.removeEventListener('scroll', update); el.removeEventListener('wheel', onWheel)
       el.removeEventListener('touchstart', onTouchStart); el.removeEventListener('touchmove', onTouchMove)
       el.removeEventListener('pointerdown', down); el.removeEventListener('keydown', onKey)
+      el.removeEventListener(SCROLL_TO_ELEMENT_EVENT, release)
       window.removeEventListener('pointerup', up)
+      window.removeEventListener('pointercancel', up)
     }
   }, [activeId])
 
