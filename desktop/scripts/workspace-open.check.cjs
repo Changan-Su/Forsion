@@ -174,6 +174,8 @@ async function main() {
     win = await app.firstWindow()
     win.on('pageerror', (e) => errors.push(`main(2): ${e.message}`))
     await win.waitForSelector('.dv-groupview', { timeout: 30000, state: 'attached' })
+    check('relaunched main window shows the workbench (no onboarding, splash gone)', await skipOnboarding(win)
+      && await win.waitForFunction(() => !document.querySelector('#tangu-splash'), null, { timeout: 15000 }).then(() => true, () => false))
     await win.waitForFunction(() => !!window.__probeCtx?.workspace?.open, null, { timeout: 30000 })
     await win.locator('.lcl-float-layer[data-scope="space"] .wo-probe-board-mini').waitFor({ timeout: 15000 }).catch(() => {})
     const back = cards('space')
