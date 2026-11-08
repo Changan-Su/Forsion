@@ -7615,6 +7615,9 @@ Then reply with only the command output.`,
         const out = [];
         const add = (f) => { try { out.push(readFileSync(f, 'utf8')); } catch { /* 还没写 */ } };
         add(join(home, 'agents', 'muse', 'MEMORY.md'));
+        // 10-30 起 remember 有 person 档:「我对观鸟没兴趣」是关于这个人本身的事,换哪个 Agent 都成立,写进共享画像 human/SOUL.md
+        // (所有 Agent 都读,下个周期的 Muse 也读得到)—— 这也算落进了它下个周期看得到的地方。11-08 起计入,之前只看 Muse 自己那两处会假红。
+        add(join(home, 'human', 'SOUL.md'));
         try { for (const f of readdirSync(join(home, 'agents', 'muse', 'LOG'))) add(join(home, 'agents', 'muse', 'LOG', f)); } catch { /* 目录还没建 */ }
         return out.join('\n');
       };
@@ -7639,7 +7642,7 @@ Then reply with only the command output.`,
       const cycles = (Number((await api('/agent/special/muse/status').then((x) => (x && typeof x.status === 'object' ? x.status : x)))?.lastCycleAt) || 0) !== cycleAt0;
       writeFileSync(join(OUT, 'musechat-evidence.json'), JSON.stringify({ systemPromptHasChatSection: sys.includes('## Talking with the user'), toldTools: a.toolArgs, toldReply: a.content, askedTools: b.toolArgs, askedReply: b.content, spaceTools: c.toolArgs, spaceReply: c.content, editTools: d.toolArgs, editReply: d.content, heroSet, heroAgain, noMainJs, spaceApprovals: c.approvals, spaceDoc: (() => { try { return readFileSync(join(spaceDir, 'space.json'), 'utf8'); } catch { return null; } })(), museFiles: museText() }, null, 2));
       return { ok: bound && saved && heroSet && (heroAgain || !edited) && noMainJs && !a.error && !b.error && !c.error && !d.error && !cycles,
-        detail: `私聊绑到 Muse 且带聊天段:${bound ? '是' : '否'};交代后 Muse 的记忆 / 日志里${saved ? '有' : '没有'}「${TOPIC}」(交代那轮调了 ${a.toolCalls.join(',') || '无工具'});` +
+        detail: `私聊绑到 Muse 且带聊天段:${bound ? '是' : '否'};交代后 Muse 的记忆 / 日志 / 共享画像里${saved ? '有' : '没有'}「${TOPIC}」(交代那轮调了 ${a.toolCalls.join(',') || '无工具'});` +
           `问后台做了什么:${lookedBack ? '读了自己的日志 / Journal' : '没读日志(不计红)'}(调了 ${b.toolCalls.join(',') || '无工具'});` +
           `让它改简报那句话:${heroSet ? '布局里已是「晚上好」' : '布局里没变成「晚上好」'}(调了 ${c.toolCalls.join(',') || '无工具'},审批 ${c.approvals} 次);再改一次(调了 ${d.toolCalls.join(',') || '无工具'}):${!edited ? '它没调 muse_space(不判)' : heroAgain ? '已是「早上好」' : '没变成「早上好」'};Space 里${noMainJs ? '没有' : '⚠️ 写出了'} main.js;期间起了周期:${cycles ? '是(不该起)' : '否'}` +
           `${a.error ? `;交代那轮出错 ${a.error}` : ''}${b.error ? `;提问那轮出错 ${b.error}` : ''}${c.error ? `;改简报那轮出错 ${c.error}` : ''}${d.error ? `;再改那轮出错 ${d.error}` : ''}`,
