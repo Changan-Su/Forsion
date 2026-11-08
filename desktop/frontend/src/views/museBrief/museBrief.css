@@ -2,6 +2,7 @@
    不描边(border-color: transparent,DESIGN §5);提议卡是「要你拍板」的动作卡,用 --accent-ink 零模糊环;字号只用 --ui-font-* 角色。
    窄按容器宽度(Muse 私聊旁的 Desk 用同一份):<720 单列。 */
 .msb-root { position: absolute; inset: 0; overflow: auto; color: var(--text); font-family: var(--font-ui); font-size: var(--ui-font-body); line-height: var(--ui-line-body); background: transparent; container-type: inline-size; }
+.msb-root-empty { display: flex; align-items: center; justify-content: center; }
 .msb-page { max-width: 880px; margin: 0 auto; padding: 20px 40px 56px; display: flex; flex-direction: column; gap: 30px; }
 .msb-head { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 6px; height: 32px; padding: 4px 12px 0; background: var(--bg); }
 .msb-head-t { display: inline-flex; align-items: center; gap: 6px; color: var(--text-muted); font-size: var(--ui-font-meta); font-weight: 500; }

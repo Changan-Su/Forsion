@@ -3,8 +3,9 @@
  * 方案页:仓根 docs/ToBeImproved/走查续_其他可优化点方案_2026-10-25/(§2 的 4.1 / 4.3、§4 的细节)。
  *
  * 桩引擎(lib/stub-engine.cjs)+ 隔离 home(overrideHome);量的是 out/ 产物 —— 改了源码先 `npx electron-vite build`。
- *  A Muse Space:中间那栏是公共空态「Muse 还没开」+「开启 Muse」,水平居中在中间那栏里;右栏没有两行长胶囊,
- *    是一行「未开启 · 去设置」;点「开启 Muse」→ 设置浮窗落在 Agent › 后台 Agent(ag-special)。
+ *  A Muse Space(11-08 起主区是「今日简报」):从没开过 → 主区是公共空态「Muse 还没开」+「开启 Muse」,水平居中;
+ *    右栏没有两行长胶囊,是一行「未开启 · 去设置」;点「开启 Muse」→ 设置浮窗落在 Agent › 后台 Agent(ag-special)。
+ *    A' 开着、还没醒过 → 简报第一轮的空态(那句话的位置),不给「开启 Muse」。
  *  B 收件箱:一封信都没有 → 主区「收件箱是空的」,列表不再写「暂无内容」;有信但都读过 → 主区「没有未读消息」。
  *  C 图像工作室启动台:空态带图标 +「新建项目」。D 发布管理没登录:居中空态 +「登录 Forsion」,不再是一条横幅。
  *  E 造物:同一个空态组件。F Agents:运行设置里 0 个原生 select,三个触发器同一种;审批档名字 = 输入框那套,
@@ -62,14 +63,13 @@ async function main() {
 
     // ── A Muse ──
     check('A 进入 Muse Space', await enterSpace(win, 'muse'))
-    const museEmpty = '[data-muse-space="empty"] .muse-lib-preview .empty-state[data-state="off"]'
+    const museEmpty = '[data-muse-brief][data-state="off"] .empty-state[data-state="off"]'
     await win.locator(museEmpty).waitFor({ timeout: 15_000 }).catch(() => {})
     check('A 中间那栏:公共空态「Muse 还没开」', (await text(win, `${museEmpty} .empty-state-title`)) === 'Muse 还没开', await text(win, `${museEmpty} .empty-state-title`))
     check('A 空态只有一颗主按钮「开启 Muse」', (await win.locator(`${museEmpty} .empty-state-action`).count()) === 1 && (await text(win, `${museEmpty} .empty-state-action`)) === '开启 Muse')
-    const ma = await centred(win, museEmpty, '.muse-lib-preview')
-    check('A 空态在中间那栏里水平居中', ma.ok, JSON.stringify(ma))
-    const listLine = await win.evaluate(() => [...document.querySelectorAll('[data-muse-space="empty"] .muse-lib-list .hint')].filter((h) => h.getBoundingClientRect().height > 0).map((h) => h.textContent.trim()))
-    check('A 左栏列表不再重复「Muse 还没写任何东西…」(中间那栏在讲)', listLine.length === 0, JSON.stringify(listLine))
+    const ma = await centred(win, museEmpty, '[data-muse-brief]')
+    check('A 空态在主区里水平居中', ma.ok, JSON.stringify(ma))
+    check('A 空态下不画简报的那句话 / 小组件区', (await win.locator('[data-muse-brief] [data-hero], [data-muse-brief] .msb-grid3').count()) === 0)
     const off = win.locator('.muse-off-line').first()
     await off.waitFor({ timeout: 10_000 }).catch(() => {})
     const offBox = await off.boundingBox().catch(() => null)
@@ -86,9 +86,9 @@ async function main() {
     muse.enabled = true
     await win.reload({ waitUntil: 'domcontentloaded' }); await win.waitForSelector('.dv-groupview', { timeout: 30_000 }); await sleep(1800)
     await enterSpace(win, 'muse')
-    const museOn = '[data-muse-space="empty"] .muse-lib-preview .empty-state[data-state="empty"]'
+    const museOn = '[data-muse-brief] [data-hero="empty"]'
     await win.locator(museOn).waitFor({ timeout: 15_000 }).catch(() => {})
-    check('A\' Muse 开着但库是空的 →「Muse 还没写任何东西」、没有按钮', (await text(win, `${museOn} .empty-state-title`)) === 'Muse 还没写任何东西' && (await win.locator(`${museOn} .empty-state-action`).count()) === 0, await text(win, museOn))
+    check('A\' Muse 开着、还没醒过 → 简报第一轮空态,没有「开启 Muse」', (await win.locator(museOn).count()) === 1 && (await win.locator('[data-muse-brief] .empty-state[data-state="off"]').count()) === 0, await text(win, museOn))
     check('A\' 右栏不再说「未开启」', (await win.locator('.muse-off-line').count()) === 0)
     muse.enabled = false
 

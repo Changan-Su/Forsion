@@ -17,6 +17,7 @@ import { registerMessages, useI18n } from '../../i18n'
 import { useApp } from '../../stores/appStore'
 import { ContextMenu, type CtxMenu } from '../../components/RightPanel'
 import { panelToast } from '../../components/PanelNotice'
+import { EmptyState } from '../../components/EmptyState'
 import { WidgetHost, useWidgetTitle } from '../../components/WidgetHost'
 import { listWidgets, type WidgetListItem } from '../../services/widgetClient'
 import { placeOnBoard } from '../../services/widgetPlaces'
@@ -78,6 +79,9 @@ registerMessages({
   'museBrief.openLibrary': { zh: '打开 Library', en: 'Open the Library' },
   'museBrief.settings': { zh: '卜算子设置', en: 'Muse settings' },
   'museBrief.failed': { zh: '没办成：{e}', en: "Couldn't do that: {e}" },
+  'museBrief.offTitle': { zh: 'Muse 还没开', en: 'Muse is off' },
+  'museBrief.offLine': { zh: '开启后，它会在后台读你的笔记和对话，写草稿、提待办，每天留一份工作日志。', en: 'Once on, it reads your notes and chats in the background, drafts, suggests to-dos and keeps a daily log.' },
+  'museBrief.turnOnMuse': { zh: '开启 Muse', en: 'Turn on Muse' },
   'museBrief.loadFailed': { zh: '暂时读不到简报的布局，下面先画内置卡。', en: "Couldn't load the brief's layout right now. Showing the built-in cards." },
 })
 
@@ -319,6 +323,19 @@ export function MuseBriefView(_props: ViewProps): React.JSX.Element {
     })
   }
   const stopped = view?.stoppedAt ?? status?.lastCycleAt ?? null
+
+  // 两条读口都回来之前(失败 = null,也算回来了)先空着:否则每次进来都先闪一下「还没醒过」再换成真的那句话
+  if ((view === undefined && !failed) || status === undefined) return <div className="msb-root" data-muse-brief="" data-state="loading" aria-busy="true" />
+
+  // 从没开过(关着、没留下那句话、也没醒过):没有「停下前留的」可看,中间放公共空态 + 「开启 Muse」(10-25 第四轮 4.1 的口径)
+  if (off && !view?.hasDoc && !status?.lastCycleAt) {
+    return (
+      <div className="msb-root msb-root-empty" data-muse-brief="" data-state="off">
+        <EmptyState icon={Sparkles} title={t('museBrief.offTitle')} line={t('museBrief.offLine')} data-state="off"
+          action={{ label: t('museBrief.turnOnMuse'), icon: Settings, action: 'muse-settings', onClick: openMuseSettings }} />
+      </div>
+    )
+  }
 
   return (
     <div className="msb-root" data-muse-brief="" data-editing={editing || undefined} data-off={off || undefined}>
