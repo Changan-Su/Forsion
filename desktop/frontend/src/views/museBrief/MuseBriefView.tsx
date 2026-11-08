@@ -40,6 +40,7 @@ registerMessages({
   'museBrief.hello.evening': { zh: '晚上好。', en: 'Good evening.' },
   'museBrief.hello.night': { zh: '夜深了。', en: 'Late night.' },
   'museBrief.by': { zh: '卜算子 · {time} 写的', en: 'Muse · written {time}' },
+  'museBrief.byUnknown': { zh: '卜算子 · 写的（时间不详）', en: 'Muse · written (time unknown)' },
   'museBrief.byNever': { zh: '卜算子 · 还没醒过', en: 'Muse · not awake yet' },
   'museBrief.byNone': { zh: '卜算子 · 还没写今天的话', en: 'Muse · nothing written yet today' },
   'museBrief.firstLede': { zh: '卜算子第一次醒来后，会在这里写一句今天的情况，把替你备好的东西放在下面。', en: "After Muse wakes for the first time, it writes a line about your day here and puts what it prepared for you below." },
@@ -134,7 +135,7 @@ function Hero({ view, status, off }: { view: MuseSpaceView | null | undefined; s
   if (hero) {
     return (
       <div className="msb-hero" data-hero="">
-        <div className="msb-by"><Sparkles size={13} /><span>{t('museBrief.by', { time: formatDayTime(hero.at) })}</span></div>
+        <div className="msb-by"><Sparkles size={13} /><span>{hero.at > 0 ? t('museBrief.by', { time: formatDayTime(hero.at) }) : t('museBrief.byUnknown')}</span></div>
         <h1 className="msb-h1">{t(greetingKey())}</h1>
         <p className="msb-lede"><HeroText text={hero.text} root={view?.libraryRoot} /></p>
       </div>
