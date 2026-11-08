@@ -131,7 +131,7 @@ import { registerRemoteSyncBackend } from './remotesync/backends'
 import { logActivity, setActivityLogEnabled, pruneActivity, exportActivity, flushAllNoteEdits } from './activityLog'
 import { createSampler, nativeProbe } from './activeWindow'
 import { KNOWN_APPS } from '../shared/knownApps'
-import { effectivePluginId } from '../shared/products'
+import { bindRecipeToPlugin, effectivePluginId } from '../shared/products'
 import { BROWSER_PARTITION, GUEST_ALLOWED_PERMISSIONS } from '../shared/browser'
 import { registerPtyIpc } from './pty'
 import { registerAssetSchemes as registerAmadeusAssetSchemes, registerAssetProtocol as registerAmadeusAssetProtocol } from './amadeus/assetProtocol'
@@ -1146,16 +1146,17 @@ async function readSpacesList(opts: { dev?: boolean } = {}): Promise<Array<{ slu
   const out: Array<{ slug: string; json: string; plugin?: string; iconUrl?: string }> = []
   // 自绘图标(space.json 的 iconFile)在这里读成 data URL 随清单带回去:设备页同源拿到,渲染层不必再开一条 IPC。
   // ponytail: 每枚 ≤256KB 的 base64 直接进清单;插件多到拖慢 loadUserSpaces 再改走 amadeus-asset: 协议按需取。
-  const entry = async (slug: string, dir: string, plugin?: { id: string; dir: string }): Promise<void> => {
-    const json = await readFile(join(dir, 'space.json'), 'utf8')
+  const entry = async (slug: string, dir: string, plugin?: { id: string; dir: string; manifestId?: unknown }): Promise<void> => {
+    const raw = await readFile(join(dir, 'space.json'), 'utf8')
+    const json = plugin ? bindRecipeToPlugin(raw, plugin.manifestId, plugin.id) : raw
     const iconUrl = await readSpaceIconDataUrl(json, plugin ? [dir, plugin.dir] : [dir])
     out.push({ slug, json, ...(plugin ? { plugin: plugin.id } : {}), ...(iconUrl ? { iconUrl } : {}) })
   }
-  const bundled = async (id: string, pdir: string): Promise<void> => {
+  const bundled = async (id: string, pdir: string, manifestId?: unknown): Promise<void> => {
     try {
       const sroot = join(pdir, 'spaces')
       for (const e of (await readdir(sroot, { withFileTypes: true })).filter((x) => x.isDirectory())) {
-        try { await entry(e.name, join(sroot, e.name), { id, dir: pdir }) } catch { /* 无 space.json 跳过 */ }
+        try { await entry(e.name, join(sroot, e.name), { id, dir: pdir, manifestId }) } catch { /* 无 space.json 跳过 */ }
       }
     } catch { /* 无 spaces/ 子目录 */ }
   }
@@ -1173,17 +1174,18 @@ async function readSpacesList(opts: { dev?: boolean } = {}): Promise<Array<{ slu
   }
   try {
     const proot = join(tanguHomeDir(), 'plugins')
-    const SAFE_PID = /^[a-z0-9][a-z0-9-]{0,63}$/ // 与 amadeus/ipc.ts pluginIdOf 同一门禁(归属 id 须两侧一致)
     for (const p of (await readdir(proot, { withFileTypes: true })).filter((x) => x.isDirectory() && !x.name.startsWith('.'))) {
       let pid: string
+      let manifestId: unknown
       try {
-        const m = JSON.parse(await readFile(join(proot, p.name, 'manifest.json'), 'utf8')) as { id?: string }
-        const cand = typeof m.id === 'string' && SAFE_PID.test(m.id) ? m.id : p.name
-        if (!SAFE_PID.test(cand)) continue // manifest id 与目录名皆非法 → 与拒载口径一致
+        manifestId = (JSON.parse(await readFile(join(proot, p.name, 'manifest.json'), 'utf8')) as { id?: unknown }).id
+        // 归属 id 与插件装载器(amadeus/ipc.ts pluginIdOf)同一条规则:商店目录 market-<uuid> 就是运行身份
+        const cand = effectivePluginId(p.name, manifestId)
+        if (!cand) continue // manifest id 与目录名皆非法 → 与拒载口径一致
         pid = cand
       } catch { continue } // 无 manifest.json = 非插件目录,跳过
       if (shadowed.has(pid)) continue
-      await bundled(pid, join(proot, p.name))
+      await bundled(pid, join(proot, p.name), manifestId)
     }
   } catch { /* plugins 目录不存在 = 无捆绑包 */ }
   return out
