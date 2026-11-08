@@ -8,6 +8,7 @@
  * 免得无界的字符串跨 IPC / 进内存。
  */
 
+import { isSourceCardId } from '../shared/storeSources'
 import type { CloudHost, HostTelemetryEvent } from './cloudHost'
 import { COMMAND_SOURCES, classifyUpdateError, isAppCountKey, settingChange, type AppCountKey } from '../shared/telemetryKeys'
 
@@ -76,7 +77,7 @@ const bool = (v: unknown): boolean | undefined => (typeof v === 'boolean' ? v : 
  * 形状必须是 kebab 小写短串(商店条目 id 是 UUID 也合),否则一律 `local` —— 用户自己的插件名本身就可能是隐私。
  */
 export function publicPluginId(id: unknown, official: unknown, max = 80): string {
-  return official === true && typeof id === 'string' && id.length <= max && PLUGIN_ID_RE.test(id) ? id : 'local'
+  return official === true && typeof id === 'string' && id.length <= max && PLUGIN_ID_RE.test(id) && !isSourceCardId(id) ? id : 'local'
 }
 
 /** Electron render-process-gone / child-process-gone 的 reason → 白名单 reason。clean-exit 不算崩溃,返回 null。 */
@@ -125,7 +126,8 @@ export type UpdateTarget = 'app' | 'engine' | 'ui' | 'builtin-plugin' | 'store-p
 export function updateProps(target: UpdateTarget, outcome: string, o: { id?: string; error?: unknown } = {}): Record<string, unknown> {
   return compact({
     target,
-    id: o.id !== undefined && PLUGIN_ID_RE.test(o.id) ? o.id : undefined,
+    // 商店来源(第三方目录)装的不报条目 id:那是第三方的名字,只记得到「哪一类」。
+    id: o.id !== undefined && PLUGIN_ID_RE.test(o.id) && !isSourceCardId(o.id) ? o.id : undefined,
     outcome,
     errorClass: outcome === 'error' ? classifyUpdateError(o.error) : undefined,
   })

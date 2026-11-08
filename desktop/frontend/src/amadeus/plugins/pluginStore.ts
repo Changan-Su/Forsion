@@ -883,6 +883,7 @@ function pluginMeta(src: ExternalPluginSource): Omit<AmadeusPlugin, 'setup'> {
     changelog: src.changelog,
     onboarding: src.onboarding,
     guide: src.guide,
+    storeSources: src.storeSources,
     widgets: src.widgets,
     blocked: src.blocked,
     blockedReason: src.blockedReason,

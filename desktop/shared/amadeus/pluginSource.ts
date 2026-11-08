@@ -6,6 +6,9 @@
  */
 import { PLUGIN_CAPABILITIES, sanitizeEvents, sanitizeGuide, sanitizeOnboarding, sanitizeRequiresPlugins, type ExternalPluginSource } from './ipc'
 import { parseManifestRequires } from './manifestRequires'
+import { declaredSourcesOf } from '../storeSources'
+
+const storeSourcesOf = (pluginId: string, raw: unknown) => { const list = declaredSourcesOf(pluginId, raw); return list.length ? list : undefined }
 
 /** manifest.json 里宿主会读的字段(全按 unknown 收:第三方写什么都可能)。 */
 export interface InstalledPluginManifest {
@@ -31,13 +34,15 @@ export interface InstalledPluginManifest {
   isDesktopOnly?: unknown
   /** true = ctx.saveData 的数据随 Forsion 账号跨设备同步(用户可在设置里逐个关)。 */
   syncData?: unknown
+  /** 商店来源(2026-11-08+):插件往商店左栏加的第三方目录,见 shared/storeSources.ts。 */
+  storeSources?: unknown
 }
 
 /** manifest 推导出的展示 / 门禁字段(id、code、文档、图标、blocked 由调用方补)。
  *  ⚠️ name / version / description 沿用桌面原有的宽松取值(`m.name || 目录名`),别在这里顺手收紧 —— 两端同时变。 */
 export type InstalledPluginFields = Pick<ExternalPluginSource,
   'name' | 'version' | 'description' | 'nameEn' | 'descriptionEn' | 'apiVersion' | 'minAppVersion' | 'requiresApp' | 'packageId'
-  | 'requiresPlugins' | 'entitlement' | 'capabilities' | 'onboarding' | 'guide' | 'events' | 'fileExtensions' | 'isDesktopOnly' | 'syncData'>
+  | 'requiresPlugins' | 'entitlement' | 'capabilities' | 'onboarding' | 'guide' | 'events' | 'fileExtensions' | 'isDesktopOnly' | 'syncData' | 'storeSources'>
 
 export function installedPluginFields(m: InstalledPluginManifest, dirName: string, id?: string): InstalledPluginFields {
   return {
@@ -66,5 +71,6 @@ export function installedPluginFields(m: InstalledPluginManifest, dirName: strin
     // 只认字面量 true:`"true"` / 1 之类不算声明(与 Obsidian 同口径;漏标的插件在手机上照常装载,用到桌面专属接口时由插件自己的可选链 / 报错兜住)。
     isDesktopOnly: m.isDesktopOnly === true ? true : undefined,
     syncData: m.syncData === true ? true : undefined,
+    storeSources: storeSourcesOf(id ?? ((m as any).id as string | undefined) ?? dirName, m.storeSources),
   }
 }

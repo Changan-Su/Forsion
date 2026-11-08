@@ -2747,6 +2747,8 @@ export interface AmadeusPlugin {
   onboarding?: PluginOnboardingSpec
   /** First-use tips (manifest `guide`, 2026-11-02+; sanitized by the host). See `PluginGuideApi`. */
   guide?: import('@amadeus-shared/ipc').PluginGuideSpec
+  /** Store sources declared in the manifest (`storeSources`): shown in the store's left column while the plugin is on. */
+  storeSources?: import('../../../../shared/storeSources').DeclaredStoreSource[]
   /** Home widgets (manifest `widgets`, 2026-11-07+; read and sanitized by the host). Data comes from `ctx.widgets.provide`. */
   widgets?: import('@amadeus-shared/ipc').PluginWidgetSpec[]
   /** Present → gated out by the host: 'api' = apiVersion mismatch, 'minApp' = app too old,

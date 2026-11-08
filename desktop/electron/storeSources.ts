@@ -299,7 +299,8 @@ export function createStoreSources(o: {
   }
 
   /** Sources declared by the plugins that are on now (the renderer knows which ones are on). */
-  async function setDeclared(raw: unknown): Promise<void> {
+  /** Returns whether the table changed. */
+  async function setDeclared(raw: unknown): Promise<boolean> {
     await load()
     const list: DeclaredStoreSource[] = []
     for (const d of Array.isArray(raw) ? raw : []) {
@@ -313,9 +314,10 @@ export function createStoreSources(o: {
       if (next.some((x) => x.uri === uri)) continue
       next.push({ id: hash8(`plugin:${d.pluginId}/${d.id}`), pluginId: d.pluginId, declId: d.id, uri, title: d.title, ...(d.icon ? { icon: d.icon } : {}) })
     }
-    if (JSON.stringify(next) === JSON.stringify(state.declared)) return
+    if (JSON.stringify(next) === JSON.stringify(state.declared)) return false
     for (const s of next) { const was = state.declared.find((x) => x.id === s.id); if (was && was.uri !== s.uri) { memo.delete(s.id); bases.delete(s.id) } }
     await save((s) => { s.declared = next })
+    return true
   }
 
   async function catalog(id: string, opts: { refresh?: boolean; locale?: string } = {}): Promise<StoreSourceCatalog> {

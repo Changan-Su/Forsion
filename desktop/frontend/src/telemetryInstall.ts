@@ -3,6 +3,7 @@
  * 那条链共用这一个跟踪器:主进程 market:install 本身不动,阶段取安装进度最后报到的那一步,失败原因按报错原文归类成枚举
  * (shared/telemetryKeys.classifyInstallError),**原文不发**。id 是商店条目 id(公开的)。
  */
+import { isSourceCardId } from '../../shared/storeSources'
 import { classifyInstallError, type InstallStage } from '../../shared/telemetryKeys'
 import { onInstallProgress } from './services/marketService'
 import { sendTelemetry, telemetryOn } from './telemetrySend'
@@ -51,7 +52,8 @@ export function trackMarketInstall(entry: InstallEntry, card: { id: string; type
     ended = true
     try { off?.() } catch { /* ignore */ }
     sendTelemetry('plugin_install', {
-      pluginId: card.id, pluginOfficial: true, entry,
+      // 商店来源(第三方目录)的条目不发 id:只记得到「本地 / 第三方」这一类(契约 §9 的 local)。
+      ...(isSourceCardId(card.id) ? { pluginId: 'local', pluginOfficial: false } : { pluginId: card.id, pluginOfficial: true }), entry,
       kind: KINDS.includes(type ?? '') ? type : 'other',
       source: SOURCES.includes(card.source ?? '') ? card.source : 'other',
       durationMs: Math.max(0, Date.now() - t0),

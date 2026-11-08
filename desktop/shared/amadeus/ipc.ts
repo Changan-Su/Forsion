@@ -495,6 +495,8 @@ export interface ExternalPluginSource {
   onboarding?: PluginOnboardingSpec
   /** First-use tips (manifest `guide`, 2026-11-02+; sanitized by `sanitizeGuide`). */
   guide?: PluginGuideSpec
+  /** Store sources this plugin adds to the store's left column (manifest `storeSources`, 2026-11-08+; `declaredSourcesOf`). */
+  storeSources?: import('../storeSources').DeclaredStoreSource[]
   /** Home widgets (manifest `widgets`, 2026-11-07+): read from each widget folder by the main process (`pluginWidgetDirs` + `sanitizePluginWidget`). */
   widgets?: PluginWidgetSpec[]
   /** Activity events the plugin declares it emits (manifest `events`, sanitized) — automation builder catalog. */

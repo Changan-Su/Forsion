@@ -4767,13 +4767,15 @@ app.whenReady().then(async () => {
   // 读目录会出站到第三方地址,读和写一律只认本应用的窗口。
   const trusted = (e: Electron.IpcMainInvokeEvent) => { if (!isTrustedSender(e)) throw new Error('Untrusted sender') }
   const sourceLocale = (l: unknown) => (l === 'zh' || l === 'en' ? l : mainLocale())
+  // 来源表变了就告诉每个窗口(商店住在独立浮窗,插件开关在主窗)。
+  const sourcesChanged = <T>(v: T): T => { for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed()) w.webContents.send('marketSources:changed'); return v }
   ipcMain.handle('marketSources:list', (e, locale?: string) => { trusted(e); return storeSources!.list(sourceLocale(locale)) })
   ipcMain.handle('marketSources:probe', (e, input: string, locale?: string) => { trusted(e); return storeSources!.probe(input, sourceLocale(locale)) })
-  ipcMain.handle('marketSources:add', (e, input: string, locale?: string) => { trusted(e); return storeSources!.add(input, sourceLocale(locale)) })
-  ipcMain.handle('marketSources:remove', (e, id: string) => { trusted(e); return storeSources!.remove(id) })
-  ipcMain.handle('marketSources:setDisabled', (e, id: string, on: boolean) => { trusted(e); return storeSources!.setDisabled(id, on === true) })
-  ipcMain.handle('marketSources:trust', (e, id: string) => { trusted(e); return storeSources!.trust(id) })
-  ipcMain.handle('marketSources:setDeclared', (e, list: unknown) => { trusted(e); return storeSources!.setDeclared(list) })
+  ipcMain.handle('marketSources:add', async (e, input: string, locale?: string) => { trusted(e); return sourcesChanged(await storeSources!.add(input, sourceLocale(locale))) })
+  ipcMain.handle('marketSources:remove', async (e, id: string) => { trusted(e); return sourcesChanged(await storeSources!.remove(id)) })
+  ipcMain.handle('marketSources:setDisabled', async (e, id: string, on: boolean) => { trusted(e); return sourcesChanged(await storeSources!.setDisabled(id, on === true)) })
+  ipcMain.handle('marketSources:trust', async (e, id: string) => { trusted(e); return sourcesChanged(await storeSources!.trust(id)) })
+  ipcMain.handle('marketSources:setDeclared', async (e, list: unknown) => { trusted(e); if (await storeSources!.setDeclared(list)) sourcesChanged(undefined) })
   ipcMain.handle('marketSources:catalog', (e, id: string, opts?: { refresh?: boolean; locale?: string }) => { trusted(e); return storeSources!.catalog(id, { refresh: opts?.refresh === true, locale: sourceLocale(opts?.locale) }) })
   ipcMain.handle('marketSources:installs', (e, locale?: string) => { trusted(e); return storeSources!.installs(sourceLocale(locale)) })
 

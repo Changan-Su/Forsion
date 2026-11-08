@@ -946,6 +946,7 @@ declare global {
       marketSourcesTrust?(id: string): Promise<void>
       marketSourcesSetDeclared?(list: import('../../shared/storeSources').DeclaredStoreSource[]): Promise<void>
       marketSourcesCatalog?(id: string, opts?: { refresh?: boolean; locale?: string }): Promise<import('../../shared/storeSources').StoreSourceCatalog>
+      onMarketSourcesChanged?(cb: () => void): () => void
       marketSourcesInstalls?(locale?: string): Promise<import('../../shared/storeSources').StoreSourceInstall[]>
       /** 卸载走确认框之后撤掉商店的安装记录(文件已经由回收站那条路挪走)。 */
       marketForget?(type: string, slug: string): Promise<{ ok: boolean }>
