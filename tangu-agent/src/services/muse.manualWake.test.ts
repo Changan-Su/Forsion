@@ -18,6 +18,11 @@ const state = vi.hoisted(() => {
     userRunActive: false,
     maxRestarts: 5,
     logs: [] as string[],
+    locked: false,
+    lockOnCreate: false, // createRun 那一下急停(起跑的异步准备期间被锁)
+    enabled: true,
+    modelId: 'model-x',
+    usagePrompt: 0, // 近窗口 Muse 的 usage(未缓存 prompt);预算 1_000_000
   };
 });
 
@@ -28,13 +33,14 @@ vi.mock('../core/db.js', () => ({
   query: vi.fn(async (sql: string) => {
     if (/s\.kind = 'user' LIMIT 1/.test(sql)) return state.userRunActive ? [{ 1: 1 }] : [];
     if (/COUNT\(\*\)/i.test(sql)) return [{ n: 0 }];
+    if (/e\.type = 'usage'/.test(sql)) return state.usagePrompt ? [{ payload: JSON.stringify({ prompt: state.usagePrompt, completion: 0 }) }] : [];
     return [];
   }),
   getOlderThanSql: (col: string, minutes: number) => `${col} < CURRENT_TIMESTAMP - INTERVAL '${minutes} minutes'`,
 }));
-vi.mock('./runStore.js', () => ({ createRun: vi.fn(async (r: any) => { state.runs.push(r); }), setRunTerminalListener: () => {} }));
+vi.mock('./runStore.js', () => ({ createRun: vi.fn(async (r: any) => { state.runs.push(r); if (state.lockOnCreate) state.locked = true; }), setRunTerminalListener: () => {} }));
 vi.mock('./agentLoop.js', () => ({ enqueueRun: () => {} }));
-vi.mock('./remoteLock.js', async (orig) => ({ ...(await orig<typeof import('./remoteLock.js')>()), remoteLocked: () => false }));
+vi.mock('./remoteLock.js', async (orig) => ({ ...(await orig<typeof import('./remoteLock.js')>()), remoteLocked: () => state.locked }));
 vi.mock('./museTriggers.js', async (orig) => ({ ...(await orig<typeof import('./museTriggers.js')>()), loadTriggers: async () => [] }));
 vi.mock('./automation.js', async (orig) => ({ ...(await orig<typeof import('./automation.js')>()), launchDueSchedules: async () => {} }));
 vi.mock('./museCards.js', async (orig) => ({ ...(await orig<typeof import('./museCards.js')>()), postObservedRuleCards: async () => {}, postIntroCard: async () => {}, inboxHint: async () => '', recommendHint: async () => '' }));
@@ -53,7 +59,7 @@ vi.mock('./specialAgentsConfig.js', async (orig) => {
     ...o,
     resolveBackgroundModelId: async (id: string) => id,
     // 运行时段 = 两小时后的那一个钟头:此刻一定在时段外
-    loadSpecialAgentsConfig: () => ({ ...o.SPECIAL_AGENTS_DEFAULTS, muse: { ...o.SPECIAL_AGENTS_DEFAULTS.muse, enabled: true, modelId: 'model-x', heartbeatMinutes: 120, maxRestartsPerWindow: state.maxRestarts, activeHours: { start: (h + 2) % 24, end: (h + 3) % 24 } } }),
+    loadSpecialAgentsConfig: () => ({ ...o.SPECIAL_AGENTS_DEFAULTS, muse: { ...o.SPECIAL_AGENTS_DEFAULTS.muse, enabled: state.enabled, modelId: state.modelId, heartbeatMinutes: 120, maxTokensPerWindow: 1_000_000, maxRestartsPerWindow: state.maxRestarts, activeHours: { start: (h + 2) % 24, end: (h + 3) % 24 } } }),
   };
 });
 
@@ -67,6 +73,11 @@ beforeEach(() => {
   state.userRunActive = false;
   state.maxRestarts = 5;
   state.logs = [];
+  state.locked = false;
+  state.lockOnCreate = false;
+  state.enabled = true;
+  state.modelId = 'model-x';
+  state.usagePrompt = 0;
 });
 
 describe('cycleTrigger', () => {
@@ -123,5 +134,57 @@ describe('巡检 × 叫醒', () => {
     expect(await museStatus()).toMatchObject({ wakePending: false, wakeBlocked: 'restartCap' });
     await __museTickForTests();
     expect(state.runs).toHaveLength(0);
+  });
+
+  it('额度用尽 / 没有模型 → 不起,请求作废、写明原因', async () => {
+    state.usagePrompt = 2_000_000;
+    requestMuseWake();
+    await __museTickForTests();
+    expect(state.runs).toHaveLength(0);
+    expect(await museStatus()).toMatchObject({ wakePending: false, wakeBlocked: 'budget' });
+    state.usagePrompt = 0;
+    state.modelId = '';
+    requestMuseWake();
+    await __museTickForTests();
+    expect(state.runs).toHaveLength(0);
+    expect(await museStatus()).toMatchObject({ wakePending: false, wakeBlocked: 'noModel' });
+  });
+
+  it('急停开着 → 请求留着、写明在等解锁;解锁后下一次巡检照办', async () => {
+    state.locked = true;
+    requestMuseWake();
+    await __museTickForTests();
+    expect(state.runs).toHaveLength(0);
+    expect(await museStatus()).toMatchObject({ wakePending: true, wakeBlocked: 'locked' });
+    state.locked = false;
+    await __museTickForTests();
+    expect(state.runs).toHaveLength(1);
+    expect(state.runs[0].input.museTrigger).toBe('manual');
+  });
+
+  it('急停着时被停用 → 请求作废;重新启用再解锁,不补跑停用前那次叫醒', async () => {
+    state.locked = true;
+    requestMuseWake();
+    await __museTickForTests();
+    state.enabled = false;
+    await __museTickForTests();
+    expect(await museStatus()).toMatchObject({ wakePending: false, wakeBlocked: 'disabled' });
+    state.enabled = true;
+    state.locked = false;
+    await __museTickForTests();
+    expect(state.runs).toHaveLength(0); // 心跳没到点、时段外:这次巡检什么也不起
+  });
+
+  it('起跑那一下被急停(这轮会被标成 remote_locked 拒跑)→ 请求留着,解锁后再起一轮', async () => {
+    state.lockOnCreate = true;
+    requestMuseWake();
+    await __museTickForTests();
+    expect(state.runs).toHaveLength(1);
+    expect(await museStatus()).toMatchObject({ wakePending: true, wakeBlocked: 'locked' });
+    state.lockOnCreate = false;
+    state.locked = false;
+    await __museTickForTests();
+    expect(state.runs).toHaveLength(2);
+    expect(state.runs[1].input.museTrigger).toBe('manual');
   });
 });

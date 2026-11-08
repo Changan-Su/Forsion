@@ -5,7 +5,8 @@
  * 行操作悬停 / 键盘聚焦才出;待办勾了才出「放进会话 / 新对话里做」那条。没开:只留一行「未开启 · 去设置」,下面什么都不摆
  * (主区已经是「Muse 还没开」空态,不在侧栏再讲一遍,DESIGN §6 空态)。
  * 11-08 先上了方案 B 里不等主区的两件:状态行右边的「叫醒」(空闲 / 在睡时才出;引擎 POST /muse/wake)和「最近几轮」
- * (引擎 GET /muse/rounds;点一条打开那一轮的会话,「全部」去自动化 Space 的运行记录)。旧引擎没有这两条路 → 两块都不画。
+ * (引擎 GET /muse/rounds;点一条打开那一轮的会话)。不设「全部」:每轮一个会话,自动化 Space 的 Muse 页只看得到最新一轮,
+ * 链过去名不副实;要看触发规则走「什么时候叫醒它」那节的「自动化 →」。旧引擎没有这两条路 → 两块都不画。
  * 主区换成宿主模板(方案 D)那天,Space 右栏切到 B:待办、追踪中挪去主区。外层容器负责 padding / 滚动。
  */
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
@@ -86,7 +87,6 @@ registerMessages({
   'musePanel.wakeNoModel': { zh: '没有可用的模型，没叫醒', en: 'No model is available, so it stayed asleep' },
   'musePanel.wakeFail': { zh: '没叫醒：{e}', en: 'Could not wake it: {e}' },
   'musePanel.rounds': { zh: '最近几轮', en: 'Recent rounds' },
-  'musePanel.roundsAll': { zh: '全部', en: 'All' },
   'musePanel.roundsEmpty': { zh: '它醒过之后，这里会列出最近几轮。', en: 'Its recent rounds show up here once it has woken.' },
   'musePanel.roundUnknown': { zh: '一轮', en: 'A round' },
   'musePanel.by.manual': { zh: '你叫醒的', en: 'You woke it' },
@@ -129,10 +129,9 @@ const WAKE_DROPPED: Record<string, string> = { budget: 'musePanel.wakeNoBudget',
 export const MuseView: React.FC<{
   cfg: TanguDesktopConfig
   sessions: SessionRecord[]
+  /** 打开某个会话:注入待办后跳过去、「最近几轮」点一条都走它(两个挂载点传的都是 openSession)。 */
   onInjected: (sessionId: string) => void
-  /** 打开某个会话(「最近几轮」点一条)。缺省同 onInjected —— 两个挂载点传的都是「打开这个会话」。 */
-  onOpenSession?: (sessionId: string) => void
-}> = ({ cfg, sessions, onInjected, onOpenSession }) => {
+}> = ({ cfg, sessions, onInjected }) => {
   const { t, locale } = useI18n()
   const museDef = useApp((s) => s.agentDefs.find((a) => a.slug === 'muse'))
   const museName = agentName(museDef ?? { name: 'Muse', nameZh: '卜算子', nameEn: 'Muse', slug: 'muse' }, locale)
@@ -154,6 +153,7 @@ export const MuseView: React.FC<{
   const [busy, setBusy] = useState<string>('') // 正在裁决的审批 id(approve 会同步执行工具)
   // 最近几轮:null = 还没取到 / 旧引擎没有这条读口(整块不画)
   const [rounds, setRounds] = useState<MuseRoundInfo[] | null>(null)
+  const roundsKey = useRef({ key: '', at: 0 }) // 上次拉「最近几轮」时的状态签名(见 load)
   const [waking, setWaking] = useState(false)
   const [wakeAsk, setWakeAsk] = useState(0) // 这个面板里点「叫醒」的时刻:作废原因只在点过之后的两分钟里说
   const [wakeErr, setWakeErr] = useState('')
@@ -175,8 +175,16 @@ export const MuseView: React.FC<{
     // 旧引擎无此端点 → 404 → 空列表(读端兜底,面板不红)。
     setApprovals(arr(await listMuseApprovals(homeTarget(), 'pending').catch(() => [])))
     setTracks(await getAgentSchedules(homeTarget()).then((all) => arr<AgentScheduleEntry>(arr<{ slug: string; entries?: AgentScheduleEntry[] }>(all).find((s) => s.slug === 'muse')?.entries).filter((e) => e.auto)).catch(() => []))
-    // 多取一条:在跑的那轮不进列表(状态行已经说了「正在想」)。旧引擎 404 → 整块不画;别的偶发失败留着上一份,不闪
-    await getMuseRounds(homeTarget(), 4).then((rs) => setRounds(arr<MuseRoundInfo>(rs)), (e: any) => { if (e?.status === 404) setRounds(null) })
+    // 多取一条:在跑的那轮不进列表(状态行已经说了「正在想」)。旧引擎 404 → 整块不画;别的偶发失败留着上一份,不闪。
+    // 不跟 4 秒轮询每次都拉(引擎要翻 agent_runs 和待办):起停了一轮(会话 / 在跑 / 上次醒来变了)才拉,另外每分钟补一次。
+    const key = `${st?.sessionId ?? ''}|${st?.running ? 1 : 0}|${st?.lastCycleAt ?? ''}`
+    const rk = roundsKey.current
+    if (rk.key !== key || Date.now() - rk.at > 60_000) {
+      await getMuseRounds(homeTarget(), 4).then(
+        (rs) => { setRounds(arr<MuseRoundInfo>(rs)); roundsKey.current = { key, at: Date.now() } },
+        (e: any) => { if (e?.status === 404) { setRounds(null); roundsKey.current = { key, at: Date.now() } } },
+      )
+    }
     if (st?.sessionId) {
       const ms = arr<{ role: string; content?: unknown; timestamp?: unknown }>(await listMessages(targetForSession(st.sessionId), st.sessionId, 6).catch(() => []))
       const lastAssistant = [...ms].reverse().find((m) => m.role === 'assistant' || m.role === 'model')
@@ -281,9 +289,7 @@ export const MuseView: React.FC<{
   const openRule = (id: string): void => { useApp.getState().closeSettings(); setActiveSpace('automation'); void useAutomation.getState().openRule(id) }
   const openAutomation = (): void => { useApp.getState().closeSettings(); setActiveSpace('automation') }
   const openSettings = (): void => useApp.getState().openSettings('agents/ag-special/muse')
-  const openRound = (sessionId: string): void => (onOpenSession ?? onInjected)(sessionId)
-  // 「全部」= 自动化 Space 里选中 Muse:右栏就是它的历次运行(跨全部 Muse 会话)
-  const openAllRounds = (): void => { useApp.getState().closeSettings(); setActiveSpace('automation'); useAutomation.getState().setSel({ kind: 'muse' }) }
+  const openRound = (sessionId: string): void => onInjected(sessionId)
   const wake = async (): Promise<void> => {
     setWaking(true); setWakeAsk(Date.now()); setWakeErr('')
     try { setStatus(await wakeMuse(homeTarget())) } catch (e: any) { setWakeErr(t('musePanel.wakeFail', { e: e?.message || e })) } finally { setWaking(false) }
@@ -502,10 +508,10 @@ export const MuseView: React.FC<{
         </section>
 
         {/* 最近几轮:时间 · 怎么醒的 · 用了多久,下一行写了几个文件 / 提了几条待办(引擎从检查点与待办表数,不让模型另写摘要)。
-            点一条打开那一轮的会话;「全部」去自动化 Space 的运行记录。 */}
+            点一条打开那一轮的会话。 */}
         {status?.enabled && rounds && (
           <section className="mv-sec" data-section="rounds">
-            <div className="mv-sh"><b>{t('musePanel.rounds')}</b>{doneRounds.length > 0 && <button type="button" className="mv-link r" onClick={openAllRounds}>{t('musePanel.roundsAll')} →</button>}</div>
+            <div className="mv-sh"><b>{t('musePanel.rounds')}</b></div>
             {doneRounds.length === 0 && <div className="mv-hint">{t('musePanel.roundsEmpty')}</div>}
             {doneRounds.length > 0 && <div className="mv-rows">
               {doneRounds.map((r) => {

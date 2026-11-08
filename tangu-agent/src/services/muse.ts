@@ -925,7 +925,12 @@ async function tick(): Promise<void> {
     let locked = true;
     try { locked = remoteLocked(); } catch { locked = true; }
     if (locked) {
-      if (wakeRequestedAt) wakeBlocked = 'locked'; // 急停:叫醒留着,解锁后的下一次巡检照办
+      // 急停:叫醒留着,解锁后的下一次巡检照办;锁着时被停用 → 作废(否则重新启用再解锁会补跑停用前的旧请求)
+      if (wakeRequestedAt) {
+        let on = true;
+        try { on = loadSpecialAgentsConfig().muse.enabled; } catch { /* 读不出 = 不知道:留着,解锁后 enabled 闸再判 */ }
+        if (on) wakeBlocked = 'locked'; else dropWake('disabled');
+      }
       ledger.inc('daily_muse', 'skipRemoteLock');
       if (!lockPauseLogged) { lockPauseLogged = true; log('remote lock on — Muse, watch rules and agent schedules paused until it is unlocked on this computer'); }
       await refreshSpaceStampWhenIdle(); // 锁只停后台:本机聊天里改的 Space 照样要让桌面重载
@@ -1070,7 +1075,13 @@ async function tick(): Promise<void> {
     restartsThisWindow += 1;
     log(`启动第 ${restartsThisWindow}/${cfg.maxRestartsPerWindow} 个思考周期(模型 ${cfg.modelId},档位 ${cfg.mode},触发 ${trigger},计费 ${spent.billable}/${cfg.maxTokensPerWindow},毛量 ${spent.gross}/${grossCap})`);
     const cycleRunId = await startCycle(cfg, (manual ? MANUAL_WAKE_NOTE : '') + buildTriggerKickoff(museFired) + scheduleKickoff(dueMuse), trigger, quietSince);
-    if (manual) { wakeRequestedAt = 0; wakeBlocked = null; }
+    if (manual) {
+      // 起跑的异步准备期间被急停 → agentLoop 把这轮标成 remote_locked 拒跑:叫醒留着,解锁后照办
+      let lockedNow = true;
+      try { lockedNow = remoteLocked(); } catch { lockedNow = true; }
+      if (lockedNow) wakeBlocked = 'locked';
+      else { wakeRequestedAt = 0; wakeBlocked = null; }
+    }
     // lastFiredAt / lastRun 只在周期真正启动后写回:被上面任何闸挡住 → 下轮重试,不白烧 cooldown。
     if (museFired.length) await markTriggersFired(museFired.map((t) => t.id), undefined, trigCursors);
     await markMuseEntriesFired(cycleRunId, dueMuse);
@@ -1219,29 +1230,39 @@ export interface MuseRound {
   error: string | null;
 }
 
-/** 最近几轮周期(新 → 旧)。只取 Muse 后台周期(input.background === 'muse'),手聊进 Muse 会话的 run 不算。 */
+/** 最近几轮周期(新 → 旧)。只取带 `input.background === 'muse'` 的后台周期:手聊进 Muse 会话的 run、
+ *  input 读不出的老行都不算。按页往回翻(每页 40、最多 5 页),手聊再多也挤不掉后台轮次;
+ *  input 在 PG 是 JSONB、在 SQLite 是文本,过滤放在 JS 里,SQL 两边通用。 */
 export async function museRecentRounds(limit = 3): Promise<MuseRound[]> {
   const n = Math.min(20, Math.max(1, Math.floor(limit) || 3));
   const userId = museUserId();
-  const rows = await query<any[]>(
-    `SELECT r.id, r.session_id, r.status, r.error, r.input, r.created_at, r.updated_at FROM agent_runs r
-     JOIN chat_sessions s ON s.id = r.session_id
-     WHERE s.kind = 'muse' AND s.user_id = ? ORDER BY r.created_at DESC LIMIT ${n * 3}`,
-    [userId],
-  );
-  const picked = (rows || []).map((r) => {
-    let input: any = r.input;
-    try { if (typeof input === 'string') input = JSON.parse(input); } catch { input = null; }
-    return { r, input };
-  }).filter((x) => !x.input || x.input.background === 'muse').slice(0, n);
+  const PAGE = 40;
+  const picked: { r: any; input: any }[] = [];
+  for (let page = 0; page < 5 && picked.length < n; page++) {
+    const rows = await query<any[]>(
+      `SELECT r.id, r.session_id, r.status, r.error, r.input, r.created_at, r.updated_at FROM agent_runs r
+       JOIN chat_sessions s ON s.id = r.session_id
+       WHERE s.kind = 'muse' AND s.user_id = ? ORDER BY r.created_at DESC LIMIT ${PAGE} OFFSET ${page * PAGE}`,
+      [userId],
+    );
+    for (const r of rows || []) {
+      let input: any = r.input;
+      try { if (typeof input === 'string') input = JSON.parse(input); } catch { input = null; }
+      if (input && input.background === 'muse') picked.push({ r, input });
+      if (picked.length >= n) break;
+    }
+    if ((rows || []).length < PAGE) break;
+  }
   if (!picked.length) return [];
+  // 待办按「这一轮」算:同一会话里、这轮开始到结束(在跑 = 到现在)后 60 秒内落的。老版本一个会话跑多轮、
+  // 或这轮之后在会话里手聊又提的待办,都不算到这一轮头上。
   const sids = [...new Set(picked.map((x) => String(x.r.session_id)))];
   const todoRows = await query<any[]>(
-    `SELECT source_session_id FROM muse_todos WHERE user_id = ? AND source_session_id IN (${sids.map(() => '?').join(',')})`,
+    `SELECT source_session_id, created_at FROM muse_todos WHERE user_id = ? AND source_session_id IN (${sids.map(() => '?').join(',')})`,
     [userId, ...sids],
   ).catch(() => []);
-  const todosBy = new Map<string, number>();
-  for (const t of todoRows || []) todosBy.set(String(t.source_session_id), (todosBy.get(String(t.source_session_id)) || 0) + 1);
+  const todosIn = (sid: string, from: number, to: number): number =>
+    (todoRows || []).filter((t) => String(t.source_session_id) === sid && (() => { const at = dbTimeMs(t.created_at); return at >= from - 5_000 && at <= to + 60_000; })()).length;
   return Promise.all(picked.map(async ({ r, input }) => {
     const live = r.status === 'queued' || r.status === 'running';
     const startedAt = dbTimeMs(r.created_at);
@@ -1254,7 +1275,7 @@ export async function museRecentRounds(limit = 3): Promise<MuseRound[]> {
       startedAt: Number.isFinite(startedAt) ? startedAt : 0,
       endedAt: endedAt != null && Number.isFinite(endedAt) ? endedAt : null,
       files: await filesTouched(String(r.session_id), String(r.id)),
-      todos: todosBy.get(String(r.session_id)) || 0,
+      todos: Number.isFinite(startedAt) ? todosIn(String(r.session_id), startedAt, endedAt != null && Number.isFinite(endedAt) ? endedAt : Date.now()) : 0,
       error: r.error ? displayText(String(r.error), 200) : null,
     };
   }));

@@ -2,7 +2,7 @@
  * Muse 面板「叫醒」与「最近几轮」两条路由(2026-11-08,Muse Space 右栏方案 B 里不等主区模板就能先上的两件)。
  * 真 express + 真 special 路由 + 真 SQLite(内存)+ 临时 TANGU_HOME。
  *   GET  /agent/special/muse/rounds:只列 Muse 后台周期(input.background === 'muse'),新 → 旧;怎么醒的读 input.museTrigger
- *        (升级前的轮次没有 → null);待办数按这一轮的会话数(每个周期一个会话);在跑的没有 endedAt;不串别的用户;远程来源 403。
+ *        (升级前的轮次没有 → null);待办数按这一轮(同会话、开始到收尾后 60 秒内落的);手聊再多也挤不掉后台轮次;在跑的没有 endedAt;不串别的用户;远程来源 403。
  *   POST /agent/special/muse/wake:Muse 关着 409;开着 → status.wakePending = true(supervisor 没起时 202,请求留着);远程来源 403。
  * 巡检怎么处理这笔请求(清休眠、不看运行时段、额度照守)在 src/services/muse.manualWake.test.ts;模型那半走 live `--only musewakenow`。
  * 跑:cd Forsion-Genesis/tangu-agent && npx vitest run test/museWakeRounds.test.ts
@@ -52,7 +52,7 @@ beforeAll(async () => {
     ('m3', 'u1', 'tangu', 'Muse', 'muse', '2026-11-08 10:00:00'),
     ('m4', 'u1', 'tangu', 'Muse', 'muse', '2026-11-08 11:00:00'),
     ('mx', 'u2', 'tangu', 'Muse', 'muse', '2026-11-08 11:30:00')`);
-  // m1:升级前的周期(input 里没有 museTrigger);m2:规则叫醒、失败;m3 里有一条手聊进来的 run(不是后台周期,不算);m4:用户叫醒、还在跑
+  // m1:升级前的周期(input 里没有 museTrigger);m2:规则叫醒、失败;m3 里有一条手聊进来的 run(不是后台周期,不算);m4:用户叫醒、还在跑;r1 的 input 里有 background 但没 museTrigger
   await query(`INSERT INTO agent_runs (id, session_id, user_id, status, error, input, created_at, updated_at) VALUES
     ('r1', 'm1', 'u1', 'done', NULL, ?, '2026-11-08 08:00:00', '2026-11-08 08:01:30'),
     ('r2', 'm2', 'u1', 'failed', 'upstream 529', ?, '2026-11-08 09:00:00', '2026-11-08 09:00:20'),
@@ -61,8 +61,16 @@ beforeAll(async () => {
     ('r4', 'm4', 'u1', 'running', NULL, ?, '2026-11-08 11:00:00', '2026-11-08 11:00:05'),
     ('rx', 'mx', 'u2', 'done', NULL, ?, '2026-11-08 11:30:00', '2026-11-08 11:31:00')`,
   [cycleInput(), cycleInput('rule:t1'), cycleInput('heartbeat'), JSON.stringify({ message: 'hi' }), cycleInput('manual'), cycleInput('manual')]);
-  await query(`INSERT INTO muse_todos (id, user_id, title, status, source_session_id) VALUES
-    ('d1', 'u1', 'a', 'pending', 'm3'), ('d2', 'u1', 'b', 'done', 'm3'), ('d3', 'u1', 'c', 'pending', 'm1'), ('dx', 'u2', 'x', 'pending', 'm3')`);
+  // m4 里叫醒那轮之后又手聊了 45 次(比后台轮次新,一页 40 装不下),外加一条 input 读不出的坏行:都不能把后台轮次挤掉
+  const chats = Array.from({ length: 45 }, (_, i) => i);
+  await query(`INSERT INTO agent_runs (id, session_id, user_id, status, input, created_at, updated_at) VALUES ${chats.map(() => '(?, ?, ?, ?, ?, ?, ?)').join(', ')}`,
+    chats.flatMap((i) => [`c${i}`, 'm4', 'u1', 'done', JSON.stringify({ message: `hi ${i}` }), `2026-11-08 12:${String(i).padStart(2, '0')}:00`, `2026-11-08 12:${String(i).padStart(2, '0')}:30`]));
+  await query(`INSERT INTO agent_runs (id, session_id, user_id, status, input, created_at, updated_at) VALUES ('cbad', 'm4', 'u1', 'done', '{oops', '2026-11-08 13:00:00', '2026-11-08 13:00:10')`);
+  // 待办按「这一轮」算:d4 是 r3 收尾很久之后手聊里提的,不算给 r3
+  await query(`INSERT INTO muse_todos (id, user_id, title, status, source_session_id, created_at) VALUES
+    ('d1', 'u1', 'a', 'pending', 'm3', '2026-11-08 10:01:00'), ('d2', 'u1', 'b', 'done', 'm3', '2026-11-08 10:01:30'),
+    ('d4', 'u1', 'd', 'pending', 'm3', '2026-11-08 10:30:30'),
+    ('d3', 'u1', 'c', 'pending', 'm1', '2026-11-08 08:01:00'), ('dx', 'u2', 'x', 'pending', 'm3', '2026-11-08 10:01:00')`);
   const app = express(); app.use(express.json()); app.use(specialRouter);
   server = app.listen(0, '127.0.0.1'); await once(server, 'listening');
   base = `http://127.0.0.1:${(server.address() as any).port}`;
@@ -80,7 +88,7 @@ describe('GET /agent/special/muse/rounds', () => {
     const { status, body } = await call('GET', '/agent/special/muse/rounds?limit=4');
     expect(status).toBe(200);
     const rounds = body.rounds as any[];
-    expect(rounds.map((r) => r.runId)).toEqual(['r4', 'r3', 'r2', 'r1']); // r3chat(手聊)与 rx(别的用户)都不在
+    expect(rounds.map((r) => r.runId)).toEqual(['r4', 'r3', 'r2', 'r1']); // r3chat / c* 手聊、cbad 坏 input、rx 别的用户都不在
     const [r4, r3, r2, r1] = rounds;
     expect(r4).toMatchObject({ trigger: 'manual', status: 'running', endedAt: null });
     expect(r3).toMatchObject({ trigger: 'heartbeat', todos: 2, files: 0 });
