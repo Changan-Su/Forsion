@@ -10,6 +10,8 @@
  */
 import { create } from 'zustand'
 import { OFFICIAL_SERIES, type AchievementDef, type SeriesDef } from './definitions'
+import { achievementCountKey } from '../../../shared/telemetryKeys'
+import { countTelemetry, countTelemetryOnce } from '../telemetrySend'
 
 const KEY = 'forsion_tangu_achievements'
 const COUNTER_CAP = 999_999
@@ -118,10 +120,14 @@ export function findAchievement(id: string): { a: AchievementDef; series: Series
   return null
 }
 
-/** 埋点入口:累计计数,新跨线(before<goal<=after)成就入 toast 队列。 */
-export function track(event: string, n = 1): void {
+/** 埋点入口:累计计数,新跨线(before<goal<=after)成就入 toast 队列。
+ *  uniq = 引擎事件派生的计数给事件自己的 id(工具调用 id):匿名遥测按它去重(同一条运行在几个窗口里 / 重连时会回放)。 */
+export function track(event: string, n = 1, uniq?: string): void {
   try {
     if (!event || !(n > 0)) return
+    // 匿名遥测 app_counts(契约 §9):只有官方计数名单里的(plugin:* 不发),主进程按小时攒成一条。在封顶判断之前报:成就计数封顶了,用量照样在
+    const key = achievementCountKey(event)
+    if (key && n >= 1) { if (uniq) countTelemetryOnce(key, uniq); else countTelemetry(key, Math.floor(n)) }
     const s = useAchievements.getState()
     const before = s.counters[event] || 0
     const after = Math.min(before + Math.floor(n), COUNTER_CAP)

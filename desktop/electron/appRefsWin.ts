@@ -366,11 +366,28 @@ public static class FsnAppRefs {
     return IsFront(h);
   }
 
-  public static string Focus(long hwnd, int pid) {
+  public static string Focus(long hwnd, int pid, int sourcePid) {
     IntPtr h = new IntPtr(hwnd);
     uint wpid = 0;
     if (!IsWindow(h) || GetWindowThreadProcessId(h, out wpid) == 0 || (pid > 0 && wpid != (uint)pid))
       return "{\"gone\":true,\"focused\":false,\"step\":0,\"min\":false}";
+    if (sourcePid > 0) {
+      // A delayed reveal must not steal focus after the user leaves Forsion.
+      uint foregroundPid = 0;
+      GetWindowThreadProcessId(GetForegroundWindow(), out foregroundPid);
+      if (foregroundPid == (uint)sourcePid && IsIconic(h)) {
+        ShowWindowAsync(h, 4); // SW_SHOWNOACTIVATE
+        for (int i = 0; i < 10 && IsIconic(h); i++) Thread.Sleep(30);
+        foregroundPid = 0;
+        GetWindowThreadProcessId(GetForegroundWindow(), out foregroundPid);
+      }
+      bool focused = !IsIconic(h) && IsFront(h);
+      if (!focused && !IsIconic(h) && foregroundPid == (uint)sourcePid) {
+        SetForegroundWindow(h);
+        focused = WaitFront(h);
+      }
+      return "{\"gone\":false,\"focused\":" + (focused ? "true" : "false") + "}";
+    }
     bool min = IsIconic(h);
     if (min) ShowWindowAsync(h, 9);
     int step = 0;
@@ -403,7 +420,7 @@ public static class FsnAppRefs {
   }
 }
 '@
-if ($req.op -eq 'focus') { $json = [FsnAppRefs]::Focus([long]$req.hwnd, [int]$req.wpid) }
+if ($req.op -eq 'focus') { $json = [FsnAppRefs]::Focus([long]$req.hwnd, [int]$req.wpid, [int]$req.sourcePid) }
 else { $json = [FsnAppRefs]::Snapshot([int]$req.own) }
 [Console]::Out.Write('<<FSN:' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json)) + ':FSN>>')
 `
@@ -716,14 +733,24 @@ const MAX_ICON_IDS = 64
 
 type OpenResult = { ok: boolean; landed?: 'window' | 'app'; error?: string }
 
-export function createWinAppRefs(deps: WinAppRefDeps) {
-  const now = deps.now ?? Date.now
+function runAppRefsPowerShell(deps: Pick<WinAppRefDeps, 'run' | 'env'>, script: string, req: Record<string, unknown>, timeoutMs: number): Promise<string> {
   const env = deps.env ?? process.env
   const powershell = `${env.SystemRoot || env.windir || 'C:\\Windows'}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`
   // 换行统一成 CRLF 再交出去:模板字面量里的换行按语言规范恒为 LF(源码检出成 CRLF 也一样),而这是给 Windows PowerShell 解析的脚本
+  return deps.run(powershell, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script.replace(/\r?\n/g, '\r\n')],
+    { env: { FSN_APPREFS_IN: Buffer.from(JSON.stringify(req), 'utf8').toString('base64') }, timeoutMs })
+}
+
+/** Launch from the foreground Forsion process to transfer focus to its verified sandbox window. */
+export async function focusWinWindowFromOwner(deps: WinAppRefDeps, hwnd: number, pid: number): Promise<boolean> {
+  const out = await runAppRefsPowerShell(deps, PS_NATIVE, { op: 'focus', hwnd, wpid: pid, sourcePid: deps.ownPid }, NATIVE_TIMEOUT_MS).catch(() => null)
+  return parseWinFocus(out)?.focused === true
+}
+
+export function createWinAppRefs(deps: WinAppRefDeps) {
+  const now = deps.now ?? Date.now
   const ps = (script: string, req: Record<string, unknown>, timeoutMs: number): Promise<string> =>
-    deps.run(powershell, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script.replace(/\r?\n/g, '\r\n')],
-      { env: { FSN_APPREFS_IN: Buffer.from(JSON.stringify(req), 'utf8').toString('base64') }, timeoutMs })
+    runAppRefsPowerShell(deps, script, req, timeoutMs)
 
   // ── 已安装的应用(缓存 + 过期后先用旧的)──
   let index = new Map<string, WinApp>()

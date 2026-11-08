@@ -106,7 +106,7 @@ Engine plugin text settings can declare `secret: true`, and the host renders a p
 
 A Space inside a plugin can declare a dedicated Mini view that offers only quick actions for its current capability; the host's "Show in main panel" carries the current entity parameters. Spaces that haven't opted in don't appear in Mini, and an adapter is withdrawn automatically when its plugin is disabled. See [Mini Panel development](./mini-panel-development.md).
 
-A plugin can also skip the full Space and open a registered compact view directly with `ctx.openMiniPanel?.(viewId, options)`; `mainViewId` sets where "Show in main panel" goes. For a wide standalone tool page, use `ctx.openFloatingPanel?.(viewId, options)`. The host adds the plugin namespace automatically and owns the window lifecycle. See [Floating Panel development](./floating-panel-development.md).
+A plugin can also skip the full Space and open a registered compact view directly with `ctx.openMiniPanel?.(viewId, options)`; `mainViewId` sets where "Show in main panel" goes. Since 2.13.8 several Mini windows can be open on desktop: opening the same `viewId` again brings up its open window, and a stable `key` gives different content its own window; at 6 the host tells the user itself. See "Several Mini windows" in [Mini Panel development](./mini-panel-development.md). For a wide standalone tool page, use `ctx.openFloatingPanel?.(viewId, options)`. The host adds the plugin namespace automatically and owns the window lifecycle. See [Floating Panel development](./floating-panel-development.md).
 
 When a View needs an input box with model selection, use `ctx.ui.mountChatBox`; it reuses the host component, and the plugin handles submission explicitly. Pass `modelPicker: false` to drop the model selection, `toolbar` for controls in the bottom row, `suggest` for completion such as `#` (since 2026-11-02 it can be a list, for example one for `#` and one for `[[`; pass a list only when `ctx.ui.chatBoxCapabilities` includes `'suggestMany'`; when the box sits in the lower half of the window the suggestions open upward), and call `insertText` to insert at the caret. See [Reusable UI components](./ui-components.md).
 
@@ -148,6 +148,8 @@ ctx.ui?.mountSelectionBar?.(root, { tools, source, ask, watch })
 ```
 
 A "hold a tool and work" view (PDF annotation and the like) switches tools with the host's tool island: `ctx.ui?.mountToolIsland?.(root, { tools, active, onPick, slots })` sits centred at the top (docked at the bottom below 520 px), selection is controlled (call `setActive` from `onPick`), and the handle's `row` is the row under the island for you to fill. On older hosts draw your own bar. See "The tool island" in [Reusable UI components](./ui-components.en.md).
+
+For something that floats (a transfer progress card, an "export finished" strip, a recording timer capsule) use `ctx.ui?.float?.({ scope, anchor, role, id })`: `scope` says what it floats over (`view` your view / `space` the whole Space, hidden while another is open / `window` the whole window). Put your content in the handle's `el`; placement, stacking, motion and drag-to-snap belong to the host, so don't write your own `position: fixed` + z-index. On older hosts keep drawing your own. See "Floats" in [Reusable UI components](./ui-components.en.md).
 
 ## Tables and note tasks
 
@@ -214,6 +216,43 @@ The summary panel on the right of a Tangu chat (desktop versions after 2.13.8-be
 ```js
 ctx.summary?.registerCard({ id, title: { zh, en }, defaultCollapsed, mount(el, host) })
 ```
+
+## Home widgets (since 2026-11-07)
+
+Home has widgets in its left and right columns and in the row under the chat box. A plugin can add its own cards: the plugin declares the card in its manifest and supplies the data, and the host draws it in the same style as the built-in Inbox and Recent notes cards. People add cards from Home → right-click → Edit Home → Add, where plugin cards sit in the Plugins group. When a plugin is turned off, its card shows a placeholder; when it is uninstalled, the card is not drawn (the placement is kept and comes back if the plugin does).
+
+This version supports **list cards** only: each row has a time or a checkbox on the left, a title, and a short note on the right, rows can be grouped (for example "Tomorrow"), and there can be a footer line. Cards are read-only. Clicking the header or a row opens the Space you declare; the first version cannot check items off or write back.
+
+List the card folders in your manifest. Each folder holds a `manifest.json`, the same folder layout as widgets made by agents:
+
+```json
+// manifest.json
+"widgets": ["widgets/today"]
+
+// widgets/today/manifest.json
+{ "schemaVersion": 1, "id": "today", "title": "Today", "titleEn": "Today", "layout": "list", "icon": "date", "space": "calendar" }
+```
+
+- `id` is unique within your plugin (lowercase letters, digits, hyphens) and is stored in the Home layout as `plugin:<plugin id>/<id>`. `title` is required (your canonical name, usually Chinese); `titleEn` is shown in the English UI.
+- `icon` is a name from the plugin icon vocabulary (the same list as `registerView`'s `icon`). Without it, the card uses your icon.png.
+- `space` is the Space id opened when the header or a row is clicked; leave it out to stay on Home. Up to 8 cards; a broken one is dropped on its own.
+
+Supply the data with `ctx.widgets.provide`. The host asks while the card is on Home; return an array of rows or `{ rows, footer, empty }`.
+
+```js
+ctx.widgets?.provide('today', async (_params, { signal }) => ({
+  rows: [{ id: 'e1', time: '10:00', title: 'Book club', meta: 'In 1 h', tone: 'accent', now: true },
+         { id: 'e2', time: '10:00', title: 'Product weekly', group: 'Tomorrow' }],
+  footer: '1 of 3 done today',
+  empty: 'Nothing on today',
+}))
+ctx.widgets?.invalidate('today') // data changed: ask the host to fetch again
+```
+
+- A row can have `title` (required), `time` (left column), `meta` (short note on the right), `tone` (`accent` / `warn` / `muted`), `done` (any value draws a checkbox; `true` strikes the row through), `now` (filled dot) and `group` (a small heading above the row when it changes). Up to 50 rows. Give the text in the language from `ctx.getLocale()`; the host fetches again when the language changes.
+- The host asks when the card mounts, when you call `invalidate`, and when the window comes back to the front (at least 30 seconds after the last time). Only one request per card runs at a time, and a newer one aborts the older `signal`. If you take longer than 10 seconds or throw, the card says it couldn't load. It is never treated as an empty list.
+- The host stops asking when the card is not on Home, so don't poll outside `provide`. For time-based text such as "In 1 h", call `invalidate` on a timer after you've been asked, and stop when you haven't been asked for a few minutes.
+- Older hosts ignore `widgets` and have no `ctx.widgets`, so always use `?.`. API details are in the plugin development skill, section "Home widgets"; the Today and To-dos cards of the core Calendar plugin are the reference.
 
 ## Intelligent UI cards
 

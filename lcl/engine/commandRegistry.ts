@@ -17,6 +17,17 @@ interface CommandState {
   setPaletteOpen(open: boolean): void
 }
 
+/** 命令是从哪儿被用户触发的(宿主遥测用:命令面板 / 快捷键 / Ribbon / Agent;别处一律 other)。 */
+export type CommandSource = 'palette' | 'hotkey' | 'ribbon' | 'agent' | 'other'
+let commandObserver: ((id: string, source: CommandSource) => void) | null = null
+/** 宿主挂一个观察者(Forsion 桌面的匿名遥测):带来源的入口跑命令前回调 (命令 id, 来源)。传 null 撤掉。 */
+export function setCommandObserver(fn: ((id: string, source: CommandSource) => void) | null): void { commandObserver = fn }
+/** 带来源的入口(命令面板 / 快捷键 / Ribbon / Agent 派发)在执行一条已注册命令之前调一下。命令本身不包、不改:
+ *  run / invoke.run 照原样由调用方调用(this、返回值都不变)。观察者抛错吞掉,绝不影响命令。 */
+export function noteCommandUse(id: string, source: CommandSource): void {
+  try { commandObserver?.(id, source) } catch { /* 观察者出错不影响命令 */ }
+}
+
 export const useCommandStore = create<CommandState>((set, get) => ({
   commands: [],
   paletteOpen: false,
@@ -94,6 +105,7 @@ export function installHotkeys(): () => void {
       const hk = effectiveHotkey(cmd) // 用户覆盖优先;'' = 已解绑
       if (hk && hotkeyMatches(hk, e)) {
         e.preventDefault()
+        noteCommandUse(cmd.id, 'hotkey')
         cmd.run()
         return
       }

@@ -33,6 +33,14 @@ afterEach(() => { useApp.setState(initial, true); vi.useRealTimers(); vi.unstubA
 const queued = () => (useApp.getState().steerPendingBySession.s || []).filter((p) => p.localOnly).map((p) => p.text)
 
 describe('queued commands while a run is active', () => {
+  it('withdrawing a waiting message hands back its attachments with the text', async () => {
+    const shot = { name: 'shot.png', mimeType: 'image/png', data: 'AAAA', size: 3 }
+    useApp.setState({ steerPendingBySession: { s: [{ id: 'q1', text: 'look at this', attachments: [shot], localOnly: true }] } })
+    const back = await useApp.getState().withdrawSteer('s', 'q1')
+    expect(back).toEqual({ text: 'look at this', attachments: [shot] })
+    expect(useApp.getState().steerPendingBySession.s).toEqual([])
+  })
+
   it('queues /compact, holds later messages behind it, then compacts and sends in order after the run', async () => {
     let finishCompact!: (r: unknown) => void
     service.compact.mockImplementation(() => new Promise((resolve) => { finishCompact = resolve }))

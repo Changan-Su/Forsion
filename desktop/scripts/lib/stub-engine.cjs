@@ -265,6 +265,13 @@ async function startStubEngine(data = {}) {
     /** 给下一次 run 排剧本。 */
     script: (events) => queue.push(events),
     /** 让一条 `__hold` 挂住的 run 按给定事件收尾(缺省 = 正常 done)。run 不在挂住态返回 false。 */
+    /** 往挂住的 run 推几条事件,连接不关(测 run 中途的 turn_boundary 之类)。 */
+    emit: (runId, events) => {
+      const o = open.get(runId)
+      if (!o) return false
+      for (const e of events) o.res.write(`data: ${JSON.stringify({ seq: ++o.seq, type: e.type, payload: e.payload || {} })}\n\n`)
+      return true
+    },
     finish: (runId, events = [{ type: 'done', payload: {} }]) => {
       const o = open.get(runId)
       if (!o) return false

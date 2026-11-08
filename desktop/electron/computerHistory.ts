@@ -1937,7 +1937,7 @@ export async function stopComputerHistoryForWipe(ch: ComputerHistory, capMs = WI
 // ── IPC ──────────────────────────────────────────────────────────────────────
 
 /** `window.tangu.computerHistory` 的主进程端(见 preload.ts / shared ComputerHistoryApi)。 */
-export function registerComputerHistoryIpc(ch: ComputerHistory, isTrustedSender: (e: IpcMainInvokeEvent) => boolean): void {
+export function registerComputerHistoryIpc(ch: ComputerHistory, isTrustedSender: (e: IpcMainInvokeEvent) => boolean, onUserToggle?: (on: boolean) => void): void {
   const handle = (name: string, fn: (...args: unknown[]) => unknown): void => {
     ipcMain.handle(`computerHistory:${name}`, async (e, ...args: unknown[]) => {
       if (!isTrustedSender(e)) throw new Error('forbidden')
@@ -1946,7 +1946,14 @@ export function registerComputerHistoryIpc(ch: ComputerHistory, isTrustedSender:
     })
   }
   handle('get', () => ch.get())
-  handle('setEnabled', (on) => ch.setEnabled(on === true))
+  handle('setEnabled', async (on) => {
+    const want = on === true
+    const was = ch.get().state.enabled
+    const view = await ch.setEnabled(want)
+    // 用户在界面上拨了开关(匿名遥测的设置改动;只报真变了的)
+    if (was !== want && view.state.enabled === want) try { onUserToggle?.(want) } catch { /* 遥测不影响开关 */ }
+    return view
+  })
   handle('pause', (until) => ch.pause(until === 'tomorrow' ? 'tomorrow' : Number(until)))
   handle('resume', () => ch.resume())
   handle('clear', (opts) => {

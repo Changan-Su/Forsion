@@ -2,7 +2,7 @@
  * 运行中排队(/compact 等命令对齐 Codex)—— 真 Electron × 真组件/store × 可编剧假引擎。
  *
  * 钉住的产品契约:
- *  ① run 在跑时发 /compact <关注点>:不撞引擎(不发压缩请求),进输入框上方等待区,提示换成「排队项…」,不露「立即插话」;
+ *  ① run 在跑时发 /compact <关注点>:不撞引擎(不发压缩请求),作为待发气泡画在对话末尾(11-07 起不再挂输入框上方),小字「本轮结束后发送」,不露「立即插话」;
  *  ② 之后再发的消息排在它后面:不 steer 进当前 run、不起新 run;
  *  ③ run 正常收尾 → 先发压缩(带关注点),压完再起新 run 发那条消息,等待区清空;
  *  ④ 用户点停止 → 排着的 /compact 照跑(刻意决定:显式排的、可 × 删)。
@@ -115,7 +115,8 @@ async function main() {
     }
     await openChatSession(win)
 
-    const items = () => win.locator('.t2c-steer-item .t2c-steer-text').allTextContents().catch(() => [])
+    // 11-07 起等待中的插话 / 排队项画在对话末尾(.t2-userwrap--pending),不再是输入框上方的等待区
+    const items = () => win.locator('.t2-stream .t2-userwrap--pending .t2-user').allTextContents().then((a) => a.map((x) => x.trim())).catch(() => [])
 
     // ── 场景 1:run 挂住 → 排 /compact + 消息 → 正常收尾后按序执行 ──
     stub.script([{ type: 'token', payload: { delta: '干活中…' } }, { type: '__hold' }])
@@ -127,9 +128,9 @@ async function main() {
     const afterCompact = await items()
     check('运行中的 /compact 进等待区,不发压缩请求', afterCompact.length === 1 && afterCompact[0] === '/compact 保留接口约定' && compacts.length === 0, JSON.stringify({ afterCompact, compacts: compacts.length }))
     // 取值一律短超时:缺省会等满 30s,正好撞上 run 看门狗(桩的在飞列表恒空 → 判 run 已结束)
-    const hint = await win.locator('.t2c-steer-hint').first().textContent({ timeout: 1000 }).catch(() => null)
-    check('等待区提示换成排队文案', !!hint && hint.includes('本轮结束后依次执行'), JSON.stringify(hint))
-    check('只有排队项时不露「立即插话」', (await win.locator('.t2c-steer-now').count()) === 0)
+    const hint = await win.locator('.t2-pending-cap').first().textContent({ timeout: 1000 }).catch(() => null)
+    check('排队项小字写「本轮结束后发送」', !!hint && hint.includes('本轮结束后发送'), JSON.stringify(hint))
+    check('只有排队项时不露「立即插话」', (await win.locator('.t2-pending-btn', { hasText: '立即插话' }).count()) === 0)
 
     await send(win, '继续写测试')
     await win.waitForTimeout(600)
@@ -140,7 +141,7 @@ async function main() {
     if (!NEGATIVE_CONTROL) {
       // 首条消息会弹「成就达成」浮层,恰好盖在等待区上 —— 与被测无关,拍照前藏掉
       await win.addStyleTag({ content: '.ach-toast{display:none!important}' })
-      const box = win.locator('.t2c-steer').first()
+      const box = win.locator('.t2-stream').first()
       await box.screenshot({ path: SHOTS.light })
       await win.evaluate(() => { document.documentElement.classList.add('dark'); document.documentElement.dataset.mode = 'dark' })
       await win.waitForTimeout(250)

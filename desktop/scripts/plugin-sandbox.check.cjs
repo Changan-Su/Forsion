@@ -21,6 +21,8 @@
  * ⚠️ 量的是 out/ 里的产物,源码改了没 `npm run build` 就是白测。
  * 跑:node .claude/hooks/devlock.cjs run --vehicle=e2e --what="plugin sandbox" -- npm run check:pluginsandbox
  * `SHOT_DIR=<目录>` 额外落沙箱窗口截图(子进程自己截的那张)与对话卡截图;`-- --focus` 加跑第 10 项(会抢几秒前台)。
+ * Windows 真前台验收(PowerShell):先设 `$env:STAGE_ELECTRON = 'C:\path\to\Electron.exe'`(独立副本),
+ * 再跑 `npm run check:pluginsandbox -- --windows-foreground`。先点沙箱再点露出的主窗口,看到 READY 再点对话卡的「打开沙箱窗口」。
  * computer use 走查:`STAGE_ELECTRON=<单独身份的 Electron 拷贝>/Contents/MacOS/Electron`(gui-verify §4.2)+ `SBX_HOLD=1`:
  * 右栏卡出来以后停住、打印 HOLD,等 `<临时 home>/kick` 出现(最多 30 分钟)再接着跑。
  */
@@ -71,6 +73,7 @@ function writePlugin(source) {
     layout: { main: [{ type: `plugin:${PLUGIN_ID}:fixture-view` }], left: [], right: [] }, requires: { views: [`plugin:${PLUGIN_ID}:fixture-view`] },
   }))
   fs.writeFileSync(path.join(PLUGIN, 'books.csv'), 'title\nDune\n')
+  fs.writeFileSync(path.join(PLUGIN, 'next-book.csv'), 'title\nNeuromancer\n')
 }
 
 const results = []
@@ -89,16 +92,152 @@ async function until(read, timeout = 20_000) {
 /** 只比文件:用户那份打开对话时自己会在智库里建空的 Sessions/ 目录,与沙箱无关。 */
 const listFiles = (dir) => listTree(dir).filter((p) => fs.statSync(path.join(dir, p)).isFile())
 const listTree = (dir) => { const out = []; const walk = (d) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const p = path.join(d, e.name); out.push(path.relative(dir, p)); if (e.isDirectory()) walk(p) } }; if (fs.existsSync(dir)) walk(dir); return out.sort() }
+const WINDOWS = process.platform === 'win32'
 const FOCUS = process.argv.includes('--focus') && process.platform === 'darwin'
+const WINDOWS_FOREGROUND = process.argv.includes('--windows-foreground')
 /** 屏幕上普通层级(0)的大窗口,从前到后的属主 pid(CGWindowList 本来就按前后排;只读层级与尺寸,不要屏幕录制权限)。 */
 const JXA_FRONT = `ObjC.import('CoreGraphics'); function run() { return JSON.stringify(ObjC.deepUnwrap(ObjC.castRefToObject($.CGWindowListCopyWindowInfo($.kCGWindowListOptionOnScreenOnly | $.kCGWindowListExcludeDesktopElements, 0))).filter((w) => w.kCGWindowLayer == 0 && w.kCGWindowBounds.Width > 300 && w.kCGWindowBounds.Height > 200).map((w) => String(w.kCGWindowOwnerPID))) }`
 const frontPids = () => JSON.parse(execFileSync('osascript', ['-l', 'JavaScript', '-e', JXA_FRONT]).toString())
 /** 把某个进程真的变成前台 App(像用户点了它的窗口),再读前台是谁。只排窗口不够:前台 App 不让,后台进程的 focus 会被系统拒掉。 */
 const activatePid = (pid) => execFileSync('osascript', ['-l', 'JavaScript', '-e', `ObjC.import('AppKit'); function run(a) { $.NSRunningApplication.runningApplicationWithProcessIdentifier(Number(a[0])).activateWithOptions($.NSApplicationActivateAllWindows); delay(0.6); return String($.NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier) }`, String(pid)]).toString().trim()
-const sandboxPids = () => { try { return execFileSync('pgrep', ['-f', path.join(SBX, 'userdata')], { encoding: 'utf8' }).trim().split('\n').filter(Boolean) } catch { return [] } }
+const sandboxUserData = path.join(SBX, 'userdata')
+let executable
+function powershell(script, env = process.env) {
+  return execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], {
+    env, encoding: 'utf8', windowsHide: true, timeout: 15000, stdio: ['ignore', 'pipe', 'pipe'],
+  }).trim()
+}
+function sandboxPids({ stop = false } = {}) {
+  if (!executable) return []
+  if (WINDOWS) {
+    const script = `$ErrorActionPreference = 'Stop'
+    $profileArg = '(?:^|\\s)' + [regex]::Escape($env:FORSION_SANDBOX_PROFILE_ARG) + '(?:\\s|$)'
+    Get-CimInstance Win32_Process | Where-Object {
+      $_.ExecutablePath -eq $env:FORSION_SANDBOX_EXECUTABLE -and $_.CommandLine -and
+      $_.CommandLine.Replace('"', '') -match $profileArg
+    } | ForEach-Object { ${stop ? `
+      $process = Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue
+      if ($process) {
+        try {
+          [void]$process.Handle
+          if ([Math]::Abs(($process.StartTime - $_.CreationDate).TotalMilliseconds) -lt 1) { $process.Kill() }
+        } catch [InvalidOperationException] {} finally { $process.Dispose() }
+      }` : '$_.ProcessId'} }`
+    return powershell(script, {
+      ...process.env, FORSION_SANDBOX_EXECUTABLE: executable, FORSION_SANDBOX_PROFILE_ARG: `--user-data-dir=${sandboxUserData}`,
+    }).split(/\r?\n/).filter(Boolean)
+  }
+  try {
+    return execFileSync('pgrep', ['-f', sandboxUserData], { encoding: 'utf8' }).trim().split('\n').filter(Boolean)
+  } catch (e) {
+    if (e.status === 1) return []
+    throw e
+  }
+}
+function cleanSandboxProcesses() {
+  if (WINDOWS) sandboxPids({ stop: true })
+  else for (const pid of sandboxPids()) try { process.kill(Number(pid), 'SIGKILL') } catch { /* 已退 */ }
+}
+async function checkWindowsForeground(app, win) {
+  await win.locator('[data-sandbox-card] button.primary').waitFor({ timeout: 25_000 })
+  const parentHwnd = await app.evaluate(({ BrowserWindow, screen }) => {
+    const parent = BrowserWindow.getAllWindows().find(w => !w.isDestroyed() && w.isVisible())
+    if (!parent) throw new Error('The sandbox fixture main window is missing')
+    const bounds = parent.getBounds()
+    const workArea = screen.getDisplayMatching(bounds).workArea
+    // Keep an exposed strip for a real click even when the two windows start at the same position.
+    const x = Math.max(workArea.x, bounds.x - 280)
+    const y = Math.max(workArea.y, bounds.y - 180)
+    if (bounds.x - x < 40 && bounds.y - y < 40) throw new Error('Move the fixture windows so that the main window has an exposed strip')
+    parent.setBounds({ ...bounds, x, y: bounds.x - x >= 40 ? bounds.y : y })
+    parent.on('page-title-updated', event => event.preventDefault())
+    parent.setTitle('Forsion Windows sandbox foreground fixture')
+    const handle = parent.getNativeWindowHandle()
+    return handle.length === 8 ? Number(handle.readBigUInt64LE()) : handle.readUInt32LE()
+  })
+  const pids = sandboxPids().map(Number)
+  if (!pids.length) throw new Error('The sandbox process is missing')
+  const snapshot = (sandboxProcesses = pids) => JSON.parse(powershell(`$ErrorActionPreference = 'Stop'
+    Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public static class SandboxOrder {
+      [StructLayout(LayoutKind.Sequential)] public struct Rect { public int left, top, right, bottom; }
+      [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+      [DllImport("user32.dll")] public static extern IntPtr GetTopWindow(IntPtr parent);
+      [DllImport("user32.dll")] public static extern IntPtr GetWindow(IntPtr hwnd, uint command);
+      [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint processId);
+      [DllImport("user32.dll")] public static extern int GetWindowLongW(IntPtr hwnd, int index);
+      [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hwnd);
+      [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hwnd);
+      [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hwnd, out Rect rect);
+    }'
+    $seen = [Collections.Generic.HashSet[long]]::new()
+    $rank = 0; $parent = 0; $child = 0; $topmost = $false; $childHwnd = 0
+    $pids = @(${sandboxProcesses.join(',')})
+    for($h = [SandboxOrder]::GetTopWindow([IntPtr]::Zero); $h -ne [IntPtr]::Zero -and $seen.Add($h.ToInt64()); $h = [SandboxOrder]::GetWindow($h, 2)) {
+      $rank++
+      if ($h.ToInt64() -eq ${parentHwnd}) { $parent = $rank }
+      [uint32]$owner = 0
+      [void][SandboxOrder]::GetWindowThreadProcessId($h, [ref]$owner)
+      if (!$child -and $owner -in $pids -and [SandboxOrder]::IsWindowVisible($h)) {
+        $rect = [SandboxOrder+Rect]::new()
+        if (![SandboxOrder]::IsIconic($h) -and (![SandboxOrder]::GetWindowRect($h, [ref]$rect) -or $rect.right - $rect.left -lt 220 -or $rect.bottom - $rect.top -lt 160)) { continue }
+        $child = $rank
+        $childHwnd = $h.ToInt64()
+        $topmost = ([SandboxOrder]::GetWindowLongW($h, -20) -band 8) -ne 0
+      }
+    }
+    $foreground = [SandboxOrder]::GetForegroundWindow().ToInt64()
+    @{ mainForeground=($foreground -eq ${parentHwnd}); sandboxForeground=($childHwnd -ne 0 -and $foreground -eq $childHwnd); minimized=[SandboxOrder]::IsIconic([IntPtr]$childHwnd); main=$parent; sandbox=$child; topmost=$topmost } | ConvertTo-Json -Compress`))
+  const started = snapshot()
+  if (!started.mainForeground) throw new Error(`Tool start displaced the foreground main window: ${JSON.stringify(started)}`)
+  console.log('Click the sandbox, then the exposed strip of the main fixture to bring it above the sandbox.')
+  const before = await until(() => {
+    const s = snapshot()
+    return s.mainForeground && s.main && s.sandbox && s.main < s.sandbox && s
+  }, 120_000)
+  if (!before) throw new Error(`The main fixture never covered the sandbox in the foreground: ${JSON.stringify(snapshot())}`)
+  console.log('Before:', JSON.stringify(before))
+  await win.evaluate(() => document.addEventListener('click', event => {
+    if (event.isTrusted && document.hasFocus() && event.target.closest?.('[data-sandbox-card] button.primary')) console.log('WINDOWS_SANDBOX_SHOW')
+  }, true))
+  const assertRaised = async (label, read = snapshot) => {
+    const after = await until(() => {
+      const s = read()
+      return s.sandboxForeground && s.main && s.sandbox < s.main && !s.topmost && !s.minimized && s
+    }, 20_000)
+    if (!after) throw new Error(`${label} did not raise a normal sandbox window: ${JSON.stringify(read())}`)
+    console.log(`PASS: ${label} raised the sandbox without leaving it topmost.`, JSON.stringify(after))
+  }
+  const open = async label => {
+    const clicked = win.waitForEvent('console', { predicate: msg => msg.text() === 'WINDOWS_SANDBOX_SHOW', timeout: 120_000 })
+    console.log('READY: click Open sandbox in the conversation card.')
+    await clicked
+    await assertRaised(label)
+  }
+  await open('Trusted Show click')
+  console.log('Minimize the sandbox, then activate the main fixture if needed.')
+  if (!await until(() => { const s = snapshot(); return s.minimized && s.mainForeground }, 120_000)) {
+    throw new Error('The sandbox was not minimized with the main fixture in the foreground')
+  }
+  await open('Trusted Show click from minimized')
+  console.log('Click the exposed main window to prepare the reset check.')
+  if (!await until(() => { const s = snapshot(); return s.mainForeground && s.main < s.sandbox }, 120_000)) {
+    throw new Error('The main fixture never covered the sandbox before reset')
+  }
+  const replacement = () => snapshot(sandboxPids().map(Number).filter(pid => !pids.includes(pid)))
+  await win.locator('[data-sandbox-card]').getByRole('button', { name: '重置数据' }).click()
+  await assertRaised('Card reset', replacement)
+  await win.evaluate(() => window.tangu.pluginSandbox.stop())
+  console.log('Activate the main fixture if needed to prepare the restart check.')
+  if (!await until(() => snapshot().mainForeground, 120_000)) throw new Error('The main fixture was not foreground before restart')
+  await win.locator('[data-sandbox-card]').getByRole('button', { name: '重新启动' }).click()
+  await assertRaised('Card restart', replacement)
+}
 const saveShot = (name, dataUrl) => { if (SHOT_DIR && dataUrl) { fs.mkdirSync(SHOT_DIR, { recursive: true }); fs.writeFileSync(path.join(SHOT_DIR, name), Buffer.from(dataUrl.split(',')[1], 'base64')) } }
 
 async function main() {
+  if (WINDOWS_FOREGROUND && (!WINDOWS || !process.env.STAGE_ELECTRON || process.env.FORSION_TEST_DESKTOP === 'left')) {
+    throw new Error('Foreground checks require Windows, an isolated STAGE_ELECTRON, and normal window placement')
+  }
   if (!fs.existsSync(path.join(ROOT, 'out/main/main.js'))) { console.error('缺 out/main/main.js —— 先跑 npm run build'); process.exit(1) }
   writePlugin(mainJs('SBX_MARK_ONE'))
   fs.mkdirSync(VAULT, { recursive: true })
@@ -131,9 +270,11 @@ async function main() {
       args: [`--user-data-dir=${UD}`, '--lang=zh-CN', ROOT],
       cwd: ROOT,
       ...(process.env.STAGE_ELECTRON ? { executablePath: process.env.STAGE_ELECTRON } : {}),
-      env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: stub.url, ELECTRON_DISABLE_SECURITY_WARNINGS: '1' },
+      env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: stub.url, ELECTRON_DISABLE_SECURITY_WARNINGS: '1',
+        ...(WINDOWS_FOREGROUND ? { TANGU_HARNESS_QUIET: '0' } : {}) },
       timeout: 45_000,
     })
+    executable = await app.evaluate(() => process.execPath)
     const win = await app.firstWindow()
     win.setDefaultTimeout(15_000)
     win.on('pageerror', (e) => errs.push(String((e && e.message) || e)))
@@ -167,7 +308,11 @@ async function main() {
       { type: '__hold' },
     ])
     const ta = win.locator('.t2c-ta').first()
-    await ta.click(); await ta.fill('try the plugin in the sandbox'); await win.keyboard.press('Enter')
+    await ta.click(); await ta.fill('try the plugin in the sandbox')
+    if (WINDOWS_FOREGROUND && !await win.evaluate(() => document.hasFocus())) {
+      throw new Error('The main fixture must be in the foreground before tool start')
+    }
+    await win.keyboard.press('Enter')
 
     const res = await until(() => results_[0], 75_000)
     const st = res && res.text ? JSON.parse(res.text) : null
@@ -180,6 +325,23 @@ async function main() {
     check('1c 外观跟着用户那份:沙箱首屏的主题色 = 用户这份的(coral)', !!st?.logs.some((l) => l.text === 'SBX_SKIN coral'), JSON.stringify(st?.logs?.filter((l) => l.text.startsWith('SBX_SKIN'))))
     saveShot('sandbox-window.jpg', res?.image)
     if (st) stub.finish('r1', [{ type: 'tool_result', payload: { id: 'ts1', name: 'plugin_sandbox', result: embedded(st), elapsedMs: 5000 } }, { type: 'done', payload: {} }])
+    if (WINDOWS_FOREGROUND) {
+      try {
+        if (results.some(r => !r.ok)) throw new Error('The sandbox fixture did not start cleanly')
+        await checkWindowsForeground(app, win)
+      } finally {
+        await win.evaluate(() => window.tangu.pluginSandbox.stop()).catch(() => {})
+        const fixtureProcess = app.process()
+        const exited = () => fixtureProcess.exitCode !== null || fixtureProcess.signalCode !== null
+        await app.evaluate(({ app }) => { setImmediate(() => app.exit(0)) }).catch(() => {})
+        if (!await until(exited, 5000)) {
+          fixtureProcess.kill()
+          if (!await until(exited, 5000)) throw new Error('The isolated main fixture did not exit')
+        }
+        app = null
+      }
+      return
+    }
 
     // ── 2 隔离 ──
     const cfg = JSON.parse(fs.readFileSync(path.join(SBX, 'userdata-dev', 'tangu-desktop-config.json'), 'utf8'))
@@ -236,6 +398,20 @@ async function main() {
     const outside = await act('files', { paths: [path.join(home, 'vault', 'mine.md')] })
     const miss = await act('click', { target: 'No such button anywhere' })
     check('12e 负对照:沙箱外的路径不收;点不存在的东西 → 报找不到,不乱点', /not usable/.test(outside.r.error || '') && /nothing visible says/.test(miss.r.error || ''), JSON.stringify({ outside: outside.r.error, miss: miss.r.error }))
+    if (process.platform === 'win32') {
+      const junction = path.join(PLUGIN, 'external-junction')
+      fs.symlinkSync(VAULT, junction, 'junction')
+      try {
+        const escaped = await act('files', { paths: [path.join(junction, 'mine.md')] })
+        check('12g Windows: a junction cannot bypass the sandbox boundary', /not usable/.test(escaped.r.error || ''))
+        const nextBook = path.join(PLUGIN, 'next-book.csv')
+        const namespaced = await act('files', { paths: [path.toNamespacedPath(nextBook)] })
+        const pickedAgain = await act('click', { target: 'Import file' })
+        check('12h Windows: the extended-length path can pick an in-sandbox file',
+          namespaced.r.ok && !namespaced.r.error && pickedAgain.a?.newLogs?.some((l) => l.text === 'PICKED next-book.csv'),
+          JSON.stringify({ armed: namespaced.r.error || namespaced.a?.did, picked: pickedAgain.r.error || pickedAgain.a?.newLogs }))
+      } finally { fs.unlinkSync(junction) }
+    }
 
     // 改 space.json(换个名字)= 换配方:旧的先注销、活动 Space 会被挪走,重载完要回到它上面(Codex 评审)
     const sj = path.join(PLUGIN, 'spaces', 'fixture-shelf', 'space.json')
@@ -312,6 +488,7 @@ async function main() {
     if (SHOT_DIR && railStopped) await win.locator(railSel).first().screenshot({ path: path.join(SHOT_DIR, 'sandbox-rail-stopped.png') })
     check('13b 停了以后右栏卡变成「已停止」+「重新启动」', railStopped, await win.locator(railSel).first().textContent().catch(() => 'no card'))
     await exec('start', { dir: PLUGIN })
+    check('8b 关主进程之前,实际找到沙箱子进程', sandboxPids().length > 0)
     await app.close(); app = null
     const orphan = await until(() => sandboxPids().length === 0, 15_000)
     check('8b 关掉用户那份 → 沙箱跟着退,不留孤儿', orphan, JSON.stringify(sandboxPids()))
@@ -319,11 +496,10 @@ async function main() {
     check('全程无渲染层异常', errs.length === 0, errs.slice(0, 3).join(' / '))
   } finally {
     if (app) await app.close().catch(() => {})
-    for (const pid of sandboxPids()) try { process.kill(Number(pid), 'SIGKILL') } catch { /* 已退 */ }
-    stub.close()
+    try { cleanSandboxProcesses() } finally { stub.close() }
   }
   const failed = results.filter((r) => !r.ok)
   console.log(`\n${results.length - failed.length}/${results.length} passed`)
   process.exit(failed.length ? 1 : 0)
 }
-main().catch((e) => { console.error(e); for (const pid of sandboxPids()) try { process.kill(Number(pid), 'SIGKILL') } catch { /* */ } process.exit(1) })
+main().then(() => process.exit(0), (e) => { console.error(e); process.exit(1) })

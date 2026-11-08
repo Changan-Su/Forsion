@@ -63,6 +63,63 @@ export function setOfflineContentOwner(memoryBase:string,identity:string,owned:b
   })
 }
 
+interface ContentSyncOwnershipHost {
+  accountId(): string | null
+  ensureBackend(): Promise<void>
+  backendStatus(): { state: string; url: string | null }
+  engineToken(): string
+  loadConfig(): Promise<{ mode: string }>
+  dataDir(): string
+  stopSync(): Promise<void> | undefined
+  restartSync(): Promise<void> | undefined
+}
+
+export function contentSyncOwnership(host: ContentSyncOwnershipHost) {
+  function assertAccount(identity: string | null): asserts identity is string {
+    if (!identity || host.accountId() !== identity) throw Error('account_changed')
+  }
+
+  function writeManagedOwner(url: string, owned: boolean, identity: string): Promise<Response> {
+    assertAccount(identity)
+    return fetch(url.replace(/\/+$/, '') + '/agent/sync/content-owner', {
+      method: 'PUT',
+      headers: { Authorization: `Bearer ${host.engineToken()}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: owned, expectedAccount: identity }),
+      signal: AbortSignal.timeout(15000),
+    })
+  }
+
+  return {
+    async claim(owned: boolean, identity = host.accountId()) {
+      assertAccount(identity)
+      await host.ensureBackend()
+      assertAccount(identity)
+      const status = host.backendStatus()
+      if (status.state !== 'ready' || !status.url) {
+        const config = await host.loadConfig()
+        assertAccount(identity)
+        if (config.mode !== 'external') throw Error('Local engine unavailable')
+        setOfflineContentOwner(host.dataDir(), identity, owned)
+      } else {
+        const response = await writeManagedOwner(status.url, owned, identity)
+        assertAccount(identity)
+        if (!response.ok) throw Error(`Content sync ownership failed (${response.status})`)
+      }
+      if (owned) await host.stopSync()
+      else await host.restartSync()
+      assertAccount(identity)
+    },
+    async changed(identity = host.accountId()) {
+      assertAccount(identity)
+      const status = host.backendStatus()
+      if (status.state !== 'ready' || !status.url) return
+      const response = await writeManagedOwner(status.url, true, identity)
+      assertAccount(identity)
+      if (!response.ok) throw Error('Content sync refresh failed')
+    },
+  }
+}
+
 /** Mirrors the engine's .memory.lock protocol, like the existing dbLock host
  * adapter. Keep filename, exclusive/no-follow flags and fail-on-busy semantics aligned. */
 function atomicWrite(abs:string,text:string):void{

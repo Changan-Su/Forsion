@@ -72,7 +72,8 @@
 /* ── C 任务概览「改动」卡 ── */
 .ct-seg { display: inline-flex; gap: 2px; padding: 2px; border-radius: var(--radius-pill); background: var(--overlay-light); font-size: var(--ui-font-caption); }
 .ct-seg button { padding: 1px 8px; border: 0; border-radius: var(--radius-pill); background: transparent; color: var(--text-muted); font: inherit; cursor: pointer; }
-.ct-seg button[aria-pressed="true"] { background: var(--bg-card); color: var(--text); box-shadow: 0 1px 2px rgba(0, 0, 0, .06); }
+/* 选中态 = 分段控件的凸起滑块(走查 5.11 A,与侧栏 / onboarding 分段同一套 token),阴影契约只认 --seg-thumb-shadow */
+.ct-seg button[aria-pressed="true"] { background: var(--seg-thumb); color: var(--text); box-shadow: var(--seg-thumb-shadow); }
 .ct-seg button:disabled { color: var(--text-faint); opacity: .6; cursor: default; }
 .ct-crow { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .ct-crow .t2-tsum-row-tx { flex: 1; min-width: 0; }

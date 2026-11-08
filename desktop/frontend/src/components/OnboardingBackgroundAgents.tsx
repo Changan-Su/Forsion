@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import { History, Loader2, RefreshCw, Sparkles } from 'lucide-react'
 import { useI18n } from '../i18n'
 import { getSpecialConfig, saveSpecialConfig } from '../services/backendService'
+import { museSettingTelemetry } from '../telemetrySend'
 import type { EngineTarget } from '../services/engine/targets'
 import type { SpecialConfigResponse } from '../types'
 import { useApp } from '../stores/appStore'
@@ -63,6 +64,7 @@ export function OnboardingBackgroundAgents({ resolveTarget, onBusyChange, onStat
     try {
       // Preserve model, rhythm, permissions, folders and all other existing preferences.
       const config = await saveSpecialConfig(target.current, { [agent]: { enabled } })
+      if (agent === 'muse') museSettingTelemetry({ enabled })
       if (request !== generation.current) return
       if (!config?.historian || !config.muse) throw new Error('special config incomplete')
       setResponse({ ...response, config })

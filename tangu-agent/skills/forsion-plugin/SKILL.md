@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.99.0
+  version: 1.102.0
   author: Forsion
   category: Forsion
 ---
@@ -28,7 +28,7 @@ metadata:
 
 Read the matching `references/` file before using an API listed below or following a section's reference:
 
-- [references/host-ui-mounts.md](references/host-ui-mounts.md): 可复用 UI 组件：ctx.ui.mountChatBox; 原生 Markdown 编辑器 ctx.ui.mountMarkdownEditor(`vault: true` 接当前库双链); 只读 Markdown ctx.ui.mountMarkdown; 原生悬浮目录 ctx.ui.mountFloatingToc; View modes: ctx.ui.setViewModes; Tooltips and motion tokens: ctx.ui.attachTooltip; Selection bar: ctx.ui.mountSelectionBar and registerSelectionAction scopes; Host parts (dialogs, toolbar controls, menus, popovers, empty states, icons, view head, i18n, bare elements, failed mount card): ctx.ui.confirm / openDialog / mountControl / contextMenu / popover / mountEmptyState / mountWebCard / icon / setViewHead / mount, ctx.addStyle, ctx.i18n.define; Settings parts: ctx.ui.mountSettingsPage / mountSettingsItem; 白板层 ctx.ui.mountBoard / ctx.ui.boardToSvg; 仪表盘 ctx.dashboard; 原生多维表 ctx.table.mount
+- [references/host-ui-mounts.md](references/host-ui-mounts.md): 可复用 UI 组件：ctx.ui.mountChatBox; 原生 Markdown 编辑器 ctx.ui.mountMarkdownEditor(`vault: true` 接当前库双链); 只读 Markdown ctx.ui.mountMarkdown; 原生悬浮目录 ctx.ui.mountFloatingToc; View modes: ctx.ui.setViewModes; Tooltips and motion tokens: ctx.ui.attachTooltip; Selection bar: ctx.ui.mountSelectionBar and registerSelectionAction scopes; Tool island: ctx.ui.mountToolIsland; Floats: ctx.ui.float; Host parts (dialogs, toolbar controls, menus, popovers, empty states, icons, view head, i18n, bare elements, failed mount card): ctx.ui.confirm / openDialog / mountControl / contextMenu / popover / mountEmptyState / mountWebCard / icon / setViewHead / mount, ctx.addStyle, ctx.i18n.define; Settings parts: ctx.ui.mountSettingsPage / mountSettingsItem; 白板层 ctx.ui.mountBoard / ctx.ui.boardToSvg; 仪表盘 ctx.dashboard; 原生多维表 ctx.table.mount
 - [references/tangu-host-apis.md](references/tangu-host-apis.md): 当前模型与当前 Space:ctx.tangu; Agent 状态:agentStatus / subscribeAgentStatus; Agent 名册:agents; 开新对话:startChat; 把对话挂进自己的视图:mountChat; 新对话输入区:mountComposer; 正文 AI:ctx.tangu.complete 与 registerSelectionAction; 翻译:ctx.tangu.translate; 行内补全:ctx.tangu.fim; Agent Desk 伴随面:ctx.desk; 摘要栏插件卡:ctx.summary; 自动化规则播种:ctx.automation; agent 自建 Space 的数据:section `ctx.agent`
 - [references/plugin-skill-providers.md](references/plugin-skill-providers.md): engine `ctx.registerSkillProvider` for live external skills.
 - [references/plugin-model-providers.md](references/plugin-model-providers.md): engine `ctx.registerModelProvider` for native single-inference sources.
@@ -343,7 +343,7 @@ Your Space renders your own status, TODOs, schedule and Library from `ctx.agent`
 | `registerSelectionAction` | 选中文字后浮出的那一条(划线条)里「⋯ → 插件」 | `run(cx)` 返回要给人看的 markdown,**只进宿主的结果卡**:笔记里用户点「替换 / 插入下方」才写,别处只读;`scope` 决定出现在哪些视图(缺省只在笔记),见下「Selection bar」。桌面 2.13.3 及更早在「AI ▾ → 插件」、只有笔记里有 |
 | `registerView` | 独立标签页(`ctx.openView(id)` 打开) | `title` 2026-10-26 起收 PluginText;**DOM 挂载**(`mount(el, view?)` 返 disposer;可以是 async —— resolve 出的就是 disposer,reject 算挂载失败;`view.extendView` 可开临时扩展),外置插件的主力;加 `rightCompanions` 声明它到前台时右栏要的那组(见「右栏:主视图规则」);`workspaceSource` 只对没写 `mode` 的老配方的左栏生效。**样式不隔离**:选择器挂自家根类名,配色只用 `var(--bg)` / `--bg-card` / `--text` / `--text-muted` / `--border` / `--accent`(自造的变量名宿主没有,会落到你写死的兜底色) |
 | `openFloatingPanel` | 第六种 Floating Panel | 先注册 view，再按相对 id 打开；桌面是真原生窗口，Web 是不可拖动居中面板；可选链兼容旧宿主 |
-| `openMiniPanel` | Mini Panel（默认 320×420，用户可改大小） | 不建 Space 也能直开紧凑 view；用 `mainViewId` 声明回主面板的目标；仅原生桌面宿主提供 |
+| `openMiniPanel` | Mini Panel（默认 320×420，用户可改大小；2.13.8 起可多开） | 不建 Space 也能直开紧凑 view；用 `mainViewId` 声明回主面板的目标；同一 `viewId` + `key` 复用一扇，不同 `key` 各开一扇（见 references/mini-panel.md「多开」）；仅原生桌面宿主提供 |
 | `registerListSource` | **统一左栏**里的一条列表(收藏/任务/订阅…) | 宿主渲染,与会话/笔记行同一套 UI;⚠️`subscribe()` 里**必须重读一次数据**,见下。`title` / 动作 `label` 2026-10-26 起收 PluginText(`() => t('…')` 或 `{ zh, en }`,切语言即变;字符串在注册那一刻定格);`empty: { icon, title, line?, action? }` 让侧栏在你的 Space 里不写「暂无内容」、手机整屏列表画这份空态 |
 | `registerFileType` | 自定义 `.x.md` 文件类型;`override: true` 可接管内置的 `.pdf` | 撞内置后缀返回 **`false`** → 整体退让(判定写 `=== false`) |
 | `registerFileCreator` | 文件树右键 + 新建标签页启动器 | 与文件类型配套;**四条新建路径都要注册**,少一条用户就会问「为什么这儿没有」 |
@@ -358,6 +358,7 @@ Your Space renders your own status, TODOs, schedule and Library from `ctx.agent`
 | `ctx.ui.dropIndicator(opts?)` | 自己视图里拖动排序 / 拖进去时的落点线、「放进去」描边,和宿主编辑器 / 侧栏 / 标签条同一个 | 2026-10-24 起;句柄 `{ line, zone, hide, dispose }`,传视口坐标(`line({x,y,w})` 横线 y=上沿、`{axis:'v'}` 竖线、`zone({x,y,w,h})` 描边);换落点原地淡出淡入、颜色 `--signal-line`;给 `key`(行 id)滚动才不算换落点;dragleave / drop 时 `hide()`,禁用时宿主统一收;老宿主没有 → 可选链,照旧自己画。2026-10-25 起句柄多一个 `land?(行或找它的函数, 松手处)`:挪完之后被拖的那一行从松手处滑进新位置(160ms,减少动态效果下直接到位),邻居不让位。见下「Drop indicators」 |
 | `ctx.ui.mountSelectionBar` | 自己的视图里选中文字后浮出宿主的划线条 | 宿主给「问 Tangu / 翻译 / ⋯」,你声明自己的工具(图标钮 / 颜色点);不接就什么都不出;老宿主没有 → 可选链,保留自己的菜单 |
 | `ctx.ui.mountToolIsland` | 「拿着工具干活」的视图(PDF 批注一类)换工具的那颗胶囊 | 2026-11-04 起;顶部居中、`root` 窄于 520px 停底部,宿主管位置 / 皮 / 滑过去的选中底块;**选中受控**(`onPick` 里自己 `setActive`),`key` 只画字母不绑键;句柄的 `row` 是岛下那一排、归插件画,`slots` 放四角;老宿主没有 → 可选链,保留自己的那条(见 references「Tool island」) |
+| `ctx.ui.float(opts)` | 浮起来的一块:传输进度卡、导出完成的小条、录音计时胶囊这类 | 2026-11-07 起;`scope` 说浮在谁之上(`view` 自己的视图里 / `space` 整个 Space、切走就藏 / `window` 整个窗口),`anchor` 四角 + 上下居中,`role` `panel` 停在角上、`notice` 同角叠放并读屏;宿主管位置、层级、入场退场、拖动吸附(`data-float-drag` 把手,给 `id` 记住角);**别再自己写 fixed + z-index**;老宿主没有 → 可选链,保留自己画的(见 references「Floats」) |
 | `ctx.ui.mountSettingsPage` / `ctx.ui.mountSettingsItem` | 设置类页面(账号、额度、诊断、偏好…)用宿主的设置零件画 | 只给 groups / items 数据和回调,宿主按端排版(手机上紧凑控件留右、宽控件换行、选了就执行 → 半屏);**别再抄宿主的设置 CSS**;老宿主没有 → 可选链,保留自己画的那套 |
 | `ctx.ui.mountRecord` | 自己的卡片里挂宿主的「一行记录」编辑字段(标题 / 时间 / 属性,和内置日历的事件浮卡同一份) | 2026-10-17 起;⚠️**声明 `"databases"` 才有**;写口同 `ctx.databases.setCell`,外框 / 关闭 / 打开 / 删除归你;见下「日历 / 待办类插件的其余入口」 |
 | `ctx.ui.haptic?.('tick')` | 移动端一次已接受操作的轻触反馈 | 2.13.7+；只有原生触感设备才存在，遵循系统设置。只在用户动作写入被接受后调用一次，撤销／同步不调用；不要拿浏览器震动模拟原生反馈 |
@@ -531,6 +532,7 @@ ctx.registerCommand({
 | `ctx.tangu` | 当前模型 / 模型目录 / 当前 Space / 会话用量 / **agent 此刻在干什么**(只读)+ `agents()` 用户的 Agent 名册 + `startChat` 用指定 Agent 开一个可见的新对话 + `mountChat` 把原生对话挂进自己的视图(2026-10-04 起)+ `mountComposer` 把「新对话」输入区整块挂进来、发送归宿主(2026-10-18 起)+ `complete` 一次性文本补全(2026-09-28 起) | ⚠️**非 Tangu 宿主上整个不存在** → 一律 `ctx.tangu?.`;`agentStatus` / `subscribeAgentStatus` / `startChat` 是 2026-09-19 起、`agents` 是 2026-09-20 起的可选方法 → `ctx.tangu?.startChat?.(…)`;见下「当前模型」「Agent 状态」「Agent 名册」「开新对话」 |
 | `ctx.desk` | Tangu 聊天右侧 **Agent Desk** 里挂一块自绘区(`registerCompanion`,典型:跟着 agent 状态做反应的 3D 形象) | 2026-09-19 起;⚠️**只在桌面 Tangu 上存在**(web / 移动端 / 纯 Amadeus 壳整个没有)→ `ctx.desk?.`;两种模式 `idle` / `always`,见下「Agent Desk 伴随面」 |
 | `ctx.summary` | Tangu 聊天右侧**摘要栏**加一张卡(`registerCard`,和进度 / 后台 / 产物 / Agent Desk 同一个栈,用户可折叠、拖动排序) | 2026-10-25 起;⚠️**只在桌面 Tangu 上存在**(同 `ctx.desk`)→ `ctx.summary?.`;见下「摘要栏插件卡」 |
+| `ctx.widgets` | 主页小组件的数据(`provide(id, fn)` 喂行 / `invalidate(id?)` 请宿主重拿);卡声明在 manifest `widgets`,宿主画,只读 | 2026-11-07 起;**所有插件可用**,不用声明能力 → `ctx.widgets?.`;见下「主页小组件」 |
 | `ctx.automation` | 播种多维表自动化规则(`ensure(rules)`);给「当…」加插件自己的事件(`registerTrigger` / `emit`,2026-10-30 起) | 2026-09-02 起;⚠️**非 Tangu 宿主上整个不存在** → `void ctx.automation?.ensure(…)`;id 宿主加 `plugin:<id>:` 前缀;见下「自动化」 |
 | `ctx.calendar` | 把插件种的表登记进 Calendar Space(`ensureMember`,人人有)+ 叠加源与日历设置(`subscribe` / `setColor` / `setHidden` / `setDefault` / `setMember` / `removeMember`)+ .ics 订阅管理(`ics.add` / `importText` / `rename` / `remove` / `refresh`) | `ensureMember` 2026-09-02 起;其余 2026-10-17 起,⚠️**声明 `"calendar"` 才有**(没声明时这几个成员不存在,不是空壳)→ `ctx.calendar?.subscribe`;见下「日历叠加源与设置」 |
 | `ctx.spaces` | Space 列表 / 打开 / 图标 / 近况那一行 + 商店、成就两格 + Ribbon 上区的收纳架(顺序、收纳夹) | 2026-10-18 起;⚠️**声明 `"spaces"` 才存在**(收纳架改的是用户的 Ribbon);见下「Space 与 Ribbon 收纳架」 |
@@ -538,6 +540,7 @@ ctx.registerCommand({
 | `ctx.noteTasks` | 笔记正文里的 `@` 时间任务(`subscribe`)+ 就地勾选 / 改日期(`update`) | 2026-10-16 起;⚠️**声明 `"noteTasks"` 才存在**;同上节 |
 | manifest `events[]` | 自动化(Automation)可订阅的事件 | 纯声明无代码;⚠️目前只有中文 `label`,英文界面下也显示中文 |
 | manifest `onboarding` | 有 `requires` = **闸**(宿主实测,未满足才弹检查卡);没有 = 详情页里折叠的使用说明 | 见下「前置条件:onboarding.requires」;**别 recommends 自家已内嵌的 agent/skill**(会引导去商店重复装);⚠ `recommends` 只在闸的检查卡里渲染,没有 `requires` 就一个字都不显示 |
+| manifest `widgets` | 主页小组件:每张一个目录(`manifest.json`,`layout: "list"`),用户在主页「编辑主页 → 添加组件」的「插件」组里放 | 2026-11-07 起;这一版只开列表型、只读;数据走 `ctx.widgets.provide`;见下「主页小组件」 |
 | manifest `guide` | 上手提示:用户用到某个功能时宿主替你提示一次,用过就不再出 | 2026-11-02 起;不是闸;锚点只认你自己 View 里的 `data-guide-anchor`;「会了」读 `ctx.achievements.track()` 的计数;新功能配**新 id** 的提示,老用户升级后会碰到;见下「上手提示」 |
 
 `ctx.app` 上另有三组:**整库文件读写**、**只读全库查询**、**块表面** —— 各占下面一节。
@@ -601,6 +604,7 @@ createPage / listPages / listFiles / searchVault / reveal / trash`)都要求一�
 - dispose 再挂 = 一份全新的实例(输入焦点、排序筛选这些状态不带过来)。只是换数据 / 换参数就用句柄的 `update()`。
 - 一个 `el` 同一时刻只有一份宿主界面:上一份没 dispose 就在同一个 `el` 上再挂,宿主先把上一份完整收掉(等同于你 dispose 了它,句柄此后不再生效),再挂新的;谁后调用谁留下,不看谁先加载完。要并排放两份,就各给一个子节点。
   `mountFloatingToc` / `mountToolIsland` 例外:它们是叠在 `shell` / `root` 上的一层,不占用它,不收掉它上面别的挂载,也不被它们收掉。
+  `ctx.ui.float` 不挂在你的元素上:它自己建一块浮层、内容放进句柄的 `el`;`close()` 收掉,停用 / 重载时宿主统一收。
 - 别用 `el > .x` 去选宿主渲染的节点,也别假设它是 `el.firstElementChild` —— 中间隔着那一层。
 - 2.12.2 及更早的宿主没有这条保证:dispose 之后那一拍里清空 `el`,宿主的卸载会报一条页面错误,或者再挂之后一片空白。
   要兼容它们,就把宿主内容挂进你自己建的子节点(`const slot = el.appendChild(document.createElement('div'))`),换内容时连子节点一起换掉。
@@ -617,6 +621,7 @@ The full contracts, examples and old-host fallbacks for these mounts live in [re
 - Drop indicators: ctx.ui.dropIndicator (2026-10-24+)
 - Selection bar: ctx.ui.mountSelectionBar and registerSelectionAction scopes (2026-10-13+)
 - Tool island: ctx.ui.mountToolIsland (2026-11-04+)
+- Floats: ctx.ui.float (2026-11-07+)
 - Host parts: dialogs, toolbar controls, menus, popovers, empty states, icons, view head, i18n (2026-10-26+)
 - Settings parts: ctx.ui.mountSettingsPage / mountSettingsItem (2026-10-17+)
 - 白板层 ctx.ui.mountBoard / ctx.ui.boardToSvg(2026-10-10 起)
@@ -867,6 +872,36 @@ ctx.registerToolResultRenderer?.({
 - 能靠界面自己说清的不发提示(「+ 子任务 Tab」那一行、输入框占位里的「支持明天下午3点」)。只给看不见的手势、快捷写法、跨两个 View 的操作发。
 - 自测:命令面板「重置上手提示」+ `ctx.guide.show(id)`;不出时先查元素带没带 `data-guide-anchor`、是不是在你自己的 View 里。台架范本:Genesis `desktop/scripts/guide-tips.check.cjs`。
 - 旧宿主不认 `guide`,什么都不出;`ctx.guide?.`。
+
+### 主页小组件:manifest `widgets` + `ctx.widgets`(2026-11-07 起)
+
+主页左右栏 / 下排能放插件的卡。卡长什么样声明在 manifest(宿主画,和内置「收件箱」「最近笔记」同一套行样式),数据由插件喂;**只读**,点卡头 / 点行打开声明的 Space。不开 DOM 挂载。
+
+```json
+// manifest.json
+"widgets": ["widgets/today", "widgets/todo"]
+// widgets/today/manifest.json(和 Agent 做的小组件同一种目录)
+{ "schemaVersion": 1, "id": "today", "title": "今天", "titleEn": "Today", "summary": "…", "summaryEn": "…", "layout": "list", "icon": "date", "space": "calendar" }
+```
+
+- `id` `^[a-z0-9][a-z0-9-]{0,47}$`,插件内唯一;主页摆放里存 `plugin:<插件 id>/<id>`(摆放只在本机)。`title` 必填,`titleEn` 英文界面用。`layout` 这一版只认 `"list"`(别的整张丢)。
+- `icon` = 插件图标词表里的名字(同 `registerView` 的 `icon`:`date` / `todo` / `cloud` …),没写用插件 icon.png。`space` = 点了打开的 Space id,不写不跳。目录只认插件根里的相对路径,最多 8 张,坏的那张单独丢。
+- 停用 → 卡上留「已停用」占位 + 启用按钮;卸载 / 旧版没声明这张 → 不画、不占位(摆放留着)。
+
+```js
+ctx.widgets?.provide('today', async (_params, { signal }) => ({
+  rows: [{ id, title, time, meta, tone: 'accent' | 'warn' | 'muted', done, now, group }],
+  footer, empty,
+}))
+ctx.widgets?.invalidate('today') // 不给 id = 你的全部卡
+```
+
+- 返回行的数组或 `{ rows, footer?, empty? }`;每行 `title` 必填,`time` 左列,`meta` 右边小字(`tone` 上色),有 `done` 字段就画勾选框(只读,`true` 划线),`now` 实心点,`group` 变了画小标题。最多 50 行;文字按 `ctx.getLocale()` 给好(宿主切语言会重拿)。
+- 宿主什么时候来要:卡挂上、你 `invalidate`、窗口回前台(距上次 ≥30 秒)。同一张同一时刻一次,新的一次 abort 旧的 `signal`;**10 秒没回 / 抛错 = 卡上写「暂时读不到」,不当成空**(数据还没准备好就抛,别回空数组)。
+- `provide` 的 `id` 必须是 manifest 里声明过的,否则忽略并在控制台警告。停用 / 重载宿主统一撤。
+- 卡不在主页上宿主就不来要 → **别在外面常驻轮询**;要按时间变的文字(「还有 1 小时」)就在被要过之后自己定时 `invalidate`,几分钟没被要就停(范本:Forsion-Calendar `src/widgets.ts`)。
+- 台架范本:Genesis `desktop/scripts/home-widgets.check.cjs`(临时家目录装好插件 → 主页右栏、收纳面板、窄窗图标条)。
+- 旧宿主不认 `widgets`、没有 `ctx.widgets`:一律 `?.`,不用抬 `minAppVersion`。
 
 ## Tangu host APIs: read references/tangu-host-apis.md
 

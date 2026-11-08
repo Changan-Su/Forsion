@@ -8,6 +8,7 @@ import { addCommand, effectiveHotkey, eventToHotkey, useShortcuts, UI_ZOOM_EVENT
 import { useApp } from './stores/appStore'
 import { broadcastPrefs } from './uiPrefsBus'
 import { UI_ZOOM_KEY as KEY } from './types'
+import { settingTelemetry } from './telemetrySend'
 
 // 2.10.0 默认缩放回归:升级/重装可能保留旧 WebStorage,按发布批次只清一次历史值。
 const DEFAULT_MIGRATION_KEY = 'forsion_ui_zoom_default_2_10_0'
@@ -112,8 +113,19 @@ function hideZoomHud(): void {
   hud.inert = true // 透明后别让 Tab 摸到隐形的「重置」
 }
 
+/** 匿名遥测 setting_change(ui.scale,按 0.1 分档):连按 ⌘± 是一次调整,停手 2 秒后报最终值;调回原值就不报。 */
+let zoomBurst: { from: number; timer: ReturnType<typeof setTimeout> } | null = null
+function reportZoom(from: number, to: number): void {
+  try {
+    if (zoomBurst) clearTimeout(zoomBurst.timer)
+    const start = zoomBurst?.from ?? from
+    zoomBurst = { from: start, timer: setTimeout(() => { zoomBurst = null; if (Math.abs(to - start) > 0.001) settingTelemetry('ui.scale', to) }, 2000) }
+  } catch { /* 遥测不影响缩放 */ }
+}
+
 export function setUiZoom(v: number): void {
   const clamped = Math.round(Math.min(MAX, Math.max(MIN, v)) * 100) / 100
+  reportZoom(getUiZoom(), clamped)
   try {
     localStorage.setItem(KEY, String(clamped))
   } catch {
@@ -129,6 +141,7 @@ export function bumpUiZoom(delta: number): void {
 }
 
 export function resetUiZoom(): void {
+  reportZoom(getUiZoom(), endpointDefault)
   try {
     localStorage.removeItem(KEY)
   } catch {

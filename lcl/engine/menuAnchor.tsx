@@ -382,8 +382,9 @@ export function OverlayAt({
 
 /** DOM-owned popovers share the same exit CSS as OverlayAt. Cleanup runs on the
  * live surface immediately; only an inert visual copy survives until it fades. */
-export function removeOverlayWithExit(el: HTMLElement): void {
-  if (!el.isConnected) { el.remove(); return }
+/** 返回的 promise 在替身摘掉之后 resolve(调用方要在那之后收拾空容器;不关心就忽略它)。 */
+export function removeOverlayWithExit(el: HTMLElement): Promise<void> {
+  if (!el.isConnected) { el.remove(); return Promise.resolve() }
   const ghost = el.cloneNode(true) as HTMLElement
   const inputs = el.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('input, textarea')
   ghost.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('input, textarea').forEach((g, i) => { g.value = inputs[i]?.value ?? g.value })
@@ -395,6 +396,6 @@ export function removeOverlayWithExit(el: HTMLElement): void {
   ghost.style.pointerEvents = 'none'
   el.replaceWith(ghost)
   const animations = ghost.getAnimations?.() ?? []
-  if (!animations.length) ghost.remove()
-  else void Promise.allSettled(animations.map((a) => a.finished)).then(() => ghost.remove())
+  if (!animations.length) { ghost.remove(); return Promise.resolve() }
+  return Promise.allSettled(animations.map((a) => a.finished)).then(() => ghost.remove())
 }

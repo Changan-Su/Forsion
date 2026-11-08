@@ -1,7 +1,10 @@
 import { applyMcpSnapshot, mergeMcpImport, parseMcpInput } from '../shared/mcpConfig'
 import { assertMarketplaceRequirements } from '../shared/marketplace'
-import { mergeSyncContent,withContentWriteLock,setOfflineContentOwner,agentContentHooks } from './contentSyncHost'
+import { mergeSyncContent,withContentWriteLock,contentSyncOwnership,agentContentHooks } from './contentSyncHost'
 import { asrBackendFor } from './asrSelection'
+import { qwenVoiceInputUrl, registerVoiceInputStream } from './voiceInputStream'
+import { voiceInputCloudUrl } from '../shared/voiceInputStream'
+import { registerDictation } from './dictation'
 import { installAmbientPalette } from './ambientPalette'
 import { unitConfigFace } from './unitConfigFace'
 import { registerStartupAppearance } from './startupAppearance'
@@ -17,7 +20,7 @@ import { protectWindowsAudioClock } from './windowsAudioClock'
 import { startMiniAutoPanel } from './miniAutoPanel'
 import { createPluginSandbox, sandboxRequiredPlugins, type PluginSandboxUiSeed } from './pluginSandbox'
 import { sandboxSelf, startSandboxChild, sandboxForward, SANDBOX_SWITCHES } from './sandboxChild'
-import { normalizeMiniOpenOptions, normalizeMiniSessionContext, type MiniSessionContext, type MiniOpenOptions, type MainPanelTarget } from '../shared/miniPanel'
+import { MINI_WINDOW_LIMIT, VOICE_CALL_VIEW, miniEntityKey, normalizeMiniOpenOptions, normalizeMiniSessionContext, type MiniSessionContext, type MiniOpenOptions, type MiniOpenResult, type MainPanelTarget } from '../shared/miniPanel'
 import { normalizeFloatingPanelOpenOptions, normalizeMainAction, type FloatingPanelOpenOptions } from '../shared/floatingPanel'
 import { normalizeUiAppearance, normalizeUiSync, UI_APPEARANCE_CHANNEL, UI_LOCALE_CHANNEL } from '../shared/uiSync'
 /**
@@ -31,7 +34,7 @@ import { pathToFileURL } from 'url'
 import { readFile, writeFile, mkdir, readdir, stat, lstat, rename, cp, rm } from 'fs/promises'
 import { writeHostTextFile } from './hostTextWrite'
 import { clearRecoveryNotice, createSerialQueue, lockedUpdateJson, readJsonRecovering, readRecoveryNotice, writePrivateJson } from './configWrite'
-import { existsSync, mkdirSync, realpathSync, writeFileSync, renameSync, rmSync, watch as fsWatch } from 'fs'
+import { appendFileSync, existsSync, mkdirSync, realpathSync, writeFileSync, renameSync, rmSync, watch as fsWatch } from 'fs'
 import { ensureCliInstalled } from './cliInstall'
 import { PRODUCT } from './product'
 import { readSpaceIconDataUrl } from './spaceIcon'
@@ -55,7 +58,8 @@ import { loadTanguCreds, saveTanguCreds, assertTanguCredsWritable, forsionAccoun
 import { createAccountCore } from './accountCore'
 import { importMcp, scanAll } from './discovery'
 import { localProvidersFor, scanLocalProviders, type LocalProviderCandidate } from './discovery/providers'
-import { checkForUpdates, downloadUpdate, installUpdate, canInstallUpdate, betaChannelOn, getUpdaterStatus, updateSourcePref, detectMainland, switchUpdateSource, openUpdateInstaller, channelChanged } from './updater'
+import { checkForUpdates, downloadUpdate, installUpdate, canInstallUpdate, betaChannelOn, getUpdaterStatus, updateSourcePref, detectMainland, switchUpdateSource, openUpdateInstaller, onUpdaterPhase, channelChanged } from './updater'
+import type { CorePluginUpdate } from '../shared/corePlugins'
 import { parseSourcePref } from '../shared/updateSource'
 import { fetchWebsiteReleases } from './websiteReleases'
 import { createRestartGuard, readRestartActivity } from './restartGuard'
@@ -81,7 +85,7 @@ import { checkBuiltinUpdates, NPM_OFFICIAL, registryOrder } from './builtinUpdat
 import { checkEngineUpdate, setupEngineOverlay, ENGINE_PACKAGE, ENGINE_UPDATE_ID, type EngineOverlayHandle } from './engineUpdates'
 import { createCoreTangu } from './coreTangu'
 import { loadBuiltinDesktopEntries, type CloudHost } from './cloudHost'
-import { createStartupTracker, createTelemetryHost, crashFromError, engineExitProps, processGoneProps, telemetryPackaged } from './telemetryHost'
+import { appUpdateProps, coreUpdateProps, createStartupTracker, createTelemetryHost, crashFromError, engineExitProps, processGoneProps, storeUpdateTelemetry, telemetryPackaged, updateProps } from './telemetryHost'
 import { npmDownloadCandidates, npmTarballToZip, type NpmInstallSnapshot } from './npmMarketInstall'
 import { extractZipToDir, checkMarketPackage, detectMarketType, MARKET_SUBDIR, MARKET_MANIFEST, isSafeSlug, readInstalledVersion, readInstalledPluginId, readUserPluginDirs, marketItemDir, downloadCandidates, downloadZip, GZIP_MAGIC, ZIP_MAGIC, type DownloadProgress } from './marketInstall'
 import { servePathRoot, serveInlineHtml, stopCodePreview, setForsionPreviewHooks, transpileForServe, MIME } from './codePreview'
@@ -93,7 +97,7 @@ import { computerUseLiveView, helperSocketPath, askHelper, ensureHelperRunning, 
 import { createAppRefs } from './appRefs'
 import { createAppRefHotkey, frontToAppRef, hotkeyToAccelerator, HOTKEY_GESTURES } from './appRefHotkey'
 import { normalizeAppRef, type AppRef } from '../shared/appRefs'
-import { winAppIdOf } from './appRefsWin'
+import { focusWinWindowFromOwner, winAppIdOf, type WinRunOpts } from './appRefsWin'
 import { appIconDataUrls } from './appIcons'
 import { chooseSide, makeRoom, panelRectFor, startDockFollow, DOCK_PANEL_WIDTH, DOCK_PANEL_MIN_WIDTH, DOCK_PANEL_MIN_HEIGHT, normalizeProbe } from './appDock'
 import { normalizeDockCandidates, normalizeDockSelection, normalizeDockWindow, type DockState, type DockWindow } from '../shared/appDock'
@@ -130,7 +134,7 @@ import { BROWSER_PARTITION, GUEST_ALLOWED_PERMISSIONS } from '../shared/browser'
 import { registerPtyIpc } from './pty'
 import { registerAssetSchemes as registerAmadeusAssetSchemes, registerAssetProtocol as registerAmadeusAssetProtocol } from './amadeus/assetProtocol'
 import { registerIuiLibProtocol } from './iuiLibProtocol'
-import { nearestEdge, collapsedBounds, expandedBounds, visibleRect, pointInRect, growRect, resizeFromEdge, type Rect, type Edge } from './windowGeometry'
+import { nearestEdge, collapsedBounds, expandedBounds, visibleRect, pointInRect, growRect, resizeFromEdge, stackPosition, mostlyOnScreen, rectsOverlap, type Rect, type Edge } from './windowGeometry'
 import { applyWindowMaterial, parseWindowMaterialRequest } from './windowMaterial'
 import { tabTitleBarOptions, parseTabTitleBar, watchTabTitleBar } from './tabTitleBar'
 import { createMiniDockMotion, miniDockFrame } from './miniDockMotion'
@@ -1642,6 +1646,8 @@ const telemetry = createTelemetryHost({
   channel: () => { refreshTelemetryChannel(); return (telemetryBeta ?? app.getVersion().includes('-')) ? 'beta' : 'stable' },
   coreVersion: () => (PRODUCT.agentBackend ? backend.engineVersion() ?? backend.engineOverlayVersion() : null),
   log: (m) => console.warn(m),
+  // 台架旁路:FORSION_TELEMETRY_TRACE=<文件> 时把交给 Extend 的每条事件(已过白名单整形)追加成一行 JSON(e2e:telemetry 用)
+  ...(process.env.FORSION_TELEMETRY_TRACE ? { tap: (ev) => appendFileSync(process.env.FORSION_TELEMETRY_TRACE!, `${JSON.stringify(ev)}\n`) } : {}),
 })
 refreshTelemetryChannel()
 const uptimeS = (): number => Math.round(process.uptime())
@@ -2114,7 +2120,6 @@ function openFloatingPanel(raw: unknown): { id: string } | undefined {
 let pendingMainPanelTarget: MainPanelTarget | null = null
 let mainPanelReady = false
 
-let miniWindow: BrowserWindow | null = null
 let miniSession: MiniSessionContext = { sessionId: null, runId: null }
 let miniAutoPanel: ReturnType<typeof startMiniAutoPanel> | null = null
 /** 电脑历史控制器(只在带 agent 后端的形态建;见 electron/computerHistory.ts)。 */
@@ -2172,38 +2177,84 @@ let appRefHelperAsked = false
 let appRefHelperOutdated = false
 let pendingAppRefHotkey: { ref: AppRef; at: number } | null = null
 let autoMiniReturnTo: BrowserWindow | null = null
-let stopMiniPassThrough: (() => void) | null = null
-/** Mini 尚在载入时也保留最后一次定向,`did-finish-load` 后补发,避免快速连续打开丢第二个目标。 */
-let miniTarget: MiniOpenOptions | undefined
 /** 贴边吸附态:edge=贴哪条边,expanded=当前是否展开。null=未贴边(自由浮动)。 */
 type MiniDockState = { edge: Edge; expanded: boolean; displayId: number; workArea: Rect }
-let miniDock: MiniDockState | null = null
-let miniDockMotion: ReturnType<typeof createMiniDockMotion> | null = null
-let suppressMiniMoved = false // 抑制程序化 setBounds 触发的 moved(否则折叠/展开自激)
-let miniDragging = false // 用户正在拖窗(moved 连发中);其间不吸附/不轮询,避免和拖拽对打(修「拖不出来」)
-let miniSettleTimer: NodeJS.Timeout | null = null
-let miniMovedTimer: NodeJS.Timeout | null = null
-let miniPollTimer: NodeJS.Timeout | null = null
+
+/** 一扇手开的 Mini(LCL 表面规范第二期 · Mini 多开)。原来这些全是模块级单例(只有一扇);现在每扇各一份,互不干扰。
+ *  自动 Mini(Computer Use 观察窗)和 App Dock 面板不在这里,各自仍是一扇。 */
+interface MiniEntry {
+  id: string
+  win: BrowserWindow
+  /** 实体键(shared/miniPanel 的 miniEntityKey):同一个再开 = 叫出这扇。窗里换了 Space / 会话,渲染层报上来改写(window:miniEntity)。 */
+  key: string
+  /** 尚在载入时也保留最后一次定向,`did-finish-load` 后补发,避免快速连续打开丢第二个目标。 */
+  target: MiniOpenOptions | undefined
+  /** 目标的代号:每发一次新目标 +1,随目标发给渲染层;渲染层报实体时带回它应用过的代号,旧代号的报告不认(防它覆盖刚发出的目标)。 */
+  gen: number
+  dock: MiniDockState | null
+  dockMotion: ReturnType<typeof createMiniDockMotion> | null
+  suppressMoved: boolean // 抑制程序化 setBounds 触发的 moved(否则折叠/展开自激)
+  dragging: boolean // 用户正在拖窗(moved 连发中);其间不吸附/不轮询,避免和拖拽对打(修「拖不出来」)
+  settleTimer: NodeJS.Timeout | null
+  movedTimer: NodeJS.Timeout | null
+  pollTimer: NodeJS.Timeout | null
+  /** 正在拖缩放边:起手时的窗口与光标;null = 没在拖。 */
+  resizeFrom: { bounds: Rect; cursor: Electron.Point; radius: number } | null
+  resizeDock: MiniDockState | null
+  resizeMaskActive: boolean
+  resizeUpdates: ReturnType<typeof createMiniResizeQueue>
+  stopPassThrough: (() => void) | null
+}
+const minis = new Map<string, MiniEntry>()
+/** 最近用过的在前(获焦 / 叫到前面都算):⌘⇧M 开合的是第一扇。 */
+let miniOrder: string[] = []
+let miniSeq = 0
+/** 位置和大小按实体键各记各的。只记在本次运行里(同原来的 miniSize);ponytail: 要跨重启记住时照 detached-windows.json 落盘。 */
+const miniLayouts = new Map<string, Rect>()
+const MINI_LAYOUT_KEEP = 64
 
 const MINI_CARD_WIDTH = 320
 const MINI_CARD_HEIGHT = 420
 const MINI_MIN = { width: 260, height: 160 }
 const MINI_MAX = { width: 640, height: 900 }
-/** 用户拉过的尺寸:关掉再开沿用(只记在本次运行里)。ponytail: 不落盘,要跨重启记住时照 detached-windows.json 的写法加。 */
-let miniSize = { width: MINI_CARD_WIDTH, height: MINI_CARD_HEIGHT }
-/** 正在拖缩放边:起手时的窗口与光标;null = 没在拖。 */
-let miniResizeFrom: { bounds: Rect; cursor: Electron.Point; radius: number } | null = null
-let miniResizeDock: MiniDockState | null = null
-let miniResizeMaskActive = false
-const miniResizeUpdates = createMiniResizeQueue(bounds => setMiniBounds(bounds, false))
-function clearIdleMiniResizeMask(): void {
-  if (!miniResizeMaskActive || miniResizeFrom || miniDock || !miniWindow || miniWindow.isDestroyed()) return
-  miniResizeMaskActive = false
-  miniWindow.setShape([])
-}
 const MINI_PEEK = 14 // 折叠后露出可辨识的把手宽度,避免 8px 细线难发现
 const MINI_TRIGGER_PAD = 6 // 悬停触发容差(薄条外扩,好点中)
 const MINI_HYSTERESIS = 28 // 展开后离开迟滞(出界超此才折叠,修「一动就弹回」)
+
+function liveMinis(): MiniEntry[] { return [...minis.values()].filter((m) => !m.win.isDestroyed()) }
+function miniWindows(): BrowserWindow[] { return liveMinis().map((m) => m.win) }
+function isMiniWindow(w: BrowserWindow | null | undefined): boolean { return !!w && liveMinis().some((m) => m.win === w) }
+function miniBySender(sender: Electron.WebContents): MiniEntry | undefined {
+  return liveMinis().find((m) => !m.win.webContents.isDestroyed() && m.win.webContents === sender)
+}
+function touchMini(m: MiniEntry): void { miniOrder = [m.id, ...miniOrder.filter((id) => id !== m.id && minis.has(id))] }
+function recentMini(): MiniEntry | undefined {
+  for (const id of miniOrder) { const m = minis.get(id); if (m && !m.win.isDestroyed()) return m }
+  return liveMinis().pop()
+}
+/** 同一实体可能有几扇(「复制一扇」开出来的):取最近用过的那扇。 */
+function findMini(key: string): MiniEntry | undefined {
+  const all = liveMinis().filter((m) => m.key === key)
+  return all.sort((a, b) => rank(a) - rank(b))[0]
+  function rank(m: MiniEntry): number { const i = miniOrder.indexOf(m.id); return i < 0 ? Number.MAX_SAFE_INTEGER : i }
+}
+function presentMini(m: MiniEntry): void { touchMini(m); present(m.win) }
+/** 记下这扇的位置和大小(按实体键)。正拉缩放边时不记;贴边时框被挪出了屏,只记大小(位置留用户放下时那次)。
+ *  sizeOnly:缩放刚结束,即使贴着边也要记下新大小。 */
+function rememberMiniLayout(m: MiniEntry, sizeOnly = false): void {
+  if (m.win.isDestroyed() || m.resizeFrom) return
+  const b = miniBounds(m), prev = miniLayouts.get(m.key)
+  if (m.dock && !sizeOnly && !prev) return
+  const next = m.dock ? { ...(prev ?? b), width: b.width, height: b.height } : b
+  miniLayouts.delete(m.key)
+  miniLayouts.set(m.key, next)
+  while (miniLayouts.size > MINI_LAYOUT_KEEP) miniLayouts.delete(miniLayouts.keys().next().value!)
+}
+function clearIdleMiniResizeMask(m: MiniEntry): void {
+  if (!m.resizeMaskActive || m.resizeFrom || m.dock || m.win.isDestroyed()) return
+  m.resizeMaskActive = false
+  m.win.setShape([])
+}
 
 function closeAutoMini(restore = false): void {
   const win = autoMiniWindow, back = autoMiniReturnTo
@@ -2244,15 +2295,21 @@ function openAutoMini(sessionId: string): void {
   loadRendererWith(win, { window: 'mini', transient: '1', sessionId })
 }
 
-function createMiniWindow(opts?: MiniOpenOptions): void {
-  miniTarget = opts
+function createMiniWindow(opts: MiniOpenOptions | undefined, key: string): MiniEntry {
   const wa = screen.getPrimaryDisplay().workArea
-  // 记住的大小也要放得进这块屏(四周留 24px):伸出工作区的卡片一挪就会被判成贴边、折起来
-  const width = Math.min(miniSize.width, wa.width - 48), height = Math.min(miniSize.height, wa.height - 48)
-  miniWindow = new BrowserWindow({
+  // 位置和大小按实体键各记各的;新实体用缺省大小。记住的大小也要放得进这块屏(四周留 24px):伸出工作区的卡片一挪就会被判成贴边、折起来
+  const remembered = miniLayouts.get(key)
+  const width = Math.min(remembered?.width ?? MINI_CARD_WIDTH, wa.width - 48), height = Math.min(remembered?.height ?? MINI_CARD_HEIGHT, wa.height - 48)
+  // 藏起来的也占位:再叫出来时不能和新开的叠在一处
+  const occupied = liveMinis().map(miniBounds)
+  const back = remembered && { x: remembered.x, y: remembered.y, width, height }
+  const pos = back && mostlyOnScreen(back, screen.getAllDisplays().map((d) => d.workArea)) && !occupied.some((o) => rectsOverlap(o, back))
+    ? back : stackPosition({ width, height }, wa, occupied)
+  const id = `m${++miniSeq}`
+  const win = new BrowserWindow({
     width, height,
-    x: wa.x + wa.width - width - 24,
-    y: wa.y + 24,
+    x: pos.x,
+    y: pos.y,
     frame: false,
     transparent: true,
     // 系统缩放边不开:透明窗在 Windows 上没有(Electron 去掉了 WS_THICKFRAME)。大小由卡片自绘的缩放边改,见 window:miniResize。
@@ -2265,48 +2322,64 @@ function createMiniWindow(opts?: MiniOpenOptions): void {
     show: !QUIET_WINDOWS,
     webPreferences: satelliteWebPreferences(),
   })
+  const m: MiniEntry = {
+    id, win, key, target: opts, gen: 0, dock: null, dockMotion: null, suppressMoved: false, dragging: false,
+    settleTimer: null, movedTimer: null, pollTimer: null, resizeFrom: null, resizeDock: null, resizeMaskActive: false,
+    resizeUpdates: createMiniResizeQueue((bounds) => setMiniBounds(m, bounds, false)), stopPassThrough: null,
+  }
+  minis.set(id, m)
+  touchMini(m)
   // The transparent Windows HWND can start a few DIP larger than constructor
   // width/height at fractional DPI. Restore the remembered CONTENT rect after
   // native creation, just as the resize path does, before the renderer paints.
-  if (process.platform === 'win32') miniWindow.setContentBounds({ x: wa.x + wa.width - width - 24, y: wa.y + 24, width, height })
-  if (QUIET_WINDOWS) miniWindow.showInactive()
-  miniWindow.setAlwaysOnTop(true, 'floating')
-  miniWindow.webContents.setWindowOpenHandler(openUrlHandler(miniWindow.webContents))
-  hardenNav(miniWindow.webContents)
-  miniWindow.webContents.on('did-finish-load', () => {
-    miniResizeUpdates.cancel()
-    miniResizeFrom = null // 拖到一半页面重载:收不到松手,这里收场
-    miniResizeDock = null
-    if (miniTarget && miniWindow && !miniWindow.isDestroyed()) miniWindow.webContents.send('window:miniTarget', miniTarget)
+  if (process.platform === 'win32') win.setContentBounds({ x: pos.x, y: pos.y, width, height })
+  if (QUIET_WINDOWS) win.showInactive()
+  win.setAlwaysOnTop(true, 'floating')
+  win.webContents.setWindowOpenHandler(openUrlHandler(win.webContents))
+  hardenNav(win.webContents)
+  win.webContents.on('did-finish-load', () => {
+    m.resizeUpdates.cancel()
+    m.resizeFrom = null // 拖到一半页面重载:收不到松手,这里收场
+    m.resizeDock = null
+    if (m.target && !win.isDestroyed()) win.webContents.send('window:miniTarget', { ...m.target, gen: m.gen })
   })
-  stopMiniPassThrough = startMiniPassThrough(miniWindow, {
+  m.stopPassThrough = startMiniPassThrough(win, {
     active: () => miniAutoPanel?.following() ?? false,
     cursor: () => screen.getCursorScreenPoint(),
   })
-  if (process.platform === 'win32') miniDockMotion = createMiniDockMotion(miniWindow)
-  miniWindow.webContents.on('did-start-navigation', (_e, _url, isInPlace, isMainFrame) => {
+  if (process.platform === 'win32') m.dockMotion = createMiniDockMotion(win)
+  win.webContents.on('did-start-navigation', (_e, _url, isInPlace, isMainFrame) => {
     if (!isMainFrame || isInPlace) return // SketchCard/media iframe loads are not Mini reloads
-    miniResizeUpdates.cancel(); miniResizeFrom = null; miniResizeDock = null
-    if (miniDock && !miniDockMotion) setMiniBounds(expandedBounds(miniBounds(), miniDock.edge, miniDock.workArea), false)
-    miniDockMotion?.reset(false); miniDock = null; stopMiniPoll()
+    m.resizeUpdates.cancel(); m.resizeFrom = null; m.resizeDock = null
+    if (m.dock && !m.dockMotion) setMiniBounds(m, expandedBounds(miniBounds(m), m.dock.edge, m.dock.workArea), false)
+    m.dockMotion?.reset(false); m.dock = null; stopMiniPoll(m)
   })
-  miniWindow.on('move', onMiniMoved)
+  win.on('move', () => onMiniMoved(m))
   // Chromium stores this region in physical pixels. Drop it BEFORE ordinary
   // native dragging can cross to a monitor with another scale.
-  miniWindow.on('will-move', clearIdleMiniResizeMask)
-  miniWindow.on('resize', clearIdleMiniResizeMask)
-  miniWindow.on('closed', () => {
-    miniResizeUpdates.cancel()
-    miniResizeMaskActive = false
-    console.log('[win] mini closed'); stopMiniPassThrough?.(); stopMiniPassThrough = null
-    miniDockMotion?.stop(); miniDockMotion = null
-    if (miniSettleTimer) clearTimeout(miniSettleTimer)
-    if (miniMovedTimer) clearTimeout(miniMovedTimer)
-    suppressMiniMoved = false; miniDragging = false
-    miniWindow = null; miniTarget = undefined; miniDock = null; miniResizeFrom = null; miniResizeDock = null; stopMiniPoll()
+  win.on('will-move', () => clearIdleMiniResizeMask(m))
+  win.on('resize', () => clearIdleMiniResizeMask(m))
+  win.on('focus', () => touchMini(m))
+  // 托盘「全部 Mini」按窗口标题列出(渲染层把胶囊上的名字写进 document.title)
+  win.on('page-title-updated', () => refreshTrayMenu())
+  win.on('close', () => rememberMiniLayout(m))
+  win.on('closed', () => {
+    m.resizeUpdates.cancel()
+    m.resizeMaskActive = false
+    console.log('[win] mini closed', id, key); m.stopPassThrough?.(); m.stopPassThrough = null
+    m.dockMotion?.stop(); m.dockMotion = null
+    if (m.settleTimer) clearTimeout(m.settleTimer)
+    if (m.movedTimer) clearTimeout(m.movedTimer)
+    m.suppressMoved = false; m.dragging = false
+    m.target = undefined; m.dock = null; m.resizeFrom = null; m.resizeDock = null; stopMiniPoll(m)
+    minis.delete(id)
+    miniOrder = miniOrder.filter((x) => x !== id)
+    refreshTrayMenu()
   })
-  console.log('[win] mini open')
-  loadRendererWith(miniWindow, { window: 'mini', ...(opts?.sessionId ? { sessionId: opts.sessionId } : {}) })
+  console.log('[win] mini open', id, key)
+  loadRendererWith(win, { window: 'mini', ...(opts?.sessionId ? { sessionId: opts.sessionId } : {}) })
+  refreshTrayMenu()
+  return m
 }
 
 // ══ 侧边拼接(App Dock):对话面板贴在别的 App 窗口旁边,像一个窗口那样一起动(跟随见 electron/appDock.ts)══
@@ -2399,117 +2472,157 @@ function dockSender(e: Electron.IpcMainInvokeEvent): boolean {
   return isTrustedSender(e) && !!dockWindow && !dockWindow.isDestroyed() && e.sender === dockWindow.webContents
 }
 
-function toggleMiniWindow(opts?: MiniOpenOptions): void {
+/** 打开 / 叫出一扇 Mini(LCL 表面规范第二期 · Mini 多开)。
+ *  - 不带目标(⌘⇧M / 托盘):开合最近用过的那扇;一扇都没有才新开。
+ *  - 带目标:同一实体(miniEntityKey)已开着 → 叫到前面、只更新目标、轻跳一下;没开 → 新开一扇。
+ *  - duplicate(「复制一扇」):不找已开的,直接再开一扇。
+ *  - 普通 Mini 满 MINI_WINDOW_LIMIT 扇就不开,结果交回调用方去提示(不静默失败);语音通话那扇不占名额。 */
+function openMiniWindow(opts?: MiniOpenOptions): MiniOpenResult {
   if (!opts && autoMiniSessionId) opts = { sessionId: autoMiniSessionId }
   miniAutoPanel?.dismiss()
-  if (miniWindow && !miniWindow.isDestroyed()) {
-    // 带目标是「把这条正式会话拿到 Mini 继续」:已显示也只更新+聚焦,不能反而把窗口藏掉。
-    if (opts?.sessionId || opts?.spaceId || opts?.view) {
-      miniTarget = opts
-      if (!miniWindow.webContents.isLoadingMainFrame()) miniWindow.webContents.send('window:miniTarget', opts)
-      present(miniWindow)
-    } else if (miniWindow.isVisible()) miniWindow.hide()
-    else present(miniWindow)
-  } else createMiniWindow(opts)
+  if (!opts) {
+    const m = recentMini()
+    if (!m) return createMini(undefined, miniEntityKey(undefined))
+    if (m.win.isVisible()) m.win.hide()
+    else presentMini(m)
+    return { ok: true, reused: true }
+  }
+  const { duplicate, ...target } = opts
+  const key = miniEntityKey(target)
+  // 通话一次只有一通:duplicate 也叫出那一扇(否则绕过「一扇」和名额豁免)
+  const open = duplicate && key !== VOICE_CALL_VIEW ? undefined : findMini(key)
+  if (!open) return createMini(target, key)
+  // 带目标是「把这个拿到 Mini 继续」:已显示也只更新 + 聚焦,不能反而把窗口藏掉。
+  open.target = target
+  open.gen++
+  if (!open.win.webContents.isLoadingMainFrame()) {
+    open.win.webContents.send('window:miniTarget', { ...target, gen: open.gen })
+    open.win.webContents.send('window:miniNudge')
+  }
+  presentMini(open)
+  return { ok: true, reused: true }
+}
+
+/** ⌘⇧M / 托盘这类主进程自己发起的打开:没有渲染层替它提示,满了用系统通知说一声(不静默失败)。 */
+function openMiniFromShell(): void {
+  const r = openMiniWindow()
+  if (!r.ok) notifyMiniLimit(r.limit)
+}
+function notifyMiniLimit(limit: number): void {
+  if (!Notification.isSupported()) return
+  try { new Notification({ title: 'Forsion', body: mt('main.mini.limit', { n: limit }) }).show() } catch { /* 通知不可用 */ }
+}
+
+function createMini(target: MiniOpenOptions | undefined, key: string): MiniOpenResult {
+  if (key !== VOICE_CALL_VIEW && liveMinis().filter((m) => m.key !== VOICE_CALL_VIEW).length >= MINI_WINDOW_LIMIT) {
+    console.log('[win] mini limit reached', MINI_WINDOW_LIMIT, key)
+    return { ok: false, reason: 'limit', limit: MINI_WINDOW_LIMIT }
+  }
+  createMiniWindow(target, key)
+  return { ok: true, reused: false }
 }
 
 /** Windows getBounds encloses fractional-DPI rounding; content bounds match the painted card. */
-function miniBounds(): Rect {
-  return process.platform === 'win32' ? miniWindow!.getContentBounds() : miniWindow!.getBounds()
+function miniBounds(m: MiniEntry): Rect {
+  return process.platform === 'win32' ? m.win.getContentBounds() : m.win.getBounds()
 }
 
 /** Native geometry changes only for snap/drag/resize. Windows docking animation stays in the renderer. */
-function setMiniBounds(r: Rect, animate = true): void {
-  if (!miniWindow || miniWindow.isDestroyed()) return
-  const previous = miniBounds()
+function setMiniBounds(m: MiniEntry, r: Rect, animate = true): void {
+  if (m.win.isDestroyed()) return
+  const win = m.win
+  const previous = miniBounds(m)
   const changed: Partial<Rect> = {}
   for (const key of ['x', 'y', 'width', 'height'] as const) if (r[key] !== previous[key]) changed[key] = r[key]
   if (Object.keys(changed).length === 0) return
-  suppressMiniMoved = true
+  m.suppressMoved = true
   // Partial setBounds reuses the rounded OUTER size on Windows, growing it on each move
   // at 125% DPI. Write the complete CONTENT rect instead; its size remains stable.
   if (process.platform === 'win32') {
     // Keep BOTH the old and new HWND extents rounded between the native calls.
     // Growing a rounded region before its HWND would clip halfway down the old
     // height and briefly expose square corners, just like shrinking stale paint.
-    if (miniResizeFrom) miniWindow.setShape(miniResizeShape(Math.min(previous.width, r.width), Math.min(previous.height, r.height), miniResizeFrom.radius))
-    miniWindow.setContentBounds(r)
-    if (miniResizeFrom) {
-      miniWindow.setShape(miniResizeShape(r.width, r.height, miniResizeFrom.radius))
-      miniResizeMaskActive = true
+    if (m.resizeFrom) win.setShape(miniResizeShape(Math.min(previous.width, r.width), Math.min(previous.height, r.height), m.resizeFrom.radius))
+    win.setContentBounds(r)
+    if (m.resizeFrom) {
+      win.setShape(miniResizeShape(r.width, r.height, m.resizeFrom.radius))
+      m.resizeMaskActive = true
     }
   }
-  else miniWindow.setBounds(changed, animate && process.platform === 'darwin')
+  else win.setBounds(changed, animate && process.platform === 'darwin')
   // 单个定时器:连发(拖缩放边)时后一次顺延,前一次的定时器不会提前放开抑制
-  if (miniMovedTimer) clearTimeout(miniMovedTimer)
-  miniMovedTimer = setTimeout(() => { suppressMiniMoved = false }, animate && process.platform === 'darwin' ? 320 : 60)
+  if (m.movedTimer) clearTimeout(m.movedTimer)
+  m.movedTimer = setTimeout(() => { m.suppressMoved = false }, animate && process.platform === 'darwin' ? 320 : 60)
 }
 
 // moved 连发 = 用户在拖窗;只在**停稳 200ms 后**才判贴边(拖拽过程中绝不折叠 → 能自由拖出)。
-function onMiniMoved(): void {
-  if (!miniWindow || suppressMiniMoved || miniResizeFrom) return // 程序化移动 / 拖缩放边不算用户拖窗
-  clearIdleMiniResizeMask()
-  if (miniDock) { miniDockMotion?.reset(); miniDock = null; stopMiniPoll() }
-  miniDragging = true
-  if (miniSettleTimer) clearTimeout(miniSettleTimer)
-  miniSettleTimer = setTimeout(onMiniSettled, 200)
+function onMiniMoved(m: MiniEntry): void {
+  if (m.win.isDestroyed() || m.suppressMoved || m.resizeFrom) return // 程序化移动 / 拖缩放边不算用户拖窗
+  clearIdleMiniResizeMask(m)
+  if (m.dock) { m.dockMotion?.reset(); m.dock = null; stopMiniPoll(m) }
+  m.dragging = true
+  if (m.settleTimer) clearTimeout(m.settleTimer)
+  m.settleTimer = setTimeout(() => onMiniSettled(m), 200)
 }
 
-function onMiniSettled(): void {
-  miniDragging = false
-  if (!miniWindow || miniWindow.isDestroyed()) return
-  const b = miniBounds()
+function onMiniSettled(m: MiniEntry): void {
+  m.dragging = false
+  if (m.win.isDestroyed()) return
+  const b = miniBounds(m)
   const display = screen.getDisplayMatching(b), wa = display.workArea
   const edge = nearestEdge(b, wa)
   if (edge) {
-    miniDock = { edge, expanded: false, displayId: display.id, workArea: wa }
-    if (miniDockMotion) {
-      setMiniBounds(expandedBounds(b, edge, wa), false)
-      miniDockMotion.set(edge, true, MINI_PEEK)
-    } else setMiniBounds(collapsedBounds(b, edge, wa, MINI_PEEK))
-    ensureMiniPoll()
+    rememberMiniLayout(m) // 折起来之前记下用户放下的位置
+    m.dock = { edge, expanded: false, displayId: display.id, workArea: wa }
+    if (m.dockMotion) {
+      setMiniBounds(m, expandedBounds(b, edge, wa), false)
+      m.dockMotion.set(edge, true, MINI_PEEK)
+    } else setMiniBounds(m, collapsedBounds(b, edge, wa, MINI_PEEK))
+    ensureMiniPoll(m)
   } else {
-    miniDock = null // 拖离边 → 解除吸附
-    stopMiniPoll()
+    m.dock = null // 拖离边 → 解除吸附
+    stopMiniPoll(m)
+    rememberMiniLayout(m)
   }
 }
 
 // 贴边时轮询光标(替掉 frameless 透明窗上不可靠的 DOM mouseenter/leave):折叠态触到薄条→展开,展开态离开(超迟滞)→折叠。
-function ensureMiniPoll(): void {
-  if (miniPollTimer) return
-  miniPollTimer = setInterval(pollMiniCursor, 90)
+function ensureMiniPoll(m: MiniEntry): void {
+  if (m.pollTimer) return
+  m.pollTimer = setInterval(() => pollMiniCursor(m), 90)
 }
-function stopMiniPoll(): void {
-  if (miniPollTimer) { clearInterval(miniPollTimer); miniPollTimer = null }
+function stopMiniPoll(m: MiniEntry): void {
+  if (m.pollTimer) { clearInterval(m.pollTimer); m.pollTimer = null }
 }
-function pollMiniCursor(): void {
-  if (!miniWindow || miniWindow.isDestroyed() || !miniWindow.isVisible() || !miniDock || miniDragging || suppressMiniMoved || miniResizeFrom || miniDockMotion?.pending()) return
+function pollMiniCursor(m: MiniEntry): void {
+  const dock = m.dock
+  if (m.win.isDestroyed() || !m.win.isVisible() || !dock || m.dragging || m.suppressMoved || m.resizeFrom || m.dockMotion?.pending()) return
   const pt = screen.getCursorScreenPoint()
-  const b = miniBounds()
+  const b = miniBounds(m)
   // Never infer ownership from a tucked window: most of it can overlap the next monitor.
-  const display = screen.getAllDisplays().find((d) => d.id === miniDock!.displayId)
-  if (!display || JSON.stringify(display.workArea) !== JSON.stringify(miniDock.workArea)) {
-    miniDockMotion?.reset(); miniDock = null; stopMiniPoll()
+  const display = screen.getAllDisplays().find((d) => d.id === dock.displayId)
+  if (!display || JSON.stringify(display.workArea) !== JSON.stringify(dock.workArea)) {
+    m.dockMotion?.reset(); m.dock = null; stopMiniPoll(m)
     const area = screen.getDisplayNearestPoint(pt).workArea
-    setMiniBounds({ ...b, x: Math.max(area.x, Math.min(b.x, area.x + area.width - b.width)), y: Math.max(area.y, Math.min(b.y, area.y + area.height - b.height)) }, false)
+    setMiniBounds(m, { ...b, x: Math.max(area.x, Math.min(b.x, area.x + area.width - b.width)), y: Math.max(area.y, Math.min(b.y, area.y + area.height - b.height)) }, false)
     return
   }
-  const wa = miniDock.workArea
-  if (!miniDock.expanded) {
+  const wa = dock.workArea
+  if (!dock.expanded) {
     // 折叠:光标触到薄条(可见交集 + 容差)→ 展开
-    const clip = miniDockMotion ? miniDockFrame(b, miniDock.edge, MINI_PEEK).clip : null
+    const clip = m.dockMotion ? miniDockFrame(b, dock.edge, MINI_PEEK).clip : null
     const visible = clip ? { ...clip, x: b.x + clip.x, y: b.y + clip.y } : visibleRect(b, wa)
     if (pointInRect(pt.x, pt.y, growRect(visible, MINI_TRIGGER_PAD))) {
-      miniDock.expanded = true
-      if (miniDockMotion) miniDockMotion.set(miniDock.edge, false, MINI_PEEK)
-      else setMiniBounds(expandedBounds(b, miniDock.edge, wa))
+      dock.expanded = true
+      if (m.dockMotion) m.dockMotion.set(dock.edge, false, MINI_PEEK)
+      else setMiniBounds(m, expandedBounds(b, dock.edge, wa))
     }
   } else {
     // 展开:光标离开窗口 + 迟滞边距 → 折叠(小幅移动不触发,修「一动就弹回」)
     if (!pointInRect(pt.x, pt.y, growRect(b, MINI_HYSTERESIS))) {
-      miniDock.expanded = false
-      if (miniDockMotion) miniDockMotion.set(miniDock.edge, true, MINI_PEEK)
-      else setMiniBounds(collapsedBounds(b, miniDock.edge, wa, MINI_PEEK))
+      dock.expanded = false
+      if (m.dockMotion) m.dockMotion.set(dock.edge, true, MINI_PEEK)
+      else setMiniBounds(m, collapsedBounds(b, dock.edge, wa, MINI_PEEK))
     }
   }
 }
@@ -2664,7 +2777,7 @@ app.whenReady().then(async () => {
       // 钥匙到手就交给引擎(stdin 私有通道;之后每次拉起引擎也会重发)
       onKey: (hex) => backend.setComputerHistoryKey(hex),
     })
-    registerComputerHistoryIpc(computerHistory, isTrustedSender)
+    registerComputerHistoryIpc(computerHistory, isTrustedSender, (on) => telemetry.setting('computerHistory.enabled', on))
   }
   // Windows 系统通知前提(无 AppUserModelId 时 Notification 可能不弹);mac/linux 无副作用。
   app.setAppUserModelId('com.forsion.tangu')
@@ -2788,6 +2901,7 @@ app.whenReady().then(async () => {
   await deviceSecrets.init({ readShell: readShellConfig as () => Promise<Record<string, any>>, writeShell: (s) => writePrivateJson(configPath(), s), queue: configQueue })
   void remoteSessions.init() // P1-K4:迁移 / 读盘(isEnabled 依赖 K5 状态,须在它之后);K5 状态一变就重播视图
   deviceSecrets.onStatusChange(() => remoteSessions.notifyChanged())
+  const storeUpdateTele = storeUpdateTelemetry({ update: (p) => telemetry.emit('update', p), setting: (k, v) => telemetry.setting(k, v) }) // 匿名遥测
   const marketPluginUpdater = createMarketPluginUpdater({
     home: forsionHomeDir(), appVersion: app.getVersion(),
     protectedIds: () => new Set([...builtinPluginIds(), ...BUILTIN_BUNDLES.map((x) => x.id)]),
@@ -2811,6 +2925,7 @@ app.whenReady().then(async () => {
       return buf
     },
     broadcast: (status) => {
+      storeUpdateTele(status)
       for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed()) w.webContents.send('market:updateStatus', status)
     },
   })
@@ -2840,7 +2955,7 @@ app.whenReady().then(async () => {
     loadConfig,
     ensureBackend,
     refreshUnitHost,
-    renderers: () => [mainWindow, miniWindow, ...detachedWindows.values()]
+    renderers: () => [mainWindow, ...miniWindows(), ...detachedWindows.values()]
       .filter((w): w is BrowserWindow => !!w && !w.isDestroyed())
       .map((w) => w.webContents)
       .filter((wc) => !wc.isDestroyed() && !!wc.getURL() && !wc.isLoadingMainFrame()),
@@ -2860,7 +2975,13 @@ app.whenReady().then(async () => {
     broadcast: (status) => {
       for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed()) w.webContents.send('updater:core-status', status)
     },
-    run: async (onStatus) => {
+    run: async (report) => {
+      // 匿名遥测 update:引擎 npm 热更新 / 内置插件 npm 更新查完的结论(current / staged / incompatible / error;报错原文只拿来归类)
+      const onStatus = (st: CorePluginUpdate): void => {
+        report(st)
+        const props = coreUpdateProps(st, ENGINE_UPDATE_ID)
+        if (props) telemetry.emit('update', props)
+      }
       const stored = await loadConfig()
       const registries = registryOrder(stored.mirror)
       const registryFetch = (url: string, init: { signal: AbortSignal; headers?: Record<string, string> }): Promise<Response> =>
@@ -2887,6 +3008,13 @@ app.whenReady().then(async () => {
   const firstBootPrefetch = app.isPackaged && !SANDBOX
     ? await prefetchOnFirstBoot({ markerFile: join(app.getPath('userData'), 'core-prefetch-version'), version: app.getVersion(), timeoutMs: 10_000, check: corePluginUpdater.check })
     : 'skipped'
+  // 匿名遥测 update(首启预取):超时 / 查到新版这一次就用上(applied)/ 都是最新 / 出错;不是装好后第一次启动(skipped)不报
+  if (firstBootPrefetch !== 'skipped') {
+    const items = corePluginUpdater.snapshot().items
+    const failed = items.find((x) => x.phase === 'error')
+    telemetry.emit('update', updateProps('first-boot-prefetch', firstBootPrefetch === 'timeout' ? 'timeout'
+      : items.some((x) => x.phase === 'staged') ? 'applied' : failed ? 'error' : 'current', { error: failed?.error }))
+  }
   // 全档案都播种 / 装载(2026-09-28 起):Amadeus / basic 单品也跑云同步、penzor、登录态续期,这些都住在 Extend 里;
   // 只在 agent 后端才有意义的包(电脑操作)由清单 requires 挡在 bundleSources 之外。
   {
@@ -2946,23 +3074,11 @@ app.whenReady().then(async () => {
           return [{prefix:'',root:forsionWorkspaceDir()},{prefix:'agents',root:join(tanguDataDir(),'agents')},
             {prefix:'human',root:join(tanguDataDir(),'human')},{prefix:'Amadeus',root:syncVaultRoot(cfg)??join(forsionWorkspaceDir(),'Amadeus')}] // 切库不换同步根(vaultList.ts)
         },
-        claim: async (owned) => {
-          await ensureBackend()
-          const before=loadTanguCreds(),identity=forsionAccountId(before.cloudUrl||'',before.token||'')
-          const st=backend.getStatus();if(st.state!=='ready'||!st.url){
-            const cfg=await loadConfig();if(cfg.mode!=='external'||!identity)throw new Error('Local engine unavailable')
-            setOfflineContentOwner(tanguDataDir(),identity,owned);if(owned)await stopAmadeusSync?.();else await restartAmadeusSync?.();return
-          }
-          const r=await fetch(st.url.replace(/\/+$/,'')+'/agent/sync/content-owner',{method:'PUT',headers:{Authorization:`Bearer ${backend.getToken()}`,'Content-Type':'application/json'},body:JSON.stringify({enabled:owned}),signal:AbortSignal.timeout(15000)})
-          if(!r.ok)throw new Error(`Content sync ownership failed (${r.status})`)
-          const current=loadTanguCreds();if(forsionAccountId(current.cloudUrl||'',current.token||'')!==identity)throw new Error('account_changed')
-          if(owned)await stopAmadeusSync?.();else await restartAmadeusSync?.()
-        },
-        changed: async () => {
-          const st=backend.getStatus();if(st.state!=='ready'||!st.url)return
-          const r=await fetch(st.url.replace(/\/+$/,'')+'/agent/sync/content-owner',{method:'PUT',headers:{Authorization:`Bearer ${backend.getToken()}`,'Content-Type':'application/json'},body:JSON.stringify({enabled:true}),signal:AbortSignal.timeout(15000)})
-          if(!r.ok)throw new Error('Content sync refresh failed')
-        },
+        ...contentSyncOwnership({
+          accountId: () => { const c = loadTanguCreds(); return forsionAccountId(c.cloudUrl || '', c.token || '') },
+          ensureBackend, loadConfig, backendStatus: () => backend.getStatus(), engineToken: () => backend.getToken(),
+          dataDir: tanguDataDir, stopSync: () => stopAmadeusSync?.(), restartSync: () => restartAmadeusSync?.(),
+        }),
         merge: (path,ours,base,theirs) => mergeSyncContent(path,ours,base,theirs,tanguDataDir()),
         agentFiles: agentContentHooks(tanguDataDir(),()=>{const c=loadTanguCreds();return forsionAccountId(c.cloudUrl||'',c.token||'')}),
         withWriteLock:(path,commit)=>withContentWriteLock(path,tanguDataDir(),commit),
@@ -3142,11 +3258,12 @@ app.whenReady().then(async () => {
     return coreTangu.load(id)
   })
   // 渲染层自己 location.reload() 是 file: 导航,会被 hardenNav 拦下:重载一律从这里发
+  // 界面热更新被退回(那一版加载失败 / 崩了 → 退回安装包那份并重载):匿名遥测 update { target: ui, outcome: rolled-back }
   ipcMain.handle('coreTangu:failed', (e, reason: unknown) => {
-    if (coreTanguOn && isTrustedSender(e) && coreTangu.failed(e.sender.id, reason)) e.sender.reload()
+    if (coreTanguOn && isTrustedSender(e) && coreTangu.failed(e.sender.id, reason)) { telemetry.emit('update', updateProps('ui', 'rolled-back')); e.sender.reload() }
   })
   ipcMain.handle('coreTangu:crashed', (e, reason: unknown) => {
-    if (coreTanguOn && isTrustedSender(e) && coreTangu.crashed(e.sender.id, reason)) e.sender.reload()
+    if (coreTanguOn && isTrustedSender(e) && coreTangu.crashed(e.sender.id, reason)) { telemetry.emit('update', updateProps('ui', 'rolled-back')); e.sender.reload() }
   })
   // 引擎退回了(或换了版)而界面还是热更新的那一版:拿着它的窗口重载一次,重载后界面跟着引擎走
   backend.onStatus((st) => {
@@ -3829,7 +3946,7 @@ app.whenReady().then(async () => {
     const request = parseWindowMaterialRequest(input)
     if (!request) return { ok: false }
     const win = BrowserWindow.fromWebContents(e.sender)
-    applyWindowMaterial(win, request, process.platform, !!win && (win === miniWindow || win === autoMiniWindow || win === dockWindow))
+    applyWindowMaterial(win, request, process.platform, !!win && (isMiniWindow(win) || win === autoMiniWindow || win === dockWindow))
     return { ok: true }
   })
   ipcMain.handle('window:setTabTitleBar', (e, input: unknown) => {
@@ -3900,6 +4017,7 @@ app.whenReady().then(async () => {
       else cur.push(provider)
       return cur
     })
+    telemetry.count('byokSave') // 匿名遥测只数次数:渠道 id、地址、key 一概不报
     const stored = await loadConfig()
     if (stored.mode === 'managed') void ensureBackend()
     return list
@@ -3917,8 +4035,9 @@ app.whenReady().then(async () => {
     const add = await localProvidersFor(Array.isArray(ids) ? ids : [], await readProvidersFile(), opts)
     localScan = null
     // 选的那几条在原来的应用里刚改过(指纹变了)或已经加过:一条都没取到就如实报,界面重扫一遍让人重选
-    if (!add.length) throw new Error('import_stale')
+    if (!add.length) { telemetry.count('byokImportStale'); throw new Error('import_stale') }
     const list = await updateProvidersFile((cur) => [...cur, ...add.filter((a) => !cur.some((p) => p.providerId === a.providerId))])
+    telemetry.count('byokImport', add.length)
     localScan = null
     const stored = await loadConfig()
     if (stored.mode === 'managed') void ensureBackend()
@@ -3926,6 +4045,7 @@ app.whenReady().then(async () => {
   })
   ipcMain.handle('providers:delete', async (_e, providerId: string) => {
     const list = await updateProvidersFile((cur) => cur.filter((p) => p.providerId !== providerId))
+    telemetry.count('byokDelete')
     const stored = await loadConfig()
     if (stored.mode === 'managed') void ensureBackend()
     return list
@@ -3945,6 +4065,7 @@ app.whenReady().then(async () => {
     const i = modelId.indexOf('/')
     const provider = i > 0 ? (await readProvidersFile()).find((p) => p.providerId === modelId.slice(0, i)) : undefined
     if (provider) {
+      if (qwenVoiceInputUrl(provider.baseUrl, modelId.slice(i + 1))) throw new Error('asr_streaming_required')
       return transcribeViaOpenAI({ baseUrl: provider.baseUrl, apiKey: provider.apiKey, model: modelId.slice(i + 1), audio, mime: req?.mime || 'audio/wav', language: req?.language, timestamps: req?.timestamps })
     }
     // 非自带 provider = Forsion 托管模型(或未选,让服务端用 app asr 默认)→ 直连 Forsion 服务端(token 不下发 renderer)。
@@ -3954,6 +4075,24 @@ app.whenReady().then(async () => {
     if (!cloudUrl || !token) throw new Error('未设置语音识别:选一个自带 provider 的语音识别模型 + key,或登录 Forsion 用云端,或下载本地语音模型。')
     return transcribeViaForsion({ cloudUrl, token, modelId, audioB64: audio.toString('base64'), mime: req?.mime || 'audio/wav', language: req?.language, timestamps: req?.timestamps })
   }
+
+  registerVoiceInputStream(isTrustedSender, async (requestedModel) => {
+    const cfg = await loadConfig()
+    if (asrBackendFor(cfg.asrBackend, undefined, localModelReady()) === 'local') return null
+    const modelId = (requestedModel || cfg.asrModelId || '').trim()
+    const i = modelId.indexOf('/')
+    const provider = i > 0 ? (await readProvidersFile()).find((p) => p.providerId === modelId.slice(0, i)) : undefined
+    if (provider) {
+      const url = qwenVoiceInputUrl(provider.baseUrl, modelId.slice(i + 1))
+      return url && provider.apiKey ? { url, token: provider.apiKey, direct: true } : null
+    }
+    const creds = loadTanguCreds()
+    const cloudUrl = cfg.cloudUrl || creds.cloudUrl
+    if (!cloudUrl || !creds.token) return null
+    return { url: voiceInputCloudUrl(cloudUrl.replace(/\/+$/, '') + '/api', modelId, `desktop/${app.getVersion()}`), token: creds.token }
+  })
+  // 全局语音输入(LCL 表面规范第四期):快捷键、语音胶囊(桌面作用域浮层)、往别的应用写字都在 electron/dictation/,这里只接线。
+  registerDictation({ isTrustedSender, globalHotkeyPause, sandbox: !!SANDBOX, dirname: __dirname, rendererUrl: process.env.ELECTRON_RENDERER_URL, userData: app.getPath('userData') })
 
   ipcMain.handle('asr:transcribe', async (_e, req: { audioBase64: string; mime?: string; modelId?: string; backend?: 'local' | 'cloud'; language?: string; timestamps?: boolean }) =>
     runTranscribe(Buffer.from(req?.audioBase64 || '', 'base64'), req || {}))
@@ -4018,14 +4157,7 @@ app.whenReady().then(async () => {
     ask: (payload) => askHelper(helperSocketPath(), payload, 5_000),
     // 助手被这里拉起来之后,顺手让全局快捷键那条订阅现在就连(它自己从不拉起助手)
     ensureHelper: () => ensureHelperRunning().then((v) => { appRefHotkey.poke(); return v }),
-    // 台架把 mdfind / open 换成夹具(FORSION_APPREF_BIN_DIR 下的同名脚本):不然测「点击打开」会真的把这台电脑上的应用拉起来。
-    // opts 只有 Windows 那一半传(数据经环境变量进 PowerShell);windowsHide:不然每问一次状态就闪一个控制台窗口。
-    run: (file, args, opts) => new Promise<string>((resolve, reject) => {
-      const fixtures = app.isPackaged ? '' : process.env.FORSION_APPREF_BIN_DIR?.trim() // 安装版不认:不给环境变量换掉系统命令的口子
-      execFile(fixtures ? join(fixtures, basename(file)) : file, args,
-        { timeout: opts?.timeoutMs ?? 8_000, maxBuffer: 4 << 20, windowsHide: true, ...(opts?.env ? { env: { ...process.env, ...opts.env } } : {}) },
-        (err, stdout) => (err ? reject(err) : resolve(String(stdout)))).stdin?.end() // 这些命令都不读 stdin:关掉,免得谁等它
-    }),
+    run: runAppRefCommand,
     // Windows 的图标:exe 自带的那枚(macOS 上 getFileIcon 只给通用图标,走下面的 appIconDataUrls)
     fileIcon: (exePath) => app.getFileIcon(exePath, { size: 'normal' }).then((img) => (img.isEmpty() ? null : img.toDataURL())),
   })
@@ -4070,7 +4202,7 @@ app.whenReady().then(async () => {
       if (!QUIET_WINDOWS) app.focus({ steal: true })
       // 送到用户最后在用的那个 Forsion 窗口,只认放得下输入框的(独立窗 / Mini / App Dock);设置浮窗之类回主窗
       const w = lastFocusedWindow
-      const last = w && !w.isDestroyed() && (w === miniWindow || w === dockWindow || [...detachedWindows.values()].includes(w)) ? w : null
+      const last = w && !w.isDestroyed() && (isMiniWindow(w) || w === dockWindow || [...detachedWindows.values()].includes(w)) ? w : null
       if (last) {
         if (last.isMinimized()) last.restore()
         present(last)
@@ -4174,8 +4306,11 @@ app.whenReady().then(async () => {
   // 测试版通道开关。落 config.json 的 updater 段;updater.ts 每次检查现读,改完无需重启。
   ipcMain.handle('updater:getBeta', () => betaChannelOn())
   ipcMain.handle('updater:setBeta', async (_e, on: boolean) => {
-    await saveHomeSection('updater', (sec: any) => ({ ...sec, beta: !!on }))
+    let was: boolean | null = null // 改之前的值:在同一次锁内读改写里取(缺省 = 正式版,同 updater.readUpdaterConfig)
+    await saveHomeSection('updater', (sec: any) => { was = sec?.beta === true; return { ...sec, beta: !!on } })
     channelChanged(!!on)
+    if (was !== null && was !== !!on) telemetry.setting('update.channel', on ? 'beta' : 'stable') // 匿名遥测:更新通道真改了
+    refreshTelemetryChannel()
     return { ok: true }
   })
   // 下载来源:auto(按地区:大陆官网、其他地区 GitHub)/ website / github。同样落 updater 段、每次现读。
@@ -4480,7 +4615,9 @@ app.whenReady().then(async () => {
     const m = await providerOAuthModule()
     const p = m.OAUTH_PROVIDERS?.[id]
     if (!p) throw new Error(`未知 provider: ${id}`)
-    await m.providerOAuthLogin(p) // loopback+PKCE,自动开浏览器,落盘 provider-auth.json
+    // 匿名遥测:订阅登录成没成(只数次数,哪个渠道、报错原文都不报)
+    await m.providerOAuthLogin(p).catch((err: unknown) => { telemetry.count('providerLoginFail'); throw err }) // loopback+PKCE,自动开浏览器,落盘 provider-auth.json
+    telemetry.count('providerLoginOk')
     const stored = await loadConfig()
     // await(不是 void):provider 只在引擎启动时装载一次,IPC 必须等重启完成才返回,
     // 否则渲染层拿到 ok 就去拉模型目录 —— 打的还是正在被杀的旧端口。
@@ -4528,9 +4665,30 @@ app.whenReady().then(async () => {
     const bounds = at2 ? { x: Math.round(at2.screenX), y: Math.round(at2.screenY), width: space ? 1100 : 900, height: space ? 760 : 680 } : undefined
     return { id: createDetachedWindow(space ? { space, bounds } : { views: list, bounds }) }
   })
-  ipcMain.on('window:openMini', (e, raw: unknown) => {
-    if (!isTrustedSender(e)) return
-    toggleMiniWindow(normalizeMiniOpenOptions(raw))
+  // invoke:结果交回调用方(满了由它提示用户,不静默失败)。
+  ipcMain.handle('window:openMini', (e, raw: unknown): MiniOpenResult | undefined => {
+    if (!isTrustedSender(e)) return undefined
+    const r = openMiniWindow(normalizeMiniOpenOptions(raw))
+    // 主窗和 Mini 自己会提示(通知 / 卡片里);独立窗、浮动面板里没有通知宿主,由这里用系统通知说
+    if (!r.ok && e.sender !== mainWindow?.webContents && !miniBySender(e.sender)) notifyMiniLimit(r.limit)
+    return r
+  })
+  // 渲染层报这扇 Mini 现在显示的是哪个实体(窗里换了 Space / 会话):改写实体键,之后再开同一个就叫出这扇。
+  // 只认 Space 目标、只认本来就是 Space 的那几扇:直开的视图(插件 / 语音通话)不会被改成别的,名额也就不会被绕过。
+  ipcMain.on('window:miniEntity', (e, raw: unknown) => {
+    const m = isTrustedSender(e) ? miniBySender(e.sender) : undefined
+    const target = normalizeMiniOpenOptions(raw)
+    if (!m || !target || target.view || m.key === VOICE_CALL_VIEW || m.key.startsWith('view:')) return
+    // 报的是哪一代目标之后的样子:不是当前这一代(新目标刚发出、渲染层还没应用)就不认
+    const gen = (raw as { gen?: unknown }).gen
+    if (m.target && gen !== m.gen) return
+    // 还在同一个 Space 里:打开时带的显式 key 留着(渲染层不知道它)
+    const keep = m.target && !m.target.view && m.target.spaceId === target.spaceId ? m.target.key : undefined
+    const entity: MiniOpenOptions = { spaceId: target.spaceId, sessionId: target.sessionId, ...(keep ? { key: keep } : {}) }
+    const key = miniEntityKey(entity)
+    if (key === m.key) return // 还是原来那个:留着打开时带的参数
+    m.key = key
+    m.target = entity // 页面重载(崩溃自愈)回到现在显示的,而不是最初打开的那个
   })
   ipcMain.handle('window:openFloating', (e, raw: unknown) => {
     if (!isTrustedSender(e)) return undefined
@@ -4543,51 +4701,54 @@ app.whenReady().then(async () => {
     return win?.webContents === e.sender ? floatingTargets.get(id) : undefined
   })
   ipcMain.on('window:miniReady', (e) => {
-    if (isTrustedSender(e) && e.sender === miniWindow?.webContents && miniTarget) e.sender.send('window:miniTarget', miniTarget)
+    const m = isTrustedSender(e) ? miniBySender(e.sender) : undefined
+    if (m?.target) e.sender.send('window:miniTarget', { ...m.target, gen: m.gen })
     if (isTrustedSender(e) && e.sender === autoMiniWindow?.webContents && autoMiniSessionId) e.sender.send('window:miniTarget', { sessionId: autoMiniSessionId })
   })
   ipcMain.on('window:miniDockMotionDone', (e, id: unknown) => {
-    if (isTrustedSender(e) && e.sender === miniWindow?.webContents && typeof id === 'number' && Number.isSafeInteger(id)) miniDockMotion?.finish(id)
+    const m = isTrustedSender(e) ? miniBySender(e.sender) : undefined
+    if (m && typeof id === 'number' && Number.isSafeInteger(id)) m.dockMotion?.finish(id)
   })
   // 屏幕坐标不受界面缩放影响;保留读光标的兼容路径。edge 不合法 = 松手。
   ipcMain.on('window:miniResize', (e, edge: unknown, start: unknown, point: unknown) => {
-    if (!isTrustedSender(e) || !miniWindow || miniWindow.isDestroyed() || e.sender !== miniWindow.webContents) return
+    const m = isTrustedSender(e) ? miniBySender(e.sender) : undefined
+    if (!m) return
     if (typeof edge !== 'string' || !/^(?=.)[ns]?[ew]?$/.test(edge)) {
-      miniResizeUpdates.flush()
-      const dock = miniResizeDock
-      miniResizeFrom = null
-      miniResizeDock = null
+      m.resizeUpdates.flush()
+      const dock = m.resizeDock
+      m.resizeFrom = null
+      m.resizeDock = null
       if (dock) {
         const display = screen.getAllDisplays().find(d => d.id === dock.displayId)
         // Resizing an expanded docked card pauses docking only for the gesture.
         // Keep it docked if its original edge and monitor still match afterwards.
-        if (display && JSON.stringify(display.workArea) === JSON.stringify(dock.workArea) && nearestEdge(miniBounds(), dock.workArea) === dock.edge) {
-          miniDock = { ...dock, expanded: true }
-          setMiniBounds(expandedBounds(miniBounds(), dock.edge, dock.workArea), false)
-          ensureMiniPoll()
+        if (display && JSON.stringify(display.workArea) === JSON.stringify(dock.workArea) && nearestEdge(miniBounds(m), dock.workArea) === dock.edge) {
+          m.dock = { ...dock, expanded: true }
+          setMiniBounds(m, expandedBounds(miniBounds(m), dock.edge, dock.workArea), false)
+          ensureMiniPoll(m)
         }
       }
-      if (process.platform === 'darwin') miniWindow.invalidateShadow() // 透明窗的投影按新轮廓重算(长大时新露出的那块在重绘前是透明的)
+      rememberMiniLayout(m, true)
+      if (process.platform === 'darwin') m.win.invalidateShadow() // 透明窗的投影按新轮廓重算(长大时新露出的那块在重绘前是透明的)
       return
     }
-    if (miniDock && !miniDock.expanded) return // 折叠在屏幕边上时不改大小:缩窄会把露在屏内的那条把手也带出去
+    if (m.dock && !m.dock.expanded) return // 折叠在屏幕边上时不改大小:缩窄会把露在屏内的那条把手也带出去
     const p = point as (Partial<Electron.Point> & { radius?: number }) | null
     const cursor = p && Number.isFinite(p.x) && Number.isFinite(p.y)
       ? { x: Math.round(p.x!), y: Math.round(p.y!) } : screen.getCursorScreenPoint()
-    if (start === true || !miniResizeFrom) {
-      miniResizeUpdates.flush()
+    if (start === true || !m.resizeFrom) {
+      m.resizeUpdates.flush()
       // 刚拖到边上、还没判贴边就开始拉:那次判定作废,免得拉到一半被折叠
-      if (miniSettleTimer) { clearTimeout(miniSettleTimer); miniSettleTimer = null }
-      miniDragging = false
-      miniResizeDock = miniDock ? { ...miniDock } : null
-      miniDockMotion?.reset(); miniDock = null; stopMiniPoll()
-      miniResizeFrom = { bounds: miniBounds(), cursor, radius: p && Number.isFinite(p.radius) ? Math.max(0, Math.min(64, p.radius!)) : 16 }
+      if (m.settleTimer) { clearTimeout(m.settleTimer); m.settleTimer = null }
+      m.dragging = false
+      m.resizeDock = m.dock ? { ...m.dock } : null
+      m.dockMotion?.reset(); m.dock = null; stopMiniPoll(m)
+      m.resizeFrom = { bounds: miniBounds(m), cursor, radius: p && Number.isFinite(p.radius) ? Math.max(0, Math.min(64, p.radius!)) : 16 }
     }
-    const from = miniResizeFrom
+    const from = m.resizeFrom
     const next = resizeFromEdge(from.bounds, edge, cursor.x - from.cursor.x, cursor.y - from.cursor.y, MINI_MIN, MINI_MAX,
       screen.getDisplayMatching(from.bounds).workArea)
-    miniSize = { width: next.width, height: next.height }
-    miniResizeUpdates.push(next)
+    m.resizeUpdates.push(next)
   })
   ipcMain.on('window:miniSession', (e, raw: unknown) => {
     if (!isTrustedSender(e) || e.sender !== mainWindow?.webContents) return
@@ -4627,7 +4788,7 @@ app.whenReady().then(async () => {
     const deliver = (): void => {
       // extensions-changed 也要到两扇 mini(手开的 / 自动弹的):它们和分离窗一样各握一份插件实例(见 amadeusPlugins.ts)。
       const recipients = req.action === 'skills-changed' || req.action === 'agents-changed' || req.action === 'extensions-changed'
-        ? [mainWindow, miniWindow, autoMiniWindow, ...detachedWindows.values(), ...floatingWindows.values()]
+        ? [mainWindow, ...miniWindows(), autoMiniWindow, ...detachedWindows.values(), ...floatingWindows.values()]
         : [mainWindow]
       for (const win of recipients) if (win && !win.isDestroyed() && !win.webContents.isDestroyed() && win.webContents !== e.sender) {
         win.webContents.send('window:mainAction', req.action, req.payload)
@@ -4645,7 +4806,7 @@ app.whenReady().then(async () => {
     if (!state) return
     // An idle resize mask belongs to the old CSS radius/zoom. No HWND resize is
     // pending now, so let the card paint the new theme's corners itself.
-    clearIdleMiniResizeMask()
+    for (const m of liveMinis()) clearIdleMiniResizeMask(m)
     // ⚠️ 不从 prefs['tangu_locale'] 取主进程语言(P1-KF):那是手选键,任何字体 / 缩放广播都带着它的 null → 曾把中文界面的主进程文案重置成系统英文。
     // 语言走下面的 ui:locale(发方窗口自己切语言时 i18n.tsx 会报;收方重放后也会再报一次同值,主进程同值不动)。
     for (const w of BrowserWindow.getAllWindows()) {
@@ -4801,7 +4962,7 @@ app.whenReady().then(async () => {
   })
   // mini 全局快捷键(默认 ⌘/Ctrl+⇧+M;register 返回 false=被占用,吞掉不阻塞启动)。
   const MINI_ACCEL = MINI_ACCELERATOR // 托盘菜单「新建 Mini 对话」显示的是同一个
-  const registerMiniShortcut = (): void => { try { globalShortcut.register(MINI_ACCEL, () => toggleMiniWindow()) } catch { /* 快捷键冲突 */ } }
+  const registerMiniShortcut = (): void => { try { globalShortcut.register(MINI_ACCEL, openMiniFromShell) } catch { /* 快捷键冲突 */ } }
   if (!SANDBOX) registerMiniShortcut()
   if (!SANDBOX) globalHotkeyPause.add({ pause: () => globalShortcut.unregister(MINI_ACCEL), resume: registerMiniShortcut })
   if (PRODUCT.agentBackend && !SANDBOX) approvalDelivery.start() // P1-K3:订阅本机引擎待批流(引擎未就绪时 idle,ready 后自连)
@@ -4824,7 +4985,7 @@ app.whenReady().then(async () => {
       readForeground: readComputerUseForeground,
       // 用户按住自动 Mini 拖走时焦点落在它自己身上 —— 不算「回到 Forsion」,否则一拖就收起。
       hasForsionFocus: () => { const w = BrowserWindow.getFocusedWindow(); return !!w && w !== autoMiniWindow },
-      manualMiniVisible: () => !!miniWindow && !miniWindow.isDestroyed() && miniWindow.isVisible(),
+      manualMiniVisible: () => liveMinis().some((m) => m.win.isVisible()),
       session: () => miniSession,
       open: openAutoMini, close: closeAutoMini,
     })
@@ -4853,8 +5014,13 @@ app.whenReady().then(async () => {
     } : undefined,
     // 「随处说一句」= Mini 窗:已经开着就提到前面(热键是开合切换,菜单项不该把开着的 Mini 藏掉)
     newMini: {
-      open: () => { if (miniWindow && !miniWindow.isDestroyed() && miniWindow.isVisible()) present(miniWindow); else toggleMiniWindow() },
+      open: () => { const m = recentMini(); if (m?.win.isVisible()) presentMini(m); else openMiniFromShell() },
       accelerator: () => (globalShortcut.isRegistered(MINI_ACCEL) ? MINI_ACCEL : null),
+    },
+    // 「全部 Mini」:开着的每一扇(藏起来的也在),点一行叫到前面。名字是窗口标题(渲染层写胶囊上的名字)。
+    minis: {
+      list: () => liveMinis().map((m) => ({ id: m.id, title: m.win.getTitle(), visible: m.win.isVisible() })),
+      open: (id) => { const m = minis.get(id); if (m && !m.win.isDestroyed()) presentMini(m) },
     },
   })
   // Amadeus Space:装载 vault IPC(暴露给 window.amadeus)+ 资产协议(指向当前 vault 根)。
@@ -4884,6 +5050,15 @@ app.whenReady().then(async () => {
 ipcMain.on('pluginSandbox:self', (e) => { e.returnValue = SANDBOX ? { ...SANDBOX, appVersion: app.getVersion() } : null })
 /** 父进程渲染层最近一次带来的主题键(起沙箱时随 exec 报上来)。 */
 let sandboxStorage: Record<string, string> = {}
+/** 开发夹具可替换系统命令。Windows PowerShell 走环境变量传参，隐藏控制台。 */
+function runAppRefCommand(file: string, args: string[], opts?: WinRunOpts): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const fixtures = app.isPackaged ? '' : process.env.FORSION_APPREF_BIN_DIR?.trim()
+    execFile(fixtures ? join(fixtures, basename(file)) : file, args,
+      { timeout: opts?.timeoutMs ?? 8_000, maxBuffer: 4 << 20, windowsHide: true, ...(opts?.env ? { env: { ...process.env, ...opts.env } } : {}) },
+      (err, stdout) => (err ? reject(err) : resolve(String(stdout)))).stdin?.end()
+  })
+}
 const pluginSandbox = SANDBOX ? null : createPluginSandbox({
   forsionHome: forsionHomeDir,
   // dev:同一个 electron 二进制 + app 路径(ELECTRON_RENDERER_URL 随环境带过去,沙箱也吃 vite 热更新);打包态:应用本体
@@ -4891,6 +5066,9 @@ const pluginSandbox = SANDBOX ? null : createPluginSandbox({
   appArgs: app.isPackaged ? [] : [app.getAppPath()],
   platform: process.platform,
   pid: process.pid,
+  ...(process.platform === 'win32' ? {
+    focusWindow: (hwnd, pid) => focusWinWindowFromOwner({ ownPid: process.pid, run: runAppRefCommand }, hwnd, pid),
+  } : {}),
   ui: (): PluginSandboxUiSeed => ({ locale: mainLocale(), storage: sandboxStorage }),
   onChange: (st) => { for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed() && !w.webContents.isDestroyed()) w.webContents.send('pluginSandbox:changed', st) },
   onChildEvent: (ev) => {
@@ -4961,7 +5139,13 @@ function installHostTelemetry(): void {
     })
     backend.onUnexpectedExit(({ code, signal, uptimeMs }) => telemetry.emit('crash', engineExitProps(code, signal, Math.round(uptimeMs / 1000))))
   }
+  // 安装包更新器的阶段 → update(只报有结论的几步;见 telemetryHost.appUpdateProps)
+  onUpdaterPhase((st) => {
+    const props = appUpdateProps(st)
+    if (props) telemetry.emit('update', props)
+  })
   setInterval(() => {
+    telemetry.flushCounts() // 本小时的 app_counts / command_use(先于 takeHour 清上限;这两类本身不受上限)
     const { longTasks } = telemetry.takeHour()
     let rssKb = 0
     try { for (const m of app.getAppMetrics()) rssKb += m.memory?.workingSetSize ?? 0 } catch { /* 拿不到就记 0 */ }
@@ -4972,7 +5156,7 @@ function installHostTelemetry(): void {
       longTasks,
     })
   }, 3_600_000).unref()
-  // preload telemetryReport:渲染层只报 crash / feature / longtasks,整形与封顶在 telemetryHost.shapeRendererReport。只进不出,没有读接口。
+  // preload telemetryReport:渲染层报的种类见 shared/telemetryKeys 的 RENDERER_REPORT_KINDS,整形与封顶在 telemetryHost.shapeRendererReport。只进不出,没有读接口。
   ipcMain.on('host-telemetry:report', (e, kind: unknown, props: unknown) => {
     if (!isTrustedSender(e)) return
     telemetry.report(kind, props)
@@ -4982,6 +5166,7 @@ function installHostTelemetry(): void {
 // 退出收尾链(冲刷新同步 → 停后端 → app.exit)正在走:再按退出只等它,不重复收尾、不提前退(提前退会掐断还在推的改动)
 let exitChain: Promise<void> | null = null
 app.on('before-quit', (e) => {
+  telemetry.flushCounts() // 本小时还没发的计数先交给 Extend(退出被拦下也无妨:之后的照常再攒)
   if (exitChain) { e.preventDefault(); return }
   // 第一件事:有插件说还没做完就拦下问(别先做下面那些收尾 —— 取消的话应用还要接着用)。
   // 托盘「退出」在 app.quit() 之前就把 isQuitting 置了 true:拦下时还原,否则取消后关窗就真关了

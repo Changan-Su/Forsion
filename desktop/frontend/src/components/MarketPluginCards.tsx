@@ -4,6 +4,7 @@ import { Check, Download, Loader2, Puzzle } from 'lucide-react'
 import type { MarketCard, MarketInstallProgress, ToolEvent } from '../types'
 import { marketplaceCompatibility, marketplaceItemsOf } from '../../../shared/marketplace'
 import { installMarket, listInstalled, onInstallProgress, installedMarketItem, type InstalledItem } from '../services/marketService'
+import { trackMarketInstall } from '../telemetryInstall'
 // 安装后处理按需加载:它经 userSpaces 拉进 spaces.tsx(模块加载期读 window),静态导入会让所有引到聊天消息的 node 测试整文件挂掉。
 const postInstall = () => import('../marketPostInstall')
 import { useApp } from '../stores/appStore'
@@ -29,7 +30,8 @@ export function openMarketItem(item: { id: string; name: string }, comments = fa
   if (window.tangu?.openFloatingPanel) void window.tangu.openFloatingPanel({ id: 'market', title: item.name, builtin: 'market', params: { itemId: item.id, detailTab: comments ? 'comments' : 'overview', nonce: Date.now() } })
   else useApp.getState().openMarket(undefined, { itemId: item.id, detailTab: comments ? 'comments' : 'overview', nonce: Date.now() })
 }
-export function MarketPluginCards({ event, onDismiss }: { event: ToolEvent; onDismiss?: () => void }) {
+/** entry = 匿名遥测里记的安装入口(对话里的插件卡 / Muse 卡);onInstalled = 装成之后(Muse 卡据此回写卡片结果)。 */
+export function MarketPluginCards({ event, onDismiss, entry = 'chat-card', onInstalled }: { event: ToolEvent; onDismiss?: () => void; entry?: 'chat-card' | 'muse-card'; onInstalled?: (item: MarketCard) => void }) {
   const { t } = useI18n()
   const version = useMarketVersion()
   const [installed, setInstalled] = useState<Record<string, InstalledItem[]>>({})
@@ -48,6 +50,7 @@ export function MarketPluginCards({ event, onDismiss }: { event: ToolEvent; onDi
   const install = async (item: MarketCard) => {
     if (busy) return
     setBusy(item.id); setProgress(null); setError('')
+    const tele = trackMarketInstall(entry, item)
     try {
       const wasInstalled = !!installedMarketItem(item, installed)
       const result = await installMarket(item.id)
@@ -55,8 +58,10 @@ export function MarketPluginCards({ event, onDismiss }: { event: ToolEvent; onDi
       if (result.type === 'skill' && !wasInstalled && skillAgentsSupported()) await applySkillAgentChoice(result.slug || item.installSlug, skillChoice[item.id] ?? null).catch((e) => setError(t('market.skillAgents.applyFailed', { e: e?.message || String(e) })))
       const post = await postInstall()
       const { restart } = await post.afterMarketInstall(result.type, result, wasInstalled, text => setError(text))
+      tele.done({ type: result.type, pluginId: result.id, restart })
+      try { onInstalled?.(item) } catch { /* 回写失败不影响安装 */ }
       setCanReboot(post.canRestartBackend()); setNeedsRestart(restart); await refresh()
-    } catch (e: any) { setError(e.message) } finally { setBusy(null); setProgress(null) }
+    } catch (e: any) { tele.fail(e); setError(e.message) } finally { setBusy(null); setProgress(null) }
   }
   const reboot = async () => { if (!(await (await postInstall()).restartBackend())) setError(t('market.cardRestartFailed')); else setNeedsRestart(false) }
   return <div className="mk-chat-results" data-marketplace-cards={event.id}>

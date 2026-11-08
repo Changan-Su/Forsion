@@ -625,7 +625,7 @@ declare global {
       cloudInvoke?(channel: string, ...args: unknown[]): Promise<unknown>
       /** 帮助改进 Forsion(2.13.8 起):渲染层的崩溃 / 功能使用 / 长任务计数报给主进程(整形后转给 Extend;只进不出)。
        *  只有 Extend 注册了 telemetry:get 才有这个键 —— 引导第 7 步「帮助改进」页签据此同步判断本机有没有这一页。 */
-      telemetryReport?(kind: 'crash' | 'feature' | 'longtasks', props: Record<string, unknown>): void
+      telemetryReport?(kind: import('../../shared/telemetryKeys').RendererReportKind, props: Record<string, unknown>): void
       /** 提交反馈到 Forsion 反馈中心(会话日志 JSON 随附为附件;token 留主进程)。 */
       submitFeedback?(input: { description: string; sessionLogJson?: string; sessionLogName?: string }): Promise<{ ok: boolean; id?: string | null; error?: string; attachmentSkipped?: boolean }>
       appVersion?(): Promise<string>
@@ -831,6 +831,15 @@ declare global {
       deleteProvider?(providerId: string): Promise<DirectProviderConfig[]>
       /** 桌面级共享语音转写:音频(base64)→ 文本。任意功能复用;主进程本地/自带-key,不经引擎。 */
       /** timestamps 不传 = 回纯文本(语音输入);传 true = 回 { text, segments }(视频转录要分段时间戳)。 */
+      openVoiceInput?: import('../../shared/voiceInputStream').OpenVoiceInput
+      /** 全局语音输入的窄接口(官方「语音输入」插件用;macOS / Windows 桌面才有)。没有一条能往别的应用写字。 */
+      dictation?: {
+        state(): Promise<import('../../shared/dictation').DictationState>
+        attach(on: boolean): Promise<import('../../shared/dictation').DictationState>
+        setHotkey(hotkey: string): Promise<import('../../shared/dictation').DictationState>
+        allowAccessibility(): Promise<import('../../shared/dictation').DictationState>
+        onChange(cb: (s: import('../../shared/dictation').DictationState) => void): () => void
+      }
       transcribeAudio?(req: { audioBase64: string; mime?: string; modelId?: string; backend?: 'local' | 'cloud'; language?: string }): Promise<string>
       transcribeAudio?(req: { audioBase64: string; mime?: string; modelId?: string; backend?: 'local' | 'cloud'; language?: string; timestamps: true }): Promise<AsrTimedResult>
       /** 按路径转写(几十 MB 音轨不走 base64;主进程直接读盘)。 */
@@ -931,8 +940,11 @@ declare global {
       /** 开一个独立窗承载给定视图(右键「移到新窗口」/拖到空桌面);screen 坐标可选(拖出落点)。 */
       openDetached?(views: Array<{ type: string; params?: Record<string, unknown> }>, at?: { screenX: number; screenY: number }, opts?: { space?: string }): Promise<{ id: string }>
       cursorScreenPoint?(): { screenX: number; screenY: number }
-      /** 开/切换 mini 悬浮卡片。带 sessionId 时定向显示该正式会话,不另建临时会话。 */
-      openMini?(opts?: import('../../shared/miniPanel').MiniOpenOptions): void
+      /** 开 / 叫出一扇 Mini 悬浮卡片(2.13.8 起多开:同一实体再开 = 叫出那扇,duplicate 才另开;普通 Mini 满 6 扇不开,
+       *  结果 { ok: false, reason: 'limit' } 由调用方提示,用 openMiniWindow() 就带提示)。不带参数 = ⌘⇧M:开合最近用过的那扇。 */
+      openMini?(opts?: import('../../shared/miniPanel').MiniOpenOptions): Promise<import('../../shared/miniPanel').MiniOpenResult | undefined> | void
+      miniEntity?(target: import('../../shared/miniPanel').MiniOpenOptions): void
+      onMiniNudge?(cb: () => void): () => void
       /** Open/focus a native Floating Panel window. Undefined on Web/mobile. */
       openFloatingPanel?(opts: import('../../shared/floatingPanel').FloatingPanelOpenOptions): Promise<{ id: string } | undefined>
       floatingReady?(id: string): Promise<import('../../shared/floatingPanel').FloatingPanelOpenOptions | undefined>

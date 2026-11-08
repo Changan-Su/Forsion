@@ -3,6 +3,7 @@
 // themes) that the UI subscribes to. Built-in plugins are registered on init(); external
 // (Forsion) plugins are discovered from ~/.forsion/plugins/ and evaluated here.
 //
+import { openMiniWindow } from '../../mini/openMiniWindow'
 import { leaseAccountResponse } from './accountResponse'
 import { pushMobileBack } from '../lib/mobileBack'
 import { desktopAccount } from './desktopAccount'
@@ -51,6 +52,7 @@ import { registerSummaryCard, revokeSummaryCards, type SummaryCardContribution, 
 import { currentPlatform } from '../../services/agentRunService'
 import { UI_MODE } from '@lcl/engine/uiMode'
 import { attachTooltip } from '@lcl/engine/hoverSurface'
+import { openFloat, FLOAT_ANCHORS, type FloatOptions } from '@lcl/engine/floatLayer'
 import { defineMessages, hostListSource, isPluginText, pluginText } from './pluginText'
 import { checkPluginIcon, pluginIconElement } from './pluginIcon'
 import { pluginListEmpty, setHostListEmpty } from '../../views/hostListEmpty'
@@ -74,6 +76,8 @@ import { getSync, markSyncDecided, refreshSync, resolveNotes, runSyncNow, setSyn
 import { POPUP_PRIORITY, queuePopup, releasePopupsOf } from '../../stores/popupQueue'
 import { closeSpotlight, showSpotlight } from './guideSpotlight'
 import { registerGuideTips, requestTip, tipState, unregisterGuideTips } from './guideTips'
+import './hostTips' // 宿主自己的上手提示(通话键首次提示等),三端都经 pluginStore 登记
+import { invalidatePluginWidget, providePluginWidget, revokePluginWidgets } from './pluginWidgets'
 import { watchAccountName } from '../../services/accountName'
 import { fetchBingWallpapers } from '../../views/homepageWallpaper'
 import { getAggDb } from '../store/dbAggregateStore'
@@ -118,6 +122,8 @@ import { addRibbonAction } from './ribbonAction'
 import { compileDashboardRecipe } from '@amadeus-shared/dashboardRecipe'
 import { openWebFloatingPanel } from '../../pluginPanelSeam'
 import { connectionTarget, homeTarget } from '../../services/engine/targets'
+import { sendTelemetry } from '../../telemetrySend'
+import { telemetryPluginRef } from '../../telemetryPluginId'
 
 // 宿主自己产出的用户可见文案(插件贡献的文案由插件自己带双语,见 display.ts 的语言解析单点)。
 // 命名空间 `pluginhost.*` 是本文件专属,别处不要复用。
@@ -733,6 +739,29 @@ function writeDisabled(ids: string[]): void {
   }
 }
 
+/** 代码内注册的内置插件里 defaultOff 的那几个(全局语音输入这类会占系统级快捷键的):这台设备**第一次见到**时记成关,之后用户怎么拨就怎么算。
+ *  记「见过」而不是每次都关 —— 用户打开以后不能被下一次启动关回去。「见过」的清单读不出来 = 不知道:这次按关算,但什么都不写回。 */
+const DEFAULT_OFF_SEEN_KEY = 'amadeus.plugins.defaultOffSeen'
+export function seedDefaultOff(plugins: readonly AmadeusPlugin[], disabled: string[]): string[] {
+  const candidates = plugins.filter((p) => p.builtin && p.defaultOff).map((p) => p.id)
+  if (!candidates.length) return disabled
+  let seen: string[]
+  try {
+    const raw = localStorage.getItem(DEFAULT_OFF_SEEN_KEY)
+    const parsed: unknown = raw ? JSON.parse(raw) : []
+    if (!Array.isArray(parsed)) throw new Error('bad')
+    seen = parsed.filter((x): x is string => typeof x === 'string')
+  } catch {
+    return [...disabled, ...candidates.filter((id) => !disabled.includes(id))]
+  }
+  const fresh = candidates.filter((id) => !seen.includes(id))
+  if (!fresh.length) return disabled
+  const next = [...disabled, ...fresh.filter((id) => !disabled.includes(id))]
+  writeDisabled(next)
+  try { localStorage.setItem(DEFAULT_OFF_SEEN_KEY, JSON.stringify([...seen, ...fresh])) } catch { /* ignore */ }
+  return next
+}
+
 /** 读持久化的禁用插件 id(直读 localStorage,不依赖 store 是否已 init)。
  *  供 userSpaces 在启动装载时过滤「被禁用插件的内嵌 Space」——那一刻插件宿主可能还没装配。 */
 function readOwed(key = OWED_KEY): Set<string> {
@@ -791,6 +820,7 @@ const loadedCode = new Map<string, string>()
 function pluginMeta(src: ExternalPluginSource): Omit<AmadeusPlugin, 'setup'> {
   return {
     id: src.id,
+    dir: src.dir,
     packageId: src.packageId,
     name: src.name,
     nameEn: src.nameEn,
@@ -813,6 +843,7 @@ function pluginMeta(src: ExternalPluginSource): Omit<AmadeusPlugin, 'setup'> {
     changelog: src.changelog,
     onboarding: src.onboarding,
     guide: src.guide,
+    widgets: src.widgets,
     blocked: src.blocked,
     blockedReason: src.blockedReason,
     isDesktopOnly: src.isDesktopOnly,
@@ -894,6 +925,23 @@ export function isPagePipelinePath(p: string): boolean {
 
 /** 每个正在运行的插件一本副作用账(effectScope.ts);teardown 关账。模块级:视图宿主组件也要往里记。 */
 const liveScopes = new Map<string, EffectScope>()
+/** 匿名遥测 plugin_load:这个窗口里已经报过激活结果的插件(同一插件同一次启动只报一次;主进程按公开 id 再去重一遍)。 */
+const loadReported = new Set<string>()
+/** 匿名遥测 plugin_lifecycle 的 blocked:门禁挡下(接口版本 / 最低版本 / 清单坏 / 开发源声明文件扩展名)或用户想开但前置没齐的插件,
+ *  同一插件同一原因这个窗口只报一次(主进程再去重)。 */
+const blockedReported = new Set<string>()
+const BLOCKED_REASON: Record<NonNullable<AmadeusPlugin['blocked']>, string> = { api: 'api', minApp: 'min-app', invalid: 'invalid', 'dev-fileext': 'dev-fileext', desktopOnly: 'other' }
+function reportBlocked(s: Pick<PluginState, 'plugins' | 'activeIds' | 'disabledIds'>): void {
+  try {
+    for (const p of s.plugins) {
+      const reason = p.blocked ? BLOCKED_REASON[p.blocked] ?? 'other'
+        : !s.activeIds.includes(p.id) && pluginWanted(p, s.disabledIds) && unmetPluginDeps(p, s).length ? 'deps' : null
+      if (!reason || blockedReported.has(`${p.id}:${reason}`)) continue
+      blockedReported.add(`${p.id}:${reason}`)
+      sendTelemetry('plugin_lifecycle', { ...telemetryPluginRef(p), action: 'blocked', blockedReason: reason })
+    }
+  } catch { /* 遥测不拖累装载 */ }
+}
 
 /** 视图级页表面(viewSurface)的吊销登记:插件禁用时 fileTypes 切片一变,React 重渲 → effect
  *  cleanup 会把视图表面收掉,但那是**异步**的 —— 记在插件当前那本账上,teardown 关账时同步吊销,才封死
@@ -1885,7 +1933,9 @@ export const usePluginStore = create<PluginState>((set, get) => {
         const def = get().views.find((item) => item.pluginId === pluginId && item.item.id === viewId)?.item
         if (!def || !ctxAlive()) return
         const mainType = `plugin:${pluginId}:${opts?.mainViewId || viewId}`
-        hostTangu()?.openMini?.({ title: opts?.title || pluginText(def.title), params: opts?.params,
+        // 2.13.8 起多开:同一 viewId(+ key)再开 = 叫出已开的那扇;满了由 openMiniWindow 提示用户
+        const key = typeof opts?.key === 'string' ? opts.key.trim().slice(0, 128) || undefined : undefined
+        void openMiniWindow({ title: opts?.title || pluginText(def.title), params: opts?.params, key,
           view: { type, params: opts?.params }, mainView: { type: mainType, params: opts?.mainViewParams } })
       },
     } : {}),
@@ -2172,6 +2222,27 @@ export const usePluginStore = create<PluginState>((set, get) => {
         if (!ctxAlive()) return { set() {}, update() {}, actions: document.createElement('div'), dispose() {} }
         return setPluginViewModes(el, spec, (d) => scope.own('mount', d, 'viewModes'), (e) => console.error(`[amadeus] plugin "${pluginId}" view mode onChange failed`, e))
       },
+      // 浮层(LCL 表面规范 2026-11-07,lcl/engine/floatLayer.ts):View / Space / 窗口三档作用域 × 锚点 × 用途。同步可用(模块很小);
+      // id 按插件 id 加前缀(两个插件同名的 id 不串);插件停用 / 重载时统一 close。参数不对同步抛。
+      float: (opts) => {
+        if (!opts || typeof opts !== 'object') throw new TypeError('float needs options')
+        if (!ctxAlive()) {
+          const el = document.createElement('div')
+          return { el, anchor: (FLOAT_ANCHORS as readonly string[]).includes(String(opts.anchor)) ? opts.anchor! : 'bottom-end', closed: true, move() {}, close() {} }
+        }
+        if (opts.scope === 'view' && !(opts.host instanceof HTMLElement && opts.host.isConnected)) throw new TypeError("float scope 'view' needs a connected host element")
+        const onAnchorChange = typeof opts.onAnchorChange === 'function' ? opts.onAnchorChange : undefined
+        const h = openFloat({
+          scope: opts.scope, host: opts.host, anchor: opts.anchor, role: opts.role, bare: !!opts.bare,
+          space: opts.space != null ? String(opts.space) : undefined,
+          id: opts.id != null ? `plugin:${pluginId}:${String(opts.id)}` : undefined,
+          label: opts.label != null ? String(opts.label) : undefined,
+          onAnchorChange: onAnchorChange && ((a) => { if (ctxAlive()) onAnchorChange(a) }),
+        } as FloatOptions)
+        h.el.dataset.floatOwner = pluginId
+        const dispose = scope.own('mount', () => h.close(), 'float')
+        return { el: h.el, get anchor() { return h.anchor }, get closed() { return h.closed }, move: (a) => h.move(a), close: dispose }
+      },
       // 提示框:LCL 那一份(hoverSurface.ts),同宿主按钮 / 侧栏行;插件停用 / 重载时统一收掉。同步可用,不走动态 import(很小)。
       attachTooltip: (el, content, opts = {}) => {
         if (!ctxAlive()) return { update() {}, dispose() {} }
@@ -2408,6 +2479,21 @@ export const usePluginStore = create<PluginState>((set, get) => {
     guide: {
       show: (id) => { if (ctxAlive()) requestTip(pluginId, String(id ?? '')) },
       state: (id) => tipState(pluginId, String(id ?? '')),
+    },
+    // 主页小组件(2026-11-07):卡声明在 manifest `widgets`,这里只喂数据(只读,宿主画);登记即记账,关账整插件撤。
+    widgets: {
+      provide: (id, fn) => {
+        const wid = String(id ?? '')
+        if (!ctxAlive() || typeof fn !== 'function') return { dispose: () => {} }
+        if (!get().plugins.find((p) => p.id === pluginId)?.widgets?.some((w) => w.id === wid)) {
+          console.warn(`[amadeus] 插件 ${pluginId} 的 manifest widgets 里没有 "${wid}",ctx.widgets.provide 被忽略`)
+          return { dispose: () => {} }
+        }
+        const off = providePluginWidget(pluginId, wid, fn)
+        scope.ownOnce('widgets', () => revokePluginWidgets(pluginId))
+        return { dispose: () => { if (ctxAlive()) off() } }
+      },
+      invalidate: (id) => { if (ctxAlive()) invalidatePluginWidget(pluginId, id === undefined ? undefined : String(id)) },
     },
     // 收件箱(2026-10-17):只给首方内置包 —— 一封「系统消息」长得和宿主自己发的一样,不能让任意插件往用户面前塞。
     ...(get().plugins.find((p) => p.id === pluginId)?.locked
@@ -2833,13 +2919,28 @@ export const usePluginStore = create<PluginState>((set, get) => {
    *  reject 且这一代还活着 → 与同步抛错同一条回滚,再对齐一轮(依赖它的跟着停)。过期那一代的结果一律不认。 */
   const start = (plugin: AmadeusPlugin): boolean => {
     const id = plugin.id
+    // 匿名遥测 plugin_load(契约 §9):给 setup 计时(async setup 到落定),同步 / 异步失败都算 error;只在主窗报,同一插件这个窗口只报一次。
+    const t0 = performance.now()
+    const loaded = (outcome: 'ok' | 'error', e?: unknown): void => {
+      if (windowKind() !== 'main' || loadReported.has(id)) return
+      loadReported.add(id)
+      const ref = telemetryPluginRef(plugin)
+      sendTelemetry('plugin_load', { ...ref, outcome, activateMs: Math.round(performance.now() - t0) })
+      // 激活失败也补进崩溃事件(带 pluginId):只给公开插件(内置 / 商店)补 —— 侧载 / 开发副本的栈帧可能带它的路径与名字。
+      // 报错原文不发,只给错误名与调用栈帧(主进程只留「at」帧,Extend 再剥一遍)
+      if (outcome === 'error' && ref.pluginOfficial) {
+        const err = e && typeof e === 'object' ? e as { name?: unknown; stack?: unknown } : null
+        sendTelemetry('crash', { reason: 'exception', errorName: err?.name ?? typeof e, stack: err?.stack, ...ref })
+      }
+    }
     // 标准设置行:每个插件自动获得「工作文件夹」(ctx.app.workFolder() 的数据源;
     // 插件在 setup 里自注册同 key 会覆盖本行,见 registerSetting 的去重)。拆 / 失败按 pluginId 一并收走。
     set((s) => ({ settings: [...s.settings, { pluginId: id, item: workFolderSetting(id) }] }))
     const ctx = makeContext(id)
     const scope = liveScopes.get(id)!
-    registerGuideTips(id, plugin.guide?.tips) // 上手提示(manifest guide):teardown 里撤
+    registerGuideTips(id, plugin.guide?.tips, plugin) // 上手提示(manifest guide):teardown 里撤
     const fail = (e: unknown): void => {
+      loaded('error', e)
       console.error(`[amadeus] plugin "${id}" setup failed`, e)
       useUiStore.getState().notify(translate('pluginhost.setupFailed', { name: plugin.name }))
       teardown(id)
@@ -2856,6 +2957,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
     }
     if (r && typeof (r as PromiseLike<unknown>).then === 'function') {
       void Promise.resolve(r).then((d) => {
+        if (scope.alive()) loaded('ok')
         if (typeof d !== 'function') return
         if (scope.alive()) set((s) => ({ disposers: { ...s.disposers, [id]: d } }))
         else try { d() } catch (e) { console.error(`[amadeus] plugin "${id}" stale disposer failed`, e) }
@@ -2866,6 +2968,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
         reconcile()
       })
     }
+    else loaded('ok')
     set((s) => ({
       activeIds: [...s.activeIds, id],
       disposers: { ...s.disposers, [id]: typeof r === 'function' ? r : undefined },
@@ -2933,7 +3036,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
       const src = sources.find((x) => x.id === cur.id)
       if (keep(cur, src)) {
         next.push({ ...pluginMeta(src), setup: cur.setup })
-        if (s0.activeIds.includes(cur.id)) registerGuideTips(cur.id, src.guide?.tips) // 只改了 manifest 的更新:新加的提示不等重启
+        if (s0.activeIds.includes(cur.id)) registerGuideTips(cur.id, src.guide?.tips, cur) // 只改了 manifest 的更新:新加的提示不等重启
         continue
       }
       reset.push(cur.id)
@@ -2992,7 +3095,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
 
     init(plugins = BUILTIN_PLUGINS) {
       if (get().initialized) return
-      set({ plugins: [...plugins], disabledIds: readDisabled(), initialized: true })
+      set({ plugins: [...plugins], disabledIds: seedDefaultOff(plugins, readDisabled()), initialized: true })
       reconcile()
     },
 
@@ -3002,6 +3105,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
       if (unmetPluginDeps(plugin).length) return // 前置没齐:装着但开不了(设置页给原因与「安装 / 启用前置」入口)
       // 注:DISABLED_KEY 是按 id 的单一全局列表;listPlugins 已按 vault 优先去重,每 id 只有一实例,一位开关即正确。
       noteExplicitEnable(id) // 用户重开 = 重试
+      if (get().disabledIds.includes(id)) sendTelemetry('plugin_lifecycle', { ...telemetryPluginRef(plugin), action: 'enable' })
       try {
         localStorage.setItem(PLUGIN_ENABLE_STAMP_KEY, JSON.stringify({ id, t: Date.now() })) // 先于偏好:别的窗口先收到戳
       } catch {
@@ -3015,6 +3119,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
     disable(id) {
       const plugin = get().plugins.find((p) => p.id === id)
       const wasOn = !!plugin && (get().activeIds.includes(id) || pluginWanted(plugin))
+      if (plugin && !get().disabledIds.includes(id)) sendTelemetry('plugin_lifecycle', { ...telemetryPluginRef(plugin), action: 'disable' })
       if (!get().disabledIds.includes(id)) set((s) => ({ disabledIds: [...s.disabledIds, id] }))
       writeDisabled(get().disabledIds)
       const before = get().activeIds
@@ -3052,6 +3157,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
         return // 读不到来源 ≠ 来源都没了:保持现状
       }
       applySources(sources)
+      if (windowKind() === 'main') reportBlocked(get())
       // 上次运行没关成的规则(走到这里在跑的都已被 start 销账)
       if (windowKind() === 'main' && automationHost()) {
         for (const id of readOwed(RULES_OWED_KEY)) {

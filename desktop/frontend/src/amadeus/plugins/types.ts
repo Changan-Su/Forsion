@@ -739,6 +739,10 @@ export interface PluginMiniPanelOptions {
   /** Relative id of this plugin's full-size destination; defaults to viewId. */
   mainViewId?: string
   mainViewParams?: Record<string, unknown>
+  /** Identity of the thing shown (2.13.8+). Several Mini windows can be open at once: calling again with the
+   *  same viewId and key focuses the open window and updates its params; a different key opens another window.
+   *  Without key there is one window per viewId (what older hosts did with every call). Older hosts ignore it. */
+  key?: string
 }
 
 /** One row in a plugin list source. The list stays a flat array; hierarchy is optional and expressed
@@ -1341,6 +1345,46 @@ export interface PluginToolIslandOptions {
   slots?: { topLeft?: HTMLElement; topRight?: HTMLElement; bottomLeft?: HTMLElement; bottomRight?: HTMLElement }
 }
 
+/** Where a `ctx.ui.float` sits inside its scope: four corners, plus top / bottom centre. */
+export type PluginFloatAnchor = 'top-start' | 'top-center' | 'top-end' | 'bottom-start' | 'bottom-center' | 'bottom-end'
+
+/** Options of `ctx.ui.float` (2026-11-07+). */
+export interface PluginFloatOptions {
+  /** What it floats over and hides with. `'view'`: inside `host` (your own view's element) — gone when the view is.
+   *  `'space'`: over the whole Space (all three columns, above the splitters); hidden while the user is in another
+   *  Space, back as it was when they return. `'window'`: over the whole window, kept across Space switches.
+   *  A window without a Space area (Mini, floating panels, view windows) shows `'space'` floats at window level. */
+  scope: 'view' | 'space' | 'window'
+  /** Required for `'view'`: the element to float in (normally your view root). Set to `position: relative` if static. */
+  host?: HTMLElement
+  /** `'space'` only: the Space it belongs to (default: the Space open when you call `float`). */
+  space?: string
+  /** Default `'bottom-end'`. When `id` is set and the user has dragged it elsewhere, their choice wins. */
+  anchor?: PluginFloatAnchor
+  /** `'panel'` (default) stays at its anchor; later panels cover earlier ones. `'notice'` stacks with the other
+   *  notices at the same anchor (8px apart, the first one nearest the corner) and is announced (`role="status"`). */
+  role?: 'panel' | 'notice'
+  /** Stable id: the anchor the user drags it to is remembered on this device. Namespaced by your plugin id. */
+  id?: string
+  /** Accessible name (panels). */
+  label?: string
+  /** `true` = no card skin (background, radius, border, shadow); you draw it. Default: the host card. */
+  bare?: boolean
+  /** The user dragged it to another anchor. */
+  onAnchorChange?(anchor: PluginFloatAnchor): void
+}
+
+export interface PluginFloatHandle {
+  /** Put your content here. Any descendant with `data-float-drag` is a drag handle (not on buttons / inputs):
+   *  dragging it and letting go snaps the float to the nearest anchor. */
+  readonly el: HTMLElement
+  readonly anchor: PluginFloatAnchor
+  readonly closed: boolean
+  move(anchor: PluginFloatAnchor): void
+  /** Fades out and removes it. The host also closes every float of yours on disable / reload. */
+  close(): void
+}
+
 export interface PluginToolIslandHandle {
   /** The row under the island (above it while docked at the bottom), for what the current tool needs: colour
    *  dots, pen types, widths. Usable at once; fill it with your own elements, don't replace its class. */
@@ -1706,7 +1750,9 @@ export interface PluginContext {
    *  Desktop uses a native window; Web uses an overlay. Feature-detect on older hosts/mobile. */
   openFloatingPanel?(viewId: string, opts?: PluginFloatingPanelOptions): void
   /** Open one of this plugin's registered views in the compact native Mini Panel.
-   *  Desktop-only; feature-detect on older hosts and Web/mobile. */
+   *  Desktop-only; feature-detect on older hosts and Web/mobile. 2.13.8+: Mini windows can be open side by side —
+   *  the same viewId (+ `key`) reuses its window, other views / keys open their own, up to the host's limit
+   *  (the host tells the user when it is reached; the call never throws). */
   openMiniPanel?(viewId: string, opts?: PluginMiniPanelOptions): void
   /** Contribute a list source to the unified workspace sidebar (2026-08-25+). Old hosts lack it:
    *  always call as `ctx.registerListSource?.(…)`. See ListSourceContribution. */
@@ -1965,6 +2011,14 @@ export interface PluginContext {
      *  pens and stroke feel as a `.excalidraw.md` board, without its chrome. See PluginBoardOptions.
      *  Feature-detect on older hosts: `ctx.ui?.mountBoard`. */
     mountBoard?(el: HTMLElement, opts: PluginBoardOptions): PluginBoardHandle
+    /** A floating card or notice over one of three scopes (2026-11-07+), instead of absolutely positioning your own:
+     *  a view (`host`), the current Space, or the whole window — see PluginFloatOptions. The host owns the layers, the
+     *  stacking order (Space floats sit above the splitters and below menus; window floats below tooltips and menus),
+     *  the six anchors, notice stacking, dragging between anchors, hiding on Space switch and the enter / exit motion;
+     *  you put your content in `el` and call `close()`. It never takes focus by itself. Menus you open from inside it
+     *  still go through `ctx.ui.contextMenu` / `popover`, which sit above it. For "the user should look here once" use
+     *  `ctx.guide`, not a float. Feature-detect on older hosts: `ctx.ui?.float`. */
+    float?(opts: PluginFloatOptions): PluginFloatHandle
     /** Render whiteboard elements to a static SVG (2026-10-10+) — for showing ink where no live layer
      *  is mounted. Resolves `null` for an empty scene. `x` / `y` / `width` / `height` are the drawing's
      *  bounds in scene units, padding included: place the SVG at `(x + scrollX) * zoom`, sized
@@ -2036,6 +2090,18 @@ export interface PluginContext {
     /** `waiting` 还没出 / `seen` 用户点过知道了 / `learned` 做过那件事 / `muted` 用户关了这个插件的提示 /
      *  `off` 用户在设置里关了上手提示,或这台设备读不了记账。 */
     state(id: string): 'waiting' | 'seen' | 'learned' | 'muted' | 'off'
+  }
+  /** 主页小组件(2026-11-07+):卡声明在 manifest `widgets`(每张一个目录,里面 `manifest.json` 写 `id` / `title` / `titleEn` /
+   *  `layout: "list"` / 可选 `icon`(插件图标词表的名字)/ 可选 `space`),宿主照主页卡的样子画;这里只喂行 —— 只读,不开 DOM 挂载。
+   *  `provide(id, fn)`:卡挂在主页上时宿主调 `fn({}, { signal })`,返回行的数组或 `{ rows, footer?, empty? }`。一行 =
+   *  `{ id?, title, time?, meta?, tone?: 'accent' | 'warn' | 'muted', done?, now?, group? }`:`time` 画在左列,`meta` 右边小字,
+   *  有 `done` 就画勾选框(只读),`now` 实心点,`group` 变了画小标题(如「明天」)。文字按 `ctx.getLocale()` 给好(切语言时宿主会重拿),最多 50 行。
+   *  卡挂上、`invalidate()`、窗口回到前台(距上次 ≥30 秒)时调;同一张同一时刻只有一次在飞,10 秒没回 / 抛错 = 画「读不到」,
+   *  不当成空。`id` 必须是 manifest 里声明过的。停用 / 重载宿主统一收。
+   *  `invalidate(id?)`:数据变了,请宿主重拿(不给 id = 你的全部卡)。旧宿主没有:`ctx.widgets?.provide(…)`。 */
+  widgets?: {
+    provide(id: string, fn: (params: Record<string, never>, opts: { signal: AbortSignal }) => unknown): { dispose(): void }
+    invalidate(id?: string): void
   }
   /** Tangu 侧的只读探针(2026-08-29+):**当前主区聊天要用的模型** + **模型目录** + **当前 Space id**。
    *  聊天状态住在 Tangu 的 store 里,`ctx.app` 是 Amadeus 的页面/库面 —— 两者不通,所以单开这一截。
@@ -2536,6 +2602,8 @@ export interface PluginAutomationRule {
 
 export interface AmadeusPlugin {
   id: string
+  /** 安装目录名(外置插件,主进程扫出来的;见 ExternalPluginSource.dir)。 */
+  dir?: string
   packageId?: string
   /** Canonical display name, retained to recognize historical folders. New default folders use the ID.
    *  For display, go through `pluginDisplayName(p, locale)`. */
@@ -2549,6 +2617,9 @@ export interface AmadeusPlugin {
   iconUrl?: string
   /** Built-in plugins ship with the app and can't be uninstalled (only disabled). */
   builtin?: boolean
+  /** In-code built-ins only: switched off the first time a device sees the plugin (the user turns it on in Settings → Plugins);
+   *  after that the user's own on / off choice stands. For built-ins that claim something system-wide (a global shortcut). */
+  defaultOff?: boolean
   /** External source that the app seeds itself (electron/builtinPlugins.ts): shown as 「内置」, no uninstall,
    *  but still an external source for load/reload purposes (never set `builtin` for these). */
   preinstalled?: boolean
@@ -2579,6 +2650,8 @@ export interface AmadeusPlugin {
   onboarding?: PluginOnboardingSpec
   /** First-use tips (manifest `guide`, 2026-11-02+; sanitized by the host). See `PluginGuideApi`. */
   guide?: import('@amadeus-shared/ipc').PluginGuideSpec
+  /** Home widgets (manifest `widgets`, 2026-11-07+; read and sanitized by the host). Data comes from `ctx.widgets.provide`. */
+  widgets?: import('@amadeus-shared/ipc').PluginWidgetSpec[]
   /** Present → gated out by the host: 'api' = apiVersion mismatch, 'minApp' = app too old,
    *  'invalid' = missing/broken manifest or unreadable main (agent Space / dev source, see `blockedReason`),
    *  'dev-fileext' = dev source declaring `fileExtensions` (unprotected outside the installed plugins dir),

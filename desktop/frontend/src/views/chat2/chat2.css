@@ -486,6 +486,33 @@
 .t2-failed-btn.primary { background: var(--overlay-light); color: var(--text); }
 .t2-failed-btn.primary:hover { background: var(--overlay-medium); }
 .t2-failed-btn:focus-visible { outline: var(--focus-ring) solid var(--signal-line); outline-offset: 1px; }
+/* 运行中已发出、Agent 还没读到(ChatView 流尾的待读气泡,读到后同 id 原地转正):气泡照常全色,不学失败那条变淡;
+   下面一行小字说还没读到,悬停 / 键盘聚焦时同一格换成撤回 · 立即插话(两层叠在一格里,换的时候不挤动布局)。
+   触屏常驻按钮、去掉「↑ 取回」;安卓原生宿主(data-native-menu)改走长按菜单,小字提示长按。 */
+.t2-pending { display: grid; justify-items: end; align-items: center; min-height: 22px; margin-top: 2px; font-size: var(--ui-font-caption); }
+.t2-pending > * { grid-area: 1 / 1; transition: opacity var(--duration-fast, .15s); }
+.t2-pending-cap { display: inline-flex; align-items: center; gap: 4px; color: var(--text-faint, var(--text-muted)); white-space: nowrap; pointer-events: none; } /* 透明度 < 1 会单独成层盖在按钮上:小字不接点击 */
+.t2-pending-tip::before { content: '·'; margin: 0 4px 0 2px; }
+.t2-pending-acts { display: inline-flex; gap: 2px; opacity: 0; pointer-events: none; }
+.t2-pending-btn { display: inline-flex; align-items: center; gap: 4px; border: 0; padding: 3px 8px; border-radius: var(--radius-sm); background: none; color: var(--text-muted); font: inherit; cursor: pointer; }
+.t2-pending-btn:hover { background: var(--overlay-light); color: var(--text); }
+.t2-pending-btn:focus-visible { outline: var(--focus-ring) solid var(--signal-line); outline-offset: 1px; }
+.t2-userwrap--pending:hover .t2-pending-acts, .t2-pending:focus-within .t2-pending-acts { opacity: 1; pointer-events: auto; }
+.t2-userwrap--pending:hover .t2-pending-cap, .t2-pending:focus-within .t2-pending-cap { opacity: 0; }
+@media (hover: none) {
+  .t2-pending { grid-auto-flow: column; justify-content: end; gap: 6px; }
+  .t2-pending > * { grid-area: auto; }
+  .t2-pending-acts { opacity: 1; pointer-events: auto; }
+  .t2-userwrap--pending:hover .t2-pending-cap { opacity: 1; }
+  .t2-pending-tip { display: none; }
+  /* 原生宿主走长按菜单:按钮「看不见」不是「没有」(同文件末尾 data-native-chrome 那条):读屏 / 外接键盘照样够得着;
+     菜单弹不出来过(.t2-userwrap--inline)就整排还回来,提示也不再说长按 */
+  .t2-userwrap:not(.t2-userwrap--inline) .t2-pending[data-native-menu] .t2-pending-btn:not(:focus-visible) {
+    position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%);
+  }
+  .t2-userwrap:not(.t2-userwrap--inline) .t2-pending[data-native-menu] .t2-pending-tip { display: inline; }
+}
+@media (prefers-reduced-motion: reduce) { .t2-pending > * { transition: none; } }
 /* 划线后的那一条不在这里了:全应用共用 lcl/components/selectionBar.css(外壳 .ui-popover.selbar,挂在 body 下)。 */
 
 @media (max-width: 1040px) {

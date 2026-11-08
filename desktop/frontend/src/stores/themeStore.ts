@@ -13,6 +13,7 @@ import {
   forcedSchemeForLanguage, listSkins, listLanguages, hasLanguage, hasSkin, mergeDiskThemes, clearDiskThemes, getLanguage,
   DEFAULT_SEED, DEFAULT_LANG,
 } from '../theme/registry'
+import { settingTelemetry } from '../telemetrySend'
 import type { ThemeAxes, UiSyncPayload } from '../../../shared/uiSync'
 import { applyPrefs } from '../uiPrefsApply'
 import { useSpaceStore } from '@lcl/engine/spaceRegistry'
@@ -25,6 +26,16 @@ import { reducedMotion } from '@lcl/engine/spring'
 type Mode = 'light' | 'dark'
 type ModePref = 'light' | 'dark' | 'system'
 const SKIN_IDS: string[] = listSkins().map((s) => s.id)
+/** 匿名遥测 setting_change(契约 §9):主题四轴里真变了的那几根各报一条。内置语言(打包进来的主题)报 id,
+ *  磁盘主题(用户自己做的)报 custom;配色只有内置那几个 id(含 custom)。 */
+function themeTelemetry(cur: { lang: string; skin: string; bg: string; modePref: string }, next: { lang?: string; skin?: string; bg?: string; pref?: string }): void {
+  try {
+    if (next.lang !== undefined && next.lang !== cur.lang) settingTelemetry('ui.designLanguage', getLanguage(next.lang)?.cssUrl ? next.lang : 'custom')
+    if (next.skin !== undefined && next.skin !== cur.skin) settingTelemetry('ui.skin', hasSkin(next.skin) ? next.skin : 'custom')
+    if (next.bg !== undefined && next.bg !== cur.bg) settingTelemetry('ui.bg', hasSkin(next.bg) ? next.bg : 'custom')
+    if (next.pref !== undefined && next.pref !== cur.modePref) settingTelemetry('ui.themeMode', next.pref)
+  } catch { /* 遥测不影响换主题 */ }
+}
 
 /** 主题锁定的 colorScheme(校验版,store 与设置面板共用同一判定)。 */
 const langForcedScheme = forcedSchemeForLanguage
@@ -250,19 +261,21 @@ export const useTheme = create<ThemeState>((set, get) => {
     flat: readFlat(),
     ambient: readAmbient(),
     themesVersion: 0,
-    setLang: (lang) => { apply(lang, get().skin, get().bg, get().modePref, get().seed); notify() },
+    setLang: (lang) => { themeTelemetry(get(), { lang }); apply(lang, get().skin, get().bg, get().modePref, get().seed); notify() },
     // 成就打点只在用户显式换主题/配色的动作里(setTheme/setSkin/setBg);严禁挪进 apply——启动初始化也走 apply 会误计。
-    setSkin: (skin) => { track('theme.change'); apply(get().lang, skin, get().bg, get().modePref, get().seed); notify() },
-    setBg: (bg) => { track('theme.change'); apply(get().lang, get().skin, bg, get().modePref, get().seed); notify() },
+    // 遥测的设置改动(themeTelemetry)同理:只在这几个用户动作里报,启动 / 跨窗同步(initThemes / syncFromWindow)不报。
+    setSkin: (skin) => { track('theme.change'); themeTelemetry(get(), { skin }); apply(get().lang, skin, get().bg, get().modePref, get().seed); notify() },
+    setBg: (bg) => { track('theme.change'); themeTelemetry(get(), { bg }); apply(get().lang, get().skin, bg, get().modePref, get().seed); notify() },
     // 主题锁定 colorScheme 时,用户改不动明暗(setModePref 忽略);过渡动画仅在真正切换时放。
     // 用户显式动作 → persistPref 写入偏好(apply 不写,见 Medium-1)。
     setModePref: (pref) => {
       if (langForcedScheme(get().lang)) return Promise.resolve()
       if (pref === get().modePref) return Promise.resolve()
+      themeTelemetry(get(), { pref })
       persistPref(pref)
       return withModeTransition(() => { apply(get().lang, get().skin, get().bg, pref, get().seed); notify() })
     },
-    setTheme: (lang, skin, bg, pref) => { track('theme.change'); persistPref(pref); apply(lang, skin, bg, pref, get().seed); notify() },
+    setTheme: (lang, skin, bg, pref) => { track('theme.change'); themeTelemetry(get(), { lang, skin, bg, pref }); persistPref(pref); apply(lang, skin, bg, pref, get().seed); notify() },
     setSeed: (seed) => { apply(get().lang, 'custom', get().bg, get().modePref, seed); notify() },
     // 只更新 seed 值 + 持久化(若当前是 custom 则即时重应用);不强行切到 custom——对齐 App.tsx onSeedChange。
     setSeedValue: (seed) => {

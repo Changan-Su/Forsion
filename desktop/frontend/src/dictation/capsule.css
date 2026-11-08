@@ -1,0 +1,121 @@
+/* 语音输入胶囊(dictation.html)。窗口透明、比胶囊大一圈(给卡面阴影留位),胶囊贴着窗口下沿居中。
+ * 卡面一律消费主题 token(--bg-card / --border / --card-shadow / --radius-pill),不写死阴影(DESIGN §7 第 6 条)。 */
+html[data-capsule],
+html[data-capsule] body,
+html[data-capsule] #root {
+  background: transparent;
+  overflow: hidden;
+  height: 100%;
+  margin: 0;
+  user-select: none;
+  -webkit-user-select: none;
+}
+html[data-capsule] #root {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: 0 20px 20px;
+  box-sizing: border-box;
+}
+
+.dcap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 400px;
+  height: 52px;
+  padding: 0 8px 0 16px;
+  background: var(--bg-card);
+  color: var(--text);
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--radius-pill);
+  box-shadow: var(--card-shadow);
+  font-family: var(--font-ui);
+  font-size: var(--ui-font-body);
+  line-height: var(--ui-line-body, 1.4);
+  animation: dcap-in var(--duration-fast) var(--ease-surface) both;
+}
+@keyframes dcap-in {
+  from { opacity: 0; translate: 0 6px; }
+  to { opacity: 1; translate: 0 0; }
+}
+
+.dcap-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  justify-content: flex-start;
+  overflow: hidden;
+  white-space: nowrap;
+}
+/* 说的字超出一行:贴右、左端淡出,看得见最新的那几个字 */
+.dcap-text[data-overflow] {
+  justify-content: flex-end;
+  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 28px);
+  mask-image: linear-gradient(to right, transparent 0, #000 28px);
+}
+.dcap-line { white-space: pre; flex: none; }
+.dcap-pending { color: var(--text-muted); }
+.dcap-hint { color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; }
+.dcap-msg { color: var(--text); }
+
+.dcap-level {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 20px;
+  flex: none;
+}
+.dcap-level i {
+  display: block;
+  width: 3px;
+  height: 18px;
+  border-radius: var(--radius-pill);
+  background: var(--accent-ink);
+  transform: scaleY(0.3);
+  transform-origin: center;
+  transition: transform var(--duration-instant) linear;
+}
+.dcap[data-phase='finishing'] .dcap-level i { background: var(--text-faint); }
+
+.dcap-mark {
+  display: inline-flex;
+  flex: none;
+  color: var(--warning, #c78a1b);
+}
+.dcap-mark[data-ok] { color: var(--green, #3f8f5a); }
+
+.dcap-btn,
+.dcap-icon {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  height: 32px;
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--ui-font-meta);
+  font-weight: 500;
+  cursor: default;
+}
+.dcap-btn { padding: 0 12px; }
+.dcap-icon { width: 32px; padding: 0; border-color: transparent; color: var(--text-muted); }
+.dcap-btn:hover,
+.dcap-icon:hover { background: var(--overlay-light, rgba(0, 0, 0, 0.05)); color: var(--text); }
+.dcap-primary {
+  background: var(--action-fill);
+  border-color: var(--action-fill);
+  color: var(--on-action);
+}
+.dcap-primary:hover { background: var(--action-fill-hover); color: var(--on-action); }
+
+@media (prefers-reduced-motion: reduce) {
+  .dcap { animation: none; }
+  .dcap-level i { transition: none; }
+}

@@ -3,7 +3,8 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSyn
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
+import { once } from 'node:events'
 
 vi.mock('electron', () => ({ ipcMain: { handle: vi.fn() } }))
 
@@ -64,6 +65,28 @@ function blockAccess(file: string, posixMode: number, windowsRights: string, res
   const run = (args: string[]): void => { execFileSync('icacls.exe', args, { stdio: 'ignore', windowsHide: true }) }
   run([file, '/deny', `${user}:${windowsRights}`, '/Q'])
   return () => run([file, '/remove:d', user, '/T', '/Q'])
+}
+
+async function lockWindowsReplacement(file: string): Promise<() => Promise<void>> {
+  const script = `$ErrorActionPreference = 'Stop'
+    $file = [IO.File]::Open($env:FORSION_CH_FIXTURE_FILE, 'Open', 'Read', 'Read')
+    try { [Console]::WriteLine('locked'); [void][Console]::ReadLine() }
+    finally { $file.Dispose() }`
+  const holder = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], {
+    env: { ...process.env, FORSION_CH_FIXTURE_FILE: file }, windowsHide: true,
+  })
+  const exited = once(holder, 'exit')
+  const release = async () => { holder.stdin.destroy(); await exited }
+  try {
+    await Promise.race([
+      once(holder.stdout, 'data', { signal: AbortSignal.timeout(2000) }),
+      exited.then(() => { throw new Error('File lock process exited before acquiring its handle') }),
+    ])
+  } catch (error) {
+    await release()
+    throw error
+  }
+  return release
 }
 
 async function waitFor(fn: () => boolean | Promise<boolean>, ms = 4_000): Promise<void> {
@@ -1831,15 +1854,15 @@ describe('ComputerHistoryStore × 加密', () => {
     expect(quiet.read).not.toHaveBeenCalled()
   })
 
-  it('迁移中途写不进(目录只读):原文件完好、不留 tmp,错误抛出(下次再迁)', async () => {
+  it('迁移写入或替换失败:原文件完好、不留 tmp,错误抛出(下次再迁)', async () => {
     const { store } = encStore()
     mkdirSync(store.eventsDir, { recursive: true })
     const f = path.join(store.eventsDir, '2026-09-26.jsonl')
     writeFileSync(f, evLineAt(at(2026, 9, 26, 9)), { mode: 0o600 })
-    const restore = blockAccess(store.eventsDir, 0o500, '(W)', 0o700)
+    const restore = process.platform === 'win32' ? await lockWindowsReplacement(f) : blockAccess(store.eventsDir, 0o500, '(W)', 0o700)
     try {
       await expect(store.migrate()).rejects.toBeTruthy()
-    } finally { restore() }
+    } finally { await restore() }
     expect(readFileSync(f, 'utf8')).toBe(evLineAt(at(2026, 9, 26, 9)))
     expect(readdirSync(store.eventsDir)).toEqual(['2026-09-26.jsonl'])
     expect(await store.migrate()).toBe(true) // 恢复可写后接着迁

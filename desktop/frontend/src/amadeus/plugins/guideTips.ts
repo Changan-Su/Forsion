@@ -14,7 +14,9 @@ import type { PluginGuideTip } from '@amadeus-shared/ipc'
 import { useAchievements } from '../../achievements/store'
 import { usePopupQueue } from '../../stores/popupQueue'
 import { currentLocale, registerMessages } from '../../i18n'
-import { closeSpotlight, showTip, spotlightActive } from './guideSpotlight'
+import { closeSpotlight, inPluginView, showTip, spotlightActive } from './guideSpotlight'
+import { sendTelemetry } from '../../telemetrySend'
+import { telemetryPluginRef, type TelemetryPluginLike } from '../../telemetryPluginId'
 
 export const GUIDE_DAILY_MAX = 3 // 全应用一天最多出几条
 export const OPEN_DELAY_MS = 2000 // 锚点出现后至少这么久才出(刚打开 View 时别抢)
@@ -81,9 +83,13 @@ export function tipState(pluginId: string, tipId: string): 'waiting' | 'seen' | 
   return muted ? 'muted' : seen ? 'seen' : 'waiting'
 }
 
-/** 只在这个插件自己的 View 里找,而且要在视口里(看不见的锚点不算「在屏幕上」)。 */
+/** 只在这个插件自己的 View 里找,而且要在视口里(看不见的锚点不算「在屏幕上」)。宿主自己的提示找宿主界面里的锚点
+ *  (插件 View 里同名的不算,插件抢不走首方提示;主页这类 `host:` owner 里的照样算)。 */
 function anchor(pluginId: string, name: string): HTMLElement | null {
-  for (const el of document.querySelectorAll<HTMLElement>(`[data-guide-owner="${CSS.escape(pluginId)}"] [data-guide-anchor="${CSS.escape(name)}"]`)) {
+  const host = pluginId === HOST_TIP_OWNER
+  const sel = host ? `[data-guide-anchor="${CSS.escape(name)}"]` : `[data-guide-owner="${CSS.escape(pluginId)}"] [data-guide-anchor="${CSS.escape(name)}"]`
+  for (const el of document.querySelectorAll<HTMLElement>(sel)) {
+    if (host && inPluginView(el)) continue
     const r = el.getBoundingClientRect()
     if (r.width > 0 && r.height > 0 && r.bottom > 0 && r.right > 0 && r.top < innerHeight && r.left < innerWidth) return el
   }
@@ -105,6 +111,49 @@ function condOk(pluginId: string, tip: PluginGuideTip): boolean {
   if ('open' in w) return (Number(read(K.open(pluginId, w.open)) ?? 0) || 0) >= w.times
   if ('count' in w) return counter(pluginId, w.count) >= w.atLeast
   return w.visible.every((n) => !!seenAnchor(pluginId, n))
+}
+
+/** 一个 View 打开一次最多出一条:插件提示认插件 View 的宿主元素,宿主提示认锚点所在的那一格视图。 */
+function tipHost(el: Element | null | undefined): Element | null {
+  if (!el) return null
+  return el.closest('[data-guide-owner]') ?? el.closest('.dv-react-part, .mb-view') ?? el
+}
+
+/** 宿主自己的上手提示(2026-11-07,LCL 表面规范第一期:通话键的首次提示 CallHint 并进来,同一套节奏 —— 一天最多几条、
+ *  停手再出、有弹窗就等、同一时刻全应用一处)。写在代码里不经 manifest;锚点是宿主界面里的 `data-guide-anchor`;
+ *  文案出的时候再算(界面语言、云端 / 直连这种此刻才知道的事);可以带一个额外动作,占「不再提示」的位置。 */
+export const HOST_TIP_OWNER = 'forsion'
+export interface HostTip {
+  id: string
+  /** 宿主界面里的 data-guide-anchor 名;它在屏幕上看得见时才出。 */
+  at: string
+  style: 'ring' | 'line'
+  /** 成就计数(`app:` 前缀 = 宿主事件)≥1 = 会了。 */
+  done?: string[]
+  platform?: 'desktop' | 'mobile'
+  /** 出的时候再算文案;拿到的是此刻的锚点元素(可以从它的 data-* 读当下的状态)。 */
+  resolve(anchor: HTMLElement | null): { title?: string; body: string }
+  extra?: { label(): string; run(): void }
+}
+const hostTips = new Map<string, HostTip>()
+export function registerHostTip(tip: HostTip): void {
+  hostTips.set(tip.id, tip)
+  // 记账、挑选与插件提示同一套:文案占位只为过 pickTip 的英文检查,真文案在 present 里由 resolve 给
+  tipsOf.set(HOST_TIP_OWNER, [...hostTips.values()].map((t) => ({
+    id: t.id, at: t.at, style: t.style, when: { visible: [t.at] }, done: t.done, platform: t.platform,
+    title: t.id, text: t.id, en: { title: t.id, text: t.id },
+  })))
+  ensureRunning()
+}
+/** 用户已经做了那件事(比如打了一通电话):记成看过,正出着就收掉。 */
+export function markHostTipSeen(id: string): void {
+  write(K.seen(HOST_TIP_OWNER, id), today())
+  if (current?.pluginId === HOST_TIP_OWNER && current.tip.id === id) closeSpotlight(HOST_TIP_OWNER)
+}
+/** 旧版自己记的「看过」(迁移用):只读到明确的值才算;读失败当不知道,不写。 */
+export function hostTipSeen(id: string): boolean | undefined {
+  const v = read(K.seen(HOST_TIP_OWNER, id))
+  return v === undefined ? undefined : v !== null
 }
 
 export interface GuideCandidate {
@@ -177,7 +226,7 @@ function tick(): void {
         const f = firstSeen.get(key)
         if (!f || f.el !== el) firstSeen.set(key, { el, t: now })
         since = firstSeen.get(key)!.t
-        const host = el.closest('[data-guide-owner]')
+        const host = tipHost(el)
         hostShown = !!host && shownHosts.has(host)
       }
       candidates.push({ pluginId, tip, seen, muted, learned: done, condOk: el ? condOk(pluginId, tip) : false, requested: requested.has(key), anchorSince: since, hostShown })
@@ -192,20 +241,25 @@ function tick(): void {
 
 function present(c: GuideCandidate): void {
   const { pluginId, tip } = c
-  const host = anchor(pluginId, tip.at)?.closest('[data-guide-owner]')
+  const at = anchor(pluginId, tip.at)
+  const host = tipHost(at)
   if (host) shownHosts.add(host)
   write(K.day, JSON.stringify({ d: today(), n: (dayCount() ?? 0) + 1 }))
   requested.delete(rk(pluginId, tip.id))
   current = { pluginId, tip }
   const en = currentLocale() === 'en'
+  const own = pluginId === HOST_TIP_OWNER ? hostTips.get(tip.id) : undefined
+  const words = own ? own.resolve(at) : { title: en ? tip.en?.title : tip.title, body: en ? tip.en!.text! : tip.text }
   void showTip(pluginId, {
     find: () => anchor(pluginId, tip.at),
     style: tip.style,
-    title: en ? tip.en?.title : tip.title,
-    body: en ? tip.en!.text! : tip.text,
+    title: words.title,
+    body: words.body,
     dock: isMobile(),
+    extra: own?.extra ? { label: own.extra.label(), run: own.extra.run } : undefined,
   }).then((r) => {
     if (current?.tip === tip) current = null
+    reportTip(pluginId, tip, r)
     if (r === 'ok') write(K.seen(pluginId, tip.id), today())
     else if (r === 'mute') write(K.muted(pluginId), today())
     // gone / replaced / closed / missing:不记,下回条件满足再出(受当天条数限制)
@@ -226,14 +280,28 @@ function ensureRunning(): void {
   timer = setInterval(tick, 1000)
 }
 
-/** 插件启用时登记(manifest 里消毒过的 tips);停用 / 重载时撤。 */
-export function registerGuideTips(pluginId: string, tips: PluginGuideTip[] | undefined): void {
+/** 匿名遥测 guide_tip(契约 §9):提示收起的结果;提示出着时用户做了那件事 → learned。只发公开插件(内置 / 商店)的提示,
+ *  插件 id 换成公开 id(侧载的整条不发,主进程再核一遍)。 */
+const pluginOf = new Map<string, TelemetryPluginLike>()
+function reportTip(pluginId: string, tip: PluginGuideTip, r: string): void {
+  try {
+    const ref = telemetryPluginRef(pluginOf.get(pluginId))
+    if (!ref.pluginOfficial) return
+    const result = r === 'closed' && learned(pluginId, tip) ? 'learned' : r
+    sendTelemetry('guide_tip', { ...ref, tipId: tip.id, result })
+  } catch { /* 遥测不影响提示 */ }
+}
+
+/** 插件启用时登记(manifest 里消毒过的 tips);停用 / 重载时撤。plugin = 插件记录(遥测换公开 id 用)。 */
+export function registerGuideTips(pluginId: string, tips: PluginGuideTip[] | undefined, plugin?: TelemetryPluginLike): void {
   if (!tips?.length) return unregisterGuideTips(pluginId)
   tipsOf.set(pluginId, tips)
+  if (plugin) pluginOf.set(pluginId, plugin)
   ensureRunning()
 }
 export function unregisterGuideTips(pluginId: string): void {
   tipsOf.delete(pluginId)
+  pluginOf.delete(pluginId)
   for (const k of [...requested]) if (k.startsWith(`${pluginId}\n`)) requested.delete(k)
   if (current?.pluginId === pluginId) current = null
 }

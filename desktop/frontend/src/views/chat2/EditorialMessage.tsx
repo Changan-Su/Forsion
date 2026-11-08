@@ -12,7 +12,7 @@ import { ChangeReceipt } from './ChangeReceipt'
  */
 import { Fragment, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type Ref } from 'react'
 import { useStreamReveal } from './streamReveal'
-import { Copy, RotateCcw, GitBranch, MessageCircleQuestion, CornerUpLeft, Pencil, Volume2, Square, Loader2, LogIn, Zap, History as HistoryIcon, FileCode2, MessageSquare, ShieldQuestion, CircleCheck, CircleX, CircleHelp } from 'lucide-react'
+import { Copy, RotateCcw, GitBranch, MessageCircleQuestion, CornerUpLeft, Pencil, Volume2, Square, Loader2, LogIn, Zap, History as HistoryIcon, FileCode2, MessageSquare, ShieldQuestion, CircleCheck, CircleX, CircleHelp, Clock, Undo2 } from 'lucide-react'
 import { FileInput } from 'lucide-react'
 import { useNoteInsertState } from './insertToNote'
 import * as api from '../../services/backendService'
@@ -270,6 +270,16 @@ export interface FileCtx {
   onOpenPreview?: (t: PreviewTarget) => void
 }
 
+/** 运行中已经发出、Agent 还没读到的那条(ChatView 按 steerPending 画在对话末尾,读到后同 id 原地转正)。 */
+export interface PendingSend {
+  /** 本轮结束后才发(外部引擎 / /refine / /compact 等不能中途插话的):小字换成「本轮结束后发送」,没有「立即插话」。 */
+  local: boolean
+  /** 连发多条时小字只挂最后一条下面。 */
+  hint: boolean
+  onWithdraw: () => void
+  onSteerNow?: () => void
+}
+
 export interface MessageHandlers {
   onCopy?: (text: string) => void
   onRegenerate?: () => void
@@ -464,7 +474,7 @@ function InsertNoteButton({ onInsert }: { onInsert: () => void }) {
  *  只有 props 稳住才挡得住:ChatView 的 handlers 按消息 id 缓存、fileCtx / voice 走 useMemo。 */
 export const EditorialMessage = memo(EditorialMessageView)
 
-function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, userAvatar, handlers, fileCtx, rootRef, speakState, voice, modelId, showWaitDetails = false, footer, onBringBack, todoInTail = false }: { /** 这条的任务清单画在对话末尾(ChatView 只给最新那份传):这里不再画。 */ todoInTail?: boolean; /** 助手气泡正文末尾的附加行(ChatView 给最后一条助手消息挂 run 统计)。 */ footer?: React.ReactNode; /** 分支里最后一条回答:「带回这里」把它作为引用挂进来源那支的输入框(ChatView 只给这一条传)。 */ onBringBack?: (text: string) => void; msg: UiMessage; avatarUrl?: string; agentNameFallback?: string; userName?: string; userAvatar?: string; handlers?: MessageHandlers; fileCtx?: FileCtx; rootRef?: Ref<HTMLDivElement>; speakState?: 'loading' | 'playing'; voice?: { on: boolean; cfg: TanguDesktopConfig; stored: StoredDesktopConfig | null }; /** 这条消息实际用的模型(仅用于认出订阅直连过期 → 给重登按钮;缺省=不给)。 */ modelId?: string; /** 测试性功能:显示发送上下文 / 等待首帧 / 已等待时间。默认关。 */ showWaitDetails?: boolean }) {
+function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, userAvatar, handlers, fileCtx, rootRef, speakState, voice, modelId, showWaitDetails = false, footer, onBringBack, todoInTail = false, pending }: { /** 已发出、还没被 Agent 读到(见 PendingSend)。 */ pending?: PendingSend; /** 这条的任务清单画在对话末尾(ChatView 只给最新那份传):这里不再画。 */ todoInTail?: boolean; /** 助手气泡正文末尾的附加行(ChatView 给最后一条助手消息挂 run 统计)。 */ footer?: React.ReactNode; /** 分支里最后一条回答:「带回这里」把它作为引用挂进来源那支的输入框(ChatView 只给这一条传)。 */ onBringBack?: (text: string) => void; msg: UiMessage; avatarUrl?: string; agentNameFallback?: string; userName?: string; userAvatar?: string; handlers?: MessageHandlers; fileCtx?: FileCtx; rootRef?: Ref<HTMLDivElement>; speakState?: 'loading' | 'playing'; voice?: { on: boolean; cfg: TanguDesktopConfig; stored: StoredDesktopConfig | null }; /** 这条消息实际用的模型(仅用于认出订阅直连过期 → 给重登按钮;缺省=不给)。 */ modelId?: string; /** 测试性功能:显示发送上下文 / 等待首帧 / 已等待时间。默认关。 */ showWaitDetails?: boolean }) {
   const forkScope = useContext(ForkScope)
   // 消息里的 agentName 是收到时的显示名:现取,切语言 / 改名后旧消息也跟着变。重载时名册可能晚到,老记录那时认不出 slug,这里按名字再认一次
   const speakerName = useApp((s) => agentName(s.agentDefs.find((a) => (msg.agentId ? a.slug === msg.agentId : !!msg.agentName && agentNames(a).includes(msg.agentName)))))
@@ -625,6 +635,8 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
     // 只列这条消息真有的动作(只读会话没有编辑 / 回退);一个都没有就不拦,长按照系统的来。
     const onBubbleMenu = (e: React.MouseEvent): void => {
       const items = [
+        ...(pending ? [{ label: t('chat.pending.withdraw'), icon: <Undo2 size={14} />, run: pending.onWithdraw }] : []),
+        ...(pending?.onSteerNow ? [{ label: t('input.steer.now'), icon: <Zap size={14} />, run: pending.onSteerNow }] : []),
         ...(handlers?.onCopy ? [{ label: t('chat.action.copy'), icon: <Copy size={14} />, run: () => handlers.onCopy?.(msg.content) }] : []),
         ...(handlers?.onEdit ? [{ label: t('chat.action.edit'), icon: <Pencil size={14} />, run: () => handlers.onEdit?.() }] : []),
         ...(handlers?.onRewind ? [{ label: t('rewind.title'), icon: <HistoryIcon size={14} />, run: toggleRewind }] : []),
@@ -639,7 +651,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
         .then((shown) => { if (!shown) restore() }, restore)
     }
     return (
-      <div ref={setUserWrap} className={`t2-userwrap${inlineActions ? ' t2-userwrap--inline' : ''}${footer ? ' t2-userwrap--failed' : ''}`} id={`tocmsg-${msg.id}`} data-toc-msg-role="user" data-toc-title={tocTitle}>
+      <div ref={setUserWrap} className={`t2-userwrap${inlineActions ? ' t2-userwrap--inline' : ''}${pending ? ' t2-userwrap--pending' : footer ? ' t2-userwrap--failed' : ''}`} id={`tocmsg-${msg.id}`} data-toc-msg-role="user" data-toc-title={tocTitle}>
         <div className="t2-user-col">
           <div className="t2-username">{name}</div>
           {previewQuote && <QuotePreview text={previewQuote.text} note={previewQuote.note} onClose={() => setPreviewQuote(null)} />}
@@ -685,7 +697,22 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
           </div>
           )}
           {/* 用户消息只有「没发出去」那条(ChatView 的 failedSends)传 footer:换掉复制 / 编辑那一排,放原因 + 丢弃 / 重试 */}
-          {footer ?? (
+          {pending ? (
+            // 小字只说「还没读到」;撤回 / 立即插话桌面悬停才出(盖掉小字),触屏常驻;安卓原生宿主改走长按菜单
+            <div className="t2-pending" data-native-menu={nativeSheetPresenter() ? '' : undefined}>
+              {pending.hint && (
+                <span className="t2-pending-cap" role="status">
+                  <Clock size={11} />
+                  {t(pending.local ? 'chat.pending.afterTurn' : 'chat.pending.waiting')}
+                  <span className="t2-pending-tip">{t(nativeSheetPresenter() ? 'chat.pending.tipHold' : 'chat.pending.tipRecall')}</span>
+                </span>
+              )}
+              <span className="t2-pending-acts">
+                <button type="button" className="t2-pending-btn" onClick={pending.onWithdraw}><Undo2 size={13} />{t('chat.pending.withdraw')}</button>
+                {pending.onSteerNow && <button type="button" className="t2-pending-btn" onClick={pending.onSteerNow}><Zap size={13} />{t('input.steer.now')}</button>}
+              </span>
+            </div>
+          ) : footer ?? (
           <div className="t2-actions">
             <MsgTime at={msg.timestamp} />
             <button className="t2-iconbtn" title={t('chat.action.copy')} onClick={() => handlers?.onCopy?.(msg.content)}><Copy size={14} /></button>

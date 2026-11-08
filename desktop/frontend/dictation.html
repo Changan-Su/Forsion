@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="zh-CN" data-capsule="">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- 语音输入胶囊(桌面作用域浮层,electron/dictation/capsuleWindow.ts):只录音 + 转写,不起引擎、不装插件。
+         转写经 preload 的 IPC 走主进程,页面自己不连外网(connect-src 只给 dev 的热更新)。 -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data:; connect-src 'self' ws://localhost:* http://localhost:*; media-src 'self' blob:;" />
+    <title>Forsion voice input</title>
+    <script>
+      /* 明暗跟主窗同一份本机偏好(同源 localStorage;口径同 index.html 首屏脚本),首帧就对,不闪。 */
+      (function () {
+        try {
+          var VM = { light: 1, dark: 1, system: 1 };
+          var forced = localStorage.getItem('forsion_theme_forced_scheme');
+          var prefRaw = localStorage.getItem('forsion_theme_pref');
+          var legacy = localStorage.getItem('forsion_theme');
+          var pref = VM[forced] ? forced : (VM[prefRaw] ? prefRaw : ((legacy === 'light' || legacy === 'dark') ? legacy : 'light'));
+          var mode = pref === 'dark' ? 'dark' : pref === 'light' ? 'light'
+            : ((window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light');
+          var root = document.documentElement;
+          root.dataset.mode = mode;
+          root.classList.toggle('dark', mode === 'dark');
+          if (localStorage.getItem('forsion_theme_flat') === '1') root.dataset.flat = '1';
+        } catch (e) { /* 读不到就按缺省亮色 */ }
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/dictation/capsule.tsx"></script>
+  </body>
+</html>

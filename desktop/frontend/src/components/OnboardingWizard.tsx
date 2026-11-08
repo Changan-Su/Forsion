@@ -28,6 +28,7 @@ import { clearChAskOnFinish, markChAskSkipped } from './computerHistoryAskMark'
 import { useApp } from '../stores/appStore'
 import { connectionTarget } from '../services/engine/targets'
 import { applySyncChoices, type SyncKind } from '../services/syncSetup'
+import { createOnboardingTracker, onboardingMode } from './onboarding/onboardingTelemetry'
 import './onboardingMessages'
 import './onboarding/messages'
 import '../views/homepage.css'
@@ -76,6 +77,8 @@ export const OnboardingWizard: React.FC<{
   })
   /** 升级短引导(第一屏是「已更新到 X」)。早于 2.13.8 的老用户虽然也是升级进来,走的是完整引导。 */
   const brief = order[0] === 'welcome'
+  // 匿名遥测:每屏停留、往回跳、收尾方式,关掉时发一条(onboarding/onboardingTelemetry.ts)
+  const [tele] = useState(() => createOnboardingTracker(onboardingMode({ brief, updateMode, returning })))
   const [step, setStep] = useState<Step>(order[0])
   const [furthest, setFurthest] = useState(0)
   const idx = order.indexOf(step)
@@ -113,6 +116,7 @@ export const OnboardingWizard: React.FC<{
 
   // 换屏:清掉上一屏的错误,焦点落在这一屏的标题上(读屏器从标题读起)
   useEffect(() => {
+    tele.enter(step, order.indexOf(step))
     setSaveError('')
     const id = requestAnimationFrame(() => {
       mainRef.current?.querySelector<HTMLElement>('[data-ob-title]')?.focus({ preventScroll: true })
@@ -123,10 +127,12 @@ export const OnboardingWizard: React.FC<{
 
   // 结束只走一次:退场动效那半秒里引导还挂着,再按一次回车 / 再点一次按钮不能重复收尾。
   const finished = useRef(false)
-  /** @param skipped 「跳过引导」(或最后一屏崩了点跳过):团队屏没写,电脑历史没问到 → 主页之后再问一次。 */
-  const close = (skipped: boolean): void => {
+  /** @param skipped 「跳过引导」(或最后一屏崩了点跳过):团队屏没写,电脑历史没问到 → 主页之后再问一次。
+   *  @param viaError 最后一屏崩了点的跳过:匿名遥测记 error-skip,不记成「跳过引导」。 */
+  const close = (skipped: boolean, viaError = false): void => {
     if (finished.current) return
     finished.current = true
+    tele.finish(skipped && !viaError ? 'skip' : 'finish', { signedIn, sync: signedIn && syncSeen.current ? syncPick : null, addedAgent: openAgents.current })
     if (order.includes('team')) {
       if (skipped) markChAskSkipped(); else clearChAskOnFinish()
     }
@@ -228,7 +234,7 @@ export const OnboardingWizard: React.FC<{
     <main className="ob3-main" ref={mainRef} key={step}>
       {/* 每屏各自兜底:某一屏渲染出错只换掉这一块,顶栏和底栏照常(走查续六 6.19) */}
       <ErrorBoundary fallback={(error, retry) => <StepErrorCard step={step} error={error} onRetry={retry}
-        onSkip={() => { commitRef.current = null; if (last) close(true); else go(idx + 1) }} />}>
+        onSkip={() => { tele.errorSkipped(); commitRef.current = null; if (last) close(true, true); else go(idx + 1) }} />}>
         {screen()}
       </ErrorBoundary>
     </main>

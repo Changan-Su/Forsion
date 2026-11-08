@@ -33,7 +33,7 @@ registerMessages({
   'widget.noOtherDash': { zh: '还没有别的仪表盘', en: 'No other dashboards yet' },
   'widget.railAll': { zh: '卡片区：所有会话都显示', en: 'Cards: show in every chat' },
   'widget.htmlChatOnly': { zh: '网页型小组件这一版只能在对话里用', en: 'Web widgets stay in chat for now' },
-  'widget.homeFull': { zh: '下排和右栏都满了', en: 'The row and side column are full' },
+  'widget.homeFull': { zh: '下排和两栏都满了', en: 'The row and both side columns are full' },
   'widget.placeFailed': { zh: '没放成：{msg}', en: "Couldn't place it: {msg}" },
   'widget.owner.user': { zh: '所有 Agent', en: 'All agents' },
   'widget.owner.project': { zh: '这个项目', en: 'This project' },

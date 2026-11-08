@@ -215,7 +215,7 @@ async function main() {
     fs.writeFileSync(path.join(space, 'main.js'), AGENT_DATA, 'utf8'); bump()
     check('ctx.agent:Space 从数据渲染出待办数与 Journal', await attached('.agent-data[data-todos="1"][data-journal*="heartbeat"]', 12_000))
     check('ctx.agent:挂载时不经手势的 updateTodo 被拒', await attached('.agent-data[data-nogesture="rejected"]', 5_000))
-    await win.click('text=当前思考') // Space 以外(右栏 Muse 面板)的真实点击
+    await win.click('[data-muse-panel] .mv-name') // Space 以外(右栏 Muse 面板标题上的名字,不是按钮)的真实点击;11-07 面板改版后「当前思考」标签没了
     check('ctx.agent:借 Space 以外的点击调 updateTodo 被拒', await attached('.agent-data[data-outside="rejected"]', 5_000))
     await win.waitForTimeout(1700) // 过了 1.5 秒手势窗口,下面那一下才是唯一的放行来源
     await win.click('.agent-data .agent-done')

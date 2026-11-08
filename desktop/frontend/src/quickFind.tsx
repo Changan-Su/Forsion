@@ -28,6 +28,7 @@ import { useSegFlow } from '@lcl/engine/segFlow'
 import { listMessages, searchSessions, type SessionSearchHit } from './services/backendService'
 import { homeTarget, targetForSession } from './services/engine/targets'
 import type { MessageRecord } from './types'
+import { countTelemetry } from './telemetrySend'
 import { windowKind } from './windowKind'
 
 registerMessages({
@@ -137,12 +138,27 @@ export interface QFPick {
 }
 
 interface QFState { open: boolean; pick: QFPick | null; openPalette(): void; openPicker(pick: QFPick): void; close(): void }
-export const useQuickFind = create<QFState>((set) => ({
+/** 匿名遥测(契约 §9 app_counts):快速查找打开 / 选中 / 没选就关的次数。只数次数,搜索词一个字都不碰;选取模式(挑文件)不算。 */
+let searchPicked = false
+const notePicked = (): void => {
+  if (searchPicked || useQuickFind.getState().pick) return
+  searchPicked = true
+  countTelemetry('searchPick')
+}
+export const useQuickFind = create<QFState>((set, get) => ({
   open: false,
   pick: null,
-  openPalette: () => set({ open: true, pick: null }),
+  openPalette: () => {
+    if (!get().open) { searchPicked = false; countTelemetry('searchOpen') }
+    set({ open: true, pick: null })
+  },
   openPicker: (pick) => set({ open: true, pick }),
-  close: () => set({ open: false, pick: null }),
+  close: () => {
+    const st = get()
+    if (st.open && !st.pick && !searchPicked) countTelemetry('searchCloseEmpty')
+    searchPicked = true // 同一次打开只记一次结局
+    set({ open: false, pick: null })
+  },
 }))
 
 type Kind = 'note' | 'db' | 'session' | 'file'
@@ -321,17 +337,20 @@ function QuickFindInner() {
 
   const openItem = (it: Item, opts?: { newTab?: boolean }): void => {
     if (pick) { pick.onPick(it.id); close(); return } // 选取模式:不导航、不记最近(选卡片内容 ≠ 我最近开过它)
+    notePicked()
     pushRecent({ kind: it.kind, id: it.id, title: it.title, sub: it.sub, emoji: it.emoji })
     it.open(opts?.newTab ? { newTab: true } : undefined)
     close()
   }
   const createNote = (): void => {
+    notePicked()
     close()
     void usePageStore.getState().createWikiPage(createName)
   }
   /** ↵ 打开会话;⌘↵ 打开后跳到命中那条并闪两下(#153 的跳转)。 */
   const openHit = (h: SessionSearchHit, jump: boolean): void => {
     const title = h.title || t('quickfind.untitledSession')
+    notePicked()
     pushRecent({ kind: 'session', id: h.id, title, sub: t('quickfind.subSession') })
     if (jump && h.hit) useApp.getState().setJumpTarget(h.id, h.hit.messageId) // 目标先落下再开会话(见 setJumpTarget)
     openSession(h.id)

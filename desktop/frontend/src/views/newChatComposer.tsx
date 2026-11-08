@@ -23,6 +23,7 @@ import { AgentSelectStrip } from '../components/AgentSelectStrip'
 import { HostLocaleProvider } from '../i18n'
 import { Composer2 } from './chat2/Composer2'
 import type { TanguComposerMount, TanguComposerOptions, TanguNewChatDispatch as NewChatDispatch } from '../amadeus/plugins/tanguSeam'
+import { tanguCount } from '../tangu/telemetry'
 
 /**
  * 「新对话」输入区(主页那一整块:项目栏、运行位置、额外文件夹、Composer2 + 收件人芯片)。主页只做「新对话」的宿主接线,输入 UI 和交互不复制:字面挂的就是 ChatView 里的 Composer2。
@@ -157,7 +158,7 @@ export function NewChatComposer({ onDispatch, onStartCall, onInputModeChange, li
         models={visibleModels}
         modelsResponse={s.modelsResp}
         modelId={modelId}
-        onModelChange={(id) => s.setSessionModel(id, null)}
+        onModelChange={(id) => { tanguCount('modelSwitchUser'); s.setSessionModel(id, null) }}
         engines={s.engines}
         engineId={config.engineId}
         engineModels={config.engineId ? (s.engineCaps[config.engineId]?.models ?? []) : undefined}

@@ -18,7 +18,7 @@ import { loadTriggers } from './museTriggers.js';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { agentsDir, humanDir } from '../core/tanguHome.js';
-import { createMemoryRepository, isMemoryTombstoneActive, MEMORY_CHAR_BUDGET } from './memoryRepository.js';
+import { isMemoryTombstoneActive, readMemoryFile, MEMORY_CHAR_BUDGET, type MemoryTombstone } from './memoryRepository.js';
 import { readCandidates } from './memoryCandidates.js';
 import { loadHarness } from '../agents/harnessStore.js';
 import { portraitEntries } from '../agents/humanPortrait.js';
@@ -93,9 +93,8 @@ function readText(file: string): string | null {
 }
 
 /** 每个 Agent 记忆域(共用默认记忆的折叠成一份)按 agentRole 汇总:条目、墓碑、候选积压、工作笔记条目;占预算百分比取这个角色里最满的那份。
- *  还没有 .memory-state.json 的记忆目录不读(读一次会触发迁移落盘,快照不该替用户写东西)。读不了的那一类整个角色都不写
- *  (读失败 ≠ 空:少加一份的和数比不写更糟,记成 NaN、最后跳过)。
- *  记忆走仓库的正常读口(同打开记忆页):盘上有外部改动时,这次读会照常把它提交进仓库。 */
+ *  只读 .memory-state.json(没有就不读),绝不经仓库的读口:那条路会迁移落盘 / 提交外部改动,快照不该替用户写东西。读不了的那一类整个角色都不写
+ *  (读失败 ≠ 空:少加一份的和数比不写更糟,记成 NaN、最后跳过)。 */
 export async function snapshotMemory(now = Date.now()): Promise<void> {
   const agents = await listAgents();
   const seen = new Set<string>();
@@ -111,7 +110,9 @@ export async function snapshotMemory(now = Date.now()): Promise<void> {
       const dir = join(agentsDir(), memSlug);
       if (existsSync(join(dir, '.memory-state.json'))) {
         try {
-          const s = createMemoryRepository(dir).snapshot();
+          // 只读状态文件,不走仓库的读口:那条路遇到盘上的外部改动 / 同步来的墓碑会拿锁、提交一版新记忆,快照不该在后台替用户写
+          const s = JSON.parse(readMemoryFile(dir, '.memory-state.json') ?? 'null') as { content: string; entries: unknown[]; tombstones: MemoryTombstone[] };
+          if (typeof s?.content !== 'string' || !Array.isArray(s.entries) || !Array.isArray(s.tombstones)) throw new Error('unreadable memory state');
           const m = (a.mem ??= { entries: 0, pct: 0, tombstones: 0 });
           m.entries += s.entries.length;
           m.pct = Math.max(m.pct, Math.floor((s.content.length * 100) / MEMORY_CHAR_BUDGET));

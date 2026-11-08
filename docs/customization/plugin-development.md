@@ -106,7 +106,7 @@ ctx.ui.mountWebCard(el, { name, status, address, note, thumbnail, actions, menu 
 
 插件内的 Space 可以声明专用 Mini 视图，只提供当前能力的快捷操作；宿主的“在主面板显示”会携带当前实体参数。未适配的 Space 不出现在 Mini 中，随插件禁用的适配会自动撤下。见 [Mini Panel 开发](./mini-panel-development.md)。
 
-插件也可以不创建完整 Space，直接用 `ctx.openMiniPanel?.(viewId, options)` 打开已注册的紧凑视图；`mainViewId` 指定“在主面板显示”的去向。需要宽屏独立工具页时用 `ctx.openFloatingPanel?.(viewId, options)`。宿主自动添加插件命名空间并负责窗口生命周期。见 [Floating Panel 开发](./floating-panel-development.md)。
+插件也可以不创建完整 Space，直接用 `ctx.openMiniPanel?.(viewId, options)` 打开已注册的紧凑视图；`mainViewId` 指定“在主面板显示”的去向。2.13.8 起桌面能同时开几扇 Mini：同一个 `viewId` 再开是叫出已开的那扇，想让不同内容各占一扇就传稳定的 `key`；满 6 扇时宿主自己提示用户，见 [Mini Panel 开发](./mini-panel-development.md)「多开」。需要宽屏独立工具页时用 `ctx.openFloatingPanel?.(viewId, options)`。宿主自动添加插件命名空间并负责窗口生命周期。见 [Floating Panel 开发](./floating-panel-development.md)。
 
 View 内需要输入框和模型选择时，使用 `ctx.ui.mountChatBox`；它复用宿主组件，并由插件显式处理提交。不要模型选择时传 `modelPicker: false`；底排工具栏用 `toolbar`，`#` 这类补全用 `suggest`（2026-11-02 起可以传一组，例如 `#` 与 `[[` 各一份，传之前先看 `ctx.ui.chatBoxCapabilities` 里有没有 `'suggestMany'`；输入框在窗口下半部分时候选朝上开），在光标处插入文字用 `insertText`。见 [可复用 UI 组件](./ui-components.md)。
 
@@ -148,6 +148,8 @@ ctx.ui?.mountSelectionBar?.(root, { tools, source, ask, watch })
 ```
 
 「拿着一件工具干活」的视图(PDF 批注一类)换工具用宿主的工具岛:`ctx.ui?.mountToolIsland?.(root, { tools, active, onPick, slots })` 顶部居中(窄于 520px 停底部),选中受控(`onPick` 里自己 `setActive`),句柄的 `row` 是岛下那一排、归插件画。旧宿主没有就画自己的那条。详见[可复用界面组件](./ui-components.md)「工具岛」。
+
+要浮起来的一块(传输进度卡、导出完成的小条、录音计时胶囊)用 `ctx.ui?.float?.({ scope, anchor, role, id })`:`scope` 说浮在谁之上(`view` 自己的视图 / `space` 整个 Space、切走就藏 / `window` 整个窗口),内容放进句柄的 `el`,位置、层级、动效、拖动吸附归宿主,别自己写 `position: fixed` + z-index。旧宿主没有就照旧自己画。详见[可复用界面组件](./ui-components.md)「浮层」。
 
 ## 读写多维表与笔记任务
 
@@ -214,6 +216,43 @@ Tangu 聊天右侧的摘要栏(2.13.8-beta.1 之后的桌面版本)是一叠卡�
 ```js
 ctx.summary?.registerCard({ id, title: { zh, en }, defaultCollapsed, mount(el, host) })
 ```
+
+## 主页小组件（2026-11-07 起）
+
+主页左右两栏和下排可以放小组件。插件可以出自己的卡：卡长什么样声明在 manifest，数据由插件喂、卡由宿主画，和内置的「收件箱」「最近笔记」同一套样子。用户在主页右键 →「编辑主页」→「添加组件」，插件的卡在「插件」那一组里；插件停用时卡上留一个「已停用」占位，插件卸载了卡就不画（摆放留着，装回来就回来）。
+
+这一版只开**列表型**：一行是左边的时间或勾选框、标题、右边一小段说明，可以分组（比如「明天」），底下可以有一行小字。卡只读，点卡头或点行会打开你声明的 Space；第一版不能在卡上勾选或写回。
+
+manifest 里列出卡的目录，每个目录一份 `manifest.json`（和 Agent 做的小组件同一种目录）：
+
+```json
+// manifest.json
+"widgets": ["widgets/today"]
+
+// widgets/today/manifest.json
+{ "schemaVersion": 1, "id": "today", "title": "今天", "titleEn": "Today", "layout": "list", "icon": "date", "space": "calendar" }
+```
+
+- `id` 在插件内唯一（小写字母、数字、连字符）；主页摆放里存成 `plugin:<插件 id>/<id>`。`title` 必填，`titleEn` 给英文界面。
+- `icon` 用插件图标词表里的名字（和 `registerView` 的 `icon` 同一张表），没写就用插件的 icon.png。
+- `space` 是点卡头 / 点行时打开的 Space id，不写就不跳。最多 8 张；一张写坏了只丢那一张。
+
+数据用 `ctx.widgets.provide` 给：卡挂在主页上时宿主来要，返回行的数组或 `{ rows, footer, empty }`。
+
+```js
+ctx.widgets?.provide('today', async (_params, { signal }) => ({
+  rows: [{ id: 'e1', time: '10:00', title: '读书会', meta: '还有 1 小时', tone: 'accent', now: true },
+         { id: 'e2', time: '10:00', title: '产品周会', group: '明天' }],
+  footer: '今天 1 / 3 完成',
+  empty: '今天没有日程',
+}))
+ctx.widgets?.invalidate('today') // 数据变了，请宿主重拿
+```
+
+- 一行可以有：`title`（必填）、`time`（左列）、`meta`（右边小字）、`tone`（`accent` / `warn` / `muted`）、`done`（有这个字段就画勾选框，`true` 划线）、`now`（实心点）、`group`（变了就在这行上面画小标题）。最多 50 行，文字按 `ctx.getLocale()` 给好，切语言时宿主会重拿。
+- 宿主在卡挂上、你调 `invalidate`、窗口回到前台（离上次 30 秒以上）时来要；同一张同一时刻只有一次，新的一次会把旧的 `signal` 取消。10 秒没回或抛错，卡上写「暂时读不到」，不会当成空列表。
+- 卡不在主页上宿主就不来要，所以别在 `provide` 外面一直轮询；要按时间刷新（比如「还有 1 小时」），在你被要过之后自己定时调 `invalidate`，几分钟没被要就停。
+- 旧宿主不认 `widgets`，也没有 `ctx.widgets`，一律 `?.`。接口细节见插件开发技能「主页小组件」一节；范本是日历核心插件的「今天」「待办」。
 
 ## Intelligent UI 卡片
 

@@ -54,7 +54,9 @@ import { DeskCardStatus, useCardStatus } from './homeCardStatus'
 import { watchAccountName } from '../services/accountName'
 import { DESKTOP_HOME_CARDS_KEY, HOME_CARDS_MAX, loadHomeCards, saveHomeCards, shownHomeCards } from './homeCards'
 import { HOME_PARTS, setHomeEditHandler, useHomeLayout, type HomePart } from './homeWidgets'
-import { HomeRail, HomeRow, PartFrame, PartsLibrary, WidgetLibrary, centerShift, dragPart, dragWidget, railModes, removePart } from './HomeWidgetParts'
+import { HOME_GUIDE_OWNER, HomeRail, HomeRow, PartFrame, PartsLibrary, WidgetLibrary, centerShift, dragPart, dragWidget, railModes, removePart } from './HomeWidgetParts'
+import { HomeWidgetEnv, useShowableIds } from './homeWidgetKinds'
+import { track } from '../achievements/store'
 import type { OrganizerTab } from './SpaceOrganizer'
 import { ComputerHistoryAsk } from '../components/ComputerHistoryAsk'
 import './homepage.css'
@@ -310,7 +312,12 @@ export function HomepageView(_props: ViewProps) {
   const rootRef = useRef<HTMLDivElement>(null)
   // 主页第四轮:左中右三栏 + 编辑态(桌面;手机本轮不做,照旧)
   const homeLayout = useHomeLayout()
+  // 栏里有没有东西按「画得出来的」算:插件没装的那张不画,也不该让中间让位
+  const leftShown = useShowableIds(homeLayout.left).length > 0
+  const rightShown = useShowableIds(homeLayout.right).length > 0
   const [editing, setEditing] = useState(false)
+  // 进过一次编辑态 = 会了(主页小组件的上手提示据此不再出)
+  useEffect(() => { if (editing) track('home.edit') }, [editing])
   const [organizerTab, setOrganizerTab] = useState<OrganizerTab>('spaces')
   const [homeW, setHomeW] = useState(0)
   useEffect(() => {
@@ -817,16 +824,18 @@ export function HomepageView(_props: ViewProps) {
     </>
   )
   const modes = railModes(homeW)
-  const shift = phone ? 0 : centerShift(homeW, { mode: modes.left, shown: editing || homeLayout.left.length > 0 }, { mode: modes.right, shown: editing || homeLayout.right.length > 0 })
+  const shift = phone ? 0 : centerShift(homeW, { mode: modes.left, shown: editing || leftShown }, { mode: modes.right, shown: editing || rightShown })
+  const widgetEnv = { openComposer: () => openComposer(false) }
   const centerParts: readonly HomePart[] = phone ? HOME_PARTS : homeLayout.center
   const partNode = (part: HomePart): React.ReactNode => part === 'clock' ? clockNode : part === 'composer' ? composerNode : part === 'dock' ? dockNode
-    : phone ? statusNode : <HomeRow cells={homeLayout.row} editing={editing} status={statusNode} onGrip={(e, id) => dragWidget(e, id, rootRef.current)} />
+    : phone ? statusNode : <HomeWidgetEnv.Provider value={widgetEnv}><HomeRow cells={homeLayout.row} editing={editing} status={statusNode} onGrip={(e, id) => dragWidget(e, id, rootRef.current)} /></HomeWidgetEnv.Provider>
 
   return (
     <div
       ref={rootRef}
       className={`hp-root${phone ? ' hp-phone' : ''}${reduceMotion ? ' hp-still' : ''}${composerFocused ? ' hp-composer-focused' : ''}${wallpaperOpen ? ' hp-layer-focused' : ''}${openFolder || organizerOpen ? ' hp-secondary-open' : ''}${editing ? ' hp-editing' : ''}`}
       data-rails={phone ? undefined : `${modes.left}-${modes.right}`}
+      data-guide-owner={phone ? undefined : HOME_GUIDE_OWNER}
       data-wallpaper={photo ? 'true' : undefined}
       data-theme-preset={wallpaperPrefs.themePreset}
       data-motion={wallpaperPrefs.motion ? 'on' : 'off'}
@@ -885,8 +894,10 @@ export function HomepageView(_props: ViewProps) {
 
       {!phone && (
         <>
-          <HomeRail side="left" ids={homeLayout.left} mode={modes.left} editing={editing} onGrip={(e, id) => dragWidget(e, id, rootRef.current)} />
-          <HomeRail side="right" ids={homeLayout.right} mode={modes.right} editing={editing} onGrip={(e, id) => dragWidget(e, id, rootRef.current)} />
+          <HomeWidgetEnv.Provider value={widgetEnv}>
+            <HomeRail side="left" ids={homeLayout.left} mode={modes.left} editing={editing} onGrip={(e, id) => dragWidget(e, id, rootRef.current)} />
+            <HomeRail side="right" ids={homeLayout.right} mode={modes.right} editing={editing} onGrip={(e, id) => dragWidget(e, id, rootRef.current)} />
+          </HomeWidgetEnv.Provider>
           {editing && (
             <div className="hp-edit-bar" role="toolbar" aria-label={t('home.edit')}>
               <span>{t('home.edit.hint')}</span>

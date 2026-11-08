@@ -17,6 +17,8 @@ import { registerMessages, translate } from '../i18n'
 import { LOCAL_ONLY_CODE, localOnlyMessage, remoteRefusalMessage } from './localOnly'
 import { saveResponseAs } from './nativeDownload'
 import type { MuseCardInfo, RelinkInfo, RelinkResult } from '../../../../tangu-agent/src/contracts/clientTypes'
+import { countTelemetry } from '../telemetrySend'
+import { REALTIME_BEARER_PROTOCOL } from '../../../shared/voiceInputStream' // 引擎握手认的子协议名,和听写共用一份
 
 registerMessages({
   'backendsvc.downloadFailed': { zh: '下载失败 ({status})', en: 'Download failed ({status})' },
@@ -128,8 +130,6 @@ export const deleteCloudVoice = (t: EngineTarget, id: string) =>
   request<{ ok: boolean }>(t, '/agent/tts/cloud-voices/delete', { method: 'POST', body: JSON.stringify({ id }) })
 export const cloudVoiceSample = (t: EngineTarget, id: string) =>
   request<{ data: string; mime: string }>(t, '/agent/tts/cloud-voices/sample', { method: 'POST', body: JSON.stringify({ id }) })
-/** 引擎握手时认的子协议名(tangu-agent services/realtimeVoice.ts 的 REALTIME_BEARER_PROTOCOL)。 */
-export const REALTIME_BEARER_PROTOCOL = 'forsion.bearer'
 /**
  * 实时语音通话的 WebSocket(引擎 ws /agent/realtime)。浏览器的 WebSocket 设不了 Authorization 头,令牌有两种带法:
  *   - 本机引擎(桌面):放 query —— 只在回环上走;
@@ -616,7 +616,16 @@ export const testProviderConnection = (
     method: 'POST',
     body: JSON.stringify(probe),
     signal,
-  }, { timeoutMs: 30000 })
+  }, { timeoutMs: 30000 }).then((r) => {
+    // 匿名遥测(契约 §9 app_counts):只数测试成没成;返回的文字、地址、key 一概不报(被拒的类别只在本机按文字判)
+    countTelemetry(r.success ? 'connTestOk' : AUTH_REJECTED.test(r.message || '') ? 'connTestAuthRejected' : 'connTestFail')
+    return r
+  }, (e) => {
+    if ((e as { name?: string })?.name !== 'AbortError') countTelemetry('connTestFail') // 用户点了取消不算
+    throw e
+  })
+/** 连接测试被上游拒了(密钥不对 / 没权限)的样子。 */
+const AUTH_REJECTED = /\b(401|403)\b|unauthori[sz]ed|forbidden|invalid[ _-]?(api[ _-]?)?key|incorrect api key|authentication/i
 
 /** 后端代拉上游 GET {baseUrl}/models(避 CORS),返回可选模型名列表;软失败回 []。 */
 export const fetchProviderModels = (

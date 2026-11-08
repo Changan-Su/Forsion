@@ -511,7 +511,17 @@ it('team: settings that match none of the options stay unselected and are not wr
   expect(api.saveMuseIntro).toHaveBeenCalledExactlyOnceWith(expect.anything(), {})
 })
 
+/** 这一行「进了可视区」才记 noticeSeen;happy-dom 的 IntersectionObserver 从不回调,这里换成一挂上就报看得见的。 */
+function rowsVisible(): void {
+  vi.stubGlobal('IntersectionObserver', vi.fn(function (this: any, cb: IntersectionObserverCallback) {
+    this.observe = (el: Element) => { queueMicrotask(() => cb([{ isIntersecting: true, target: el } as any], this)) }
+    this.disconnect = () => {}
+  }))
+}
+afterEach(() => { vi.unstubAllGlobals() })
+
 it('help improve: the update screen shows the notice once to a signed-in user who has not seen it', async () => {
+  rowsVisible()
   store.onboardingUpdate = true
   localStorage.setItem(ONBOARDING_DISMISS_KEY, '1')
   localStorage.setItem(ONBOARDING_VERSION_KEY, '2.14.0')
@@ -529,6 +539,52 @@ it('help improve: the update screen shows the notice once to a signed-in user wh
   root = createRoot(host)
   await render()
   expect(host.querySelector('[data-ob-improve]')).toBeNull()
+})
+
+it('help improve: signed in, the row marks the notice seen without opening the details', async () => {
+  rowsVisible()
+  vi.mocked(window.tangu!.authStatus!).mockResolvedValue({ loggedIn: true } as any)
+  let view = { available: true, enabled: true, noticeSeen: false, signedIn: true }
+  const invoke = vi.fn(async (channel: string, patch?: { enabled?: boolean; noticeSeen?: true }) => {
+    if (channel === 'telemetry:set') view = { ...view, ...patch }
+    return view
+  })
+  Object.assign(window.tangu!, { telemetryReport: vi.fn(), cloudInvoke: invoke, openExternal: vi.fn() })
+  await render()
+  expect(host.querySelector('[data-ob-improve]')).not.toBeNull()
+  expect(invoke.mock.calls.filter(([c]) => c === 'telemetry:set')).toEqual([['telemetry:set', { noticeSeen: true }]])
+  expect(host.querySelector('.ob3-pop')).toBeNull()
+  // ⓘ 还能手动展开
+  await act(async () => { (host.querySelector('[data-ob-improve] .ob3-info') as HTMLButtonElement).click() })
+  expect(host.querySelector('.ob3-pop')).not.toBeNull()
+})
+
+it('help improve: not marked seen while the row is scrolled out of view', async () => {
+  const observers: Array<{ cb: IntersectionObserverCallback; el?: Element }> = []
+  const IO = vi.fn(function (this: any, cb: IntersectionObserverCallback) {
+    const rec: { cb: IntersectionObserverCallback; el?: Element } = { cb }
+    observers.push(rec)
+    this.observe = (el: Element) => { rec.el = el }
+    this.disconnect = () => {}
+  })
+  vi.stubGlobal('IntersectionObserver', IO)
+  try {
+    vi.mocked(window.tangu!.authStatus!).mockResolvedValue({ loggedIn: true } as any)
+    let view = { available: true, enabled: true, noticeSeen: false, signedIn: true }
+    const invoke = vi.fn(async (channel: string, patch?: { enabled?: boolean; noticeSeen?: true }) => {
+      if (channel === 'telemetry:set') view = { ...view, ...patch }
+      return view
+    })
+    Object.assign(window.tangu!, { telemetryReport: vi.fn(), cloudInvoke: invoke, openExternal: vi.fn() })
+    await render()
+    const rec = observers.find((o) => o.el?.hasAttribute('data-ob-improve'))
+    expect(rec).toBeDefined()
+    expect(invoke).not.toHaveBeenCalledWith('telemetry:set', expect.anything())
+    await act(async () => { rec!.cb([{ isIntersecting: true, target: rec!.el! } as any], {} as any) })
+    expect(invoke.mock.calls.filter(([c]) => c === 'telemetry:set')).toEqual([['telemetry:set', { noticeSeen: true }]])
+  } finally {
+    vi.unstubAllGlobals()
+  }
 })
 
 it('help improve: greyed out until signed in', async () => {

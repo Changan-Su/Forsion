@@ -1,10 +1,10 @@
 /**
  * 录音内联条:录音时「就地替换」输入框底排(+ 号保留、其余控件让位),不再浮在上方。
  * 波形随时间从右往左连续滚动(最新采样在最右,x = 右缘 − (now − t)×速度,逐帧连续 = 丝滑);
- * 静音处只剩虚线基线。■ = 停止并转写入框、↑ = 停止转写并立即发送(均由父组件接线)。
+ * 静音处只剩虚线基线。停止后由父组件把最终转写留在草稿里。
  */
 import { useEffect, useRef, useState } from 'react'
-import { ArrowUp, Loader2, Square } from 'lucide-react'
+import { Loader2, Square } from 'lucide-react'
 import '../../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
 
 interface Props {
@@ -12,8 +12,6 @@ interface Props {
   recording: boolean
   busy: boolean
   onStop: () => void
-  /** 缺省 = 不出 ↑(实时对话:说完自动发)。 */
-  onSend?: () => void
   /** 给了就替换计时(实时对话的「聆听中 / 转写中」);■ 的 title 同步用 stopTitle。 */
   status?: string
   stopTitle?: string
@@ -24,7 +22,7 @@ const STEP_MS = 40      // 每 40ms 落一根柱
 const PX_PER_MS = 0.1   // 滚动速度 ≈100px/s → 柱距 4px
 const GAIN = 3.2        // 语音时域 RMS 偏小,放大到可见
 
-export function VoiceRecordingBar({ analyser, recording, busy, onStop, onSend, status, stopTitle, t }: Props) {
+export function VoiceRecordingBar({ analyser, recording, busy, onStop, status, stopTitle, t }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const [sec, setSec] = useState(0)
 
@@ -103,7 +101,6 @@ export function VoiceRecordingBar({ analyser, recording, busy, onStop, onSend, s
       <canvas ref={canvasRef} className="t2c-voicewave" />
       <span className="t2c-voicetime">{status ?? time}</span>
       <button className="t2c-voicestop" title={stopTitle ?? t('input.micStop')} onClick={onStop}><Square size={12} /></button>
-      {onSend && <button className="t2c-send" title={t('input.send')} onClick={onSend}><ArrowUp size={16} /></button>}
     </div>
   )
 }

@@ -208,12 +208,12 @@ async function main() {
     check('主视图列出 Journal 文件并渲染当日日志(Journal 置顶;UTF-8 解码,不是 base64 原文)', lib1.rows.includes('Journal/2026-09-10.md') && lib1.rows.includes('Home.md') && lib1.rows.indexOf('Journal/2026-09-10.md') < lib1.rows.indexOf('Home.md') && lib1.previewText && !lib1.base64Leak, JSON.stringify(lib1))
 
     const panel = await win.evaluate(() => ({
-      pending: !!document.body.textContent.includes('1 项待批'),
+      pending: !!document.body.textContent.includes('等你批准 1 件事'),
       approveBtn: !![...document.querySelectorAll('button')].find((b) => b.textContent.includes('批准并执行')),
       track: !!document.body.textContent.includes('盯着 CI 失败率'),
       todo: !!document.body.textContent.includes('Windows 步骤'),
     }))
-    check('右栏 Muse 面板:待批 pill / 批准按钮 / 追踪中 / TODO 都在', panel.pending && panel.approveBtn && panel.track && panel.todo, JSON.stringify(panel))
+    check('右栏 Muse 面板:状态行「等你批准 1 件事」/ 批准按钮 / 它给自己排的 / 待办都在', panel.pending && panel.approveBtn && panel.track && panel.todo, JSON.stringify(panel))
     if (!NEGATIVE_CONTROL) await win.screenshot({ path: SHOT_SPACE })
     await win.locator('button', { hasText: '批准并执行' }).first().click()
     await win.waitForTimeout(1000)
