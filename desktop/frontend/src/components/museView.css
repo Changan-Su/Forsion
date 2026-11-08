@@ -68,3 +68,8 @@
 .mv-ap-row:hover { background: var(--overlay-light); }
 .mv-ap-row > svg { flex: none; color: var(--text-muted); }
 .mv-ap-row .mv-n { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* 最近几轮:整行是一颗按钮(点开那一轮的会话),长得和别的行一样 */
+.mv-round { width: 100%; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.mv-round:focus-visible { outline: var(--focus-ring, 2px) solid var(--signal-line); outline-offset: -2px; }
+.mv-round[data-round-status='failed'] .mv-rt i { color: var(--danger, var(--text-muted)); }

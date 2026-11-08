@@ -73,6 +73,18 @@ let currentSessionId: string | null = null;
 /** Space 目录内容戳(周期收尾刷新;桌面按它变了才重载 Muse 的插件)。0 = 尚未计算。 */
 let spaceStamp = 0;
 let pendingJournal: { runId: string; sessionId: string; trigger: string; mode: string; startedAt: number } | null = null;
+/** 面板上点了「叫醒」(11-08,Muse Space 右栏方案 B):下一次巡检当作到点 —— 清掉它自己定的休眠、不看心跳间隔与运行时段,
+ *  直接起一轮(trigger = 'manual')。额度、每窗口次数、让位(用户有 run 在跑)、急停照守:让位 / 急停挡住的留着等下一次巡检,
+ *  额度 / 次数 / 停用 / 没模型挡住的作废,原因写进 wakeBlocked 给面板说清。只在内存:引擎重启即丢,用户再点一次。 */
+let wakeRequestedAt = 0;
+export type MuseWakeBlock = 'locked' | 'userActive' | 'budget' | 'restartCap' | 'disabled' | 'noModel';
+let wakeBlocked: MuseWakeBlock | null = null;
+/** 叫醒作废(挡住它的不会自己消失):清掉请求,留下原因。 */
+function dropWake(why: MuseWakeBlock): void {
+  if (!wakeRequestedAt) return;
+  wakeRequestedAt = 0;
+  wakeBlocked = why;
+}
 
 /** Muse 的工作区 = 自己的 Library(桌面 Agent Space 浏览的就是它)。 */
 export function museLibraryDir(): string {
@@ -226,6 +238,13 @@ async function flushJournal(): Promise<void> {
   }
 }
 
+/** 库里的时间列 → epoch ms:SQLite 的 CURRENT_TIMESTAMP 是不带时区的 UTC 串,PG 回 Date。读不出 → NaN。 */
+function dbTimeMs(v: unknown): number {
+  if (v instanceof Date) return v.getTime();
+  const s = String(v || '');
+  return s ? Date.parse(s.replace(' ', 'T') + (/(?:[zZ]|[+-]\d\d:?\d\d)$/.test(s) ? '' : 'Z')) : NaN;
+}
+
 /** 周期收尾的计数(遥测账本):结果、token、耗时(run 最后一次更新 − 周期开始)、没产出的周期。 */
 function noteCycleEnd(pj: { runId: string; startedAt: number }, run: { status: string; tokens_total: unknown; updated_at: unknown }): void {
   const status = String(run.status);
@@ -233,8 +252,7 @@ function noteCycleEnd(pj: { runId: string; startedAt: number }, run: { status: s
   else if (status === 'failed') ledger.inc('daily_muse', 'cyclesError');
   else if (status === 'aborted') ledger.inc('daily_muse', 'cyclesAborted');
   ledger.inc('daily_muse', 'cycleTokens', { n: Math.max(0, Math.floor(Number(run.tokens_total) || 0)) });
-  const u = run.updated_at;
-  const end = u instanceof Date ? u.getTime() : Date.parse(String(u || '').replace(' ', 'T') + (/(?:[zZ]|[+-]\d\d:?\d\d)$/.test(String(u || '')) ? '' : 'Z'));
+  const end = dbTimeMs(run.updated_at);
   if (Number.isFinite(end) && end >= pj.startedAt) ledger.inc('daily_muse', 'cycleMs', { n: Math.floor(end - pj.startedAt) });
   if (museCycleFinished(pj.runId) === 0) ledger.inc('daily_muse', 'cyclesSilent');
 }
@@ -786,6 +804,18 @@ async function onboardingTurn(userId: string, hadCycle: boolean, now = Date.now(
   } catch { return ''; }
 }
 
+/** 用户点「叫醒」起的这一轮(走 ephemeralHint,不落 chat_messages):人就在电脑前、刚点的,要的是完整的一轮,不是心跳。 */
+export const MANUAL_WAKE_NOTE = '\n\n(The user just woke you from your panel: they are at the computer right now and want a full round, not a heartbeat check.)';
+
+/** 这一轮因为什么起(落进 agent_runs.input.museTrigger,面板「最近几轮」按它写「怎么醒的」):
+ *  用户点了叫醒 > 规则命中 > 自己的到期日程 > 心跳;都不是 → null(不起)。 */
+export function cycleTrigger(x: { manual: boolean; fired: readonly { id: string }[]; due: readonly { name: string }[]; heartbeatDue: boolean }): string | null {
+  if (x.manual) return 'manual';
+  if (x.fired.length) return `rule:${x.fired.map((t) => t.id).join('+')}`;
+  if (x.due.length) return `schedule:${x.due.map((e) => e.name).join('+').slice(0, 60)}`;
+  return x.heartbeatDue ? 'heartbeat' : null;
+}
+
 async function startCycle(cfg: MuseConfig, extraKickoff = '', trigger = 'heartbeat', quietSince = false): Promise<string> {
   const userId = museUserId();
   const hadCycle = lastCycleAt > 0;
@@ -828,6 +858,7 @@ async function startCycle(cfg: MuseConfig, extraKickoff = '', trigger = 'heartbe
       attachments: [],
       client: backgroundClientTag('muse'), // 后台用量归因(api_usage_logs.client),与用户 run 可分
       background: 'muse', // 引擎内部来源标记(路由组装 input 时不透传此键):agentLoop 只对它放行 approvalDeferral
+      museTrigger: trigger, // 这一轮怎么醒的(面板「最近几轮」读;模型看不到 input 里的这个键)
       agentConfig: museAgentConfig(cfg, agentThinking),
     },
   });
@@ -837,7 +868,8 @@ async function startCycle(cfg: MuseConfig, extraKickoff = '', trigger = 'heartbe
   lastRunning = true;
   pendingJournal = { runId, sessionId, trigger, mode: cfg.mode, startedAt: lastCycleAt };
   museCycleStarted(runId);
-  ledger.inc('daily_muse', trigger.startsWith('rule:') ? 'cyclesRule' : trigger.startsWith('schedule:') ? 'cyclesSchedule' : 'cyclesHeartbeat');
+  // 叫醒的那轮不进这三类(账本键是和服务端对过的契约,不为它新加键;总数仍可由 cyclesModeX 加出来)
+  if (trigger !== 'manual') ledger.inc('daily_muse', trigger.startsWith('rule:') ? 'cyclesRule' : trigger.startsWith('schedule:') ? 'cyclesSchedule' : 'cyclesHeartbeat');
   ledger.inc('daily_muse', cfg.mode === 'auto' ? 'cyclesModeAuto' : cfg.mode === 'agent' ? 'cyclesModeAgent' : 'cyclesModeAsk');
   enqueueRun(sessionId, runId);
   return runId;
@@ -893,6 +925,7 @@ async function tick(): Promise<void> {
     let locked = true;
     try { locked = remoteLocked(); } catch { locked = true; }
     if (locked) {
+      if (wakeRequestedAt) wakeBlocked = 'locked'; // 急停:叫醒留着,解锁后的下一次巡检照办
       ledger.inc('daily_muse', 'skipRemoteLock');
       if (!lockPauseLogged) { lockPauseLogged = true; log('remote lock on — Muse, watch rules and agent schedules paused until it is unlocked on this computer'); }
       await refreshSpaceStampWhenIdle(); // 锁只停后台:本机聊天里改的 Space 照样要让桌面重载
@@ -952,10 +985,10 @@ async function tick(): Promise<void> {
     }
 
     const cfg = loadSpecialAgentsConfig().muse;
-    if (!cfg.enabled) { lastRunning = false; return; }
+    if (!cfg.enabled) { lastRunning = false; dropWake('disabled'); return; }
     // 模型解析:用户显式配置 > admin 后台默认槽 > 对话默认(未选模型=跟随云端,admin 改动下轮生效)。
     cfg.modelId = await resolveBackgroundModelId(cfg.modelId);
-    if (!cfg.modelId) { lastRunning = false; ledger.inc('daily_muse', 'skipNoModel'); log('已启用但无可用模型(本地未选且云端无后台默认),跳过'); return; }
+    if (!cfg.modelId) { lastRunning = false; dropWake('noModel'); ledger.inc('daily_muse', 'skipNoModel'); log('已启用但无可用模型(本地未选且云端无后台默认),跳过'); return; }
     // 播种/自愈 Muse 系统 agent 文件夹(幂等;首次创建时一次性迁移旧自定义 prompt)。
     await ensureMuseAgent(legacyMusePrompt()).catch((e: any) => log(`播种 muse agent 失败:${e?.message || e}`));
     // 每周装备巡检条目(只播一次);放在读自己到期日程之前,同一个巡检周期就能看到它。失败不挡周期,下个巡检再试。
@@ -972,12 +1005,22 @@ async function tick(): Promise<void> {
       ledger.inc('daily_muse', 'skipSleepCleared');
       sleep = null;
     }
-    if (!isWithinActiveHours(cfg, nowHour())) { ledger.inc('daily_muse', 'skipOutsideHours'); log(`不在运行时段(当前 ${nowHour()} 时),跳过`); return; }
+    const manual = wakeRequestedAt > 0;
+    if (manual && sleep) {
+      log(`用户点了叫醒,提前结束休眠(原定到 ${localTime(new Date(sleep.until))})`);
+      await setMuseSleep(null).catch((e: any) => log(`清休眠失败:${e?.message || e}`));
+      sleep = null;
+    }
+    if (!manual && !isWithinActiveHours(cfg, nowHour())) { ledger.inc('daily_muse', 'skipOutsideHours'); log(`不在运行时段(当前 ${nowHour()} 时),跳过`); return; }
 
     await sendDailyDigestIfDue(cfg, userId);
     await postObservedRuleCards(userId).catch((e: any) => log(`观察结果卡发送失败:${e?.message || e}`));
     // 后台让位：用户有进行中的 run → 不与之抢模型账号/速率，本轮跳过（下次巡检再来）。
-    if (await anyUserRunActive()) { lastRunning = false; ledger.inc('daily_muse', 'skipUserActive'); log('用户有进行中的 run，本轮让位'); return; }
+    if (await anyUserRunActive()) {
+      lastRunning = false;
+      if (manual) wakeBlocked = 'userActive'; // 叫醒留着:用户那个 run 跑完(终态会 kickMuse)就醒
+      ledger.inc('daily_muse', 'skipUserActive'); log('用户有进行中的 run，本轮让位'); return;
+    }
     // 起周期的三种理由(任一即可;都不豁免 anyMuseRunActive/token/restarts 预算闸——防失控烧穿额度):
     //   ① 盯任务规则命中(museFired)② 自己 CALENDAR.db 的到期条目(自触发/Track)③ 心跳到点(heartbeatHours,0=关)。
     // 2026-09-10 前的「无新用户消息就跳过」降为提示(quietSince 注入 kickoff):用户要的是「默认每 2 小时醒一次」,
@@ -985,15 +1028,20 @@ async function tick(): Promise<void> {
     let dueMuse: ScheduleEntry[] = [];
     try { dueMuse = await museDueSchedules(); } catch (e: any) { log(`读自己的日程失败:${e?.message || e}`); }
     const heartbeatDue = heartbeatDecision({ heartbeatMinutes: cfg.heartbeatMinutes, lastCycleAt, now: Date.now(), sleep }) === 'due';
-    if (!museFired.length && !dueMuse.length && !heartbeatDue) { lastRunning = false; ledger.inc('daily_muse', 'skipNothingDue'); return; }
+    const trigger = cycleTrigger({ manual, fired: museFired, due: dueMuse, heartbeatDue });
+    if (!trigger) { lastRunning = false; ledger.inc('daily_muse', 'skipNothingDue'); return; }
+    if (manual) log('用户点了叫醒');
     if (museFired.length) log(`盯任务命中 ${museFired.length} 条:${museFired.map((t) => t.id).join(', ')}`);
     if (dueMuse.length) log(`自己的日程到期 ${dueMuse.length} 条:${dueMuse.map((e) => e.name).join(', ')}`);
-    const quietSince = !(await userActiveSince(userId, lastCycleAt));
-    const trigger = museFired.length ? `rule:${museFired.map((t) => t.id).join('+')}`
-      : dueMuse.length ? `schedule:${dueMuse.map((e) => e.name).join('+').slice(0, 60)}` : 'heartbeat';
+    // 叫醒的那轮人就在跟前:不挂「自上一轮以来没有动静」的心跳提示
+    const quietSince = !manual && !(await userActiveSince(userId, lastCycleAt));
 
     rollWindow(cfg);
-    if (await anyMuseRunActive(userId)) { lastRunning = true; ledger.inc('daily_muse', 'skipAlreadyRunning'); return; }
+    if (await anyMuseRunActive(userId)) {
+      lastRunning = true;
+      if (manual) { wakeRequestedAt = 0; wakeBlocked = null; } // 已经在想了:叫醒算办到
+      ledger.inc('daily_muse', 'skipAlreadyRunning'); return;
+    }
     lastRunning = false;
 
     // token 预算(两道,近 tokenBudgetWindowHours 小时、该用户全部 Muse 会话):任一超限本轮不起新周期。
@@ -1005,21 +1053,24 @@ async function tick(): Promise<void> {
     if (cfg.maxTokensPerWindow > 0) {
       spent = await tokensInWindow(userId, cfg.tokenBudgetWindowHours);
       if (spent.billable >= cfg.maxTokensPerWindow) {
+        dropWake('budget');
         ledger.inc('daily_muse', 'skipBudgetBillable');
         log(`token 预算用尽(近 ${cfg.tokenBudgetWindowHours}h 计费 ${spent.billable}/${cfg.maxTokensPerWindow},未缓存 prompt+completion),本轮跳过`);
         return;
       }
       if (spent.gross >= grossCap) {
+        dropWake('budget');
         ledger.inc('daily_muse', 'skipBudgetGross');
         log(`毛 prompt 预算用尽(近 ${cfg.tokenBudgetWindowHours}h 毛量 ${spent.gross}/${grossCap}),本轮跳过`);
         return;
       }
     }
 
-    if (restartsThisWindow >= cfg.maxRestartsPerWindow) { ledger.inc('daily_muse', 'skipRestartCap'); log(`本窗口预算用尽(${restartsThisWindow}/${cfg.maxRestartsPerWindow})`); return; }
+    if (restartsThisWindow >= cfg.maxRestartsPerWindow) { dropWake('restartCap'); ledger.inc('daily_muse', 'skipRestartCap'); log(`本窗口预算用尽(${restartsThisWindow}/${cfg.maxRestartsPerWindow})`); return; }
     restartsThisWindow += 1;
     log(`启动第 ${restartsThisWindow}/${cfg.maxRestartsPerWindow} 个思考周期(模型 ${cfg.modelId},档位 ${cfg.mode},触发 ${trigger},计费 ${spent.billable}/${cfg.maxTokensPerWindow},毛量 ${spent.gross}/${grossCap})`);
-    const cycleRunId = await startCycle(cfg, buildTriggerKickoff(museFired) + scheduleKickoff(dueMuse), trigger, quietSince);
+    const cycleRunId = await startCycle(cfg, (manual ? MANUAL_WAKE_NOTE : '') + buildTriggerKickoff(museFired) + scheduleKickoff(dueMuse), trigger, quietSince);
+    if (manual) { wakeRequestedAt = 0; wakeBlocked = null; }
     // lastFiredAt / lastRun 只在周期真正启动后写回:被上面任何闸挡住 → 下轮重试,不白烧 cooldown。
     if (museFired.length) await markTriggersFired(museFired.map((t) => t.id), undefined, trigCursors);
     await markMuseEntriesFired(cycleRunId, dueMuse);
@@ -1068,6 +1119,16 @@ export function kickMuse(): void {
   (kickTimer as any).unref?.();
 }
 
+/** 面板「叫醒」:记一笔、催一次巡检(下一次 tick 当作到点,见 wakeRequestedAt)。supervisor 还没起 → false
+ *  (请求照样留着,起来后的第一次巡检照办)。 */
+export function requestMuseWake(): boolean {
+  wakeRequestedAt = Date.now();
+  wakeBlocked = null;
+  if (!timer) return false;
+  kickMuse();
+  return true;
+}
+
 /** @internal 测试用:跑一轮巡检(P1-K2 锁定测试)。 */
 export const __museTickForTests = (): Promise<void> => tick();
 
@@ -1098,6 +1159,10 @@ export interface MuseStatus {
   sleepReason: string | null;
   /** 主动消息下面的反馈按钮开到这个时刻(磨合期 14 天;epoch ms)。null = 还没开始。 */
   feedbackUntil: number | null;
+  /** 面板点了「叫醒」、还没起那一轮(11-08)。旧引擎没有这个字段 → 面板不出「叫醒」。 */
+  wakePending: boolean;
+  /** 上一次叫醒为什么没起来 / 还在等什么;null = 没挡。 */
+  wakeBlocked: MuseWakeBlock | null;
 }
 
 export async function museStatus(): Promise<MuseStatus> {
@@ -1134,6 +1199,64 @@ export async function museStatus(): Promise<MuseStatus> {
     sleepUntil: sleep?.until ?? null,
     sleepReason: sleep?.reason ?? null,
     feedbackUntil: onboarding ? onboarding.startedAt + MUSE_ONBOARDING_MS : null,
+    wakePending: wakeRequestedAt > 0,
+    wakeBlocked,
   };
+}
+
+/** 面板「最近几轮」的一行(11-08)。trigger 是 cycleTrigger 的原串(升级前跑的轮次没记 → null);
+ *  files = 这一轮真写过的文件数(检查点 manifest,同 Journal 那列);todos = 这一轮提的待办数(每个周期一个会话,按会话数)。 */
+export interface MuseRound {
+  runId: string;
+  sessionId: string;
+  status: string;
+  trigger: string | null;
+  startedAt: number;
+  /** 最后一次更新(终态时 = 结束时刻);在跑的轮次是 null。 */
+  endedAt: number | null;
+  files: number;
+  todos: number;
+  error: string | null;
+}
+
+/** 最近几轮周期(新 → 旧)。只取 Muse 后台周期(input.background === 'muse'),手聊进 Muse 会话的 run 不算。 */
+export async function museRecentRounds(limit = 3): Promise<MuseRound[]> {
+  const n = Math.min(20, Math.max(1, Math.floor(limit) || 3));
+  const userId = museUserId();
+  const rows = await query<any[]>(
+    `SELECT r.id, r.session_id, r.status, r.error, r.input, r.created_at, r.updated_at FROM agent_runs r
+     JOIN chat_sessions s ON s.id = r.session_id
+     WHERE s.kind = 'muse' AND s.user_id = ? ORDER BY r.created_at DESC LIMIT ${n * 3}`,
+    [userId],
+  );
+  const picked = (rows || []).map((r) => {
+    let input: any = r.input;
+    try { if (typeof input === 'string') input = JSON.parse(input); } catch { input = null; }
+    return { r, input };
+  }).filter((x) => !x.input || x.input.background === 'muse').slice(0, n);
+  if (!picked.length) return [];
+  const sids = [...new Set(picked.map((x) => String(x.r.session_id)))];
+  const todoRows = await query<any[]>(
+    `SELECT source_session_id FROM muse_todos WHERE user_id = ? AND source_session_id IN (${sids.map(() => '?').join(',')})`,
+    [userId, ...sids],
+  ).catch(() => []);
+  const todosBy = new Map<string, number>();
+  for (const t of todoRows || []) todosBy.set(String(t.source_session_id), (todosBy.get(String(t.source_session_id)) || 0) + 1);
+  return Promise.all(picked.map(async ({ r, input }) => {
+    const live = r.status === 'queued' || r.status === 'running';
+    const startedAt = dbTimeMs(r.created_at);
+    const endedAt = live ? null : dbTimeMs(r.updated_at);
+    return {
+      runId: String(r.id),
+      sessionId: String(r.session_id),
+      status: String(r.status),
+      trigger: typeof input?.museTrigger === 'string' ? input.museTrigger : null,
+      startedAt: Number.isFinite(startedAt) ? startedAt : 0,
+      endedAt: endedAt != null && Number.isFinite(endedAt) ? endedAt : null,
+      files: await filesTouched(String(r.session_id), String(r.id)),
+      todos: todosBy.get(String(r.session_id)) || 0,
+      error: r.error ? displayText(String(r.error), 200) : null,
+    };
+  }));
 }
 

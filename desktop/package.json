@@ -119,6 +119,7 @@
     "e2e:musesettings": "node scripts/muse-settings.e2e.cjs",
     "e2e:modelcatalog": "node scripts/model-catalog.e2e.cjs",
     "e2e:museagentspace": "node scripts/muse-agentspace.e2e.cjs",
+    "e2e:musepanel": "node scripts/muse-panel.e2e.cjs",
     "e2e:inboxamadeus": "node scripts/inbox-amadeus.e2e.cjs",
     "e2e:planlive": "node scripts/plan-live.e2e.cjs",
     "e2e:changes": "node scripts/change-trail.e2e.cjs",

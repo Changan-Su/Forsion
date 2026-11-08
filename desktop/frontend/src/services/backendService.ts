@@ -3,7 +3,7 @@
  * 统一 Bearer + JSON 错误,错误信息抛 Error(detail)。
  */
 import type {
-  AgentConfig, AgentScheduleEntry, AgentScheduleEntryUpsert, AgentScheduleInfo, AgentsMeta, AutomationActionCatalogItem, AutomationExecutionInfo, AutomationRunInfo, AutomationSessionInfo, ChannelKind, HistorianActivityItem, MessageRecord, ModelsResponse, ProviderQuota, MuseLibraryEntry, MuseStarter, MuseStatusInfo, MuseTodo, MuseTriggerInfo, MuseTriggerUpsert, PendingApprovalInfo, TriggerSourceInfo,
+  AgentConfig, AgentScheduleEntry, AgentScheduleEntryUpsert, AgentScheduleInfo, AgentsMeta, AutomationActionCatalogItem, AutomationExecutionInfo, AutomationRunInfo, AutomationSessionInfo, ChannelKind, HistorianActivityItem, MessageRecord, ModelsResponse, ProviderQuota, MuseLibraryEntry, MuseStarter, MuseRoundInfo, MuseStatusInfo, MuseTodo, MuseTriggerInfo, MuseTriggerUpsert, PendingApprovalInfo, TriggerSourceInfo,
   GitIdentity, GitSettings, NormalAgentDef, ProjectContext, ProjectMemoryView, ProjectSettings, ProjectSkillInfo, SessionRecord, SkillInfo, SkillCatalogEntry, SpecialAgentsConfig,
   ToolsResponse, WorkspaceFileMeta, TeamDef } from '../types'
 import { authFetch } from './http'
@@ -1148,6 +1148,12 @@ export const injectMuseTodos = (t: EngineTarget, todoIds: string[], sessionId: s
 
 export const getMuseStatus = (t: EngineTarget) =>
   request<{ status: MuseStatusInfo }>(t, '/agent/special/muse/status').then((r) => r.status)
+/** 面板「叫醒」(2026-11-08):下一次巡检当作到点,回最新状态。旧引擎 404;Muse 关着 409。 */
+export const wakeMuse = (t: EngineTarget): Promise<MuseStatusInfo> =>
+  request<{ status: MuseStatusInfo }>(t, '/agent/special/muse/wake', { method: 'POST', body: '{}' }).then((r) => r.status)
+/** 面板「最近几轮」(2026-11-08)。旧引擎 404(调用方当「不支持」,整块不画)。 */
+export const getMuseRounds = (t: EngineTarget, limit = 3): Promise<MuseRoundInfo[]> =>
+  request<{ rounds: MuseRoundInfo[] }>(t, `/agent/special/muse/rounds?limit=${limit}`).then((r) => r.rounds)
 
 // 异步审批(Muse ask/agent 档的越界动作):列表 / 批准(引擎按原参数代执行,结果随响应回)/ 拒绝。
 export const listMuseApprovals = (t: EngineTarget, status?: string) =>
