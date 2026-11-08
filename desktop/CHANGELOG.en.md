@@ -26,7 +26,7 @@ Preview build: only for people who chose the preview channel. Stable users won't
 - **Calendar and to-dos** (with Calendar 0.1.8): the to-do add box moves to the bottom of the list, with subtasks, tags and linked notes; new Today and Tasks cards for Home; moving an event's start keeps its duration.
 - **Amadeus**: attachment, file and image embeds show an Open button on hover; block formulas get a copy button, and copying a formula in chat gives you the TeX; links, commands and @ mentions use the accent color; formulas are no longer auto-numbered, untitled notes put the cursor in the title, and wikilink source is colored too; the drop line when dragging blocks is back in the right place; file links like `a.ts:42` in chat jump to that line.
 - **Spaces and windows**:
-  - Right-clicking a Space or a note gives the same menu everywhere: Ribbon, Home, the Space organizer, the note tree and the note "⋯" menu, with one confirmation before deleting.
+  - Right-clicking a Space or a note gives the same menu everywhere: Ribbon, Home, the Space organizer, the note tree and the note "⋯" menu, and deleting several at once asks only once.
   - Right-click a Space and choose Add to desktop, then double-click it to open that Space in its own window; several Mini windows can be open at once.
   - Every tab has a right-click menu and pinned views can be dragged out into a new window; ⇧⌘O opens the Space organizer from any Space.
   - View more on a sidebar project expands in place; set how many it adds per click from the project's "…" menu.
