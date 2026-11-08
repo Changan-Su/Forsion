@@ -17,6 +17,7 @@
  * `overlayPlacement.guard.test.ts` 拦下(那份名单里是存量,只减不增)。
  */
 import React, { useLayoutEffect, useRef, useState, type CSSProperties, type HTMLAttributes, type ReactNode, type RefObject } from 'react'
+import type { TextAnchor } from './textAnchor'
 
 /** 端级 UI 缩放变更事件:改 zoom 不会触发 window.resize,浮层收不到通知就会停在按旧 zoom 算的位置。
  *  由 app 的 uiZoom.apply() 派发(引擎不反向依赖 app,只约定事件名)。 */
@@ -175,19 +176,50 @@ export function followAnchor(el: HTMLElement, anchor: Element, opts: FitAnchored
   }
 }
 
+/** keep 的纯算术(视口 px):钉住的那一截已经按自己的高度摆在 keptTop;它在锚点上方(底边不越过 anchorTop)而上面
+ *  放得下其余 rest 时整块往上长,否则往下长 —— 钉住那一截都不动。 */
+export function keptPlacement(keptTop: number, keptH: number, rest: number, anchorTop: number, margin = 8): { top: number; grow: 'up' | 'down' } {
+  const above = keptTop + keptH <= anchorTop + 0.5
+  const up = above && keptTop - rest >= margin
+  return { top: up ? keptTop - rest : keptTop, grow: up ? 'up' : 'down' }
+}
+
+/** 跟着一段字走的那几个选项(划线条、结果卡、笔记格式栏;LCL 表面规范 · 划线菜单方案 B)。 */
+export interface FollowOpts {
+  /** 锚在一段字上:每次摆位现量(滚动、视图尺寸、内容变化都重摆);x / y / anchorTop 不再用。
+   *  那段字看不见时浮层打 `data-anchor-hidden`(textAnchor.css:淡出、不吃指针),位置停在上一次。 */
+  anchor?: TextAnchor | null
+  /** 浮层离那段字多远(视口 px),缺省 8。 */
+  gap?: number
+  /** 钉住的那一截(选择器):按它的高度贴着锚点摆,其余部分往远离锚点的一侧长(在锚点上方 = 往上长,打 data-grow="up");
+   *  那一侧放不下才往另一侧。划线条的 ⋯ 面板靠它:展开时那一行不跳。 */
+  keep?: string
+}
+
 /** 挂在 fixed 浮层根上:量真实尺寸 → 夹取/翻面 → 反补偿 zoom。useLayoutEffect 在绘制前定位,故无闪。
  *  内容变高(异步加载完、筛选)由 ResizeObserver 兜住 —— 故**不需要**调用方传 deps。 */
-export function useClampedMenu(x: number, y: number, opts: AnchorOpts & { boundary?: HTMLElement | null } = {}): {
+export function useClampedMenu(xOpt: number, yOpt: number, opts: AnchorOpts & FollowOpts & { boundary?: HTMLElement | null } = {}): {
   ref: RefObject<HTMLDivElement | null>
   style: CSSProperties
 } {
-  const { anchorTop, prefer, flip, center, alignEnd, margin = 8, boundLeft, boundRight, boundary } = opts
+  const { anchorTop: anchorTopOpt, prefer, flip, center, alignEnd, margin = 8, boundLeft, boundRight, boundary, anchor, gap = 8, keep } = opts
   const ref = useRef<HTMLDivElement>(null)
-  const [pos, setPos] = useState({ left: x, top: y, maxWidth: undefined as number | undefined, maxHeight: undefined as number | undefined })
+  const [pos, setPos] = useState({ left: xOpt, top: yOpt, maxWidth: undefined as number | undefined, maxHeight: undefined as number | undefined })
   useLayoutEffect(() => {
     const el = ref.current
     if (!el) return
+    if (anchor) el.setAttribute('data-anchor-follow', '')
     const apply = (): void => {
+      let x = xOpt, y = yOpt, anchorTop = anchorTopOpt
+      if (anchor) {
+        const r = anchor.read()
+        // 看不见:藏起来、停在上一次的位置(回来时从这里接着摆,不从角落飞过来)
+        if (!r) { el.setAttribute('data-anchor-hidden', ''); return }
+        el.removeAttribute('data-anchor-hidden')
+        x = center ? (r.left + r.right) / 2 : alignEnd ? r.right : r.left
+        y = r.bottom + gap
+        anchorTop = r.top - gap
+      }
       const z = zoomOf(el)
       // offsetWidth/Height = 未缩放局部 px(且不含 pop-in 的 scale 动画)→ ×z 换到视口 px 再比。
       const rect = boundary?.getBoundingClientRect()
@@ -201,7 +233,19 @@ export function useClampedMenu(x: number, y: number, opts: AnchorOpts & { bounda
         : undefined
       const wV = Math.min(el.offsetWidth * z, availableWidth)
       const hV = Math.min(el.offsetHeight * z, maxHeight === undefined ? Infinity : maxHeight * z)
-      const v = clampMenu(x - left, y - top, wV, hV, vw, vh, { anchorTop: anchorTop === undefined ? undefined : anchorTop - top, prefer, flip, center, alignEnd, margin, boundLeft: boundLeft === undefined ? undefined : boundLeft - left, boundRight: boundRight === undefined ? undefined : boundRight - left })
+      const place = { anchorTop: anchorTop === undefined ? undefined : anchorTop - top, prefer, flip, center, alignEnd, margin, boundLeft: boundLeft === undefined ? undefined : boundLeft - left, boundRight: boundRight === undefined ? undefined : boundRight - left }
+      const v = clampMenu(x - left, y - top, wV, hV, vw, vh, place)
+      // keep:按钉住那一截的高度贴锚点,其余往远离锚点的一侧长(⋯ 展开时那一行不跳,方案 B §7.5)
+      const kept = keep ? el.querySelector<HTMLElement>(keep) : null
+      if (kept) {
+        const hKeepV = Math.min(hV, (kept.offsetHeight + el.offsetHeight - el.clientHeight) * z)
+        const restV = hV - hKeepV
+        if (restV > 0.5) {
+          const k = keptPlacement(clampMenu(x - left, y - top, wV, hKeepV, vw, vh, place).top, hKeepV, restV, place.anchorTop ?? y - top, margin)
+          v.top = k.top
+          el.dataset.grow = k.grow
+        } else delete el.dataset.grow
+      }
       // 比视口还宽(窄屏 × 固定宽度浮层):夹取只能贴左边、右边照样被裁 → 给个局部 px 的上限。
       const maxWidth = boundary || el.offsetWidth * z > availableWidth ? availableWidth / z : undefined
       const next = { left: (v.left + left) / z, top: (v.top + top) / z, maxWidth, maxHeight }
@@ -220,13 +264,15 @@ export function useClampedMenu(x: number, y: number, opts: AnchorOpts & { bounda
     ro.observe(el)
     if (boundary) ro.observe(boundary)
     document.addEventListener('scroll', apply, true)
+    const unfollow = anchor?.subscribe(apply) // 视图尺寸 / 内容 / 摘下挂回:锚点自己会报
     return () => {
       window.removeEventListener('resize', apply)
       window.removeEventListener(UI_ZOOM_EVENT, apply)
       ro.disconnect()
       document.removeEventListener('scroll', apply, true)
+      unfollow?.()
     }
-  }, [x, y, anchorTop, prefer, flip, center, alignEnd, margin, boundLeft, boundRight, boundary])
+  }, [xOpt, yOpt, anchorTopOpt, prefer, flip, center, alignEnd, margin, boundLeft, boundRight, boundary, anchor, gap, keep])
   return { ref, style: { left: pos.left, top: pos.top, maxWidth: pos.maxWidth, maxHeight: pos.maxHeight } }
 }
 
@@ -450,12 +496,15 @@ export function OverlayAt({
   boundLeft,
   boundRight,
   boundary,
+  anchor,
+  gap,
+  keep,
   innerRef,
   className,
   style,
   children,
   ...rest
-}: {
+}: FollowOpts & {
   x: number
   y: number
   anchorTop?: number
@@ -473,7 +522,7 @@ export function OverlayAt({
   style?: CSSProperties
   children?: ReactNode
 } & Omit<HTMLAttributes<HTMLDivElement>, 'style' | 'className' | 'children'>) {
-  const p = useClampedMenu(x, y, { anchorTop, prefer, flip, center, alignEnd, margin, boundLeft, boundRight, boundary })
+  const p = useClampedMenu(x, y, { anchorTop, prefer, flip, center, alignEnd, margin, boundLeft, boundRight, boundary, anchor, gap, keep })
   useExitGhost(p.ref)
   return (
     <div

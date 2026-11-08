@@ -33,6 +33,7 @@ export function mountPluginSelectionBar(root: HTMLElement, pluginId: string, ini
           view={`${pluginId}:${view}`}
           pluginId={pluginId}
           watch={opts.watch === false ? undefined : rootRef}
+          owner={rootRef}
           selection={shown}
           onDismiss={() => { if (shown) { shown = null; render() } }}
           tools={(s) => (Array.isArray(opts.tools) ? opts.tools : []).filter((t) => t && typeof t.id === 'string' && typeof t.run === 'function').map((t) => {

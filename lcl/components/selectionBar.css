@@ -94,7 +94,16 @@
 }
 .selbar-dot:hover { background: var(--menu-hover); }
 .selbar-dot.on::before { outline: 1.5px solid var(--text); outline-offset: 2px; }
-/* ⋯ 展开的那一块:接在条的下面,和笔记工具栏的「转换为」「AI」面板同一种展开方式。 */
+/* ⋯ 展开的那一块:接在行的远离选区那一侧(划线菜单方案 B §7.5)。宿主按 OverlayAt 的 keep=".selbar-row" 摆位:
+   行钉住不动,条在选区上方时面板往上长(data-grow="up",面板排在行上面、分隔线在面板下沿),被挤到下方时往下长。 */
+.selbar[data-grow='up'] {
+  display: flex;
+  flex-direction: column-reverse;
+}
+.selbar[data-grow='up'] > .selbar-panel {
+  border-top: 0;
+  border-bottom: var(--border-width, 1px) solid var(--border);
+}
 .selbar-panel {
   display: flex;
   flex-direction: column;

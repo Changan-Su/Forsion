@@ -6,6 +6,7 @@
 import { useEffect, useRef, useState, type ReactElement } from 'react'
 import { Languages, Sparkles } from 'lucide-react'
 import { OverlayAt } from '../lib/clampMenu'
+import type { TextAnchor } from '@lcl/engine'
 import { registerMessages, useI18n } from '../../i18n'
 import { TRANSLATE_LANGUAGES } from '../../translateTarget'
 import type { AiApply } from './inlineAi'
@@ -48,11 +49,14 @@ registerMessages({
 /** model = 这次实际是谁出的结果(翻译才给;readTangu().complete 的返回值可以原样交回来)。 */
 export type InlineAiRun = (instruction: string | undefined, onDelta: (d: string) => void, signal: AbortSignal) => Promise<{ text: string; toolCallText?: boolean; model?: { name: string; mt: boolean } }>
 
-export function InlineAiPanel({ x, y, anchorTop, title, hasSelection, askFirst, run, onApply, onClose, editorEl, language }: {
+export function InlineAiPanel({ x, y, anchorTop, anchor, title, hasSelection, askFirst, run, onApply, onClose, editorEl, language }: {
   /** 视口坐标:目标末尾下方(y)/ 目标起点上方(anchorTop);下方放不下时翻上去(同工具栏)。 */
   x: number
   y: number
   anchorTop: number
+  /** 锚在目标那段字上(划线菜单方案 B):滚动 / 视图尺寸变了跟着走,那段字看不见就藏、视图被摘下就藏,回来原样出现。
+   *  给了它 x / y / anchorTop 只是第一帧的位置。 */
+  anchor?: TextAnchor | null
   /** 面板头:动作名(「润色」「翻译」…)或「AI 写作」。 */
   title: string
   /** 有选区:给「替换 / 插入下方」;光标模式:给「插入」。 */
@@ -186,7 +190,7 @@ export function InlineAiPanel({ x, y, anchorTop, title, hasSelection, askFirst, 
   )
 
   return (
-    <OverlayAt innerRef={(el) => { panelRef.current = el }} className="ui-popover am-ai-panel" x={x} y={y} anchorTop={anchorTop} prefer="below" role="dialog" aria-label={onApply ? t('inlineai.label') : title} data-testid="inline-ai-panel" data-phase={phase} data-readonly={onApply ? undefined : ''}>
+    <OverlayAt innerRef={(el) => { panelRef.current = el }} className="ui-popover am-ai-panel" x={x} y={y} anchorTop={anchorTop} anchor={anchor} gap={6} prefer="below" role="dialog" aria-label={onApply ? t('inlineai.label') : title} data-testid="inline-ai-panel" data-phase={phase} data-readonly={onApply ? undefined : ''}>
       <div className="am-ai-head">
         {language ? <Languages size={14} aria-hidden /> : <Sparkles size={14} aria-hidden />}
         <span className="am-ai-title">{title}</span>
