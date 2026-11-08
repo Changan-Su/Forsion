@@ -98,7 +98,7 @@ To ship a new version or change the Store details, select your item under Submis
 
 On the user side (desktop 2.13.8 and later), Store plugins **auto-update by default**: a new version downloads in the background and applies the next time Forsion starts. Users can turn this off for everything on the Updates page, or for one plugin on its page. Before a version is replaced, the desktop keeps the old one on the device (the 2 most recent per plugin, under `~/.forsion/.plugin-versions/`), so users can roll back in one click. Rolling back, or installing an older version from the Versions tab, pins the plugin at that version until the user chooses "Resume auto-update". **Rolling back only swaps your plugin's files; your data (work folder, `plugin-data`, settings) stays as it is.** When a new version changes a data format, make sure an older version can still read it (ignore unknown fields, never rewrite old data in place into a shape the old version cannot read), or write the new format to a new file. Core plugins (Extend, Calendar, Computer Use) follow the desktop version and are not affected.
 
-## Platform accounts and sign-ins (desktop 2.14.0+)
+## Platform accounts and sign-ins (desktop 2.13.8+)
 
 Some content only loads for signed-in users (members-only, HD or rate-limited Bilibili videos). `ctx.app.platformAccounts` lets a plugin use **the account the user signed in to in the built-in browser**. Your plugin never stores the sign-in itself:
 

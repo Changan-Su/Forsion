@@ -4,8 +4,11 @@
  * 只是画在一扇不进 Dock / 任务栏的系统窗口里,锚在**当前屏幕**(鼠标所在那块)的工作区上。
  *
  * 两样分开控制,别混成一个开关(Codex 评审):
- *   - focus 'keep' = 不抢焦点:用户正在打字的那个应用保持在前台、保持输入焦点,点浮层上的按钮也不换前台。
+ *   - focus 'keep' = 不抢焦点:浮层出现、更新时,用户正在打字的那个应用保持在前台、保持输入焦点(点击见下)。
  *     macOS:panel 型窗(NSWindowStyleMaskNonactivatingPanel,权限引导窗已经这样用)+ focusable:false + acceptFirstMouse;
+ *     ⚠️ 只保证「出现时不抢焦点」:Electron 把这个样式位加在普通 NSWindow 上,AppKit 只对真 NSPanel 认它,
+ *     所以**鼠标点上去照样会激活 Forsion**(11-08 实机)。点完要回到原应用的调用方得自己把它切回前台
+ *     (听写:electron/dictation/index.ts 的 handBack)。
  *     Windows:focusable:false(WS_EX_NOACTIVATE)+ showInactive。全屏应用之上不承诺能显示(Windows 上 visibleOnAllWorkspaces 无效)。
  *   - pin = 盖在别的应用的普通窗口上面。**桌面 ≠ 置顶**:Mini 缺省置顶、设置窗缺省不置顶;语音胶囊要在用户正在用的应用上面
  *     看得见,所以它 pin。

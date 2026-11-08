@@ -158,7 +158,7 @@ export interface PlatformAccountStatus {
   expiresAt?: number
 }
 
-/** Sign-ins kept in the host's built-in browser, for content that needs an account (2.14.0+, desktop only). */
+/** Sign-ins kept in the host's built-in browser, for content that needs an account (2.13.8+, desktop only). */
 export interface PlatformAccountsApi {
   /** Platforms this host supports. Today: `['bilibili']`. */
   platforms(): string[]
