@@ -51,7 +51,12 @@ export function useMuseSpaceView(): {
   apply: (op: MusePlacementOp) => Promise<boolean>
 } {
   const [local, setLocal] = useState<MuseSpaceView | null>(null)
-  const { data, error, refresh } = usePolled(() => getMuseSpace(homeTarget()), 8000)
+  const { data, error, refresh } = usePolled(async () => {
+    const v = await getMuseSpace(homeTarget())
+    // 回了 200 却没有 view(代理 / 不认识这条路由的引擎给的空壳):当没有这条读口,否则一直停在加载态、主区空白
+    if (!v || typeof v !== 'object' || !Array.isArray((v as MuseSpaceView).cards)) throw Object.assign(new Error('no muse space view'), { status: 404 })
+    return v
+  }, 8000)
   useEffect(() => { if (data) setLocal(data) }, [data])
   const view = local ?? data
   const apply = useCallback(async (op: MusePlacementOp): Promise<boolean> => {
