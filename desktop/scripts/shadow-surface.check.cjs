@@ -44,7 +44,7 @@ const cssFiles = [
   'frontend/src/theme/themes/genesis-glass/theme.css',
   'frontend/src/quickFind.css',
   'frontend/src/findInPage.css',
-  'frontend/src/hoverTip.css',
+  '../lcl/engine/hoverSurface.css', // 原 frontend/src/hoverTip.css,10 月并进 LCL(6ec7880c2)后这里一直指着已删的文件
   'frontend/src/styles/unitSwitcher.css',
   'frontend/src/amadeus/pdf/pdfAnnotator.css',
   'frontend/src/styles/sidebar2.css',
