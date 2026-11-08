@@ -154,7 +154,8 @@ async function main() {
     const before = await chatPickerText()
     if (before === MODEL_NAME) fail('起步未选中目标模型', before)
     await tap(chatPicker(), '对话与任务 选择器')
-    await tap(page.locator('.model-defaults-panel .composer-menu .menu-item')
+    // 菜单 portal 到 body、由 followAnchor 贴着按钮落位(#543),不在 .model-defaults-panel 里
+    await tap(page.locator('.composer-menu--anchored .menu-item')
       .filter({ has: page.locator('.grow', { hasText: new RegExp(`^\\s*${MODEL_NAME}\\s*$`) }) }).first(), `模型 ${MODEL_NAME}`)
 
     // A. 点一下不许抛。这一条就是本次 bug 的直接复现(setConfig is not a function)。
