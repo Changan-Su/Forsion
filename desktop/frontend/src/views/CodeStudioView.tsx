@@ -342,7 +342,12 @@ function ProjectStudio({ root, extendView, onActivate, briefSaveError, retryBrie
     }
     if (prefs.devUrl) { openTool('setup'); useApp.getState().toast(t('studio.publishStaticOnly'), true); return }
     const projectsRoot = useCodeStudio.getState().projectsRoot
-    if (projectsRoot && !projectRelative(projectsRoot, root)) { useApp.getState().toast(t('studio.publishImported'), true); return }
+    // 「原地加入造物」的项目留在 Project 文件夹外面,也能发布(宿主按同一份登记判;主进程 connect:publish 再核一次)。
+    if (projectsRoot && !projectRelative(projectsRoot, root)) {
+      const adopted = await window.tangu?.productsIsCreation?.(root).catch(() => false)
+      if (!mounted.current || useCodeStudio.getState().activeProject !== root) return
+      if (!adopted) { useApp.getState().toast(t('studio.publishImported'), true); return }
+    }
     setShowPublish(true)
   }
   // 「文件」= 这个项目自己的树(根就是项目目录),和「验收」一样走工作室工具面板;再点一次收起。
