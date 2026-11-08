@@ -12,19 +12,15 @@
  * 谁来触发同步:`installHomeSlot()` 订阅 `useSpaceStore` —— Space 列表一变就重算一次。
  * 这样用户 Space 异步装载、内置插件启停、Space 被删,三条路都自动跟上,不必在各处补调用。
  */
-import { useEffect, useState } from 'react'
-import { createPortal } from 'react-dom'
-import { Check } from 'lucide-react'
-import { useSpaceStore, useRibbonStore, addRibbonIcon, label, OverlayAt, getDetachApi } from '@lcl/engine'
+import { useSpaceStore, useRibbonStore, addRibbonIcon, label, useObjectMenu } from '@lcl/engine'
 import type { SpaceDefinition } from '@lcl/engine'
+import { spaceRef } from './objects/space'
 import { SpaceButton } from './components/SpaceButton'
 import { PRODUCT } from './product'
 import { registerMessages, useI18n } from './i18n'
 
 registerMessages({
   'homeSlot.menuHead': { zh: '主位放哪个 Space', en: 'Space in the home slot' },
-  'homeSlot.openInNewWindow': { zh: '在新窗口中打开', en: 'Open in new window' },
-  'homeSlot.addToDesktop': { zh: '添加到桌面', en: 'Add to desktop' },
 })
 
 export const HOME_SLOT_KEY = 'forsion_home_slot_space'
@@ -56,45 +52,27 @@ export function setHomeSlotSpace(id: string): void {
 
 /** 主位槽的按钮:外观复用 SpaceButton(高亮/角标/展开态全都白拿),外面套一层接右键菜单。 */
 function HomeSlotButton({ space, expanded }: { space: SpaceDefinition; expanded: boolean }) {
-  const spaces = useSpaceStore((s) => s.spaces)
-  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
   const { t } = useI18n()
-  // 关菜单走 window 监听(与 amadeusViews 的 ctx-menu 同款),不铺 scrim:
-  // ribbon 整条是 -webkit-app-region:drag,盖一张全屏 div 会顺手把拖窗区也挡掉。
-  useEffect(() => {
-    if (!menu) return
-    const close = (): void => setMenu(null)
-    window.addEventListener('click', close)
-    window.addEventListener('contextmenu', close)
-    return () => { window.removeEventListener('click', close); window.removeEventListener('contextmenu', close) }
-  }, [menu])
+  // 右键 = 这个 Space 的对象菜单(打开 / 在新窗口中打开 / 添加到桌面 / 删除…,和条上别的 Space 同一份,见 objects/space.tsx)
+  // + 本处那一节「主位放哪个 Space」。⚠️ 必须拦下右键(useObjectMenu 有项就 preventDefault):ribbon 根节点的区菜单只在
+  // `e.defaultPrevented` 时让路。菜单由共用渲染器画,不铺 scrim(ribbon 整条是拖窗区,全屏 div 会把它挡掉)。
+  const menu = useObjectMenu({
+    refs: [spaceRef(space.id)],
+    place: { kind: 'home-slot' },
+    placeSections: () => [{
+      title: t('homeSlot.menuHead'),
+      items: useSpaceStore.getState().spaces.map((sp) => ({
+        id: `slot:${sp.id}`,
+        label: label(sp.name),
+        icon: sp.icon ? <sp.icon size={13} /> : <span style={{ width: 13 }} />,
+        checked: sp.id === space.id,
+        run: () => setHomeSlotSpace(sp.id),
+      })),
+    }],
+  })
   return (
-    <span
-      className="rb-homeslot"
-      // ⚠️必须 preventDefault:ribbon 根节点的右键菜单只在 `e.defaultPrevented` 时让路。
-      onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setMenu({ x: e.clientX, y: e.clientY }) }}
-    >
+    <span className="rb-homeslot" onContextMenu={menu.onContextMenu}>
       <SpaceButton space={space} expanded={expanded} />
-      {menu && createPortal(
-        <OverlayAt className="ctx-menu" x={menu.x} y={menu.y} onClick={(e) => e.stopPropagation()}>
-          {/* 与条上别的 Space 图标同一项(宿主能开窗才有);主位槽自己接了右键,Ribbon 的通用菜单到不了这里。 */}
-          {getDetachApi()?.openSpace && (
-            <button onClick={() => { getDetachApi()?.openSpace?.(space.id); setMenu(null) }}>{t('homeSlot.openInNewWindow')}</button>
-          )}
-          {getDetachApi()?.addSpaceToDesktop && (
-            <button onClick={() => { getDetachApi()?.addSpaceToDesktop?.(space.id); setMenu(null) }}>{t('homeSlot.addToDesktop')}</button>
-          )}
-          <div className="ctx-head">{t('homeSlot.menuHead')}</div>
-          {spaces.map((sp) => (
-            <button key={sp.id} onClick={() => { setHomeSlotSpace(sp.id); setMenu(null) }}>
-              {sp.icon ? <sp.icon size={13} /> : <span style={{ width: 13 }} />}
-              {label(sp.name)}
-              {sp.id === space.id && <Check size={12} style={{ marginLeft: 'auto', opacity: 0.7 }} />}
-            </button>
-          ))}
-        </OverlayAt>,
-        document.body,
-      )}
     </span>
   )
 }

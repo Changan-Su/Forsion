@@ -44,7 +44,7 @@ export { useRibbonStore, addRibbonIcon, removeRibbonIcon, setRibbonActions, RIBB
 /** 拖拽重排的公共语义(悬停谁就顶掉谁);侧栏等 app 层的可排序列表复用同一个,别再各写一份 splice。 */
 export { moveTo, rankIds } from './ribbonRegistry'
 export type { RibbonFolder, RibbonZone } from './ribbonRegistry'
-export { useSpaceStore, registerSpace, unregisterSpace, setActiveSpace, setActiveSpaceCold, adoptSpaceLayoutCold, seedSpaceWindowLayout, resetSpaceLayouts, spaceLayoutsWereReset, BOOT_ACTIVE_SPACE_ID, getActiveSpace, spaceLayoutName, setSpacePinHandler, pinSpaceToHome, openRedirectType, landOnMainPage } from './spaceRegistry'
+export { useSpaceStore, registerSpace, unregisterSpace, setActiveSpace, setActiveSpaceCold, adoptSpaceLayoutCold, seedSpaceWindowLayout, resetSpaceLayouts, spaceLayoutsWereReset, BOOT_ACTIVE_SPACE_ID, getActiveSpace, spaceLayoutName, setSpacePinHandler, pinSpaceToHome, canPinSpaceToHome, openRedirectType, landOnMainPage } from './spaceRegistry'
 export { isPinned } from './pinnedViews'
 export type { PinnedViews } from './pinnedViews'
 export { useNav, recordNav } from './navStore'
@@ -107,7 +107,7 @@ export { claimObjectFocus, focusedObjects, subscribeObjectFocus } from './object
 export type { FocusedObjects, ObjectFocusClaim } from './objectFocus'
 export { MenuSurface, openMenu, closeMenu, menuIsOpen, openObjectMenu, objectContextMenuHandler, useObjectMenu, bindObject } from './objectMenu'
 export type { MenuAt, OpenMenuRequest, ObjectMenuBinding } from './objectMenu'
-export { setDetachApi, getDetachApi } from './detachSeam'
+export { setDetachApi, getDetachApi, spaceOpensElsewhere } from './detachSeam'
 export type { DetachApi, ViewRef } from './detachSeam'
 
 export type { ExtendViewController, ExtendViewOptions, ExtendViewHandle, ExtendViewSide, ExtendViewCloseReason } from './extendView'

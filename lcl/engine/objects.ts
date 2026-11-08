@@ -51,7 +51,14 @@ export interface ObjectContext { place: Place; caps: ObjectCaps }
 export type ActionResult = { ref: ObjectRef; ok: true } | { ref: ObjectRef; ok: false; reason: string }
 
 /** 引擎自己产生的失败原因(宿主上报时翻成人话);类型 / 动作自己给的原因直接是给人看的文字。 */
-export const OBJECT_REASON = { unavailable: 'unavailable', error: 'error', busy: 'busy', cancelled: 'cancelled' } as const
+export const OBJECT_REASON = {
+  unavailable: 'unavailable',
+  error: 'error',
+  busy: 'busy',
+  cancelled: 'cancelled',
+  /** 动作自己已经把失败告诉用户了(比如宿主函数自带 toast),执行层不再上报一次。 */
+  reported: 'reported',
+} as const
 
 export interface ObjectTypeDefinition {
   type: string
@@ -188,7 +195,7 @@ export function freezeRefs(refs: ObjectRef[]): FrozenRef[] {
 }
 
 const fail = (ref: ObjectRef, reason: string): ActionResult => ({ ref, ok: false, reason })
-const reportable = (r: ActionResult): boolean => !r.ok && r.reason !== OBJECT_REASON.cancelled && r.reason !== OBJECT_REASON.busy
+const reportable = (r: ActionResult): boolean => !r.ok && r.reason !== OBJECT_REASON.cancelled && r.reason !== OBJECT_REASON.busy && r.reason !== OBJECT_REASON.reported
 
 async function verifyAll(targets: FrozenRef[]): Promise<{ ok: FrozenRef[]; failed: ActionResult[] }> {
   const ok: FrozenRef[] = []
@@ -258,15 +265,28 @@ export async function executeAction(actionId: string, targets: Array<FrozenRef |
   }
 }
 
-/** 打开一个对象(= 点一下):重验后交给类型的 open。窗口锁这类规矩在类型里,所有入口都走这里。 */
-export async function openObject(ref: ObjectRef, how: OpenMode = 'here', place: Place = { kind: 'api' }): Promise<ActionResult> {
+const isThenable = (v: unknown): v is PromiseLike<unknown> => !!v && typeof (v as { then?: unknown }).then === 'function'
+
+/** 打开一个对象(= 点一下):重验后交给类型的 open。窗口锁这类规矩在类型里,所有入口都走这里。
+ *  ⚠️ verify / open 都是同步的类型**同步打开**(返回的 Promise 只是报结果):插件、Agent 打开 Space 后紧接着在那里开视图,
+ *  晚一拍就开进了旧 Space。只有类型自己返回 Promise 时才异步。 */
+export function openObject(ref: ObjectRef, how: OpenMode = 'here', place: Place = { kind: 'api' }): Promise<ActionResult> {
   const type = types.get(ref.type)
   const cx: ObjectContext = { place, caps: objectCaps() }
   const done = (r: ActionResult): ActionResult => { if (reportable(r)) host.report([r], `open:${ref.type}`); return r }
-  if (!type || !type.isValidId(ref.id) || !type.openModes.includes(how)) return done(fail(ref, OBJECT_REASON.unavailable))
-  const { failed } = await verifyAll(freezeRefs([ref]))
-  if (failed.length) return done(failed[0])
-  try { await type.open(ref, how, cx); return { ref, ok: true } } catch (e) { return done(fail(ref, e instanceof Error && e.message ? e.message : OBJECT_REASON.error)) }
+  const failWith = (e: unknown): ActionResult => done(fail(ref, e instanceof Error && e.message ? e.message : OBJECT_REASON.error))
+  if (!type || !type.isValidId(ref.id) || !type.openModes.includes(how)) return Promise.resolve(done(fail(ref, OBJECT_REASON.unavailable)))
+  const [frozen] = freezeRefs([ref])
+  const go = (reason: string | null | undefined): ActionResult | Promise<ActionResult> => {
+    if (reason) return done(fail(ref, reason))
+    try {
+      const r = type.open(ref, how, cx)
+      return isThenable(r) ? Promise.resolve(r).then((): ActionResult => ({ ref, ok: true }), failWith) : { ref, ok: true }
+    } catch (e) { return failWith(e) }
+  }
+  let verdict: string | null | Promise<string | null> | undefined
+  try { verdict = type.verify?.(ref, frozen.snap) } catch (e) { return Promise.resolve(failWith(e)) }
+  return Promise.resolve(isThenable(verdict) ? Promise.resolve(verdict).then(go, failWith) : go(verdict))
 }
 
 // ─────────────────────────────── 菜单 ───────────────────────────────
