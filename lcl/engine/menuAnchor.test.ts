@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { clampMenu, edgeNudge, nestedPanelPlacement, nestedPanelTop } from './menuAnchor'
+import { clampMenu, edgeNudge, fitAnchored, nestedPanelPlacement, nestedPanelTop } from './menuAnchor'
 
 // 视口 1000x800,菜单 200x300,margin 8
 describe('clampMenu', () => {
@@ -105,5 +105,34 @@ describe('nestedPanelTop', () => {
   it('同时尊重 View 顶边与累计 zoom，并返回局部 CSS px', () => {
     expect(nestedPanelTop(90, 100, 100, 500, 120, 700)).toBe(28)
     expect(nestedPanelTop(360, 100, 300, 650, 0, 700, 1.5)).toBe(40)
+  })
+})
+
+// 视口 1200×720,浮层 260×346(日历待办的日期面板)
+describe('fitAnchored(锚在元素上:翻面 + 按边封顶 maxHeight)', () => {
+  const at = (top: number, left = 900) => ({ left, right: left + 28, top, bottom: top + 28 })
+  it('下方放得下 → 贴锚点下沿', () => {
+    expect(fitAnchored(at(100), 260, 346, 1200, 720).top).toBe(132)
+  })
+  it('锚点在窗口底部(吸底输入框)→ 翻到上方', () => {
+    expect(fitAnchored(at(649), 260, 346, 1200, 720).top).toBe(649 - 4 - 346)
+  })
+  it("prefer:'above' 上方放不下 → 翻到下方", () => {
+    expect(fitAnchored(at(100), 260, 346, 1200, 720, { prefer: 'above' }).top).toBe(132)
+  })
+  it('两侧都放不下 → 放在空间大的那侧,maxHeight 封顶到那侧可用高度', () => {
+    const up = fitAnchored(at(400), 260, 900, 1200, 720)
+    expect(up).toMatchObject({ top: 8, maxHeight: 388 })
+    const down = fitAnchored(at(200), 260, 900, 1200, 720)
+    expect(down.top).toBe(232)
+    expect(down.top + down.maxHeight).toBe(712)
+  })
+  it('锚点自己被挤出窗口 → 浮层仍夹回窗口内', () => {
+    expect(fitAnchored(at(734), 260, 346, 1200, 720).top + 346).toBeLessThanOrEqual(712)
+    expect(fitAnchored(at(-60), 260, 346, 1200, 720).top).toBeGreaterThanOrEqual(8)
+  })
+  it('横向:夹进窗口;alignEnd 右缘对齐锚点右缘', () => {
+    expect(fitAnchored(at(100, 1150), 260, 100, 1200, 720).left).toBe(932)
+    expect(fitAnchored(at(100, 900), 260, 100, 1200, 720, { alignEnd: true }).left).toBe(668)
   })
 })
