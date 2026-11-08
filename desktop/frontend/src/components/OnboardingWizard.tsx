@@ -199,8 +199,9 @@ export const OnboardingWizard: React.FC<{
     const onKey = (event: KeyboardEvent): void => {
       if (event.key !== 'Enter' || event.defaultPrevented || event.isComposing || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return
       const target = event.target as Element | null
-      if (target?.closest?.('button, a, input, select, textarea, summary, dialog, [role="radio"], [role="switch"], [contenteditable="true"]')) return
-      if (finished.current || document.querySelector('dialog[open]') || primaryRef.current.disabled) return
+      if (target?.closest?.('button, a, input, select, textarea, summary, dialog, [role="dialog"], [role="radio"], [role="switch"], [contenteditable="true"]')) return
+      // 「从其他 AI 搬过来」的审阅单是 div[role=dialog][aria-modal]:开着时焦点落在遮罩上回车,不能在它背后「继续」并写 MEMORY.md
+      if (finished.current || document.querySelector('dialog[open], [role="dialog"][aria-modal="true"]') || primaryRef.current.disabled) return
       event.preventDefault()
       void primaryRef.current.run()
     }

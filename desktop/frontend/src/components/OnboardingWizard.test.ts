@@ -30,6 +30,7 @@ vi.mock('../views/homepageWallpaperArt', () => ({ HomeWallpaperArt: () => null }
 vi.mock('./ThemePreview', () => ({ ThemePreview: () => null }))
 vi.mock('./LocaleToggle', () => ({ LocaleToggle: () => null }))
 vi.mock('./ComputerHistoryAbout', () => ({ ComputerHistoryAbout: () => null }))
+vi.mock('./ExternalImport', () => ({ ExternalImportEntry: ({ layout }: { layout?: string }) => React.createElement('div', { 'data-import-stub': layout || 'inline' }) }))
 
 const { OnboardingWizard, ONBOARDING_DISMISS_KEY, ONBOARDING_VERSION_KEY } = await import('./OnboardingWizard')
 const api = await import('../services/backendService')
@@ -96,6 +97,7 @@ async function render() {
   await flush()
 }
 const stepNow = () => host.querySelector('.ob-flow')?.getAttribute('data-step')
+const youName = () => host.querySelector<HTMLInputElement>('[data-ob-you-name]')!
 const primary = () => host.querySelector<HTMLButtonElement>('[data-ob-primary]')!
 async function next() {
   expect(primary().disabled).toBe(false)
@@ -153,9 +155,11 @@ it('desktop: four screens in order; Continue saves About you, Get started writes
   expect(stepNow()).toBe('theme')
   await next()
   expect(stepNow()).toBe('you')
-  await type(host.querySelector('textarea')!, 'I am Q')
+  // 三问卡:名字没汉字 → 整节英文(界面是中文也一样);胶囊按那一节的语言写
+  await type(youName(), 'Q')
+  await act(async () => host.querySelector<HTMLButtonElement>('[data-ob-you-work="code"]')!.click())
   await next()
-  expect(human.saveHumanDocument).toHaveBeenCalledExactlyOnceWith(expect.anything(), { kind: 'human', file: 'MEMORY.md' }, 'I am Q', 'v1', 'Onboarding: About me')
+  expect(human.saveHumanDocument).toHaveBeenCalledExactlyOnceWith(expect.anything(), { kind: 'human', file: 'MEMORY.md' }, '## About me\n- Call me: Q\n- Working on: coding\n', 'v1', 'Onboarding: About me')
   expect(stepNow()).toBe('team')
   // 名字只按界面语言显示一个;卜算子没登录时模型必须自己选
   expect(host.querySelector('[data-ob-muse]')?.textContent).toContain('卜算子')
@@ -237,7 +241,7 @@ it('About you: a conflicting edit reloads and stays on the screen; skipping the 
   vi.mocked(human.saveHumanDocument).mockRejectedValueOnce(Object.assign(new Error('changed elsewhere'), { status: 409 }))
   await render()
   await next(); await next()
-  await type(host.querySelector('textarea')!, 'draft')
+  await type(youName(), 'draft')
   await next()
   expect(stepNow()).toBe('you')
   expect(host.textContent).toContain(translate('ob3.you.conflict'))
@@ -253,10 +257,77 @@ it('About you: a failed read never saves over the profile', async () => {
   vi.mocked(human.getHumanDocument).mockRejectedValue(new Error('offline'))
   await render()
   await next(); await next()
-  expect(host.querySelector('textarea')?.disabled).toBe(true)
+  expect(youName().disabled).toBe(true)
+  expect(host.querySelector<HTMLButtonElement>('[data-ob-you-work="code"]')?.disabled).toBe(true)
   await next()
   expect(stepNow()).toBe('team')
   expect(human.saveHumanDocument).not.toHaveBeenCalled()
+})
+
+it('About you: the engine\'s seeded template reads as empty, and filling in replaces it whole', async () => {
+  const { USER_MD_TEMPLATE } = await import('../../../../tangu-agent/src/contracts/userMdTemplate')
+  vi.mocked(human.getHumanDocument).mockResolvedValue({ content: USER_MD_TEMPLATE, version: 'v1', maxLength: 2000 } as any)
+  await render()
+  await next(); await next()
+  expect(youName().value).toBe('')
+  expect(youName().placeholder).toBe(translate('ob3.you.namePh'))
+  expect(host.querySelector('[data-ob-you] textarea')).toBeNull() // 自由框折叠着
+  expect(host.querySelector('[data-ob-you-more]')?.getAttribute('aria-expanded')).toBe('false')
+  // 没填就继续:不写(模板留着)
+  await next()
+  expect(stepNow()).toBe('team')
+  expect(human.saveHumanDocument).not.toHaveBeenCalled()
+  await act(async () => host.querySelectorAll<HTMLButtonElement>('.ob3-dots button')[2].click())
+  await flush()
+  await type(youName(), '小鹿')
+  await act(async () => host.querySelector<HTMLButtonElement>('[data-ob-you-style="short"]')!.click())
+  await next()
+  expect(human.saveHumanDocument).toHaveBeenCalledExactlyOnceWith(expect.anything(), expect.anything(), '## 关于我\n- 称呼：小鹿\n- 回答：简短直接\n', 'v1', 'Onboarding: About me')
+})
+
+it('About you: an existing profile fills the questions in place, keeps the rest word for word, and is not rewritten untouched', async () => {
+  vi.mocked(human.getHumanDocument).mockResolvedValue({ content: 'Call me: 小鹿\r\n住在杭州\r\n\r\n\r\n', version: 'v1', maxLength: 2000 } as any)
+  await render()
+  await next(); await next()
+  expect(youName().value).toBe('小鹿')
+  // 认不得的行放进自由框,并且展开
+  expect(host.querySelector('[data-ob-you-more]')?.getAttribute('aria-expanded')).toBe('true')
+  expect(host.querySelector<HTMLTextAreaElement>('[data-ob-you] textarea')?.value).toBe('住在杭州')
+  // 原文的换行风格 / 末尾空行不同,不算改过
+  await next()
+  expect(human.saveHumanDocument).not.toHaveBeenCalled()
+  await act(async () => host.querySelectorAll<HTMLButtonElement>('.ob3-dots button')[2].click())
+  await flush()
+  // 单选再点一次取消;回答语言再点一次回到「跟着我说的话」
+  const style = () => host.querySelector<HTMLButtonElement>('[data-ob-you-style="why"]')!
+  await act(async () => style().click())
+  expect(style().getAttribute('aria-pressed')).toBe('true')
+  await act(async () => style().click())
+  expect(style().getAttribute('aria-pressed')).toBe('false')
+  const zh = () => host.querySelector<HTMLButtonElement>('[data-ob-you-lang="zh"]')!
+  await act(async () => zh().click())
+  await act(async () => zh().click())
+  expect(host.querySelector('[data-ob-you-lang="auto"]')?.getAttribute('aria-pressed')).toBe('true')
+  await act(async () => zh().click())
+  await next()
+  expect(human.saveHumanDocument).toHaveBeenCalledExactlyOnceWith(expect.anything(), expect.anything(), '## 关于我\n- 称呼：小鹿\n- 回答用中文\n\n住在杭州\n', 'v1', 'Onboarding: About me')
+})
+
+it('About you: "Bring it over from another AI" reuses the shared import entry; Enter behind its sheet does not continue', async () => {
+  await render()
+  await next(); await next()
+  expect(host.querySelector('.ob3-imp [data-import-stub="row"]')).not.toBeNull()
+  const sheet = document.createElement('div')
+  sheet.setAttribute('role', 'dialog'); sheet.setAttribute('aria-modal', 'true')
+  document.body.appendChild(sheet)
+  try {
+    await act(async () => { document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })) })
+    await flush()
+    expect(stepNow()).toBe('you')
+  } finally { sheet.remove() }
+  await act(async () => { document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })) })
+  await flush()
+  expect(stepNow()).toBe('team')
 })
 
 it('team: a failed write keeps the screen with the error and does not finish', async () => {
@@ -758,7 +829,7 @@ it('Enter runs the primary action; the dots reopen a screen already visited', as
 it('closing only once: Enter while the guide is closing does not save a skipped screen', async () => {
   await render()
   await next(); await next()
-  await type(host.querySelector('textarea')!, 'not saved')
+  await type(youName(), 'not saved')
   await clickText(translate('onboarding.nav.skip'))
   await act(async () => { document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })) })
   await flush()

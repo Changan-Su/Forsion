@@ -25,6 +25,8 @@ html.dark .ob3-paper { --hpw-grain-blend: screen; --hpw-halo: 16%; --hpw-halo-mi
 .ob3-top, .ob3-main, .ob3-foot { z-index: 1; }
 /* 引导盖在 z-index 1000 上:开着时(OnboardingWizard 给 html 挂 data-ob-open)把菜单层抬上来,模型选择器等 portal 到 body 的下拉才看得见 */
 :root[data-ob-open] { --z-menu: 1001; }
+/* 「从其他 AI 搬过来」的审阅单(.u-backdrop 本身没设层级)同理抬到引导上面;只认这张单,别的弹窗照旧排在引导之后 */
+:root[data-ob-open] .u-backdrop:has(> .imp-sheet) { z-index: var(--z-menu); } /* 引导开着时 = 1001;单里再弹的菜单挂在它后面,同层靠后照样在上 */
 .ob3-top { grid-row: 1; } .ob3-foot { grid-row: 3; }
 
 /* 顶栏:左上进度点(到过的能点回去),右上语言 + 跳过 */
@@ -156,14 +158,25 @@ html.dark .ob3-paper { --hpw-grain-blend: screen; --hpw-halo: 16%; --hpw-halo-mi
 .ob3-preview { padding: 0; overflow: hidden; display: grid; min-height: 360px; }
 .ob3-preview > * { min-width: 0; height: 100%; }
 
-/* 关于你 */
-.ob3-you { display: grid; gap: 10px; padding: 14px 16px 12px; }
-.ob3-you textarea { width: 100%; min-height: 128px; resize: vertical; border: 0; outline: none; background: transparent; color: var(--text); font: inherit; font-size: var(--ui-font-heading, 14px); line-height: 1.7; padding: 0; }
-.ob3-you textarea::placeholder { color: var(--text-faint); }
-.ob3-you-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.ob3-count { white-space: nowrap; margin-left: auto; color: var(--text-faint); font-size: var(--ui-font-meta, 12px); }
+/* 关于你(11-08 方案 A 三问卡):问题小字 + 胶囊 / 一格,和团队屏卜算子两问同一套画法 */
+.ob3-about { display: grid; gap: 16px; }
+.ob3-text { width: min(280px, 100%); padding: 6px 12px; border: 0; border-radius: var(--radius-md); outline: none; background: var(--bg); box-shadow: inset 0 0 0 1px var(--overlay-medium, rgba(127, 127, 127, .2)); color: var(--text); font: inherit; font-size: var(--ui-font-body, 13px); }
+.ob3-text:focus { box-shadow: inset 0 0 0 1px var(--accent-ink); }
+.ob3-text::placeholder, .ob3-own input::placeholder, .ob3-more textarea::placeholder { color: var(--text-faint); }
+.ob3-about .ob3-own { min-width: 220px; }
+.ob3-more { display: grid; gap: 6px; }
+.ob3-more textarea { width: 100%; min-height: 96px; resize: vertical; padding: 8px 12px; border: 0; border-radius: var(--radius-md); outline: none; background: var(--bg); box-shadow: inset 0 0 0 1px var(--overlay-medium, rgba(127, 127, 127, .2)); color: var(--text); font: inherit; font-size: var(--ui-font-body, 13px); line-height: 1.7; }
+.ob3-more textarea:focus { box-shadow: inset 0 0 0 1px var(--accent-ink); }
+.ob3-count { justify-self: end; white-space: nowrap; color: var(--text-faint); font-size: var(--ui-font-meta, 12px); }
+.ob3-count.over { color: var(--warning, #c08a2a); }
+/* 从其他 AI 搬过来:共用的 ExternalImportEntry(layout="row"),外框是这张卡;不支持导入时它不渲染,卡跟着收起 */
+.ob3-imp { padding: 12px 16px; }
+.ob3-imp:empty { display: none; }
+.ob3-imp .imp-hint, .ob3-imp .imp-done { margin: 0; padding: 0; background: transparent; box-shadow: none; }
+.ob3-imp .imp-hint > svg { color: var(--text-muted); }
+.ob3-imp .imp-row b { display: block; font-size: var(--ui-font-body, 13px); font-weight: 600; }
 
-/* 选项胶囊(卜算子三问、关于你的快捷句) */
+/* 选项胶囊(卜算子两问、关于你三问) */
 .ob3-pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 11px; border: 0; border-radius: var(--radius-pill); background: var(--overlay-light, rgba(127, 127, 127, .08)); color: var(--text); font: inherit; font-size: var(--ui-font-meta, 12px); white-space: nowrap; cursor: pointer;
   transition: background-color var(--duration-fast) var(--ease-calm), color var(--duration-fast) var(--ease-calm); }
 .ob3-pill svg { transition: color var(--duration-fast) var(--ease-calm); }

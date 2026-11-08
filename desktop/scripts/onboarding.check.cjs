@@ -36,7 +36,10 @@ async function main() {
     { slug: 'muse', name: 'Muse', nameZh: '卜算子', nameEn: 'Muse', description: '', createdBy: 'builtin' },
     { slug: 'coder', name: 'Coder', description: 'Writes code with you', createdBy: 'user' },
   ]
-  const human = { scope: 'human', path: 'human/MEMORY.md', content: '', version: 'h1', exists: false, updatedAt: null, history: [], maxLength: 2000 }
+  // 新装机:引擎播种的英文空模板(tangu-agent/src/contracts/userMdTemplate.ts),「关于你」要当空、写时整份换掉
+  const SEEDED = '# User Profile (USER.md)\n\n> Every Agent reads this profile. Record long-term information about yourself here.\n\n' +
+    '## Name / What to call you\n\n## Preferences\n- \n\n## Level / Background\n\n## Long-term needs / Goals\n'
+  const human = { scope: 'human', path: 'human/MEMORY.md', content: SEEDED, version: 'h1', exists: true, updatedAt: null, history: [], maxLength: 2000 }
   const specialWrites = [], introWrites = [], humanWrites = [], agentPatches = []
   let failIntro = false
   const stub = await startStubEngine({ models, override: async ({ path: p, method, body }) => {
@@ -64,6 +67,9 @@ async function main() {
       return human
     }
     if (p === '/agent/agents' && method === 'GET') return { agents }
+    // 「从其他 AI 搬过来」:扫到两家;审阅单打开时读一次空的整理状态
+    if (p === '/agent/import/scan' && method === 'GET') return { tools: [{ id: 'claude-code', about: 3, rules: 1, project: 0, notes: 0, skills: 1 }, { id: 'codex', about: 2, rules: 0, project: 0, notes: 0, skills: 0 }], fresh: 5, freshTools: ['claude-code', 'codex'], last: null }
+    if (p === '/agent/import/plan' && method === 'GET') return { state: 'idle', done: 0, total: 0, plan: null, error: null }
     const m = /^\/agent\/agents\/([^/]+)$/.exec(p)
     if (m && method === 'PATCH') {
       const b = await body(); agentPatches.push({ slug: m[1], ...b })
@@ -140,7 +146,7 @@ async function main() {
     const ready = {
       start: () => win.waitForSelector('[data-ob-channels]'),
       theme: () => win.waitForSelector('.ob3-styles'),
-      you: () => win.waitForSelector('[data-ob-you] textarea:not([disabled])'),
+      you: () => win.waitForSelector('[data-ob-you] [data-ob-you-name]:not([disabled])'),
       team: async () => { await win.waitForSelector('[data-ob-muse-model] .model-select-btn:not([disabled])'); await win.waitForSelector('[data-agent="coder"]') },
     }
     async function fresh() {
@@ -216,9 +222,39 @@ async function main() {
     await geometry('zh-start-keyform', { mustFit: true })
     await win.locator('[data-ob-keyform] button', { hasText: '返回' }).click(); await win.waitForSelector('[data-ob-keyform]', { state: 'detached' })
     await next(); await ready.theme(); await next(); await ready.you()
-    await win.locator('[data-ob-you] textarea').fill('我叫小鹿,做产品设计。')
+    // 关于你(方案 A):新装机的英文模板当空 —— 三问都是空的、占位看得见、自由框折叠着
+    assert.equal(await win.locator('[data-ob-you-name]').inputValue(), '', 'the seeded template reads as empty')
+    assert.equal(await win.locator('[data-ob-you] textarea').count(), 0, 'the free box starts folded')
+    // 「从其他 AI 搬过来」:共用的导入入口一行,审阅单开在引导上面;单开着时背后回车不「继续」
+    const impRow = win.locator('.ob3-imp [data-ai-import-row]')
+    await impRow.waitFor()
+    assert.match(await impRow.innerText(), /从其他 AI 搬过来[\s\S]*Claude Code、Codex/)
+    await impRow.locator('[data-ai-import-open]').click()
+    const sheetBox = await win.locator('.imp-sheet').boundingBox()
+    assert(sheetBox, 'the import sheet opens')
+    const onTop = await win.evaluate(([x, y]) => !!document.elementFromPoint(x, y)?.closest('.imp-sheet'), [sheetBox.x + sheetBox.width / 2, sheetBox.y + 30])
+    assert(onTop, 'the import sheet shows above the guide')
+    // 等入场动效放完再拍(半途的淡入看着像透明)
+    await win.waitForFunction(() => document.getAnimations().every((a) => a.playState !== 'running' || a.effect?.getTiming?.().iterations === Infinity), null, { timeout: 3000 }).catch(() => {})
+    await win.screenshot({ path: path.join(OUT, 'zh-you-import-sheet.png') })
+    // 焦点进单里,Tab 出不去(否则能摸到背后的「继续」)
+    assert(await win.evaluate(() => !!document.activeElement?.closest('.imp-sheet')), 'focus moves into the import sheet')
+    for (let i = 0; i < 14; i++) await win.keyboard.press('Tab')
+    assert(await win.evaluate(() => !!document.activeElement?.closest('.imp-sheet')), 'Tab stays inside the import sheet')
+    await win.evaluate(() => document.activeElement?.blur?.()); await win.keyboard.press('Enter'); await win.waitForTimeout(300)
+    assert.equal(await stepNow(), 'you', 'Enter behind the open import sheet does not continue')
+    await win.locator('.imp-sheet .modal-head .icon-btn').click(); await win.waitForSelector('.imp-sheet', { state: 'detached' })
+    assert(await win.evaluate(() => document.activeElement?.hasAttribute('data-ai-import-open')), 'closing gives focus back to the opener')
+    await win.locator('[data-ob-you-name]').fill('小鹿')
+    await win.locator('[data-ob-you-work="design"]').click()
+    await win.locator('[data-ob-you-work-own]').fill('独立开发一个记账 App')
+    await win.locator('[data-ob-you-style="short"]').click()
+    await win.locator('[data-ob-you-more]').click()
+    await win.locator('[data-ob-you] textarea').fill('晚上 10 点以后别提醒我工作的事。')
+    await geometry('zh-you-filled') // 自由框展开后可以滚(折叠着的缺省态在 ① 里按 mustFit 量过);底栏仍须在窗里
     await next(); await ready.team()
-    assert.deepEqual(humanWrites.map((w) => [w.content, w.expectedVersion]), [['我叫小鹿,做产品设计。', 'h1']], 'About you saved once with the version it was read at')
+    assert.deepEqual(humanWrites.map((w) => [w.content, w.expectedVersion]), [['## 关于我\n- 称呼：小鹿\n- 在做：设计；独立开发一个记账 App\n- 回答：简短直接\n\n晚上 10 点以后别提醒我工作的事。\n', 'h1']],
+      'About you saved once as one zh section (the seeded template replaced whole) with the version it was read at')
     const museText = await win.locator('[data-ob-muse]').innerText()
     assert(museText.includes('卜算子') && !museText.includes('Muse'), `Muse shows one name by UI language: ${museText.slice(0, 80)}`)
     // 没登录:模型行显示引擎实际会用的默认模型(桩的 defaultModelId = 第一个),不黄底、不替用户写
@@ -275,8 +311,15 @@ async function main() {
     await win.locator('[data-ob-mode] [role="tab"]').nth(1).click()
     await geometry('en-dark-theme')
     await size(390, 844); await geometry('en-narrow-theme'); await size(1024, 720)
-    await next(); await ready.you(); await size(390, 844); await geometry('en-narrow-you'); await size(1024, 720)
+    await next(); await ready.you()
+    // 再进来:写过的那一节回填到三问(英文界面照样认中文标签),没改就不重写
+    assert.equal(await win.locator('[data-ob-you-name]').inputValue(), '小鹿')
+    assert.equal(await win.locator('[data-ob-you-style="short"]').getAttribute('aria-pressed'), 'true')
+    assert.equal(await win.locator('[data-ob-you] textarea').inputValue(), '晚上 10 点以后别提醒我工作的事。')
+    await size(390, 844); await geometry('en-narrow-you'); await size(1024, 720)
+    const writesBefore = humanWrites.length
     await next(); await ready.team()
+    assert.equal(humanWrites.length, writesBefore, 'About you is not rewritten when nothing changed')
     // ② 里开过又关掉(真主进程:开 → 关让 dataGen +1 并落盘):这台不再算「从没动过」,团队屏不替他预开
     if (historyOffered) await win.waitForSelector('[data-ob-history][data-ch-draft="off"]')
     await geometry('en-dark-team')
