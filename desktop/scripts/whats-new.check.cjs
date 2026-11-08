@@ -35,17 +35,32 @@ async function checkSwitch(app, win) {
   await app.evaluate(({ BrowserWindow }) => {
     const settings = BrowserWindow.getAllWindows().find(w => w.webContents.getURL().includes('window=floating'))
     if (!settings) throw new Error('Settings BrowserWindow is missing')
+    const mainWindow = BrowserWindow.getAllWindows().find(w => w !== settings)
+    if (!mainWindow) throw new Error('Main BrowserWindow is missing')
+    mainWindow.setContentSize(1024, 688)
     settings.setContentSize(1024, 688)
     for (const w of BrowserWindow.getAllWindows()) w.webContents.send('updater:status', {
       phase: 'downloading', version: '99.0.0', source: 'website', transferred: 28 * 1048576,
       total: 461841453, percent: 6, canSwitch: true,
     })
   })
-  const buttonName = 'Use GitHub instead'
-  await about.getByRole('button', { name: buttonName }).click({ timeout: 8000 })
+  const clickSwitch = async (scope, container) => {
+    const button = scope.getByRole('button', { name: 'Use GitHub instead', exact: true })
+    await button.scrollIntoViewIfNeeded({ timeout: 8000 })
+    const fullTarget = await button.evaluate((element, selector) => {
+      const row = element.closest(selector).getBoundingClientRect()
+      const { left, right, top, bottom } = element.getBoundingClientRect()
+      const y = (top + bottom) / 2
+      const hit = x => element.contains(document.elementFromPoint(x, y))
+      return left >= row.left && right <= row.right && hit(left + 1) && hit(right - 1)
+    }, container)
+    if (!fullTarget) throw new Error('Part of the switch action is clipped in ' + container)
+    await button.click({ timeout: 8000 })
+  }
+  await clickSwitch(about, '.field')
   await about.screenshot({ path: path.join(OUT, 'switch-about.png') })
   await about.getByTestId('about-whats-new').click()
-  await win.locator('.wn-modal').getByRole('button', { name: buttonName }).click({ timeout: 8000 })
+  await clickSwitch(win.locator('.wn-modal'), '.wn-foot')
   await win.screenshot({ path: path.join(OUT, 'switch-dialog.png') })
   const calls = await app.evaluate(() => globalThis.updateSwitchCalls)
   ok(calls.length === 2 && calls[0] !== calls[1], '关于和更新弹窗的真实按钮分别调用换源 IPC')
@@ -136,7 +151,7 @@ async function main() {
   const fixtureProcess = app.process()
   try {
     const win = await app.firstWindow()
-    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1512, 950))
+    if (!switchCheck) await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1512, 950))
     await win.waitForSelector('#root', { timeout: 60_000 }); await win.waitForTimeout(2500)
     if (switchCheck) { await checkSwitch(app, win); process.exitCode = fails.length ? 1 : 0; return }
     if (process.env.WHATS_NEW_COMBINED === '1') { await checkCombined(app, win); process.exitCode = fails.length ? 1 : 0; return }
