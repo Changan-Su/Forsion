@@ -222,16 +222,17 @@ export function registerDictation(h: DictationHostDeps): DictationController | n
   })
   // macOS:Electron 的 type:'panel' 只是给普通 NSWindow 加了「不激活」样式位,AppKit 只对真 NSPanel 认它 ——
   // 鼠标点胶囊上的按钮会把 Forsion 激活到前台(11-08 实机:TextEdit 在前,点 ✕ / 复制后前台变成 Forsion)。
-  // 后果:点「完成」后目标核对判成「前台换了」;点「复制」后 ⌘V 落进 Forsion。所以响应胶囊上的点击之前,
-  // 若前台正是 Forsion 自己(= 这一下点击激活的),先把按快捷键时记下的那个应用切回前台,再处理这个动作。
+  // 后果:点「完成」后目标核对判成「前台换了」;点「复制」后 ⌘V 落进 Forsion。所以胶囊上的点击要把按快捷键时
+  // 记下的那个应用切回前台 —— 只在前台正是 Forsion 自己(= 这一下点击激活的)时切,这一核和切在同一次原生调用里做,
+  // 中间用户自己换到别处的不会被拽回来;又开了新一轮也不切。
   // 只管胶囊点击;快捷键那条路一点不动(那里前台变了 = 用户自己换了应用,照旧拒写)。「允许」本来就要开系统设置,不切。
-  const handBack = async (id: string): Promise<void> => {
-    if (!mac || controller.state().sessionId !== id) return
-    const t = await controller.currentTarget()
+  const handBack = async (id: string, target: Promise<DictationTarget | null>): Promise<void> => {
+    if (!mac) return
+    const t = await target.catch(() => null)
     if (!t || t.kind !== 'external' || t.pid === process.pid) return
-    const front = await mac.front().catch(() => null)
-    if (!front || front.pid !== process.pid) return
-    if (!(await mac.activate(t.pid).catch(() => false))) return
+    const sid = controller.state().sessionId
+    if (sid && sid !== id) return
+    if (!(await mac.activate(t.pid, process.pid).catch(() => false))) return
     for (let i = 0; i < 10; i++) {
       if ((await mac.front().catch(() => null))?.pid === t.pid) return
       await new Promise((r) => setTimeout(r, 50))
@@ -241,8 +242,16 @@ export function registerDictation(h: DictationHostDeps): DictationController | n
     const ok: readonly DictationCapsuleAction[] = ['stop', 'cancel', 'copy', 'dismiss', 'allow']
     if (!fromCapsule(e) || typeof id !== 'string' || !ok.includes(action as DictationCapsuleAction)) return
     const act = action as DictationCapsuleAction
-    if (act === 'allow') { controller.capsuleAction(id, act); return }
-    void handBack(id).catch(() => {}).finally(() => controller.capsuleAction(id, act))
+    if (act === 'allow' || !mac || controller.state().sessionId !== id) { controller.capsuleAction(id, act); return }
+    const target = controller.currentTarget() // 动作会结束这一轮、清掉目标,先拿住
+    if (act === 'stop') {
+      // 「完成」:写入前要核前台,所以先切回去再收尾。
+      void handBack(id, target).catch(() => {}).finally(() => controller.capsuleAction(id, act))
+    } else {
+      // 取消 / 复制 / 关闭:当场生效(取消要赢过这期间到的定稿,不能等切前台),再切回去。
+      controller.capsuleAction(id, act)
+      void handBack(id, target).catch(() => {})
+    }
   })
 
   if (process.env.FORSION_E2E_DICTATION === '1') (globalThis as { __forsionDictation?: unknown }).__forsionDictation = { controller, capsule }

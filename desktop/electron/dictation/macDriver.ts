@@ -199,7 +199,11 @@ function run() {
     if (req.op === 'front') return JSON.stringify({ front: front() })
     if (req.op === 'probe') return JSON.stringify({ ax: !!$.AXIsProcessTrusted(), secure: !!$.IsSecureEventInputEnabled() })
     if (req.op === 'activate') {
-      // NSApplicationActivateIgnoringOtherApps = 2: bring that app forward without raising all of its windows
+      // NSApplicationActivateIgnoringOtherApps = 2: bring that app forward without raising all of its windows.
+      // req.from: only while that process is still the front app — checked here, in the same call, so a switch
+      // the user made in between is never undone.
+      var fr = $.NSWorkspace.sharedWorkspace.frontmostApplication
+      if (req.from && !(fr && !fr.isNil() && Number(fr.processIdentifier) === Number(req.from))) return JSON.stringify({ ok: false })
       var app = $.NSRunningApplication.runningApplicationWithProcessIdentifier(Number(req.pid) || 0)
       return JSON.stringify({ ok: !!(app && !app.isNil() && app.activateWithOptions(2)) })
     }
@@ -237,8 +241,8 @@ export interface MacDriver {
   insert(req: MacInsertRequest): Promise<MacInsertResult>
   copy(text: string, pasteboard?: string): Promise<boolean>
   probe(): Promise<{ ax: boolean; secure: boolean }>
-  /** 把这个进程的应用切回前台(不需要辅助功能授权)。 */
-  activate(pid: number): Promise<boolean>
+  /** 把这个进程的应用切回前台(不需要辅助功能授权)。给了 onlyIfFront:仅当那个进程仍在前台时才切(同一次调用里核)。 */
+  activate(pid: number, onlyIfFront?: number): Promise<boolean>
 }
 
 const FAILURES: readonly string[] = ['target-changed', 'secure-field', 'still-typing', 'no-permission', 'paste-failed']
@@ -280,9 +284,10 @@ export function createMacDriver(run: RunJxa = runOsascript): MacDriver {
       const r = await call({ op: 'probe' }, 5_000)
       return { ax: r.ax === true, secure: r.secure === true }
     },
-    async activate(pid) {
+    async activate(pid, onlyIfFront) {
       if (!Number.isInteger(pid) || pid <= 0) return false
-      const r = await call({ op: 'activate', pid }, 5_000)
+      if (onlyIfFront !== undefined && (!Number.isInteger(onlyIfFront) || onlyIfFront <= 0)) return false
+      const r = await call({ op: 'activate', pid, ...(onlyIfFront !== undefined ? { from: onlyIfFront } : {}) }, 5_000)
       return r.ok === true
     },
   }

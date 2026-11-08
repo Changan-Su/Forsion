@@ -105,6 +105,15 @@ describe.skipIf(!mac)('macOS dictation driver (private pasteboard, no keystrokes
     expect(await driver.activate(0)).toBe(false)
     expect(await driver.activate(-5)).toBe(false)
     expect(await driver.activate(2 ** 22 + 12345)).toBe(false)
+    expect(await driver.activate(1, 0)).toBe(false)
+  }, 20_000)
+
+  it('activate with onlyIfFront does nothing unless that process is the front app', async () => {
+    const front = await driver.front()
+    if (!front) return // 没有前台应用(无界面环境)
+    // 「已在前台的应用再切一次」本身没有副作用,只看那一核挡没挡住
+    expect(await driver.activate(front.pid, 2 ** 22 + 12345)).toBe(false)
+    expect(await driver.activate(front.pid, front.pid)).toBe(true)
   }, 20_000)
 
   it('writes the exact text, marked transient for clipboard managers', async () => {
