@@ -18,6 +18,7 @@ const ROOT = path.resolve(__dirname, '..')
 const ENGINE = path.resolve(ROOT, '../tangu-agent/dist')
 const load = (name) => import(pathToFileURL(path.join(ENGINE, name)).href)
 const checks = []
+const SHARE_ACCOUNT = 'https://api.forsion.test::u-memory'
 function check(name, ok) { assert.ok(ok, name); checks.push(name); console.log(`PASS ${name}`) }
 
 async function main() {
@@ -31,10 +32,10 @@ async function main() {
     fs.writeFileSync(path.join(dir, 'tangu-desktop-config.json'), JSON.stringify({ mode: 'managed' }))
   }
   const [{ configureTangu }, { createTanguProfile }, { createSqliteHost }, { STANDALONE_SCHEMA }, { toSqliteDDL },
-    { createLocalMemoryBrain }, registry, { createMemoryRepository }, { configureMemoryDream }, { default: agentsRouter }, { default: dreamRouter }] = await Promise.all([
+    { createLocalMemoryBrain }, registry, { createMemoryRepository }, { configureMemoryDream }, { default: agentsRouter }, { default: dreamRouter }, { runMigration }] = await Promise.all([
     load('seams/runtime.js'), load('profiles/index.js'), load('adapters/standalone/sqliteHost.js'), load('db/schemaStandalone.js'), load('core/dialectDDL.js'),
     load('adapters/standalone/localMemoryBrain.js'), load('agents/agentRegistry.js'), load('services/memoryRepository.js'), load('services/memoryDream.js'),
-    load('routes/agents.js'), load('routes/memoryMaintenance.js'),
+    load('routes/agents.js'), load('routes/memoryMaintenance.js'), load('db/migrate.js'),
   ])
   const { host, db } = createSqliteHost({ dataDir: 'memory', localToken: 'e2e', userId: 'memory-instrument' })
   db.exec(toSqliteDDL(STANDALONE_SCHEMA))
@@ -47,6 +48,8 @@ async function main() {
         : { ok: true }), toolCalls: [], usage: { prompt_tokens: 1, completion_tokens: 1 } }),
     }, users: { getUserById: async () => ({ id: 'memory-instrument' }) },
   } })
+  await runMigration() // 遥测账本表(telemetry_ledger)在迁移里建:遗忘理由要落得进去才看得到
+  const ledgerCell = (field, dim) => db.prepare('SELECT SUM(n) AS n FROM telemetry_ledger WHERE event = ? AND field = ? AND dim = ?').get('daily_memory', field, dim)?.n || 0
   for (const slug of ['alpha', 'beta']) {
     await registry.saveAgent({ slug, name: `Memory ${slug}`, description: 'Isolated memory instrument', systemPrompt: 'Test agent', createdBy: 'user' })
     configureMemoryDream(slug, { modelId: 'instrument' })
@@ -87,6 +90,17 @@ async function main() {
       env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: url } })
     let win = await app.firstWindow()
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1280, 960))
+    await win.waitForSelector('#root')
+    // 「附上这条原文，随账号发给 Forsion」:auth:status 报一个登录着的账号(渲染层 authInfo.accountId 从这来),
+    // feedback:submit 在主进程里接住、只记下收到的入参(真的 Extend 会用它核对发送时的账号,那一半在 Extend 单测里钉)。改完重载一次让 authInfo 拿到它。
+    await app.evaluate(({ ipcMain }, acct) => {
+      globalThis.__feedbackSubmits = []
+      try { ipcMain.removeHandler('auth:status') } catch { /* 没注册过 */ }
+      ipcMain.handle('auth:status', () => ({ loggedIn: true, tokenValid: null, cloudUrl: 'https://api.forsion.test', accountId: acct, username: 'e2e', nickname: null, avatar: null, membershipTier: null, tokenSource: 'tangu-login', backendState: null }))
+      try { ipcMain.removeHandler('feedback:submit') } catch { /* 没注册过 */ }
+      ipcMain.handle('feedback:submit', (_e, input) => { globalThis.__feedbackSubmits.push(input); return { ok: true, id: 'fb-1' } })
+    }, SHARE_ACCOUNT)
+    await win.reload({ waitUntil: 'domcontentloaded' })
     await win.waitForSelector('#root')
     await win.waitForTimeout(1600)
     for (const label of ['跳过引导', 'Skip']) {
@@ -166,9 +180,37 @@ async function main() {
     await wait(() => alpha.snapshot().content === initialAlpha.content, 'revision restored')
     check('Revision restore uses the current version', alpha.snapshot().version !== initialAlpha.version)
     const initialEntry = panel.locator('[data-memory-entry-id]').filter({ hasText: 'Alpha 私有事实' }).first()
+    // 遗忘先问理由(帮助改进 P3):点了不马上生效;「取消」回去;选了理由才遗忘,理由进本机遥测账本(自建 Agent 记 custom)
     await initialEntry.getByRole('button', { name: '遗忘', exact: true }).click()
+    await initialEntry.locator('[data-reason-prompt]').waitFor({ timeout: 5000 })
+    check('Forget first offers optional reasons and does not act yet', alpha.snapshot().entries.length === 1 && await initialEntry.locator('[data-reason]').count() === 5)
+    await panel.screenshot({ path: path.join(SHOTS, 'memory-forget-reasons.png') })
+    await initialEntry.locator('[data-reason-cancel]').click()
+    check('Cancel puts the entry actions back without forgetting', alpha.snapshot().entries.length === 1 && await initialEntry.locator('[data-reason-prompt]').count() === 0)
+    // 理由行开着时去改原文:草稿一脏理由行就收起(遗忘成功会用新快照冲掉草稿 —— 不能让它在有草稿时还能点)
+    await initialEntry.getByRole('button', { name: '遗忘', exact: true }).click()
+    await initialEntry.locator('[data-reason-prompt]').waitFor({ timeout: 5000 })
+    await summary('编辑原文').click()
+    const cleanDoc = await editor.inputValue()
+    await editor.fill(`${cleanDoc}\n- 还没保存的草稿。`)
+    await wait(async () => await initialEntry.locator('[data-reason-prompt]').count() === 0, 'reason row closes on a dirty draft')
+    check('A dirty source draft closes the forget reasons, so forgetting cannot wipe the draft', alpha.snapshot().entries.length === 1
+      && await editor.inputValue() === `${cleanDoc}\n- 还没保存的草稿。` && await initialEntry.getByRole('button', { name: '遗忘', exact: true }).isDisabled())
+    await editor.fill(cleanDoc)
+    await summary('编辑原文').click()
+    await initialEntry.getByRole('button', { name: '遗忘', exact: true }).click()
+    await initialEntry.locator('[data-reason-share]').check() // 勾的这一刻记下登录的账号
+    await initialEntry.locator('[data-reason="stale"]').click()
     await wait(() => alpha.snapshot().entries.length === 0, 'entry forgotten')
     check('Forget removes active memory and records its tombstone', alpha.snapshot().tombstones.length > 0)
+    const feedbackSubmits = () => app.evaluate(() => globalThis.__feedbackSubmits)
+    await wait(async () => (await feedbackSubmits()).length === 1, 'shared original sent')
+    const shared = (await feedbackSubmits())[0]
+    check('Ticking "send this text" sends the forgotten entry once, bound to the account signed in at tick time',
+      shared.expectedAccountId === SHARE_ACCOUNT && /\[memory:custom:/.test(shared.description) && shared.description.includes('Alpha 私有事实'))
+    await wait(() => ledgerCell('userForgetStale', 'custom') === 1, 'forget reason counted')
+    check('The chosen reason lands in the local telemetry ledger as an enum count only', ledgerCell('userForget', 'custom') === 1 && ledgerCell('userForgetStale', 'custom') === 1
+      && db.prepare("SELECT COUNT(*) AS n FROM telemetry_ledger WHERE dim NOT IN ('', 'custom') OR field LIKE '%Alpha%'").get().n === 0)
     await restoreInitial()
     await wait(() => panel.getByRole('button', { name: '刷新', exact: true }).first().isEnabled(), 'restore settled')
     check('Restoring an old revision does not resurrect forgotten memory', alpha.snapshot().content === '')

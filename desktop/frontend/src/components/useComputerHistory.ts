@@ -1,12 +1,12 @@
 /**
- * 电脑历史的读写与开关逻辑,设置页(ComputerHistorySettings)、首次引导(团队屏 / OnboardingComputerHistory)和主页那一行(ComputerHistoryAsk)共用这一份。
+ * 电脑历史的读写与开关逻辑,设置页(ComputerHistorySettings)、首启引导团队屏(TeamScreen)和主页那一行(ComputerHistoryAsk)共用这一份。
  * 落盘 / 保留 / 清除 / 暂停 / 连 helper 全在主进程(electron/computerHistory.ts),这里经 window.tangu.computerHistory
  * (shared/computerHistory.ts 的 ComputerHistoryApi)读写,每个写操作回最新 View 直接替换。
  * 状态实时性:onChanged 推送 + 窗口回到前台时 get() 一次(从系统设置授权回来,不必等主进程的重试)。
  * 三路来的 View(get 回包 / 写操作结果 / 推送)一律按主进程的 rev 取最新:旧的 get() 回包晚到不能把新推送盖回去。
  * ⚠️ 主进程的 get() 在失败态会立刻重连(连不上就拉起 helper)。权限卡正在「更新并重启助手」时别触发它:
  * 旧助手 shutdown 到新字节落盘之间一重连,就会把旧版拉起来占住 socket,新版随即作为多余实例退出。
- * 所以同屏的每一张 DesktopPermissions 都要把 onBusyChange 接到这里的 onPermissionBusy(引导里「操作电脑」那一页也算)。
+ * 所以同屏的每一张 DesktopPermissions 都要把 onBusyChange 接到这里的 onPermissionBusy。
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ComputerHistoryApi, ComputerHistoryView } from '../../../shared/computerHistory'

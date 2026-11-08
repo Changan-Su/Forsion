@@ -12,12 +12,13 @@ import {
 } from '@dnd-kit/core'
 import { SortableContext, rectSortingStrategy, sortableKeyboardCoordinates, useSortable } from '@dnd-kit/sortable'
 import { CSS as DndCSS } from '@dnd-kit/utilities'
-import { ChevronLeft, FolderOpen, FolderPlus, Grid2X2, Search, X } from 'lucide-react'
-import { commandHotkeyText, getDetachApi, label, setActiveSpace, useRibbonStore, useSpaceStore, WINDOW_SPACE_ID, type SpaceDefinition } from '@lcl/engine'
+import { ChevronLeft, FolderOpen, FolderOutput, FolderPlus, Grid2X2, Search, X } from 'lucide-react'
+import { commandHotkeyText, label, objectContextMenuHandler, useRibbonStore, useSpaceStore, type Place, type SheetMenuItem, type SheetMenuSection, type SpaceDefinition } from '@lcl/engine'
 import { isImeKeyEvent } from '@lcl/engine/ime'
 import { askString } from '@amadeus/components/askString'
-import { registerMessages, useI18n } from '../i18n'
-import { shelfAddFolder, shelfMove, shelfMoveIntoFolder, shelfTiles, type ShelfTile } from './homeShelf'
+import { launchSpace, spaceRef } from '../objects/space'
+import { registerMessages, translate, useI18n } from '../i18n'
+import { shelfAddFolder, shelfMove, shelfMoveIntoFolder, shelfMoveOut, shelfTiles, type ShelfTile } from './homeShelf'
 import './homepage.css'
 
 registerMessages({
@@ -55,6 +56,11 @@ export const dockCollision: CollisionDetection = (args) => {
   return hits.length ? hits : closestCenter(args)
 }
 
+/** 「移出收纳夹」本处项:收纳面板的夹内视图、主页的收纳夹弹层共用;文案与 Ribbon 收纳夹浮层是同一个键。 */
+export function moveOutItem(itemId: string, after?: () => void): SheetMenuItem {
+  return { id: 'move-out', label: translate('lcl.ribbon.moveOut'), icon: <FolderOutput size={13} />, run: () => { shelfMoveOut(itemId); after?.() } }
+}
+
 export function TileVisual({ tile }: { tile: ShelfTile }) {
   if (tile.kind === 'space') {
     return (
@@ -79,7 +85,7 @@ export function TileVisual({ tile }: { tile: ShelfTile }) {
 }
 
 export function SortableTile({
-  tile, over, open, sel, current, disabled, onOpen, onLaunch, onMenu,
+  tile, over, open, sel, current, disabled, onOpen, onLaunch, onMenu, spacePlace, spaceSections,
 }: {
   tile: ShelfTile
   over: boolean
@@ -93,6 +99,10 @@ export function SortableTile({
   onOpen: (el: HTMLElement, id: string) => void
   onLaunch: (spaceId: string) => void
   onMenu?: (event: React.MouseEvent, id: string) => void
+  /** Space 格子右键出 LCL 对象菜单(和 Ribbon 上右键同一份);这里说「在哪」,给了才接。 */
+  spacePlace?: Place
+  /** 本处那一节(收纳夹里的「移出收纳夹」…),右键那一刻现取。 */
+  spaceSections?: (spaceId: string) => SheetMenuSection[]
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: tile.id, disabled })
   const name = tile.kind === 'space' ? label(tile.space.name) : tile.folder.name
@@ -119,7 +129,9 @@ export function SortableTile({
         if (tile.kind === 'folder') { event.stopPropagation(); onOpen(event.currentTarget, tile.id) }
         else onLaunch(tile.space.id)
       }}
-      onContextMenu={tile.kind === 'folder' && onMenu ? (event) => onMenu(event, tile.id) : undefined}
+      onContextMenu={tile.kind === 'folder'
+        ? (onMenu ? (event) => onMenu(event, tile.id) : undefined)
+        : spacePlace ? (event) => objectContextMenuHandler(() => ({ refs: [spaceRef(tile.space.id)], place: spacePlace, placeSections: () => spaceSections?.(tile.space.id) ?? [] }))(event) : undefined}
     >
       <TileVisual tile={tile} />
     </button>
@@ -306,6 +318,8 @@ export function SpaceOrganizer({
                   onOpen={(el) => activate(tile, el)}
                   onLaunch={() => activate(tile)}
                   onMenu={onFolderMenu}
+                  spacePlace={{ kind: 'organizer', ...(folder ? { container: folder.id } : {}) }}
+                  spaceSections={folder?.kind === 'folder' ? (id) => [{ items: [moveOutItem(`space:${id}`, () => setScope(null))] }] : undefined}
                 />
               ))}
               {sorting && (
@@ -335,12 +349,8 @@ export function SpaceOrganizer({
   )
 }
 
-/** 进某个 Space。Space 窗口锁在自己的 Space 上,切不走:改成把那个 Space 开到它自己的窗口(同主页磁贴)。 */
-export function launchSpace(spaceId: string): void {
-  const open = WINDOW_SPACE_ID ? getDetachApi()?.openSpace : undefined
-  if (open) open(spaceId)
-  else setActiveSpace(spaceId)
-}
+/** 进某个 Space:走对象层的打开(objects/space.tsx),窗口锁的规矩写在那里一次。保留这个出口给老调用点。 */
+export { launchSpace }
 
 const useHostStore = create<{ open: boolean }>(() => ({ open: false }))
 let homeToggle: (() => void) | null = null

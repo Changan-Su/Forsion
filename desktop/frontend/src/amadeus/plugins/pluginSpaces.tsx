@@ -2,7 +2,7 @@
  * `ctx.spaces`(2026-10-18,主页插件化 S3 / S4):Space 列表、打开、图标、近况那一行、商店 / 成就两格,以及 Ribbon 上区的收纳架。
  * 收纳架写的就是 Ribbon 那一份(views/homeShelf,内置主页也用它),不另存。manifest 声明 `spaces` 才注入(改的是用户的 Ribbon)。
  */
-import { getDetachApi, label, setActiveSpace, useRibbonStore, useSpaceStore, WINDOW_SPACE_ID } from '@lcl/engine'
+import { label, openObject, useRibbonStore, useSpaceStore } from '@lcl/engine'
 import { claimHostMount, mountHostReact } from '@lcl/components'
 import type { PluginContext } from './types'
 import {
@@ -33,16 +33,12 @@ export function createSpacesApi({ alive, own }: { alive: () => boolean; own: (of
       const b = useRibbonStore.subscribe((s, p) => { if (s.order !== p.order || s.folders !== p.folders || s.items !== p.items) fire() })
       return own(() => { a(); b() })
     },
-    // 口径同 Ribbon 上点它;本窗口是锁在某个 Space 上的 Space 窗口时,改成把它开到它自己的窗口(同内置主页的 launchSpace)
+    // 走对象层的打开(objects/space.tsx):本窗口是锁在某个 Space 上的 Space 窗口时,开到它自己的窗口(同 Ribbon、主页)
     open: async (id) => {
       const sid = str(id)
       if (!alive() || !useSpaceStore.getState().spaces.some((s) => s.id === sid)) return false
-      const inWindow = WINDOW_SPACE_ID ? getDetachApi()?.openSpace : undefined
-      if (inWindow) inWindow(sid)
-      else {
-        setActiveSpace(sid)
-        await new Promise((r) => requestAnimationFrame(() => r(null)))
-      }
+      if (!(await openObject({ type: 'space', id: sid }, 'here', { kind: 'plugin' })).ok) return false
+      await new Promise((r) => requestAnimationFrame(() => r(null)))
       return true
     },
     // 跟着 store 走:同 id 重注册换了图标(插件更新 iconFile)就原地重画,挂的时候还没注册的等它注册上;退订在树里,卸载一起走

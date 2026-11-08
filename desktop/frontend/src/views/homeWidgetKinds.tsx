@@ -3,7 +3,7 @@
  *  卡头(图标 / 标题 / 归属 / 点了去哪)与卡身按 id 前缀分派 —— 只有 w_… 才去问引擎要原件。 */
 import { createContext, Fragment, useContext, useEffect, useState, useSyncExternalStore } from 'react'
 import { CalendarDays, Check, FileText, Globe, Inbox, LayoutGrid, ListTodo, MessagesSquare, Radar, RefreshCw, Sparkles } from 'lucide-react'
-import { setActiveSpace } from '@lcl/engine'
+import { launchSpace } from '../objects/space'
 import { registerMessages, useI18n } from '../i18n'
 import { WidgetHost, useWidgetTitle } from '../components/WidgetHost'
 import { panelToast } from '../components/PanelNotice'
@@ -94,7 +94,7 @@ export function useHomeWidgetHead(id: string, size = 13): HomeWidgetHead {
   if (isBuiltinWidget(id)) {
     const Icon = BUILTIN_ICON[id]
     const space = BUILTIN_SPACE[id]
-    return { show: true, title: t(builtinKey(id)), owner: '', icon: <Icon size={size} />, open: space ? () => setActiveSpace(space) : undefined }
+    return { show: true, title: t(builtinKey(id)), owner: '', icon: <Icon size={size} />, open: space ? () => launchSpace(space) : undefined }
   }
   if (plug) {
     const spec = plugin?.widgets?.find((w) => w.id === plug.widgetId)
@@ -107,7 +107,7 @@ export function useHomeWidgetHead(id: string, size = 13): HomeWidgetHead {
       title: locale === 'en' && spec.titleEn ? spec.titleEn : spec.title,
       owner: pluginDisplayName(plugin, locale),
       icon: Vocab ? <Vocab size={size} /> : plugin.iconUrl ? <img className="hp-wcard-pic" src={plugin.iconUrl} alt="" style={{ width: size, height: size }} /> : <LayoutGrid size={size} />,
-      open: space ? () => setActiveSpace(space) : undefined,
+      open: space ? () => launchSpace(space) : undefined,
     }
   }
   return { show: true, title: agent.title, owner: agent.owner, icon: <LayoutGrid size={size} /> }
@@ -230,7 +230,7 @@ function InboxBody(): React.JSX.Element {
     if (!st.listLoaded) void st.refreshList()
   }, [])
   return (
-    <button type="button" className="hp-wstat" onClick={() => setActiveSpace('inbox')}>
+    <button type="button" className="hp-wstat" onClick={() => launchSpace('inbox')}>
       <span className="hp-wbig"><b>{unread}</b><span>{t('home.w.unread')}</span></span>
       {latest && <span className="hp-wsub">{senderOf(latest)} · {latest.title}</span>}
     </button>
@@ -286,7 +286,7 @@ function PluginBody({ pluginId, widgetId }: { pluginId: string; widgetId: string
   if (data.status === 'none' ? !active : data.status === 'loading' && !data.list) return <div className="hp-wl-loading" aria-busy="true" />
   if (data.status === 'error' && !data.list) return <div className="hp-wl-empty" title={data.error}>{t('home.w.failed')}</div>
   const list = data.status === 'none' ? { rows: [] } : data.list ?? { rows: [] }
-  const go = spec?.space ? () => setActiveSpace(spec.space!) : undefined
+  const go = spec?.space ? () => launchSpace(spec.space!) : undefined
   return <HomeList rows={list.rows.map((r) => ({ ...r, key: r.id, onClick: go }))} footer={list.footer} empty={list.empty ?? t('home.w.empty')} />
 }
 
@@ -295,7 +295,7 @@ function PluginBody({ pluginId, widgetId }: { pluginId: string; widgetId: string
 function MuseTodosBody(): React.JSX.Element {
   const { t } = useI18n()
   const { todos } = useMuseTodosLive(20_000)
-  const go = (): void => setActiveSpace('muse')
+  const go = (): void => launchSpace('muse')
   const shown = (todos ?? []).slice(0, 4)
   return (
     <HomeList empty={todos ? t('home.w.museTodosEmpty') : ''}
@@ -306,7 +306,7 @@ function MuseTodosBody(): React.JSX.Element {
 function MuseTrackingBody(): React.JSX.Element {
   const { t } = useI18n()
   const tracks = useMuseTracksLive(60_000)
-  const go = (): void => setActiveSpace('muse')
+  const go = (): void => launchSpace('muse')
   return (
     <HomeList empty={tracks ? t('home.w.museTrackingEmpty') : ''}
       rows={(tracks ?? []).slice(0, 4).map((e, i) => ({ key: e.id, time: trackWhen(e.date), now: i === 0, title: e.name, onClick: go }))} />

@@ -671,7 +671,8 @@ export type PluginViewLocation = 'main' | 'left' | 'right' | 'bottom'
  *  onClose(reason): `dismiss` = the person closed that panel itself; `layout` = the workbench took it with its place
  *  (side folded, layout reset or replaced, another view's extension) — hosts up to 2.12.2 report those as `dismiss`. */
 export interface PluginViewContext {
-  /** Mount location. Mini/Floating receive no extendView/full workspace chrome. Feature-detect on older hosts. */
+  /** Mount location. Mini/Floating receive no extendView/full workspace chrome. Feature-detect on older hosts.
+   *  A view that `ctx.workspace.open` floats inside the window (2.13.8+) reports 'mini' for the Mini look and 'floating' otherwise. */
   surface?: 'main' | 'mini' | 'floating'
   /** Current entity/filter params, live for this mount. Keep entity keys identical in mini/main views. */
   getParams?(): Readonly<Record<string, unknown>>
@@ -722,7 +723,60 @@ export interface ViewContribution {
    *  PDF…) are dropped; at most 4 are used, 3 or fewer recommended (side tabs are icon-only). Leave it out to use the
    *  Space's `layout.right`. Details / forms opened from one row or event belong in `view.extendView`, not here. */
   rightCompanions?: string[]
+  /** Which looks this view supports (2.13.8+; older hosts ignore it). Leave it out and every look works, as before.
+   *  Declare it and anything left out is unsupported: `ctx.workspace.open` (and openView / openMiniPanel / openFloatingPanel,
+   *  which go through it) then falls back by the rules in PluginOpenOptions. `mini: { view }` names a compact view of THIS
+   *  plugin (relative id) shown whenever this view is opened in the Mini look; `mini: true` shows the view itself. */
+  forms?: PluginViewForms
 }
+
+/** The look a view takes (2.13.8+). Left / right are places, not looks: docked in either side panel is 'side'. */
+export type PluginViewForm = 'main' | 'side' | 'bottom' | 'mini'
+
+/** See ViewContribution.forms. */
+export interface PluginViewForms {
+  main?: boolean
+  side?: boolean
+  bottom?: boolean
+  mini?: boolean | { view: string; params?: Record<string, unknown> }
+}
+
+/** Where `ctx.workspace.open` puts a view (2.13.8+).
+ *  - `{ dock }`: docked in the workbench, the same as `openView`'s location.
+ *  - `{ float: 'desktop', pin? }`: its own small system window — the Mini look is the Mini Panel (always on top), the main look is
+ *    the Floating Panel (on top only with `pin: true`). Web has no Mini window and phones have neither: there the view floats in
+ *    the window instead (a half-height sheet on phones), and the main look docks in the main area on phones.
+ *  - `{ float: 'view', host }` / `{ float: 'space' }` / `{ float: 'window' }`: a card floating inside the window, in the same
+ *    three scopes as `ctx.ui.float` (inside one element of your view / over the current Space, hidden while another Space is
+ *    shown / over the whole window). `anchor` defaults to 'bottom-end'; the person can drag the card to another corner. */
+export type PluginOpenLayer =
+  | { dock: PluginViewLocation }
+  | { float: 'desktop'; pin?: boolean }
+  | { float: 'view'; host: HTMLElement; anchor?: PluginFloatAnchor }
+  | { float: 'space' | 'window'; anchor?: PluginFloatAnchor }
+
+/** Options for `ctx.workspace.open` (2.13.8+). Fallback rules when the view's `forms` leave the asked-for look out:
+ *  1. Docked: the place decides the look (left / right = 'side'); `form` is ignored. Unsupported → the next place on the ladder
+ *     (main → right → bottom; left / right → main → bottom; bottom → right → main); a host without a bottom panel uses right.
+ *     A view that supports only 'mini' floats over the current Space instead.
+ *  2. Floating: `form` defaults to 'mini' ('side' / 'bottom' count as 'main'). 'mini' unsupported → 'main'; 'main' (the view
+ *     itself) unsupported → 'mini'. The Mini look shows `forms.mini.view` when set, otherwise the view itself. */
+export interface PluginOpenOptions {
+  /** Default `{ dock: 'main' }`. */
+  layer?: PluginOpenLayer
+  form?: PluginViewForm
+  /** Which one of this view (Mini windows and floating cards): the same view + key opens the one already there and gives it
+   *  the new params; another key opens another. Params never count as identity. */
+  key?: string
+  /** Title of the Mini / Floating Panel / floating card; defaults to the view's title. */
+  title?: string
+}
+
+/** What `ctx.workspace.open` resolves to. `layer` / `form` say where it actually went after the fallback rules.
+ *  `close` is there for docked views and floating cards (not for the desktop windows). */
+export type PluginOpenResult =
+  | { ok: true; layer: { dock: PluginViewLocation } | { float: 'desktop' | 'view' | 'space' | 'window' }; form: PluginViewForm; close?(): void }
+  | { ok: false; reason: 'unknown-view' | 'unsupported' | 'unavailable' | 'limit' | 'disabled'; limit?: number }
 
 export interface PluginFloatingPanelOptions {
   title?: string
@@ -1754,6 +1808,14 @@ export interface PluginContext {
    *  the same viewId (+ `key`) reuses its window, other views / keys open their own, up to the host's limit
    *  (the host tells the user when it is reached; the call never throws). */
   openMiniPanel?(viewId: string, opts?: PluginMiniPanelOptions): void
+  /** One way to open your views, with where (`layer`) and what it looks like (`form`) written apart (2.13.8+; older hosts lack
+   *  it — feature-detect `ctx.workspace?.open`). openView / openMiniPanel / openFloatingPanel are this with fixed options and
+   *  keep working. `target` is one of your own view ids, or `{ view, params }`. Bad options throw a TypeError at once; a view
+   *  that cannot be opened resolves `{ ok: false, reason }` ('limit' = too many Mini windows, the host already told the person).
+   *  Floating cards close with your plugin (disable / reload), and when you call `close()` or the person closes them. */
+  workspace?: {
+    open(target: string | { view: string; params?: Record<string, unknown> }, opts?: PluginOpenOptions): Promise<PluginOpenResult>
+  }
   /** Contribute a list source to the unified workspace sidebar (2026-08-25+). Old hosts lack it:
    *  always call as `ctx.registerListSource?.(…)`. See ListSourceContribution. */
   registerListSource?(src: ListSourceContribution): void

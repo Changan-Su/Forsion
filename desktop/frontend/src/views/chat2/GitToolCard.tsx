@@ -7,13 +7,15 @@
  * 和 Git 页同一套动作,不经 Tangu、不过审批。读不到现状(手机 / 网页 / 别的电脑上的会话)→ 只按工具结果画,不给写按钮。
  * 远端的站名与「用谁的账号」复用 ProjectGitRemotes(Forsion Git / GitHub / 别的站一张表)。
  * 审批卡里的结构化卡身也在这里(useGitApproval,ApprovalCard 用)。
+ * 多仓 Git(11-07,方案 C):工具点名了仓(参数 repo / 结果 repoInfo)→ 连续几步只在同一个仓里并卡,换了仓另起一张;
+ * 标题写仓名、小字写在哪;现状用 git/repo 现读,卡上的动作带上这个仓。git_publish(发布到 Forsion Git)也进卡。
  */
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { ArrowDownToLine, Check, ExternalLink, GitBranch, GitCommitHorizontal, Loader2, Sparkles, Upload, UserRound, X } from 'lucide-react'
 import type { GitRemoteInfo, GitSummary, ToolEvent } from '../../../../../tangu-agent/src/contracts/clientTypes'
 import { registerMessages, useI18n } from '../../i18n'
 import { UI_MODE } from '@lcl/engine'
-import { generateGitCommitMessage, getGitHosting, getGitReviews, getProjectContext, gitCommitProject, gitPendingProject, gitPullProject, gitPushProject, type GitReviews } from '../../services/backendService'
+import { generateGitCommitMessage, getGitAccounts, getGitHosting, getGitRepo, getGitReviews, getProjectContext, gitCommitProject, gitPendingProject, gitPullProject, gitPushProject, type GitAccounts, type GitRef, type GitReviews } from '../../services/backendService'
 import { homeTarget, refForSession } from '../../services/engine/targets'
 import { showDetails } from '../../stores/detailsSubject'
 import { useApp } from '../../stores/appStore'
@@ -63,15 +65,43 @@ registerMessages({
   'gitCard.apv.once': { zh: '只推这一次，推送去向仍是 {remote}', en: 'This once; the push target stays {remote}' },
   'gitCard.apv.commits': { zh: '{count} 个提交', en: '{count} commits' },
   'gitCard.apv.commitsOne': { zh: '{count} 个提交', en: '{count} commit' },
+  'gitCard.publishedTo': { zh: '已发布到 Forsion Git：{name}', en: 'Published to Forsion Git: {name}' },
+  'gitCard.publishFailed': { zh: '没发布成功', en: 'Not published' },
+  'gitCard.apv.publish': { zh: '发布到 Forsion Git', en: 'Publish to Forsion Git' },
+  'gitCard.apv.publishNew': { zh: '在 Forsion Git 上新建一个私有仓库，以后推送到这里', en: 'Creates a new private repository on Forsion Git and pushes there from now on' },
+  'gitCard.apv.publishFrom': { zh: '仓库 {label} · 分支 {branch}', en: 'Repository {label} · branch {branch}' },
+  'gitCard.apv.publishAccount': { zh: '用你的 Forsion 账号 @{user}', en: 'Uses your Forsion account @{user}' },
 })
 
-export const GIT_CARD_TOOLS: ReadonlySet<string> = new Set(['git_status', 'git_commit', 'git_push', 'git_pull'])
+export const GIT_CARD_TOOLS: ReadonlySet<string> = new Set(['git_status', 'git_commit', 'git_push', 'git_pull', 'git_publish'])
 export const isGitTool = (ev: { name: string }): boolean => GIT_CARD_TOOLS.has(ev.name)
-/** 只看过状态的那张卡,在同一条回答里后面又有提交 / 推送 / 拉取时不画:否则卡上的「推送」和等你批准的那次推送并排(后面那张结果卡会写清现状)。 */
+/** 只看过状态的那张卡,在同一条回答里后面又对**同一个仓**提交 / 推送 / 拉取时不画:否则卡上的「推送」和等你批准的那次推送并排(后面那张结果卡会写清现状)。 */
 export function gitStatusSuperseded(run: ToolEvent[], all: ToolEvent[] | undefined): boolean {
   if (!run.length || run.some((e) => e.name !== 'git_status') || !all) return false
   const at = all.findIndex((e) => e.id === run[run.length - 1].id)
-  return at >= 0 && all.slice(at + 1).some((e) => isGitTool(e) && e.name !== 'git_status')
+  const key = gitRepoKey(run[run.length - 1])
+  return at >= 0 && all.slice(at + 1).some((e) => isGitTool(e) && e.name !== 'git_status' && gitRepoKey(e) === key)
+}
+
+/** 结果里引擎认出的那个仓(git_* 工具结果的 repoInfo;git_status 里的 repo 是 true/false,不是它)。老引擎 / 没解析到 → null。 */
+export function gitRepoInfo(ev: Pick<ToolEvent, 'result' | 'isError'>): { id: string; name: string; label: string; scope?: string } | null {
+  const info = ev.result ? parseGitResult(ev)?.data?.repoInfo : undefined
+  return info && typeof info === 'object' && typeof info.id === 'string' && info.id ? { id: info.id, name: String(info.name || ''), label: String(info.label || ''), ...(typeof info.scope === 'string' ? { scope: info.scope } : {}) } : null
+}
+/** 一步 git 动的是哪个仓:结果里的 repoInfo.id → 参数 repo → '.'(项目自己 / 老引擎)。 */
+export function gitRepoKey(ev: Pick<ToolEvent, 'arguments' | 'result' | 'isError'>): string {
+  const arg = argsOf(ev.arguments).repo
+  return gitRepoInfo(ev)?.id || (typeof arg === 'string' && arg.trim() ? arg.trim() : '.')
+}
+/** 一串 git 调用按仓切开:连续的同一个仓并成一张卡,换了仓另起一张。 */
+export function splitGitRuns(events: ToolEvent[]): ToolEvent[][] {
+  const runs: ToolEvent[][] = []
+  for (const ev of events) {
+    const last = runs[runs.length - 1]
+    if (last && gitRepoKey(last[last.length - 1]) === gitRepoKey(ev)) last.push(ev)
+    else runs.push([ev])
+  }
+  return runs
 }
 
 const FILES_SHOWN = 8
@@ -98,29 +128,35 @@ function canReach(sessionId: string | null | undefined): boolean {
   return !!sessionId && UI_MODE !== 'mobile' && !window.tangu?.mobile && !window.tangu?.remoteCaller && refForSession(sessionId).kind !== 'unit'
 }
 
-interface Live { git: GitSummary | null; login: string | null | undefined; name: string; reviews: GitReviews | null }
+interface Live { git: GitSummary | null; login: string | null | undefined; name: string; label: string; reviews: GitReviews | null }
 
-/** 此刻的状况(项目上下文的 git 一段)+ 绑定的 GitHub 账号(只在有 GitHub 远端时多问一趟)+ 等你审的合并请求(只在有 Forsion Git 远端时问)。 */
-function useLiveGit(sessionId: string | null | undefined, refreshKey: string) {
+/** 卡上的动作带哪个仓:'.'(项目自己)/ 没点名 → 只带会话(老引擎照旧)。 */
+const refOf = (sessionId: string, repo: string | undefined): GitRef => (repo && repo !== '.' ? { sessionId, repo } : sessionId)
+
+/** 此刻的状况(项目上下文的 git 一段;点名了别的仓 = git/repo 现读那个仓)+ 绑定的 GitHub 账号(只在有 GitHub 远端时多问一趟)
+ *  + 等你审的合并请求(只在有 Forsion Git 远端时问)。 */
+function useLiveGit(sessionId: string | null | undefined, refreshKey: string, repo?: string) {
   const [live, setLive] = useState<Live | null>(null)
   const [tick, setTick] = useState(0)
   const reach = canReach(sessionId)
+  const other = repo && repo !== '.' ? repo : ''
   useEffect(() => {
     if (!reach || !sessionId) return
     let alive = true
-    void getProjectContext(homeTarget(), sessionId).then(async (ctx) => {
-      const git = ctx?.git ?? null
-      const name = ctx?.cwd ? ctx.cwd.split(/[\\/]/).filter(Boolean).pop() || '' : ''
+    const read: Promise<{ git: GitSummary | null; name: string; label: string }> = other
+      ? getGitRepo(homeTarget(), sessionId, other).then((r) => ({ git: r.git ?? null, name: r.repo?.name || '', label: r.repo?.label || '' }))
+      : getProjectContext(homeTarget(), sessionId).then((ctx) => ({ git: ctx?.git ?? null, name: ctx?.cwd ? ctx.cwd.split(/[\\/]/).filter(Boolean).pop() || '' : '', label: '.' }))
+    void read.then(async ({ git, name, label }) => {
       const needLogin = git?.remoteList?.some((r) => r.auth === 'github')
       const [hosting, reviews] = await Promise.all([
-        needLogin ? getGitHosting(homeTarget(), sessionId).catch(() => null) : null,
+        needLogin ? getGitHosting(homeTarget(), refOf(sessionId, other)).catch(() => null) : null,
         git?.remoteList?.some((r) => r.host === 'forsion') ? getGitReviews(homeTarget(), sessionId) : null,
       ])
       const login = hosting?.github ? (hosting.github.linked ? hosting.github.login ?? undefined : null) : undefined
-      if (alive) setLive({ git, login, name, reviews })
+      if (alive) setLive({ git, login, name, label, reviews })
     }, () => { if (alive) setLive(null) })
     return () => { alive = false }
-  }, [reach, sessionId, refreshKey, tick])
+  }, [reach, sessionId, refreshKey, tick, other])
   return { live, reach, reload: useCallback(() => setTick((n) => n + 1), []) }
 }
 
@@ -192,7 +228,7 @@ function StateBlock({ git, files }: { git: GitSummary; files: boolean }) {
 }
 
 /** 卡上的提交框:清单与署名现取(同 Git 页),信息由会话的模型写、可改;提交带清单指纹,清单变了就不提交。 */
-function CommitForm({ sessionId, onDone, onCancel }: { sessionId: string; onDone: () => void; onCancel: () => void }) {
+function CommitForm({ gref, onDone, onCancel }: { gref: GitRef; onDone: () => void; onCancel: () => void }) {
   const { t } = useI18n()
   const errText = useErrText()
   const [pending, setPending] = useState<Awaited<ReturnType<typeof gitPendingProject>> | null>(null)
@@ -200,17 +236,18 @@ function CommitForm({ sessionId, onDone, onCancel }: { sessionId: string; onDone
   const [writing, setWriting] = useState(false)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
+  const refKey = JSON.stringify(gref)
   const write = useCallback(() => {
     setWriting(true)
-    void generateGitCommitMessage(homeTarget(), sessionId).then((m) => setMessage(m), (e) => setErr(errText(e?.code, e?.message))).finally(() => setWriting(false))
-  }, [sessionId]) // eslint-disable-line react-hooks/exhaustive-deps
+    void generateGitCommitMessage(homeTarget(), gref).then((m) => setMessage(m), (e) => setErr(errText(e?.code, e?.message))).finally(() => setWriting(false))
+  }, [refKey]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
-    void gitPendingProject(homeTarget(), sessionId).then((p) => { setPending(p); if (p.total) write() }, (e) => setErr(errText(e?.code, e?.message)))
-  }, [sessionId]) // eslint-disable-line react-hooks/exhaustive-deps
+    void gitPendingProject(homeTarget(), gref).then((p) => { setPending(p); if (p.total) write() }, (e) => setErr(errText(e?.code, e?.message)))
+  }, [refKey]) // eslint-disable-line react-hooks/exhaustive-deps
   const commit = () => {
     if (!pending || !message.trim()) return
     setBusy(true); setErr('')
-    void gitCommitProject(homeTarget(), sessionId, message, pending.token).then(onDone, (e) => setErr(errText(e?.code, e?.message))).finally(() => setBusy(false))
+    void gitCommitProject(homeTarget(), gref, message, pending.token).then(onDone, (e) => setErr(errText(e?.code, e?.message))).finally(() => setBusy(false))
   }
   return <div className="git-card-form" data-git-card-form>
     {pending && <div className="git-card-faint">{t(pending.stagedOnly ? 'projectProfile.git.filesStaged' : 'projectProfile.git.filesAll', { count: pending.total })}</div>}
@@ -253,6 +290,9 @@ function Step({ ev, git, login }: { ev: ToolEvent; git: GitSummary | null | unde
   } else if (ev.name === 'git_pull') {
     title = <b>{ok ? t('gitCard.pulledFrom', { upstream: d.upstream }) : t('gitCard.pullFailed')}</b>
     if (ok) sub = d.updated ? t(countKey('gitCard.pulledCount', d.commits), { count: d.commits }) : t('gitCard.pulledNothing')
+  } else if (ev.name === 'git_publish') {
+    title = <b>{ok ? t('gitCard.publishedTo', { name: d.name || argsOf(ev.arguments).name || '' }) : t('gitCard.publishFailed')}</b>
+    if (ok) sub = [d.remote, d.branch].filter((x) => typeof x === 'string' && x).join(' · ')
   } else {
     title = <b>{t('gitCard.statusFailed')}</b>
   }
@@ -270,7 +310,11 @@ function Step({ ev, git, login }: { ev: ToolEvent; git: GitSummary | null | unde
 export function GitToolCard({ events, sessionId }: { events: ToolEvent[]; sessionId?: string | null }) {
   const { t } = useI18n()
   const errText = useErrText()
-  const { live, reach, reload } = useLiveGit(sessionId, events.map((e) => e.id).join(','))
+  // 这张卡是哪个仓的(一张卡只有一个仓,见 splitGitRuns);'.' = 项目自己(标题照旧写项目名)
+  const repoKey = gitRepoKey(events[events.length - 1])
+  const repoInfo = [...events].reverse().map(gitRepoInfo).find(Boolean) ?? null
+  const { live, reach, reload } = useLiveGit(sessionId, events.map((e) => e.id).join(','), repoKey)
+  const gref = sessionId ? refOf(sessionId, repoKey) : ''
   const [busy, setBusy] = useState<'' | 'push' | 'pull'>('')
   const [form, setForm] = useState(false)
   const [actErr, setActErr] = useState('')
@@ -289,30 +333,38 @@ export function GitToolCard({ events, sessionId }: { events: ToolEvent[]; sessio
     staged: fromTool.changes?.staged, unstaged: fromTool.changes?.unstaged, untracked: fromTool.changes?.untracked,
     changes: fromTool.changes?.files, changesTotal: fromTool.changes?.total,
   } as GitSummary : null)
-  const canAct = reach && !!git?.repo && !git.nested && !git.detached && !!sessionId
+  // 子目录模式(scope)的仓可写:提交只收本项目这块,引擎把关;老引擎的 nested 照旧只读
+  const canAct = reach && !!git?.repo && (!git.nested || !!git.scope) && !git.detached && !!sessionId
   const act = async (kind: 'push' | 'pull') => {
     if (!sessionId) return
     setBusy(kind); setActErr('')
     try {
       // 按钮上写着推到哪:Git 页在这张卡露面之后改过推送去向,就先刷新标签、不推(再点一次推到新写的那里)
-      if (kind === 'push' && !retryRemote && (await getProjectContext(homeTarget(), sessionId))?.git?.pushRemote !== git?.pushRemote) { reload(); return }
-      await (kind === 'push' ? gitPushProject(homeTarget(), sessionId, false, retryRemote) : gitPullProject(homeTarget(), sessionId))
+      const now = repoKey !== '.' ? (await getGitRepo(homeTarget(), sessionId, repoKey)).git : (await getProjectContext(homeTarget(), sessionId))?.git
+      if (kind === 'push' && !retryRemote && now?.pushRemote !== git?.pushRemote) { reload(); return }
+      await (kind === 'push' ? gitPushProject(homeTarget(), gref, false, retryRemote) : gitPullProject(homeTarget(), gref))
       reload()
     } catch (e: any) { setActErr(errText(e?.code, e?.message)) } finally { setBusy('') }
   }
   const openDetails = () => {
     const path = useApp.getState().sessions.find((x) => x.id === sessionId)?.project_path
-    if (path) showDetails({ kind: 'project', path, git: Date.now() })
+    if (path) showDetails({ kind: 'project', path, git: Date.now(), gitRepo: repoKey, ...(sessionId ? { gitSession: sessionId } : {}) })
   }
   const openPage = (url: string) => { void import('../../builtins').then((m) => m.routeExternalUrl(url)) }
   // 推成功后的「打开仓库网页」去刚推到的那个远端(只推这一次的不是缺省去向)
   const pushed = lastPush && !pushFailed ? parseGitResult(lastPush)?.data : undefined
-  const pushedWeb: string | undefined = pushed?.site?.web ?? (pushed?.remote === remote?.name ? remote?.web : undefined)
+  const lastPublish = [...writes].reverse().find((e) => e.name === 'git_publish')
+  const publishedUrl = lastPublish ? parseGitResult(lastPublish) : null
+  const publishedWeb = publishedUrl?.ok && typeof publishedUrl.data.url === 'string' && /^https:\/\//i.test(publishedUrl.data.url) ? publishedUrl.data.url : undefined
+  const pushedWeb: string | undefined = pushed?.site?.web ?? (pushed?.remote === remote?.name ? remote?.web : undefined) ?? publishedWeb
+  // 标题:点名了别的仓 → 仓名 + 小字写在哪;项目自己 / 只有一个仓 → 照旧项目名
+  const titleName = repoInfo && repoInfo.id !== '.' ? repoInfo.name : repoKey !== '.' && live?.name ? live.name : projectName
+  const titleSub = repoInfo && repoInfo.id !== '.' ? repoInfo.label : repoKey !== '.' && live?.label && live.label !== '.' ? live.label : ''
   const total = git?.changesTotal ?? git?.changes?.length ?? 0
   const synced = !!git?.repo && !total && !git.ahead && !git.behind && !!git.upstream
   return <div className="git-card-wrap" data-git-card={writes.length ? 'result' : 'status'}>
     <div className="sketch-card plugin-tool-card">
-      <div className="sketch-card-head"><span className="sketch-card-title">{t('gitCard.title', { name: projectName || 'Git' })}</span></div>
+      <div className="sketch-card-head"><span className="sketch-card-title" data-git-card-repo={repoKey}>{t('gitCard.title', { name: titleName || 'Git' })}{titleSub && <span className="git-card-repo-sub" title={titleSub}>{titleSub}</span>}</span></div>
       <div className="plugin-tool-card-body inline"><div className="git-card">
         {writes.length > 0 && <div className="git-card-steps">{writes.map((ev) => <Step key={ev.id} ev={ev} git={git} login={live?.login} />)}</div>}
         {writes.length > 0 && git?.repo && (synced
@@ -323,7 +375,7 @@ export function GitToolCard({ events, sessionId }: { events: ToolEvent[]; sessio
         {!writes.length && (git?.remoteList?.length ?? 0) > 1 && <div className="git-card-faint">{t('gitCard.moreRemotes', { count: git!.remoteList!.length })}</div>}
         {!writes.length && <Reviews reviews={live ? live.reviews : fromTool?.reviewRequests} site={originOf((git ?? { remoteList: fromTool?.remotes })?.remoteList?.find((r: { host?: string }) => r.host === 'forsion')?.web)} open={openPage} />}
         {actErr && <p className="git-card-err">{actErr}</p>}
-        {form && canAct && sessionId ? <CommitForm sessionId={sessionId} onCancel={() => setForm(false)} onDone={() => { setForm(false); reload() }} /> : (reach || writes.length > 0) && <div className="git-card-acts">
+        {form && canAct && sessionId ? <CommitForm gref={gref} onCancel={() => setForm(false)} onDone={() => { setForm(false); reload() }} /> : (reach || writes.length > 0) && <div className="git-card-acts">
           {canAct && !!total && <button type="button" className="btn sm primary" data-git-card-act="commit" onClick={() => setForm(true)}><GitCommitHorizontal size={13} />{t('projectProfile.git.commit')}</button>}
           {canAct && remote && (!!git?.ahead || pushFailed || !git?.upstream) && <button type="button" className="btn sm" data-git-card-act="push" disabled={!!busy} onClick={() => void act('push')}>
             {busy === 'push' ? <Loader2 size={13} className="spin" /> : <Upload size={13} />}
@@ -346,18 +398,42 @@ export function GitToolCard({ events, sessionId }: { events: ToolEvent[]; sessio
  */
 export function useGitApproval(name: string, rawArgs: string | undefined, sessionId: string | undefined, active: boolean): { title: string; body: ReactNode } | null {
   const { t } = useI18n()
-  const isGit = active && (name === 'git_commit' || name === 'git_push' || name === 'git_pull')
-  const { live } = useLiveGit(isGit ? sessionId : null, '')
+  const isGit = active && (name === 'git_commit' || name === 'git_push' || name === 'git_pull' || name === 'git_publish')
+  const args = argsOf(rawArgs)
+  const repo = typeof args.repo === 'string' && args.repo.trim() ? args.repo.trim() : undefined
+  const { live } = useLiveGit(isGit ? sessionId : null, '', repo)
   const [pending, setPending] = useState<Awaited<ReturnType<typeof gitPendingProject>> | null>(null)
   useEffect(() => {
     if (!isGit || name !== 'git_commit' || !sessionId || !canReach(sessionId)) return
     let alive = true
-    void gitPendingProject(homeTarget(), sessionId).then((p) => { if (alive) setPending(p) }, () => {})
+    void gitPendingProject(homeTarget(), refOf(sessionId, repo)).then((p) => { if (alive) setPending(p) }, () => {})
+    return () => { alive = false }
+  }, [isGit, name, sessionId, repo])
+  // 发布:站上的用户名(推拉过 Forsion Git 才知道;不知道就不写「用谁的账号」那一行)
+  const [accounts, setAccounts] = useState<GitAccounts | null>(null)
+  useEffect(() => {
+    if (!isGit || name !== 'git_publish' || !sessionId || !canReach(sessionId)) return
+    let alive = true
+    void getGitAccounts(homeTarget()).then((a) => { if (alive) setAccounts(a) })
     return () => { alive = false }
   }, [isGit, name, sessionId])
   if (!isGit || !live?.git?.repo) return null
   const git = live.git
-  const args = argsOf(rawArgs)
+  if (name === 'git_publish') {
+    const repoName = typeof args.name === 'string' ? args.name.trim() : ''
+    if (!repoName) return null
+    const user = accounts?.forsionGit?.username
+    const label = live.label && live.label !== '.' ? live.label : live.name
+    return {
+      title: t('gitCard.apv.publish'),
+      body: <div className="git-apv" data-git-approval="publish">
+        <div className="git-apv-msg"><b>{user ? `${user}/${repoName}` : repoName}</b></div>
+        <div className="git-card-faint">{t('gitCard.apv.publishNew')}</div>
+        <div className="git-card-faint">{t('gitCard.apv.publishFrom', { label, branch: git.branch || 'HEAD' })}</div>
+        {user && <div className="git-card-id"><UserRound size={12} />{t('gitCard.apv.publishAccount', { user })}</div>}
+      </div>,
+    }
+  }
   if (name === 'git_commit') {
     if (!pending) return null
     const msg = typeof args.message === 'string' ? args.message.trim() : ''

@@ -275,11 +275,26 @@ export async function gitInit(cwd: string): Promise<{ createdGitignore: boolean 
 // ── 待提交的东西 ──────────────────────────────────────────────────────────
 
 export interface PendingFile { code: string; path: string; /** 改名 / 复制的原路径。 */ from?: string }
+
+/** 子目录模式(11-07 多仓 Git):scope = 项目在仓里的 posix 相对路径;git 命令在仓根跑,用这条 pathspec 圈住它。
+ *  top = 相对仓根、literal = 不当通配符(文件夹名里的 * ? [ 照字面认)。 */
+export const scopeSpec = (scope?: string): string[] => (scope ? ['--', `:(top,literal)${scope}`] : []);
+/** 路径(相对仓根)在不在 scope 里。 */
+export const withinScope = (file: string, scope?: string): boolean => !scope || file === scope || file.startsWith(`${scope}/`);
+/** scope 只收干净的相对路径:不以 / 开头、不含 .. 段、不含控制字符。 */
+export function cleanScope(scope: unknown): string | undefined {
+  if (scope == null || scope === '') return undefined;
+  // 反斜杠只在 Windows 上是分隔符;POSIX 上它是文件名里的一个字,换成 / 会指到别的文件夹(Codex 评审)
+  const raw = typeof scope === 'string' ? (process.platform === 'win32' ? scope.replace(/\\/g, '/') : scope) : '';
+  const text = raw.replace(/\/+$/, '');
+  if (!text || text.startsWith('/') || /[\u0000-\u001f]/.test(text) || text.split('/').some((p) => !p || p === '.' || p === '..')) throw new GitActionError('invalid_scope', 'Invalid project folder inside the repository');
+  return text;
+}
 interface StagedEntry { status: string; path: string; mode: string; blob: string }
 
 /** 全量改动(未跟踪文件逐个列出)。输出爆了上限 = 文件多到离谱,直接按「太多」拒。 */
-async function pendingChanges(cwd: string): Promise<{ entries: PendingFile[]; untracked: string[]; paths: Set<string> }> {
-  const r = await readGit(cwd, ['status', '--porcelain=v1', '-z', '--untracked-files=all'], { maxOutputBytes: 2 * 1024 * 1024 });
+async function pendingChanges(cwd: string, scope?: string): Promise<{ entries: PendingFile[]; untracked: string[]; paths: Set<string> }> {
+  const r = await readGit(cwd, ['status', '--porcelain=v1', '-z', '--untracked-files=all', ...scopeSpec(scope)], { maxOutputBytes: 2 * 1024 * 1024 });
   if (r.reason === 'output-limit') throw new GitActionError('too_many_files', 'Too many files to commit; add the generated folders to .gitignore first');
   must(r, 'status');
   const entries: PendingFile[] = [];
@@ -355,11 +370,23 @@ export async function assertCommittable(cwd: string, changes: { untracked: strin
   if (large.length) throw new GitActionError('large_files', 'Some new files are too large to commit', large.slice(0, 5).join('\n'));
 }
 
+/** 工作区 .gitmodules 登记的子模块路径(`git config -f` 读指定文件时缺省不跟 include,只是解析)。读不到 = 一个都没有。 */
+async function submodulePaths(cwd: string): Promise<Set<string>> {
+  const r = await readGit(cwd, ['config', '-z', '-f', '.gitmodules', '--get-regexp', '^submodule\\..*\\.path$'], { timeoutMs: 5000 }).catch(() => null);
+  const out = new Set<string>();
+  if (!r || r.code !== 0) return out;
+  for (const rec of r.stdout.split('\0')) { const nl = rec.indexOf('\n'); if (nl > 0) out.add(rec.slice(nl + 1).replace(/\/+$/, '')); }
+  return out;
+}
+
 /** 提交前的第二道:按**最终 index** 复核(用户自己预先暂存的、过滤器处理后的大对象都逃不过)。 */
 export async function assertStagedSafe(cwd: string, staged: StagedEntry[], limits = { maxFiles: MAX_NEW_FILES, maxBytes: MAX_NEW_FILE_BYTES, maxEntries: PENDING_LIST_MAX }): Promise<void> {
   if (staged.length > limits.maxEntries) throw new GitActionError('too_many_files', `${staged.length} changes would be committed; the list can only show ${limits.maxEntries}`, topDirs(staged.map((e) => e.path)).join('\n'));
   const live = staged.filter((e) => e.status !== 'D');
-  const embedded = live.filter((e) => e.mode === '160000').map((e) => `${e.path}/`);
+  const links = live.filter((e) => e.mode === '160000');
+  // .gitmodules 里登记过的子模块(内嵌仓「注册成子模块」就是这样)照常提交;没登记的 gitlink 克隆下来是空目录 → 拒
+  const registered = links.length ? await submodulePaths(cwd) : new Set<string>();
+  const embedded = links.filter((e) => !registered.has(e.path)).map((e) => `${e.path}/`);
   if (embedded.length) throw new GitActionError('embedded_repo', 'The commit would contain another git repository', embedded.slice(0, 5).join('\n'));
   const added = live.filter((e) => e.status === 'A');
   if (added.length > limits.maxFiles) throw new GitActionError('too_many_files', `${added.length} new files would be committed`, topDirs(added.map((e) => e.path)).join('\n'));
@@ -384,10 +411,14 @@ function topDirs(files: string[]): string[] {
 }
 
 /** 这次提交会带上的东西:有已暂存的 → 只有已暂存的(提交也只提交它们);没有 → 全部改动(提交时 add -A)。 */
-async function commitScope(cwd: string): Promise<{ files: PendingFile[]; paths: Set<string>; staged: StagedEntry[]; changes: { entries: PendingFile[]; untracked: string[]; paths: Set<string> } | null }> {
-  const staged = await stagedEntries(cwd);
+async function commitScope(cwd: string, scope?: string): Promise<{ files: PendingFile[]; paths: Set<string>; staged: StagedEntry[]; changes: { entries: PendingFile[]; untracked: string[]; paths: Set<string> } | null }> {
+  const all = await stagedEntries(cwd);
+  // 子目录模式:`git commit` 提交的是整个 index —— 仓里别的文件夹暂存着东西,就会被一起提交。不替用户推翻那份暂存,直接拒并点名
+  const outside = all.filter((e) => !withinScope(e.path, scope));
+  if (outside.length) throw new GitActionError('staged_outside', 'Other folders of this repository have staged changes; commit or unstage them first', outside.slice(0, 10).map((e) => `${e.status} ${e.path}`).join('\n'));
+  const staged = all;
   if (staged.length) return { files: staged.map((e) => ({ code: e.status, path: e.path })), paths: new Set(staged.map((e) => e.path)), staged, changes: null };
-  const changes = await pendingChanges(cwd);
+  const changes = await pendingChanges(cwd, scope);
   return { files: changes.entries, paths: changes.paths, staged, changes };
 }
 
@@ -398,10 +429,10 @@ export function changesToken(files: PendingFile[]): string {
 }
 
 /** 面板的待提交清单(完整;超过上限时提交本来也会被拒)+ 指纹。 */
-export async function gitPending(cwd: string, trust?: boolean): Promise<{ files: PendingFile[]; total: number; stagedOnly: boolean; token: string; tooMany: boolean }> {
+export async function gitPending(cwd: string, trust?: boolean, /** 子目录模式:只列这里的改动 */ scopePath?: string): Promise<{ files: PendingFile[]; total: number; stagedOnly: boolean; token: string; tooMany: boolean }> {
   await requireRepoRoot(cwd);
   await requireTrust(cwd, 'read', trust);
-  const scope = await commitScope(cwd);
+  const scope = await commitScope(cwd, cleanScope(scopePath));
   // tooMany:清单列不全 → 这次不能在面板上提交(提交时也会拒);让面板直接说清楚,别给一个注定失败的确认按钮
   return { files: scope.files.slice(0, PENDING_LIST_MAX), total: scope.files.length, stagedOnly: scope.staged.length > 0, token: changesToken(scope.files), tooMany: scope.files.length > PENDING_LIST_MAX };
 }
@@ -440,14 +471,16 @@ export function assertWithinReviewed(entries: StagedEntry[], reviewed: Map<strin
  *  **权威复核在提交之后**:以「新提交 vs 提交前的基准」的全部改动为准 —— 每条都得在过目的清单里、类型一致,再过安全检查
  *  (凭据 / 体量 / 嵌套仓)。钩子(lint-staged 之类在已确认路径内改格式照常放行)、别的 git 进程在检查与提交之间塞进来的东西都逃不过;
  *  不过关报 hook_changed_commit 并列出来,**提交留着不撤**(为什么见提交后那段)。提交前那几道只是省得白建提交的早退。 */
-export async function gitCommit(cwd: string, message: unknown, trust?: boolean, expect?: unknown, /** git 配置里缺的提交身份(services/gitIdentity.ts 的 env);只进提交这一个子进程。 */ identityEnv?: Record<string, string>): Promise<{ sha: string; subject: string; stagedOnly: boolean }> {
+export async function gitCommit(cwd: string, message: unknown, trust?: boolean, expect?: unknown, /** git 配置里缺的提交身份(services/gitIdentity.ts 的 env);只进提交这一个子进程。 */ identityEnv?: Record<string, string>,
+  /** 子目录模式:只提交仓里这个文件夹的改动(仓里别处有暂存的 → staged_outside 拒)。 */ scopePath?: string): Promise<{ sha: string; subject: string; stagedOnly: boolean }> {
   const text = typeof message === 'string' ? message.replace(/\0/g, '').replace(/\r\n/g, '\n').trim() : '';
   if (!text) throw new GitActionError('empty_message', 'The commit message is empty');
   if (text.length > COMMIT_MESSAGE_MAX) throw new GitActionError('message_too_long', `The commit message is longer than ${COMMIT_MESSAGE_MAX} characters`);
   await assertNotSharedWorkspace(cwd);
   await requireRepoRoot(cwd);
   await requireTrust(cwd, 'write', trust);
-  const scope = await commitScope(cwd);
+  const within = cleanScope(scopePath);
+  const scope = await commitScope(cwd, within);
   if (!scope.files.length) throw new GitActionError('nothing_to_commit', 'There is nothing to commit');
   if (typeof expect === 'string' && expect !== changesToken(scope.files)) {
     throw new GitActionError('changes_changed', 'The changes are different from the list you reviewed');
@@ -463,7 +496,7 @@ export async function gitCommit(cwd: string, message: unknown, trust?: boolean, 
   let addedByUs = false;
   if (!stagedOnly) {
     await assertCommittable(cwd, scope.changes!);
-    must(await runAction(cwd, ['add', '-A']), 'add');
+    must(await runAction(cwd, ['add', '-A', ...scopeSpec(within)]), 'add');
     addedByUs = true;
   }
   try {
@@ -472,7 +505,7 @@ export async function gitCommit(cwd: string, message: unknown, trust?: boolean, 
     assertWithinReviewed(staged, reviewed);
     await assertStagedSafe(cwd, staged);
   } catch (e) {
-    if (addedByUs) await unstageAll(cwd); // 是我们暂存的就退回去:用户看到的仓库状态与点提交之前一致
+    if (addedByUs) await unstageAll(cwd, within); // 是我们暂存的就退回去:用户看到的仓库状态与点提交之前一致(子目录模式只退这个文件夹,别处的暂存不碰)
     throw e;
   }
   const committed = await runAction(cwd, ['commit', '-F', '-'], { input: `${text}\n`, env: identityEnv });
@@ -520,9 +553,12 @@ export function postCommitFailure(e: unknown): GitActionError {
 }
 
 /** 把 index 退回 HEAD(还没有提交的新仓 = 清空)。只在「index 是我们刚 add -A 的」时用。 */
-async function unstageAll(cwd: string): Promise<void> {
+async function unstageAll(cwd: string, scope?: string): Promise<void> {
   const hasHead = (await readGit(cwd, ['rev-parse', '--verify', '--quiet', 'HEAD'], { timeoutMs: 5000 })).code === 0;
-  await runAction(cwd, hasHead ? ['reset', '-q'] : ['read-tree', '--empty']).catch(() => {});
+  const args = scope
+    ? (hasHead ? ['reset', '-q', ...scopeSpec(scope)] : ['rm', '--cached', '-r', '-q', '--ignore-unmatch', ...scopeSpec(scope)])
+    : (hasHead ? ['reset', '-q'] : ['read-tree', '--empty']);
+  await runAction(cwd, args).catch(() => {});
 }
 
 // ── 新建分支 ──────────────────────────────────────────────────────────────
@@ -722,16 +758,17 @@ export async function gitPull(cwd: string, trust?: boolean): Promise<PullResult>
 // ── 生成提交信息 ──────────────────────────────────────────────────────────
 
 /** 写提交信息要看的现场:要提交的文件、diff(截断)、最近几条提交的风格。读工作区 → 过 read 级信任闸。 */
-export async function commitMessageContext(cwd: string, trust?: boolean): Promise<string> {
-  const pending = await gitPending(cwd, trust);
+export async function commitMessageContext(cwd: string, trust?: boolean, scopePath?: string): Promise<string> {
+  const pending = await gitPending(cwd, trust, scopePath);
+  const spec = scopeSpec(cleanScope(scopePath));
   if (!pending.total) throw new GitActionError('nothing_to_commit', 'There is nothing to commit');
   const base = await diffBase(cwd);
   const hasHead = base === 'HEAD';
   // 只提交已暂存的时候,diff 也只看已暂存的,别让模型描述不会进这次提交的改动
   const scope = pending.stagedOnly ? ['--cached'] : [];
   const [stat, patch, log] = await Promise.all([
-    readGit(cwd, ['diff', ...scope, base, '--stat', '--no-color'], { timeoutMs: 10_000 }),
-    readGit(cwd, ['diff', ...scope, base, '--no-color', '--no-ext-diff', '--no-textconv', '-U2'], { timeoutMs: 10_000 }),
+    readGit(cwd, ['diff', ...scope, base, '--stat', '--no-color', ...spec], { timeoutMs: 10_000 }),
+    readGit(cwd, ['diff', ...scope, base, '--no-color', '--no-ext-diff', '--no-textconv', '-U2', ...spec], { timeoutMs: 10_000 }),
     hasHead ? readGit(cwd, ['log', '-8', '--format=%s'], { timeoutMs: 5000 }) : null,
   ]);
   const parts: string[] = [];
@@ -764,10 +801,10 @@ export function cleanCommitMessage(raw: string): string {
 }
 
 /** 用会话自己的模型写一条提交信息。这条路不经 agent loop:计费照 visionService 同款三步(预检 → 扣费 → 记用量),漏了就是免费 LLM。 */
-export async function generateCommitMessage(cwd: string, opts: { userId: string; modelId: string | null; appId: string; trust?: boolean; signal?: AbortSignal }): Promise<string> {
+export async function generateCommitMessage(cwd: string, opts: { userId: string; modelId: string | null; appId: string; trust?: boolean; signal?: AbortSignal; scope?: string }): Promise<string> {
   const modelId = (opts.modelId || '').trim();
   if (!modelId) throw new GitActionError('no_model', 'This conversation has no model yet');
-  const context = await commitMessageContext(cwd, opts.trust);
+  const context = await commitMessageContext(cwd, opts.trust, opts.scope);
   const billing = deps().billing;
   const user = (await deps().brain.users.getUserById(opts.userId).catch(() => null)) ?? { id: opts.userId, username: 'local' };
   const estCost = await billing.calculateCost(modelId, Math.ceil(context.length / 3), MESSAGE_MAX_TOKENS);
@@ -795,4 +832,70 @@ export async function generateCommitMessage(cwd: string, opts: { userId: string;
   const message = cleanCommitMessage(String(res?.content || ''));
   if (!message) throw new GitActionError('empty_message', 'The model returned an empty commit message');
   return message;
+}
+
+// ── 内嵌仓的三个出路(11-07 多仓 Git)───────────────────────────────────────
+
+export type EmbeddedHow = 'exclude' | 'ignore' | 'submodule';
+
+/** 仓里一个没登记的内嵌仓(未跟踪、里面有 .git 的文件夹)怎么处理:
+ *   - exclude   = 单独管理:写进 `.git/info/exclude`(只在这台电脑上不收,不进提交);它照样出现在仓库清单里,单独提交推送;
+ *   - ignore    = 写进仓根的 `.gitignore`(随下一次提交一起进去,别人克隆也不收);
+ *   - submodule = `git submodule add <它自己的远端> <路径>`(它得先有远端;地址照「连接远端」的规矩过滤,不收本地路径 / ext::)。
+ *  path 必须是 status 里真报出来的那个未跟踪文件夹(相对仓根,以 / 结尾),而且里面真有 .git —— 别的一律 not_embedded。 */
+export async function gitEmbedded(cwd: string, rawPath: unknown, how: unknown, trust?: boolean): Promise<{ path: string; how: EmbeddedHow }> {
+  if (how !== 'exclude' && how !== 'ignore' && how !== 'submodule') throw new GitActionError('invalid_action', 'Unknown way to handle the inner repository');
+  await requireRepoRoot(cwd);
+  await requireTrust(cwd, 'read', trust);
+  const text = typeof rawPath === 'string' ? rawPath.replace(/\\/g, '/').trim() : '';
+  const dir = text.replace(/\/+$/, '');
+  if (!dir || dir.startsWith('/') || /[\u0000-\u001f]/.test(dir) || dir.split('/').some((p) => !p || p === '.' || p === '..')) throw new GitActionError('not_embedded', 'That folder is not an inner repository', text);
+  const status = must(await readGit(cwd, ['status', '--porcelain=v1', '-z', '--untracked-files=normal', '--', `:(top,literal)${dir}`]), 'status');
+  const listed = status.stdout.split('\0').some((f) => f === `?? ${dir}/`);
+  const hasGit = await fs.lstat(path.join(cwd, ...dir.split('/'), '.git')).then(() => true, () => false);
+  if (!listed || !hasGit) throw new GitActionError('not_embedded', 'That folder is not an inner repository', `${dir}/`);
+  // 忽略规则里 * ? [ ] \ ! # 和结尾空格有特殊含义:照字面写要转义,否则 lib[1] 会去匹配 lib1(Codex 评审)
+  const literal = dir.replace(/[\\*?[\]!#]/g, (c) => `\\${c}`).replace(/ +$/, (sp) => sp.replace(/ /g, '\\ '));
+  const line = `/${literal}/`;
+  const appendLine = async (file: string): Promise<void> => {
+    // 不跟符号链接:.gitignore / info/exclude 是指到别处的链接时,追加会写到仓外面去
+    const st = await fs.lstat(file).catch((e: NodeJS.ErrnoException) => { if (e.code === 'ENOENT') return null; throw e; });
+    if (st && !st.isFile()) throw new GitActionError('git_failed', 'The ignore file is not a regular file', path.basename(file));
+    const cur = st ? await fs.readFile(file, 'utf8') : '';
+    if (cur.split(/\r?\n/).some((l) => l.trim() === line || l.trim() === `${literal}/` || l.trim() === `/${literal}`)) return;
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.appendFile(file, `${cur && !cur.endsWith('\n') ? '\n' : ''}${line}\n`);
+  };
+  if (how === 'exclude') {
+    const p = must(await readGit(cwd, ['rev-parse', '--git-path', 'info/exclude'], { timeoutMs: 5000 }), 'rev-parse').stdout.trim();
+    await appendLine(path.resolve(cwd, p));
+  } else if (how === 'ignore') {
+    await assertNotSharedWorkspace(cwd);
+    await appendLine(path.join(cwd, '.gitignore'));
+  } else {
+    await assertNotSharedWorkspace(cwd);
+    await requireTrust(cwd, 'write', trust);
+    const inner = path.join(cwd, ...dir.split('/'));
+    const names = (await readGit(inner, ['remote'], { timeoutMs: 5000 })).stdout.split('\n').map((r) => r.trim()).filter((r) => r && !r.startsWith('-'));
+    const pick = names.includes('origin') ? 'origin' : names[0];
+    const raw = pick ? (await readGit(inner, ['remote', 'get-url', pick], { timeoutMs: 5000 })).stdout.split('\n')[0].trim() : '';
+    const url = submoduleUrl(raw);
+    if (!url) throw new GitActionError('no_remote', 'The inner repository has no remote that can be registered as a submodule', raw ? maskUrl(raw) : undefined);
+    // 那里已经是个仓:git 只登记(.gitmodules + gitlink),不克隆
+    must(await runAction(cwd, ['submodule', 'add', '--', url, dir], { timeoutMs: ACTION_TIMEOUT_MS }), 'submodule add');
+  }
+  return { path: `${dir}/`, how };
+}
+const maskUrl = (url: string): string => url.replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/@\s]+@/i, '$1').replace(/[?#].*$/, '');
+/** 写进 .gitmodules(会被提交、推出去)的地址:去掉 https 里的账号口令;带查询串 / 片段的(常夹着 token)不收。 */
+function submoduleUrl(raw: string): string | null {
+  const url = remoteAddress(raw);
+  if (!url) return null;
+  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(url)) return url; // scp 式 git@host:path 没有口令可带
+  let u: URL;
+  try { u = new URL(url); } catch { return null; }
+  if (u.search || u.hash) return null;
+  if (u.protocol === 'ssh:') { u.password = ''; return u.toString(); } // ssh 的用户名(git@)要留着
+  u.username = ''; u.password = '';
+  return u.toString();
 }

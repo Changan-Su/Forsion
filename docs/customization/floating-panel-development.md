@@ -48,6 +48,8 @@ ctx.registerCommand({
 
 `mount(el, view)` 在该表面收到 `view.surface === 'floating'`。`getParams`、`setParams`、`onParamsChanged` 与主面板一致；`showInMainPanel()` 把当前参数交回主工作区。Floating 不提供 `extendView`。窗口关闭或插件停用时，宿主调用 `mount` 返回的清理函数，所有订阅都要在这个函数里清掉；已打开的插件视图被反注册后，对应窗口/网页浮层自动关闭。
 
+2.13.8 起也可以写成 `ctx.workspace.open(viewId, { layer: { float: 'desktop' }, form: 'main' })`,开的是同一扇(窗口 id 同为视图类型,带 `key` 时再加上 key)。Floating Panel 缺省**不置顶**:要盖在别的应用的窗口上,写 `layer: { float: 'desktop', pin: true }`;之后不带 `pin` 再开这一扇会撤掉置顶。视图声明了 `forms` 且不支持 `main` 时,这一句按回落规则开成 Mini。规则见[插件开发](./plugin-development.md)「统一打开入口」。
+
 插件应 feature-detect `ctx.openFloatingPanel?.(...)` 以兼容旧宿主。当前桌面和 Web 都支持 Floating；移动端没有桌面悬浮语义，插件应继续提供正常主视图作为回退。
 
 ## 验证

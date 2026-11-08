@@ -1,8 +1,9 @@
 /**
  * 电脑历史的说明弹窗。consent = 从关到开的同意说明(同意那一段 + 完整说明 + 「取消 / 开启记录」);否则只看完整说明。
- * 首启引导团队屏的「详情」、主页那一行的「开启…」、旧引导「权限与数据」页(只剩电脑历史台架在用)共用这一份;
+ * 首启引导团队屏的「详情」(只看说明)和主页那一行的「开启…」(同意说明)共用这一份;
  * 词条与设置页同一份(computerHistoryMessages + ComputerHistoryAbout),这里不另写隐私口径。
- * 台架靠的名字:.ob-history-dialog / .ob-history-consent / .ob-history-dialog-foot(onboarding-history.check、check:first-run)。
+ * 台架靠的名字:.ob-history-dialog / .ob-history-consent / .ob-history-dialog-foot / .ob-history-dialog-error
+ * (check:onboardinghistory 在 computer-history-harness 的 ?ask / ?dialog 里量,check:first-run 在真应用里走)。
  */
 import React, { useEffect, useRef } from 'react'
 import { Loader2, Play, X } from 'lucide-react'

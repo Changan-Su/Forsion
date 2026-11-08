@@ -10,7 +10,8 @@ import { Plus, Bot, FileText, Globe, TerminalSquare, Search, ChevronDown, ArrowU
 import { useApp } from '../stores/appStore'
 import { hasNativeFeature, amadeusAvailable } from '../features/runtime'
 import { readTanguShell } from '../amadeus/plugins/tanguSeam'
-import { useWorkspace, useSpaceStore, useRibbonStore, getActiveSpace, switchSpace, getView, label, startOpenDrag, rankIds, OverlayAt, formatHotkey, effectiveHotkey, isMacPlatform, type PersistedPanel } from '@lcl/engine'
+import { useWorkspace, useSpaceStore, useRibbonStore, getActiveSpace, switchSpace, getView, label, startOpenDrag, rankIds, OverlayAt, formatHotkey, effectiveHotkey, isMacPlatform, objectContextMenuHandler, type PersistedPanel } from '@lcl/engine'
+import { spaceRef } from '../objects/space'
 import { AMADEUS_ENABLED } from '../spaces'
 import { pluginOfSpace } from '../userSpaces'
 import { homeSlotSpaceId } from '../homeSlot'
@@ -260,7 +261,16 @@ export function NewTabView({ leaf }: ViewProps) {
       {it.meta && <span className="nt-meta">{it.meta}</span>}
     </button>
   )
-  /** Space 格子:右键、或(多视图时)点右边的箭头,出展开菜单。事件不让冒到 window —— 那边的监听会把刚开的菜单关掉。 */
+  /** Space 格子:(多视图时)点右边的箭头出展开菜单(视图可拖);右键出 Space 的对象菜单(和 Ribbon 上同一份),
+   *  本处那一节列这个 Space 的视图。展开菜单的事件不让冒到 window —— 那边的监听会把刚开的菜单关掉。 */
+  const spaceMenu = (it: Item) => objectContextMenuHandler(() => ({
+    refs: [spaceRef(it.spaceId!)],
+    place: { kind: 'newtab' },
+    placeSections: () => [{
+      title: t('newtab.moreViews', { space: it.label }),
+      items: (it.views ?? []).map((v) => ({ id: `view:${v.key}`, label: v.label, icon: v.icon, run: () => pick(v) })),
+    }],
+  }))
   const tile = (it: Item): ReactNode => {
     if (!it.views) return <div className="nt-tile" key={it.key}>{card(it, 'nt-tilebtn')}</div>
     const more = it.views.length > 1
@@ -268,7 +278,11 @@ export function NewTabView({ leaf }: ViewProps) {
       <div
         key={it.key}
         className={`nt-tile${more ? ' has-more' : ''}`}
-        onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setMenu({ x: e.clientX, y: e.clientY, item: it }) }}
+        onContextMenu={(e) => {
+          setMenu(null)
+          if (it.spaceId) spaceMenu(it)(e)
+          else { e.preventDefault(); e.stopPropagation(); setMenu({ x: e.clientX, y: e.clientY, item: it }) }
+        }}
       >
         {card(it, 'nt-tilebtn')}
         {more && (

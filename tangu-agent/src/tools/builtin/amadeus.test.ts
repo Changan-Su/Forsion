@@ -161,6 +161,81 @@ describe('calendar tools', () => {
   });
 });
 
+// 待办(11-07):用户的待办列表 = 带勾选列的日历表里的行,有没有日期都算(desktop TodoListView);勾选列 = 完成。
+// 手机上 Agent 把两条无日期待办写成了一篇只有 `- [ ]` 的笔记:create 必须有日期、list 跳过无日期的行,两头都不通。
+describe('to-dos: rows of a calendar with a checkbox column (host)', () => {
+  const humanFile = () => path.join(humanDir(), 'CALENDAR.db');
+  const humanRows = async (): Promise<any[]> => JSON.parse(await fs.readFile(humanFile(), 'utf8')).rows;
+  const idOf = (out: string): string => /id=(\w+)/.exec(out)![1];
+
+  it('a to-do without a date: no date cell, not ticked, listed after the dated rows with start null', async () => {
+    const out = await run('amadeus_create_event', { title: '开发票' });
+    expect(out).toContain('Created to-do "开发票" (no date)');
+    expect(out).toContain('in "My calendar"');
+    const id = idOf(out);
+    // 日期格不写(不是空串、不是今天),勾选格也不写 —— 和表格里从没填过的行一个样
+    expect((await humanRows()).find((r) => r.id === id).cells).toEqual({ name: '开发票' });
+
+    const all = JSON.parse(await run('amadeus_list_events'));
+    expect(all[all.length - 1]).toEqual({ calendar: 'My calendar', id, title: '开发票', start: null, allDay: null, done: false, props: {}, path: 'human://CALENDAR.db' });
+    expect(all.findIndex((e: any) => e.start === null)).toBeGreaterThan(all.findIndex((e: any) => e.title === '既有会议')); // 未排期沉底
+    // 给了日期范围:只要范围里的;显式 include_undated 再带上
+    expect(JSON.parse(await run('amadeus_list_events', { from: '2026-07-01', to: '2026-07-31' })).some((e: any) => e.id === id)).toBe(false);
+    expect(JSON.parse(await run('amadeus_list_events', { from: '2026-07-01', to: '2026-07-31', include_undated: true })).some((e: any) => e.id === id)).toBe(true);
+    expect(await run('amadeus_list_events', { include_undated: false, calendar: 'My calendar' })).toBe('No events or to-dos found for that query.');
+
+    const cals = JSON.parse(await run('amadeus_list_calendars'));
+    expect(cals[0]).toMatchObject({ path: 'human://CALENDAR.db', events: 0, todoColumn: 'Done', undatedTodos: 1 });
+    expect(await run('amadeus_delete_event', { calendar: 'My calendar', eventId: id })).toContain('Deleted');
+  }, 30_000);
+
+  it('done ticks the first checkbox column and unticking removes the cell; the column is not repeated in props', async () => {
+    const id = idOf(await run('amadeus_create_event', { title: 'Pay rent', done: true }));
+    expect((await humanRows()).find((r) => r.id === id).cells).toEqual({ name: 'Pay rent', done: true });
+    await run('amadeus_edit_event', { calendar: 'human://CALENDAR.db', eventId: id, done: false });
+    expect((await humanRows()).find((r) => r.id === id).cells).toEqual({ name: 'Pay rent' }); // = 桌面取消勾选(setAggCell undefined)
+    await run('amadeus_edit_event', { calendar: 'My calendar', eventId: id, done: 'true' }); // 模型偶尔把布尔写成字符串
+    expect(JSON.parse(await run('amadeus_list_events')).find((e: any) => e.id === id)).toMatchObject({ done: true, props: {} });
+    await run('amadeus_delete_event', { calendar: 'My calendar', eventId: id });
+
+    // 库里的旧日历:勾选列是内置 todo 类型,叫「完成」(desktop resolveBaseType('todo') === 'checkbox')
+    const vid = idOf(await run('amadeus_create_event', { calendar: 'Calendar.db', title: '已办', start: '2026-07-20', done: true }));
+    const vdb = JSON.parse(await fs.readFile(path.join(vault, 'Calendar.db'), 'utf8'));
+    expect(vdb.rows.find((r: any) => r.id === vid).cells).toEqual({ c1: '已办', c2: '2026-07-20', c3: true });
+    const ev = JSON.parse(await run('amadeus_list_events', { calendar: '我的日历' })).find((e: any) => e.id === vid);
+    expect(ev).toMatchObject({ start: '2026-07-20', allDay: true, done: true, props: {} });
+    await run('amadeus_delete_event', { calendar: '我的日历', eventId: vid });
+  }, 30_000);
+
+  it('start: "" turns an event into an undated to-do; an end without a start is refused', async () => {
+    const id = idOf(await run('amadeus_create_event', { title: 'Call the bank', start: '2026-07-21T09:00', end: '2026-07-21T09:30' }));
+    await run('amadeus_edit_event', { calendar: 'My calendar', eventId: id, start: '' });
+    expect((await humanRows()).find((r) => r.id === id).cells).toEqual({ name: 'Call the bank' });
+    await expect(run('amadeus_edit_event', { calendar: 'My calendar', eventId: id, end: '2026-07-22' })).rejects.toThrow(/no date yet/);
+    await run('amadeus_edit_event', { calendar: 'My calendar', eventId: id, start: '2026-07-23' }); // 再排上日期
+    expect((await humanRows()).find((r) => r.id === id).cells).toEqual({ name: 'Call the bank', date: '2026-07-23' });
+    await expect(run('amadeus_create_event', { title: 'x', end: '2026-07-22' })).rejects.toThrow(/needs a start/);
+    await run('amadeus_delete_event', { calendar: 'My calendar', eventId: id });
+  }, 30_000);
+
+  it('a calendar without a checkbox column has no to-dos: undated rows are refused there and its undated rows are not listed', async () => {
+    const file = path.join(vault, 'Trips.db');
+    const plain = { version: 1, name: 'Trips', columns: [{ id: 't', name: 'Name', type: 'text' }, { id: 'd', name: 'When', type: 'calendarDate' }], rows: [{ id: 'nodate', cells: { t: 'Someday' } }] };
+    await fs.writeFile(file, `${JSON.stringify(plain, null, 2)}\n`);
+    try {
+      await expect(run('amadeus_create_event', { calendar: 'Trips', title: 'Lisbon' })).rejects.toThrow(/no checkbox column/);
+      await expect(run('amadeus_create_event', { calendar: 'Trips', title: 'Lisbon', start: '2026-09-01', done: true })).rejects.toThrow(/no checkbox column/);
+      await expect(run('amadeus_edit_event', { calendar: 'Trips', eventId: 'nodate', done: true })).rejects.toThrow(/no checkbox column/);
+      expect(JSON.parse(await fs.readFile(file, 'utf8'))).toEqual(plain); // 一个字节都没动
+      expect(await run('amadeus_list_events', { calendar: 'Trips' })).toBe('No events or to-dos found for that query.');
+      const trips = JSON.parse(await run('amadeus_list_calendars')).find((c: any) => c.name === 'Trips');
+      expect(trips).toEqual({ name: 'Trips', path: 'Trips.db', events: 0, columns: [{ name: 'Name', type: 'text' }, { name: 'When', type: 'calendarDate' }] });
+    } finally {
+      await fs.rm(file, { force: true });
+    }
+  });
+});
+
 describe('cloud backend (execMode≠host → deps().brain.amadeus)', () => {
   // 内存版云 vault:seq 单调递增,baseSeq 不符 → 409 同款 AmadeusConflictError(带最新 seq+content)。
   const store = new Map<string, { content: string; seq: number }>();
@@ -262,6 +337,13 @@ describe('cloud backend (execMode≠host → deps().brain.amadeus)', () => {
     expect(events[0].calendar).toBe('CloudCal');
     expect(await runCloud('amadeus_delete_event', { calendar: 'CloudCal', eventId: events[0].id })).toContain('Deleted');
     expect(JSON.parse(store.get('Cloud.db')!.content).rows).toHaveLength(0);
+  });
+
+  it('a cloud vault calendar without a checkbox column takes no undated or ticked rows (they would vanish)', async () => {
+    const before = store.get('Cloud.db')!;
+    await expect(runCloud('amadeus_create_event', { title: '开发票' })).rejects.toThrow(/no checkbox column/);
+    await expect(runCloud('amadeus_create_event', { title: '开发票', start: '2026-07-10', done: true })).rejects.toThrow(/no checkbox column/);
+    expect(store.get('Cloud.db')).toEqual(before);
   });
 
   // ── 画布覆盖闸(codex 2026-08-17:P1 fail-open + P3 正则越界)────────────────────
@@ -424,6 +506,34 @@ describe('cloud default calendar (brain.amadeus → /agent/human/CALENDAR.db)', 
     expect(writes[0].data.columns.map((c: any) => c.id)).toEqual(['name', 'date', 'done']);
     expect(writes[0].data.rows[0].cells).toMatchObject({ name: 'Dentist', date: '2026-12-03T10:00' });
     expect(vault.size).toBe(0);
+  });
+
+  // 手机云会话走的就是这条路(PUT /api/agent/human/CALENDAR.db):无日期待办、勾选、列出都要和本机一样
+  it('to-dos on the cloud default calendar: undated create, listing with start null, done written and cleared', async () => {
+    const out = await runCloud('amadeus_create_event', { title: '开发票' });
+    expect(out).toContain('Created to-do "开发票" (no date)');
+    const id = /id=(\w+)/.exec(out)![1];
+    expect(writes[0].version).toBeNull();
+    expect(writes[0].data.rows[0]).toEqual({ id, cells: { name: '开发票' } });
+    await runCloud('amadeus_create_event', { title: 'Dentist', start: '2026-12-03T10:00' });
+    expect(JSON.parse(await runCloud('amadeus_list_events')).map((e: any) => [e.title, e.start, e.done])).toEqual([
+      ['Dentist', '2026-12-03T10:00', false],
+      ['开发票', null, false], // 未排期沉底
+    ]);
+    expect(JSON.parse(await runCloud('amadeus_list_events', { from: '2026-12-01', to: '2026-12-31' })).map((e: any) => e.title)).toEqual(['Dentist']);
+
+    await runCloud('amadeus_edit_event', { calendar: 'My calendar', eventId: id, done: true });
+    expect(human!.data.rows.find((r: any) => r.id === id).cells).toEqual({ name: '开发票', done: true });
+    expect(writes[writes.length - 1].version).toBe('v2'); // 照旧按版本写回
+    await runCloud('amadeus_edit_event', { calendar: 'My calendar', eventId: id, done: false });
+    expect(human!.data.rows.find((r: any) => r.id === id).cells).toEqual({ name: '开发票' });
+  });
+
+  it('a cloud default calendar without a checkbox column (an adopted web calendar) refuses undated rows and lists none', async () => {
+    human = { data: cloudCal([{ id: 'u', cells: { n: 'No date here' } }]), version: 'v0', legacy: null };
+    await expect(runCloud('amadeus_create_event', { title: '开发票' })).rejects.toThrow(/no checkbox column/);
+    expect(writes).toEqual([]);
+    expect(await runCloud('amadeus_list_events')).toBe('No events or to-dos found for that query.');
   });
 
   it('the name of a new calendar follows the language the client reported, not the worker', async () => {

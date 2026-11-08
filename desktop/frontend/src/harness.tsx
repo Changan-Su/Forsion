@@ -77,6 +77,11 @@ import { routeNote } from './amadeus/unified/router'
 import { SEG_SLOT } from './amadeus/unified/CanvasModeSeg'
 import { useUiOverlay } from './amadeusOverlayStore'
 import './tangu/store/standalone' // 不走 installEngine:自己装 Tangu 的 store 半身(界面热更新 3c);排在最后,别早于上面那些打桩的 import
+import { installObjectLayer } from './objects/install'
+
+// LCL 对象层的宿主装配(能力、确认框、失败提示):生产里在 installEngine 里调,harness 不走 installEngine,自己调同一个 ——
+// 不装的话对象菜单拿到的是「什么能力都没有」的缺省宿主,「在文件管理器中显示」这类按能力列的项全缺。
+installObjectLayer()
 
 // ExcalidrawEmbed 平时干这件事;harness 直挂画布,得自己设(否则字体去 CDN 拉,CSP 拦)。
 ;(window as unknown as { EXCALIDRAW_ASSET_PATH?: string }).EXCALIDRAW_ASSET_PATH = new URL('excalidraw/', document.baseURI).href
