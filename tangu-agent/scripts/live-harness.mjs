@@ -73,6 +73,11 @@
  *                                                              改 services/childSessions.ts / tools/builtin/childSessions.ts 的措辞后跑
  *   npm run live:harness -- --only nestedmsg                  # 会话互通(10-28,对齐 Claude):① 主会话先聊出一个事实 → 开 context fork 的子会话,子会话答得出那个事实;
  *                                                              ② 两个兄弟子会话,一个读口令后 send_to_session 发给另一个,另一个收到 <session_message> 后把口令写进文件。改会话互发 / fork 后跑
+ *   npm run live:harness -- --only handoff                    # 挪出去(11-08,方案「会话互通升级」):逐个读 6 个文件写摘要,跑到一半插话 ——
+ *                                                              A 问个不相干的(SSH 端口)→ 调 hand_off_task、挪出去的会话把 6 行写完、原会话答了端口;
+ *                                                              B 负对照「第 3 个写短点」→ 不挪、本会话写完;C 「另起话题」(steer newTopic)→ 挪。改 hand_off_task / NEW_TOPIC_NOTE / 持久性段后跑
+ *   npm run live:harness -- --only crosstree                  # 跨树互发(11-08):会话 Q 记一个事实;另一棵树里的 S 用 search_sessions 找到 Q、send_to_session 去问,
+ *                                                              Q 收到 relation="peer" 的消息并回发,S 收到回信里有答案。改 send_to_session / peer 规则后跑
  *   npm run live:harness -- --only ultra --model xai/grok-4.7  # Ultra 档(09-27):改 ULTRA_SECTION / delegate 描述 / 子代理成本闸后跑:可并行的题一轮派 ≥2 个且真并行、琐碎题 0 个、不开 Ultra 的对照只记数
  *   npm run live:harness -- --only fast --model codex/gpt-6-luna  # Fast 档(10-25,对标 Codex /fast):开了的会话 llm-debug 行带 service_tier=priority 且答题照常,没开的不带(改 Fast 下发 / Codex 目录解析后跑;只对目录列了 Fast 的 Codex 订阅模型有意义)
  *   TANGU_CONTEXT_WINDOW_TOKENS=100000 npm run live:harness -- --only ultra --model codex/gpt-5.6-luna  # Ultra 拉满上下文(09-27):上限压到 100k,族表 272k 的模型 Ultra 两跑窗口须 272k、对照 100k
@@ -256,6 +261,7 @@ const AUTH = resolve(opt('auth', process.env.TANGU_LIVE_AUTH || join(homedir(), 
 const KEYS = ['realtime', 'voiceclone', 'personas', 'names', 'rename', 'selfschedule', 'selfmodel', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'parkedask', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'suggest', 'browsertabs', 'officedoc', 'ultra', 'fast', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'gitpush', 'multirepo', 'gitpublish', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask', 'plugin', 'skillpick', 'pluginlook', 'settingsnav', 'appsettings', 'imgwindow', 'viewimage', 'imgtools', 'account', 'webpublish', 'nested', 'branch', 'musedm', 'humandims', 'pluginsandbox', 'musestarters', 'pluginui'];
 KEYS.push('bluebird');
 KEYS.push('nestedmsg');
+KEYS.push('handoff', 'crosstree');
 KEYS.push('signals');
 KEYS.push('decisiongate');
 KEYS.push('musechat');
@@ -316,6 +322,7 @@ KEYS.push('subresume'); OPT_IN.add('subresume'); // --only subresume:改 delegat
 KEYS.push('taskoutcomes'); OPT_IN.add('taskoutcomes'); // --only taskoutcomes: actual hashes / approval identity / duplicate writes, classified separately from model narration.
 OPT_IN.add('bluebird'); // --only bluebird --plugin-src <bundle>: real instruction-following on supplied transcripts
 OPT_IN.add('nestedmsg'); // --only nestedmsg: fork 上下文 + 兄弟会话传话(10-28)
+OPT_IN.add('handoff'); OPT_IN.add('crosstree'); // --only handoff,crosstree: 挪出去 + 跨树互发(11-08)
 OPT_IN.add('signals');
 OPT_IN.add('decisiongate'); // --only decisiongate:Historian 决策闸(beta);要 TANGU_LIVE_CLOUD_URL 带决策模型,--decision-gate off = 负对照
 OPT_IN.add('musechat');
@@ -1650,7 +1657,7 @@ async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {
           if (e.type === 'token' || e.type === 'reasoning' || e.type === 'tool_stream') { if (ev.ttftMs == null) ev.ttftMs = Date.now() - t0; if (e.type === 'tool_stream' && p.name) (ev.streamAt ||= {})[p.name] ??= Date.now() - t0; if (e.type === 'token') { ev.tokens += 1; if (ev.firstTokenMs == null) ev.firstTokenMs = Date.now() - t0; } }
           // toolArgs:参数原文(control 场景要看 B 腿的 run_bash 到底跑了什么命令 —— 只记工具名的话事后只看得见「run_bash」)。
           // 不进 results.json(record 只收场景返回的字段);大小由模型单次输出封顶。
-          else if (e.type === 'tool_call') { ev.toolCalls.push(p.name || '?'); ev.toolCallIds.push(p.id); ev.toolArgs.push({ id: p.id, name: p.name || '?', args: toolArgsText(p.arguments), arguments: typeof p.arguments === 'string' ? p.arguments : JSON.stringify(p.arguments || {}), at: Date.now() }); }
+          else if (e.type === 'tool_call') { ev.toolCalls.push(p.name || '?'); ev.toolCallIds.push(p.id); ev.toolArgs.push({ id: p.id, name: p.name || '?', args: toolArgsText(p.arguments), arguments: typeof p.arguments === 'string' ? p.arguments : JSON.stringify(p.arguments || {}), at: Date.now() }); if (opts.onToolCall) await opts.onToolCall(p, runId, ev); }
           // 假手机:照契约 §3.1 先核 body(v / runId / ackId / ns),再 sha256(body 原串)→ claim → 按 op 回预设结果。
           // 应答器不在 / 核不过 → 什么都不回(= 真原生的行为:不 claim、不执行、不回执)。
           else if (e.type === 'client_cmd') ev.clientCmds.push(await phoneResponder(runId, p, opts.phone));
@@ -6712,6 +6719,103 @@ Then reply with only the command output.`,
       output: `【fork 子会话】${childText}\n\n【start_session 参数】${startArgs.join('\n')}\n\n【兄弟 · 主会话】${ev3.content}\n---\n${pAfter}\n\n【写口令 收到的】${wMsgs.filter((m) => m.role === 'user').map((m) => String(m.content).slice(0, 600)).join('\n---\n')}`,
       toolCalls: [...ev1.toolCalls, ...ev2.toolCalls, ...ev3.toolCalls],
       ttftMs: ttft(ev2), tokens: [ev1, ev2, ev3].reduce((n, e) => n + (tokensOf(e) || 0), 0) || null,
+    };
+  });
+
+  // ── handoff:挪出去(11-08,方案 docs/ToBeImproved/会话互通升级方案_2026-11-08 A + C)──
+  // 判据看工具与落盘(hand_off_task 调没调、notes.md 由谁写满),不看措辞。B 腿是负对照:改手头任务的话不许挪。
+  await scenario('handoff', 'handoff 挪出去:做到一半插一句不相干的 → 手头的挪成独立会话接着做;改手头任务的话不挪;「另起话题」必挪', async () => {
+    const sessionsOf = async () => (await api('/agent/sessions?limit=500')).sessions;
+    const msgsOf = async (sid) => (await api(`/agent/sessions/${sid}/messages?limit=300`)).messages || [];
+    const settleAll = async (ids, ms) => {
+      const t0 = Date.now();
+      while (Date.now() - t0 < ms) {
+        await new Promise((r) => setTimeout(r, 5000));
+        const ss = await sessionsOf();
+        if (ids().every((id) => !ss.find((x) => x.id === id)?.busy)) {
+          await new Promise((r) => setTimeout(r, 4000));
+          const again = await sessionsOf();
+          if (ids().every((id) => !again.find((x) => x.id === id)?.busy)) return again;
+        }
+      }
+      return null;
+    };
+    const FILES = ['日历', '闪念盒', '商店', '同步', '主页', '白板'];
+    const leg = async (tag, steer, newTopic) => {
+      const root = join(workspace, `handoff-${tag}`);
+      mkdirSync(root, { recursive: true });
+      FILES.forEach((f, i) => writeFileSync(join(root, `change-${i + 1}.md`), `# ${f}\n\n${f}这一版的改动:${'修了几处显示问题,加了一个设置项。'.repeat(4)}\n`));
+      const S = `live-handoff-${tag}-${Date.now()}`;
+      const TASK = `把 handoff-${tag}/ 下 change-1.md 到 change-6.md 六个文件按顺序一个一个处理:每读完一个,就往 handoff-${tag}/notes.md 末尾追加一行「<文件名>:<一句话摘要>」,`
+        + '读一个写一行,不要先全部读完再写。六行都写完以后告诉我写好了。';
+      let steered = null;
+      const ev = await run(S, TASK, 600_000, { approvalMode: 'full-auto' }, undefined, undefined, undefined, undefined, {
+        // 第 2 个工具调用时插话(此时最多写了第 1 行,任务明显没做完)
+        onToolCall: async (_p, runId, e) => {
+          if (steered || e.toolCalls.length !== 2) return;
+          steered = await api(`/agent/runs/${runId}/steer`, { method: 'POST', body: JSON.stringify({ message: steer, ...(newTopic ? { newTopic: true } : {}) }) }).catch((err) => ({ error: String(err.message) }));
+        },
+      });
+      const handArgs = (ev.toolArgs || []).filter((t) => t.name === 'hand_off_task');
+      const ss = await sessionsOf();
+      const moved = ss.filter((x) => x.parent_session_id === S);
+      const done = await settleAll(() => [S, ...moved.map((m) => m.id)], 480_000);
+      let notes = '';
+      try { notes = readFileSync(join(root, 'notes.md'), 'utf8'); } catch { /* 没写 */ }
+      const lines = notes.split('\n').filter((l) => /change-\d/.test(l));
+      const covered = new Set(lines.map((l) => (l.match(/change-(\d)/) || [])[1]).filter(Boolean)).size;
+      const movedCfg = moved.map((m) => { try { return typeof m.agent_config === 'string' ? JSON.parse(m.agent_config) : m.agent_config || {}; } catch { return {}; } });
+      const backLine = (await msgsOf(S)).some((m) => m.role === 'user' && String(m.content).includes('A task you handed off earlier'));
+      return { S, ev, steered, handArgs, moved, movedCfg, done: !!done, covered, notes, backLine };
+    };
+    const a = await leg('a', '诶顺便问一下,git 的 SSH 默认端口是多少?我 clone 一直超时。', false);
+    const b = await leg('b', '第 3 个文件的摘要写短一点,十个字以内。', false);
+    const c = await leg('c', '今天适合出去跑步吗?随便聊聊。', true);
+    const okA = !a.ev.error && !a.steered?.error && a.handArgs.length === 1 && a.moved.length === 1 && a.movedCfg[0]?.handoffFrom === a.S && a.covered === 6 && /22/.test(a.ev.content) && a.backLine;
+    const okB = !b.ev.error && !b.steered?.error && b.handArgs.length === 0 && b.moved.length === 0 && b.covered === 6;
+    const okC = !c.ev.error && !c.steered?.error && c.handArgs.length === 1 && c.moved.length === 1 && c.covered === 6;
+    const line = (x, name) => `【${name}】插话${x.steered?.error ? `失败(${x.steered.error})` : '已送'};hand_off_task ×${x.handArgs.length};挪出 ${x.moved.length} 个${x.movedCfg[0]?.handoffFrom ? '(handoffFrom 对)' : ''};notes 覆盖 ${x.covered}/6;${x.done ? '都收尾' : '没收完!'}${x.backLine ? ';原会话收到一行回报' : ''}`;
+    return {
+      ok: okA && okB && okC,
+      detail: `${line(a, 'A 不相干 → 挪')}${okA ? '' : ' ✗'} ${line(b, 'B 改手头 → 不挪(负对照)')}${okB ? '' : ' ✗'} ${line(c, 'C 另起话题 → 挪')}${okC ? '' : ' ✗'};A 答了端口:${/22/.test(a.ev.content) ? '是' : '否!'}`,
+      output: ['a', 'b', 'c'].map((k, i) => { const x = [a, b, c][i]; return `【${k.toUpperCase()} 原会话最后的回答】${x.ev.content}\n【hand_off_task 参数】${x.handArgs.map((t) => t.args).join('\n')}\n【notes.md】\n${x.notes}`; }).join('\n\n'),
+      toolCalls: [...a.ev.toolCalls, ...b.ev.toolCalls, ...c.ev.toolCalls],
+      ttftMs: ttft(a.ev), tokens: [a.ev, b.ev, c.ev].reduce((n, e) => n + (tokensOf(e) || 0), 0) || null,
+    };
+  });
+
+  // ── crosstree:跨树互发(11-08)── Q、S 是两棵不相干的树:S 自己找到 Q、去问,Q 回信,S 收到答案。
+  await scenario('crosstree', 'crosstree 跨树互发:另一棵树里的会话用 search_sessions 找到对方、send_to_session 去问,对方回信', async () => {
+    const msgsOf = async (sid) => (await api(`/agent/sessions/${sid}/messages?limit=300`)).messages || [];
+    const sessionsOf = async () => (await api('/agent/sessions?limit=500')).sessions;
+    const WINDOW = `周${['二', '三', '四', '五'][Math.floor(Math.random() * 4)]}晚上 ${7 + Math.floor(Math.random() * 3)} 点`;
+    const Q = `live-crosstree-q-${Date.now()}`;
+    const evQ = await run(Q, `记一下:灰鹭项目的发布窗口定在${WINDOW}。只回「记下了」,不用工具。`, 180_000, { approvalMode: 'full-auto' });
+    const S = `live-crosstree-s-${Date.now()}`;
+    const evS = await run(S, '我在另一个会话里记过灰鹭项目的发布窗口。用 search_sessions 找到那个会话,用 send_to_session 去问它发布窗口是什么时候,发完就结束这一轮,等它回你,不要自己猜。', 240_000, { approvalMode: 'full-auto' });
+    const sendArgs = (evS.toolArgs || []).filter((t) => t.name === 'send_to_session');
+    const toQ = sendArgs.some((t) => t.arguments.includes(Q));
+    // 等 Q 收到 → 回发 → S 收到并接着说一轮
+    const t0 = Date.now();
+    let qGot = false, sGot = false, sAnswer = '';
+    while (Date.now() - t0 < 420_000) {
+      await new Promise((r) => setTimeout(r, 5000));
+      const qm = await msgsOf(Q), sm = await msgsOf(S);
+      qGot = qm.some((m) => m.role === 'user' && String(m.content).startsWith(`<session_message from="${S}"`) && String(m.content).includes('relation="peer"'));
+      const idx = sm.findIndex((m) => m.role === 'user' && String(m.content).startsWith(`<session_message from="${Q}"`));
+      sGot = idx >= 0;
+      sAnswer = sm.slice(idx + 1).filter((m) => m.role === 'model').map((m) => String(m.content || '')).join('\n');
+      const ss = await sessionsOf();
+      if (sGot && sAnswer && !ss.find((x) => x.id === S)?.busy && !ss.find((x) => x.id === Q)?.busy) break;
+    }
+    const hour = WINDOW.match(/(\d+) 点/)[1];
+    const answered = sAnswer.includes(hour) || (await msgsOf(S)).some((m) => m.role === 'user' && String(m.content).startsWith(`<session_message from="${Q}"`) && String(m.content).includes(hour));
+    return {
+      ok: !evQ.error && !evS.error && toQ && qGot && sGot && answered,
+      detail: `S 调 search_sessions ${evS.toolCalls.filter((n) => n === 'search_sessions').length} 次、send_to_session ${sendArgs.length} 次${toQ ? '(发给 Q)' : '(没发给 Q!)'};Q ${qGot ? '收到 peer 消息' : '没收到!'};S ${sGot ? '收到回信' : '没收到回信!'};答案${answered ? `含「${hour} 点」` : '不对!'}`,
+      output: `【发布窗口】${WINDOW}\n【S 第一轮】${evS.content}\n【send_to_session 参数】${sendArgs.map((t) => t.args).join('\n')}\n【S 收到回信后】${sAnswer}`,
+      toolCalls: [...evQ.toolCalls, ...evS.toolCalls],
+      ttftMs: ttft(evS), tokens: [evQ, evS].reduce((n, e) => n + (tokensOf(e) || 0), 0) || null,
     };
   });
 
