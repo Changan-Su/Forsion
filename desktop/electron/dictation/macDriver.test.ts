@@ -101,6 +101,12 @@ describe.skipIf(!mac)('macOS dictation driver (private pasteboard, no keystrokes
     expect(read()).toEqual(before)
   }, 20_000)
 
+  it('activate refuses a bad pid and answers false for a pid with no app (no side effects)', async () => {
+    expect(await driver.activate(0)).toBe(false)
+    expect(await driver.activate(-5)).toBe(false)
+    expect(await driver.activate(2 ** 22 + 12345)).toBe(false)
+  }, 20_000)
+
   it('writes the exact text, marked transient for clipboard managers', async () => {
     const text = '引号 "quoted" \\ back\nnew line 🎙️'
     expect(await driver.copy(text, board)).toBe(true)

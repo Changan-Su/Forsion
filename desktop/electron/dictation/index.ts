@@ -220,9 +220,29 @@ export function registerDictation(h: DictationHostDeps): DictationController | n
   ipcMain.on(DICTATION_CAPSULE_CHANNELS.error, (e, id: unknown, msg: unknown) => {
     if (fromCapsule(e) && typeof id === 'string') controller.capsuleError(id, typeof msg === 'string' ? msg : '')
   })
+  // macOS:Electron 的 type:'panel' 只是给普通 NSWindow 加了「不激活」样式位,AppKit 只对真 NSPanel 认它 ——
+  // 鼠标点胶囊上的按钮会把 Forsion 激活到前台(11-08 实机:TextEdit 在前,点 ✕ / 复制后前台变成 Forsion)。
+  // 后果:点「完成」后目标核对判成「前台换了」;点「复制」后 ⌘V 落进 Forsion。所以响应胶囊上的点击之前,
+  // 若前台正是 Forsion 自己(= 这一下点击激活的),先把按快捷键时记下的那个应用切回前台,再处理这个动作。
+  // 只管胶囊点击;快捷键那条路一点不动(那里前台变了 = 用户自己换了应用,照旧拒写)。「允许」本来就要开系统设置,不切。
+  const handBack = async (id: string): Promise<void> => {
+    if (!mac || controller.state().sessionId !== id) return
+    const t = await controller.currentTarget()
+    if (!t || t.kind !== 'external' || t.pid === process.pid) return
+    const front = await mac.front().catch(() => null)
+    if (!front || front.pid !== process.pid) return
+    if (!(await mac.activate(t.pid).catch(() => false))) return
+    for (let i = 0; i < 10; i++) {
+      if ((await mac.front().catch(() => null))?.pid === t.pid) return
+      await new Promise((r) => setTimeout(r, 50))
+    }
+  }
   ipcMain.on(DICTATION_CAPSULE_CHANNELS.action, (e, id: unknown, action: unknown) => {
     const ok: readonly DictationCapsuleAction[] = ['stop', 'cancel', 'copy', 'dismiss', 'allow']
-    if (fromCapsule(e) && typeof id === 'string' && ok.includes(action as DictationCapsuleAction)) controller.capsuleAction(id, action as DictationCapsuleAction)
+    if (!fromCapsule(e) || typeof id !== 'string' || !ok.includes(action as DictationCapsuleAction)) return
+    const act = action as DictationCapsuleAction
+    if (act === 'allow') { controller.capsuleAction(id, act); return }
+    void handBack(id).catch(() => {}).finally(() => controller.capsuleAction(id, act))
   })
 
   if (process.env.FORSION_E2E_DICTATION === '1') (globalThis as { __forsionDictation?: unknown }).__forsionDictation = { controller, capsule }
