@@ -2,7 +2,7 @@
    聊天也用这张卡,而那份大样式表只跟着笔记加载。外壳走共享 `.ui-popover`(字体 / 描边 / 圆角 / 阴影 / Genesis 材质),
    这里只管内容布局;色值只消费语义 token,字号只用 --ui-font-* 角色。 */
 .am-ai-panel {
-  z-index: 100;
+  z-index: var(--z-menu, 100); /* 和划线条同层(base.css 层级表) */
   width: min(440px, calc(100vw - 32px));
   padding: 8px 10px 10px;
   display: flex;

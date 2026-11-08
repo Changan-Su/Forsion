@@ -4,7 +4,7 @@
    字号只用 --ui-font-* / --menu-* 角色;阴影不另写;不写 ::-webkit-scrollbar。只消费根上的 token:这一条会挂到 body 下,
    拿不到某个 View 作用域里的别名(--text-sec 之类)。 */
 .selbar {
-  z-index: 100; /* 与 .ctx-menu 同层:在 Dockview 的 sash(99)之上 */
+  z-index: var(--z-menu, 100); /* 菜单层(与 .ctx-menu 同层,在 Dockview 的 sash 99 之上):base.css 的层级表 */
   user-select: none;
   -webkit-user-select: none;
   max-width: calc((100vw - 16px) / var(--uiz, 1));
