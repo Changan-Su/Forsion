@@ -34,8 +34,8 @@ export const signedEssentials = (entry: string): string[] => [entry, 'manifest.j
 export interface CloudHost {
   contentSync?: {
     roots(): Promise<Array<{prefix:string;root:string}>>
-    claim(owned:boolean): Promise<void>
-    changed(): Promise<void>
+    claim(owned:boolean,expectedAccount?:string): Promise<void>
+    changed(expectedAccount?:string): Promise<void>
     merge(path:string,ours:string,base:string|null,theirs:string): {content:string;conflict:boolean}|null
     withWriteLock(path:string|string[],commit:()=>void): Promise<void>
     trash(path:string): Promise<void>

@@ -6,33 +6,45 @@ import { withMemoryDirectoryLock } from './memoryRepository.js';
 import type { AgentFilesBrain } from '../seams/cloudBrain.js';
 import { agentsDir, DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
 
-const identities = new WeakMap<AgentFilesBrain, (userId: string) => string | null>();
+interface AgentSyncIdentity { account: string; scope: string }
+const identities = new WeakMap<AgentFilesBrain, () => AgentSyncIdentity | null>();
 
-export function cloudAccountScope(origin: string, userId: string): string {
+function cloudIdentity(origin: string, userId: string): AgentSyncIdentity {
   let normalized = origin.replace(/\/+$/, '');
   try {
     const url = new URL(origin);
     normalized = `${url.origin}${url.pathname.replace(/\/+$/, '')}`;
   } catch { /* custom adapter identifier */ }
-  return createHash('sha256').update(JSON.stringify([normalized, userId])).digest('hex');
+  return {
+    account: `${normalized}::${userId}`,
+    scope: createHash('sha256').update(JSON.stringify([normalized, userId])).digest('hex'),
+  };
+}
+
+export function cloudAccountScope(origin: string, userId: string): string {
+  return cloudIdentity(origin, userId).scope;
 }
 
 /** The standalone host user is usually "local". Its cloud identity must follow the actual JWT. */
 export function registerAgentSyncIdentity(cloud: AgentFilesBrain, origin: string, token: string | (() => string)): void {
-  identities.set(cloud, (requestUserId) => {
+  identities.set(cloud, () => {
     try {
       const claims = JSON.parse(Buffer.from((typeof token === 'function' ? token() : token).split('.')[1], 'base64url').toString('utf8'));
       const userId = claims.userId ?? claims.sub;
       return (typeof userId === 'string' || typeof userId === 'number') && String(userId).trim()
-        ? cloudAccountScope(origin, String(userId)) : null;
+        ? cloudIdentity(origin, String(userId)) : null;
     } catch { return null; }
   });
 }
 
-export function agentSyncScope(cloud: AgentFilesBrain | undefined, userId: string): string | null {
+export function agentSyncIdentity(cloud: AgentFilesBrain | undefined, userId: string): AgentSyncIdentity | null {
   if (!cloud) return null;
   const resolve = identities.get(cloud);
-  return resolve ? resolve(userId) : userId ? cloudAccountScope('local-adapter', userId) : null;
+  return resolve ? resolve() : userId ? cloudIdentity('local-adapter', userId) : null;
+}
+
+export function agentSyncScope(cloud: AgentFilesBrain | undefined, userId: string): string | null {
+  return agentSyncIdentity(cloud, userId)?.scope ?? null;
 }
 
 // follow = 「跟着账号总闸」:总闸关的时候,单独开过的 Agent 改记成这个(不抹 revision,只增)
