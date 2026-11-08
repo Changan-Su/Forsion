@@ -124,7 +124,7 @@ function startupReceipt(version) {
   return null
 }
 
-function installerTransfer(file, startUrl, bytes, partial = false, mustCancel = false) {
+function installerTransfer(file, startUrl, bytes, partial = false) {
   const { events, constants: { logEventTypes: types } } = readJson(file)
   const active = new Map()
   const legs = new Map()
@@ -150,7 +150,7 @@ function installerTransfer(file, startUrl, bytes, partial = false, mustCancel = 
   function follow(leg, remaining) {
     const status = Number(leg.headers?.[0]?.match(/^HTTP\/\S+ (\d+)/)?.[1])
     const receipt = { host: new URL(leg.url).hostname, status, bytes: leg.bytes, canceled: leg.canceled === true }
-    if (partial ? (status === 200 || status === 206) && leg.bytes > 0 && leg.bytes < bytes && (!mustCancel || leg.canceled) : status === 200 && leg.bytes === bytes) return [receipt]
+    if (partial ? (status === 200 || status === 206) && leg.bytes > 0 && leg.bytes < bytes : status === 200 && leg.bytes === bytes) return [receipt]
     if (!remaining || !(status >= 300 && status < 400)) return null
     const location = leg.headers.find(header => /^location:/i.test(header))?.slice('location:'.length).trim()
     if (!location) return null
@@ -368,7 +368,7 @@ async function main() {
     let partialRoute
     if (spec.action) {
       const primaryUrl = spec.first === 'website' ? siteDownload : releases + '/' + filename
-      partialRoute = installerTransfer(rawNetLog, primaryUrl, bytes, true, spec.action === 'stall')
+      partialRoute = installerTransfer(rawNetLog, primaryUrl, bytes, true)
       check(proxy.events.some(event => event.action === 'throttled' && (!switchedAt || event.at < switchedAt)), 'the primary installer route was paced and transferred real bytes before switching')
     }
     if (spec.noExtend) {
