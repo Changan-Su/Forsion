@@ -16,7 +16,7 @@ const env = vi.hoisted(() => ({ sources: [] as ExternalPluginSource[] }))
 vi.mock('../api', () => ({
   amadeus: { listPlugins: async () => env.sources, listPages: async () => [], listFiles: async () => [] },
 }))
-const { usePluginStore, pluginFootprint, unmetPluginDeps } = await import('./pluginStore')
+const { usePluginStore, pluginFootprint, unmetPluginDeps, pluginSetupSettled, onPluginSetupSettled } = await import('./pluginStore')
 const { createEffectScope } = await import('./effectScope')
 
 type Log = string[]
@@ -110,6 +110,28 @@ describe('setup 失败回滚', () => {
     expect(st().activeIds).toEqual([])
     expect(document.getElementById('amadeus-plugin-theme-t1')).toBeNull()
     expect(g.__log).toEqual(['up:user', 'down:user'])
+  })
+
+  it('setup 落定信号:同步立即落定;async 要等 resolve;reject / 停用都不算落定(宿主清理伴随标签页靠它)', async () => {
+    env.sources = [
+      src('quick', LOGGED('quick')),
+      src('later', `return new Promise((resolve) => { globalThis.__resolve = resolve })`),
+      src('broken', `return new Promise((_, reject) => { globalThis.__rejectB = reject })`),
+    ]
+    const heard: string[] = []
+    const off = onPluginSetupSettled((id) => heard.push(id))
+    await st().loadExternal()
+    expect(pluginSetupSettled('quick')).toBe(true)
+    expect(pluginSetupSettled('later')).toBe(false) // 已算激活,但还在 await:声明不完整
+    ;(globalThis as unknown as { __resolve: () => void }).__resolve()
+    await vi.waitFor(() => expect(pluginSetupSettled('later')).toBe(true))
+    ;(globalThis as unknown as { __rejectB: (e: Error) => void }).__rejectB(new Error('boom'))
+    await vi.waitFor(() => expect(st().lastSetupError.broken).toBe('boom'))
+    expect(pluginSetupSettled('broken')).toBe(false)
+    st().disable('quick')
+    expect(pluginSetupSettled('quick')).toBe(false)
+    off()
+    expect(heard).toEqual(['quick', 'later'])
   })
 
   it('前置 async setup reject → 依赖方先停,收尾经前置 ctx 的调用不被拦(Codex 10-02)', async () => {
