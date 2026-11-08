@@ -219,6 +219,16 @@ describe('dictation controller', () => {
     expect(order).toEqual(['start 1', 'end 1', 'start 2', 'end 2'])
   })
 
+  it('exposes the target captured at the press, and forgets it when the session ends', async () => {
+    const h = harness()
+    expect(await h.c.currentTarget()).toBeNull()
+    h.c.attach(1)
+    h.c.toggle()
+    expect(await h.c.currentTarget()).toEqual({ kind: 'external', pid: 42, window: 7 })
+    h.c.cancel()
+    expect(await h.c.currentTarget()).toBeNull()
+  })
+
   it('changing the hotkey re-registers; pausing releases both keys', () => {
     const h = harness()
     h.c.attach(1)

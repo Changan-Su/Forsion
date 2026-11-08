@@ -47,10 +47,12 @@ function sourceFor(platformName, archName) {
 const gitBin = (root, platformName = process.platform) =>
   platformName === 'win32' ? path.join(root, 'cmd', 'git.exe') : path.join(root, 'bin', 'git');
 
+const DOWNLOAD_TIMEOUT_MS = 10 * 60_000;
 async function download(url) {
   for (let i = 0; ; i++) {
     try {
-      const r = await fetch(url, { headers: { 'User-Agent': 'tangu-build' } });
+      // 每次尝试封顶 10 分钟(连接 + 读完正文):卡住的连接按失败重试,不让 CI 挂到 job 超时
+      const r = await fetch(url, { headers: { 'User-Agent': 'tangu-build' }, signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) });
       if (!r.ok) throw new Error(`下载 HTTP ${r.status} @ ${url}`);
       return Buffer.from(await r.arrayBuffer());
     } catch (e) { if (i >= 3) throw e; await sleep(1500 * (i + 1)); }
@@ -141,6 +143,20 @@ const bashMembers = () => [...BASH_TOOLS.map((t) => `usr/bin/${t}.exe`), ...BASH
  *  Windows 命令行转义 / MSYS 自己的通配展开在这里就能现形。改一边必须改另一边。 */
 const BASH_EVAL = ['-c', '__tangu_cmd=$TANGU_RUN_BASH_COMMAND; unset TANGU_RUN_BASH_COMMAND; eval "$__tangu_cmd"'];
 
+/** 构建机上 Git for Windows 的 usr/bin(GNU tar + bzip2 在这里)。FORSION_GIT_USR_BIN 可指定;否则看标准安装位置,
+ *  再从 PATH 上的 git.exe 往上找(<root>/cmd|bin/git.exe → <root>/usr/bin)。找不到就报错,不回落 System32 的 tar。 */
+function hostGitUsrBin() {
+  const env = process.env;
+  const roots = [env.ProgramW6432, env.ProgramFiles, env['ProgramFiles(x86)']].filter(Boolean).map((r) => path.join(r, 'Git'));
+  if (env.LOCALAPPDATA) roots.push(path.join(env.LOCALAPPDATA, 'Programs', 'Git'));
+  const where = spawnSync('where', ['git'], { encoding: 'utf8', timeout: 30_000, windowsHide: true });
+  for (const line of (where.stdout || '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean)) roots.push(path.dirname(path.dirname(line)));
+  const dirs = [env.FORSION_GIT_USR_BIN, ...roots.map((r) => path.join(r, 'usr', 'bin'))].filter(Boolean);
+  const hit = dirs.find((d) => existsSync(path.join(d, 'tar.exe')) && existsSync(path.join(d, 'bzip2.exe')));
+  if (!hit) throw new Error(`[fetch-git] 找不到 Git for Windows 的 usr/bin(要 tar.exe + bzip2.exe 解 .tar.bz2);装 Git for Windows 或设 FORSION_GIT_USR_BIN。找过:${dirs.join(' ; ')}`);
+  return hit;
+}
+
 /** Windows:sh.exe → bash.exe,再从同版本完整包里解出 BASH_TOOLS。下载 / 解压失败按 git 同一口径(必需时抛)。 */
 async function addBash(dest, platformName, archName) {
   const usrBin = path.join(dest, 'usr', 'bin');
@@ -149,14 +165,31 @@ async function addBash(dest, platformName, archName) {
   copyFileSync(sh, path.join(usrBin, 'bash.exe'));
   const item = pinnedRuntime('gitbash', platformName, archName);
   console.log(`[fetch-git] bash 小工具 ← ${item.name}`);
+  const tDl = Date.now();
   const buf = verifyArchive(await download(item.url), item);
+  console.log(`[fetch-git] 下载完成 ${(buf.length / 1048576).toFixed(1)} MB / ${((Date.now() - tDl) / 1000).toFixed(1)}s`);
   const tmp = mkdtempSync(path.join(os.tmpdir(), 'forsion-gitbash-'));
   try {
     const archive = path.join(tmp, item.name);
     writeFileSync(archive, buf);
     const out = path.join(tmp, 'x');
     mkdirSync(out);
-    execFileSync('tar', ['-xjf', archive, '-C', out, ...bashMembers()], { stdio: 'inherit' });
+    // Windows 构建机上不用 System32 的 tar.exe(bsdtar):2.13.8-beta.4 的两个 Windows Package installer 都停在这一步
+    // 直到取消(那里的 bsdtar 解 .bz2 要转调外部 bzip2 程序)。改用 Git for Windows 自带的 GNU tar,同目录的 bzip2 由它自己调;
+    // cwd 设在临时目录、路径全给相对的(GNU tar 会把 `D:\…` 里的冒号当成远程主机),再加 --force-local 兜底。
+    // stdin 不接、封顶 10 分钟:再卡也是报错退出,不挂到 job 超时。
+    let tarBin = 'tar', tarArgs = ['-xjf', item.name, '-C', 'x', ...bashMembers()], env = process.env;
+    if (process.platform === 'win32') {
+      const gitUsrBin = hostGitUsrBin();
+      const pathKey = Object.keys(process.env).find((k) => k.toUpperCase() === 'PATH') || 'Path';
+      tarBin = path.join(gitUsrBin, 'tar.exe');
+      tarArgs = ['--force-local', ...tarArgs];
+      env = { ...process.env, [pathKey]: `${gitUsrBin};${process.env[pathKey] || ''}` };
+    }
+    console.log(`[fetch-git] 解包 ${bashMembers().length} 项 ← ${tarBin}`);
+    const t0 = Date.now();
+    execFileSync(tarBin, tarArgs, { cwd: tmp, env, stdio: ['ignore', 'inherit', 'inherit'], timeout: 10 * 60_000, windowsHide: true });
+    console.log(`[fetch-git] 解包完成 ${((Date.now() - t0) / 1000).toFixed(1)}s`);
     for (const rel of bashMembers()) {
       const from = path.join(out, rel);
       const to = path.join(dest, rel);

@@ -381,6 +381,8 @@ async function main() {
     for (const channel of ['stdout', 'stderr']) app.process()[channel]?.on('data', bytes => fs.appendFileSync(path.join(SHOTS, `electron-${channel}.log`), bytes))
     await app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]?.setContentSize(1512, 950) })
     await win.waitForSelector('#root', { timeout: 30_000 })
+    // 宿主落位时间线(lcl dockTrace:closeView 判定 / 关视图 / 开合 / 补占位 / 右栏标签变化),从开窗就记,① 之后停;① 红时落进 overview-right.json
+    await win.evaluate(() => { globalThis.__forsionDockTrace = [] }).catch(() => {})
     if (PACKAGED_EXE) await win.waitForFunction(() => typeof window.tangu?.cloudFetch === 'function')
     if (PACKAGED_EXE) {
       const installed = path.join(home, 'plugins', 'forsion-extend')
@@ -421,14 +423,29 @@ async function main() {
     const later = win.getByRole('button', { name: '稍后', exact: true })
     if (await later.count()) await later.first().click()
     // ① Ribbon → 概览,右栏收起
+    const tOpen = await win.evaluate(() => Math.round(performance.now()))
     check('① Ribbon 上有「蓬洲云」', await openCloud(win) === '蓬洲云')
+    const tOverviewClick = await win.evaluate(() => Math.round(performance.now()))
     await win.locator('.t2s-srow-title', { hasText: /^概览$/ }).first().click()
     await win.waitForSelector('.pz-total', { timeout: 20_000 })
     const total = await win.locator('.pz-total b').textContent().catch(() => '')
     check('① 统一根展示八个来源和总量', await win.locator('.pz-rows .row').count() === 8 && total === '4.2 GB', total)
     check('① T2 提醒且历史不计', /只是提醒/.test(await win.locator('.pz-unified-quota').textContent()) && /历史版本不算/.test(await win.locator('.pz-unified-quota').textContent()))
     await win.waitForTimeout(900)
-    check('① 概览时右栏收起(不是空占位)', (await sideWidth()) < 40 && !(await win.locator('.dv-groupview .sidebar-empty, [data-view-type="sidebar-empty"]').count()), `side=${await sideWidth()}`)
+    {
+      // 这一条红时要能从产物里看出右栏里是什么(2.13.8-beta.4 mac / Windows 打包验收红过,本机源码跑复现不出)
+      const right = await win.evaluate(() => ({
+        viewTypes: [...document.querySelectorAll('[data-view-type]')].map((e) => e.getAttribute('data-view-type')),
+        sidebarEmpty: document.querySelectorAll('[data-view-type="sidebar-empty"]').length,
+        now: Math.round(performance.now()),
+        trace: globalThis.__forsionDockTrace || null,
+        pzSide: !!document.querySelector('.pz-side'),
+        groups: [...document.querySelectorAll('.dv-groupview')].map((g) => ({ w: Math.round(g.getBoundingClientRect().width), x: Math.round(g.getBoundingClientRect().left), empty: !!g.querySelector('.sidebar-empty') })),
+      }))
+      fs.writeFileSync(path.join(SHOTS, 'overview-right.json'), JSON.stringify({ tOpen, tOverviewClick, ...right }, null, 2))
+      await win.evaluate(() => { globalThis.__forsionDockTrace = undefined }).catch(() => {})
+      check('① 概览时右栏收起(不是空占位)', (await sideWidth()) < 40 && !right.sidebarEmpty, `side=${await sideWidth()} empty=${right.sidebarEmpty}`)
+    }
     await setMode('light'); await shot('overview')
     await setMode('dark'); await shot('overview-dark'); await setMode('light')
 

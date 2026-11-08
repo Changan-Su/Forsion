@@ -131,8 +131,12 @@ function harness(opts: { multiPeer?: boolean; selfConnect?: boolean; approvals?:
   const say = async (peerId: string, text: string, extra: Partial<ChannelInbound> = {}): Promise<string> => {
     const runs = state.runs.length;
     let reply: string | null = null;
-    void svc.handleInbound({ accountId: 'acc', peerId, text, ...extra }).then((r) => { reply = r; });
-    for (let i = 0; i < 2000 && reply === null && state.runs.length === runs; i++) await new Promise((r) => setImmediate(r));
+    let done = false;
+    void svc.handleInbound({ accountId: 'acc', peerId, text, ...extra }).then((r) => { reply = r; }).finally(() => { done = true; });
+    // 按时间截止(1.5 秒),不按圈数:CI 高负载时建会话可能要几十毫秒,2000 圈 setImmediate 会提前放手(11-08 发版构建两次在这里偶发红)。入站处理完、回了话、或起了新 run 任一成立就提前返回;文字批准这类三样都不发生的,等满 1.5 秒。
+    // 只用 setImmediate + Date.now():审批超时那几条会假 setTimeout / setInterval,不假这两样。
+    const deadline = Date.now() + 1500;
+    while (!done && reply === null && state.runs.length === runs && Date.now() < deadline) await new Promise((r) => setImmediate(r));
     await flush();
     return reply ?? '';
   };

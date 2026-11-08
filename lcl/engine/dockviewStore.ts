@@ -339,6 +339,14 @@ function pinSides(api: DockviewApi): void {
 
 /** 读 panel 的视图类型:优先 params.__type(可靠),回退 Dockview 的 component(跨版本不保证暴露,
  *  曾因其 undefined 导致 toggle 暂存出空 type → 重开 addPanel('') 报错+白屏)。 */
+/** 台架用的落位时间线:页面上设了 `globalThis.__forsionDockTrace = []` 才记(打包验收在概览收起那条红时把它落进产物)。
+ *  平时没有这个数组,什么都不做。 */
+export function dockTrace(what: string, data: Record<string, unknown> = {}): void {
+  const t = (globalThis as { __forsionDockTrace?: unknown[] }).__forsionDockTrace
+  if (!Array.isArray(t) || t.length > 500) return
+  t.push({ at: Math.round(performance.now()), what, ...data, stack: new Error().stack?.split('\n').slice(2, 9).map((l) => l.trim()).join(' | ') })
+}
+
 function panelType(p: IDockviewPanel): string {
   const t = ((p.params ?? {}) as PanelMeta).__type
   return t || (p as { component?: string }).component || ''
@@ -1071,7 +1079,10 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     const left = sideTabsFor('left')
     const right = sideTabsFor('right')
     if (!sideEq(get().leftTabs, left)) set({ leftTabs: left })
-    if (!sideEq(get().rightTabs, right)) set({ rightTabs: right })
+    if (!sideEq(get().rightTabs, right)) {
+      dockTrace('rightTabs', { from: get().rightTabs.map((t) => t.type), to: right.map((t) => t.type), visible: get().rightVisible })
+      set({ rightTabs: right })
+    }
     // 主区前台视图的组变了 → 右栏按主视图规则对账(推一拍,见 queueRightRules)
     const rg = rightRulesOn() ? rightGroupNow(api, get().sidebarDefaults.right) : null
     if (rg && rg.key !== rightKey) queueRightRules()
@@ -1117,6 +1128,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     // 底部最后一个 = 收起面板:同 ⌘J 藏组不删组,免主区重挂。
     if (wasLastBottom) parkBottom(api, panel.group, [panel])
     else panel.api.close()
+    if (wasLastSide) dockTrace('placeholder', { closed: panelType(panel), loc, force: !!force })
     if (wasLastSide) get().openView('sidebar-empty', {}, loc)
     if (wasLastBottom) set((st) => ({ stash: { ...st.stash, bottom: [] }, stashActive: { ...st.stashActive, bottom: null }, bottomVisible: false }))
     useNav.getState().drop(id) // 该 tab 的导航历史随之销毁
@@ -1192,6 +1204,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   closeViewsOfType(type, force) {
     const api = get().api
     if (!api) return
+    dockTrace('closeViewsOfType', { type, force: !!force, locs: api.panels.filter((x) => panelType(x) === type).map((x) => ((x.params ?? {}) as PanelMeta).__loc ?? 'main') })
     // 先拍下名单再逐个关(close 会就地改 api.panels)。一律走 closeLeaf 而不是 panel.api.close(),
     // 这样各区的收尾语义都对:主区最后一个 → 就地换 home;侧栏最后一个 → 回填占位;底部最后一个 → 连 stash 一起清、面板收起。
     for (const p of api.panels.filter((x) => panelType(x) === type)) get().closeLeaf(p.id, force)
@@ -1366,6 +1379,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   openView(type, params = {}, loc = 'main', opts) {
     const api = get().api
     if (!api) return null
+    if (type === 'sidebar-empty' || loc === 'right') dockTrace('openView', { type, loc })
     // 独立视图窗只装主区:视图自己往侧栏开东西(Agent 资料页挂载时开名册、对话的「在项目详情中打开」)一律不开,
     // 否则左右栏又长出来、开关钮还藏着收不回去(Codex 评审)。见 uiMode.IS_VIEW_WINDOW。
     if (IS_VIEW_WINDOW && (loc === 'left' || loc === 'right')) return null
@@ -1489,6 +1503,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   toggleSidebar(side) {
     const api = get().api
     if (!api) return
+    dockTrace('toggleSidebar', { side, panels: panelsAt(api, side).map(panelType) })
     if (IS_VIEW_WINDOW && side !== 'bottom') return // 独立视图窗只装主区:左右栏开不出来(见 uiMode.IS_VIEW_WINDOW)
     const beforeToggle = captureRegionTree(api)
     // 唯一的轴向差异集中在这几行:左右量宽 / 底部量高。其余(暂存、还原、补间、沉降)两轴共用一份。

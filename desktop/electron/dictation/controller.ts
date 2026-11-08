@@ -61,6 +61,8 @@ export interface DictationController {
   capsuleResult(sessionId: string, text: string): void
   capsuleError(sessionId: string, message: string): void
   capsuleAction(sessionId: string, action: DictationCapsuleAction): void
+  /** 这一次听写按快捷键时记下的目标(没有会话 / 还没取到 = null)。 */
+  currentTarget(): Promise<DictationTarget | null>
   /** 设置页录快捷键期间(globalHotkeyPause)。 */
   pause(): void
   resume(): void
@@ -202,6 +204,7 @@ export function createDictationController(d: DictationDeps, opts: { hotkey: stri
 
   const controller: DictationController = {
     state: snapshot,
+    currentTarget: () => target ?? Promise.resolve(null),
     attach(owner) {
       const was = enabled()
       leases.add(owner)
