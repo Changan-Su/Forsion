@@ -266,19 +266,13 @@ export function syncPluginViews(): void {
         const tabs = s === 'left' ? ws.leftTabs : ws.rightTabs
         return (s === 'left' ? ws.leftVisible : ws.rightVisible) && tabs.length > 0 && tabs.every((t) => t.type === type)
       }) : undefined
-      if (!side && (!opts?.collapse || !ws.api)) { ws.closeViewsOfType(type); return } // 单列 store 没有 Dockview api:照旧
-      // 收起已经在途的那一侧(toggleSidebar 先把 visible 置假,panel 留到 200ms 补间结束才关):它的 panel 归补间收尾,
-      // 这里不再 closeLeaf —— 否则「侧栏最后一个」补出空占位,收起变成一个开着的空侧栏(插件进 Space 时 mount 要一次收起、
-      // 紧接着用户点了一个也要收起的位置,两次落在同一个补间里:2.13.8-beta.4 蓬洲云打包验收 mac / Windows 红)。
-      const collapsing = (loc: string | undefined): boolean =>
-        !!opts?.collapse && (loc === 'left' ? !ws.leftVisible : loc === 'right' ? !ws.rightVisible : false)
+      if (!side) { ws.closeViewsOfType(type); return }
       // 别处的同类实例(主区标签、另一侧 / 底部)照常关,只有这一侧收起(Codex 评审 #4)
       for (const p of [...(ws.api?.panels ?? [])]) { // 先拍下名单:closeLeaf 会就地改 api.panels
         const m = (p.params ?? {}) as { __type?: string; __loc?: string }
-        if ((m.__type || (p as { component?: string }).component) === type && m.__loc !== side && !collapsing(m.__loc)) ws.closeLeaf(p.id)
+        if ((m.__type || (p as { component?: string }).component) === type && m.__loc !== side) ws.closeLeaf(p.id)
       }
-      if (side) ws.toggleSidebar(side)
-      else ws.refreshTabs()
+      ws.toggleSidebar(side)
     },
     replace: (from, to, params) => useWorkspace.getState().replaceViewsOfType(from, to, params),
   })
