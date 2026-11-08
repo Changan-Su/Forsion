@@ -21,15 +21,7 @@ const SCAN = ['desktop/frontend/src', 'lcl']
 const PATTERN = /\binnerHeight\b|\bshowPopover\(/g
 const SKIP = new Set(['lcl/engine/menuAnchor.tsx'])
 
-const LEGACY = '存量浮层手写落位,改到 followAnchor / useClampedMenu 时删掉这一行'
 const ALLOW: Record<string, [number, string]> = {
-  'desktop/frontend/src/amadeus/blocks/database/DatabaseEmbed.tsx': [1, `${LEGACY}(选项菜单按 250×260 估高)`],
-  'desktop/frontend/src/amadeus/blocks/database/FormBody.tsx': [1, `${LEGACY}(选项菜单按 250×260 估高)`],
-  'desktop/frontend/src/amadeus/components/WikiHoverPreview.tsx': [1, `${LEGACY}(按固定卡高翻面)`],
-  'desktop/frontend/src/views/CalendarView.tsx': [1, `${LEGACY}(内置日历的单日议程卡按 356 估高)`],
-  'desktop/frontend/src/views/calendar/EventCard.tsx': [1, `${LEGACY}(事件卡按固定高夹取)`],
-  'desktop/frontend/src/components/ModelSelect.tsx': [2, `${LEGACY}(判上下翻)`],
-  'desktop/frontend/src/views/chat2/BackgroundProcs.tsx': [1, `${LEGACY}(底部定位的进程浮层)`],
   'lcl/engine/Ribbon.tsx': [6, 'Ribbon 「+N」液滴浮层的落位(363/599/664)与拖出窗口判定(760/775/869)'],
   'lcl/engine/hoverSurface.ts': [2, '悬停浮层:placeHover 自带夹取;另一处是锚点滚出视口就收起'],
   'lcl/engine/FloatingToc.tsx': [2, '悬浮目录的轨道高度按窗口比例,不是锚定浮层'],

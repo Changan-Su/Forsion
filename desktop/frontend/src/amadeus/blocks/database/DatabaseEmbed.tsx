@@ -1506,7 +1506,7 @@ function DbTable({ dbRef, db: dbProp, pagePath, initialView, onViewChange, memor
           view={view}
           colIcon={(ct) => colMeta(ct).icon}
           renderCell={(row, col, sc, openOptions) => <Cell row={row} col={col} pagePath={pagePath} env={cellEnv} setCell={sc} openOptions={openOptions} />}
-          renderOptions={(p) => <OptionsPop x={p.x} y={p.y} col={p.col} row={p.row} setCell={p.setCell} createOption={createOption} onClose={p.onClose} />}
+          renderOptions={(p) => <OptionsPop x={p.x} y={p.y} anchorTop={p.anchorTop} col={p.col} row={p.row} setCell={p.setCell} createOption={createOption} onClose={p.onClose} />}
           onSubmit={(draft) => addRow(draft)}
           onGoTable={() => { const tv = views.find((v) => !['kanban', 'calendar', 'gallery', 'chart', 'form', 'gantt'].includes(v.type)); if (tv) pickView(tv) }}
         />
@@ -1828,7 +1828,7 @@ function DbTable({ dbRef, db: dbProp, pagePath, initialView, onViewChange, memor
         </PopShell>
       )}
       {pop && popCol && popRow && pop.kind === 'options' && (
-        <OptionsPop x={pop.x} y={pop.y} col={popCol} row={popRow} setCell={setCell} createOption={createOption} onClose={() => setPop(null)} />
+        <OptionsPop x={pop.x} y={pop.y} anchorTop={pop.anchorTop} col={popCol} row={popRow} setCell={setCell} createOption={createOption} onClose={() => setPop(null)} />
       )}
       {pop && pop.kind === 'folder' && (
         <PopShell x={pop.x} y={pop.y} anchorTop={pop.anchorTop} onClose={() => setPop(null)}>
@@ -3200,9 +3200,10 @@ function FolderPopover({ current, onPick }: { current: string; onPick: (f: strin
 // ── 多视图:选项弹层复用 / 视图菜单 / 行编辑器 / 卡片 / 看板 / 日历 / 画廊 ─────────────
 
 /** select/multiselect 选项弹层连同取值/切换/新增语义:表格单元格与行编辑器两处共用。 */
-function OptionsPop({ x, y, col, row, setCell, createOption, onClose }: {
+function OptionsPop({ x, y, anchorTop, col, row, setCell, createOption, onClose }: {
   x: number
   y: number
+  anchorTop?: number
   col: DbColumn
   row: DbRow
   setCell: (rowId: string, colId: string, v: CellValue | undefined) => void
@@ -3211,7 +3212,7 @@ function OptionsPop({ x, y, col, row, setCell, createOption, onClose }: {
 }) {
   const multi = col.type === 'multiselect'
   return (
-    <PopShell x={x} y={y} onClose={onClose}>
+    <PopShell x={x} y={y} anchorTop={anchorTop} onClose={onClose}>
       <OptionPopover
         col={col}
         value={coerceForDisplay(row.cells[col.id], resolveBaseType(col.type))}
@@ -3673,7 +3674,7 @@ function RowEditor({ db, row, pagePath, env, setCell, createOption, readOnly, ti
   onDelete: () => void
 }) {
   const { t } = useI18n()
-  const [opt, setOpt] = useState<{ colId: string; x: number; y: number } | null>(null)
+  const [opt, setOpt] = useState<{ colId: string; x: number; y: number; anchorTop: number } | null>(null)
   const optCol = opt ? db.columns.find((c) => c.id === opt.colId) : undefined
   const titleCol = titleColId ? db.columns.find((c) => c.id === titleColId) : undefined
   const cols = titleCol ? [titleCol, ...db.columns.filter((c) => c !== titleCol)] : db.columns
@@ -3697,7 +3698,7 @@ function RowEditor({ db, row, pagePath, env, setCell, createOption, readOnly, ti
               setCell={setCell}
               openOptions={(e) => {
                 const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
-                setOpt({ colId: col.id, x: Math.min(r.left, window.innerWidth - 250), y: Math.min(r.bottom + 4, window.innerHeight - 260) })
+                setOpt({ colId: col.id, x: r.left, y: r.bottom + 4, anchorTop: r.top }) // 落位交给 PopShell 里的 OverlayAt:量真实尺寸,下方放不下翻到格子上方
               }}
             />
             )}
@@ -3706,7 +3707,7 @@ function RowEditor({ db, row, pagePath, env, setCell, createOption, readOnly, ti
       ))}
       {!readOnly && <button className="amx-db-opt amx-db-opt-danger" onClick={onDelete}>{t('dbembed.deleteRow')}</button>}
       {opt && optCol && (
-        <OptionsPop x={opt.x} y={opt.y} col={optCol} row={row} setCell={setCell} createOption={createOption} onClose={() => setOpt(null)} />
+        <OptionsPop x={opt.x} y={opt.y} anchorTop={opt.anchorTop} col={optCol} row={row} setCell={setCell} createOption={createOption} onClose={() => setOpt(null)} />
       )}
     </div>
   )

@@ -1,14 +1,14 @@
 /** 双链 hover 预览(Obsidian 页面预览式):悬停正文 [[链接]] 400ms 弹只读渲染浮卡,
  *  移入浮卡可停留滚动,离开即关;点了链接(跳走)也当场关 —— 见 onDown。事件委托吃编辑器 wikilink 部件(.wikilink[data-wiki]);
  *  未解析链接与文件引用([[xxx.db]] 等)不预览。挂载于 AmadeusOverlays,三端共享。 */
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { resolvePageName } from '@amadeus-shared/links'
 import type { LoadedPage } from '@amadeus-shared/compiler/types'
 import { amadeus } from '../api'
 import { usePageStore } from '../store/pageStore'
 import { isFileRef } from '../lib/vaultFiles'
 import { PlainMarkdownEditor } from '../blocks/markdown/MarkdownBlock'
-import { OverlayAt } from '../lib/clampMenu'
+import { followAnchor, useExitGhost } from '@lcl/engine'
 import { registerMessages, translate } from '../../i18n'
 
 registerMessages({
@@ -17,8 +17,6 @@ registerMessages({
 
 const SHOW_DELAY = 400
 const MAX_CHARS = 2500
-const CARD_W = 380 // 与 .amx-hoverprev 的 width/max-height 同步
-const CARD_H = 300
 
 /** 按 2D 布局顺序拼接块内容(预览只要前一段,截断即可)。 */
 function clipContent(p: LoadedPage): string {
@@ -39,11 +37,12 @@ function clipContent(p: LoadedPage): string {
 }
 
 export function WikiHoverPreview() {
-  const [show, setShow] = useState<{ name: string; path: string; x: number; y: number } | null>(null)
+  const [show, setShow] = useState<{ name: string; path: string } | null>(null)
   const [md, setMd] = useState<string | null>(null)
   const timer = useRef<number | null>(null)
   const overCard = useRef(false)
   const anchor = useRef<HTMLElement | null>(null) // 当前这张卡是哪个链接节点弹出来的
+  const cardRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     const clearTimer = (): void => {
@@ -65,16 +64,14 @@ export function WikiHoverPreview() {
       const path = resolvePageName(name, st.pages, src)
       if (!path) return
       clearTimer()
-      const r = el.getBoundingClientRect()
       timer.current = window.setTimeout(() => {
         if (!el.isConnected) return // 等的这 400ms 里链接已经没了(键盘跳走 / 页面重渲染)
         anchor.current = el
         // ⚠️ 贴底必须**翻转到链接上方**,不能只往上夹:夹完卡片会盖住链接本身 → 盖住指针 →
         // 链接 mouseleave 关卡 → 指针又落回链接 → 再弹……无限闪烁(聊天气泡的引用条天然
         // 在屏幕底部,一挂就中;编辑器里链接多在中部,这坑藏了很久)。
-        const below = r.bottom + 8
-        const y = below + CARD_H <= window.innerHeight - 8 ? below : Math.max(8, r.top - 8 - CARD_H)
-        setShow({ name, path, x: Math.min(r.left, window.innerWidth - CARD_W - 16), y })
+        // 落位交给 followAnchor(锚 = 链接节点):量卡片真实高度,上下都放不下就封顶在空间大的一侧,永远不压住链接。
+        setShow({ name, path })
       }, SHOW_DELAY)
       const cancel = (): void => {
         el.removeEventListener('mouseleave', cancel)
@@ -139,12 +136,19 @@ export function WikiHoverPreview() {
     }
   }, [show])
 
+  const visible = !!show && md !== null
+  useExitGhost(cardRef, visible)
+  useLayoutEffect(() => {
+    const el = cardRef.current, link = anchor.current
+    if (!visible || !el || !link) return
+    return followAnchor(el, link, { gap: 8 })
+  }, [visible, show])
+
   if (!show || md === null) return null
   return (
-    <OverlayAt
+    <div
+      ref={cardRef}
       className="amx-hoverprev"
-      x={show.x}
-      y={show.y}
       onMouseEnter={() => {
         overCard.current = true
       }}
@@ -158,6 +162,6 @@ export function WikiHoverPreview() {
         {/* key 换页重建编辑器实例;readOnly 纯渲染 */}
         <PlainMarkdownEditor key={show.path} initial={md} onChange={() => {}} readOnly />
       </div>
-    </OverlayAt>
+    </div>
   )
 }

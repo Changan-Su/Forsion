@@ -6,8 +6,9 @@
  * 之前它们各自把全部模型平铺成一排按钮,模型一多整页就被撑爆(2026-08-03 用户反馈)。
  */
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Check, ChevronDown, ChevronRight, Search } from 'lucide-react'
-import { zoomOf } from '@lcl/engine'
+import { followAnchor, zoomOf } from '@lcl/engine'
 import { ModelMetadata } from './ModelMetadata'
 import { useModelPickerPreferences } from '../modelPickerPreferences'
 import { groupModelsByProvider } from './ModelGroupList'
@@ -23,8 +24,6 @@ registerMessages({
 
 /** 选项多到这个数才给搜索框(少量选项时搜索框只是噪音)。 */
 const SEARCH_THRESHOLD = 12
-/** 菜单最大高度 + 间距,与 .composer-menu 的 max-height:320 对齐(翻转判定用)。 */
-const MENU_MAX = 330
 
 export function ModelSelect({ models, value, onChange, icon, cloudDefaultId, disabled, defaultLabel, ariaLabel, chip, footer }: {
   models: ModelInfo[]
@@ -45,24 +44,25 @@ export function ModelSelect({ models, value, onChange, icon, cloudDefaultId, dis
   const { t } = useI18n()
   const prefs = useModelPickerPreferences()
   const [open, setOpen] = useState(false)
-  const [up, setUp] = useState(false)
   const [query, setQuery] = useState('')
   const wrapRef = useRef<HTMLDivElement>(null)
+  const btnRef = useRef<HTMLButtonElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
 
-  // 下方放不下就往上弹:设置页正文(.settings-body)是滚动容器,不翻的话菜单被裁掉半截。
-  // ⚠️ rect/innerHeight 是**视口** px,MENU_MAX 是**未缩放**局部 px —— 比较前必须乘端级 zoom
-  //    (同 ModelPill.subFlips 的坑)。
+  // 菜单 portal 到 body、贴着按钮由 followAnchor 落位:先往下开,下方放不下翻到上方,两侧都放不下就封顶在空间大的一侧滚
+  // (设置页正文 .settings-body 是滚动容器,absolute 的菜单会被它裁掉半截)。量的是菜单真实高度,
+  // 搜索筛选后变矮 / 窗口缩放 / 端级 zoom / 滚动都重落。portal 是因为 fixed 留在原处会被带 backdrop-filter / transform
+  // 的祖先(玻璃主题的面板)当成包含块,坐标整体错位;点外面关的判定因此同时认按钮这边和菜单。
   useLayoutEffect(() => {
-    const el = wrapRef.current
-    if (!open || !el) return
-    const r = el.getBoundingClientRect()
-    const need = MENU_MAX * zoomOf(el)
-    setUp(window.innerHeight - r.bottom < need && r.top > need)
+    const menu = menuRef.current, wrap = wrapRef.current
+    if (!open || !menu || !btnRef.current || !wrap) return
+    menu.style.width = `${wrap.getBoundingClientRect().width / zoomOf(menu)}px` // 与控件同宽(原来 left:0;right:0 拉满)
+    return followAnchor(menu, btnRef.current, { gap: 6 })
   }, [open])
 
   useEffect(() => {
     if (!open) { setQuery(''); return }
-    const onDown = (e: MouseEvent) => { if (!wrapRef.current?.contains(e.target as Node)) setOpen(false) }
+    const onDown = (e: MouseEvent) => { if (!wrapRef.current?.contains(e.target as Node) && !menuRef.current?.contains(e.target as Node)) setOpen(false) }
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
     document.addEventListener('mousedown', onDown)
     document.addEventListener('keydown', onKey)
@@ -84,14 +84,14 @@ export function ModelSelect({ models, value, onChange, icon, cloudDefaultId, dis
 
   return (
     <div ref={wrapRef} className="model-select" data-cmenu>
-      <button className={`model-select-btn${open ? ' is-open' : ''}`} aria-label={ariaLabel} aria-expanded={open} disabled={disabled} onClick={() => setOpen((o) => !o)}>
+      <button ref={btnRef} className={`model-select-btn${open ? ' is-open' : ''}`} aria-label={ariaLabel} aria-expanded={open} disabled={disabled} onClick={() => setOpen((o) => !o)}>
         {icon}
         <span className="grow">{label}</span>
         {chip}
         <ChevronDown size={12} />
       </button>
-      {open && (
-        <div className={`composer-menu ${up ? 'composer-menu--up' : 'composer-menu--down'}`}>
+      {open && createPortal(
+        <div ref={menuRef} className="composer-menu composer-menu--anchored" data-cmenu>
           {models.length >= SEARCH_THRESHOLD && (
             <span className="model-picker-search">
               <Search size={12} />
@@ -121,7 +121,8 @@ export function ModelSelect({ models, value, onChange, icon, cloudDefaultId, dis
           {footer && <div className="model-select-footer">
             <button className="menu-item" onClick={() => { setOpen(false); footer.onClick() }}><span className="grow">{footer.label}</span><ChevronRight size={12} /></button>
           </div>}
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   )

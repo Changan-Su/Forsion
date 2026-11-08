@@ -35,7 +35,7 @@ export function FormBody({ db, view, renderCell, renderOptions, colIcon, onSubmi
   /** 渲染一格(DatabaseEmbed 里包一层 <Cell>)。 */
   renderCell: (row: DbRow, col: DbColumn, setCell: FormSetCell, openOptions: (e: ReactMouseEvent) => void) => ReactNode
   /** select/多选的选项弹层(DatabaseEmbed 里包一层 <OptionsPop>)。 */
-  renderOptions: (p: { col: DbColumn; row: DbRow; x: number; y: number; setCell: FormSetCell; onClose: () => void }) => ReactNode
+  renderOptions: (p: { col: DbColumn; row: DbRow; x: number; y: number; anchorTop?: number; setCell: FormSetCell; onClose: () => void }) => ReactNode
   colIcon: (type: string) => ReactNode
   /** 提交:调用方就是 addRow(draft),盖章在它里面压最后。 */
   onSubmit: (draft: Record<string, CellValue>) => void
@@ -48,7 +48,7 @@ export function FormBody({ db, view, renderCell, renderOptions, colIcon, onSubmi
   const [draft, setDraft] = useState<Record<string, CellValue>>(() => formDefaults(view, fields))
   const [errs, setErrs] = useState<Set<string>>(new Set())
   const [done, setDone] = useState(0) // 本次挂载已提交条数(留在表单时给个回执)
-  const [opt, setOpt] = useState<{ colId: string; x: number; y: number } | null>(null)
+  const [opt, setOpt] = useState<{ colId: string; x: number; y: number; anchorTop: number } | null>(null)
   const row: DbRow = { id: FORM_DRAFT_ROW_ID, cells: draft }
   const optCol = opt ? fields.find((c) => c.id === opt.colId) : undefined
 
@@ -91,7 +91,7 @@ export function FormBody({ db, view, renderCell, renderOptions, colIcon, onSubmi
             <div className="amx-db-form-cell">
               {renderCell(row, col, setCell, (e) => {
                 const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
-                setOpt({ colId: col.id, x: Math.min(r.left, window.innerWidth - 250), y: Math.min(r.bottom + 4, window.innerHeight - 260) })
+                setOpt({ colId: col.id, x: r.left, y: r.bottom + 4, anchorTop: r.top }) // 落位交给 PopShell 里的 OverlayAt:量真实尺寸,下方放不下翻到格子上方
               })}
             </div>
             {bad && <span className="amx-db-form-err">{t('dbform.required')}</span>}
@@ -102,7 +102,7 @@ export function FormBody({ db, view, renderCell, renderOptions, colIcon, onSubmi
         <button className="amx-db-newbtn amx-db-form-submit" onClick={submit}>{cfg.submitText?.trim() || t('dbform.submit')}</button>
         {done > 0 && <span className="amx-db-form-done">{t('dbform.done', { n: done })}</span>}
       </div>
-      {opt && optCol && renderOptions({ col: optCol, row, x: opt.x, y: opt.y, setCell, onClose: () => setOpt(null) })}
+      {opt && optCol && renderOptions({ col: optCol, row, x: opt.x, y: opt.y, anchorTop: opt.anchorTop, setCell, onClose: () => setOpt(null) })}
     </div>
   )
 }

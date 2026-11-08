@@ -33,6 +33,8 @@ export interface AnchorOpts {
   anchorTop?: number
   /** 首选方向:'below'(默认,锚点下方展开)/ 'above'(锚点上方,放不下再翻到下方)。 */
   prefer?: 'below' | 'above'
+  /** false = 不翻面,首选位置放不下就整体夹回视口(贴在锚点**旁边**的侧卡:顶边对齐锚点、太靠下就往上推)。缺省 true。 */
+  flip?: boolean
   /** 水平以 x 为中心(行内工具栏那种居中浮条),缺省是左对齐 x。 */
   center?: boolean
   /** 右缘对齐 x(「⋯」按钮下方往左展开的菜单),缺省是左缘对齐 x。 */
@@ -58,7 +60,7 @@ export function clampMenu(
   vh: number,
   opts: AnchorOpts = {},
 ): { left: number; top: number } {
-  const { anchorTop = y, prefer = 'below', center = false, alignEnd = false, margin = 8, boundLeft, boundRight } = opts
+  const { anchorTop = y, prefer = 'below', flip = true, center = false, alignEnd = false, margin = 8, boundLeft, boundRight } = opts
   let lo = Math.max(0, boundLeft ?? 0)
   let hi = Math.min(vw, boundRight ?? vw)
   if (hi - lo < w + 2 * margin) { lo = 0; hi = vw }
@@ -67,7 +69,7 @@ export function clampMenu(
   const below = y
   const above = anchorTop - h
   const order = prefer === 'above' ? [above, below] : [below, above]
-  for (const t of order) if (fits(t)) return { left, top: t }
+  for (const t of flip ? order : order.slice(0, 1)) if (fits(t)) return { left, top: t }
   // 两侧都放不下(菜单比视口还高 / 锚点在视口外):退回夹取首选方向的那个候选。
   return { left, top: Math.max(margin, Math.min(order[0], vh - h - margin)) }
 }
@@ -172,7 +174,7 @@ export function useClampedMenu(x: number, y: number, opts: AnchorOpts & { bounda
   ref: RefObject<HTMLDivElement | null>
   style: CSSProperties
 } {
-  const { anchorTop, prefer, center, alignEnd, margin = 8, boundLeft, boundRight, boundary } = opts
+  const { anchorTop, prefer, flip, center, alignEnd, margin = 8, boundLeft, boundRight, boundary } = opts
   const ref = useRef<HTMLDivElement>(null)
   const [pos, setPos] = useState({ left: x, top: y, maxWidth: undefined as number | undefined, maxHeight: undefined as number | undefined })
   useLayoutEffect(() => {
@@ -192,7 +194,7 @@ export function useClampedMenu(x: number, y: number, opts: AnchorOpts & { bounda
         : undefined
       const wV = Math.min(el.offsetWidth * z, availableWidth)
       const hV = Math.min(el.offsetHeight * z, maxHeight === undefined ? Infinity : maxHeight * z)
-      const v = clampMenu(x - left, y - top, wV, hV, vw, vh, { anchorTop: anchorTop === undefined ? undefined : anchorTop - top, prefer, center, alignEnd, margin, boundLeft: boundLeft === undefined ? undefined : boundLeft - left, boundRight: boundRight === undefined ? undefined : boundRight - left })
+      const v = clampMenu(x - left, y - top, wV, hV, vw, vh, { anchorTop: anchorTop === undefined ? undefined : anchorTop - top, prefer, flip, center, alignEnd, margin, boundLeft: boundLeft === undefined ? undefined : boundLeft - left, boundRight: boundRight === undefined ? undefined : boundRight - left })
       // 比视口还宽(窄屏 × 固定宽度浮层):夹取只能贴左边、右边照样被裁 → 给个局部 px 的上限。
       const maxWidth = boundary || el.offsetWidth * z > availableWidth ? availableWidth / z : undefined
       const next = { left: (v.left + left) / z, top: (v.top + top) / z, maxWidth, maxHeight }
@@ -217,7 +219,7 @@ export function useClampedMenu(x: number, y: number, opts: AnchorOpts & { bounda
       ro.disconnect()
       document.removeEventListener('scroll', apply, true)
     }
-  }, [x, y, anchorTop, prefer, center, alignEnd, margin, boundLeft, boundRight, boundary])
+  }, [x, y, anchorTop, prefer, flip, center, alignEnd, margin, boundLeft, boundRight, boundary])
   return { ref, style: { left: pos.left, top: pos.top, maxWidth: pos.maxWidth, maxHeight: pos.maxHeight } }
 }
 
@@ -434,6 +436,7 @@ export function OverlayAt({
   y,
   anchorTop,
   prefer,
+  flip,
   center,
   alignEnd,
   margin,
@@ -450,6 +453,7 @@ export function OverlayAt({
   y: number
   anchorTop?: number
   prefer?: 'below' | 'above'
+  flip?: boolean
   center?: boolean
   alignEnd?: boolean
   margin?: number
@@ -462,7 +466,7 @@ export function OverlayAt({
   style?: CSSProperties
   children?: ReactNode
 } & Omit<HTMLAttributes<HTMLDivElement>, 'style' | 'className' | 'children'>) {
-  const p = useClampedMenu(x, y, { anchorTop, prefer, center, alignEnd, margin, boundLeft, boundRight, boundary })
+  const p = useClampedMenu(x, y, { anchorTop, prefer, flip, center, alignEnd, margin, boundLeft, boundRight, boundary })
   useExitGhost(p.ref)
   return (
     <div

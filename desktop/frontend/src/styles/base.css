@@ -4023,12 +4023,10 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 .model-select-btn:hover, .model-select-btn.is-open { border-color: var(--accent-ink); }
 .model-select-btn .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .model-select-btn svg { flex-shrink: 0; color: var(--text-muted); }
-/* ⚠️ 通用 .composer-menu 是 bottom:100%(输入框在页面底部,只能向上弹);设置页的字段上方就是
-   标题,向上弹会盖住自己的 label —— 这个变体把它翻下来。 */
-.composer-menu--down { top: 100%; bottom: auto; margin-top: 6px; margin-bottom: 0; left: 0; right: 0; max-width: none; transform-origin: top; }
-/* 下方放不下时翻上去(基类本就是 bottom:100%,这里只补左右拉满)。 */
-.composer-menu--up { left: 0; right: 0; max-width: none; margin-bottom: 6px; }
-.composer-menu--down .model-search, .composer-menu--up .model-search { margin-bottom: 4px; }
+/* ⚠️ 通用 .composer-menu 是 absolute + bottom:100%(输入框在页面底部,只能向上弹)。ModelSelect 用这个变体(portal 到 body):
+   fixed,left / top / max-height 由 followAnchor 贴着按钮写(先下后上、量真实高度),宽度由组件按控件宽给。 */
+.composer-menu--anchored { position: fixed; z-index: var(--z-menu); bottom: auto; margin: 0; max-width: none; transform-origin: top; } /* 与 .ctx-menu 同层:盖过浮动面板(55) */
+.composer-menu--anchored .model-search { margin-bottom: 4px; }
 
 /* ===== Markdown 正文统一排版(.md-body)=====
  * 凡是用 <Markdown>(react-markdown)渲染的地方都套这个类:插件 README/更新日志、关于页更新日志、
