@@ -333,7 +333,7 @@ else { f.el.append(card); head.dataset.floatDrag = '' }         // content goes 
 - `bare: true` = no host card skin. `id` = remember the user's dragged corner on this device (namespaced by plugin id). Drag needs 4 px, ignores buttons / inputs, snaps to the nearest anchor on release; `onAnchorChange(a)` reports it, `f.move(a)` moves it.
 - Never takes focus, never closes itself. Enter/exit use the shared toast motion. Stacking: view floats < Space floats < window floats < menus < guide tips < dialogs < palette — never write literal z-index, use `var(--z-*)`.
 - Wrong shapes throw `TypeError`; a disabled plugin gets a no-op handle. Desktop-level floats (over other apps) are host-only: no `'desktop'` scope for plugins.
-- To float a whole registered **view** (not DOM you draw), use `ctx.workspace.open(viewId, { layer: { float: 'space' | 'window' | 'view', anchor } })` (2.13.8+; `'view'` needs `host`). Same layers and anchors; the host draws the card head (title, "Show in main panel", close) and your `mount` gets `view.surface` `'mini'` (Mini look, default) or `'floating'` (`form: 'main'`). Same view + `key` reopens that card with new params. Closed on disable / reload / unregister / `close()`. Not restored after restart.
+- To float a whole registered **view** (not DOM you draw), use `ctx.workspace.open(viewId, { layer: { float: 'space' | 'window' | 'view', anchor } })` (2.13.8+; `'view'` needs `host`). Same layers and anchors; the host draws the card head (title, "Show in main panel", close) and your `mount` gets `view.surface` `'mini'` (Mini look, default) or `'floating'` (`form: 'main'`). Same view + `key` reopens that card with new params. Closed on disable / reload / unregister / `close()`. `space` cards are saved with that Space's layout (view, current params, look, key, anchor) and reopen after restart / on returning / on undoing "Reset layout" (late-registering views open when they register); "Reset layout" closes them. `window` / `view` cards are not restored (a `view` card is reopened by its host view on mount); their anchor is remembered per view + key.
 
 ### Opening views: ctx.workspace.open (2.13.8+)
 
@@ -341,7 +341,7 @@ Where (`layer`) and what it looks like (`form`) written apart; `openView` / `ope
 
 ```js
 await ctx.workspace?.open('board', { layer: { dock: 'right' } })                     // = openView(…, { location: 'right' })
-await ctx.workspace?.open({ view: 'board', params }, { layer: { float: 'desktop' } }) // Mini window (always on top, reused by view + key)
+await ctx.workspace?.open({ view: 'board', params }, { layer: { float: 'desktop' } }) // Mini window (on top; pin: false = not on top, no edge folding; reused by view + key)
 await ctx.workspace?.open('board', { layer: { float: 'desktop', pin: true }, form: 'main' }) // Floating Panel, on top only with pin
 const r = await ctx.workspace?.open('board', { layer: { float: 'space' } })           // card over the current Space
 // r: { ok: true, layer, form, close? } (where it actually went) | { ok: false, reason: 'unknown-view' | 'unsupported' | 'unavailable' | 'limit' | 'disabled' }

@@ -5,13 +5,20 @@
  *  「视图反注册(插件停用)→ 挂着它的浮层收掉」红;compactOf 不看 forms.mini → 三条红(只有 Mini 的停靠 / 桌面 Mini 的紧凑视图 / 反注册)。
  *  Codex 评审(11-08)那一轮的负对照(已实跑红):不比主人 →「紧凑视图只认同一个主人」红;身份按紧凑视图算 →「两个视图共用紧凑视图」红;
  *  换样子原地复用 →「换了样子 = 换一张卡」红;只看紧凑视图反注册 →「主视图反注册也收」红;停靠回落不看 mini 支持 →
- *  「一个样子都不支持 = unsupported」红;async 校验 →「参数不对同步抛」红;只看 UI_MODE →「原生手机」红;showInMain 不 setParams →「在主面板显示」红。 */
+ *  「一个样子都不支持 = unsupported」红;async 校验 →「参数不对同步抛」红;只看 UI_MODE →「原生手机」红;showInMain 不 setParams →「在主面板显示」红。
+ *  Space 布局那一轮(11-08 已实跑红):collect 不带挂起的 →「读不到 ≠ 没有」红;还原不 move 到布局锚点 →「锚点以布局为准」红;
+ *  锚点 id 不带 Space →「各记各的」红;不查能否序列化 →「循环引用」红;noteFloatParams 不改 rec.view →「开着的卡记进」红;
+ *  clear 不清挂起 →「恢复默认布局」红;Mini 的 pin 恒 true →「Mini 缺省置顶」两条红;
+ *  别的 Space 的卡变了也只存屏上这份(Codex 第二轮 P2)→「藏着的 Space」红。 */
 import * as React from 'react'
 import { act, createElement as h } from 'react'
 import { createRoot } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { FloatViews } from '@lcl/engine/FloatViews'
-import { checkOpenOptions, dockFallback, floatViewsSnapshot, planOpen, registerFloatViewRenderer, resetWorkspaceOpenForTest, setDesktopOpener, workspaceOpen, type OpenEnv } from '@lcl/engine/workspaceOpen'
+import { checkOpenOptions, dockFallback, floatViewsSnapshot, noteFloatParams, planOpen, registerFloatViewRenderer, resetWorkspaceOpenForTest, setDesktopOpener, workspaceOpen, type OpenEnv } from '@lcl/engine/workspaceOpen'
+import { floatPersistence, setFloatLayoutHost } from '@lcl/engine/floatPersistSeam'
+import { liveLayoutOwner, scheduleWorkspaceSave } from '@lcl/engine/dockviewStore'
+import { loadNamedLayout, saveNamedLayout, type PersistedFloat } from '@lcl/engine/layoutPersist'
 import { registerView, unregisterView } from '@lcl/engine/viewRegistry'
 import { resetFloatsForTest } from '@lcl/engine/floatLayer'
 import { useSpaceStore } from '@lcl/engine/spaceRegistry'
@@ -64,10 +71,14 @@ describe('planOpen · float desktop', () => {
   it('mini = 桌面 Mini:Mini 显示声明的紧凑视图(参数带过去),在主面板显示回到视图本身', () => {
     const p = planOpen({ type: 'v', params: { id: 1 } }, { layer: { float: 'desktop' }, form: 'mini' },
       env({ v: { main: true, mini: { view: { type: 'v.mini', params: { compact: true } } } }, 'v.mini': undefined }))
-    expect(p).toEqual({ kind: 'mini', view: { type: 'v.mini', params: { compact: true, id: 1 } }, mainView: { type: 'v', params: { id: 1 } } })
+    expect(p).toEqual({ kind: 'mini', view: { type: 'v.mini', params: { compact: true, id: 1 } }, mainView: { type: 'v', params: { id: 1 } }, pin: true })
   })
   it('form 缺省就是 mini;没声明 forms = Mini 里显示视图本身(同 openMiniPanel)', () => {
-    expect(planOpen({ type: 'v' }, { layer: { float: 'desktop' } }, env({ v: undefined }))).toEqual({ kind: 'mini', view: { type: 'v', params: undefined }, mainView: { type: 'v', params: undefined } })
+    expect(planOpen({ type: 'v' }, { layer: { float: 'desktop' } }, env({ v: undefined }))).toEqual({ kind: 'mini', view: { type: 'v', params: undefined }, mainView: { type: 'v', params: undefined }, pin: true })
+  })
+  it('Mini 缺省置顶;pin:false 不置顶(§7「桌面不等于置顶」:和 Floating Panel 的缺省相反)', () => {
+    expect(planOpen({ type: 'v' }, { layer: { float: 'desktop', pin: false } }, env({ v: undefined }))).toMatchObject({ kind: 'mini', pin: false })
+    expect(planOpen({ type: 'v' }, { layer: { float: 'desktop', pin: true } }, env({ v: undefined }))).toMatchObject({ kind: 'mini', pin: true })
   })
   it('某个 Space 的 mini 以它为主视图:走那个 Space(实体键 space:<id>,和 ⌘⇧M 开的是同一扇)', () => {
     const p = planOpen({ type: 'todo-list' }, { layer: { float: 'desktop' }, form: 'mini' },
@@ -77,7 +88,7 @@ describe('planOpen · float desktop', () => {
   it('紧凑视图只认同一个主人:插件 P 的视图不落到插件 Q 的紧凑视图上(Space 映射、forms.mini 都一样)', () => {
     const spaceMiniOf = (t: string) => (t === 'plugin:p:v' ? { spaceId: 's', view: { type: 'plugin:q:c' } } : null)
     expect(planOpen({ type: 'plugin:p:v' }, { layer: { float: 'desktop' } }, env({ 'plugin:p:v': undefined, 'plugin:q:c': undefined }, { spaceMiniOf })))
-      .toEqual({ kind: 'mini', view: { type: 'plugin:p:v', params: undefined }, mainView: { type: 'plugin:p:v', params: undefined } })
+      .toEqual({ kind: 'mini', view: { type: 'plugin:p:v', params: undefined }, mainView: { type: 'plugin:p:v', params: undefined }, pin: true })
     expect(planOpen({ type: 'plugin:p:v' }, { layer: { float: 'desktop' } }, env({ 'plugin:p:v': { main: true, mini: { view: { type: 'plugin:q:c' } } }, 'plugin:q:c': undefined })))
       .toMatchObject({ kind: 'mini', view: { type: 'plugin:p:v' } })
     expect(planOpen({ type: 'plugin:p:v' }, { layer: { float: 'desktop' } }, env({ 'plugin:p:v': { main: true, mini: { view: { type: 'plugin:p:c' } } }, 'plugin:p:c': undefined })))
@@ -85,7 +96,7 @@ describe('planOpen · float desktop', () => {
   })
   it('调用方点名了主视图(旧 openMiniPanel 的 mainViewId):target 就是紧凑视图,不按 forms 换', () => {
     const p = planOpen({ type: 'v.mini' }, { layer: { float: 'desktop' }, form: 'mini', mainView: { type: 'v' } }, env({ 'v.mini': { side: true } }))
-    expect(p).toEqual({ kind: 'mini', view: { type: 'v.mini', params: undefined }, mainView: { type: 'v' } })
+    expect(p).toEqual({ kind: 'mini', view: { type: 'v.mini', params: undefined }, mainView: { type: 'v' }, pin: true })
   })
   it('main = Floating Panel,缺省不置顶;pin:true 置顶', () => {
     expect(planOpen({ type: 'v' }, { layer: { float: 'desktop' }, form: 'main' }, env({ v: undefined }))).toEqual({ kind: 'panel', pin: false })
@@ -173,6 +184,8 @@ describe('workspaceOpen', () => {
     setDesktopOpener({ mini, panel })
     expect(await workspaceOpen({ type: 'v', params: { a: 1 } }, { layer: { float: 'desktop' }, form: 'mini', key: 'k' })).toEqual({ ok: false, reason: 'limit', limit: 6 })
     expect(mini).toHaveBeenCalledWith({ view: { type: 'v', params: { a: 1 } }, mainView: { type: 'v', params: { a: 1 } }, spaceId: undefined, params: { a: 1 }, key: 'k', title: 'V' })
+    await workspaceOpen({ type: 'v' }, { layer: { float: 'desktop', pin: false }, form: 'mini' })
+    expect(mini).toHaveBeenLastCalledWith(expect.objectContaining({ pin: false }))
     expect(await workspaceOpen({ type: 'v' }, { layer: { float: 'desktop', pin: true }, form: 'main', key: 'k' })).toEqual({ ok: true, layer: { float: 'desktop' }, form: 'main' })
     expect(panel).toHaveBeenCalledWith({ view: { type: 'v', params: undefined }, title: 'V', pin: true, key: 'k', size: undefined })
   })
@@ -294,5 +307,115 @@ describe('workspaceOpen', () => {
   it('没挂浮层宿主:unavailable,不留浮层', async () => {
     expect(await workspaceOpen({ type: 'v' }, { layer: { float: 'window' } })).toEqual({ ok: false, reason: 'unavailable' })
     expect(document.querySelector('.lcl-float')).toBeNull()
+  })
+})
+
+describe('Space 作用域的卡 × Space 布局(§7 位置记忆)', () => {
+  const factory = () => null
+  const saved = vi.fn()
+  let owner: string | null = 'cloud'
+  const fp = () => floatPersistence()!
+  const card = (type: string, over: Partial<PersistedFloat> = {}): PersistedFloat =>
+    ({ type, form: 'mini', anchor: 'bottom-center', view: { type, params: { n: 2 } }, mainView: { type, params: { n: 2 } }, ...over })
+  beforeEach(() => {
+    resetWorkspaceOpenForTest(); resetFloatsForTest()
+    document.body.innerHTML = ''
+    localStorage.clear()
+    useSpaceStore.setState({ activeSpaceId: 'cloud' })
+    registerView({ type: 'v', displayName: 'V', factory })
+    saved.mockClear()
+    owner = 'cloud'
+    setFloatLayoutHost({ save: saved, owner: () => owner })
+  })
+  afterEach(() => { resetWorkspaceOpenForTest(); resetFloatsForTest(); unregisterView('v'); unregisterView('late'); setFloatLayoutHost({ save: scheduleWorkspaceSave, owner: liveLayoutOwner }) })
+
+  it('开着的卡记进这个 Space 的布局(视图、当前参数、样子、key、锚点);开 / 视图改参数 / 关都请存一次;窗口作用域不记', async () => {
+    registerFloatViewRenderer()
+    await workspaceOpen({ type: 'v', params: { n: 1 } }, { layer: { float: 'space', anchor: 'top-end' }, key: 'k' })
+    expect(saved).toHaveBeenCalledTimes(1)
+    expect(fp().collect('cloud')).toEqual([{ type: 'v', form: 'mini', anchor: 'top-end', view: { type: 'v', params: { n: 1 } }, mainView: { type: 'v', params: { n: 1 } }, key: 'k' }])
+    expect(fp().collect('chat')).toEqual([])
+    const [rec] = floatViewsSnapshot()
+    noteFloatParams(rec, { n: 5 })
+    expect(saved).toHaveBeenCalledTimes(2)
+    expect(fp().collect('cloud')[0]).toMatchObject({ view: { params: { n: 5 } }, mainView: { params: { n: 5 } } })
+    rec.handle.move('bottom-start')
+    expect(fp().collect('cloud')[0].anchor).toBe('bottom-start')
+    await workspaceOpen({ type: 'v' }, { layer: { float: 'window' } })
+    expect(fp().collect('cloud')).toHaveLength(1)
+    rec.close()
+    expect(saved).toHaveBeenCalledTimes(3)
+    expect(fp().collect('cloud')).toEqual([])
+  })
+
+  it('布局换上来:按布局开回卡,锚点以布局为准(盖过本机记忆);开着的不重开、不改', () => {
+    registerFloatViewRenderer()
+    localStorage.setItem('lcl.float.anchor.open:space:cloud:v#k', 'top-start')
+    fp().restore('cloud', [card('v', { key: 'k' })])
+    const [rec] = floatViewsSnapshot()
+    expect(rec).toMatchObject({ scope: 'space', space: 'cloud', key: 'k', view: { params: { n: 2 } } })
+    expect(rec.handle.anchor).toBe('bottom-center')
+    fp().restore('cloud', [card('v', { key: 'k', view: { type: 'v', params: { n: 9 } } })])
+    expect(floatViewsSnapshot()).toEqual([rec])
+    expect(rec.view.params).toEqual({ n: 2 })
+  })
+
+  it('视图还没注册 / 浮层宿主还没挂上:先挂起,存布局照样带上(读不到 ≠ 没有);到了再开', () => {
+    fp().restore('cloud', [card('late'), card('v')])
+    expect(floatViewsSnapshot()).toHaveLength(0)
+    expect(fp().collect('cloud').map((f) => f.type)).toEqual(['late', 'v'])
+    registerFloatViewRenderer()
+    expect(floatViewsSnapshot().map((r) => r.targetType)).toEqual(['v'])
+    expect(fp().collect('cloud').map((f) => f.type).sort()).toEqual(['late', 'v'])
+    registerView({ type: 'late', displayName: 'Late', factory })
+    expect(floatViewsSnapshot().map((r) => r.targetType).sort()).toEqual(['late', 'v'])
+    expect(fp().collect('cloud')).toHaveLength(2)
+  })
+
+  it('恢复默认布局:收掉这个 Space 的卡和挂起的;别的 Space 不动', async () => {
+    registerFloatViewRenderer()
+    await workspaceOpen({ type: 'v' }, { layer: { float: 'space' } })
+    await workspaceOpen({ type: 'v' }, { layer: { float: 'space', space: 'chat' } })
+    fp().restore('cloud', [card('late')])
+    fp().clear('cloud')
+    expect(fp().collect('cloud')).toEqual([])
+    expect(floatViewsSnapshot().map((r) => r.space)).toEqual(['chat'])
+  })
+
+  it('参数存不下(循环引用)的卡不记,别的照记', async () => {
+    registerFloatViewRenderer()
+    const loop: Record<string, unknown> = {}
+    loop.self = loop
+    await workspaceOpen({ type: 'v', params: loop }, { layer: { float: 'space' }, key: 'a' })
+    await workspaceOpen({ type: 'v', params: { ok: 1 } }, { layer: { float: 'space' }, key: 'b' })
+    expect(fp().collect('cloud').map((f) => f.key)).toEqual(['b'])
+  })
+
+  it('藏着的 Space 的卡变了(插件 close() / 视图改参数):改那个 Space 存着的那份,不存屏上这份;那个 Space 没存过就不建', async () => {
+    registerFloatViewRenderer()
+    const env = { version: 4 as const, space: 'chat', dockview: { tag: 'chat-layout' }, sidebars: { left: { visible: true, stash: [] }, right: { visible: true, stash: [] } } }
+    saveNamedLayout('space:chat', { ...env, floats: [card('v')] })
+    await workspaceOpen({ type: 'v', params: { n: 1 } }, { layer: { float: 'space', space: 'chat' } })
+    const [rec] = floatViewsSnapshot()
+    saved.mockClear()
+    noteFloatParams(rec, { n: 7 })
+    await new Promise((r) => setTimeout(r, 150))
+    expect(saved).not.toHaveBeenCalled()
+    expect(loadNamedLayout('space:chat')).toMatchObject({ dockview: { tag: 'chat-layout' }, floats: [{ view: { params: { n: 7 } } }] })
+    rec.close()
+    await new Promise((r) => setTimeout(r, 150))
+    expect(loadNamedLayout('space:chat')).toMatchObject({ dockview: { tag: 'chat-layout' } })
+    expect('floats' in loadNamedLayout('space:chat')!).toBe(false)
+    await workspaceOpen({ type: 'v' }, { layer: { float: 'space', space: 'never' } })
+    await new Promise((r) => setTimeout(r, 150))
+    expect(loadNamedLayout('space:never')).toBeNull()
+  })
+
+  it('Space 作用域的锚点记忆每个 Space 各记各的', async () => {
+    registerFloatViewRenderer()
+    localStorage.setItem('lcl.float.anchor.open:space:cloud:v', 'top-start')
+    await workspaceOpen({ type: 'v' }, { layer: { float: 'space' } })
+    await workspaceOpen({ type: 'v' }, { layer: { float: 'space', space: 'chat' } })
+    expect(floatViewsSnapshot().map((r) => [r.space, r.handle.anchor])).toEqual([['cloud', 'top-start'], ['chat', 'bottom-end']])
   })
 })

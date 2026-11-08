@@ -775,12 +775,15 @@ export interface PluginViewForms {
 
 /** Where `ctx.workspace.open` puts a view (2.13.8+).
  *  - `{ dock }`: docked in the workbench, the same as `openView`'s location.
- *  - `{ float: 'desktop', pin? }`: its own small system window — the Mini look is the Mini Panel (always on top), the main look is
- *    the Floating Panel (on top only with `pin: true`). Web has no Mini window and phones have neither: there the view floats in
- *    the window instead (a half-height sheet on phones), and the main look docks in the main area on phones.
+ *  - `{ float: 'desktop', pin? }`: its own small system window — the Mini look is the Mini Panel (on top unless `pin: false`;
+ *    an unpinned Mini does not fold away at the screen edge), the main look is the Floating Panel (on top only with `pin: true`).
+ *    Web has no Mini window and phones have neither: there the view floats in the window instead (a half-height sheet on
+ *    phones), and the main look docks in the main area on phones.
  *  - `{ float: 'view', host }` / `{ float: 'space' }` / `{ float: 'window' }`: a card floating inside the window, in the same
  *    three scopes as `ctx.ui.float` (inside one element of your view / over the current Space, hidden while another Space is
- *    shown / over the whole window). `anchor` defaults to 'bottom-end'; the person can drag the card to another corner. */
+ *    shown / over the whole window). `anchor` defaults to 'bottom-end'; the person can drag the card to another corner.
+ *    Space cards are saved with that Space's layout (view, current params, look, key, anchor) and come back after a restart;
+ *    window and view cards do not (a view card is reopened by your view when it mounts). */
 export type PluginOpenLayer =
   | { dock: PluginViewLocation }
   | { float: 'desktop'; pin?: boolean }

@@ -31,7 +31,8 @@ function pluginLayer(raw: unknown): OpenLayer | undefined {
   if (typeof raw !== 'object') throw new TypeError('workspace.open layer must be { dock } or { float }')
   const l = raw as Record<string, unknown>
   if ('dock' in l) return { dock: l.dock as 'main' } // 值由引擎的 checkOpenOptions 核
-  if (l.float === 'desktop') return { float: 'desktop', pin: l.pin === true }
+  // pin 只认布尔、没给就不带:缺省各归各(Mini 置顶、Floating Panel 不置顶),不能在这里替插件填成 false
+  if (l.float === 'desktop') return typeof l.pin === 'boolean' ? { float: 'desktop', pin: l.pin } : { float: 'desktop' }
   if (l.float === 'view' || l.float === 'space' || l.float === 'window') {
     const anchor = l.anchor as FloatAnchor | undefined // 值由引擎的 checkOpenOptions 核
     return l.float === 'view' ? { float: 'view', host: l.host as HTMLElement, anchor } : { float: l.float, anchor }

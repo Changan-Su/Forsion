@@ -145,12 +145,17 @@ if (open) {
 | `layer` | Where it goes |
 |---|---|
 | `{ dock: 'main' \| 'left' \| 'right' \| 'bottom' }` | Docked in the workbench, like `openView`'s `location`; the place sets the look (either side panel is `side`) |
-| `{ float: 'desktop', pin? }` | A small system window: `form: 'mini'` (default) is the Mini Panel (always on top, several at once, reused by `key`); `'main'` is the Floating Panel (not on top unless `pin: true`) |
+| `{ float: 'desktop', pin? }` | A small system window: `form: 'mini'` (default) is the Mini Panel (on top by default; `pin: false` keeps it level with other windows and it no longer folds away at the screen edge; several at once, reused by `key`, position and size remembered per entity across restarts); `'main'` is the Floating Panel (not on top unless `pin: true`) |
 | `{ float: 'space', anchor? }` | A card floating over the current Space; hidden while another Space is shown, back as it was on return |
 | `{ float: 'window', anchor? }` | A card floating over the whole window; stays across Space switches |
 | `{ float: 'view', host, anchor? }` | A card floating inside one element (`host`) of your view |
 
-The last three are the same floating layer as `ctx.ui.float` (six anchors, the person can drag the card to another corner, remembered on this device per scope + view + key). The difference is that the card holds your whole registered **view**, not DOM you draw: the host draws the card head (title, "Show in main panel", close) and your view's `mount` gets its `view` as usual (`surface` is `'mini'` or `'floating'`; `showInMainPanel()` opens the main area with the current params and closes the card). Cards are not part of the layout and do not come back after a restart. They close when your plugin is disabled or reloaded, when the view is unregistered, when you call `close()`, or when the person closes them. Opening the same view with the same `key` again brings up that card with the new params; params never count as identity.
+The last three are the same floating layer as `ctx.ui.float` (six anchors, the person can drag the card to another corner). The difference is that the card holds your whole registered **view**, not DOM you draw: the host draws the card head (title, "Show in main panel", close) and your view's `mount` gets its `view` as usual (`surface` is `'mini'` or `'floating'`; `showInMainPanel()` opens the main area with the current params and closes the card). Cards close when your plugin is disabled or reloaded, when the view is unregistered, when you call `close()`, or when the person closes them. Opening the same view with the same `key` again brings up that card with the new params; params never count as identity.
+
+Where cards are remembered (2.13.8+):
+- `space`: the cards open in a Space (view, current params including those your view changed with `view.setParams`, look, `key`, anchor) are saved with that Space's layout. They come back after a restart, when the person returns to that Space, and when they undo "Reset layout". If your plugin loads after the layout, the card opens as soon as its view registers. "Reset layout" closes them. A card closed and opened again goes back to the corner the person last dragged it to in that Space. Cards closed because the plugin was disabled do not come back when it is enabled again.
+- `window`: the anchor is remembered on this device per view + `key`; the card itself does not survive a restart.
+- `view`: the card belongs to your view, which opens it again each time it mounts; the anchor is remembered on this device per view + `key` and is not written into the host view's params.
 
 **Declare looks with `forms`**: pass `forms` to `registerView` to say which looks the view supports:
 

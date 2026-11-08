@@ -20,14 +20,51 @@ export interface PersistedSidebar {
   rule?: string
 }
 
+/** 这个 Space 里 workspace.open 开着的浮层卡(§7「Space 作用域的锚点和拖过的位置跟 Space 布局一起记」)。
+ *  type = 调用方要开的视图(卡的身份按它 + key);view = 卡里渲染的那个(紧凑视图或它本身)和它当前的参数;
+ *  mainView =「在主面板显示」去哪;title 只记调用方给的(没给 = 还原时按当前语言取视图名)。 */
+export interface PersistedFloat {
+  type: string
+  form: 'mini' | 'main'
+  view: PersistedPanel
+  mainView: PersistedPanel
+  key?: string
+  title?: string
+  anchor: string
+}
+
+/** 读信封里的 floats:不成形的条目逐条丢掉,不连累整份布局(老代码读到这个键也只是忽略)。 */
+export function readPersistedFloats(value: unknown): PersistedFloat[] {
+  if (!Array.isArray(value)) return []
+  const panel = (v: unknown): v is PersistedPanel => !!v && typeof v === 'object' && typeof (v as PersistedPanel).type === 'string' && !!(v as PersistedPanel).type
+    && (!(v as PersistedPanel).params || (typeof (v as PersistedPanel).params === 'object' && !Array.isArray((v as PersistedPanel).params)))
+  const out: PersistedFloat[] = []
+  for (const f of value as Partial<PersistedFloat>[]) {
+    if (!f || typeof f !== 'object' || typeof f.type !== 'string' || !f.type || (f.form !== 'mini' && f.form !== 'main')) continue
+    if (!panel(f.view) || !panel(f.mainView) || typeof f.anchor !== 'string') continue
+    if (f.key != null && typeof f.key !== 'string') continue
+    if (f.title != null && typeof f.title !== 'string') continue
+    out.push({
+      type: f.type, form: f.form, anchor: f.anchor,
+      view: { type: f.view.type, params: { ...(f.view.params ?? {}) } },
+      mainView: { type: f.mainView.type, params: { ...(f.mainView.params ?? {}) } },
+      ...(f.key ? { key: f.key } : {}), ...(f.title ? { title: f.title } : {}),
+    })
+  }
+  return out
+}
+
 /** v4 布局信封：Dockview 图 + 引擎自己的侧栏状态。
  *  bottom(底部面板)**刻意做成可选、不升版本号**:老 blob 没有它 = 底部收起,新 blob 被老代码读到也只是
  *  多一个被忽略的键 —— 升 v5 会让所有人的布局重建一次,为一个新增区付这个代价不值。
  *  space(这份布局是给哪个 Space 摆的)同理可选:它和布局**同一次写盘**,冷启动归档按它认主,不再只信
- *  「上次退出在哪」那个单独的键(两把键不同步时,回落 Space 的布局会被归档到别人名下)。老 blob 没有它 = 照旧信那个键。 */
+ *  「上次退出在哪」那个单独的键(两把键不同步时,回落 Space 的布局会被归档到别人名下)。老 blob 没有它 = 照旧信那个键。
+ *  floats(这个 Space 开着的浮层卡,2026-11-08)同理可选:只在有 space 时写(归属不明就不记,不替它推定一个);
+ *  不成形的条目读时逐条丢(readPersistedFloats),isLayoutEnvelopeV4 不因它拒收整份布局。 */
 export interface LayoutEnvelopeV4 {
   version: 4
   space?: string
+  floats?: PersistedFloat[]
   dockview: unknown
   sidebars: {
     left: PersistedSidebar

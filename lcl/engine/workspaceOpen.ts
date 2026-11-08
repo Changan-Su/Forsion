@@ -22,18 +22,31 @@
  *      走那个 Space(桌面 Mini 的实体键就是 space:<id>,和 ⌘⇧M / 命令面板开的同一扇)→ View 本身。
  *      紧凑视图只认同一个主人(ownerOf):插件 P 的视图不落到插件 Q 的紧凑视图上。
  *   5. 桌面:没有 Mini 接缝 → 窗口作用域的浮层(手机上是半屏抽屉);没有 Floating Panel 接缝 → 停靠主区
- *      (手机上占满一屏的面板就是主区)。Mini 恒置顶(pin:false 留到下一步),Floating Panel 缺省不置顶、pin:true 置顶。
+ *      (手机上占满一屏的面板就是主区)。置顶:Mini 缺省置顶、pin:false 不置顶(也不贴边折叠:折起来的卡压在别的窗口
+ *      下面就够不着了);Floating Panel 缺省不置顶、pin:true 置顶(§7「桌面不等于置顶」)。
  *   6. 这扇窗没挂浮层宿主(Mini 窗、Floating Panel 窗)→ View / Space / 窗口作用域打不开,回 { ok:false, reason:'unavailable' }。
  *
- * 浮层里的 View 是合成 leaf 渲染的(同 SpacePeek / FloatingViewSurface / MiniColumnHost 的先例):不进布局、不进
- * singleton 计数、切 Space 跟着藏(Space 作用域)、View 类型反注册(插件停用)就收掉。位置只记用户拖到的锚点(本机,
- * 按 View + key),跟 Space 布局一起记 / 重启后还原是下一步。
+ * 浮层里的 View 是合成 leaf 渲染的(同 SpacePeek / FloatingViewSurface / MiniColumnHost 的先例):不进 Dockview 图、不进
+ * singleton 计数、切 Space 跟着藏(Space 作用域)、View 类型反注册(插件停用)就收掉。
+ *
+ * 位置记忆(§7):
+ *   - Space 作用域:开着哪些卡(视图、当前参数、样子、key、锚点)跟那个 Space 的布局一起存(信封的 floats,经
+ *     floatPersistSeam),重启 / 切回来 / 撤销「恢复默认布局」时开回来;用户亲手恢复默认布局时一起收。布局里记着的卡按布局里的
+ *     锚点还原;关掉再开的按用户上次在这个 Space 拖到的锚点(本机,按 Space + View + key)。视图还没注册(插件晚到)或浮层宿主
+ *     还没挂上的先挂起,到了再开,其间存布局照样带上它们(读不到 ≠ 没有)。
+ *   - View 作用域:卡归宿主 View 管,宿主每次挂上自己再开;锚点按 View + key 记在本机。不写进宿主 View 的参数 —— 改参数会让
+ *     宿主整个重渲染,为一个锚点不值。
+ *   - 窗口作用域:锚点按 View + key 记在本机,卡本身不跨重启。
+ *   - 桌面(Mini):主进程按实体键记位置和大小(userData/mini-windows.json)。
  */
 import { getView, subscribeViews } from './viewRegistry'
 import { useWorkspace } from './workspaceStore'
-import { useSpaceStore } from './spaceRegistry'
+import { spaceLayoutName, useSpaceStore } from './spaceRegistry'
 import { openFloat, FLOAT_ANCHORS, type FloatAnchor, type FloatHandle } from './floatLayer'
-import { IS_MINI_PANEL, UI_MODE } from './uiMode'
+import { IS_MAIN_WINDOW, IS_MINI_PANEL, UI_MODE } from './uiMode'
+import { floatLayoutChanged, floatLayoutOwner, setFloatPersistence } from './floatPersistSeam'
+import type { PersistedFloat } from './layoutPersist'
+import { loadNamedLayout, readPersistedFloats, saveNamedLayout } from './layoutPersist'
 import type { Leaf, ViewDefinition, ViewForm, ViewForms, ViewLocation } from './types'
 
 export type FloatOpenScope = 'view' | 'space' | 'window'
@@ -67,7 +80,8 @@ export type OpenResult =
 
 /** 壳层接上的系统小窗(桌面 = window.tangu.openMini / openFloatingPanel;网页只有 panel = 页内浮层)。 */
 export interface DesktopOpener {
-  mini?(req: { view: OpenTarget; mainView: OpenTarget; spaceId?: string; params?: Record<string, unknown>; key?: string; title?: string }):
+  /** pin:false = 这扇 Mini 不置顶(缺省置顶,同今天)。 */
+  mini?(req: { view: OpenTarget; mainView: OpenTarget; spaceId?: string; params?: Record<string, unknown>; key?: string; title?: string; pin?: false }):
     Promise<{ ok: true } | { ok: false; reason: 'limit'; limit: number } | undefined>
   panel?(req: { view: OpenTarget; title: string; pin: boolean; key?: string; size?: OpenOptions['size'] }): void
 }
@@ -88,7 +102,7 @@ export interface OpenEnv {
 
 export type OpenPlan =
   | { kind: 'dock'; loc: ViewLocation; form: ViewForm }
-  | { kind: 'mini'; view: OpenTarget; mainView: OpenTarget; spaceId?: string }
+  | { kind: 'mini'; view: OpenTarget; mainView: OpenTarget; spaceId?: string; pin: boolean }
   | { kind: 'panel'; pin: boolean }
   | { kind: 'float'; scope: FloatOpenScope; form: 'mini' | 'main'; view: OpenTarget; mainView: OpenTarget; sheet: boolean }
   | { kind: 'none'; reason: Exclude<OpenFailure, 'limit'> }
@@ -154,7 +168,7 @@ export function planOpen(target: OpenTarget, opts: OpenOptions, env: OpenEnv): O
   }
   if (layer.float !== 'desktop') return floatIn(layer.float, form)
   if (form === 'mini') {
-    if (env.desktopMini) { const c = compactOf(target, def, env, opts.mainView); return { kind: 'mini', ...c } }
+    if (env.desktopMini) { const c = compactOf(target, def, env, opts.mainView); return { kind: 'mini', ...c, pin: layer.pin !== false } }
     return floatIn('window', 'mini') // §7:网页 / 手机没有桌面作用域,降成窗口作用域(手机上 = 半屏抽屉)
   }
   if (env.desktopPanel) return { kind: 'panel', pin: layer.pin === true }
@@ -171,6 +185,11 @@ export interface FloatViewRec {
   /** 调用方要开的那个视图(身份按它算;它或渲染的紧凑视图任一反注册,卡就收)。 */
   readonly targetType: string
   readonly scope: FloatOpenScope
+  /** Space 作用域:属于哪个 Space(别的作用域 '')。 */
+  readonly space: string
+  readonly key: string
+  /** 调用方给的标题(没给 = 视图名,还原时按当时语言重取,不记)。 */
+  readonly customTitle?: string
   readonly form: 'mini' | 'main'
   readonly handle: FloatHandle
   readonly sheet: boolean
@@ -201,13 +220,17 @@ export function floatViewsSnapshot(): readonly FloatViewRec[] { return snapshot 
 /** FloatViews 挂上 / 卸下时登记:没人渲染的窗口(Mini、Floating Panel)不开 View 浮层。 */
 export function registerFloatViewRenderer(): () => void {
   renderers++
+  flushPendingFloats() // 布局先还原、浮层宿主后挂上:记着的卡这时开
   return () => { renderers-- }
 }
 
 function watchUnregister(): void {
   if (unsubViews) return
-  // 插件停用 → 它的视图类型反注册 → 挂着它的浮层收掉(同工作台里的 leaf 先关再反注册)
-  unsubViews = subscribeViews(() => { for (const r of [...recs.values()]) if (!getView(r.view.type) || !getView(r.targetType)) r.close() })
+  // 插件停用 → 它的视图类型反注册 → 挂着它的浮层收掉(同工作台里的 leaf 先关再反注册);新注册上来的 → 挂起的卡开回来
+  unsubViews = subscribeViews(() => {
+    for (const r of [...recs.values()]) if (!getView(r.view.type) || !getView(r.targetType)) r.close()
+    flushPendingFloats()
+  })
 }
 
 function displayTitle(type: string): string {
@@ -215,7 +238,8 @@ function displayTitle(type: string): string {
   return typeof n === 'function' ? n() : n || type
 }
 
-function openViewFloat(targetType: string, plan: Extract<OpenPlan, { kind: 'float' }>, opts: OpenOptions, layer: OpenLayer): FloatViewRec {
+/** restoreAnchor:从布局还原时按布局里记的锚点放(盖过本机记忆);平常开不给。 */
+function openViewFloat(targetType: string, plan: Extract<OpenPlan, { kind: 'float' }>, opts: OpenOptions, layer: OpenLayer, restoreAnchor?: FloatAnchor): FloatViewRec {
   const fl = 'float' in layer && layer.float !== 'desktop' && layer.float === plan.scope ? layer : undefined
   const host = plan.scope === 'view' ? fl?.host : undefined
   let hostId = ''
@@ -228,6 +252,7 @@ function openViewFloat(targetType: string, plan: Extract<OpenPlan, { kind: 'floa
   const prev = recs.get(ident)
   // 换了样子(mini ↔ main、抽屉与否)= 换一张卡:尺寸、卡头、视图拿到的 surface 都不一样,原地改不干净
   if (prev && !prev.handle.closed && (prev.form !== plan.form || prev.sheet !== plan.sheet || prev.view.type !== plan.view.type)) prev.close()
+  const persisted = plan.scope === 'space'
   if (prev && !prev.handle.closed) {
     prev.view = plan.view
     prev.mainView = plan.mainView
@@ -235,20 +260,25 @@ function openViewFloat(targetType: string, plan: Extract<OpenPlan, { kind: 'floa
     prev.gen++
     prev.nudge++
     emit()
+    if (persisted) spaceChanged(space)
     return prev
   }
   const handle = openFloat({
     scope: plan.scope, host, space: space || undefined, label: title,
-    anchor: plan.sheet ? 'bottom-center' : fl?.anchor ?? 'bottom-end',
-    // 抽屉不记锚点(恒在底边);别的按「作用域 + View + key」记用户拖到哪
-    id: plan.sheet ? undefined : `open:${plan.scope}:${targetType}${key ? `#${key}` : ''}`,
+    anchor: plan.sheet ? 'bottom-center' : restoreAnchor ?? fl?.anchor ?? 'bottom-end',
+    // 抽屉不记锚点(恒在底边);别的记用户拖到哪:Space 作用域按 Space + View + key(每个 Space 各记各的),别的按作用域 + View + key
+    id: plan.sheet ? undefined : persisted ? `open:space:${space}:${targetType}${key ? `#${key}` : ''}` : `open:${plan.scope}:${targetType}${key ? `#${key}` : ''}`,
+    ...(persisted ? { onAnchorChange: () => spaceChanged(space) } : {}),
   })
+  // 布局里记着的锚点盖过本机记忆(两者平常一致;按布局换上来时以布局为准)。move 不写本机记忆
+  if (restoreAnchor && !plan.sheet && handle.anchor !== restoreAnchor) handle.move(restoreAnchor)
   handle.el.dataset.viewFloat = plan.form
   if (plan.sheet) handle.el.dataset.sheet = ''
   let settle!: () => void
   const closed = new Promise<void>((r) => { settle = r })
   const rec: FloatViewRec = {
-    id: `float-view:${++seq}`, ident, targetType, scope: plan.scope, form: plan.form, handle, sheet: plan.sheet,
+    id: `float-view:${++seq}`, ident, targetType, scope: plan.scope, space, key, ...(opts.title ? { customTitle: opts.title } : {}),
+    form: plan.form, handle, sheet: plan.sheet,
     view: plan.view, mainView: plan.mainView, title, gen: 0, nudge: 0, closed,
     close: () => {
       handle.close()
@@ -256,13 +286,112 @@ function openViewFloat(targetType: string, plan: Extract<OpenPlan, { kind: 'floa
       if (recs.get(ident) !== rec) return
       recs.delete(ident)
       emit()
+      if (persisted) spaceChanged(space)
     },
   }
   recs.set(ident, rec)
   watchUnregister()
   emit()
+  if (persisted) spaceChanged(space)
   return rec
 }
+
+/** 卡里的视图改了自己的参数(合成 leaf 的 setParams):记到卡上,Space 作用域的跟布局一起存(重启后回到改过的那份)。 */
+export function noteFloatParams(rec: FloatViewRec, params: Record<string, unknown>): void {
+  if (recs.get(rec.ident) !== rec) return
+  rec.view = { ...rec.view, params: { ...params } }
+  if (rec.mainView.type === rec.view.type) rec.mainView = rec.view
+  if (rec.scope === 'space') spaceChanged(rec.space)
+}
+
+// ── Space 作用域的卡 × Space 布局(floatPersistSeam;dockviewStore 存 / 换布局时调)──────────────────────────────
+
+/** 布局里记着、还没开回来的卡(按 Space)。存布局时照样带上:插件晚到不等于卡没了。 */
+const pendingFloats = new Map<string, PersistedFloat[]>()
+
+/** Space 的卡变了:是屏上这份布局的 Space → 存屏上这份;是别的 Space(切走了、卡藏着,插件 close() / 停用 / 视图改参数)
+ *  → 改那个 Space 存着的那份里的 floats(不动它的 Dockview 图)。不改的话,回到那个 Space 时关掉的卡又被开回来、改的参数丢了。
+ *  那个 Space 还没存过布局 → 不建:等进那个 Space、它第一次存时带上。只在主窗、桌面工作台里做(单列壳 / 卫星窗的布局另有键)。 */
+const patchTimers = new Map<string, ReturnType<typeof setTimeout>>()
+function spaceChanged(space: string): void {
+  const owner = floatLayoutOwner()
+  if (!space || owner === null || owner === space || !IS_MAIN_WINDOW || !('bottomVisible' in useWorkspace.getState())) { floatLayoutChanged(); return }
+  clearTimeout(patchTimers.get(space))
+  patchTimers.set(space, setTimeout(() => { patchTimers.delete(space); patchArchivedFloats(space) }, 100))
+}
+function patchArchivedFloats(space: string): void {
+  if (floatLayoutOwner() === space) { floatLayoutChanged(); return } // 去抖期间人已切回来:存屏上这份就是
+  const name = spaceLayoutName(space)
+  const blob = loadNamedLayout(name)
+  if (!blob) return
+  const floats = collectFloats(space)
+  const { floats: _old, ...rest } = blob
+  void _old
+  saveNamedLayout(name, floats.length ? { ...rest, floats } : rest)
+}
+const spaceIdent = (space: string, type: string, key: string): string => `space|${space}|${type}|${key}`
+
+/** 参数存得下才记(插件塞了循环引用之类:这张卡不记,别让整份布局写不进去)。 */
+function serializable(v: unknown): boolean { try { JSON.stringify(v); return true } catch { return false } }
+
+function toPersisted(r: FloatViewRec): PersistedFloat | null {
+  const f: PersistedFloat = {
+    type: r.targetType, form: r.form, anchor: r.handle.anchor,
+    view: { type: r.view.type, params: { ...(r.view.params ?? {}) } },
+    mainView: { type: r.mainView.type, params: { ...(r.mainView.params ?? {}) } },
+    ...(r.key ? { key: r.key } : {}), ...(r.customTitle ? { title: r.customTitle } : {}),
+  }
+  return serializable(f) ? f : null
+}
+
+function flushPendingFloats(): void {
+  if (renderers === 0 || pendingFloats.size === 0) return
+  const mobile = liveEnv().mobile
+  for (const [space, list] of [...pendingFloats]) {
+    const left: PersistedFloat[] = []
+    for (const f of list) {
+      const live = recs.get(spaceIdent(space, f.type, f.key ?? ''))
+      if (live && !live.handle.closed) continue // 开着的以开着的为准
+      if (!getView(f.type) || !getView(f.view.type)) { left.push(f); continue }
+      const anchor = (FLOAT_ANCHORS as readonly string[]).includes(f.anchor) ? f.anchor as FloatAnchor : undefined
+      try {
+        openViewFloat(f.type, { kind: 'float', scope: 'space', form: f.form, view: f.view, mainView: f.mainView, sheet: mobile && f.form === 'mini' },
+          { key: f.key, title: f.title }, { float: 'space', space }, anchor)
+      } catch (e) { console.error('[lcl] restore float failed', f.type, e) }
+    }
+    if (pendingFloats.get(space) !== list) continue // 开的途中又换了一份(重入):以新的为准
+    if (left.length) pendingFloats.set(space, left)
+    else pendingFloats.delete(space)
+  }
+}
+
+function collectFloats(space: string): PersistedFloat[] {
+  const out: PersistedFloat[] = []
+  const live = new Set<string>()
+  for (const r of recs.values()) {
+    if (r.scope !== 'space' || r.space !== space || r.handle.closed) continue
+    live.add(r.ident)
+    const f = toPersisted(r)
+    if (f) out.push(f)
+  }
+  for (const f of pendingFloats.get(space) ?? []) if (!live.has(spaceIdent(space, f.type, f.key ?? ''))) out.push(f)
+  return out
+}
+
+setFloatPersistence({
+  collect: collectFloats,
+  restore(space, floats) {
+    const list = readPersistedFloats(floats)
+    if (list.length) pendingFloats.set(space, list)
+    else pendingFloats.delete(space)
+    watchUnregister()
+    flushPendingFloats()
+  },
+  clear(space) {
+    pendingFloats.delete(space)
+    for (const r of [...recs.values()]) if (r.scope === 'space' && r.space === space) r.close()
+  },
+})
 
 const DOCKS: readonly ViewLocation[] = ['main', 'left', 'right', 'bottom']
 const FORMS: readonly ViewForm[] = ['main', 'side', 'bottom', 'mini']
@@ -328,7 +457,7 @@ async function run(target: OpenTarget, opts: OpenOptions): Promise<OpenResult> {
       // params 照旧 openMiniPanel 的口径:顶层也带一份(Mini 应用目标时它盖在视图参数之上;Space 那条路只认它)
       // 标题缺省 = 主视图的名字(紧凑视图的名字是实现细节;走 Space 那条路时 Mini 自己用 Space 的 mini 名)
       const title = opts.title || (plan.spaceId ? undefined : displayTitle(plan.mainView.type))
-      const r = await desktop!.mini!({ view: plan.view, mainView: plan.mainView, spaceId: plan.spaceId, params: target.params, key: opts.key, title })
+      const r = await desktop!.mini!({ view: plan.view, mainView: plan.mainView, spaceId: plan.spaceId, params: target.params, key: opts.key, title, ...(plan.pin ? {} : { pin: false as const }) })
       if (r && !r.ok) return { ok: false, reason: 'limit', limit: r.limit }
       return { ok: true, layer: { float: 'desktop' }, form: 'mini' }
     }
@@ -349,6 +478,9 @@ export const workspace = { open: workspaceOpen }
 export function resetWorkspaceOpenForTest(): void {
   for (const r of [...recs.values()]) r.close()
   recs.clear(); snapshot = []
+  pendingFloats.clear()
+  for (const t of patchTimers.values()) clearTimeout(t)
+  patchTimers.clear()
   unsubViews?.(); unsubViews = null
   desktop = null
   renderers = 0

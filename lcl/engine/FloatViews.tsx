@@ -1,6 +1,6 @@
 /** workspace.open 挂进浮层(View / Space / 窗口作用域)的 View(workspaceOpen.ts)。SpaceFloatLayer 旁边各挂一份
  *  (WorkspaceHost / SingleColumnHost),经 portal 渲染进各自的浮层元素 —— 留在壳的 React 树里,语言 / 主题这些上下文照常。
- *  leaf 是合成的(同 SpacePeek / FloatingViewSurface 的先例):参数只活在这张卡里,不进布局;「在主面板显示」把当前参数
+ *  leaf 是合成的(同 SpacePeek / FloatingViewSurface 的先例):参数活在这张卡里(Space 作用域的随 Space 布局存,见 noteFloatParams);「在主面板显示」把当前参数
  *  带去主区开那个主视图,然后收掉这张卡。 */
 import { Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactElement } from 'react'
 import { createPortal } from 'react-dom'
@@ -10,7 +10,7 @@ import { getView } from './viewRegistry'
 import { useWorkspace } from './workspaceStore'
 import { useEngineI18n } from './i18nSeam'
 import { reducedMotion } from './spring'
-import { floatViewsSnapshot, registerFloatViewRenderer, subscribeFloatViews, type FloatViewRec } from './workspaceOpen'
+import { floatViewsSnapshot, noteFloatParams, registerFloatViewRenderer, subscribeFloatViews, type FloatViewRec } from './workspaceOpen'
 import type { Leaf } from './types'
 
 function FloatViewCard({ rec }: { rec: FloatViewRec }): ReactElement | null {
@@ -37,7 +37,7 @@ function FloatViewCard({ rec }: { rec: FloatViewRec }): ReactElement | null {
     loc: 'main',
     get params() { return paramsRef.current },
     setTitle: () => {},
-    setParams: (next) => setParams({ ...next }),
+    setParams: (next) => { setParams({ ...next }); noteFloatParams(rec, next) },
     close: () => rec.close(),
   }), [rec])
   const def = getView(rec.view.type)

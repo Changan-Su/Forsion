@@ -2248,6 +2248,9 @@ interface MiniEntry {
   /** 目标的代号:每发一次新目标 +1,随目标发给渲染层;渲染层报实体时带回它应用过的代号,旧代号的报告不认(防它覆盖刚发出的目标)。 */
   gen: number
   dock: MiniDockState | null
+  /** 置顶(缺省是;workspace.open 的 { float: 'desktop', pin: false } 不置顶)。不置顶的不贴边折叠:折起来压在别的窗口下面就够不着了。
+   *  每次带目标打开 / 叫回都按那次的请求重设(同 Floating Panel);不进实体键。 */
+  pinned: boolean
   dockMotion: ReturnType<typeof createMiniDockMotion> | null
   suppressMoved: boolean // 抑制程序化 setBounds 触发的 moved(否则折叠/展开自激)
   dragging: boolean // 用户正在拖窗(moved 连发中);其间不吸附/不轮询,避免和拖拽对打(修「拖不出来」)
@@ -2265,9 +2268,55 @@ const minis = new Map<string, MiniEntry>()
 /** 最近用过的在前(获焦 / 叫到前面都算):⌘⇧M 开合的是第一扇。 */
 let miniOrder: string[] = []
 let miniSeq = 0
-/** 位置和大小按实体键各记各的。只记在本次运行里(同原来的 miniSize);ponytail: 要跨重启记住时照 detached-windows.json 落盘。 */
+/** 位置和大小按实体键各记各的(Map 的顺序 = 最近记的在后,超出 MINI_LAYOUT_KEEP 先丢最早的)。
+ *  跨重启记在 userData/mini-windows.json(§7「桌面作用域的记在主进程,按实体键记」,照 detached-windows.json 落盘)。 */
 const miniLayouts = new Map<string, Rect>()
 const MINI_LAYOUT_KEEP = 64
+const miniLayoutsPath = (): string => join(app.getPath('userData'), 'mini-windows.json')
+/** 读成功(或文件本来就没有)才往回写:读不出 / 解析不了 = 不知道里面有什么,这次运行只记在内存里,不拿这几条盖掉它(读失败 ≠ 空)。 */
+let miniLayoutsWritable = false
+let saveMiniLayoutsTimer: NodeJS.Timeout | null = null
+const isMiniRect = (r: unknown): r is Rect => !!r && typeof r === 'object'
+  && (['x', 'y', 'width', 'height'] as const).every((k) => Number.isFinite((r as Record<string, unknown>)[k]))
+  && (r as Rect).width > 0 && (r as Rect).height > 0
+/** 同步读:启动时在任何 Mini 能开之前读完(文件很小)。异步读的话,早开的 Mini 拿不到记住的位置,关掉时又把缺省位置写回去盖掉它。 */
+function loadMiniLayouts(): void {
+  let raw: string
+  try { raw = readFileSync(miniLayoutsPath(), 'utf8') } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') miniLayoutsWritable = true
+    else console.error('[win] could not read mini-windows.json; leaving it untouched this run:', e)
+    return
+  }
+  try {
+    const obj = JSON.parse(raw) as unknown
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) throw new Error('not an object')
+    // 读盘前这次运行已经记下的更新:排在后面(更近),同键以它为准
+    const merged = new Map<string, Rect>()
+    for (const [k, r] of Object.entries(obj)) if (k && isMiniRect(r)) merged.set(k, { x: r.x, y: r.y, width: r.width, height: r.height })
+    for (const [k, r] of miniLayouts) { merged.delete(k); merged.set(k, r) }
+    miniLayouts.clear()
+    for (const [k, r] of merged) miniLayouts.set(k, r)
+    while (miniLayouts.size > MINI_LAYOUT_KEEP) miniLayouts.delete(miniLayouts.keys().next().value!)
+    miniLayoutsWritable = true
+  } catch (e) { console.error('[win] mini-windows.json unreadable; leaving it untouched this run:', e) }
+}
+function saveMiniLayouts(): void {
+  if (saveMiniLayoutsTimer) clearTimeout(saveMiniLayoutsTimer)
+  saveMiniLayoutsTimer = null
+  if (!miniLayoutsWritable) return
+  const file = miniLayoutsPath(), tmp = `${file}.${process.pid}.tmp`
+  try {
+    writeFileSync(tmp, JSON.stringify(Object.fromEntries(miniLayouts)), { encoding: 'utf8', mode: 0o600 })
+    renameSync(tmp, file)
+  } catch (error) {
+    try { rmSync(tmp, { force: true }) } catch { /* best effort */ }
+    console.error('[win] could not save mini window layouts:', error)
+  }
+}
+function scheduleSaveMiniLayouts(): void {
+  if (saveMiniLayoutsTimer) clearTimeout(saveMiniLayoutsTimer)
+  saveMiniLayoutsTimer = setTimeout(saveMiniLayouts, 400)
+}
 
 const MINI_CARD_WIDTH = 320
 const MINI_CARD_HEIGHT = 420
@@ -2295,6 +2344,18 @@ function findMini(key: string): MiniEntry | undefined {
   function rank(m: MiniEntry): number { const i = miniOrder.indexOf(m.id); return i < 0 ? Number.MAX_SAFE_INTEGER : i }
 }
 function presentMini(m: MiniEntry): void { touchMini(m); present(m.win) }
+/** 改置顶(带目标再开时按那次的请求)。撤置顶时若正贴边:先展开、解除吸附,再撤 —— 折着的卡压到别的窗口下面就够不着了。 */
+function setMiniPinned(m: MiniEntry, pinned: boolean): void {
+  if (m.pinned === pinned || m.win.isDestroyed()) return
+  m.pinned = pinned
+  if (!pinned && m.dock) {
+    if (!m.dockMotion) setMiniBounds(m, expandedBounds(miniBounds(m), m.dock.edge, m.dock.workArea), false)
+    m.dockMotion?.reset() // Windows:折叠是渲染层把卡片挪出去的,要通知它挪回来(只撤原生裁剪会留下一条折着的卡)
+    m.dock = null
+    stopMiniPoll(m)
+  }
+  m.win.setAlwaysOnTop(pinned, 'floating')
+}
 /** 记下这扇的位置和大小(按实体键)。正拉缩放边时不记;贴边时框被挪出了屏,只记大小(位置留用户放下时那次)。
  *  sizeOnly:缩放刚结束,即使贴着边也要记下新大小。 */
 function rememberMiniLayout(m: MiniEntry, sizeOnly = false): void {
@@ -2305,6 +2366,7 @@ function rememberMiniLayout(m: MiniEntry, sizeOnly = false): void {
   miniLayouts.delete(m.key)
   miniLayouts.set(m.key, next)
   while (miniLayouts.size > MINI_LAYOUT_KEEP) miniLayouts.delete(miniLayouts.keys().next().value!)
+  scheduleSaveMiniLayouts()
 }
 function clearIdleMiniResizeMask(m: MiniEntry): void {
   if (!m.resizeMaskActive || m.resizeFrom || m.dock || m.win.isDestroyed()) return
@@ -2362,6 +2424,7 @@ function createMiniWindow(opts: MiniOpenOptions | undefined, key: string): MiniE
   const pos = back && mostlyOnScreen(back, screen.getAllDisplays().map((d) => d.workArea)) && !occupied.some((o) => rectsOverlap(o, back))
     ? back : stackPosition({ width, height }, wa, occupied)
   const id = `m${++miniSeq}`
+  const pinned = opts?.pin !== false
   const win = new BrowserWindow({
     width, height,
     x: pos.x,
@@ -2371,7 +2434,7 @@ function createMiniWindow(opts: MiniOpenOptions | undefined, key: string): MiniE
     // 系统缩放边不开:透明窗在 Windows 上没有(Electron 去掉了 WS_THICKFRAME)。大小由卡片自绘的缩放边改,见 window:miniResize。
     resizable: false,
     acceptFirstMouse: true, // 卡片不在前台时,第一下按住缩放边 / 顶栏就能拖(同 openAutoMini)
-    alwaysOnTop: true,
+    alwaysOnTop: pinned,
     skipTaskbar: true,
     hasShadow: true,
     backgroundColor: '#00000000',
@@ -2379,7 +2442,7 @@ function createMiniWindow(opts: MiniOpenOptions | undefined, key: string): MiniE
     webPreferences: satelliteWebPreferences(),
   })
   const m: MiniEntry = {
-    id, win, key, target: opts, gen: 0, dock: null, dockMotion: null, suppressMoved: false, dragging: false,
+    id, win, key, target: opts, gen: 0, dock: null, pinned, dockMotion: null, suppressMoved: false, dragging: false,
     settleTimer: null, movedTimer: null, pollTimer: null, resizeFrom: null, resizeDock: null, resizeMaskActive: false,
     resizeUpdates: createMiniResizeQueue((bounds) => setMiniBounds(m, bounds, false)), stopPassThrough: null,
   }
@@ -2390,7 +2453,7 @@ function createMiniWindow(opts: MiniOpenOptions | undefined, key: string): MiniE
   // native creation, just as the resize path does, before the renderer paints.
   if (process.platform === 'win32') win.setContentBounds({ x: pos.x, y: pos.y, width, height })
   if (QUIET_WINDOWS) win.showInactive()
-  win.setAlwaysOnTop(true, 'floating')
+  if (pinned) win.setAlwaysOnTop(true, 'floating')
   win.webContents.setWindowOpenHandler(openUrlHandler(win.webContents))
   hardenNav(win.webContents)
   win.webContents.on('did-finish-load', () => {
@@ -2551,6 +2614,7 @@ function openMiniWindow(opts?: MiniOpenOptions): MiniOpenResult {
   // 带目标是「把这个拿到 Mini 继续」:已显示也只更新 + 聚焦,不能反而把窗口藏掉。
   open.target = target
   open.gen++
+  setMiniPinned(open, target.pin !== false)
   if (!open.win.webContents.isLoadingMainFrame()) {
     open.win.webContents.send('window:miniTarget', { ...target, gen: open.gen })
     open.win.webContents.send('window:miniNudge')
@@ -2626,7 +2690,7 @@ function onMiniSettled(m: MiniEntry): void {
   if (m.win.isDestroyed()) return
   const b = miniBounds(m)
   const display = screen.getDisplayMatching(b), wa = display.workArea
-  const edge = nearestEdge(b, wa)
+  const edge = m.pinned ? nearestEdge(b, wa) : null // 不置顶的不贴边折叠(见 MiniEntry.pinned)
   if (edge) {
     rememberMiniLayout(m) // 折起来之前记下用户放下的位置
     m.dock = { edge, expanded: false, displayId: display.id, workArea: wa }
@@ -2791,6 +2855,7 @@ async function downloadMarketPackage(id: string, report: (phase: 'resolve' | 'do
 }
 
 app.whenReady().then(async () => {
+  loadMiniLayouts() // Mini 按实体键记的位置和大小:放在最前、同步读,任何窗口 / 快捷键能开 Mini 之前就读完
   await registerStartupAppearance(isTrustedSender)
   const desktopPermissions = registerDesktopPermissions({
     isTrustedSender, computerUseAvailable: PRODUCT.agentBackend, returnToApp: showMainWindow,
@@ -5268,6 +5333,8 @@ app.on('before-quit', (e) => {
     if (win && !win.isDestroyed()) state.bounds = win.getBounds()
   }
   saveDetachedState()
+  for (const m of minis.values()) rememberMiniLayout(m) // 开着的 Mini 也记下(关窗事件在退出时不一定赶得上落盘)
+  saveMiniLayouts()
   void pluginSandbox?.dispose() // 沙箱跟着退(它那头也会因控制通道断开自己退)
   globalShortcut.unregisterAll() // 释放 mini 全局快捷键
   miniAutoPanel?.stop(); miniAutoPanel = null
