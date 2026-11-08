@@ -40,7 +40,7 @@ const TODOS = [
 ]
 const TRACKS = [
   { id: 's1', name: '读书会提醒', date: new Date(now + 20 * 3600_000).toISOString().slice(0, 16), repeat: '', auto: true, description: '' },
-  { id: 's2', name: '周报回顾', date: new Date(now + 5 * 86400_000).toISOString().slice(0, 10), repeat: 'weekly', auto: true, description: '' },
+  { id: 's2', name: '周报回顾', date: new Date(now + 5 * 86400_000).toISOString().slice(0, 10), repeat: '7d', auto: true, description: '' },
 ]
 const JOURNAL = `# 今天\n\n## 09:12 上午\n你从 8 点起一直在改主页小组件，#489 合了。把「2.14 What’s new」记成待办。\n\n## 15:20 下午\n你下午在读《置身事内》，整理了两条摘录放进 [[Reading/置身事内 · 摘录.md]]。\n\n## 18:05 傍晚\n周会议程还空着，起了一版草稿放在「备好的」，等你看。\n`
 
@@ -114,10 +114,13 @@ async function main() {
   const keys = () => win.locator('[data-section="widgets"] [data-card-key]:not(.msb-proposed)').evaluateAll((els) => els.map((e) => e.getAttribute('data-card-key')))
   const lastOp = () => W.ops[W.ops.length - 1] || {}
   const shot = async (name) => { await sleep(500); const f = path.join(OUT, `${name}.png`); await win.locator('.dv-groupview').filter({ has: brief }).first().screenshot({ path: f }).catch(() => win.screenshot({ path: f })); r.note('shot', f) }
-  const reenter = async () => { await win.reload(); await win.waitForSelector('.dv-groupview', { timeout: 30000 }); await enterSpace(win, 'muse'); await brief.waitFor({ timeout: 15000 }) }
+  // enterSpace 在 Ribbon 收起时会点开「更多 Space」浮层,进去以后它还开着、会盖进截图:按一次 Esc 收掉
+  const closeOverflow = async () => { await win.keyboard.press('Escape').catch(() => {}); await sleep(200) }
+  const reenter = async () => { await win.reload(); await win.waitForSelector('.dv-groupview', { timeout: 30000 }); await enterSpace(win, 'muse'); await brief.waitFor({ timeout: 15000 }); await closeOverflow() }
   try {
     await boot(app, win, { space: null, width: 1512, height: 950 })
     r.check('进 Muse Space', await enterSpace(win, 'muse'))
+    await closeOverflow()
     await brief.waitFor({ timeout: 15000 })
     await until(async () => (await keys()).length === 3)
 
@@ -219,7 +222,9 @@ async function main() {
     await enterSpace(win, 'home')
     const homeText = async () => win.locator('.hp-wcard, [data-home-id]').evaluateAll((els) => els.map((e) => e.textContent).join(' | ')).catch(() => '')
     r.check('H1 主页右栏「待你看的」「在跟的」两张,带数据', await until(async () => { const s = await homeText(); return /待你看的/.test(s) && /在跟的/.test(s) && /周一产品周会还没有议程/.test(s) && /读书会提醒/.test(s) }, 12000), (await homeText()).slice(0, 300))
-    await sleep(400)
+    // 文字断言读得到被启动画面盖着的 DOM:截图前等卡片中心真的露在最上层
+    await until(() => win.evaluate(() => { const c = document.querySelector('.hp-wcard'); if (!c) return false; const b = c.getBoundingClientRect(); const el = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2); return !!el && c.contains(el) }), 20000)
+    await closeOverflow(); await sleep(400)
     const hf = path.join(OUT, 'home-widgets.png'); await win.screenshot({ path: hf }); r.note('shot', hf)
   } catch (e) {
     r.check('台架跑完', false, String((e && e.stack) || e).slice(0, 700))
