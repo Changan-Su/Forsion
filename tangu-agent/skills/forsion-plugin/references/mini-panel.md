@@ -36,7 +36,7 @@ ctx.openMiniPanel?.('mini-counter', {
 
 `viewId` / `mainViewId` 都写**本插件相对 id**，宿主自动加 `plugin:<pluginId>:`，省略 `mainViewId` 就把同一视图交回主面板。仍须先 `registerView`；Web/mobile 或旧宿主可能没有原生 Mini，务必可选链并保留 `ctx.openView()` 回退。
 
-**`ctx.workspace.open` 打开(2.13.8 起)**:`ctx.workspace.open(viewId, { layer: { float: 'desktop' } })` 和 `openMiniPanel` 是同一扇(实体同为视图 + `key`);紧凑视图由主视图注册时的 `forms.mini.view` 决定(`forms: { main: true, mini: { view: 'board-mini' } }` → 打开 `board` 的 Mini 样子显示 `board-mini`,「在主面板显示」回 `board`,标题缺省用 `board` 的)。网页 / 手机没有 Mini 窗:自动降成窗口里的卡(手机是半屏抽屉)。见 host-ui-mounts.md「Opening views」。
+**`ctx.workspace.open` 打开(2.13.8 起)**:`ctx.workspace.open(viewId, { layer: { float: 'desktop' } })` 和 `openMiniPanel` 是同一扇(实体同为视图 + `key`;例外:没写 `forms` 的视图被某个 Space 配方的 `mini.mainView` 指着时,`workspace.open` 走那个 Space 的 Mini,`openMiniPanel` 照旧开视图自己那扇);紧凑视图由主视图注册时的 `forms.mini.view` 决定(`forms: { main: true, mini: { view: 'board-mini' } }` → 打开 `board` 的 Mini 样子显示 `board-mini`,「在主面板显示」回 `board`,标题缺省用 `board` 的)。网页 / 手机没有 Mini 窗:自动降成窗口里的卡(手机是半屏抽屉)。见 host-ui-mounts.md「Opening views」。
 
 **多开(2.13.8 起)**:桌面能同时开几扇 Mini,宿主按实体认窗口 —— 同一个实体再开 = 叫出已开的那扇并更新参数,不同实体各开一扇(沿屏幕右缘往下排)。`openMiniPanel` 的实体是「本插件的 `viewId` + `opts.key`」:
 
