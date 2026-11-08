@@ -735,6 +735,13 @@ declare global {
       /** 用系统默认应用打开(预览不支持的类型)。 */
       openHostPath?(p: string): Promise<{ ok: boolean; error?: string }>
       /** Forsion Clip 手动安装(设置 › 浏览器):复制出包的扩展文件夹 / 打开 Chrome / Edge 扩展页;拖拽用 startHostDrag。 */
+      platformAccounts?: {
+        status(platform: string): Promise<unknown>
+        connect(platform: string, pluginId: string, pluginName: string): Promise<unknown>
+        paste(platform: string, pluginId: string, text: string): Promise<unknown>
+        disconnect(platform: string): Promise<unknown>
+        cookie(platform: string, pluginId: string, pluginName: string): Promise<string | null>
+      }
       clipExtension?: {
         /** update=false 只补缺不动已有副本;用户要(重新)装时传 true 换成随包版本(bundled)。 */
         prepare(update?: boolean): Promise<{ dir: string; version: string; bundled: string } | { error: string }>

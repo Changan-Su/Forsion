@@ -48,6 +48,7 @@ import { BackendManager, bundledPythonBin, resolveBundledGit, resolveBundledNode
 import { registerBrowserPickIpc } from './browserPick'
 import { registerPageThumbIpc } from './pageThumb'
 import { CLIP_ORIGIN, browserControlCode, registerClipExtensionIpc, startClipVersionSync } from './clipExtension'
+import { registerPlatformAccountsIpc } from './platformAccounts'
 import { envWithFullPath, pathKeyOf, withBundledGit } from './envPath'
 import { findGit } from './gitHistory'
 import { downloadUrlFor, installCommandFor, requiredProgram } from './envInstall'
@@ -3836,6 +3837,7 @@ app.whenReady().then(async () => {
     if (!icon || icon.isEmpty()) icon = nativeImage.createFromDataURL(DRAG_FALLBACK_ICON)
     e.sender.startDrag({ file: filePath, icon })
   })
+  registerPlatformAccountsIpc() // 插件的平台账号(B 站登录信息等):只读内置浏览器分区、按插件授权
   registerClipExtensionIpc() // Forsion Clip 手动安装:复制出包的扩展文件夹、打开 Chrome / Edge 扩展页(拖拽复用上面的 fs:startDrag)
   if (!SANDBOX) startClipVersionSync(localEngineRef) // Forsion 更新后连着的 Clip 换成随包版本并重载
 

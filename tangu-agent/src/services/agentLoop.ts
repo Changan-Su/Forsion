@@ -1,3 +1,4 @@
+import { clearRunSecretEnv } from '../sandbox/runSecretEnv.js';
 import { hasMarketplaceCards, MARKETPLACE_CARDS_CAPABILITY } from '../shared/marketplace.js';
 import { normalizeUIAppCards } from '../shared/intelligentCards.js';
 import { computedUiEnabledFor, intelligentUiEnabledFor, INTELLIGENT_UI_SECTION, INTELLIGENT_UI_V2_SECTION, looksLikeLeakedUiDocument, UI_DOCUMENT_LEAK_CHECK } from '../tools/builtin/intelligentUi.js';
@@ -3823,6 +3824,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     parkAc.abort(); // 没等到拍板的挂起审批一并撤掉(登记表清空 → 事后点批准回 410)
     setApprovalTray(runId, false);
     unregisterLiveRun(runId);
+    clearRunSecretEnv(runId); // secret_env 只活到 run 终结
     abortControllers.delete(runId);
     modelSwaps.delete(runId);
     steerQueue.delete(runId); // 丢弃尚未注入的转向消息(run 已终结)

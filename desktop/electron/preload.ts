@@ -385,6 +385,14 @@ const api = {
     browsers: (): Promise<Array<'chrome' | 'edge'>> => ipcRenderer.invoke('clipExt:browsers'),
     openExtensionsPage: (browser: 'chrome' | 'edge'): Promise<{ ok: true } | { ok: false; copied: true; reason: 'launched' | 'not-found' | 'unsupported' }> => ipcRenderer.invoke('clipExt:openExtensions', browser),
   },
+  /** 平台账号(platformAccounts.ts):内置浏览器里某个平台的登录信息,插件经 ctx.app.platformAccounts 用。 */
+  platformAccounts: {
+    status: (platform: string): Promise<unknown> => ipcRenderer.invoke('platformAccounts:status', platform),
+    connect: (platform: string, pluginId: string, pluginName: string): Promise<unknown> => ipcRenderer.invoke('platformAccounts:connect', platform, pluginId, pluginName),
+    paste: (platform: string, pluginId: string, text: string): Promise<unknown> => ipcRenderer.invoke('platformAccounts:paste', platform, pluginId, text),
+    disconnect: (platform: string): Promise<unknown> => ipcRenderer.invoke('platformAccounts:disconnect', platform),
+    cookie: (platform: string, pluginId: string, pluginName: string): Promise<string | null> => ipcRenderer.invoke('platformAccounts:cookie', platform, pluginId, pluginName),
+  },
   /** 原生拖出:在元素 onDragStart 里 e.preventDefault() 后调用,主进程接管系统级拖拽。 */
   startHostDrag: (filePath: string): void => ipcRenderer.send('fs:startDrag', filePath),
   /** 拖 OS 文件/文件夹进 host 工作区目录 → 原生复制(重名加序号)。 */

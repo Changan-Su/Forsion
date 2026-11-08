@@ -5,6 +5,7 @@
  *   GET  /agent/runs?session_id=     列出该 session 的在飞/最近 run（刷新恢复用）
  *   POST /agent/runs/:id/abort       中止
  */
+import { normalizeSecretEnv, setRunSecretEnv } from '../sandbox/runSecretEnv.js';
 import { normalizeUIAppCards } from '../shared/intelligentCards.js';
 import { Router } from 'express';
 import { v4 as uuidv4 } from 'uuid';
@@ -198,7 +199,7 @@ export function normalizeUiValues(v: unknown): Record<string, string> | undefine
 router.post('/agent/runs', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.userId;
-    const { session_id, model_id, app_id, message, attachments, agent_config, client, ui_commands, ui_settings, approval_tray, client_capabilities, user_message_id, ephemeral_hint, ui_cards, quota_fallback } = req.body || {};
+    const { session_id, model_id, app_id, message, attachments, agent_config, client, ui_commands, ui_settings, approval_tray, client_capabilities, user_message_id, ephemeral_hint, ui_cards, quota_fallback, secret_env } = req.body || {};
     if (agent_config != null && (typeof agent_config !== 'object' || Array.isArray(agent_config))) {
       return res.status(400).json({ detail: 'agent_config must be an object' });
     }
@@ -213,6 +214,9 @@ router.post('/agent/runs', authMiddleware, async (req: AuthRequest, res) => {
     // 客户端面标识(desktop/2.7.4 等,统计维度,与 app_id 正交)。客户端自报,白名单校验后
     // 随 input 落库(不加列:input 本就是 JSONB,免动 stateStore 接缝);不合法静默丢弃。
     const clientTag = normalizeClientTag(client);
+    // 秘密环境变量(sandbox/runSecretEnv.ts):只在内存、不进 input、不落库;远程来源静默丢弃(不让插件的 run 因此失败)。
+    const secretEnv = normalizeSecretEnv(secret_env);
+    if (!secretEnv) return res.status(400).json({ detail: 'secret_env must map UPPER_CASE names to strings' });
     const uiCommandsNorm = normalizeUiCommands(ui_commands);
     const uiSettingsNorm = normalizeUiSettings(ui_settings);
     const clientCapsNorm = normalizeClientCapabilities(client_capabilities);
@@ -297,6 +301,7 @@ router.post('/agent/runs', authMiddleware, async (req: AuthRequest, res) => {
       },
     });
 
+    if (!remote) setRunSecretEnv(runId, secretEnv);
     enqueueRun(session_id, runId); // 同会话已有在飞 run 则排队，否则立刻起；均不 await
 
     res.json({ runId, assistantMessageId, userMessageId });
