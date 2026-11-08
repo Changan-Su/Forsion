@@ -313,6 +313,17 @@ it('About you: an existing profile fills the questions in place, keeps the rest 
   expect(human.saveHumanDocument).toHaveBeenCalledExactlyOnceWith(expect.anything(), expect.anything(), '## 关于我\n- 称呼：小鹿\n- 回答用中文\n\n住在杭州\n', 'v1', 'Onboarding: About me')
 })
 
+it('About you: a profile over the size limit is not saved; the screen stays with the error', async () => {
+  vi.mocked(human.getHumanDocument).mockResolvedValue({ content: '', version: 'v1', maxLength: 20 } as any)
+  await render()
+  await next(); await next()
+  await type(youName(), 'A long enough name')
+  await next()
+  expect(human.saveHumanDocument).not.toHaveBeenCalled()
+  expect(stepNow()).toBe('you')
+  expect(host.querySelector('.ob3-foot [role="alert"]')?.textContent).toContain(translate('ob3.you.tooLong', { max: 20 }))
+})
+
 it('About you: "Bring it over from another AI" reuses the shared import entry; Enter behind its sheet does not continue', async () => {
   await render()
   await next(); await next()
