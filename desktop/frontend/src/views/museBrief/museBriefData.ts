@@ -11,7 +11,6 @@ import { homeTarget } from '../../services/engine/targets'
 import { openNewChat, openSession } from '../../sessionNav'
 import { useApp } from '../../stores/appStore'
 import { translate } from '../../i18n'
-import { nextOccurrence } from '../../components/agentScheduleLib'
 import type { AgentScheduleEntry, MusePlacementOp, MuseSpaceView, MuseStatusInfo, MuseTodo } from '../../types'
 
 /** 串行轮询:上一次结束后再等 ms;fn 抛错 = 留着上一份,不清空(读失败 ≠ 空)。 */
@@ -81,9 +80,22 @@ export function useMuseTodosLive(ms = 10_000): { todos: MuseTodo[] | undefined; 
 
 /** 在跟的 = 卜算子自己日程里 auto 的条目(任务卡「交给 Muse 追踪」/ 它自己排的后续),按下一次发生先后;
  *  引擎按写入顺序给,不排就截前几条会漏掉刚加的明天那条。没有下一次的(一次性已过 / 没日期)排最后。 */
+const SCHED_UNIT_MS = { h: 3_600_000, d: 86_400_000 } as const
+/** 下一次发生的时刻(ms;一次性已过 / 没日期 → Infinity)。口径抄 components/agentScheduleLib.ts 的 nextOccurrence:
+ *  那是 Tangu 模块,宿主运行时不许直引(tangu-boundary 1b);这里只为排序,算偏了只是顺序不准,不影响触发。 */
+function nextTrackAt(e: Pick<AgentScheduleEntry, 'date' | 'repeat'>, now: number): number {
+  const m = /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{1,2}):(\d{2}))?/.exec(String((e.date || '').split('/')[0]).trim())
+  if (!m) return Number.POSITIVE_INFINITY
+  const start = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4] || 0), Number(m[5] || 0)).getTime()
+  if (Number.isNaN(start)) return Number.POSITIVE_INFINITY
+  if (start > now) return start
+  const r = /^(\d+)([hd])$/.exec(e.repeat || '')
+  const step = r ? Number(r[1]) * SCHED_UNIT_MS[r[2] as 'h' | 'd'] : 0
+  return step ? start + Math.ceil((now - start) / step) * step : Number.POSITIVE_INFINITY
+}
 export const sortTracks = (entries: AgentScheduleEntry[], now = Date.now()): AgentScheduleEntry[] =>
   entries
-    .map((e) => ({ e, at: nextOccurrence(e, now)?.getTime() ?? Number.POSITIVE_INFINITY }))
+    .map((e) => ({ e, at: nextTrackAt(e, now) }))
     .sort((a, b) => a.at - b.at)
     .map((x) => x.e)
 export function useMuseTracksLive(ms = 30_000): AgentScheduleEntry[] | undefined {
