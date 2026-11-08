@@ -739,6 +739,10 @@ export interface PluginMiniPanelOptions {
   /** Relative id of this plugin's full-size destination; defaults to viewId. */
   mainViewId?: string
   mainViewParams?: Record<string, unknown>
+  /** Identity of the thing shown (2.13.8+). Several Mini windows can be open at once: calling again with the
+   *  same viewId and key focuses the open window and updates its params; a different key opens another window.
+   *  Without key there is one window per viewId (what older hosts did with every call). Older hosts ignore it. */
+  key?: string
 }
 
 /** One row in a plugin list source. The list stays a flat array; hierarchy is optional and expressed
@@ -1341,6 +1345,46 @@ export interface PluginToolIslandOptions {
   slots?: { topLeft?: HTMLElement; topRight?: HTMLElement; bottomLeft?: HTMLElement; bottomRight?: HTMLElement }
 }
 
+/** Where a `ctx.ui.float` sits inside its scope: four corners, plus top / bottom centre. */
+export type PluginFloatAnchor = 'top-start' | 'top-center' | 'top-end' | 'bottom-start' | 'bottom-center' | 'bottom-end'
+
+/** Options of `ctx.ui.float` (2026-11-07+). */
+export interface PluginFloatOptions {
+  /** What it floats over and hides with. `'view'`: inside `host` (your own view's element) — gone when the view is.
+   *  `'space'`: over the whole Space (all three columns, above the splitters); hidden while the user is in another
+   *  Space, back as it was when they return. `'window'`: over the whole window, kept across Space switches.
+   *  A window without a Space area (Mini, floating panels, view windows) shows `'space'` floats at window level. */
+  scope: 'view' | 'space' | 'window'
+  /** Required for `'view'`: the element to float in (normally your view root). Set to `position: relative` if static. */
+  host?: HTMLElement
+  /** `'space'` only: the Space it belongs to (default: the Space open when you call `float`). */
+  space?: string
+  /** Default `'bottom-end'`. When `id` is set and the user has dragged it elsewhere, their choice wins. */
+  anchor?: PluginFloatAnchor
+  /** `'panel'` (default) stays at its anchor; later panels cover earlier ones. `'notice'` stacks with the other
+   *  notices at the same anchor (8px apart, the first one nearest the corner) and is announced (`role="status"`). */
+  role?: 'panel' | 'notice'
+  /** Stable id: the anchor the user drags it to is remembered on this device. Namespaced by your plugin id. */
+  id?: string
+  /** Accessible name (panels). */
+  label?: string
+  /** `true` = no card skin (background, radius, border, shadow); you draw it. Default: the host card. */
+  bare?: boolean
+  /** The user dragged it to another anchor. */
+  onAnchorChange?(anchor: PluginFloatAnchor): void
+}
+
+export interface PluginFloatHandle {
+  /** Put your content here. Any descendant with `data-float-drag` is a drag handle (not on buttons / inputs):
+   *  dragging it and letting go snaps the float to the nearest anchor. */
+  readonly el: HTMLElement
+  readonly anchor: PluginFloatAnchor
+  readonly closed: boolean
+  move(anchor: PluginFloatAnchor): void
+  /** Fades out and removes it. The host also closes every float of yours on disable / reload. */
+  close(): void
+}
+
 export interface PluginToolIslandHandle {
   /** The row under the island (above it while docked at the bottom), for what the current tool needs: colour
    *  dots, pen types, widths. Usable at once; fill it with your own elements, don't replace its class. */
@@ -1706,7 +1750,9 @@ export interface PluginContext {
    *  Desktop uses a native window; Web uses an overlay. Feature-detect on older hosts/mobile. */
   openFloatingPanel?(viewId: string, opts?: PluginFloatingPanelOptions): void
   /** Open one of this plugin's registered views in the compact native Mini Panel.
-   *  Desktop-only; feature-detect on older hosts and Web/mobile. */
+   *  Desktop-only; feature-detect on older hosts and Web/mobile. 2.13.8+: Mini windows can be open side by side —
+   *  the same viewId (+ `key`) reuses its window, other views / keys open their own, up to the host's limit
+   *  (the host tells the user when it is reached; the call never throws). */
   openMiniPanel?(viewId: string, opts?: PluginMiniPanelOptions): void
   /** Contribute a list source to the unified workspace sidebar (2026-08-25+). Old hosts lack it:
    *  always call as `ctx.registerListSource?.(…)`. See ListSourceContribution. */
@@ -1965,6 +2011,14 @@ export interface PluginContext {
      *  pens and stroke feel as a `.excalidraw.md` board, without its chrome. See PluginBoardOptions.
      *  Feature-detect on older hosts: `ctx.ui?.mountBoard`. */
     mountBoard?(el: HTMLElement, opts: PluginBoardOptions): PluginBoardHandle
+    /** A floating card or notice over one of three scopes (2026-11-07+), instead of absolutely positioning your own:
+     *  a view (`host`), the current Space, or the whole window — see PluginFloatOptions. The host owns the layers, the
+     *  stacking order (Space floats sit above the splitters and below menus; window floats below tooltips and menus),
+     *  the six anchors, notice stacking, dragging between anchors, hiding on Space switch and the enter / exit motion;
+     *  you put your content in `el` and call `close()`. It never takes focus by itself. Menus you open from inside it
+     *  still go through `ctx.ui.contextMenu` / `popover`, which sit above it. For "the user should look here once" use
+     *  `ctx.guide`, not a float. Feature-detect on older hosts: `ctx.ui?.float`. */
+    float?(opts: PluginFloatOptions): PluginFloatHandle
     /** Render whiteboard elements to a static SVG (2026-10-10+) — for showing ink where no live layer
      *  is mounted. Resolves `null` for an empty scene. `x` / `y` / `width` / `height` are the drawing's
      *  bounds in scene units, padding included: place the SVG at `(x + scrollX) * zoom`, sized
@@ -2563,6 +2617,9 @@ export interface AmadeusPlugin {
   iconUrl?: string
   /** Built-in plugins ship with the app and can't be uninstalled (only disabled). */
   builtin?: boolean
+  /** In-code built-ins only: switched off the first time a device sees the plugin (the user turns it on in Settings → Plugins);
+   *  after that the user's own on / off choice stands. For built-ins that claim something system-wide (a global shortcut). */
+  defaultOff?: boolean
   /** External source that the app seeds itself (electron/builtinPlugins.ts): shown as 「内置」, no uninstall,
    *  but still an external source for load/reload purposes (never set `builtin` for these). */
   preinstalled?: boolean

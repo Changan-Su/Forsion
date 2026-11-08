@@ -65,6 +65,9 @@ export type { NestedPanelPlacement } from './menuAnchor'
 export type { AnchorOpts } from './menuAnchor'
 // 液滴展开(DESIGN §3):小按钮长出贴着的面板。宿主组件(账号卡)用;插件暂不开放。
 export { emergeDroplet } from './droplet'
+export { openFloat, nearestAnchor, savedAnchor, registerSpaceFloatLayer, FLOAT_ANCHORS, FLOAT_SCOPES, FLOAT_ROLES } from './floatLayer'
+export type { FloatScope, FloatAnchor, FloatRole, FloatOptions, FloatHandle } from './floatLayer'
+export { SpaceFloatLayer } from './SpaceFloatLayer'
 export type { Droplet, DropletOptions } from './droplet'
 /** 落点提示(拖动时的落点线 / 放进去的描边):换落点原地淡出淡入。见 dropIndicator.ts 顶注。 */
 export { createDropIndicator, createsFixedContainingBlock, dropRetarget, dropHide,DROP_IN_MS, DROP_OUT_MS, land, landCancel, landWhenMoved, landOffset, dragGrab, releasePoint, LAND_MS } from './dropIndicator'

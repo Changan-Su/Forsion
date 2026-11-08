@@ -3,7 +3,7 @@
 :root { --lcl-ftoc-gutter: 36px; } /* 目录占的那条沟。正文要让开就读它,见 ui-components.md */
 .lcl-ftoc-mount-layer { position: absolute; inset: 0; pointer-events: none; }
 .lcl-ftoc-frame {
-  z-index: 20;
+  z-index: var(--z-view-float, 20);
   pointer-events: none;
 }
 .lcl-ftoc-frame.is-overlay { position: absolute; inset: 0; }

@@ -10,6 +10,8 @@ const path = require('node:path')
 const assert = require('node:assert/strict')
 const electron = require('./lib/launch-electron.cjs')
 const { startStubEngine } = require('./lib/stub-engine.cjs')
+const { skipOnboarding } = require('./lib/skip-onboarding.cjs')
+const { enterSpace } = require('./lib/uiux-electron.cjs')
 const ROOT = path.resolve(__dirname, '..')
 let checks = 0
 function check(name, condition) { assert.ok(condition, name); console.log(`PASS ${name}`); checks++ }
@@ -53,14 +55,14 @@ async function main() {
     await win.waitForSelector('#root')
     await win.evaluate(() => { localStorage.setItem('forsion_default_space', 'tangu'); localStorage.setItem('tangu_locale', 'zh') })
     await win.reload({ waitUntil: 'domcontentloaded' })
-    for (const label of ['跳过引导', 'Skip']) {
-      const b = win.locator(`button:text-is("${label}")`).first()
-      if (await b.isVisible().catch(() => false)) { await b.click(); break }
-    }
+    assert.ok(await skipOnboarding(win), 'Feedback fixture must dismiss onboarding')
     // 登录后首次同步卡 2.5s 后弹、会挡住 ⌘K 切换语言那一步(同 btw / selection-bar.check)
     await win.addStyleTag({ content: '.sync-setup-backdrop { display: none !important; }' })
+    assert.ok(await enterSpace(win, 'tangu'), 'Feedback fixture must enter Tangu after onboarding')
     const input = win.locator('.t2c-ta').first()
     await input.waitFor({ timeout: 30000 })
+    const mainWindow = await app.browserWindow(win)
+    const mainVisible = () => mainWindow.evaluate((w) => w.isVisible() && !w.isMinimized())
     /** 敲一次斜杠命令,等浮窗开出来并返回它的 page + 面板 locator。 */
     const openFeedback = async (text) => {
       await input.fill(text)
@@ -101,6 +103,7 @@ async function main() {
     check('success contains feedback reference', (await modal.textContent()).includes('FB-2026-0042'))
     // 「完成」关窗:下一轮必须重新拿。等待要在点之前挂上 —— click() 返回时窗已经关了,事后再等 close 永远等不到(白等 30 秒)
     await Promise.all([fbPage.waitForEvent('close'), modal.getByRole('button', { name: '完成', exact: true }).click()])
+    check('Done leaves the main window visible', await mainVisible())
 
     ;({ page: fbPage, panel: modal } = await openFeedback('/feedback 带内容的快捷反馈'))
     check('slash arguments prefill feedback', await modal.locator('textarea').inputValue() === '带内容的快捷反馈')
@@ -113,21 +116,26 @@ async function main() {
     await fbPage.evaluate(() => { document.documentElement.classList.add('dark'); document.documentElement.dataset.mode = 'dark' })
     await fbPage.waitForTimeout(350)
     await modal.screenshot({ path: path.join(shots, 'feedback-dark.png') })
-    await sizeFloating(480, 640)
+    await sizeFloating(480, 560)
     await fbPage.waitForTimeout(350)
     await modal.screenshot({ path: path.join(shots, 'feedback-narrow.png') })
     const geometry = await modal.evaluate((el) => {
       const footer = el.querySelector('.feedback-footer').getBoundingClientRect()
       const r = el.getBoundingClientRect()
-      return { width: innerWidth, fits: r.left >= 0 && r.right <= innerWidth + 1 && r.top >= 0 && r.bottom <= innerHeight + 1, footer: footer.bottom <= innerHeight, scroll: el.querySelector('.modal-body').scrollHeight > el.querySelector('.modal-body').clientHeight }
+      return { width: innerWidth, fits: r.left >= 0 && r.right <= innerWidth + 1 && r.top >= 0 && r.bottom <= innerHeight + 1, footer: footer.bottom <= innerHeight + 1, scroll: el.querySelector('.modal-body').scrollHeight > el.querySelector('.modal-body').clientHeight }
     })
-    check('narrow window keeps the footer visible with one scroll area', geometry.width <= 480 && geometry.fits && geometry.footer && geometry.scroll)
     await modal.getByRole('checkbox', { name: /当前会话内容/ }).uncheck()
     await modal.getByRole('checkbox', { name: /应用与运行日志/ }).uncheck()
     await modal.getByRole('button', { name: '提交反馈', exact: true }).click()
     await modal.getByText('反馈已收到', { exact: true }).waitFor()
     check('text-only sends no attachment', tickets.at(-1).attachments.length === 0)
     await Promise.all([fbPage.waitForEvent('close'), modal.getByRole('button', { name: '完成', exact: true }).click()])
+    check('Done leaves the main window visible after text-only feedback', await mainVisible())
+    check(`narrow window keeps the footer visible with one scroll area ${JSON.stringify(geometry)}`,
+      geometry.width <= 480 && geometry.fits && geometry.footer && geometry.scroll)
+    ;({ page: fbPage, panel: modal } = await openFeedback('/feedback'))
+    await Promise.all([fbPage.waitForEvent('close'), fbPage.keyboard.press('Escape')])
+    check('Escape closes just the feedback window', await mainVisible())
     const beforeOversize = tickets.length
     const oversize = await win.evaluate(() => window.tangu.submitFeedback({ description: 'Oversize guard', sessionLogJson: 'x'.repeat(5 * 1024 * 1024 + 1) }))
     check('IPC rejects oversize diagnostics before any HTTP request', !oversize.ok && oversize.error === 'attachment-too-large' && tickets.length === beforeOversize)

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, mkdirSync, symlinkSync, writeFileSync, realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, toNamespacedPath } from 'node:path'
 
 vi.mock('electron', () => ({ app: {}, BrowserWindow: class {}, dialog: {}, ipcMain: {} }))
 const { keyEvents, sandboxFilePath } = await import('./sandboxChild')
@@ -50,5 +50,15 @@ describe('files 的路径', () => {
     symlinkSync(join(b.outside, 'nope.txt'), join(b.dir, 'dangling.csv')) // 悬空软链同理
     expect(sandboxFilePath('dangling.csv', b, false)).toBeNull()
     expect(sandboxFilePath('', b, false)).toBeNull()
+  })
+  it.runIf(process.platform === 'win32')('canonicalizes Windows paths and still rejects escapes through junctions', () => {
+    const b = setup()
+    const inside = join(b.dir, 'books.csv')
+    expect(sandboxFilePath(toNamespacedPath(inside), b, true)).toBe(inside)
+    expect(sandboxFilePath(inside[0].toLowerCase() + inside.slice(1), b, true)).toBe(inside)
+    const junction = join(b.dir, 'junction')
+    symlinkSync(b.outside, junction, 'junction')
+    expect(sandboxFilePath(toNamespacedPath(join(junction, 'key.txt')), b, true)).toBeNull()
+    expect(sandboxFilePath(toNamespacedPath(join(junction, 'new.txt')), b, false)).toBeNull()
   })
 })

@@ -1,6 +1,6 @@
 /** One dedicated Space surface; no desktop layout, tabs, ribbon or mobile chrome. */
 import { Suspense, useEffect, useLayoutEffect, useReducer, useRef, useState } from 'react'
-import { Check, ChevronDown, ExternalLink, Plus, Search, X } from 'lucide-react'
+import { Check, ChevronDown, CopyPlus, ExternalLink, Plus, Search, X } from 'lucide-react'
 import { getActiveSpace, setActiveSpace, setActiveSpaceCold, useSpaceStore } from './spaceRegistry'
 import { getView, subscribeViews } from './viewRegistry'
 import { label } from './types'
@@ -12,6 +12,7 @@ import { useEngineI18n } from './i18nSeam'
 import { currentMiniChrome, useMiniChromeSlot } from './miniChrome'
 import { type Droplet } from './droplet'
 import { openPanel } from './panelMotion'
+import { reducedMotion } from './spring'
 
 interface DirectMiniViewTarget { type: string; params?: Record<string, unknown> }
 
@@ -42,7 +43,15 @@ export const MiniColumnHost: React.FC<{
   resizable?: boolean
   /** 右胶囊最前的搜索钮(宿主给快速查找;不给就不画)。 */
   onSearch?: () => void
-}> = ({ buildDefault, direct, resizable, onSearch }) => {
+  /** 「复制一扇」(Mini 多开):左胶囊下拉的最后一行。不给就没有这一行(语音通话那扇不给)。 */
+  onDuplicate?: () => void
+  /** 卡片里的一行提示(Mini 窗里没有通知宿主,例如「Mini 开满了」);null = 不显示。 */
+  notice?: string | null
+  /** 每加一 = 这扇被同一实体的再次打开叫到前面:轻跳一下(减弱动效时不动)。 */
+  nudge?: number
+  /** 胶囊上的名字变了(宿主写进窗口标题,托盘「全部 Mini」按它列)。 */
+  onTitle?: (title: string) => void
+}> = ({ buildDefault, direct, resizable, onSearch, onDuplicate, notice, nudge, onTitle }) => {
   const registered = useSpaceStore((s) => s.spaces)
   const activeId = useSpaceStore((s) => s.activeSpaceId)
   const [, refreshViews] = useReducer((n) => n + 1, 0)
@@ -94,6 +103,20 @@ export const MiniColumnHost: React.FC<{
     if (direct && directSeen.current && !directDef) window.tangu?.closeSelf?.()
   }, [direct, directDef])
   const name = direct?.title || (directDef ? label(directDef.displayName) : space ? label(space.mini?.name ?? space.name) : 'Mini Panel')
+  const pickedLabel = picker ? picker.items.find((i) => i.id === picker.value)?.label || picker.placeholder : ''
+  const windowTitle = pickedLabel ? `${name} · ${pickedLabel}` : name
+  const onTitleRef = useRef(onTitle)
+  onTitleRef.current = onTitle
+  useEffect(() => { onTitleRef.current?.(windowTitle) }, [windowTitle])
+  const shellRef = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    if (!nudge || reducedMotion()) return
+    shellRef.current?.animate?.([{ transform: 'scale(1)' }, { transform: 'scale(0.97)' }, { transform: 'scale(1)' }],
+      { duration: 280, easing: 'cubic-bezier(0.3, 0.7, 0.4, 1)' })
+  }, [nudge])
+  // 左胶囊的下拉:换 Space(有两个以上时)+ 「复制一扇」。直开的视图没有 Space 可换,只剩复制那一行。
+  const canSwitch = !direct && spaces.length > 1
+  const hasMenu = canSwitch || !!onDuplicate
 
   useEffect(() => {
     const ws = useWorkspace.getState()
@@ -125,13 +148,13 @@ export const MiniColumnHost: React.FC<{
       params: { ...current.mini.mainView.params, ...useWorkspace.getState().getActiveLeaf()?.params } })
   }
   return (
-    <div className="mini-card-shell mini-card-floating" data-space={direct ? 'direct' : space?.id} data-resizable={resizable || undefined}>
+    <div ref={shellRef} className="mini-card-shell mini-card-floating" data-space={direct ? 'direct' : space?.id} data-resizable={resizable || undefined}>
       {/* 顶栏浮在内容之上、收成两颗胶囊(手机 .mb-cap 同款,10-17 方案 A);胶囊之外的透明条是拖拽区。 */}
       <header className="mini-card-chrome">
         <div className="mini-card-cap" ref={capRef}>
           <button className="mini-card-space" aria-label={t('lcl.mini.switchSpace')} aria-expanded={openMenu === 'space'}
-            disabled={!!direct || spaces.length < 2} onClick={() => toggleMenu('space')}>
-            {!direct && Icon && <Icon size={15} />}{(direct || !picker) && <span>{name}</span>}{!direct && spaces.length > 1 && <ChevronDown size={12} />}
+            disabled={!hasMenu} onClick={() => toggleMenu('space')}>
+            {!direct && Icon && <Icon size={15} />}{(direct || !picker) && <span>{name}</span>}{hasMenu && <ChevronDown size={12} />}
           </button>
           {picker && <>
             <span className="mini-card-cap-div" />
@@ -161,13 +184,19 @@ export const MiniColumnHost: React.FC<{
       {openMenu && <>
         <button className="mini-card-dismiss" aria-label={t('lcl.mini.closeMenu')} onClick={dismissMenu} />
         {openMenu === 'space' && <section ref={popRef} className="mini-card-popover" aria-label={t('lcl.mini.switchSpace')}>
-          <div className="mini-card-popover-list">{spaces.map((item) => {
+          <div className="mini-card-popover-list">{canSwitch && spaces.map((item) => {
             const ItemIcon = item.icon
             return <button key={item.id} className={`mini-card-row${item.id === activeId ? ' active' : ''}`}
               onClick={() => { setActiveSpace(item.id); setMenu(null) }}>
               {ItemIcon && <ItemIcon size={15} />}<span className="mini-card-row-label">{label(item.mini!.name ?? item.name)}</span>
             </button>
-          })}</div>
+          })}
+          {onDuplicate && <>
+            {canSwitch && <div className="mini-card-popover-sep" role="separator" />}
+            <button className="mini-card-row mini-card-row-duplicate" onClick={() => { setMenu(null); onDuplicate() }}>
+              <CopyPlus size={15} /><span className="mini-card-row-label">{t('lcl.mini.duplicate')}</span>
+            </button>
+          </>}</div>
         </section>}
         {openMenu === 'picker' && picker && <section ref={popRef} className="mini-card-popover mini-card-popover--picker" aria-label={picker.label}>
           <div className="mini-card-popover-title">{picker.label}</div>
@@ -181,6 +210,7 @@ export const MiniColumnHost: React.FC<{
           </div>
         </section>}
       </>}
+      {notice && <div className="mini-card-notice" role="status">{notice}</div>}
       {resizable && EDGES.map((edge) => <div key={edge} className="mini-card-edge" data-edge={edge}
         onPointerDown={dragEdge} onPointerMove={dragEdge} onPointerUp={dragEdge} onLostPointerCapture={dragEdge} />)}
     </div>

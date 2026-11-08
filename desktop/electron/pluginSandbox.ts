@@ -127,6 +127,7 @@ async function insideSandbox(forsionHome: string, p: ReturnType<typeof sandboxPa
 export const INSTALL_SKIP = /(^|[\\/])(node_modules|\.git|\.forsion|\.DS_Store)([\\/]|$)/
 
 export interface SandboxDeps {
+  focusWindow?(hwnd: number, pid: number): Promise<boolean>
   forsionHome(): string
   spawn(args: string[], env: NodeJS.ProcessEnv): ChildProcess
   /** dev = [app 路径];打包态 = []。 */
@@ -490,7 +491,13 @@ export function createPluginSandbox(deps: SandboxDeps) {
     const c = child && !child.exited ? child : null
     if (!c) return false
     c.lastUsed = Date.now()
-    await request(c, 'show').catch(() => null)
+    const reply = await request(c, 'show').catch(() => null)
+    if (deps.focusWindow) {
+      const hwnd = reply?.hwnd
+      const pid = c.proc.pid
+      if (child !== c || c.exited || !pid || typeof hwnd !== 'number' || !Number.isSafeInteger(hwnd) || hwnd <= 0) return false
+      return deps.focusWindow(hwnd, pid)
+    }
     return true
   }
 

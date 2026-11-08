@@ -84,7 +84,10 @@ export function keyEvents(combo: string, platform: NodeJS.Platform = process.pla
 export function sandboxFilePath(p: string, base: { dir: string; root: string }, mustExist: boolean): string | null {
   if (!p || p.length > 4096) return null
   const abs = isAbsolute(p) ? resolve(p) : resolve(base.dir, p)
-  const real = (x: string): string | null => { try { return realpathSync(x) } catch { return null } }
+  // The Windows native resolver canonicalizes drive case and extended-length paths
+  // while still following junctions before the containment check.
+  const resolveReal = process.platform === 'win32' ? realpathSync.native : realpathSync
+  const real = (x: string): string | null => { try { return resolveReal(x) } catch { return null } }
   // 已经在的(哪怕是软链)一律按它真实指向核:save 到一个指出去的软链 = 写穿到沙箱外面(Codex 评审);只有还不存在的才按父目录核
   const there = (() => { try { lstatSync(abs); return true } catch { return false } })()
   const target = mustExist || there ? real(abs) : (() => { const d = real(dirname(abs)); return d && resolve(d, basename(abs)) })()
@@ -300,11 +303,15 @@ export function startSandboxChild(self: SandboxSelf, opts: { getWindow(): Browse
       case 'reload': await hook('reload()', 30_000); return {}
       case 'show': {
         const w = win()
-        // 沙箱是后台进程,叫不动前台:Windows 有前台锁(只有前台进程能 SetForegroundWindow,别人调 focus 只闪任务栏),
-        // macOS 是协作式激活。临时置顶再放下只改 z 序、不要前台权,窗口一定排到最前,也顺带把静默模式压到 -1 层
-        // (main.ts sinkForHarness)的窗口抬回普通层;能不能顺带拿到键盘焦点看系统
         if (w) {
+          if (process.platform === 'win32') {
+            // The foreground parent hands focus to this window after verifying the HWND belongs to us.
+            if (!w.isVisible() && !w.isMinimized()) w.showInactive()
+            const handle = w.getNativeWindowHandle()
+            return { hwnd: handle.length === 8 ? Number(handle.readBigUInt64LE()) : handle.readUInt32LE() }
+          }
           if (w.isMinimized()) w.restore()
+          // Also restores the normal level for the macOS quiet harness (main.ts sinkForHarness).
           w.setAlwaysOnTop(true); w.show(); w.focus(); w.setAlwaysOnTop(false)
           if (process.platform === 'darwin') app.focus({ steal: true })
         }
