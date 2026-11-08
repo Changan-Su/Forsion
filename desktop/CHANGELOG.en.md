@@ -2,6 +2,55 @@
 
 <!-- English edition of CHANGELOG.md: same "## <version> (<date>)" headings, one bullet per Chinese bullet. Add both when releasing. -->
 
+## 2.13.8-beta.4 (2026-11-08)
+
+Preview build: only for people who chose the preview channel. Stable users won't receive it.
+
+- **Agents and chat**:
+  - Messages you send while an agent is running go straight into the conversation and settle in place once it reads them; Undo send and Interrupt & send move onto the bubble.
+  - Picking an agent for a new chat is now a chip in the composer toolbar; open it to choose one agent or a team.
+  - Every turn gets a receipt of the files it changed: see added and removed lines and the diff, and undo one file or Undo this turn’s changes.
+  - When you change a file the agent has read, in the editor or another program, it is told and continues from the current text.
+  - Project Git handles several repositories in one project, or a project inside a larger repository; the Git card recognizes Forsion Git organization repositories and lists merge requests waiting for your review.
+  - Tell the agent "add two to-dos" and it puts them straight into your calendar's to-do list, without a date if you didn't give one; it can also list and tick them off.
+  - Memory entries can say which computer or system they apply to; project memory follows the Git repository, so worktrees and subfolders of one repository share it.
+  - Import from other AIs: memories, preferences and skills from Claude Code, Codex, Gemini CLI and others become a review list, only ticked items are written, and a whole import can be undone.
+  - Picking up a chat after an hour or more compacts it first; models with a 1M context can use a 512k or custom limit; MCP tools load only when needed, so each request costs less.
+  - The Fast tier is open to the official OpenAI and Anthropic APIs with your own key; new OpenCode Go model channel.
+  - On Windows the agent's commands run in bash too, written the same way as on macOS.
+  - The image tools can make GIFs; GIFs, video and audio play right in the chat.
+  - Long straight runs of questions in the chat canvas fold into an index card; click a turn to expand it.
+  - You can pick a reason when dismissing a Muse card or forgetting a memory; after ticking "Also send this text to Forsion with my account", the text is no longer sent under a different account if you switched in between.
+  - The Muse panel is reorganized: one line says what it is doing, and approvals open one at a time; while it is idle, Wake starts a round right away, and Recent rounds shows what its last 3 rounds did; chat starters fill up to three.
+- **Voice**: voice input in the composer shows words as you speak; the new Voice input plugin lets you press ⌥⇧Space in any app and drops the text into the field you are typing in; voice calls on phones keep going in the background.
+- **Calendar and to-dos** (with Calendar 0.1.8): the to-do add box moves to the bottom of the list, with subtasks, tags and linked notes; new Today and Tasks cards for Home; moving an event's start keeps its duration.
+- **Amadeus**: attachment, file and image embeds show an Open button on hover; block formulas get a copy button, and copying a formula in chat gives you the TeX; links, commands and @ mentions use the accent color; formulas are no longer auto-numbered, untitled notes put the cursor in the title, and wikilink source is colored too; the drop line when dragging blocks is back in the right place; file links like `a.ts:42` in chat jump to that line.
+- **Spaces and windows**:
+  - Right-clicking a Space or a note gives the same menu everywhere: Ribbon, Home, the Space organizer, the note tree and the note "⋯" menu, and deleting several at once asks only once.
+  - Right-click a Space and choose Add to desktop, then double-click it to open that Space in its own window; several Mini windows can be open at once, they can stay un-pinned, and each remembers its position.
+  - Floating cards in a Space are saved with its layout and come back in place after a restart.
+  - Every tab has a right-click menu and pinned views can be dragged out into a new window; ⇧⌘O opens the Space organizer from any Space.
+  - View more on a sidebar project expands in place; set how many it adds per click from the project's "…" menu.
+  - Closing the main window first asks whether to Quit Forsion or Keep running in background; change it under Settings → General, When closing the window.
+- **Home**: four built-in cards (Muse suggestions, Inbox, Recent notes, Recent chats), and plugins can add their own (such as the Sync card from Forsion Extend); widgets made in chat can go in the right rail, dashboards and Home.
+- **Look and motion**: Settings → Appearance adds Motion theme (four styles) and Fade only; the Space preview, account card and Mini dropdowns pour out of the control that opened them; segmented capsule thumbs stretch edge by edge; the composer capsules animate open and shut again; the Ribbon's default command order changes and Events stays right below Store; membership badges use each plan's color and show its name.
+- **Store and plugins**:
+  - Store plugins auto-update by default, older versions stay on the device, and you can roll back and pin a version.
+  - The plugin sandbox holds only the plugin under test, and the agent can click, type and read pages in it on its own.
+  - Plugins can declare getting-started tips that show once when you reach that part of the UI; turn them off or show them again under Settings → Notifications, Tips.
+  - New for plugin authors: the unified `workspace.open` entry and View forms, floats, the tool island, Markdown display with wikilinks, whole-table edits, the Chat Box capability list, and account and entitlements.
+  - Plugins can use a platform account signed in through the built-in browser to fetch content that needs sign-in, starting with Bilibili: scan the QR code or paste a cookie, and each plugin asks for your consent the first time; the cookie is only available to commands in that one run, and the model never sees it.
+  - The Tangu interface can update together with the engine, without a new installer.
+- **First run**: onboarding is now four screens (Start, Appearance, About you, Meet your agents), and a Forsion account and other model channels can both be connected; Help improve Forsion only sends after you sign in and no longer pops open its details on its own.
+- **Connections and sync**:
+  - The connector catalog is in the Store and Settings, you can enter your own keys, and sensitive tools ask every time.
+  - Bundled Forsion Clip 2.2.0: it finds Forsion on this computer by itself, and one approval when the side panel first opens also turns on browser control.
+  - Cloud sync waits until you stop typing for a few seconds and pushes right away when you switch windows, close the lid or quit; both agent syncs share one set of merge rules, first sign-in lets you pick agents one by one, and you are asked once when the cloud already has a different copy.
+  - Computer history is encrypted on this device; published web pages open at their public address; projects added to Creations in place can be published.
+- **Phone**: Calendar and Forsion Extend follow npm updates without waiting for a new app; coming back to the app no longer reloads the whole page and lands on Home.
+- **Reliability**: in the installed app, Reload on the error page and similar buttons work again; on Windows the sandbox window comes to the front; Switch update source is clickable in narrow windows; the Mac installer window no longer shows hidden files; menus, pickers, hover previews and calendar cards stay inside the window and off the thing they came from; note and chat panes a plugin's newer version no longer uses close on their own instead of staying in the layout; renaming a note on the web no longer trips the request limit; opening a page from Shared with me no longer lands somewhere else; earlier to-do snapshots no longer read Stopped; a failed Intelligent UI redraw is taken down right away; long questions no longer push past the chat column.
+- **Engine 2.13.15**, with Forsion Extend 0.9.8 and Calendar 0.1.8 built in.
+
 ## 2.13.8-beta.3 (2026-11-02)
 
 Preview build: only for people who chose the preview channel. Stable users won't receive it.
