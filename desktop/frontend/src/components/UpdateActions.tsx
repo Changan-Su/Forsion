@@ -60,13 +60,13 @@ export function UpdateSourceNote({ upd }: { upd: UpdaterStatusInfo }) {
     ? [t(upd.source === 'github' ? 'about.update.fellBackToGithub' : 'about.update.fellBackToWebsite'), progress].filter(Boolean).join(' · ')
     : progress ? t('about.update.fromProgress', { host, done: mb(upd.transferred ?? 0), total: mb(upd.total!) }) : t('about.update.from', { host })
   return (
-    <span className="upd-src">
-      {text}
+    <>
+      <span className="upd-src">{text}</span>
       {upd.canSwitch && window.tangu?.switchUpdateSource && (
         <button type="button" className="upd-src-switch" onClick={() => void window.tangu?.switchUpdateSource?.()}>
           {t(upd.source === 'website' ? 'about.update.useGithub' : 'about.update.useWebsite')}
         </button>
       )}
-    </span>
+    </>
   )
 }
