@@ -29,9 +29,11 @@ function page(spec) {
     }
     return el
   })
-  const doc = { defaultView: win, activeElement: field, querySelectorAll: () => els, addEventListener: (t, f) => listeners[t]?.push(f) }
+  // documentElement / globalThis:reducedMotion()(@lcl/engine/spring,#481 起)读 data-motion-fade 与 globalThis.matchMedia
+  const doc = { defaultView: win, documentElement: { dataset: {} }, activeElement: field, querySelectorAll: () => els, addEventListener: (t, f) => listeners[t]?.push(f) }
   const mod = { exports: {} }
-  new Function('module', 'exports', 'require', 'window', 'document', 'HTMLTextAreaElement', 'HTMLInputElement', 'getComputedStyle', src)(mod, mod.exports, require, win, doc, HTMLTextAreaElement, HTMLInputElement, (e) => ({ zoom: '1', translate: e.drawnAt ?? 'none' })) // `drawnAt`: where a motion under way has the element
+  const global = Object.assign(Object.create(globalThis), { matchMedia: (q) => win.matchMedia(q) })
+  new Function('module', 'exports', 'require', 'window', 'document', 'globalThis', 'HTMLTextAreaElement', 'HTMLInputElement', 'getComputedStyle', src)(mod, mod.exports, require, win, doc, global, HTMLTextAreaElement, HTMLInputElement, (e) => ({ zoom: '1', translate: e.drawnAt ?? 'none' })) // `drawnAt`: where a motion under way has the element
   mod.exports.installKeyboardRise()
   return { ...mod.exports, els, win, doc, resize: (h) => { win.innerHeight = h; for (const f of listeners.resize) f() }, blur: () => { doc.activeElement = null } }
 }
@@ -97,6 +99,14 @@ const COLUMN = [{ rise: 'end' }, { inside: 0 }] // a chat: the column, and the i
 {
   const p = page(COLUMN)
   p.win.reducedMotion = true
+  p.keyboardRise({ rise: 300, ms: 285 })
+  p.resize(500); p.resize(800)
+  assert.deepEqual([moved(p.els[0]), moved(p.els[1])], [[], []])
+}
+// Fade only (the app's own motion setting, data-motion-fade): nothing travels either
+{
+  const p = page(COLUMN)
+  p.doc.documentElement.dataset.motionFade = 'on'
   p.keyboardRise({ rise: 300, ms: 285 })
   p.resize(500); p.resize(800)
   assert.deepEqual([moved(p.els[0]), moved(p.els[1])], [[], []])

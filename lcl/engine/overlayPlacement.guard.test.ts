@@ -47,6 +47,7 @@ const ALLOW: Record<string, [number, string]> = {
   'desktop/frontend/src/theme/spaceAmbient.ts': [1, '氛围背景取样区与视口求交'],
   'desktop/frontend/src/views/chat2/deskCapture.ts': [1, '截图区域与视口求交'],
   'desktop/frontend/src/views/coding/StudioGuestSurface.tsx': [1, '嵌入页可见区与其窗口求交'],
+  'lcl/engine/SingleColumnHost.tsx': [1, '原生底栏长按回落到网页菜单时的起点(屏幕中下方),落位走 openObjectMenu → OverlayAt'],
   'lcl/engine/WorkspaceHost.tsx': [1, '拖出窗口判定'],
   'lcl/engine/lineSelection.ts': [2, '整行选区高亮的视口框'],
   'lcl/engine/ribbonPointerDrag.ts': [1, '拖动时铺满窗口的遮罩'],

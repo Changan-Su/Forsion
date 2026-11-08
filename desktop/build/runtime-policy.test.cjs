@@ -29,7 +29,7 @@ for (const kind of ['node', 'python', 'git']) {
           runtimeRequired: (k,p) => policy.runtimeRequired(k,p,{}),
           assertSkipAllowed: (k,p) => policy.assertSkipAllowed(k,p,{}) } : require(name);
       const context = { require: req, module, exports: module.exports, __dirname, console,
-        Buffer, setTimeout: fn => fn(), process: { env: mode === 'skip' ? { [`TANGU_SKIP_FETCH_${kind.toUpperCase()}`]: '1' } : {}, platform: 'win32', arch: 'x64' },
+        Buffer, AbortSignal, setTimeout: fn => fn(), process: { env: mode === 'skip' ? { [`TANGU_SKIP_FETCH_${kind.toUpperCase()}`]: '1' } : {}, platform: 'win32', arch: 'x64' },
         fetch: async () => { if (mode === 'network') throw Error('synthetic network failure'); return { ok:true, arrayBuffer: async () => Buffer.from('altered archive') }; } };
       vm.runInNewContext(fs.readFileSync(path.join(__dirname, `fetch-${kind}.cjs`), 'utf8'), context);
       const fn = module.exports[`fetch${kind[0].toUpperCase()}${kind.slice(1)}`];
