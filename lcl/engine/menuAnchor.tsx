@@ -142,16 +142,22 @@ export function followAnchor(el: HTMLElement, anchor: Element, opts: FitAnchored
     // 还没显示的 popover(display:none)读自己的 currentCSSZoom 恒为 1,这时先借锚点的,显示后 ResizeObserver 会再落一次。
     const z = el.getClientRects().length ? zoomOf(el) : zoomOf(anchor)
     const h = Math.min(el.scrollHeight + el.offsetHeight - el.clientHeight, cap) * z
-    const v = fitAnchored(anchor.getBoundingClientRect(), el.offsetWidth * z, h, window.innerWidth, window.innerHeight, {
+    const r = anchor.getBoundingClientRect()
+    const v = fitAnchored(r, el.offsetWidth * z, h, window.innerWidth, window.innerHeight, {
       ...opts,
       gap: (opts.gap ?? 4) * z,
       margin: (opts.margin ?? 8) * z,
     })
-    const key = `${v.left}|${v.top}|${v.maxHeight}`
+    // 开在锚点上方时钉**底边**:内容再长高(编辑器异步渲染、列表加载)是往上长、离开锚点;钉顶边的话,在 ResizeObserver
+    // 重落之前那一帧会往下盖住锚点 —— 悬停预览就会「盖住链接 → 链接 mouseleave 关卡 → 再弹」来回闪(2026-11-08 实测)。
+    const bottom = v.top + Math.min(h, v.maxHeight)
+    const up = bottom <= r.top + 0.5
+    const key = `${v.left}|${v.top}|${v.maxHeight}|${up}`
     if (key === last) return // 写 maxHeight 会再触发一次 ResizeObserver;同值就停,不进循环
     last = key
     el.style.left = `${v.left / z}px`
-    el.style.top = `${v.top / z}px`
+    el.style.top = up ? 'auto' : `${v.top / z}px`
+    el.style.bottom = up ? `${(window.innerHeight - bottom) / z}px` : 'auto'
     el.style.maxHeight = `${Math.max(0, Math.min(v.maxHeight / z, cap) - chrome)}px`
   }
   place()

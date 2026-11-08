@@ -3698,7 +3698,7 @@ function RowEditor({ db, row, pagePath, env, setCell, createOption, readOnly, ti
               setCell={setCell}
               openOptions={(e) => {
                 const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
-                setOpt({ colId: col.id, x: r.left, y: r.bottom + 4, anchorTop: r.top }) // 落位交给 PopShell 里的 OverlayAt:量真实尺寸,下方放不下翻到格子上方
+                setOpt({ colId: col.id, x: r.left, y: r.bottom + 4, anchorTop: r.top - 4 }) // 落位交给 PopShell 里的 OverlayAt:量真实尺寸,下方放不下翻到格子上方(上下都留 4px)
               }}
             />
             )}

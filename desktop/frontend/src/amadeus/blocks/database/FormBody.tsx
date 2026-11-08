@@ -91,7 +91,7 @@ export function FormBody({ db, view, renderCell, renderOptions, colIcon, onSubmi
             <div className="amx-db-form-cell">
               {renderCell(row, col, setCell, (e) => {
                 const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
-                setOpt({ colId: col.id, x: r.left, y: r.bottom + 4, anchorTop: r.top }) // 落位交给 PopShell 里的 OverlayAt:量真实尺寸,下方放不下翻到格子上方
+                setOpt({ colId: col.id, x: r.left, y: r.bottom + 4, anchorTop: r.top - 4 }) // 落位交给 PopShell 里的 OverlayAt:量真实尺寸,下方放不下翻到格子上方(上下都留 4px)
               })}
             </div>
             {bad && <span className="amx-db-form-err">{t('dbform.required')}</span>}

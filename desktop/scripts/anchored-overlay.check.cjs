@@ -25,7 +25,8 @@ function findChromium() {
 
 const ORIGIN = process.env.HARNESS_ORIGIN || 'http://localhost:5173'
 const SHOTS = process.env.ANCHORED_SHOTS
-const VIEW = { width: 1200, height: 720 }
+// 720 = 任务要求的自查尺寸;520 = 矮窗口,旧的固定高度估算(议程卡 356、选项菜单 260…)在这里压住锚点
+const HEIGHTS = (process.env.ANCHORED_HEIGHTS || '720,520').split(',').map(Number)
 const ZOOMS = (process.env.ANCHORED_ZOOMS || '1.1,1').split(',').map(Number)
 const TOL = 1
 
@@ -68,7 +69,8 @@ const CASES = [
     id: 'cal-agenda', pop: '.amx-cal-agenda',
     open: async (p) => {
       const more = p.locator('.amx-cal-more').last()
-      await more.evaluate((el) => el.setAttribute('data-anchor-test', ''))
+      await more.evaluate((el) => { el.setAttribute('data-anchor-test', ''); el.scrollIntoView({ block: 'end' }) })
+      await p.waitForTimeout(300)
       await more.click()
       return '[data-anchor-test]'
     },
@@ -76,16 +78,18 @@ const CASES = [
   {
     id: 'cal-card', pop: '.amx-cal-cardwrap', side: true,
     open: async (p) => {
-      const chip = p.locator('.amx-cal-more').last().locator('xpath=..').locator('button').first()
+      // 当天格子里最后一条可见事件(紧挨「还有 N 项」),格子滚到窗口底边
+      const chip = p.locator('.amx-cal-more').last().locator('xpath=..').locator('button:not(.amx-cal-more)').last()
+      await chip.evaluate((el) => { el.setAttribute('data-anchor-test', ''); el.parentElement.querySelector('.amx-cal-more').scrollIntoView({ block: 'end' }) })
+      await p.waitForTimeout(300)
       await chip.click()
-      await chip.evaluate((el) => el.setAttribute('data-anchor-test', ''))
       return '[data-anchor-test]'
     },
   },
 ]
 
-async function run(browser, c, z) {
-  const page = await browser.newPage({ locale: 'zh-CN', viewport: VIEW })
+async function run(browser, c, z, height) {
+  const page = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1200, height } })
   page.on('pageerror', (e) => console.log(`[pageerror ${c.id}]`, e.message))
   await page.goto(`${ORIGIN}/anchored-overlays.html?case=${c.id}`, { waitUntil: 'domcontentloaded' })
   await page.waitForSelector('#root > *', { timeout: 30000 })
@@ -97,7 +101,7 @@ async function run(browser, c, z) {
   }, z)
   await page.waitForTimeout(800)
   let anchorSel
-  try { anchorSel = await c.open(page) } catch (e) { check(`${c.id} @${z}: 打开浮层`, false, e.message.split('\n')[0]); await page.close(); return }
+  try { anchorSel = await c.open(page) } catch (e) { check(`${c.id} @${z} h${height}: 打开浮层`, false, e.message.split('\n')[0]); await page.close(); return }
   await page.waitForTimeout(500) // 内容异步长高 / 入场动画放完
   const m = await page.evaluate(({ pop, anchor }) => {
     const p = [...document.querySelectorAll(pop)].find((n) => !n.hasAttribute('data-lcl-exit'))
@@ -106,16 +110,16 @@ async function run(browser, c, z) {
     const r = p.getBoundingClientRect(), b = a.getBoundingClientRect()
     return { pop: { l: r.left, t: r.top, r: r.right, b: r.bottom }, anchor: { l: b.left, t: b.top, r: b.right, b: b.bottom }, vw: innerWidth, vh: innerHeight, scrolls: p.scrollHeight > p.clientHeight + 1 }
   }, { pop: c.pop, anchor: anchorSel })
-  if (SHOTS) { fs.mkdirSync(SHOTS, { recursive: true }); await page.screenshot({ path: path.join(SHOTS, `${c.id}@${z}.png`) }) }
-  if (!m) { check(`${c.id} @${z}: 浮层出现`, false, '没找到浮层或锚点'); await page.close(); return }
+  if (SHOTS) { fs.mkdirSync(SHOTS, { recursive: true }); await page.screenshot({ path: path.join(SHOTS, `${c.id}@${z}-h${height}.png`) }) }
+  if (!m) { check(`${c.id} @${z} h${height}: 浮层出现`, false, '没找到浮层或锚点'); await page.close(); return }
   const { pop: p, anchor: a } = m
   const fmt = (r) => `${r.l.toFixed(0)},${r.t.toFixed(0)}–${r.r.toFixed(0)},${r.b.toFixed(0)}`
   const detail = `pop ${fmt(p)} anchor ${fmt(a)} of ${m.vw}×${m.vh}`
-  check(`${c.id} @${z}: 整张在窗口里`, p.t >= -TOL && p.l >= -TOL && p.b <= m.vh + TOL && p.r <= m.vw + TOL, detail)
+  check(`${c.id} @${z} h${height}: 整张在窗口里`, p.t >= -TOL && p.l >= -TOL && p.b <= m.vh + TOL && p.r <= m.vw + TOL, detail)
   const overlapV = Math.min(p.b, a.b) - Math.max(p.t, a.t) > TOL
   const overlapH = Math.min(p.r, a.r) - Math.max(p.l, a.l) > TOL
-  check(`${c.id} @${z}: 不盖住锚点`, !(overlapV && overlapH), detail)
-  if (!c.side) check(`${c.id} @${z}: 锚点在底部 → 开在锚点上方`, p.b <= a.t + TOL, detail)
+  check(`${c.id} @${z} h${height}: 不盖住锚点`, !(overlapV && overlapH), detail)
+  if (!c.side) check(`${c.id} @${z} h${height}: 锚点在底部 → 开在锚点上方`, p.b <= a.t + TOL, detail)
   await page.close()
 }
 
@@ -130,7 +134,7 @@ async function main() {
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })
   const only = process.env.ANCHORED_ONLY?.split(',')
   try {
-    for (const z of ZOOMS) for (const c of CASES) if (!only || only.includes(c.id)) await run(browser, c, z)
+    for (const height of HEIGHTS) for (const z of ZOOMS) for (const c of CASES) if (!only || only.includes(c.id)) await run(browser, c, z, height)
   } finally {
     await browser.close()
     if (vite) vite.kill()
