@@ -21,7 +21,7 @@ import { PLUGIN_ICONS } from '@amadeus/components/icons'
 import { registerMessages, useI18n } from './i18n'
 import { PLUGIN_VIEW_HOST_ATTR, clearPluginViewModes, pluginViewHeadOf, pluginViewModesOf, subscribePluginViewModes } from '@amadeus/plugins/pluginViewModes'
 import { pluginText } from '@amadeus/plugins/pluginText'
-import { setPluginCompanions } from './pluginCompanions'
+import { pruneStalePluginCompanions, setPluginCompanions } from './pluginCompanions'
 import { EmptyState } from './components/EmptyState'
 import { noteViewOpen } from '@amadeus/plugins/guideTips'
 
@@ -129,6 +129,17 @@ export const PluginViewHost: React.FC<ViewProps & { def: ViewContribution; plugi
           (e) => { if (alive) fail(e) },
         )
       } else cleanup = mounted as (() => void) | void
+      // Companion tabs this view no longer declares (dropped by a newer plugin version) are closed by the host.
+      // Deferred a tick: closing panels in the middle of a mount re-enters Dockview. Only for an active plugin
+      // whose view actually mounted — a plugin still loading or one that failed never reaches this line.
+      if (pluginId && kind === 'main' && !isFloating) queueMicrotask(() => {
+        const st = usePluginStore.getState()
+        if (!alive || !st.activeIds.includes(pluginId) || st.lastSetupError[pluginId]) return
+        pruneStalePluginCompanions(pluginId, current.current.leaf.id, def, {
+          views: st.views.filter((v) => v.pluginId === pluginId).map((v) => v.item),
+          knownPluginIds: st.plugins.map((p) => p.id),
+        })
+      })
     } catch (e) {
       fail(e)
     }
