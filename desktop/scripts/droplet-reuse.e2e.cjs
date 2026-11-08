@@ -8,7 +8,7 @@
  *  动效第三轮(11-06)加:开到 60 / 150ms 就收,内容只淡不先蹦出来(三处 + Ribbon「+N」);「+N」倒放到一半又点 = 重新流出来。
  *  账号卡还没流完就变高又马上收:按新矩形重建要从同一个进度接着(不先跳成长满、内容不蹦到 1)。
  *  这三条的负对照 = 拿没修的构建跑(倒放从 1 淡出、「+N」吞掉那一下点击、重建用 settled),必须报红。
- *  用法:npm run build && node scripts/droplet-reuse.e2e.cjs [--neg]   截图 → outputs/droplet-reuse/ */
+ *  用法:npm run build && node scripts/droplet-reuse.e2e.cjs [--neg | --account-resize]   截图 → outputs/droplet-reuse/ */
 const fs = require('fs'), os = require('os'), path = require('path')
 const electron = require('./lib/launch-electron.cjs')
 const { startStubEngine } = require('./lib/stub-engine.cjs')
@@ -25,22 +25,26 @@ const LAYERS_JXA = `ObjC.import('CoreGraphics'); function run(a) { return JSON.s
 const layersOf = (pid) => JSON.parse(require('child_process').execFileSync('osascript', ['-l', 'JavaScript', '-e', LAYERS_JXA, String(pid)]).toString())
 
 /** 等 sel 出现后逐帧记状态 ms 毫秒。act:在页面里先做的动作(点哪个元素),省掉 Playwright 自己约 100ms 的点击开销。 */
-const sample = (page, sel, { ms = 650, act = null, key = null } = {}) => page.evaluate(async ({ sel, ms, act, key }) => {
+const sample = (page, sel, { ms = 650, act = null, key = null, layerSel = '.lcl-droplet', afterLayout = false } = {}) => page.evaluate(async ({ sel, ms, act, key, layerSel, afterLayout }) => {
+  const opening = !key && !document.querySelector(sel)
   if (act) document.querySelector(act)?.click()
   if (key) window.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }))
   const raf = () => new Promise(requestAnimationFrame)
   const t0 = performance.now()
-  if (!act && !key) while (!document.querySelector(sel) && performance.now() - t0 < 1500) await raf()
+  if (opening) while (!document.querySelector(sel) && performance.now() - t0 < 1500) await raf()
   const t1 = performance.now(), frames = []
   while (performance.now() - t1 < ms) {
     await raf()
-    const p = document.querySelector(sel), layer = document.querySelector('.lcl-droplet')
+    // ResizeObserver runs after rAF. Use a post-layout task for resize checks only,
+    // since the timer can be throttled in the background Mini window.
+    if (afterLayout) await new Promise((resolve) => setTimeout(resolve, 0))
+    const p = document.querySelector(sel), layer = document.querySelector(layerSel)
     const cs = p && getComputedStyle(p), before = p && getComputedStyle(p, '::before')
     frames.push({ t: Math.round(performance.now() - t1), exists: !!p, pouring: !!p?.classList.contains('lcl-droplet-pouring'),
       bg: cs?.backgroundColor, beforeShown: !!before && before.content !== 'none' && +before.opacity > 0 && !/rgba\(0, 0, 0, 0\)|transparent/.test(before.backgroundColor),
       layer: !!layer && getComputedStyle(layer).display !== 'none', clip: cs?.clipPath, vis: cs?.visibility,
       kids: p ? [...p.children].map((k) => +getComputedStyle(k).opacity) : [], mark: p?.dataset.probe ?? null, hole: !!layer && 'hole' in layer.dataset,
-      bc: cs?.borderTopColor,
+      bc: cs?.borderTopColor, accounts: !!p?.querySelector('.ap-accounts'),
       // 面板此刻露出的面积(%):按 clip-path 的 inset 算(Chrome 按 margin 简写序列化,1–4 个值都要认);没裁 = 100,藏起 / 不在 = 0
       area: (() => {
         if (!p || cs.visibility === 'hidden') return 0
@@ -49,12 +53,51 @@ const sample = (page, sel, { ms = 650, act = null, key = null } = {}) => page.ev
         const [t, r = t, b = t, l = r] = iv, W = p.offsetWidth, H = p.offsetHeight
         return Math.round(100 * Math.max(0, W - r - l) * Math.max(0, H - t - b) / (W * H))
       })(),
-      // 液体本体(第二个 <i>,按面板矩形摆)与面板此刻矩形的最大偏差:液滴量到的若是面板定位前的矩形,这里会差出一截
-      geo: (() => { const b = layer?.querySelectorAll('i')[1]; if (!b || !p) return null; const x = b.getBoundingClientRect(), y = p.getBoundingClientRect(); return Math.round(Math.max(Math.abs(x.left - y.left), Math.abs(x.top - y.top), Math.abs(x.width - y.width), Math.abs(x.height - y.height))) })(),
+      // The last <i> is the panel surface. The droplet's first <i> is the source.
+      geo: (() => { const b = layer?.lastElementChild; if (!b || !p) return null; const x = b.getBoundingClientRect(), y = p.getBoundingClientRect(); return Math.round(Math.max(Math.abs(x.left - y.left), Math.abs(x.top - y.top), Math.abs(x.width - y.width), Math.abs(x.height - y.height))) })(),
       drop: (() => { const i = layer?.querySelector('i'); if (!i) return null; const r = i.getBoundingClientRect(); return { cx: r.x + r.width / 2, cy: r.y + r.height / 2 } })() })
   }
   return frames
-}, { sel, ms, act, key })
+}, { sel, ms, act, key, layerSel, afterLayout })
+
+async function verifyAccountResize(app, win) {
+  // Exercise the real AccountSwitcher mount and OverlayAt repositioning while the panel is opening.
+  await app.evaluate(({ ipcMain }) => {
+    ipcMain.removeHandler('auth:status')
+    ipcMain.handle('auth:status', () => ({ loggedIn: true, username: 'Motion test', tokenValid: true }))
+    ipcMain.removeHandler('auth:accounts')
+    ipcMain.handle('auth:accounts', async () => {
+      await new Promise((resolve) => setTimeout(resolve, 120))
+      return [{ id: 'motion', cloudUrl: 'https://example.test', username: 'Motion test', active: true }]
+    })
+  })
+  const mainWindow = await app.browserWindow(win)
+  await mainWindow.evaluate((w) => w.webContents.send('auth:changed', { loggedIn: true }))
+  const avatar = '.ribbon-account, .account-card'
+  await win.waitForFunction((sel) => document.querySelector(sel)?.title === 'Motion test', avatar, { timeout: 5000 })
+  for (const [theme, layerSel] of [['genesis', '.lcl-droplet'], ['stretch', '.lcl-stretch']]) {
+    await win.evaluate((theme) => { document.documentElement.dataset.motionTheme = theme }, theme)
+    const opening = await sample(win, '.account-pop', { act: avatar, layerSel, afterLayout: true })
+    const before = opening.find((f) => f.pouring && !f.accounts)
+    const after = opening.filter((f) => f.pouring && f.accounts)
+    check(`账号卡(${theme}): 切换账号在动效中途出现，底板和内容仍然对齐`,
+      !!before && after.length >= 3 && after.every((f) => f.layer && f.geo !== null && f.geo <= 2),
+      JSON.stringify(after.slice(0, 5).map(({ t, geo, area }) => ({ t, geo, area }))))
+    const closing = await sample(win, '.account-pop', { act: avatar, layerSel, ms: 500 })
+    const moving = closing.filter((f) => f.pouring && f.vis !== 'hidden' && f.area >= 94)
+    check(`账号卡(${theme}): 卡片开始明显收拢前，内容仍在淡出`,
+      moving.length >= 2 && moving.every((f) => f.kids[0] > 0.02) && !closing.at(-1).exists,
+      JSON.stringify(moving.slice(-5).map(({ t, area, kids }) => ({ t, area, opacity: kids[0] }))))
+
+    await armFreeze(win, 200, layerSel)
+    await win.evaluate((sel) => document.querySelector(sel).click(), avatar)
+    await win.locator('.account-pop .ap-accounts').waitFor({ state: 'attached', timeout: 3000 })
+    const height = await win.evaluate(() => innerHeight)
+    await freezeShot(win, `account-resize-${theme}.png`, { x: 0, y: height - 380, width: 360, height: 380 })
+    await win.keyboard.press('Escape')
+    await win.locator('.account-pop').waitFor({ state: 'detached', timeout: 3000 })
+  }
+}
 
 function verifyPour(frames, name) {
   const mid = frames.filter((f) => f.t > 50 && f.t < 300 && f.exists)
@@ -76,14 +119,14 @@ function verifyRetract(frames, name) {
 /** 冻结在倾倒的某一毫秒拍一张(DESIGN §8 观感交付要真截图),拍完放开。先等上一滴(含倒放)清场,再在液体层挂上的
  *  那一刻(MutationObserver,早于下一帧)暂停全部动画 —— 等 Playwright 看到面板再冻,抓到的可能是上一次还没倒放完的那滴。 */
 const waitNoDrop = (page) => page.waitForFunction(() => !document.querySelector('.lcl-droplet, .lcl-droplet-pouring'), null, { timeout: 3000 })
-const armFreeze = (page, t) => page.evaluate((t) => {
+const armFreeze = (page, t, layerSel = '.lcl-droplet') => page.evaluate(({ t, layerSel }) => {
   window.__frozen = false
   const mo = new MutationObserver(() => {
-    if (!document.querySelector('.lcl-droplet')) return
+    if (!document.querySelector(layerSel)) return
     mo.disconnect(); document.getAnimations().forEach((a) => { a.pause(); a.currentTime = t }); window.__frozen = true
   })
   mo.observe(document.body, { childList: true, subtree: true })
-}, t)
+}, { t, layerSel })
 async function freezeShot(page, file, clip) {
   await page.waitForFunction(() => window.__frozen, null, { timeout: 3000 })
   await page.waitForTimeout(60)
@@ -176,6 +219,12 @@ async function main() {
     check('主窗口跳过引导', await skipOnboarding(win))
     await win.waitForSelector('.rb [data-space-id]', { timeout: 30000 })
     await win.waitForTimeout(800)
+    if (process.argv.includes('--account-resize')) {
+      await verifyAccountResize(app, win)
+      check('没有渲染层报错', errors.length === 0, JSON.stringify(errors))
+      process.exitCode = results.some((ok) => !ok) ? 1 : 0
+      return
+    }
     if (NEG) await win.addStyleTag({ content: NEG_CSS })
     const away = () => win.mouse.move(1100, 600)
     const center = (sel) => win.evaluate((sel) => { const r = document.querySelector(sel).getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 } }, sel)
@@ -345,6 +394,7 @@ async function main() {
       await mini.waitForTimeout(500); await mini.screenshot({ path: path.join(OUT, `mini-open-${m}.png`), clip: box })
       await mini.keyboard.press('Escape'); await mini.waitForTimeout(600)
     }
+    await verifyAccountResize(app, win)
     check('没有渲染层报错', errors.length === 0, JSON.stringify(errors))
     console.log(`SCREENSHOTS ${OUT}`)
   } finally { if (app) await app.close().catch(() => {}); await stub.close() }

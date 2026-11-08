@@ -7,7 +7,7 @@
  *  面板前面插一层兄弟节点画同形状的「底」,影子(--droplet-shadow)由这层带着形状走 —— clip-path 会裁掉面板自己的投影。
  *  平移:淡入 + 0.985→1 微缩(菜单那一对,--menu-enter-*),收起淡出 + 0.99(--menu-exit-duration、--ease-exit)。
  *  减少动态效果 / 「只淡入淡出」(reducedMotion())三种都只淡入 / 淡出。 */
-import { emergeDroplet, ms, curve, splitAlpha, type Droplet, type DropletOptions } from './droplet'
+import { emergeDroplet, ms, curve, splitAlpha, fadePanelContentOut, motionRectChanged, observePanelGeometry, positionMotionLayer, type Droplet, type DropletOptions } from './droplet'
 import { zoomOf } from './menuAnchor'
 import { reducedMotion } from './spring'
 
@@ -136,46 +136,48 @@ export function easeOf(css: string): (x: number) => number {
 }
 
 /** 拉伸展开。缝(源与面板之间)和液滴一样要 ≤ 12px,远了看着就不是从按钮里长出来的。 */
-export function stretchOpen(source: HTMLElement, panel: HTMLElement, opts: DropletOptions & { /** 内部用(收起前按新矩形重建):从这一毫秒接着 */ at?: number } = {}): Droplet {
+export function stretchOpen(source: HTMLElement, panel: HTMLElement, opts: DropletOptions = {}): Droplet {
   if (reducedMotion() || typeof panel.animate !== 'function' || !panel.parentElement) return fadeOnly(panel, opts.settled)
   panel.style.visibility = ''
   const D = ms('--stretch-open-duration', 380)
   const ez = easeOf(curve('--ease-surface', 'cubic-bezier(0.22, 1, 0.36, 1)'))
-  const s = source.getBoundingClientRect()
-  const pr = panel.getBoundingClientRect()
+  let s = source.getBoundingClientRect()
+  let pr = panel.getBoundingClientRect()
   const pcs = getComputedStyle(panel)
-  const pz = zoomOf(panel)
-  const radius = (parseFloat(pcs.borderTopLeftRadius) || 12) * pz
-  const r0 = Math.min(radius, (parseFloat(getComputedStyle(source).borderTopLeftRadius) || 8) * zoomOf(source))
-  const p: Box = { x: pr.left, y: pr.top, w: pr.width, h: pr.height }
-  // 面板在源的哪一侧:远端那条边沿这个方向走,两条侧边从「源与面板重叠的那一段」撑到面板全长
-  const dir = pr.left >= s.right - 1 ? 'r' : pr.right <= s.left + 1 ? 'l' : pr.top >= s.bottom - 1 ? 'd' : 'u'
-  const horiz = dir === 'r' || dir === 'l'
-  const lo = horiz ? p.y : p.x, hi = horiz ? p.y + p.h : p.x + p.w
-  const slo = horiz ? s.top : s.left, shi = horiz ? s.bottom : s.right
-  let a0 = Math.max(lo, slo), b0 = Math.min(hi, shi)
-  const MIN = 8 * pz
-  if (b0 - a0 < MIN) { const c = Math.min(hi - MIN / 2, Math.max(lo + MIN / 2, (slo + shi) / 2)); a0 = c - MIN / 2; b0 = c + MIN / 2 }
-  const thick0 = Math.min(10 * pz, horiz ? p.w : p.h) // 起步时远端离近端多远
-  const FAR: [number, number] = [0, 0.78], SIDE: [number, number] = [0.2, 1]
-  const seg = (t: number, [a, b]: [number, number]): number => ez(Math.min(1, Math.max(0, (t - a) / (b - a))))
-  const boxAt = (t: number): Box & { r: number } => {
-    const f = seg(t, FAR), v = seg(t, SIDE)
-    const a = a0 + (lo - a0) * v, b = b0 + (hi - b0) * v
-    const len = thick0 + ((horiz ? p.w : p.h) - thick0) * f
-    const r = Math.min(r0 + (radius - r0) * v, (b - a) / 2, len / 2)
-    if (dir === 'r') return { x: p.x, y: a, w: len, h: b - a, r }
-    if (dir === 'l') return { x: p.x + p.w - len, y: a, w: len, h: b - a, r }
-    if (dir === 'd') return { x: a, y: p.y, w: b - a, h: len, r }
-    return { x: a, y: p.y + p.h - len, w: b - a, h: len, r }
+  let pz = zoomOf(panel)
+  const panelRadius = parseFloat(pcs.borderTopLeftRadius) || 12
+  const sourceRadius = parseFloat(getComputedStyle(source).borderTopLeftRadius) || 8
+  const frames = (z: number): Keyframe[] => {
+    const p: Box = { x: pr.left, y: pr.top, w: pr.width, h: pr.height }
+    const radius = panelRadius * pz, r0 = Math.min(radius, sourceRadius * zoomOf(source))
+    // 远端沿源到面板的方向走,侧边从源与面板重叠的那一段撑到全长。
+    const dir = pr.left >= s.right - 1 ? 'r' : pr.right <= s.left + 1 ? 'l' : pr.top >= s.bottom - 1 ? 'd' : 'u'
+    const horiz = dir === 'r' || dir === 'l'
+    const lo = horiz ? p.y : p.x, hi = horiz ? p.y + p.h : p.x + p.w
+    const slo = horiz ? s.top : s.left, shi = horiz ? s.bottom : s.right
+    let a0 = Math.max(lo, slo), b0 = Math.min(hi, shi)
+    const min = 8 * pz
+    if (b0 - a0 < min) { const c = Math.min(hi - min / 2, Math.max(lo + min / 2, (slo + shi) / 2)); a0 = c - min / 2; b0 = c + min / 2 }
+    const thick0 = Math.min(10 * pz, horiz ? p.w : p.h)
+    const seg = (t: number, a: number, b: number): number => ez(Math.min(1, Math.max(0, (t - a) / (b - a))))
+    const boxAt = (t: number): Box & { r: number } => {
+      const f = seg(t, 0, 0.78), v = seg(t, 0.2, 1)
+      const a = a0 + (lo - a0) * v, b = b0 + (hi - b0) * v
+      const len = thick0 + ((horiz ? p.w : p.h) - thick0) * f
+      const r = Math.min(r0 + (radius - r0) * v, (b - a) / 2, len / 2)
+      if (dir === 'r') return { x: p.x, y: a, w: len, h: b - a, r }
+      if (dir === 'l') return { x: p.x + p.w - len, y: a, w: len, h: b - a, r }
+      if (dir === 'd') return { x: a, y: p.y, w: b - a, h: len, r }
+      return { x: a, y: p.y + p.h - len, w: b - a, h: len, r }
+    }
+    const n = 32
+    return Array.from({ length: n + 1 }, (_, i) => {
+      const t = i / n, b = boxAt(t)
+      const top = (b.y - p.y) / z, left = (b.x - p.x) / z
+      const right = (p.x + p.w - b.x - b.w) / z, bottom = (p.y + p.h - b.y - b.h) / z
+      return { offset: t, clipPath: `inset(${top}px ${right}px ${bottom}px ${left}px round ${b.r / z}px)` }
+    })
   }
-  const N = 32
-  const frames = (z: number, off: { x: number; y: number }): Keyframe[] => Array.from({ length: N + 1 }, (_, i) => {
-    const t = i / N, b = boxAt(t)
-    const top = (b.y - off.y) / z, left = (b.x - off.x) / z
-    const right = (off.x + p.w - b.x - b.w) / z, bottom = (off.y + p.h - b.y - b.h) / z
-    return { offset: t, clipPath: `inset(${top}px ${right}px ${bottom}px ${left}px round ${b.r / z}px)` }
-  })
 
   // 底层:面板前面的兄弟节点,框住面板;同形状的一块「底」带着影子走(层上 filter = 影子,块上 clip-path = 形状)
   const layer = document.createElement('div')
@@ -183,26 +185,23 @@ export function stretchOpen(source: HTMLElement, panel: HTMLElement, opts: Dropl
   layer.setAttribute('aria-hidden', 'true')
   layer.style.zIndex = String((parseInt(pcs.zIndex, 10) || 1) - 1)
   panel.parentElement.insertBefore(layer, panel)
-  const z = zoomOf(layer)
-  const ux = p.x - PAD, uy = p.y - PAD
-  Object.assign(layer.style, { left: `${ux / z}px`, top: `${uy / z}px`, width: `${(p.w + 2 * PAD) / z}px`, height: `${(p.h + 2 * PAD) / z}px` })
-  const at = layer.getBoundingClientRect() // 祖先带 transform 时 fixed 的坐标系不是视口:量一次差值补回去(同 droplet.ts)
-  if (Math.abs(at.left - ux) > 0.5 || Math.abs(at.top - uy) > 0.5) {
-    layer.style.left = `${(2 * ux - at.left) / z}px`
-    layer.style.top = `${(2 * uy - at.top) / z}px`
-  }
   // 底色:缺省读面板自身;材质画在 ::before 上的面板(悬停预览)由调用方传(同 emergeDroplet 的 color)。
   // 半透明拆成「不透明色 + 整层透明度」,和液滴同一种画法:形状边上不出两层叠色
   const fill = splitAlpha(opts.color ?? pcs.backgroundColor)
   if (fill.alpha < 1) layer.style.opacity = String(fill.alpha)
   const body = document.createElement('i')
-  Object.assign(body.style, { left: `${PAD / z}px`, top: `${PAD / z}px`, width: `${p.w / z}px`, height: `${p.h / z}px`, background: fill.rgb })
+  body.style.background = fill.rgb
   layer.appendChild(body)
+  const placeSurface = (): number => {
+    const z = positionMotionLayer(layer, pr.left - PAD, pr.top - PAD, pr.width + 2 * PAD, pr.height + 2 * PAD)
+    Object.assign(body.style, { left: `${PAD / z}px`, top: `${PAD / z}px`, width: `${pr.width / z}px`, height: `${pr.height / z}px` })
+    return z
+  }
 
   const kf: KeyframeAnimationOptions = { duration: D, fill: 'both' }
-  const grow = body.animate(frames(z, p), kf)
+  const grow = body.animate(frames(placeSurface()), kf)
   panel.classList.add(POURING)
-  let clip: Animation | null = panel.animate(frames(pz, p), kf)
+  let clip: Animation | null = panel.animate(frames(pz), kf)
   const kids = (): HTMLElement[] => Array.from(panel.children) as HTMLElement[]
   const surface = curve('--ease-surface', 'cubic-bezier(0.22, 1, 0.36, 1)')
   let shows = kids().map((k) => k.animate([{ opacity: 0 }, { opacity: 1 }], { delay: D * 0.3, duration: D * 0.3, easing: surface, fill: 'backwards' }))
@@ -210,9 +209,20 @@ export function stretchOpen(source: HTMLElement, panel: HTMLElement, opts: Dropl
   let closing: Promise<void> | null = null
   // cancel 之后旧的收尾不再碰面板:收到一半又重开时,新的一次已经给面板挂上 pouring,旧 promise 的 finally 晚一拍才跑
   let dead = false
-  let rebuilt: Droplet | null = null
   let gen = 0 // 每次倒放 / 掉头 +1:掉头后 grow.finished 还是同一个 Promise,旧那次收尾按它作废
   let landed = false
+  const syncGeometry = (): void => {
+    const nextPanel = panel.getBoundingClientRect(), nextSource = source.getBoundingClientRect(), nextZoom = zoomOf(panel)
+    if (!motionRectChanged(pr, nextPanel) && !motionRectChanged(s, nextSource) && pz === nextZoom) return
+    pr = nextPanel
+    s = nextSource
+    pz = nextZoom
+    const z = placeSurface()
+    const effect = grow.effect as KeyframeEffect
+    effect.setKeyframes(frames(z))
+    if (clip) (clip.effect as KeyframeEffect).setKeyframes(frames(pz))
+  }
+  const stopObserving = observePanelGeometry(source, panel, () => { if (!landed) syncGeometry() })
   // 形状长满 → 真面板接手:去掉 pouring、撤掉裁切(fill 留着会把阴影也裁掉)、底层藏起来留给倒放。
   // 描边从透明淡进来(同 droplet.ts);edge = false 只给 settled:面板本来就开着
   const land = (edge = true): void => {
@@ -230,14 +240,11 @@ export function stretchOpen(source: HTMLElement, panel: HTMLElement, opts: Dropl
     for (const a of [grow, ...shows]) a.finish()
     clip?.finish()
     land(false)
-  } else if (opts.at !== undefined) {
-    // 重建:停在原来那一份此刻的进度(形状、内容透明度都接得上),紧接着的 retract() 从这里倒放
-    for (const a of [grow, ...shows]) a.currentTime = Math.min(opts.at, D)
-    if (clip) clip.currentTime = Math.min(opts.at, D)
   }
 
-  const cancelSelf = (): void => {
+  const cancel = (): void => {
     dead = true
+    stopObserving()
     for (const a of [grow, ...shows]) a.cancel()
     clip?.cancel()
     panel.getAnimations({ subtree: true }).forEach((a) => a.cancel())
@@ -248,33 +255,21 @@ export function stretchOpen(source: HTMLElement, panel: HTMLElement, opts: Dropl
   return {
     retract() {
       if (closing) return closing
-      if (rebuilt) return (closing = rebuilt.retract())
-      // 开着期间面板换了位置 / 尺寸(账号卡展开额度、账号列表异步长高)或源挪了:形状还按展开时的矩形,
-      // 倒放会先跳回旧位置。按现在的矩形重建一份(直接停在接手后)再倒放它(同 droplet.ts)
-      const pn = panel.getBoundingClientRect(), sn = source.getBoundingClientRect()
-      const off = (a: DOMRect, b: { left: number; top: number; width: number; height: number }): boolean =>
-        Math.max(Math.abs(a.left - b.left), Math.abs(a.top - b.top), Math.abs(a.width - b.width), Math.abs(a.height - b.height)) > 1
-      if (off(pn, pr) || off(sn, s)) {
-        // 还没长满就变了尺寸又收:从同一个进度重建,别先跳成长满、内容推到 1 再倒放(同 droplet.ts)
-        const at = grow.playState === 'finished' ? undefined : Math.min(D, Number(grow.currentTime ?? D))
-        cancelSelf()
-        rebuilt = stretchOpen(source, panel, at === undefined ? { ...opts, settled: true } : { ...opts, settled: false, at })
-        return (closing = rebuilt.retract())
-      }
+      layer.style.display = ''
+      syncGeometry()
       // 内容此刻的透明度:开到一半就收时淡入还没走完,从这里接着淡(动效第三轮,同 droplet.ts)
       const from = kids().map((k) => +getComputedStyle(k).opacity)
       shows.forEach((a) => a.cancel())
       outs.forEach((a) => a.cancel())
       landed = false
       const t = Math.min(D, Number(grow.currentTime ?? D))
-      layer.style.display = ''
       panel.classList.add(POURING)
       clip?.cancel()
-      clip = panel.animate(frames(pz, p), kf)
+      clip = panel.animate(frames(pz), kf)
       grow.currentTime = t
       clip.currentTime = t
       // 不用 fill: forwards(理由同 droplet.ts):收完由下面藏起面板
-      outs = kids().map((k, i) => k.animate([{ opacity: from[i] ?? 1 }, { opacity: 0, offset: 0.3 }, { opacity: 0 }], { duration: D * 0.7 }))
+      outs = fadePanelContentOut(kids(), from, t, D)
       const rate = -1 / 0.7
       for (const a of [grow, clip]) { a.updatePlaybackRate(rate); a.play() }
       // 掉头(reopen)后 grow 往前放到底、grow.finished 照样 resolve:按 gen 认出这次收起已作废 —— 不藏、不收尾、不 resolve
@@ -283,6 +278,7 @@ export function stretchOpen(source: HTMLElement, panel: HTMLElement, opts: Dropl
         const done = (hide: boolean): void => {
           if (g !== gen) return
           if (hide && !dead) panel.style.visibility = 'hidden'
+          stopObserving()
           layer.remove()
           if (!dead) { clip?.cancel(); panel.classList.remove(POURING) }
           resolve()
@@ -291,14 +287,9 @@ export function stretchOpen(source: HTMLElement, panel: HTMLElement, opts: Dropl
       })
       return closing
     },
-    cancel() { rebuilt?.cancel(); cancelSelf() },
+    cancel,
     // 倒放途中又要开:从这一帧往前放、停在打开(同 droplet.ts 的 reopen)
     reopen() {
-      if (rebuilt) {
-        if (!closing || !rebuilt.reopen?.()) return false
-        closing = null
-        return true
-      }
       if (!closing || !clip || dead || grow.playState !== 'running') return false
       const g = ++gen
       closing = null
