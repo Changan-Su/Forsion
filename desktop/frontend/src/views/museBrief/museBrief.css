@@ -1,0 +1,139 @@
+/* Muse Space「今日简报」(方案 D 第一期)。配方照方案页 instrument/parts.cjs 的方案图:卡 = --bg-card + --radius-md + --card-shadow,
+   不描边(border-color: transparent,DESIGN §5);提议卡是「要你拍板」的动作卡,用 --accent-ink 零模糊环;字号只用 --ui-font-* 角色。
+   窄按容器宽度(Muse 私聊旁的 Desk 用同一份):<720 单列。 */
+.msb-root { position: absolute; inset: 0; overflow: auto; color: var(--text); font-family: var(--font-ui); font-size: var(--ui-font-body); line-height: var(--ui-line-body); background: transparent; container-type: inline-size; }
+.msb-page { max-width: 880px; margin: 0 auto; padding: 20px 40px 56px; display: flex; flex-direction: column; gap: 30px; }
+.msb-head { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 6px; height: 32px; padding: 4px 12px 0; background: var(--bg); }
+.msb-head-t { display: inline-flex; align-items: center; gap: 6px; color: var(--text-muted); font-size: var(--ui-font-meta); font-weight: 500; }
+.msb-warn { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--danger, var(--accent-ink)); }
+.msb-sp { flex: 1; }
+.msb-icbtn { display: inline-grid; place-items: center; width: 26px; height: 26px; padding: 0; border: 1px solid transparent; border-radius: var(--radius-sm); background: transparent; color: var(--text-muted); cursor: pointer; flex: none; }
+.msb-icbtn:hover { background: var(--overlay-light); color: var(--text); }
+.msb-icbtn:disabled { opacity: .45; cursor: default; }
+.msb-pill { display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 10px; border: 1px solid transparent; border-radius: var(--radius-pill); background: var(--overlay-light); color: var(--text); font: inherit; font-size: var(--ui-font-meta); font-weight: 500; white-space: nowrap; flex: none; cursor: pointer; }
+.msb-pill.ghost { background: transparent; color: var(--text-muted); padding: 0 6px; }
+.msb-pill.ghost:hover { color: var(--text); }
+.msb-pill.solid { background: var(--text); color: var(--bg-card); }
+.msb-pill:disabled { opacity: .45; cursor: default; }
+.msb-row { display: flex; gap: 8px; margin-top: 6px; align-items: center; }
+.msb-note { color: var(--text-muted); font-size: var(--ui-font-meta); }
+
+/* 卜算子那句 */
+.msb-hero { display: flex; flex-direction: column; gap: 8px; padding-top: 12px; }
+.msb-by { display: flex; align-items: center; gap: 6px; color: var(--text-muted); font-size: var(--ui-font-meta); }
+.msb-by svg { color: var(--accent-ink); }
+.msb-h1 { margin: 0; font-size: var(--ui-font-display); line-height: var(--ui-line-display); font-weight: 600; letter-spacing: -.01em; }
+.msb-lede { margin: 0; max-width: 640px; font-family: var(--font-body); font-size: var(--ui-font-title); line-height: var(--reading-line-height, 1.75); color: var(--text); overflow-wrap: anywhere; }
+.msb-lede.muted { color: var(--text-muted); }
+.msb-link { color: var(--accent-ink); text-decoration: none; font-weight: 500; cursor: pointer; }
+.msb-link:hover { text-decoration: underline; }
+
+/* 分节 */
+.msb-sec { position: relative; display: flex; flex-direction: column; gap: 10px; }
+.msb-sh { display: flex; align-items: baseline; gap: 8px; min-height: 26px; }
+.msb-sh b { font-size: var(--ui-font-heading); line-height: var(--ui-line-heading); font-weight: 600; }
+.msb-sh span { color: var(--text-muted); font-size: var(--ui-font-meta); }
+.msb-sh .msb-icbtn { align-self: center; }
+.msb-add { display: inline-flex; align-items: center; gap: 4px; align-self: center; padding: 0 4px; border: 1px solid transparent; border-radius: var(--radius-sm); background: transparent; color: var(--accent-ink); font: inherit; font-weight: 500; cursor: pointer; }
+.msb-grid3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.msb-wrow > .msb-card { min-height: 168px; }
+
+/* 卡 */
+.msb-card { position: relative; box-sizing: border-box; overflow: hidden; display: flex; flex-direction: column; min-width: 0; padding: 10px 12px 12px; border: var(--border-width, 1px) solid transparent; border-radius: var(--radius-md); background: var(--bg-card); box-shadow: var(--card-shadow); color: inherit; font: inherit; text-align: left; }
+.msb-ch { display: flex; align-items: center; gap: 6px; min-width: 0; min-height: 26px; margin-bottom: 6px; font-weight: 600; }
+.msb-ch > svg { flex: none; color: var(--text-muted); }
+.msb-ct { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.msb-co { flex: none; margin-left: auto; color: var(--text-muted); font-size: var(--ui-font-meta); font-weight: 400; }
+.msb-ch > .msb-icbtn { margin-left: auto; }
+.msb-co + .msb-icbtn { margin-left: 2px; }
+.msb-cb { display: flex; flex-direction: column; gap: 6px; flex: 1; min-height: 0; }
+.msb-cb.inert { pointer-events: none; }
+.msb-grip { display: inline-grid; color: var(--text-muted); }
+.msb-root[data-editing] .msb-ch { cursor: grab; }
+.msb-card.hp-lifted { z-index: 3; cursor: grabbing; }
+/* 要你拍板的提议卡:零模糊的主题色环(DESIGN §5 动作卡可描边),不加高程 */
+.msb-proposed { box-shadow: var(--card-shadow), 0 0 0 1.5px color-mix(in srgb, var(--accent-ink) 55%, transparent); }
+.msb-prop { display: flex; align-items: center; gap: 6px; margin: -2px 0 8px; padding: 5px 8px; border-radius: var(--radius-sm); background: color-mix(in srgb, var(--accent-ink) 9%, transparent); color: var(--accent-ink); font-size: var(--ui-font-meta); font-weight: 500; }
+.msb-prop-t { min-width: 0; margin-right: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.msb-prop .msb-pill { height: 22px; }
+.msb-prop .msb-pill.solid { background: var(--accent-ink); color: var(--bg-card); }
+.msb-prop .msb-pill.ghost { color: var(--accent-ink); }
+
+/* 待你看的 */
+.msb-tds { display: flex; flex-direction: column; gap: 7px; }
+.msb-td { display: flex; align-items: flex-start; gap: 8px; min-width: 0; }
+.msb-box { flex: none; display: grid; place-items: center; width: 14px; height: 14px; margin-top: 2px; padding: 0; border: 1px solid transparent; border-radius: 4px; background: transparent; box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--text-muted) 55%, transparent); color: transparent; cursor: pointer; }
+.msb-box:hover { color: var(--text-muted); }
+.msb-box:disabled { cursor: default; opacity: .5; }
+.msb-tdt { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.msb-tdt b { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.msb-tdt i { font-style: normal; color: var(--text-muted); font-size: var(--ui-font-meta); line-height: var(--ui-line-meta); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.msb-acts { display: flex; gap: 2px; flex: none; opacity: 0; }
+.msb-td:hover .msb-acts, .msb-td:focus-within .msb-acts { opacity: 1; }
+.msb-acts .msb-icbtn { width: 22px; height: 22px; }
+.msb-foot { display: flex; align-items: center; gap: 6px; margin-top: auto; padding-top: 4px; color: var(--text-muted); font-size: var(--ui-font-meta); }
+.msb-foot > span:first-child { margin-right: auto; }
+
+/* 在跟的 */
+.msb-evs { display: flex; flex-direction: column; gap: 3px; }
+.msb-ev { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 2px 0; border: 1px solid transparent; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.msb-ev > i { flex: none; width: 5px; height: 5px; border-radius: 50%; background: var(--overlay-medium); }
+.msb-ev.next > i { background: var(--accent-ink); }
+.msb-ev.next .msb-n { font-weight: 600; }
+.msb-n { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.msb-time { flex: none; color: var(--text-muted); font-size: var(--ui-font-meta); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.msb-time.r { margin-left: auto; padding-left: 8px; display: inline-flex; align-items: center; gap: 3px; }
+
+/* 卜算子状态 */
+.msb-big { display: flex; align-items: baseline; gap: 6px; margin-top: 2px; }
+.msb-big b { font-size: var(--ui-font-display); line-height: var(--ui-line-display); font-weight: 500; }
+.msb-big span { color: var(--text-muted); font-size: var(--ui-font-meta); }
+.msb-sub { color: var(--text-muted); font-size: var(--ui-font-meta); }
+
+.msb-blank { color: var(--text-muted); font-size: var(--ui-font-meta); margin: auto 0; text-align: center; padding: 24px 4px; }
+.msb-blank.left { text-align: left; padding: 0; margin: 0; }
+
+/* 备好的 */
+.msb-file { flex-direction: row; align-items: center; gap: 10px; padding: 12px; cursor: pointer; }
+.msb-fic { flex: none; display: grid; place-items: center; width: 32px; height: 32px; border-radius: var(--radius-sm); background: var(--overlay-light); color: var(--accent-ink); }
+.msb-ft { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.msb-ft b { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.msb-ft i { font-style: normal; color: var(--text-muted); font-size: var(--ui-font-meta); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* 今天(手记):格子里那张 = 最后两段;分节 = 时间线,最多 4 段 */
+.msb-today { display: flex; flex-direction: column; gap: 6px; padding: 0; border: 1px solid transparent; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.msb-seg { margin: 0; font-family: var(--font-body); line-height: 1.6; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.msb-seg .msb-time { margin-right: 8px; }
+.msb-seg b { font-weight: 600; margin-right: 6px; }
+.msb-tl { display: flex; flex-direction: column; padding: 0 0 0 4px; border: 1px solid transparent; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.msb-tli { position: relative; display: grid; grid-template-columns: 14px 1fr; gap: 0 8px; align-items: start; padding-bottom: 14px; }
+.msb-tli > i { position: relative; align-self: stretch; }
+.msb-tli > i::before { content: ''; position: absolute; left: 4px; top: 7px; width: 7px; height: 7px; border-radius: 50%; background: var(--accent-ink); }
+.msb-tli > i::after { content: ''; position: absolute; left: 7px; top: 18px; bottom: -12px; width: 1px; background: var(--overlay-medium); }
+.msb-tli:last-child > i::after { display: none; }
+.msb-tli .msb-seg { max-width: 600px; -webkit-line-clamp: 4; }
+
+/* 编辑态 */
+.msb-hidden-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; color: var(--text-muted); font-size: var(--ui-font-meta); }
+.msb-pop { position: absolute; z-index: 5; right: 0; top: 30px; width: 300px; padding: 6px; border-radius: var(--radius-md); background: var(--bg-card); box-shadow: var(--card-shadow); display: flex; flex-direction: column; gap: 1px; animation: ui-menu-enter var(--menu-enter-ms, 120ms) ease-out; }
+.msb-pop-h { padding: 8px 8px 3px; color: var(--text-muted); font-size: var(--ui-font-caption); font-weight: 600; }
+.msb-pop-row { display: flex; align-items: center; gap: 8px; height: 28px; padding: 0 8px; border: 1px solid transparent; border-radius: var(--radius-sm); background: transparent; color: inherit; font: inherit; font-size: var(--menu-text-size, var(--ui-font-body)); text-align: left; cursor: pointer; }
+.msb-pop-row:hover { background: var(--menu-hover, var(--overlay-light)); }
+.msb-pop-row > svg { flex: none; color: var(--text-muted); }
+.msb-pop-row.on { cursor: default; }
+.msb-pop-row.on .msb-time { color: var(--accent-ink); }
+.msb-pop-empty { padding: 4px 8px 8px; color: var(--text-muted); font-size: var(--ui-font-meta); min-height: 18px; }
+
+/* 停用条 */
+.msb-off { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: var(--radius-md); background: var(--overlay-light); color: var(--text-muted); font-size: var(--ui-font-meta); }
+.msb-off span { margin-right: auto; }
+.msb-root[data-off] .msb-cb { opacity: .7; }
+
+@media (prefers-reduced-motion: reduce) { .msb-pop { animation: none; } }
+
+/* 窄:主区 / Desk 按容器宽度收成单列 */
+@container (max-width: 720px) {
+  .msb-page { padding-inline: 20px; padding-bottom: 40px; gap: 24px; }
+  .msb-grid3 { grid-template-columns: 1fr; }
+  .msb-wrow > .msb-card { min-height: 0; }
+}

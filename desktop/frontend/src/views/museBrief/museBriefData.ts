@@ -1,0 +1,195 @@
+/**
+ * 「今日简报」(Muse Space 主区,方案 D 第一期)的数据:布局、待办、在跟的、今天的手记、卜算子状态。
+ * 简报页和主页上的「待你看的 / 在跟的」两张小组件共用这些 hook;每个 hook 自己串行轮询(上一次结束再等),卸载即停。
+ */
+import { useCallback, useEffect, useRef, useState } from 'react'
+import {
+  getAgentSchedules, getMuseLibraryFile, getMuseSpace, getMuseStatus, getMuseTodos, injectMuseTodos, patchMuseTodo,
+  postMuseFeedback, postMuseSpacePlacement,
+} from '../../services/backendService'
+import { homeTarget } from '../../services/engine/targets'
+import { openNewChat, openSession } from '../../sessionNav'
+import { useApp } from '../../stores/appStore'
+import { translate } from '../../i18n'
+import type { AgentScheduleEntry, MusePlacementOp, MuseSpaceView, MuseStatusInfo, MuseTodo } from '../../types'
+
+/** 串行轮询:上一次结束后再等 ms;fn 抛错 = 留着上一份,不清空(读失败 ≠ 空)。 */
+function usePolled<T>(fn: () => Promise<T>, ms: number, deps: unknown[] = []): { data: T | undefined; error: unknown; refresh: () => Promise<void> } {
+  const [data, setData] = useState<T | undefined>(undefined)
+  const [error, setError] = useState<unknown>(null)
+  const fnRef = useRef(fn)
+  fnRef.current = fn
+  const gen = useRef(0)
+  const refresh = useCallback(async (): Promise<void> => {
+    const g = ++gen.current
+    try { const v = await fnRef.current(); if (g === gen.current) { setData(v); setError(null) } } catch (e) { if (g === gen.current) setError(e) }
+  }, [])
+  useEffect(() => {
+    let alive = true
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const loop = async (): Promise<void> => {
+      if (!alive) return
+      await refresh()
+      if (alive) timer = setTimeout(() => void loop(), ms)
+    }
+    void loop()
+    return () => { alive = false; gen.current++; if (timer) clearTimeout(timer) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, deps)
+  return { data, error, refresh }
+}
+
+const isMissing = (e: unknown): boolean => (e as { status?: number } | null)?.status === 404
+
+/** 布局:8 秒一轮(两份小 JSON + 三个 stat,引擎那边很便宜)。apply = 你的一下;409(别处刚改过)→ 重读,不报错。 */
+export function useMuseSpaceView(): {
+  view: MuseSpaceView | null | undefined
+  /** 旧引擎没有这条读口:主区照画内置卡 */
+  unsupported: boolean
+  failed: boolean
+  refresh: () => Promise<void>
+  apply: (op: MusePlacementOp) => Promise<boolean>
+} {
+  const [local, setLocal] = useState<MuseSpaceView | null>(null)
+  const { data, error, refresh } = usePolled(() => getMuseSpace(homeTarget()), 8000)
+  useEffect(() => { if (data) setLocal(data) }, [data])
+  const view = local ?? data
+  const apply = useCallback(async (op: MusePlacementOp): Promise<boolean> => {
+    const cur = local ?? data
+    if (!cur) return false
+    try {
+      setLocal(await postMuseSpacePlacement(homeTarget(), cur.rev.placement, op))
+      return true
+    } catch (e) {
+      if ((e as { status?: number }).status === 409) { await refresh(); return false }
+      throw e
+    }
+  }, [local, data, refresh])
+  return { view: view ?? (isMissing(error) ? null : undefined), unsupported: isMissing(error), failed: !!error && !isMissing(error) && !view, refresh, apply }
+}
+
+export function useMuseTodosLive(ms = 10_000): { todos: MuseTodo[] | undefined; refresh: () => Promise<void> } {
+  const { data, refresh } = usePolled(async () => {
+    const r = await getMuseTodos(homeTarget(), 'pending')
+    return Array.isArray(r) ? r : []
+  }, ms)
+  return { todos: data, refresh }
+}
+
+/** 在跟的 = 卜算子自己日程里 auto 的条目(任务卡「交给 Muse 追踪」/ 它自己排的后续),按时间先后。 */
+export function useMuseTracksLive(ms = 30_000): AgentScheduleEntry[] | undefined {
+  const { data } = usePolled(async () => {
+    const all = await getAgentSchedules(homeTarget())
+    const muse = (Array.isArray(all) ? all : []).find((s: { slug?: string }) => s.slug === 'muse') as { entries?: AgentScheduleEntry[] } | undefined
+    return (Array.isArray(muse?.entries) ? muse!.entries : []).filter((e) => e.auto)
+  }, ms)
+  return data
+}
+
+export function useMuseStatusLive(ms = 8000): MuseStatusInfo | null | undefined {
+  const { data, error } = usePolled(() => getMuseStatus(homeTarget()), ms)
+  return data ?? (error ? null : undefined)
+}
+
+/** 今天的手记:Library/Journal/<本地日期>.md;没有 = 空数组(还没写),读失败 = undefined 之后保持上一份。 */
+export const todayJournalPath = (d = new Date()): string =>
+  `Journal/${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}.md`
+export function useMuseJournalToday(ms = 30_000): { segments: JournalSegment[]; path: string } | undefined {
+  const { data } = usePolled(async () => {
+    const path = todayJournalPath()
+    try {
+      const r = await getMuseLibraryFile(homeTarget(), path)
+      return { segments: splitJournal(r.content), path }
+    } catch (e) {
+      if (isMissing(e)) return { segments: [], path }
+      throw e
+    }
+  }, ms)
+  return data
+}
+
+export interface JournalSegment {
+  /** 段头里的时刻(`09:12`);段头不是时刻就是 '' */
+  time: string
+  /** 段头文字(去掉编号);没有段头 = '' */
+  label: string
+  /** 正文:去掉 Markdown 记号的纯文本,截到 MAX_SEG_CHARS */
+  text: string
+}
+const MAX_SEG_CHARS = 280
+
+/** Markdown → 一行纯文本:链接留字、双链留名、去掉列表 / 勾选 / 强调 / 行内代码记号。 */
+export function plainText(md: string): string {
+  return md
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
+    .replace(/\[\[([^\]|#]+)(?:[#|][^\]]*)?\]\]/g, (_, p: string) => p.split('/').pop()!.replace(/\.md$/i, ''))
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    .replace(/^\s*(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?/gm, '')
+    .replace(/^\s*>\s?/gm, '')
+    .replace(/[*_~`]+/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+/**
+ * 手记按段切,只留最后 max 段(方案 §5:读 Library/Journal/<今天>.md 按段切,最多 4 段)。
+ * 段 = `##` 段头;没有段头就按空行分的段落。段头以时刻开头(`## 09:12 …`)→ 时刻进左边那一列。顶部的 `#` 标题与空段跳过。
+ */
+export function splitJournal(md: string, max = 4): JournalSegment[] {
+  const lines = md.replace(/\r\n?/g, '\n').split('\n')
+  const out: JournalSegment[] = []
+  const hasH2 = lines.some((l) => /^##\s+\S/.test(l))
+  const push = (head: string, body: string[]): void => {
+    const text = plainText(body.join('\n'))
+    let label = plainText(head).replace(/^\d+[.)]\s*/, '')
+    let time = ''
+    const m = /^(\d{1,2}:\d{2})\s*(?:[-—–·:|]\s*)?(.*)$/.exec(label)
+    if (m) { time = m[1]; label = m[2] }
+    if (!text && !label) return
+    out.push({ time, label, text: text.length > MAX_SEG_CHARS ? `${text.slice(0, MAX_SEG_CHARS).trimEnd()}…` : text })
+  }
+  if (hasH2) {
+    let head: string | null = null
+    let body: string[] = []
+    for (const l of lines) {
+      const h = /^##\s+(.*)$/.exec(l)
+      if (h) { if (head !== null) push(head, body); head = h[1]; body = []; continue }
+      if (head !== null && !/^#\s/.test(l)) body.push(l)
+    }
+    if (head !== null) push(head, body)
+  } else {
+    let para: string[] = []
+    const flush = (): void => { if (para.length) push('', para); para = [] }
+    for (const l of lines) {
+      if (/^#{1,6}\s/.test(l) || !l.trim()) { flush(); continue }
+      para.push(l)
+    }
+    flush()
+  }
+  return out.slice(-max)
+}
+
+/** 待办的完成 / 略过(CAS 在引擎:已经被别处处理掉的回 409,当成功处理 —— 下一轮轮询它就不在了)。 */
+export async function setTodoStatus(id: string, status: 'done' | 'dismissed'): Promise<void> {
+  try { await patchMuseTodo(homeTarget(), id, status) } catch (e) { if ((e as { status?: number }).status !== 409) throw e }
+}
+
+/**
+ * 「交给 Agent」:放进一个已有会话(引擎把待办注入那个会话并标 injected),或开新会话照原样发出去。
+ * 和右栏原来的「注入所选到会话」/「新对话里做」同一条路(MuseView.inject / runInNew)。
+ */
+export async function handTodosToAgent(todos: MuseTodo[], target: string | 'new'): Promise<void> {
+  if (!todos.length) return
+  if (target !== 'new') {
+    await injectMuseTodos(homeTarget(), todos.map((x) => x.id), target)
+    openSession(target)
+    return
+  }
+  const message = `${translate('special.muse.injectPrefix')}\n\n` + todos.map((x, i) => `${i + 1}. ${x.title}${x.detail ? `\n   ${x.detail}` : ''}`).join('\n\n')
+  openNewChat()
+  const ok = await useApp.getState().send(message, [], undefined, undefined, undefined, null)
+  if (!ok) return
+  for (const x of todos) await patchMuseTodo(homeTarget(), x.id, 'injected').catch(() => {})
+  void postMuseFeedback(homeTarget(), `todos run in a new session by user: ${todos.map((x) => `"${x.title}"`).join('; ')}`).catch(() => {})
+}

@@ -2,7 +2,7 @@
  *  插件卡(manifest `widgets` + `ctx.widgets.provide`,宿主照同一套行样式画)或 Agent 做的小组件(w_…,原生文档)。
  *  卡头(图标 / 标题 / 归属 / 点了去哪)与卡身按 id 前缀分派 —— 只有 w_… 才去问引擎要原件。 */
 import { createContext, Fragment, useContext, useEffect, useState, useSyncExternalStore } from 'react'
-import { CalendarDays, Check, FileText, Globe, Inbox, LayoutGrid, ListTodo, MessagesSquare, RefreshCw, Sparkles } from 'lucide-react'
+import { CalendarDays, Check, FileText, Globe, Inbox, LayoutGrid, ListTodo, MessagesSquare, Radar, RefreshCw, Sparkles } from 'lucide-react'
 import { setActiveSpace } from '@lcl/engine'
 import { registerMessages, useI18n } from '../i18n'
 import { WidgetHost, useWidgetTitle } from '../components/WidgetHost'
@@ -21,6 +21,8 @@ import { vocabIcon } from '../amadeus/plugins/pluginIcon'
 import { usePluginWidgetData, type WidgetListRow } from '../amadeus/plugins/pluginWidgets'
 import { readTanguMuseStarters, subscribeTanguMuseStarters } from '../amadeus/plugins/tanguSeam'
 import type { MuseStarter } from '../types'
+import { useMuseTodosLive, useMuseTracksLive } from './museBrief/museBriefData'
+import { trackWhen } from '../components/museViewFormat'
 import { MUSE_CARD, SESSIONS_CARD, isBuiltinWidget, parsePluginWidgetId, type BuiltinWidget } from './homeWidgets'
 
 registerMessages({
@@ -28,6 +30,11 @@ registerMessages({
   'home.w.inbox': { zh: '收件箱', en: 'Inbox' },
   'home.w.notes': { zh: '最近笔记', en: 'Recent notes' },
   'home.w.sessions': { zh: '最近对话', en: 'Recent chats' },
+  'home.w.museTodos': { zh: '待你看的', en: 'For you' },
+  'home.w.museTracking': { zh: '在跟的', en: 'Tracking' },
+  'home.w.museTodosEmpty': { zh: '卜算子提的待办会出现在这里', en: 'To-dos Muse suggests show up here' },
+  'home.w.museTrackingEmpty': { zh: '卜算子在跟的事会出现在这里', en: 'Things Muse is tracking show up here' },
+  'home.w.museTodosMore': { zh: '还有 {n} 条', en: '{n} more' },
   'home.w.use': { zh: '用这句', en: 'Use this' },
   'home.w.next': { zh: '换一条', en: 'Next' },
   'home.w.museBusy': { zh: '输入框里还有没发的话，先发出去或清空再用这句', en: 'There is an unsent message in the input. Send or clear it first' },
@@ -50,8 +57,9 @@ const NEW_CHAT_DRAFT = 'new' // 新对话草稿的键(和 Composer2 同一个;�
 
 export const BUILTIN_ICON: Record<BuiltinWidget, typeof Sparkles> = {
   'builtin:muse': Sparkles, 'builtin:inbox': Inbox, 'builtin:notes': FileText, 'builtin:sessions': MessagesSquare,
+  'builtin:museTodos': ListTodo, 'builtin:museTracking': Radar,
 }
-const BUILTIN_SPACE: Partial<Record<BuiltinWidget, string>> = { 'builtin:inbox': 'inbox', 'builtin:notes': 'amadeus', 'builtin:sessions': 'tangu' }
+const BUILTIN_SPACE: Partial<Record<BuiltinWidget, string>> = { 'builtin:inbox': 'inbox', 'builtin:notes': 'amadeus', 'builtin:sessions': 'tangu', 'builtin:museTodos': 'muse', 'builtin:museTracking': 'muse' }
 const builtinKey = (id: BuiltinWidget): string => `home.w.${id.slice('builtin:'.length)}`
 
 // ── Muse 的开场建议(经 tanguSeam,Tangu 没激活 = 没有) ──
@@ -122,6 +130,8 @@ export function HomeWidgetBody({ id, wide, onRemove }: { id: string; wide?: bool
   if (id === 'builtin:inbox') return <InboxBody />
   if (id === 'builtin:notes') return <NotesBody />
   if (id === 'builtin:sessions') return <SessionsBody />
+  if (id === 'builtin:museTodos') return <MuseTodosBody />
+  if (id === 'builtin:museTracking') return <MuseTrackingBody />
   const plug = parsePluginWidgetId(id)
   if (plug) return <PluginBody pluginId={plug.pluginId} widgetId={plug.widgetId} />
   return <WidgetHost id={id} onRemove={onRemove} />
@@ -278,4 +288,27 @@ function PluginBody({ pluginId, widgetId }: { pluginId: string; widgetId: string
   const list = data.status === 'none' ? { rows: [] } : data.list ?? { rows: [] }
   const go = spec?.space ? () => setActiveSpace(spec.space!) : undefined
   return <HomeList rows={list.rows.map((r) => ({ ...r, key: r.id, onClick: go }))} footer={list.footer} empty={list.empty ?? t('home.w.empty')} />
+}
+
+// ── Muse Space 简报格子里的两张,放到主页上(11-08 方案 D):只看、点进 Muse Space 处理 ——
+//    完成 / 略过 / 交给 Agent 都在简报那张卡上;主页列表卡的勾是只读的。
+function MuseTodosBody(): React.JSX.Element {
+  const { t } = useI18n()
+  const { todos } = useMuseTodosLive(20_000)
+  const go = (): void => setActiveSpace('muse')
+  const shown = (todos ?? []).slice(0, 4)
+  return (
+    <HomeList empty={todos ? t('home.w.museTodosEmpty') : ''}
+      rows={shown.map((td) => ({ key: td.id, done: false, title: td.title, onClick: go }))}
+      footer={todos && todos.length > shown.length ? <span>{t('home.w.museTodosMore', { n: todos.length - shown.length })}</span> : undefined} />
+  )
+}
+function MuseTrackingBody(): React.JSX.Element {
+  const { t } = useI18n()
+  const tracks = useMuseTracksLive(60_000)
+  const go = (): void => setActiveSpace('muse')
+  return (
+    <HomeList empty={tracks ? t('home.w.museTrackingEmpty') : ''}
+      rows={(tracks ?? []).slice(0, 4).map((e, i) => ({ key: e.id, time: trackWhen(e.date), now: i === 0, title: e.name, onClick: go }))} />
+  )
 }

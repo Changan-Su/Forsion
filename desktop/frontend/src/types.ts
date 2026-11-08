@@ -148,6 +148,8 @@ export interface MuseStatusInfo {
   wakeBlocked?: 'locked' | 'userActive' | 'budget' | 'restartCap' | 'disabled' | 'noModel' | null
 }
 
+/** Muse Space「今日简报」的布局协议(引擎与宿主共用一份契约,见 tangu-agent/src/contracts/museSpace.ts)。 */
+export type { MuseSpaceView, MusePlacementOp, MuseSpaceCard, MuseCardRef, MuseBuiltinCard, MuseSpaceProposal } from '../../../tangu-agent/src/contracts/museSpace'
 /** GET /agent/special/muse/rounds 的一行(面板「最近几轮」,2026-11-08)。trigger = 引擎 cycleTrigger 的原串:
  *  manual / heartbeat / rule:<id>+<id> / schedule:<名字>+<名字>;升级前跑的轮次没记 → null。 */
 export interface MuseRoundInfo {

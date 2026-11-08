@@ -298,6 +298,8 @@ export interface MuseSpaceView {
   enabled: boolean;
   /** 卜算子那份是否存在(第一轮之前 = false,宿主画占位) */
   hasDoc: boolean;
+  /** 卜算子 Library 的绝对路径:「备好的」/ 那句话里的 [[链接]] / 今天的手记,宿主拼成 wsfile 路径在主区打开(本机路由才回) */
+  libraryRoot: string;
   hero: { text: string; at: number; sources: string[] } | null;
   /** 只列还在的,最新的在前,≤3 */
   prepared: { path: string; title: string; mtime: number }[];
