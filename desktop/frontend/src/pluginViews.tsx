@@ -25,6 +25,7 @@ import { pruneStalePluginCompanions, setPluginCompanions } from './pluginCompani
 import { EmptyState } from './components/EmptyState'
 import { noteViewOpen } from '@amadeus/plugins/guideTips'
 import { openDockedView } from './workspaceOpenHost'
+import { dockTrace } from '@lcl/engine/dockviewStore'
 
 registerMessages({
   'pluginview.mountFailed': { zh: '插件视图加载失败', en: 'Plugin view failed to load' },
@@ -266,6 +267,8 @@ export function syncPluginViews(): void {
         const tabs = s === 'left' ? ws.leftTabs : ws.rightTabs
         return (s === 'left' ? ws.leftVisible : ws.rightVisible) && tabs.length > 0 && tabs.every((t) => t.type === type)
       }) : undefined
+      dockTrace('closeView', { type, collapse: !!opts?.collapse, side: side ?? null, leftVisible: ws.leftVisible, rightVisible: ws.rightVisible,
+        rightTabs: ws.rightTabs.map((t) => t.type), live: (ws.api?.panels ?? []).map((p) => `${((p.params ?? {}) as { __loc?: string }).__loc ?? 'main'}:${((p.params ?? {}) as { __type?: string }).__type ?? ''}`) })
       if (!side) { ws.closeViewsOfType(type); return }
       // 别处的同类实例(主区标签、另一侧 / 底部)照常关,只有这一侧收起(Codex 评审 #4)
       for (const p of [...(ws.api?.panels ?? [])]) { // 先拍下名单:closeLeaf 会就地改 api.panels

@@ -421,7 +421,17 @@ async function main() {
     const later = win.getByRole('button', { name: '稍后', exact: true })
     if (await later.count()) await later.first().click()
     // ① Ribbon → 概览,右栏收起
+    // 落位时间线(宿主 dockTrace + 视图节点进出),① 那条红时落进 overview-right.json
+    await win.evaluate(() => {
+      globalThis.__forsionDockTrace = []
+      const seen = (n, what) => { const t = globalThis.__forsionDockTrace; if (!Array.isArray(t) || n.nodeType !== 1) return; for (const e of [n, ...n.querySelectorAll('[data-view-type]')]) if (e.getAttribute?.('data-view-type')) t.push({ at: Math.round(performance.now()), what, view: e.getAttribute('data-view-type') }) }
+      const mo = new MutationObserver((ms) => { for (const m of ms) { m.addedNodes.forEach((n) => seen(n, 'dom+')); m.removedNodes.forEach((n) => seen(n, 'dom-')) } })
+      mo.observe(document.body, { childList: true, subtree: true })
+      globalThis.__forsionDockObserver = mo
+    }).catch(() => {})
+    const tOpen = await win.evaluate(() => Math.round(performance.now()))
     check('① Ribbon 上有「蓬洲云」', await openCloud(win) === '蓬洲云')
+    const tOverviewClick = await win.evaluate(() => Math.round(performance.now()))
     await win.locator('.t2s-srow-title', { hasText: /^概览$/ }).first().click()
     await win.waitForSelector('.pz-total', { timeout: 20_000 })
     const total = await win.locator('.pz-total b').textContent().catch(() => '')
@@ -432,12 +442,15 @@ async function main() {
       // 这一条红时要能从产物里看出右栏里是什么(2.13.8-beta.4 mac / Windows 打包验收红过,本机源码跑复现不出)
       const right = await win.evaluate(() => ({
         viewTypes: [...document.querySelectorAll('[data-view-type]')].map((e) => e.getAttribute('data-view-type')),
-        sidebarEmpty: document.querySelectorAll('.dv-groupview .sidebar-empty').length,
+        sidebarEmpty: document.querySelectorAll('[data-view-type="sidebar-empty"]').length,
+        now: Math.round(performance.now()),
+        trace: globalThis.__forsionDockTrace || null,
         pzSide: !!document.querySelector('.pz-side'),
         groups: [...document.querySelectorAll('.dv-groupview')].map((g) => ({ w: Math.round(g.getBoundingClientRect().width), x: Math.round(g.getBoundingClientRect().left), empty: !!g.querySelector('.sidebar-empty') })),
       }))
-      fs.writeFileSync(path.join(SHOTS, 'overview-right.json'), JSON.stringify(right, null, 2))
-      check('① 概览时右栏收起(不是空占位)', (await sideWidth()) < 40 && !right.sidebarEmpty && !(await win.locator('[data-view-type="sidebar-empty"]').count()), `side=${await sideWidth()} empty=${right.sidebarEmpty}`)
+      fs.writeFileSync(path.join(SHOTS, 'overview-right.json'), JSON.stringify({ tOpen, tOverviewClick, ...right }, null, 2))
+      await win.evaluate(() => { globalThis.__forsionDockObserver?.disconnect(); globalThis.__forsionDockTrace = undefined }).catch(() => {})
+      check('① 概览时右栏收起(不是空占位)', (await sideWidth()) < 40 && !right.sidebarEmpty, `side=${await sideWidth()} empty=${right.sidebarEmpty}`)
     }
     await setMode('light'); await shot('overview')
     await setMode('dark'); await shot('overview-dark'); await setMode('light')
