@@ -9,6 +9,7 @@
  * （见 services/approvals.ts）；本文件只管「真去做」，不含审批逻辑。
  */
 import { spawnHostShell, hostSandboxEnabled, remoteShellSeatbeltApplies } from '../sandbox/hostSandbox.js';
+import { redactRunSecrets } from '../sandbox/runSecretEnv.js';
 import { RemoteShellProtectionError, remoteShellNotes } from '../sandbox/remoteShellSeatbelt.js';
 import { fromShellPath, hostShell, hostShellName, hostShellQuoting } from './hostShell.js';
 import { pinSystemFindstr } from './cmdReadOnly.js';
@@ -286,7 +287,8 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
       } else if (r.aborted) {
         out += ' (aborted)';
       }
-      return truncateBashOutput(out.trim() || '(no output)');
+      // 本 run 的秘密变量(secret_env)万一被脚本打印出来,不进模型上下文,也不进截断落盘的那份
+      return truncateBashOutput(redactRunSecrets(ctx, out.trim()) || '(no output)');
     },
   },
 

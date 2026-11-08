@@ -148,6 +148,35 @@ export type PluginVaultEvent =
   | { kind: 'rename'; path: string; from: string; folder?: boolean }
   | { kind: 'vault' }
 
+/** ctx.app.platformAccounts 的账号状态。`invalid` 只出现在 pasteCookie:粘贴的内容里没有登录项。 */
+export interface PlatformAccountStatus {
+  platform: string
+  state: 'connected' | 'expired' | 'none' | 'invalid'
+  /** Account display name, when the platform tells us. */
+  name?: string
+  /** When the sign-in cookie expires (ms epoch), when known. */
+  expiresAt?: number
+}
+
+/** Sign-ins kept in the host's built-in browser, for content that needs an account (2.13.8+, desktop only). */
+export interface PlatformAccountsApi {
+  /** Platforms this host supports. Today: `['bilibili']`. */
+  platforms(): string[]
+  status(platform: string): Promise<PlatformAccountStatus>
+  /** Already signed in → returns at once. Otherwise opens the platform's own sign-in page (QR code) in a
+   *  host window and resolves when it closes. Calling it from your plugin counts as the user allowing
+   *  your plugin to use that sign-in. Call it only from a user click. */
+  connect(platform: string): Promise<PlatformAccountStatus>
+  /** Advanced fallback: the user pastes a `Cookie` header. Stored in the built-in browser, nowhere else. */
+  pasteCookie(platform: string, text: string): Promise<PlatformAccountStatus>
+  /** Signs the platform out of the built-in browser and withdraws every plugin's permission for it. */
+  disconnect(platform: string): Promise<PlatformAccountStatus>
+  /** The `Cookie` header value, or null (not signed in, or the user declined). If your plugin was not
+   *  allowed yet, the host asks the user first. Never write it to the vault, logs or a prompt: pass it to
+   *  a script through `secret_env` on `POST /agent/runs`, which only that run's run_bash can read. */
+  cookie(platform: string): Promise<string | null>
+}
+
 export interface PluginAppApi extends BlockSurfaceApi {
   /** Vault-relative path of the note the active panel is showing (both carriers), or null. */
   getActivePage(): string | null
@@ -242,6 +271,9 @@ export interface PluginAppApi extends BlockSurfaceApi {
    *  readFile/writeFile paths (`${ctx.app.workFolder()}/note.md`) — folders spring into existence
    *  on first write. Older hosts lack this method: feature-check `ctx.app.workFolder` first. */
   workFolder(options?: { preferId?: boolean }): string
+  /** Platform sign-ins (see PlatformAccountsApi). Undefined on web, mobile and older hosts: hide your
+   *  account UI when it is missing. */
+  platformAccounts?: PlatformAccountsApi
   /** Open a file into the view registered for its file type (post-create / cross-navigation). Refreshes
    *  the tree first if the path is newly created; falls back to the OS default app for non-plugin files. */
   openFile(path: string): void

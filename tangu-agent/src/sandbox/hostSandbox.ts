@@ -10,6 +10,7 @@ import { toolSubprocessEnv } from './credentialEnv.js';
 import { effectiveRemote } from '../services/remoteOrigin.js';
 import { remoteShellProfile, RemoteShellProtectionError } from './remoteShellSeatbelt.js';
 import { BASH_EVAL_ARGS, hostShell, windowsBashEnv } from '../tools/hostShell.js';
+import { runSecretEnv } from './runSecretEnv.js';
 
 /** 起进程时要看的 ctx 字段:工作区 / 宿主沙箱策略,加远程污点(起跑时的 remote 或中途被 steer 染上的,按 runId 现查)。 */
 type HostExecContext = Pick<ToolContext, 'cwd' | 'extraRoots' | 'hostSandbox' | 'remote' | 'runId' | 'writeProtectShell'>;
@@ -167,8 +168,9 @@ function bubblewrapArgs(roots: string[], scratch: string, cwd: string, network: 
   args.push('--chdir', cwd, '--', ...argv);
   return args;
 }
-export function spawnHostCommand(ctx: HostExecContext, argv: string[], options: SpawnOptions = {}): ChildProcess {
+export function spawnHostCommand(ctx: HostExecContext, argv: string[], options: SpawnOptions = {}, extraEnv: Record<string, string> = {}): ChildProcess {
   const command = prepareHostCommand(ctx, argv);
+  if (Object.keys(extraEnv).length) command.options = { ...command.options, env: { ...(command.options.env || {}), ...extraEnv } };
   try {
     const child = spawn(command.file, command.args, { ...options, ...command.options });
     child.once('close', command.cleanup);
@@ -182,15 +184,17 @@ export function spawnHostCommand(ctx: HostExecContext, argv: string[], options: 
  *  Windows 不 detached + windowsHide,两个必须成对:detached 是 DETACHED_PROCESS,cmd.exe 没有控制台,它起的 python.exe
  *  等控制台程序就各自弹一个可见窗口,而单加 windowsHide(CREATE_NO_WINDOW)与它同用时被系统忽略。win32 的终止本来就不靠进程组。 */
 export function spawnHostShell(ctx: HostExecContext, command: string): ChildProcess {
+  // 本 run 的秘密变量(runSecretEnv.ts):只给本机 run 的 run_bash,远程污点(含 steer 染色)一律不给
+  const secrets = effectiveRemote(ctx) ? {} : runSecretEnv(ctx);
   if (!hostSandboxEnabled(ctx) && !shellWriteProtectApplies(ctx)) {
     const shell = hostShell();
     if (shell.kind === 'bash' && shell.bin) {
       // Windows + Git for Windows bash(hostShell.ts):argv 是固定字面量,命令走环境变量;bash 不在了就报错,绝不回落 cmd
       //(审批按 bash 规则判过的命令到 cmd 里会先在工作目录找程序)。不 detached 的理由同下面那条注释。
       if (!existsSync(shell.bin)) throw new Error(`bash not found at ${shell.bin}; the command was not run. Restart the app to pick the shell again.`);
-      return spawn(shell.bin, BASH_EVAL_ARGS, { cwd: ctx.cwd || process.cwd(), windowsHide: true, env: windowsBashEnv(toolSubprocessEnv(), shell, command) });
+      return spawn(shell.bin, BASH_EVAL_ARGS, { cwd: ctx.cwd || process.cwd(), windowsHide: true, env: windowsBashEnv({ ...toolSubprocessEnv(), ...secrets }, shell, command) });
     }
-    return spawn(command, { cwd: ctx.cwd || process.cwd(), shell: true, detached: process.platform !== 'win32', windowsHide: true, env: toolSubprocessEnv() });
+    return spawn(command, { cwd: ctx.cwd || process.cwd(), shell: true, detached: process.platform !== 'win32', windowsHide: true, env: { ...toolSubprocessEnv(), ...secrets } });
   }
-  return spawnHostCommand(ctx, ['/bin/sh', '-c', command]);
+  return spawnHostCommand(ctx, ['/bin/sh', '-c', command], {}, secrets);
 }
