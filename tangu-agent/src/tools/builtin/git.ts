@@ -83,7 +83,7 @@ const stillWanted = (ctx: ToolContext): void => { ctx.signal?.throwIfAborted(); 
 /** git_status 的结果:分支、上下游、改动清单、远端(全部列出,标出推送去向)、最近几个提交、Forsion Git 上等你审的合并请求。 */
 export function renderStatus(s: GitSummary, login: string | null | undefined, reviews?: ForsionGitReviews | null): Record<string, unknown> {
   if (!s.available) return { repo: false, note: 'git is not installed on this computer.' };
-  if (!s.repo) return { repo: false, note: 'This project folder is not a git repository. The user can create one in the project details (Git tab), or you can run `git init` with run_bash if they ask.' };
+  if (!s.repo) return { repo: false, note: 'This project folder is not a git repository yet. When the user wants one, run `git init` with run_bash, then git_commit; git_publish then puts it on their Forsion Git.' };
   if (s.nested && !s.scope) return { repo: true, nested: true, note: 'This project folder is inside a larger repository, not at its root; commit / push / pull from here are refused. Use run_bash for this repository.' };
   const notes: string[] = [];
   if (s.scope) notes.push(`This project is the folder ${s.scope} inside a larger repository. Changes and git_commit only cover that folder; git_push and git_pull act on the whole branch.`);
@@ -92,6 +92,8 @@ export function renderStatus(s: GitSummary, login: string | null | undefined, re
   if (s.configRisks?.length && !s.trusted) notes.push('This repository has its own git configuration that runs programs. Commit, push and pull are refused until the user trusts it in the project details (Git tab).');
   if (s.changesUnread) notes.push('The list of changes could not be read without running the repository\'s own filters; it is not necessarily clean.');
   if (s.detached) notes.push('HEAD is detached; switch to a branch before committing or pushing.');
+  // 没有远端时点名 git_publish:不然模型只会让用户「去项目详情的 Git 页发布」或者要一个地址(11-08 用户反馈)
+  if (!s.remoteList?.length) notes.push('No remote yet. To put this repository online, git_publish creates a private repository on the user\'s Forsion Git and pushes to it; do not ask the user for an address first.');
   if ((s.remoteList?.length ?? 0) > 1 && !s.pushRemote) notes.push('Several remotes and none is the push target: pass `remote` to git_push, or ask the user which one.');
   return {
     repo: true,
@@ -117,7 +119,10 @@ export function renderStatus(s: GitSummary, login: string | null | undefined, re
 const NEXT_STEP: Partial<Record<string, string>> = {
   untrusted_config: 'Ask the user to trust this repository in the project details (Git tab), then try again.',
   credential_denied: 'The account used for this remote has no write access. Tell the user which account was used and suggest linking a different GitHub account in the account centre, or pushing to a remote they own.',
-  no_remote: 'There is no remote. The user can add or publish one in the project details (Git tab).',
+  no_remote: 'There is no remote. Use git_publish to create a private repository on the user\'s Forsion Git and push there; only if the user wants a different host, ask them for its address.',
+  invalid_repo_name: 'Pick a name with only letters, digits, - _ and . (for a folder name without Latin letters, a short English name that describes the project) and call git_publish again.',
+  forsion_git_needs_setup: 'The user has no Forsion Git account yet: ask them to open the site in the detail once and sign in with their Forsion account, then try again.',
+  forsion_git_unavailable: 'Forsion Git cannot be used right now (not signed in to Forsion, or the site is unreachable). Tell the user; nothing was published.',
   ambiguous_remote: 'Call git_status to see the remotes, then pass `remote` to git_push or ask the user which one.',
   no_upstream: 'This branch has no upstream yet; push it first.',
   diverged: 'Local and remote both have new commits. Nothing was merged; ask the user how to reconcile (rebase or merge) before doing it with run_bash.',
@@ -301,7 +306,7 @@ export const gitToolsProvider: ToolProvider = {
       "Publish a repository of the current project to the user's Forsion Git: creates a private repository there under their Forsion account and pushes the current branch. Asks the user every time.",
       "Publish a repository to the user's Forsion Git, like Publish to Forsion Git in the project details: adds a remote pointing at <site>/<their username>/<name>.git (named origin when the repository has no remote yet) and pushes the current branch; the site creates it as a private repository. " +
         'The repository needs at least one commit (use git_commit first). The user approves every call. If the push fails, the new remote is removed again so a different name can be tried. The user sees the result as a git card.',
-      { type: 'object', properties: { name: { type: 'string', description: 'Repository name on Forsion Git: letters, digits, - _ and . only. Leave it out to use the folder name.' }, ...repoParam } },
+      { type: 'object', properties: { name: { type: 'string', description: 'Repository name on Forsion Git: letters, digits, - _ and . only. Leave it out to use the folder name; when the folder name has no Latin letters or digits (a Chinese name, for example), pass a short English name that describes the project.' }, ...repoParam } },
       async (args, ctx) => {
         try {
           const { project, repo } = await targetRepo(ctx, args);

@@ -117,6 +117,7 @@
  *   npm run live:harness -- --only storeview                 # 商店左栏的插件页(10-05):ctx.registerStoreView 只给首方内置包。第三方作者问「怎么往商店左栏加一页」→ 须装载手册、
  *                                                           #   说清这条路不对普通插件开放,不许教他照着注册(注册了也不显示)。改 skills/forsion-plugin 那一行后跑。
  *   npm run live:harness -- --only creation                  # 进造物(09-27):要做「拿来用的东西」→ 回复带 forsion-creation 作品卡;只问概念 / 一次性脚本 → 不出卡。改 skills/forsion-creations 后跑
+ *   npm run live:harness -- --only gitpublish                # 发布到 Forsion Git(11-08 用户反馈):中文名项目、有提交没远端,「帮我上传Forsion Git」→ 模型自己起英文名调 git_publish,不要地址;审批卡拒掉,不真发
  *   npm run live:harness -- --only multirepo                 # 多仓 Git(11-07):项目文件夹不是仓、里面两个仓;不点名工具,看状况后只提交 alpha —— 判据看磁盘与 git_commit 的 repo 参数(改 tools/builtin/git.ts / services/gitRepos.ts 后跑)
  *   npm run live:harness -- --only git                       # 「设置 → Git」(09-26):agent 自己起的分支名带前缀、提交照提交说明;PROJECT 详情「提交…」生成的信息也照做并能提交。
  *                                                           #   改 runtimeContext.gitPreferenceLines / gitActions 的提交信息提示词后跑;负对照 --git-prefs off(不写设置,须红)
@@ -248,7 +249,7 @@ const opt = (name, def) => { const i = argv.indexOf(`--${name}`); return i >= 0 
 const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const MODEL = opt('model', process.env.TANGU_LIVE_MODEL || 'codex/gpt-5.6-luna');
 const AUTH = resolve(opt('auth', process.env.TANGU_LIVE_AUTH || join(homedir(), '.forsion-dev', 'provider-auth.json')));
-const KEYS = ['realtime', 'voiceclone', 'personas', 'names', 'rename', 'selfschedule', 'selfmodel', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'parkedask', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'suggest', 'browsertabs', 'officedoc', 'ultra', 'fast', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'gitpush', 'multirepo', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask', 'plugin', 'skillpick', 'pluginlook', 'settingsnav', 'appsettings', 'imgwindow', 'viewimage', 'imgtools', 'account', 'webpublish', 'nested', 'branch', 'musedm', 'humandims', 'pluginsandbox', 'musestarters', 'pluginui'];
+const KEYS = ['realtime', 'voiceclone', 'personas', 'names', 'rename', 'selfschedule', 'selfmodel', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'parkedask', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'suggest', 'browsertabs', 'officedoc', 'ultra', 'fast', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'gitpush', 'multirepo', 'gitpublish', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask', 'plugin', 'skillpick', 'pluginlook', 'settingsnav', 'appsettings', 'imgwindow', 'viewimage', 'imgtools', 'account', 'webpublish', 'nested', 'branch', 'musedm', 'humandims', 'pluginsandbox', 'musestarters', 'pluginui'];
 KEYS.push('bluebird');
 KEYS.push('nestedmsg');
 KEYS.push('signals');
@@ -303,7 +304,7 @@ const GIT_PREFIX = 'livetest/'; const GIT_TAG = '[LIVE]';
 // opt-in:缺省全量跑里**不带**这几个 —— cache 7 个 run / churn 6 个 run(都慢),cache 与 recall-unprompted
 // 还会往隔离 home 播记忆行(会进别的场景的系统提示);deferred 要真装 liteparse 解析文档;
 // grant 是两个委派 run(慢),且只在动过 delegate.grantTools / 子代理管理面闸时才有信息量。
-const OPT_IN = new Set(['pluginsandbox', 'humandims', 'nested', 'branch', 'musedm', 'realtime', 'remember', 'musewake', 'personas', 'rename', 'selfschedule', 'selfmodel', 'teamapproval', 'parked', 'parkedask', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'fast', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'gitpush', 'multirepo', 'creation', 'human', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'appsettings', 'control', 'phone']);
+const OPT_IN = new Set(['pluginsandbox', 'humandims', 'nested', 'branch', 'musedm', 'realtime', 'remember', 'musewake', 'personas', 'rename', 'selfschedule', 'selfmodel', 'teamapproval', 'parked', 'parkedask', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'fast', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'gitpush', 'multirepo', 'gitpublish', 'creation', 'human', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'appsettings', 'control', 'phone']);
 KEYS.push('mcpsettings'); OPT_IN.add('mcpsettings');
 KEYS.push('cloudcal');
 KEYS.push('subresume'); OPT_IN.add('subresume'); // --only subresume:改 delegate.resume / 子代理续用后跑(两条腿共五个 run)
@@ -4338,6 +4339,36 @@ Then reply with only the command output.`,
       ok: !ev.error && alphaOk && betaOk && aimed && bashGit === 0 && statusCalls > 0,
       detail: ev.error || `alpha ${alphaOk ? '已提交且干净' : `没提交好(${alpha.g('status', '--porcelain') || '干净'} / ${alpha.g('log', '-1', '--format=%s')})`};beta ${betaOk ? '没动' : '被动了'};git_status ${statusCalls} 次;git_commit 的 repo = ${repoArg.join(', ') || '没调'}${bashGit ? `;run_bash 里跑了 ${bashGit} 次 git commit` : ''}`,
       output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls,
+    };
+  });
+
+  // 发布到 Forsion Git(11-08 用户反馈 tangu-feedback-1e24ee8a):项目文件夹是中文名、已经有一个提交、没有远端,用户原话「帮我上传Forsion Git」。
+  // 当时模型看完 git_status 回「把仓库地址发给我」,用户说「你帮我创建一个仓库吧」又被指去项目详情的 Git 页。
+  // 判据:模型自己调 git_publish,并带一个合规的英文仓库名(文件夹名整理不出名字);没在 run_bash 里自己 git remote add / push。
+  // 审批:带合规名字的那张卡拒掉(台架里没有 Forsion Git,也不许碰 git.forsion.net);名字不合规的那张放行,让它吃 invalid_repo_name 再改。
+  // 负对照 = 没有这次改动的旧代码(--kind base):提示里只说「去项目详情」,看模型是不是照样要地址。
+  await scenario('gitpublish', '发布到 Forsion Git:中文名项目没远端 → 自己起英文名调 git_publish', async () => {
+    const dir = join(workspace, `马里奥赛车-${Date.now()}`);
+    mkdirSync(dir, { recursive: true });
+    const g = (...a) => execFileSync('git', ['-C', dir, ...a], { encoding: 'utf8' }).trim();
+    g('init', '-q', '-b', 'main');
+    g('config', 'user.name', 'Live Harness'); g('config', 'user.email', 'live@example.com');
+    writeFileSync(join(dir, 'index.html'), '<!doctype html><title>Kart</title><canvas id="track"></canvas>\n');
+    g('add', '.'); g('commit', '-qm', 'Initial commit');
+    const VALID = /^[A-Za-z0-9_](?:[A-Za-z0-9._-]*[A-Za-z0-9_])?$/;
+    const nameOf = (args) => { try { const n = JSON.parse(args || '{}').name; return typeof n === 'string' ? n.trim() : ''; } catch { return ''; } };
+    const { session } = await api('/agent/sessions', { method: 'POST', body: JSON.stringify({ title: 'gitpublish', model_id: MODEL, project_path: dir }) });
+    const ev = await run(session.id, '帮我上传Forsion Git', 240_000, { cwd: dir, approvalMode: 'auto-edit' },
+      undefined, (p) => (p.name === 'git_publish' && VALID.test(nameOf(p.arguments)) && !/\.\./.test(nameOf(p.arguments)) ? 'reject' : undefined));
+    const pubs = ev.approvalList.filter((a) => a.name === 'git_publish');
+    const named = pubs.map((a) => nameOf(a.args)).filter((n) => VALID.test(n) && !/\.\./.test(n));
+    const bashRemote = ev.toolArgs.filter((t) => t.name === 'run_bash' && /\bgit\b[^\n]*\b(remote\s+add|push)\b/.test(t.args)).length;
+    const remotes = g('remote');
+    return {
+      ok: !ev.error && named.length > 0 && bashRemote === 0 && remotes === '',
+      detail: ev.error || `git_publish ${pubs.length ? `问了 ${pubs.length} 次,名字 ${pubs.map((a) => nameOf(a.args) || '(没给)').join(' / ')}` : '没调'}${named.length ? ' ✓' : ' ✗'};工具 ${ev.toolCalls.join(',') || '无'}${bashRemote ? `;run_bash 里自己跑了 ${bashRemote} 次 git remote add / push` : ''};远端 ${remotes || '无'}`,
+      output: `${ev.content}\n\n--- 审批说明 ---\n${pubs.map((a) => a.preview).join('\n---\n')}`,
+      ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls,
     };
   });
 
