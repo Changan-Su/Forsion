@@ -1,0 +1,66 @@
+name: tmp-probe-gitbash-windows
+
+# 临时探针(11-08,CI 提速 PR 用完即删,不进 main):fetch-git addBash 在 Windows 上卡死,先看清是哪一步。
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/tmp-probe-gitbash-windows.yml'
+      - 'desktop/build/fetch-git.cjs'
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # actions/checkout@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # actions/setup-node@v4
+        with:
+          node-version: 24.22.1
+
+      - name: Which tar / bzip2 (pwsh, as the Package installer step sees them)
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          where.exe tar
+          where.exe bzip2
+          tar --version
+          & "$env:SystemRoot\System32\tar.exe" --version
+          node -e "console.log(process.env.PATH.split(';').join('\n'))"
+
+      - name: Time the addBash extraction with each tar (180 s cap each)
+        shell: pwsh
+        working-directory: desktop
+        run: |
+          node -e @'
+          const { execFileSync } = require('node:child_process');
+          const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
+          const { pinnedRuntime, verifyArchive } = require('./build/runtime-policy.cjs');
+          const src = fs.readFileSync('build/fetch-git.cjs', 'utf8');
+          const tools = eval(src.match(/const BASH_TOOLS = (\[[\s\S]*?\]);/)[1]);
+          const extra = eval(src.match(/const BASH_EXTRA = (\[[\s\S]*?\]);/)[1]);
+          const members = [...tools.map((t) => `usr/bin/${t}.exe`), ...extra];
+          (async () => {
+            const item = pinnedRuntime('gitbash', 'win32', 'x64');
+            let t = Date.now();
+            const r = await fetch(item.url, { signal: AbortSignal.timeout(180_000) });
+            const buf = Buffer.from(await r.arrayBuffer());
+            verifyArchive(buf, item);
+            console.log(`download ${(buf.length / 1e6).toFixed(1)} MB in ${(Date.now() - t) / 1000}s`);
+            const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'probe-gitbash-'));
+            const archive = path.join(tmp, item.name);
+            fs.writeFileSync(archive, buf);
+            for (const [label, bin] of [['System32 tar', path.join(process.env.SystemRoot, 'System32', 'tar.exe')], ['PATH tar', 'tar']]) {
+              const out = fs.mkdtempSync(path.join(tmp, 'x-'));
+              t = Date.now();
+              try {
+                execFileSync(bin, ['-xjf', archive, '-C', out, ...members], { stdio: 'inherit', timeout: 180_000 });
+                console.log(`${label}: ok in ${(Date.now() - t) / 1000}s`);
+              } catch (e) {
+                console.log(`${label}: FAILED after ${(Date.now() - t) / 1000}s: ${e.code || ''} ${e.signal || ''} ${e.message.split('\n')[0]}`);
+              }
+            }
+          })().catch((e) => { console.error(e); process.exit(1); });
+          '@
