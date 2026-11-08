@@ -16,6 +16,8 @@ export interface FloatingPanelOpenOptions {
   /** 会话级面板(旁聊 btw):只在主窗当前会话 = 这条时显示,切走隐藏、切回再现(隐藏不销毁,面板内状态还在)。
    *  主进程在主窗上报当前会话(window:miniSession)时同步显隐;缺省 = 普通面板,不随会话变。 */
   sessionId?: string
+  /** 盖在别的应用的普通窗口上(workspace.open 的 `{ float: 'desktop', pin: true }`,2.13.8+)。缺省不置顶 —— 桌面 ≠ 置顶。 */
+  pin?: boolean
   width?: number
   height?: number
   minWidth?: number
@@ -50,7 +52,7 @@ export function normalizeFloatingPanelOpenOptions(raw: unknown): FloatingPanelOp
   const height = size(value.height, h, 360, 1200)
   const sessionId = text(value.sessionId, 256)
   return {
-    id, title, builtin, view, params: object(value.params), ...(sessionId ? { sessionId } : {}), width, height,
+    id, title, builtin, view, params: object(value.params), ...(sessionId ? { sessionId } : {}), ...(value.pin === true ? { pin: true } : {}), width, height,
     minWidth: size(value.minWidth, minW, 360, width),
     minHeight: size(value.minHeight, minH, 280, height),
   }

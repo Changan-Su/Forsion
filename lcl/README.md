@@ -82,7 +82,17 @@ Genesis 当前使用这份 LCL。`apps/Archived/Forsion-LCL` 是早期组合引�
 - z 只有一张表:`desktop/frontend/src/styles/base.css :root` 的 `--z-view-float / --z-space-float / --z-window-float / --z-menu / --z-hint / --z-dialog / --z-palette`(值等于原来的梯子),LCL 样式只写同值兜底。新写的字面 z-index 被 `npm run check:zindex` 的棘轮挡住(基线 `scripts/zindex-baseline.json`,进 `npm test`)。
 - 插件:`ctx.ui.float`;详见 [公共契约](../docs/customization/ui-components.md)「浮层」。宿主自己的第一个用户:蓬洲云传输卡(Extend,Space 作用域)。
 - 上手提示不是浮层:宿主自己的一次性提示(如通话键首次提示)走 `guideTips.ts` 的 `registerHostTip`,和插件提示同一套节奏。
-- 还没做:Mini 多开、`workspace.open(layer, form)`、桌面级浮层(盖在别的应用上的胶囊)。
+- Mini 多开(第二期)在主进程;桌面级浮层(第四期,`desktop/electron/desktopFloat.ts`)只给宿主。
+
+## 统一打开入口 `workspace.open`(第三期,2026-11-08)
+
+`engine/workspaceOpen.ts`:`workspace.open({ type, params }, { layer, form, key?, title? })`,位置(`layer`)和样子(`form`)分开写。
+- `{ dock: 'main' | 'left' | 'right' | 'bottom' }` → `useWorkspace.openView`(样子由位置定,左右 = `side`)。
+- `{ float: 'desktop', pin? }` → 壳层接缝 `setDesktopOpener({ mini, panel })`(桌面 = `window.tangu.openMini` / `openFloatingPanel`,网页只有 panel;接线在 `desktop/frontend/src/workspaceOpenHost.ts`,用的时候现装)。没接上 = 降级:Mini → 窗口作用域(手机 = 半屏抽屉),main → 停靠主区。
+- `{ float: 'view' | 'space' | 'window', anchor?, host? }` → `openFloat` 开一块浮层,`FloatViews.tsx`(随 `SpaceFloatLayer` 挂)用合成 leaf 把 View 经 portal 渲染进去:卡头(标题、在主面板显示、关闭)+ View。不进布局、不进 singleton 计数,View 类型反注册就收;同 View + key 再开 = 同一张卡换参数。没挂 FloatViews 的窗口(Mini、Floating Panel)回 `unavailable`。
+- `ViewDefinition.forms`(`{ main?, side?, bottom?, mini?: true | { view } }`)声明能用的样子;**不写 = 全都行**。回落规则全在纯函数 `planOpen` 与文件头注里,单测 `desktop/frontend/src/workspaceOpen.test.ts`;Mini 样子的紧凑视图取法:`forms.mini.view` → 某个 Space 的 `mini.mainView` 是它就走那个 Space → 视图本身(紧凑视图只认同一个主人:插件视图不落到别的插件的紧凑视图上)。
+- 旧入口一个不删:插件 `ctx.openView` / `openMiniPanel` / `openFloatingPanel` 内部转到这里;插件新入口 `ctx.workspace.open`。真 Electron 台架 `desktop` → `npm run check:workspaceopen`。
+- 留到下一步:浮层卡的位置跟 Space 布局 / View 参数一起记(现在只记用户拖到的锚点,重启不恢复)、Mini 的 `pin: false`(Mini 恒置顶)。
 
 ## English contract
 
@@ -103,6 +113,8 @@ Compact desktop/Web Chat Boxes keep trigger widths stable and show a short model
 Objects: `engine/objects.ts` registers object types (identity, cached info, open, execution-time verify) and per-type actions; every action runs through `executeAction` (targets frozen when the menu opens, re-verified before and after confirmation, double-run guarded, failures reported by the host). `engine/objectMenu.tsx` is the shared menu renderer (`openMenu`, web `.ctx-menu` or the Android native sheet) plus `useObjectMenu` / `bindObject`; surfaces pass only `refs`, `place` and place-specific sections. `when` decides listing, not authorization.
 
 Floats are a layer attribute (`engine/floatLayer.ts`, `openFloat`): scope `view` (inside a host element), `space` (over the whole Space, inside `.shell-host` isolation, hidden while another Space is open; `SpaceFloatLayer` in WorkspaceHost and SingleColumnHost) or `window` (body); six anchors; role `panel` or `notice` (stacked, `role=status`). Roles govern behaviour, not stacking. Stacking comes from one token table in `base.css :root` (`--z-view-float` … `--z-palette`); `npm run check:zindex` ratchets literal z-index values. Plugins use `ctx.ui.float`.
+
+`engine/workspaceOpen.ts` is the single way to open a view: `workspace.open({ type, params }, { layer, form })` writes where (`{ dock }`, `{ float: 'desktop', pin? }`, `{ float: 'view' | 'space' | 'window' }`) apart from what it looks like (`main | side | bottom | mini`). Docking calls `openView`; the desktop layer goes through the shell seam `setDesktopOpener` (Mini / Floating Panel; web and phones fall back to an in-window card, a half-height sheet on phones); in-window layers render the view with a synthetic leaf in a float (`FloatViews.tsx`). `ViewDefinition.forms` declares supported looks (absent = all); the fallback rules live in the pure `planOpen`. Plugin `openView` / `openMiniPanel` / `openFloatingPanel` forward to it; plugins also get `ctx.workspace.open`. Electron harness: `desktop` → `npm run check:workspaceopen`.
 
 Space owns layout; View owns a navigable feature; UI components compose the inside of a View. Amadeus document Blocks and Dashboard Cards have different responsibilities. Use `@lcl/components` for host-independent primitives and application adapters for services. Inputs and callbacks are explicit; a component must not implicitly target the active session. DOM plugins consume `ctx.ui` mounts, with lifecycle cleanup owned by the host. Settings parts (panels, rows, switches, buttons, inputs, meters, steppers, sheets) currently live in the application layer (`components/SettingsPrimitives`, `components/SettingsPage`) because their CSS source of truth is `base.css`; plugins reach them through `ctx.ui.mountSettingsPage` / `mountSettingsItem`. Keep types, documentation, consumers, and lifecycle coverage together when changing public APIs.
 

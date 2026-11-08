@@ -16,6 +16,8 @@ export type {
   SpaceDefinition,
   SpaceIcon,
   SidebarDefaults,
+  ViewForm,
+  ViewForms,
 } from './types'
 export { label } from './types'
 
@@ -68,6 +70,9 @@ export { emergeDroplet } from './droplet'
 export { openFloat, nearestAnchor, savedAnchor, registerSpaceFloatLayer, FLOAT_ANCHORS, FLOAT_SCOPES, FLOAT_ROLES } from './floatLayer'
 export type { FloatScope, FloatAnchor, FloatRole, FloatOptions, FloatHandle } from './floatLayer'
 export { SpaceFloatLayer } from './SpaceFloatLayer'
+/** 统一打开入口(第三期):位置(layer)和样子(form)分开写;回落规则在 workspaceOpen.ts 头注。 */
+export { workspace, workspaceOpen, planOpen, dockFallback, setDesktopOpener } from './workspaceOpen'
+export type { OpenTarget, OpenOptions, OpenLayer, OpenResult, OpenPlan, OpenEnv, OpenFailure, ResolvedLayer, FloatOpenScope, DesktopOpener } from './workspaceOpen'
 export type { Droplet, DropletOptions } from './droplet'
 /** 落点提示(拖动时的落点线 / 放进去的描边):换落点原地淡出淡入。见 dropIndicator.ts 顶注。 */
 export { createDropIndicator, createsFixedContainingBlock, dropRetarget, dropHide,DROP_IN_MS, DROP_OUT_MS, land, landCancel, landWhenMoved, landOffset, dragGrab, releasePoint, LAND_MS } from './dropIndicator'

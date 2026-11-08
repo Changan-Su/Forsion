@@ -2088,6 +2088,7 @@ async function restoreDetachedWindows(): Promise<void> {
 const floatingWindows = new Map<string, BrowserWindow>()
 const floatingTargets = new Map<string, FloatingPanelOpenOptions>()
 const readyFloating = new WeakSet<BrowserWindow>()
+const pinnedFloating = new WeakSet<BrowserWindow>()
 
 /** 会话级面板(旁聊 btw,target.sessionId)只在主窗当前会话 = 它的归属会话时露面;普通面板恒为 true。 */
 function inSessionScope(id: string): boolean {
@@ -2122,6 +2123,11 @@ function openFloatingPanel(raw: unknown): { id: string } | undefined {
     existing.setTitle(target.title)
     existing.setMinimizable(!target.sessionId) // 先以普通面板开过、后被主窗绑上会话的,也收回最小化
     if (target.sessionId && !existing.getParentWindow() && mainWindow && !mainWindow.isDestroyed()) existing.setParentWindow(mainWindow)
+    // 置顶跟最近这次打开说的走(workspace.open 的 pin;桌面 ≠ 置顶,缺省不置顶)。只撤我们自己置的顶
+    if (!!target.pin !== pinnedFloating.has(existing)) {
+      existing.setAlwaysOnTop(!!target.pin, 'floating')
+      if (target.pin) pinnedFloating.add(existing); else pinnedFloating.delete(existing)
+    }
     if (existing.isMinimized()) existing.restore()
     present(existing)
     // 还在载入:渲染层可能已经 floatingReady 拿走了上一份 target,这份得等载入完补发(发最新的;同一份重复到达不会重挂 —— 面板按 params 做 key,设置的带落点请求靠 params.nonce 区分先后)
@@ -2149,6 +2155,7 @@ function openFloatingPanel(raw: unknown): { id: string } | undefined {
     webPreferences: satelliteWebPreferences(),
   })
   floatingWindows.set(target.id, win)
+  if (target.pin) { win.setAlwaysOnTop(true, 'floating'); pinnedFloating.add(win) }
   win.webContents.setWindowOpenHandler(openUrlHandler(win.webContents))
   hardenNav(win.webContents)
   win.once('ready-to-show', () => {

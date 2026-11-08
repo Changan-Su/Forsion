@@ -108,6 +108,49 @@ A Space inside a plugin can declare a dedicated Mini view that offers only quick
 
 A plugin can also skip the full Space and open a registered compact view directly with `ctx.openMiniPanel?.(viewId, options)`; `mainViewId` sets where "Show in main panel" goes. Since 2.13.8 several Mini windows can be open on desktop: opening the same `viewId` again brings up its open window, and a stable `key` gives different content its own window; at 6 the host tells the user itself. See "Several Mini windows" in [Mini Panel development](./mini-panel-development.md). For a wide standalone tool page, use `ctx.openFloatingPanel?.(viewId, options)`. The host adds the plugin namespace automatically and owns the window lifecycle. See [Floating Panel development](./floating-panel-development.md).
 
+### One way to open views: `ctx.workspace.open` (2.13.8+)
+
+The ways to open a view above (`openView` docked, `openMiniPanel` small window, `openFloatingPanel` panel window) are now forms of one entry point that writes **where** (`layer`) apart from **what it looks like** (`form`). The three old calls keep working and go through it inside the host; new code can call it directly:
+
+```js
+const open = ctx.workspace?.open
+if (open) {
+  await open('board', { layer: { dock: 'right' } })                              // = openView('board', { location: 'right' })
+  await open({ view: 'board', params: { id } }, { layer: { float: 'desktop' } }) // = openMiniPanel; the compact view comes from forms
+  await open('board', { layer: { float: 'desktop', pin: true }, form: 'main' })  // = openFloatingPanel, kept on top
+  const r = await open('board', { layer: { float: 'space' } })                   // a card floating over the current Space
+  if (r.ok) r.close?.()
+} else ctx.openView('board')                                                     // older hosts
+```
+
+| `layer` | Where it goes |
+|---|---|
+| `{ dock: 'main' \| 'left' \| 'right' \| 'bottom' }` | Docked in the workbench, like `openView`'s `location`; the place sets the look (either side panel is `side`) |
+| `{ float: 'desktop', pin? }` | A small system window: `form: 'mini'` (default) is the Mini Panel (always on top, several at once, reused by `key`); `'main'` is the Floating Panel (not on top unless `pin: true`) |
+| `{ float: 'space', anchor? }` | A card floating over the current Space; hidden while another Space is shown, back as it was on return |
+| `{ float: 'window', anchor? }` | A card floating over the whole window; stays across Space switches |
+| `{ float: 'view', host, anchor? }` | A card floating inside one element (`host`) of your view |
+
+The last three are the same floating layer as `ctx.ui.float` (six anchors, the person can drag the card to another corner, remembered on this device per scope + view + key). The difference is that the card holds your whole registered **view**, not DOM you draw: the host draws the card head (title, "Show in main panel", close) and your view's `mount` gets its `view` as usual (`surface` is `'mini'` or `'floating'`; `showInMainPanel()` opens the main area with the current params and closes the card). Cards are not part of the layout and do not come back after a restart. They close when your plugin is disabled or reloaded, when the view is unregistered, when you call `close()`, or when the person closes them. Opening the same view with the same `key` again brings up that card with the new params; params never count as identity.
+
+**Declare looks with `forms`**: pass `forms` to `registerView` to say which looks the view supports:
+
+```js
+ctx.registerView({ id: 'board', title, mount, forms: { main: true, side: true, mini: { view: 'board-mini' } } })
+```
+
+Without `forms` every look works, as before. With it, anything left out is unsupported. `mini: { view }` names a compact view of this plugin (relative id): whenever `board` opens in the Mini look (desktop Mini, floating card), `board-mini` is what shows, and "Show in main panel" goes back to `board`. This replaces the half of a Space recipe's `mini` that pairs a compact view with its main view; the recipe's `mini` keeps working.
+
+**Fallback rules** (when the asked-for look is unsupported):
+
+1. Docked: the place sets the look; `form` is ignored. Unsupported → the next place on the ladder: main → right → bottom; left / right → main → bottom; bottom → right → main. Hosts without a bottom panel (phones, satellite windows) use right for bottom. A view with no docked look at all (only `mini`) floats over the current Space instead; with no `mini` either (for example `forms: {}`) the result is `'unsupported'`.
+2. Floating: `form` defaults to `'mini'`; `'side'` / `'bottom'` count as `'main'`. `mini` unsupported → `main`; the view itself unsupported → `mini`.
+3. The Mini look shows `forms.mini.view` (the view itself if that one is not registered, or when `mini` is not an object). Only compact views of your own plugin count. A view without `forms` opened with `openMiniPanel` behaves as in 2.13.7: the Mini shows the view itself.
+4. Web has no Mini window: the Mini look of `{ float: 'desktop' }` becomes a card floating in the window. On phones it is a half-height sheet along the bottom, and the main look docks in the main area (a panel filling the phone screen is the main area). Space cards on phones sit just above the bottom bar.
+5. Windows without a workbench (Mini windows, Floating Panel windows) cannot open the `space` / `window` / `view` layers.
+
+The result `{ ok: true, layer, form, close? }` says where the view actually went after the fallback rules (desktop windows have no `close`). When it cannot open you get `{ ok: false, reason }`: `'unknown-view'` (not one of your registered views), `'unsupported'` (none of the declared looks can be used), `'unavailable'` (this window cannot open it), `'limit'` (too many Mini windows; the host already told the person, and `limit` is the cap), or `'disabled'` (your plugin is disabled). Malformed options throw a `TypeError` at once. Plugins can only open their own views. `{ float: 'desktop' }` is only another way to write Mini / Floating Panel; the component float `ctx.ui.float` still has no desktop scope.
+
 When a View needs an input box with model selection, use `ctx.ui.mountChatBox`; it reuses the host component, and the plugin handles submission explicitly. Pass `modelPicker: false` to drop the model selection, `toolbar` for controls in the bottom row, `suggest` for completion such as `#` (since 2026-11-02 it can be a list, for example one for `#` and one for `[[`; pass a list only when `ctx.ui.chatBoxCapabilities` includes `'suggestMany'`; when the box sits in the lower half of the window the suggestions open upward), and call `insertText` to insert at the caret. See [Reusable UI components](./ui-components.md).
 
 Settings-like pages (account, quota and credits, diagnostics, preferences) hand the host a description of the whole page through `ctx.ui.mountSettingsPage(el, { groups })`: each group has an icon, title, description, top-right buttons and items (switch, value, buttons, input, segmented, select, pick-to-run choice, stepper, code with copy, usage meters, empty / loading / error, custom block). The plugin supplies only the text, values and callbacks; the host draws them with its own settings parts and lays them out per device — on phones switches, values and single buttons stay at the right, inputs, steppers and two or more buttons move to the next line, and a pick-to-run choice becomes one button and a half sheet. Put anything outside that list in a `custom` block and mount single parts there with `ctx.ui.mountSettingsItem`. Stop copying the host's settings CSS; hosts before 2026-10-17 lack both methods, so feature-detect and keep your own page there. See [Reusable UI components](./ui-components.md).

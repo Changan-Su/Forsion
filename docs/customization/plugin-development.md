@@ -108,6 +108,49 @@ ctx.ui.mountWebCard(el, { name, status, address, note, thumbnail, actions, menu 
 
 插件也可以不创建完整 Space，直接用 `ctx.openMiniPanel?.(viewId, options)` 打开已注册的紧凑视图；`mainViewId` 指定“在主面板显示”的去向。2.13.8 起桌面能同时开几扇 Mini：同一个 `viewId` 再开是叫出已开的那扇，想让不同内容各占一扇就传稳定的 `key`；满 6 扇时宿主自己提示用户，见 [Mini Panel 开发](./mini-panel-development.md)「多开」。需要宽屏独立工具页时用 `ctx.openFloatingPanel?.(viewId, options)`。宿主自动添加插件命名空间并负责窗口生命周期。见 [Floating Panel 开发](./floating-panel-development.md)。
 
+### 统一打开入口 `ctx.workspace.open`(2.13.8 起)
+
+上面几种打开方式(`openView` 停靠、`openMiniPanel` 小窗、`openFloatingPanel` 浮窗)现在是同一个入口的几种写法:**放在哪**(`layer`)和**长什么样**(`form`)分开写。旧的三个照旧可用,宿主内部转到这里;新代码可以直接写:
+
+```js
+const open = ctx.workspace?.open
+if (open) {
+  await open('board', { layer: { dock: 'right' } })                              // = openView('board', { location: 'right' })
+  await open({ view: 'board', params: { id } }, { layer: { float: 'desktop' } }) // = openMiniPanel,紧凑视图按 forms 挑
+  await open('board', { layer: { float: 'desktop', pin: true }, form: 'main' })  // = openFloatingPanel,并且置顶
+  const r = await open('board', { layer: { float: 'space' } })                   // 一张卡浮在当前 Space 之上
+  if (r.ok) r.close?.()
+} else ctx.openView('board')                                                     // 旧宿主
+```
+
+| `layer` | 落到哪 |
+|---|---|
+| `{ dock: 'main' \| 'left' \| 'right' \| 'bottom' }` | 停靠在工作台里,同 `openView` 的 `location`;样子由位置定(左右栏都是 `side`) |
+| `{ float: 'desktop', pin? }` | 系统小窗:`form: 'mini'`(缺省)是 Mini Panel(恒置顶、可多开、按 `key` 复用),`'main'` 是 Floating Panel(缺省不置顶,`pin: true` 才盖在别的应用上) |
+| `{ float: 'space', anchor? }` | 一张卡浮在当前 Space 的三栏之上;切到别的 Space 时藏起来,回来原样 |
+| `{ float: 'window', anchor? }` | 一张卡浮在整个窗口之上,切 Space 也留着 |
+| `{ float: 'view', host, anchor? }` | 一张卡浮在你视图里的某个元素(`host`)里 |
+
+后三种和 `ctx.ui.float` 是同一套浮层(六个锚点、用户可拖到别的角、按「作用域 + 视图 + key」记在本机),区别是里面挂的是你注册的**整个视图**,不是一块自己画的 DOM:宿主画卡头(标题、「在主面板显示」、关闭),视图的 `mount` 照常拿到 `view`(`surface` 是 `'mini'` 或 `'floating'`;`showInMainPanel()` 把当前参数带去主区打开、收掉这张卡)。卡不进布局,重启不恢复;插件停用或重载、视图被反注册、你调 `close()`、用户点关闭,都会收掉。同一视图 + 同一 `key` 再开 = 叫出那张、换成新参数,参数本身不算身份。
+
+**声明样子 `forms`**:`registerView` 时写 `forms`,说明这个视图能以哪几种样子出现:
+
+```js
+ctx.registerView({ id: 'board', title, mount, forms: { main: true, side: true, mini: { view: 'board-mini' } } })
+```
+
+不写 `forms` = 什么样子都行(和以前一样)。写了,没列出的就是不支持。`mini: { view }` 指一个本插件的紧凑视图(相对 id):以后凡是用 Mini 样子打开 `board`(桌面 Mini、浮层卡),里面显示的都是 `board-mini`,「在主面板显示」回到 `board`。它取代了 Space 配方 `mini` 里「哪个紧凑视图配哪个主视图」那一半;配方的 `mini` 照旧可用。
+
+**回落规则**(要的样子不支持时):
+
+1. 停靠:位置决定样子,传的 `form` 不看。不支持就按梯子换位置:主区 → 右栏 → 底部;左 / 右 → 主区 → 底部;底部 → 右栏 → 主区。没有底部面板的宿主(手机、卫星窗)底部当右栏。一个停靠样子都不支持(只有 `mini`)时,浮在当前 Space 之上;连 `mini` 也没有(比如 `forms: {}`)就回 `'unsupported'`。
+2. 浮起来:`form` 缺省 `'mini'`,`'side'` / `'bottom'` 当 `'main'`。`mini` 不支持 → `main`;视图本身不支持 → `mini`。
+3. Mini 样子里显示 `forms.mini.view`(没注册就用视图本身);没写就是视图本身。紧凑视图只认本插件的。没写 `forms` 的视图用 `openMiniPanel` 打开时和 2.13.7 一样,Mini 里就是它自己。
+4. 网页没有 Mini 窗口:`{ float: 'desktop' }` 的 Mini 样子降成浮在窗口里的卡;手机上是贴底的半屏抽屉,`main` 样子停靠主区(手机上占满一屏的面板就是主区)。Space 作用域的卡在手机上贴在底栏上方。
+5. Mini 窗、Floating Panel 窗这类没有工作台的窗口里,`space` / `window` / `view` 三档打不开。
+
+返回值 `{ ok: true, layer, form, close? }` 说明回落之后实际落到哪(桌面小窗没有 `close`);打不开是 `{ ok: false, reason }`:`'unknown-view'` 不是你注册的视图,`'unsupported'` 声明的样子一个都用不上,`'unavailable'` 这扇窗开不了,`'limit'` Mini 开满了(宿主已经告诉用户,`limit` 是上限),`'disabled'` 插件已停用。参数形状不对同步抛 `TypeError`。插件只能开自己的视图。`{ float: 'desktop' }` 只是 Mini / Floating Panel 换个写法;组件浮层 `ctx.ui.float` 仍然没有桌面档。
+
 View 内需要输入框和模型选择时，使用 `ctx.ui.mountChatBox`；它复用宿主组件，并由插件显式处理提交。不要模型选择时传 `modelPicker: false`；底排工具栏用 `toolbar`，`#` 这类补全用 `suggest`（2026-11-02 起可以传一组，例如 `#` 与 `[[` 各一份，传之前先看 `ctx.ui.chatBoxCapabilities` 里有没有 `'suggestMany'`；输入框在窗口下半部分时候选朝上开），在光标处插入文字用 `insertText`。见 [可复用 UI 组件](./ui-components.md)。
 
 设置类页面（账号、额度与积分、诊断、偏好）用 `ctx.ui.mountSettingsPage(el, { groups })` 交一份整页描述：每组有图标、标题、说明、右上角按钮和若干项（开关、数值、按钮、输入框、分段、下拉、「选了就执行」、步进器、代码 + 复制、额度条、空 / 加载 / 出错、自定义块），插件只给文字、值和回调，宿主用自己的设置零件画并按端排版——手机上开关、数值、单个按钮留在右边，输入框、步进器、两个以上的按钮换到下一行，「选了就执行」换成一枚按钮 + 半屏。清单外的内容放进 `custom` 块，块里用 `ctx.ui.mountSettingsItem` 挂单件。别再抄宿主的设置 CSS；2026-10-17 之前的宿主没有这两个接口，先探测，保留自己画的那套。见 [可复用界面组件](./ui-components.md)。

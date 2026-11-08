@@ -53,3 +53,45 @@
 .lcl-float [data-float-drag] { cursor: grab; touch-action: none; }
 .lcl-float[data-dragging] { cursor: grabbing; transition: none; z-index: 1; }
 .lcl-float[data-dragging] [data-float-drag] { cursor: grabbing; }
+
+/* workspace.open 挂进浮层的 View(FloatViews.tsx,第三期):卡面同上,头部一行(标题 = 拖动把手、在主面板显示、关闭),
+   下面是 View。mini 同 Mini 窗的缺省大小(320 × 420),main 是面板大小;都受上面的 max-width / max-height 管。 */
+.lcl-float[data-view-float] {
+  display: flex;
+  flex-direction: column;
+  width: 320px;
+  height: 420px;
+}
+.lcl-float[data-view-float='main'] { width: 640px; height: 480px; }
+.lcl-float[data-view-float]:not([data-bare]) { overflow: hidden; }
+.lcl-float-view { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.lcl-float-view-head {
+  display: flex; align-items: center; gap: 2px; flex: none;
+  height: 34px; padding: 0 4px 0 12px;
+  color: var(--text-muted);
+  font-family: var(--font-ui); font-size: var(--ui-font-meta, 12px); line-height: var(--ui-line-meta, 18px); font-weight: 600;
+}
+.lcl-float-view-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lcl-float-view-btn {
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+  width: 26px; height: 26px; padding: 0;
+  border: 0; border-radius: var(--radius-sm, 6px);
+  background: transparent; color: var(--text-muted);
+  cursor: pointer;
+}
+.lcl-float-view-btn:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.1)); color: var(--text); }
+.lcl-float-view-btn:focus-visible { outline: var(--focus-ring, 1px) solid var(--signal-line, var(--accent-ink)); outline-offset: -1px; }
+.lcl-float-view-body { position: relative; flex: 1; min-height: 0; overflow: auto; }
+
+/* 手机:Mini 样子的 View 浮层是半屏抽屉(§7)—— 贴本层底边、占满宽、半屏高,只圆上面两个角;Space 层的底边已让开
+   原生底栏(上面 .mb-body 那条),窗口层按原生外壳报的底部占位让。不记锚点、不能拖。放文件末尾:要压过锚点那几条(DESIGN §7.2)。 */
+.lcl-float[data-role='panel'][data-sheet] {
+  left: 0; right: 0; bottom: 0; top: auto;
+  width: auto; max-width: none; margin: 0;
+  height: 50%;
+  border-radius: var(--radius-lg, 16px) var(--radius-lg, 16px) 0 0;
+  border-bottom: 0;
+}
+.mb-body > .lcl-float-layer[data-scope='space'] > .lcl-float[data-role='panel'][data-sheet] { bottom: var(--mb-bottom, 0px); }
+.lcl-float-layer[data-scope='window'] > .lcl-float[data-role='panel'][data-sheet] { bottom: calc(var(--nc-bottom, 0) * 1px / var(--uiz, 1)); }
+.lcl-float[data-sheet] .lcl-float-view-head { height: 40px; }
