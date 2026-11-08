@@ -1,7 +1,8 @@
 /**
  * ① 开始:Forsion 账号 + 其他模型渠道,两边可以同时接(11-05 用户定:不是二选一)。
  * - 账号卡只在装了 Forsion Extend(桥键 forsionLogin)时出现:权益六样、浏览器登录、登录后的同步勾(10-20:勾着的开、没勾的关、
- *   没看到不替你开;11-06 拿掉「Agents 与记忆」,新同步里它不起作用,换成一行指向 蓬洲云 › 同步 的说明),
+ *   没看到不替你开;11-06 拿掉「Agents 与记忆」,新同步里它不起作用,换成一行指向 蓬洲云 › 同步 的说明;
+ *   11-08 标 Beta、缺省关,勾的初值按现在开没开,读到之前不露),
  *   卡底「帮助改进 Forsion」开关 + ⓘ。没登录时开关灰着(只在登录后能开);登录那一刻详情自动弹一次 = 看过告知。
  * - 渠道卡:API Key(原来的「更多 Provider」点进去是同一张表,11-06 并进来)、订阅登录(authProviders 列出几家就几块)、本机模型;
  *   接上的那块打 ✓。凭证只在本机。
@@ -16,7 +17,7 @@ import { FORSION_PRIVACY_URL } from '../../appCompliance'
 import { SettingsSwitch } from '../SettingsPrimitives'
 import { PROVIDER_PRESETS, presetProviderId } from '../providerPresets'
 import { asTelemetryView, improveOnThisHost, readTelemetry, type TelemetryView } from '../OnboardingImprove'
-import type { SyncKind } from '../../services/syncSetup'
+import { getSync, refreshSync, subscribeSync, type SyncKind } from '../../services/syncSetup'
 import type { AuthStatusInfo, DirectProviderConfig } from '../../types'
 
 export const SUB_LABELS: Record<string, string> = { codex: 'Codex', xai: 'xAI' }
@@ -27,7 +28,8 @@ export interface StartProps {
   /** 现读主机连接(外壳给;登录 / 加渠道后 token 可能刚换过)。 */
   resolveTarget: () => Promise<EngineTarget>
   returning: boolean
-  syncPick: Record<SyncKind, boolean>
+  /** 登录后的同步勾;null = 还没读到现在的同步状态(读到之前不露勾,收尾时也不按它开关)。 */
+  syncPick: Record<SyncKind, boolean> | null
   onSyncPick: (next: Record<SyncKind, boolean>) => void
   /** 同步那三个勾真露出来过(没看到就不替用户开)。 */
   onSyncSeen: () => void
@@ -68,6 +70,23 @@ export function StartScreen(p: StartProps): React.ReactNode {
   useEffect(() => { onSignedIn(signedIn) }, [signedIn, onSignedIn])
   const busy = loggingIn || !!providerBusy
   useEffect(() => { onBusyChange(busy) }, [busy, onBusyChange])
+  // 同步勾(11-08 用户定:缺省关、标 Beta)。收尾是「勾着的开、没勾的关」,所以初值按现在的状态:已经开着的显示开
+  // (不然点「开始使用」会把用户自己开的同步关掉);插件同步没人定过时也算「开」(没关掉的记号),按新缺省显示关。
+  // 读到之前不露勾:读失败 ≠ 全关。初值只种一次(存在外壳里),回到这一屏不把用户勾过的冲掉。
+  const { syncPick, onSyncPick } = p
+  useEffect(() => {
+    if (!signedIn || syncPick) return
+    let done = false
+    const seed = (): void => {
+      const s = getSync()
+      if (done || !s?.signedIn) return
+      done = true
+      onSyncPick({ notes: s.notes.on, agents: s.agents.on, plugins: s.decided && s.plugins.on })
+    }
+    const off = subscribeSync(seed)
+    void refreshSync().then(seed, () => {})
+    return () => { done = true; off() }
+  }, [signedIn, syncPick, onSyncPick])
 
   const login = async (): Promise<void> => {
     if (!window.tangu?.forsionLogin) return
@@ -93,15 +112,18 @@ export function StartScreen(p: StartProps): React.ReactNode {
   }
   const name = auth?.nickname || auth?.username || ''
 
-  const accountCard = canForsion && <section className={`ob3-card ob3-choice${signedIn ? ' pick' : ''}`} data-ob-account="">
+  // 接上了不再给整张卡描强调色边(11-08 用户:一进来两张卡都被粗线框住,太丑);状态看右上角的「已登录」和渠道块上的 ✓
+  const accountCard = canForsion && <section className="ob3-card ob3-choice" data-ob-account="">
     <div className="ob3-choice-h"><Cloud size={20} aria-hidden="true" /><strong>{t('ob3.account.title')}</strong>
       {signedIn ? <em className="ob3-chip"><Check size={12} aria-hidden="true" />{t('ob3.account.signedIn')}</em> : <em>{t('ob3.account.recommended')}</em>}</div>
     {signedIn ? <>
       {name && <div className="ob3-muse-h" style={{ alignItems: 'center', gap: 10 }}><span className="ob3-ava" style={{ width: 28, height: 28, fontWeight: 600 }}>{name.slice(0, 1).toUpperCase()}</span><div><strong style={{ fontSize: 'inherit', fontWeight: 500 }}>{name}</strong></div></div>}
-      <div className="ob3-sync" ref={() => p.onSyncSeen()}><span className="ob3-note">{t('onboarding.connect.syncTitle')}</span>
-        {([['notes', 'onboarding.connect.sync.notes'], ['plugins', 'onboarding.connect.sync.plugins']] as const)
+      <div className="ob3-sync" data-ob-sync=""><span className="ob3-note ob3-sync-h">{t('onboarding.connect.syncTitle')}<em className="ob3-beta">{t('ob3.sync.beta')}</em>
+        <span>{t('ob3.sync.betaHint')}</span></span>
+        {syncPick && <SyncSeen onSeen={p.onSyncSeen} />}
+        {syncPick && ([['notes', 'onboarding.connect.sync.notes'], ['plugins', 'onboarding.connect.sync.plugins']] as const)
           .filter(([k]) => k !== 'notes' || !!window.remoteSync).map(([k, label]) => (
-            <label key={k}><input type="checkbox" checked={p.syncPick[k]} onChange={(e) => p.onSyncPick({ ...p.syncPick, [k]: e.target.checked })} />{t(label)}</label>
+            <label key={k}><input type="checkbox" checked={syncPick[k]} onChange={(e) => onSyncPick({ ...syncPick, [k]: e.target.checked })} />{t(label)}</label>
           ))}
         {/* 引导盖在最上面,这里只说去哪儿选,不做成点了没反应的链接 */}
         <span className="ob3-note" data-ob-sync-agents="">{t('ob3.sync.agentsWhere')}</span></div>
@@ -122,7 +144,7 @@ export function StartScreen(p: StartProps): React.ReactNode {
     <ImproveRow signedIn={signedIn} />
   </section>
 
-  const channelsCard = <section className={`ob3-card ob3-choice${(subConnected || keyCount > 0) ? ' pick' : ''}`} data-ob-channels="">
+  const channelsCard = <section className="ob3-card ob3-choice" data-ob-channels="">
     <div className="ob3-choice-h"><KeyRound size={20} aria-hidden="true" /><strong>{t('ob3.channels.title')}</strong><em>{t('ob3.channels.many')}</em></div>
     {panel ? <KeyForm local={panel === 'local'} resolveTarget={p.resolveTarget} onDone={(saved) => { setPanel(null); if (saved) { refresh(); p.onReconnect() } }} /> : <>
       <span className="ob3-sub">{t('ob3.channels.lead')}</span>
@@ -149,6 +171,12 @@ export function StartScreen(p: StartProps): React.ReactNode {
     {msg && <div className="ob3-feedback" role="status">{msg}</div>}
     {!canForsion && <div className="ob3-where"><WifiOff size={12} aria-hidden="true" />{t('ob3.channels.noExt')}</div>}
   </div>
+}
+
+/** 同步勾真露出来过(挂载那一下记一次),没看到就不替用户开关。 */
+function SyncSeen({ onSeen }: { onSeen: () => void }): null {
+  useEffect(() => { onSeen() }, [onSeen])
+  return null
 }
 
 /**
@@ -209,7 +237,7 @@ function KeyForm({ local, resolveTarget, onDone }: { local: boolean; resolveTarg
   const keyField = (label: string) => <label>{label}<input type="password" autoComplete="off" value={key} onChange={(e) => setKey(e.target.value)} placeholder={local ? '' : 'sk-…'} /></label>
   const urlField = <label>{t('onboarding.connect.baseUrlLabel')}<input value={url} onChange={(e) => setUrlInput(e.target.value.trim())} placeholder="http://localhost:11434/v1" /></label>
   const listField = <label>{t('onboarding.connect.modelWhitelistLabel')}<input value={models} onChange={(e) => setModels(e.target.value)} placeholder="llama3, qwen2.5-coder" /></label>
-  return <div className="ob3-form" data-ob-keyform="" data-preset={preset || 'custom'}>
+  return <div className="ob3-form" data-ob-keyform="" data-preset={preset || 'custom'} data-motion="enter">
     {!local && <>
       <span className="ob3-sub">{t('ob3.key.pick')}</span>
       <div className="ob3-pick" role="group" aria-label={t('prov.preset')}>
@@ -223,8 +251,8 @@ function KeyForm({ local, resolveTarget, onDone }: { local: boolean; resolveTarg
     </> : <>
       {keyField(t('ob3.key.keyFor', { name }))}
       {chosen?.keyUrl && <button type="button" className="ob3-link ob3-keyurl" onClick={() => openKeyPage(chosen.keyUrl!)}>{t('ob3.key.getKey', { name })}<ExternalLink size={11} aria-hidden="true" /></button>}
-      <button type="button" className="ob3-adv" aria-expanded={advanced} onClick={() => setAdvanced((a) => !a)}><ChevronRight size={13} aria-hidden="true" />{t('ob3.key.advanced')}</button>
-      {advanced && <>{pidField}{urlField}{listField}</>}
+      <button type="button" className="ob3-adv" aria-expanded={advanced} onClick={() => setAdvanced((a) => !a)}><ChevronRight size={13} aria-hidden="true" data-motion="chevron" data-open={advanced} />{t('ob3.key.advanced')}</button>
+      {advanced && <div className="ob3-adv-fields" data-motion="enter">{pidField}{urlField}{listField}</div>}
     </>}
     <div className="ob3-actions">
       <button type="button" className="btn primary sm" disabled={busy || !pid || !url || (!custom && (!key || existing === null))} onClick={() => void save()}>{busy ? <Loader2 size={12} className="spin" aria-hidden="true" /> : <Check size={12} aria-hidden="true" />}{t('onboarding.connect.saveAndStart')}</button>
@@ -311,7 +339,7 @@ export function ImproveRow({ signedIn }: { signedIn: boolean }): React.ReactNode
       <button type="button" className="ob3-info" aria-label={t('ob3.improve.details')} aria-expanded={open} onClick={() => setOpen((o) => !o)}><Info size={13} aria-hidden="true" /></button>
       <small>{error || t(can ? 'ob3.improve.on' : 'ob3.improve.signedOut')}</small></div>
     <SettingsSwitch checked={can && view.enabled} disabled={!can || busy} onChange={toggle} label={t('onboarding.improve.title')} />
-    {open && <div className="ob3-pop" role="dialog" aria-label={t('onboarding.improve.title')}>
+    {open && <div className="ob3-pop" role="dialog" aria-label={t('onboarding.improve.title')} data-motion="enter">
       <b>{t('onboarding.improve.title')}</b><span>{t('onboarding.improve.summary')}</span>
       <ul>{IMPROVE_ROWS.map(([Icon, k]) => <li key={k}><Icon size={12} aria-hidden="true" />{t(k)}</li>)}</ul>
       <button type="button" className="ob3-link" onClick={openPrivacy}>{t('onboarding.improve.privacy')}<ChevronRight size={12} aria-hidden="true" /></button>

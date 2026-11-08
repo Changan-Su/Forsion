@@ -2,17 +2,19 @@
  * ④ 认识你的 Agents 团队(11-06 第四轮 A4,方案 docs/ToBeImproved/首启引导第四轮方案_2026-11-06/):
  * 两张等宽的卡,左卜算子、右电脑历史;团队名单收成底下一行,只介绍。
  * - 名字按界面语言只显示一个(agentName:中文界面「卜算子」,英文界面「Muse」)。
- * - 卜算子:开关、一句话说清它做什么、用哪个模型、两问(什么时候能找你 / 最想盯什么 + 自己写一条,60 字)。
+ * - 卜算子:头像用它自己的(AgentAvatar:上传过的图,没有就是名字首字,和 Agents 页同一个;11-08 换掉星星)、
+ *   开关、一句话说清它做什么、用哪个模型、两问(什么时候能找你 / 最想盯什么 + 自己写一条,60 字)。
  *   主动程度不问(按缺省「普通」,不发 proactivity),卡底写一句去哪改。
  *   模型行只改显示、不替用户写 modelId:不选时显示引擎实际会用的那个(本机后台任务那一格 → 云端后台模型 → 默认模型,要在可用列表里),
  *   一个都没有才黄底「选择模型 / 先不醒」;登录了缺省「跟随云端」走独立额度,改选 Forsion 的模型算主额度、直连的算接的那家。
- * - 团队名单:头像字 + 名字,默认 / 后台 / 已停用的标签,没有开关(停用开关在 Agents 页)。「在 Agents 里管理」引导结束后去 Agents。
+ *   选择器是设置页那个 ModelSelect(按管理员分组 / 本机偏好隐藏,11-08 用户:有组件就复用),不另写原生 select。
+ * - 团队名单:头像(AgentAvatar)+ 名字,默认 / 后台 / 已停用的标签,没有开关(停用开关在 Agents 页)。「在 Agents 里管理」引导结束后去 Agents。
  * - 电脑历史:新装机预先打开,带着开着的开关点「开始使用」才算数(跳过引导不开,主页之后再问一次);老用户显示现在的值。
  *   「开了之后,比如」三行是固定的示意文案,不读真记录。完整说明在「详情」里。点「开始使用」后 macOS 请用户给助手开辅助功能。
  * 这一屏的选择都在「开始使用」时一起写(commitRef),只发和读到的不一样的;写失败留在这一屏报错。
  */
 import React, { useEffect, useRef, useState } from 'react'
-import { Check, ChevronRight, Cpu, Globe, History, Monitor, PenLine, Sparkles } from 'lucide-react'
+import { Check, ChevronRight, Cpu, Globe, History, Monitor, PenLine } from 'lucide-react'
 import { useI18n } from '../../i18n'
 import { agentName } from '../../agentName'
 import { agentDescription } from '../builtinAgentDescriptions'
@@ -21,6 +23,8 @@ import { museSettingTelemetry } from '../../telemetrySend'
 import type { EngineTarget } from '../../services/engine/targets'
 import type { ModelsResponse, NormalAgentDef, SpecialAgentsConfig } from '../../types'
 import { SettingsSwitch } from '../SettingsPrimitives'
+import { AgentAvatar } from '../AgentAvatar'
+import { ModelSelect } from '../ModelSelect'
 import { ComputerHistoryDialog } from '../ComputerHistoryDialog'
 import { useComputerHistory } from '../useComputerHistory'
 import { historyUntouched } from '../computerHistoryAskMark'
@@ -104,6 +108,8 @@ export function TeamScreen({ resolveTarget, commitRef, signedIn, fresh, onOpenAg
   const muse = agents.find((a) => a.slug === 'muse') || MUSE_FALLBACK
   const museName = agentName(muse, locale)
   const roster = agents.filter((a) => a.slug !== 'muse' && a.createdBy !== 'system')
+  /** 同屏的名字(首字撞了 AgentAvatar 会换一个字) */
+  const rosterNames = [museName, ...roster.map((a) => agentName(a, locale)), t('ob3.historian.name')]
   const llms = (models?.models || []).filter((m) => !m.modelType || m.modelType === 'llm')
   const modelOf = (id: string) => llms.find((m) => m.id === id)
 
@@ -176,29 +182,28 @@ export function TeamScreen({ resolveTarget, commitRef, signedIn, fresh, onOpenAg
   const modelHint = needModel ? (llms.length ? 'ob3.muse.modelNeed' : 'ob3.muse.modelNone')
     : !modelId ? (localPick ? (mainQuota(modelOf(localPick)) ? 'ob3.muse.modelLocalMain' : 'ob3.muse.modelLocal') : signedIn ? 'ob3.muse.modelCloud' : 'ob3.muse.modelDefault')
     : mainQuota(picked) ? 'ob3.muse.modelMain' : 'ob3.muse.modelBilled'
+  // 不选那一项写什么:本机那一格 / 跟随云端(知道云端配的是哪个就带上名字)/ 默认模型 / 选择模型
+  const cloudBg = !localPick && signedIn && models?.backgroundModelId && modelOf(models.backgroundModelId) ? models.backgroundModelId : ''
+  const emptyLabel = localPick ? t('ob3.muse.modelLocalOption', { model: modelOf(localPick)?.name || localPick })
+    : signedIn ? t('ob3.muse.modelCloudOption')
+    : fallback ? t('ob3.muse.modelDefaultOption', { model: modelOf(fallback)?.name || fallback })
+    : t('ob3.muse.modelPick')
   const pills = <T extends string>(label: string, values: readonly T[], keyOf: (v: T) => string, on: (v: T) => boolean, pick: (v: T) => void, extra?: React.ReactNode): React.ReactNode =>
     <div className="ob3-q"><span>{label}</span><div className="ob3-actions" role="group" aria-label={label}>
       {values.map((v) => <button key={v} type="button" className="ob3-pill" aria-pressed={on(v)} disabled={!museOn} onClick={() => pick(v)}>{t(keyOf(v))}</button>)}{extra}</div></div>
-  const initial = (name: string): string => Array.from(name)[0]?.toUpperCase() || '?'
 
   return <div className="ob3-col team">
     <div className="ob3-head"><h1 tabIndex={-1} data-ob-title="">{t('ob3.team.title')}</h1><p>{t('ob3.team.desc', { muse: museName })}</p></div>
     <div className={`ob3-team${chShown ? '' : ' solo'}`}>
       <section className="ob3-card ob3-muse" data-ob-muse="">
-        <div className="ob3-muse-h"><span className="ob3-ava"><Sparkles size={18} aria-hidden="true" /></span>
+        <div className="ob3-muse-h"><span className="ob3-ava agent" data-ob-muse-avatar=""><AgentAvatar name={museName} url={avatars[muse.slug]} siblings={rosterNames} size={34} fill /></span>
           <div><strong>{museName} · {t('ob3.muse.kind')}</strong><small>{t('ob3.muse.lead')}</small></div>
           <SettingsSwitch checked={museOn} disabled={!config} onChange={setMuseOn} label={museName} /></div>
         <div className={`ob3-model${needModel ? ' need' : ''}`} data-ob-muse-model="">
           <Cpu size={16} aria-hidden="true" />
           <div><strong>{t('ob3.muse.model', { muse: museName })}</strong><small>{t(modelHint)}</small></div>
-          <select value={modelId} disabled={!museOn || !config} aria-label={t('ob3.muse.model', { muse: museName })} onChange={(e) => setModelId(e.target.value)}>
-            {localPick ? <option value="">{t('ob3.muse.modelLocalOption', { model: modelOf(localPick)?.name || localPick })}</option>
-              : signedIn ? <option value="">{t('ob3.muse.modelCloudOption')}</option>
-              : fallback ? <option value="">{t('ob3.muse.modelDefaultOption', { model: modelOf(fallback)?.name || fallback })}</option>
-              : <option value="" disabled>{t('ob3.muse.modelPick')}</option>}
-            {modelId && !picked && <option value={modelId}>{modelId}</option>}
-            {llms.map((m) => <option key={m.id} value={m.id}>{m.name || m.id}</option>)}
-          </select>
+          <ModelSelect models={llms} value={modelId} onChange={setModelId} disabled={!museOn || !config} ariaLabel={t('ob3.muse.model', { muse: museName })}
+            defaultLabel={emptyLabel} cloudDefaultId={cloudBg || undefined} />
         </div>
         <div className="ob3-sep" />
         {pills(t('ob3.q.when'), INTRO_WHEN, (v) => `ob3.when.${v}`, (v) => v === when, setWhen)}
@@ -215,7 +220,7 @@ export function TeamScreen({ resolveTarget, commitRef, signedIn, fresh, onOpenAg
           <span className="ob3-eg-k">{t('ob3.ch.egTitle')}</span>
           <div className="ob3-eg-r"><Monitor size={13} aria-hidden="true" /><time>15:10</time><span>{t('ob3.ch.eg1')}</span></div>
           <div className="ob3-eg-r"><Globe size={13} aria-hidden="true" /><time>15:42</time><span>{t('ob3.ch.eg2')}</span></div>
-          <div className="ob3-eg-r muse"><Sparkles size={13} aria-hidden="true" /><time>21:00</time><span>{t('ob3.ch.eg3', { muse: museName })}</span></div>
+          <div className="ob3-eg-r muse"><span className="ob3-eg-ava"><AgentAvatar name={museName} url={avatars[muse.slug]} siblings={rosterNames} size={16} fill /></span><time>21:00</time><span>{t('ob3.ch.eg3', { muse: museName })}</span></div>
         </div>
         <dl><div><dt>{t('computerHistory.about.recordedLabel')}</dt><dd>{t('ob3.ch.recordedShort')}</dd></div>
           <div><dt>{t('computerHistory.about.neverLabel')}</dt><dd>{t('computerHistory.about.never')}</dd></div></dl>
@@ -228,13 +233,13 @@ export function TeamScreen({ resolveTarget, commitRef, signedIn, fresh, onOpenAg
       {roster.map((a) => {
         const name = agentName(a, locale)
         return <span key={a.slug} className="ob3-member" data-agent={a.slug} title={agentDescription(a, t) || undefined}>
-          <span className="ob3-av">{avatars[a.slug] ? <img src={avatars[a.slug]} alt="" width={24} height={24} /> : initial(name)}</span>{name}
+          <span className="ob3-av"><AgentAvatar name={name} url={avatars[a.slug]} siblings={rosterNames} size={24} fill /></span>{name}
           {a.slug === defaultSlug && <em className="ob3-tag">{t('ob3.roster.default')}</em>}
           {a.disabled && <em className="ob3-tag">{t('ob3.roster.off')}</em>}
         </span>
       })}
       <span className="ob3-member" data-agent="historian" title={t('ob3.historian.desc')}>
-        <span className="ob3-av">{initial(t('ob3.historian.name'))}</span>{t('ob3.historian.name')}<em className="ob3-tag">{t('ob3.roster.background')}</em>
+        <span className="ob3-av"><AgentAvatar name={t('ob3.historian.name')} siblings={rosterNames} fill /></span>{t('ob3.historian.name')}<em className="ob3-tag">{t('ob3.roster.background')}</em>
         {config?.historian?.enabled === false && <em className="ob3-tag">{t('ob3.roster.off')}</em>}
       </span>
       <button type="button" className="ob3-link ob3-manage" data-ob-manage="" aria-pressed={agentsQueued}

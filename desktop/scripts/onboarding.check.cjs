@@ -101,6 +101,9 @@ async function main() {
     /** 量这一屏:底栏在窗口里、没有横向溢出;mustFit = 这一屏在这个尺寸下不许要滚。 */
     async function geometry(name, { mustFit = false, screenshot = true } = {}) {
       await win.waitForTimeout(300)
+      // 换屏动效(新屏滑进、旧屏替身滑出)放完再量:translate 会算进位置,替身也会让 .ob3-main 找到两个
+      await win.waitForFunction(() => !document.querySelector('.ob3-main[data-lcl-exit]') && !document.getAnimations().some((a) => a.playState === 'running'
+        && a.effect?.getComputedTiming?.().iterations !== Infinity && a.effect?.target?.closest?.('.ob3-main')), null, { timeout: 5000 })
       const state = await win.evaluate(() => {
         const shell = document.querySelector('.ob-flow'), main = document.querySelector('.ob3-main'), foot = document.querySelector('.ob3-foot')
         const r = foot.getBoundingClientRect()
@@ -125,17 +128,20 @@ async function main() {
     const stepNow = () => win.locator('.ob-flow').getAttribute('data-step')
     /** 每次重载都会重放开屏(#tangu-splash 盖在最上面):等它退掉再量 / 截图,否则截到的是开屏。 */
     const settle = () => win.waitForFunction(() => !document.getElementById('tangu-splash'), null, { timeout: 30000 })
+    /** 换屏时旧屏留一个替身滑出(带 data-lcl-exit,约 150ms):等它摘掉,不然按 data-* 找的严格选择器会找到两个。 */
+    const noGhost = () => win.waitForFunction(() => !document.querySelector('.ob3-main[data-lcl-exit]'), null, { timeout: 5000 })
     async function next() {
       const previous = await stepNow()
       await win.locator('[data-ob-primary]').click()
       await win.waitForFunction((step) => document.querySelector('.ob-flow')?.getAttribute('data-step') !== step, previous)
+      await noGhost()
     }
     /** 每屏等它的数据读回来再量:量「读取中」的空态会假绿。 */
     const ready = {
       start: () => win.waitForSelector('[data-ob-channels]'),
       theme: () => win.waitForSelector('.ob3-styles'),
       you: () => win.waitForSelector('[data-ob-you] textarea:not([disabled])'),
-      team: async () => { await win.waitForSelector('[data-ob-muse] select:not([disabled])'); await win.waitForSelector('[data-agent="coder"]') },
+      team: async () => { await win.waitForSelector('[data-ob-muse-model] .model-select-btn:not([disabled])'); await win.waitForSelector('[data-agent="coder"]') },
     }
     async function fresh() {
       await win.evaluate(() => { localStorage.removeItem('forsion_tangu_onboarding_done'); localStorage.removeItem('forsion_tangu_onboarding_version') })
@@ -193,6 +199,16 @@ async function main() {
 
     // ② 中文 1280×800 真走一遍,核对写进去的东西
     await setLocale('zh'); await size(1280, 800); await fresh()
+    // 换屏有动效:继续 = 新屏从右滑进、旧屏替身往左滑出;返回反过来(真跑的 CSS 动画,用 animationstart 记下来)
+    await win.evaluate(() => { window.__obAnims = []; document.addEventListener('animationstart', (e) => window.__obAnims.push(e.animationName), true) })
+    await next(); await ready.theme()
+    await win.locator('.ob3-back').click(); await win.waitForSelector('.ob-flow[data-step="start"]'); await ready.start(); await noGhost()
+    // animationstart 在下一帧才派发:等它到齐再断言(到不齐 = 没动)
+    const animNames = ['ob3-in-fwd', 'ob3-out-fwd', 'ob3-in-back', 'ob3-out-back']
+    await win.waitForFunction((names) => names.every((n) => window.__obAnims.includes(n)), animNames, { timeout: 3000 }).catch(() => {})
+    const anims = await win.evaluate(() => window.__obAnims)
+    for (const name of animNames) assert(anims.includes(name), `screen change animates (${name}): ${anims.join(', ')}`)
+    console.log('PASS screen changes slide: Continue forwards, Back backwards, the old screen slides out')
     assert.equal(await win.locator('[data-ob-title]').innerText(), '欢迎使用 Forsion')
     assert.equal(await win.locator('[data-ob-account]').count() + await win.locator('[data-ob-channels]').count() >= 1, true)
     assert.match(await win.locator('[data-ob-primary]').innerText(), /先不接/)
@@ -207,11 +223,18 @@ async function main() {
     assert(museText.includes('卜算子') && !museText.includes('Muse'), `Muse shows one name by UI language: ${museText.slice(0, 80)}`)
     // 没登录:模型行显示引擎实际会用的默认模型(桩的 defaultModelId = 第一个),不黄底、不替用户写
     assert.equal(await win.locator('[data-ob-muse-model].need').count(), 0, 'signed out with a default model: no pick is demanded')
-    assert.match(await win.locator('[data-ob-muse-model] select option').first().innerText(), /GPT-6 Luna · 默认/)
+    assert.match(await win.locator('[data-ob-muse-model] .model-select-btn').innerText(), /GPT-6 Luna · 默认/)
+    assert.equal(await win.locator('[data-ob-muse-avatar] svg').count(), 0, 'Muse shows its own avatar, not a star icon')
     // 名单一行只介绍,没有开关;主动程度不问
     assert.equal(await win.locator('[data-ob-roster] [role="switch"]').count(), 0, 'the roster has no switches')
     assert.equal(await win.locator('[data-ob-muse] .ob3-q').count(), 2, 'two questions')
-    await win.locator('[data-ob-muse-model] select').selectOption('local/qwen')
+    // 模型行是设置页那个分组选择器:菜单 portal 到 body,引导开着时菜单层抬到引导上面(点得到 = 没被盖住)
+    await win.locator('[data-ob-muse-model] .model-select-btn').click()
+    await win.waitForSelector('.composer-menu--anchored')
+    assert((await win.locator('.composer-menu--anchored .menu-source').count()) >= 1, 'model menu is grouped (Forsion / direct)')
+    await win.waitForTimeout(300) // 菜单进场淡入放完再拍
+    await win.screenshot({ path: path.join(OUT, 'zh-team-model-menu.png') })
+    await win.locator('.composer-menu--anchored .menu-item', { has: win.locator('.grow', { hasText: /^Qwen local$/ }) }).click()
     await win.locator('[data-ob-muse] .ob3-pill', { hasText: '学习' }).click()
     if (historyOffered) {
       assert.match(await win.locator('[data-ob-ch-example]').innerText(), /开了之后，比如/)
@@ -249,7 +272,7 @@ async function main() {
     // ③ 英文深色、窄窗、110% 缩放(用户实际用的缩放)
     await setLocale('en'); await size(1024, 720); await fresh()
     await next(); await ready.theme()
-    await win.locator('.ob3-seg button').nth(1).click()
+    await win.locator('[data-ob-mode] [role="tab"]').nth(1).click()
     await geometry('en-dark-theme')
     await size(390, 844); await geometry('en-narrow-theme'); await size(1024, 720)
     await next(); await ready.you(); await size(390, 844); await geometry('en-narrow-you'); await size(1024, 720)
@@ -260,7 +283,7 @@ async function main() {
     await size(390, 844); await geometry('en-narrow-team')
     await size(900, 640); await zoom(1.1); await geometry('en-dark-zoom110-team')
     await zoom(1); await size(1024, 720)
-    await win.locator('.ob3-dots button').first().click(); await ready.start()
+    await win.locator('.ob3-dots button').first().click(); await ready.start(); await noGhost()
     await geometry('en-dark-start')
     await size(390, 844); await geometry('en-narrow-start'); await size(1024, 720)
     // 跳过引导不写这一屏

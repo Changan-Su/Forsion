@@ -49,6 +49,8 @@ registerMessages({
   'ob3.key.getKey': { zh: '去 {name} 拿 Key', en: 'Get a key from {name}' },
   'ob3.key.advanced': { zh: '高级：连接名、接口地址、模型白名单（选了哪家就已经填好）', en: 'Advanced: connection name, endpoint and model allowlist (already filled in)' },
   'ob3.key.listFailed': { zh: '读不到这台电脑上已有的连接，先不按预设保存（免得盖掉同名的那条）；可以点「自己填…」自己起名', en: 'Couldn’t read the connections already on this computer, so presets can’t be saved (that could replace one with the same name). Use Custom… and name it yourself' },
+  'ob3.sync.beta': { zh: 'Beta 测试', en: 'Beta' },
+  'ob3.sync.betaHint': { zh: '测试中的功能，默认不开，想试再勾', en: 'Still in testing. Off unless you tick it' },
   'ob3.sync.agentsWhere': { zh: '哪些 Agent 跨设备，以后在 蓬洲云 › 同步 里逐个选', en: 'Choose which agents sync across devices later, one by one, in Penzor Cloud › Sync' },
   'ob3.channels.noExt': { zh: '这台 Forsion 没装 Forsion Extend：没有账号登录，也不发任何统计', en: 'Forsion Extend isn’t installed here, so there’s no account sign-in and nothing is sent' },
 
