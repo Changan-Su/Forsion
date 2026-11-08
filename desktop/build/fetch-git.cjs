@@ -20,7 +20,7 @@
  *    GitHub 发行资产。也没选整份 PortableGit:7z 自解压包 bsdtar 解不开,解开 360MB。
  *    许可同 MinGit 本就带的那些 MSYS2 程序(bash / coreutils 为 GPLv3,unzip 的许可原文一并带上),SOURCE.txt 写明来源。
  */
-const { chmodSync, closeSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, rmSync, statSync, writeFileSync } = require('node:fs');
+const { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } = require('node:fs');
 const { execFileSync, spawnSync } = require('node:child_process');
 const os = require('node:os');
 const path = require('node:path');
@@ -47,13 +47,10 @@ function sourceFor(platformName, archName) {
 const gitBin = (root, platformName = process.platform) =>
   platformName === 'win32' ? path.join(root, 'cmd', 'git.exe') : path.join(root, 'bin', 'git');
 
-/** 外部命令一律限时:卡死比报错更糟(11-08 Windows 打包在 tar 上一挂二十分钟,job 缺省 360 分钟才超时)。 */
-const STEP_TIMEOUT_MS = 5 * 60_000;
-
 async function download(url) {
   for (let i = 0; ; i++) {
     try {
-      const r = await fetch(url, { headers: { 'User-Agent': 'tangu-build' }, signal: AbortSignal.timeout(STEP_TIMEOUT_MS) });
+      const r = await fetch(url, { headers: { 'User-Agent': 'tangu-build' } });
       if (!r.ok) throw new Error(`下载 HTTP ${r.status} @ ${url}`);
       return Buffer.from(await r.arrayBuffer());
     } catch (e) { if (i >= 3) throw e; await sleep(1500 * (i + 1)); }
@@ -144,50 +141,6 @@ const bashMembers = () => [...BASH_TOOLS.map((t) => `usr/bin/${t}.exe`), ...BASH
  *  Windows 命令行转义 / MSYS 自己的通配展开在这里就能现形。改一边必须改另一边。 */
 const BASH_EVAL = ['-c', '__tangu_cmd=$TANGU_RUN_BASH_COMMAND; unset TANGU_RUN_BASH_COMMAND; eval "$__tangu_cmd"'];
 
-/**
- * Windows 上 System32\tar.exe(bsdtar 3.8.9,windows-2022 runner 实测)编译时**没带 bzip2**,`-xjf` 会改走外部 `bzip2 -d`
- * 经管道喂数据 —— 那条管道在 Windows 上报 `bzip2: Invalid argument` 后**永远挂住**(11-08 CI 探针实测,System32 与 PATH 上
- * 的 tar 都一样,180 秒限时内无产出)。所以先用 bzip2 把整包解成普通 .tar **写文件**(不经 libarchive 的管道),再让 tar 按名字取。
- * bzip2 取 PATH 上的,找不到再看 git.exe 旁边 Git for Windows 自带的 usr\bin\bzip2.exe。
- */
-function findBzip2() {
-  const pathKey = Object.keys(process.env).find((k) => k.toUpperCase() === 'PATH') || 'PATH';
-  const dirs = (process.env[pathKey] || '').split(path.delimiter).filter(Boolean);
-  for (const d of dirs) {
-    const p = path.join(d, 'bzip2.exe');
-    if (existsSync(p)) return p;
-  }
-  for (const d of dirs) {
-    if (!existsSync(path.join(d, 'git.exe'))) continue;
-    const p = path.join(d, '..', 'usr', 'bin', 'bzip2.exe'); // <Git>\cmd 或 <Git>\bin → <Git>\usr\bin
-    if (existsSync(p)) return path.resolve(p);
-  }
-  throw new Error('[fetch-git] 找不到 bzip2.exe(Git for Windows 自带一份):Windows 的 tar 不能自己解 .tar.bz2');
-}
-
-/** 按名字从 .tar.bz2 里取文件。Windows 先解成 .tar 文件再取(原因见 findBzip2);其他平台的 bsdtar / GNU tar 自带 bzip2。 */
-function extractBz2Members(archive, out, members) {
-  const t0 = Date.now();
-  if (process.platform === 'win32') {
-    const bzip2 = findBzip2();
-    const tarFile = archive.replace(/\.bz2$/, '');
-    const fd = openSync(tarFile, 'w');
-    try {
-      const r = spawnSync(bzip2, ['-dc', archive], { stdio: ['ignore', fd, 'inherit'], timeout: STEP_TIMEOUT_MS, windowsHide: true });
-      if (r.error) throw new Error(`[fetch-git] ${bzip2} 起不来: ${r.error.message}`);
-      if (r.status !== 0) throw new Error(`[fetch-git] ${bzip2} -dc → ${r.status}${r.signal ? ` (${r.signal})` : ''}`);
-    } finally {
-      closeSync(fd);
-    }
-    const tar = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe');
-    console.log(`[fetch-git] ${path.basename(archive)} → .tar ${(statSync(tarFile).size / 1e6).toFixed(0)} MB (${bzip2}, ${((Date.now() - t0) / 1000).toFixed(1)}s)`);
-    execFileSync(tar, ['-xf', tarFile, '-C', out, ...members], { stdio: 'inherit', timeout: STEP_TIMEOUT_MS, windowsHide: true });
-  } else {
-    execFileSync('tar', ['-xjf', archive, '-C', out, ...members], { stdio: 'inherit', timeout: STEP_TIMEOUT_MS });
-  }
-  console.log(`[fetch-git] 取出 ${members.length} 个文件 (${((Date.now() - t0) / 1000).toFixed(1)}s)`);
-}
-
 /** Windows:sh.exe → bash.exe,再从同版本完整包里解出 BASH_TOOLS。下载 / 解压失败按 git 同一口径(必需时抛)。 */
 async function addBash(dest, platformName, archName) {
   const usrBin = path.join(dest, 'usr', 'bin');
@@ -196,16 +149,14 @@ async function addBash(dest, platformName, archName) {
   copyFileSync(sh, path.join(usrBin, 'bash.exe'));
   const item = pinnedRuntime('gitbash', platformName, archName);
   console.log(`[fetch-git] bash 小工具 ← ${item.name}`);
-  const t0 = Date.now();
   const buf = verifyArchive(await download(item.url), item);
-  console.log(`[fetch-git] 下载 ${(buf.length / 1e6).toFixed(1)} MB (${((Date.now() - t0) / 1000).toFixed(1)}s)`);
   const tmp = mkdtempSync(path.join(os.tmpdir(), 'forsion-gitbash-'));
   try {
     const archive = path.join(tmp, item.name);
     writeFileSync(archive, buf);
     const out = path.join(tmp, 'x');
     mkdirSync(out);
-    extractBz2Members(archive, out, bashMembers());
+    execFileSync('tar', ['-xjf', archive, '-C', out, ...bashMembers()], { stdio: 'inherit' });
     for (const rel of bashMembers()) {
       const from = path.join(out, rel);
       const to = path.join(dest, rel);
@@ -272,7 +223,7 @@ async function fetchGit({ platformName, archName }) {
     rmSync(dest, { recursive: true, force: true });
     mkdirSync(dest, { recursive: true });
     // 两种包都没有顶层目录,直接解进 dest;tar 同时认 gzip 与 zip(Windows runner 的 bsdtar)。
-    execFileSync('tar', ['-xf', tmp, '-C', dest], { stdio: 'inherit', timeout: STEP_TIMEOUT_MS });
+    execFileSync('tar', ['-xf', tmp, '-C', dest], { stdio: 'inherit' });
     rmSync(tmp, { force: true });
     if (platformName === 'darwin') {
       slimDarwin(dest);
