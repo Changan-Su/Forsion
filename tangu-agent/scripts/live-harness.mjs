@@ -7632,19 +7632,21 @@ Then reply with only the command output.`,
       //    卜算子能改的只有 space.json 里那句话 / 备好的 / 提议,改法是 muse_space update —— 不再写 main.js。
       //    判据看引擎合成后的布局(GET /muse/space,宿主就读这条),不看模型自述;每轮是一个新 run,「每轮那句话改一次」的限额不挡第二轮。
       const heroNow = () => api('/agent/special/muse/space').then((x) => String(x?.view?.hero?.text || '')).catch(() => '');
+      const spaceDir = join(home, 'agents', 'muse', 'Space');
+      const mainJs = () => { try { return readFileSync(join(spaceDir, 'main.js'), 'utf8'); } catch { return null; } };
+      const mainBefore = mainJs(); // 同一次台架里先跑 muse 的话,那边播了一份旧 main.js:判「这两轮没新建 / 没改它」,不判「盘上没有」
       const c = await run(sid, '把今日简报最上面那句话改成「晚上好」吧。', 300_000);
       const heroSet = /晚上好/.test(await heroNow());
       const d = await run(sid, '把那句话改成「早上好」。', 300_000);
       const edited = d.toolCalls.includes('muse_space');
       const heroAgain = /早上好/.test(await heroNow());
-      const spaceDir = join(home, 'agents', 'muse', 'Space');
-      const noMainJs = !existsSync(join(spaceDir, 'main.js'));
+      const noMainJs = mainJs() === mainBefore;
       const cycles = (Number((await api('/agent/special/muse/status').then((x) => (x && typeof x.status === 'object' ? x.status : x)))?.lastCycleAt) || 0) !== cycleAt0;
       writeFileSync(join(OUT, 'musechat-evidence.json'), JSON.stringify({ systemPromptHasChatSection: sys.includes('## Talking with the user'), toldTools: a.toolArgs, toldReply: a.content, askedTools: b.toolArgs, askedReply: b.content, spaceTools: c.toolArgs, spaceReply: c.content, editTools: d.toolArgs, editReply: d.content, heroSet, heroAgain, noMainJs, spaceApprovals: c.approvals, spaceDoc: (() => { try { return readFileSync(join(spaceDir, 'space.json'), 'utf8'); } catch { return null; } })(), museFiles: museText() }, null, 2));
       return { ok: bound && saved && heroSet && (heroAgain || !edited) && noMainJs && !a.error && !b.error && !c.error && !d.error && !cycles,
         detail: `私聊绑到 Muse 且带聊天段:${bound ? '是' : '否'};交代后 Muse 的记忆 / 日志 / 共享画像里${saved ? '有' : '没有'}「${TOPIC}」(交代那轮调了 ${a.toolCalls.join(',') || '无工具'});` +
           `问后台做了什么:${lookedBack ? '读了自己的日志 / Journal' : '没读日志(不计红)'}(调了 ${b.toolCalls.join(',') || '无工具'});` +
-          `让它改简报那句话:${heroSet ? '布局里已是「晚上好」' : '布局里没变成「晚上好」'}(调了 ${c.toolCalls.join(',') || '无工具'},审批 ${c.approvals} 次);再改一次(调了 ${d.toolCalls.join(',') || '无工具'}):${!edited ? '它没调 muse_space(不判)' : heroAgain ? '已是「早上好」' : '没变成「早上好」'};Space 里${noMainJs ? '没有' : '⚠️ 写出了'} main.js;期间起了周期:${cycles ? '是(不该起)' : '否'}` +
+          `让它改简报那句话:${heroSet ? '布局里已是「晚上好」' : '布局里没变成「晚上好」'}(调了 ${c.toolCalls.join(',') || '无工具'},审批 ${c.approvals} 次);再改一次(调了 ${d.toolCalls.join(',') || '无工具'}):${!edited ? '它没调 muse_space(不判)' : heroAgain ? '已是「早上好」' : '没变成「早上好」'};这两轮${noMainJs ? '没碰' : '⚠️ 新建 / 改了'} main.js;期间起了周期:${cycles ? '是(不该起)' : '否'}` +
           `${a.error ? `;交代那轮出错 ${a.error}` : ''}${b.error ? `;提问那轮出错 ${b.error}` : ''}${c.error ? `;改简报那轮出错 ${c.error}` : ''}${d.error ? `;再改那轮出错 ${d.error}` : ''}`,
         output: `【交代】\n${a.content || '(无)'}\n\n【问后台做了什么】\n${b.content || '(无)'}\n\n【改简报】\n${c.content || '(无)'}\n\n【再改】\n${d.content || '(无)'}` };
     } finally {
