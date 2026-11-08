@@ -26,7 +26,7 @@ import {
 import { Check, ChevronLeft, ChevronRight, MoreHorizontal, RotateCcw, ZoomIn, ZoomOut } from 'lucide-react'
 import { Button } from '@astryxdesign/core/Button'
 import { DropdownMenu, DropdownMenuItem } from '@astryxdesign/core/DropdownMenu'
-import { zoomOf, UI_MODE, useViewModes, ViewModeSwitch } from '@lcl/engine'
+import { zoomOf, UI_MODE, UI_ZOOM_EVENT, useClampedMenu, useViewModes, ViewModeSwitch } from '@lcl/engine'
 import { AstryxScope } from '../theme/astryxBridge'
 import { parseCalDate } from '@amadeus-shared/db/calDate'
 import { usePageStore } from '../amadeus/store/pageStore'
@@ -328,6 +328,19 @@ export function CalendarView({ leafId }: { leafId?: string } = {}) {
       }
     }
   }
+  // 端级 zoom 改了,事件块的视口位置跟着变:按事件块重新量一次锚点(卡片的落位本身由 useCardPlacement 按真实尺寸重算)。
+  const cardKey = card?.key
+  useEffect(() => {
+    if (!cardKey) return
+    const remeasure = (): void => {
+      const node = rootRef.current?.querySelector<HTMLElement>(`[data-key="${CSS.escape(cardKey)}"]`)
+      if (!node) return
+      const r = node.getBoundingClientRect()
+      setCard((c) => (c && c.key === cardKey ? { ...c, at: { left: r.left, top: r.top, right: r.right, bottom: r.bottom, zoom: zoomOf(node) || 1 } } : c))
+    }
+    window.addEventListener(UI_ZOOM_EVENT, remeasure)
+    return () => window.removeEventListener(UI_ZOOM_EVENT, remeasure)
+  }, [cardKey])
   // 事件流一变:等着的新行到了就高亮;高亮的那条换成最新对象,被删了就清掉。
   useEffect(() => {
     const nav = useCalendarNav.getState()
@@ -1722,10 +1735,9 @@ function DayAgendaPopover({
   const { t } = useI18n()
   const width = 292
   const zoom = at.zoom || 1
-  const margin = 12 * zoom
-  const left = Math.max(margin, Math.min(at.left, window.innerWidth - width * zoom - margin)) / zoom
-  const top = Math.max(margin, Math.min(at.bottom + 6 * zoom, window.innerHeight - 356 * zoom - margin)) / zoom
-  const dialogRef = useRef<HTMLElement>(null)
+  // 落位量卡片真实高度:先放日期格下方,放不下翻到格子上方(不再按固定卡高估);随内容 / 缩放重算。
+  const place = useClampedMenu(at.left, at.bottom + 6 * zoom, { anchorTop: at.top - 6 * zoom, margin: 12 * zoom })
+  const dialogRef = place.ref
   const onCloseRef = useRef(onClose)
   onCloseRef.current = onClose
   useEffect(() => {
@@ -1741,13 +1753,13 @@ function DayAgendaPopover({
   }, [])
   return (
     <div className="amx-cal-agenda-overlay" onMouseDown={onClose}>
-      <section
+      <div
         className="amx-cal-agenda"
         ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-label={t('calview.a11yDayEvents', { m: day.getMonth() + 1, d: day.getDate() })}
-        style={{ left, top, width }}
+        style={{ ...place.style, width }}
         onMouseDown={(e) => e.stopPropagation()}
       >
         <header>
@@ -1762,7 +1774,7 @@ function DayAgendaPopover({
             </button>
           ))}
         </div>
-      </section>
+      </div>
     </div>
   )
 }

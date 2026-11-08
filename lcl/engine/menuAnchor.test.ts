@@ -27,6 +27,11 @@ describe('clampMenu', () => {
     // 光标行 top=690 bottom=706:下方放不下 → top=690-300=390
     expect(clampMenu(100, 706, 200, 300, 1000, 800, { anchorTop: 690 }).top).toBe(390)
   })
+  it('flip:false(侧卡)→ 不翻到锚点上方,只把整张往上推回视口', () => {
+    // y=700 放不下:翻面会得 400(卡片底贴锚点顶);不翻面则夹到 800-300-8=492
+    expect(clampMenu(100, 700, 200, 300, 1000, 800, { flip: false }).top).toBe(492)
+    expect(clampMenu(100, 100, 200, 300, 1000, 800, { flip: false }).top).toBe(100)
+  })
   it('上下都放不下(菜单比视口还高)→ 顶到上边距,配合 CSS overflow 滚动', () => {
     expect(clampMenu(100, 700, 200, 900, 1000, 800).top).toBe(8)
   })

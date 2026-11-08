@@ -1215,6 +1215,7 @@ button.t2-bg-url:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.
 /* 向上弹的清单:浮层材质照 .ctx-menu,但不借它的类(它的 button 规则会把行里的停止钮撑满) */
 .t2-bgpop {
   position: fixed; z-index: 100; width: 340px; max-width: calc(100vw - 32px); box-sizing: border-box; padding: 8px 10px 8px;
+  overflow-y: auto; /* left / top / max-height 由 followAnchor 写:窗口矮到上下都放不下时封顶,在这里滚 */
   background: var(--bg-card, var(--bg)); border: var(--border-width, 1px) solid var(--border);
   border-radius: var(--radius-md, 12px); box-shadow: var(--card-shadow);
   font-size: var(--ui-font-meta, 12px); color: var(--text);

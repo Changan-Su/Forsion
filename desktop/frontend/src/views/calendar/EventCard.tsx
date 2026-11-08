@@ -8,10 +8,10 @@
  *    刻意不套 astryx Card/Scope —— 那会把整卡盖成 astryx 中性灰、与 app 暖色主题不搭。
  *  ponytail: 时间仍用原生 date/time 输入编辑(点击展开),未做参考图那种内联时间胶囊编辑器;
  *  select 值显示为中性胶囊,无每选项配色(schema 的 options 是纯字符串,无色)。 */
-import { useEffect, useRef, useState, type ReactElement, type RefObject, type SVGProps, type ReactNode, type MouseEvent } from 'react'
+import { useEffect, useRef, useState, type CSSProperties, type ReactElement, type RefObject, type SVGProps, type ReactNode, type MouseEvent } from 'react'
 import { HUMAN_CAL } from '../../amadeus/store/humanCalendarIo'
 import { ExternalLink, MoreHorizontal, ChevronUp } from 'lucide-react'
-import { UI_MODE, useExitGhost, useNativeChromeClaim } from '@lcl/engine'
+import { UI_MODE, useClampedMenu, useExitGhost, useNativeChromeClaim } from '@lcl/engine'
 import { coerceForDisplay, type CellValue, type DbColumn } from '@amadeus-shared/db/schema'
 import { CalDateFields } from '../../amadeus/blocks/database/propertyTypes.builtins'
 import { getPropertyType, isStamped, resolveBaseType } from '../../amadeus/blocks/database/propertyTypes'
@@ -57,19 +57,26 @@ export interface CardTarget {
   color?: string
 }
 
-/** 卡片落点:默认贴锚点右侧,放不下就翻到左侧。maxRight = 右边界(视口像素;缺省窗口右缘)——
- *  日历传主区右缘,卡片翻到事件左边,而不是盖住右栏的待办。 */
-export function cardPos(at: Anchor, { w = 360, h = 380, maxRight }: { w?: number; h?: number; maxRight?: number } = {}): { left: number; top: number; width?: number } {
+/** 卡片横向落点(视口 px):默认贴锚点右侧,放不下就翻到左侧。maxRight = 右边界(视口像素;缺省窗口右缘)——
+ *  日历传主区右缘,卡片翻到事件左边,而不是盖住右栏的待办。卡片宽是定的(CSS / w),横向不用量。 */
+export function cardX(at: Anchor, { w = 360, maxRight }: { w?: number; maxRight?: number } = {}): { x: number; width?: number } {
   const zoom = at.zoom || 1
   // 窗口比卡片还窄(Mini 窗 320px):卡片收窄到窗口宽减两侧边距,不越出窗口。
   const W = Math.min(w, window.innerWidth / zoom - 16)
-  const H = h
   const margin = 8 * zoom
   let left = at.right + margin
   if (left + W * zoom > (maxRight ?? window.innerWidth)) left = Math.max(margin, at.left - W * zoom - margin)
-  const top = Math.max(margin, Math.min(at.top, window.innerHeight - H * zoom - margin))
-  // body 使用 CSS zoom 时，fixed 的 left/top 仍是元素自身的 CSS 像素；锚点则来自视口像素。
-  return { left: left / zoom, top: top / zoom, ...(W < w ? { width: W } : {}) }
+  return { x: left, ...(W < w ? { width: W } : {}) }
+}
+
+/** 侧旁卡片的整套落位:横向见 cardX;纵向顶边对齐锚点,太靠下就整张往上推回窗口(flip:false,不翻到锚点上方)。
+ *  高度量卡片真实尺寸、随内容长高 / 缩放 / 滚动重算(useClampedMenu),不按固定卡高估。
+ *  返回的 ref 只挂在要落位的那张卡上;手机抽屉不挂(它靠 CSS 吸底,内联 left / top 会把它拽走)。 */
+export function useCardPlacement(at: Anchor | null, opts: { w?: number; maxRight?: number } = {}): { ref: RefObject<HTMLDivElement | null>; style: CSSProperties } {
+  const h = at ? cardX(at, opts) : { x: 0 }
+  const zoom = at?.zoom || 1
+  const p = useClampedMenu(h.x, at?.top ?? 0, { flip: false, margin: 8 * zoom })
+  return { ref: p.ref, style: h.width ? { ...p.style, width: h.width } : p.style }
 }
 
 /** 属性行的类型图标:自定义类型用注册表已声明的图标,primitive 按 baseType 取。 */
@@ -91,7 +98,7 @@ export function EventCard({ ev, at, onClose, maxRight, calendar = false, onActio
 }) {
   const { t } = useI18n()
   const mobile = calendar && (UI_MODE === 'mobile' || !!window.tangu?.mobile)
-  const pos = cardPos(at, { maxRight })
+  const place = useCardPlacement(at, { maxRight })
   const dialogRef = useRef<HTMLDivElement>(null)
   useExitGhost(dialogRef) // 关掉(卸载)时留替身放 80ms 退场(走查续八 8.4)
   const closeRef = useRef<HTMLButtonElement>(null)
@@ -134,12 +141,12 @@ export function EventCard({ ev, at, onClose, maxRight, calendar = false, onActio
     <div className={`amx-cal-cardcatch${calendar ? ' calendar' : ''}${mobile ? ' mobile' : ''}`} onMouseDown={calendar ? undefined : onClose}>
       <div
         className={`amx-cal-cardwrap${mobile ? ' amx-cal-drawer' : ''}${collapsed ? ' collapsed' : ''}`}
-        ref={dialogRef}
+        ref={(el) => { dialogRef.current = el; place.ref.current = mobile ? null : el }}
         role="dialog"
         aria-modal={calendar ? false : true}
         aria-label={t('evcard.editEvent', { title: ev.title || t('evcard.untitled') })}
         data-kb-rise={mobile ? 'bar' : undefined}
-        style={mobile ? undefined : pos}
+        style={mobile ? undefined : place.style}
         onMouseDown={(e) => e.stopPropagation()}
       >
         {mobile && <button className="amx-cal-drawer-grab" aria-label={t('evcard.expand')} onClick={onExpand} onPointerDown={(e) => { e.currentTarget.dataset.y = String(e.clientY); e.currentTarget.setPointerCapture(e.pointerId) }} onPointerUp={(e) => {
