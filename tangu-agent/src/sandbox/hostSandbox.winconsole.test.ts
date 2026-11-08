@@ -12,7 +12,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import type { ChildProcess } from 'node:child_process';
+import type { ChildProcess, SpawnOptions } from 'node:child_process';
 
 const spawnSpy = vi.hoisted(() => vi.fn());
 vi.mock('node:child_process', async (importOriginal) => {
@@ -21,19 +21,37 @@ vi.mock('node:child_process', async (importOriginal) => {
   return { ...actual, spawn: spawnSpy };
 });
 import { prepareHostCommand, spawnHostShell } from './hostSandbox.js';
+import { resetHostShellCache } from '../tools/hostShell.js';
 
 const realPlatform = process.platform;
 const asPlatform = (value: NodeJS.Platform): void => { Object.defineProperty(process, 'platform', { value }); };
-afterEach(() => { asPlatform(realPlatform); spawnSpy.mockClear(); });
+const realWinShell = process.env.TANGU_WINDOWS_SHELL;
+afterEach(() => {
+  asPlatform(realPlatform);
+  spawnSpy.mockClear();
+  if (realWinShell === undefined) delete process.env.TANGU_WINDOWS_SHELL; else process.env.TANGU_WINDOWS_SHELL = realWinShell;
+  resetHostShellCache();
+});
+// spawn(command, options) 走 cmd / sh;spawn(bash.exe, argv, options) 走 Git Bash(#466)—— 两种形状都取 options
+const lastSpawnOptions = (): SpawnOptions => {
+  const call = spawnSpy.mock.lastCall ?? [];
+  return (Array.isArray(call[1]) ? call[2] : call[1]) as SpawnOptions;
+};
 
 describe('agent 子进程在 Windows 上不弹控制台窗口', () => {
   it('win32:不 detached + windowsHide 成对;POSIX 仍 detached', () => {
     const fake = { once: () => fake, on: () => fake } as unknown as ChildProcess;
-    for (const [platform, detached] of [['win32', false], ['linux', true]] as const) {
+    // win32 两条路都要成对:强制 cmd 那条处处可测;不强制时在装了 Git Bash 的 Windows(CI 的 windows-2022)上走 bash 那条。
+    for (const [platform, detached, winShell] of [['win32', false, 'cmd'], ['win32', false, undefined], ['linux', true, undefined]] as const) {
       asPlatform(platform);
+      if (winShell) process.env.TANGU_WINDOWS_SHELL = winShell; else delete process.env.TANGU_WINDOWS_SHELL;
+      resetHostShellCache();
+      const label = `run_bash on ${platform}${winShell ? ` (${winShell})` : ''}`;
       spawnSpy.mockReturnValueOnce(fake);
       spawnHostShell({ cwd: os.tmpdir() }, 'echo hi');
-      expect(spawnSpy.mock.lastCall?.[1], `run_bash on ${platform}`).toMatchObject({ shell: true, detached, windowsHide: true });
+      const options = lastSpawnOptions();
+      expect(options, label).toMatchObject({ windowsHide: true });
+      expect(Boolean(options.detached), label).toBe(detached);
       expect(prepareHostCommand({ cwd: os.tmpdir() }, ['x']).options, `argv on ${platform}`).toMatchObject({ detached, windowsHide: true });
     }
   });

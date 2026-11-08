@@ -16,7 +16,8 @@ vi.mock('@lcl/engine', () => ({
   runNativeSheetMenu: async (menu: any) => { if (!engine.presenter) return false; engine.presented.push(menu); return true },
   accountMenuRows: () => engine.rows,
 }))
-vi.mock('../achievements/store', () => ({ track: vi.fn() }))
+// 只换掉 track;其余照真的(hostTips → guideTips 在模块顶层订 useAchievements)
+vi.mock('../achievements/store', async (importOriginal) => ({ ...(await importOriginal<typeof import('../achievements/store')>()), track: vi.fn() }))
 const { AccountCard } = await import('./AccountCard')
 const { LocaleProvider } = await import('../i18n')
 const { usePluginStore } = await import('../amadeus/plugins/pluginStore')
