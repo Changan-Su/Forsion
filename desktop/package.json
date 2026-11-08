@@ -216,6 +216,7 @@
     "check:boot": "node scripts/boot-replay.check.cjs",
     "shot:dashgrid": "node scripts/e2e-editor.cjs --check=dashgrid --shot",
     "check:overlay": "node scripts/overlay-zoom.check.cjs",
+    "check:followanchor": "node scripts/follow-anchor.check.cjs",
     "check:leadicon": "node scripts/t2s-lead-icon.check.cjs",
     "check:tasksummary": "node scripts/task-summary.check.cjs",
     "check:plancard": "node scripts/plan-card.check.cjs",

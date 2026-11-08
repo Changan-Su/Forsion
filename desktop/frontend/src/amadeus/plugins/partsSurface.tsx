@@ -6,7 +6,7 @@
 import { useEffect, useRef, useState, type ReactElement } from 'react'
 import { createPortal } from 'react-dom'
 import { ChevronDown, Check } from 'lucide-react'
-import { removeOverlayWithExit, OverlayAt, ViewModeSwitch, clampMenu, nativeSheetPresenter, presentNativeConfirm, runNativeSheetMenu, zoomOf, UI_ZOOM_EVENT } from '@lcl/engine'
+import { removeOverlayWithExit, OverlayAt, ViewModeSwitch, followAnchor, nativeSheetPresenter, presentNativeConfirm, runNativeSheetMenu } from '@lcl/engine'
 import { mountHostReact } from '@lcl/components'
 import { HostLocaleProvider, registerMessages, subscribeLocale, translate, useI18n } from '../../i18n'
 import { EmptyState } from '../../components/EmptyState'
@@ -295,27 +295,23 @@ export function openPluginPopover(anchor: HTMLElement, opts: PluginPopoverOption
   overlayLayer(anchor).append(el)
   let open = true
   let cleanup: unknown
+  let stop: (() => void) | null = null
+  // 落位交给引擎的 followAnchor:内容晚到(插件自己的框架异步渲染)、窗口 / 端级缩放、滚动都重算,
+  // 两侧都放不下时把 maxHeight 封顶到空间大的那侧 —— 弹出层恒在窗口内,超高的内容在里面滚。
   const place = (): void => {
     if (!open) return
-    const r = anchor.getBoundingClientRect(), z = zoomOf(el)
-    const end = opts.align === 'end'
-    const v = clampMenu(end ? r.right : r.left, r.bottom + 4, el.offsetWidth * z, el.offsetHeight * z, window.innerWidth, window.innerHeight,
-      { anchorTop: r.top - 4, prefer: opts.side === 'top' ? 'above' : 'below', alignEnd: end })
-    el.style.left = `${v.left / z}px`
-    el.style.top = `${v.top / z}px`
+    stop?.()
+    stop = followAnchor(el, anchor, { prefer: opts.side === 'top' ? 'above' : 'below', alignEnd: opts.align === 'end' })
     el.style.visibility = ''
   }
-  const ro = new ResizeObserver(place)
   const close = (): void => {
     if (!open) return
     open = false
     if (currentPop === close) currentPop = null
-    ro.disconnect()
+    stop?.()
     document.removeEventListener('pointerdown', onDown, true)
     document.removeEventListener('keydown', onKey, true)
     window.removeEventListener('blur', onBlur)
-    window.removeEventListener('resize', place)
-    window.removeEventListener(UI_ZOOM_EVENT, place)
     runCleanup(cleanup)
     removeOverlayWithExit(el)
     onClosed()
@@ -335,11 +331,8 @@ export function openPluginPopover(anchor: HTMLElement, opts: PluginPopoverOption
   document.addEventListener('pointerdown', onDown, true)
   document.addEventListener('keydown', onKey, true)
   window.addEventListener('blur', onBlur)
-  window.addEventListener('resize', place)
-  window.addEventListener(UI_ZOOM_EVENT, place)
   currentPop = close
   cleanup = guard(() => opts.mount(el))
-  ro.observe(el)
   place()
   return { update: place, close }
 }
