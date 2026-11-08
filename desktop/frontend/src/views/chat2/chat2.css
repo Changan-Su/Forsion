@@ -1200,6 +1200,12 @@ button.t2-bg-url:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.
   color: var(--text-muted); white-space: pre-wrap; overflow-wrap: anywhere;
 }
 .t2-proclog-note { padding: 0 12px 8px; font-size: var(--ui-font-meta, 12px); color: var(--text-muted); }
+
+/* 中文 Windows 的系统等宽字体可能回退到新宋体。设置里的显式选择优先。 */
+[data-platform='win'] :is(.t2-bg-cmd, .t2-proclog-cmd, .t2-proclog-out) {
+  font-family: var(--font-mono-preference, 'JetBrains Mono Variable', 'Noto Sans SC', Consolas, monospace);
+}
+
 /* 窄窗那一行:输入卡上方的小胶囊;摘要栏在场(够宽、车道没收)时藏掉,后台卡接手 */
 .t2-bgstrip { display: flex; align-items: center; gap: 4px; margin: 0 0 8px 14px; pointer-events: auto; }
 .t2-bgstrip-main {
