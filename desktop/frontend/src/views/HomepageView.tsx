@@ -824,8 +824,10 @@ export function HomepageView(_props: ViewProps) {
         </section>}
     </>
   )
-  const modes = railModes(homeW)
-  const shift = phone ? 0 : centerShift(homeW, { mode: modes.left, shown: editing || leftShown }, { mode: modes.right, shown: editing || rightShown })
+  // 编辑态两栏都算有东西(空栏要画出落点)
+  const has = { left: editing || leftShown, right: editing || rightShown }
+  const modes = railModes(homeW, has)
+  const shift = phone ? 0 : centerShift(homeW, { mode: modes.left, shown: has.left }, { mode: modes.right, shown: has.right }, modes.railW)
   const widgetEnv = { openComposer: () => openComposer(false) }
   const centerParts: readonly HomePart[] = phone ? HOME_PARTS : homeLayout.center
   const partNode = (part: HomePart): React.ReactNode => part === 'clock' ? clockNode : part === 'composer' ? composerNode : part === 'dock' ? dockNode
@@ -836,6 +838,7 @@ export function HomepageView(_props: ViewProps) {
       ref={rootRef}
       className={`hp-root${phone ? ' hp-phone' : ''}${reduceMotion ? ' hp-still' : ''}${composerFocused ? ' hp-composer-focused' : ''}${wallpaperOpen ? ' hp-layer-focused' : ''}${openFolder || organizerOpen ? ' hp-secondary-open' : ''}${editing ? ' hp-editing' : ''}`}
       data-rails={phone ? undefined : `${modes.left}-${modes.right}`}
+      style={phone ? undefined : ({ '--hp-rail-w': `${modes.railW}px` } as React.CSSProperties)}
       data-guide-owner={phone ? undefined : HOME_GUIDE_OWNER}
       data-wallpaper={photo ? 'true' : undefined}
       data-theme-preset={wallpaperPrefs.themePreset}

@@ -51,18 +51,30 @@ registerMessages({
 })
 
 // ── 三栏几何 ──
-export const RAIL_W = 256, STRIP_W = 36, EDGE = 16, GAP = 32, CENTER_W = 840
+export const RAIL_W = 256, RAIL_MIN = 216, STRIP_W = 36, EDGE = 16, GAP = 32, CENTER_W = 840
 export type RailMode = 'open' | 'strip' | 'hidden'
-/** 主页宽(不含 Ribbon)→ 两栏的样子:≥1448 三栏;≥1228 先收左栏;≥1008 两栏都收;更窄只剩中间。 */
-export function railModes(width: number): { left: RailMode; right: RailMode } {
-  const strip = (open: boolean): RailMode => (open ? 'open' : width >= 1008 ? 'strip' : 'hidden')
-  return { left: strip(width >= 1448), right: strip(width >= 1228) }
+export interface RailLayout { left: RailMode; right: RailMode; /** 展开的栏有多宽(两栏同宽) */ railW: number }
+/** 一边除了展开栏本身还要占多少:空栏只留外边;图标条 = 外边 + 36 + 缝;展开 = 外边 + 缝(栏宽另算)。 */
+const sideFixed = (mode: RailMode, has: boolean): number => (!has ? EDGE : mode === 'strip' ? EDGE + STRIP_W + GAP : EDGE + GAP)
+/** 主页宽(不含 Ribbon)+ 两栏有没有东西 → 两栏的样子。中间 840 不缩、和栏之间至少 32 不变(11-03 定的);
+ *  空栏不占地方,所以缺省摆放(左栏空)只看右栏;放不下先把栏从 256 缩到 216,还放不下才收:先收左栏成图标条,再收右栏,
+ *  两条图标条都放不下才只剩中间。门槛(两栏都有东西):≥1368 三栏(≥1448 才是 256 宽);≥1188 先收左栏;≥1008 两栏都收。
+ *  只有右栏有东西:≥1120 展开;≥940 图标条。11-08 前是写死的 1448 / 1228 / 1008、栏恒 256,空栏也算,窗口稍窄就收。 */
+export function railModes(width: number, has: { left: boolean; right: boolean } = { left: true, right: true }): RailLayout {
+  for (const [left, right] of [['open', 'open'], ['strip', 'open'], ['strip', 'strip']] as const) {
+    const opens = Number(has.left && left === 'open') + Number(has.right && right === 'open')
+    const room = width - CENTER_W - sideFixed(left, has.left) - sideFixed(right, has.right)
+    if (room < 0) continue
+    const railW = opens ? Math.min(RAIL_W, Math.floor(room / opens)) : RAIL_W
+    if (railW >= RAIL_MIN) return { left, right, railW }
+  }
+  return { left: 'hidden', right: 'hidden', railW: RAIL_W }
 }
-const reserve = (mode: RailMode, shown: boolean): number => (!shown ? 0 : mode === 'open' ? EDGE + RAIL_W + GAP : mode === 'strip' ? EDGE + STRIP_W + GAP : 0)
+const reserve = (mode: RailMode, shown: boolean, railW: number): number => (!shown ? 0 : mode === 'open' ? EDGE + railW + GAP : mode === 'strip' ? EDGE + STRIP_W + GAP : 0)
 /** 中间那块的横向让位:居中放得下就居中;否则贴着有东西的那一栏留 32(空栏不占地方)。 */
-export function centerShift(width: number, left: { mode: RailMode; shown: boolean }, right: { mode: RailMode; shown: boolean }): number {
+export function centerShift(width: number, left: { mode: RailMode; shown: boolean }, right: { mode: RailMode; shown: boolean }, railW = RAIL_W): number {
   const nat = (width - CENTER_W) / 2
-  const lo = reserve(left.mode, left.shown), hi = width - reserve(right.mode, right.shown) - CENTER_W
+  const lo = reserve(left.mode, left.shown, railW), hi = width - reserve(right.mode, right.shown, railW) - CENTER_W
   if (lo > hi) return 0
   return Math.min(Math.max(nat, lo), hi) - nat
 }
