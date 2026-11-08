@@ -75,6 +75,8 @@ registerMessages({
 
 /** 主区特殊视图(从侧栏特殊卡片打开;作主区 leaf,与对话同组 tab)。 */
 export type SpecialKind = 'agents' | 'workspace'
+/** send 的附加选项(放在位置参数之后,免得再往那串位置参数里加)。newTopic:运行中这条按「另起话题」插话(11-08)。 */
+export interface SendOpts { newTopic?: boolean }
 
 const VOICE_MESSAGE_PLUGIN_ID = 'voice-message' // 语音消息插件 id(与 plugins/voice-message 一致)
 /** 按账号区分的未读键:第一次用时(建 store 那一刻,host 已就位)取一次就定住 —— 与原先模块加载时取一次同一时机。 */
@@ -967,10 +969,11 @@ export interface TanguState {
    *  私聊缺省归档、deleteChats 一并删。失败抛错。 */
   removeAgent(slug: string, opts?: { deleteChats?: boolean }): Promise<{ trashId?: string }>
   /** holdFailed:没发出去的那条留在会话末尾(借 Comma 的失败气泡)并当作「收下了」返回 true —— 只给输入框里手打的那条用;
-   *  其余调用方(编辑重发、插件、文档任务……)靠 false 回滚 / 报错,照旧 toast + false。 */
-  send(text: string, attachments: Attachment[], workspaceFiles?: Attachment[], skillIds?: string[], mentions?: { priorityAgent?: string; mentionAgents?: string[]; mentionProjects?: Array<{ name: string; path: string }> }, sessionId?: string | null, fromQueue?: boolean, holdFailed?: boolean): Promise<boolean>
+   *  其余调用方(编辑重发、插件、文档任务……)靠 false 回滚 / 报错,照旧 toast + false。
+   *  opts.newTopic:会话有 run 在跑时,这条按「另起话题」插进去(steerRun 带 newTopic,11-08);没在跑就是普通发送。 */
+  send(text: string, attachments: Attachment[], workspaceFiles?: Attachment[], skillIds?: string[], mentions?: { priorityAgent?: string; mentionAgents?: string[]; mentionProjects?: Array<{ name: string; path: string }> }, sessionId?: string | null, fromQueue?: boolean, holdFailed?: boolean, opts?: SendOpts): Promise<boolean>
   /** send 的本体;只给 send 用(send 在外面套了「作品卡挪会话」互斥,直接调它会绕过)。 */
-  sendNow(text: string, attachments: Attachment[], workspaceFiles?: Attachment[], skillIds?: string[], mentions?: { priorityAgent?: string; mentionAgents?: string[]; mentionProjects?: Array<{ name: string; path: string }> }, sessionId?: string | null, fromQueue?: boolean, holdFailed?: boolean): Promise<boolean>
+  sendNow(text: string, attachments: Attachment[], workspaceFiles?: Attachment[], skillIds?: string[], mentions?: { priorityAgent?: string; mentionAgents?: string[]; mentionProjects?: Array<{ name: string; path: string }> }, sessionId?: string | null, fromQueue?: boolean, holdFailed?: boolean, opts?: SendOpts): Promise<boolean>
   /** 撤回一条等待中的插话(删除/↑取回)。返回消息文本;已注入或来不及则 null(等待区交给事件流收拾)。 */
   /** 撤回一条还没被读到的插话,返回它的文字和附件(撤回方负责放回输入框,附件不能丢);来不及则 null。 */
   withdrawSteer(sessionId: string, msgId: string): Promise<{ text: string; attachments?: Attachment[] } | null>
@@ -2733,14 +2736,14 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     })
     persistDeskSoon()
   },
-  send: async (text, attachments, workspaceFiles, skillIds, mentions, targetSessionId, fromQueue, holdFailed) => {
+  send: async (text, attachments, workspaceFiles, skillIds, mentions, targetSessionId, fromQueue, holdFailed, opts) => {
     const sid = targetSessionId === undefined ? get().activeId : targetSessionId
     if (sid && movingSessions.has(sid)) { get().toast(get().tr('app.sessionMoving'), true); return false }
     if (sid) markSending(sid, 1)
-    try { return await get().sendNow(text, attachments, workspaceFiles, skillIds, mentions, targetSessionId, fromQueue, holdFailed) } finally { if (sid) markSending(sid, -1) }
+    try { return await get().sendNow(text, attachments, workspaceFiles, skillIds, mentions, targetSessionId, fromQueue, holdFailed, opts) } finally { if (sid) markSending(sid, -1) }
   },
 
-  sendNow: async (text, attachments, workspaceFiles, skillIds, mentions, targetSessionId, fromQueue, holdFailed) => {
+  sendNow: async (text, attachments, workspaceFiles, skillIds, mentions, targetSessionId, fromQueue, holdFailed, opts) => {
     track('chat.send')
     const t = get().tr
     let sid = targetSessionId === undefined ? get().activeId : targetSessionId
@@ -2901,6 +2904,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     // 排队(先于 steer 判):队里已有东西 / 压缩或排队消息在途 / 运行中的 /refine(引擎只在 run 开头认它)→ 排到队尾,保住先后。
     // 空闲时队里还有(上一条排队消息没发出去)也走队:入队即试着取,顺带重试卡住的队首。
     // ponytail: 排队消息只带正文 + 附件(同 steer),@ 提及 / 技能钉选不随队。
+    // 「另起话题」(opts.newTopic)进了队也不带:队里的只在 run 收尾后才发,那时已没有手头的活可挪(同 409 回退)。
     if (!fromQueue && (queueBusy(get(), sessionId) || (activeRunId && /^\/refine(\s|$)/.test(text)))) {
       queueAfterRun(set, sessionId, { text, attachments })
       set((s) => ({ steerSentBySession: { ...s.steerSentBySession, [sessionId]: [...(s.steerSentBySession[sessionId] || []), text] } }))
@@ -2909,7 +2913,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     }
     if (activeRunId) {
       try {
-        const sr = await steerRun(targetForSession(sessionId), activeRunId, { message: text, attachments })
+        const sr = await steerRun(targetForSession(sessionId), activeRunId, { message: text, attachments, ...(opts?.newTopic ? { newTopic: true } : {}) })
         if (sr.ok) {
           // G2 所有权转移:用户此刻在**这个**窗口/这台设备说话,界面动作就该落在这里。
           // 只在 startRun 处认领的话,「A 设备起 run、用户换到 B 设备追一句」会让 A 替 B 执行并

@@ -79,7 +79,7 @@ import { TaskCards, TaskTraces, type TaskLanding } from './TaskCards'
 import { MuseApprovalLine, MuseTodoCards, MuseTodoTraces, ProactiveMark, isProactive } from './MuseDm'
 import { MuseCardLine, MuseFeedbackRow, museCardRef } from './MuseCards'
 import { FallbackLine, FallbackModelName, QuotaChips, QuotaRemindChip, QUOTA_RE, isQuotaText, quotaResetFromError, stripQuotaAsk } from './QuotaRelay'
-import { CHILD_UPDATE_OPEN, ChildUpdateLine, ForkBlock, ForkScope, SESSION_MESSAGE_OPEN, SessionMessageLine, childIdsOf } from './ChildSessions'
+import { CHILD_UPDATE_OPEN, ChildUpdateLine, ForkBlock, ForkScope, HandoffBlock, SESSION_MESSAGE_OPEN, SessionMessageLine, childIdsOf, handoffIdsOf } from './ChildSessions'
 import { APPROVAL_UPDATE_OPEN, INQUIRY_UPDATE_OPEN, approvalForCall, parseApprovalUpdate, parseInquiryUpdate, pickPlanInquiry, type ApprovalOutcome } from './approvalQueue'
 import { isRemoteApprover, wasDecidedHere } from '../../components/ApprovalCard'
 import { answeredByText, approvalPreviewText } from '../../approvalReason'
@@ -747,6 +747,9 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
   const museCard = msg.origin === 'proactive:card' || msg.origin === 'proactive:notice' ? museCardRef(msg.content) : null
   const { text: body, items: suggestions, tasks, creations, approvals: museApprovals } = splitSuggestions(museCard ? museCard.text : msg.content, { streaming, kinds: fenceKinds, todo: museTodo })
   const childIds = childIdsOf(msg.toolEvents) // 不用 hook:上面 system / user 两支提前 return 了
+  // hand_off_task 挪出去的会话:过程行下面、正文前面单独一小块(不进下面的「从这里分出」)
+  const handoffIds = handoffIdsOf(msg.toolEvents)
+  const handoff = runSid && handoffIds.length > 0 ? <HandoffBlock key="handoff" sessionId={runSid} ids={handoffIds} onSuggest={handlers?.onSuggest} /> : null
   // sketch 卡 → 笔记里的交互块(```forsion-sketch 围栏,嵌入层按同一沙箱渲染);与回答的「插入笔记」同一条写口。
   const sketchActions = handlers?.onInsertNote
     ? (it: SketchItem) => <InsertNoteButton onInsert={() => handlers.onInsertNote?.(sketchFence(it.html))} />
@@ -834,13 +837,14 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
               ) : null
             })
             const head = (!!msg.reasoning || !!headEvents) && <ToolGroup key="proc-head" events={headEvents || []} running={streaming} approvals={msg.approvals} awaitingAnswer={awaitingAnswer} sessionId={runSid} {...think(nodes.every((n) => n == null))} />
-            return <>{head}{nodes}</>
+            return <>{head}{handoff}{nodes}</>
           }
           // 老序:插件卡片挪到尾部(trailingCards),不在这一行里再列一遍
           const head = (!!msg.reasoning || !!msg.toolEvents?.length) && <ToolGroup key="proc-head" events={(msg.toolEvents || []).filter((ev) => !cardOf(ev))} running={streaming} approvals={msg.approvals} awaitingAnswer={awaitingAnswer} sessionId={runSid} {...think(!body)} />
           return (
             <>
               {head}
+              {handoff}
               {body && (
                 voiceMode
                   ? <VoiceBubble text={body} stored={voice!.stored} anchorPrefix={`toc-${msg.id}`} />

@@ -48,6 +48,9 @@ const CREATION_NAME_MAX = 100
 const CREATION_PATH_MAX = 500
 /** 审批 id 只认引擎生成的形态(uuid / 短 id);别的一律当写坏还回正文。 */
 const APPROVAL_ID_RE = /^[A-Za-z0-9_-]{1,64}$/
+/** 任务卡 `model:`(模型 id 或名字的一部分,如 `codex/gpt-6-luna`、`Kimi K3`):短、单行、只认 id / 名字里会出现的字符;
+ *  写坏了只丢这个键(卡照出,子会话照会话缺省模型开)。引擎那边还会按模型目录再认一遍。 */
+const MODEL_RE = /^[A-Za-z0-9][\w ./:@+-]{0,79}$/
 const MAX_APPROVALS = 2
 
 /** 任务卡:title 必填;prompt = 自包含任务书(新会话不共享上下文,路径/症状/文件都得写死在里面);
@@ -63,6 +66,8 @@ export interface TaskCard {
   id?: string
   /** 开子会话时交给哪个 Agent(模型写 `agent: coding`;引擎认得这个 slug 才用)。 */
   agent?: string
+  /** 开子会话时用哪个模型(模型写 `model: kimi-k3`;id 或名字的一部分,引擎按模型目录认,11-08)。 */
+  model?: string
   /** 先问卡(`ask: true`):用户点名的事、但该另开会话 —— 按钮只有「新会话 / 在这里做」,选之前什么都不开始。 */
   ask?: boolean
   /** 撤回标记(只有 `withdraw: <id>` + 可选 `reason:` 的围栏):不画卡,让同会话里那张 id 的卡变成「已撤回」。 */
@@ -130,6 +135,7 @@ export function parseTaskCard(lines: string[], opts?: { todo?: boolean }): TaskC
   let todo = ''
   let id = ''
   let agent = ''
+  let model = ''
   let skill = ''
   let ask = false
   let withdraw = ''
@@ -144,6 +150,7 @@ export function parseTaskCard(lines: string[], opts?: { todo?: boolean }): TaskC
     else if (k === 'todo') todo = m[2]
     else if (k === 'id') id = m[2]
     else if (k === 'agent') agent = m[2]
+    else if (k === 'model') model = m[2]
     else if (k === 'skill') skill = m[2]
     else if (k === 'ask') ask = /^(true|yes|1)$/i.test(m[2])
     else if (k === 'withdraw') withdraw = m[2]
@@ -163,7 +170,7 @@ export function parseTaskCard(lines: string[], opts?: { todo?: boolean }): TaskC
   title = title.trim().slice(0, TITLE_MAX)
   if (!title || !prompt) return null
   // todo id 与审批 id 同一形态约束;不合法只丢这个键(卡照出,只是不回写 TODO)。
-  return { title, ...(tldr ? { tldr: tldr.slice(0, TLDR_MAX) } : {}), ...(track ? { track: true } : {}), ...(opts?.todo && APPROVAL_ID_RE.test(todo) ? { todo } : {}), ...(APPROVAL_ID_RE.test(agent) ? { agent } : {}), ...(APPROVAL_ID_RE.test(id) ? { id } : {}), ...(ask ? { ask: true } : {}), prompt }
+  return { title, ...(tldr ? { tldr: tldr.slice(0, TLDR_MAX) } : {}), ...(track ? { track: true } : {}), ...(opts?.todo && APPROVAL_ID_RE.test(todo) ? { todo } : {}), ...(APPROVAL_ID_RE.test(agent) ? { agent } : {}), ...(MODEL_RE.test(model) ? { model } : {}), ...(APPROVAL_ID_RE.test(id) ? { id } : {}), ...(ask ? { ask: true } : {}), prompt }
 }
 
 /** 围栏正文 → 作品卡:只认 `key: value` 行(name 必填,path 可选,未知键忽略);写坏的 → null(整块还回正文)。 */

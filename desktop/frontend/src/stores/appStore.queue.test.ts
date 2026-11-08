@@ -162,3 +162,22 @@ describe('queued commands while a run is active', () => {
     expect(queued()).toEqual(['/refine tone'])
   })
 })
+
+// 「另起话题」(11-08):运行中带 newTopic 的这条走 steer 并把旗子带给引擎;普通插话不带;没在跑就是普通起 run(旗子作废)
+describe('new topic while a run is active', () => {
+  it('passes newTopic to the steer request only when asked', async () => {
+    await useApp.getState().send('plain steer', [], undefined, undefined, undefined, 's')
+    await useApp.getState().send('ssh port?', [], undefined, undefined, undefined, 's', false, true, { newTopic: true })
+    expect(service.steer).toHaveBeenCalledTimes(2)
+    expect(service.steer.mock.calls[0][2]).toEqual({ message: 'plain steer', attachments: [] })
+    expect(service.steer.mock.calls[1][2]).toEqual({ message: 'ssh port?', attachments: [], newTopic: true })
+  })
+
+  it('falls back to a plain new run when the run already ended (409)', async () => {
+    service.steer.mockResolvedValueOnce({ ok: false, reason: 'not_active' })
+    expect(await useApp.getState().send('ssh port?', [], undefined, undefined, undefined, 's', false, true, { newTopic: true })).toBe(true)
+    expect(service.start).toHaveBeenCalledOnce()
+    expect(service.start.mock.calls[0][1]).toMatchObject({ sessionId: 's', message: 'ssh port?' })
+    expect(service.start.mock.calls[0][1]).not.toHaveProperty('newTopic')
+  })
+})
