@@ -141,9 +141,11 @@ export function SortableTile({
 const asTile = (space: SpaceDefinition): ShelfTile => ({ kind: 'space', id: `space:${space.id}`, space })
 
 export function SpaceOrganizer({
-  onClose, onLaunch, byKey = false, skip, onOpenFolder, onFolderMenu, onDragStart, tabs,
+  onClose, onLaunch, byKey = false, skip, onOpenFolder, onFolderMenu, onDragStart, tabs, yielded = false,
 }: {
   tabs?: OrganizerTabs
+  /** 有瓷砖正被拖向主页(homeLibraryDrag.ts):面板和遮罩原地淡出、不接指针;拖完取消时淡回(data-yield out → back)。 */
+  yielded?: boolean
   onClose: () => void
   onLaunch: (spaceId: string) => void
   /** 用快捷键 / 命令打开:搜索框聚焦、默认选中上一个用过的 Space、底部写按键。 */
@@ -200,13 +202,13 @@ export function SpaceOrganizer({
 
   // Esc:夹内 → 回顶层,否则收起。挂在捕获阶段 —— 用鼠标打开时焦点不在面板里。
   // 焦点在别的浮层里(收纳上面又开了 ⌘K 等)、新建收纳夹的输入框或收纳夹右键菜单开着、正在键盘拖放时,Esc 归它们。
-  const live = useRef({ scope, drag, onClose })
-  live.current = { scope, drag, onClose }
+  const live = useRef({ scope, drag, onClose, yielded })
+  live.current = { scope, drag, onClose, yielded }
   useEffect(() => {
     const onEsc = (e: KeyboardEvent): void => {
       const a = document.activeElement
       const mine = !a || a === document.body || !!a.closest('.hp-root')
-      if (e.key !== 'Escape' || isImeKeyEvent(e) || !mine || live.current.drag || [...document.querySelectorAll('.dialog-overlay, .ctx-menu')].some((x) => x.getClientRects().length)) return
+      if (e.key !== 'Escape' || isImeKeyEvent(e) || !mine || live.current.drag || live.current.yielded || [...document.querySelectorAll('.dialog-overlay, .ctx-menu')].some((x) => x.getClientRects().length)) return
       e.preventDefault()
       e.stopPropagation()
       if (live.current.scope) setScope(null)
@@ -264,8 +266,11 @@ export function SpaceOrganizer({
   const count = spaces.filter((s) => s.id !== skip).length
   const tab: OrganizerTab = tabs?.tab ?? 'spaces'
   const pane = tab === 'spaces' ? null : tabs?.panes[tab] ?? null
+  // 让过一次位之后取消:停在 back(淡回),不再摘掉属性 —— 摘掉会让面板的入场动画重放一遍
+  const yieldedOnce = useRef(false)
+  if (yielded) yieldedOnce.current = true
   return (
-    <div className="hp-organizer-stage" onClick={onClose}>
+    <div className="hp-organizer-stage" data-yield={yielded ? 'out' : yieldedOnce.current ? 'back' : undefined} onClick={onClose}>
       <section className="hp-organizer-panel" aria-label={t('home.organizer.title')} onClick={(event) => event.stopPropagation()} onKeyDown={onKeyDown}>
         <header className="hp-organizer-head">
           <div>
