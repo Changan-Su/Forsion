@@ -104,7 +104,6 @@ const SKIP = {
   listSkills: 'Root 里仅用于接收设置浮窗的 skills-changed 广播后重读主窗技能清单；移动端设置与 Agent 档案共用一个渲染进程，改动后在原窗口刷新',
   openAgentProfile: 'Root 里仅用于接收设置浮窗的 open-agent 请求并切回主窗 Agent Space；移动端没有卫星窗，设置内直接导航到 Agent 档案',
   getLanguage: 'soft 主题的 panelGap 只喂给 Dockview Shell;单列壳不消费',
-  FeedbackModal: '同上:入口(rb-feedback 图标 + open-feedback 命令;图标 2026-08-31 撤下、09-17 放回)门控在 window.tangu?.submitFeedback,移动 shim 无 → 不注册。(组件本身有可选桥检查并显示 unavailable,不会崩;此前这条理由写的「点了就崩」是错的)',
   UnitRemoteSurface: '设备远程面(整个主区切过去)是 <webview>+Electron 分区注入,纯 host 概念;移动端拍板不做被连方/内嵌面,App 互联入口 = UnitsSheet 开外部浏览器引导页(2026-08-25)',
   runUnitRoutePayload: 'Root 里只接设置浮窗(设置 › 设备)发来的 unit-route 去处,在主窗开远程面 / 切 vaultSide;移动端没有卫星窗也没有远程面(见上一条)',
   Shell: '单列壳 SingleColumnHost 取而代之(mobile/vite.config engineSwap)',
@@ -140,7 +139,7 @@ const KNOWN_GATES = {
   'window.tangu?.spacesList': 'Space 配方读盘(用户自建 + 各插件包里带的)— 桌面 = Electron IPC;Android App 自 2026-10-09 起也有(mobile/src/plugins/pluginHost.ts 的 listSpaces,由 mobile/src/main.tsx 在启动模块求值前挂上):只有插件包里带的那一半,装了带 Space 的插件,它的 Space 才进底部导航栏(此前装上只有命令 / 视图,Space 不出现);设备页 = 对端主机的清单(unitShim);web 无此方法 → 不装载',
   'window.tangu?.spacesSave': '用户自定义 Space 写盘 — 仅桌面',
   'window.tangu?.marketList': '应用市场入口(ribbon 图标 + open-market 命令)— 桌面 = Electron IPC;Android App 自 2026-10-02 起也有(mobile/src/plugins/mobileMarket.ts,只装 Forsion 插件,由 mobile/src/main.tsx 在启动模块求值前挂上 → rb-market 经「⋯」菜单可点,MobileRoot 挂了 MarketModal)。web / 设备页无此方法 → 不注册',
-  'window.tangu?.submitFeedback': '反馈入口(ribbon 图标 rb-feedback + 命令面板 open-feedback)— 仅桌面',
+  'window.tangu?.submitFeedback': '反馈入口(ribbon 图标 rb-feedback + 命令面板 open-feedback + 输入框 /feedback)— 桌面 = Electron IPC,启动时就在;网页主入口 / Android App 自 2026-11-09 起由 Forsion Extend 装好后经 ctx.app.provideFeedbackChannel 交来(feedbackChannel.ts 把它挂成这个键并补注册入口),MobileRoot 渲染 FeedbackModal 全屏页。没有 Extend 的宿主(开源版网页 / 设备页)照旧没有',
   'window.tangu?.openMini': 'Mini 卡片命令 — 仅桌面',
   // P1-K8
   'window.tangu?.unitsList': 'Unit 切换器(Ribbon 命令区 rb-unit;移动端注册在 head)— 桌面 = Electron IPC 名册;mobile 也有 unitsList(mobileShim cloudJson,是移动端 UnitsSheet「在哪运行 / 打开设备界面」的数据面,入口 rb-units-mobile 由 mobileEntry 的 installUnitsEntry 装),rb-unit 在移动端注册为 side=head,而 SingleColumnHost 只渲染 side=bottom 的项 → 不可见,无害(桌面 10-02 起改 side=bottom;移动端刻意留 head,免得它冒进 MoreSheet);webShim / unitShim 无此方法 → 两端都不注册。vault 切换仍走 VaultSideSwitch mobile 分支。P1-K7a:features/runtime.ts 的 rosterAvailable() 也读它 —— 手机的跨设备会话分组 / 「在哪运行」选择器的名册(Electron IPC + mobileShim cloudJson;webShim / unitShim 无 → 网页版与设备页不显示,K7 U2 与 §4.7 b6)',

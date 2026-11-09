@@ -343,6 +343,9 @@ export function installTanguSlice(mod: TanguSliceModule): void {
   useApp.setState(mod.create(useApp.setState, useApp.getState, deps))
 }
 
+/** openFeedback 等账号查询时的请求号:新的一次打开 / 关闭都会让在途的那次作废。 */
+let feedbackAsk = 0
+
 export const useApp = create<AppState>((set, get) => ({
   tr: (k) => k,
   // 云 web/mobile:boot() 异步回填前的早期请求(布局恢复后的轮询等)会拿默认 cfg 打
@@ -792,19 +795,34 @@ export const useApp = create<AppState>((set, get) => ({
 
   openFeedback: (description) => {
     if (description) set({ feedbackDraft: description })
-    if (get().authInfo?.loggedIn) {
+    // 会话在调用这一刻就记下:下面可能要等一次账号查询,等完再读就可能是用户切过去的另一条(诊断附件会挂错会话)
+    const opener = openerSession(get())
+    const show = (): void => {
       if (window.tangu?.openFloatingPanel) {
-        void window.tangu.openFloatingPanel({ id: 'feedback', title: get().tr('feedback.title'), builtin: 'feedback', params: { description: description ?? get().feedbackDraft, ...openerSession(get()) } })
+        void window.tangu.openFloatingPanel({ id: 'feedback', title: get().tr('feedback.title'), builtin: 'feedback', params: { description: description ?? get().feedbackDraft, ...opener } })
       } else set({ feedbackOpen: true })
-      return true
     }
-    else {
+    const refuse = (): void => {
       get().toast(get().tr('feedback.errNotLoggedIn'), true)
       get().openSettings('forsion')
     }
+    const info = get().authInfo
+    const ticket = ++feedbackAsk
+    if (info?.loggedIn) { show(); return true }
+    // authInfo 是连上引擎之后才读进来的。引擎没连上时它是 null(= 不知道,不是没登录):网页 / 手机的引擎在远端,
+    // 连不上恰恰是最需要反馈的时候 → 现问一次账号再定。描述已经存进 feedbackDraft,没登录也不丢。
+    const ask = info === null ? window.tangu?.authStatus : undefined
+    if (ask) {
+      // 等的这段里作废的请求不再动界面:又点了一次、反馈被关掉(含通道被撤)、或切了会话(内嵌表单挂的是打开那一刻的当前会话)
+      const at = get().activeId
+      const live = (): boolean => ticket === feedbackAsk && get().activeId === at
+      void ask().then((a) => { if (!live()) return; if (a?.loggedIn) show(); else refuse() }).catch(() => { if (live()) refuse() })
+      return true
+    }
+    refuse()
     return false
   },
-  closeFeedback: () => set({ feedbackOpen: false }),
+  closeFeedback: () => { feedbackAsk++; set({ feedbackOpen: false }) },
 
   setOnboarding: (on) => set({ onboarding: on, onboardingUpdate: false }),
   setUpdateAvailable: (v) => set({ updateAvailable: v }),

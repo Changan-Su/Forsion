@@ -991,6 +991,16 @@ export const Composer2: React.FC<{
     return start
   }
 
+  // 反馈通道在网页 / 手机上是 Forsion Extend 装好后才交给宿主的(宿主 feedbackChannel.ts),比输入框晚到:
+  // 宿主在 window 上派 forsion:feedback-channel,斜杠表跟着重算。老宿主不派这个事件,键在启动时就定了,照旧。
+  const [feedbackChannel, setFeedbackChannel] = useState(() => !!window.tangu?.submitFeedback)
+  useEffect(() => {
+    const sync = (): void => setFeedbackChannel(!!window.tangu?.submitFeedback)
+    sync()
+    window.addEventListener('forsion:feedback-channel', sync)
+    return () => window.removeEventListener('forsion:feedback-channel', sync)
+  }, [])
+
   const slashItems = useMemo<SlashItem[]>(() => {
     const close = () => { replaceSlash(''); setSlashSubMenu(null) }
     const app = useApp.getState
@@ -1025,7 +1035,7 @@ export const Composer2: React.FC<{
       '/approval': () => { setOpenMenu('mode'); close() },
       // 下面这些在桌面端等价于「打开对应面板」——TUI 里是打印一段文本,GUI 里就该跳过去。
       '/help': () => { app().openSettings('about'); close() },
-      '/feedback': window.tangu?.submitFeedback ? () => { if (app().openFeedback()) close() } : undefined,
+      '/feedback': feedbackChannel && window.tangu?.submitFeedback ? () => { if (app().openFeedback()) close() } : undefined,
       // /btw:点选 = 补成「/btw 」等用户打问题;回车由 sendMessage 派给旁聊(裸 /btw 回车 = 只开面板)。
       '/btw': onBtw ? () => { replaceSlash('/btw '); setSlashIndex(0) } : undefined,
       '/skills': () => { app().openSettings('skills'); close() },
@@ -1142,7 +1152,7 @@ export const Composer2: React.FC<{
     }
     return items
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [running, onStop, planMode, voiceMode, onVoiceModeChange, thinkingLevel, maxIterations, onMaxIterationsChange, verifyCommand, onVerifyCommandChange, models, modelId, skills, onPlanModeChange, onThinkingChange, onModelChange, onNewSession, onBranch, onCompact, onGroupChange, isChat, onPresetChange, engineId, engineCommands, customCommands, describe, execConfig, agentDef, sessionTokens, ctxTokens, ringWindow, runCost, costLimit, ctxInfo, !!onBtw, allowUltra, ultraOn])
+  }, [feedbackChannel, running, onStop, planMode, voiceMode, onVoiceModeChange, thinkingLevel, maxIterations, onMaxIterationsChange, verifyCommand, onVerifyCommandChange, models, modelId, skills, onPlanModeChange, onThinkingChange, onModelChange, onNewSession, onBranch, onCompact, onGroupChange, isChat, onPresetChange, engineId, engineCommands, customCommands, describe, execConfig, agentDef, sessionTokens, ctxTokens, ringWindow, runCost, costLimit, ctxInfo, !!onBtw, allowUltra, ultraOn])
 
   const slash = useMemo(() => {
     if (disabled || slashDismissed) return null
