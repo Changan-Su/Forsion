@@ -98,7 +98,12 @@ export function saveHomeLayout(next: HomeLayout): void {
 globalThis.addEventListener?.('storage', (e) => {
   if (e.key === HOME_WIDGETS_KEY || e.key === null) { cached = null; notify() }
 })
-export const useHomeLayout = (): HomeLayout => useSyncExternalStore((f) => { subs.add(f); return () => subs.delete(f) }, readHomeLayout)
+/** 摆放变了(本窗口保存、别的窗口改了)就叫一声;返回退订。 */
+export function subscribeHomeLayout(f: () => void): () => void {
+  subs.add(f)
+  return () => { subs.delete(f) }
+}
+export const useHomeLayout = (): HomeLayout => useSyncExternalStore(subscribeHomeLayout, readHomeLayout)
 
 const rowUsed = (l: HomeLayout): number => l.row.reduce((s, c) => s + c.w, 0)
 export const isOnHome = (l: HomeLayout, id: string): boolean => l.row.some((c) => c.id === id) || l.left.includes(id) || l.right.includes(id)

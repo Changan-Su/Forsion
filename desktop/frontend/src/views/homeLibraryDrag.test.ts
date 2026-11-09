@@ -2,8 +2,8 @@
 // 从收纳把瓷砖拖进主页(11-08 方案 B)的判定:只按量下的格子矩形命中,满了就放不了(11-08 用户定,不做「放在卡上换下」)。
 // 几何按 110% × 1512 宽窗口的真主页量的(方案页 instrument/recon.cjs):左栏浮层在中列左边、右栏在右边;数值是视口 px(已乘 110%)。
 import { describe, expect, it } from 'vitest'
-import { applyLibraryDrop, hitLibraryDrop, type Box, type HomeGeometry } from './homeLibraryDrag'
-import { DEFAULT_HOME_LAYOUT, STATUS_CARD, moveOnHome, type HomeLayout } from './homeWidgets'
+import { applyLibraryDrop, forgetLibraryDrop, hitLibraryDrop, recordLibraryDrop, spendLibraryUndo, undoLibraryDrop, type Box, type HomeGeometry } from './homeLibraryDrag'
+import { DEFAULT_HOME_LAYOUT, STATUS_CARD, isOnHome, moveOnHome, readHomeLayout, saveHomeLayout, type HomeLayout } from './homeWidgets'
 
 const Z = 1.1
 const b = (x: number, y: number, w: number, h: number): Box => ({ x, y, w, h })
@@ -144,5 +144,43 @@ describe('moveOnHome 的新卡宽度', () => {
     expect(moveOnHome(l, NOTES, { area: 'row', index: 1 }, 2)?.row[1]).toEqual({ id: NOTES, w: 2 })
     expect(moveOnHome(l, NOTES, { area: 'row', index: 1 })?.row[1]).toEqual({ id: NOTES, w: 1 })
     expect(moveOnHome(l, 'builtin:muse', { area: 'row', index: 0 }, 2)?.row[0]).toEqual({ id: 'builtin:muse', w: 1 })
+  })
+})
+
+describe('撤销凭证(右上角「撤销」与 ⌘Z 共用一次)', () => {
+  const put = (l: HomeLayout): void => saveHomeLayout(l)
+  const withNotes = (): HomeLayout => ({ ...DEFAULT_HOME_LAYOUT, left: [NOTES] })
+  it('⌘Z 用掉之后,旧通知的「撤销」不再删重新放进来的那张', () => {
+    put(withNotes())
+    const u = recordLibraryDrop(W(NOTES))
+    expect(undoLibraryDrop()).toBe(true)
+    expect(readHomeLayout().left).toEqual([])
+    put(withNotes()) // 用户又点瓷砖放了回来
+    expect(spendLibraryUndo(u)).toBe(false)
+    expect(readHomeLayout().left).toEqual([NOTES])
+  })
+  it('那张被「−」拿掉过再放回来:旧凭证作废', () => {
+    put(withNotes())
+    const u = recordLibraryDrop(W(NOTES))
+    put(DEFAULT_HOME_LAYOUT)
+    put(withNotes())
+    expect(spendLibraryUndo(u)).toBe(false)
+    expect(undoLibraryDrop()).toBe(false)
+    expect(readHomeLayout().left).toEqual([NOTES])
+  })
+  it('之后又挪了位置照样能撤;撤一次就用完', () => {
+    put(withNotes())
+    const u = recordLibraryDrop(W(NOTES))
+    put({ ...DEFAULT_HOME_LAYOUT, right: ['builtin:inbox', NOTES] })
+    expect(spendLibraryUndo(u)).toBe(true)
+    expect(isOnHome(readHomeLayout(), NOTES)).toBe(false)
+    expect(spendLibraryUndo(u)).toBe(false)
+  })
+  it('退出编辑态:⌘Z 不再撤,通知里的凭证照旧能用', () => {
+    put(withNotes())
+    const u = recordLibraryDrop(W(NOTES))
+    forgetLibraryDrop()
+    expect(undoLibraryDrop()).toBe(false)
+    expect(spendLibraryUndo(u)).toBe(true)
   })
 })

@@ -8,7 +8,7 @@ import { registerMessages } from '../i18n'
 import { panelToast } from '../components/PanelNotice'
 import { motion } from '../theme/motionTokens'
 import {
-  RAIL_MAX, ROW_CELLS, STATUS_CARD, addCenterPart, isOnHome, moveCenterPart, moveOnHome, readHomeLayout, removeCenterPart, removeFromHome, saveHomeLayout,
+  RAIL_MAX, ROW_CELLS, STATUS_CARD, addCenterPart, isOnHome, moveCenterPart, moveOnHome, readHomeLayout, removeCenterPart, removeFromHome, saveHomeLayout, subscribeHomeLayout,
   type HomeLayout, type HomePart,
 } from './homeWidgets'
 
@@ -151,25 +151,39 @@ export function measureHome(root: HTMLElement): HomeGeometry {
 }
 
 // ── 撤销:撤的是「放进来」这一下 = 把它从主页拿掉(之后又挪过也照样对) ──
-let lastDrop: LibItem | null = null
-function undoItem(item: LibItem): boolean {
+// 每次放进来发一张一次性凭证,右上角「撤销」和 ⌘Z 共用:用过就作废;那一张离开过主页(「−」拿掉、别的窗口改了)也作废,
+// 免得旧通知的「撤销」把之后重新放进来的那张删掉(Codex 评审)。
+export interface DropUndo { item: LibItem; done: boolean; off: () => void }
+let lastDrop: DropUndo | null = null
+const placedNow = (l: HomeLayout, item: LibItem): boolean => (item.kind === 'part' ? l.center.includes(item.part) : isOnHome(l, item.id))
+function expire(u: DropUndo): void {
+  u.done = true
+  u.off()
+  if (lastDrop === u) lastDrop = null
+}
+/** 记下一次放进来(也成为 ⌘Z 撤的那一次);返回给右上角通知用的凭证。 */
+export function recordLibraryDrop(item: LibItem): DropUndo {
+  const u: DropUndo = { item, done: false, off: () => {} }
+  const off = subscribeHomeLayout(() => { if (!placedNow(readHomeLayout(), item)) expire(u) })
+  const timer = window.setTimeout(() => expire(u), 10 * 60_000)
+  u.off = () => { off(); window.clearTimeout(timer) }
+  lastDrop = u // 只在放进去时换;拿起又取消的那次不动上一次的记录
+  return u
+}
+export function spendLibraryUndo(u: DropUndo): boolean {
+  if (u.done) return false
+  expire(u)
   const cur = readHomeLayout()
-  if (item.kind === 'part') {
-    if (!cur.center.includes(item.part)) return false
-    saveHomeLayout(removeCenterPart(cur, item.part))
-  } else {
-    if (!isOnHome(cur, item.id)) return false
-    saveHomeLayout(removeFromHome(cur, item.id))
-  }
-  if (lastDrop === item) lastDrop = null
+  if (!placedNow(cur, u.item)) return false
+  saveHomeLayout(u.item.kind === 'part' ? removeCenterPart(cur, u.item.part) : removeFromHome(cur, u.item.id))
   return true
 }
 /** 编辑态里的 ⌘Z:撤最近一次从收纳拖进来的那一下。没有可撤的回 false(按键照常往下走)。 */
 export function undoLibraryDrop(): boolean {
-  const item = lastDrop
-  lastDrop = null
-  return !!item && undoItem(item)
+  const u = lastDrop
+  return !!u && spendLibraryUndo(u)
 }
+/** 退出编辑态:⌘Z 不再撤它(右上角通知里的「撤销」照旧能用到通知消失)。 */
 export const forgetLibraryDrop = (): void => { lastDrop = null }
 
 // ── 拖 ──
@@ -192,11 +206,14 @@ export interface LibraryDragHost {
   folds?: (l: HomeLayout) => { left: boolean; right: boolean }
 }
 
-let active = false
+/** 正在进行的那一次拖(同一时刻只有一次)。主页卸载时 `cancelLibraryDrag()` 收掉,不留全局监听、影子和光标,也不再提交。 */
+let activeDrag: { abort: () => void } | null = null
+export function cancelLibraryDrag(): void { activeDrag?.abort() }
 /** 瓷砖上的 pointerdown。没动够 4px 就松手 = 什么都不做,交给瓷砖自己的 click(点一下放第一个空位)。 */
 export function startLibraryDrag(e: React.PointerEvent<HTMLElement>, item: LibItem, host: LibraryDragHost): void {
   const tile = e.currentTarget
-  if (active || e.button !== 0 || (tile as HTMLButtonElement).disabled) return
+  if (activeDrag || e.button !== 0 || (tile as HTMLButtonElement).disabled) return
+  const pid = e.pointerId // 只认起拖的那根指针:触屏上另一根手指的移动 / 松手不算
   e.preventDefault() // 不起文字选区;click 照常来
   const { root, t } = host
   const x0 = e.clientX, y0 = e.clientY
@@ -213,7 +230,6 @@ export function startLibraryDrag(e: React.PointerEvent<HTMLElement>, item: LibIt
   let last = { x: x0, y: y0 }
   let buttons = 1
   let hit: DropHit | null = null
-  active = true
 
   const z = (): number => zoomOf(document.body) || 1
   const placeGhost = (): void => {
@@ -254,7 +270,6 @@ export function startLibraryDrag(e: React.PointerEvent<HTMLElement>, item: LibIt
   }
   const lift = (): void => {
     lifted = true
-    lastDrop = null
     const k = z()
     ghost = tile.cloneNode(true) as HTMLElement
     ghost.removeAttribute('disabled')
@@ -273,11 +288,12 @@ export function startLibraryDrag(e: React.PointerEvent<HTMLElement>, item: LibIt
     ind = createDropIndicator({ host: root, className: 'hp-drop-ind' })
     host.onLift()
     settleAt = performance.now() + SETTLE_MS
-    settleTimer = window.setTimeout(() => { if (active) { geo = measureHome(root); judge() } }, SETTLE_MS + 20)
+    settleTimer = window.setTimeout(() => { if (activeDrag === self) { geo = measureHome(root); judge() } }, SETTLE_MS + 20)
     geo = measureHome(root)
     judge()
   }
   const move = (ev: PointerEvent): void => {
+    if (ev.pointerId !== pid) return
     last = { x: ev.clientX, y: ev.clientY }
     buttons = ev.buttons
     if (!lifted) {
@@ -289,11 +305,11 @@ export function startLibraryDrag(e: React.PointerEvent<HTMLElement>, item: LibIt
     judge()
   }
   const finish = (): void => {
-    active = false
+    if (activeDrag === self) activeDrag = null
     window.clearTimeout(settleTimer)
     window.removeEventListener('pointermove', move, true)
     window.removeEventListener('pointerup', up, true)
-    window.removeEventListener('pointercancel', cancel, true)
+    window.removeEventListener('pointercancel', pointerCancel, true)
     window.removeEventListener('keydown', esc, true)
     window.removeEventListener('blur', cancel)
     ind?.destroy()
@@ -312,14 +328,14 @@ export function startLibraryDrag(e: React.PointerEvent<HTMLElement>, item: LibIt
     if (!g) return
     g.classList.remove('is-no')
     const done = (): void => { g.remove(); tile.classList.remove('is-source') }
-    if (reducedMotion()) { done(); return }
+    if (reducedMotion() || !tile.isConnected) { done(); return } // 面板已经不在(拖动中被 ⇧⌘O 收掉):没处可飞,原地收
     const k = z()
     const to = tile.getBoundingClientRect()
     g.animate([{ translate: g.style.translate }, { translate: `${to.left / k}px ${to.top / k}px` }], { duration: motion.ms('slow'), easing: motion.css('surface'), fill: 'forwards' })
       .finished.then(done, done)
   }
   const place = (): boolean => {
-    if (!hit || (hit.type !== 'rail' && hit.type !== 'row' && hit.type !== 'part')) return false
+    if (!root.isConnected || !hit || (hit.type !== 'rail' && hit.type !== 'row' && hit.type !== 'part')) return false
     const cur = readHomeLayout()
     const next = applyLibraryDrop(cur, item, hit)
     if (!next) return false
@@ -332,17 +348,18 @@ export function startLibraryDrag(e: React.PointerEvent<HTMLElement>, item: LibIt
     // 新卡从松手处滑进(LCL land),被挤开的卡和空位同一段时长滑到新位置(只挪不缩)
     landWhenMoved(find, { x: from.left, y: from.top }, { onMoved: (el) => { replay(root, flip, el); land(el, { x: from.left, y: from.top }) } })
     saveHomeLayout(next)
-    lastDrop = item
+    const undo = recordLibraryDrop(item)
     const where = item.kind === 'part' ? t('home.drop.addedPart', { name: item.name })
       : t(hit.type === 'row' ? 'home.drop.added.row' : hit.type === 'rail' && hit.side === 'left' ? 'home.drop.added.left' : 'home.drop.added.right')
-    panelToast(where, false, { action: { label: t('home.drop.undo'), run: () => { undoItem(item) } } })
+    panelToast(where, false, { action: { label: t('home.drop.undo'), run: () => { spendLibraryUndo(undo) } }, durationMs: 4000 })
     tile.classList.remove('is-source')
     if (reducedMotion()) g.remove()
     else g.animate([{ opacity: 1 }, { opacity: 0 }], { duration: motion.ms('instant'), easing: motion.css('exit'), fill: 'forwards' }).finished.then(() => g.remove(), () => g.remove())
     host.onPlaced()
     return true
   }
-  const up = (): void => {
+  const up = (ev: PointerEvent): void => {
+    if (ev.pointerId !== pid) return
     finish()
     if (!lifted) return
     swallowClick()
@@ -352,6 +369,7 @@ export function startLibraryDrag(e: React.PointerEvent<HTMLElement>, item: LibIt
     finish()
     if (lifted) flyBack()
   }
+  const pointerCancel = (ev: PointerEvent): void => { if (ev.pointerId === pid) cancel() }
   const esc = (ev: KeyboardEvent): void => {
     if (ev.key !== 'Escape') return
     ev.preventDefault()
@@ -360,15 +378,25 @@ export function startLibraryDrag(e: React.PointerEvent<HTMLElement>, item: LibIt
     // Esc 取消时手往往还按着:之后松手补发的 click 会落在淡回来的遮罩上,把面板收掉。等那一下松手再吞;
     // 松手发生在窗口外(收不到)的话,下一次按下就作罢,不吃别人的 click。
     if (lifted && buttons & 1) {
-      const release = (): void => { window.removeEventListener('pointerdown', drop, true); swallowClick() }
-      const drop = (): void => window.removeEventListener('pointerup', release, true)
-      window.addEventListener('pointerup', release, { capture: true, once: true })
-      window.addEventListener('pointerdown', drop, { capture: true, once: true })
+      const disarm = (): void => { window.removeEventListener('pointerup', release, true); window.removeEventListener('pointerdown', drop, true) }
+      const release = (ev: PointerEvent): void => { if (ev.pointerId === pid) { disarm(); swallowClick() } }
+      const drop = (ev: PointerEvent): void => { if (ev.pointerId === pid) disarm() }
+      window.addEventListener('pointerup', release, true)
+      window.addEventListener('pointerdown', drop, true)
     }
   }
+  /** 主页卸载:收掉监听、影子、落点和光标,不提交、不回调宿主(组件已经不在)。 */
+  const self = {
+    abort: (): void => {
+      finish()
+      ghost?.remove()
+      tile.classList.remove('is-source')
+    },
+  }
+  activeDrag = self
   window.addEventListener('pointermove', move, true)
   window.addEventListener('pointerup', up, true)
-  window.addEventListener('pointercancel', cancel, true)
+  window.addEventListener('pointercancel', pointerCancel, true)
   window.addEventListener('keydown', esc, true)
   window.addEventListener('blur', cancel)
 }

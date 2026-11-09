@@ -56,7 +56,7 @@ import { watchAccountName } from '../services/accountName'
 import { DESKTOP_HOME_CARDS_KEY, HOME_CARDS_MAX, loadHomeCards, saveHomeCards, shownHomeCards } from './homeCards'
 import { HOME_PARTS, setHomeEditHandler, useHomeLayout, type HomePart } from './homeWidgets'
 import { HOME_GUIDE_OWNER, HomeRail, HomeRow, PartFrame, PartsLibrary, WidgetLibrary, centerShift, dragPart, dragWidget, railModes, removePart } from './HomeWidgetParts'
-import { forgetLibraryDrop, startLibraryDrag, undoLibraryDrop, type LibItem } from './homeLibraryDrag'
+import { cancelLibraryDrag, forgetLibraryDrop, startLibraryDrag, undoLibraryDrop, type LibItem } from './homeLibraryDrag'
 import { HomeWidgetEnv, useShowableIds } from './homeWidgetKinds'
 import { track } from '../achievements/store'
 import type { OrganizerTab } from './SpaceOrganizer'
@@ -350,6 +350,7 @@ export function HomepageView(_props: ViewProps) {
   // 放进去 = 面板收起、停在编辑态;取消 = 面板淡回原处,编辑态回到拿起之前
   const [yielded, setYielded] = useState(false)
   const editBeforeDrag = useRef<boolean | null>(null)
+  useEffect(() => () => cancelLibraryDrag(), []) // 拖到一半主页被切走(快捷键换 Space):收掉,不再提交
   const fileRef = useRef<HTMLInputElement>(null)
   const leaveTimer = useRef<number | null>(null)
   const pending = useRef<(() => void) | null>(null)
