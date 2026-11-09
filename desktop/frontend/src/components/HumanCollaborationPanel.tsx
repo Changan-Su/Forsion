@@ -95,7 +95,7 @@ function HumanBody({ engine, target, name, running, jump, onRewrite, draftKey }:
   const over = cut && cut.cutAt !== null ? cut : null
   const draftCut = draft && limit ? clipWholeLines(draft.content, limit) : null
   const agentName = (slug: string) => agentDefs.find((a) => a.slug === slug)?.name || slug
-  const num = (n: number) => (locale === 'zh' ? String(n) : n.toLocaleString('en-US'))
+  const num = (n: number) => (locale === 'zh' ? String(n) : new Intl.NumberFormat('en-US').format(n))
   const reviewLatest = async () => { try { const d = await getHumanDocument(engine, target); if (alive.current) setLatest(d) } catch (e) { if (alive.current) setError(errorText(e)) } }
   return <section className="human-panel" data-human-scope={target.kind} data-human-file={target.kind === 'human' ? target.file : undefined} onKeyDown={e => { if ((e.metaKey || e.ctrlKey) && e.key === 's' && draft) { e.preventDefault(); e.stopPropagation(); void save() } }}>
     <header className="human-heading"><div><h3>{t(file ? `human.file.${file}.title` : 'human.title')}</h3><p>{file ? t(`human.file.${file}.caption`) : target.kind === 'agent' ? t('human.agentScope', { name }) : t('human.projectScope')}</p></div><div className="human-actions">
