@@ -23,6 +23,7 @@
  * 自己不跑 loop)—— 它经 handleRealtimeUpgrade 接手 Upgrade,把「连哪个上游」「委派的 run 交给谁跑」换成自己的,其余(人设、
  * 转写落库、改正、重连)是同一份代码。网关上人设从云端取(cloudAgentStore / brain.memory),不读本机文件。
  */
+import { getAgentForRun } from '../agents/standIn.js';
 import type { IncomingMessage, Server } from 'node:http';
 import { channelHub } from '../channels/hub.js';
 import type { Duplex } from 'node:stream';
@@ -78,7 +79,8 @@ const clip = (s: string, n: number): string => (s.length > n ? wellFormed(s.slic
 export async function buildVoiceInstructions(sessionId: string, agentSlug: string | undefined, userId = ''): Promise<string> {
   const cloud = cloudAgentsEnabled();
   const slug = agentSlug || (cloud ? (await cloudReadAgentsMeta(userId).catch(() => null))?.defaultSlug || '' : readAgentsMeta().defaultSlug);
-  const def = await (cloud ? cloudGetAgent(userId, slug) : getAgent(slug)).catch(() => null);
+  // 分身(11-09)走同一个解析器:人设按白名单从本体现读,记忆是它自己的(resolveMemorySlug 对分身恒为它自己)
+  const def = await (cloud ? cloudGetAgent(userId, slug) : getAgentForRun(slug)).catch(() => null);
   const name = def?.name || 'Tangu';
   let memory = '';
   if (def && cloud) {
@@ -105,7 +107,7 @@ export async function buildVoiceInstructions(sessionId: string, agentSlug: strin
   ];
   if (def?.soul?.trim()) sections.push(`## Your persona\n${clip(def.soul.trim(), 2000)}`);
   // 连着聊天通道的会话不放这两份(同 agentLoop 的 renderAboutHuman({ private }))
-  const own = !cloud && (await channelHub.channelBinding(userId, sessionId)) === false;
+  const own = !cloud && !def?.standInOf && (await channelHub.channelBinding(userId, sessionId)) === false; // 分身按身份不给(不看此刻绑没绑)
   const user = own ? readUserMdForPrompt().trim() : '';
   if (user) sections.push(`## About the user\n${clipForPrompt(user, ABOUT_HUMAN_LIMITS['MEMORY.md'])}`);
   const portrait = own ? readHumanFile('SOUL.md').trim() : ''; // 画像:Agent 们对这个人的认识,同 renderAboutHuman 按整条截前 2000 字

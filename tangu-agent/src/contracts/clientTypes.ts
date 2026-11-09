@@ -318,6 +318,29 @@ export interface NormalAgentDef {
   /** 内置工具名单:'deny'=toolsList 内禁用(其余可用);'allow'=仅 toolsList 可用;缺省=不限制。 */
   toolsMode?: 'allow' | 'deny'
   toolsList?: string[]
+  /** 分身(引擎 agents/standIn.ts):这是谁的分身。/agent/agents 不列分身,出现在这里只会是 getAgent 读到的。 */
+  standInOf?: string
+  /** 本体这边:哪几组通道**不**换分身('im' = 微信 / 企业微信 / Telegram / QQ,'plugin' = 其他插件通道)。缺省 = 都换。 */
+  standInOff?: Array<'im' | 'plugin'>
+  /** 本体这边:勾给分身只读的 Library 文件(相对 Library 的名字)。 */
+  standInLibrary?: string[]
+  /** 本体这边:分身能不能读 human/AGENT.md(缺省不能)。 */
+  standInAgentMd?: boolean
+}
+
+/** GET /agent/stand-ins、/agent/agents/:slug/stand-ins 的一行。 */
+export interface StandInInfo {
+  slug: string
+  name: string
+  nameZh?: string
+  nameEn?: string
+  standInOf: string
+  standInChannel: string | null
+  /** 多联系人通道:联系人哈希(不是联系人本身)。 */
+  standInPeer: string | null
+  channelName: { zh: string; en: string } | null
+  createdAt: string
+  memoryEntries: number
 }
 
 export interface AgentConfig {

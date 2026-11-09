@@ -31,6 +31,7 @@ import { assistantTurnOf, compactContext, compactionThreshold, estimateMessagesT
 import { compactWorkingMessages, messageSource } from './compaction.js';
 import { compactionSettingsFor } from './compactionSettings.js';
 import { getAgent, resolveActiveSlug, resolveMemorySlug } from '../agents/agentRegistry.js';
+import { getAgentForRun } from '../agents/standIn.js';
 import { agentIdentitySection } from './agentActivation.js';
 import { runWithAgentSlug, currentAgentSlug } from '../seams/runContext.js';
 import { runHooks, type HookRunContext, type HookVerdict } from '../hooks/index.js';
@@ -337,7 +338,7 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
 
   // 具名 agent:载入它的人格叠在子代理契约之上;模型/思考档随它。拿不到则退回通用子代理。
   // 无 def 但带 instructions → 主 agent「自建」的临时子代理:用内联指令当人设(无文件夹 → 不写记忆日志)。
-  const def = p.agentSlug ? await getAgent(p.agentSlug).catch(() => null) : null;
+  const def = p.agentSlug ? await getAgentForRun(p.agentSlug).catch(() => null) : null; // 分身点名自己:人设同主循环从本体现读
   const persona = def
     ? [def.systemPrompt, def.soul, def.name?.trim() ? agentIdentitySection({ name: def.name.trim(), description: String(def.description || '').trim() }) : '']
       .map((s) => String(s || '').trim()).filter(Boolean).map((s) => textForThisDevice(s, runTagContext(!!deps().profile.capabilities.hostExec))).join('\n\n') // 别台的段落折成一行(11-06)
@@ -435,7 +436,7 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
   // 项目记忆(父会话所在的那个项目):子 agent 与父会话同一个会话 id,remember 的项目级它本来就写得进,提示里也该看得到已有的。
   // 读不到只丢这一段(同主循环)。
   let projectMemory: string | null = null;
-  if (deps().profile.capabilities.hostExec) {
+  if (deps().profile.capabilities.hostExec && !parentCtx.standIn) { // 分身的子代理继承分身的权限域:同样没有项目记忆
     try { projectMemory = (await buildProjectMemoryContext(parentCtx.userId, parentCtx.sessionId)) || null; }
     catch (e) { parentCtx.signal?.throwIfAborted(); console.warn('[sub-agent] load project memory failed:', (e as Error)?.message || e); }
   }

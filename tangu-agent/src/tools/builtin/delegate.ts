@@ -9,6 +9,7 @@
  * 子代理后端可换成外部 agent CLI(engine 参数,借 DSH 的 subagent-provider 思路):
  * 复用已有的 deps().engines(ACP 管理器),不新建注册表。装了引擎才暴露该参数。
  */
+import { standInDelegateDenied, standInOf } from '../../services/accessDomain.js';
 import { runSubAgent, SUB_MAX_ITERATIONS, type SubAgentParams } from '../../services/subAgent.js';
 import { claimDelegate, findDelegate, releaseDelegate } from '../../services/delegateTranscript.js';
 import { query } from '../../core/db.js';
@@ -160,6 +161,9 @@ export const delegateProvider: ToolProvider = {
         execute: async (args, ctx) => {
           const task = String(args.task ?? '').trim();
           if (!task) return 'Error: task is required';
+          // 分身(11-09):点名别的 Agent 会切到它的记忆域(subAgent 的 runWithAgentSlug)、外部引擎是本机全权 —— 一律拒
+          const standInDenied = standInDelegateDenied(standInOf(ctx), args);
+          if (standInDenied) return standInDenied;
           const modelId = ctx.modelId || ctx.profile?.defaultModelId || '';
           if (!modelId) return 'Error: no model available (parent run carries no modelId)';
           const handle = args.resume ? String(args.resume).trim().toLowerCase() : '';

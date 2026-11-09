@@ -238,6 +238,8 @@ export const CLASSIFICATION = {
   'GET /agent/agents-meta': [A, 'Agent roster meta'],
   'PUT /agent/agents-meta': [D, 'Agent roster meta write'],
   'GET /agent/agents/:slug/memory': [A, 'read Agent memory'],
+  'GET /agent/agents/:slug/stand-ins': [D, 'stand-ins are local-only; lists channel and contact identifiers'],
+  'GET /agent/stand-ins': [D, 'stand-ins are local-only; lists channel and contact identifiers'],
   'PUT /agent/agents/:slug/memory': [D, 'memory write (design appendix C)'],
   'GET /agent/agents/:slug/memory/revisions': [A, 'memory revisions'],
   'POST /agent/agents/:slug/memory/restore': [D, 'memory write'],

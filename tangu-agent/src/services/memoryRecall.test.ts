@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { configureTangu } from '../seams/runtime.js';
-import { runWithAgentSlug } from '../seams/runContext.js';
+import { runWithAgentSlug, setRunStandIn } from '../seams/runContext.js';
 import { createLocalMemoryBrain } from '../adapters/standalone/localMemoryBrain.js';
 import { createMemoryRepository } from './memoryRepository.js';
 import { buildAgentMemoryContext, MEMORY_RECALL_BUDGET, MEMORY_RECALL_MAX_CHARS, memoryQueryTerms } from './memoryRecall.js';
@@ -255,6 +255,31 @@ describe('memory layers in recall', () => {
     expect(c.content.match(/每周五发版/g)).toHaveLength(1);
     const off = await recall('alpha');
     expect(off.content).not.toContain('你在维护 AlphaProject 插件'); // 不给 portrait(云端 / 通道会话)就不读画像
+  });
+  it('a stand-in never gets the portrait in recall, even when the caller passes portrait: true (run context or stand-in slug)', async () => {
+    configure();
+    seed();
+    mkdirSync(join(temporaryHome, 'human'), { recursive: true });
+    writeFileSync(join(temporaryHome, 'human', 'SOUL.md'), '- 你叫林夏。\n\n## 工作 <!--tg topic=work-->\n\n项目与工具\n\n- 你在维护 AlphaProject 插件。 <!--tg by=user-->\n');
+    const ask = (agentSlug: string) => ({ userId: 'u1', appId: 'tangu', agentSlug, query: '插件 AlphaProject', excludeSessionId: 'current', portrait: true });
+    // 分身的 run(agentLoop 在读记忆之前 setRunStandIn):调用方漏了闸也不带画像
+    const dom = { slug: 'alpha-standin-wechat', bodySlug: 'alpha', agentMd: false, library: [], roots: [] };
+    const inRun = await runWithAgentSlug('alpha-standin-wechat', async () => { setRunStandIn(dom); return buildAgentMemoryContext(ask('alpha-standin-wechat')); });
+    expect(inRun.content).not.toContain("From the human's portrait");
+    expect(inRun.content).not.toContain('你在维护 AlphaProject 插件');
+    // 不在 run 里(后台 / 别的调用方):按分身的形状认
+    const bySlug = await runWithAgentSlug('alpha-standin-wechat', () => buildAgentMemoryContext(ask('alpha-standin-wechat')));
+    expect(bySlug.content).not.toContain('你在维护 AlphaProject 插件');
+    // 正对照:本体同样的调用照旧带画像详情
+    const body = await runWithAgentSlug('alpha', () => buildAgentMemoryContext(ask('alpha')));
+    expect(body.volatile).toContain('- 你在维护 AlphaProject 插件。');
+    // 存量的同形普通 Agent(没有 stand_in_of;新建已经不许用这个形状):按持久身份认,照旧带画像(Codex 评审 11-09)
+    const { saveAgent, invalidateAgentCache } = await import('../agents/agentRegistry.js');
+    await saveAgent({ slug: 'legacyx', name: 'Legacy', systemPrompt: 'x' } as any);
+    renameSync(join(temporaryHome, 'agents', 'legacyx'), join(temporaryHome, 'agents', 'my-standin-helper'));
+    invalidateAgentCache();
+    const legacy = await runWithAgentSlug('my-standin-helper', () => buildAgentMemoryContext(ask('my-standin-helper')));
+    expect(legacy.volatile).toContain('- 你在维护 AlphaProject 插件。');
   });
   it('a first resident entry longer than the whole budget is still given (cut), not dropped with everything after it', async () => {
     configure();

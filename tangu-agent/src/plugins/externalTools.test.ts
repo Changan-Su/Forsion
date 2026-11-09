@@ -2,7 +2,7 @@ import {beforeEach,expect,it,vi} from 'vitest';
 import {createTanguProfile} from '../profiles/tangu.js';
 const m=vi.hoisted(()=>({profile:null as any,decision:{action:'approve'} as any,gate:{action:'approve'} as any,exec:vi.fn(async()=>({result:'ok'})),controllers:new Map<string,AbortController>(),onApproval:null as any}));
 vi.mock('../seams/runtime.js',()=>({deps:()=>({profile:m.profile})}));
-vi.mock('../seams/runContext.js',()=>({enterRunContext:vi.fn()}));
+vi.mock('../seams/runContext.js',()=>({enterRunContext:vi.fn(),currentStandIn:()=>undefined}));
 vi.mock('../core/db.js',()=>({query:vi.fn(async()=>[])}));
 vi.mock('../core/config.js',()=>({configExists:()=>true,loadRawConfig:()=>({hostSandbox:{mode:'off'}}),getRawSection:()=>undefined}));
 vi.mock('../services/runStore.js',()=>({createRun:vi.fn(),updateRunStatus:vi.fn()}));

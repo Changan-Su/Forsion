@@ -236,6 +236,7 @@ import { tiersLive } from './lib/tiers-live.mjs';
 import { projTiersLive } from './lib/projtiers-live.mjs';
 import { portraitMoveLive } from './lib/portrait-move-live.mjs';
 import { importLive } from './lib/import-live.mjs';
+import { standinLive, writeChannelFixture as writeStandinChannel } from './lib/standin-live.mjs';
 import { dreamSeedLive } from './lib/dream-seed-live.mjs';
 import { layersLive } from './lib/layers-live.mjs';
 import { accountLive, startFakeCloud } from './lib/account-live.mjs';
@@ -413,6 +414,7 @@ OPT_IN.add('streamoverflow'); KEYS.push('streamoverflow'); // 注入:真 Codex �
 OPT_IN.add('foreignreasoning'); KEYS.push('foreignreasoning'); // 注入:回灌的加密推理被拒(400 invalid_encrypted_content);只在动 historyReplay 的推理绑定 / agentLoop 的拿掉重发时跑
 OPT_IN.add('relay'); KEYS.push('relay'); // 假提供方只回 429 usage_limit_reached;只在动 llm/quotaRelay.ts / agentLoop 的接力分支时跑。--relay-mode auto|ask|none
 KEYS.push('orgchat'); OPT_IN.add('orgchat'); // --only orgchat --org-plugin <bundle>: a multi-peer channel plugin brings its own legs in verify/orgchat.live.mjs
+OPT_IN.add('standin'); KEYS.push('standin'); // 分身(11-09):多联系人假通道 × 本体的私事;七个 run。动通道选 Agent / 分身权限域 / 文件读根 / 委派闸时跑;--kind neg 在旧代码上跑应当漏
 OPT_IN.add('appref'); // 四个 run;只在动 APP_REF_SECTION(应用 / 窗口引用那一段提示词)时才有信息量。
 const NEEDS = { dream: ['historian'], recall: ['historian', 'dream'] }; // 记忆链三连有先后依赖;其余场景自包含
 KEYS.push('marketplace', 'marketplacechat');
@@ -1259,6 +1261,8 @@ if (ONLY.has('orgchat')) {
     cpSync(join(ORG_PLUGIN, 'tangu-plugins', name), join(home, 'plugins', name), { recursive: true, filter: (p) => !p.split('/').includes('node_modules') });
   }
 }
+// standin(11-09):多联系人的假通道插件(文件收发),引擎起来时装载;场景见 lib/standin-live.mjs。
+const STANDIN_CHAN = ONLY.has('standin') ? writeStandinChannel(home, join(OUT, 'standin-channel')) : null;
 // plugin(10-02):隔离 home 的插件目录里放一个夹具引擎插件,它唯一的工具回一个随机标记(引擎起来时装载)。
 const PLUGIN_MARKER = `PLUG-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
 if (ONLY.has('plugin')) {
@@ -2214,6 +2218,49 @@ try {
     portraitMoveLive({ api, OUT, MODEL, home, rounds: SELF_ROUNDS }));
 
   // ── 从其他 AI 导入:拆条 / 归位 / 拦截 / 合并,导入后整次撤销(11-03);设计见 lib/import-live.mjs ──
+  // 分身(11-09):通道里的 run 不是台架起的 —— 跟着引擎自己起的 run 的事件流走到收尾(有审批就批,= 通道里的人点了批准,最坏情况)。
+  const followRun = async (runId, timeoutMs, { approve = false } = {}) => {
+    const ev = { runId, toolCalls: [], toolResults: [], subTools: [], approvals: 0, content: '', error: null, done: false };
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), timeoutMs);
+    try {
+      const res = await fetch(`${base}/agent/runs/${runId}/events`, { headers: { Authorization: `Bearer ${TOKEN}` }, signal: ac.signal });
+      if (!res.ok || !res.body) { ev.error = `events ${res.status}`; return ev; }
+      let buf = '';
+      outer: for await (const chunk of res.body) {
+        buf += Buffer.from(chunk).toString('utf8');
+        let i;
+        while ((i = buf.indexOf('\n\n')) >= 0) {
+          const frame = buf.slice(0, i); buf = buf.slice(i + 2);
+          for (const line of frame.split('\n')) {
+            if (!line.startsWith('data:')) continue;
+            let e; try { e = JSON.parse(line.slice(5).trim()); } catch { continue; }
+            const p = e.payload || {};
+            if (e.type === 'tool_call') ev.toolCalls.push(p.name || '?');
+            else if (e.type === 'tool_result') { const full = String(p.result || ''); ev.toolResults.push({ id: p.id, name: p.name || '?', isError: !!p.isError, full }); }
+            else if (e.type === 'subagent' && p.phase === 'tool') ev.subTools.push({ name: p.name || '?', isError: !!p.isError, preview: String(p.preview || '') });
+            else if (e.type === 'approval_request') {
+              ev.approvals += 1;
+              const id = p.approvalId || p.id || p.approval_id;
+              if (id) await api(`/agent/runs/${p.runId || runId}/approvals/${id}`, { method: 'POST', body: JSON.stringify({ action: approve ? 'approve' : 'reject' }) }).catch(() => {});
+            } else if (e.type === 'inquiry_request') {
+              const id = p.inquiryId || p.id;
+              if (id) await api(`/agent/runs/${p.runId || runId}/inquiries/${id}`, { method: 'POST', body: JSON.stringify({ answer: '(台架无人值守,没有人能回答这个问题。)' }) }).catch(() => {});
+            } else if (e.type === 'done') { ev.done = true; ev.content = String(p.content || ''); break outer; }
+            else if (e.type === 'error') { ev.error = String(p.error || 'error'); break outer; }
+          }
+        }
+      }
+      if (!ev.done && !ev.error) ev.error = 'SSE 结束但无 done/error';
+    } catch (e) {
+      ev.error = ac.signal.aborted ? `run ${timeoutMs / 1000}s 超时` : String(e?.message || e);
+      if (ac.signal.aborted) await api(`/agent/runs/${runId}/abort`, { method: 'POST', body: '{}' }).catch(() => {});
+    } finally { clearTimeout(timer); }
+    return ev;
+  };
+  await scenario('standin', `standin 分身:通道里问不到主人私聊 / 记忆 / human/ 里的事,委派和 shell 也拿不到,多联系人互不相通,人设跟着本体${argv.includes('--standin-neg') ? '(负对照)' : ''}`, () =>
+    standinLive({ api, sleep, until, home, OUT, MODEL, run, followRun, dbPath: join(home, 'state.db'), inbox: STANDIN_CHAN.inbox, outbox: STANDIN_CHAN.outbox, neg: argv.includes('--standin-neg') }));
+
   await scenario('import', `import 从其他 AI 导入:注入句不进可勾的去处、偏好进协作说明、项目的事进项目 ×${SELF_ROUNDS} 轮${argv.includes('--import-neg') ? '(负对照)' : ''}`, () =>
     importLive({ api, OUT, MODEL, home, src: join(home, '..', 'import-src'), rounds: SELF_ROUNDS, neg: argv.includes('--import-neg') }));
 

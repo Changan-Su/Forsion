@@ -27,6 +27,7 @@ import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, re
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { tanguHome } from '../core/tanguHome.js';
+import { currentStandIn } from '../seams/runContext.js';
 import { assertSafeChain } from './projectContext.js';
 import { humanProjectScope } from './humanContext.js';
 import { query } from '../core/db.js';
@@ -513,6 +514,8 @@ export async function addProjectFact(ref: ProjectMemoryRef, fact: string, sessio
 export interface ProjectMemoryInjection { stable: string; volatile: string }
 export async function buildProjectMemoryLayers(userId: string, sessionId: string, queryText = '', maxChars = PROJECT_MEMORY_RECALL_CHARS): Promise<ProjectMemoryInjection> {
   const empty: ProjectMemoryInjection = { stable: '', volatile: '' };
+  // 分身(11-09)没有项目记忆:常驻、详情索引、按这句话召回都不给(那份给这个项目里所有 Agent,含本体)。调用方另有闸,这里按 run 上下文再拒一次
+  if (currentStandIn()) return empty;
   const ref = await resolveProjectMemory(userId, sessionId);
   if (!ref) return empty;
   const layers = projectLayers(ref);

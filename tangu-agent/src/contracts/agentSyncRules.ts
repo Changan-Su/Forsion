@@ -45,7 +45,13 @@ export function validAgentFilePath(p: unknown): p is string {
 /** 只在本机、不进任何一套同步的 Agent 文件夹:Muse(11-05 用户定「暂不开放同步」,两台各跑各的)、
  *  Historian 复盘时建的临时目录 historian-<会话 id 前 12 位>(只有 MEMORY.md,传上去成了云端的「幽灵 Agent」)。 */
 export function agentSlugLocalOnly(slug: string): boolean {
-  return slug === MUSE_SLUG || /^historian-[a-z0-9]{1,12}$/.test(slug);
+  return slug === MUSE_SLUG || /^historian-[a-z0-9]{1,12}$/.test(slug) || isStandInSlugShape(slug);
+}
+/** Agent 分身(11-09,方案「记忆分层与 Agent 分身」第三步):`<本体>-standin-<通道>[-<联系人哈希>]`,超长截断加哈希也留着 `-standin-`。
+ *  分身文件夹装着别人在通道里说的话,只留本机、不进任何一套同步;这里是纯函数、读不到 config.toml,只能按形状认 ——
+ *  新建普通 Agent 时引擎拒绝这种形状(agentRegistry.writeAgentLocked),形状就等于身份。 */
+export function isStandInSlugShape(slug: string): boolean {
+  return /^[a-z0-9][a-z0-9-]*-standin-[a-z0-9]/.test(slug);
 }
 
 const CONFLICT_STAMP = /\(conflict \d{4}-\d{2}-\d{2} \d{4}(?: \d+)?\)/;

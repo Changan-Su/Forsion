@@ -54,7 +54,7 @@ export const displayFileProvider: ToolProvider = {
         if (ctx.execMode === 'host') {
           const abs = path.isAbsolute(rawPath) ? rawPath : path.resolve(ctx.cwd || process.cwd(), rawPath);
           // 契约 C4:展示 = 把文件交给用户(手机上还能下载)。凭据文件(按 realpath,软链改名同样拦)与 read_file 同一道硬拒,卡片都不发。
-          const readGuard = checkReadPath(abs);
+          const readGuard = checkReadPath(abs, ctx);
           if (!readGuard.ok) return `Error: ${readGuard.reason}`;
           try {
             const st = await fs.stat(abs);
