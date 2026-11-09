@@ -2,7 +2,7 @@
 // 数值存本机 localStorage forsion.dev.homeRails,刷新不丢;定下来的数要回写成 homeRails.ts 的缺省,这块面板不进生产。
 import { useRef, useState } from 'react'
 import { registerMessages, useI18n } from '../i18n'
-import { RAIL_GEOMETRY, RAIL_TUNE_RANGE, railThresholds, resetRailTuning, setRailTunerOpen, setRailTuning, type RailGeometry, type RailLayout, type RailMode } from './homeRails'
+import { RAIL_GEOMETRY, RAIL_TUNE_RANGE, SHIFT_ANY, railThresholds, resetRailTuning, setRailTunerOpen, setRailTuning, type RailGeometry, type RailLayout, type RailMode } from './homeRails'
 
 registerMessages({
   'home.tune.title': { zh: '侧栏收起调节（开发用）', en: 'Side rail folding (dev)' },
@@ -26,6 +26,9 @@ registerMessages({
   'home.tune.k.railMin': { zh: '侧栏最窄', en: 'Rail minimum' },
   'home.tune.k.gap': { zh: '栏和中间的缝', en: 'Gap to the center' },
   'home.tune.k.edge': { zh: '外边', en: 'Outer margin' },
+  'home.tune.k.maxShift': { zh: '中间最多偏移', en: 'Center max offset' },
+  'home.tune.k.maxShiftNote': { zh: '0 = 两边对称、空栏也留白；拉满 = 不限', en: '0 = symmetric, empty side keeps its space. Max = no limit' },
+  'home.tune.any': { zh: '不限', en: 'any' },
   'home.tune.reset': { zh: '恢复默认', en: 'Reset' },
   'home.tune.copy': { zh: '复制数值', en: 'Copy values' },
   'home.tune.copied': { zh: '已复制', en: 'Copied' },
@@ -33,7 +36,7 @@ registerMessages({
 })
 
 const KNOBS: readonly { k: keyof RailGeometry; note?: boolean }[] = [
-  { k: 'centerW', note: true }, { k: 'centerMin', note: true }, { k: 'railW' }, { k: 'railMin' }, { k: 'gap' }, { k: 'edge' },
+  { k: 'centerW', note: true }, { k: 'centerMin', note: true }, { k: 'railW' }, { k: 'railMin' }, { k: 'gap' }, { k: 'edge' }, { k: 'maxShift', note: true },
 ]
 
 export function HomeRailTuner({ geo, homeW, has, modes }: { geo: RailGeometry; homeW: number; has: { left: boolean; right: boolean }; modes: RailLayout }): React.JSX.Element {
@@ -82,8 +85,8 @@ export function HomeRailTuner({ geo, homeW, has, modes }: { geo: RailGeometry; h
           return (
             <label key={k} className={`hp-tuner-knob${geo[k] !== RAIL_GEOMETRY[k] ? ' on' : ''}`}>
               <span className="hp-tuner-name">{t(`home.tune.k.${k}`)}{note && <small>{t(`home.tune.k.${k}Note`)}</small>}</span>
-              <input type="range" min={lo} max={hi} step={k === 'gap' || k === 'edge' ? 2 : 4} value={geo[k]} data-knob={k} onChange={(e) => setRailTuning(k, Number(e.currentTarget.value))} />
-              <output>{geo[k]}</output>
+              <input type="range" min={lo} max={hi} step={k === 'gap' || k === 'edge' ? 2 : k === 'maxShift' ? 8 : 4} value={geo[k]} data-knob={k} onChange={(e) => setRailTuning(k, Number(e.currentTarget.value))} />
+              <output>{k === 'maxShift' && geo[k] >= SHIFT_ANY ? t('home.tune.any') : geo[k]}</output>
             </label>
           )
         })}

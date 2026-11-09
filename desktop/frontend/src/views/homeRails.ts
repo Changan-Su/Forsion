@@ -5,9 +5,12 @@ import { registerMessages } from '../i18n'
 
 export const RAIL_W = 256, RAIL_MIN = 216, STRIP_W = 36, EDGE = 16, GAP = 32, CENTER_W = 840
 export type RailMode = 'open' | 'strip' | 'hidden'
-/** 三栏几何。centerMin < centerW 时中间可以先缩、再收栏;缺省 centerMin = centerW = 中间不缩(11-03 定的)。 */
-export interface RailGeometry { centerW: number; centerMin: number; railW: number; railMin: number; gap: number; edge: number }
-export const RAIL_GEOMETRY: Readonly<RailGeometry> = { centerW: CENTER_W, centerMin: CENTER_W, railW: RAIL_W, railMin: RAIL_MIN, gap: GAP, edge: EDGE }
+/** 三栏几何。centerMin < centerW 时中间可以先缩、再收栏;缺省 centerMin = centerW = 中间不缩(11-03 定的)。
+ *  maxShift = 中间最多偏离正中多少:两边占的不一样(一边空、一边图标条一边展开)时,少的那边至少留「多的那边 − 2×maxShift」,
+ *  0 = 两边对称、空栏也留白;SHIFT_ANY(缺省)= 不限,空栏只留外边、中间往空的那边让(现在的样子)。 */
+export interface RailGeometry { centerW: number; centerMin: number; railW: number; railMin: number; gap: number; edge: number; maxShift: number }
+export const SHIFT_ANY = 400
+export const RAIL_GEOMETRY: Readonly<RailGeometry> = { centerW: CENTER_W, centerMin: CENTER_W, railW: RAIL_W, railMin: RAIL_MIN, gap: GAP, edge: EDGE, maxShift: SHIFT_ANY }
 export interface RailLayout { left: RailMode; right: RailMode; /** 展开的栏有多宽(两栏同宽) */ railW: number; /** 中间那块有多宽 */ centerW: number }
 
 // ── 开发用调节(只在 dev 构建里生效;生产恒为缺省) ──
@@ -17,7 +20,7 @@ registerMessages({
 const KEY = 'forsion.dev.homeRails'
 /** 每个滑块的范围;最窄的上限跟着最宽走(见 sanitize)。 */
 export const RAIL_TUNE_RANGE: Readonly<Record<keyof RailGeometry, readonly [number, number]>> = {
-  centerW: [600, 960], centerMin: [480, 960], railW: [160, 360], railMin: [120, 360], gap: [8, 64], edge: [0, 48],
+  centerW: [600, 960], centerMin: [480, 960], railW: [160, 360], railMin: [120, 360], gap: [8, 64], edge: [0, 48], maxShift: [0, SHIFT_ANY],
 }
 const clampTo = (k: keyof RailGeometry, v: unknown, fallback: number): number => {
   const n = typeof v === 'number' && Number.isFinite(v) ? Math.round(v) : fallback
@@ -65,22 +68,27 @@ export const setRailTunerOpen = (open: boolean): void => commit({ ...tuning, ope
 export const toggleRailTuner = (): void => setRailTunerOpen(!tuning.open)
 
 // ── 收起算法 ──
-/** 一边除了展开栏本身还要占多少:空栏只留外边;图标条 = 外边 + 36 + 缝;展开 = 外边 + 缝(栏宽另算)。 */
-const sideFixed = (g: RailGeometry, mode: RailMode, has: boolean): number => (!has ? g.edge : mode === 'strip' ? g.edge + STRIP_W + g.gap : g.edge + g.gap)
+/** 一边占多少:空栏只留外边;图标条 = 外边 + 36 + 缝;展开 = 外边 + 栏宽 + 缝。 */
+const sideRes = (g: RailGeometry, mode: RailMode, has: boolean, railW: number): number => (!has ? g.edge : mode === 'strip' ? g.edge + STRIP_W + g.gap : g.edge + railW + g.gap)
+/** 两边一共占多少。中间最多偏 maxShift,所以少的那边至少要「多的那边 − 2×maxShift」(空栏也跟着留白)。 */
+function sides(g: RailGeometry, left: RailMode, right: RailMode, has: { left: boolean; right: boolean }, railW: number): number {
+  const l = sideRes(g, left, has.left, railW), r = sideRes(g, right, has.right, railW)
+  if (g.maxShift >= SHIFT_ANY) return l + r
+  return Math.max(l, r - 2 * g.maxShift) + Math.max(r, l - 2 * g.maxShift)
+}
 /** 主页宽(不含 Ribbon,布局 px)+ 两栏有没有东西 → 两栏的样子。依次试 两栏展开 → 左收右开 → 两栏图标条:
- *  ① 中间满宽,剩下的平分给展开的栏,栏在 [railMin, railW] 之间伸缩;② 栏已到最窄,中间从 centerW 缩到 centerMin;
- *  都放不下就试下一种,最后只剩中间。空栏不占地方。缺省几何(中间不缩)下的门槛:两栏都有 ≥1368 三栏(≥1448 才 256 宽)、
+ *  ① 中间满宽,栏取 [railMin, railW] 里放得下的最宽;② 栏已到最窄,中间从 centerW 缩到 centerMin;
+ *  都放不下就试下一种,最后只剩中间。缺省几何(中间不缩、偏移不限)下的门槛:两栏都有 ≥1368 三栏(≥1448 才 256 宽)、
  *  ≥1188 先收左栏、≥1008 两栏都收;只有右栏 ≥1120 展开、≥940 图标条(#552,11-08)。 */
 export function railModes(width: number, has: { left: boolean; right: boolean } = { left: true, right: true }, g: RailGeometry = railGeometry()): RailLayout {
   for (const [left, right] of [['open', 'open'], ['strip', 'open'], ['strip', 'strip']] as const) {
     const opens = Number(has.left && left === 'open') + Number(has.right && right === 'open')
-    const room = width - sideFixed(g, left, has.left) - sideFixed(g, right, has.right) // 中间 + 展开的栏能分的宽
-    const spare = room - g.centerW
-    if (spare >= 0) {
-      const railW = opens ? Math.min(g.railW, Math.floor(spare / opens)) : g.railW
-      if (railW >= g.railMin) return { left, right, railW, centerW: g.centerW }
+    if (opens && sides(g, left, right, has, g.railMin) + g.centerW <= width) {
+      let lo = g.railMin, hi = g.railW // 放得下的最宽栏(sides 随栏宽单调增)
+      while (lo < hi) { const mid = Math.ceil((lo + hi) / 2); if (sides(g, left, right, has, mid) + g.centerW <= width) lo = mid; else hi = mid - 1 }
+      return { left, right, railW: lo, centerW: g.centerW }
     }
-    const centerW = Math.floor(Math.min(g.centerW, room - opens * g.railMin))
+    const centerW = Math.floor(Math.min(g.centerW, width - sides(g, left, right, has, g.railMin)))
     if (centerW >= g.centerMin) return { left, right, railW: opens ? g.railMin : g.railW, centerW }
   }
   return { left: 'hidden', right: 'hidden', railW: g.railW, centerW: g.centerW }

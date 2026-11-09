@@ -3,7 +3,7 @@
 // 门槛之外再扫一遍宽度,钉住 11-03 定的两条:中间 840 不缩、和栏之间至少 32,谁也不越界。
 import { describe, expect, it } from 'vitest'
 import { CENTER_W, EDGE, GAP, RAIL_MIN, RAIL_W, STRIP_W, centerShift, railModes, type RailMode } from './HomeWidgetParts'
-import { RAIL_GEOMETRY, railGeometry, railThresholds, resetRailTuning, setRailTuning, type RailGeometry } from './homeRails'
+import { RAIL_GEOMETRY, SHIFT_ANY, railGeometry, railThresholds, resetRailTuning, setRailTuning, type RailGeometry } from './homeRails'
 
 const both = { left: true, right: true }
 const rightOnly = { left: false, right: true }
@@ -87,9 +87,9 @@ describe('rail geometry tuning', () => {
 
   it('keeps every tuned layout inside its own bounds at every width', () => {
     const geos: RailGeometry[] = [
-      { centerW: 840, centerMin: 640, railW: 300, railMin: 180, gap: 16, edge: 8 },
-      { centerW: 760, centerMin: 760, railW: 240, railMin: 200, gap: 24, edge: 0 },
-      { centerW: 900, centerMin: 600, railW: 256, railMin: 256, gap: 48, edge: 32 },
+      { centerW: 840, centerMin: 640, railW: 300, railMin: 180, gap: 16, edge: 8, maxShift: SHIFT_ANY },
+      { centerW: 760, centerMin: 760, railW: 240, railMin: 200, gap: 24, edge: 0, maxShift: 0 },
+      { centerW: 900, centerMin: 600, railW: 256, railMin: 256, gap: 48, edge: 32, maxShift: 64 },
     ]
     for (const g of geos) {
       for (let w = 700; w <= 2000; w += 3) {
@@ -105,9 +105,22 @@ describe('rail geometry tuning', () => {
           if (has.right) expect(w - g.edge - width(m.right) - (x + m.centerW)).toBeGreaterThanOrEqual(g.gap)
           expect(x).toBeGreaterThanOrEqual(0)
           expect(x + m.centerW).toBeLessThanOrEqual(w)
+          if (g.maxShift < SHIFT_ANY) expect(Math.abs(x - (w - m.centerW) / 2)).toBeLessThanOrEqual(g.maxShift + 0.5)
         }
       }
     }
+  })
+
+  it('max offset 0 keeps the center dead center: the empty side reserves as much as the full one', () => {
+    const g: RailGeometry = { ...RAIL_GEOMETRY, maxShift: 0 }
+    // 只有右栏:左边也要留 16 + 216 + 32,右栏展开要 840 + 2×264
+    expect(railThresholds(g).right.open).toBe(840 + 2 * (16 + 216 + 32))
+    const m = railModes(1400, { left: false, right: true }, g)
+    expect(m).toMatchObject({ right: 'open', centerW: 840 })
+    expect(centerShift(1400, { mode: m.left, shown: false }, { mode: m.right, shown: true }, m.railW, g, m.centerW)).toBe(0)
+    // 中间也能缩时,1320 照样右栏展开、中间居中
+    const b = railModes(1320, { left: false, right: true }, { ...g, centerMin: 720 })
+    expect(b).toEqual({ left: 'open', right: 'open', railW: 216, centerW: 1320 - 2 * (16 + 216 + 32) })
   })
 
   it('the dev store clamps, keeps min ≤ max (the knob just moved wins) and resets', () => {
