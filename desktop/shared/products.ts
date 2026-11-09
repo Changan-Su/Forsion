@@ -27,6 +27,29 @@ export function effectivePluginId(dirName: string, manifestId: unknown): string 
   return SAFE_PLUGIN_ID.test(dirName) ? dirName : null
 }
 
+/** A bundled Space recipe names its views by the manifest id (`plugin:<id>:<view>`), but a marketplace install runs
+ *  under `market-<uuid>` and registers its views there. Rewrite the recipe's own view types to the runtime id;
+ *  other plugins' views and every other string stay as written. */
+export function bindRecipeToPlugin(json: string, manifestId: unknown, runtimeId: string): string {
+  if (typeof manifestId !== 'string' || !SAFE_PLUGIN_ID.test(manifestId) || manifestId === runtimeId) return json
+  const own = `plugin:${manifestId}:`
+  let changed = false
+  const walk = (v: unknown): unknown => {
+    if (typeof v === 'string') {
+      if (!v.startsWith(own) || !/^\S+$/.test(v.slice(own.length))) return v // 视图 id 不限字符集(可带 / 或中文),只排除空白
+      changed = true
+      return `plugin:${runtimeId}:${v.slice(own.length)}`
+    }
+    if (Array.isArray(v)) return v.map(walk)
+    if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, walk(x)]))
+    return v
+  }
+  try {
+    const out = walk(JSON.parse(json))
+    return changed ? JSON.stringify(out) : json
+  } catch { return json } // 坏 JSON 原样交给 parseSpaceJson 报错
+}
+
 export interface ProductSummary {
   /** `p_<12hex>`;过得了 deepLinkPlan.isSafeId。 */
   id: string
