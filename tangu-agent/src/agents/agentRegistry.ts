@@ -22,6 +22,7 @@ import { mirrorLegacyHuman } from './humanFolder.js';
 import { recordAgentRemoval } from '../services/cloudSyncAccount.js';
 import { moveToTrash, type TrashEntry } from '../services/trash.js';
 import { credentialReadTarget } from '../sandbox/hostSandboxProtection.js';
+import { isStandInSlugShape } from '../contracts/agentSyncRules.js';
 import { builtinAgentAvatar } from './builtinAvatars.js';
 import { LEGACY_PERSONAS, LEGACY_MUSE_PROMPTS, LEGACY_MUSE_DESCRIPTION } from './legacyPersonas.js';
 import { ARIOSO_SYSTEM_PROMPT, ARIOSO_SOUL, ARIA_SYSTEM_PROMPT, ARIA_SOUL, RECITA_SYSTEM_PROMPT, RECITA_SOUL } from './personaPrompts.js';
@@ -107,6 +108,19 @@ export interface NormalAgentDef {
   apps?: string[];
   /** 本地 agent 的 Library 绝对路径(私聊会话的 cwd);云端 agent 无此字段 ⇒ 不能开私聊(私聊 host-only)。 */
   libraryDir?: string;
+  /** 分身(11-09,agents/standIn.ts):这个 Agent 是谁的分身(config.toml stand_in_of)。有它 = 持久的分身身份:
+   *  人设按白名单每次从本体现读,记忆 / 日志 / 日程 / 工作笔记 / 会话是它自己的,权限域见 services/accessDomain.ts。建好后不再改。 */
+  standInOf?: string;
+  /** 分身接的通道 kind(stand_in_channel);多联系人通道另带 standInPeer(联系人哈希短串,只用来显示和区分)。 */
+  standInChannel?: string;
+  standInPeer?: string;
+  /** 本体这边:哪几组通道**不**换分身(stand_in_off;'im' = 微信 / 企业微信 / Telegram / QQ,'plugin' = 其他插件通道)。
+   *  缺席 = 都换(缺省开);用户关掉的显式记下,以后不翻回。 */
+  standInOff?: string[];
+  /** 本体这边:勾给分身看的 Library 文件(本体 Library 里的相对路径,stand_in_library)。只给文件,不给目录。 */
+  standInLibrary?: string[];
+  /** 本体这边:分身读不读 human/AGENT.md(stand_in_agent_md,缺省不读)。human/ 里别的一律不给。 */
+  standInAgentMd?: boolean;
 }
 
 /** 记忆/日志作用域 slug:共用默认 → DEFAULT_AGENT_SLUG;否则该 agent 自己。 */
@@ -294,6 +308,12 @@ export function parseAgentConfig(slug: string, tomlRaw: string, soul: string): N
       ? meta.tools_list.filter((t: any) => typeof t === 'string' && t.trim()).slice(0, 200)
       : undefined,
     apps,
+    ...(str(meta.stand_in_of).trim() ? { standInOf: str(meta.stand_in_of).trim() } : {}),
+    ...(str(meta.stand_in_channel).trim() ? { standInChannel: str(meta.stand_in_channel).trim() } : {}),
+    ...(str(meta.stand_in_peer).trim() ? { standInPeer: str(meta.stand_in_peer).trim() } : {}),
+    ...(Array.isArray(meta.stand_in_off) ? { standInOff: meta.stand_in_off.filter((t: any) => typeof t === 'string' && t.trim()).map((t: string) => t.trim()).slice(0, 20) } : {}),
+    ...(Array.isArray(meta.stand_in_library) ? { standInLibrary: meta.stand_in_library.filter((t: any) => typeof t === 'string' && t.trim()).slice(0, 200) } : {}),
+    ...(meta.stand_in_agent_md === true ? { standInAgentMd: true } : {}),
     ...(meta.compaction && typeof meta.compaction === 'object' && Object.keys(normalizeCompactionLayer(meta.compaction)).length
       ? { compaction: normalizeCompactionLayer(meta.compaction) as Record<string, unknown> }
       : {}),
@@ -329,6 +349,12 @@ export function serializeAgentConfig(def: NormalAgentDef): string {
   if (def.cloudSync) obj.cloud_sync = true;
   if (def.activityAccess) obj.activity_access = true;
   if (def.disabled) obj.disabled = true;
+  if (def.standInOf) obj.stand_in_of = def.standInOf;
+  if (def.standInChannel) obj.stand_in_channel = def.standInChannel;
+  if (def.standInPeer) obj.stand_in_peer = def.standInPeer;
+  if (def.standInOff) obj.stand_in_off = def.standInOff; // 空数组也落盘:「都开着」和「从没设过」一样,但写过就是写过
+  if (def.standInLibrary && def.standInLibrary.length) obj.stand_in_library = def.standInLibrary;
+  if (def.standInAgentMd) obj.stand_in_agent_md = true;
   if (def.toolsStrict) obj.tools_strict = true;
   if (def.toolsMode && def.toolsList) { // allow+空数组=全禁,合法;缺 mode 不落盘
     obj.tools_mode = def.toolsMode;
@@ -744,8 +770,9 @@ const agentsMetaFile = (): string => path.join(agentsDir(), '.meta.json');
 
 export function normalizeAgentsMeta(meta: Partial<AgentsMeta>): AgentsMeta {
   return {
-    order: Array.isArray(meta?.order) ? meta.order.filter((slug) => typeof slug === 'string' && isValidSlug(slug) && !isRetiredBuiltin({ slug })) : [],
-    defaultSlug: typeof meta?.defaultSlug === 'string' && isValidSlug(meta.defaultSlug) && !isRetiredBuiltin({ slug: meta.defaultSlug })
+    // 分身(按形状认,见 contracts isStandInSlugShape)不进名册顺序、也不能当缺省 Agent:它们挂在本体下,由引擎在通道里换上。
+    order: Array.isArray(meta?.order) ? meta.order.filter((slug) => typeof slug === 'string' && isValidSlug(slug) && !isRetiredBuiltin({ slug }) && !isStandInSlugShape(slug)) : [],
+    defaultSlug: typeof meta?.defaultSlug === 'string' && isValidSlug(meta.defaultSlug) && !isRetiredBuiltin({ slug: meta.defaultSlug }) && !isStandInSlugShape(meta.defaultSlug)
       ? meta.defaultSlug : DEFAULT_AGENT_SLUG,
   };
 }
@@ -801,7 +828,28 @@ export async function listAgents(): Promise<NormalAgentDef[]> {
   const meta = readAgentsMeta();
   const visible = sortAgentDefs(defs.filter((a) => !isRetiredBuiltin(a)), meta.order);
   cache = { stamp, defs: visible };
-  return visible;
+  return visible.filter((a) => !a.standInOf);
+}
+
+/** 分身(11-09):listAgents 一律不列它们 —— 选择器 / 缺省 Agent / 名册 / 商店导出 / 委派目标都不该看见;要它们的(名册嵌套行、
+ *  配置页「分身」一节、删本体时连带)走这里。bodySlug 缺省 = 全部分身。 */
+/** 本体的分身目录:直接扫盘(按形状筛、再认 config.toml 的 stand_in_of)。trashAgent 用它 —— 不经 listAgents,那会顺手迁移遗留扁平文件。 */
+async function standInDirsOf(bodySlug: string): Promise<string[]> {
+  const names = await fs.readdir(agentsDir()).catch(() => [] as string[]);
+  const out: string[] = [];
+  for (const name of names) {
+    if (!isStandInSlugShape(name) || !isValidSlug(name)) continue;
+    const d = path.join(agentsDir(), name);
+    if (!existsSync(path.join(d, 'config.toml'))) continue;
+    const def = await parseAgentFolder(name, d).catch(() => null);
+    if (def?.standInOf === bodySlug) out.push(d);
+  }
+  return out;
+}
+
+export async function listStandIns(bodySlug?: string): Promise<NormalAgentDef[]> {
+  await listAgents();
+  return (cache?.defs ?? []).filter((a) => !!a.standInOf && (!bodySlug || a.standInOf === bodySlug));
 }
 
 export async function getAgent(slug: string): Promise<NormalAgentDef | null> {
@@ -875,6 +923,14 @@ export interface SaveAgentInput {
   activityAccess?: boolean;
   /** 停用:从侧栏 / @ / 选择器 / 其他 Agent 的名册里收起,文件与记忆都留着;缺省保留已有。 */
   disabled?: boolean;
+  /** 分身身份(只在新建时生效,建好后沿用磁盘上的,见 NormalAgentDef.standInOf)。 */
+  standInOf?: string;
+  standInChannel?: string;
+  standInPeer?: string;
+  /** 本体的分身设置;缺省保留已有。 */
+  standInOff?: string[];
+  standInLibrary?: string[];
+  standInAgentMd?: boolean;
   /** 内置工具名单模式;null=清除(回到不限制),缺省保留已有。 */
   toolsMode?: 'allow' | 'deny' | null;
   /** 内置工具名单;null=清除,缺省保留已有。 */
@@ -977,6 +1033,17 @@ export function buildAgentDef(slug: string, existing: NormalAgentDef | null, inp
     cloudSync: input.cloudSync !== undefined ? input.cloudSync : existing?.cloudSync,
     activityAccess: input.activityAccess !== undefined ? input.activityAccess : existing?.activityAccess,
     disabled: (input.disabled !== undefined ? input.disabled : existing?.disabled) || undefined,
+    // 分身身份建好就不变(existing 优先):设置页 / manage_agent 的保存改不了「它是谁的分身」
+    standInOf: existing ? existing.standInOf : (input.standInOf && isValidSlug(input.standInOf) ? input.standInOf : undefined),
+    standInChannel: existing ? existing.standInChannel : (input.standInChannel || undefined),
+    standInPeer: existing ? existing.standInPeer : (input.standInPeer || undefined),
+    standInOff: input.standInOff !== undefined
+      ? [...new Set((Array.isArray(input.standInOff) ? input.standInOff : []).filter((t) => t === 'im' || t === 'plugin'))]
+      : existing?.standInOff,
+    standInLibrary: input.standInLibrary !== undefined
+      ? [...new Set((Array.isArray(input.standInLibrary) ? input.standInLibrary : []).filter((t) => typeof t === 'string' && t.trim() && !t.includes('..') && !t.startsWith('/') && !t.includes('\\')))].slice(0, 200)
+      : existing?.standInLibrary,
+    standInAgentMd: (input.standInAgentMd !== undefined ? input.standInAgentMd : existing?.standInAgentMd) || undefined,
     toolsStrict: existing?.toolsStrict,
     toolsMode: input.toolsMode !== undefined
       ? (input.toolsMode === 'allow' || input.toolsMode === 'deny' ? input.toolsMode : undefined)
@@ -1012,6 +1079,8 @@ function withAgentLock<T>(slug: string, fn: () => Promise<T>): Promise<T> {
 async function writeAgentLocked(slug: string, existing: NormalAgentDef | null, input: SaveAgentInput): Promise<NormalAgentDef> {
   if (input.mustExist && !existing) throw new AgentNotFoundError(slug);
   if (input.mustNotExist && existing) throw new AgentExistsError(slug);
+  // `-standin-` 的形状只留给分身:同步规则只能按形状认分身(纯函数读不到 config.toml),普通 Agent 占了就会悄悄不上云。
+  if (!existing && !input.standInOf && isStandInSlugShape(slug)) throw new Error(`"${slug}" is reserved for stand-ins (it contains "-standin-"); pick another id.`);
   const def = buildAgentDef(slug, existing, input);
   const adir = path.join(agentsDir(), slug);
   if (!existing) mkdirSync(adir, { recursive: true });
@@ -1117,9 +1186,12 @@ export async function trashAgent(slug: string, opts: { record?: boolean; alsoTra
     const dir = path.join(agentsDir(), slug);
     let undo = (): void => {};
     try {
-      const name = (await parseAgentFolder(slug, dir).catch(() => null))?.name || slug;
-      if (opts.record !== false) undo = recordAgentRemoval(slug); // 影子跟着目录走,不先记一笔,下次同步会从云端整份拉回来
-      const entry = await moveToTrash({ kind: 'agent', ref: slug, name, paths: [{ path: dir, role: 'dir' }, { path: path.join(agentsDir(), `${slug}.md`), role: 'flat' }, ...(opts.alsoTrash ?? [])] });
+      const own = await parseAgentFolder(slug, dir).catch(() => null);
+      const name = own?.name || slug;
+      // 删本体 = 它的分身一起进同一条回收站(恢复时一起回来);删分身不碰本体。分身只在本机,不记同步删除。
+      const standIns = own && !own.standInOf && existsSync(path.join(dir, 'config.toml')) ? (await standInDirsOf(slug)).map((p) => ({ path: p, role: 'standin' })) : [];
+      if (opts.record !== false && !own?.standInOf) undo = recordAgentRemoval(slug); // 影子跟着目录走,不先记一笔,下次同步会从云端整份拉回来
+      const entry = await moveToTrash({ kind: 'agent', ref: slug, name, paths: [{ path: dir, role: 'dir' }, { path: path.join(agentsDir(), `${slug}.md`), role: 'flat' }, ...standIns, ...(opts.alsoTrash ?? [])] });
       cache = null;
       return entry ? { ok: true, entry } : { ok: true };
     } catch {

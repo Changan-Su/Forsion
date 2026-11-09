@@ -13,6 +13,7 @@ import { agentsDir, humanDir, DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
 import { currentAgentSlug, currentDisplayAgentSlug } from '../seams/runContext.js';
 import { protectedHostPaths, credentialPaths, forsionConfigPaths, matchProtected, credentialReadTarget, remoteForbiddenRoot, withinForsionDomains, remoteHomeStartupTarget, remoteCwdForbidden, foldCase, canonicalFuturePath, pathWithin } from '../sandbox/hostSandboxProtection.js';
 import { effectiveRemote } from '../services/remoteOrigin.js';
+import { standInOf, standInReadDenied, standInWriteDenied } from '../services/accessDomain.js';
 
 /** agent 自己目录里的身份/自进化文件:generic 写工具(write_file/edit_file/apply_patch…)一律硬拒——
  *  人格(SOUL/config)归用户在设置里改;工作笔记必须走 manage_harness 的快照/封顶/脱敏管线,
@@ -170,14 +171,20 @@ export interface ReadPathVerdict { ok: boolean; reason: string }
  *  Library 文件端点 / 通道发文件同样过这道)。防的是「run 读出 forsion_token 再去批准别处的审批」(§6.4-1);按 realpath 判,软链进来同样拒。
  *  ⚠️ shell(run_bash / run_background)读同一个文件不在这里:known-safe 捷径碰到凭据就不再免批、改走审批 —— 审批是 D1 下的同意,
  *  不是硬拒;要彻底隔离得开宿主沙箱(方案 §6.8)。 */
-export function checkReadPath(abs: string): ReadPathVerdict {
+export function checkReadPath(abs: string, ctx?: Pick<ToolContext, 'standIn'>): ReadPathVerdict {
   const hit = credentialReadTarget(abs);
-  return hit ? { ok: false, reason: `Access denied: ${abs} is a protected credential file and cannot be read by agents.` } : { ok: true, reason: '' };
+  if (hit) return { ok: false, reason: `Access denied: ${abs} is a protected credential file and cannot be read by agents.` };
+  // 分身(11-09):只认自己的文件夹、工作目录、勾给它的 Library 文件(services/accessDomain.ts)。读闸原来只挡凭据。
+  const standIn = standInReadDenied(standInOf(ctx), abs);
+  return standIn ? { ok: false, reason: standIn } : { ok: true, reason: '' };
 }
 
 /** 判定一次 host 写入路径。abs 应为已解析的绝对路径;内部再做 realpath 归一(防软链)。 */
 export function checkWritePath(ctx: ToolContext, abs: string): WritePathVerdict {
   const resolved = realResolve(abs);
+  // 分身(11-09):自己的文件夹和工作目录之外一律硬拒(不进审批 —— 通道里能点「批准」的是别人)
+  const standIn = standInWriteDenied(standInOf(ctx), abs);
+  if (standIn) return { ok: false, hardDeny: true, reason: standIn };
   if (effectiveRemote(ctx)) {
     const hit = protectedRemoteWrite(abs);
     if (hit) return { ok: false, hardDeny: true, reason: `Remote sessions cannot write protected configuration, credentials or startup files: ${resolved}` };

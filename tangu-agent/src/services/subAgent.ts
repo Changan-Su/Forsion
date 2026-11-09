@@ -435,7 +435,7 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
   // 项目记忆(父会话所在的那个项目):子 agent 与父会话同一个会话 id,remember 的项目级它本来就写得进,提示里也该看得到已有的。
   // 读不到只丢这一段(同主循环)。
   let projectMemory: string | null = null;
-  if (deps().profile.capabilities.hostExec) {
+  if (deps().profile.capabilities.hostExec && !parentCtx.standIn) { // 分身的子代理继承分身的权限域:同样没有项目记忆
     try { projectMemory = (await buildProjectMemoryContext(parentCtx.userId, parentCtx.sessionId)) || null; }
     catch (e) { parentCtx.signal?.throwIfAborted(); console.warn('[sub-agent] load project memory failed:', (e as Error)?.message || e); }
   }

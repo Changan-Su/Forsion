@@ -6,6 +6,7 @@
  * 内置 provider 由 registry.ts(门面)按固定顺序注册;app 自带工具经
  * AppProfile.toolLoadout.providers 注入(resolve 时排在内置之后,不受 builtins 白名单约束)。
  */
+import { standInOf, standInToolDenied } from '../services/accessDomain.js';
 import type { ToolImpl, ToolContext } from './toolTypes.js';
 import type { AppProfile } from '../seams/appProfile.js';
 import { presetOf } from '../core/presetTable.js';
@@ -80,6 +81,8 @@ export interface ToolProvider {
   /** 宿主打的标(plugins/bootstrap 按 plugins/official.ts 的判定现填,插件自己写的值一律被覆盖):官方签名捆绑包里的引擎插件。
    *  只开两扇门:chat 预设的 toolFace.officialPlugin 点名的工具、capabilities.approvalPreview。 */
   official?: boolean;
+  /** 宿主打的标:注册这个 provider 的插件 id(plugins/bootstrap 现填)。分身只给注册它那个通道的插件的工具(services/accessDomain)。 */
+  ownerPlugin?: string;
 }
 
 // 各 preset 的情境 deferred 集合住 core/presetTable.ts(单源);这里 re-export 保持既有 import 路径。
@@ -97,6 +100,7 @@ export function isMcpDeferred(t: Pick<LoadedMcpTool, 'deferLoading'>): boolean {
  *  就会出现「目录里有、装不上」或「装上了、defs 里没有」。taken = 本 ctx 的内置 + 自定义工具名(调用方现算,本层拿不到 profile)。 */
 export function visibleMcpTools(ctx: ToolContext, taken: ReadonlySet<string>): LoadedMcpTool[] {
   if (!ctx.mcpTools?.size) return [];
+  if (standInOf(ctx)) return []; // 分身不给 MCP(第一期:连「通道驱动插件自带的 MCP」也不给,见 services/accessDomain)
   if (!presetOf(ctx.preset).externalTools || isHostSandboxRestricted(ctx)) return [];
   const out: LoadedMcpTool[] = [];
   for (const t of ctx.mcpTools.values()) {
@@ -397,7 +401,10 @@ export function resolveTools(profile: AppProfile, ctx: ToolContext, origins?: Ma
     if (hasDeferred) builtins = [...builtins, 'load_tools'];
   }
   const out = new Map<string, ToolDef>();
-  const add = (t: ToolDef, isBuiltin: boolean, fromPlugin = false, official = false): void => {
+  const standIn = standInOf(ctx);
+  const add = (t: ToolDef, isBuiltin: boolean, fromPlugin = false, official = false, ownerPlugin?: string): void => {
+    // 分身闸(11-09)和子代理硬闸一样放在**最前**:内置只给白名单,插件只给注册这个通道的那个插件的,一处拒 = 四处都没有。
+    if (standIn && standInToolDenied(standIn, t.name, { isBuiltin, fromPlugin, ownerPlugin })) return;
     // 子代理硬闸放在**最前**:defs / 目录 / load_tools 的可解锁集 / executeTool 的按名解析
     // 全经本函数,一处拒=四处都没有。放在 deferBypass 之前(Muse/自动化的子代理也一样拒)。
     if (isSubAgentDenied(ctx, t.name)) return;
@@ -445,8 +452,8 @@ export function resolveTools(profile: AppProfile, ctx: ToolContext, origins?: Ma
     out.set(t.name, t);
     origins?.set(t.name, fromPlugin ? 'plugin' : 'core');
   };
-  for (const p of providers) for (const t of providerTools(p)) add(t, true, p.origin === 'plugin', p.origin === 'plugin' && p.official === true);
-  for (const p of profile.toolLoadout.providers ?? []) for (const t of providerTools(p)) add(t, false, p.origin === 'plugin');
+  for (const p of providers) for (const t of providerTools(p)) add(t, true, p.origin === 'plugin', p.origin === 'plugin' && p.official === true, p.ownerPlugin);
+  for (const p of profile.toolLoadout.providers ?? []) for (const t of providerTools(p)) add(t, false, p.origin === 'plugin', false, p.ownerPlugin);
   return out;
 }
 

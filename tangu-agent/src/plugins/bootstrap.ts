@@ -155,7 +155,7 @@ function makeContext(d: DiscoveredPlugin, inst: Instance, official = false): Tan
       p = scopedProvider(p);
       inst.providerIds.add(p.id);
       providerOwner.set(p.id, id);
-      registerToolProvider({ ...p, origin: 'plugin', official }); // 全局注册表,append 在核心 builtin 之后;打 plugin 标(chat 正向面只认核心 provider)
+      registerToolProvider({ ...p, origin: 'plugin', official, ownerPlugin: id }); // 全局注册表,append 在核心 builtin 之后;打 plugin 标(chat 正向面只认核心 provider)
     },
     registerSkillProvider: (provider) => {
       if (!live('技能')) return;
@@ -177,7 +177,7 @@ function makeContext(d: DiscoveredPlugin, inst: Instance, official = false): Tan
         meta = { ...meta, id: metaAliases.get(meta.id)!, ...(meta.toolProvider ? { toolProvider: scopedProvider(meta.toolProvider) } : {}) };
       }
       // official 只认宿主的判定:插件自己在 provider 上写的值一律盖掉(registry.registerPlugin 展开 toolProvider 时保留它)。
-      if (meta.toolProvider) meta = { ...meta, toolProvider: { ...meta.toolProvider, official } };
+      if (meta.toolProvider) meta = { ...meta, toolProvider: { ...meta.toolProvider, official, ownerPlugin: id } };
       inst.metaIds.add(meta.id);
       if (meta.toolProvider) { // registry 顺带注册的 provider 也进台账
         inst.providerIds.add(meta.toolProvider.id);

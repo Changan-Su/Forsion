@@ -2,6 +2,7 @@
  * 记忆/日志工具:remember / log_event / read_log(execute 体从 registry.ts 原样搬移)。
  * 经 deps().brain.memory 落云端(或 standalone 的 httpBrain)。
  */
+import { standInOf } from '../../services/accessDomain.js';
 import { deps } from '../../seams/runtime.js';
 import type { ToolProvider } from '../toolRegistry.js';
 import type { Tool } from '../../core/types.js';
@@ -109,7 +110,8 @@ function rememberVariant(o: { project: boolean; notes: boolean; person: boolean;
  *  定义和执行同一个判定:定义里没有 person 时,执行收到 person 明确报错,绝不降级记进 Agent 自己的记忆。 */
 export function personAllowed(ctx: ToolContext): boolean {
   const profile = ctx.profile ?? deps().profile;
-  return !!profile?.capabilities?.hostExec && !effectiveRemote(ctx) && !ctx.ephemeral && !ctx.subAgentDepth && !ctx.channelSession && !ctx.channelUnknown;
+  // 分身(11-09)按身份挡:不看会话此刻连没连通道(主人在桌面上打开分身的会话接着聊,照样不写画像)
+  return !!profile?.capabilities?.hostExec && !effectiveRemote(ctx) && !ctx.ephemeral && !ctx.subAgentDepth && !ctx.channelSession && !ctx.channelUnknown && !standInOf(ctx);
 }
 /** 有没有工作笔记这个工具:本机引擎的 profile、本机直连(host)、不是 chat 面,且 profile 的内置工具名单里有它
  *  (manageHarness.isEnabledFor + preset 的 host 族整族拒 + toolLoadout.builtins)。
@@ -303,7 +305,8 @@ export const memoryLogProvider: ToolProvider = {
         const remoteDenied = effectiveRemote(ctx) ? remoteManagementDenied('remember', action) : null;
         if (remoteDenied) return `Error: ${remoteDenied}`;
         // 项目级记忆只在本机有(存用户目录、按会话存档的项目路径索引);无项目会话 / 云端 → 没有这一级。
-        const projectRef = deps().profile.capabilities.hostExec ? await resolveProjectMemory(ctx.userId, ctx.sessionId) : null;
+        // 分身没有项目记忆(项目记忆按项目路径给这个项目里的所有 Agent,分身写进去本体就读得到)
+        const projectRef = deps().profile.capabilities.hostExec && !standInOf(ctx) ? await resolveProjectMemory(ctx.userId, ctx.sessionId) : null;
         if (action === 'list') {
           if (!brain.getMemorySnapshot) return 'Error: this memory backend does not support entry management.';
           const snapshot = await brain.getMemorySnapshot(ctx.userId);

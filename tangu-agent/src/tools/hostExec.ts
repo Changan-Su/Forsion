@@ -22,6 +22,7 @@ import { pathToFileURL } from 'node:url';
 import type { ToolContext, ToolImpl } from './toolTypes.js';
 import type { ToolProvider } from './toolRegistry.js';
 import { checkReadPath, checkWritePath } from './fsPolicy.js';
+import { standInOf, standInSearchDenied } from '../services/accessDomain.js';
 import { citeHitFor, citeHowFor, citeRefFor, docxText, grepPages, pageFilter, pagesOf, renderPages, type DocPage } from './documentPages.js';
 import { amadeusVaultPath } from './builtin/amadeus.js';
 import { contentFingerprint, noteAgentWrite, noteRead, readFingerprint } from './readState.js';
@@ -318,7 +319,7 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
       const abs = resolvePath(ctx, String(args.path ?? ''));
       // 凭据文件(auth.json / provider-auth.json / 设备密钥 / 引擎 .env 与 config.json …)对所有 run 读硬拒(契约 C4,方案 §6.4-1)。
       // 硬拒的是结构化读工具;shell 读同一个文件走审批(已接受的边界,见 hostSandboxProtection.credentialPaths)。
-      const readGuard = checkReadPath(abs);
+      const readGuard = checkReadPath(abs, ctx);
       if (!readGuard.ok) return `Error: ${readGuard.reason}`;
       // 图片文件文本读取没有意义(会吐二进制乱码)——引导模型改用 view_image「看」图。
       const imgMime = imageMimeForPath(abs);
@@ -486,6 +487,8 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
     },
     execute: async (args, ctx): Promise<string> => {
       const abs = resolvePath(ctx, String(args.path ?? '.'));
+      const standInDenied = standInSearchDenied(standInOf(ctx), abs); // 分身:列不了读不了的目录,也列不了把它们包在底下的目录
+      if (standInDenied) return `Error: ${standInDenied}`;
       let entries;
       try {
         entries = await hostSandboxFs(ctx).readdir(abs, { withFileTypes: true });
@@ -603,7 +606,7 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
       const rawPath = String(args.path ?? '');
       if (!rawPath) return 'Error: path is required';
       const abs = resolvePath(ctx, rawPath);
-      const readGuard = checkReadPath(abs); // 凭据文件读硬拒(C4):改个 .png 的软链名也按 realpath 拦
+      const readGuard = checkReadPath(abs, ctx); // 凭据文件读硬拒(C4):改个 .png 的软链名也按 realpath 拦
       if (!readGuard.ok) return `Error: ${readGuard.reason}`;
       const mime = imageMimeForPath(abs);
       if (!mime) {
@@ -676,7 +679,7 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
       const rawPath = String(args.path ?? '');
       if (!rawPath) return 'Error: path is required';
       const abs = resolvePath(ctx, rawPath);
-      const readGuard = checkReadPath(abs); // 凭据文件读硬拒(C4)
+      const readGuard = checkReadPath(abs, ctx); // 凭据文件读硬拒(C4)
       if (!readGuard.ok) return `Error: ${readGuard.reason}`;
       if (imageMimeForPath(abs)) {
         return `${relDisplay(ctx, abs)} is an image — use view_image to see it; read_document is for PDF/Office documents.`;

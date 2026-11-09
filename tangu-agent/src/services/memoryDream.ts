@@ -2,6 +2,7 @@
  *
  *  Why default-on: Historian only ever writes *candidates*; this job is the single path that promotes them into
  *  MEMORY.md. While it was opt-in, a stock install collected candidates forever and never remembered any of them. */
+import { isStandInSlug } from '../agents/standIn.js';
 import { deps } from '../seams/runtime.js';
 import { runWithUserAgentScope } from '../seams/runContext.js';
 import { query } from '../core/db.js';
@@ -267,7 +268,8 @@ export function startMemoryDream(userId: string, slug: string, opts: { automatic
         return parseJson(result.content);
       };
       // 画像只在本机有;来自连着聊天通道的会话的候选不进画像(别人也可能在读那段对话),同 agentLoop 的 channelSession 判定
-      const portrait = !!deps().profile.capabilities.hostExec;
+      // 分身(11-09)按持久身份整个不进画像:不看候选那段会话此刻还绑不绑通道(解绑之后保护就没了)
+      const portrait = !!deps().profile.capabilities.hostExec && !(await isStandInSlug(slug));
       const noPortrait = new Set<string>();
       if (portrait) {
         const { channelHub } = await import('../channels/hub.js');

@@ -26,7 +26,10 @@ import { takeRunThinking } from './sessionSettings.js';
 import { registerLiveRun, unregisterLiveRun, type RunStatus } from './runStatus.js';
 import { makeClientActionRequester } from './clientAck.js';
 import { runHooks, type HookRunContext, type HookVerdict } from '../hooks/index.js';
-import { enterRunContext, currentDisplayAgentSlug, currentRunId, setRunClientTag, setRunCwd, setRunSessionContext } from '../seams/runContext.js';
+import { enterRunContext, currentDisplayAgentSlug, currentRunId, setRunClientTag, setRunCwd, setRunSessionContext, setRunStandIn } from '../seams/runContext.js';
+import { getAgentForRun } from '../agents/standIn.js';
+import { resolveRunStandIn, standInSection } from './standInRun.js';
+import { standInSearchDenied } from './accessDomain.js';
 import path from 'node:path';
 import { agentsDir, DEFAULT_AGENT_SLUG, engineLibDir } from '../core/tanguHome.js';
 import { renderAboutHuman } from '../agents/humanFolder.js';
@@ -1042,12 +1045,14 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   // 稳态(存值 == run 值)零额外查询;只有缺键/不一致时才数一次消息判「空白」。
   let preset: Preset | undefined = parsePreset(agentConfig.preset);
   let pluginReadOnly = agentConfig.pluginReadOnly === true;
+  let storedAgentSlug: string | undefined; // 分身:这次之前会话存的是谁(换身份的会话不接着用旧历史,见下)
   try {
     const rawStored = await deps().state.getAgentConfig(sessionId);
     ac.signal.throwIfAborted();
     const stored = rawStored ? (typeof rawStored === 'string' ? JSON.parse(rawStored) : rawStored) : null;
     if (stored !== null && (typeof stored !== 'object' || Array.isArray(stored))) throw new Error('Invalid stored session Agent configuration');
     pluginReadOnly ||= stored?.pluginReadOnly === true;
+    if (typeof stored?.agentSlug === 'string') storedAgentSlug = stored.agentSlug;
     // 轨道身份先于 agentSlug 纠偏:私聊会话的 agentSlug 由 soloAgentSlug 钉死,下面的写穿会把存值也顺手纠回来。
     bindSessionFacts(agentConfig, pickSessionFacts(stored));
     if (stored?.delegatedFrom) {
@@ -1114,6 +1119,12 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   if (agentConfig.agentSlug && (typeof agentConfig.agentSlug !== 'string' || !isValidSlug(agentConfig.agentSlug))) {
     throw new Error('The selected Agent identity is invalid. Choose an Agent and retry.');
   }
+  // 分身(11-09,agents/standIn.ts):读任何上下文之前先定这次是谁。通道 run 按本体的开关换成分身(第一次用到时建);
+  // 选中的就是分身的(主人在桌面上接着聊分身的会话)照样是分身。之后激活 / 记忆 / 工具 / 文件只认解析出的这个身份。
+  const standIn = profile.capabilities.hostExec && agentConfig.agentSlug && !inlineMemberDef
+    ? await resolveRunStandIn(sessionId, agentConfig, plainObject(input.source), storedAgentSlug)
+    : undefined;
+  ac.signal.throwIfAborted();
   // A valid local snapshot serves immediately. Only a first hydrate waits for cloud files.
   const agentFiles = deps().brain.agentFiles;
   if (profile.capabilities.hostExec && agentConfig.agentSlug && !inlineMemberDef) {
@@ -1133,7 +1144,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   const { activeAgentSlug, memScopeSlug, profile: agentProfile } = await applyAgentActivation(
     agentConfig,
     userId,
-    inlineMemberDef ? async (slug: string) => (slug === inlineMemberDef.slug ? inlineMemberDef : getAgent(slug)) : getAgent,
+    inlineMemberDef ? async (slug: string) => (slug === inlineMemberDef.slug ? inlineMemberDef : getAgent(slug)) : getAgentForRun, // 分身:人设白名单从本体现读
     deps().brain.agents,
     remoteCap ? { approvalCap: remoteCap } : undefined,
   );
@@ -1151,6 +1162,13 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   // ~/.tangu/agents/<slug>/;未选择时使用默认 Agent，无效身份已在上面拒绝。enterWith 覆盖整个异步子树。
   // memScopeSlug=共用默认时落 DEFAULT,否则该 agent 自己——保证「每个 agent 只写自己的(或显式共用默认的)」。
   enterRunContext(userId, runId, memScopeSlug, activeAgentSlug);
+  if (standIn) {
+    setRunStandIn(standIn);
+    // 会话里存过的工具选择不带进分身:MCP / 自定义工具一律不给(工具面另有 resolveTools 最前面那道闸)
+    agentConfig.enabledMcpServers = [];
+    agentConfig.enabledToolIds = [];
+    agentConfig.libraryOrder = [];
+  }
   // 默认不限轮数(20 → 90 → 不限,10-25):轮数分不出「长任务」和「失控」,默认 90 截断过 48 分钟、113 次调用的正常任务。
   // 停下来靠模型收尾、额度 / TANGU_MAX_RUN_COST 成本闸、同参连败守卫与用户停止(Codex / Pi 同款)。显式上限照旧生效:
   // 会话 /loop、Agent 定义的 max_iterations(applyAgentActivation 已套下限并入)、自动化 / Muse 自带的上限;不再有 200 硬顶。
@@ -1624,7 +1642,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     if (profile.capabilities.hostExec && !inlineMemberDef) {
       systemParts.push(HUMAN_GUIDANCE);
       // 三个维度并排读、谁也不盖谁(10-20 用户定):和这个人的共识(human/HUMAN.md)→ 这个 Agent 的 → 这个项目的。
-      for (const scope of [{ kind: 'human', file: 'HUMAN.md' }, { kind: 'agent', slug: activeAgentSlug }] as const) {
+      // 分身:人这边的那份(human/HUMAN.md)和项目的那份都不给,只读它自己文件夹里的
+      for (const scope of [...(standIn ? [] : [{ kind: 'human', file: 'HUMAN.md' }] as const), { kind: 'agent', slug: activeAgentSlug }] as const) {
         try {
           const human = await readHuman(scope);
           const humanBlock = renderHumanContext(human);
@@ -1633,7 +1652,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         } catch (e) { console.warn('[human] Cannot load collaboration context:', e instanceof Error ? e.message : e); }
       }
       try {
-        const projectScope = await humanProjectScope(userId, sessionId);
+        const projectScope = standIn ? null : await humanProjectScope(userId, sessionId);
         if (projectScope) {
           const projectHuman = await readHuman(projectScope);
           const projectBlock = renderHumanContext(projectHuman);
@@ -1693,7 +1712,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     //    Agent 们对人的认识 SOUL.md。替换原来那段 USER.md,不并排加(提示词体量)。HUMAN.md 共识走下面协作说明那段。读失败不阻断。
     //    连着聊天通道的会话(别人也可能在读)不注入人的本子和画像,只留 AGENT.md 那段要求(10-29 画像写入方案 细节 5)。
     try {
-      const aboutHuman = renderAboutHuman({ private: channelBinding === false });
+      // 分身:human/ 全不给,只有本体那边开了开关才留 AGENT.md(按身份判,不看会话此刻连没连通道)
+      const aboutHuman = standIn ? (standIn.agentMd ? renderAboutHuman({ private: false }) : '') : renderAboutHuman({ private: channelBinding === false });
       if (aboutHuman) systemParts.push(aboutHuman);
     } catch { /* ignore */ }
     ctxMark('profile');
@@ -1728,6 +1748,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         folderBlock += '\n\nLibrary preferred reading order:\n' + lines.join('\n');
       }
       systemParts.push(folderBlock);
+      if (standIn) systemParts.push(standInSection(standIn, agentProfile?.name));
     } else if (Array.isArray(agentConfig.libraryOrder) && agentConfig.libraryOrder.length) {
       // 5b) 云端 sandbox 形态:无 host 文件工具、专属文件夹不可达 → 把 library_order 的**文本**资料内容注入
       //     (封顶 ~30KB),让云端 agent 也用上自己的 Library(Phase 2 B/D3)。二进制运行时用不上 → 跳过。
@@ -1749,7 +1770,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       }
     }
     // 5c) 其他 Agent 名册(仅 host、非子代理、非团队成员 —— delegate / start_discussion 在那些 run 里本就不可见)。
-    if (execMode === 'host' && ps.hostExtras && !isTeamMember && !agentConfig.delegatedFrom) {
+    if (execMode === 'host' && ps.hostExtras && !isTeamMember && !agentConfig.delegatedFrom && !standIn) { // 分身委派不了别的 Agent,不给名册
       try { const roster = await buildAgentRoster(activeAgentSlug); if (roster) systemParts.push(roster); }
       catch (e) { console.warn('[agent-core] agent roster skipped:', (e as Error)?.message || e); }
     }
@@ -1796,7 +1817,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     }
     // 6b) 项目级记忆:只在本项目成立的事实,本项目里的 agent 共用(services/projectMemory.ts)。同一项目的会话之间不变 → 稳定区。
     //     只在本机有(存用户目录、按会话存档的项目路径索引);无项目会话不注入。读不到只丢这一段,不影响上面的 agent 记忆。
-    if (profile.capabilities.hostExec) {
+    if (profile.capabilities.hostExec && !standIn) { // 分身没有项目记忆(那份给这个项目里所有 Agent,含本体)
       try { const projectMemory = await buildProjectMemoryContext(userId, sessionId); if (projectMemory) systemParts.push(projectMemory); }
       catch (e) { ac.signal.throwIfAborted(); console.warn('[agent-core] load project memory failed:', (e as Error)?.message || e); }
     }
@@ -1824,7 +1845,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       ? agentConfig.mentionedProjects.map((p: any) => (p && typeof p.path === 'string' ? safeRealpath(p.path) : '')).filter(Boolean).slice(0, 8)
       : [];
     // 会话属于一个本机项目 → remember 露出「项目级」(定义多一段说明和一个参数);别的会话拿到的是精简定义。
-    const projectRef = profile.capabilities.hostExec ? await resolveProjectMemory(userId, sessionId) : null;
+    const projectRef = profile.capabilities.hostExec && !standIn ? await resolveProjectMemory(userId, sessionId) : null;
     const projectScoped = projectRef ? true : undefined;
     const projectPath = projectRef?.project;
     // MCP 工具(deps().mcp 仅 standalone/TUI 装配):run 开始取一次快照、run 内冻结——
@@ -1832,7 +1853,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // agent_config.enabledMcpServers(string[],缺省=全部已连接 server)做会话级过滤。
     // 取在门禁字段之前(11-06):MCP 缺省按需加载,下面拼「Additional Tools」目录时就要知道有哪些 MCP 工具。
     let mcpTools: Map<string, import('../mcp/toolBridge.js').LoadedMcpTool> | undefined;
-    if (deps().mcp && !planMode && ps.externalTools) {
+    if (deps().mcp && !planMode && ps.externalTools && !standIn) { // 分身不给 MCP
       const enabledMcp = Array.isArray(agentConfig.enabledMcpServers) ? agentConfig.enabledMcpServers : undefined;
       await deps().mcp!.reloadConfig?.();
       const snapshot = deps().mcp!.toolsForRun(enabledMcp);
@@ -1847,7 +1868,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // profile.features.customTools=false 的 app(Connect manifest / admin 覆盖)同样整体跳过:此前该开关无人读。
     // 同 MCP 取在门禁字段之前(11-06):目录 / defs / load_tools 的撞名判定要看同一份自定义工具名。
     let customTools: Map<string, LoadedCustomTool> | undefined;
-    if (!planMode && ps.externalTools && profile.features.customTools) {
+    if (!planMode && ps.externalTools && profile.features.customTools && !standIn) { // 分身不给自定义工具
       try {
         const loaded = await loadCustomTools(appId, agentConfig);
         if (loaded.length) {
@@ -1878,6 +1899,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       subAgentGrants: agentConfig.delegatedFrom ? new Set<string>(agentConfig.subAgentGrants || []) : undefined,
       subAgentDelegator: agentConfig.delegatedBy,
       agentSlug: activeAgentSlug,
+      standIn, // 分身的权限域(工具面 / 读写根 / 委派 / 画像),子代理随 ctx 继承
       thinkingLevel,
       teamSessionId: isTeamMember ? String(teamMember.teamSessionId) : undefined,
       inDiscussion: isTeamMember || undefined, // 团队成员不可再起讨论 / 派遣 / 界面动作(防裂变;与旧群聊发言人同款)
@@ -1928,7 +1950,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     //     chat(hostWorkspace=false)不注入:D11 形态(ii)下这是用户真实磁盘的文件名。
     // ponytail:探针只认契约里的 6 个系统段 → system:cwd 一路盖到系统消息末尾(清单 + 日程 + 插件 + hooks + 计划模式)。
     segAt('system:cwd');
-    if (execMode === 'host' && ps.hostWorkspace) {
+    if (execMode === 'host' && ps.hostWorkspace && !standInSearchDenied(standIn, cwd || process.cwd())) { // 分身:工作目录底下包着读不了的就不列
       try {
         const listing = await listFilesLocal(cwd || process.cwd(), '/');
         if (listing && listing !== '(empty directory)') {
@@ -1968,6 +1990,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     //    随插件内容(如表情库)变化只失效最短后缀。读失败不阻断 run。
     for (const p of listPluginMetas()) {
       if (!ps.externalTools || !p.promptSection || !isPluginEnabledSync(p.id)) continue; // chat:插件工具进不了面,其提示段一并不注入
+      if (standIn && p.id !== standIn.channelOwner) continue; // 分身:只留注册这个通道的插件的段(别的插件可能带着主人的日历 / 资料)
       try {
         const sec = await p.promptSection({ slug: activeAgentSlug, userId, execMode });
         if (sec && sec.trim()) systemParts.push(sec.trim());

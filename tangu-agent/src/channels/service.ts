@@ -37,6 +37,7 @@ import { resolveInquiry } from '../services/inquiries.js';
 import { patchSessionAgentConfig, readSessionSettings, requestRunThinking, setSessionModelId } from '../services/sessionSettings.js';
 import { chatModels, listModelCatalog } from '../services/modelCatalog.js';
 import { readAgentsMeta, listAgents, getAgent, agentCapOf, isValidSlug } from '../agents/agentRegistry.js';
+import { isStandInSlugShape, resolveRunIdentity } from '../agents/standIn.js';
 import { resolveReplySegment, splitMessage, segmentDelayMs } from '../services/replySegment.js';
 import { resolveVoiceMessage, synthesizeVoiceWav, VOICE_MESSAGE_PLUGIN_ID } from '../services/voiceMessage.js';
 import { setPluginEnabled, setScopeSettings } from '../plugins/settingsStore.js';
@@ -885,7 +886,13 @@ export class ChannelService {
     const rows = await query<any[]>(`SELECT model_id, agent_config, project_path FROM chat_sessions WHERE id = ? AND user_id = ? LIMIT 1`, [binding.session_id, binding.user_id]);
     // 通道已停 / 账号已断开:静默作废(回 '' —— receive 不推空串,不往已停的驱动 / 已移除的账号说话;也不再把入站文件落盘)。
     if (channelGone()) return '';
-    const session = rows[0];
+    const firstSession = rows[0];
+    if (!firstSession) return channelMsg(L, 'sessionMissing');
+    // 分身(11-09):这次是谁先按同一个解析器算一遍;会话里存的是另一个身份、又已经聊过 → 开新的会话历史、绑定改指它(见 standInSession)
+    const runSessionId = await this.standInSession(binding, msg, parseJson(firstSession.agent_config) || {}, firstSession.model_id, channelGone);
+    if (runSessionId === null || channelGone()) return '';
+    const session = runSessionId === binding.session_id ? firstSession
+      : (await query<any[]>(`SELECT model_id, agent_config, project_path FROM chat_sessions WHERE id = ? AND user_id = ? LIMIT 1`, [runSessionId, binding.user_id]))[0];
     if (!session) return channelMsg(L, 'sessionMissing');
     const modelId = session.model_id || this.settings().modelId || deps().profile.defaultModelId || '';
     if (!modelId) return channelMsg(L, 'noModel');
@@ -936,7 +943,7 @@ export class ChannelService {
     if (channelGone()) return ''; // 存入站文件期间停了:同上,不建 run
     await createRun({
       id: runId,
-      sessionId: binding.session_id,
+      sessionId: runSessionId,
       userId: binding.user_id,
       appId: deps().profile.appId,
       modelId,
@@ -949,7 +956,7 @@ export class ChannelService {
         // 通道消息没有渲染层 POST /agent/runs 可自报端信息;继承托管引擎的 Desktop 端/版本。
         // 下游仍由 input.source.channel 区分微信/Telegram/QQ。
         ...(this.hostClientTag ? { client: this.hostClientTag } : {}),
-        source: { channel: this.kind, accountId: msg.accountId, openid: msg.peerId, messageId: msg.messageId },
+        source: { channel: this.kind, accountId: msg.accountId, openid: msg.peerId, messageId: msg.messageId, ...(this.multiPeer ? { multiPeer: true } : {}) }, // multiPeer:分身按联系人分开(agents/standIn.ts)
       },
     });
     if (channelGone() || lockedNow()) {
@@ -957,13 +964,37 @@ export class ChannelService {
       // 照样没有通道在听。入队后立即中止:abortRun 对排队(出队 + 补 aborted 终态)与已起的(AbortController;runLoop 在
       // 钩子 / 采样之前就 throwIfAborted)都认。不 trackRun:没有订阅,结果不往已停的通道 / 已移除的账号推。
       // 这里到 enqueueRun 之间没有 await,不会再漏一个窗口。
-      enqueueRun(binding.session_id, runId);
+      enqueueRun(runSessionId, runId);
       abortRun(runId);
       return '';
     }
     this.trackRun(runId, addr, agentConfig.agentSlug);
-    enqueueRun(binding.session_id, runId);
+    enqueueRun(runSessionId, runId);
     return { wait: this.waitForRunReply(runId) };
+  }
+
+  /**
+   * 分身(11-09,agents/standIn.ts):这次 run 是谁用同一个解析器先算一遍。会话里存的身份和这次的不一样(本体 ↔ 分身,或换成了另一个分身)、
+   * 而且会话里已经有消息 → 开一段新的会话历史:旧历史里有另一个身份的东西(本体的私事,或分身那边别人说的话)。新会话照旧建在通道工作区
+   * (多联系人的建在这个联系人的目录),绑定只改分派时认到的这一条(同 /new 的 setConnectedSession 守卫);通道配置里存的仍是本体 slug。
+   * 返回这次 run 用的会话 id;通道已停 / 账号已断开 → null。空会话直接用,身份由 agentLoop 写穿。agentLoop 那边还有一道同样的兜底。
+   */
+  private async standInSession(binding: BindingRow, msg: ChannelInbound, sessionCfg: any, modelId: string | null | undefined, gone: () => boolean): Promise<string | null> {
+    const selected = pinnedAgent(msg.agentSlug) || (typeof sessionCfg.agentSlug === 'string' ? sessionCfg.agentSlug : '') || this.settings().agentSlug || readAgentsMeta().defaultSlug;
+    const stored = typeof sessionCfg.agentSlug === 'string' ? sessionCfg.agentSlug : '';
+    let id;
+    try {
+      if (!selected || !isValidSlug(selected)) return binding.session_id;
+      id = await resolveRunIdentity(selected, { kind: this.kind, accountId: msg.accountId, peerId: msg.peerId, multiPeer: this.multiPeer });
+    } catch { return binding.session_id; } // 解析失败交给 agentLoop(它用同一个解析器,失败会如实报错;换了身份的旧会话它也拒跑)
+    if (stored === id.slug || (id.kind !== 'standin' && !isStandInSlugShape(stored))) return binding.session_id;
+    if ((await deps().state.countSessionMessages(binding.session_id)) === 0) return binding.session_id;
+    if (gone()) return null;
+    const peer = this.multiPeer && binding.peer_id ? { cwd: this.peerWorkspaceDir(binding.account_id, binding.peer_id), agentSlug: pinnedAgent(msg.agentSlug) } : undefined;
+    const sid = await this.createChannelSession(binding.user_id, modelId || undefined, undefined, peer);
+    if (gone()) return null;
+    await this.setConnectedSession(binding.user_id, sid, { stale: gone, binding });
+    return sid;
   }
 
   // ── run 跟踪 ──

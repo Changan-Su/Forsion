@@ -26,6 +26,7 @@
  *
  * 成本：背景任务、用户未主动发起 → 只记 usage（projectSource='tangu-historian'），默认不扣配额。
  */
+import { isStandInSlug } from '../agents/standIn.js';
 import { v4 as uuidv4 } from 'uuid';
 import { completeHistorianTask } from './historianSession.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
@@ -701,7 +702,8 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
     // 项目会话(归属只认会话存档的 project_path):判官把「只在这个项目成立」的候选单列一组,由代码写进项目记忆。
     // 判官看得到已有的那份,免得把前台刚 remember 过的同一件事换个说法再记一遍(项目记忆没有 Dream 去重)。
     // 等用户确认的、用户丢弃过的候选也算「已经提过」:不给它看,它每轮换个说法再提一遍,待确认清单里就是一排近义句。
-    const projectRef = judgeMemory && deps().profile.capabilities.hostExec ? await resolveProjectMemory(userId, sessionId) : null;
+    // 分身(11-09)的会话不往项目记忆里写:那份给这个项目里所有 Agent(含本体),按持久身份判
+    const projectRef = judgeMemory && deps().profile.capabilities.hostExec && !(await isStandInSlug(effectiveSlug)) ? await resolveProjectMemory(userId, sessionId) : null;
     const projectKnown = projectRef
       ? projectKnownForJudge(((await peekProjectMemory(projectRef).catch(() => null))?.entries ?? []).map((e) => e.content), pendingProjectFacts(projectRef))
       : '';

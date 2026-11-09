@@ -14,7 +14,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { skillsDir as userSkillsDir, agentsDir, WORKSPACE_DIR_NAME, LEGACY_WORKSPACE_DIR_NAME } from '../core/tanguHome.js';
 import { bundleSkillRoots } from '../plugins/bundles.js';
-import { currentDisplayAgentSlug, currentRunCwd } from '../seams/runContext.js';
+import { currentDisplayAgentSlug, currentRunCwd, currentStandIn } from '../seams/runContext.js';
 import type { SkillRecord } from '../core/types.js';
 import { listAgents } from '../agents/agentRegistry.js';
 import { disabledSkillNames } from './availability.js';
@@ -425,7 +425,8 @@ async function listFilesystemSkills(): Promise<SkillRecord[]> {
     ...bundleSkillRoots().map((d): [string, SkillSource] => [d, 'bundle']),
     [userSkillsDir(), 'user'],
   ];
-  const slug = currentDisplayAgentSlug();
+  // 分身(11-09):技能是人设的一部分、跟着本体走 —— 按本体的技能目录装(读根那边对这几个目录只读放行,见 services/accessDomain)
+  const slug = currentStandIn()?.bodySlug || currentDisplayAgentSlug();
   if (slug && SAFE_SLUG.test(slug)) {
     roots.push([builtinAgentSkillsDir(slug), 'agent']); // 该 agent 的包内置默认技能
     roots.push([agentSkillsDir(slug), 'agent']);        // 用户为该 agent 增改的(覆盖同 id 默认)

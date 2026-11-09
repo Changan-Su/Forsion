@@ -13,7 +13,7 @@
 import { Router } from 'express';
 import { authMiddleware, AuthRequest } from '../core/http.js';
 import { deps } from '../seams/runtime.js';
-import { listAgents, getAgent, saveAgent, patchAgent, AgentNotFoundError, AgentExistsError, type AgentPatch, saveAgentAvatar, readAgentAvatar, deleteAgentAvatar, readAgentsMeta, writeAgentsMeta, resolveMemorySlug, listLibraryFiles, readLibraryFile, writeLibraryFile, deleteLibraryFile, MUSE_AGENT_SLUG, slugFromNames, isValidSlug, AGENT_MAX_ITERATIONS_MIN, agentUndeletableReason } from '../agents/agentRegistry.js';
+import { listAgents, getAgent, saveAgent, patchAgent, AgentNotFoundError, AgentExistsError, type AgentPatch, saveAgentAvatar, readAgentAvatar, deleteAgentAvatar, readAgentsMeta, writeAgentsMeta, resolveMemorySlug, listLibraryFiles, readLibraryFile, writeLibraryFile, deleteLibraryFile, MUSE_AGENT_SLUG, slugFromNames, isValidSlug, AGENT_MAX_ITERATIONS_MIN, agentUndeletableReason, listStandIns } from '../agents/agentRegistry.js';
 import {
   cloudAgentsEnabled, cloudListAgents, cloudGetAgent, cloudSaveAgent, cloudPatchAgent, cloudDeleteAgent,
   cloudSaveAgentAvatar, cloudReadAgentAvatar, cloudDeleteAgentAvatar, cloudReadAgentsMeta, cloudWriteAgentsMeta,
@@ -78,6 +78,23 @@ router.get('/agent/agents', authMiddleware, async (req: AuthRequest, res) => {
     res.json({ agents });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'list agents failed' });
+  }
+});
+
+/** 分身(11-09):挂在这个本体下的分身(名册嵌套行、配置页「分身」一节)。/agent/agents 不列它们 —— 选择器 / 缺省 Agent 都不该看见。
+ *  memoryEntries = 分身自己记了几条(界面上「N 条自己的记忆」)。本机才有(分身只留本机)。 */
+router.get('/agent/agents/:slug/stand-ins', authMiddleware, async (req: AuthRequest, res) => {
+  if (cloudAgentsEnabled()) return void res.json({ standIns: [] });
+  if (!ensureLocal(res)) return;
+  try {
+    const standIns = (await listStandIns(req.params.slug)).map((a) => {
+      let memoryEntries = 0;
+      try { memoryEntries = createMemoryRepository(path.join(agentsDir(), a.slug)).snapshot().entries.length; } catch { /* 还没有记忆 */ }
+      return { slug: a.slug, name: a.name, nameZh: a.nameZh, nameEn: a.nameEn, standInOf: a.standInOf, standInChannel: a.standInChannel ?? null, standInPeer: a.standInPeer ?? null, createdAt: a.createdAt, memoryEntries };
+    });
+    res.json({ standIns });
+  } catch (e: any) {
+    res.status(500).json({ detail: e?.message || 'list stand-ins failed' });
   }
 });
 
@@ -196,7 +213,13 @@ router.patch('/agent/agents/:slug', authMiddleware, async (req: AuthRequest, res
       // null=显式清除(saveAgent 收 null → undefined 落盘);缺省保留现值
       toolsMode: b.toolsMode,
       toolsList: b.toolsList,
+      // 分身那一节(11-09,本体这边):哪几组通道不换分身、勾给分身的 Library 文件、读不读 human/AGENT.md;缺省保留现值
+      standInOff: Array.isArray(b.standInOff) ? b.standInOff.map(String) : undefined,
+      standInLibrary: Array.isArray(b.standInLibrary) ? b.standInLibrary.map(String) : undefined,
+      standInAgentMd: b.standInAgentMd != null ? !!b.standInAgentMd : undefined,
     };
+    // 分身本身的设置跟着本体走,这一节只在本体上改
+    if (cur.standInOf && (fields.standInOff || fields.standInLibrary || fields.standInAgentMd !== undefined)) return res.status(400).json({ detail: 'Stand-in settings belong to the agent it stands in for' });
     // 本地 patchAgent / 云端 cloudPatchAgent 同一口径:在按 slug(云端按 user+slug)串行化的保存里现读 cur、只改提交了的字段、
     // 审批档没提交就 KEEP、恒 mustExist。旧口径用上面锁外预读的 cur 补齐全部未提交字段(含审批档)再整份保存 ——
     // 并发的用户收紧(另一个窗口 / 另一台设备)被这份旧快照盖回去;并发的 DELETE 被这次保存建回来(复活)。
