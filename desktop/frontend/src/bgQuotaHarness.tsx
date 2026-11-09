@@ -1,7 +1,8 @@
 /**
  * Dev-only visual harness:Muse 设置里的「后台额度」区块 —— 真 SpecialAgentsTab + 生产 CSS;引擎端点与账号额度都是桩,
  * 不连任何后端、不碰凭证。?dark / ?lang=en / ?other(Muse 显式选了不计入后台额度的模型)/ ?cloud(云端引擎:只露按轮 Historian 四项)/
- * ?remote(设备页:引擎对远程来源只回开关摘要 + remote:true,P1-K10b —— 只读说明 + 两张开关卡)。
+ * ?remote(设备页:引擎对远程来源只回开关摘要 + remote:true,P1-K10b —— 只读说明 + 两张开关卡)/
+ * ?localbg=<id>(本机「设置 → 模型 → 后台任务」那格选了它:m-direct 自己接的 Key / m-pro 别的 Forsion 模型)。
  * 跑法:node scripts/e2e-editor.cjs --check=bgquota-settings --shot
  */
 import { createRoot } from 'react-dom/client'
@@ -11,6 +12,7 @@ import './styles/base.css'
 import { applyTheme } from './theme/loader'
 import { SpecialAgentsTab } from './components/SpecialAgentsTab'
 import type { AccountQuotaView } from './services/accountQuota'
+import { installEngineHost } from './services/engine/targets'
 import type { TanguDesktopConfig } from './types'
 import './tangu/store/standalone' // 不走 installEngine:自己装 Tangu 的 store 半身(界面热更新 3c);排在最后,别早于上面那些打桩的 import
 
@@ -19,6 +21,8 @@ setLocaleGlobal(params.get('lang') === 'en' ? 'en' : 'zh')
 applyTheme('lovable', 'cream', 'cream', params.has('dark') ? 'dark' : 'light')
 
 const BACKEND = 'http://stub.local'
+// 引擎请求经 homeTarget() 取地址(宿主接缝):装一个指向桩的宿主,盖掉 appStore 求值时装的那个(同 channelsHarness)
+installEngineHost({ cfg: () => ({ backendUrl: BACKEND, token: 'stub' } as TanguDesktopConfig), desktopConfig: () => ({ mode: 'managed' }) })
 const config = {
   historian: { enabled: true, modelId: '', everyRounds: 5, firstRoundTrigger: true, mode: 'independent', prompt: '', harnessCandidates: false },
   muse: {
@@ -44,7 +48,8 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Res
     return json({ config, defaults: { historianPrompt: '' }, ...(params.has('cloud') ? { cloud: true } : {}) })
   }
   if (path === '/agent/models') {
-    return json({ models: [{ id: 'm-cheap', name: 'Luna Lite', provider: 'forsion' }, { id: 'm-pro', name: 'Opus 5.5', provider: 'forsion' }], backgroundModelId: 'm-cheap', defaultModelId: 'm-pro' })
+    return json({ models: [{ id: 'm-cheap', name: 'Luna Lite', provider: 'forsion', source: 'forsion' }, { id: 'm-pro', name: 'Opus 5.5', provider: 'forsion', source: 'forsion' },
+      { id: 'm-direct', name: 'My Key', provider: 'openai', source: 'direct' }], backgroundModelId: 'm-cheap', defaultModelId: 'm-pro' })
   }
   if (path === '/agent/agents') return json({ agents: [] })
   return json({})
@@ -60,6 +65,7 @@ let quota: AccountQuotaView = {
 }
 window.tangu = {
   accountQuota: async () => ({ status: 200, json: quota }),
+  getConfig: async () => ({ backgroundModelId: params.get('localbg') || '' }),
   // 有 Extend 的桌面:剩余量与开关 / 转入都在「Forsion 云端 → 额度与积分」,Muse 页只给跳转(记下跳到哪)
   cloudInvoke: async () => ({}),
   openFloatingPanel: async (req: { params?: { tab?: string } }) => {

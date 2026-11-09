@@ -6,7 +6,10 @@
  *   开关、一句话说清它做什么、用哪个模型、两问(什么时候能找你 / 最想盯什么 + 自己写一条,60 字)。
  *   主动程度不问(按缺省「普通」,不发 proactivity),卡底写一句去哪改。
  *   模型行只改显示、不替用户写 modelId:不选时显示引擎实际会用的那个(本机后台任务那一格 → 云端后台模型 → 默认模型,要在可用列表里),
- *   一个都没有才黄底「选择模型 / 先不醒」;登录了缺省「跟随云端」走独立额度,改选 Forsion 的模型算主额度、直连的算接的那家。
+ *   一个都没有才黄底「选择模型 / 先不醒」;直连的模型算接的那家。
+ *   后台额度(11-09 方案 A,docs/ToBeImproved/Muse后台额度模型标注方案_2026-11-09/):只计一个模型 = 账号额度接口的 background.modelId。
+ *   Muse 实际会用的就是它 → 提示行开头贴「后台额度」标签;是别的 Forsion 模型 → 黄字说明扣 AI 额度,⚠ 点开「额度怎么算」;
+ *   读不到额度(没登录 / 读失败 / 服务端没配)→ 不贴、不下结论。菜单里那一项和「跟随云端 · 它」也贴(ModelSelect 的 tagFor)。
  *   选择器是设置页那个 ModelSelect(按管理员分组 / 本机偏好隐藏,11-08 用户:有组件就复用),不另写原生 select。
  * - 团队名单:头像(AgentAvatar)+ 名字,默认 / 后台 / 已停用的标签,没有开关(停用开关在 Agents 页)。「在 Agents 里管理」引导结束后去 Agents。
  * - 电脑历史:新装机预先打开,带着开着的开关点「开始使用」才算数(跳过引导不开,主页之后再问一次);老用户显示现在的值。
@@ -14,7 +17,7 @@
  * 这一屏的选择都在「开始使用」时一起写(commitRef),只发和读到的不一样的;写失败留在这一屏报错。
  */
 import React, { useEffect, useRef, useState } from 'react'
-import { Check, ChevronRight, Cpu, Globe, History, Monitor, PenLine } from 'lucide-react'
+import { ArrowLeftRight, Check, ChevronRight, CircleAlert, Cpu, Gauge, Gift, Globe, History, Monitor, PenLine } from 'lucide-react'
 import { useI18n } from '../../i18n'
 import { agentName } from '../../agentName'
 import { agentDescription } from '../builtinAgentDescriptions'
@@ -25,6 +28,9 @@ import type { ModelsResponse, NormalAgentDef, SpecialAgentsConfig } from '../../
 import { SettingsSwitch } from '../SettingsPrimitives'
 import { AgentAvatar } from '../AgentAvatar'
 import { ModelSelect } from '../ModelSelect'
+import { BackgroundQuotaTag } from '../BackgroundQuotaTag'
+import { backgroundQuotaModel, useAccountQuota } from '../../services/useAccountQuota'
+import { usePopDismiss } from './usePopDismiss'
 import { ComputerHistoryDialog } from '../ComputerHistoryDialog'
 import { useComputerHistory } from '../useComputerHistory'
 import { historyUntouched } from '../computerHistoryAskMark'
@@ -57,6 +63,10 @@ export function TeamScreen({ resolveTarget, commitRef, signedIn, fresh, onOpenAg
   const [models, setModels] = useState<ModelsResponse | null>(null)
   /** 本机「设置 › 模型 › 后台任务」那一格(config.json models.background):引擎先认它,再认云端(resolveBackgroundModelId)。 */
   const [localBg, setLocalBg] = useState('')
+  const quota = useAccountQuota(signedIn)
+  const [quotaOpen, setQuotaOpen] = useState(false)
+  const modelRowRef = useRef<HTMLDivElement>(null)
+  usePopDismiss(modelRowRef, quotaOpen, () => setQuotaOpen(false))
   // 草稿
   const [museOn, setMuseOn] = useState(true)
   const [modelId, setModelId] = useState('')
@@ -179,11 +189,32 @@ export function TeamScreen({ resolveTarget, commitRef, signedIn, fresh, onOpenAg
   const needModel = !signedIn && !modelId && !fallback
   const picked = modelId ? modelOf(modelId) : undefined
   const mainQuota = (m?: { source?: string }): boolean => signedIn && m?.source === 'forsion'
+  // 后台额度:Muse 实际会用的模型(不选时按引擎的回落链)和计入的那个比;计入的那个读不到就不下结论
+  const bgModel = signedIn ? backgroundQuotaModel(quota) : ''
+  const effective = modelId || localPick || (signedIn ? models?.backgroundModelId || '' : fallback)
+  const bgCounts = !!bgModel && effective === bgModel
+  const bgOther = !!bgModel && !bgCounts && !!effective && mainQuota(modelOf(effective))
   const modelHint = needModel ? (llms.length ? 'ob3.muse.modelNeed' : 'ob3.muse.modelNone')
     : !modelId ? (localPick ? (mainQuota(modelOf(localPick)) ? 'ob3.muse.modelLocalMain' : 'ob3.muse.modelLocal') : signedIn ? 'ob3.muse.modelCloud' : 'ob3.muse.modelDefault')
-    : mainQuota(picked) ? 'ob3.muse.modelMain' : 'ob3.muse.modelBilled'
+    // 走到这几句 = 额度读不到(读到了走下面的 bgCounts / bgOther):不知道计入哪个,只说「用 Forsion 账号的额度」,不说主额度还是后台额度。
+    // 显式选的正是云端给后台配的那个:和跟随云端一样说。
+    : mainQuota(picked) ? (modelId === models?.backgroundModelId ? 'ob3.muse.modelSameAsCloud' : 'ob3.muse.modelMain') : 'ob3.muse.modelBilled'
+  const share = Number.isFinite(quota?.background?.sharePercent) ? Number(quota?.background?.sharePercent) : 15
+  const nameOf = (id: string): string => modelOf(id)?.name || id
   // 不选那一项写什么:本机那一格 / 跟随云端(知道云端配的是哪个就带上名字)/ 默认模型 / 选择模型
   const cloudBg = !localPick && signedIn && models?.backgroundModelId && modelOf(models.backgroundModelId) ? models.backgroundModelId : ''
+  const tagFor = (id: string): React.ReactNode => {
+    if (!bgModel) return null
+    const target = id || localPick || cloudBg // 「跟随云端 / 本机后台任务」那一项实际落到哪个
+    return target === bgModel ? <BackgroundQuotaTag /> : null
+  }
+  const hint: React.ReactNode = bgCounts && !needModel
+    ? <span className="ob3-bgq" data-ob-bgq="counts"><BackgroundQuotaTag />{t('ob3.muse.modelBgQuota', { model: nameOf(bgModel) })}</span>
+    : bgOther && !needModel
+      ? <span className="ob3-bgq warn" data-ob-bgq="other">
+        <button type="button" className="ob3-info warn" aria-label={t('ob3.quota.title')} aria-expanded={quotaOpen} data-ob-quota-info="" onClick={() => setQuotaOpen((o) => !o)}><CircleAlert size={13} aria-hidden="true" /></button>
+        {t('ob3.muse.modelNotBg', { model: nameOf(effective) })}</span>
+      : t(modelHint)
   const emptyLabel = localPick ? t('ob3.muse.modelLocalOption', { model: modelOf(localPick)?.name || localPick })
     : signedIn ? t('ob3.muse.modelCloudOption')
     : fallback ? t('ob3.muse.modelDefaultOption', { model: modelOf(fallback)?.name || fallback })
@@ -199,11 +230,20 @@ export function TeamScreen({ resolveTarget, commitRef, signedIn, fresh, onOpenAg
         <div className="ob3-muse-h"><span className="ob3-ava agent" data-ob-muse-avatar=""><AgentAvatar name={museName} url={avatars[muse.slug]} siblings={rosterNames} size={34} fill /></span>
           <div><strong>{museName} · {t('ob3.muse.kind')}</strong><small>{t('ob3.muse.lead')}</small></div>
           <SettingsSwitch checked={museOn} disabled={!config} onChange={setMuseOn} label={museName} /></div>
-        <div className={`ob3-model${needModel ? ' need' : ''}`} data-ob-muse-model="">
+        <div className={`ob3-model${needModel ? ' need' : ''}`} data-ob-muse-model="" ref={modelRowRef}>
           <Cpu size={16} aria-hidden="true" />
-          <div><strong>{t('ob3.muse.model', { muse: museName })}</strong><small>{t(modelHint)}</small></div>
-          <ModelSelect models={llms} value={modelId} onChange={setModelId} disabled={!museOn || !config} ariaLabel={t('ob3.muse.model', { muse: museName })}
-            defaultLabel={emptyLabel} cloudDefaultId={cloudBg || undefined} />
+          <div><strong>{t('ob3.muse.model', { muse: museName })}</strong><small>{hint}</small></div>
+          <ModelSelect models={llms} value={modelId} onChange={(id) => { setModelId(id); setQuotaOpen(false) }} disabled={!museOn || !config} ariaLabel={t('ob3.muse.model', { muse: museName })}
+            defaultLabel={emptyLabel} cloudDefaultId={cloudBg || undefined} tagFor={tagFor} />
+          {bgOther && quotaOpen && <div className="ob3-pop ob3-quota-pop" role="dialog" aria-label={t('ob3.quota.title')} data-motion="enter" data-ob-quota-pop="">
+            <b>{t('ob3.quota.title')}</b>
+            <ul>
+              <li><Gauge size={12} aria-hidden="true" />{t('ob3.quota.main')}</li>
+              <li><Gift size={12} aria-hidden="true" />{t('ob3.quota.bg', { share, model: nameOf(bgModel), muse: museName })}</li>
+              <li><ArrowLeftRight size={12} aria-hidden="true" />{t('ob3.quota.more')}</li>
+              <li><Cpu size={12} aria-hidden="true" />{t('ob3.quota.other', { muse: museName })}</li>
+            </ul>
+          </div>}
         </div>
         <div className="ob3-sep" />
         {pills(t('ob3.q.when'), INTRO_WHEN, (v) => `ob3.when.${v}`, (v) => v === when, setWhen)}

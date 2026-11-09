@@ -5,6 +5,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import '../i18n.generated'
 import { LocaleProvider, setLocaleGlobal, translate } from '../i18n'
+import { publishAccountQuota } from '../services/accountQuota'
 
 vi.mock('../product', () => ({ PRODUCT: { agentBackend: true }, PRODUCT_DISPLAY_NAME: 'Forsion' }))
 vi.mock('../services/backendService', () => ({
@@ -352,7 +353,7 @@ it('team: a failed write keeps the screen with the error and does not finish', a
   expect(props.onFinish).toHaveBeenCalledTimes(1)
 })
 
-it('signed in: another Forsion model counts against the main quota; a direct one is billed by its provider', async () => {
+it('signed in, quota unknown: another Forsion model just says account quota (no main / background claim); a direct one is billed by its provider', async () => {
   vi.mocked(window.tangu!.authStatus!).mockResolvedValue({ loggedIn: true } as any)
   vi.mocked(api.listModels).mockResolvedValue({ models: [{ id: 'c1', name: 'Cloud', modelType: 'llm', source: 'forsion' }, { id: 'd1', name: 'Direct', modelType: 'llm', source: 'direct' }], directProviders: [] } as any)
   await toTeam()
@@ -361,6 +362,81 @@ it('signed in: another Forsion model counts against the main quota; a direct one
   expect(row.textContent).toContain(translate('ob3.muse.modelMain'))
   await pickModel('Direct')
   expect(row.textContent).toContain(translate('ob3.muse.modelBilled'))
+})
+
+/** 后台额度(11-09 方案 A):只计账号额度接口给的 background.modelId 那一个模型;菜单里它和「跟随云端 · 它」贴标签,收起时标签进提示行。 */
+function signedInWithQuota(quota: unknown = { background: { modelId: 'c1', sharePercent: 15 } }) {
+  vi.mocked(window.tangu!.authStatus!).mockResolvedValue({ loggedIn: true } as any)
+  Object.assign(window.tangu!, { accountQuota: vi.fn().mockResolvedValue({ status: 200, json: quota }) })
+  vi.mocked(api.listModels).mockResolvedValue({ models: [
+    { id: 'c1', name: 'Luna', modelType: 'llm', source: 'forsion' }, { id: 'c2', name: 'Opus', modelType: 'llm', source: 'forsion' },
+    { id: 'd1', name: 'Direct', modelType: 'llm', source: 'direct' },
+  ], backgroundModelId: 'c1', directProviders: [] } as any)
+}
+const menuItem = (name: string) => [...document.querySelectorAll<HTMLButtonElement>('.composer-menu .menu-item')].find((b) => b.querySelector('.grow')?.textContent === name)
+
+it('background quota: following the cloud tags the counted model in the menu and in the hint', async () => {
+  signedInWithQuota()
+  await toTeam()
+  const row = host.querySelector('[data-ob-muse-model]')!
+  expect(row.querySelector('[data-ob-bgq="counts"] [data-bgq-tag]')).toBeTruthy()
+  expect(row.textContent).toContain(translate('ob3.muse.modelBgQuota', { model: 'Luna' }))
+  expect(modelBtn().querySelector('[data-bgq-tag]')).toBeNull() // 按钮里不放标签
+  await act(async () => modelBtn().click())
+  expect(document.querySelector('.composer-menu .menu-item')?.querySelector('[data-bgq-tag]')).toBeTruthy() // 「跟随云端 · Luna」
+  expect(menuItem('Luna')?.querySelector('[data-bgq-tag]')).toBeTruthy()
+  expect(menuItem('Opus')?.querySelector('[data-bgq-tag]')).toBeNull()
+  expect(menuItem('Direct')?.querySelector('[data-bgq-tag]')).toBeNull()
+  // 登出 / 切账号:宿主广播 null → 标签收掉,不留上一个账号的
+  await act(async () => { publishAccountQuota(null) })
+  expect(document.querySelector('[data-bgq-tag]')).toBeNull()
+  expect(row.querySelector('[data-ob-bgq]')).toBeNull()
+})
+
+it('background quota: picking the counted model explicitly still counts (was misreported as the main quota)', async () => {
+  signedInWithQuota()
+  await toTeam()
+  await pickModel('Luna')
+  const row = host.querySelector('[data-ob-muse-model]')!
+  expect(row.querySelector('[data-ob-bgq="counts"]')).toBeTruthy()
+  expect(row.textContent).not.toContain(translate('ob3.muse.modelMain'))
+})
+
+it('background quota: another Forsion model turns the hint into a warning whose icon explains the quota', async () => {
+  signedInWithQuota({ background: { modelId: 'c1', sharePercent: 20 } })
+  await toTeam()
+  await pickModel('Opus')
+  const row = host.querySelector('[data-ob-muse-model]')!
+  expect(row.querySelector('[data-ob-bgq="other"]')?.textContent).toContain(translate('ob3.muse.modelNotBg', { model: 'Opus' }))
+  expect(host.querySelector('[data-ob-quota-pop]')).toBeNull()
+  const info = row.querySelector<HTMLButtonElement>('[data-ob-quota-info]')!
+  await act(async () => info.click())
+  const pop = host.querySelector('[data-ob-quota-pop]')!
+  expect(info.getAttribute('aria-expanded')).toBe('true')
+  expect(pop.textContent).toContain(translate('ob3.quota.bg', { share: 20, model: 'Luna', muse: '卜算子' }))
+  expect(pop.textContent).toContain(translate('ob3.quota.more'))
+  await act(async () => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })) })
+  expect(host.querySelector('[data-ob-quota-pop]')).toBeNull()
+  // 自己接的 Key:不提后台额度,照旧「费用算在你接的那家」
+  await pickModel('Direct')
+  expect(row.querySelector('[data-ob-bgq]')).toBeNull()
+  expect(row.textContent).toContain(translate('ob3.muse.modelBilled'))
+})
+
+it('background quota: unknown quota (read failed / server not configured) tags nothing', async () => {
+  signedInWithQuota()
+  vi.mocked(window.tangu!.accountQuota!).mockResolvedValue({ status: 500, json: null } as any)
+  await toTeam()
+  const row = host.querySelector('[data-ob-muse-model]')!
+  expect(row.querySelector('[data-ob-bgq]')).toBeNull()
+  expect(row.textContent).toContain(translate('ob3.muse.modelCloud'))
+  await pickModel('Opus')
+  expect(row.querySelector('[data-ob-bgq]')).toBeNull()
+  // 不知道计入哪个:不说「主额度」,也不说「后台额度」
+  expect(row.textContent).toContain(translate('ob3.muse.modelMain'))
+  expect(translate('ob3.muse.modelMain')).not.toMatch(/主额度|后台额度/)
+  await act(async () => modelBtn().click())
+  expect(document.querySelector('.composer-menu [data-bgq-tag]')).toBeNull()
 })
 
 it('team: "Manage in Agents" opens the Agents space after the guide closes', async () => {

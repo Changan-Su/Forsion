@@ -205,6 +205,12 @@ html.dark .ob3-paper { --hpw-grain-blend: screen; --hpw-halo: 16%; --hpw-halo-mi
 .ob3-model > div { flex: 1; min-width: 0; }
 .ob3-model strong { display: block; font-weight: 500; }
 .ob3-model small { display: block; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); }
+/* 后台额度(11-09 方案 A):计入 = 提示行开头一枚「后台额度」标签;别的 Forsion 模型 = 黄字 + ⚠ 点开「额度怎么算」 */
+.ob3-model { position: relative; }
+.ob3-bgq .bgq-tag { display: inline-block; margin-right: 6px; padding: 0 6px; vertical-align: 1px; }
+.ob3-bgq.warn { color: var(--warning, #c08a2a); }
+.ob3-info.warn { color: var(--warning, #c08a2a); margin: 0 2px 0 -3px; vertical-align: -4px; }
+.ob3-quota-pop { top: calc(100% + 6px); bottom: auto; left: 28px; width: min(340px, calc(100% - 40px)); }
 /* 模型选择器 = 设置页那个 ModelSelect(按管理员分组的下拉,菜单 portal 到 body);这里只定宽和缺模型时的黄边 */
 .ob3-model .model-select { flex: 0 1 46%; min-width: 0; }
 .ob3-model .model-select-btn { width: 100%; background: var(--bg-card); }

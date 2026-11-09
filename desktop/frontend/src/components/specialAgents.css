@@ -33,6 +33,8 @@
 .special-field textarea { resize: vertical; line-height: 1.65; }
 .special-field > .capability-menu-trigger { width: 100%; max-width: 460px; }
 .special-field > .capability-menu-trigger svg { rotate: 90deg; }
+.special-field > .model-select { width: 100%; max-width: 460px; }
+.special-field > .model-select .model-select-btn { width: 100%; }
 .special-choices { display: flex; flex-wrap: wrap; gap: 4px; width: fit-content; padding: 4px; border-radius: var(--radius-sm); background: var(--overlay-light); }
 .special-choices > button { padding: 6px 12px; min-height: var(--control-height-sm); border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-muted); font: inherit; cursor: pointer; transition: background 140ms ease, color 140ms ease; }
 .special-choices > button[aria-pressed=true] { color: var(--accent-ink); background: var(--bg-card); }

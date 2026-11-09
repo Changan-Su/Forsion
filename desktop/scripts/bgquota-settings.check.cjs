@@ -59,6 +59,40 @@ async function main() {
 
   await open('?other')
   check('Muse 显式选了别的模型 → 提示会走 AI 额度', (await page.locator('.special-bgquota').textContent()).includes('Muse 当前用的是 Opus 5.5，不计入后台额度'))
+  // 11-09 方案 A:模型格换成引导 / 设置 → 模型同一个分组选择器;计入后台额度的模型和「跟随云端 · 它」贴「后台额度」,别的不贴,按钮里也不贴
+  const menuTags = async () => {
+    const menu = page.locator('.composer-menu--anchored')
+    await menu.waitFor()
+    return menu.locator('.menu-item').evaluateAll((items) => items.map((b) => [b.querySelector('.grow')?.textContent || '', !!b.querySelector('[data-bgq-tag]')]))
+  }
+  await page.locator('.special-field .model-select-btn').click()
+  const museTags = await menuTags()
+  check('Muse 模型菜单:跟随项与 Luna Lite 贴后台额度,Opus 5.5 不贴', museTags[0]?.[1] === true && museTags.some(([n, on]) => n === 'Luna Lite' && on) && museTags.some(([n, on]) => n === 'Opus 5.5' && !on), JSON.stringify(museTags))
+  check('按钮里不放标签', await page.locator('.special-field .model-select-btn [data-bgq-tag]').count() === 0)
+  const menuWidth = await page.locator('.composer-menu--anchored').evaluate((el) => el.offsetWidth) // 布局宽:进场缩放动画不影响
+  check('菜单至少 320 宽', menuWidth >= 320, String(menuWidth))
+  if (shot) { await page.waitForTimeout(250); await page.screenshot({ path: path.join(out, 'muse-model-menu.png') }) }
+  await page.keyboard.press('Escape')
+  await page.locator('#special-historian-tab').click()
+  await page.locator('.special-field .model-select-btn').click()
+  check('Historian 的模型菜单不贴后台额度(不走后台额度)', !(await menuTags()).some(([, on]) => on))
+  await page.keyboard.press('Escape')
+  await page.locator('#special-muse-tab').click()
+  await page.locator('.special-bgquota').waitFor()
+
+  // 本机「设置 → 模型 → 后台任务」那格选了别的:Muse 跟随时落到它(引擎 resolveBackgroundModelId 同一顺序),按钮、标签、下面的说明说同一个模型
+  await open('?localbg=m-direct')
+  const followBtn = page.locator('.special-field .model-select-btn')
+  check('本机后台槽是自己接的 Key:按钮写「跟随本机后台任务 · My Key」', (await followBtn.textContent()).includes('跟随本机后台任务') && (await followBtn.textContent()).includes('My Key'), await followBtn.textContent())
+  check('自己接的 Key 不说「不计入后台额度 / 扣 AI 额度」', !(await page.locator('.special-bgquota').textContent()).includes('不计入后台额度'))
+  await followBtn.click()
+  check('跟随项落到 My Key → 不贴后台额度', (await menuTags())[0]?.[1] === false)
+  await page.keyboard.press('Escape')
+  await open('?localbg=m-pro')
+  check('本机后台槽是别的 Forsion 模型:提示它不计入后台额度', (await page.locator('.special-bgquota').textContent()).includes('Muse 当前用的是 Opus 5.5，不计入后台额度'))
+  await page.locator('.special-field .model-select-btn').click()
+  check('跟随项落到 Opus 5.5 → 不贴,Luna Lite 仍贴', (await menuTags()).filter(([, on]) => on).map(([n]) => n).join() === 'Luna Lite')
+  await page.keyboard.press('Escape')
 
   await page.setViewportSize({ width: 420, height: 1100 })
   const narrow = await page.locator('.special-bgquota').evaluate((el) => {

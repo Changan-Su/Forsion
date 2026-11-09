@@ -24,8 +24,9 @@ registerMessages({
 
 /** 选项多到这个数才给搜索框(少量选项时搜索框只是噪音)。 */
 const SEARCH_THRESHOLD = 12
+const MENU_MIN = 320 // 菜单最窄(px);比控件窄时按这个,名字和「后台额度」这类标签放得下
 
-export function ModelSelect({ models, value, onChange, icon, cloudDefaultId, disabled, defaultLabel, ariaLabel, chip, footer }: {
+export function ModelSelect({ models, value, onChange, icon, cloudDefaultId, disabled, defaultLabel, ariaLabel, chip, footer, tagFor }: {
   models: ModelInfo[]
   /** 空串 = 未选择(跟随云端默认槽)。 */
   value: string
@@ -40,6 +41,9 @@ export function ModelSelect({ models, value, onChange, icon, cloudDefaultId, dis
   chip?: React.ReactNode
   /** 菜单最底下一行(如「在模型库管理…」),点了先收菜单再调。 */
   footer?: { label: string; onClick: () => void }
+  /** 菜单里某一项名字后面的小标签(如后台额度计入的那个模型);id '' = 最上面「跟随 / 不选」那一项,由调用方判它实际落到哪个模型。
+   *  只进菜单,不进按钮(按钮里会把模型名挤成省略号)。 */
+  tagFor?: (id: string) => React.ReactNode
 }) {
   const { t } = useI18n()
   const prefs = useModelPickerPreferences()
@@ -56,7 +60,9 @@ export function ModelSelect({ models, value, onChange, icon, cloudDefaultId, dis
   useLayoutEffect(() => {
     const menu = menuRef.current, wrap = wrapRef.current
     if (!open || !menu || !btnRef.current || !wrap) return
-    menu.style.width = `${wrap.getBoundingClientRect().width / zoomOf(menu)}px` // 与控件同宽(原来 left:0;right:0 拉满)
+    // 至少 MENU_MIN 宽(控件窄时模型名折行,标签更挤),不超过窗口;落位交给 followAnchor(放不下会往左收)
+    const z = zoomOf(menu)
+    menu.style.width = `${Math.min(Math.max(wrap.getBoundingClientRect().width / z, MENU_MIN), window.innerWidth / z - 16)}px`
     return followAnchor(menu, btnRef.current, { gap: 6 })
   }, [open])
 
@@ -101,8 +107,9 @@ export function ModelSelect({ models, value, onChange, icon, cloudDefaultId, dis
             </span>
           )}
           {/* 留空 = 回到跟随云端默认;没有这一项就只能选、不能撤销。 */}
-          <button className={`menu-item${value ? '' : ' active'}`} onClick={() => pick('')}>
+          <button className={`menu-item${value ? '' : ' active'}`} aria-current={value ? undefined : 'true'} onClick={() => pick('')}>
             <span className="grow">{followLabel}</span>
+            {tagFor?.('')}
             <span className="mi-check">{value ? '' : <Check size={12} />}</span>
           </button>
           {groups.map((g, index) => (
@@ -110,9 +117,10 @@ export function ModelSelect({ models, value, onChange, icon, cloudDefaultId, dis
               {groups[index - 1]?.source !== g.source && <div className="menu-source">{t(g.source === 'forsion' ? 'model.group.forsion' : 'model.group.direct')}</div>}
               {g.provider && <div className="menu-section">{g.provider}</div>}
               {g.models.map((m) => (
-                <button key={`${m.source}-${m.id}`} className={`menu-item${m.id === value ? ' active' : ''}`} onClick={() => pick(m.id)}>
+                <button key={`${m.source}-${m.id}`} className={`menu-item${m.id === value ? ' active' : ''}`} aria-current={m.id === value ? 'true' : undefined} onClick={() => pick(m.id)}>
                   <span className="grow">{m.name}</span>
                   <ModelMetadata model={m} />
+                  {tagFor?.(m.id)}
                   <span className="mi-check">{m.id === value ? <Check size={12} /> : ''}</span>
                 </button>
               ))}

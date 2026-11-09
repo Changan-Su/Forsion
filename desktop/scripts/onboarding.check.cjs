@@ -42,7 +42,9 @@ async function main() {
   const human = { scope: 'human', path: 'human/MEMORY.md', content: SEEDED, version: 'h1', exists: true, updatedAt: null, history: [], maxLength: 2000 }
   const specialWrites = [], introWrites = [], humanWrites = [], agentPatches = []
   let failIntro = false
+  let signedIn = false // ④b 起:主进程回「已登录」,/agent/models 带云端后台模型(后台额度只计它)
   const stub = await startStubEngine({ models, override: async ({ path: p, method, body }) => {
+    if (p === '/agent/models' && signedIn) return { models, defaultModelId: models[0].id, backgroundModelId: 'cloud-0', directProviders: [] }
     if (p === '/agent/special/config') {
       if (method === 'POST') {
         const patch = await body(); specialWrites.push(patch)
@@ -361,6 +363,62 @@ async function main() {
     assert.equal(errors.length, 0, errors.join('\n'))
     console.log('PASS upgrade paths: before 2.13.8 = full guide, after = what changed only, once')
 
+    // ④b 已登录 × 后台额度(11-09 方案 A):主进程换成「已登录」,账号额度说后台额度只计 cloud-0(GPT-6 Luna)。
+    // 跟随云端 → 提示行开头带「后台额度」;菜单里它和「跟随云端 · 它」两处贴;换成别的 Forsion 模型 → 黄字 + ⚠ 点开讲额度组成
+    signedIn = true
+    specialConfig.muse.modelId = '' // 上一段写进去的是自己接的 Qwen local
+    await app.evaluate(({ ipcMain }) => {
+      ipcMain.removeHandler('auth:status')
+      ipcMain.handle('auth:status', () => ({ loggedIn: true, accountId: 'acct-demo', user: { id: 'acct-demo', username: 'demo', displayName: 'Demo' } }))
+      ipcMain.removeHandler('account:quota')
+      ipcMain.handle('account:quota', () => ({ status: 200, json: { dailyLimit: 100, dailyRemaining: 100, weeklyLimit: 500, weeklyRemaining: 500,
+        background: { sharePercent: 15, modelId: 'cloud-0', autoMain: false, dailyLimit: 15, dailyRemaining: 15, weeklyLimit: 75, weeklyRemaining: 75 } } }))
+    })
+    await setLocale('zh')
+    await size(1280, 800)
+    await win.evaluate(() => { localStorage.removeItem('forsion_tangu_onboarding_done'); localStorage.removeItem('forsion_tangu_onboarding_version') })
+    await win.reload(); await win.waitForSelector('.ob-flow[data-step="start"]'); await settle()
+    await win.waitForSelector('[data-ob-channels], [data-ob-account]'); await next()
+    await ready.theme(); await next(); await ready.you(); await next(); await ready.team()
+    const bgRow = win.locator('[data-ob-muse-model]')
+    await win.waitForSelector('[data-ob-muse-model] [data-ob-bgq="counts"]')
+    assert.match(await bgRow.locator('small').innerText(), /后台额度\s*AI 额度之外另送的一份，只有 GPT-6 Luna 计入/)
+    assert.equal(await bgRow.locator('.model-select-btn [data-bgq-tag]').count(), 0, 'no tag inside the button (it would squeeze the model name)')
+    await geometry('zh-team-bgquota', { mustFit: true })
+    await bgRow.locator('.model-select-btn').click()
+    await win.waitForSelector('.composer-menu--anchored')
+    const tagged = await win.locator('.composer-menu--anchored .menu-item').evaluateAll((items) => items.filter((b) => b.querySelector('[data-bgq-tag]')).map((b) => b.querySelector('.grow')?.textContent))
+    assert.deepEqual(tagged, ['跟随云端 · GPT-6 Luna', 'GPT-6 Luna'], `only the counted model and the follow item are tagged: ${JSON.stringify(tagged)}`)
+    // 量布局宽(offsetWidth):菜单进场带缩放动画,getBoundingClientRect 会量到放到一半的宽
+    const menuW = await win.locator('.composer-menu--anchored').evaluate((el) => el.offsetWidth)
+    assert(menuW >= 320, `model menu at least 320 wide (${menuW})`)
+    await win.waitForTimeout(300)
+    await win.screenshot({ path: path.join(OUT, 'zh-team-bgquota-menu.png') })
+    await win.locator('.composer-menu--anchored .menu-item', { has: win.locator('.grow', { hasText: /^Claude Sonnet 4\.6$/ }) }).click()
+    await win.waitForSelector('[data-ob-muse-model] [data-ob-bgq="other"]')
+    assert.match(await bgRow.locator('small').innerText(), /Claude Sonnet 4\.6 不计入后台额度，用的是 AI 额度/)
+    await bgRow.locator('[data-ob-quota-info]').click()
+    const pop = win.locator('[data-ob-quota-pop]')
+    await pop.waitFor()
+    await win.waitForTimeout(300)
+    const popText = await pop.innerText()
+    assert(popText.includes('AI 额度的 15%') && popText.includes('只在卜算子和自动化用 GPT-6 Luna 时扣') && popText.includes('从 AI 额度转入') && popText.includes('额度与积分'), `quota details: ${popText}`)
+    const popFits = await pop.evaluate((el) => { const r = el.getBoundingClientRect(); return r.top >= 0 && r.bottom <= innerHeight && r.left >= 0 && r.right <= innerWidth })
+    assert(popFits, 'quota details fit inside the window')
+    await win.screenshot({ path: path.join(OUT, 'zh-team-bgquota-details.png') })
+    // 同一屏切到浅色再拍一张(只改根上的明暗属性,和方案页出图同一个做法;拍完还原)
+    const mode0 = await win.evaluate(() => { const r = document.documentElement; const m = { mode: r.dataset.mode, dark: r.classList.contains('dark') }; r.dataset.mode = 'light'; r.classList.remove('dark'); return m })
+    await win.waitForTimeout(200)
+    await win.screenshot({ path: path.join(OUT, 'zh-team-bgquota-details-light.png') })
+    await win.evaluate((m) => { const r = document.documentElement; if (m.mode) r.dataset.mode = m.mode; else delete r.dataset.mode; r.classList.toggle('dark', m.dark) }, mode0)
+    await win.keyboard.press('Escape')
+    await pop.waitFor({ state: 'detached' })
+    await win.locator('[data-ob-primary]').click()
+    await win.waitForSelector('.ob-flow', { state: 'detached' })
+    assert.deepEqual(specialWrites.at(-1), { muse: { modelId: 'cloud-1' } })
+    assert.equal(errors.length, 0, errors.join('\n'))
+    console.log('PASS signed in: background quota tagged on the counted model; another model warns and explains the quota')
+
     // ⑤ 设置 → 常规设置 → 本机运行环境:这个子页必须真的存在,且工具清单排在最前
     await win.locator('.ntf-close').evaluateAll((bs) => bs.forEach((b) => b.click())).catch(() => {})
     const opened = app.waitForEvent('window')
@@ -383,6 +441,23 @@ async function main() {
     assert(layout.first && layout.rows >= 5 && !layout.connProbe, `settings runtime page: ${JSON.stringify(layout)}`)
     await settings.screenshot({ path: path.join(OUT, 'settings-runtime.png') })
     console.log(`PASS settings → general → ${runtimeLabel}: tools panel first (${layout.rows} rows)`)
+    // 设置 → 模型 → 默认模型 → 后台任务:同一个选择器、同一个标签(引导里那个就是它)
+    let defaults = nav.getByRole('button', { name: /^(默认模型|Default models)$/ })
+    if (!(await defaults.count())) await nav.getByRole('button', { name: /^(模型|Models)$/ }).first().click()
+    defaults = nav.getByRole('button', { name: /^(默认模型|Default models)$/ })
+    await defaults.first().click()
+    const bgSlot = settings.locator('.model-select-btn[aria-label="后台任务"], .model-select-btn[aria-label="Background tasks"]')
+    await bgSlot.waitFor({ timeout: 30000 })
+    await settings.waitForFunction(() => { const b = document.querySelector('.model-select-btn[aria-label="后台任务"], .model-select-btn[aria-label="Background tasks"]'); return !!b && !b.disabled }, null, { timeout: 30000 })
+    await bgSlot.click()
+    await settings.waitForSelector('.composer-menu--anchored')
+    const slotTagged = await settings.locator('.composer-menu--anchored .menu-item').evaluateAll((items) => items.filter((b) => b.querySelector('[data-bgq-tag]')).map((b) => b.querySelector('.grow')?.textContent))
+    assert.equal(slotTagged.length, 2, `settings background slot: follow item + GPT-6 Luna tagged: ${JSON.stringify(slotTagged)}`)
+    assert(slotTagged.every((n) => /GPT-6 Luna$/.test(n || '')), JSON.stringify(slotTagged))
+    await settings.waitForTimeout(300)
+    await settings.screenshot({ path: path.join(OUT, 'settings-background-slot-menu.png') })
+    await settings.keyboard.press('Escape')
+    console.log('PASS settings → models → default models: the background slot tags the same model')
     const scrolled = results.filter((r) => r.scrolls).map((r) => r.name)
     console.log(`PASS finish + persistence + no renderer errors; ${results.length} layout cases${scrolled.length ? `; scroll inside the screen: ${scrolled.join(', ')}` : ''}`)
   } finally {

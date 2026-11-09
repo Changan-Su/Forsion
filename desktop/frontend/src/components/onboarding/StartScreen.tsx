@@ -19,6 +19,7 @@ import { PROVIDER_PRESETS, presetProviderId } from '../providerPresets'
 import { asTelemetryView, improveOnThisHost, readTelemetry, type TelemetryView } from '../OnboardingImprove'
 import { getSync, refreshSync, subscribeSync, type SyncKind } from '../../services/syncSetup'
 import type { AuthStatusInfo, DirectProviderConfig } from '../../types'
+import { usePopDismiss } from './usePopDismiss'
 
 export const SUB_LABELS: Record<string, string> = { codex: 'Codex', xai: 'xAI' }
 const SUB_HINTS: Record<string, string> = { codex: 'ob3.channels.sub.codex', xai: 'ob3.channels.sub.xai' }
@@ -326,13 +327,7 @@ export function ImproveRow({ signedIn }: { signedIn: boolean }): React.ReactNode
     marking.current = true
     void set({ noticeSeen: true }).catch(() => {}).finally(() => { marking.current = false })
   }, [can, onScreen, view]) // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => {
-    if (!open) return
-    const onDown = (e: MouseEvent): void => { if (!rowRef.current?.contains(e.target as Node)) setOpen(false) }
-    const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') setOpen(false) }
-    window.addEventListener('mousedown', onDown); window.addEventListener('keydown', onKey)
-    return () => { window.removeEventListener('mousedown', onDown); window.removeEventListener('keydown', onKey) }
-  }, [open])
+  usePopDismiss(rowRef, open, () => setOpen(false))
   if (!view) return null
   const toggle = (enabled: boolean): void => {
     setBusy(true); setError('')
