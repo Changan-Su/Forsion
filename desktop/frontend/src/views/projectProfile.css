@@ -171,3 +171,5 @@
 [data-project-memory] > .memory-layer-head { margin: 4px 0 2px; }
 .project-memory-over { margin: 0 0 6px; padding: 0 8px; color: var(--text-muted); font-size: var(--ui-font-caption, 11px); line-height: 1.6; }
 .project-chip[data-over="true"] { color: var(--accent-ink); }
+/* 11-09 项目记忆分层:项目详情只在右栏(窄),详情一行不放文件位置,标题和说明才不会被挤成一列;位置走卡头的「打开记忆文件夹」 */
+.project-card .memory-layer-path { display: none; }
