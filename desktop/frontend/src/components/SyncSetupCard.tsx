@@ -153,7 +153,7 @@ export function SyncSetupHost(): React.JSX.Element | null {
   // 依赖只放这两个布尔:快照每次同步进度 / 插件变动都换新对象,拿它当依赖计时器会一直被重置、永远弹不出来
   const eligible = main && wantsSyncCard(s, obDone)
   const want = eligible && !open
-  const allOn = main && !!s && s.signedIn && !s.decided && obDone && s.notes.available && !want && !open
+  const allOn = main && !!s && s.signedIn && !s.decided && !s.applying && obDone && s.notes.available && !want && !open
   useEffect(() => { if (allOn) markSyncDecided() }, [allOn])
   useEffect(() => {
     if (!want) return

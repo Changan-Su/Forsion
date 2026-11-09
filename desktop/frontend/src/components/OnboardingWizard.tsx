@@ -30,7 +30,7 @@ import { openAgentsSpace } from '../views/agentProfileNav'
 import { clearChAskOnFinish, markChAskSkipped } from './computerHistoryAskMark'
 import { useApp } from '../stores/appStore'
 import { connectionTarget } from '../services/engine/targets'
-import { applySyncChoices, type SyncKind } from '../services/syncSetup'
+import { applyOnboardingSync, type SyncKind } from '../services/syncSetup'
 import { createOnboardingTracker, onboardingMode } from './onboarding/onboardingTelemetry'
 import './onboardingMessages'
 import './onboarding/messages'
@@ -112,7 +112,7 @@ export const OnboardingWizard: React.FC<{
   // 不然收尾时「没勾的关」会关掉用户自己开的);读不到就一直是 null,收尾不动同步。
   // Agents 那个勾在旧同步里是账号总闸;11-06 第四轮从界面拿掉(新同步里逐个选),初值照现状原样传回去,不替用户开也不替他关。
   const [syncPick, setSyncPick] = useState<Record<SyncKind, boolean> | null>(null)
-  /** 读到的现状:收尾只把和它不一样的那几项交给 applySyncChoices(没露出来的智库那项不动)。 */
+  /** 读到的现状:收尾只把和它不一样的那几项交给 applyOnboardingSync(没露出来的智库那项不动)。 */
   const [syncBase, setSyncBase] = useState<SyncBase | null>(null)
   const onSyncSeed = useCallback((pick: Record<SyncKind, boolean>, base: SyncBase) => { setSyncPick(pick); setSyncBase(base) }, [])
   const syncSeen = useRef(false)
@@ -155,10 +155,10 @@ export const OnboardingWizard: React.FC<{
       localStorage.setItem(ONBOARDING_DISMISS_KEY, '1')
       localStorage.setItem(ONBOARDING_VERSION_KEY, version)
     } catch { /* 隐私窗口里可能写不了 */ }
-    // 后台去开,不挡收尾(第二台电脑要用户定的,蓬洲云「同步」页会挂着等)
+    // 后台去开,不挡收尾。不跳蓬洲云「同步」页(11-08):云端已有数据要用户定的,回主页由首登卡片带着数字问
     if (pick && syncBase && window.remoteSync) {
       const kinds = (['notes', 'plugins'] as const).filter((k) => (k !== 'notes' || syncBase.notesShown) && pick[k] !== syncBase[k])
-      void applySyncChoices(pick, kinds)
+      void applyOnboardingSync(pick, kinds)
     }
     onFinish()
     if (openAgents.current) setTimeout(() => openAgentsSpace(), 0)

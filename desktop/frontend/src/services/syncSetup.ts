@@ -28,6 +28,8 @@ export interface SyncSnapshot {
   /** Informational unified quota; never gates sync choices. */
   storage?: { usedBytes: number | null; limitBytes: number; complete: boolean; asOf: string; enforcement?: boolean } | null
   contentRules?: boolean
+  /** 引导收尾正在后台开新同步(几秒):首登卡片先别弹,也别据此记「点过了」。 */
+  applying?: boolean
   signedIn: boolean
   decided: boolean
   notes: {
@@ -79,6 +81,7 @@ let snap: SyncSnapshot | null = null
 let account: string | null = null
 let started = false
 let loading: Promise<void> | null = null
+let onboardingApplying = false
 let storageCache: { account: string; at: number; value: SyncSnapshot['storage'] } | null = null
 async function readStorage(acct: string | null): Promise<SyncSnapshot['storage']> {
   if (!acct) { storageCache = null; return null }
@@ -141,6 +144,7 @@ async function load(): Promise<void> {
   snap = {
     storage,
     contentRules:!!content&&typeof content.ok==='boolean',
+    applying: onboardingApplying,
     signedIn,
     decided: !!account && ls.get(decidedKey(account)) === '1',
     notes: {
@@ -311,9 +315,53 @@ export async function applySyncChoices(choices: Record<SyncKind, boolean>, kinds
   return out
 }
 
+/** Extend 的内容同步通道;回 ok:false 抛错(错误串原样)。 */
+async function invokeContent<T>(channel: string, ...args: unknown[]): Promise<T> {
+  const r = await window.tangu?.cloudInvoke?.(channel, ...args) as { ok?: boolean; value?: T; error?: string } | undefined
+  if (!r?.ok) throw new Error(r?.error ?? 'content_sync_unavailable')
+  return r.value as T
+}
+interface SetupPreviewLite { token: string; download: number; conflicts?: number; agentAsks?: unknown[] }
+function holdCard(on: boolean): void {
+  onboardingApplying = on
+  if (snap) { snap = { ...snap, applying: on }; emit() }
+}
+
+/** 引导收尾(11-08):不再跳到蓬洲云「同步」页 —— 引导上写的是「以后」再逐个选,刚走完就被切走还不说为什么。
+ *  旧同步照 applySyncChoices。新同步(按条规则):
+ *   - 插件那项照勾的写;
+ *   - 智库勾上了才开:Extend 按勾算建议配置给预览(只开智库;「关于你」、Agent 都不替用户开)。这台已经开过 = 不动;
+ *     云端已有东西要下载、有冲突或有 Agent 要问 → 不记「点过了」,回主页由首登卡片带着数字让用户确认;
+ *     什么都不用定(第一台电脑)→ 直接确认开起来;
+ *   - 智库没勾 / 没露出来 → 记「点过了」,不弹卡片也不跳页(Beta 缺省关,想开在 蓬洲云 › 同步)。
+ *  预览或确认失败不记「点过了」:首登卡片会再问一次。 */
+export async function applyOnboardingSync(choices: Record<SyncKind, boolean>, kinds: readonly SyncKind[] = ['agents', 'plugins', 'notes']): Promise<SyncResult[]> {
+  if (!snap) await refreshSync()
+  if (!snap?.contentRules) return applySyncChoices(choices, kinds)
+  const who = account
+  if (!(await sameAccount(who))) return [{ ok: false, error: 'account-changed' }]
+  const out: SyncResult[] = []
+  if (kinds.includes('plugins')) out.push(await setSync('plugins', choices.plugins, who))
+  if (!kinds.includes('notes') || !choices.notes) {
+    if (account === who) markSyncDecided()
+    return out
+  }
+  holdCard(true)
+  try {
+    const preview = await invokeContent<SetupPreviewLite | null>('penzor:sync:setup', { notes: true, profile: false, plugins: choices.plugins, agents: false, agentSlugs: [] })
+    if (account !== who) { out.push({ ok: false, error: 'account-changed' }); return out }
+    if (preview && (preview.download > 0 || (preview.conflicts ?? 0) > 0 || !!preview.agentAsks?.length)) return out
+    if (preview) await invokeContent('penzor:sync:apply', preview.token)
+    if (account === who) markSyncDecided()
+    out.push({ ok: true })
+  } catch (e) { out.push({ ok: false, error: String((e as Error)?.message ?? e) }) }
+  finally { holdCard(false) }
+  return out
+}
+
 /** 首登卡片要不要弹:登录着、没点过、这台能开智库同步、引导走完了;三样本来就都开着的不弹(调用方直接记成点过)。 */
 export function wantsSyncCard(s: SyncSnapshot | null, onboardingDone: boolean): boolean {
-  if (!s || !s.signedIn || s.decided || !s.notes.available || !onboardingDone) return false
+  if (!s || !s.signedIn || s.decided || s.applying || !s.notes.available || !onboardingDone) return false
   return !(s.notes.on && s.agents.on && s.plugins.on)
 }
 
