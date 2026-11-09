@@ -382,6 +382,12 @@ export interface PluginAppApi extends BlockSurfaceApi {
     run(): void
     dot?: { get(): boolean; subscribe(cb: () => void): () => void; label?: () => string }
   }): () => void
+  /** 页内反馈通道(2026-11-09+):把「随当前账号提交一条反馈」交给宿主,宿主据此露出反馈入口(Ribbon 下区的反馈图标、
+   *  命令面板的「反馈」、输入框的 /feedback)并挂成 `window.tangu.submitFeedback`。给没有主进程的宿主用(网页主入口 / 手机);
+   *  桌面自己有通道,调了回 false。只对首方内置包生效,别的插件调了什么都不发生。传 `null` 撤回自己交的那一份;
+   *  插件停用时宿主也收。通道认不出账号时,带 `expectedAccountId` 的调用必须回 `account-changed`、不发。
+   *  旧宿主没有:`ctx.app.provideFeedbackChannel?.(…)`。 */
+  provideFeedbackChannel?(submit: ((input: { description: string; sessionLogJson?: string; sessionLogName?: string; expectedAccountId?: string }) => Promise<{ ok: boolean; id?: string | null; error?: string; attachmentSkipped?: boolean }>) | null): boolean
   /** 同步总开关(2026-10-20+,蓬洲云「同步」页):笔记库 / Agents 与记忆 / 插件数据三样的开关与状态,宿主
    *  services/syncSetup.ts 是真身。只给首方内置包、只在有本地库远程同步的桌面挂;别的插件 get() 恒 null、set 恒失败。
    *  旧宿主没有:`ctx.app.sync?.get()`。 */

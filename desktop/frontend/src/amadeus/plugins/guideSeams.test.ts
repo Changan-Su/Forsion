@@ -55,6 +55,28 @@ describe('使用指南接缝', () => {
     expect(useRibbonStore.getState().items).toEqual([])
   })
 
+  it('provideFeedbackChannel:只有首方内置包能交反馈通道,插件卸载时收掉', async () => {
+    const w = window as unknown as { tangu?: { submitFeedback?: unknown } }
+    w.tangu = {}
+    useRibbonStore.setState({ items: [], bottomOrder: [] })
+    env.sources = [src({ id: 'third', code: "window.__seen.third = ctx.app.provideFeedbackChannel(async () => ({ ok: true }))" })]
+    await usePluginStore.getState().loadExternal()
+    expect(seen()).toEqual({ third: false })
+    expect(w.tangu.submitFeedback).toBeUndefined()
+    env.sources = [src({ id: 'forsion-extend', preinstalled: true, locked: true, bundleOff: false, code: "window.__seen.ext = ctx.app.provideFeedbackChannel(async () => ({ ok: true, id: 'T' }))" })]
+    await usePluginStore.getState().loadExternal()
+    expect(seen().ext).toBe(true)
+    expect(typeof w.tangu.submitFeedback).toBe('function')
+    expect(useRibbonStore.getState().items.map((i) => i.id)).toEqual(['rb-feedback'])
+    expect(useCommandStore.getState().commands.some((c) => c.id === 'open-feedback')).toBe(true)
+    env.sources = []
+    await usePluginStore.getState().loadExternal()
+    expect(w.tangu.submitFeedback).toBeUndefined()
+    expect(useRibbonStore.getState().items).toEqual([])
+    expect(useCommandStore.getState().commands.some((c) => c.id === 'open-feedback')).toBe(false)
+    delete w.tangu
+  })
+
   it('achievements.count:读官方计数与自己的计数,读不到别家插件的', async () => {
     track('chat.send', 3)
     track('plugin:other:secret', 2)

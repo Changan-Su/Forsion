@@ -1375,6 +1375,41 @@ describe('openFeedback 带上当前会话', () => {
     expect(openFloatingPanel.mock.calls[0][0].params.session).toBeUndefined()
   })
 
+  // 登录状态是连上引擎后才读进来的:引擎没连上(网页 / 手机的远端引擎)时 authInfo 是 null = 不知道,不能当没登录
+  it('登录状态未知:现问一次账号,登录着就开;描述先存下', async () => {
+    const authStatus = vi.fn(async () => ({ loggedIn: true }))
+    vi.stubGlobal('window', { tangu: { authStatus } })
+    useApp.setState({ authInfo: null, feedbackOpen: false })
+    expect(useApp.getState().openFeedback('引擎连不上')).toBe(true)
+    expect(useApp.getState().feedbackOpen).toBe(false)
+    await vi.waitFor(() => expect(useApp.getState().feedbackOpen).toBe(true))
+    expect(useApp.getState().feedbackDraft).toBe('引擎连不上')
+    expect(authStatus).toHaveBeenCalledTimes(1)
+    useApp.setState({ feedbackOpen: false })
+  })
+
+  it('登录状态未知而账号说没登录 / 问不到:不开,去登录页,描述不丢', async () => {
+    for (const authStatus of [vi.fn(async () => ({ loggedIn: false })), vi.fn(async () => { throw new Error('offline') })]) {
+      vi.stubGlobal('window', { tangu: { authStatus } })
+      useApp.setState({ authInfo: null, feedbackOpen: false, settingsOpen: false, feedbackDraft: '' })
+      expect(useApp.getState().openFeedback('写了一半')).toBe(true)
+      await vi.waitFor(() => expect(useApp.getState().settingsOpen).toBe(true))
+      expect(useApp.getState().feedbackOpen).toBe(false)
+      expect(useApp.getState().feedbackDraft).toBe('写了一半')
+    }
+    useApp.setState({ settingsOpen: false })
+  })
+
+  it('明确没登录(authInfo.loggedIn === false):照旧当场拒绝,不再问', () => {
+    const authStatus = vi.fn(async () => ({ loggedIn: true }))
+    vi.stubGlobal('window', { tangu: { authStatus } })
+    useApp.setState({ authInfo: { loggedIn: false } as never, feedbackOpen: false, settingsOpen: false })
+    expect(useApp.getState().openFeedback()).toBe(false)
+    expect(authStatus).not.toHaveBeenCalled()
+    expect(useApp.getState().feedbackOpen).toBe(false)
+    useApp.setState({ settingsOpen: false })
+  })
+
   // 设置浮窗同理:「高级 → 导出会话日志」导错会话是静默的,人眼看不出
   it('设置浮窗也带上当前会话', () => {
     useApp.getState().openSettings('advanced')

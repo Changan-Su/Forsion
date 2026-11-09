@@ -5,9 +5,9 @@ import { registerOperationsViews } from './features/operations'
 import { amadeusAvailable } from './features/runtime'
 import { registerMiniViews } from './mini/miniViews'
 /** 真实引擎装配:注册视图(会话/对话)+ ribbon + 命令 + 默认布局。替代 demoBootstrap。 */
-import { Folder, Plus, Command as CommandIcon, Moon, Languages, MessageSquare, Store, Settings, FileText, ListTree, Search, Inbox, Mail, PanelLeft, PanelRight, PanelBottom, Code2, Trophy, Activity, AppWindow, Sun, TextCursorInput } from 'lucide-react'
+import { Folder, Plus, Command as CommandIcon, Moon, Languages, Store, Settings, FileText, ListTree, Search, Inbox, Mail, PanelLeft, PanelRight, PanelBottom, Code2, Trophy, Activity, AppWindow, Sun, TextCursorInput } from 'lucide-react'
 import type { LucideIcon, LucideProps } from 'lucide-react'
-import { registerView, addCommand, addRibbonIcon, useRibbonStore, moveTo, openCommandPalette, useWorkspace, useSpaceStore, getActiveSpace, setActiveSpaceCold, setActiveSpace, openRedirectType, adoptSpaceLayoutCold, seedSpaceWindowLayout, BOOT_ACTIVE_SPACE_ID, getView, label, recordNav, useNav, activeMainPanel, setEngineI18n, setRibbonActions, openObject, UI_MODE, WINDOW_SPACE_ID, supportsMiniPanel, LCL_MESSAGES, installViewModeCommands } from '@lcl/engine'
+import { registerView, addCommand, addRibbonIcon, openCommandPalette, useWorkspace, useSpaceStore, getActiveSpace, setActiveSpaceCold, setActiveSpace, openRedirectType, adoptSpaceLayoutCold, seedSpaceWindowLayout, BOOT_ACTIVE_SPACE_ID, getView, label, recordNav, useNav, activeMainPanel, setEngineI18n, setRibbonActions, openObject, UI_MODE, WINDOW_SPACE_ID, supportsMiniPanel, LCL_MESSAGES, installViewModeCommands } from '@lcl/engine'
 import { toggleSpaceOrganizer } from './views/SpaceOrganizer'
 import { requestHomeEdit } from './views/homeWidgets'
 import type { ViewProps } from '@lcl/engine'
@@ -50,6 +50,7 @@ import { syncDevCommands } from './devCommands'
 import { isSmoothCaretOn, setSmoothCaret } from './smoothCaret'
 import { matchFileType, fileTypeBaseName, setResetCardCeremonyHandler } from './amadeus/plugins/pluginStore'
 import { moveModeLastOnce, reorderCommandsOnce } from './amadeus/plugins/ribbonAction'
+import { installFeedbackIcon, installFeedbackCommand } from './feedbackChannel'
 import type { TanguHost } from './amadeus/plugins/tanguSeam'
 import { ActivityLogView } from './views/ActivityLogView'
 import { ActiveWindowView } from './views/ActiveWindowView'
@@ -375,19 +376,9 @@ export function installEngine(activateTangu: (host: TanguHost) => void): void {
   // 主题锁定明暗时 toggleMode 静默无效 → tooltip 改说明「由主题决定」,悬停即知为何点不动(codex Low-2)。
   addRibbonIcon({ id: 'rb-mode', side: 'bottom', icon: ThemeModeIcon, tooltip: () => useVisualTheme.getState().modeLocked ? app().tr('settings.theme.modeLocked') : app().tr('theme.changeMode'), onClick: () => toggleVisibleMode() })
   if (window.tangu?.marketList) addRibbonIcon({ id: 'rb-market', side: 'bottom', icon: Store, tooltip: () => app().tr('market.title'), onClick: () => app().openMarket() })
-  if (window.tangu?.submitFeedback) {
-    addRibbonIcon({ id: 'rb-feedback', side: 'bottom', icon: MessageSquare, tooltip: () => app().tr('feedback.title'), onClick: () => { app().openFeedback() } })
-    // 老存档(用户动过底部区)的 bottomOrder 里,rb-feedback 要么还停在 08-31 前的旧位(明暗与命令之间),要么缺席
-    // (rankIds 排到区末尾)→ 只挪一次到商店之前,打标记后用户再拖到哪算哪。
-    // ponytail: 只认「商店在持久顺序里、反馈不在收纳夹里」的形状,其余形状不动(注册序或用户自己的摆法)。
-    const MOVED_KEY = 'forsion_ribbon_feedback_above_market'
-    if (!localStorage.getItem(MOVED_KEY)) {
-      const rb = useRibbonStore.getState()
-      const at = rb.bottomOrder.filter((id) => id !== 'rb-feedback').indexOf('rb-market')
-      if (at >= 0 && !rb.folders.some((f) => f.items.includes('rb-feedback'))) rb.setZoneOrder('bottom', moveTo(rb.bottomOrder, 'rb-feedback', at))
-      try { localStorage.setItem(MOVED_KEY, '1') } catch { /* ignore */ }
-    }
-  }
+  // 反馈入口(图标 + 下面的 open-feedback 命令 + 输入框的 /feedback)认 submitFeedback 这个键:桌面启动时就在;
+  // 网页主入口 / 手机由 Forsion Extend 装好后经 ctx.app.provideFeedbackChannel 交来,那时再注册(feedbackChannel.ts)。
+  if (window.tangu?.submitFeedback) installFeedbackIcon()
   // 单列壳(手机)的「⋯」里也叫「命令面板」(末尾的 ⌘K 由 moreRowLabel 剥掉)。10-05 改叫过「搜索」+ 放大镜:
   // 排在一串插件命令上面读不出是命令面板,用户自己都没认出来 → 2026-10-13 改回,别再另起名字。
   addRibbonIcon({ id: 'rb-cmd', side: 'bottom', icon: CommandIcon, tooltip: () => app().tr('command.palette'), onClick: openCommandPalette })
@@ -506,7 +497,7 @@ export function installEngine(activateTangu: (host: TanguHost) => void): void {
   if (window.tangu?.marketList) addCommand({ id: 'open-market', icon: Store, title: () => app().tr('market.title'), keywords: 'store market marketplace plugin theme skill agent space 商店 应用市场 应用商店 市场 商店 插件 主题 技能 扩展', run: () => app().openMarket() })
   addCommand({ id: 'open-achievements', icon: Trophy, title: () => app().tr('achievements.title'), keywords: 'achievement trophy badge medal 成就 勋章 徽章', run: () => app().openAchievements() })
   addCommand({ id: 'guide-reset', title: () => app().tr('guideTips.command'), keywords: 'tips guide onboarding hint reset 上手 提示 引导 重置', run: () => { resetGuide(); app().toast(app().tr('guideTips.resetDone')) } })
-  if (window.tangu?.submitFeedback) addCommand({ id: 'open-feedback', icon: MessageSquare, title: () => app().tr('feedback.title'), keywords: 'feedback bug report 反馈 问题 建议 报错', run: () => { app().openFeedback() } })
+  if (window.tangu?.submitFeedback) installFeedbackCommand()
   addCommand({ id: 'open-settings', icon: Settings, title: () => app().tr('settings.title'), keywords: 'settings 设置 preferences', hotkey: 'mod+,', run: () => app().openSettings() , invoke: {
     // ⚠️ ≤300 字符(引擎 normalizeUiCommands 的截断上限)。「not documented on the web」那半句是真模型台架量出来的:
     //    没有它,grok 打开对的页之后还会连搜五六次网页去找「这页有什么」(live:harness --only settingsnav)。

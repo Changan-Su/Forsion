@@ -26,12 +26,15 @@ function executable() {
   fs.mkdirSync(shots, { recursive: true })
   const preview = await startPreview(root)
   let browser
-  const errors = [], uploads = [], requests = [], files = [{ id: 'legacy-file', name: legacyName, fileType: 'file', fileSize: 19, updatedAt: '2026-10-01T00:00:00Z' }]
+  let engineUp = false // the feedback phase turns on a minimal engine so the composer is usable
+  const errors = [], uploads = [], requests = [], tickets = [], files = [{ id: 'legacy-file', name: legacyName, fileType: 'file', fileSize: 19, updatedAt: '2026-10-01T00:00:00Z' }]
   try {
     await preview.ready()
     browser = await chromium.launch({ executablePath: executable(), headless: true, args: ['--no-sandbox'] })
     const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, locale, acceptDownloads: true })
     await ctx.addInitScript((locale) => {
+      // the back chain asks the shell first with this event: counting it tells "the back key reached MobileRoot" from "it never arrived"
+      window.__backSeen = 0; window.addEventListener('forsion:mobile-back', () => { window.__backSeen++ })
       if (!localStorage.getItem('forsion_token')) localStorage.setItem('forsion_token', 'legacy-account-token')
       localStorage.setItem('forsion_tangu_onboarding_done', '1')
       localStorage.setItem('tangu_locale', locale.startsWith('zh') ? 'zh' : 'en')
@@ -51,6 +54,11 @@ function executable() {
         files.push({ id: 'upload-file', name: 'Mobile upload.txt', fileType: 'file', fileSize: 25, updatedAt: new Date().toISOString() })
         return json({ id: 'upload-file' }, 201)
       }
+      if (p === '/api/feedback' && request.method() === 'POST') {
+        assert.equal(request.headers().authorization, 'Bearer legacy-account-token')
+        tickets.push(JSON.parse(request.postData() || '{}'))
+        return json({ id: `T-${tickets.length}` }, 201)
+      }
       if (p === '/api/files/legacy-file/content') return route.fulfill({ status: 200, headers: cors, contentType: 'text/plain', body: 'Legacy account bytes' })
       if (p === '/api/files') return json(files)
       if (p === '/api/storage/quota') return json({ used: 19, quota: 1024 * 1024 })
@@ -68,9 +76,24 @@ function executable() {
       if (p === '/api/features') return json({ shop: true })
       if (p === '/api/payment/offerings') return json({ membershipPlans: [{ id: 'pro', name: 'Pro fixture', priceMonthly: 10, isActive: true }], packages: [{ id: 'points', name: '100 points fixture', credits: 100, price: 1, isActive: true }] })
       if (p === '/api/shop/products') return json([{ id: 'quota-card', name: 'Quota reset card fixture', description: 'Existing account item', type: 'reset_card', pricePoints: 10, isActive: true }])
+      if (engineUp && (p.endsWith('/health') || p.startsWith('/api/agent/'))) {
+        if (p.endsWith('/health')) return json({ ok: true, sandbox: 'extend-e2e' })
+        if (p.endsWith('/agent/special/config')) return json({})
+        if (p.endsWith('/agent/agents')) return json({ agents: [] })
+        if (p.endsWith('/agent/projects')) return json({ projects: [] })
+        if (p.endsWith('/agent/teams')) return json({ teams: [] })
+        if (p.endsWith('/agent/engines')) return json({ engines: [] })
+        if (p.endsWith('/agent/agents-meta')) return json({ order: [], defaultSlug: null })
+        if (p.endsWith('/agent/sessions')) return json({ sessions: [] })
+        if (p.endsWith('/agent/runs')) return json({ runs: [] })
+        if (p.endsWith('/agent/approvals/pending')) return json({ rev: 'e2e', approvals: [] })
+        if (p.endsWith('/agent/models')) return json({ models: [{ id: 'e2e-model', name: 'E2E Model', provider: 'E2E', source: 'forsion', modelType: 'llm' }], directProviders: [], defaultModelId: 'e2e-model' })
+        return route.abort()
+      }
       if (p.startsWith('/api/agent/')) return route.abort()
       return json({}, 404)
     })
+    const zh = locale.startsWith('zh')
     const page = await ctx.newPage(); page.setDefaultTimeout(12000); page.on('pageerror', (e) => errors.push(e.message))
     const cdp = await ctx.newCDPSession(page)
     const tap = async (loc) => {
@@ -118,7 +141,34 @@ function executable() {
     await page.screenshot({ path: path.join(shots, 'account.png') })
     await tap(page.locator('.settings-mobile-detail-head button').last())
     await closeLeft()
+    // Feedback (2026-11-09): Extend hands its submit channel to the host, which then lists Feedback under "more",
+    // renders the form as a full-screen page and accepts /feedback in the composer. An Extend build without the seam keeps the old shape.
+    const hasFeedbackSeam = bundle.code.includes('provideFeedbackChannel')
+    if (hasFeedbackSeam) {
+      assert.equal(await page.evaluate(() => typeof window.tangu.submitFeedback), 'function', 'feedback channel is provided to the host')
+      await tap(page.locator('.mb-topbar [aria-label="more"]'))
+      await page.locator('.mb-sheet [data-ribbon-id="rb-feedback"]').waitFor()
+      await page.screenshot({ path: path.join(shots, 'feedback-more.png') })
+      await tap(page.locator('.mb-sheet [data-ribbon-id="rb-feedback"]'))
+      await page.locator('[data-mobile-feedback] .feedback-modal').waitFor()
+      await page.locator('#feedback-description').fill(zh ? '手机上提的反馈' : 'Feedback sent from the phone')
+      await page.locator('[data-mobile-feedback] .feedback-footer .btn.primary:not([disabled])').waitFor()
+      await geometry('[data-mobile-feedback]', 'feedback-layout')
+      await tap(page.locator('[data-mobile-feedback] .feedback-footer .btn.primary'))
+      await page.locator('[data-mobile-feedback] .feedback-success').waitFor()
+      assert.equal(tickets.length, 1, 'one ticket reached the cloud')
+      assert(String(tickets[0].description).includes(zh ? '手机上提的反馈' : 'Feedback sent from the phone'), JSON.stringify(tickets[0].description))
+      assert(tickets[0].attachments.length === 1 && tickets[0].attachments[0].size > 0, 'diagnostics attached')
+      assert((await page.locator('[data-mobile-feedback] .feedback-success').innerText()).includes('T-1'))
+      await page.screenshot({ path: path.join(shots, 'feedback-success.png') })
+      await tap(page.locator('[data-mobile-feedback] .feedback-footer .btn.primary'))
+      await page.locator('[data-mobile-feedback]').waitFor({ state: 'detached' })
+    } else {
+      assert.equal(await page.evaluate(() => typeof window.tangu.submitFeedback), 'undefined', 'an Extend build without the seam adds no feedback channel')
+      console.log('INFO this Extend build has no provideFeedbackChannel: only the unchanged shape is checked')
+    }
     await tap(page.locator('.mb-topbar [aria-label="more"]'))
+    if (!hasFeedbackSeam) assert.equal(await page.locator('.mb-sheet [data-ribbon-id="rb-feedback"]').count(), 0, 'no feedback entry without the channel')
     await tap(page.locator('.mb-sheet [data-ribbon-id="rb-market"]'))
     await page.locator('[data-store-view="forsion-extend:membership"]').waitFor()
     await tap(page.locator('[data-store-view="forsion-extend:membership"]'))
@@ -157,8 +207,59 @@ function executable() {
     assert.equal(fs.readFileSync(target, 'utf8'), 'Legacy account bytes', 'download preserves old-account file bytes')
     assert.equal(await page.evaluate(() => localStorage.getItem('forsion.mobile.legacy-note')), 'Preserve local notes and selected vault')
     assert.equal(await page.evaluate(() => localStorage.getItem('forsion_token')), 'legacy-account-token')
-    await geometry('.pz', 'drive-layout')
+    await geometry('.pz:not(.pz-txfloat)', 'drive-layout') // 0.10 起传输浮条也带 .pz
     await page.screenshot({ path: path.join(shots, 'drive.png') })
+    // Feedback, second half: /feedback in the composer and the back key. Both need a fresh load — the composer only takes
+    // input with an engine connected (fixture turned on here), and Capacitor's web App plugin loses the backButton listener on
+    // a share of loads (see home-back.e2e.cjs), so the back check re-rolls the load until the key reaches MobileRoot.
+    if (hasFeedbackSeam) {
+      engineUp = true
+      let slash = false, back = false
+      for (let attempt = 1; attempt <= 20 && !(slash && back); attempt++) {
+        const p2 = await ctx.newPage(); p2.setDefaultTimeout(12000); p2.on('pageerror', (e) => errors.push(e.message))
+        const cdp2 = await ctx.newCDPSession(p2)
+        const tap2 = async (loc) => {
+          await loc.waitFor({ state: 'visible' }); const box = await loc.boundingBox(); assert(box, 'tap target has geometry')
+          await cdp2.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: box.x + box.width / 2, y: box.y + box.height / 2 }] })
+          await cdp2.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+          await p2.waitForTimeout(400)
+        }
+        await p2.goto(preview.url, { waitUntil: 'domcontentloaded' })
+        await p2.locator('.mb-topbar [aria-label="more"]').waitFor({ timeout: 30000 })
+        await p2.waitForFunction(() => typeof window.tangu?.submitFeedback === 'function', null, { timeout: 15000 })
+        await p2.waitForTimeout(1800) // same settle as the first load: the shell is still arranging itself
+        if (!slash) {
+          const composer = p2.locator('textarea.t2c-ta:not([disabled])').first()
+          await composer.waitFor({ timeout: 15000 })
+          // the menu is memoised and the channel arrives after boot: it has to list /feedback all the same
+          await composer.fill('/feed')
+          await p2.locator('.t2c-menu .t2c-menu-cmd').filter({ hasText: '/feedback' }).first().waitFor()
+          await p2.screenshot({ path: path.join(shots, 'feedback-slash-menu.png') })
+          await composer.fill(zh ? '/feedback 斜杠带来的描述' : '/feedback from the slash command')
+          await composer.press('Enter')
+          await p2.locator('[data-mobile-feedback] .feedback-modal').waitFor()
+          assert.equal(await p2.locator('#feedback-description').inputValue(), zh ? '斜杠带来的描述' : 'from the slash command')
+          assert.equal(await composer.inputValue(), '', 'the slash draft is consumed')
+          slash = true
+          console.log('PASS /feedback is listed in the slash menu and opens the feedback page with the description')
+        } else {
+          await tap2(p2.locator('.mb-topbar [aria-label="more"]'))
+          await tap2(p2.locator('.mb-sheet [data-ribbon-id="rb-feedback"]'))
+          await p2.locator('[data-mobile-feedback] .feedback-modal').waitFor()
+        }
+        const seen0 = await p2.evaluate(() => window.__backSeen)
+        await p2.evaluate(() => { window.Capacitor?.Plugins?.App?.notifyListeners?.('backButton', { canGoBack: false }) })
+        await p2.waitForTimeout(1000)
+        if (await p2.evaluate((n) => window.__backSeen > n, seen0)) {
+          assert.equal(await p2.locator('[data-mobile-feedback]').count(), 0, 'the back key reached MobileRoot but the feedback page stayed open')
+          back = true
+          console.log(`PASS back key closes the feedback page (load ${attempt})`)
+        } else console.log(`  (load ${attempt}: the back key did not reach MobileRoot — Capacitor web plugin race, new load)`)
+        await p2.close()
+      }
+      assert(slash && back, `feedback phase two incomplete: slash=${slash} back=${back}`)
+      engineUp = false
+    }
     assert.equal(errors.length, 0, errors.join('\n'))
     assert(requests.filter((r) => r.method !== 'OPTIONS' && /^\/api\/(files|storage|remotesync)/.test(r.p)).every((r) => r.token === 'Bearer legacy-account-token'))
     console.log('PASS actual bundled Extend mobile: settings entry, legacy account details, desktop gates, store/items, drive list, multipart upload, exact-byte download, token/local preference preservation, no page errors')

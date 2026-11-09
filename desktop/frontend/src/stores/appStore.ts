@@ -792,16 +792,25 @@ export const useApp = create<AppState>((set, get) => ({
 
   openFeedback: (description) => {
     if (description) set({ feedbackDraft: description })
-    if (get().authInfo?.loggedIn) {
+    const show = (): void => {
       if (window.tangu?.openFloatingPanel) {
         void window.tangu.openFloatingPanel({ id: 'feedback', title: get().tr('feedback.title'), builtin: 'feedback', params: { description: description ?? get().feedbackDraft, ...openerSession(get()) } })
       } else set({ feedbackOpen: true })
-      return true
     }
-    else {
+    const refuse = (): void => {
       get().toast(get().tr('feedback.errNotLoggedIn'), true)
       get().openSettings('forsion')
     }
+    const info = get().authInfo
+    if (info?.loggedIn) { show(); return true }
+    // authInfo 是连上引擎之后才读进来的。引擎没连上时它是 null(= 不知道,不是没登录):网页 / 手机的引擎在远端,
+    // 连不上恰恰是最需要反馈的时候 → 现问一次账号再定。描述已经存进 feedbackDraft,没登录也不丢。
+    const ask = info === null ? window.tangu?.authStatus : undefined
+    if (ask) {
+      void ask().then((a) => { if (a?.loggedIn) show(); else refuse() }).catch(refuse)
+      return true
+    }
+    refuse()
     return false
   },
   closeFeedback: () => set({ feedbackOpen: false }),
