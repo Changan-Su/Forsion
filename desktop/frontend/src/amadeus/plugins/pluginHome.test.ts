@@ -17,7 +17,7 @@ vi.mock('../../views/homeWidgetMount', () => ({
 }))
 
 import { createHomeApi, homeWidgetInfo } from './pluginHome'
-import { HOME_WIDGETS_KEY, requestHomeEdit, sanitizeHomeLayout } from '../../views/homeWidgets'
+import { BUILTIN_WIDGETS, HOME_WIDGETS_KEY, requestHomeEdit, sanitizeHomeLayout } from '../../views/homeWidgets'
 import type { AmadeusPlugin } from './types'
 
 const cal = { id: 'forsion-calendar', name: '日历', nameEn: 'Calendar', widgets: [{ id: 'today', title: '今天', titleEn: 'Today', layout: 'list', space: 'calendar' }] } as unknown as AmadeusPlugin
@@ -47,11 +47,12 @@ describe('ctx.home(主页插件化 B,2026-11-09)', () => {
     expect(homeWidgetInfo('w_a1', plugins)).toMatchObject({ kind: 'agent', show: true, title: '' })
     expect(homeWidgetInfo('builtin:inbox', plugins)).toMatchObject({ kind: 'builtin', show: true, canOpen: true })
     expect(homeWidgetInfo('builtin:muse', plugins).canOpen).toBe(false)
+    expect(homeWidgetInfo('builtin:museTodos', plugins).canOpen).toBe(true) // 和主页卡头同一份名单,新加的内置卡不漏
   })
 
-  it('library:内置四张 + 插件声明的 + Agent 做的(只收 widget.json 那种)', async () => {
+  it('library:内置的 + 插件声明的 + Agent 做的(只收 widget.json 那种)', async () => {
     const ids = (await api().library()).map((w) => w.id)
-    expect(ids).toEqual(['builtin:muse', 'builtin:inbox', 'builtin:notes', 'builtin:sessions', 'plugin:forsion-calendar/today', 'w_a1'])
+    expect(ids).toEqual([...BUILTIN_WIDGETS, 'plugin:forsion-calendar/today', 'w_a1'])
     expect((await api().library()).find((w) => w.id === 'w_a1')?.title).toBe('Agent card')
   })
 

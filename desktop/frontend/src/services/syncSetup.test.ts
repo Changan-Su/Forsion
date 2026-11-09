@@ -287,3 +287,71 @@ describe('folder rules first',()=>{
   expect(JSON.parse(localStorage.getItem(s.PENZOR_FOCUS)!)).toMatchObject({page:'sync'})
  })
 })
+
+// 11-08:引导收尾不再跳蓬洲云「同步」页;智库勾了才开,云端已有东西要定的交给首登卡片
+describe('onboarding finish with folder rules', () => {
+  const channels = (preview: unknown, fail?: string) => {
+    const calls: Array<[string, ...unknown[]]> = []
+    ;(window as any).tangu.cloudInvoke = vi.fn(async (ch: string, ...a: unknown[]) => {
+      calls.push([ch, ...a])
+      if (ch === 'penzor:sync:get') return { ok: true, value: { available: true } }
+      if (fail && ch === fail) return { ok: false, error: 'boom' }
+      if (ch === 'penzor:sync:setup') return { ok: true, value: preview }
+      return { ok: true, value: null }
+    })
+    return calls
+  }
+  const pick = { notes: true, agents: false, plugins: false }
+
+  it('notes left unticked: records the decision, does not switch to Penzor', async () => {
+    const calls = channels(null)
+    const s = await fresh(); await s.refreshSync()
+    await s.applyOnboardingSync({ ...pick, notes: false }, ['plugins'])
+    expect(localStorage.getItem(s.PENZOR_FOCUS)).toBeNull()
+    expect(calls.some(([ch]) => ch === 'penzor:sync:setup')).toBe(false)
+    expect(s.getSync()?.decided).toBe(true)
+  })
+
+  it('nothing to decide (first computer): applies the vault-only preview silently', async () => {
+    const calls = channels({ token: 't1', upload: 4, download: 0, conflicts: 0, bytes: 10 })
+    const s = await fresh(); await s.refreshSync()
+    const out = await s.applyOnboardingSync(pick, ['notes'])
+    expect(out.every((r) => r.ok)).toBe(true)
+    expect(calls.find(([ch]) => ch === 'penzor:sync:setup')?.[1]).toMatchObject({ notes: true, profile: false, agents: false, agentSlugs: [] })
+    expect(calls.find(([ch]) => ch === 'penzor:sync:apply')?.[1]).toBe('t1')
+    expect(localStorage.getItem(s.PENZOR_FOCUS)).toBeNull()
+    expect(s.getSync()?.decided).toBe(true)
+  })
+
+  it('cloud already has data: leaves it to the first sign-in card, no jump', async () => {
+    const calls = channels({ token: 't2', upload: 0, download: 12, conflicts: 0, bytes: 0 })
+    const s = await fresh(); await s.refreshSync()
+    const seen: boolean[] = []
+    s.subscribeSync(() => seen.push(!!s.getSync()?.applying))
+    await s.applyOnboardingSync(pick, ['notes'])
+    expect(calls.some(([ch]) => ch === 'penzor:sync:apply')).toBe(false)
+    expect(localStorage.getItem(s.PENZOR_FOCUS)).toBeNull()
+    expect(seen).toContain(true)
+    expect(s.getSync()?.applying).toBe(false)
+    expect(s.getSync()?.decided).toBe(false)
+    expect(s.wantsSyncCard(s.getSync(), true)).toBe(true)
+    expect(s.wantsSyncCard({ ...s.getSync()!, applying: true }, true)).toBe(false)
+  })
+
+  it('already set up on this computer: just records the decision', async () => {
+    channels(null)
+    const s = await fresh(); await s.refreshSync()
+    await s.applyOnboardingSync(pick, ['notes'])
+    expect(s.getSync()?.decided).toBe(true)
+    expect(localStorage.getItem(s.PENZOR_FOCUS)).toBeNull()
+  })
+
+  it('a failed preview is not recorded as decided (the card asks again)', async () => {
+    channels(null, 'penzor:sync:setup')
+    const s = await fresh(); await s.refreshSync()
+    const out = await s.applyOnboardingSync(pick, ['notes'])
+    expect(out.at(-1)).toMatchObject({ ok: false, error: 'boom' })
+    expect(s.getSync()?.decided).toBe(false)
+    expect(s.getSync()?.applying).toBe(false)
+  })
+})

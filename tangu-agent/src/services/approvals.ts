@@ -115,9 +115,12 @@ function nextApprovalId(): string {
 // 远程污点 run 的持久化后续执行入口(manage_automation / manage_schedule,§6.6)与 Agent / 技能管理面不走审批档:
 // 写动作在 gateToolCall 入口按 remoteManagementDenied 硬拒(按 D1 远端能批自己的卡,「要审批」挡不住),list 与本机同档。
 
-/** 这次调用会把小组件写进磁盘(存 / 改原件、记一笔、删):工具本身是无副作用的,所以按参数判,否则绕过只读档。参数解析不了时按写算。 */
+/** 这次调用会把小组件写进磁盘(存 / 改原件、记一笔、删):工具本身是无副作用的,所以按参数判,否则绕过只读档。参数解析不了时按写算。
+ *  muse_space 的 widget(建卜算子自己的小组件)同写文件档(11-08 方案 D:「建自家原生小组件的入口,走写文件审批档」);
+ *  它的 update 只改 Space 目录里自己那份 space.json —— 那个目录三档都免审,不进这一档。 */
 export function widgetWrite(call: ToolCall): boolean {
   const name = call.function.name;
+  if (name === 'muse_space') return String(parseCallArgs(call)?.action ?? 'widget') === 'widget';
   if (name !== 'intelligent_ui_html' && name !== 'sketch' && name !== 'intelligent_ui' && name !== 'manage_widget') return false;
   const args: any = parseCallArgs(call);
   if (name === 'manage_widget') return !['list', 'read'].includes(String(args?.action ?? ''));
@@ -411,6 +414,7 @@ function rawPreview(call: ToolCall, opts: { keptActions?: unknown[] | null; prof
   if (name === 'copy_path') return `copy ${pathLine(args.from)} → ${pathLine(args.to)}${args.overwrite === true ? ' (overwrite)' : ''}`;
   if (name === 'delete_path') return `${args.permanent === true ? 'delete permanently' : 'move to trash'} ${pathLine(args.path)}`;
   if (name === 'open_path') return `open ${pathLine(args.path)}`;
+  if (name === 'muse_space') return widgetWrite(call) ? `save Muse widget ${pathLine(args.name ?? '')}` : `update Muse's Space layout`;
   // 带 widget 的卡:不把整份 HTML 铺到卡上
   if (widgetWrite(call) && name !== 'manage_widget') {
     const w = args.widget && typeof args.widget === 'object' ? args.widget : {};

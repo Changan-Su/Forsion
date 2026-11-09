@@ -36,7 +36,10 @@ async function main() {
     { slug: 'muse', name: 'Muse', nameZh: '卜算子', nameEn: 'Muse', description: '', createdBy: 'builtin' },
     { slug: 'coder', name: 'Coder', description: 'Writes code with you', createdBy: 'user' },
   ]
-  const human = { scope: 'human', path: 'human/MEMORY.md', content: '', version: 'h1', exists: false, updatedAt: null, history: [], maxLength: 2000 }
+  // 新装机:引擎播种的英文空模板(tangu-agent/src/contracts/userMdTemplate.ts),「关于你」要当空、写时整份换掉
+  const SEEDED = '# User Profile (USER.md)\n\n> Every Agent reads this profile. Record long-term information about yourself here.\n\n' +
+    '## Name / What to call you\n\n## Preferences\n- \n\n## Level / Background\n\n## Long-term needs / Goals\n'
+  const human = { scope: 'human', path: 'human/MEMORY.md', content: SEEDED, version: 'h1', exists: true, updatedAt: null, history: [], maxLength: 2000 }
   const specialWrites = [], introWrites = [], humanWrites = [], agentPatches = []
   let failIntro = false
   const stub = await startStubEngine({ models, override: async ({ path: p, method, body }) => {
@@ -64,6 +67,9 @@ async function main() {
       return human
     }
     if (p === '/agent/agents' && method === 'GET') return { agents }
+    // 「从其他 AI 搬过来」:扫到两家;审阅单打开时读一次空的整理状态
+    if (p === '/agent/import/scan' && method === 'GET') return { tools: [{ id: 'claude-code', about: 3, rules: 1, project: 0, notes: 0, skills: 1 }, { id: 'codex', about: 2, rules: 0, project: 0, notes: 0, skills: 0 }], fresh: 5, freshTools: ['claude-code', 'codex'], last: null }
+    if (p === '/agent/import/plan' && method === 'GET') return { state: 'idle', done: 0, total: 0, plan: null, error: null }
     const m = /^\/agent\/agents\/([^/]+)$/.exec(p)
     if (m && method === 'PATCH') {
       const b = await body(); agentPatches.push({ slug: m[1], ...b })
@@ -101,6 +107,9 @@ async function main() {
     /** 量这一屏:底栏在窗口里、没有横向溢出;mustFit = 这一屏在这个尺寸下不许要滚。 */
     async function geometry(name, { mustFit = false, screenshot = true } = {}) {
       await win.waitForTimeout(300)
+      // 换屏动效(新屏滑进、旧屏替身滑出)放完再量:translate 会算进位置,替身也会让 .ob3-main 找到两个
+      await win.waitForFunction(() => !document.querySelector('.ob3-main[data-lcl-exit]') && !document.getAnimations().some((a) => a.playState === 'running'
+        && a.effect?.getComputedTiming?.().iterations !== Infinity && a.effect?.target?.closest?.('.ob3-main')), null, { timeout: 5000 })
       const state = await win.evaluate(() => {
         const shell = document.querySelector('.ob-flow'), main = document.querySelector('.ob3-main'), foot = document.querySelector('.ob3-foot')
         const r = foot.getBoundingClientRect()
@@ -125,17 +134,20 @@ async function main() {
     const stepNow = () => win.locator('.ob-flow').getAttribute('data-step')
     /** 每次重载都会重放开屏(#tangu-splash 盖在最上面):等它退掉再量 / 截图,否则截到的是开屏。 */
     const settle = () => win.waitForFunction(() => !document.getElementById('tangu-splash'), null, { timeout: 30000 })
+    /** 换屏时旧屏留一个替身滑出(带 data-lcl-exit,约 150ms):等它摘掉,不然按 data-* 找的严格选择器会找到两个。 */
+    const noGhost = () => win.waitForFunction(() => !document.querySelector('.ob3-main[data-lcl-exit]'), null, { timeout: 5000 })
     async function next() {
       const previous = await stepNow()
       await win.locator('[data-ob-primary]').click()
       await win.waitForFunction((step) => document.querySelector('.ob-flow')?.getAttribute('data-step') !== step, previous)
+      await noGhost()
     }
     /** 每屏等它的数据读回来再量:量「读取中」的空态会假绿。 */
     const ready = {
       start: () => win.waitForSelector('[data-ob-channels]'),
       theme: () => win.waitForSelector('.ob3-styles'),
-      you: () => win.waitForSelector('[data-ob-you] textarea:not([disabled])'),
-      team: async () => { await win.waitForSelector('[data-ob-muse] select:not([disabled])'); await win.waitForSelector('[data-agent="coder"]') },
+      you: () => win.waitForSelector('[data-ob-you] [data-ob-you-name]:not([disabled])'),
+      team: async () => { await win.waitForSelector('[data-ob-muse-model] .model-select-btn:not([disabled])'); await win.waitForSelector('[data-agent="coder"]') },
     }
     async function fresh() {
       await win.evaluate(() => { localStorage.removeItem('forsion_tangu_onboarding_done'); localStorage.removeItem('forsion_tangu_onboarding_version') })
@@ -193,6 +205,16 @@ async function main() {
 
     // ② 中文 1280×800 真走一遍,核对写进去的东西
     await setLocale('zh'); await size(1280, 800); await fresh()
+    // 换屏有动效:继续 = 新屏从右滑进、旧屏替身往左滑出;返回反过来(真跑的 CSS 动画,用 animationstart 记下来)
+    await win.evaluate(() => { window.__obAnims = []; document.addEventListener('animationstart', (e) => window.__obAnims.push(e.animationName), true) })
+    await next(); await ready.theme()
+    await win.locator('.ob3-back').click(); await win.waitForSelector('.ob-flow[data-step="start"]'); await ready.start(); await noGhost()
+    // animationstart 在下一帧才派发:等它到齐再断言(到不齐 = 没动)
+    const animNames = ['ob3-in-fwd', 'ob3-out-fwd', 'ob3-in-back', 'ob3-out-back']
+    await win.waitForFunction((names) => names.every((n) => window.__obAnims.includes(n)), animNames, { timeout: 3000 }).catch(() => {})
+    const anims = await win.evaluate(() => window.__obAnims)
+    for (const name of animNames) assert(anims.includes(name), `screen change animates (${name}): ${anims.join(', ')}`)
+    console.log('PASS screen changes slide: Continue forwards, Back backwards, the old screen slides out')
     assert.equal(await win.locator('[data-ob-title]').innerText(), '欢迎使用 Forsion')
     assert.equal(await win.locator('[data-ob-account]').count() + await win.locator('[data-ob-channels]').count() >= 1, true)
     assert.match(await win.locator('[data-ob-primary]').innerText(), /先不接/)
@@ -200,18 +222,55 @@ async function main() {
     await geometry('zh-start-keyform', { mustFit: true })
     await win.locator('[data-ob-keyform] button', { hasText: '返回' }).click(); await win.waitForSelector('[data-ob-keyform]', { state: 'detached' })
     await next(); await ready.theme(); await next(); await ready.you()
-    await win.locator('[data-ob-you] textarea').fill('我叫小鹿,做产品设计。')
+    // 关于你(方案 A):新装机的英文模板当空 —— 三问都是空的、占位看得见、自由框折叠着
+    assert.equal(await win.locator('[data-ob-you-name]').inputValue(), '', 'the seeded template reads as empty')
+    assert.equal(await win.locator('[data-ob-you] textarea').count(), 0, 'the free box starts folded')
+    // 「从其他 AI 搬过来」:共用的导入入口一行,审阅单开在引导上面;单开着时背后回车不「继续」
+    const impRow = win.locator('.ob3-imp [data-ai-import-row]')
+    await impRow.waitFor()
+    assert.match(await impRow.innerText(), /从其他 AI 搬过来[\s\S]*Claude Code、Codex/)
+    await impRow.locator('[data-ai-import-open]').click()
+    const sheetBox = await win.locator('.imp-sheet').boundingBox()
+    assert(sheetBox, 'the import sheet opens')
+    const onTop = await win.evaluate(([x, y]) => !!document.elementFromPoint(x, y)?.closest('.imp-sheet'), [sheetBox.x + sheetBox.width / 2, sheetBox.y + 30])
+    assert(onTop, 'the import sheet shows above the guide')
+    // 等入场动效放完再拍(半途的淡入看着像透明)
+    await win.waitForFunction(() => document.getAnimations().every((a) => a.playState !== 'running' || a.effect?.getTiming?.().iterations === Infinity), null, { timeout: 3000 }).catch(() => {})
+    await win.screenshot({ path: path.join(OUT, 'zh-you-import-sheet.png') })
+    // 焦点进单里,Tab 出不去(否则能摸到背后的「继续」)
+    assert(await win.evaluate(() => !!document.activeElement?.closest('.imp-sheet')), 'focus moves into the import sheet')
+    for (let i = 0; i < 14; i++) await win.keyboard.press('Tab')
+    assert(await win.evaluate(() => !!document.activeElement?.closest('.imp-sheet')), 'Tab stays inside the import sheet')
+    await win.evaluate(() => document.activeElement?.blur?.()); await win.keyboard.press('Enter'); await win.waitForTimeout(300)
+    assert.equal(await stepNow(), 'you', 'Enter behind the open import sheet does not continue')
+    await win.locator('.imp-sheet .modal-head .icon-btn').click(); await win.waitForSelector('.imp-sheet', { state: 'detached' })
+    assert(await win.evaluate(() => document.activeElement?.hasAttribute('data-ai-import-open')), 'closing gives focus back to the opener')
+    await win.locator('[data-ob-you-name]').fill('小鹿')
+    await win.locator('[data-ob-you-work="design"]').click()
+    await win.locator('[data-ob-you-work-own]').fill('独立开发一个记账 App')
+    await win.locator('[data-ob-you-style="short"]').click()
+    await win.locator('[data-ob-you-more]').click()
+    await win.locator('[data-ob-you] textarea').fill('晚上 10 点以后别提醒我工作的事。')
+    await geometry('zh-you-filled') // 自由框展开后可以滚(折叠着的缺省态在 ① 里按 mustFit 量过);底栏仍须在窗里
     await next(); await ready.team()
-    assert.deepEqual(humanWrites.map((w) => [w.content, w.expectedVersion]), [['我叫小鹿,做产品设计。', 'h1']], 'About you saved once with the version it was read at')
+    assert.deepEqual(humanWrites.map((w) => [w.content, w.expectedVersion]), [['## 关于我\n- 称呼：小鹿\n- 在做：设计；独立开发一个记账 App\n- 回答：简短直接\n\n晚上 10 点以后别提醒我工作的事。\n', 'h1']],
+      'About you saved once as one zh section (the seeded template replaced whole) with the version it was read at')
     const museText = await win.locator('[data-ob-muse]').innerText()
     assert(museText.includes('卜算子') && !museText.includes('Muse'), `Muse shows one name by UI language: ${museText.slice(0, 80)}`)
     // 没登录:模型行显示引擎实际会用的默认模型(桩的 defaultModelId = 第一个),不黄底、不替用户写
     assert.equal(await win.locator('[data-ob-muse-model].need').count(), 0, 'signed out with a default model: no pick is demanded')
-    assert.match(await win.locator('[data-ob-muse-model] select option').first().innerText(), /GPT-6 Luna · 默认/)
+    assert.match(await win.locator('[data-ob-muse-model] .model-select-btn').innerText(), /GPT-6 Luna · 默认/)
+    assert.equal(await win.locator('[data-ob-muse-avatar] svg').count(), 0, 'Muse shows its own avatar, not a star icon')
     // 名单一行只介绍,没有开关;主动程度不问
     assert.equal(await win.locator('[data-ob-roster] [role="switch"]').count(), 0, 'the roster has no switches')
     assert.equal(await win.locator('[data-ob-muse] .ob3-q').count(), 2, 'two questions')
-    await win.locator('[data-ob-muse-model] select').selectOption('local/qwen')
+    // 模型行是设置页那个分组选择器:菜单 portal 到 body,引导开着时菜单层抬到引导上面(点得到 = 没被盖住)
+    await win.locator('[data-ob-muse-model] .model-select-btn').click()
+    await win.waitForSelector('.composer-menu--anchored')
+    assert((await win.locator('.composer-menu--anchored .menu-source').count()) >= 1, 'model menu is grouped (Forsion / direct)')
+    await win.waitForTimeout(300) // 菜单进场淡入放完再拍
+    await win.screenshot({ path: path.join(OUT, 'zh-team-model-menu.png') })
+    await win.locator('.composer-menu--anchored .menu-item', { has: win.locator('.grow', { hasText: /^Qwen local$/ }) }).click()
     await win.locator('[data-ob-muse] .ob3-pill', { hasText: '学习' }).click()
     if (historyOffered) {
       assert.match(await win.locator('[data-ob-ch-example]').innerText(), /开了之后，比如/)
@@ -249,18 +308,25 @@ async function main() {
     // ③ 英文深色、窄窗、110% 缩放(用户实际用的缩放)
     await setLocale('en'); await size(1024, 720); await fresh()
     await next(); await ready.theme()
-    await win.locator('.ob3-seg button').nth(1).click()
+    await win.locator('[data-ob-mode] [role="tab"]').nth(1).click()
     await geometry('en-dark-theme')
     await size(390, 844); await geometry('en-narrow-theme'); await size(1024, 720)
-    await next(); await ready.you(); await size(390, 844); await geometry('en-narrow-you'); await size(1024, 720)
+    await next(); await ready.you()
+    // 再进来:写过的那一节回填到三问(英文界面照样认中文标签),没改就不重写
+    assert.equal(await win.locator('[data-ob-you-name]').inputValue(), '小鹿')
+    assert.equal(await win.locator('[data-ob-you-style="short"]').getAttribute('aria-pressed'), 'true')
+    assert.equal(await win.locator('[data-ob-you] textarea').inputValue(), '晚上 10 点以后别提醒我工作的事。')
+    await size(390, 844); await geometry('en-narrow-you'); await size(1024, 720)
+    const writesBefore = humanWrites.length
     await next(); await ready.team()
+    assert.equal(humanWrites.length, writesBefore, 'About you is not rewritten when nothing changed')
     // ② 里开过又关掉(真主进程:开 → 关让 dataGen +1 并落盘):这台不再算「从没动过」,团队屏不替他预开
     if (historyOffered) await win.waitForSelector('[data-ob-history][data-ch-draft="off"]')
     await geometry('en-dark-team')
     await size(390, 844); await geometry('en-narrow-team')
     await size(900, 640); await zoom(1.1); await geometry('en-dark-zoom110-team')
     await zoom(1); await size(1024, 720)
-    await win.locator('.ob3-dots button').first().click(); await ready.start()
+    await win.locator('.ob3-dots button').first().click(); await ready.start(); await noGhost()
     await geometry('en-dark-start')
     await size(390, 844); await geometry('en-narrow-start'); await size(1024, 720)
     // 跳过引导不写这一屏

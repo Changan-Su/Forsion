@@ -16,9 +16,12 @@ export type HomePart = 'clock' | 'composer' | 'row' | 'dock'
 export const HOME_PARTS: readonly HomePart[] = ['clock', 'composer', 'row', 'dock']
 export const REMOVABLE_PARTS: readonly HomePart[] = ['clock', 'dock']
 export const STATUS_CARD = 'builtin:status'
-/** 宿主内置的四张(数据就在宿主里):卜算子·建议 / 收件箱 / 最近笔记 / 最近对话。 */
-export const BUILTIN_WIDGETS = ['builtin:muse', 'builtin:inbox', 'builtin:notes', 'builtin:sessions'] as const
+/** 宿主内置的(数据就在宿主里):卜算子·建议 / 收件箱 / 最近笔记 / 最近对话,
+ *  以及 Muse Space 简报格子里的待你看的 / 在跟的(11-08 方案 D:同一份数据也能放到主页)。 */
+export const BUILTIN_WIDGETS = ['builtin:muse', 'builtin:inbox', 'builtin:notes', 'builtin:sessions', 'builtin:museTodos', 'builtin:museTracking'] as const
 export type BuiltinWidget = (typeof BUILTIN_WIDGETS)[number]
+/** 内置卡对应的 Space(卡头标题点一下打开它)。主页卡头和 ctx.home 的 canOpen 共用这一份。 */
+export const BUILTIN_WIDGET_SPACE: Partial<Record<BuiltinWidget, string>> = { 'builtin:inbox': 'inbox', 'builtin:notes': 'amadeus', 'builtin:sessions': 'tangu', 'builtin:museTodos': 'muse', 'builtin:museTracking': 'muse' }
 export const MUSE_CARD: BuiltinWidget = 'builtin:muse'
 export const SESSIONS_CARD: BuiltinWidget = 'builtin:sessions'
 /** 插件卡的 id:`plugin:<插件 id>/<卡 id>`(卡 id 是插件 manifest `widgets` 里那一张自己的 id)。 */
@@ -154,12 +157,13 @@ export function removeFromHome(l: HomeLayout, id: string): HomeLayout {
 }
 
 export type HomeSlot = { area: 'left' | 'right' | 'row'; index: number }
-/** 拖动松手:把 id 从原处拿出来插到 slot。放不下(栏满 / 下排格子不够)回 null,卡回原处。 */
-export function moveOnHome(l: HomeLayout, id: string, to: HomeSlot): HomeLayout | null {
+/** 拖动松手:把 id 从原处拿出来插到 slot。放不下(栏满 / 下排格子不够)回 null,卡回原处。
+ *  `w` = 新进下排的卡占几格(从收纳拖进来时按「点一下」的规矩给:空 2 格就占 2 格);已在下排的卡保留原宽。 */
+export function moveOnHome(l: HomeLayout, id: string, to: HomeSlot, newW?: 1 | 2 | 4): HomeLayout | null {
   const cell = l.row.find((c) => c.id === id)
   const rest = removeFromHome(l, id)
   if (to.area === 'row') {
-    const w = id === STATUS_CARD ? 4 : cell?.w ?? 1
+    const w = id === STATUS_CARD ? 4 : cell?.w ?? (newW === 2 ? 2 : 1)
     if (rowUsed(rest) + w > ROW_CELLS) return null
     const row = [...rest.row]
     row.splice(Math.min(to.index, row.length), 0, { id, w })

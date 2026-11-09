@@ -13,14 +13,12 @@ import { listWidgets } from '../../services/widgetClient'
 import { currentLocale, subscribeLocale, translate } from '../../i18n'
 import { track } from '../../achievements/store'
 import {
-  BUILTIN_WIDGETS, cloneHomeLayout, isBuiltinWidget, parsePluginWidgetId, pluginWidgetId, readStoredHomeLayoutState, saveHomeLayout,
+  BUILTIN_WIDGET_SPACE, BUILTIN_WIDGETS, type BuiltinWidget, cloneHomeLayout, isBuiltinWidget, parsePluginWidgetId, pluginWidgetId, readStoredHomeLayoutState, saveHomeLayout,
   sanitizeHomeLayout, setHomeEditHandler, subscribeHomeLayout,
 } from '../../views/homeWidgets'
 
 /** `ctx.home.track` 收的官方事件名。只许加:插件按名字记。 */
 export const HOME_TRACK_EVENTS: readonly string[] = ['home.edit']
-/** 有「打开所在 Space」的内置卡(和 homeWidgetKinds 的 BUILTIN_SPACE 同一份口径)。 */
-const BUILTIN_OPENS = new Set(['builtin:inbox', 'builtin:notes', 'builtin:sessions'])
 
 type MountMod = typeof import('../../views/homeWidgetMount')
 let mod: MountMod | null = null
@@ -34,7 +32,7 @@ export function homeWidgetInfo(id: string, plugins: readonly AmadeusPlugin[]): P
   if (isBuiltinWidget(id)) {
     const key = `home.w.${id.slice('builtin:'.length)}`
     const title = translate(key)
-    return { id, kind: 'builtin', show: true, title: title === key ? '' : title, owner: '', canOpen: BUILTIN_OPENS.has(id) }
+    return { id, kind: 'builtin', show: true, title: title === key ? '' : title, owner: '', canOpen: !!BUILTIN_WIDGET_SPACE[id as BuiltinWidget] }
   }
   const plug = parsePluginWidgetId(id)
   if (plug) {

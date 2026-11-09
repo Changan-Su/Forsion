@@ -11,6 +11,9 @@
  *   GET      /agent/special/muse/status                Muse 运行态 + 本窗口预算余量
  *   POST     /agent/special/muse/wake                  面板「叫醒」:下一次巡检当作到点(清休眠、不看心跳与运行时段;额度 / 次数 / 让位 / 急停照守;只认本机)
  *   GET      /agent/special/muse/rounds?limit=3        最近几轮周期(怎么醒的 / 用时 / 写了几个文件 / 提了几条待办;只认本机)
+ *   GET      /agent/special/muse/space                 今日简报的有效布局(卜算子那份 × 你的摆放合成,契约 contracts/museSpace.ts;只认本机)
+ *   POST     /agent/special/muse/space/placement { expectedRev, op }  你在页上做的一下(挪 / 藏 / 显 / 添加 / 接受 / 拒绝提议 / 恢复默认):
+ *                                                      200 { view } / 409 { detail, view }(rev 对不上、格子变了、摆放文件读坏拒写)/ 400 坏 op;只认本机
  *   GET      /agent/special/muse/triggers              自动化规则列表(manage_automation 工具/构建器写入;附 nextRunAt)
  *   POST     /agent/special/automation/triggers/:id/fire  立即执行(origin=manual 试跑 / button 按钮点击,不动 lastFiredAt)
  *   POST     /agent/special/automation/kick            唤醒巡检(桌面写完 .db 后踢一下,db_changed 从 5min 降到 ~2s;{scope:'computer'} = 电脑历史落盘后踢,没有电脑类规则就不醒)
@@ -73,6 +76,8 @@ import { MUSE_AGENT_SLUG, ensureMuseAgent, getAgent, listAgents, isValidSlug } f
 import { listApprovals, decideApproval, getApproval } from '../services/pendingApprovals.js';
 import { APPROVAL_LOCAL_ONLY_BODY } from '../services/approvals.js';
 import { museLibraryDir } from '../services/muse.js';
+import { museSpaceView, applyMusePlacement } from '../services/museSpace.js';
+import { sanitizePlacementOp } from '../contracts/museSpace.js';
 import { recordRemoteCreated } from '../services/remoteCreated.js'; // P1-K2
 import { appendMuseFeedback, applyOnboardingIntro, countObservedHits, decideMuseCard, getMuseCard, listMuseCards, museDismissReason, recordMessageFeedback } from '../services/museCards.js';
 import { promises as fs } from 'node:fs';
@@ -449,6 +454,34 @@ router.get('/agent/special/muse/rounds', authMiddleware, async (req: AuthRequest
     res.json({ rounds: await museRecentRounds(Number(req.query.limit) || 3) });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'rounds failed' });
+  }
+});
+
+// 今日简报(11-08,Muse Space 方案 D 第一期):宿主画页用的有效布局。只认本机:回 Library 绝对路径、读的是本机文件。
+router.get('/agent/special/muse/space', authMiddleware, async (req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  if (parseRemoteOrigin(req.headers)) return void res.status(403).json({ detail: 'Only on this computer' });
+  try {
+    res.json({ view: await museSpaceView() });
+  } catch (e: any) {
+    res.status(500).json({ detail: e?.message || 'space failed' });
+  }
+});
+
+// 你在今日简报上的一下(摆放归你:写 <tangu home>/ui/muse-space.json,卜算子写不到)。冲突 / 不适用 / 摆放文件读坏 → 409 + 最新 view,宿主照它重画。
+router.post('/agent/special/muse/space/placement', authMiddleware, async (req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  if (parseRemoteOrigin(req.headers)) return void res.status(403).json({ detail: 'Only on this computer' });
+  const expectedRev = req.body?.expectedRev;
+  const op = sanitizePlacementOp(req.body?.op);
+  if (!Number.isInteger(expectedRev) || expectedRev < 0) return void res.status(400).json({ detail: 'expectedRev must be a non-negative integer' });
+  if (!op) return void res.status(400).json({ detail: 'op is not a valid placement operation' });
+  try {
+    const r = await applyMusePlacement(expectedRev, op);
+    if (r.ok) return void res.json({ view: r.view });
+    res.status(409).json({ detail: r.detail, reason: r.reason, view: r.view });
+  } catch (e: any) {
+    res.status(500).json({ detail: e?.message || 'placement failed' });
   }
 });
 

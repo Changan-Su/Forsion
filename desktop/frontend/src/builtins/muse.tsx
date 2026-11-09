@@ -1,72 +1,47 @@
 /**
- * 内置插件「Muse」= Muse Space:主=`muse-library`(**稳定的宿主视图**,内部渲染 Muse **自建插件** agent-muse 的 home 视图;
- * 没有就以 Library 浏览器打底 + 一行提示),右=Muse 面板(待批 / 追踪 / TODO,复用 components/MuseView)。
- * 为什么主槽不直接放 `plugin:agent-muse:home`:持久化布局冷启动恢复时插件还没求值,plugin:* 视图会被整个丢掉
- * (08-27 那个「插件 Space 重启后点进去是 Tangu 内容」的机理);布局里永远只存宿主类型就没这条路。
- * ⚠️类型名沿用 09-10 的 `muse-library`(那天它是 Library 浏览器):命名布局 `space:muse` 里存的主区就是这个名字,
- * 换新名 = 老布局 applyNamed 成功、build() 不跑、插件视图永远出不来;沿用旧名 = 零迁移。纯 Library 浏览器改叫 `muse-files`。
- * 热重载见 builtins/agentSpaceSync。形态照 builtins/calendar:
+ * 内置插件「Muse」= Muse Space:主=`muse-library`(**稳定的宿主视图**,2026-11-08 起画宿主的「今日简报」,views/museBrief),
+ * 右=Muse 面板的管理面(状态 / 审批 / 在想 / 叫醒时机 / 最近几轮,复用 components/MuseView 的 manage 摆法)。
+ * 11-08 之前主区画的是卜算子自建插件 agent-muse 的 home 视图(main.js);用户定直接换成模板:main.js 留在
+ * agents/muse/Space/ 不删,但不再装载(electron/amadeus/ipc.ts 的 readAgentSpacePlugins 跳过 muse),也不加切回开关。
+ * 为什么主槽不直接放 `plugin:*`:持久化布局冷启动恢复时插件还没求值,plugin:* 视图会被整个丢掉;布局里永远只存宿主类型。
+ * ⚠️类型名沿用 09-10 的 `muse-library`:命名布局 `space:muse` 里存的主区就是这个名字,换新名 = 老布局打不开;纯 Library 浏览器叫 `muse-files`。
+ * 形态照 builtins/calendar:
  *  · **启动** = spaces.tsx 的 SPACES 里按开关声明式带上(ribbon 默认序 + 启动恢复);
  *  · **运行时开关** = installMuseSpace / removeMuseSpace(applyBuiltin 调),幂等。
  * 视图 lazyRetry:builtins/index 要能在 node 单测里导入。
- * 「Agent Space 赋予其他 agent」的扩展位:museSpace 由 agentSpaceFor(slug) 生成,只是今天只注册 muse
- * (库树端点 /agent/special/muse/library 也还只有 muse 的;换成 per-slug 端点即可推广)。
+ * 「Agent Space 赋予其他 agent」的扩展位:museSpace 由 agentSpaceFor(slug) 生成,只是今天只注册 muse。
  */
-import { Suspense, useEffect } from 'react'
+import { Suspense } from 'react'
 import { Sparkles } from 'lucide-react'
 import {
   registerView, registerSpace, unregisterSpace, addRibbonIcon, removeRibbonIcon,
   setActiveSpace, useSpaceStore, useWorkspace, Skeleton,
 } from '@lcl/engine'
 import type { SpaceDefinition, PersistedPanel, ViewProps } from '@lcl/engine'
-import { usePluginStore } from '@amadeus/plugins/pluginStore'
-import { PluginViewHost } from '../pluginViews'
-import { getMuseStatus } from '../services/backendService'
-import { agentPluginId, reportAgentSpaceMountError, syncAgentSpace } from './agentSpaceSync'
 import { lazyRetry } from '../lazyRetry'
 import { useApp } from '../stores/appStore'
 import { PRODUCT } from '../product'
 import { SpaceButton } from '../components/SpaceButton'
 import { openSession } from '../sessionNav'
-import { homeTarget } from '../services/engine/targets'
 
 const MuseLibraryView = lazyRetry(() => import('../views/MuseLibraryView').then((m) => ({ default: m.MuseLibraryView })))
 const MuseViewLazy = lazyRetry(() => import('../components/MuseView').then((m) => ({ default: m.MuseView })))
+const MuseBriefLazy = lazyRetry(() => import('../views/museBrief/MuseBriefView').then((m) => ({ default: m.MuseBriefView })))
 
 const ws = () => useWorkspace.getState()
 const app = () => useApp.getState()
 
+/** 右栏 = 管理面(方案 B / D):状态、要你批准、上一轮在想、什么时候叫醒它、最近几轮;待办和在跟的进了主区的卡。 */
 function MusePanel() {
   const cfg = useApp((s) => s.cfg)
   const sessions = useApp((s) => s.sessions)
-  return <MuseViewLazy cfg={cfg} sessions={sessions} onInjected={(id) => openSession(id)} />
+  return <MuseViewLazy cfg={cfg} sessions={sessions} onInjected={(id) => openSession(id)} variant="manage" />
 }
 
-/** Muse Space 主槽:agent-muse 插件注册了 home 视图 → 用 pluginViews 同一份 DOM-mount 契约渲染它;否则空白态。
- *  挂载时与每 20s 拉一次 status 按戳热重载(面板关着也能刷新)。 */
+/** Muse Space 主槽 = 宿主画的「今日简报」(2026-11-08 方案 D;用户定:老用户直接换成它,卜算子以前写的 main.js 不再加载、文件留着、
+ *  没有切回的开关)。Muse 私聊旁的 Desk 空闲面也是这个视图(AgentDesk 的 MUSE_HOME_VIEW)。 */
 function MuseHome(props: ViewProps) {
-  const cfg = useApp((s) => s.cfg)
-  const def = usePluginStore((s) => s.views.find((o) => o.pluginId === agentPluginId('muse') && o.item.id === 'home')?.item)
-  useEffect(() => {
-    let alive = true
-    let timer: ReturnType<typeof setTimeout> | null = null
-    const tick = async (): Promise<void> => {
-      if (!alive) return
-      const st = await getMuseStatus(homeTarget()).catch(() => null)
-      if (alive) await syncAgentSpace(cfg, 'muse', st?.spaceStamp)
-      if (alive) timer = setTimeout(() => void tick(), 20_000)
-    }
-    void tick()
-    return () => { alive = false; if (timer) clearTimeout(timer) }
-  }, [cfg])
-  // pluginId 要带:Muse 主槽是另一条挂载路径(不经 pluginViews 的 factory),不带的话它挂失败就归不了属。
-  // 挂载抛错也回写给 Muse(否则只有用户看得见那行「插件视图加载失败」)
-  if (def) return <div data-muse-space="plugin" style={{ height: '100%', minHeight: 0 }}><PluginViewHost def={def} pluginId={agentPluginId('muse')} onMountError={(e) => reportAgentSpaceMountError(cfg, 'muse', def, e)} {...props} /></div>
-  return (
-    <div data-muse-space="empty" style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
-      <div style={{ flex: 1, minHeight: 0 }}><Suspense fallback={<Skeleton variant="document" />}><MuseLibraryView {...props} /></Suspense></div>
-    </div>
-  )
+  return <Suspense fallback={<Skeleton variant="document" />}><MuseBriefLazy {...props} /></Suspense>
 }
 
 /** 通用形状:某个 agent 的 Space = 主槽 `<slug>-library`(它自建的插件视图 / 空白态)+ 右栏它的面板。今天只实例化 muse。 */

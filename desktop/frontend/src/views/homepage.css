@@ -1605,3 +1605,65 @@ button.hp-organizer-mark:hover { color: var(--text); background: var(--bg-hover)
 .hp-lib-h { display: flex; align-items: baseline; gap: 8px; padding: 8px 8px 2px; }
 .hp-lib-h > b { font-size: var(--ui-font-meta, 12px); font-weight: 600; }
 .hp-lib-h > span { color: var(--text-muted); font-size: var(--ui-font-caption, 11px); }
+
+/* ── 从收纳把瓷砖拖进主页(11-08 方案 B「原地淡出」,homeLibraryDrag.ts;方案页 docs/ToBeImproved/主页小组件拖放方案_2026-11-08/) ── */
+/* 栏里的空位就是落点:`.hp-rail .hp-slot { min-height: 0 }`(0,2,0)把 .hp-slot-empty 的 96 压成了 19px(DESIGN §7 第 3 条),在这里抬回来 */
+.hp-rail .hp-slot.hp-slot-empty { min-height: 96px; justify-content: center; align-items: center; }
+.hp-lib-tile.hp-lib-drag { cursor: grab; }
+.hp-lib-tile.is-source { opacity: 0.35; }
+/* 面板让位:拿起时面板 + 遮罩原地淡出,只动 opacity(不带 scale / 位移;缩回源格只给点关闭 / 遮罩 / Esc);取消时淡回 */
+@keyframes hp-yield-out { from { opacity: 1; } to { opacity: 0; } }
+.hp-organizer-stage[data-yield='out'],
+.hp-organizer-stage[data-yield='out'] > .hp-organizer-panel { pointer-events: none; }
+.hp-organizer-stage[data-yield='out']::before,
+.hp-organizer-stage[data-yield='out'] > .hp-organizer-panel { opacity: 0; animation: hp-yield-out var(--duration-fast) var(--ease-exit) both; }
+.hp-organizer-stage[data-yield='back']::before,
+.hp-organizer-stage[data-yield='back'] > .hp-organizer-panel { animation: hp-stage-in var(--duration-fast) var(--ease-surface) both; }
+.hp-still .hp-organizer-stage[data-yield]::before,
+.hp-still .hp-organizer-stage[data-yield] > .hp-organizer-panel { animation: none; }
+/* 跟手的影子 = 那块瓷砖本身:放大 1.04、实底、拖动阴影(同 .hp-lifted);放不下时半透明 */
+.hp-lib-ghost {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: var(--z-hint);
+  margin: 0;
+  box-sizing: border-box;
+  pointer-events: none;
+  background: var(--bg-card);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.06), 0 18px 40px rgba(0, 0, 0, 0.14);
+  scale: 1.04;
+  transition: opacity var(--duration-instant) ease-out;
+}
+.hp-lib-ghost.is-no { opacity: 0.5; }
+body.hp-lib-dragging,
+body.hp-lib-dragging * { cursor: grabbing !important; }
+body.hp-lib-nodrop,
+body.hp-lib-nodrop * { cursor: not-allowed !important; }
+/* 影子下面的小签:放不下的原因 / 要知道的事(左栏点完成后会收成图标条) */
+.hp-lib-note-pill {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: var(--z-hint);
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 11px 5px 9px;
+  border: var(--border-width) solid color-mix(in srgb, var(--border) 80%, transparent);
+  border-radius: var(--radius-pill, 999px);
+  background: color-mix(in srgb, var(--bg-card) 94%, transparent);
+  box-shadow: var(--icon-shadow);
+  color: var(--text);
+  font-size: var(--ui-font-meta, 12px);
+  line-height: 1.3;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity var(--lcl-drop-in) var(--ease-surface);
+}
+.hp-lib-note-pill.on { opacity: 1; }
+.hp-lib-note-pill > svg { flex: none; color: var(--text-muted); }
+/* 落点框的圆角跟格子走(LCL 框缺省 --radius-sm) */
+.lcl-drop-ind.hp-drop-ind.lcl-drop-ind--zone { border-radius: var(--radius-lg); }

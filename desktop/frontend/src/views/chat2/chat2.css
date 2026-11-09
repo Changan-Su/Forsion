@@ -1613,6 +1613,22 @@ html[data-chat-avatars='off'] .t2-username { display: none; }
 /* 回退菜单是消息里唯一伸出框外的弹层(往下最高 320px),开着的那条不加 containment,否则被裁 */
 .t2-stream-inner > .t2-userwrap:has(.rewind-menu) { content-visibility: visible; }
 
+/* A single streamed answer can span thousands of nodes. Message-level containment alone
+   still lays out that entire answer when its tail is visible. Skip offscreen Markdown
+   blocks too, keeping their measured height once seen. Only contain blocks whose child
+   margins already cannot collapse through them: quotes/lists/display math must retain
+   their original margin behavior. Headings stay measurable for TOC navigation. */
+.t2-stream-inner .t2-content > :is(p, table, .code-box[data-code-head]) {
+  content-visibility: auto;
+  contain-intrinsic-block-size: auto 100px;
+  overflow-clip-margin: 40px;
+}
+/* The growing tail needs real heights even while the reader is above it. Estimating
+   freshly appended paragraphs makes the scroll range shrink on each reveal. */
+.t2-stream-inner .t2-content[data-streaming-tail] > :nth-last-child(-n+16) {
+  content-visibility: visible;
+}
+
 /* 操作条里带字的那颗(分支里「带回这里」):同 .t2-iconbtn 的底,宽度随字 */
 .t2-iconbtn.t2-textbtn { width: auto; gap: 5px; padding: 0 10px; border-radius: 14px; font-size: var(--ui-font-meta, 12px); font-family: var(--font-ui); }
 

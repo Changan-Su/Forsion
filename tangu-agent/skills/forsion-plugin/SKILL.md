@@ -29,13 +29,14 @@ metadata:
 Read the matching `references/` file before using an API listed below or following a section's reference:
 
 - [references/host-ui-mounts.md](references/host-ui-mounts.md): 可复用 UI 组件：ctx.ui.mountChatBox; 原生 Markdown 编辑器 ctx.ui.mountMarkdownEditor(`vault: true` 接当前库双链); 只读 Markdown ctx.ui.mountMarkdown; 原生悬浮目录 ctx.ui.mountFloatingToc; View modes: ctx.ui.setViewModes; Tooltips and motion tokens: ctx.ui.attachTooltip; Selection bar: ctx.ui.mountSelectionBar and registerSelectionAction scopes; Tool island: ctx.ui.mountToolIsland; Floats: ctx.ui.float; Host parts (dialogs, toolbar controls, menus, popovers, empty states, icons, view head, i18n, bare elements, failed mount card): ctx.ui.confirm / openDialog / mountControl / contextMenu / popover / mountEmptyState / mountWebCard / icon / setViewHead / mount, ctx.addStyle, ctx.i18n.define; Settings parts: ctx.ui.mountSettingsPage / mountSettingsItem; 白板层 ctx.ui.mountBoard / ctx.ui.boardToSvg; 仪表盘 ctx.dashboard; 原生多维表 ctx.table.mount
-- [references/tangu-host-apis.md](references/tangu-host-apis.md): 当前模型与当前 Space:ctx.tangu; Agent 状态:agentStatus / subscribeAgentStatus; Agent 名册:agents; 开新对话:startChat; 把对话挂进自己的视图:mountChat; 新对话输入区:mountComposer; 正文 AI:ctx.tangu.complete 与 registerSelectionAction; 翻译:ctx.tangu.translate; 行内补全:ctx.tangu.fim; Agent Desk 伴随面:ctx.desk; 摘要栏插件卡:ctx.summary; 自动化规则播种:ctx.automation; agent 自建 Space 的数据:section `ctx.agent`
+- [references/tangu-host-apis.md](references/tangu-host-apis.md): 当前模型与当前 Space:ctx.tangu; Agent 状态:agentStatus / subscribeAgentStatus; Agent 名册:agents; 开新对话:startChat; 把对话挂进自己的视图:mountChat; 新对话输入区:mountComposer; 正文 AI:ctx.tangu.complete 与 registerSelectionAction; 翻译:ctx.tangu.translate; 行内补全:ctx.tangu.fim; Agent Desk 伴随面:ctx.desk; 摘要栏插件卡:ctx.summary; 自动化规则播种:ctx.automation; agent 自建 Space 的数据:section `ctx.agent`(今天没有 agent 在用)
 - [references/plugin-skill-providers.md](references/plugin-skill-providers.md): engine `ctx.registerSkillProvider` for live external skills.
 - [references/plugin-model-providers.md](references/plugin-model-providers.md): engine `ctx.registerModelProvider` for native single-inference sources.
 - [references/mini-panel.md](references/mini-panel.md): a Space's small floating window (`mini` in `space.json`)
 - [references/bundle-mcp-hooks.md](references/bundle-mcp-hooks.md): stdio MCP servers and observe-only hooks a bundle declares in its manifest
 - [references/note-editor-surfaces.md](references/note-editor-surfaces.md): 块表面 ctx.app.getPage / mountBlocks / insertMarkdown; ctx.registerEditorExtension / registerSettingsView / loadData / saveData / watchFile
 - [references/work-folder-migration.md](references/work-folder-migration.md): one-time upgrade of old plugin data into the working folder (Identity and destination; Request and result; Upgrade sequence; Acceptance cases; Ordinary writes after upgrade)
+- [references/agent-space.md](references/agent-space.md): an agent's own Space plugin (`agents/<slug>/Space/main.js`) and `ctx.agent`; unused since Muse moved to its brief layout
 
 ## Troubleshooting an installed plugin: Space missing, view blank, "stopped working after an update" (2026-10-10)
 
@@ -323,21 +324,13 @@ Forsion Android App 也跑 Forsion 插件(同一份 `pluginStore`、同一个 `c
 - 手机的**主页只有一页、不开标签**(2026-10-11 起):用户停在主页时,命令里 `openView` 打开的视图会被带到「主人」那个 Space 去开 —— 主人 = `layout.main` 里列着这个视图的 Space(插件自带的 Space 就是这么认的)。没有任何 Space 列着它的视图仍然盖在主页上打开,但用户下次回到主页时会被宿主关掉:这类视图别攒没保存的状态,要长驻就给插件带一个 Space。
 - 手机没有 ribbon:插件的 `registerCommand` 命令由宿主按插件分节列进顶栏「⋯」菜单(节标题 = 插件展示名),`checked` 开关在那里显示为勾选态 —— 命令 `title` 要能独立看懂(手机上它就是菜单行文案)。
 
-## Agent 自建 Space(2026-09-11 起;Muse 首例)
+## Agent 自建 Space(2026-09-11 起;今天没有 agent 在用)
 
-一个 agent 自己的 Space = 它目录下的一个桌面插件:`<tangu>/agents/<slug>/Space/{manifest.json, main.js}`,与普通桌面插件**同一份契约**(manifest + main.js,`registerView` / `registerCommand` / `registerStatusItem` / `registerSetting` / `notify` / `loadData` 都能用),但有五条不同:
+契约与 `ctx.agent` 在 references/agent-space.md。Muse 11-08 起改用下面的布局,不写 main.js。
 
-> ⚠️ **main.js 整个文件就是 `setup(ctx)` 的函数体**(宿主 `new Function('ctx', code)(ctx)`):`ctx` 已在作用域里,顶层直接写 `ctx.registerView({ id: 'home', … })`。**别**写成 `function setup(ctx) { … }` —— 没人调用它,求值只声明了一个函数,零注册、零报错。09-27 实机:Muse 的 Space 每一版都这么包,从首建起空白了 16 天,它自己还一直在「升级」。
+### Muse: Today's brief layout (from 2026-11-08, Muse only)
 
-1. **id 固定 `agent-<slug>`**,manifest 里的 `id` 被无视 —— 写别家的 id 也顶不掉真插件;
-2. **主槽 = `registerView({ id: 'home', … })`**:桌面该 agent 的 Space 主区渲染这一个视图,其它视图照常 `ctx.openView` 开标签页;
-3. `capabilities` / `fileExtensions` / `requiresApp` / `onboarding` / `events` 一律不生效(没有「用户点安装」这步授权),bundle 子目录(引擎插件/技能/agents/spaces)也**不生效**(引擎只认一个 bundle 根);
-4. 纯 JS、无构建、无 CDN(CSP `default-src 'self'`);想用库就内联进 main.js;
-5. **不监听文件**:桌面按引擎在你周期收尾时打的内容戳重载,所以一个周期里改完再收尾即可;加载失败(setup 抛错 / manifest 缺失、坏或被 apiVersion·minAppVersion 挡下 / 装上了却没注册 `home` / `home` 的 mount 抛错)会以 `[feedback]` 行回到你的日志,下个周期修。**没收到 feedback 不等于用户看到了你的 Space** —— 它只在桌面打开过 Muse Space / Muse 面板时才会发。
-
-### `ctx.agent`:读写你自己的数据(2026-09-27 起,**只有 agent 自建 Space 有**)
-
-Your Space renders your own status, TODOs, schedule and Library from `ctx.agent` instead of hardcoding them: the member table, the click-only `updateTodo` rule and an example are in [references/tangu-host-apis.md](references/tangu-host-apis.md), section `ctx.agent`. Read it before the Space shows any of that data.
+Muse's Space no longer loads `main.js` (it stays on disk; do not edit it): the desktop draws the "Today's brief" template from two local files. `agents/muse/Space/space.json` is Muse's part (the one-line message, ≤160 characters, may link `[[Library path]]`; up to 3 prepared Library files; proposed cards), written with the `muse_space` tool: read first, then update only what changes, with `expectedRev`. `<tangu home>/ui/muse-space.json` is the user's grid (order, hidden, placed cards, tombstones of rejected proposals): Muse cannot write it, move or remove cards, or re-propose a rejected key. At most one message change and one proposal per cycle; `muse_space widget` creates Muse's own native widget to propose. A broken `space.json` is shown from its last valid version and never repaired automatically.
 
 ## 桌面插件:贡献点全表(动手前先看这张表)
 

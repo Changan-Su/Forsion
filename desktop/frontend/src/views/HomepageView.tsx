@@ -56,6 +56,7 @@ import { watchAccountName } from '../services/accountName'
 import { DESKTOP_HOME_CARDS_KEY, HOME_CARDS_MAX, loadHomeCards, saveHomeCards, shownHomeCards } from './homeCards'
 import { HOME_PARTS, setHomeEditHandler, useHomeLayout, type HomePart } from './homeWidgets'
 import { HOME_GUIDE_OWNER, HomeRail, HomeRow, PartFrame, PartsLibrary, WidgetLibrary, centerShift, dragPart, dragWidget, railModes, removePart } from './HomeWidgetParts'
+import { cancelLibraryDrag, forgetLibraryDrop, startLibraryDrag, undoLibraryDrop, type LibItem } from './homeLibraryDrag'
 import { HomeWidgetEnv, useShowableIds } from './homeWidgetKinds'
 import { track } from '../achievements/store'
 import type { OrganizerTab } from './SpaceOrganizer'
@@ -329,15 +330,27 @@ export function HomepageView(_props: ViewProps) {
   }, [phone])
   useEffect(() => (phone ? undefined : setHomeEditHandler(() => setEditing(true))), [phone])
   useEffect(() => {
-    if (!editing) return
+    if (!editing) { forgetLibraryDrop(); return }
     const esc = (e: KeyboardEvent): void => {
       if (e.key !== 'Escape' || document.querySelector('.hp-organizer-stage, .dialog-overlay, .ctx-menu')) return
       e.preventDefault()
       setEditing(false)
     }
+    // 编辑态里 ⌘Z 撤最近一次从收纳拖进来的那一下(右上角通知的「撤销」同一件事);没有可撤的就照常往下走
+    const undo = (e: KeyboardEvent): void => {
+      if (!(e.metaKey || e.ctrlKey) || e.shiftKey || e.altKey || e.key.toLowerCase() !== 'z') return
+      if ((e.target as HTMLElement | null)?.closest?.('input, textarea, [contenteditable="true"]')) return
+      if (undoLibraryDrop()) { e.preventDefault(); e.stopPropagation() }
+    }
     window.addEventListener('keydown', esc)
-    return () => window.removeEventListener('keydown', esc)
+    window.addEventListener('keydown', undo, true)
+    return () => { window.removeEventListener('keydown', esc); window.removeEventListener('keydown', undo, true) }
   }, [editing])
+  // 从收纳把瓷砖拖进主页(11-08 方案 B):拖动期间面板原地淡出(yielded)、主页从面板后面回来并进编辑态;
+  // 放进去 = 面板收起、停在编辑态;取消 = 面板淡回原处,编辑态回到拿起之前
+  const [yielded, setYielded] = useState(false)
+  const editBeforeDrag = useRef<boolean | null>(null)
+  useEffect(() => () => cancelLibraryDrag(), []) // 拖到一半主页被切走(快捷键换 Space):收掉,不再提交
   const fileRef = useRef<HTMLInputElement>(null)
   const leaveTimer = useRef<number | null>(null)
   const pending = useRef<(() => void) | null>(null)
@@ -656,6 +669,28 @@ export function HomepageView(_props: ViewProps) {
     else if (!phone) setMenu({ x: event.clientX, y: event.clientY, kind: 'blank' })
     else showOrganizer()
   }
+  const libDrag = (event: React.PointerEvent<HTMLElement>, item: LibItem): void => {
+    const root = rootRef.current
+    if (!root) return
+    startLibraryDrag(event, item, {
+      root,
+      t,
+      onLift: () => { editBeforeDrag.current = editing; setMenu(null); setYielded(true); setEditing(true) },
+      onPlaced: () => { editBeforeDrag.current = null; setYielded(false); setOrganizerOpen(false) },
+      onCancel: () => {
+        const was = editBeforeDrag.current
+        editBeforeDrag.current = null
+        setYielded(false)
+        if (was === false) setEditing(false)
+      },
+      // 放进这一栏、点「完成」之后它会不会收成图标条:同一套 railModes,按主页自己的宽度
+      folds: (l) => {
+        const w = root.offsetWidth
+        const has = { left: l.left.length > 0, right: l.right.length > 0 }
+        return { left: railModes(w, { ...has, left: true }).left === 'strip', right: railModes(w, { ...has, right: true }).right === 'strip' }
+      },
+    })
+  }
   const askAgentForWidget = (): void => {
     // 经 Tangu 的草稿接缝只填空着的那份:已写了一半的草稿原样留着(新对话草稿的键是 'new')
     readTanguDrafts()?.fill('new', { text: t('home.lib.askDraft'), pastes: [] })
@@ -836,7 +871,7 @@ export function HomepageView(_props: ViewProps) {
   return (
     <div
       ref={rootRef}
-      className={`hp-root${phone ? ' hp-phone' : ''}${reduceMotion ? ' hp-still' : ''}${composerFocused ? ' hp-composer-focused' : ''}${wallpaperOpen ? ' hp-layer-focused' : ''}${openFolder || organizerOpen ? ' hp-secondary-open' : ''}${editing ? ' hp-editing' : ''}`}
+      className={`hp-root${phone ? ' hp-phone' : ''}${reduceMotion ? ' hp-still' : ''}${composerFocused ? ' hp-composer-focused' : ''}${wallpaperOpen ? ' hp-layer-focused' : ''}${openFolder || (organizerOpen && !yielded) ? ' hp-secondary-open' : ''}${editing ? ' hp-editing' : ''}`}
       data-rails={phone ? undefined : `${modes.left}-${modes.right}`}
       style={phone ? undefined : ({ '--hp-rail-w': `${modes.railW}px` } as React.CSSProperties)}
       data-guide-owner={phone ? undefined : HOME_GUIDE_OWNER}
@@ -1099,6 +1134,7 @@ export function HomepageView(_props: ViewProps) {
         <SpaceOrganizer
           skip={SELF_SPACE}
           byKey={organizerByKey}
+          yielded={yielded}
           onClose={() => setOrganizerOpen(false)}
           onLaunch={launchSpace}
           onOpenFolder={openFolderTile}
@@ -1108,8 +1144,8 @@ export function HomepageView(_props: ViewProps) {
             tab: organizerTab,
             onTab: setOrganizerTab,
             panes: {
-              widgets: { node: <WidgetLibrary layout={homeLayout} onAsk={askAgentForWidget} />, count: homeLayout.left.length + homeLayout.right.length + homeLayout.row.length, footer: t('home.lib.hint') },
-              parts: { node: <PartsLibrary layout={homeLayout} />, count: homeLayout.center.filter((p) => p !== 'row').length, footer: t('home.lib.partsHint') },
+              widgets: { node: <WidgetLibrary layout={homeLayout} onAsk={askAgentForWidget} onDrag={libDrag} />, count: homeLayout.left.length + homeLayout.right.length + homeLayout.row.length, footer: t('home.lib.hint') },
+              parts: { node: <PartsLibrary layout={homeLayout} onDrag={libDrag} />, count: homeLayout.center.filter((p) => p !== 'row').length, footer: t('home.lib.partsHint') },
             },
           }}
         />

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { CircleCheck, Copy, Download, FolderInput, Loader2, Undo2, X } from 'lucide-react'
 import { registerMessages, useI18n } from '../i18n'
@@ -91,6 +91,7 @@ registerMessages({
   'aiImport.hint.web': { zh: '也可以从 ChatGPT、Claude 这些网页上的 AI 搬过来', en: 'You can also bring them over from web AIs like ChatGPT and Claude' },
   'aiImport.hint.ignore': { zh: '忽略', en: 'Ignore' },
   'aiImport.hint.look': { zh: '看看…', en: 'Take a look…' },
+  'aiImport.row.title': { zh: '从其他 AI 搬过来', en: 'Bring it over from another AI' },
   'aiImport.join': { zh: '、', en: ', ' },
   'aiImport.prompt': {
     zh: '请把你存着的关于我的记忆，以及从我们过去的对话里了解到的我，全部导出来。尽量保留我的原话，特别是我对你提过的要求和偏好。\n\n按这几类输出，顺序不变：\n## 关于我 —— 名字、所在地、工作、兴趣、长期在做的事\n## 我希望你怎么做 —— 我明确要你以后都这样做的事：语言、语气、格式、“总是…”“不要…”，以及我纠正过你的地方\n## 项目 —— 我在做的项目，每个一条：做什么、到了哪一步、定下来的决定；开头写项目名\n## 偏好 —— 口味、习惯、工作方式\n\n每条一行，格式：[YYYY-MM-DD] - 内容。不知道日期写 [unknown]。\n把整个导出放进一个代码块。最后说一句这是全部，还是还有更多。',
@@ -119,8 +120,10 @@ function useToolLabel() {
   return (id: ImportTool): string => (id === 'pasted' ? t('aiImport.tool.pasted') : TOOL_LABEL[id] || id)
 }
 
-/** 「我 › 画像」顶上:最近一次导入的完成条(24 小时内、没撤销),否则有新东西时一行提示,都没有就一颗小按钮。 */
-export function ExternalImportEntry({ engine }: { engine: EngineTarget }) {
+/** 「我 › 画像」顶上:最近一次导入的完成条(24 小时内、没撤销),否则有新东西时一行提示,都没有就一颗小按钮。
+ *  layout="row"(首启引导「关于你」):没导入过时恒为一行「标题 + 找到什么 / 网页也能搬 + 看看」,不给「忽略」;完成条照旧。
+ *  外面的容器由调用方给;读不到 / 不支持时整块不渲染(调用方的容器可以用 :empty 收起)。 */
+export function ExternalImportEntry({ engine, layout = 'inline' }: { engine: EngineTarget; layout?: 'inline' | 'row' }) {
   const { t, locale } = useI18n()
   const label = useToolLabel()
   const [scan, setScan] = useState<ImportScan | null>(null)
@@ -156,6 +159,10 @@ export function ExternalImportEntry({ engine }: { engine: EngineTarget }) {
       <button type="button" className="btn ghost sm" disabled={busy} onClick={() => void undo()}>{busy ? <Loader2 size={13} className="spin" /> : <Undo2 size={13} />} {t('aiImport.done.undo')}</button>
     </div></>
   }
+  if (layout === 'row') return <>{sheet}<div className="imp-hint imp-row" data-ai-import-row><FolderInput size={16} />
+    <span className="grow"><b>{t('aiImport.row.title')}</b>{scan.fresh > 0 && <small>{t('aiImport.hint.found', { n: scan.fresh, apps: scan.freshTools.map(label).join(t('aiImport.join')) })}</small>}<small>{t('aiImport.hint.web')}</small></span>
+    <button type="button" className="btn ghost sm" data-ai-import-open onClick={show}><Download size={13} /> {t('aiImport.hint.look')}</button>
+  </div></>
   if (scan.fresh > 0 && !ignored) return <>{sheet}<div className="imp-hint" data-ai-import-hint><FolderInput size={16} />
     <span className="grow">{t('aiImport.hint.found', { n: scan.fresh, apps: scan.freshTools.map(label).join(t('aiImport.join')) })}<small>{t('aiImport.hint.web')}</small></span>
     <button type="button" className="btn ghost sm" onClick={() => { setIgnored(true); void ignoreImport(engine).then(() => load(true)).catch(() => {}) }}>{t('aiImport.hint.ignore')}</button>
@@ -183,6 +190,23 @@ export function ExternalImportSheet({ engine, onClose }: { engine: EngineTarget;
   const [undone, setUndone] = useState<ImportLedger | null>(null)
   const alive = useRef(true)
   useEffect(() => { alive.current = true; return () => { alive.current = false } }, [])
+  // 焦点:打开就进单里,Tab 在单里转,关掉还给打开它的那颗按钮 —— 否则焦点留在背后,Tab 能摸到背后的按钮(引导里就是「继续」)
+  const boxRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const opener = document.activeElement as HTMLElement | null
+    boxRef.current?.focus()
+    return () => { if (opener?.isConnected) opener.focus() }
+  }, [])
+  const keepTab = (e: ReactKeyboardEvent): void => {
+    const box = boxRef.current
+    if (e.key !== 'Tab' || !box) return
+    const all = [...box.querySelectorAll<HTMLElement>('button, a[href], input, select, textarea, [tabindex]:not([tabindex="-1"])')]
+      .filter((el) => !(el as HTMLButtonElement).disabled && !el.closest('[hidden], [inert]'))
+    if (!all.length) { e.preventDefault(); return }
+    const first = all[0], last = all[all.length - 1], at = document.activeElement
+    if (e.shiftKey && (at === first || at === box)) { e.preventDefault(); last.focus() }
+    else if (!e.shiftKey && at === last) { e.preventDefault(); first.focus() }
+  }
   const fail = (e: any) => { if (alive.current) setError(e?.code === 'IMPORT_PLAN_GONE' ? t('aiImport.error.gone') : t('aiImport.error.failed', { e: e?.message || String(e) })) }
 
   const toReview = (p: ImportPlan) => {
@@ -337,8 +361,8 @@ export function ExternalImportSheet({ engine, onClose }: { engine: EngineTarget;
   }
   return createPortal(
     <div className="u-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget && !busy) onClose() }}>
-      <div className="modal imp-sheet" role="dialog" aria-modal="true" aria-label={t('aiImport.title')} data-ai-import-step={step}
-        onKeyDown={(e) => { if (e.key === 'Escape' && !busy && !editing) onClose() }}>
+      <div className="modal imp-sheet" role="dialog" aria-modal="true" aria-label={t('aiImport.title')} data-ai-import-step={step} ref={boxRef} tabIndex={-1}
+        onKeyDown={(e) => { if (e.key === 'Escape' && !busy && !editing) onClose(); else keepTab(e) }}>
         <div className="modal-head"><span className="grow">{t('aiImport.title')}</span>
           <button type="button" className="icon-btn" aria-label={t('aiImport.close')} onClick={onClose} disabled={busy}><X size={15} /></button></div>
         {sum && <p className="imp-sum">{sum}</p>}

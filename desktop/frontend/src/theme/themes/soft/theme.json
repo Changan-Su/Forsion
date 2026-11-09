@@ -9,7 +9,6 @@
   "supportsDarkMode": true,
   "tags": ["lcl", "soft", "rounded"],
   "panelGap": 8,
-  "fonts": { "google": ["Plus Jakarta Sans:wght@400;500;600;700", "Nunito:wght@400;600;700;800"] },
   "preview": {
     "shape": "soft",
     "background": {

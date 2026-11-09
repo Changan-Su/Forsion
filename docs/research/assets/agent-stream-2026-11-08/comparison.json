@@ -1,0 +1,655 @@
+{
+  "baseCommit": "c103802490fe4bca4349fe1c8ba060b29cb493ff",
+  "date": "2026-11-08",
+  "measurement": "Automation request to next paint, including IPC; baseline active-only typing has fewer samples because it could not finish before run completion.",
+  "budgets": {
+    "typingP95Ms": 150,
+    "switchP95Ms": 700
+  },
+  "baseline": {
+    "baseline": true,
+    "runtime": {
+      "electron": "40.10.2",
+      "chrome": "144.0.7559.236"
+    },
+    "prefixChars": 24268,
+    "events": 1600,
+    "cpu": 1,
+    "typingAll": {
+      "count": 62,
+      "p50": 22,
+      "p95": 4695,
+      "max": 5136
+    },
+    "typingDuringRun": {
+      "count": 28,
+      "p50": 2060,
+      "p95": 4798,
+      "max": 5136
+    },
+    "typingWallMs": 46062,
+    "typingFinishedDuringRun": false,
+    "switches": [
+      {
+        "space": "amadeus",
+        "ms": 1462
+      },
+      {
+        "space": "tangu",
+        "ms": 4360
+      },
+      {
+        "space": "amadeus",
+        "ms": 1085
+      },
+      {
+        "space": "tangu",
+        "ms": 3007
+      },
+      {
+        "space": "amadeus",
+        "ms": 490
+      },
+      {
+        "space": "tangu",
+        "ms": 3662
+      }
+    ],
+    "switchLatency": {
+      "count": 6,
+      "p50": 3007,
+      "p95": 4360,
+      "max": 4360
+    },
+    "frames": {
+      "count": 747,
+      "p50": 56,
+      "p95": 201,
+      "max": 2125
+    },
+    "longTasks": {
+      "count": 405,
+      "p50": 115,
+      "p95": 173,
+      "max": 2126
+    },
+    "correctnessPassed": true,
+    "errors": [],
+    "typed": [
+      {
+        "ms": 1738,
+        "streaming": true
+      },
+      {
+        "ms": 1091,
+        "streaming": true
+      },
+      {
+        "ms": 1253,
+        "streaming": true
+      },
+      {
+        "ms": 1293,
+        "streaming": true
+      },
+      {
+        "ms": 1455,
+        "streaming": true
+      },
+      {
+        "ms": 1473,
+        "streaming": true
+      },
+      {
+        "ms": 1424,
+        "streaming": true
+      },
+      {
+        "ms": 1773,
+        "streaming": true
+      },
+      {
+        "ms": 1839,
+        "streaming": true
+      },
+      {
+        "ms": 1810,
+        "streaming": true
+      },
+      {
+        "ms": 2035,
+        "streaming": true
+      },
+      {
+        "ms": 1927,
+        "streaming": true
+      },
+      {
+        "ms": 1867,
+        "streaming": true
+      },
+      {
+        "ms": 2060,
+        "streaming": true
+      },
+      {
+        "ms": 2001,
+        "streaming": true
+      },
+      {
+        "ms": 2351,
+        "streaming": true
+      },
+      {
+        "ms": 3280,
+        "streaming": true
+      },
+      {
+        "ms": 3638,
+        "streaming": true
+      },
+      {
+        "ms": 3658,
+        "streaming": true
+      },
+      {
+        "ms": 4131,
+        "streaming": true
+      },
+      {
+        "ms": 4798,
+        "streaming": true
+      },
+      {
+        "ms": 5136,
+        "streaming": true
+      },
+      {
+        "ms": 4627,
+        "streaming": true
+      },
+      {
+        "ms": 4695,
+        "streaming": true
+      },
+      {
+        "ms": 4758,
+        "streaming": true
+      },
+      {
+        "ms": 4341,
+        "streaming": true
+      },
+      {
+        "ms": 4083,
+        "streaming": true
+      },
+      {
+        "ms": 2952,
+        "streaming": true
+      },
+      {
+        "ms": 745,
+        "streaming": false
+      },
+      {
+        "ms": 24,
+        "streaming": false
+      },
+      {
+        "ms": 22,
+        "streaming": false
+      },
+      {
+        "ms": 15,
+        "streaming": false
+      },
+      {
+        "ms": 16,
+        "streaming": false
+      },
+      {
+        "ms": 16,
+        "streaming": false
+      },
+      {
+        "ms": 15,
+        "streaming": false
+      },
+      {
+        "ms": 15,
+        "streaming": false
+      },
+      {
+        "ms": 16,
+        "streaming": false
+      },
+      {
+        "ms": 12,
+        "streaming": false
+      },
+      {
+        "ms": 13,
+        "streaming": false
+      },
+      {
+        "ms": 16,
+        "streaming": false
+      },
+      {
+        "ms": 13,
+        "streaming": false
+      },
+      {
+        "ms": 14,
+        "streaming": false
+      },
+      {
+        "ms": 14,
+        "streaming": false
+      },
+      {
+        "ms": 17,
+        "streaming": false
+      },
+      {
+        "ms": 15,
+        "streaming": false
+      },
+      {
+        "ms": 15,
+        "streaming": false
+      },
+      {
+        "ms": 12,
+        "streaming": false
+      },
+      {
+        "ms": 13,
+        "streaming": false
+      },
+      {
+        "ms": 15,
+        "streaming": false
+      },
+      {
+        "ms": 16,
+        "streaming": false
+      },
+      {
+        "ms": 17,
+        "streaming": false
+      },
+      {
+        "ms": 13,
+        "streaming": false
+      },
+      {
+        "ms": 14,
+        "streaming": false
+      },
+      {
+        "ms": 16,
+        "streaming": false
+      },
+      {
+        "ms": 14,
+        "streaming": false
+      },
+      {
+        "ms": 13,
+        "streaming": false
+      },
+      {
+        "ms": 15,
+        "streaming": false
+      },
+      {
+        "ms": 16,
+        "streaming": false
+      },
+      {
+        "ms": 13,
+        "streaming": false
+      },
+      {
+        "ms": 14,
+        "streaming": false
+      },
+      {
+        "ms": 16,
+        "streaming": false
+      },
+      {
+        "ms": 19,
+        "streaming": false
+      }
+    ]
+  },
+  "optimized": {
+    "baseline": false,
+    "runtime": {
+      "electron": "40.10.2",
+      "chrome": "144.0.7559.236"
+    },
+    "prefixChars": 24268,
+    "events": 1600,
+    "cpu": 1,
+    "typingAll": {
+      "count": 62,
+      "p50": 46,
+      "p95": 72,
+      "max": 752
+    },
+    "typingDuringRun": {
+      "count": 62,
+      "p50": 46,
+      "p95": 72,
+      "max": 752
+    },
+    "typingWallMs": 5257,
+    "typingFinishedDuringRun": true,
+    "switches": [
+      {
+        "space": "amadeus",
+        "ms": 1100,
+        "activationMs": 1076
+      },
+      {
+        "space": "tangu",
+        "ms": 2239,
+        "activationMs": 2029
+      },
+      {
+        "space": "amadeus",
+        "ms": 177,
+        "activationMs": 152
+      },
+      {
+        "space": "tangu",
+        "ms": 2199,
+        "activationMs": 2004
+      },
+      {
+        "space": "amadeus",
+        "ms": 202,
+        "activationMs": 188
+      },
+      {
+        "space": "tangu",
+        "ms": 2148,
+        "activationMs": 1955
+      }
+    ],
+    "switchLatency": {
+      "count": 6,
+      "p50": 2148,
+      "p95": 2239,
+      "max": 2239
+    },
+    "frames": {
+      "count": 5125,
+      "p50": 7,
+      "p95": 21,
+      "max": 1951
+    },
+    "longTasks": {
+      "count": 14,
+      "p50": 703,
+      "p95": 1947,
+      "max": 1947
+    },
+    "correctnessPassed": true,
+    "errors": [],
+    "typed": [
+      {
+        "ms": 752,
+        "streaming": true
+      },
+      {
+        "ms": 61,
+        "streaming": true
+      },
+      {
+        "ms": 54,
+        "streaming": true
+      },
+      {
+        "ms": 42,
+        "streaming": true
+      },
+      {
+        "ms": 72,
+        "streaming": true
+      },
+      {
+        "ms": 42,
+        "streaming": true
+      },
+      {
+        "ms": 44,
+        "streaming": true
+      },
+      {
+        "ms": 43,
+        "streaming": true
+      },
+      {
+        "ms": 49,
+        "streaming": true
+      },
+      {
+        "ms": 58,
+        "streaming": true
+      },
+      {
+        "ms": 43,
+        "streaming": true
+      },
+      {
+        "ms": 32,
+        "streaming": true
+      },
+      {
+        "ms": 48,
+        "streaming": true
+      },
+      {
+        "ms": 38,
+        "streaming": true
+      },
+      {
+        "ms": 44,
+        "streaming": true
+      },
+      {
+        "ms": 50,
+        "streaming": true
+      },
+      {
+        "ms": 46,
+        "streaming": true
+      },
+      {
+        "ms": 46,
+        "streaming": true
+      },
+      {
+        "ms": 50,
+        "streaming": true
+      },
+      {
+        "ms": 56,
+        "streaming": true
+      },
+      {
+        "ms": 46,
+        "streaming": true
+      },
+      {
+        "ms": 39,
+        "streaming": true
+      },
+      {
+        "ms": 50,
+        "streaming": true
+      },
+      {
+        "ms": 51,
+        "streaming": true
+      },
+      {
+        "ms": 88,
+        "streaming": true
+      },
+      {
+        "ms": 58,
+        "streaming": true
+      },
+      {
+        "ms": 24,
+        "streaming": true
+      },
+      {
+        "ms": 133,
+        "streaming": true
+      },
+      {
+        "ms": 71,
+        "streaming": true
+      },
+      {
+        "ms": 57,
+        "streaming": true
+      },
+      {
+        "ms": 48,
+        "streaming": true
+      },
+      {
+        "ms": 48,
+        "streaming": true
+      },
+      {
+        "ms": 42,
+        "streaming": true
+      },
+      {
+        "ms": 46,
+        "streaming": true
+      },
+      {
+        "ms": 43,
+        "streaming": true
+      },
+      {
+        "ms": 64,
+        "streaming": true
+      },
+      {
+        "ms": 46,
+        "streaming": true
+      },
+      {
+        "ms": 43,
+        "streaming": true
+      },
+      {
+        "ms": 45,
+        "streaming": true
+      },
+      {
+        "ms": 42,
+        "streaming": true
+      },
+      {
+        "ms": 42,
+        "streaming": true
+      },
+      {
+        "ms": 40,
+        "streaming": true
+      },
+      {
+        "ms": 43,
+        "streaming": true
+      },
+      {
+        "ms": 38,
+        "streaming": true
+      },
+      {
+        "ms": 49,
+        "streaming": true
+      },
+      {
+        "ms": 55,
+        "streaming": true
+      },
+      {
+        "ms": 46,
+        "streaming": true
+      },
+      {
+        "ms": 44,
+        "streaming": true
+      },
+      {
+        "ms": 50,
+        "streaming": true
+      },
+      {
+        "ms": 60,
+        "streaming": true
+      },
+      {
+        "ms": 43,
+        "streaming": true
+      },
+      {
+        "ms": 42,
+        "streaming": true
+      },
+      {
+        "ms": 45,
+        "streaming": true
+      },
+      {
+        "ms": 42,
+        "streaming": true
+      },
+      {
+        "ms": 39,
+        "streaming": true
+      },
+      {
+        "ms": 49,
+        "streaming": true
+      },
+      {
+        "ms": 38,
+        "streaming": true
+      },
+      {
+        "ms": 47,
+        "streaming": true
+      },
+      {
+        "ms": 49,
+        "streaming": true
+      },
+      {
+        "ms": 54,
+        "streaming": true
+      },
+      {
+        "ms": 41,
+        "streaming": true
+      },
+      {
+        "ms": 43,
+        "streaming": true
+      }
+    ]
+  }
+}
