@@ -1400,6 +1400,49 @@ describe('openFeedback 带上当前会话', () => {
     useApp.setState({ settingsOpen: false })
   })
 
+  // Codex 评审:等账号查询的这段里,用户切了会话 / 关了反馈(含通道被撤),晚到的结果不能再动界面
+  it('等账号时切了会话:这次请求作废,不拿后一条会话去开(诊断附件会挂错)', async () => {
+    let answer!: (v: { loggedIn: boolean }) => void
+    vi.stubGlobal('window', { tangu: { openFloatingPanel, authStatus: () => new Promise((r) => { answer = r }) } })
+    useApp.setState({ authInfo: null, activeId: 's1' })
+    expect(useApp.getState().openFeedback('在 s1 里写的')).toBe(true)
+    useApp.setState({ activeId: 's2' })
+    answer({ loggedIn: true })
+    await new Promise((r) => setTimeout(r, 0))
+    expect(openFloatingPanel).not.toHaveBeenCalled()
+    expect(useApp.getState().feedbackDraft).toBe('在 s1 里写的')
+  })
+
+  it('等账号时没切会话:带着调用那一刻的会话去开', async () => {
+    let answer!: (v: { loggedIn: boolean }) => void
+    vi.stubGlobal('window', { tangu: { openFloatingPanel, authStatus: () => new Promise((r) => { answer = r }) } })
+    useApp.setState({ authInfo: null, activeId: 's1' })
+    useApp.getState().openFeedback()
+    answer({ loggedIn: true })
+    await vi.waitFor(() => expect(openFloatingPanel).toHaveBeenCalledTimes(1))
+    expect(openFloatingPanel.mock.calls[0][0].params.session.id).toBe('s1')
+  })
+
+  it('等账号时反馈被关掉(通道被撤也走这里)/ 又点了一次:晚到的结果不再开、不再踢去登录页', async () => {
+    const answers: Array<(v: { loggedIn: boolean }) => void> = []
+    vi.stubGlobal('window', { tangu: { authStatus: () => new Promise((r) => { answers.push(r) }) } })
+    useApp.setState({ authInfo: null, feedbackOpen: false, settingsOpen: false })
+    useApp.getState().openFeedback()
+    useApp.getState().closeFeedback()
+    answers[0]!({ loggedIn: true })
+    await new Promise((r) => setTimeout(r, 0))
+    expect(useApp.getState().feedbackOpen).toBe(false)
+
+    useApp.getState().openFeedback()
+    useApp.getState().openFeedback()
+    answers[1]!({ loggedIn: false }) // 前一次的「没登录」已作废
+    await new Promise((r) => setTimeout(r, 0))
+    expect(useApp.getState().settingsOpen).toBe(false)
+    answers[2]!({ loggedIn: true })
+    await vi.waitFor(() => expect(useApp.getState().feedbackOpen).toBe(true))
+    useApp.setState({ feedbackOpen: false })
+  })
+
   it('明确没登录(authInfo.loggedIn === false):照旧当场拒绝,不再问', () => {
     const authStatus = vi.fn(async () => ({ loggedIn: true }))
     vi.stubGlobal('window', { tangu: { authStatus } })

@@ -13,7 +13,7 @@
  * 「附上这条原文」那个勾按「认得出账号」画(见 FeedbackReasons.canShareOriginal),所以在这两端照旧不出现。
  */
 import { MessageSquare } from 'lucide-react'
-import { addCommand, removeCommand, addRibbonIcon, removeRibbonIcon, useRibbonStore, moveTo } from '@lcl/engine'
+import { addCommand, removeCommand, addRibbonIcon, useRibbonStore, moveTo } from '@lcl/engine'
 import { useApp } from './stores/appStore'
 
 export type SubmitFeedback = NonNullable<NonNullable<Window['tangu']>['submitFeedback']>
@@ -67,9 +67,10 @@ export function installFeedbackCommand(): void {
 function removeFeedbackEntries(): void {
   icon = false
   command = false
-  // ⚠️ 不用 removeRibbonIcon 以外的办法「藏」:通道没了入口就得真的没,否则是个点了报「不可用」的死按钮。
-  //    代价是持久顺序里这一格被抹掉(下次回来按注册序落位)—— 只发生在 Extend 被卸掉时,它是锁定的核心包。
-  removeRibbonIcon('rb-feedback')
+  // ⚠️ 只摘掉在场的那一格,不走 removeRibbonIcon:它会连持久顺序和收纳夹成员一起抹掉(那是「这个图标真的没了」才该做的)。
+  //    Extend 更新 / 重载就是一次撤回再交来,用户把反馈拖到哪、收进哪个夹,回来还得在原处。
+  //    代价:Extend 真的不在了时,夹里会留一个不显示的成员;它是锁定的核心包,正常卸不掉。
+  useRibbonStore.setState((s) => ({ items: s.items.filter((item) => item.id !== 'rb-feedback') }))
   removeCommand('open-feedback')
 }
 

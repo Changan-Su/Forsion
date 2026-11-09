@@ -233,8 +233,17 @@ function executable() {
           await composer.waitFor({ timeout: 15000 })
           // the menu is memoised and the channel arrives after boot: it has to list /feedback all the same
           await composer.fill('/feed')
-          await p2.locator('.t2c-menu .t2c-menu-cmd').filter({ hasText: '/feedback' }).first().waitFor()
+          const item = p2.locator('.t2c-menu .t2c-menu-cmd').filter({ hasText: '/feedback' }).first()
+          await item.waitFor()
+          await p2.waitForTimeout(500) // let the menu finish appearing
+          // really on screen: inside the viewport and the topmost thing at its own centre (not clipped, not covered)
+          const onScreen = await item.evaluate((el) => {
+            const r = el.getBoundingClientRect(), x = r.left + r.width / 2, y = r.top + r.height / 2
+            const top = document.elementFromPoint(x, y)
+            return { rect: [Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height)], inView: r.top >= 0 && r.bottom <= innerHeight && r.width > 0, hit: !!top && (top === el || el.contains(top) || !!top.closest('.t2c-menu')), opacity: getComputedStyle(el.closest('.t2c-menu')).opacity }
+          })
           await p2.screenshot({ path: path.join(shots, 'feedback-slash-menu.png') })
+          assert(onScreen.inView && onScreen.hit && Number(onScreen.opacity) > 0.9, `slash menu item is not really visible: ${JSON.stringify(onScreen)}`)
           await composer.fill(zh ? '/feedback 斜杠带来的描述' : '/feedback from the slash command')
           await composer.press('Enter')
           await p2.locator('[data-mobile-feedback] .feedback-modal').waitFor()

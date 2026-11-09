@@ -5,7 +5,7 @@
  * ② 桌面(桥上本来就有通道,或桥是冻住的)不接,原来那个不动;③ 撤回只认交的那个插件,撤掉后键 / 图标 / 命令都没了;
  * ④ 用户排过下区:插在商店后面,已有位置不动,不在这里跑桌面老存档那条一次性迁移。
  * 负对照:去掉 provideFeedbackChannel 里「桥上已有就不接」那行 → ② 红;installFeedbackIcon(late) 不带 after → ① 的顺序那条红;
- * 撤回不判 provider → ③ 的「别人撤不掉」红。
+ * 撤回不判 provider → ③ 的「别人撤不掉」红;撤回改回 removeRibbonIcon → 「撤回再交来」红。
  */
 import { beforeEach, describe, expect, it } from 'vitest'
 import { rankIds, useCommandStore, useRibbonStore } from '@lcl/engine'
@@ -92,6 +92,26 @@ describe('provideFeedbackChannel', () => {
     useRibbonStore.setState({ items: base, bottomOrder: ['rb-feedback', 'rb-settings', 'rb-market'] })
     provideFeedbackChannel('forsion-extend', submit)
     expect(useRibbonStore.getState().bottomOrder).toEqual(['rb-feedback', 'rb-settings', 'rb-market'])
+  })
+
+  // Extend 更新 / 重载 = 撤回再交来(Codex 评审):用户摆的位置和收纳夹不能被这一来一回抹掉
+  it('撤回再交来:用户排的位置、收进的收纳夹都还在', () => {
+    useRibbonStore.setState({ bottomOrder: ['rb-feedback', 'rb-settings', 'rb-market'] })
+    provideFeedbackChannel('forsion-extend', submit)
+    provideFeedbackChannel('forsion-extend', null)
+    expect(shown()).not.toContain('rb-feedback')
+    expect(useRibbonStore.getState().bottomOrder).toEqual(['rb-feedback', 'rb-settings', 'rb-market'])
+    provideFeedbackChannel('forsion-extend', submit)
+    expect(shown()).toEqual(['rb-feedback', 'rb-settings', 'rb-market', 'rb-mode', 'rb-cmd'])
+
+    resetFeedbackChannelForTest(); win.tangu = {}
+    const folder = { id: 'f1', name: '夹', items: ['rb-feedback', 'rb-cmd'] }
+    useRibbonStore.setState({ items: base, bottomOrder: ['rb-market', 'f1'], folders: [folder] as never })
+    provideFeedbackChannel('forsion-extend', submit)
+    provideFeedbackChannel('forsion-extend', null)
+    provideFeedbackChannel('forsion-extend', submit)
+    expect((useRibbonStore.getState().folders as Array<{ items: string[] }>)[0]!.items).toEqual(['rb-feedback', 'rb-cmd'])
+    expect(useRibbonStore.getState().bottomOrder).toEqual(['rb-market', 'f1'])
   })
 
   it('晚到的那条路不跑桌面老存档的一次性迁移(那条会把反馈挪到商店前面)', () => {
