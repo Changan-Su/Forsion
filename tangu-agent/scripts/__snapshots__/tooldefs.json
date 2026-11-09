@@ -2880,7 +2880,7 @@
       "type": "function",
       "function": {
         "name": "start_session",
-        "description": "Start a child session: a separate, user-visible conversation (listed under this one in the session list) that works on one self-contained task on its own, in the same project and with your settings, while this conversation stays free. When it finishes or stops to ask something, its result comes back to you automatically in a <child_sessions_update> message (once no other child is still running) — you never need to poll or wait. Use it for independent pieces of work that take a while (research one option each, try an approach, do a separate change); use delegate instead for a quick lookup whose answer you need right now. One call per independent piece. Choose context every time: \"fresh\" — the child sees only your brief, so the brief must be complete; \"fork\" — the child also gets this conversation so far as background (the brief still says what to do). If your brief relies on anything said or read here (\"the conversation above\", \"what we discussed\", a file you just read) and does not spell it out, you must use \"fork\" — a fresh child sees none of it and will guess. The child can message you back with send_to_session.",
+        "description": "Start a child session: a separate, user-visible conversation (listed under this one in the session list) that works on one self-contained task on its own, in the same project and with your settings, while this conversation stays free. When it finishes or stops to ask something, its result comes back to you automatically in a <child_sessions_update> message (once no other child is still running) — you never need to poll or wait. Use it for independent pieces of work that take a while (research one option each, try an approach, do a separate change); use delegate instead for a quick lookup whose answer you need right now. One call per independent piece. Choose context every time: \"fresh\" — the child sees only your brief, so the brief must be complete; \"fork\" — the child also gets this conversation so far as background (the brief still says what to do). If your brief relies on anything said or read here (\"the conversation above\", \"what we discussed\", a file you just read) and does not spell it out, you must use \"fork\" — a fresh child sees none of it and will guess. The child can message you back with send_to_session. Optionally pick a cheaper model for read-only work (research, counting, searching) with model; leave it out to use this session's model, and keep this session's model for writing code. This is for pieces of the user's request that you split off yourself. When the user names a separate job that does not belong in this conversation, do not start it on your own: offer it with an ask card and let them choose — ```forsion-task\ntitle: <short title>\nask: true\n---\n<complete brief>\n``` (buttons \"New session\" / \"Do it here\"; nothing starts until they pick).",
         "parameters": {
           "type": "object",
           "properties": {
@@ -2899,12 +2899,53 @@
                 "fork"
               ],
               "description": "\"fresh\": the child sees only the brief. \"fork\": it also gets this conversation so far. Use \"fork\" whenever the brief leans on this conversation."
+            },
+            "model": {
+              "type": "string",
+              "description": "Optional model for the child (id or part of a name, e.g. \"kimi\"). Omit to use this session's model."
+            },
+            "thinking_level": {
+              "type": "string",
+              "enum": [
+                "off",
+                "minimal",
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max"
+              ],
+              "description": "Optional thinking level for the child. Omit to use this session's."
             }
           },
           "required": [
             "title",
             "message",
             "context"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "hand_off_task",
+        "description": "Move the task you are in the middle of into its own session, so this conversation is free for the user's new topic. Use it when, while you are still working on a task, the user sends a message about something unrelated — a different subject, not a correction, constraint, follow-up or progress question about the current task — or when a <new_topic> note tells you to. The new session gets this conversation as background plus your brief, continues the task on its own, and is listed in the user's session list; when it finishes it leaves one line here, and this conversation does not resume the task. After calling it, tell the user in one sentence that the task moved, then answer their new message here. Do not use it when the task is already finished, when the new message is about the current task, or for new work the user has not started yet (use start_session for that).",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string",
+              "description": "Short title for the moved task, shown in the session list, in the user's language (max ~60 chars)."
+            },
+            "brief": {
+              "type": "string",
+              "description": "What the task is, what is already done, what is left (the unchecked items of your checklist), and exactly where you stopped."
+            }
+          },
+          "required": [
+            "title",
+            "brief"
           ]
         }
       }
@@ -3710,7 +3751,7 @@
       "type": "function",
       "function": {
         "name": "start_session",
-        "description": "Start a child session: a separate, user-visible conversation (listed under this one in the session list) that works on one self-contained task on its own, in the same project and with your settings, while this conversation stays free. When it finishes or stops to ask something, its result comes back to you automatically in a <child_sessions_update> message (once no other child is still running) — you never need to poll or wait. Use it for independent pieces of work that take a while (research one option each, try an approach, do a separate change); use delegate instead for a quick lookup whose answer you need right now. One call per independent piece. Choose context every time: \"fresh\" — the child sees only your brief, so the brief must be complete; \"fork\" — the child also gets this conversation so far as background (the brief still says what to do). If your brief relies on anything said or read here (\"the conversation above\", \"what we discussed\", a file you just read) and does not spell it out, you must use \"fork\" — a fresh child sees none of it and will guess. The child can message you back with send_to_session.",
+        "description": "Start a child session: a separate, user-visible conversation (listed under this one in the session list) that works on one self-contained task on its own, in the same project and with your settings, while this conversation stays free. When it finishes or stops to ask something, its result comes back to you automatically in a <child_sessions_update> message (once no other child is still running) — you never need to poll or wait. Use it for independent pieces of work that take a while (research one option each, try an approach, do a separate change); use delegate instead for a quick lookup whose answer you need right now. One call per independent piece. Choose context every time: \"fresh\" — the child sees only your brief, so the brief must be complete; \"fork\" — the child also gets this conversation so far as background (the brief still says what to do). If your brief relies on anything said or read here (\"the conversation above\", \"what we discussed\", a file you just read) and does not spell it out, you must use \"fork\" — a fresh child sees none of it and will guess. The child can message you back with send_to_session. Optionally pick a cheaper model for read-only work (research, counting, searching) with model; leave it out to use this session's model, and keep this session's model for writing code. This is for pieces of the user's request that you split off yourself. When the user names a separate job that does not belong in this conversation, do not start it on your own: offer it with an ask card and let them choose — ```forsion-task\ntitle: <short title>\nask: true\n---\n<complete brief>\n``` (buttons \"New session\" / \"Do it here\"; nothing starts until they pick).",
         "parameters": {
           "type": "object",
           "properties": {
@@ -3729,12 +3770,53 @@
                 "fork"
               ],
               "description": "\"fresh\": the child sees only the brief. \"fork\": it also gets this conversation so far. Use \"fork\" whenever the brief leans on this conversation."
+            },
+            "model": {
+              "type": "string",
+              "description": "Optional model for the child (id or part of a name, e.g. \"kimi\"). Omit to use this session's model."
+            },
+            "thinking_level": {
+              "type": "string",
+              "enum": [
+                "off",
+                "minimal",
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max"
+              ],
+              "description": "Optional thinking level for the child. Omit to use this session's."
             }
           },
           "required": [
             "title",
             "message",
             "context"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "hand_off_task",
+        "description": "Move the task you are in the middle of into its own session, so this conversation is free for the user's new topic. Use it when, while you are still working on a task, the user sends a message about something unrelated — a different subject, not a correction, constraint, follow-up or progress question about the current task — or when a <new_topic> note tells you to. The new session gets this conversation as background plus your brief, continues the task on its own, and is listed in the user's session list; when it finishes it leaves one line here, and this conversation does not resume the task. After calling it, tell the user in one sentence that the task moved, then answer their new message here. Do not use it when the task is already finished, when the new message is about the current task, or for new work the user has not started yet (use start_session for that).",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string",
+              "description": "Short title for the moved task, shown in the session list, in the user's language (max ~60 chars)."
+            },
+            "brief": {
+              "type": "string",
+              "description": "What the task is, what is already done, what is left (the unchecked items of your checklist), and exactly where you stopped."
+            }
+          },
+          "required": [
+            "title",
+            "brief"
           ]
         }
       }
@@ -4963,7 +5045,7 @@
       "type": "function",
       "function": {
         "name": "start_session",
-        "description": "Start a child session: a separate, user-visible conversation (listed under this one in the session list) that works on one self-contained task on its own, in the same project and with your settings, while this conversation stays free. When it finishes or stops to ask something, its result comes back to you automatically in a <child_sessions_update> message (once no other child is still running) — you never need to poll or wait. Use it for independent pieces of work that take a while (research one option each, try an approach, do a separate change); use delegate instead for a quick lookup whose answer you need right now. One call per independent piece. Choose context every time: \"fresh\" — the child sees only your brief, so the brief must be complete; \"fork\" — the child also gets this conversation so far as background (the brief still says what to do). If your brief relies on anything said or read here (\"the conversation above\", \"what we discussed\", a file you just read) and does not spell it out, you must use \"fork\" — a fresh child sees none of it and will guess. The child can message you back with send_to_session.",
+        "description": "Start a child session: a separate, user-visible conversation (listed under this one in the session list) that works on one self-contained task on its own, in the same project and with your settings, while this conversation stays free. When it finishes or stops to ask something, its result comes back to you automatically in a <child_sessions_update> message (once no other child is still running) — you never need to poll or wait. Use it for independent pieces of work that take a while (research one option each, try an approach, do a separate change); use delegate instead for a quick lookup whose answer you need right now. One call per independent piece. Choose context every time: \"fresh\" — the child sees only your brief, so the brief must be complete; \"fork\" — the child also gets this conversation so far as background (the brief still says what to do). If your brief relies on anything said or read here (\"the conversation above\", \"what we discussed\", a file you just read) and does not spell it out, you must use \"fork\" — a fresh child sees none of it and will guess. The child can message you back with send_to_session. Optionally pick a cheaper model for read-only work (research, counting, searching) with model; leave it out to use this session's model, and keep this session's model for writing code. This is for pieces of the user's request that you split off yourself. When the user names a separate job that does not belong in this conversation, do not start it on your own: offer it with an ask card and let them choose — ```forsion-task\ntitle: <short title>\nask: true\n---\n<complete brief>\n``` (buttons \"New session\" / \"Do it here\"; nothing starts until they pick).",
         "parameters": {
           "type": "object",
           "properties": {
@@ -4982,12 +5064,53 @@
                 "fork"
               ],
               "description": "\"fresh\": the child sees only the brief. \"fork\": it also gets this conversation so far. Use \"fork\" whenever the brief leans on this conversation."
+            },
+            "model": {
+              "type": "string",
+              "description": "Optional model for the child (id or part of a name, e.g. \"kimi\"). Omit to use this session's model."
+            },
+            "thinking_level": {
+              "type": "string",
+              "enum": [
+                "off",
+                "minimal",
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max"
+              ],
+              "description": "Optional thinking level for the child. Omit to use this session's."
             }
           },
           "required": [
             "title",
             "message",
             "context"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "hand_off_task",
+        "description": "Move the task you are in the middle of into its own session, so this conversation is free for the user's new topic. Use it when, while you are still working on a task, the user sends a message about something unrelated — a different subject, not a correction, constraint, follow-up or progress question about the current task — or when a <new_topic> note tells you to. The new session gets this conversation as background plus your brief, continues the task on its own, and is listed in the user's session list; when it finishes it leaves one line here, and this conversation does not resume the task. After calling it, tell the user in one sentence that the task moved, then answer their new message here. Do not use it when the task is already finished, when the new message is about the current task, or for new work the user has not started yet (use start_session for that).",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string",
+              "description": "Short title for the moved task, shown in the session list, in the user's language (max ~60 chars)."
+            },
+            "brief": {
+              "type": "string",
+              "description": "What the task is, what is already done, what is left (the unchecked items of your checklist), and exactly where you stopped."
+            }
+          },
+          "required": [
+            "title",
+            "brief"
           ]
         }
       }
@@ -6235,7 +6358,7 @@
       "type": "function",
       "function": {
         "name": "start_session",
-        "description": "Start a child session: a separate, user-visible conversation (listed under this one in the session list) that works on one self-contained task on its own, in the same project and with your settings, while this conversation stays free. When it finishes or stops to ask something, its result comes back to you automatically in a <child_sessions_update> message (once no other child is still running) — you never need to poll or wait. Use it for independent pieces of work that take a while (research one option each, try an approach, do a separate change); use delegate instead for a quick lookup whose answer you need right now. One call per independent piece. Choose context every time: \"fresh\" — the child sees only your brief, so the brief must be complete; \"fork\" — the child also gets this conversation so far as background (the brief still says what to do). If your brief relies on anything said or read here (\"the conversation above\", \"what we discussed\", a file you just read) and does not spell it out, you must use \"fork\" — a fresh child sees none of it and will guess. The child can message you back with send_to_session.",
+        "description": "Start a child session: a separate, user-visible conversation (listed under this one in the session list) that works on one self-contained task on its own, in the same project and with your settings, while this conversation stays free. When it finishes or stops to ask something, its result comes back to you automatically in a <child_sessions_update> message (once no other child is still running) — you never need to poll or wait. Use it for independent pieces of work that take a while (research one option each, try an approach, do a separate change); use delegate instead for a quick lookup whose answer you need right now. One call per independent piece. Choose context every time: \"fresh\" — the child sees only your brief, so the brief must be complete; \"fork\" — the child also gets this conversation so far as background (the brief still says what to do). If your brief relies on anything said or read here (\"the conversation above\", \"what we discussed\", a file you just read) and does not spell it out, you must use \"fork\" — a fresh child sees none of it and will guess. The child can message you back with send_to_session. Optionally pick a cheaper model for read-only work (research, counting, searching) with model; leave it out to use this session's model, and keep this session's model for writing code. This is for pieces of the user's request that you split off yourself. When the user names a separate job that does not belong in this conversation, do not start it on your own: offer it with an ask card and let them choose — ```forsion-task\ntitle: <short title>\nask: true\n---\n<complete brief>\n``` (buttons \"New session\" / \"Do it here\"; nothing starts until they pick).",
         "parameters": {
           "type": "object",
           "properties": {
@@ -6254,12 +6377,53 @@
                 "fork"
               ],
               "description": "\"fresh\": the child sees only the brief. \"fork\": it also gets this conversation so far. Use \"fork\" whenever the brief leans on this conversation."
+            },
+            "model": {
+              "type": "string",
+              "description": "Optional model for the child (id or part of a name, e.g. \"kimi\"). Omit to use this session's model."
+            },
+            "thinking_level": {
+              "type": "string",
+              "enum": [
+                "off",
+                "minimal",
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max"
+              ],
+              "description": "Optional thinking level for the child. Omit to use this session's."
             }
           },
           "required": [
             "title",
             "message",
             "context"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "hand_off_task",
+        "description": "Move the task you are in the middle of into its own session, so this conversation is free for the user's new topic. Use it when, while you are still working on a task, the user sends a message about something unrelated — a different subject, not a correction, constraint, follow-up or progress question about the current task — or when a <new_topic> note tells you to. The new session gets this conversation as background plus your brief, continues the task on its own, and is listed in the user's session list; when it finishes it leaves one line here, and this conversation does not resume the task. After calling it, tell the user in one sentence that the task moved, then answer their new message here. Do not use it when the task is already finished, when the new message is about the current task, or for new work the user has not started yet (use start_session for that).",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string",
+              "description": "Short title for the moved task, shown in the session list, in the user's language (max ~60 chars)."
+            },
+            "brief": {
+              "type": "string",
+              "description": "What the task is, what is already done, what is left (the unchecked items of your checklist), and exactly where you stopped."
+            }
+          },
+          "required": [
+            "title",
+            "brief"
           ]
         }
       }
@@ -7005,7 +7169,7 @@
       "type": "function",
       "function": {
         "name": "start_session",
-        "description": "Start a child session: a separate, user-visible conversation (listed under this one in the session list) that works on one self-contained task on its own, in the same project and with your settings, while this conversation stays free. When it finishes or stops to ask something, its result comes back to you automatically in a <child_sessions_update> message (once no other child is still running) — you never need to poll or wait. Use it for independent pieces of work that take a while (research one option each, try an approach, do a separate change); use delegate instead for a quick lookup whose answer you need right now. One call per independent piece. Choose context every time: \"fresh\" — the child sees only your brief, so the brief must be complete; \"fork\" — the child also gets this conversation so far as background (the brief still says what to do). If your brief relies on anything said or read here (\"the conversation above\", \"what we discussed\", a file you just read) and does not spell it out, you must use \"fork\" — a fresh child sees none of it and will guess. The child can message you back with send_to_session.",
+        "description": "Start a child session: a separate, user-visible conversation (listed under this one in the session list) that works on one self-contained task on its own, in the same project and with your settings, while this conversation stays free. When it finishes or stops to ask something, its result comes back to you automatically in a <child_sessions_update> message (once no other child is still running) — you never need to poll or wait. Use it for independent pieces of work that take a while (research one option each, try an approach, do a separate change); use delegate instead for a quick lookup whose answer you need right now. One call per independent piece. Choose context every time: \"fresh\" — the child sees only your brief, so the brief must be complete; \"fork\" — the child also gets this conversation so far as background (the brief still says what to do). If your brief relies on anything said or read here (\"the conversation above\", \"what we discussed\", a file you just read) and does not spell it out, you must use \"fork\" — a fresh child sees none of it and will guess. The child can message you back with send_to_session. Optionally pick a cheaper model for read-only work (research, counting, searching) with model; leave it out to use this session's model, and keep this session's model for writing code. This is for pieces of the user's request that you split off yourself. When the user names a separate job that does not belong in this conversation, do not start it on your own: offer it with an ask card and let them choose — ```forsion-task\ntitle: <short title>\nask: true\n---\n<complete brief>\n``` (buttons \"New session\" / \"Do it here\"; nothing starts until they pick).",
         "parameters": {
           "type": "object",
           "properties": {
@@ -7024,12 +7188,53 @@
                 "fork"
               ],
               "description": "\"fresh\": the child sees only the brief. \"fork\": it also gets this conversation so far. Use \"fork\" whenever the brief leans on this conversation."
+            },
+            "model": {
+              "type": "string",
+              "description": "Optional model for the child (id or part of a name, e.g. \"kimi\"). Omit to use this session's model."
+            },
+            "thinking_level": {
+              "type": "string",
+              "enum": [
+                "off",
+                "minimal",
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max"
+              ],
+              "description": "Optional thinking level for the child. Omit to use this session's."
             }
           },
           "required": [
             "title",
             "message",
             "context"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "hand_off_task",
+        "description": "Move the task you are in the middle of into its own session, so this conversation is free for the user's new topic. Use it when, while you are still working on a task, the user sends a message about something unrelated — a different subject, not a correction, constraint, follow-up or progress question about the current task — or when a <new_topic> note tells you to. The new session gets this conversation as background plus your brief, continues the task on its own, and is listed in the user's session list; when it finishes it leaves one line here, and this conversation does not resume the task. After calling it, tell the user in one sentence that the task moved, then answer their new message here. Do not use it when the task is already finished, when the new message is about the current task, or for new work the user has not started yet (use start_session for that).",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string",
+              "description": "Short title for the moved task, shown in the session list, in the user's language (max ~60 chars)."
+            },
+            "brief": {
+              "type": "string",
+              "description": "What the task is, what is already done, what is left (the unchecked items of your checklist), and exactly where you stopped."
+            }
+          },
+          "required": [
+            "title",
+            "brief"
           ]
         }
       }
@@ -7794,7 +7999,7 @@
       "type": "function",
       "function": {
         "name": "start_session",
-        "description": "Start a child session: a separate, user-visible conversation (listed under this one in the session list) that works on one self-contained task on its own, in the same project and with your settings, while this conversation stays free. When it finishes or stops to ask something, its result comes back to you automatically in a <child_sessions_update> message (once no other child is still running) — you never need to poll or wait. Use it for independent pieces of work that take a while (research one option each, try an approach, do a separate change); use delegate instead for a quick lookup whose answer you need right now. One call per independent piece. Choose context every time: \"fresh\" — the child sees only your brief, so the brief must be complete; \"fork\" — the child also gets this conversation so far as background (the brief still says what to do). If your brief relies on anything said or read here (\"the conversation above\", \"what we discussed\", a file you just read) and does not spell it out, you must use \"fork\" — a fresh child sees none of it and will guess. The child can message you back with send_to_session.",
+        "description": "Start a child session: a separate, user-visible conversation (listed under this one in the session list) that works on one self-contained task on its own, in the same project and with your settings, while this conversation stays free. When it finishes or stops to ask something, its result comes back to you automatically in a <child_sessions_update> message (once no other child is still running) — you never need to poll or wait. Use it for independent pieces of work that take a while (research one option each, try an approach, do a separate change); use delegate instead for a quick lookup whose answer you need right now. One call per independent piece. Choose context every time: \"fresh\" — the child sees only your brief, so the brief must be complete; \"fork\" — the child also gets this conversation so far as background (the brief still says what to do). If your brief relies on anything said or read here (\"the conversation above\", \"what we discussed\", a file you just read) and does not spell it out, you must use \"fork\" — a fresh child sees none of it and will guess. The child can message you back with send_to_session. Optionally pick a cheaper model for read-only work (research, counting, searching) with model; leave it out to use this session's model, and keep this session's model for writing code. This is for pieces of the user's request that you split off yourself. When the user names a separate job that does not belong in this conversation, do not start it on your own: offer it with an ask card and let them choose — ```forsion-task\ntitle: <short title>\nask: true\n---\n<complete brief>\n``` (buttons \"New session\" / \"Do it here\"; nothing starts until they pick).",
         "parameters": {
           "type": "object",
           "properties": {
@@ -7813,12 +8018,53 @@
                 "fork"
               ],
               "description": "\"fresh\": the child sees only the brief. \"fork\": it also gets this conversation so far. Use \"fork\" whenever the brief leans on this conversation."
+            },
+            "model": {
+              "type": "string",
+              "description": "Optional model for the child (id or part of a name, e.g. \"kimi\"). Omit to use this session's model."
+            },
+            "thinking_level": {
+              "type": "string",
+              "enum": [
+                "off",
+                "minimal",
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max"
+              ],
+              "description": "Optional thinking level for the child. Omit to use this session's."
             }
           },
           "required": [
             "title",
             "message",
             "context"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "hand_off_task",
+        "description": "Move the task you are in the middle of into its own session, so this conversation is free for the user's new topic. Use it when, while you are still working on a task, the user sends a message about something unrelated — a different subject, not a correction, constraint, follow-up or progress question about the current task — or when a <new_topic> note tells you to. The new session gets this conversation as background plus your brief, continues the task on its own, and is listed in the user's session list; when it finishes it leaves one line here, and this conversation does not resume the task. After calling it, tell the user in one sentence that the task moved, then answer their new message here. Do not use it when the task is already finished, when the new message is about the current task, or for new work the user has not started yet (use start_session for that).",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string",
+              "description": "Short title for the moved task, shown in the session list, in the user's language (max ~60 chars)."
+            },
+            "brief": {
+              "type": "string",
+              "description": "What the task is, what is already done, what is left (the unchecked items of your checklist), and exactly where you stopped."
+            }
+          },
+          "required": [
+            "title",
+            "brief"
           ]
         }
       }
@@ -9047,7 +9293,7 @@
       "type": "function",
       "function": {
         "name": "start_session",
-        "description": "Start a child session: a separate, user-visible conversation (listed under this one in the session list) that works on one self-contained task on its own, in the same project and with your settings, while this conversation stays free. When it finishes or stops to ask something, its result comes back to you automatically in a <child_sessions_update> message (once no other child is still running) — you never need to poll or wait. Use it for independent pieces of work that take a while (research one option each, try an approach, do a separate change); use delegate instead for a quick lookup whose answer you need right now. One call per independent piece. Choose context every time: \"fresh\" — the child sees only your brief, so the brief must be complete; \"fork\" — the child also gets this conversation so far as background (the brief still says what to do). If your brief relies on anything said or read here (\"the conversation above\", \"what we discussed\", a file you just read) and does not spell it out, you must use \"fork\" — a fresh child sees none of it and will guess. The child can message you back with send_to_session.",
+        "description": "Start a child session: a separate, user-visible conversation (listed under this one in the session list) that works on one self-contained task on its own, in the same project and with your settings, while this conversation stays free. When it finishes or stops to ask something, its result comes back to you automatically in a <child_sessions_update> message (once no other child is still running) — you never need to poll or wait. Use it for independent pieces of work that take a while (research one option each, try an approach, do a separate change); use delegate instead for a quick lookup whose answer you need right now. One call per independent piece. Choose context every time: \"fresh\" — the child sees only your brief, so the brief must be complete; \"fork\" — the child also gets this conversation so far as background (the brief still says what to do). If your brief relies on anything said or read here (\"the conversation above\", \"what we discussed\", a file you just read) and does not spell it out, you must use \"fork\" — a fresh child sees none of it and will guess. The child can message you back with send_to_session. Optionally pick a cheaper model for read-only work (research, counting, searching) with model; leave it out to use this session's model, and keep this session's model for writing code. This is for pieces of the user's request that you split off yourself. When the user names a separate job that does not belong in this conversation, do not start it on your own: offer it with an ask card and let them choose — ```forsion-task\ntitle: <short title>\nask: true\n---\n<complete brief>\n``` (buttons \"New session\" / \"Do it here\"; nothing starts until they pick).",
         "parameters": {
           "type": "object",
           "properties": {
@@ -9066,12 +9312,53 @@
                 "fork"
               ],
               "description": "\"fresh\": the child sees only the brief. \"fork\": it also gets this conversation so far. Use \"fork\" whenever the brief leans on this conversation."
+            },
+            "model": {
+              "type": "string",
+              "description": "Optional model for the child (id or part of a name, e.g. \"kimi\"). Omit to use this session's model."
+            },
+            "thinking_level": {
+              "type": "string",
+              "enum": [
+                "off",
+                "minimal",
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max"
+              ],
+              "description": "Optional thinking level for the child. Omit to use this session's."
             }
           },
           "required": [
             "title",
             "message",
             "context"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "hand_off_task",
+        "description": "Move the task you are in the middle of into its own session, so this conversation is free for the user's new topic. Use it when, while you are still working on a task, the user sends a message about something unrelated — a different subject, not a correction, constraint, follow-up or progress question about the current task — or when a <new_topic> note tells you to. The new session gets this conversation as background plus your brief, continues the task on its own, and is listed in the user's session list; when it finishes it leaves one line here, and this conversation does not resume the task. After calling it, tell the user in one sentence that the task moved, then answer their new message here. Do not use it when the task is already finished, when the new message is about the current task, or for new work the user has not started yet (use start_session for that).",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string",
+              "description": "Short title for the moved task, shown in the session list, in the user's language (max ~60 chars)."
+            },
+            "brief": {
+              "type": "string",
+              "description": "What the task is, what is already done, what is left (the unchecked items of your checklist), and exactly where you stopped."
+            }
+          },
+          "required": [
+            "title",
+            "brief"
           ]
         }
       }
@@ -10319,7 +10606,7 @@
       "type": "function",
       "function": {
         "name": "start_session",
-        "description": "Start a child session: a separate, user-visible conversation (listed under this one in the session list) that works on one self-contained task on its own, in the same project and with your settings, while this conversation stays free. When it finishes or stops to ask something, its result comes back to you automatically in a <child_sessions_update> message (once no other child is still running) — you never need to poll or wait. Use it for independent pieces of work that take a while (research one option each, try an approach, do a separate change); use delegate instead for a quick lookup whose answer you need right now. One call per independent piece. Choose context every time: \"fresh\" — the child sees only your brief, so the brief must be complete; \"fork\" — the child also gets this conversation so far as background (the brief still says what to do). If your brief relies on anything said or read here (\"the conversation above\", \"what we discussed\", a file you just read) and does not spell it out, you must use \"fork\" — a fresh child sees none of it and will guess. The child can message you back with send_to_session.",
+        "description": "Start a child session: a separate, user-visible conversation (listed under this one in the session list) that works on one self-contained task on its own, in the same project and with your settings, while this conversation stays free. When it finishes or stops to ask something, its result comes back to you automatically in a <child_sessions_update> message (once no other child is still running) — you never need to poll or wait. Use it for independent pieces of work that take a while (research one option each, try an approach, do a separate change); use delegate instead for a quick lookup whose answer you need right now. One call per independent piece. Choose context every time: \"fresh\" — the child sees only your brief, so the brief must be complete; \"fork\" — the child also gets this conversation so far as background (the brief still says what to do). If your brief relies on anything said or read here (\"the conversation above\", \"what we discussed\", a file you just read) and does not spell it out, you must use \"fork\" — a fresh child sees none of it and will guess. The child can message you back with send_to_session. Optionally pick a cheaper model for read-only work (research, counting, searching) with model; leave it out to use this session's model, and keep this session's model for writing code. This is for pieces of the user's request that you split off yourself. When the user names a separate job that does not belong in this conversation, do not start it on your own: offer it with an ask card and let them choose — ```forsion-task\ntitle: <short title>\nask: true\n---\n<complete brief>\n``` (buttons \"New session\" / \"Do it here\"; nothing starts until they pick).",
         "parameters": {
           "type": "object",
           "properties": {
@@ -10338,12 +10625,53 @@
                 "fork"
               ],
               "description": "\"fresh\": the child sees only the brief. \"fork\": it also gets this conversation so far. Use \"fork\" whenever the brief leans on this conversation."
+            },
+            "model": {
+              "type": "string",
+              "description": "Optional model for the child (id or part of a name, e.g. \"kimi\"). Omit to use this session's model."
+            },
+            "thinking_level": {
+              "type": "string",
+              "enum": [
+                "off",
+                "minimal",
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max"
+              ],
+              "description": "Optional thinking level for the child. Omit to use this session's."
             }
           },
           "required": [
             "title",
             "message",
             "context"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "hand_off_task",
+        "description": "Move the task you are in the middle of into its own session, so this conversation is free for the user's new topic. Use it when, while you are still working on a task, the user sends a message about something unrelated — a different subject, not a correction, constraint, follow-up or progress question about the current task — or when a <new_topic> note tells you to. The new session gets this conversation as background plus your brief, continues the task on its own, and is listed in the user's session list; when it finishes it leaves one line here, and this conversation does not resume the task. After calling it, tell the user in one sentence that the task moved, then answer their new message here. Do not use it when the task is already finished, when the new message is about the current task, or for new work the user has not started yet (use start_session for that).",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string",
+              "description": "Short title for the moved task, shown in the session list, in the user's language (max ~60 chars)."
+            },
+            "brief": {
+              "type": "string",
+              "description": "What the task is, what is already done, what is left (the unchecked items of your checklist), and exactly where you stopped."
+            }
+          },
+          "required": [
+            "title",
+            "brief"
           ]
         }
       }
@@ -11630,7 +11958,7 @@
       "type": "function",
       "function": {
         "name": "start_session",
-        "description": "Start a child session: a separate, user-visible conversation (listed under this one in the session list) that works on one self-contained task on its own, in the same project and with your settings, while this conversation stays free. When it finishes or stops to ask something, its result comes back to you automatically in a <child_sessions_update> message (once no other child is still running) — you never need to poll or wait. Use it for independent pieces of work that take a while (research one option each, try an approach, do a separate change); use delegate instead for a quick lookup whose answer you need right now. One call per independent piece. Choose context every time: \"fresh\" — the child sees only your brief, so the brief must be complete; \"fork\" — the child also gets this conversation so far as background (the brief still says what to do). If your brief relies on anything said or read here (\"the conversation above\", \"what we discussed\", a file you just read) and does not spell it out, you must use \"fork\" — a fresh child sees none of it and will guess. The child can message you back with send_to_session.",
+        "description": "Start a child session: a separate, user-visible conversation (listed under this one in the session list) that works on one self-contained task on its own, in the same project and with your settings, while this conversation stays free. When it finishes or stops to ask something, its result comes back to you automatically in a <child_sessions_update> message (once no other child is still running) — you never need to poll or wait. Use it for independent pieces of work that take a while (research one option each, try an approach, do a separate change); use delegate instead for a quick lookup whose answer you need right now. One call per independent piece. Choose context every time: \"fresh\" — the child sees only your brief, so the brief must be complete; \"fork\" — the child also gets this conversation so far as background (the brief still says what to do). If your brief relies on anything said or read here (\"the conversation above\", \"what we discussed\", a file you just read) and does not spell it out, you must use \"fork\" — a fresh child sees none of it and will guess. The child can message you back with send_to_session. Optionally pick a cheaper model for read-only work (research, counting, searching) with model; leave it out to use this session's model, and keep this session's model for writing code. This is for pieces of the user's request that you split off yourself. When the user names a separate job that does not belong in this conversation, do not start it on your own: offer it with an ask card and let them choose — ```forsion-task\ntitle: <short title>\nask: true\n---\n<complete brief>\n``` (buttons \"New session\" / \"Do it here\"; nothing starts until they pick).",
         "parameters": {
           "type": "object",
           "properties": {
@@ -11649,12 +11977,53 @@
                 "fork"
               ],
               "description": "\"fresh\": the child sees only the brief. \"fork\": it also gets this conversation so far. Use \"fork\" whenever the brief leans on this conversation."
+            },
+            "model": {
+              "type": "string",
+              "description": "Optional model for the child (id or part of a name, e.g. \"kimi\"). Omit to use this session's model."
+            },
+            "thinking_level": {
+              "type": "string",
+              "enum": [
+                "off",
+                "minimal",
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max"
+              ],
+              "description": "Optional thinking level for the child. Omit to use this session's."
             }
           },
           "required": [
             "title",
             "message",
             "context"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "hand_off_task",
+        "description": "Move the task you are in the middle of into its own session, so this conversation is free for the user's new topic. Use it when, while you are still working on a task, the user sends a message about something unrelated — a different subject, not a correction, constraint, follow-up or progress question about the current task — or when a <new_topic> note tells you to. The new session gets this conversation as background plus your brief, continues the task on its own, and is listed in the user's session list; when it finishes it leaves one line here, and this conversation does not resume the task. After calling it, tell the user in one sentence that the task moved, then answer their new message here. Do not use it when the task is already finished, when the new message is about the current task, or for new work the user has not started yet (use start_session for that).",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string",
+              "description": "Short title for the moved task, shown in the session list, in the user's language (max ~60 chars)."
+            },
+            "brief": {
+              "type": "string",
+              "description": "What the task is, what is already done, what is left (the unchecked items of your checklist), and exactly where you stopped."
+            }
+          },
+          "required": [
+            "title",
+            "brief"
           ]
         }
       }
@@ -14296,7 +14665,7 @@
       "type": "function",
       "function": {
         "name": "start_session",
-        "description": "Start a child session: a separate, user-visible conversation (listed under this one in the session list) that works on one self-contained task on its own, in the same project and with your settings, while this conversation stays free. When it finishes or stops to ask something, its result comes back to you automatically in a <child_sessions_update> message (once no other child is still running) — you never need to poll or wait. Use it for independent pieces of work that take a while (research one option each, try an approach, do a separate change); use delegate instead for a quick lookup whose answer you need right now. One call per independent piece. Choose context every time: \"fresh\" — the child sees only your brief, so the brief must be complete; \"fork\" — the child also gets this conversation so far as background (the brief still says what to do). If your brief relies on anything said or read here (\"the conversation above\", \"what we discussed\", a file you just read) and does not spell it out, you must use \"fork\" — a fresh child sees none of it and will guess. The child can message you back with send_to_session.",
+        "description": "Start a child session: a separate, user-visible conversation (listed under this one in the session list) that works on one self-contained task on its own, in the same project and with your settings, while this conversation stays free. When it finishes or stops to ask something, its result comes back to you automatically in a <child_sessions_update> message (once no other child is still running) — you never need to poll or wait. Use it for independent pieces of work that take a while (research one option each, try an approach, do a separate change); use delegate instead for a quick lookup whose answer you need right now. One call per independent piece. Choose context every time: \"fresh\" — the child sees only your brief, so the brief must be complete; \"fork\" — the child also gets this conversation so far as background (the brief still says what to do). If your brief relies on anything said or read here (\"the conversation above\", \"what we discussed\", a file you just read) and does not spell it out, you must use \"fork\" — a fresh child sees none of it and will guess. The child can message you back with send_to_session. Optionally pick a cheaper model for read-only work (research, counting, searching) with model; leave it out to use this session's model, and keep this session's model for writing code. This is for pieces of the user's request that you split off yourself. When the user names a separate job that does not belong in this conversation, do not start it on your own: offer it with an ask card and let them choose — ```forsion-task\ntitle: <short title>\nask: true\n---\n<complete brief>\n``` (buttons \"New session\" / \"Do it here\"; nothing starts until they pick).",
         "parameters": {
           "type": "object",
           "properties": {
@@ -14315,12 +14684,53 @@
                 "fork"
               ],
               "description": "\"fresh\": the child sees only the brief. \"fork\": it also gets this conversation so far. Use \"fork\" whenever the brief leans on this conversation."
+            },
+            "model": {
+              "type": "string",
+              "description": "Optional model for the child (id or part of a name, e.g. \"kimi\"). Omit to use this session's model."
+            },
+            "thinking_level": {
+              "type": "string",
+              "enum": [
+                "off",
+                "minimal",
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max"
+              ],
+              "description": "Optional thinking level for the child. Omit to use this session's."
             }
           },
           "required": [
             "title",
             "message",
             "context"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "hand_off_task",
+        "description": "Move the task you are in the middle of into its own session, so this conversation is free for the user's new topic. Use it when, while you are still working on a task, the user sends a message about something unrelated — a different subject, not a correction, constraint, follow-up or progress question about the current task — or when a <new_topic> note tells you to. The new session gets this conversation as background plus your brief, continues the task on its own, and is listed in the user's session list; when it finishes it leaves one line here, and this conversation does not resume the task. After calling it, tell the user in one sentence that the task moved, then answer their new message here. Do not use it when the task is already finished, when the new message is about the current task, or for new work the user has not started yet (use start_session for that).",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string",
+              "description": "Short title for the moved task, shown in the session list, in the user's language (max ~60 chars)."
+            },
+            "brief": {
+              "type": "string",
+              "description": "What the task is, what is already done, what is left (the unchecked items of your checklist), and exactly where you stopped."
+            }
+          },
+          "required": [
+            "title",
+            "brief"
           ]
         }
       }

@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.106.0
+  version: 1.106.1
   author: Forsion
   category: Forsion
 ---
@@ -35,6 +35,8 @@ Read the matching `references/` file before using an API listed below or followi
 - [references/mini-panel.md](references/mini-panel.md): a Space's small floating window (`mini` in `space.json`)
 - [references/bundle-mcp-hooks.md](references/bundle-mcp-hooks.md): stdio MCP servers and observe-only hooks a bundle declares in its manifest
 - [references/note-editor-surfaces.md](references/note-editor-surfaces.md): 块表面 ctx.app.getPage / mountBlocks / insertMarkdown; ctx.registerEditorExtension / registerSettingsView / loadData / saveData / watchFile
+- [references/store-sources.md](references/store-sources.md): 商店来源 `storeSources` 与 `forsion-store.json` 目录格式、四种包出处、Forsion Git 私有仓
+- [references/local-plugin-tasks.md](references/local-plugin-tasks.md): local plugin task APIs (Dispatch host branch) and recording model choices
 - [references/work-folder-migration.md](references/work-folder-migration.md): one-time upgrade of old plugin data into the working folder (Identity and destination; Request and result; Upgrade sequence; Acceptance cases; Ordinary writes after upgrade)
 - [references/agent-space.md](references/agent-space.md): an agent's own Space plugin (`agents/<slug>/Space/main.js`) and `ctx.agent`; unused since Muse moved to its brief layout
 
@@ -299,12 +301,7 @@ A bundle can declare stdio MCP servers and observe-only hooks in its manifest: r
 
 ### 商店来源:自己维护一份目录,不走投稿(2026-11-08 起)
 
-不想每版都过审、或者东西很多(一套几十个技能)时,可以让插件在商店左栏「来源」分组里加一个条目,指向你维护的 `forsion-store.json`;用户也能自己点 + 贴地址。**来源只交目录**,卡片、下载、校验、安装、更新、卸载全是商店照常做,插件不画界面(`registerStoreView` 仍只给 Extend)。
-
-- manifest:`"storeSources": [{ "id": "main", "title": { "zh": "…", "en": "…" }, "index": "github:owner/repo", "icon": "image" }]`,≤4 个,`id` 匹配 `^[a-z0-9][a-z0-9-]{0,31}$`。`index` 写 `github:owner/repo`(或 `https://github.com/owner/repo/tree/<ref>/<目录>`)、`npm:<包名>`(读 latest 包根的目录文件)、直接指向 JSON 的 `https://` 地址,或 `forsion-git:owner/repo`(Forsion Git 私有仓;`https://git.forsion.net/owner/repo/src/branch/<ref>/<目录>` 指定分支和子目录)。Forsion Git 由服务端按当前登录的账号去读,只读得到这个人有读权限的仓库;没登录时来源页给登录引导,读不到时报「仓库不存在或没有读权限」;私有目录的相对 `icon` 显示不出来,写完整 https 地址。插件停用 / 卸载,来源随之消失;装过的东西留着、不再自动更新。
-- 目录 `{ "schema": 1, "title", "author", "description", "items": [...] }`;每条 `id`(`^[a-z0-9][a-z0-9-]{0,47}$`,**发出去别改**,本机身份 `src-<来源哈希>-<id>` 靠它)、`type`(同投稿类型)、`name`、`version`、`package`,可选 `summary` / `tags` / `icon` / `readme` / `minAppVersion` / `maxAppVersion` / `platforms` / `updatedAt`。
-- `package` 四选一:`{ github, ref, path? }`、`{ npm, version, integrity? }`(version 必须等于条目 version)、`{ url, sha256 }`(必须带 sha256)、`{ forsionGit: 'owner/repo', ref, path? }`(服务端按装的人的账号下归档,装的人要登录且有读权限)。**换了包的出处(仓库 / npm 包名 / 下载域名)自动更新会停**,等用户手动点。
-- 用户第一次从某个来源装、以及每个插件 / Agent / Space 第一次装前,商店在详情侧栏确认一次;来源条目标「未经 Forsion 审核」,没有评论区,`requiresPlugins` 的 `market` 认不到它们。完整格式见 Genesis 仓 `docs/customization/plugin-development.md`「商店来源」。
+不想每版都过审、或东西很多时,让插件在商店左栏「来源」里挂一份自己维护的 `forsion-store.json`(manifest `storeSources`,GitHub / npm / https / Forsion Git 私有仓)。来源只交目录,下载安装照常走商店。写之前读 [references/store-sources.md](references/store-sources.md)。
 
 ### 投稿元数据、版本要求与评论(2026-10-17 起)
 
@@ -1321,25 +1318,6 @@ The returned disposer removes only its own current registration. Disable, unload
 中文：插件只贡献选项，不自动改用户选择。选择后缓存图像供离线启动使用，图标立即同步到应用内部；「同步到 Dock／任务栏」开着时，桌面安装版还会把它写进系统，退出 Forsion 后仍保留（macOS 的访达／Dock／启动台图标，Windows 的开始菜单、桌面和任务栏快捷方式，更新后重新写入；Linux 与开发版仅运行时）。安卓桌面图标只能在应用内置的图标之间切换，插件图标只在 App 内显示。普通重载保留快照，重新选择可更新素材。禁用或移除插件时恢复默认，旧上下文不能重新注册。安装包自身的图标不随此设置修改。
 
 
-## Local plugin task APIs (Dispatch host branch, 2026-10-04)
+## Local plugin task APIs and recorded model choices: read references/local-plugin-tasks.md
 
-Feature-detect these additive interfaces; released 2.12.2 builds do not contain them.
-
-- Renderer `ctx.tangu.request?(enginePluginId, path, {method?,body?,signal?})`: authenticated JSON through the host, restricted to an engine plugin in the caller's bundle. Absolute route fragments only, no query/encoded/dot segments. Local desktop only. Disable aborts pending requests. The host builds the route from the bundle's install folder name, so the plugin never spells the prefix. Desktop 2.13.3 and earlier built it from the manifest `id` instead: there a bundle whose install folder name differs from its manifest `id` gets 404 on every call (see the bundle section for what to do when listing in the Store). New Store listings install into `market-<listing ID>` folders and need a desktop after 2.13.4, so this only concerns older listings.
-- Renderer `await ctx.tangu.openSession?(id)`: hydrates hidden session metadata/model/config into the native child-session cache, then opens a native chat tab. No new run is started.
-- Engine `ctx.registerScopedRoutes(router => { router.get('/snapshot', handler); })`: host mounts `/extensions/<bundle directory>/<engine id>` (the install folder name as found on disk, never an id the package declares), applies user authentication and rejects remote callers. `req.user.userId` is authoritative. Host removes the route on disable.
-- Engine `ctx.paths.dataDir`: stable host-owned plugin data directory. Do not derive writable runtime data from installation paths.
-- `ctx.sdk.runs.start({userId,cwd,prompt,modelId,thinkingLevel,agentSlug|engineId,engineModelId?,planMode?,sessionId?,requestId?,parentSessionId?,title?})` creates a local plugin-owned `kind=task` session/run. Persist an intent and reuse requestId on an uncertain outcome. Native approval/inquiry behavior remains active; callers cannot supply an approval mode. External engines require local host execution and do not support plan mode.
-- `runs.status(runId,userId)` gives real status, bounded final summary, tokens and waiting kinds; `sessionRuns(sessionId,userId)` also tracks native continuations. `events`, `subscribe` and `stop` validate ownership. Subscribe returns an unsubscribe function and the host disposes it on disable.
-- `ctx.sdk.engines.list()` reports available local external engines and sandbox restrictions. A registry entry does not prove the CLI is authenticated.
-- Agent config `tools_strict=true` makes `tools_list` an exact allowlist over all tool sources, including gated/plugin/MCP tools. It is opt-in and config-only; old agents retain existing blacklist/allowlist behavior. Include `ask_user` explicitly when needed.
-
-Task sessions, including native continuations, share a host FIFO by canonical project path. This is a single local engine guarantee, not a distributed lock between independent engine processes. Plugins still own task metadata, scheduling and lifecycle. Disabling a plugin removes its contributions but does not abort previously accepted native runs.
-
-### Recording model choices / 记录中的模型选择（2026-10-14）
-
-`ctx.ui?.mountModelPicker?.(el, { kind, value, label, followLabel, scopeKey, onChange })` mounts the existing native ModelPill menu without a prompt input. `kind` is `asr` or `translation`; `value: ''` follows that global slot, while ASR `value: 'local'` selects on-device SenseVoice. It reads the home engine catalog, includes dedicated translation models, and follows native model sorting and grouping preferences. Selection is a local draft delivered through `onChange`; the host never changes global settings or starts a model call. Use `{ update(patch), dispose() }`, change `scopeKey` when switching recordings, and feature-detect together with `ctx.tangu.modelCatalog`. Unready on-device models are explained and cannot become selected; download them through Settings → Voice. The host disposes the picker and aborts an open menu when the plugin is disabled or reloaded.
-
-`ctx.tangu?.modelCatalog?.(kind)` returns `{ models, defaultModelId }` from the same home target used by desktop ASR and inline AI. Each model has `id`, `name`, `provider`, `source`, `available`, and `supportsCorrection`; dedicated machine-translation models set `supportsCorrection: false`. No credentials are returned. `ctx.tangu.complete` and `ctx.tangu.translate` accept optional `modelId` overrides and return optional `model: { id, name, mt? }` provenance. An explicit override never writes the global model slot. When it is omitted, the existing global-slot behavior remains available. Desktop `window.tangu.transcribeAudio` accepts per-call `backend: 'local' | 'cloud'` as well as `modelId`; explicit offline ASR never falls through to a cloud Provider when the local model is unavailable. Pass `language` (`zh`, `en`, `ja`, `ko`, `yue`, …) when you know what is spoken: the on-device model otherwise guesses the language per utterance and can turn far-field English into Chinese or Japanese text; cloud models receive it as a hint. Omit it for mixed-language audio.
-
-这组接口复用原生模型选择器，选择保持为插件的局部草稿；模型调用和记录级持久化仍由插件负责。空值跟随全局设置，ASR 的 `local` 代表本机 SenseVoice。目录来自实际执行调用的 home 引擎；专用翻译模型通过 `supportsCorrection` 标明只支持翻译。切换记录更新 `scopeKey`，通过 `dispose()` 收回宿主挂载；插件禁用或重载也会自动清理。旧宿主没有这些可选方法时，保留跟随全局设置的界面，不显示无法兑现的记录级覆盖。
+插件自己开后台任务(`ctx.tasks` 一族,Dispatch 宿主分支)和录音 / 转写类插件记录所用模型时,先读 [references/local-plugin-tasks.md](references/local-plugin-tasks.md)。

@@ -2,6 +2,23 @@
 
 <!-- English edition of CHANGELOG.md: same "## <version> (<date>)" headings, one bullet per Chinese bullet. Add both when releasing. -->
 
+## 2.14.0-beta.1 (2026-11-09)
+
+Preview build: only for people who chose the preview channel. Stable users won't receive it.
+
+- **Muse**: The Muse Space main area is now Today's brief, a fixed layout that shows what Muse is doing today, what's waiting for you and what it's following. Waiting for you and Following can also go on Home as widgets.
+- **Home**: Press and drag a widget from the Space organizer to where you want it on Home; when Home is full, it can't be dropped. When the window gets a little narrower, the side widget rails shrink before they collapse, and an empty rail takes no space.
+- **Agents and chat**:
+  - Typing keeps up better, and switching back to a long chat shows it within 0.7 seconds.
+  - When you change topic mid-task, the agent can hand the unfinished work to a new child chat that carries on; child chats can message each other, and each can use its own model.
+  - The selection bar, its result card and the note format toolbar follow their text instead of closing as soon as you scroll.
+- **Forsion Connect**: Publish in Coding Studio opens the new publish dialog (with Forsion Extend 0.10.0). For a page that uses AI you can choose to pay for visitors' AI from your points pack, with a daily limit per visitor and a daily cap for the page. My web pages shows your balance, each page's AI usage and the pages you saved.
+- **Store**: The store's left column has a new Sources group for third-party plugin catalogs (GitHub, npm or a URL), and it can read your private repositories on Forsion Git. Installing, updating and uninstalling work like any other store plugin.
+- **First-run guide**: Sync after sign-in is marked Beta and off by default. Finishing the guide no longer jumps to Penzor Cloud's sync page; if the cloud already has data you need to decide about, Home asks you. Muse shows its own avatar, the model picker is the same one used elsewhere, screens slide in the direction you're going, and there's a new About you question card.
+- **Appearance**: Dialogs in Genesis are no longer see-through, and new popovers follow the Glass theme automatically. The Soft theme now ships with the app as layered floating cards (an edited older copy is kept as soft-custom). Genesis and Soft interface fonts ship with the app, so startup no longer reaches Google Fonts. The account popover animation in the lower left is fixed, and Windows background processes use the bundled monospace font.
+- **Plugins**: Core plugins that take over Home get `ctx.home` (mount cards, place them, edit Home) and related APIs. Plugins with a bundled Space installed from the store bind to the plugin's actual id.
+- The Tangu engine is now 2.14.0.
+
 ## 2.13.8-beta.4 (2026-11-08)
 
 Preview build: only for people who chose the preview channel. Stable users won't receive it.

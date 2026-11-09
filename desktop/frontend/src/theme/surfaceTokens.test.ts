@@ -90,9 +90,9 @@ function rules(): Rule[] {
     for (const m of css.matchAll(/([^{}@]+)\{([^{}]*)\}/g)) {
       const body = m[2]
       const floating = /z-index:\s*var\(--z-/.test(body)
-        || (/position:\s*(fixed|absolute)/.test(body) && /box-shadow:\s*var\(--card-shadow/.test(body))
+        || (/position:\s*(fixed|absolute)/.test(body) && /box-shadow:\s*var\(--card-shadow/.test(body)) // shadow-contract: effect (test regex, not a style)
       const painted = /background(-color)?:\s*(var\(--(bg-card|bg|sidebar-bg|surface-2|bg-glass|bg-elevated)\b|color-mix)/.test(body)
-        || /box-shadow:\s*var\(--card-shadow/.test(body)
+        || /box-shadow:\s*var\(--card-shadow/.test(body) // shadow-contract: effect (test regex, not a style)
       const tokens = /background(-color)?:\s*var\(--surface-(menu|float)\b/.test(body)
       const glassy = /var\(--(bg-glass|panel-blur)\b/.test(body)
       for (const part of m[1].split(',')) {
