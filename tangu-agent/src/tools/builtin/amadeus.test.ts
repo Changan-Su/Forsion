@@ -197,10 +197,12 @@ describe('a start that is already in the past', () => {
     expect(pastStartNote('2026-11-08', true, local)).toContain('this date (2026-11-08) is already in the past: it is now 2026-11-09 (Monday');
   });
 
-  it('something still going on is not past; no date / a broken cell says nothing', () => {
-    expect(pastStartNote('2026-11-09T20:00/2026-11-09T23:30', true, local)).toBe('');
-    expect(pastStartNote('2026-11-07/2026-11-10', true, local)).toBe('');
+  it('only the start counts, whatever the end; no date / a broken cell says nothing', () => {
+    // 结束时间还没到也报:22:23 写「20:00–23:30」正是要提醒的那种
+    expect(pastStartNote('2026-11-09T20:00/2026-11-09T23:30', true, local)).toContain('this start (2026-11-09T20:00) is already in the past');
+    expect(pastStartNote('2026-11-07/2026-11-10', true, local)).toContain('this date (2026-11-07) is already in the past');
     expect(pastStartNote('2026-11-09T20:00/2026-11-09T21:00', true, local)).toContain('already in the past');
+    expect(pastStartNote('2026-11-09T23:00/2026-11-10T01:00', true, local)).toBe('');
     for (const v of [null, undefined, '', 'tomorrow', 3, true]) expect(pastStartNote(v as any, true, local)).toBe('');
     // 写法对、但没有这一天 / 这个时刻:桌面会归到别的日子(2 月 31 日 → 3 月 3 日),照字面比会把将来的事报成过去
     const march = new Date(2026, 2, 1, 9, 0);

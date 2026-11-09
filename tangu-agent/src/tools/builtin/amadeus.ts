@@ -174,7 +174,8 @@ const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Frida
 const ANYWHERE_PAST_MS = 12 * 3_600_000;
 /**
  * 刚写进去的开始时间已经过去时,给模型的一句提示;没过去 / 没日期 = 空串。只提示不拒绝:补记已发生的事是正当用法。
- * `value` 是写进日期格的值(encodeCalDate 之后的:allDay 去掉了时刻)。还没结束的(有结束时间且没过)不算过去。
+ * `value` 是写进日期格的值(encodeCalDate 之后的:allDay 去掉了时刻)。只看开始时间:结束时间还没到也照报
+ * (晚上十点多写「20:00–23:00」正是要提醒的那种;真是进行中的事,提示里说了留着就行)。
  *
  * 「现在」用哪个钟:
  *  - host:引擎和用户在同一台机器上,用进程的本地时钟(和系统提示的 Current Date、get_datetime 同一个口径)。
@@ -192,7 +193,7 @@ export function pastStartNote(value: CellValue | undefined, host: boolean, now: 
     ? `${now.getFullYear()}-${p2(now.getMonth() + 1)}-${p2(now.getDate())}T${p2(now.getHours())}:${p2(now.getMinutes())}`
     : new Date(now.getTime() - ANYWHERE_PAST_MS).toISOString().slice(0, 16);
   const isPast = (t: string): boolean => (t.includes('T') ? t < ref : t < ref.slice(0, 10));
-  if (!isPast(d.start) || (d.end && !isPast(d.end))) return '';
+  if (!isPast(d.start)) return '';
   const timed = d.start.includes('T');
   const clock = host
     ? `it is now ${timed ? ref : ref.slice(0, 10)} (${WEEKDAYS[now.getDay()]}, this machine's local time)`

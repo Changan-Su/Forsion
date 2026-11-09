@@ -30,8 +30,8 @@
  *              a record), asking first is fine; red = the past time is written and the reply says nothing about it having passed, or nothing
  *              is written and nothing is said. Skipped before 03:00 on the engine's clock.
  *  Negative control for legs 4–5: the same legs on the engine without the default-calendar mark / past-start note (`--kind base`). With
- *  GPT 6 Luna on 2026-11-09 the base passed leg 4 in 11 of 12 rounds (it mostly writes today's date without a time, into the default
- *  calendar) and leg 5 in 2 of 6: leg 5 is the one that tells the two apart, leg 4 guards against the old behaviour coming back. */
+ *  GPT 6 Luna on 2026-11-09 the base passed leg 4 in 11 of 12 rounds (3 of the 12 with `--later-msg "帮我加个日程：今天晚一点…"`; it
+ *  mostly writes today's date without a time, into the default calendar) and leg 5 in 2 of 6: leg 5 is the one that tells the two apart, leg 4 guards against the old behaviour coming back. */
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 
