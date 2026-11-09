@@ -1133,6 +1133,10 @@ async function run(app, win, stub, seen, home, ctx) {
     && del.slug === 'coder' && del.deleteChats && del.rowGone && del.undo === 1 && del.restores.join() === 'trash-coder-1' && del.rowBack, JSON.stringify({ agentDialog, del }))
 
   // 11f 移除工作区:勾「同时删除相关文件」→ 三个会话删掉、项目里的 .tangu 进废纸篓、项目文件夹本身还在
+  // 右栏的「文件」标签(不在前台,但 #583 起 renderer="always" 常驻 DOM)也按工作区列项目根;它的列表得跟着会话走,
+  // 不能停在挂载那一刻(11-09 main 上 Windows 探针连红两次的根因:FilesBody 只订阅了 workspaces 函数引用)
+  const filesTabRow = () => win.locator('.wb-view--right .t2s-folder-row').filter({ hasText: 'Demo Project' })
+  const filesTabBefore = await filesTabRow().count()
   await groupHead('Demo Project').click({ button: 'right' })
   await menuItem('ws-remove').click()
   await dialog.waitFor()
@@ -1142,13 +1146,14 @@ async function run(app, win, stub, seen, home, ctx) {
   await dialog.locator('.dialog-btn[data-danger]').click()
   for (let i = 0; i < 30 && fs.existsSync(path.join(projectDir, '.tangu')); i++) await sleep(150)
   await groupHead('Demo Project').waitFor({ state: 'detached', timeout: 5_000 }).catch(() => {})
-  const gone = { deletes: [...seen.sessionDeletes].sort(), tangu: fs.existsSync(path.join(projectDir, '.tangu')), dir: fs.existsSync(projectDir), trashed: fs.readdirSync(trashDir).filter((n) => n.endsWith('.tangu')).length, head: await groupHead('Demo Project').count() }
+  const gone = { deletes: [...seen.sessionDeletes].sort(), tangu: fs.existsSync(path.join(projectDir, '.tangu')), dir: fs.existsSync(projectDir), trashed: fs.readdirSync(trashDir).filter((n) => n.endsWith('.tangu')).length, head: await groupHead('Demo Project').count(), filesTabBefore, filesTab: await filesTabRow().count() }
   // 重载:会话是真从引擎删掉了,不是只在本地列表里藏起来
   await win.reload({ waitUntil: 'domcontentloaded' })
   await win.waitForSelector('.t2sw, .t2s-side', { timeout: 30_000 })
   await groupHead('Tangu 默认项目').waitFor({ timeout: 15_000 }).catch(() => {})
   gone.afterReload = await groupHead('Demo Project').count()
   check('11f 移除工作区 + 勾选删文件:三个会话 DELETE、.tangu 进废纸篓、项目文件夹还在、侧栏组消失且重载后不回来', gone.deletes.join() === 'pd-coder,pd-main,pd-team' && !gone.tangu && gone.dir && gone.trashed === 1 && gone.head === 0 && gone.afterReload === 0, JSON.stringify(gone))
+  check('11g 右栏「文件」标签(后台常驻)移除前列着 Demo Project、移除后当场去掉,不等重挂', gone.filesTabBefore >= 1 && gone.filesTab === 0, JSON.stringify({ filesTabBefore: gone.filesTabBefore, filesTab: gone.filesTab }))
   return shots
 }
 

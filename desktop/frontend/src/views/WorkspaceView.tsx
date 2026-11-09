@@ -20,7 +20,7 @@ import type { HostListAction as ListAction, HostListSource } from '@amadeus/plug
 import { LIST_ROW_MIME, ancestorsOf, buildListTree, dropCandidates, fitsPhoneList, flattenLeaves, groupFold, hiddenByFilter, isFolder, isGroupHead, leafCount, type GroupFold, type ListDropPosition, type ListNode } from '@amadeus/plugins/listTree'
 import { folderPadLeft, nameLeft } from '@amadeus/lib/treeIndent'
 import { initialFor } from '../components/agentInitial'
-import { useApp } from '../stores/appStore'
+import { useApp, useWorkspaceList } from '../stores/appStore'
 import { registerMessages, useI18n } from '../i18n'
 import { useShallow } from 'zustand/react/shallow'
 import { readTanguChatOutline, readTanguShell, readTanguSidebarModes } from '../amadeus/plugins/tanguSeam'
@@ -93,18 +93,16 @@ function useCurrentFilePath(): string | null {
  *  sideFilter(左栏胶囊):cloud=只看云端工作区,local=只看本地(不混);undefined=不过滤(右栏)。 */
 function FilesBody({ vaultCtx, sideFilter }: { vaultCtx: { root: string; noteDir: string | null } | null; sideFilter?: 'local' | 'cloud' }) {
   const s = useApp(useShallow((state) => ({
-    workspaces: state.workspaces,
     setFilePreview: state.setFilePreview,
     activeWorkspaceKey: state.activeWorkspaceKey,
     setActiveWorkspaceKey: state.setActiveWorkspaceKey,
   })))
   const vaultKey = vaultCtx ? `vault:${vaultCtx.root}` : null
-  // s.workspaces() 会读活动 Vault 快照;这里显式订阅,否则非编辑器场景切 Vault 时 useMemo 不会失效。
-  const amadeusRoot = usePageStore((state) => state.vaultRoot)
+  // 订阅式列表(会话 / 项目 / Vault 变了都重算):这个标签在右栏常驻,只在挂载时算一次就会一直列着已移除的项目
+  const base = useWorkspaceList(usePageStore((state) => state.vaultRoot))
   const [localKey, setLocalKey] = useState<string | null>(vaultKey)
   useEffect(() => { setLocalKey(vaultKey) }, [vaultKey])
   const workspaces = useMemo<WorkspaceDescriptor[]>(() => {
-    const base = s.workspaces()
     const merged = (() => {
       if (!vaultCtx) return base
       const vaultWs: WorkspaceDescriptor = {
@@ -117,7 +115,7 @@ function FilesBody({ vaultCtx, sideFilter }: { vaultCtx: { root: string; noteDir
     })()
     if (!sideFilter) return merged
     return merged.filter((w) => (sideFilter === 'cloud' ? w.kind === 'cloud' : w.kind !== 'cloud' && w.kind !== 'rootless'))
-  }, [s, vaultCtx, vaultKey, sideFilter, amadeusRoot])
+  }, [base, vaultCtx, vaultKey, sideFilter])
   // Coding Space:主区 focus 为工作台时,点文件不另开 wsfile tab,而是喂给主区 Code 面板(codeStudioStore)。
   const mainType = useActiveMainType()
   // 悬停预览里点的 / 从列表拖出来的(见引擎 openBeside.ts)不喂工作台:那是就地换掉它正开着的文件,走文件视图开成新标签。
