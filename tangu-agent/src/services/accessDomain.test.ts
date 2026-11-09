@@ -208,3 +208,49 @@ describe('委派、画像、项目记忆', () => {
     expect(sec).toMatch(/do not have that information here/);
   });
 });
+
+describe('Codex 评审 11-09:放行用的根自己是软链、技能软链指出去', () => {
+  it('本体的 Library / skills 自己是指向 human/ 的软链:勾的文件、技能根都不放行;分身自己的文件夹是软链也不认', async () => {
+    const { buildStandInDomain, grantedLibraryFiles, standInReadDenied } = await import('./accessDomain.js');
+    const { symlinkSync } = await import('node:fs');
+    mkdirSync(T('agents/zed'), { recursive: true });
+    writeFileSync(T('human/SOUL.md'), '- 你叫林夏。\n');
+    symlinkSync(T('human'), T('agents/zed/Library'));
+    symlinkSync(T('human'), T('agents/zed/skills'));
+    const body = { slug: 'zed', standInLibrary: ['SOUL.md', 'MEMORY.md'] };
+    expect(grantedLibraryFiles(body as any)).toEqual([]);
+    const d = buildStandInDomain({ slug: 'zed-standin-wechat', standInOf: 'zed' }, body as any, { cwd: work });
+    // 就算权限域里拿着(旧的 / 绕过 grantedLibraryFiles),读根也不认
+    const stale = { ...d, library: [T('agents/zed/Library/SOUL.md')] };
+    for (const p of ['agents/zed/Library/SOUL.md', 'human/SOUL.md', 'agents/zed/skills/MEMORY.md', 'human/MEMORY.md']) expect(standInReadDenied(stale, T(p)), p).toMatch(/Access denied/);
+    // 分身自己的文件夹被换成指向 human/ 的软链:不当「自己的文件夹」放行
+    symlinkSync(T('human'), T('agents/zed-standin-wechat'));
+    expect(standInReadDenied(d, T('agents/zed-standin-wechat/SOUL.md'))).toMatch(/Access denied/);
+    // 正对照:正常的本体 Library 照旧放行勾的文件
+    expect(standInReadDenied(dom, T('agents/aria/Library/notes/shared.md'))).toBeNull();
+  });
+
+  it('技能:SKILL.md 软链指出技能根(指向 human/)的,分身的 run 里不装;不是分身照旧装', async () => {
+    const { configureTangu } = await import('../seams/runtime.js');
+    const { createTanguProfile } = await import('../profiles/index.js');
+    const stub: any = new Proxy({}, { get: () => () => { throw new Error('stub'); } });
+    configureTangu({ host: stub, brain: stub, billing: stub, profile: createTanguProfile({ sandboxMode: 'none' }) });
+    const { symlinkSync } = await import('node:fs');
+    const { runWithAgentSlug, setRunStandIn } = await import('../seams/runContext.js');
+    const { listLocalSkills } = await import('../skills/localSkills.js');
+    mkdirSync(T('skills/leaky'), { recursive: true });
+    mkdirSync(T('skills/fine'), { recursive: true });
+    writeFileSync(T('human/LEAK.md'), '---\nname: leaky\ndescription: plate 沪A7Q2K9\n---\n\nplate 沪A7Q2K9\n');
+    symlinkSync(T('human/LEAK.md'), T('skills/leaky/SKILL.md'));
+    writeFileSync(T('skills/fine/SKILL.md'), '---\nname: fine\ndescription: a normal skill\n---\n\nbody\n');
+    const ids = async (standIn: boolean) => runWithAgentSlug('aria-standin-wechat', async () => {
+      if (standIn) setRunStandIn(dom);
+      return (await listLocalSkills()).map((s) => s.id);
+    });
+    const plain = await ids(false);
+    expect(plain).toEqual(expect.arrayContaining(['local:leaky', 'local:fine']));
+    const asStandIn = await ids(true);
+    expect(asStandIn).toContain('local:fine');
+    expect(asStandIn).not.toContain('local:leaky');
+  });
+});

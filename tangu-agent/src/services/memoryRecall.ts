@@ -1,7 +1,6 @@
 /** Bounded lexical recall. No embedding calls, background index, or retained copies of forgotten facts. */
 import { deps } from '../seams/runtime.js';
 import { currentAgentSlug, currentDisplayAgentSlug, currentRunUserId, currentStandIn } from '../seams/runContext.js';
-import { isStandInSlugShape } from '../contracts/agentSyncRules.js';
 import { DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
 import { searchSessions, sessionToolScope, type SessionHit } from './sessionSearch.js';
 import { isMemoryTombstoneActive, normalizeMemoryFact } from './memoryRepository.js';
@@ -203,8 +202,10 @@ export async function buildAgentMemoryContext(input: AgentMemoryContextInput): P
   // 用量(R6):和这句话对得上的前几条(常驻里的也算,它们每轮都在、靠这个才知道常不常用)记一笔;只在本机、不等
   if (usageDir && terms.length) noteMemoryUse(usageDir, AGENT_USAGE_FILE, ranked([...resident, ...byDeviceDetails]).slice(0, 6).map(({ entry }) => String(entry.content || '')));
   // 画像的详情第一次接进召回(R5):详情各主题 + 常驻线外,按这句话挑几条;归档不进;和上面给过的、画像线内的同一条不重复
-  // 分身(11-09)按身份不给画像:调用方传了 portrait 也不认 —— 这次 run 是分身(run 上下文),或召回的就是分身的记忆(形状即身份)
-  const portraitAllowed = !!input.portrait && !currentStandIn() && !isStandInSlugShape(input.agentSlug);
+  // 分身(11-09)按身份不给画像:调用方传了 portrait 也不认 —— 这次 run 是分身(run 上下文),或召回的就是分身的记忆
+  // (按持久身份 stand_in_of 判,读不到定义才看形状;存量同形的普通 Agent 不误判,Codex 评审 11-09)。注册表按需引,云端不走这条(portrait 只在本机给)
+  const portraitAllowed = !!input.portrait && !currentStandIn()
+    && !(await import('../agents/standIn.js').then((m) => m.isStandInSlug(input.agentSlug)).catch(() => true));
   if (portraitAllowed && terms.length && used < cap) {
     try {
       const raw = readHumanFile('SOUL.md');

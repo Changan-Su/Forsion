@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { configureTangu } from '../seams/runtime.js';
@@ -273,6 +273,13 @@ describe('memory layers in recall', () => {
     // 正对照:本体同样的调用照旧带画像详情
     const body = await runWithAgentSlug('alpha', () => buildAgentMemoryContext(ask('alpha')));
     expect(body.volatile).toContain('- 你在维护 AlphaProject 插件。');
+    // 存量的同形普通 Agent(没有 stand_in_of;新建已经不许用这个形状):按持久身份认,照旧带画像(Codex 评审 11-09)
+    const { saveAgent, invalidateAgentCache } = await import('../agents/agentRegistry.js');
+    await saveAgent({ slug: 'legacyx', name: 'Legacy', systemPrompt: 'x' } as any);
+    renameSync(join(temporaryHome, 'agents', 'legacyx'), join(temporaryHome, 'agents', 'my-standin-helper'));
+    invalidateAgentCache();
+    const legacy = await runWithAgentSlug('my-standin-helper', () => buildAgentMemoryContext(ask('my-standin-helper')));
+    expect(legacy.volatile).toContain('- 你在维护 AlphaProject 插件。');
   });
   it('a first resident entry longer than the whole budget is still given (cut), not dropped with everything after it', async () => {
     configure();

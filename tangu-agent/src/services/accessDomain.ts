@@ -38,6 +38,7 @@ const memoryDetailsOf = (slug: string): string => path.join(agentsDir(), slug, .
 export function grantedLibraryFiles(body: Pick<NormalAgentDef, 'slug' | 'standInLibrary'>): string[] {
   const root = libraryOf(body.slug);
   const details = memoryDetailsOf(body.slug);
+  if (!plainRoot(root)) return []; // Library 自己是软链(指向 human/ 之类):一份都不认
   return (body.standInLibrary ?? []).filter((rel) => !isLibraryMemoryRel(rel)).map((rel) => path.resolve(root, rel))
     .filter((abs) => pathWithin(abs, root) && abs !== root && inside(abs, root) && !within(abs, details));
 }
@@ -112,6 +113,15 @@ const forms = (abs: string): string[] => [...new Set([path.resolve(abs), real(ab
 const within = (abs: string, root: string): boolean => { const r = [path.resolve(root), real(root)]; return forms(abs).some((f) => r.some((x) => pathWithin(f, x))); };
 /** 放行用:只认真实目标落在真实根里(Codex 评审 #2:自己文件夹里一条指向本体的软链,字面在里面、真实在外面,不能凭字面放行)。 */
 const inside = (abs: string, root: string): boolean => pathWithin(real(abs), real(root));
+/** 放行用的根自己不能是软链(Library → human/、skills → 本体的 LOG 之类):否则「真身在根里」会把根指向的地方整个放行
+ *  (Codex 评审 11-09)。上面几层是软链不要紧(家目录挪过盘之类),只看最后这一段。 */
+const plainRoot = (root: string): boolean => {
+  const want = path.join(real(path.dirname(root)), path.basename(root));
+  const got = real(root);
+  return pathWithin(got, want) && pathWithin(want, got);
+};
+/** 真身在一个不是软链的根里。 */
+const insidePlain = (abs: string, root: string): boolean => plainRoot(root) && inside(abs, root);
 
 /** 笔记库根(同 tools/builtin/amadeus.ts amadeusVaultPath 的解析顺序;这里不引那个模块,免得文件策略挂上整张工具图)。 */
 function vaultRoot(): string {
@@ -129,19 +139,19 @@ const packageAgentSkills = (slug: string): string => path.resolve(path.dirname(f
 
 /** 技能是人设的一部分(跟着本体):全局技能、包内置技能、本体自己的技能目录可读(只读,写还要过 standInWriteDenied)。 */
 function skillRoot(abs: string, dom: StandInDomain): boolean {
-  return [skillsDir(), packageSkills(), packageAgentSkills(dom.bodySlug), path.join(agentsDir(), dom.bodySlug, 'skills')].some((r) => inside(abs, r));
+  return [skillsDir(), packageSkills(), packageAgentSkills(dom.bodySlug), path.join(agentsDir(), dom.bodySlug, 'skills')].some((r) => insidePlain(abs, r));
 }
 
 /** 分身读这个路径:null = 可以;否则是给模型的拒绝原因(英文)。 */
 export function standInReadDenied(dom: StandInDomain | undefined, abs: string): string | null {
   if (!dom) return null;
   const own = path.join(agentsDir(), dom.slug);
-  if (inside(abs, own)) return null;
+  if (insidePlain(abs, own)) return null;
   const denied = `Access denied: ${abs} is outside what this stand-in can read. You are answering in a conversation other people can read, so you only have your own folder (${own}), the working directory and the files the user shared with you.`;
   // 本体的记忆详情(Library/memory/**,含归档;11-09 分层):和本体的 MEMORY.md 一样,勾过也不给(字面或真实路径落进去都算)
   if (dom.bodySlug && within(abs, memoryDetailsOf(dom.bodySlug))) return denied;
   // 勾给它的文件:真身还得在本体的 Library 里(软链指向 human/、别的 Agent 的不认,落到下面的总闸)
-  if (dom.library.some((f) => real(f) === real(abs)) && dom.bodySlug && inside(abs, libraryOf(dom.bodySlug))) return null;
+  if (dom.library.some((f) => real(f) === real(abs)) && dom.bodySlug && insidePlain(abs, libraryOf(dom.bodySlug))) return null;
   if (skillRoot(abs, dom)) return null;
   // 本体 / 别的 Agent、human/、引擎 home、Forsion 家目录、笔记库:哪怕在工作目录里面也不给
   if (within(abs, agentsDir()) || within(abs, humanDir()) || within(abs, tanguHome()) || withinForsionDomains(abs) || within(abs, vaultRoot())) return denied;
@@ -153,7 +163,7 @@ export function standInReadDenied(dom: StandInDomain | undefined, abs: string): 
 export function standInWriteDenied(dom: StandInDomain | undefined, abs: string): string | null {
   if (!dom) return null;
   const own = path.join(agentsDir(), dom.slug);
-  if (inside(abs, own)) return null;
+  if (insidePlain(abs, own)) return null;
   const denied = `Access denied: a stand-in can only write inside its own folder (${own}) and the working directory; ${abs} is outside them.`;
   if (within(abs, agentsDir()) || within(abs, humanDir()) || within(abs, tanguHome()) || withinForsionDomains(abs) || within(abs, vaultRoot())) return denied;
   if (dom.roots.some((r) => inside(abs, r))) return null;
@@ -167,7 +177,7 @@ export function standInSearchDenied(dom: StandInDomain | undefined, baseDir: str
   const direct = standInReadDenied(dom, baseDir);
   if (direct) return direct;
   const own = path.join(agentsDir(), dom.slug);
-  if (inside(baseDir, own)) return null; // 自己的文件夹(含底下)随便搜;方向别写反:起点是自己文件夹的祖先时不算(Codex 评审 #5)
+  if (insidePlain(baseDir, own)) return null; // 自己的文件夹(含底下)随便搜;方向别写反:起点是自己文件夹的祖先时不算(Codex 评审 #5)
   const guarded = [agentsDir(), humanDir(), tanguHome(), vaultRoot()];
   if (guarded.some((g) => within(g, baseDir))) return `Access denied: searching ${baseDir} would reach folders this stand-in cannot read (other agents, the user's own files or notes). Search a narrower folder inside the working directory.`;
   return null;
