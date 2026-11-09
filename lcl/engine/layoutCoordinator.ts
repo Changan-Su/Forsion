@@ -25,6 +25,7 @@ const mix = (a: number, b: number, t: number): number => a + (b - a) * t
 export class LayoutCoordinator {
   private ratios: LayoutRatios = {}
   private ratioBranches = new Map<string, { axis: string; children: string[] }>()
+  private activeRatioKeys = new Set<string>()
   private intent = new Map<DockSide, boolean>()
   private rendered = new Map<string, LayoutRect>()
   private frame = 0
@@ -52,7 +53,7 @@ export class LayoutCoordinator {
     this.observer.observe(viewport)
     this.subscriptions.push(api.onWillMutateLayout(e => {
       if (this.applying) return
-      if (e.kind === 'clear' || e.kind === 'load') { this.cancel(); this.skipMotion = true; this.ratios = {}; this.ratioBranches.clear(); this.intent.clear(); this.rendered.clear() }
+      if (e.kind === 'clear' || e.kind === 'load') { this.cancel(); this.skipMotion = true; this.ratios = {}; this.ratioBranches.clear(); this.activeRatioKeys.clear(); this.intent.clear(); this.rendered.clear() }
     }), api.onDidMutateLayout(() => this.request()), api.onDidActivePanelChange(() => { this.updateOverlays(); this.request() }),
       api.onDidLayoutChange(() => this.updateOverlays()))
     const watch = (panel: DockviewApi['panels'][number]) => {
@@ -137,6 +138,7 @@ export class LayoutCoordinator {
   private readTree(capture = false): LayoutNode | null {
     const grid = this.api.toJSON().grid
     if (!grid?.root) return null
+    const nextKeys = new Set<string>()
     const walk = (n: typeof grid.root, axis: 'width' | 'height'): LayoutNode | null => {
       if (Array.isArray(n.data)) {
         const children = n.data.map(c => walk(c, axis === 'width' ? 'height' : 'width')).filter((c): c is LayoutNode => !!c)
@@ -144,13 +146,15 @@ export class LayoutCoordinator {
         const key = `${axis}(${children.map(nodeKey).join(',')})`
         const size = { width: axis === 'width' ? children.reduce((s, c) => s + c.size.width, 0) : Math.max(...children.map(c => c.size.width)),
           height: axis === 'height' ? children.reduce((s, c) => s + c.size.height, 0) : Math.max(...children.map(c => c.size.height)) }
-        if (capture || !this.ratios[key] || this.ratios[key].length !== children.length) {
+        nextKeys.add(key)
+        if (capture || !this.ratios[key] || this.ratios[key].length !== children.length || (this.rendered.size && !this.skipMotion && !this.activeRatioKeys.has(key))) {
           const childKeys = children.map(nodeKey), weights = children.map(c => Math.max(1, c.size[axis]))
+          const flexibleKeys = children.filter(c => { const loc = nodeLocation(c); return !(axis === 'width' ? loc === 'left' || loc === 'right' : loc === 'bottom') }).map(nodeKey)
           // A sidebar insertion/removal can change a branch key while its Main children survive.
           // Transfer their remembered proportions, never seed them from a clamped viewport.
-          const candidates = capture ? [] : [...this.ratioBranches].filter(([old, b]) => b.axis === axis && this.ratios[old])
-            .map(([old, b]) => ({ old, children: b.children, shared: childKeys.filter(k => b.children.includes(k)) }))
-            .filter(b => b.shared.length >= 2).sort((a, b) => b.shared.length - a.shared.length)
+          const candidates = capture ? [] : [...this.ratioBranches].filter(([old, b]) => b.axis === axis && this.ratios[old] && this.activeRatioKeys.has(old))
+            .map(([old, b]) => ({ old, children: b.children, shared: flexibleKeys.filter(k => b.children.includes(k)) }))
+            .filter(b => b.shared.length >= 2 && b.shared.length === flexibleKeys.length).sort((a, b) => b.shared.length - a.shared.length)
           const prior = candidates[0]
           if (prior) {
             const priorTotal = prior.shared.reduce((sum, k) => sum + this.ratios[prior.old][prior.children.indexOf(k)], 0)
@@ -174,7 +178,9 @@ export class LayoutCoordinator {
       return { id: g.id, loc, visible: loc === 'main' ? g.api.isVisible : this.visible(loc as DockSide), size,
         min: { width: Math.max(...hints.map(v => v.minWidth)), height: Math.max(...hints.map(v => v.minHeight)) } }
     }
-    return walk(grid.root, grid.orientation === 'HORIZONTAL' ? 'width' : 'height')
+    const tree = walk(grid.root, grid.orientation === 'HORIZONTAL' ? 'width' : 'height')
+    this.activeRatioKeys = nextKeys
+    return tree
   }
   refresh(animate = true): void {
     if (!this.ready || this.disposed || this.dragging || this.applying) return

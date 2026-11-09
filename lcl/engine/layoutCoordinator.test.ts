@@ -169,4 +169,23 @@ describe('LCL real Dockview coordination', () => {
     expect(a.group.api.width / b.group.api.width).toBeCloseTo(preferred, 2)
   })
 
+  it('does not transfer a fixed sidebar-to-main ratio into a newly created main split', () => {
+    const { a, b } = host()
+    b.api.close(); c.refresh(false)
+    const next = api.addPanel({ id: 'new-split', component: 'probe', params: { __loc: 'main', __type: 'probe' }, position: { referencePanel: a.id, direction: 'right' } })
+    const initialProportion = a.group.api.width / next.group.api.width
+    c.refresh(false)
+    expect(a.group.api.width / next.group.api.width).toBeCloseTo(initialProportion, 2)
+  })
+
+  it('carries the latest user proportion when returning to an older branch structure', () => {
+    const { a, b } = host(), ws = useWorkspace.getState()
+    const right = ws.openView('other', {}, 'right')!; c.refresh(false)
+    const ratios = c.exportRatios(), key = Object.keys(ratios).find(k => k.startsWith('width(') && ratios[k].length === 4)!
+    c.restoreRatios({ ...ratios, [key]: [240, 600, 400, 260] }); c.refresh(false)
+    const latest = a.group.api.width / b.group.api.width
+    api.getPanel(right.id)!.api.close(); c.refresh(false)
+    expect(a.group.api.width / b.group.api.width).toBeCloseTo(latest, 2)
+  })
+
 })
