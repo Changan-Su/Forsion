@@ -22,6 +22,9 @@ const SHOTS = {
   detail: shot('detail'),
   installed: shot('installed'),
   installFail: shot('install-fail'),
+  source: shot('source'),
+  sourceConfirm: shot('source-confirm'),
+  sourceAdd: shot('source-add'),
 }
 
 function findChromium() {
@@ -64,6 +67,10 @@ async function main() {
     const errors = []
     page.on('console', (message) => { if (message.type() === 'error') errors.push(message.text()) })
     page.on('pageerror', (error) => errors.push(error.message))
+    // 技能详情会问引擎「装给谁」(SkillAgentPicker);台架没有引擎,给空名单,免得连接被拒记成页面错误。
+    // 目录里放上本轮从来源装的两项,「装给谁」那步才找得到它们(真引擎装完就在目录里)。
+    const SRC_SKILLS = ['src-0a1b2c3d-poster', 'src-0a1b2c3d-ecommerce'].map((slug) => ({ key: slug, id: slug, slug, scope: 'user', name: slug }))
+    await page.route(/:8787\/agent\/(agents|skills\/catalog)(\?|$)/, (route) => route.fulfill({ json: /agents/.test(route.request().url()) ? { agents: [] } : { skills: SRC_SKILLS } }))
     await page.goto(`${ORIGIN}/market-harness.html`, { waitUntil: 'networkidle' })
     await page.locator('.mk-featured').waitFor({ state: 'visible' })
 
@@ -89,7 +96,7 @@ async function main() {
     })
     check('发现首页有主精选区', initial.hero.width > 700 && initial.hero.height >= 240, `${Math.round(initial.hero.width)}x${Math.round(initial.hero.height)}`)
     check('最近上架与热门内容都有真实卡片', initial.recent === 4 && initial.popular >= 4, `recent=${initial.recent} popular=${initial.popular}`)
-    check('侧栏按发现/分类/管理分成三组', initial.navGroups === 3, String(initial.navGroups))
+    check('侧栏按发现/分类/来源/管理分成四组', initial.navGroups === 4, String(initial.navGroups))
     check('左上角的名字是「商店」', initial.brand === '商店', String(initial.brand))
     check('插件分类已合并且侧栏不再显示 Forsion 插件', initial.navLabels.filter((label) => label === '插件').length === 1 && !initial.navLabels.includes('Forsion 插件'), initial.navLabels.join(' / '))
     // 2026-10-05:Agent / Space 不再各占一格导航,并进「插件」。先证导航钮确实读得到(否则下面两个 includes 恒假 = 假绿)。
@@ -210,7 +217,7 @@ async function main() {
       log: [...window.__storeViewLog],
     }))
     let sv = await storeNav()
-    check('插件页的分组排在「分类」与「管理」之间', sv.groups.join('/') === '发现/分类/会员与积分/管理', sv.groups.join('/'))
+    check('来源与插件页的分组排在「分类」与「管理」之间', sv.groups.join('/') === '发现/分类/来源/会员与积分/管理', sv.groups.join('/'))
     check('首方内置包的页进左栏,第三方与已停用插件的不进', sv.labels.includes('会员') && sv.labels.includes('积分') && !sv.labels.includes('第三方页') && !sv.labels.includes('停用插件的页'), sv.labels.join(' / '))
     check('插件页入口都有图标(认不出的名字回落缺省图标)', sv.icons === 2 && !sv.labels.some((l) => l.includes('no-such-icon')), String(sv.icons))
     await page.locator('[data-store-view="first-party:membership"]').click()
@@ -224,6 +231,69 @@ async function main() {
     sv = await storeNav()
     check('插件被停用:页面卸载,分组消失,退回原来的页', sv.page === null && !sv.groups.includes('会员与积分') && sv.active.join() === '商店首页' && sv.log.at(-1) === 'dispose:credits', JSON.stringify({ groups: sv.groups, active: sv.active, log: sv.log }))
     await page.evaluate(() => { const S = window.__marketHarness.pluginStore; S.setState({ storeViews: [], plugins: S.getState().plugins.filter((p) => !/^(first|third)-party/.test(p.id)) }) })
+
+    // 商店来源(2026-11-08 方案 A,docs/ToBeImproved/商店来源接口方案_2026-11-08):插件声明 / 用户添加的第三方目录进左栏「来源」,
+    // 宿主画卡片与下装;未信任来源的第一次安装、会运行代码的条目,都先在详情侧栏原地确认。剧本见 marketHarnessBridge 的 sourceRows。
+    const srcNav = await page.evaluate(() => [...document.querySelectorAll('[data-store-sources] [data-store-source]')].map((el) => el.textContent?.trim()))
+    check('来源分组列出插件声明与用户添加的来源', srcNav.join(' / ') === '图片 Skills 大全 / Acme 设计规范', srcNav.join(' / '))
+    await page.locator('[data-store-source="0a1b2c3d"]').click()
+    await page.locator('[data-store-source-page] .mk-grid').waitFor()
+    const srcPage = await page.evaluate(() => ({
+      title: document.querySelector('.settings-main-title')?.textContent?.trim(),
+      active: [...document.querySelectorAll('.settings-nav-list button.active')].map((el) => el.textContent?.trim()),
+      flag: document.querySelector('[data-store-source-info] .mk-src-flag')?.textContent?.trim(),
+      cards: document.querySelectorAll('[data-store-source-page] .mk-card').length,
+      badges: document.querySelectorAll('[data-store-source-page] [data-market-source-badge]').length,
+      overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    }))
+    check('来源页:标题是来源名、只亮这一项、标「未经审核」、列出目录条目', srcPage.title === '图片 Skills 大全' && srcPage.active.join() === '图片 Skills 大全'
+      && srcPage.flag === '未经 Forsion 审核' && srcPage.cards === 6 && srcPage.badges === 0 && srcPage.overflow <= 0, JSON.stringify(srcPage))
+    await page.mouse.move(1350, 880)
+    await page.screenshot({ path: SHOTS.source, fullPage: true })
+    await page.locator('[data-store-source-page] .mk-card-title', { hasText: '海报排版' }).click()
+    await page.locator('[data-store-source-trust]').waitFor()
+    const srcDetail = await page.evaluate(() => ({
+      tabs: [...document.querySelectorAll('.mk-detail-tabs button')].map((el) => el.textContent?.trim()),
+      facts: [...document.querySelectorAll('.mk-facts dt')].map((el) => el.textContent?.trim()),
+    }))
+    check('来源条目的详情:没有评论页,写明来源与来源地址', srcDetail.tabs.length === 2 && srcDetail.facts.includes('安装来源') && srcDetail.facts.includes('来源地址'), JSON.stringify(srcDetail))
+    await page.locator('.mk-detail-actions .mk-wide-btn').first().click()
+    await page.locator('[data-store-source-confirm-install]').waitFor()
+    const confirmText = await page.locator('[data-store-source-confirm-install]').textContent()
+    check('未信任来源的第一次安装先在侧栏原地确认,点名来源', /图片 Skills 大全/.test(confirmText || '') && /不会自己运行代码/.test(confirmText || ''), (confirmText || '').slice(0, 80))
+    await page.mouse.move(1350, 880)
+    await page.screenshot({ path: SHOTS.sourceConfirm, fullPage: true })
+    await page.locator('[data-store-source-install]').click()
+    const srcInstalled = await page.locator('.mk-detail-sidebar [data-market-uninstall]').waitFor({ timeout: 5000 }).then(() => true, () => false)
+    check('确认后装上,侧栏换成卸载', srcInstalled && await page.locator('[data-store-source-confirm-install]').count() === 0)
+    await page.locator('.mk-detail-back').click()
+    await page.locator('[data-store-source-page] .mk-card-title', { hasText: '电商主图' }).click()
+    await page.locator('[data-store-source-trust]').waitFor()
+    await page.locator('.mk-detail-actions .mk-wide-btn').first().click()
+    const trustedDirect = await page.locator('.mk-detail-sidebar [data-market-uninstall]').waitFor({ timeout: 5000 }).then(() => true, () => false)
+    check('同一来源信任后,文字类条目直接装', trustedDirect && await page.locator('[data-store-source-confirm-install]').count() === 0)
+    await page.locator('.mk-detail-back').click()
+    await page.locator('[data-store-source-page] .mk-card-title', { hasText: '取色板' }).click()
+    await page.locator('[data-store-source-trust]').waitFor()
+    await page.locator('.mk-detail-actions .mk-wide-btn').first().click()
+    const codeConfirm = await page.locator('[data-store-source-confirm-install]').waitFor({ timeout: 3000 }).then(() => page.locator('[data-store-source-confirm-install]').textContent(), () => '')
+    check('会运行代码的条目每次首装都要确认', /代码/.test(codeConfirm || '') && !/第一次/.test(codeConfirm || ''), (codeConfirm || '').slice(0, 80))
+    await page.locator('[data-store-source-confirm-install] .btn:not(.primary)').click()
+    await page.locator('.mk-detail-back').click()
+    // 添加来源:停手后读一次目录再给预览;认不出 / 暂不支持的地址直接说清
+    await page.locator('[data-store-source-add]').click()
+    const addInput = page.locator('.mk-src-pop input')
+    await addInput.fill('git.forsion.net/acme/private')
+    const gitErr = await page.locator('.mk-src-pop .mk-src-probe.is-error').waitFor({ timeout: 3000 }).then(() => page.locator('.mk-src-pop .mk-src-probe.is-error').textContent(), () => '')
+    check('添加来源:Forsion Git 说明暂未开通', /Forsion Git/.test(gitErr || '') && await page.locator('[data-store-source-confirm]').isDisabled(), gitErr || '')
+    await addInput.fill('github.com/pixel-lab/icons')
+    await page.locator('[data-store-source-probe]').waitFor({ timeout: 3000 })
+    await page.screenshot({ path: SHOTS.sourceAdd, fullPage: true })
+    await page.locator('[data-store-source-confirm]').click()
+    const added = await page.waitForFunction(() => [...document.querySelectorAll('[data-store-sources] [data-store-source]')].some((el) => el.textContent?.trim() === 'icons'), null, { timeout: 4000 }).then(() => true, () => false)
+    check('添加后来源进左栏', added && await page.locator('.mk-src-pop').count() === 0)
+    await page.locator('.settings-nav-list button', { hasText: '商店首页' }).click()
+    await page.locator('.mk-featured').waitFor({ state: 'visible' })
 
     const search = page.locator('.mk-search input')
     await search.fill('LaTeX')
@@ -240,7 +310,14 @@ async function main() {
     await page.locator('.mk-detail-back').click()
     await page.locator('.settings-nav-list button', { hasText: '已安装' }).click()
     await page.locator('.mk-grid').waitFor()
-    check('已安装区只列出本机已有的商店内容', await page.locator('.mk-grid .mk-card').count() === 2)
+    // 商店 2 项 + 来源装的 2 项(海报排版 / 电商主图)+ 来源已移除的 1 项
+    const inst = await page.evaluate(() => ({
+      count: document.querySelectorAll('.mk-grid .mk-card').length,
+      badges: [...document.querySelectorAll('.mk-grid [data-market-source-badge]')].map((el) => el.textContent?.trim()),
+      gone: [...document.querySelectorAll('.mk-grid .mk-src-badge.is-gone')].map((el) => el.textContent?.trim()),
+    }))
+    check('已安装区只列出本机已有的商店内容(含来源装的)', inst.count === 5, JSON.stringify(inst))
+    check('已安装区里来源装的条目标出来源,来源移除的写明', inst.badges.filter((x) => x === '图片 Skills 大全').length === 2 && inst.gone.join() === '来源已移除', JSON.stringify(inst))
 
     // 卸载(2026-08-25):此前商店只有「重新安装」,装错/不想要的东西没有出口。
     // ⚠️ 卸载走 window.confirm,Playwright 不接管 dialog 会一直挂着 —— 这条断言最初就是这么卡住的。

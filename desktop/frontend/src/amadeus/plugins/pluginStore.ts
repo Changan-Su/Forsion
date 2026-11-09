@@ -883,6 +883,7 @@ function pluginMeta(src: ExternalPluginSource): Omit<AmadeusPlugin, 'setup'> {
     changelog: src.changelog,
     onboarding: src.onboarding,
     guide: src.guide,
+    storeSources: src.storeSources,
     widgets: src.widgets,
     blocked: src.blocked,
     blockedReason: src.blockedReason,
@@ -1437,6 +1438,10 @@ function replayPendingDisables(): void {
     void disablePluginRules(pluginId, true).catch((e) => console.warn(`[amadeus] plugin "${pluginId}" 停用规则重放失败`, e))
   }
 }
+
+let externalInventoryLoaded = false
+/** 外置插件至少完整读到过一次(读失败时 store 里只有内置插件,不能当成「插件都没了」往外报)。 */
+export const externalPluginsLoaded = (): boolean => externalInventoryLoaded
 
 export const usePluginStore = create<PluginState>((set, get) => {
   const makeContext = (pluginId: string): PluginContext => {
@@ -3252,6 +3257,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
         return // 读不到来源 ≠ 来源都没了:保持现状
       }
       applySources(sources)
+      externalInventoryLoaded = true
       if (windowKind() === 'main') reportBlocked(get())
       // 上次运行没关成的规则(走到这里在跑的都已被 start 销账)
       if (windowKind() === 'main' && automationHost()) {

@@ -98,6 +98,49 @@ ctx.ui.mountWebCard(el, { name, status, address, note, thumbnail, actions, menu 
 
 用户那边(桌面 2.13.8 起):商店插件**缺省自动更新**,新版本在后台下好、下次启动时换上;用户可以在「可更新」页关掉全局开关,或在插件详情页单独关掉。换版前桌面会把旧版本留在本机(每个插件最近 2 份,放在 `~/.forsion/.plugin-versions/`),用户能一键回退;回退或从「版本」页装旧版后,这个插件会固定在那一版,不再自动更新,直到用户点「恢复自动更新」。**回退只换插件文件,你的数据(工作文件夹、`plugin-data`、设置)不跟着回退**:新版要改数据格式时,让旧版读到新格式也不至于出错(忽略不认识的字段、别把旧数据原地改写成旧版读不了的样子),或者把新格式写到新文件里。核心插件(Extend、日历、Computer Use)跟桌面版本走,不在此列。
 
+## 商店来源（2026-11-08 起）
+
+插件可以在商店左栏的「来源」分组里加一个条目，指向你自己维护的一份目录 `forsion-store.json`。**来源只交目录**：卡片、详情、下载、校验、安装、更新和卸载都由商店照常处理，你不画界面，也拿不到商店的页面挂载口（`registerStoreView` 仍只给 Extend）。用户也可以点「来源」旁的 + 直接贴地址，不需要插件。
+
+在 manifest 里声明（一个插件最多 4 个）：
+
+```json
+"storeSources": [
+  { "id": "main", "title": { "zh": "图片 Skills 大全", "en": "Image skills" }, "index": "github:pixel-lab/image-skills", "icon": "image" }
+]
+```
+
+- `id`：插件内唯一，`^[a-z0-9][a-z0-9-]{0,31}$`。`title` 写字符串或 `{ zh, en }`；`icon` 可省，从 `image` / `sparkles` / `palette` / `wrench` / `bot` / `package` / `globe` / `crown` / `coins` 里挑，认不出的按地址类型给缺省图标。
+- `index`：目录在哪。`github:owner/repo`（读默认分支根目录的 `forsion-store.json`；`https://github.com/owner/repo/tree/<ref>/<目录>` 指定分支和子目录）、`npm:<包名>`（读 `latest` 版本包根的 `forsion-store.json`，按 registry 的 sha512 校验）、或一个 `https://` 地址直接指向 JSON。`forsion-git:` 私有仓下一期开放，现在会提示「还没开通」。
+- 插件启用时来源出现，停用或卸载时消失；用户可以在来源页右上角「⋯」里停用你的来源。来源没了，从它装的东西留着，只是不再自动更新。
+
+`forsion-store.json`：
+
+```json
+{
+  "schema": 1,
+  "title": { "zh": "图片 Skills 大全", "en": "Image skills" },
+  "author": "Pixel Lab",
+  "description": "海报、电商图、封面……",
+  "items": [
+    {
+      "id": "poster", "type": "skill", "version": "1.2.0",
+      "name": { "zh": "海报排版", "en": "Poster layout" },
+      "summary": "按尺寸与层级规则排一张活动海报。",
+      "tags": ["海报", "排版"], "icon": "icons/poster.png", "readme": "# 海报排版\n…",
+      "minAppVersion": "2.13.8",
+      "package": { "github": "pixel-lab/image-skills", "ref": "v1.2.0", "path": "skills/poster" }
+    }
+  ]
+}
+```
+
+- `type` 与商店投稿同一套：`skill` / `amadeus-plugin` / `plugin` / `agent` / `space` / `theme`。`id` 在目录内唯一，`^[a-z0-9][a-z0-9-]{0,47}$`，**发出去就别改**：装进本机的目录名、更新时认的都是它。
+- `package` 四选一：`{ "github", "ref", "path"? }`（下这个 ref 的仓库归档，`path` 只取其中一个目录）；`{ "npm", "version", "integrity"? }`（版本必须等于条目的 `version`，没写 `integrity` 时按 registry 记录的 sha512 校验）；`{ "url", "sha256" }`（必须带 sha256）；`{ "forsionGit", "ref", "path"? }`（下一期）。
+- 相对路径的 `icon` 按目录所在位置解析（npm 来源没有这个位置，写完整的 `https://` 地址）。最多读 1000 条、单条 README 64 KB，坏条目跳过不影响其他条。包里 manifest 的版本与平台要求照样生效，和商店里的条目一样。
+- 更新：改目录里的 `version` 和 `package`。商店按用户的自动更新设置照常更新；**包的出处变了（换了仓库、npm 包名或下载域名）自动更新会停下**，等用户自己点。
+- 装进本机的身份是 `src-<来源哈希>-<条目 id>`，`requiresPlugins` 的 `market` 字段认不到来源里的条目。用户第一次从某个来源安装、以及每装一个会运行代码的条目（插件、Agent、Space）前，商店会在详情页侧栏让用户确认一次；来源里的东西标着「未经 Forsion 审核」。
+
 ## 平台账号与登录信息（桌面 2.13.8 起）
 
 有些平台的内容要登录才取得到（B 站会员、高清、被风控的视频）。`ctx.app.platformAccounts` 让插件用**用户在内置浏览器里登录的那个账号**去取，插件自己不存登录信息：

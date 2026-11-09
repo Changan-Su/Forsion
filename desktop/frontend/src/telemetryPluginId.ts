@@ -7,6 +7,7 @@
  * 零运行期依赖(除了 shared/products 的正则),pluginStore 等可以直接 import。
  */
 import { MARKET_ITEM_ID } from '../../shared/products'
+import { isSourceCardId } from '../../shared/storeSources'
 import { telemetryOn } from './telemetrySend'
 
 /** `<type>:<目录名>` → 商店条目 id。null = 还没订阅。 */
@@ -40,7 +41,7 @@ export function telemetryPluginRef(p: TelemetryPluginLike | undefined, type: 'am
   if (!p || p.dev) return LOCAL
   const dir = p.dir || p.bundle?.dir || p.id // 安装目录名(老商店条目按 install_slug 落目录,可以和插件 id 不同)
   const mapped = (telemetryOn() || marketIds ? ensureMarketIds() : null)?.get(`${type}:${dir}`)
-  if (mapped) return { pluginId: mapped, pluginOfficial: true }
+  if (mapped && !isSourceCardId(mapped)) return { pluginId: mapped, pluginOfficial: true } // 商店来源(第三方目录)装的记 local
   const marketDir = [dir, p.id].find((x) => MARKET_ITEM_ID.test(x))
   if (marketDir) return { pluginId: marketDir.slice('market-'.length), pluginOfficial: true } // market-<UUID> 的 UUID 就是商店条目 id
   if (p.builtin || p.preinstalled) return { pluginId: p.id, pluginOfficial: true }

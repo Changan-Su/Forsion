@@ -1,0 +1,55 @@
+/* 商店来源(第三方目录):左栏分组、添加来源浮层、来源页信息行、详情页首装确认。
+ * 只用产品 token;新增字号一律走 --ui-font-*(check:uiscale)。方案:docs/ToBeImproved/商店来源接口方案_2026-11-08 */
+
+/* 左栏分组标题:右侧一颗「+」。`.settings-nav-list button` 的整行样式要在这里收回去。 */
+.mk-src-head { display: flex; align-items: center; justify-content: space-between; }
+.settings-nav-list .mk-src-head .mk-src-add {
+  width: 20px; min-height: 0; height: 20px; padding: 0; margin: 0;
+  display: inline-grid; place-items: center; flex: none;
+  border-radius: var(--radius-sm); background: transparent; color: var(--text-faint); cursor: pointer;
+}
+.settings-nav-list .mk-src-head .mk-src-add:hover,
+.settings-nav-list .mk-src-head .mk-src-add.is-open { background: var(--overlay-light); color: var(--text); }
+.settings-nav-list button .mk-src-lock { margin-left: auto; display: inline-flex; color: var(--text-faint); }
+.settings-nav-list button.mk-src-off { opacity: .55; }
+
+/* 添加来源浮层:与右键菜单同一套表面(底色 / 描边 / 圆角 / 投影) */
+.mk-src-pop {
+  position: fixed; z-index: var(--z-menu); width: 340px; max-width: calc(100vw - 16px);
+  padding: 14px; display: flex; flex-direction: column; gap: 10px;
+  background: var(--bg-card); border: var(--border-width) solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--card-shadow);
+  color: var(--text);
+}
+.mk-src-pop h4 { margin: 0; font-size: var(--ui-font-body, 13px); font-weight: 600; }
+.mk-src-pop p { margin: 0; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); line-height: var(--ui-line-meta, 1.5); }
+.mk-src-pop .mk-src-input { height: 32px; }
+.mk-src-probe { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: var(--radius-md); background: var(--overlay-light); font-size: var(--ui-font-meta, 12px); color: var(--text-muted); }
+.mk-src-probe.is-muted { background: transparent; padding-block: 2px; }
+.mk-src-probe.is-error { background: var(--danger-light); color: var(--danger); align-items: flex-start; }
+.mk-src-probe.is-error svg { flex: none; margin-top: 1px; }
+.mk-src-probe > div:last-child { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.mk-src-probe b { color: var(--text); font-size: var(--ui-font-body, 13px); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mk-src-probe-icon { width: 30px; height: 30px; flex: none; display: grid; place-items: center; border-radius: var(--radius-md); color: var(--accent-ink); background: var(--accent-light); }
+.mk-src-acts { display: flex; justify-content: flex-end; gap: 8px; }
+
+/* 来源页信息行(替代分类页的「只看适配」那一段) */
+.mk-src-info { flex: 1; min-width: 0; display: flex; align-items: center; flex-wrap: wrap; gap: 6px 14px; color: var(--text-faint); font-size: var(--ui-font-meta, 12px); }
+.mk-src-flag { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 10px; border-radius: var(--radius-pill, 999px); background: var(--overlay-light); color: var(--text-muted); }
+.mk-src-url { display: inline-flex; align-items: center; gap: 5px; min-width: 0; color: var(--text-muted); text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mk-src-url:hover { color: var(--text); text-decoration: underline; }
+.mk-src-stale { color: var(--warning, var(--text-muted)); }
+.mk-src-more { margin-left: auto; width: 30px; height: 30px; flex: none; display: inline-grid; place-items: center; border: 0; border-radius: var(--radius-pill, 999px); background: var(--overlay-light); color: var(--text-muted); cursor: pointer; }
+.mk-src-more:hover { color: var(--text); background: var(--overlay-medium); }
+.mk-src-note { margin: 0 0 12px; color: var(--text-faint); font-size: var(--ui-font-meta, 12px); }
+
+/* 卡片角标:混排列表(已安装)里说清是哪个来源 */
+.mk-card-eyeline .mk-src-badge { display: inline-flex; align-items: center; height: 18px; max-width: 160px; padding: 0 6px; border-radius: var(--radius-xs, 4px); background: var(--overlay-light); color: var(--text-muted); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mk-card-eyeline .mk-src-badge.is-gone { color: var(--text-faint); }
+
+/* 详情页:信任栏换成「未经审核」的中性色;首装确认原地占住安装按钮的位置 */
+.mk-trust-row.mk-src-trust { color: var(--text-muted); }
+/* 说明比「已审核」长:图标别被正文挤扁;「来源地址」这类标签不折行,让长地址那侧去折 */
+.mk-trust-row.mk-src-trust > svg { flex: none; }
+.mk-detail-sidebar .mk-facts dt { flex: none; }
+.mk-src-confirm { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border-radius: var(--radius-md); background: var(--overlay-light); color: var(--text); font-size: var(--ui-font-meta, 12px); line-height: var(--ui-line-meta, 1.5); }
+.mk-src-confirm .mk-src-acts .btn { flex: 1; justify-content: center; }

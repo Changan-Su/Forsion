@@ -472,8 +472,9 @@ const api = {
     void ipcRenderer.invoke('market:updateStatus').then((state) => { if (!off && !received) cb(state) }).catch(() => {})
     return () => { off = true; ipcRenderer.removeListener('market:updateStatus', listener) }
   },
-  marketInstall: (id: string, version?: string): Promise<{ ok: boolean; path: string; files: number; type: string; slug: string }> =>
-    ipcRenderer.invoke('market:install', id, version),
+  /** `expect.type`: for store-source items, the type the user confirmed; main refuses the install if it changed. */
+  marketInstall: (id: string, version?: string, expect?: { type: string }): Promise<{ ok: boolean; path: string; files: number; type: string; slug: string }> =>
+    ipcRenderer.invoke('market:install', id, version, expect),
   // 安装进度(阶段 + 当前在试第几个下载地址 + 字节):主进程只推给发起窗口,渲染层按 id 过滤。
   onMarketInstallProgress: (cb: (ev: MarketInstallProgress) => void): (() => void) => {
     const listener = (_e: unknown, ev: MarketInstallProgress): void => cb(ev)
@@ -487,6 +488,21 @@ const api = {
   pluginsUserInstalled: (): Promise<Array<{ id: string; slug: string }>> => ipcRenderer.invoke('plugins:userInstalled'),
   pluginsUninstall: (id: string, movedSlug?: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('plugins:uninstall', id, movedSlug),
   marketForget: (type: string, slug: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('market:forget', type, slug),
+  // ── 商店来源(第三方目录;主进程 electron/storeSources.ts)──
+  marketSourcesList: (locale?: string): Promise<import('../shared/storeSources').StoreSourceInfo[]> => ipcRenderer.invoke('marketSources:list', locale),
+  marketSourcesProbe: (input: string, locale?: string): Promise<{ uri: string; kind: string; title: string; count: number; duplicate?: string }> => ipcRenderer.invoke('marketSources:probe', input, locale),
+  marketSourcesAdd: (input: string, locale?: string): Promise<import('../shared/storeSources').StoreSourceInfo> => ipcRenderer.invoke('marketSources:add', input, locale),
+  marketSourcesRemove: (id: string): Promise<void> => ipcRenderer.invoke('marketSources:remove', id),
+  marketSourcesSetDisabled: (id: string, on: boolean): Promise<void> => ipcRenderer.invoke('marketSources:setDisabled', id, on),
+  marketSourcesTrust: (id: string): Promise<void> => ipcRenderer.invoke('marketSources:trust', id),
+  marketSourcesSetDeclared: (list: import('../shared/storeSources').DeclaredStoreSource[]): Promise<void> => ipcRenderer.invoke('marketSources:setDeclared', list),
+  marketSourcesCatalog: (id: string, opts?: { refresh?: boolean; locale?: string }): Promise<import('../shared/storeSources').StoreSourceCatalog> => ipcRenderer.invoke('marketSources:catalog', id, opts),
+  onMarketSourcesChanged: (cb: () => void): (() => void) => {
+    const listener = (): void => cb()
+    ipcRenderer.on('marketSources:changed', listener)
+    return () => ipcRenderer.removeListener('marketSources:changed', listener)
+  },
+  marketSourcesInstalls: (locale?: string): Promise<import('../shared/storeSources').StoreSourceInstall[]> => ipcRenderer.invoke('marketSources:installs', locale),
   // ── 用户自定义 Space(~/.tangu/spaces;数据化布局配方,market type='space' 同目录)──
   spacesList: (): Promise<Array<{ slug: string; json: string; plugin?: string; iconUrl?: string }>> => ipcRenderer.invoke('spaces:list'),
   spacesSave: (slug: string, json: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('spaces:save', slug, json),
@@ -796,7 +812,7 @@ const AGENT_KEYS = [
   'remoteSafety', // 急停 / 远程锁定管的是本机引擎上的远程 / 通道 / 无人值守 run
 ] as const
 if (!PRODUCT.agentBackend) for (const k of AGENT_KEYS) delete (api as Record<string, unknown>)[k]
-if (!PRODUCT.market) for (const k of ['marketList', 'marketRead', 'marketDetail', 'marketInstall', 'onMarketInstallProgress', 'marketInstalled', 'marketUninstall', 'marketForget', 'marketUpdateStatus', 'marketSetAutoUpdate', 'marketSetAutoUpdateAll', 'marketRollback', 'marketCheckUpdates', 'onMarketUpdateStatus'] as const) delete (api as Record<string, unknown>)[k]
+if (!PRODUCT.market) for (const k of ['marketList', 'marketRead', 'marketDetail', 'marketInstall', 'onMarketInstallProgress', 'marketInstalled', 'marketUninstall', 'marketForget', 'marketUpdateStatus', 'marketSetAutoUpdate', 'marketSetAutoUpdateAll', 'marketRollback', 'marketCheckUpdates', 'onMarketUpdateStatus', 'marketSourcesList', 'marketSourcesProbe', 'marketSourcesAdd', 'marketSourcesRemove', 'marketSourcesSetDisabled', 'marketSourcesTrust', 'marketSourcesSetDeclared', 'marketSourcesCatalog', 'marketSourcesInstalls', 'onMarketSourcesChanged'] as const) delete (api as Record<string, unknown>)[k]
 // 云端账号面(个人中心 / 会员页 / 额度与重置卡 / 反馈 / cloud:fetch)由内置包 Forsion Extend 的主进程半身提供
 // (electron/cloudHost.ts);没装载(验签失败 / 单品变体 / 没捆)就删键 —— 调了会 reject "No handler registered",
 // 删掉键渲染层按同一套 window.tangu?.X 门控自动隐藏。主进程在开窗前就答好 cloud:present(Extend 实际注册的通道名),

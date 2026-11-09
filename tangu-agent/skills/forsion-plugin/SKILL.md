@@ -296,6 +296,15 @@ A bundle can declare stdio MCP servers and observe-only hooks in its manifest: r
 
 **用户侧自动更新与回退(桌面 2.13.8 起)**:商店插件**缺省自动更新**(后台下好、下次启动换上;用户可全局或按插件关掉)。换版前旧版本留在本机(`~/.forsion/.plugin-versions/<类型>/<目录名>/<版本>/`,每个插件最近 2 份),用户能一键回退;回退或从「版本」页装旧版 = 固定在那一版,直到用户「恢复自动更新」。⚠️ **回退只换插件文件,数据不回退**(工作文件夹、`plugin-data`、设置原样):改数据格式时让旧版读新数据也不出错(忽略不认识的字段、别把旧数据原地改成旧版读不了的形状),或新格式写新文件。核心插件(Extend / 日历 / Computer Use)跟桌面版本走,不参与。
 
+### 商店来源:自己维护一份目录,不走投稿(2026-11-08 起)
+
+不想每版都过审、或者东西很多(一套几十个技能)时,可以让插件在商店左栏「来源」分组里加一个条目,指向你维护的 `forsion-store.json`;用户也能自己点 + 贴地址。**来源只交目录**,卡片、下载、校验、安装、更新、卸载全是商店照常做,插件不画界面(`registerStoreView` 仍只给 Extend)。
+
+- manifest:`"storeSources": [{ "id": "main", "title": { "zh": "…", "en": "…" }, "index": "github:owner/repo", "icon": "image" }]`,≤4 个,`id` 匹配 `^[a-z0-9][a-z0-9-]{0,31}$`。`index` 写 `github:owner/repo`(或 `https://github.com/owner/repo/tree/<ref>/<目录>`)、`npm:<包名>`(读 latest 包根的目录文件)或直接指向 JSON 的 `https://` 地址。`forsion-git:` 私有仓下一期才开。插件停用 / 卸载,来源随之消失;装过的东西留着、不再自动更新。
+- 目录 `{ "schema": 1, "title", "author", "description", "items": [...] }`;每条 `id`(`^[a-z0-9][a-z0-9-]{0,47}$`,**发出去别改**,本机身份 `src-<来源哈希>-<id>` 靠它)、`type`(同投稿类型)、`name`、`version`、`package`,可选 `summary` / `tags` / `icon` / `readme` / `minAppVersion` / `maxAppVersion` / `platforms` / `updatedAt`。
+- `package` 四选一:`{ github, ref, path? }`、`{ npm, version, integrity? }`(version 必须等于条目 version)、`{ url, sha256 }`(必须带 sha256)、`{ forsionGit, ref, path? }`(下一期)。**换了包的出处(仓库 / npm 包名 / 下载域名)自动更新会停**,等用户手动点。
+- 用户第一次从某个来源装、以及每个插件 / Agent / Space 第一次装前,商店在详情侧栏确认一次;来源条目标「未经 Forsion 审核」,没有评论区,`requiresPlugins` 的 `market` 认不到它们。完整格式见 Genesis 仓 `docs/customization/plugin-development.md`「商店来源」。
+
 ### 投稿元数据、版本要求与评论(2026-10-17 起)
 
 - 投稿表单可填:标签(≤8 个,每个 ≤40 字)、长描述(详情页「内容介绍」)、支持平台(`desktop` / `macos` / `windows` / `linux` / `android` / `ios` / `web`)、Forsion 版本范围(`minAppVersion` 含、`maxAppVersion` 不含,语义化版本号)。
@@ -502,7 +511,7 @@ ctx.registerCommand({
   按钮要等下一次重渲才跟上。旧宿主没有这个字段 = 静默忽略,不用做特性检测。
 
 | `registerSettingsView` | 详情页里自己画的面板 | 会被反复挂载卸载,状态别放模块级单例;`title` 可传函数(切语言跟上)。`category: 'forsion'`(2026-09-28 起)只对带主进程半身的首方内置包(Forsion Extend)生效:面板成为设置「Forsion 云端」的一个子页,别的插件写了照旧画在详情页 |
-| `registerStoreView` | 商店左栏里的一页(左栏多一个入口,整页正文自己画) | 2026-10-05 起;**只对带主进程半身的首方内置包(Forsion Extend)生效**,别的插件注册了不显示 —— 做普通插件用不到。旧宿主没有:`ctx.registerStoreView?.(…)`,没有就不注册,**别拿 `registerSettingsView` 顶替**(那会把页面画进插件详情页) |
+| `registerStoreView` | 商店左栏里的一页(左栏多一个入口,整页正文自己画) | 2026-10-05 起;**只对带主进程半身的首方内置包(Forsion Extend)生效**,别的插件注册了不显示 —— 做普通插件用不到。旧宿主没有:`ctx.registerStoreView?.(…)`,没有就不注册,**别拿 `registerSettingsView` 顶替**(那会把页面画进插件详情页)。想在商店里列出自己的一批条目,用 manifest `storeSources`(见「商店来源」) |
 | `ctx.app.openSettings?(target)` | 打开设置到某一页 / 子页(2026-09-28 起) | 口径同宿主深链,如 `'model/m-providers'`;旧宿主没有,一律 `?.` 调 |
 | `ctx.app.watchAccountName?(cb)` | 当前登录的名字(有昵称用昵称,2026-10-18 起) | 先回调一次当前值,换账号 / 登出再回调,没登录 = 空串;只给名字,不给令牌和账号 id;返回退订,停用时宿主也会退 |
 | `ctx.wallpaper.bing(locale?)` | 必应每日壁纸最近 8 张(2026-10-18 起) | `{ id, url, thumbnailUrl, title?, copyright?, startDate? }`;宿主代拉(桌面经主进程,插件直连必应会被 CSP 拦);拿不到 → reject;老宿主没有 → `ctx.wallpaper?.bing(…)` |

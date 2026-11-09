@@ -51,6 +51,8 @@ export function createMarketPluginUpdater(o: {
   download: (item: MarketUpdateItem) => Promise<Buffer>
   broadcast: (state: MarketPluginUpdates) => void
   platform?: string
+  /** Items not to update now (a store source that was removed or switched off). */
+  paused?: (id: string) => boolean
 }) {
   const root = join(o.home, '.market-updates'), stateFile = join(root, 'state.json')
   const versionsRoot = join(o.home, '.plugin-versions')
@@ -264,6 +266,9 @@ export function createMarketPluginUpdater(o: {
         if (x.pendingVersion && x.pinnedVersion && !x.pendingRollback) {
           await rm(pending(x), { recursive: true, force: true }); x.pendingVersion = undefined; x.phase = 'current'; continue
         }
+        // Its store source was removed or switched off after the download, or the source table can't be read
+        // ("don't know" is not "gone"): don't swap it in, and don't delete it either. An explicit rollback still goes through.
+        if (x.pendingVersion && !x.pendingRollback && o.paused?.(x.id)) { x.phase = 'staged'; continue }
         if (!x.pendingVersion) continue
         const next = await manifest(x.type, pending(x))
         if (compareMarketVersions(next.version, old.version) === 0) {
@@ -384,7 +389,7 @@ export function createMarketPluginUpdater(o: {
       do {
         recheck = false
         for (const remembered of [...items]) {
-          if (!active(remembered.id)) continue
+          if (!active(remembered.id) || o.paused?.(remembered.id)) continue
           const x = items.find((it) => it.id === remembered.id)!
           const staging = join(root, x.type, `.${x.slug}.staging-${randomUUID()}`)
           try {
@@ -404,7 +409,7 @@ export function createMarketPluginUpdater(o: {
             const next = await manifest(x.type, staging)
             validate(x, old, next)
             if (compareMarketVersions(next.version, item.latestVersion) !== 0) throw new Error('install: advertised version mismatch')
-            if (!active(x.id)) { await patch(x.id, { phase: x.pendingVersion ? 'staged' : 'idle' }); continue }
+            if (!active(x.id) || o.paused?.(x.id)) { await patch(x.id, { phase: x.pendingVersion ? 'staged' : 'idle' }); continue }
             // Save a complete package under a fresh directory, then publish the state pointer atomically.
             const previous = `${pending(x)}.old-${randomUUID()}`
             let had = false

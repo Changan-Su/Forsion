@@ -1,5 +1,6 @@
 /** 商店 UI 专项台架:只提供 MarketModal 用到的桌面桥,不读真实账号、网络或用户目录。 */
 import type { MarketCard, MarketDetail, MarketInstallProgress } from './types'
+import type { StoreSourceInfo, StoreSourceInstall } from '../../shared/storeSources'
 
 // 卡片图标:两枚内联 PNG(投稿包 icon.png 的替身)+ 一个必然 404 的地址,
 // 台架里同时覆盖「有图 / 无图 / 图挂了要回落字形」三态。
@@ -32,13 +33,77 @@ const progressListeners = new Set<(p: MarketInstallProgress) => void>()
 const emit = (p: MarketInstallProgress): void => progressListeners.forEach((cb) => cb(p))
 const tick = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
 
+// 商店来源(第三方目录):一个插件声明的 GitHub 来源 + 一个用户贴的地址(Forsion Git 私有仓的那种这一版还不开)。
+// 卡片 id 走 `src_<来源>_<条目>`,与主进程同形;出处记录按安装时写。
+// 来源名由主进程按界面语言挑好再给渲染层(LocalText → string),台架照此按页面语言给。
+const EN = typeof navigator !== 'undefined' && /^en/i.test(navigator.language)
+const SRC_TITLE = EN ? 'Image skills' : '图片 Skills 大全'
+const SRC = '0a1b2c3d'
+const SRC_URL = '5e6f7a8b'
+const sourceRows: StoreSourceInfo[] = [
+  { id: SRC, title: SRC_TITLE, origin: 'plugin', pluginId: 'image-skills', uri: 'https://github.com/pixel-lab/image-skills', kind: 'github', icon: 'image', trusted: false, disabled: false },
+  { id: SRC_URL, title: EN ? 'Acme design guide' : 'Acme 设计规范', origin: 'user', uri: 'https://design.acme.example/forsion-store.json', kind: 'url', trusted: true, disabled: false },
+]
+const srcItem = (source: string, sourceTitle: string, id: string, type: MarketCard['type'], name: string, summary: string, version: string, tags: string[]): MarketDetail => ({
+  id: `src_${source}_${id}`, type, source: 'github', name, summary, author: 'Pixel Lab', installSlug: `src-${source}-${id}`, downloads: 0, iconUrl: null,
+  latestVersion: version, tags, createdAt: null, updatedAt: new Date(now - 3 * day).toISOString(), origin: { sourceId: source, sourceTitle },
+  readme: `# ${name}\n\n${summary}\n\n## 怎么用\n\n- 说清用途和尺寸\n- 给出要放的文字\n- 先回一版草稿，确认后再出图`,
+})
+const sourceItems: Record<string, MarketDetail[]> = {
+  [SRC]: [
+    srcItem(SRC, SRC_TITLE, 'poster', 'skill', '海报排版', '按尺寸与层级规则排一张活动海报，标题、主图、信息区自动分层。', '1.2.0', ['海报', '排版']),
+    srcItem(SRC, SRC_TITLE, 'ecommerce', 'skill', '电商主图', '白底主图、场景图、卖点图三件套，附平台尺寸与留白要求。', '0.9.3', ['电商', '商品图']),
+    srcItem(SRC, SRC_TITLE, 'cover', 'skill', '小红书封面', '3:4 封面的大字标题、贴纸与配色规则，给出三版可选。', '1.0.1', ['社媒', '封面']),
+    srcItem(SRC, SRC_TITLE, 'storyboard', 'skill', '漫画分镜', '把一段剧情拆成 4–8 格分镜，写清镜头、人物与对白位置。', '0.6.0', ['漫画', '分镜']),
+    srcItem(SRC, SRC_TITLE, 'restore', 'skill', '老照片修复', '描述划痕、褪色与噪点的修复步骤，给出修图模型的提示词。', '1.1.0', ['修复', '提示词']),
+    srcItem(SRC, SRC_TITLE, 'palette-tools', 'amadeus-plugin', '取色板', '从图片里取主色，存成可复用的色板。', '0.4.2', ['配色']),
+  ],
+  [SRC_URL]: [],
+}
+const sourceInstalls: StoreSourceInstall[] = [
+  { cardId: 'src_9c9c9c9c_meme', type: 'skill', slug: 'src-9c9c9c9c-meme', name: '表情包生成', version: '0.3.0', sourceId: '9c9c9c9c', sourceTitle: null, removed: true, summary: '把一句话做成四格表情包，附字体与留白规则。', author: 'Meme Lab' },
+]
+installed.skill!.push({ slug: 'src-9c9c9c9c-meme', version: '0.3.0' })
+const findSourceItem = (id: string) => Object.values(sourceItems).flat().find((x) => x.id === id)
+
 const bridge = {
   platform: 'darwin',
+  marketSourcesList: async () => sourceRows.map((x) => ({ ...x })),
+  marketSourcesInstalls: async () => sourceInstalls.map((x) => ({ ...x })),
+  marketSourcesCatalog: async (id: string) => {
+    const source = sourceRows.find((x) => x.id === id)!
+    return { source: { ...source }, items: (sourceItems[id] || []).map(({ readme: _readme, ...card }) => card), fetchedAt: now - 2 * 60_000, stale: false, truncated: false }
+  },
+  marketSourcesTrust: async (id: string) => { const s = sourceRows.find((x) => x.id === id); if (s) s.trusted = true },
+  marketSourcesSetDisabled: async (id: string, on: boolean) => { const s = sourceRows.find((x) => x.id === id); if (s) s.disabled = on },
+  marketSourcesRemove: async (id: string) => { const i = sourceRows.findIndex((x) => x.id === id); if (i >= 0) sourceRows.splice(i, 1) },
+  marketSourcesProbe: async (input: string) => {
+    await tick(200)
+    if (/git\.forsion\.net/.test(input)) throw new Error("Error invoking remote method 'marketSources:probe': Error: source: forsion-git-unsupported")
+    if (!/github\.com\/[\w-]+\/[\w-]+/.test(input)) throw new Error("Error invoking remote method 'marketSources:probe': Error: source: unrecognized")
+    return { uri: `https://${input.replace(/^https?:\/\//, '')}`, kind: 'github', title: input.split('/').pop() || input, count: 14 }
+  },
+  marketSourcesAdd: async (input: string) => {
+    const row: StoreSourceInfo = { id: '7d7d7d7d', title: input.split('/').pop() || input, origin: 'user', uri: `https://${input.replace(/^https?:\/\//, '')}`, kind: 'github', trusted: false, disabled: false }
+    sourceRows.push(row); sourceItems[row.id] = []
+    return { ...row }
+  },
+  marketSourcesSetDeclared: async () => {},
+  onMarketSourcesChanged: () => () => {},
   onMarketInstallProgress: (cb: (p: MarketInstallProgress) => void) => { progressListeners.add(cb); return () => { progressListeners.delete(cb) } },
   marketList: async (type?: string): Promise<{ items: MarketCard[] }> => ({ items: rows.filter((row) => !type || row.type === type).map(({ readme: _readme, githubRepoUrl: _repo, ...card }) => card) }),
-  marketDetail: async (id: string): Promise<MarketDetail> => rows.find((row) => row.id === id)!,
+  marketDetail: async (id: string): Promise<MarketDetail> => rows.find((row) => row.id === id) ?? findSourceItem(id)!,
   marketInstalled: async () => installed,
   marketInstall: async (id: string) => {
+    const fromSource = findSourceItem(id)
+    if (fromSource) {
+      emit({ id, phase: 'resolve' }); await tick(200)
+      emit({ id, phase: 'install' }); await tick(150)
+      const pool = installed[fromSource.type] ||= []
+      if (!pool.some((x) => x.slug === fromSource.installSlug)) pool.push({ slug: fromSource.installSlug, version: fromSource.latestVersion || null })
+      if (!sourceInstalls.some((x) => x.cardId === id)) sourceInstalls.push({ cardId: id, type: fromSource.type, slug: fromSource.installSlug, name: fromSource.name, version: fromSource.latestVersion || null, sourceId: fromSource.origin!.sourceId, sourceTitle: fromSource.origin!.sourceTitle, removed: false, summary: fromSource.summary, author: fromSource.author })
+      return { ok: true, path: `/harness/${fromSource.installSlug}`, files: 1, type: fromSource.type, slug: fromSource.installSlug }
+    }
     const row = rows.find((item) => item.id === id)!
     if (id === 'calendar-tools' || id === 'mindmap') {
       emit({ id, phase: 'resolve' }); await tick(300)
@@ -59,6 +124,8 @@ const bridge = {
     const i = pool.findIndex((item) => item.slug === slug)
     if (i < 0) throw new Error('该项不在已安装目录中') // 与主进程同口径:找不到即报错,不静默成功
     pool.splice(i, 1)
+    const rec = sourceInstalls.findIndex((x) => x.type === type && x.slug === slug)
+    if (rec >= 0) sourceInstalls.splice(rec, 1) // 主进程卸载时同步删出处记录(storeSources.forget)
     return { ok: true, path: `/harness/${slug}`, type }
   },
   openAccountCenter: async () => ({ ok: true }),

@@ -96,6 +96,8 @@ export function installAmadeusPlugins(): void {
     // 徽标常驻设置页。check 类(可能打远端)启动期不跑,见 pluginOnboardingStore 文件头。
     const s = usePluginStore.getState()
     for (const p of s.plugins) if (s.activeIds.includes(p.id)) void evaluateAndNudge(p)
+    // 插件声明的商店来源:主窗装载落定后才报(别的窗口可能没装外置插件,报上去就是「一个都没有」)
+    if (windowKind() === 'main') void import('./storeSourcesSync').then((m) => m.startStoreSourceSync())
     // 插件沙箱:装载落定 = 卡片从「启动中」变成「运行中 / 失败」,并落到插件的 Space(等配方扫完:插件 Space 是这一遍才注册上的)
     if (window.tangu?.sandbox && windowKind() === 'main') {
       void spacesLoaded.catch(() => {}).then(() => import('./sandbox/sandboxWindow')).then((m) => m.sandboxPluginsLoaded())

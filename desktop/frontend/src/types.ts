@@ -932,11 +932,22 @@ declare global {
       marketSetAutoUpdateAll?(on: boolean): Promise<import('../../shared/marketPluginUpdates').MarketPluginUpdates>
       marketRollback?(type: string, slug: string, version: string, market?: { id: string; name?: string }): Promise<import('../../shared/marketPluginUpdates').PluginRollbackResult & { path: string; id?: string }>
       onMarketUpdateStatus?(cb: (state: import('../../shared/marketPluginUpdates').MarketPluginUpdates) => void): () => void
-      marketInstall?(id: string, version?: string): Promise<{ ok: boolean; path: string; files: number; type: string; slug: string; id?: string }>
+      marketInstall?(id: string, version?: string, expect?: { type: string }): Promise<{ ok: boolean; path: string; files: number; type: string; slug: string; id?: string }>
       /** 安装进度订阅(主进程只推给发起窗口);返回退订函数。 */
       onMarketInstallProgress?(cb: (ev: MarketInstallProgress) => void): () => void
       marketInstalled?(): Promise<Record<string, Array<{ slug: string; version: string | null; id?: string }>>>
       marketUninstall?(type: string, slug: string): Promise<{ ok: boolean; path: string; type: string; id?: string }>
+      /** 商店来源(第三方目录)。网页 / 手机没有这一组,商店按存在性门控。 */
+      marketSourcesList?(locale?: string): Promise<import('../../shared/storeSources').StoreSourceInfo[]>
+      marketSourcesProbe?(input: string, locale?: string): Promise<{ uri: string; kind: string; title: string; count: number; duplicate?: string }>
+      marketSourcesAdd?(input: string, locale?: string): Promise<import('../../shared/storeSources').StoreSourceInfo>
+      marketSourcesRemove?(id: string): Promise<void>
+      marketSourcesSetDisabled?(id: string, on: boolean): Promise<void>
+      marketSourcesTrust?(id: string): Promise<void>
+      marketSourcesSetDeclared?(list: import('../../shared/storeSources').DeclaredStoreSource[]): Promise<void>
+      marketSourcesCatalog?(id: string, opts?: { refresh?: boolean; locale?: string }): Promise<import('../../shared/storeSources').StoreSourceCatalog>
+      onMarketSourcesChanged?(cb: () => void): () => void
+      marketSourcesInstalls?(locale?: string): Promise<import('../../shared/storeSources').StoreSourceInstall[]>
       /** 卸载走确认框之后撤掉商店的安装记录(文件已经由回收站那条路挪走)。 */
       marketForget?(type: string, slug: string): Promise<{ ok: boolean }>
       /** 本宿主能装的市场类型(缺省 = 全部)。Android App 没有本机引擎 / 主题目录 / Space 目录,只声明 ['amadeus-plugin'];
@@ -1270,6 +1281,8 @@ export interface MarketCard {
   /** 用于商店「最近上架」和详情元信息；兼容旧服务端，均可缺省。 */
   createdAt?: string | null
   updatedAt?: string | null
+  /** 来自商店来源(第三方目录)的条目:哪个来源。Forsion 商店的条目没有这一项。 */
+  origin?: { sourceId: string; sourceTitle: string }
 }
 
 /** market:installProgress:resolve=向服务端要下载地址;download=在试第 attempt/attempts 个地址、已收 received 字节

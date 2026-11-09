@@ -54,8 +54,9 @@ const unwrapIpcError = (e: unknown): never => {
   throw resolve ? Object.assign(new Error(translate('marketsvc.resolveFailed', { detail: resolve[1] })), { stage: 'resolve' as const, raw: msg }) : Object.assign(new Error(msg), { raw: msg })
 }
 
-export const installMarket = (id: string, version?: string): Promise<{ ok: boolean; path: string; type: string; slug: string; id?: string }> =>
-  bridge().marketInstall!(id, version).catch(unwrapIpcError)
+/** `expect`: for store-source items, what the user saw and confirmed (main refuses if the catalog changed it since). */
+export const installMarket = (id: string, version?: string, expect?: { type: string }): Promise<{ ok: boolean; path: string; type: string; slug: string; id?: string }> =>
+  (expect ? bridge().marketInstall!(id, version, expect) : bridge().marketInstall!(id, version)).catch(unwrapIpcError)
 
 /** 订阅安装进度(旧主进程没有这个事件 → 空退订,按钮退化成只转圈)。 */
 export const onInstallProgress = (cb: (p: MarketInstallProgress) => void): (() => void) =>
