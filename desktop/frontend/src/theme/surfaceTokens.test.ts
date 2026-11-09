@@ -25,6 +25,7 @@ const SOLID_BY_DESIGN: Record<string, { file: string; why: string }> = {
   '.img-stack-nav': { file: 'desktop/frontend/src/views/chat2/chat2.css', why: '图片叠卡的翻页钮,压在图上' },
   '.t2cv-read': { file: 'desktop/frontend/src/views/chat2/chat2.css', why: '画布视图的阅读卡(正文)' },
   '.t2cv-read-ghost': { file: 'desktop/frontend/src/views/chat2/chat2.css', why: '阅读卡拖动时的替身' },
+  '.hp-lib-ghost': { file: 'desktop/frontend/src/views/homepage.css', why: '从收纳盒拖小组件时跟手的替身卡,和主页上的卡同色' },
   '.t2cv-empty': { file: 'desktop/frontend/src/views/chat2/chat2.css', why: '画布视图空态' },
   '.dash2-board': { file: 'desktop/frontend/src/views/dashCanvas.css', why: 'Dashboard 画板本身' },
   '.amx-ucard': { file: 'desktop/frontend/src/amadeus/styles.css', why: '正文里的卡' },
@@ -90,9 +91,9 @@ function rules(): Rule[] {
     for (const m of css.matchAll(/([^{}@]+)\{([^{}]*)\}/g)) {
       const body = m[2]
       const floating = /z-index:\s*var\(--z-/.test(body)
-        || (/position:\s*(fixed|absolute)/.test(body) && /box-shadow:\s*var\(--card-shadow/.test(body))
+        || (/position:\s*(fixed|absolute)/.test(body) && /box-shadow:\s*var\(--card-shadow/.test(body)) // shadow-contract: effect (test regex, not a style)
       const painted = /background(-color)?:\s*(var\(--(bg-card|bg|sidebar-bg|surface-2|bg-glass|bg-elevated)\b|color-mix)/.test(body)
-        || /box-shadow:\s*var\(--card-shadow/.test(body)
+        || /box-shadow:\s*var\(--card-shadow/.test(body) // shadow-contract: effect (test regex, not a style)
       const tokens = /background(-color)?:\s*var\(--surface-(menu|float)\b/.test(body)
       const glassy = /var\(--(bg-glass|panel-blur)\b/.test(body)
       for (const part of m[1].split(',')) {

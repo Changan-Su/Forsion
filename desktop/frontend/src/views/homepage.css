@@ -1653,7 +1653,7 @@ body.hp-lib-nodrop * { cursor: not-allowed !important; }
   padding: 5px 11px 5px 9px;
   border: var(--border-width) solid color-mix(in srgb, var(--border) 80%, transparent);
   border-radius: var(--radius-pill, 999px);
-  background: color-mix(in srgb, var(--bg-card) 94%, transparent);
+  background: var(--surface-float, color-mix(in srgb, var(--bg-card) 94%, transparent));
   box-shadow: var(--icon-shadow);
   color: var(--text);
   font-size: var(--ui-font-meta, 12px);
