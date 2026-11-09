@@ -10,6 +10,7 @@ import { setActiveSpace, useSpaceStore, useWorkspace } from '@lcl/engine'
 import { claimHostMount } from '@lcl/components'
 import {
   pluginChatType,
+  readTanguDrafts,
   readTanguNewChat,
   setTanguProbe,
   type TanguProbe,
@@ -446,6 +447,13 @@ function mountComposer(el: HTMLElement, o: TanguComposerOptions): TanguComposerM
     focus: () => { if (disposed) return; focusPending = true; mounted?.focus() },
     startVoice: () => { if (!disposed) mounted?.startVoice() },
     draft: () => (disposed ? '' : mounted?.draft() ?? ''),
+    // 经 Tangu 的草稿接缝填新对话那份(键 'new'):只填空着的,写了一半的原样留着(同内置主页「让 Agent 做一个小组件」)
+    prefill: (text) => {
+      if (disposed || typeof text !== 'string' || !text.trim()) return
+      readTanguDrafts()?.fill('new', { text: text.slice(0, 8000), pastes: [] })
+      focusPending = true
+      requestAnimationFrame(() => { if (!disposed) mounted?.focus() })
+    },
     dispose: () => { if (disposed) return; disposed = true; mounted?.dispose(); mounted = null },
   }
 }

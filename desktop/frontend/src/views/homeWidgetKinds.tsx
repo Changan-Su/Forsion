@@ -23,7 +23,7 @@ import { readTanguMuseStarters, subscribeTanguMuseStarters } from '../amadeus/pl
 import type { MuseStarter } from '../types'
 import { useMuseTodosLive, useMuseTracksLive } from './museBrief/museBriefData'
 import { trackWhen } from '../components/museViewFormat'
-import { MUSE_CARD, SESSIONS_CARD, isBuiltinWidget, parsePluginWidgetId, type BuiltinWidget } from './homeWidgets'
+import { BUILTIN_WIDGET_SPACE, MUSE_CARD, SESSIONS_CARD, isBuiltinWidget, parsePluginWidgetId, type BuiltinWidget } from './homeWidgets'
 
 registerMessages({
   'home.w.muse': { zh: '卜算子·建议', en: 'From Muse' },
@@ -59,7 +59,7 @@ export const BUILTIN_ICON: Record<BuiltinWidget, typeof Sparkles> = {
   'builtin:muse': Sparkles, 'builtin:inbox': Inbox, 'builtin:notes': FileText, 'builtin:sessions': MessagesSquare,
   'builtin:museTodos': ListTodo, 'builtin:museTracking': Radar,
 }
-const BUILTIN_SPACE: Partial<Record<BuiltinWidget, string>> = { 'builtin:inbox': 'inbox', 'builtin:notes': 'amadeus', 'builtin:sessions': 'tangu', 'builtin:museTodos': 'muse', 'builtin:museTracking': 'muse' }
+const BUILTIN_SPACE = BUILTIN_WIDGET_SPACE
 const builtinKey = (id: BuiltinWidget): string => `home.w.${id.slice('builtin:'.length)}`
 
 // ── Muse 的开场建议(经 tanguSeam,Tangu 没激活 = 没有) ──

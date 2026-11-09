@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.104.0
+  version: 1.105.1
   author: Forsion
   category: Forsion
 ---
@@ -506,6 +506,7 @@ ctx.registerCommand({
 | `registerSettingsView` | 详情页里自己画的面板 | 会被反复挂载卸载,状态别放模块级单例;`title` 可传函数(切语言跟上)。`category: 'forsion'`(2026-09-28 起)只对带主进程半身的首方内置包(Forsion Extend)生效:面板成为设置「Forsion 云端」的一个子页,别的插件写了照旧画在详情页 |
 | `registerStoreView` | 商店左栏里的一页(左栏多一个入口,整页正文自己画) | 2026-10-05 起;**只对带主进程半身的首方内置包(Forsion Extend)生效**,别的插件注册了不显示 —— 做普通插件用不到。旧宿主没有:`ctx.registerStoreView?.(…)`,没有就不注册,**别拿 `registerSettingsView` 顶替**(那会把页面画进插件详情页)。想在商店里列出自己的一批条目,用 manifest `storeSources`(见「商店来源」) |
 | `ctx.app.openSettings?(target)` | 打开设置到某一页 / 子页(2026-09-28 起) | 口径同宿主深链,如 `'model/m-providers'`;旧宿主没有,一律 `?.` 调 |
+| `ctx.app.motion?()` / `subscribeMotion?(cb)` | 动效偏好 `{ reduce, fadeOnly }`(2026-11-09 起) | `reduce` = 系统减少动态效果或设置里「只淡入淡出」任一开着:别做位移 / 缩放,只留淡入淡出;和宿主界面同一个判据。订阅返回退订,停用时宿主也会退;旧宿主没有 → 只看 `prefers-reduced-motion` |
 | `ctx.app.watchAccountName?(cb)` | 当前登录的名字(有昵称用昵称,2026-10-18 起) | 先回调一次当前值,换账号 / 登出再回调,没登录 = 空串;只给名字,不给令牌和账号 id;返回退订,停用时宿主也会退 |
 | `ctx.wallpaper.bing(locale?)` | 必应每日壁纸最近 8 张(2026-10-18 起) | `{ id, url, thumbnailUrl, title?, copyright?, startDate? }`;宿主代拉(桌面经主进程,插件直连必应会被 CSP 拦);拿不到 → reject;老宿主没有 → `ctx.wallpaper?.bing(…)` |
 | `ctx.app.openSpace?(id)` | 切到某个 Space(2026-10-17 起) | resolve 在新 Space 布局建好之后,接着 `ctx.openView(…, { location: 'right' })` 就落在新 Space 里;不认识的 id → `false`;旧宿主没有 → `?.`。2.13.8 起认 Space 窗口锁:锁在别的 Space 上的窗口里,开到那个 Space 自己的窗口、本窗口不切走(之后的 openView 仍落在本窗口);锁着又开不了新窗口 → `false` |
@@ -538,6 +539,7 @@ ctx.registerCommand({
 | `ctx.widgets` | 主页小组件的数据(`provide(id, fn)` 喂行 / `invalidate(id?)` 请宿主重拿);卡声明在 manifest `widgets`,宿主画,只读 | 2026-11-07 起;**所有插件可用**,不用声明能力 → `ctx.widgets?.`;见下「主页小组件」 |
 | `ctx.automation` | 播种多维表自动化规则(`ensure(rules)`);给「当…」加插件自己的事件(`registerTrigger` / `emit`,2026-10-30 起) | 2026-09-02 起;⚠️**非 Tangu 宿主上整个不存在** → `void ctx.automation?.ensure(…)`;id 宿主加 `plugin:<id>:` 前缀;见下「自动化」 |
 | `ctx.calendar` | 把插件种的表登记进 Calendar Space(`ensureMember`,人人有)+ 叠加源与日历设置(`subscribe` / `setColor` / `setHidden` / `setDefault` / `setMember` / `removeMember`)+ .ics 订阅管理(`ics.add` / `importText` / `rename` / `remove` / `refresh`) | `ensureMember` 2026-09-02 起;其余 2026-10-17 起,⚠️**声明 `"calendar"` 才有**(没声明时这几个成员不存在,不是空壳)→ `ctx.calendar?.subscribe`;见下「日历叠加源与设置」 |
+| `ctx.home` | 主页宿主件:卡里的内容由宿主画进插件的格子(`mount` / `mountPart`)、主页摆放读写(`layout`)、「编辑主页」命令(`onEditRequest`)、官方计数(`track`) | 2026-11-09 起;⚠️**只给接管宿主主页的那个核心插件**(`HOST_VIEW_CLAIMS.homepage`),普通插件没有、manifest 也申请不到 —— 做普通插件用不到;见下「主页宿主件」 |
 | `ctx.spaces` | Space 列表 / 打开 / 图标 / 近况那一行 + 商店、成就两格 + Ribbon 上区的收纳架(顺序、收纳夹) | 2026-10-18 起;⚠️**声明 `"spaces"` 才存在**(收纳架改的是用户的 Ribbon);见下「Space 与 Ribbon 收纳架」 |
 | `ctx.databases` | 全库多维表的实时聚合(`subscribe`)+ 按行按格读写(`setCell` / `addRow` / `duplicateRow` / `deleteRow`) | 2026-10-16 起;⚠️**manifest `capabilities` 声明 `"databases"` 才存在**;见下「全库多维表与笔记任务」 |
 | `ctx.noteTasks` | 笔记正文里的 `@` 时间任务(`subscribe`)+ 就地勾选 / 改日期(`update`) | 2026-10-16 起;⚠️**声明 `"noteTasks"` 才存在**;同上节 |
@@ -1042,10 +1044,23 @@ const off = s.subscribe(draw)                        // Space 注册 / Ribbon �
   别自己存一份顺序 —— 两份迟早对不上。`items()` 不含收纳夹里的成员(它们在 `spaceIds` 里),含你自己那个 Space(不想画就自己滤掉)。
 - `mountStatus(el, id)`:宿主把这个 Space 的近况那一行(继续某会话、最近的笔记、下一条日程、未读数;`actions()` 那两格是已装插件数、可领成就)画进 `el`,
   跟着数据自己更新;拿不到就是空的。目前只有内置 Space 有近况,插件 Space 还报不了自己的。
-- `actions()`:商店、成就两格 `{ id, name, run() }`,图标同样用 `mountIcon(el, id)`。
+- `actions()`:商店、成就两格 `{ id, name, run() }`,2026-11-09 起后面再接首方 Ribbon 动作(活动中心等,和内置主页的坞同一份);图标同样用 `mountIcon(el, id)`。
+- `contextMenu?(event, id, extra?)`(2026-11-09 起):右键一个 Space 时弹宿主的对象菜单 —— 和 Ribbon、主页、收纳面板上同一份;`extra` 是你这一处的几项(形状同 `ctx.ui.contextMenu` 的行,最多 20 行),画在最后一节。传触发右键的事件(原生的或 React 的都行;坐标不是有限数、缺 `preventDefault` / `stopPropagation` 的直接回 false、什么都不做),弹出后宿主替你 `preventDefault` + `stopPropagation`;返回弹没弹出来。旧宿主没有 → 退回 `ctx.ui.contextMenu`。
+- `opensElsewhere?(id)`(2026-11-09 起):点这个 Space 会开到它自己的窗口去(而不是本窗口里切过去)。只有在本窗口切的才值得先放离场动效;旧宿主没有 → 当 false。
 - `open(id)` 口径同 Ribbon 上点它;本窗口是锁在某个 Space 上的 Space 窗口时,开到那个 Space 自己的窗口。不认识的 id → `false`。
 - `mountIcon` / `mountStatus` 返回卸载函数,之后 `el` 立刻还给你;插件被停用 / 重载时宿主统一收掉,`subscribe` 也一并退订。
 - `mountIcon` 画的图标跟着 Space 走:同一个 id 重新注册换了图标(插件更新了 `iconFile`)宿主原地重画;挂的时候还没注册的 id 先空着,注册上了再画 —— 不用为换图标自己重挂。
+
+## 主页宿主件:ctx.home(2026-11-09 起,只给接管主页的核心插件)
+
+⚠️普通插件没有这一截,也申请不到:它只注入给 `shared/corePlugins.ts` 的 `HOST_VIEW_CLAIMS.homepage` 指名、且能接管(核心插件,或开发档 `localStorage forsion.dev.coreTrial`)的那个插件(`forsion-home`)。
+分工(主页插件化 B):插件管主页长什么样、东西怎么摆;卡里的内容、摆放的存储与格式校验、首启再问那张卡留在宿主。
+
+- `widget(id)` → `{ id, kind: 'builtin' | 'plugin' | 'agent', show, title, owner, canOpen }`(非 React 读法);`library()` 列出能放的全部卡;`subscribe(cb)` 头信息可能变了。
+- `mount(el, id, { part: 'head' | 'body' | 'icon', wide?, size?, editing?, onRemove?, onComposer? })`:宿主把卡头 / 卡芯 / 图标画进 `el`;返回的卸载函数带 `update(opts)`(进出编辑态不重挂)。卜算子·建议没内容时这一格改画最近对话,宿主算。
+- `mountPart(el, 'computer-history-ask')`:首启跳过「电脑历史」后主页再问一次那张卡;不认识的名字什么都不画。
+- `layout.read()`(从没摆过 / 读不了存储 = `null`,缺省摆法你定、别写回;每次都核对存储原文,别的窗口刚存过也读得到;给的是拷贝)/ `write(next)`(宿主校验后存、返回存进去的那份,遥测计数宿主记;⚠️你上一次 `read()` 读失败时这一下不写、回存储现状 —— 你手里那份是缺省上改的,不许盖真摆放;先再 `read()` 一次)/ `subscribe(cb)`。格式只加字段不改字段。
+- `onEditRequest(cb)`:命令「编辑主页」来了;主页没挂上时宿主先记着,登记那一刻补发。`track('home.edit')`:官方计数(主页小组件那条上手提示据此算「会了」),别的名字忽略。
 
 ## 全库多维表与笔记任务:ctx.databases / ctx.noteTasks(2026-10-16 起)
 

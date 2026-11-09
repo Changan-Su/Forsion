@@ -172,12 +172,13 @@ const box = ctx.tangu?.mountComposer?.(el, {
   beforeSend: () => playLeaveAnimation(),   // 宿主发送前先等它;回 false = 这次不发
   call: true,                               // 要通话按钮(只在挂载时所在的 Space 是当前 Space 时画)
 })
-// 句柄:box.focus() / box.startVoice()(在点击处理里同步调,麦克风权限只认用户那一下)/ box.draft()(只读)/ box.dispose()
+// 句柄:box.focus() / box.startVoice()(在点击处理里同步调,麦克风权限只认用户那一下)/ box.draft()(只读)/ box.prefill?.(text) / box.dispose()
 ```
 
 - **发送归宿主**:用户按发送 → 宿主建新会话、切到 Tangu、发出去。插件改不了要发的内容(`draft()` 只读);和 `ui.mountChatBox` 正好相反(那个草稿和提交都归插件)。
 - `beforeSend` 抛错、超过 2 秒、或者插件这时被停用 / 视图被卸,宿主**照样发**:用户按下的那一下不能因为动画丢掉(它是放动效用的,别在里面弹确认框)。发送和开通话共用一把锁,同一时刻只放一次,动效没放完又按 = 不动。
 - 没有 Tangu Space 的宿主(单品档案)上按发送不动;没有对话能力的宿主 / 旧宿主上整个缺席:`ctx.tangu?.mountComposer`。
+- `prefill?(text)`(2026-11-09 起):往输入框里填一句并聚焦;只在输入框空着时填,写了一半的草稿原样留着,回车由用户按。旧宿主没有 → `box.prefill?.(…)`。
 - `dispose()` 之后 `el` 立刻还给你;插件被禁用 / 重载时宿主统一卸掉。
 
 ### 代填通道凭据:connectChannel(2026-10-31 起)
