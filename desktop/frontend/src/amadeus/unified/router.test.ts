@@ -1,7 +1,7 @@
 // 路由决策(承载数据安全的那个判定)契约:素文件/外来 md 绝不进 v3 编译管线,
 // v3 只在开关开启且升级器放行时走 unified,其余一律 block。
 import { describe, expect, it } from 'vitest'
-import { routeNote } from './router'
+import { readVerdict, routeNote } from './router'
 import { canvasLineOf, composeFm, layoutLineOf, setAmadeusStructure, splitFm } from './fm'
 import { classifyPageSource, parseV4Layout } from '@amadeus-shared/compiler/v4'
 import { parseFrontmatter } from '@amadeus-shared/compiler/split'
@@ -110,5 +110,23 @@ describe('routeNote', () => {
     // `<云名>/X.md` 空文件、改名后反复复活旧名空白页。新建流全都先落盘再导航,不经这里。
     expect(routeNote('note.md', null, true, NOW)).toEqual({ editor: 'missing' })
     expect(routeNote('WMOSv11/note.md', null, false, NOW)).toEqual({ editor: 'missing' })
+  })
+})
+
+describe('readVerdict(读不出 ≠ 不存在)', () => {
+  it('读的时候出错(网络断 / 429 / 超时)→ 读不出,哪怕名单里没有这篇', () => {
+    // 2026-11-09 实报:手机断网时点云端笔记显示「当前库里没有这篇笔记」—— 名单里恰好没有它,出错被当成了 null。
+    expect(readVerdict({ raw: null, failed: true }, false)).toBe('unreadable')
+    expect(readVerdict({ raw: null, failed: true }, true)).toBe('unreadable')
+  })
+  it('名单里有、读回 null → 读不出(旧口径不变)', () => {
+    expect(readVerdict({ raw: null, failed: false }, true)).toBe('unreadable')
+  })
+  it('名单里没有、读回 null(没出错)→ 交给 routeNote 判 missing', () => {
+    expect(readVerdict({ raw: null, failed: false }, false)).toBe('route')
+    expect(routeNote('WMOSv11/note.md', null, true, NOW)).toEqual({ editor: 'missing' })
+  })
+  it('读到了内容 → 照常路由', () => {
+    expect(readVerdict({ raw: '正文\n', failed: false }, false)).toBe('route')
   })
 })
