@@ -83,6 +83,18 @@ it('invalidates a stale attachment as soon as its selection changes', async () =
   expect(vi.mocked(buildFeedbackReport).mock.calls[1][1]?.id).toBe('A')
 })
 
+it('includes the linked conversation by default and leaves it off without one', async () => {
+  await render({ id: 'A', title: 'A' })
+  expect(container.querySelectorAll<HTMLInputElement>('input[type=checkbox]')[1].checked).toBe(true)
+  expect(vi.mocked(buildFeedbackReport).mock.calls[0][2]).toMatchObject({ conversation: true })
+  await act(async () => root.unmount()); root = createRoot(container)
+  vi.mocked(buildFeedbackReport).mockClear()
+  await render()
+  const box = container.querySelectorAll<HTMLInputElement>('input[type=checkbox]')[1]
+  expect(box.checked).toBe(false); expect(box.disabled).toBe(true)
+  expect(vi.mocked(buildFeedbackReport).mock.calls[0][2]).toMatchObject({ conversation: false })
+})
+
 it('blocks oversize reports and permits an explicit text-only submission', async () => {
   vi.mocked(buildFeedbackReport).mockResolvedValue({ ...report, bytes: FEEDBACK_LOG_LIMIT + 1 })
   await render()

@@ -28,7 +28,8 @@ export const FeedbackModal: React.FC<{
   const text = useApp((s) => s.feedbackDraft)
   const [kind, setKind] = useState<'bug' | 'idea' | 'other'>('bug')
   const [diagnostics, setDiagnostics] = useState(true)
-  const [conversation, setConversation] = useState(false)
+  // On by default whenever a conversation is linked: reports without it are rarely actionable.
+  const [conversation, setConversation] = useState(() => !!activeSession)
   const [activity, setActivity] = useState(false)
   const [revision, setRevision] = useState(0)
   const [prepared, setPrepared] = useState<{ key: string; report?: FeedbackReport; failed?: boolean } | null>(null)
