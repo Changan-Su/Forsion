@@ -132,8 +132,12 @@ export function positionMotionLayer(layer: HTMLElement, x: number, y: number, wi
 
 /** Fade out alongside the retreating surface, including when interrupted during entry. */
 export function fadePanelContentOut(children: HTMLElement[], opacity: number[], time: number, duration: number): Animation[] {
+  // 关键帧的 offset 只收 [0,1]:刚开就收(动画还在 delay 里 currentTime 为负)或时长读成 0 时会算出负数 / NaN,
+  // animate() 直接抛错(11-09 2.14.0-beta.1 tag 构建的打包验收报过)。夹住之后最坏是「立刻淡到 0」。
+  const k = 0.65 * time / duration
+  const offset = Number.isFinite(k) ? Math.min(1, Math.max(0, k)) : 0
   return children.map((child, i) => child.animate(
-    [{ opacity: opacity[i] }, { opacity: 0, offset: 0.65 * time / duration }, { opacity: 0 }],
+    [{ opacity: opacity[i] }, { opacity: 0, offset }, { opacity: 0 }],
     { duration: duration * 0.7 },
   ))
 }
