@@ -26,6 +26,8 @@
  *                                                           #   额度用完时先跑离线接线证据:node scripts/rename-identity.smoke.mjs(假模型端点,截获系统提示词)
  *   npm run live:harness -- --only caltodo [--calendar-plugin <Calendar 插件检出>] [--rounds 3]   # 用户的待办(11-07):「帮我添加两条待办」几步之内进默认日历、没日期没勾、不写笔记,再列出、勾掉;
  *                                                           #   --calendar-plugin 放进 calendar-todos 技能(桌面形态)。云端 run 用 --only cloudtodo(同 cloudcal 那样指 server scripts/calendar-local.mts)。改日历 / 待办工具定义后跑
+ *                                                           #   本机那份还有第四条腿「今天晚一点…」:三本日历 + 界面命令面,须进缺省那本、时间不早于现在;引擎时钟钉在晚上(--later-hour <0-23|off>,缺省 22),
+ *                                                           #   --caltodo-later-only 只跑这一条(负对照用)。改日历工具的缺省日历标记 / 过去时间提醒、list_ui_commands 的返回后跑
  *   npm run live:harness -- --only chat,tool,muse            # 子集(historian→dream→recall 三连有先后依赖)
  *   npm run live:harness -- --only mask [--mask-off]          # 发给模型前脱敏(10-28,借鉴 magpie 方案 1):读 .env → run_bash 带 key 的 curl 打台架里的回显服务 → 问模型看到的值是不是 sk-proj- 开头、是不是占位符。
  *   npm run live:harness -- --only filechange               # 变动感知(11-07):读过的文件被用户改了 → 下一轮开头 / run 内续调前都带 diff 告诉模型,且不拿旧副本覆盖。改 tools/readState.ts / tools/fileChangeNotice.ts / agentLoop 那两处注入后跑;负对照 TANGU_FILE_CHANGE_NOTICE=off(①② 须红)
@@ -1086,6 +1088,13 @@ const SELF_SCHED_CAL = join(SELF_SCHED_VAULT, 'Calendar.db');
 // 带 --calendar-plugin <Calendar 插件检出> 时把它的 manifest + skills/ 放进隔离共享域的 plugins/forsion-calendar(= 桌面装了插件的样子)。
 if (ONLY.has('caltodo')) mkdirSync(SELF_SCHED_VAULT, { recursive: true });
 const CALTODO_SKILL = ONLY.has('caltodo') ? plantCalendarSkill({ src: opt('calendar-plugin', ''), shared }) : null;
+// caltodo 的「今天晚一点」那条腿:随手填的晚上八点只有在夜里才算「已经过去」,白天跑这条腿在旧代码上也过。所以把引擎进程的本地时钟
+// 钉到晚上(缺省 22 点档,--later-hour <0-23> 换一档,--later-hour off 不钉):只换 TZ,日期、get_datetime、过去时间的判断都跟着走。
+// Etc/GMT±N 是 POSIX 记法,符号和日常写法相反(Etc/GMT-3 = UTC+3)。
+const LATER_OFFSET_H = ONLY.has('caltodo') && opt('later-hour', '22') !== 'off'
+  ? (() => { let o = (((Number(opt('later-hour', '22')) - new Date().getUTCHours()) % 24) + 24) % 24; if (o > 14) o -= 24; return o; })()
+  : null;
+const LATER_TZ = LATER_OFFSET_H == null ? null : `Etc/GMT${LATER_OFFSET_H > 0 ? '-' : '+'}${Math.abs(LATER_OFFSET_H)}`;
 if (ONLY.has('selfschedule') || ONLY.has('selfmodel')) {
   mkdirSync(SELF_SCHED_VAULT, { recursive: true });
   writeFileSync(SELF_SCHED_CAL, JSON.stringify({ version: 1, name: '我的日历', columns: [{ id: 'c1', name: '名称', type: 'text' }, { id: 'c2', name: '日期', type: 'calendarDate' }], rows: [{ id: 'r1', cells: { c1: '既有会议', c2: '2026-07-08T14:00' } }] }, null, 2));
@@ -1474,6 +1483,7 @@ const child = spawn(process.execPath, [
   // cumusic / cusend:Jev 每次请求的图和回答落进产物目录(不含密钥),场景跑完挪进自己的 <key>-evidence/jev/
   ...(CU_JEV ? { TANGU_JEV_EVIDENCE_DIR: join(OUT, JEV_REQUESTS_DIR) } : {}),
   ...(ONLY.has('selfschedule') || ONLY.has('selfmodel') || ONLY.has('caltodo') ? { FORSION_AMADEUS_VAULT: SELF_SCHED_VAULT } : {}),
+  ...(LATER_TZ ? { TZ: LATER_TZ } : {}),
   // P1-K1 remotecaller:unitWeb 盖章的密钥(桌面主进程每次启动生成,这里随机一枚);只在跑这个场景时注入,别的场景环境不变
   ...(ONLY.has('remotecaller') || ONLY.has('remotesession') ? { TANGU_REMOTE_MARK_SECRET: REMOTE_MARK } : {}),
   // P1-K2 estop:桌面主进程独占的锁文件(隔离 home 下);只在跑这个场景时注入 —— 别的场景的引擎没有桌面锁概念(env 没设 = 未锁)
@@ -8262,7 +8272,9 @@ Then reply with only the command output.`,
   });
   // caltodo / cloudtodo(11-07):「帮我添加两条待办」几步之内进默认日历、没日期没勾、不写笔记;再列出、勾掉。判据与负对照见 lib/caltodo-live.mjs。
   await scenario('caltodo', 'caltodo 用户的待办(本机):加两条无日期待办 → 新会话列出 → 勾掉', async () =>
-    calTodoLive({ run, rounds: Number(opt('rounds', 1)), home, workspace, vault: SELF_SCHED_VAULT, skill: CALTODO_SKILL }));
+    calTodoLive({ run, rounds: Number(opt('rounds', 1)), home, workspace, vault: SELF_SCHED_VAULT, skill: CALTODO_SKILL,
+      // 引擎本地时钟相对 UTC 的分钟数:钉了就是钉的那一档,没钉就是台架自己的(引擎继承台架的 TZ)
+      tzOffsetMin: LATER_OFFSET_H == null ? -new Date().getTimezoneOffset() : LATER_OFFSET_H * 60, laterOnly: argv.includes('--caltodo-later-only') }));
   await scenario('cloudtodo', 'cloudtodo 用户的待办(云端 run):加两条无日期待办 → 新会话列出 → 勾掉', async () => {
     const cloud = process.env.TANGU_LIVE_CLOUD_URL;
     if (!cloud) return { ok: false, detail: '要 TANGU_LIVE_CLOUD_URL / TANGU_LIVE_CLOUD_TOKEN 指向 server scripts/calendar-local.mts(打印的 url 与 token)' };
