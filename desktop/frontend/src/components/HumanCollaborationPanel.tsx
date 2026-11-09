@@ -95,6 +95,7 @@ function HumanBody({ engine, target, name, running, jump, onRewrite, draftKey }:
   const over = cut && cut.cutAt !== null ? cut : null
   const draftCut = draft && limit ? clipWholeLines(draft.content, limit) : null
   const agentName = (slug: string) => agentDefs.find((a) => a.slug === slug)?.name || slug
+  const num = (n: number) => (locale === 'zh' ? String(n) : n.toLocaleString('en-US'))
   const reviewLatest = async () => { try { const d = await getHumanDocument(engine, target); if (alive.current) setLatest(d) } catch (e) { if (alive.current) setError(errorText(e)) } }
   return <section className="human-panel" data-human-scope={target.kind} data-human-file={target.kind === 'human' ? target.file : undefined} onKeyDown={e => { if ((e.metaKey || e.ctrlKey) && e.key === 's' && draft) { e.preventDefault(); e.stopPropagation(); void save() } }}>
     <header className="human-heading"><div><h3>{t(file ? `human.file.${file}.title` : 'human.title')}</h3><p>{file ? t(`human.file.${file}.caption`) : target.kind === 'agent' ? t('human.agentScope', { name }) : t('human.projectScope')}</p></div><div className="human-actions">
@@ -109,7 +110,7 @@ function HumanBody({ engine, target, name, running, jump, onRewrite, draftKey }:
     {notice && <p className="human-notice" role="status">{notice}</p>}
     {doc && !draft && !file && humanLegacy(doc) && <p className="human-notice" data-human-legacy>{t('human.legacy')} {onRewrite && <button type="button" className="profile-text-action" disabled={!!running} onClick={rewrite}><RefreshCw size={12} />{t('human.rewrite')}</button>}</p>}
     {!doc && !error && <p className="agent-profile-muted" role="status"><Loader2 size={14} className="spin" /> {t('human.loading')}</p>}
-    {doc && over && <p className="human-notice human-over" data-prompt-over-budget={file}>{t(file === 'soul' ? 'human.portraitOver' : 'human.notesOver', { limit: over.limit, chars: over.chars, n: over.outside })}
+    {doc && over && <p className="human-notice human-over" data-prompt-over-budget={file}>{t(file === 'soul' ? 'human.portraitOver' : 'human.notesOver', { limit: num(over.limit), chars: num(over.chars), n: over.outside })}
       {file === 'soul' && !draft && <button type="button" className="profile-text-action" disabled={busy} onClick={tidy} data-portrait-tidy><Pencil size={12} />{t('human.portraitTidy')}</button>}</p>}
     {doc && file === 'soul' && !draft && overflow.length > 0 && <div className="human-overflow" data-portrait-overflow>
       <p>{t('human.overflow.title', { n: overflow.length })}
@@ -121,7 +122,7 @@ function HumanBody({ engine, target, name, running, jump, onRewrite, draftKey }:
     {doc && file === 'soul' && !draft && <PortraitMoveCard engine={engine} />}
     {doc?.updatedAt && <p className="human-date">{t('human.updatedAt', { time: formatRelative(doc.updatedAt, { locale }) })}</p>}
     {draft ? <div className="human-editor"><textarea ref={editorRef} aria-label={file ? t('human.editFile', { name: t(`human.file.${file}.title`) }) : t('human.editLabel')} value={draft.content} maxLength={doc?.maxLength || 12000} rows={15} onChange={e => changeDraft({ ...draft, content: e.target.value })} disabled={busy} />
-      {draftCut && <p className="human-draft-budget" data-prompt-draft-budget={draftCut.cutAt === null ? 'fits' : 'over'}>{draftCut.cutAt === null ? t('human.draftFits', { chars: draftCut.chars, limit: draftCut.limit }) : t('human.draftOver', { chars: draftCut.chars, limit: draftCut.limit, n: draftCut.outside })}</p>}
+      {draftCut && <p className="human-draft-budget" data-prompt-draft-budget={draftCut.cutAt === null ? 'fits' : 'over'}>{draftCut.cutAt === null ? t('human.draftFits', { chars: num(draftCut.chars), limit: num(draftCut.limit) }) : t('human.draftOver', { chars: num(draftCut.chars), limit: num(draftCut.limit), n: draftCut.outside })}</p>}
       <div className="human-actions"><button type="button" className="btn primary sm" disabled={busy || conflict} onClick={() => void save()}>{busy && <Loader2 size={13} className="spin" />}{t('human.save')}</button><button type="button" className="btn sm" disabled={busy} onClick={() => { changeDraft(null); setConflict(false); setLatest(null); setError('') }}>{t('human.cancel')}</button></div>
       {conflict && <button type="button" className="profile-text-action" onClick={() => void reviewLatest()}>{t('human.latest')}</button>}
       {latest && <section className="human-latest"><div className="md-body"><Markdown content={latest.content} allowRun={false} /></div><button type="button" className="btn sm" disabled={busy} onClick={() => void save(latest.version)}>{t('human.merge')}</button></section>}

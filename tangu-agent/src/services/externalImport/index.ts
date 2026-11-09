@@ -240,7 +240,10 @@ async function buildPlan(userId: string, input: { tools: string[]; pasted?: unkn
  *  「过去的事」本来就默认不勾,只记 cost(勾上也算进「勾了约 Y 字」)。 */
 function budgetPortrait(items: PlanItem[], current: string, heading: string): PortraitBudget {
   const chars = current.trim().length;
-  const overhead = current.split('\n').some((l) => l.replace(/^#{1,6}\s+/, '').trim() === heading && /^#{1,6}\s/.test(l)) ? 0 : `\n\n## ${heading}\n`.length;
+  // 同一天已有导入那一节:不再扣标题,但那一节还没条目时第一条前面会多一个空行
+  const lines = current.split('\n');
+  const at = lines.findIndex((l) => /^#{1,6}\s/.test(l) && l.replace(/^#{1,6}\s+/, '').trim() === heading);
+  const overhead = at < 0 ? `\n\n## ${heading}\n`.length : portraitEntries(lines.slice(at + 1).join('\n').split(/\n#{1,6}\s/)[0]).length ? 0 : 1;
   const room = Math.max(0, PORTRAIT_LIMIT - chars - overhead);
   let used = 0;
   for (const i of items) {
@@ -326,7 +329,7 @@ export async function applyPlan(input: { planId?: unknown; items?: unknown; skil
   const record = (w: Write, kind: keyof Ledger['counts'], n = 1): void => { ledger.writes.push(w); ledger.counts[kind] += n; writeLedger(ledger); };
   try {
     // 画像:一条一条加(mutatePortrait 自己去重);勾上的「过去的事」也是关于这个人的。写进导入自己那一节,不进 Agent 那一节(11-09)
-    const portraitSection = sectionHeading(plan.lang, ledger.at);
+    const portraitSection = sectionHeading(plan.lang, plan.createdAt); // 和整理时算账用的同一个标题(跨过午夜也不多开一节)
     for (const i of items.filter((x) => x.dest === 'person' || x.dest === 'past')) {
       const r = await mutatePortrait({ action: 'add', fact: text(i), actor: 'user', source: { kind: 'import' }, section: portraitSection });
       if (r.duplicate || !r.change) { skipped++; continue; }
@@ -447,7 +450,11 @@ export async function migrateImportedPortrait(): Promise<{ moved: number; skippe
   catch (e: any) { return e?.code === 'ENOENT' ? { moved: 0 } : { moved: 0, skipped: 'unreadable' }; }
   const ledgers: Ledger[] = [];
   for (const n of names) {
-    try { ledgers.push(readLedger(n.slice(0, -5))); } catch { return { moved: 0, skipped: 'unreadable' }; }
+    let l: Ledger;
+    try { l = readLedger(n.slice(0, -5)); } catch { return { moved: 0, skipped: 'unreadable' }; }
+    // 形状不对(没有日期、条目不是字符串)也算读不懂:标题会写成「Invalid Date」,条目对不上
+    if (!Number.isFinite(l.at) || l.writes.some((w: any) => !w || typeof w.kind !== 'string' || (w.kind === 'person' && typeof w.content !== 'string'))) return { moved: 0, skipped: 'unreadable' };
+    ledgers.push(l);
   }
   const moves = ledgers.filter((l) => !l.undoneAt).sort((a, b) => a.at - b.at).flatMap((l) => {
     const person = l.writes.flatMap((w) => (w.kind === 'person' ? [w.content] : []));

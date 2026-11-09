@@ -353,6 +353,10 @@ describe('moving earlier imports out of the agent section (one-off, 11-09)', () 
     expect(await migrateImportedPortrait()).toEqual({ moved: 0, skipped: 'unreadable' });
     expect((await readHuman(SOUL)).version).toBe(before.version);
     expect(readFileSync(join(home, 'imports', `${id2}.json`), 'utf8')).toBe('{broken');
+    // 能解析但形状不对(没有日期)同样算读不懂:不会写出「Invalid Date」标题
+    writeLedgerFile(id2, { id: id2, sources: [], counts: { person: 1, agent: 0, project: 0, skill: 0 }, writes: [{ kind: 'person', content: '你喜欢喝茶。' }] });
+    expect(await migrateImportedPortrait()).toEqual({ moved: 0, skipped: 'unreadable' });
+    expect((await readHuman(SOUL)).version).toBe(before.version);
   });
 
   it('an undone import and an entry outside the agent section are left alone; English imports get an English heading', async () => {
