@@ -263,6 +263,74 @@ describe('Forsion Git sources', () => {
       .rejects.toThrow('source: forsion-git-unsupported')
   })
 
+  // Review findings (Codex, 2026-11-09): each of these failed before the fix.
+  it('a refusal (expired sign-in, access revoked) is never covered by the copy read earlier', async () => {
+    routes[INDEX] = () => json(index([kit()]))
+    const s = makeGit()
+    const src = await s.add('forsion-git:acme/team-kit')
+    routes[INDEX] = refused(401)
+    expect(await s.catalog(src.id, { refresh: true })).toMatchObject({ items: [], error: 'source: forsion-git-signin', stale: false })
+    routes[INDEX] = () => json(index([kit()]))
+    await s.catalog(src.id, { refresh: true })
+    routes[INDEX] = refused(404, 'GIT_NOT_FOUND')
+    expect(await s.catalog(src.id, { refresh: true })).toMatchObject({ items: [], error: 'source: forsion-git-no-access' })
+    await expect(s.download(`src_${src.id}_brief`)).rejects.toThrow('source: forsion-git-no-access')
+    // A network failure still falls back to the copy (same account).
+    routes[INDEX] = () => json(index([kit()]))
+    await s.catalog(src.id, { refresh: true })
+    routes[INDEX] = () => { throw new Error('ECONNRESET') }
+    expect(await s.catalog(src.id, { refresh: true })).toMatchObject({ stale: true, error: 'source: fetch-failed' })
+  })
+
+  it('switching accounts while a read is in flight: the answer for the old account is not handed to the new one', async () => {
+    routes[INDEX] = () => json(index([kit()]))
+    const s = makeGit()
+    const src = await s.add('forsion-git:acme/team-kit')
+    let release!: () => void
+    const gate = new Promise<void>((r) => { release = r })
+    routes[INDEX] = async () => { await gate; return json(index([kit()])) } // Alice's read, held
+    const pending = s.catalog(src.id, { refresh: true })
+    await new Promise((r) => setTimeout(r, 10))
+    access = { base: BASE, token: jwt('u-bob') }
+    routes[INDEX] = refused(404, 'GIT_NOT_FOUND') // what Bob gets
+    release()
+    expect(await pending).toMatchObject({ items: [], error: 'source: forsion-git-no-access' })
+  })
+
+  it('the same user id on another server is another account: its copy is not reused', async () => {
+    routes[INDEX] = () => json(index([kit()]))
+    const s = makeGit()
+    const src = await s.add('forsion-git:acme/team-kit')
+    const OTHER = 'https://selfhosted.example'
+    access = { base: OTHER, token: jwt('u-alice') }
+    routes[`${OTHER}/api/git/store/index?repo=acme%2Fteam-kit`] = refused(404, 'GIT_NOT_FOUND')
+    const before = hits.length
+    expect(await s.catalog(src.id)).toMatchObject({ items: [], error: 'source: forsion-git-no-access' })
+    expect(hits.length).toBe(before + 1)
+  })
+
+  it('a private catalog\'s title stays out of the state file and is shown only to the account that read it', async () => {
+    routes[INDEX] = () => json({ ...index([kit()]), title: 'Acme secret roadmap' })
+    const s = makeGit()
+    const src = await s.add('forsion-git:acme/team-kit')
+    expect(src.title).toBe('Acme secret roadmap')
+    expect(await readFile(join(home, '.store-sources', 'state.json'), 'utf8')).not.toContain('secret roadmap')
+    access = null
+    expect((await s.list()).map((x) => x.title)).toEqual(['team-kit'])
+    expect((await makeGit().list()).map((x) => x.title)).toEqual(['team-kit'])
+  })
+
+  it('a Forsion Git package listed by a public source: updates wait for the sign-in too', async () => {
+    routes[CATALOG] = () => json(index([kit()]))
+    const s = makeGit()
+    const src = await s.add('github:pixel-lab/image-skills')
+    const card = `src_${src.id}_brief`
+    await s.recordInstall({ cardId: card, type: 'skill', slug: `src-${src.id}-brief`, name: '周报', version: '1.0.0', origin: 'forsion-git:acme/team-kit' })
+    expect(s.updatesPaused(card)).toBe(false)
+    access = null
+    expect(s.updatesPaused(card)).toBe(true)
+  })
+
   it('downloads the package folder from the archive the server streams, signed in as the user', async () => {
     routes[INDEX] = () => json(index([kit()]))
     // Gitea wraps the archive in `<repo>/` (not GitHub's `<repo>-<ref>/`).

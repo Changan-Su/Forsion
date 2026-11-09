@@ -20,6 +20,7 @@ import { createSerialQueue, writePrivateJson } from './configWrite'
 import { downloadCandidates, downloadZip, GZIP_MAGIC, isJunkPath, MARKET_MANIFEST, ZIP_MAGIC, type DownloadProgress } from './marketInstall'
 import { npmDownloadCandidates, npmTarballToZip } from './npmMarketInstall'
 import { untar } from './minitar'
+import { forsionAccountId } from '../shared/forsionAccount'
 import { registryOrder, resolveLatest, timeoutSignal } from '../shared/npmRegistry'
 import { planZipFiles } from '../shared/marketPackage'
 import {
@@ -68,14 +69,13 @@ async function gitFailure(res: Response): Promise<string> {
   if (res.status === 404 || res.status === 503) return 'forsion-git-unsupported'
   return 'fetch-failed'
 }
-/** Whose copy a Forsion Git catalog is: the account id in the sign-in token (read, not verified: it only keys a cache). */
-export function forsionAccountKey(token: string): string {
-  try {
-    const id = JSON.parse(Buffer.from(token.split('.')[1] ?? '', 'base64url').toString('utf8'))?.userId
-    if (typeof id === 'string' && id) return `u:${id}`
-  } catch { /* not a JWT */ }
-  return `t:${createHash('sha256').update(token).digest('hex').slice(0, 16)}`
+/** Whose copy a Forsion Git catalog is: server + account id from the sign-in token (read, not verified: it only keys
+ *  a cache). Two servers can hand out the same user id, so the server is part of it. */
+export function forsionAccountKey(base: string, token: string): string {
+  return forsionAccountId(base, token) ?? `${base.replace(/\/+$/, '')}::t:${createHash('sha256').update(token).digest('hex').slice(0, 16)}`
 }
+/** Answers that say this account may not read it (or nobody is signed in): never covered with an older copy. */
+const GIT_REFUSALS = new Set(['forsion-git-signin', 'forsion-git-no-access', 'forsion-git-needs-setup'])
 
 /** Fetch the first address that answers with a body under `max` bytes (connect and total timeouts per address). */
 export async function fetchTextFirst(urls: string[], fetchFor: (url: string) => FetchFn, max = MAX_INDEX_BYTES): Promise<string> {
@@ -246,8 +246,14 @@ export function createStoreSources(o: {
   const find = (id: string) => all().find((s) => s.id === id)
   const fallbackTitle = (ref: StoreSourceRef): string =>
     ref.kind === 'npm' ? ref.name : ref.kind === 'url' ? hostOf(ref.url) : ref.repo.split('/')[1]
+  /** A private (Forsion Git) catalog's own title shows only to the account that read it; otherwise the repository name. */
+  const memoTitle = (s: UserSource | PluginSource, locale: string): string => {
+    const m = memo.get(s.id)
+    if (!m || (refOf(s).kind === 'forsion-git' && (!lastWho || m.who !== lastWho))) return ''
+    return pickText(m.index.title, locale)
+  }
   const titleOf = (s: UserSource | PluginSource, locale: string): string =>
-    pickText(s.title, locale) || pickText(memo.get(s.id)?.index.title, locale) || fallbackTitle(refOf(s))
+    pickText(s.title, locale) || memoTitle(s, locale) || fallbackTitle(refOf(s))
   const info = (s: UserSource | PluginSource, locale: string): StoreSourceInfo => ({
     id: s.id, title: titleOf(s, locale), uri: canonicalSource(refOf(s)), kind: refOf(s).kind,
     trusted: state.trusted.includes(s.id), disabled: state.disabled.includes(s.id),
@@ -262,10 +268,12 @@ export function createStoreSources(o: {
     if (!a?.token || !a.base) throw new StoreIndexError('forsion-git-signin')
     return a
   }
+  /** Who was signed in at the last look ('' = nobody): lets the (sync) title of a private source follow the account. */
+  let lastWho = ''
   /** Who is signed in now, as a cache key ('' = nobody). */
   const currentWho = async (): Promise<string> => {
     const a = await o.forsionGit?.().catch(() => null)
-    return a?.token ? forsionAccountKey(a.token) : ''
+    return (lastWho = a?.token && a.base ? forsionAccountKey(a.base, a.token) : '')
   }
   const gitUrl = (a: ForsionGitAccess, path: string, q: Record<string, string | undefined>) =>
     `${a.base.replace(/\/+$/, '')}/api/git/store/${path}?${new URLSearchParams(Object.entries(q).filter((e): e is [string, string] => !!e[1]))}`
@@ -280,7 +288,7 @@ export function createStoreSources(o: {
       const res = await o.fetchFor(url)(url, { signal: ac.signal, headers: { accept: 'application/json', authorization: `Bearer ${a.token}` } })
       if (!res.ok) throw Object.assign(new StoreIndexError(await gitFailure(res)), { detail: `HTTP ${res.status}` })
       const text = await readCapped(res, MAX_INDEX_BYTES)
-      return { json: JSON.parse(text), who: forsionAccountKey(a.token) }
+      return { json: JSON.parse(text), who: (lastWho = forsionAccountKey(a.base, a.token)) }
     } catch (e) {
       if (e instanceof StoreIndexError || e instanceof SyntaxError) throw e
       throw Object.assign(new StoreIndexError('fetch-failed'), { detail: `${hostOf(url)}: ${ac.signal.aborted ? 'timeout' : errorText(e)}` })
@@ -327,7 +335,7 @@ export function createStoreSources(o: {
     return index
   }
   /** Fresh enough copy, or fetch. `allowStale` falls back to the copy on disk when fetching fails. */
-  async function indexOf(id: string, opts: { refresh?: boolean } = {}): Promise<{ index: StoreIndex; at: number; stale: boolean; error?: string }> {
+  async function indexOf(id: string, opts: { refresh?: boolean; again?: boolean } = {}): Promise<{ index: StoreIndex; at: number; stale: boolean; error?: string }> {
     const s = find(id)
     if (!s) throw new StoreIndexError('not-found')
     const git = refOf(s).kind === 'forsion-git'
@@ -338,8 +346,18 @@ export function createStoreSources(o: {
     const uri = canonicalSource(refOf(s)), key = `${id} ${uri} ${who ?? ''}`
     let job = inflight.get(key)
     if (!job) { job = fetchIndex(id, refOf(s)).finally(() => inflight.delete(key)); inflight.set(key, job) }
-    try { const index = await job; return { index, at: memo.get(id)!.at, stale: false } } catch (e) {
+    try {
+      const index = await job
+      // Signed in as someone else while this was in flight: that read belongs to the other account. Read again as this one.
+      if (git && await currentWho() !== who) {
+        if (opts.again) throw new StoreIndexError('fetch-failed')
+        return indexOf(id, { ...opts, again: true })
+      }
+      return { index, at: memo.get(id)!.at, stale: false }
+    } catch (e) {
       const code = e instanceof Error ? e.message : String(e)
+      // "Not you" / "not signed in" isn't an outage: no older copy stands in, and the one in memory goes.
+      if (git && e instanceof StoreIndexError && GIT_REFUSALS.has(e.code)) { memo.delete(id); throw e }
       if (hit) return { index: hit.index, at: hit.at, stale: true, error: code }
       if (git) throw e
       const cached = await readFile(cacheFile(id), 'utf8').then((t) => JSON.parse(t), () => null)
@@ -377,6 +395,7 @@ export function createStoreSources(o: {
   // ── Public API ──
   async function list(locale = o.defaultLocale()): Promise<StoreSourceInfo[]> {
     await load()
+    if (all().some((s) => refOf(s).kind === 'forsion-git')) await currentWho()
     return all().map((s) => info(s, locale))
   }
 
@@ -400,7 +419,9 @@ export function createStoreSources(o: {
     if (all().some((s) => s.id === id || canonicalSource(refOf(s)) === uri)) throw new StoreIndexError('duplicate')
     // Only a readable catalog becomes a source.
     const index = await fetchIndex(id, ref)
-    await save((s) => { if (!s.user.some((x) => x.id === id)) s.user.push({ id, uri, ...(index.title ? { title: index.title } : {}), addedAt: Date.now() }) })
+    // A private catalog's title isn't written to the shared state file (another account on this machine would see it).
+    const keepTitle = index.title && ref.kind !== 'forsion-git'
+    await save((s) => { if (!s.user.some((x) => x.id === id)) s.user.push({ id, uri, ...(keepTitle ? { title: index.title } : {}), addedAt: Date.now() }) })
     return info(find(id)!, locale)
   }
 
@@ -502,8 +523,10 @@ export function createStoreSources(o: {
     if (!parts) return false
     const s = find(parts.source)
     if (!s || state.disabled.includes(parts.source)) return true
-    // Signed out: a private source can't be read. Wait for the sign-in instead of marking the item as failed.
-    return refOf(s).kind === 'forsion-git' && !!o.forsionSignedIn && !o.forsionSignedIn()
+    // Signed out: a private source (or a Forsion Git package listed by a public one) can't be read. Wait for the
+    // sign-in instead of marking the item as failed.
+    const viaGit = refOf(s).kind === 'forsion-git' || !!state.installs.find((x) => x.cardId === cardId)?.origin.startsWith('forsion-git:')
+    return viaGit && !!o.forsionSignedIn && !o.forsionSignedIn()
   }
 
   async function downloadPackage(pkg: StorePackage, type: string, onProgress: (p: DownloadProgress) => void, allowLocal: boolean): Promise<{ buf: Buffer; url: string }> {
