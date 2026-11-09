@@ -19,6 +19,10 @@
  * 有没有日期都收,没日期的进「未排期」)。所以日历工具同时是待办工具:create 可以不给 start(= 无日期待办,日期格不写),
  * list 能列出无日期的行,create / edit 的 done 写第一个勾选列。待办是什么、怎么用,写在日历插件的 calendar-todos 技能里;
  * 这里只改工具定义(用户定:引擎系统提示不加待办段)。
+ *
+ * 缺省日历与过去的时间(11-09):一次真实会话里 Agent 面对三本日历挑了不是缺省的那本,还填了一个已经过去的时刻。
+ * list_calendars 给缺省那本标 `default: true`(= 不带 calendar 时 create 实际落的那本,见 defaultCalOf);
+ * create / edit 写进去的开始时间已经过去时,返回里带一句提示(只提示不拒绝,见 pastStartNote)。
  */
 import { promises as fs, existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -154,6 +158,40 @@ function noDoneCol(cal: Cal, what: string): Error {
     `calendar "${cal.db.name}" has no checkbox column, so ${what}: it holds calendar events, not to-dos. ` +
       'Put to-dos in a calendar whose amadeus_list_calendars entry has a todoColumn (normally the default one, human://CALENDAR.db). ' +
       'If none has one, tell the user: a dated row in a calendar without a checkbox column shows on the calendar but never in the to-do list.',
+  );
+}
+
+const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+/** 云端认「已经过去」的余量:地球上最晚的时区是 UTC−12,早于「UTC 现在 − 12 小时」的时刻在哪个时区看都过去了。 */
+const ANYWHERE_PAST_MS = 12 * 3_600_000;
+/**
+ * 刚写进去的开始时间已经过去时,给模型的一句提示;没过去 / 没日期 = 空串。只提示不拒绝:补记已发生的事是正当用法。
+ * `value` 是写进日期格的值(encodeCalDate 之后的:allDay 去掉了时刻)。还没结束的(有结束时间且没过)不算过去。
+ *
+ * 「现在」用哪个钟:
+ *  - host:引擎和用户在同一台机器上,用进程的本地时钟(和系统提示的 Current Date、get_datetime 同一个口径)。
+ *  - 云端:请求里没有用户的时区,worker 的钟不代表用户。只在「哪个时区看都已经过去」时才报(UTC 现在 − 12 小时为界),
+ *    提示里写明用的是 UTC、不知道用户时区。⚠️代价:同一天里晚了几小时的那种在云端报不出来,要等客户端随请求带上时区。
+ *    别为了报得出来改成拿 worker 的钟直接比:UTC 的 worker 对东八区用户会把「今晚八点」在下午就报成过去。
+ */
+export function pastStartNote(value: CellValue | undefined, host: boolean, now: Date = new Date()): string {
+  const d = decodeCalDate(value);
+  if (!d) return '';
+  const p2 = (n: number): string => String(n).padStart(2, '0');
+  // 和 start 同一个写法(YYYY-MM-DDTHH:mm),字符串直接比大小
+  const ref = host
+    ? `${now.getFullYear()}-${p2(now.getMonth() + 1)}-${p2(now.getDate())}T${p2(now.getHours())}:${p2(now.getMinutes())}`
+    : new Date(now.getTime() - ANYWHERE_PAST_MS).toISOString().slice(0, 16);
+  const isPast = (t: string): boolean => (t.includes('T') ? t < ref : t < ref.slice(0, 10));
+  if (!isPast(d.start) || (d.end && !isPast(d.end))) return '';
+  const timed = d.start.includes('T');
+  const clock = host
+    ? `it is now ${timed ? ref : ref.slice(0, 10)} (${WEEKDAYS[now.getDay()]}, this machine's local time)`
+    : `it is now ${now.toISOString().slice(0, 16)} UTC, and the user's timezone is not known here, so this is only reported once it is past in every timezone`;
+  return (
+    `\nNote: this ${timed ? 'start' : 'date'} (${d.start}) is already in the past: ${clock}. ` +
+    'If the user meant a time still to come (for example "later today"), correct it with amadeus_edit_event. ' +
+    'If they are recording something that already happened, leave it as it is.'
   );
 }
 
@@ -416,12 +454,15 @@ export async function localCalendarRows(): Promise<Array<{ rel: string; columns:
   }
   return out;
 }
+/** 缺省日历 = calendars() 的第一本:有默认日历 human/CALENDAR.db 就是它;它读不出来(文件坏了 / 老云端没有这份)时是库里按路径排第一的那本。
+ *  「不带 calendar 的 create 落在哪」和「list_calendars 标 default 的是谁」都从这里取,两边不会说岔。 */
+const defaultCalOf = (cals: Cal[]): Cal | undefined => cals[0];
 async function findCalendar(be: AmadeusBackend, nameOrPath?: string): Promise<Cal> {
   const cals = await calendars(be);
   if (!cals.length) {
     throw new Error('no calendar database found. A calendar is a multi-dimensional table with a "calendarDate" column; open the Calendar space in the app to create one.');
   }
-  if (!nameOrPath) return cals[0];
+  if (!nameOrPath) return defaultCalOf(cals)!;
   const q = nameOrPath.trim();
   const found = cals.find(
     (c) => c.rel === q || c.db.name === q || path.basename(c.rel).replace(/\.db$/i, '') === q,
@@ -625,7 +666,8 @@ export const amadeusProvider: ToolProvider = {
     deferCalendar(mk(
       'amadeus_list_calendars',
       "List the user's calendars (multi-dimensional tables that have a calendarDate column) with their names, paths, columns and counts. " +
-        'The default calendar (path human://CALENDAR.db) comes first. Every row of a calendar that has a checkbox column is also on the ' +
+        "The first entry, marked `default: true`, is the user's default calendar (normally path human://CALENDAR.db): new events and to-dos " +
+        'belong there unless the user names another calendar. Every row of a calendar that has a checkbox column is also on the ' +
         "user's to-do list (the checkbox = done), whether or not it has a date.",
       {},
       [],
@@ -636,6 +678,7 @@ export const amadeusProvider: ToolProvider = {
         if (!be.exists()) return noVault;
         const cals = await calendars(be);
         if (!cals.length) return 'No calendars found (a calendar is a table with a "calendarDate" column).';
+        const dflt = defaultCalOf(cals);
         return JSON.stringify(
           cals.map((c) => {
             const dated = c.db.rows.filter((r) => decodeCalDate(r.cells[c.cal.id])).length;
@@ -643,6 +686,8 @@ export const amadeusProvider: ToolProvider = {
             return {
               name: c.db.name,
               path: c.rel,
+              // 只出现在缺省那本上:不带 calendar 的 create 就落在它里面
+              ...(c === dflt ? { default: true } : {}),
               events: dated,
               // 有勾选列 = 待办来源:没有日期的那些行只在待办列表里,events 不数它们
               ...(doneCol ? { todoColumn: doneCol.name, undatedTodos: c.db.rows.length - dated } : {}),
@@ -706,8 +751,10 @@ export const amadeusProvider: ToolProvider = {
     ), "Read the user's events and to-dos (to-dos are calendar rows; checkbox = done; they may have no date)."),
     deferCalendar(mk(
       'amadeus_create_event',
-      "Add an event or a to-do to the user's calendar. The user's to-dos are rows in their calendar (the default one unless they name another), " +
-        'not notes. A to-do may have no date: when the user gives no date or time, leave `start` out — do not invent one. ' +
+      "Add an event or a to-do to the user's calendar. The user's to-dos are rows in their calendar, not notes. " +
+        'Leave `calendar` out and the row goes into the default calendar (the one amadeus_list_calendars marks `default: true`); ' +
+        'name a calendar only when the user asked for that one. ' +
+        'A to-do may have no date: when the user gives no date or time, leave `start` out — do not invent one. ' +
         'Times are "YYYY-MM-DD" (all-day) or "YYYY-MM-DDTHH:mm" (with a time). One call adds one row.',
       {
         title: { type: 'string', description: 'Event or to-do title.' },
@@ -715,7 +762,7 @@ export const amadeusProvider: ToolProvider = {
         end: { type: 'string', description: 'Optional end, same format as start (needs a start).' },
         allDay: { type: 'boolean', description: 'Optional; force all-day (drops any time component).' },
         done: { type: 'boolean', description: "Optional; true adds it already ticked (the calendar's checkbox column, e.g. 完成 / Done)." },
-        calendar: { type: 'string', description: 'Optional calendar name/path; defaults to the first calendar (the default one).' },
+        calendar: { type: 'string', description: 'Optional calendar name/path. Leave it out unless the user named a calendar: the row then goes into the default calendar.' },
         props: { type: 'object', description: 'Optional extra column values, keyed by column name.' },
       },
       ['title'],
@@ -746,6 +793,7 @@ export const amadeusProvider: ToolProvider = {
             ok: true,
             msg: value
               ? `Created event "${args.title}" (${value}${ticked}) in "${cal.db.name}". id=${id}`
+                + (ticked ? '' : pastStartNote(value, ctx?.execMode === 'host')) // 加进来就勾上的 = 补记做完的事,不用提醒
               : `Created to-do "${args.title}" (no date${ticked}) in "${cal.db.name}"; it shows in the user's to-do list. id=${id}`,
           };
         });
@@ -795,7 +843,12 @@ export const amadeusProvider: ToolProvider = {
           }
           setNamedProps(cal.db, row.cells, args.props);
           if (doneCol && done !== undefined) setDone(row.cells, doneCol, done);
-          return { ok: true, msg: `Updated event ${args.eventId} in "${cal.db.name}".` };
+          // 只在这次调用写了开始时间时看:勾掉一条早就过期的待办、改个标题,不该被提醒「时间过去了」
+          const wroteStart = !!start && !(doneCol && row.cells[doneCol.id] === true);
+          return {
+            ok: true,
+            msg: `Updated event ${args.eventId} in "${cal.db.name}".` + (wroteStart ? pastStartNote(row.cells[cal.cal.id], ctx?.execMode === 'host') : ''),
+          };
         });
       },
     ), "Change an event or a to-do on the user's calendar, or tick a to-do done."),
