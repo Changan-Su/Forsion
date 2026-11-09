@@ -14,8 +14,13 @@
  * 场景:
  *  A. 不限流:抽屉里点根上的笔记 / 同步库分区里的笔记 → 编辑器装入正文。
  *  B. 限流中点一篇:不显示「当前库里没有这篇笔记」;限流过去后能读出正文(自动或点重试)。
- *  C. 断网冷启动:不显示「当前库里没有这篇笔记」。已知另一件事(未修,只打 INFO):断网冷启动时整个云端库打不开,
- *     网络回来也不会自己重开。
+ *  C. 断网冷启动(2026-11-09 修:此前库只在启动时试开一次,断网失败后网络回来也不重开,只能重启 app):
+ *     C1 有树快照:断网时先用快照显示树、不出「没有这篇」;断网期间别处删掉的笔记点开不判「没有」、不往云端写;
+ *        网络回来(online)不点任何东西,后台重新拉树(删掉的那篇从树上消失),笔记能读出。
+ *     C2 没有快照(首次登录 / 快照被清):网络回来(online)自己把云端库打开,回到上次那篇。
+ *     C3 没有快照、网络回来但没有 online 事件(请求失败而系统仍算在线):再进一次笔记 Space 就打开。
+ *     C4 网络挂住(请求不回也不报错)冷启动:快照照样几秒内上屏,不等 30 秒超时。
+ *  负对照 = 这份台架对着修复前的代码(重建 dist)跑,C 必须红;E2E_NEGATIVE=1 只是撤掉故障注入。
  *
  * 种子:缺省是内置的几篇;CLOUD_SEED=<json>(`{ path: { kind, content } }`)可换成真实库的导出,只在本机用,别进仓库。
  */
@@ -57,14 +62,16 @@ const BUILTIN_SEED = {
   'WMOSv11/.forsion-vault.md': { kind: 'page', content: '---\ndevices: []\n---\n' },
   'WMOSv11/MOC-Forsion.fd/Forsion-2.14.md': { kind: 'page', content: '# Forsion 2.14\n\n别的设备同步来的笔记。\n' },
   'WMOSv11/同步来的.md': { kind: 'page', content: '同步来的正文。\n' },
+  // 正文首行别和文件名同字:标题栏显示文件名,判据会把「读不出」误判成正文装入。
+  '离线时被删.md': { kind: 'page', content: '这篇在断网期间被别的设备删掉。\n' },
 }
 
 /** 假云端库 + 限流开关。limit = { file: bool, tree: bool }。 */
 function startFakeCloud(seed) {
   const rows = new Map()
   let changeSeq = 0
-  const limit = { file: false, tree: false, net: false } // net = 断网:请求根本到不了服务端(由页面路由 abort)
-  const hits = { file429: 0, tree429: 0, file200: 0 }
+  const limit = { file: false, tree: false, net: false, hang: false } // net = 断网:请求根本到不了服务端(页面路由 abort);hang = 挂住不回
+  const hits = { file429: 0, tree429: 0, file200: 0, tree200: 0 }
   const kindOf = (p) => (/\.md$/i.test(p) ? 'page' : /\.db$/i.test(p) ? 'db' : 'binary')
   const sha = (b) => crypto.createHash('sha256').update(b).digest('hex')
   for (const [p, v] of Object.entries(seed)) {
@@ -85,6 +92,7 @@ function startFakeCloud(seed) {
       switch (m ? `${req.method} ${m[1]}` : '') {
         case 'GET tree': {
           if (limit.tree) { hits.tree429++; return limited() }
+          hits.tree200++
           const entries = [...rows].map(([p, r]) => ({ path: p, kind: r.kind, seq: r.seq, hash: sha(r.body), size: r.body.length }))
           const folders = new Set()
           for (const e of entries) for (let d = path.posix.dirname(e.path); d !== '.'; d = path.posix.dirname(d)) folders.add(d)
@@ -122,6 +130,7 @@ function startFakeCloud(seed) {
   })
   return new Promise((resolve) => srv.listen(0, '127.0.0.1', () => resolve({
     origin: `http://127.0.0.1:${srv.address().port}`, limit, hits,
+    remove: (p) => { rows.delete(p); changeSeq++ }, // 别的设备删了这篇(不经本端)
     close: () => { srv.closeAllConnections(); srv.close() },
   })))
 }
@@ -150,7 +159,8 @@ async function main() {
     await ctx.addInitScript(() => {
       try {
         localStorage.setItem('forsion_tangu_onboarding_done', '1')
-        localStorage.setItem('forsion_token', 'e2e-cloudnote')
+        // JWT 形状(只取 userId 认账号):非 JWT 的 token 每次启动都换一个匿名作用域,树快照永远读不回来,C1 就测不到快照路径。
+        localStorage.setItem('forsion_token', `e30.${btoa(JSON.stringify({ userId: 'e2e-cloudnote' }))}.x`)
         localStorage.setItem('amadeus_vault_mode', 'cloud')
       } catch { /* ignore */ }
     })
@@ -159,9 +169,12 @@ async function main() {
     page.on('pageerror', (e) => pageErrors.push(e.message))
     await page.route('**/auth/me', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: '{"username":"e2e"}' }))
     await page.route('**/api/**', (r) => r.abort())
+    const hung = []
+    const releaseHung = () => { for (const r of hung.splice(0)) r.abort('internetdisconnected').catch(() => {}) }
     await page.route('**/api/amadeus/**', (r) => {
       const u = new URL(r.request().url())
       if (/\/events$/.test(u.pathname)) return r.abort() // SSE:假云端不实现
+      if (fake.limit.hang) { hung.push(r); return } // 挂住:不回也不报错,直到 releaseHung
       if (fake.limit.net) { fake.hits.netDropped = (fake.hits.netDropped || 0) + 1; return r.abort('internetdisconnected') }
       return r.continue({ url: `${fake.origin}/api/amadeus${u.pathname.replace(/^.*?\/api\/amadeus/, '')}${u.search}` })
     })
@@ -185,9 +198,18 @@ async function main() {
     }
     const enterAmadeus = async () => {
       await drawerOpen()
-      const tabs = await page.$$eval('.mb-drawer-foot .mb-tab', (els) => els.map((e) => e.dataset.space || ''))
+      let tabs = []
+      for (let t = 0; t < 10000; t += 250) { // 冷启动早期点抽屉按钮可能落空(还没接上手势),标签随抽屉懒渲染 —— 每轮都确保抽屉开着
+        await drawerOpen().catch(() => {})
+        tabs = await page.$$eval('.mb-drawer-foot .mb-tab', (els) => els.map((e) => e.dataset.space || ''))
+        if (tabs.includes('amadeus')) break
+        await page.waitForTimeout(250)
+      }
       const idx = tabs.indexOf('amadeus')
-      if (idx < 0) throw new Error(`左抽屉底部没有 Amadeus space tab(现有: ${tabs.join(',')})`)
+      if (idx < 0) {
+        await page.screenshot({ path: path.join(SHOTS, 'enter-amadeus-fail.png') }).catch(() => {})
+        throw new Error(`左抽屉底部没有 Amadeus space tab(现有: ${tabs.join(',')})`)
+      }
       await tap(page.locator(`.mb-drawer-foot .mb-tab >> nth=${idx}`))
       await page.waitForTimeout(1200)
     }
@@ -251,40 +273,121 @@ async function main() {
       check(s2 === 'content', `B 限流过去后 ${target} 正文装入`, s2)
     } catch (e) { fail(`B ${target}`, e.message) } finally { fake.limit.file = false }
 
-    // ---- C. 断网(请求到不了服务端,服务器日志里也看不到;2026-11-09 用户实报那次就是这样)----
-    // 开着一篇 → 断网冷启动 → 进笔记 Space(会回到上次那篇)→ 再从树上点它。任何时候都不许出「当前库里没有这篇笔记」;
-    // 网络回来后点重试 / 重点一次能读出。
+    // ---- C. 断网冷启动(请求到不了服务端,服务器日志里也看不到;2026-11-09 用户实报那次就是这样)----
     const target2 = process.env.CLOUD_SEED ? pagesInSeed.filter((p) => needleOf(p) && !sample.includes(p) && p !== target)[0] : 'WMOSv11/MOC-Forsion.fd/Forsion-2.14.md'
+    const gone = process.env.CLOUD_SEED ? null : '离线时被删.md'
+    const rowOf = (p) => page.locator(`.mb-drawer--left .t2s-srow[data-sel-id="${p.replace(/"/g, '\\"')}"]`)
+    /** 树上有没有这一行(按需逐级展开祖先文件夹;不点笔记本身)。 */
+    const treeHas = async (p, ms = 0) => {
+      const t0 = Date.now()
+      for (;;) {
+        await drawerOpen().catch(() => {})
+        if (await rowOf(p).count()) return true
+        const segs = p.split('/')
+        for (let i = 0; i < segs.length - 1 && !(await rowOf(p).count()); i++) {
+          const folder = page.locator('.mb-drawer--left .t2s-folder-row', { has: page.locator('.t2s-group-label', { hasText: new RegExp(`^${segs[i].replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`) }) })
+          if (await folder.count()) { await tap(folder).catch(() => {}); await page.waitForTimeout(300) }
+        }
+        if (await rowOf(p).count()) return true
+        if (Date.now() - t0 >= ms) return false
+        await page.waitForTimeout(500)
+      }
+    }
+    const dropSnapshot = () => page.evaluate(() => { for (const k of Object.keys(localStorage)) if (k.startsWith('amadeus_tree_snap')) localStorage.removeItem(k) })
+    const coldStart = async (mode) => {
+      fake.limit.net = mode === 'net'
+      fake.limit.hang = mode === 'hang'
+      const t0 = Date.now()
+      await page.reload({ waitUntil: 'domcontentloaded' })
+      await page.waitForTimeout(mode === 'hang' ? 1500 : 4500)
+      await enterAmadeus()
+      return t0
+    }
+    const netBack = async (withOnline) => {
+      fake.limit.net = false
+      fake.limit.hang = false
+      releaseHung()
+      if (withOnline) await page.evaluate(() => window.dispatchEvent(new Event('online')))
+    }
+    const leaveAmadeus = async () => {
+      await drawerOpen()
+      const tabs = await page.$$eval('.mb-drawer-foot .mb-tab', (els) => els.map((e) => e.dataset.space || ''))
+      // 别切去主页:主页没有顶栏的抽屉按钮,下一次冷启动会停在那里
+      const idx = tabs.findIndex((x, i) => x && x !== 'amadeus' && i > 0 && !/home/i.test(x))
+      if (idx < 0) throw new Error(`左抽屉底部没有别的 Space(现有: ${tabs.join(',')})`)
+      console.log(`   (C3 先切去 ${tabs[idx]} 再回笔记)`)
+      await tap(page.locator(`.mb-drawer-foot .mb-tab >> nth=${idx}`))
+      await page.waitForTimeout(800)
+    }
     try {
+      // C1:有快照
       await openFromTree(target2)
       await waitState(needleOf(target2), ['content'], 6000)
-      fake.limit.net = !NEGATIVE
-      await page.reload({ waitUntil: 'domcontentloaded' })
-      await page.waitForTimeout(4500)
-      await enterAmadeus()
-      const s0 = await waitState(needleOf(target2), ['missing'], 4000)
-      await page.screenshot({ path: path.join(SHOTS, 'c-offline-restore.png') })
-      check(s0 !== 'missing', 'C 断网冷启动进笔记:不显示「当前库里没有这篇笔记」', `${s0} · 断掉的请求×${fake.hits.netDropped || 0}`)
-      const rowThere = await page.locator(`.mb-drawer--left .t2s-srow[data-sel-id="${target2}"]`).count()
-      if (rowThere || await page.locator('.mb-drawer--left .t2s-folder-row').count()) {
+      await coldStart('net')
+      const s0 = await waitState(needleOf(target2), ['missing'], 3000)
+      await page.screenshot({ path: path.join(SHOTS, 'c1-offline-restore.png') })
+      check(s0 !== 'missing', 'C1 断网冷启动进笔记:不显示「当前库里没有这篇笔记」', `${s0} · 断掉的请求×${fake.hits.netDropped || 0}`)
+      check(await treeHas(target2), `C1 断网时用树快照显示:树上有 ${target2}`)
+      if (gone) {
+        fake.remove(gone)
         try {
-          await openFromTree(target2)
-          const s1 = await waitState(needleOf(target2), ['missing'], 4000)
-          await page.screenshot({ path: path.join(SHOTS, 'c-offline-tap.png') })
-          check(s1 !== 'missing', `C 断网时从树上点 ${target2}:不显示「当前库里没有这篇笔记」`, s1)
-        } catch (e) { console.log(`(C 断网时树上点不到 ${target2}: ${e.message})`) }
-      } else console.log('(C 断网冷启动树是空的,跳过树上点)')
-      fake.limit.net = false
-      let s2 = await waitState(needleOf(target2), ['content'], 4000)
-      for (let i = 0; i < 2 && s2 !== 'content'; i++) {
-        const retry = page.locator('.mb-main button', { hasText: /重试/ })
-        if (await retry.count()) await tap(retry)
-        else { await enterAmadeus().catch(() => {}); await openFromTree(target2).catch(() => {}) }
-        s2 = await waitState(needleOf(target2), ['content'], 6000)
+          await openFromTree(gone)
+          const sg = await waitState(needleOf(gone), ['missing'], 3000)
+          check(sg !== 'missing', `C1 断网时点快照里(云端已删的)${gone}:不判「没有这篇」`, sg)
+        } catch (e) { fail(`C1 断网时点 ${gone}`, e.message) }
       }
-      // 已知另一件事(2026-11-09 记,未修):断网冷启动时整个云端库没打开,网络回来也不会自己重开 —— 只记录,不判红。
-      console.log(`INFO  C 网络回来后 ${target2}: ${s2 === 'content' ? '正文装入' : '没恢复(已知:断网冷启动库不自动重开)'}`)
-    } catch (e) { fail(`C ${target2}`, e.message) } finally { fake.limit.net = false }
+      const treeBefore = fake.hits.tree200
+      await netBack(true)
+      // 不点任何东西:后台重连拉树 —— 删掉的那篇从树上消失
+      let refetched = false
+      for (let t = 0; t < 10000 && !refetched; t += 250) { refetched = fake.hits.tree200 > treeBefore; if (!refetched) await page.waitForTimeout(250) }
+      check(refetched, 'C1 网络回来(online)不点任何东西:后台重新拉了树', `GET tree +${fake.hits.tree200 - treeBefore}`)
+      if (gone) {
+        let still = true
+        for (let t = 0; t < 6000 && still; t += 500) { still = await rowOf(gone).count() > 0; if (still) await page.waitForTimeout(500) }
+        check(!still, `C1 重连后树已刷新:云端删掉的 ${gone} 不在树上了`)
+      }
+      await openFromTree(target2)
+      let s1 = await waitState(needleOf(target2), ['content'], 6000)
+      if (s1 !== 'content') {
+        const retry = page.locator('.mb-main button', { hasText: /重试/ })
+        if (await retry.count()) { await tap(retry); s1 = await waitState(needleOf(target2), ['content'], 6000) }
+      }
+      await page.screenshot({ path: path.join(SHOTS, 'c1-back-online.png') })
+      check(s1 === 'content', `C1 网络回来后 ${target2} 正文装入`, s1)
+
+      // C2:没有快照,网络回来(online)自己打开
+      await dropSnapshot()
+      await coldStart('net')
+      const s2 = await waitState(needleOf(target2), ['missing'], 3000)
+      check(s2 !== 'missing', 'C2 无快照断网冷启动:不显示「当前库里没有这篇笔记」', s2)
+      await drawerOpen()
+      await netBack(true)
+      const opened2 = await treeHas(target2, 10000)
+      const s2b = await waitState(needleOf(target2), ['content'], 6000)
+      await page.screenshot({ path: path.join(SHOTS, 'c2-back-online.png') })
+      check(opened2, 'C2 无快照:网络回来(online)云端库自己打开,树上有笔记')
+      check(s2b === 'content', `C2 无快照:库重开后正在看的 ${target2} 没被换掉`, s2b)
+
+      // C3:没有快照,网络回来但没有 online 事件 —— 再进一次笔记 Space
+      await dropSnapshot()
+      await coldStart('net')
+      await netBack(false)
+      await page.waitForTimeout(1500)
+      await leaveAmadeus()
+      await enterAmadeus()
+      const opened3 = await treeHas(target2, 8000)
+      await page.screenshot({ path: path.join(SHOTS, 'c3-reenter.png') })
+      check(opened3, 'C3 无快照、没有 online 事件:再进笔记 Space 云端库打开')
+
+      // C4:网络挂住(不回不报错)冷启动 —— 快照不等请求超时
+      const t4 = await coldStart('hang')
+      const shown4 = await treeHas(target2, Math.max(0, 10000 - (Date.now() - t4)))
+      const ms4 = Date.now() - t4
+      await page.screenshot({ path: path.join(SHOTS, 'c4-hang.png') })
+      check(shown4 && ms4 < 10000, 'C4 网络挂住冷启动:树快照 10 秒内上屏(请求超时是 30 秒)', `重载后 ${ms4}ms · 挂住的请求×${hung.length}`)
+      await netBack(true)
+    } catch (e) { fail(`C ${target2}`, e.message) } finally { fake.limit.net = false; fake.limit.hang = false; releaseHung() }
 
     check(!(fake.hits.writes || []).length, '点开笔记没有往云端写任何文件', (fake.hits.writes || []).join(', '))
     if (pageErrors.length) console.log('页面异常:', pageErrors.slice(0, 5).join(' | '))
@@ -297,7 +400,7 @@ async function main() {
   }
   console.log(`截图: ${SHOTS}`)
   if (fails.length) { console.error(`❌ e2e:cloudnote${NEGATIVE ? '(负对照)' : ''} ${fails.length} 项失败`); process.exit(1) }
-  console.log(`✅ e2e:cloudnote${NEGATIVE ? '(负对照)' : ''} —— 云端库点笔记:限流中不判「没有这篇」,过后能读出`)
+  console.log(`✅ e2e:cloudnote${NEGATIVE ? '(负对照)' : ''} —— 云端库点笔记:限流 / 断网中不判「没有这篇」,网络回来云端库自己重开`)
 }
 
 main()

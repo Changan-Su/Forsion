@@ -184,8 +184,22 @@ let amadeusBooted = false
  *  → Amadeus 恒显「打开 Vault 文件夹」空态)。 */
 export function ensureAmadeusReady(): void {
   if (!amadeusAvailable()) return
-  if (amadeusBooted) return
+  if (amadeusBooted) { retryFailedVaultRestore(); return }
   amadeusBooted = true
   installAmadeusPlugins()
   void usePageStore.getState().restoreVault()
+  // 云端冷启动断网(GET /vaults、/tree 失败)时库没装上:网络回来自己重开,不用重启 app。
+  // 不只靠 online —— 「请求失败但系统仍算在线」时它不会来,所以再进笔记(任一处调 ensureAmadeusReady)、
+  // 回到前台也各重试一次。只在上一次 restoreVault 抛错、且至今没有库时才动,装上了的库绝不重开(会顶掉正在看的笔记)。
+  if (typeof window !== 'undefined') {
+    window.addEventListener('online', retryFailedVaultRestore)
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') retryFailedVaultRestore() })
+  }
+}
+
+let vaultRetry: Promise<void> | null = null // 在途去重:vaultLoading 是按面板记的,online 与再进笔记可能同一刻到
+function retryFailedVaultRestore(): void {
+  const s = usePageStore.getState()
+  if (vaultRetry || !s.vaultRestoreFailed || s.vaultRoot != null || s.vaultLoading) return
+  vaultRetry = s.restoreVault({ keepOpenNote: true }).finally(() => { vaultRetry = null })
 }
