@@ -20,6 +20,7 @@ import { getDeviceId } from '../../core/deviceId.js';
 import type { MemoryBrain } from '../../seams/cloudBrain.js';
 import { createMemoryRepository, withMemoryDirectoryLock, readMemoryFile, atomicWriteMemoryFile, safeMemoryPath, memoryContentVersion, memoryVersionConflict, MemoryRepositoryError, normalizeMemoryFact, MEMORY_CHAR_BUDGET, type MemorySnapshot } from '../../services/memoryRepository.js';
 import { deviceTagContext } from '../../services/deviceTagContext.js';
+import { readAgentLayers } from '../../services/agentMemoryLayers.js';
 
 export const MEMORY_SOFT_CAP = MEMORY_CHAR_BUDGET;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -177,6 +178,7 @@ export function createLocalMemoryBrain(opts?: { baseDir?: string; deviceId?: str
     store,
     deviceId,
     async getMemorySnapshot() { return createMemoryRepository(store.baseDir).snapshot(); },
+    async getMemoryLayers() { const baseDir = store.baseDir; return { ...readAgentLayers(baseDir), baseDir }; },
     async commitMemory(_userId, proposal) { return createMemoryRepository(store.baseDir).commit(proposal); },
     async mutateMemory(_userId, mutation) { return createMemoryRepository(store.baseDir).mutate(mutation); },
     async listMemoryRevisions() { return createMemoryRepository(store.baseDir).revisions(); },

@@ -17,11 +17,12 @@ import { DEFAULT_AGENT_SLUG } from '../../core/tanguHome.js';
 import { APPLIES_TO, labelFor, tagOf, withTag } from '../../contracts/deviceTags.js';
 import { runTagContext } from '../../services/deviceTagContext.js';
 import { countRemember, noteRetell } from '../../services/memoryTelemetry.js';
+import { splitMark, stripMark } from '../../contracts/entryMark.js';
 
 /** 单条上限与 Historian 候选采集同口径(localHistorian `.slice(0, 300)`)。显式路径此前无闸:09-22 一份终端用户导出里
  *  41 条显式条目最长 1,477 字、21 条带日期、9 条是追加式「更正旧条目」——记忆被日志灌满,而候选路径 12 天只出 8 条一句话。 */
 export const REMEMBER_FACT_MAX_CHARS = 300;
-const entryView = (e: MemoryEntry) => ({ id: e.id, content: e.content });
+const entryView = (e: MemoryEntry) => ({ id: e.id, content: stripMark(e.content).trim() });
 /** 版本号抄错的判据:与现在的版本相差不超过几处编辑(10-13 那次是 4 处)。两个随机 UUID 之间通常差 25 处以上。 */
 const MISCOPY_MAX_EDITS = 8;
 function editDistance(a: string, b: string): number {
@@ -308,7 +309,9 @@ export const memoryLogProvider: ToolProvider = {
           if (!brain.getMemorySnapshot) return 'Error: this memory backend does not support entry management.';
           const snapshot = await brain.getMemorySnapshot(ctx.userId);
           const project = projectRef ? await peekProjectMemory(projectRef) : null;
-          return JSON.stringify({ version: snapshot.version, entries: snapshot.entries, chars: snapshot.content.length, limit: MEMORY_CHAR_BUDGET,
+          // 行尾记号(钉住、谁写的)不给模型看;钉住的另标一个字段。挪进详情的不在这份里(它们在 Library/memory/,召回时带)
+          const listed = snapshot.entries.map((e) => { const { body, meta } = splitMark(e.content); return { ...e, content: body.trim(), ...(meta.pin ? { pinned: true } : {}) }; });
+          return JSON.stringify({ version: snapshot.version, entries: listed, chars: snapshot.content.length, limit: MEMORY_CHAR_BUDGET,
             ...(projectRef ? { project: { name: projectRef.name, version: project?.version ?? null, entries: project?.entries ?? [], chars: project?.content.length ?? 0, limit: PROJECT_MEMORY_CHAR_BUDGET } } : {}),
             ...(personAllowed(ctx) ? { person: await readPortrait().catch((e) => ({ error: e instanceof Error ? e.message : String(e) })) } : {}) });
         }
@@ -386,6 +389,12 @@ export const memoryLogProvider: ToolProvider = {
                 ? `Entry ${JSON.stringify(target.id)} currently reads ${JSON.stringify(target.content)}. If that is still the entry you meant to ${action}, retry with exactly this expectedVersion${scoped}; otherwise list again.`
                 : `There is no entry with id ${JSON.stringify(mutation.id)}; list again${scoped} and use an ID from it.`);
           };
+          // 11-09 分层:这件事已经在这个 Agent 的记忆详情里(整理时挪过去的)→ 不在常驻里再记一份(它会被详情那份盖过、白占一条)
+          if (!projectRepo && action === 'add' && brain.getMemoryLayers) {
+            const layers = await brain.getMemoryLayers(ctx.userId).catch(() => null);
+            const hit = layers?.topics.flatMap((t) => t.entries.map((e) => ({ e, t }))).find(({ e }) => e.id === normalizeMemoryFact(fact));
+            if (hit) return JSON.stringify({ ok: true, action, scope, duplicate: true, note: `This fact is already saved in your memory details (topic "${hit.t.title}", ${hit.t.path}); nothing was written.`, entry: { id: hit.e.entryId, content: hit.e.text } });
+          }
           let snapshot: MemorySnapshot | undefined;
           let compacted: Extract<CompactionOutcome, { status: 'compacted' }> | undefined;
           let fullError: unknown;
@@ -407,6 +416,14 @@ export const memoryLogProvider: ToolProvider = {
             const full = await read();
             if (!full) throw fullError;
             return `Error: ${projectRepo ? 'project' : 'long-term'} memory is full (${full.content.length}/${limit} characters). Forget or shorten stale entries with update/forget (scope "${scope}", expectedVersion ${full.version}), then add. Current entries: ${JSON.stringify(full.entries.map(entryView))}`;
+          }
+          // 常驻过线了(11-09 分层):排一次后台整理(用后台模型那一格,不打断这轮对话);没配后台模型就不排,界面上有提示和手动入口
+          if (!projectRepo && action !== 'forget' && brain.getMemoryLayers) {
+            void brain.getMemoryLayers(ctx.userId).then(async (l) => {
+              if (l.residentChars <= l.limit) return;
+              const o = await import('../../services/memoryOrganize.js');
+              if (await o.organizeAvailable()) o.scheduleOrganize({ kind: 'agent', slug: l.baseDir.split(/[\\/]/).pop()! }, ctx.userId);
+            }).catch(() => {});
           }
           // 回执只回受影响的条目:整份 entries 回灌一次就是几万字进上下文(09-22 导出实测 31k)。
           const id = args.id ? String(args.id) : undefined;

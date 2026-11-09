@@ -19,120 +19,46 @@ export const PORTRAIT_SCOPE: HumanScope = { kind: 'human', file: 'SOUL.md' };
 export const PORTRAIT_LIMIT = ABOUT_HUMAN_LIMITS['SOUL.md'];
 /** 对外只给版本号前 12 位(同 manage_human 的 SHORT_VERSION):64 位十六进制模型偶尔抄漏。 */
 export const PORTRAIT_SHORT_VERSION = 12;
-/** Agent 那一节的标题。两种都认(任意 #{1,6} 级);新开一节时按这句话的语言挑。 */
-export const PORTRAIT_SECTION_TITLES = { zh: '最近认识的', en: 'Recently learned' } as const;
 /** 什么算「关于这个人」:remember 的 person 档和搬家的挑选共用一句(五轮 live 调出来的,一句都别删)。 */
 export const PERSON_IS = '"person" = about the user themself and their life, true with any agent and in any project (what to call them, language, background, what they are working on or learning now — a few weeks counts, their tastes and habits); every agent reads it, and so does the user: write it to them ("you …"), one fact per sentence, in their language. What they ask of you about the work itself (how to test, report or structure answers) is "agent", even when phrased as their preference; what to call them and their language stay "person". ';
+// 节、条目、合并这些纯函数在契约里(11-09 记忆分层:桌面宿主的新同步也要用同一份画像合并)
+import { entryOfLine, entryEnd, agentSection, headingOf, insertPortraitEntry, removePortraitLine, portraitResidentChars, portraitResidentText, residentLine, PORTRAIT_SECTION_TITLES, importSectionTitle, isImportTitle, mergePortrait, ARCHIVE_TOPIC } from '../contracts/memoryLayers.js';
+import { splitMark, stripMark, withMark, type EntryMeta } from '../contracts/entryMark.js';
+export { PORTRAIT_SECTION_TITLES, importSectionTitle, isImportTitle, insertPortraitEntry, mergePortrait };
 
-const ENTRY = /^(\s*(?:[-*+]|\d+[.)])\s+)(.+?)\s*$/;
-const HEADING = /^(#{1,6})\s+(.*?)(?:\s+#+)?\s*$/;
-// ponytail: 引擎拿不到界面语言,标题按这句话本身的书写系统挑(和 core/scriptCheck 的 cjk 一类同一个字符集);日文也落中文标题。
-const CJK = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u;
-const isAgentTitle = (t: string): boolean => t === PORTRAIT_SECTION_TITLES.zh || t.toLowerCase() === PORTRAIT_SECTION_TITLES.en.toLowerCase();
-/** 导入那一节的标题(画像和协作说明共用一种写法):语言跟审阅单的界面语言,日期 = 这次导入。 */
-export function importSectionTitle(lang: 'zh' | 'en', at: number): string {
-  const d = new Date(at);
-  return lang === 'zh' ? `从其他 AI 导入 · ${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-    : `Imported from other AIs · ${d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`;
-}
-const IMPORT_TITLE = /^(?:从其他 AI 导入 · \d{2}-\d{2}|Imported from other AIs · [A-Z][a-z]+ \d{1,2})$/;
-export const isImportTitle = (t: string): boolean => IMPORT_TITLE.test(t);
-/** 引擎开的标题(Agent 那一节、导入那一节):不算人写的段落,空了随条目一起收掉。 */
-const isEngineTitle = (t: string): boolean => isAgentTitle(t) || isImportTitle(t);
-
-export interface PortraitEntry { id: string; content: string }
+/** 画像里的一条。content 去掉了行尾记号;pinned = 钉住(永远常驻);topic = 在哪个详情主题里(archive = 归档),不在 = 常驻。 */
+export interface PortraitEntry { id: string; content: string; pinned?: true; topic?: string }
 export interface PortraitView { version: string; entries: PortraitEntry[]; chars: number; limit: number }
 
-/** 条目编号 = 规范化原文的哈希:同一句不管在第几行都是同一个号,换了说法就是另一条。 */
+/** 条目编号 = 规范化原文的哈希(去掉记号):同一句不管在第几行、钉没钉都是同一个号,换了说法就是另一条。 */
 export const portraitEntryId = (content: string): string => `p${createHash('sha256').update(normalizeMemoryFact(content)).digest('hex').slice(0, 10)}`;
-const entryOfLine = (line: string): { prefix: string; content: string } | null => {
-  const m = line.match(ENTRY);
-  return m ? { prefix: m[1], content: m[2] } : null;
-};
-/** 文档里的条目(同一句只算第一次出现)。 */
+/** 文档里的条目(同一句只算第一次出现),按文中顺序;详情主题里的带 topic。 */
 export function portraitEntries(content: string): PortraitEntry[] {
   const out: PortraitEntry[] = []; const seen = new Set<string>();
+  let topic: { key: string; level: number } | null = null;
   for (const line of content.split('\n')) {
+    const h = headingOf(line);
+    if (h) { if (h.topic) topic = { key: h.topic, level: h.level }; else if (topic && h.level <= topic.level) topic = null; continue; }
     const e = entryOfLine(line); if (!e) continue;
     const id = portraitEntryId(e.content);
-    if (!seen.has(id)) { seen.add(id); out.push({ id, content: e.content }); }
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const { body, meta } = splitMark(e.content);
+    out.push({ id, content: body.trim(), ...(meta.pin && !topic ? { pinned: true as const } : {}), ...(topic ? { topic: topic.key } : {}) });
   }
   return out;
 }
-type Section = { start: number; end: number };
-/** 第 start 行那个标题管到哪:到下一个同级或更高级标题为止。 */
-function sectionAt(lines: string[], start: number): Section {
-  const level = lines[start].match(HEADING)![1].length;
-  let end = lines.length;
-  for (let i = start + 1; i < lines.length; i++) { const h = lines[i].match(HEADING); if (h && h[1].length <= level) { end = i; break; } }
-  return { start, end };
-}
-/** 最后一个标题对得上 match 的那一节。 */
-function namedSection(lines: string[], match: (title: string) => boolean): Section | null {
-  let start = -1;
-  for (let i = 0; i < lines.length; i++) { const h = lines[i].match(HEADING); if (h && match(h[2].trim())) start = i; }
-  return start < 0 ? null : sectionAt(lines, start);
-}
-/** Agent 那一节:最后一个叫「最近认识的 / Recently learned」的标题,到下一个同级或更高级标题为止。 */
-const agentSection = (lines: string[]): Section | null => namedSection(lines, isAgentTitle);
 function sectionEntries(content: string): PortraitEntry[] {
   const lines = content.split('\n'); const sec = agentSection(lines);
   return sec ? portraitEntries(lines.slice(sec.start + 1, sec.end).join('\n')) : [];
 }
-/** 条目第 i 行之后缩进的续行(不是新条目、不是标题)一直到哪一行(含)。 */
-const CONTINUATION = /^\s+\S/;
-function entryEnd(lines: string[], i: number, end = lines.length): number {
-  let last = i;
-  for (let j = i + 1; j < end; j++) {
-    if (!lines[j].trim()) continue;
-    if (CONTINUATION.test(lines[j]) && !entryOfLine(lines[j])) last = j; else break;
-  }
-  return last;
-}
-/** 加在这一节最后一个条目(连同它的续行)后面;这一节还没有条目就接在标题下。 */
-function insertInSection(lines: string[], sec: Section, fact: string): string {
-  let last = -1;
-  for (let i = sec.start + 1; i < sec.end; i++) if (entryOfLine(lines[i])) last = i;
-  if (last >= 0) { lines.splice(entryEnd(lines, last, sec.end) + 1, 0, `- ${fact}`); return lines.join('\n'); }
-  const next = lines[sec.start + 1];
-  lines.splice(sec.start + 1, 0, '', `- ${fact}`, ...(next !== undefined && next.trim() ? [''] : []));
-  return lines.join('\n');
-}
-const appendSection = (content: string, heading: string, fact: string): string => {
-  const body = content.replace(/\s+$/, '');
-  return `${body ? `${body}\n\n` : ''}${heading}\n\n- ${fact}\n`;
-};
-/** 缺省加在 Agent 那一节(没有就在文末开一节);section = 导入那一节的标题时加在那一节(没有就在文末开)。 */
-export function insertPortraitEntry(content: string, fact: string, section?: string): string {
-  const lines = content.split('\n');
-  if (section) {
-    const own = namedSection(lines, (t) => t === section);
-    return own ? insertInSection(lines, own, fact) : appendSection(content, `## ${section}`, fact);
-  }
-  const sec = agentSection(lines);
-  if (sec) return insertInSection(lines, sec, fact);
-  return appendSection(content, `## ${CJK.test(fact) ? PORTRAIT_SECTION_TITLES.zh : PORTRAIT_SECTION_TITLES.en}`, fact);
-}
-/** 引擎开的一节空了:连标题一起收掉。 */
-function collapseIfEmpty(lines: string[], sec: Section | null): void {
-  if (!sec || !lines.slice(sec.start + 1, sec.end).every((l) => !l.trim())) return;
-  const last = sec.end === lines.length;
-  let from = sec.start;
-  if (last) while (from > 0 && !lines[from - 1].trim()) from--;
-  lines.splice(from, sec.end - from);
-  if (last && lines.length) lines.push('');
-}
-/** 第 index 行所在那一节的标题行号(-1 = 在所有标题之前)。 */
-const headingAbove = (lines: string[], index: number): number => { for (let i = index - 1; i >= 0; i--) if (HEADING.test(lines[i])) return i; return -1; };
-/** 删掉一行;Agent 那一节、或这一行所在的导入那一节因此空了,就连标题一起收掉(那些标题是引擎开的,不是人写的)。 */
-function removeLine(content: string, index: number): string {
-  const lines = content.split('\n');
-  const h = headingAbove(lines, index);
-  const imported = h >= 0 && isImportTitle(lines[h].match(HEADING)![2].trim());
-  lines.splice(index, 1);
-  if (imported) collapseIfEmpty(lines, sectionAt(lines, h));
-  collapseIfEmpty(lines, agentSection(lines));
-  return lines.join('\n');
+/** 这一句在画像里落在哪:inside = 常驻且在线内(每轮都带);outside = 常驻但在线外(只有召回才带);detail = 某个详情主题(召回 + 索引);archive;null = 没有。 */
+export function portraitPlace(content: string, fact: string): 'inside' | 'outside' | 'detail' | 'archive' | null {
+  const key = normalizeMemoryFact(fact);
+  const hit = portraitEntries(content).find((e) => normalizeMemoryFact(e.content) === key);
+  if (!hit) return null;
+  if (hit.topic) return hit.topic === ARCHIVE_TOPIC ? 'archive' : 'detail';
+  return residentLine(portraitResidentText(content), PORTRAIT_LIMIT).inside.has(key) ? 'inside' : 'outside';
 }
 
 // ── 墓碑:只在本机 ──
@@ -167,7 +93,7 @@ export function isPortraitFactForgotten(fact: string): boolean {
 
 export async function readPortrait(): Promise<PortraitView> {
   const doc = await readHuman(PORTRAIT_SCOPE);
-  return { version: doc.version.slice(0, PORTRAIT_SHORT_VERSION), entries: portraitEntries(doc.content), chars: doc.content.length, limit: PORTRAIT_LIMIT };
+  return { version: doc.version.slice(0, PORTRAIT_SHORT_VERSION), entries: portraitEntries(doc.content), chars: portraitResidentChars(doc.content), limit: PORTRAIT_LIMIT };
 }
 
 /** 写满:错误里带 Agent 那一节的条目,让模型先合并那一节(update 变短 / forget 永远放行;人写的段落绝不替它压缩)。 */
@@ -190,6 +116,10 @@ export interface PortraitMutation {
   noTombstone?: boolean;
   /** add 写进哪一节(导入那一节的标题,见 importSectionTitle);不给 = Agent 那一节。 */
   section?: string;
+  /** add 时盖在这一行上的记号(导入:by=import + 日期,跟着条目走,挪进详情、两台合并之后还认得出)。 */
+  meta?: EntryMeta;
+  /** 超了一律拒(即使配了后台整理):搬家这种「写完就删原件」的,写到线外 = 原来每轮都读的那句变成只在聊到时才读。拒的同时照样排一次整理,腾出地方再搬。 */
+  strict?: boolean;
 }
 export interface PortraitResult {
   document: HumanDocument; change: HumanChange | null;
@@ -218,18 +148,24 @@ async function mutateOnce(m: PortraitMutation): Promise<PortraitResult> {
     const dup = entries.find((e) => normalizeMemoryFact(e.content) === normalizeMemoryFact(fact));
     if (dup) return { document: doc, change: null, entry: dup, duplicate: true };
     if (m.skipForgotten && isPortraitFactForgotten(fact)) return { document: doc, change: null, forgotten: true };
-    after = insertPortraitEntry(before, fact, m.section);
+    after = insertPortraitEntry(before, m.meta ? withMark(fact, m.meta) : fact, m.section);
   } else {
     const lines = before.split('\n');
     const index = lines.findIndex((l) => { const e = entryOfLine(l); return !!e && portraitEntryId(e.content) === m.id; });
     if (index < 0) throw new HumanError('PORTRAIT_NOT_FOUND', 'There is no portrait entry with this id; list it again.');
     const line = entryOfLine(lines[index])!;
-    removed = { id: m.id!, content: line.content };
-    if (m.action === 'update') { lines[index] = `${line.prefix}${fact}`; after = lines.join('\n'); }
-    else after = removeLine(before, index);
+    removed = { id: m.id!, content: stripMark(line.content).trim() };
+    // 改写只换正文:记号(钉住、谁写的、从哪来)留在这一行上
+    if (m.action === 'update') { lines[index] = `${line.prefix}${withMark(fact, splitMark(line.content).meta)}`; after = lines.join('\n'); }
+    else after = removePortraitLine(before, index);
   }
-  // 预算只拦 Agent「这次让全文变长」:改短、删掉永远放行;人自己写(含回执上撤销)不受它限制,超出的部分只是 Agent 看不到
-  if (m.actor === 'agent' && after.length > PORTRAIT_LIMIT && after.length > before.length) throw new PortraitFullError(sectionEntries(before), before.length, doc.version);
+  // 预算只拦 Agent「这次让常驻变长」:改短、删掉永远放行;人自己写(含回执上撤销)不受它限制,超出的部分只是 Agent 每轮看不到。
+  // 11-09 分层:量的是常驻(详情各节不算);配了后台模型时照样写进去(前台写入永远成功),排一次后台整理,不再把整份条目甩给正在聊天的 Agent
+  const over = m.actor === 'agent' && portraitResidentChars(after) > PORTRAIT_LIMIT && portraitResidentChars(after) > portraitResidentChars(before);
+  if (over && (m.strict || !(await organizerReady()))) {
+    if (m.strict) void import('../services/memoryOrganize.js').then((o) => o.scheduleOrganize({ kind: 'portrait' })).catch(() => {});
+    throw new PortraitFullError(sectionEntries(before), portraitResidentChars(before), doc.version);
+  }
   const summary = (m.action === 'forget' ? removed!.content : fact).slice(0, 240);
   const result = await writeHuman(PORTRAIT_SCOPE, { content: after, expectedVersion: doc.version, summary, evidence: '' }, m.actor, { ...m.source, action: m.action });
   const written = result.document.content;
@@ -247,7 +183,12 @@ async function mutateOnce(m: PortraitMutation): Promise<PortraitResult> {
     const fp = memoryFactFingerprint(fact);
     tombstoneBestEffort((list) => list.filter((t) => t.fingerprint !== fp));
   }
+  if (over) void import('../services/memoryOrganize.js').then((o) => o.scheduleOrganize({ kind: 'portrait' })).catch(() => {});
   return { ...result, ...(entry ? { entry } : {}), ...(removed ? { removed } : {}) };
+}
+/** 有没有后台整理可排(配了后台模型):有就让前台写入照样成功;没有(或判不出来)= 第一步的行为。 */
+export async function organizerReady(): Promise<boolean> {
+  try { return await (await import('../services/memoryOrganize.js')).organizeAvailable(); } catch { return false; }
 }
 
 /** 导入迁移(11-09):Agent 那一节里这些条目挪进各自的一节(按 moves 的顺序;只认 Agent 那一节里的,别处同一句不碰)。 */
@@ -261,7 +202,8 @@ export function moveEntriesToSections(content: string, moves: Array<{ content: s
     if (index < 0) continue;
     if (entryEnd(lines, index, sec.end) !== index) continue; // 人后来补了续行(限定条件之类):只搬首行会拆散这一条,留在原处
     const line = entryOfLine(lines[index])!.content;
-    out = insertPortraitEntry(removeLine(out, index), line, m.section);
+    // 挪进导入那一节的同时在这一行上记下「导入的」(11-09 第二步):两台合并把它放回 Agent 那一节时也还认得出
+    out = insertPortraitEntry(removePortraitLine(out, index), withMark(line, { ...splitMark(line).meta, by: 'import' }), m.section);
     moved++; sections.push(m.section);
   }
   return { content: out, moved, sections };
@@ -314,45 +256,4 @@ export async function revertPortraitWrite(written: PortraitResult, source: Human
     await writeHuman(PORTRAIT_SCOPE, { expectedVersion: written.document.version, undoId: written.change.id }, written.change.actor, source);
     return true;
   } catch { return false; } // 这期间画像又改过:留着新句子(两边都有,模型看得到),不按条目号删 —— 编号跟内容走,可能删到人后来重新加的同一句
-}
-
-/** 本机新加的一条插回它原来那一节:同名标题还在就加在那一节末尾;所有标题之前的那段就加在那一段;
- *  导入那一节在云端那份里还没有就在文末开出来;其余(人写的标题被另一台删了、Agent 那一节)照旧进 Agent 那一节。 */
-function insertLikeOurs(out: string, fact: string, heading: { title: string; level: number } | null): string {
-  const lines = out.split('\n');
-  if (!heading) {
-    let first = lines.findIndex((l) => HEADING.test(l)); if (first < 0) first = lines.length;
-    let last = -1; for (let i = 0; i < first; i++) if (entryOfLine(lines[i])) last = i;
-    if (last >= 0) { lines.splice(last + 1, 0, `- ${fact}`); return lines.join('\n'); }
-    if (first > 0 && lines.slice(0, first).some((l) => l.trim())) { let end = first; while (end > 0 && !lines[end - 1].trim()) end--; lines.splice(end, 0, '', `- ${fact}`); return lines.join('\n'); }
-    return `- ${fact}\n${out.trim() ? `\n${out.replace(/^\s+/, '')}` : ''}`;
-  }
-  if (isAgentTitle(heading.title)) return insertPortraitEntry(out, fact);
-  const same = lines.filter((l) => { const h = l.match(HEADING); return !!h && h[1].length === heading.level && h[2].trim() === heading.title; }).length;
-  if (same > 1) return insertPortraitEntry(out, fact); // 同名同级的标题不止一个:认不准是哪一节,照旧进 Agent 那一节
-  const sec = namedSection(lines, (t) => t === heading.title);
-  if (sec) return insertInSection(lines, sec, fact);
-  return isImportTitle(heading.title) ? appendSection(out, `${'#'.repeat(heading.level)} ${heading.title}`, fact) : insertPortraitEntry(out, fact);
-}
-/** 两台设备都改了画像、按行三方合并又合不拢(两台都往 Agent 那一节末尾各加了一条,几乎总是这样):
- *  以云端那份为底,本机相对基线新增的条目插回它在本机所在的那一节、本机删掉的条目从结果里删掉,其余文字取云端。
- *  本机还改了别的文字(人写的标题、段落;引擎开的标题不算)而云端那份里没有 → conflict: true,同步照旧把本机整份存成冲突副本。 */
-export function mergePortrait(ours: string, base: string, theirs: string): { content: string; conflict: boolean } {
-  const key = (c: string): string => normalizeMemoryFact(c);
-  const keys = (t: string): Set<string> => new Set(t.split('\n').map(entryOfLine).filter((e): e is NonNullable<typeof e> => !!e).map((e) => key(e.content)));
-  const prose = (t: string): string => t.split('\n').filter((l) => { const h = l.match(HEADING); return l.trim() && !entryOfLine(l) && !(h && isEngineTitle(h[2].trim())); }).map((l) => l.trim()).join('\n');
-  const b = keys(base), o = keys(ours);
-  const deleted = new Set([...b].filter((k) => !o.has(k)));
-  let out = theirs.split('\n').filter((l) => { const e = entryOfLine(l); return !(e && deleted.has(key(e.content))); }).join('\n');
-  const have = keys(out);
-  let heading: { title: string; level: number } | null = null;
-  for (const line of ours.split('\n')) {
-    const h = line.match(HEADING);
-    if (h) { heading = { title: h[2].trim(), level: h[1].length }; continue; }
-    const e = entryOfLine(line); if (!e) continue;
-    const k = key(e.content);
-    if (b.has(k) || have.has(k)) continue;
-    out = insertLikeOurs(out, e.content, heading); have.add(k);
-  }
-  return { content: out, conflict: prose(ours) !== prose(base) && prose(ours) !== prose(theirs) };
 }

@@ -20,6 +20,7 @@ import { loadSpecialAgentsConfig, resolveBackgroundModelId } from '../specialAge
 import { coveringProjectEntry, openProjectMemory, PROJECT_MEMORY_CHAR_BUDGET, refOf } from '../projectMemory.js';
 import { HUMAN_FOLDER_MAX_LENGTH, HumanError, readHuman, writeHuman, type HumanScope } from '../../agents/humanStore.js';
 import { importSectionTitle, insertPortraitEntry, isPortraitFactForgotten, moveEntriesToSections, mutatePortrait, PERSON_IS, PORTRAIT_LIMIT, PORTRAIT_SCOPE, portraitEntries } from '../../agents/humanPortrait.js';
+import { portraitResidentChars } from '../../contracts/memoryLayers.js';
 import { listLocalSkills, LOCAL_SKILL_PREFIX, treeHash, builtinSkillsDir } from '../../skills/localSkills.js';
 import { IMPORT_TOOLS, isImportTool, pastedSnippets, scanSources, skillFingerprint, SKILL_FILES_MAX, type ExternalSkill, type ImportNotice, type ImportTool, type Snippet } from './sources.js';
 
@@ -239,10 +240,11 @@ async function buildPlan(userId: string, input: { tools: string[]; pasted?: unkn
  *  每条估算多占的字数 = 「\n- 」+ 原文;这次要新开一节就先扣掉标题。按单上顺序默认勾到放得下为止,其余默认不勾、标 noRoom(人照样能勾)。
  *  「过去的事」本来就默认不勾,只记 cost(勾上也算进「勾了约 Y 字」)。 */
 function budgetPortrait(items: PlanItem[], current: string, heading: string): PortraitBudget {
-  const chars = current.trim().length;
+  // 11-09 分层:量的是常驻(详情各节不算,去掉行尾记号),和引擎注入、画像页那条线同一个口径
+  const chars = portraitResidentChars(current);
   // 第一条要多付的(新开一节的标题、空节首条前后的空行):拿真实的插入函数插一条试试,按结果长度算;之后每条都是「\n- 」+ 原文
   const probe = 'x';
-  const overhead = Math.max(0, insertPortraitEntry(current, probe, heading).trim().length - chars - (probe.length + 3));
+  const overhead = Math.max(0, portraitResidentChars(insertPortraitEntry(current, probe, heading)) - chars - (probe.length + 3));
   const room = Math.max(0, PORTRAIT_LIMIT - chars - overhead);
   let used = 0;
   for (const i of items) {
@@ -285,6 +287,7 @@ function readLedger(id: string): Ledger {
 }
 const writeLedger = (l: Ledger): void => atomicWriteMemoryFile(root(), ledgerFile(l.id), JSON.stringify(l));
 
+const importDay = (at: number): string => { const d = new Date(at); const p = (n: number) => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; };
 /** 协作说明末尾那一节、画像里导入那一节:同一种标题(写法在 humanPortrait,画像那边要认得它)。 */
 const sectionHeading = importSectionTitle;
 const cleanEdit = (v: unknown): string | null => {
@@ -330,7 +333,8 @@ export async function applyPlan(input: { planId?: unknown; items?: unknown; skil
     // 画像:一条一条加(mutatePortrait 自己去重);勾上的「过去的事」也是关于这个人的。写进导入自己那一节,不进 Agent 那一节(11-09)
     const portraitSection = sectionHeading(plan.lang, plan.createdAt); // 和整理时算账用的同一个标题(跨过午夜也不多开一节)
     for (const i of items.filter((x) => x.dest === 'person' || x.dest === 'past')) {
-      const r = await mutatePortrait({ action: 'add', fact: text(i), actor: 'user', source: { kind: 'import' }, section: portraitSection });
+      // 行尾记号「导入的 + 哪天」跟着条目走(11-09 第二步):整理挪进详情、两台合并之后还认得出是导入的
+      const r = await mutatePortrait({ action: 'add', fact: text(i), actor: 'user', source: { kind: 'import' }, section: portraitSection, meta: { by: 'import', from: importDay(plan.createdAt) } });
       if (r.duplicate || !r.change) { skipped++; continue; }
       record({ kind: 'person', content: r.entry?.content ?? text(i) }, 'person');
     }

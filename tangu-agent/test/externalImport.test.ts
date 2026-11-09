@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 vi.mock('../src/services/agentFileSync.js', () => ({ scheduleAgentFilesSync: vi.fn() }));
 vi.mock('../src/services/specialAgentsConfig.js', async (original) => ({ ...(await original<object>()), resolveBackgroundModelId: async () => 'bg' }));
+import { portraitResidentChars } from '../src/contracts/memoryLayers.js';
 import { configureTangu } from '../src/seams/runtime.js';
 import { createTanguProfile } from '../src/profiles/index.js';
 import { createSqliteHost } from '../src/adapters/standalone/sqliteHost.js';
@@ -272,7 +273,8 @@ describe('portrait budget and its own section', () => {
     answer = manyAnswer;
     const p = await planned();
     await applyPlan(checkedOf(p));
-    expect((await readHuman(SOUL)).content.trim().length).toBeLessThanOrEqual(2000);
+    // 11-09 第二步:量常驻(行尾记号不进 Agent 读的文本,不算字数)
+    expect(portraitResidentChars((await readHuman(SOUL)).content)).toBeLessThanOrEqual(2000);
   });
 
   it('imported entries go to their own dated section, never into the agent section', async () => {
@@ -336,7 +338,7 @@ describe('moving earlier imports out of the agent section (one-off, 11-09)', () 
     writeLedgerFile(id1, { id: id1, at: ledgerAt, sources: ['claude-code'], counts: { person: 2, agent: 0, project: 0, skill: 0 }, writes: [{ kind: 'person', content: '你希望别人叫你阿青。' }, { kind: 'person', content: '你在读博。' }] });
     expect(await migrateImportedPortrait()).toEqual({ moved: 2 });
     const doc = await readHuman(SOUL);
-    expect(doc.content).toBe('# 林夏\n\n她自己写的一段。\n\n## 最近认识的\n\n- 你喜欢喝茶。\n\n## 从其他 AI 导入 · 11-03\n\n- 你希望别人叫你阿青。\n- 你在读博。\n');
+    expect(doc.content).toBe('# 林夏\n\n她自己写的一段。\n\n## 最近认识的\n\n- 你喜欢喝茶。\n\n## 从其他 AI 导入 · 11-03\n\n- 你希望别人叫你阿青。 <!--tg by=import-->\n- 你在读博。 <!--tg by=import-->\n');
     expect(doc.history[0]).toMatchObject({ source: { kind: 'import' }, canUndo: true });
     expect(await migrateImportedPortrait()).toEqual({ moved: 0 });
     expect((await readHuman(SOUL)).version).toBe(doc.version);
@@ -363,7 +365,7 @@ describe('moving earlier imports out of the agent section (one-off, 11-09)', () 
     await seed('## 最近认识的\n\n- 你在吃药。\n  只在头疼时。\n- 你在读博。\n');
     writeLedgerFile(id1, { id: id1, at: ledgerAt, sources: [], counts: { person: 2, agent: 0, project: 0, skill: 0 }, writes: [{ kind: 'person', content: '你在吃药。' }, { kind: 'person', content: '你在读博。' }] });
     expect(await migrateImportedPortrait()).toEqual({ moved: 1 });
-    expect((await readHuman(SOUL)).content).toBe('## 最近认识的\n\n- 你在吃药。\n  只在头疼时。\n\n## 从其他 AI 导入 · 11-03\n\n- 你在读博。\n');
+    expect((await readHuman(SOUL)).content).toBe('## 最近认识的\n\n- 你在吃药。\n  只在头疼时。\n\n## 从其他 AI 导入 · 11-03\n\n- 你在读博。 <!--tg by=import-->\n');
   });
 
   it('an undone import and an entry outside the agent section are left alone; English imports get an English heading', async () => {
@@ -371,6 +373,6 @@ describe('moving earlier imports out of the agent section (one-off, 11-09)', () 
     writeLedgerFile(id1, { id: id1, at: ledgerAt, sources: [], counts: { person: 1, agent: 0, project: 0, skill: 0 }, writes: [{ kind: 'person', content: 'You run at night.' }, { kind: 'person', content: 'You like tea.' }] });
     writeLedgerFile(id2, { id: id2, at: ledgerAt, undoneAt: ledgerAt + 1, sources: [], counts: { person: 1, agent: 0, project: 0, skill: 0 }, writes: [{ kind: 'person', content: 'You are called Kiko.' }] });
     expect(await migrateImportedPortrait()).toEqual({ moved: 1 });
-    expect((await readHuman(SOUL)).content).toBe('- You like tea.\n\n## Recently learned\n\n- You are called Kiko.\n\n## Imported from other AIs · Nov 3\n\n- You run at night.\n');
+    expect((await readHuman(SOUL)).content).toBe('- You like tea.\n\n## Recently learned\n\n- You are called Kiko.\n\n## Imported from other AIs · Nov 3\n\n- You run at night. <!--tg by=import-->\n');
   });
 });

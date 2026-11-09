@@ -95,6 +95,15 @@ export const CLASSIFICATION = {
   'GET /agent/human/SOUL.md/overflow': [D, 'host list of entries Dream kept in Agent memory because the portrait was full (the route itself also refuses remote origin)'],
   'POST /agent/human/SOUL.md/overflow/dismiss': [D, 'clears that list on the host (the route itself also refuses remote origin)'],
   'POST /agent/human/SOUL.md/move/items/:id': [D, 'moves or keeps one Agent memory entry for the portrait (the route itself also refuses remote origin)'],
+  // 记忆分层(11-09 第二步):整理、整理记录与撤销、图钉、Agent 记忆的分层视图;路由自己也拒远端
+  'GET /agent/human/SOUL.md/organize': [D, 'host portrait organize status and history (the route itself also refuses remote origin)'],
+  'POST /agent/human/SOUL.md/organize': [D, 'organizes the portrait into resident and detail entries with the background model (the route itself also refuses remote origin)'],
+  'POST /agent/human/SOUL.md/organize/:id/undo': [D, 'undoes one portrait organize run (the route itself also refuses remote origin)'],
+  'POST /agent/human/SOUL.md/pin': [D, 'pins or unpins one portrait entry (the route itself also refuses remote origin)'],
+  'GET /agent/agents/:slug/memory/layers': [D, 'host Agent memory resident / detail view (the route itself also refuses remote origin)'],
+  'POST /agent/agents/:slug/memory/organize': [D, 'organizes Agent memory into resident and detail files (the route itself also refuses remote origin)'],
+  'POST /agent/agents/:slug/memory/organize/:id/undo': [D, 'undoes one Agent memory organize run across files (the route itself also refuses remote origin)'],
+  'POST /agent/agents/:slug/memory/pin': [D, 'pins or unpins one Agent memory entry (the route itself also refuses remote origin)'],
   // 从其他 AI 导入(services/externalImport):读这台电脑上别家 AI 的文件、写画像 / 协作说明 / 项目记忆 / 技能;路由自己也拒远端
   'GET /agent/import/scan': [D, 'lists other AI tools found in local files (the route itself also refuses remote origin)'],
   'GET /agent/import/plan': [D, 'reads the sorted import list built from local files (the route itself also refuses remote origin)'],

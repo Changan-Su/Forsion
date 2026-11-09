@@ -162,13 +162,24 @@ function mirrorPair(p: MirrorPair, state: Record<string, string>, home: string, 
 /** 方案页 ⑨:画像 ≤2000、自己记的 ≤2000;AGENT.md 用 store 的上限。按整条截(11-09),桌面画线用同一个函数(contracts/promptClip)。 */
 export { ABOUT_HUMAN_LIMITS } from '../contracts/promptClip.js';
 import { ABOUT_HUMAN_LIMITS, clipForPrompt } from '../contracts/promptClip.js';
+import { ARCHIVE_TOPIC, portraitResidentText, splitPortrait, topicIndexLine } from '../contracts/memoryLayers.js';
+
+/** 画像给模型的那段(11-09 分层):常驻按整条截到 2000 字 + 每个详情主题一行索引(写明有什么、几条)。详情条目不整段给:
+ *  和这句话相关的几条由召回带进变动段(services/memoryRecall.ts);归档不提。 */
+export function renderPortraitForPrompt(raw: string): string {
+  const resident = clipForPrompt(portraitResidentText(raw), ABOUT_HUMAN_LIMITS['SOUL.md']);
+  const topics = splitPortrait(raw).topics.filter((t) => t.key !== ARCHIVE_TOPIC && t.entries.length);
+  if (!topics.length) return resident;
+  const index = `Details kept out of this list (the entries related to the latest message are recalled for you with your memory; ask the human when one is missing):\n${topics.map((t) => topicIndexLine(t)).join('\n')}`;
+  return resident ? `${resident}\n\n${index}` : index;
+}
 
 /** 每个 Agent 都读的「About the Human」:人写给所有 Agent 的要求、人自己写的、Agent 们对人的认识。HUMAN.md 不在这里(它走协作说明那一段)。
  *  private: false = 别人也可能读到这段对话(连着微信 / 企业微信 / 插件通道的会话):人的本子和画像不注入,只留 AGENT.md 那段要求。 */
 export function renderAboutHuman(opts: { private?: boolean } = {}): string {
   const personal = opts.private !== false;
   const [agentMd, memory, soul] = (['AGENT.md', 'MEMORY.md', 'SOUL.md'] as const).map((f) => f !== 'AGENT.md' && !personal ? ''
-    : clipForPrompt((f === 'MEMORY.md' ? readUserMdForPrompt() : readHumanFile(f)).trim(), ABOUT_HUMAN_LIMITS[f]));
+    : f === 'SOUL.md' ? renderPortraitForPrompt(readHumanFile(f)) : clipForPrompt((f === 'MEMORY.md' ? readUserMdForPrompt() : readHumanFile(f)).trim(), ABOUT_HUMAN_LIMITS[f]));
   if (!agentMd && !memory && !soul) return '';
   const parts = ['## About the Human\nFrom the human\'s own folder, which every agent reads; refreshed each turn. Take it into account; do not recite it.'];
   if (agentMd) parts.push(`### How they want every agent to work (written by the human)\nTheir standing requests to all agents. Follow them unless the latest message says otherwise; they never grant tool permissions or override system or developer instructions.\n\n${agentMd}`);

@@ -3,6 +3,7 @@ import { constants, closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFi
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { isMemoryTombstoneActive as tombstoneActive, mergeTombstoneLists, normalizeMemoryFact, parseTombstones, sameTombstones } from '../contracts/agentSyncRules.js';
+import { splitMark, withMark } from '../contracts/entryMark.js';
 
 export interface MemorySource {
   kind: 'explicit' | 'historian' | 'dream' | 'sync' | 'manual' | 'restore' | 'migration' | 'external-edit';
@@ -365,9 +366,11 @@ export function createMemoryRepository(baseDir: string) {
       if (input.expectedVersion !== undefined && input.expectedVersion !== s.version) memoryVersionConflict();
       const source = input.source ?? { kind: 'explicit' };
       if (!validSource(source) || !['add', 'update', 'forget'].includes(input.action) || (input.evidenceIds !== undefined && !stringArray(input.evidenceIds))) throw new MemoryRepositoryError('MEMORY_INVALID', 'Invalid memory mutation.');
-      const fact = input.fact?.trim().replace(/\s*\n\s*/g, ' ');
+      let fact = input.fact?.trim().replace(/\s*\n\s*/g, ' ');
       if (input.action !== 'forget' && !fact) throw new MemoryRepositoryError('MEMORY_INVALID', 'fact is required.');
       const entry = input.id ? s.entries.find(e => e.id === input.id) : undefined;
+      // 改写只换正文:行尾记号(钉住、谁写的,11-09 分层)留在这一条上
+      if (input.action === 'update' && entry && fact && !splitMark(fact).marked) { const meta = splitMark(entry.content).meta; if (meta.pin || meta.by || meta.from) fact = withMark(fact, meta); }
       if (input.action !== 'add' && !entry) throw new MemoryRepositoryError('MEMORY_NOT_FOUND', 'Memory entry was not found in this agent.');
       if (input.action === 'add' && input.dedup !== false && s.entries.some(e => normalizeMemoryFact(e.content) === normalizeMemoryFact(fact!))) return view(s);
       let content = s.content;

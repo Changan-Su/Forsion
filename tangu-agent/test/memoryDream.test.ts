@@ -17,6 +17,7 @@ import { readHuman, writeHuman } from '../src/agents/humanStore.js';
 import { mutatePortrait, portraitEntryId } from '../src/agents/humanPortrait.js';
 import { channelHub } from '../src/channels/hub.js';
 import { readFileSync } from 'node:fs';
+import { readAgentLayers } from '../src/services/agentMemoryLayers.js';
 
 let home: string;
 let oldHome: string | undefined;
@@ -54,6 +55,7 @@ beforeEach(() => {
     brain: { memory: {
       getMemorySnapshot: async () => repo(currentAgentSlug()).snapshot(),
       commitMemory: async (_u: string, input: any) => repo(currentAgentSlug()).commit(input),
+      getMemoryLayers: async () => { const baseDir = join(home, 'agents', currentAgentSlug()); return { ...readAgentLayers(baseDir), baseDir }; },
     }, llm: {
       resolveModelAndKey: async () => resolved,
       buildProviderPayload: async (p: any) => p,
@@ -461,3 +463,45 @@ describe('Dream routes facts about the person into the portrait', () => {
   });
 });
 
+// 11-09 记忆分层第二步(R4):Dream 取料、提议、核验、提交都认位置
+describe('Dream knows where entries live', () => {
+  const CAT = '用户养了一只叫团子的猫';
+  const seedDetails = () => {
+    mkdirSync(join(home, 'agents', 'alpha', 'Library', 'memory'), { recursive: true });
+    writeFileSync(join(home, 'agents', 'alpha', 'Library', 'memory', 'life.md'), `# 日常\n\n宠物与日常生活\n\n- ${CAT} <!--tg by=agent-->\n`);
+  };
+  it('a candidate already in the details is consumed, not added back to resident; a moved copy left in resident is not a source and goes on commit', async () => {
+    repo().add('已有事实'); repo().add(CAT); seedDetails(); // 常驻里那份被详情盖过(挪走了,并集又带回来)
+    seedCandidate('alpha', CAT, 's-cat');
+    seedCandidate('alpha', '用户偏好中文回复', 's-zh');
+    startMemoryDream('u', 'alpha');
+    expect((await settle()).state).toBe('completed');
+    const propose = calls.find((c) => c.payload.messages[0].content.startsWith('Consolidate'))!;
+    const sources: any[] = JSON.parse(propose.payload.messages[1].content);
+    expect(sources.filter((x) => x.kind === 'memory').map((x) => x.fact)).toEqual(['已有事实']); // 被详情盖过的那份不当来源
+    expect(sources.some((x) => x.fact === CAT)).toBe(false); // 一字不差在详情里的候选直接消费掉
+    const memory = repo().snapshot().content;
+    expect(memory).not.toContain(CAT); // 没加回常驻,也没「丢」:详情里还在
+    expect(memory).toContain('已有事实'); expect(memory).toContain('用户偏好中文回复');
+    expect(readFileSync(join(home, 'agents', 'alpha', 'Library', 'memory', 'life.md'), 'utf8')).toContain(CAT);
+    expect(readCandidates('alpha')).toHaveLength(0);
+  });
+  it('a near candidate goes to the model with the detail facts it may duplicate, and both prompts say so', async () => {
+    repo().add('已有事实'); seedDetails();
+    seedCandidate('alpha', '用户的猫团子三岁了', 's-cat2');
+    startMemoryDream('u', 'alpha');
+    await settle();
+    const propose = calls.find((c) => c.payload.messages[0].content.startsWith('Consolidate'))!;
+    expect(propose.payload.messages[0].content).toContain('inDetails');
+    expect(propose.payload.messages[1].content).toContain(CAT);
+    const verify = calls.find((c) => c.payload.messages[0].content.startsWith('Verify'));
+    if (verify) expect(verify.payload.messages[0].content).toContain('inDetails');
+  });
+  it('a pinned entry keeps its pin through a Dream rewrite', async () => {
+    repo().add('已有事实'); repo().add('用户希望被叫夏夏 <!--tg pin by=user-->');
+    seedCandidate();
+    startMemoryDream('u', 'alpha');
+    expect((await settle()).state).toBe('completed');
+    expect(repo().snapshot().content).toContain('用户希望被叫夏夏 <!--tg pin by=user-->');
+  });
+});

@@ -967,6 +967,33 @@ export interface PortraitOverflowItem { agent: string; fact: string; at: number 
 export const getPortraitOverflow = (t: EngineTarget) => request<{ items: PortraitOverflowItem[] }>(t, '/agent/human/SOUL.md/overflow')
 export const dismissPortraitOverflow = (t: EngineTarget) => request<{ items: PortraitOverflowItem[] }>(t, '/agent/human/SOUL.md/overflow/dismiss', { method: 'POST' })
 
+// ── 记忆分层(11-09 第二步):常驻 / 详情、后台整理(配了后台模型才有)、整理记录(整次撤销)、图钉。只在宿主本机 ──
+export type MemoryOrganizeOutcome =
+  | { status: 'organized'; moved: number; archived: number; before: { count: number; chars: number }; after: { count: number; chars: number }; recordId: string }
+  | { status: 'skipped'; reason: 'no_model' | 'under' | 'nothing' | 'busy' | 'cooldown' | 'rejected' | 'conflict' | 'failed'; detail?: string }
+export interface MemoryOrganizeRecord { id: string; at: number; moved: number; archived: number; topics: string[]; before?: { count: number; chars: number }; after?: { count: number; chars: number }; undoneAt?: number }
+export interface MemoryOrganizeView { available: boolean; running: boolean; last: { at: number; outcome: MemoryOrganizeOutcome } | null; history: MemoryOrganizeRecord[] }
+export type MemoryAuthor = 'user' | 'agent' | 'import'
+export interface AgentMemoryLayers {
+  version: string; residentChars: number; limit: number
+  resident: Array<{ id: string; text: string; pinned: boolean; by: MemoryAuthor; shadowed: boolean }>
+  topics: Array<{ key: string; title: string; about: string; path: string; entries: Array<{ id: string; text: string; by: MemoryAuthor }> }>
+  archive: { key: string; title: string; path: string; entries: Array<{ id: string; text: string; by: MemoryAuthor }> } | null
+  organize: MemoryOrganizeView
+}
+export const getPortraitOrganize = (t: EngineTarget) => request<MemoryOrganizeView>(t, '/agent/human/SOUL.md/organize')
+export const runPortraitOrganize = (t: EngineTarget) => request<MemoryOrganizeOutcome>(t, '/agent/human/SOUL.md/organize', { method: 'POST' }, { timeoutMs: 150_000 })
+export const undoPortraitOrganize = (t: EngineTarget, id: string) => request<{ id: string; undoneAt: number }>(t, `/agent/human/SOUL.md/organize/${encodeURIComponent(id)}/undo`, { method: 'POST' })
+/** 按原句钉住 / 取消;详情里的那条钉住 = 挪回常驻。回来的是整份画像。 */
+export const pinPortraitEntry = (t: EngineTarget, body: { fact: string; pinned: boolean; expectedVersion: string }) =>
+  request<{ content: string; version: string }>(t, '/agent/human/SOUL.md/pin', { method: 'POST', body: JSON.stringify(body) })
+export const getAgentMemoryLayers = (t: EngineTarget, slug: string) => request<AgentMemoryLayers>(t, `${agentMemoryPath(slug)}/layers`)
+export const runAgentMemoryOrganize = (t: EngineTarget, slug: string) => request<MemoryOrganizeOutcome>(t, `${agentMemoryPath(slug)}/organize`, { method: 'POST' }, { timeoutMs: 150_000 })
+export const undoAgentMemoryOrganize = (t: EngineTarget, slug: string, id: string) =>
+  request<{ id: string; undoneAt: number; changed: string[] }>(t, `${agentMemoryPath(slug)}/organize/${encodeURIComponent(id)}/undo`, { method: 'POST' })
+export const pinAgentMemoryEntry = (t: EngineTarget, slug: string, body: { id: string; pinned: boolean; expectedVersion?: string }) =>
+  request<{ ok: true }>(t, `${agentMemoryPath(slug)}/pin`, { method: 'POST', body: JSON.stringify(body) })
+
 // ── 从其他 AI 导入(11-03,引擎 services/externalImport;只许本机)──
 export type ImportTool = 'claude-code' | 'codex' | 'gemini-cli' | 'hermes' | 'cursor' | 'windsurf' | 'pasted'
 export interface ImportLedger { id: string; at: number; sources: ImportTool[]; counts: Record<'person' | 'agent' | 'project' | 'skill', number>; undoneAt?: number; kept?: string[] }
