@@ -8,6 +8,7 @@
  * 破坏性操作（run_bash / write_file / edit_file）由 agentLoop 在执行前经审批闸门把关
  * （见 services/approvals.ts）；本文件只管「真去做」，不含审批逻辑。
  */
+import { noteDetailFileRead } from '../services/memoryUsage.js';
 import { spawnHostShell, hostSandboxEnabled, remoteShellSeatbeltApplies } from '../sandbox/hostSandbox.js';
 import { redactRunSecrets } from '../sandbox/runSecretEnv.js';
 import { RemoteShellProtectionError, remoteShellNotes } from '../sandbox/remoteShellSeatbelt.js';
@@ -347,6 +348,7 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
       const ref = citeRefFor(abs, vaultRootOrNull(), path.sep);
       noteRead(ctx, abs, buf); // G3-02:write_file 整篇覆盖前据此判断「读后盘上有没有被改过」
       const text = buf.toString('utf-8');
+      if (/[\\/]Library[\\/]memory[\\/][^\\/]+\.md$/.test(abs)) noteDetailFileRead(abs, text); // 记忆分层:整份读了一份详情,里面每条记一次用量
       // 块锚 `^abc` 只在文件里**真的有**的时候才教:那是 Obsidian 的格式,只有从那边导入的笔记
       // 才带,本仓自己一行都不产 —— 无条件教 = 教出一堆点不动的死锚(教了模型就会用)。
       const blockIds = /\.(md|markdown)$/i.test(abs) && /(?:^|\s)\^[A-Za-z0-9-]+[ \t]*$/m.test(text);

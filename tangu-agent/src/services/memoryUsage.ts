@@ -2,8 +2,11 @@
  *  整理的模型拿它分「常用的留常驻、没用过的挪进详情」。只在本机、是个提示信号:不拿记忆目录锁(前台 remember 撞锁会直接 409),
  *  进程内按文件排队写,写不上就算了。条目按身份(normalizeMemoryFact)的哈希记,不存原文。 */
 import { createHash } from 'node:crypto';
+import { join, relative, resolve, sep } from 'node:path';
 import { atomicWriteMemoryFile, readMemoryFile } from './memoryRepository.js';
-import { normalizeMemoryFact } from '../contracts/entryMark.js';
+import { ARCHIVE_TOPIC, normalizeMemoryFact } from '../contracts/entryMark.js';
+import { parseTopicFile } from '../contracts/memoryLayers.js';
+import { agentsDir } from '../core/tanguHome.js';
 
 const DAYS = 30;
 interface UseItem { d: Record<string, number>; last: string }
@@ -49,3 +52,14 @@ export function readMemoryUse(dir: string, file: string): (fact: string) => UseS
 export async function flushMemoryUseForTests(): Promise<void> { await Promise.all([...queues.values()]); }
 export const AGENT_USAGE_FILE = '.memory-usage.json';
 export const PORTRAIT_USAGE_FILE = 'portrait-usage.json';
+/** read_file 整份读了某个 Agent 的一份详情(agents/<slug>/Library/memory/<主题>.md):里面每条记一次(R6)。归档不记;认不出路径就什么都不做,不抛。 */
+export function noteDetailFileRead(abs: string, text: string): void {
+  try {
+    const rel = relative(agentsDir(), resolve(abs)).split(sep);
+    if (rel.length !== 4 || rel[0].startsWith('..') || rel[1] !== 'Library' || rel[2] !== 'memory') return;
+    const m = /^([a-z][a-z0-9-]{0,31})\.md$/.exec(rel[3]);
+    if (!m || m[1] === ARCHIVE_TOPIC) return;
+    const facts = parseTopicFile(m[1], text).entries.map((e) => e.raw.split('\n')[0]);
+    if (facts.length) noteMemoryUse(join(agentsDir(), rel[0]), AGENT_USAGE_FILE, facts);
+  } catch { /* 提示信号:记不上就算了 */ }
+}

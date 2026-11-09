@@ -16,7 +16,7 @@ import { mutatePortrait, portraitEntryId } from '../src/agents/humanPortrait.js'
 import { applyPortraitOrganize, OrganizeRejected, pinPortraitEntry, portraitOrganizeHistory, undoPortraitOrganize } from '../src/agents/portraitLayers.js';
 import { applyAgentOrganize, agentOrganizeHistory, crashOrganizeAfterForTests, detailEntryId, pinAgentEntry, readAgentLayers, undoAgentOrganize } from '../src/services/agentMemoryLayers.js';
 import { resetMemoryOrganizeForTests, runOrganize, validateOrganizePlan, type OrganizeItem } from '../src/services/memoryOrganize.js';
-import { flushMemoryUseForTests, noteMemoryUse, readMemoryUse } from '../src/services/memoryUsage.js';
+import { flushMemoryUseForTests, noteDetailFileRead, noteMemoryUse, readMemoryUse } from '../src/services/memoryUsage.js';
 import { createMemoryRepository } from '../src/services/memoryRepository.js';
 import { normalizeMemoryFact } from '../src/contracts/entryMark.js';
 import { portraitResidentChars, portraitResidentText, splitPortrait } from '../src/contracts/memoryLayers.js';
@@ -235,5 +235,14 @@ describe('usage counts (R6)', () => {
     const use = readMemoryUse(base(), '.memory-usage.json');
     expect(use(CAT).uses30).toBe(2); // 同一次(一轮召回)里同一条只算一次 expect(use(RUN).uses30).toBe(1); expect(use(NAME)).toEqual({ uses30: 0, lastUsed: null });
     expect(readFileSync(join(base(), '.memory-usage.json'), 'utf8')).not.toContain('团子'); // 只存身份的哈希
+  });
+  it('reading a whole detail file counts each entry in it; the archive and other files do not count', async () => {
+    const life = `# 日常\n\n宠物与日常\n\n- ${TRIP} <!--tg by=agent-->\n`;
+    noteDetailFileRead(topicFile('life'), life);
+    noteDetailFileRead(topicFile('archive'), `# 归档\n\n- ${NAME}\n`);
+    noteDetailFileRead(join(base(), 'Library', 'notes', 'x.md'), `- ${RUN}\n`);
+    await flushMemoryUseForTests();
+    const use = readMemoryUse(base(), '.memory-usage.json');
+    expect(use(TRIP).uses30).toBe(1); expect(use(NAME).uses30).toBe(0); expect(use(RUN).uses30).toBe(0);
   });
 });

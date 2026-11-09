@@ -43,3 +43,5 @@
 .memory-layer-chevron { transition: transform var(--motion-fast, 120ms) ease; }
 .memory-layer-topic[aria-expanded="true"] .memory-layer-chevron { transform: rotate(90deg); }
 .memory-layer-topics .memory-layer-entries { margin: 2px 0 10px 31px; color: var(--text-light, var(--text)); }
+/* 窄栏(手机 / 窄分栏):文件位置让给说明 */
+@media (max-width: 640px) { .memory-layer-path { display: none; } }
