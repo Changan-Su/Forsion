@@ -262,11 +262,13 @@ export function createMarketPluginUpdater(o: {
         }
         const old = await manifest(x.type, target)
         x.installedVersion = old.version
-        // A pin outranks an update downloaded before it was set; so does a source that was removed or switched off
-        // after the download (its items are "no longer updated"). An explicit rollback still goes through.
-        if (x.pendingVersion && !x.pendingRollback && (x.pinnedVersion || o.paused?.(x.id))) {
+        // A pin outranks an update downloaded before it was set.
+        if (x.pendingVersion && x.pinnedVersion && !x.pendingRollback) {
           await rm(pending(x), { recursive: true, force: true }); x.pendingVersion = undefined; x.phase = 'current'; continue
         }
+        // Its store source was removed or switched off after the download, or the source table can't be read
+        // ("don't know" is not "gone"): don't swap it in, and don't delete it either. An explicit rollback still goes through.
+        if (x.pendingVersion && !x.pendingRollback && o.paused?.(x.id)) { x.phase = 'staged'; continue }
         if (!x.pendingVersion) continue
         const next = await manifest(x.type, pending(x))
         if (compareMarketVersions(next.version, old.version) === 0) {

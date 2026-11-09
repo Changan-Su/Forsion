@@ -222,7 +222,11 @@ it('a staged update from a store source is not swapped in after the source is re
   await f.updater.setAutoUpdate(f.item.id, true); await f.updater.check()
   expect(f.updater.snapshot().items[0]).toMatchObject({ phase: 'staged', pendingVersion: '1.1.0' })
   const next = createMarketPluginUpdater({ ...f.options, paused: () => true }); await next.init()
-  expect(await readFile(join(f.target, 'main.js'), 'utf8')).toBe('old'); expect(next.snapshot().items[0].pendingVersion).toBeUndefined()
+  expect(await readFile(join(f.target, 'main.js'), 'utf8')).toBe('old')
+  // Paused is not "delete": the downloaded package stays (the source table may just be unreadable this launch).
+  expect(next.snapshot().items[0]).toMatchObject({ pendingVersion: '1.1.0', phase: 'staged' })
+  const back = createMarketPluginUpdater(f.options); await back.init()
+  expect(await readFile(join(f.target, 'main.js'), 'utf8')).toBe('new')
 })
 it('a source removed while its update downloads keeps the update from being staged', async () => {
   const f = await fixture()
