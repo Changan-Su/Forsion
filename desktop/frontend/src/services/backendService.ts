@@ -4,7 +4,7 @@
  */
 import type {
   AgentConfig, AgentScheduleEntry, AgentScheduleEntryUpsert, AgentScheduleInfo, AgentsMeta, AutomationActionCatalogItem, AutomationExecutionInfo, AutomationRunInfo, AutomationSessionInfo, ChannelKind, HistorianActivityItem, MessageRecord, ModelsResponse, ProviderQuota, MuseLibraryEntry, MuseStarter, MuseRoundInfo, MuseSpaceView, MusePlacementOp, MuseStatusInfo, MuseTodo, MuseTriggerInfo, MuseTriggerUpsert, PendingApprovalInfo, TriggerSourceInfo,
-  GitIdentity, GitSettings, GitSummary, NormalAgentDef, ProjectContext, ProjectRepoInfo, ProjectMemoryView, ProjectSettings, ProjectSkillInfo, SessionRecord, SkillInfo, SkillCatalogEntry, SpecialAgentsConfig,
+  GitIdentity, GitSettings, GitSummary, NormalAgentDef, ProjectContext, ProjectRepoInfo, ProjectMemoryView, ProjectMemoryOrganizeOutcome, ProjectSettings, ProjectSkillInfo, SessionRecord, SkillInfo, SkillCatalogEntry, SpecialAgentsConfig,
   ToolsResponse, WorkspaceFileMeta, TeamDef } from '../types'
 import { authFetch } from './http'
 import { fetchOpts, type EngineTarget } from './engine/targets'
@@ -969,7 +969,7 @@ export const dismissPortraitOverflow = (t: EngineTarget) => request<{ items: Por
 
 // ── 记忆分层(11-09 第二步):常驻 / 详情、后台整理(配了后台模型才有)、整理记录(整次撤销)、图钉。只在宿主本机 ──
 export type MemoryOrganizeOutcome =
-  | { status: 'organized'; moved: number; archived: number; before: { count: number; chars: number }; after: { count: number; chars: number }; recordId: string }
+  | { status: 'organized'; moved: number; archived: number; before: { count: number; chars: number }; after: { count: number; chars: number }; recordId?: string }
   | { status: 'skipped'; reason: 'no_model' | 'under' | 'nothing' | 'busy' | 'cooldown' | 'rejected' | 'conflict' | 'failed'; detail?: string }
 export interface MemoryOrganizeRecord { id: string; at: number; moved: number; archived: number; topics: string[]; before?: { count: number; chars: number }; after?: { count: number; chars: number }; undoneAt?: number }
 export interface MemoryOrganizeView { available: boolean; running: boolean; last: { at: number; outcome: MemoryOrganizeOutcome } | null; history: MemoryOrganizeRecord[] }
@@ -1766,6 +1766,13 @@ export const resolveProjectCandidate = (t: EngineTarget, sessionId: string, id: 
 /** 把写满压缩时合并 / 去掉的一句原样记回项目记忆。404 = 那一句已经不在记录里;放不下 → err.code 'MEMORY_FULL'。 */
 export const restoreProjectMemoryFact = (t: EngineTarget, sessionId: string, id: string) =>
   request<{ memory: ProjectMemoryView }>(t, '/agent/project-context/memory/restore', { method: 'POST', body: JSON.stringify({ sessionId, id }) }).then((r) => r.memory)
+/** 项目记忆分层(11-09 2b):手点「整理」(先挪进详情,再丢过时的;要等后台模型,给长一点的时限)、整次撤销、钉住。只在宿主本机。 */
+export const organizeProjectMemory = (t: EngineTarget, sessionId: string) =>
+  request<ProjectMemoryOrganizeOutcome>(t, '/agent/project-context/memory/organize', { method: 'POST', body: JSON.stringify({ sessionId }) }, { timeoutMs: 200_000 })
+export const undoProjectMemoryOrganize = (t: EngineTarget, sessionId: string, id: string) =>
+  request<{ memory: ProjectMemoryView; changed: string[] }>(t, '/agent/project-context/memory/organize/undo', { method: 'POST', body: JSON.stringify({ sessionId, id }) })
+export const pinProjectMemoryEntry = (t: EngineTarget, sessionId: string, body: { id: string; pinned: boolean; expectedVersion?: string }) =>
+  request<{ memory: ProjectMemoryView }>(t, '/agent/project-context/memory/pin', { method: 'POST', body: JSON.stringify({ sessionId, ...body }) }).then((r) => r.memory)
 // ── 项目文件夹搬走后重新指向(引擎 services/projectRelink.ts;只在本机引擎上,手机 / 网页拿到的是空表)──
 /** 本人会话里出现过、现在不在原处的本地项目路径(外接盘没挂上也算 —— 只拿来打标记)。 */
 export const getMissingProjects = (t: EngineTarget) =>

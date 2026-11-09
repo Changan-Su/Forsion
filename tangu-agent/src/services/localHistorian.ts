@@ -48,8 +48,8 @@ import { appendCandidates as appendRawCandidates, readCandidates as readRaw } fr
 import { startMemoryDream } from './memoryDream.js';
 import { MEMORY_CHAR_BUDGET, normalizeMemoryFact } from './memoryRepository.js';
 import { sessionCalledTool } from './sessionSearchSql.js';
-import { addProjectFact, peekProjectMemory, pendingProjectFacts, projectKnownForJudge, queueProjectFact, resolveProjectMemory } from './projectMemory.js';
-import { compactProjectMemory } from './projectMemoryCompact.js';
+import { addProjectFact, peekProjectMemory, pendingProjectFacts, projectDetailEntries, projectKnownForJudge, projectLayers, queueProjectFact, resolveProjectMemory } from './projectMemory.js';
+import { afterProjectWrite } from './projectMemoryCompact.js';
 import { COMPUTER_HISTORY_TOOL } from './computerHistory.js';
 import { HISTORIAN_EMOJI_FIELD } from '../core/sessionEmoji.js';
 import { applyHistorianEmoji } from './sessionEmoji.js';
@@ -702,8 +702,10 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
     // 判官看得到已有的那份,免得把前台刚 remember 过的同一件事换个说法再记一遍(项目记忆没有 Dream 去重)。
     // 等用户确认的、用户丢弃过的候选也算「已经提过」:不给它看,它每轮换个说法再提一遍,待确认清单里就是一排近义句。
     const projectRef = judgeMemory && deps().profile.capabilities.hostExec ? await resolveProjectMemory(userId, sessionId) : null;
+    // 挪进详情(含归档)的也算「已经记着」(11-09 分层),单独一格,不挤掉常驻那份
     const projectKnown = projectRef
-      ? projectKnownForJudge(((await peekProjectMemory(projectRef).catch(() => null))?.entries ?? []).map((e) => e.content), pendingProjectFacts(projectRef))
+      ? projectKnownForJudge(((await peekProjectMemory(projectRef).catch(() => null))?.entries ?? []).map((e) => e.content), pendingProjectFacts(projectRef),
+        (() => { try { return projectDetailEntries(projectLayers(projectRef), true).map((d) => d.text); } catch { return []; } })())
       : '';
 
     // 远程轮 / 电脑历史隔离的会话里,信号加评没有可评的类别 → 不起这次调用。
@@ -841,22 +843,15 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
             // 排进这个项目的待确认清单,等用户在项目详情里逐条点头(10-04 用户裁决「有风险的才需要确认」;此前是直接丢)。
             try {
               if (!autoAdoptable(fact)) { if (await queueProjectFact(projectRef, fact, sessionId)) waiting.push(fact); continue; }
-              let wrote = await addProjectFact(projectRef, fact, sessionId);
-              if (wrote === 'full') {
-                // 写满(10-05 用户:「记忆满了就让 agent 压缩一下」):让模型把整份压一遍再试一次。压不成 → 照旧不写,绝不为了腾地方直接删条目。
-                // 压没压成、为什么没成,compactProjectMemory 自己记日志;压成了的那一笔活动(project_memory_compacted)也由它记
-                const made = await compactProjectMemory(userId, projectRef, { fallbackModelId: cfg.modelId, sessionId, signal: historianSignal.getStore() });
-                if (made.status === 'compacted') {
-                  // 等模型的那几秒里会话可能已被远端驱动 / 调过电脑历史:和上面 stillClean 同一道闸,落这一句之前再核一次。
-                  // 没过 → 这一句和这一轮剩下的都不写(光跳过这一句,下一句会落进刚腾出来的地方;Codex 评审 10-05)
-                  if ((await sessionRemoteTainted(sessionId)) || (await sessionCalledTool(sessionId, COMPUTER_HISTORY_TOOL).catch(() => true))) break;
-                  wrote = await addProjectFact(projectRef, fact, sessionId);
-                }
-              }
+              // 常驻超线不再拦写入(11-09 分层):写进去,循环后排一次后台整理(先挪进详情,再丢过时的);'full' 只在到了存储上限时出现,那时照旧不写
+              const wrote = await addProjectFact(projectRef, fact, sessionId);
               if (wrote === 'added') added.push(fact);
+              else if (wrote === 'full') log(`项目记忆到了存储上限,这一句没写(${projectRef.name})`);
             } catch (e: any) { log(`写项目记忆失败: ${e?.message || e}`); }
           }
           if (added.length) ledger.inc('daily_judge', 'projCandidatesAuto', { n: added.length });
+          // 常驻过线了:排一次后台整理(不等;后台模型那一格,没配就用这次判官的模型)。整理只挪已有条目,不写新内容,不用再过上面的远端 / 电脑历史闸
+          if (added.length) afterProjectWrite(userId, projectRef, { fallbackModelId: cfg.modelId, sessionId });
           if (waiting.length) ledger.inc('daily_judge', 'projCandidatesQueued', { n: waiting.length });
           if (added.length) {
             await logActivity(userId, 'project_memory_added', added.join(' | ').slice(0, 300), sessionId);
