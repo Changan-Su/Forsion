@@ -151,6 +151,8 @@ export interface MemoryBrain {
   mutateMemory?(userId: string, mutation: import('../services/memoryRepository.js').MemoryMutation): Promise<import('../services/memoryRepository.js').MemorySnapshot>;
   listMemoryRevisions?(userId: string): Promise<import('../services/memoryRepository.js').MemoryRevision[]>;
   restoreMemoryRevision?(userId: string, version: string, expectedVersion: string, signal?: AbortSignal): Promise<import('../services/memoryRepository.js').MemorySnapshot>;
+  /** 记忆分层(11-09):常驻 + 详情 + 归档的视图,和这份记忆在本机的目录(记用量、写详情用)。只有本机文件后端有;没有 = 只有常驻。 */
+  getMemoryLayers?(userId: string): Promise<import('../services/agentMemoryLayers.js').AgentLayers & { baseDir: string }>;
   getMemory(userId: string, opts?: { signal?: AbortSignal }): Promise<{ content: string; updatedAt: any }>;
   appendMemoryEntry(
     userId: string,

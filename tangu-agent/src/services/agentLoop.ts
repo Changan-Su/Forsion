@@ -102,7 +102,7 @@ import { buildAgentMemoryContext } from './memoryRecall.js';
 import { agentRoleOf } from './telemetryLedger.js';
 import { filterTaggedEntries, filterTaggedText, foldNote } from '../contracts/deviceTags.js';
 import { runTagContext, textForThisDevice } from './deviceTagContext.js';
-import { buildProjectMemoryContext, resolveProjectMemory } from './projectMemory.js';
+import { buildProjectMemoryLayers, resolveProjectMemory } from './projectMemory.js';
 import { computerHistoryDigest, computerHistoryRecallHide } from './computerHistory.js';
 import { takeWorkspaceUploads, withUploadRefs } from './workspaceUploads.js';
 import './remoteTaint.js'; // 首次远程染色 → 落进 run 行(input.remoteTainted),会话级污点判据据此跨重启认得(P1 · M1A)
@@ -1804,7 +1804,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       // (P1 · M1A,G7)。run 自己带远程污点时不藏 —— 远端内容回到远端 run 不是洗白。显式的 search_sessions / read_session 另见工具。
       // 远程污点只存在于本机引擎(hostExec):云端 / thin worker 不带这个键,免得 PG 谓词与网关路由为一个恒空的集合跑一遍。
       const hideRemoteSessions = profile.capabilities.hostExec && !effectiveRemote({ remote, runId });
-      const memoryContext = await buildAgentMemoryContext({ userId, appId, agentSlug: activeAgentSlug, deviceTags: tagCtx,
+      // portrait:画像的详情也按这句话召回(11-09 分层),和上面画像注入同一道门(本机、不连通道)
+      const memoryContext = await buildAgentMemoryContext({ userId, appId, agentSlug: activeAgentSlug, deviceTags: tagCtx, portrait: channelBinding === false && !!profile.capabilities.hostExec,
         query: typeof input.message === 'string' ? input.message : '', excludeSessionId: sessionId, hideSessionsWithTool, hideRemoteSessions, signal: ac.signal });
       recallStats = { recallEntries: memoryContext.entryIds.length, recallHistory: memoryContext.historyMessageIds.length, recallTruncated: !!memoryContext.truncated };
       if (volatilePlacement === 'system') {
@@ -1818,11 +1819,15 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       console.warn('[agent-core] load agent memory failed:', e);
       systemParts.push('Agent memory is currently unreadable. Do not claim it is empty or that anything was saved; explicit memory tools may be retried.');
     }
-    // 6b) 项目级记忆:只在本项目成立的事实,本项目里的 agent 共用(services/projectMemory.ts)。同一项目的会话之间不变 → 稳定区。
+    // 6b) 项目级记忆:只在本项目成立的事实,本项目里的 agent 共用(services/projectMemory.ts)。常驻 + 详情索引同一项目的会话之间不变 → 稳定区;
+    //     按这句话从详情里召回的几条(11-09 分层)每条消息都变 → 和上面 agent 记忆的易变段同一处落位,不破前缀缓存。
     //     只在本机有(存用户目录、按会话存档的项目路径索引);无项目会话不注入。读不到只丢这一段,不影响上面的 agent 记忆。
-    if (profile.capabilities.hostExec && !standIn) { // 分身没有项目记忆(那份给这个项目里所有 Agent,含本体)
-      try { const projectMemory = await buildProjectMemoryContext(userId, sessionId); if (projectMemory) systemParts.push(projectMemory); }
-      catch (e) { ac.signal.throwIfAborted(); console.warn('[agent-core] load project memory failed:', (e as Error)?.message || e); }
+    if (profile.capabilities.hostExec && !standIn) { // 分身没有项目记忆(常驻、详情、召回都不给:那份给这个项目里所有 Agent,含本体)
+      try {
+        const projectMemory = await buildProjectMemoryLayers(userId, sessionId, typeof input.message === 'string' ? input.message : '');
+        if (projectMemory.stable) systemParts.push(volatilePlacement === 'system' && projectMemory.volatile ? `${projectMemory.stable}\n\n${projectMemory.volatile}` : projectMemory.stable);
+        if (volatilePlacement !== 'system' && projectMemory.volatile) volatileMemory = [volatileMemory, projectMemory.volatile].filter(Boolean).join('\n');
+      } catch (e) { ac.signal.throwIfAborted(); console.warn('[agent-core] load project memory failed:', (e as Error)?.message || e); }
     }
     ctxMark('memory');
     // 7/8) 技能目录 + deferred 工具目录 + 环境段(environment 在技能段后,保留原相对次序)
