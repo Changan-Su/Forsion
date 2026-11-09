@@ -141,6 +141,7 @@ import { LIST_CAPABILITIES } from './listTree'
 import { CHAT_BOX_CAPABILITIES } from '../../../../shared/chatBox'
 import { windowKind } from '../../windowKind'
 import { addRibbonAction } from './ribbonAction'
+import { provideFeedbackChannel } from '../../feedbackChannel'
 import { compileDashboardRecipe } from '@amadeus-shared/dashboardRecipe'
 import { openWebFloatingPanel } from '../../pluginPanelSeam'
 import { connectionTarget, homeTarget } from '../../services/engine/targets'
@@ -689,6 +690,13 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
       ribbonActions.add(off)
       return () => { ribbonActions.delete(off); off() }
     },
+    // 页内反馈通道(2026-11-09):网页主入口 / 手机没有主进程,Forsion Extend 把「随账号提交反馈」交给宿主,宿主才有反馈入口
+    // (Ribbon 图标、命令面板、/feedback)。同 runCommand 只给首方包;桌面自己有通道,不接;插件停用时 revokeSurface 收掉。
+    provideFeedbackChannel: (submit) => {
+      if (submit === null) return provideFeedbackChannel(pluginId, null)
+      if (!ok() || typeof submit !== 'function' || !usePluginStore.getState().plugins.find((p) => p.id === pluginId)?.locked) return false
+      return provideFeedbackChannel(pluginId, submit)
+    },
     // 同步总开关(2026-10-20,蓬洲云「同步」页):只给首方包(同 spotlight 认 locked)、只在有本地库远程同步的桌面
     ...(typeof window !== 'undefined' && window.remoteSync && !hostTangu()?.mobile ? { sync: syncSeam(pluginId, ok) } : {}),
     // 自己弹出来的弹窗排队(2026-10-19,Extend 公告):同一时间只露一个,插件排在宿主的协议更新 / What's new 后面;停用时 teardown 收掉
@@ -752,6 +760,7 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
     revokeSurface: () => {
       ribbonActions.forEach((off) => off())
       ribbonActions.clear()
+      provideFeedbackChannel(pluginId, null)
       alive = false
       surface.revoke()
       for (const u of Array.from(fileUnsubs)) {

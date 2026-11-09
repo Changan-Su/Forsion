@@ -6,7 +6,7 @@ import './spaceAmbient.css'
 
 // Paper only: sampling chrome would feed the previous palette back into itself.
 function visiblePaper(): HTMLElement | undefined {
-  return [...document.querySelectorAll<HTMLElement>('.dv-groupview:not(:has(.wb-tab--icon)) .dv-content-container > .dv-react-part, .mb-main')]
+  return [...document.querySelectorAll<HTMLElement>('.dv-render-overlay[data-lcl-loc="main"][data-lcl-visible="true"] > .dv-react-part, .dv-groupview:not(:has(.wb-tab--icon)) .dv-content-container > .dv-react-part, .mb-main')]
     .filter((el) => el.checkVisibility() && el.getBoundingClientRect().width > 20)
     .sort((a, b) => b.clientWidth * b.clientHeight - a.clientWidth * a.clientHeight)[0]
 }

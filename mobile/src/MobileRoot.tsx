@@ -28,6 +28,7 @@ import { setPopupsBlocked } from '@/stores/popupQueue'
 import { AmadeusOverlays } from '@/amadeusOverlays'
 import { AchievementToast } from '@/achievements/AchievementToast'
 import { AchievementsModal } from '@/achievements/AchievementsModal'
+import { FeedbackModal } from '@/components/FeedbackModal'
 import { VoiceCallBar } from '@/mini/VoiceCallView'
 import { getCallLayer, openCallLayer, subscribeCallLayer } from '@/services/realtimeCall'
 import { readTanguShell, TanguBtwHost } from '@/amadeus/plugins/tanguSeam'
@@ -114,6 +115,8 @@ function planBack(): BrowserBackPlan & { slide?: 'left' | 'right' } {
   const shell = readTanguShell()
   if (shell?.btwPageVisible(app.activeId)) return { run: () => shell.closeBtwPage() }
   // 应用市场全屏页(详情页开着时,MarketModal 自己在 forsion:mobile-back 里先退回列表)
+  // 反馈全屏页(入口:「⋯」里的反馈、命令面板、输入框的 /feedback;通道由 Forsion Extend 交来,见 feedbackChannel.ts)
+  if (app.feedbackOpen) return { run: () => app.closeFeedback() }
   if (app.marketOpen) return { run: () => app.closeMarket() }
   if (app.settingsOpen) return { run: () => app.closeSettings() }
   const ws = useWorkspace.getState()
@@ -155,7 +158,7 @@ function useBrowserBack(): void {
         useWorkspace.subscribe(changed), useNav.subscribe(changed), useSpaceStore.subscribe(changed),
         useQuickFind.subscribe(changed), readTanguShell()?.subscribeBtw(changed) ?? (() => {}), subscribeBrowserSheet(changed),
         useApp.subscribe((s, prev) => {
-          if (s.settingsOpen !== prev.settingsOpen || s.marketOpen !== prev.marketOpen || s.onboarding !== prev.onboarding || s.activeId !== prev.activeId || s.achievementsOpen !== prev.achievementsOpen) changed()
+          if (s.settingsOpen !== prev.settingsOpen || s.marketOpen !== prev.marketOpen || s.onboarding !== prev.onboarding || s.activeId !== prev.activeId || s.achievementsOpen !== prev.achievementsOpen || s.feedbackOpen !== prev.feedbackOpen) changed()
         }),
       ]
       return () => { offs.forEach((off) => off()) }
@@ -246,6 +249,8 @@ export function MobileRoot() {
     onboarding: s.onboarding,
     setOnboarding: s.setOnboarding,
     achievementsOpen: s.achievementsOpen,
+    feedbackOpen: s.feedbackOpen,
+    closeFeedback: s.closeFeedback,
     cfg: s.cfg,
     closeSettings: s.closeSettings,
     patchConfig: s.patchConfig,
@@ -255,7 +260,7 @@ export function MobileRoot() {
   const unitsOpen = useUnitsSheet((s) => s.open)
   const callLayer = useSyncExternalStore(subscribeCallLayer, getCallLayer)
   const btwPage = useSyncExternalStore(subscribeBtwPage, () => readTanguShell()?.btwPageVisible(a.activeId) ?? false)
-  useNativeChromeClaim(a.onboarding || a.achievementsOpen || unitsOpen || btwPage ? CHROME_HIDDEN : null)
+  useNativeChromeClaim(a.onboarding || a.achievementsOpen || a.feedbackOpen || unitsOpen || btwPage ? CHROME_HIDDEN : null)
   // 同 Root:全屏引导开着时,协议更新 / What's new / 插件公告先排着
   useEffect(() => setPopupsBlocked(!!a.onboarding), [a.onboarding])
   // 原生外壳(Android)把账号入口画成顶栏右侧的头像,左栏底部那一排不再渲染 —— 账号卡在这儿隐身挂着:
@@ -305,6 +310,24 @@ export function MobileRoot() {
             transition={{ duration: 0.22, ease: [0.2, 0.8, 0.2, 1] }}
           >
             <AchievementsModal />
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* 反馈(2026-11-09 起手机也有):与设置同款全屏二级页,表单自带标题与关闭键。同一渲染进程,
+          「让 Tangu 帮我诊断」原地把草稿交给聊天(桌面浮窗那条 onMainAction 转交在这里用不上)。 */}
+      <AnimatePresence>
+        {a.feedbackOpen && (
+          <motion.div
+            key="feedback"
+            data-mobile-feedback
+            style={{ position: 'fixed', inset: 0, zIndex: 50, display: 'flex', minWidth: 0, minHeight: 0, overflow: 'hidden', background: 'var(--bg)', paddingTop: 'env(safe-area-inset-top)', paddingBottom: 'env(safe-area-inset-bottom)' }}
+            initial={{ opacity: 0, scale: 0.985 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.985 }}
+            transition={{ duration: 0.22, ease: [0.2, 0.8, 0.2, 1] }}
+          >
+            <FeedbackModal surface="panel" cfg={a.cfg} activeSession={activeSession} onClose={() => a.closeFeedback()} />
           </motion.div>
         )}
       </AnimatePresence>

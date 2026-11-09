@@ -151,3 +151,7 @@ export type {
   NativeChromeHost, NativeChromeClaim, NativeChromeClaimHandle, NativeChromeShellLabels, NativeChromeShellHandlers,
   NativeChromeSpace, NativeHaptic,
 } from './nativeChrome'
+
+export type { ViewLayoutHints } from './layoutCoordinator'
+export type { ViewLayoutHandle, ViewLayoutState } from './viewLayout'
+export { createViewLayout } from './viewLayout'

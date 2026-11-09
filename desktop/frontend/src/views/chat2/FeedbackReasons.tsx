@@ -41,8 +41,9 @@ export interface ShareConsent { accountId: string | null }
 /** 现在登录的是哪个账号:读 store 里 auth:status 的结果(同步,不去问网)。换号后到重新拉到之前是 null。 */
 const currentAccountId = (): string | null => useApp.getState().authInfo?.accountId || null
 
-/** 宿主有没有随账号的反馈通道(桌面有;网页 / 手机 / 老宿主没有)。 */
-export const canShareOriginal = (): boolean => typeof window !== 'undefined' && !!window.tangu?.submitFeedback
+/** 能不能画「附上这条原文」:要有反馈通道,还要认得出现在登录的账号 —— 同意是对账号给的,认不出就不问(问了也不会发)。
+ *  桌面登录后两样都有;网页 / 手机的反馈通道是页内的,报不出 accountId,这个勾照旧不出现。 */
+export const canShareOriginal = (): boolean => typeof window !== 'undefined' && !!window.tangu?.submitFeedback && !!currentAccountId()
 
 /** 反馈单正文上限(server /api/feedback 收 10000 字)。 */
 const TICKET_LIMIT = 10_000
