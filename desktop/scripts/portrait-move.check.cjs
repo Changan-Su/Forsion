@@ -151,7 +151,7 @@ async function run() {
     const saved = JSON.parse(fs.readFileSync(record, 'utf8'))
     const hit = saved.items.find((i) => i.content.includes(LANG)); assert.ok(hit); hit.state = 'moving'
     fs.writeFileSync(record, JSON.stringify(saved))
-    await openPortrait('记忆'); await openPortrait('画像')
+    await openPortrait('我的笔记'); await openPortrait('画像')
     await card.waitFor()
     await win.waitForFunction(() => !document.querySelector('[data-portrait-move-item][data-state="moving"]'))
     assert.ok(!(await mem()).content.includes(LANG), 'the interrupted move finished')

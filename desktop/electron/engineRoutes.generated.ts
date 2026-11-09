@@ -101,6 +101,8 @@ export const ENGINE_ROUTES: readonly EngineRoute[] = [
   { method: 'GET', path: '/agent/human/SOUL.md/move', access: 'deny-remote', src: 'routes/human.ts', why: 'host portrait move card (the route itself also refuses remote origin)' },
   { method: 'POST', path: '/agent/human/SOUL.md/move/items/:id', access: 'deny-remote', src: 'routes/human.ts', why: 'moves or keeps one Agent memory entry for the portrait (the route itself also refuses remote origin)' },
   { method: 'POST', path: '/agent/human/SOUL.md/move/scan', access: 'deny-remote', src: 'routes/human.ts', why: 'starts the user-requested scan of Agent memories (the route itself also refuses remote origin)' },
+  { method: 'GET', path: '/agent/human/SOUL.md/overflow', access: 'deny-remote', src: 'routes/human.ts', why: 'host list of entries Dream kept in Agent memory because the portrait was full (the route itself also refuses remote origin)' },
+  { method: 'POST', path: '/agent/human/SOUL.md/overflow/dismiss', access: 'deny-remote', src: 'routes/human.ts', why: 'clears that list on the host (the route itself also refuses remote origin)' },
   { method: 'GET', path: '/agent/project-context/human', access: 'deny-remote', src: 'routes/human.ts', why: 'host collaboration configuration' },
   { method: 'PUT', path: '/agent/project-context/human', access: 'deny-remote', src: 'routes/human.ts', why: 'host collaboration configuration write' },
   { method: 'POST', path: '/agent/project-context/human/undo', access: 'deny-remote', src: 'routes/human.ts', why: 'host collaboration configuration undo' },

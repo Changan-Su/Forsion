@@ -962,15 +962,21 @@ export const getPortraitMove = (t: EngineTarget) => request<PortraitMoveView>(t,
 export const scanPortraitMove = (t: EngineTarget) => request<PortraitMoveView>(t, '/agent/human/SOUL.md/move/scan', { method: 'POST' })
 export const decidePortraitMove = (t: EngineTarget, id: string, decision: 'move' | 'keep' | 'undo') =>
   request<PortraitMoveView>(t, `/agent/human/SOUL.md/move/items/${encodeURIComponent(id)}`, { method: 'POST', body: JSON.stringify({ decision }) })
+// 后台整理(Dream)因为画像满了、记在各 Agent 那里的条目(11-09):画像页提示一句,点开看是哪几条;只在宿主本机。
+export interface PortraitOverflowItem { agent: string; fact: string; at: number }
+export const getPortraitOverflow = (t: EngineTarget) => request<{ items: PortraitOverflowItem[] }>(t, '/agent/human/SOUL.md/overflow')
+export const dismissPortraitOverflow = (t: EngineTarget) => request<{ items: PortraitOverflowItem[] }>(t, '/agent/human/SOUL.md/overflow/dismiss', { method: 'POST' })
 
 // ── 从其他 AI 导入(11-03,引擎 services/externalImport;只许本机)──
 export type ImportTool = 'claude-code' | 'codex' | 'gemini-cli' | 'hermes' | 'cursor' | 'windsurf' | 'pasted'
 export interface ImportLedger { id: string; at: number; sources: ImportTool[]; counts: Record<'person' | 'agent' | 'project' | 'skill', number>; undoneAt?: number; kept?: string[] }
 export interface ImportScan { tools: Array<{ id: ImportTool; about: number; rules: number; project: number; notes: number; skills: number }>; fresh: number; freshTools: ImportTool[]; last: ImportLedger | null }
-export interface ImportPlanItem { id: string; text: string; dest: 'person' | 'agent' | 'project' | 'past' | 'blocked'; project?: string; sources: ImportTool[]; flags: Array<'merged' | 'sensitive' | 'known' | 'conflict' | 'forgotten'>; conflictWith?: string; checked: boolean; locked: boolean }
+export interface ImportPlanItem { id: string; text: string; dest: 'person' | 'agent' | 'project' | 'past' | 'blocked'; project?: string; sources: ImportTool[]; flags: Array<'merged' | 'sensitive' | 'known' | 'conflict' | 'forgotten' | 'noRoom'>; conflictWith?: string; checked: boolean; locked: boolean; cost?: number }
 export interface ImportPlanSkill { key: string; tool: ImportTool; name: string; target: string; description: string; scripts: number; files: number; flags: Array<'renamed' | 'mentions-other' | 'too-big'>; checked: boolean; locked: boolean }
 export interface ImportNotice { tool: ImportTool; kind: 'too-many' | 'persona' | 'truncated'; path: string; count?: number; project?: string }
-export interface ImportPlan { id: string; createdAt: number; items: ImportPlanItem[]; skills: ImportPlanSkill[]; notices: ImportNotice[]; missed: number }
+/** 画像的账(11-09):现在多少字、上限、还能放多少(引擎已扣掉新开那一节的标题);旧引擎没有这一项。 */
+export interface ImportPortraitBudget { chars: number; limit: number; room: number }
+export interface ImportPlan { id: string; createdAt: number; items: ImportPlanItem[]; skills: ImportPlanSkill[]; notices: ImportNotice[]; missed: number; portrait?: ImportPortraitBudget }
 export interface ImportPlanView { state: 'idle' | 'running' | 'done' | 'error'; done: number; total: number; plan: ImportPlan | null; error: string | null }
 export const scanImport = (t: EngineTarget) => request<ImportScan>(t, '/agent/import/scan')
 export const getImportPlan = (t: EngineTarget) => request<ImportPlanView>(t, '/agent/import/plan')

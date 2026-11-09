@@ -37,6 +37,7 @@ import { subscribe } from './eventBus.js';
 import { getAgent, readAgentsMeta, resolveMemorySlug } from '../agents/agentRegistry.js';
 import { cloudAgentsEnabled, cloudGetAgent, cloudReadAgentsMeta } from '../agents/cloudAgentStore.js';
 import { agentsDir, readHumanFile, readUserMdForPrompt } from '../core/tanguHome.js';
+import { ABOUT_HUMAN_LIMITS, clipForPrompt } from '../contracts/promptClip.js';
 import { createMemoryRepository } from './memoryRepository.js';
 import { runWithUserAgentScope } from '../seams/runContext.js';
 import { wellFormed } from '../llm/wellFormedJson.js';
@@ -106,9 +107,9 @@ export async function buildVoiceInstructions(sessionId: string, agentSlug: strin
   // 连着聊天通道的会话不放这两份(同 agentLoop 的 renderAboutHuman({ private }))
   const own = !cloud && (await channelHub.channelBinding(userId, sessionId)) === false;
   const user = own ? readUserMdForPrompt().trim() : '';
-  if (user) sections.push(`## About the user\n${clip(user, 2000)}`);
-  const portrait = own ? readHumanFile('SOUL.md').trim() : ''; // 画像:Agent 们对这个人的认识,同 renderAboutHuman 只取前 2000 字
-  if (portrait) sections.push(`## How agents see the human\n${clip(portrait, 2000)}`);
+  if (user) sections.push(`## About the user\n${clipForPrompt(user, ABOUT_HUMAN_LIMITS['MEMORY.md'])}`);
+  const portrait = own ? readHumanFile('SOUL.md').trim() : ''; // 画像:Agent 们对这个人的认识,同 renderAboutHuman 按整条截前 2000 字
+  if (portrait) sections.push(`## How agents see the human\n${clipForPrompt(portrait, ABOUT_HUMAN_LIMITS['SOUL.md'])}`);
   if (memory.trim()) sections.push(`## Your memory\n${clip(textForThisDevice(memory.trim(), runTagContext(!!deps().profile.capabilities.hostExec), 'entry'), 3000)}`); // 别台的条目折成一行(11-06)
   if (history) sections.push(`## Recent messages in this chat\n${history}`);
   return sections.join('\n\n');

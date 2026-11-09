@@ -440,6 +440,8 @@ describe('Dream routes facts about the person into the portrait', () => {
     startMemoryDream('u', 'alpha'); expect((await settle()).state).toBe('completed');
     expect(soul()).not.toContain('walks');
     expect(repo().snapshot().content).toBe('- You like long walks after dinner.');
+    // 11-09:不再悄悄退回 —— 记一笔给画像页(哪个 Agent、哪一句)
+    expect(JSON.parse(readFileSync(join(home, 'human-history', 'portrait-overflow.json'), 'utf8')).items).toMatchObject([{ agent: 'alpha', fact: 'You like long walks after dinner.' }]);
     // 人从画像里删掉的一句(墓碑):整理时不再写回画像,也不改记进这个 Agent 的记忆
     const now = await readHuman({ kind: 'human', file: 'SOUL.md' });
     await writeHuman({ kind: 'human', file: 'SOUL.md' }, { content: '- You drink tea.\n', summary: 'fixture', expectedVersion: now.version }, 'user');

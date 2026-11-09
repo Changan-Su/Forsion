@@ -42,3 +42,5 @@
 .imp-hint small, .imp-done small { display: block; color: var(--text-muted); font-size: var(--ui-font-caption); margin-top: 2px; }
 .imp-hint > svg, .imp-done > svg { flex: none; }
 .imp-body .imp-done { margin-top: 14px; }
+/* 画像的账(11-09):勾的超过还能放的,数字换成提示色 */
+.imp-sec small.imp-budget.is-over { color: var(--accent-ink); }
