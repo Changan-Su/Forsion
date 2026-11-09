@@ -35,12 +35,19 @@ const SPECS = [
   { pkg: '@fontsource-variable/jetbrains-mono', css: ['wght.css'], family: 'JetBrains Mono Variable' },
   { pkg: '@fontsource/noto-sans-sc', css: ['400.css', '700.css'], family: 'Noto Sans SC' },
   { pkg: '@fontsource/lxgw-wenkai', css: ['500.css'], family: 'LXGW WenKai' },
+  // 设计语言的界面字体(2026-11-08 主题检修):原先由主题 manifest 的 fonts.google 每次启动去连 fonts.googleapis.com,
+  // 国内 / 离线 / 公司网连不上就静默落回系统字,同一个 Genesis 在两台机器上是两种字。只取正体的可变字重轴(wght.css)。
+  // familyAs:fontsource 的可变字体族名带「 Variable」后缀,而 base.css :root / 各主题的字体栈一直写不带后缀的名字
+  // —— 生成时把族名改过来,字体栈一个字不用动。
+  { pkg: '@fontsource-variable/hanken-grotesk', css: ['wght.css'], family: 'Hanken Grotesk Variable', familyAs: 'Hanken Grotesk' },
+  { pkg: '@fontsource-variable/plus-jakarta-sans', css: ['wght.css'], family: 'Plus Jakarta Sans Variable', familyAs: 'Plus Jakarta Sans' },
+  { pkg: '@fontsource-variable/nunito', css: ['wght.css'], family: 'Nunito Variable', familyAs: 'Nunito' },
 ]
 
 const STAMP = path.join(outDir, '.stamp')
 
 /** 改了生成逻辑(剥 woff 的正则、落盘布局…)就 +1,老产物才会被判过期。 */
-const GEN_VERSION = 2
+const GEN_VERSION = 3
 
 /** 逐级上找 node_modules。**cwd 与 __dirname 两处都要找**(照 copy-excalidraw-assets.cjs 的房规):
  *  web 自己 npm ci、自己的 node_modules,只从 __dirname 找会永远看不见它;
@@ -73,7 +80,13 @@ function collect() {
     for (const cssName of spec.css) {
       const cssPath = path.join(pkgDir, cssName)
       if (!fs.existsSync(cssPath)) throw new Error(`[gen-fonts] ${spec.pkg}/${cssName} 不存在`)
-      const css = fs.readFileSync(cssPath, 'utf8').replace(WOFF_FALLBACK, '')
+      let css = fs.readFileSync(cssPath, 'utf8').replace(WOFF_FALLBACK, '')
+      if (spec.familyAs) {
+        const from = `font-family: '${spec.family}';`
+        // 硬失败:包里改了族名而这里没跟上,改名会静默落空,字体栈点名的那个族就不存在。
+        if (!css.includes(from)) throw new Error(`[gen-fonts] ${spec.pkg}/${cssName} 里没有 ${from}`)
+        css = css.split(from).join(`font-family: '${spec.familyAs}';`)
+      }
       const woff2 = [...css.matchAll(/url\(\.\/files\/([^)]+\.woff2)\)/g)].map((m) => m[1])
       units.push({ spec, pkgDir, version, cssName, css, woff2 })
     }
