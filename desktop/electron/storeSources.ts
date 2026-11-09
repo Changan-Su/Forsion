@@ -14,19 +14,20 @@ import { join } from 'node:path'
 import { gunzipSync } from 'node:zlib'
 import JSZip from 'jszip'
 import { createSerialQueue, writePrivateJson } from './configWrite'
-import { computeStripPrefix, downloadCandidates, downloadZip, GZIP_MAGIC, isJunkPath, MARKET_MANIFEST, ZIP_MAGIC, type DownloadProgress } from './marketInstall'
+import { downloadCandidates, downloadZip, GZIP_MAGIC, isJunkPath, MARKET_MANIFEST, ZIP_MAGIC, type DownloadProgress } from './marketInstall'
 import { npmDownloadCandidates, npmTarballToZip } from './npmMarketInstall'
 import { untar } from './minitar'
 import { registryOrder, resolveLatest, timeoutSignal } from '../shared/npmRegistry'
+import { planZipFiles } from '../shared/marketPackage'
 import {
-  canonicalSource, declaredSourcesOf, isSourceId, MAX_INDEX_BYTES, packageOrigin, parseSourceInput, parseStoreIndex, pickText,
+  canonicalSource, isPublicHttpsUrl, declaredSourcesOf, isSourceId, MAX_INDEX_BYTES, packageOrigin, parseSourceInput, parseStoreIndex, pickText,
   sourceCardId, sourceInstallSlug, splitSourceCardId, STORE_INDEX_FILE, StoreIndexError,
   type DeclaredStoreSource, type LocalText, type StoreIndex, type StoreIndexItem, type StorePackage, type StoreSourceRef,
   type StoreSourceCard, type StoreSourceCatalog, type StoreSourceInfo, type StoreSourceInstall,
 } from '../shared/storeSources'
 export type { StoreSourceCard, StoreSourceCatalog, StoreSourceInfo, StoreSourceInstall }
 
-type FetchFn = (url: string, init: { signal: AbortSignal; headers?: Record<string, string> }) => Promise<Response>
+type FetchFn = (url: string, init: { signal: AbortSignal; headers?: Record<string, string>; redirect?: 'manual' }) => Promise<Response>
 
 interface UserSource { id: string; uri: string; title?: LocalText; addedAt: number }
 interface PluginSource { id: string; pluginId: string; declId: string; uri: string; title: LocalText; icon?: string }
@@ -40,6 +41,7 @@ export interface SourceDownload {
 }
 
 const FRESH_MS = 10 * 60_000
+const OWN_CDN_REDIRECTS = /^https:\/\/([^/]*\.)?(github\.com|githubusercontent\.com)\//
 const CONNECT_MS = 15_000
 const TOTAL_MS = 30_000
 const hash8 = (key: string) => createHash('sha256').update(key).digest('hex').slice(0, 8)
@@ -102,14 +104,25 @@ export async function subtreeZip(buf: Buffer, path: string): Promise<Buffer> {
   return out.generateAsync({ type: 'nodebuffer', platform: 'UNIX' })
 }
 
-/** Manifest id of the package, read the way the installer re-roots it (shallowest manifest). */
+/**
+ * Manifest id of the package, read through the installer's own plan (same path normalisation, same root), so
+ * the id checked is the id that gets installed. Two entries landing on one path are refused: the installer
+ * would keep the last, the check might read the first.
+ */
 export async function packageManifestId(buf: Buffer, type: string): Promise<string | null> {
-  const manifest = MARKET_MANIFEST[type]?.[0]
+  const names = MARKET_MANIFEST[type]
+  const manifest = names?.[0]
   if (!manifest?.endsWith('.json')) return null
   const zip = await JSZip.loadAsync(buf)
-  const names = Object.values(zip.files).filter((f) => !f.dir).map((f) => f.name)
-  const prefix = computeStripPrefix(names, MARKET_MANIFEST[type])
-  const file = zip.file(`${prefix}${manifest}`)
+  const plan = planZipFiles(Object.values(zip.files), names)
+  const seen = new Set<string>()
+  for (const p of plan) {
+    const key = p.rel.toLowerCase()
+    if (seen.has(key)) throw new Error('install: duplicate path in archive')
+    seen.add(key)
+  }
+  const entry = plan.find((p) => p.rel === manifest)
+  const file = entry && zip.file(entry.name)
   if (!file) return null
   try { const id = JSON.parse(await file.async('string'))?.id; return typeof id === 'string' ? id : null } catch { return null }
 }
@@ -147,14 +160,37 @@ export function createStoreSources(o: {
       if ((e as NodeJS.ErrnoException).code !== 'ENOENT') { readable = false; console.warn('[store-sources] state unreadable:', errorText(e)) }
     }
   })()
-  const save = (mutate: (s: State) => State | void) => disk(async () => {
+  /** Mutations run in the disk queue against the latest state; returning `false` leaves the file alone. */
+  const save = (mutate: (s: State) => State | void | false): Promise<boolean> => disk(async () => {
     await load()
     if (!readable) throw new StoreIndexError('state-unreadable')
     const draft = structuredClone(state)
-    const next = mutate(draft) ?? draft
+    const r = mutate(draft)
+    if (r === false) return false
+    const next = r ?? draft
     await writePrivateJson(stateFile, { v: 1, ...next })
     state = next
+    return true
   })
+  /** Fetch that checks every hop: catalog-supplied addresses (and where they redirect) must be public https,
+   *  unless the source itself lives on this machine / network (the user typed that address). */
+  const guardedFetch = (allowLocal: boolean): FetchFn => async (url, init) => {
+    let at = url
+    for (let hop = 0; hop <= 5; hop++) {
+      if (!allowLocal && !isPublicHttpsUrl(at)) throw new Error('resolve: address-not-allowed')
+      // GitHub only redirects to its own download hosts and goes through Electron's net.fetch (system proxy),
+      // which can't stop at a redirect ("Redirect was cancelled"): let it follow. Everything else stops at each hop.
+      if (OWN_CDN_REDIRECTS.test(at)) return o.fetchFor(at)(at, init)
+      const res = await o.fetchFor(at)(at, { ...init, redirect: 'manual' })
+      const location = res.status >= 300 && res.status < 400 ? res.headers.get('location') : null
+      if (!location) return res
+      void res.body?.cancel().catch(() => {})
+      at = new URL(location, at).toString()
+    }
+    throw new Error('resolve: too many redirects')
+  }
+  const localSource = (ref: StoreSourceRef) => ref.kind === 'url' && !isPublicHttpsUrl(ref.url)
+  const cacheFile = (id: string) => join(cacheDir, `${id}.json`)
 
   const refOf = (s: { uri: string }) => parseSourceInput(s.uri)!
   const all = (): Array<UserSource | PluginSource> => [...state.declared, ...state.user]
@@ -173,7 +209,7 @@ export function createStoreSources(o: {
   async function rawIndex(ref: StoreSourceRef): Promise<{ json: unknown; base?: string }> {
     const mirror = await o.mirror()
     if (ref.kind === 'forsion-git') throw new StoreIndexError('forsion-git-unsupported')
-    if (ref.kind === 'url') return { json: JSON.parse(await fetchTextFirst([ref.url], o.fetchFor)), base: new URL('.', ref.url).toString() }
+    if (ref.kind === 'url') return { json: JSON.parse(await fetchTextFirst([ref.url], () => guardedFetch(localSource(ref)))), base: new URL('.', ref.url).toString() }
     if (ref.kind === 'github') {
       const base = `https://raw.githubusercontent.com/${ref.repo}/${ref.ref || 'HEAD'}/${ref.dir ? `${ref.dir}/` : ''}`
       return { json: JSON.parse(await fetchTextFirst(downloadCandidates(`${base}${STORE_INDEX_FILE}`, mirror, o.githubProxy?.() || ''), o.fetchFor)), base }
@@ -196,10 +232,14 @@ export function createStoreSources(o: {
       throw e
     }
     const index = parseStoreIndex(got.json)
+    // The source's address changed while this was in flight: don't publish the old address's catalog under it.
+    const uri = canonicalSource(ref), cur = find(id)
+    if (cur && canonicalSource(refOf(cur)) !== uri) return index
     memo.set(id, { at: Date.now(), index }); bases.set(id, got.base)
     await mkdir(cacheDir, { recursive: true }).catch(() => {})
     // The raw file is cached (not the parsed form): it is parsed again with the same rules when read back.
-    await writePrivateJson(join(cacheDir, `${id}.json`), { at: Date.now(), base: got.base ?? null, json: got.json }).catch(() => {})
+    // It carries the address it came from; a copy for another address is never shown.
+    await writePrivateJson(cacheFile(id), { at: Date.now(), uri, base: got.base ?? null, json: got.json }).catch(() => {})
     return index
   }
   /** Fresh enough copy, or fetch. `allowStale` falls back to the copy on disk when fetching fails. */
@@ -208,13 +248,14 @@ export function createStoreSources(o: {
     if (!s) throw new StoreIndexError('not-found')
     const hit = memo.get(id)
     if (hit && !opts.refresh && Date.now() - hit.at < FRESH_MS) return { index: hit.index, at: hit.at, stale: false }
-    let job = inflight.get(id)
-    if (!job) { job = fetchIndex(id, refOf(s)).finally(() => inflight.delete(id)); inflight.set(id, job) }
+    const uri = canonicalSource(refOf(s)), key = `${id} ${uri}`
+    let job = inflight.get(key)
+    if (!job) { job = fetchIndex(id, refOf(s)).finally(() => inflight.delete(key)); inflight.set(key, job) }
     try { const index = await job; return { index, at: memo.get(id)!.at, stale: false } } catch (e) {
       const code = e instanceof Error ? e.message : String(e)
       if (hit) return { index: hit.index, at: hit.at, stale: true, error: code }
-      const cached = await readFile(join(cacheDir, `${id}.json`), 'utf8').then((t) => JSON.parse(t), () => null)
-      if (cached?.json) {
+      const cached = await readFile(cacheFile(id), 'utf8').then((t) => JSON.parse(t), () => null)
+      if (cached?.json && cached.uri === uri) {
         try {
           const index = parseStoreIndex(cached.json)
           memo.set(id, { at: cached.at ?? 0, index }); bases.set(id, cached.base ?? undefined)
@@ -229,7 +270,7 @@ export function createStoreSources(o: {
     if (!icon) return null
     try {
       const u = new URL(icon, bases.get(id))
-      return u.protocol === 'https:' ? u.toString() : null
+      return isPublicHttpsUrl(u) ? u.toString() : null
     } catch { return null }
   }
   const card = (s: UserSource | PluginSource, index: StoreIndex, it: StoreIndexItem, locale: string): StoreSourceCard => ({
@@ -283,7 +324,7 @@ export function createStoreSources(o: {
     if (!s) throw new StoreIndexError('not-found')
     await save((st) => { st.user = st.user.filter((x) => x.id !== id); st.trusted = st.trusted.filter((x) => x !== id); st.disabled = st.disabled.filter((x) => x !== id) })
     memo.delete(id); bases.delete(id)
-    await rm(join(cacheDir, `${id}.json`), { force: true }).catch(() => {})
+    await rm(cacheFile(id), { force: true }).catch(() => {})
   }
 
   async function setDisabled(id: string, on: boolean): Promise<void> {
@@ -301,9 +342,11 @@ export function createStoreSources(o: {
   /** Sources declared by the plugins that are on now (the renderer knows which ones are on). */
   /** Returns whether the table changed. */
   async function setDeclared(raw: unknown): Promise<boolean> {
+    // The list replaces the whole table: anything but an array is a broken call, not "no sources".
+    if (!Array.isArray(raw)) throw new StoreIndexError('invalid')
     await load()
     const list: DeclaredStoreSource[] = []
-    for (const d of Array.isArray(raw) ? raw : []) {
+    for (const d of raw) {
       if (!d || typeof d !== 'object' || typeof (d as DeclaredStoreSource).pluginId !== 'string') continue
       const one = declaredSourcesOf((d as DeclaredStoreSource).pluginId, [d])[0]
       if (one && !list.some((x) => x.pluginId === one.pluginId && x.id === one.id)) list.push(one)
@@ -314,10 +357,17 @@ export function createStoreSources(o: {
       if (next.some((x) => x.uri === uri)) continue
       next.push({ id: hash8(`plugin:${d.pluginId}/${d.id}`), pluginId: d.pluginId, declId: d.id, uri, title: d.title, ...(d.icon ? { icon: d.icon } : {}) })
     }
-    if (JSON.stringify(next) === JSON.stringify(state.declared)) return false
-    for (const s of next) { const was = state.declared.find((x) => x.id === s.id); if (was && was.uri !== s.uri) { memo.delete(s.id); bases.delete(s.id) } }
-    await save((s) => { s.declared = next })
-    return true
+    // Compare and replace inside the disk queue, so a later call never loses to an earlier one still writing.
+    let stale: string[] = []
+    const changed = await save((s) => {
+      if (JSON.stringify(next) === JSON.stringify(s.declared)) return false
+      // A declaration that is gone or now points elsewhere: trust and the cached catalog belonged to the old address.
+      stale = s.declared.filter((was) => !next.some((n) => n.id === was.id && n.uri === was.uri)).map((was) => was.id)
+      s.trusted = s.trusted.filter((x) => !stale.includes(x))
+      s.declared = next
+    })
+    for (const id of stale) { memo.delete(id); bases.delete(id); await rm(cacheFile(id), { force: true }).catch(() => {}) }
+    return changed
   }
 
   async function catalog(id: string, opts: { refresh?: boolean; locale?: string } = {}): Promise<StoreSourceCatalog> {
@@ -367,7 +417,7 @@ export function createStoreSources(o: {
     return !find(parts.source) || state.disabled.includes(parts.source)
   }
 
-  async function downloadPackage(pkg: StorePackage, type: string, onProgress: (p: DownloadProgress) => void): Promise<{ buf: Buffer; url: string }> {
+  async function downloadPackage(pkg: StorePackage, type: string, onProgress: (p: DownloadProgress) => void, allowLocal: boolean): Promise<{ buf: Buffer; url: string }> {
     const mirror = await o.mirror()
     const fetchFn = (u: string, init: { signal: AbortSignal }) => o.fetchFor(u)(u, init)
     if (pkg.kind === 'forsion-git') throw new Error('resolve: forsion-git-unsupported')
@@ -377,7 +427,7 @@ export function createStoreSources(o: {
       return { buf: pkg.path ? await subtreeZip(zip, pkg.path) : zip, url }
     }
     if (pkg.kind === 'url') {
-      const zip = await downloadZip([pkg.url], fetchFn, onProgress, ZIP_MAGIC)
+      const zip = await downloadZip([pkg.url], guardedFetch(allowLocal), onProgress, ZIP_MAGIC)
       if (createHash('sha256').update(zip).digest('hex') !== pkg.sha256) throw new Error('install: package checksum mismatch')
       return { buf: zip, url: pkg.url }
     }
@@ -402,11 +452,13 @@ export function createStoreSources(o: {
     const { s, it } = await itemOf(cardId, { refresh: !opts.auto })
     if (opts.version && opts.version !== it.version) throw new Error('resolve: version-unavailable')
     const origin = packageOrigin(it.package)
+    // Automatic updates only follow a package whose origin and type match what the user installed. No record of
+    // that (a crash between install and the write, a failed write) counts as "moved": the user updates by hand.
     if (opts.auto) {
       const rec = state.installs.find((x) => x.cardId === cardId)
-      if (rec && rec.origin !== origin) throw new Error('resolve: source-package-moved')
+      if (!rec || rec.origin !== origin || rec.type !== it.type) throw new Error('resolve: source-package-moved')
     }
-    const { buf, url } = await downloadPackage(it.package, it.type, opts.onProgress ?? (() => {}))
+    const { buf, url } = await downloadPackage(it.package, it.type, opts.onProgress ?? (() => {}), localSource(refOf(s)))
     return {
       buf, origin,
       info: {

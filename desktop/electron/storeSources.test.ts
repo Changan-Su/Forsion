@@ -123,6 +123,62 @@ describe('store sources', () => {
     expect(await s.list()).toEqual([])
   })
 
+  it('does not update automatically without a record of where the package came from', async () => {
+    routes[CATALOG] = () => json(index([poster()]))
+    const s = make()
+    const src = await s.add('github:pixel-lab/image-skills')
+    await expect(s.download(`src_${src.id}_poster`, { auto: true })).rejects.toThrow('resolve: source-package-moved')
+    await s.recordInstall({ cardId: `src_${src.id}_poster`, type: 'plugin', slug: `src-${src.id}-poster`, name: 'x', version: '1.2.0', origin: 'github:pixel-lab/image-skills' })
+    // Same origin, but the catalog now says it is another kind of thing.
+    await expect(s.download(`src_${src.id}_poster`, { auto: true })).rejects.toThrow('resolve: source-package-moved')
+  })
+
+  it('never lets a public catalog send downloads to this machine or the local network', async () => {
+    const pkgZip = await zipOf({ 'SKILL.md': skill('p', '1.0.0') })
+    const sha = createHash('sha256').update(pkgZip).digest('hex')
+    routes['https://cdn.example.com/forsion-store.json'] = () => json(index([
+      { id: 'local', type: 'skill', name: 'L', version: '1.0.0', package: { url: 'http://localhost:8787/admin/reset', sha256: sha } },
+      { id: 'lan', type: 'skill', name: 'N', version: '1.0.0', package: { url: 'https://192.168.1.1/p.zip', sha256: sha } },
+      { id: 'hop', type: 'skill', name: 'H', version: '1.0.0', package: { url: 'https://cdn.example.com/hop.zip', sha256: sha } },
+      { id: 'ok', type: 'skill', name: 'O', version: '1.0.0', package: { url: 'https://cdn.example.com/moved.zip', sha256: sha } },
+    ]))
+    routes['https://cdn.example.com/hop.zip'] = () => new Response(null, { status: 302, headers: { location: 'http://127.0.0.1:9000/x' } })
+    routes['https://cdn.example.com/moved.zip'] = () => new Response(null, { status: 302, headers: { location: 'https://files.example.net/p.zip' } })
+    routes['https://files.example.net/p.zip'] = () => new Response(new Uint8Array(pkgZip))
+    const s = make()
+    const src = await s.add('https://cdn.example.com/forsion-store.json')
+    for (const id of ['local', 'lan', 'hop']) await expect(s.download(`src_${src.id}_${id}`)).rejects.toThrow('resolve: address-not-allowed')
+    expect(hits.some((u) => /localhost|127\.0\.0\.1|192\.168/.test(u))).toBe(false)
+    await expect(s.download(`src_${src.id}_ok`)).resolves.toMatchObject({ origin: 'url:cdn.example.com' })
+  })
+
+  it('forgets trust and the cached catalog when a plugin points its source somewhere else', async () => {
+    const OTHER = 'https://raw.githubusercontent.com/pixel-lab/other/HEAD/forsion-store.json'
+    routes[CATALOG] = () => json(index([poster()]))
+    const s = make()
+    const decl = (index: string) => [{ pluginId: 'image-skills', id: 'main', title: 'Images', index }]
+    await s.setDeclared(decl('github:pixel-lab/image-skills'))
+    const [src] = await s.list()
+    await s.catalog(src.id, { refresh: true }); await s.trust(src.id)
+    await s.setDeclared(decl('github:pixel-lab/other'))
+    const [moved] = await s.list()
+    expect(moved).toMatchObject({ id: src.id, trusted: false, uri: 'https://github.com/pixel-lab/other' })
+    // The new address can't be read: the old address's catalog must not stand in for it.
+    expect(routes[OTHER]).toBeUndefined()
+    const cat = await make().catalog(src.id, { refresh: true })
+    expect(cat.items).toEqual([]); expect(cat.error).toBe('source: fetch-failed')
+    await expect(s.setDeclared('nope')).rejects.toThrow('source: invalid')
+  })
+
+  it('applies plugin-declared lists in the order they were sent', async () => {
+    routes[CATALOG] = () => json(index([poster()]))
+    const s = make()
+    const a = [{ pluginId: 'image-skills', id: 'main', title: 'A', index: 'github:pixel-lab/image-skills' }]
+    await s.setDeclared(a)
+    await Promise.all([s.setDeclared([]), s.setDeclared(a)])
+    expect((await make().list()).map((x) => x.title)).toEqual(['A'])
+  })
+
   it('never writes over a state file it could not read', async () => {
     await mkdir(join(home, '.store-sources'), { recursive: true })
     await writeFile(join(home, '.store-sources', 'state.json'), '{broken')
@@ -138,5 +194,11 @@ describe('package helpers', () => {
     const z = await zipOf({ 'r-main/a/manifest.json': JSON.stringify({ id: 'my-plugin', version: '1.0.0' }) })
     await expect(subtreeZip(z, 'b')).rejects.toThrow('install: package folder not found')
     expect(await packageManifestId(await subtreeZip(z, 'a'), 'amadeus-plugin')).toBe('my-plugin')
+  })
+
+  it('reads the manifest the installer will write, and refuses two files landing on one path', async () => {
+    // A Windows-style separator is laid out by the installer as `manifest.json` at the root.
+    expect(await packageManifestId(await zipOf({ 'pkg\\manifest.json': JSON.stringify({ id: 'victim', version: '1.0.0' }), 'pkg\\main.js': 'x' }), 'amadeus-plugin')).toBe('victim')
+    await expect(packageManifestId(await zipOf({ 'manifest.json': JSON.stringify({ id: 'a' }), 'Manifest.json': JSON.stringify({ id: 'b' }) }), 'amadeus-plugin')).rejects.toThrow('install: duplicate path in archive')
   })
 })

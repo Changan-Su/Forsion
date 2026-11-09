@@ -472,8 +472,9 @@ const api = {
     void ipcRenderer.invoke('market:updateStatus').then((state) => { if (!off && !received) cb(state) }).catch(() => {})
     return () => { off = true; ipcRenderer.removeListener('market:updateStatus', listener) }
   },
-  marketInstall: (id: string, version?: string): Promise<{ ok: boolean; path: string; files: number; type: string; slug: string }> =>
-    ipcRenderer.invoke('market:install', id, version),
+  /** `expect.type`: for store-source items, the type the user confirmed; main refuses the install if it changed. */
+  marketInstall: (id: string, version?: string, expect?: { type: string }): Promise<{ ok: boolean; path: string; files: number; type: string; slug: string }> =>
+    ipcRenderer.invoke('market:install', id, version, expect),
   // 安装进度(阶段 + 当前在试第几个下载地址 + 字节):主进程只推给发起窗口,渲染层按 id 过滤。
   onMarketInstallProgress: (cb: (ev: MarketInstallProgress) => void): (() => void) => {
     const listener = (_e: unknown, ev: MarketInstallProgress): void => cb(ev)

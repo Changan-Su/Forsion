@@ -1439,6 +1439,10 @@ function replayPendingDisables(): void {
   }
 }
 
+let externalInventoryLoaded = false
+/** 外置插件至少完整读到过一次(读失败时 store 里只有内置插件,不能当成「插件都没了」往外报)。 */
+export const externalPluginsLoaded = (): boolean => externalInventoryLoaded
+
 export const usePluginStore = create<PluginState>((set, get) => {
   const makeContext = (pluginId: string): PluginContext => {
     liveScopes.get(pluginId)?.close() // 防守:没经 teardown 就重建 context 也不留旧账
@@ -3253,6 +3257,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
         return // 读不到来源 ≠ 来源都没了:保持现状
       }
       applySources(sources)
+      externalInventoryLoaded = true
       if (windowKind() === 'main') reportBlocked(get())
       // 上次运行没关成的规则(走到这里在跑的都已被 start 销账)
       if (windowKind() === 'main' && automationHost()) {

@@ -3090,6 +3090,8 @@ app.whenReady().then(async () => {
       for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed()) w.webContents.send('market:updateStatus', status)
     },
   })
+  // The updater asks the source table whether an item's source is gone before swapping in a staged update.
+  if (PRODUCT.market) await sources.load()
   if (PRODUCT.market) await marketPluginUpdater.init().catch((e) => console.warn('[market-updates] initialization failed:', e))
   // 手动拷进插件目录的插件:每出现一个新版本就留一份,换版后能在 设置 → 插件 里回退。后台跑,排在安装 / 卸载同一条队列里。
   if (PRODUCT.market) void marketPluginUpdater.exclusive(() => marketPluginUpdater.keepLocalVersions()).catch((e) => console.warn('[market-updates] keep local versions:', e))
@@ -4576,7 +4578,7 @@ app.whenReady().then(async () => {
 
   // 安装进度推回发起窗口('market:installProgress',同 asr:localProgress 口径):市场住在独立浮窗里,
   // 全局通知在那里不渲染,按钮上的阶段/字节 + 市场自己的提示条是用户唯一看得见的反馈。
-  ipcMain.handle('market:install', async (e, id: string, version?: string) => marketPluginUpdater.exclusive(async () => {
+  ipcMain.handle('market:install', async (e, id: string, version?: string, expect?: { type?: unknown }) => marketPluginUpdater.exclusive(async () => {
     if (!isTrustedSender(e)) throw new Error('Untrusted sender')
     let lastSent = 0
     const report = (phase: 'resolve' | 'download' | 'install', p?: DownloadProgress): void => {
@@ -4596,6 +4598,9 @@ app.whenReady().then(async () => {
     // (slug = 内置 id,或目录里的 manifest 是内置 id)时,覆盖再回滚会把它连同用户数据一起删掉。
     const occupant = await readFile(join(dest, 'manifest.json'), 'utf8').then((s) => JSON.parse(s)?.id, () => undefined)
     if (builtinPluginIds().has(info.installSlug) || (typeof occupant === 'string' && builtinPluginIds().has(occupant))) throw new Error('install: builtin')
+    // 来源装的:用户确认时看到的类型 = 目录里的类型 = 包实测的类型,否则拒(目录可以在确认和安装之间改,
+    // 把「文字说明」换成会跑代码的插件就绕过了首装确认)。
+    if (isSourceCardId(id) && (effType !== info.type || typeof expect?.type !== 'string' || expect.type !== info.type)) throw new Error('resolve: source-item-changed')
     // 来源装的插件:包里的 id 和已装的另一个插件撞了就拒(两份同 id 谁先被扫到谁生效),在写盘之前判。
     if (isSourceCardId(id) && (effType === 'plugin' || effType === 'amadeus-plugin')) {
       const incoming = effectivePluginId(info.installSlug, await packageManifestId(buf, effType))
@@ -4627,6 +4632,12 @@ app.whenReady().then(async () => {
       await rm(dest, { recursive: true, force: true }).catch(() => {})
       throw new Error('install: builtin')
     }
+    // 来源装的(所有类型):先记下出处,再交给更新器 —— 没有出处记录的条目不会被自动更新(换出处保护靠它)。
+    if (isSourceCardId(id) && origin) {
+      const named = await storeSources!.lookup(id).catch(() => null)
+      await storeSources!.recordInstall({ cardId: id, type: effType, slug: info.installSlug, name: named?.name || info.installSlug, version: info.version ?? null, origin, summary: named?.summary, author: named?.author })
+        .catch((err) => console.warn('[store-sources] record install:', err))
+    }
     if (effType === 'plugin' || effType === 'amadeus-plugin') {
       // 从版本页装了比最新版旧的 = 固定在这一版(自动更新对它关掉,「恢复自动更新」解除)。查不到最新版时按用户点名的版本算固定。
       // 解析失败(网络 / JSON)也不能跳过登记:文件已经覆盖了,登记才会清掉旧的待换版本、按需固定。
@@ -4635,12 +4646,6 @@ app.whenReady().then(async () => {
       const pinned = !!version && (compareMarketVersions(version, latest?.latestVersion) ?? -1) < 0
       await marketPluginUpdater.recordInstall({ id, name: latest?.name, type: effType, slug: info.installSlug, pinned })
     } else await marketPluginUpdater.forget(effType, info.installSlug, false)
-    // 来源装的(所有类型):记下出处,「已安装」页靠它画来源角标与「来源已移除」。
-    if (isSourceCardId(id) && origin) {
-      const named = await storeSources!.lookup(id).catch(() => null)
-      await storeSources!.recordInstall({ cardId: id, type: effType, slug: info.installSlug, name: named?.name || info.installSlug, version: info.version ?? null, origin, summary: named?.summary, author: named?.author })
-        .catch((err) => console.warn('[store-sources] record install:', err))
-    }
     return { ok: true, path: dest, files, type: effType, slug: info.installSlug, ...(pluginId ? { id: pluginId } : {}) }
   }))
 
@@ -4775,7 +4780,12 @@ app.whenReady().then(async () => {
   ipcMain.handle('marketSources:remove', async (e, id: string) => { trusted(e); return sourcesChanged(await storeSources!.remove(id)) })
   ipcMain.handle('marketSources:setDisabled', async (e, id: string, on: boolean) => { trusted(e); return sourcesChanged(await storeSources!.setDisabled(id, on === true)) })
   ipcMain.handle('marketSources:trust', async (e, id: string) => { trusted(e); return sourcesChanged(await storeSources!.trust(id)) })
-  ipcMain.handle('marketSources:setDeclared', async (e, list: unknown) => { trusted(e); if (await storeSources!.setDeclared(list)) sourcesChanged(undefined) })
+  // Only the main window has the full plugin inventory; any other window would report a partial (or empty) list.
+  ipcMain.handle('marketSources:setDeclared', async (e, list: unknown) => {
+    trusted(e)
+    if (!mainWindow || mainWindow.isDestroyed() || e.sender !== mainWindow.webContents) throw new Error('Untrusted sender')
+    if (await storeSources!.setDeclared(list)) sourcesChanged(undefined)
+  })
   ipcMain.handle('marketSources:catalog', (e, id: string, opts?: { refresh?: boolean; locale?: string }) => { trusted(e); return storeSources!.catalog(id, { refresh: opts?.refresh === true, locale: sourceLocale(opts?.locale) }) })
   ipcMain.handle('marketSources:installs', (e, locale?: string) => { trusted(e); return storeSources!.installs(sourceLocale(locale)) })
 

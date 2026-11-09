@@ -3,7 +3,7 @@
  * plugins have loaded: a window that never loaded external plugins would otherwise report "none" and hide every source.
  * Main keeps the list on disk (the plugin updater needs it at startup) and tells every window when it changes.
  */
-import { usePluginStore } from './amadeus/plugins/pluginStore'
+import { externalPluginsLoaded, usePluginStore } from './amadeus/plugins/pluginStore'
 import type { DeclaredStoreSource } from '../../shared/storeSources'
 
 let started = false
@@ -15,6 +15,8 @@ export function startStoreSourceSync(): void {
   let last = ''
   let timer: ReturnType<typeof setTimeout> | undefined
   const push = (): void => {
+    // 启动时读插件目录失败:store 里只有内置插件,报上去会把持久化的来源全抹掉。等下次完整读到再报。
+    if (!externalPluginsLoaded()) return
     const s = usePluginStore.getState()
     const list: DeclaredStoreSource[] = s.plugins.filter((p) => s.activeIds.includes(p.id)).flatMap((p) => p.storeSources ?? [])
     const key = JSON.stringify(list)

@@ -932,7 +932,7 @@ declare global {
       marketSetAutoUpdateAll?(on: boolean): Promise<import('../../shared/marketPluginUpdates').MarketPluginUpdates>
       marketRollback?(type: string, slug: string, version: string, market?: { id: string; name?: string }): Promise<import('../../shared/marketPluginUpdates').PluginRollbackResult & { path: string; id?: string }>
       onMarketUpdateStatus?(cb: (state: import('../../shared/marketPluginUpdates').MarketPluginUpdates) => void): () => void
-      marketInstall?(id: string, version?: string): Promise<{ ok: boolean; path: string; files: number; type: string; slug: string; id?: string }>
+      marketInstall?(id: string, version?: string, expect?: { type: string }): Promise<{ ok: boolean; path: string; files: number; type: string; slug: string; id?: string }>
       /** 安装进度订阅(主进程只推给发起窗口);返回退订函数。 */
       onMarketInstallProgress?(cb: (ev: MarketInstallProgress) => void): () => void
       marketInstalled?(): Promise<Record<string, Array<{ slug: string; version: string | null; id?: string }>>>

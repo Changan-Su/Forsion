@@ -403,7 +403,7 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
     const wasInstalled = isInstalled(c)
     const tele = trackMarketInstall(quiet ? 'deps' : 'store', c) // 匿名遥测:商店条目 id + 阶段 / 结果的枚举,报错原文不发
     try {
-      const res = await installMarket(c.id, version)
+      const res = await installMarket(c.id, version, c.origin ? { type: c.type } : undefined)
       const effectiveType = ((res?.type as MarketType) || c.type)
       if (effectiveType === 'skill' && !wasInstalled && skillAgentsSupported()) {
         await applySkillAgentChoice(res?.slug || c.installSlug, skillChoice[c.id] ?? null)

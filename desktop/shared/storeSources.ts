@@ -144,6 +144,25 @@ const isRef = (s: string) => /^[A-Za-z0-9._/-]{1,100}$/.test(s) && !s.startsWith
 const isDir = (s: string) => safeSegments(s, 200)
 const localHttp = (u: URL) => u.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(u.hostname)
 
+/**
+ * An https address on the public internet: no loopback, private, link-local or carrier-NAT address, no
+ * single-label or `.local`-style name. Catalog-supplied addresses (packages, redirects, icons) must pass this,
+ * so a catalog can't make the desktop app call services on the user's machine or network.
+ * (A name that resolves to a private address is not caught here.)
+ */
+export function isPublicHttpsUrl(raw: string | URL): boolean {
+  let u: URL
+  try { u = typeof raw === 'string' ? new URL(raw) : raw } catch { return false }
+  if (u.protocol !== 'https:' || u.username || u.password) return false
+  const h = u.hostname.toLowerCase().replace(/^\[|\]$/g, '')
+  if (!h || h === 'localhost' || /\.(localhost|local|internal|lan|home|arpa)$/.test(h)) return false
+  if (h.includes(':')) return !(h === '::' || h === '::1' || /^f[cd]/.test(h) || /^fe[89ab]/.test(h) || h.startsWith('::ffff:') || h.startsWith('64:ff9b:'))
+  const v4 = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(h)
+  if (!v4) return h.includes('.')
+  const a = Number(v4[1]), b = Number(v4[2])
+  return !(a === 0 || a === 10 || a === 127 || a >= 224 || (a === 100 && b >= 64 && b <= 127) || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 198 && (b === 18 || b === 19)))
+}
+
 /** A repository path after the host: `owner/repo[.git][/tree/<ref>[/<dir>]]`. */
 function repoPath(kind: 'github' | 'forsion-git', path: string): StoreSourceRef | null {
   const parts = path.replace(/^\/+|\/+$/g, '').split('/')

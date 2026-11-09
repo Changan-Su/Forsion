@@ -94,12 +94,16 @@ registerMessages({
   'market.sources.err.plugin-id-taken': { zh: '已经装了一个同 id 的插件，这一项没有装。', en: 'A plugin with the same ID is already installed, so this one wasn\'t installed.' },
   'market.sources.err.checksum': { zh: '下载的文件和目录里写的校验值对不上，没有安装。', en: 'The downloaded file doesn\'t match the checksum in the catalog, so it wasn\'t installed.' },
   'market.sources.err.folder-missing': { zh: '仓库里找不到目录写的那个文件夹。', en: 'The folder named in the catalog isn\'t in the repository.' },
+  'market.sources.err.source-item-changed': { zh: '这一项在来源里刚改过，没有安装。请重新打开再看一遍。', en: 'This item just changed in its source, so it wasn\'t installed. Open it again to review it.' },
+  'market.sources.err.address-not-allowed': { zh: '目录里的下载地址指向本机或内网，没有下载。', en: 'The catalog\'s download address points at this computer or a private network, so nothing was downloaded.' },
+  'market.sources.err.duplicate-path': { zh: '安装包里有两个文件落在同一个位置，没有安装。', en: 'Two files in the package land in the same place, so it wasn\'t installed.' },
   'market.sources.err.npm-version': { zh: 'npm 上找不到目录写的那个版本。', en: 'The version named in the catalog isn\'t on npm.' },
 })
 
 const ERROR_CODES: Array<[RegExp, string]> = [
   [/source: (fetch-failed|index-invalid|index-schema|index-missing|too-large|unrecognized|forsion-git-unsupported|duplicate|state-unreadable|not-found)\b/, '$1'],
-  [/resolve: (source-removed|source-item-removed|version-unavailable|source-package-moved|forsion-git-unsupported)\b/, '$1'],
+  [/resolve: (source-removed|source-item-removed|source-item-changed|address-not-allowed|version-unavailable|source-package-moved|forsion-git-unsupported)\b/, '$1'],
+  [/install: duplicate path in archive/, 'duplicate-path'],
   [/install: plugin id taken/, 'plugin-id-taken'],
   [/install: package checksum mismatch/, 'checksum'],
   [/install: package folder not found/, 'folder-missing'],
@@ -107,7 +111,8 @@ const ERROR_CODES: Array<[RegExp, string]> = [
 ]
 /** 主进程原因码 → 文案;认不出返回 null(调用方用原文)。 */
 export function sourceErrorText(e: unknown, t: (k: string, v?: Record<string, string | number>) => string): string | null {
-  const msg = typeof e === 'string' ? e : (e as Error)?.message || String(e)
+  // marketService 把 `resolve: …` 换成了本地化的句子,原因码原文留在 raw 上
+  const msg = typeof e === 'string' ? e : (e as { raw?: string })?.raw || (e as Error)?.message || String(e)
   for (const [re, code] of ERROR_CODES) {
     const m = re.exec(msg)
     if (m) return t(`market.sources.err.${code.startsWith('$') ? m[1] : code}`)

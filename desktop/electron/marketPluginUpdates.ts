@@ -262,8 +262,9 @@ export function createMarketPluginUpdater(o: {
         }
         const old = await manifest(x.type, target)
         x.installedVersion = old.version
-        // A pin outranks an update downloaded before it was set.
-        if (x.pendingVersion && x.pinnedVersion && !x.pendingRollback) {
+        // A pin outranks an update downloaded before it was set; so does a source that was removed or switched off
+        // after the download (its items are "no longer updated"). An explicit rollback still goes through.
+        if (x.pendingVersion && !x.pendingRollback && (x.pinnedVersion || o.paused?.(x.id))) {
           await rm(pending(x), { recursive: true, force: true }); x.pendingVersion = undefined; x.phase = 'current'; continue
         }
         if (!x.pendingVersion) continue
@@ -406,7 +407,7 @@ export function createMarketPluginUpdater(o: {
             const next = await manifest(x.type, staging)
             validate(x, old, next)
             if (compareMarketVersions(next.version, item.latestVersion) !== 0) throw new Error('install: advertised version mismatch')
-            if (!active(x.id)) { await patch(x.id, { phase: x.pendingVersion ? 'staged' : 'idle' }); continue }
+            if (!active(x.id) || o.paused?.(x.id)) { await patch(x.id, { phase: x.pendingVersion ? 'staged' : 'idle' }); continue }
             // Save a complete package under a fresh directory, then publish the state pointer atomically.
             const previous = `${pending(x)}.old-${randomUUID()}`
             let had = false

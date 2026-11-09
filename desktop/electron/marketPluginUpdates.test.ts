@@ -217,6 +217,20 @@ it('pinning by installing an older version drops an update staged before it', as
   const next = createMarketPluginUpdater(f.options); await next.init()
   expect(await readFile(join(f.target, 'main.js'), 'utf8')).toBe('old')
 })
+it('a staged update from a store source is not swapped in after the source is removed or switched off', async () => {
+  const f = await fixture()
+  await f.updater.setAutoUpdate(f.item.id, true); await f.updater.check()
+  expect(f.updater.snapshot().items[0]).toMatchObject({ phase: 'staged', pendingVersion: '1.1.0' })
+  const next = createMarketPluginUpdater({ ...f.options, paused: () => true }); await next.init()
+  expect(await readFile(join(f.target, 'main.js'), 'utf8')).toBe('old'); expect(next.snapshot().items[0].pendingVersion).toBeUndefined()
+})
+it('a source removed while its update downloads keeps the update from being staged', async () => {
+  const f = await fixture()
+  let gone = false
+  const u = createMarketPluginUpdater({ ...f.options, paused: () => gone, download: async (item: MarketUpdateItem) => { const buf = await f.download(item); gone = true; return buf } })
+  await u.init(); await u.setAutoUpdate(f.item.id, true); await u.check()
+  expect(u.snapshot().items[0].pendingVersion).toBeUndefined()
+})
 it('a staged update is discarded at startup when the plugin was pinned after it was downloaded', async () => {
   const f = await catalogFixture(); await f.updater.check()
   const state = JSON.parse(await readFile(join(f.home, '.market-updates', 'state.json'), 'utf8'))
