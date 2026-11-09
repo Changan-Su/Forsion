@@ -54,7 +54,7 @@ const STARTERS = [
 
 /** 开发用的侧栏收起调节面板(HomeRailTuner,只在 dev 渲染里有)。HOME_RAIL_TUNER=1 时只跑这一段:两栏都摆上卡,1380 窗(主页约 1320)。 */
 async function tunerChecks(app, win) {
-  const TK = 'forsion.dev.homeRails'
+  const TK = 'forsion.dev.homeRails.v2'
   const look = () => win.evaluate(() => {
     const root = document.querySelector('.hp-root'), c = document.querySelector('.hp-stack')?.getBoundingClientRect()
     const l = document.querySelector('.hp-rail-left')?.getBoundingClientRect(), r = document.querySelector('.hp-rail-right')?.getBoundingClientRect()

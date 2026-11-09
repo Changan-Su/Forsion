@@ -17,7 +17,9 @@ export interface RailLayout { left: RailMode; right: RailMode; /** 展开的栏�
 registerMessages({
   'home.tune.cmd': { zh: '主页：调节侧栏收起（开发用）', en: 'Home: tune side rail folding (dev)' },
 })
-const KEY = 'forsion.dev.homeRails'
+const KEY = 'forsion.dev.homeRails.v2'
+/** 11-09 用户说「你来调一下」:dev 面板第一次打开时用的那组(两边对称、中间可缩到 680),「恢复默认」仍回到 RAIL_GEOMETRY。 */
+export const RAIL_TUNED: Readonly<RailGeometry> = { ...RAIL_GEOMETRY, centerMin: 680, maxShift: 0 }
 /** 每个滑块的范围;最窄的上限跟着最宽走(见 sanitize)。 */
 export const RAIL_TUNE_RANGE: Readonly<Record<keyof RailGeometry, readonly [number, number]>> = {
   centerW: [600, 960], centerMin: [480, 960], railW: [160, 360], railMin: [120, 360], gap: [8, 64], edge: [0, 48], maxShift: [0, SHIFT_ANY],
@@ -37,10 +39,13 @@ function sanitize(raw: Partial<RailGeometry>, moved?: keyof RailGeometry): RailG
 }
 export interface RailTuning { geo: RailGeometry; open: boolean }
 const DEFAULT_TUNING: RailTuning = { geo: RAIL_GEOMETRY, open: false }
+const FIRST_TUNING: RailTuning = { geo: RAIL_TUNED, open: true }
 function load(): RailTuning {
   if (!import.meta.env.DEV) return DEFAULT_TUNING
   try {
-    const v = JSON.parse(localStorage.getItem(KEY) || 'null') as { geo?: Partial<RailGeometry>; open?: boolean } | null
+    const raw = localStorage.getItem(KEY)
+    if (raw == null) return FIRST_TUNING
+    const v = JSON.parse(raw) as { geo?: Partial<RailGeometry>; open?: boolean } | null
     if (!v || typeof v !== 'object') return DEFAULT_TUNING
     return { geo: sanitize(v.geo ?? {}), open: v.open === true }
   } catch { return DEFAULT_TUNING }

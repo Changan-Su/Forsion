@@ -1,10 +1,12 @@
 // @vitest-environment happy-dom
 // 主页左右栏什么时候收(11-08 用户嫌「窗口稍小一点就收」):空栏不占地方、栏先缩到 216 再收。
 // 门槛之外再扫一遍宽度,钉住 11-03 定的两条:中间 840 不缩、和栏之间至少 32,谁也不越界。
-import { describe, expect, it } from 'vitest'
+import { beforeAll, describe, expect, it } from 'vitest'
 import { CENTER_W, EDGE, GAP, RAIL_MIN, RAIL_W, STRIP_W, centerShift, railModes, type RailMode } from './HomeWidgetParts'
 import { RAIL_GEOMETRY, SHIFT_ANY, railGeometry, railThresholds, resetRailTuning, setRailTuning, type RailGeometry } from './homeRails'
 
+// dev 构建里没存过调节值时面板用 RAIL_TUNED;这里钉回缺省几何再测
+beforeAll(() => resetRailTuning())
 const both = { left: true, right: true }
 const rightOnly = { left: false, right: true }
 const at = (w: number, has = both): string => { const m = railModes(w, has); return `${m.left}-${m.right}@${m.railW}` }
