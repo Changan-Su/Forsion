@@ -125,3 +125,5 @@
 .provider-import-note { margin: 8px 18px 0; color: var(--text-muted); font-size: var(--ui-font-caption); }
 .provider-import-note.error { color: var(--danger); }
 .provider-import-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 14px 18px 16px; }
+/* 「后台额度」标签(BackgroundQuotaTag):同 .model-tag,绿色读作「另送的」;跟主题明暗走 */
+.model-tag.bgq-tag { --tag-ink: var(--green); flex: none; }

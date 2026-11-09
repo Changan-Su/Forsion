@@ -5,6 +5,8 @@ import { ModelSelect } from './ModelSelect'
 import { catalogByKind, originOf, type CatalogItem, type ModelKind, type ModelOrigin } from './modelKinds'
 import { realtimeCandidates, saveRealtimeModel } from './RealtimeVoiceSettings'
 import { effectiveRealtimeModel } from '../services/realtimeModel'
+import { backgroundQuotaModel, useAccountQuota } from '../services/useAccountQuota'
+import { BackgroundQuotaTag } from './BackgroundQuotaTag'
 import { registerMessages, useI18n } from '../i18n'
 import type { DirectProviderConfig, ModelInfo, ModelsResponse, StoredDesktopConfig, VisionMode } from '../types'
 
@@ -118,6 +120,9 @@ export function DefaultModelsPage(p: {
   const undoTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => { void window.tangu?.asrLocalStatus?.().then((s) => setLocalReady(s.ready)) }, [])
   useEffect(() => () => { if (undoTimer.current) clearTimeout(undoTimer.current) }, [])
+  // 后台额度只计一个模型(账号额度接口的 background.modelId);菜单里给它和「跟随云端 · 它」贴标签。读不到 = 不贴。
+  const bgQuotaModel = backgroundQuotaModel(useAccountQuota(!!stored && p.realtimeSignedIn))
+  const bgTagFor = (id: string) => bgQuotaModel && (id || models?.backgroundModelId) === bgQuotaModel ? <BackgroundQuotaTag /> : null
 
   const directRealtime = stored ? realtimeCandidates(stored, p.providers, models?.realtimeModel, p.realtimeSignedIn).filter((c) => c.source === 'direct') : []
   const cat = catalogByKind(models, directRealtime)
@@ -128,10 +133,10 @@ export function DefaultModelsPage(p: {
   const manage = (kind: ModelKind) => ({ label: t('dm.manage'), onClick: () => p.onOpen('m-display', kind) })
 
   // 一行 = 选择器 + 自选时的「恢复跟随」
-  const slot = (o: { value: string; onChange: (id: string) => void; models: ModelInfo[]; icon: ReactNode; label: string; cloudDefaultId?: string | null; defaultLabel?: string; chip?: ReactNode; disabled?: boolean; kind: ModelKind; resettable?: boolean }) => (
+  const slot = (o: { value: string; onChange: (id: string) => void; models: ModelInfo[]; icon: ReactNode; label: string; cloudDefaultId?: string | null; defaultLabel?: string; chip?: ReactNode; disabled?: boolean; kind: ModelKind; resettable?: boolean; tagFor?: (id: string) => ReactNode }) => (
     <div className="model-slot">
       <ModelSelect models={o.models} value={o.value} onChange={o.onChange} icon={o.icon} ariaLabel={o.label} cloudDefaultId={o.cloudDefaultId}
-        defaultLabel={o.defaultLabel} chip={o.chip} disabled={o.disabled || p.loading} footer={manage(o.kind)} />
+        defaultLabel={o.defaultLabel} chip={o.chip} disabled={o.disabled || p.loading} footer={manage(o.kind)} tagFor={o.tagFor} />
       {o.resettable !== false && o.value && <button className="btn ghost sm model-slot-reset" title={t('dm.reset')} aria-label={`${t('dm.reset')} · ${o.label}`} onClick={() => o.onChange('')}><RotateCcw size={13} /></button>}
     </div>
   )
@@ -185,7 +190,7 @@ export function DefaultModelsPage(p: {
       })} />
       {stored && <SettingsRow label={t('dm.background')} description={t('dm.backgroundHint')} control={slot({
         value: snap.background, onChange: (id) => void save({ backgroundModelId: id }), models: llms, icon: <Sparkles size={13} />, label: t('dm.background'), kind: 'llm',
-        cloudDefaultId: models?.backgroundModelId, chip: tag(cat.llm, followOrValue(snap.background, models?.backgroundModelId)),
+        cloudDefaultId: models?.backgroundModelId, chip: tag(cat.llm, followOrValue(snap.background, models?.backgroundModelId)), tagFor: bgTagFor,
       })} />}
       {stored && <SettingsRow label={t('dm.quotaFallback')} description={t('dm.quotaFallbackHint')} control={slot({
         value: stored.quotaFallbackModelId || '', onChange: (id) => void save({ quotaFallbackModelId: id }), models: llms, icon: <ArrowRightLeft size={13} />, label: t('dm.quotaFallback'), kind: 'llm',

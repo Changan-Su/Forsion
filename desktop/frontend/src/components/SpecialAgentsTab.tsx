@@ -7,12 +7,16 @@ import type { HistorianConfig, ModelInfo, MuseConfig, NormalAgentDef, SpecialAge
 import { registerMessages, useI18n } from '../i18n'
 import { track } from '../achievements/store'
 import { CapabilityMenu } from './CapabilityMenu'
-import { subscribeAccountQuota, type AccountQuotaView } from '../services/accountQuota'
+import type { AccountQuotaView } from '../services/accountQuota'
+import { useAccountQuota } from '../services/useAccountQuota'
+import { ModelSelect } from './ModelSelect'
+import { BackgroundQuotaTag } from './BackgroundQuotaTag'
 import './specialAgents.css'
 import { homeTarget, connectionKey } from '../services/engine/targets'
 import { agentName } from '../agentName'
 
 registerMessages({
+  'specialUi.followLocal': { zh: '跟随本机后台任务', en: 'Follow local background tasks' },
   'specialUi.intro': { zh: '管理在后台整理记忆与推进工作的 Agent。选择一个 Agent 调整它的工作方式。', en: 'Manage the agents that organize memory and work in the background. Choose one to adjust how it works.' },
   'specialUi.historianSummary': { zh: '整理会话与记忆', en: 'Organizes conversations and memory' },
   'specialUi.autoEmoji': { zh: '自动选择会话图标', en: 'Choose session icons automatically' },
@@ -41,7 +45,6 @@ registerMessages({
   'specialUi.addFolder': { zh: '添加文件夹', en: 'Add folder' },
   'specialUi.startHour': { zh: '开始时间（小时）', en: 'Start time (hour)' },
   'specialUi.endHour': { zh: '结束时间（小时）', en: 'End time (hour)' },
-  'specialUi.searchModels': { zh: '搜索模型', en: 'Search models' },
   'specialUi.cloudQuota': {
     zh: '在云端运行：每到设定的轮数，用所选模型整理一次标题、日志和长期记忆，按实际用量计入你的 AI 额度；额度用完的那一轮会跳过。',
     en: 'Runs in the cloud: every set number of rounds it updates the title, log and long-term memory with the chosen model, counted against your AI quota at actual usage. Rounds are skipped once your quota runs out.',
@@ -78,24 +81,15 @@ function NumberField({ label, value, onChange, min, max, hint }: { label: string
  */
 /** 后台额度:剩余量与操作(用完改用 AI 额度继续 / 从 AI 额度转入)2026-09-28 起都在「Forsion 云端 → 额度与积分」(Extend 画的页),
  *  这里只留说明、Muse 专属的「当前模型不计入后台额度」提示和一个跳转 —— 同一组开关原来在这、网页、提醒条三处各有一份。 */
-function BackgroundQuotaSection({ museModelId, modelLabel }: { museModelId: string; modelLabel: (id: string) => string }) {
+function BackgroundQuotaSection({ quota, museModelId, modelLabel }: { quota: AccountQuotaView | null; museModelId: string; modelLabel: (id: string) => string }) {
   const { t } = useI18n()
-  const [quota, setQuota] = useState<AccountQuotaView | null>(null)
-  useEffect(() => {
-    let alive = true
-    let pushed = false // 首拉回来之前已经收到过广播(转入 / 切账号后别处刷新)→ 首拉那份是旧快照,丢掉
-    const off = subscribeAccountQuota((q) => { if (alive && q) { pushed = true; setQuota(q) } })
-    void window.tangu?.accountQuota?.().then((r) => { if (alive && !pushed && r?.status === 200 && r.json) setQuota(r.json) }).catch(() => {})
-    return () => { alive = false; off() }
-  }, [])
   const bg = quota?.background
   if (!window.tangu?.accountQuota || !bg?.modelId) return null
   return <>
     <div className="special-section-title">{t('bgQuota.title')}</div>
     <div className="special-bgquota">
       <p className="special-bgquota-lead">{t('bgQuota.lead', { model: modelLabel(bg.modelId) })}</p>
-      {/* ponytail: 只看 Muse 显式选的模型;「设置 → 模型」里本机改过辅助模型槽(config.json models.background)时 Muse 也会走 AI 额度,
-          这里不提醒 —— 要提醒得让 /agent/models 带回本机槽位 */}
+      {/* museModelId = Muse 实际用的:显式选的,或跟随时本机「设置 → 模型 → 后台任务」槽(config.json models.background)选的那个 */}
       {!!museModelId && museModelId !== bg.modelId && <p className="special-bgquota-warn">{t('bgQuota.otherModel', { model: modelLabel(museModelId) })}</p>}
       {!!window.tangu?.cloudInvoke && (
         <button type="button" className="btn ghost sm" onClick={() => useApp.getState().openSettings('forsion/fx:forsion-extend:quota' as Parameters<ReturnType<typeof useApp.getState>['openSettings']>[0])}>
@@ -121,6 +115,10 @@ export function SpecialAgentsTab({ cfg, localHost = false, initialRole = 'histor
   const [models, setModels] = useState<ModelInfo[]>([])
   const [agents, setAgents] = useState<NormalAgentDef[]>([])
   const [slotDefault, setSlotDefault] = useState('')
+  // 本机「设置 → 模型 → 后台任务」槽:Muse 跟随时先落到它,再落到云端的后台模型(引擎同一顺序)
+  const [localBg, setLocalBg] = useState('')
+  const quota = useAccountQuota()
+  useEffect(() => { void window.tangu?.getConfig?.().then((c) => setLocalBg(String((c as { backgroundModelId?: string } | null)?.backgroundModelId || ''))).catch(() => {}) }, [])
   const [active, setActive] = useState<'historian' | 'muse'>(initialRole)
   // 云端(web/安卓):引擎只有按轮 Historian 的四项(开关 / 模型 / 轮数 / 首轮),Muse、模式、提示词都是本地特性。
   const [cloud, setCloud] = useState(false)
@@ -172,11 +170,18 @@ export function SpecialAgentsTab({ cfg, localHost = false, initialRole = 'histor
   const h = conf.historian, m = conf.muse
   const hMode = h.mode || 'independent', museMode = m.mode || 'ask'
   const choice = (label: string, value: string, options: { id: string; label: string }[], onChange: (v: string) => void, searchLabel?: string) => <CapabilityMenu label={label} selection searchLabel={searchLabel} items={options.map((o) => ({ ...o, selected: o.id === value, onSelect: () => onChange(o.id) }))}><span>{options.find((o) => o.id === value)?.label || value}</span><ChevronRight size={13} /></CapabilityMenu>
-  const model = (value: string, onChange: (v: string) => void) => choice(t('settings.special.model'), value, [
-    { id: '', label: slotDefault ? t('settings.special.followCloudDefault', { model: models.find((item) => item.id === slotDefault)?.name || slotDefault }) : t('agentProfile.default') },
-    ...models.map((item) => ({ id: item.id, label: item.name || item.id })),
-    ...(value && !models.some((item) => item.id === value) ? [{ id: value, label: value }] : []),
-  ], onChange, t('specialUi.searchModels'))
+  // 和引导、「设置 → 模型」同一个分组选择器(11-09 方案 A);Muse 那格给后台额度计入的模型贴标签,读不到额度 = 不贴
+  // 不选 = 跟随:Historian / Muse 都走引擎 resolveBackgroundModelId —— 本机后台任务那格 → 云端后台模型 → 默认模型。显示、标签、下面的说明用同一个
+  const bgQuotaModel = quota?.background?.modelId || ''
+  const localPick = localBg && models.some((item) => item.id === localBg) ? localBg : ''
+  const followTarget = localPick || slotDefault
+  const museTag = (id: string) => bgQuotaModel && (id || followTarget) === bgQuotaModel ? <BackgroundQuotaTag /> : null
+  // 不传 ariaLabel:按钮的可读名就是当前模型,「模型」二字由外面 Field 的 group 标签给
+  const model = (value: string, onChange: (v: string) => void, tagFor?: (id: string) => ReactNode) => <ModelSelect models={models} value={value} onChange={onChange}
+    cloudDefaultId={followTarget || null} defaultLabel={localPick ? t('specialUi.followLocal') : slotDefault ? undefined : t('agentProfile.default')} tagFor={tagFor} />
+  // 「当前模型不计入后台额度」只对 Forsion 的模型说;自己接的 Key 费用算在那家,不扣 AI 额度
+  const museEffective = m.modelId || localPick
+  const museQuotaModel = museEffective && models.find((item) => item.id === museEffective)?.source !== 'direct' ? museEffective : ''
   const toggleRow = (label: string, value: boolean, onChange: (v: boolean) => void, hint?: string) => <div className="special-toggle-row"><div><strong>{label}</strong>{hint && <p>{hint}</p>}</div><Toggle label={label} value={value} onChange={onChange} /></div>
   const escalation = agents.filter((a) => a.slug !== 'muse').map((a) => ({ id: a.slug, label: agentName(a) }))
   if (m.escalateTo && !escalation.some((a) => a.id === m.escalateTo)) escalation.push({ id: m.escalateTo, label: m.escalateTo })
@@ -188,7 +193,7 @@ export function SpecialAgentsTab({ cfg, localHost = false, initialRole = 'histor
     <fieldset className="special-editor" disabled={busy}>
       <section key={active} id={`special-${active}`} role="tabpanel" aria-labelledby={`special-${active}-tab`} className="special-agent-content">
         <header className="special-agent-heading"><div><h3>{t(`settings.special.${active}`)}</h3><p>{t(active === 'historian' ? 'settings.special.historianDesc' : 'settings.special.museDesc')}</p></div><Toggle label={t(`settings.special.${active}`)} value={conf[active].enabled} onChange={(enabled) => active === 'historian' ? changeHistorian({ enabled }) : changeMuse({ enabled })} /></header>
-        <Field label={t(hMode === 'fork' && active === 'historian' ? 'settings.special.h.fallbackModel' : 'settings.special.model')}>{model(conf[active].modelId, (modelId) => active === 'historian' ? changeHistorian({ modelId }) : changeMuse({ modelId }))}</Field>
+        <Field label={t(hMode === 'fork' && active === 'historian' ? 'settings.special.h.fallbackModel' : 'settings.special.model')}>{model(conf[active].modelId, (modelId) => active === 'historian' ? changeHistorian({ modelId }) : changeMuse({ modelId }), active === 'muse' ? museTag : undefined)}</Field>
         {active === 'historian' ? <>
           {!cloud && <Field label={t('settings.special.h.mode')} hint={t(hMode === 'assist' ? 'settings.special.h.modeHintAssist' : hMode === 'fork' ? 'settings.special.h.modeHintFork' : 'settings.special.h.modeHintIndependent')}>
             <div className="special-choices">{(['independent', 'assist', 'fork'] as const).map((mode) => <button type="button" key={mode} aria-pressed={hMode === mode} onClick={() => changeHistorian({ mode })}>{t(mode === 'assist' ? 'settings.special.h.modeAssist' : mode === 'fork' ? 'settings.special.h.modeFork' : 'settings.special.h.modeIndependent')}</button>)}</div>
@@ -213,7 +218,7 @@ export function SpecialAgentsTab({ cfg, localHost = false, initialRole = 'histor
               {m.activeHours && <div className="special-hours"><NumberField label={t('specialUi.startHour')} value={m.activeHours.start} min={0} max={23} onChange={(start) => changeMuse({ activeHours: { ...m.activeHours!, start } })} /><NumberField label={t('specialUi.endHour')} value={m.activeHours.end} min={0} max={23} onChange={(end) => changeMuse({ activeHours: { ...m.activeHours!, end } })} /></div>}
             </Field></div>
           {toggleRow(t('settings.special.m.chatStarters'), m.chatStarters !== false, (chatStarters) => changeMuse({ chatStarters }), t('settings.special.m.chatStartersHint'))}
-          <BackgroundQuotaSection museModelId={m.modelId} modelLabel={(id) => models.find((item) => item.id === id)?.name || id} />
+          <BackgroundQuotaSection quota={quota} museModelId={museQuotaModel} modelLabel={(id) => models.find((item) => item.id === id)?.name || id} />
           <details className="special-disclosure"><summary>{t('settings.special.m.notify')}</summary><div className="special-field-grid"><Field label={t('settings.special.m.notifyMode')}>{choice(t('settings.special.m.notifyMode'), m.notify || 'immediate', [{ id: 'digest', label: t('settings.special.m.notifyDigest') }, { id: 'immediate', label: t('settings.special.m.notifyImmediate') }], (notify) => changeMuse({ notify: notify as MuseConfig['notify'] }))}</Field><Field label={t('settings.special.m.escalateTo')}>{choice(t('settings.special.m.escalateTo'), m.escalateTo || '', [{ id: '', label: t('settings.special.m.escalateNone') }, ...escalation], (escalateTo) => changeMuse({ escalateTo }))}</Field><NumberField label={t('specialUi.maxDm')} value={m.maxDmPerDay ?? 0} min={0} max={24} onChange={(maxDmPerDay) => changeMuse({ maxDmPerDay })} /></div>{!!m.inboxAutoRead?.length && <Field label={t('specialUi.inboxAuto')} hint={t('specialUi.inboxAutoHint')}><div className="special-inbox-auto">{m.inboxAutoRead.map((c) => <button type="button" key={c} data-inbox-auto={c} onClick={() => changeMuse({ inboxAutoRead: m.inboxAutoRead!.filter((x) => x !== c) })}>{t(`specialUi.inboxCat.${c}`)}<X size={12} aria-hidden="true" /></button>)}</div></Field>}</details>
           <details className="special-disclosure"><summary>{t('settings.special.m.budget')}</summary><div className="special-field-grid">
             <NumberField label={t('settings.special.m.budgetWindow')} value={m.restartWindowHours} min={1} max={24} onChange={(restartWindowHours) => changeMuse({ restartWindowHours })} />
