@@ -283,13 +283,34 @@ export const useCalendarConfig = create<CalCfgState>((set) => ({
 
 // 别的窗口写了这份设置(同一份 localStorage,各自内存里一份):把内存换成盘上最新的。不换的话,这个窗口下一次整份落盘
 // 就是拿旧内存把那边刚改的颜色 / 成员 / 显隐盖掉。storage 事件只发给别的窗口,自己写的不会回来;盘上读不出来就不动。
+// 键被删了 / 成了空串 / 某个库那一项不是对象 = 不知道,**不当成空**:内存里这份好的留着,不换、也不据此落盘。
+// 盘上没有的库照旧留在内存里(没有哪个写动作会删掉整个库的设置)。
+const isObj = (x: unknown): x is Record<string, unknown> => !!x && typeof x === 'object' && !Array.isArray(x)
+/** 别的窗口写来的一项:缺的字段补空(下游直接读 hidden / colors / members),形状不对整份作废。 */
+const saneVc = (v: unknown): VaultCfg | null => {
+  if (!isObj(v)) return null
+  const o = v as Partial<VaultCfg>
+  return {
+    ...o,
+    colors: isObj(o.colors) ? (o.colors as VaultCfg['colors']) : {},
+    hidden: Array.isArray(o.hidden) ? o.hidden : [],
+    defaultDbPath: typeof o.defaultDbPath === 'string' ? o.defaultDbPath : null,
+    members: isObj(o.members) ? (o.members as VaultCfg['members']) : {},
+  } as VaultCfg
+}
 if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
   window.addEventListener('storage', (e) => {
     if (e.key !== KEY) return
     const r = readAll()
-    if (!r.ok) return
-    writeBlocked = false // 内存现在就是盘上读得出来的那份,照常落盘不会盖掉什么
-    useCalendarConfig.setState({ byVault: r.all })
+    if (!r.ok || !localStorage.getItem(KEY)) return
+    const incoming: Cfg = {}
+    for (const [vault, v] of Object.entries(r.all)) {
+      const s = saneVc(v)
+      if (!s) return
+      incoming[vault] = s
+    }
+    writeBlocked = false // 内存现在包含盘上读得出来的那份,照常落盘不会盖掉什么
+    useCalendarConfig.setState((st) => ({ byVault: { ...st.byVault, ...incoming } }))
   })
 }
 

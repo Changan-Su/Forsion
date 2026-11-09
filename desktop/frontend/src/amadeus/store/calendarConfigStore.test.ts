@@ -301,4 +301,26 @@ describe('来源颜色:落盘', () => {
     onStorage[0]({ key: KEY })
     expect(cfg.getState().byVault[V].hidden).toEqual(['b.db', 'c.db'])
   })
+
+  it('别的窗口把键删了 / 写成空串 / 写了形状不对的一项:不当成空,内存里好的那份留着,再落盘设置都还在', async () => {
+    const good = { colors: { 'a.db': '#123456' }, hidden: ['b.db'], defaultDbPath: 'a.db', members: { 'a.db': { dateCol: 'd' } }, migrated: true, autoColors: { 'a.db': P[0] } }
+    data.set(KEY, JSON.stringify({ [V]: good }))
+    const cfg = await boot()
+    for (const bad of [null, '', JSON.stringify({ [V]: 'x' }), JSON.stringify({ [V]: null })]) {
+      if (bad === null) data.delete(KEY)
+      else data.set(KEY, bad)
+      onStorage[0]({ key: KEY })
+      expect(cfg.getState().byVault[V]).toEqual(good)
+    }
+    // 缺字段的一项:补空再用(下游直接读 hidden / colors / members),不崩
+    data.set(KEY, JSON.stringify({ [V]: good, '/other': { defaultDbPath: 'x.db' } }))
+    onStorage[0]({ key: KEY })
+    expect(cfg.getState().byVault['/other']).toEqual({ colors: {}, hidden: [], defaultDbPath: 'x.db', members: {} })
+    // 盘上少了一个库(那边是旧内存整份写的):这个窗口知道的那份不丢
+    data.set(KEY, JSON.stringify({ '/other': { colors: {}, hidden: [], defaultDbPath: null, members: {} } }))
+    onStorage[0]({ key: KEY })
+    expect(cfg.getState().byVault[V]).toEqual(good)
+    cfg.getState().toggleHidden(V, 'c.db')
+    expect(disk()[V]).toEqual({ ...good, hidden: ['b.db', 'c.db'] })
+  })
 })
