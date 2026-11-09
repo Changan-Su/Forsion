@@ -39,7 +39,7 @@ const LIST = '我现在还有哪些待办？';
 const TICK = '开发票那条我已经弄完了，帮我勾掉。';
 const MAX_STEPS = 6;
 /** Wrong destinations for a to-do: a file / note, or the session's own checklist. */
-const WRONG_TOOLS = ['write_file', 'edit_file', 'apply_patch', 'amadeus_write_note', 'todo_write'];
+const WRONG_TOOLS = ['write_file', 'edit_file', 'multi_edit', 'apply_patch', 'amadeus_write_note', 'todo_write'];
 const DENIES = /没有[^。，,\n]{0,8}(待办|to-?do)[^。，,\n]{0,6}(接口|工具|功能)|(待办|to-?do)[^。，,\n]{0,6}(接口|工具)[^。，,\n]{0,4}(不存在|没有)|no (to-?do|task) (tool|api)/i;
 const ZH = { ui: { locale: { value: 'zh', allowed: ['zh', 'en'] } } };
 
@@ -207,7 +207,8 @@ export async function calTodoLive({ run, rounds = 1, home, workspace, vault, clo
             + `${row ? (start ? (past ? `;✗ 开始时间 ${start} 早于现在` : `;开始时间 ${start} 没过`) : ';没带日期(不计红)') : ''}${row?.cells?.done === true ? ';✗ 勾上了' : ''}`
             + `${strayed.length ? `;✗ 写进了别的日历 ${strayed.join(',')}` : ''}${restIntact ? '' : ';✗ 原有行被改'}${wrong4.length ? `;✗ 写到了 ${wrong4.join('/')}` : ''}`
             + `${newNotes4.length ? `;✗ 新笔记 ${newNotes4.join(',')}` : ''}${gaveUp ? ';✗ 说做不到' : ''}`
-            + `;过去时间提醒 ${warned} 次,get_datetime ${asked('get_datetime')} 次,list_ui_commands ${asked('list_ui_commands')} 次,run_ui_command ${asked('run_ui_command')} 次`,
+            + `;过去时间提醒 ${warned} 次,get_datetime ${asked('get_datetime')} 次,list_ui_commands ${asked('list_ui_commands')} 次,run_ui_command ${asked('run_ui_command')} 次`
+            + `${WRONG_TOOLS.some(asked) ? `;试过 ${WRONG_TOOLS.filter(asked).join('/')}(没写成的不计红,参数见 todoLegs)` : ''}`,
           later);
 
         // 5. the user names an hour that has already passed today: writing it is fine, saying nothing about it is not
