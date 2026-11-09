@@ -58,7 +58,8 @@ describe('calendarConfigStore 成员制 + 迁移', () => {
  *  planAutoColors 播种后也按序号取 → 「取最少用」红;没到齐也播种 → 「升级播种」「只写一次」红;
  *  ensureColors 没有新来源也换引用 → 「原样返回」红;migratePath 不迁 autoColors → 「改名」红;
  *  slashCfg 不管 autoColors / 照换合成路径 → 「Windows」红;读不出来、原文没另存也照写 → 「一个字都不写」红;
- *  ensureColors 不看盘 / 整份落盘不带盘上的自动色(改名时不摘旧名字)→ 「别的窗口」红。 */
+ *  ensureColors 不看盘 / 整份落盘不带盘上的自动色(改名时不摘旧名字、不把盘上的挪到新名字)→ 「别的窗口」红;
+ *  不听 storage 事件 → 「别的窗口写了设置」红;有手选色的新来源备着的自动色不占名额 → 「取最少用」红。 */
 describe('来源颜色:定下来就不动', () => {
   /** 老规则在这一列上的结果(升级播种要和它一模一样)。 */
   const legacy = (paths: string[]): Record<string, string> => Object.fromEntries(paths.map((p, i) => [p, P[i % P.length]]))
@@ -112,6 +113,11 @@ describe('来源颜色:定下来就不动', () => {
     st().setColor(V, 'a.db', P[4].toUpperCase())
     st().ensureColors(V, ['a.db', 'z.db'], false)
     expect(bv()[V].autoColors!['z.db']).toBe(P[0]) // a 现在显示 P4,P0 空出来了
+    // 新来源里有一个已经手选了色:它备着的自动色也占名额 —— 清掉手选色回到它时,不和同批的 c 撞色
+    st().ensureColors('/m', ['a.db'], true) // P0
+    st().setColor('/m', 'b.db', P[1])
+    st().ensureColors('/m', ['a.db', 'b.db', 'c.db'], false)
+    expect(bv()['/m'].autoColors).toEqual({ 'a.db': P[0], 'b.db': P[2], 'c.db': P[3] })
     // 八个色都用过一轮之后,下一个从用得最少的里按顺序取
     const eight = Array.from({ length: 8 }, (_, i) => `e${i}.db`)
     st().ensureColors('/w', eight, true)
@@ -173,9 +179,13 @@ describe('来源颜色:落盘', () => {
   const WIN = 'C:\\Users\\me\\Vault'
   let data = new Map<string, string>()
   let failWrites = false
+  /** 这个窗口挂上的 storage 监听(别的窗口写盘时浏览器发给它)。 */
+  let onStorage: Array<(e: { key: string | null }) => void> = []
   beforeEach(() => {
     data = new Map<string, string>()
     failWrites = false
+    onStorage = []
+    vi.stubGlobal('window', { addEventListener: (type: string, fn: (e: { key: string | null }) => void) => { if (type === 'storage') onStorage.push(fn) } })
     vi.stubGlobal('localStorage', {
       getItem: (key: string) => data.get(key) ?? null,
       setItem: (key: string, value: string) => { if (failWrites) throw new Error('QuotaExceededError'); data.set(key, value) },
@@ -264,5 +274,31 @@ describe('来源颜色:落盘', () => {
     // 改名:盘上旧名字的自动色不被这一步又带回来
     cfg.getState().migratePath(V, 'b.db', 'renamed.db')
     expect(disk()[V].autoColors).toEqual({ 'renamed.db': P[0], 'a.db': P[1], 'ics://s1': P[2], 'ics://s2': P[3] })
+    // 改名的那张表,自动色是别的窗口刚定的、这边内存里还没有:盘上那份跟着挪到新名字,不是摘掉了事
+    const d2 = disk()
+    ;(d2[V].autoColors as Record<string, string>)['late.db'] = P[6]
+    data.set(KEY, JSON.stringify(d2))
+    cfg.getState().migratePath(V, 'late.db', 'late2.db')
+    expect(disk()[V].autoColors).toMatchObject({ 'late2.db': P[6] })
+    expect('late.db' in (disk()[V].autoColors as object)).toBe(false)
+  })
+
+  it('别的窗口写了设置(storage 事件):内存换成盘上最新的,这个窗口再落盘不会拿旧内存盖掉那边的改动', async () => {
+    data.set(KEY, JSON.stringify({ [V]: { colors: {}, hidden: [], defaultDbPath: null, members: {} } }))
+    const cfg = await boot()
+    expect(onStorage.length).toBe(1)
+    const theirs = { colors: { 'a.db': '#123456' }, hidden: ['b.db'], defaultDbPath: 'a.db', members: { 'a.db': { dateCol: 'd' } }, migrated: true, autoColors: { 'a.db': P[0] } }
+    data.set(KEY, JSON.stringify({ [V]: theirs, '/other': { colors: {}, hidden: [], defaultDbPath: null, members: { 'x.db': { dateCol: 'd' } } } }))
+    onStorage[0]({ key: 'something.else' })
+    expect(cfg.getState().byVault[V].colors).toEqual({}) // 别的键不管
+    onStorage[0]({ key: KEY })
+    expect(cfg.getState().byVault[V]).toEqual(theirs)
+    cfg.getState().toggleHidden(V, 'c.db')
+    expect(disk()[V]).toEqual({ ...theirs, hidden: ['b.db', 'c.db'] }) // 那边选的色、成员、默认库都还在
+    expect(disk()['/other'].members).toEqual({ 'x.db': { dateCol: 'd' } }) // 盘上别的库也没被这次落盘删掉
+    // 盘上读不出来时不动内存
+    data.set(KEY, '{oops')
+    onStorage[0]({ key: KEY })
+    expect(cfg.getState().byVault[V].hidden).toEqual(['b.db', 'c.db'])
   })
 })

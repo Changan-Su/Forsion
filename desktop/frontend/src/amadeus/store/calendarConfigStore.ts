@@ -107,8 +107,9 @@ const writeAll = (m: Cfg): void => {
   }
 }
 /** 整份落盘(用户手势触发的那些写)。别的窗口定下的自动色不在这个窗口的内存里 → 从盘上带过来,不让整份覆盖把它们冲掉。
- *  moved = 这次写是把某个库的一条路径改了名:盘上旧名字的自动色不带(已经挪到新名字上了)。 */
-const persist = (m: Cfg, moved?: { vault: string; from: string }): void => {
+ *  moved = 这次写是把某个库的一条路径改了名:盘上旧名字的自动色不原样带回来 —— 内存里已经挪过的就摘掉,
+ *  内存里还没有的(别的窗口刚定的)在这里挪到新名字上。 */
+const persist = (m: Cfg, moved?: { vault: string; from: string; to: string }): void => {
   if (writeBlocked) return
   const disk = readAll()
   if (!disk.ok) {
@@ -120,7 +121,10 @@ const persist = (m: Cfg, moved?: { vault: string; from: string }): void => {
     const mine = out[vault]
     if (!mine || !d?.autoColors) continue
     const auto = { ...d.autoColors, ...mine.autoColors }
-    if (moved?.vault === vault && !(moved.from in (mine.autoColors ?? {}))) delete auto[moved.from]
+    if (moved?.vault === vault && moved.from in auto && !(moved.from in (mine.autoColors ?? {}))) {
+      if (!(moved.to in (mine.autoColors ?? {}))) auto[moved.to] = auto[moved.from]
+      delete auto[moved.from]
+    }
     out[vault] = { ...mine, autoColors: auto }
   }
   writeAll(out)
@@ -160,7 +164,7 @@ export function planAutoColors(
     if (typeof out[p] === 'string') continue
     const at = used.indexOf(Math.min(...used))
     out[p] = EVENT_PALETTE[at]
-    used[at]++
+    used[at]++ // 新来源已经有手选色时(少见),备着的这个自动色也占名额:清掉手选色回到它时不和同批的别的来源撞
   }
   return out
 }
@@ -272,10 +276,22 @@ export const useCalendarConfig = create<CalCfgState>((set) => ({
           members,
         },
       }
-      persist(next, { vault, from: oldPath })
+      persist(next, { vault, from: oldPath, to: newPath })
       return { byVault: next }
     }),
 }))
+
+// 别的窗口写了这份设置(同一份 localStorage,各自内存里一份):把内存换成盘上最新的。不换的话,这个窗口下一次整份落盘
+// 就是拿旧内存把那边刚改的颜色 / 成员 / 显隐盖掉。storage 事件只发给别的窗口,自己写的不会回来;盘上读不出来就不动。
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+  window.addEventListener('storage', (e) => {
+    if (e.key !== KEY) return
+    const r = readAll()
+    if (!r.ok) return
+    writeBlocked = false // 内存现在就是盘上读得出来的那份,照常落盘不会盖掉什么
+    useCalendarConfig.setState({ byVault: r.all })
+  })
+}
 
 /** 手选色 → 自动定下的色 → 都没有(这个库还没播种 / 新来源还没轮到定色的那一拍)才按序号取调色板。 */
 export const colorForDb = (vault: string, byVault: Cfg, dbPath: string, dbIndex: number): string => {
