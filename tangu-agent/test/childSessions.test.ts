@@ -21,6 +21,8 @@ import { enqueueRun, activeSessionIds } from '../src/services/agentLoop.js';
 import { childSessionsProvider } from '../src/tools/builtin/childSessions.js';
 import { branchSession } from '../src/services/sessionBranch.js';
 import { CHILD_UPDATE_OPEN, deliverPendingChildReports, endsWithQuestion, markAwaitingUser } from '../src/services/childSessions.js';
+import { clearRunApprovalCap, setRunApprovalCap } from '../src/services/approvals.js';
+import { NEW_TOPIC_NOTE } from '../src/services/agentLoop.js';
 
 let home: string | null = null;
 // 主会话 id 每个用例不同:自动接着做的计数在模块内存里,同名会串到下一个用例
@@ -118,8 +120,8 @@ describe('child sessions', () => {
     expect(String(await tool('send_to_session').execute({ session_id: cid, message: 'use the enterprise docs' }, ctx()))).toMatch(/^Sent to "A"/);
     await idle();
     expect(await updatesIn(P)).toHaveLength(2);
-    // 不在同一棵树里 → 拒
-    expect(String(await tool('send_to_session').execute({ session_id: 'nope', message: 'x' }, ctx(cid)))).toMatch(/^Error: No such linked session/);
+    // 不存在的会话 → 拒(11-08 起树外的会话也发得到,见「跨树互发」)
+    expect(String(await tool('send_to_session').execute({ session_id: 'nope', message: 'x' }, ctx(cid)))).toMatch(/^Error: No such session/);
   });
 
   it('连续自动接着做 3 次后只写行不起轮;用户发一句归零', async () => {
@@ -201,13 +203,15 @@ describe('child sessions', () => {
     await idle();
   });
 
-  it('分支(fork_message_id 有值)不是子会话:分支里能开子会话,send_to_session 发不到分支,回报不把分支算进去', async () => {
+  it('分支(fork_message_id 有值)不是子会话:分支里能开子会话,send_to_session 按树外发到分支,回报不把分支算进去', async () => {
     await setup();
     await query(`INSERT INTO chat_messages (id, session_id, role, content, timestamp) VALUES ('fm', ?, 'model', 'x', 100)`, [P]);
     const B = `${P}-branch`;
     await query(`INSERT INTO chat_sessions (id, user_id, app_id, title, model_id, kind, parent_session_id, fork_message_id, agent_config) VALUES (?, 'u1', 'tangu', 'branch', 'm1', 'user', ?, 'fm', ?)`,
       [B, P, JSON.stringify({ execMode: 'host', cwd: home, approvalMode: 'auto-edit' })]);
-    expect(String(await tool('send_to_session').execute({ session_id: B, message: 'hi' }, ctx()))).toMatch(/No such linked session/);
+    // 11-08 跨树互发:分支不是子会话,但同一个用户的会话 → 按树外(peer)发得到
+    expect(String(await tool('send_to_session').execute({ session_id: B, message: 'hi' }, ctx()))).toMatch(/^Sent to "branch"/);
+    await idle();
     const cid = idOf(String(await tool('start_session').execute({ title: 'A', message: 'a' }, ctx(B))));
     await idle();
     expect((await updatesIn(B))[0]).toContain(`id="${cid}"`);
@@ -328,5 +332,141 @@ describe('child sessions', () => {
     expect(outs.filter((o) => /^Sent to/.test(String(o)))).toHaveLength(1);
     await idle();
     expect((await runsOf(c)).length).toBe(before + 1);
+  });
+
+  it('hand_off_task:主会话挪出 → 挂它下面、带交接背景、那一轮是 handoff;做完只在原会话留一行,不起轮', async () => {
+    await setup();
+    await query(`INSERT INTO chat_messages (id, session_id, role, content, timestamp) VALUES ('hm1', ?, 'user', 'Draft the release notes for 2.14.1', 100)`, [P]);
+    const out = String(await tool('hand_off_task').execute({ title: 'Notes', brief: 'SID:handoff Finish the notes: groups 3-5 left' }, ctx()));
+    expect(out).toMatch(/^Moved the unfinished task to a new session "Notes"/);
+    const h = idOf(out);
+    const row = (await query<any[]>(`SELECT * FROM chat_sessions WHERE id = ?`, [h]))[0];
+    expect(row.parent_session_id).toBe(P);
+    expect(JSON.parse(row.agent_config).handoffFrom).toBe(P);
+    await idle();
+    const hr = (await runsOf(h))[0];
+    expect(hr.input.handoff).toBe(true);
+    expect(hr.input.fromParent).toBeUndefined(); // ask_user 照常挂起等用户,不短路给原会话
+    const seen = JSON.stringify(payloads.find((x) => x.sid === 'handoff')!.messages);
+    expect(seen).toContain('Handed-off context');
+    expect(seen).toContain('Draft the release notes');
+    const ups = await updatesIn(P);
+    expect(ups).toHaveLength(1);
+    expect(ups[0]).toContain('A task you handed off earlier');
+    expect(ups[0]).toContain(`<child id="${h}" title="Notes" status="finished">`);
+    expect(await runsOf(P)).toEqual([]); // 原会话不起轮
+    expect((await query<any[]>(`SELECT report_run_id FROM chat_sessions WHERE id = ?`, [h]))[0].report_run_id).toBeNull();
+  });
+
+  it('hand_off_task:子会话挪出 → 挂同一个主会话下面(兄弟,守一层);结果回原子会话一行,主会话不收不等', async () => {
+    await setup();
+    const a = idOf(String(await tool('start_session').execute({ title: 'A', message: 'a' }, ctx())));
+    await idle();
+    const pRuns = (await runsOf(P)).length;
+    const pUps = (await updatesIn(P)).length;
+    const h = idOf(String(await tool('hand_off_task').execute({ title: 'H', brief: 'continue the rest' }, ctx(a))));
+    const row = (await query<any[]>(`SELECT parent_session_id, agent_config FROM chat_sessions WHERE id = ?`, [h]))[0];
+    expect(row.parent_session_id).toBe(P);
+    expect(JSON.parse(row.agent_config).handoffFrom).toBe(a);
+    await idle();
+    expect((await updatesIn(a)).some((u) => u.includes(`<child id="${h}"`))).toBe(true);
+    expect((await updatesIn(P)).length).toBe(pUps);
+    expect((await runsOf(P)).length).toBe(pRuns);
+    // 挪出去的那条挂着回报也不挡主会话置「等你」
+    await query(`UPDATE chat_sessions SET report_run_id = 'pending-x' WHERE id = ?`, [h]);
+    expect(await markAwaitingUser(P, 'u1')).toBe(true);
+  });
+
+  it('跨树互发:发给树外的会话 → relation="peer" + 起一轮,审批档上限 = 发方的档;收不到的给出原因', async () => {
+    await setup();
+    const cfg = (o: object = {}) => JSON.stringify({ execMode: 'host', cwd: home, approvalMode: 'full-auto', ...o });
+    const add = (id: string, more: { user?: string; archived?: boolean; cfg?: object } = {}) => query(
+      `INSERT INTO chat_sessions (id, user_id, app_id, title, model_id, kind, archived, agent_config) VALUES (?, ?, 'tangu', ?, 'm1', 'user', ?, ?)`,
+      [id, more.user || 'u1', id, more.archived ? 1 : 0, cfg(more.cfg)]);
+    const Q = `${P}-q`;
+    await add(Q);
+    const out = String(await tool('send_to_session').execute({ session_id: Q, message: 'is 300 MB fine?' }, { ...ctx(), approvalMode: 'auto-edit' }));
+    expect(out).toMatch(new RegExp(`^Sent to "${Q}"`));
+    await idle();
+    const qr = (await runsOf(Q)).at(-1)!;
+    expect(qr.input.fromSession).toEqual({ id: P, relation: 'peer' });
+    expect(qr.input.approvalCap).toBe('auto-edit'); // 发方存档 auto-edit,收方 full-auto
+    expect(qr.input.message).toContain(`<session_message from="${P}" title="main" relation="peer">`);
+    expect(qr.input.message).toContain('outside your session tree');
+    // 发方 custom → 上限按最严
+    await query(`UPDATE chat_sessions SET agent_config = ? WHERE id = ?`, [cfg({ approvalMode: 'custom' }), P]);
+    await tool('send_to_session').execute({ session_id: Q, message: 'again' }, ctx());
+    await idle();
+    expect((await runsOf(Q)).at(-1)!.input.approvalCap).toBe('readonly');
+    // 收不到的
+    await add(`${P}-arch`, { archived: true });
+    await add(`${P}-muse`, { cfg: { agentSlug: 'muse' } });
+    await add(`${P}-codex`, { cfg: { soloEngineId: 'codex' } });
+    await add(`${P}-wx`);
+    await query(`INSERT INTO tangu_wechat_bindings (id, user_id, channel, account_id, session_id) VALUES ('b1', 'u1', 'wechat', 'acc', ?)`, [`${P}-wx`]);
+    await add(`${P}-other`, { user: 'u2' });
+    const send = async (id: string) => String(await tool('send_to_session').execute({ session_id: id, message: 'x' }, ctx()));
+    expect(await send(`${P}-arch`)).toMatch(/archived/);
+    expect(await send(`${P}-muse`)).toMatch(/Muse/);
+    expect(await send(`${P}-codex`)).toMatch(/external engine/);
+    expect(await send(`${P}-wx`)).toMatch(/messaging channel/);
+    expect(await send(`${P}-other`)).toMatch(/No such session/);
+    for (const id of ['arch', 'muse', 'codex', 'wx', 'other']) expect(await runsOf(`${P}-${id}`)).toEqual([]);
+  });
+
+  it('被钳过的一轮派生出去不放大:开子会话存档钳到上限、转发给树外按上限;挪出去不抄「另起话题」提示;回报补发不重复(Codex 11-08)', async () => {
+    await setup();
+    await query(`UPDATE chat_sessions SET agent_config = ? WHERE id = ?`, [JSON.stringify({ execMode: 'host', cwd: home, approvalMode: 'full-auto' }), P]);
+    setRunApprovalCap('R-capped', 'readonly');
+    const capped = { ...ctx(), runId: 'R-capped', approvalMode: 'full-auto' };
+    try {
+      // 开子会话:存档钳到只读,第一轮也带上限
+      const c = idOf(String(await tool('start_session').execute({ title: 'C', message: 'c' }, capped)));
+      expect(JSON.parse((await query<any[]>(`SELECT agent_config FROM chat_sessions WHERE id = ?`, [c]))[0].agent_config).approvalMode).toBe('readonly');
+      await idle();
+      expect((await runsOf(c))[0].input.approvalCap).toBe('readonly');
+      // 转发给树外:发方存档 full-auto,但这一轮被钳成只读 → 收方上限只读
+      const Q = `${P}-q2`;
+      await query(`INSERT INTO chat_sessions (id, user_id, app_id, title, model_id, kind, agent_config) VALUES (?, 'u1', 'tangu', 'q', 'm1', 'user', ?)`,
+        [Q, JSON.stringify({ execMode: 'host', cwd: home, approvalMode: 'full-auto' })]);
+      await tool('send_to_session').execute({ session_id: Q, message: 'go' }, capped);
+      await idle();
+      expect((await runsOf(Q)).at(-1)!.input.approvalCap).toBe('readonly');
+      // 挪出去:在飞消息里的 <new_topic> 不进种子
+      const working = [
+        { role: 'user', content: 'SID:x Write the notes' },
+        { role: 'user', content: `What port does SSH use?\n\n${NEW_TOPIC_NOTE}` },
+        { role: 'user', content: [{ type: 'text', text: 'see image' }, { type: 'text', text: NEW_TOPIC_NOTE }] },
+      ];
+      const h = idOf(String(await tool('hand_off_task').execute({ title: 'H', brief: 'SID:h2 continue' }, { ...capped, getWorkingMessages: () => working })));
+      const seed = String((await query<any[]>(`SELECT summary FROM session_summaries WHERE session_id = ?`, [h]))[0]?.summary || '');
+      expect(seed).toContain('What port does SSH use?');
+      expect(seed).not.toContain('<new_topic>');
+      expect(JSON.parse((await query<any[]>(`SELECT agent_config FROM chat_sessions WHERE id = ?`, [h]))[0].agent_config).approvalMode).toBe('readonly');
+      await idle();
+      // 回报行写过、report_run_id 没清就崩了 → 重启补发认出已写过
+      const hRun = (await runsOf(h))[0].id;
+      const before = (await updatesIn(P)).filter((u) => u.includes(`<child id="${h}"`)).length;
+      expect(before).toBe(1);
+      await query(`UPDATE chat_sessions SET report_run_id = ? WHERE id = ?`, [hRun, h]);
+      await deliverPendingChildReports();
+      expect((await updatesIn(P)).filter((u) => u.includes(`<child id="${h}"`)).length).toBe(1);
+      expect((await query<any[]>(`SELECT report_run_id FROM chat_sessions WHERE id = ?`, [h]))[0].report_run_id).toBeNull();
+    } finally {
+      clearRunApprovalCap('R-capped');
+    }
+  });
+
+  it('start_session 的 model / thinking_level:认得的才用,认不得跟主会话并说明', async () => {
+    await setup();
+    const out = String(await tool('start_session').execute({ title: 'M', message: 'm', model: 'no-such-model-xyz', thinking_level: 'bogus' }, ctx()));
+    expect(out).toContain('No model matches "no-such-model-xyz"');
+    const m = idOf(out);
+    const row = (await query<any[]>(`SELECT model_id, agent_config FROM chat_sessions WHERE id = ?`, [m]))[0];
+    expect(row.model_id).toBe('m1');
+    expect(JSON.parse(row.agent_config).thinkingLevel).toBe('low'); // 跟主会话
+    const l = idOf(String(await tool('start_session').execute({ title: 'L', message: 'l', thinking_level: 'high' }, ctx())));
+    expect(JSON.parse((await query<any[]>(`SELECT agent_config FROM chat_sessions WHERE id = ?`, [l]))[0].agent_config).thinkingLevel).toBe('high');
+    await idle();
   });
 });

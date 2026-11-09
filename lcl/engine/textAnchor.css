@@ -1,0 +1,5 @@
+/* 文字锚点(textAnchor.ts)的浮层:那段字滚出可见区 / 视图被摘下时只藏不收(useClampedMenu 打 data-anchor-hidden),
+   回来原样出现。跟随本身不加动画(每帧直接写位置);只有藏 / 现做一次淡入淡出,减少动态效果时直接显隐。 */
+[data-anchor-follow] { transition: opacity var(--duration-instant, 0.1s) var(--ease-surface, ease); }
+[data-anchor-hidden] { opacity: 0; pointer-events: none; }
+@media (prefers-reduced-motion: reduce) { [data-anchor-follow] { transition: none; } }

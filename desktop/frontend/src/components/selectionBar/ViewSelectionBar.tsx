@@ -6,12 +6,15 @@
  *
  * ⚠️ 条和卡都 portal 到 body:聊天区自上而下几层 `container-type`(蕴含 layout containment)会让 fixed 后代以卡片
  *    而不是视口为包含块(见 lcl/engine/menuAnchor 的 useEdgeNudge 顶注)。OverlayAt 自己补偿缩放,坐标直接给视口 px。
+ * ⚠️ 归属 ≠ 画的位置(划线菜单方案 B,2026-11-08):画在 body 下,归属是 owner(看选区的那个元素 / 插件视图根)。
+ *    条和卡锚在那段字上(lcl/engine/textAnchor):滚动、视图尺寸变了跟着走,滚出可见区 / 视图被 Dockview 摘下就藏,
+ *    回来原样出现;那段字没了(节点被重渲染)才收。只有给不出锚点的选区(插件 show() 只报了一个矩形)照旧一滚就收。
  * ⚠️ 不做全局监听:只看调用方交过来的那个元素。输入框、别的视图、插件自己画的菜单都不会被这里碰到。
  */
-import { useEffect, useRef, useState, type ReactElement, type ReactNode, type RefObject } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode, type RefObject } from 'react'
 import { createPortal } from 'react-dom'
 import { Languages, MessageSquareQuote } from 'lucide-react'
-import { OverlayAt, mountLineSelection } from '@lcl/engine'
+import { OverlayAt, mountLineSelection, rangeAnchor, rectAnchor, type TextAnchor } from '@lcl/engine'
 import { SelectionBar, type SelectionBarAction, type SelectionBarTool } from '@lcl/components'
 import { registerMessages, translate, useI18n } from '../../i18n'
 import { useApp } from '../../stores/appStore'
@@ -35,6 +38,10 @@ export interface BarSelection {
   rect: { left: number; right: number; top: number; bottom: number }
   /** 拖选的方向:条顺着它滑进来(借鉴 Comma 方案,10-24)。双击 / 三击选词选段没有拖的方向,不给。 */
   dir?: 'forward' | 'backward'
+  /** 宿主自己看到的选区(克隆的):条和卡锚在它的起止节点上,跟着滚动走。 */
+  range?: Range
+  /** 调用方现量的矩形(插件 show({ getRect })):null = 现在看不见。没有 range 也没有它 = 只有 rect 快照,一滚就收。 */
+  getRect?: () => { left: number; right: number; top: number; bottom: number } | null
 }
 export interface BarSource { title?: string; path?: string; sessionId?: string; page?: number }
 /** 动的是变换、不是滚动的视图(画布):视口一挪就在 `watch` 里面的元素上派发这个事件,条跟着收(条是固定定位,不收会飘在原处)。 */
@@ -43,6 +50,8 @@ export const SELBAR_VIEWPORT_MOVED = 'selbar:viewport-moved'
 export interface ViewSelectionBarProps {
   /** 'chat' 或 '<插件 id>:<视图 id>':插件动作的 scope / when 按它过滤。 */
   view: string
+  /** 条和卡归谁(视图根):它被摘下 / 藏起来时条和卡跟着藏。缺省 = watch。插件视图不看选区(watch: false)时也要给。 */
+  owner?: RefObject<HTMLElement | null>
   /** 这个视图是哪个插件的(scope: 'own' 认它)。宿主自己的视图不给。 */
   pluginId?: string
   /** 看谁的 DOM 选区(松开鼠标时出,选区收起 / 滚动 / 点到外面时收)。不给 = 不看,选区只由 `selection` 报。 */
@@ -71,6 +80,9 @@ interface Card {
   x: number
   y: number
   top: number
+  /** 锚点来源(从选区带过来):卡跟着那段字走。 */
+  range?: Range
+  getRect?: BarSelection['getRect']
   /** 翻译的目标语言;插件动作没有。 */
   language?: string
   /** 插件动作的键;没有 = 内置的翻译。 */
@@ -80,6 +92,14 @@ interface Card {
 const pluginIcon = (icon: string | undefined): ReactNode => {
   const el = resolveIcon(icon)
   return el ? <span className="selbar-ico">{el}</span> : null
+}
+
+/** 选区 → 文字锚点(没有 range / getRect 的只有快照,不跟)。只建对象不挂监听:监听等 OverlayAt 订阅才挂(textAnchor)。 */
+function anchorOf(owner: HTMLElement | null | undefined, src: { range?: Range; getRect?: BarSelection['getRect'] } | null, onLost: () => void): TextAnchor | null {
+  if (!owner || !src) return null
+  if (src.range) return rangeAnchor(owner, src.range, { onLost })
+  if (src.getRect) return rectAnchor(owner, src.getRect, owner, { onLost })
+  return null
 }
 
 /** 缺省的「问 Tangu」交给侧栏对话的引用:文字 + 一行出处(库里的文件写成 [[路径]],和笔记那枚同形)。 */
@@ -96,6 +116,8 @@ export function ViewSelectionBar(p: ViewSelectionBarProps): ReactElement | null 
   const { watch, watchKey } = p
   const onDismissRef = useRef(p.onDismiss)
   onDismissRef.current = p.onDismiss
+  // 这一条能不能跟着那段字走(有锚点):能跟的,滚动 / 盒子变了不收(锚点跟着走或藏起来);只有快照的照旧收
+  const followRef = useRef(false)
 
   useEffect(() => {
     const el = watch?.current
@@ -118,11 +140,13 @@ export function ViewSelectionBar(p: ViewSelectionBarProps): ReactElement | null 
       const back = s.anchorNode === s.focusNode ? s.focusOffset < s.anchorOffset
         : !!(s.anchorNode && s.focusNode && s.anchorNode.compareDocumentPosition(s.focusNode) & Node.DOCUMENT_POSITION_PRECEDING)
       const dir = e.detail > 1 ? undefined : back ? 'backward' : 'forward'
-      setOwn({ text, markdown: content?.markdown, rect: { left: r.left, right: r.right, top: r.top, bottom: r.bottom }, dir })
+      setOwn({ text, markdown: content?.markdown, rect: { left: r.left, right: r.right, top: r.top, bottom: r.bottom }, dir, range: range.cloneRange() })
     }
     const onSelection = (): void => { if (window.getSelection()?.isCollapsed) setOwn(null) }
     // 调用方自己报的选区(插件的 show())也跟着收:它是按当时的位置报的,滚了 / 盒子变了就不在那儿了。
     const clear = (): void => { setOwn(null); onDismissRef.current?.() }
+    // 滚动 / 盒子变了 / 画布挪视口:能跟的条不收(锚点跟着走,看不见就藏),只有快照的才收
+    const moved = (): void => { if (!followRef.current) clear() }
     // 条挂在 body 下,不会跟着这个视图一起被藏起来 / 挪走:点到视图和条的外面、视图的盒子变了(切标签页、拖分栏、缩窗口)都收。
     const onDown = (e: MouseEvent): void => {
       const at = e.target as Element | null
@@ -133,15 +157,21 @@ export function ViewSelectionBar(p: ViewSelectionBarProps): ReactElement | null 
     // 冒泡阶段挂在 document 上,排在 el 自己的 read 后面。
     const onUp = (): void => { fromBar = false }
     let sized = false
-    const ro = new ResizeObserver(() => { if (sized) clear(); else sized = true }) // 第一次回调是 observe 本身,不算
+    // 第一次回调是 observe 本身,不算。视图被摘下 / 藏起(切标签,盒子没了):条照旧收 —— 选区已经不在用户眼前,切回来也不该
+    // 自己冒出来(方案 B §7);开着的结果卡是另一份状态,由它的锚点藏起、切回来还在。只是尺寸变了(拖分栏、缩窗口)才按 moved 走。
+    const ro = new ResizeObserver(() => {
+      if (!sized) { sized = true; return }
+      if (!el.isConnected || !el.getClientRects().length) clear()
+      else moved()
+    })
     ro.observe(el)
     el.addEventListener('mouseup', read)
     document.addEventListener('mouseup', onUp)
     document.addEventListener('selectionchange', onSelection)
     document.addEventListener('mousedown', onDown, true)
     // capture:滚动不冒泡,里面哪一层滚了都要收(选区的位置已经变了)。
-    el.addEventListener('scroll', clear, { passive: true, capture: true })
-    el.addEventListener(SELBAR_VIEWPORT_MOVED, clear, true)
+    el.addEventListener('scroll', moved, { passive: true, capture: true })
+    el.addEventListener(SELBAR_VIEWPORT_MOVED, moved, true)
     return () => {
       paint.dispose()
       ro.disconnect()
@@ -149,13 +179,26 @@ export function ViewSelectionBar(p: ViewSelectionBarProps): ReactElement | null 
       document.removeEventListener('mouseup', onUp)
       document.removeEventListener('selectionchange', onSelection)
       document.removeEventListener('mousedown', onDown, true)
-      el.removeEventListener('scroll', clear, { capture: true })
-      el.removeEventListener(SELBAR_VIEWPORT_MOVED, clear, true)
+      el.removeEventListener('scroll', moved, { capture: true })
+      el.removeEventListener(SELBAR_VIEWPORT_MOVED, moved, true)
     }
   }, [watch, watchKey])
 
   const sel = p.selection ?? (watch ? own : null) // 调用方报的优先(插件的 show());没报才用自己看到的
   const dismiss = (): void => { setOwn(null); p.onDismiss?.() }
+  const ownerEl = (p.owner ?? watch)?.current ?? null
+  followRef.current = !!ownerEl && !!(sel?.range || sel?.getRect)
+  const dismissRef = useRef(dismiss)
+  dismissRef.current = dismiss
+  // 条和卡各一个锚点(同一段字);那段字没了 → 收。随选区 / 卡换新,旧的在下面的 effect 里收拾
+  const barAnchor = useMemo(() => anchorOf(ownerEl, sel, () => dismissRef.current()), [ownerEl, sel])
+  useEffect(() => () => barAnchor?.dispose(), [barAnchor])
+  // 只随那段字本身(range / getRect)重建:卡头换语言会换一个 card 对象,而切标签回来之后 card.range 这份活 Range 已经塌缩,
+  // 拿它重建会被当成「字没了」把卡收掉;锚点自己记的起止节点没丢,沿用它。
+  const cardSrc = card ? { range: card.range, getRect: card.getRect } : null
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const cardAnchor = useMemo(() => anchorOf(ownerEl, cardSrc, () => setCard(null)), [ownerEl, !!card, card?.range, card?.getRect])
+  useEffect(() => () => cardAnchor?.dispose(), [cardAnchor])
   /** 收起并清掉选区(动作把这段文字拿走了)。 */
   const done = (): void => { dismiss(); window.getSelection()?.removeAllRanges() }
 
@@ -164,7 +207,7 @@ export function ViewSelectionBar(p: ViewSelectionBarProps): ReactElement | null 
     const probe = readTangu()
     const source = p.source?.(sel)
     const openCard = (title: string, extra: Pick<Card, 'language' | 'action'>): void => {
-      setCard({ key: Date.now(), title, text: sel.text, markdown: sel.markdown ?? sel.text, source, x: sel.rect.left, y: sel.rect.bottom + 6, top: sel.rect.top - 6, ...extra })
+      setCard({ key: Date.now(), title, text: sel.text, markdown: sel.markdown ?? sel.text, source, x: sel.rect.left, y: sel.rect.bottom + 6, top: sel.rect.top - 6, range: sel.range, getRect: sel.getRect, ...extra })
       dismiss() // 选区留着:卡在它下面,看得出译的是哪一段
     }
     const runPlugin = (o: OwnedSelectionAction): void => {
@@ -193,6 +236,8 @@ export function ViewSelectionBar(p: ViewSelectionBarProps): ReactElement | null 
           x={(sel.rect.left + sel.rect.right) / 2}
           y={sel.rect.bottom + 8}
           anchorTop={sel.rect.top - 8}
+          anchor={barAnchor}
+          keep=".selbar-row"
           prefer="above"
           center
           role="toolbar"
@@ -232,6 +277,7 @@ export function ViewSelectionBar(p: ViewSelectionBarProps): ReactElement | null 
           x={card.x}
           y={card.y}
           anchorTop={card.top}
+          anchor={cardAnchor}
           title={card.title}
           hasSelection
           askFirst={false}

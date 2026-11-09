@@ -19,25 +19,38 @@
  *    (在跑就排队);回不回由对方自己 send_to_session,不自动回传(自动回传 = 两边互相叫醒)。防回环:收方连续被消息叫醒
  *    AUTO_CONTINUE_MAX 次后只写行不起轮,用户发一句 / 主会话派一轮归零。主会话 → 自己的子会话照旧走 sendToChildSession(会回报)。
  *  - 分支(/branch,fork_message_id 有值)也挂 parent_session_id,但不是子会话:下面认子会话的查询一律带 `fork_message_id IS NULL`。
+ *  - 挪出去(hand_off_task,方案「会话互通升级」11-08 A):做到一半用户换了话题 → 手头没做完的任务连同这段对话(fork)挪成独立会话接着做。
+ *    主会话挪出的挂在它下面;子会话挪出的挂在同一个主会话下面(兄弟,守「只一层」)。存值记 handoffFrom = 原会话;
+ *    那一轮的 input 是 handoff(不是 fromParent):ask_user 照常挂起等用户(用户在场,只是在聊别的),不短路给主会话。
+ *    做完只在原会话留一行(deliverHandoffReport),**不起轮**:原会话已经在聊别的。主会话等子会话收尾 / 「等你」的判断都不算它。
+ *  - 跨树互发(relation 'peer',同方案):本机这个用户的任何别的会话都能发;收不到的 = 已归档、非 user 会话(团队成员 / Muse 周期 / 自动化)、
+ *    Muse、外部引擎私聊、绑着通道的会话。收方那一轮的审批档 = 两边较严的那个(input.approvalCap → 审批闸 runApprovalCap)。
  *
  * 唯一触发点 = agentLoop.startRun 的 finally(onRunSettled):子会话收尾试着送给主会话,主会话收尾试着收它名下积着的回报。
  */
-import { v4 as uuidv4 } from 'uuid';
+import { v4 as uuidv4, v5 as uuidv5 } from 'uuid';
 import { query } from '../core/db.js';
 import { getRawSection } from '../core/config.js';
 import { deps } from '../seams/runtime.js';
 import { createRun, getRun } from './runStore.js';
-import { remoteOriginMarker, type RemoteInfo } from './remoteOrigin.js';
+import { clampApprovalMode, minCapMode, remoteOriginMarker, type RemoteInfo } from './remoteOrigin.js';
 import { sessionRemoteTainted } from './remoteTaint.js';
 import { buildTranscript } from './compaction.js';
 import { modelContextWindow } from './contextBudget.js';
 import { clearChildQuestions, peekChildQuestions } from './inquiries.js';
+import { clearRunApprovalCap, storedApprovalMode } from './approvals.js';
+import { MUSE_AGENT_SLUG } from '../agents/agentRegistry.js';
+import type { CapMode } from './remoteOrigin.js';
+import { chatModels, listModelCatalog, resolveModelQuery } from './modelCatalog.js';
+import { THINKING_LEVELS, normalizeThinkingLevel } from '../llm/modelCapabilities.js';
 
 export const CHILD_UPDATE_OPEN = '<child_sessions_update>';
 export const CHILD_UPDATE_CLOSE = '</child_sessions_update>';
 const AUTO_CONTINUE_MAX = 3;
 const MAX_RUNNING_CHILDREN = 4;
 const EXCERPT_CHARS = 1500;
+/** 挪出去的回报行 id 的命名空间(uuid v5,随手生成的固定值)。 */
+const HANDOFF_REPORT_NS = '6f1d3c9a-4b7e-4d2a-9c61-2f8e5a7b0d14';
 /** fork 时带给子会话的主会话转写上限(token 粗估;另不超过模型窗口的 1/4)。它当「已有摘要」存,以后压缩时整段保留不裁,所以要小。
  *  ponytail: 子会话事后换成窗口 < ~4× 种子的模型仍可能撑窗;要彻底得让压缩能重压种子。 */
 const FORK_MAX_TOKENS = 24_000;
@@ -71,6 +84,14 @@ export async function startChildSession(p: {
   fork?: boolean;
   /** 主会话这一轮在飞的工作消息(ctx.getWorkingMessages):这一轮刚读到的东西还没落库,只从库里读会漏(Codex 10-28 P2)。 */
   parentMessages?: any[];
+  /** 子会话自己的模型(已解析成目录里的 id;start_session 的 model / 任务卡的 model:);缺省跟主会话。 */
+  model?: string;
+  /** 子会话自己的思考档;缺省跟主会话。 */
+  thinkingLevel?: string;
+  /** 挪出去(hand_off_task):从哪个会话挪出来的(它的对话当背景、做完回那里留一行)。parentId 此时是挂靠的主会话(原会话本身或它的主会话)。 */
+  handoff?: { fromId: string; fromTitle: string };
+  /** 起这个子会话的那一轮带着的审批上限(会话互发的那一轮,runApprovalCap):子会话存的档钳到它,派生出去也不比这一轮松。 */
+  approvalCap?: CapMode;
 }): Promise<{ sessionId: string; runId: string; title: string; forked: boolean }> {
   const [parent] = await query<any[]>(
     `SELECT id, user_id, app_id, kind, parent_session_id, fork_message_id, project_path, project_name, projectless, agent_config, model_id, title FROM chat_sessions WHERE id = ?`,
@@ -88,33 +109,93 @@ export async function startChildSession(p: {
   const runConfig: Record<string, unknown> = {};
   for (const k of INHERIT_KEYS) if (cfg[k] !== undefined) runConfig[k] = cfg[k];
   if (p.agentSlug) runConfig.agentSlug = p.agentSlug;
+  if (p.thinkingLevel) runConfig.thinkingLevel = p.thinkingLevel;
+  if (p.approvalCap) runConfig.approvalMode = cappedMode(runConfig.approvalMode, p.approvalCap);
   // 远程污点的调用方开出的子会话:存值盖远程标记(同 dispatchProjectSession / 远程 POST /agent/sessions),首个 run 抄 input.remote。
-  const stored = p.remote ? { ...runConfig, remoteOrigin: remoteOriginMarker(p.remote) } : runConfig;
+  const marked = p.handoff ? { ...runConfig, handoffFrom: p.handoff.fromId } : runConfig;
+  const stored = p.remote ? { ...marked, remoteOrigin: remoteOriginMarker(p.remote) } : marked;
   const sessionId = uuidv4();
   const title = p.title.replace(/\s+/g, ' ').trim().slice(0, 80) || p.message.replace(/\s+/g, ' ').trim().slice(0, 80) || 'New Chat';
-  const modelId = p.modelId || parent.model_id || deps().profile.defaultModelId || '';
+  const modelId = p.model || p.modelId || parent.model_id || deps().profile.defaultModelId || '';
   await query(
     `INSERT INTO chat_sessions (id, user_id, app_id, title, model_id, project_path, project_name, projectless, agent_config, parent_session_id)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [sessionId, p.userId, parent.app_id, title, modelId || null, parent.project_path, parent.project_name, !!parent.projectless, JSON.stringify(stored), p.parentId],
   );
-  const forked = p.fork ? await seedForkContext(sessionId, p.parentId, String(parent.title || ''), modelId, p.parentMessages).catch(() => false) : false;
-  const runId = await queueFromParent({ sessionId, userId: p.userId, appId: parent.app_id, modelId, message: p.message, agentConfig: runConfig, remote: p.remote });
+  const src = p.handoff ? { id: p.handoff.fromId, title: p.handoff.fromTitle } : { id: p.parentId, title: String(parent.title || '') };
+  const forked = p.fork || p.handoff ? await seedForkContext(sessionId, src.id, src.title, modelId, p.parentMessages, !!p.handoff).catch(() => false) : false;
+  const runId = await queueFromParent({ sessionId, userId: p.userId, appId: parent.app_id, modelId, message: p.message, agentConfig: runConfig, remote: p.remote, handoff: !!p.handoff, approvalCap: p.approvalCap });
   return { sessionId, runId, title, forked };
 }
 
-/** 主会话此刻的转写 → 子会话的开头摘要(压缩检查点,through_timestamp=1:不覆盖任何一行,hydrateHistory 照样注入)。 */
-async function seedForkContext(childId: string, parentId: string, parentTitle: string, modelId: string, inFlight?: any[]): Promise<boolean> {
-  const messages = inFlight?.length ? inFlight : (await (await loop()).hydrateHistory(parentId, '', undefined, undefined, undefined, false)).messages;
+/** 子会话自己的模型(start_session 的 model / 任务卡的 model:):按用户的模型目录解析(认部分名字);认不得 / 有歧义 → 不改,回一句说明。 */
+export async function resolveChildModel(want: string): Promise<{ id?: string; note?: string }> {
+  const q = String(want || '').trim();
+  if (!q) return {};
+  const models = chatModels((await listModelCatalog(deps().profile)).models);
+  const hit = resolveModelQuery(q, models);
+  if (hit.kind === 'hit') return { id: hit.model.id };
+  return { note: hit.kind === 'ambiguous'
+    ? `"${q}" matches several models (${hit.candidates.slice(0, 6).map((m) => m.id).join(', ')}), so the child uses this session's model.`
+    : `No model matches "${q}", so the child uses this session's model.` };
+}
+
+/** 子会话自己的思考档:认得的档名才用(none / ultra 这类别名也收),认不得 = 跟主会话。 */
+export function childThinkingLevel(raw: string): string | undefined {
+  const v = String(raw || '').trim();
+  if (!v) return undefined;
+  const a = normalizeThinkingLevel(v, 'off'), b = normalizeThinkingLevel(v, 'max');
+  return a === b && (THINKING_LEVELS as readonly string[]).includes(a) ? a : undefined;
+}
+
+/** 挪出去(hand_off_task):把这个会话手头没做完的任务挪成独立会话。主会话 → 挂它下面;子会话 → 挂同一个主会话下面(兄弟,守一层)。 */
+export async function handOffTask(p: {
+  fromId: string; userId: string; modelId: string; title: string; brief: string; remote?: RemoteInfo;
+  parentMessages?: any[]; inherit?: Record<string, unknown>; approvalCap?: CapMode;
+}): Promise<{ sessionId: string; runId: string; title: string; forked: boolean; parentId: string }> {
+  const [me] = await query<any[]>(`SELECT id, user_id, kind, parent_session_id, fork_message_id, title FROM chat_sessions WHERE id = ?`, [p.fromId]);
+  if (!me || me.user_id !== p.userId || me.kind !== 'user') throw new Error('This conversation cannot hand off tasks.');
+  const parentId = isChildRow(me) ? String(me.parent_session_id) : String(me.id);
+  const r = await startChildSession({
+    parentId, userId: p.userId, modelId: p.modelId, title: p.title, message: p.brief, remote: p.remote,
+    parentMessages: p.parentMessages, inherit: p.inherit, handoff: { fromId: String(me.id), fromTitle: String(me.title || '') }, approvalCap: p.approvalCap,
+  });
+  return { ...r, parentId };
+}
+
+/** 主会话此刻的转写 → 子会话的开头摘要(压缩检查点,through_timestamp=1:不覆盖任何一行,hydrateHistory 照样注入)。
+ *  handoff = 挪出去:那段对话里没做完的任务就是交给它接着做的(和普通 fork「只当背景、别接着做」相反)。 */
+/** 只给那一轮看的提示(「另起话题」的 <new_topic>,agentLoop.NEW_TOPIC_NOTE)不抄进 fork 种子:
+ *  种子当摘要永久留在子会话里,抄进去它以后每一轮都会读到「把手头的挪出去」(Codex 11-08)。 */
+const NEW_TOPIC_RE = /\s*<new_topic>[\s\S]*?<\/new_topic>/g;
+function stripTransientNotes(messages: any[]): any[] {
+  const clean = (t: string) => (t.includes('<new_topic>') ? t.replace(NEW_TOPIC_RE, '') : t);
+  return messages.map((m) => {
+    if (typeof m?.content === 'string') return m.content.includes('<new_topic>') ? { ...m, content: clean(m.content) } : m;
+    if (Array.isArray(m?.content)) {
+      return { ...m, content: m.content
+        .filter((x: any) => !(x?.type === 'text' && typeof x.text === 'string' && x.text.trim().startsWith('<new_topic>') && x.text.trim().endsWith('</new_topic>')))
+        .map((x: any) => (x?.type === 'text' && typeof x.text === 'string' ? { ...x, text: clean(x.text) } : x)) };
+    }
+    return m;
+  });
+}
+
+async function seedForkContext(childId: string, parentId: string, parentTitle: string, modelId: string, inFlight?: any[], handoff = false): Promise<boolean> {
+  const messages = stripTransientNotes(inFlight?.length ? inFlight : (await (await loop()).hydrateHistory(parentId, '', undefined, undefined, undefined, false)).messages);
   let model: any;
   try { model = (await deps().brain.llm.resolveModelAndKey(modelId))?.model; } catch { /* 窗口按 id 估 */ }
   const budget = Math.min(FORK_MAX_TOKENS, Math.floor(modelContextWindow(modelId, model) / 4));
   const { text } = buildTranscript(messages, { read: new Set(), modified: new Set() }, budget);
   if (!text.trim()) return false;
   const summary = [
-    '[Forked context — this is NOT work done in this session.] You are a child session. Below is the conversation of the session that started you, '
-      + 'up to the moment it started you, so you share its context. Treat it as background only: do not continue that conversation\'s own task or redo its work. '
-      + 'Your task is the brief in the first user message of this session.',
+    handoff
+      ? '[Handed-off context — this is NOT work done in this session.] The conversation below was working on a task when the user changed topic, '
+        + 'so the unfinished task was moved here to continue on its own. Continue it from where it stopped, as the brief in the first user message of this session says. '
+        + 'Do not redo work that is already done, and do not take up the user\'s newer, unrelated messages from that conversation — those are answered there.'
+      : '[Forked context — this is NOT work done in this session.] You are a child session. Below is the conversation of the session that started you, '
+        + 'up to the moment it started you, so you share its context. Treat it as background only: do not continue that conversation\'s own task or redo its work. '
+        + 'Your task is the brief in the first user message of this session.',
     '',
     `<parent_conversation title="${attr(parentTitle)}">`,
     text,
@@ -125,7 +206,7 @@ async function seedForkContext(childId: string, parentId: string, parentTitle: s
 }
 
 /** 主会话给自己的子会话再说一句(回答它的问题、补一个要求):子会话在跑就排在后面。 */
-export async function sendToChildSession(p: { parentId: string; userId: string; childId: string; message: string; remote?: RemoteInfo }): Promise<{ runId: string; queued: boolean; title: string }> {
+export async function sendToChildSession(p: { parentId: string; userId: string; childId: string; message: string; remote?: RemoteInfo; approvalCap?: CapMode }): Promise<{ runId: string; queued: boolean; title: string }> {
   const [child] = await query<any[]>(
     `SELECT id, user_id, app_id, kind, parent_session_id, fork_message_id, agent_config, model_id, title FROM chat_sessions WHERE id = ?`,
     [p.childId],
@@ -137,47 +218,88 @@ export async function sendToChildSession(p: { parentId: string; userId: string; 
   const queued = activeSessionIds().has(p.childId);
   const cfg = decode(child.agent_config);
   delete cfg.remoteOrigin; // 标记只在会话存值里,run 的污点是 input.remote
-  const runId = await queueFromParent({ sessionId: p.childId, userId: p.userId, appId: child.app_id, modelId: child.model_id || '', message: p.message, agentConfig: cfg, remote: p.remote });
+  const runId = await queueFromParent({ sessionId: p.childId, userId: p.userId, appId: child.app_id, modelId: child.model_id || '', message: p.message, agentConfig: cfg, remote: p.remote, approvalCap: p.approvalCap });
   return { runId, queued, title: String(child.title || '') };
 }
 
-type Rel = 'child' | 'parent' | 'sibling';
+type Rel = 'child' | 'parent' | 'sibling' | 'peer';
 const isChildRow = (r: any): boolean => !!r?.parent_session_id && !r?.fork_message_id;
 
-/** to 相对 from 是什么:from 的子会话 / from 的主会话 / 同一个主会话下的兄弟;别的(含分支、别人的会话)= null。 */
+/** to 相对 from 是什么:from 的子会话 / from 的主会话 / 同一个主会话下的兄弟 / 同一个用户的别的会话(peer);别人的会话、非 user 会话 = null。
+ *  peer 还要过 peerReachable(收得到的才算)。 */
 function relationOf(from: any, to: any): Rel | null {
   if (!from || !to || from.id === to.id || from.user_id !== to.user_id || from.kind !== 'user' || to.kind !== 'user') return null;
   if (isChildRow(to) && to.parent_session_id === from.id) return 'child';
   if (isChildRow(from) && from.parent_session_id === to.id) return 'parent';
   if (isChildRow(from) && isChildRow(to) && from.parent_session_id === to.parent_session_id) return 'sibling';
+  return 'peer';
+}
+
+/** 树外的会话收不收得到:已归档、Muse、外部引擎私聊(不跑 Tangu 的循环)、绑着通道的(回复会发到微信 / QQ 这类外部去)都不收。
+ *  通道绑定表读不出 = 不知道,按收不到(读失败 ≠ 空)。返回英文原因(工具原样回给模型),收得到返回 null。 */
+async function peerUnreachable(to: any): Promise<string | null> {
+  const cfg = decode(to.agent_config);
+  if (to.archived === true || to.archived === 1 || to.archived === '1') return 'That session is archived.';
+  if (cfg.soloEngineId || cfg.engineId) return 'That session runs an external engine and cannot receive session messages.';
+  if (cfg.agentSlug === MUSE_AGENT_SLUG || cfg.soloAgentSlug === MUSE_AGENT_SLUG) return 'Muse sessions cannot receive session messages.';
+  try {
+    const bound = await query<any[]>(`SELECT 1 FROM tangu_wechat_bindings WHERE session_id = ? AND is_active = TRUE LIMIT 1`, [String(to.id)]);
+    if (bound.length) return 'That session is connected to a messaging channel and cannot receive session messages.';
+  } catch {
+    return 'Could not check whether that session is connected to a messaging channel, so the message was not sent.';
+  }
   return null;
 }
 
-const SESSION_COLS = 'id, user_id, app_id, kind, parent_session_id, fork_message_id, agent_config, model_id, title';
+/** 审批档 → 上限档。custom(用户自己写的规则)说不准有多松 → 按最严(readonly);没设 = 本机缺省 auto-edit。 */
+function capOfMode(mode: string | undefined): CapMode {
+  return mode === 'readonly' || mode === 'auto-edit' || mode === 'full-auto' ? mode : mode === 'custom' ? 'readonly' : 'auto-edit';
+}
 
-/** 给同一棵树里的会话发一句(send_to_session):自己的子会话走 sendToChildSession(会回报);主会话 / 兄弟落成一条 <session_message> 并起一轮。
- *  toId 可写 "parent"。错误抛英文串(工具原样回给模型)。 */
-export async function sendSessionMessage(p: { fromId: string; userId: string; toId: string; message: string; remote?: RemoteInfo }): Promise<{ title: string; queued: boolean; rowOnly: boolean; relation: Rel }> {
+/** 钳过上限的子会话档:custom 的规则可能比上限松也可能更严,一律落成只读(最严),不丢 deny 也不越上限。 */
+function cappedMode(mode: unknown, cap: CapMode): string {
+  return mode === 'custom' ? 'readonly' : clampApprovalMode(typeof mode === 'string' ? mode : undefined, cap);
+}
+
+const SESSION_COLS = 'id, user_id, app_id, kind, parent_session_id, fork_message_id, agent_config, model_id, title, archived';
+
+/** 给会话发一句(send_to_session):自己的子会话走 sendToChildSession(会回报);主会话 / 兄弟 / 树外的会话落成一条 <session_message> 并起一轮。
+ *  toId 可写 "parent"。senderMode = 发方这一轮的审批档快照(读不到会话存档时用)。错误抛英文串(工具原样回给模型)。 */
+export async function sendSessionMessage(p: { fromId: string; userId: string; toId: string; message: string; remote?: RemoteInfo; senderMode?: string; senderCap?: CapMode }): Promise<{ title: string; queued: boolean; rowOnly: boolean; relation: Rel }> {
   const [from] = await query<any[]>(`SELECT ${SESSION_COLS} FROM chat_sessions WHERE id = ?`, [p.fromId]);
   const toId = p.toId === 'parent' && isChildRow(from) ? String(from.parent_session_id) : p.toId;
   const [to] = await query<any[]>(`SELECT ${SESSION_COLS} FROM chat_sessions WHERE id = ?`, [toId]);
   const relation = from && from.user_id === p.userId ? relationOf(from, to) : null;
   if (!relation) {
-    throw new Error('No such linked session. You can message your own child sessions, the session that started you ("parent"), and its other child sessions — see list_linked_sessions.');
+    throw new Error(p.toId === 'parent'
+      ? 'This session was not started by another session, so it has no "parent". Use a session id instead.'
+      : 'No such session. Use an id from start_session, a <child_sessions_update>, a <session_message>, list_linked_sessions or search_sessions.');
   }
   if (relation === 'child') {
-    const r = await sendToChildSession({ parentId: p.fromId, userId: p.userId, childId: toId, message: p.message, remote: p.remote });
+    const r = await sendToChildSession({ parentId: p.fromId, userId: p.userId, childId: toId, message: p.message, remote: p.remote, approvalCap: p.senderCap });
     return { title: r.title, queued: r.queued, rowOnly: false, relation };
   }
-  // 收方眼里发件人是谁:收方是主会话 → 发件人是它的子会话;兄弟 → 兄弟
-  const senderIs = relation === 'parent' ? 'child' : 'sibling';
+  if (relation === 'peer') {
+    const why = await peerUnreachable(to);
+    if (why) throw new Error(why);
+  }
+  // 收方眼里发件人是谁:收方是主会话 → 发件人是它的子会话;兄弟 → 兄弟;树外 → peer
+  const senderIs = relation === 'parent' ? 'child' : relation;
+  const who = senderIs === 'child' ? 'a child session you started'
+    : senderIs === 'sibling' ? 'a sibling session (another child of the session that started you)'
+      : `another of the user's sessions ("${String(from.title || '').replace(/"/g, "'")}"), outside your session tree`;
   const content = [
     `<session_message from="${attr(String(from.id))}" title="${attr(String(from.title || ''))}" relation="${senderIs}">`,
     p.message,
     '</session_message>',
-    `A message from ${senderIs === 'child' ? 'a child session you started' : 'a sibling session (another child of the session that started you)'}. `
+    `A message from ${who}. `
       + `It is not from the user. Act on it if it fits your task; if they need an answer, reply with send_to_session (session_id "${String(from.id)}"). Do not reply just to acknowledge.`,
   ].join('\n');
+  // 树外发来的那一轮:审批档不比发方松(发方被网页里的话骗去指挥一个完全放行的会话,也只能拿到发方自己的档)
+  // 发方这一轮自己被钳过(它也是被别的会话叫起来的,senderCap)→ 转发出去也不比它松,不能经第二跳放大(Codex 11-08)
+  const approvalCap = relation === 'peer'
+    ? minCapMode(capOfMode((await storedApprovalMode(p.fromId).catch(() => undefined)) || p.senderMode), p.senderCap)
+    : p.senderCap;
   const { activeSessionIds, enqueueRun } = await loop();
   const modelId = String(to.model_id || deps().profile.defaultModelId || '');
   const tainted = !p.remote && ((await sessionRemoteTainted(toId)) || (await sessionRemoteTainted(p.fromId)));
@@ -197,7 +319,10 @@ export async function sendSessionMessage(p: { fromId: string; userId: string; to
   const runId = uuidv4();
   await createRun({
     id: runId, sessionId: toId, userId: p.userId, appId: to.app_id, modelId, assistantMessageId: uuidv4(),
-    input: { message: content, userMessageId: uuidv4(), attachments: [], agentConfig: cfg, fromSession: { id: String(from.id), relation: senderIs }, ...(p.remote ? { remote: p.remote } : {}) },
+    input: {
+      message: content, userMessageId: uuidv4(), attachments: [], agentConfig: cfg, fromSession: { id: String(from.id), relation: senderIs },
+      ...(approvalCap ? { approvalCap } : {}), ...(p.remote ? { remote: p.remote } : {}),
+    },
   });
   enqueueRun(toId, runId);
   return { title: String(to.title || ''), queued, rowOnly: false, relation };
@@ -222,11 +347,12 @@ export async function listLinkedSessions(sessionId: string, userId: string): Pro
   return out;
 }
 
-async function queueFromParent(p: { sessionId: string; userId: string; appId: string; modelId: string; message: string; agentConfig: Record<string, unknown>; remote?: RemoteInfo }): Promise<string> {
+async function queueFromParent(p: { sessionId: string; userId: string; appId: string; modelId: string; message: string; agentConfig: Record<string, unknown>; remote?: RemoteInfo; handoff?: boolean; approvalCap?: CapMode }): Promise<string> {
   const runId = uuidv4();
   await createRun({
     id: runId, sessionId: p.sessionId, userId: p.userId, appId: p.appId, modelId: p.modelId, assistantMessageId: uuidv4(),
-    input: { message: p.message, userMessageId: uuidv4(), attachments: [], agentConfig: p.agentConfig, fromParent: true, ...(p.remote ? { remote: p.remote } : {}) },
+    // 挪出去那一轮不是 fromParent:用户只是在别处聊,它的 ask_user 照常挂起等用户,不短路给原会话(那边已经在聊别的)
+    input: { message: p.message, userMessageId: uuidv4(), attachments: [], agentConfig: p.agentConfig, ...(p.handoff ? { handoff: true } : { fromParent: true }), ...(p.remote ? { remote: p.remote } : {}), ...(p.approvalCap ? { approvalCap: p.approvalCap } : {}) },
   });
   (await loop()).enqueueRun(p.sessionId, runId);
   return runId;
@@ -237,8 +363,9 @@ async function queueFromParent(p: { sessionId: string; userId: string; appId: st
 export async function markAwaitingUser(sessionId: string, userId: string): Promise<boolean> {
   const { activeSessionIds } = await loop();
   const busy = activeSessionIds();
-  const kids = await query<any[]>(
-    `SELECT id, report_run_id FROM chat_sessions WHERE parent_session_id = ? AND user_id = ? AND kind = 'user' AND fork_message_id IS NULL`, [sessionId, userId]);
+  const kids = (await query<any[]>(
+    `SELECT id, report_run_id, agent_config FROM chat_sessions WHERE parent_session_id = ? AND user_id = ? AND kind = 'user' AND fork_message_id IS NULL`, [sessionId, userId]))
+    .filter((k) => !isHandoffRow(k)); // 挪出去的那条自己跑,不挡这边置「等你」
   if (kids.some((k: any) => busy.has(k.id) || k.report_run_id)) return false;
   await query(`UPDATE chat_sessions SET awaiting_user = TRUE WHERE id = ? AND user_id = ?`, [sessionId, userId]);
   return true;
@@ -247,8 +374,8 @@ export async function markAwaitingUser(sessionId: string, userId: string): Promi
 /** 每一轮开始:清「等你」;用户自己发的一轮 → 连续自动接着做的计数归零。 */
 export async function onRunStart(sessionId: string, input: any, runId: string): Promise<void> {
   if (!deps().profile.capabilities.hostExec) return; // 父子会话只在本机引擎(云端 thin worker 不直连库)
-  if (input?.origin === 'client' || input?.fromParent === true) autoRuns.delete(sessionId);
-  if (input?.fromParent === true) {
+  if (input?.origin === 'client' || input?.fromParent === true || input?.handoff === true) autoRuns.delete(sessionId);
+  if (input?.fromParent === true || input?.handoff === true) {
     await query(`UPDATE chat_sessions SET report_run_id = ? WHERE id = ? AND parent_session_id IS NOT NULL`, [runId, sessionId]);
   }
   await query(`UPDATE chat_sessions SET awaiting_user = FALSE WHERE id = ? AND awaiting_user = TRUE`, [sessionId]);
@@ -257,13 +384,53 @@ export async function onRunStart(sessionId: string, input: any, runId: string): 
 /** run 收尾(startRun 的 finally,终态已落库、会话队列已推进)。尽力而为:失败只记日志,绝不影响 run 收尾。 */
 export async function onRunSettled(runId: string): Promise<void> {
   if (!deps().profile.capabilities.hostExec) return;
+  clearRunApprovalCap(runId);
   const run = await getRun(runId);
   if (!run) return;
   const sid = String(run.session_id);
-  const input = decode(run.input);
-  const [s] = await query<any[]>(`SELECT kind, parent_session_id, fork_message_id FROM chat_sessions WHERE id = ?`, [sid]);
+  const [s] = await query<any[]>(`SELECT id, title, kind, parent_session_id, fork_message_id, agent_config, report_run_id FROM chat_sessions WHERE id = ?`, [sid]);
   if (!s || s.kind !== 'user') return;
+  if (isHandoffRow(s) && s.report_run_id) await deliverHandoffReport(s);
   await deliverChildReports(s.parent_session_id && !s.fork_message_id ? String(s.parent_session_id) : sid);
+}
+
+/** 挪出去的会话(hand_off_task 开的):存值带 handoffFrom。 */
+function isHandoffRow(r: any): boolean {
+  return !!decode(r?.agent_config).handoffFrom;
+}
+
+/** 挪出去的那条有了结果 → 原会话里留一行(<child_sessions_update>,界面照旧画成系统行),不起轮:原会话已经在聊别的。
+ *  挂起那一轮还没到终态就不送(下次收尾 / 重启再送);原会话没了 / 不是这个用户的,只清挂起。 */
+async function deliverHandoffReport(kid: any): Promise<void> {
+  const reportRun = String(kid.report_run_id);
+  const run = await getRun(reportRun);
+  if (run && !STATUS[String(run.status)]) return;
+  const target = String(decode(kid.agent_config).handoffFrom || '');
+  const [orig] = target ? await query<any[]>(`SELECT id, user_id, model_id, kind FROM chat_sessions WHERE id = ?`, [target]) : [];
+  const [me] = await query<any[]>(`SELECT user_id FROM chat_sessions WHERE id = ?`, [String(kid.id)]);
+  if (orig && orig.kind === 'user' && me && orig.user_id === me.user_id) {
+    const asked = peekChildQuestions(reportRun);
+    const status = run?.status === 'done' && asked.length ? 'waiting_for_user' : STATUS[String(run?.status)] || 'stopped';
+    const [msg] = run?.assistant_message_id ? await query<any[]>(`SELECT content FROM chat_messages WHERE id = ? LIMIT 1`, [run.assistant_message_id]) : [];
+    const text = String(msg?.content || run?.error || '').trim();
+    const excerpt = text.length > EXCERPT_CHARS ? `${text.slice(0, EXCERPT_CHARS)}… [truncated; read_session for the rest]` : text || '(no reply)';
+    const body = [
+      CHILD_UPDATE_OPEN,
+      'A task you handed off earlier (hand_off_task) has an update. It continues in its own session, which the user can open from their session list.',
+      `<child id="${attr(String(kid.id))}" title="${attr(String(kid.title || ''))}" status="${status}">\n${excerpt}\n</child>`,
+      'This conversation has moved on to other things: do not resume that task here. Mention it only if the user asks about it.',
+      CHILD_UPDATE_CLOSE,
+    ].join('\n');
+    // 行 id 由这次回报的 run 定:写完行、清 report_run_id 之前崩了,重启补发时认出已写过,不写第二行(Codex 11-08)
+    const msgId = uuidv5(`handoff-report:${reportRun}`, HANDOFF_REPORT_NS);
+    const [had] = await query<any[]>(`SELECT id FROM chat_messages WHERE id = ? LIMIT 1`, [msgId]);
+    if (!had) {
+      await deps().state.insertUserMessage({ id: msgId, sessionId: target, content: body, modelId: String(orig.model_id || deps().profile.defaultModelId || ''), attachments: null });
+      await query(`UPDATE chat_sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?`, [target]);
+    }
+  }
+  await query(`UPDATE chat_sessions SET report_run_id = NULL WHERE id = ? AND report_run_id = ?`, [String(kid.id), reportRun]);
+  clearChildQuestions(reportRun);
 }
 
 /** 最后一句以问号结尾(去掉收尾的空白 / 引号 / 括号 / markdown 记号)。 */
@@ -283,6 +450,8 @@ export async function markIfAsked(sessionId: string, userId: string, input: any,
 /** 引擎启动(recoverQueuedRuns 之后):上次退出 / 崩溃时没送出去的回报补成主会话里的一行(不起轮 —— 别一开 app 主会话就自己跑起来)。 */
 export async function deliverPendingChildReports(): Promise<void> {
   if (!deps().profile.capabilities.hostExec) return;
+  const handoffs = (await query<any[]>(`SELECT id, title, agent_config, report_run_id FROM chat_sessions WHERE report_run_id IS NOT NULL AND parent_session_id IS NOT NULL`)).filter(isHandoffRow);
+  for (const k of handoffs) await deliverHandoffReport(k).catch(() => {});
   const rows = await query<any[]>(`SELECT DISTINCT parent_session_id AS p FROM chat_sessions WHERE report_run_id IS NOT NULL AND parent_session_id IS NOT NULL`);
   for (const r of rows) await deliverChildReports(String(r.p), { rowOnly: true }).catch(() => {});
 }
@@ -302,10 +471,11 @@ async function deliverNow(parentId: string, opts: { rowOnly?: boolean }): Promis
   const { activeSessionIds, enqueueRun } = await loop();
   const busy = activeSessionIds();
   if (busy.has(parentId)) return; // 主会话在跑:等它这一轮收尾再送
-  const kids = await query<any[]>(
-    `SELECT id, title, awaiting_user, report_run_id FROM chat_sessions WHERE parent_session_id = ? AND kind = 'user' AND fork_message_id IS NULL`,
+  // 挪出去的那条(handoffFrom)不在这里送、也不等它:它只回原会话一行(deliverHandoffReport)
+  const kids = (await query<any[]>(
+    `SELECT id, title, awaiting_user, report_run_id, agent_config FROM chat_sessions WHERE parent_session_id = ? AND kind = 'user' AND fork_message_id IS NULL`,
     [parentId],
-  );
+  )).filter((k) => !isHandoffRow(k));
   if (!kids.length || kids.some((k) => busy.has(String(k.id)))) return; // 还有子会话在跑:等最后一个
   const [parent] = await query<any[]>(`SELECT id, user_id, app_id, model_id, agent_config, kind FROM chat_sessions WHERE id = ?`, [parentId]);
   if (!parent || parent.kind !== 'user') return;

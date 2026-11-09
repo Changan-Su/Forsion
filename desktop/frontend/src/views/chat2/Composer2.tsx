@@ -8,7 +8,7 @@ import { useModelPickerPreferences } from '../../modelPickerPreferences'
 import React, { useEffect, useId, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from 'react'
 import {
   ArrowUp, Square, Mic, X, ClipboardList, Check, ChevronDown, ChevronRight, Users, Sparkles,
-  Hand, ShieldCheck, ShieldAlert, Settings2, SlidersHorizontal, MessageSquare, Loader2, Clock, Zap, AudioLines, CircleAlert, type LucideIcon } from 'lucide-react'
+  Hand, ShieldCheck, ShieldAlert, Settings2, SlidersHorizontal, MessageSquare, Loader2, Clock, Zap, AudioLines, CircleAlert, CornerDownRight, Split, type LucideIcon } from 'lucide-react'
 import { joinVoiceText, useVoiceInput } from '../../hooks/useVoiceInput'
 import { CALL_TEXT_MAX, getCallPresence, onCallEvent, openCallLayer, sendTextToCall, subscribeCallPresence, useRealtimeConfig } from '../../services/realtimeCall'
 import { resolveRealtimeCall } from '../../services/realtimeModel'
@@ -18,7 +18,8 @@ import { THINKING_LEVELS } from '../../../../../tangu-agent/src/contracts/client
 
 // context 视图已知注入段 key(与引擎 agentLoop ctxMark 调用一一对应);未知 key 显示原样
 import type { AgentConfig, Attachment, CtxInfo, DefaultModelSlot, MessageRecord, ModelInfo, ModelsResponse, NormalAgentDef, SkillInfo } from '../../../../../tangu-agent/src/contracts/clientTypes'
-import { nativeHaptic, nativeSheetPresenter, openNativeSheetMenu, useEdgeNudge, useNativeChromeInstalled, useWorkspace, type SheetMenuItem, type SheetMenuSection } from '@lcl/engine'
+import { isMacPlatform, nativeHaptic, nativeSheetPresenter, openNativeSheetMenu, useEdgeNudge, useNativeChromeInstalled, useWorkspace, type SheetMenuItem, type SheetMenuSection } from '@lcl/engine'
+import { ContextMenu, type CtxMenu } from '../../components/RightPanel'
 import { ModelPill, contextRingWindow, type ModelPillGroup } from '../../components/ModelPill'
 import { UltraConfirmDialog, ultraConfirmSkipped } from './UltraConfirmDialog'
 import { registerMessages, useI18n } from '../../i18n'
@@ -86,6 +87,11 @@ registerMessages({
   'livecall.cloudOnly': { zh: '这个会话在你的电脑上，语音通话暂时只能在云端的会话里用', en: 'This session lives on your computer. For now, voice calls only work in cloud sessions' },
   'livecall.typeHint': { zh: '通话中：打的字会直接送进电话', en: 'In a call: typed messages go straight into the call' },
   'livecall.textFallback': { zh: '通话没接上，这条改发给 Tangu 了', en: 'The call did not pick this up, so it was sent to Tangu instead' },
+  // 运行中发送键的右键 / 长按菜单(方案「会话互通升级」11-08 P2-C):插话 = 并进这一轮;另起话题 = 手头的挪进子会话,这里答这句
+  'input.sendMenu.steer': { zh: '插话', en: 'Steer' },
+  'input.sendMenu.steerDesc': { zh: '并进手头的活，它会先答你再接着做', en: 'Folded into the current task; it answers you, then carries on' },
+  'input.sendMenu.newTopic': { zh: '另起话题', en: 'New topic' },
+  'input.sendMenu.newTopicDesc': { zh: '手头的挪到子会话接着做，这里答这句', en: 'The current task moves to a new session; this message is answered here' },
 })
 registerMessages({
   'input.modeSheetTitle': { zh: '模式', en: 'Mode' },
@@ -418,7 +424,8 @@ export const Composer2: React.FC<{
   onBranch?: () => void
   onOpenSettings?: () => void
   onExecConfigChange: (patch: Pick<AgentConfig, 'execMode' | 'approvalMode' | 'cwd'>) => void
-  onSend: (text: string, attachments: Attachment[], workspaceFiles?: Attachment[], skillIds?: string[], mentions?: { priorityAgent?: string; mentionAgents?: string[]; mentionProjects?: Array<{ name: string; path: string }> }) => Promise<boolean>
+  /** opts.newTopic:运行中按「另起话题」发(⌘/Ctrl+Enter 或发送键右键 / 长按菜单),宿主把它带进 steer 请求;没在跑时不会带。 */
+  onSend: (text: string, attachments: Attachment[], workspaceFiles?: Attachment[], skillIds?: string[], mentions?: { priorityAgent?: string; mentionAgents?: string[]; mentionProjects?: Array<{ name: string; path: string }> }, opts?: { newTopic?: boolean }) => Promise<boolean>
   /** 私聊会话(Agent 轨道):@ 候选池换成本机项目(派遣,方案 §5.4);给了非空数组即视为私聊。 */
   mentionProjects?: Array<{ name: string; path: string }>
   onStop: () => void
@@ -1385,8 +1392,9 @@ export const Composer2: React.FC<{
   /** 把一段行内引用整段删掉(退格 / Delete 挨着它时)。 */
   const removeRun = (start: number, end: number): void => spliceDraft(start, end, '')
 
-  /** override = 实时对话直接发的转写文本(不读也不清草稿)。返回这次发送的 promise(accepted);没发出去返回 undefined。 */
-  const sendMessage = (override?: string): Promise<boolean> | undefined => {
+  /** override = 实时对话直接发的转写文本(不读也不清草稿)。返回这次发送的 promise(accepted);没发出去返回 undefined。
+   *  opts.newTopic = 运行中「另起话题」(只在 running 时往下带;没在跑就是普通发送)。 */
+  const sendMessage = (override?: string, opts?: { newTopic?: boolean }): Promise<boolean> | undefined => {
     if (voiceActive && override === undefined) return
     // 行内引用段先换成 token 再 trim:段两头的边界空格属于空白字符,先 trim 会把开头 / 结尾那一段拆坏。
     // override(实时转写)不读草稿,草稿里的段不算。
@@ -1490,7 +1498,7 @@ export const Composer2: React.FC<{
       setDraft('')
       requestAnimationFrame(autoGrow)
       void expandCustomCommand(homeTarget(), name, args)
-        .then((expanded) => onSend(expanded, [], [], undefined, undefined))
+        .then((expanded) => onSend(expanded, [], [], undefined, undefined, running && opts?.newTopic ? { newTopic: true } : undefined))
         .catch((e: any) => setHint(String(e?.message || e)))
       return
     }
@@ -1534,7 +1542,7 @@ export const Composer2: React.FC<{
     const sentWs = wsFiles.filter((a) => !isLeaving(a))
     const toUpload = sentWs.filter((a) => !isInWorkspace(a)) // 已经传进工作区的不再传
     if (toUpload.length) setSendingFiles(toUpload)
-    return onSend(outgoing, [...sentAtts, ...elementImages(elements)], toUpload, pinnedSkills.map((s) => s.id), mentions).finally(() => setSendingFiles(null)).then((accepted) => {
+    return onSend(outgoing, [...sentAtts, ...elementImages(elements)], toUpload, pinnedSkills.map((s) => s.id), mentions, running && opts?.newTopic ? { newTopic: true } : undefined).finally(() => setSendingFiles(null)).then((accepted) => {
       if (accepted) release([...sentAtts, ...sentWs])
       if (!accepted) {
         dropSend(outgoing)
@@ -1562,6 +1570,47 @@ export const Composer2: React.FC<{
     })
   }
   const send = () => { void sendMessage() }
+  const sendNewTopic = () => { void sendMessage(undefined, { newTopic: true }) }
+  // 菜单项点下去时要用那一刻的 sendMessage(附件读完了、草稿改过了),不是开菜单那一刻闭包里的(Codex 11-08)
+  const sendLatest = useRef({ send, sendNewTopic })
+  sendLatest.current = { send, sendNewTopic }
+
+  // ── 运行中发送键:右键 / 长按(≥500ms)出「插话 / 另起话题」两项(11-08 P2-C)。菜单走共用的 ContextMenu(portal 到 body,
+  // 安卓有原生半屏宿主时自动换成原生菜单)。长按出了菜单,松手后跟来的那一下 click 不再发(否则菜单出来的同时已经插话了)。
+  const [sendMenu, setSendMenu] = useState<CtxMenu>(null)
+  const longPress = useRef<{ timer: number; fired: boolean }>({ timer: 0, fired: false })
+  const clearLongPress = (): void => { if (longPress.current.timer) { window.clearTimeout(longPress.current.timer); longPress.current.timer = 0 } }
+  useEffect(() => () => clearLongPress(), [])
+  useEffect(() => { if (!running) { clearLongPress(); setSendMenu(null) } }, [running])
+  const openSendMenu = (el: HTMLElement): void => {
+    if (disabled || uploadGate) return // 发送键灰着(附件在读 / 传)时不出菜单,同点击
+    const r = el.getBoundingClientRect()
+    setSendMenu({
+      x: r.right, y: r.bottom + 6, anchorTop: r.top - 6, prefer: 'above', alignEnd: true, className: 't2c-send-menu',
+      items: [
+        { label: t('input.sendMenu.steer'), detail: t('input.sendMenu.steerDesc'), icon: <CornerDownRight size={14} />, shortcut: '↵', run: () => sendLatest.current.send() },
+        { label: t('input.sendMenu.newTopic'), detail: t('input.sendMenu.newTopicDesc'), icon: <Split size={14} />, shortcut: isMacPlatform() ? '⌘↵' : 'Ctrl+↵', run: () => sendLatest.current.sendNewTopic() },
+      ],
+    })
+  }
+  const runningSendProps = {
+    // 只吞「长按出菜单后松手」跟来的那一下指针 click;键盘激活(detail === 0)照常发(Codex 11-08)
+    onClick: (e: React.MouseEvent<HTMLButtonElement>): void => {
+      const swallow = longPress.current.fired && e.detail !== 0
+      longPress.current.fired = false
+      if (!swallow) send()
+    },
+    // stopPropagation:触屏长按时计时器先开了菜单,随后的原生 contextmenu 冒到 window 会被菜单当「点外面」关掉(同一批更新里 null 胜出)
+    onContextMenu: (e: React.MouseEvent<HTMLButtonElement>): void => { e.preventDefault(); e.stopPropagation(); clearLongPress(); openSendMenu(e.currentTarget) },
+    onPointerDown: (e: React.PointerEvent<HTMLButtonElement>): void => {
+      longPress.current.fired = false
+      clearLongPress()
+      if (e.button !== 0) return
+      const el = e.currentTarget
+      longPress.current.timer = window.setTimeout(() => { longPress.current.timer = 0; longPress.current.fired = true; openSendMenu(el) }, 500)
+    },
+    onPointerUp: clearLongPress, onPointerLeave: clearLongPress, onPointerCancel: clearLongPress,
+  }
 
   const pickFiles = async (files: ArrayLike<File> | null) => {
     if (!files) return
@@ -1827,7 +1876,7 @@ export const Composer2: React.FC<{
   const submitKeys = running ? (
     <>
       {(!!draft.trim() || allRefChips.length > 0 || quotedNote || pastes.length > 0 || elements.length > 0) && (
-        <ChatBoxSubmit onClick={send} disabled={disabled || !!uploadGate} title={t('input.send')} aria-label={t('input.send')} />
+        <ChatBoxSubmit {...runningSendProps} disabled={disabled || !!uploadGate} title={t('input.send')} aria-label={t('input.send')} aria-haspopup="menu" />
       )}
       <button className="t2c-stop" onClick={onStop} title={t('input.stop')} aria-label={t('input.stop')}><Square size={10} /><span className="t2c-stop-label">{t('input.stop')}</span></button>
     </>
@@ -2103,7 +2152,8 @@ export const Composer2: React.FC<{
                 && draft.slice(e.currentTarget.selectionStart).indexOf('\n') === -1) {
                 e.preventDefault(); recallHistory(false); return
               }
-              if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send() }
+              // 运行中 ⌘/Ctrl+Enter = 另起话题(11-08);没在跑时 ⌘Enter 照旧就是发送
+              if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); if (running && (isMacPlatform() ? e.metaKey : e.ctrlKey)) sendNewTopic(); else send() }
             }}
           />
           <InlineRefMirror text={shownDraft} pending={pendingVoice} runs={inlineRuns} marks={tokenMarks} chipOf={(run) => runChips.get(run)} />
@@ -2394,6 +2444,7 @@ export const Composer2: React.FC<{
         })()}
         {previewQuote !== null && <QuotePreview text={previewQuote} note={noteOf(quoteNotes, previewQuote)} onNote={onQuoteNote ? (note) => onQuoteNote(previewQuote, note) : undefined} onClose={() => setPreviewQuote(null)} />}
       </div>
+      {sendMenu && <ContextMenu menu={sendMenu} onClose={() => setSendMenu(null)} autoFocus />}
       {rulesOpen && <ApprovalRulesModal cfg={liveCfg} onClose={() => setRulesOpen(false)} />}
       {ultraAsk && (
         <UltraConfirmDialog

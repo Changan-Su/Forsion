@@ -4,13 +4,15 @@
 // 这是笔记里的「划线条」:一行 = 本视图的工具(AI ▾、转换为、格式、颜色、对齐)+ 每个视图都有的动作区
 // (问 Tangu、翻译、⋯ 里的插件动作)。动作区的按钮是 @lcl/components 的 SelectionBarActions,和聊天、插件视图里那一条
 // 同一份;谁在前由设置 → 外观的「划线菜单」定(缺省工具在前)。
-import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
 import { AlignCenter, AlignLeft, AlignRight, Languages, MessageSquareQuote } from 'lucide-react'
 import { SelectionBarActions, type SelectionBarAction } from '@lcl/components'
+import { rectAnchor } from '@lcl/engine'
 import { OverlayAt } from '../../lib/clampMenu'
 import { registerMessages, useI18n } from '../../../i18n'
 import { selectionBarOrder } from '../../../selectionActions'
 import type { ToolbarShape } from './menuContext'
+import type { SelFollow } from './wikiAutocomplete'
 
 // ⚠️ 文案一律经组件内的 `t()` 求值(useI18n),**不要**换成模块级 `translate()`:
 // 表格是模块作用域,模块级求值会把文案冻在加载时的语言上,切语言不再更新。
@@ -170,6 +172,7 @@ export function InlineToolbar({
   onReturnFocus,
   onAsk,
   ai,
+  follow,
 }: {
   left: number
   /** 选区行上沿(视口 px) */
@@ -203,8 +206,13 @@ export function InlineToolbar({
   /** 正文 AI(评审 G3-07):宿主能做时才传;选中一项(id)交给宿主开预览面板。不传 = 这几样都不出。
    *  items = 「AI ▾」里的改写动作(本视图的工具);translate = 动作区出「翻译」(id 'translate');more = ⋯ 里的插件动作。 */
   ai?: { items: ToolbarAiItem[]; translate?: boolean; more?: ToolbarAiItem[]; onPick: (id: string) => void }
+  /** 跟着那段字走(划线菜单方案 B):有它就每帧按选区现量摆位(left / top / bottom / pane* 只当初值),滚出可见区只藏不收;
+   *  展开的面板往远离选区的一侧长,那一行不动。 */
+  follow?: SelFollow
 }) {
   const { t } = useI18n()
+  const anchor = useMemo(() => (follow ? rectAnchor(follow.owner, follow.rect) : null), [follow])
+  useEffect(() => () => anchor?.dispose(), [anchor])
   const [enterDir] = useState(dir)
   const [panel, setPanel] = useState<'color' | 'turn' | 'ai' | 'more' | null>(null)
   const rootRef = useRef<HTMLDivElement | null>(null)
@@ -304,7 +312,8 @@ export function InlineToolbar({
     // 摆位一律交给 OverlayAt:默认浮在选区上方,上面没地方才翻到下方(同 slash)。
     // ⚠️别改回「CSS transform: translate(-50%,-100%)」那套 —— pop-in 动画也动 transform,
     // 会把摆位覆盖掉 120ms:工具栏先出现在选区右下、动画结束才跳到文字上方(用户实报)。
-    <OverlayAt className="inline-toolbar" x={left} y={bottom + 8} anchorTop={top - 8} prefer="above" center boundLeft={paneLeft} boundRight={paneRight} role="toolbar" aria-label={t('itb.aria')} data-testid="inline-toolbar" data-dir={enterDir} data-order={actionsFirst ? 'actions' : 'tools'} innerRef={(el) => { rootRef.current = el }} onKeyDown={onNav}>
+    // 跟随(follow):锚点每帧现量;⋯ / AI ▾ / 转换为 / 颜色面板展开时 .itb-row 钉住不动,面板往远离选区的一侧长(data-grow)。
+    <OverlayAt className="inline-toolbar" x={left} y={bottom + 8} anchorTop={top - 8} prefer="above" center boundLeft={paneLeft} boundRight={paneRight} anchor={anchor} bounds={follow?.pane} keep=".itb-row" role="toolbar" aria-label={t('itb.aria')} data-testid="inline-toolbar" data-dir={enterDir} data-order={actionsFirst ? 'actions' : 'tools'} innerRef={(el) => { rootRef.current = el }} onKeyDown={onNav}>
       <div className="itb-row">
         {actionsFirst && actionZone && <>{actionZone}<span className="itb-sep" /></>}
         {ai && ai.items.length > 0 && (

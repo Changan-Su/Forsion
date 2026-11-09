@@ -7,7 +7,7 @@
  */
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { diffLines } from 'diff'
-import { ChevronRight, ChevronDown, XCircle, PauseCircle, Sparkles, FilePlus2, Pencil, Terminal, FileText, Search, Globe, Wrench, MessagesSquare, type LucideIcon } from 'lucide-react'
+import { ChevronRight, ChevronDown, XCircle, PauseCircle, Sparkles, FilePlus2, Pencil, Terminal, FileText, Search, Globe, Wrench, MessagesSquare, Split, type LucideIcon } from 'lucide-react'
 import { AnimatedCollapse } from './AnimatedUI'
 import { DiffView } from './DiffView'
 import { toolDiffText } from './toolDiff'
@@ -39,6 +39,9 @@ registerMessages({
   'tool.sumN': { zh: '{n} 个工具', en: '{n} tool calls' },
   'tool.verb.session': { zh: '子会话', en: 'Sub-session' },
   'tool.sum.sessions': { zh: '开了 {n} 个子会话', en: 'Started {n} sub-session(s)' },
+  // hand_off_task(11-08「另起话题」):把手头没做完的活挪进一个新会话接着做。摘要就是这一句(一轮里只会挪一次,不报个数)
+  'tool.verb.handoff': { zh: '挪到子会话', en: 'Moved to a new session' },
+  'tool.sum.handoff': { zh: '把手头的活挪到了子会话', en: 'Moved the unfinished task to a new session' },
   'tool.computerHistory.notSaved': {
     zh: '电脑历史摘录已交给模型，不会保存在对话记录里。',
     en: 'The computer history excerpt was passed to the model and isn’t saved in the conversation.',
@@ -58,7 +61,7 @@ function toolResultText(ev: ToolEvent, t: (key: string) => string): string {
 /** 这两个工具就是「问你」本身:调用挂着 = 在等你在托盘里答,不是在跑,别用流光装忙。 */
 const ASKS_YOU = new Set(['ask_user', 'exit_plan_mode'])
 
-type Kind = 'write' | 'edit' | 'run' | 'read' | 'search' | 'browse' | 'session' | 'other'
+type Kind = 'write' | 'edit' | 'run' | 'read' | 'search' | 'browse' | 'session' | 'handoff' | 'other'
 /** verbKey 空时 label 是现成的人话名字(MCP / 插件工具);两个都没有就退回原工具名。unowned = 插件名单里还没认出主人。 */
 interface Desc { kind: Kind; verbKey: string; label?: string; unowned?: boolean; target: string; adds?: number; dels?: number; isFile: boolean
   /** 写 / 改到的文件全路径:摘要按文件数算(同一个文件改三次只算一个),不按调用数。 */
@@ -185,6 +188,8 @@ export function describeTool(ev: ToolEvent, pluginName?: (tool: string) => strin
       return { kind: 'search', verbKey: 'tool.verb.searched', target: String(a.pattern ?? a.query ?? ''), isFile: false }
     case 'start_session':
       return { kind: 'session', verbKey: 'tool.verb.session', target: String(a.title ?? ''), isFile: false }
+    case 'hand_off_task':
+      return { kind: 'handoff', verbKey: 'tool.verb.handoff', target: String(a.title ?? ''), isFile: false }
     case 'web_search':
       return { kind: 'search', verbKey: 'tool.verb.searched', target: String(a.query ?? ''), isFile: false }
     case 'web_fetch':
@@ -226,7 +231,7 @@ const Stat: React.FC<{ d: Desc }> = ({ d }) =>
     </span>
   ) : null
 
-const KIND_ICON: Record<Kind, LucideIcon> = { write: FilePlus2, edit: Pencil, run: Terminal, read: FileText, search: Search, browse: Globe, session: MessagesSquare, other: Wrench }
+const KIND_ICON: Record<Kind, LucideIcon> = { write: FilePlus2, edit: Pencil, run: Terminal, read: FileText, search: Search, browse: Globe, session: MessagesSquare, handoff: Split, other: Wrench }
 
 /** 正在进行的那一步:三个小点(纯 CSS,减少动态效果时静止)。 */
 const Dots: React.FC = () => <span className="proc-dots" aria-hidden="true"><i /><i /><i /></span>
@@ -362,7 +367,7 @@ export const ToolGroup: React.FC<{
   const activeImageJobs = running ? events.filter((event) => (event.name === 'generate_image' || event.name === 'edit_image') && !event.done) : []
   const groupedEvents = activeImageJobs.length ? events.filter((event) => !activeImageJobs.includes(event)) : events
   const descs = groupedEvents.map((ev) => describeTool(ev, pluginName))
-  const counts = { write: 0, edit: 0, run: 0, read: 0, search: 0, browse: 0, session: 0, other: 0 } as Record<Kind, number>
+  const counts = { write: 0, edit: 0, run: 0, read: 0, search: 0, browse: 0, session: 0, handoff: 0, other: 0 } as Record<Kind, number>
   descs.forEach((d) => { counts[d.kind]++ })
   // 写 / 改按文件数(方案 A:同一个文件改了几次只算一个;先写后改的算在「写入」里),拿不到路径的照调用数
   const fileCounts = countFiles(descs)
@@ -370,15 +375,16 @@ export const ToolGroup: React.FC<{
   counts.edit = fileCounts.edit
   const SUM: Record<Kind, string> = {
     write: 'tool.sum.wrote', edit: 'tool.sum.edited', run: 'tool.sum.ran', read: 'tool.sum.read',
-    search: 'tool.sum.searched', browse: 'tool.sum.browsed', session: 'tool.sum.sessions', other: 'tool.sum.other',
+    search: 'tool.sum.searched', browse: 'tool.sum.browsed', session: 'tool.sum.sessions', handoff: 'tool.sum.handoff', other: 'tool.sum.other',
   }
-  const order: Kind[] = ['write', 'edit', 'run', 'read', 'search', 'browse', 'session', 'other']
+  const order: Kind[] = ['write', 'edit', 'run', 'read', 'search', 'browse', 'session', 'handoff', 'other']
   const thinking = !!running && !!thinkingProp && !!reasoning
   const thinkLabel = reasoning ? (thinking ? t('tool.thinkingNow') : thoughtLabel(t, reasoningMs)) : ''
   const summary = [...(thinking ? [] : [thinkLabel]), ...order.filter((k) => counts[k] > 0).map((k) => t(SUM[k], { n: counts[k] }))].filter(Boolean).join(' · ')
-  // 窄列的短摘要只报个数;整组都是开子会话时照样说「开了 N 个子会话」(那一句就是这组在干什么)
+  // 窄列的短摘要只报个数;整组都是开子会话 / 挪活时照样说那一句(「开了 N 个子会话」「把手头的活挪到了子会话」就是这组在干什么)
   const allSessions = groupedEvents.length > 0 && counts.session === groupedEvents.length
-  const shortSummary = [...(thinking ? [] : [thinkLabel]), groupedEvents.length ? t(allSessions ? 'tool.sum.sessions' : 'tool.sumN', { n: groupedEvents.length }) : ''].filter(Boolean).join(' · ') || thinkLabel
+  const allHandoff = groupedEvents.length > 0 && counts.handoff === groupedEvents.length
+  const shortSummary = [...(thinking ? [] : [thinkLabel]), groupedEvents.length ? t(allHandoff ? 'tool.sum.handoff' : allSessions ? 'tool.sum.sessions' : 'tool.sumN', { n: groupedEvents.length }) : ''].filter(Boolean).join(' · ') || thinkLabel
 
   // 挂起的 ask_user(托盘 run,10-23)已经有占位结果(done),仍在等你答 —— 它那一段可能已经收尾(切段),不看 running
   const asksYou = (e: ToolEvent): boolean => !!awaitingAnswer && ASKS_YOU.has(e.name) && (!!e.parked || (!!running && !e.done))

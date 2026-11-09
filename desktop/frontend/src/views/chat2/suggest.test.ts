@@ -334,3 +334,18 @@ describe('任务卡 skill 头', () => {
   })
 })
 
+
+describe('任务卡 model 头(11-08)', () => {
+  const card = (head: string) => splitSuggestions(`做好了\n\n\`\`\`forsion-task\ntitle: 做个插件\n${head}---\n做一个转写插件\n\`\`\``, { kinds: ['task'] }).tasks[0]
+  it('模型 id 或名字的一部分都收', () => {
+    expect(card('model: codex/gpt-6-luna\n').model).toBe('codex/gpt-6-luna')
+    expect(card('model: Kimi K3\n').model).toBe('Kimi K3')
+    expect(card('agent: coding\nmodel: kimi-k3\n')).toMatchObject({ agent: 'coding', model: 'kimi-k3', prompt: '做一个转写插件' })
+  })
+  it('写坏了只丢这个键,卡照出', () => {
+    expect(card('model: <script>\n').model).toBeUndefined()
+    expect(card(`model: ${'a'.repeat(81)}\n`).model).toBeUndefined()
+    expect(card('model: 模型\n').model).toBeUndefined()
+    expect(card('model:\n')).toEqual({ title: '做个插件', prompt: '做一个转写插件' })
+  })
+})

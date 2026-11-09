@@ -240,12 +240,20 @@ ctx.registerView({ id: 'reader', title: 'Reader', mount(el) {
 ```
 
 - By default the host watches the DOM selection inside the element you pass: the bar shows on mouse-up and goes
-  away when the selection collapses, the content scrolls or resizes, or the user clicks elsewhere. Selections in
-  `<input>` / `<textarea>` / `contenteditable` never show it.
+  away when the selection collapses, the user clicks elsewhere or presses Esc. Selections in `<input>` /
+  `<textarea>` / `contenteditable` never show it. On scroll, resize or zoom the bar (and a result card opened from
+  it) follows the text, hides while the text is off screen and comes back with it; behind another tab the
+  selection is lost so the bar closes, while an open result card hides until the view returns (2026-11-08+; older
+  hosts close it on scroll).
 - Content the host cannot see into (an `<iframe>`, a canvas, a PDF text layer you position yourself): pass
   `watch: false` and drive it — `bar.show({ text, rect })` with the selection's bounding box in **viewport pixels**
   (`range.getBoundingClientRect()` works as is; do not divide by zoom, the host compensates), `bar.hide()` when it
   is gone. `bar.update({ tools })` changes options on a live bar.
+- To make a reported selection follow the text, also pass `getRect` (optional, 2026-11-08+):
+  `bar.show({ text, rect, getRect: () => currentBoxOrNull })`. The host calls it whenever something may have moved
+  and places the bar and its result card against it; return `null` while the text is off screen (the bar hides and
+  returns with the next box). Cheap and side-effect free; a throw counts as `null`. Without it, `hide()` on scroll /
+  resize yourself. Older hosts ignore the field.
 - A tool is `{ id, title, icon?, color?, on?, run(sel) }`. `icon` is a name from the plugin icon vocabulary
   (`highlight` / `underline` / `strikethrough` / `annotate` / `copy` / `cite` were added for this; `edit`, `pin`,
   `bookmark`, `trash`… also work); `color` draws a round swatch instead. The host only draws the button — clear

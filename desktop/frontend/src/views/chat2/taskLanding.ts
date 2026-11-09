@@ -57,7 +57,7 @@ export async function runTaskCard(card: TaskCard, landing: TaskLanding, sessionI
   if (landing === 'child') {
     if (!sessionId) return false
     try {
-      const r = await startChildSession(targetForSession(sessionId), sessionId, { title: card.title, message: card.prompt, ...(card.agent ? { agent: card.agent } : {}) })
+      const r = await startChildSession(targetForSession(sessionId), sessionId, { title: card.title, message: card.prompt, ...(card.agent ? { agent: card.agent } : {}), ...(card.model ? { model: card.model } : {}) })
       await app.refreshSessions(app.cfg).catch(() => [])
       feedback(`${label} accepted: child session`)
       return { childId: r.sessionId }

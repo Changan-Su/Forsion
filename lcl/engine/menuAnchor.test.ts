@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { clampMenu, edgeNudge, fitAnchored, nestedPanelPlacement, nestedPanelTop } from './menuAnchor'
+import { clampMenu, edgeNudge, fitAnchored, keptPlacement, nestedPanelPlacement, nestedPanelTop } from './menuAnchor'
 
 // 视口 1000x800,菜单 200x300,margin 8
 describe('clampMenu', () => {
@@ -139,5 +139,20 @@ describe('fitAnchored(锚在元素上:翻面 + 按边封顶 maxHeight)', () => {
   it('横向:夹进窗口;alignEnd 右缘对齐锚点右缘', () => {
     expect(fitAnchored(at(100, 1150), 260, 100, 1200, 720).left).toBe(932)
     expect(fitAnchored(at(100, 900), 260, 100, 1200, 720, { alignEnd: true }).left).toBe(668)
+  })
+})
+
+// 划线条的 ⋯(划线菜单方案 B §7.5):钉住那一行,面板往远离选区的一侧长
+describe('keptPlacement', () => {
+  it('行在选区上方、上面放得下:整块往上长,行不动', () => {
+    // 行摆在 200..238(选区上沿 246,gap 8 → anchorTop 238),面板 104 高
+    expect(keptPlacement(200, 38, 104, 238)).toEqual({ top: 96, grow: 'up' })
+  })
+  it('行在选区上方、上面放不下面板:往下长(盖住选区),行照样不动', () => {
+    expect(keptPlacement(40, 38, 104, 78)).toEqual({ top: 40, grow: 'down' })
+  })
+  it('行被挤到选区下方:往下长', () => {
+    // 选区贴着顶,行翻到选区下方 300,anchorTop = 选区上沿 - gap = 280
+    expect(keptPlacement(300, 38, 104, 280)).toEqual({ top: 300, grow: 'down' })
   })
 })

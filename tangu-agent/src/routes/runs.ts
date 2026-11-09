@@ -465,6 +465,8 @@ router.post('/agent/runs/:id/steer', authMiddleware, async (req: AuthRequest, re
       id: userMessageId,
       content: message,
       attachments: Array.isArray(attachments) ? attachments : [],
+      // 「另起话题」(输入区 ⌘Enter / 发送键菜单):手头没做完的挪到独立会话,这句在这里答(agentLoop.NEW_TOPIC_NOTE)
+      ...(req.body?.newTopic === true ? { newTopic: true } : {}),
     });
     if (!ok) return res.status(409).json({ detail: 'run not active', reason: 'not_active' });
     // 远端 steer 本机 run:注入的文字从下一迭代起驱动它 → 染色,审批闸 / 路径策略 / 验证命令从此按远程钳制(C3)。

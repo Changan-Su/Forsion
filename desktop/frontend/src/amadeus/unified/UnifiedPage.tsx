@@ -60,7 +60,7 @@ import { findTextHit, unfoldToReveal } from './revealText'
 import { isLoneBlockId, trailingBlockId } from '@amadeus-shared/pdfLink'
 import { editorModeOf, useUiOverlay } from '../../amadeusOverlayStore'
 import { CanvasSegPortal, canvasModesSpec } from './CanvasModeSeg'
-import { useViewModes } from '@lcl/engine'
+import { rectAnchor, useViewModes } from '@lcl/engine'
 import { claimCanvasToggle, releaseCanvasToggle } from './canvasToggleCommand'
 import { track } from '../../achievements/store'
 import { AmadeusPropertiesPanel, PropsDraftFlushContext } from '../../amadeusProperties'
@@ -1950,6 +1950,27 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
     setAiPanel({ key: Date.now(), x: a.left, y: b.bottom + 6, top: a.top - 6, title, hasSelection: !cursor, askFirst: cursor || kind === 'custom', action, plugin, ...(kind === 'translate' ? { language: translateTargetOf(text) } : {}) })
   }
   aiSpaceRef.current = (view) => openAi(view, 'prompt')
+  /** 可写结果卡跟着目标那段字走(划线菜单方案 B,2026-11-08):目标区间随编辑映射(aiTargetOf),每帧按它现量;
+   *  滚出可见区 / 标签被换走时只藏不收。x / y / top 只当挂上那一刻的初值。 */
+  const aiPanelKey = aiPanel?.key
+  const aiAnchor = useMemo(() => {
+    const view = aiPanelKey === undefined ? null : layer.getView()
+    if (!view) return null
+    return rectAnchor(view.dom, () => {
+      if (view.isDestroyed) return null
+      const target = aiTargetOf(view)
+      if (!target) return null
+      const size = view.state.doc.content.size
+      try {
+        const a = view.coordsAtPos(Math.min(target.from, size))
+        const b = view.coordsAtPos(Math.min(target.to, size))
+        return { left: a.left, right: Math.max(a.left + 1, a.right), top: a.top, bottom: Math.max(a.bottom, b.bottom) }
+      } catch {
+        return null
+      }
+    })
+  }, [aiPanelKey, layer])
+  useEffect(() => () => aiAnchor?.dispose(), [aiAnchor])
   /** 面板的请求:内置动作走引擎 /agent/inline;插件项走它自己的 run(结果同样只进预览)。目标区间现读(随编辑映射)。 */
   const runAi = (panel: NonNullable<typeof aiPanel>): InlineAiRun => async (instruction, onDelta, signal) => {
     const view = layer.getView()
@@ -3589,6 +3610,7 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
             x={aiPanel.x}
             y={aiPanel.y}
             anchorTop={aiPanel.top}
+            anchor={aiAnchor}
             title={aiPanel.title}
             hasSelection={aiPanel.hasSelection}
             askFirst={aiPanel.askFirst}

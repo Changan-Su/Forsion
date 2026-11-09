@@ -22,7 +22,7 @@ import { isOutsideWorkspace, writableRoots, protectedLocalWrite, protectedRemote
 import { credentialPaths, credentialReadTarget, pathWithin, canonicalFuturePath, procTreeTouched, pluginSettingsTreeTouched } from '../sandbox/hostSandboxProtection.js';
 import { gitDiscovery, repoGitPrograms, type GitDiscovery } from './gitRepoPrograms.js';
 import { hostSandboxBackend } from '../sandbox/hostSandbox.js';
-import { clampApprovalMode, effectiveRemote, remoteApprovalCap, remoteApprovalPayload, remoteManagementDenied, type CapMode, type RemoteInfo } from './remoteOrigin.js';
+import { clampApprovalMode, effectiveRemote, minCapMode, remoteApprovalCap, remoteApprovalPayload, remoteManagementDenied, type CapMode, type RemoteInfo } from './remoteOrigin.js';
 import { WRITE_TOOLS, writeTargetsOf } from '../tools/writeTargets.js';
 import type { ToolCall } from '../core/types.js';
 import { runHooks } from '../hooks/index.js';
@@ -910,6 +910,13 @@ export function isKnownSafeBash(
 
 /** 会话此刻存着的审批档(输入区切档 = PUT 进 agent_config)。没存 → undefined;**读失败照抛**(调用方自己决定兜底方向)。
  *  存了个不认识的非空值 → readonly(H5):从前当「没存」,回落到可能更宽的启动快照。 */
+/** 单个 run 的审批档上限(远程污点之外的另一种):树外会话发来的消息起的那一轮 = 发方的档(services/childSessions.ts sendSessionMessage)。
+ *  agentLoop 起跑时登记、childSessions.onRunSettled 收尾时清;审批闸与远程上限取较严的那个。 */
+const runApprovalCaps = new Map<string, CapMode>();
+export function setRunApprovalCap(runId: string, cap: CapMode): void { runApprovalCaps.set(runId, cap); }
+export function clearRunApprovalCap(runId: string): void { runApprovalCaps.delete(runId); }
+export function runApprovalCap(runId: string): CapMode | undefined { return runApprovalCaps.get(runId); }
+
 export async function storedApprovalMode(sessionId: string): Promise<ApprovalMode | undefined> {
   const raw = await deps().state.getAgentConfig(sessionId);
   const mode = (typeof raw === 'string' ? JSON.parse(raw) : raw)?.approvalMode;
@@ -1190,7 +1197,7 @@ export async function gateToolCall(
   const mgmtDenied = remote ? remoteManagementDenied(name, parseCallArgs(call).action) : null;
   if (mgmtDenied) return { action: 'reject', rejectReason: mgmtDenied };
   // host 模式全部过闸;非 host 仅 MCP 工具过闸(本地形态的 sandbox 会话也可能挂 MCP)。
-  const cap: CapMode | undefined = remote ? remoteApprovalCap() : undefined;
+  const cap: CapMode | undefined = minCapMode(remote ? remoteApprovalCap() : undefined, runApprovalCaps.get(runId));
 
   // 契约 C4 · 保护路径写入(凭据 + ~/.forsion(-dev) 配置):远程污点 → 硬拒(不进审批 —— 按 D1 会被推到远端批,
   // 与「只在本机」矛盾;不依赖宿主沙箱);本机 → 每次都问人(完全通行 / 总允许 / custom allow / hook allow 都不放行);
@@ -1267,7 +1274,7 @@ export async function gateToolCall(
   const escalate = ctx.execMode === 'host' && mode !== 'full-auto' && writeEscalationNeeded(call, escCtx);
   if (escalate) logEscalation(runId, call, escCtx);
 
-  if (allowRule && !protectedAsk && !alwaysAsk && !(cap && remote && (await capWouldAsk(call, cap, ctx, remote))) && (!escalate || allowRuleCoversWrites(allowRule, call, ctx.cwd))) return { action: 'approve' };
+  if (allowRule && !protectedAsk && !alwaysAsk && !(cap && (await capWouldAsk(call, cap, ctx, remote))) && (!escalate || allowRuleCoversWrites(allowRule, call, ctx.cwd))) return { action: 'approve' };
   // known-safe 只读 bash:免审批(碰凭据文件的不算 known-safe,见 isKnownSafeBash)。
   if (!forceAsk && !alwaysAsk && name === 'run_bash' && isKnownSafeBash(bashCommandOf(call), ctx.cwd)) {
     // known-safe git 读的是仓库里可被改写的配置:没人看过卡,就在写拒绝 profile 里跑(G5 方案 B;其余 known-safe 程序不读仓库配置,不包)。
@@ -1292,7 +1299,8 @@ export async function gateToolCall(
     if (!toolNeedsApproval(name, mode, { userBrowser, widgetWrite: widgetWrite(call) })) return { action: 'approve' };
     // 改参重闸不走「总允许」捷径:同会话另一张卡刚点了总允许,也不能让这次改过的参数跳过下面的 hook(Codex 09-27 复审)。
     // 远程污点 run 也不走:本机在这个会话里点过的「总允许 run_bash」会让远程 run 越过上限档(C3)。
-    if (!editedOnCard && !remote && isAlwaysAllowed(ctx.sessionId, name)) return { action: 'approve' };
+    // 会话互发起的那一轮带了上限档(runApprovalCaps):上限档要问的,本会话以前点过的「总允许」也不代答(Codex 11-08)。
+    if (!editedOnCard && !remote && isAlwaysAllowed(ctx.sessionId, name) && !(cap && (await capWouldAsk(call, cap, ctx, remote)))) return { action: 'approve' };
   }
 
   // —— PermissionRequest hook：在弹审批 UI 前问 hook（host-only）。deny → 拒绝；allow → 跳过用户审批直接放行。——
@@ -1310,7 +1318,7 @@ export async function gateToolCall(
   // 诚实性:这是 hook 挡的,不是用户拒的 —— 不写清楚,模型和用户都会以为「用户拒绝了该操作」
   if (permV.block) return { action: 'reject', rejectReason: 'Denied by a PermissionRequest hook.' };
   // hook 的 allow 对远程污点 run 同样不越过上限档(C3):上限档本身要问的,hook 也不代答;block 照常生效。
-  if (permV.allow && !protectedAsk && !alwaysAsk && !(cap && remote && (await capWouldAsk(call, cap, escCtx, remote)))) return { action: 'approve' };
+  if (permV.allow && !protectedAsk && !alwaysAsk && !(cap && (await capWouldAsk(call, cap, escCtx, remote)))) return { action: 'approve' };
   // 改参重闸:「这个档位下这个工具要不要问」刚在审批卡上被答过(批准者就是在那张卡上改的参数),不问第二遍 ——
   // 否则桌面 / TUI 改完 bash 命令还得再批一次。越界写与 custom ask 规则看的是**参数**,照新参数重问(上面的 deny 规则与 hook 也已按新参数判过)。
   if (editedOnCard && !escalate && !forceAsk && !protectedAsk) return { action: 'approve' };
@@ -1381,12 +1389,12 @@ async function gitPreview(call: ToolCall, cwd: string | undefined, profile: AppP
   return approvalPreview(call, { profile });
 }
 
-/** 这次调用若按上限档 cap 判,需不需要问人(custom 的 allow 规则对远程污点 run 不许越过它)。 */
+/** 这次调用若按上限档 cap 判,需不需要问人(custom 的 allow 规则对远程污点 run / 树外会话消息那一轮不许越过它)。 */
 async function capWouldAsk(
   call: ToolCall,
   cap: CapMode,
   ctx: { sessionId?: string; execMode?: string; cwd?: string; extraRoots?: string[]; approvalDeferral?: 'queue' | 'agent' },
-  remote: RemoteInfo,
+  remote: RemoteInfo | undefined, // 没有 = 会话消息上限(跨树互发):同样不让 custom allow 越过上限,额外可写根也不认
 ): Promise<boolean> {
   if (cap === 'full-auto') return false;
   const name = call.function.name;
