@@ -16,8 +16,9 @@ export type HomePart = 'clock' | 'composer' | 'row' | 'dock'
 export const HOME_PARTS: readonly HomePart[] = ['clock', 'composer', 'row', 'dock']
 export const REMOVABLE_PARTS: readonly HomePart[] = ['clock', 'dock']
 export const STATUS_CARD = 'builtin:status'
-/** 宿主内置的四张(数据就在宿主里):卜算子·建议 / 收件箱 / 最近笔记 / 最近对话。 */
-export const BUILTIN_WIDGETS = ['builtin:muse', 'builtin:inbox', 'builtin:notes', 'builtin:sessions'] as const
+/** 宿主内置的(数据就在宿主里):卜算子·建议 / 收件箱 / 最近笔记 / 最近对话,
+ *  以及 Muse Space 简报格子里的待你看的 / 在跟的(11-08 方案 D:同一份数据也能放到主页)。 */
+export const BUILTIN_WIDGETS = ['builtin:muse', 'builtin:inbox', 'builtin:notes', 'builtin:sessions', 'builtin:museTodos', 'builtin:museTracking'] as const
 export type BuiltinWidget = (typeof BUILTIN_WIDGETS)[number]
 export const MUSE_CARD: BuiltinWidget = 'builtin:muse'
 export const SESSIONS_CARD: BuiltinWidget = 'builtin:sessions'

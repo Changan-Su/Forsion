@@ -340,6 +340,8 @@ export const CLASSIFICATION = {
   'GET /agent/special/muse/status': [A, 'Muse status; remote callers get the fields the Muse view / Space read, no absolute paths, budgets or last error (P1-M1A projection)'],
   'POST /agent/special/muse/wake': ['deny-remote', 'starts a Muse round now (spends the background budget); the engine refuses remote origins too'],
   'GET /agent/special/muse/rounds': ['deny-remote', 'recent Muse rounds with raw run errors; local panel only, the route refuses remote origins too'],
+  'GET /agent/special/muse/space': [D, "Muse Today's brief layout; returns the Library's absolute path and reads local files; the route refuses remote origins too"],
+  'POST /agent/special/muse/space/placement': [D, "rearranges the user's Muse Space (writes local layout state); the route refuses remote origins too"],
   'GET /agent/special/muse/triggers': [A, 'Muse triggers'],
   'DELETE /agent/special/muse/triggers/:id': [D, 'Muse trigger config'],
   'POST /agent/special/muse/triggers': [D, 'creates persistent follow-up execution (design appendix C)'],

@@ -142,10 +142,10 @@
  *   npm run live:harness -- --only ruleobserve --muse-mode auto  # 规则观察(10-31):真引擎命中只记账不起 run;Muse 自建的动作规则缺省观察(改观察分支 / manage_automation 后跑)
  *   npm run live:harness -- --only muserule                 # Muse 提规则卡(10-30):ask 档发卡不写规则,点「好」才建(改 Muse 的 manage_automation / 规则卡后跑)
  *   npm run live:harness -- --only muselogdm                # 到期日程撞上 LOG 里的活(10-31):私聊存下的交代,第一个周期就得办。要新 home,和别的 Muse 场景分开跑(改周期提示词 / 日程文案后跑)
- *   npm run live:harness -- --only muselogspace             # 同上,换成 Space 报错回写的 [feedback]
  *   npm run live:harness -- --only muserulechat             # 私聊直说规则(10-31):Muse 当场建好,不经过周期(改 museChatSection / manage_automation 后跑)
  *   npm run live:harness -- --only musechat                 # 手聊 Muse(10-13):私聊里用平常话交代「以后别…」→ 须落进 Muse 自己的记忆 / 当天日志(下个周期是新会话,读不到这段对话);
- *                                                           #   再问它后台做了什么 → 记下它读没读自己的日志。改 museChatSection / 私聊绑定后跑;对照 = 没有聊天段的构建(--kind base)
+ *                                                           #   再问它后台做了什么 → 记下它读没读自己的日志;再让它改今日简报那句话(两轮)→ GET /muse/space 的 hero 跟着变、Space 里不出 main.js(11-08)。
+ *                                                           #   改 museChatSection / 私聊绑定 / muse_space 后跑;对照 = 没有聊天段的构建(--kind base)
  *   npm run live:harness -- --only computerhistory          # 电脑历史(09-27):播事件+state.json+桌面配置(第二道闸)→ 默认聊天问「我休息之前在做什么?」须调 read_computer_history 答中文档与 PR;
  *                                                           #   负对照**在正例之后**跑(state.json 关 → 工具不在、不编造,且跨会话召回不把正例答案注进来);
  *                                                           #   第三腿开 Muse 等一个周期,核摘要注入(日志)且 agent_runs.input 里没有它。改工具 / 门禁 / 召回 / Muse 摘要后跑
@@ -413,7 +413,7 @@ KEYS.push('marketplace', 'marketplacechat');
 OPT_IN.add('musesettings'); KEYS.push('musesettings'); // 两个 run:私聊说一句改设置 → 出卡不写配置、点了才写,权限档不出卡;动 propose_muse_settings 时跑
 OPT_IN.add('muserule'); KEYS.push('muserule'); // 一个 Muse 周期;只在动 Muse 的 manage_automation(规则卡)时才有信息量
 OPT_IN.add('ruleobserve'); KEYS.push('ruleobserve'); // 一个 Muse 周期(--muse-mode auto):真引擎命中只记账不起 run;Muse 自建的动作规则缺省观察并如实告诉用户
-OPT_IN.add('muselogdm'); KEYS.push('muselogdm'); OPT_IN.add('muselogspace'); KEYS.push('muselogspace'); // 各一个 Muse 周期:第一个周期必撞每周装备巡检,看 LOG 里的活有没有被挤掉;动周期提示词 / 日程文案时跑
+OPT_IN.add('muselogdm'); KEYS.push('muselogdm'); // 一个 Muse 周期(muselogspace 11-08 退场:Space 不再装载 main.js,没有报错回写这条来路):第一个周期必撞每周装备巡检,看 LOG 里的活有没有被挤掉;动周期提示词 / 日程文案时跑
 OPT_IN.add('muserulechat'); KEYS.push('muserulechat'); // 一个私聊 run:直说规则当场建好,不经过周期
 OPT_IN.add('pluginaware'); KEYS.push('pluginaware'); // 四个 run + 假云端的商店;只在动 PLUGIN_AWARENESS_SECTION(解决需求时想到插件)时才有信息量
 KEYS.push('pluginext');
@@ -1502,14 +1502,6 @@ const appendUserActivity = (d = new Date(), what = 'note.edit f="Notes/harness.m
 };
 const hhmm = (ms) => { const d = new Date(Number(ms)); return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`; };
 const museLogTail = () => { try { return readFileSync(engineLog, 'utf8').split('\n').filter((l) => l.includes('[muse]')).slice(-6).join(' ⏎ '); } catch { return ''; } };
-/** Muse 自建 Space 能不能被桌面装出 home(判定口径与仪器本体见 scripts/muse-space-verdict.mjs)。放进**子进程**:插件代码里
- *  没人接的 async 报错会直接打死所在进程(Codex 09-27 实测),不能让它打死整个台架。 */
-async function museSpaceVerdict(dir, appVersion) {
-  try {
-    const { stdout } = await promisify(execFile)(process.execPath, [join(root, 'scripts', 'muse-space-verdict.mjs'), dir, appVersion || ''], { timeout: 20_000 });
-    return JSON.parse(stdout.trim().split('\n').pop());
-  } catch (e) { return { built: true, ok: false, text: `判定子进程失败:${String(e?.message || e).slice(0, 160)}` }; }
-}
 /** 直接读隔离 state.db 的压缩检查点(只读打开,引擎同时写着也安全);没有 HTTP 面,只能这么核。 */
 const summariesOf = async (sessionId) => {
   const { default: Database } = await import('better-sqlite3');
@@ -1542,6 +1534,25 @@ const museSkillLoads = async () => {
   try {
     return db.prepare(`SELECT COUNT(*) AS n FROM agent_run_events e JOIN agent_runs r ON r.id = e.run_id JOIN chat_sessions s ON s.id = r.session_id
       WHERE s.kind = 'muse' AND e.type = 'tool_call' AND json_extract(e.payload, '$.name') = 'use_skill' AND e.payload LIKE '%forsion-plugin%'`).get().n;
+  } finally { db.close(); }
+};
+/** Muse 周期里碰 Space 的工具调用(11-08 今日简报):muse_space 的每次调用(参数 + 结果),以及直接拿文件工具读写 Space 目录的。
+ *  按 run 先后排;结果按 tool_call id 配对。只读打开,引擎同时写着也安全。 */
+const museSpaceCalls = async () => {
+  const { default: Database } = await import('better-sqlite3');
+  const db = new Database(join(home, 'state.db'), { readonly: true, fileMustExist: true });
+  try {
+    const rows = db.prepare(`SELECT e.run_id AS run, e.type AS type, e.payload AS p FROM agent_run_events e JOIN agent_runs r ON r.id = e.run_id JOIN chat_sessions s ON s.id = r.session_id
+      WHERE s.kind = 'muse' AND e.type IN ('tool_call', 'tool_result') ORDER BY r.created_at, e.rowid`).all();
+    const calls = new Map();
+    for (const x of rows) {
+      let p; try { p = JSON.parse(x.p); } catch { continue; }
+      const args = String(p.arguments ?? '');
+      const touchesSpace = p.name === 'muse_space' || (/^(read_file|write_file|edit_file|multi_edit|apply_patch)$/.test(p.name || '') && /[\\/]Space[\\/]/.test(args));
+      if (x.type === 'tool_call' && touchesSpace) calls.set(p.id, { run: x.run, name: p.name, args, result: '' });
+      else if (x.type === 'tool_result' && calls.has(p.id)) calls.get(p.id).result = String(p.result ?? '');
+    }
+    return [...calls.values()];
   } finally { db.close(); }
 };
 /** 某个 run 落库时的思考档(input.agentConfig.thinkingLevel);realtime 场景核「通话中换档」用。 */
@@ -5460,6 +5471,22 @@ Then reply with only the command output.`,
     const lsid = `L${tag}-live-muse-local`;
     const seedR = await run(rsid, `${rmark} is my project codename; keep it in mind. Reply with just OK.`, 120_000, {}, 'mobile/live-harness', undefined, { 'x-forsion-remote': 'tunnel' });
     const seedL = await run(lsid, `MUSELOCAL${tag} is my other codename. Reply with just OK.`, 120_000);
+    // 今日简报(11-08,方案 D 第一期):开 Muse 之前摆好一个「老用户」的 Space ——
+    //   用户的摆放里有一条墓碑 focus-week(他拒过这张卡),卜算子那份里还挂着同一个 key 的陈旧提议(rev 1);
+    //   Space 目录里留着一份旧的 main.js + manifest.json(升级前它自己写的插件,现在不再加载)。
+    // 判:周期里经 muse_space 交了布局(space.json rev > 1、有一次成功的 update)、墓碑里的 key 没被加回来(原文件与合成都没有)、
+    //   升级提示只进周期 1 的简报。只记:Space 读写字节数、有没有试着再提 focus-week(工具会拒)、main.js 动没动。
+    const TOMB = 'focus-week';
+    const spaceDir = join(home, 'agents', 'muse', 'Space');
+    const docFile = join(spaceDir, 'space.json');
+    if (!(await until(() => existsSync(join(home, 'agents', 'muse', 'config.toml')), 30_000, 500))) return { ok: false, detail: '30s 内没播种出 Muse' };
+    mkdirSync(spaceDir, { recursive: true }); mkdirSync(join(home, 'ui'), { recursive: true });
+    const dayAgo = new Date(Date.now() - 86_400_000).toISOString();
+    writeFileSync(join(home, 'ui', 'muse-space.json'), JSON.stringify({ schemaVersion: 1, rev: 1, order: null, hidden: [], added: [], tombstones: [{ key: TOMB, at: dayAgo }] }));
+    writeFileSync(docFile, JSON.stringify({ schemaVersion: 1, rev: 1, template: 'brief', hero: null, prepared: [], proposed: [{ key: TOMB, ref: { widgetId: 'w_31aa0f0e0d0c' }, why: 'Most of your week went to one project', at: dayAgo }] }));
+    const oldMain = "ctx.registerView({ id: 'home', title: 'Muse', mount(el) { el.textContent = 'Muse v1.5 — status: ok' } })\n";
+    writeFileSync(join(spaceDir, 'manifest.json'), JSON.stringify({ id: 'agent-muse', name: 'Muse', version: '1.5.14', main: 'main.js' }));
+    writeFileSync(join(spaceDir, 'main.js'), oldMain);
     await api('/agent/special/config', { method: 'POST', body: JSON.stringify({ muse: { enabled: true, modelId: MODEL, mode: MUSE_MODE, heartbeatMinutes: 1, supervisorPollMinutes: 1, maxIterationsPerCycle: 12, maxRestartsPerWindow: 3, allowedFolders: [workspace], notify: 'immediate' } }) });
     const status = () => api('/agent/special/muse/status').then((s) => (s && typeof s.status === 'object' ? s.status : s)); // 路由包一层 {status}
     const started = await until(async () => { const s = await status(); return s.running || s.lastCycleAt ? s : null; }, 120_000, 3000);
@@ -5512,23 +5539,31 @@ Then reply with only the command output.`,
     if (sid) { const list = asList(await api(`/agent/sessions/${sid}/messages`).catch(() => []), 'messages'); museSays = list.filter((m) => m.role === 'assistant' || m.role === 'model').map((m) => String(m.content || '')).join('\n---\n'); }
     const blockedBy = blocked();
     const twoCycles = advanced(second) && !blockedBy;
-    // Space 判定**只记不判**:它是 Node 里对渲染进程的近似,两向都可能有偏差,不该把一个真跑通的模型场景判红;
-    // 看 detail 里的「Space …」跨次比对即可(⚠️ = 判定为装不出 home,拿 scripts/muse-space-verdict.mjs 复核)。没写不算错。
-    const space = await museSpaceVerdict(join(home, 'agents', 'muse', 'Space'), health?.version);
-    // 只记不判(09-27):Space 有没有改用 ctx.agent 从数据渲染、这两个周期加载了几次 84KB 的插件技能
-    const spaceUsesAgent = (() => { try { return /ctx\.agent\./.test(readFileSync(join(home, 'agents', 'muse', 'Space', 'main.js'), 'utf8')); } catch { return false; } })();
+    // 今日简报(11-08):旧的 main.js 判定(muse-space-verdict / ctx.agent / CSS 变量)退场 —— main.js 不再加载。
+    // 只记不判(09-27 起):这两个周期加载了几次 forsion-plugin 技能(现在 Space 用不着它,应为 0)。
     const skillLoads = await museSkillLoads().catch(() => '?');
-    // 只记不判(09-27 dev):Space 用了宿主没有的 CSS 变量 → 落到它写死的兜底色(dev 上猜了 --panel,浅色主题下卡片标题看不见)。
-    // 宿主词表 = desktop styles/base.css 里 **:root 块**(含 :root.dark / html:root[data-mode=…])定义的 token(DESIGN §2:缺省 + 首帧兜底);
-    // 只在局部选择器上定义的(如弹窗的 --modal-w)插件视图拿不到,不算
-    const unknownVars = (() => {
-      try {
-        const code = readFileSync(join(home, 'agents', 'muse', 'Space', 'main.js'), 'utf8');
-        const hostCss = readFileSync(join(root, '..', 'desktop', 'frontend', 'src', 'styles', 'base.css'), 'utf8');
-        const host = new Set([...hostCss.matchAll(/[^{}]*:root[^{}]*\{([^{}]*)\}/g)].flatMap((b) => [...b[1].matchAll(/(--[\w-]+)\s*:/g)].map((m) => m[1])));
-        return [...new Set([...code.matchAll(/var\(\s*(--[\w-]+)/g)].map((m) => m[1]))].filter((v) => !host.has(v));
-      } catch { return null; }
-    })();
+    const spaceCalls = await museSpaceCalls().catch(() => []);
+    const msCalls = spaceCalls.filter((c) => c.name === 'muse_space');
+    const actionOf = (c) => { try { return JSON.parse(c.args).action; } catch { return '?'; } };
+    const updatesOk = msCalls.filter((c) => actionOf(c) === 'update' && /^Saved your layout/.test(c.result));
+    const msErrors = msCalls.filter((c) => /^Error:/.test(c.result)).map((c) => c.result.slice(0, 120));
+    const tombTries = msCalls.filter((c) => { try { return JSON.parse(c.args).propose?.key === TOMB; } catch { return false; } });
+    const spaceBytes = { read: spaceCalls.reduce((n, c) => n + Buffer.byteLength(c.result), 0), written: spaceCalls.reduce((n, c) => n + Buffer.byteLength(c.args), 0) };
+    const directWrites = spaceCalls.filter((c) => c.name !== 'muse_space' && c.name !== 'read_file');
+    let docAfter = null; try { docAfter = JSON.parse(readFileSync(docFile, 'utf8')); } catch { docAfter = null; }
+    const view = await api('/agent/special/muse/space').then((x) => x.view).catch((e) => ({ error: String(e?.message || e).slice(0, 120) }));
+    const layoutOk = !!docAfter && docAfter.schemaVersion === 1 && Number(docAfter.rev) > 1 && updatesOk.length > 0;
+    const tombOk = !!docAfter && !(docAfter.proposed || []).some((p) => p?.key === TOMB) && !view?.error && !(view?.proposed || []).some((p) => p.key === TOMB)
+      && !tombTries.some((c) => /^Saved/.test(c.result));
+    const mainUntouched = (() => { try { return readFileSync(join(spaceDir, 'main.js'), 'utf8') === oldMain; } catch { return false; } })();
+    const hintsNow = await museCycleHints().catch(() => []);
+    const noteOk = hintsNow.length >= 1 && hintsNow[0].includes('Your Space changed') && hintsNow.slice(1).every((h) => !h.includes('Your Space changed'));
+    const layoutText = `布局:${layoutOk ? '交了' : '没交 ← 红'}(space.json rev ${docAfter?.rev ?? '读不出'};muse_space ${msCalls.length} 次:${msCalls.map(actionOf).join('/') || '无'},成功 update ${updatesOk.length} 次${msErrors.length ? `;报错 ${msErrors.length} 次:${msErrors.join(' | ')}` : ''})`
+      + `;那句话「${String(docAfter?.hero?.text ?? '').slice(0, 80)}」;备好的 ${JSON.stringify(docAfter?.prepared ?? [])};提议 ${JSON.stringify((docAfter?.proposed ?? []).map((p) => p.key))}`
+      + `;墓碑 ${TOMB} ${tombOk ? '没加回来' : '加回来了 / 陈旧提议还在 ← 红'}${tombTries.length ? `(试着再提 ${tombTries.length} 次,工具拒了)` : ''}${view?.error ? `;GET /muse/space 失败 ${view.error}` : ''}`
+      + `;升级提示${noteOk ? '只在周期 1' : ` ← 红(${hintsNow.map((h) => (h.includes('Your Space changed') ? '有' : '无')).join('/') || '无简报'})`}`
+      + `;Space 读 ${spaceBytes.read} B / 写 ${spaceBytes.written} B(工具调用 ${spaceCalls.length} 次${directWrites.length ? `,其中直接改文件 ${directWrites.length} 次:${directWrites.map((c) => c.name).join(',')}` : ''})`
+      + `;旧 main.js ${mainUntouched ? '没动' : '被改了(只记)'}`;
     const spaceAsks = approvals.filter((a) => JSON.stringify(a).includes('/Space/')).length; // Space 目录三档免审:排进审批 = 提示词又把它说成「Library 外」
     // 开局上下文(09-27):每个周期一个新会话 → 周期 2 第一次调用不该带着周期 1 的整段对话(连工具结果)。
     // 旧行为实测 ×2.6(1.8 万 → 4.6 万 token;实机攒到 17–20 万,2 小时心跳下每轮都按缓存未命中计费)。判据 ≤ ×1.5;
@@ -5541,11 +5576,13 @@ Then reply with only the command output.`,
     const hintAll = hints.join('\n');
     const hintLeak = [rmark, `s=${rsid.slice(0, 6)}`].filter((m) => hintAll.includes(m));
     const hintPos = hintAll.includes(`s=${lsid.slice(0, 6)}`);
-    const saidLeak = [journal, museSays, JSON.stringify(todos)].some((t) => t.includes(rmark));
+    // 今日简报那句话 / 提议理由是新的模型输出口(11-08):远程会话的原话也不许出现在 space.json 里
+    const docText = (() => { try { return readFileSync(join(home, 'agents', 'muse', 'Space', 'space.json'), 'utf8'); } catch { return ''; } })();
+    const saidLeak = [journal, museSays, JSON.stringify(todos), docText].some((t) => t.includes(rmark));
     const g7 = !seedR.error && !seedL.error && hints.length > 0 && hintLeak.length === 0 && hintPos && !saidLeak;
     const g7Text = `G7 远程会话${seedR.error ? `种子失败(${seedR.error})` : hintLeak.length ? `漏进周期简报 ${hintLeak.join(',')} ← 红` : '未进周期简报'}、本机活动行${hintPos ? '在' : '不在 ← 红(正对照)'}${saidLeak ? '、Muse 输出里出现了远程标记 ← 红' : ''}(简报 ${hints.length} 份)`;
-    const ok = twoCycles && (journal.trim().length > 0 || todos.length > 0 || approvals.length > 0) && !spaceAsks && replayOk && g7; // 审批队列、开局上下文都是引擎真实状态,照判
-    return { ok, detail: `${g7Text};${slept ? `周期 1 后${slept};` : ''}周期 2 ${twoCycles ? '已起' : blockedBy ? `被 token 预算挡(${blockedBy})` : '600s 未起'}(lastCycleAt ${firstCycleAt || '?'}→${Number(second?.lastCycleAt) || '?'},restarts ${second?.restartsThisWindow ?? '?'});起周期时计费/毛量 ${spent || '?'};开局上下文 ${p1 || '?'}→${p2 || '?'} token${p1 && p2 ? `(×${(p2 / p1).toFixed(2)}${replayOk ? '' : ' ⚠️带着上一周期的对话'})` : twoCycles ? '(⚠️周期 2 首轮 60s 未返回,没量到)' : ''};Journal ${journal.trim() ? '有' : '无'};todo ${todos.length};审批 ${approvals.length}${spaceAsks ? `(其中 Space ${spaceAsks} 条)` : ''};Space ${space.ok ? '' : '⚠️'}${space.text}${space.built ? (spaceUsesAgent ? '(用 ctx.agent 取数)' : '(没用 ctx.agent)') : ''}${space.built ? `;CSS 变量${unknownVars === null ? ' ?' : unknownVars.length ? ` ⚠️宿主没有 ${unknownVars.join(' ')}` : '全在宿主词表'}` : ''};插件技能加载 ${skillLoads} 次;自排日程 ${museSchedule.length}${museSchedule.length ? `(${museSchedule.join(' | ')})` : ''};error ${(second || started).lastError || '无'}`, output: museSays, journal, todos, approvals, status: second || started };
+    const ok = twoCycles && (journal.trim().length > 0 || todos.length > 0 || approvals.length > 0) && !spaceAsks && replayOk && g7 && layoutOk && tombOk && noteOk; // 审批队列、开局上下文都是引擎真实状态,照判
+    return { ok, detail: `${g7Text};${slept ? `周期 1 后${slept};` : ''}周期 2 ${twoCycles ? '已起' : blockedBy ? `被 token 预算挡(${blockedBy})` : '600s 未起'}(lastCycleAt ${firstCycleAt || '?'}→${Number(second?.lastCycleAt) || '?'},restarts ${second?.restartsThisWindow ?? '?'});起周期时计费/毛量 ${spent || '?'};开局上下文 ${p1 || '?'}→${p2 || '?'} token${p1 && p2 ? `(×${(p2 / p1).toFixed(2)}${replayOk ? '' : ' ⚠️带着上一周期的对话'})` : twoCycles ? '(⚠️周期 2 首轮 60s 未返回,没量到)' : ''};Journal ${journal.trim() ? '有' : '无'};todo ${todos.length};审批 ${approvals.length}${spaceAsks ? `(其中 Space ${spaceAsks} 条)` : ''};${layoutText};插件技能加载 ${skillLoads} 次;自排日程 ${museSchedule.length}${museSchedule.length ? `(${museSchedule.join(' | ')})` : ''};error ${(second || started).lastError || '无'}`, output: museSays, journal, todos, approvals, space: { doc: docAfter, view, calls: msCalls }, status: second || started };
   });
   // ── musedm(10-18,opt-in,单独跑:`--only musedm`):Muse 私聊 × 收件箱分工(方案 docs/ToBeImproved/Muse私聊与收件箱分工方案_2026-10-17,
   // 用户选 B「按性质分」)。三件同时到期的事交给 Muse(走「交给 Muse 追踪」同一条路:auto 日程条目到期 → 进周期 kickoff):
@@ -5583,8 +5620,8 @@ Then reply with only the command output.`,
     return { ok, detail: `第 ${cycle || '?'} 个周期出卡;卡上 ${JSON.stringify(cond)};点之前规则没变=${untouched};点之后 ${made ? `已建 ${made.id} enabled=${made.enabled}` : `没建:${JSON.stringify(r)}`}`, output: JSON.stringify(card.payload?.rule) };
   });
 
-  // muselogdm / muselogspace(10-31):下个周期要接着办的事只躺在 Muse 的 LOG 里,这是两条真实来路 —— 私聊时存下的交代、Space 报错回写的 [feedback]
-  // (文案照抄 desktop agentSpaceSync.ts)。新 home 的第一个周期必撞到期的每周装备巡检,正好量「到期日程把 LOG 里的活挤掉」。
+  // muselogdm(10-31):下个周期要接着办的事只躺在 Muse 的 LOG 里,真实来路是私聊时存下的交代(另一条「Space 报错回写的 [feedback]」
+  // 11-08 随 main.js 一起退场)。新 home 的第一个周期必撞到期的每周装备巡检,正好量「到期日程把 LOG 里的活挤掉」。
   // 心跳 60 分钟,不给第二个周期补救的机会;判据看磁盘上的成品,不看模型自述。
   const museFirstCycle = async () => {
     const status = () => api('/agent/special/muse/status').then((x) => (x && typeof x.status === 'object' ? x.status : x));
@@ -5617,22 +5654,6 @@ Then reply with only the command output.`,
     const ok = made && c.done && c.collided && !c.error;
     return { ok, detail: `私聊工具 ${chat.toolCalls.join(',') || '无'}(存下了=${saved});第一个周期撞上巡检=${c.collided};周期收尾=${c.done}${c.error ? `,错误 ${c.error}` : ''};to-try.md ${made ? '做了' : '没做'}`, output: c.said };
   });
-  await scenario('muselogspace', `muselogspace Space 报错回写撞上到期日程(${MUSE_MODE})`, async () => {
-    const seeded = await until(() => existsSync(join(home, 'agents', 'muse', 'config.toml')), 30_000, 500);
-    if (!seeded) return { ok: false, detail: '30s 内没播种出 Muse' };
-    const dir = join(home, 'agents', 'muse', 'Space');
-    mkdirSync(dir, { recursive: true });
-    const broken = `ctx.registerView({ id: 'home', title: 'Home', mount(el) { el.append(renderStatus()); } });\n`;
-    writeFileSync(join(dir, 'manifest.json'), JSON.stringify({ id: 'agent-muse', name: 'Muse', version: '0.1.0', main: 'main.js' }));
-    writeFileSync(join(dir, 'main.js'), broken);
-    await api('/agent/special/muse/feedback', { method: 'POST', body: JSON.stringify({ text: 'Space view "home" registered but its mount() threw, so the user sees "Plugin view failed to load": renderStatus is not defined' }) });
-    const c = await museFirstCycle();
-    const now = readFileSync(join(dir, 'main.js'), 'utf8');
-    const fixed = now !== broken && (!/renderStatus\(/.test(now) || /(function\s+renderStatus|renderStatus\s*=)/.test(now)); // 只加注释不算修
-    const ok = fixed && c.done && c.collided && !c.error;
-    return { ok, detail: `第一个周期撞上巡检=${c.collided};周期收尾=${c.done}${c.error ? `,错误 ${c.error}` : ''};main.js ${fixed ? '改了' : '没动'}`, output: c.said };
-  });
-
   await scenario('ruleobserve', 'ruleobserve 观察中的规则只记账,Muse 自建规则缺省观察', async () => {
     if (MUSE_MODE !== 'auto') return { ok: false, detail: '这个场景要 --muse-mode auto' };
     const rules = () => { try { return JSON.parse(readFileSync(join(home, 'agents', 'muse', 'triggers.json'), 'utf8')); } catch { return []; } };
@@ -7712,6 +7733,9 @@ Then reply with only the command output.`,
         const out = [];
         const add = (f) => { try { out.push(readFileSync(f, 'utf8')); } catch { /* 还没写 */ } };
         add(join(home, 'agents', 'muse', 'MEMORY.md'));
+        // 10-30 起 remember 有 person 档:「我对观鸟没兴趣」是关于这个人本身的事,换哪个 Agent 都成立,写进共享画像 human/SOUL.md
+        // (所有 Agent 都读,下个周期的 Muse 也读得到)—— 这也算落进了它下个周期看得到的地方。11-08 起计入,之前只看 Muse 自己那两处会假红。
+        add(join(home, 'human', 'SOUL.md'));
         try { for (const f of readdirSync(join(home, 'agents', 'muse', 'LOG'))) add(join(home, 'agents', 'muse', 'LOG', f)); } catch { /* 目录还没建 */ }
         return out.join('\n');
       };
@@ -7722,31 +7746,27 @@ Then reply with only the command output.`,
       const saved = !before && museText().includes(TOPIC);
       const b = await run(sid, '你最近在后台都做了些什么?', 240_000);
       const lookedBack = b.toolCalls.includes('read_log') || b.toolArgs.some((x) => /Journal/.test(x.args || ''));
-      // ④ 聊天里让它做自己的 Space(用户的用法:聊天 + Desk 里的 Muse Space 并排,对着它说「改一下」)。周期里 Space 的写法随 kickoff 来,
-      //    聊天里没有 kickoff —— 没有聊天段的构建里它连 Space 目录在哪都不知道。判据同 muse 场景:桌面装不装得出 home 视图。
-      const museStatus = () => api('/agent/special/muse/status').then((x) => (x && typeof x.status === 'object' ? x.status : x));
-      const stamp0 = Number((await museStatus())?.spaceStamp) || 0;
-      const c = await run(sid, '把你的 Space 首页做出来吧,先简单点:上面显示一行「晚上好」就行。', 300_000);
-      // 聊天里写完 Space,桌面靠 status.spaceStamp 变了才重载(桌面每 20s 拉一次)。周期之外原先没人刷这个戳 ——
-      // 这一轮收尾后 30s 内它必须变(run 终态 → kickMuse → tick → 没有 run 在跑 → 刷)。没有这次改动的构建这里必红。
-      const stampMoved = !!(await until(async () => { const v = Number((await museStatus())?.spaceStamp) || 0; return v && v !== stamp0 ? v : null; }, 30_000, 1500));
-      // ⚠️上面那次分不出有没有这次改动:引擎没跑过周期时戳是 0,status 每次按磁盘现算,所以 main 原样也会「变」。
-      // 能分出来的是**已有 Space 再改一次**:戳非 0 之后原先只有周期收尾才刷。再说一句让它改字,改了文件戳就必须再变。
-      const stamp1 = Number((await museStatus())?.spaceStamp) || 0;
-      const d = await run(sid, '把那行字改成「早上好」。', 300_000);
-      const edited = d.toolCalls.some((n) => ['write_file', 'edit_file', 'multi_edit'].includes(n));
-      const stampMovedAgain = !!(await until(async () => { const v = Number((await museStatus())?.spaceStamp) || 0; return v && v !== stamp1 ? v : null; }, 30_000, 1500));
-      const space = await museSpaceVerdict(join(home, 'agents', 'muse', 'Space'), health?.version);
-      // 计红的是「两份文件真写到了它的 Space 目录」(知道在哪、写得进);装不装得出 home 同 muse 场景只记不判(Node 里的近似判定)。
-      const spaceWritten = ['manifest.json', 'main.js'].every((f) => existsSync(join(home, 'agents', 'muse', 'Space', f)));
+      // ④ 聊天里对着简报说「改一下」(用户的用法:聊天 + Desk 里的 Muse Space 并排)。11-08 起 Space 是宿主画的「今日简报」,
+      //    卜算子能改的只有 space.json 里那句话 / 备好的 / 提议,改法是 muse_space update —— 不再写 main.js。
+      //    判据看引擎合成后的布局(GET /muse/space,宿主就读这条),不看模型自述;每轮是一个新 run,「每轮那句话改一次」的限额不挡第二轮。
+      const heroNow = () => api('/agent/special/muse/space').then((x) => String(x?.view?.hero?.text || '')).catch(() => '');
+      const spaceDir = join(home, 'agents', 'muse', 'Space');
+      const mainJs = () => { try { return readFileSync(join(spaceDir, 'main.js'), 'utf8'); } catch { return null; } };
+      const mainBefore = mainJs(); // 同一次台架里先跑 muse 的话,那边播了一份旧 main.js:判「这两轮没新建 / 没改它」,不判「盘上没有」
+      const c = await run(sid, '把今日简报最上面那句话改成「晚上好」吧。', 300_000);
+      const heroSet = /晚上好/.test(await heroNow());
+      const d = await run(sid, '把那句话改成「早上好」。', 300_000);
+      const edited = d.toolCalls.includes('muse_space');
+      const heroAgain = /早上好/.test(await heroNow());
+      const noMainJs = mainJs() === mainBefore;
       const cycles = (Number((await api('/agent/special/muse/status').then((x) => (x && typeof x.status === 'object' ? x.status : x)))?.lastCycleAt) || 0) !== cycleAt0;
-      writeFileSync(join(OUT, 'musechat-evidence.json'), JSON.stringify({ systemPromptHasChatSection: sys.includes('## Talking with the user'), toldTools: a.toolArgs, toldReply: a.content, askedTools: b.toolArgs, askedReply: b.content, spaceTools: c.toolArgs, spaceReply: c.content, editTools: d.toolArgs, editReply: d.content, stampMoved, stampMovedAgain, spaceApprovals: c.approvals, space, spaceWritten, museFiles: museText() }, null, 2));
-      return { ok: bound && saved && spaceWritten && (stampMovedAgain || !edited) && !a.error && !b.error && !c.error && !d.error && !cycles,
-        detail: `私聊绑到 Muse 且带聊天段:${bound ? '是' : '否'};交代后 Muse 的记忆 / 日志里${saved ? '有' : '没有'}「${TOPIC}」(交代那轮调了 ${a.toolCalls.join(',') || '无工具'});` +
+      writeFileSync(join(OUT, 'musechat-evidence.json'), JSON.stringify({ systemPromptHasChatSection: sys.includes('## Talking with the user'), toldTools: a.toolArgs, toldReply: a.content, askedTools: b.toolArgs, askedReply: b.content, spaceTools: c.toolArgs, spaceReply: c.content, editTools: d.toolArgs, editReply: d.content, heroSet, heroAgain, noMainJs, spaceApprovals: c.approvals, spaceDoc: (() => { try { return readFileSync(join(spaceDir, 'space.json'), 'utf8'); } catch { return null; } })(), museFiles: museText() }, null, 2));
+      return { ok: bound && saved && heroSet && (heroAgain || !edited) && noMainJs && !a.error && !b.error && !c.error && !d.error && !cycles,
+        detail: `私聊绑到 Muse 且带聊天段:${bound ? '是' : '否'};交代后 Muse 的记忆 / 日志 / 共享画像里${saved ? '有' : '没有'}「${TOPIC}」(交代那轮调了 ${a.toolCalls.join(',') || '无工具'});` +
           `问后台做了什么:${lookedBack ? '读了自己的日志 / Journal' : '没读日志(不计红)'}(调了 ${b.toolCalls.join(',') || '无工具'});` +
-          `聊天里做 Space:${spaceWritten ? '两份文件已写进 Space 目录' : '没写进 Space 目录'},${space.ok ? '桌面能装出 home' : `⚠️ 判定装不出 home(${space.text || '?'};只记不判)`}(调了 ${c.toolCalls.join(',') || '无工具'},审批 ${c.approvals} 次);写完后 Space 戳${stampMoved ? '变了' : ' 30s 内没变'};再改一次(调了 ${d.toolCalls.join(',') || '无工具'}):${!edited ? '它没改文件(不判)' : stampMovedAgain ? '戳又变了(桌面会重载)' : '戳 30s 内没再变(桌面不会重载)'};期间起了周期:${cycles ? '是(不该起)' : '否'}` +
-          `${a.error ? `;交代那轮出错 ${a.error}` : ''}${b.error ? `;提问那轮出错 ${b.error}` : ''}${c.error ? `;做 Space 那轮出错 ${c.error}` : ''}`,
-        output: `【交代】\n${a.content || '(无)'}\n\n【问后台做了什么】\n${b.content || '(无)'}\n\n【做 Space】\n${c.content || '(无)'}` };
+          `让它改简报那句话:${heroSet ? '布局里已是「晚上好」' : '布局里没变成「晚上好」'}(调了 ${c.toolCalls.join(',') || '无工具'},审批 ${c.approvals} 次);再改一次(调了 ${d.toolCalls.join(',') || '无工具'}):${!edited ? '它没调 muse_space(不判)' : heroAgain ? '已是「早上好」' : '没变成「早上好」'};这两轮${noMainJs ? '没碰' : '⚠️ 新建 / 改了'} main.js;期间起了周期:${cycles ? '是(不该起)' : '否'}` +
+          `${a.error ? `;交代那轮出错 ${a.error}` : ''}${b.error ? `;提问那轮出错 ${b.error}` : ''}${c.error ? `;改简报那轮出错 ${c.error}` : ''}${d.error ? `;再改那轮出错 ${d.error}` : ''}`,
+        output: `【交代】\n${a.content || '(无)'}\n\n【问后台做了什么】\n${b.content || '(无)'}\n\n【改简报】\n${c.content || '(无)'}\n\n【再改】\n${d.content || '(无)'}` };
     } finally {
       await api('/agent/special/config', { method: 'POST', body: JSON.stringify({ muse: { enabled: false, activeHours: null } }) }).catch(() => {});
     }

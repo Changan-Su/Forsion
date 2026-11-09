@@ -36,6 +36,14 @@ interface MuseStateShape {
   sessionId?: string;
   sleep?: MuseSleep | null;
   onboarding?: MuseOnboarding;
+  /** 「Space 换成布局了」那句升级提示已经说过的时刻(11-08,Muse Space 方案 D 第一期):只说一次。 */
+  spaceLayoutToldAt?: number;
+}
+
+/** 升级提示说过没有(读不出 = 没说过:最坏多说一次)。 */
+export async function readSpaceLayoutToldAt(): Promise<number | null> {
+  const v = Number((await readRaw()).spaceLayoutToldAt);
+  return Number.isFinite(v) && v > 0 ? v : null;
 }
 
 /** 磨合期(10-30 方案 C):从 Muse 第一次开起来算 14 天。fresh = 新用户(有第一天三问和第 14 天小结);

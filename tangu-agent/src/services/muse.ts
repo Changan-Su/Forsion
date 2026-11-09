@@ -15,7 +15,9 @@
  *           pending_approvals,用户批准后由引擎按原参数代执行(services/pendingApprovals.ts);
  *   agent → 同上,但先由默认 agent 代用户裁决一次(否决才排队);
  *   auto  → 'full-auto',allowedFolders 并入可写根。
- *   三档都把自己的 Space 目录(agents/muse/Space,自建 Forsion 插件)并入可写根:Space 由 Muse 自己迭代,不该逐次审批。
+ *   三档都把自己的 Space 目录(agents/muse/Space)并入可写根:Space 由 Muse 自己迭代,不该逐次审批。
+ *   Space 自 11-08 起是宿主画的「今日简报」布局(space.json,经 muse_space 工具写;契约 contracts/museSpace.ts),
+ *   从前那份自建插件 main.js 留在盘上、不再加载。
  * 工作区 = 自己的 Library(~/.tangu/agents/muse/Library;桌面 Agent Space 直接浏览),每日工作日志由本文件在
  * 周期结束时**机械**追加到 Library/Journal/<date>.md(不靠模型自觉)。对用户的出口 = add_muse_todo(顺手进收件箱)
  * + 收件箱回执;用户对 TODO / 待批的处理以 [feedback] / [approval] 行进它的 LOG(下周期 read_log 即见)。
@@ -48,7 +50,7 @@ import { inboxHint, postIntroCard, postObservedRuleCards, recommendHint } from '
 import { MUSE_ONBOARDING_DAILY_CAP, MUSE_ONBOARDING_MS, ensureMuseOnboarding, onboardingActive, readMuseOnboarding } from './museState.js';
 import { readActivityLines, readUserActivityStamps, activityRhythm, activitySince, parseActivityTs, type ActivityRhythm } from './userActivity.js';
 import { notRemoteTaintedSql } from './remoteTaint.js';
-import { museStateFile, readLastCycleAt, readMuseSessionId, patchMuseState, getMuseSleep, setMuseSleep, type MuseSleep } from './museState.js';
+import { museStateFile, readLastCycleAt, readMuseSessionId, patchMuseState, getMuseSleep, setMuseSleep, readSpaceLayoutToldAt, type MuseSleep } from './museState.js';
 import { loadTriggers, evaluateTriggers, markTriggersFired, disableTriggers, disableTriggersWithReasons, buildTriggerKickoff, type MuseTrigger, type EventCursor, type DbLike } from './museTriggers.js';
 import { loadCursors, setCursors, pruneCursors } from './dbCursors.js';
 import { readDbOrNull } from './amadeusDb.js';
@@ -59,6 +61,7 @@ import { remoteLocked } from './remoteLock.js'; // P1-K2
 import { noteRemoteEntriesCarried } from './remoteCreated.js'; // P1-K2
 import { ledger } from './telemetryLedger.js';
 import { museCycleStarted, museCycleFinished } from './museTelemetry.js';
+import { museLibraryDir, museSpaceDir } from './museSpace.js';
 
 let timer: ReturnType<typeof setTimeout> | null = null;
 import { runTagContext, textForThisDevice } from './deviceTagContext.js';
@@ -86,15 +89,10 @@ function dropWake(why: MuseWakeBlock): void {
   wakeBlocked = why;
 }
 
-/** Muse 的工作区 = 自己的 Library(桌面 Agent Space 浏览的就是它)。 */
-export function museLibraryDir(): string {
-  return path.join(agentsDir(), MUSE_AGENT_SLUG, 'Library');
-}
-/** Muse 自建 Space(2026-09-11)= 一个 Forsion 桌面插件目录(manifest.json + main.js),桌面主进程按 agents/<slug>/Space/ 读取、
- *  id 固定 agent-<slug>。Muse Space 主区渲染它注册的 home 视图;空目录 = 空白态。 */
-export function museSpaceDir(): string {
-  return path.join(agentsDir(), MUSE_AGENT_SLUG, 'Space');
-}
+/** Muse 的工作区 = 自己的 Library(桌面 Muse Space 读的就是它);Space 目录 = 今日简报的布局(space.json,11-08 起;
+ *  从前是一个自建桌面插件 manifest.json + main.js,现在 main.js 留在盘上、宿主不再加载)。两个目录住在 museSpace.ts:
+ *  muse_space 工具要用,而工具不能 import 本文件(经 agentLoop → registry 成环)。 */
+export { museLibraryDir, museSpaceDir };
 export function museJournalPath(date = localDate()): string {
   return path.join(museLibraryDir(), 'Journal', `${date}.md`);
 }
@@ -693,39 +691,44 @@ async function activityTailHint(): Promise<string> {
   }
 }
 
-/** Muse 自建 Space 的契约(每周期钉一次;绝对路径老用户的 config.toml 里没有)。写法交给 forsion-plugin 技能,这里只钉边界。
- *  「文件本身就是 setup 函数体、别包 function setup」必须明说:从前只写「a bare main.js setup body」,09-27 实机 Muse 每一版都
- *  包成 function setup(ctx){…} 却不调用 —— 零注册零报错,Space 从首建起一直空白。
- *  ctx.agent(09-27):Space 从数据渲染,别再每周期把状态 / 时间戳写死重写一遍(实机 1.4.x 全是这种改动);核心契约写在这里,
- *  84KB 的 forsion-plugin 技能只在要更多接口时才加载(实机 23 个周期里 13 次为改文案加载它)。
- *  返回字段与配色变量也得写在这里(09-27 dev 首个 ctx.agent 版 Space):技能不加载,它就只能猜 —— 猜了 status().status
- *  (「当前状态」卡恒空)、猜了宿主没有的 --panel(卡片落到写死的深色兜底,浅色主题下标题深底深字看不见)。
- *  变量表 = styles/base.css :root 与深色块都定义的那几个(--surface / --card 只在笔记作用域里有,插件视图拿不到)。 */
-function spaceKickoff(
-  reloadAfter = 'your cycle ends',
-  skillHint = 'load the "forsion-plugin" skill only if you need more of the plugin API than this',
-): string {
-  return `Your Space: the desktop's "Muse" Space shows the view registered by the Forsion plugin at ${museSpaceDir()} ` +
-    `(manifest.json + main.js; ${skillHint}). ` +
-    'main.js runs as the body of setup(ctx), so call ctx.registerView({ id: "home", ... }) at the top level of the file. ' +
-    'Do not wrap the file in function setup(ctx) { ... } — nothing calls it, so nothing registers and no error is raised. ' +
-    'Render live data instead of hardcoding it — these return Promises (status() can resolve to null): ctx.agent.status() → { running, lastCycleAt, sleepUntil, mode, heartbeatMinutes, pendingApprovals } (times in epoch ms or null); ' +
-    'ctx.agent.todos("pending") → [{ id, title, detail, status, createdAt }] (no argument = every status, dismissed included); ' +
-    'ctx.agent.schedule() → [{ name, date, repeat, auto, lastRun }]; ctx.agent.library.read(path) → the text of a Library file ' +
-    '(e.g. "Journal/<date>.md"; .list() for the tree). ctx.agent.subscribe(cb) returns an unsubscribe function right away (call it in your cleanup); ' +
-    'ctx.agent.updateTodo(id, "done" | "dismissed") works only inside a click handler on your Space. ' +
-    'Colors come only from the host theme variables var(--bg), var(--bg-card), var(--text), var(--text-muted), var(--border), var(--accent) — ' +
-    'no hex values, no other variable names — so light and dark themes both work; your view shares the app\'s page, so prefix every CSS selector with your own root class. ' +
-    'Plain JS, no build step, no CDN. It starts empty: build it, then improve what it shows across cycles — never edit it just to refresh status or timestamps. ' +
-    `It is reloaded after ${reloadAfter}; a load failure, a missing "home" view, or a later runtime error (with its main.js line) ` +
-    'reaches you as a [feedback] entry mentioning the Space.';
+/** Muse Space 的契约(每周期钉一次,落库前缀里逐字稳定)。11-08 起 Space 是宿主画的「今日简报」布局(方案 D 第一期):
+ *  「那句话保持有内容、空着 / 过时了就写一句」是 live 首跑(ask)后补的:只写「每轮最多改一次」时,Luna 读了布局、那句话空着也不写 ——
+ *  它把上限读成了许可,不是期望(同一轮里开场建议那句是祈使「Keep N … shown」,它就照做了)。muse_space read 的回执里也带一句提示。
+ *  它只交差量(那句话 / 备好的 / 提议),格子归用户;字段细节在 muse_space 的工具定义里,这里只钉规矩。
+ *  从前这里是 main.js 自建插件的整套契约(registerView / ctx.agent / 配色变量,约 1.6k 字符),连同「要更多接口再加载
+ *  forsion-plugin 技能」一并删掉:main.js 不再加载,Space 用不着那份 84KB 的技能。
+ *  「不为刷新时间重写」「墓碑里的 key 不再提」两条是方案 §5 点名的;「main.js 不再显示、别改」防它按旧记忆接着改插件。 */
+function spaceKickoff(per = 'cycle'): string {
+  return 'Your Space is a layout the desktop draws for the user ("Today\'s brief"); its top line is your message to them, and you fill in your part with the muse_space tool. ' +
+    'Call muse_space read first: it returns the effective layout, including how the user arranged it, and you submit only what changes (update, with its expectedRev). ' +
+    'Keep the message filled: when it is empty or no longer true, write one line with the most useful thing for the user right now (what you prepared, what needs them, what you noticed). ' +
+    `Change it at most once per ${per}, at most 160 characters; it may link Library files as [[path]]; never rewrite it just to refresh times. ` +
+    'List up to 3 files you prepared for the user in your Library. ' +
+    `Propose at most one new card per ${per} and never re-propose a key the user rejected; to offer a card of your own, create it with muse_space widget first. ` +
+    'The user arranges the cards: you cannot move or remove them. ' +
+    `main.js in your Space folder (${museSpaceDir()}) is no longer shown — do not edit it.`;
+}
+
+/** 升级后第一个周期说一次(走 ephemeralHint,不进落库前缀):老用户的 Muse 记忆里还是「我在迭代自己的 main.js」。 */
+export const SPACE_LAYOUT_NOTE = '\n\n(Your Space changed: it is now a layout the desktop draws (Today\'s brief) that you fill in with muse_space; main.js in your Space folder is no longer loaded or shown. Read your layout with muse_space read this cycle and fill in your part.)';
+
+/** 那句升级提示只说一次:说过的时刻记进 muse-state.json(引擎自有状态域)。第一次跑的新用户、Space 里没有 main.js 的
+ *  也记上「说过」但不说 —— 他们没有旧 Space 可换。记不下来就这次不说(下个周期再试),不冒「每轮都说」的险。 */
+async function spaceUpgradeNote(hadCycle: boolean, now = Date.now()): Promise<string> {
+  try {
+    if (await readSpaceLayoutToldAt()) return '';
+    const hadMainJs = await fs.access(path.join(museSpaceDir(), 'main.js')).then(() => true, () => false);
+    await patchMuseState({ spaceLayoutToldAt: now });
+    return hadCycle || hadMainJs ? SPACE_LAYOUT_NOTE : '';
+  } catch { return ''; }
 }
 
 /**
  * 手聊 Muse(私聊,或普通会话里切到 Muse)时并进系统提示的一段 —— agentLoop 对 agentSlug='muse' 且不是周期的 run 注入。
  * 人格(config.toml)写的是周期口径:「每个周期你会收到简报」。聊天里没有简报、用户就在对面;不说清,它会等一份不会来的简报,
  * 也不会把用户交代的「以后怎么干」记下来 —— 下个周期是新会话,只读得到 LOG / 记忆,读不到这段对话。
- * Space 契约在周期里随 kickoff 来,聊天里没有 kickoff,所以一并带上(用户多半正对着 Desk 里的 Space 说话)。
+ * Space 契约在周期里随 kickoff 来,聊天里没有 kickoff,所以一并带上(用户多半正对着 Desk 里的 Space 说话);
+ * 用户要挪 / 拿掉卡时它动不了,得告诉用户在页上自己改。
  */
 export function museChatSection(): string {
   return '## Talking with the user\n' +
@@ -735,12 +738,9 @@ export function museChatSection(): string {
     '(what to watch, what to stop suggesting, when to stay quiet), save it before you reply: remember for a lasting preference, log_event for a one-off request. ' +
     'Actions here follow this conversation\'s approval setting, with the user present to confirm; your background permission tier applies to your cycles only. ' +
     'When they want to change when or how often you work, use propose_muse_settings; they confirm on a card. ' +
-    // 聊天里先装技能再动手(10-14 实测:沿用周期那句「只在不够用时才装」,3 次里 2 次没装就写 main.js,用了不存在的 render、
-    // 其中 1 次连 manifest.json 都没写;没有这段说明的构建每次都先装技能、4 次都对)。周期那份的措辞不动。
-    spaceKickoff(
-      'your turn ends, and the user may be looking at it next to this chat',
-      'load the "forsion-plugin" skill before you create it or change how it is built: the manifest fields and the shape of the view object are in there',
-    );
+    // 11-08:Space 换成布局后,聊天里不再先装 forsion-plugin 技能(从前 10-14 实测要先装才写得对 main.js)。
+    spaceKickoff('turn') + ' ' +
+    'When the user wants a card moved, hidden or removed, tell them to do it on the page with the edit button at the top; you cannot.';
 }
 
 /**
@@ -754,7 +754,7 @@ export function museChatSection(): string {
  */
 export function buildCycleMessages(
   cfg: MuseConfig,
-  dyn: { extraKickoff?: string; hint?: string; pending?: number; quietSince?: boolean; sleepNote?: string; onboardingNote?: string },
+  dyn: { extraKickoff?: string; hint?: string; pending?: number; quietSince?: boolean; sleepNote?: string; onboardingNote?: string; spaceNote?: string },
 ): { message: string; ephemeralHint: string } {
   const message =
     'Start this round: first use read_log to review your own recent cycles, the [feedback] entries showing how the user handled your previous todos, and any [approval] entries about actions you deferred earlier. ' +
@@ -784,6 +784,7 @@ export function buildCycleMessages(
     (dyn.quietSince ? '\n\n(No new user messages or in-app activity since your last cycle — this is a heartbeat; maintenance, preparation or simply "nothing to do" are all fine answers, and so is set_next_wake.)' : '') +
     (dyn.sleepNote || '') +
     (dyn.onboardingNote || '') +
+    (dyn.spaceNote || '') +
     (dyn.pending ? `\n\n(${dyn.pending} of your earlier actions are still waiting for the user's approval — do not re-request them.)` : '') +
     (dyn.extraKickoff || '') +
     (dyn.hint || '');
@@ -839,7 +840,7 @@ async function startCycle(cfg: MuseConfig, extraKickoff = '', trigger = 'heartbe
     (await rhythmHint());
   const pending = await countPendingApprovals(userId).catch(() => 0);
   const sleep = await getMuseSleep().catch(() => null);
-  const { message, ephemeralHint } = buildCycleMessages(cfg, { extraKickoff, hint, pending, quietSince, sleepNote: sleepNote(sleep, trigger), onboardingNote: await onboardingTurn(userId, hadCycle) });
+  const { message, ephemeralHint } = buildCycleMessages(cfg, { extraKickoff, hint, pending, quietSince, sleepNote: sleepNote(sleep, trigger), onboardingNote: await onboardingTurn(userId, hadCycle), spaceNote: await spaceUpgradeNote(hadCycle) });
   const agentThinking = (await getAgent(MUSE_AGENT_SLUG).catch(() => null))?.thinkingLevel;
   const runId = uuidv4();
   await createRun({

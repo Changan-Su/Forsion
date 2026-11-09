@@ -195,7 +195,8 @@ export function HomeRow({ cells: stored, editing, status, onGrip }: { cells: Hom
 
 // ── 拖动:卡在栏 / 下排之间挪,主页组件上下挪。落点提示走 LCL dropIndicator(DESIGN §6) ──
 const DRAG_START_PX = 4
-function track(e: React.PointerEvent, el: HTMLElement, onMove: (ev: PointerEvent) => void, onDrop: () => boolean, cleanup: () => void): void {
+/** 起拖到松手的那一套(超过 4px 才抬起、跟手、Esc 取消、放不下 land 回原处)。Muse Space 简报的格子也用它(views/museBrief)。 */
+export function trackDrag(e: React.PointerEvent, el: HTMLElement, onMove: (ev: PointerEvent) => void, onDrop: () => boolean, cleanup: () => void): void {
   if (e.button !== 0 || (e.target as HTMLElement).closest('button')) return
   e.preventDefault()
   const z = (el as HTMLElement & { currentCSSZoom?: number }).currentCSSZoom || 1
@@ -236,7 +237,7 @@ export function dragWidget(e: React.PointerEvent, id: string, root: HTMLElement 
   if (!root || !el) return
   const ind = createDropIndicator({ host: root })
   let to: HomeSlot | null = null
-  track(e, el, (ev) => {
+  trackDrag(e, el, (ev) => {
     el.style.pointerEvents = 'none'
     const slot = (document.elementFromPoint(ev.clientX, ev.clientY) as HTMLElement | null)?.closest<HTMLElement>('[data-home-slot]')
     el.style.pointerEvents = ''
@@ -263,7 +264,7 @@ export function dragPart(e: React.PointerEvent, part: HomePart, root: HTMLElemen
   if (!root || !el) return
   const ind = createDropIndicator({ host: root })
   let before: HomePart | null | undefined
-  track(e, el, (ev) => {
+  trackDrag(e, el, (ev) => {
     const parts = [...root.querySelectorAll<HTMLElement>('[data-home-part]')].filter((p) => p !== el)
     const next = parts.find((p) => { const r = p.getBoundingClientRect(); return ev.clientY < r.top + r.height / 2 })
     before = next ? (next.dataset.homePart as HomePart) : null
