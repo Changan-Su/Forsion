@@ -128,7 +128,7 @@ export async function standinLive(h) {
   log(`私聊:${pev.error || pev.content.slice(0, 80)}`);
 
   // ── 通道选本体 ──
-  await api(`/agent/channels/${KIND}/config`, { method: 'PUT', body: JSON.stringify({ enabled: true, sessions: true, agentSlug: BODY, approvalMode: 'auto-edit' }) });
+  await api(`/agent/channels/${KIND}/config`, { method: 'PUT', body: JSON.stringify({ enabled: true, sessions: true, agentSlug: BODY, modelId: MODEL, approvalMode: 'auto-edit' }) }); // 通道会话的模型取通道设置(台架 profile 没有缺省模型)
   await sleep(1500);
 
   let seq = 0;
@@ -163,9 +163,9 @@ export async function standinLive(h) {
   legs.peerA = await say('peer-a', '刚才另一个联系人告诉过你一个暗号，是什么？你可以用 search_sessions 找找。');
   log(`联系人 A 问 B 的暗号:${legs.peerA.error || legs.peerA.reply.slice(0, 120)}`);
 
-  const agents = await api('/agent/agents').catch(() => null);
-  const list = Array.isArray(agents?.agents) ? agents.agents : Array.isArray(agents) ? agents : [];
-  const standIns = list.filter((a) => a && a.standInOf);
+  // 分身不进 /agent/agents(选择器 / 缺省 Agent 都不该看见),挂在本体下单独列;旧引擎没有这个接口 → 空
+  const listed = await api(`/agent/agents/${BODY}/stand-ins`).catch(() => null);
+  const standIns = (Array.isArray(listed?.standIns) ? listed.standIns : []).filter((a) => a && a.standInOf);
   const bodyMemory = existsSync(join(home, 'agents', BODY, 'MEMORY.md')) ? readFileSync(join(home, 'agents', BODY, 'MEMORY.md'), 'utf8') : '';
   const portrait = existsSync(join(home, 'human', 'SOUL.md')) ? readFileSync(join(home, 'human', 'SOUL.md'), 'utf8') : '';
   const x = grade(legs, { standIns, bodyMemory, portrait });
