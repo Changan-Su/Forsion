@@ -69,6 +69,29 @@ describe('读写根', () => {
     expect(standInWriteDenied(dom, T('human/MEMORY.md'))).toMatch(/Access denied/);
   });
 
+  it('Codex 评审 #2 #5:自己文件夹里指向本体的软链不放行;工作目录包着引擎 home 时,从工作目录起搜照样拒', async () => {
+    const { buildStandInDomain, standInReadDenied, standInSearchDenied } = await import('./accessDomain.js');
+    const { symlinkSync } = await import('node:fs');
+    symlinkSync(T('agents/aria'), T('agents/aria-standin-wechat/escape'));
+    expect(standInReadDenied(dom, T('agents/aria-standin-wechat/escape/MEMORY.md'))).toMatch(/Access denied/);
+    const wide = buildStandInDomain({ slug: 'aria-standin-wechat', standInOf: 'aria' }, null, { cwd: home });
+    expect(standInSearchDenied(wide, home)).toMatch(/Access denied/);
+    // 工作目录是引擎 home 的上一层(不在 Forsion 家目录里,本身可读):起点是自己文件夹的祖先,不算「自己的文件夹」
+    const above = buildStandInDomain({ slug: 'aria-standin-wechat', standInOf: 'aria' }, null, { cwd: path.dirname(home) });
+    expect(standInSearchDenied(above, path.dirname(home))).toMatch(/Access denied/);
+    expect(standInSearchDenied(wide, T('agents/aria-standin-wechat'))).toBeNull();
+  });
+
+  it('Codex 评审 #6:复制 / 挪走 / 删掉一个底下包着笔记库的目录,整次拒', async () => {
+    const { buildStandInDomain } = await import('./accessDomain.js');
+    const wide = buildStandInDomain({ slug: 'aria-standin-wechat', standInOf: 'aria' }, null, { cwd: home });
+    const { HOST_FILE_OP_TOOLS } = await import('../tools/hostFileOps.js');
+    const tool = (n: string) => HOST_FILE_OP_TOOLS[n];
+    const ctx = { userId: 'u', cwd: home, execMode: 'host', standIn: wide } as unknown as ToolContext;
+    expect(await tool('copy_path').execute({ from: home, to: path.join(work, 'copy') }, ctx)).toMatch(/Access denied/);
+    expect(await tool('delete_path').execute({ path: path.join(home, 'vault') }, ctx)).toMatch(/Error/);
+  });
+
   it('fsPolicy 两道闸接上了:checkReadPath 认 ctx.standIn,checkWritePath 硬拒(不进审批)', async () => {
     const { checkReadPath, checkWritePath } = await import('../tools/fsPolicy.js');
     expect(checkReadPath(T('human/MEMORY.md'), { standIn: dom }).ok).toBe(false);
@@ -115,6 +138,18 @@ describe('工具面', () => {
     const { visibleMcpTools } = await import('../tools/toolRegistry.js');
     const mcp = new Map([['mcp__x__y', { name: 'mcp__x__y', serverName: 'x', definition: mk('mcp__x__y').definition } as any]]);
     expect(visibleMcpTools({ ...base, preset: undefined, mcpTools: mcp, standIn: dom } as ToolContext, new Set())).toEqual([]);
+  });
+});
+
+describe('管理工具点名别人(Codex 评审 #1)', () => {
+  it('日程只管自己的;工作笔记的 propose 不给', async () => {
+    const { standInManageDenied } = await import('./accessDomain.js');
+    expect(standInManageDenied(dom, 'manage_schedule', { action: 'list', agent: 'aria' })).toMatch(/own schedule/);
+    expect(standInManageDenied(dom, 'manage_schedule', { action: 'list' })).toBeNull();
+    expect(standInManageDenied(dom, 'manage_schedule', { action: 'list', agent: 'aria-standin-wechat' })).toBeNull();
+    expect(standInManageDenied(dom, 'manage_harness', { action: 'propose', agent: 'kai' })).toMatch(/cannot propose/);
+    expect(standInManageDenied(dom, 'manage_harness', { action: 'upsert' })).toBeNull();
+    expect(standInManageDenied(undefined, 'manage_schedule', { agent: 'aria' })).toBeNull();
   });
 });
 

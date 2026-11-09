@@ -992,6 +992,11 @@ export class ChannelService {
     if (gone()) return null;
     const peer = this.multiPeer && binding.peer_id ? { cwd: this.peerWorkspaceDir(binding.account_id, binding.peer_id), agentSlug: pinnedAgent(msg.agentSlug) } : undefined;
     const sid = await this.createChannelSession(binding.user_id, modelId || undefined, undefined, peer);
+    // 新会话记下这次解析用的本体(createChannelSession 缺省盖通道默认 Agent,会把会话里选过的别的本体换掉:Codex 评审 #8)
+    const body = id.kind === 'standin' ? id.bodySlug : id.slug;
+    const raw = await deps().state.getAgentConfig(sid);
+    const cfg = (typeof raw === 'string' ? parseJson(raw) : raw) || {};
+    if (cfg.agentSlug !== body) await deps().state.setAgentConfig(sid, JSON.stringify({ ...cfg, agentSlug: body }));
     if (gone()) return null;
     await this.setConnectedSession(binding.user_id, sid, { stale: gone, binding });
     return sid;

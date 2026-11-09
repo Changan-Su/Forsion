@@ -171,6 +171,20 @@ describe('分身:注册表、解析器、人设白名单', () => {
     writeFileSync(path.join(home, 'agents', '.keep'), ''); // 目录还在,别的用例不受影响
   });
 
+  it('Codex 评审 #9 #7:listAgents 缓存命中时也不列分身;分身存盘时 shareDefaultMemory 恒关、记忆作用域恒是自己', async () => {
+    const { listAgents, getAgent, saveAgent, resolveMemorySlug } = await import('./agentRegistry.js');
+    const { resolveRunIdentity, ensureStandIn } = await import('./standIn.js');
+    const id = await resolveRunIdentity('nova', { kind: 'qq' });
+    if (id.kind !== 'standin') throw new Error('expected stand-in');
+    await ensureStandIn(id);
+    expect((await listAgents()).some((a) => a.standInOf)).toBe(false);
+    expect((await listAgents()).some((a) => a.standInOf)).toBe(false); // 第二次走缓存
+    await saveAgent({ slug: id.slug, name: 'x', systemPrompt: 'x', shareDefaultMemory: true } as any);
+    const def = await getAgent(id.slug);
+    expect(def?.shareDefaultMemory).toBe(false);
+    expect(resolveMemorySlug({ ...def!, shareDefaultMemory: true })).toBe(id.slug);
+  });
+
   it('改名:有分身的本体不给改(改了分身全成孤儿),分身自己也不给改', async () => {
     const { saveAgent } = await import('./agentRegistry.js');
     const { resolveRunIdentity, ensureStandIn } = await import('./standIn.js');
@@ -181,6 +195,8 @@ describe('分身:注册表、解析器、人设白名单', () => {
     await ensureStandIn(id);
     await expect(renameAgent('rio', 'rio-two')).rejects.toMatchObject({ code: 'has_stand_ins' });
     await expect(renameAgent(id.slug, 'rio-standin-other')).rejects.toMatchObject({ code: 'stand_in' });
+    await saveAgent({ slug: 'plain', name: 'Plain', systemPrompt: 'p' });
+    await expect(renameAgent('plain', 'plain-standin-x')).rejects.toMatchObject({ code: 'invalid_slug' }); // 形状留给分身
     expect(existsSync(path.join(home, 'agents', 'rio'))).toBe(true);
   });
 });

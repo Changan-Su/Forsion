@@ -29,6 +29,7 @@ import { runHooks, type HookRunContext, type HookVerdict } from '../hooks/index.
 import { enterRunContext, currentDisplayAgentSlug, currentRunId, setRunClientTag, setRunCwd, setRunSessionContext, setRunStandIn } from '../seams/runContext.js';
 import { getAgentForRun } from '../agents/standIn.js';
 import { resolveRunStandIn, standInSection } from './standInRun.js';
+import { isStandInSlugShape } from '../contracts/agentSyncRules.js';
 import { standInSearchDenied } from './accessDomain.js';
 import path from 'node:path';
 import { agentsDir, DEFAULT_AGENT_SLUG, engineLibDir } from '../core/tanguHome.js';
@@ -1073,9 +1074,11 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     const patch: Record<string, unknown> = {};
     if (!agentConfig.agentSlug && stored?.agentSlug) {
       agentConfig.agentSlug = stored.agentSlug;
-    } else if (agentConfig.agentSlug && stored?.agentSlug !== agentConfig.agentSlug) {
+    } else if (agentConfig.agentSlug && stored?.agentSlug !== agentConfig.agentSlug
+      && !isStandInSlugShape(String(agentConfig.agentSlug)) && !isStandInSlugShape(String(stored?.agentSlug ?? ''))) {
       // 写穿(不只补空):run 带的 slug 是前端「此刻生效」的真值(显式选择都会同步 PUT),
       // 存值缺失或不一致(如曾被竞速污染成默认 agent)都以 run 为准纠偏。
+      // 换到 / 换出分身的不在这里写:resolveRunStandIn 先查完「旧历史属于别的身份」再写(先写后拒 = 拒跑了归属也改了,Codex 评审 #4)。
       patch.agentSlug = agentConfig.agentSlug;
     }
     const storedHasPreset = !!stored && Object.prototype.hasOwnProperty.call(stored, 'preset');

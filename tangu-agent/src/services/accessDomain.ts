@@ -54,9 +54,9 @@ export function buildStandInDomain(own: Pick<NormalAgentDef, 'slug' | 'standInOf
 export const STANDIN_BUILTIN_TOOLS: ReadonlySet<string> = new Set([
   // 文件(读写根见 standInReadDenied / standInWriteDenied)
   'read_file', 'list_dir', 'glob_files', 'search_files', 'write_file', 'edit_file', 'multi_edit', 'apply_patch',
-  'view_image', 'view_video', 'read_document', 'move_path', 'copy_path', 'delete_path',
-  // 网页、生成与小工具
-  'web_search', 'web_fetch', 'generate_image', 'edit_image', 'transcribe_audio', 'calculator', 'get_datetime',
+  'view_image', 'read_document', 'move_path', 'copy_path', 'delete_path',
+  // 网页、生成与小工具(view_video / transcribe_audio 不过读根闸,第一期不给:Codex 评审 #3)
+  'web_search', 'web_fetch', 'generate_image', 'edit_image', 'calculator', 'get_datetime',
   // 自己的记忆 / 日志 / 会话 / 日程 / 工作笔记 / 技能
   'remember', 'log_event', 'read_log', 'search_sessions', 'read_session', 'manage_harness', 'manage_schedule', 'use_skill', 'load_tools',
   // 对话本身
@@ -84,12 +84,25 @@ export function standInDelegateDenied(dom: StandInDomain | undefined, args: { ag
   return null;
 }
 
+/** 管自己东西的工具也有点名别人的参数(Codex 评审 #1):日程只管自己的;工作笔记的 propose 是往别的 Agent 的候选箱里写,不给。 */
+export function standInManageDenied(dom: StandInDomain | undefined, tool: 'manage_schedule' | 'manage_harness', args: { agent?: unknown; action?: unknown }): string | null {
+  if (!dom) return null;
+  if (tool === 'manage_schedule') {
+    const target = typeof args.agent === 'string' ? args.agent.trim() : '';
+    return target && target !== dom.slug ? 'Error: a stand-in can only manage its own schedule (omit the agent parameter).' : null;
+  }
+  return String(args.action || '') === 'propose' ? 'Error: a stand-in cannot propose notes to other agents.' : null;
+}
+
 // ── 文件读写根 ──────────────────────────────────────────────────────────────
 
 const real = (p: string): string => { try { return canonicalFuturePath(path.resolve(p)); } catch { return path.resolve(p); } };
 /** 字面与真实路径两种形态(软链进来同样认得)。 */
 const forms = (abs: string): string[] => [...new Set([path.resolve(abs), real(abs)])];
+/** 拒绝用:字面或真实路径任一落在根里(字面 / 真实两种根)就算 —— 宁可多拒。 */
 const within = (abs: string, root: string): boolean => { const r = [path.resolve(root), real(root)]; return forms(abs).some((f) => r.some((x) => pathWithin(f, x))); };
+/** 放行用:只认真实目标落在真实根里(Codex 评审 #2:自己文件夹里一条指向本体的软链,字面在里面、真实在外面,不能凭字面放行)。 */
+const inside = (abs: string, root: string): boolean => pathWithin(real(abs), real(root));
 
 /** 笔记库根(同 tools/builtin/amadeus.ts amadeusVaultPath 的解析顺序;这里不引那个模块,免得文件策略挂上整张工具图)。 */
 function vaultRoot(): string {
@@ -107,20 +120,20 @@ const packageAgentSkills = (slug: string): string => path.resolve(path.dirname(f
 
 /** 技能是人设的一部分(跟着本体):全局技能、包内置技能、本体自己的技能目录可读(只读,写还要过 standInWriteDenied)。 */
 function skillRoot(abs: string, dom: StandInDomain): boolean {
-  return [skillsDir(), packageSkills(), packageAgentSkills(dom.bodySlug), path.join(agentsDir(), dom.bodySlug, 'skills')].some((r) => within(abs, r));
+  return [skillsDir(), packageSkills(), packageAgentSkills(dom.bodySlug), path.join(agentsDir(), dom.bodySlug, 'skills')].some((r) => inside(abs, r));
 }
 
 /** 分身读这个路径:null = 可以;否则是给模型的拒绝原因(英文)。 */
 export function standInReadDenied(dom: StandInDomain | undefined, abs: string): string | null {
   if (!dom) return null;
   const own = path.join(agentsDir(), dom.slug);
-  if (within(abs, own)) return null;
-  if (dom.library.some((f) => forms(abs).some((x) => forms(f).includes(x)))) return null;
+  if (inside(abs, own)) return null;
+  if (dom.library.some((f) => real(f) === real(abs))) return null;
   if (skillRoot(abs, dom)) return null;
   const denied = `Access denied: ${abs} is outside what this stand-in can read. You are answering in a conversation other people can read, so you only have your own folder (${own}), the working directory and the files the user shared with you.`;
   // 本体 / 别的 Agent、human/、引擎 home、Forsion 家目录、笔记库:哪怕在工作目录里面也不给
   if (within(abs, agentsDir()) || within(abs, humanDir()) || within(abs, tanguHome()) || withinForsionDomains(abs) || within(abs, vaultRoot())) return denied;
-  if (dom.roots.some((r) => within(abs, r))) return null;
+  if (dom.roots.some((r) => inside(abs, r))) return null;
   return denied;
 }
 
@@ -128,10 +141,10 @@ export function standInReadDenied(dom: StandInDomain | undefined, abs: string): 
 export function standInWriteDenied(dom: StandInDomain | undefined, abs: string): string | null {
   if (!dom) return null;
   const own = path.join(agentsDir(), dom.slug);
-  if (within(abs, own)) return null;
+  if (inside(abs, own)) return null;
   const denied = `Access denied: a stand-in can only write inside its own folder (${own}) and the working directory; ${abs} is outside them.`;
   if (within(abs, agentsDir()) || within(abs, humanDir()) || within(abs, tanguHome()) || withinForsionDomains(abs) || within(abs, vaultRoot())) return denied;
-  if (dom.roots.some((r) => within(abs, r))) return null;
+  if (dom.roots.some((r) => inside(abs, r))) return null;
   return denied;
 }
 
@@ -142,7 +155,7 @@ export function standInSearchDenied(dom: StandInDomain | undefined, baseDir: str
   const direct = standInReadDenied(dom, baseDir);
   if (direct) return direct;
   const own = path.join(agentsDir(), dom.slug);
-  if (within(own, baseDir)) return null; // 自己的文件夹(含底下)随便搜
+  if (inside(baseDir, own)) return null; // 自己的文件夹(含底下)随便搜;方向别写反:起点是自己文件夹的祖先时不算(Codex 评审 #5)
   const guarded = [agentsDir(), humanDir(), tanguHome(), vaultRoot()];
   if (guarded.some((g) => within(g, baseDir))) return `Access denied: searching ${baseDir} would reach folders this stand-in cannot read (other agents, the user's own files or notes). Search a narrower folder inside the working directory.`;
   return null;

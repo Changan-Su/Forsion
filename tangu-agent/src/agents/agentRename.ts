@@ -17,6 +17,7 @@ import { channelSettings, saveChannelSettings } from '../channels/config.js';
 import { BUNDLE_ORIGIN_FILE } from '../plugins/bundles.js';
 import { sessionHasActiveRun } from '../services/agentLoop.js';
 import { withKeyLock } from '../core/keyLock.js';
+import { isStandInSlugShape } from '../contracts/agentSyncRules.js';
 
 export type AgentRenameCode = 'invalid_slug' | 'unchanged' | 'builtin' | 'not_found' | 'exists' | 'cloud_synced' | 'plugin_seeded' | 'busy' | 'unreadable' | 'has_stand_ins' | 'stand_in';
 
@@ -52,6 +53,7 @@ export async function renameAgent(oldSlug: string, newSlug: string): Promise<{ a
   // 分身(agents/standIn.ts)的 slug 由本体 slug 推出、stand_in_of 也指着它:改本体名会让分身全变孤儿(通道里换上全新的空分身)。
   // 第一期不跟着搬,先拒;分身自己也不能改名(改了解析器就找不到它)。
   if (cur.standInOf) throw new AgentRenameError('stand_in', 409);
+  if (isStandInSlugShape(newSlug)) throw new AgentRenameError('invalid_slug', 400); // -standin- 的形状留给分身(Codex 评审 #10)
   if ((await listStandIns(oldSlug)).length) throw new AgentRenameError('has_stand_ins', 409);
 
   const rows = await query<Array<{ id: string; agent_config: unknown }>>('SELECT id, agent_config FROM chat_sessions WHERE agent_config IS NOT NULL');

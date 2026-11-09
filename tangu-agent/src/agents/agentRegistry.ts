@@ -125,7 +125,7 @@ export interface NormalAgentDef {
 
 /** 记忆/日志作用域 slug:共用默认 → DEFAULT_AGENT_SLUG;否则该 agent 自己。 */
 export function resolveMemorySlug(def: NormalAgentDef): string {
-  return def.shareDefaultMemory ? DEFAULT_AGENT_SLUG : def.slug;
+  return def.shareDefaultMemory && !def.standInOf ? DEFAULT_AGENT_SLUG : def.slug; // 分身恒用自己的(Codex 评审 #7)
 }
 
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
@@ -802,7 +802,7 @@ export async function listAgents(): Promise<NormalAgentDef[]> {
   await ensureAgentsReady();
   const dir = agentsDir();
   const stamp = await dirStamp(dir);
-  if (cache && cache.stamp === stamp) return cache.defs;
+  if (cache && cache.stamp === stamp) return cache.defs.filter((a) => !a.standInOf); // 缓存存全量(listStandIns 也读它),命中时同样不列分身(Codex 评审 #9)
   const defs: NormalAgentDef[] = [];
   let entries;
   try {
@@ -1029,7 +1029,8 @@ export function buildAgentDef(slug: string, existing: NormalAgentDef | null, inp
     apps: existing?.apps,
     compaction: existing?.compaction,
     avatar: input.avatar !== undefined ? (input.avatar ? String(input.avatar) : undefined) : existing?.avatar,
-    shareDefaultMemory: input.shareDefaultMemory !== undefined ? input.shareDefaultMemory : existing?.shareDefaultMemory,
+    // 分身恒不共用默认记忆(存盘也关;运行时人设合并、resolveMemorySlug 各再兜一次)
+    shareDefaultMemory: (existing?.standInOf || input.standInOf) ? false : input.shareDefaultMemory !== undefined ? input.shareDefaultMemory : existing?.shareDefaultMemory,
     cloudSync: input.cloudSync !== undefined ? input.cloudSync : existing?.cloudSync,
     activityAccess: input.activityAccess !== undefined ? input.activityAccess : existing?.activityAccess,
     disabled: (input.disabled !== undefined ? input.disabled : existing?.disabled) || undefined,

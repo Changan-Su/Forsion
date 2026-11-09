@@ -25,6 +25,7 @@ import { applyHarnessEdit, loadHarness, appendHarnessCandidates, shelveForAgent,
 import { getAgent, isValidSlug, MUSE_AGENT_SLUG } from '../../agents/agentRegistry.js';
 import { effectiveRemote, remoteManagementDenied } from '../../services/remoteOrigin.js';
 import { scheduleAgentFilesSync } from '../../services/agentFileSync.js';
+import { standInManageDenied, standInOf } from '../../services/accessDomain.js';
 
 /** propose 一条候选的字数上限(候选进对方 /refine 那一轮的提示,所以要有上限)。 */
 const PROPOSE_MAX = 1000;
@@ -117,6 +118,8 @@ export const manageHarnessProvider: ToolProvider = {
       },
       execute: async (args, ctx) => {
         if (ctx.ephemeral) return 'Error: The evolution record is unavailable in this execution context.';
+        const standInRefusal = standInManageDenied(standInOf(ctx), 'manage_harness', args); // 分身:不往别的 Agent 的候选箱里写
+        if (standInRefusal) return standInRefusal;
         // 展示身份优先:prompt 注入槽用的是 activeAgentSlug,写入必须落同一个文件夹——
         // shareDefaultMemory 的 agent 其 currentAgentSlug()=xyra,拿它写会写进别人家(Codex 评审 #3)。
         const slug = currentDisplayAgentSlug() || currentAgentSlug() || DEFAULT_AGENT_SLUG;

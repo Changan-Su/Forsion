@@ -24,6 +24,7 @@ import { isHostSandboxRestricted } from '../sandbox/hostSandboxPolicy.js';
 import { toolSubprocessEnv } from '../sandbox/credentialEnv.js';
 import { moveToTrash, restoreTrashItems, trashDir, TRASH_DAYS, type TrashEntry } from '../services/trash.js';
 import { checkReadPath, checkWritePath } from './fsPolicy.js';
+import { standInOf, standInReadDenied, standInSearchDenied } from '../services/accessDomain.js';
 import { fromShellPath } from './hostShell.js';
 import { forgetRead } from './readState.js';
 import { withWriteLock } from './writeLock.js';
@@ -61,6 +62,9 @@ async function statOrNull(p: string): Promise<Stats | null> {
 }
 
 function guardWrite(ctx: ToolContext, p: string): string | null {
+  // 分身:挪走 / 删掉一个底下包着读不了那几片的目录(笔记库在工作目录里之类)= 把它们挪出保护或毁掉,整次拒(Codex 评审 #6)
+  const sealed = standInSearchDenied(standInOf(ctx), p);
+  if (sealed) return sealed;
   const v = checkWritePath(ctx, p);
   return v.hardDeny ? v.reason : null;
 }
@@ -196,6 +200,9 @@ export const HOST_FILE_OP_TOOLS: Record<string, FileOpTool> = {
       if (pathWithin(to, from)) return 'Error: cannot copy a folder into itself';
       const read = checkReadPath(from, ctx);
       if (!read.ok) return `Error: ${read.reason}`;
+      const dom = standInOf(ctx);
+      const sealed = st.isDirectory() ? standInSearchDenied(dom, from) : null; // 分身:整个复制出来再读 = 绕过读根(Codex 评审 #6)
+      if (sealed) return `Error: ${sealed}`;
       if (st.isDirectory() && holdsCredentials(from)) return `Error: ${from} contains protected credential files and cannot be copied.`;
       const why = guardWrite(ctx, to); if (why) return `Error: ${why}`;
       const existing = await statOrNull(to);
@@ -210,7 +217,7 @@ export const HOST_FILE_OP_TOOLS: Record<string, FileOpTool> = {
           preserveTimestamps: true,
           verbatimSymlinks: true,
           // A symlink inside the folder can point at a credential file; never copy one, whatever its name here.
-          filter: (src) => { const hit = !!credentialReadTarget(src); if (hit) skipped++; return !hit; },
+          filter: (src) => { const hit = !!credentialReadTarget(src) || !!standInReadDenied(dom, src); if (hit) skipped++; return !hit; },
         });
       } catch (e: any) {
         return `Error: ${e?.message || e}`;

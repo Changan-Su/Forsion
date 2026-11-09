@@ -75,8 +75,10 @@ export function mergeStandInPersona(own: NormalAgentDef, body: NormalAgentDef | 
  *  形状不对再读 config.toml —— 读不到按「不是」:调用方都在「是分身就少给」的方向上用它,老路本身对通道会话也有一层按绑定的挡。 */
 export async function isStandInSlug(slug: string | undefined | null): Promise<boolean> {
   if (!slug) return false;
-  if (isStandInSlugShape(slug)) return true;
-  return !!(await getAgent(slug).catch(() => null))?.standInOf;
+  // 按持久身份(stand_in_of)判;读不到定义(不在 / 读失败)时才看形状 —— 读失败不当成「不是分身」(Codex 评审 #10:存量同形普通 Agent 不误判)
+  const def = await getAgent(slug).catch(() => undefined);
+  if (def) return !!def.standInOf;
+  return isStandInSlugShape(slug);
 }
 
 /** 运行时取 Agent 定义:分身拿人设合并后的那份(本体现读),别的原样。agentLoop 激活、语音人设共用这一个。 */

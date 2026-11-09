@@ -40,7 +40,8 @@ export async function resolveRunStandIn(
       : 'This conversation belongs to a stand-in. Send the message again to start a new conversation.');
   }
   if (id.kind === 'self') {
-    if (id.slug !== agentConfig.agentSlug) {
+    // 从分身换回本体(空会话)也在这里写:agentLoop 的写穿对分身形状的存值让路(先查后写)
+    if (id.slug !== agentConfig.agentSlug || isStandInSlugShape(storedAgentSlug ?? '')) {
       agentConfig.agentSlug = id.slug;
       await patchSessionAgentConfig(sessionId, { agentSlug: id.slug });
     }
