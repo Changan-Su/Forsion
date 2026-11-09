@@ -161,6 +161,14 @@ function noDoneCol(cal: Cal, what: string): Error {
   );
 }
 
+/** DATE_RE 只管写法;这里再核一遍是不是真有这一天、这个时刻。 */
+function isRealCalTime(t: string): boolean {
+  const m = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2}))?$/.exec(t);
+  if (!m) return false;
+  const [y, mo, day] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  if (mo < 1 || mo > 12 || day < 1 || day > new Date(Date.UTC(y, mo, 0)).getUTCDate()) return false;
+  return m[4] === undefined || (Number(m[4]) < 24 && Number(m[5]) < 60);
+}
 const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 /** 云端认「已经过去」的余量:地球上最晚的时区是 UTC−12,早于「UTC 现在 − 12 小时」的时刻在哪个时区看都过去了。 */
 const ANYWHERE_PAST_MS = 12 * 3_600_000;
@@ -176,7 +184,8 @@ const ANYWHERE_PAST_MS = 12 * 3_600_000;
  */
 export function pastStartNote(value: CellValue | undefined, host: boolean, now: Date = new Date()): string {
   const d = decodeCalDate(value);
-  if (!d) return '';
+  // 写法对、但不是真实日期 / 时刻的(2 月 31 日、47 点)不判:桌面会把它归到别的日子,照字面比会把将来的事报成过去
+  if (!d || !isRealCalTime(d.start) || (d.end && !isRealCalTime(d.end))) return '';
   const p2 = (n: number): string => String(n).padStart(2, '0');
   // 和 start 同一个写法(YYYY-MM-DDTHH:mm),字符串直接比大小
   const ref = host
@@ -793,7 +802,8 @@ export const amadeusProvider: ToolProvider = {
             ok: true,
             msg: value
               ? `Created event "${args.title}" (${value}${ticked}) in "${cal.db.name}". id=${id}`
-                + (ticked ? '' : pastStartNote(value, ctx?.execMode === 'host')) // 加进来就勾上的 = 补记做完的事,不用提醒
+                // 看最后落在日期格里的值(props 也能写这一列);加进来就勾上的 = 补记做完的事,不用提醒
+                + (ticked ? '' : pastStartNote(cells[cal.cal.id], ctx?.execMode === 'host'))
               : `Created to-do "${args.title}" (no date${ticked}) in "${cal.db.name}"; it shows in the user's to-do list. id=${id}`,
           };
         });
@@ -829,6 +839,7 @@ export const amadeusProvider: ToolProvider = {
           if (start === '' && !doneCol) throw noDoneCol(cal, 'removing the date would make this row disappear');
           if (done !== undefined && !doneCol) throw noDoneCol(cal, 'nothing can be ticked done in it');
           const nameCol = cal.db.columns[0];
+          const dateBefore = row.cells[cal.cal.id];
           if (args.title !== undefined && nameCol && nameCol.id !== cal.cal.id) row.cells[nameCol.id] = String(args.title);
           if (start === '') {
             delete row.cells[cal.cal.id]; // 去掉日期 = 变回未排期的待办(结束时间一并没了)
@@ -843,11 +854,12 @@ export const amadeusProvider: ToolProvider = {
           }
           setNamedProps(cal.db, row.cells, args.props);
           if (doneCol && done !== undefined) setDone(row.cells, doneCol, done);
-          // 只在这次调用写了开始时间时看:勾掉一条早就过期的待办、改个标题,不该被提醒「时间过去了」
-          const wroteStart = !!start && !(doneCol && row.cells[doneCol.id] === true);
+          // 只在这次调用改了开始时间时看(start,或 props 写日期列):勾掉一条早就过期的待办、改标题、只动结束时间,不该被提醒「时间过去了」
+          const startOf = (v: CellValue | undefined): string | undefined => decodeCalDate(v)?.start;
+          const movedStart = startOf(row.cells[cal.cal.id]) !== startOf(dateBefore) && !(doneCol && row.cells[doneCol.id] === true);
           return {
             ok: true,
-            msg: `Updated event ${args.eventId} in "${cal.db.name}".` + (wroteStart ? pastStartNote(row.cells[cal.cal.id], ctx?.execMode === 'host') : ''),
+            msg: `Updated event ${args.eventId} in "${cal.db.name}".` + (movedStart ? pastStartNote(row.cells[cal.cal.id], ctx?.execMode === 'host') : ''),
           };
         });
       },

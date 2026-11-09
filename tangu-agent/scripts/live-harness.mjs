@@ -26,7 +26,7 @@
  *                                                           #   额度用完时先跑离线接线证据:node scripts/rename-identity.smoke.mjs(假模型端点,截获系统提示词)
  *   npm run live:harness -- --only caltodo [--calendar-plugin <Calendar 插件检出>] [--rounds 3]   # 用户的待办(11-07):「帮我添加两条待办」几步之内进默认日历、没日期没勾、不写笔记,再列出、勾掉;
  *                                                           #   --calendar-plugin 放进 calendar-todos 技能(桌面形态)。云端 run 用 --only cloudtodo(同 cloudcal 那样指 server scripts/calendar-local.mts)。改日历 / 待办工具定义后跑
- *                                                           #   本机那份还有第四、五条腿:「今天晚一点…」须进缺省那本(三本日历 + 界面命令面)、时间不早于现在;点名一个已经过去的钟点时不许悄悄写进去;引擎时钟钉在晚上(--later-hour <0-23|off>,缺省 22),
+ *                                                           #   本机那份还有第四、五条腿:「今天晚一点…」须进缺省那本(三本日历 + 界面命令面)、时间不早于现在;点名一个已经过去的钟点时不许悄悄写进去;引擎时钟钉在晚上(--later-hour <0-23|off>,缺省 22;只在单跑 caltodo 时钉),
  *                                                           #   --caltodo-later-only 只跑这两条(负对照用)。改日历工具的缺省日历标记 / 过去时间提醒、list_ui_commands 的返回后跑
  *   npm run live:harness -- --only chat,tool,muse            # 子集(historian→dream→recall 三连有先后依赖)
  *   npm run live:harness -- --only mask [--mask-off]          # 发给模型前脱敏(10-28,借鉴 magpie 方案 1):读 .env → run_bash 带 key 的 curl 打台架里的回显服务 → 问模型看到的值是不是 sk-proj- 开头、是不是占位符。
@@ -1091,7 +1091,8 @@ const CALTODO_SKILL = ONLY.has('caltodo') ? plantCalendarSkill({ src: opt('calen
 // caltodo 的「今天晚一点」那条腿:随手填的晚上八点只有在夜里才算「已经过去」,白天跑这条腿在旧代码上也过。所以把引擎进程的本地时钟
 // 钉到晚上(缺省 22 点档,--later-hour <0-23> 换一档,--later-hour off 不钉):只换 TZ,日期、get_datetime、过去时间的判断都跟着走。
 // Etc/GMT±N 是 POSIX 记法,符号和日常写法相反(Etc/GMT-3 = UTC+3)。
-const LATER_OFFSET_H = ONLY.has('caltodo') && opt('later-hour', '22') !== 'off'
+// ⚠️只在单跑 caltodo 时钉:引擎是各场景共用的一个进程,和别的场景一起跑时换了它的钟,那些按台架自己的钟算时段的场景会无故变红。
+const LATER_OFFSET_H = ONLY.size === 1 && ONLY.has('caltodo') && opt('later-hour', '22') !== 'off'
   ? (() => { let o = (((Number(opt('later-hour', '22')) - new Date().getUTCHours()) % 24) + 24) % 24; if (o > 14) o -= 24; return o; })()
   : null;
 const LATER_TZ = LATER_OFFSET_H == null ? null : `Etc/GMT${LATER_OFFSET_H > 0 ? '-' : '+'}${Math.abs(LATER_OFFSET_H)}`;

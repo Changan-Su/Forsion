@@ -71,11 +71,11 @@ const KEY_HINT = 'locale = interface language. theme_lang = design language, NOT
   + 'accent = accent colour, background = page background. ui_zoom takes "reset" or a number.';
 
 /** 界面面不是数据面(11-09):一次真实会话里,模型在命令列表里看到一个待办 Space,把它当成存数据的地方去找写入接口,找不到就说
- *  「做不到」。这句话通用,不写任何 Space id(Space 因设备 / 插件而异);待办和日历指到日历工具(延迟加载的一组)。 */
+ *  「做不到」。这句话通用,不写任何 Space id(Space 因设备 / 插件而异);待办和日历指到日历工具(延迟加载的一组)。
+ *  只说 Space,不说「命令都不是数据接口」:有的命令本来就交回数据(run_ui_command 的 result)。 */
 const SURFACE_NOT_DATA =
-  "These settings and commands only change what the user's window shows; they are not a data API. "
-  + 'A Space is an interface layout, not a place where data is stored: switching to one shows it to the user and reads or writes nothing. '
-  + 'To read or change what a Space or view displays, use the data tools for that content instead — '
+  'A Space is an interface layout, not a place where data is stored: switching to one only changes what the user sees. '
+  + 'To read or change the content a Space or view displays, use the data tools for that content — '
   + "the user's to-dos and calendar events go through the calendar tools (`amadeus_list_calendars` and the rest of that set; "
   + 'load them with `load_tools` if they are not among your tools yet), notes through the note and file tools.';
 

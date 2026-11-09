@@ -178,9 +178,9 @@ describe('a start that is already in the past', () => {
   const utc = new Date('2026-11-09T14:23:00Z');
   // 下面两条真往默认日历里写:跑完放回原样,后面的用例数着里面的行
   const humanFile = () => path.join(humanDir(), 'CALENDAR.db');
-  let humanBefore: string;
-  beforeAll(async () => { humanBefore = await fs.readFile(humanFile(), 'utf8'); });
-  afterAll(async () => { await fs.writeFile(humanFile(), humanBefore); });
+  let humanBefore: string | null; // null = 还没有这个文件(单独跑这一组时)
+  beforeAll(async () => { humanBefore = await fs.readFile(humanFile(), 'utf8').catch(() => null); });
+  afterAll(async () => { if (humanBefore === null) await fs.rm(humanFile(), { force: true }); else await fs.writeFile(humanFile(), humanBefore); });
 
   it('host: compares with this machine\'s local clock, and says which clock', () => {
     const note = pastStartNote('2026-11-09T20:00', true, local);
@@ -202,6 +202,10 @@ describe('a start that is already in the past', () => {
     expect(pastStartNote('2026-11-07/2026-11-10', true, local)).toBe('');
     expect(pastStartNote('2026-11-09T20:00/2026-11-09T21:00', true, local)).toContain('already in the past');
     for (const v of [null, undefined, '', 'tomorrow', 3, true]) expect(pastStartNote(v as any, true, local)).toBe('');
+    // 写法对、但没有这一天 / 这个时刻:桌面会归到别的日子(2 月 31 日 → 3 月 3 日),照字面比会把将来的事报成过去
+    const march = new Date(2026, 2, 1, 9, 0);
+    for (const v of ['2026-02-31', '2026-02-29T10:00', '2026-13-01', '2026-02-28T47:00', '2026-02-28T10:75', '2026-02-27/2026-02-31']) expect(pastStartNote(v, true, march)).toBe('');
+    expect(pastStartNote('2024-02-29', true, march)).toContain('already in the past'); // 闰年那天是真的
   });
 
   it('cloud: the user\'s timezone is unknown, so only what is past in every timezone is reported', () => {
@@ -230,6 +234,9 @@ describe('a start that is already in the past', () => {
     expect(await run('amadeus_create_event', { title: 'Long ago, all day', start: '2000-01-01T20:00', allDay: true })).toContain('this date (2000-01-01)');
     expect(await run('amadeus_create_event', { title: 'Did it then', start: '2000-01-01T20:00', done: true })).not.toContain('Note:'); // 补记做完的事
     expect(await run('amadeus_create_event', { title: 'No date' })).not.toContain('Note:');
+    // props 也能写日期列:按最后落在格子里的值判
+    expect(await run('amadeus_create_event', { title: 'Moved by props', start: '2000-01-01T20:00', props: { Date: '2099-01-01T20:00' } })).not.toContain('Note:');
+    expect(await run('amadeus_create_event', { title: 'Moved back by props', start: '2099-01-01T20:00', props: { Date: '2000-01-01T20:00' } })).toContain('this start (2000-01-01T20:00)');
   });
 
   it('edit: only when this call writes the start, and not on a ticked row', async () => {
@@ -239,6 +246,8 @@ describe('a start that is already in the past', () => {
     expect(await run('amadeus_edit_event', { calendar: cal, eventId: id, end: '2000-01-01T21:00' })).not.toContain('Note:');
     expect(await run('amadeus_edit_event', { calendar: cal, eventId: id, start: '2099-06-01T09:00', end: '' })).not.toContain('Note:');
     expect(await run('amadeus_edit_event', { calendar: cal, eventId: id, start: '2000-01-02T20:00' })).toContain('this start (2000-01-02T20:00) is already in the past');
+    expect(await run('amadeus_edit_event', { calendar: cal, eventId: id, start: '2000-01-02T20:00', title: 'Same start again' })).not.toContain('Note:'); // 开始时间没变
+    expect(await run('amadeus_edit_event', { calendar: cal, eventId: id, props: { Date: '2000-01-05T20:00' } })).toContain('this start (2000-01-05T20:00)');
     expect(await run('amadeus_edit_event', { calendar: cal, eventId: id, start: '' })).not.toContain('Note:'); // 去掉日期
     expect(await run('amadeus_edit_event', { calendar: cal, eventId: id, start: '2000-01-03T20:00', done: true })).not.toContain('Note:');
     expect(await run('amadeus_edit_event', { calendar: cal, eventId: id, start: '2000-01-04T20:00' })).not.toContain('Note:'); // 已经勾掉的

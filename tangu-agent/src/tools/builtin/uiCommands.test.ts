@@ -201,6 +201,7 @@ describe('list_ui_commands 的返回:Space 不是数据接口', () => {
     const text = await out([{ id: 'set-active-space', description: 'Switch Space.', state: 'active=chat; available=home,chat,some-plugin-space' }]);
     const [guide, block] = [text.slice(0, text.indexOf('<ui_surface>')), text.slice(text.indexOf('<ui_surface>'))];
     expect(guide).toMatch(/Space is an interface layout/);
+    expect(guide).not.toMatch(/not a data API/); // 只说 Space:有的命令本来就交回数据,别把整个命令面说成不能查
     expect(guide).toMatch(/to-dos and calendar events/);
     expect(guide).toContain('amadeus_list_calendars');
     expect(guide).toContain('load_tools');

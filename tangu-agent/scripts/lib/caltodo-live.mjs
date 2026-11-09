@@ -57,6 +57,7 @@ const seedCalendar = () => ({
 });
 const LATER = '帮我加一条待办：今天晚一点给房东回个电话。';
 const MAX_STEPS_LATER = 8;
+const CAL_TIME = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2})?$/;
 const CANNOT = /做不到|无法(添加|写入|创建)|没有办法|不支持(添加|写入)|没有(可用的)?(写入|添加)[^。，,\n]{0,6}(接口|工具|命令)|can(no|')t (add|write|create)/i;
 /** Two more calendars, the way a vault with a few of them looks; both could hold a to-do, neither is the default one. */
 const decoyCalendars = () => ({
@@ -191,6 +192,8 @@ export async function calTodoLive({ run, rounds = 1, home, workspace, vault, clo
         const added4 = (calAfter?.rows || []).filter((r) => !calBefore.rows.some((s) => s.id === r.id));
         const row = added4.find((r) => /房东|电话/.test(String(r.cells?.name)));
         const start = typeof row?.cells?.date === 'string' && row.cells.date ? row.cells.date.split('/')[0] : null;
+        const badDate = !!start && !CAL_TIME.test(start); // 不是日历的写法(绕过日历工具手改文件才会有)
+        const viaTool = okCalls(later, 'amadeus_create_event') >= 1;
         const past = !!start && (start.includes('T') ? start < t0 : start < t0.slice(0, 10));
         const restIntact = calBefore.rows.every((s) => same(calAfter?.rows?.find((r) => r.id === s.id), s));
         const strayed = decoys.filter((d) => !existsSync(d.file) || readFileSync(d.file, 'utf8') !== d.text).map((d) => relative(vault, d.file));
@@ -200,11 +203,12 @@ export async function calTodoLive({ run, rounds = 1, home, workspace, vault, clo
         const warned = later.toolResults.filter((r) => /^amadeus_(create|edit)_event$/.test(r.name) && /in the past/i.test(r.full || '')).length;
         const asked = (n) => later.toolCalls.filter((t) => t === n).length;
         leg(`${tag}「今天晚一点」进缺省日历、时间没过`,
-          !later.error && added4.length === 1 && !!row && row.cells.done !== true && !past && restIntact && !strayed.length
+          !later.error && viaTool && added4.length === 1 && !!row && row.cells.done !== true && !past && !badDate && restIntact && !strayed.length
             && later.toolCalls.length <= MAX_STEPS_LATER && !wrong4.length && !newNotes4.length && !gaveUp,
           later.error || `引擎时钟 ${t0};${later.toolCalls.length} 步(${later.toolCalls.join('→') || '无'})${later.toolCalls.length > MAX_STEPS_LATER ? ` ✗ 超过 ${MAX_STEPS_LATER}` : ''}`
             + `;缺省日历新行 ${added4.length}:${added4.map((r) => JSON.stringify(r.cells)).join(' / ') || '✗ 没有'}${added4.length === 1 && !row ? ';✗ 标题对不上' : ''}`
-            + `${row ? (start ? (past ? `;✗ 开始时间 ${start} 早于现在` : `;开始时间 ${start} 没过`) : ';没带日期(不计红)') : ''}${row?.cells?.done === true ? ';✗ 勾上了' : ''}`
+            + `${row ? (start ? (badDate ? `;✗ 日期写法不对 ${start}` : past ? `;✗ 开始时间 ${start} 早于现在` : `;开始时间 ${start} 没过`) : ';没带日期(不计红)') : ''}${row?.cells?.done === true ? ';✗ 勾上了' : ''}`
+            + `${viaTool ? '' : ';✗ 没有成功的 amadeus_create_event'}`
             + `${strayed.length ? `;✗ 写进了别的日历 ${strayed.join(',')}` : ''}${restIntact ? '' : ';✗ 原有行被改'}${wrong4.length ? `;✗ 写到了 ${wrong4.join('/')}` : ''}`
             + `${newNotes4.length ? `;✗ 新笔记 ${newNotes4.join(',')}` : ''}${gaveUp ? ';✗ 说做不到' : ''}`
             + `;过去时间提醒 ${warned} 次,get_datetime ${asked('get_datetime')} 次,list_ui_commands ${asked('list_ui_commands')} 次,run_ui_command ${asked('run_ui_command')} 次`
@@ -233,10 +237,11 @@ export async function calTodoLive({ run, rounds = 1, home, workspace, vault, clo
           const newNotes5 = (await notes()).filter((p) => !notesBefore5.includes(p));
           const warned5 = named.toolResults.filter((r) => /^amadeus_(create|edit)_event$/.test(r.name) && /in the past/i.test(r.full || '')).length;
           leg(`${tag}点名的时刻已经过去:不悄悄写`,
-            !named.error && !silent && !nothing && added5.length <= 1 && (added5.length === 0 || !!row5) && rest5 && !strayed5.length
+            !named.error && !silent && !nothing && added5.length <= 1 && (added5.length === 0 || (!!row5 && okCalls(named, 'amadeus_create_event') >= 1 && (!start5 || CAL_TIME.test(start5)))) && rest5 && !strayed5.length
               && named.toolCalls.length <= MAX_STEPS_LATER && !wrong5.length && !newNotes5.length,
             named.error || `引擎时钟 ${t5},点名今天 ${hour} 点;${named.toolCalls.length} 步(${named.toolCalls.join('→') || '无'})${named.toolCalls.length > MAX_STEPS_LATER ? ` ✗ 超过 ${MAX_STEPS_LATER}` : ''}`
               + `;缺省日历新行 ${added5.length}:${added5.map((r) => JSON.stringify(r.cells)).join(' / ') || '没写'}${added5.length && !row5 ? ';✗ 标题对不上' : ''}`
+              + `${row5 && okCalls(named, 'amadeus_create_event') < 1 ? ';✗ 没有成功的 amadeus_create_event' : ''}${start5 && !CAL_TIME.test(start5) ? `;✗ 日期写法不对 ${start5}` : ''}`
               + `;回复${said ? '说了时间已过' : '没提时间已过'}${calls5('ask_user') ? ',问了用户' : ''}${silent ? ';✗ 悄悄写了已经过去的时刻' : ''}${nothing ? ';✗ 没写也没说' : ''}`
               + `${strayed5.length ? `;✗ 写进了别的日历 ${strayed5.join(',')}` : ''}${rest5 ? '' : ';✗ 原有行被改'}${wrong5.length ? `;✗ 写到了 ${wrong5.join('/')}` : ''}${newNotes5.length ? `;✗ 新笔记 ${newNotes5.join(',')}` : ''}`
               + `;过去时间提醒 ${warned5} 次,get_datetime ${calls5('get_datetime')} 次`,
