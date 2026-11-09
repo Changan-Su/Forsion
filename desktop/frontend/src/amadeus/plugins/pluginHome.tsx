@@ -6,14 +6,15 @@
  * - 「编辑主页」命令复用 setHomeEditHandler(主页没挂上时先记着,登记那一刻补发);
  * - 官方计数只收白名单里的名字(和内置主页记的是同一个,上手提示据此算「会了」)。
  */
+import { claimHostMount } from '@lcl/components'
 import { pluginDisplayName } from './display'
 import type { AmadeusPlugin, PluginHomeApi, PluginHomeLayout, PluginHomeMountOptions, PluginHomeWidgetInfo } from './types'
 import { listWidgets } from '../../services/widgetClient'
 import { currentLocale, subscribeLocale, translate } from '../../i18n'
 import { track } from '../../achievements/store'
 import {
-  BUILTIN_WIDGETS, isBuiltinWidget, parsePluginWidgetId, pluginWidgetId, readStoredHomeLayout, saveHomeLayout, sanitizeHomeLayout,
-  setHomeEditHandler, subscribeHomeLayout,
+  BUILTIN_WIDGETS, cloneHomeLayout, isBuiltinWidget, parsePluginWidgetId, pluginWidgetId, readStoredHomeLayoutState, saveHomeLayout,
+  sanitizeHomeLayout, setHomeEditHandler, subscribeHomeLayout,
 } from '../../views/homeWidgets'
 
 /** `ctx.home.track` 收的官方事件名。只许加:插件按名字记。 */
@@ -56,6 +57,8 @@ export interface HomeApiDeps {
 }
 
 export function createHomeApi({ alive, own, plugins, subscribePlugins }: HomeApiDeps): PluginHomeApi {
+  /** 这个插件上一次 layout.read 读失败了 —— 它接下来写的整份不可信。 */
+  let baseFailed = false
   const info = (id: string): PluginHomeWidgetInfo => homeWidgetInfo(id, plugins())
   // 订了才拉卡头模块:内置卡标题的词条在里面
   const subscribe = (cb: () => void): (() => void) => {
@@ -96,7 +99,11 @@ export function createHomeApi({ alive, own, plugins, subscribePlugins }: HomeApi
       let cur = pick(opts)
       let m: ReturnType<MountMod['mountHomeWidget']> | null = null
       let gone = false
-      void loadMod().then((x) => { if (!gone) m = x.mountHomeWidget(el, wid, cur) }, (e) => console.error('[home] widget mount failed', e))
+      // 同一个 el 后来又挂了别的(模块还没载完时插件换了卡):晚到的这份不画,免得盖掉新的
+      const mine = claimHostMount(el)
+      void loadMod()
+        .then((x) => { if (!gone && mine()) m = x.mountHomeWidget(el, wid, cur) })
+        .catch((e) => console.error('[home] widget mount failed', e))
       const off = own(() => { gone = true; m?.dispose(); m = null })
       // 换选项(编辑态进出、宽窄)不重挂:卡里的状态留着
       return Object.assign(() => off(), { update: (next?: PluginHomeMountOptions) => { if (gone) return; cur = pick(next); m?.update(cur) } })
@@ -106,15 +113,29 @@ export function createHomeApi({ alive, own, plugins, subscribePlugins }: HomeApi
       if (!alive()) return () => {}
       let m: { dispose(): void } | null = null
       let gone = false
-      void loadMod().then((x) => { if (!gone) m = x.mountHomePart(el, str(name)) }, (e) => console.error('[home] part mount failed', e))
+      const mine = claimHostMount(el)
+      void loadMod()
+        .then((x) => { if (!gone && mine()) m = x.mountHomePart(el, str(name)) })
+        .catch((e) => console.error('[home] part mount failed', e))
       return own(() => { gone = true; m?.dispose(); m = null })
     },
     layout: {
-      read: () => readStoredHomeLayout() as PluginHomeLayout | null,
+      read: () => {
+        const r = readStoredHomeLayoutState()
+        baseFailed = r.failed
+        return r.layout
+      },
+      // 返回写完之后存储里的那份(拷贝)。插件上一次读是失败的:它手里是缺省摆法改出来的,不拿它盖真摆放 —— 不写,回存储现状
       write: (next) => {
-        if (!alive()) return sanitizeHomeLayout(readStoredHomeLayout()) as PluginHomeLayout
+        const stored = (): PluginHomeLayout => {
+          const r = readStoredHomeLayoutState()
+          return (r.layout ?? sanitizeHomeLayout(null)) as PluginHomeLayout
+        }
+        if (!alive() || baseFailed) return stored()
         saveHomeLayout(sanitizeHomeLayout(next))
-        return (readStoredHomeLayout() ?? sanitizeHomeLayout(next)) as PluginHomeLayout
+        const r = readStoredHomeLayoutState()
+        // 存不下(这台设备读写不了存储):这次会话里照样生效,回宿主内存里那份
+        return (r.layout ?? cloneHomeLayout(sanitizeHomeLayout(next))) as PluginHomeLayout
       },
       subscribe: (cb) => {
         if (!alive() || typeof cb !== 'function') return () => {}

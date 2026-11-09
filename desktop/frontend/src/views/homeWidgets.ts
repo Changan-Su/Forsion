@@ -63,6 +63,8 @@ export function sanitizeHomeLayout(raw: unknown): HomeLayout {
 }
 
 let cached: HomeLayout | null = null
+/** cached 解析自哪份存储原文;undefined = 不是存储里的(读不到时在内存里改出来的)。插件读法拿它核对别的窗口是不是已经存过新的。 */
+let cachedRaw: string | null | undefined
 /** 读不到(存储被拒)≠ 没摆过:这时只在内存里改、不写回,免得缺省盖掉真摆放。读不懂的那份先备份到 `.corrupt` 再当缺省。 */
 let readFailed = false
 const subs = new Set<() => void>()
@@ -71,6 +73,7 @@ export function readHomeLayout(): HomeLayout {
   if (cached) return cached
   let raw: string | null
   try { raw = localStorage.getItem(HOME_WIDGETS_KEY); readFailed = false } catch { readFailed = true; return DEFAULT_HOME_LAYOUT }
+  cachedRaw = raw
   try { cached = sanitizeHomeLayout(JSON.parse(raw ?? 'null')) } catch {
     try { localStorage.setItem(`${HOME_WIDGETS_KEY}.corrupt`, raw ?? '') } catch { readFailed = true }
     cached = DEFAULT_HOME_LAYOUT
@@ -88,12 +91,25 @@ function countLayoutChange(prev: HomeLayout, next: HomeLayout): void {
   if (!added && !removed && JSON.stringify(prev) !== JSON.stringify(next)) countTelemetry('homeWidgetMove') // 换位置 / 改宽度
 }
 export function saveHomeLayout(next: HomeLayout): void {
+  const failedBefore = readFailed
   const prev = readHomeLayout()
+  // 刚才还读不到、这一下又读得到了:next 是在缺省上改出来的,不拿它盖存储里的真摆放 —— 丢掉,大家回到存着的那份
+  if (failedBefore && !readFailed) { notify(); return }
   cached = sanitizeHomeLayout(next)
+  cachedRaw = undefined
   try { countLayoutChange(prev, cached) } catch { /* 遥测不影响摆放 */ }
-  if (!readFailed) try { localStorage.setItem(HOME_WIDGETS_KEY, JSON.stringify(cached)) } catch { /* 存不下:这次会话里照样生效 */ }
+  if (!readFailed) {
+    try {
+      const raw = JSON.stringify(cached)
+      localStorage.setItem(HOME_WIDGETS_KEY, raw)
+      cachedRaw = raw
+    } catch { /* 存不下:这次会话里照样生效 */ }
+  }
   notify()
 }
+export const notifyHomeLayout = notify
+/** 一份摆放的深拷贝:交给插件的都是拷贝,插件改它碰不到宿主的缓存。 */
+export const cloneHomeLayout = (l: HomeLayout): HomeLayout => ({ left: [...l.left], center: [...l.center], row: l.row.map((c) => ({ ...c })), right: [...l.right] })
 // 别的窗口改了摆放:丢掉缓存重读,免得这边拿旧布局整份写回
 globalThis.addEventListener?.('storage', (e) => {
   if (e.key === HOME_WIDGETS_KEY || e.key === null) { cached = null; notify() }
@@ -104,14 +120,22 @@ export function subscribeHomeLayout(f: () => void): () => void {
   return () => { subs.delete(f) }
 }
 export const useHomeLayout = (): HomeLayout => useSyncExternalStore(subscribeHomeLayout, readHomeLayout)
-/** 存过的那份摆放;从没存过、或这台设备读不了存储 = null(ctx.home.layout.read 用:缺省摆法交给接管主页的插件定,别把缺省写回去)。 */
-export function readStoredHomeLayout(): HomeLayout | null {
+/** 存过的那份摆放(插件读法,ctx.home.layout.read):每次都核对存储原文 —— 别的窗口刚存过、storage 事件还没到时缓存是旧的,
+ *  插件拿旧的整份写回会盖掉别人的改动。从没存过 = `layout: null`(缺省摆法交给接管主页的插件定,别写回);
+ *  这台设备此刻读不了存储 = `failed: true`(也给 null,宿主随后的保存只在内存里生效)。给出去的是拷贝。 */
+export function readStoredHomeLayoutState(): { layout: HomeLayout | null; failed: boolean } {
   let raw: string | null
-  try { raw = localStorage.getItem(HOME_WIDGETS_KEY) } catch { return null }
-  if (raw === null) return null
+  // 读不到只告诉插件,不动宿主的 readFailed:宿主手里那份是之前从存储读出来的,照常存
+  try { raw = localStorage.getItem(HOME_WIDGETS_KEY) } catch { return { layout: null, failed: true } }
+  let stale = false
+  // 存储里的和缓存的不是同一份(别的窗口存过、事件还没到,或缓存是读不到时的内存改动):以存储为准,宿主主页也跟着重画
+  if (raw !== cachedRaw && cached) { cached = null; stale = true }
   const l = readHomeLayout()
-  return readFailed ? null : l
+  if (stale) queueMicrotask(notify)
+  if (readFailed) return { layout: null, failed: true }
+  return { layout: raw === null ? null : cloneHomeLayout(l), failed: false }
 }
+export const readStoredHomeLayout = (): HomeLayout | null => readStoredHomeLayoutState().layout
 
 const rowUsed = (l: HomeLayout): number => l.row.reduce((s, c) => s + c.w, 0)
 export const isOnHome = (l: HomeLayout, id: string): boolean => l.row.some((c) => c.id === id) || l.left.includes(id) || l.right.includes(id)

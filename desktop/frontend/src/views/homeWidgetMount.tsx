@@ -54,14 +54,14 @@ export function mountHomeWidget(el: HTMLElement, id: string, o: HomeWidgetMountO
 }
 
 /** 宿主自己的小件。名字表只许加不许改(插件按名字要)。 */
-const HOST_PARTS: Record<string, () => React.ReactNode> = {
+const HOST_PARTS = new Map<string, () => React.ReactNode>([
   // 首启跳过「电脑历史」后主页再问一次那张卡(引导第四轮 A4);这台机器不需要问时它自己什么都不画
-  'computer-history-ask': () => <ComputerHistoryAsk />,
-}
-export const HOME_HOST_PARTS = Object.keys(HOST_PARTS)
+  ['computer-history-ask', () => <ComputerHistoryAsk />],
+])
+export const HOME_HOST_PARTS: readonly string[] = [...HOST_PARTS.keys()]
 
 export function mountHomePart(el: HTMLElement, name: string): { dispose(): void } | null {
-  const render = HOST_PARTS[name]
+  const render = HOST_PARTS.get(name) // Map:'__proto__' / 'toString' 之类的名字查不到东西
   if (!render) return null
   return mountHostReact(el, <HostLocaleProvider>{render()}</HostLocaleProvider>)
 }

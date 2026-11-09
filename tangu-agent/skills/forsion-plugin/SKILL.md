@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.105.0
+  version: 1.105.1
   author: Forsion
   category: Forsion
 ---
@@ -1052,7 +1052,7 @@ const off = s.subscribe(draw)                        // Space 注册 / Ribbon �
 - `mountStatus(el, id)`:宿主把这个 Space 的近况那一行(继续某会话、最近的笔记、下一条日程、未读数;`actions()` 那两格是已装插件数、可领成就)画进 `el`,
   跟着数据自己更新;拿不到就是空的。目前只有内置 Space 有近况,插件 Space 还报不了自己的。
 - `actions()`:商店、成就两格 `{ id, name, run() }`,2026-11-09 起后面再接首方 Ribbon 动作(活动中心等,和内置主页的坞同一份);图标同样用 `mountIcon(el, id)`。
-- `contextMenu?(event, id, extra?)`(2026-11-09 起):右键一个 Space 时弹宿主的对象菜单 —— 和 Ribbon、主页、收纳面板上同一份;`extra` 是你这一处的几项(形状同 `ctx.ui.contextMenu` 的行,最多 20 行),画在最后一节。传触发右键的事件,弹出后宿主替你 `preventDefault`;返回弹没弹出来。旧宿主没有 → 退回 `ctx.ui.contextMenu`。
+- `contextMenu?(event, id, extra?)`(2026-11-09 起):右键一个 Space 时弹宿主的对象菜单 —— 和 Ribbon、主页、收纳面板上同一份;`extra` 是你这一处的几项(形状同 `ctx.ui.contextMenu` 的行,最多 20 行),画在最后一节。传触发右键的事件(原生的或 React 的都行;坐标不是有限数、缺 `preventDefault` / `stopPropagation` 的直接回 false、什么都不做),弹出后宿主替你 `preventDefault` + `stopPropagation`;返回弹没弹出来。旧宿主没有 → 退回 `ctx.ui.contextMenu`。
 - `opensElsewhere?(id)`(2026-11-09 起):点这个 Space 会开到它自己的窗口去(而不是本窗口里切过去)。只有在本窗口切的才值得先放离场动效;旧宿主没有 → 当 false。
 - `open(id)` 口径同 Ribbon 上点它;本窗口是锁在某个 Space 上的 Space 窗口时,开到那个 Space 自己的窗口。不认识的 id → `false`。
 - `mountIcon` / `mountStatus` 返回卸载函数,之后 `el` 立刻还给你;插件被停用 / 重载时宿主统一收掉,`subscribe` 也一并退订。
@@ -1066,7 +1066,7 @@ const off = s.subscribe(draw)                        // Space 注册 / Ribbon �
 - `widget(id)` → `{ id, kind: 'builtin' | 'plugin' | 'agent', show, title, owner, canOpen }`(非 React 读法);`library()` 列出能放的全部卡;`subscribe(cb)` 头信息可能变了。
 - `mount(el, id, { part: 'head' | 'body' | 'icon', wide?, size?, editing?, onRemove?, onComposer? })`:宿主把卡头 / 卡芯 / 图标画进 `el`;返回的卸载函数带 `update(opts)`(进出编辑态不重挂)。卜算子·建议没内容时这一格改画最近对话,宿主算。
 - `mountPart(el, 'computer-history-ask')`:首启跳过「电脑历史」后主页再问一次那张卡;不认识的名字什么都不画。
-- `layout.read()`(从没摆过 / 读不了存储 = `null`,缺省摆法你定、别写回)/ `write(next)`(宿主校验后存、返回存进去的那份,遥测计数宿主记)/ `subscribe(cb)`。格式只加字段不改字段。
+- `layout.read()`(从没摆过 / 读不了存储 = `null`,缺省摆法你定、别写回;每次都核对存储原文,别的窗口刚存过也读得到;给的是拷贝)/ `write(next)`(宿主校验后存、返回存进去的那份,遥测计数宿主记;⚠️你上一次 `read()` 读失败时这一下不写、回存储现状 —— 你手里那份是缺省上改的,不许盖真摆放;先再 `read()` 一次)/ `subscribe(cb)`。格式只加字段不改字段。
 - `onEditRequest(cb)`:命令「编辑主页」来了;主页没挂上时宿主先记着,登记那一刻补发。`track('home.edit')`:官方计数(主页小组件那条上手提示据此算「会了」),别的名字忽略。
 
 ## 全库多维表与笔记任务:ctx.databases / ctx.noteTasks(2026-10-16 起)

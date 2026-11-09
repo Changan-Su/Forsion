@@ -2550,10 +2550,10 @@ export interface PluginContext {
     /** 坞上 Space 之外的那几格:商店、成就,以及首方 Ribbon 动作(活动中心等;2026-11-09 起一起回,之前只有商店、成就)。 */
     actions(): PluginSpaceAction[]
     /** 右键一个 Space(2026-11-09+):弹宿主的对象菜单 —— 和 Ribbon、主页、收纳面板上右键同一份(打开、在新窗口打开…),
-     *  `extra` 是你这一处特有的几项,画在最后一节(形状同 `ctx.ui.contextMenu` 的行)。传触发右键的那个事件:用它的坐标,
-     *  弹出后宿主替你 `preventDefault`。返回弹没弹出来(Space 不认识 / 没有可列的项 = false)。
+     *  `extra` 是你这一处特有的几项,画在最后一节(形状同 `ctx.ui.contextMenu` 的行)。传触发右键的那个事件(原生的或 React 的都行):
+     *  用它的坐标,弹出后宿主替你 `preventDefault` + `stopPropagation`。返回弹没弹出来(Space 不认识 / 没有可列的项 / 事件不像事件 = false)。
      *  旧宿主没有:`ctx.spaces.contextMenu?.(…)`,缺席时退回 `ctx.ui.contextMenu` 画你自己的。 */
-    contextMenu?(event: MouseEvent, id: string, extra?: PluginContextMenuItem[]): boolean
+    contextMenu?(event: PluginSpaceMenuEvent, id: string, extra?: PluginContextMenuItem[]): boolean
     /** 点这个 Space 会开到它自己的窗口去(Space 单独开了窗口,或本窗口锁在别的 Space 上),而不是在本窗口里切过去(2026-11-09+)。
      *  在本窗口切的才值得先放离场动效。旧宿主没有:缺席时当 false。 */
     opensElsewhere?(id: string): boolean
@@ -2726,6 +2726,16 @@ export interface PluginAutomationRule {
 
 /** `ctx.home.layout` 的摆放(主页第四轮):中间是主页组件的上下顺序,下排 4 格(一张卡占 1 / 2 格,近况卡 `builtin:status` 占满 4 格),
  *  左右栏各最多 3 张。卡 id:`builtin:<种类>` / `plugin:<插件 id>/<卡 id>` / Agent 做的 `w_…`。格式只加字段不改字段。 */
+/** `ctx.spaces.contextMenu` 收的事件:原生 MouseEvent 或 React 合成事件都满足。 */
+export interface PluginSpaceMenuEvent {
+  clientX: number
+  clientY: number
+  preventDefault(): void
+  stopPropagation(): void
+  currentTarget?: EventTarget | null
+  target?: EventTarget | null
+}
+
 export interface PluginHomeLayout {
   left: string[]
   center: Array<'clock' | 'composer' | 'row' | 'dock'>

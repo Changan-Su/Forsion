@@ -73,7 +73,10 @@ export function createSpacesApi({ alive, own }: { alive: () => boolean; own: (of
     // 对象层那份 Space 菜单(和 Ribbon、主页、收纳面板同一份)+ 插件这一处的几项;行的清洗同 ctx.ui.contextMenu 的口径(最多 20 行)
     contextMenu: (event, id, extra) => {
       const sid = str(id)
-      if (!alive() || !event || typeof (event as MouseEvent).clientX !== 'number') return false
+      // 原生 MouseEvent 和 React 的合成事件都收;坐标不是有限数、或没有 preventDefault / stopPropagation 的,任何动作之前就退
+      if (!alive() || !event || typeof event !== 'object') return false
+      if (!Number.isFinite(event.clientX) || !Number.isFinite(event.clientY)) return false
+      if (typeof event.preventDefault !== 'function' || typeof event.stopPropagation !== 'function') return false
       if (!useSpaceStore.getState().spaces.some((s) => s.id === sid)) return false
       const rows: SheetMenuItem[] = (Array.isArray(extra) ? extra : []).slice(0, 20).flatMap((it, i) => {
         if (!it || typeof it.run !== 'function') return []

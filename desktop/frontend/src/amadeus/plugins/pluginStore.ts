@@ -2835,7 +2835,14 @@ export const usePluginStore = create<PluginState>((set, get) => {
                       ...(typeof beforeSend === 'function' ? { beforeSend: () => (ctxAlive() ? beforeSend() : undefined) } : {}),
                     })
                     const dispose = scope.own('mount', () => mounted.dispose(), 'composer')
-                    return { focus: () => { if (ctxAlive()) mounted.focus() }, startVoice: () => { if (ctxAlive()) mounted.startVoice() }, draft: () => (ctxAlive() ? mounted.draft() : ''), dispose }
+                    return {
+                      focus: () => { if (ctxAlive()) mounted.focus() },
+                      startVoice: () => { if (ctxAlive()) mounted.startVoice() },
+                      draft: () => (ctxAlive() ? mounted.draft() : ''),
+                      // 宿主的输入框有 prefill 才转(2026-11-09+;插件按 typeof 判)
+                      ...(typeof mounted.prefill === 'function' ? { prefill: (text: string) => { if (ctxAlive()) mounted.prefill?.(text) } } : {}),
+                      dispose,
+                    }
                   },
                 }
               : {}),

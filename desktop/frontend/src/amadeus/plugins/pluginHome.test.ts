@@ -43,7 +43,7 @@ describe('ctx.home(主页插件化 B,2026-11-09)', () => {
     expect(homeWidgetInfo('plugin:forsion-calendar/today', plugins)).toMatchObject({ kind: 'plugin', show: true, title: '今天', owner: '日历', canOpen: true })
     expect(homeWidgetInfo('plugin:forsion-calendar/todo', plugins).show).toBe(false)
     expect(homeWidgetInfo('plugin:gone/today', plugins)).toMatchObject({ show: false, owner: 'gone' })
-    expect(homeWidgetInfo('plugin:forsion-calendar/today', [{ ...cal, blocked: true } as AmadeusPlugin]).show).toBe(false)
+    expect(homeWidgetInfo('plugin:forsion-calendar/today', [{ ...cal, blocked: 'api' } as AmadeusPlugin]).show).toBe(false)
     expect(homeWidgetInfo('w_a1', plugins)).toMatchObject({ kind: 'agent', show: true, title: '' })
     expect(homeWidgetInfo('builtin:inbox', plugins)).toMatchObject({ kind: 'builtin', show: true, canOpen: true })
     expect(homeWidgetInfo('builtin:muse', plugins).canOpen).toBe(false)
@@ -128,6 +128,38 @@ describe('ctx.home(主页插件化 B,2026-11-09)', () => {
     off()
     await flush()
     expect(el.textContent).toBe('')
+  })
+
+  it('mount:模块还没载入时同一个 el 又挂了一张,先请求的那张作废', async () => {
+    const { mountHomeWidget } = await import('../../views/homeWidgetMount')
+    const calls = vi.mocked(mountHomeWidget)
+    calls.mockClear()
+    const el = document.createElement('div')
+    api().mount(el, 'builtin:notes')
+    api().mount(el, 'builtin:inbox')
+    await flush()
+    expect(calls.mock.calls.map((c) => c[1])).toEqual(['builtin:inbox'])
+    expect(el.textContent).toBe('body:builtin:inbox:false')
+  })
+
+  it('layout:读出来的是拷贝,改它不影响下一次读', () => {
+    const home = api()
+    home.layout.write(sanitizeHomeLayout({ right: ['builtin:notes'] }) as never)
+    const r = home.layout.read()!
+    r.right.push('builtin:inbox')
+    expect(home.layout.read()!.right).toEqual(['builtin:notes'])
+  })
+
+  it('layout:上一次读失败了,插件手里那份不写(回存储现状);再读成功后照常写', () => {
+    const home = api()
+    home.layout.write(sanitizeHomeLayout({ right: ['builtin:notes'] }) as never)
+    const get = vi.spyOn(localStorage, 'getItem').mockImplementation(() => { throw new Error('denied') })
+    expect(home.layout.read()).toBeNull()
+    get.mockRestore()
+    expect(home.layout.write(sanitizeHomeLayout({ right: [] }) as never).right).toEqual(['builtin:notes'])
+    expect(JSON.parse(localStorage.getItem(HOME_WIDGETS_KEY)!).right).toEqual(['builtin:notes'])
+    expect(home.layout.read()!.right).toEqual(['builtin:notes'])
+    expect(home.layout.write(sanitizeHomeLayout({ right: [] }) as never).right).toEqual([])
   })
 
   it('mountPart:认识的名字画,不认识的什么都不画', async () => {
