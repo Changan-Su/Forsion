@@ -5,6 +5,7 @@ import { Code2, Eye, Columns2, Folder, Globe, Loader2, ExternalLink, RotateCw, M
 import { getView, useSpaceStore, useWorkspace, useViewModes, ViewModeSwitch, type ViewProps, type ExtendViewController } from '@lcl/engine'
 import { lazyRetry } from '../lazyRetry'
 import { ConnectPublishDialog } from '../components/ConnectPublishDialog'
+import { runPublish, useCanPublish } from './coding/publishEntry'
 import { useApp } from '../stores/appStore'
 import type { ChatBoxSelection } from '../components/chatbox'
 import { useCodeStudio, type StudioMode } from '../stores/codeStudioStore'
@@ -164,6 +165,9 @@ function ProjectStudio({ root, extendView, onActivate, briefSaveError, retryBrie
   const [pendingChanges, setPendingChanges] = useState(false)
   const [fileRevision, setFileRevision] = useState(0)
   const [showPublish, setShowPublish] = useState(false)
+  // 发布弹窗在 Forsion Extend 里开着(命令 connect.publish 的 run() 关掉时才 resolve):期间同样收起预览
+  const [extendPublishing, setExtendPublishing] = useState(false)
+  const canPublish = useCanPublish()
   const [urlDraft, setUrlDraft] = useState(prefs.devUrl)
   const [urlError, setUrlError] = useState('')
   const [scanNonce, setScanNonce] = useState(0)
@@ -348,7 +352,11 @@ function ProjectStudio({ root, extendView, onActivate, briefSaveError, retryBrie
       if (!mounted.current || useCodeStudio.getState().activeProject !== root) return
       if (!adopted) { useApp.getState().toast(t('studio.publishImported'), true); return }
     }
-    setShowPublish(true)
+    // 弹窗已搬进 Forsion Extend:有它的命令就交给它;没有(随包的 Extend 还是旧版)就开宿主自己的弹窗
+    await runPublish({ root, projectName: projectName(root), entry, htmlFiles }, {
+      openHostDialog: () => { if (mounted.current) setShowPublish(true) },
+      setExtendOpen: open => { if (mounted.current) setExtendPublishing(open) },
+    })
   }
   // 「文件」= 这个项目自己的树(根就是项目目录),和「验收」一样走工作室工具面板;再点一次收起。
   const openFiles = () => { if (panel === 'files') tools.close(); else openTool('files') }
@@ -358,8 +366,8 @@ function ProjectStudio({ root, extendView, onActivate, briefSaveError, retryBrie
       <button className="csu-project" title={t('coding.switchProject')} onClick={() => useCodeStudio.getState().closeProject()}><ArrowLeft size={15} /><span>{projectName(root)}</span></button>
       <ViewModeSwitch leafId={leafId} className="csu-modes" />
       <div className="csu-head-actions">
-        {/* 插件不是网页:发布(Forsion Connect 托管静态页)对它没有意义,整颗按钮不出现。 */}
-        {!!window.tangu?.connectPublish && !isPlugin && <button className="csu-primary" disabled={running || !entry || !!prefs.devUrl} onClick={() => void publish()}><Globe size={14} /><span>{t('coding.publish')}</span></button>}
+        {/* 插件不是网页:发布(Forsion Connect 托管静态页)对它没有意义,整颗按钮不出现。有 Extend 的发布命令或宿主自己的发布桥才画。 */}
+        {canPublish && !isPlugin && <button className="csu-primary" disabled={running || !entry || !!prefs.devUrl || extendPublishing} onClick={() => void publish()}><Globe size={14} /><span>{t('coding.publish')}</span></button>}
       </div>
     </header>
     {/* 设备宽度 / 点选元素 / 浏览器打开 / 预览设置这一排全是「这个项目是网页」的前提。插件项目里它们
@@ -384,7 +392,7 @@ function ProjectStudio({ root, extendView, onActivate, briefSaveError, retryBrie
         <section className="csu-preview-pane" aria-hidden={mode === 'code'} inert={mode === 'code'} aria-label={t('coding.preview')}>
           {/* 插件项目永远不进 StudioPreview:哪怕目录里恰好有个 index.html,它也不是这个插件的样子。 */}
           {isPlugin ? <div className="csu-first-page" data-sandbox-placeholder><div className="csu-first-icon"><Puzzle size={28} /></div><h2>{t('studio.pluginPreview')}</h2><p>{t('studio.pluginPreviewHint')}</p><div className="csu-actions"><button className="csu-primary" data-action="sandbox-open" onClick={() => openTool('sandbox')}><Puzzle size={14} />{t('studio.openSandbox')}</button></div></div>
-            : previewUrl ? <StudioPreview key={previewUrl} url={previewUrl} nonce={reloadNonce} device={prefs.device} visible={!showPublish && (!!extendView || !tools.active)} onActivate={onActivate} inspecting={inspecting} onInspectEnd={() => setInspecting(false)} onSelect={setSelected} onIssue={addIssue} onStatus={setPreviewStatus} /> : <div className="csu-first-page"><div className="csu-first-icon"><Code2 size={28} /></div><h2>{t('studio.firstPage')}</h2><p>{t('studio.firstPageHint')}</p><div className="csu-actions"><button className="csu-primary" onClick={() => openTool('brief')}><FileText size={14} />{t('studio.project')}</button></div></div>}
+            : previewUrl ? <StudioPreview key={previewUrl} url={previewUrl} nonce={reloadNonce} device={prefs.device} visible={!showPublish && !extendPublishing && (!!extendView || !tools.active)} onActivate={onActivate} inspecting={inspecting} onInspectEnd={() => setInspecting(false)} onSelect={setSelected} onIssue={addIssue} onStatus={setPreviewStatus} /> : <div className="csu-first-page"><div className="csu-first-icon"><Code2 size={28} /></div><h2>{t('studio.firstPage')}</h2><p>{t('studio.firstPageHint')}</p><div className="csu-actions"><button className="csu-primary" onClick={() => openTool('brief')}><FileText size={14} />{t('studio.project')}</button></div></div>}
         </section>
       </div>
 
