@@ -9,7 +9,7 @@ import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { tanguHome } from '../core/tanguHome.js';
 import { atomicWriteMemoryFile, readMemoryFile, withMemoryDirectoryLock } from '../services/memoryRepository.js';
-import { defaultTopicHeader, entryFromRaw, entryOfLine, headingOf, insertPortraitAt, insertPortraitEntry, joinPortrait, portraitAuthorAt, portraitResidentChars, removePortraitLine, splitPortrait, ORGANIZE_ACCEPT_RATIO, type LayerTopic } from '../contracts/memoryLayers.js';
+import { defaultTopicHeader, entryEnd, entryFromRaw, entryOfLine, headingOf, lineIdentity, insertPortraitAt, insertPortraitEntry, joinPortrait, portraitAuthorAt, portraitResidentChars, removePortraitLine, splitPortrait, ORGANIZE_ACCEPT_RATIO, type LayerTopic } from '../contracts/memoryLayers.js';
 import { normalizeMemoryFact, splitMark, stripMark, TOPIC_KEY, withMark, type EntryAuthor } from '../contracts/entryMark.js';
 import { HumanError, readHuman, writeHuman } from './humanStore.js';
 import { PORTRAIT_LIMIT, PORTRAIT_SCOPE, portraitEntryId } from './humanPortrait.js';
@@ -43,7 +43,7 @@ function residentIndex(lines: string[]): Map<string, number> {
     const h = headingOf(l);
     if (h) { if (h.topic) topic = h.level; else if (topic !== null && h.level <= topic) topic = null; return; }
     if (topic !== null || !entryOfLine(l)) return;
-    const id = normalizeMemoryFact(l); if (id && !out.has(id)) out.set(id, i);
+    const id = lineIdentity(l); if (id && !out.has(id)) out.set(id, i);
   });
   return out;
 }
@@ -78,6 +78,7 @@ export async function applyPortraitOrganize(input: { expectedVersion: string; mo
     if (at === undefined) continue;
     const raw = entryOfLine(lines[at])!.content;
     if (splitMark(raw).meta.pin) continue; // 钉住的永远常驻
+    if (entryEnd(lines, at) !== at) continue; // 带续行(限定条件之类)的不挪:只挪首行会拆散这一条(Codex 评审 11-09)
     moves.push({ identity: m.identity, raw, to: m.to, by: portraitAuthorAt(lines, at), heading: headingAbove(lines, at) });
     content = removePortraitLine(content, at);
   }
@@ -91,7 +92,7 @@ export async function applyPortraitOrganize(input: { expectedVersion: string; mo
       topic = { key: m.to, title: def?.title || fallback.title, about: def?.about || fallback.about, notes: [], entries: [] } as LayerTopic;
       layers.topics.push(topic);
     }
-    if (!topic.entries.some((e) => e.id === m.identity)) topic.entries.push(entryFromRaw(`- ${withMark(bodyOf(m.raw), { ...splitMark(m.raw).meta, pin: false, by: m.by })}`));
+    if (!topic.entries.some((e) => e.id === m.identity)) topic.entries.push(entryFromRaw(writtenLine(m)));
   }
   const next = joinPortrait(layers);
   const after = sizeOf(next);
@@ -111,6 +112,8 @@ export async function applyPortraitOrganize(input: { expectedVersion: string; mo
   return record;
 }
 export class OrganizeRejected extends Error { code = 'ORGANIZE_REJECTED'; }
+/** 整理写进主题的那一行(撤销时拿来比:之后被人改过 —— 加了续行、改了记号 —— 就不往回挪,留在原处)。 */
+const writtenLine = (m: PortraitMove): string => `- ${withMark(bodyOf(m.raw), { ...splitMark(m.raw).meta, pin: false, by: m.by })}`;
 
 /** 整次撤销:还在目标主题里的挪回原来那一节(原句原样,连记号);已经回到常驻的只从主题里拿掉;被人删了的不复活。 */
 export async function undoPortraitOrganize(id: string): Promise<PortraitOrganizeRecord> {
@@ -127,9 +130,11 @@ export async function undoPortraitOrganize(id: string): Promise<PortraitOrganize
     for (let i = 0; i < lines.length; i++) {
       const h = headingOf(lines[i]);
       if (h) { if (h.topic) topic = { key: h.topic, level: h.level }; else if (topic && h.level <= topic.level) topic = null; continue; }
-      if (topic?.key === m.to && entryOfLine(lines[i]) && normalizeMemoryFact(lines[i]) === m.identity) { at = i; break; }
+      if (topic?.key === m.to && entryOfLine(lines[i]) && lineIdentity(lines[i]) === m.identity) { at = i; break; }
     }
     if (at < 0) continue;
+    // 整理之后在主题里被改过(续行、记号):不挪回去,免得把后来的改动抹掉(Codex 评审 11-09)
+    if (entryEnd(lines, at) !== at || lines[at].replace(/\s+$/, '') !== writtenLine(m)) continue;
     content = removePortraitLine(content, at);
     if (!residentIndex(content.split('\n')).has(m.identity)) content = insertPortraitAt(content, m.raw, m.heading);
   }
@@ -168,7 +173,9 @@ export async function pinPortraitEntry(input: { id: string; pinned: boolean; exp
   } else {
     if (!input.pinned) return;
     const by = meta.by ?? portraitAuthorAt(lines, at);
-    const line = withMark(bodyOf(e.content), { ...meta, pin: true, by });
+    // 续行跟着这一条走(插进去的是整块:首行带上图钉,后面的缩进行原样)
+    const more = lines.slice(at + 1, entryEnd(lines, at) + 1).filter((l) => l.trim()).map((l) => l.replace(/\s+$/, ''));
+    const line = [withMark(bodyOf(e.content), { ...meta, pin: true, by }), ...more].join('\n');
     const removed = removePortraitLine(doc.content, at);
     content = by === 'agent' ? insertPortraitEntry(removed, line) : insertPortraitAt(removed, line, null);
   }

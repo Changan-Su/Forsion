@@ -246,3 +246,55 @@ describe('usage counts (R6)', () => {
     expect(use(TRIP).uses30).toBe(1); expect(use(NAME).uses30).toBe(0); expect(use(RUN).uses30).toBe(0);
   });
 });
+
+describe('Codex review 11-09', () => {
+  it('agent undo leaves an entry edited after organizing in its topic, and a human-written entry goes back marked as human-written', () => {
+    const r = organize([[CAT, 'life'], [NAME, 'life']]);
+    const edited = readFileSync(topicFile('life'), 'utf8').replace(`- ${CAT} <!--tg by=agent-->`, `- ${CAT} <!--tg by=agent-->\n  只在周末喂罐头。`);
+    writeFileSync(topicFile('life'), edited);
+    const undone = undoAgentOrganize(base(), r.id);
+    expect(undone.undoChanged).toEqual(['life']);
+    expect(readFileSync(topicFile('life'), 'utf8')).toContain('只在周末喂罐头。');
+    expect(memoryFile()).not.toContain(CAT);
+    expect(memoryFile()).toContain(`${NAME} <!--tg by=user-->`);
+    expect(readAgentLayers(base()).resident.find((x) => x.identity === id(NAME))!.by).toBe('user');
+  });
+  it('pinning a multi-line detail entry back is refused instead of splitting it', () => {
+    mkdirSync(join(base(), 'Library', 'memory'), { recursive: true });
+    writeFileSync(topicFile('life'), `# 日常\n\n宠物与日常\n\n- ${TRIP} <!--tg by=agent-->\n  和室友一起。\n`);
+    expect(() => pinAgentEntry(base(), { id: detailEntryId(id(TRIP)), pinned: true })).toThrow(/several lines/);
+    expect(readFileSync(topicFile('life'), 'utf8')).toContain('和室友一起。');
+  });
+  it('two resident copies of one sentence (one marked, one not) count once; a forgotten detail entry is scrubbed from its file', () => {
+    repo().add(`${RUN} <!--tg by=user-->`);
+    const l = readAgentLayers(base());
+    expect(l.resident.filter((x) => x.identity === id(RUN) && !x.shadowed)).toHaveLength(1);
+    organize([[CAT, 'life']]);
+    const extra = readFileSync(topicFile('life'), 'utf8') + `- 用户以前养过仓鼠。 <!--tg by=agent-->\n`;
+    writeFileSync(topicFile('life'), extra);
+    repo().add('用户以前养过仓鼠。');
+    const hamster = repo().snapshot().entries.find((e) => e.content.includes('仓鼠'))!;
+    repo().mutate({ action: 'forget', id: hamster.id, expectedVersion: repo().snapshot().version });
+    readAgentLayers(base());
+    expect(readFileSync(topicFile('life'), 'utf8')).not.toContain('仓鼠');
+    expect(readFileSync(topicFile('life'), 'utf8')).toContain(CAT);
+  });
+  it('portrait: a multi-line entry is not moved; undo leaves an entry edited after organizing; pin-back keeps continuation lines', async () => {
+    await setSoul('- 你叫林夏。\n- 你在吃药。\n  只在头疼时。\n- 你养了一只猫。\n- 你在读博。\n');
+    const t = [{ key: 'life', title: '日常', about: '日常与健康的细节' }];
+    const r = await applyPortraitOrganize({ expectedVersion: (await readHuman(SOUL)).version, topics: t,
+      moves: [{ identity: id('你在吃药。'), to: 'life' }, { identity: id('你养了一只猫。'), to: 'life' }, { identity: id('你在读博。'), to: 'life' }] });
+    let doc = (await readHuman(SOUL)).content;
+    expect(portraitResidentText(doc)).toContain('- 你在吃药。\n  只在头疼时。');
+    expect(r.moves.map((m) => m.identity)).toEqual([id('你养了一只猫。'), id('你在读博。')]);
+    await setSoul(doc.replace('- 你养了一只猫。 <!--tg by=user-->', '- 你养了一只猫。 <!--tg by=user-->\n  叫团子。'));
+    await undoPortraitOrganize(r.id);
+    doc = (await readHuman(SOUL)).content;
+    expect(splitPortrait(doc).topics[0].entries.map((e) => e.raw)).toEqual(['- 你养了一只猫。 <!--tg by=user-->\n  叫团子。']);
+    expect(portraitResidentText(doc)).toContain('- 你在读博。');
+    await pinPortraitEntry({ id: portraitEntryId('你养了一只猫。'), pinned: true, expectedVersion: (await readHuman(SOUL)).version });
+    doc = (await readHuman(SOUL)).content;
+    expect(portraitResidentText(doc)).toContain('- 你养了一只猫。\n  叫团子。');
+    expect(doc).toContain('你养了一只猫。 <!--tg pin by=user-->');
+  });
+});

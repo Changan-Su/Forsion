@@ -6,7 +6,7 @@ import { configureTangu } from '../seams/runtime.js';
 import { runWithAgentSlug } from '../seams/runContext.js';
 import { createLocalMemoryBrain } from '../adapters/standalone/localMemoryBrain.js';
 import { createMemoryRepository } from './memoryRepository.js';
-import { buildAgentMemoryContext, MEMORY_RECALL_MAX_CHARS, memoryQueryTerms } from './memoryRecall.js';
+import { buildAgentMemoryContext, MEMORY_RECALL_BUDGET, MEMORY_RECALL_MAX_CHARS, memoryQueryTerms } from './memoryRecall.js';
 import { searchSessions } from './sessionSearch.js';
 import { flushMemoryUseForTests, readMemoryUse } from './memoryUsage.js';
 
@@ -158,7 +158,7 @@ describe('Agent memory recall', () => {
     configure();
     createMemoryRepository(join(temporaryHome, 'agents', 'alpha')).mutate({ action: 'add', fact: '事实 '.repeat(2000) });
     const context = await recall('alpha', '');
-    expect(context.content.length).toBeLessThanOrEqual(1000);
+    expect(context.content.length).toBeLessThanOrEqual(MEMORY_RECALL_BUDGET.resident); // 11-09 分层:常驻预算 = 常驻上限 4000
     expect(searchSessions).not.toHaveBeenCalled();
   });
   it('bounded legacy fallback is explicit, while a mismatched active Agent fails closed', async () => {
@@ -255,5 +255,13 @@ describe('memory layers in recall', () => {
     expect(c.content.match(/每周五发版/g)).toHaveLength(1);
     const off = await recall('alpha');
     expect(off.content).not.toContain('你在维护 AlphaProject 插件'); // 不给 portrait(云端 / 通道会话)就不读画像
+  });
+  it('a first resident entry longer than the whole budget is still given (cut), not dropped with everything after it', async () => {
+    configure();
+    const repository = createMemoryRepository(join(temporaryHome, 'agents', 'alpha'));
+    repository.mutate({ action: 'add', fact: 'LONG_FIRST ' + '很长的一段。'.repeat(700) });
+    repository.mutate({ action: 'add', fact: 'SHORT_SECOND 用户喜欢喝茶。' });
+    const c = await recall('alpha', '');
+    expect(c.stable).toContain('LONG_FIRST'); expect(c.truncated).toBe(true);
   });
 });

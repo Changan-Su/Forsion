@@ -340,7 +340,10 @@ export function startMemoryDream(userId: string, slug: string, opts: { automatic
         if (g.sourceIds.length === 1 && own.length === 1 && normalizeMemoryFact(own[0]) === normalizeMemoryFact(g.fact)) return /^\s*[-*+]\s/.test(own[0]) ? own[0] : `- ${own[0].trim()}`;
         return own.some((c) => splitMark(c).meta.pin) ? `- ${withMark(g.fact, { pin: true })}` : `- ${g.fact}`;
       };
-      const content = memoryGroups.map(lineOf).join('\n');
+      // 被详情盖过的常驻副本不当来源,但原样留着(R4 + Codex 评审 11-09):这台把它删了、另一台同时撤销整理删了详情那份,
+      // 两份文件各自「删除优先」合并会两边都没了。藏着不显示,不动它
+      const shadowedLines = snapshot.entries.filter((e) => shadowed.has(e.id)).map((e) => (/^\s*[-*+]\s/.test(e.content) ? e.content : `- ${e.content.trim()}`));
+      const content = [...memoryGroups.map(lineOf), ...shadowedLines].join('\n');
       const committed = await brain.memory.commitMemory(userId, { expectedVersion: snapshot.version, content,
         source: { kind: 'dream' }, provenance: memoryGroups.map(group => ({ fact: group.fact, sourceIds: [...new Set(group.sourceIds.flatMap(alias => {
           const source = sources.find(s => s.id === alias);

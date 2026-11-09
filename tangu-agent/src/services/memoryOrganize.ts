@@ -13,7 +13,7 @@ import { deps } from '../seams/runtime.js';
 import { agentsDir, tanguHome } from '../core/tanguHome.js';
 import { currentRunUserId } from '../seams/runContext.js';
 import { loadSpecialAgentsConfig, resolveBackgroundModelId } from './specialAgentsConfig.js';
-import { AGENT_RESIDENT_LIMIT, ARCHIVE_TOPIC, ORGANIZE_ACCEPT_RATIO, PORTRAIT_RESIDENT_LIMIT, splitPortrait, entryOfLine, headingOf, portraitAuthorAt, validTopicAbout, validTopicTitle } from '../contracts/memoryLayers.js';
+import { AGENT_RESIDENT_LIMIT, ARCHIVE_TOPIC, ORGANIZE_ACCEPT_RATIO, PORTRAIT_RESIDENT_LIMIT, splitPortrait, entryOfLine, headingOf, lineIdentity, portraitAuthorAt, validTopicAbout, validTopicTitle } from '../contracts/memoryLayers.js';
 import { normalizeMemoryFact, splitMark, stripMark, TOPIC_KEY, type EntryAuthor } from '../contracts/entryMark.js';
 import { readHuman } from '../agents/humanStore.js';
 import { PORTRAIT_SCOPE } from '../agents/humanPortrait.js';
@@ -133,7 +133,7 @@ async function organizePortrait(userId: string, manual: boolean): Promise<Organi
   const items: OrganizeItem[] = []; const identity = new Map<string, string>(); const seen = new Set<string>();
   lines.forEach((l, i) => {
     const e = entryOfLine(l); if (!e || headingOf(l)) return;
-    const id = normalizeMemoryFact(l); if (!id || seen.has(id)) return; seen.add(id);
+    const id = lineIdentity(l); if (!id || seen.has(id)) return; seen.add(id);
     const alias = `e${items.length + 1}`; identity.set(alias, id);
     const u = use(l);
     items.push({ id: alias, text: stripMark(e.content).trim(), by: portraitAuthorAt(lines, i), pinned: !!splitMark(e.content).meta.pin, uses30: u.uses30, lastUsed: u.lastUsed });

@@ -55,6 +55,8 @@ export const entryOfLine = (line: string): { prefix: string; content: string } |
   const m = line.match(ENTRY);
   return m ? { prefix: m[1], content: m[2] } : null;
 };
+/** 一行条目的身份:列表符号(含「1.」这种编号)和行尾记号都去掉 —— 「- x」和「1. x」是同一条(Codex 评审 11-09)。 */
+export const lineIdentity = (line: string): string => { const e = entryOfLine(line); return normalizeMemoryFact(e ? e.content : line); };
 /** 标题行:级别、去掉记号的标题、记号里的主题键。 */
 export function headingOf(line: string): { level: number; title: string; topic: string | null } | null {
   const h = line.match(HEADING);
@@ -70,8 +72,16 @@ function sectionAt(lines: string[], start: number): Section {
   return { start, end };
 }
 function namedSection(lines: string[], match: (title: string) => boolean): Section | null {
-  let start = -1;
-  for (let i = 0; i < lines.length; i++) { const h = headingOf(lines[i]); if (h && !h.topic && match(h.title)) start = i; }
+  // 详情主题里面的小标题不算常驻的节(Codex 评审 11-09:主题里写了个「### 最近认识的」,新条目不能插进详情里)
+  let start = -1; let topic: number | null = null;
+  for (let i = 0; i < lines.length; i++) {
+    const h = headingOf(lines[i]);
+    if (!h) continue;
+    if (h.topic) { topic = h.level; continue; }
+    if (topic !== null && h.level > topic) continue;
+    topic = null;
+    if (match(h.title)) start = i;
+  }
   return start < 0 ? null : sectionAt(lines, start);
 }
 export const agentSection = (lines: string[]): Section | null => namedSection(lines, isAgentTitle);
@@ -170,7 +180,7 @@ export const entryFromRaw = (raw: string): LayerEntry => {
   const first = raw.split('\n')[0];
   const { body, meta } = splitMark(first);
   const e = entryOfLine(body);
-  return { raw, id: normalizeMemoryFact(first), text: (e ? e.content : body).trim(), meta };
+  return { raw, id: normalizeMemoryFact(e ? e.content : body), text: (e ? e.content : body).trim(), meta };
 };
 /** 一节(或一个文件)标题下面的正文:第一段不是条目的文字 = 索引说明;条目一行一条(缩进续行跟着上一条);其余文字原样留在 notes。 */
 function parseTopicBody(lines: string[]): { about: string; notes: string[]; entries: LayerEntry[] } {
@@ -253,7 +263,7 @@ export function settlePortrait(content: string): string {
   const lines = layers.resident.split('\n');
   const places = new Map<string, Place[]>();
   const add = (id: string, p: Place): void => { if (!id) return; const l = places.get(id); if (l) l.push(p); else places.set(id, [p]); };
-  for (let i = 0; i < lines.length; i++) if (entryOfLine(lines[i])) add(normalizeMemoryFact(lines[i]), { where: 'resident', index: i, pinned: !!splitMark(lines[i]).meta.pin });
+  for (let i = 0; i < lines.length; i++) if (entryOfLine(lines[i])) add(lineIdentity(lines[i]), { where: 'resident', index: i, pinned: !!splitMark(lines[i]).meta.pin });
   layers.topics.forEach((t) => t.entries.forEach((e, i) => add(e.id, { where: 'topic', key: t.key, index: i })));
   const dropResident = new Set<number>(); const dropTopic = new Map<string, Set<number>>();
   for (const list of places.values()) {
@@ -408,7 +418,22 @@ export function mergeLayeredPortrait(ours: string, base: string | null, theirs: 
     if (text !== null) resident = text;
     else { const m = mergePortrait(o.resident, b.resident, t.resident); resident = m.content; conflict = m.conflict; }
   }
-  const topics = mergeTopics(o.topics, b ? b.topics : null, t.topics);
+  let topics = mergeTopics(o.topics, b ? b.topics : null, t.topics);
+  // 跨常驻 / 详情按身份认删除(Codex 评审 11-09):基线里有、某一边哪儿都没有了 = 那边删了;另一边只是把它挪了个地方,
+  // 各段各自合并会把「挪过去的那份」当成新加的留下来 —— 删除优先。没有基线(第一次见面)认不出谁删的,照旧并集
+  if (b) {
+    const anywhere = (l: PortraitLayers): Set<string> => new Set([...l.resident.split('\n').filter((x) => entryOfLine(x)).map(lineIdentity), ...l.topics.flatMap((x) => x.entries.map((e) => e.id))]);
+    const was = anywhere(b), mine = anywhere(o), there = anywhere(t);
+    const gone = new Set([...was].filter((id) => !mine.has(id) || !there.has(id)));
+    if (gone.size) {
+      // 每删一条重新找(删一条可能连带收掉空了的节,行号会变)
+      for (let at = 0; at >= 0;) {
+        at = resident.split('\n').findIndex((x) => !!entryOfLine(x) && gone.has(lineIdentity(x)));
+        if (at >= 0) resident = removePortraitLine(resident, at);
+      }
+      topics = topics.map((x) => ({ ...x, entries: x.entries.filter((e) => !gone.has(e.id)) }));
+    }
+  }
   return { content: settlePortrait(joinPortrait({ resident, topics })), conflict };
 }
 
@@ -418,8 +443,8 @@ export function mergeLayeredPortrait(ours: string, base: string | null, theirs: 
 export function residentLine(text: string, limit: number): { kept: string; inside: Set<string>; outside: string[] } {
   const clip = clipWholeLines(text, limit);
   const inside = new Set<string>(); const outside: string[] = [];
-  for (const line of clip.kept.split('\n')) if (entryOfLine(line)) inside.add(keyOf(line));
-  for (const line of clip.rest.split('\n')) { const e = entryOfLine(line); if (e && !inside.has(keyOf(line))) outside.push(e.content.trim()); }
+  for (const line of clip.kept.split('\n')) if (entryOfLine(line)) inside.add(lineIdentity(line));
+  for (const line of clip.rest.split('\n')) { const e = entryOfLine(line); if (e && !inside.has(lineIdentity(line))) outside.push(e.content.trim()); }
   return { kept: clip.kept, inside, outside };
 }
 

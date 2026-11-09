@@ -63,6 +63,8 @@ export function readAgentLayers(base: string): AgentLayers {
   const add = (id: string, p: Place): void => { if (!id) return; const l = places.get(id); if (l) l.push(p); else places.set(id, [p]); };
   resident.forEach((r, i) => add(r.identity, { where: 'resident', index: i, pinned: r.pinned }));
   const live = files.map(({ key, file }) => ({ key, file, entries: file.topic.entries.filter((e) => !forgotten.has(memoryFactFingerprint(e.raw.split('\n')[0]))) }));
+  // 详情文件里还留着忘掉的(另一台忘的、墓碑同步过来了):顺手从文件里清掉 —— 索引里写着文件位置,整份读的时候不能再读到它(Codex 评审 11-09)
+  if (live.some((t) => t.entries.length !== t.file.topic.entries.length)) scrubForgottenDetails(base, forgotten, live.filter((t) => t.entries.length !== t.file.topic.entries.length).map((t) => t.key));
   live.forEach((t) => t.entries.forEach((e, i) => add(e.id, { where: 'topic', key: t.key, index: i })));
   const dropTopic = new Set<string>();
   for (const list of places.values()) {
@@ -71,7 +73,8 @@ export function readAgentLayers(base: string): AgentLayers {
     const anyPinned = list.some((p) => p.where === 'resident' && p.pinned);
     for (const p of list) {
       if (p === win) continue;
-      if (p.where === 'resident') { if (win.where === 'topic' || anyPinned) resident[p.index].shadowed = true; }
+      // 常驻里同一句的另几份(详情 / 钉住的那份胜出,或者两台各带一份、一份带记号一份不带)都藏起来,只算一份(Codex 评审 11-09)
+      if (p.where === 'resident') resident[p.index].shadowed = true;
       else dropTopic.add(`${p.key}\n${p.index}`);
     }
   }
@@ -83,6 +86,22 @@ export function readAgentLayers(base: string): AgentLayers {
   const archive = live.find((t) => t.key === ARCHIVE_TOPIC);
   const visible = resident.filter((r) => !r.shadowed);
   return { version: snapshot.version, resident, residentChars: visible.map((r) => stripMark(r.entry.content).trim()).join('\n').length, limit: AGENT_RESIDENT_LIMIT, topics, archive: archive ? view(archive) : null };
+}
+
+/** 尽力而为:拿目录锁把忘掉的条目从这几份详情里拿掉(锁被占着、读写出错就下次再说,不挡读)。 */
+function scrubForgottenDetails(base: string, forgotten: Set<string>, keys: string[]): void {
+  try {
+    withMemoryDirectoryLock(base, () => {
+      for (const key of keys) {
+        const cur = readTopic(base, key);
+        if (!cur) continue;
+        const entries = cur.topic.entries.filter((e) => !forgotten.has(memoryFactFingerprint(e.raw.split('\n')[0])));
+        if (entries.length === cur.topic.entries.length) continue;
+        if (!entries.length && !cur.topic.notes.length) unlinkSync(safeMemoryPath(base, topicRel(key)));
+        else atomicWriteMemoryFile(base, topicRel(key), serializeTopicFile({ ...cur.topic, entries }));
+      }
+    });
+  } catch (e) { console.warn('[memory layers] forgotten detail entries not scrubbed yet:', e instanceof Error ? e.message : e); }
 }
 
 // ── 整理的操作记录(只在本机)──
@@ -117,6 +136,9 @@ let crashAfter: Phase | null = null;
 export function crashOrganizeAfterForTests(phase: Phase | null): void { crashAfter = phase; }
 const step = (phase: Phase): void => { if (crashAfter === phase) { crashAfter = null; throw new Error(`simulated crash after ${phase}`); } };
 
+/** 整理写进详情的那一行(撤销时拿来比:之后被改过的 —— 加了续行、改了记号 —— 不往回挪,留在详情里并说出来)。 */
+const writtenLine = (m: OrganizeMove): string => `- ${withMark(bodyOf(m.raw), { ...splitMark(m.raw).meta, pin: false, by: m.by })}`;
+const unchangedSince = (base: string, m: OrganizeMove): boolean => readTopic(base, m.to)?.topic.entries.some((e) => e.id === m.identity && e.raw === writtenLine(m)) ?? false;
 /** 第一步:把要挪的条目写进各详情文件(已经在那儿的不重复写),读回来核对每一条都在、原句一字不差。幂等。 */
 function runWriting(base: string, r: OrganizeRecord): void {
   const byTopic = new Map<string, OrganizeMove[]>();
@@ -129,7 +151,7 @@ function runWriting(base: string, r: OrganizeRecord): void {
     if (def?.about && !topic.about) topic.about = def.about;
     for (const m of moves) {
       if (topic.entries.some((e) => e.id === m.identity)) continue;
-      topic.entries.push(entryFromRaw(`- ${withMark(bodyOf(m.raw), { ...splitMark(m.raw).meta, pin: false, by: m.by })}`));
+      topic.entries.push(entryFromRaw(writtenLine(m)));
     }
     const text = serializeTopicFile(topic);
     if (text !== cur?.raw) atomicWriteMemoryFile(base, topicRel(key), text);
@@ -152,14 +174,16 @@ function runCommitting(base: string, r: OrganizeRecord): void {
   const after = createMemoryRepository(base).snapshot();
   r.after = { count: after.entries.length, chars: after.entries.map((e) => stripMark(e.content).trim()).join('\n').length };
 }
-/** 撤销第一步:还在详情里(没被人删 / 忘掉)的挪回常驻;已经在常驻里的不重复。 */
+/** 撤销第一步:还在详情里、整理之后没被改过的挪回常驻;已经在常驻里的不重复。
+ *  人写的那条放回去时在行尾写明是人写的(重新提交的条目来源会变成「恢复」,不写就被当成 Agent 写的,下次可能被归档)。 */
 function runRestoring(base: string, r: OrganizeRecord): void {
   const repo = createMemoryRepository(base);
   const snap = repo.snapshot();
   const have = new Set(snap.entries.map((e) => normalizeMemoryFact(e.content)));
-  const back = r.moves.filter((m) => !have.has(m.identity) && readTopic(base, m.to)?.topic.entries.some((e) => e.id === m.identity));
+  const back = r.moves.filter((m) => !have.has(m.identity) && unchangedSince(base, m));
   if (!back.length) return;
-  const content = `${snap.content.replace(/\n+$/, '')}${snap.content.trim() ? '\n' : ''}${back.map((m) => m.raw).join('\n')}`;
+  const lineOf = (m: OrganizeMove): string => { const meta = splitMark(m.raw).meta; return m.by !== 'agent' && !meta.by ? withMark(m.raw, { ...meta, by: m.by }) : m.raw; };
+  const content = `${snap.content.replace(/\n+$/, '')}${snap.content.trim() ? '\n' : ''}${back.map(lineOf).join('\n')}`;
   repo.commit({ expectedVersion: snap.version, content, source: { kind: 'restore' } });
 }
 /** 撤销第二步:常驻里已经有了的,从详情里拿掉;文件空了就删掉。每份比一下整理后的哈希,变过的记下来(照样只动这次挪的那几条)。 */
@@ -170,8 +194,9 @@ function runRemoving(base: string, r: OrganizeRecord): void {
     const cur = readTopic(base, key);
     if (!cur) continue;
     if (r.files[key] && sha(cur.raw) !== r.files[key]) changed.push(key);
-    const gone = new Set(r.moves.filter((m) => m.to === key && resident.has(m.identity)).map((m) => m.identity));
-    const entries = cur.topic.entries.filter((e) => !gone.has(e.id));
+    // 只拿掉整理时写进来、之后没改过、并且已经回到常驻的那几条;改过的留在详情里(上面记进 changed)
+    const mine = r.moves.filter((m) => m.to === key && resident.has(m.identity));
+    const entries = cur.topic.entries.filter((e) => !mine.some((m) => m.identity === e.id && e.raw === writtenLine(m)));
     if (entries.length === cur.topic.entries.length) continue;
     if (!entries.length && !cur.topic.notes.length) unlinkSync(safeMemoryPath(base, topicRel(key)));
     else atomicWriteMemoryFile(base, topicRel(key), serializeTopicFile({ ...cur.topic, entries }));
@@ -259,6 +284,8 @@ export function pinAgentEntry(base: string, input: { id: string; pinned: boolean
       const cur = readTopic(base, key);
       const hit = cur?.topic.entries.find((e) => detailEntryId(e.id) === input.id);
       if (!cur || !hit) continue;
+      // 常驻一行一条:带续行的那条钉回去会拆散它,不做(Codex 评审 11-09);人可以先在详情文件里把它并成一行
+      if (hit.raw.includes('\n')) throw new MemoryRepositoryError('MEMORY_MULTILINE', 'This detail entry spans several lines; join it into one line in its topic file before pinning it.');
       const line = `- ${withMark(hit.text, { ...hit.meta, pin: true, by: hit.meta.by ?? 'agent' })}`;
       // 常驻里同一句没钉的旧副本(无基线并集带回来的)一起换成钉住的这一条
       const rest = snap.content.split('\n').filter((l) => !l.trim() || normalizeMemoryFact(l) !== hit.id).join('\n').replace(/\n+$/, '');

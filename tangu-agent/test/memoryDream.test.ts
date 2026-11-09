@@ -470,7 +470,7 @@ describe('Dream knows where entries live', () => {
     mkdirSync(join(home, 'agents', 'alpha', 'Library', 'memory'), { recursive: true });
     writeFileSync(join(home, 'agents', 'alpha', 'Library', 'memory', 'life.md'), `# 日常\n\n宠物与日常生活\n\n- ${CAT} <!--tg by=agent-->\n`);
   };
-  it('a candidate already in the details is consumed, not added back to resident; a moved copy left in resident is not a source and goes on commit', async () => {
+  it('a candidate already in the details is consumed, not added back to resident; a moved copy left in resident is not a source and stays hidden', async () => {
     repo().add('已有事实'); repo().add(CAT); seedDetails(); // 常驻里那份被详情盖过(挪走了,并集又带回来)
     seedCandidate('alpha', CAT, 's-cat');
     seedCandidate('alpha', '用户偏好中文回复', 's-zh');
@@ -481,7 +481,10 @@ describe('Dream knows where entries live', () => {
     expect(sources.filter((x) => x.kind === 'memory').map((x) => x.fact)).toEqual(['已有事实']); // 被详情盖过的那份不当来源
     expect(sources.some((x) => x.fact === CAT)).toBe(false); // 一字不差在详情里的候选直接消费掉
     const memory = repo().snapshot().content;
-    expect(memory).not.toContain(CAT); // 没加回常驻,也没「丢」:详情里还在
+    // 常驻里被详情盖过的那份原样留着(藏着、不当来源;两台各删一份会两边都没了,Codex 评审 11-09),也没多出第二份
+    expect(memory.match(new RegExp(CAT, 'g'))).toHaveLength(1);
+    const layers = readAgentLayers(join(home, 'agents', 'alpha'));
+    expect(layers.resident.find((r) => r.text === CAT)?.shadowed).toBe(true);
     expect(memory).toContain('已有事实'); expect(memory).toContain('用户偏好中文回复');
     expect(readFileSync(join(home, 'agents', 'alpha', 'Library', 'memory', 'life.md'), 'utf8')).toContain(CAT);
     expect(readCandidates('alpha')).toHaveLength(0);

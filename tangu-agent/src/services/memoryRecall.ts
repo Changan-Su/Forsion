@@ -169,7 +169,8 @@ export async function buildAgentMemoryContext(input: AgentMemoryContextInput): P
     for (const line of lines) {
       const remaining = available - chars - 1;
       // whole:按整条截,放不下的一条都不切(常驻线外的进召回池)
-      if (whole ? line.text.length > remaining : remaining < 60) { truncated = true; break; }
+      // 第一条就放不下(一整段很长的):照旧按字截给,不然这一段一条都没有(Codex 评审 11-09)
+      if (whole && taken > 0 ? line.text.length > remaining : remaining < 60) { truncated = true; break; }
       const text = line.text.length > remaining ? `${line.text.slice(0, remaining - 1)}…` : line.text;
       out.push(text); chars += text.length + 1; taken++;
       if (line.id) { selected.add(line.id); entryIds.push(line.id); }

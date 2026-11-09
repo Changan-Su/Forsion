@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { diff3Merge } from 'node-diff3';
 import { normalizeMemoryFact, splitMark, stripMark, withMark } from './entryMark.js';
-import { mergeEntryLists, mergePortrait, mergeTopicFile, parseTopicFile, portraitResidentChars, portraitResidentText, residentLine, settlePortrait, splitPortrait, topicIndexLine, validTopicAbout } from './memoryLayers.js';
+import { insertPortraitEntry, lineIdentity, mergeEntryLists, mergePortrait, mergeTopicFile, parseTopicFile, portraitResidentChars, portraitResidentText, residentLine, settlePortrait, splitPortrait, topicIndexLine, validTopicAbout } from './memoryLayers.js';
 import { mergeAgentSyncContent } from './agentSyncRules.js';
 
 const merge = (path: string, ours: string, base: string | null, theirs: string) => mergeAgentSyncContent(path, ours, base, theirs, { diff3: diff3Merge })!;
@@ -104,5 +104,28 @@ describe('topic index gate', () => {
     expect(validTopicAbout('学习', '学习', 'study')).toBe(false);
     expect(validTopicAbout('study.md', 'Study', 'study')).toBe(false);
     expect(validTopicAbout('two\nlines here', 'x', 'x')).toBe(false);
+  });
+});
+
+describe('Codex review 11-09', () => {
+  it('one side moved an entry into a topic while the other forgot it: the forget wins', () => {
+    const base = '- 你叫林夏。\n- 你养了一只猫。\n';
+    const moved = '- 你叫林夏。\n\n## 日常 <!--tg topic=life-->\n\n日常与宠物的细节\n\n- 你养了一只猫。 <!--tg by=agent-->\n';
+    const forgot = '- 你叫林夏。\n';
+    for (const [o, t] of [[moved, forgot], [forgot, moved]]) {
+      const m = merge('human/SOUL.md', o, base, t).content;
+      expect(m).not.toContain('猫');
+      expect(residentFacts(m)).toEqual(['你叫林夏。']);
+    }
+  });
+  it('a numbered entry and a bulleted one are the same entry', () => {
+    expect(lineIdentity('1. You have a cat.')).toBe(lineIdentity('- You have a cat. <!--tg pin-->'));
+    expect(residentLine('1. You have a cat.', 100).inside.has(lineIdentity('- You have a cat.'))).toBe(true);
+  });
+  it('a heading inside a detail topic is not a resident section: new entries never land in a topic', () => {
+    const doc = '- 你叫林夏。\n\n## 日常 <!--tg topic=life-->\n\n日常细节\n\n### 最近认识的\n\n- 你养了一只猫。\n';
+    const out = insertPortraitEntry(doc, '你在读博。');
+    expect(topics(out)).toEqual({ life: ['你养了一只猫。'] });
+    expect(residentFacts(out)).toEqual(['你叫林夏。', '你在读博。']);
   });
 });
