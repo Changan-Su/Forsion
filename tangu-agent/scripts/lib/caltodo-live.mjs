@@ -17,7 +17,7 @@
  *   3. tick  — same session 「开发票那条我已经弄完了，帮我勾掉。」: amadeus_edit_event ticks that row (still no date); nothing else changes.
  *  Negative control (run it when touching this): the engine before 11-07 (start required, undated rows skipped by list) — leg 1 goes red.
  *
- *  Local engine only, a fourth leg (11-09). In a real session the agent was asked for a to-do "later today": it took the to-do Space it saw
+ *  Local engine only, two more legs (11-09). In a real session the agent was asked for a to-do "later today": it took the to-do Space it saw
  *  in the interface commands for a data store and said it could not write to it, then picked one of three calendars that was not the default
  *  one, with a start time that had already passed.
  *   4. later — two more calendars (both with a checkbox column) are put in the vault for this leg only, and the run is a desktop client with a
@@ -26,7 +26,11 @@
  *              leg began (a date without a time must be today or later; no date at all is reported, not red).
  *              "Later today" at ten in the morning passes with any guessed evening time, so live-harness pins the engine's clock to the evening
  *              (`--later-hour`, default 22). `--caltodo-later-only` runs this leg alone; `--later-msg "…"` tries another wording (keep 房东 / 电话 in it).
- *  Negative control for leg 4: the same leg on the engine without the default-calendar mark / past-start note (`--kind base`). */
+ *   5. named — same setup, 「帮我加个日程：今天 N 点给物业打个电话。」 with N two hours before the engine's clock. Adding it is fine (it may be
+ *              a record), asking first is fine; red = the past time is written and the reply says nothing about it having passed, or nothing
+ *              is written and nothing is said. Skipped before 03:00 on the engine's clock.
+ *  Negative control for legs 4–5: the same legs on the engine without the default-calendar mark / past-start note (`--kind base`). On
+ *  2026-11-09 leg 4 was green there too with GPT 6 Luna (it writes today's date without a time). */
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 
@@ -205,6 +209,38 @@ export async function calTodoLive({ run, rounds = 1, home, workspace, vault, clo
             + `${newNotes4.length ? `;✗ 新笔记 ${newNotes4.join(',')}` : ''}${gaveUp ? ';✗ 说做不到' : ''}`
             + `;过去时间提醒 ${warned} 次,get_datetime ${asked('get_datetime')} 次,list_ui_commands ${asked('list_ui_commands')} 次,run_ui_command ${asked('run_ui_command')} 次`,
           later);
+
+        // 5. the user names an hour that has already passed today: writing it is fine, saying nothing about it is not
+        const t5 = wallClock(tzOffsetMin);
+        const hour = Number(t5.slice(11, 13)) - 2;
+        if (hour >= 1) {
+          const cal5 = await readCal();
+          const notesBefore5 = await notes();
+          const named = await run(sid('named'), `帮我加个日程：今天 ${hour} 点给物业打个电话。`, 300_000, cfg, 'desktop/live-harness', undefined, undefined, undefined, { ...ZH, uiCommands: [SPACE_COMMAND] });
+          const cal5After = await readCal();
+          const added5 = (cal5After?.rows || []).filter((r) => !cal5.rows.some((s) => s.id === r.id));
+          const row5 = added5.find((r) => /物业/.test(String(r.cells?.name)));
+          const start5 = typeof row5?.cells?.date === 'string' && row5.cells.date ? row5.cells.date.split('/')[0] : null;
+          const past5 = !!start5 && (start5.includes('T') ? start5 < t5 : start5 < t5.slice(0, 10));
+          const said = /已经?过|过去|已过|过了|早于(现在|当前)|passed|in the past/i.test(named.content || '');
+          const calls5 = (n) => named.toolCalls.filter((t) => t === n).length;
+          const silent = !!row5 && past5 && !said; // 悄悄写了一个已经过去的时刻
+          const nothing = !row5 && !said && !calls5('ask_user'); // 没写,也没说为什么、没问
+          const rest5 = cal5.rows.every((s) => same(cal5After?.rows?.find((r) => r.id === s.id), s));
+          const strayed5 = decoys.filter((d) => !existsSync(d.file) || readFileSync(d.file, 'utf8') !== d.text).map((d) => relative(vault, d.file));
+          const wrong5 = WRONG_TOOLS.filter((n) => okCalls(named, n));
+          const newNotes5 = (await notes()).filter((p) => !notesBefore5.includes(p));
+          const warned5 = named.toolResults.filter((r) => /^amadeus_(create|edit)_event$/.test(r.name) && /in the past/i.test(r.full || '')).length;
+          leg(`${tag}点名的时刻已经过去:不悄悄写`,
+            !named.error && !silent && !nothing && added5.length <= 1 && (added5.length === 0 || !!row5) && rest5 && !strayed5.length
+              && named.toolCalls.length <= MAX_STEPS_LATER && !wrong5.length && !newNotes5.length,
+            named.error || `引擎时钟 ${t5},点名今天 ${hour} 点;${named.toolCalls.length} 步(${named.toolCalls.join('→') || '无'})${named.toolCalls.length > MAX_STEPS_LATER ? ` ✗ 超过 ${MAX_STEPS_LATER}` : ''}`
+              + `;缺省日历新行 ${added5.length}:${added5.map((r) => JSON.stringify(r.cells)).join(' / ') || '没写'}${added5.length && !row5 ? ';✗ 标题对不上' : ''}`
+              + `;回复${said ? '说了时间已过' : '没提时间已过'}${calls5('ask_user') ? ',问了用户' : ''}${silent ? ';✗ 悄悄写了已经过去的时刻' : ''}${nothing ? ';✗ 没写也没说' : ''}`
+              + `${strayed5.length ? `;✗ 写进了别的日历 ${strayed5.join(',')}` : ''}${rest5 ? '' : ';✗ 原有行被改'}${wrong5.length ? `;✗ 写到了 ${wrong5.join('/')}` : ''}${newNotes5.length ? `;✗ 新笔记 ${newNotes5.join(',')}` : ''}`
+              + `;过去时间提醒 ${warned5} 次,get_datetime ${calls5('get_datetime')} 次`,
+            named);
+        }
       } finally {
         for (const d of decoys) rmSync(d.file, { force: true });
       }

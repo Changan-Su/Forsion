@@ -26,8 +26,8 @@
  *                                                           #   额度用完时先跑离线接线证据:node scripts/rename-identity.smoke.mjs(假模型端点,截获系统提示词)
  *   npm run live:harness -- --only caltodo [--calendar-plugin <Calendar 插件检出>] [--rounds 3]   # 用户的待办(11-07):「帮我添加两条待办」几步之内进默认日历、没日期没勾、不写笔记,再列出、勾掉;
  *                                                           #   --calendar-plugin 放进 calendar-todos 技能(桌面形态)。云端 run 用 --only cloudtodo(同 cloudcal 那样指 server scripts/calendar-local.mts)。改日历 / 待办工具定义后跑
- *                                                           #   本机那份还有第四条腿「今天晚一点…」:三本日历 + 界面命令面,须进缺省那本、时间不早于现在;引擎时钟钉在晚上(--later-hour <0-23|off>,缺省 22),
- *                                                           #   --caltodo-later-only 只跑这一条(负对照用)。改日历工具的缺省日历标记 / 过去时间提醒、list_ui_commands 的返回后跑
+ *                                                           #   本机那份还有第四、五条腿:「今天晚一点…」须进缺省那本(三本日历 + 界面命令面)、时间不早于现在;点名一个已经过去的钟点时不许悄悄写进去;引擎时钟钉在晚上(--later-hour <0-23|off>,缺省 22),
+ *                                                           #   --caltodo-later-only 只跑这两条(负对照用)。改日历工具的缺省日历标记 / 过去时间提醒、list_ui_commands 的返回后跑
  *   npm run live:harness -- --only chat,tool,muse            # 子集(historian→dream→recall 三连有先后依赖)
  *   npm run live:harness -- --only mask [--mask-off]          # 发给模型前脱敏(10-28,借鉴 magpie 方案 1):读 .env → run_bash 带 key 的 curl 打台架里的回显服务 → 问模型看到的值是不是 sk-proj- 开头、是不是占位符。
  *   npm run live:harness -- --only filechange               # 变动感知(11-07):读过的文件被用户改了 → 下一轮开头 / run 内续调前都带 diff 告诉模型,且不拿旧副本覆盖。改 tools/readState.ts / tools/fileChangeNotice.ts / agentLoop 那两处注入后跑;负对照 TANGU_FILE_CHANGE_NOTICE=off(①② 须红)
