@@ -170,4 +170,17 @@ describe('分身:注册表、解析器、人设白名单', () => {
     expect(await listStandIns('kai')).toEqual([]);
     writeFileSync(path.join(home, 'agents', '.keep'), ''); // 目录还在,别的用例不受影响
   });
+
+  it('改名:有分身的本体不给改(改了分身全成孤儿),分身自己也不给改', async () => {
+    const { saveAgent } = await import('./agentRegistry.js');
+    const { resolveRunIdentity, ensureStandIn } = await import('./standIn.js');
+    const { renameAgent } = await import('./agentRename.js');
+    await saveAgent({ slug: 'rio', name: 'Rio', systemPrompt: 'r' });
+    const id = await resolveRunIdentity('rio', { kind: 'wechat' });
+    if (id.kind !== 'standin') throw new Error('expected stand-in');
+    await ensureStandIn(id);
+    await expect(renameAgent('rio', 'rio-two')).rejects.toMatchObject({ code: 'has_stand_ins' });
+    await expect(renameAgent(id.slug, 'rio-standin-other')).rejects.toMatchObject({ code: 'stand_in' });
+    expect(existsSync(path.join(home, 'agents', 'rio'))).toBe(true);
+  });
 });

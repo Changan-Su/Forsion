@@ -10,7 +10,7 @@ import { promises as fs, existsSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { agentsDir } from '../core/tanguHome.js';
 import { query } from '../core/db.js';
-import { getAgent, isValidSlug, builtinAgentDef, readAgentsMeta, writeAgentsMeta, type NormalAgentDef } from './agentRegistry.js';
+import { getAgent, listStandIns, isValidSlug, builtinAgentDef, readAgentsMeta, writeAgentsMeta, type NormalAgentDef } from './agentRegistry.js';
 import { listTeams, saveTeam } from './teamRegistry.js';
 import { loadTriggers, saveTriggers } from '../services/museTriggers.js';
 import { channelSettings, saveChannelSettings } from '../channels/config.js';
@@ -18,7 +18,7 @@ import { BUNDLE_ORIGIN_FILE } from '../plugins/bundles.js';
 import { sessionHasActiveRun } from '../services/agentLoop.js';
 import { withKeyLock } from '../core/keyLock.js';
 
-export type AgentRenameCode = 'invalid_slug' | 'unchanged' | 'builtin' | 'not_found' | 'exists' | 'cloud_synced' | 'plugin_seeded' | 'busy' | 'unreadable';
+export type AgentRenameCode = 'invalid_slug' | 'unchanged' | 'builtin' | 'not_found' | 'exists' | 'cloud_synced' | 'plugin_seeded' | 'busy' | 'unreadable' | 'has_stand_ins' | 'stand_in';
 
 export class AgentRenameError extends Error {
   constructor(public code: AgentRenameCode, public status: number) {
@@ -49,6 +49,10 @@ export async function renameAgent(oldSlug: string, newSlug: string): Promise<{ a
   // `.cloudsync-<scope>.json` 是跑过一次同步才落的 prev-state;只开过开关没同步过的不算(云端没有它)。
   if (cur.cloudSync || entries.some((f) => /^\.cloudsync-.+\.json$/.test(f) && f !== '.cloudsync-accounts.json')) throw new AgentRenameError('cloud_synced', 409);
   if (entries.includes(BUNDLE_ORIGIN_FILE)) throw new AgentRenameError('plugin_seeded', 409);
+  // 分身(agents/standIn.ts)的 slug 由本体 slug 推出、stand_in_of 也指着它:改本体名会让分身全变孤儿(通道里换上全新的空分身)。
+  // 第一期不跟着搬,先拒;分身自己也不能改名(改了解析器就找不到它)。
+  if (cur.standInOf) throw new AgentRenameError('stand_in', 409);
+  if ((await listStandIns(oldSlug)).length) throw new AgentRenameError('has_stand_ins', 409);
 
   const rows = await query<Array<{ id: string; agent_config: unknown }>>('SELECT id, agent_config FROM chat_sessions WHERE agent_config IS NOT NULL');
   const sessions: Array<{ id: string; cfg: Record<string, unknown> }> = [];

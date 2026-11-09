@@ -36,6 +36,7 @@ import { deviceTagContext, factWithScope } from '../services/deviceTagContext.js
 import type { DeviceTagContext } from '../contracts/deviceTags.js';
 import { parseRemoteOrigin, clampApprovalMode, remoteApprovalCap } from '../services/remoteOrigin.js';
 import { noteUserDocumentEdit, noteUserEntryEdit, noteUserRestore } from '../services/memoryTelemetry.js';
+import { channelHub } from '../channels/hub.js';
 
 const router = Router();
 
@@ -83,20 +84,24 @@ router.get('/agent/agents', authMiddleware, async (req: AuthRequest, res) => {
 
 /** 分身(11-09):挂在这个本体下的分身(名册嵌套行、配置页「分身」一节)。/agent/agents 不列它们 —— 选择器 / 缺省 Agent 都不该看见。
  *  memoryEntries = 分身自己记了几条(界面上「N 条自己的记忆」)。本机才有(分身只留本机)。 */
-router.get('/agent/agents/:slug/stand-ins', authMiddleware, async (req: AuthRequest, res) => {
+/** 分身清单(11-09,agents/standIn.ts):本体页「分身」一段与名册里挂在本体下的那几行。分身不进 /agent/agents。
+ *  不带 slug = 本机全部分身(名册一次取完);带 slug = 只要这个本体的。 */
+async function standInRows(bodySlug?: string) {
+  return (await listStandIns(bodySlug)).map((a) => {
+    let memoryEntries = 0;
+    try { memoryEntries = createMemoryRepository(path.join(agentsDir(), a.slug)).snapshot().entries.length; } catch { /* 还没有记忆 */ }
+    return { slug: a.slug, name: a.name, nameZh: a.nameZh, nameEn: a.nameEn, standInOf: a.standInOf, standInChannel: a.standInChannel ?? null, standInPeer: a.standInPeer ?? null,
+      channelName: a.standInChannel ? channelHub.channelName(a.standInChannel) : null, createdAt: a.createdAt, memoryEntries };
+  });
+}
+const sendStandIns = async (res: any, bodySlug?: string): Promise<void> => {
   if (cloudAgentsEnabled()) return void res.json({ standIns: [] });
   if (!ensureLocal(res)) return;
-  try {
-    const standIns = (await listStandIns(req.params.slug)).map((a) => {
-      let memoryEntries = 0;
-      try { memoryEntries = createMemoryRepository(path.join(agentsDir(), a.slug)).snapshot().entries.length; } catch { /* 还没有记忆 */ }
-      return { slug: a.slug, name: a.name, nameZh: a.nameZh, nameEn: a.nameEn, standInOf: a.standInOf, standInChannel: a.standInChannel ?? null, standInPeer: a.standInPeer ?? null, createdAt: a.createdAt, memoryEntries };
-    });
-    res.json({ standIns });
-  } catch (e: any) {
-    res.status(500).json({ detail: e?.message || 'list stand-ins failed' });
-  }
-});
+  try { res.json({ standIns: await standInRows(bodySlug) }); }
+  catch (e: any) { res.status(500).json({ detail: e?.message || 'list stand-ins failed' }); }
+};
+router.get('/agent/stand-ins', authMiddleware, (_req: AuthRequest, res) => sendStandIns(res));
+router.get('/agent/agents/:slug/stand-ins', authMiddleware, (req: AuthRequest, res) => sendStandIns(res, req.params.slug));
 
 /** 工具目录:agent 编辑 UI「工具黑白名单」的可勾选项(=名单能约束的无门禁内置工具)。
  *  纯静态内存注册表,无本地依赖 → 全模式放行。 */

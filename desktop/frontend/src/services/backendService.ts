@@ -4,7 +4,7 @@
  */
 import type {
   AgentConfig, AgentScheduleEntry, AgentScheduleEntryUpsert, AgentScheduleInfo, AgentsMeta, AutomationActionCatalogItem, AutomationExecutionInfo, AutomationRunInfo, AutomationSessionInfo, ChannelKind, HistorianActivityItem, MessageRecord, ModelsResponse, ProviderQuota, MuseLibraryEntry, MuseStarter, MuseRoundInfo, MuseSpaceView, MusePlacementOp, MuseStatusInfo, MuseTodo, MuseTriggerInfo, MuseTriggerUpsert, PendingApprovalInfo, TriggerSourceInfo,
-  GitIdentity, GitSettings, GitSummary, NormalAgentDef, ProjectContext, ProjectRepoInfo, ProjectMemoryView, ProjectSettings, ProjectSkillInfo, SessionRecord, SkillInfo, SkillCatalogEntry, SpecialAgentsConfig,
+  GitIdentity, GitSettings, GitSummary, NormalAgentDef, ProjectContext, ProjectRepoInfo, ProjectMemoryView, ProjectSettings, ProjectSkillInfo, SessionRecord, SkillInfo, SkillCatalogEntry, SpecialAgentsConfig, StandInInfo,
   ToolsResponse, WorkspaceFileMeta, TeamDef } from '../types'
 import { authFetch } from './http'
 import { fetchOpts, type EngineTarget } from './engine/targets'
@@ -854,6 +854,10 @@ export const setChannelConnectedSession = (t: EngineTarget, kind: ChannelKind, s
 // ── Normal Agent（本地自定义人格;仅本地后端可用,云端返回 404 → 调用方降级空列表）──
 export const listAgents = (t: EngineTarget) =>
   request<{ agents: NormalAgentDef[] }>(t, '/agent/agents').then((r) => r.agents).catch(() => [] as NormalAgentDef[])
+
+/** 分身清单(本机引擎;旧引擎 / 云端 → 空)。不带 slug = 全部。 */
+export const listStandIns = (t: EngineTarget, slug?: string) =>
+  request<{ standIns: StandInInfo[] }>(t, slug ? `/agent/agents/${encodeURIComponent(slug)}/stand-ins` : '/agent/stand-ins').then((r) => r.standIns || []).catch(() => [] as StandInInfo[])
 
 /** toolsMode/toolsList 传 null=显式清除(JSON 会剔掉 undefined 键=保留旧值)。 */
 export const saveAgentDef = (t: EngineTarget, def: Omit<Partial<NormalAgentDef>, 'toolsMode' | 'toolsList' | 'enabledSkillIds' | 'enabledMcpServers'> & { enabledSkillIds?: string[] | null; enabledMcpServers?: string[] | null; toolsMode?: 'allow' | 'deny' | null; toolsList?: string[] | null }, slug?: string) =>
