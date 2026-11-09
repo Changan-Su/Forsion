@@ -175,10 +175,12 @@ export function projectDetailEntries(layers: AgentLayers | null, withArchive = f
   if (!layers) return [];
   return [...layers.topics, ...(withArchive && layers.archive ? [layers.archive] : [])].flatMap((t) => t.entries.map((e) => ({ id: e.id, text: e.text, topic: t.key })));
 }
-/** 项目记忆一条是谁写的(整理、界面用):行尾记号说了算;没有就看来源 —— 界面上采纳 / 恢复 / 改过的(manual)、手改 MEMORY.md 的(external-edit)
- *  算人写的(整理只挪不归档),其余(remember、判官、迁移)算 Agent。 */
+/** 项目记忆一条是谁写的(整理、界面用):界面上采纳 / 恢复 / 改过的(manual)、手改 MEMORY.md 的(external-edit)算人写的(整理只挪不归档);
+ *  其余看行尾记号,没有记号的(remember、判官、迁移)算 Agent。 */
 export function projectEntryAuthor(e: MemoryEntry): EntryAuthor {
-  return splitMark(e.content).meta.by ?? (e.source?.kind === 'manual' || e.source?.kind === 'external-edit' ? 'user' : 'agent');
+  // 人改过的(界面里改 / 外部编辑)先认人:钉住留下的 by=agent 记号不能让人改写过的那条被归档(Codex 评审 11-09)
+  if (e.source?.kind === 'manual' || e.source?.kind === 'external-edit') return 'user';
+  return splitMark(e.content).meta.by ?? 'agent';
 }
 /** 一条给人 / 模型看的样子:去掉行尾记号和行首列表符号(钉回常驻的那条带着「- 」,项目记忆自己写的不带)。 */
 export const projectEntryText = (content: string): string => stripMark(content).trim().replace(/^(?:[-*+]|\d+[.)])\s+/, '');
@@ -669,21 +671,27 @@ function mergeProjectMemory(src: string, into: string): void {
     const theirs = readMemoryFile(src, detailRel(key));
     if (theirs === null) continue;
     const ours = readMemoryFile(into, detailRel(key));
-    let merged = ours === null ? theirs : mergeTopicFile(key, ours, null, theirs).content;
-    const topic = parseTopicFile(key, merged);
+    // 没有共同基线的合并按首行身份去重、撞了取一边:同身份但原文(含续行)不同时那样会丢一份 → 这种情况不合,源那份另存一个主题(Codex 评审 11-09)
+    const clash = ours !== null && (() => { const mine = new Map(parseTopicFile(key, ours).entries.map((e) => [e.id, e.raw])); return parseTopicFile(key, theirs).entries.some((e) => mine.has(e.id) && mine.get(e.id) !== e.raw); })();
+    const target = clash ? `${key.slice(0, 19)}-merged-${randomUUID().slice(0, 4)}` : key; // TOPIC_KEY 最长 32
+    let merged = ours === null || clash ? theirs : mergeTopicFile(key, ours, null, theirs).content;
+    const topic = parseTopicFile(target, merged);
     const entries = topic.entries.filter((e) => !forgotten.has(memoryFactFingerprint(e.raw.split('\n')[0])));
     if (entries.length !== topic.entries.length) merged = serializeTopicFile({ ...topic, entries });
     if (!entries.length && !topic.notes.length) continue;
-    if (merged !== ours) atomicWriteMemoryFile(into, detailRel(key), merged);
+    if (clash || merged !== ours) atomicWriteMemoryFile(into, detailRel(target), merged);
   }
   const filed = new Set(listTopicKeys(into, PROJECT_STORE).flatMap((key) => { const raw = readMemoryFile(into, detailRel(key)); return raw === null ? [] : parseTopicFile(key, raw).entries.map((e) => e.id); }));
   for (const e of from.entries) {
-    if (forgotten.has(memoryFactFingerprint(e.content)) || filed.has(normalizeMemoryFact(e.content)) || coveringProjectEntry(repo.snapshot().entries, e.content)) continue;
+    // 钉住的不因详情 / 归档里有同一句就跳过:钉住 = 留在常驻(Codex 评审 11-09)
+    if (forgotten.has(memoryFactFingerprint(e.content)) || (filed.has(normalizeMemoryFact(e.content)) && !splitMark(e.content).meta.pin) || coveringProjectEntry(repo.snapshot().entries, e.content)) continue;
     repo.mutate({ action: 'add', fact: e.content, source: e.source, evidenceIds: e.evidenceIds, cap: MERGE_CAP }); // 一字不差的由 mutate 自己去重
   }
   // 旧项目里用户删过的那几句,墓碑也带过去(Codex 评审):不然合并后后台又能把它记回来。目标里留着同一句的不动(那边的用户没删)。
   // 仓库没有「只立墓碑」的接口:记一下再删,删除的证据(会话记号)随 evidenceIds 进墓碑。
-  const kept = new Set(repo.snapshot().entries.map((e) => memoryFactFingerprint(e.content)));
+  // 目标留着的 = 常驻 + 详情 + 归档(11-09 分层):只看常驻会给目标详情里还在的那句立墓碑,下次读时被清掉(Codex 评审 11-09)
+  const keptDetail = listTopicKeys(into, PROJECT_STORE).flatMap((key) => { const raw = readMemoryFile(into, detailRel(key)); return raw === null ? [] : parseTopicFile(key, raw).entries.map((e) => memoryFactFingerprint(e.raw.split('\n')[0])); });
+  const kept = new Set([...repo.snapshot().entries.map((e) => memoryFactFingerprint(e.content)), ...keptDetail]);
   for (const t of from.tombstones.filter(isMemoryTombstoneActive)) {
     if (forgotten.has(t.fingerprint) || kept.has(t.fingerprint)) continue;
     const added = repo.mutate({ action: 'add', fact: t.content, source: { kind: 'migration' }, evidenceIds: t.evidenceIds, cap: MERGE_CAP });
@@ -735,7 +743,9 @@ function rehomeDir(src: string, ref: ProjectMemoryRef): ProjectMemoryMove {
   try { renameSync(staging, dst); } catch (e) { renameSync(keptDst, dst); drop(staging); throw e; }
   try { renameSync(src, keptSrc); } catch (e) { drop(dst); renameSync(keptDst, dst); throw e; }
   // 记忆版本之外,待确认候选与压缩记录也算「被写过」(后台排进一条候选不改版本号)
-  const stamp = (): string => [createMemoryRepository(dst).snapshot().version, readMemoryFile(dst, PENDING), readMemoryFile(dst, COMPACTED)].join('\0');
+  // 11-09 分层:详情文件与整理状态也算(用户在详情里钉回 / 整理挪了一批都不改常驻的版本号;只看版本会把这期间的写入一起换掉 —— Codex 评审 11-09)
+  const detailStamp = (): string => listTopicKeys(dst, PROJECT_STORE).map((key) => `${key}:${readMemoryFile(dst, `${PROJECT_STORE.detailDir}/${key}.md`)}`).join('\0');
+  const stamp = (): string => [createMemoryRepository(dst).snapshot().version, readMemoryFile(dst, PENDING), readMemoryFile(dst, COMPACTED), readMemoryFile(dst, '.memory-organize.json'), detailStamp()].join('\0');
   const swapped = stamp();
   return {
     kind: 'merged',

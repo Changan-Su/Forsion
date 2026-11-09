@@ -240,6 +240,8 @@ async function moveMemoryEntry(i: { from: MemoryScope; scope: MemoryScope; id: s
   if (!old) return `Error: there is no entry with id ${JSON.stringify(i.id)} in scope "${i.from}". Nothing was written; list again and use an ID from it.`;
   let added: Awaited<ReturnType<ScopeStore['add']>>;
   try { added = await target.add(i.fact); } catch (e) { return failed(e); }
+  // 跨档挪进项目记忆也是一次写:常驻过线同样排整理(和直接 add 走同一个口子,Codex 评审 11-09)
+  if (i.scope === 'project' && i.projectRef && !added.duplicate) afterProjectWrite(i.ctx.userId, i.projectRef, { fallbackModelId: i.ctx.modelId, sessionId: i.ctx.sessionId });
   const done = (): string => {
     const project = i.projectRef?.name;
     return JSON.stringify({ ok: true, action: 'update', scope: i.scope, ...(i.scope === 'project' ? { project } : {}), version: added.version,

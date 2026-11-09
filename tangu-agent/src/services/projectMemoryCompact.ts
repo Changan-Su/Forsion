@@ -369,6 +369,8 @@ const organizeJobs = new Map<string, Promise<ProjectOrganizeOutcome>>();
 const organizeRetryAt = new Map<string, number>();
 const organizeLast = new Map<string, { at: number; outcome: ProjectOrganizeOutcome }>();
 const organizeTimers = new Map<string, ReturnType<typeof setTimeout>>();
+/** 整理跑着时又有写入过线:记下来,这次收场后再排一次(只记最后一笔的会话 / 模型)。 */
+const organizeAgain = new Map<string, { userId: string; opts: { fallbackModelId?: string; sessionId?: string } }>();
 
 /** 整理一次这个项目的记忆。同一个项目同时只跑一次(第二个调用方等同一次的结果)。自动排的:没整理到常驻线以内,30 分钟内不再自动试;手点的不受限。
  *  fallbackModelId = 解析不出后台模型时用哪个(前台排的传当前 run 的模型,同原来的写满压缩)。 */
@@ -391,14 +393,20 @@ export function organizeProjectMemory(userId: string, ref: ProjectMemoryRef, opt
       organizeLast.set(ref.dir, { at: Date.now(), outcome });
       return outcome;
     })
-    .finally(() => organizeJobs.delete(ref.dir));
+    .finally(() => {
+      organizeJobs.delete(ref.dir);
+      // 跑着的时候又写过(那笔写入多半让这次 CAS 冲突):收场后再看一眼,还过线就再排一次,别让常驻一直超着等下一笔写(Codex 评审 11-09)
+      const again = organizeAgain.get(ref.dir);
+      if (again) { organizeAgain.delete(ref.dir); afterProjectWrite(again.userId, ref, again.opts); }
+    });
   organizeJobs.set(ref.dir, job);
   return job;
 }
 
 /** 常驻写过线之后排一次(稍等几秒,让同一轮里接连的几笔写完)。不等结果、不抛。 */
 export function scheduleProjectOrganize(userId: string, ref: ProjectMemoryRef, opts: { fallbackModelId?: string; sessionId?: string } = {}): void {
-  if (organizeTimers.has(ref.dir) || organizeJobs.has(ref.dir) || (organizeRetryAt.get(ref.dir) ?? 0) > Date.now()) return;
+  if (organizeJobs.has(ref.dir)) { organizeAgain.set(ref.dir, { userId, opts }); return; }
+  if (organizeTimers.has(ref.dir) || (organizeRetryAt.get(ref.dir) ?? 0) > Date.now()) return;
   const t = setTimeout(() => { organizeTimers.delete(ref.dir); void organizeProjectMemory(userId, ref, opts); }, 3_000);
   t.unref?.();
   organizeTimers.set(ref.dir, t);
@@ -416,4 +424,4 @@ export function afterProjectWrite(userId: string, ref: ProjectMemoryRef, opts: {
 export async function projectOrganizeStatus(ref: ProjectMemoryRef): Promise<{ available: boolean; running: boolean; last: { at: number; outcome: ProjectOrganizeOutcome } | null }> {
   return { available: await organizeAvailable(), running: organizeJobs.has(ref.dir) || organizeTimers.has(ref.dir), last: organizeLast.get(ref.dir) ?? null };
 }
-export function resetProjectMemoryOrganizeForTests(): void { organizeJobs.clear(); organizeRetryAt.clear(); organizeLast.clear(); for (const t of organizeTimers.values()) clearTimeout(t); organizeTimers.clear(); }
+export function resetProjectMemoryOrganizeForTests(): void { organizeJobs.clear(); organizeRetryAt.clear(); organizeLast.clear(); for (const t of organizeTimers.values()) clearTimeout(t); organizeTimers.clear(); organizeAgain.clear(); }

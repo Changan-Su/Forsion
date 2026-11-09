@@ -24,7 +24,8 @@ export const detailEntryId = (identity: string): string => `d${sha(identity).sli
 export interface LayerStore { detailDir: string; limit: number; /** 常驻条目没记号时算谁写的(缺省 residentAuthor)。 */ author?: (e: MemoryEntry) => EntryAuthor }
 export const AGENT_STORE: LayerStore = { detailDir: MEMORY_DETAIL_DIR, limit: AGENT_RESIDENT_LIMIT };
 const topicRel = (key: string, store: LayerStore = AGENT_STORE): string => `${store.detailDir}/${key}.md`;
-const bodyOf = (line: string): string => stripMark(line).trim().replace(/^(?:[-*+]|\d+[.)])\s+/, '');
+// 只去掉圆点列表的记号,不去编号:身份(normalizeMemoryFact)保留「1. 」,这里也得保留,不然挪过去的那条身份对不上、事务卡在 writing 并反复追加(Codex 评审 11-09)
+const bodyOf = (line: string): string => stripMark(line).trim().replace(/^[-*+]\s+/, '');
 
 export interface ResidentItem { entry: MemoryEntry; identity: string; text: string; pinned: boolean; by: EntryAuthor; shadowed: boolean }
 export interface DetailItem extends LayerEntry { topic: string; entryId: string; by: EntryAuthor }
@@ -171,9 +172,14 @@ function runWriting(base: string, r: OrganizeRecord, store: LayerStore): void {
 function runCommitting(base: string, r: OrganizeRecord, store: LayerStore): void {
   const repo = createMemoryRepository(base);
   const snap = repo.snapshot();
-  const moved = new Set(r.moves.filter((m) => readTopic(base, m.to, store)?.topic.entries.some((e) => e.id === m.identity)).map((m) => m.identity));
+  // 只删和挪走时一字不差的那一行:中断后续做之前用户改过的(哪怕只改了大小写,身份相同)留在常驻,不拿详情里的旧句顶替(Codex 评审 11-09)
+  const moved = new Map<string, Set<string>>();
+  for (const m of r.moves) {
+    if (!readTopic(base, m.to, store)?.topic.entries.some((e) => e.id === m.identity)) continue;
+    const bodies = moved.get(m.identity) ?? new Set<string>(); bodies.add(bodyOf(m.raw)); moved.set(m.identity, bodies);
+  }
   const lines = snap.content.split('\n');
-  const keep = lines.filter((l) => !l.trim() || !moved.has(normalizeMemoryFact(l)) || splitMark(l).meta.pin);
+  const keep = lines.filter((l) => !l.trim() || !moved.get(normalizeMemoryFact(l))?.has(bodyOf(l)) || splitMark(l).meta.pin);
   if (keep.length !== lines.length) repo.commit({ expectedVersion: snap.version, content: keep.join('\n'), source: { kind: 'dream' } });
   const after = createMemoryRepository(base).snapshot();
   r.after = { count: after.entries.length, chars: after.entries.map((e) => stripMark(e.content).trim()).join('\n').length };

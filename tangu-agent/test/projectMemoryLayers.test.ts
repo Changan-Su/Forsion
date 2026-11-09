@@ -155,6 +155,30 @@ describe('写满整理:先挪进详情,再丢过时的', () => {
     expect(view.organizeHistory).toHaveLength(1);
   });
 
+  it('中断后、续做前用户改了要挪的那句(身份相同、原文不同):续做只删一字不差的那行,改过的留在常驻(Codex 评审 11-09)', async () => {
+    const { ref, sessionId, project } = await fresh();
+    await seed(ref, sessionId);
+    crashOrganizeAfterForTests('writing');
+    expect(await org(ref)).toMatchObject({ status: 'skipped', reason: 'failed' });
+    const file = join(ref.dir, 'MEMORY.md');
+    const edited = HIST.replace('RabbitMQ', 'RABBITMQ'); // 只改大小写:归一化后的身份不变
+    writeFileSync(file, readFileSync(file, 'utf8').replace(HIST, edited));
+    const view = await projectMemoryView(project);
+    expect(readFileSync(file, 'utf8')).toContain(edited); // 盘上留着(同身份时界面 / 注入按 2a 的位置规则只给一份,改过的这句不丢)
+    expect(view.topics![0].entries.map((e) => e.text)).toContain(HIST);
+  });
+  it('编号条目(「1. 」开头)挪得过去:详情里身份对得上,事务收场、不反复追加(Codex 评审 11-09)', async () => {
+    const { ref, sessionId, project } = await fresh();
+    await seed(ref, sessionId);
+    const NUM = `1. ${HIST}`;
+    const repo = await openProjectMemory(ref);
+    repo.mutate({ action: 'add', fact: NUM, cap: 20_000, source: { kind: 'historian', sessionId } });
+    expect(await org(ref)).toMatchObject({ status: 'organized' }); // goodPlan 把带 RabbitMQ 的两条(含编号那条)都挪进 history
+    await projectMemoryView(project); await projectMemoryView(project); // 读两次:没有悬着的事务,不再追加
+    expect(readFileSync(join(ref.dir, 'MEMORY.md'), 'utf8')).not.toContain(NUM);
+    expect(readFileSync(join(ref.dir, 'Library', 'history.md'), 'utf8').split(NUM).length - 1).toBe(1);
+    expect(existsSync(join(ref.dir, '.memory-organize.json')) && JSON.parse(readFileSync(join(ref.dir, '.memory-organize.json'), 'utf8')).pending).toBeFalsy();
+  });
   it('挪完常驻还超过七成 → 才走第二段原来的压缩(它的闸照旧);第一段的挪动照样算数', async () => {
     const { ref, sessionId, project } = await fresh();
     await seed(ref, sessionId);
