@@ -3,6 +3,7 @@
 // 门槛之外再扫一遍宽度,钉住 11-03 定的两条:中间 840 不缩、和栏之间至少 32,谁也不越界。
 import { describe, expect, it } from 'vitest'
 import { CENTER_W, EDGE, GAP, RAIL_MIN, RAIL_W, STRIP_W, centerShift, railModes, type RailMode } from './HomeWidgetParts'
+import { RAIL_GEOMETRY, railGeometry, railThresholds, resetRailTuning, setRailTuning, type RailGeometry } from './homeRails'
 
 const both = { left: true, right: true }
 const rightOnly = { left: false, right: true }
@@ -59,5 +60,64 @@ describe('centerShift with the rail width', () => {
         if (m.left !== 'hidden' || m.right !== 'hidden') { expect(x).toBeGreaterThanOrEqual(0); expect(x + CENTER_W).toBeLessThanOrEqual(w) }
       }
     }
+  })
+})
+
+// 11-09 dev 里加了调节面板(HomeRailTuner):六个数可调,缺省一个不变;中间可以先缩到「中间最窄」再收栏。
+describe('rail geometry tuning', () => {
+  it('default geometry reports the same thresholds as above', () => {
+    expect(railThresholds(RAIL_GEOMETRY)).toEqual({
+      both: { full: 1448, open: 1368, leftStrip: 1188, strips: 1008 },
+      right: { open: 1120, strip: 940 },
+    })
+  })
+
+  it('a shrinkable center keeps both rails open at 1320 (110% zoom in a 1512 window)', () => {
+    expect(railModes(1320, both)).toMatchObject({ left: 'strip', right: 'open' })
+    const g: RailGeometry = { ...RAIL_GEOMETRY, centerMin: 720 }
+    // 1320 − 2×(16+32) = 1224;两栏各 216 后中间剩 792 ≥ 720
+    expect(railModes(1320, both, g)).toEqual({ left: 'open', right: 'open', railW: 216, centerW: 792 })
+    expect(railThresholds(g).both.open).toBe(720 + 2 * 216 + 2 * 48)
+  })
+
+  it('a smaller gap and margin move the three-column threshold by exactly what they save', () => {
+    const g: RailGeometry = { ...RAIL_GEOMETRY, gap: 16, edge: 8 }
+    expect(railThresholds(g).both.open).toBe(840 + 2 * 216 + 2 * (8 + 16))
+  })
+
+  it('keeps every tuned layout inside its own bounds at every width', () => {
+    const geos: RailGeometry[] = [
+      { centerW: 840, centerMin: 640, railW: 300, railMin: 180, gap: 16, edge: 8 },
+      { centerW: 760, centerMin: 760, railW: 240, railMin: 200, gap: 24, edge: 0 },
+      { centerW: 900, centerMin: 600, railW: 256, railMin: 256, gap: 48, edge: 32 },
+    ]
+    for (const g of geos) {
+      for (let w = 700; w <= 2000; w += 3) {
+        for (const has of [both, rightOnly, { left: true, right: false }]) {
+          const m = railModes(w, has, g)
+          const x = (w - m.centerW) / 2 + centerShift(w, { mode: m.left, shown: has.left }, { mode: m.right, shown: has.right }, m.railW, g, m.centerW)
+          const width = (mode: RailMode): number => (mode === 'open' ? m.railW : mode === 'strip' ? STRIP_W : 0)
+          if (m.left === 'hidden' && m.right === 'hidden') continue
+          expect(m.centerW).toBeGreaterThanOrEqual(g.centerMin)
+          expect(m.centerW).toBeLessThanOrEqual(g.centerW)
+          if ((has.left && m.left === 'open') || (has.right && m.right === 'open')) { expect(m.railW).toBeGreaterThanOrEqual(g.railMin); expect(m.railW).toBeLessThanOrEqual(g.railW) }
+          if (has.left) expect(x - (g.edge + width(m.left))).toBeGreaterThanOrEqual(g.gap)
+          if (has.right) expect(w - g.edge - width(m.right) - (x + m.centerW)).toBeGreaterThanOrEqual(g.gap)
+          expect(x).toBeGreaterThanOrEqual(0)
+          expect(x + m.centerW).toBeLessThanOrEqual(w)
+        }
+      }
+    }
+  })
+
+  it('the dev store clamps, keeps min ≤ max (the knob just moved wins) and resets', () => {
+    setRailTuning('railMin', 300)
+    expect(railGeometry()).toMatchObject({ railMin: 300, railW: 300 })
+    setRailTuning('railW', 200)
+    expect(railGeometry()).toMatchObject({ railMin: 200, railW: 200 })
+    setRailTuning('centerMin', 10)
+    expect(railGeometry().centerMin).toBe(480)
+    resetRailTuning()
+    expect(railGeometry()).toEqual(RAIL_GEOMETRY)
   })
 })

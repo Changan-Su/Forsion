@@ -17,6 +17,7 @@ import {
 } from './homeWidgets'
 import { BUILTIN_ICON, HomeWidgetBody, useHomeWidgetHead, useShowableIds, useShownWidgetId } from './homeWidgetKinds'
 import type { LibItem } from './homeLibraryDrag'
+import type { RailMode } from './homeRails'
 
 /** 瓷砖按住拖进主页(homeLibraryDrag.ts);没给 = 只能点。 */
 export type LibDrag = (e: React.PointerEvent<HTMLElement>, item: LibItem) => void
@@ -54,34 +55,9 @@ registerMessages({
   'home.lib.empty': { zh: '还没有小组件。在对话里让 Agent 做一个。', en: 'No widgets yet. Ask an agent in a chat.' },
 })
 
-// ── 三栏几何 ──
-export const RAIL_W = 256, RAIL_MIN = 216, STRIP_W = 36, EDGE = 16, GAP = 32, CENTER_W = 840
-export type RailMode = 'open' | 'strip' | 'hidden'
-export interface RailLayout { left: RailMode; right: RailMode; /** 展开的栏有多宽(两栏同宽) */ railW: number }
-/** 一边除了展开栏本身还要占多少:空栏只留外边;图标条 = 外边 + 36 + 缝;展开 = 外边 + 缝(栏宽另算)。 */
-const sideFixed = (mode: RailMode, has: boolean): number => (!has ? EDGE : mode === 'strip' ? EDGE + STRIP_W + GAP : EDGE + GAP)
-/** 主页宽(不含 Ribbon)+ 两栏有没有东西 → 两栏的样子。中间 840 不缩、和栏之间至少 32 不变(11-03 定的);
- *  空栏不占地方,所以缺省摆放(左栏空)只看右栏;放不下先把栏从 256 缩到 216,还放不下才收:先收左栏成图标条,再收右栏,
- *  两条图标条都放不下才只剩中间。门槛(两栏都有东西):≥1368 三栏(≥1448 才是 256 宽);≥1188 先收左栏;≥1008 两栏都收。
- *  只有右栏有东西:≥1120 展开;≥940 图标条。11-08 前是写死的 1448 / 1228 / 1008、栏恒 256,空栏也算,窗口稍窄就收。 */
-export function railModes(width: number, has: { left: boolean; right: boolean } = { left: true, right: true }): RailLayout {
-  for (const [left, right] of [['open', 'open'], ['strip', 'open'], ['strip', 'strip']] as const) {
-    const opens = Number(has.left && left === 'open') + Number(has.right && right === 'open')
-    const room = width - CENTER_W - sideFixed(left, has.left) - sideFixed(right, has.right)
-    if (room < 0) continue
-    const railW = opens ? Math.min(RAIL_W, Math.floor(room / opens)) : RAIL_W
-    if (railW >= RAIL_MIN) return { left, right, railW }
-  }
-  return { left: 'hidden', right: 'hidden', railW: RAIL_W }
-}
-const reserve = (mode: RailMode, shown: boolean, railW: number): number => (!shown ? 0 : mode === 'open' ? EDGE + railW + GAP : mode === 'strip' ? EDGE + STRIP_W + GAP : 0)
-/** 中间那块的横向让位:居中放得下就居中;否则贴着有东西的那一栏留 32(空栏不占地方)。 */
-export function centerShift(width: number, left: { mode: RailMode; shown: boolean }, right: { mode: RailMode; shown: boolean }, railW = RAIL_W): number {
-  const nat = (width - CENTER_W) / 2
-  const lo = reserve(left.mode, left.shown, railW), hi = width - reserve(right.mode, right.shown, railW) - CENTER_W
-  if (lo > hi) return 0
-  return Math.min(Math.max(nat, lo), hi) - nat
-}
+// ── 三栏几何(常量与算法在 homeRails.ts;这里照旧导出,老的 import 不用改) ──
+export { CENTER_W, EDGE, GAP, RAIL_MIN, RAIL_W, STRIP_W, centerShift, railModes } from './homeRails'
+export type { RailLayout, RailMode } from './homeRails'
 
 // ── 卡 ──
 /** 一张卡:卡头(图标 / 标题 / 归属,点标题去它的 Space)+ 卡身。卜算子·建议没有建议时这一格画最近对话(见 useShownWidgetId)。 */

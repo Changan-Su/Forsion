@@ -2,6 +2,8 @@
  * 主页小组件(11-07 方案 A):真 Electron(out/ 构建)× 桩引擎 × 临时家目录里装好带 `widgets` 的日历核心插件。
  * 查:没存过摆放 = 右栏 今天 / 待办 / 卜算子·建议;插件卡的行(下一条实心点、逾期标红、今天几条完成);「用这句」填进主页输入框;
  * 收纳面板三组;存过摆放的老用户一张不动;窄窗收成图标条用各自的图标;第一次出现的上手提示。截图进 OUT(缺省 ../../outputs/home-widgets)。
+ * HOME_RAIL_TUNER=1:只查开发用的侧栏收起调节面板。面板只在 dev 渲染里有(electron-vite build 恒为生产),所以先在本检出
+ *   npx electron-vite dev --rendererOnly(看日志里的端口),再带 ELECTRON_RENDERER_URL=http://localhost:<端口>/ 跑本脚本。
  *
  * 用法:先在本检出 npx electron-vite build;日历插件检出里 npm run build;然后
  *   CALENDAR_PLUGIN_DIR=<Forsion-Calendar 检出> node ../../.claude/hooks/devlock.cjs run --vehicle=e2e --what="主页小组件" --eta=3 -- node scripts/home-widgets.check.cjs
@@ -50,6 +52,41 @@ const STARTERS = [
   { id: 's3', text: '每周一为「AI 学习仪表盘」规划一个开发里程碑。', source: { kind: 'muse', label: 'AI 学习仪表盘' } },
 ]
 
+/** 开发用的侧栏收起调节面板(HomeRailTuner,只在 dev 渲染里有)。HOME_RAIL_TUNER=1 时只跑这一段:两栏都摆上卡,1380 窗(主页约 1320)。 */
+async function tunerChecks(app, win) {
+  const TK = 'forsion.dev.homeRails'
+  const look = () => win.evaluate(() => {
+    const root = document.querySelector('.hp-root'), c = document.querySelector('.hp-stack')?.getBoundingClientRect()
+    const l = document.querySelector('.hp-rail-left')?.getBoundingClientRect(), r = document.querySelector('.hp-rail-right')?.getBoundingClientRect()
+    return { home: root?.offsetWidth, rails: root?.getAttribute('data-rails'), cw: c && Math.round(c.width), lw: l && Math.round(l.width), rw: r && Math.round(r.width), gapL: c && l ? Math.round(c.left - l.right) : null, gapR: c && r ? Math.round(r.left - c.right) : null, now: document.querySelector('[data-testid="hp-tuner-now"]')?.textContent || '' }
+  })
+  await win.evaluate((k) => {
+    localStorage.setItem(k, JSON.stringify({ left: ['builtin:inbox'], center: ['clock', 'composer', 'row', 'dock'], row: [{ id: 'builtin:status', w: 4 }], right: ['plugin:forsion-calendar/today', 'plugin:forsion-calendar/todo', 'builtin:notes'] }))
+    window.dispatchEvent(new StorageEvent('storage', { key: k }))
+  }, KEY)
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1380, 860)); await sleep(900)
+  await win.evaluate((k) => { localStorage.setItem(k, JSON.stringify({ open: true, geo: {} })); window.dispatchEvent(new StorageEvent('storage', { key: k })) }, TK); await sleep(700)
+  const before = await look()
+  check('调节面板(dev):打开后读数和真实摆放一致(缺省 = 左栏收成图标条)', before.rails === 'strip-open' && before.now.includes(`主页宽 ${before.home}`) && before.now.includes('左栏图标条'), JSON.stringify(before))
+  await captureWindow(app, path.join(OUT, 'tuner-default.png'))
+  await win.evaluate(() => {
+    const el = document.querySelector('.hp-tuner input[data-knob="centerMin"]')
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, '720')
+    el.dispatchEvent(new Event('input', { bubbles: true }))
+  }); await sleep(700)
+  const after = await look()
+  const want = after.home - 2 * (16 + 32) - 2 * 216
+  check('调节面板(dev):中间最窄拉到 720 → 两栏都展开、中间缩成剩下的宽、两边仍隔 ≥32', after.rails === 'open-open' && Math.abs(after.cw - want) <= 1 && after.gapL >= 31 && after.gapR >= 31, JSON.stringify({ ...after, want }))
+  await captureWindow(app, path.join(OUT, 'tuner-center720.png'))
+  const box0 = await win.locator('.hp-tuner').boundingBox()
+  await win.mouse.move(box0.x + 40, box0.y + 14); await win.mouse.down(); await win.mouse.move(box0.x + 340, box0.y - 186, { steps: 8 }); await win.mouse.up(); await sleep(300)
+  const box1 = await win.locator('.hp-tuner').boundingBox()
+  check('调节面板(dev):按住标题能拖走,别挡着要看的栏', Math.abs(box1.x - box0.x - 300) <= 3 && Math.abs(box1.y - box0.y + 200) <= 3, JSON.stringify({ box0, box1 }))
+  await win.locator('.hp-tuner-f button').first().click(); await sleep(700)
+  const reset = await look()
+  check('调节面板(dev):恢复默认回到原样', reset.rails === 'strip-open' && reset.cw === 840, JSON.stringify(reset))
+}
+
 async function main() {
   if (!PLUGIN || !fs.existsSync(path.join(PLUGIN, 'main.js'))) throw new Error('CALENDAR_PLUGIN_DIR 要指向打好包的 Forsion-Calendar 检出(npm run build)')
   fs.mkdirSync(OUT, { recursive: true })
@@ -79,6 +116,7 @@ async function main() {
     await win.evaluate(() => document.fonts.ready)
     await win.locator('.hp-rail-right .hp-wcard').first().waitFor({ timeout: 15_000 })
     await sleep(3500) // 插件装载 + 第一次拿行
+    if (process.env.HOME_RAIL_TUNER === '1') { await tunerChecks(app, win); return }
 
     // ── 缺省摆放 = 方案 A ──
     check('没存过摆放:右栏 今天 / 待办 / 卜算子·建议', JSON.stringify(await ids('right')) === JSON.stringify(['plugin:forsion-calendar/today', 'plugin:forsion-calendar/todo', 'builtin:muse']), JSON.stringify(await ids('right')))
@@ -181,9 +219,9 @@ async function main() {
     })
     check('两栏都有卡(1460 窗):缩窄后两栏都展开,两边和中间都隔 ≥32', both.rails === 'open-open' && both.lw >= 216 && both.gapL >= 31 && both.gapR >= 31, JSON.stringify(both))
     await captureWindow(app, path.join(OUT, 'both-1460.png'))
+
   } finally {
     await ctx.close()
   }
-  process.exitCode = R.summary() ? 1 : 0
 }
-main().catch((e) => { console.error(e); process.exit(1) })
+main().then(() => { process.exitCode = R.summary() ? 1 : 0 }).catch((e) => { console.error(e); process.exit(1) })

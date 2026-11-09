@@ -10,6 +10,7 @@ import type { LucideIcon, LucideProps } from 'lucide-react'
 import { registerView, addCommand, addRibbonIcon, useRibbonStore, moveTo, openCommandPalette, useWorkspace, useSpaceStore, getActiveSpace, setActiveSpaceCold, setActiveSpace, openRedirectType, adoptSpaceLayoutCold, seedSpaceWindowLayout, BOOT_ACTIVE_SPACE_ID, getView, label, recordNav, useNav, activeMainPanel, setEngineI18n, setRibbonActions, openObject, UI_MODE, WINDOW_SPACE_ID, supportsMiniPanel, LCL_MESSAGES, installViewModeCommands } from '@lcl/engine'
 import { toggleSpaceOrganizer } from './views/SpaceOrganizer'
 import { requestHomeEdit } from './views/homeWidgets'
+import { toggleRailTuner } from './views/homeRails'
 import type { ViewProps } from '@lcl/engine'
 import { useEffect } from 'react'
 import { windowKind } from './windowKind'
@@ -587,6 +588,18 @@ export function installEngine(activateTangu: (host: TanguHost) => void): void {
       requestHomeEdit()
     },
   })
+  // 开发用:主页左右栏收起的手感调节面板(views/HomeRailTuner)。生产构建里没有这条命令。
+  if (import.meta.env.DEV) {
+    addCommand({
+      id: 'tune-home-rails',
+      title: () => translate('home.tune.cmd'),
+      keywords: 'home rails fold collapse tune dev 主页 侧栏 收起 折叠 调节 栏宽 手感',
+      run: () => {
+        if (useSpaceStore.getState().activeSpaceId !== 'home') setActiveSpace('home')
+        toggleRailTuner()
+      },
+    })
+  }
   addCommand({
     id: 'set-active-space',
     title: () => translate('bootengine.cmd.setActiveSpace'),

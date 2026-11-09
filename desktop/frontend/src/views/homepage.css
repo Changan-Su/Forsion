@@ -238,7 +238,7 @@ html.dark .hp-root { --hpw-grain-blend: screen; --hpw-halo: 16%; --hpw-halo-mid:
 
 .hp-stack {
   position: relative;
-  width: min(840px, 100%);
+  width: min(var(--hp-center-w, 840px), 100%); /* --hp-center-w 由 HomepageView 按 homeRails.ts 写;手机不写 = 840 */
   margin: auto;
   display: flex;
   flex-direction: column;
@@ -1358,8 +1358,8 @@ button.hp-organizer-mark:hover { color: var(--text); background: var(--bg-hover)
   transition: opacity var(--duration-fast) var(--ease-surface);
 }
 .hp-rail > * { pointer-events: auto; }
-.hp-rail-left { left: 16px; }
-.hp-rail-right { right: 16px; }
+.hp-rail-left { left: var(--hp-edge, 16px); }
+.hp-rail-right { right: var(--hp-edge, 16px); }
 .hp-strip { width: 36px; gap: 6px; }
 .hp-secondary-open .hp-rail,
 .hp-secondary-open .hp-edit-bar { opacity: 0; pointer-events: none; }
@@ -1667,3 +1667,49 @@ body.hp-lib-nodrop * { cursor: not-allowed !important; }
 .hp-lib-note-pill > svg { flex: none; color: var(--text-muted); }
 /* 落点框的圆角跟格子走(LCL 框缺省 --radius-sm) */
 .lcl-drop-ind.hp-drop-ind.lcl-drop-ind--zone { border-radius: var(--radius-lg); }
+
+/* 开发用:侧栏收起调节面板(HomeRailTuner.tsx,只在 dev 构建里画)。浮在左下,压在栏和小组件之上、收纳面板之下。 */
+.hp-tuner {
+  position: absolute;
+  z-index: 18;
+  left: 12px;
+  bottom: calc(var(--hp-chrome-bottom, 0px) + 12px);
+  width: 320px;
+  max-height: calc(100% - 24px);
+  overflow: auto;
+  padding: 12px 14px;
+  box-sizing: border-box;
+  background: var(--surface-float, var(--bg-card));
+  backdrop-filter: var(--surface-blur, none);
+  border: var(--border-width, 1px) solid var(--surface-edge, var(--border));
+  border-radius: var(--radius-lg);
+  box-shadow: var(--card-shadow);
+  color: var(--text);
+  font-size: var(--ui-font-meta, 12px);
+  line-height: 1.5;
+  -webkit-app-region: no-drag;
+}
+.hp-tuner-h { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; font-size: var(--ui-font-body, 13px); cursor: grab; user-select: none; }
+.hp-tuner-x, .hp-tuner-f button {
+  padding: 2px 8px;
+  border: var(--border-width, 1px) solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  cursor: pointer;
+}
+.hp-tuner-x:hover, .hp-tuner-f button:hover:not(:disabled) { color: var(--text); }
+.hp-tuner-f button:disabled { opacity: 0.45; cursor: default; }
+.hp-tuner p { margin: 0 0 4px; }
+.hp-tuner-now { color: var(--text); font-variant-numeric: tabular-nums; }
+.hp-tuner-th, .hp-tuner-rule { color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.hp-tuner .hp-tuner-rule { margin-top: 8px; font-size: var(--ui-font-caption, 11px); }
+.hp-tuner-knobs { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.hp-tuner-knob { display: grid; grid-template-columns: 92px minmax(0, 1fr) 36px; align-items: center; gap: 8px; }
+.hp-tuner-name { display: flex; flex-direction: column; color: var(--text-muted); }
+.hp-tuner-name small { color: var(--text-faint); font-size: var(--ui-font-caption, 11px); line-height: 1.3; }
+.hp-tuner-knob.on .hp-tuner-name { color: var(--text); }
+.hp-tuner-knob input { width: 100%; accent-color: var(--accent-ink, var(--accent)); }
+.hp-tuner-knob output { text-align: right; font-variant-numeric: tabular-nums; }
+.hp-tuner-f { display: flex; justify-content: flex-end; gap: 6px; margin-top: 8px; }
