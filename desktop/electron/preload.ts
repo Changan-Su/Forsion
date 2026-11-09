@@ -438,7 +438,7 @@ const api = {
       return () => { appearanceListeners.delete(cb) }
     },
   },
-  listThemes: (): Promise<Array<{ id: string; manifest: Record<string, any>; css: string }>> =>
+  listThemes: (): Promise<Array<{ id: string; manifest: Record<string, any>; css: string; migratedFrom?: string }>> =>
     ipcRenderer.invoke('themes:list'),
   openThemesDir: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('themes:openDir'),
   /** 当前主题请求窗口级系统材质，并同步经白名单校验的实色降级底。 */

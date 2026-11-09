@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtemp, mkdir, writeFile, rm } from 'fs/promises'
+import { mkdtemp, mkdir, writeFile, readFile, rm } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { isValidThemeId, readThemesDir, seedDefaultThemes } from './themes'
+import { isValidThemeId, readThemesDir } from './themes'
+import { SOFT_MIGRATION_MARKER, fingerprint } from './themeMigrations'
 
 describe('isValidThemeId', () => {
   it('accepts kebab/lowercase ids', () => {
@@ -57,23 +58,49 @@ describe('readThemesDir', () => {
   it('returns empty for a missing directory (no throw)', async () => {
     expect(await readThemesDir(join(dir, 'does-not-exist'))).toEqual([])
   })
-})
 
-describe('seedDefaultThemes', () => {
-  let base: string
-  beforeEach(async () => { base = await mkdtemp(join(tmpdir(), 'tangu-seed-')) })
-  afterEach(async () => { await rm(base, { recursive: true, force: true }) })
+  it('maps [data-theme=<json id>] to the folder when the CSS never names its folder (migrated soft-custom)', async () => {
+    const css = `[data-theme='soft'] { --radius-lg: 22px; }\n.dark[data-theme="soft"] .rb { width: 48px; }\n[data-theme=soft] .sb{}\n[ data-theme = 'soft' ] .x{}\n[data-theme='soft-ish'] .y{}`
+    await writeTheme('soft-custom', JSON.stringify({ id: 'soft', name: 'Soft(自改)' }), css)
+    const [t] = await readThemesDir(dir)
+    expect(t.id).toBe('soft-custom')
+    expect(t.css).not.toMatch(/data-theme\s*=\s*['"]?soft['"]?\s*\]/)
+    expect(t.css.match(/\[data-theme="soft-custom"\]/g)).toHaveLength(4) // 方括号里带空格的写法也算
+    expect(t.css).toContain(`[data-theme='soft-ish'] .y{}`) // 别的 id 不误伤
+    // 只改返回给渲染层的文本:磁盘上的 theme.css 一个字节不动
+    expect(await readFile(join(dir, 'soft-custom', 'theme.css'), 'utf8')).toBe(css)
+  })
 
-  it('seeds soft when themes dir is absent, then is a no-op when present', async () => {
-    const themes = join(base, 'themes')
-    await seedDefaultThemes(themes)
-    const first = await readThemesDir(themes)
-    expect(first.map((t) => t.id)).toContain('soft')
-    expect(first.find((t) => t.id === 'soft')!.manifest.panelGap).toBe(8)
+  it('leaves CSS alone when the json id equals the folder, or when the CSS already targets its folder', async () => {
+    await writeTheme('soft', JSON.stringify({ id: 'soft' }), `[data-theme='soft'] a{}`)
+    await writeTheme('my-soft', JSON.stringify({ id: 'soft' }), `[data-theme='my-soft'] a{} [data-theme='soft'] b{}`)
+    await writeTheme('noid', JSON.stringify({ name: 'x' }), `[data-theme='soft'] a{}`)
+    const out = Object.fromEntries((await readThemesDir(dir)).map((t) => [t.id, t.css]))
+    expect(out.soft).toBe(`[data-theme='soft'] a{}`)
+    expect(out['my-soft']).toBe(`[data-theme='my-soft'] a{} [data-theme='soft'] b{}`)
+    expect(out.noid).toBe(`[data-theme='soft'] a{}`)
+  })
 
-    // 用户删掉 soft 后再次启动:themes/ 目录已存在 → 不重种(文件夹归用户)
-    await rm(join(themes, 'soft'), { recursive: true, force: true })
-    await seedDefaultThemes(themes)
-    expect(await readThemesDir(themes)).toHaveLength(0)
+  it('still rescopes market themes unconditionally', async () => {
+    const folder = 'market-0123abcd-0123-4567-89ab-0123456789ab'
+    await writeTheme(folder, JSON.stringify({ id: 'pastel' }), `[data-theme='pastel'] a{}`)
+    const [t] = await readThemesDir(dir)
+    expect(t.css).toBe(`[data-theme="${folder}"] a{}`)
+  })
+
+  it('tags the migrated theme with migratedFrom only when the marker names it and its CSS is the one that was moved', async () => {
+    await writeTheme('soft-custom', JSON.stringify({ id: 'soft' }), 'moved{}')
+    await writeTheme('other', JSON.stringify({ id: 'other' }))
+    expect((await readThemesDir(dir)).every((t) => t.migratedFrom === undefined)).toBe(true)
+    const marker = { from: 'soft', to: 'soft-custom', at: '2026-11-08T00:00:00.000Z', css: fingerprint('someone else{}') }
+    await writeFile(join(dir, SOFT_MIGRATION_MARKER), JSON.stringify(marker)) // 同名目录不是迁移出来的那份
+    expect((await readThemesDir(dir)).every((t) => t.migratedFrom === undefined)).toBe(true)
+    await writeFile(join(dir, SOFT_MIGRATION_MARKER), JSON.stringify({ ...marker, css: fingerprint('moved{}') }))
+    const out = await readThemesDir(dir)
+    expect(out.find((t) => t.id === 'soft-custom')!.migratedFrom).toBe('soft')
+    expect(out.find((t) => t.id === 'other')!.migratedFrom).toBeUndefined()
+    await writeFile(join(dir, SOFT_MIGRATION_MARKER), '{ broken') // 坏标记 = 没有,主题照常列出
+    expect((await readThemesDir(dir)).map((t) => [t.id, t.migratedFrom])).toEqual([['other', undefined], ['soft-custom', undefined]])
   })
 })
+

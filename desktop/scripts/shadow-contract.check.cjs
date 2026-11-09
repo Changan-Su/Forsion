@@ -94,7 +94,6 @@ const LEGACY_CONTROLLED = new Set([
   'frontend/src/amadeus/lcl/shell.css',
   'frontend/src/amadeus/theme/lcl/recipes.css',
   'frontend/src/amadeus/theme/lcl/tangu.css',
-  'frontend/src/amadeus/theme/lcl/tanguSoft.css',
 ])
 
 function exceptionReason(file, selector, prop, value) {

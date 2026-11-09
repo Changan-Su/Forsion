@@ -24,10 +24,6 @@ function findChromium() {
 
 const SRC = path.join(__dirname, '../frontend/src')
 const read = (p) => fs.readFileSync(path.join(SRC, p), 'utf8')
-require('sucrase/register/ts')
-const { SEED_THEMES } = require(path.join(__dirname, '../electron/seedThemes.ts'))
-const SOFT_CSS = SEED_THEMES.find((theme) => theme.id === 'soft')?.css
-if (!SOFT_CSS) throw new Error('缺少第一方 soft 磁盘种子主题')
 const zhiCandidate = path.resolve(__dirname, '../../../Forsion-Instrumentality-Project/forsion-theme-zhi/theme.css')
 const hasZhiCandidate = fs.existsSync(zhiCandidate)
 const LANGS = ['lovable', 'genesis-glass', 'soft', ...(hasZhiCandidate ? ['zhi'] : [])]
@@ -43,7 +39,7 @@ const COLOR_TOKENS = [
 const CSS = [
   read('styles/base.css'),
   read('theme/skins.css'),
-  ...LANGS.map((id) => id === 'soft' ? SOFT_CSS : id === 'zhi' ? fs.readFileSync(zhiCandidate, 'utf8') : read(`theme/themes/${id}/theme.css`)),
+  ...LANGS.map((id) => id === 'zhi' ? fs.readFileSync(zhiCandidate, 'utf8') : read(`theme/themes/${id}/theme.css`)),
   read('views/chat2/chat2.css'),
   fs.readFileSync(path.join(__dirname, '../../lcl/engine/singleColumn.css'), 'utf8'),
   read('amadeus-host.css'),
@@ -51,6 +47,7 @@ const CSS = [
   read('amadeus/theme/themes/origin/theme.css'),
 ].join('\n')
 
+require('sucrase/register/ts')
 const { customAccentVars, customBgVars } = require(path.join(SRC, 'theme/lcl/lovableData.ts'))
 
 const CUSTOM_ACCENTS = [
@@ -196,7 +193,7 @@ function filesUnder(dir, out = []) {
   // Genesis/Soft 是纯结构语言。Genesis Glass 另有从 skin token 派生的材质别名(--bg-glass),故在浏览器矩阵验。
   const axisLeaks = []
   for (const lang of ['lovable', 'soft', ...(hasZhiCandidate ? ['zhi'] : [])]) {
-    const source = (lang === 'soft' ? SOFT_CSS : lang === 'zhi' ? fs.readFileSync(zhiCandidate, 'utf8') : read(`theme/themes/${lang}/theme.css`)).replace(/\/\*[\s\S]*?\*\//g, '')
+    const source = (lang === 'zhi' ? fs.readFileSync(zhiCandidate, 'utf8') : read(`theme/themes/${lang}/theme.css`)).replace(/\/\*[\s\S]*?\*\//g, '')
     for (const token of COLOR_TOKENS) {
       if (new RegExp(`--${token.replace(/-/g, '\\-')}\\s*:`).test(source)) axisLeaks.push(`${lang}/--${token}`)
     }

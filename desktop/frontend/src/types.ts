@@ -915,8 +915,8 @@ declare global {
       onEnvOutput?(cb: (ev: { installId: string; line: string }) => void): () => void
       /** Forsion 插件依赖应用一键安装:宿主白名单查表登记,拿 installId 走 envRun;null=无一键命令。 */
       requestKnownAppInstall?(appId: string): Promise<{ installId: string; command: string } | null>
-      /** 拖入式主题:列 ~/.tangu/themes/(每项 {id,manifest,css})/ 打开该文件夹。 */
-      listThemes?(): Promise<Array<{ id: string; manifest: Record<string, unknown>; css: string }>>
+      /** 拖入式主题:列 <home>/themes/(每项 {id,manifest,css};migratedFrom = 主进程迁移标记,见 electron/themeMigrations.ts)/ 打开该文件夹。 */
+      listThemes?(): Promise<Array<{ id: string; manifest: Record<string, unknown>; css: string; migratedFrom?: string }>>
       openThemesDir?(): Promise<{ ok: boolean }>
       /** 设置界面「打开文件夹」:在系统文件管理器打开 agent(slug 缺省=agents 根)/ skills / plugins 目录(仅桌面)。 */
       openAgentDir?(slug?: string): Promise<{ ok: boolean }>

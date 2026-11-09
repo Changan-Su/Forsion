@@ -1,0 +1,77 @@
+/**
+ * Soft — 设计语言:柔影浮卡 · 结构层(LCL「soft」基底,源自 Amadeus/tanguSoft)。
+ * 双轴主题模型:**语言只管结构**(大圆角 · Plus Jakarta · 柔影 · 渐变舞台 + 角落辉光 + 每个停靠面板成独立圆角浮卡),
+ * **颜色由配色(data-skin)决定**(故 soft + 任意配色 = 浮卡结构 + 该配色)。`--glow`/`--bg` 由配色给,这里只「用」。
+ */
+
+[data-theme='soft'] {
+  --radius-sm: 10px;
+  --radius-md: 14px;
+  --radius-lg: 18px;
+  --radius-chat-surface: 20px;
+  --radius-chat-card: 14px;
+  --font-ui: 'Plus Jakarta Sans', 'Nunito', ui-rounded, 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+  --panel-blur: none;
+  --card-shadow: 0 1px 2px rgba(70, 50, 100, 0.05), 0 12px 30px -10px rgba(90, 70, 130, 0.18);
+  --btn-shadow: 0 3px 12px rgba(139, 127, 214, 0.28);
+  --icon-shadow: 0 1px 5px rgba(90, 70, 130, 0.16);
+}
+
+.dark[data-theme='soft'] {
+  --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 14px 34px -10px rgba(0, 0, 0, 0.55);
+  --btn-shadow: 0 3px 12px rgba(0, 0, 0, 0.45);
+  --icon-shadow: 0 1px 5px rgba(0, 0, 0, 0.3);
+}
+
+/* ─── soft 结构:渐变舞台 + 角落辉光 + 内嵌留白 + 每个停靠面板成独立圆角浮卡 ───
+ * (soft 不止换色:外壳面板要浮起来。仅 soft 语言生效,lovable 仍扁平满铺。
+ *  导航/对话/右栏 都是 Dockview 组,各自卡片化 + theme.gap=8 拉开 → 独立浮卡。
+ *  --bg/--glow 由当前配色(data-skin)提供,故 soft × 任意配色 都成立。) */
+[data-theme='soft'] .shell {
+  background: var(--glow, transparent), var(--bg);
+  padding: 8px;
+  gap: 8px;
+}
+[data-theme='soft'] .shell-titlebar {
+  background: transparent;
+  border: 0;
+  height: 22px;
+}
+[data-theme='soft'] .shell-top {
+  background: transparent;
+  gap: 8px;
+}
+[data-theme='soft'] .shell-work { background: transparent; }
+[data-theme='soft'] .rb,
+[data-theme='soft'] .sb {
+  background: var(--bg-card);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--card-shadow);
+  border: var(--border-width, 1px) solid color-mix(in srgb, var(--border) 70%, transparent);
+}
+[data-theme='soft'] .rb { width: 48px; padding-block: 9px; }
+[data-theme='soft'] .sb { height: 26px; }
+[data-theme='soft'] .dockview-theme-lcl .dv-groupview {
+  background: var(--bg-card);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--card-shadow);
+  overflow: hidden;
+}
+[data-theme='soft'] .t2-toolbar {
+  background: color-mix(in srgb, var(--bg-card) 90%, transparent);
+  border-bottom-color: color-mix(in srgb, var(--border) 70%, transparent);
+}
+[data-theme='soft'] .t2c-card { border-radius: 22px; }
+[data-theme='soft'] .composer-anchor {
+  background: linear-gradient(to top, color-mix(in srgb, var(--bg-card) 78%, transparent), transparent);
+}
+[data-theme='soft'] .dockview-theme-lcl {
+  --dv-background-color: transparent;
+  --dv-group-view-background-color: transparent;
+  --dv-tabs-and-actions-container-background-color: transparent;
+  --dv-activegroup-visiblepanel-tab-background-color: var(--overlay-light);
+  --dv-inactivegroup-visiblepanel-tab-background-color: transparent;
+}
+[data-theme='soft'] .dockview-theme-lcl .dv-tabs-and-actions-container {
+  border-bottom-color: color-mix(in srgb, var(--border) 65%, transparent);
+}

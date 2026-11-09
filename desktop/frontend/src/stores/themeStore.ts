@@ -19,6 +19,7 @@ import { applyPrefs } from '../uiPrefsApply'
 import { useSpaceStore } from '@lcl/engine/spaceRegistry'
 import { useSpaceAppearance, receiveSpaceAppearance, setSpaceAppearance } from './spaceAppearanceStore'
 import { resolveSpaceAppearance } from '../theme/spaceAppearance'
+import { adoptMigratedLanguage, markLanguageChosen } from '../theme/migratedLanguage'
 import '../theme/calm' // 「呼吸感」三个外观开关:落 <html data-calm-*>,每个窗口加载一次(见该文件)
 import { suggestMotionTheme } from '../theme/motionTheme' // 动效主题:落 <html data-motion-theme>,每个窗口加载一次(见该文件)
 import { reducedMotion } from '@lcl/engine/spring'
@@ -139,8 +140,8 @@ function hasForcedSchemeHint(): boolean {
   try { const v = localStorage.getItem('forsion_theme_forced_scheme'); return v === 'light' || v === 'dark' || v === 'system' } catch { return false }
 }
 
-/** 读 ~/.tangu/themes(无 preload/出错 → 空,渲染端纯 bundle 运行)。 */
-async function fetchDiskThemes(): Promise<Array<{ id: string; manifest: Record<string, unknown>; css: string }>> {
+/** 读 <home>/themes(无 preload/出错 → 空,渲染端纯 bundle 运行)。 */
+async function fetchDiskThemes(): Promise<Array<{ id: string; manifest: Record<string, unknown>; css: string; migratedFrom?: string }>> {
   try { return (await window.tangu?.listThemes?.()) ?? [] } catch { return [] }
 }
 
@@ -261,7 +262,7 @@ export const useTheme = create<ThemeState>((set, get) => {
     flat: readFlat(),
     ambient: readAmbient(),
     themesVersion: 0,
-    setLang: (lang) => { themeTelemetry(get(), { lang }); apply(lang, get().skin, get().bg, get().modePref, get().seed); notify() },
+    setLang: (lang) => { if (lang !== get().lang) markLanguageChosen(); themeTelemetry(get(), { lang }); apply(lang, get().skin, get().bg, get().modePref, get().seed); notify() },
     // 成就打点只在用户显式换主题/配色的动作里(setTheme/setSkin/setBg);严禁挪进 apply——启动初始化也走 apply 会误计。
     // 遥测的设置改动(themeTelemetry)同理:只在这几个用户动作里报,启动 / 跨窗同步(initThemes / syncFromWindow)不报。
     setSkin: (skin) => { track('theme.change'); themeTelemetry(get(), { skin }); apply(get().lang, skin, get().bg, get().modePref, get().seed); notify() },
@@ -275,7 +276,7 @@ export const useTheme = create<ThemeState>((set, get) => {
       persistPref(pref)
       return withModeTransition(() => { apply(get().lang, get().skin, get().bg, pref, get().seed); notify() })
     },
-    setTheme: (lang, skin, bg, pref) => { track('theme.change'); themeTelemetry(get(), { lang, skin, bg, pref }); persistPref(pref); apply(lang, skin, bg, pref, get().seed); notify() },
+    setTheme: (lang, skin, bg, pref) => { if (lang !== get().lang) markLanguageChosen(); track('theme.change'); themeTelemetry(get(), { lang, skin, bg, pref }); persistPref(pref); apply(lang, skin, bg, pref, get().seed); notify() },
     setSeed: (seed) => { apply(get().lang, 'custom', get().bg, get().modePref, seed); notify() },
     // 只更新 seed 值 + 持久化(若当前是 custom 则即时重应用);不强行切到 custom——对齐 App.tsx onSeedChange。
     setSeedValue: (seed) => {
@@ -324,8 +325,12 @@ export const useTheme = create<ThemeState>((set, get) => {
       // 承接首屏:持久化语言若是刚合并的磁盘主题(首屏被回退到 lovable),现重应用其结构。
       // 走 apply(而非裸 applyTheme):磁盘 manifest 此刻才可见,借它按 colorScheme 强制/解锁明暗
       //(如 genesis-glass 首屏还不知道要锁 system,合并后这里才补上——配合 forced_scheme 首屏 hint 防闪)。
-      const want = persistedLang && hasLanguage(persistedLang) ? persistedLang : get().lang
-      apply(want, get().skin, get().bg, get().modePref, get().seed)
+      const persisted = persistedLang && hasLanguage(persistedLang) ? persistedLang : get().lang
+      // 主进程把改过的旧 Soft 另存成了 soft-custom:正用 soft 的人(含单独设了 soft 的 Space)切过去,观感不变;
+      // 用户之后自己换过语言(setLang / setTheme 里 markLanguageChosen)就不再切。
+      const adopted = adoptMigratedLanguage(list, persisted, useSpaceAppearance.getState().byId, hasLanguage)
+      for (const s of adopted.spaces) setSpaceAppearance(s.id, s.appearance)
+      apply(adopted.lang, get().skin, get().bg, get().modePref, get().seed)
       set({ themesVersion: get().themesVersion + 1 })
     },
     reloadThemes: async () => {

@@ -76,7 +76,8 @@ import './mainMessages' // P1-K5:登记 main.* 原生界面文案(配对框 / �
 import * as deviceSecrets from './deviceSecrets' // P1-K5:设备凭据(配对 / external token)进 safeStorage
 import { createUnitRelay } from './unitRelay' // 桌面作为调用方:把会话建到账号下另一台电脑上
 import './editContextMenu' // 编辑区系统右键菜单(评审 G4-08):导入即给每个应用窗口挂 context-menu,逻辑全在模块里
-import { readThemesDir, seedDefaultThemes } from './themes'
+import { readThemesDir } from './themes'
+import { migrateDiskSoft } from './themeMigrations'
 import { builtinBundleSources, builtinPluginIds, bundleOff, bundleRestartPending, initBundleSwitches, lockedPluginIds, seedBuiltinBundles, setBundleOff } from './builtinPlugins'
 import { createCorePluginUpdater, prefetchOnFirstBoot } from './corePluginUpdates'
 import { createMarketPluginUpdater, type MarketUpdateItem } from './marketPluginUpdates'
@@ -3095,7 +3096,9 @@ app.whenReady().then(async () => {
   if (PRODUCT.market) await marketPluginUpdater.init().catch((e) => console.warn('[market-updates] initialization failed:', e))
   // 手动拷进插件目录的插件:每出现一个新版本就留一份,换版后能在 设置 → 插件 里回退。后台跑,排在安装 / 卸载同一条队列里。
   if (PRODUCT.market) void marketPluginUpdater.exclusive(() => marketPluginUpdater.keepLocalVersions()).catch((e) => console.warn('[market-updates] keep local versions:', e))
-  await seedDefaultThemes(themesDir()) // 首次运行种入 soft 示例主题(themes/ 已存在则跳过;内部吞错不阻塞启动)
+  // Soft 已随包内置:旧版种进 themes/soft 的副本,没改过的原地让位,改过的另存成 soft-custom(见 themeMigrations.ts)。
+  // 须在开窗前 await 完 —— 渲染层第一次列主题就要看到迁移结果;内部不抛,出错按「不知道」什么都不动。
+  await migrateDiskSoft(themesDir()).catch((e) => console.warn('[themes] Soft migration:', e))
   // 内置插件捆绑包(电脑操作 / Forsion Extend)播种进 <home>/plugins/:须在 ensureBackend 之前 await 完 —— 引擎只在启动时扫一次
   // bundle 根;随包版本更新才替换,不降级;逐包吞错不阻塞启动(见 builtinPlugins.ts)。单品变体不捆内置包 → 不播。
   const allBundleSources = builtinBundleSources({ isPackaged: app.isPackaged, resourcesPath: process.resourcesPath, appPath: app.getAppPath(), agentBackend: PRODUCT.agentBackend, spaces: PRODUCT.spaces })
