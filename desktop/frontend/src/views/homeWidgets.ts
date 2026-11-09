@@ -98,7 +98,20 @@ export function saveHomeLayout(next: HomeLayout): void {
 globalThis.addEventListener?.('storage', (e) => {
   if (e.key === HOME_WIDGETS_KEY || e.key === null) { cached = null; notify() }
 })
-export const useHomeLayout = (): HomeLayout => useSyncExternalStore((f) => { subs.add(f); return () => subs.delete(f) }, readHomeLayout)
+/** 摆放变了(本窗口保存、别的窗口改了)就回调。返回退订。 */
+export function subscribeHomeLayout(f: () => void): () => void {
+  subs.add(f)
+  return () => { subs.delete(f) }
+}
+export const useHomeLayout = (): HomeLayout => useSyncExternalStore(subscribeHomeLayout, readHomeLayout)
+/** 存过的那份摆放;从没存过、或这台设备读不了存储 = null(ctx.home.layout.read 用:缺省摆法交给接管主页的插件定,别把缺省写回去)。 */
+export function readStoredHomeLayout(): HomeLayout | null {
+  let raw: string | null
+  try { raw = localStorage.getItem(HOME_WIDGETS_KEY) } catch { return null }
+  if (raw === null) return null
+  const l = readHomeLayout()
+  return readFailed ? null : l
+}
 
 const rowUsed = (l: HomeLayout): number => l.row.reduce((s, c) => s + c.w, 0)
 export const isOnHome = (l: HomeLayout, id: string): boolean => l.row.some((c) => c.id === id) || l.left.includes(id) || l.right.includes(id)

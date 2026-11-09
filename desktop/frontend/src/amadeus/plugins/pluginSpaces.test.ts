@@ -69,3 +69,31 @@ describe('ctx.spaces(主页插件化 S3 / S4)', () => {
     expect(aRenders).toBe(renders)
   })
 })
+
+describe('ctx.spaces 主页插件化收尾(H6 / H7,2026-11-09)', () => {
+  it('actions 带上首方 Ribbon 动作(rb-plugin-*),排在商店 / 成就后面;别的 Ribbon 条目不带', () => {
+    const run = vi.fn()
+    useRibbonStore.setState({ items: [
+      { id: 'rb-plugin-activity', side: 'top', tooltip: '活动', onClick: run } as never,
+      { id: 'rb-market', side: 'top', tooltip: '商店', onClick: vi.fn() } as never,
+      { id: 'rb-settings', side: 'bottom', tooltip: '设置', onClick: vi.fn() } as never,
+    ] })
+    const ids = api().actions().map((a) => a.id)
+    expect(ids).toEqual(['rb-market', 'rb-plugin-activity'])
+    api().actions()[1]!.run()
+    expect(run).toHaveBeenCalledOnce()
+  })
+
+  it('contextMenu:不认识的 Space / 停用后 / 不是事件 → false,不 preventDefault', () => {
+    const ev = new MouseEvent('contextmenu', { clientX: 10, clientY: 10, cancelable: true })
+    expect(api().contextMenu!(ev, 'nope')).toBe(false)
+    expect(ev.defaultPrevented).toBe(false)
+    expect(api().contextMenu!(null as never, 'home')).toBe(false)
+    alive = false
+    expect(api().contextMenu!(ev, 'home')).toBe(false)
+  })
+
+  it('opensElsewhere:普通窗口里点 Space 是就地切(false)', () => {
+    expect(api().opensElsewhere!('home')).toBe(false)
+  })
+})

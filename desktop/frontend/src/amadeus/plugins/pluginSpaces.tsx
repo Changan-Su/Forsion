@@ -2,14 +2,16 @@
  * `ctx.spaces`(2026-10-18,主页插件化 S3 / S4):Space 列表、打开、图标、近况那一行、商店 / 成就两格,以及 Ribbon 上区的收纳架。
  * 收纳架写的就是 Ribbon 那一份(views/homeShelf,内置主页也用它),不另存。manifest 声明 `spaces` 才注入(改的是用户的 Ribbon)。
  */
-import { label, openObject, useRibbonStore, useSpaceStore } from '@lcl/engine'
+import { label, openObject, openObjectMenu, spaceOpensElsewhere, useRibbonStore, useSpaceStore, type SheetMenuItem } from '@lcl/engine'
 import { claimHostMount, mountHostReact } from '@lcl/components'
 import type { PluginContext } from './types'
+import { RIBBON_ACTION_PREFIX } from './ribbonAction'
+import { pluginText } from './pluginText'
 import {
   shelfAddFolder, shelfMove, shelfMoveIntoFolder, shelfMoveOut, shelfRemoveFolder, shelfRenameFolder, shelfReorderFolder, shelfTiles,
 } from '../../views/homeShelf'
 
-/** 商店、成就两格(Ribbon 条目 id)。 */
+/** 商店、成就两格(Ribbon 条目 id);2026-11-09 起后面再接首方 Ribbon 动作(`rb-plugin-*`,活动中心等,和内置主页的坞同一份)。 */
 const ACTIONS = ['rb-market', 'rb-achievements'] as const
 
 type Api = NonNullable<PluginContext['spaces']>
@@ -60,10 +62,39 @@ export function createSpacesApi({ alive, own }: { alive: () => boolean; own: (of
       }, (e) => console.error('[spaces] status mount failed', e))
       return own(() => { cancelled = true; off?.(); off = null })
     },
-    actions: () => ACTIONS.flatMap((id) => {
-      const item = useRibbonStore.getState().items.find((i) => i.id === id)
-      return item ? [{ id, name: item.tooltip ? label(item.tooltip) : '', run: () => { if (alive()) item.onClick?.() } }] : []
-    }),
+    actions: () => {
+      const items = useRibbonStore.getState().items
+      const ids = [...ACTIONS, ...items.filter((i) => i.id.startsWith(RIBBON_ACTION_PREFIX)).map((i) => i.id)]
+      return ids.flatMap((id) => {
+        const item = items.find((i) => i.id === id)
+        return item ? [{ id, name: item.tooltip ? label(item.tooltip) : '', run: () => { if (alive()) item.onClick?.() } }] : []
+      })
+    },
+    // 对象层那份 Space 菜单(和 Ribbon、主页、收纳面板同一份)+ 插件这一处的几项;行的清洗同 ctx.ui.contextMenu 的口径(最多 20 行)
+    contextMenu: (event, id, extra) => {
+      const sid = str(id)
+      if (!alive() || !event || typeof (event as MouseEvent).clientX !== 'number') return false
+      if (!useSpaceStore.getState().spaces.some((s) => s.id === sid)) return false
+      const rows: SheetMenuItem[] = (Array.isArray(extra) ? extra : []).slice(0, 20).flatMap((it, i) => {
+        if (!it || typeof it.run !== 'function') return []
+        const text = pluginText(it.label).trim().slice(0, 80)
+        if (!text) return []
+        const run = it.run
+        return [{
+          id: `plugin-${i}`, label: text, danger: !!it.danger, disabled: !!it.disabled,
+          ...(typeof it.checked === 'boolean' ? { checked: it.checked } : {}),
+          run: () => { if (alive()) try { run() } catch (e) { console.error('[spaces] menu item threw', e) } },
+        }]
+      })
+      const target = event.currentTarget instanceof Element ? event.currentTarget : event.target instanceof Element ? event.target : null
+      const opened = openObjectMenu({
+        refs: [{ type: 'space', id: sid }], place: { kind: 'plugin-space' }, placeSections: rows.length ? [{ items: rows }] : [],
+        x: event.clientX, y: event.clientY, returnFocus: target,
+      })
+      if (opened) { event.preventDefault(); event.stopPropagation() }
+      return opened
+    },
+    opensElsewhere: (id) => spaceOpensElsewhere(str(id)),
     shelf: {
       items: () => {
         const { order, folders } = useRibbonStore.getState()
