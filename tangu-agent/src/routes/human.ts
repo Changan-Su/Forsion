@@ -3,7 +3,7 @@ import { authMiddleware, type AuthRequest } from '../core/http.js';
 import { deps } from '../seams/runtime.js';
 import { HumanError, isHumanFile, readHuman, writeHuman, type HumanScope } from '../agents/humanStore.js';
 import { mirrorLegacyHuman } from '../agents/humanFolder.js';
-import { mutatePortrait, portraitEntries, PORTRAIT_SHORT_VERSION, readPortrait } from '../agents/humanPortrait.js';
+import { dismissPortraitOverflow, mutatePortrait, portraitEntries, PORTRAIT_SHORT_VERSION, readPortrait, readPortraitOverflow } from '../agents/humanPortrait.js';
 import { keepPortraitItem, movePortraitItem, readPortraitMove, startPortraitScan, undoPortraitMove } from '../agents/portraitMove.js';
 import { getAgent, isValidSlug, resolveMemorySlug } from '../agents/agentRegistry.js';
 import { humanProjectScope } from '../services/humanContext.js';
@@ -131,6 +131,15 @@ router.post('/agent/human/SOUL.md/entries', authMiddleware, async (req: AuthRequ
     const r = await mutatePortrait({ action, id, fact, expectedVersion, actor: 'user', source: { kind: 'user' } });
     res.json({ ...portraitBody(r.document), ...(r.entry ? { entry: r.entry } : {}) });
   } catch (e) { fail(res, e); }
+});
+// Dream 因为画像满了、退回各 Agent 记忆的条目(11-09):画像页提示一句、点开看是哪几条,「知道了」清掉。只在本机、拒远端。
+router.get('/agent/human/SOUL.md/overflow', authMiddleware, async (req: AuthRequest, res) => {
+  if (!humanLocal(req, res)) return;
+  try { res.json({ items: await readPortraitOverflow() }); } catch (e) { fail(res, e); }
+});
+router.post('/agent/human/SOUL.md/overflow/dismiss', authMiddleware, async (req: AuthRequest, res) => {
+  if (!humanLocal(req, res)) return;
+  try { dismissPortraitOverflow(); res.json({ items: [] }); } catch (e) { fail(res, e); }
 });
 // 搬家卡(10-30 第 2 步):人点了才扫、逐条点了才挪。同样只在本机、拒远端。
 router.get('/agent/human/SOUL.md/move', authMiddleware, async (req: AuthRequest, res) => {

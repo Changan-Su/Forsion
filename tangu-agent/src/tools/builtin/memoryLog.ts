@@ -140,7 +140,7 @@ function portraitError(e: unknown): string {
   if (e instanceof PortraitFullError) {
     return e.section.length
       ? `Error: the portrait is full (${e.chars}/${PORTRAIT_LIMIT} characters, the part every agent reads). Nothing was written. Merge or shorten the entries agents added, with update/forget (scope "person", expectedVersion ${e.version.slice(0, PORTRAIT_SHORT_VERSION)}), then add. Those entries: ${JSON.stringify(e.section)}`
-      : `Error: the portrait is full (${e.chars}/${PORTRAIT_LIMIT} characters, the part every agent reads) with text the human wrote, which you must not shorten. Nothing was written; tell them it did not fit.`;
+      : `Error: the portrait is full (${e.chars}/${PORTRAIT_LIMIT} characters, the part every agent reads) with text the human wrote or imported, which you must not shorten. Nothing was written; tell them it did not fit.`;
   }
   if (e instanceof HumanError) {
     if (e.code === 'HUMAN_CONFLICT') return 'Error: the portrait changed since it was listed. Nothing was written; list again and use the new version (scope "person").';

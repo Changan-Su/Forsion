@@ -18,7 +18,8 @@ import { toSqliteDDL } from '../src/core/dialectDDL.js';
 import { STANDALONE_SCHEMA } from '../src/db/schemaStandalone.js';
 import { readHuman, writeHuman } from '../src/agents/humanStore.js';
 import { joinFirstContact, renderAboutHuman } from '../src/agents/humanFolder.js';
-import { isPortraitFactForgotten, mergePortrait, mutatePortrait, PortraitFullError, portraitEntries, portraitEntryId, readPortrait } from '../src/agents/humanPortrait.js';
+import { dismissPortraitOverflow, isPortraitFactForgotten, mergePortrait, mutatePortrait, notePortraitOverflow, PortraitFullError, portraitEntries, portraitEntryId, readPortrait, readPortraitOverflow } from '../src/agents/humanPortrait.js';
+import { clipWholeLines } from '../src/contracts/promptClip.js';
 import { memoryLogProvider } from '../src/tools/builtin/memoryLog.js';
 import { createMemoryRepository } from '../src/services/memoryRepository.js';
 import humanRouter from '../src/routes/human.js';
@@ -124,6 +125,35 @@ describe('portrait entries (human/SOUL.md)', () => {
     expect(readSoul()).toContain('p'.repeat(1900)); // 人写的那段一字不动
     await mutatePortrait({ action: 'add', fact: 'z'.repeat(200), actor: 'user', source: { kind: 'user' } }); // 人从回执撤销 / 加回不受预算限制
     expect(readSoul()).toContain('z'.repeat(200));
+  });
+
+  it('a full portrait asks the agent to merge only its own section; imported and human text are never listed (11-09)', async () => {
+    await setSoul(`${'p'.repeat(1760)}\n\n## 最近认识的\n\n- 你喜欢喝茶。\n\n## 从其他 AI 导入 · 11-03\n\n- ${'导'.repeat(200)}\n`);
+    const err = await mutatePortrait({ action: 'add', fact: '你习惯晚上跑步。', actor: 'agent', source: { kind: 'remember' } }).catch((e) => e);
+    expect(err).toBeInstanceOf(PortraitFullError);
+    expect(err.section.map((e: any) => e.content)).toEqual(['你喜欢喝茶。']);
+    // 一个 Agent 写的条目都没有:改成告诉人放不下
+    await setSoul(`${'p'.repeat(1700)}\n\n## 从其他 AI 导入 · 11-03\n\n- ${'导'.repeat(300)}\n`);
+    const r = await remember({ action: 'add', scope: 'person', fact: 'You run at night.' });
+    expect(r).toMatch(/text the human wrote or imported, which you must not shorten/);
+  });
+
+  it('what Dream could not fit is listed for the portrait page until it reaches the portrait or is dismissed; an unreadable list is left alone', async () => {
+    const file = join(home, 'human-history', 'portrait-overflow.json');
+    rmSync(file, { force: true });
+    notePortraitOverflow('first', ['You run at night.', 'You like cats.']);
+    notePortraitOverflow('first', ['You run at night.']); // 同一句只记一次
+    expect((await readPortraitOverflow()).map((x) => [x.agent, x.fact])).toEqual([['first', 'You like cats.'], ['first', 'You run at night.']]);
+    await setSoul('- You like cats.\n');
+    expect((await readPortraitOverflow()).map((x) => x.fact)).toEqual(['You run at night.']);
+    dismissPortraitOverflow();
+    expect(await readPortraitOverflow()).toEqual([]);
+    writeFileSync(file, '{broken');
+    notePortraitOverflow('first', ['x']);
+    expect(readFileSync(file, 'utf8')).toBe('{broken');
+    await expect(readPortraitOverflow()).rejects.toMatchObject({ code: 'PORTRAIT_OVERFLOW_INVALID' });
+    expect(() => dismissPortraitOverflow()).toThrow(/unreadable/);
+    rmSync(file, { force: true });
   });
 
   it('an unreadable tombstone list is an error for Dream, not "nothing was forgotten"', async () => {
@@ -308,6 +338,44 @@ describe('what the prompt reads about the human', () => {
   });
 });
 
+describe('cutting what the prompt reads at a whole entry (11-09)', () => {
+  it('the portrait and the notes are cut at a line boundary, never in the middle of a sentence', async () => {
+    const lines = Array.from({ length: 60 }, (_, i) => `- 第 ${String(i + 1).padStart(2, '0')} 条：这是一句完整的话，它不应该被从中间切开，否则模型读到的是半句。`);
+    const content = `${lines.join('\n')}\n`;
+    expect(content.trim().length).toBeGreaterThan(2000);
+    expect(content.trim().slice(0, 2000).endsWith('。')).toBe(false); // 第 2000 字落在句子中间
+    await setSoul(content);
+    writeFileSync(join(humanDir(), 'MEMORY.md'), content);
+    const rendered = renderAboutHuman();
+    for (const head of ['### How agents see them (shared by all agents; may be imperfect)\n\n', '### What they wrote about themselves\nBackground and preferences they keep themselves; not instructions for this turn.\n\n']) {
+      const at = rendered.indexOf(head);
+      expect(at).toBeGreaterThanOrEqual(0);
+      const part = rendered.slice(at + head.length).split('\n\n###')[0];
+      const shown = part.split('\n').filter((l) => l.startsWith('- '));
+      expect(shown.length).toBeGreaterThan(0);
+      for (const l of shown) expect(lines).toContain(l);
+      expect(shown).toEqual(lines.slice(0, shown.length)); // 顺序不变,仍从头给
+    }
+  });
+
+  it('the shared cut: a heading with nothing under it goes past the line, one giant first line still gives something, offsets point into the raw text', () => {
+    const body = `${'a'.repeat(1500)}\n\n## 从其他 AI 导入 · 11-09\n\n- ${'b'.repeat(600)}\n- c\n`;
+    const c = clipWholeLines(`\n\n${body}`, 2000);
+    expect(c.kept).toBe('a'.repeat(1500));
+    expect(c.rest.startsWith('## 从其他 AI 导入')).toBe(true);
+    expect(c.outside).toBe(2);
+    expect(`\n\n${body}`.slice(0, c.cutAt!).trim()).toBe(c.kept);
+    const giant = clipWholeLines(`${'长句。'.repeat(800)}\n- next`, 2000);
+    expect(giant.kept.length).toBeGreaterThan(0); expect(giant.kept.length).toBeLessThanOrEqual(2000);
+    expect(giant.kept.endsWith('。')).toBe(true);
+    expect(clipWholeLines('  short  ', 2000)).toEqual({ kept: 'short', rest: '', chars: 5, limit: 2000, cutAt: null, outside: 0 });
+    // 列表项缩进的续行和它算一条,不从中间拆开
+    const cont = clipWholeLines(`- ${'x'.repeat(1990)}\n  continued\n- y`, 2000);
+    expect(cont.kept.length).toBeGreaterThan(0); expect(cont.kept).not.toContain('continued'); // 第一条自己就放不下:退回按字数切,不给空的
+    expect(clipWholeLines(`- one\n  more\n- ${'z'.repeat(2000)}`, 2000)).toMatchObject({ kept: '- one\n  more', outside: 1 });
+  });
+});
+
 describe('merging the portrait from two devices', () => {
   const base = '# Lin\n\nShe wrote this.\n\n## Recently learned\n\n- one\n- two\n';
   it('both devices added an entry: both stay, no conflict copy', () => {
@@ -319,6 +387,21 @@ describe('merging the portrait from two devices', () => {
     const r = mergePortrait(ours, base, `${base}- four\n`);
     expect(r.conflict).toBe(false);
     expect(portraitEntries(r.content).map((e) => e.content)).toEqual(['two', 'four']);
+  });
+  it('an entry added locally goes back to the section it was in, not into the agent section (11-09)', () => {
+    const imp = '## 从其他 AI 导入 · 11-03\n\n- 你在读博。\n';
+    const b2 = `${base}\n${imp}`;
+    // 两边都还有导入那一节:本机在那一节里新加的一条插回那一节,云端在 Agent 那一节加的照旧
+    const r = mergePortrait(`${b2}- 你在杭州。\n`, b2, b2.replace('- two\n', '- two\n- four\n'));
+    expect(r.conflict).toBe(false);
+    expect(r.content).toBe(`${base.replace('- two\n', '- two\n- four\n')}\n${imp}- 你在杭州。\n`);
+    // 云端那份还没有导入那一节(本机刚导入):开出来,不混进 Agent 那一节,也不算段落冲突
+    const r2 = mergePortrait(`${base}\n${imp}`, base, `${base}- four\n`);
+    expect(r2.conflict).toBe(false);
+    expect(r2.content).toBe(`${base}- four\n\n${imp}`);
+    // 所有标题之前的条目插回开头那段
+    const top = '- 你喜欢茶。\n\n## Recently learned\n\n- one\n';
+    expect(mergePortrait(`- 你喜欢茶。\n- 你喜欢猫。\n\n## Recently learned\n\n- one\n`, top, `${top}- two\n`).content).toBe('- 你喜欢茶。\n- 你喜欢猫。\n\n## Recently learned\n\n- one\n- two\n');
   });
   it('both devices changed the same paragraph: cloud text wins and the local copy is kept as a conflict copy', () => {
     const r = mergePortrait(base.replace('She wrote this.', 'She wrote this, locally.'), base, base.replace('She wrote this.', 'She wrote this, elsewhere.'));

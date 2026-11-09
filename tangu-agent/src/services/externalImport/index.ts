@@ -4,7 +4,9 @@
  *  - 去处:关于这个人的 → 画像(human/SOUL.md,和搬家 / remember 的 person 档同一个入口);人给 AI 定的规矩 → human/AGENT.md;
  *    只在某个项目成立的 → 那个项目的记忆;技能 → ~/.tangu/skills(同名绝不原名落地)。都以用户的名义写、来源记 import。
  *  - 一次导入一份账(imports/<id>.json),撤销按账来:还是导入时那样才撤,之后改过的留着并告诉人。
- *  - 读失败 ≠ 空:账本 / seen.json 读不懂就报错,绝不当成空的写回去。 */
+ *  - 读失败 ≠ 空:账本 / seen.json 读不懂就报错,绝不当成空的写回去。
+ *  - 11-09(记忆分层第一步):整理时算画像的账(Agent 每轮只读前 2000 字),按单上顺序默认勾到放得下为止,其余标「放不下」;
+ *    导入的画像条目写进自己的一节「从其他 AI 导入 · MM-DD」,不再进 Agent 那一节。方案页 docs/ToBeImproved/记忆分层与Agent分身方案_2026-11-09。 */
 import { randomUUID } from 'node:crypto';
 import { cpSync, existsSync, lstatSync, readdirSync, realpathSync, renameSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
@@ -17,22 +19,25 @@ import { parseJson } from '../memoryDream.js';
 import { loadSpecialAgentsConfig, resolveBackgroundModelId } from '../specialAgentsConfig.js';
 import { coveringProjectEntry, openProjectMemory, PROJECT_MEMORY_CHAR_BUDGET, refOf } from '../projectMemory.js';
 import { HUMAN_FOLDER_MAX_LENGTH, HumanError, readHuman, writeHuman, type HumanScope } from '../../agents/humanStore.js';
-import { isPortraitFactForgotten, mutatePortrait, PERSON_IS, PORTRAIT_SCOPE, portraitEntries } from '../../agents/humanPortrait.js';
+import { importSectionTitle, isPortraitFactForgotten, moveEntriesToSections, mutatePortrait, PERSON_IS, PORTRAIT_LIMIT, PORTRAIT_SCOPE, portraitEntries } from '../../agents/humanPortrait.js';
 import { listLocalSkills, LOCAL_SKILL_PREFIX, treeHash, builtinSkillsDir } from '../../skills/localSkills.js';
 import { IMPORT_TOOLS, isImportTool, pastedSnippets, scanSources, skillFingerprint, SKILL_FILES_MAX, type ExternalSkill, type ImportNotice, type ImportTool, type Snippet } from './sources.js';
 
 export type ImportDest = 'person' | 'agent' | 'project' | 'past' | 'blocked';
-export type ItemFlag = 'merged' | 'sensitive' | 'known' | 'conflict' | 'forgotten';
-export interface PlanItem { id: string; text: string; dest: ImportDest; project?: string; sources: ImportTool[]; flags: ItemFlag[]; conflictWith?: string; checked: boolean; locked: boolean }
+export type ItemFlag = 'merged' | 'sensitive' | 'known' | 'conflict' | 'forgotten' | 'noRoom';
+/** cost = 写进画像大约多占几个字(person / past 才有);noRoom = 按单上顺序已经放不下,默认不勾(人照样可以勾,勾上的落在线外)。 */
+export interface PlanItem { id: string; text: string; dest: ImportDest; project?: string; sources: ImportTool[]; flags: ItemFlag[]; conflictWith?: string; checked: boolean; locked: boolean; cost?: number }
+/** 画像的账:现在多少字(去首尾空白,同注入时的算法)、上限、还能放多少(已减去新开那一节的标题)。 */
+export interface PortraitBudget { chars: number; limit: number; room: number }
 export interface PlanSkill { key: string; fp: string; tool: ImportTool; name: string; target: string; description: string; scripts: number; files: number; flags: Array<'renamed' | 'mentions-other' | 'too-big'>; checked: boolean; locked: boolean }
-export interface ImportPlan { id: string; createdAt: number; lang: 'zh' | 'en'; items: PlanItem[]; skills: PlanSkill[]; notices: ImportNotice[]; missed: number; fingerprints: string[] }
+export interface ImportPlan { id: string; createdAt: number; lang: 'zh' | 'en'; items: PlanItem[]; skills: PlanSkill[]; notices: ImportNotice[]; missed: number; fingerprints: string[]; portrait: PortraitBudget }
 export interface PlanView { state: 'idle' | 'running' | 'done' | 'error'; done: number; total: number; plan: ImportPlan | null; error: string | null }
 type Write =
   | { kind: 'person'; content: string }
   | { kind: 'agent'; lines: string[]; heading: string }
   | { kind: 'project'; project: string; content: string }
   | { kind: 'skill'; dir: string; name: string; hash: string | null };
-export interface Ledger { id: string; at: number; sources: ImportTool[]; counts: Record<'person' | 'agent' | 'project' | 'skill', number>; writes: Write[]; undoneAt?: number; kept?: string[] }
+export interface Ledger { id: string; at: number; lang?: 'zh' | 'en'; sources: ImportTool[]; counts: Record<'person' | 'agent' | 'project' | 'skill', number>; writes: Write[]; undoneAt?: number; kept?: string[] }
 
 export class ImportError extends Error { constructor(public code: string, message: string) { super(message); } }
 
@@ -59,12 +64,13 @@ function addSeen(fps: Iterable<string>): void {
 }
 
 // ── 已有的(给模型对一遍,也给确定性的去重)──
-async function knownTexts(projects: string[]): Promise<{ portrait: string[]; agentRules: string[]; projects: Record<string, string[]> }> {
-  const portrait = portraitEntries((await readHuman(PORTRAIT_SCOPE)).content).map((e) => e.content);
+async function knownTexts(projects: string[]): Promise<{ portrait: string[]; portraitText: string; agentRules: string[]; projects: Record<string, string[]> }> {
+  const portraitText = (await readHuman(PORTRAIT_SCOPE)).content;
+  const portrait = portraitEntries(portraitText).map((e) => e.content);
   const agentRules = (await readHuman({ kind: 'human', file: 'AGENT.md' })).content.split('\n').map((l) => l.replace(/^\s*(?:[-*+]|\d+[.)])\s+/, '').trim()).filter((l) => l && !l.startsWith('#'));
   const byProject: Record<string, string[]> = {};
   for (const p of projects) byProject[p] = (await openProjectMemory(refOf(p))).snapshot().entries.map((e) => e.content);
-  return { portrait, agentRules, projects: byProject };
+  return { portrait, portraitText, agentRules, projects: byProject };
 }
 const capList = (list: string[], chars: number): string[] => { const out: string[] = []; let n = 0; for (const s of list) { if (n + s.length > chars) break; out.push(s); n += s.length; } return out; };
 
@@ -223,8 +229,28 @@ async function buildPlan(userId: string, input: { tools: string[]; pasted?: unkn
     const checked = !locked && (r.dest === 'person' || r.dest === 'agent' || r.dest === 'project') && !flags.some((f) => f === 'sensitive' || f === 'conflict' || f === 'forgotten');
     items.push({ id: `i${items.length + 1}`, text: r.text, dest: r.dest, ...(r.project ? { project: r.project } : {}), sources: [...new Set(tools)], flags, ...(flags.includes('conflict') ? { conflictWith: r.conflict } : {}), checked, locked });
   }
+  const createdAt = Date.now();
+  const portrait = budgetPortrait(items, known.portraitText, importSectionTitle(input.lang, createdAt));
   const skills = await planSkills(scan.skills);
-  return { id: randomUUID(), createdAt: Date.now(), lang: input.lang, items, skills, notices: scan.notices, missed, fingerprints: [...snippets.filter((s) => s.tool !== 'pasted').map((s) => s.fp), ...scan.skills.map(skillFingerprint)] };
+  return { id: randomUUID(), createdAt, lang: input.lang, items, skills, notices: scan.notices, missed, fingerprints: [...snippets.filter((s) => s.tool !== 'pasted').map((s) => s.fp), ...scan.skills.map(skillFingerprint)], portrait };
+}
+
+/** 导入前先算账(11-09):Agent 每轮读画像的前 2000 字,导入不能一次把它推过去。
+ *  每条估算多占的字数 = 「\n- 」+ 原文;这次要新开一节就先扣掉标题。按单上顺序默认勾到放得下为止,其余默认不勾、标 noRoom(人照样能勾)。
+ *  「过去的事」本来就默认不勾,只记 cost(勾上也算进「勾了约 Y 字」)。 */
+function budgetPortrait(items: PlanItem[], current: string, heading: string): PortraitBudget {
+  const chars = current.trim().length;
+  const overhead = current.split('\n').some((l) => l.replace(/^#{1,6}\s+/, '').trim() === heading && /^#{1,6}\s/.test(l)) ? 0 : `\n\n## ${heading}\n`.length;
+  const room = Math.max(0, PORTRAIT_LIMIT - chars - overhead);
+  let used = 0;
+  for (const i of items) {
+    if (i.dest !== 'person' && i.dest !== 'past') continue;
+    i.cost = i.text.length + 3;
+    if (i.dest !== 'person' || !i.checked) continue;
+    if (used + i.cost <= room) used += i.cost;
+    else { i.checked = false; i.flags.push('noRoom'); }
+  }
+  return { chars, limit: PORTRAIT_LIMIT, room };
 }
 
 let job: { done: number; total: number } | null = null;
@@ -257,11 +283,8 @@ function readLedger(id: string): Ledger {
 }
 const writeLedger = (l: Ledger): void => atomicWriteMemoryFile(root(), ledgerFile(l.id), JSON.stringify(l));
 
-function sectionHeading(lang: 'zh' | 'en', at: number): string {
-  const d = new Date(at);
-  return lang === 'zh' ? `从其他 AI 导入 · ${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-    : `Imported from other AIs · ${d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`;
-}
+/** 协作说明末尾那一节、画像里导入那一节:同一种标题(写法在 humanPortrait,画像那边要认得它)。 */
+const sectionHeading = importSectionTitle;
 const cleanEdit = (v: unknown): string | null => {
   if (typeof v !== 'string') return null;
   const t = redactSecrets(v.trim().replace(/\s*\n\s*/g, ' '));
@@ -292,7 +315,7 @@ export async function applyPlan(input: { planId?: unknown; items?: unknown; skil
   const picked = new Map<string, string | null>();
   if (Array.isArray(input.items)) for (const it of input.items) if (it && typeof it.id === 'string') picked.set(it.id, cleanEdit((it as any).text));
   const items = plan.items.filter((i) => picked.has(i.id) && !i.locked);
-  const ledger: Ledger = { id: randomUUID(), at: Date.now(), sources: [], counts: { person: 0, agent: 0, project: 0, skill: 0 }, writes: [] };
+  const ledger: Ledger = { id: randomUUID(), at: Date.now(), lang: plan.lang, sources: [], counts: { person: 0, agent: 0, project: 0, skill: 0 }, writes: [] };
   let skipped = 0;
   const text = (i: PlanItem): string => picked.get(i.id) ?? i.text;
   const wantSkills = new Set(Array.isArray(input.skills) ? input.skills.map(String) : []);
@@ -302,9 +325,10 @@ export async function applyPlan(input: { planId?: unknown; items?: unknown; skil
   writeLedger(ledger);
   const record = (w: Write, kind: keyof Ledger['counts'], n = 1): void => { ledger.writes.push(w); ledger.counts[kind] += n; writeLedger(ledger); };
   try {
-    // 画像:一条一条加(mutatePortrait 自己去重);勾上的「过去的事」也是关于这个人的
+    // 画像:一条一条加(mutatePortrait 自己去重);勾上的「过去的事」也是关于这个人的。写进导入自己那一节,不进 Agent 那一节(11-09)
+    const portraitSection = sectionHeading(plan.lang, ledger.at);
     for (const i of items.filter((x) => x.dest === 'person' || x.dest === 'past')) {
-      const r = await mutatePortrait({ action: 'add', fact: text(i), actor: 'user', source: { kind: 'import' } });
+      const r = await mutatePortrait({ action: 'add', fact: text(i), actor: 'user', source: { kind: 'import' }, section: portraitSection });
       if (r.duplicate || !r.change) { skipped++; continue; }
       record({ kind: 'person', content: r.entry?.content ?? text(i) }, 'person');
     }
@@ -412,4 +436,29 @@ export async function scanSummary(): Promise<{ tools: Array<{ id: ImportTool; ab
 export function ignoreCurrent(): void {
   const scan = scanSources();
   addSeen([...scan.snippets.map((s) => s.fp), ...scan.skills.map(skillFingerprint)]);
+}
+
+/** 11-09 一次性迁移(记忆分层第一步):以前导入的画像条目都写进了 Agent 那一节(「最近认识的」),Agent 写满时会被当成自己写的去压缩。
+ *  导入账本里记着、仍躺在 Agent 那一节里的,挪进那次导入自己的一节。走 humanStore(版本比对 + 修改记录,能撤销)。
+ *  幂等:挪过的不在 Agent 那一节了,再跑一条都不写。账本目录读不了、任何一份账读不懂 = 不知道哪些是导入的:整个跳过,不改画像。 */
+export async function migrateImportedPortrait(): Promise<{ moved: number; skipped?: 'unreadable' }> {
+  let names: string[];
+  try { names = readdirSync(root()).filter((n) => /^[a-f0-9-]{36}\.json$/.test(n)); }
+  catch (e: any) { return e?.code === 'ENOENT' ? { moved: 0 } : { moved: 0, skipped: 'unreadable' }; }
+  const ledgers: Ledger[] = [];
+  for (const n of names) {
+    try { ledgers.push(readLedger(n.slice(0, -5))); } catch { return { moved: 0, skipped: 'unreadable' }; }
+  }
+  const moves = ledgers.filter((l) => !l.undoneAt).sort((a, b) => a.at - b.at).flatMap((l) => {
+    const person = l.writes.flatMap((w) => (w.kind === 'person' ? [w.content] : []));
+    // 旧账没记界面语言:按这次导入的条目本身的书写系统挑(同 Agent 那一节标题的挑法)
+    const lang = l.lang ?? (/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u.test(person.join('')) ? 'zh' : 'en');
+    return person.map((content) => ({ content, section: importSectionTitle(lang, l.at) }));
+  });
+  if (!moves.length) return { moved: 0 };
+  const doc = await readHuman(PORTRAIT_SCOPE);
+  const r = moveEntriesToSections(doc.content, moves);
+  if (!r.moved) return { moved: 0 };
+  await writeHuman(PORTRAIT_SCOPE, { content: r.content, expectedVersion: doc.version, summary: [...new Set(r.sections)].join(' / ').slice(0, 240), evidence: '' }, 'user', { kind: 'import' });
+  return { moved: r.moved };
 }

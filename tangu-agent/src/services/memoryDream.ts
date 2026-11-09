@@ -13,7 +13,7 @@ import { memoryFactFingerprint, isMemoryTombstoneActive } from './memoryReposito
 import { getAgent, resolveMemorySlug } from '../agents/agentRegistry.js';
 import type { ThinkingLevel } from '../core/types.js';
 import { thinkingHeadroom } from '../llm/openaiCompat.js';
-import { mutatePortrait } from '../agents/humanPortrait.js';
+import { mutatePortrait, notePortraitOverflow, PortraitFullError } from '../agents/humanPortrait.js';
 import { deviceNameKey, rawTagLabel, tagOf, withTag, type DeviceTagContext } from '../contracts/deviceTags.js';
 import { NO_DEVICE, runTagContext } from './deviceTagContext.js';
 import { agentRoleOf, ledger } from './telemetryLedger.js';
@@ -297,11 +297,12 @@ export function startMemoryDream(userId: string, slug: string, opts: { automatic
       // 先写画像、再照旧提交记忆:画像里已有同一句 / 被忘过(墓碑)→ 跳过,也不进记忆;写不进去(满了、比 remember 的 300 字长、读写出错)→ 这一组退回记忆,不丢。
       // 记忆提交失败时候选没被消费,下一轮同样的组再来,画像那边就是「已有同一句」。
       const inPortrait = new Set<DreamProposal['groups'][number]>();
+      const portraitFull: string[] = []; // 11-09:因为画像满了退回的不再悄悄退,记忆提交成了就记一笔给画像页
       for (const group of proposal.groups) {
         if (group.to !== 'person' || group.fact.length > 300) continue;
         check();
         try { await mutatePortrait({ action: 'add', fact: group.fact, actor: 'agent', source: { kind: 'dream', agent: slug }, skipForgotten: true }); inPortrait.add(group); }
-        catch { /* 退回记忆 */ }
+        catch (e) { if (e instanceof PortraitFullError) portraitFull.push(group.fact); /* 退回记忆 */ }
       }
       check();
       const memoryGroups = proposal.groups.filter((g) => !inPortrait.has(g));
@@ -314,6 +315,7 @@ export function startMemoryDream(userId: string, slug: string, opts: { automatic
       // The durable commit is the point of no return. A cancellation arriving afterwards
       // must not report "cancelled" for a write which already happened.
       committedVersion = committed.version;
+      notePortraitOverflow(slug, portraitFull);
       status.state = 'completed'; status.version = committed.version;
       consumeCandidates(slug, new Set(raw.map((c) => c.id)));
       for (const [field, n] of [['dreamSources', sources.length], ['dreamGroups', proposal.groups.length], ['dreamMerges', proposal.groups.filter((g) => g.sourceIds.length > 1).length],

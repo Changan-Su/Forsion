@@ -3,7 +3,9 @@
  *  新增只进 Agent 自己那一节(「最近认识的」/ Recently learned,没有就在文末开一节),人写的标题和段落文字它不碰。
  *  删掉 / 改写掉的条目记进本机墓碑(human-history/portrait-tombstones.json,不上云:human/ 的云槽位只收固定几份):
  *  Dream 遇到同一句不再写回;显式 add 撤掉墓碑。
- *  方案页 docs/ToBeImproved/human文件夹写入方案_2026-10-29。 */
+ *  方案页 docs/ToBeImproved/human文件夹写入方案_2026-10-29。
+ *  11-09(记忆分层第一步):从其他 AI 导入的条目自己成一节「从其他 AI 导入 · MM-DD」,不混进 Agent 那一节;Agent 写满时只让它合并自己那一节。
+ *  两台设备合并时,本机新加的条目插回它原来那一节。方案页 docs/ToBeImproved/记忆分层与Agent分身方案_2026-11-09。 */
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { tanguHome } from '../core/tanguHome.js';
@@ -27,6 +29,16 @@ const HEADING = /^(#{1,6})\s+(.*?)(?:\s+#+)?\s*$/;
 // ponytail: 引擎拿不到界面语言,标题按这句话本身的书写系统挑(和 core/scriptCheck 的 cjk 一类同一个字符集);日文也落中文标题。
 const CJK = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u;
 const isAgentTitle = (t: string): boolean => t === PORTRAIT_SECTION_TITLES.zh || t.toLowerCase() === PORTRAIT_SECTION_TITLES.en.toLowerCase();
+/** 导入那一节的标题(画像和协作说明共用一种写法):语言跟审阅单的界面语言,日期 = 这次导入。 */
+export function importSectionTitle(lang: 'zh' | 'en', at: number): string {
+  const d = new Date(at);
+  return lang === 'zh' ? `从其他 AI 导入 · ${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+    : `Imported from other AIs · ${d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`;
+}
+const IMPORT_TITLE = /^(?:从其他 AI 导入 · \d{2}-\d{2}|Imported from other AIs · [A-Z][a-z]+ \d{1,2})$/;
+export const isImportTitle = (t: string): boolean => IMPORT_TITLE.test(t);
+/** 引擎开的标题(Agent 那一节、导入那一节):不算人写的段落,空了随条目一起收掉。 */
+const isEngineTitle = (t: string): boolean => isAgentTitle(t) || isImportTitle(t);
 
 export interface PortraitEntry { id: string; content: string }
 export interface PortraitView { version: string; entries: PortraitEntry[]; chars: number; limit: number }
@@ -47,45 +59,69 @@ export function portraitEntries(content: string): PortraitEntry[] {
   }
   return out;
 }
-/** Agent 那一节:最后一个叫「最近认识的 / Recently learned」的标题,到下一个同级或更高级标题为止。 */
-function agentSection(lines: string[]): { start: number; end: number } | null {
-  let start = -1, level = 0;
-  for (let i = 0; i < lines.length; i++) { const h = lines[i].match(HEADING); if (h && isAgentTitle(h[2].trim())) { start = i; level = h[1].length; } }
-  if (start < 0) return null;
+type Section = { start: number; end: number };
+/** 第 start 行那个标题管到哪:到下一个同级或更高级标题为止。 */
+function sectionAt(lines: string[], start: number): Section {
+  const level = lines[start].match(HEADING)![1].length;
   let end = lines.length;
   for (let i = start + 1; i < lines.length; i++) { const h = lines[i].match(HEADING); if (h && h[1].length <= level) { end = i; break; } }
   return { start, end };
 }
+/** 最后一个标题对得上 match 的那一节。 */
+function namedSection(lines: string[], match: (title: string) => boolean): Section | null {
+  let start = -1;
+  for (let i = 0; i < lines.length; i++) { const h = lines[i].match(HEADING); if (h && match(h[2].trim())) start = i; }
+  return start < 0 ? null : sectionAt(lines, start);
+}
+/** Agent 那一节:最后一个叫「最近认识的 / Recently learned」的标题,到下一个同级或更高级标题为止。 */
+const agentSection = (lines: string[]): Section | null => namedSection(lines, isAgentTitle);
 function sectionEntries(content: string): PortraitEntry[] {
   const lines = content.split('\n'); const sec = agentSection(lines);
   return sec ? portraitEntries(lines.slice(sec.start + 1, sec.end).join('\n')) : [];
 }
-/** 加在 Agent 那一节最后一个条目后面;那一节还没有条目就接在标题下;没有那一节就在文末开一节。 */
-export function insertPortraitEntry(content: string, fact: string): string {
-  const lines = content.split('\n'); const sec = agentSection(lines);
-  if (sec) {
-    let last = -1;
-    for (let i = sec.start + 1; i < sec.end; i++) if (entryOfLine(lines[i])) last = i;
-    if (last >= 0) { lines.splice(last + 1, 0, `- ${fact}`); return lines.join('\n'); }
-    const next = lines[sec.start + 1];
-    lines.splice(sec.start + 1, 0, '', `- ${fact}`, ...(next !== undefined && next.trim() ? [''] : []));
-    return lines.join('\n');
-  }
-  const body = content.replace(/\s+$/, '');
-  return `${body ? `${body}\n\n` : ''}## ${CJK.test(fact) ? PORTRAIT_SECTION_TITLES.zh : PORTRAIT_SECTION_TITLES.en}\n\n- ${fact}\n`;
+/** 加在这一节最后一个条目后面;这一节还没有条目就接在标题下。 */
+function insertInSection(lines: string[], sec: Section, fact: string): string {
+  let last = -1;
+  for (let i = sec.start + 1; i < sec.end; i++) if (entryOfLine(lines[i])) last = i;
+  if (last >= 0) { lines.splice(last + 1, 0, `- ${fact}`); return lines.join('\n'); }
+  const next = lines[sec.start + 1];
+  lines.splice(sec.start + 1, 0, '', `- ${fact}`, ...(next !== undefined && next.trim() ? [''] : []));
+  return lines.join('\n');
 }
-/** 删掉一行;Agent 那一节因此空了就连标题一起收掉(那一节的标题是 Agent 开的,不是人写的)。 */
+const appendSection = (content: string, heading: string, fact: string): string => {
+  const body = content.replace(/\s+$/, '');
+  return `${body ? `${body}\n\n` : ''}${heading}\n\n- ${fact}\n`;
+};
+/** 缺省加在 Agent 那一节(没有就在文末开一节);section = 导入那一节的标题时加在那一节(没有就在文末开)。 */
+export function insertPortraitEntry(content: string, fact: string, section?: string): string {
+  const lines = content.split('\n');
+  if (section) {
+    const own = namedSection(lines, (t) => t === section);
+    return own ? insertInSection(lines, own, fact) : appendSection(content, `## ${section}`, fact);
+  }
+  const sec = agentSection(lines);
+  if (sec) return insertInSection(lines, sec, fact);
+  return appendSection(content, `## ${CJK.test(fact) ? PORTRAIT_SECTION_TITLES.zh : PORTRAIT_SECTION_TITLES.en}`, fact);
+}
+/** 引擎开的一节空了:连标题一起收掉。 */
+function collapseIfEmpty(lines: string[], sec: Section | null): void {
+  if (!sec || !lines.slice(sec.start + 1, sec.end).every((l) => !l.trim())) return;
+  const last = sec.end === lines.length;
+  let from = sec.start;
+  if (last) while (from > 0 && !lines[from - 1].trim()) from--;
+  lines.splice(from, sec.end - from);
+  if (last && lines.length) lines.push('');
+}
+/** 第 index 行所在那一节的标题行号(-1 = 在所有标题之前)。 */
+const headingAbove = (lines: string[], index: number): number => { for (let i = index - 1; i >= 0; i--) if (HEADING.test(lines[i])) return i; return -1; };
+/** 删掉一行;Agent 那一节、或这一行所在的导入那一节因此空了,就连标题一起收掉(那些标题是引擎开的,不是人写的)。 */
 function removeLine(content: string, index: number): string {
   const lines = content.split('\n');
+  const h = headingAbove(lines, index);
+  const imported = h >= 0 && isImportTitle(lines[h].match(HEADING)![2].trim());
   lines.splice(index, 1);
-  const sec = agentSection(lines);
-  if (sec && lines.slice(sec.start + 1, sec.end).every((l) => !l.trim())) {
-    const last = sec.end === lines.length;
-    let from = sec.start;
-    if (last) while (from > 0 && !lines[from - 1].trim()) from--;
-    lines.splice(from, sec.end - from);
-    if (last && lines.length) lines.push('');
-  }
+  if (imported) collapseIfEmpty(lines, sectionAt(lines, h));
+  collapseIfEmpty(lines, agentSection(lines));
   return lines.join('\n');
 }
 
@@ -142,6 +178,8 @@ export interface PortraitMutation {
   skipForgotten?: boolean;
   /** 撤销一次导入:回到导入前,不算人删过,不记墓碑(否则再导入同一句会被标成「删过」默认不勾)。 */
   noTombstone?: boolean;
+  /** add 写进哪一节(导入那一节的标题,见 importSectionTitle);不给 = Agent 那一节。 */
+  section?: string;
 }
 export interface PortraitResult {
   document: HumanDocument; change: HumanChange | null;
@@ -170,7 +208,7 @@ async function mutateOnce(m: PortraitMutation): Promise<PortraitResult> {
     const dup = entries.find((e) => normalizeMemoryFact(e.content) === normalizeMemoryFact(fact));
     if (dup) return { document: doc, change: null, entry: dup, duplicate: true };
     if (m.skipForgotten && isPortraitFactForgotten(fact)) return { document: doc, change: null, forgotten: true };
-    after = insertPortraitEntry(before, fact);
+    after = insertPortraitEntry(before, fact, m.section);
   } else {
     const lines = before.split('\n');
     const index = lines.findIndex((l) => { const e = entryOfLine(l); return !!e && portraitEntryId(e.content) === m.id; });
@@ -202,6 +240,62 @@ async function mutateOnce(m: PortraitMutation): Promise<PortraitResult> {
   return { ...result, ...(entry ? { entry } : {}), ...(removed ? { removed } : {}) };
 }
 
+/** 导入迁移(11-09):Agent 那一节里这些条目挪进各自的一节(按 moves 的顺序;只认 Agent 那一节里的,别处同一句不碰)。 */
+export function moveEntriesToSections(content: string, moves: Array<{ content: string; section: string }>): { content: string; moved: number; sections: string[] } {
+  let out = content; let moved = 0; const sections: string[] = [];
+  for (const m of moves) {
+    const lines = out.split('\n'); const sec = agentSection(lines);
+    if (!sec) break;
+    let index = -1;
+    for (let i = sec.start + 1; i < sec.end; i++) { const e = entryOfLine(lines[i]); if (e && normalizeMemoryFact(e.content) === normalizeMemoryFact(m.content)) { index = i; break; } }
+    if (index < 0) continue;
+    const line = entryOfLine(lines[index])!.content;
+    out = insertPortraitEntry(removeLine(out, index), line, m.section);
+    moved++; sections.push(m.section);
+  }
+  return { content: out, moved, sections };
+}
+
+// ── Dream 因为画像满了、退回各 Agent 记忆的条目(11-09):只在本机,画像页提示一句、点开看是哪几条 ──
+export interface PortraitOverflowItem { agent: string; fact: string; at: number }
+const OVERFLOW = 'portrait-overflow.json';
+/** 读不懂 ≠ 没有:抛出去,别拿空列表盖掉。 */
+function readOverflowFile(): PortraitOverflowItem[] {
+  const raw = readMemoryFile(historyRoot(), OVERFLOW);
+  if (raw === null) return [];
+  let v: any;
+  try { v = JSON.parse(raw); } catch { v = null; }
+  if (!v || !Array.isArray(v.items) || v.items.some((t: any) => !t || typeof t.agent !== 'string' || typeof t.fact !== 'string' || !Number.isFinite(t.at))) {
+    throw new HumanError('PORTRAIT_OVERFLOW_INVALID', 'The list of entries that did not fit in the portrait is unreadable; nothing was changed.');
+  }
+  return v.items;
+}
+/** Dream 往画像加不进去(写满了),这一条照样记进那个 Agent 的记忆:记一笔给画像页看。记不上只影响提示,不让整理失败。 */
+export function notePortraitOverflow(agent: string, facts: string[]): void {
+  if (!facts.length) return;
+  try {
+    withMemoryDirectoryLock(historyRoot(), () => {
+      const list = readOverflowFile();
+      const next = [...list.filter((x) => !(x.agent === agent && facts.some((f) => memoryFactFingerprint(f) === memoryFactFingerprint(x.fact)))),
+        ...facts.map((fact) => ({ agent, fact, at: Date.now() }))];
+      atomicWriteMemoryFile(historyRoot(), OVERFLOW, JSON.stringify({ schemaVersion: 1, items: next.slice(-100) }));
+    });
+  } catch (e) { console.warn('[portrait] overflow not recorded:', e instanceof Error ? e.message : e); }
+}
+/** 画像页读:已经进了画像的(人挪进来了 / 整理后又写进去了)不再提。 */
+export async function readPortraitOverflow(): Promise<PortraitOverflowItem[]> {
+  const list = readOverflowFile();
+  if (!list.length) return [];
+  const have = new Set(portraitEntries((await readHuman(PORTRAIT_SCOPE)).content).map((e) => normalizeMemoryFact(e.content)));
+  return list.filter((x) => !have.has(normalizeMemoryFact(x.fact)));
+}
+/** 人点了「知道了」:清掉。读不懂就报错,不拿空列表盖。 */
+export function dismissPortraitOverflow(): void {
+  withMemoryDirectoryLock(historyRoot(), () => {
+    if (readOverflowFile().length) atomicWriteMemoryFile(historyRoot(), OVERFLOW, JSON.stringify({ schemaVersion: 1, items: [] }));
+  });
+}
+
 /** 撤回刚写的那一笔(跨档挪的第二步失败时):先按修改记录撤;撤不了(期间又有人改过)就只删掉那一条。返回撤成没有。 */
 export async function revertPortraitWrite(written: PortraitResult, source: HumanChangeSource): Promise<boolean> {
   if (!written.change) return true;
@@ -211,21 +305,41 @@ export async function revertPortraitWrite(written: PortraitResult, source: Human
   } catch { return false; } // 这期间画像又改过:留着新句子(两边都有,模型看得到),不按条目号删 —— 编号跟内容走,可能删到人后来重新加的同一句
 }
 
+/** 本机新加的一条插回它原来那一节:同名标题还在就加在那一节末尾;所有标题之前的那段就加在那一段;
+ *  导入那一节在云端那份里还没有就在文末开出来;其余(人写的标题被另一台删了、Agent 那一节)照旧进 Agent 那一节。 */
+function insertLikeOurs(out: string, fact: string, heading: { title: string; level: number } | null): string {
+  const lines = out.split('\n');
+  if (!heading) {
+    let first = lines.findIndex((l) => HEADING.test(l)); if (first < 0) first = lines.length;
+    let last = -1; for (let i = 0; i < first; i++) if (entryOfLine(lines[i])) last = i;
+    if (last >= 0) { lines.splice(last + 1, 0, `- ${fact}`); return lines.join('\n'); }
+    if (first > 0 && lines.slice(0, first).some((l) => l.trim())) { let end = first; while (end > 0 && !lines[end - 1].trim()) end--; lines.splice(end, 0, '', `- ${fact}`); return lines.join('\n'); }
+    return `- ${fact}\n${out.trim() ? `\n${out.replace(/^\s+/, '')}` : ''}`;
+  }
+  if (isAgentTitle(heading.title)) return insertPortraitEntry(out, fact);
+  const sec = namedSection(lines, (t) => t === heading.title);
+  if (sec) return insertInSection(lines, sec, fact);
+  return isImportTitle(heading.title) ? appendSection(out, `${'#'.repeat(heading.level)} ${heading.title}`, fact) : insertPortraitEntry(out, fact);
+}
 /** 两台设备都改了画像、按行三方合并又合不拢(两台都往 Agent 那一节末尾各加了一条,几乎总是这样):
- *  以云端那份为底,本机相对基线新增的条目补进 Agent 那一节、本机删掉的条目从结果里删掉,其余文字取云端。
- *  本机还改了别的文字(标题、段落)而云端那份里没有 → conflict: true,同步照旧把本机整份存成冲突副本。 */
+ *  以云端那份为底,本机相对基线新增的条目插回它在本机所在的那一节、本机删掉的条目从结果里删掉,其余文字取云端。
+ *  本机还改了别的文字(人写的标题、段落;引擎开的标题不算)而云端那份里没有 → conflict: true,同步照旧把本机整份存成冲突副本。 */
 export function mergePortrait(ours: string, base: string, theirs: string): { content: string; conflict: boolean } {
   const key = (c: string): string => normalizeMemoryFact(c);
   const keys = (t: string): Set<string> => new Set(t.split('\n').map(entryOfLine).filter((e): e is NonNullable<typeof e> => !!e).map((e) => key(e.content)));
-  const prose = (t: string): string => t.split('\n').filter((l) => { const h = l.match(HEADING); return l.trim() && !entryOfLine(l) && !(h && isAgentTitle(h[2].trim())); }).map((l) => l.trim()).join('\n');
+  const prose = (t: string): string => t.split('\n').filter((l) => { const h = l.match(HEADING); return l.trim() && !entryOfLine(l) && !(h && isEngineTitle(h[2].trim())); }).map((l) => l.trim()).join('\n');
   const b = keys(base), o = keys(ours);
   const deleted = new Set([...b].filter((k) => !o.has(k)));
   let out = theirs.split('\n').filter((l) => { const e = entryOfLine(l); return !(e && deleted.has(key(e.content))); }).join('\n');
   const have = keys(out);
-  for (const e of portraitEntries(ours)) {
+  let heading: { title: string; level: number } | null = null;
+  for (const line of ours.split('\n')) {
+    const h = line.match(HEADING);
+    if (h) { heading = { title: h[2].trim(), level: h[1].length }; continue; }
+    const e = entryOfLine(line); if (!e) continue;
     const k = key(e.content);
     if (b.has(k) || have.has(k)) continue;
-    out = insertPortraitEntry(out, e.content); have.add(k);
+    out = insertLikeOurs(out, e.content, heading); have.add(k);
   }
   return { content: out, conflict: prose(ours) !== prose(base) && prose(ours) !== prose(theirs) };
 }

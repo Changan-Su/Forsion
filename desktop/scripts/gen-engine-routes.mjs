@@ -92,6 +92,8 @@ export const CLASSIFICATION = {
   'POST /agent/human/SOUL.md/entries': [D, 'host portrait entry write (receipt undo; the route itself also refuses remote origin)'],
   'GET /agent/human/SOUL.md/move': [D, 'host portrait move card (the route itself also refuses remote origin)'],
   'POST /agent/human/SOUL.md/move/scan': [D, 'starts the user-requested scan of Agent memories (the route itself also refuses remote origin)'],
+  'GET /agent/human/SOUL.md/overflow': [D, 'host list of entries Dream kept in Agent memory because the portrait was full (the route itself also refuses remote origin)'],
+  'POST /agent/human/SOUL.md/overflow/dismiss': [D, 'clears that list on the host (the route itself also refuses remote origin)'],
   'POST /agent/human/SOUL.md/move/items/:id': [D, 'moves or keeps one Agent memory entry for the portrait (the route itself also refuses remote origin)'],
   // 从其他 AI 导入(services/externalImport):读这台电脑上别家 AI 的文件、写画像 / 协作说明 / 项目记忆 / 技能;路由自己也拒远端
   'GET /agent/import/scan': [D, 'lists other AI tools found in local files (the route itself also refuses remote origin)'],

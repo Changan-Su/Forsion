@@ -126,7 +126,7 @@ async function run() {
     await page.getByRole('tab', { name: '画像', exact: true }).click()
     await page.locator('[data-human-file="SOUL.md"]').getByText('技术名词保留英文', { exact: false }).waitFor()
     await shot('me-portrait-light')
-    await page.getByRole('tab', { name: '记忆', exact: true }).click()
+    await page.getByRole('tab', { name: '我的笔记', exact: true }).click()
     const memory = page.locator('[data-human-file="MEMORY.md"]')
     await memory.getByText('Forsion 是主业', { exact: false }).waitFor()
     assert.equal(await memory.locator('h3').innerText(), '关于我')

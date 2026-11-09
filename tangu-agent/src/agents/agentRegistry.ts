@@ -717,6 +717,17 @@ async function seedUserMdOnce(): Promise<void> {
   await fs.writeFile(f, USER_MD_TEMPLATE, 'utf-8');
 }
 
+/** 11-09:以前导入进 Agent 那一节的画像条目挪进导入自己的一节(幂等;账本读不懂就整个跳过)。只在本机引擎有 human/。 */
+async function migrateImportedPortraitOnce(): Promise<void> {
+  try {
+    const { deps } = await import('../seams/runtime.js');
+    if (!deps().profile.capabilities.hostExec) return;
+    const { migrateImportedPortrait } = await import('../services/externalImport/index.js');
+    const r = await migrateImportedPortrait();
+    if (r.moved || r.skipped) console.log(`[import] portrait migration: moved ${r.moved}${r.skipped ? `, skipped (${r.skipped})` : ''}`);
+  } catch (e) { console.warn('[import] portrait migration failed:', e instanceof Error ? e.message : e); }
+}
+
 let readyChecked = false;
 /** 首次访问:迁移扁平 agent → 文件夹、播种默认 agent + USER.md、迁移旧全局记忆 → xyra。幂等、绝不抛。 */
 async function ensureAgentsReady(): Promise<void> {
@@ -728,6 +739,7 @@ async function ensureAgentsReady(): Promise<void> {
   await seedUserMdOnce().catch(() => { /* ignore */ });
   try { ensureHumanFolder(); } catch { /* ignore */ } // 在 USER.md 播种之后:新装机的模板也一起进 MEMORY.md
   try { await mirrorLegacyHuman(); } catch (e) { console.warn('[human mirror]', e instanceof Error ? e.message : e); } // 默认日历首次搬进 human/;离线时旧版改过的 USER.md 并进来
+  await migrateImportedPortraitOnce();
   await migrateGlobalMemoryToXyra().catch(() => { /* ignore */ });
   await purgeExpiredWidgets().catch((e) => { console.warn('[widgets] purge failed:', e instanceof Error ? e.message : e); });
   cache = null;
