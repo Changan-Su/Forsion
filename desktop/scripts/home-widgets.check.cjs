@@ -82,6 +82,12 @@ async function tunerChecks(app, win) {
   await win.mouse.move(box0.x + 40, box0.y + 14); await win.mouse.down(); await win.mouse.move(box0.x + 340, box0.y - 186, { steps: 8 }); await win.mouse.up(); await sleep(300)
   const box1 = await win.locator('.hp-tuner').boundingBox()
   check('调节面板(dev):按住标题能拖走,别挡着要看的栏', Math.abs(box1.x - box0.x - 300) <= 3 && Math.abs(box1.y - box0.y + 200) <= 3, JSON.stringify({ box0, box1 }))
+  // 拖到右边后再缩窗(试手感时就是这么拖窗口的):面板要夹回窗内,标题还能摸到
+  await win.mouse.move(box1.x + 40, box1.y + 14); await win.mouse.down(); await win.mouse.move(box1.x + 640, box1.y + 14, { steps: 8 }); await win.mouse.up(); await sleep(200)
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1000, 700)); await sleep(800)
+  const box2 = await win.locator('.hp-tuner').boundingBox(), vw = await win.evaluate(() => innerWidth)
+  check('调节面板(dev):拖到右边再缩窗,面板夹回窗内', box2.x >= 0 && box2.x + box2.width <= vw + 1 && box2.y >= 0, JSON.stringify({ box2, vw }))
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1380, 860)); await sleep(800)
   await win.locator('.hp-tuner-f button').first().click(); await sleep(700)
   const reset = await look()
   check('调节面板(dev):恢复默认回到原样', reset.rails === 'strip-open' && reset.cw === 840, JSON.stringify(reset))

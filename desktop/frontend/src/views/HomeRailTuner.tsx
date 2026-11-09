@@ -66,7 +66,7 @@ export function HomeRailTuner({ geo, homeW, has, modes }: { geo: RailGeometry; h
     void navigator.clipboard?.writeText(JSON.stringify(geo)).then(() => { setCopied(true); window.setTimeout(() => setCopied(false), 1400) }, () => undefined)
   }
   return (
-    <section ref={ref} className="hp-tuner" aria-label={t('home.tune.title')} style={pos ? { left: pos.x, top: pos.y, bottom: 'auto' } : undefined} onPointerDown={(e) => e.stopPropagation()}>
+    <section ref={ref} className="hp-tuner" aria-label={t('home.tune.title')} style={pos ? { left: `clamp(0px, ${pos.x}px, calc(100% - 320px))`, top: `clamp(0px, ${pos.y}px, calc(100% - 120px))`, bottom: 'auto' } : undefined /* 拖走后再缩窗:按当前容器重新夹住,至少露出标题能拖回来(宽 320 同 .hp-tuner) */} onPointerDown={(e) => e.stopPropagation()}>
       <header className="hp-tuner-h" onPointerDown={grab}>
         <b>{t('home.tune.title')}</b>
         <button type="button" className="hp-tuner-x" onClick={() => setRailTunerOpen(false)}>{t('home.tune.close')}</button>
