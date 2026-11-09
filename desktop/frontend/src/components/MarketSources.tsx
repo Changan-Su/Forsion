@@ -8,7 +8,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import {
   AlertCircle, Bot, Coins, Copy, Crown, Download, ExternalLink, GitBranch, Globe, Image as ImageIcon, Loader2, Lock, MoreHorizontal,
-  Package, Palette, Plus, Power, RefreshCw, ShieldAlert, Sparkles, Trash2, Wrench,
+  LogIn, Package, Palette, Plus, Power, RefreshCw, ShieldAlert, Sparkles, Trash2, Wrench,
 } from 'lucide-react'
 import { OverlayAt } from '@lcl/engine'
 import { registerMessages, useI18n } from '../i18n'
@@ -21,8 +21,8 @@ registerMessages({
   'market.sources.group': { zh: '来源', en: 'Sources' },
   'market.sources.add': { zh: '添加来源', en: 'Add source' },
   'market.sources.addHint': {
-    zh: '贴一个地址：GitHub 仓库、npm 包，或 forsion-store.json 的链接。读得到目录才能添加。',
-    en: 'Paste an address: a GitHub repository, an npm package, or a link to a forsion-store.json file. It is added once its catalog can be read.',
+    zh: '贴一个地址：GitHub 或 Forsion Git 仓库、npm 包，或 forsion-store.json 的链接。读得到目录才能添加。',
+    en: 'Paste an address: a GitHub or Forsion Git repository, an npm package, or a link to a forsion-store.json file. It is added once its catalog can be read.',
   },
   'market.sources.addPlaceholder': { zh: 'github.com/作者/仓库', en: 'github.com/owner/repo' },
   'market.sources.addChecking': { zh: '正在读取目录…', en: 'Reading the catalog…' },
@@ -57,6 +57,12 @@ registerMessages({
   'market.sources.emptyTitle': { zh: '这个来源还没有内容', en: 'This source has no items yet' },
   'market.sources.emptyHint': { zh: '来源作者往目录里加了内容，这里就会出现。', en: 'Items appear here once the source\'s author adds them to the catalog.' },
   'market.sources.retry': { zh: '重试', en: 'Try again' },
+  'market.sources.signinTitle': { zh: '登录后才能看这个来源', en: 'Sign in to see this source' },
+  'market.sources.signinHint': {
+    zh: '它在 Forsion Git 的私有仓库里，Forsion 用你的账号去读。只有你有读权限的仓库才读得到。',
+    en: 'It\'s in a private repository on Forsion Git. Forsion reads it with your account, so only repositories you can read will open.',
+  },
+  'market.sources.signin': { zh: '登录 Forsion', en: 'Sign in to Forsion' },
   'market.sources.trustTitle': { zh: '未经 Forsion 审核', en: 'Not reviewed by Forsion' },
   'market.sources.trustHint': {
     zh: '来自第三方来源「{name}」。安装、更新、卸载仍由 Forsion 管，装进去的文件照常检查。',
@@ -80,10 +86,17 @@ registerMessages({
   'market.sources.err.fetch-failed': { zh: '读不到这个来源的目录：网络不通，或者地址不对。', en: 'Couldn\'t read this source\'s catalog. Check the network or the address.' },
   'market.sources.err.index-invalid': { zh: '这个地址上不是 Forsion 商店目录（forsion-store.json）。', en: 'This address isn\'t a Forsion store catalog (forsion-store.json).' },
   'market.sources.err.index-schema': { zh: '这份目录的格式版本这里还不认识，请先更新 Forsion。', en: 'This catalog uses a newer format. Update Forsion first.' },
-  'market.sources.err.index-missing': { zh: '这个 npm 包里没有 forsion-store.json。', en: 'This npm package has no forsion-store.json.' },
+  'market.sources.err.index-missing': {
+    zh: '找不到 forsion-store.json：npm 包里没有它，或者仓库的这个分支、文件夹里没有。',
+    en: 'No forsion-store.json here. The npm package doesn\'t include one, or this branch or folder of the repository doesn\'t have it.',
+  },
   'market.sources.err.too-large': { zh: '目录文件太大（超过 1 MB）。', en: 'The catalog file is too large (over 1 MB).' },
-  'market.sources.err.unrecognized': { zh: '认不出这个地址。可以贴 GitHub 仓库、npm 包或 forsion-store.json 的链接。', en: 'This address isn\'t recognized. Paste a GitHub repository, an npm package or a link to forsion-store.json.' },
-  'market.sources.err.forsion-git-unsupported': { zh: 'Forsion Git 来源还没开通，后续版本支持。', en: 'Forsion Git sources aren\'t available yet. They\'re coming in a later version.' },
+  'market.sources.err.unrecognized': { zh: '认不出这个地址。可以贴 GitHub 或 Forsion Git 仓库、npm 包或 forsion-store.json 的链接。', en: 'This address isn\'t recognized. Paste a GitHub or Forsion Git repository, an npm package or a link to forsion-store.json.' },
+  'market.sources.err.forsion-git-unsupported': { zh: '这台 Forsion 服务器还没开通 Forsion Git 来源。', en: 'Forsion Git sources aren\'t available on this Forsion server yet.' },
+  'market.sources.err.forsion-git-signin': { zh: '登录 Forsion 账号后才能读 Forsion Git 上的私有仓库。', en: 'Sign in to your Forsion account to read private repositories on Forsion Git.' },
+  'market.sources.err.forsion-git-no-access': { zh: '读不到这个仓库：它不存在，或者你的 Forsion 账号没有读权限。', en: 'Can\'t read this repository. It doesn\'t exist, or your Forsion account has no read access.' },
+  'market.sources.err.forsion-git-needs-setup': { zh: '你还没有 Forsion Git 账号。先在浏览器里打开 Forsion Git 登录一次。', en: 'You don\'t have a Forsion Git account yet. Open Forsion Git in your browser and sign in once.' },
+  'market.sources.err.forsion-git-ref-missing': { zh: '仓库里没有目录写的那个分支或标签。', en: 'The repository doesn\'t have the branch or tag named in the catalog.' },
   'market.sources.err.duplicate': { zh: '这个来源已经在左栏里了。', en: 'This source is already in the list.' },
   'market.sources.err.state-unreadable': { zh: '来源列表文件读不出来。为了不覆盖它，这次没有保存。', en: 'The source list file can\'t be read. Nothing was saved, so it isn\'t overwritten.' },
   'market.sources.err.not-found': { zh: '找不到这个来源。', en: 'This source wasn\'t found.' },
@@ -101,8 +114,8 @@ registerMessages({
 })
 
 const ERROR_CODES: Array<[RegExp, string]> = [
-  [/source: (fetch-failed|index-invalid|index-schema|index-missing|too-large|unrecognized|forsion-git-unsupported|duplicate|state-unreadable|not-found)\b/, '$1'],
-  [/resolve: (source-removed|source-item-removed|source-item-changed|address-not-allowed|version-unavailable|source-package-moved|forsion-git-unsupported)\b/, '$1'],
+  [/source: (fetch-failed|index-invalid|index-schema|index-missing|too-large|unrecognized|forsion-git-(?:unsupported|signin|no-access|needs-setup)|duplicate|state-unreadable|not-found)\b/, '$1'],
+  [/resolve: (source-removed|source-item-removed|source-item-changed|address-not-allowed|version-unavailable|source-package-moved|forsion-git-(?:unsupported|signin|no-access|needs-setup|ref-missing))\b/, '$1'],
   [/install: duplicate path in archive/, 'duplicate-path'],
   [/install: plugin id taken/, 'plugin-id-taken'],
   [/install: package checksum mismatch/, 'checksum'],
@@ -119,6 +132,11 @@ export function sourceErrorText(e: unknown, t: (k: string, v?: Record<string, st
   }
   return null
 }
+
+/** 没登录(或登录过期)读不了 Forsion Git:给登录引导,不当报错。 */
+export const needsSignIn = (e: unknown): boolean => /forsion-git-signin\b/.test(typeof e === 'string' ? e : (e as { raw?: string })?.raw || (e as Error)?.message || String(e))
+/** 走 Forsion 账号登录(Extend 提供;没装 Extend 时没有这个入口 → undefined)。 */
+const forsionLogin = (): (() => Promise<unknown>) | undefined => { const login = window.tangu?.forsionLogin; return login ? () => login() : undefined }
 
 /** 左栏图标:插件声明的图标词 → 图标;用户加的按种类。认不出回落 Package。 */
 const ICONS: Record<string, typeof Package> = { image: ImageIcon, crown: Crown, coins: Coins, package: Package, sparkles: Sparkles, globe: Globe, palette: Palette, wrench: Wrench, bot: Bot }
@@ -180,13 +198,14 @@ export function SourceNavGroup({ sources, activeId, onOpen, onAdded, onError }: 
   )
 }
 
-type Probe = { state: 'idle' } | { state: 'checking' } | { state: 'ok'; title: string; kind: string; count: number; duplicate?: string } | { state: 'error'; text: string }
+type Probe = { state: 'idle' } | { state: 'checking' } | { state: 'ok'; title: string; kind: string; count: number; duplicate?: string } | { state: 'error'; text: string; signin?: boolean }
 
 function AddSourcePopover({ anchor, onClose, onAdded, onError }: { anchor: DOMRect; onClose: () => void; onAdded: (s: StoreSourceInfo) => void; onError: (text: string) => void }) {
   const { t, locale } = useI18n()
   const [value, setValue] = useState('')
   const [probe, setProbe] = useState<Probe>({ state: 'idle' })
   const [adding, setAdding] = useState(false)
+  const [attempt, setAttempt] = useState(0)
   const box = useRef<HTMLDivElement | null>(null)
   const seq = useRef(0)
   useEffect(() => {
@@ -205,10 +224,12 @@ function AddSourcePopover({ anchor, onClose, onAdded, onError }: { anchor: DOMRe
     const timer = setTimeout(() => {
       void window.tangu!.marketSourcesProbe!(input, locale)
         .then((r) => { if (n === seq.current) setProbe({ state: 'ok', title: r.title, kind: r.kind, count: r.count, duplicate: r.duplicate }) })
-        .catch((e) => { if (n === seq.current) setProbe({ state: 'error', text: sourceErrorText(e, t) ?? String((e as Error)?.message || e) }) })
+        .catch((e) => { if (n === seq.current) setProbe({ state: 'error', text: sourceErrorText(e, t) ?? String((e as Error)?.message || e), signin: needsSignIn(e) }) })
     }, 600)
     return () => clearTimeout(timer)
-  }, [value, locale, t])
+  }, [value, locale, t, attempt])
+  const login = forsionLogin()
+  const signIn = login && (async () => { try { await login() } catch { /* 取消或失败:留在原处 */ } setAttempt((x) => x + 1) })
   const submit = async (): Promise<void> => {
     if (probe.state !== 'ok' || probe.duplicate || adding) return
     setAdding(true)
@@ -232,7 +253,12 @@ function AddSourcePopover({ anchor, onClose, onAdded, onError }: { anchor: DOMRe
           <div><b>{probe.title}</b><span>{probe.duplicate ? t('market.sources.err.duplicate') : t('market.sources.addFound', { kind: t(`market.sources.kind.${probe.kind}`), n: probe.count })}</span></div>
         </div>
       )}
-      {probe.state === 'error' && <div className="mk-src-probe is-error"><AlertCircle size={14} />{probe.text}</div>}
+      {probe.state === 'error' && (
+        <div className="mk-src-probe is-error" data-store-source-probe-error>
+          <AlertCircle size={14} /><span className="mk-src-probe-text">{probe.text}</span>
+          {probe.signin && signIn && <button type="button" className="btn sm mk-src-signin" data-store-source-signin-btn onClick={() => void signIn()}><LogIn size={13} />{t('market.sources.signin')}</button>}
+        </div>
+      )}
       <div className="mk-src-acts">
         <button type="button" className="btn sm" onClick={onClose}>{t('market.sources.cancel')}</button>
         <button type="button" className="btn sm primary" disabled={!ready || adding} data-store-source-confirm onClick={() => void submit()}>
@@ -307,9 +333,20 @@ export function SourceConfirm({ sourceTitle, kindLabel, code, first, busy, onCan
   )
 }
 
-/** 来源页的空 / 停用 / 读不到状态卡。 */
-export function SourceState({ kind, error, onRetry, onEnable }: { kind: 'disabled' | 'error' | 'empty'; error?: string; onRetry?: () => void; onEnable?: () => void }) {
+/** 来源页的空 / 停用 / 读不到 / 要登录状态卡。 */
+export function SourceState({ kind, error, onRetry, onEnable }: { kind: 'disabled' | 'error' | 'empty' | 'signin'; error?: string; onRetry?: () => void; onEnable?: () => void }) {
   const { t } = useI18n()
+  const [busy, setBusy] = useState(false)
+  if (kind === 'signin') {
+    const login = forsionLogin()
+    const signIn = login && (async () => { setBusy(true); try { await login() } catch { /* 取消或失败 */ } finally { setBusy(false) } onRetry?.() })
+    return (
+      <div className="mk-state-card" data-store-source-signin>
+        <Lock size={28} /><strong>{t('market.sources.signinTitle')}</strong><span>{t('market.sources.signinHint')}</span>
+        {signIn && <button className="btn sm primary" disabled={busy} data-store-source-signin-btn onClick={() => void signIn()}>{busy ? <Loader2 size={13} className="mk-spin" /> : <LogIn size={13} />}{t('market.sources.signin')}</button>}
+      </div>
+    )
+  }
   if (kind === 'disabled') return <div className="mk-state-card"><Power size={28} /><strong>{t('market.sources.disabledTitle')}</strong><span>{t('market.sources.disabledHint')}</span>{onEnable && <button className="btn sm" onClick={onEnable}><Power size={13} />{t('market.sources.enable')}</button>}</div>
   if (kind === 'error') return <div className="mk-state-card"><AlertCircle size={28} /><strong>{(error && sourceErrorText(error, t)) || error}</strong>{onRetry && <button className="btn sm" onClick={onRetry}><RefreshCw size={13} />{t('market.sources.retry')}</button>}</div>
   return <div className="mk-state-card"><Package size={28} /><strong>{t('market.sources.emptyTitle')}</strong><span>{t('market.sources.emptyHint')}</span></div>

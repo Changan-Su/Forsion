@@ -54,3 +54,8 @@
 .mk-detail-sidebar .mk-facts dt { flex: none; }
 .mk-src-confirm { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border-radius: var(--radius-md); background: var(--overlay-light); color: var(--text); font-size: var(--ui-font-meta, 12px); line-height: var(--ui-line-meta, 1.5); }
 .mk-src-confirm .mk-src-acts .btn { flex: 1; justify-content: center; }
+
+/* Forsion Git 没登录:添加浮层的报错行里带一个「登录 Forsion」按钮(放末尾:要压过上面同特异性的 .mk-src-probe.is-error) */
+.mk-src-probe.is-error { flex-wrap: wrap; }
+.mk-src-probe .mk-src-probe-text { flex: 1 1 200px; min-width: 0; }
+.mk-src-probe .mk-src-signin { flex: none; margin-left: auto; }

@@ -7,7 +7,7 @@ import './MarketUpgrade.css'
  * 发现首页 + 分类目录 + 安装管理 + 商品详情。
  * 浏览/安装全走主进程 IPC(marketService),token 不下发渲染层。
  */
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
   AlertCircle, ArrowLeft, ArrowRight, Bot, Check, Clock, Coins, Compass, Crown, Download, ExternalLink,
   GitBranch, Globe, KeyRound, LayoutGrid, Library, Loader2, Monitor, Package, PackageOpen, Palette, Puzzle,
@@ -48,7 +48,7 @@ import { compareMarketVersions } from '../../../shared/marketPluginUpdates'
 import { ConnectorStore } from './Connectors'
 import { connectorsSupported } from '../services/connectorService'
 import { SkillAgentPicker, applySkillAgentChoice, skillAgentsSupported, useSkillAgents, type SkillAgentChoice } from './MarketSkillAgents'
-import { CODE_TYPES, SourceConfirm, SourceInfoRow, SourceNavGroup, SourceState, SourceTrustRow, sourceErrorText, useStoreSources } from './MarketSources'
+import { CODE_TYPES, needsSignIn, SourceConfirm, SourceInfoRow, SourceNavGroup, SourceState, SourceTrustRow, sourceErrorText, useStoreSources } from './MarketSources'
 import type { StoreSourceCatalog } from '../../../shared/storeSources'
 
 registerMessages({
@@ -267,12 +267,23 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
   const activeSource = sourceKey ? sources.sources.find((s) => s.id === sourceKey) ?? null : null
   const sourceOf = (c: MarketCard) => (c.origin ? sources.sources.find((s) => s.id === c.origin!.sourceId) : undefined)
   const removedSourceCards = useMemo(() => new Set(sources.installs.filter((r) => r.removed).map((r) => r.cardId)), [sources.installs])
+  // 登录 / 换号的代数:换号之前发出去的来源请求,回来时不再上屏(私有来源的目录是上一个账号的)
+  const authGen = useRef(0)
   const loadSource = useCallback(async (id: string, refresh = false) => {
+    const gen = authGen.current
     setSourceLoading(true)
-    try { setSourceCat(await window.tangu!.marketSourcesCatalog!(id, { refresh, locale })) }
-    catch (e) { setSourceCat(null); toast(sourceErrorText(e, t) ?? String((e as Error)?.message || e), true) }
-    finally { setSourceLoading(false) }
+    try { const cat = await window.tangu!.marketSourcesCatalog!(id, { refresh, locale }); if (gen === authGen.current) setSourceCat(cat) }
+    catch (e) { if (gen === authGen.current) { setSourceCat(null); toast(sourceErrorText(e, t) ?? String((e as Error)?.message || e), true) } }
+    finally { if (gen === authGen.current) setSourceLoading(false) }
   }, [locale, t, toast])
+  // 换了账号:Forsion Git 私有来源的目录和详情属于上一个账号,收掉,按现在的账号重读
+  const sourceList = sources.sources
+  useEffect(() => window.tangu?.onAuthChanged?.(() => {
+    authGen.current++
+    const isGit = (sourceId?: string) => sourceList.find((s) => s.id === sourceId)?.kind === 'forsion-git'
+    setDetail((d) => (d?.origin && isGit(d.origin.sourceId) ? null : d))
+    if (activeSource?.kind === 'forsion-git') { setSourceCat(null); void loadSource(activeSource.id, true) }
+  }), [activeSource, sourceList, loadSource])
   // 选中的来源不见了(插件停用 / 被移除):退回原来那页
   useEffect(() => { if (sourceKey && sources.loaded && !activeSource) setSourceKey(null) }, [sourceKey, sources.loaded, activeSource])
   // Automatic checks run in main even while this window is closed. Refresh the local installed snapshot after activation/mutations.
@@ -987,6 +998,7 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
               <section className="mk-section" data-store-source-page={activeSource.id}>
                 {activeSource.disabled ? <SourceState kind="disabled" onEnable={() => onToggleSource(true)} />
                   : sourceLoading && !sourceCards.length ? <Skeleton variant="list" />
+                  : sourceCat?.error && !sourceCards.length && needsSignIn(sourceCat.error) ? <SourceState kind="signin" onRetry={() => void loadSource(activeSource.id, true)} />
                   : sourceCat?.error && !sourceCards.length ? <SourceState kind="error" error={sourceCat.error} onRetry={() => void loadSource(activeSource.id, true)} />
                   : !sourceCards.length ? <SourceState kind="empty" />
                   : <>

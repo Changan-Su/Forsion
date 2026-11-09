@@ -25,6 +25,8 @@ const SHOTS = {
   source: shot('source'),
   sourceConfirm: shot('source-confirm'),
   sourceAdd: shot('source-add'),
+  sourceSignin: shot('source-signin'),
+  sourceAddSignin: shot('source-add-signin'),
 }
 
 function findChromium() {
@@ -235,7 +237,7 @@ async function main() {
     // 商店来源(2026-11-08 方案 A,docs/ToBeImproved/商店来源接口方案_2026-11-08):插件声明 / 用户添加的第三方目录进左栏「来源」,
     // 宿主画卡片与下装;未信任来源的第一次安装、会运行代码的条目,都先在详情侧栏原地确认。剧本见 marketHarnessBridge 的 sourceRows。
     const srcNav = await page.evaluate(() => [...document.querySelectorAll('[data-store-sources] [data-store-source]')].map((el) => el.textContent?.trim()))
-    check('来源分组列出插件声明与用户添加的来源', srcNav.join(' / ') === '图片 Skills 大全 / Acme 设计规范', srcNav.join(' / '))
+    check('来源分组列出插件声明与用户添加的来源', srcNav.join(' / ') === '图片 Skills 大全 / Acme 设计规范 / 团队工具箱', srcNav.join(' / '))
     await page.locator('[data-store-source="0a1b2c3d"]').click()
     await page.locator('[data-store-source-page] .mk-grid').waitFor()
     const srcPage = await page.evaluate(() => ({
@@ -285,13 +287,31 @@ async function main() {
     const addInput = page.locator('.mk-src-pop input')
     await addInput.fill('git.forsion.net/acme/private')
     const gitErr = await page.locator('.mk-src-pop .mk-src-probe.is-error').waitFor({ timeout: 3000 }).then(() => page.locator('.mk-src-pop .mk-src-probe.is-error').textContent(), () => '')
-    check('添加来源:Forsion Git 说明暂未开通', /Forsion Git/.test(gitErr || '') && await page.locator('[data-store-source-confirm]').isDisabled(), gitErr || '')
+    check('添加来源:没登录时 Forsion Git 地址说要登录,并给登录按钮', /登录 Forsion 账号/.test(gitErr || '') && await page.locator('.mk-src-pop [data-store-source-signin-btn]').count() === 1
+      && await page.locator('[data-store-source-confirm]').isDisabled(), gitErr || '')
+    await page.screenshot({ path: SHOTS.sourceAddSignin, fullPage: true })
     await addInput.fill('github.com/pixel-lab/icons')
     await page.locator('[data-store-source-probe]').waitFor({ timeout: 3000 })
     await page.screenshot({ path: SHOTS.sourceAdd, fullPage: true })
     await page.locator('[data-store-source-confirm]').click()
     const added = await page.waitForFunction(() => [...document.querySelectorAll('[data-store-sources] [data-store-source]')].some((el) => el.textContent?.trim() === 'icons'), null, { timeout: 4000 }).then(() => true, () => false)
     check('添加后来源进左栏', added && await page.locator('.mk-src-pop').count() === 0)
+    // Forsion Git 私有仓:没登录时来源页是登录引导(不是红字报错);点登录后读出条目。剧本见 marketHarnessBridge 的 SRC_GIT。
+    await page.locator('[data-store-source="3c3c3c3c"]').click()
+    const signinCard = await page.locator('[data-store-source-signin]').waitFor({ timeout: 3000 }).then(() => page.locator('[data-store-source-signin]').textContent(), () => '')
+    check('Forsion Git 来源没登录:给登录引导卡和登录按钮', /登录后才能看这个来源/.test(signinCard || '') && await page.locator('[data-store-source-signin] [data-store-source-signin-btn]').count() === 1
+      && await page.locator('[data-store-source-page] .mk-state-card').count() === 1, signinCard || '')
+    await page.mouse.move(1350, 880)
+    await page.screenshot({ path: SHOTS.sourceSignin, fullPage: true })
+    await page.locator('[data-store-source-signin] [data-store-source-signin-btn]').click()
+    const gitCards = await page.locator('[data-store-source-page] .mk-card-title', { hasText: '周报' }).waitFor({ timeout: 4000 }).then(() => true, () => false)
+    check('点登录后读出 Forsion Git 来源的条目', gitCards && await page.locator('[data-store-source-signin]').count() === 0)
+    // 登录后,读不到的仓库说「没有读权限」,不再给登录按钮
+    await page.locator('[data-store-source-add]').click()
+    await page.locator('.mk-src-pop input').fill('git.forsion.net/acme/private')
+    const noAccess = await page.locator('.mk-src-pop .mk-src-probe.is-error').waitFor({ timeout: 3000 }).then(() => page.locator('.mk-src-pop .mk-src-probe.is-error').textContent(), () => '')
+    check('登录后读不到的 Forsion Git 仓库:说没有读权限', /没有读权限/.test(noAccess || '') && await page.locator('.mk-src-pop [data-store-source-signin-btn]').count() === 0, noAccess || '')
+    await page.keyboard.press('Escape')
     await page.locator('.settings-nav-list button', { hasText: '商店首页' }).click()
     await page.locator('.mk-featured').waitFor({ state: 'visible' })
 

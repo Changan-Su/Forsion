@@ -1,6 +1,8 @@
 /** Store sources through the real main process (Electron, IPC, files): add a source served from a local fixture,
  * install a skill and a Forsion plugin from it, check the files, the provenance record and the updater registration,
  * refuse an install whose confirmed type no longer matches the catalog, then uninstall and check the records go.
+ * Then a Forsion Git source: main.ts hands the sign-in from auth.json to the server endpoints (the fixture plays the
+ * server's /api/git/store/index|archive), the catalog never lands in the disk cache, the archive's `<repo>/` folder is cut.
  * The renderer half (left column, source page, confirmation) is `npm run check:marketui`; this covers what that stub skips.
  * Run: npm run build, then node scripts/store-sources.e2e.cjs
  */
@@ -31,9 +33,21 @@ async function main() {
       { id: 'palette', type: 'amadeus-plugin', name: '取色板', version: '0.4.2', package: { url: `${base}/pkg/palette.zip`, sha256: sha(files['palette.zip']) } },
     ],
   })
+  // Forsion Git: the Forsion server reads as the signed-in user. Gitea's archive wraps everything in `<repo>/`.
+  const TOKEN = 'e2e-forsion-sign-in'
+  const gitAuth = []
+  const teamKit = await zipOf({ 'team-kit/skills/brief/SKILL.md': '---\nname: weekly-brief\ndescription: Weekly brief\nversion: 1.0.0\n---\n# Weekly brief\n', 'team-kit/forsion-store.json': '{}' })
+  const gitCatalog = { schema: 1, title: 'Team kit', items: [{ id: 'brief', type: 'skill', name: '周报', version: '1.0.0', package: { forsionGit: 'acme/team-kit', ref: 'v1.0.0', path: 'skills/brief' } }] }
   const hits = []
   const server = http.createServer((req, res) => {
     hits.push(req.url)
+    if (req.url.startsWith('/api/git/store/')) {
+      gitAuth.push(req.headers.authorization)
+      if (req.headers.authorization !== `Bearer ${TOKEN}`) { res.writeHead(401, { 'Content-Type': 'application/json' }); return res.end('{"detail":"no token"}') }
+      if (req.url === '/api/git/store/index?repo=acme%2Fteam-kit') { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(gitCatalog)) }
+      if (req.url === '/api/git/store/archive?repo=acme%2Fteam-kit&ref=v1.0.0') { res.writeHead(200, { 'Content-Type': 'application/zip' }); return res.end(teamKit) }
+      res.writeHead(404, { 'Content-Type': 'application/json' }); return res.end('{"code":"GIT_NOT_FOUND"}')
+    }
     if (req.url === '/forsion-store.json') { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(catalog())) }
     const m = /^\/pkg\/(.+)$/.exec(req.url)
     if (m && files[m[1]]) { res.writeHead(200, { 'Content-Type': 'application/zip' }); return res.end(files[m[1]]) }
@@ -41,6 +55,8 @@ async function main() {
   })
   await new Promise((r) => server.listen(0, '127.0.0.1', r)); base = `http://127.0.0.1:${server.address().port}`
   fs.mkdirSync(`${userData}-dev`); fs.writeFileSync(path.join(`${userData}-dev`, 'tangu-desktop-config.json'), JSON.stringify({ mode: 'managed', cloudUrl: base, unitHostEnabled: false }))
+  // Signed in (the sign-in belongs to the fixture server): Forsion Git reads carry it.
+  fs.writeFileSync(path.join(home, 'auth.json'), JSON.stringify({ cloudUrl: base, token: TOKEN }), { mode: 0o600 })
   const env = { ...process.env, TANGU_HOME: home, TANGU_CLOUD_URL: base }; delete env.TANGU_BACKEND_URL
   let app
   try {
@@ -86,7 +102,20 @@ async function main() {
     await win.evaluate((id) => window.tangu.marketSourcesRemove(id), src.id)
     assert.deepEqual(await win.evaluate(() => window.tangu.marketSourcesList('zh')), [])
     assert.ok(hits.includes('/pkg/poster.zip') && hits.includes('/pkg/palette.zip'))
-    console.log('PASS store sources e2e: add, catalog, type-change refusal, skill + plugin install, provenance, updater registration, uninstall, remove')
+
+    // Forsion Git: catalog and package through the server, with the sign-in; nothing private in the disk cache.
+    const git = await win.evaluate(() => window.tangu.marketSourcesAdd('forsion-git:acme/team-kit', 'zh'))
+    assert.equal(git.kind, 'forsion-git'); assert.equal(git.title, 'Team kit')
+    const gitCat = await win.evaluate((id) => window.tangu.marketSourcesCatalog(id, { locale: 'zh' }), git.id)
+    assert.deepEqual(gitCat.items.map((x) => x.id), [`src_${git.id}_brief`])
+    assert.ok(!fs.existsSync(path.join(home, '.store-sources', 'cache', `${git.id}.json`)), 'private catalog not cached on disk')
+    const brief = await win.evaluate((id) => window.tangu.marketInstall(id, undefined, { type: 'skill' }), `src_${git.id}_brief`)
+    assert.ok(fs.readFileSync(path.join(brief.path, 'SKILL.md'), 'utf8').includes('Weekly brief'), 'package folder cut out of <repo>/')
+    assert.equal(JSON.parse(fs.readFileSync(statePath, 'utf8')).installs.find((x) => x.slug === brief.slug)?.origin, 'forsion-git:acme/team-kit')
+    assert.ok(gitAuth.length >= 2 && gitAuth.every((a) => a === `Bearer ${TOKEN}`), `sign-in on every Forsion Git read: ${gitAuth}`)
+    await win.evaluate((slug) => window.tangu.marketUninstall('skill', slug), brief.slug)
+    await win.evaluate((id) => window.tangu.marketSourcesRemove(id), git.id)
+    console.log('PASS store sources e2e: add, catalog, type-change refusal, skill + plugin install, provenance, updater registration, uninstall, remove; Forsion Git catalog + package with the sign-in')
   } finally {
     if (app) await app.close().catch(() => {})
     server.close(); fs.rmSync(home, { recursive: true, force: true })

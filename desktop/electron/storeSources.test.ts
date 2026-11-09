@@ -189,6 +189,191 @@ describe('store sources', () => {
   })
 })
 
+// Forsion Git: the Forsion server reads private repositories as the signed-in user (server/microserver/git/routes/store.ts).
+// The server's answers here follow its tests (storeReads.test.ts) and the real Gitea 28 run (verify-git-store-reads.mts).
+describe('Forsion Git sources', () => {
+  const BASE = 'https://api.forsion.test'
+  const jwt = (userId: string) => ['h', Buffer.from(JSON.stringify({ userId, exp: 9e9 })).toString('base64url'), 'sig'].join('.')
+  let access: { base: string; token: string } | null
+  let auths: Array<string | undefined>
+  const makeGit = () => createStoreSources({
+    home, mirror: async () => '', defaultLocale: () => 'zh',
+    fetchFor: () => async function answer(url, init): Promise<Response> {
+      hits.push(url); auths.push(init.headers?.authorization)
+      const r = routes[url]
+      const res = r ? await r() : new Response('<!doctype html>Cannot GET', { status: 404 })
+      // Like fetch's default: follow a redirect with the same headers unless told to stop at it.
+      const to = res.status >= 300 && res.status < 400 && init.redirect !== 'manual' ? res.headers.get('location') : null
+      return to ? answer(new URL(to, url).toString(), init) : res
+    },
+    forsionGit: async () => access,
+    forsionSignedIn: () => !!access,
+  })
+  const INDEX = `${BASE}/api/git/store/index?repo=acme%2Fteam-kit`
+  const ARCHIVE = `${BASE}/api/git/store/archive?repo=acme%2Fteam-kit&ref=v1.0.0`
+  const refused = (status: number, code?: string) => () => new Response(JSON.stringify({ detail: 'x', ...(code ? { code } : {}) }), { status })
+  const kit = (pkg: unknown = { forsionGit: 'acme/team-kit', ref: 'v1.0.0', path: 'skills/brief' }) =>
+    ({ id: 'brief', type: 'skill', name: { zh: '周报', en: 'Weekly brief' }, version: '1.0.0', icon: 'icons/brief.png', package: pkg })
+  beforeEach(() => { access = { base: BASE, token: jwt('u-alice') }; auths = [] })
+
+  it('reads the catalog through the Forsion server as the signed-in account, and keeps it off the disk', async () => {
+    routes[INDEX] = () => json(index([kit()]))
+    const s = makeGit()
+    const src = await s.add('forsion-git:acme/team-kit')
+    expect(src).toMatchObject({ kind: 'forsion-git', uri: 'https://git.forsion.net/acme/team-kit', title: '图片 Skills 大全' })
+    expect(auths).toEqual([`Bearer ${access!.token}`])
+    const cat = await s.catalog(src.id, { locale: 'en' })
+    expect(cat.items).toEqual([expect.objectContaining({ id: `src_${src.id}_brief`, name: 'Weekly brief', source: 'zip', iconUrl: null })])
+    // Private catalog: never written to the disk cache, so a later launch (or another account) can't show it offline.
+    await expect(readFile(join(home, '.store-sources', 'cache', `${src.id}.json`), 'utf8')).rejects.toThrow()
+    // Gitea names (organisation with a dot) and the web address with a ref and a folder.
+    routes[`${BASE}/api/git/store/index?repo=acme.team%2Fkit&ref=main&dir=catalog`] = () => json(index([]))
+    expect(await s.probe('https://git.forsion.net/acme.team/kit/src/branch/main/catalog')).toMatchObject({ kind: 'forsion-git', count: 0 })
+  })
+
+  it('signed out: asks to sign in without calling anyone; a copy read as another account is never shown', async () => {
+    routes[INDEX] = () => json(index([kit()]))
+    const s = makeGit()
+    const src = await s.add('forsion-git:acme/team-kit')
+    access = null
+    const before = hits.length
+    await expect(s.probe('forsion-git:acme/other')).rejects.toThrow('source: forsion-git-signin')
+    const out = await s.catalog(src.id)
+    expect(out).toMatchObject({ items: [], error: 'source: forsion-git-signin', stale: false })
+    expect(hits.length).toBe(before)
+    expect(s.updatesPaused(`src_${src.id}_brief`)).toBe(true)
+    // Bob signs in: Alice's copy (still fresh in memory) must not stand in for his own read.
+    access = { base: BASE, token: jwt('u-bob') }
+    routes[INDEX] = refused(404, 'GIT_NOT_FOUND')
+    expect(await s.catalog(src.id)).toMatchObject({ items: [], error: 'source: forsion-git-no-access' })
+    expect(s.updatesPaused(`src_${src.id}_brief`)).toBe(false)
+    await expect(s.download(`src_${src.id}_brief`)).rejects.toThrow('source: forsion-git-no-access')
+  })
+
+  it('maps the server answers: expired sign-in, no read access, no Forsion Git account, not offered, missing catalog', async () => {
+    const s = makeGit()
+    for (const [answer, code] of [
+      [refused(401), 'forsion-git-signin'], [refused(404, 'GIT_NOT_FOUND'), 'forsion-git-no-access'], [refused(409, 'GIT_NEEDS_SETUP'), 'forsion-git-needs-setup'],
+      [refused(503, 'GIT_STORE_READS_OFF'), 'forsion-git-unsupported'], [refused(503, 'GIT_NOT_CONFIGURED'), 'forsion-git-unsupported'],
+      [refused(404, 'GIT_FILE_NOT_FOUND'), 'index-missing'], [refused(413, 'GIT_TOO_LARGE'), 'too-large'], [refused(429, 'GIT_STORE_RATE_LIMITED'), 'fetch-failed'],
+    ] as const) {
+      routes[INDEX] = answer
+      await expect(s.probe('forsion-git:acme/team-kit')).rejects.toThrow(`source: ${code}`)
+    }
+    delete routes[INDEX] // a server from before the endpoint: plain 404 page
+    await expect(s.probe('forsion-git:acme/team-kit')).rejects.toThrow('source: forsion-git-unsupported')
+    await expect(createStoreSources({ home, mirror: async () => '', defaultLocale: () => 'zh', fetchFor: () => fetch }).probe('forsion-git:acme/team-kit'))
+      .rejects.toThrow('source: forsion-git-unsupported')
+  })
+
+  // Review findings (Codex, 2026-11-09): each of these failed before the fix.
+  it('a refusal (expired sign-in, access revoked) is never covered by the copy read earlier', async () => {
+    routes[INDEX] = () => json(index([kit()]))
+    const s = makeGit()
+    const src = await s.add('forsion-git:acme/team-kit')
+    routes[INDEX] = refused(401)
+    expect(await s.catalog(src.id, { refresh: true })).toMatchObject({ items: [], error: 'source: forsion-git-signin', stale: false })
+    routes[INDEX] = () => json(index([kit()]))
+    await s.catalog(src.id, { refresh: true })
+    routes[INDEX] = refused(404, 'GIT_NOT_FOUND')
+    expect(await s.catalog(src.id, { refresh: true })).toMatchObject({ items: [], error: 'source: forsion-git-no-access' })
+    await expect(s.download(`src_${src.id}_brief`)).rejects.toThrow('source: forsion-git-no-access')
+    // A network failure still falls back to the copy (same account).
+    routes[INDEX] = () => json(index([kit()]))
+    await s.catalog(src.id, { refresh: true })
+    routes[INDEX] = () => { throw new Error('ECONNRESET') }
+    expect(await s.catalog(src.id, { refresh: true })).toMatchObject({ stale: true, error: 'source: fetch-failed' })
+  })
+
+  it('switching accounts while a read is in flight: the answer for the old account is not handed to the new one', async () => {
+    routes[INDEX] = () => json(index([kit()]))
+    const s = makeGit()
+    const src = await s.add('forsion-git:acme/team-kit')
+    let release!: () => void
+    const gate = new Promise<void>((r) => { release = r })
+    routes[INDEX] = async () => { await gate; return json(index([kit()])) } // Alice's read, held
+    const pending = s.catalog(src.id, { refresh: true })
+    await new Promise((r) => setTimeout(r, 10))
+    access = { base: BASE, token: jwt('u-bob') }
+    routes[INDEX] = refused(404, 'GIT_NOT_FOUND') // what Bob gets
+    release()
+    expect(await pending).toMatchObject({ items: [], error: 'source: forsion-git-no-access' })
+  })
+
+  it('the same user id on another server is another account: its copy is not reused', async () => {
+    routes[INDEX] = () => json(index([kit()]))
+    const s = makeGit()
+    const src = await s.add('forsion-git:acme/team-kit')
+    const OTHER = 'https://selfhosted.example'
+    access = { base: OTHER, token: jwt('u-alice') }
+    routes[`${OTHER}/api/git/store/index?repo=acme%2Fteam-kit`] = refused(404, 'GIT_NOT_FOUND')
+    const before = hits.length
+    expect(await s.catalog(src.id)).toMatchObject({ items: [], error: 'source: forsion-git-no-access' })
+    expect(hits.length).toBe(before + 1)
+  })
+
+  it('a private catalog\'s title stays out of the state file and is shown only to the account that read it', async () => {
+    routes[INDEX] = () => json({ ...index([kit()]), title: 'Acme secret roadmap' })
+    const s = makeGit()
+    const src = await s.add('forsion-git:acme/team-kit')
+    expect(src.title).toBe('Acme secret roadmap')
+    expect(await readFile(join(home, '.store-sources', 'state.json'), 'utf8')).not.toContain('secret roadmap')
+    access = null
+    expect((await s.list()).map((x) => x.title)).toEqual(['team-kit'])
+    expect((await makeGit().list()).map((x) => x.title)).toEqual(['team-kit'])
+  })
+
+  it('a Forsion Git package listed by a public source: updates wait for the sign-in too', async () => {
+    routes[CATALOG] = () => json(index([kit()]))
+    const s = makeGit()
+    const src = await s.add('github:pixel-lab/image-skills')
+    const card = `src_${src.id}_brief`
+    await s.recordInstall({ cardId: card, type: 'skill', slug: `src-${src.id}-brief`, name: '周报', version: '1.0.0', origin: 'forsion-git:acme/team-kit' })
+    expect(s.updatesPaused(card)).toBe(false)
+    access = null
+    expect(s.updatesPaused(card)).toBe(true)
+  })
+
+  it('downloads the package folder from the archive the server streams, signed in as the user', async () => {
+    routes[INDEX] = () => json(index([kit()]))
+    // Gitea wraps the archive in `<repo>/` (not GitHub's `<repo>-<ref>/`).
+    const archive = await zipOf({ 'team-kit/skills/brief/SKILL.md': skill('brief', '1.0.0'), 'team-kit/skills/other/SKILL.md': skill('other', '2.0.0'), 'team-kit/forsion-store.json': '{}' })
+    routes[ARCHIVE] = () => new Response(new Uint8Array(archive))
+    const s = makeGit()
+    const src = await s.add('forsion-git:acme/team-kit')
+    const got = await s.download(`src_${src.id}_brief`)
+    expect(Object.keys((await JSZip.loadAsync(got.buf)).files)).toEqual(['SKILL.md'])
+    expect(got.origin).toBe('forsion-git:acme/team-kit')
+    expect(got.info).toMatchObject({ downloadUrl: 'forsion-git:acme/team-kit@v1.0.0', source: 'zip', version: '1.0.0' })
+    expect(auths.at(-1)).toBe(`Bearer ${access!.token}`)
+
+    for (const [answer, code] of [[refused(401), 'forsion-git-signin'], [refused(404, 'GIT_NOT_FOUND'), 'forsion-git-no-access'], [refused(404, 'GIT_REF_NOT_FOUND'), 'forsion-git-ref-missing']] as const) {
+      routes[ARCHIVE] = answer
+      await expect(s.download(`src_${src.id}_brief`)).rejects.toThrow(`resolve: ${code}`)
+    }
+    // Signed out between reading the catalog and downloading.
+    routes[ARCHIVE] = () => new Response(new Uint8Array(archive))
+    const cached = makeGit()
+    await cached.catalog(src.id)
+    access = null
+    await expect(cached.download(`src_${src.id}_brief`, { auto: true })).rejects.toThrow('forsion-git-signin')
+  })
+
+  it('never carries the sign-in through a redirect', async () => {
+    const ELSEWHERE = 'https://elsewhere.example/grab'
+    const away = () => new Response(null, { status: 302, headers: { location: ELSEWHERE } })
+    routes[ELSEWHERE] = () => json(index([kit()]))
+    routes[INDEX] = away
+    const s = makeGit()
+    await expect(s.probe('forsion-git:acme/team-kit')).rejects.toThrow('source: fetch-failed')
+    routes[INDEX] = () => json(index([kit()]))
+    const src = await s.add('forsion-git:acme/team-kit')
+    routes[ARCHIVE] = away
+    await expect(s.download(`src_${src.id}_brief`)).rejects.toThrow('resolve: fetch-failed')
+    expect(hits).not.toContain(ELSEWHERE)
+  })
+})
+
 describe('package helpers', () => {
   it('refuses a folder that is not in the archive and reads the manifest id', async () => {
     const z = await zipOf({ 'r-main/a/manifest.json': JSON.stringify({ id: 'my-plugin', version: '1.0.0' }) })
