@@ -636,7 +636,13 @@ export function TaskSummary({ sessionId, desk, messages, running, cwd, hostCwd, 
     for (const id in next.cap) next.cap[id] -= mts[id] ?? 0 // fitCards 按「开着多出来的高度」(含正文上边距)算,封顶写在正文自己的 max-height 上
     if (JSON.stringify(next) !== JSON.stringify(cur)) setFit(next)
   }
-  useLayoutEffect(() => measure.current())
+  // Let the parent finish positioning the long chat before reading rail geometry.
+  // ResizeObserver covers actual size changes; this also covers user/hover priorities
+  // that can change without resizing a card. Coalesce commits within the same frame.
+  useLayoutEffect(() => {
+    const frame = requestAnimationFrame(() => measure.current())
+    return () => cancelAnimationFrame(frame)
+  })
   const ro = useRef<ResizeObserver | null>(null)
   useLayoutEffect(() => {
     const st = stackRef.current

@@ -811,7 +811,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
                 fenceState = parsed.state
                 const segBody = parsed.text
                 return segBody
-                  ? <div key={i} className="t2-content"><Markdown content={segBody} anchorPrefix={`toc-${msg.id}`} run={runCtx} allowRun={!elsewhere} embeds={embeds} linkCards codeHead /></div>
+                  ? <div key={i} className="t2-content" data-streaming-tail={streaming && i === lastTextIdx || undefined}><Markdown content={segBody} anchorPrefix={`toc-${msg.id}`} run={runCtx} allowRun={!elsewhere} embeds={embeds} linkCards codeHead streaming={streaming} /></div>
                   : null
               }
               const skip = i === firstIdx && headEvents ? 1 : 0
@@ -848,7 +848,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
               {body && (
                 voiceMode
                   ? <VoiceBubble text={body} stored={voice!.stored} anchorPrefix={`toc-${msg.id}`} />
-                  : <div className="t2-content"><Markdown content={body} anchorPrefix={`toc-${msg.id}`} run={runCtx} allowRun={!elsewhere} embeds={embeds} linkCards codeHead /></div>
+                  : <div className="t2-content" data-streaming-tail={streaming || undefined}><Markdown content={body} anchorPrefix={`toc-${msg.id}`} run={runCtx} allowRun={!elsewhere} embeds={embeds} linkCards codeHead streaming={streaming} /></div>
               )}
             </>
           )

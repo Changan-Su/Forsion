@@ -26,6 +26,10 @@ Genesis 当前使用这份 LCL。`apps/Archived/Forsion-LCL` 是早期组合引�
 - 插件：`ctx.ui.mountChatBox`；详见 [公共契约](../docs/customization/ui-components.md)。
 - 桌面 / Web 卡内容宽 ≤480px 时，模型显示短名称与档位，模型 / 添加 / 模式入口展开不改变宽度；≤260px 时上下文与语音通过添加菜单访问。窄菜单用同层返回并保留完整模型名、审批说明和额度；原生手机沿用自身布局。`desktop` 的 `check:composernarrow` 与 `check:composernarrow:electron` 覆盖真实组件 / 构建后 ChatView。
 
+## 长内容导航
+
+目录、搜索和画布定位使用 `@lcl/engine` 的 `scrollToElement`；它先在目标滚动容器派发内部 `SCROLL_TO_ELEMENT_EVENT`，再滚动并校正延迟布局。带自动跟随的宿主监听这个意图来暂停跟随，不能从 `scrollTop` 的变化猜测用户意图（`content-visibility` 与浏览器锚定也会改变位置）。恢复到底部前调用 `cancelScrollToElement`，避免旧跳转的校正覆盖新位置。此事件属于内置宿主协作，不改变插件 `ctx.ui.mountFloatingToc` 契约。
+
 ## 对象与动作(Objects)
 
 同一个东西(Space、笔记……)在哪儿右键都该是同一份菜单。LCL 原来只按出口登记(Ribbon 图标、命令、视图),动作挂在出口上,离开就没了;现在按对象登记。

@@ -22,7 +22,7 @@ const MAX_CHARS = 220
 const NAME = 't2-reveal-'
 
 interface Run { start: number; end: number; at: number }
-interface Root { el: HTMLElement; seen: number; runs: Run[]; live: boolean }
+interface Root { el: HTMLElement; seen: number; runs: Run[]; live: boolean; nodes: Text[]; dirty: boolean; observer: MutationObserver }
 
 const roots = new Set<Root>()
 let highlights: Highlight[] | null = null
@@ -39,7 +39,16 @@ function textNodes(el: HTMLElement): Text[] {
   for (let n = walker.nextNode(); n; n = walker.nextNode()) out.push(n as Text)
   return out
 }
-const textLength = (el: HTMLElement): number => textNodes(el).reduce((s, n) => s + n.length, 0)
+// The tail fades over many frames, but the Markdown DOM changes only on commits.
+// Avoid walking every formula/code node on every frame. Child-only commits (lazy
+// highlighting/embeds) invalidate too, so ranges never point at replaced text nodes.
+function nodesOf(root: Root): Text[] {
+  if (root.observer.takeRecords().length) root.dirty = true
+  // The observer is disconnected at completion/unmount. A final fade can still run
+  // for 240ms while lazy child components commit, so re-scan those few closing frames.
+  if (root.dirty || !root.live) { root.nodes = textNodes(root.el); root.dirty = false }
+  return root.nodes
+}
 
 function ensureHighlights(): Highlight[] {
   if (highlights) return highlights
@@ -64,10 +73,11 @@ function paint(now: number): void {
   hs.forEach((h) => h.clear())
   let pending = false
   for (const root of roots) {
+    if (!root.el.isConnected) { root.observer.disconnect(); roots.delete(root); continue }
     root.runs = reducedMotion() ? [] : root.runs.filter((r) => now < r.at + MAX_STAGGER + DURATION)
     if (!root.runs.length) { if (!root.live) roots.delete(root); continue }
     pending = true
-    const nodes = textNodes(root.el)
+    const nodes = nodesOf(root)
     // 新字一律在尾巴上:从后往前数够 220 个就停,更早的那些直接算落定
     let budget = MAX_CHARS
     const marks: Array<{ i: number; level: number }> = []
@@ -114,15 +124,18 @@ export function useStreamReveal(ref: RefObject<HTMLElement | null>, streaming: b
   useLayoutEffect(() => {
     const el = ref.current
     if (!streaming || !el || !supported() || reducedMotion()) return
-    const r: Root = { el, seen: textLength(el), runs: [], live: true }
+    const nodes = textNodes(el)
+    const observer = new MutationObserver(() => { r.dirty = true })
+    const r: Root = { el, nodes, seen: nodes.reduce((s, n) => s + n.length, 0), runs: [], live: true, dirty: false, observer }
+    observer.observe(el, { childList: true, characterData: true, subtree: true })
     root.current = r
     roots.add(r)
-    return () => { r.live = false; root.current = null; if (!r.runs.length) roots.delete(r) }
+    return () => { observer.disconnect(); r.dirty = true; r.live = false; root.current = null; if (!r.runs.length) roots.delete(r) }
   }, [ref, streaming])
   useLayoutEffect(() => {
     const r = root.current
     if (!r) return
-    const len = textLength(r.el)
+    const len = nodesOf(r).reduce((s, n) => s + n.length, 0)
     if (len > r.seen && !reducedMotion()) { r.runs.push({ start: r.seen, end: len, at: performance.now() }); kick() }
     else if (len < r.seen) r.runs = r.runs.filter((run) => run.start < len).map((run) => ({ ...run, end: Math.min(run.end, len) }))
     r.seen = len
