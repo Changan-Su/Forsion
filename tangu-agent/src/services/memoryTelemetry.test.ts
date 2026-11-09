@@ -69,7 +69,8 @@ afterEach(() => {
   resetMemoryDreamForTests();
   db.close();
   if (prevHome === undefined) delete process.env.TANGU_HOME; else process.env.TANGU_HOME = prevHome;
-  rmSync(home, { recursive: true, force: true });
+  // 测完还有异步落盘在写(记忆 / 账本),rm 中途目录又冒出文件会抛 ENOTEMPTY(11-09 tag 构建红过一次);重试几次就干净
+  rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 const settle = () => new Promise((r) => setTimeout(r, 20));
