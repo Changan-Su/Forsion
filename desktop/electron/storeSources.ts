@@ -285,7 +285,9 @@ export function createStoreSources(o: {
     const ac = new AbortController()
     const timer = setTimeout(() => ac.abort(), TOTAL_MS)
     try {
-      const res = await o.fetchFor(url)(url, { signal: ac.signal, headers: { accept: 'application/json', authorization: `Bearer ${a.token}` } })
+      // The sign-in goes only to the server that issued it: these endpoints never redirect (the server follows Gitea's
+      // own redirects itself), so a redirect is a failure here, not a hop to follow with the token.
+      const res = await o.fetchFor(url)(url, { signal: ac.signal, redirect: 'manual', headers: { accept: 'application/json', authorization: `Bearer ${a.token}` } })
       if (!res.ok) throw Object.assign(new StoreIndexError(await gitFailure(res)), { detail: `HTTP ${res.status}` })
       const text = await readCapped(res, MAX_INDEX_BYTES)
       return { json: JSON.parse(text), who: (lastWho = forsionAccountKey(a.base, a.token)) }
@@ -538,7 +540,7 @@ export function createStoreSources(o: {
       // The server's refusal carries a reason code; downloadZip only knows "HTTP 4xx", so keep the code and rethrow it.
       let refused = ''
       const authed: FetchFn = async (u, init) => {
-        const res = await o.fetchFor(u)(u, { ...init, headers: { authorization: `Bearer ${a.token}` } })
+        const res = await o.fetchFor(u)(u, { ...init, redirect: 'manual', headers: { authorization: `Bearer ${a.token}` } })
         if (!res.ok) refused = await gitFailure(res)
         return res
       }

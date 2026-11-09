@@ -198,10 +198,13 @@ describe('Forsion Git sources', () => {
   let auths: Array<string | undefined>
   const makeGit = () => createStoreSources({
     home, mirror: async () => '', defaultLocale: () => 'zh',
-    fetchFor: () => async (url, init) => {
+    fetchFor: () => async function answer(url, init): Promise<Response> {
       hits.push(url); auths.push(init.headers?.authorization)
       const r = routes[url]
-      return r ? r() : new Response('<!doctype html>Cannot GET', { status: 404 })
+      const res = r ? await r() : new Response('<!doctype html>Cannot GET', { status: 404 })
+      // Like fetch's default: follow a redirect with the same headers unless told to stop at it.
+      const to = res.status >= 300 && res.status < 400 && init.redirect !== 'manual' ? res.headers.get('location') : null
+      return to ? answer(new URL(to, url).toString(), init) : res
     },
     forsionGit: async () => access,
     forsionSignedIn: () => !!access,
@@ -354,6 +357,20 @@ describe('Forsion Git sources', () => {
     await cached.catalog(src.id)
     access = null
     await expect(cached.download(`src_${src.id}_brief`, { auto: true })).rejects.toThrow('forsion-git-signin')
+  })
+
+  it('never carries the sign-in through a redirect', async () => {
+    const ELSEWHERE = 'https://elsewhere.example/grab'
+    const away = () => new Response(null, { status: 302, headers: { location: ELSEWHERE } })
+    routes[ELSEWHERE] = () => json(index([kit()]))
+    routes[INDEX] = away
+    const s = makeGit()
+    await expect(s.probe('forsion-git:acme/team-kit')).rejects.toThrow('source: fetch-failed')
+    routes[INDEX] = () => json(index([kit()]))
+    const src = await s.add('forsion-git:acme/team-kit')
+    routes[ARCHIVE] = away
+    await expect(s.download(`src_${src.id}_brief`)).rejects.toThrow('resolve: fetch-failed')
+    expect(hits).not.toContain(ELSEWHERE)
   })
 })
 
