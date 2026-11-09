@@ -55,7 +55,7 @@ import { DeskCardStatus, useCardStatus } from './homeCardStatus'
 import { watchAccountName } from '../services/accountName'
 import { DESKTOP_HOME_CARDS_KEY, HOME_CARDS_MAX, loadHomeCards, saveHomeCards, shownHomeCards } from './homeCards'
 import { HOME_PARTS, setHomeEditHandler, useHomeLayout, type HomePart } from './homeWidgets'
-import { HOME_GUIDE_OWNER, HomeRail, HomeRow, PartFrame, PartsLibrary, WidgetLibrary, centerShift, dragPart, dragWidget, railModes, removePart } from './HomeWidgetParts'
+import { HOME_GUIDE_OWNER, HomeRail, HomeRow, PartFrame, PartsLibrary, RAIL_GEOMETRY, WidgetLibrary, centerShift, dragPart, dragWidget, railModes, removePart } from './HomeWidgetParts'
 import { cancelLibraryDrag, forgetLibraryDrop, startLibraryDrag, undoLibraryDrop, type LibItem } from './homeLibraryDrag'
 import { HomeWidgetEnv, useShowableIds } from './homeWidgetKinds'
 import { track } from '../achievements/store'
@@ -862,7 +862,7 @@ export function HomepageView(_props: ViewProps) {
   // 编辑态两栏都算有东西(空栏要画出落点)
   const has = { left: editing || leftShown, right: editing || rightShown }
   const modes = railModes(homeW, has)
-  const shift = phone ? 0 : centerShift(homeW, { mode: modes.left, shown: has.left }, { mode: modes.right, shown: has.right }, modes.railW)
+  const shift = phone ? 0 : centerShift(homeW, { mode: modes.left, shown: has.left }, { mode: modes.right, shown: has.right }, modes.railW, RAIL_GEOMETRY, modes.centerW)
   const widgetEnv = { openComposer: () => openComposer(false) }
   const centerParts: readonly HomePart[] = phone ? HOME_PARTS : homeLayout.center
   const partNode = (part: HomePart): React.ReactNode => part === 'clock' ? clockNode : part === 'composer' ? composerNode : part === 'dock' ? dockNode
@@ -873,7 +873,7 @@ export function HomepageView(_props: ViewProps) {
       ref={rootRef}
       className={`hp-root${phone ? ' hp-phone' : ''}${reduceMotion ? ' hp-still' : ''}${composerFocused ? ' hp-composer-focused' : ''}${wallpaperOpen ? ' hp-layer-focused' : ''}${openFolder || (organizerOpen && !yielded) ? ' hp-secondary-open' : ''}${editing ? ' hp-editing' : ''}`}
       data-rails={phone ? undefined : `${modes.left}-${modes.right}`}
-      style={phone ? undefined : ({ '--hp-rail-w': `${modes.railW}px` } as React.CSSProperties)}
+      style={phone ? undefined : ({ '--hp-rail-w': `${modes.railW}px`, '--hp-center-w': `${modes.centerW}px` } as React.CSSProperties)}
       data-guide-owner={phone ? undefined : HOME_GUIDE_OWNER}
       data-wallpaper={photo ? 'true' : undefined}
       data-theme-preset={wallpaperPrefs.themePreset}
