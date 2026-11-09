@@ -21,6 +21,7 @@ import { runMigration } from '../src/db/migrate.js';
 import { query } from '../src/core/db.js';
 import { createRun, getRun } from '../src/services/runStore.js';
 import { enqueueRun } from '../src/services/agentLoop.js';
+import { MEMORY_RECALL_BUDGET } from '../src/services/memoryRecall.js';
 
 const USER = 'u1';
 const HINT = 'EPHEMERAL-HINT-MARK';
@@ -29,15 +30,16 @@ const TERM = 'hummingbird'; // 记忆行与本轮消息共有的检索词:没有
 const FIRST_MESSAGE = `${TERM} 进度`;
 
 /**
- * 记忆行刻意做长(每行 900 字符):buildAgentMemoryContext 的 §1「存储证据」段预算只有 cap/4,
- * 第一行填满即停 → 它落**稳定段**(留在 system 原位),后两行转**易变段**(走尾部通道)。
+ * 常驻按整条放、上限 MEMORY_RECALL_BUDGET.resident(11-09 记忆分层):第一行做得几乎占满常驻 → 它落**稳定段**
+ * (留在 system 原位);后两行放不进常驻,成了「常驻线外」,和本轮消息共有检索词 → 转**易变段**(走尾部通道)。
  * 两段各带自己的标记,于是「落点对不对」也被钉住 —— 只断言「出现过」在 system 档下同样是绿的。
+ * 填充用 '-' 不用空格:记忆行进上下文前会 trim,空格填充等于没填(三行都会塞进常驻,召回块就空了)。
  */
-const pad = (s: string): string => s + ' '.repeat(Math.max(0, 900 - s.length));
+const pad = (s: string, n: number): string => `${s} ${'-'.repeat(Math.max(0, n - s.length - 1))}`;
 const SEEDED_MEMORY = [
-  pad(`${TERM} STABLE-EVIDENCE-1`),
-  pad(`${TERM} VOLATILE-EVIDENCE-2`),
-  pad(`${TERM} VOLATILE-EVIDENCE-3`),
+  pad(`${TERM} STABLE-EVIDENCE-1`, MEMORY_RECALL_BUDGET.resident - 300),
+  pad(`${TERM} VOLATILE-EVIDENCE-2`, 600),
+  pad(`${TERM} VOLATILE-EVIDENCE-3`, 600),
 ].join('\n');
 
 let home: string;
