@@ -116,7 +116,7 @@
 
 /* 编辑态 */
 .msb-hidden-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; color: var(--text-muted); font-size: var(--ui-font-meta); }
-.msb-pop { position: absolute; z-index: 5; right: 0; top: 30px; width: 300px; padding: 6px; border-radius: var(--radius-md); background: var(--bg-card); box-shadow: var(--card-shadow); display: flex; flex-direction: column; gap: 1px; animation: ui-menu-enter var(--menu-enter-ms, 120ms) ease-out; }
+.msb-pop { position: absolute; z-index: var(--z-view-float); right: 0; top: 30px; width: 300px; padding: 6px; border-radius: var(--radius-md); background: var(--surface-menu, var(--bg-card)); box-shadow: var(--card-shadow); display: flex; flex-direction: column; gap: 1px; animation: ui-menu-enter var(--menu-enter-ms, 120ms) ease-out; }
 .msb-pop-h { padding: 8px 8px 3px; color: var(--text-muted); font-size: var(--ui-font-caption); font-weight: 600; }
 .msb-pop-row { display: flex; align-items: center; gap: 8px; height: 28px; padding: 0 8px; border: 1px solid transparent; border-radius: var(--radius-sm); background: transparent; color: inherit; font: inherit; font-size: var(--menu-text-size, var(--ui-font-body)); text-align: left; cursor: pointer; }
 .msb-pop-row:hover { background: var(--menu-hover, var(--overlay-light)); }

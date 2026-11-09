@@ -176,6 +176,8 @@
   --inset: rgba(255, 255, 255, 0.2) 0 0.5px 0 0 inset, rgba(0, 0, 0, 0.2) 0 0 0 0.5px inset, rgba(0, 0, 0, 0.05) 0 1px 2px 0;
   --focus: rgba(0, 0, 0, 0.1) 0 4px 12px;
   --card-shadow: 0 1px 2px rgba(42, 36, 26, 0.04), 0 10px 26px rgba(42, 36, 26, 0.05);
+  /* 插件公开 token(plugin-contract.json):小块凸起元素。原先只在 Soft 种子里定义,随包 Soft 之后宿主补上(11-09) */
+  --shadow-sm: 0 1px 2px rgba(42, 36, 26, 0.05), 0 5px 14px -8px rgba(42, 36, 26, 0.14);
   --btn-shadow: var(--inset);
   --icon-shadow: var(--inset);
 }
@@ -242,6 +244,7 @@
   --tool-bg: rgba(242, 239, 232, 0.04);
   --tool-text: #b0a99f;
   --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 10px 26px rgba(0, 0, 0, 0.35);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35), 0 6px 16px -8px rgba(0, 0, 0, 0.45);
   --btn-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
   --icon-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
   --glow: radial-gradient(110% 75% at 82% -12%, rgba(206, 192, 168, 0.12), transparent 56%);
