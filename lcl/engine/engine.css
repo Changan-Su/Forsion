@@ -1060,3 +1060,28 @@ html[data-space-switch-axis='x'][data-space-switch]::view-transition-new(space-w
   padding-top: var(--dv-tabs-and-actions-container-height, 32px);
   padding-right: 0;
 }
+
+/* Only workspace content scrolls when the requested split layout exceeds its viewport.
+ * Ribbon, top chrome, status and the panel toggles stay in their shell positions. */
+.wb-workspace-viewport { position: relative; flex: 1; width: 100%; height: 100%; min-width: 0; min-height: 0; overflow: auto; overscroll-behavior: contain; }
+.wb-workspace-viewport > .wb-dockview { flex: none; }
+@property --lcl-panel-x { syntax: '<length>'; inherits: false; initial-value: 0px; }
+@property --lcl-panel-y { syntax: '<length>'; inherits: false; initial-value: 0px; }
+@property --lcl-panel-w { syntax: '<length>'; inherits: false; initial-value: 0px; }
+@property --lcl-panel-h { syntax: '<length>'; inherits: false; initial-value: 0px; }
+/* Stable content layer; native group/tab geometry and sash hit boxes stay in Dockview. */
+.dv-render-overlay[data-lcl-group] {
+  left: var(--lcl-panel-x) !important; top: var(--lcl-panel-y) !important;
+  width: var(--lcl-panel-w) !important; height: var(--lcl-panel-h) !important;
+  box-sizing: border-box;
+}
+.dv-render-overlay[data-lcl-visible='false'] { display: none !important; visibility: hidden !important; pointer-events: none !important; }
+.dockview-theme-lcl .dv-render-overlay:is([data-lcl-loc='main'], [data-lcl-loc='bottom']) {
+  padding: 0 8px calc(4px + var(--sb-h, 0px));
+}
+.dockview-theme-lcl .dv-render-overlay:is([data-lcl-loc='main'], [data-lcl-loc='bottom']) > .dv-react-part {
+  border-radius: var(--radius-lg, 14px); overflow: hidden; background: var(--bg);
+}
+/* Upstream's GPU hint/containment would rebase fixed menus inside a View. Geometry already
+ * moves via native layout; these contents need the same fixed-position semantics as before. */
+.dv-render-overlay[data-lcl-group] { transform: none; will-change: auto; contain: none; }

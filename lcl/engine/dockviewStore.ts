@@ -7,6 +7,7 @@
  * 视图「参数驱动可重建」:panel 存 {component:type, params} → 刷新/恢复时 Dockview 据此重建。
  */
 import { create } from 'zustand'
+import { LayoutCoordinator, layoutCoordinator } from './layoutCoordinator'
 import type { ExtendViewPresenter } from './extendView'
 import { nativeExtendTargets } from './nativeExtendView'
 import { withoutTransientPanels } from './transientLayout'
@@ -180,6 +181,7 @@ let bottomSettling: unknown = null
 /** 刚建出的底部组按 Dockview 默认高(~50%)诞生 → 把它落到目标高。≈pinSides 的纵向版,但**只在建组时用一次**
  *  (底部恒 free,用户拖多高就是多高,不做持续钉高)。补间动画期间跳过,让 tween 独占。 */
 function settleBottomHeight(api: DockviewApi): void {
+  if (layoutCoordinator(api)) { layoutCoordinator(api)!.request(); return }
   const apply = (): void => {
     if (sidebarAnimating.bottom) return
     try { panelsAt(api, 'bottom')[0]?.group.api.setSize({ height: bottomTargetHeight(api) }) } catch { /* 跨版本兜底 */ }
@@ -203,13 +205,14 @@ export function keepMainOnly(api: DockviewApi): number {
   return side.length
 }
 
-export function captureSideWidths(api: DockviewApi): void {
+export function captureSideWidths(api: DockviewApi, userGesture = false, onlySide?: DockSide): void {
+  if (layoutCoordinator(api) && !userGesture) return
   const st = useWorkspace.getState()
   if (!st.sideProfileKey) return
   let changed = false
   const next: Record<DockSide, number | null> = { ...st.sideWidths }
   for (const loc of ['left', 'right'] as const) {
-    if (!st.sideFree[loc] || sidebarAnimating[loc]) continue
+    if ((onlySide && onlySide !== loc) || !st.sideFree[loc] || sidebarAnimating[loc]) continue
     const w = (panelsAt(api, loc)[0] as { group?: SizableGroup } | undefined)?.group?.api?.width
     if (typeof w !== 'number') continue
     // 「这是不是用户拖出来的、该记的宽」抽到 sideCapture.shouldRecordSideWidth(纯函数,可单测)。
@@ -221,7 +224,7 @@ export function captureSideWidths(api: DockviewApi): void {
   // 底部面板高度:恒 free,判定复用同一个 shouldRecordSideWidth(pinPending 恒 false —— 底部的沉降窗口由 bottomSettling 挡),
   // 于是「贴近目标高 = 系统设的」「<120 = 收起补间中间值」「与已记值几乎相同」三条豁免自动生效。
   const bottomGroup = (panelsAt(api, 'bottom')[0] as { group?: SizableGroup } | undefined)?.group
-  if (!sidebarAnimating.bottom && bottomGroup !== bottomSettling) { // 沉降中的组:出生高是系统态(见 bottomSettling)
+  if ((!onlySide || onlySide === 'bottom') && !sidebarAnimating.bottom && bottomGroup !== bottomSettling) { // 沉降中的组:出生高是系统态(见 bottomSettling)
     const h = bottomGroup?.api?.height
     if (typeof h === 'number'
       && shouldRecordSideWidth({ measured: h, target: bottomTargetHeight(api), prev: next.bottom, pinPending: false })) {
@@ -243,6 +246,7 @@ const sideLocks = new WeakMap<SizableGroup, number>()
  *  Dockview 默认把腾出的宽度按比例摊给所有组,侧栏会「突然变宽」而剩下的主区纹丝不动。
  *  返回释放函数(布局沉降后调,恢复可手动拖宽)。 */
 function lockSides(api: DockviewApi, sides: ('left' | 'right')[], keepCurrent = false): () => void {
+  if (layoutCoordinator(api)) return () => {}
   const locked: SizableGroup[] = []
   for (const s of sides) {
     const g = (panelsAt(api, s)[0] as { group?: SizableGroup } | undefined)?.group
@@ -275,6 +279,7 @@ const lockOtherSide = (api: DockviewApi, side: 'left' | 'right'): (() => void) =
  * redistributes the shell widths and captureSideWidths records them as user resizes.
  * New horizontal groups must still fit within the container's minimum-size budget. */
 export function withPreservedSideWidths<T>(api: DockviewApi, change: () => T, newColumns = 0): T {
+  if (layoutCoordinator(api)) return change()
   // 钉宽还没落地时「此刻的宽」是过渡态(刚建的侧栏约占一半):锁它会把 pinSides 挡在外面,侧栏就停在过渡宽上。
   const release = lockSides(api, ['left', 'right'], !pinPending)
   if (api.minimumWidth + newColumns * DV_GROUP_MIN > api.width) {
@@ -321,6 +326,7 @@ function tweenGroupSize(group: SizableGroup, key: 'width' | 'height', from: numb
  *  Dockview split/setSize 异步竞争 → rAF + setTimeout 双重兜底,在布局沉降后再钉。
  *  正在补间动画的一侧跳过(sidebarAnimating),避免钉宽打断丝滑过渡。 */
 function pinSides(api: DockviewApi): void {
+  if (layoutCoordinator(api)) { layoutCoordinator(api)!.request(); return }
   const gen = ++pinGen
   pinPending = true // 钉宽落地前 captureSideWidths 不记宽(防过渡态污染)
   const apply = (): void => {
@@ -398,7 +404,7 @@ function makeLeaf(panel: IDockviewPanel): Leaf {
 }
 
 function panelsAt(api: DockviewApi, loc: ViewLocation): IDockviewPanel[] {
-  return api.panels.filter((p) => ((p.params ?? {}) as PanelMeta).__loc === loc)
+  return api.panels.filter((p) => ((p.params ?? {}) as PanelMeta).__loc === loc && (loc === 'main' || (layoutCoordinator(api)?.visible(loc) ?? true)))
 }
 
 const locOfPanel = (p: IDockviewPanel): ViewLocation => ((p.params ?? {}) as PanelMeta).__loc ?? 'main'
@@ -533,10 +539,19 @@ function queueRightRules(): void {
 
 /** New shell groups start at the outer edge, then alignRegions places them around the entire
  * Main subtree. Referencing a Main leaf here would cut a sidebar into that one split. */
-function positionFor(api: DockviewApi, loc: ViewLocation): Record<string, unknown> | undefined {
+function positionFor(api: DockviewApi, loc: ViewLocation, groupId?: string): Record<string, unknown> | undefined {
+  if (loc === 'main') {
+    const target = groupId ? api.groups?.find(g => g.id === groupId && g.panels.some(p => locOfPanel(p) === 'main')) : undefined
+    const current = activeMainPanel(api)
+    return target ? { referenceGroup: target.id, direction: 'within' } : current ? { referencePanel: current.id, direction: 'within' } : undefined
+  }
+  const coordinator = layoutCoordinator(api)
+  if (coordinator) {
+    const parked = api.panels.find(p => locOfPanel(p) === loc)
+    if (parked) { revealCoordinatedSidebar(api, loc); return { referencePanel: parked.id, direction: 'within' } }
+  }
   const sameLoc = panelsAt(api, loc)
   if (sameLoc.length) return { referencePanel: sameLoc[0].id, direction: 'within' }
-  if (loc === 'main') return undefined // 首个主区 panel
   const parked = loc === 'bottom' ? parkedBottom(api) : undefined
   if (parked) {
     // 开回收起时藏着的那个组:不新建组 = 网格不收支 = 主区不重挂。先亮出来再开 panel,视图挂载时量得到尺寸。
@@ -586,6 +601,7 @@ function parkBottom(api: DockviewApi, group: Group, panels: IDockviewPanel[]): v
 /** Repair region boundaries without reloading any View. The snapshot before insertion keeps
  * Main proportions intact; the same path also heals old persisted, interleaved layouts. */
 function alignRegions(api: DockviewApi, before?: RegionTree | null): void {
+  if (layoutCoordinator(api)) { alignWorkspaceRegions(api, before, useWorkspace.getState().bottomSpan); layoutCoordinator(api)!.request(); return }
   const snapshot = before ?? captureRegionTree(api)
   const restore = preserveAcrossRestructure()
   pinSides(api)
@@ -628,6 +644,7 @@ function envelope(api: DockviewApi, state: Pick<WorkspaceState, 'leftVisible' | 
     version: 4,
     ...(space ? { space } : {}),
     ...(floats ? { floats } : {}),
+    ...(layoutCoordinator(api) ? { layoutRatios: layoutCoordinator(api)!.exportRatios() } : {}),
     dockview: withoutTransientPanels(api.toJSON(), Object.fromEntries(Object.values(extensions).filter((lease) => lease.previousId).map((lease) => [lease.id, lease.previousId!]))),
     sidebars: {
       // 真实 panel 是唯一真源；状态事件可能落后于 Dockview 的异步布局沉降。
@@ -817,7 +834,7 @@ interface WorkspaceState {
    *  见下方 singleton 分支上的注释);主区默认**就地替换**当前活动 leaf(浏览器/Obsidian 式,
    *  opts.newTab 显式新建);侧栏同侧同类型复用。返回 leaf。 */
   /** opts.split(只对主区):开在旁边那半屏,没有就向右分屏(见 besidePanePosition);与 newTab 同给时 newTab 优先。 */
-  openView(type: string, params?: Record<string, unknown>, loc?: ViewLocation, opts?: { newTab?: boolean; split?: boolean }): Leaf | null
+  openView(type: string, params?: Record<string, unknown>, loc?: ViewLocation, opts?: { newTab?: boolean; split?: boolean; groupId?: string }): Leaf | null
   /** 就地把某 leaf 切换为另一视图类型(同 tab 内导航的原语)。旧视图参数全清,不残留。 */
   navigateLeaf(leafId: string, type: string, params?: Record<string, unknown>): Leaf | null
   getActiveLeaf(): Leaf | null
@@ -1090,6 +1107,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   activateLeaf: (id) => {
     const panel = get().api?.getPanel(id)
     if (panel && locOfPanel(panel) === 'main') noteBesideTarget(id) // 「已经开着就切过去」的那些打开法走这里
+    if (panel && locOfPanel(panel) !== 'main' && layoutCoordinator(get().api)) revealCoordinatedSidebar(get().api!, locOfPanel(panel) as DockSide)
     panel?.api.setActive()
     get().refreshTabs()
   },
@@ -1105,6 +1123,10 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     if (panelType(panel) === 'home') return // home 是主区空态占位,不可关(无 close 入口,防御性)
     if (!force && guarded(api, panel)) return // 固定 View:区内最后一个关不掉
     const loc = ((panel.params ?? {}) as PanelMeta).__loc ?? 'main'
+    if (!force && loc !== 'main' && layoutCoordinator(api) && !layoutCoordinator(api)!.visible(loc)) {
+      const remaining = get().stash[loc].filter(v => v.type !== panelType(panel) || identitySig(v.params) !== identitySig(makeLeaf(panel).params))
+      set(st => ({ stash: { ...st.stash, [loc]: remaining.length ? remaining : [{ type: 'sidebar-empty', params: {} }] } }))
+    }
     // 主区关掉「最后一个」view → 就地把它变成 home 空态占位(Forsion 品牌图 + 新建),而非
     // close→addPanel。后者会销毁主区组,让侧栏瞬间回流吞掉主区宽再弹回 = 侧栏「被关」+卡顿(本次修复的 bug)。
     // navigateLeaf 复用同一 panel/组,只换 __type → 零组结构变化,侧栏纹丝不动。
@@ -1116,7 +1138,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     }
     // 侧栏关空 → 补「空侧栏」占位(保住 group 作拖放靶;toggleSidebar 折叠不走 closeLeaf,不受影响)。
     const wasLastSide = (loc === 'left' || loc === 'right')
-      && panelType(panel) !== 'sidebar-empty' && panelsAt(api, loc).length <= 1
+      && panelType(panel) !== 'sidebar-empty' && panelsAt(api, loc).length === 1
     // 底部面板反过来:关掉最后一个视图 = 关掉整个面板(VS Code 观感,不补占位;Dockview 自动移除空组,
     // syncPanelState 随即把 bottomVisible 翻假)。**stash 必须一并清空** —— 否则「折叠→展开→×关掉→
     // 再折叠→展开」会把用户已经明确关掉的视图从 stash 里复活(左右栏有占位撑着,不会走到这一步)。
@@ -1126,7 +1148,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     const release = loc === 'main' ? lockSides(api, ['left', 'right'], true) : () => {}
     // 先关再填:占位可能与被关视图同 type,open-first 会复用到正被关的那个。
     // 底部最后一个 = 收起面板:同 ⌘J 藏组不删组,免主区重挂。
-    if (wasLastBottom) parkBottom(api, panel.group, [panel])
+    if (wasLastBottom) { parkBottom(api, panel.group, [panel]); layoutCoordinator(api)?.setVisible('bottom', false) }
     else panel.api.close()
     if (wasLastSide) dockTrace('placeholder', { closed: panelType(panel), loc, force: !!force })
     if (wasLastSide) get().openView('sidebar-empty', {}, loc)
@@ -1384,9 +1406,13 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     // 否则左右栏又长出来、开关钮还藏着收不回去(Codex 评审)。见 uiMode.IS_VIEW_WINDOW。
     if (IS_VIEW_WINDOW && (loc === 'left' || loc === 'right')) return null
     const def = getView(type)
+    if (loc !== 'main') {
+      const c = layoutCoordinator(api)
+      if (c) revealCoordinatedSidebar(api, loc)
+    }
     // 「开在当前标签旁边」那一档(见 openBeside.ts)先于单例复用:单例带 reuseKey:'primary' 时复用会把参数并进已开着的那份 ——
     // 主区开着 Agent A 的资料页,卡里点 Agent B,A 就地变成 B(Codex 评审实证)。这一档只认参数一致的那份。
-    if (loc === 'main' && mainOpensBeside()) {
+    if (loc === 'main' && !opts?.newTab && !opts?.groupId && mainOpensBeside()) {
       const cur = activeMainPanel(api)
       if (cur) return openBesideOnce(api, cur, type, params)
     }
@@ -1405,6 +1431,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       if (existing) {
         if (reuseKey === 'primary') existing.api.updateParameters({ ...(existing.params ?? {}), ...params })
         retirePlaceholder(api, locOfPanel(existing)) // 旧存档里留在它旁边的占位(见下面同侧复用那条)
+        const where = locOfPanel(existing)
+        if (where !== 'main' && layoutCoordinator(api)) revealCoordinatedSidebar(api, where)
         existing.api.setActive()
         return makeLeaf(existing)
       }
@@ -1439,7 +1467,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       component: loc === 'main' ? '__frame' : type,
       title,
       params: { ...params, __loc: loc, __type: type },
-      position: positionFor(api, loc) as never,
+      position: positionFor(api, loc, opts?.groupId) as never,
     })
     if (firstOfSide) {
       alignRegions(api, before)
@@ -1505,6 +1533,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     if (!api) return
     dockTrace('toggleSidebar', { side, panels: panelsAt(api, side).map(panelType) })
     if (IS_VIEW_WINDOW && side !== 'bottom') return // 独立视图窗只装主区:左右栏开不出来(见 uiMode.IS_VIEW_WINDOW)
+    if (layoutCoordinator(api)) { toggleCoordinatedSidebar(api, side); return }
     const beforeToggle = captureRegionTree(api)
     // 唯一的轴向差异集中在这几行:左右量宽 / 底部量高。其余(暂存、还原、补间、沉降)两轴共用一份。
     const vert = side === 'bottom'
@@ -1664,6 +1693,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       dismissExtensions()
       selfTitled.clear() // 新布局会复用 leaf id(如 launcher#1),旧的「自己改过名」标记不能带过去
       api.fromJSON(blob.dockview as never)
+      layoutCoordinator(api)?.restoreRatios(blob.layoutRatios, blob.sidebars)
       alignRegions(api)
       retitleDefaultPanels()
       // 布局整体更换,旧 leaf id 全失效。⚠️ 放在 fromJSON **之后**:拆旧建新途中的激活事件也会让订阅方记账,
@@ -1809,6 +1839,7 @@ function restoreLayout(api: DockviewApi): boolean {
     selfTitled.clear()
     rightKey = layout.sidebars.right.rule ?? null // 同 applyLayout
     api.fromJSON(layout.dockview as never)
+    layoutCoordinator(api)?.restoreRatios(layout.layoutRatios, layout.sidebars)
     alignRegions(api)
     retitleDefaultPanels(api) // 恢复发生在 onReady 里,store 里的 api 可能还没挂上 → 直接传
     useWorkspace.setState({
@@ -1848,6 +1879,7 @@ let extensionSerial = 0
 export const presentDockedExtension: ExtendViewPresenter = (options, dismiss) => {
   const api = useWorkspace.getState().api
   if (!api) throw new Error('Workbench is not ready')
+  if (layoutCoordinator(api)) return presentCoordinatedExtension(api, options, dismiss)
   const beforeExtension = captureRegionTree(api)
   const side = options.side ?? 'right'
   extensions[side]?.dismiss('layout') // another view's extension takes this side
@@ -1982,4 +2014,119 @@ export const presentDockedExtension: ExtendViewPresenter = (options, dismiss) =>
     return { element, titled: vert, activate: () => { if (!disposed) panel?.api.setActive() }, dispose: lease.dispose }
   } catch (error) { lease.dispose(true); throw error }
   finally { restore(); if (!opening) release?.() }
+}
+
+/** Install once per real workspace, before restore/build. Mock stores keep their legacy sizing adapter. */
+export function attachLayoutCoordinator(api: DockviewApi, viewport: HTMLElement, canvas: HTMLElement): LayoutCoordinator {
+  return new LayoutCoordinator(api, viewport, canvas, {
+    sideSize: (side, size) => {
+      const st = useWorkspace.getState()
+      const key = side === 'bottom' ? 'preferredHeight' : 'preferredWidth'
+      const preferred = Math.max(0, ...api.panels.filter(p => locOfPanel(p) === side).map(p => getView(panelType(p))?.layout?.[key] ?? 0).filter(n => Number.isFinite(n) && n > 0 && n <= 4096))
+      if (st.sideWidths[side] == null && preferred) return preferred
+      if (side === 'bottom') return computeBottomHeight(size.height, st.sideWidths.bottom)
+      return st.sideWidths[side] == null && extensions[side]?.defaultWidth != null ? extensions[side]!.defaultWidth!
+        : computeSideWidth(size.width, side, { free: st.sideFree[side], saved: st.sideWidths[side], scale: st.sideScale[side] })
+    },
+    didResize: (side) => { if (side) captureSideWidths(api, true, side) },
+    settled: () => { useWorkspace.getState().syncPanelState(); scheduleWorkspaceSave() },
+  })
+}
+
+function toggleCoordinatedSidebar(api: DockviewApi, side: DockSide): void {
+  const c = layoutCoordinator(api)!, ws = useWorkspace.getState(), opening = !c.visible(side)
+  const existing = api.panels.filter(p => locOfPanel(p) === side)
+  if (!opening) {
+    const stash = existing.filter(p => !['sidebar-empty', '__extend'].includes(panelType(p))).map(p => {
+      const { __loc, __type, ...params } = p.params ?? {}; void __loc; void __type
+      return { type: panelType(p), params }
+    })
+    const active = existing.find(p => p.group.activePanel === p)
+    useWorkspace.setState(s => ({ stash: { ...s.stash, [side]: stash.length ? stash : s.stash[side] },
+      stashActive: { ...s.stashActive, [side]: active ? panelType(active) : s.stashActive[side] } }))
+  }
+  c.setVisible(side, opening)
+  useWorkspace.setState({ [visKeyOf(side)]: opening })
+  if (opening && existing.length) reconcileParkedSidebar(api, side, existing)
+  if (opening && !existing.length) {
+    const known = (v: Stashed) => !!getView(v.type)
+    const live = ws.stash[side].filter(known), defaults = ws.sidebarDefaults[side].filter(known)
+    const entries = live.length ? live : defaults.length ? defaults : [{ type: 'sidebar-empty', params: {} }]
+    for (const entry of entries) ws.openView(entry.type, entry.params, side)
+    const active = panelsAt(api, side).find(p => panelType(p) === (ws.stashActive[side] ?? entries[0].type))
+    active?.api.setActive()
+  }
+  c.request()
+}
+
+function presentCoordinatedExtension(api: DockviewApi, options: Parameters<ExtendViewPresenter>[0], dismiss: Parameters<ExtendViewPresenter>[1]): ReturnType<ExtendViewPresenter> {
+  const c = layoutCoordinator(api)!, side = options.side ?? 'right'
+  extensions[side]?.dismiss('layout'); extensions[side]?.dispose(true)
+  const existing = api.panels.filter(p => locOfPanel(p) === side), previous = existing.find(p => p.group.activePanel === p)
+  const element = document.createElement('div'); element.className = 'wb-extend-target'
+  const id = `__extend-${++extensionSerial}`
+  let disposed = false
+  let closing: Promise<void> | undefined
+  let resolveClose: (() => void) | undefined
+  let panel: IDockviewPanel | undefined
+  let removed: { dispose(): void } | undefined
+  const finish = (): void => {
+    if (disposed) return
+    disposed = true; removed?.dispose(); nativeExtendTargets.delete(id)
+    if (extensions[side] === lease) delete extensions[side]
+    if (panel && api.getPanel(id)) {
+      const group = panel.group, solo = group.panels.length === 1
+      const lastInRegion = !api.panels.some(p => p !== panel && locOfPanel(p) === side)
+      if (solo) { closeKeepingGroup(api, panel); group.api.setVisible(false); if (lastInRegion) c.setVisible(side, false) }
+      else panel.api.close()
+    }
+    if (previous && api.getPanel(previous.id) === previous) previous.api.setActive()
+    element.remove(); useWorkspace.getState().syncPanelState(); c.request(); resolveClose?.()
+  }
+  const dispose = (instant = false): void | Promise<void> => {
+    if (disposed) return
+    if (instant || !panel || !api.getPanel(id) || api.panels.some(p => locOfPanel(p) === side && p !== panel)) { finish(); return }
+    if (!closing) {
+      closing = new Promise<void>(resolve => { resolveClose = resolve })
+      c.setVisible(side, false, finish)
+    }
+    return closing
+  }
+  const lease = { id, previousId: previous?.id, dismiss, dispose }
+  extensions[side] = lease; nativeExtendTargets.set(id, element)
+  revealCoordinatedSidebar(api, side)
+  const before = captureRegionTree(api)
+  try { panel = api.addPanel({ id, component: '__extend', title: typeof options.title === 'function' ? options.title() : options.title,
+    params: { __loc: side, __type: '__extend' }, position: positionFor(api, side) as never }) } catch (error) { finish(); throw error }
+  if (!existing.length) alignRegions(api, before)
+  removed = api.onDidRemovePanel(p => { if (p === panel && !disposed) { dismiss('layout'); finish() } })
+  useWorkspace.getState().syncPanelState(); c.request()
+  return { element, titled: side === 'bottom', activate: () => { if (!disposed) { c.reveal(side); panel?.api.setActive() } }, dispose }
+}
+
+/** Reconcile recipes changed while folded (right-companion rules, pinned Views, explicit closes),
+ * retaining each still-requested live instance and its current params. A simple fold/unfold must
+ * not re-run right rules: that would resurrect companions the person explicitly closed. */
+function reconcileParkedSidebar(api: DockviewApi, side: DockSide, existing: IDockviewPanel[]): void {
+  const ws = useWorkspace.getState()
+  const known = (v: Stashed) => !!getView(v.type)
+  const recipe = ws.stash[side].filter(known)
+  const fallback = ws.sidebarDefaults[side].filter(known)
+  const desired = recipe.length ? recipe : fallback.length ? fallback : [{ type: 'sidebar-empty', params: {} }]
+  const keep = new Set<string>()
+  for (const entry of desired) {
+    const retained = existing.find(p => panelType(p) === entry.type && !keep.has(p.id))
+    if (retained) keep.add(retained.id)
+    else { const opened = ws.openView(entry.type, entry.params, side); if (opened) keep.add(opened.id) }
+  }
+  for (const panel of existing) if (!keep.has(panel.id) && panelType(panel) !== '__extend' && api.getPanel(panel.id) === panel) panel.api.close()
+  const active = api.panels.find(p => locOfPanel(p) === side && panelType(p) === ws.stashActive[side])
+  active?.api.setActive()
+}
+function revealCoordinatedSidebar(api: DockviewApi, side: DockSide): void {
+  const c = layoutCoordinator(api)!
+  if (c.visible(side)) return
+  const existing = api.panels.filter(p => locOfPanel(p) === side)
+  c.setVisible(side, true)
+  if (existing.length) reconcileParkedSidebar(api, side, existing)
 }

@@ -619,12 +619,12 @@ if (new URLSearchParams(location.search).has('dock')) {
     // 收起是 200ms 补间,而让位是随 panel 增删翻转的**阶跃** —— 两者不同相位就会在收尾那一帧跳一下。
     cardBottom: (): number => {
       const g = [...document.querySelectorAll('.dv-groupview')].find((x) => x.querySelector('.wb-view--main'))
-      const c = g?.querySelector('.dv-content-container > .dv-react-part')
+      const c = document.querySelector('.dv-render-overlay[data-lcl-loc="main"][data-lcl-visible="true"] > .dv-react-part') ?? g?.querySelector('.dv-content-container > .dv-react-part')
       return c ? Math.round(c.getBoundingClientRect().bottom) : 0
     },
     mainPadBottom: (): string => {
       const g = [...document.querySelectorAll('.dv-groupview')].find((x) => x.querySelector('.wb-view--main'))
-      const cc = g?.querySelector('.dv-content-container')
+      const cc = document.querySelector('.dv-render-overlay[data-lcl-loc="main"][data-lcl-visible="true"]') ?? g?.querySelector('.dv-content-container')
       return cc ? getComputedStyle(cc).paddingBottom : '?'
     },
     locs: (): string[] => (useWorkspace.getState().api?.panels ?? []).map((p) => String(((p.params ?? {}) as { __loc?: string }).__loc ?? 'main')),

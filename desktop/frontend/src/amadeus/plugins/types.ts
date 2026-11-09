@@ -708,7 +708,14 @@ export type PluginViewLocation = 'main' | 'left' | 'right' | 'bottom'
  *  side Views have none). Feature-detect view?.extendView. Rules and opt-in agent commands can call open().
  *  onClose(reason): `dismiss` = the person closed that panel itself; `layout` = the workbench took it with its place
  *  (side folded, layout reset or replaced, another view's extension) — hosts up to 2.12.2 report those as `dismiss`. */
+export interface PluginViewLayout {
+  width: number; height: number; visible: boolean; compact: boolean; phase: 'transition' | 'settled'
+}
 export interface PluginViewContext {
+  /** Current View dimensions in logical CSS pixels. Layout changes retain this mount. */
+  getLayout?(): Readonly<PluginViewLayout>
+  /** Immediate snapshot, then geometry/visibility/phase changes. Unsubscribe on cleanup. */
+  onLayout?(listener: (layout: Readonly<PluginViewLayout>) => void): () => void
   /** Mount location. Mini/Floating receive no extendView/full workspace chrome. Feature-detect on older hosts.
    *  A view that `ctx.workspace.open` floats inside the window (2.13.8+) reports 'mini' for the Mini look and 'floating' otherwise. */
   surface?: 'main' | 'mini' | 'floating'
@@ -730,6 +737,8 @@ export interface PluginViewContext {
 }
 
 export interface ViewContribution {
+  /** Optional workspace constraints; old plugins inherit LCL's defaults. */
+  layout?: { minWidth?: number; minHeight?: number; preferredWidth?: number; preferredHeight?: number }
   /** View id, unique within the plugin (kebab-case recommended). */
   id: string
   /** Tab title shown in the workbench. A function or `{ zh, en }` (2026-10-26+) follows a language switch. */

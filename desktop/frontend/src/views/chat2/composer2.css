@@ -10,7 +10,8 @@
    由 skins.css 在那两块声明 --sidebar-card-bg（= 卡片色）接管；新增「侧栏最深」的暗色时同样要声明，
    check:chatside 31b 逐套背景色量这一档。
    genesis-glass 仍由主题自己的 ::before 材质分档接管，不消费这个实色。 */
-.dv-groupview:has(.wb-tab--icon) .t2-chat-view {
+.dv-groupview:has(.wb-tab--icon) .t2-chat-view,
+.dv-render-overlay:is([data-lcl-loc="left"], [data-lcl-loc="right"]) .t2-chat-view {
   --t2c-card-surface: var(--sidebar-card-bg, var(--bg));
 }
 .t2c-inner { max-width: 880px; margin: 0 auto; width: 100%; box-sizing: border-box; padding: 8px 28px 16px; display: flex; flex-direction: column; gap: 8px; }

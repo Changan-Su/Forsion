@@ -553,3 +553,13 @@ ctx.app.writeFileScoped?.(path, text, expectedRoot, {create:true})
 ### Space 的 Ribbon 落点和手机布局
 
 `space.json` 写 `"ribbon": { "after": "<spaceId>" }`,图标第一次出现时排在那个 Space 后面,用户已经摆过的位置不动。写 `"mobile": { "listFirst": true }`,手机上先落左栏列表,点一项进主区;只有左栏确实是这种列表才写,缺省主区是第一层、左栏是抽屉。 主视图要接管原生顶栏时用 `ctx.ui.claimHeader?.({ title, back, onBack, toList: true })`:返回时壳把列表层滑出来(边缘手势跟手,中途放弃什么都不发生),列表露出来后才调 `onBack`;不带 `toList` 时系统返回和顶栏箭头都只跑 `onBack`,适合浮层。
+
+## View 的布局协同
+
+LCL 统一保留并排的 View。空间不足时滚动工作区内容，Ribbon、顶栏与状态栏保持固定。侧栏开合和分屏使用同一条尺寸过渡，不对整页淡入淡出，也不缩放文字。收起侧栏保留原挂载；显式关闭 View、停用插件或切换整份布局才清理它。
+
+`ctx.registerView({ layout: { minWidth: 360, minHeight: 200 }, ... })` 可声明逻辑 CSS 像素下的最小尺寸。未声明也自动遵守引擎规则；主区默认 320 × 180、左栏 220 × 180、右栏 240 × 180、底栏 240 × 140。同组多个标签取最大的最小尺寸，切标签不会来回挤压相邻 View。
+
+`mount(el, view)` 的 `view.getLayout?.()` 返回 `{ width, height, visible, compact, phase }`；`view.onLayout?.(callback)` 立即回送快照，并在尺寸、可见性或阶段变化时通知，返回取消订阅函数。`phase` 为 `transition` 或 `settled`，`compact` 表示内容宽度不足 480px。PDF、画布、终端等可在过渡中只更新轻量外框，等 `settled && visible` 再做昂贵的适配；不要因窗口变窄而重新挂载内容或重置缩放。宿主在 View 卸载时自动取消残留订阅。旧宿主没有这些方法，仍可用 `ResizeObserver`。
+
+`preferredWidth` / `preferredHeight` 可选：新建分屏时作为初始分配权重，侧栏尚未被用户调整时作为展开尺寸；用户保存的比例和侧栏尺寸优先。

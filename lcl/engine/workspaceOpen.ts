@@ -67,7 +67,7 @@ export interface OpenOptions {
    *  插件走 forms,插件 ctx 不给这个口子。 */
   mainView?: OpenTarget
   /** 停靠主区时的开法(新标签 / 分屏),原样交给 openView。 */
-  dock?: { newTab?: boolean; split?: boolean }
+  dock?: { newTab?: boolean; split?: boolean; groupId?: string }
   /** Floating Panel 的窗口尺寸。 */
   size?: { width?: number; height?: number; minWidth?: number; minHeight?: number }
 }

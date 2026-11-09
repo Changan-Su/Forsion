@@ -39,6 +39,8 @@ export interface Leaf {
 
 /** 视图渲染时拿到的 props。 */
 export interface ViewProps {
+  /** Read current geometry; subscribe without rerendering the View on every frame. */
+  layout?: import('./viewLayout').ViewLayoutHandle
   /** Temporary View owned by this View: a Main View's opens as a native side-panel tab; a side / bottom / drawer View's
    *  covers that View itself behind Back. Absent in embedded cards and mini windows. */
   extendView?: ExtendViewController
@@ -87,6 +89,8 @@ export interface DashboardCardDefinition {
 
 /** 注册一种视图(≈ Obsidian registerView)。 */
 export interface ViewDefinition {
+  /** Workspace constraints in logical CSS pixels; omitted values use LCL defaults. */
+  layout?: import('./layoutCoordinator').ViewLayoutHints
   /** 注册键(= Dockview component 名)。 */
   type: string
   /** 标签名;函数形式支持 i18n 懒求值。 */
@@ -262,7 +266,7 @@ export interface SpaceDefinition {
   sidebarDefaults: SidebarDefaults
   /** 主区关掉最后一个 view 时填充的「新页面」(不留空白)。缺省 = 打开 launcher 启动器。
    *  Amadeus 等无启动器的 Space 用它指向自己的主视图(如空白编辑器)。 */
-  newPage?(): void
+  newPage?(target?: { groupId?: string; open(type: string, params?: Record<string, unknown>): Leaf | null }): void
   /** 哪些侧栏「可自由拖宽 + 持久化」。**2026-08-14 起缺省两侧都开**(用户要求:拖过的宽度要常驻,
    *  折叠/展开、切 Space、重启都不丢)——本字段因此变成**opt-out**:显式写 false 的那侧才钉黄金分割。 */
   resizableSides?: { left?: boolean; right?: boolean }

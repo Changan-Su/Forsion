@@ -2,6 +2,7 @@ import { resolve } from 'path'
 import { defineConfig } from 'vitest/config'
 
 export default defineConfig({
+  server: { fs: { allow: [resolve(__dirname, '..')] } }, // LCL tests live alongside desktop, including in isolated worktrees.
   resolve: {
     alias: {
       '@lcl': resolve(__dirname, '../lcl'),
