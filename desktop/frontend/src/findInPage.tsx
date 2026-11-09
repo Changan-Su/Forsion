@@ -244,12 +244,13 @@ export function textareaFindProvider(ta: HTMLTextAreaElement): FindReplaceProvid
 /** 活动 View 的根。焦点优先(Cmd+F 的语义就是「我正在看的这一面」),其次 dockview 的活动组,
  *  最后退到主区。⚠️ `.wb-view` 不是 dockview 面板独有(仪表盘卡片也用),所以只能从焦点
  *  `closest()` 往上找最内层的那个,不能 `querySelector` 抓第一个。 */
-function pickRoot(): HTMLElement | null {
+export function pickRoot(): HTMLElement | null {
   const focused = document.activeElement
   const near = focused instanceof Element ? focused.closest('.wb-view, .mb-view, .fs-overlay') : null
-  return (near
+  return ((near?.getClientRects().length ? near : null)
+    ?? document.querySelector('.dv-render-overlay[data-lcl-active="true"] .wb-view')
     ?? document.querySelector('.dv-active-group .wb-view')
-    ?? document.querySelector('.wb-view--main')
+    ?? [...document.querySelectorAll('.wb-view--main')].find(el => el.getClientRects().length)
     ?? document.querySelector('.mb-view')
     ?? document.body) as HTMLElement | null
 }

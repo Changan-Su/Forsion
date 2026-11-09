@@ -24,6 +24,7 @@ const mix = (a: number, b: number, t: number): number => a + (b - a) * t
  * No screenshot layers, transforms, opacity, DOM reparenting or content remounts. */
 export class LayoutCoordinator {
   private ratios: LayoutRatios = {}
+  private ratioBranches = new Map<string, { axis: string; children: string[] }>()
   private intent = new Map<DockSide, boolean>()
   private rendered = new Map<string, LayoutRect>()
   private frame = 0
@@ -51,7 +52,7 @@ export class LayoutCoordinator {
     this.observer.observe(viewport)
     this.subscriptions.push(api.onWillMutateLayout(e => {
       if (this.applying) return
-      if (e.kind === 'clear' || e.kind === 'load') { this.cancel(); this.skipMotion = true; this.ratios = {}; this.intent.clear(); this.rendered.clear() }
+      if (e.kind === 'clear' || e.kind === 'load') { this.cancel(); this.skipMotion = true; this.ratios = {}; this.ratioBranches.clear(); this.intent.clear(); this.rendered.clear() }
     }), api.onDidMutateLayout(() => this.request()), api.onDidActivePanelChange(() => { this.updateOverlays(); this.request() }),
       api.onDidLayoutChange(() => this.updateOverlays()))
     const watch = (panel: DockviewApi['panels'][number]) => {
@@ -72,13 +73,13 @@ export class LayoutCoordinator {
     return intended !== false && this.api.groups.some(g => location(g) === side && g.panels.length && (intended === true || g.api.isVisible))
   }
   initialize(): void { this.ready = true; this.refresh(false) }
-  private cancel(): void { ++this.generation; cancelAnimationFrame(this.frame); this.frame = 0; this.targetSignature = ''; this.completions.clear() }
+  private cancel(): void { ++this.generation; cancelAnimationFrame(this.frame); this.frame = 0; this.targetSignature = '' }
   private pointerDown = (e: PointerEvent): void => {
     if (!(e.target instanceof Element) || !e.target.closest('.dv-sash')) return
     this.cancel(); this.dragging = true
     this.dragStart = new Map(this.api.groups.map(g => [g.id, box(g)]))
     const split = e.target.closest('.dv-split-view-container')
-    const ids = this.api.groups.filter(g => split?.contains(g.element)).map(g => g.id).sort().join(',')
+    const ids = this.api.groups.filter(g => g.panels.length && split?.contains(g.element)).map(g => g.id).sort().join(',')
     const tree = this.readTree()
     const leafIds = (n: LayoutNode): string[] => 'id' in n ? [n.id] : n.children.flatMap(leafIds)
     const axis = split?.classList.contains('dv-horizontal') ? 'width' : 'height'
@@ -114,7 +115,6 @@ export class LayoutCoordinator {
   }
   setVisible(side: DockSide, visible: boolean, done?: () => void): void {
     this.intent.set(side, visible)
-    this.completions.delete(side)
     if (done) this.completions.set(side, done)
     if (visible) for (const g of this.api.groups) if (location(g) === side && !g.api.isVisible) g.api.setVisible(true)
     this.request()
@@ -144,7 +144,22 @@ export class LayoutCoordinator {
         const key = `${axis}(${children.map(nodeKey).join(',')})`
         const size = { width: axis === 'width' ? children.reduce((s, c) => s + c.size.width, 0) : Math.max(...children.map(c => c.size.width)),
           height: axis === 'height' ? children.reduce((s, c) => s + c.size.height, 0) : Math.max(...children.map(c => c.size.height)) }
-        if (capture || !this.ratios[key] || this.ratios[key].length !== children.length) this.ratios[key] = children.map(c => Math.max(1, c.size[axis]))
+        if (capture || !this.ratios[key] || this.ratios[key].length !== children.length) {
+          const childKeys = children.map(nodeKey), weights = children.map(c => Math.max(1, c.size[axis]))
+          // A sidebar insertion/removal can change a branch key while its Main children survive.
+          // Transfer their remembered proportions, never seed them from a clamped viewport.
+          const candidates = capture ? [] : [...this.ratioBranches].filter(([old, b]) => b.axis === axis && this.ratios[old])
+            .map(([old, b]) => ({ old, children: b.children, shared: childKeys.filter(k => b.children.includes(k)) }))
+            .filter(b => b.shared.length >= 2).sort((a, b) => b.shared.length - a.shared.length)
+          const prior = candidates[0]
+          if (prior) {
+            const priorTotal = prior.shared.reduce((sum, k) => sum + this.ratios[prior.old][prior.children.indexOf(k)], 0)
+            const currentTotal = prior.shared.reduce((sum, k) => sum + weights[childKeys.indexOf(k)], 0)
+            if (priorTotal > 0) for (const k of prior.shared) weights[childKeys.indexOf(k)] = currentTotal * this.ratios[prior.old][prior.children.indexOf(k)] / priorTotal
+          }
+          this.ratios[key] = weights
+        }
+        this.ratioBranches.set(key, { axis, children: children.map(nodeKey) })
         return { key, axis, children, size }
       }
       const g = this.api.getGroup(n.data.id)
@@ -254,6 +269,8 @@ export class LayoutCoordinator {
       overlay.dataset.lclGroup = group.id
       overlay.dataset.lclLoc = location(group)
       overlay.dataset.lclVisible = String(panel.api.isVisible)
+      overlay.dataset.lclActive = String(panel.api.isVisible && this.api.activePanel === panel)
+      overlay.inert = !panel.api.isVisible
       if (!panel.api.isVisible) continue
       const root = overlay.parentElement!, rr = root.getBoundingClientRect(), r = reference.getBoundingClientRect()
       const zoom = root.offsetWidth ? rr.width / root.offsetWidth : 1
@@ -265,6 +282,7 @@ export class LayoutCoordinator {
     this.viewport.removeEventListener('pointerdown', this.pointerDown, true)
     window.removeEventListener('pointerup', this.pointerUp, true); window.removeEventListener('pointercancel', this.pointerUp, true)
     this.panelSubscriptions.forEach(s => s.dispose()); this.panelSubscriptions.clear()
+    const completions = [...this.completions.values()]; this.completions.clear(); completions.forEach(done => done())
     coordinators.delete(this.api)
   }
 }

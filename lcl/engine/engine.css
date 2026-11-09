@@ -1075,7 +1075,7 @@ html[data-space-switch-axis='x'][data-space-switch]::view-transition-new(space-w
   width: var(--lcl-panel-w) !important; height: var(--lcl-panel-h) !important;
   box-sizing: border-box;
 }
-.dv-render-overlay[data-lcl-visible='false'] { visibility: hidden !important; pointer-events: none !important; }
+.dv-render-overlay[data-lcl-visible='false'] { display: none !important; visibility: hidden !important; pointer-events: none !important; }
 .dockview-theme-lcl .dv-render-overlay:is([data-lcl-loc='main'], [data-lcl-loc='bottom']) {
   padding: 0 8px calc(4px + var(--sb-h, 0px));
 }

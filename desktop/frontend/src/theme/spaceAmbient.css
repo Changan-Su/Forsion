@@ -44,7 +44,7 @@
 [data-theme='lovable']:where([data-ambient='on']):not([data-glass='off']) .shell-work,
 [data-theme='lovable']:where([data-ambient='on']):not([data-glass='off']) .t2s-side,
 [data-theme='lovable']:where([data-ambient='on']):not([data-glass='off']) .dockview-theme-lcl .dv-groupview,
-[data-theme='lovable']:where([data-ambient='on']):not([data-glass='off']) .dockview-theme-lcl .dv-groupview:not(:has(.wb-tab--icon)) .dv-content-container { background: transparent; }
+[data-theme='lovable']:where([data-ambient='on']):not([data-glass='off']) .dockview-theme-lcl :is(.dv-groupview:not(:has(.wb-tab--icon)) .dv-content-container, .dv-render-overlay:is([data-lcl-loc="main"], [data-lcl-loc="bottom"])) { background: transparent; }
 [data-theme='lovable']:where([data-ambient='on']):not([data-glass='off']) .dockview-theme-lcl {
   --dv-background-color: transparent;
   --dv-group-view-background-color: transparent;

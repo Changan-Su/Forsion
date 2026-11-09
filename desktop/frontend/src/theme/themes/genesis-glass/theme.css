@@ -190,10 +190,10 @@
  * 少写一段 :not(:has()) 就压不过它的 background: var(--sidebar-bg),纸卡四周会糊上一层实色。
  * ⚠ padding **不要动**:engine.css 的 sash 位移和 sashAffordance.ts 的 CARD_INSET=8 都按 8px
  * 标定,磁盘主题改不了那个 TS 常量,改成 10px 会让分割线/刻度落在纸卡可见边缘内 2px。 */
-[data-theme='genesis-glass'] .dockview-theme-lcl .dv-groupview:not(:has(.wb-tab--icon)) .dv-content-container {
+[data-theme='genesis-glass'] .dockview-theme-lcl :is(.dv-groupview:not(:has(.wb-tab--icon)) .dv-content-container, .dv-render-overlay:is([data-lcl-loc="main"], [data-lcl-loc="bottom"])) {
   background: transparent;
 }
-[data-theme='genesis-glass'] .dockview-theme-lcl .dv-groupview:not(:has(.wb-tab--icon)) .dv-content-container > .dv-react-part {
+[data-theme='genesis-glass'] .dockview-theme-lcl :is(.dv-groupview:not(:has(.wb-tab--icon)) .dv-content-container, .dv-render-overlay:is([data-lcl-loc="main"], [data-lcl-loc="bottom"])) > .dv-react-part {
   background: var(--gl-paper);
   border-radius: var(--radius-lg);
   box-shadow: var(--card-shadow);
@@ -315,21 +315,21 @@
  * 染色浓度把底下的字盖住 → 使用专门的 side 兜底档。
  * 边界:body 里 portal 出去的浮层(右键菜单等)按**屏幕位置**取 backdrop,DOM 上不在侧栏组里,
  * 选择器管不着 —— 它们开在侧栏上方时同样糊不出东西,只能靠自身浓度。已知,暂不追。 */
-[data-theme='genesis-glass'] .dv-groupview:has(.wb-tab--icon) .t2c-card {
+[data-theme='genesis-glass'] :is(.dv-groupview:has(.wb-tab--icon), .dv-render-overlay:is([data-lcl-loc="left"], [data-lcl-loc="right"])) .t2c-card {
   background: transparent;
 }
-[data-theme='genesis-glass'] .dv-groupview:has(.wb-tab--icon) .t2c-card::before {
+[data-theme='genesis-glass'] :is(.dv-groupview:has(.wb-tab--icon), .dv-render-overlay:is([data-lcl-loc="left"], [data-lcl-loc="right"])) .t2c-card::before {
   background: var(--gl-sheen), var(--gl-side);
 }
 /* 侧栏里的 composer 菜单同样没有可靠 CSS backdrop,只在这里加厚；主区 / 主页继续使用 58% 菜单档。 */
-[data-theme='genesis-glass'] .dv-groupview:has(.wb-tab--icon) .composer-menu:not(.composer-menu--model):not(.composer-menu--mode):not(.composer-menu--add),
-[data-theme='genesis-glass'] .dv-groupview:has(.wb-tab--icon) .cm-sub,
-[data-theme='genesis-glass'] .dv-groupview:has(.wb-tab--icon) .approval-hover-desc,
-[data-theme='genesis-glass'] .dv-groupview:has(.wb-tab--icon) .t2c-menu,
-[data-theme='genesis-glass'] .dv-groupview:has(.wb-tab--icon) .t2c-ctxring-pop,
+[data-theme='genesis-glass'] :is(.dv-groupview:has(.wb-tab--icon), .dv-render-overlay:is([data-lcl-loc="left"], [data-lcl-loc="right"])) .composer-menu:not(.composer-menu--model):not(.composer-menu--mode):not(.composer-menu--add),
+[data-theme='genesis-glass'] :is(.dv-groupview:has(.wb-tab--icon), .dv-render-overlay:is([data-lcl-loc="left"], [data-lcl-loc="right"])) .cm-sub,
+[data-theme='genesis-glass'] :is(.dv-groupview:has(.wb-tab--icon), .dv-render-overlay:is([data-lcl-loc="left"], [data-lcl-loc="right"])) .approval-hover-desc,
+[data-theme='genesis-glass'] :is(.dv-groupview:has(.wb-tab--icon), .dv-render-overlay:is([data-lcl-loc="left"], [data-lcl-loc="right"])) .t2c-menu,
+[data-theme='genesis-glass'] :is(.dv-groupview:has(.wb-tab--icon), .dv-render-overlay:is([data-lcl-loc="left"], [data-lcl-loc="right"])) .t2c-ctxring-pop,
 /* 划线条挂在 body 下,上面这种祖先选择器认不出它开在侧栏里 —— 由调用方打 data-dense(聊天的侧栏对话)。 */
 [data-theme='genesis-glass'] .selbar[data-dense],
-[data-theme='genesis-glass'] .dv-groupview:has(.wb-tab--icon) .composer-menu:is(.composer-menu--model, .composer-menu--mode, .composer-menu--add)::before {
+[data-theme='genesis-glass'] :is(.dv-groupview:has(.wb-tab--icon), .dv-render-overlay:is([data-lcl-loc="left"], [data-lcl-loc="right"])) .composer-menu:is(.composer-menu--model, .composer-menu--mode, .composer-menu--add)::before {
   background: var(--gl-sheen), var(--gl-side);
 }
 

@@ -2066,6 +2066,8 @@ function presentCoordinatedExtension(api: DockviewApi, options: Parameters<Exten
   const element = document.createElement('div'); element.className = 'wb-extend-target'
   const id = `__extend-${++extensionSerial}`
   let disposed = false
+  let closing: Promise<void> | undefined
+  let resolveClose: (() => void) | undefined
   let panel: IDockviewPanel | undefined
   let removed: { dispose(): void } | undefined
   const finish = (): void => {
@@ -2074,13 +2076,23 @@ function presentCoordinatedExtension(api: DockviewApi, options: Parameters<Exten
     if (extensions[side] === lease) delete extensions[side]
     if (panel && api.getPanel(id)) {
       const group = panel.group, solo = group.panels.length === 1
-      if (solo) { closeKeepingGroup(api, panel); group.api.setVisible(false); c.setVisible(side, false) }
+      const lastInRegion = !api.panels.some(p => p !== panel && locOfPanel(p) === side)
+      if (solo) { closeKeepingGroup(api, panel); group.api.setVisible(false); if (lastInRegion) c.setVisible(side, false) }
       else panel.api.close()
     }
     if (previous && api.getPanel(previous.id) === previous) previous.api.setActive()
-    element.remove(); useWorkspace.getState().syncPanelState(); c.request()
+    element.remove(); useWorkspace.getState().syncPanelState(); c.request(); resolveClose?.()
   }
-  const lease = { id, previousId: previous?.id, dismiss, dispose: finish }
+  const dispose = (instant = false): void | Promise<void> => {
+    if (disposed) return
+    if (instant || !panel || !api.getPanel(id) || api.panels.some(p => locOfPanel(p) === side && p !== panel)) { finish(); return }
+    if (!closing) {
+      closing = new Promise<void>(resolve => { resolveClose = resolve })
+      c.setVisible(side, false, finish)
+    }
+    return closing
+  }
+  const lease = { id, previousId: previous?.id, dismiss, dispose }
   extensions[side] = lease; nativeExtendTargets.set(id, element)
   revealCoordinatedSidebar(api, side)
   const before = captureRegionTree(api)
@@ -2089,7 +2101,7 @@ function presentCoordinatedExtension(api: DockviewApi, options: Parameters<Exten
   if (!existing.length) alignRegions(api, before)
   removed = api.onDidRemovePanel(p => { if (p === panel && !disposed) { dismiss('layout'); finish() } })
   useWorkspace.getState().syncPanelState(); c.request()
-  return { element, titled: side === 'bottom', activate: () => { if (!disposed) { c.reveal(side); panel?.api.setActive() } }, dispose: finish }
+  return { element, titled: side === 'bottom', activate: () => { if (!disposed) { c.reveal(side); panel?.api.setActive() } }, dispose }
 }
 
 /** Reconcile recipes changed while folded (right-companion rules, pinned Views, explicit closes),

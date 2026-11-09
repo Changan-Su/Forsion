@@ -253,7 +253,7 @@ export interface SelFollow {
   pane: () => { left?: number; right?: number } | null
 }
 /** 编辑器面板(Dockview 的内容区 / 移动端主区):格式栏横向不出它、横向中心只算露在它里面的行。 */
-const paneOf = (view: EditorView): DOMRect | undefined => view.dom.closest('.dv-content-container, .mb-main')?.getBoundingClientRect()
+const paneOf = (view: EditorView): DOMRect | undefined => view.dom.closest('.dv-render-overlay[data-lcl-group], .dv-content-container, .mb-main')?.getBoundingClientRect()
 /** 选中的是不是「一张图」—— 两种形态都算:md 图片节点(NodeSelection),以及 `![[pic.png|200]]`
  *  那段被整体选中的源码文本(wikilink.ts 的选中态就是这么表示的)。
  *  行内格式工具栏据此让位:对图片来说 B/I/U 毫无意义,浮条还会盖住正文(截图自查发现)。 */

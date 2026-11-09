@@ -7,6 +7,8 @@ import { layoutCoordinator } from '../../../lcl/engine/layoutCoordinator'
 import { computeDropTarget } from '../../../lcl/engine/dropModel'
 import '../../../lcl/engine/engine.css'
 import '../../frontend/src/styles/base.css'
+import '../../frontend/src/theme/themes/soft/theme.css'
+import '../../frontend/src/theme/themes/genesis-glass/theme.css'
 const content = (id: string) => <div className="probe-content"><h2>{id === 'document' ? 'Layout coordination' : id === 'canvas' ? 'Reading surface' : 'Workspace'}</h2><textarea aria-label="Draft" defaultValue="An unfinished draft stays here."/><div className="probe-scroll">{Array.from({length: 70}, (_,i) => <p key={i}>Paragraph {i + 1} · Views share the available space while retaining their reading position.</p>)}</div>{id === 'document' && <iframe title="Embedded state" srcDoc="<body>Embedded preview<script>window.bootId=Math.random()</script></body>"/>}</div>
 for (const id of ['document', 'canvas', 'nav', 'launcher', 'sidebar-empty']) registerView({ type: id, displayName: id, factory: () => content(id) })
 const build = () => {

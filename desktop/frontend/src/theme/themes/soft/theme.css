@@ -42,11 +42,11 @@
 /* 主区:Genesis 在组里垫一圈 --sidebar-bg 再画圆角纸卡;Soft 的组本身就是纸卡,拆掉那两层,标签栏直接在纸上。
    底部仍让出状态栏高度(--sb-h,同 engine.css)。 */
 [data-theme='soft'] .dockview-theme-lcl .dv-groupview:not(:has(.wb-tab--icon)) { background: var(--bg); }
-[data-theme='soft'] .dockview-theme-lcl .dv-groupview:not(:has(.wb-tab--icon)) .dv-content-container {
+[data-theme='soft'] .dockview-theme-lcl :is(.dv-groupview:not(:has(.wb-tab--icon)) .dv-content-container, .dv-render-overlay:is([data-lcl-loc="main"], [data-lcl-loc="bottom"])) {
   background: transparent;
   padding: 0 0 var(--sb-h, 0px);
 }
-[data-theme='soft'] .dockview-theme-lcl .dv-groupview:not(:has(.wb-tab--icon)) .dv-content-container > .dv-react-part {
+[data-theme='soft'] .dockview-theme-lcl :is(.dv-groupview:not(:has(.wb-tab--icon)) .dv-content-container, .dv-render-overlay:is([data-lcl-loc="main"], [data-lcl-loc="bottom"])) > .dv-react-part {
   border-radius: 0;
   background: transparent;
 }

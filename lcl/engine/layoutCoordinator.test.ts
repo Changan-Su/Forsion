@@ -134,4 +134,39 @@ describe('LCL real Dockview coordination', () => {
     ws.toggleSidebar('right'); c.refresh(false)
     expect(api.panels.filter(p => p.params?.__loc === 'right').map(p => p.params?.__type)).toEqual(['other'])
   })
+  it('transfers preferred main proportions when adding a sidebar in a constrained window', () => {
+    const { a, b, resize } = host()
+    const key = Object.keys(c.exportRatios()).find(k => k.startsWith('width(') && c.exportRatios()[k].length === 3)!
+    c.restoreRatios({ [key]: [240, 350, 910] }); c.refresh(false)
+    const preferred = a.group.api.width / b.group.api.width
+    resize(640)
+    useWorkspace.getState().openView('other', {}, 'right'); c.refresh(false)
+    resize(2000)
+    expect(a.group.api.width / b.group.api.width).toBeCloseTo(preferred, 2)
+  })
+  it('collapses a sole extension continuously and still records main sashes after its empty group remains', async () => {
+    const { a, b, viewport, resize } = host()
+    const extension = presentDockedExtension({ title: 'Detail', side: 'right' } as never, () => {})
+    c.refresh(false)
+    const panel = api.panels.find(p => p.params?.__type === '__extend')!
+    let frame: FrameRequestCallback | undefined
+    vi.stubGlobal('requestAnimationFrame', (f: FrameRequestCallback) => { frame = f; return 1 })
+    vi.stubGlobal('cancelAnimationFrame', () => {})
+    const closing = extension.dispose(); c.refresh(true)
+    expect(api.getPanel(panel.id)).toBe(panel)
+    frame!(performance.now() + 55)
+    expect(panel.group.api.width).toBeGreaterThan(0)
+    expect(panel.group.api.width).toBeLessThan(260)
+    frame!(performance.now() + 250); await closing; c.refresh(false)
+    expect(api.getPanel(panel.id)).toBeUndefined()
+    const sash = [...viewport.querySelectorAll('.dv-sash')].filter(el => el.closest('.dv-split-view-container')?.classList.contains('dv-horizontal'))[1]
+    sash.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
+    a.group.api.setSize({ width: 800 }); b.group.api.setSize({ width: 460 })
+    window.dispatchEvent(new PointerEvent('pointerup'))
+    const preferred = a.group.api.width / b.group.api.width
+    expect(preferred).toBeGreaterThan(1.6)
+    resize(1900)
+    expect(a.group.api.width / b.group.api.width).toBeCloseTo(preferred, 2)
+  })
+
 })
