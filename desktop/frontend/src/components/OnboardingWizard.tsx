@@ -5,11 +5,14 @@
  *   开始 / 外观即点即生效;团队那一屏在「开始使用」时一起写。「跳过引导」不写当前这一屏,并记下「电脑历史没问到」,
  *   主页输入框下面之后再问一次(computerHistoryAskMark.ts;走完引导清掉)。
  * - 上次看引导记下的版本早于 2.13.8(或没记录)= 完整走一遍,原来走过的叫「欢迎回来」;之后的升级只看「已更新到 X」+ 这一版新增的屏。
+ * - 换屏有动效(11-08):外壳 data-nav 记方向,新的一屏从前进方向滑进,旧的那屏留一个替身(useExitGhost)往反方向滑出;
+ *   减少动态效果 / 只淡入淡出时由全局规则收成瞬间。引导开着时 html 挂 data-ob-open,把菜单层抬到引导上面(模型选择器的下拉 portal 到 body)。
  * 台架靠的名字:.ob-shell.ob-flow、data-step、data-mode、.ob-skip(「跳过引导」)。
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { ArrowLeft, ArrowRight, CircleAlert, Loader2, RotateCcw } from 'lucide-react'
 import { useI18n } from '../i18n'
+import { useExitGhost } from '@lcl/engine'
 import { useReducedMotionPref } from '../theme/motionTheme'
 import { PRODUCT } from '../product'
 import { APP_VERSION } from '../changelog'
@@ -19,7 +22,7 @@ import { LocaleToggle } from './LocaleToggle'
 import { ErrorBoundary } from './ErrorBoundary'
 import { needsFullGuide, stepOrder, updateOrder, type Step } from './onboardingFlow'
 import { readTelemetry } from './OnboardingImprove'
-import { StartScreen, ImproveRow } from './onboarding/StartScreen'
+import { StartScreen, ImproveRow, type SyncBase } from './onboarding/StartScreen'
 import { ThemeScreen } from './onboarding/ThemeScreen'
 import { YouScreen } from './onboarding/YouScreen'
 import { TeamScreen } from './onboarding/TeamScreen'
@@ -87,7 +90,14 @@ export const OnboardingWizard: React.FC<{
   const [screenBusy, setScreenBusy] = useState(false)
   const [saveError, setSaveError] = useState('')
   const commitRef = useRef<(() => Promise<void>) | null>(null)
-  const mainRef = useRef<HTMLElement>(null)
+  const mainRef = useRef<HTMLElement | null>(null)
+  /** 上一次换屏的方向(第一屏没有,不动)。 */
+  const [nav, setNav] = useState<'fwd' | 'back' | null>(null)
+  useEffect(() => {
+    const root = document.documentElement
+    root.setAttribute('data-ob-open', '')
+    return () => root.removeAttribute('data-ob-open')
+  }, [])
 
   const [appVer, setAppVer] = useState('')
   useEffect(() => { void window.tangu?.appVersion?.().then((v) => setAppVer(v || '')).catch(() => {}) }, [])
@@ -97,10 +107,14 @@ export const OnboardingWizard: React.FC<{
   const [signedIn, setSignedIn] = useState(false)
   useEffect(() => { void window.tangu?.authStatus?.().then((a) => setSignedIn(!!a?.loggedIn)).catch(() => {}) }, [])
   const [connected, setConnected] = useState(false)
-  // 登录后的同步三个勾(10-20):真露出来过才在结束时按勾的开,没看到不替用户开(留给首登卡片问)。
-  // Agents 那个勾在旧同步里是账号总闸(= 所有 Agent);11-05 Agent 逐个选定案后它在新同步里不起作用,11-06 第四轮从界面拿掉,
-  // 换成一行「在 蓬洲云 › 同步 里逐个选」。这里恒为 false,照旧传给 applySyncChoices(不替用户开旧总闸)。
-  const [syncPick, setSyncPick] = useState<Record<SyncKind, boolean>>({ notes: true, agents: false, plugins: true })
+  // 登录后的同步勾(10-20):真露出来过才在结束时按勾的开关,没看到不替用户开(留给首登卡片问)。
+  // 11-08 用户定:标 Beta、缺省关。null = 还没读到现在的同步状态,开始那一屏读到后按现状种初值(开着的显示开,
+  // 不然收尾时「没勾的关」会关掉用户自己开的);读不到就一直是 null,收尾不动同步。
+  // Agents 那个勾在旧同步里是账号总闸;11-06 第四轮从界面拿掉(新同步里逐个选),初值照现状原样传回去,不替用户开也不替他关。
+  const [syncPick, setSyncPick] = useState<Record<SyncKind, boolean> | null>(null)
+  /** 读到的现状:收尾只把和它不一样的那几项交给 applySyncChoices(没露出来的智库那项不动)。 */
+  const [syncBase, setSyncBase] = useState<SyncBase | null>(null)
+  const onSyncSeed = useCallback((pick: Record<SyncKind, boolean>, base: SyncBase) => { setSyncPick(pick); setSyncBase(base) }, [])
   const syncSeen = useRef(false)
   const onSyncSeen = useCallback(() => { syncSeen.current = true }, [])
   /** 团队屏「在 Agents 里管理」:引导盖在最上面,点了先记下,引导关掉之后再去 Agents。 */
@@ -132,7 +146,8 @@ export const OnboardingWizard: React.FC<{
   const close = (skipped: boolean, viaError = false): void => {
     if (finished.current) return
     finished.current = true
-    tele.finish(skipped && !viaError ? 'skip' : 'finish', { signedIn, sync: signedIn && syncSeen.current ? syncPick : null, addedAgent: openAgents.current })
+    const pick = signedIn && syncSeen.current ? syncPick : null
+    tele.finish(skipped && !viaError ? 'skip' : 'finish', { signedIn, sync: pick, addedAgent: openAgents.current })
     if (order.includes('team')) {
       if (skipped) markChAskSkipped(); else clearChAskOnFinish()
     }
@@ -141,7 +156,10 @@ export const OnboardingWizard: React.FC<{
       localStorage.setItem(ONBOARDING_VERSION_KEY, version)
     } catch { /* 隐私窗口里可能写不了 */ }
     // 后台去开,不挡收尾(第二台电脑要用户定的,蓬洲云「同步」页会挂着等)
-    if (signedIn && syncSeen.current && window.remoteSync) void applySyncChoices(syncPick)
+    if (pick && syncBase && window.remoteSync) {
+      const kinds = (['notes', 'plugins'] as const).filter((k) => (k !== 'notes' || syncBase.notesShown) && pick[k] !== syncBase[k])
+      void applySyncChoices(pick, kinds)
+    }
     onFinish()
     if (openAgents.current) setTimeout(() => openAgentsSpace(), 0)
   }
@@ -158,6 +176,7 @@ export const OnboardingWizard: React.FC<{
   const go = (next: number): void => {
     if (next < 0 || next >= order.length) return
     setFurthest((f) => Math.max(f, next))
+    setNav(next > idx ? 'fwd' : 'back')
     setStep(order[next])
   }
   const forward = async (): Promise<void> => {
@@ -180,8 +199,9 @@ export const OnboardingWizard: React.FC<{
     const onKey = (event: KeyboardEvent): void => {
       if (event.key !== 'Enter' || event.defaultPrevented || event.isComposing || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return
       const target = event.target as Element | null
-      if (target?.closest?.('button, a, input, select, textarea, summary, dialog, [role="radio"], [role="switch"], [contenteditable="true"]')) return
-      if (finished.current || document.querySelector('dialog[open]') || primaryRef.current.disabled) return
+      if (target?.closest?.('button, a, input, select, textarea, summary, dialog, [role="dialog"], [role="radio"], [role="switch"], [contenteditable="true"]')) return
+      // 「从其他 AI 搬过来」的审阅单是 div[role=dialog][aria-modal]:开着时焦点落在遮罩上回车,不能在它背后「继续」并写 MEMORY.md
+      if (finished.current || document.querySelector('dialog[open], [role="dialog"][aria-modal="true"]') || primaryRef.current.disabled) return
       event.preventDefault()
       void primaryRef.current.run()
     }
@@ -210,7 +230,7 @@ export const OnboardingWizard: React.FC<{
         <section className="ob3-card ob3-update changelog"><ChangelogEntries /></section>
         {improveNotice && signedIn && <section className="ob3-card"><ImproveRow signedIn={signedIn} /></section>}
       </div>
-      case 'start': return <StartScreen resolveTarget={onboardingTarget} returning={returning} syncPick={syncPick} onSyncPick={setSyncPick} onSyncSeen={onSyncSeen}
+      case 'start': return <StartScreen resolveTarget={onboardingTarget} returning={returning} syncPick={syncPick} syncBase={syncBase} onSyncPick={setSyncPick} onSyncSeed={onSyncSeed} onSyncSeen={onSyncSeen}
         onConnected={onConnected} onSignedIn={onSignedIn} onReconnect={onReconnect} onBusyChange={onBusyChange} />
       case 'theme': return <ThemeScreen themeLang={themeLang} themeSkin={themeSkin} themeMode={themeMode} themeModePref={themeModePref} themeSeed={themeSeed}
         onThemeChange={onThemeChange} onSeedChange={onSeedChange} />
@@ -220,7 +240,7 @@ export const OnboardingWizard: React.FC<{
     }
   }
 
-  return <div className="ob-shell ob-flow ob3" data-step={step} data-mode={brief ? 'update' : 'full'}>
+  return <div className="ob-shell ob-flow ob3" data-step={step} data-mode={brief ? 'update' : 'full'} data-nav={nav || undefined}>
     <div className="ob3-paper" aria-hidden="true"><div className="hp-wallpaper-art"><HomeWallpaperArt preset="orbit" hour={12} minute={0} still={reduceMotion} /></div></div>
     <header className="ob3-top">
       {order.length > 1 ? <nav className="ob3-dots" aria-label={t('ob3.progress', { n: idx + 1, total: order.length })}>
@@ -231,13 +251,13 @@ export const OnboardingWizard: React.FC<{
       <div className="ob3-top-r"><LocaleToggle compact />
         {order.length > 1 && <button type="button" className="ob-skip" disabled={locked} onClick={() => close(true)}>{t('onboarding.nav.skip')}</button>}</div>
     </header>
-    <main className="ob3-main" ref={mainRef} key={step}>
+    <StepPane key={step} mainRef={mainRef}>
       {/* 每屏各自兜底:某一屏渲染出错只换掉这一块,顶栏和底栏照常(走查续六 6.19) */}
       <ErrorBoundary fallback={(error, retry) => <StepErrorCard step={step} error={error} onRetry={retry}
         onSkip={() => { tele.errorSkipped(); commitRef.current = null; if (last) close(true, true); else go(idx + 1) }} />}>
         {screen()}
       </ErrorBoundary>
-    </main>
+    </StepPane>
     <footer className="ob3-foot">
       <div className={`ob3-foot-in ${FOOT_WIDTH[step] || 'narrow'}`}>
         <button type="button" className="ob3-back" disabled={idx === 0 || locked} onClick={() => go(idx - 1)}><ArrowLeft size={14} aria-hidden="true" />{t('onboarding.nav.prev')}</button>
@@ -248,6 +268,13 @@ export const OnboardingWizard: React.FC<{
       </div>
     </footer>
   </div>
+}
+
+/** 每屏一块(换屏 = 换 key 整块重挂):卸下时留一个替身做退场,样式在 onboarding3.css「换屏」。 */
+function StepPane({ mainRef, children }: { mainRef: React.MutableRefObject<HTMLElement | null>; children: React.ReactNode }) {
+  const ref = useRef<HTMLElement | null>(null)
+  useExitGhost(ref)
+  return <main className="ob3-main" ref={(el) => { ref.current = el; mainRef.current = el }}>{children}</main>
 }
 
 /** 某一屏崩了时的错误卡:「重试」重新挂载这一屏;「跳过这一步」= 去下一屏、不保存这一屏。堆栈收进「错误详情」。 */

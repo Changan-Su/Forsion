@@ -5631,7 +5631,7 @@ html:root :is(.ctx-menu, .ui-popover, .amx-db-pop, .slash-menu, .wiki-suggest, .
 [data-lcl-exit]:not(.lcl-ftoc-rail, .ctx-menu, .ui-popover, .amx-db-pop, .slash-menu, .wiki-suggest, .paste-as-menu,
   .project-menu, .composer-menu, .cm-sub, .add-menu-sub, .unitsw-menu,
   .rb-menu, .rb-iconpick, .t2c-menu, .dash-add-menu, .inline-toolbar,
-  .cmd-overlay, .amx-qf-scrim, .dialog-overlay, .amx-cal-cardwrap, [data-motion~='toast']) { animation: none !important; }
+  .cmd-overlay, .amx-qf-scrim, .dialog-overlay, .amx-cal-cardwrap, .ob3-main, [data-motion~='toast']) { animation: none !important; }
 /* 替身里的子元素不重放自己的进场(命令面板 / ⌘P / 确认框的面板本身除外:它跟着遮罩一起退,见 engine.css / amadeus styles.css)。 */
 [data-lcl-exit] :not(.cmd-panel, .amx-qf, .dialog) { animation: none !important; }
 

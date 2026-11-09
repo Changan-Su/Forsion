@@ -1,9 +1,11 @@
 /**
  * ② 外观:风格 / 明暗 / 主题色 / 背景色,右边实时预览(ThemePreview,和设置 › 外观同一个)。即选即生效,后面几屏就是这个样子。
  * 两根颜色轴独立(主题色只换 accent 家族,背景色只换底 / 文字 / 边线族;别退回 2026-08-29 前的耦合写法)。字体留在设置里。
+ * 明暗三选一用 LCL 的看法胶囊(ViewModeSwitch spec,滑块会动、跟动效主题走;11-08 换掉手写的 .ob3-seg)。
  */
 import React from 'react'
 import { Moon, MonitorCog, Sun } from 'lucide-react'
+import { ViewModeSwitch } from '@lcl/components'
 import { useI18n } from '../../i18n'
 import { listLanguages, listSkins, skinSwatch, backgroundSwatch, forcedSchemeForLanguage } from '../../theme/registry'
 import { useTheme } from '../../stores/themeStore'
@@ -41,11 +43,15 @@ export function ThemeScreen(p: ThemeProps): React.ReactNode {
             })}
           </div></div>
         <div className="ob3-field"><span>{t('onboarding.theme.modeLabel')}</span>
-          <div className="ob3-seg" role="group" aria-label={t('onboarding.theme.modeLabel')}>
-            {([['light', Sun, 'onboarding.theme.light'], ['dark', Moon, 'onboarding.theme.dark'], ['system', MonitorCog, 'settings.theme.system']] as const).map(([id, Icon, label]) => (
-              <button key={id} type="button" className={mode === id ? 'on' : ''} aria-pressed={mode === id} disabled={!!forced} title={forced ? t('settings.theme.modeLocked') : undefined}
-                onClick={() => p.onThemeChange(p.themeLang, p.themeSkin, id)}><Icon size={13} aria-hidden="true" />{t(label)}</button>
-            ))}
+          <div className={`ob3-mode${forced ? ' locked' : ''}`} data-ob-mode="" title={forced ? t('settings.theme.modeLocked') : undefined}>
+            {/* 锁住时整颗 inert:点不到、Tab 不进、读屏器也不当成能用的控件(下面那行说明照读) */}
+            <div inert={!!forced}><ViewModeSwitch spec={{
+              value: mode, ariaLabel: t('onboarding.theme.modeLabel'),
+              modes: [{ value: 'light', label: t('onboarding.theme.light'), icon: Sun }, { value: 'dark', label: t('onboarding.theme.dark'), icon: Moon },
+                { value: 'system', label: t('settings.theme.system'), icon: MonitorCog }],
+              onChange: (v) => { if (!forced) p.onThemeChange(p.themeLang, p.themeSkin, v as 'light' | 'dark' | 'system') },
+            }} /></div>
+            {forced && <small className="ob3-note">{t('settings.theme.modeLockedHint')}</small>}
           </div></div>
         <div className="ob3-field"><span>{t('settings.theme.accentLabel')}</span>
           <div className="ob3-sw" role="radiogroup" aria-label={t('settings.theme.accentLabel')}>

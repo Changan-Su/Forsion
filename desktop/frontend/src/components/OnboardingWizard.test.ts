@@ -12,7 +12,10 @@ vi.mock('../services/backendService', () => ({
   saveMuseIntro: vi.fn(), saveAgentDef: vi.fn(), testProviderConnection: vi.fn(),
 }))
 vi.mock('../services/humanCollaboration', () => ({ getHumanDocument: vi.fn(), saveHumanDocument: vi.fn() }))
-vi.mock('../services/syncSetup', () => ({ applySyncChoices: vi.fn() }))
+const sync = vi.hoisted(() => ({ snap: null as null | Record<string, any> }))
+vi.mock('../services/syncSetup', () => ({
+  applySyncChoices: vi.fn(), getSync: () => sync.snap, refreshSync: vi.fn(async () => {}), subscribeSync: () => () => {},
+}))
 vi.mock('../views/agentProfileNav', () => ({ openAgentsSpace: vi.fn() }))
 vi.mock('../achievements/store', () => ({ track: vi.fn() }))
 vi.mock('../stores/themeStore', () => ({ useTheme: (pick: any) => pick({ bg: 'cream', bgSeed: '', setBg: vi.fn(), setBgSeedValue: vi.fn() }) }))
@@ -27,6 +30,7 @@ vi.mock('../views/homepageWallpaperArt', () => ({ HomeWallpaperArt: () => null }
 vi.mock('./ThemePreview', () => ({ ThemePreview: () => null }))
 vi.mock('./LocaleToggle', () => ({ LocaleToggle: () => null }))
 vi.mock('./ComputerHistoryAbout', () => ({ ComputerHistoryAbout: () => null }))
+vi.mock('./ExternalImport', () => ({ ExternalImportEntry: ({ layout }: { layout?: string }) => React.createElement('div', { 'data-import-stub': layout || 'inline' }) }))
 
 const { OnboardingWizard, ONBOARDING_DISMISS_KEY, ONBOARDING_VERSION_KEY } = await import('./OnboardingWizard')
 const api = await import('../services/backendService')
@@ -34,6 +38,7 @@ const human = await import('../services/humanCollaboration')
 const { PRODUCT } = await import('../product')
 const { openAgentsSpace } = await import('../views/agentProfileNav')
 const { CH_ASK_KEY } = await import('./computerHistoryAskMark')
+const { applySyncChoices } = await import('../services/syncSetup')
 
 let host: HTMLDivElement
 let root: Root
@@ -56,6 +61,7 @@ beforeEach(() => {
   ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
   vi.clearAllMocks()
   store.onboardingUpdate = false
+  sync.snap = null
   localStorage.clear()
   setLocaleGlobal('zh')
   PRODUCT.agentBackend = true
@@ -91,6 +97,7 @@ async function render() {
   await flush()
 }
 const stepNow = () => host.querySelector('.ob-flow')?.getAttribute('data-step')
+const youName = () => host.querySelector<HTMLInputElement>('[data-ob-you-name]')!
 const primary = () => host.querySelector<HTMLButtonElement>('[data-ob-primary]')!
 async function next() {
   expect(primary().disabled).toBe(false)
@@ -102,6 +109,14 @@ async function clickText(text: string, container: ParentNode = host) {
   expect(button, `Missing button: ${text}`).toBeTruthy()
   await act(async () => button!.click())
   await flush()
+}
+/** 模型行是设置页那个 ModelSelect:按钮 + portal 到 body 的分组菜单。 */
+const modelBtn = () => host.querySelector<HTMLButtonElement>('[data-ob-muse-model] .model-select-btn')!
+async function pickModel(name: string) {
+  await act(async () => modelBtn().click())
+  const item = [...document.querySelectorAll<HTMLButtonElement>('.composer-menu .menu-item')].find((b) => b.querySelector('.grow')?.textContent === name)
+  expect(item, `Missing model: ${name}`).toBeTruthy()
+  await act(async () => item!.click())
 }
 const sw = (label: string) => host.querySelector<HTMLButtonElement>(`[role="switch"][aria-label="${label}"]`)!
 async function type(el: HTMLTextAreaElement | HTMLInputElement | HTMLSelectElement, value: string) {
@@ -140,9 +155,11 @@ it('desktop: four screens in order; Continue saves About you, Get started writes
   expect(stepNow()).toBe('theme')
   await next()
   expect(stepNow()).toBe('you')
-  await type(host.querySelector('textarea')!, 'I am Q')
+  // 三问卡:名字没汉字 → 整节英文(界面是中文也一样);胶囊按那一节的语言写
+  await type(youName(), 'Q')
+  await act(async () => host.querySelector<HTMLButtonElement>('[data-ob-you-work="code"]')!.click())
   await next()
-  expect(human.saveHumanDocument).toHaveBeenCalledExactlyOnceWith(expect.anything(), { kind: 'human', file: 'MEMORY.md' }, 'I am Q', 'v1', 'Onboarding: About me')
+  expect(human.saveHumanDocument).toHaveBeenCalledExactlyOnceWith(expect.anything(), { kind: 'human', file: 'MEMORY.md' }, '## About me\n- Call me: Q\n- Working on: coding\n', 'v1', 'Onboarding: About me')
   expect(stepNow()).toBe('team')
   // 名字只按界面语言显示一个;卜算子没登录时模型必须自己选
   expect(host.querySelector('[data-ob-muse]')?.textContent).toContain('卜算子')
@@ -156,7 +173,7 @@ it('desktop: four screens in order; Continue saves About you, Get started writes
   // 两问:主动程度不问
   expect(host.querySelectorAll('[data-ob-muse] .ob3-q')).toHaveLength(2)
   expect(host.querySelector('[data-ob-muse]')?.textContent).toContain(translate('ob3.muse.proNote'))
-  await type(host.querySelector<HTMLSelectElement>('[data-ob-muse-model] select')!, 'm1')
+  await pickModel('Model one')
   await clickText(translate('ob3.focus.study'))
   await type(host.querySelector<HTMLInputElement>('.ob3-own input')!, ' my thesis ')
   expect(primary().textContent).toBe(translate('ob3.getStarted'))
@@ -177,10 +194,8 @@ it('signed out: the model row shows the default model the engine will use, witho
   vi.mocked(api.listModels).mockResolvedValue({ models: [{ id: 'm1', name: 'Model one', modelType: 'llm', source: 'direct' }], defaultModelId: 'm1', directProviders: [] } as any)
   await toTeam()
   const row = host.querySelector('[data-ob-muse-model]')!
-  const select = row.querySelector('select')!
   expect(row.classList.contains('need')).toBe(false)
-  expect(select.value).toBe('')
-  expect(select.options[0].textContent).toBe(translate('ob3.muse.modelDefaultOption', { model: 'Model one' }))
+  expect(modelBtn().textContent).toBe(translate('ob3.muse.modelDefaultOption', { model: 'Model one' }))
   expect(row.textContent).toContain(translate('ob3.muse.modelDefault'))
   await next()
   expect(api.saveSpecialConfig).not.toHaveBeenCalled()
@@ -192,7 +207,7 @@ it('the Background tasks model set in Settings comes first, signed in or not, an
   vi.mocked(api.listModels).mockResolvedValue({ models: [{ id: 'c1', name: 'Cloud', modelType: 'llm', source: 'forsion' }, { id: 'd1', name: 'Direct', modelType: 'llm', source: 'direct' }], backgroundModelId: 'c1', directProviders: [] } as any)
   await toTeam()
   const row = host.querySelector('[data-ob-muse-model]')!
-  expect(row.querySelector('select')!.options[0].textContent).toBe(translate('ob3.muse.modelLocalOption', { model: 'Direct' }))
+  expect(modelBtn().textContent).toBe(translate('ob3.muse.modelLocalOption', { model: 'Direct' }))
   // 登录了也不说「跟随云端 / 独立额度」:引擎先用本机这一格
   expect(row.textContent).toContain(translate('ob3.muse.modelLocal'))
   expect(row.textContent).not.toContain(translate('ob3.muse.modelCloud'))
@@ -211,9 +226,7 @@ it('signed out: a default model that is not usable here still asks for a pick', 
 it('signed in: Muse follows the cloud model by default and nothing is written for untouched choices', async () => {
   vi.mocked(window.tangu!.authStatus!).mockResolvedValue({ loggedIn: true } as any)
   await toTeam()
-  const select = host.querySelector<HTMLSelectElement>('[data-ob-muse-model] select')!
-  expect(select.value).toBe('')
-  expect(select.options[0].textContent).toBe(translate('ob3.muse.modelCloudOption'))
+  expect(modelBtn().textContent).toBe(translate('ob3.muse.modelCloudOption'))
   expect(host.querySelector('[data-ob-muse-model]')?.classList.contains('need')).toBe(false)
   expect(host.querySelector('[data-ob-muse-model]')?.textContent).toContain(translate('ob3.muse.modelCloud'))
   await next()
@@ -228,7 +241,7 @@ it('About you: a conflicting edit reloads and stays on the screen; skipping the 
   vi.mocked(human.saveHumanDocument).mockRejectedValueOnce(Object.assign(new Error('changed elsewhere'), { status: 409 }))
   await render()
   await next(); await next()
-  await type(host.querySelector('textarea')!, 'draft')
+  await type(youName(), 'draft')
   await next()
   expect(stepNow()).toBe('you')
   expect(host.textContent).toContain(translate('ob3.you.conflict'))
@@ -244,10 +257,88 @@ it('About you: a failed read never saves over the profile', async () => {
   vi.mocked(human.getHumanDocument).mockRejectedValue(new Error('offline'))
   await render()
   await next(); await next()
-  expect(host.querySelector('textarea')?.disabled).toBe(true)
+  expect(youName().disabled).toBe(true)
+  expect(host.querySelector<HTMLButtonElement>('[data-ob-you-work="code"]')?.disabled).toBe(true)
   await next()
   expect(stepNow()).toBe('team')
   expect(human.saveHumanDocument).not.toHaveBeenCalled()
+})
+
+it('About you: the engine\'s seeded template reads as empty, and filling in replaces it whole', async () => {
+  const { USER_MD_TEMPLATE } = await import('../../../../tangu-agent/src/contracts/userMdTemplate')
+  vi.mocked(human.getHumanDocument).mockResolvedValue({ content: USER_MD_TEMPLATE, version: 'v1', maxLength: 2000 } as any)
+  await render()
+  await next(); await next()
+  expect(youName().value).toBe('')
+  expect(youName().placeholder).toBe(translate('ob3.you.namePh'))
+  expect(host.querySelector('[data-ob-you] textarea')).toBeNull() // 自由框折叠着
+  expect(host.querySelector('[data-ob-you-more]')?.getAttribute('aria-expanded')).toBe('false')
+  // 没填就继续:不写(模板留着)
+  await next()
+  expect(stepNow()).toBe('team')
+  expect(human.saveHumanDocument).not.toHaveBeenCalled()
+  await act(async () => host.querySelectorAll<HTMLButtonElement>('.ob3-dots button')[2].click())
+  await flush()
+  await type(youName(), '小鹿')
+  await act(async () => host.querySelector<HTMLButtonElement>('[data-ob-you-style="short"]')!.click())
+  await next()
+  expect(human.saveHumanDocument).toHaveBeenCalledExactlyOnceWith(expect.anything(), expect.anything(), '## 关于我\n- 称呼：小鹿\n- 回答：简短直接\n', 'v1', 'Onboarding: About me')
+})
+
+it('About you: an existing profile fills the questions in place, keeps the rest word for word, and is not rewritten untouched', async () => {
+  vi.mocked(human.getHumanDocument).mockResolvedValue({ content: 'Call me: 小鹿\r\n住在杭州\r\n\r\n\r\n', version: 'v1', maxLength: 2000 } as any)
+  await render()
+  await next(); await next()
+  expect(youName().value).toBe('小鹿')
+  // 认不得的行放进自由框,并且展开
+  expect(host.querySelector('[data-ob-you-more]')?.getAttribute('aria-expanded')).toBe('true')
+  expect(host.querySelector<HTMLTextAreaElement>('[data-ob-you] textarea')?.value).toBe('住在杭州')
+  // 原文的换行风格 / 末尾空行不同,不算改过
+  await next()
+  expect(human.saveHumanDocument).not.toHaveBeenCalled()
+  await act(async () => host.querySelectorAll<HTMLButtonElement>('.ob3-dots button')[2].click())
+  await flush()
+  // 单选再点一次取消;回答语言再点一次回到「跟着我说的话」
+  const style = () => host.querySelector<HTMLButtonElement>('[data-ob-you-style="why"]')!
+  await act(async () => style().click())
+  expect(style().getAttribute('aria-pressed')).toBe('true')
+  await act(async () => style().click())
+  expect(style().getAttribute('aria-pressed')).toBe('false')
+  const zh = () => host.querySelector<HTMLButtonElement>('[data-ob-you-lang="zh"]')!
+  await act(async () => zh().click())
+  await act(async () => zh().click())
+  expect(host.querySelector('[data-ob-you-lang="auto"]')?.getAttribute('aria-pressed')).toBe('true')
+  await act(async () => zh().click())
+  await next()
+  expect(human.saveHumanDocument).toHaveBeenCalledExactlyOnceWith(expect.anything(), expect.anything(), '## 关于我\n- 称呼：小鹿\n- 回答用中文\n\n住在杭州\n', 'v1', 'Onboarding: About me')
+})
+
+it('About you: a profile over the size limit is not saved; the screen stays with the error', async () => {
+  vi.mocked(human.getHumanDocument).mockResolvedValue({ content: '', version: 'v1', maxLength: 20 } as any)
+  await render()
+  await next(); await next()
+  await type(youName(), 'A long enough name')
+  await next()
+  expect(human.saveHumanDocument).not.toHaveBeenCalled()
+  expect(stepNow()).toBe('you')
+  expect(host.querySelector('.ob3-foot [role="alert"]')?.textContent).toContain(translate('ob3.you.tooLong', { max: 20 }))
+})
+
+it('About you: "Bring it over from another AI" reuses the shared import entry; Enter behind its sheet does not continue', async () => {
+  await render()
+  await next(); await next()
+  expect(host.querySelector('.ob3-imp [data-import-stub="row"]')).not.toBeNull()
+  const sheet = document.createElement('div')
+  sheet.setAttribute('role', 'dialog'); sheet.setAttribute('aria-modal', 'true')
+  document.body.appendChild(sheet)
+  try {
+    await act(async () => { document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })) })
+    await flush()
+    expect(stepNow()).toBe('you')
+  } finally { sheet.remove() }
+  await act(async () => { document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })) })
+  await flush()
+  expect(stepNow()).toBe('team')
 })
 
 it('team: a failed write keeps the screen with the error and does not finish', async () => {
@@ -266,9 +357,9 @@ it('signed in: another Forsion model counts against the main quota; a direct one
   vi.mocked(api.listModels).mockResolvedValue({ models: [{ id: 'c1', name: 'Cloud', modelType: 'llm', source: 'forsion' }, { id: 'd1', name: 'Direct', modelType: 'llm', source: 'direct' }], directProviders: [] } as any)
   await toTeam()
   const row = host.querySelector('[data-ob-muse-model]')!
-  await type(row.querySelector('select')!, 'c1')
+  await pickModel('Cloud')
   expect(row.textContent).toContain(translate('ob3.muse.modelMain'))
-  await type(row.querySelector('select')!, 'd1')
+  await pickModel('Direct')
   expect(row.textContent).toContain(translate('ob3.muse.modelBilled'))
 })
 
@@ -364,12 +455,12 @@ it('team: after a partial failure, a choice changed back is still written on ret
   vi.mocked(window.tangu!.authStatus!).mockResolvedValue({ loggedIn: true } as any)
   vi.mocked(api.saveMuseIntro).mockRejectedValueOnce(new Error('intro write failed'))
   await toTeam()
-  await type(host.querySelector<HTMLSelectElement>('[data-ob-muse-model] select')!, 'm1')
+  await pickModel('Model one')
   await next()
   expect(api.saveSpecialConfig).toHaveBeenLastCalledWith(expect.anything(), { muse: { modelId: 'm1' } })
   expect(stepNow()).toBe('team')
   // 用户改回「跟随云端」:盘上已经是 m1,重试时要把空的写回去
-  await type(host.querySelector<HTMLSelectElement>('[data-ob-muse-model] select')!, '')
+  await pickModel(translate('ob3.muse.modelCloudOption'))
   await next()
   expect(api.saveSpecialConfig).toHaveBeenLastCalledWith(expect.anything(), { muse: { modelId: '' } })
   expect(api.saveMuseIntro).toHaveBeenLastCalledWith(expect.anything(), {})
@@ -379,7 +470,7 @@ it('team: after a partial failure, a choice changed back is still written on ret
 it('team: the focus memory is not written twice when a retry follows a partial failure', async () => {
   vi.mocked(api.saveSpecialConfig).mockRejectedValueOnce(new Error('config write failed'))
   await toTeam()
-  await type(host.querySelector<HTMLSelectElement>('[data-ob-muse-model] select')!, 'm1')
+  await pickModel('Model one')
   await clickText(translate('ob3.focus.study'))
   await next()
   expect(stepNow()).toBe('team')
@@ -453,6 +544,126 @@ it('start: signed in, the sync choices no longer offer an Agents box and point t
   const account = host.querySelector('[data-ob-account]')!
   expect(account.textContent).not.toContain(translate('onboarding.connect.sync.agents'))
   expect(account.querySelector('[data-ob-sync-agents]')?.textContent).toBe(translate('ob3.sync.agentsWhere'))
+})
+
+const snapshot = (over: Record<string, any> = {}) => ({
+  signedIn: true, decided: false, notes: { on: false, available: true }, agents: { on: false }, plugins: { on: true }, ...over,
+})
+async function walkToEnd() {
+  await next(); await next(); await next()
+  expect(stepNow()).toBe('team')
+  await next()
+  expect(props.onFinish).toHaveBeenCalledTimes(1)
+}
+
+it('start: signed in, sync is marked Beta and off by default; an untouched choice is finished as all off', async () => {
+  vi.mocked(window.tangu!.authStatus!).mockResolvedValue({ loggedIn: true, nickname: 'Q' } as any)
+  ;(window as any).remoteSync = {}
+  sync.snap = snapshot() // 插件同步没人定过(没有关掉的记号 = 算开着):按新缺省显示关
+  try {
+    await render()
+    const box = host.querySelector('[data-ob-sync]')!
+    expect(box.querySelector('.ob3-beta')?.textContent).toBe(translate('ob3.sync.beta'))
+    expect(box.textContent).toContain(translate('ob3.sync.betaHint'))
+    const boxes = [...box.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')]
+    expect(boxes).toHaveLength(2)
+    expect(boxes.every((b) => !b.checked)).toBe(true)
+    await walkToEnd()
+    // 只交出和现状不一样的那一项:插件同步原来算开着,这次按缺省关
+    expect(applySyncChoices).toHaveBeenCalledExactlyOnceWith({ notes: false, agents: false, plugins: false }, ['plugins'])
+  } finally { delete (window as any).remoteSync }
+})
+
+it('start: sync that is already on stays ticked, so finishing does not switch it off', async () => {
+  vi.mocked(window.tangu!.authStatus!).mockResolvedValue({ loggedIn: true, nickname: 'Q' } as any)
+  ;(window as any).remoteSync = {}
+  sync.snap = snapshot({ decided: true, notes: { on: true, available: true }, agents: { on: true }, plugins: { on: true } })
+  try {
+    await render()
+    const boxes = [...host.querySelectorAll<HTMLInputElement>('[data-ob-sync] input[type="checkbox"]')]
+    expect(boxes.map((b) => b.checked)).toEqual([true, true])
+    await walkToEnd()
+    expect(applySyncChoices).toHaveBeenCalledExactlyOnceWith({ notes: true, agents: true, plugins: true }, [])
+  } finally { delete (window as any).remoteSync }
+})
+
+it('start: when the notes sync state could not be read, its box is hidden and finishing never touches it', async () => {
+  vi.mocked(window.tangu!.authStatus!).mockResolvedValue({ loggedIn: true, nickname: 'Q' } as any)
+  ;(window as any).remoteSync = {}
+  // 快照读不到 remoteSync 时 notes 是假的「关」(available 也是假):不能拿来当底,否则状态恢复后会把开着的智库同步关掉
+  sync.snap = snapshot({ decided: true, notes: { on: false, available: false }, plugins: { on: true } })
+  try {
+    await render()
+    const labels = [...host.querySelectorAll('[data-ob-sync] label')].map((l) => l.textContent)
+    expect(labels).toEqual([translate('onboarding.connect.sync.plugins')])
+    await walkToEnd()
+    expect(applySyncChoices).toHaveBeenCalledExactlyOnceWith(expect.anything(), [])
+  } finally { delete (window as any).remoteSync }
+})
+
+it('start: when the sync state cannot be read, no boxes are shown and finishing leaves sync alone', async () => {
+  vi.mocked(window.tangu!.authStatus!).mockResolvedValue({ loggedIn: true, nickname: 'Q' } as any)
+  ;(window as any).remoteSync = {}
+  sync.snap = null
+  try {
+    await render()
+    expect(host.querySelectorAll('[data-ob-sync] input[type="checkbox"]')).toHaveLength(0)
+    await walkToEnd()
+    expect(applySyncChoices).not.toHaveBeenCalled()
+  } finally { delete (window as any).remoteSync }
+})
+
+it('start: connected cards get no accent frame; the state shows in the badge and the tile check', async () => {
+  vi.mocked(window.tangu!.authStatus!).mockResolvedValue({ loggedIn: true, nickname: 'Q' } as any)
+  vi.mocked(window.tangu!.listProviders!).mockResolvedValue([{ providerId: 'openai' }] as any)
+  await render()
+  expect(host.querySelector('[data-ob-account]')!.classList.contains('pick')).toBe(false)
+  expect(host.querySelector('[data-ob-channels]')!.classList.contains('pick')).toBe(false)
+  expect(host.querySelector('[data-ob-account] .ob3-chip')?.textContent).toBe(translate('ob3.account.signedIn'))
+  expect(host.querySelector('[data-channel="key"] .ob3-mark')).not.toBeNull()
+})
+
+it('screens slide in the direction you go: Continue forwards, Back backwards', async () => {
+  await render()
+  const shell = () => host.querySelector('.ob-flow')!
+  expect(shell().getAttribute('data-nav')).toBeNull()
+  await next()
+  expect(shell().getAttribute('data-nav')).toBe('fwd')
+  await act(async () => host.querySelector<HTMLButtonElement>('.ob3-back')!.click())
+  await flush()
+  expect(stepNow()).toBe('start')
+  expect(shell().getAttribute('data-nav')).toBe('back')
+  // 开着时把菜单层抬到引导上面(模型选择器的下拉 portal 到 body)
+  expect(document.documentElement.hasAttribute('data-ob-open')).toBe(true)
+})
+
+it('theme: light / dark / system is the shared view-mode capsule', async () => {
+  await render()
+  await next()
+  const tabs = [...host.querySelectorAll<HTMLButtonElement>('[data-ob-mode] [role="tab"]')]
+  expect(tabs.map((b) => b.getAttribute('aria-label'))).toEqual([translate('onboarding.theme.light'), translate('onboarding.theme.dark'), translate('settings.theme.system')])
+  expect(tabs[0].getAttribute('aria-selected')).toBe('true')
+  await act(async () => tabs[1].click())
+  expect(props.onThemeChange).toHaveBeenCalledWith('lovable', 'cream', 'dark')
+})
+
+it('team: closing the model menu gives focus back to the picker, so Enter does not finish the guide', async () => {
+  await toTeam()
+  await act(async () => modelBtn().click())
+  expect(document.querySelector('.composer-menu')).not.toBeNull()
+  await act(async () => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })) })
+  expect(document.querySelector('.composer-menu')).toBeNull()
+  expect(document.activeElement).toBe(modelBtn())
+  await pickModel('Model one')
+  expect(document.activeElement).toBe(modelBtn())
+  expect(props.onFinish).not.toHaveBeenCalled()
+})
+
+it('team: Muse shows its own avatar (the uploaded picture, or its initial), not a star', async () => {
+  await toTeam()
+  const ava = host.querySelector('[data-ob-muse-avatar]')!
+  expect(ava.querySelector('svg')).toBeNull()
+  expect(ava.textContent).toBe('卜')
 })
 
 it('team: failing to reach the engine on Get started reports it and leaves the buttons usable', async () => {
@@ -629,7 +840,7 @@ it('Enter runs the primary action; the dots reopen a screen already visited', as
 it('closing only once: Enter while the guide is closing does not save a skipped screen', async () => {
   await render()
   await next(); await next()
-  await type(host.querySelector('textarea')!, 'not saved')
+  await type(youName(), 'not saved')
   await clickText(translate('onboarding.nav.skip'))
   await act(async () => { document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })) })
   await flush()

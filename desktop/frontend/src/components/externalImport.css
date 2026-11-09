@@ -1,5 +1,6 @@
 /* 从其他 AI 导入(ExternalImport.tsx):审阅单 + 画像页顶上的提示行 / 完成条。平卡不描边(DESIGN §卡片描边纪律)。 */
 .imp-sheet.modal { --modal-w: 600px; height: min(742px, 92vh); display: flex; flex-direction: column; }
+.imp-sheet.modal:focus { outline: none; } /* 打开时焦点落在单本身(为了 Tab 从单里起步),不画框 */
 .imp-sum { margin: 2px 18px 0; color: var(--text-muted); font-size: var(--ui-font-caption); }
 .imp-sum.imp-error { color: var(--danger, var(--text)); }
 .imp-body { flex: 1; min-height: 0; overflow: auto; padding: 0 18px 4px; }
