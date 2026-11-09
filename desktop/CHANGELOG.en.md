@@ -2,6 +2,15 @@
 
 <!-- English edition of CHANGELOG.md: same "## <version> (<date>)" headings, one bullet per Chinese bullet. Add both when releasing. -->
 
+## 2.14.0 (2026-11-09)
+
+Stable release: everything from 2.13.8-beta.1 through 2.14.0-beta.1 (see the sections below), plus these changes since 2.14.0-beta.1:
+
+- **Home**: The side columns are now symmetric. If only one side has widgets, the other side keeps the same empty width so the middle stays centered. The middle is 720 wide by default and can shrink to 500 in narrower windows; narrower still, both sides fold into icon strips together.
+- **Background quota**: The Muse model menus (first-run guide, Settings → Models → Default models → Background tasks, and the Muse model in Settings → Agents) mark the model that counts toward the background quota with a green "Background quota" tag. If you pick a Forsion model that doesn't count, the hint in the guide turns yellow, and the icon in front explains how quota works.
+- Fixed: closing a panel right after it started opening could occasionally throw an error (droplet / stretch motion).
+- Engine 2.14.0, with Forsion Extend 0.10.0.
+
 ## 2.14.0-beta.1 (2026-11-09)
 
 Preview build: only for people who chose the preview channel. Stable users won't receive it.
