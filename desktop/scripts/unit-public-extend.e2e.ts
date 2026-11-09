@@ -8,7 +8,10 @@
  *     ④ 设置有「Forsion 云端」,只有 Extend 的子页,没有同步 / 连接 / 诊断;
  *     ⑤ 蓬洲云 Space 进得去,我的云盘能新建文件夹;选一个中文名文件上传,云端收到的名字和内容对得上;下载落成浏览器下载、名字内容对得上;
  *     ⑥ 云端请求都盖着访客 token(页面账号代发),没有别的身份;
- *     ⑦ 负对照:Unit 没装 Extend(同服务器的 /admin/)→ 没有商店入口、没有空的「Forsion 云端」。
+ *     ⑦ 负对照:Unit 没装 Extend(同服务器的 /admin/)→ 没有商店入口、没有空的「Forsion 云端」、没有反馈入口;
+ *     ⑧ 反馈(2026-11-09):Extend 把提交通道交给宿主后,Ribbon 有反馈图标(商店后面)、命令面板有「反馈」、聊天输入框认 /feedback,
+ *        提交落到云端 /api/feedback、盖访客 token;window.tangu 上只多 submitFeedback 这一个键。
+ *        EXTEND_DIR 里的包还没有这条接缝(老版本 Extend × 新宿主)时,只钉「照旧没有入口、不报错」。
  *
  * 前置:node scripts/build-unit-web.mjs(产物在 desktop/unit-web-dist);EXTEND_DIR = build 过的 Extend 检出(dist/main.js 在)。
  * 跑:EXTEND_DIR=… npx tsx scripts/unit-public-extend.e2e.ts   截图落 SHOT_DIR(缺省 /tmp)。CHROMIUM_EXE 可覆盖。
@@ -98,6 +101,8 @@ const seen: Array<{ method: string; url: string; auth: string; source: string }>
 const PDF_BYTES = '%PDF-1.4 fake'
 /** 云端收到的上传(multipart 按 filename* 解名字,同服务端 busboy)。 */
 const uploads: Array<{ name: string | null; ascii: string | null; body: string; parentId: string | null }> = []
+/** 云端收到的反馈单(POST /api/feedback 的 JSON)。 */
+const tickets: Array<{ description?: string; attachments?: Array<{ filename?: string; size?: number }> }> = []
 
 function fakeCloud(req: http.IncomingMessage, res: http.ServerResponse): boolean {
   const url = req.url || '/'
@@ -117,6 +122,16 @@ function fakeCloud(req: http.IncomingMessage, res: http.ServerResponse): boolean
       uploads.push({ name: star ? decodeURIComponent(star) : null, ascii: /filename="([^"]*)"/.exec(raw)?.[1] ?? null, body: file, parentId: /name="parentId"\r\n\r\n([^\r\n]*)/.exec(raw)?.[1] ?? null })
       res.writeHead(201, { 'Content-Type': 'application/json' })
       res.end(JSON.stringify({ id: 'up1' }))
+    })
+    return true
+  }
+  if (req.method === 'POST' && url === '/api/feedback') {
+    const chunks: Buffer[] = []
+    req.on('data', (c: Buffer) => chunks.push(c))
+    req.on('end', () => {
+      try { tickets.push(JSON.parse(Buffer.concat(chunks).toString('utf8'))) } catch { tickets.push({}) }
+      res.writeHead(201, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ id: `T-${tickets.length}` }))
     })
     return true
   }
@@ -312,6 +327,67 @@ async function main(): Promise<void> {
     // 使用指南的视图在网页上不注册(它讲的是桌面端):Space 不该露出来
     check('使用指南 Space 不在网页的 Ribbon 上', !ribbon.includes('forsion-guide'), ribbon.join(', '))
 
+    // ⑧ 反馈:通道由 Extend 交给宿主,入口晚于启动才注册
+    const canFeedback = fs.readFileSync(path.join(EXTEND_DIR, 'dist/main.js'), 'utf8').includes('provideFeedbackChannel')
+    const fbBridge = await page.evaluate(() => { const t = (window as any).tangu; return { submit: typeof t?.submitFeedback, fetch: typeof t?.cloudFetch, invoke: typeof t?.cloudInvoke } })
+    const bottom = await page.evaluate(() => Array.from(document.querySelectorAll('.rb [data-id^="rb-"]')).map((e) => (e as HTMLElement).dataset.id))
+    if (!canFeedback) {
+      console.log('INFO  这份 Extend 还没有 provideFeedbackChannel:只钉老版本照旧')
+      check('⑧ 老版本 Extend:没有反馈入口,submitFeedback 不在', fbBridge.submit === 'undefined' && !bottom.includes('rb-feedback'), JSON.stringify({ fbBridge, bottom }))
+    } else {
+      check('⑧ window.tangu 上只多 submitFeedback,cloudFetch / cloudInvoke 仍不外露', fbBridge.submit === 'function' && fbBridge.fetch === 'undefined' && fbBridge.invoke === 'undefined', JSON.stringify(fbBridge))
+      const fbIcon = page.locator('[data-id="rb-feedback"]')
+      const inBar = await page.locator('.rb [data-id="rb-feedback"]').first().isVisible().catch(() => false)
+      if (!inBar) await page.locator('.rb-more').first().click()
+      await fbIcon.last().waitFor()
+      await shot(page, 'feedback-ribbon')
+      await fbIcon.last().click()
+      await page.locator('.feedback-modal').waitFor()
+      check('⑧ Ribbon 的反馈图标打开反馈页', true, inBar ? '在条上' : '在「更多」里')
+      await page.locator('#feedback-description').fill('网页主入口上提的反馈')
+      // 诊断信息缺省勾着:等附件备好再提交
+      await page.locator('.feedback-footer .btn.primary:not([disabled])').waitFor()
+      await page.waitForTimeout(500) // 面板入场动画走完再拍
+      await shot(page, 'feedback-form')
+      await page.locator('.feedback-footer .btn.primary').click()
+      await page.locator('.feedback-success').waitFor()
+      const ticketText = await page.locator('.feedback-success').innerText()
+      const sent = seen.filter((r) => r.method === 'POST' && r.url === '/api/feedback')
+      check('⑧ 提交落到云端 /api/feedback,盖访客 token,带诊断附件', tickets.length === 1 && sent.length === 1 && sent[0]!.auth === `Bearer ${TOKEN}`
+        && String(tickets[0]!.description).includes('网页主入口上提的反馈') && tickets[0]!.attachments?.length === 1 && (tickets[0]!.attachments![0]!.size ?? 0) > 0,
+        JSON.stringify({ n: tickets.length, description: tickets[0]?.description, attachments: tickets[0]?.attachments?.map((a) => `${a.filename}:${a.size}`) }))
+      check('⑧ 成功页给出单号', ticketText.includes('T-1'), ticketText.replace(/\n+/g, ' / ').slice(0, 120))
+      await shot(page, 'feedback-success')
+      await page.locator('.feedback-footer .btn.primary').click()
+      await page.locator('.feedback-modal').waitFor({ state: 'detached' })
+
+      // 命令面板:用 Ribbon 的命令格打开(热键随平台不同),搜「反馈」回车 → 反馈页
+      await clickRibbon('rb-cmd')
+      await page.locator('.cmd-input').waitFor()
+      await page.locator('.cmd-input').fill('feedback')
+      await page.waitForTimeout(300)
+      const rows = await page.locator('.cmd-item').allInnerTexts()
+      check('⑧ 命令面板搜得到「反馈」', rows.some((r) => r.includes('反馈')), JSON.stringify(rows.slice(0, 6)))
+      await page.locator('.cmd-item').filter({ hasText: '反馈' }).first().click()
+      await page.locator('.feedback-modal').waitFor()
+      check('⑧ 命令面板的「反馈」打开反馈页', true)
+      await page.locator('.feedback-head .icon-btn').click()
+      await page.locator('.feedback-modal').waitFor({ state: 'detached' })
+
+      // 输入框的 /feedback:这份夹具带不带聊天视图看产品配置,有输入框才测
+      const composer = page.locator('textarea.t2c-ta').first()
+      if (await composer.count()) {
+        await composer.click()
+        await page.keyboard.type('/feedback 斜杠带来的描述')
+        await page.keyboard.press('Enter')
+        await page.locator('.feedback-modal').waitFor()
+        const prefilled = await page.locator('#feedback-description').inputValue()
+        check('⑧ 输入框 /feedback 打开反馈页并带上描述', prefilled === '斜杠带来的描述', prefilled)
+        await page.locator('.feedback-head .icon-btn').click()
+        await page.locator('.feedback-modal').waitFor({ state: 'detached' })
+      } else console.log('INFO  这份夹具没有聊天输入框(产品配置没开 Tangu):/feedback 由另一条台架测')
+    }
+
     // ⑥ 身份
     const others = seen.filter((r) => r.auth !== `Bearer ${TOKEN}`)
     check('⑥ 云端请求都盖着访客 token', seen.length > 5 && others.length === 0, `${seen.length} 条,其它身份 ${others.length}:${JSON.stringify(others.slice(0, 3))}`)
@@ -327,6 +403,8 @@ async function main(): Promise<void> {
     const bareIds = await page2.locator('.rb [data-id]').evaluateAll((els) => els.map((e) => (e as HTMLElement).dataset.id))
     const bareMarket = await page2.evaluate(() => typeof (window as any).tangu?.marketList)
     check('⑦ 没装 Extend:没有商店入口', !bareIds.includes('rb-market') && bareMarket === 'undefined', `${bareIds.join(', ')} marketList=${bareMarket}`)
+    const bareFeedback = await page2.evaluate(() => typeof (window as any).tangu?.submitFeedback)
+    check('⑦ 没装 Extend:没有反馈入口', !bareIds.includes('rb-feedback') && bareFeedback === 'undefined', `submitFeedback=${bareFeedback}`)
     await page2.locator('.rb [data-id="rb-settings"]').first().click()
     await page2.locator('.settings-nav').first().waitFor()
     const bareNav = await page2.locator('.settings-nav').first().innerText()

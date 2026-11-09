@@ -1375,6 +1375,84 @@ describe('openFeedback 带上当前会话', () => {
     expect(openFloatingPanel.mock.calls[0][0].params.session).toBeUndefined()
   })
 
+  // 登录状态是连上引擎后才读进来的:引擎没连上(网页 / 手机的远端引擎)时 authInfo 是 null = 不知道,不能当没登录
+  it('登录状态未知:现问一次账号,登录着就开;描述先存下', async () => {
+    const authStatus = vi.fn(async () => ({ loggedIn: true }))
+    vi.stubGlobal('window', { tangu: { authStatus } })
+    useApp.setState({ authInfo: null, feedbackOpen: false })
+    expect(useApp.getState().openFeedback('引擎连不上')).toBe(true)
+    expect(useApp.getState().feedbackOpen).toBe(false)
+    await vi.waitFor(() => expect(useApp.getState().feedbackOpen).toBe(true))
+    expect(useApp.getState().feedbackDraft).toBe('引擎连不上')
+    expect(authStatus).toHaveBeenCalledTimes(1)
+    useApp.setState({ feedbackOpen: false })
+  })
+
+  it('登录状态未知而账号说没登录 / 问不到:不开,去登录页,描述不丢', async () => {
+    for (const authStatus of [vi.fn(async () => ({ loggedIn: false })), vi.fn(async () => { throw new Error('offline') })]) {
+      vi.stubGlobal('window', { tangu: { authStatus } })
+      useApp.setState({ authInfo: null, feedbackOpen: false, settingsOpen: false, feedbackDraft: '' })
+      expect(useApp.getState().openFeedback('写了一半')).toBe(true)
+      await vi.waitFor(() => expect(useApp.getState().settingsOpen).toBe(true))
+      expect(useApp.getState().feedbackOpen).toBe(false)
+      expect(useApp.getState().feedbackDraft).toBe('写了一半')
+    }
+    useApp.setState({ settingsOpen: false })
+  })
+
+  // Codex 评审:等账号查询的这段里,用户切了会话 / 关了反馈(含通道被撤),晚到的结果不能再动界面
+  it('等账号时切了会话:这次请求作废,不拿后一条会话去开(诊断附件会挂错)', async () => {
+    let answer!: (v: { loggedIn: boolean }) => void
+    vi.stubGlobal('window', { tangu: { openFloatingPanel, authStatus: () => new Promise((r) => { answer = r }) } })
+    useApp.setState({ authInfo: null, activeId: 's1' })
+    expect(useApp.getState().openFeedback('在 s1 里写的')).toBe(true)
+    useApp.setState({ activeId: 's2' })
+    answer({ loggedIn: true })
+    await new Promise((r) => setTimeout(r, 0))
+    expect(openFloatingPanel).not.toHaveBeenCalled()
+    expect(useApp.getState().feedbackDraft).toBe('在 s1 里写的')
+  })
+
+  it('等账号时没切会话:带着调用那一刻的会话去开', async () => {
+    let answer!: (v: { loggedIn: boolean }) => void
+    vi.stubGlobal('window', { tangu: { openFloatingPanel, authStatus: () => new Promise((r) => { answer = r }) } })
+    useApp.setState({ authInfo: null, activeId: 's1' })
+    useApp.getState().openFeedback()
+    answer({ loggedIn: true })
+    await vi.waitFor(() => expect(openFloatingPanel).toHaveBeenCalledTimes(1))
+    expect(openFloatingPanel.mock.calls[0][0].params.session.id).toBe('s1')
+  })
+
+  it('等账号时反馈被关掉(通道被撤也走这里)/ 又点了一次:晚到的结果不再开、不再踢去登录页', async () => {
+    const answers: Array<(v: { loggedIn: boolean }) => void> = []
+    vi.stubGlobal('window', { tangu: { authStatus: () => new Promise((r) => { answers.push(r) }) } })
+    useApp.setState({ authInfo: null, feedbackOpen: false, settingsOpen: false })
+    useApp.getState().openFeedback()
+    useApp.getState().closeFeedback()
+    answers[0]!({ loggedIn: true })
+    await new Promise((r) => setTimeout(r, 0))
+    expect(useApp.getState().feedbackOpen).toBe(false)
+
+    useApp.getState().openFeedback()
+    useApp.getState().openFeedback()
+    answers[1]!({ loggedIn: false }) // 前一次的「没登录」已作废
+    await new Promise((r) => setTimeout(r, 0))
+    expect(useApp.getState().settingsOpen).toBe(false)
+    answers[2]!({ loggedIn: true })
+    await vi.waitFor(() => expect(useApp.getState().feedbackOpen).toBe(true))
+    useApp.setState({ feedbackOpen: false })
+  })
+
+  it('明确没登录(authInfo.loggedIn === false):照旧当场拒绝,不再问', () => {
+    const authStatus = vi.fn(async () => ({ loggedIn: true }))
+    vi.stubGlobal('window', { tangu: { authStatus } })
+    useApp.setState({ authInfo: { loggedIn: false } as never, feedbackOpen: false, settingsOpen: false })
+    expect(useApp.getState().openFeedback()).toBe(false)
+    expect(authStatus).not.toHaveBeenCalled()
+    expect(useApp.getState().feedbackOpen).toBe(false)
+    useApp.setState({ settingsOpen: false })
+  })
+
   // 设置浮窗同理:「高级 → 导出会话日志」导错会话是静默的,人眼看不出
   it('设置浮窗也带上当前会话', () => {
     useApp.getState().openSettings('advanced')
