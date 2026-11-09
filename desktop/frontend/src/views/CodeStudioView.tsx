@@ -336,7 +336,14 @@ function ProjectStudio({ root, extendView, onActivate, briefSaveError, retryBrie
     requestTerminalFocus()
     useWorkspace.getState().openView('terminal', { cwd: root, reuseKey: `studio:${root}` }, 'bottom')
   }
+  // 前置检查是异步的:连点两下别起两份发布(Extend 的弹窗会顶掉前一个,前一个收尾时又把预览放出来盖住后一个)
+  const publishInFlight = useRef(false)
   const publish = async () => {
+    if (publishInFlight.current) return
+    publishInFlight.current = true
+    try { await publishChecked() } finally { publishInFlight.current = false }
+  }
+  const publishChecked = async () => {
     const saved = await flushStudioEditors(root)
     if (!mounted.current || useCodeStudio.getState().activeProject !== root) return
     if (!saved) {
