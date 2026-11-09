@@ -170,7 +170,7 @@ function formatDate(value?: string | null): string {
   return formatDateLabel(date, { year: 'always' })
 }
 
-export function MarketModal({ onClose, initialQuery, initialItemId, initialDetailTab, initialTab }: { onClose?: () => void; initialQuery?: string; initialItemId?: string; initialDetailTab?: string; initialTab?: string } = {}) {
+export function MarketModal({ onClose, initialQuery, initialItemId, initialDetailTab, initialTab, initialStoreView }: { onClose?: () => void; initialQuery?: string; initialItemId?: string; initialDetailTab?: string; initialTab?: string; initialStoreView?: string } = {}) {
   const { t, locale } = useI18n()
   const pluginUpdates = useMarketPluginUpdates()
   const settingsViews = usePluginStore((s) => s.settingsViews)
@@ -186,7 +186,8 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
   // 插件提供的页:只认已启用的首方内置包(locked),设备页不显示。按 group 分组,组与页都保持注册顺序。
   const allStoreViews = usePluginStore((s) => s.storeViews)
   const storeViews = useMemo(() => (!ownAccount ? [] : allStoreViews.filter((o) => activeIds.includes(o.pluginId) && !!plugins.find((p) => p.id === o.pluginId)?.locked)), [ownAccount, allStoreViews, activeIds, plugins])
-  const [storeViewKey, setStoreViewKey] = useState<string | null>(null)
+  // initialStoreView = `<pluginId>:<viewId>`(如 Forsion Extend 的「买额度包」落到物品页);只认下面那份首方内置包的页,认不出就是商店首页
+  const [storeViewKey, setStoreViewKey] = useState<string | null>(initialStoreView && /^[a-z0-9-]+:[a-z0-9-]+$/i.test(initialStoreView) ? initialStoreView : null)
   const storeViewKeyOf = (o: { pluginId: string; item: { id: string } }): string => `${o.pluginId}:${o.item.id}`
   // 页面所属的插件被停用 / 卸载 → 找不到了,自然退回 tab 指着的那页
   const storeView = storeViewKey ? storeViews.find((o) => storeViewKeyOf(o) === storeViewKey) ?? null : null
