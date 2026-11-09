@@ -48,7 +48,7 @@ import { compareMarketVersions } from '../../../shared/marketPluginUpdates'
 import { ConnectorStore } from './Connectors'
 import { connectorsSupported } from '../services/connectorService'
 import { SkillAgentPicker, applySkillAgentChoice, skillAgentsSupported, useSkillAgents, type SkillAgentChoice } from './MarketSkillAgents'
-import { CODE_TYPES, SourceConfirm, SourceInfoRow, SourceNavGroup, SourceState, SourceTrustRow, sourceErrorText, useStoreSources } from './MarketSources'
+import { CODE_TYPES, needsSignIn, SourceConfirm, SourceInfoRow, SourceNavGroup, SourceState, SourceTrustRow, sourceErrorText, useStoreSources } from './MarketSources'
 import type { StoreSourceCatalog } from '../../../shared/storeSources'
 
 registerMessages({
@@ -986,6 +986,7 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
               <section className="mk-section" data-store-source-page={activeSource.id}>
                 {activeSource.disabled ? <SourceState kind="disabled" onEnable={() => onToggleSource(true)} />
                   : sourceLoading && !sourceCards.length ? <Skeleton variant="list" />
+                  : sourceCat?.error && !sourceCards.length && needsSignIn(sourceCat.error) ? <SourceState kind="signin" onRetry={() => void loadSource(activeSource.id, true)} />
                   : sourceCat?.error && !sourceCards.length ? <SourceState kind="error" error={sourceCat.error} onRetry={() => void loadSource(activeSource.id, true)} />
                   : !sourceCards.length ? <SourceState kind="empty" />
                   : <>

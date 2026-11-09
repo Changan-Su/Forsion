@@ -33,16 +33,20 @@ const progressListeners = new Set<(p: MarketInstallProgress) => void>()
 const emit = (p: MarketInstallProgress): void => progressListeners.forEach((cb) => cb(p))
 const tick = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
 
-// 商店来源(第三方目录):一个插件声明的 GitHub 来源 + 一个用户贴的地址(Forsion Git 私有仓的那种这一版还不开)。
+// 商店来源(第三方目录):一个插件声明的 GitHub 来源 + 一个用户贴的地址 + 一个 Forsion Git 私有仓(没登录时给登录引导,
+// 点登录(forsionLogin)后列出条目;登录后 acme/private 是「没有读权限」)。
 // 卡片 id 走 `src_<来源>_<条目>`,与主进程同形;出处记录按安装时写。
 // 来源名由主进程按界面语言挑好再给渲染层(LocalText → string),台架照此按页面语言给。
 const EN = typeof navigator !== 'undefined' && /^en/i.test(navigator.language)
 const SRC_TITLE = EN ? 'Image skills' : '图片 Skills 大全'
 const SRC = '0a1b2c3d'
 const SRC_URL = '5e6f7a8b'
+const SRC_GIT = '3c3c3c3c'
+let signedIn = false
 const sourceRows: StoreSourceInfo[] = [
   { id: SRC, title: SRC_TITLE, origin: 'plugin', pluginId: 'image-skills', uri: 'https://github.com/pixel-lab/image-skills', kind: 'github', icon: 'image', trusted: false, disabled: false },
   { id: SRC_URL, title: EN ? 'Acme design guide' : 'Acme 设计规范', origin: 'user', uri: 'https://design.acme.example/forsion-store.json', kind: 'url', trusted: true, disabled: false },
+  { id: SRC_GIT, title: EN ? 'Team kit' : '团队工具箱', origin: 'user', uri: 'https://git.forsion.net/acme/team-kit', kind: 'forsion-git', trusted: true, disabled: false },
 ]
 const srcItem = (source: string, sourceTitle: string, id: string, type: MarketCard['type'], name: string, summary: string, version: string, tags: string[]): MarketDetail => ({
   id: `src_${source}_${id}`, type, source: 'github', name, summary, author: 'Pixel Lab', installSlug: `src-${source}-${id}`, downloads: 0, iconUrl: null,
@@ -59,6 +63,7 @@ const sourceItems: Record<string, MarketDetail[]> = {
     srcItem(SRC, SRC_TITLE, 'palette-tools', 'amadeus-plugin', '取色板', '从图片里取主色，存成可复用的色板。', '0.4.2', ['配色']),
   ],
   [SRC_URL]: [],
+  [SRC_GIT]: [srcItem(SRC_GIT, EN ? 'Team kit' : '团队工具箱', 'brief', 'skill', '周报', '按团队模板整理一周进展、风险与下周计划。', '1.0.0', ['团队'])],
 }
 const sourceInstalls: StoreSourceInstall[] = [
   { cardId: 'src_9c9c9c9c_meme', type: 'skill', slug: 'src-9c9c9c9c-meme', name: '表情包生成', version: '0.3.0', sourceId: '9c9c9c9c', sourceTitle: null, removed: true, summary: '把一句话做成四格表情包，附字体与留白规则。', author: 'Meme Lab' },
@@ -72,6 +77,7 @@ const bridge = {
   marketSourcesInstalls: async () => sourceInstalls.map((x) => ({ ...x })),
   marketSourcesCatalog: async (id: string) => {
     const source = sourceRows.find((x) => x.id === id)!
+    if (source.kind === 'forsion-git' && !signedIn) { await tick(150); return { source: { ...source }, items: [], fetchedAt: null, stale: false, truncated: false, error: 'source: forsion-git-signin' } }
     return { source: { ...source }, items: (sourceItems[id] || []).map(({ readme: _readme, ...card }) => card), fetchedAt: now - 2 * 60_000, stale: false, truncated: false }
   },
   marketSourcesTrust: async (id: string) => { const s = sourceRows.find((x) => x.id === id); if (s) s.trusted = true },
@@ -79,7 +85,7 @@ const bridge = {
   marketSourcesRemove: async (id: string) => { const i = sourceRows.findIndex((x) => x.id === id); if (i >= 0) sourceRows.splice(i, 1) },
   marketSourcesProbe: async (input: string) => {
     await tick(200)
-    if (/git\.forsion\.net/.test(input)) throw new Error("Error invoking remote method 'marketSources:probe': Error: source: forsion-git-unsupported")
+    if (/git\.forsion\.net/.test(input)) throw new Error(`Error invoking remote method 'marketSources:probe': Error: source: ${signedIn ? 'forsion-git-no-access' : 'forsion-git-signin'}`)
     if (!/github\.com\/[\w-]+\/[\w-]+/.test(input)) throw new Error("Error invoking remote method 'marketSources:probe': Error: source: unrecognized")
     return { uri: `https://${input.replace(/^https?:\/\//, '')}`, kind: 'github', title: input.split('/').pop() || input, count: 14 }
   },
@@ -89,6 +95,7 @@ const bridge = {
     return { ...row }
   },
   marketSourcesSetDeclared: async () => {},
+  forsionLogin: async () => { await tick(150); signedIn = true; return { ok: true, cloudUrl: 'https://forsion.test' } },
   onMarketSourcesChanged: () => () => {},
   onMarketInstallProgress: (cb: (p: MarketInstallProgress) => void) => { progressListeners.add(cb); return () => { progressListeners.delete(cb) } },
   marketList: async (type?: string): Promise<{ items: MarketCard[] }> => ({ items: rows.filter((row) => !type || row.type === type).map(({ readme: _readme, githubRepoUrl: _repo, ...card }) => card) }),

@@ -111,7 +111,7 @@ ctx.ui.mountWebCard(el, { name, status, address, note, thumbnail, actions, menu 
 ```
 
 - `id`：插件内唯一，`^[a-z0-9][a-z0-9-]{0,31}$`。`title` 写字符串或 `{ zh, en }`；`icon` 可省，从 `image` / `sparkles` / `palette` / `wrench` / `bot` / `package` / `globe` / `crown` / `coins` 里挑，认不出的按地址类型给缺省图标。
-- `index`：目录在哪。`github:owner/repo`（读默认分支根目录的 `forsion-store.json`；`https://github.com/owner/repo/tree/<ref>/<目录>` 指定分支和子目录）、`npm:<包名>`（读 `latest` 版本包根的 `forsion-store.json`，按 registry 的 sha512 校验）、或一个 `https://` 地址直接指向 JSON。`forsion-git:` 私有仓下一期开放，现在会提示「还没开通」。
+- `index`：目录在哪。`github:owner/repo`（读默认分支根目录的 `forsion-store.json`；`https://github.com/owner/repo/tree/<ref>/<目录>` 指定分支和子目录）、`npm:<包名>`（读 `latest` 版本包根的 `forsion-store.json`，按 registry 的 sha512 校验）、或一个 `https://` 地址直接指向 JSON；`forsion-git:owner/repo`（Forsion Git 上的私有仓，读默认分支根目录的 `forsion-store.json`；`https://git.forsion.net/owner/repo/src/branch/<ref>/<目录>` 指定分支和子目录）由 Forsion 服务端按当前登录的账号去读，只有这个人有读权限的仓库才读得到——没登录时来源页给「登录 Forsion」引导，读不到时说「仓库不存在或没有读权限」（两者故意不分开），这台服务器没开 Forsion Git 时说「还没开通」。私有目录只在内存里按账号留副本，不写进磁盘缓存，换了账号会重新读。
 - 插件启用时来源出现，停用或卸载时消失；用户可以在来源页右上角「⋯」里停用你的来源。来源没了，从它装的东西留着，只是不再自动更新。
 
 `forsion-store.json`：
@@ -136,8 +136,8 @@ ctx.ui.mountWebCard(el, { name, status, address, note, thumbnail, actions, menu 
 ```
 
 - `type` 与商店投稿同一套：`skill` / `amadeus-plugin` / `plugin` / `agent` / `space` / `theme`。`id` 在目录内唯一，`^[a-z0-9][a-z0-9-]{0,47}$`，**发出去就别改**：装进本机的目录名、更新时认的都是它。
-- `package` 四选一：`{ "github", "ref", "path"? }`（下这个 ref 的仓库归档，`path` 只取其中一个目录）；`{ "npm", "version", "integrity"? }`（版本必须等于条目的 `version`，没写 `integrity` 时按 registry 记录的 sha512 校验）；`{ "url", "sha256" }`（必须带 sha256）；`{ "forsionGit", "ref", "path"? }`（下一期）。
-- 相对路径的 `icon` 按目录所在位置解析（npm 来源没有这个位置，写完整的 `https://` 地址）。最多读 1000 条、单条 README 64 KB，坏条目跳过不影响其他条。包里 manifest 的版本与平台要求照样生效，和商店里的条目一样。
+- `package` 四选一：`{ "github", "ref", "path"? }`（下这个 ref 的仓库归档，`path` 只取其中一个目录）；`{ "npm", "version", "integrity"? }`（版本必须等于条目的 `version`，没写 `integrity` 时按 registry 记录的 sha512 校验）；`{ "url", "sha256" }`（必须带 sha256）；`{ "forsionGit": "owner/repo", "ref", "path"? }`（Forsion Git 私有仓：服务端按装的人的账号下这个 ref 的整仓归档，`path` 只取其中一个目录；装的人要登录、要对这个仓库有读权限；`ref` 写分支、标签或提交号，不存在会报「没有那个分支或标签」）。
+- 相对路径的 `icon` 按目录所在位置解析（npm 和 Forsion Git 私有仓没有可公开访问的位置，写完整的 `https://` 地址）。最多读 1000 条、单条 README 64 KB，坏条目跳过不影响其他条。包里 manifest 的版本与平台要求照样生效，和商店里的条目一样。
 - 更新：改目录里的 `version` 和 `package`。商店按用户的自动更新设置照常更新；**包的出处变了（换了仓库、npm 包名或下载域名）自动更新会停下**，等用户自己点。
 - 装进本机的身份是 `src-<来源哈希>-<条目 id>`，`requiresPlugins` 的 `market` 字段认不到来源里的条目。用户第一次从某个来源安装、以及每装一个会运行代码的条目（插件、Agent、Space）前，商店会在详情页侧栏让用户确认一次；来源里的东西标着「未经 Forsion 审核」。
 

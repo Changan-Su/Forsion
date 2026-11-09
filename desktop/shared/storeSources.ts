@@ -113,6 +113,8 @@ export const MAX_DECLARED_PER_PLUGIN = 4
 const ITEM_ID = /^[a-z0-9][a-z0-9-]{0,47}$/
 const SOURCE_HASH = /^[0-9a-f]{8}$/
 const OWNER = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/
+/** Gitea user / organisation names may also carry `.` and `_` (not at the ends). */
+const GIT_OWNER = /^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,38}[A-Za-z0-9])?$/
 const REPO = /^[A-Za-z0-9._-]{1,100}$/
 const NPM_NAME = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/
 const VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/
@@ -138,7 +140,8 @@ export function pickText(text: LocalText | undefined, locale: string): string {
   return (zh ? text.zh ?? text.en : text.en ?? text.zh) ?? ''
 }
 
-const isRepo = (owner: string, repo: string) => OWNER.test(owner) && REPO.test(repo) && repo !== '.' && repo !== '..'
+const isRepo = (owner: string, repo: string, kind: 'github' | 'forsion-git' = 'github') =>
+  (kind === 'forsion-git' ? GIT_OWNER : OWNER).test(owner) && REPO.test(repo) && repo !== '.' && repo !== '..'
 const safeSegments = (s: string, max: number) => s.length <= max && s.split('/').every((x) => /^[A-Za-z0-9._-]+$/.test(x) && x !== '.' && x !== '..')
 const isRef = (s: string) => /^[A-Za-z0-9._/-]{1,100}$/.test(s) && !s.startsWith('/') && !s.startsWith('-') && !s.endsWith('/') && safeSegments(s, 100)
 const isDir = (s: string) => safeSegments(s, 200)
@@ -168,7 +171,7 @@ function repoPath(kind: 'github' | 'forsion-git', path: string): StoreSourceRef 
   const parts = path.replace(/^\/+|\/+$/g, '').split('/')
   if (parts.length < 2) return null
   const owner = parts[0], repo = parts[1].replace(/\.git$/, '')
-  if (!isRepo(owner, repo)) return null
+  if (!isRepo(owner, repo, kind)) return null
   if (parts.length === 2) return { kind, repo: `${owner}/${repo}` }
   if ((parts[2] !== 'tree' && parts[2] !== 'src') || parts.length < 4) return null
   // Gitea writes /src/branch/<ref>/…; GitHub /tree/<ref>/…. A ref with a slash is taken as ref + dir.
@@ -248,7 +251,7 @@ function parsePackage(v: unknown): StorePackage | null {
   const repoPkg = (kind: 'github' | 'forsion-git', repo: unknown): StorePackage | null => {
     if (typeof repo !== 'string') return null
     const [owner, name, ...extra] = repo.split('/')
-    if (extra.length || !owner || !name || !isRepo(owner, name)) return null
+    if (extra.length || !owner || !name || !isRepo(owner, name, kind)) return null
     if (typeof o.ref !== 'string' || !isRef(o.ref)) return null
     if (o.path !== undefined && (typeof o.path !== 'string' || !isDir(o.path.replace(/^\/+|\/+$/g, '')))) return null
     const path = typeof o.path === 'string' ? o.path.replace(/^\/+|\/+$/g, '') : ''

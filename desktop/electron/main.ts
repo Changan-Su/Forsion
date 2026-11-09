@@ -3058,6 +3058,14 @@ app.whenReady().then(async () => {
     githubProxy: () => process.env.TANGU_GITHUB_PROXY || '',
     fetchFor: (url) => (/^https:\/\/([^/]*\.)?(github\.com|githubusercontent\.com)\//.test(url) || url.startsWith(NPM_OFFICIAL) ? (u, init) => net.fetch(u, init) : (u, init) => fetch(u, init)),
     defaultLocale: () => mainLocale(),
+    // Forsion Git 私有仓:由 Forsion 服务端按登录的人去读(代读),这里只带上登录令牌;令牌发回签发它的那台服务器。
+    forsionGit: async () => {
+      const creds = loadTanguCreds()
+      if (!creds.token) return null
+      const base = (creds.cloudUrl || '').replace(/\/+$/, '') || await marketBase().catch(() => '')
+      return base ? { base, token: creds.token } : null
+    },
+    forsionSignedIn: () => !!loadTanguCreds().token,
   })
   const sources = storeSources
   const marketPluginUpdater = createMarketPluginUpdater({

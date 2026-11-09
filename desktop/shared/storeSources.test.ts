@@ -20,6 +20,11 @@ describe('parseSourceInput', () => {
     expect(parseSourceInput('https://www.npmjs.com/package/@pixel/image-skills')).toEqual({ kind: 'npm', name: '@pixel/image-skills' })
     expect(parseSourceInput('git.forsion.net/acme/design-skills')).toEqual({ kind: 'forsion-git', repo: 'acme/design-skills' })
     expect(parseSourceInput('https://git.forsion.net/acme/x/src/branch/dev/store')).toEqual({ kind: 'forsion-git', repo: 'acme/x', ref: 'dev', dir: 'store' })
+    // Gitea names may carry `.` / `_` (organisations do); GitHub owners can't.
+    expect(parseSourceInput('forsion-git:acme.team/kit')).toEqual({ kind: 'forsion-git', repo: 'acme.team/kit' })
+    expect(parseSourceInput('forsion-git:a_b/kit')).toEqual({ kind: 'forsion-git', repo: 'a_b/kit' })
+    expect(parseSourceInput('github:acme.team/kit')).toBeNull()
+    expect(parseSourceInput('forsion-git:.acme/kit')).toBeNull()
   })
   it('takes other https addresses as a catalog file, http only on this computer', () => {
     expect(parseSourceInput('https://example.com/forsion-store.json#x')).toEqual({ kind: 'url', url: 'https://example.com/forsion-store.json' })
