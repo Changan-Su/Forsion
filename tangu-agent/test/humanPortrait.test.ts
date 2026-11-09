@@ -373,6 +373,10 @@ describe('cutting what the prompt reads at a whole entry (11-09)', () => {
     const cont = clipWholeLines(`- ${'x'.repeat(1990)}\n  continued\n- y`, 2000);
     expect(cont.kept.length).toBeGreaterThan(0); expect(cont.kept).not.toContain('continued'); // 第一条自己就放不下:退回按字数切,不给空的
     expect(clipWholeLines(`- one\n  more\n- ${'z'.repeat(2000)}`, 2000)).toMatchObject({ kept: '- one\n  more', outside: 1 });
+    // 空行隔开的缩进段落仍属于同一个列表项:要么一起在线内,要么一起在线外(Codex 评审 11-09)
+    const loose = clipWholeLines(`- a\n- ${'f'.repeat(1800)}\n\n  ${'g'.repeat(300)}\n- tail`, 2000);
+    expect(loose.kept).toBe('- a');
+    expect(loose.rest).toContain('f'.repeat(1800)); expect(loose.rest).toContain('g'.repeat(300));
   });
 });
 
@@ -402,6 +406,16 @@ describe('merging the portrait from two devices', () => {
     // 所有标题之前的条目插回开头那段
     const top = '- 你喜欢茶。\n\n## Recently learned\n\n- one\n';
     expect(mergePortrait(`- 你喜欢茶。\n- 你喜欢猫。\n\n## Recently learned\n\n- one\n`, top, `${top}- two\n`).content).toBe('- 你喜欢茶。\n- 你喜欢猫。\n\n## Recently learned\n\n- one\n- two\n');
+  });
+  it('Codex review (11-09): an added entry never lands between an entry and its continuation; same-named headings fall back to the agent section', () => {
+    const b = '# Lin\n\n## 从其他 AI 导入 · 11-03\n\n- 你在跑步。\n  只在周末。\n';
+    const r = mergePortrait(`${b}- 你在游泳。\n`, b, b.replace('# Lin', '# Lin!'));
+    expect(r.content).toContain('- 你在跑步。\n  只在周末。\n- 你在游泳。');
+    const two = '## Work\n\n### Preferences\n\n- a\n\n## Health\n\n### Preferences\n\n- b\n';
+    const ours = two.replace('- a\n', '- a\n- c\n');
+    const merged = mergePortrait(ours, two, `${two}\n## Recently learned\n\n- d\n`);
+    expect(merged.content).toContain('## Recently learned\n\n- d\n- c');
+    expect(merged.content.indexOf('- c')).toBeGreaterThan(merged.content.indexOf('- b'));
   });
   it('both devices changed the same paragraph: cloud text wins and the local copy is kept as a conflict copy', () => {
     const r = mergePortrait(base.replace('She wrote this.', 'She wrote this, locally.'), base, base.replace('She wrote this.', 'She wrote this, elsewhere.'));

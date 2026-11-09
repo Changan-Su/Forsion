@@ -23,17 +23,21 @@ const ENTRY = /^\s*(?:[-*+]|\d+[.)])\s+/;
 const HEADING = /^#{1,6}\s/;
 const SENTENCE_END = /[。！？!?.;；]\s*/g;
 
-/** 一「条」= 列表项行 + 它后面缩进的续行;其余每一行自成一条。返回每条在 text 里的 [start, end)(end 不含换行)。 */
+/** 一「条」= 列表项行 + 它后面缩进的续行(中间隔着空行的缩进段落也算,Markdown 里它们属于同一个列表项);其余每一行自成一条。
+ *  返回每条在 text 里的 [start, end)(end 不含换行)。 */
 function blocks(text: string): Array<{ start: number; end: number; heading: boolean; blank: boolean }> {
   const out: Array<{ start: number; end: number; heading: boolean; blank: boolean }> = [];
-  let pos = 0; let inEntry = false;
+  let pos = 0; let entry = -1; // 当前列表项在 out 里的下标;-1 = 不在列表项里
+  const held: Array<{ start: number; end: number }> = []; // 列表项后面的空行:下一行是缩进续行就并进这一条,否则各算一个空行
   for (const line of text.split('\n')) {
     const start = pos, end = pos + line.length; pos = end + 1;
-    const continuation = inEntry && line.trim() !== '' && /^\s+/.test(line) && !ENTRY.test(line);
-    if (continuation) { out[out.length - 1].end = end; continue; }
-    inEntry = ENTRY.test(line);
+    if (entry >= 0 && !line.trim()) { held.push({ start, end }); continue; }
+    if (entry >= 0 && /^\s+\S/.test(line) && !ENTRY.test(line)) { out[entry].end = end; held.length = 0; continue; }
+    for (const b of held.splice(0)) out.push({ ...b, heading: false, blank: true });
     out.push({ start, end, heading: HEADING.test(line), blank: !line.trim() });
+    entry = ENTRY.test(line) ? out.length - 1 : -1;
   }
+  for (const b of held) out.push({ ...b, heading: false, blank: true });
   return out;
 }
 

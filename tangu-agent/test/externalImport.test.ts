@@ -359,6 +359,13 @@ describe('moving earlier imports out of the agent section (one-off, 11-09)', () 
     expect((await readHuman(SOUL)).version).toBe(before.version);
   });
 
+  it('an imported entry the human later added a continuation line to stays where it is (Codex review 11-09)', async () => {
+    await seed('## 最近认识的\n\n- 你在吃药。\n  只在头疼时。\n- 你在读博。\n');
+    writeLedgerFile(id1, { id: id1, at: ledgerAt, sources: [], counts: { person: 2, agent: 0, project: 0, skill: 0 }, writes: [{ kind: 'person', content: '你在吃药。' }, { kind: 'person', content: '你在读博。' }] });
+    expect(await migrateImportedPortrait()).toEqual({ moved: 1 });
+    expect((await readHuman(SOUL)).content).toBe('## 最近认识的\n\n- 你在吃药。\n  只在头疼时。\n\n## 从其他 AI 导入 · 11-03\n\n- 你在读博。\n');
+  });
+
   it('an undone import and an entry outside the agent section are left alone; English imports get an English heading', async () => {
     await seed('- You like tea.\n\n## Recently learned\n\n- You are called Kiko.\n- You run at night.\n');
     writeLedgerFile(id1, { id: id1, at: ledgerAt, sources: [], counts: { person: 1, agent: 0, project: 0, skill: 0 }, writes: [{ kind: 'person', content: 'You run at night.' }, { kind: 'person', content: 'You like tea.' }] });

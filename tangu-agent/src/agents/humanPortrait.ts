@@ -79,11 +79,21 @@ function sectionEntries(content: string): PortraitEntry[] {
   const lines = content.split('\n'); const sec = agentSection(lines);
   return sec ? portraitEntries(lines.slice(sec.start + 1, sec.end).join('\n')) : [];
 }
-/** 加在这一节最后一个条目后面;这一节还没有条目就接在标题下。 */
+/** 条目第 i 行之后缩进的续行(不是新条目、不是标题)一直到哪一行(含)。 */
+const CONTINUATION = /^\s+\S/;
+function entryEnd(lines: string[], i: number, end = lines.length): number {
+  let last = i;
+  for (let j = i + 1; j < end; j++) {
+    if (!lines[j].trim()) continue;
+    if (CONTINUATION.test(lines[j]) && !entryOfLine(lines[j])) last = j; else break;
+  }
+  return last;
+}
+/** 加在这一节最后一个条目(连同它的续行)后面;这一节还没有条目就接在标题下。 */
 function insertInSection(lines: string[], sec: Section, fact: string): string {
   let last = -1;
   for (let i = sec.start + 1; i < sec.end; i++) if (entryOfLine(lines[i])) last = i;
-  if (last >= 0) { lines.splice(last + 1, 0, `- ${fact}`); return lines.join('\n'); }
+  if (last >= 0) { lines.splice(entryEnd(lines, last, sec.end) + 1, 0, `- ${fact}`); return lines.join('\n'); }
   const next = lines[sec.start + 1];
   lines.splice(sec.start + 1, 0, '', `- ${fact}`, ...(next !== undefined && next.trim() ? [''] : []));
   return lines.join('\n');
@@ -249,6 +259,7 @@ export function moveEntriesToSections(content: string, moves: Array<{ content: s
     let index = -1;
     for (let i = sec.start + 1; i < sec.end; i++) { const e = entryOfLine(lines[i]); if (e && normalizeMemoryFact(e.content) === normalizeMemoryFact(m.content)) { index = i; break; } }
     if (index < 0) continue;
+    if (entryEnd(lines, index, sec.end) !== index) continue; // 人后来补了续行(限定条件之类):只搬首行会拆散这一条,留在原处
     const line = entryOfLine(lines[index])!.content;
     out = insertPortraitEntry(removeLine(out, index), line, m.section);
     moved++; sections.push(m.section);
@@ -317,6 +328,8 @@ function insertLikeOurs(out: string, fact: string, heading: { title: string; lev
     return `- ${fact}\n${out.trim() ? `\n${out.replace(/^\s+/, '')}` : ''}`;
   }
   if (isAgentTitle(heading.title)) return insertPortraitEntry(out, fact);
+  const same = lines.filter((l) => { const h = l.match(HEADING); return !!h && h[1].length === heading.level && h[2].trim() === heading.title; }).length;
+  if (same > 1) return insertPortraitEntry(out, fact); // 同名同级的标题不止一个:认不准是哪一节,照旧进 Agent 那一节
   const sec = namedSection(lines, (t) => t === heading.title);
   if (sec) return insertInSection(lines, sec, fact);
   return isImportTitle(heading.title) ? appendSection(out, `${'#'.repeat(heading.level)} ${heading.title}`, fact) : insertPortraitEntry(out, fact);

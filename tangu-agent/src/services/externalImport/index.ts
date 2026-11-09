@@ -19,7 +19,7 @@ import { parseJson } from '../memoryDream.js';
 import { loadSpecialAgentsConfig, resolveBackgroundModelId } from '../specialAgentsConfig.js';
 import { coveringProjectEntry, openProjectMemory, PROJECT_MEMORY_CHAR_BUDGET, refOf } from '../projectMemory.js';
 import { HUMAN_FOLDER_MAX_LENGTH, HumanError, readHuman, writeHuman, type HumanScope } from '../../agents/humanStore.js';
-import { importSectionTitle, isPortraitFactForgotten, moveEntriesToSections, mutatePortrait, PERSON_IS, PORTRAIT_LIMIT, PORTRAIT_SCOPE, portraitEntries } from '../../agents/humanPortrait.js';
+import { importSectionTitle, insertPortraitEntry, isPortraitFactForgotten, moveEntriesToSections, mutatePortrait, PERSON_IS, PORTRAIT_LIMIT, PORTRAIT_SCOPE, portraitEntries } from '../../agents/humanPortrait.js';
 import { listLocalSkills, LOCAL_SKILL_PREFIX, treeHash, builtinSkillsDir } from '../../skills/localSkills.js';
 import { IMPORT_TOOLS, isImportTool, pastedSnippets, scanSources, skillFingerprint, SKILL_FILES_MAX, type ExternalSkill, type ImportNotice, type ImportTool, type Snippet } from './sources.js';
 
@@ -240,10 +240,9 @@ async function buildPlan(userId: string, input: { tools: string[]; pasted?: unkn
  *  「过去的事」本来就默认不勾,只记 cost(勾上也算进「勾了约 Y 字」)。 */
 function budgetPortrait(items: PlanItem[], current: string, heading: string): PortraitBudget {
   const chars = current.trim().length;
-  // 同一天已有导入那一节:不再扣标题,但那一节还没条目时第一条前面会多一个空行
-  const lines = current.split('\n');
-  const at = lines.findIndex((l) => /^#{1,6}\s/.test(l) && l.replace(/^#{1,6}\s+/, '').trim() === heading);
-  const overhead = at < 0 ? `\n\n## ${heading}\n`.length : portraitEntries(lines.slice(at + 1).join('\n').split(/\n#{1,6}\s/)[0]).length ? 0 : 1;
+  // 第一条要多付的(新开一节的标题、空节首条前后的空行):拿真实的插入函数插一条试试,按结果长度算;之后每条都是「\n- 」+ 原文
+  const probe = 'x';
+  const overhead = Math.max(0, insertPortraitEntry(current, probe, heading).trim().length - chars - (probe.length + 3));
   const room = Math.max(0, PORTRAIT_LIMIT - chars - overhead);
   let used = 0;
   for (const i of items) {
