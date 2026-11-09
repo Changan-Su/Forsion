@@ -11,7 +11,7 @@ import { amadeusAvailable } from './features/runtime'
  */
 import React, { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState, useSyncExternalStore } from 'react'
 import { Puzzle, RotateCw, TriangleAlert, type LucideIcon } from 'lucide-react'
-import { registerView, unregisterView, useWorkspace, getActiveSpace, getView, showInMainPanel, useViewModes, ViewHead, type ViewForms, type ViewProps, type ViewModeOption } from '@lcl/engine'
+import { registerView, unregisterView, useWorkspace, getActiveSpace, getView, showInMainPanel, createViewLayout, useViewModes, ViewHead, type ViewForms, type ViewProps, type ViewModeOption } from '@lcl/engine'
 import { notePluginGesture, onPluginSetupSettled, pluginSetupSettled, usePluginStore } from '@amadeus/plugins/pluginStore'
 import { recordDevMountError } from '@amadeus/plugins/devRecords'
 import { setDevViewBridge } from '@amadeus/plugins/devSandbox'
@@ -37,7 +37,7 @@ registerMessages({
  *  `pluginId` 只在经插件命名空间注册时有(见下方 factory);带上它,挂载失败才能按插件记账 —— 控制台里
  *  那行 `[plugin-view] mount failed` 谁都看得见,但开发者看不见「是我的插件炸的」。
  *  `onMountError`:挂载抛错时额外通知调用方(Muse Space 主槽拿它回写给 Muse);走 ref,换了回调身份不重挂。 */
-export const PluginViewHost: React.FC<ViewProps & { def: ViewContribution; pluginId?: string; onMountError?: (e: unknown) => void }> = ({ def, pluginId, onMountError, extendView, leaf, params, surface }) => {
+export const PluginViewHost: React.FC<ViewProps & { def: ViewContribution; pluginId?: string; onMountError?: (e: unknown) => void }> = ({ def, pluginId, onMountError, extendView, leaf, params, surface, layout }) => {
   const ref = useRef<HTMLDivElement>(null)
   // ctx.ui.setViewModes:插件报的看法 → 头行(胶囊在左、插件的按钮在右)+ 同原生视图的 ⌥⌘V / 命令面板 / 手机顶栏
   const [hostEl, setHostEl] = useState<HTMLDivElement | null>(null)
@@ -63,8 +63,8 @@ export const PluginViewHost: React.FC<ViewProps & { def: ViewContribution; plugi
   const onError = useRef(onMountError)
   onError.current = onMountError
   const disposeBeforePaint = useRef<(() => void) | null>(null)
-  const current = useRef({ leaf, params })
-  current.current = { leaf, params }
+  const current = useRef({ leaf, params, layout })
+  current.current = { leaf, params, layout }
   // workspace.open 浮在窗口里的那一份(引擎 FloatViews 给):按样子报 surface,「在主面板显示」走它给的。走 ref,每次渲染换对象不重挂
   const floatSurface = useRef(surface)
   floatSurface.current = surface
@@ -86,6 +86,10 @@ export const PluginViewHost: React.FC<ViewProps & { def: ViewContribution; plugi
     if (!el) return
     let cleanup: (() => void) | void
     let alive = true
+    const fallbackLayout = current.current.layout ? null : createViewLayout()
+    const detachLayout = fallbackLayout?.attach(el)
+    const geometry = current.current.layout ?? fallbackLayout!
+    const layoutSubscriptions = new Set<() => void>()
     const check = (): void => { if (!alive) throw new Error('View has been disposed') }
     const kind = windowKind()
     const floated = floatSurface.current
@@ -129,6 +133,8 @@ export const PluginViewHost: React.FC<ViewProps & { def: ViewContribution; plugi
     }
     try {
       const mounted = def.mount(el, {
+        getLayout: () => { check(); return geometry.getSnapshot() },
+        onLayout: (listener) => { check(); const off = geometry.subscribe(value => { if (alive) listener(value) }); layoutSubscriptions.add(off); return () => { off(); layoutSubscriptions.delete(off) } },
         extendView, surface: isMini ? 'mini' : isFloating ? 'floating' : 'main',
         getParams: () => { check(); return { ...(useWorkspace.getState().leafById(current.current.leaf.id)?.params ?? current.current.params) } },
         setParams: (patch) => { check(); current.current.leaf.setParams({ ...(useWorkspace.getState().leafById(current.current.leaf.id)?.params ?? current.current.params), ...patch }) },
@@ -166,6 +172,7 @@ export const PluginViewHost: React.FC<ViewProps & { def: ViewContribution; plugi
       alive = false
       offSettled?.(); offSettled = null
       listeners.current.clear()
+      layoutSubscriptions.forEach(off => off()); layoutSubscriptions.clear(); detachLayout?.()
       for (const t of gestureEvents) el.removeEventListener(t, onGesture, true)
       if (typeof cleanup === 'function') runCleanup(cleanup)
       el.replaceChildren()
@@ -363,6 +370,7 @@ export function syncPluginViews(): void {
         rightCompanions: Array.isArray(def.rightCompanions)
           ? def.rightCompanions.filter((t): t is string => typeof t === 'string' && !!t).map((t) => ({ type: t, params: {} }))
           : undefined,
+        layout: def.layout,
         forms: pluginForms(type.split(':')[1], def.forms),
       })
     }

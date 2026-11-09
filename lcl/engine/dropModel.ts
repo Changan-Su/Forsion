@@ -61,7 +61,9 @@ export function tabInsertion(tabs: { left: number; right: number }[], x: number,
 /** 唯一真源:据光标(视口坐标)算落点。null = 违规/无命中 → 不提示不落子。
  *  被拖的源 tab 靠 DOM 上的 .wb-tab-dragging 类排除(见下),故无需 draggingId 参与计算。 */
 export function computeDropTarget(api: DockviewApi, x: number, y: number): DropTarget | null {
-  const groupEl = (document.elementFromPoint(x, y) as Element | null)?.closest('.dv-groupview') as HTMLElement | null
+  const hit = document.elementFromPoint(x, y) as Element | null
+  const overlay = hit?.closest<HTMLElement>('[data-lcl-group]')
+  const groupEl = (overlay ? (api.getGroup(overlay.dataset.lclGroup!) as unknown as { element?: HTMLElement } | undefined)?.element : hit?.closest('.dv-groupview')) as HTMLElement | null
   if (!groupEl) return null
   const group = api.groups.find((g) => (g as unknown as { element?: HTMLElement }).element === groupEl)
   if (!group) return null

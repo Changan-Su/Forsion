@@ -553,3 +553,13 @@ Set both `external: true` and `override: true` to handle external PDFs opened wi
 For an external PDF, `mount(el, file)` receives `file.io`: `readBytes(path)` reads this PDF or its adjacent `.<filename>.annot.json`; `writeBytes(path, bytes)` writes only that annotation sidecar or a `.broken-<timestamp>` recovery copy. The source PDF remains read-only. `saveCopy(name, bytes)` shows the native Save As dialog, returns the saved name or `null` on cancellation, and refuses to overwrite the source. The general `ctx.app` file APIs remain vault-scoped. Surface write failures when the source directory is read-only.
 
 A file-type cleanup may return `Promise<void>`. Closing a tab waits for its final save before revoking `file.io`; disabling the plugin still revokes immediately. When multiple tabs share a document, discard the handle belonging to a closed tab. External files are not imported into a vault or sent through note storage.
+
+## Coordinated View layout
+
+LCL keeps split Views side by side. When space runs out, the workspace content scrolls while the Ribbon, top chrome and status stay fixed. Panels and splits share a geometry transition without whole-page fading or text scaling. Collapsing a sidebar retains its mounted content; explicitly closing the View, disabling its plugin or replacing the workspace layout disposes it.
+
+Use `ctx.registerView({ layout: { minWidth: 360, minHeight: 200 }, ... })` to declare minimum dimensions in logical CSS pixels. Existing Views inherit defaults: main 320 × 180, left 220 × 180, right 240 × 180 and bottom 240 × 140. A tab group takes the largest minimum among its tabs, so switching tabs does not repeatedly squeeze neighbouring Views.
+
+In `mount(el, view)`, `view.getLayout?.()` returns `{ width, height, visible, compact, phase }`. `view.onLayout?.(callback)` sends an immediate snapshot and subsequent size, visibility or phase changes, and returns an unsubscribe function. `phase` is `transition` or `settled`; `compact` means content width below 480px. Expensive PDF, canvas or terminal adapters can update cheap chrome during transitions and refit when `settled && visible`. Do not remount content or reset document zoom merely because the window narrows. The host removes outstanding subscriptions when the View is disposed. Older hosts lack these methods; use `ResizeObserver` as a fallback.
+
+Optional `preferredWidth` / `preferredHeight` seed allocation weights for new splits and the initial size of a sidebar that the user has not resized. Saved user ratios and sidebar sizes take precedence.

@@ -23,7 +23,7 @@ import { ExtendViewHost } from './ExtendViewHost'
 import { presentInlineExtension, type ExtendViewController } from './extendView'
 import { NativeExtendView } from './nativeExtendView'
 import { allViews, getView, subscribeViews } from './viewRegistry'
-import { useWorkspace, tryRestoreLayout, scheduleWorkspaceSave, activeMainPanel, captureSideWidths, presentDockedExtension, markSelfTitled, dropAllowed, keepMainOnly } from './dockviewStore'
+import { useWorkspace, tryRestoreLayout, scheduleWorkspaceSave, activeMainPanel, captureSideWidths, presentDockedExtension, attachLayoutCoordinator, markSelfTitled, dropAllowed, keepMainOnly } from './dockviewStore'
 import { IS_VIEW_WINDOW } from './uiMode'
 import { useNav } from './navStore'
 import { useCommandStore, commandHotkeyText } from './commandRegistry'
@@ -39,6 +39,7 @@ import { withComponentFallback } from './componentFallback'
 import { cycleFocusedGroupTab, tabCycleDelta } from './tabCycle'
 import { besideTarget, openMainBesideThisTask } from './openBeside'
 import { keepScroll } from './keepScroll'
+import { createViewLayout } from './viewLayout'
 
 /** tooltip「名称(快捷键)」:快捷键取该命令**当前生效**的键、按平台格式化(改了键就跟着变,解绑就只剩名称)。 */
 function withHotkey(t: (k: string, v?: Record<string, unknown>) => string, text: string, cmdId: string): string {
@@ -108,25 +109,16 @@ function leafFromProps(props: IDockviewPanelProps): Leaf {
   }
 }
 
-// 主区「上一次显示的视图类型」(模块级,跨重挂载存活)。Dockview renderer='onlyWhenVisible':
-// 收/展侧栏会重挂主区面板 → 若每次挂载都播淡入,就会「整页闪一下」。只在**视图类型真的变了**时播,
-// 同类型重挂(布局抖动引起)不播 → 收/展侧栏不闪,真正切视图(对话↔微信↔…)才淡入。
-let lastMainViewType: string | undefined
-
 /** 把一个 ViewDefinition 编成 Dockview 组件。 */
 function makeComponent(def: ViewDefinition): React.FC<IDockviewPanelProps> {
   return function ViewHost(props) {
     const leaf = leafFromProps(props)
     const loc = ((props.params ?? {}) as { __loc?: string }).__loc ?? 'main'
-    const [enter, setEnter] = useState(() => {
-      if (loc !== 'main') return false // 仅主区做切换淡入;侧栏靠自身宽度补间,别再叠淡入
-      const changed = lastMainViewType !== def.type
-      lastMainViewType = def.type
-      return changed
-    })
     const ownerKey = `${leaf.id}:${leaf.type}:${identitySig(leaf.params)}`
     // 换标签再换回来:面板的 DOM 是摘下重挂的,里面的滚动位置全归零 —— 平时记着,重新可见时写回(见 keepScroll)。
     const viewRef = useRef<HTMLDivElement>(null)
+    const layout = useMemo(() => createViewLayout(), [props.api])
+    useEffect(() => viewRef.current ? layout.attach(viewRef.current) : undefined, [layout])
     useEffect(() => {
       const el = viewRef.current
       if (!el) return
@@ -138,23 +130,13 @@ function makeComponent(def: ViewDefinition): React.FC<IDockviewPanelProps> {
     const view = (sideExtend?: ExtendViewController) => (
       <div
         ref={viewRef}
-        className={`wb-view wb-view--${loc}${enter ? ' wb-view-enter' : ''}`}
-        // ⚠️淡入类**播完必须摘**。CSS 动画是绑在元素上的:类只要还留着,元素每次被重新挂进 DOM 就会
-        // 从头再播一遍。而 Dockview 在网格结构变化时正会这么干 —— 收起底部面板/侧栏时它把纵向
-        // branch node 收回成 leaf,主区子树被摘下重挂(实测 t=200ms 一条 removed/added,元素对象不变),
-        // 于是整页重播 0.22s 淡入 = 用户三次实报的「收起时闪一下」(左右栏同因,由来已久)。
-        // 上面的 lastMainViewType 只挡住了「重挂时**再加**这个类」,挡不住「类还在 → 重挂即重播」。
-        // ⚠️几何断言看不见这个:元素身份、尺寸、padding 全程不变,变的只有 opacity —— 别再用量几何的
-        // 方式来验这条(前两轮就是这么漏掉的)。
-        onAnimationEnd={(e) => {
-          if (e.animationName === 'wb-view-enter' && e.target === e.currentTarget) setEnter(false)
-        }}
+        className={`wb-view wb-view--${loc}`}
       >
         <ViewErrorBoundary type={def.type}>
           <Suspense fallback={<Skeleton variant={skeletonVariantOf(def.type, loc)} />}>
             {loc === 'main' ? <ExtendViewHost present={presentDockedExtension} owner={props.api} ownerKey={ownerKey}>
-              {(extendView) => def.factory({ leaf, params: leaf.params, extendView })}
-            </ExtendViewHost> : def.factory({ leaf, params: leaf.params, extendView: sideExtend })}
+              {(extendView) => def.factory({ leaf, params: leaf.params, extendView, layout })}
+            </ExtendViewHost> : def.factory({ leaf, params: leaf.params, extendView: sideExtend, layout })}
           </Suspense>
         </ViewErrorBoundary>
       </div>
@@ -167,8 +149,8 @@ function makeComponent(def: ViewDefinition): React.FC<IDockviewPanelProps> {
 }
 
 /** 主区 frame 宿主:按 params.__type 动态派发到注册视图(包装组件按类型缓存)。
- *  就地切视图 = navigateLeaf 改 __type → key 换 → 内层 remount,复用 makeComponent 的
- *  「类型真变才播淡入」机制(lastMainViewType)。视图注册变化时整个 components map 重建,缓存随之作废。
+ *  就地切视图 = navigateLeaf 改 __type → key 换 → 内层 remount。布局变化由协调器驱动几何,不淡化内容。
+ *  视图注册变化时整个 components map 重建,缓存随之作废。
  *  也是 components 表的兜底(withComponentFallback):布局里存着、此刻没注册的视图(侧栏 panel 的组件名就是视图类型)
  *  交给它 —— 先画占位,订阅注册表,注册上来就地换回真视图,不丢整份布局。 */
 function makeFrameHost(cache: Map<string, React.FC<IDockviewPanelProps>>): React.FC<IDockviewPanelProps> {
@@ -376,11 +358,17 @@ function makePrefixActions(): React.FC<IDockviewHeaderActionsProps> {
 
 /** 主区组标签栏「所有 tab 之后」的 ＋:打开空白启动器(launcher/NewTabView),选视图后空白页变成它。 */
 function makeSuffixActions(): React.FC<IDockviewHeaderActionsProps> {
-  return function SuffixActions({ panels }) {
+  return function SuffixActions({ panels, group }) {
     const { t } = useEngineI18n()
     if (!isMainGroup(panels)) return null
     return (
-      <button className="dv-new-tab" title={t('lcl.tab.new')} onClick={() => { const sp = getActiveSpace(); if (sp?.newPage) sp.newPage(); else useWorkspace.getState().openView('launcher', {}, 'main', { newTab: true }) }}>
+      <button className="dv-new-tab" title={t('lcl.tab.new')} onClick={() => {
+        const groupId = group.id
+        const open = (type: string, params: Record<string, unknown> = {}) => useWorkspace.getState().openView(type, params, 'main', { newTab: true, groupId })
+        group.api.setActive()
+        const sp = getActiveSpace()
+        if (sp?.newPage) sp.newPage({ groupId, open }); else open('launcher')
+      }}>
         <Plus size={15} />
       </button>
     )
@@ -720,25 +708,17 @@ export const WorkspaceHost: React.FC<{
     return () => window.removeEventListener('keydown', onKey, true)
   }, [])
 
-  // 容器尺寸变化(窗口 / 外层分栏)时 dockview 会重分配各组宽度 → pinned 侧漂离黄金分割,
-  // 引擎原本无 resize 监听,得等下次开视图/切栏才回正(侧栏抽风根因 R3)。补一个防抖重钉。
-  // 观测容器盒本身而非各子组:repinSides 只改子组宽、不改容器盒 → 不会自触发,无反馈环。
-  useEffect(() => {
-    if (typeof ResizeObserver === 'undefined') return
-    const el = document.querySelector('.wb-dockview') // 本 realm 单实例(每 BrowserWindow 独立 document)
-    if (!el) return
-    let t: ReturnType<typeof setTimeout> | null = null
-    const ro = new ResizeObserver(() => {
-      if (t) clearTimeout(t)
-      t = setTimeout(() => useWorkspace.getState().repinSides(), 120)
-    })
-    ro.observe(el)
-    return () => { ro.disconnect(); if (t) clearTimeout(t) }
-  }, [])
+  const viewportRef = useRef<HTMLDivElement>(null)
+  const coordinatorRef = useRef<ReturnType<typeof attachLayoutCoordinator> | null>(null)
+  useEffect(() => () => coordinatorRef.current?.dispose(), [])
 
   const onReady = (e: DockviewReadyEvent): void => {
     const ws = useWorkspace.getState()
     ws.setApi(e.api)
+    const viewport = viewportRef.current!
+    coordinatorRef.current?.dispose()
+    const coordinator = attachLayoutCoordinator(e.api, viewport, viewport.querySelector<HTMLElement>('.wb-dockview')!)
+    coordinatorRef.current = coordinator
     if (buildDefault) ws.setDefaultBuilder(buildDefault) // 供「恢复默认布局」复用
     const restored = tryRestoreLayout(e.api)
     if (!restored) {
@@ -766,11 +746,15 @@ export const WorkspaceHost: React.FC<{
     const activeType = ((e.api.activePanel?.params ?? {}) as { __type?: string }).__type
     ws.setFocusedLeaf(activeType === 'chat' ? e.api.activePanel : e.api.panels.find((panel) => ((panel.params ?? {}) as { __type?: string }).__type === 'chat'))
     ws.refreshTabs() // 布局恢复/默认构建后 seed 一次初始 active 态
+    coordinator.initialize()
   }
 
   return (
     <>
+      <div className="wb-workspace-viewport" ref={viewportRef}>
       <DockviewReact
+        disableAutoResizing
+        defaultRenderer="always"
         className={`wb-dockview${soft ? ' wb-soft' : ''}`}
         theme={lclTheme(dark, soft)}
         defaultTabComponent={WbTab}
@@ -781,6 +765,7 @@ export const WorkspaceHost: React.FC<{
                     * 程序化移动/分屏不受 disableDnd 影响,故落子照常;提示与落子同源 computeDropTarget → 天生一致。 */
         onReady={onReady}
       />
+      </div>
       {/* Space 作用域的浮层(floatLayer.ts):盖在三栏之上、分隔条之上,切 Space 时按 id 藏。 */}
       <SpaceFloatLayer />
       {/* 右上角浮钮组:恢复默认布局 → 小窗(仅桌面)→ 底部面板 → 右栏(用户指定的次序);折叠钮收起后都仍在原处,可重开。 */}

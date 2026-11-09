@@ -65,6 +65,8 @@ export interface LayoutEnvelopeV4 {
   version: 4
   space?: string
   floats?: PersistedFloat[]
+  /** User split preferences, independent of constrained viewport geometry. Optional for old layouts. */
+  layoutRatios?: Record<string, number[]>
   dockview: unknown
   sidebars: {
     left: PersistedSidebar
