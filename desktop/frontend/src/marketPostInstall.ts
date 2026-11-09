@@ -8,6 +8,8 @@ import { useApp } from './stores/appStore'
 import { useTheme } from './stores/themeStore'
 import { loadUserSpaces } from './userSpaces'
 import { announceExtensionsChanged, installAmadeusPlugins, reloadPluginsAndAnnounce } from './amadeusPlugins'
+import { rescanPlugins } from './services/backendService'
+import { homeTarget } from './services/engine/targets'
 
 /** restart = 引擎里还跑着旧代码 / 新路由挂不上,重启后端才完整生效;fresh = 新装上的 Forsion 插件(调用方做引导检查)。 */
 export async function afterMarketInstall(
@@ -27,6 +29,13 @@ export async function afterMarketInstall(
   const had = engineOf(before), has = engineOf(after)
   // 捆绑包内嵌引擎插件:新的靠重扫即时生效;装之前就有的(升级 / 重装 / 这一版删掉了)旧代码还在引擎里,要重启。
   const restart = had.length || has.length ? await useApp.getState().onPluginInstalled(say, had.length > 0) : false
+  // 捆绑包里的 Agent:引擎只在启动或重扫时播种,并给 Agent 技能做指纹自愈(用户没改过的副本跟着包更新)。
+  // 上面只在带引擎插件时才重扫 —— 只带 agents/ 的包(青鸟)装上或升级后,Agent 一直跑旧技能脚本到下次重启(11-09 实翻:
+  // 2.4.0 的下载修复整版没生效)。这里补一次静默重扫;失败不拦安装,重启照样会自愈。
+  const agentsOf = (list: AmadeusPlugin[]): string[] => list.find((p) => p.id === res?.id)?.bundle?.agents ?? []
+  if (!had.length && !has.length && (agentsOf(before).length || agentsOf(after).length)) {
+    await rescanPlugins(homeTarget()).catch((e) => console.warn('[market] 捆绑包 Agent 重扫失败(重启后自愈)', e))
+  }
   await loadUserSpaces()
   return { restart, fresh }
 }
