@@ -56,7 +56,8 @@
 .human-cutline::before, .human-cutline::after { content: ''; border-top: 1px solid var(--border); }
 .human-cutline::before { flex: 0 0 18px; }
 .human-cutline::after { flex: 1; }
-.human-outside { --text: var(--human-dim-ink); color: var(--human-dim-ink); }
+/* .md-body 的 li / p / td 读 --text-light(base.css),只换 --text 不变淡 */
+.human-outside { --text: var(--human-dim-ink); --text-light: var(--human-dim-ink); color: var(--human-dim-ink); }
 .human-draft-budget { margin: 0; color: var(--text-muted); font-size: var(--ui-font-meta); }
 .human-draft-budget[data-prompt-draft-budget="over"] { color: var(--accent-ink); }
 .human-overflow { margin: 0 0 12px; color: var(--accent-ink); font-size: var(--ui-font-meta); }
