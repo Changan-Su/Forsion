@@ -21,7 +21,7 @@ export function createViewLayout(): ViewLayoutHandle & { attach(el: HTMLElement)
     attach(el) {
       const viewport = el.closest<HTMLElement>('.wb-workspace-viewport'), overlay = el.closest<HTMLElement>('.dv-render-overlay')
       const update = () => {
-        const next: ViewLayoutState = { width: el.clientWidth, height: el.clientHeight, visible: overlay ? overlay.dataset.lclVisible === 'true' : el.checkVisibility(), compact: el.clientWidth < 480,
+        const next: ViewLayoutState = { width: el.clientWidth, height: el.clientHeight, visible: overlay ? overlay.dataset.lclVisible === 'true' : (el.checkVisibility?.() ?? el.getClientRects().length > 0), compact: el.clientWidth < 480,
           phase: viewport?.dataset.layoutPhase === 'transition' ? 'transition' : 'settled' }
         if (Object.keys(next).every(k => next[k as keyof ViewLayoutState] === state[k as keyof ViewLayoutState])) return
         state = Object.freeze(next)
