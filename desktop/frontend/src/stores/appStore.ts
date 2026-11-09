@@ -9,7 +9,7 @@ import { PRODUCT } from '../product'
  */
 import { create } from 'zustand'
 import { useShallow } from 'zustand/react/shallow'
-import { useMemo } from 'react'
+import { useMemo, useRef } from 'react'
 import { contentStorageKey } from '@lcl/engine/contentStorageScope'
 import { useSpaceStore } from '@lcl/engine/spaceRegistry'
 import { getView } from '@lcl/engine/viewRegistry'
@@ -851,7 +851,16 @@ export function useWorkspaceList(vaultRoot: string | null | undefined): Workspac
     homeDir: state.homeDir,
     tr: state.tr,
   })))
-  return useMemo(() => s.workspaces(), [s, vaultRoot]) // eslint-disable-line react-hooks/exhaustive-deps
+  // 流式运行时 sessions 每次刷 updated_at 都换引用 —— 内容没变就交回上一份数组,后台常驻的文件面板不跟着重渲染
+  // (Codex 评审 11-09)。描述符是纯数据,JSON 签名就是完整比对。
+  const prev = useRef<{ sig: string; list: WorkspaceDescriptor[] } | null>(null)
+  return useMemo(() => {
+    const list = s.workspaces()
+    const sig = JSON.stringify(list)
+    if (prev.current?.sig === sig) return prev.current.list
+    prev.current = { sig, list }
+    return list
+  }, [s, vaultRoot]) // eslint-disable-line react-hooks/exhaustive-deps
 }
 
 const revoke = (url: string): void => { try { URL.revokeObjectURL(url) } catch { /* ignore */ } }
