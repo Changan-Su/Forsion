@@ -16,6 +16,10 @@ import {
   removeCenterPart, removeFromHome, resizeRowCell, saveHomeLayout, useHomeLayout, type HomeLayout, type HomePart, type HomeSlot,
 } from './homeWidgets'
 import { BUILTIN_ICON, HomeWidgetBody, useHomeWidgetHead, useShowableIds, useShownWidgetId } from './homeWidgetKinds'
+import type { LibItem } from './homeLibraryDrag'
+
+/** 瓷砖按住拖进主页(homeLibraryDrag.ts);没给 = 只能点。 */
+export type LibDrag = (e: React.PointerEvent<HTMLElement>, item: LibItem) => void
 
 registerMessages({
   'home.edit.hint': { zh: '拖动调整位置；Esc 退出', en: 'Drag to rearrange. Esc to exit' },
@@ -287,8 +291,8 @@ export function placeWidgetOnHome(id: string, t: (k: string) => string): void {
   saveHomeLayout(next)
 }
 
-/** 收纳面板「小组件」页:内置 / 插件 / Agent 做的 三组,点一下放进第一个空位。 */
-export function WidgetLibrary({ layout, onAsk }: { layout: HomeLayout; onAsk: () => void }): React.JSX.Element {
+/** 收纳面板「小组件」页:内置 / 插件 / Agent 做的 三组,点一下放进第一个空位,按住可以直接拖到主页上。 */
+export function WidgetLibrary({ layout, onAsk, onDrag }: { layout: HomeLayout; onAsk: () => void; onDrag?: LibDrag }): React.JSX.Element {
   const { t, locale } = useI18n()
   const gen = useWidgetListGen()
   const [items, setItems] = useState<WidgetListItem[] | null>(null)
@@ -301,23 +305,24 @@ export function WidgetLibrary({ layout, onAsk }: { layout: HomeLayout; onAsk: ()
   }, [gen])
   const pluginTiles = plugins.filter((p) => !p.blocked).flatMap((p) => (p.widgets ?? []).map((w) => ({ p, w, id: pluginWidgetId(p.id, w.id) })))
   const head = (k: string): React.JSX.Element => <div className="hp-lib-h"><b>{t(`home.lib.group.${k}`)}</b><span>{t(`home.lib.group.${k}Note`)}</span></div>
+  const dragOf = (id: string): ((e: React.PointerEvent<HTMLElement>) => void) | undefined => (onDrag ? (e) => onDrag(e, { kind: 'widget', id }) : undefined)
   return (
     <div className="hp-lib">
       {head('builtin')}
       <div className="hp-lib-grid">
-        {BUILTIN_WIDGETS.map((id) => <BuiltinLibTile key={id} id={id} on={isOnHome(layout, id)} onClick={() => placeWidgetOnHome(id, t)} />)}
-        <LibTile icon={<LayoutGrid size={18} />} name={t('home.widget.status')} on={isOnHome(layout, STATUS_CARD)}
+        {BUILTIN_WIDGETS.map((id) => <BuiltinLibTile key={id} id={id} on={isOnHome(layout, id)} onClick={() => placeWidgetOnHome(id, t)} drag={dragOf(id)} />)}
+        <LibTile icon={<LayoutGrid size={18} />} name={t('home.widget.status')} on={isOnHome(layout, STATUS_CARD)} drag={dragOf(STATUS_CARD)}
           onClick={() => { const next = moveOnHome(readHomeLayout(), STATUS_CARD, { area: 'row', index: 0 }); if (next) saveHomeLayout(next); else panelToast(t('home.edit.full'), true) }} />
       </div>
       {pluginTiles.length > 0 && <>
         {head('plugin')}
         <div className="hp-lib-grid">
-          {pluginTiles.map(({ p, w, id }) => <PluginLibTile key={id} id={id} sub={pluginDisplayName(p, locale)} on={isOnHome(layout, id)} onClick={() => placeWidgetOnHome(id, t)} />)}
+          {pluginTiles.map(({ p, id }) => <PluginLibTile key={id} id={id} sub={pluginDisplayName(p, locale)} on={isOnHome(layout, id)} onClick={() => placeWidgetOnHome(id, t)} drag={dragOf(id)} />)}
         </div>
       </>}
       {head('agent')}
       <div className="hp-lib-grid">
-        {(items ?? []).map((w) => <WidgetLibTile key={w.id} w={w} on={isOnHome(layout, w.id)} onClick={() => placeWidgetOnHome(w.id, t)} />)}
+        {(items ?? []).map((w) => <WidgetLibTile key={w.id} w={w} on={isOnHome(layout, w.id)} onClick={() => placeWidgetOnHome(w.id, t)} drag={dragOf(w.id)} />)}
         <LibTile icon={<Sparkles size={18} />} name={t('home.lib.ask')} on={false} onClick={onAsk} />
       </div>
       {error && <div className="hp-lib-note">{t('home.lib.loadFailed', { msg: error })}</div>}
@@ -326,26 +331,29 @@ export function WidgetLibrary({ layout, onAsk }: { layout: HomeLayout; onAsk: ()
   )
 }
 
-function PluginLibTile({ id, sub, on, onClick }: { id: string; sub: string; on: boolean; onClick: () => void }): React.JSX.Element {
+type TileDrag = (e: React.PointerEvent<HTMLElement>) => void
+function PluginLibTile({ id, sub, on, onClick, drag }: { id: string; sub: string; on: boolean; onClick: () => void; drag?: TileDrag }): React.JSX.Element {
   const { title, icon } = useHomeWidgetHead(id, 18)
-  return <LibTile icon={icon} name={title} sub={sub} on={on} onClick={onClick} />
+  return <LibTile icon={icon} name={title} sub={sub} on={on} onClick={onClick} drag={drag} />
 }
 
-function BuiltinLibTile({ id, on, onClick }: { id: string; on: boolean; onClick: () => void }): React.JSX.Element {
+function BuiltinLibTile({ id, on, onClick, drag }: { id: string; on: boolean; onClick: () => void; drag?: TileDrag }): React.JSX.Element {
   const { title } = useHomeWidgetHead(id)
   const Icon = BUILTIN_ICON[id as keyof typeof BUILTIN_ICON] ?? LayoutGrid
-  return <LibTile icon={<Icon size={18} />} name={title} on={on} onClick={onClick} />
+  return <LibTile icon={<Icon size={18} />} name={title} on={on} onClick={onClick} drag={drag} />
 }
 
-function WidgetLibTile({ w, on, onClick }: { w: WidgetListItem; on: boolean; onClick: () => void }): React.JSX.Element {
+function WidgetLibTile({ w, on, onClick, drag }: { w: WidgetListItem; on: boolean; onClick: () => void; drag?: TileDrag }): React.JSX.Element {
   const owner = useWidgetOwner(w)
-  return <LibTile icon={<LayoutGrid size={18} />} name={w.title || w.name} sub={owner} on={on} onClick={onClick} />
+  return <LibTile icon={<LayoutGrid size={18} />} name={w.title || w.name} sub={owner} on={on} onClick={onClick} drag={drag} />
 }
 
-function LibTile({ icon, name, sub, on, onClick }: { icon: React.ReactNode; name: string; sub?: string; on: boolean; onClick: () => void }): React.JSX.Element {
+/** 「已放」的灰瓷砖、「让 Agent 做一个」拖不动(没有 drag);能拖的悬停光标 = grab。 */
+function LibTile({ icon, name, sub, on, onClick, drag }: { icon: React.ReactNode; name: string; sub?: string; on: boolean; onClick: () => void; drag?: TileDrag }): React.JSX.Element {
   const { t } = useI18n()
+  const canDrag = !!drag && !on
   return (
-    <button type="button" className={`hp-lib-tile${on ? ' on' : ''}`} aria-pressed={on} disabled={on} onClick={onClick}>
+    <button type="button" className={`hp-lib-tile${on ? ' on' : ''}${canDrag ? ' hp-lib-drag' : ''}`} aria-pressed={on} disabled={on} onClick={onClick} onPointerDown={canDrag ? drag : undefined}>
       <span className="hp-lib-icon">{icon}</span>
       <span className="hp-lib-name">{name}</span>
       <span className="hp-lib-sub">{on ? <><Check size={11} />{t('home.lib.added')}</> : sub}</span>
@@ -353,7 +361,7 @@ function LibTile({ icon, name, sub, on, onClick }: { icon: React.ReactNode; name
   )
 }
 
-export function PartsLibrary({ layout }: { layout: HomeLayout }): React.JSX.Element {
+export function PartsLibrary({ layout, onDrag }: { layout: HomeLayout; onDrag?: LibDrag }): React.JSX.Element {
   const { t } = useI18n()
   const parts: HomePart[] = ['clock', 'composer', 'dock']
   return (
@@ -361,7 +369,9 @@ export function PartsLibrary({ layout }: { layout: HomeLayout }): React.JSX.Elem
       <div className="hp-lib-grid">
         {parts.map((p) => {
           const on = layout.center.includes(p)
-          return <LibTile key={p} icon={on ? <Check size={18} /> : <Plus size={18} />} name={t(`home.part.${p}`)} on={on} onClick={() => saveHomeLayout(addCenterPart(readHomeLayout(), p))} />
+          const name = t(`home.part.${p}`)
+          return <LibTile key={p} icon={on ? <Check size={18} /> : <Plus size={18} />} name={name} on={on} onClick={() => saveHomeLayout(addCenterPart(readHomeLayout(), p))}
+            drag={onDrag ? (e) => onDrag(e, { kind: 'part', part: p, name }) : undefined} />
         })}
       </div>
     </div>

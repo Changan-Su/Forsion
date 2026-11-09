@@ -117,12 +117,13 @@ export function removeFromHome(l: HomeLayout, id: string): HomeLayout {
 }
 
 export type HomeSlot = { area: 'left' | 'right' | 'row'; index: number }
-/** 拖动松手:把 id 从原处拿出来插到 slot。放不下(栏满 / 下排格子不够)回 null,卡回原处。 */
-export function moveOnHome(l: HomeLayout, id: string, to: HomeSlot): HomeLayout | null {
+/** 拖动松手:把 id 从原处拿出来插到 slot。放不下(栏满 / 下排格子不够)回 null,卡回原处。
+ *  `w` = 新进下排的卡占几格(从收纳拖进来时按「点一下」的规矩给:空 2 格就占 2 格);已在下排的卡保留原宽。 */
+export function moveOnHome(l: HomeLayout, id: string, to: HomeSlot, newW?: 1 | 2 | 4): HomeLayout | null {
   const cell = l.row.find((c) => c.id === id)
   const rest = removeFromHome(l, id)
   if (to.area === 'row') {
-    const w = id === STATUS_CARD ? 4 : cell?.w ?? 1
+    const w = id === STATUS_CARD ? 4 : cell?.w ?? (newW === 2 ? 2 : 1)
     if (rowUsed(rest) + w > ROW_CELLS) return null
     const row = [...rest.row]
     row.splice(Math.min(to.index, row.length), 0, { id, w })

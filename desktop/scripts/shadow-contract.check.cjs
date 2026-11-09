@@ -87,6 +87,7 @@ const INTERACTION_EXCEPTIONS = new Map([
   ['frontend/src/views/dashGrid.css|.dash3-card--lift|box-shadow', '网格仪表盘 DragOverlay 跟手壳抬起反馈(只在浮层这一层,不落到格子里的卡)'],
   ['frontend/src/views/chat2/chat2.css|.t2-card-lifted|box-shadow', '摘要卡片栈拖拽排序时的抬起反馈(只在拖动期间)'],
   ['frontend/src/views/homepage.css|.hp-lifted .hp-wcard, .hp-lifted.hp-part-frame|box-shadow', '主页小组件 / 主页组件拖动时的抬起反馈(.hp-lifted 只在拖动期间挂)'],
+  ['frontend/src/views/homepage.css|.hp-lib-ghost|box-shadow', '从收纳拖进主页时跟手的影子(只在拖动期间存在,与 .hp-lifted 同值)'],
 ])
 
 /* LCL 历史展示页保留自己的 token 契约。 */
