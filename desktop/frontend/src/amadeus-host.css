@@ -411,8 +411,8 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 .amx-toast {
   position: fixed; bottom: 28px; left: 50%; transform: translateX(-50%); z-index: 90;
   padding: 8px 14px; font-size: var(--ui-font-body, 13px); color: var(--text);
-  background: var(--bg-glass, var(--bg-card)); backdrop-filter: var(--panel-blur, blur(8px));
-  border: var(--border-width, 1px) solid var(--border); border-radius: var(--radius-md, 10px);
+  background: var(--surface-float, var(--bg-card)); backdrop-filter: var(--surface-blur, none);
+  border: var(--border-width, 1px) solid var(--surface-edge, var(--border)); border-radius: var(--radius-md, 10px);
   box-shadow: var(--card-shadow); pointer-events: none;
 }
 
@@ -1223,7 +1223,7 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 /* 视图菜单里被隐藏的列淡显 */
 .amx-db-opt[data-dim] { opacity: 0.5; }
 /* 双链 hover 预览浮卡:只读渲染前段,可入卡滚动 */
-.amx-hoverprev { position: fixed; z-index: 90; width: 380px; max-height: 300px; display: flex; flex-direction: column; background: var(--bg-card, var(--bg)); border-radius: var(--radius-md, 12px); outline: 0.5px solid var(--border); outline-offset: -0.5px; box-shadow: var(--card-shadow); overflow: hidden; }
+.amx-hoverprev { position: fixed; z-index: 90; width: 380px; max-height: 300px; display: flex; flex-direction: column; background: var(--surface-float, var(--bg-card, var(--bg))); backdrop-filter: var(--surface-blur, none); border-radius: var(--radius-md, 12px); outline: 0.5px solid var(--border); outline-offset: -0.5px; box-shadow: var(--card-shadow); overflow: hidden; }
 .amx-hoverprev-title { flex: 0 0 auto; padding: 8px 12px 4px; font-size: var(--ui-font-meta, 12px); font-weight: 600; color: var(--text-muted); border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent); }
 .amx-hoverprev-body { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 12px 10px; font-size: 0.92em; }
 .amx-hoverprev-body .md-plain .milkdown { pointer-events: none; }
@@ -1294,9 +1294,9 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
   align-items: center;
   gap: 2px;
   padding: 3px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--surface-edge, var(--border));
   border-radius: var(--radius-pill, 999px);
-  background: var(--bg-card, var(--bg));
+  background: var(--surface-menu, var(--bg-card, var(--bg))); backdrop-filter: var(--surface-blur, none);
   box-shadow: var(--card-shadow);
   z-index: 5;
 }
@@ -1338,8 +1338,8 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
   z-index: 6;
   display: flex;
   flex-direction: column;
-  background: var(--bg-card, var(--bg));
-  border-top: 1px solid var(--border);
+  background: var(--surface-menu, var(--bg-card, var(--bg))); backdrop-filter: var(--surface-blur, none);
+  border-top: 1px solid var(--surface-edge, var(--border));
   box-shadow: var(--card-shadow);
   animation: amx-bpick-up 0.2s var(--ease-out, ease-out);
 }
@@ -1403,7 +1403,7 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 .amx-trash-entry { margin-top: 10px; opacity: 0.65; }
 .amx-trash-entry:hover { opacity: 1; }
 .amx-trash-wrap { position: fixed; inset: 0; z-index: 80; background: rgba(0, 0, 0, 0.18); display: grid; place-items: center; }
-.amx-trash-pop { width: min(460px, calc(100vw - 48px)); max-height: min(480px, 78vh); display: flex; flex-direction: column; background: var(--bg-card, var(--bg)); border-radius: var(--radius-md, 12px); outline: 0.5px solid var(--border); outline-offset: -0.5px; box-shadow: var(--card-shadow); overflow: hidden; }
+.amx-trash-pop { width: min(460px, calc(100vw - 48px)); max-height: min(480px, 78vh); display: flex; flex-direction: column; background: var(--surface-float, var(--bg-card, var(--bg))); backdrop-filter: var(--surface-blur, none); border-radius: var(--radius-md, 12px); outline: 0.5px solid var(--border); outline-offset: -0.5px; box-shadow: var(--card-shadow); overflow: hidden; }
 .amx-trash-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px 8px; font-weight: 600; font-size: var(--ui-font-body, 13px); color: var(--text); }
 .amx-trash-clear { border: none; background: transparent; color: var(--danger, #e5484d); font: inherit; font-size: var(--ui-font-meta, 12px); cursor: pointer; padding: 2px 6px; border-radius: var(--radius-sm, 6px); }
 .amx-trash-clear:hover { background: color-mix(in srgb, var(--danger, #e5484d) 10%, transparent); }
@@ -1486,7 +1486,7 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 .amx-db-rowed-cell { border: 1px solid color-mix(in srgb, var(--border) 70%, transparent); border-radius: var(--radius-sm, 6px); padding: 1px 4px; min-height: 26px; display: flex; align-items: center; }
 /* 弹层(选项池 / 列菜单):fixed,免被 amx-db-scroll 裁剪;0.5px outline + 可清零高程,挂载纯 opacity 淡入 */
 .amx-db-popwrap { position: fixed; inset: 0; z-index: 80; -webkit-app-region: no-drag; }
-.amx-db-pop { position: fixed; width: 230px; max-height: 300px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; background: var(--bg-card, var(--bg)); border-radius: var(--radius-md); outline: 0.5px solid var(--border); outline-offset: -0.5px; box-shadow: var(--card-shadow); padding: 8px; transition: opacity 120ms ease-in; }
+.amx-db-pop { position: fixed; width: 230px; max-height: 300px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; background: var(--surface-menu, var(--bg-card, var(--bg))); backdrop-filter: var(--surface-blur, none); border-radius: var(--radius-md); outline: 0.5px solid var(--border); outline-offset: -0.5px; box-shadow: var(--card-shadow); padding: 8px; transition: opacity 120ms ease-in; }
 .amx-db-pop-sec { font-size: var(--ui-font-caption, 11px); text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-faint, var(--text-muted)); padding: 4px 6px 2px; }
 .amx-db-pop-list { display: flex; flex-direction: column; gap: 1px; }
 /* 横排小档位(chart 视图的图形/聚合三选一):同一套 .amx-db-opt,只改排布 */
@@ -1694,7 +1694,7 @@ html.dark .amx-cal-chip-ev, html.dark .amx-cal-event {
 
 /* 月格溢出事件列表：保留格内密度，又让“还有 N 项”可操作。 */
 .amx-cal-agenda-overlay { position: fixed; inset: 0; z-index: 70; background: transparent; }
-.amx-cal-agenda { position: fixed; max-height: 344px; overflow: hidden; display: flex; flex-direction: column; padding: 6px; background: var(--bg-card, var(--bg)); border: 1px solid var(--border); border-radius: var(--radius-md, 12px); box-shadow: var(--card-shadow); }
+.amx-cal-agenda { position: fixed; max-height: 344px; overflow: hidden; display: flex; flex-direction: column; padding: 6px; background: var(--surface-menu, var(--bg-card, var(--bg))); backdrop-filter: var(--surface-blur, none); border: 1px solid var(--surface-edge, var(--border)); border-radius: var(--radius-md, 12px); box-shadow: var(--card-shadow); }
 .amx-cal-agenda > header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 5px 6px 8px; font-size: var(--ui-font-body, 13px); }
 .amx-cal-agenda > header button { width: 28px; height: 28px; border: none; border-radius: var(--radius-sm, 6px); background: transparent; color: var(--text-muted); font-size: var(--ui-font-title, 16px); cursor: pointer; }
 .amx-cal-agenda > header button:hover { background: var(--bg-hover, var(--overlay-light)); color: var(--text); }
@@ -1708,7 +1708,7 @@ html.dark .amx-cal-chip-ev, html.dark .amx-cal-event {
 /* 承载面 = app 自己的浮层主题(--bg-card + 0.5px 描边环 + 柔投影,与 .amx-db-pop 同一套 token),
  * 刻意不套 astryx Card/Scope —— 那会把整卡盖成 astryx 中性灰、与 app 暖色主题不搭。
  * 视觉对标 Notion Calendar 事件 peek:图标引导的行、时段大标题 + 时长徽章、值右对齐可就地编辑。 */
-.amx-cal-cardwrap { position: fixed; width: 360px; max-height: 80vh; overflow-y: auto; transform-origin: top left; animation: amx-cal-cardin 0.16s cubic-bezier(0.22, 0.61, 0.36, 1); background: var(--bg-card, var(--bg)); border-radius: var(--radius-md, 12px); outline: 0.5px solid var(--border); outline-offset: -0.5px; box-shadow: var(--card-shadow); }
+.amx-cal-cardwrap { position: fixed; width: 360px; max-height: 80vh; overflow-y: auto; transform-origin: top left; animation: amx-cal-cardin 0.16s cubic-bezier(0.22, 0.61, 0.36, 1); background: var(--surface-menu, var(--bg-card, var(--bg))); backdrop-filter: var(--surface-blur, none); border-radius: var(--radius-md, 12px); outline: 0.5px solid var(--border); outline-offset: -0.5px; box-shadow: var(--card-shadow); }
 /* 关掉(Esc / 点外面)时卸载留下的替身(EventCard 的 useExitGhost)放菜单那一档退场(走查续八 8.4);手机底部抽屉只淡出。 */
 html:root .amx-cal-cardwrap[data-lcl-exit] { animation: ui-menu-exit var(--menu-exit-duration) var(--ease-exit) forwards; }
 html:root .amx-cal-cardwrap.amx-cal-drawer[data-lcl-exit] { animation-name: ui-fade-out; }
@@ -2013,7 +2013,7 @@ textarea.amx-cal-card-title { display: block; resize: none; field-sizing: conten
 .amxc-panel {
   width: min(400px, calc(100vw - 48px)); max-height: min(600px, calc(100vh - 96px));
   overflow-y: auto; padding: 10px 10px 14px;
-  background: var(--bg-card, var(--surface)); color: var(--text);
+  background: var(--surface-float, var(--bg-card, var(--surface))); backdrop-filter: var(--surface-blur, none); color: var(--text);
   border: var(--border-width, 1px) solid var(--border); border-radius: var(--radius-lg, 16px);
   box-shadow: var(--card-shadow);
   font-family: var(--font-ui); font-size: var(--ui-font-body, 13px);
@@ -2065,7 +2065,7 @@ textarea.amx-cal-card-title { display: block; resize: none; field-sizing: conten
 .amxc-card {
   position: fixed; width: 360px; max-height: min(640px, calc(100vh - 48px)); overflow-y: auto;
   padding: 8px 12px 12px;
-  background: var(--bg-card, var(--surface)); color: var(--text);
+  background: var(--surface-float, var(--bg-card, var(--surface))); backdrop-filter: var(--surface-blur, none); color: var(--text);
   border: var(--border-width, 1px) solid var(--border); border-radius: var(--radius-md, 12px);
   box-shadow: var(--card-shadow);
   font-family: var(--font-ui); font-size: var(--ui-font-body, 13px);
@@ -2209,9 +2209,9 @@ textarea.amx-cal-card-title { display: block; resize: none; field-sizing: conten
 .dash-add-menu {
   position: absolute; right: 0; top: calc(100% + 4px); z-index: 41;
   min-width: 148px; padding: var(--menu-shell-padding, 4px);
-  border: var(--border-width, 1px) solid var(--border);
+  border: var(--border-width, 1px) solid var(--surface-edge, var(--border));
   border-radius: var(--radius-md, 10px);
-  background: var(--bg-card, var(--bg));
+  background: var(--surface-menu, var(--bg-card, var(--bg))); backdrop-filter: var(--surface-blur, none);
   box-shadow: var(--card-shadow);
 }
 .dash-add-menu button {

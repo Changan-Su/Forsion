@@ -1,8 +1,8 @@
 {
   "id": "lovable",
   "name": "Genesis",
-  "description": "经典纸感 · 单色。炭黑强调,柔阴影代线条,Pill 按钮。",
-  "descriptionEn": "Classic paper texture with a charcoal accent, gentle shadows, and pill buttons.",
+  "description": "纸感结构:侧栏和外框连成一片,主区一张圆角纸卡。颜色跟随配色。",
+  "descriptionEn": "Paper layout: the sidebar and frame form one surface, with a rounded paper card for the main view. Colors follow your palette.",
   "version": "1.0.0",
   "author": "Forsion",
   "supportsDarkMode": true,
@@ -16,8 +16,8 @@
     },
     "accent": "#1c1c1c",
     "title": { "text": "Genesis" },
-    "tagline": "经典纸感 · 单色",
-    "taglineEn": "Classic paper · monochrome",
+    "tagline": "经典纸感",
+    "taglineEn": "Classic paper",
     "swatches": ["#1c1c1c", "#f8f7f6", "#5f5f5d", "#eae9e7"]
   }
 }

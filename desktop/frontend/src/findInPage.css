@@ -6,7 +6,7 @@
   display: flex;
   align-items: center;
   gap: 4px;
-  background: var(--bg-card, var(--bg));
+  background: var(--surface-float, var(--bg-card, var(--bg))); backdrop-filter: var(--surface-blur, none);
   border-radius: var(--radius-sm, 6px);
   outline: 0.5px solid var(--border);
   outline-offset: -0.5px;

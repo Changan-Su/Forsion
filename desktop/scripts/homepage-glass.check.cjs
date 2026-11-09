@@ -16,6 +16,16 @@ const { HOME_PLUGIN_DIR, installHomePlugin, homeBody } = require('./lib/home-plu
 
 const ROOT = path.join(__dirname, '..')
 const SHOT = process.argv.includes('--shot')
+// 11-03 起「编辑主页」和「壁纸与主页外观」共用 .hp-wallpaper-button,只按类名定位会撞两个元素(strict mode 直接崩)。
+const WALLPAPER_BTN = '.hp-wallpaper-button:not(.hp-edit-button)'
+// 同一轮起桌面空白处右键先弹「编辑主页 / 换壁纸 / 整理 Space」三项菜单(HomepageView 的 kind: 'blank'),第三项才进收纳层;
+// 手机仍是右键直接进。按位置点而不按文案点:台架钉中文,但菜单顺序是代码里写死的。
+async function openOrganizer(win) {
+  await win.locator('.hp-root').dispatchEvent('contextmenu')
+  const organize = win.locator('.ctx-menu button').nth(2)
+  if (await organize.waitFor({ state: 'visible', timeout: 3000 }).then(() => true, () => false)) await organize.click()
+  await win.waitForSelector('.hp-organizer-panel')
+}
 const results = []
 function check(name, ok, detail) {
   results.push({ name, ok: !!ok })
@@ -150,7 +160,7 @@ async function main() {
     check('文本区 Escape 仍可退出聚焦', !(await isFocused()))
     await win.locator('.hp-composer .model-pill-btn').focus()
     check('键盘焦点进入相关控件也触发聚焦', await isFocused())
-    await win.locator('.hp-wallpaper-button').focus()
+    await win.locator(WALLPAPER_BTN).focus()
     check('键盘焦点移到输入区外退出聚焦', !(await isFocused()))
     // 不改被测祖先的 opacity/animation/transform,否则会把这次的回归直接掩掉。
     const fixture = await win.addStyleTag({ content: `
@@ -240,8 +250,7 @@ async function main() {
     check('输入模式保留清晰前景与局部磨砂', focused.difference > 4, focused)
     await win.locator('.hp-root').dispatchEvent('pointerdown')
 
-    await win.locator('.hp-root').dispatchEvent('contextmenu')
-    await win.waitForSelector('.hp-organizer-panel')
+    await openOrganizer(win)
     await win.waitForTimeout(650)
     const organizer = await probe(win, app, '.hp-organizer-panel', '::before')
     check('Space 抽屉整面磨砂', organizer.difference > 4 && organizer.backdrop.includes('blur('), organizer)
@@ -297,8 +306,7 @@ async function main() {
     })
     const dark = await probe(win, app, '.hp-composer .t2c-card', '::before')
     check('深色输入框仍有真实磨砂', dark.difference > 4, dark)
-    await win.locator('.hp-root').dispatchEvent('contextmenu')
-    await win.waitForSelector('.hp-organizer-panel')
+    await openOrganizer(win)
     const darkDrawer = await probe(win, app, '.hp-organizer-panel', '::before')
     check('深色抽屉仍有真实磨砂', darkDrawer.difference > 4, darkDrawer)
     await win.click('.hp-organizer-head > button')
@@ -311,7 +319,7 @@ async function main() {
 
     if (SHOT) {
       // 优先通过真正的壁纸设置选 Bing 照片;离线时明确标记为纹理夹具。
-      await win.click('.hp-wallpaper-button')
+      await win.click(WALLPAPER_BTN)
       await win.click('.hp-wallpaper-sources button[data-source="bing"]')
       const bing = await win.waitForFunction(() => {
         const thumbs = [...document.querySelectorAll('.hp-wallpaper-grid img')]
@@ -334,7 +342,7 @@ async function main() {
         }, mode)
         await win.waitForTimeout(650)
         for (const state of ['home', 'organizer', 'folder']) {
-          if (state === 'organizer') await win.locator('.hp-root').dispatchEvent('contextmenu')
+          if (state === 'organizer') await openOrganizer(win)
           if (state === 'folder') await win.click('.hp-spaces .hp-folder')
           await win.waitForTimeout(650)
           const out = path.join(os.tmpdir(), `forsion-homepage.glass-${mode}-${state}.png`)

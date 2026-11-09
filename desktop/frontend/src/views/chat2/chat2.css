@@ -1222,7 +1222,7 @@ button.t2-bg-url:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.
 .t2-bgpop {
   position: fixed; z-index: 100; width: 340px; max-width: calc(100vw - 32px); box-sizing: border-box; padding: 8px 10px 8px;
   overflow-y: auto; /* left / top / max-height 由 followAnchor 写:窗口矮到上下都放不下时封顶,在这里滚 */
-  background: var(--bg-card, var(--bg)); border: var(--border-width, 1px) solid var(--border);
+  background: var(--surface-menu, var(--bg-card, var(--bg))); backdrop-filter: var(--surface-blur, none); border: var(--border-width, 1px) solid var(--surface-edge, var(--border));
   border-radius: var(--radius-md, 12px); box-shadow: var(--card-shadow);
   font-size: var(--ui-font-meta, 12px); color: var(--text);
 }
@@ -1840,7 +1840,7 @@ html[data-chat-avatars='off'] .t2-username { display: none; }
 /* 「?」点开的那几行说明:同菜单的卡面(base.css .ctx-menu) */
 .t2cv-helppop {
   position: fixed; z-index: 100; display: flex; flex-direction: column; gap: 4px; width: 280px; box-sizing: border-box; padding: 10px 12px;
-  background: var(--bg-card); border: var(--border-width, 1px) solid var(--border); border-radius: var(--radius-md, 10px); box-shadow: var(--card-shadow);
+  background: var(--surface-menu, var(--bg-card)); backdrop-filter: var(--surface-blur, none); border: var(--border-width, 1px) solid var(--surface-edge, var(--border)); border-radius: var(--radius-md, 10px); box-shadow: var(--card-shadow);
   font-size: var(--ui-font-meta, 12px); line-height: 1.5; color: var(--text-sec, var(--text-muted)); animation: fade-up var(--duration-fast) var(--ease-out);
 }
 
