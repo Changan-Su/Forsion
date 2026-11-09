@@ -6,7 +6,7 @@ import { join, relative, resolve, sep } from 'node:path';
 import { atomicWriteMemoryFile, readMemoryFile } from './memoryRepository.js';
 import { ARCHIVE_TOPIC, normalizeMemoryFact } from '../contracts/entryMark.js';
 import { parseTopicFile } from '../contracts/memoryLayers.js';
-import { agentsDir } from '../core/tanguHome.js';
+import { agentsDir, tanguHome } from '../core/tanguHome.js';
 
 const DAYS = 30;
 interface UseItem { d: Record<string, number>; last: string }
@@ -52,14 +52,21 @@ export function readMemoryUse(dir: string, file: string): (fact: string) => UseS
 export async function flushMemoryUseForTests(): Promise<void> { await Promise.all([...queues.values()]); }
 export const AGENT_USAGE_FILE = '.memory-usage.json';
 export const PORTRAIT_USAGE_FILE = 'portrait-usage.json';
-/** read_file 整份读了某个 Agent 的一份详情(agents/<slug>/Library/memory/<主题>.md):里面每条记一次(R6)。归档不记;认不出路径就什么都不做,不抛。 */
+/** read_file 整份读了一份记忆详情:里面每条记一次(R6)。认两处 —— Agent 的 agents/<slug>/Library/memory/<主题>.md,
+ *  项目记忆的 <TANGU_HOME>/project-memory/<目录>/Library/<主题>.md(11-09 2b)。归档不记;认不出路径就什么都不做,不抛。 */
 export function noteDetailFileRead(abs: string, text: string): void {
   try {
-    const rel = relative(agentsDir(), resolve(abs)).split(sep);
-    if (rel.length !== 4 || rel[0].startsWith('..') || rel[1] !== 'Library' || rel[2] !== 'memory') return;
-    const m = /^([a-z][a-z0-9-]{0,31})\.md$/.exec(rel[3]);
-    if (!m || m[1] === ARCHIVE_TOPIC) return;
-    const facts = parseTopicFile(m[1], text).entries.map((e) => e.raw.split('\n')[0]);
-    if (facts.length) noteMemoryUse(join(agentsDir(), rel[0]), AGENT_USAGE_FILE, facts);
+    const at = resolve(abs);
+    const note = (dir: string, file: string): void => {
+      const m = /^([a-z][a-z0-9-]{0,31})\.md$/.exec(file);
+      if (!m || m[1] === ARCHIVE_TOPIC) return;
+      const facts = parseTopicFile(m[1], text).entries.map((e) => e.raw.split('\n')[0]);
+      if (facts.length) noteMemoryUse(dir, AGENT_USAGE_FILE, facts);
+    };
+    const rel = relative(agentsDir(), at).split(sep);
+    if (rel.length === 4 && !rel[0].startsWith('..') && rel[1] === 'Library' && rel[2] === 'memory') return note(join(agentsDir(), rel[0]), rel[3]);
+    const projects = join(tanguHome(), 'project-memory');
+    const prel = relative(projects, at).split(sep);
+    if (prel.length === 3 && !prel[0].startsWith('..') && prel[0] && prel[1] === 'Library') note(join(projects, prel[0]), prel[2]);
   } catch { /* 提示信号:记不上就算了 */ }
 }

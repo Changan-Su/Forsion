@@ -162,3 +162,12 @@
 .project-git-emb-options > button > svg { grid-row: 1 / 3; color: var(--text-muted); }
 .project-git-emb-options > button > small { grid-column: 2; color: var(--text-muted); font-size: var(--ui-font-caption, 11px); }
 @media (prefers-reduced-motion: reduce) { .project-git-emb-options > button { transition: none; } }
+/* 项目记忆分层(11-09 2b):钉子跟着行悬停出来(钉住的常亮,见 components/memoryLayers.css);常驻超线那一句提示;
+   整理条、详情列表复用 memoryLayers.css 的零件,只在卡里收一下左右留白,和条目行对齐 */
+.project-memory-row:hover .memory-layer-pin, .project-memory-row:focus-within .memory-layer-pin { opacity: 1; }
+.project-memory-row .memory-layer-pin { width: 22px; height: 22px; }
+.project-memory-row[data-pinned="true"] .memory-layer-pin { color: var(--accent-ink); }
+[data-project-memory] > .memory-layer-bar, [data-project-memory] > .memory-layer-head, [data-project-memory] > .memory-layer-details > .memory-layer-head { padding: 0 8px; }
+[data-project-memory] > .memory-layer-head { margin: 4px 0 2px; }
+.project-memory-over { margin: 0 0 6px; padding: 0 8px; color: var(--text-muted); font-size: var(--ui-font-caption, 11px); line-height: 1.6; }
+.project-chip[data-over="true"] { color: var(--accent-ink); }

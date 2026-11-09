@@ -8,8 +8,8 @@ import type { Tool } from '../../core/types.js';
 import type { ToolContext } from '../toolTypes.js';
 import { MemoryRepositoryError, MEMORY_CHAR_BUDGET, normalizeMemoryFact, type MemoryEntry, type MemorySnapshot } from '../../services/memoryRepository.js';
 import { effectiveRemote, remoteManagementDenied } from '../../services/remoteOrigin.js';
-import { coveringProjectEntry, openProjectMemory, peekProjectMemory, resolveProjectMemory, PROJECT_MEMORY_CHAR_BUDGET, type ProjectMemoryRef } from '../../services/projectMemory.js';
-import { compactProjectMemory, type CompactionOutcome } from '../../services/projectMemoryCompact.js';
+import { coveringProjectEntry, openProjectMemory, peekProjectMemory, projectDetailEntries, projectEntryText, projectLayers, resolveProjectMemory, PROJECT_MEMORY_CHAR_BUDGET, PROJECT_MEMORY_STORE_CAP, type ProjectMemoryRef } from '../../services/projectMemory.js';
+import { afterProjectWrite } from '../../services/projectMemoryCompact.js';
 import { mutatePortrait, PERSON_IS, portraitEntries, PortraitFullError, PORTRAIT_LIMIT, PORTRAIT_SHORT_VERSION, readPortrait, revertPortraitWrite } from '../../agents/humanPortrait.js';
 import { HumanError, type HumanChangeSource, type HumanDocument } from '../../agents/humanStore.js';
 import { currentDisplayAgentSlug } from '../../seams/runContext.js';
@@ -18,6 +18,7 @@ import { APPLIES_TO, labelFor, tagOf, withTag } from '../../contracts/deviceTags
 import { runTagContext } from '../../services/deviceTagContext.js';
 import { countRemember, noteRetell } from '../../services/memoryTelemetry.js';
 import { splitMark, stripMark } from '../../contracts/entryMark.js';
+import { join } from 'node:path';
 
 /** 单条上限与 Historian 候选采集同口径(localHistorian `.slice(0, 300)`)。显式路径此前无闸:09-22 一份终端用户导出里
  *  41 条显式条目最长 1,477 字、21 条带日期、9 条是追加式「更正旧条目」——记忆被日志灌满,而候选路径 12 天只出 8 条一句话。 */
@@ -188,7 +189,7 @@ function storeFor(scope: MemoryScope, ctx: ToolContext, projectRef: ProjectMemor
   const limit = scope === 'project' ? PROJECT_MEMORY_CHAR_BUDGET : MEMORY_CHAR_BUDGET;
   const read = async (): Promise<MemorySnapshot> => repo ? (await repo()).snapshot() : brain.getMemorySnapshot!(ctx.userId);
   const mutate = async (m: { action: 'add' | 'forget'; fact?: string; id?: string; expectedVersion?: string }): Promise<MemorySnapshot> =>
-    repo ? (await repo()).mutate({ ...m, source, cap: PROJECT_MEMORY_CHAR_BUDGET, signal: ctx.signal }) : brain.mutateMemory!(ctx.userId, { ...m, source, signal: ctx.signal });
+    repo ? (await repo()).mutate({ ...m, source, cap: PROJECT_MEMORY_STORE_CAP, signal: ctx.signal }) : brain.mutateMemory!(ctx.userId, { ...m, source, signal: ctx.signal });
   return {
     read: async () => { const s = await read(); return { version: s.version, full: s.version, entries: s.entries.map(entryView) }; },
     add: async (fact) => {
@@ -309,10 +310,14 @@ export const memoryLogProvider: ToolProvider = {
           if (!brain.getMemorySnapshot) return 'Error: this memory backend does not support entry management.';
           const snapshot = await brain.getMemorySnapshot(ctx.userId);
           const project = projectRef ? await peekProjectMemory(projectRef) : null;
+          // 项目记忆的详情(11-09 分层):每份一行(标题、几条、说明、文件位置),条目本身按这句话召回或整份读;常驻条目去掉行尾记号
+          const projectTopics = project && projectRef ? (() => { try { return projectLayers(projectRef)?.topics ?? []; } catch { return []; } })() : [];
+          const projectListed = (project?.entries ?? []).map((e) => ({ ...e, content: projectEntryText(e.content), ...(splitMark(e.content).meta.pin ? { pinned: true } : {}) }));
           // 行尾记号(钉住、谁写的)不给模型看;钉住的另标一个字段。挪进详情的不在这份里(它们在 Library/memory/,召回时带)
           const listed = snapshot.entries.map((e) => { const { body, meta } = splitMark(e.content); return { ...e, content: body.trim(), ...(meta.pin ? { pinned: true } : {}) }; });
           return JSON.stringify({ version: snapshot.version, entries: listed, chars: snapshot.content.length, limit: MEMORY_CHAR_BUDGET,
-            ...(projectRef ? { project: { name: projectRef.name, version: project?.version ?? null, entries: project?.entries ?? [], chars: project?.content.length ?? 0, limit: PROJECT_MEMORY_CHAR_BUDGET } } : {}),
+            ...(projectRef ? { project: { name: projectRef.name, version: project?.version ?? null, entries: projectListed, chars: project?.content.length ?? 0, limit: PROJECT_MEMORY_CHAR_BUDGET,
+              ...(projectTopics.length ? { details: projectTopics.map((t) => ({ title: t.title, about: t.about, count: t.entries.length, file: join(projectRef.dir, t.path) })) } : {}) } } : {}),
             ...(personAllowed(ctx) ? { person: await readPortrait().catch((e) => ({ error: e instanceof Error ? e.message : String(e) })) } : {}) });
         }
         // person 不在这里就明确拒:旧写法把认不得的 scope 一律当 agent,这一档要是也这样,不给画像的会话会把关于这个人的事悄悄记进自己的记忆
@@ -351,6 +356,7 @@ export const memoryLogProvider: ToolProvider = {
         if (brain.mutateMemory || scope === 'project') {
           // 两级共用下面的回执逻辑:只是读写落在哪个库不同。
           const projectRepo = scope === 'project' ? await openProjectMemory(projectRef!) : null;
+          // 项目记忆:limit 报的是常驻上限(4000);写入的硬上限是 PROJECT_MEMORY_STORE_CAP(11-09 分层:常驻超线不拦写入,排后台整理)
           const limit = projectRepo ? PROJECT_MEMORY_CHAR_BUDGET : MEMORY_CHAR_BUDGET;
           const read = async (): Promise<MemorySnapshot | undefined> => projectRepo ? projectRepo.snapshot() : brain.getMemorySnapshot ? brain.getMemorySnapshot(ctx.userId) : undefined;
           const before = action === 'add' ? await read() : undefined;
@@ -370,7 +376,7 @@ export const memoryLogProvider: ToolProvider = {
             expectedVersion: args.expectedVersion ? String(args.expectedVersion) : undefined,
             source: { kind: 'explicit' as const, sessionId: ctx.sessionId, runId: ctx.runId }, signal: ctx.signal,
           };
-          const write = async (m = mutation): Promise<MemorySnapshot> => projectRepo ? projectRepo.mutate({ ...m, cap: PROJECT_MEMORY_CHAR_BUDGET }) : brain.mutateMemory!(ctx.userId, m);
+          const write = async (m = mutation): Promise<MemorySnapshot> => projectRepo ? projectRepo.mutate({ ...m, cap: PROJECT_MEMORY_STORE_CAP }) : brain.mutateMemory!(ctx.userId, m);
           const isFull = (e: unknown): boolean => e instanceof MemoryRepositoryError && e.code === 'MEMORY_FULL';
           // 版本冲突里分出「抄错了」:10-13 live 里模型把 list 回执的 36 位版本号抄串两位,两次都被回「记忆已变」,最后告诉用户没改成。
           // 带来的号和现在的版本只差几个字符 → 是照着现在这份抄错了,不是读的时候还是别的版本(随机 UUID 之间差三十来位):
@@ -389,6 +395,12 @@ export const memoryLogProvider: ToolProvider = {
                 ? `Entry ${JSON.stringify(target.id)} currently reads ${JSON.stringify(target.content)}. If that is still the entry you meant to ${action}, retry with exactly this expectedVersion${scoped}; otherwise list again.`
                 : `There is no entry with id ${JSON.stringify(mutation.id)}; list again${scoped} and use an ID from it.`);
           };
+          // 11-09 分层:这件事已经在项目记忆的详情(含归档)里 → 同上,不在常驻里再记一份;认「已有某一条里的一段原话」也算上详情
+          if (projectRepo && action === 'add') {
+            const details = (() => { try { return projectDetailEntries(projectLayers(projectRef!), true); } catch { return []; } })();
+            const hit = details.find((d) => d.id === normalizeMemoryFact(fact)) ?? coveringProjectEntry(details.map((d) => ({ ...d, content: d.text })), fact);
+            if (hit) return JSON.stringify({ ok: true, action, scope, project: projectRef!.name, duplicate: true, note: `This fact is already saved in the project memory details (topic "${hit.topic}"); nothing was written.`, entry: { content: hit.text } });
+          }
           // 11-09 分层:这件事已经在这个 Agent 的记忆详情里(整理时挪过去的)→ 不在常驻里再记一份(它会被详情那份盖过、白占一条)
           if (!projectRepo && action === 'add' && brain.getMemoryLayers) {
             const layers = await brain.getMemoryLayers(ctx.userId).catch(() => null);
@@ -396,27 +408,23 @@ export const memoryLogProvider: ToolProvider = {
             if (hit) return JSON.stringify({ ok: true, action, scope, duplicate: true, note: `This fact is already saved in your memory details (topic "${hit.t.title}", ${hit.t.path}); nothing was written.`, entry: { id: hit.e.entryId, content: hit.e.text } });
           }
           let snapshot: MemorySnapshot | undefined;
-          let compacted: Extract<CompactionOutcome, { status: 'compacted' }> | undefined;
           let fullError: unknown;
+          // 项目记忆写满(常驻超线)不再当场压缩(11-09 分层,方案页「满了不再打断前台」):写入照常成功(存到 PROJECT_MEMORY_STORE_CAP),
+          // 下面排一次后台整理。真到了存储上限(整理反复没成)才回「写满了」。
           try { snapshot = await write(); } catch (e) {
             const misread = e instanceof MemoryRepositoryError && e.code === 'MEMORY_VERSION_CONFLICT' ? await miscopiedVersion() : null;
             if (misread) return misread;
             if (!isFull(e)) throw e;
             fullError = e;
-            // 项目记忆写满(10-05 用户:「记忆满了就让 agent 压缩一下」):先让模型把整份压一遍,再记这一句。agent 级不走这条(那边有 Dream)。
-            // 只管 add:update 带着旧版本号和旧条目 id,压完都对不上了,那种照旧回现有条目。压不成(没模型 / 压不动 / 刚试过)同样照旧。
-            const made = projectRepo && action === 'add' ? await compactProjectMemory(ctx.userId, projectRef!, { fallbackModelId: ctx.modelId, sessionId: ctx.sessionId, signal: ctx.signal }) : undefined;
-            if (made?.status === 'compacted') {
-              // 不带模型给的 expectedVersion:压缩自己把版本改了,带着它这一句必然冲突
-              try { snapshot = await write({ ...mutation, expectedVersion: undefined }); compacted = made; } catch (again) { if (!isFull(again)) throw again; }
-            }
           }
           if (!snapshot) {
             // 满了就回显现有条目,让模型一次删旧加新(Hermes 的 IF FULL),而不是只丢一句「超预算」。
             const full = await read();
             if (!full) throw fullError;
-            return `Error: ${projectRepo ? 'project' : 'long-term'} memory is full (${full.content.length}/${limit} characters). Forget or shorten stale entries with update/forget (scope "${scope}", expectedVersion ${full.version}), then add. Current entries: ${JSON.stringify(full.entries.map(entryView))}`;
+            return `Error: ${projectRepo ? 'project' : 'long-term'} memory is full (${full.content.length}/${projectRepo ? PROJECT_MEMORY_STORE_CAP : limit} characters). Forget or shorten stale entries with update/forget (scope "${scope}", expectedVersion ${full.version}), then add. Current entries: ${JSON.stringify(full.entries.map(entryView))}`;
           }
+          // 项目记忆的常驻过线了:排一次后台整理(后台模型那一格,没配就用这一轮的模型),回执里告诉模型不用自己删
+          const overLine = projectRepo && action !== 'forget' ? afterProjectWrite(ctx.userId, projectRef!, { fallbackModelId: ctx.modelId, sessionId: ctx.sessionId }) : false;
           // 常驻过线了(11-09 分层):排一次后台整理(用后台模型那一格,不打断这轮对话);没配后台模型就不排,界面上有提示和手动入口
           if (!projectRepo && action !== 'forget' && brain.getMemoryLayers) {
             void brain.getMemoryLayers(ctx.userId).then(async (l) => {
@@ -435,8 +443,7 @@ export const memoryLogProvider: ToolProvider = {
             ...(duplicate ? { duplicate: true, note: 'An identical fact already exists; nothing was written.' } : {}),
             ...(entry ? { entry: entryView(entry) } : id ? { id } : {}),
             count: snapshot.entries.length, chars: snapshot.content.length, limit,
-            // 压过一遍:条目 id 和版本都换过了,模型手里旧的那份 list 不能再用
-            ...(compacted ? { compacted: `Project memory was full, so it was compacted before this was saved: ${compacted.before.count} entries (${compacted.before.chars} characters) became ${compacted.after.count} (${compacted.after.chars}). Entry IDs and versions from earlier list calls are stale; list again before update or forget.` } : {}),
+            ...(overLine ? { organizing: 'Saved. The resident part of project memory is past its limit, so a background run will move background and history into detail files and archive finished progress, word for word. Nothing to do on your side: do not forget entries to make room.' } : {}),
           });
         }
         if (action !== 'add') return 'Error: this memory backend does not support entry management.';

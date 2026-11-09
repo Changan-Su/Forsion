@@ -233,6 +233,7 @@ import { realUseLive } from './lib/real-use-live.mjs';
 import { humanRealLive } from './lib/human-real-live.mjs';
 import { humanPortraitLive } from './lib/human-portrait-live.mjs';
 import { tiersLive } from './lib/tiers-live.mjs';
+import { projTiersLive } from './lib/projtiers-live.mjs';
 import { portraitMoveLive } from './lib/portrait-move-live.mjs';
 import { importLive } from './lib/import-live.mjs';
 import { dreamSeedLive } from './lib/dream-seed-live.mjs';
@@ -286,6 +287,7 @@ KEYS.push('realuse');
 KEYS.push('humanreal');
 KEYS.push('humanportrait');
 KEYS.push('tiers');
+KEYS.push('projtiers');
 KEYS.push('portraitmove');
 KEYS.push('import');
 KEYS.push('projmem');
@@ -398,6 +400,7 @@ OPT_IN.add('webpublishreal'); KEYS.push('webpublishreal');
 OPT_IN.add('webcardsreal'); KEYS.push('webcardsreal');
 OPT_IN.add('realuse'); // 真实使用模拟:每轮 12 个 run(--rounds),--usage-db 再加一个 Muse 周期;单独跑。
 OPT_IN.add('suggest'); // 三个 run + 三次建议调用;只在动 services/promptSuggestion.ts(提示词 / 前缀对齐)或主循环收尾处的快照时才有信息量。
+OPT_IN.add('projtiers'); // 项目记忆分层(11-09 2b):超线的项目记忆整理后,线外的约定 / 来龙去脉问得出;只在动项目记忆 / 写满压缩 / 召回时才有信息量。
 OPT_IN.add('tiers'); // 记忆分层(11-09):超线的画像 / Agent 记忆整理后,线外的事问得出;只在动记忆分层 / 召回 / 整理时才有信息量。
 OPT_IN.add('humanportrait'); // 画像(human/SOUL.md)写没写:每轮 4 个 run + 另一个 agent 读一次;只在动 remember 的 person 档 / 画像注入时才有信息量。
 OPT_IN.add('import'); // 从其他 AI 导入(11-03):后台模型拆条 / 归位 / 拦截;不跑对话。动了 services/externalImport 的提示 / 后处理才有信息量。--import-neg = 负对照
@@ -2201,6 +2204,10 @@ try {
   // ── 记忆分层:常驻 + 详情 + 召回(11-09);设计见 lib/tiers-live.mjs ──
   await scenario('tiers', `tiers 记忆分层:超线的画像 / 记忆整理后,线外的事问得出 ×${SELF_ROUNDS} 轮`, () =>
     tiersLive({ run, api, OUT, MODEL, AGENT_CONFIG, rounds: SELF_ROUNDS }));
+
+  // ── 项目记忆分层:常驻 + 详情 + 召回(11-09 2b);设计见 lib/projtiers-live.mjs ──
+  await scenario('projtiers', `projtiers 项目记忆分层:超线的项目记忆整理后,线外的约定 / 来龙去脉问得出 ×${SELF_ROUNDS} 轮`, () =>
+    projTiersLive({ run, api, OUT, MODEL, home, workspace, rounds: SELF_ROUNDS }));
 
   // ── 搬家:后台模型从 agent 记忆里挑「关于这个人」的条目、写成第二人称(10-30);设计见 lib/portrait-move-live.mjs ──
   await scenario('portraitmove', `portraitmove 搬家:该挑的全挑、对 Agent 的要求和项目的事一条不挑 ×${SELF_ROUNDS} 轮`, () =>

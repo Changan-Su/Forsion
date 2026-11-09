@@ -1,5 +1,13 @@
 /**
- * 项目记忆写满时的压缩(10-05 用户:「可以参考 claude 和 codex 的做法吧,记忆满了就让 agent 压缩一下」)。
+ * 项目记忆写满时的整理(11-09 分层 2b,方案页 docs/ToBeImproved/记忆分层与Agent分身方案_2026-11-09):「先挪进详情,再丢过时的」。
+ *   第一段 = organizeProjectMemory 的挪动:后台模型只分堆(留常驻 / 挪进某个详情主题 / 归档),一个字都不写,原句由引擎搬进
+ *     项目记忆目录的 Library/<主题>.md(归档 = Library/archive.md);命令、路径、约定、踩过的坑留常驻,来龙去脉、历史决策挪详情,
+ *     进度流水和做完的事归档(原句可找回、不再召回)。应用走 agentMemoryLayers.ts 的跨文件事务(先写详情、核对、最后才从常驻里拿掉;
+ *     中断接着做;整次撤销)。挪动不丢任何东西,所以这一段不卡七成。钉住的、人写的(manual / 手改)只挪不归档;过不了形状闸的不给模型看。
+ *   第二段 = 第一段之后常驻仍超过上限的七成,才跑下面这套原来的压缩(合并 / 取代 / 丢掉,闸一道不少),丢掉的原句照旧进 COMPACTED.json 逐句可恢复。
+ *   前台写入、后台判官都不再同步等它:写满(常驻超线)只排一次后台整理(scheduleProjectOrganize),写入本身照常成功。
+ *
+ * 以下是第二段(10-05 用户:「可以参考 claude 和 codex 的做法吧,记忆满了就让 agent 压缩一下」)。
  *
  * 以前写满了就是写不进:前台 remember 回一份现有条目让模型自己逐条删,后台(Historian 判官)那条路直接不写。
  * 现在写满时让模型把整份重写一遍 —— 说同一件事的合成一句、被后来的条目取代的和过了时的去掉、措辞收短 —— 腾出地方再记那一句。
@@ -31,7 +39,11 @@ import { redactSecrets } from '../core/redact.js';
 import { autoAdoptable } from '../agents/harnessStore.js';
 import { loadSpecialAgentsConfig, resolveBackgroundModelId } from './specialAgentsConfig.js';
 import { MemoryRepositoryError, filterForgottenMemory, normalizeMemoryFact, type MemoryEntry } from './memoryRepository.js';
-import { openProjectMemory, recordProjectCompaction, PROJECT_MEMORY_CHAR_BUDGET, type CompactionSize, type ProjectMemoryRef } from './projectMemory.js';
+import { openProjectMemory, projectEntryAuthor, projectLayers, recordProjectCompaction, PROJECT_MEMORY_CHAR_BUDGET, PROJECT_STORE, type CompactionSize, type ProjectMemoryRef } from './projectMemory.js';
+import { splitMark, stripMark, stripMarks } from '../contracts/entryMark.js';
+import { applyAgentOrganize, readAgentLayers, type AgentLayers } from './agentMemoryLayers.js';
+import { isOrganizeOutcome, organizeAvailable, proposeOrganize, type OrganizeItem } from './memoryOrganize.js';
+import { AGENT_USAGE_FILE, readMemoryUse } from './memoryUsage.js';
 
 /** 给模型的预算:压到上限的一半。 */
 export const COMPACT_ASK_CHARS = Math.floor(PROJECT_MEMORY_CHAR_BUDGET * 0.5);
@@ -157,13 +169,14 @@ async function run(userId: string, ref: ProjectMemoryRef, fallbackModelId?: stri
   const signal = AbortSignal.timeout(DEADLINE_MS);
   const repo = await openProjectMemory(ref);
   const snapshot = repo.snapshot();
-  const strip = (e: MemoryEntry): string => e.content.replace(/^[-*+]\s+/, '');
+  // 行尾记号(钉住、谁写的,11-09 分层)不给模型看;钉住的和人写的一样不改写
+  const strip = (e: MemoryEntry): string => stripMark(e.content).trim().replace(/^[-*+]\s+/, '');
   // 不给模型看的:过不了形状闸的,和带着密钥样子的(过得了形状闸、但 redactSecrets 认得出 —— 压缩用的可能是另一家的后台模型)
-  const risky = (e: MemoryEntry): boolean => !autoAdoptable(e.content) || redactSecrets(e.content) !== e.content;
-  const pinned = (e: MemoryEntry): boolean => e.source?.kind === 'manual' || risky(e);
+  const risky = (e: MemoryEntry): boolean => { const t = stripMark(e.content).trim(); return !autoAdoptable(t) || redactSecrets(t) !== t; };
+  const pinned = (e: MemoryEntry): boolean => e.source?.kind === 'manual' || !!splitMark(e.content).meta.pin || splitMark(e.content).meta.by === 'user' || risky(e);
   const open = snapshot.entries.filter((e) => !pinned(e));
   if (open.length < 2) return { status: 'skipped', reason: 'nothing' };
-  const fixedChars = snapshot.entries.filter(pinned).reduce((n, e) => n + e.content.length + 1, 0);
+  const fixedChars = snapshot.entries.filter(pinned).reduce((n, e) => n + stripMark(e.content).trim().length + 1, 0);
   // 不改写的条目自己就快把门槛占满 → 模型没有腾挪的余地,不叫它(用户在项目详情里删几条才有用)
   if (COMPACT_ACCEPT_CHARS - fixedChars < 500) return { status: 'skipped', reason: 'pinned' };
   // 给模型的 id 用短别名(m1…):UUID 一个二十多 token,几十上百个光 keep 就把输出预算吃掉(Dream 同一做法)。
@@ -231,7 +244,8 @@ async function run(userId: string, ref: ProjectMemoryRef, fallbackModelId?: stri
   }
   const content = lines.join('\n');
   // 门槛按真正要写下去的这份再量一次:校验里量的是给模型看的那份(去了行首的列表符号),两边对不上时以这里为准
-  if (content.length > COMPACT_ACCEPT_CHARS) return { status: 'skipped', reason: 'rejected', detail: `still ${content.length} characters once written; ${COMPACT_ACCEPT_CHARS} or fewer are needed` };
+  const written = stripMarks(content).length;
+  if (written > COMPACT_ACCEPT_CHARS) return { status: 'skipped', reason: 'rejected', detail: `still ${written} characters once written; ${COMPACT_ACCEPT_CHARS} or fewer are needed` };
   let committed;
   try {
     committed = repo.commit({
@@ -295,3 +309,111 @@ export function compactProjectMemory(userId: string, ref: ProjectMemoryRef, opts
 }
 
 export function resetProjectMemoryCompactionForTests(): void { jobs.clear(); retryAt.clear(); }
+
+// ── 11-09 分层:第一段挪动 + 需要时第二段压缩;后台排队 ─────────────────────────────────────────────────
+
+export type ProjectOrganizeOutcome =
+  | { status: 'organized'; moved: number; archived: number; before: CompactionSize; after: CompactionSize; recordId?: string; compacted?: { before: CompactionSize; after: CompactionSize } }
+  | { status: 'skipped'; reason: 'no_model' | 'under' | 'nothing' | 'busy' | 'cooldown' | 'rejected' | 'conflict' | 'failed'; detail?: string };
+/** 第一段的目标:挪到上限的六成(同 Agent 记忆);采用不卡这个数(挪动不丢东西),七成以上再走第二段。 */
+const MOVE_TARGET = Math.floor(PROJECT_MEMORY_CHAR_BUDGET * 0.6);
+const ORGANIZE_DEADLINE_MS = 90_000 + DEADLINE_MS + 10_000;
+const day = (t = Date.now()): string => { const d = new Date(t); const p = (n: number) => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; };
+const residentSize = (l: AgentLayers): CompactionSize => ({ count: l.resident.filter((r) => !r.shadowed).length, chars: l.residentChars });
+
+/** 第一段:后台模型分堆,引擎搬原句(跨文件事务)。过不了形状闸 / 带密钥样子的不给模型看,原地留着。 */
+async function movePhase(userId: string, ref: ProjectMemoryRef, layers: AgentLayers, fallbackModelId?: string): Promise<ProjectOrganizeOutcome> {
+  const use = readMemoryUse(ref.dir, AGENT_USAGE_FILE);
+  const now = Date.now();
+  const risky = (content: string): boolean => { const t = stripMark(content).trim(); return !autoAdoptable(t) || redactSecrets(t) !== t; };
+  const shown = layers.resident.filter((r) => !r.shadowed && !risky(r.entry.content));
+  const items: OrganizeItem[] = shown.map((r, i) => { const u = use(r.entry.content); return { id: `e${i + 1}`, text: r.text, by: projectEntryAuthor(r.entry), pinned: r.pinned, uses30: u.uses30, lastUsed: u.lastUsed, ageDays: Math.max(0, Math.floor((now - r.entry.createdAt) / 86_400_000)) }; });
+  if (!items.some((i) => !i.pinned)) return { status: 'skipped', reason: 'nothing' };
+  const existing = layers.topics.map((t) => ({ key: t.key, title: t.title, about: t.about, count: t.entries.length }));
+  const plan = await proposeOrganize(userId, 'project', { limit: PROJECT_MEMORY_CHAR_BUDGET, now: layers.residentChars, target: MOVE_TARGET, today: day(), entries: items, topics: existing }, items, existing, fallbackModelId);
+  if (isOrganizeOutcome(plan)) return plan;
+  if (!plan.moves.length) return { status: 'skipped', reason: 'rejected', detail: plan.ignored.slice(0, 3).join('; ') || 'nothing moved' };
+  const byAlias = new Map(items.map((it, i) => [it.id, shown[i]]));
+  const moves = plan.moves.map((m) => { const r = byAlias.get(m.id)!; return { identity: r.identity, raw: r.entry.content, to: m.topic, by: projectEntryAuthor(r.entry) }; });
+  try {
+    const r = applyAgentOrganize(ref.dir, { expectedVersion: layers.version, moves, topics: plan.topics, before: residentSize(layers) }, PROJECT_STORE);
+    return { status: 'organized', moved: moves.filter((m) => m.to !== 'archive').length, archived: moves.filter((m) => m.to === 'archive').length, before: r.before, after: r.after ?? residentSize(layers), recordId: r.id };
+  } catch (e) {
+    if (e instanceof MemoryRepositoryError && e.code === 'MEMORY_VERSION_CONFLICT') return { status: 'skipped', reason: 'conflict' };
+    if (e instanceof MemoryRepositoryError && e.code === 'MEMORY_BUSY') return { status: 'skipped', reason: 'busy' };
+    throw e;
+  }
+}
+
+async function organizeRun(userId: string, ref: ProjectMemoryRef, manual: boolean, fallbackModelId?: string, sessionId?: string): Promise<ProjectOrganizeOutcome> {
+  await openProjectMemory(ref);
+  const start = readAgentLayers(ref.dir, PROJECT_STORE);
+  if (!manual && start.residentChars <= PROJECT_MEMORY_CHAR_BUDGET) return { status: 'skipped', reason: 'under' };
+  const first = await movePhase(userId, ref, start, fallbackModelId);
+  if (first.status === 'skipped' && (first.reason === 'no_model' || first.reason === 'conflict' || first.reason === 'busy')) return first;
+  const mid = readAgentLayers(ref.dir, PROJECT_STORE);
+  if (mid.residentChars <= COMPACT_ACCEPT_CHARS) return first.status === 'organized' ? { ...first, after: residentSize(mid) } : first;
+  // 挪完常驻还超过七成:第二段,原来那套压缩(合并 / 取代 / 丢掉,闸一道不少;丢掉的原句进 COMPACTED.json 逐句可恢复)
+  const second = await run(userId, ref, fallbackModelId, sessionId);
+  const end = readAgentLayers(ref.dir, PROJECT_STORE);
+  if (second.status === 'compacted') {
+    return { status: 'organized', moved: first.status === 'organized' ? first.moved : 0, archived: first.status === 'organized' ? first.archived : 0,
+      before: residentSize(start), after: residentSize(end), ...(first.status === 'organized' && first.recordId ? { recordId: first.recordId } : {}), compacted: { before: second.before, after: second.after } };
+  }
+  if (first.status === 'organized') return { ...first, after: residentSize(end) };
+  const reason = second.reason === 'pinned' ? 'nothing' : second.reason;
+  return { status: 'skipped', reason, ...(second.detail || first.detail ? { detail: [first.detail, second.detail].filter(Boolean).join(' / ') } : {}) };
+}
+
+const organizeJobs = new Map<string, Promise<ProjectOrganizeOutcome>>();
+const organizeRetryAt = new Map<string, number>();
+const organizeLast = new Map<string, { at: number; outcome: ProjectOrganizeOutcome }>();
+const organizeTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+/** 整理一次这个项目的记忆。同一个项目同时只跑一次(第二个调用方等同一次的结果)。自动排的:没整理到常驻线以内,30 分钟内不再自动试;手点的不受限。
+ *  fallbackModelId = 解析不出后台模型时用哪个(前台排的传当前 run 的模型,同原来的写满压缩)。 */
+export function organizeProjectMemory(userId: string, ref: ProjectMemoryRef, opts: { manual?: boolean; fallbackModelId?: string; sessionId?: string } = {}): Promise<ProjectOrganizeOutcome> {
+  const running = organizeJobs.get(ref.dir);
+  if (running) return running;
+  if (!opts.manual && (organizeRetryAt.get(ref.dir) ?? 0) > Date.now()) return Promise.resolve({ status: 'skipped', reason: 'cooldown' });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('timed out')), ORGANIZE_DEADLINE_MS); });
+  const job = Promise.race([organizeRun(userId, ref, !!opts.manual, opts.fallbackModelId, opts.sessionId), late])
+    .finally(() => clearTimeout(timer))
+    .catch((e): ProjectOrganizeOutcome => ({ status: 'skipped', reason: 'failed', detail: String(e?.message || e).slice(0, 200) }))
+    .then((outcome) => {
+      log(outcome.status === 'organized'
+        ? `整理(${ref.name}):挪进详情 ${outcome.moved} 条、归档 ${outcome.archived} 条${outcome.compacted ? `,再压缩 ${outcome.compacted.before.count} → ${outcome.compacted.after.count} 条` : ''},常驻 ${outcome.before.chars} → ${outcome.after.chars} 字`
+        : `整理没成(${ref.name}):${outcome.reason}${outcome.detail ? ` — ${outcome.detail}` : ''}`);
+      // 自动排的没整理到线内(没成,或挪完还是超线)→ 冷却;别处同时改过(conflict / busy)不算,下一句再满就再试
+      const still = outcome.status === 'organized' ? outcome.after.chars > PROJECT_MEMORY_CHAR_BUDGET : !['under', 'conflict', 'busy', 'cooldown'].includes(outcome.reason);
+      if (still) organizeRetryAt.set(ref.dir, Date.now() + RETRY_AFTER_MS); else organizeRetryAt.delete(ref.dir);
+      organizeLast.set(ref.dir, { at: Date.now(), outcome });
+      return outcome;
+    })
+    .finally(() => organizeJobs.delete(ref.dir));
+  organizeJobs.set(ref.dir, job);
+  return job;
+}
+
+/** 常驻写过线之后排一次(稍等几秒,让同一轮里接连的几笔写完)。不等结果、不抛。 */
+export function scheduleProjectOrganize(userId: string, ref: ProjectMemoryRef, opts: { fallbackModelId?: string; sessionId?: string } = {}): void {
+  if (organizeTimers.has(ref.dir) || organizeJobs.has(ref.dir) || (organizeRetryAt.get(ref.dir) ?? 0) > Date.now()) return;
+  const t = setTimeout(() => { organizeTimers.delete(ref.dir); void organizeProjectMemory(userId, ref, opts); }, 3_000);
+  t.unref?.();
+  organizeTimers.set(ref.dir, t);
+}
+/** 写完之后看一眼常驻:过线了就排一次整理。返回过没过线(回执里告诉模型「不用自己删」)。读不了当没过线,不抛。 */
+export function afterProjectWrite(userId: string, ref: ProjectMemoryRef, opts: { fallbackModelId?: string; sessionId?: string } = {}): boolean {
+  try {
+    const l = projectLayers(ref);
+    if (!l || l.residentChars <= l.limit) return false;
+    scheduleProjectOrganize(userId, ref, opts);
+    return true;
+  } catch { return false; }
+}
+/** 界面要的:能不能整理(有没有后台模型)、正在跑没有、上一次的结果。 */
+export async function projectOrganizeStatus(ref: ProjectMemoryRef): Promise<{ available: boolean; running: boolean; last: { at: number; outcome: ProjectOrganizeOutcome } | null }> {
+  return { available: await organizeAvailable(), running: organizeJobs.has(ref.dir) || organizeTimers.has(ref.dir), last: organizeLast.get(ref.dir) ?? null };
+}
+export function resetProjectMemoryOrganizeForTests(): void { organizeJobs.clear(); organizeRetryAt.clear(); organizeLast.clear(); for (const t of organizeTimers.values()) clearTimeout(t); organizeTimers.clear(); }
