@@ -1,0 +1,47 @@
+/* 记忆分层(11-09 第二步):常驻 / 详情。底色即边界、不描边、不画虚线(DESIGN §5);字号只用界面角色变量(check:uiscale)。 */
+.memory-layer-head { margin: 16px 0 6px; color: var(--text); font-size: var(--ui-font-body); font-weight: 600; }
+.memory-layers > .memory-layer-head:first-child { margin-top: 0; }
+.memory-layer-muted { color: var(--text-muted); }
+
+.memory-layer-bar { margin: 0 0 12px; color: var(--text-muted); font-size: var(--ui-font-meta); }
+.memory-layer-bar > p { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin: 0; }
+.memory-layer-bar .profile-text-action { display: inline-flex; align-items: center; gap: 5px; }
+.memory-layer-records { margin: 8px 0 0; padding: 0; list-style: none; }
+.memory-layer-records li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; padding: 6px 0; }
+.memory-layer-records li + li { border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent); }
+
+/* 条目:一条一行,钉子在行尾;没钉的悬停 / 聚焦才出来,触屏常亮 */
+.memory-layer-entries { margin: 0; padding: 0 0 0 4px; list-style: none; }
+/* 类名两级:压过成长页 .profile-memory li 的留白(0,1,1),不靠样式表加载先后 */
+.memory-layer-entries > .memory-layer-item { display: flex; align-items: flex-start; gap: 8px; padding: 0; }
+.memory-layer-entries > .memory-layer-item + .memory-layer-item { margin-top: 4px; }
+/* 行首圆点:li 是 flex,原生列表符号画不出来 */
+.memory-layer-entries > .memory-layer-item::before { content: ''; flex: none; width: 4px; height: 4px; margin: calc(0.85em - 2px) 4px 0 0; border-radius: 50%; background: var(--text-muted); }
+.memory-layers > .md-body + .memory-layer-entries, .memory-layers > .memory-layer-entries + .md-body, .memory-layers > .memory-layer-entries + div, .memory-layers > .md-body + div { margin-top: 10px; }
+.memory-layer-text { flex: 1; min-width: 0; }
+.memory-layer-text p { display: inline; margin: 0; }
+.memory-layer-by { margin-left: 8px; color: var(--text-muted); font-size: var(--ui-font-caption); white-space: nowrap; }
+.memory-layer-pin { flex: none; display: inline-grid; place-items: center; width: 22px; height: 22px; padding: 0; color: var(--text-muted); background: none; border: 0; border-radius: var(--radius-sm); cursor: pointer; opacity: 0; transition: opacity var(--motion-fast, 120ms) ease; }
+.memory-layer-pin[aria-pressed="true"] { color: var(--accent-ink); opacity: 1; }
+.memory-layer-pin:hover:not(:disabled) { color: var(--text); background: var(--bg-hover); }
+.memory-layer-pin:focus-visible, li:hover > .memory-layer-pin, .memory-entry-meta .memory-layer-pin { opacity: 1; }
+.memory-layer-pin:disabled { cursor: default; }
+@media (hover: none) { .memory-layer-pin { opacity: 1; } }
+
+/* 详情:每份一行(图标、标题 · 几条、说明、文件位置、展开箭头);点开是这一份的条目 */
+.memory-layer-details { margin-top: 18px; }
+.memory-layer-topics { margin: 0; padding: 0; list-style: none; }
+.memory-layer-topics > .memory-layer-topic-row { padding: 0; }
+.memory-layer-topics > .memory-layer-topic-row + .memory-layer-topic-row { margin-top: 2px; }
+.memory-layer-topic { display: flex; align-items: flex-start; gap: 10px; width: 100%; padding: 8px 6px; color: var(--text); text-align: left; background: none; border: 0; border-radius: var(--radius-sm); font: inherit; cursor: pointer; }
+.memory-layer-topic:hover { background: var(--bg-hover); }
+.memory-layer-topic > svg { flex: none; margin-top: 3px; color: var(--text-muted); }
+.memory-layer-topic-main { flex: 1; min-width: 0; }
+.memory-layer-topic-main strong { font-weight: 600; }
+.memory-layer-about { display: block; color: var(--text-muted); font-size: var(--ui-font-meta); overflow-wrap: anywhere; }
+.memory-layer-path { flex: none; max-width: 40%; margin-top: 2px; color: var(--text-muted); font-size: var(--ui-font-caption); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.memory-layer-chevron { transition: transform var(--motion-fast, 120ms) ease; }
+.memory-layer-topic[aria-expanded="true"] .memory-layer-chevron { transform: rotate(90deg); }
+.memory-layer-topics .memory-layer-entries { margin: 2px 0 10px 31px; color: var(--text-light, var(--text)); }
+/* 窄栏(手机 / 窄分栏):文件位置让给说明 */
+@media (max-width: 640px) { .memory-layer-path { display: none; } }

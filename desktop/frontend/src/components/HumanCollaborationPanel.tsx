@@ -9,7 +9,10 @@ import { useApp } from '../stores/appStore'
 import { formatRelative, formatDateTime } from '../format/time'
 import type { TanguDesktopConfig } from '../../../../tangu-agent/src/contracts/clientTypes'
 import { ABOUT_HUMAN_LIMITS, clipWholeLines } from '../../../../tangu-agent/src/contracts/promptClip'
-import { dismissPortraitOverflow, getPortraitOverflow, type PortraitOverflowItem } from '../services/backendService'
+import { dismissPortraitOverflow, getPortraitOrganize, getPortraitOverflow, pinPortraitEntry, runPortraitOrganize, undoPortraitOrganize, type MemoryOrganizeView, type PortraitOverflowItem } from '../services/backendService'
+import { splitPortrait } from '../../../../tangu-agent/src/contracts/memoryLayers'
+import { stripMarks } from '../../../../tangu-agent/src/contracts/entryMark'
+import { DetailTopics, LayerEntries, OrganizeBar, factOf, organizeOutcomeText, residentBlocks, type LayerItem } from './MemoryLayers'
 import type { EngineTarget } from '../services/engine/targets'
 import { getHumanDocument, saveHumanDocument, undoHumanChange, humanTargetKey, humanLegacy, HUMAN_CHANGED_EVENT, type HumanChange, type HumanDocument, type HumanTarget, type HumanJump } from '../services/humanCollaboration'
 import './humanMessages'
@@ -45,6 +48,8 @@ function HumanBody({ engine, target, name, running, jump, onRewrite, draftKey }:
   const [conflict, setConflict] = useState(false), [latest, setLatest] = useState<HumanDocument | null>(null)
   // Dream 因为画像满了、记在各 Agent 那里的条目(只画像那份有;旧引擎 / 读不出 = 不提示)
   const [overflow, setOverflow] = useState<PortraitOverflowItem[]>([]), [overflowOpen, setOverflowOpen] = useState(false)
+  // 记忆分层(11-09 第二步):整理记录 / 有没有后台模型;旧引擎没有这条路由 = null,界面照第一步
+  const [organize, setOrganize] = useState<MemoryOrganizeView | null>(null), [organizing, setOrganizing] = useState(false)
   const editorRef = useRef<HTMLTextAreaElement>(null), caretAt = useRef<number | null>(null)
   const alive = useRef(true), seq = useRef(0), processedJump = useRef(0)
   useEffect(() => { alive.current = true; return () => { alive.current = false; seq.current++ } }, [])
@@ -54,7 +59,10 @@ function HumanBody({ engine, target, name, running, jump, onRewrite, draftKey }:
     const n = ++seq.current
     try { const d = await getHumanDocument(engine, target); if (alive.current && n === seq.current) { setDoc(d); const pending = draftRef.current; if (pending && pending.version !== d.version && pending.content === d.content) changeDraft(null); if (!draftRef.current) setError('') } }
     catch (e) { if (alive.current && n === seq.current) setError(errorText(e)) }
-    if (file === 'soul') { try { const o = await getPortraitOverflow(engine); if (alive.current) setOverflow(o.items) } catch { if (alive.current) setOverflow([]) } }
+    if (file === 'soul') {
+      try { const o = await getPortraitOverflow(engine); if (alive.current) setOverflow(o.items) } catch { if (alive.current) setOverflow([]) }
+      try { const v = await getPortraitOrganize(engine); if (alive.current) setOrganize(v) } catch { if (alive.current) setOrganize(null) }
+    }
   }, [draftKey, locale]) // identity is encoded by draftKey
   useEffect(() => { void load(); const refresh = () => { void load() }; window.addEventListener(HUMAN_CHANGED_EVENT, refresh); return () => window.removeEventListener(HUMAN_CHANGED_EVENT, refresh) }, [load, running])
   useEffect(() => {
@@ -79,7 +87,36 @@ function HumanBody({ engine, target, name, running, jump, onRewrite, draftKey }:
     finally { if (alive.current) setBusy(false) }
   }
   // 「整理画像」第一步 = 进入编辑,光标停在线上(textarea 画不了高亮;编辑框下面随打随算还剩几条在线外)
-  const tidy = () => { if (!doc || draft || busy) return; caretAt.current = cut?.cutAt ?? null; changeDraft({ content: doc.content, version: doc.version }) }
+  const tidy = () => {
+    if (!doc || draft || busy) return
+    // 线算在去掉记号的常驻上:光标落到线外第一条在原文里的位置
+    const first = layered && over ? blocks.find((b) => b.outside) : null
+    const at = first ? doc.content.indexOf(first.kind === 'entries' ? factOf(first.items[0]) : first.md.split('\n')[0]) : -1
+    caretAt.current = at >= 0 ? at : null; changeDraft({ content: doc.content, version: doc.version })
+  }
+  /** 后台整理(配了后台模型才有这颗按钮):成了 / 没成都说一句,画像和记录重新读。 */
+  const runOrganize = async () => {
+    if (organizing || busy || draft) return
+    setOrganizing(true); setError(''); setNotice('')
+    try { const o = await runPortraitOrganize(engine); if (alive.current) setNotice(organizeOutcomeText(t, o, num)) }
+    catch (e) { if (alive.current) setError(errorText(e)) }
+    finally { if (alive.current) { setOrganizing(false); void load() } }
+  }
+  const undoOrganize = async (id: string) => {
+    if (busy || draft) return
+    setBusy(true); setError(''); setNotice('')
+    try { await undoPortraitOrganize(engine, id); if (alive.current) setNotice(t('memoryLayers.undoneNotice')) }
+    catch (e: any) { if (alive.current) setError(e?.status === 409 ? t('human.undoConflict') : errorText(e)) }
+    finally { if (alive.current) { setBusy(false); void load() } }
+  }
+  /** 钉住 / 取消;详情里的那条钉住 = 挪回常驻。按原句指,带着读到的版本(别处改过 = 409,重读)。 */
+  const pin = async (item: LayerItem, pinned: boolean) => {
+    if (!doc || busy || draft) return
+    setBusy(true); setError(''); setNotice('')
+    try { await pinPortraitEntry(engine, { fact: factOf(item), pinned, expectedVersion: doc.version }) }
+    catch (e: any) { if (alive.current) setError(e?.status === 409 ? t('human.conflict') : errorText(e)) }
+    finally { if (alive.current) { setBusy(false); void load() } }
+  }
   useEffect(() => {
     const at = caretAt.current, ta = editorRef.current
     if (at === null || !ta || !draft) return
@@ -91,9 +128,17 @@ function HumanBody({ engine, target, name, running, jump, onRewrite, draftKey }:
   const dismissOverflow = async () => { try { await dismissPortraitOverflow(engine); if (alive.current) { setOverflow([]); setOverflowOpen(false) } } catch (e) { if (alive.current) setError(errorText(e)) } }
   const rewrite = () => { if (!onRewrite || running || draft) return; setError(''); onRewrite(); setNotice(t('human.rewrite.sent')) }
   const limit = file ? PROMPT_LIMIT[file] : undefined
-  const cut = doc && limit ? clipWholeLines(doc.content, limit) : null
+  // 画像分层(11-09 第二步):量的是常驻(详情各节不算、行尾记号不算),和引擎注入同一个口径;线也画在常驻上
+  const layered = file === 'soul'
+  const layers = layered && doc ? splitPortrait(doc.content) : null
+  const measured = (content: string) => (layered ? stripMarks(splitPortrait(content).resident) : content)
+  const cut = doc && limit ? clipWholeLines(measured(doc.content), limit) : null
   const over = cut && cut.cutAt !== null ? cut : null
-  const draftCut = draft && limit ? clipWholeLines(draft.content, limit) : null
+  const draftCut = draft && limit ? clipWholeLines(measured(draft.content), limit) : null
+  const blocks = layers ? residentBlocks(layers.resident, over ? over.cutAt : null) : []
+  const detailTopics = layers ? layers.topics.filter((x) => x.key !== 'archive').map((x) => ({ key: x.key, title: x.title, about: x.about, entries: x.entries.map((e) => ({ id: e.id, text: e.text, by: e.meta.by })) })) : []
+  const archiveTopic = layers?.topics.find((x) => x.key === 'archive')
+  const archive = archiveTopic ? { key: 'archive', title: archiveTopic.title, about: archiveTopic.about, entries: archiveTopic.entries.map((e) => ({ id: e.id, text: e.text, by: e.meta.by })) } : null
   const agentName = (slug: string) => agentDefs.find((a) => a.slug === slug)?.name || slug
   const num = (n: number) => (locale === 'zh' ? String(n) : new Intl.NumberFormat('en-US').format(n))
   const reviewLatest = async () => { try { const d = await getHumanDocument(engine, target); if (alive.current) setLatest(d) } catch (e) { if (alive.current) setError(errorText(e)) } }
@@ -111,7 +156,10 @@ function HumanBody({ engine, target, name, running, jump, onRewrite, draftKey }:
     {doc && !draft && !file && humanLegacy(doc) && <p className="human-notice" data-human-legacy>{t('human.legacy')} {onRewrite && <button type="button" className="profile-text-action" disabled={!!running} onClick={rewrite}><RefreshCw size={12} />{t('human.rewrite')}</button>}</p>}
     {!doc && !error && <p className="agent-profile-muted" role="status"><Loader2 size={14} className="spin" /> {t('human.loading')}</p>}
     {doc && over && <p className="human-notice human-over" data-prompt-over-budget={file}>{t(file === 'soul' ? 'human.portraitOver' : 'human.notesOver', { limit: num(over.limit), chars: num(over.chars), n: over.outside })}
-      {file === 'soul' && !draft && <button type="button" className="profile-text-action" disabled={busy} onClick={tidy} data-portrait-tidy><Pencil size={12} />{t('human.portraitTidy')}</button>}</p>}
+      {file === 'soul' && !draft && <button type="button" className="profile-text-action" disabled={busy} onClick={tidy} data-portrait-tidy><Pencil size={12} />{t('human.portraitTidy')}</button>}
+      {file === 'soul' && !draft && organize && !organize.available && <span className="human-over-hint">{t('memoryLayers.noModel')}</span>}</p>}
+    {doc && layered && !draft && organize && <OrganizeBar view={organize} busy={busy} running={organizing || organize.running} onOrganize={() => void runOrganize()} onUndo={(id) => void undoOrganize(id)}
+      summary={<>{t('memoryLayers.residentChars', { chars: num(cut?.chars ?? 0), limit: num(limit ?? 0) })}{detailTopics.length > 0 && <> · {t('memoryLayers.detailCount', { n: detailTopics.length })}</>}</>} />}
     {doc && file === 'soul' && !draft && overflow.length > 0 && <div className="human-overflow" data-portrait-overflow>
       <p>{t('human.overflow.title', { n: overflow.length })}
         <button type="button" className="profile-text-action" aria-expanded={overflowOpen} onClick={() => setOverflowOpen(!overflowOpen)}>{t(overflowOpen ? 'human.overflow.hide' : 'human.overflow.show')}</button>
@@ -126,7 +174,16 @@ function HumanBody({ engine, target, name, running, jump, onRewrite, draftKey }:
       <div className="human-actions"><button type="button" className="btn primary sm" disabled={busy || conflict} onClick={() => void save()}>{busy && <Loader2 size={13} className="spin" />}{t('human.save')}</button><button type="button" className="btn sm" disabled={busy} onClick={() => { changeDraft(null); setConflict(false); setLatest(null); setError('') }}>{t('human.cancel')}</button></div>
       {conflict && <button type="button" className="profile-text-action" onClick={() => void reviewLatest()}>{t('human.latest')}</button>}
       {latest && <section className="human-latest"><div className="md-body"><Markdown content={latest.content} allowRun={false} /></div><button type="button" className="btn sm" disabled={busy} onClick={() => void save(latest.version)}>{t('human.merge')}</button></section>}
-    </div> : doc && (doc.content ? over
+    </div> : doc && layered && !source && doc.content ? <div className="memory-layers" data-portrait-layers>
+      {detailTopics.length > 0 && <h4 className="memory-layer-head">{t('memoryLayers.resident')}</h4>}
+      {blocks.map((b, i) => {
+        const node = b.kind === 'text' ? <div className="md-body" key={i}><Markdown content={b.md} allowRun={false} /></div>
+          : <LayerEntries key={i} items={b.items} busy={busy} onPin={(it, p) => void pin(it, p)} />
+        const first = b.outside && !blocks.slice(0, i).some((x) => x.outside)
+        return b.outside ? <div key={i}>{first && <div className="human-cutline" role="separator" data-prompt-cutline><span>{t('human.cutline')}</span></div>}<div className="human-outside" data-prompt-outside>{node}</div></div> : node
+      })}
+      <DetailTopics topics={detailTopics} archive={archive} busy={busy} onPinBack={(it) => void pin({ ...it, id: `0:${it.text.split('\n')[0]}` }, true)} />
+    </div> : doc && (doc.content ? over && !layered
       // 线内 / 线外分两段画,中间一条实线「Agent 每轮读到这里」,线外变淡;分在哪由 clipWholeLines(和引擎同一个函数)给
       ? <>{source ? <pre className="human-source">{doc.content.slice(0, over.cutAt!)}</pre> : <div className="md-body"><Markdown content={doc.content.slice(0, over.cutAt!)} allowRun={false} /></div>}
         <div className="human-cutline" role="separator" data-prompt-cutline><span>{t('human.cutline')}</span></div>

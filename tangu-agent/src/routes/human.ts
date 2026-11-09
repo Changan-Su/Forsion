@@ -3,7 +3,7 @@ import { authMiddleware, type AuthRequest } from '../core/http.js';
 import { deps } from '../seams/runtime.js';
 import { HumanError, isHumanFile, readHuman, writeHuman, type HumanScope } from '../agents/humanStore.js';
 import { mirrorLegacyHuman } from '../agents/humanFolder.js';
-import { dismissPortraitOverflow, mutatePortrait, portraitEntries, PORTRAIT_SHORT_VERSION, readPortrait, readPortraitOverflow } from '../agents/humanPortrait.js';
+import { dismissPortraitOverflow, mutatePortrait, portraitEntries, portraitEntryId, PORTRAIT_SHORT_VERSION, readPortrait, readPortraitOverflow } from '../agents/humanPortrait.js';
 import { keepPortraitItem, movePortraitItem, readPortraitMove, startPortraitScan, undoPortraitMove } from '../agents/portraitMove.js';
 import { getAgent, isValidSlug, resolveMemorySlug } from '../agents/agentRegistry.js';
 import { humanProjectScope } from '../services/humanContext.js';
@@ -16,11 +16,14 @@ import { agentsDir, defaultCalendarFile, ensureHumanFolder, humanDir, tanguHome 
 import { atomicSyncWrite, readSyncBytes } from '../services/agentSyncPaths.js';
 import { createMemoryRepository, normalizeMemoryFact, withMemoryDirectoryLock } from '../services/memoryRepository.js';
 import { serializeDb, type DbFile } from '../services/amadeusDb.js';
+import { pinPortraitEntry, portraitOrganizeHistory, undoPortraitOrganize } from '../agents/portraitLayers.js';
+import { agentOrganizeHistory, pinAgentEntry, readAgentLayers, undoAgentOrganize } from '../services/agentMemoryLayers.js';
+import { lastOrganize, organizeAvailable, organizeRunning, runOrganize, type OrganizeTarget } from '../services/memoryOrganize.js';
 
 const router = Router();
 function fail(res: Response, e: any) {
   const code = e?.code || 'HUMAN_FAILED';
-  res.status(code === 'HUMAN_CONFLICT' || code === 'MEMORY_VERSION_CONFLICT' ? 409 : code === 'HUMAN_VERSION_REQUIRED' ? 428 : code === 'HUMAN_NOT_FOUND' || code === 'PORTRAIT_NOT_FOUND' ? 404 : 400)
+  res.status(code === 'HUMAN_CONFLICT' || code === 'MEMORY_VERSION_CONFLICT' ? 409 : code === 'HUMAN_VERSION_REQUIRED' ? 428 : code === 'HUMAN_NOT_FOUND' || code === 'PORTRAIT_NOT_FOUND' || code === 'MEMORY_NOT_FOUND' ? 404 : code === 'MEMORY_BUSY' ? 409 : 400)
     .json({ error: code, detail: e?.message || 'Collaboration request failed.' });
 }
 async function scopeOf(req: AuthRequest, res: Response): Promise<HumanScope | null> {
@@ -200,6 +203,85 @@ router.post('/agent/agents/:slug/memory/promote', authMiddleware, async (req: Au
     ledger.inc('daily_human', 'promoteToAgentMd');
     scheduleAgentFilesSync(req.user!.userId, slug); // 记忆少了一条:和记忆视图一样排一次后台同步(没开云同步的是空操作)
     res.json({ agentMd: { version: written.document.version }, memoryVersion: after.version });
+  } catch (e) { fail(res, e); }
+});
+// ── 记忆分层(11-09 第二步):画像 / Agent 记忆的整理、整理记录(可整次撤销)、图钉。只在本机、拒远端 ──
+const organizeView = async (target: OrganizeTarget, history: Array<{ id: string; at: number; moves: Array<{ to: string }>; undoneAt?: number; before?: unknown; after?: unknown }>) => ({
+  available: await organizeAvailable(), running: organizeRunning(target), last: lastOrganize(target),
+  history: history.map((r) => ({ id: r.id, at: r.at, moved: r.moves.filter((m) => m.to !== 'archive').length, archived: r.moves.filter((m) => m.to === 'archive').length, topics: [...new Set(r.moves.map((m) => m.to))], before: r.before, after: r.after, ...(r.undoneAt ? { undoneAt: r.undoneAt } : {}) })),
+});
+router.get('/agent/human/SOUL.md/organize', authMiddleware, async (req: AuthRequest, res) => {
+  if (!humanLocal(req, res)) return;
+  try { res.json(await organizeView({ kind: 'portrait' }, await portraitOrganizeHistory())); } catch (e) { fail(res, e); }
+});
+router.post('/agent/human/SOUL.md/organize', authMiddleware, async (req: AuthRequest, res) => {
+  if (!humanLocal(req, res)) return;
+  try { res.json(await runOrganize({ kind: 'portrait' }, { userId: req.user!.userId, manual: true })); } catch (e) { fail(res, e); }
+});
+router.post('/agent/human/SOUL.md/organize/:id/undo', authMiddleware, async (req: AuthRequest, res) => {
+  if (!humanLocal(req, res)) return;
+  try { const r = await undoPortraitOrganize(String(req.params.id)); res.json({ id: r.id, undoneAt: r.undoneAt }); } catch (e) { fail(res, e); }
+});
+router.post('/agent/human/SOUL.md/pin', authMiddleware, async (req: AuthRequest, res) => {
+  if (!humanLocal(req, res)) return;
+  try {
+    // 界面按原句指(画像页画的是文件本身,不另取条目列表);id 也认(和 /entries 的号同一个)
+    const { id: given, fact, pinned, expectedVersion } = req.body ?? {};
+    const id = typeof given === 'string' && given ? given : typeof fact === 'string' && fact.trim() ? portraitEntryId(fact) : '';
+    if (!id || typeof pinned !== 'boolean') throw new HumanError('PORTRAIT_INVALID', 'id (or fact) and pinned are required.');
+    if (typeof expectedVersion !== 'string' || !expectedVersion) throw new HumanError('HUMAN_VERSION_REQUIRED', 'Read the portrait and supply expectedVersion.');
+    await pinPortraitEntry({ id, pinned, expectedVersion });
+    res.json(await readHuman(PORTRAIT_HUMAN));
+  } catch (e) { fail(res, e); }
+});
+const PORTRAIT_HUMAN: HumanScope = { kind: 'human', file: 'SOUL.md' };
+/** 这个 Agent 实际读写的那份记忆(共用默认记忆的 Agent → 默认 Agent 的文件夹,和面板、写入端同一个口径)。 */
+async function memoryBase(slug: string): Promise<{ memorySlug: string; base: string }> {
+  const def = isValidSlug(slug) ? await getAgent(slug) : null;
+  if (!def) throw new HumanError('HUMAN_NOT_FOUND', 'Agent not found.');
+  const memorySlug = resolveMemorySlug(def);
+  if (!isValidSlug(memorySlug)) throw new HumanError('HUMAN_NOT_FOUND', 'Invalid memory scope.');
+  return { memorySlug, base: join(agentsDir(), memorySlug) };
+}
+router.get('/agent/agents/:slug/memory/layers', authMiddleware, async (req: AuthRequest, res) => {
+  if (!humanLocal(req, res)) return;
+  try {
+    const { memorySlug, base } = await memoryBase(String(req.params.slug));
+    const l = readAgentLayers(base);
+    res.json({
+      version: l.version, residentChars: l.residentChars, limit: l.limit,
+      resident: l.resident.map((r) => ({ id: r.entry.id, text: r.text, pinned: r.pinned, by: r.by, shadowed: r.shadowed })),
+      topics: l.topics.map((t) => ({ key: t.key, title: t.title, about: t.about, path: t.path, entries: t.entries.map((e) => ({ id: e.entryId, text: e.text, by: e.by })) })),
+      archive: l.archive ? { key: l.archive.key, title: l.archive.title, path: l.archive.path, entries: l.archive.entries.map((e) => ({ id: e.entryId, text: e.text, by: e.by })) } : null,
+      organize: await organizeView({ kind: 'agent', slug: memorySlug }, agentOrganizeHistory(base)),
+    });
+  } catch (e) { fail(res, e); }
+});
+router.post('/agent/agents/:slug/memory/organize', authMiddleware, async (req: AuthRequest, res) => {
+  if (!humanLocal(req, res)) return;
+  try {
+    const { memorySlug } = await memoryBase(String(req.params.slug));
+    res.json(await runOrganize({ kind: 'agent', slug: memorySlug }, { userId: req.user!.userId, manual: true }));
+  } catch (e) { fail(res, e); }
+});
+router.post('/agent/agents/:slug/memory/organize/:id/undo', authMiddleware, async (req: AuthRequest, res) => {
+  if (!humanLocal(req, res)) return;
+  try {
+    const { base } = await memoryBase(String(req.params.slug));
+    const r = undoAgentOrganize(base, String(req.params.id));
+    scheduleAgentFilesSync(req.user!.userId, String(req.params.slug));
+    res.json({ id: r.id, undoneAt: r.undoneAt, changed: r.undoChanged ?? [] });
+  } catch (e) { fail(res, e); }
+});
+router.post('/agent/agents/:slug/memory/pin', authMiddleware, async (req: AuthRequest, res) => {
+  if (!humanLocal(req, res)) return;
+  try {
+    const { id, pinned, expectedVersion } = req.body ?? {};
+    if (typeof id !== 'string' || !id || typeof pinned !== 'boolean') throw new HumanError('PORTRAIT_INVALID', 'id and pinned are required.');
+    const { base } = await memoryBase(String(req.params.slug));
+    pinAgentEntry(base, { id, pinned, ...(typeof expectedVersion === 'string' && expectedVersion ? { expectedVersion } : {}) });
+    scheduleAgentFilesSync(req.user!.userId, String(req.params.slug));
+    res.json({ ok: true });
   } catch (e) { fail(res, e); }
 });
 // Keep paths explicit so the remote-access route allowlist can audit every endpoint.
