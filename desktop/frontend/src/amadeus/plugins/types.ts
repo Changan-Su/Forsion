@@ -487,7 +487,8 @@ export interface PluginCalendarSnapshot {
   /** 当前库里「在日历中」的表:日期列与(可选的)完成勾选列已按宿主日历的规则解析好 */
   members: Array<{ path: string; dateCol: string; checkboxCol?: string }>
   overlays: PluginCalendarOverlay[]
-  /** 每个成员与叠加源的颜色(`#rrggbb`),与宿主日历图例一致(用户改过的优先,否则按图例顺序取调色板) */
+  /** 每个成员与叠加源的颜色(`#rrggbb`),与宿主日历图例一致:用户改过的优先,否则是这个来源第一次出现时定下的调色板色
+   *  (定了就不变,不跟来源的顺序走;setColor(path, null) 清掉手选色后回到它) */
   colors: Record<string, string>
   /** 用户在日历里藏起来的源(路径) */
   hidden: string[]

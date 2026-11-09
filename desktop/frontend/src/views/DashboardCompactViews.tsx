@@ -11,6 +11,7 @@ import { parseCalDate } from '@amadeus-shared/db/calDate'
 import { setAggCell, firstDateCol } from '../amadeus/store/dbAggregateStore'
 import { useCalendarMembers } from '../amadeus/store/calendarMembers'
 import { useCalendarConfig, colorForDb, isHidden } from '../amadeus/store/calendarConfigStore'
+import { useStableCalendarColors } from '../amadeus/store/calendarColors'
 import { usePageStore } from '../amadeus/store/pageStore'
 import { startOfDay, toLocalDate } from './calendar/dateUtils'
 import { todoDueMeta } from './calendar/todoMeta'
@@ -97,6 +98,7 @@ export function useAgendaItems(): AgendaItem[] {
   const other = useOtherVaultCalDbs()
   const ics = useIcsCalDbs()
   const byVault = useCalendarConfig((s) => s.byVault)
+  useStableCalendarColors()
   return useMemo(() => {
     const sources = [
       ...members.map((member) => ({ db: member.db, dateCol: member.dateCol })),

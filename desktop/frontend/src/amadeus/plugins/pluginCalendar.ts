@@ -4,6 +4,7 @@
  *  写:与日历左栏同一组 store 动作(calendarConfigStore),按当前库生效。成员解析与日历视图同一个函数(resolveCalendarMembers)。
  *  .ics 订阅管理(ctx.calendar.ics)走 useIcsCalendars 同一组动作;联网仍是主进程的 fetchIcs(私网 / 回环 / 重定向那几道闸在那边)。 */
 import { colorForDb, defaultDbPath, isHidden, isMigrated, memberOf, useCalendarConfig } from '../store/calendarConfigStore'
+import { acquireCalendarColors } from '../store/calendarColors'
 import { migrationSeeds, resolveCalendarMembers, watchHumanCal, withHumanCal } from '../store/calendarMembers'
 import { getAggDb, isCheckboxCol, isDateCol, watchAllDatabases, type AggDb } from '../store/dbAggregateStore'
 import { HUMAN_CAL } from '../store/humanCalendarIo'
@@ -21,7 +22,8 @@ type CalendarApi = Omit<Required<NonNullable<PluginContext['calendar']>>, 'ensur
 
 const HEX = /^#[0-9a-f]{6}$/i
 
-/** 叠加源,顺序同日历左栏的图例(Agent → 另一侧 → .ics):调色板色按这个顺序取,和宿主图例对得上。 */
+/** 叠加源,顺序同日历左栏的图例(Agent → 另一侧 → .ics)。颜色是每个来源第一次出现时定下存住的(calendarColors),
+ *  不跟这个顺序走;只有这个库还没播种的那一段,才按这个顺序取调色板色(和宿主图例对得上)。 */
 function overlaysNow(): Array<{ db: AggDb; origin: PluginCalendarOverlay['origin'] }> {
   const agent = useAgentSchedules.getState().schedules
   return [
@@ -96,6 +98,8 @@ export function createCalendarApi(scope: DataScope): CalendarApi {
         try { cb(snapshotOf(dbs, ready)) } catch (e) { console.error('[amadeus] ctx.calendar 回调抛错', e) }
       }
       const offs = [
+        // 排第一:来源一变,先由它给新来源定色、再轮到下面的 emit 出快照(snapshotOf 只读不写)
+        acquireCalendarColors(),
         watchHumanCal(),
         acquireAgentSchedulePolling(), startIcsRefresh(), watchOtherSideCal(),
         watchAllDatabases((d, r) => {

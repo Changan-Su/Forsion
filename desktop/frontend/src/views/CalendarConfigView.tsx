@@ -18,6 +18,7 @@ import { useOtherVaultCalDbs } from '../stores/otherVaultCalStore'
 import { MAX_IMPORT_BYTES, useIcsCalDbs, useIcsCalendars } from '../stores/icsCalendarStore'
 import { icsCalendarName } from './calendar/ics'
 import { useCalendarConfig, colorForDb, isHidden, defaultDbPath, memberOf } from '../amadeus/store/calendarConfigStore'
+import { useStableCalendarColors } from '../amadeus/store/calendarColors'
 import { useCalendarNav } from '../amadeus/store/calendarNavStore'
 import { openDb } from '../amadeusNav'
 import { MemberColPicker } from './calendar/MemberColPicker'
@@ -156,6 +157,7 @@ function ConfigList() {
   const { t } = useI18n()
   const vault = usePageStore((s) => s.vaultRoot) ?? ''
   const members = useCalendarMembers()
+  useStableCalendarColors()
   const agentDbs = useAgentCalDbs() // agent 日程只读源:进图例(调色/显隐可用,无 ★/⋯)
   const otherDbs = useOtherVaultCalDbs() // 非活动侧只读日历(任务1:汇总两侧,名字已带 Vault 后缀)
   const icsDbs = useIcsCalDbs() // 外部日历订阅(.ics)
