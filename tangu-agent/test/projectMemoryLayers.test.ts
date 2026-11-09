@@ -9,7 +9,7 @@ import { configureTangu } from '../src/seams/runtime.js';
 import { createTanguProfile } from '../src/profiles/index.js';
 import { createSqliteHost } from '../src/adapters/standalone/sqliteHost.js';
 import { createLocalMemoryBrain } from '../src/adapters/standalone/localMemoryBrain.js';
-import { runWithAgentSlug } from '../src/seams/runContext.js';
+import { runWithAgentSlug, setRunStandIn } from '../src/seams/runContext.js';
 import { toSqliteDDL } from '../src/core/dialectDDL.js';
 import { STANDALONE_SCHEMA } from '../src/db/schemaStandalone.js';
 import { runMigration } from '../src/db/migrate.js';
@@ -231,6 +231,24 @@ describe('注入:常驻 + 索引 + 按这句话召回', () => {
     expect(asked.volatile).not.toContain('make dev'); // 常驻里已经给了
     await flushMemoryUseForTests();
     expect(existsSync(join(ref.dir, '.memory-usage.json'))).toBe(true);
+  });
+  it('分身(11-09)的 run 里没有项目记忆:常驻、详情索引、按这句话召回都不给;remember 的 list 也不露项目详情', async () => {
+    const { ref, sessionId } = await fresh();
+    await seed(ref, sessionId);
+    await org(ref);
+    const question = 'Why did we drop RabbitMQ? And what did order export and make dev do?';
+    const dom = { slug: 'xyra-standin-wechat', bodySlug: 'xyra', agentMd: false, library: [], roots: [] };
+    // agentLoop 在读上下文之前 setRunStandIn;注入点自己的闸漏了,这里也回空
+    const inRun = await runWithAgentSlug('xyra-standin-wechat', async () => { setRunStandIn(dom); return buildProjectMemoryLayers('owner', sessionId, question); });
+    expect(inRun).toEqual({ stable: '', volatile: '' });
+    const remember = memoryLogProvider.tools().find((t) => t.name === 'remember')!;
+    const listed = JSON.parse(String(await runWithAgentSlug('xyra-standin-wechat', async () => remember.execute({ action: 'list' },
+      { userId: 'owner', sessionId, appId: 'tangu', execMode: 'host', runId: 'run-standin', modelId: 'run-model', standIn: dom } as any))));
+    expect(listed.project).toBeUndefined();
+    // 正对照:同一个会话、不是分身,照旧有常驻和召回
+    const asked = await buildProjectMemoryLayers('owner', sessionId, question);
+    expect(asked.stable).toContain(CMD);
+    expect(asked.volatile).toContain(`[topic=history] ${HIST}`);
   });
 });
 

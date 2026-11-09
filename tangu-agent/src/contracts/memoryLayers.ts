@@ -31,6 +31,13 @@ export function defaultTopicHeader(key: string, sample: string): { title: string
   return { title: key, about: '' };
 }
 export const isMemoryDetailPath = (rel: string): boolean => /^Library\/memory\/[a-z][a-z0-9-]{0,31}\.md$/.test(rel);
+/** 分身(11-09):Library 里的一个相对路径(相对 Library/)是不是落在记忆详情目录 memory/ 底下(含归档、含文件名不合主题键的)。
+ *  那是本体的记忆,和 MEMORY.md 一样不勾给分身。按目录判、不按文件名判;不分大小写、去掉段尾的点和空格
+ *  (macOS / Windows 上 Memory/、memory./ 就是同一个目录)。引擎的读根另按真实路径再拒一次(软链指进去的也算)。 */
+export function isLibraryMemoryRel(rel: string): boolean {
+  const first = String(rel).replace(/\\/g, '/').split('/').filter((s) => s && s !== '.')[0] ?? '';
+  return first.replace(/[. ]+$/, '').toLowerCase() === MEMORY_DETAIL_DIR.split('/')[1];
+}
 
 // ── 画像的节:Agent 那一节、导入那几节(第一步的写法,挪到这里给合并共用)──
 

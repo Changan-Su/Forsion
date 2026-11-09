@@ -92,6 +92,31 @@ describe('读写根', () => {
     expect(await tool('delete_path').execute({ path: path.join(home, 'vault') }, ctx)).toMatch(/Error/);
   });
 
+  it('记忆分层(11-09):本体的记忆详情 Library/memory/**(含归档)勾过也不给;勾的软链指进 memory/ 或 human/ 也不给;项目记忆的详情不给', async () => {
+    const { buildStandInDomain, grantedLibraryFiles, standInReadDenied } = await import('./accessDomain.js');
+    const { symlinkSync } = await import('node:fs');
+    mkdirSync(T('agents/aria/Library/memory'), { recursive: true });
+    writeFileSync(T('agents/aria/Library/memory/work.md'), '# 工作\n\n- 保险柜暗码 kestrel-58\n');
+    writeFileSync(T('agents/aria/Library/memory/archive.md'), '# 归档\n\n- 旧事\n');
+    symlinkSync(T('agents/aria/Library/memory/work.md'), T('agents/aria/Library/link.md'));
+    symlinkSync(T('human/MEMORY.md'), T('agents/aria/Library/out.md'));
+    const body = { slug: 'aria', standInLibrary: ['notes/shared.md', 'memory/work.md', 'Memory/archive.md', 'memory./work.md', './memory/archive.md', 'link.md', 'out.md'] };
+    expect(grantedLibraryFiles(body as any)).toEqual([T('agents/aria/Library/notes/shared.md')]);
+    const d = buildStandInDomain({ slug: 'aria-standin-wechat', standInOf: 'aria' }, body as any, { cwd: work });
+    expect(d.library).toEqual([T('agents/aria/Library/notes/shared.md')]); // 给模型的那一段(standInSection)只列这一份
+    for (const p of ['agents/aria/Library/memory/work.md', 'agents/aria/Library/memory/archive.md', 'agents/aria/Library/memory', 'agents/aria/Library/link.md', 'agents/aria/Library/out.md']) {
+      expect(standInReadDenied(d, T(p)), p).toMatch(/Access denied/);
+    }
+    // 就算权限域是旧的、手里还拿着那几份(老引擎建的、或绕过 grantedLibraryFiles),读根照样拒
+    const stale = { ...d, library: [T('agents/aria/Library/memory/work.md'), T('agents/aria/Library/link.md'), T('agents/aria/Library/out.md'), T('agents/aria/Library/notes/shared.md')] };
+    for (const p of ['agents/aria/Library/memory/work.md', 'agents/aria/Library/link.md', 'agents/aria/Library/out.md']) expect(standInReadDenied(stale, T(p)), p).toMatch(/Access denied/);
+    expect(standInReadDenied(stale, T('agents/aria/Library/notes/shared.md'))).toBeNull();
+    // 分身自己的记忆详情照常可读(它自己的分层)
+    expect(standInReadDenied(d, T('agents/aria-standin-wechat/Library/memory/work.md'))).toBeNull();
+    // 项目记忆(常驻和 Library/ 详情)在引擎 home 底下:不给
+    expect(standInReadDenied(d, T('project-memory/q1-12345678/Library/history.md'))).toMatch(/Access denied/);
+  });
+
   it('fsPolicy 两道闸接上了:checkReadPath 认 ctx.standIn,checkWritePath 硬拒(不进审批)', async () => {
     const { checkReadPath, checkWritePath } = await import('../tools/fsPolicy.js');
     expect(checkReadPath(T('human/MEMORY.md'), { standIn: dom }).ok).toBe(false);

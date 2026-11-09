@@ -23,6 +23,7 @@ import { recordAgentRemoval } from '../services/cloudSyncAccount.js';
 import { moveToTrash, type TrashEntry } from '../services/trash.js';
 import { credentialReadTarget } from '../sandbox/hostSandboxProtection.js';
 import { isStandInSlugShape } from '../contracts/agentSyncRules.js';
+import { isLibraryMemoryRel } from '../contracts/memoryLayers.js';
 import { builtinAgentAvatar } from './builtinAvatars.js';
 import { LEGACY_PERSONAS, LEGACY_MUSE_PROMPTS, LEGACY_MUSE_DESCRIPTION } from './legacyPersonas.js';
 import { ARIOSO_SYSTEM_PROMPT, ARIOSO_SOUL, ARIA_SYSTEM_PROMPT, ARIA_SOUL, RECITA_SYSTEM_PROMPT, RECITA_SOUL } from './personaPrompts.js';
@@ -312,7 +313,8 @@ export function parseAgentConfig(slug: string, tomlRaw: string, soul: string): N
     ...(str(meta.stand_in_channel).trim() ? { standInChannel: str(meta.stand_in_channel).trim() } : {}),
     ...(str(meta.stand_in_peer).trim() ? { standInPeer: str(meta.stand_in_peer).trim() } : {}),
     ...(Array.isArray(meta.stand_in_off) ? { standInOff: meta.stand_in_off.filter((t: any) => typeof t === 'string' && t.trim()).map((t: string) => t.trim()).slice(0, 20) } : {}),
-    ...(Array.isArray(meta.stand_in_library) ? { standInLibrary: meta.stand_in_library.filter((t: any) => typeof t === 'string' && t.trim()).slice(0, 200) } : {}),
+    // Library/memory/ 底下是本体的记忆详情(11-09 分层):勾过也不认(读根那边按真实路径再拒一次)
+    ...(Array.isArray(meta.stand_in_library) ? { standInLibrary: meta.stand_in_library.filter((t: any) => typeof t === 'string' && t.trim() && !isLibraryMemoryRel(t)).slice(0, 200) } : {}),
     ...(meta.stand_in_agent_md === true ? { standInAgentMd: true } : {}),
     ...(meta.compaction && typeof meta.compaction === 'object' && Object.keys(normalizeCompactionLayer(meta.compaction)).length
       ? { compaction: normalizeCompactionLayer(meta.compaction) as Record<string, unknown> }
@@ -1054,7 +1056,7 @@ export function buildAgentDef(slug: string, existing: NormalAgentDef | null, inp
       ? [...new Set((Array.isArray(input.standInOff) ? input.standInOff : []).filter((t) => t === 'im' || t === 'plugin'))]
       : existing?.standInOff,
     standInLibrary: input.standInLibrary !== undefined
-      ? [...new Set((Array.isArray(input.standInLibrary) ? input.standInLibrary : []).filter((t) => typeof t === 'string' && t.trim() && !t.includes('..') && !t.startsWith('/') && !t.includes('\\')))].slice(0, 200)
+      ? [...new Set((Array.isArray(input.standInLibrary) ? input.standInLibrary : []).filter((t) => typeof t === 'string' && t.trim() && !t.includes('..') && !t.startsWith('/') && !t.includes('\\') && !isLibraryMemoryRel(t)))].slice(0, 200)
       : existing?.standInLibrary,
     standInAgentMd: (input.standInAgentMd !== undefined ? input.standInAgentMd : existing?.standInAgentMd) || undefined,
     toolsStrict: existing?.toolsStrict,

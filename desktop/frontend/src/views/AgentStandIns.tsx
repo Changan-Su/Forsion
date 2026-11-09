@@ -13,6 +13,7 @@ import { useApp } from '../stores/appStore'
 import { AgentMemoryModal } from '../components/AgentMemoryModal'
 import { agentName } from '../agentName'
 import type { NormalAgentDef, StandInInfo } from '../../../../tangu-agent/src/contracts/clientTypes'
+import { isLibraryMemoryRel } from '../../../../tangu-agent/src/contracts/memoryLayers'
 import type { TanguDesktopConfig } from '../types'
 import { ProfileGroup } from './profileControls'
 
@@ -78,10 +79,11 @@ export function AgentStandInGroup({ agent, draft, patch, cfg }: { agent: NormalA
   }, [cfg, agent.slug])
   const off = draft.standInOff || []
   const setGroup = (g: Group, on: boolean): void => patch({ standInOff: on ? off.filter((x) => x !== g) : [...new Set([...off, g])] })
-  const lib = draft.standInLibrary || []
+  // Library/memory/ 底下是本体的记忆详情(11-09 记忆分层):不列、不算、存盘时也丢掉(引擎读根另外再拒一次)
+  const lib = (draft.standInLibrary || []).filter((x) => !isLibraryMemoryRel(x))
   const setFile = (name: string, on: boolean): void => patch({ standInLibrary: on ? [...new Set([...lib, name])] : lib.filter((x) => x !== name) })
   // 勾过但 Library 里已经没有的文件也列出来(能取消);头像不算资料
-  const choices = [...new Set([...(files || []).map((f) => f.name).filter((n) => !/^avatar\.(png|jpe?g|gif|webp)$/i.test(n)), ...lib])]
+  const choices = [...new Set([...(files || []).map((f) => f.name).filter((n) => !/^avatar\.(png|jpe?g|gif|webp)$/i.test(n) && !isLibraryMemoryRel(n)), ...lib])]
   return <ProfileGroup title={t('agentProfile.standIn.title')} hint={t('agentProfile.standIn.hint')}>
     <div className="agent-standin" data-standin-section>
       <label className="agent-equipment-item"><input type="checkbox" checked={!off.includes('im')} onChange={(e) => setGroup('im', e.target.checked)} /><span><strong>{t('agentProfile.standIn.im')}</strong><small>{t('agentProfile.standIn.imHint')}</small></span></label>

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as realDelay } from 'node:timers/promises';
@@ -432,6 +432,18 @@ describe('Dream routes facts about the person into the portrait', () => {
     } finally { spy.mockRestore(); }
     expect(soul()).toBe('');
     expect(repo().snapshot().content).toBe('- You live in Hangzhou.');
+  });
+
+  it('a stand-in (11-09) never routes into the portrait, even from a session that is no longer bound to a channel; its facts stay in its own memory', async () => {
+    const slug = 'alpha-standin-wechat';
+    configureMemoryDream(slug, { modelId: 'test-model' });
+    seedCandidate(slug, 'You live in Hangzhou.'); // channelBinding 这里恒为 false(上面 beforeEach):只剩按身份那道闸
+    startMemoryDream('u', slug); expect((await settle(slug)).state).toBe('completed');
+    expect(soul()).toBe('');
+    expect(repo(slug).snapshot().content).toBe('- You live in Hangzhou.');
+    expect(repo().snapshot().content).toBe(''); // 本体的记忆不动
+    expect(calls[0].payload.messages[0].content).not.toContain('"to":"person"'); // 提议提示词里压根没有画像这条路
+    expect(existsSync(join(home, 'human-history', 'portrait-overflow.json'))).toBe(false);
   });
 
   it('a full portrait sends the fact back into memory; one the human forgot from the portrait is written nowhere', async () => {

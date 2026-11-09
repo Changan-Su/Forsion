@@ -1804,8 +1804,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       // (P1 · M1A,G7)。run 自己带远程污点时不藏 —— 远端内容回到远端 run 不是洗白。显式的 search_sessions / read_session 另见工具。
       // 远程污点只存在于本机引擎(hostExec):云端 / thin worker 不带这个键,免得 PG 谓词与网关路由为一个恒空的集合跑一遍。
       const hideRemoteSessions = profile.capabilities.hostExec && !effectiveRemote({ remote, runId });
-      // portrait:画像的详情也按这句话召回(11-09 分层),和上面画像注入同一道门(本机、不连通道)
-      const memoryContext = await buildAgentMemoryContext({ userId, appId, agentSlug: activeAgentSlug, deviceTags: tagCtx, portrait: channelBinding === false && !!profile.capabilities.hostExec,
+      // portrait:画像的详情也按这句话召回(11-09 分层),和上面画像注入同一道门(本机、不连通道);分身按身份不给(不看此刻连没连通道)
+      const memoryContext = await buildAgentMemoryContext({ userId, appId, agentSlug: activeAgentSlug, deviceTags: tagCtx, portrait: !standIn && channelBinding === false && !!profile.capabilities.hostExec,
         query: typeof input.message === 'string' ? input.message : '', excludeSessionId: sessionId, hideSessionsWithTool, hideRemoteSessions, signal: ac.signal });
       recallStats = { recallEntries: memoryContext.entryIds.length, recallHistory: memoryContext.historyMessageIds.length, recallTruncated: !!memoryContext.truncated };
       if (volatilePlacement === 'system') {

@@ -8,6 +8,7 @@
  *     MCP、自定义工具一律不给。resolveTools 最前面一道闸,defs / 目录 / load_tools / 执行四处同时生效。
  *   - 文件读写根:只认分身自己的文件夹、这次会话的工作目录(通道配置的工作区)、本体勾给它的那几份 Library 文件(只读);
  *     本体和别的 Agent 的文件夹、human/、引擎 home / Forsion 家目录、笔记库一律拒,哪怕它们恰好在工作目录里面。
+ *     本体的记忆详情 Library/memory/**(11-09 记忆分层,含归档)是本体的记忆,勾过也不给;勾给它的文件真身得还在本体的 Library 里。
  *   - 委派:只能派不点名的子代理(或点名自己);点名别的 Agent 会切到它的记忆域,一律拒;外部引擎不给。
  *   - 画像 / 项目记忆 / human/ 注入 / Dream 进画像:按分身身份判(持久),不按会话此刻连没连通道判。
  */
@@ -18,6 +19,7 @@ import { fileURLToPath } from 'node:url';
 import { agentsDir, humanDir, skillsDir, tanguHome } from '../core/tanguHome.js';
 import { canonicalFuturePath, pathWithin, withinForsionDomains } from '../sandbox/hostSandboxProtection.js';
 import { currentStandIn, type StandInDomain } from '../seams/runContext.js';
+import { isLibraryMemoryRel, MEMORY_DETAIL_DIR } from '../contracts/memoryLayers.js';
 import type { NormalAgentDef } from '../agents/agentRegistry.js';
 
 export type { StandInDomain };
@@ -27,10 +29,17 @@ export function standInOf(ctx?: { standIn?: StandInDomain } | null): StandInDoma
   return ctx?.standIn ?? currentStandIn();
 }
 
-/** 本体勾给分身的 Library 文件 → 绝对路径(只认 Library 里面的文件,越界的名字丢掉)。 */
+const libraryOf = (slug: string): string => path.join(agentsDir(), slug, 'Library'); // = agentRegistry.libDirOf(本模块只引纯路径,不挂注册表那张图)
+/** 本体的记忆详情目录 agents/<本体>/Library/memory(11-09 记忆分层;详情和归档都在这里)。 */
+const memoryDetailsOf = (slug: string): string => path.join(agentsDir(), slug, ...MEMORY_DETAIL_DIR.split('/'));
+
+/** 本体勾给分身的 Library 文件 → 绝对路径。只认真身还在本体 Library 里的文件:越界的名字、软链指出去的、
+ *  落在记忆详情目录 memory/ 底下的(字面或真实路径,大小写不分)一律丢掉 —— 那是本体的记忆,勾过也不给。 */
 export function grantedLibraryFiles(body: Pick<NormalAgentDef, 'slug' | 'standInLibrary'>): string[] {
-  const root = path.join(agentsDir(), body.slug, 'Library'); // = agentRegistry.libDirOf(本模块只引纯路径,不挂注册表那张图)
-  return (body.standInLibrary ?? []).map((rel) => path.resolve(root, rel)).filter((abs) => pathWithin(abs, root) && abs !== root);
+  const root = libraryOf(body.slug);
+  const details = memoryDetailsOf(body.slug);
+  return (body.standInLibrary ?? []).filter((rel) => !isLibraryMemoryRel(rel)).map((rel) => path.resolve(root, rel))
+    .filter((abs) => pathWithin(abs, root) && abs !== root && inside(abs, root) && !within(abs, details));
 }
 
 /** 组一个权限域(agentLoop 在读任何上下文之前调;cwd = 这次会话的工作目录)。 */
@@ -128,9 +137,12 @@ export function standInReadDenied(dom: StandInDomain | undefined, abs: string): 
   if (!dom) return null;
   const own = path.join(agentsDir(), dom.slug);
   if (inside(abs, own)) return null;
-  if (dom.library.some((f) => real(f) === real(abs))) return null;
-  if (skillRoot(abs, dom)) return null;
   const denied = `Access denied: ${abs} is outside what this stand-in can read. You are answering in a conversation other people can read, so you only have your own folder (${own}), the working directory and the files the user shared with you.`;
+  // 本体的记忆详情(Library/memory/**,含归档;11-09 分层):和本体的 MEMORY.md 一样,勾过也不给(字面或真实路径落进去都算)
+  if (dom.bodySlug && within(abs, memoryDetailsOf(dom.bodySlug))) return denied;
+  // 勾给它的文件:真身还得在本体的 Library 里(软链指向 human/、别的 Agent 的不认,落到下面的总闸)
+  if (dom.library.some((f) => real(f) === real(abs)) && dom.bodySlug && inside(abs, libraryOf(dom.bodySlug))) return null;
+  if (skillRoot(abs, dom)) return null;
   // 本体 / 别的 Agent、human/、引擎 home、Forsion 家目录、笔记库:哪怕在工作目录里面也不给
   if (within(abs, agentsDir()) || within(abs, humanDir()) || within(abs, tanguHome()) || withinForsionDomains(abs) || within(abs, vaultRoot())) return denied;
   if (dom.roots.some((r) => inside(abs, r))) return null;

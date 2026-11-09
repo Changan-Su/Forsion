@@ -225,6 +225,25 @@ describe('background organize (R7)', () => {
     bgModel.id = '';
     expect(await runOrganize({ kind: 'agent', slug: 'aria' }, { userId: 'u', manual: true })).toMatchObject({ status: 'skipped', reason: 'no_model' });
   });
+  it('a stand-in (11-09) organizes its own memory into its own Library/memory: the body\'s folder and the portrait are not touched', async () => {
+    const { scheduleAgentFilesSync } = await import('../src/services/agentFileSync.js');
+    vi.mocked(scheduleAgentFilesSync).mockClear();
+    await saveAgent({ slug: 'aria-standin-wechat', name: 'Aria · WeChat', systemPrompt: 'Stand-in of aria.', standInOf: 'aria', standInChannel: 'wechat', mustNotExist: true } as any);
+    const sBase = join(home, 'agents', 'aria-standin-wechat');
+    const sRepo = createMemoryRepository(sBase);
+    for (let i = 0; i < 40; i++) sRepo.add(`联系人的第 ${i + 1} 条细节:这是一句故意写长一些的话,用来占掉常驻的字数,让整理有事可做;再多写几个字,让四十条加起来明显超过四千字的常驻上限。`);
+    const bodyMemory = memoryFile();
+    const soul = (await readHuman(SOUL)).content;
+    answer = (input) => ({ move: input.entries.filter((e: any) => e.text.includes('联系人的第')).map((e: any) => ({ id: e.id, topic: 'life' })), keep: [], topics: [LIFE] });
+    expect(await runOrganize({ kind: 'agent', slug: 'aria-standin-wechat' }, { userId: 'u', manual: true })).toMatchObject({ status: 'organized', moved: 40 });
+    expect(readAgentLayers(sBase).topics[0].entries).toHaveLength(40);
+    expect(existsSync(join(sBase, 'Library', 'memory', 'life.md'))).toBe(true);
+    expect(existsSync(join(base(), 'Library', 'memory'))).toBe(false); // 本体的详情目录没被建出来
+    expect(memoryFile()).toBe(bodyMemory);
+    expect((await readHuman(SOUL)).content).toBe(soul);
+    // 整理完排的那次同步是分身自己的 slug;它只留本机,真同步那边按 agentSlugLocalOnly 跳过(standIn.test.ts 钉住路径规则)
+    expect(vi.mocked(scheduleAgentFilesSync)).toHaveBeenCalledWith('u', 'aria-standin-wechat');
+  });
 });
 
 describe('usage counts (R6)', () => {

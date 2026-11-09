@@ -34,6 +34,23 @@ describe('分身 slug 与同步规则(纯函数)', () => {
     expect(agentContentSyncable('agents/aria/MEMORY.md')).toBe(true);
   });
 
+  it('记忆分层(11-09):分身自己的记忆详情 Library/memory/ 也只留本机(按条合并的那条规则轮不到它);本体的照旧上云', async () => {
+    const { agentContentSyncable } = await import('../contracts/agentSyncRules.js');
+    for (const p of ['agents/aria-standin-wechat/Library/memory/work.md', 'agents/aria-standin-wechat/Library/memory/archive.md', 'agents/aria-standin-wechat-1a2b3c4d/Library/memory/life.md']) {
+      expect(agentContentSyncable(p), p).toBe(false);
+    }
+    expect(agentContentSyncable('agents/aria-standin-wechat/Library/memory', 'folder')).toBe(false);
+    expect(agentContentSyncable('agents/aria-standin-wechat/Library', 'folder')).toBe(false);
+    expect(agentContentSyncable('agents/aria/Library/memory/work.md')).toBe(true);
+    expect(agentContentSyncable('agents/aria/Library/memory', 'folder')).toBe(true);
+  });
+
+  it('本体 Library 里哪些路径算记忆详情(勾给分身时一律剔掉):按目录、不分大小写、去段尾点和空格', async () => {
+    const { isLibraryMemoryRel } = await import('../contracts/memoryLayers.js');
+    for (const rel of ['memory/work.md', 'memory/archive.md', 'Memory/x.md', 'MEMORY/x', 'memory./x.md', 'memory /x.md', './memory/x.md', 'memory\\x.md', 'memory', 'memory/sub/deep.md']) expect(isLibraryMemoryRel(rel), rel).toBe(true);
+    for (const rel of ['notes/memory/x.md', 'memories/x.md', 'memory.md', 'my-memory/x.md', 'shared.md']) expect(isLibraryMemoryRel(rel), rel).toBe(false);
+  });
+
   it('自动换分身的分组:微信 / 企业微信 / Telegram / QQ = im,其余插件通道 = plugin;关过的那组不换', async () => {
     const { standInGroupOf, standInEnabled } = await import('./standIn.js');
     expect(['wechat', 'wecom', 'telegram', 'qq'].map(standInGroupOf)).toEqual(['im', 'im', 'im', 'im']);
@@ -133,6 +150,16 @@ describe('分身:注册表、解析器、人设白名单', () => {
     const body = await getAgent('nova');
     expect(body?.standInOff).toEqual(['im']);
     expect(body?.standInLibrary).toEqual(['notes/a.md']);
+    // 本体的记忆详情(Library/memory/**)存盘时就丢掉;手改 config.toml 塞进去的,读出来也不认
+    await patchAgent('nova', { standInLibrary: ['notes/a.md', 'memory/work.md', 'Memory/archive.md', 'memory./x.md'] });
+    expect((await getAgent('nova'))?.standInLibrary).toEqual(['notes/a.md']);
+    const toml = path.join(home, 'agents', 'nova', 'config.toml');
+    const raw = await fs.readFile(toml, 'utf8');
+    await fs.writeFile(toml, raw.replace(/stand_in_library = \[[^\]]*\]/, 'stand_in_library = [ "notes/a.md", "memory/work.md" ]'));
+    expect(await fs.readFile(toml, 'utf8')).toContain('"memory/work.md"');
+    const { invalidateAgentCache } = await import('./agentRegistry.js');
+    invalidateAgentCache();
+    expect((await getAgent('nova'))?.standInLibrary).toEqual(['notes/a.md']);
     expect(body?.standInAgentMd).toBe(true);
     await patchAgent('nova-standin-wechat', { name: 'Renamed' });
     expect((await getAgent('nova-standin-wechat'))?.standInOf).toBe('nova');
