@@ -62,9 +62,9 @@ export {
 } from './layoutPersist'
 export type { PersistedPanel, LayoutBlob } from './layoutPersist'
 /** 视口锚定的 fixed 浮层(右键菜单/补全/弹出层):自带 CSS zoom 反补偿 + 越界翻面。别再手写 left/top。 */
-export { OverlayAt, useExitGhost, removeOverlayWithExit, useClampedMenu, clampMenu, fitAnchored, followAnchor, useEdgeNudge, nestedPanelPlacement, nestedPanelTop, zoomOf, UI_ZOOM_EVENT } from './menuAnchor'
+export { OverlayAt, useExitGhost, removeOverlayWithExit, useClampedMenu, clampMenu, keptPlacement, fitAnchored, followAnchor, useEdgeNudge, nestedPanelPlacement, nestedPanelTop, zoomOf, UI_ZOOM_EVENT } from './menuAnchor'
 export type { NestedPanelPlacement } from './menuAnchor'
-export type { AnchorOpts, FitAnchoredOpts } from './menuAnchor'
+export type { AnchorOpts, FitAnchoredOpts, FollowOpts } from './menuAnchor'
 // 液滴展开(DESIGN §3):小按钮长出贴着的面板。宿主组件(账号卡)用;插件暂不开放。
 export { emergeDroplet } from './droplet'
 export { openFloat, nearestAnchor, savedAnchor, registerSpaceFloatLayer, FLOAT_ANCHORS, FLOAT_SCOPES, FLOAT_ROLES } from './floatLayer'
@@ -85,7 +85,7 @@ export { LCL_MESSAGES } from './engineMessages'
 export { Skeleton, ViewErrorBoundary, skeletonVariantOf } from './Skeleton'
 export type { SkeletonVariant } from './Skeleton'
 /** Shared collapsed-rail / expanded-list table of contents for scrollable feature surfaces. */
-export { FloatingToc, defaultFloatingTocItem, scrollToElement, cancelScrollToElement } from './FloatingToc'
+export { FloatingToc, defaultFloatingTocItem, scrollToElement, cancelScrollToElement, SCROLL_TO_ELEMENT_EVENT } from './FloatingToc'
 export type {
   FloatingTocElementSource,
   FloatingTocItemDescriptor,
@@ -115,6 +115,8 @@ export { ExtendViewHost } from './ExtendViewHost'
 
 export { contentStorageKey } from './contentStorageScope'
 export { mountLineSelection } from './lineSelection'
+export { createTextAnchor, rangeAnchor, rectAnchor } from './textAnchor'
+export type { TextAnchor, TextAnchorOptions, AnchorRect, AnchorMeasure } from './textAnchor'
 export type { LineSelectionOptions, LineSelectionHandle } from './lineSelection'
 
 export { switchSpace, setSpaceBarOrder, spaceSwitchDirection, type SpaceSwitchMotion } from './spaceTransition'

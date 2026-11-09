@@ -144,12 +144,13 @@ async function main() {
       const shown = (el) => !!el && getComputedStyle(el).display !== 'none' && el.getBoundingClientRect().width > 0
       return {
         panel: !!panel, open: !!panel?.classList.contains('open'), panelW: r ? Math.round(r.width) : 0,
-        panelMuse: !!panel?.querySelector('[data-muse-space]'), panelText: (panel?.textContent || '').slice(0, 400),
-        card: !!card, cardGone: !!card?.classList.contains('gone'), cardMuse: !!card?.querySelector('[data-muse-space]'),
+        panelMuse: !!panel?.querySelector('[data-muse-brief]'), panelText: (panel?.textContent || '').slice(0, 400),
+        card: !!card, cardGone: !!card?.classList.contains('gone'), cardMuse: !!card?.querySelector('[data-muse-brief]'),
         cardTitle: card?.querySelector('.agent-desk-card-title')?.textContent || '',
-        // 文件库视图的预览栏:小卡里藏起来(挤不下,标题会一字一行),侧板里显示
-        cardPreview: shown(card?.querySelector('.muse-lib-preview')), panelPreview: shown(panel?.querySelector('.muse-lib-preview')),
-        cardListW: Math.round(card?.querySelector('.muse-lib-list')?.getBoundingClientRect().width || 0), cardW: Math.round(card?.getBoundingClientRect().width || 0),
+        // 11-08 起 Muse Space 主区是「今日简报」:小卡里不横向溢出、小组件区落成单列(容器查询 720px),侧板里照常显示
+        cardFit: (() => { const b = card?.querySelector('[data-muse-brief]'); return !!b && b.scrollWidth <= b.clientWidth + 1 })(),
+        cardCols: (() => { const g = card?.querySelector('.msb-grid3'); return g ? getComputedStyle(g).gridTemplateColumns.split(' ').filter(Boolean).length : 0 })(),
+        panelShown: shown(panel?.querySelector('[data-muse-brief]')), cardW: Math.round(card?.getBoundingClientRect().width || 0),
       }
     }, id)
 
@@ -164,7 +165,7 @@ async function main() {
     const isHomeCard = (x) => !x.open && x.card && !x.cardGone && x.cardMuse && x.cardTitle === 'Muse'
     check('M2 没发消息,右侧已有一张小卡,里面是 Muse Space;侧板没有自己展开',
       msgCount === 0 && isHomeCard(d), JSON.stringify({ msgCount, ...d, panelText: d.panelText.slice(0, 60) }))
-    check('M2b 小卡里文件库只留文件列表(预览栏不挤进来),列表占满卡宽', !d.cardPreview && d.cardListW > d.cardW * 0.7, JSON.stringify({ cardPreview: d.cardPreview, cardListW: d.cardListW, cardW: d.cardW }))
+    check('M2b 小卡里的简报不横向溢出,小组件区是单列(没有小组件区 = 空态,也算)', d.cardFit && d.cardCols <= 1, JSON.stringify({ cardFit: d.cardFit, cardCols: d.cardCols, cardW: d.cardW }))
     await win.screenshot({ path: path.join(SHOT_DIR, 'musechat-light.png') })
 
     // ── M3 负对照:别的 Agent 的私聊 ──
@@ -203,7 +204,7 @@ async function main() {
     await win.locator(`.agent-desk-card[data-desk-session="${MUSE_ID}"]`).first().click().catch(() => {})
     await sleep(900)
     d = await desk(MUSE_ID)
-    const expanded = d.open && d.panelW > 300 && d.panelMuse && /Home/.test(d.panelText) && d.panelPreview // 侧板够宽:预览栏在
+    const expanded = d.open && d.panelW > 300 && d.panelMuse && d.panelShown
     await win.locator('.t2o-row', { hasText: 'Nova' }).first().click()
     await sleep(900)
     await win.locator('.t2o-row', { hasText: 'Muse' }).first().click()
@@ -233,7 +234,7 @@ async function main() {
     const hasOpen = await openSpace.count().catch(() => 0)
     if (hasOpen) await openSpace.click()
     await sleep(1200)
-    const museSpaceMain = await win.locator('[data-muse-space]').count().catch(() => 0)
+    const museSpaceMain = await win.locator('[data-muse-brief]').count().catch(() => 0)
     const chatStillVisible = await win.locator(chat(MUSE_ID)).isVisible().catch(() => false)
     check('M7 行菜单有「新会话(先总结记忆)」与「打开 Muse Space」,后者切到整页 Muse Space', hasRotate && !!hasOpen && museSpaceMain > 0 && !chatStillVisible,
       JSON.stringify({ hasRotate, hasOpen, museSpaceMain, chatStillVisible, menuText: menuText.slice(0, 120) }))

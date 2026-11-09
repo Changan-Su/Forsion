@@ -38,7 +38,7 @@ import {
 import { OverlayAt, reducedMotion } from '@lcl/engine'
 import { EditorialMessage, type FileCtx, type MessageHandlers } from './EditorialMessage'
 import { openBtw } from './btwStore'
-import { ForkBlock, ForkScope, childIdsOf, type ForkScopeValue } from './ChildSessions'
+import { ForkBlock, ForkScope, childIdsOf, handoffIdsOf, type ForkScopeValue } from './ChildSessions'
 import { StatusMark } from './AttentionDot'
 import { rowStatus, type RowStatus } from './sessionTree'
 import { splitLeadingRefs } from './RefChipView'
@@ -346,8 +346,8 @@ export function ChatCanvas({ rootId, activeId, dir, onDir, onChat, exiting, onEx
   }, [kidSig])
   const kidSpecs = useMemo<KidSpec[]>(() => kids.map((k) => {
     const from = k.parent_session_id!
-    // 开出它的那条回答:start_session 的工具结果里有它的 id(同卡底那块的认法);认不到 = 挂在那一支最后一张卡下
-    const at = msgs[from]?.find((m) => childIdsOf(m.toolEvents).includes(k.id))?.id
+    // 开出它的那条回答:start_session / hand_off_task 的工具结果里有它的 id(同卡底那块的认法);认不到 = 挂在那一支最后一张卡下
+    const at = msgs[from]?.find((m) => childIdsOf(m.toolEvents).includes(k.id) || handoffIdsOf(m.toolEvents).includes(k.id))?.id
     return { sid: k.id, from, at }
   }), [kids, msgs])
   const tree = useMemo(() => buildTurnTree(rootId, branches, (sid) => msgs[sid], kidSpecs), [rootId, branches, msgs, kidSpecs])

@@ -1,6 +1,6 @@
 /* 全局快速查找面板(居中悬浮) —— app 级,主题变量驱动,深浅自适应。 */
 .amx-qf-scrim { position: fixed; inset: 0; z-index: 200; background: rgba(0, 0, 0, 0.4); display: flex; align-items: flex-start; justify-content: center; padding-top: 12vh; }
-.amx-qf { width: min(680px, 92vw); max-height: 66vh; display: flex; flex-direction: column; background: var(--bg-card, var(--bg, #1e1e1e)); border: 1px solid var(--border); border-radius: var(--radius-lg, 16px); box-shadow: var(--card-shadow); overflow: hidden; }
+.amx-qf { width: min(680px, 92vw); max-height: 66vh; display: flex; flex-direction: column; background: var(--surface-float, var(--bg-card, var(--bg, #1e1e1e))); backdrop-filter: var(--surface-blur, none); border: 1px solid var(--surface-edge, var(--border)); border-radius: var(--radius-lg, 16px); box-shadow: var(--card-shadow); overflow: hidden; }
 .amx-qf-head { display: flex; align-items: center; gap: 10px; padding: 13px 16px; border-bottom: 1px solid var(--border); }
 .amx-qf-searchicon { color: var(--text-muted); flex: none; }
 .amx-qf-input { flex: 1; min-width: 0; border: none; background: transparent; color: var(--text); font-size: var(--ui-font-heading, 14px); outline: none; }
@@ -21,7 +21,7 @@
 .amx-qf-phone .amx-qf { width: 100%; max-height: 100%; }
 .amx-qf-phone .amx-qf-row { padding-block: 12px; }
 /* 居中小卡片(加库第二步:选日期/勾选列),复用同款悬浮 chrome */
-.amx-qf-card { width: min(340px, 92vw); background: var(--bg-card, var(--bg, #1e1e1e)); border: 1px solid var(--border); border-radius: var(--radius-lg, 16px); box-shadow: var(--card-shadow); padding: 12px; }
+.amx-qf-card { width: min(340px, 92vw); background: var(--surface-float, var(--bg-card, var(--bg, #1e1e1e))); backdrop-filter: var(--surface-blur, none); border: 1px solid var(--border); border-radius: var(--radius-lg, 16px); box-shadow: var(--card-shadow); padding: 12px; }
 /* 分类胶囊:复用 `.t2s-vaultseg`(sidebar2.css),这里只补面板里的尺寸与间距。
    选中态的字色/滑块色一律由那颗组件出,别在这儿另调一套 —— 第一版自己写 chip 时就是在这里
    写死了 color:#fff,深色皮肤下 --accent 近白 = 白字白底(截图自查才发现)。 */

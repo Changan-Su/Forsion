@@ -23,8 +23,8 @@
  *
  * 降级:
  *   · 设置里的性能开关 data-glass='off' → 全部材质回落实色(见文件末尾)。
- *   · 非 macOS 无原生 vibrancy，loader 会把当前 skin 解析后的 --bg 同步给原生窗口底；
- *     CSS 同时把舞台钉回 var(--bg)，两层不会再透出写死的 cream 底色。
+ *   · 非 macOS(Windows / Linux / 浏览器)无原生 vibrancy:外壳 / 侧栏 / 舞台回实色(见文件末尾),
+ *     菜单、输入卡、弹窗的 CSS 磨砂照旧 —— 那几层身后有页面像素可糊。
  *   · 空间高程遵循 base.css 的统一淡阴影，玻璃材质仍由本主题控制。
  */
 
@@ -82,9 +82,20 @@
   /* base.css 的浮层仍通过这个 token 获得同一套 blur；各表面浓度与高光在下方按层级覆写。
    * --panel-blur 只有 :root(0,1,0) 一个竞争者,放这儿够用;--bg-glass 不行,见下面那块。 */
   --panel-blur: var(--gl-blur-float);
+
+  /* ── 表面 token(DESIGN §3「浮层表面」):base.css / lcl 的菜单、弹层、弹窗、toast 都按角色读这几个,
+   * 没定义时回落各自原来的实色。本主题只在这里给材质,**不再逐个列类名** —— 10 月以后新加的十几个浮层
+   * 就是因为没进名单而在 Glass 下是实色。新浮层只要读 --surface-*(或直接用 .ui-popover)就自动跟上。
+   * 值在使用处之前已在 :root 上解析,暗色块改的 --gl-menu / --gl-float 照样传过来。 */
+  --surface-menu: var(--gl-sheen), var(--gl-menu);
+  --surface-float: var(--gl-sheen), var(--gl-float);
+  --surface-blur: var(--gl-blur-float);
+  /* 浮层不描边(用户 08-14 整批去轮廓线);大型弹窗另有发丝线,见 4b。 */
+  --surface-edge: transparent;
 }
 
-/* ⚠ --bg-glass 必须单独放在 (0,3,0):skins.css 在 :root[data-skin='…'](0,2,0)/
+/* base.css 已不再用 --bg-glass(浮层改读 --surface-*);这块留给磁盘主题 / 插件里还在用它的浮层。
+ * ⚠ --bg-glass 必须单独放在 (0,3,0):skins.css 在 :root[data-skin='…'](0,2,0)/
  * :root.dark[data-skin='…'](0,3,0) 里逐配色定义了它,压过上面那个 (0,1,0) 的块。
  * 不提特异性的话本主题的基础 float 材质会被配色定义覆盖
  * ——更糟的是 data-glass='off' 时它们会停在配色给的 0.9 alpha 上,毛玻璃关了却还是半透明。
@@ -238,56 +249,13 @@
   -webkit-backdrop-filter: var(--gl-blur-float);
 }
 
-/* ═══ 4a 菜单 / popover:Chatbox 同款磨砂 ═══
- * 默认菜单只比输入卡厚 8 个百分点,并共享同一层高光和 blur/saturate;这样仍看得到被打散的背景,
- * 不会因 84% 染色几乎实心而被误认成「只有半透明、没有磨砂」。侧栏物理兜底在本段后单独覆盖。
- * ⚠ 名单里每一个都确认过**没有 fixed 后代**:Amadeus 的嵌套浮层走 overlayPortal 的 createPortal
- *   挂到 body(不是 DOM 后代),EventCard 卡内也不开浮层 —— 否则会被这层 filter 抢走包含块
- *   (见下方 chrome 段那条长警告)。往这些浮层里塞 fixed 子元素之前先回来看这行。
- * cm-sub / approval-hover-desc 是 Chatbox 新增的第二层浮面,必须和一级菜单一起进材质表。
- * 这里列的是「真正画卡片的元素」而不是透明点击遮罩；新增 popup 时也必须按这个口径登记。
- * 划线条(.selbar,聊天 / 插件视图里选中文字后那一条)和它的结果卡(.am-ai-panel)外壳都是 .ui-popover,已在名单里;
- *   ⋯ 展开的 .selbar-panel 是流内的,没有 fixed 后代。笔记那条是下面的 .am-app .inline-toolbar。 */
-[data-theme='genesis-glass'] .composer-menu,
-[data-theme='genesis-glass'] .cm-sub,
-[data-theme='genesis-glass'] .approval-hover-desc,
-[data-theme='genesis-glass'] .ctx-menu,
-[data-theme='genesis-glass'] .project-menu,
-[data-theme='genesis-glass'] .t2c-menu,
-[data-theme='genesis-glass'] .t2c-ctxring-pop,
-[data-theme='genesis-glass'] .account-pop,
-[data-theme='genesis-glass'] .rb-menu,
-[data-theme='genesis-glass'] .rb-fly,
-[data-theme='genesis-glass'] .rb-iconpick,
-[data-theme='genesis-glass'] .unitsw-menu,
-[data-theme='genesis-glass'] .t2sw-plug-menu,
-[data-theme='genesis-glass'] .lcl-tip,
-[data-theme='genesis-glass'] .amx-db-pop,
-[data-theme='genesis-glass'] .ui-popover,
-[data-theme='genesis-glass'] .amx-bpick,
-[data-theme='genesis-glass'] .amx-mbar,
-[data-theme='genesis-glass'] .amx-cal-agenda,
-[data-theme='genesis-glass'] .amx-cal-cardwrap,
-[data-theme='genesis-glass'] .dash-add-menu {
-  background: var(--gl-sheen), var(--gl-menu);
-  backdrop-filter: var(--gl-blur-float);
-  -webkit-backdrop-filter: var(--gl-blur-float);
-  /* 不描边:与其他主题的输入卡一致(用户 08-14 要求整批卡去轮廓线)。
-     代价写在这儿:压在壁纸上的那一侧,边缘只能靠材质浓度差交代。 */
-  border-color: transparent;
-  isolation: isolate;
-}
-/* Amadeus 编辑器自己的浮层(斜杠、[[ / @ / # 补全、粘贴为、划词工具栏)也是一级菜单,同一份材质(10-02 用户拍板 c1:
- * 此前漏登记,它们还是不透明底 + 深色描边,于是「只有 Chat 跟上了」)。块菜单与它的「转换为 ›」子菜单是 .ctx-menu,已在上面。
- * 特异性多一个 .am-app / :not():Amadeus 与多维表的样式在懒加载 chunk 里,可能晚于本主题的 <link> 进场,同特异性会被它们盖回去。
- * ⚠ 同上段口径:这几个浮层都没有 fixed 后代(划词工具栏的二级面板 .itb-panel 是流内展开)。 */
-[data-theme='genesis-glass'] .am-app :is(.slash-menu, .wiki-suggest, .paste-as-menu, .inline-toolbar, .ctx-menu) {
-  background: var(--gl-sheen), var(--gl-menu);
-  backdrop-filter: var(--gl-blur-float);
-  -webkit-backdrop-filter: var(--gl-blur-float);
-  border-color: transparent;
-  isolation: isolate;
-}
+/* ═══ 4a 菜单 / popover / toast / 弹层:材质由上面的 --surface-* 给 ═══
+ * 菜单档(--surface-menu,浓度旋钮默认 72% 时为 58%)只比输入卡厚 8 个百分点;浮层档(--surface-float,72%)给
+ * toast、预览、查找条、悬浮目录这类停留更久、字更多的。两档共享输入卡同一束高光与 blur/saturate,
+ * 浓度差只表达层级。**哪个浮层用哪一档写在它自己的 CSS 里**(base.css / lcl / Amadeus 各处读 var(--surface-*, 原实色)),
+ * 本文件只留下面几处「按位置 / 按结构」的例外;surfaceTokens.test.ts 扫所有浮层规则,没读 token 又不在实色白名单就红。
+ * ⚠ --surface-blur 会让读它的浮层成为其 fixed 后代的包含块(见 chrome 段长警告):读它之前先确认没有 fixed 后代、
+ *   嵌套浮层走 portal。装着整块 View 的 .lcl-float 因此不读,保持实色;Mini 卡片弹层要和液滴同色,也保持实色。 */
 [data-theme='genesis-glass'] .amx-db-pop:not(.amx-coverpick) { border-color: transparent; }
 /* 文档里的「对象」卡(看板 / 画廊卡、文件卡、书签卡、媒体、仪表盘卡、Coding 模板卡、回答里的实时应用卡)与 Chat 浮卡同一配方:
  * 统一淡阴影 + 浮层圆角,本主题照 08-14 去轮廓线(c3)。其他主题保留细描边。 */
@@ -296,12 +264,12 @@
   border-color: transparent;
 }
 
-/* ribbon / 侧栏原生玻璃上没有可靠的页面像素可采样:保留同一高光和模糊参数,只提高染色浓度。 */
+/* ribbon / 侧栏原生玻璃上没有可靠的页面像素可采样:保留同一高光和模糊参数,只提高染色浓度。
+ * 这几个浮层几乎只开在 Ribbon / 侧栏上方,按位置加厚,所以仍按类名列。 */
 [data-theme='genesis-glass'] .rb-menu,
 [data-theme='genesis-glass'] .rb-fly,
 [data-theme='genesis-glass'] .rb-iconpick,
 [data-theme='genesis-glass'] .unitsw-menu,
-[data-theme='genesis-glass'] .t2sw-plug-menu,
 [data-theme='genesis-glass'] .lcl-tip {
   background: var(--gl-sheen), var(--gl-side);
 }
@@ -316,25 +284,6 @@
   -webkit-backdrop-filter: var(--gl-blur-float);
 }
 
-/* toast / 预览 / 搜索等信息量更高、停留更久,进入 float 档；它们仍与 Chatbox 共用同一高光与模糊。 */
-[data-theme='genesis-glass'] .ntf,
-[data-theme='genesis-glass'] .wsfile-panel,
-[data-theme='genesis-glass'] .amx-qf,
-[data-theme='genesis-glass'] .amx-trash-pop,
-[data-theme='genesis-glass'] .amx-hoverprev,
-[data-theme='genesis-glass'] .amx-toast {
-  background: var(--gl-sheen), var(--gl-float);
-  backdrop-filter: var(--gl-blur-float);
-  -webkit-backdrop-filter: var(--gl-blur-float);
-  border-color: transparent;
-  isolation: isolate;
-}
-/* 通用胶囊浮钮仍保留自身边线(边就是形状),只统一材质配方。 */
-[data-theme='genesis-glass'] .jump-bottom,
-[data-theme='genesis-glass'] .voting-indicator {
-  background: var(--gl-sheen), var(--gl-menu);
-}
-
 /* 拥有二级浮面的一级菜单也不能自己成为 backdrop root。模型菜单内有 .cm-sub,模式菜单内有
  * .approval-hover-desc,添加菜单内有 .add-menu-sub；三者沿用输入卡的无子节点材质代理。
  * 其他叶子菜单仍直接吃上面的滤镜，避免给可滚动菜单引入会随内容滚走的绝对定位底片。 */
@@ -342,6 +291,7 @@
   background: transparent;
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
+  isolation: isolate;
 }
 [data-theme='genesis-glass'] .composer-menu:is(.composer-menu--model, .composer-menu--mode, .composer-menu--add)::before {
   content: '';
@@ -463,6 +413,7 @@
   /* 输入卡必须一起回实色:毛玻璃关了 backdrop-filter 就没了,再留 50% 半透就是「正文直接透过输入卡」 */
   --gl-thin: var(--bg-card);
   --gl-hairline: var(--border);
+  --surface-blur: none;
 }
 /* base.css 的通配符不匹配伪元素；三类材质代理必须显式停掉滤镜，性能开关才名副其实。 */
 :root[data-theme='genesis-glass'][data-glass='off'] .t2c-card::before,
@@ -474,11 +425,16 @@
   -webkit-backdrop-filter: none;
 }
 
-/* ═══ 非 macOS / 浏览器构建:舞台回实色 ═══
- * 只有 darwin 会被 main.tsx 打上 data-platform='mac',别处没有原生 vibrancy。loader 会把当前
- * --bg 同步给原生窗口底；这里仍把舞台钉回 var(--bg)，外壳各层的半透染色照旧 ——
- * 于是非 mac 上呈现为「柔和分层的实色主题」,而不是掉色。
- * (0,3,0) 与暗色块打平、位置更靠后,故生效;毛玻璃开关那块 (0,4,0) 仍能压过它。 */
+/* ═══ 非 macOS / 浏览器构建:外壳回实色 ═══
+ * 只有 darwin 会被 main.tsx 打上 data-platform='mac',别处没有原生 vibrancy:窗口底是实色(loader 把当前 --bg
+ * 同步给原生窗口),外壳 / 侧栏若还按 46% / 58% 半透画,底下垫的就是纸色 —— 侧栏被冲成「差不多是纸」,
+ * 侧栏与纸面的亮度台阶从 Genesis 的 1.9 掉到 1.0(OKLab ×100,经典亮色;11-08 检修方案实测)。
+ * 所以这里沿用毛玻璃开关那块(下面 data-glass='off')的外壳三行:舞台 / 外壳 / 侧栏回实色,层次与 Genesis 一致;
+ * 菜单、输入卡、弹窗**不跟着回落** —— 它们身后有页面像素,CSS 磨砂在 Windows 上照样成立。
+ * (0,3,0) 压过暗色块 (0,2,0);毛玻璃开关那块 (0,4,0) 仍能把其余材质一起压成实色。
+ * mac 上的浏览器同样没有 data-platform,也走这里:网页里没有原生玻璃可透。 */
 :root[data-theme='genesis-glass']:not([data-platform='mac']) {
   --gl-stage: var(--bg);
+  --gl-chrome: var(--sidebar-bg);
+  --gl-pane: var(--sidebar-bg);
 }

@@ -1,27 +1,12 @@
 /**
- * Lovable — 设计语言:平展纸感 · 结构层。
- * 双轴主题模型:**语言(data-theme)只管 UI 结构**(圆角/字体/阴影/布局),**颜色由配色(data-skin)决定**。
- * 故本文件只设结构 token(小圆角 · 柔影代线条 · Pill),不设任何配色;颜色见 theme/skins.css。
- * 字体走 :root 默认(Hanken Grotesk)。
+ * Genesis(id: lovable)—— 设计语言:纸感结构。侧栏和外框连成一片,主区是一张圆角纸卡(纸卡本身由 lcl engine.css 画)。
+ * 三轴模型:语言(data-theme)只管结构,颜色由配色(data-skin)与背景色(data-bg)决定,本文件不设任何颜色。
+ * 阴影走 base.css 的全局淡阴影(DESIGN §3,html:root[data-mode] 统一给),字体走 :root 默认(Hanken Grotesk)。
+ * Genesis 就是 base.css :root 的缺省几何,这里只把三档圆角写明,方便别的语言对照。
  */
 
 [data-theme='lovable'] {
-  --border-width: 1px;
   --radius-sm: 6px;
   --radius-md: 12px;
   --radius-lg: 16px;
-  --radius-chat-surface: var(--radius-lg);
-  --radius-chat-card: var(--radius-md);
-  --panel-blur: none;
-  --inset: rgba(255, 255, 255, 0.2) 0 0.5px 0 0 inset, rgba(0, 0, 0, 0.2) 0 0 0 0.5px inset, rgba(0, 0, 0, 0.05) 0 1px 2px 0;
-  --card-shadow: 0 1px 2px rgba(42, 36, 26, 0.04), 0 10px 26px rgba(42, 36, 26, 0.05);
-  --btn-shadow: var(--inset);
-  --icon-shadow: var(--inset);
-}
-
-/* 暗色仅换阴影形态(颜色由配色暗色块给) */
-.dark[data-theme='lovable'] {
-  --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 10px 26px rgba(0, 0, 0, 0.35);
-  --btn-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
-  --icon-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
 }

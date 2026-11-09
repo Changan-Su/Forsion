@@ -1,0 +1,41 @@
+{
+  "id": "soft",
+  "name": "Soft · 柔影",
+  "nameEn": "Soft",
+  "description": "柔影浮卡 · 大圆角(LCL soft 结构语言)。渐变舞台 + 角落辉光 + 圆角浮卡,Plus Jakarta Sans。颜色由「配色」决定。",
+  "descriptionEn": "Rounded floating panels, a softly lit stage and a clear reading surface. Colors follow your selected palette.",
+  "version": "1.0.0",
+  "author": "Forsion",
+  "supportsDarkMode": true,
+  "tags": [
+    "lcl",
+    "soft",
+    "rounded"
+  ],
+  "panelGap": 8,
+  "fonts": {
+    "google": [
+      "Plus Jakarta Sans:wght@400;500;600;700",
+      "Nunito:wght@400;600;700;800"
+    ]
+  },
+  "preview": {
+    "shape": "soft",
+    "background": {
+      "light": "linear-gradient(158deg, #f8f7f6 0%, #f2f1ef 52%, #fdfdfc 100%)",
+      "dark": "linear-gradient(158deg, #2a292b 0%, #323235 55%, #353538 100%)"
+    },
+    "accent": "#1c1c1c",
+    "title": {
+      "text": "Soft"
+    },
+    "tagline": "柔影浮卡 · 大圆角",
+    "taglineEn": "Softly raised panels · rounded",
+    "swatches": [
+      "#1c1c1c",
+      "#f8f7f6",
+      "#5f5f5d",
+      "#eae9e7"
+    ]
+  }
+}

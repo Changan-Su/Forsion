@@ -1491,8 +1491,8 @@ body.amx-marquee-active * {
   flex-direction: column;
   width: 248px;
   max-height: 320px;
-  background: var(--surface-2);
-  border: var(--border-width, 1px) solid var(--border);
+  background: var(--surface-menu, var(--surface-2)); backdrop-filter: var(--surface-blur, none);
+  border: var(--border-width, 1px) solid var(--surface-edge, var(--border));
   /* 圆角/投影跟宿主浮层同一套 token(与 .am-app .ctx-menu 一致);此前写死 8px + 自定义阴影,
      和四周的面板不是一个观感(用户 2026-07-26)。 */
   border-radius: var(--radius-md);
@@ -1510,8 +1510,8 @@ body.amx-marquee-active * {
   display: flex;
   flex-direction: column;
   min-width: 176px;
-  background: var(--surface-2);
-  border: var(--border-width, 1px) solid var(--border);
+  background: var(--surface-menu, var(--surface-2)); backdrop-filter: var(--surface-blur, none);
+  border: var(--border-width, 1px) solid var(--surface-edge, var(--border));
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-panel);
   padding: var(--menu-shell-padding, 4px);
@@ -1568,12 +1568,12 @@ body.amx-marquee-active * {
 .am-app .inline-toolbar {
   /* 外壳与笔记「…」菜单同一套(10-02 用户拍板 c1):细描边 + 统一淡阴影,不自带毛玻璃;Genesis 下由主题材质表接管。 */
   position: fixed;
-  z-index: 55;
+  z-index: var(--z-menu, 100); /* 划线条同层(原 55 在窗口浮层 90 之下,一条吐司就能盖住它;和斜杠 / [[ 菜单不同时出现) */
   /* ⚠️别把摆位写成 transform:拖选进场 selbar-in 动的是 transform,会覆盖它(工具栏先出现在选区右下再跳上去,用户实报)。
      落位交给 OverlayAt 的 prefer:'above' + center。进退场(走查续八 8.1):在 base.css 的菜单名单里 —— 双击 / 三击 / 键盘选区
      走菜单进场,关掉 80ms 缩淡退场;拖选松手顺着方向滑进(下面 data-dir)。 */
-  background: var(--surface-2);
-  border: var(--border-width, 1px) solid var(--border);
+  background: var(--surface-menu, var(--surface-2)); backdrop-filter: var(--surface-blur, none);
+  border: var(--border-width, 1px) solid var(--surface-edge, var(--border));
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-panel);
   user-select: none;
@@ -1634,6 +1634,10 @@ body.amx-marquee-active * {
   max-height: 300px;
   overflow-y: auto;
 }
+/* 面板往上长(划线菜单方案 B):格式栏在选区上方时,⋯ / AI ▾ / 转换为 / 颜色展开后 .itb-row 钉住不动、面板长在它上面
+   (useClampedMenu 的 keep 打 data-grow,同聊天那条 .selbar[data-grow='up']);上面放不下才往下长,同以前。 */
+.am-app .inline-toolbar[data-grow='up'] { display: flex; flex-direction: column-reverse; }
+.am-app .inline-toolbar[data-grow='up'] > .itb-panel { border-top: 0; border-bottom: 1px solid var(--border); }
 .am-app .itb-menu-item {
   text-align: left;
   border: none;
@@ -1869,12 +1873,12 @@ body.amx-marquee-active * {
   max-height: 64vh;
   display: flex;
   flex-direction: column;
-  background: var(--surface-2);
+  background: var(--surface-float, var(--surface-2));
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-panel);
   overflow: hidden;
-  backdrop-filter: blur(20px) saturate(140%);
+  backdrop-filter: var(--surface-blur, blur(20px) saturate(140%));
 }
 .am-app .cmd-input {
   font-family: inherit;
@@ -2019,8 +2023,8 @@ body.amx-marquee-active * {
   max-width: 320px;
   max-height: 260px;
   overflow-y: auto;
-  background: var(--surface-2);
-  border: var(--border-width, 1px) solid var(--border);
+  background: var(--surface-menu, var(--surface-2)); backdrop-filter: var(--surface-blur, none);
+  border: var(--border-width, 1px) solid var(--surface-edge, var(--border));
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-panel);
   padding: var(--menu-shell-padding, 4px);
@@ -2334,8 +2338,8 @@ body.amx-marquee-active * {
   max-height: calc(100vh - 16px); /* 超高时滚动而非纵向溢出屏幕 */
   overflow-y: auto;
   padding: var(--menu-shell-padding, 4px);
-  background: var(--surface-2);
-  border: var(--border-width, 1px) solid var(--border);
+  background: var(--surface-menu, var(--surface-2)); backdrop-filter: var(--surface-blur, none);
+  border: var(--border-width, 1px) solid var(--surface-edge, var(--border));
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-panel);
   animation: pop-in var(--dur-fast) var(--ease-apple);
@@ -3400,8 +3404,8 @@ body.amx-marquee-active * {
   min-width: 320px;
   padding: 12px;
   border-radius: var(--radius-md, 12px);
-  background: var(--bg-elevated, var(--bg));
-  border: 1px solid var(--border);
+  background: var(--surface-menu, var(--bg-elevated, var(--bg))); backdrop-filter: var(--surface-blur, none);
+  border: 1px solid var(--surface-edge, var(--border));
   box-shadow: var(--card-shadow);
 }
 .am-app .amx-linkedit-form { display: contents; } /* form 只为 Enter 提交,不参与布局 */

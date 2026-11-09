@@ -1,0 +1,24 @@
+{
+  "id": "soft",
+  "name": "Soft · 柔影",
+  "nameEn": "Soft",
+  "description": "分层浮卡:Ribbon、侧栏和主区各是一张大圆角卡片,浮在比纸面深一档的底上,层次与 Genesis 相同。颜色跟随配色。",
+  "descriptionEn": "Layered floating panels: the Ribbon, sidebar and main view sit as separate rounded cards on a slightly deeper stage, layered like Genesis. Colors follow your palette.",
+  "version": "2.0.0",
+  "author": "Forsion",
+  "supportsDarkMode": true,
+  "tags": ["lcl", "soft", "rounded"],
+  "panelGap": 8,
+  "preview": {
+    "shape": "soft",
+    "background": {
+      "light": "linear-gradient(158deg, #f8f7f6 0%, #f2f1ef 52%, #fdfdfc 100%)",
+      "dark": "linear-gradient(158deg, #2a292b 0%, #323235 55%, #353538 100%)"
+    },
+    "accent": "#1c1c1c",
+    "title": { "text": "Soft" },
+    "tagline": "柔影浮卡 · 大圆角",
+    "taglineEn": "Softly raised panels · rounded",
+    "swatches": ["#1c1c1c", "#f8f7f6", "#5f5f5d", "#eae9e7"]
+  }
+}

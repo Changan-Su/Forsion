@@ -1,0 +1,79 @@
+name: unit-tests
+
+# 发版门禁里的「全量单测」那半,单独成一个可复用 workflow(11-08):
+#   - build-desktop 的 release 门禁经 workflow_call 调它(tag 与手动预跑都一样),定义只此一份;
+#   - main 上每次合并也跑一轮:PR 快检查不跑全量 vitest,v2.13.8-beta.4 推 tag 才发现 AccountCard.test.ts 早已红在 main 上,
+#     修完挪 tag 多花了约一小时。合并后跑,红了合并的人十分钟内收到邮件。
+# push 只认 main(仓根 CLAUDE.md 约定);刻意**不**挂 pull_request —— 这两个 job 合计 ~10 分钟,PR 快检查要保持轻。
+# 引擎与桌面拆成两个并行 job:以前串在一个 job 里约 12 分钟,和 Windows 打包一起卡发版墙钟。
+
+on:
+  workflow_call:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'desktop/**'
+      - 'lcl/**'
+      - 'tangu-agent/**'
+      - '.github/workflows/unit-tests.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  engine:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: tangu-agent
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # actions/checkout@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # actions/setup-node@v4
+        with:
+          node-version: 24.22.1
+          cache: npm
+          cache-dependency-path: tangu-agent/package-lock.json
+
+      - run: npm ci --no-audit --no-fund
+      - run: npm run typecheck
+      - run: npm test
+
+      # 三端功能同步闸:mobile 重写了一份 desktop 的 main.tsx/Root.tsx,desktop 那边新加一行
+      # 移动端不会自动跟上(typecheck 与 boot smoke 都抓不到——不是类型错、也不崩,只是静默少功能)。纯 fs 读文件。
+      - name: Platform parity (desktop ↔ mobile)
+        working-directory: desktop
+        run: node scripts/platform-parity.check.cjs
+
+      # Tangu 界面边界(核心插件化第 1 步):宿主只经 @tangu/ui 出口用 Tangu,Tangu 的宿主依赖只许减。纯 fs。
+      - name: Tangu UI boundary
+        working-directory: desktop
+        run: node scripts/tangu-boundary.check.cjs --selftest && node scripts/tangu-boundary.check.cjs
+
+  # 渲染层 + electron main 的纯 vitest,不需要浏览器。
+  # `check:*` 那批不在这儿:它们要真 Electron / Chromium(check:scrollbar 那支在无头 chromium 上
+  # 必然**假绿** —— 那儿恒是 overlay 滚动条、gutter 恒为 0,量什么都通过),留在本地跑。
+  desktop:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # actions/checkout@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # actions/setup-node@v4
+        with:
+          node-version: 24.22.1
+          cache: npm
+          cache-dependency-path: |
+            tangu-agent/package-lock.json
+            desktop/package-lock.json
+
+      # desktop 的部分用例直接 import 引擎源码(../../tangu-agent/src/...),它们的依赖要在引擎那边装好。
+      - name: Install engine deps (imported by desktop tests)
+        working-directory: tangu-agent
+        run: npm ci --no-audit --no-fund
+      - run: npm ci --no-audit --no-fund
+      - run: npm run typecheck
+      - run: npm test

@@ -74,12 +74,13 @@ To record an entry for the user (记一笔, or any value they report), call \`ma
 In an \`intelligent_ui\` widget, \`records\` is the list of its saved records, each \`{id, <field>: value}\` with the field names you pass to \`set_record\`; read it directly, without declaring it, through each / filter / sum (table rows \`"each(records,'r',[r.item,r.amount])"\`, total \`"sum(each(records,'r',r.amount))"\`). Buttons cannot change it: records are added only with \`manage_widget\` \`set_record\`.`;
 
 /** 存 / 改原件。返回给模型的回执;失败以 Error 开头,什么都没落盘。content 未给 = 只发 edits。
- *  ⚠️不给模型选层级:Luna 在项目会话里自己带上 scope:user(live 10-31),一张项目卡落到了所有 Agent 都看得到的地方。用户级要等搬家(开工顺序的管理页那步)。 */
-export async function saveCardWidget(args: Record<string, any>, ctx: ToolContext, card: { entry: WidgetEntry; content?: string; title?: string; edits?: WidgetEdit[] }): Promise<string> {
+ *  ⚠️不给模型选层级:Luna 在项目会话里自己带上 scope:user(live 10-31),一张项目卡落到了所有 Agent 都看得到的地方。用户级要等搬家(开工顺序的管理页那步)。
+ *  opts.place:调用方钉死落在哪一层(muse_space widget 只建 Muse 自己的 Agent 级小组件,项目会话里手聊也不落进项目)。模型给不了。 */
+export async function saveCardWidget(args: Record<string, any>, ctx: ToolContext, card: { entry: WidgetEntry; content?: string; title?: string; edits?: WidgetEdit[] }, opts: { place?: WidgetPlace } = {}): Promise<string> {
   if (effectiveRemote(ctx)) return REMOTE_DENIED;
   const widget = parseArg(args.widget);
   if (!widget || typeof widget !== 'object') return 'Error: widget must be { name } or { id, expectedRev }.';
-  const place = placeOf(ctx);
+  const place = opts.place ?? placeOf(ctx);
   const summary = typeof args.summary === 'string' ? args.summary.trim().slice(0, 200) : undefined;
   const title = typeof card.title === 'string' ? card.title : undefined;
   try {

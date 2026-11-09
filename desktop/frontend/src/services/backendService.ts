@@ -3,7 +3,7 @@
  * 统一 Bearer + JSON 错误,错误信息抛 Error(detail)。
  */
 import type {
-  AgentConfig, AgentScheduleEntry, AgentScheduleEntryUpsert, AgentScheduleInfo, AgentsMeta, AutomationActionCatalogItem, AutomationExecutionInfo, AutomationRunInfo, AutomationSessionInfo, ChannelKind, HistorianActivityItem, MessageRecord, ModelsResponse, ProviderQuota, MuseLibraryEntry, MuseStarter, MuseRoundInfo, MuseStatusInfo, MuseTodo, MuseTriggerInfo, MuseTriggerUpsert, PendingApprovalInfo, TriggerSourceInfo,
+  AgentConfig, AgentScheduleEntry, AgentScheduleEntryUpsert, AgentScheduleInfo, AgentsMeta, AutomationActionCatalogItem, AutomationExecutionInfo, AutomationRunInfo, AutomationSessionInfo, ChannelKind, HistorianActivityItem, MessageRecord, ModelsResponse, ProviderQuota, MuseLibraryEntry, MuseStarter, MuseRoundInfo, MuseSpaceView, MusePlacementOp, MuseStatusInfo, MuseTodo, MuseTriggerInfo, MuseTriggerUpsert, PendingApprovalInfo, TriggerSourceInfo,
   GitIdentity, GitSettings, GitSummary, NormalAgentDef, ProjectContext, ProjectRepoInfo, ProjectMemoryView, ProjectSettings, ProjectSkillInfo, SessionRecord, SkillInfo, SkillCatalogEntry, SpecialAgentsConfig,
   ToolsResponse, WorkspaceFileMeta, TeamDef } from '../types'
 import { authFetch } from './http'
@@ -272,7 +272,8 @@ export const getBackgroundSessions = (t: EngineTarget, sessionId: string, kind?:
   ).then((r) => r.background)
 
 /** 任务卡「开个子会话」:在这个会话下开一个可见子会话,任务书当第一条消息(做完送回主会话)。 */
-export const startChildSession = (t: EngineTarget, parentId: string, body: { title: string; message: string; agent?: string }) =>
+/** model(11-08):子会话用的模型(id 或名字的一部分,引擎按模型目录认);不给 = 跟开它的会话一样。 */
+export const startChildSession = (t: EngineTarget, parentId: string, body: { title: string; message: string; agent?: string; model?: string }) =>
   request<{ sessionId: string; runId: string; title: string }>(t, `/agent/sessions/${encodeURIComponent(parentId)}/children`, { method: 'POST', body: JSON.stringify(body) })
 
 export const listMessages = (t: EngineTarget, sessionId: string, limit = 200, before?: number) =>
@@ -1153,6 +1154,12 @@ export const getMuseStatus = (t: EngineTarget) =>
 /** 面板「叫醒」(2026-11-08):下一次巡检当作到点,回最新状态。旧引擎 404;Muse 关着 409。 */
 export const wakeMuse = (t: EngineTarget): Promise<MuseStatusInfo> =>
   request<{ status: MuseStatusInfo }>(t, '/agent/special/muse/wake', { method: 'POST', body: '{}' }).then((r) => r.status)
+/** Muse Space「今日简报」的布局(2026-11-08,方案 D):合成好的那份。旧引擎 404(主区照画内置卡,只是没有那句话 / 备好的)。 */
+export const getMuseSpace = (t: EngineTarget): Promise<MuseSpaceView> =>
+  request<{ view: MuseSpaceView }>(t, '/agent/special/muse/space').then((r) => r.view)
+/** 你在页上的一下(挪 / 隐藏 / 添加 / 接受或拒绝提议 / 恢复默认)。带 expectedRev:别处刚改过 → 409,调用方重读再说。 */
+export const postMuseSpacePlacement = (t: EngineTarget, expectedRev: number, op: MusePlacementOp): Promise<MuseSpaceView> =>
+  request<{ view: MuseSpaceView }>(t, '/agent/special/muse/space/placement', { method: 'POST', body: JSON.stringify({ expectedRev, op }) }).then((r) => r.view)
 /** 面板「最近几轮」(2026-11-08)。旧引擎 404(调用方当「不支持」,整块不画)。 */
 export const getMuseRounds = (t: EngineTarget, limit = 3): Promise<MuseRoundInfo[]> =>
   request<{ rounds: MuseRoundInfo[] }>(t, `/agent/special/muse/rounds?limit=${limit}`).then((r) => r.rounds)

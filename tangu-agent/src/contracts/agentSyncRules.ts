@@ -11,6 +11,7 @@
 import { mergeDbFile, unionLines } from './dbRowMerge.js';
 import { mergeText3With, splitLogBlocks, mergeBlocks, mergeLogHeaders } from './contentMerge.js';
 import { LEGACY_PERSONAS, LEGACY_PERSONA_PROMPTS_ZH } from './legacyPersonas.js';
+import { USER_MD_TEMPLATE, LEGACY_USER_MD_TEMPLATES } from './userMdTemplate.js';
 
 // ── 路径:哪些上云 ─────────────────────────────────────────────────────────────
 
@@ -108,17 +109,8 @@ export interface AgentMergeDeps {
   portrait?: (ours: string, base: string, theirs: string) => AgentMergeResult;
 }
 
-/** 新装机播种的 USER.md / human/MEMORY.md 空模板:第一次见面认得它,一边是空模板就用另一边,别把模板行混进真资料。 */
-const userMdTemplate = (lead: string): string =>
-  '# User Profile (USER.md)\n\n' +
-  `> Every Agent reads this profile. ${lead}\n\n` +
-  '## Name / What to call you\n\n' +
-  '## Preferences\n- \n\n' +
-  '## Level / Background\n\n' +
-  '## Long-term needs / Goals\n';
-export const USER_MD_TEMPLATE = userMdTemplate('Record long-term information about yourself here.');
-/** 以前发出去的空模板:同步 / 镜像的第一次见面和提示词都要认得,不然旧装机那份空模板会被当成真资料合并、注入。 */
-export const LEGACY_USER_MD_TEMPLATES: readonly string[] = [userMdTemplate('Record long-term information about yourself here; Agents may also add to it based on conversations.')];
+/** 新装机播种的 USER.md / human/MEMORY.md 空模板:第一次见面认得它,一边是空模板就用另一边,别把模板行混进真资料。定义在 userMdTemplate.ts(渲染层也引)。 */
+export { USER_MD_TEMPLATE, LEGACY_USER_MD_TEMPLATES };
 
 /** 没有基线时两份文本怎么合:一边是空的或新装机的空模板就用另一边,否则按行取并集(一行都不丢)。 */
 export function joinFirstContact(ours: string, theirs: string): string {

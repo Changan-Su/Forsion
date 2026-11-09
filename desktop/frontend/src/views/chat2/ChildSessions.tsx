@@ -6,10 +6,12 @@
  *  - ForkBlock(方案「Chat 画布分支」10-18 第二轮「挂点统一」):一条回答下面一块「从这里分出 N」,分支 / 顺便问 / 子会话一行一个
  *    (行就是上面子会话那一行的样子)。点分支 = 主区就地换成那一支(⌘ 开新标签);点顺便问 / 子会话 = 右边那块子会话面板。
  *  - ChildFromLine:子会话顶上「来自 主会话」;分支顶上「从 X 分出」。
- *  - SessionMessageLine:引擎落库的 <session_message> 用户行(子会话发给主会话 / 兄弟之间,10-28)画成一行系统行 + 正文,不摆成用户气泡。
+ *  - SessionMessageLine:引擎落库的 <session_message> 用户行(子会话发给主会话 / 兄弟之间,10-28)画成一行系统行 + 正文,不摆成用户气泡;
+ *    树外的会话发来的(relation=peer,11-08)头行换说法,下面多一行「不是你说的」。
+ *  - HandoffBlock:hand_off_task 把手头的活挪出去的会话(11-08「另起话题」),过程行下面单独一小块,不进 ForkBlock。
  */
 import React, { createContext, useContext, useEffect, useState, type RefObject } from 'react'
-import { ChevronRight, CornerDownRight, CornerUpLeft, GitBranch, MessageCircleQuestion, MessageSquare, Sparkles, Split } from 'lucide-react'
+import { ChevronRight, CornerDownRight, CornerUpLeft, Cpu, GitBranch, MessageCircleQuestion, MessageSquare, ShieldCheck, Sparkles, Split } from 'lucide-react'
 import type { SessionRecord, ToolEvent } from '../../../../../tangu-agent/src/contracts/clientTypes'
 import { useApp } from '../../stores/appStore'
 import { useSessionAttention } from '../../stores/attentionStore'
@@ -51,21 +53,35 @@ registerMessages({
   'childs.pill.waitOne': { zh: '{n} 个等你', en: '{n} needs you' },
   'childs.pill.title': { zh: '回到子会话', en: 'Back to child sessions' },
   'sessmsg.from': { zh: '{title} 发来消息', en: 'Message from {title}' },
+  'sessmsg.fromPeer': { zh: '另一个会话「{title}」发来消息', en: 'Message from another session, “{title}”' },
+  'sessmsg.peerNote': { zh: '不是你说的 · 这一轮的审批档不会比发消息那边松', en: 'Not from you · this turn’s approval level is never looser than the sender’s' },
+  'handoff.head': { zh: '手头的活挪到了这里', en: 'The unfinished task moved here' },
+  'handoff.note': { zh: '做完在这里留一行，不打断这边', en: 'It leaves a line here when done; it won’t interrupt this chat' },
 })
 
 export const CHILD_UPDATE_OPEN = '<child_sessions_update>'
 export const SESSION_MESSAGE_OPEN = '<session_message '
 const ID_RE = /\(id ([0-9a-f-]{36})\)/i
 
-/** 这条回答里 start_session 成功开出的子会话 id(工具结果里的 `(id …)`)。 */
-export function childIdsOf(events: ToolEvent[] | undefined): string[] {
+/** 这条回答里某个工具成功开出的会话 id(工具结果里的 `(id …)`)。 */
+function sessionIdsOf(events: ToolEvent[] | undefined, tool: string): string[] {
   const out: string[] = []
   for (const e of events || []) {
-    if (e.name !== 'start_session' || !e.done || e.isError) continue
+    if (e.name !== tool || !e.done || e.isError) continue
     const m = ID_RE.exec(e.result || '')
     if (m && !out.includes(m[1])) out.push(m[1])
   }
   return out
+}
+
+/** 这条回答里 start_session 成功开出的子会话 id。只认 start_session:hand_off_task 挪出去的不进「从这里分出」,另画一块(HandoffBlock)。 */
+export function childIdsOf(events: ToolEvent[] | undefined): string[] {
+  return sessionIdsOf(events, 'start_session')
+}
+
+/** 这条回答里 hand_off_task 把手头的活挪进去的会话 id(方案「会话互通升级」11-08:另起话题)。 */
+export function handoffIdsOf(events: ToolEvent[] | undefined): string[] {
+  return sessionIdsOf(events, 'hand_off_task')
 }
 
 const unescape = (s: string): string => s.replace(/&lt;/g, '<').replace(/&quot;/g, '"').replace(/&amp;/g, '&')
@@ -93,10 +109,27 @@ function useLastReply(id: string, status: RowStatus, known: boolean): string {
   return text
 }
 
-function ChildRow({ parentId, s, status, onSuggest }: { parentId: string; s: SessionRecord; status: RowStatus; onSuggest?: (text: string) => void }) {
+/** 模型 id → 显示名(模型目录里的 name;目录里没有就原样,同 ModelPill 的 modelName)。 */
+export function useModelName(id: string | null | undefined): string {
+  const name = useApp((st) => (id ? st.modelsResp?.models.find((m) => m.id === id)?.name : undefined))
+  return id ? name || id : ''
+}
+
+/** 子会话 / 任务卡上的小芯片:这个会话用的模型(和开它的会话不一样时才画,见 ChildRow)。 */
+export function ModelChip({ model }: { model: string }) {
+  const name = useModelName(model)
+  return <span className="t2-model-chip" data-model={model} title={model}><Cpu size={11} /><span>{name}</span></span>
+}
+
+/** fromId:开出它的那个会话(比模型用)。画布里 parentId 是主区开着的那一支(host),不一定是开它的那个。 */
+function ChildRow({ parentId, fromId, s, status, onSuggest }: { parentId: string; fromId?: string; s: SessionRecord; status: RowStatus; onSuggest?: (text: string) => void }) {
   const { t } = useI18n()
   const sub = useLastReply(s.id, status, true)
   const title = displaySessionTitle(s.title, t)
+  const openerId = fromId || s.parent_session_id || parentId
+  const openerModel = useApp((st) => (st.sessions.find((x) => x.id === openerId) || st.archivedSessions.find((x) => x.id === openerId))?.model_id)
+  // 只在两边都知道、且不一样时画:子会话跟着开它的会话用同一个模型是缺省,不必说
+  const ownModel = s.model_id && openerModel && s.model_id !== openerModel ? s.model_id : ''
   const open = (e: React.MouseEvent): void => {
     if (e.metaKey || e.ctrlKey) { openSession(s.id, { newTab: true }); return }
     useChildChat.getState().open(parentId, { id: s.id, sessionId: s.id, title })
@@ -107,7 +140,8 @@ function ChildRow({ parentId, s, status, onSuggest }: { parentId: string; s: Ses
       onKeyDown={(e) => { if (e.key === 'Enter') useChildChat.getState().open(parentId, { id: s.id, sessionId: s.id, title }) }}>
       <span className="t2-child-lead"><MessageSquare size={15} /></span>
       <span className="t2-child-title">{title}</span>
-      <span className={`t2-child-state${status === 'wait' ? ' wait' : ''}`}>{t(label)}<StatusMark status={status} /></span>
+      {/* 芯片放在状态格里(行是四列 grid,另起一格会把下一行的 grid-column 2/4 挤歪) */}
+      <span className={`t2-child-state${status === 'wait' ? ' wait' : ''}`}>{ownModel && <ModelChip model={ownModel} />}{t(label)}<StatusMark status={status} /></span>
       <span className="t2-child-chev"><ChevronRight size={13} /></span>
       {sub && status !== 'run' && <span className="t2-child-sub">{sub}</span>}
       {status === 'wait' && (
@@ -137,7 +171,7 @@ export function ChildSessionsBlock({ parentId, ids, onSuggest }: { parentId: str
         <b>{t('childs.head')}</b><span>{kids.length}</span><span className="grow" />
         <span>{allBack ? t('childs.allBack') : waiting ? t('childs.waitingN', { n: waiting }) : t('childs.pending')}</span>
       </div>
-      {kids.map((k, i) => <ChildRow key={k.id} parentId={parentId} s={k} status={st[i]} onSuggest={onSuggest} />)}
+      {kids.map((k, i) => <ChildRow key={k.id} parentId={parentId} fromId={parentId} s={k} status={st[i]} onSuggest={onSuggest} />)}
     </div>
   )
 }
@@ -213,7 +247,32 @@ export function ForkBlock({ sessionId, messageId, childIds, onSuggest }: { sessi
       </div>
       {branches.map((b) => <BranchRow key={b.id} s={b} status={stOf(b)} />)}
       {asides.map((a) => <AsideRow key={a.id} sessionId={sessionId} aside={a} />)}
-      {kids.map((k, i) => <ChildRow key={k.id} parentId={host ?? sessionId} s={k} status={st[i]} onSuggest={onSuggest} />)}
+      {kids.map((k, i) => <ChildRow key={k.id} parentId={host ?? sessionId} fromId={sessionId} s={k} status={st[i]} onSuggest={onSuggest} />)}
+    </div>
+  )
+}
+
+/** 一条回答里 hand_off_task 把手头的活挪出去的会话(方案「会话互通升级」11-08 P2-A):不进「从这里分出」,单独一小块,
+ *  画在过程行下面、正文前面。行就是子会话那一行(点开走右侧子会话面板,⌘ 开新标签;在等你时照样给「去回复 / 让 Tangu 回答」)。
+ *  画布开着「显示子会话」时它已经是一张卡,这里不再列(同 ForkBlock 的 hideKids)。 */
+export function HandoffBlock({ sessionId, ids, onSuggest }: { sessionId: string; ids: string[]; onSuggest?: (text: string) => void }) {
+  const { t } = useI18n()
+  const { host, hideKids } = useContext(ForkScope)
+  const sessions = useApp((s) => s.sessions)
+  const running = useApp((s) => s.runningBySession)
+  const unread = useApp((s) => s.unread)
+  const attention = useSessionAttention()
+  const kids = ids.filter((id) => !hideKids?.has(id)).map((id) => sessions.find((x) => x.id === id)).filter((x): x is SessionRecord => !!x)
+  if (!kids.length) return null // 挪出去的会话归档 / 删掉了:块也不留
+  const st = kids.map((k) => rowStatus(k, !!attention.get(k.id), !!running[k.id], unread.has(k.id)))
+  // data-child-sessions:输入框上方的子会话药丸按它找可滚回的块(childBlocks)
+  return (
+    <div className="t2-childs t2-handoff" data-handoff={kids.length} data-child-sessions={kids.length}>
+      <div className="t2-childs-head">
+        <Split size={12} /><b>{t('handoff.head')}</b><span className="grow" />
+        <span>{t('handoff.note')}</span>
+      </div>
+      {kids.map((k, i) => <ChildRow key={k.id} parentId={host ?? sessionId} fromId={sessionId} s={k} status={st[i]} onSuggest={onSuggest} />)}
     </div>
   )
 }
@@ -325,10 +384,11 @@ export function ChildUpdateLine({ content }: { content: string }) {
 }
 const UPD = { finished: 1, waiting_for_user: 1, failed: 1, stopped: 1 }
 
-/** <session_message from title relation>正文</session_message>(引擎 services/childSessions.ts sendSessionMessage 写的)。 */
-export function parseSessionMessage(content: string): { from: string; title: string; body: string } | null {
-  const m = /^<session_message from="([^"]*)" title="([^"]*)" relation="[a-z]+">\n([\s\S]*?)\n<\/session_message>/.exec(content)
-  return m ? { from: unescape(m[1]), title: unescape(m[2]), body: m[3] } : null
+/** <session_message from title relation>正文</session_message>(引擎 services/childSessions.ts sendSessionMessage 写的)。
+ *  relation:parent / child / sibling(同一棵会话树里),peer = 树外的另一个会话(11-08 起;不加新属性,旧宿主照样认)。 */
+export function parseSessionMessage(content: string): { from: string; title: string; relation: string; body: string } | null {
+  const m = /^<session_message from="([^"]*)" title="([^"]*)" relation="([a-z]+)">\n([\s\S]*?)\n<\/session_message>/.exec(content)
+  return m ? { from: unescape(m[1]), title: unescape(m[2]), relation: m[3], body: m[4] } : null
 }
 
 export function SessionMessageLine({ content }: { content: string }) {
@@ -336,13 +396,16 @@ export function SessionMessageLine({ content }: { content: string }) {
   const m = parseSessionMessage(content)
   if (!m) return null
   const title = displaySessionTitle(m.title, t)
+  const peer = m.relation === 'peer'
   return (
-    <div className="t2-sys t2-session-msg" data-session-message={m.from}>
+    <div className="t2-sys t2-session-msg" data-session-message={m.from} data-relation={m.relation}>
       <div className="t2-session-msg-head">
         <CornerUpLeft size={12} />
-        <a role="button" tabIndex={0} onClick={() => openSession(m.from)} onKeyDown={(e) => { if (e.key === 'Enter') openSession(m.from) }}>{t('sessmsg.from', { title })}</a>
+        <a role="button" tabIndex={0} onClick={() => openSession(m.from)} onKeyDown={(e) => { if (e.key === 'Enter') openSession(m.from) }}>{t(peer ? 'sessmsg.fromPeer' : 'sessmsg.from', { title })}</a>
       </div>
       <div className="t2-session-msg-body" title={m.body}>{m.body}</div>
+      {/* 树外的会话发来的:这一轮不是用户本人说的,审批档按两边较严的跑(引擎那半保证,这里只说明) */}
+      {peer && <div className="t2-session-msg-note"><ShieldCheck size={12} /><span>{t('sessmsg.peerNote')}</span></div>}
     </div>
   )
 }

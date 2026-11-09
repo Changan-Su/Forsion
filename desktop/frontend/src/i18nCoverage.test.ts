@@ -530,7 +530,6 @@ const ELECTRON_HAN_DEBT: Record<string, [count: number, reason: string]> = {
   'builtinPlugins.ts': [5, '内置包来源的诊断标签(日志 / 状态说明)'],
   'backendManager.ts': [4, '引擎启动失败的 Error / lastError 文案'],
   'codePreview.ts': [4, '预览根的诊断标签'],
-  'seedThemes.ts': [4, '种子主题的名称 / 描述 / CSS 注释(落盘的主题包内容,主题 id 永不改)'],
   'amadeus/linkMeta.ts': [2, '链接卡片元数据里的站点名(哔哩哔哩)'],
   'configWrite.ts': [2, '配置写锁超时的 Error 文案'],
   'hostTextWrite.ts': [2, '写文件 IPC 的 Error 文案'],

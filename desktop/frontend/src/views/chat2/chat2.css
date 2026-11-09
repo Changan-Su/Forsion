@@ -1222,7 +1222,7 @@ button.t2-bg-url:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.
 .t2-bgpop {
   position: fixed; z-index: 100; width: 340px; max-width: calc(100vw - 32px); box-sizing: border-box; padding: 8px 10px 8px;
   overflow-y: auto; /* left / top / max-height 由 followAnchor 写:窗口矮到上下都放不下时封顶,在这里滚 */
-  background: var(--bg-card, var(--bg)); border: var(--border-width, 1px) solid var(--border);
+  background: var(--surface-menu, var(--bg-card, var(--bg))); backdrop-filter: var(--surface-blur, none); border: var(--border-width, 1px) solid var(--surface-edge, var(--border));
   border-radius: var(--radius-md, 12px); box-shadow: var(--card-shadow);
   font-size: var(--ui-font-meta, 12px); color: var(--text);
 }
@@ -1466,6 +1466,17 @@ button.t2-bg-url:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.
 .t2-child-row:hover .t2-child-chev { opacity: 1; }
 .t2-child-sub { grid-column: 2 / 4; margin-top: 2px; font-size: var(--ui-font-meta, 12px); color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .t2-child-actions { grid-column: 2 / 4; margin-top: 7px; }
+/* 子会话 / 任务卡上的模型芯片(11-08):和开它的会话用的不是同一个模型才画。不描边,淡底胶囊 */
+.t2-model-chip {
+  display: inline-flex; align-items: center; gap: 4px; max-width: 18ch; padding: 1px 7px; border-radius: 999px;
+  background: var(--overlay-medium); color: var(--text-muted); font-size: var(--ui-font-meta, 12px); line-height: 1.5; white-space: nowrap; flex: none;
+}
+.t2-model-chip > svg { flex: none; }
+.t2-model-chip > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.t2-child-state > .t2-model-chip { margin-right: 6px; }
+/* hand_off_task 挪出去的那一块(11-08 P2-A):同子会话块的壳,头行带个分叉图标 */
+.t2-handoff { margin-top: 8px; margin-bottom: 10px; }
+.t2-handoff .t2-childs-head > svg { flex: none; color: var(--text-muted); }
 /* <child_sessions_update> 落库行(子会话结果送回主会话):一行说明谁回来了 */
 .t2-child-update { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 4px 8px; margin: 4px 0; color: var(--text-muted); }
 .t2-child-update > svg { color: var(--accent-ink); flex: none; }
@@ -1479,6 +1490,9 @@ button.t2-bg-url:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.
 .t2-session-msg-head > a { color: var(--accent-ink); cursor: pointer; text-decoration: none; }
 .t2-session-msg-head > a:hover { text-decoration: underline; }
 .t2-session-msg-body { max-width: min(560px, 100%); color: var(--text-muted); white-space: pre-wrap; overflow-wrap: anywhere; text-align: left; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+/* 树外的会话发来的(relation=peer,11-08 P4-A):正文下一行淡字说明「不是你说的」。字号随 .t2-sys(同审批结局行下面那句),只用最淡的颜色 */
+.t2-session-msg-note { display: flex; align-items: center; justify-content: center; gap: 5px; margin-top: 2px; color: var(--text-faint, var(--text-muted)); }
+.t2-session-msg-note > svg { flex: none; }
 /* 子会话顶上「来自 主会话」:按一段文字排(窄的子会话面板里会折行,不能是 flex —— 那样每一截各自竖着挤成一列) */
 .t2-child-from { display: block; text-align: center; margin: 0 0 10px; color: var(--text-muted); }
 .t2-child-from > svg { vertical-align: -2px; margin-right: 4px; }
@@ -1598,6 +1612,22 @@ html[data-chat-avatars='off'] .t2-username { display: none; }
 .t2-stream-inner > .t2-asst[data-streaming] { content-visibility: visible; }
 /* 回退菜单是消息里唯一伸出框外的弹层(往下最高 320px),开着的那条不加 containment,否则被裁 */
 .t2-stream-inner > .t2-userwrap:has(.rewind-menu) { content-visibility: visible; }
+
+/* A single streamed answer can span thousands of nodes. Message-level containment alone
+   still lays out that entire answer when its tail is visible. Skip offscreen Markdown
+   blocks too, keeping their measured height once seen. Only contain blocks whose child
+   margins already cannot collapse through them: quotes/lists/display math must retain
+   their original margin behavior. Headings stay measurable for TOC navigation. */
+.t2-stream-inner .t2-content > :is(p, table, .code-box[data-code-head]) {
+  content-visibility: auto;
+  contain-intrinsic-block-size: auto 100px;
+  overflow-clip-margin: 40px;
+}
+/* The growing tail needs real heights even while the reader is above it. Estimating
+   freshly appended paragraphs makes the scroll range shrink on each reveal. */
+.t2-stream-inner .t2-content[data-streaming-tail] > :nth-last-child(-n+16) {
+  content-visibility: visible;
+}
 
 /* 操作条里带字的那颗(分支里「带回这里」):同 .t2-iconbtn 的底,宽度随字 */
 .t2-iconbtn.t2-textbtn { width: auto; gap: 5px; padding: 0 10px; border-radius: 14px; font-size: var(--ui-font-meta, 12px); font-family: var(--font-ui); }
@@ -1826,7 +1856,7 @@ html[data-chat-avatars='off'] .t2-username { display: none; }
 /* 「?」点开的那几行说明:同菜单的卡面(base.css .ctx-menu) */
 .t2cv-helppop {
   position: fixed; z-index: 100; display: flex; flex-direction: column; gap: 4px; width: 280px; box-sizing: border-box; padding: 10px 12px;
-  background: var(--bg-card); border: var(--border-width, 1px) solid var(--border); border-radius: var(--radius-md, 10px); box-shadow: var(--card-shadow);
+  background: var(--surface-menu, var(--bg-card)); backdrop-filter: var(--surface-blur, none); border: var(--border-width, 1px) solid var(--surface-edge, var(--border)); border-radius: var(--radius-md, 10px); box-shadow: var(--card-shadow);
   font-size: var(--ui-font-meta, 12px); line-height: 1.5; color: var(--text-sec, var(--text-muted)); animation: fade-up var(--duration-fast) var(--ease-out);
 }
 

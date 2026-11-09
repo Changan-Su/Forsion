@@ -28,10 +28,7 @@ function findChromium() {
 const SRC = path.join(__dirname, '../frontend/src')
 const read = (file) => fs.readFileSync(path.join(SRC, file), 'utf8')
 require('sucrase/register/ts')
-const { SEED_THEMES } = require(path.join(__dirname, '../electron/seedThemes.ts'))
 const { customSkinVars } = require(path.join(SRC, 'theme/lcl/lovableData.ts'))
-const softCss = SEED_THEMES.find((theme) => theme.id === 'soft')?.css
-if (!softCss) throw new Error('缺少第一方 soft 磁盘种子主题')
 
 const zhiCandidate = path.resolve(__dirname, '../../../Forsion-Instrumentality-Project/forsion-theme-zhi/theme.css')
 const hasZhiCandidate = fs.existsSync(zhiCandidate)
@@ -53,7 +50,7 @@ const css = [
   read('theme/skins.css'),
   read('theme/themes/lovable/theme.css'),
   read('theme/themes/genesis-glass/theme.css'),
-  softCss,
+  read('theme/themes/soft/theme.css'),
   ...(hasZhiCandidate ? [fs.readFileSync(zhiCandidate, 'utf8')] : []),
   read('views/chat2/chat2.css'),
   fs.readFileSync(path.join(__dirname, '../../lcl/engine/engine.css'), 'utf8'),

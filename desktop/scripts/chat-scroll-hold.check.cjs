@@ -1,5 +1,6 @@
 // 长会话里程序滚动停得住(真 Electron + 假引擎):消息带 content-visibility,往上一滚刚进视口的才量出真实高度、内容变高。
-// ① 吸底时程序往上滚(目录跳转就是程序滚动)不许被 follow 拽回底部(10-16 实报的回归:原来只认手势才松开吸底);
+// ① 吸底时用户往上滚不许被 follow 拽回底部;②④⑤ 覆盖真实目录的程序跳转。
+// 程序导航由 scrollToElement 发出明确意图,不能从 scrollTop 变化猜测(浏览器布局修正也会改变它)。
 // ② 点目录中间那一项要落在那一项上(被跳过的消息进视口把目标挤开约 850px,滚动锚定那时不补 → scrollToElement 落地再补);
 // ③ 回到底部吸底照常恢复;④ 连点两项落在后一项;⑤ 点完目录马上回到底部,补正不许把人拉回去。用法:npm run check:chatscrollhold(先 npm run build)
 const U = require('./lib/uiux-electron.cjs')
@@ -20,10 +21,11 @@ const check = (name, ok, detail) => { ok ? pass++ : fail++; console.log(`${ok ? 
     const st = () => win.evaluate(() => { const s = document.querySelector('.t2-stream'); return { top: Math.round(s.scrollTop), gap: Math.round(s.scrollHeight - s.scrollTop - s.clientHeight) } })
     check('打开后在底部', (await st()).gap < 40, await st())
 
-    for (let k = 0; k < 3; k++) { await win.evaluate(() => { const s = document.querySelector('.t2-stream'); s.scrollTop -= s.clientHeight }); await sleep(150) }
+    await win.locator('.t2-stream').first().hover()
+    for (let k = 0; k < 3; k++) { await win.mouse.wheel(0, -834); await sleep(150) }
     await sleep(800)
     const held = await st()
-    check('① 程序往上滚三屏停得住(没被拽回底部)', held.gap > 1500, held)
+    check('① 用户往上滚三屏停得住(没被拽回底部)', held.gap > 1500, held)
 
     await win.locator('.lcl-ftoc').first().hover(); await sleep(400)
     const items = win.locator('.lcl-ftoc-item')

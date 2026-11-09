@@ -81,8 +81,9 @@
 .theme-card .theme-preview .theme-preview-sheet small { text-transform: none; letter-spacing: .02em; }
 .theme-card .theme-preview[data-font='serif'] .theme-preview-sheet { font-family: ui-serif, 'Songti SC', 'Noto Serif SC', Georgia, serif; }
 .theme-card .theme-preview[data-font='mono'] .theme-preview-sheet { font-family: var(--font-mono, ui-monospace, monospace); }
-/* Glass:纯色 --bg 上的 72% 半透 + blur 暗色下几乎看不出。垫一层有形状的底(accent 色块),
- * 侧栏做成真半透玻璃压在色块上,纸面保持实色(与 Glass 主题「外壳透、正文不透」一致)。 */
+/* Glass:纯色 --bg 上的 72% 半透 + blur 暗色下几乎看不出。垫一层「玻璃后面的光」(accent 色的柔光),
+ * 侧栏做成真半透玻璃压在上面,纸面保持实色(与 Glass 主题「外壳透、正文不透」一致)。
+ * 光要大、淡、边缘化开:11-08 检修前是三颗硬边圆点,经典配色(accent 近黑)下读成两块灰斑。 */
 .theme-card .theme-preview[data-shape='glass'] { position: relative; isolation: isolate; }
 .theme-card .theme-preview[data-shape='glass']::before {
   content: '';
@@ -90,9 +91,10 @@
   inset: 0;
   z-index: -1;
   background:
-    radial-gradient(circle at 16% 30%, color-mix(in srgb, var(--theme-preview-accent) 55%, transparent) 0 13%, transparent 14%),
-    radial-gradient(circle at 26% 78%, color-mix(in srgb, var(--theme-preview-accent) 34%, transparent) 0 11%, transparent 12%),
-    radial-gradient(circle at 80% 18%, color-mix(in srgb, var(--theme-preview-accent) 20%, transparent) 0 16%, transparent 17%);
+    radial-gradient(ellipse 44% 62% at 14% 32%, color-mix(in srgb, var(--theme-preview-accent) 30%, transparent), transparent 72%),
+    radial-gradient(ellipse 38% 52% at 30% 88%, color-mix(in srgb, var(--theme-preview-accent) 20%, transparent), transparent 72%),
+    radial-gradient(ellipse 50% 64% at 86% 12%, color-mix(in srgb, var(--theme-preview-accent) 14%, transparent), transparent 72%);
+  filter: blur(6px);
 }
 /* 窗体本身不再挂 backdrop-filter:它会成为 Backdrop Root,里面侧栏的 blur 就看不到外层色块了。 */
 .theme-card .theme-preview[data-shape='glass'] .theme-preview-window { background: transparent; -webkit-backdrop-filter: none; backdrop-filter: none; }

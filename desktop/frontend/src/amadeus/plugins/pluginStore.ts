@@ -89,6 +89,9 @@ import { loadSyncedPluginData, notePluginDataEdit, pluginDataSyncOn, pluginSyncS
 import { createCalendarApi } from './pluginCalendar'
 import { createCalendarEventsApi } from './pluginCalendarEvents'
 import { createSpacesApi } from './pluginSpaces'
+import { createHomeApi } from './pluginHome'
+import { HOST_VIEW_CLAIMS, canClaimHostView } from '../../../../shared/corePlugins'
+import { isFadeOnlyChosen, subscribeMotionTheme, systemReducesMotion } from '../../theme/motionTheme'
 import { clearSpaceProgressOf, setSpaceDot, setSpaceProgress } from '../../stores/spaceProgress'
 import { getSync, markSyncDecided, refreshSync, resolveNotes, runSyncNow, setSync, startSyncSetup, subscribeSync } from '../../services/syncSetup'
 import { POPUP_PRIORITY, queuePopup, releasePopupsOf } from '../../stores/popupQueue'
@@ -555,6 +558,15 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
     watchAccountName: (cb) => {
       if (!alive || typeof cb !== 'function') return () => {}
       const off = watchAccountName((name) => { if (alive) cb(name) })
+      const wrapped = (): void => { off(); fileUnsubs.delete(wrapped) }
+      fileUnsubs.add(wrapped)
+      return wrapped
+    },
+    // 动效偏好(11-09,主页插件化 H9):和宿主界面同一个判据(motionTheme 的 reducedMotion 口径);退订同上一组收
+    motion: () => ({ reduce: isFadeOnlyChosen() || systemReducesMotion(), fadeOnly: isFadeOnlyChosen() }),
+    subscribeMotion: (cb) => {
+      if (!alive || typeof cb !== 'function') return () => {}
+      const off = subscribeMotionTheme(() => { if (alive) cb() })
       const wrapped = (): void => { off(); fileUnsubs.delete(wrapped) }
       fileUnsubs.add(wrapped)
       return wrapped
@@ -2823,7 +2835,14 @@ export const usePluginStore = create<PluginState>((set, get) => {
                       ...(typeof beforeSend === 'function' ? { beforeSend: () => (ctxAlive() ? beforeSend() : undefined) } : {}),
                     })
                     const dispose = scope.own('mount', () => mounted.dispose(), 'composer')
-                    return { focus: () => { if (ctxAlive()) mounted.focus() }, startVoice: () => { if (ctxAlive()) mounted.startVoice() }, draft: () => (ctxAlive() ? mounted.draft() : ''), dispose }
+                    return {
+                      focus: () => { if (ctxAlive()) mounted.focus() },
+                      startVoice: () => { if (ctxAlive()) mounted.startVoice() },
+                      draft: () => (ctxAlive() ? mounted.draft() : ''),
+                      // 宿主的输入框有 prefill 才转(2026-11-09+;插件按 typeof 判)
+                      ...(typeof mounted.prefill === 'function' ? { prefill: (text: string) => { if (ctxAlive()) mounted.prefill?.(text) } } : {}),
+                      dispose,
+                    }
                   },
                 }
               : {}),
@@ -2942,6 +2961,15 @@ export const usePluginStore = create<PluginState>((set, get) => {
     // Space 与 Ribbon 收纳架(2026-10-18,主页插件化):改的是用户的 Ribbon → 和 databases 同一道闸,声明了 'spaces' 才有
     ...(get().plugins.find((p) => p.id === pluginId)?.capabilities?.includes('spaces')
       ? { spaces: createSpacesApi({ alive: ctxAlive, own: (off) => scope.own('subscription', off, 'spaces') }) }
+      : {}),
+    // 主页宿主件(11-09,主页插件化 B):只给 HOST_VIEW_CLAIMS 指名接管主页、且能接管(核心插件 / 开发档 coreTrial)的那个插件;
+    // 不经 manifest —— 普通插件申请不到(10-18 S1 的口径)
+    ...(pluginId === HOST_VIEW_CLAIMS.homepage?.pluginId && canClaimHostView(get().plugins.find((p) => p.id === pluginId))
+      ? { home: createHomeApi({
+          alive: ctxAlive, own: (off) => scope.own('subscription', off, 'home'),
+          plugins: () => get().plugins,
+          subscribePlugins: (cb) => usePluginStore.subscribe((s, prev) => { if (s.plugins !== prev.plugins) cb() }),
+        }) }
       : {}),
     ...(get().plugins.find((p) => p.id === pluginId)?.capabilities?.includes('noteTasks')
       ? { noteTasks: createNoteTasksApi({ alive: ctxAlive, own: (off) => scope.own('subscription', off, 'noteTasks') }) }

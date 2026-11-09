@@ -1358,21 +1358,8 @@ export function MilkdownInner({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slashActive])
 
-  // 工具栏同 slash:滚动/缩放即关(fixed 坐标不跟内层滚动容器),但同样排除浮层内部滚动。
-  const toolbarActive = !!toolbar
-  useEffect(() => {
-    if (!toolbarActive) return
-    const outside = outsideScroll('.inline-toolbar')
-    const onScroll = (e: Event): void => { if (outside(e)) setToolbar(null) }
-    const close = (): void => setToolbar(null)
-    window.addEventListener('scroll', onScroll, true)
-    window.addEventListener('resize', close)
-    return () => {
-      window.removeEventListener('scroll', onScroll, true)
-      window.removeEventListener('resize', close)
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [toolbarActive])
+  // 格式栏不再「滚动 / 缩放即关」(划线菜单方案 B,2026-11-08):它带着 follow 现量,滚动、窗口尺寸、分栏拖动都跟着那段字走,
+  // 滚出可见区只藏不收(InlineToolbar → lcl/engine/textAnchor)。⚠️别加回那份监听:滚一下就丢掉选区上的工具是方案要修的毛病。
 
   // 「粘贴为」菜单滚动/缩放即关(fixed 坐标不跟内层滚动容器)。键盘交给菜单自己(↑↓/↵/esc),
   // 见 PasteAsMenu —— 它只吞自己认的那几个键,别的一律放行并关掉菜单。点空白由 backdrop 关。
@@ -1896,6 +1883,7 @@ export function MilkdownInner({
           fg={toolbar.fg}
           bg={toolbar.bg}
           dir={toolbar.dir}
+          follow={toolbar.follow}
           onAct={onToolbarAct}
           onColor={(v) => runCmd(applyColorCommand.key, v || undefined)}
           onBg={(v) => runCmd(applyBgCommand.key, v || undefined)}

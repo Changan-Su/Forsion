@@ -2,6 +2,10 @@
 import { act } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useRibbonStore, useSpaceStore, type SpaceDefinition } from '@lcl/engine'
+
+// 对象菜单打桩成「弹得出来」:测试环境里没有菜单宿主,不打桩时永远 false,判不出事件校验那一层
+const menu = vi.hoisted(() => ({ open: vi.fn((_o: unknown) => true) }))
+vi.mock('@lcl/engine', async (orig) => ({ ...(await orig<typeof import('@lcl/engine')>()), openObjectMenu: menu.open }))
 import { createSpacesApi } from './pluginSpaces'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -67,5 +71,59 @@ describe('ctx.spaces(主页插件化 S3 / S4)', () => {
     act(() => useSpaceStore.setState({ spaces: [sp('home'), sp('tangu')] })) // 换回 A:还挂着的话会再画一次
     expect(el.textContent).toBe('')
     expect(aRenders).toBe(renders)
+  })
+})
+
+describe('ctx.spaces 主页插件化收尾(H6 / H7,2026-11-09)', () => {
+  it('actions 带上首方 Ribbon 动作(rb-plugin-*),排在商店 / 成就后面;别的 Ribbon 条目不带', () => {
+    const run = vi.fn()
+    useRibbonStore.setState({ items: [
+      { id: 'rb-plugin-activity', side: 'top', tooltip: '活动', onClick: run } as never,
+      { id: 'rb-market', side: 'top', tooltip: '商店', onClick: vi.fn() } as never,
+      { id: 'rb-settings', side: 'bottom', tooltip: '设置', onClick: vi.fn() } as never,
+    ] })
+    const ids = api().actions().map((a) => a.id)
+    expect(ids).toEqual(['rb-market', 'rb-plugin-activity'])
+    api().actions()[1]!.run()
+    expect(run).toHaveBeenCalledOnce()
+  })
+
+  it('contextMenu:不认识的 Space / 停用后 / 不是事件 → false,不 preventDefault', () => {
+    const ev = new MouseEvent('contextmenu', { clientX: 10, clientY: 10, cancelable: true })
+    expect(api().contextMenu!(ev, 'nope')).toBe(false)
+    expect(ev.defaultPrevented).toBe(false)
+    expect(api().contextMenu!(null as never, 'home')).toBe(false)
+    alive = false
+    expect(api().contextMenu!(ev, 'home')).toBe(false)
+  })
+
+  it('contextMenu:坐标不是有限数 / 缺 preventDefault 的像事件对象,在任何动作之前就退(菜单不弹)', () => {
+    menu.open.mockClear()
+    const stop = vi.fn()
+    expect(api().contextMenu!({ clientX: NaN, clientY: 1, preventDefault: vi.fn(), stopPropagation: stop }, 'home')).toBe(false)
+    expect(() => api().contextMenu!({ clientX: 1, clientY: 1, stopPropagation: stop } as never, 'home')).not.toThrow()
+    expect(api().contextMenu!({ clientX: 1, clientY: 1, stopPropagation: stop } as never, 'home')).toBe(false)
+    expect(api().contextMenu!({ clientX: 1, clientY: 1, preventDefault: vi.fn() } as never, 'home')).toBe(false)
+    expect(menu.open).not.toHaveBeenCalled()
+    expect(stop).not.toHaveBeenCalled()
+  })
+
+  it('contextMenu:React 合成事件那样的对象也收;弹出后替插件 preventDefault + stopPropagation,插件那几项排在最后一节', () => {
+    menu.open.mockClear()
+    const ev = { clientX: 12, clientY: 34, preventDefault: vi.fn(), stopPropagation: vi.fn(), currentTarget: null, target: null }
+    const run = vi.fn()
+    expect(api().contextMenu!(ev, 'home', [{ label: '固定', run }, { label: '', run }, { label: 'x' } as never])).toBe(true)
+    expect(ev.preventDefault).toHaveBeenCalledOnce()
+    expect(ev.stopPropagation).toHaveBeenCalledOnce()
+    const o = menu.open.mock.calls[0]![0] as { x: number; y: number; refs: unknown; placeSections: { items: { label: string; run(): void }[] }[] }
+    expect(o).toMatchObject({ x: 12, y: 34, refs: [{ type: 'space', id: 'home' }] })
+    expect(o.placeSections[0]!.items.map((i) => i.label)).toEqual(['固定'])
+    alive = false
+    o.placeSections[0]!.items[0]!.run()
+    expect(run).not.toHaveBeenCalled()
+  })
+
+  it('opensElsewhere:普通窗口里点 Space 是就地切(false)', () => {
+    expect(api().opensElsewhere!('home')).toBe(false)
   })
 })

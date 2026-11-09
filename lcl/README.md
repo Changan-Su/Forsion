@@ -26,6 +26,10 @@ Genesis 当前使用这份 LCL。`apps/Archived/Forsion-LCL` 是早期组合引�
 - 插件：`ctx.ui.mountChatBox`；详见 [公共契约](../docs/customization/ui-components.md)。
 - 桌面 / Web 卡内容宽 ≤480px 时，模型显示短名称与档位，模型 / 添加 / 模式入口展开不改变宽度；≤260px 时上下文与语音通过添加菜单访问。窄菜单用同层返回并保留完整模型名、审批说明和额度；原生手机沿用自身布局。`desktop` 的 `check:composernarrow` 与 `check:composernarrow:electron` 覆盖真实组件 / 构建后 ChatView。
 
+## 长内容导航
+
+目录、搜索和画布定位使用 `@lcl/engine` 的 `scrollToElement`；它先在目标滚动容器派发内部 `SCROLL_TO_ELEMENT_EVENT`，再滚动并校正延迟布局。带自动跟随的宿主监听这个意图来暂停跟随，不能从 `scrollTop` 的变化猜测用户意图（`content-visibility` 与浏览器锚定也会改变位置）。恢复到底部前调用 `cancelScrollToElement`，避免旧跳转的校正覆盖新位置。此事件属于内置宿主协作，不改变插件 `ctx.ui.mountFloatingToc` 契约。
+
 ## 对象与动作(Objects)
 
 同一个东西(Space、笔记……)在哪儿右键都该是同一份菜单。LCL 原来只按出口登记(Ribbon 图标、命令、视图),动作挂在出口上,离开就没了;现在按对象登记。
@@ -39,11 +43,12 @@ Genesis 当前使用这份 LCL。`apps/Archived/Forsion-LCL` 是早期组合引�
 
 选中文字后浮出来的那一条,全应用一份。
 
-- `@lcl/components`:`SelectionBar`(一行 = 本视图的工具 + 动作,中间一道竖线;「⋯」展开的面板在行下方)、`SelectionBarActions`(只要动作那几枚,给自己画工具行的宿主嵌进去)。纯展示:选区怎么来、条放哪儿、每个按钮做什么都由宿主给;外壳是宿主套的 `.ui-popover.selbar`(定位用 `@lcl/engine` 的 `OverlayAt`)。
+- `@lcl/components`:`SelectionBar`(一行 = 本视图的工具 + 动作,中间一道竖线;「⋯」展开的面板往远离选区的一侧长,那一行不动)、`SelectionBarActions`(只要动作那几枚,给自己画工具行的宿主嵌进去)。纯展示:选区怎么来、条放哪儿、每个按钮做什么都由宿主给;外壳是宿主套的 `.ui-popover.selbar`(定位用 `@lcl/engine` 的 `OverlayAt`)。
 - `desktop/frontend/src/components/selectionBar/ViewSelectionBar`:应用层。看一个元素里的 DOM 选区,接上「带去对话 / 翻译 / 插件动作」和结果卡;聊天直接用。动作表(插件动作的 scope / when、排法偏好)在 `desktop/frontend/src/selectionActions.ts`。
 - 笔记:`InlineToolbar` 保留自己的工具行和下拉,把 `SelectionBarActions` 嵌在行首或行尾。
 - 插件:`ctx.ui.mountSelectionBar`(自己的视图用上这一条)、`ctx.registerSelectionAction`(往「⋯」里加动作);详见 [公共契约](../docs/customization/ui-components.md)。
 - 不做全局选区监听:每个视图自己接,没接的视图不出。新视图接入时别再另画一条。
+- 摆位(LCL 表面规范 · 用途「工具条」,2026-11-08):条、结果卡、笔记格式栏**归属**是那段字所在的视图(owner),**画在**窗口层(`--z-menu`,portal 到 body:聊天区的 `container-type` 圈住 fixed 后代)。锚点是 `@lcl/engine` 的 `engine/textAnchor.ts` —— `rangeAnchor(owner, range)`(DOM 选区,记起止节点 + 偏移,不存活 Range:Dockview 摘下视图时活 Range 会塌缩)/ `rectAnchor(owner, getRect)`(调用方现量:笔记的 coordsAtPos、插件 `show({ getRect })`)/ `createTextAnchor`。交给 `OverlayAt` 的 `anchor`(配 `gap`、`keep`、`bounds`):滚动、窗口尺寸、界面缩放、owner 尺寸 / 内容变化时每帧现量重摆,不加动画;那段字看不见(滚出可见区、视图被摘下)打 `data-anchor-hidden` 只藏不收;那段字没了(owner 还在、节点不在了)才 `onLost` 收。`keep` 给钉住的那一截(`.selbar-row` / `.itb-row`),其余往远离锚点的一侧长(`data-grow`)。只在选区清空、点别处、Esc、执行动作时收;换 Space 视图卸载,一并收。回归:`desktop` → `npm run check:selectionbar`。
 
 ## 设置零件(Settings parts)
 

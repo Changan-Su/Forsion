@@ -24,7 +24,7 @@ import { estimateTokensRough } from '../services/contextBudget.js';
 import { deps } from '../seams/runtime.js';
 import { bumpHistoryRevision } from '../services/historyRevision.js';
 import { activeSessionIds, sessionHasActiveRun } from '../services/agentLoop.js';
-import { startChildSession } from '../services/childSessions.js';
+import { resolveChildModel, startChildSession } from '../services/childSessions.js';
 import { museDmSessionId } from '../services/museDm.js';
 import { getAgent, MUSE_AGENT_SLUG } from '../agents/agentRegistry.js';
 import { branchSession } from '../services/sessionBranch.js';
@@ -313,7 +313,9 @@ router.post('/agent/sessions/:id/children', authMiddleware, async (req: AuthRequ
     const remote = parseRemoteOrigin(req.headers);
     // 任务卡的 `agent:` 是模型写的串:认得才用,认不得跟主会话走
     const agent = typeof req.body?.agent === 'string' ? await getAgent(req.body.agent).catch(() => null) : null;
-    const r = await startChildSession({ parentId: s.id, userId, modelId: s.model_id || '', title, message, ...(agent ? { agentSlug: agent.slug } : {}), ...(remote ? { remote } : {}) });
+    // 任务卡的 `model:`(11-08 会话互通升级):同样是模型写的串,按用户的模型目录解析,认不得跟主会话走
+    const picked = typeof req.body?.model === 'string' && req.body.model.trim().length <= 120 ? await resolveChildModel(req.body.model).catch(() => ({} as { id?: string })) : {};
+    const r = await startChildSession({ parentId: s.id, userId, modelId: s.model_id || '', title, message, ...(agent ? { agentSlug: agent.slug } : {}), ...(picked.id ? { model: picked.id } : {}), ...(remote ? { remote } : {}) });
     res.json({ sessionId: r.sessionId, runId: r.runId, title: r.title });
   } catch (e: any) {
     res.status(400).json({ detail: e?.message || 'start child session failed' });

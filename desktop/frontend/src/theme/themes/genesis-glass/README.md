@@ -40,9 +40,14 @@
    后代菜单 computed 仍显示 `blur(40px)`，实际却只能采到祖先的合成结果，视觉上就退化成半透明。
    输入卡、拥有二级面的模型/模式/添加菜单、命令面板遮罩都把材质画在无子节点的 `::before`；
    叶子浮层才直接使用滤镜。若新浮层会再打开子浮层，必须沿用这个拓扑。
-4. **`--bg-glass` 必须写在 `(0,3,0)`**(`:root[data-theme][data-skin]`):`skins.css` 在
-   `:root.dark[data-skin]` 里逐配色定义过它,不提特异性的话本主题对 `.modal/.toast/.jump-bottom`
-   完全不生效,更糟的是 `data-glass='off'` 时它们停在配色给的 0.9 alpha 上 —— 毛玻璃关了却还是半透明。
+4. **浮层材质只改表面 token,不列类名**(2026-11-08):base.css / lcl / Amadeus 的菜单、弹层、弹窗、toast
+   都写 `var(--surface-menu | --surface-float, 原实色)` + `var(--surface-blur, none)` + `var(--surface-edge, var(--border))`,
+   本主题在 `[data-theme='genesis-glass']` 里给这四个值。之前按类名名单逐个接管,10 月以后新加的十几个浮层
+   没进名单、在 Glass 下是实色。还按类名写的只剩「按位置 / 按结构」的例外:Ribbon / 侧栏上方加厚的几个菜单、
+   带二级面的 `::before` 代理、大型弹窗的发丝描边。新浮层别再往这里加类名,读 token 即可
+   (`surfaceTokens.test.ts` 会拦没读 token 的新浮层)。
+5. **`--bg-glass` 仍写在 `(0,3,0)`**(`:root[data-theme][data-skin]`):base.css 已不再用它,
+   留给磁盘主题 / 插件里还在用 `--bg-glass` 的浮层;不提特异性会被 `skins.css` 的逐配色定义压掉。
 
 ## 已知边界
 
@@ -53,8 +58,10 @@
 - **body portal 出去的浮层管不着**:右键菜单等按**屏幕位置**取 backdrop,DOM 上不在侧栏组里,
   上面那条选择器覆盖不到 —— 它们开在侧栏上方时同样糊不出东西,只能靠自身浓度。
 - **非 macOS 没有原生 vibrancy**:loader 会把当前 skin 解析后的 `--bg` 作为 `#rrggbb`
-  同步给主进程窗口底，同时 `:root[data-theme][:not([data-platform='mac'])]` 把页面舞台钉回
-  `var(--bg)`；因此呈现为「柔和分层的实色主题」，不会再从半透外壳下漏出 cream 底色。
+  同步给主进程窗口底;`:root[data-theme]:not([data-platform='mac'])` 把舞台 / 外壳 / 侧栏一起钉回实色
+  (`--bg` / `--sidebar-bg`,即关毛玻璃那档的外壳三行),层次与 Genesis 一致;菜单、输入卡、弹窗的 CSS 磨砂照旧。
+  11-08 之前只钉了舞台,外壳 / 侧栏还按 46% / 58% 半透画在纸色上,侧栏与纸的亮度台阶从 1.9 掉到 1.0。
+  Win11 的 Mica / Acrylic(Electron `setBackgroundMaterial`)待 Windows 实机评估。
 - **`data-glass='off'`**:`base.css` 只清 `backdrop-filter`,**不管染色** —— 本文件末尾那块必须把
   所有材质一并回落实色,漏一个(如 `--gl-thin`)就会出现「毛玻璃关了、正文却透过输入卡」。
 
@@ -71,5 +78,7 @@ window.tangu.setWindowMaterial({ material: 'system-glass', mode: 'dark' })
 
 - `npm run check:homepageglass` 用高对比壁纸做启用/禁用滤镜的像素差，覆盖输入卡、模型一级/二级菜单、
   命令面板与 Space 收纳层；只看 computed style 不算通过。
-- `npm run check:chatside` 的 24/25 两条覆盖输入卡主区薄档 / 侧栏加厚，并巡检所有已登记的一级、
-  二级菜单和大型浮层是否仍处于 menu / float / fallback 的正确分档。
+- `npm run check:chatside` 的 24/25 两条覆盖输入卡主区薄档 / 侧栏加厚,并巡检手写表里的一级、
+  二级菜单和大型浮层是否仍处于 menu / float / fallback 的正确分档;25b 按样式表给**所有**读 `--surface-*`
+  的浮层自动插探针(有磨砂、不是实色),25c 量非 mac 外壳 / 侧栏实色,25d 量缺省语言下浮层全是实底。
+- `frontend/src/theme/surfaceTokens.test.ts`(进 `npm test`):静态扫浮层规则,没读 token 又不在实色白名单就红。

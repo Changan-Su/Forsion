@@ -596,6 +596,9 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
     type SpaceManifest = { name?: unknown; nameEn?: unknown; version?: unknown; description?: unknown; descriptionEn?: unknown; main?: unknown; apiVersion?: unknown; minAppVersion?: unknown }
     for (const e of entries) {
       if (!e.isDirectory() || !/^[a-z0-9][a-z0-9-]{0,40}$/.test(e.name)) continue
+      // 2026-11-08 方案 D(用户定):Muse Space 主区换成宿主画的「今日简报」,卜算子以前写的 main.js 留在原处、不再装载 ——
+      // 装上了没人看,它的报错还会经 agentSpaceSync 回灌成 [feedback],卜算子就会继续改一个不显示的文件。
+      if (e.name === 'muse') continue
       const id = `agent-${e.name}`
       if (seen.has(id)) continue
       const sdir = path.join(root, e.name, 'Space')

@@ -76,6 +76,10 @@ async function main() {
       await page.locator('.terms-modal').waitFor({ timeout: 5000 })
       check('登录后弹卡;notice 只有「知道了」;写着这次的变化与版本', (await footButtons(page)).join('|') === '知道了' && (await page.locator('.terms-modal').innerText()).includes('第 1、4、8 节') && (await page.locator('.terms-modal').innerText()).includes('版本 2026-10-19'))
       await page.screenshot({ path: path.join(SHOTS, 'notice-light.png') })
+      // 11-08:Genesis 下这张卡曾是半透明的 —— .modal 用 --bg-glass(九成不透明)+ --panel-blur,而 Genesis 的 --panel-blur 是 none,
+      // 身后的笔记清楚地透上来。缺省语言下必须实底、不模糊(材质主题经 --surface-* 另给)。
+      const modalPaint = await page.locator('.terms-modal').evaluate((el) => { const st = getComputedStyle(el); return { bg: st.backgroundColor, blur: st.backdropFilter } })
+      check('协议卡是实底、不模糊(Genesis 下不再半透)', /^rgb\(/.test(modalPaint.bg) && modalPaint.blur === 'none', JSON.stringify(modalPaint))
       await page.keyboard.press('Escape')
       await page.mouse.click(20, 20)
       await page.waitForTimeout(200)

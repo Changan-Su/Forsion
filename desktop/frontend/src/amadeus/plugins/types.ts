@@ -345,6 +345,12 @@ export interface PluginAppApi extends BlockSurfaceApi {
   /** 当前登录的名字(有昵称用昵称;2026-10-18+,主页的问候用它):先回调一次当前值,换账号 / 登出时再回调;没登录 = 空串。
    *  只给名字,不给令牌和账号 id。返回退订;插件停用时宿主也会退订。旧宿主没有:`ctx.app.watchAccountName?.(…)`。 */
   watchAccountName?(cb: (name: string) => void): () => void
+  /** 动效偏好(2026-11-09+):`reduce` = 系统「减少动态效果」或设置里「只淡入淡出」任一开着 —— 这时别做位移 / 缩放,只留淡入淡出;
+   *  `fadeOnly` = 用户在设置里选了只淡入淡出。和宿主自己的界面同一个判据。旧宿主没有:`ctx.app.motion?.()`,缺席时只看系统的
+   *  `prefers-reduced-motion`。 */
+  motion?(): { reduce: boolean; fadeOnly: boolean }
+  /** 动效偏好变了就回调(本窗口、别的窗口、系统设置改的都算)。返回退订;插件停用时宿主也会退订。 */
+  subscribeMotion?(cb: () => void): () => void
   /** 跑一条命令面板里现成的命令(2026-10-17+),按 id(如 `amadeus-new-note`、`open-market`)。只对首方内置包生效,
    *  别的插件调了恒为 false —— 命令里有删除、改设置这类动作,不能让任意插件替用户按。命令不存在 / 停用 → false。 */
   runCommand?(id: string): boolean
@@ -1391,8 +1397,9 @@ export interface PluginSelectionBarOptions {
    *  `path` is a vault-relative path when the content is a vault file. */
   source?(sel: PluginSelectionBarSelection): { title?: string; path?: string; page?: number } | undefined
   /** Default `true`: the host watches the DOM selection inside the element you passed (bar on mouse-up; gone when
-   *  the selection collapses, the element scrolls or resizes, or the user clicks elsewhere). Set `false` when the
-   *  text lives where the host cannot see it (an iframe, a canvas) and drive the bar with `show()` / `hide()`.
+   *  the selection collapses or the user clicks elsewhere; it follows the text when the element scrolls or resizes).
+   *  Set `false` when the text lives where the host cannot see it (an iframe, a canvas) and drive the bar with
+   *  `show()` / `hide()`.
    *  Watched reading surfaces share the host's continuous line selection paint; native Selection/copy are preserved.
    *  Custom PDF/code-editor layers and coarse pointers retain native paint. `watch:false` keeps custom paint. */
   watch?: boolean
@@ -1400,8 +1407,15 @@ export interface PluginSelectionBarOptions {
 
 export interface PluginSelectionBarHandle {
   /** Show the bar for this text. `rect` is the selection's bounding box in viewport pixels (a `DOMRect` works):
-   *  the bar sits centred above it, or below when there is no room. */
-  show(sel: { text: string; markdown?: string; rect: { left: number; right: number; top: number; bottom: number } }): void
+   *  the bar sits centred above it, or below when there is no room.
+   *
+   *  `getRect` (optional) lets the bar follow the text: the host calls it on every frame something may have moved
+   *  (scroll, resize, zoom, your view's own size or content) and places the bar — and a result card opened from
+   *  it — against what it returns. Return the selection's current box in viewport pixels, or `null` while the
+   *  text is not on screen (scrolled away, page not rendered): the bar fades out and comes back when you return a
+   *  box again. Keep it cheap and side-effect free; a throw counts as `null`. Without `getRect` the bar only knows
+   *  `rect`, so hide it yourself when the view scrolls or resizes. */
+  show(sel: { text: string; markdown?: string; rect: { left: number; right: number; top: number; bottom: number }; getRect?: () => { left: number; right: number; top: number; bottom: number } | null }): void
   /** Hide the bar (an open result card closes too when the host was watching the selection itself). */
   hide(): void
   update(opts: Partial<PluginSelectionBarOptions>): void
@@ -2200,6 +2214,10 @@ export interface PluginContext {
     provide(id: string, fn: (params: Record<string, never>, opts: { signal: AbortSignal }) => unknown): { dispose(): void }
     invalidate(id?: string): void
   }
+  /** 主页宿主件(2026-11-09+,主页插件化 B)。⚠️**只给接管宿主主页视图的那个核心插件**(shared/corePlugins 的 `HOST_VIEW_CLAIMS.homepage`),
+   *  别的插件没有这一截 —— 不经 manifest 申请,也申请不到。插件管主页长什么样、东西怎么摆;卡里的内容、摆放的存储、首启再问那张卡
+   *  留在宿主,由这里交给插件。细节见 `PluginHomeApi`。旧宿主没有:`ctx.home?.mount(…)`。 */
+  home?: PluginHomeApi
   /** Tangu 侧的只读探针(2026-08-29+):**当前主区聊天要用的模型** + **模型目录** + **当前 Space id**。
    *  聊天状态住在 Tangu 的 store 里,`ctx.app` 是 Amadeus 的页面/库面 —— 两者不通,所以单开这一截。
    *
@@ -2529,7 +2547,16 @@ export interface PluginContext {
     open(id: string): Promise<boolean>
     mountIcon(el: HTMLElement, id: string, opts?: { size?: number }): () => void
     mountStatus(el: HTMLElement, id: string): () => void
+    /** 坞上 Space 之外的那几格:商店、成就,以及首方 Ribbon 动作(活动中心等;2026-11-09 起一起回,之前只有商店、成就)。 */
     actions(): PluginSpaceAction[]
+    /** 右键一个 Space(2026-11-09+):弹宿主的对象菜单 —— 和 Ribbon、主页、收纳面板上右键同一份(打开、在新窗口打开…),
+     *  `extra` 是你这一处特有的几项,画在最后一节(形状同 `ctx.ui.contextMenu` 的行)。传触发右键的那个事件(原生的或 React 的都行):
+     *  用它的坐标,弹出后宿主替你 `preventDefault` + `stopPropagation`。返回弹没弹出来(Space 不认识 / 没有可列的项 / 事件不像事件 = false)。
+     *  旧宿主没有:`ctx.spaces.contextMenu?.(…)`,缺席时退回 `ctx.ui.contextMenu` 画你自己的。 */
+    contextMenu?(event: PluginSpaceMenuEvent, id: string, extra?: PluginContextMenuItem[]): boolean
+    /** 点这个 Space 会开到它自己的窗口去(Space 单独开了窗口,或本窗口锁在别的 Space 上),而不是在本窗口里切过去(2026-11-09+)。
+     *  在本窗口切的才值得先放离场动效。旧宿主没有:缺席时当 false。 */
+    opensElsewhere?(id: string): boolean
     shelf: {
       items(): PluginShelfItem[]
       move(id: string, targetId: string): void
@@ -2695,6 +2722,81 @@ export interface PluginAutomationRule {
   actions: Array<Extract<import('../../types').AutomationActionSpec, { type: 'notify' | 'db_row_add' | 'db_row_edit' }>>
   /** 冷却小时;纯动作链缺省 0(链式规则需要),可显式给 0。 */
   cooldown_hours?: number
+}
+
+/** `ctx.home.layout` 的摆放(主页第四轮):中间是主页组件的上下顺序,下排 4 格(一张卡占 1 / 2 格,近况卡 `builtin:status` 占满 4 格),
+ *  左右栏各最多 3 张。卡 id:`builtin:<种类>` / `plugin:<插件 id>/<卡 id>` / Agent 做的 `w_…`。格式只加字段不改字段。 */
+/** `ctx.spaces.contextMenu` 收的事件:原生 MouseEvent 或 React 合成事件都满足。 */
+export interface PluginSpaceMenuEvent {
+  clientX: number
+  clientY: number
+  preventDefault(): void
+  stopPropagation(): void
+  currentTarget?: EventTarget | null
+  target?: EventTarget | null
+}
+
+export interface PluginHomeLayout {
+  left: string[]
+  center: Array<'clock' | 'composer' | 'row' | 'dock'>
+  row: Array<{ id: string; w: 1 | 2 | 4 }>
+  right: string[]
+}
+/** `ctx.home.widget(id)` / `library()` 的一项。 */
+export interface PluginHomeWidgetInfo {
+  id: string
+  /** builtin = 宿主内置(卜算子·建议 / 收件箱 / 最近笔记 / 最近对话);plugin = 某个插件 manifest `widgets` 声明的;agent = Agent 做的。 */
+  kind: 'builtin' | 'plugin' | 'agent'
+  /** false = 此刻画不出来(插件没装 / 被拦 / 没声明这张):栏里跳过、不占位;编辑态可以画成占位,好让用户拿掉。 */
+  show: boolean
+  /** 按当前语言给好;Agent 做的卡在 `widget()` 里是空串(要问引擎),画卡头请用 `mount(…, { part: 'head' })`。 */
+  title: string
+  /** 来源(插件的显示名);内置卡是空串。 */
+  owner: string
+  /** 卡头标题能点、点了打开所在 Space。 */
+  canOpen: boolean
+}
+/** `ctx.home.mount` 的选项。 */
+export interface PluginHomeMountOptions {
+  /** 'head' = 卡头(图标 + 标题 + 来源;标题能点就是打开所在 Space)/ 'body' = 卡里的内容(缺省)/ 'icon' = 只有图标(收起的栏、库瓷砖)。 */
+  part?: 'head' | 'body' | 'icon'
+  /** 卡占下排 2 格(卜算子·建议宽的时候多放一行)。 */
+  wide?: boolean
+  /** 只给 'icon':边长,缺省 18、最大 64。 */
+  size?: number
+  /** 编辑态:卡头标题不当按钮(按下去是你的拖动)。 */
+  editing?: boolean
+  /** 卡里请求拿掉自己(Agent 做的卡在卡里被删了)。 */
+  onRemove?(): void
+  /** 卡里要把光标放进新对话输入区(卜算子·建议填好一句之后):你把焦点交给自己挂的那份 `mountComposer`。 */
+  onComposer?(): void
+}
+/** `ctx.home`(2026-11-09+,只给接管宿主主页的那个核心插件)。 */
+export interface PluginHomeApi {
+  /** 一张卡此刻的头信息。非 React 读法;变了经 `subscribe` 通知。 */
+  widget(id: string): PluginHomeWidgetInfo
+  /** 收纳面板「小组件」那一页能放的全部卡:内置四张 + 插件声明的 + Agent 做的(引擎没连上就只少 Agent 那几张)。 */
+  library(): Promise<PluginHomeWidgetInfo[]>
+  /** 卡的头信息可能变了(插件装上 / 停用、切语言、宿主的卡头词条载入)。返回退订。 */
+  subscribe(cb: () => void): () => void
+  /** 宿主把卡画进 `el`。卜算子·建议没内容时这一格改画最近对话(和内置主页同一条规则,宿主算)。同一个 `el` 再挂会顶掉上一份。
+   *  返回卸载函数,带 `update(opts)`:换选项(进出编辑态、宽窄)不重挂,卡里的状态留着。 */
+  mount(el: HTMLElement, id: string, opts?: PluginHomeMountOptions): (() => void) & { update?(opts?: PluginHomeMountOptions): void }
+  /** 宿主自己的小件画进 `el`。现在只有 `'computer-history-ask'`(首启跳过「电脑历史」后主页再问一次那张卡;不需要问时它什么都不画)。
+   *  不认识的名字什么都不画。返回卸载函数。 */
+  mountPart(el: HTMLElement, name: 'computer-history-ask' | (string & {})): () => void
+  layout: {
+    /** 存着的摆放;从没摆过、或这台设备读不了存储 = null —— 缺省摆法由你定,别把缺省写回去(读不了存储时宿主也不会存)。 */
+    read(): PluginHomeLayout | null
+    /** 写整份新摆法。宿主按格式校验(去重、限量、输入区必在、认不得的 id 丢掉)后存,返回校验后的那份;匿名遥测的加 / 删 / 挪计数宿主记。 */
+    write(next: PluginHomeLayout): PluginHomeLayout
+    /** 摆放变了(别的窗口、聊天里「放到主页」、你自己写的)。返回退订。 */
+    subscribe(cb: () => void): () => void
+  }
+  /** 命令「编辑主页」(命令面板 / 快捷键)来了。主页还没挂上时宿主先记着,你登记的那一刻补发一次;同一时刻只认最后登记的那个。返回退订。 */
+  onEditRequest(cb: () => void): () => void
+  /** 官方计数(不带 `plugin:` 前缀,和内置主页记的是同一个)。只收 `'home.edit'`(进了编辑态;主页小组件那条上手提示据此算「会了」),别的名字忽略。 */
+  track(event: 'home.edit' | (string & {})): void
 }
 
 export interface AmadeusPlugin {

@@ -189,9 +189,9 @@
 }
 .ui-popover {
   position: fixed;
-  background: var(--bg-card);
+  background: var(--surface-menu, var(--bg-card)); backdrop-filter: var(--surface-blur, none);
   color: var(--text);
-  border: var(--border-width) solid var(--border);
+  border: var(--border-width) solid var(--surface-edge, var(--border));
   border-radius: var(--radius-md);
   box-shadow: var(--card-shadow);
   font-family: var(--font-ui);
@@ -643,8 +643,8 @@ a:hover { color: var(--accent-ink); }
   margin-bottom: 8px;
   overflow: visible;
   padding: var(--menu-shell-padding);
-  background: var(--bg-card, var(--bg));
-  border: var(--border-width) solid var(--border);
+  background: var(--surface-menu, var(--bg-card, var(--bg))); backdrop-filter: var(--surface-blur, none);
+  border: var(--border-width) solid var(--surface-edge, var(--border));
   border-radius: var(--radius-lg);
   box-shadow: var(--card-shadow);
   transform-origin: bottom left;
@@ -798,7 +798,7 @@ a:hover { color: var(--accent-ink); }
 .newtab-card.nt-pchip:hover { background: var(--overlay-light); border-color: var(--accent-ink); }
 
 .memv-modal { position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center; background: var(--overlay-scrim); }
-.memv-modal-box { width: min(560px, 90vw); max-height: 70vh; display: flex; flex-direction: column; background: var(--bg-card); border: var(--border-width) solid var(--border); border-radius: var(--radius-md); box-shadow: var(--card-shadow); }
+.memv-modal-box { width: min(560px, 90vw); max-height: 70vh; display: flex; flex-direction: column; background: var(--surface-float, var(--bg-card)); backdrop-filter: var(--surface-blur, none); border: var(--border-width) solid var(--border); border-radius: var(--radius-md); box-shadow: var(--card-shadow); }
 .memv-modal-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px; border-bottom: var(--border-width) solid var(--border); color: var(--text-muted); font-size: var(--ui-font-meta, 12px); }
 .memv-modal-body { padding: 16px; overflow-y: auto; white-space: pre-wrap; line-height: 1.6; font-size: var(--ui-font-body, 13px); color: var(--text-light); }
 /* 工作区拖拽排序:拖起的组半透明,落点组上方画一条 accent 插入线。 */
@@ -994,8 +994,8 @@ a:hover { color: var(--accent-ink); }
   min-width: var(--menu-action-min);
   max-width: min(var(--menu-action-max), calc(100vw - 16px));
   padding: var(--menu-shell-padding);
-  background: var(--bg-card);
-  border: var(--border-width) solid var(--border);
+  background: var(--surface-menu, var(--bg-card)); backdrop-filter: var(--surface-blur, none);
+  border: var(--border-width) solid var(--surface-edge, var(--border));
   border-radius: var(--radius-md);
   box-shadow: var(--card-shadow);
   animation: fade-up var(--duration-fast) var(--ease-out);
@@ -1137,8 +1137,7 @@ a:hover { color: var(--accent-ink); }
   align-items: center;
   justify-content: center;
   border-radius: var(--radius-pill, 999px);
-  background: var(--bg-glass);
-  backdrop-filter: var(--panel-blur);
+  background: var(--surface-menu, var(--bg-card)); backdrop-filter: var(--surface-blur, none);
   border: var(--border-width) solid var(--border);
   box-shadow: var(--card-shadow);
   color: var(--text-muted);
@@ -1159,8 +1158,7 @@ a:hover { color: var(--accent-ink); }
   padding: 6px 14px;
   font-size: var(--ui-font-meta, 12px);
   color: var(--text-muted);
-  background: var(--bg-glass);
-  backdrop-filter: var(--panel-blur);
+  background: var(--surface-menu, var(--bg-card)); backdrop-filter: var(--surface-blur, none);
   border: var(--border-width) solid var(--border);
   border-radius: var(--radius-pill, 999px);
   box-shadow: var(--card-shadow);
@@ -1941,8 +1939,8 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   max-height: 320px;
   overflow-y: auto;
   padding: var(--menu-shell-padding);
-  background: var(--bg-card, var(--bg));
-  border: var(--border-width) solid var(--border);
+  background: var(--surface-menu, var(--bg-card, var(--bg))); backdrop-filter: var(--surface-blur, none);
+  border: var(--border-width) solid var(--surface-edge, var(--border));
   border-radius: var(--radius-lg);
   box-shadow: var(--card-shadow);
   z-index: 40;
@@ -2001,9 +1999,9 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   width: min(260px, calc(100cqw - 16px));
   max-width: calc(100cqw - 16px);
   padding: 9px 11px;
-  border: var(--border-width) solid var(--border);
+  border: var(--border-width) solid var(--surface-edge, var(--border));
   border-radius: var(--radius-md);
-  background: var(--bg-card, var(--bg));
+  background: var(--surface-menu, var(--bg-card, var(--bg))); backdrop-filter: var(--surface-blur, none);
   box-shadow: var(--card-shadow);
   color: var(--text-light);
   font-size: var(--t2c-font-control, 12px);
@@ -2457,8 +2455,8 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   max-width: none;
   max-height: 320px; overflow-y: auto;
   padding: var(--menu-shell-padding);
-  background: var(--bg-card, var(--bg));
-  border: var(--border-width) solid var(--border);
+  background: var(--surface-menu, var(--bg-card, var(--bg))); backdrop-filter: var(--surface-blur, none);
+  border: var(--border-width) solid var(--surface-edge, var(--border));
   border-radius: var(--radius-lg);
   box-shadow: var(--card-shadow);
   animation: pop 0.16s var(--ease-spring);
@@ -2714,8 +2712,10 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   max-width: 94vw;
   display: flex;
   flex-direction: column;
-  background: var(--bg-glass);
-  backdrop-filter: var(--panel-blur);
+  /* 实底:原先是 --bg-glass(九成不透明)+ --panel-blur,而 Genesis / Soft 的 --panel-blur 是 none,
+     弹窗就成了「半透又不糊」,身后的界面清楚地透上来(协议更新卡最显眼)。材质由主题改 --surface-* 给。 */
+  background: var(--surface-float, var(--bg-card));
+  backdrop-filter: var(--surface-blur, none);
   border: var(--border-width) solid var(--border);
   border-radius: var(--radius-lg);
   box-shadow: var(--card-shadow);
@@ -4503,8 +4503,8 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-wrap { top: calc(var(-
   font-size: var(--ui-font-meta, 12px);
   line-height: 1.45;
   /* 与整体浮层卡片(命令面板/右键菜单/ribbon 菜单)统一:实色卡 + 四周同边 + 卡片阴影;无左侧强调竖条。 */
-  background: var(--bg-card, var(--bg));
-  border: var(--border-width) solid var(--border);
+  background: var(--surface-float, var(--bg-card, var(--bg))); backdrop-filter: var(--surface-blur, none);
+  border: var(--border-width) solid var(--surface-edge, var(--border));
   border-radius: var(--radius-md);
   box-shadow: var(--card-shadow, 0 8px 24px var(--shadow));
   color: var(--text);
@@ -4549,7 +4549,7 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-wrap { top: calc(var(-
   font-size: var(--ui-font-caption, 11px);
   color: var(--text-muted);
   padding: 2px 8px;
-  background: var(--bg-glass);
+  background: var(--surface-float, var(--bg-card)); backdrop-filter: var(--surface-blur, none);
   border: var(--border-width) solid var(--border);
   border-radius: var(--radius-pill, 999px);
 }
@@ -4590,8 +4590,8 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-wrap { top: calc(var(-
   max-height: 58vh;
   display: flex;
   flex-direction: column;
-  background: var(--bg-card);
-  border: var(--border-width) solid var(--border);
+  background: var(--surface-float, var(--bg-card)); backdrop-filter: var(--surface-blur, none);
+  border: var(--border-width) solid var(--surface-edge, var(--border));
   border-radius: var(--radius-lg);
   box-shadow: var(--card-shadow);
   overflow: hidden;
@@ -4714,8 +4714,8 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-wrap { top: calc(var(-
   z-index: 100;
   min-width: 232px;
   padding: var(--menu-shell-padding);
-  background: var(--bg-card);
-  border: var(--border-width) solid var(--border);
+  background: var(--surface-menu, var(--bg-card)); backdrop-filter: var(--surface-blur, none);
+  border: var(--border-width) solid var(--surface-edge, var(--border));
   border-radius: var(--radius-md);
   box-shadow: var(--card-shadow);
   /* 不在菜单进 / 退名单里:开合走液滴(2026-11-05,AccountCard.tsx 调 emergeDroplet,从头像里流出、倒放缩回) */
@@ -5313,7 +5313,7 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-wrap { top: calc(var(-
 
 /* ── Coding Space:Forsion Connect 发布对话框 ── */
 .csx-pub-overlay { position: fixed; inset: 0; z-index: 1000; background: rgba(0, 0, 0, 0.42); display: grid; place-items: center; }
-.csx-pub-card { width: 380px; max-width: calc(100vw - 40px); max-height: calc(100vh - 60px); overflow: auto; background: var(--bg-card); border: var(--border-width) solid var(--border); border-radius: var(--radius-md); padding: 16px 18px; box-shadow: var(--card-shadow); }
+.csx-pub-card { width: 380px; max-width: calc(100vw - 40px); max-height: calc(100vh - 60px); overflow: auto; background: var(--surface-float, var(--bg-card)); backdrop-filter: var(--surface-blur, none); border: var(--border-width) solid var(--border); border-radius: var(--radius-md); padding: 16px 18px; box-shadow: var(--card-shadow); }
 .csx-pub-head { display: flex; align-items: center; gap: 8px; color: var(--text); }
 .csx-pub-title { flex: 1; font-size: var(--ui-font-body, 13px); font-weight: 600; }
 .csx-pub-desc { font-size: var(--ui-font-meta, 12px); line-height: 1.6; color: var(--text-muted); margin: 8px 0 14px; }
@@ -5631,7 +5631,7 @@ html:root :is(.ctx-menu, .ui-popover, .amx-db-pop, .slash-menu, .wiki-suggest, .
 [data-lcl-exit]:not(.lcl-ftoc-rail, .ctx-menu, .ui-popover, .amx-db-pop, .slash-menu, .wiki-suggest, .paste-as-menu,
   .project-menu, .composer-menu, .cm-sub, .add-menu-sub, .unitsw-menu,
   .rb-menu, .rb-iconpick, .t2c-menu, .dash-add-menu, .inline-toolbar,
-  .cmd-overlay, .amx-qf-scrim, .dialog-overlay, .amx-cal-cardwrap, [data-motion~='toast']) { animation: none !important; }
+  .cmd-overlay, .amx-qf-scrim, .dialog-overlay, .amx-cal-cardwrap, .ob3-main, [data-motion~='toast']) { animation: none !important; }
 /* 替身里的子元素不重放自己的进场(命令面板 / ⌘P / 确认框的面板本身除外:它跟着遮罩一起退,见 engine.css / amadeus styles.css)。 */
 [data-lcl-exit] :not(.cmd-panel, .amx-qf, .dialog) { animation: none !important; }
 
@@ -5718,8 +5718,8 @@ html:root :is(.ctx-menu, .ui-popover, .amx-db-pop, .slash-menu, .wiki-suggest, .
   position: fixed; right: 16px; bottom: 16px; z-index: 2147483000;
   display: inline-flex; align-items: center; gap: 8px; padding: 5px 5px 5px 12px;
   font-size: var(--ui-font-meta, 12px); color: var(--text-muted); font-variant-numeric: tabular-nums;
-  background: var(--bg-glass, var(--bg-card)); backdrop-filter: var(--panel-blur, blur(8px));
-  border: var(--border-width, 1px) solid var(--border); border-radius: var(--radius-md, 10px);
+  background: var(--surface-float, var(--bg-card)); backdrop-filter: var(--surface-blur, none);
+  border: var(--border-width, 1px) solid var(--surface-edge, var(--border)); border-radius: var(--radius-md, 10px);
   box-shadow: var(--card-shadow);
   opacity: 0; translate: 0 6px; pointer-events: none;
   transition: opacity var(--toast-exit-duration, 140ms) var(--ease-exit, ease-in), translate var(--toast-exit-duration, 140ms) var(--ease-exit, ease-in);

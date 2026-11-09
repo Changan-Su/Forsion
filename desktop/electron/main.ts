@@ -76,7 +76,8 @@ import './mainMessages' // P1-K5:登记 main.* 原生界面文案(配对框 / �
 import * as deviceSecrets from './deviceSecrets' // P1-K5:设备凭据(配对 / external token)进 safeStorage
 import { createUnitRelay } from './unitRelay' // 桌面作为调用方:把会话建到账号下另一台电脑上
 import './editContextMenu' // 编辑区系统右键菜单(评审 G4-08):导入即给每个应用窗口挂 context-menu,逻辑全在模块里
-import { readThemesDir, seedDefaultThemes } from './themes'
+import { readThemesDir } from './themes'
+import { migrateDiskSoft } from './themeMigrations'
 import { builtinBundleSources, builtinPluginIds, bundleOff, bundleRestartPending, initBundleSwitches, lockedPluginIds, seedBuiltinBundles, setBundleOff } from './builtinPlugins'
 import { createCorePluginUpdater, prefetchOnFirstBoot } from './corePluginUpdates'
 import { createMarketPluginUpdater, type MarketUpdateItem } from './marketPluginUpdates'
@@ -133,7 +134,7 @@ import { registerRemoteSyncBackend } from './remotesync/backends'
 import { logActivity, setActivityLogEnabled, pruneActivity, exportActivity, flushAllNoteEdits } from './activityLog'
 import { createSampler, nativeProbe } from './activeWindow'
 import { KNOWN_APPS } from '../shared/knownApps'
-import { effectivePluginId } from '../shared/products'
+import { bindRecipeToPlugin, effectivePluginId } from '../shared/products'
 import { BROWSER_PARTITION, GUEST_ALLOWED_PERMISSIONS } from '../shared/browser'
 import { registerPtyIpc } from './pty'
 import { registerAssetSchemes as registerAmadeusAssetSchemes, registerAssetProtocol as registerAmadeusAssetProtocol } from './amadeus/assetProtocol'
@@ -1148,16 +1149,17 @@ async function readSpacesList(opts: { dev?: boolean } = {}): Promise<Array<{ slu
   const out: Array<{ slug: string; json: string; plugin?: string; iconUrl?: string }> = []
   // 自绘图标(space.json 的 iconFile)在这里读成 data URL 随清单带回去:设备页同源拿到,渲染层不必再开一条 IPC。
   // ponytail: 每枚 ≤256KB 的 base64 直接进清单;插件多到拖慢 loadUserSpaces 再改走 amadeus-asset: 协议按需取。
-  const entry = async (slug: string, dir: string, plugin?: { id: string; dir: string }): Promise<void> => {
-    const json = await readFile(join(dir, 'space.json'), 'utf8')
+  const entry = async (slug: string, dir: string, plugin?: { id: string; dir: string; manifestId?: unknown }): Promise<void> => {
+    const raw = await readFile(join(dir, 'space.json'), 'utf8')
+    const json = plugin ? bindRecipeToPlugin(raw, plugin.manifestId, plugin.id) : raw
     const iconUrl = await readSpaceIconDataUrl(json, plugin ? [dir, plugin.dir] : [dir])
     out.push({ slug, json, ...(plugin ? { plugin: plugin.id } : {}), ...(iconUrl ? { iconUrl } : {}) })
   }
-  const bundled = async (id: string, pdir: string): Promise<void> => {
+  const bundled = async (id: string, pdir: string, manifestId?: unknown): Promise<void> => {
     try {
       const sroot = join(pdir, 'spaces')
       for (const e of (await readdir(sroot, { withFileTypes: true })).filter((x) => x.isDirectory())) {
-        try { await entry(e.name, join(sroot, e.name), { id, dir: pdir }) } catch { /* 无 space.json 跳过 */ }
+        try { await entry(e.name, join(sroot, e.name), { id, dir: pdir, manifestId }) } catch { /* 无 space.json 跳过 */ }
       }
     } catch { /* 无 spaces/ 子目录 */ }
   }
@@ -1175,17 +1177,18 @@ async function readSpacesList(opts: { dev?: boolean } = {}): Promise<Array<{ slu
   }
   try {
     const proot = join(tanguHomeDir(), 'plugins')
-    const SAFE_PID = /^[a-z0-9][a-z0-9-]{0,63}$/ // 与 amadeus/ipc.ts pluginIdOf 同一门禁(归属 id 须两侧一致)
     for (const p of (await readdir(proot, { withFileTypes: true })).filter((x) => x.isDirectory() && !x.name.startsWith('.'))) {
       let pid: string
+      let manifestId: unknown
       try {
-        const m = JSON.parse(await readFile(join(proot, p.name, 'manifest.json'), 'utf8')) as { id?: string }
-        const cand = typeof m.id === 'string' && SAFE_PID.test(m.id) ? m.id : p.name
-        if (!SAFE_PID.test(cand)) continue // manifest id 与目录名皆非法 → 与拒载口径一致
+        manifestId = (JSON.parse(await readFile(join(proot, p.name, 'manifest.json'), 'utf8')) as { id?: unknown }).id
+        // 归属 id 与插件装载器(amadeus/ipc.ts pluginIdOf)同一条规则:商店目录 market-<uuid> 就是运行身份
+        const cand = effectivePluginId(p.name, manifestId)
+        if (!cand) continue // manifest id 与目录名皆非法 → 与拒载口径一致
         pid = cand
       } catch { continue } // 无 manifest.json = 非插件目录,跳过
       if (shadowed.has(pid)) continue
-      await bundled(pid, join(proot, p.name))
+      await bundled(pid, join(proot, p.name), manifestId)
     }
   } catch { /* plugins 目录不存在 = 无捆绑包 */ }
   return out
@@ -3103,7 +3106,9 @@ app.whenReady().then(async () => {
   if (PRODUCT.market) await marketPluginUpdater.init().catch((e) => console.warn('[market-updates] initialization failed:', e))
   // 手动拷进插件目录的插件:每出现一个新版本就留一份,换版后能在 设置 → 插件 里回退。后台跑,排在安装 / 卸载同一条队列里。
   if (PRODUCT.market) void marketPluginUpdater.exclusive(() => marketPluginUpdater.keepLocalVersions()).catch((e) => console.warn('[market-updates] keep local versions:', e))
-  await seedDefaultThemes(themesDir()) // 首次运行种入 soft 示例主题(themes/ 已存在则跳过;内部吞错不阻塞启动)
+  // Soft 已随包内置:旧版种进 themes/soft 的副本,没改过的原地让位,改过的另存成 soft-custom(见 themeMigrations.ts)。
+  // 须在开窗前 await 完 —— 渲染层第一次列主题就要看到迁移结果;内部不抛,出错按「不知道」什么都不动。
+  await migrateDiskSoft(themesDir()).catch((e) => console.warn('[themes] Soft migration:', e))
   // 内置插件捆绑包(电脑操作 / Forsion Extend)播种进 <home>/plugins/:须在 ensureBackend 之前 await 完 —— 引擎只在启动时扫一次
   // bundle 根;随包版本更新才替换,不降级;逐包吞错不阻塞启动(见 builtinPlugins.ts)。单品变体不捆内置包 → 不播。
   const allBundleSources = builtinBundleSources({ isPackaged: app.isPackaged, resourcesPath: process.resourcesPath, appPath: app.getAppPath(), agentBackend: PRODUCT.agentBackend, spaces: PRODUCT.spaces })

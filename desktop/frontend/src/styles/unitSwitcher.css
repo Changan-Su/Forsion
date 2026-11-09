@@ -15,8 +15,8 @@
   min-width: 0;
   max-width: none;
   padding: var(--menu-shell-padding, 4px);
-  background: var(--bg-card);
-  border: var(--border-width) solid var(--border);
+  background: var(--surface-menu, var(--bg-card)); backdrop-filter: var(--surface-blur, none);
+  border: var(--border-width) solid var(--surface-edge, var(--border));
   border-radius: var(--radius-md);
   box-shadow: var(--card-shadow);
   font-family: var(--font-ui);

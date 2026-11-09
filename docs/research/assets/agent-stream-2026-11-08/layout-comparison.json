@@ -1,0 +1,705 @@
+{
+  "date": "2026-11-08",
+  "environment": "Windows 11 / Ryzen 5 5500 / production Electron, isolated user data and deterministic local SSE; CPU unthrottled; no concurrent builds/tests during final samples.",
+  "measurement": "Automation request through actual final text line fully above the composer and next paint. Each final run contains six Space switches, including three returns to the long chat, all while the Agent fixture is running. Typing is request-to-paint with 35ms per-key spacing.",
+  "budgets": {
+    "typingP95Ms": 150,
+    "switchP95Ms": 700
+  },
+  "previousRound": {
+    "typing": {
+      "count": 62,
+      "p50": 46,
+      "p95": 72,
+      "max": 752
+    },
+    "switches": [
+      {
+        "space": "amadeus",
+        "ms": 1100,
+        "activationMs": 1076
+      },
+      {
+        "space": "tangu",
+        "ms": 2239,
+        "activationMs": 2029
+      },
+      {
+        "space": "amadeus",
+        "ms": 177,
+        "activationMs": 152
+      },
+      {
+        "space": "tangu",
+        "ms": 2199,
+        "activationMs": 2004
+      },
+      {
+        "space": "amadeus",
+        "ms": 202,
+        "activationMs": 188
+      },
+      {
+        "space": "tangu",
+        "ms": 2148,
+        "activationMs": 1955
+      }
+    ],
+    "switchLatency": {
+      "count": 6,
+      "p50": 2148,
+      "p95": 2239,
+      "max": 2239
+    }
+  },
+  "finalRuns": [
+    {
+      "label": "a",
+      "runtime": {
+        "electron": "40.10.2",
+        "chrome": "144.0.7559.236"
+      },
+      "cpu": 1,
+      "prefixChars": 24268,
+      "events": 1600,
+      "typing": {
+        "count": 62,
+        "p50": 27,
+        "p95": 65,
+        "max": 191
+      },
+      "keysDuringRun": 62,
+      "typingWallMs": 3884,
+      "switches": [
+        {
+          "space": "amadeus",
+          "ms": 309,
+          "activationMs": 300
+        },
+        {
+          "space": "tangu",
+          "ms": 633,
+          "activationMs": 441
+        },
+        {
+          "space": "amadeus",
+          "ms": 178,
+          "activationMs": 139
+        },
+        {
+          "space": "tangu",
+          "ms": 552,
+          "activationMs": 409
+        },
+        {
+          "space": "amadeus",
+          "ms": 142,
+          "activationMs": 133
+        },
+        {
+          "space": "tangu",
+          "ms": 553,
+          "activationMs": 388
+        }
+      ],
+      "returnToChat": {
+        "count": 3,
+        "p50": 553,
+        "p95": 633,
+        "max": 633
+      },
+      "frames": {
+        "count": 5934,
+        "p50": 7,
+        "p95": 14,
+        "max": 361
+      },
+      "longTasks": {
+        "count": 12,
+        "p50": 123,
+        "p95": 339,
+        "max": 339
+      },
+      "readingGap": 878.400390625,
+      "followRestored": true,
+      "downwardFollowRestored": true,
+      "correctnessPassed": true,
+      "passed": true,
+      "typedSamples": [
+        {
+          "ms": 191,
+          "streaming": true
+        },
+        {
+          "ms": 152,
+          "streaming": true
+        },
+        {
+          "ms": 37,
+          "streaming": true
+        },
+        {
+          "ms": 42,
+          "streaming": true
+        },
+        {
+          "ms": 33,
+          "streaming": true
+        },
+        {
+          "ms": 27,
+          "streaming": true
+        },
+        {
+          "ms": 21,
+          "streaming": true
+        },
+        {
+          "ms": 21,
+          "streaming": true
+        },
+        {
+          "ms": 18,
+          "streaming": true
+        },
+        {
+          "ms": 26,
+          "streaming": true
+        },
+        {
+          "ms": 43,
+          "streaming": true
+        },
+        {
+          "ms": 29,
+          "streaming": true
+        },
+        {
+          "ms": 27,
+          "streaming": true
+        },
+        {
+          "ms": 32,
+          "streaming": true
+        },
+        {
+          "ms": 22,
+          "streaming": true
+        },
+        {
+          "ms": 32,
+          "streaming": true
+        },
+        {
+          "ms": 28,
+          "streaming": true
+        },
+        {
+          "ms": 28,
+          "streaming": true
+        },
+        {
+          "ms": 48,
+          "streaming": true
+        },
+        {
+          "ms": 18,
+          "streaming": true
+        },
+        {
+          "ms": 28,
+          "streaming": true
+        },
+        {
+          "ms": 36,
+          "streaming": true
+        },
+        {
+          "ms": 17,
+          "streaming": true
+        },
+        {
+          "ms": 27,
+          "streaming": true
+        },
+        {
+          "ms": 20,
+          "streaming": true
+        },
+        {
+          "ms": 34,
+          "streaming": true
+        },
+        {
+          "ms": 17,
+          "streaming": true
+        },
+        {
+          "ms": 25,
+          "streaming": true
+        },
+        {
+          "ms": 36,
+          "streaming": true
+        },
+        {
+          "ms": 17,
+          "streaming": true
+        },
+        {
+          "ms": 24,
+          "streaming": true
+        },
+        {
+          "ms": 35,
+          "streaming": true
+        },
+        {
+          "ms": 20,
+          "streaming": true
+        },
+        {
+          "ms": 26,
+          "streaming": true
+        },
+        {
+          "ms": 19,
+          "streaming": true
+        },
+        {
+          "ms": 23,
+          "streaming": true
+        },
+        {
+          "ms": 19,
+          "streaming": true
+        },
+        {
+          "ms": 30,
+          "streaming": true
+        },
+        {
+          "ms": 28,
+          "streaming": true
+        },
+        {
+          "ms": 16,
+          "streaming": true
+        },
+        {
+          "ms": 48,
+          "streaming": true
+        },
+        {
+          "ms": 124,
+          "streaming": true
+        },
+        {
+          "ms": 65,
+          "streaming": true
+        },
+        {
+          "ms": 37,
+          "streaming": true
+        },
+        {
+          "ms": 32,
+          "streaming": true
+        },
+        {
+          "ms": 61,
+          "streaming": true
+        },
+        {
+          "ms": 24,
+          "streaming": true
+        },
+        {
+          "ms": 25,
+          "streaming": true
+        },
+        {
+          "ms": 34,
+          "streaming": true
+        },
+        {
+          "ms": 28,
+          "streaming": true
+        },
+        {
+          "ms": 25,
+          "streaming": true
+        },
+        {
+          "ms": 17,
+          "streaming": true
+        },
+        {
+          "ms": 19,
+          "streaming": true
+        },
+        {
+          "ms": 19,
+          "streaming": true
+        },
+        {
+          "ms": 29,
+          "streaming": true
+        },
+        {
+          "ms": 16,
+          "streaming": true
+        },
+        {
+          "ms": 25,
+          "streaming": true
+        },
+        {
+          "ms": 17,
+          "streaming": true
+        },
+        {
+          "ms": 22,
+          "streaming": true
+        },
+        {
+          "ms": 36,
+          "streaming": true
+        },
+        {
+          "ms": 29,
+          "streaming": true
+        },
+        {
+          "ms": 22,
+          "streaming": true
+        }
+      ],
+      "errors": []
+    },
+    {
+      "label": "b",
+      "runtime": {
+        "electron": "40.10.2",
+        "chrome": "144.0.7559.236"
+      },
+      "cpu": 1,
+      "prefixChars": 24268,
+      "events": 1600,
+      "typing": {
+        "count": 62,
+        "p50": 26,
+        "p95": 82,
+        "max": 167
+      },
+      "keysDuringRun": 62,
+      "typingWallMs": 4221,
+      "switches": [
+        {
+          "space": "amadeus",
+          "ms": 297,
+          "activationMs": 282
+        },
+        {
+          "space": "tangu",
+          "ms": 669,
+          "activationMs": 516
+        },
+        {
+          "space": "amadeus",
+          "ms": 142,
+          "activationMs": 137
+        },
+        {
+          "space": "tangu",
+          "ms": 545,
+          "activationMs": 411
+        },
+        {
+          "space": "amadeus",
+          "ms": 135,
+          "activationMs": 129
+        },
+        {
+          "space": "tangu",
+          "ms": 557,
+          "activationMs": 397
+        }
+      ],
+      "returnToChat": {
+        "count": 3,
+        "p50": 557,
+        "p95": 669,
+        "max": 669
+      },
+      "frames": {
+        "count": 5933,
+        "p50": 7,
+        "p95": 14,
+        "max": 361
+      },
+      "longTasks": {
+        "count": 12,
+        "p50": 112,
+        "p95": 339,
+        "max": 339
+      },
+      "readingGap": 878.400390625,
+      "followRestored": true,
+      "downwardFollowRestored": true,
+      "correctnessPassed": true,
+      "passed": true,
+      "typedSamples": [
+        {
+          "ms": 167,
+          "streaming": true
+        },
+        {
+          "ms": 56,
+          "streaming": true
+        },
+        {
+          "ms": 27,
+          "streaming": true
+        },
+        {
+          "ms": 41,
+          "streaming": true
+        },
+        {
+          "ms": 25,
+          "streaming": true
+        },
+        {
+          "ms": 24,
+          "streaming": true
+        },
+        {
+          "ms": 26,
+          "streaming": true
+        },
+        {
+          "ms": 32,
+          "streaming": true
+        },
+        {
+          "ms": 20,
+          "streaming": true
+        },
+        {
+          "ms": 60,
+          "streaming": true
+        },
+        {
+          "ms": 26,
+          "streaming": true
+        },
+        {
+          "ms": 19,
+          "streaming": true
+        },
+        {
+          "ms": 33,
+          "streaming": true
+        },
+        {
+          "ms": 29,
+          "streaming": true
+        },
+        {
+          "ms": 29,
+          "streaming": true
+        },
+        {
+          "ms": 35,
+          "streaming": true
+        },
+        {
+          "ms": 23,
+          "streaming": true
+        },
+        {
+          "ms": 18,
+          "streaming": true
+        },
+        {
+          "ms": 55,
+          "streaming": true
+        },
+        {
+          "ms": 27,
+          "streaming": true
+        },
+        {
+          "ms": 19,
+          "streaming": true
+        },
+        {
+          "ms": 57,
+          "streaming": true
+        },
+        {
+          "ms": 24,
+          "streaming": true
+        },
+        {
+          "ms": 22,
+          "streaming": true
+        },
+        {
+          "ms": 29,
+          "streaming": true
+        },
+        {
+          "ms": 27,
+          "streaming": true
+        },
+        {
+          "ms": 26,
+          "streaming": true
+        },
+        {
+          "ms": 46,
+          "streaming": true
+        },
+        {
+          "ms": 29,
+          "streaming": true
+        },
+        {
+          "ms": 22,
+          "streaming": true
+        },
+        {
+          "ms": 16,
+          "streaming": true
+        },
+        {
+          "ms": 23,
+          "streaming": true
+        },
+        {
+          "ms": 25,
+          "streaming": true
+        },
+        {
+          "ms": 21,
+          "streaming": true
+        },
+        {
+          "ms": 39,
+          "streaming": true
+        },
+        {
+          "ms": 24,
+          "streaming": true
+        },
+        {
+          "ms": 163,
+          "streaming": true
+        },
+        {
+          "ms": 117,
+          "streaming": true
+        },
+        {
+          "ms": 82,
+          "streaming": true
+        },
+        {
+          "ms": 58,
+          "streaming": true
+        },
+        {
+          "ms": 61,
+          "streaming": true
+        },
+        {
+          "ms": 26,
+          "streaming": true
+        },
+        {
+          "ms": 26,
+          "streaming": true
+        },
+        {
+          "ms": 18,
+          "streaming": true
+        },
+        {
+          "ms": 18,
+          "streaming": true
+        },
+        {
+          "ms": 23,
+          "streaming": true
+        },
+        {
+          "ms": 19,
+          "streaming": true
+        },
+        {
+          "ms": 24,
+          "streaming": true
+        },
+        {
+          "ms": 40,
+          "streaming": true
+        },
+        {
+          "ms": 21,
+          "streaming": true
+        },
+        {
+          "ms": 15,
+          "streaming": true
+        },
+        {
+          "ms": 56,
+          "streaming": true
+        },
+        {
+          "ms": 25,
+          "streaming": true
+        },
+        {
+          "ms": 20,
+          "streaming": true
+        },
+        {
+          "ms": 47,
+          "streaming": true
+        },
+        {
+          "ms": 24,
+          "streaming": true
+        },
+        {
+          "ms": 21,
+          "streaming": true
+        },
+        {
+          "ms": 50,
+          "streaming": true
+        },
+        {
+          "ms": 26,
+          "streaming": true
+        },
+        {
+          "ms": 20,
+          "streaming": true
+        },
+        {
+          "ms": 47,
+          "streaming": true
+        },
+        {
+          "ms": 21,
+          "streaming": true
+        }
+      ],
+      "errors": []
+    }
+  ]
+}

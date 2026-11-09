@@ -12,7 +12,6 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Sparkles, Check, X, Trash2, ShieldQuestion, MessageSquarePlus, FolderOpen, Settings, Pause, Play, Pencil, HeartPulse, AlarmClock, Zap, ChevronRight } from 'lucide-react'
 import { setActiveSpace, useWorkspace } from '@lcl/engine'
-import { syncAgentSpace } from '../builtins/agentSpaceSync'
 import {
   getMuseStatus, getMuseTodos, patchMuseTodo, injectMuseTodos, listMessages, getMuseTriggers, deleteMuseTrigger, saveMuseTrigger,
   listMuseApprovals, decideMuseApproval, getAgentSchedules, deleteAgentScheduleEntry, postMuseFeedback, wakeMuse, getMuseRounds,
@@ -131,7 +130,11 @@ export const MuseView: React.FC<{
   sessions: SessionRecord[]
   /** 打开某个会话:注入待办后跳过去、「最近几轮」点一条都走它(两个挂载点传的都是 openSession)。 */
   onInjected: (sessionId: string) => void
-}> = ({ cfg, sessions, onInjected }) => {
+  /** 摆法(方案 B / D):`manage` = Muse Space 右栏的管理面,待办和它给自己排的已挪进主区「今日简报」的卡,这里不再画;
+   *  `full`(缺省)= 后台 Agent 详情页里那份,照旧全画。 */
+  variant?: 'full' | 'manage'
+}> = ({ cfg, sessions, onInjected, variant = 'full' }) => {
+  const manage = variant === 'manage'
   const { t, locale } = useI18n()
   const museDef = useApp((s) => s.agentDefs.find((a) => a.slug === 'muse'))
   const museName = agentName(museDef ?? { name: 'Muse', nameZh: '卜算子', nameEn: 'Muse', slug: 'muse' }, locale)
@@ -166,15 +169,16 @@ export const MuseView: React.FC<{
   const load = async (): Promise<void> => {
     const st = await getMuseStatus(homeTarget()).catch(() => null)
     setStatus(st)
-    void syncAgentSpace(cfg, 'muse', st?.spaceStamp) // 自建 Space 变了 → 只重载 agent-muse 插件(按戳去重)
     // 各列表缺省一律补空数组:老引擎 / 外部后端可能回一个不是数组的壳,渲染里的 .filter / .length 会崩掉整个面板。
-    const nextTodos = arr<MuseTodo>(await getMuseTodos(homeTarget(), 'pending').catch(() => []))
-    setTodos(nextTodos)
-    setSel((p) => new Set([...p].filter((id) => nextTodos.some((x) => x.id === id)))) // 已被处理/消失的 TODO 不留在选择集里
+    if (!manage) {
+      const nextTodos = arr<MuseTodo>(await getMuseTodos(homeTarget(), 'pending').catch(() => []))
+      setTodos(nextTodos)
+      setSel((p) => new Set([...p].filter((id) => nextTodos.some((x) => x.id === id)))) // 已被处理/消失的 TODO 不留在选择集里
+    }
     setTriggers(arr(await getMuseTriggers(homeTarget()).catch(() => [])))
     // 旧引擎无此端点 → 404 → 空列表(读端兜底,面板不红)。
     setApprovals(arr(await listMuseApprovals(homeTarget(), 'pending').catch(() => [])))
-    setTracks(await getAgentSchedules(homeTarget()).then((all) => arr<AgentScheduleEntry>(arr<{ slug: string; entries?: AgentScheduleEntry[] }>(all).find((s) => s.slug === 'muse')?.entries).filter((e) => e.auto)).catch(() => []))
+    if (!manage) setTracks(await getAgentSchedules(homeTarget()).then((all) => arr<AgentScheduleEntry>(arr<{ slug: string; entries?: AgentScheduleEntry[] }>(all).find((s) => s.slug === 'muse')?.entries).filter((e) => e.auto)).catch(() => []))
     // 多取一条:在跑的那轮不进列表(状态行已经说了「正在想」)。旧引擎 404 → 整块不画;别的偶发失败留着上一份,不闪。
     // 不跟 4 秒轮询每次都拉(引擎要翻 agent_runs 和待办):起停了一轮(会话 / 在跑 / 上次醒来变了)才拉,另外每分钟补一次。
     const key = `${st?.sessionId ?? ''}|${st?.running ? 1 : 0}|${st?.lastCycleAt ?? ''}`
@@ -425,7 +429,7 @@ export const MuseView: React.FC<{
         )}
 
         {/* 待办:一行一条;完成 / 略过悬停才出;勾了才出「放进会话 / 新对话里做」那条。 */}
-        <section className="mv-sec" data-section="todos">
+        {!manage && <section className="mv-sec" data-section="todos">
           <div className="mv-sh">
             <b>{t('musePanel.todos')}</b>{todos.length > 0 && <span>{todos.length}</span>}
             {todos.length > 1 && <button type="button" className="mv-link r" onClick={() => setSel(allSelected ? new Set() : new Set(todos.map((x) => x.id)))}>{t(allSelected ? 'musePanel.selectNone' : 'musePanel.selectAll')}</button>}
@@ -458,10 +462,10 @@ export const MuseView: React.FC<{
             </div>
           )}
           {msg && <div className="mv-hint" role="status">{msg}</div>}
-        </section>
+        </section>}
 
         {/* 它给自己排的:Muse 自己 SCHEDULE.db 的 auto 条目(任务卡「交给 Muse 追踪」/ Muse 自己排的后续),到期回灌它的周期;Calendar 同源可见。 */}
-        <section className="mv-sec" data-section="tracks">
+        {!manage && <section className="mv-sec" data-section="tracks">
           <div className="mv-sh"><b>{t('musePanel.tracks')}</b>{shownTracks.length > 0 && <span>{shownTracks.length}</span>}</div>
           {shownTracks.length === 0 && <div className="mv-hint">{t('special.muse.tracksEmpty')}</div>}
           {shownTracks.length > 0 && <div className="mv-rows">
@@ -473,7 +477,7 @@ export const MuseView: React.FC<{
               </div>
             ))}
           </div>}
-        </section>
+        </section>}
 
         {/* 什么时候叫醒它:心跳一行 + Muse 唤醒式规则(只列无动作链/无执行者的老式规则;带动作的自动化归自动化 Space 统一管理)。 */}
         <section className="mv-sec" data-section="wake">

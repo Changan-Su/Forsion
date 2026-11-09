@@ -43,7 +43,7 @@ ProseMirror override 是为消除 Milkdown 传递树中的受影响版本；退�
 
 afterPack 检查 Node 可执行文件及 npx 本体，运行 Python 原有库导入/渲染 probe 与 Git init/commit/HTTPS helper probe。已有 Python constraints、插件签名、引擎签名和 OIDC 发布链保留。
 
-正式 workflow 使用 npm ci、固定 Node 24.22.1、锁文件内构建器版本；安装输入变更拒绝。高权限 action 钉 commit SHA；desktop workflow 仅 release job 有 contents:write/attestations/id-token。每个平台/发行版 build job 在本机生成唯一命名的材料清单并随产物上传，汇总 collector 另列自身环境，避免将汇总机器误写成构建机器。发布材料包括四份 lock、runtime manifest、Python requirements/constraints、源码 commit、构建器与产物摘要；`release-sbom.json` 明确是含开发依赖的 CycloneDX **源锁清单**，不是从安装包扫描的完整二进制 SBOM。GitHub release 额外用 OIDC 生成 artifact provenance。
+正式 workflow 使用 npm ci、固定 Node 24.22.1、锁文件内构建器版本；安装输入变更拒绝。高权限 action 钉 commit SHA；desktop workflow 仅 release job 有 contents:write/attestations/id-token。每个平台/发行版 build job 在本机生成唯一命名的材料清单（`materials-*` artifact，不直接挂 Release），`release-metadata` job 把它们原样并进一份 `build-materials.json`（`platforms[<平台>]`，构建机环境、输入与产物哈希都在）；各平台源锁 SBOM 字节相同时只记哈希、由 `release-sbom.json` 承载，release job 核对两者哈希一致，不同才逐平台保留。汇总 collector 另列自身环境，避免将汇总机器误写成构建机器。发布材料包括四份 lock、runtime manifest、Python requirements/constraints、源码 commit、构建器与产物摘要；`release-sbom.json` 明确是含开发依赖的 CycloneDX **源锁清单**，不是从安装包扫描的完整二进制 SBOM。GitHub release 额外用 OIDC 生成 artifact provenance。
 
 不宣称 bit-for-bit reproducible：操作系统工具、pip 平台 wheel、签名/压缩时间戳及 runner 镜像仍可能变化。构建材料与实际安装包 probe 共同审查。
 

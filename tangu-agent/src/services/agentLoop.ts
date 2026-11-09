@@ -21,7 +21,7 @@ import { PROTOCOL_MARK, DIRECT_MARK, ACCOUNT_MARK } from '../llm/openaiCompat.js
 import { realpathSync } from 'node:fs';
 import { publish, drain, cleanup } from './eventBus.js';
 import { makeUiSettingsUpdater } from './uiAck.js';
-import { gateToolCall, requestApproval, normalizeApprovalMode, USER_REJECT_REASON, setApprovalTray, type ApprovalDecision, type ApprovalMode } from './approvals.js';
+import { gateToolCall, requestApproval, normalizeApprovalMode, USER_REJECT_REASON, setApprovalTray, setRunApprovalCap, type ApprovalDecision, type ApprovalMode } from './approvals.js';
 import { takeRunThinking } from './sessionSettings.js';
 import { registerLiveRun, unregisterLiveRun, type RunStatus } from './runStatus.js';
 import { makeClientActionRequester } from './clientAck.js';
@@ -65,7 +65,7 @@ import { getAgent, isValidSlug, libDirOf, MUSE_AGENT_SLUG, type NormalAgentDef }
 import { loadHarness, shelvedOf, renderHarnessSection, isRefineInvocation, REFINE_DIRECTIVE, consumeHarnessCandidates, renderPendingHarnessCandidates } from '../agents/harnessStore.js';
 import { loadSchedule, entriesOf, upcomingScheduleLines } from './agentSchedule.js';
 import { agentIdentitySection, applyAgentActivation } from './agentActivation.js';
-import { clampApprovalMode, clearRunRemoteTaint, effectiveRemote, remoteApprovalCap, remoteOf, REMOTE_WRITABLE_CONFIG_KEYS } from './remoteOrigin.js';
+import { clampApprovalMode, clearRunRemoteTaint, effectiveRemote, minCapMode, remoteApprovalCap, remoteOf, REMOTE_WRITABLE_CONFIG_KEYS, type CapMode } from './remoteOrigin.js';
 import { remoteLocked, remoteLockedBody } from './remoteLock.js'; // P1-K2
 import { isChildBriefRun, isSiblingMessageRun, isUnattendedRun, registerRun, runCategory, unregisterRun, type RunCategory } from './remoteActivity.js'; // P1-K2
 import { requestInquiry } from './inquiries.js';
@@ -139,7 +139,8 @@ const VERIFY_MAX_ROUNDS = 2;
 // 运行时转向(steer，类 Codex):用户在 run 跑动期间发来的消息按 runId 暂存，在「迭代边界」注入到
 // 当前 run（而非另起新 run，也不是等整个 run 跑完）。仅「活跃 run」(已注册 AbortController = 已进循环)
 // 接受注入；排队中的 run 还没 AC → 拒收（前端回退起新 run）。
-interface SteerMsg { id: string; content: string; attachments?: any[] }
+/** newTopic = 用户在跑的时候选了「另起话题」(⌘Enter / 发送键菜单):这一句另起一件事,手头没做完的挪到独立会话(hand_off_task)。 */
+interface SteerMsg { id: string; content: string; attachments?: any[]; newTopic?: boolean }
 const steerQueue = new Map<string, SteerMsg[]>();
 // Only the read-only model request is interruptible for steering. Tool execution and
 // the parent run keep their lifetime; completed work remains in workingMessages.
@@ -170,6 +171,11 @@ export function expediteSteer(runId: string): boolean {
   }
   return true; // already consumed is an idempotent success, not a reason to resend
 }
+
+/** 「另起话题」那句后面带给模型的一段(英文:模型读的)。手头没东西可挪时照常回答。 */
+export const NEW_TOPIC_NOTE = '<new_topic>The user sent the message above as a NEW TOPIC (they chose "New topic" while you were working). '
+  + 'If the task you were working on is not finished, first call hand_off_task to move it — with a brief of what is done and what is left — into its own session, '
+  + 'then answer this message here. Do not continue the old task in this conversation. If nothing was left unfinished, just answer the message.</new_topic>';
 
 /** 入队一条转向消息；run 非活跃返回 false（前端据此回退 startRun）。 */
 export function enqueueSteer(runId: string, msg: SteerMsg): boolean {
@@ -1002,7 +1008,12 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   // 远程污点(契约 C1/C3/C5):只认 input.remote(路由解析 / 派生 run 显式抄写),审批档据此钳到上限。
   const remote = remoteOf(input);
   setRunSessionContext(sessionId, !!remote || !!input.remoteTainted);
-  const remoteCap = remote ? remoteApprovalCap() : undefined;
+  // 会话互发 / 父子派生起的那一轮(childSessions 写 input.approvalCap = 发方这一轮的有效档):审批档不比发方松。
+  // 只有引擎内部起的 run 会带(POST /agent/runs 按字段名组装 input,客户端塞不进来;就算塞进来也只会更严)。
+  const sessionMsgCap: CapMode | undefined = input.approvalCap === 'readonly' || input.approvalCap === 'auto-edit' || input.approvalCap === 'full-auto'
+    ? input.approvalCap : undefined;
+  if (sessionMsgCap) setRunApprovalCap(runId, sessionMsgCap); // 审批闸现读会话档之后再钳;收尾由 childSessions.onRunSettled 清
+  const remoteCap = minCapMode(remote ? remoteApprovalCap() : undefined, sessionMsgCap);
   // 界面面(set_ui_setting / run_ui_command / list_ui_commands)的能力握手 + 目录快照。
   // 与 clientTag 同源同链;run 内冻结(prompt 缓存纪律,同 mcpTools)。
   const uiCommands = Array.isArray(input.uiCommands) ? input.uiCommands : undefined;
@@ -1236,7 +1247,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   const modeSessionId = profile.capabilities.hostExec
     // 父子会话的派生轮(start_session / send_to_session 起的子会话轮、回报后自动接着做的主会话轮)也跟本会话现档:中途收紧当场生效(Codex 10-17 #6)。
     // 这两个字段只由引擎内部 createRun 写,POST /agent/runs 按字段名组装 input、客户端塞不进来。
-    ? approvalModeSessionId({ fromClient: input.origin === 'client' || input.fromParent === true || input.childReport === true || !!input.fromSession, sessionId, teamSessionId: verifiedTeamSessionId, followSessionMode: teamMember.followSessionMode === true })
+    ? approvalModeSessionId({ fromClient: input.origin === 'client' || input.fromParent === true || input.handoff === true || input.childReport === true || !!input.fromSession, sessionId, teamSessionId: verifiedTeamSessionId, followSessionMode: teamMember.followSessionMode === true })
     : undefined;
   // 无人值守的异步审批(Muse ask/agent 档):**只信引擎内部起的 run** —— input.background 由 muse.ts 直接写进
   // createRun 的 input,/agent/runs 路由按字段名组装 input、客户端塞不进来;agentConfig 是请求体可控的,
@@ -2355,6 +2366,12 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         const pushed = { role: 'user', content: described
           ? `${m.content}\n\n[Attached images transcribed by the vision assistant]\n${described}`
           : images.length ? toImageParts(m.content, images) : m.content } as ChatMessage;
+        // 「另起话题」:只进这一轮的上下文(不落库、界面不画),告诉模型这句是新话题、先把手头的挪出去
+        if (m.newTopic) {
+          const note = NEW_TOPIC_NOTE;
+          if (typeof pushed.content === 'string') pushed.content = `${pushed.content}\n\n${note}`;
+          else if (Array.isArray(pushed.content)) (pushed.content as any[]).push({ type: 'text', text: note });
+        }
         workingMessages.push(pushed);
         const ts = await messageTimestamp(m.id); // 刚落库的转向消息也是已落库行
         if (ts) tagMessageSource(pushed, { id: m.id, ts });

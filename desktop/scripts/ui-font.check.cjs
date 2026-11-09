@@ -46,8 +46,9 @@ const UI_ID = 'inter', MONO_ID = 'jetbrains'
 const UI_STACK = resolveFontStack(UI_ID), MONO_STACK = resolveFontStack(MONO_ID)
 if (!UI_STACK || !MONO_STACK) throw new Error('探针预设不存在,先看 fontPresets.ts 的 BUILTIN')
 
-// 真源:base.css 的 token 底 + 两个 LCL 基座(lovable 带 [data-skin] 变体、soft 用 --font/--mono 词汇)。
-const CSS = [read('styles/base.css'), read('amadeus/theme/lcl/tangu.css'), read('amadeus/theme/lcl/tanguSoft.css'), read('views/chat2/chat2.css')].join('\n')
+// 真源:base.css 的 token 底 + LCL lovable 基座(带 [data-skin] 变体)+ chat2.css(后台进程的等宽字体)。soft 基座(tanguSoft.css)没有引用、已删;
+// .tangu-soft 仍在 uiFont 的覆盖作用域里,探针留着验 --font / --mono 这套词汇照样被盖。
+const CSS = [read('styles/base.css'), read('amadeus/theme/lcl/tangu.css'), read('views/chat2/chat2.css')].join('\n')
 
 // 每个探针都住在真实的祖先链下,量的就是「主题重定义之后我还压不压得住」。
 const PAGE = `<!doctype html><html><head><meta charset="utf-8"><style>

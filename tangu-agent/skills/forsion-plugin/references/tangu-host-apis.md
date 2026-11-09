@@ -172,12 +172,13 @@ const box = ctx.tangu?.mountComposer?.(el, {
   beforeSend: () => playLeaveAnimation(),   // 宿主发送前先等它;回 false = 这次不发
   call: true,                               // 要通话按钮(只在挂载时所在的 Space 是当前 Space 时画)
 })
-// 句柄:box.focus() / box.startVoice()(在点击处理里同步调,麦克风权限只认用户那一下)/ box.draft()(只读)/ box.dispose()
+// 句柄:box.focus() / box.startVoice()(在点击处理里同步调,麦克风权限只认用户那一下)/ box.draft()(只读)/ box.prefill?.(text) / box.dispose()
 ```
 
 - **发送归宿主**:用户按发送 → 宿主建新会话、切到 Tangu、发出去。插件改不了要发的内容(`draft()` 只读);和 `ui.mountChatBox` 正好相反(那个草稿和提交都归插件)。
 - `beforeSend` 抛错、超过 2 秒、或者插件这时被停用 / 视图被卸,宿主**照样发**:用户按下的那一下不能因为动画丢掉(它是放动效用的,别在里面弹确认框)。发送和开通话共用一把锁,同一时刻只放一次,动效没放完又按 = 不动。
 - 没有 Tangu Space 的宿主(单品档案)上按发送不动;没有对话能力的宿主 / 旧宿主上整个缺席:`ctx.tangu?.mountComposer`。
+- `prefill?(text)`(2026-11-09 起):往输入框里填一句并聚焦;只在输入框空着时填,写了一半的草稿原样留着,回车由用户按。旧宿主没有 → `box.prefill?.(…)`。
 - `dispose()` 之后 `el` 立刻还给你;插件被禁用 / 重载时宿主统一卸掉。
 
 ### 代填通道凭据:connectChannel(2026-10-31 起)
@@ -405,7 +406,9 @@ ctx.automation?.emit('build-finished', { project: 'site', status: 'ok' })
 ### `ctx.agent`:读写你自己的数据(2026-09-27 起,**只有 agent 自建 Space 有**)
 
 Space 应该**从数据渲染**,别把状态、时间、待办写死在 main.js 里、每个周期改一遍 —— 那既浪费你的额度,用户看到的也永远是旧的。
-`ctx.agent` 只在 `agent-<slug>` 插件上存在、只能碰你自己这个 agent(普通插件整个没有;今天只有 Muse 有数据源):
+`ctx.agent` 只在 `agent-<slug>` 插件上存在、只能碰你自己这个 agent(普通插件整个没有)。
+⚠️ 2026-11-08 起 **Muse 的 Space 不再是插件**:主区是宿主画的「今日简报」,Muse 改的是 `Space/space.json`(用 `muse_space` 工具),
+`agent-muse` 不再装载(旧 main.js 留在原处不删)。这一节的接口留给以后自建 Space 的 agent;今天没有 agent 用它。
 
 | 成员 | 说明 |
 |---|---|

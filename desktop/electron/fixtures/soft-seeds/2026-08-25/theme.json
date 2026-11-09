@@ -1,0 +1,38 @@
+{
+  "id": "soft",
+  "name": "Soft · 柔影",
+  "description": "柔影浮卡 · 大圆角(LCL soft 结构语言)。渐变舞台 + 角落辉光 + 圆角浮卡,Plus Jakarta Sans。颜色由「配色」决定。",
+  "version": "1.0.0",
+  "author": "Forsion",
+  "supportsDarkMode": true,
+  "tags": [
+    "lcl",
+    "soft",
+    "rounded"
+  ],
+  "panelGap": 8,
+  "fonts": {
+    "google": [
+      "Plus Jakarta Sans:wght@400;500;600;700",
+      "Nunito:wght@400;600;700;800"
+    ]
+  },
+  "preview": {
+    "shape": "soft",
+    "background": {
+      "light": "linear-gradient(158deg, #fceee4 0%, #f6edf9 52%, #edeefc 100%)",
+      "dark": "linear-gradient(158deg, #221c2e 0%, #1d1a28 55%, #181a2a 100%)"
+    },
+    "accent": "#8b7fd6",
+    "title": {
+      "text": "Soft"
+    },
+    "tagline": "柔影浮卡 · 大圆角",
+    "swatches": [
+      "#8b7fd6",
+      "#f6edf9",
+      "#6b6675",
+      "#c3b8ee"
+    ]
+  }
+}

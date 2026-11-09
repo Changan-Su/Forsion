@@ -38,7 +38,7 @@
 /* 手机 / 窄窗:顶栏只留名字、计数、「更多」和关闭 */
 .iv.is-compact .iv-bar { padding: 0 6px 0 14px; }
 .iv-more { position: relative; }
-.iv-menu { position: absolute; right: 0; top: calc(100% + 4px); z-index: 3; min-width: 176px; padding: 4px; border-radius: var(--radius-md, 12px); background: var(--bg-card); box-shadow: var(--card-shadow, 0 6px 22px rgb(0 0 0 / .08)); display: flex; flex-direction: column; }
+.iv-menu { position: absolute; right: 0; top: calc(100% + 4px); z-index: 3; min-width: 176px; padding: 4px; border-radius: var(--radius-md, 12px); background: var(--surface-menu, var(--bg-card)); backdrop-filter: var(--surface-blur, none); box-shadow: var(--card-shadow, 0 6px 22px rgb(0 0 0 / .08)); display: flex; flex-direction: column; }
 .iv-menu button { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border: 0; border-radius: var(--radius-sm, 6px); background: none; color: var(--text); font-size: var(--ui-font-body, 13px); text-align: left; cursor: pointer; }
 .iv-menu button:hover { background: var(--overlay-light); }
 

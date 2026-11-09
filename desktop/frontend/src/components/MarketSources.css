@@ -17,7 +17,8 @@
 .mk-src-pop {
   position: fixed; z-index: var(--z-menu); width: 340px; max-width: calc(100vw - 16px);
   padding: 14px; display: flex; flex-direction: column; gap: 10px;
-  background: var(--bg-card); border: var(--border-width) solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--card-shadow);
+  background: var(--surface-menu, var(--bg-card)); backdrop-filter: var(--surface-blur, none);
+  border: var(--border-width) solid var(--surface-edge, var(--border)); border-radius: var(--radius-lg); box-shadow: var(--card-shadow);
   color: var(--text);
 }
 .mk-src-pop h4 { margin: 0; font-size: var(--ui-font-body, 13px); font-weight: 600; }

@@ -33,6 +33,7 @@ export function mountPluginSelectionBar(root: HTMLElement, pluginId: string, ini
           view={`${pluginId}:${view}`}
           pluginId={pluginId}
           watch={opts.watch === false ? undefined : rootRef}
+          owner={rootRef}
           selection={shown}
           onDismiss={() => { if (shown) { shown = null; render() } }}
           tools={(s) => (Array.isArray(opts.tools) ? opts.tools : []).filter((t) => t && typeof t.id === 'string' && typeof t.run === 'function').map((t) => {
@@ -68,7 +69,21 @@ export function mountPluginSelectionBar(root: HTMLElement, pluginId: string, ini
       const r = sel?.rect
       const rect = { left: num(r?.left), right: num(r?.right), top: num(r?.top), bottom: num(r?.bottom) }
       if (!text || Object.values(rect).some(Number.isNaN)) { console.warn(`[amadeus] plugin "${pluginId}" selection bar show() needs text and a rect { left, right, top, bottom }`); return }
-      shown = { text, markdown: typeof sel.markdown === 'string' && sel.markdown ? sel.markdown : undefined, rect } // content, not a label: never capped
+      // getRect(可选,方案 B):宿主每帧现量,条和结果卡跟着那段字走、滚出视图只藏不收;不给 = 只有 rect 快照,滚动 / 尺寸变化就收(同以前)。
+      const live = typeof sel.getRect === 'function' ? sel.getRect.bind(sel) : null
+      let warned = false
+      const getRect = live ? (): { left: number; right: number; top: number; bottom: number } | null => {
+        let v: unknown
+        try { v = live() } catch (e) {
+          if (!warned) { warned = true; console.error(`[amadeus] plugin "${pluginId}" selection bar getRect() threw`, e) }
+          return null
+        }
+        if (!v || typeof v !== 'object') return null
+        const o = v as Record<string, unknown>
+        const at = { left: num(o.left), right: num(o.right), top: num(o.top), bottom: num(o.bottom) }
+        return Object.values(at).some(Number.isNaN) ? null : at
+      } : undefined
+      shown = { text, markdown: typeof sel.markdown === 'string' && sel.markdown ? sel.markdown : undefined, rect, ...(getRect ? { getRect } : {}) } // content, not a label: never capped
       render()
     },
     hide() {

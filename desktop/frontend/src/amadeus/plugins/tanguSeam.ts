@@ -153,6 +153,8 @@ export interface TanguComposerMount {
   startVoice(): void
   /** 输入框里此刻的草稿(只读;草稿归宿主)。 */
   draft(): string
+  /** 往输入框里填一句并聚焦(2026-11-09+):只在输入框空着时填,已经写了一半的草稿原样留着;回车由用户按。旧宿主没有:`m.prefill?.(…)`。 */
+  prefill?(text: string): void
   dispose(): void
 }
 
