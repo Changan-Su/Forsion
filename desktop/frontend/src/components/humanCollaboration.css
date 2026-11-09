@@ -49,7 +49,7 @@
 
 /* 每轮进提示词的那条线(11-09 记忆分层第一步):实线 + 文字(界面里不画虚线);线外的条目变淡。
    变淡换的是文字变量,不叠 opacity(DESIGN §6:子元素的不透明度高不过父元素);原值先在面板上取别名,免得 --text 引用自己 */
-.human-panel { --human-dim-ink: var(--text-muted); }
+.human-panel { --human-dim-ink: var(--text-faint); }  /* muted 和正文只差一档,看不出变淡 */
 .human-over { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
 .human-over .profile-text-action { display: inline-flex; align-items: center; gap: 5px; }
 .human-cutline { display: flex; align-items: center; gap: 10px; margin: 14px 0; color: var(--text-muted); font-size: var(--ui-font-meta); }
