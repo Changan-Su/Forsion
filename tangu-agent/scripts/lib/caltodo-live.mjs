@@ -25,7 +25,7 @@
  *              default calendar, the other calendars untouched, no file / note / "cannot do it", and a start that is not before the moment the
  *              leg began (a date without a time must be today or later; no date at all is reported, not red).
  *              "Later today" at ten in the morning passes with any guessed evening time, so live-harness pins the engine's clock to the evening
- *              (`--later-hour`, default 22). `--caltodo-later-only` runs this leg alone.
+ *              (`--later-hour`, default 22). `--caltodo-later-only` runs this leg alone; `--later-msg "…"` tries another wording (keep 房东 / 电话 in it).
  *  Negative control for leg 4: the same leg on the engine without the default-calendar mark / past-start note (`--kind base`). */
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
@@ -100,7 +100,7 @@ export function plantCalendarSkill({ src, shared }) {
 /**
  * cloud = undefined → local engine (host); otherwise the calendar-local server URL. `skill` = path of the planted plugin (host only).
  */
-export async function calTodoLive({ run, rounds = 1, home, workspace, vault, cloud, token, skill, tzOffsetMin = 0, laterOnly = false }) {
+export async function calTodoLive({ run, rounds = 1, home, workspace, vault, cloud, token, skill, tzOffsetMin = 0, laterOnly = false, laterMsg = LATER }) {
   const cfg = cloud ? { execMode: 'sandbox', cwd: undefined } : { execMode: 'host', cwd: workspace };
   const req = async (path, init) => {
     const r = await fetch(cloud + path, { ...init, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' } });
@@ -182,7 +182,7 @@ export async function calTodoLive({ run, rounds = 1, home, workspace, vault, clo
         const calBefore = await readCal();
         const notesBefore4 = await notes();
         const t0 = wallClock(tzOffsetMin);
-        const later = await run(sid('later'), LATER, 300_000, cfg, 'desktop/live-harness', undefined, undefined, undefined, { ...ZH, uiCommands: [SPACE_COMMAND] });
+        const later = await run(sid('later'), laterMsg, 300_000, cfg, 'desktop/live-harness', undefined, undefined, undefined, { ...ZH, uiCommands: [SPACE_COMMAND] });
         const calAfter = await readCal();
         const added4 = (calAfter?.rows || []).filter((r) => !calBefore.rows.some((s) => s.id === r.id));
         const row = added4.find((r) => /房东|电话/.test(String(r.cells?.name)));

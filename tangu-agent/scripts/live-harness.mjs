@@ -8274,7 +8274,7 @@ Then reply with only the command output.`,
   await scenario('caltodo', 'caltodo 用户的待办(本机):加两条无日期待办 → 新会话列出 → 勾掉', async () =>
     calTodoLive({ run, rounds: Number(opt('rounds', 1)), home, workspace, vault: SELF_SCHED_VAULT, skill: CALTODO_SKILL,
       // 引擎本地时钟相对 UTC 的分钟数:钉了就是钉的那一档,没钉就是台架自己的(引擎继承台架的 TZ)
-      tzOffsetMin: LATER_OFFSET_H == null ? -new Date().getTimezoneOffset() : LATER_OFFSET_H * 60, laterOnly: argv.includes('--caltodo-later-only') }));
+      tzOffsetMin: LATER_OFFSET_H == null ? -new Date().getTimezoneOffset() : LATER_OFFSET_H * 60, laterOnly: argv.includes('--caltodo-later-only'), ...(opt('later-msg', '') ? { laterMsg: opt('later-msg', '') } : {}) }));
   await scenario('cloudtodo', 'cloudtodo 用户的待办(云端 run):加两条无日期待办 → 新会话列出 → 勾掉', async () => {
     const cloud = process.env.TANGU_LIVE_CLOUD_URL;
     if (!cloud) return { ok: false, detail: '要 TANGU_LIVE_CLOUD_URL / TANGU_LIVE_CLOUD_TOKEN 指向 server scripts/calendar-local.mts(打印的 url 与 token)' };
