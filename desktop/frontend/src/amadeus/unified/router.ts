@@ -24,6 +24,19 @@ export type RouteDecision =
  * future schema → block:futureSchemaPage 的原样只读展示在那边。
  * v3 + 升级开关 + 升级被拒(mindmap:/dashboard 键等)→ block,文件留在 v3。
  */
+/**
+ * 读到的结果 → 先判「读不出」还是交给 routeNote。**读的时候出错(网络断、限流 429、超时)一律是读不出**,
+ * 不管笔记名单里有没有这篇 —— 出错不等于没有这个文件;只有读取方明确回「没有」(raw == null,不抛错)才可能是 missing。
+ * 2026-11-09 用户实报:手机上很多云端笔记点进去显示「当前库里没有这篇笔记」,服务器日志里那几下请求根本没到 ——
+ * 网络失败被 `.catch(() => null)` 抹成了 null,而当时这一面的名单里恰好没有它,于是误报成「不存在」。
+ * listed:当前库名单里有这篇。名单里有、却读回 null(瞬时读不到)同样按读不出(沿用旧口径)。
+ */
+export function readVerdict(read: { raw: string | null; failed: boolean }, listed: boolean): 'unreadable' | 'route' {
+  if (read.failed) return 'unreadable'
+  if (read.raw == null && listed) return 'unreadable'
+  return 'route'
+}
+
 export function routeNote(path: string, raw: string | null, upgradeV3: boolean, now: string): RouteDecision {
   if (raw == null) return { editor: 'missing' }
   const cls = classifyPageSource(raw)

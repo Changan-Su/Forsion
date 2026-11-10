@@ -39,7 +39,7 @@ import { UnifiedPage, type UnifiedHistory } from '@amadeus/unified/UnifiedPage'
 import { SEG_SLOT } from '@amadeus/unified/CanvasModeSeg'
 import { NoteFloatingToc } from '@amadeus/unified/NoteFloatingToc'
 import { NoteCover, CoverPicker, IconPicker, randomEmoji, useActiveCover, UNTITLED_RE } from '@amadeus/chrome/pageChrome'
-import { routeNote, type RouteDecision } from '@amadeus/unified/router'
+import { readVerdict, routeNote, type RouteDecision } from '@amadeus/unified/router'
 import { upgradeV4Enabled } from '@amadeus/lib/upgradeV4'
 import { cursorFromSource, setModeCursor, sourceOffsetFor, takeModeCursor } from '@amadeus/lib/modeCursor'
 import { importToPage, importToFolder, pasteImagesToPage, filesFromHostPaths, useFolderUploads } from './amadeusImport'
@@ -2594,7 +2594,13 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
     if (done && done.path === notePath) retireUnifiedPath(notePath)
     let alive = true
     void (async () => {
-      let raw = await amadeus.readTextFile(notePath).catch(() => null)
+      // 读出错(网络 / 限流 / 超时)与「读回 null = 没有这个文件」分开记:出错一律不判 missing(见 readVerdict)。
+      let failed = false
+      const read = (): Promise<string | null> => amadeus.readTextFile(notePath).then(
+        (r) => { failed = false; return r },
+        () => { failed = true; return null },
+      )
+      let raw = await read()
       // ⚠️ 冷启动竞态:主进程库根还没就位时 readTextFile **一律返回 null**
       //    (electron/amadeus/ipc.ts 的 `if (!vault.getRoot()) return null`),而 routeNote 把
       //    raw==null 读成「文件不存在 → 新建流 → v3 块编辑器」—— 于是「刚打开 Forsion 恰好停在
@@ -2607,13 +2613,13 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
       for (let i = 0; raw == null && !myPs().vaultRoot && i < 30; i++) {
         await new Promise((r) => setTimeout(r, 100))
         if (!alive) return
-        raw = await amadeus.readTextFile(notePath).catch(() => null)
+        raw = await read()
       }
       if (!alive) return
       const decision = routeNote(notePath, raw, upgradeV4Enabled(), new Date().toISOString())
-      if (decision.editor === 'missing' && myPs().pages.includes(notePath)) {
-        // 名册里有、却读不到 = 瞬时读失败(IPC 未就位 / 网络 / 权限),不是「不存在」:不退休任何实例
-        // (别的标签可能正编辑着这篇)、不占位成 missing,给一个重试按钮。
+      if (readVerdict({ raw, failed }, myPs().pages.includes(notePath)) === 'unreadable') {
+        // 读出错,或名册里有却读不到 = 瞬时读失败(IPC 未就位 / 网络 / 限流 / 权限),不是「不存在」:不退休任何实例
+        // (别的标签可能正编辑着这篇)、不占位成 missing,给一个重试按钮(网络恢复时也自动重试一次)。
         routedFor.current = null
         setRoute({ forPath: notePath, decision, root: myPs().vaultRoot, unreadable: true })
         return
@@ -2636,6 +2642,13 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
   const unifiedRoute = routed?.editor === 'unified' ? routed : null
   const unreadableNote = !!notePath && !!route?.unreadable && route.forPath === notePath
   const missingNote = routed?.editor === 'missing' && !!notePath && !unreadableNote
+  // 读不出时网络恢复(online)自动重试一次,不用等用户点「重试」。
+  useEffect(() => {
+    if (!unreadableNote) return
+    const retry = (): void => setRetryTick((n) => n + 1)
+    window.addEventListener('online', retry)
+    return () => window.removeEventListener('online', retry)
+  }, [unreadableNote])
   // 编辑器实例身份 = 库根 + 路径:切侧后同路径的判定即使仍是 unified 也必须换实例(旧实例持有旧库正文)。
   const routeRoot = route && route.forPath === notePath ? route.root ?? '' : ''
 
