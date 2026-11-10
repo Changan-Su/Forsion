@@ -186,6 +186,23 @@ describe('withOutboundMasking', () => {
     expect(log.at(-1)?.sid).toBe('s1');
     expect(readFileSync(join(home, 'masking', 'log.jsonl'), 'utf8')).not.toContain(KEY);
   });
+  it('streams tool args that arrive as deltas only (hosted frames carry no cumulative args)', async () => {
+    const ph = placeholderFor('API_KEY', KEY);
+    const argsText = JSON.stringify({ command: `echo ${ph}` });
+    const llm = withOutboundMasking({
+      resolveModelAndKey: async () => ({}) as any,
+      buildProviderPayload: async () => ({}),
+      streamProviderCompletion: async (o) => {
+        // 托管 SSE 的 tool 帧:只有 argsDelta,没有 args(server toolFrameOf)
+        for (const d of argsText.match(/.{1,7}/gs) || []) o.onToolCallDelta?.({ id: 't', name: 'bash', argsLen: 0, argsDelta: d } as any);
+        return { content: '', reasoning: '', toolCalls: [{ id: 't', type: 'function', function: { name: 'bash', arguments: argsText } }], usage: { prompt_tokens: 1, completion_tokens: 1 } };
+      },
+    }, () => ON);
+    let preview = '';
+    const res = await llm.streamProviderCompletion({ apiKey: '', baseUrl: '', payload: { messages: [{ content: ENV }] }, onToolCallDelta: (i) => { preview += i.argsDelta; } });
+    expect(preview).toBe(JSON.stringify({ command: `echo ${KEY}` }));
+    expect(JSON.parse(res.toolCalls[0].function.arguments).command).toBe(`echo ${KEY}`);
+  });
   it('blocks the turn instead of sending it as written when masking cannot run', async () => {
     let called = false;
     const llm = withOutboundMasking(fake(() => { called = true; }, '', '{}'), () => { return { ...ON, get secrets() { throw new Error('boom'); } } as any; });
