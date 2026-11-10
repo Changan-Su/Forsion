@@ -47,6 +47,17 @@ describe('continue after a failed turn', () => {
     expect(ids.slice(0, 2)).toEqual(['u1', 'a1']) // 失败那条原样留着
   })
 
+  it('two clicks before the run starts send only one continue', async () => {
+    let release!: (v: unknown) => void
+    service.start.mockImplementationOnce(() => new Promise((r) => { release = r }))
+    const first = useApp.getState().continueRun('s')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(await useApp.getState().continueRun('s')).toBe(false) // 额度按钮 / 右栏卡在往返途中又点一下
+    release({ runId: 'next', assistantMessageId: 'next-a', userMessageId: 'next-u' })
+    expect(await first).toBe(true)
+    expect(service.start).toHaveBeenCalledOnce()
+  })
+
   it('does nothing while a run is active', async () => {
     useApp.setState({ runningBySession: { s: 'r' } })
     expect(await useApp.getState().continueRun('s')).toBe(false)

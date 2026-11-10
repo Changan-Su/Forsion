@@ -558,6 +558,8 @@ const approvalWrites = new Map<string, { issued: number; pending: number; mode: 
 const movingSessions = new Set<string>()
 /** 正在重试的失败气泡 id:连点「重试」只发一次。 */
 const retrying = new Set<string>()
+/** continueRun 在途的会话(send 回来之前):同一轮失败只续一次。 */
+const continuing = new Set<string>()
 const sendingSessions = new Map<string, number>()
 /** 占住这条会话来挪;它正在发送,或已有一张作品卡在挪 → false(调用方什么都别做)。 */
 export const lockSessionMove = (sid: string): boolean => {
@@ -3113,10 +3115,12 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
 
   continueRun: async (targetSessionId, opts) => {
     const sid = targetSessionId === undefined ? get().activeId : targetSessionId
-    if (!sid || get().runningBySession[sid]) return false
+    // 起 run 往返途中 running 还没置上:失败行、右栏卡、额度按钮各点一下也只发一次(Codex 评审)
+    if (!sid || get().runningBySession[sid] || continuing.has(sid)) return false
+    continuing.add(sid)
     tanguCount('chatContinue')
     if (opts?.quotaFallback) quotaFallbackNext.set(sid, Date.now())
-    return get().send(TURN_RESUME_MARKER, [], undefined, undefined, undefined, sid)
+    try { return await get().send(TURN_RESUME_MARKER, [], undefined, undefined, undefined, sid) } finally { continuing.delete(sid) }
   },
 
   editUserMessage: (messageId, newText, targetSessionId) => {

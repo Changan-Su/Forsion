@@ -35,16 +35,20 @@ function cutStream(res, chars) {
   ].map((e) => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`).join('');
   const body = new ReadableStream({
     async pull(ctrl) {
-      const { done, value } = await reader.read();
-      if (done) { if (buf) ctrl.enqueue(enc.encode(buf)); ctrl.close(); return; }
-      buf += dec.decode(value, { stream: true });
-      let i;
-      while ((i = buf.indexOf('\n\n')) >= 0) {
-        const block = buf.slice(0, i + 2); buf = buf.slice(i + 2);
-        ctrl.enqueue(enc.encode(block));
-        const data = block.split('\n').find((l) => l.startsWith('data:'));
-        try { const e = JSON.parse(data.slice(5)); if (e.type === 'response.output_text.delta') seen += String(e.delta || '').length; } catch { /* 不是 JSON 的行原样过 */ }
-        if (seen >= chars) { ctrl.enqueue(enc.encode(failed)); ctrl.close(); reader.cancel().catch(() => {}); return; }
+      // 一块上游数据可能凑不出一个完整事件:读到至少转出一个事件(或流结束)才返回,否则下游那次 read 永远等不到(Codex 评审)
+      for (let sent = false; !sent;) {
+        const { done, value } = await reader.read();
+        if (done) { if (buf) ctrl.enqueue(enc.encode(buf)); ctrl.close(); return; }
+        buf += dec.decode(value, { stream: true });
+        let i;
+        while ((i = buf.indexOf('\n\n')) >= 0) {
+          const block = buf.slice(0, i + 2); buf = buf.slice(i + 2);
+          ctrl.enqueue(enc.encode(block));
+          sent = true;
+          const data = block.split('\n').find((l) => l.startsWith('data:'));
+          try { const e = JSON.parse(data.slice(5)); if (e.type === 'response.output_text.delta') seen += String(e.delta || '').length; } catch { /* 不是 JSON 的行原样过 */ }
+          if (seen >= chars) { ctrl.enqueue(enc.encode(failed)); ctrl.close(); reader.cancel().catch(() => {}); return; }
+        }
       }
     },
     cancel() { reader.cancel().catch(() => {}); },

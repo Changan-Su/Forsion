@@ -415,7 +415,7 @@ export function ChatView({ leaf, params }: ViewProps) {
   const sentHistory = useMemo(() => {
     const users = activeMessages.filter((m) => m.role === 'user' && !isContinuationRow(m.content) && !m.content.startsWith(APPROVAL_UPDATE_OPEN) && !m.content.startsWith(INQUIRY_UPDATE_OPEN) && !m.content.startsWith(CHILD_UPDATE_OPEN) && !m.content.startsWith(SESSION_MESSAGE_OPEN)).map((m) => m.content)
     const have = new Set(users)
-    return [...users, ...s.steerSent.filter((x) => !have.has(x))]
+    return [...users, ...s.steerSent.filter((x) => !have.has(x) && !isContinuationRow(x))]
   }, [activeMessages, s.steerSent])
 
   const chatAgentSlug = mvCfg.agentSlug || s.defaultAgentSlug

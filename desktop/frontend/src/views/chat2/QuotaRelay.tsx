@@ -103,7 +103,9 @@ export function QuotaChips({ error, messageId, sessionId, modelId }: { error?: s
   const retry = (quotaFallback?: boolean) => {
     const st = useApp.getState()
     const opts = quotaFallback ? { quotaFallback } : undefined
-    if (turnHasOutput(st.messagesBySession[sid])) void st.continueRun(sid, opts)
+    const list = st.messagesBySession[sid]
+    // 只有失败的正是最新这一轮才续写:老气泡上留着的额度按钮不许去续后来那一轮(Codex 评审)
+    if (list?.at(-1)?.id === messageId && turnHasOutput(list)) void st.continueRun(sid, opts)
     else st.regenerate(messageId, sid, opts)
   }
   if (ask) return (

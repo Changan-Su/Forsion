@@ -3464,14 +3464,16 @@ try {
       const a = await run(sid, ask(tag));
       const fired = faultLog().filter((l) => l.fired === 'cut_after').length;
       const rows = asList(await api(`/agent/sessions/${sid}/messages`).catch(() => []), 'messages');
-      const partialRow = [...rows].reverse().find((m) => m.role === 'assistant');
+      // 取最后一条有正文的回答:同一轮里还可能有空的助手占位行(第一次就挑中它,负对照删错了行)
+      const partialRow = [...rows].reverse().find((m) => (m.role === 'assistant' || m.role === 'model') && String(m.content || '').trim());
       const partial = String(partialRow?.content || '');
       if (dropPartial && partialRow) await api(`/agent/sessions/${sid}/messages/delete`, { method: 'POST', body: JSON.stringify({ ids: [partialRow.id] }) });
       const b = await run(sid, TURN_RESUME_MARKER);
       disarmFault();
       const before = nums(partial), after = nums(b.content);
       const restarted = after[0] === 1;
-      return { a, b, fired, partial, before, after, restarted, reached12: after.includes(12) };
+      const dump = rows.map((m) => ({ id: m.id, role: m.role, len: String(m.content || '').length, head: String(m.content || '').slice(0, 60) }));
+      return { a, b, fired, partial, before, after, restarted, reached12: after.includes(12), dump };
     };
     const ok1 = await leg(false);
     const nc = await leg(true);
@@ -3480,7 +3482,7 @@ try {
     const persisted = ok1.before.length >= 2; // 160 字左右至少写出两条:落库的半截里有编号
     const continued = !ok1.b.error && ok1.b.done && !ok1.restarted && ok1.reached12 && (ok1.after[0] ?? 0) >= lastBefore;
     const ncCaught = nc.restarted; // 没有半截时同一判据必须判「重来」,否则这条判据分不出续写
-    writeFileSync(join(OUT, 'continuegen-evidence.json'), JSON.stringify({ ok: { errA: ok1.a.error, fired: ok1.fired, partial: ok1.partial, before: ok1.before, after: ok1.after, content: ok1.b.content }, nc: { errA: nc.a.error, fired: nc.fired, after: nc.after, content: nc.b.content } }, null, 2));
+    writeFileSync(join(OUT, 'continuegen-evidence.json'), JSON.stringify({ ok: { errA: ok1.a.error, fired: ok1.fired, partial: ok1.partial, before: ok1.before, after: ok1.after, content: ok1.b.content, rows: ok1.dump }, nc: { errA: nc.a.error, fired: nc.fired, partial: nc.partial, after: nc.after, content: nc.b.content, rows: nc.dump } }, null, 2));
     const detail = `掐断 ${ok1.fired} 次、报错=${ok1.a.error ? ok1.a.error.slice(0, 60) : '无'};落库的半截编号 ${ok1.before.join(',') || '无'};续写编号 ${ok1.after.join(',') || '无'}(从 1 重来=${ok1.restarted},写到 12=${ok1.reached12});负对照(删掉半截)续写 ${nc.after.slice(0, 3).join(',')}… 判为重来=${ncCaught}`;
     return { ok: quotaErr && ok1.fired === 1 && persisted && continued && ncCaught, detail, output: `【失败前落库】\n${ok1.partial}\n【继续生成】\n${ok1.b.content}\n【负对照:删掉半截后】\n${nc.b.content}`, tokens: tokensOf(ok1.a) + tokensOf(ok1.b) + tokensOf(nc.a) + tokensOf(nc.b) };
   });
