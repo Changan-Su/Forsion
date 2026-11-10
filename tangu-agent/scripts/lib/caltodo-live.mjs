@@ -33,21 +33,20 @@
  *  GPT 6 Luna on 2026-11-09 the base passed leg 4 in 13 of 15 rounds (3 of the 15 with `--later-msg "帮我加个日程：今天晚一点…"`; it
  *  mostly writes today's date without a time, into the default calendar) and leg 5 in 3 of 9: leg 5 is the one that tells the two apart, leg 4 guards against the old behaviour coming back.
  *
- *  Local engine only, four more legs (11-09, the event mark). Every row of a calendar with a checkbox column counted as a to-do, so the
+ *  Local engine only, three more legs (11-09, the event mark). Every row of a calendar with a checkbox column counted as a to-do, so the
  *  meetings and classes a user put on the calendar filled their to-do list. An event now carries the reserved cell `_kind = "event"` on its
  *  row (written by amadeus_create_event `kind: "event"`); a row without it is a to-do as before. Not told apart by having a time.
  *   6. event  — 「帮我加个日程：明天下午三点开组会。」: one new row in the default calendar through a successful amadeus_create_event, and that
  *               row carries `_kind = "event"`. The start is reported (expected: tomorrow 15:00 on the engine's clock), not judged.
- *   7. remind — 「提醒我明天下午三点交报告。」: one new row through amadeus_create_event, and it carries no `_kind` (still a to-do).
- *               ⚠️ Red on 2026-11-10 with or without the mark in the engine: GPT 6 Luna took this wording to manage_automation (a timed
- *               reminder) in 24 of 24 rounds and wrote no calendar row at all, so the leg never got to look at the mark. Whether "remind me"
- *               should land in the to-do list is a separate question; the leg stays as specified and says in its detail where the run went.
+ *   (7. remind — 「提醒我明天下午三点交报告。」 was dropped on 2026-11-10: with or without the mark in the engine, GPT 6 Luna took this wording
+ *               to manage_automation (a timed reminder) in 24 of 24 rounds and wrote no calendar row, which is a fair reading of "remind me".
+ *               The leg never got to look at the mark; what it meant to pin — a to-do with a time carries no mark — is leg 8.)
  *   8. timed  — 「帮我加一条待办：明天下午三点交报告。」: one new row through amadeus_create_event, and it carries no `_kind`: a to-do stays a
  *               to-do, time and all. This is the leg that catches "it has a time, so it is an event".
  *   9. todos  — new session 「我现在还有哪些待办？」 with the meeting and the report in the calendar at the same hour: amadeus_list_events, the
  *               reply names 报告, and does not count 组会 as a to-do (not naming it is fine; naming it as a 日程 / "not a to-do" is fine).
  *               Judged on the reply alone, which is printed; whether the tool result marked the row is reported.
- *              `--caltodo-kind-only` runs these four alone.
+ *              `--caltodo-kind-only` runs these legs alone.
  *  Negative control for legs 6–9: the same legs on the engine without the mark (`--kind base`): leg 6 cannot pass there (nothing writes the
  *  cell), leg 8 passes trivially, leg 9 shows what the model does with a meeting that looks like any other unticked row.
  *  With GPT 6 Luna on 2026-11-10: leg 6 passed in 15 of 15 rounds with the mark and 0 of 9 without; leg 9 in 12 of 12 with it and 0 of 9
@@ -101,7 +100,6 @@ const SPACE_COMMAND = {
   state: 'active=chat; available=home,chat,amadeus,forsion-calendar,forsion-todo,muse',
 };
 const EVENT = '帮我加个日程：明天下午三点开组会。';
-const REMIND = '提醒我明天下午三点交报告。';
 const TIMED = '帮我加一条待办：明天下午三点交报告。';
 /** Words that set a mention of the meeting apart from the to-dos (on its own line, or on the line that heads its list). */
 const NOT_TODO = /日程|日历|不算|不是待办|非待办|不属于待办|不在待办|不计入|event/i;
@@ -329,7 +327,6 @@ export async function calTodoLive({ run, rounds = 1, home, workspace, vault, clo
         return row;
       };
       const meeting = await addOne('event', EVENT, /组会/, true, '「加个日程」带日程标记');
-      await addOne('remind', REMIND, /报告/, false, '「提醒我」仍是待办(不带标记)');
       const report = await addOne('timed', TIMED, /报告/, false, '带时刻的待办仍是待办(不带标记)');
 
       // 9. a new session lists the to-dos: the report is one, the meeting is not
