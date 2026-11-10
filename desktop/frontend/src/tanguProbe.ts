@@ -81,17 +81,21 @@ async function translateInline(req: TanguCompleteRequest, opts: TanguCompleteOpt
   }
 }
 
-/** 行内补全(ctx.tangu.fim)用哪个模型:点名的 → 「补全」模型槽(config.json models.fim,且还在**本机引擎**目录的 fimModels 里)
- *  → fimModels 第一个 → null(调用方 reject fim_unavailable)。目录按 home 验(与 translateModelChoice 同理:正文 AI 只打本机)。
- *  目录还没拉到就先拉一次 —— 冷启动时直接判「没有」会让插件整场会话落回 complete;拉不到(引擎没起来)才先信槽。 */
+const FIM_CATALOG_RETRY_MS = 15_000
+
+/** 行内补全用点名的模型、补全槽或目录首项。目录没有可用的模型时，缩短缓存时间以发现后台刚启用的 FIM。 */
 export async function fimModelChoice(modelId?: string): Promise<{ id: string; name: string } | null> {
-  const cached = catalogFor('home')?.models
-  const cat = cached ?? (await ensureCatalog('home').catch(() => null))?.models ?? null
+  let cat = catalogFor('home')?.models
+  const slot = modelId ? undefined : (await window.tangu?.getConfig?.().catch(() => null))?.fimModelId
+  if (!modelId || !cat) {
+    const cachedChoice = cat?.fimModels?.some((m) => !slot || m.id === slot)
+    const maxAgeMs = cachedChoice ? undefined : FIM_CATALOG_RETRY_MS
+    cat = (await ensureCatalog('home', { maxAgeMs }).catch(() => null))?.models ?? cat
+  }
   const nameOf = (id: string): string => cat?.fimModels?.find((m) => m.id === id)?.name || cat?.models.find((m) => m.id === id)?.name || id
   if (modelId) return { id: modelId, name: nameOf(modelId) }
-  const slot = (await window.tangu?.getConfig?.().catch(() => null))?.fimModelId
   // 云端目录这次没拉成(status error,fimModels 空)≠ 没有补全模型:先信槽;槽也没有就报可重试的错,
-  // 别抛 fim_unavailable —— 插件会据此整场会话落回 complete,网好了也不回来。
+  // 别抛 fim_unavailable —— 仍在运行的旧版插件会因此一直回退聊天模型。
   const cloudDown = cat?.forsion?.status === 'error'
   if (slot && (!cat || cloudDown || cat.fimModels?.some((m) => m.id === slot))) return { id: slot, name: nameOf(slot) }
   const first = cat?.fimModels?.[0]

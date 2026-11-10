@@ -84,10 +84,10 @@ const inflight = new Map<TargetKey, Promise<TargetCatalog | null>>()
  * 保证某目标的目录在缓存里且不旧于 5 分钟(R-18)。失败的单项保留旧值(模型没拉到不把 Agent 清空);
  * 整体拉不到(目标解析不出来)→ null。
  */
-export function ensureCatalog(key: TargetKey, opts: { force?: boolean } = {}): Promise<TargetCatalog | null> {
+export function ensureCatalog(key: TargetKey, opts: { force?: boolean; maxAgeMs?: number } = {}): Promise<TargetCatalog | null> {
   if (!isTargetKey(key)) return Promise.resolve(null)
   const cached = catalogFor(key)
-  if (!opts.force && cached && cached.at > 0 && Date.now() - cached.at < CATALOG_TTL_MS) return Promise.resolve(cached)
+  if (!opts.force && cached && cached.at > 0 && Date.now() - cached.at < (opts.maxAgeMs ?? CATALOG_TTL_MS)) return Promise.resolve(cached)
   const running = inflight.get(key)
   if (running) return running
   const t = targetForRef(refOfKey(key))

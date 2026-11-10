@@ -257,13 +257,22 @@ describe('「补全」模型槽(ctx.tangu.fim 的模型)', () => {
     withSlot('')
     const ensure = vi.spyOn(catalogService, 'ensureCatalog').mockResolvedValueOnce({ models: FIMS, agents: [], defaultAgentSlug: '', skills: [], at: Date.now() } as never)
     expect(await fimModelChoice()).toEqual({ id: 'ds', name: 'DeepSeek FIM' })
-    expect(ensure).toHaveBeenCalledWith('home')
+    expect(ensure).toHaveBeenCalledWith('home', { maxAgeMs: 15_000 })
     ensure.mockResolvedValueOnce(null)
     withSlot('cs')
     expect(await fimModelChoice()).toEqual({ id: 'cs', name: 'cs' })
     ensure.mockResolvedValueOnce(null)
     withSlot('')
     expect(await fimModelChoice()).toBeNull()
+  })
+
+  it('缓存为空时用短缓存重查，发现新开的补全模型', async () => {
+    home({ models: FIMS.models, fimModels: [] })
+    withSlot('')
+    expect(await fimModelChoice()).toBeNull()
+    const ensure = vi.spyOn(catalogService, 'ensureCatalog').mockResolvedValueOnce({ models: FIMS } as never)
+    expect(await fimModelChoice()).toEqual({ id: 'ds', name: 'DeepSeek FIM' })
+    expect(ensure).toHaveBeenCalledWith('home', { maxAgeMs: 15_000 })
   })
 
   it('探针 fim:没有模型 → fim_unavailable(不发请求);有 → 带上模型回执', async () => {
