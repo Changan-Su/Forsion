@@ -84,6 +84,9 @@ describe('互转', () => {
     expect(diffVaultCfg(a, b, false)).toEqual([{ t: 'set', k: 'sync|color|y.db', v: '#2' }, { t: 'del', k: 'sync|hidden|x.db' }])
     expect(diffVaultCfg(a, b, true)).toEqual([{ t: 'setIfAbsent', k: 'sync|color|y.db', v: '#2' }])
     expect(diffVaultCfg(vc(), vc({ colors: { 'ics://1': '#1' } }), false)).toEqual([])
+    // 缺省表换成另一侧库的表(不可移植):不删共享里别的设备在用的缺省表
+    expect(diffVaultCfg(vc({ defaultDbPath: 'a.db' }), vc({ defaultDbPath: 'otherside:/X/b.db' }), false)).toEqual([])
+    expect(diffVaultCfg(vc({ defaultDbPath: 'a.db' }), vc({ defaultDbPath: null }), false)).toEqual([{ t: 'del', k: 'sync|default|' }])
   })
   it('投到内存:可移植的取共享,本机独有的(otherside / ics)叠回,带账号标记', () => {
     const shared = vc({ colors: { 'a.db': '#aaaaaa' }, hidden: ['a.db'], members: { 'a.db': { dateCol: 'd' } } })

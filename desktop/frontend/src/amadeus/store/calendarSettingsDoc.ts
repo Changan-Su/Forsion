@@ -159,7 +159,9 @@ export function diffVaultCfg(prev: VaultCfg | undefined, next: VaultCfg, auto: b
   const b = vaultCfgEntries(next)
   const ops: SettingOp[] = []
   for (const [k, v] of b) if (a.get(k) !== v) ops.push(auto ? { t: 'setIfAbsent', k, v } : { t: 'set', k, v })
-  if (!auto) for (const k of a.keys()) if (!b.has(k)) ops.push({ t: 'del', k })
+  // 缺省表换成了不可移植的(另一侧库的表):那是这台的事,不删共享里别的设备在用的缺省表
+  const localOnlyDefault = !!next.defaultDbPath && !isPortableSource(next.defaultDbPath)
+  if (!auto) for (const k of a.keys()) if (!b.has(k) && !(localOnlyDefault && k === settingKey('default'))) ops.push({ t: 'del', k })
   return ops
 }
 

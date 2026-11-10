@@ -8,6 +8,7 @@ import { diffVaultCfg, type CalMember, type VaultCfg } from './calendarSettingsD
 import { createCalendarSettingsSync, type CalendarSettingsSync } from './calendarSettingsSync'
 import { engineSettingsTransport } from './calendarSettingsIo'
 import { resolveCalendarSettingsKey } from './calendarSettingsKey'
+import { accountStorageId } from '../../services/engine/targets'
 
 export type { CalMember, VaultCfg } from './calendarSettingsDoc'
 
@@ -82,9 +83,14 @@ const stash = (raw: string | null): boolean => {
 }
 /** 启动时没读出来、原文也没能另存:这一程不落盘 —— 拿「读失败当成的空」写回去,就把用户原来的设置盖掉了。 */
 let writeBlocked = false
+/** 启动时本机这份没读出来(内存是空的 = 不知道,不是真的空):随账号走的库据此不做第一次合并。别的窗口写来读得出的那份后复位。 */
+let loadFailed = false
+/** 启动时本机有设置的库(随账号走的库据此判断「这台设备上这个库是不是新的」)。 */
+const rootsAtStart = new Set<string>()
 const loadAll = (): Cfg => {
   const r = readAll()
-  if (r.ok) return r.all
+  if (r.ok) { for (const k of Object.keys(r.all)) rootsAtStart.add(k); return r.all }
+  loadFailed = true
   writeBlocked = !stash(r.raw)
   console.warn('[amadeus] 日历设置读不出来,按「不知道」处理', writeBlocked ? '(本次运行不落盘)' : '(原文已另存)')
   return {}
@@ -162,19 +168,19 @@ export function planAutoColors(
 
 /** 对随账号走的库(或还不知道是不是)把这次改动记成单项改动,交给 calendarSettingsSync 排队落共享文件;留本机的库在那边直接返回。
  *  在 set 之后调(不在 set 的回调里):那边可能要读 store。auto = 不是用户手势(迁移 / 定色 / ensureMember):只补不覆盖。 */
-const noteChange = (vault: string, prev: VaultCfg | undefined, auto: boolean): void => {
+const noteChange = (vault: string, prev: VaultCfg | undefined, auto: boolean, inferred = false): void => {
   const next = useCalendarConfig.getState().byVault[vault]
   if (!vault || !next || next === prev) return
   const ops = diffVaultCfg(prev, next, auto)
-  if (ops.length) calendarSettingsSync.record(vault, ops)
+  if (ops.length) calendarSettingsSync.record(vault, ops, { inferred })
 }
 
 export const useCalendarConfig = create<CalCfgState>((set, get) => {
   /** 包一层:动作本身照旧同步算整份 next、写镜像;算完再把前后差交给共享那半。 */
-  const tracked = (vault: string, auto: boolean, fn: (s: CalCfgState) => Partial<CalCfgState> | CalCfgState): void => {
+  const tracked = (vault: string, auto: boolean, fn: (s: CalCfgState) => Partial<CalCfgState> | CalCfgState, inferred = false): void => {
     const prev = get().byVault[vault]
     set(fn)
-    noteChange(vault, prev, auto)
+    noteChange(vault, prev, auto, inferred)
   }
   return {
   byVault: loadAll(),
@@ -259,7 +265,7 @@ export const useCalendarConfig = create<CalCfgState>((set, get) => {
       const next = { ...s.byVault, [vault]: { ...cur, members, migrated: true } }
       persist(next)
       return { byVault: next }
-    }),
+    }, true),
   migratePath: (vault, oldPath, newPath) =>
     tracked(vault, false, (s) => {
       const cur = s.byVault[vault]
@@ -302,6 +308,9 @@ export const calendarSettingsSync: CalendarSettingsSync = createCalendarSettings
   io: engineSettingsTransport,
   storage: typeof localStorage === 'undefined' ? null : localStorage,
   resolveKey: (root) => resolveCalendarSettingsKey(root),
+  account: () => accountStorageId(),
+  localTrusted: () => !loadFailed,
+  hadLocalAtStart: (root) => rootsAtStart.has(root),
   getVc: (root) => useCalendarConfig.getState().byVault[root],
   applyVc: (root, v) => {
     const next = { ...useCalendarConfig.getState().byVault, [root]: v }
@@ -341,6 +350,7 @@ export function onCalendarCfgStorage(key: string | null): void {
     incoming[vault] = s
   }
   writeBlocked = false // 内存现在包含盘上读得出来的那份,照常落盘不会盖掉什么
+  if (loadFailed) { loadFailed = false; for (const k of Object.keys(incoming)) rootsAtStart.add(k) }
   const shared = Object.keys(incoming).filter((vault) => calendarSettingsSync.isShared(vault))
   useCalendarConfig.setState((st) => {
     const next = { ...st.byVault, ...incoming }

@@ -34,6 +34,13 @@ export interface SettingsSyncDeps {
   getVc(root: string): VaultCfg | undefined
   /** 把内存换成这一份并照写镜像(不再记改动)。 */
   applyVc(root: string, vc: VaultCfg): void
+  /** 此刻登录的账号(同步拿):缓存的库键是上一个账号的时候,改动不进那个账号的队列。缺省不核。 */
+  account?(): string | null
+  /** 本机镜像这一程读得出来吗:读不出来(启动时内存是空的)= 不知道本机有什么,不做第一次合并、不记合过了。缺省可信。 */
+  localTrusted?(): boolean
+  /** 这个库在本次启动时本机有没有设置:没有 = 这台设备上这个库是新的,第一次合并不贡献
+   *  (之后日历一打开就会按本机的表跑一遍迁移,那是「有日期列即入历」的推断,不是用户的选择,不拿去并进共享成员)。缺省 = 看此刻内存。 */
+  hadLocalAtStart?(root: string): boolean
   /** 改动之后多久踢一次落盘;单测传一个不排队的,自己调 tick。 */
   schedule?(fn: () => void, ms: number): unknown
 }
@@ -43,7 +50,8 @@ export const MERGED_KEY = 'amadeus.calendar.cfg.merged'
 /** 409 重放上限:每次都重读最新再重放,还撞说明有人在狂写,留在队列里等下一次。 */
 export const MAX_CAS_RETRY = 3
 
-type PendingOp = SettingOp & { id: string }
+/** inferred = 迁移推断出来的(「有日期列即入历」),不是用户的选择:新设备第一次合并时丢掉。 */
+type PendingOp = SettingOp & { id: string; inferred?: boolean }
 interface Persisted { acct: Record<string, PendingOp[]> }
 interface Live {
   acct: string
@@ -57,6 +65,7 @@ interface Live {
 const isObj = (x: unknown): x is Record<string, unknown> => !!x && typeof x === 'object' && !Array.isArray(x)
 const isOp = (x: unknown): x is PendingOp =>
   isObj(x) && typeof x.id === 'string' && typeof x.k === 'string' &&
+  (x.inferred === undefined || typeof x.inferred === 'boolean') &&
   (x.t === 'del' || ((x.t === 'set' || x.t === 'setIfAbsent') && typeof x.v === 'string'))
 
 /** 本机这份要不要等:还没迁移 / 还没播种的先在本机跑完(否则没迁移的设备会丢隐式成员,没播种的会跳过播种)。 */
@@ -112,16 +121,17 @@ export function createCalendarSettingsSync(deps: SettingsSyncDeps) {
   }
 
   /** store 的写动作调:前后两份 → 单项改动进队列。留本机的库什么都不做。 */
-  function record(root: string, ops: SettingOp[]): void {
+  function record(root: string, ops: SettingOp[], opts: { inferred?: boolean } = {}): void {
     if (!root || !ops.length) return
     const key = keys.get(root)
     if (key?.kind === 'local') return
-    const withIds = ops.map((op) => ({ ...op, id: nextId() }))
-    if (key?.kind === 'sync') {
+    const withIds: PendingOp[] = ops.map((op) => ({ ...op, id: nextId(), ...(opts.inferred ? { inferred: true } : {}) }))
+    const acctNow = deps.account ? deps.account() : key?.kind === 'sync' ? key.acct : null
+    if (key?.kind === 'sync' && acctNow === key.acct) {
       const p = readPersisted()
       writePersisted({ ...p, acct: { ...p.acct, [key.acct]: [...(p.acct[key.acct] ?? []), ...withIds] } }) // 内存已经由动作本身改好了
     } else {
-      // 库键还没算出来:先按库记在内存里,算出是 sync 再归到账号的队列,算出是留本机就丢(改动已经在镜像里)。
+      // 库键还没算出来(或缓存的库键是上一个账号的):先按库记在内存里,算出是 sync 再归到账号的队列,算出是留本机就丢(改动已经在镜像里)。
       // 不落 localStorage:留本机的库不该因为这一步多写任何东西。代价:算出来之前(通常不到一秒)就退出,这几条只在镜像里。
       limbo.set(root, [...(limbo.get(root) ?? []), ...withIds])
     }
@@ -137,6 +147,13 @@ export function createCalendarSettingsSync(deps: SettingsSyncDeps) {
     if (rest.length) accts[acct] = rest
     else delete accts[acct]
     writePersisted({ ...p, acct: accts })
+  }
+
+  function dropInferred(acct: string): void {
+    const p = readPersisted()
+    const list = p.acct[acct]
+    if (!list?.some((op) => op.inferred)) return
+    writePersisted({ ...p, acct: { ...p.acct, [acct]: list.filter((op) => !op.inferred) } })
   }
 
   function adoptRootOps(root: string, key: SettingsKey): void {
@@ -190,9 +207,24 @@ export function createCalendarSettingsSync(deps: SettingsSyncDeps) {
     const r = await deps.io.read()
     l.read = r.status
     if (r.status !== 'ok' && r.status !== 'missing') return // corrupt / unknown:不写、不记合过了;内存照旧
+    const trusted = deps.localTrusted ? deps.localTrusted() : true
+    const local = deps.getVc(root)
+    const mine = local && (!local.owner || local.owner === acct) ? local : undefined // 别的账号的那份不带进来
     if (!mergedFor(acct)) {
-      const local = deps.getVc(root)
-      const mine = local && (!local.owner || local.owner === acct) ? local : undefined // 别的账号的那份不带进来
+      if (!trusted) return // 本机镜像读不出来:不知道本机有什么,不合、不记
+      const fresh = deps.hadLocalAtStart ? !deps.hadLocalAtStart(root) : !local
+      if (fresh) {
+        // 这台设备上这个库是新的:不贡献,也不等迁移 / 播种;迁移推断出来的那几条(日历比共享那份先打开时会有)也丢掉 ——
+        // 不管谁先到,结果一样。用户在这期间的手势、插件 ensureMember、定色照常带上。
+        dropInferred(acct)
+        const doc = await commit(acct, r, [])
+        if (!doc) return
+        markMerged(acct)
+        l.doc = doc
+        l.shared = true
+        reproject(root)
+        return
+      }
       if (mine && !localReady(mine)) return // 先在本机把迁移 / 播种跑完(迁移、定色动作会再踢一次)
       const doc = await commit(acct, r, mine ? mergeContribution(mine) : [])
       if (!doc) return
@@ -202,8 +234,19 @@ export function createCalendarSettingsSync(deps: SettingsSyncDeps) {
       reproject(root)
       return
     }
+    if (r.status === 'missing') {
+      // 合过之后共享那份不见了(文件被删 / 被隔离 / 引擎换了家目录):**不拿空的去盖内存**。用本账号这份镜像按「只补」重建;
+      // 镜像不可信(读不出来 / 属于别的账号)就什么都不动,等下一次。
+      if (!trusted || !mine) return
+      const doc = await commit(acct, r, mergeContribution(mine))
+      if (!doc) return
+      l.doc = doc
+      l.shared = true
+      reproject(root)
+      return
+    }
     const doc = await commit(acct, r, [])
-    l.doc = doc ?? (r.status === 'ok' ? r.data : emptySettingsDoc())
+    l.doc = doc ?? r.data
     l.shared = true
     reproject(root)
   }

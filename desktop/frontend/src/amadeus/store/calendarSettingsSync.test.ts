@@ -47,7 +47,7 @@ function memStorage(): SettingsStorage & { data: Map<string, string> } {
   return { data, getItem: (k) => data.get(k) ?? null, setItem: (k, v) => { data.set(k, v) } }
 }
 
-function device(server: ReturnType<typeof fakeServer>, opts: { acct?: string; key?: () => SettingsKey; local?: VaultCfg } = {}) {
+function device(server: ReturnType<typeof fakeServer>, opts: { acct?: string; key?: () => SettingsKey; local?: VaultCfg; trusted?: () => boolean; loginAcct?: () => string | null } = {}) {
   const mem = new Map<string, VaultCfg>()
   if (opts.local) mem.set(R, clone(opts.local))
   const storage = memStorage()
@@ -58,18 +58,28 @@ function device(server: ReturnType<typeof fakeServer>, opts: { acct?: string; ke
     resolveKey: async () => (opts.key ? opts.key() : { kind: 'sync', acct }),
     getVc: (r) => mem.get(r),
     applyVc: (r, v) => { mem.set(r, v) },
+    hadLocalAtStart: () => !!opts.local,
+    ...(opts.trusted ? { localTrusted: opts.trusted } : {}),
+    ...(opts.loginAcct ? { account: opts.loginAcct } : {}),
     schedule: () => {},
   })
-  const act = (fn: (v: VaultCfg) => VaultCfg, auto = false): void => {
+  const act = (fn: (v: VaultCfg) => VaultCfg, auto = false, inferred = false): void => {
     const prev = mem.get(R)
     const next = fn(clone(prev ?? vc()))
     mem.set(R, next)
-    sync.record(R, diffVaultCfg(prev, next, auto))
+    sync.record(R, diffVaultCfg(prev, next, auto), { inferred })
   }
+  /** 照 store 的 migrate:有日期列的表推断为成员 */
+  const migrate = (paths: string[]): void => act((v) => {
+    if (v.migrated) return v
+    const members = { ...v.members }
+    for (const p of paths) members[p] ??= { dateCol: 'd' }
+    return { ...v, members, migrated: true }
+  }, true, true)
   /** 照 store 的 ensureColors:planAutoColors 定色,setIfAbsent 进队列 */
   const seedColors = (paths: string[]): void => act((v) => ({ ...v, autoColors: planAutoColors(v, paths, true) ?? v.autoColors ?? {} }), true)
   return {
-    mem, storage, sync, act, seedColors,
+    mem, storage, sync, act, seedColors, migrate,
     vc: () => mem.get(R),
     tick: () => sync.tick(R),
     switchAccount: (a: string) => { acct = a },
@@ -370,5 +380,55 @@ describe('之后:共享那份是真源', () => {
     const staleMirror = ready({ colors: { 'a.db': '#old000', 'ics://9': '#icsics' } })
     d.sync.onMirrorChanged(R, staleMirror)
     expect(d.vc()?.colors).toEqual({ 'a.db': '#new000', 'ics://9': '#icsics' })
+  })
+})
+
+describe('读失败 ≠ 空(评审补)', () => {
+  it('合过之后共享那份不见了(missing):不拿空的盖内存,用本账号的镜像按只补重建', async () => {
+    const srv = fakeServer()
+    const d = device(srv, { local: ready({ hidden: ['a.db'], colors: { 'a.db': '#0a0a0a' } }) })
+    await d.tick()
+    srv.doc = null // 引擎换了家目录 / 文件被隔离
+    await d.tick()
+    expect(d.vc()?.hidden).toEqual(['a.db'])
+    expect(d.vc()?.colors).toEqual({ 'a.db': '#0a0a0a' })
+    expect(srv.shared().hidden).toEqual(['a.db'])
+  })
+  it('本机镜像启动时读不出来:不做第一次合并、不记合过了', async () => {
+    const srv = fakeServer()
+    let trusted = false
+    const d = device(srv, { local: ready({ hidden: ['a.db'] }), trusted: () => trusted })
+    await d.tick()
+    expect(srv.puts).toEqual([])
+    expect(d.merged()).toEqual({})
+    trusted = true
+    await d.tick()
+    expect(d.merged()).toEqual({ A: true })
+  })
+  it('缓存的库键还是上一个账号:改动不进上一个账号的队列,算出新账号后归到新账号', async () => {
+    const srvA = fakeServer()
+    let login: string | null = 'A'
+    let key: SettingsKey = { kind: 'sync', acct: 'A' }
+    const d = device(srvA, { local: ready(), key: () => key, loginAcct: () => login })
+    await d.tick()
+    login = 'B' // 换号了,但这个库的键还没重算
+    d.act((v) => ({ ...v, hidden: ['b-only.db'] }))
+    expect(d.pending().A).toBeUndefined()
+    key = { kind: 'sync', acct: 'B' }
+    await d.tick()
+    expect(d.pending().A).toBeUndefined()
+    expect(srvA.shared().hidden).toEqual(['b-only.db']) // 假 server 只有一份;要点是它进的是 B 的队列(A 的队列始终是空的)
+  })
+  it('新设备:不管日历先打开(迁移先跑)还是共享先读到,迁移推断的成员都不并进共享', async () => {
+    for (const order of ['migrate-first', 'shared-first'] as const) {
+      const srv = fakeServer()
+      await device(srv, { local: ready({ members: { 'kept.db': { dateCol: 'd' } } }) }).tick() // 第一台(删过 implicit.db)
+      const d = device(srv) // 本机没有这个库的设置
+      if (order === 'migrate-first') d.migrate(['implicit.db'])
+      await d.tick()
+      if (order === 'shared-first') { d.migrate(['implicit.db']); await d.tick() }
+      expect(Object.keys(srv.shared().members)).toEqual(['kept.db'])
+      expect(Object.keys(d.vc()?.members ?? {})).toEqual(['kept.db'])
+    }
   })
 })
