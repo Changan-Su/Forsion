@@ -412,6 +412,7 @@ OPT_IN.add('humanreal'); // 协作说明写成什么样:每轮 6 个 run + 1 次
 OPT_IN.add('secretenv'); KEYS.push('secretenv'); // --only secretenv:一个 run;插件经 secret_env 交给 run_bash 的值,脚本拿得到、模型看不到(动 sandbox/runSecretEnv.ts 时跑)
 OPT_IN.add('mask'); KEYS.push('mask'); // 两个 run + 本地回显服务;只在动 llm/outboundMask.ts(发给模型前脱敏)时才有信息量。
 OPT_IN.add('filechange'); KEYS.push('filechange'); // 四个 run;只在动 tools/readState.ts 的变动感知 / tools/fileChangeNotice.ts / agentLoop 的两处注入时才有信息量。负对照:TANGU_FILE_CHANGE_NOTICE=off
+OPT_IN.add('continuegen'); KEYS.push('continuegen'); // 注入:真 Codex 回答写到一半在流里报额度用完(lib/llm-fault-preload.mjs cut_after),再发 <turn_resume> 接着写;动失败落库 / 「继续生成」时跑。自带负对照腿
 OPT_IN.add('streamoverflow'); KEYS.push('streamoverflow'); // 注入:真 Codex 路径上流里回 context_length_exceeded(lib/llm-fault-preload.mjs);只在动流内报错归类 / agentLoop 的超长压缩重试时跑
 OPT_IN.add('foreignreasoning'); KEYS.push('foreignreasoning'); // 注入:回灌的加密推理被拒(400 invalid_encrypted_content);只在动 historyReplay 的推理绑定 / agentLoop 的拿掉重发时跑
 OPT_IN.add('relay'); KEYS.push('relay'); // 假提供方只回 429 usage_limit_reached;只在动 llm/quotaRelay.ts / agentLoop 的接力分支时跑。--relay-mode auto|ask|none
@@ -996,7 +997,7 @@ if (argv.includes('--selftest')) {
 
 const OUT = resolve(opt('out', process.env.TANGU_LIVE_OUT || join(tmpdir(), `tangu-live-${stamp}-${randomUUID().slice(0, 6)}`)));
 // streamoverflow / foreignreasoning:引擎以 --import 载入 lib/llm-fault-preload.mjs,场景往规则文件里写一条,真 Codex 路径上命中的请求换成厂商原文报错
-const FAULT_FILE = ONLY.has('streamoverflow') || ONLY.has('foreignreasoning') ? join(OUT, 'llm-fault.json') : null;
+const FAULT_FILE = ONLY.has('streamoverflow') || ONLY.has('foreignreasoning') || ONLY.has('continuegen') ? join(OUT, 'llm-fault.json') : null;
 // 每次布置规则先清掉上一次的记录:同一次台架里 streamoverflow 与 foreignreasoning 共用这份 .log,不清的话后跑的那个会把前一个的「被拒 / 放行」也算进来
 const armFault = (rule) => { rmSync(`${FAULT_FILE}.log`, { force: true }); writeFileSync(FAULT_FILE, JSON.stringify(rule)); };
 const disarmFault = () => rmSync(FAULT_FILE, { force: true });
@@ -3458,6 +3459,43 @@ try {
       && compacting.some((x) => x.reason === 'overflow') && compacted.length >= 1 && retries.length === 0;
     const detail = `被拒 ${fired.length} 次(${fired[0]?.bytes ?? '-'}B)、放行 ${passed.length} 次(${passed[0]?.bytes ?? '-'}B);压缩 ${compacting.map((x) => x.reason).join(',') || '无'} → ${compacted.length ? (compacted[0].fallback ? '机械折叠' : `摘要 ${compacted[0].summarized ?? '?'} 条`) : '无'};llm_retry ${retries.length} 次;${b.error ? `报错:${b.error.slice(0, 140)}` : `答${b.content.includes(tok) ? '对' : '错'}`}`;
     return { ok, detail, output: b.content, tokens: tokensOf(a) + tokensOf(b), toolCalls: b.toolCalls };
+  });
+
+  // continuegen(11-10 用户反馈:报错 / 额度用完只有「重试」,前面生成的白费):真 Codex 写编号列表写到一半,流里被掐成额度用完。
+  //   ① 失败那一轮已流出的正文落了库(引擎 catch 把在飞那截并进终稿);② 发 <turn_resume>(界面「继续生成」发的就是它),
+  //   模型从断处接着写到 12,不从 1 重来。负对照腿(同一 run 内):把半截回答删掉再发同一个标记 → 模型只能从 1 写起,判据必须判它「重来」。
+  await scenario('continuegen', 'continuegen 额度用完后「继续生成」接着写', async () => {
+    const { TURN_RESUME_MARKER } = await import('../dist/contracts/turnResume.js');
+    const ask = (tag) => `${tag} 请写一个 1 到 12 的编号列表,每条一句话介绍一种常见的鸟,格式「N. 鸟名:一句介绍」,每条单独一行。直接写,不要调用任何工具,不要开场白。`;
+    const nums = (text) => [...String(text || '').matchAll(/^\s*(\d{1,2})[.、]/gm)].map((m) => Number(m[1]));
+    const leg = async (dropPartial) => {
+      const sid = `live-contgen-${dropPartial ? 'nc' : 'ok'}-${Date.now()}`;
+      const tag = `CG-${randomUUID().slice(0, 6)}`;
+      armFault({ mode: 'cut_after', match: tag, chars: 160 });
+      const a = await run(sid, ask(tag));
+      const fired = faultLog().filter((l) => l.fired === 'cut_after').length;
+      const rows = asList(await api(`/agent/sessions/${sid}/messages`).catch(() => []), 'messages');
+      // 取最后一条有正文的回答:同一轮里还可能有空的助手占位行(第一次就挑中它,负对照删错了行)
+      const partialRow = [...rows].reverse().find((m) => (m.role === 'assistant' || m.role === 'model') && String(m.content || '').trim());
+      const partial = String(partialRow?.content || '');
+      if (dropPartial && partialRow) await api(`/agent/sessions/${sid}/messages/delete`, { method: 'POST', body: JSON.stringify({ ids: [partialRow.id] }) });
+      const b = await run(sid, TURN_RESUME_MARKER);
+      disarmFault();
+      const before = nums(partial), after = nums(b.content);
+      const restarted = after[0] === 1;
+      const dump = rows.map((m) => ({ id: m.id, role: m.role, len: String(m.content || '').length, head: String(m.content || '').slice(0, 60) }));
+      return { a, b, fired, partial, before, after, restarted, reached12: after.includes(12), dump };
+    };
+    const ok1 = await leg(false);
+    const nc = await leg(true);
+    const lastBefore = ok1.before.at(-1) ?? 0;
+    const quotaErr = !!ok1.a.error && /quota/i.test(ok1.a.error);
+    const persisted = ok1.before.length >= 2; // 160 字左右至少写出两条:落库的半截里有编号
+    const continued = !ok1.b.error && ok1.b.done && !ok1.restarted && ok1.reached12 && (ok1.after[0] ?? 0) >= lastBefore;
+    const ncCaught = nc.restarted; // 没有半截时同一判据必须判「重来」,否则这条判据分不出续写
+    writeFileSync(join(OUT, 'continuegen-evidence.json'), JSON.stringify({ ok: { errA: ok1.a.error, fired: ok1.fired, partial: ok1.partial, before: ok1.before, after: ok1.after, content: ok1.b.content, rows: ok1.dump }, nc: { errA: nc.a.error, fired: nc.fired, partial: nc.partial, after: nc.after, content: nc.b.content, rows: nc.dump } }, null, 2));
+    const detail = `掐断 ${ok1.fired} 次、报错=${ok1.a.error ? ok1.a.error.slice(0, 60) : '无'};落库的半截编号 ${ok1.before.join(',') || '无'};续写编号 ${ok1.after.join(',') || '无'}(从 1 重来=${ok1.restarted},写到 12=${ok1.reached12});负对照(删掉半截)续写 ${nc.after.slice(0, 3).join(',')}… 判为重来=${ncCaught}`;
+    return { ok: quotaErr && ok1.fired === 1 && persisted && continued && ncCaught, detail, output: `【失败前落库】\n${ok1.partial}\n【继续生成】\n${ok1.b.content}\n【负对照:删掉半截后】\n${nc.b.content}`, tokens: tokensOf(ok1.a) + tokensOf(ok1.b) + tokensOf(nc.a) + tokensOf(nc.b) };
   });
 
   await scenario('taskoutcomes', 'taskoutcomes actual artifacts, rejected approvals and repeat delivery', () =>
