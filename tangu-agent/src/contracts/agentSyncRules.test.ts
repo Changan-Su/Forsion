@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { diff3Merge } from 'node-diff3';
-import { agentContentSyncable, conflictCopyName, isConflictCopyPath, mergeAgentSyncContent, mergeTombstoneLists, parseTombstones, sameFactoryConfig, serializeTombstones, type WireTombstone } from './agentSyncRules.js';
+import { agentContentSyncable, conflictCopyName, isConflictCopyPath, isSettingsPath, mergeAgentSyncContent, mergeSettingsDb, mergeTombstoneLists, neverConflictCopy, parseTombstones, sameFactoryConfig, serializeTombstones, type WireTombstone } from './agentSyncRules.js';
 
 const deps = { diff3: diff3Merge };
 const merge = (path: string, ours: string, base: string | null, theirs: string) => mergeAgentSyncContent(path, ours, base, theirs, deps);
@@ -33,6 +33,22 @@ describe('which agent files sync', () => {
     expect(agentContentSyncable('human/MEMORY (conflict 2026-10-21 0104).md')).toBe(false);
     expect(agentContentSyncable('Amadeus/x.md')).toBe(null);
   });
+  // ⚠️ 和 Forsion Extend test/vitest/agentContent.test.ts 同一组用例:两边的表必须逐条一致
+  it('settings files that follow the account: only human/Settings/<name>.db, and the one folder that holds them', () => {
+    const cases: Array<[string, 'file' | 'folder', boolean | null]> = [
+      ['human/Settings/calendar.db', 'file', true], ['human/Settings/appearance-2.db', 'file', true], ['human/Settings', 'folder', true],
+      ['human/Settings/Calendar.db', 'file', false], ['human/Settings/calendar.json', 'file', false], ['human/Settings/a_b.db', 'file', false],
+      ['human/Settings/-x.db', 'file', false], ['human/Settings/.hidden.db', 'file', false], [`human/Settings/${'a'.repeat(65)}.db`, 'file', false],
+      ['human/Settings/sub/calendar.db', 'file', false], ['human/Settings/sub', 'folder', false], ['human/Settings/calendar.db', 'folder', false],
+      ['human/Settings/calendar (conflict 2026-11-10 0900).db', 'file', false], ['human/settings/calendar.db', 'file', false],
+      ['agents/xyra/Settings/calendar.db', 'file', false], ['agents/xyra/Settings', 'folder', false], ['Settings/calendar.db', 'file', null],
+    ];
+    for (const [p, k, want] of cases) expect([p, k, agentContentSyncable(p, k)]).toEqual([p, k, want]);
+    expect(isSettingsPath('Settings/calendar.db')).toBe(true);
+    expect(isSettingsPath('human/Settings/calendar.db')).toBe(false); // 相对 human/ 的路径
+    expect(neverConflictCopy('human/Settings/calendar.db')).toBe(true);
+    for (const p of ['human/CALENDAR.db', 'human/WidgetData/w_1/data.db', 'agents/xyra/Settings/calendar.db', 'human/Settings/notes.json', 'Amadeus/Settings/calendar.db']) expect([p, neverConflictCopy(p)]).toEqual([p, false]);
+  });
   it('makes one copy name and recognizes both old ones', () => {
     const at = new Date(2026, 10, 4, 1, 50);
     expect(conflictCopyName('Library/a.md', at)).toBe('Library/a (conflict 2026-11-04 0150).md');
@@ -62,6 +78,65 @@ describe('both syncs merge agent files the same way', () => {
     expect(merge('human/MEMORY.md', '- 住在伦敦\n', null, '- 养了一只猫\n')!.content).toContain('住在伦敦');
     expect(merge('agents/christen/SOUL.md', 'a\n', null, 'b\n')).toBe(null);
     expect(merge('agents/christen/Library/a.md', 'a\nx\n', 'a\n', 'a\n')).toEqual({ content: 'a\nx\n', conflict: false });
+  });
+  describe('settings files (human/Settings/<name>.db) always have a winner and never ask for a copy', () => {
+    const P = 'human/Settings/calendar.db';
+    const db = (items: Record<string, string>, extra: Record<string, unknown> = {}) => `${JSON.stringify({ version: 2, name: 'calendar-settings', columns: [{ id: 'k', name: 'key', type: 'text' }, { id: 'v', name: 'value', type: 'text' }], rows: Object.entries(items).map(([k, v]) => ({ id: `s-${k}`, cells: { k, v } })), ...extra }, null, 2)}\n`;
+    const items = (text: string) => Object.fromEntries((JSON.parse(text).rows as Array<{ cells: { k: string; v: string } }>).map((r) => [r.cells.k, r.cells.v]));
+    it('first contact: union of rows, the cloud copy wins a row both have', () => {
+      const out = merge(P, db({ shared: 'local', mine: '1' }), null, db({ shared: 'cloud', theirs: '1' }))!;
+      expect(out.conflict).toBe(false);
+      expect(items(out.content)).toEqual({ shared: 'cloud', theirs: '1', mine: '1' });
+    });
+    it('with a baseline: three-way by rows — delete holds, both changed goes to the cloud copy, an edit beats a delete', () => {
+      const base = db({ same: '0', gone: 'x', goneThere: 'y', mine: '0', theirs: '0', editedHere: '0', editedThere: '0' });
+      const ours = db({ same: 'local', goneThere: 'y', mine: 'local', theirs: '0', editedHere: 'local', newHere: '1' }); // 删了 gone、editedThere
+      const cloud = db({ same: 'cloud', gone: 'x', mine: '0', theirs: 'cloud', editedThere: 'cloud', newThere: '1' }); // 删了 goneThere、editedHere
+      const out = merge(P, ours, base, cloud)!;
+      expect(out.conflict).toBe(false);
+      expect(items(out.content)).toEqual({ same: 'cloud', mine: 'local', theirs: 'cloud', editedHere: 'local', editedThere: 'cloud', newHere: '1', newThere: '1' });
+    });
+    it('differing column definitions or file name take the cloud copy', () => {
+      const out = merge(P, db({ a: '1' }, { name: 'local-name', columns: [{ id: 'k', name: 'K', type: 'text' }, { id: 'v', name: 'V', type: 'text' }] }), null, db({ b: '2' }))!;
+      expect(out.conflict).toBe(false);
+      expect(JSON.parse(out.content)).toMatchObject({ name: 'calendar-settings', columns: [{ id: 'k', name: 'key' }, { id: 'v', name: 'value' }] });
+      expect(items(out.content)).toEqual({ a: '1', b: '2' });
+    });
+    it('column ids are field names: a renamed column is not matched up, and values that look like ids are not rewritten', () => {
+      // 日历那种「同类型的列对到一起」会把 ours 的列 id "val" 按文本换成 "v",连带改掉值里的 "val"
+      const ours = `${JSON.stringify({ version: 2, name: 'calendar-settings', columns: [{ id: 'k', name: 'key', type: 'text' }, { id: 'val', name: 'value2', type: 'text' }], rows: [{ id: 'r1', cells: { k: 'x', val: 'val' } }] })}\n`;
+      const out = JSON.parse(merge(P, ours, null, db({ b: '2' }))!.content);
+      expect(out.rows.find((r: any) => r.id === 'r1').cells).toEqual({ k: 'x', val: 'val' });
+    });
+    it('an unreadable side loses to the readable one; both unreadable = the cloud copy; a bad baseline counts as none', () => {
+      const good = db({ a: '1' });
+      const dup = JSON.stringify({ ...JSON.parse(db({ a: 'dup' })), rows: [{ id: 'x', cells: {} }, { id: 'x', cells: {} }] });
+      for (const bad of ['{ not json', '[]', '', dup]) {
+        expect([bad, merge(P, bad, null, good)]).toEqual([bad, { content: good, conflict: false }]);
+        expect([bad, merge(P, good, null, bad)]).toEqual([bad, { content: good, conflict: false }]);
+        expect([bad, merge(P, good, good, bad)]).toEqual([bad, { content: good, conflict: false }]);
+        expect([bad, merge(P, 'local junk', null, bad)]).toEqual([bad, { content: bad, conflict: false }]);
+        const out = merge(P, db({ shared: 'local', mine: '1' }), bad, db({ shared: 'cloud' }))!;
+        expect([bad, out.conflict, items(out.content)]).toEqual([bad, false, { shared: 'cloud', mine: '1' }]);
+      }
+    });
+    it('never returns null or a conflict for any pairing, unlike the default calendar next to it', () => {
+      const sides = [db({ a: '1' }), db({ a: '2', b: '1' }), db({}), '{ not json', ''];
+      for (const o of sides) for (const t of sides) for (const b of [null, ...sides]) {
+        const out = mergeSettingsDb(o, b, t);
+        expect(out.conflict).toBe(false);
+        expect(typeof out.content).toBe('string');
+        expect(merge(P, o, b, t)).toEqual(out);
+      }
+      expect(merge('human/CALENDAR.db', db({ a: '1' }), null, db({ a: '2' }))!.conflict).toBe(true); // 同一行不一样:别的 .db 照旧报冲突、出副本
+      expect(merge('human/CALENDAR.db', '{ not json', null, db({ a: '2' }))).toBe(null);
+    });
+    it('merging is stable: merging the result again with either side changes nothing', () => {
+      const ours = db({ shared: 'local', mine: '1' }), cloud = db({ shared: 'cloud', theirs: '1' });
+      const once = merge(P, ours, null, cloud)!.content;
+      expect(merge(P, once, null, once)!.content).toBe(once);
+      expect(merge(P, cloud, cloud, once)!.content).toBe(once); // 另一台拿自己的基线拉这份:就是这份
+    });
   });
   it('calendars keep the latest run, logs are block unions, tombstones are unions in the old wire format', () => {
     const db = (run: string, desc: string) => JSON.stringify({ version: 2, name: 'Calendar', columns: [{ id: 'd', name: 'D', type: 'text' }], rows: [{ id: 'r1', cells: { d: desc, lastRun: run } }] });

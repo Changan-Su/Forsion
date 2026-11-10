@@ -6,6 +6,7 @@
  * - 两边都改了怎么合:记忆按事实行、墓碑并集、日志按块、.db 按行(Agent 日历 lastRun 取最晚)、第一次见面可合并的取并集、
  *   出厂 Agent 认指纹(用云端那份,不出副本)。
  * - 冲突副本叫什么:只生成一种名字;认得两套同步用过的两种名字。
+ * - 哪些文件不出冲突副本:随账号走的设置文件(human/Settings/<name>.db),任何情况下都有确定的赢家(mergeSettingsDb / neverConflictCopy)。
  * 纯函数,不碰磁盘 / 网络 / node 内置模块:diff3 和画像合并由调用方注入(桌面主进程只引 contracts,不引引擎 services)。
  */
 import { mergeDbFile, unionLines } from './dbRowMerge.js';
@@ -26,6 +27,11 @@ export const MEMORY_TOMBSTONES = '.memory-tombstones.json';
 export const MUSE_SLUG = 'muse';
 
 export const isWidgetDataPath = (p: string): boolean => /^WidgetData\/[a-z0-9][a-z0-9_-]{0,63}\/data\.db$/.test(p);
+/** 随账号走的设置文件(2026-11-10):human/Settings/<name>.db,可选族 `settings`(服务端声明了才同步,和 widget-data 同一套做法)。
+ *  只在 human/ 下有;一行一项设置的 DbFile。按族写,不认具体哪一份(第一份是日历设置 calendar.db)。 */
+export const isSettingsPath = (p: string): boolean => /^Settings\/[a-z0-9][a-z0-9-]{0,63}\.db$/.test(p);
+/** 设置文件的大小上限(本机读写接口、同步推送同一个数)。 */
+export const SETTINGS_MAX_BYTES = 256 * 1024;
 export function validLogDate(date: unknown): date is string {
   return typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date) && Number.isFinite(Date.parse(`${date}T00:00:00Z`)) && new Date(`${date}T00:00:00Z`).toISOString().slice(0, 10) === date;
 }
@@ -87,7 +93,7 @@ export function parseAgentContentPath(path: string): { area: 'agents' | 'human';
 /**
  * 新同步在 agents/、human/ 下的边界:true = 上云;false = 只留本机(不上传、不下载、不删);null = 不归这里管(Amadeus/、Plugins/…)。
  * 文件 = 服务端白名单,去掉 Muse / Historian 临时目录 / 冲突副本。文件夹 = 装得下白名单文件的那几层(agents、agents/<slug>、
- * Library/**、LOG、WidgetData/<id>;human、human/WidgetData/<id>),其余文件夹不在云端建、也不从云端建到本机
+ * Library/**、LOG、WidgetData/<id>;human、human/WidgetData/<id>、human/Settings),其余文件夹不在云端建、也不从云端建到本机
  * —— 尤其 agents/muse:另一台凭空多出一个空的 muse 文件夹,就不再播种 Muse 了。
  */
 export function agentContentSyncable(path: string, kind: 'file' | 'folder' = 'file'): boolean | null {
@@ -96,8 +102,8 @@ export function agentContentSyncable(path: string, kind: 'file' | 'folder' = 'fi
   if (isConflictCopyPath(path)) return false;
   const { area, slug, rel } = at;
   if (area === 'human') {
-    if (kind === 'folder') return rel === '' || rel === 'WidgetData' || /^WidgetData\/[a-z0-9][a-z0-9_-]{0,63}$/.test(rel);
-    return (HUMAN_SYNC_FILES as readonly string[]).includes(rel) || isWidgetDataPath(rel);
+    if (kind === 'folder') return rel === '' || rel === 'WidgetData' || /^WidgetData\/[a-z0-9][a-z0-9_-]{0,63}$/.test(rel) || rel === 'Settings';
+    return (HUMAN_SYNC_FILES as readonly string[]).includes(rel) || isWidgetDataPath(rel) || isSettingsPath(rel);
   }
   if (slug === null) return kind === 'folder';
   if (!validAgentSyncSlug(slug) || agentSlugLocalOnly(slug)) return false;
@@ -250,11 +256,36 @@ export function sameFactoryConfig(slug: string, ours: string, theirs: string): b
   return [...keys].every((k) => a.get(k) === b.get(k));
 }
 
+/** 内容路径(`human/Settings/<name>.db`)是不是随账号走的设置文件。 */
+export function isSettingsContentPath(path: string): boolean {
+  const at = parseAgentContentPath(path);
+  return at?.area === 'human' && isSettingsPath(at.rel);
+}
+/** 这个内容路径是不是「不出冲突副本」的那一族(现在只有设置文件)。两套同步在要存副本的地方都问它:
+ *  合并规则已经保证有确定的赢家(mergeSettingsDb),这里再兜住不经过合并的那几条路(云端那份标成二进制、老服务端没有版本号)。 */
+export const neverConflictCopy = (path: string): boolean => isSettingsContentPath(path);
+
+/**
+ * 设置文件(human/Settings/<name>.db)两边不一样怎么合。和 human/ 里别的文件不同:**任何情况下都有确定的结果,不出冲突副本**
+ * (conflict 恒为 false,也不返回 null)—— 渲染层读这份文件时不会去翻副本,留副本等于悄悄丢设置。ours = 这台,theirs = 云端。
+ * - 有基线:按行三方合并。一边删、另一边没动 = 删;两边改了同一行且值不同 = 云端那份赢。
+ * - 没有基线(两台各自建了文件,第一次见面):行取并集;同一个行 id 两边值不同 = 云端那份赢(先同步上去的那台说了算)。
+ * - 列定义、文件名这些表头两边不一样(不该发生)= 云端那份。列 id 就是字段名(k / v),不做日历那种对列。
+ * - 基线读不懂 = 当没有基线。某一份读不懂(不是 DbFile、行 id 重复)= 读得懂的那份整份赢;都读不懂 = 云端那份。
+ */
+export function mergeSettingsDb(ours: string, base: string | null, theirs: string): AgentMergeResult {
+  const merged = mergeDbFile(ours, base, theirs, { fieldColumns: true }) ?? (base === null ? null : mergeDbFile(ours, null, theirs, { fieldColumns: true }));
+  if (merged) return { content: merged.content, conflict: false };
+  const readable = (text: string): boolean => mergeDbFile(text, null, text, { fieldColumns: true }) !== null;
+  return { content: readable(theirs) || !readable(ours) ? theirs : ours, conflict: false };
+}
+
 const TEXT_FILE = /\.(md|txt|toml|json|yaml|yml|csv|html|xml|js|ts|py)$/i;
 
 /**
  * 同一份 Agent 文件两边都改了(或第一次见面两份不一样)怎么合。path = 内容路径:`agents/<slug>/<相对>`、`human/<相对>`,
  * 旧同步的 USER.md 槽位传 `USER.md`。返回 null = 合不了,调用方照旧整份存冲突副本、取云端那份。
+ * 设置文件(human/Settings/<name>.db)例外:恒有结果、conflict 恒为 false,见 mergeSettingsDb。
  * base = 上次两边一致时的原文;null = 第一次见面(没有基线)。
  */
 export function mergeAgentSyncContent(path: string, ours: string, base: string | null, theirs: string, deps: AgentMergeDeps): AgentMergeResult | null {
@@ -267,6 +298,7 @@ export function mergeAgentSyncContent(path: string, ours: string, base: string |
     return a && b ? { content: serializeTombstones(mergeTombstoneLists(a, b)), conflict: false } : null;
   }
   if (at?.area === 'agents' && rel.startsWith('LOG/')) return { content: mergeLogContent(ours, theirs, rel.slice(4, -3)), conflict: false };
+  if (at?.area === 'human' && isSettingsPath(rel)) return mergeSettingsDb(ours, base, theirs);
   if (rel.toLowerCase().endsWith('.db')) {
     const merged = mergeDbFile(ours, base, theirs, { fieldColumns: isWidgetDataPath(rel) });
     // Agent 的日历:同一行冲突时整行取了一边,lastRun 不能跟着回滚(否则排它的那台会把同一次再跑一遍)
