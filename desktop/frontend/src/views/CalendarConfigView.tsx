@@ -13,11 +13,12 @@ import { usePageStore } from '../amadeus/store/pageStore'
 import { useDbStore } from '../amadeus/store/dbStore'
 import { useCalendarMembers } from '../amadeus/store/calendarMembers'
 import { useAllDatabases, isDateCol, type AggDb } from '../amadeus/store/dbAggregateStore'
-import { useAgentCalDbs } from '../stores/agentScheduleStore'
+import { useAgentCalDbs, useAgentSchedulePolling } from '../stores/agentScheduleStore'
 import { useOtherVaultCalDbs } from '../stores/otherVaultCalStore'
 import { MAX_IMPORT_BYTES, useIcsCalDbs, useIcsCalendars } from '../stores/icsCalendarStore'
 import { icsCalendarName } from './calendar/ics'
 import { useCalendarConfig, colorForDb, isHidden, defaultDbPath, memberOf } from '../amadeus/store/calendarConfigStore'
+import { useStableCalendarColors } from '../amadeus/store/calendarColors'
 import { useCalendarNav } from '../amadeus/store/calendarNavStore'
 import { openDb } from '../amadeusNav'
 import { MemberColPicker } from './calendar/MemberColPicker'
@@ -156,6 +157,8 @@ function ConfigList() {
   const { t } = useI18n()
   const vault = usePageStore((s) => s.vaultRoot) ?? ''
   const members = useCalendarMembers()
+  useStableCalendarColors()
+  useAgentSchedulePolling() // 图例里列着 Agent 日程:单独开着这一栏也要拉(和日历主区共用一个计时器),不然来源永远到不齐、颜色定不下来
   const agentDbs = useAgentCalDbs() // agent 日程只读源:进图例(调色/显隐可用,无 ★/⋯)
   const otherDbs = useOtherVaultCalDbs() // 非活动侧只读日历(任务1:汇总两侧,名字已带 Vault 后缀)
   const icsDbs = useIcsCalDbs() // 外部日历订阅(.ics)

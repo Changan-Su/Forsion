@@ -40,6 +40,7 @@ import {
 } from '../amadeus/store/dbAggregateStore'
 import { useCalendarMembers } from '../amadeus/store/calendarMembers'
 import { useCalendarConfig, colorForDb, isHidden, defaultDbPath } from '../amadeus/store/calendarConfigStore'
+import { useStableCalendarColors } from '../amadeus/store/calendarColors'
 import { HOUR_PX_DEFAULT, useCalendarNav, type CalDraft } from '../amadeus/store/calendarNavStore'
 import { useAgentSchedulePolling, useAgentCalDbs } from '../stores/agentScheduleStore'
 import { useOtherVaultCalDbs } from '../stores/otherVaultCalStore'
@@ -232,6 +233,7 @@ export function CalendarView({ leafId }: { leafId?: string } = {}) {
   const firstDow = useWeekStart()
   const weekPref = useWeekStartPref((s) => s.pref)
   const members = useCalendarMembers()
+  useStableCalendarColors() // 来源的颜色第一次出现时定下存住,不跟下面这一列的顺序走
   const agentDbs = useAgentCalDbs()
   const otherDbs = useOtherVaultCalDbs() // 非活动侧(Local↔Cloud 另一侧)只读日历,汇总两侧(任务1)
   const icsDbs = useIcsCalDbs() // 外部日历订阅(.ics):同为只读叠加源

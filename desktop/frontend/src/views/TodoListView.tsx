@@ -36,6 +36,7 @@ import { parseQuickAdd } from './calendar/nlDate'
 import { TODO_DRAG_MIME } from './calendar/draft'
 import { usePageStore } from '../amadeus/store/pageStore'
 import { colorForDb, useCalendarConfig, defaultDbPath } from '../amadeus/store/calendarConfigStore'
+import { useStableCalendarColors } from '../amadeus/store/calendarColors'
 import { EventCard, type Anchor, type CardTarget } from './calendar/EventCard'
 import { rescheduleCalendarRow, rescheduleNoteTask } from './calendar/eventActions'
 import { todoDueMeta } from './calendar/todoMeta'
@@ -192,6 +193,7 @@ export function TodoListView({ params, leaf }: { params?: Record<string, unknown
   const addRef = useRef<HTMLInputElement>(null)
   const vault = usePageStore((s) => s.vaultRoot) ?? ''
   const byVault = useCalendarConfig((s) => s.byVault)
+  useStableCalendarColors()
 
   const today = useMemo(() => startOfDay(new Date()), [])
   // 全部可当待办来源的表(带勾选列)—— 清单菜单列的是这一份,不受当前筛选影响。

@@ -42,7 +42,7 @@ vi.mock('../../services/backendService', () => ({ getAgentSchedules: (...a: unkn
 
 const { useDbStore } = await import('../store/dbStore')
 const { usePageStore } = await import('../store/pageStore')
-const { useCalendarConfig } = await import('../store/calendarConfigStore')
+const { useCalendarConfig, EVENT_PALETTE } = await import('../store/calendarConfigStore')
 const { useAgentSchedules, acquireAgentSchedulePolling } = await import('../../stores/agentScheduleStore')
 const { useIcsCalendars } = await import('../../stores/icsCalendarStore')
 const { useOtherSideCal } = await import('../../stores/otherVaultCalStore')
@@ -109,6 +109,34 @@ describe('ctx.calendar.subscribe', () => {
     expect(Object.keys(last.colors).sort()).toEqual(['T.db', AGENT, ICS].sort())
     expect(last.defaultPath).toBeNull()
     off()
+  })
+
+  // 负对照(11-09 实跑红,一次只撤一处):colorForDb 不读 autoColors(后面的来源整体往前挪一格色)/ 订阅里不挂 acquireCalendarColors / 播种后也按序号取 → 这条红。
+  it('快照里的颜色定下来就不动:排在前面的成员移除后,后面的 Agent 日程 / 订阅不换色(老规则按序号取,会整体换)', async () => {
+    human = table('我的日历', [{ id: 'name', name: '名称', type: 'text' }, { id: 'date', name: '日期', type: 'calendarDate' }])
+    const s = fakeScope()
+    const api = createCalendarApi(s)
+    const seen: Snap[] = []
+    api.subscribe((x) => seen.push(x))
+    await flush(); await flush(); await flush()
+    const before = seen.at(-1)!.colors
+    const order = ['human://CALENDAR.db', 'T.db', AGENT, ICS]
+    expect(Object.keys(before).sort()).toEqual([...order].sort())
+    // 到齐那一刻存下的 = 老规则此刻的结果(升级前后同一套颜色)
+    expect(order.map((p) => before[p])).toEqual(order.map((_, i) => EVENT_PALETTE[i]))
+    expect(useCalendarConfig.getState().byVault['/V'].autoColors).toEqual(before)
+    expect(api.removeMember('T.db')).toBe(true)
+    const after = seen.at(-1)!
+    expect(after.members.map((m) => m.path)).toEqual(['human://CALENDAR.db'])
+    expect(after.colors).toEqual({ 'human://CALENDAR.db': before['human://CALENDAR.db'], [AGENT]: before[AGENT], [ICS]: before[ICS] })
+    // 新加一个订阅:取用得最少的色,原来的不动
+    const id = api.ics.importText('节假日', 'BEGIN:VCALENDAR\nEND:VCALENDAR')!
+    expect(seen.at(-1)!.colors).toEqual({ ...after.colors, [`ics://${id}`]: EVENT_PALETTE[1] })
+    // 手选过的颜色照旧优先;清掉回到定下的那个色
+    expect(api.setColor(ICS, '#101010')).toBe(true)
+    expect(seen.at(-1)!.colors[ICS]).toBe('#101010')
+    expect(api.setColor(ICS, null)).toBe(true)
+    expect(seen.at(-1)!.colors[ICS]).toBe(before[ICS])
   })
 
   it('库读完后替插件做一次性迁移(和打开宿主日历一样,成员不变);之后撤掉的成员不会被旧行为补回来', async () => {
