@@ -479,6 +479,9 @@ async function reconcileFile(cloud: AgentFilesBrain, uid: string, slug: string, 
     if (!isReadableSettingsDb(theirs)) { result.skipped++; return; }
     const out = initial ? Buffer.from(mergeSettingsDb(initial.toString('utf8'), null, theirs).content) : fetched.bytes;
     if (initial?.equals(out) || settingsTooLarge(contentPathOf(slug, p), out, 'merged')) { result.skipped++; return; }
+    // 本机要换成这份了:原来的影子(基线)不再是这台的祖先,先作废并落盘再写 —— 留着它,等服务端有了版本号,
+    // 会把这次没从云端带来的行当成「这台删了」推上去(Codex 返修复核 P1)。不装新的基线:按第一次见面合
+    if (prev.files[p]) { delete prev.files[p]; opts.persist?.(); }
     withMemoryDirectoryLock(dir, () => { assertUnchanged(); atomicSyncWrite(root, abs, out, guard); });
     result.pulled++;
   };

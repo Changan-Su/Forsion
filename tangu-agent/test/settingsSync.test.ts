@@ -321,6 +321,23 @@ describe('review: a server entry without seq / hash (old metadata) does not bypa
     expect(itemsOf(read(homeA))).toEqual({ shared: 'cloud', onlyLocal: '1', onlyCloud: '1' });
   });
 
+  it('a repair from a versionless cloud copy drops the old baseline: rows restored in the cloud later are not pushed away as local deletes', async () => {
+    const cloud = fakeCloud();
+    await enroll(cloud, homeA);
+    write(homeA, settingsDb({ a: '1', r: '1' }));
+    expect(await sync(cloud, homeA)).toMatchObject({ ok: true });
+    const modern = cloud._rows.get(`__human__\0${REL}`);
+    write(homeA, '{ half'); // 断电后坏了
+    legacyRow(cloud, settingsDb({ a: '1' }), Date.now() + 60_000); // 这时云端那行没有版本号
+    expect(await sync(cloud, homeA)).toMatchObject({ ok: true });
+    expect(itemsOf(read(homeA))).toEqual({ a: '1' }); // 云端那份修好了这台
+    const restored = settingsDb({ a: '1', r: '1' }); // 服务端又有版本号了,云端是 {a, r}
+    cloud._rows.set(`__human__\0${REL}`, { content: restored, isBinary: false, size: Buffer.byteLength(restored), mtimeMs: Date.now() + 120_000, seq: modern.seq + 1, hash: sha(restored), deleted: false });
+    expect(await sync(cloud, homeA)).toMatchObject({ ok: true, conflicts: 0 });
+    expect(itemsOf(cloudText(cloud)!)).toEqual({ a: '1', r: '1' });
+    expect(itemsOf(read(homeA))).toEqual({ a: '1', r: '1' });
+  });
+
   it('no local file and an unreadable cloud copy: nothing is written', async () => {
     const cloud = fakeCloud();
     await enroll(cloud, homeA);
