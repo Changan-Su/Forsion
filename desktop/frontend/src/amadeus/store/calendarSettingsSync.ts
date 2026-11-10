@@ -266,25 +266,30 @@ export function createCalendarSettingsSync(deps: SettingsSyncDeps) {
         try { deps.storage!.setItem(opKeyOf(acct, rec.id), JSON.stringify(rec)) } catch { ok = false }
       })
     }
-    if (ok) { try { deps.storage.removeItem(PENDING_KEY) } catch { /* 下次启动再迁一遍,同一批键,幂等 */ } }
-    else legacyDone = false
+    // 没迁完 / 旧键删不掉:旧队列还会把已经 ack 的改动再造出来(盖掉别人后来的值)→ 这一程不写共享那份
+    if (!ok) { block(PENDING_KEY); return }
+    try { deps.storage.removeItem(PENDING_KEY) } catch { block(PENDING_KEY) }
   }
 
   /** 全部记录(盘上 + 覆盖层,覆盖层优先),按产生顺序。某条读不出来 = 不知道:写闸关上,那条不参与。 */
+  /** 上一次 listAll 有没有哪条读不出来:读不出来 = 挂起改动不知道,不拿这次的列表去 ack / 投影。 */
+  let lastListOk = true
   function listAll(): OpRecord[] {
     migrateLegacy()
     const out = new Map<string, OpRecord>()
+    lastListOk = !blocked
+    const fail = (why: string): void => { lastListOk = false; block(why) }
     if (deps.storage) {
       let ks: string[] = []
-      try { ks = deps.storage.keys() } catch { block('keys') }
+      try { ks = deps.storage.keys() } catch { fail('keys') }
       for (const k of ks) {
         if (!k.startsWith(OP_PREFIX)) continue
         let raw: string | null
-        try { raw = deps.storage.getItem(k) } catch { block(k); continue }
+        try { raw = deps.storage.getItem(k) } catch { fail(k); continue }
         if (raw === null) continue // 别的窗口刚 ack 掉
         let x: unknown
-        try { x = JSON.parse(raw) } catch { block(k); continue }
-        if (!isRecord(x) || opKeyOf(x.acct, x.id) !== k) { block(k); continue }
+        try { x = JSON.parse(raw) } catch { fail(k); continue }
+        if (!isRecord(x) || opKeyOf(x.acct, x.id) !== k) { fail(k); continue }
         out.set(x.id, x)
       }
     }
@@ -320,9 +325,12 @@ export function createCalendarSettingsSync(deps: SettingsSyncDeps) {
       ...(flags.inferred ? { inferred: true as const } : {}), ...(flags.u ? { u: true as const } : {}), ...(flags.l ? { l: true as const } : {}),
     }
   }
-  /** 这个账号在这个库上要重放的(不含还没认领的 u)。 */
-  const pendingFor = (acct: string, root: string): OpRecord[] =>
-    listAll().filter((r) => r.acct === acct && !r.u && (r.root === '' || r.root === root))
+  /** 这个账号在这个库上要重放的(不含还没认领的 u)。null = 挂起改动读不出来(不知道)。 */
+  const pendingFor = (acct: string, root: string): OpRecord[] | null => {
+    const all = listAll()
+    if (!lastListOk) return null
+    return all.filter((r) => r.acct === acct && !r.u && (r.root === '' || r.root === root))
+  }
 
   // ── 账号代次 ──
   let epoch = 0
@@ -349,7 +357,8 @@ export function createCalendarSettingsSync(deps: SettingsSyncDeps) {
     else setTimeout(run, ms)
   }
 
-  const claimable = (root: string, acct: string): boolean => !listAll().some((r) => r.root === root && r.acct !== acct && (r.u || r.l))
+  const claimable = (root: string, acct: string): boolean =>
+    !listAll().some((r) => r.root === root && r.acct !== acct && (r.u || r.l)) && !limbo.some((r) => r.root === root && !!r.acct && r.acct !== acct)
   /** 没主的镜像打上账号(不新建条目、镜像不可信时不打)。 */
   function stamp(root: string, acct: string): void {
     if (deps.localTrusted && !deps.localTrusted()) return
@@ -377,7 +386,13 @@ export function createCalendarSettingsSync(deps: SettingsSyncDeps) {
       // 镜像没主(可能是从没同步的库)只记在内存里 —— 留本机的库不该因为这一步多写任何键。
       const origin = now ?? owner ?? null
       if (owner && origin) append(ops.map((op) => mint(origin, root, op, { inferred, u: true })))
-      else for (const op of ops) limbo.push(mint(origin ?? '', root, op, { inferred, u: true }))
+      else {
+        for (const op of ops) {
+          const r = mint(origin ?? '', root, op, { inferred, u: true })
+          if (op.t !== 'setIfAbsent') for (let i = limbo.length - 1; i >= 0; i--) if (limbo[i].op.k === op.k && limbo[i].acct === r.acct && limbo[i].root === root) limbo.splice(i, 1)
+          limbo.push(r)
+        }
+      }
     }
     kick(root)
   }
@@ -390,21 +405,22 @@ export function createCalendarSettingsSync(deps: SettingsSyncDeps) {
     for (let i = limbo.length - 1; i >= 0; i--) {
       const r = limbo[i]
       if (r.root !== root) continue
+      if (acct && r.acct && r.acct !== acct) {
+        // 别的账号在这份镜像上改过:留着等它回来(这个账号真投影到这个库时才丢);镜像没主就归它,不当成「升级前的老数据」
+        const v = deps.getVc(root)
+        if (unowned && v && !v.owner) deps.applyVc(root, { ...v, owner: r.acct })
+        continue
+      }
       limbo.splice(i, 1)
       if (!acct) continue // 留本机:改动已经在镜像里
       if (r.acct === acct || (!r.acct && unowned && claimable(root, acct))) append([stripFlags({ ...r, acct })])
-      else if (r.acct && r.acct !== acct && unowned) {
-        // 别的账号在这份没主的镜像上改过:镜像归它,不当成「升级前的老数据」给这个账号
-        const v = deps.getVc(root)
-        if (v && !v.owner) deps.applyVc(root, { ...v, owner: r.acct })
-      }
     }
     // 盘上的(镜像当时有主)
     for (const r of listAll()) {
       if (!r.u || r.root !== root) continue
       if (acct) {
         if (r.acct === acct) put(stripFlags(r))
-        else remove(r) // 对不上账号就丢:绝不写进另一个账号
+        // 对不上账号:绝不归这个账号;留在原账号名下,等原账号回来,或这个账号真投影到这个库时丢
       } else if (r.acct && deps.getVc(root)?.owner === r.acct && mergedFor(r.acct)) put(stripFlags(r, { l: true })) // 留本机 + 合过:按 D 留着
       else remove(r)
     }
@@ -414,12 +430,15 @@ export function createCalendarSettingsSync(deps: SettingsSyncDeps) {
   function project(c: Round, doc: DbFile): void {
     const l = live.get(c.root)
     if (!l || l.acct !== c.acct) return
+    const pending = pendingFor(c.acct, c.root)
+    if (!pending) return // 挂起改动读不出来:不知道该叠什么,不投影
     l.doc = doc
     l.shared = true
-    // D:别的账号在这个库留本机期间记的改动,这个库现在归这个账号了 → 丢(不留着日后拿旧手势盖那个账号更新的值)
-    for (const r of listAll()) if (r.l && r.root === c.root && r.acct !== c.acct) remove(r)
+    // 别的账号在这个库上还没认领的 / 留本机期间的改动:这个库现在归这个账号了 → 丢(不留着日后拿旧手势盖那个账号更新的值)
+    for (const r of listAll()) if ((r.l || r.u) && r.root === c.root && r.acct !== c.acct) remove(r)
+    for (let i = limbo.length - 1; i >= 0; i--) if (limbo[i].root === c.root && limbo[i].acct !== c.acct) limbo.splice(i, 1)
     const local = deps.getVc(c.root)
-    const shared = docToVaultCfg(applySettingOps(doc, pendingFor(c.acct, c.root).map((r) => r.op)))
+    const shared = docToVaultCfg(applySettingOps(doc, pending.map((r) => r.op)))
     const next = projectShared(shared, local, c.acct)
     if (JSON.stringify(next) !== JSON.stringify(local)) deps.applyVc(c.root, next)
   }
@@ -430,6 +449,7 @@ export function createCalendarSettingsSync(deps: SettingsSyncDeps) {
       if (base.status !== 'ok' && base.status !== 'missing') return { t: 'failed', base }
       if (!still(c)) return { t: 'aborted' }
       const queued = pendingFor(c.acct, c.root) // 每一轮都重读:写的时候用户又改了的也带上
+      if (!queued) return { t: 'aborted' } // 挂起改动读不出来 = 不知道:不 ack、不写、不投影
       const ops: SettingOp[] = [...extra(), ...queued.map((r) => r.op)]
       const from = base.status === 'ok' ? base.data : emptySettingsDoc()
       const next = applySettingOps(from, ops)
@@ -440,11 +460,12 @@ export function createCalendarSettingsSync(deps: SettingsSyncDeps) {
       if (rejected.get(c.acct) === print) return { t: 'failed', base } // 同一份内容对同一个基线被拒过:不再撞
       const w = await deps.io.write(next, base.status === 'ok' ? base.version : null)
       if (w.status === 'ok') {
-        const mine = bumpSeen(c.acct)
         if (!alive(c)) return { t: 'aborted' }
-        c.seen = mine
         rejected.delete(c.acct)
-        for (const r of queued) remove(r)
+        for (const r of queued) remove(r) // 已经写进去了:不 ack 的话之后重放这些旧改动会盖掉别人更新的值
+        // 响应在路上的时候别的窗口写过:我这份可能已经不是最新,不改标记、不投影,重读
+        if (readSeen(c.acct) !== c.seen) return { t: 'aborted' }
+        c.seen = bumpSeen(c.acct)
         return { t: 'done', doc: next }
       }
       if (!alive(c)) return { t: 'aborted' }
@@ -463,6 +484,10 @@ export function createCalendarSettingsSync(deps: SettingsSyncDeps) {
     if (!l || l.acct !== acct) { l = { acct, doc: null, read: 'loading', shared: false }; live.set(root, l) }
     const r = await deps.io.read()
     if (!alive(c)) return
+    // 读的这段时间里库键可能变了(关了同步 / 换了库):写之前重算一次,变了整轮作废
+    const k2 = await deps.resolveKey(root)
+    if (k2.kind !== 'sync' || k2.acct !== acct) { keys.set(root, k2); return }
+    if (!alive(c)) return
     health.nokey = false
     health.streak = r.status === 'unknown' ? health.streak + 1 : 0
     l.read = r.status
@@ -479,7 +504,7 @@ export function createCalendarSettingsSync(deps: SettingsSyncDeps) {
       if (fresh) {
         // 这台设备上这个库是新的:不贡献,也不等迁移 / 播种;迁移推断出来的那几条(日历比共享那份先打开时会有)也丢掉 ——
         // 不管谁先到,结果一样。用户在这期间的手势、插件 ensureMember、定色照常带上。
-        for (const x of pendingFor(acct, root)) if (x.inferred) remove(x)
+        for (const x of pendingFor(acct, root) ?? []) if (x.inferred) remove(x)
       } else {
         const mine = mineNow()
         if (mine && !localReady(mine)) return // 先在本机把迁移 / 播种跑完(迁移、定色动作会再踢一次)

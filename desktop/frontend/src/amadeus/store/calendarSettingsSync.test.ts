@@ -883,3 +883,73 @@ describe('F. 轮询与重试', () => {
     }
   })
 })
+
+describe('返修后的 Codex 复核', () => {
+  it('挂起改动列不出来:不拿共享的旧值投影盖掉用户刚改的', async () => {
+    const srv = fakeServer()
+    let deny = false
+    const io: SettingsTransport = { read: async () => { const r = await srv.io.read(); deny = true; return r }, write: (x, v) => srv.io.write(x, v) }
+    const d = device(srv, { io, local: ready({ colors: { 'a.db': '#ff0000' } }) })
+    await d.tick()
+    deny = false
+    d.act((v) => ({ ...v, colors: { 'a.db': '#0000ff' } }))
+    const keys = d.storage.keys
+    d.storage.keys = () => { if (deny) throw new Error('denied'); return keys() } // GET 之后才列不出来
+    await d.tick()
+    d.storage.keys = keys
+    expect(d.vc()?.colors['a.db']).toBe('#0000ff')
+    expect(srv.shared().colors['a.db']).toBe('#ff0000')
+  })
+  it('换到 B 时 A 还没认领的改动不丢:B 读失败没投影,回到 A 照样重放', async () => {
+    const srvA = fakeServer()
+    const srvB = fakeServer()
+    srvB.mode = 'down'
+    let login: string | null = 'A'
+    let key: SettingsKey = { kind: 'sync', acct: 'A' }
+    const d = device(srvA, { io: routed({ A: srvA, B: srvB }, () => login), loginAcct: () => login, key: () => key, local: ready({ colors: { 'a.db': '#ff0000' } }) })
+    await d.tick()
+    key = { kind: 'unknown' }
+    await d.tick()
+    d.act((v) => ({ ...v, colors: { 'a.db': '#0000ff' } }))
+    login = 'B'; key = { kind: 'sync', acct: 'B' }
+    await d.tick()
+    login = 'A'; key = { kind: 'sync', acct: 'A' }
+    await d.tick()
+    expect(srvA.shared().colors['a.db']).toBe('#0000ff')
+    expect(srvB.puts).toEqual([])
+  })
+  it('旧队列没迁完(有一条写不进新键):这一程不写共享那份', async () => {
+    const srv = fakeServer()
+    await device(srv, { local: ready() }).tick()
+    const storage = memStorage()
+    storage.data.set(MERGED_KEY, JSON.stringify({ A: true }))
+    storage.data.set(PENDING_KEY, JSON.stringify({ acct: { A: [{ id: 'ok1', t: 'set', k: 'sync|hidden|q.db', v: 'true' }, { id: 'bad', t: 'set', k: 'sync|hidden|r.db', v: 'true' }] } }))
+    storage.failSet = (k) => k.endsWith('.legacy-bad')
+    const puts = srv.puts.length
+    const d = device(srv, { storage, local: ready({ owner: 'A' }) })
+    await d.tick()
+    expect(srv.puts.length).toBe(puts)
+    expect(storage.data.has(PENDING_KEY)).toBe(true)
+  })
+  it('读的时候关了同步(库键变成留本机):这一轮不写', async () => {
+    const srv = fakeServer()
+    let key: SettingsKey = { kind: 'sync', acct: 'A' }
+    const d0 = device(srv, { local: ready() })
+    await d0.tick()
+    const slow = slowRead(srv)
+    const d = device(srv, { io: slow.io, storage: d0.storage, key: () => key, local: d0.vc() })
+    d.act((v) => ({ ...v, hidden: ['x.db'] }))
+    const p = d.tick()
+    await slow.started
+    key = { kind: 'local' }
+    slow.release()
+    await p
+    expect(srv.shared().hidden).toEqual([])
+  })
+  it('没主的镜像、库键一直不知道:同一项反复改不堆积', () => {
+    const srv = fakeServer()
+    const d = device(srv, { key: () => ({ kind: 'unknown' }), local: ready() })
+    for (let i = 0; i < 50; i++) d.act((v) => ({ ...v, colors: { 'a.db': `#0000${(i % 100).toString().padStart(2, '0')}` } }))
+    expect(d.sync.debugState(R).limbo).toBe(1)
+  })
+})
