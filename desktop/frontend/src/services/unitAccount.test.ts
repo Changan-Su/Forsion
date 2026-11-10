@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { installUnitAccount } from '../../../../web/src/unitAccount'
+import { AccountChangedError } from '../../../../web/src/account'
 import { contentStorageKey } from '@lcl/engine/contentStorageScope'
 
 const meta = { instanceId: 'unit-one', account: { apiBase: '/api', loginPath: '/auth' } }
@@ -91,6 +92,26 @@ describe('Unit visitor Account adapter', () => {
     pageEvents.mockClear()
     await installUnitAccount(meta, base)
     expect(pageEvents.mock.calls.some(([event]) => event === 'storage')).toBe(false)
+  })
+
+  it('rejects an in-flight profile and stops the old page from fetching the replacement account', async () => {
+    shared.set(tokenKey, 'token-a')
+    const { accountPresentation } = await installUnitAccount({ ...meta, inheritWebAccount: true }, base)
+    const profile = Promise.withResolvers<Response>()
+    const started = Promise.withResolvers<void>()
+    fetcher.mockImplementationOnce(fetcher.getMockImplementation()!).mockImplementationOnce(async () => {
+      started.resolve()
+      return profile.promise
+    })
+    const pending = expect(accountPresentation!.authStatus()).rejects.toBeInstanceOf(AccountChangedError)
+    await started.promise
+    shared.set(tokenKey, 'token-b')
+    profile.resolve(json({ id: 'a', nickname: 'Old profile' }))
+    await pending
+
+    fetcher.mockClear()
+    await expect(accountPresentation!.authStatus()).rejects.toBeInstanceOf(AccountChangedError)
+    expect(fetcher).not.toHaveBeenCalled()
   })
 
   it('recovers through a reload when another tab changes the login while this one is still starting', async () => {

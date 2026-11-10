@@ -10,6 +10,7 @@
  */
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { useShallow } from 'zustand/react/shallow'
 import { OverlayAt, accountMenuRows, openPanel, nativeSheetPresenter, runNativeSheetMenu, type Droplet, type SheetMenuItem, type SheetMenuSection } from '@lcl/engine'
 import { LogIn, LogOut, Loader2, Gauge, ChevronDown, ChevronRight, RotateCcw, ExternalLink, Backpack } from 'lucide-react'
 import type { AuthAccountInfo, AuthStatusInfo } from '../types'
@@ -73,8 +74,18 @@ export const AccountCard: React.FC<{
   const [menu, setMenu] = useState<{ x: number; y: number; anchorTop: number } | null>(null)
   const [quota, setQuota] = useState<AccountQuotaView | null>(null)
   const [quotaErr, setQuotaErr] = useState(false)
-  const hasBackpackPage = usePluginStore((s) => s.activeIds.includes('forsion-extend') &&
-    s.settingsViews.some((v) => v.pluginId === 'forsion-extend' && v.item.id === 'backpack' && v.item.category === 'forsion'))
+  const pages = usePluginStore(useShallow((s) => {
+    const active = s.activeIds.includes('forsion-extend')
+    const hasSettingsPage = (id: string) => active &&
+      s.settingsViews.some((v) => v.pluginId === 'forsion-extend' && v.item.id === id && v.item.category === 'forsion')
+    return {
+      account: hasSettingsPage('account'),
+      quota: hasSettingsPage('quota'),
+      backpack: hasSettingsPage('backpack'),
+      membership: active && s.plugins.some((p) => p.id === 'forsion-extend' && p.locked) &&
+        s.storeViews.some((v) => v.pluginId === 'forsion-extend' && v.item.id === 'membership'),
+    }
+  }))
   const [quotaOpen, setQuotaOpen] = useState(false)
   const [confirmCard, setConfirmCard] = useState(false)
   const [usingCard, setUsingCard] = useState(false)
@@ -265,8 +276,17 @@ export const AccountCard: React.FC<{
 
   const loggedIn = !!auth?.loggedIn
   const hasQuota = !!window.tangu?.accountQuota
-  // 「Forsion 云端」的账号页 / 额度页由 Extend 渲染半身画:cloudInvoke 在 = 本机装载了 Extend(设备页、网页壳没有)
-  const hasCloudPages = !!window.tangu?.cloudInvoke
+  // Extend registers pages in the official Web app without exposing desktop IPC.
+  const desktopCloud = !!window.tangu?.cloudInvoke
+  const publicWeb = !!window.tangu?.unitPublicEntry
+  const hasAccountPage = desktopCloud || (publicWeb && pages.account)
+  const hasQuotaPage = desktopCloud || (publicWeb && pages.quota)
+  const hasBackpackPage = (desktopCloud || publicWeb) && pages.backpack
+  const openPayCenter = window.tangu?.openPayCenter
+  const upgrade = openPayCenter ? () => { void openPayCenter() }
+    : publicWeb && pages.membership && window.tangu?.marketList
+      ? () => useApp.getState().openMarket(undefined, { storeView: 'forsion-extend:membership', nonce: Date.now() })
+      : null
   // 过期 = token 仍在(loggedIn)但 whoami 判定失效(tokenValid:false)。此时绝不当「已登录」对待。
   const expired = loggedIn && auth?.tokenValid === false
   // 引擎轴(managed 才有,external/纯 Amadeus 形态 backendState=null):与「登没登录」正交。
@@ -284,14 +304,14 @@ export const AccountCard: React.FC<{
     : failed ? t('sidebar.account.menu.quotaFail') : t('sidebar.account.menu.loading')
   const accountItems = (q: AccountQuotaView | null, failed: boolean): Record<'head' | 'login' | 'restart' | 'quota' | 'backpack' | 'upgrade' | 'logout', SheetMenuItem | null> => ({
     // 头部 = 进「Forsion 云端 → 账号」(资料、会员、安全都在那);没有那几页的宿主只是个标题
-    head: loggedIn && hasCloudPages ? { id: 'account', label: display, detail: t('sidebar.account.menu.openAccount'), run: () => { setMenu(null); openCloudPage('account') } } : null,
+    head: loggedIn && hasAccountPage ? { id: 'account', label: display, detail: t('sidebar.account.menu.openAccount'), run: () => { setMenu(null); openCloudPage('account') } } : null,
     login: !loggedIn && !engineDown ? { id: 'login', label: t('sidebar.account.login'), icon: <LogIn size={14} />, disabled: loggingIn, run: () => { setMenu(null); void login() } } : null,
     restart: engineDown ? { id: 'engine-restart', label: t('sidebar.account.engineDown'), icon: <RotateCcw size={14} />, run: () => { setMenu(null); void window.tangu?.backendRestart?.().finally(refresh) } } : null,
     // 一行 AI 额度摘要(口径同全端:剩余向下取整、不足 1% 写 <1%)→「额度与积分」
-    quota: loggedIn && hasQuota ? { id: 'quota', label: t('sidebar.account.menu.quota'), detail: quotaText(q, failed), icon: <Gauge size={14} />, disabled: !hasCloudPages, run: () => { setMenu(null); openCloudPage('quota') } } : null,
+    quota: loggedIn && hasQuota ? { id: 'quota', label: t('sidebar.account.menu.quota'), detail: quotaText(q, failed), icon: <Gauge size={14} />, disabled: !hasQuotaPage, run: () => { setMenu(null); openCloudPage('quota') } } : null,
     // 背包 / 升级:Web 浮层里住在别处(背包一行、升级在额度展开区),原生半屏不能就地展开 → 各占一行,免得安卓静默少入口。
-    backpack: loggedIn && hasCloudPages && hasBackpackPage ? { id: 'backpack', label: t('sidebar.account.menu.backpack'), icon: <Backpack size={14} />, run: () => { setMenu(null); openCloudPage('backpack') } } : null,
-    upgrade: loggedIn && window.tangu?.openPayCenter ? { id: 'upgrade', label: t('sidebar.account.menu.upgrade'), icon: <ExternalLink size={14} />, run: () => { setMenu(null); void window.tangu?.openPayCenter?.() } } : null,
+    backpack: loggedIn && hasBackpackPage ? { id: 'backpack', label: t('sidebar.account.menu.backpack'), icon: <Backpack size={14} />, run: () => { setMenu(null); openCloudPage('backpack') } } : null,
+    upgrade: loggedIn && upgrade ? { id: 'upgrade', label: t('sidebar.account.menu.upgrade'), icon: openPayCenter ? <ExternalLink size={14} /> : <ChevronRight size={14} />, run: () => { setMenu(null); upgrade() } } : null,
     logout: loggedIn ? { id: 'logout', label: t('sidebar.account.logout'), icon: <LogOut size={14} />, danger: true, run: () => { setMenu(null); void logout() } } : null,
   })
 
@@ -337,7 +357,7 @@ export const AccountCard: React.FC<{
     if (engineDown) { void window.tangu?.backendRestart?.().finally(refresh); return }
     if (!loggedIn || expired) { void login(); return }
     if (window.tangu?.accountQuota || window.tangu?.forsionLogin) showMenu(el)
-    else if (hasCloudPages) openCloudPage('account')
+    else if (hasAccountPage) openCloudPage('account')
   }
   // 菜单开着时再点头像 = 收起(倒放);正倒放着又点 = 从这一帧掉头、停在打开(同悬浮目录)
   const activate = (e: React.MouseEvent | React.KeyboardEvent): void => {
@@ -378,8 +398,8 @@ export const AccountCard: React.FC<{
   const menuContent = menu && <div>
       {/* 头部 = 进「Forsion 云端 → 账号」(资料、会员、安全都在那);没有那几页的宿主只是个标题 */}
       <div
-        className={`ap-head${loggedIn && hasCloudPages ? ' ap-head--link' : ''}`}
-        {...(loggedIn && hasCloudPages ? {
+        className={`ap-head${webItems.head ? ' ap-head--link' : ''}`}
+        {...(webItems.head ? {
           role: 'button', tabIndex: 0, title: t('sidebar.account.menu.openAccount'),
           onClick: webItems.head?.run,
           onKeyDown: (e: React.KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); webItems.head?.run?.() } },
@@ -389,7 +409,7 @@ export const AccountCard: React.FC<{
         {/* 没登录时别把品牌名当账号名写在头部 —— 看着像「已用名为 Forsion 的账号登录」(W-01) */}
         <span className="ap-name">{loggedIn ? display : t('sidebar.account.notSignedIn')}</span>
         {loggedIn && <TierBadge tier={auth?.membershipTier} />}
-        {loggedIn && hasCloudPages && <ChevronRight size={13} className="ap-head-go" aria-hidden="true" />}
+        {webItems.head && <ChevronRight size={13} className="ap-head-go" aria-hidden="true" />}
       </div>
       {!loggedIn && !engineDown && <button className="ap-item" disabled={loggingIn} onClick={() => { setMenu(null); void login() }}>
         <LogIn size={14} /><span>{t('sidebar.account.login')}</span>
@@ -437,12 +457,12 @@ export const AccountCard: React.FC<{
               </button>
             )}
             {/* 升级入口不依赖额度接口成败 */}
-            {!!window.tangu?.openPayCenter && (
-              <button className="ap-item ap-sub-item" onClick={() => { setMenu(null); void window.tangu?.openPayCenter?.() }}>
-                <span>{t('sidebar.account.menu.upgrade')}</span><span className="grow" /><ExternalLink size={12} />
+            {webItems.upgrade && (
+              <button className="ap-item ap-sub-item" onClick={webItems.upgrade.run}>
+                <span>{webItems.upgrade.label}</span><span className="grow" />{openPayCenter ? <ExternalLink size={12} /> : <ChevronRight size={12} />}
               </button>
             )}
-            {hasCloudPages && (
+            {hasQuotaPage && (
               <button className="ap-item ap-sub-item" onClick={() => { setMenu(null); openCloudPage('quota') }}>
                 <span>{t('sidebar.account.menu.more')}</span><span className="grow" /><ChevronRight size={12} />
               </button>
@@ -450,7 +470,7 @@ export const AccountCard: React.FC<{
           </div>}
         </>
       })()}
-      {loggedIn && hasCloudPages && hasBackpackPage && (
+      {webItems.backpack && (
         <button className="ap-item" onClick={() => { setMenu(null); openCloudPage('backpack') }}>
           <Backpack size={14} /><span>{t('sidebar.account.menu.backpack')}</span>
         </button>

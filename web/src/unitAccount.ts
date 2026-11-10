@@ -1,4 +1,4 @@
-import { AccountChangedError, AccountHttpError, createBrowserAccount } from './account'
+import { AccountChangedError, AccountHttpError, createBrowserAccount, type BrowserIdentity } from './account'
 import { contentStorageKey, setContentStorageScope } from '@lcl/engine/contentStorageScope'
 import type { PluginAccount, PluginAccountStatus } from '../../desktop/frontend/src/amadeus/plugins/types'
 
@@ -135,7 +135,41 @@ export async function installUnitAccount(meta: {
     status: account.authStatus, login, logout: account.logout, request,
     subscribe: (listener) => { listeners.add(listener); return () => { listeners.delete(listener) } },
   }
-  return { account, capability, scope, login,
+  // The official app uses the same profile and quota endpoints as desktop.
+  // Unit identity remains authoritative for login and storage scope.
+  const accountPresentation = meta.inheritWebAccount ? {
+    authStatus: async () => {
+      if (bootGeneration !== account.generation) throw new AccountChangedError()
+      const status = await account.authStatus()
+      if (!status.loggedIn || status.tokenValid !== true) return status
+      const response = await account.request('/brain/users/me', { signal: AbortSignal.timeout(5000) }).catch(() => null)
+      if (response && !response.ok) void response.body?.cancel()
+      const profile: (Partial<BrowserIdentity> & { id?: string | number }) | null =
+        response?.ok ? await response.json().catch(() => null) : null
+      if (bootGeneration !== account.generation) throw new AccountChangedError()
+      if (!profile || String(profile.id ?? '') !== status.userId) return status
+      return {
+        ...status,
+        avatar: typeof profile.avatar === 'string' ? profile.avatar : null,
+        nickname: typeof profile.nickname === 'string' ? profile.nickname : null,
+        membershipTier: typeof profile.membershipTier === 'string' ? profile.membershipTier : null,
+      }
+    },
+    accountQuota: () => accountJson('/token-quota/my'),
+    accountUseResetCard: async (type?: string) => {
+      if (type !== undefined && type !== 'both') return { status: 400, json: { error: 'invalid_type' } }
+      return accountJson('/token-quota/reset-card/use', { method: 'POST',
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type: 'both' }) })
+    },
+    membershipPlans: () => accountJson('/membership/plans'),
+  } : undefined
+
+  async function accountJson(path: string, init?: RequestInit) {
+    if (!account.getIdentity()) return { status: 401, json: null }
+    const response = await request(path, { ...init, signal: AbortSignal.timeout(15000) })
+    return { status: response.status, json: await response.json().catch(() => null) }
+  }
+  return { account, capability, scope, login, accountPresentation,
     onAuthWillChange(callback: () => Promise<void>) {
       prepare.add(callback)
       const unsubscribe = account.beforeChange(callback)
