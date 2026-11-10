@@ -154,6 +154,15 @@ describe('deciding', () => {
     expect(repo().snapshot().content).toContain(NAME);
     expect(await soul()).toBe(mine);
   });
+  it('portrait full with a background model set: still refused (moving deletes an original read every turn), memory untouched (11-09)', async () => {
+    const [item] = (await scanned()).items;
+    const doc = await readHuman({ kind: 'human', file: 'SOUL.md' });
+    const mine = '人写的段落。'.repeat(400);
+    await writeHuman({ kind: 'human', file: 'SOUL.md' }, { content: mine, summary: 'mine', expectedVersion: doc.version }, 'user');
+    await expect(movePortraitItem('owner', item.id)).rejects.toMatchObject({ code: 'PORTRAIT_FULL' });
+    expect(await soul()).toBe(mine);
+    expect(repo().snapshot().content).toContain(NAME);
+  });
   it('the sentence was already in the portrait: only the original goes, and undo keeps the user\'s line', async () => {
     await mutatePortrait({ action: 'add', fact: FACT, actor: 'user', source: { kind: 'user' } });
     const [item] = (await scanned()).items;

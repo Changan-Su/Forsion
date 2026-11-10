@@ -7,6 +7,7 @@ import { withTextWriteLock } from './amadeus/fs/vaultHandlers'
 import { forsionHomeDir } from './forsionHome'
 import { mergeDbFile } from '../../tangu-agent/src/contracts/dbRowMerge'
 import { mergeText3With,splitLogBlocks,mergeBlocks,mergeLogHeaders } from '../../tangu-agent/src/contracts/contentMerge'
+import { isMemoryDetailPath } from '../../tangu-agent/src/contracts/memoryLayers'
 import { agentSlugLocalOnly,dropForgottenFacts,mergeAgentSyncContent,mergeTombstoneLists,parseAgentContentPath,parseTombstones,sameTombstones,serializeTombstones,validAgentSyncSlug,MEMORY_TOMBSTONES,type WireTombstone } from '../../tangu-agent/src/contracts/agentSyncRules'
 const mergeText3=(ours:string,base:string,theirs:string)=>mergeText3With(ours,base,theirs,diff3Merge)
 const sha256=(b:Buffer|string)=>createHash('sha256').update(b).digest('hex')
@@ -18,14 +19,15 @@ export function contentSyncOwned(account:string|null):boolean {
   try{return JSON.parse(readFileSync(join(forsionHomeDir(),'content-sync',name),'utf8')).owned===true}catch{return false}
 }
 /** 新同步两边都改了:agents/、human/ 走和旧同步同一份规则(contracts/agentSyncRules.ts);memoryBase 给了的话,
- *  Agent 的记忆合完再按本机墓碑滤一遍(第一次见面取并集时,别把这台忘掉的事实从对方那份带回来、再传上云)。 */
+ *  Agent 的记忆(和记忆详情)合完再按本机墓碑滤一遍(第一次见面取并集时,别把这台忘掉的事实从对方那份带回来、再传上云)。 */
 export function mergeSyncContent(path:string,ours:string,base:string|null,theirs:string,memoryBase?:string):{content:string;conflict:boolean}|null {
   const agent=parseAgentContentPath(path)
   if(agent){
     // 记忆仓库提交到一半:盘上那份 MEMORY.md 是旧的,照它合出来的会先传上云(落盘那道检查在上传之后)。这一轮先不合,调用方记错、下一轮再来
     if(memoryBase&&agent.rel==='MEMORY.md'&&(agent.area==='human'||agent.slug&&validAgentSyncSlug(agent.slug)))refuseMidCommit(agent.area==='human'?join(memoryBase,'human'):join(memoryBase,'agents',agent.slug!))
+    // 画像(human/SOUL.md)和记忆详情(Library/memory/*.md)按条合 —— 合并器在契约里,和引擎的旧同步同一份(11-09 记忆分层)
     const merged=mergeAgentSyncContent(path,ours,base,theirs,{diff3:diff3Merge})
-    if(!merged||!memoryBase||agent.area!=='agents'||!agent.slug||agent.rel!=='MEMORY.md'||!validAgentSyncSlug(agent.slug))return merged
+    if(!merged||!memoryBase||agent.area!=='agents'||!agent.slug||!(agent.rel==='MEMORY.md'||isMemoryDetailPath(agent.rel))||!validAgentSyncSlug(agent.slug))return merged
     const forgotten=localTombstones(join(memoryBase,'agents',agent.slug))
     return forgotten.length?{...merged,content:dropForgottenFacts(merged.content,forgotten,sha256)}:merged
   }

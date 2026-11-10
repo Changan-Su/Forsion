@@ -12,7 +12,7 @@ import { STANDALONE_SCHEMA } from '../src/db/schemaStandalone.js';
 import { runMigration } from '../src/db/migrate.js';
 import {
   addProjectFact, buildProjectMemoryContext, forgetProjectMemory, openProjectMemory, peekProjectMemory, pendingProjectFacts, projectMemoryView,
-  queueProjectFact, resolveProjectCandidate, resolveProjectMemory, PROJECT_MEMORY_CHAR_BUDGET, type ProjectMemoryRef,
+  queueProjectFact, resolveProjectCandidate, resolveProjectMemory, PROJECT_MEMORY_STORE_CAP, type ProjectMemoryRef,
 } from '../src/services/projectMemory.js';
 
 let home: string, work: string, database: any;
@@ -120,13 +120,14 @@ describe('项目记忆的待确认候选', () => {
     // 把记忆填到只剩二十来个字:比任何一条候选都短
     const filler = (n: number): string => `Convention ${n}: ${'this project keeps generated files out of the source tree. '.repeat(4)}`.slice(0, 290);
     const store = await openProjectMemory(ref);
-    for (let n = 0; n < 60; n++) { try { store.mutate({ action: 'add', fact: filler(n), cap: PROJECT_MEMORY_CHAR_BUDGET }); } catch { break; } }
-    const room = PROJECT_MEMORY_CHAR_BUDGET - (await projectMemoryView(project('delta'))).chars - 1;
-    if (room > 30) store.mutate({ action: 'add', fact: 'z'.repeat(room - 20), cap: PROJECT_MEMORY_CHAR_BUDGET });
+    // 11-09 分层:采纳不再卡常驻上限(4000),卡的是存储上限
+    for (let n = 0; n < 200; n++) { try { store.mutate({ action: 'add', fact: filler(n), cap: PROJECT_MEMORY_STORE_CAP }); } catch { break; } }
+    const room = PROJECT_MEMORY_STORE_CAP - store.snapshot().content.length - 1;
+    if (room > 30) store.mutate({ action: 'add', fact: 'z'.repeat(room - 20), cap: PROJECT_MEMORY_STORE_CAP });
     const stuck = await idOf('delta', list[0]!);
     expect(await code(resolveProjectCandidate(project('delta'), stuck, true))).toBe('MEMORY_FULL');
     expect(await waiting('delta')).toHaveLength(20);
-  });
+  }, 60_000);
 
   it('丢弃记录比待确认留得久:丢弃过二十多条之后,最早那条和它的会话仍然不会再排', async () => {
     session('z0', 'zeta');

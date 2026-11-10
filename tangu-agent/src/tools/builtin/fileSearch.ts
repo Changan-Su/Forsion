@@ -5,6 +5,7 @@
  *     未命中(纯 Penzor 云模式)→ glob 走 listWorkspaceMetas 元数据;search 拉取文件内容(带量级上限)
  * 输出统一截断,跳过 .git/node_modules 等重目录与二进制文件。
  */
+import { standInOf, standInSearchDenied } from '../../services/accessDomain.js';
 import type { ToolProvider } from '../toolRegistry.js';
 import type { ToolContext } from '../toolTypes.js';
 import { getSessionDir } from '../../sandbox/sessionSandbox.js';
@@ -234,6 +235,8 @@ export const fileSearchProvider: ToolProvider = {
         }
         const include = args.include ? globToRegExp(String(args.include)) : undefined;
         const baseDir = await resolveBaseDir(ctx);
+        const standInDenied = baseDir ? standInSearchDenied(standInOf(ctx), baseDir) : null; // 分身:起点底下包着读不了的就整次拒
+        if (standInDenied) return `Error: ${standInDenied}`;
         const exclude = baseDir ? credentialExclusions(baseDir) : [];
         if (exclude === null) return CREDENTIAL_SEARCH_DENIED;
         if (ctx.execMode === 'host') {
@@ -276,6 +279,8 @@ export const fileSearchProvider: ToolProvider = {
         if (pattern.length > 4096) return 'Error: pattern exceeds 4096 characters';
         const re = globToRegExp(pattern);
         const baseDir = await resolveBaseDir(ctx);
+        const standInDenied = baseDir ? standInSearchDenied(standInOf(ctx), baseDir) : null;
+        if (standInDenied) return `Error: ${standInDenied}`;
         const worker = new FileSearchWorker({ include: re.source }, ctx.signal);
         let matched: string[];
         try {

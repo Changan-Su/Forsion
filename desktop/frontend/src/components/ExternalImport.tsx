@@ -67,6 +67,8 @@ registerMessages({
   'aiImport.flag.known': { zh: '已经有了', en: 'Already there' },
   'aiImport.flag.conflict': { zh: '和已有的一条不一致，勾上只加不替换', en: "Doesn't match one you have; ticking adds it without replacing" },
   'aiImport.flag.forgotten': { zh: '你之前删过这条', en: 'You removed this one before' },
+  'aiImport.flag.noRoom': { zh: '放不下：Agent 每轮只读画像的前 {limit} 字，勾上会落在线外', en: 'No room: agents read only the first {limit} characters of the portrait, so this would sit below the line' },
+  'aiImport.group.personBudget': { zh: '还能放 {room} 字 · 勾了约 {picked} 字', en: 'Room for {room} characters · About {picked} ticked' },
   'aiImport.flag.blocked': { zh: '像是写给 AI 的命令，不能导入', en: "Looks like an instruction to an AI and can't be imported" },
   'aiImport.flag.past': { zh: '已经过去的事，要留就勾上', en: 'Already in the past; tick it to keep it' },
   'aiImport.flag.renamed': { zh: '和已有的技能同名，勾上会存成 {target}', en: 'Same name as a skill you have; ticking saves it as {target}' },
@@ -273,7 +275,7 @@ export function ExternalImportSheet({ engine, onClose }: { engine: EngineTarget;
   const toggle = (key: string) => setPicked((s) => { const n = new Set(s); if (n.has(key)) n.delete(key); else n.add(key); return n })
   const counts = (x: ImportScan['tools'][number]) => (['about', 'rules', 'project', 'notes', 'skills'] as const).filter((k) => x[k]).map((k) => t(`aiImport.count.${k}`, { n: x[k] })).join(' · ')
 
-  const sec = (title: string, dest: string, count: string) => <div className="imp-sec"><span>{title}</span>{dest && <small>{dest}</small>}<span className="grow" />{count && <small>{count}</small>}</div>
+  const sec = (title: string, dest: string, count: string, extra?: ReactNode) => <div className="imp-sec"><span>{title}</span>{dest && <small>{dest}</small>}{extra}<span className="grow" />{count && <small>{count}</small>}</div>
   const tags = (sources: string[], flag?: string | null) => <span className="imp-tags">{sources.map((s) => <span key={s} className="imp-chip">{s}</span>)}{flag && <span className="imp-flag">{flag}</span>}</span>
   const row = (key: string, opts: { text: string; sub?: string; sources: string[]; flag?: string | null; locked?: boolean; editable?: boolean }) => (
     <div key={key} className={`imp-row${opts.locked ? ' is-off' : ''}`} data-ai-import-row={key}>
@@ -290,7 +292,7 @@ export function ExternalImportSheet({ engine, onClose }: { engine: EngineTarget;
   const itemFlag = (i: ImportPlan['items'][number]): string | null => {
     if (i.dest === 'blocked') return t('aiImport.flag.blocked')
     const f = i.flags.find((x) => x !== 'merged') ?? i.flags[0]
-    if (f) return t(`aiImport.flag.${f}`)
+    if (f) return t(`aiImport.flag.${f}`, { limit: plan?.portrait?.limit ?? 2000 })
     return i.dest === 'past' ? t('aiImport.flag.past') : null
   }
   const itemRow = (i: ImportPlan['items'][number]) => row(i.id, { text: i.text, sub: i.conflictWith, sources: i.sources.map(label), flag: itemFlag(i), locked: i.locked, editable: !i.locked })
@@ -330,13 +332,18 @@ export function ExternalImportSheet({ engine, onClose }: { engine: EngineTarget;
     const total = plan.items.length + plan.skills.length + mcp.length
     const n = plan.items.filter((i) => picked.has(i.id) && !i.locked).length + plan.skills.filter((s) => picked.has(s.key) && !s.locked).length + mcp.filter((m) => picked.has(`mcp:${m.ecosystem}:${m.name}`)).length
     const ratio = (list: Array<{ id: string; locked: boolean }>) => `${list.filter((i) => picked.has(i.id) && !i.locked).length} / ${list.length}`
+    // 画像的账(11-09):引擎给每条估算的字数,改过的按改后的长度折算;勾上的「过去的事」也写进画像,一起算
+    const room = plan.portrait?.room
+    const pickedChars = plan.items.filter((i) => (i.dest === 'person' || i.dest === 'past') && picked.has(i.id) && !i.locked && i.cost !== undefined)
+      .reduce((n, i) => n + i.cost! - i.text.length + (edits[i.id]?.trim() ? edits[i.id].trim().length : i.text.length), 0)
+    const budget = room === undefined ? undefined : <small className={`imp-budget${pickedChars > room ? ' is-over' : ''}`} data-ai-import-budget>{t('aiImport.group.personBudget', { room, picked: pickedChars })}</small>
     sum = total ? t('aiImport.review.sum', { total, n }) : t('aiImport.review.empty')
     const notes = [
       ...plan.notices.map((x, k) => row(`notice-${k}`, { text: x.kind === 'persona' ? x.path : x.kind === 'too-many' ? t('aiImport.notice.tooMany', { tool: label(x.tool), project: x.project || x.path, n: x.count ?? 0 }) : t('aiImport.notice.truncated'), sources: [label(x.tool)], flag: x.kind === 'persona' ? t('aiImport.notice.persona') : null, locked: true })),
       ...(plan.missed ? [row('missed', { text: t('aiImport.notice.missed', { n: plan.missed }), sources: [], locked: true })] : []),
     ]
     body = <>
-      {!!by('person').length && <>{sec(t('aiImport.group.person'), t('aiImport.group.personDest'), ratio(by('person')))}{by('person').map(itemRow)}</>}
+      {!!by('person').length && <>{sec(t('aiImport.group.person'), t('aiImport.group.personDest'), ratio(by('person')), budget)}{by('person').map(itemRow)}</>}
       {!!by('agent').length && <>{sec(t('aiImport.group.agent'), t('aiImport.group.agentDest'), ratio(by('agent')))}{by('agent').map(itemRow)}</>}
       {projects.map((p) => { const list = by('project').filter((i) => i.project === p); return <div key={p}>{sec(t('aiImport.group.project', { name: p.split(/[\\/]/).filter(Boolean).pop() || p }), t('aiImport.group.projectDest', { path: p }), ratio(list))}{list.map(itemRow)}</div> })}
       {!!plan.skills.length && <>{sec(t('aiImport.group.skills'), t('aiImport.group.skillsDest'), ratio(plan.skills.map((s) => ({ id: s.key, locked: s.locked }))))}

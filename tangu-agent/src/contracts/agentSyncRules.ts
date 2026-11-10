@@ -12,6 +12,8 @@ import { mergeDbFile, unionLines } from './dbRowMerge.js';
 import { mergeText3With, splitLogBlocks, mergeBlocks, mergeLogHeaders } from './contentMerge.js';
 import { LEGACY_PERSONAS, LEGACY_PERSONA_PROMPTS_ZH } from './legacyPersonas.js';
 import { USER_MD_TEMPLATE, LEGACY_USER_MD_TEMPLATES } from './userMdTemplate.js';
+import { normalizeMemoryFact } from './entryMark.js';
+import { hasPortraitTopics, isMemoryDetailPath, mergeLayeredPortrait, mergePortrait, mergeTopicFile, settlePortrait } from './memoryLayers.js';
 
 // ── 路径:哪些上云 ─────────────────────────────────────────────────────────────
 
@@ -43,7 +45,13 @@ export function validAgentFilePath(p: unknown): p is string {
 /** 只在本机、不进任何一套同步的 Agent 文件夹:Muse(11-05 用户定「暂不开放同步」,两台各跑各的)、
  *  Historian 复盘时建的临时目录 historian-<会话 id 前 12 位>(只有 MEMORY.md,传上去成了云端的「幽灵 Agent」)。 */
 export function agentSlugLocalOnly(slug: string): boolean {
-  return slug === MUSE_SLUG || /^historian-[a-z0-9]{1,12}$/.test(slug);
+  return slug === MUSE_SLUG || /^historian-[a-z0-9]{1,12}$/.test(slug) || isStandInSlugShape(slug);
+}
+/** Agent 分身(11-09,方案「记忆分层与 Agent 分身」第三步):`<本体>-standin-<通道>[-<联系人哈希>]`,超长截断加哈希也留着 `-standin-`。
+ *  分身文件夹装着别人在通道里说的话,只留本机、不进任何一套同步;这里是纯函数、读不到 config.toml,只能按形状认 ——
+ *  新建普通 Agent 时引擎拒绝这种形状(agentRegistry.writeAgentLocked),形状就等于身份。 */
+export function isStandInSlugShape(slug: string): boolean {
+  return /^[a-z0-9][a-z0-9-]*-standin-[a-z0-9]/.test(slug);
 }
 
 const CONFLICT_STAMP = /\(conflict \d{4}-\d{2}-\d{2} \d{4}(?: \d+)?\)/;
@@ -105,7 +113,7 @@ export type Diff3 = (a: string[], b: string[], c: string[], options: { excludeFa
 export interface AgentMergeResult { content: string; conflict: boolean }
 export interface AgentMergeDeps {
   diff3: Diff3;
-  /** human/SOUL.md(画像)按条目合;引擎传 humanPortrait.mergePortrait,宿主不传(合不拢就出副本)。 */
+  /** human/SOUL.md(画像)行合不拢时按条目合;不传 = 契约里的 mergePortrait(11-09 起挪进契约,引擎和桌面宿主同一份)。 */
   portrait?: (ours: string, base: string, theirs: string) => AgentMergeResult;
 }
 
@@ -200,10 +208,8 @@ export function sameTombstones(a: readonly WireTombstone[], b: readonly WireTomb
     .map((t) => [t.fingerprint, t.id, t.content, t.forgottenAt, t.restoredAt ?? null, [...t.evidenceIds].sort()]));
   return key(a) === key(b);
 }
-/** 事实行的身份:去掉列表符号、压空白、小写。记忆仓库的指纹 = sha256(这个),引擎和宿主同一份。 */
-export function normalizeMemoryFact(fact: string): string {
-  return fact.trim().replace(/^[-*+]\s+/, '').replace(/\s+/g, ' ').toLowerCase();
-}
+/** 事实行的身份:去掉行尾记号、列表符号、压空白、小写(定义在 entryMark.ts,11-09 起记号不算事实的一部分)。 */
+export { normalizeMemoryFact };
 export function isMemoryTombstoneActive(tombstone: { forgottenAt: number; restoredAt?: number }): boolean {
   return tombstone.forgottenAt >= (tombstone.restoredAt ?? 0);
 }
@@ -267,15 +273,24 @@ export function mergeAgentSyncContent(path: string, ours: string, base: string |
     return merged && at?.area === 'agents' && rel === 'CALENDAR.db' ? { ...merged, content: keepLatestRuns(merged.content, ours, theirs) } : merged;
   }
   if (!TEXT_FILE.test(name)) return null;
+  // 记忆详情(11-09 分层):Library/memory/<主题>.md 按条合(第一次见面取并集),别的 Library 文件照旧按行三方合、合不拢出副本
+  if (at?.area === 'agents' && isMemoryDetailPath(rel)) return mergeTopicFile(name.slice(0, -3), ours, base, theirs);
+  // 画像带详情各节时常驻和详情分开合、合完按「每条在哪」的推导规则收拾(第一次见面也是:不把挪进详情的那条复活回常驻)
+  if (at?.area === 'human' && rel === 'SOUL.md' && (hasPortraitTopics(ours) || hasPortraitTopics(theirs) || (base !== null && hasPortraitTopics(base)))) {
+    return mergeLayeredPortrait(ours, base, theirs, deps.diff3);
+  }
   // 只有 Agent 的记忆按事实集合合并;human/MEMORY.md 是人的本子、和 USER.md 镜像互相 diff3,集合合并会重排行,下一轮镜像那对合不拢、丢行(10-23)
   if (at?.area === 'agents' && rel === 'MEMORY.md') return { content: base === null ? joinFirstContact(ours, theirs) : mergeFactLines(ours, base, theirs), conflict: false };
   if (at?.area === 'agents' && rel === 'config.toml' && at.slug && sameFactoryConfig(at.slug, ours, theirs)) return { content: theirs, conflict: false };
   // human/ 那几份、USER.md:人的资料,第一次见面取并集;有基线时按行三方合并
   const mergeable = !at || at.area === 'human';
-  if (base === null) return mergeable ? { content: joinFirstContact(ours, theirs), conflict: false } : null;
+  const soul = at?.area === 'human' && rel === 'SOUL.md';
+  // 画像合完收拾一遍:并集出来的钉住 / 没钉两份同一句只留钉住的(没有记号的老画像原样不动)
+  const tidy = (r: AgentMergeResult): AgentMergeResult => soul ? { ...r, content: settlePortrait(r.content) } : r;
+  if (base === null) return mergeable ? tidy({ content: joinFirstContact(ours, theirs), conflict: false }) : null;
   const text = diff3(ours, base, theirs);
-  if (text !== null) return { content: text, conflict: false };
+  if (text !== null) return tidy({ content: text, conflict: false });
   // 画像(human/SOUL.md,10-29):两台都往 Agent 那一节末尾各记一条,按行三方合并几乎必然合不拢 → 条目按集合合
-  if (at?.area === 'human' && rel === 'SOUL.md' && deps.portrait) return deps.portrait(ours, base, theirs);
+  if (soul) return tidy((deps.portrait ?? mergePortrait)(ours, base, theirs));
   return null;
 }

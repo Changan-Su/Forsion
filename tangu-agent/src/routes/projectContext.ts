@@ -6,6 +6,10 @@
  *   DELETE /agent/project-context/memory        { sessionId, id, expectedVersion }         → 删一条项目记忆,返回 { memory }(GET 的 context 里带 memory;远端来源不给)
  *   POST /agent/project-context/memory/candidate { sessionId, id, action: adopt|dismiss }  → 对一条待确认的后台候选点头或丢弃,返回 { memory }(远端来源不给)
  *   POST /agent/project-context/memory/restore   { sessionId, id }                          → 把写满压缩时合并 / 去掉的一句原句记回去,返回 { memory }
+ *   POST /agent/project-context/memory/organize  { sessionId }                              → 手点「整理」(11-09 分层:先挪进详情,再丢过时的),返回整理结果
+ *   POST /agent/project-context/memory/organize/undo { sessionId, id }                      → 整次撤销一次整理,返回 { memory, changed }
+ *   POST /agent/project-context/memory/pin       { sessionId, id, pinned, expectedVersion? } → 钉住 / 取消钉住一条(详情里的钉住 = 挪回常驻),返回 { memory }
+ *          (memory 都带 organize: { available, running, last } —— 界面的「整理」按钮和整理记录;远端来源一律不给)
  *   PUT  /agent/project-context/doc             { sessionId, content, expectedMtimeMs? }   → 写指令文件(409 = 别处改过)
  *   GET  /agent/project-context/settings?sessionId=|cwd= → { settings }(桌面建会话前的轻量预取;cwd 形态给没有会话可借的项目)
  *   PUT  /agent/project-context/settings        { sessionId, settings }                    → 用户侧项目默认项
@@ -52,7 +56,8 @@ import {
   canonicalProjectPath, createProjectSkill, deleteProjectSkill, deleteProjectIcon, gitSummary, initProjectWorkspace, projectContext, readProjectIcon, readProjectSettings, repoInfo,
   saveProjectIcon, setProjectIconEmoji, writeProjectDoc, writeProjectSettings,
 } from '../services/projectContext.js';
-import { editProjectMemory, forgetProjectMemory, projectMemoryView, resolveProjectCandidate, restoreCompactedFact } from '../services/projectMemory.js';
+import { editProjectMemory, forgetProjectMemory, pinProjectMemory, projectMemoryView, refOf, resolveProjectCandidate, restoreCompactedFact, undoProjectOrganize, type ProjectMemoryView } from '../services/projectMemory.js';
+import { afterProjectWrite, organizeProjectMemory, projectOrganizeStatus } from '../services/projectMemoryCompact.js';
 import { parseRemoteOrigin } from '../services/remoteOrigin.js';
 import { RelinkError, missingProjectPaths, relinkInfo, relinkProject } from '../services/projectRelink.js';
 import { GitActionError, generateCommitMessage, gitCommit, gitCreateBranch, gitEmbedded, gitInit, gitPending, gitConnectRemote, gitPull, gitPush, gitSetPushRemote, gitTrustRepo, readGit, serialized } from '../services/gitActions.js';
@@ -110,6 +115,12 @@ async function repoFor(req: AuthRequest, res: Response, cwd: string, sessionId: 
   if (given && !found) { res.status(400).json({ detail: 'This repository is not part of the project', error: 'unknown_repo' }); return undefined; }
   return found;
 }
+/** 回给界面的项目记忆:带上整理按钮要的状态(11-09 分层)。读不到状态不挡记忆本身。 */
+async function withOrganize(cwd: string, memory: ProjectMemoryView): Promise<ProjectMemoryView & { organize?: Awaited<ReturnType<typeof projectOrganizeStatus>> }> {
+  try { return { ...memory, organize: await projectOrganizeStatus(refOf(cwd)) }; } catch { return memory; }
+}
+/** 界面上写进去一条(采纳 / 恢复 / 改写)之后:常驻过线就排一次后台整理(和 remember、判官同一个入口)。 */
+const afterUserWrite = (req: AuthRequest, cwd: string): void => { afterProjectWrite(req.user!.userId, refOf(cwd)); };
 /** 项目记忆的失败:404 = 那一条已经不在了,409 = 别处刚改过(都让界面重载);error 是机器码(桌面 request() 从它取 code)。 */
 const memoryFail = (res: Response, e: any, fallback: string): void => {
   res.status(e?.code === 'MEMORY_NOT_FOUND' ? 404 : e?.code === 'MEMORY_VERSION_CONFLICT' || e?.code === 'MEMORY_BUSY' ? 409 : 400).json({ detail: e?.message || fallback, code: e?.code, error: e?.code });
@@ -168,7 +179,7 @@ router.get('/agent/project-context', authMiddleware, async (req: AuthRequest, re
     const cwd = await projectDirOf(req, res, req.query.sessionId);
     if (!cwd) return;
     // 项目记忆(10-04):同协作说明的口径,远端设备来的请求不给看、也不给改(见下面的 DELETE)。
-    const memory = parseRemoteOrigin(req.headers) ? undefined : await projectMemoryView(cwd).catch(() => undefined);
+    const memory = parseRemoteOrigin(req.headers) ? undefined : await projectMemoryView(cwd).then((m) => withOrganize(cwd, m)).catch(() => undefined);
     res.json({ ...(await fullContext(req, cwd, req.query.sessionId)), ...(memory ? { memory } : {}) });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'project context failed' });
@@ -185,7 +196,9 @@ router.patch('/agent/project-context/memory', authMiddleware, async (req: AuthRe
     const text = typeof fact === 'string' ? fact.trim().replace(/\s*\n\s*/g, ' ') : '';
     if (typeof id !== 'string' || !id || typeof expectedVersion !== 'string' || !expectedVersion || !text) return res.status(400).json({ detail: 'id, fact and expectedVersion are required' });
     if (text.length > 300) return res.status(400).json({ error: 'MEMORY_TOO_LONG', detail: 'One entry is at most 300 characters.' });
-    res.json({ memory: await editProjectMemory(cwd, id, text, expectedVersion) });
+    const memory = await editProjectMemory(cwd, id, text, expectedVersion);
+    afterUserWrite(req, cwd);
+    res.json({ memory: await withOrganize(cwd, memory) });
   } catch (e: any) {
     memoryFail(res, e, 'edit project memory failed');
   }
@@ -199,7 +212,7 @@ router.delete('/agent/project-context/memory', authMiddleware, async (req: AuthR
     if (!cwd) return;
     const { id, expectedVersion } = req.body || {};
     if (typeof id !== 'string' || !id || typeof expectedVersion !== 'string' || !expectedVersion) return res.status(400).json({ detail: 'id and expectedVersion are required' });
-    res.json({ memory: await forgetProjectMemory(cwd, id, expectedVersion) });
+    res.json({ memory: await withOrganize(cwd, await forgetProjectMemory(cwd, id, expectedVersion)) });
   } catch (e: any) {
     memoryFail(res, e, 'forget project memory failed');
   }
@@ -213,7 +226,9 @@ router.post('/agent/project-context/memory/candidate', authMiddleware, async (re
     if (!cwd) return;
     const { id, action } = req.body || {};
     if (typeof id !== 'string' || !id || (action !== 'adopt' && action !== 'dismiss')) return res.status(400).json({ detail: 'id and action ("adopt" or "dismiss") are required' });
-    res.json({ memory: await resolveProjectCandidate(cwd, id, action === 'adopt') });
+    const memory = await resolveProjectCandidate(cwd, id, action === 'adopt');
+    if (action === 'adopt') afterUserWrite(req, cwd);
+    res.json({ memory: await withOrganize(cwd, memory) });
   } catch (e: any) {
     memoryFail(res, e, 'project memory candidate action failed');
   }
@@ -227,9 +242,49 @@ router.post('/agent/project-context/memory/restore', authMiddleware, async (req:
     if (!cwd) return;
     const { id } = req.body || {};
     if (typeof id !== 'string' || !id) return res.status(400).json({ detail: 'id is required' });
-    res.json({ memory: await restoreCompactedFact(cwd, id) });
+    const memory = await restoreCompactedFact(cwd, id);
+    afterUserWrite(req, cwd);
+    res.json({ memory: await withOrganize(cwd, memory) });
   } catch (e: any) {
     memoryFail(res, e, 'restore project memory failed');
+  }
+});
+
+// 记忆分层(11-09 2b):手点「整理」、整次撤销一次整理、钉住 / 取消钉住。同样只在主机上(远端来源 403)。
+router.post('/agent/project-context/memory/organize', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    if (parseRemoteOrigin(req.headers)) return res.status(403).json({ detail: 'Open the project on the host computer to edit its memory.' });
+    const cwd = await projectDirOf(req, res, req.body?.sessionId);
+    if (!cwd) return;
+    res.json(await organizeProjectMemory(req.user!.userId, refOf(cwd), { manual: true, sessionId: String(req.body.sessionId) }));
+  } catch (e: any) {
+    memoryFail(res, e, 'organize project memory failed');
+  }
+});
+router.post('/agent/project-context/memory/organize/undo', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    if (parseRemoteOrigin(req.headers)) return res.status(403).json({ detail: 'Open the project on the host computer to edit its memory.' });
+    const cwd = await projectDirOf(req, res, req.body?.sessionId);
+    if (!cwd) return;
+    const { id } = req.body || {};
+    if (typeof id !== 'string' || !id) return res.status(400).json({ detail: 'id is required' });
+    const r = await undoProjectOrganize(cwd, id);
+    res.json({ memory: await withOrganize(cwd, r.memory), changed: r.changed });
+  } catch (e: any) {
+    memoryFail(res, e, 'undo project memory organize failed');
+  }
+});
+router.post('/agent/project-context/memory/pin', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    if (parseRemoteOrigin(req.headers)) return res.status(403).json({ detail: 'Open the project on the host computer to edit its memory.' });
+    const cwd = await projectDirOf(req, res, req.body?.sessionId);
+    if (!cwd) return;
+    const { id, pinned, expectedVersion } = req.body || {};
+    if (typeof id !== 'string' || !id || typeof pinned !== 'boolean') return res.status(400).json({ detail: 'id and pinned are required' });
+    const memory = await pinProjectMemory(cwd, { id, pinned, ...(typeof expectedVersion === 'string' && expectedVersion ? { expectedVersion } : {}) });
+    res.json({ memory: await withOrganize(cwd, memory) });
+  } catch (e: any) {
+    memoryFail(res, e, 'pin project memory failed');
   }
 });
 

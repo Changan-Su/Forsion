@@ -7,7 +7,8 @@ import { useShallow } from 'zustand/react/shallow'
 import { useApp } from '../stores/appStore'
 import { usePageStore } from '../amadeus/store/pageStore'
 import { useI18n } from '../i18n'
-import { createProjectSkill, deleteProjectSkill, deleteProjectIcon, editProjectMemory, forgetProjectMemory, generateGitCommitMessage, getGitHosting, getGitRepo, type GitHosting, type GitRef, getGitSettings, getProjectContext, gitCommitProject, gitEmbeddedProject, gitCreateProjectBranch, gitInitProject, gitConnectRemoteProject, gitPendingProject, gitPublishGithubProject, gitPublishProject, gitPullProject, gitPushProject, gitSetPushTargetProject, gitTrustProject, initProjectContext, putProjectDoc, putProjectSettings, setProjectIconEmoji, uploadProjectIcon, resolveProjectCandidate, restoreProjectMemoryFact } from '../services/backendService'
+import { createProjectSkill, deleteProjectSkill, deleteProjectIcon, editProjectMemory, forgetProjectMemory, generateGitCommitMessage, getGitHosting, getGitRepo, type GitHosting, type GitRef, getGitSettings, getProjectContext, gitCommitProject, gitEmbeddedProject, gitCreateProjectBranch, gitInitProject, gitConnectRemoteProject, gitPendingProject, gitPublishGithubProject, gitPublishProject, gitPullProject, gitPushProject, gitSetPushTargetProject, gitTrustProject, initProjectContext, putProjectDoc, putProjectSettings, setProjectIconEmoji, uploadProjectIcon, resolveProjectCandidate, restoreProjectMemoryFact, organizeProjectMemory, undoProjectMemoryOrganize, pinProjectMemoryEntry } from '../services/backendService'
+import { DetailTopics, OrganizeBar, PinButton, organizeOutcomeText } from '../components/MemoryLayers'
 import { askString } from '../amadeus/components/askString'
 import { normPath } from './coding/studioModel'
 import { addToCreations } from './chat2/CreationCards'
@@ -334,6 +335,42 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
     } catch (e: any) {
       if (e?.status === 409 || e?.status === 404) { setReloadAt((n) => n + 1); setError(t(e.status === 404 ? 'projectProfile.memoryRemovedGone' : 'projectProfile.memoryBusy')) }
       else setError(e?.code === 'MEMORY_FULL' ? t('projectProfile.memoryFullRestore') : String(e?.message || e))
+    } finally { setBusy('') }
+  }
+  // 项目记忆分层(11-09 2b):手点「整理」(先挪进详情,再丢过时的)、整次撤销一次整理、钉住 / 钉回常驻。老引擎不带 topics,这几样都不画。
+  const [organizing, setOrganizing] = useState(false)
+  const num = (n: number) => new Intl.NumberFormat(locale === 'zh' ? 'zh-CN' : 'en-US').format(n)
+  const runOrganize = async (): Promise<void> => {
+    if (organizing || busy) return
+    clear(); setOrganizing(true)
+    try {
+      const o = await organizeProjectMemory(homeTarget(), session.id)
+      const text = organizeOutcomeText(t, o, num)
+      setNotice(o.status === 'organized' && o.compacted ? `${text} ${t('projectProfile.memoryOrganizedCompacted', { before: o.compacted.before.count, after: o.compacted.after.count })}` : text)
+    } catch (e: any) { setError(String(e?.message || e)) }
+    finally { setOrganizing(false); setReloadAt((n) => n + 1) }
+  }
+  const undoOrganize = async (id: string): Promise<void> => {
+    if (busy) return
+    clear(); setBusy(`organize:${id}`)
+    try {
+      const r = await undoProjectMemoryOrganize(homeTarget(), session.id, id)
+      setCtx((c) => (c ? { ...c, memory: r.memory } : c))
+      setNotice(r.changed.length ? t('memoryLayers.undoChanged', { n: r.changed.length }) : t('memoryLayers.undoneNotice'))
+    } catch (e: any) {
+      if (e?.status === 409 || e?.status === 404) { setReloadAt((n) => n + 1); setError(t('projectProfile.memoryBusy')) }
+      else setError(String(e?.message || e))
+    } finally { setBusy('') }
+  }
+  const pinMemory = async (id: string, pinned: boolean): Promise<void> => {
+    if (busy || !ctx?.memory) return
+    clear(); setBusy(`pin:${id}`)
+    try {
+      const memory = await pinProjectMemoryEntry(homeTarget(), session.id, { id, pinned, ...(ctx.memory.version ? { expectedVersion: ctx.memory.version } : {}) })
+      setCtx((c) => (c ? { ...c, memory } : c))
+    } catch (e: any) {
+      if (e?.status === 409 || e?.status === 404) { setReloadAt((n) => n + 1); setError(t('projectProfile.memoryBusy')) }
+      else setError(String(e?.message || e))
     } finally { setBusy('') }
   }
   const open = (key: string) => { setSelected(key); setOpened((keys) => (keys.includes(key) ? keys : [...keys, key])) }
@@ -841,11 +878,19 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
               <div><button type="button" className="btn ghost sm" onClick={() => setSkillForm(null)}>{t('agentProfile.cancel')}</button><button type="submit" className="btn primary sm" disabled={!skillForm.slug.trim() || !skillForm.name.trim() || !skillForm.content.trim()}>{busy === 'skill' && <Loader2 size={13} className="spin" />}{t('projectProfile.newSkill')}</button></div>
             </form> : <div className="project-card-actions"><button type="button" className="btn ghost sm" onClick={() => { clear(); setSkillForm({ slug: '', name: '', description: '', content: '' }) }}><Plus size={13} />{t('projectProfile.newSkill')}</button></div>}
           </section>
-          {ctx.memory && <section className="project-card" data-project-memory>
-            <div className="project-card-head"><div><h3>{t('projectProfile.memory')}</h3><small>{t('projectProfile.memoryHint')}</small>
-              {ctx.memory.entries.length > 0 && <div className="project-chips"><span className="project-chip">{t('projectProfile.memoryUsage', { count: ctx.memory.entries.length, chars: ctx.memory.chars, limit: ctx.memory.limit })}</span></div>}</div>
-              {ctx.memory.file && window.tangu?.revealHostPath && <button type="button" title={t('projectProfile.openMemory')} aria-label={t('projectProfile.openMemory')} onClick={() => reveal(ctx.memory!.file!)}><FolderOpen size={14} /></button>}</div>
-            {ctx.memory.entries.length ? <ul className="project-list project-memory-list">{ctx.memory.entries.map((entry) => <li key={entry.id} className="project-memory-row" data-project-memory-entry={entry.id}>
+          {ctx.memory && (() => { const mem = ctx.memory; const layered = Array.isArray(mem.topics); const topics = mem.topics ?? []; const hasDetails = topics.length > 0 || !!mem.archive?.entries.length
+            return <section className="project-card" data-project-memory data-project-memory-layered={layered ? 'true' : undefined}>
+            <div className="project-card-head"><div><h3>{t('projectProfile.memory')}</h3><small>{t(layered ? 'projectProfile.memoryHintLayered' : 'projectProfile.memoryHint')}</small>
+              {(mem.entries.length > 0 || hasDetails) && <div className="project-chips"><span className="project-chip" data-over={mem.chars > mem.limit ? 'true' : undefined}>{layered ? t('memoryLayers.residentEntries', { count: mem.entries.length, chars: num(mem.chars), limit: num(mem.limit) }) : t('projectProfile.memoryUsage', { count: mem.entries.length, chars: mem.chars, limit: mem.limit })}</span>
+                {topics.length > 0 && <span className="project-chip">{t('memoryLayers.detailCount', { n: topics.length })}</span>}</div>}</div>
+              {mem.file && window.tangu?.revealHostPath && <button type="button" title={t('projectProfile.openMemory')} aria-label={t('projectProfile.openMemory')} onClick={() => reveal(mem.file!)}><FolderOpen size={14} /></button>}</div>
+            {layered && mem.organize && (mem.entries.length > 0 || hasDetails) && <OrganizeBar busy={!!busy} running={organizing || mem.organize.running}
+              view={{ available: mem.organize.available, running: mem.organize.running, last: mem.organize.last, history: mem.organizeHistory ?? [] }}
+              onOrganize={() => void runOrganize()} onUndo={(id) => void undoOrganize(id)}
+              summary={mem.organizeHistory?.[0] && !mem.organizeHistory[0].undoneAt ? t('memoryLayers.lastMoved', { moved: mem.organizeHistory[0].moved }) : t(mem.organize.available ? 'projectProfile.memoryOrganizeHint' : 'memoryLayers.noModel')} />}
+            {layered && mem.chars > mem.limit && <p className="project-memory-over" data-project-memory-over>{t('projectProfile.memoryOverLine')}</p>}
+            {hasDetails && mem.entries.length > 0 && <h4 className="memory-layer-head">{t('memoryLayers.resident')}</h4>}
+            {mem.entries.length ? <ul className="project-list project-memory-list">{mem.entries.map((entry) => <li key={entry.id} className="project-memory-row" data-project-memory-entry={entry.id} data-pinned={entry.pinned ? 'true' : undefined}>
               {editing?.id === entry.id
                 ? <textarea className="project-memory-edit" rows={1} autoFocus maxLength={300} value={editing.text} aria-label={t('projectProfile.memoryEdit')} disabled={!!busy}
                     onChange={(e) => setEditing({ ...editing, text: e.target.value })}
@@ -855,9 +900,13 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
                 {editing?.id === entry.id
                   ? <button type="button" title={t('projectProfile.memoryEditSave')} aria-label={t('projectProfile.memoryEditSave')} disabled={!!busy} onClick={() => void saveMemory()}>{busy === `memory:${entry.id}` ? <Loader2 size={13} className="spin" /> : <Check size={13} />}</button>
                   : <button type="button" title={t('projectProfile.memoryEdit')} aria-label={t('projectProfile.memoryEdit')} disabled={!!busy} onClick={() => { if (ctx.memory?.version) { clear(); setEditing({ id: entry.id, text: entry.content, version: ctx.memory.version }) } }}><Pencil size={13} /></button>}
+                {layered && editing?.id !== entry.id && <PinButton pinned={!!entry.pinned} disabled={!!busy} onClick={() => void pinMemory(entry.id, !entry.pinned)} />}
                 <button type="button" className="danger" title={editing?.id === entry.id ? t('projectProfile.memoryEditCancel') : t('projectProfile.memoryForget')} aria-label={editing?.id === entry.id ? t('projectProfile.memoryEditCancel') : t('projectProfile.memoryForget')} disabled={!!busy} onClick={() => (editing?.id === entry.id ? setEditing(null) : void forgetMemory(entry.id))}>{busy === `memory:${entry.id}` && editing?.id !== entry.id ? <Loader2 size={13} className="spin" /> : <X size={13} />}</button>
               </div>
-            </li>)}</ul> : <p className="agent-profile-muted">{t('projectProfile.memoryEmpty')}</p>}
+            </li>)}</ul> : !hasDetails ? <p className="agent-profile-muted">{t('projectProfile.memoryEmpty')}</p> : null}
+            {layered && <DetailTopics topics={topics.map((tp) => ({ ...tp, entries: tp.entries.map((e) => ({ id: e.id, text: e.text, by: e.by })) }))}
+              archive={mem.archive ? { key: mem.archive.key, title: mem.archive.title, about: '', path: mem.archive.path, entries: mem.archive.entries.map((e) => ({ id: e.id, text: e.text, by: e.by })) } : null}
+              busy={!!busy} onPinBack={(it) => void pinMemory(it.id, true)} />}
             {!!ctx.memory.candidates?.length && <div className="project-memory-pending" data-project-memory-candidates={ctx.memory.candidates.length}>
               <strong>{t('projectProfile.memoryCandidates', { count: ctx.memory.candidates.length })}</strong>
               <ul className="project-memory-list">{ctx.memory.candidates.map((c) => <li key={c.id} className="project-memory-candidate" data-project-memory-candidate={c.id}>
@@ -877,7 +926,7 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
               </li>)}</ul>}
               <small>{t('projectProfile.memoryCompactedHint')}</small>
             </details>}
-          </section>}
+          </section> })()}
           {ctx.plans.length > 0 && <section className="project-card" data-project-plans>
             <div className="project-card-head"><div><h3>{t('projectProfile.plans')}</h3><small>{t('projectProfile.plansHint', { dir: `${ctx.workspaceDirName}/plans` })}</small></div></div>
             <div className="project-list">{ctx.plans.map((plan) => <button type="button" key={plan.path} className="project-row" title={plan.path} onClick={() => void window.tangu?.openHostPath?.(plan.path)}><strong>{plan.title || plan.name}</strong><small>{formatRelative(plan.mtimeMs, { now, locale })}</small></button>)}</div>

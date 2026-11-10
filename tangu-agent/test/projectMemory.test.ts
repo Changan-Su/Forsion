@@ -12,7 +12,8 @@ import { toSqliteDDL } from '../src/core/dialectDDL.js';
 import { STANDALONE_SCHEMA } from '../src/db/schemaStandalone.js';
 import { runMigration } from '../src/db/migrate.js';
 import { memoryLogProvider } from '../src/tools/builtin/memoryLog.js';
-import { buildProjectMemoryContext, resolveProjectMemory, PROJECT_MEMORY_CHAR_BUDGET } from '../src/services/projectMemory.js';
+import { buildProjectMemoryContext, buildProjectMemoryLayers, openProjectMemory, resolveProjectMemory, PROJECT_MEMORY_CHAR_BUDGET, PROJECT_MEMORY_STORE_CAP } from '../src/services/projectMemory.js';
+import { resetProjectMemoryOrganizeForTests } from '../src/services/projectMemoryCompact.js';
 
 let home: string, work: string, database: any;
 const previousHome = process.env.TANGU_HOME;
@@ -81,7 +82,7 @@ describe('项目级记忆', () => {
     expect(stores()).toHaveLength(1);
   });
 
-  it('项目级的 update / forget 走自己的 id 与版本;满了回显条目', async () => {
+  it('项目级的 update / forget 走自己的 id 与版本;常驻超线照写、排整理;到了存储上限才回显条目', async () => {
     const before = JSON.parse(await call('s-alpha', { action: 'list', fact: null, scope: 'project' })).project;
     const id = before.entries[0].id;
     expect(await call('s-alpha', { action: 'update', fact: 'Tests run with "npm run test:unit".', id, expectedVersion: 'stale', scope: 'project' }).catch((e) => String(e))).toMatch(/changed since it was read/);
@@ -91,26 +92,40 @@ describe('项目级记忆', () => {
     const agentVersion = JSON.parse(await call('s-alpha', { action: 'list', fact: null, scope: 'agent' })).version;
     expect(await call('s-alpha', { action: 'update', fact: 'x', id, expectedVersion: agentVersion, scope: 'agent' }).catch((e) => String(e))).toMatch(/^Error: expectedVersion is not current\. Nothing was written/);
     expect(JSON.parse(await call('s-alpha', { action: 'list', fact: null, scope: 'project' })).project.entries.map((e: any) => e.id)).toContain(id);
-    // 塞满
+    // 塞到常驻线:常驻没过线时整份都在提示里,最老的那条也看得到
     const filler = (n: number) => `Convention ${n}: ${'this project keeps generated files out of the source tree. '.repeat(4)}`.slice(0, 290);
-    let full = '';
-    for (let n = 0; n < 60 && !full; n++) { const r = await call('s-alpha', { action: 'add', fact: filler(n), scope: 'project' }); if (r.startsWith('Error:')) full = r; }
-    expect(full).toMatch(new RegExp(`^Error: project memory is full \\(\\d+/${PROJECT_MEMORY_CHAR_BUDGET} characters\\)`));
-    expect(full).toContain('scope "project"');
-    // 注入:索引整份常驻(总量 = 注入量),塞满了最老的那条也看得到
+    let n = 0; let last: any = null;
+    for (; n < 60; n++) {
+      const r = await call('s-alpha', { action: 'add', fact: filler(n), scope: 'project' });
+      expect(r.startsWith('Error:')).toBe(false); // 11-09 分层:常驻超线不拦写入
+      last = JSON.parse(r);
+      if (last.organizing) break;
+    }
+    expect(last.organizing).toMatch(/background run will move/); // 过线的那一句:回执里告诉模型不用自己删
+    // 注入:常驻按整条放到上限、留最新的;线外的说明还在,也会按这句话召回
     const block = await buildProjectMemoryContext('owner', 's-alpha');
     const after = JSON.parse(await call('s-alpha', { action: 'list', fact: null, scope: 'project' })).project;
-    expect(block).toContain('Convention 0:');
     expect(block).toContain(after.entries.at(-1).content.slice(0, 40));
-    expect(block).not.toMatch(/not shown/);
-    // 手改 MEMORY.md 写超了总量才会截:留最新的、说明还有多少没显示
+    expect(block).not.toContain('Convention 0:');
+    expect(block).toMatch(/\(\d+ more entr(y is|ies are) past the resident limit and waiting to be organized; the ones related to the latest message are recalled with it/);
+    const recalled = await buildProjectMemoryLayers('owner', 's-alpha', 'Convention 0 generated files');
+    expect(recalled.volatile).toContain('Convention 0:');
+    expect(recalled.stable).toBe(block); // 稳定段不随这句话变(护前缀缓存)
+    // 手改 MEMORY.md 写超了更多才会截得更狠:留最新的
     const small = await buildProjectMemoryContext('owner', 's-alpha', 1500);
-    expect(small).toMatch(/\(\d+ older entr(y is|ies are) not shown; remember with action "list" returns all of them\.\)$/);
-    expect(small).not.toContain('Convention 0:');
+    expect(small).not.toContain('Convention 1:');
     expect(small).toContain(after.entries.at(-1).content.slice(0, 40));
-    const gone = JSON.parse(await call('s-alpha', { action: 'forget', fact: null, id, expectedVersion: after.version, scope: 'project' }));
-    expect(gone).toMatchObject({ ok: true, action: 'forget', scope: 'project', count: after.entries.length - 1 });
-  });
+    // 真到了存储上限(整理反复没成)才回「写满了」+ 现有条目
+    const store = await openProjectMemory((await resolveProjectMemory('owner', 's-alpha'))!);
+    for (let k = 100; k < 200; k++) { try { store.mutate({ action: 'add', fact: filler(k), cap: PROJECT_MEMORY_STORE_CAP }); } catch { break; } }
+    const full = await call('s-alpha', { action: 'add', fact: filler(999), scope: 'project' });
+    expect(full).toMatch(new RegExp(`^Error: project memory is full \\(\\d+/${PROJECT_MEMORY_STORE_CAP} characters\\)`));
+    expect(full).toContain('scope "project"');
+    const now = JSON.parse(await call('s-alpha', { action: 'list', fact: null, scope: 'project' })).project;
+    const gone = JSON.parse(await call('s-alpha', { action: 'forget', fact: null, id, expectedVersion: now.version, scope: 'project' }));
+    expect(gone).toMatchObject({ ok: true, action: 'forget', scope: 'project', count: now.entries.length - 1 });
+    resetProjectMemoryOrganizeForTests();
+  }, 60_000);
 
   it('远程污点 run 不许写(两级同一道闸);云端档位没有项目级', async () => {
     expect(await call('s-beta', { action: 'add', fact: 'x', scope: 'project' }, 'xyra', { remote: { marked: true } })).toMatch(/^Error:/);

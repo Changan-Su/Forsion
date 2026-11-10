@@ -4,7 +4,7 @@
  */
 import type {
   AgentConfig, AgentScheduleEntry, AgentScheduleEntryUpsert, AgentScheduleInfo, AgentsMeta, AutomationActionCatalogItem, AutomationExecutionInfo, AutomationRunInfo, AutomationSessionInfo, ChannelKind, HistorianActivityItem, MessageRecord, ModelsResponse, ProviderQuota, MuseLibraryEntry, MuseStarter, MuseRoundInfo, MuseSpaceView, MusePlacementOp, MuseStatusInfo, MuseTodo, MuseTriggerInfo, MuseTriggerUpsert, PendingApprovalInfo, TriggerSourceInfo,
-  GitIdentity, GitSettings, GitSummary, NormalAgentDef, ProjectContext, ProjectRepoInfo, ProjectMemoryView, ProjectSettings, ProjectSkillInfo, SessionRecord, SkillInfo, SkillCatalogEntry, SpecialAgentsConfig,
+  GitIdentity, GitSettings, GitSummary, NormalAgentDef, ProjectContext, ProjectRepoInfo, ProjectMemoryView, ProjectMemoryOrganizeOutcome, ProjectSettings, ProjectSkillInfo, SessionRecord, SkillInfo, SkillCatalogEntry, SpecialAgentsConfig, StandInInfo,
   ToolsResponse, WorkspaceFileMeta, TeamDef } from '../types'
 import { authFetch } from './http'
 import { fetchOpts, type EngineTarget } from './engine/targets'
@@ -855,6 +855,10 @@ export const setChannelConnectedSession = (t: EngineTarget, kind: ChannelKind, s
 export const listAgents = (t: EngineTarget) =>
   request<{ agents: NormalAgentDef[] }>(t, '/agent/agents').then((r) => r.agents).catch(() => [] as NormalAgentDef[])
 
+/** 分身清单(本机引擎;旧引擎 / 云端 → 空)。不带 slug = 全部。 */
+export const listStandIns = (t: EngineTarget, slug?: string) =>
+  request<{ standIns: StandInInfo[] }>(t, slug ? `/agent/agents/${encodeURIComponent(slug)}/stand-ins` : '/agent/stand-ins').then((r) => r.standIns || []).catch(() => [] as StandInInfo[])
+
 /** toolsMode/toolsList 传 null=显式清除(JSON 会剔掉 undefined 键=保留旧值)。 */
 export const saveAgentDef = (t: EngineTarget, def: Omit<Partial<NormalAgentDef>, 'toolsMode' | 'toolsList' | 'enabledSkillIds' | 'enabledMcpServers'> & { enabledSkillIds?: string[] | null; enabledMcpServers?: string[] | null; toolsMode?: 'allow' | 'deny' | null; toolsList?: string[] | null }, slug?: string) =>
   request<{ agent: NormalAgentDef }>(
@@ -962,15 +966,48 @@ export const getPortraitMove = (t: EngineTarget) => request<PortraitMoveView>(t,
 export const scanPortraitMove = (t: EngineTarget) => request<PortraitMoveView>(t, '/agent/human/SOUL.md/move/scan', { method: 'POST' })
 export const decidePortraitMove = (t: EngineTarget, id: string, decision: 'move' | 'keep' | 'undo') =>
   request<PortraitMoveView>(t, `/agent/human/SOUL.md/move/items/${encodeURIComponent(id)}`, { method: 'POST', body: JSON.stringify({ decision }) })
+// 后台整理(Dream)因为画像满了、记在各 Agent 那里的条目(11-09):画像页提示一句,点开看是哪几条;只在宿主本机。
+export interface PortraitOverflowItem { agent: string; fact: string; at: number }
+export const getPortraitOverflow = (t: EngineTarget) => request<{ items: PortraitOverflowItem[] }>(t, '/agent/human/SOUL.md/overflow')
+export const dismissPortraitOverflow = (t: EngineTarget) => request<{ items: PortraitOverflowItem[] }>(t, '/agent/human/SOUL.md/overflow/dismiss', { method: 'POST' })
+
+// ── 记忆分层(11-09 第二步):常驻 / 详情、后台整理(配了后台模型才有)、整理记录(整次撤销)、图钉。只在宿主本机 ──
+export type MemoryOrganizeOutcome =
+  | { status: 'organized'; moved: number; archived: number; before: { count: number; chars: number }; after: { count: number; chars: number }; recordId?: string }
+  | { status: 'skipped'; reason: 'no_model' | 'under' | 'nothing' | 'busy' | 'cooldown' | 'rejected' | 'conflict' | 'failed'; detail?: string }
+export interface MemoryOrganizeRecord { id: string; at: number; moved: number; archived: number; topics: string[]; before?: { count: number; chars: number }; after?: { count: number; chars: number }; undoneAt?: number }
+export interface MemoryOrganizeView { available: boolean; running: boolean; last: { at: number; outcome: MemoryOrganizeOutcome } | null; history: MemoryOrganizeRecord[] }
+export type MemoryAuthor = 'user' | 'agent' | 'import'
+export interface AgentMemoryLayers {
+  version: string; residentChars: number; limit: number
+  resident: Array<{ id: string; text: string; pinned: boolean; by: MemoryAuthor; shadowed: boolean }>
+  topics: Array<{ key: string; title: string; about: string; path: string; entries: Array<{ id: string; text: string; by: MemoryAuthor }> }>
+  archive: { key: string; title: string; path: string; entries: Array<{ id: string; text: string; by: MemoryAuthor }> } | null
+  organize: MemoryOrganizeView
+}
+export const getPortraitOrganize = (t: EngineTarget) => request<MemoryOrganizeView>(t, '/agent/human/SOUL.md/organize')
+export const runPortraitOrganize = (t: EngineTarget) => request<MemoryOrganizeOutcome>(t, '/agent/human/SOUL.md/organize', { method: 'POST' }, { timeoutMs: 150_000 })
+export const undoPortraitOrganize = (t: EngineTarget, id: string) => request<{ id: string; undoneAt: number }>(t, `/agent/human/SOUL.md/organize/${encodeURIComponent(id)}/undo`, { method: 'POST' })
+/** 按原句钉住 / 取消;详情里的那条钉住 = 挪回常驻。回来的是整份画像。 */
+export const pinPortraitEntry = (t: EngineTarget, body: { fact: string; pinned: boolean; expectedVersion: string }) =>
+  request<{ content: string; version: string }>(t, '/agent/human/SOUL.md/pin', { method: 'POST', body: JSON.stringify(body) })
+export const getAgentMemoryLayers = (t: EngineTarget, slug: string) => request<AgentMemoryLayers>(t, `${agentMemoryPath(slug)}/layers`)
+export const runAgentMemoryOrganize = (t: EngineTarget, slug: string) => request<MemoryOrganizeOutcome>(t, `${agentMemoryPath(slug)}/organize`, { method: 'POST' }, { timeoutMs: 150_000 })
+export const undoAgentMemoryOrganize = (t: EngineTarget, slug: string, id: string) =>
+  request<{ id: string; undoneAt: number; changed: string[] }>(t, `${agentMemoryPath(slug)}/organize/${encodeURIComponent(id)}/undo`, { method: 'POST' })
+export const pinAgentMemoryEntry = (t: EngineTarget, slug: string, body: { id: string; pinned: boolean; expectedVersion?: string }) =>
+  request<{ ok: true }>(t, `${agentMemoryPath(slug)}/pin`, { method: 'POST', body: JSON.stringify(body) })
 
 // ── 从其他 AI 导入(11-03,引擎 services/externalImport;只许本机)──
 export type ImportTool = 'claude-code' | 'codex' | 'gemini-cli' | 'hermes' | 'cursor' | 'windsurf' | 'pasted'
 export interface ImportLedger { id: string; at: number; sources: ImportTool[]; counts: Record<'person' | 'agent' | 'project' | 'skill', number>; undoneAt?: number; kept?: string[] }
 export interface ImportScan { tools: Array<{ id: ImportTool; about: number; rules: number; project: number; notes: number; skills: number }>; fresh: number; freshTools: ImportTool[]; last: ImportLedger | null }
-export interface ImportPlanItem { id: string; text: string; dest: 'person' | 'agent' | 'project' | 'past' | 'blocked'; project?: string; sources: ImportTool[]; flags: Array<'merged' | 'sensitive' | 'known' | 'conflict' | 'forgotten'>; conflictWith?: string; checked: boolean; locked: boolean }
+export interface ImportPlanItem { id: string; text: string; dest: 'person' | 'agent' | 'project' | 'past' | 'blocked'; project?: string; sources: ImportTool[]; flags: Array<'merged' | 'sensitive' | 'known' | 'conflict' | 'forgotten' | 'noRoom'>; conflictWith?: string; checked: boolean; locked: boolean; cost?: number }
 export interface ImportPlanSkill { key: string; tool: ImportTool; name: string; target: string; description: string; scripts: number; files: number; flags: Array<'renamed' | 'mentions-other' | 'too-big'>; checked: boolean; locked: boolean }
 export interface ImportNotice { tool: ImportTool; kind: 'too-many' | 'persona' | 'truncated'; path: string; count?: number; project?: string }
-export interface ImportPlan { id: string; createdAt: number; items: ImportPlanItem[]; skills: ImportPlanSkill[]; notices: ImportNotice[]; missed: number }
+/** 画像的账(11-09):现在多少字、上限、还能放多少(引擎已扣掉新开那一节的标题);旧引擎没有这一项。 */
+export interface ImportPortraitBudget { chars: number; limit: number; room: number }
+export interface ImportPlan { id: string; createdAt: number; items: ImportPlanItem[]; skills: ImportPlanSkill[]; notices: ImportNotice[]; missed: number; portrait?: ImportPortraitBudget }
 export interface ImportPlanView { state: 'idle' | 'running' | 'done' | 'error'; done: number; total: number; plan: ImportPlan | null; error: string | null }
 export const scanImport = (t: EngineTarget) => request<ImportScan>(t, '/agent/import/scan')
 export const getImportPlan = (t: EngineTarget) => request<ImportPlanView>(t, '/agent/import/plan')
@@ -1733,6 +1770,13 @@ export const resolveProjectCandidate = (t: EngineTarget, sessionId: string, id: 
 /** 把写满压缩时合并 / 去掉的一句原样记回项目记忆。404 = 那一句已经不在记录里;放不下 → err.code 'MEMORY_FULL'。 */
 export const restoreProjectMemoryFact = (t: EngineTarget, sessionId: string, id: string) =>
   request<{ memory: ProjectMemoryView }>(t, '/agent/project-context/memory/restore', { method: 'POST', body: JSON.stringify({ sessionId, id }) }).then((r) => r.memory)
+/** 项目记忆分层(11-09 2b):手点「整理」(先挪进详情,再丢过时的;要等后台模型,给长一点的时限)、整次撤销、钉住。只在宿主本机。 */
+export const organizeProjectMemory = (t: EngineTarget, sessionId: string) =>
+  request<ProjectMemoryOrganizeOutcome>(t, '/agent/project-context/memory/organize', { method: 'POST', body: JSON.stringify({ sessionId }) }, { timeoutMs: 200_000 })
+export const undoProjectMemoryOrganize = (t: EngineTarget, sessionId: string, id: string) =>
+  request<{ memory: ProjectMemoryView; changed: string[] }>(t, '/agent/project-context/memory/organize/undo', { method: 'POST', body: JSON.stringify({ sessionId, id }) })
+export const pinProjectMemoryEntry = (t: EngineTarget, sessionId: string, body: { id: string; pinned: boolean; expectedVersion?: string }) =>
+  request<{ memory: ProjectMemoryView }>(t, '/agent/project-context/memory/pin', { method: 'POST', body: JSON.stringify({ sessionId, ...body }) }).then((r) => r.memory)
 // ── 项目文件夹搬走后重新指向(引擎 services/projectRelink.ts;只在本机引擎上,手机 / 网页拿到的是空表)──
 /** 本人会话里出现过、现在不在原处的本地项目路径(外接盘没挂上也算 —— 只拿来打标记)。 */
 export const getMissingProjects = (t: EngineTarget) =>

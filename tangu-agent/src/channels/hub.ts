@@ -11,6 +11,7 @@ import { QQChannel } from './qq.js';
 import { CHANNEL_DIR_NAME, channelHasCredentials, channelSettings, saveChannelSettings } from './config.js';
 import type { ChannelKind, ChannelOwner, ChannelSettings, PluginChannelSpec, SendResult } from './types.js';
 import { CHANNEL_KINDS } from './types.js';
+import { CHANNEL_NAME } from './messages.js';
 
 class ChannelHub {
   readonly wechatDriver = new WechatChannel();
@@ -56,6 +57,15 @@ class ChannelHub {
 
   /** 插件通道的声明(内置通道 → undefined)。 */
   pluginChannel(kind: string): PluginChannelSpec | undefined { return this.plugins.get(kind); }
+  /** 注册这个通道的插件(内置通道 / 没登记 → undefined)。分身只给这个插件的工具(services/accessDomain)。 */
+  channelOwner(kind: string): ChannelOwner | undefined { return this.owners.get(kind); }
+  /** 通道的显示名(zh/en):内置按 messages.CHANNEL_NAME,插件按它声明的 name。分身的名字「本体名 · 通道名」用它。 */
+  channelName(kind: string): { zh: string; en: string } {
+    const p = this.plugins.get(kind);
+    if (p) return { zh: p.name.zh, en: p.name.en };
+    const b = (CHANNEL_NAME as Record<string, { zh: string; en: string }>)[kind];
+    return b ? { zh: b.zh.trim(), en: b.en.trim() } : { zh: kind, en: kind };
+  }
 
   /** 插件把这个凭据键声明成 secret:状态与保存回执都不回显它(appId 内置是明文回显的)。 */
   isSecretField(kind: string, key: 'appId' | 'appSecret' | 'botToken'): boolean {

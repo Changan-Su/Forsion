@@ -318,6 +318,29 @@ export interface NormalAgentDef {
   /** 内置工具名单:'deny'=toolsList 内禁用(其余可用);'allow'=仅 toolsList 可用;缺省=不限制。 */
   toolsMode?: 'allow' | 'deny'
   toolsList?: string[]
+  /** 分身(引擎 agents/standIn.ts):这是谁的分身。/agent/agents 不列分身,出现在这里只会是 getAgent 读到的。 */
+  standInOf?: string
+  /** 本体这边:哪几组通道**不**换分身('im' = 微信 / 企业微信 / Telegram / QQ,'plugin' = 其他插件通道)。缺省 = 都换。 */
+  standInOff?: Array<'im' | 'plugin'>
+  /** 本体这边:勾给分身只读的 Library 文件(相对 Library 的名字)。 */
+  standInLibrary?: string[]
+  /** 本体这边:分身能不能读 human/AGENT.md(缺省不能)。 */
+  standInAgentMd?: boolean
+}
+
+/** GET /agent/stand-ins、/agent/agents/:slug/stand-ins 的一行。 */
+export interface StandInInfo {
+  slug: string
+  name: string
+  nameZh?: string
+  nameEn?: string
+  standInOf: string
+  standInChannel: string | null
+  /** 多联系人通道:联系人哈希(不是联系人本身)。 */
+  standInPeer: string | null
+  channelName: { zh: string; en: string } | null
+  createdAt: string
+  memoryEntries: number
 }
 
 export interface AgentConfig {
@@ -725,14 +748,29 @@ export interface ProjectMemoryView {
   /** MEMORY.md 的本机路径(「打开记忆文件夹」);还没有记忆 / 老引擎 → 不带。 */
   file?: string
   version: string | null
-  entries: Array<{ id: string; content: string; updatedAt: number }>
+  /** 常驻(11-09 分层以后不含挪进详情的);pinned / by 是行尾记号里的(钉住的整理不碰;user = 你写的,只挪不归档)。
+   *  「导入的」写成反引号:宿主的边界仪器按正则认 import 语句,单引号写法会被当成一条 import(同 contracts/entryMark.ts)。 */
+  entries: Array<{ id: string; content: string; updatedAt: number; pinned?: boolean; by?: 'user' | 'agent' | `import` }>
+  /** 常驻字数(给 Agent 看的样子)与常驻上限。 */
   chars: number
   limit: number
   /** 等用户点头的后台候选(带网址、命令或权限字眼,没有直接记):不是记忆,Agent 读不到。老引擎不带。 */
   candidates?: Array<{ id: string; content: string; at: number }>
   /** 写满时的自动压缩:最近一次的前后规模;removed = 被合并或去掉、还能逐句恢复的原句(新的在前)。没压过 / 老引擎不带。 */
   compacted?: { at: number; before: { count: number; chars: number }; after: { count: number; chars: number }; removed: Array<{ id: string; content: string }> }
+  // ── 11-09 分层(常驻 + 详情 + 召回)。老引擎不带下面这些:界面照原样画平铺的一份 ──
+  /** 详情:每份一个主题(path 相对记忆文件夹),聊到时按这句话召回;归档 = 过时的,原句都在、不再召回。 */
+  topics?: Array<{ key: string; title: string; about: string; path: string; entries: Array<{ id: string; text: string; by: 'user' | 'agent' | `import` }> }>
+  archive?: { key: string; title: string; path: string; entries: Array<{ id: string; text: string; by: 'user' | 'agent' | `import` }> } | null
+  /** 整理记录(新的在前),每次能整次撤销。 */
+  organizeHistory?: Array<{ id: string; at: number; moved: number; archived: number; topics: string[]; before?: { count: number; chars: number }; after?: { count: number; chars: number }; undoneAt?: number }>
+  /** 「整理」按钮要的:有没有后台模型、正在跑没有、上一次的结果。 */
+  organize?: { available: boolean; running: boolean; last: { at: number; outcome: ProjectMemoryOrganizeOutcome } | null }
 }
+/** 项目记忆整理一次的结果(手点「整理」的回应;compacted = 挪完还超七成,又压缩了一遍,丢掉的原句在 compacted.removed 里逐句可恢复)。 */
+export type ProjectMemoryOrganizeOutcome =
+  | { status: 'organized'; moved: number; archived: number; before: { count: number; chars: number }; after: { count: number; chars: number }; recordId?: string; compacted?: { before: { count: number; chars: number }; after: { count: number; chars: number } } }
+  | { status: 'skipped'; reason: 'no_model' | 'under' | 'nothing' | 'busy' | 'cooldown' | 'rejected' | 'conflict' | 'failed'; detail?: string }
 
 export interface SkillInfo {
   id: string

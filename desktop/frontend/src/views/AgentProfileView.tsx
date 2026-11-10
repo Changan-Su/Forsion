@@ -1,5 +1,5 @@
 import { agentDescription, isStockAgent } from '../components/builtinAgentDescriptions'
-import { useEffect, useId, useMemo, useRef, useState, type ChangeEvent } from 'react'
+import { Fragment, useEffect, useId, useMemo, useRef, useState, type ChangeEvent } from 'react'
 import { BookOpen, Bot, CalendarClock, Check, ChevronDown, ChevronRight, ExternalLink, ArrowUp, ArrowDown, Eye, EyeOff, ImageUp, Loader2, MoreHorizontal, Plus, Plug, ScrollText, Search, Settings2, Sparkles, Sprout, Star, Trash2, X } from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
 import { activeMainPanel, startOpenDrag, useListFirst, useWorkspace, ViewErrorBoundary } from '@lcl/engine'
@@ -29,6 +29,7 @@ import type { RecordJump } from '../services/recordJump'
 import './agentProfileMessages'
 import './agentProfile.css'
 import { AgentAvatar } from '../components/AgentAvatar'
+import { AgentStandInGroup, StandInRosterRows, useStandInsByBody } from './AgentStandIns'
 import { homeTarget } from '../services/engine/targets'
 import { track } from '../achievements/store'
 import { agentName, hasHan } from '../agentName'
@@ -228,6 +229,7 @@ export function AgentsRosterView() {
   }
   // 删除走与侧栏同一个卸载确认框(逐项写去向、进回收站);删掉的是正在看的那个 → 换到名册第一个
   const [removing, setRemoving] = useState<NormalAgentDef | null>(null)
+  const standIns = useStandInsByBody() // 分身挂在本体下(不进名册、不能拖排序)
   return <aside className="agents-roster">
       {/* 创建入口只留底部那一个(评审 U-25:标题行的 ＋ 与底部链接重复)。 */}
       <div className="agents-roster-heading"><span>{t('agentProfile.roster')} <small>{agents.length}</small></span></div>
@@ -236,7 +238,7 @@ export function AgentsRosterView() {
         <span className="agent-portrait small"><AgentAvatar name={meIdentity.name} url={meIdentity.avatar} fill /></span><span><strong>{meIdentity.name}</strong><small>{t('human.me.rowHint')}</small></span>
       </button></div>
       <label className="agents-search"><Search size={14} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t('agentProfile.search')} aria-label={t('agentProfile.search')} /></label>
-      <div className={`agents-roster-list${phone ? ' pl-fab-room' : ''}`}>{filtered.map((a) => <div key={a.slug} className={`agents-roster-row${dragSlug === a.slug ? ' dragging' : ''}`} draggable={!rosterBusy && !query}
+      <div className={`agents-roster-list${phone ? ' pl-fab-room' : ''}`}>{filtered.map((a) => <Fragment key={a.slug}><div className={`agents-roster-row${dragSlug === a.slug ? ' dragging' : ''}`} draggable={!rosterBusy && !query}
         onDragStart={(e) => { setDragSlug(a.slug); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', a.slug); startOpenDrag(e.dataTransfer, { open: () => selectAgent(a.slug) }) }} onDragEnd={() => setDragSlug(null)}
         onDragOver={(e) => { if (dragSlug && dragSlug !== a.slug) e.preventDefault() }} onDrop={(e) => { e.preventDefault(); if (dragSlug) void reorder(dragSlug, a.slug) }}>
         <button type="button" className={`agents-roster-item${viewing(a.slug) ? ' selected' : ''}`} onClick={() => selectAgent(a.slug)} aria-pressed={viewing(a.slug)}>
@@ -249,7 +251,7 @@ export function AgentsRosterView() {
           { id: 'disable', label: t(a.disabled ? 'agentProfile.enable' : 'agentProfile.disable'), icon: a.disabled ? <Eye size={14} /> : <EyeOff size={14} />, disabled: rosterBusy || (!a.disabled && (a.slug === 'xyra' || a.slug === defaultSlug || a.slug === 'muse')), onSelect: () => void toggleDisabled(a) },
           { id: 'delete', label: t('agentProfile.delete'), icon: <Trash2 size={14} />, danger: true, disabled: rosterBusy || a.slug === 'xyra' || a.slug === defaultSlug, onSelect: () => { setRosterError(''); setRemoving(a) } },
         ]}><MoreHorizontal size={15} /></CapabilityMenu>
-      </div>)}{!filtered.length && <p className="agent-profile-muted">{t('agentProfile.noResults')}</p>}</div>
+      </div><StandInRosterRows rows={standIns.get(a.slug)} onOpen={() => selectAgent(a.slug)} /></Fragment>)}{!filtered.length && <p className="agent-profile-muted">{t('agentProfile.noResults')}</p>}</div>
       {rosterError && <p className="agent-profile-error" role="alert">{rosterError}</p>}
       {phone
         ? <ListFab label={t('agentProfile.create')} icon={<Plus />} onClick={() => { setCreating(); setRosterError('') }} />
@@ -449,7 +451,7 @@ function AgentProfile({ agent, compact = false, sessionId, rewriteSessionId, evo
       openAgentProfile(next) // 视图按 agentSlug 参数选人,不换参数会退回名册第一个
     } catch (e: any) {
       if (!alive.current) return
-      const known: Record<string, string> = { builtin: 'agentProfile.folderFixed', exists: 'agentProfile.renameExists', cloud_synced: 'agentProfile.renameCloudSynced', plugin_seeded: 'agentProfile.renamePluginSeeded', busy: 'agentProfile.renameBusy', invalid_slug: 'agentProfile.renameInvalid' }
+      const known: Record<string, string> = { builtin: 'agentProfile.folderFixed', exists: 'agentProfile.renameExists', cloud_synced: 'agentProfile.renameCloudSynced', plugin_seeded: 'agentProfile.renamePluginSeeded', busy: 'agentProfile.renameBusy', invalid_slug: 'agentProfile.renameInvalid', has_stand_ins: 'agentProfile.renameHasStandIns', stand_in: 'agentProfile.renameStandIn' }
       setError(known[e?.code] ? t(known[e.code]) : String(e?.message || e))
       setSlugDraft(old)
     } finally { if (alive.current) setBusy(false) }
@@ -608,6 +610,7 @@ function AgentProfile({ agent, compact = false, sessionId, rewriteSessionId, evo
           <ProfileModelField models={s.models || []} value={s.session.model_id || ''} label={t('agentProfile.sessionModel')} onChange={(model) => { tanguCount('modelSwitchUser'); useApp.getState().setSessionModel(model, sessionId, false) }} />
           <small>{t('agentProfile.sessionModelHint')}</small>
         </section>}
+        {agent.libraryDir && !agent.standInOf && agent.slug !== 'muse' && <AgentStandInGroup agent={agent} draft={draft} patch={patch} cfg={s.cfg} />}
         <ProfileGroup title={t('agentProfile.quickSettings')} hint={t('agentProfile.defaultsHint')}>{runSettings}</ProfileGroup>
         {agentConfiguration}
         {s.usage && <p className="agent-profile-muted">{t('agentProfile.context')} · {s.usage.ctx.toLocaleString()} tokens</p>}

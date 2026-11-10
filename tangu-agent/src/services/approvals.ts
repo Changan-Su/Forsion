@@ -1,3 +1,4 @@
+import { standInOf, type StandInDomain } from './accessDomain.js';
 import { mcpSettingsPreview } from './mcpSettings.js';
 /**
  * 进程内工具审批登记表（host-exec 模式 / TUI 专用）。
@@ -1280,13 +1281,14 @@ export async function gateToolCall(
 
   if (allowRule && !protectedAsk && !alwaysAsk && !(cap && (await capWouldAsk(call, cap, ctx, remote))) && (!escalate || allowRuleCoversWrites(allowRule, call, ctx.cwd))) return { action: 'approve' };
   // known-safe 只读 bash:免审批(碰凭据文件的不算 known-safe,见 isKnownSafeBash)。
-  if (!forceAsk && !alwaysAsk && name === 'run_bash' && isKnownSafeBash(bashCommandOf(call), ctx.cwd)) {
+  // 分身(11-09)不走免审批捷径(它本来就没有 shell / open_path,这里是同一判定的兜底:只读命令也读得到 human/ 和本体的文件夹)
+  if (!forceAsk && !alwaysAsk && name === 'run_bash' && !standInOf(ctx as { standIn?: StandInDomain }) && isKnownSafeBash(bashCommandOf(call), ctx.cwd)) {
     // known-safe git 读的是仓库里可被改写的配置:没人看过卡,就在写拒绝 profile 里跑(G5 方案 B;其余 known-safe 程序不读仓库配置,不包)。
     return /^git( |$)/.test(bashCommandOf(call).trim()) ? { action: 'approve', writeProtect: true } : { action: 'approve' };
   }
   // 打开一份普通文档 / 一个普通文件夹:免审批(和只读 bash 同档)。远程污点 run 和无人值守 run 不走这条 ——
   // 驱动它的人不在这台电脑前,屏幕上凭空弹窗没人看。
-  if (!forceAsk && !alwaysAsk && name === 'open_path' && !remote && !ctx.approvalDeferral && !ctx.unattended &&
+  if (!forceAsk && !alwaysAsk && name === 'open_path' && !remote && !ctx.approvalDeferral && !ctx.unattended && !standInOf(ctx as { standIn?: StandInDomain }) &&
       openPathKnownSafe(String(parseCallArgs(call).path ?? ''), ctx.cwd || process.cwd())) {
     return { action: 'approve' };
   }

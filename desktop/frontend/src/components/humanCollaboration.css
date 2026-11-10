@@ -46,3 +46,21 @@
 .portrait-move-caption { margin: 0 0 8px; color: var(--text-muted); font-size: var(--ui-font-meta); }
 .portrait-move-foot { display: flex; gap: 18px; padding: 10px 0; border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent); }
 .portrait-move-entry { display: flex; align-items: center; gap: 6px; margin: 0 0 14px; color: var(--text-muted); font-size: var(--ui-font-meta); }
+
+/* 每轮进提示词的那条线(11-09 记忆分层第一步):实线 + 文字(界面里不画虚线);线外的条目变淡。
+   变淡换的是文字变量,不叠 opacity(DESIGN §6:子元素的不透明度高不过父元素);原值先在面板上取别名,免得 --text 引用自己 */
+.human-panel { --human-dim-ink: var(--text-faint); }  /* muted 和正文只差一档,看不出变淡 */
+.human-over { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.human-over .profile-text-action { display: inline-flex; align-items: center; gap: 5px; }
+.human-cutline { display: flex; align-items: center; gap: 10px; margin: 14px 0; color: var(--text-muted); font-size: var(--ui-font-meta); }
+.human-cutline::before, .human-cutline::after { content: ''; border-top: 1px solid var(--border); }
+.human-cutline::before { flex: 0 0 18px; }
+.human-cutline::after { flex: 1; }
+/* .md-body 的 li / p / td 读 --text-light(base.css),只换 --text 不变淡 */
+.human-outside { --text: var(--human-dim-ink); --text-light: var(--human-dim-ink); color: var(--human-dim-ink); }
+.human-draft-budget { margin: 0; color: var(--text-muted); font-size: var(--ui-font-meta); }
+.human-draft-budget[data-prompt-draft-budget="over"] { color: var(--accent-ink); }
+.human-overflow { margin: 0 0 12px; color: var(--accent-ink); font-size: var(--ui-font-meta); }
+.human-overflow p { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin: 0; }
+.human-overflow ul { margin: 6px 0 0; padding-left: 18px; color: var(--text-muted); }
+.human-overflow li + li { margin-top: 2px; }

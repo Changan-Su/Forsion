@@ -8,14 +8,15 @@
  * 混进目录与 system prompt 被 use_skill 直接调用。改由「设置 → Agent CLIs」逐个显式导入
  * (整夹复制进 ~/.tangu/skills/),导入后才以 `local:` 出现。见 engines/assets.ts。
  */
-import { promises as fs } from 'node:fs';
+import { promises as fs, realpathSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { skillsDir as userSkillsDir, agentsDir, WORKSPACE_DIR_NAME, LEGACY_WORKSPACE_DIR_NAME } from '../core/tanguHome.js';
 import { bundleSkillRoots } from '../plugins/bundles.js';
-import { currentDisplayAgentSlug, currentRunCwd } from '../seams/runContext.js';
+import { currentDisplayAgentSlug, currentRunCwd, currentStandIn } from '../seams/runContext.js';
 import type { SkillRecord } from '../core/types.js';
+import { pathWithin } from '../sandbox/hostSandboxProtection.js';
 import { listAgents } from '../agents/agentRegistry.js';
 import { disabledSkillNames } from './availability.js';
 import { getPluginSkill, isPluginSkillActive, listPluginSkills, PLUGIN_SKILL_PREFIX } from './pluginSkills.js';
@@ -416,6 +417,15 @@ async function builtinTreeHash(name: string): Promise<string | null> {
 /** 测试用:某个技能文件夹现在的指纹(current 算法)。 */
 export const skillTreeHash = (dir: string): Promise<string | null> => treeHash(dir);
 
+/** 分身(11-09,Codex 评审):技能正文会进技能目录描述、再经 use_skill 整份返回,不过文件读根 —— SKILL.md(或技能文件夹)
+ *  软链指出它所在的技能根(指向 human/SOUL.md、本体的记忆详情……)就不装。只在分身的 run 里查;读不到真身按「指出去」算。 */
+function skillStaysInRoot(s: SkillRecord, root: string): boolean {
+  try {
+    const dir = String((s as { dir?: string }).dir || '');
+    return !!dir && pathWithin(realpathSync.native(path.join(dir, 'SKILL.md')), realpathSync.native(root));
+  } catch { return false; }
+}
+
 async function listFilesystemSkills(): Promise<SkillRecord[]> {
   await seedBuiltinSkills(); // 首启把内置复制进 ~/.forsion/skills(幂等;覆盖 TUI 等不走 standalone 启动的入口)
   const roots: Array<[string, SkillSource]> = [
@@ -425,7 +435,8 @@ async function listFilesystemSkills(): Promise<SkillRecord[]> {
     ...bundleSkillRoots().map((d): [string, SkillSource] => [d, 'bundle']),
     [userSkillsDir(), 'user'],
   ];
-  const slug = currentDisplayAgentSlug();
+  // 分身(11-09):技能是人设的一部分、跟着本体走 —— 按本体的技能目录装(读根那边对这几个目录只读放行,见 services/accessDomain)
+  const slug = currentStandIn()?.bodySlug || currentDisplayAgentSlug();
   if (slug && SAFE_SLUG.test(slug)) {
     roots.push([builtinAgentSkillsDir(slug), 'agent']); // 该 agent 的包内置默认技能
     roots.push([agentSkillsDir(slug), 'agent']);        // 用户为该 agent 增改的(覆盖同 id 默认)
@@ -433,7 +444,9 @@ async function listFilesystemSkills(): Promise<SkillRecord[]> {
   const cwd = currentRunCwd();
   if (cwd) for (const d of projectSkillsDirs(cwd)) roots.push([d, 'project']);
 
-  const scanned = await Promise.all(roots.map(([dir, src]) => scanDir(dir, src)));
+  const standIn = currentStandIn();
+  const scanned = (await Promise.all(roots.map(([dir, src]) => scanDir(dir, src))))
+    .map((list, i) => (standIn ? list.filter((s) => skillStaysInRoot(s, roots[i][0])) : list));
   // 停用状态按作用域过滤候选版本，而不是删除目录。Agent 排除继承只影响全局候选；
   // 同名 Agent 专属版仍可生效。项目级候选完全不参与本次管理，沿用既有顺序。
   const [disabledUser, disabledAgent, disabledInherited] = await Promise.all([

@@ -126,7 +126,7 @@ async function run() {
     await page.getByRole('tab', { name: '画像', exact: true }).click()
     await page.locator('[data-human-file="SOUL.md"]').getByText('技术名词保留英文', { exact: false }).waitFor()
     await shot('me-portrait-light')
-    await page.getByRole('tab', { name: '记忆', exact: true }).click()
+    await page.getByRole('tab', { name: '我的笔记', exact: true }).click()
     const memory = page.locator('[data-human-file="MEMORY.md"]')
     await memory.getByText('Forsion 是主业', { exact: false }).waitFor()
     assert.equal(await memory.locator('h3').innerText(), '关于我')
@@ -205,7 +205,7 @@ async function run() {
     // 布局存盘有节流:刚点完链接就重载,恢复的可能还是 Xyra —— 这里不验恢复,直接再点一次「我」
     await meRow.click()
     await page.waitFor()
-    for (const tab of ['Collaboration', 'Portrait', 'Memory']) assert.equal(await page.getByRole('tab', { name: tab, exact: true }).count(), 1)
+    for (const tab of ['Collaboration', 'Portrait', 'My notes']) assert.equal(await page.getByRole('tab', { name: tab, exact: true }).count(), 1)
     assert.equal(await agentMd.locator('h3').innerText(), 'How you want Agents to work')
     assert.ok((await meRow.innerText()).includes('Me'))
     assert.equal(await page.evaluate((el) => el.scrollWidth > el.clientWidth + 1), false)

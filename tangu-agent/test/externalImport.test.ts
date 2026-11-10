@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 vi.mock('../src/services/agentFileSync.js', () => ({ scheduleAgentFilesSync: vi.fn() }));
 vi.mock('../src/services/specialAgentsConfig.js', async (original) => ({ ...(await original<object>()), resolveBackgroundModelId: async () => 'bg' }));
+import { portraitResidentChars } from '../src/contracts/memoryLayers.js';
 import { configureTangu } from '../src/seams/runtime.js';
 import { createTanguProfile } from '../src/profiles/index.js';
 import { createSqliteHost } from '../src/adapters/standalone/sqliteHost.js';
@@ -12,7 +13,7 @@ import { readHuman, writeHuman } from '../src/agents/humanStore.js';
 import { portraitEntries } from '../src/agents/humanPortrait.js';
 import { openProjectMemory, refOf } from '../src/services/projectMemory.js';
 import { scanSources } from '../src/services/externalImport/sources.js';
-import { applyPlan, planView, scanSummary, startPlan, undoImport, type ImportPlan } from '../src/services/externalImport/index.js';
+import { applyPlan, migrateImportedPortrait, planView, scanSummary, startPlan, undoImport, type ImportPlan } from '../src/services/externalImport/index.js';
 
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 });
 const PROJ = '/work/forsion';
@@ -259,5 +260,119 @@ describe('apply and undo', () => {
     const { ledger } = await applyPlan({ planId: p.id, items: [{ id: blocked.id }] });
     expect(ledger.writes).toEqual([]);
     expect(await soul()).toEqual([]);
+  });
+});
+
+// 11-09 记忆分层第一步(止血):导入不许一次把画像推过 Agent 每轮读的 2000 字;导入的条目自己成一节,不混进 Agent 写的「最近认识的」
+describe('portrait budget and its own section', () => {
+  const SOUL = { kind: 'human' as const, file: 'SOUL.md' as const };
+  const manyFacts = Array.from({ length: 47 }, (_, i) => `你在第 ${i + 1} 件事上有一个很具体的习惯，这一句故意写得长一些，好占掉一些字数，免得四十七条加起来还不到两千字。`);
+  const manyAnswer = (body: any) => ({ items: manyFacts.map((text) => ({ text, dest: 'person', from: [body.snippets[0].id] })) });
+
+  it('47 imported facts never push the portrait past the 2,000 characters agents read', async () => {
+    answer = manyAnswer;
+    const p = await planned();
+    await applyPlan(checkedOf(p));
+    // 11-09 第二步:量常驻(行尾记号不进 Agent 读的文本,不算字数)
+    expect(portraitResidentChars((await readHuman(SOUL)).content)).toBeLessThanOrEqual(2000);
+  });
+
+  it('imported entries go to their own dated section, never into the agent section', async () => {
+    await writeHuman(SOUL, { content: '## 最近认识的\n\n- 你喜欢喝茶。\n', summary: 'seed', expectedVersion: (await readHuman(SOUL)).version }, 'user');
+    const p = await planned();
+    const { ledger } = await applyPlan(checkedOf(p));
+    const content = (await readHuman(SOUL)).content;
+    const d = new Date();
+    const heading = `## 从其他 AI 导入 · ${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    expect(content).toContain(heading);
+    expect(content.indexOf('你希望别人叫你阿青。')).toBeGreaterThan(content.indexOf(heading));
+    expect(content.slice(0, content.indexOf(heading))).not.toContain('阿青');
+    // 撤销照旧:回到导入前,导入那一节的标题也一起收掉,Agent 那一节不动
+    await undoImport(ledger.id);
+    expect((await readHuman(SOUL)).content).toBe('## 最近认识的\n\n- 你喜欢喝茶。\n');
+  });
+
+  it('ticks in list order until the 2,000 characters are used, marks the rest no room, and a ticked one still goes in past the line', async () => {
+    answer = manyAnswer;
+    const p = await planned();
+    const person = p.items.filter((i) => i.dest === 'person');
+    expect(p.portrait).toMatchObject({ chars: 0, limit: 2000 });
+    expect(p.portrait.room).toBeLessThan(2000); // 新开那一节的标题先扣掉
+    const ticked = person.filter((i) => i.checked), over = person.filter((i) => i.flags.includes('noRoom'));
+    expect(ticked.length).toBeGreaterThan(0); expect(over.length).toBeGreaterThan(0);
+    expect(person.indexOf(over[0])).toBe(ticked.length); // 按单上顺序:前面的勾上,从第一条放不下的开始都不勾
+    expect(over.every((i) => !i.checked && !i.locked)).toBe(true);
+    expect(ticked.reduce((n, i) => n + i.cost!, 0)).toBeLessThanOrEqual(p.portrait.room);
+    // 人照样能勾上放不下的:写进去,落在 Agent 读不到的那一截
+    const { ledger } = await applyPlan({ planId: p.id, items: [...ticked, over[0]].map((i) => ({ id: i.id })), skills: [] });
+    expect(ledger.counts.person).toBe(ticked.length + 1);
+    const content = (await readHuman(SOUL)).content;
+    expect(content.trim().length).toBeGreaterThan(2000);
+    expect(content.trim().slice(0, 2000)).not.toContain(over[0].text);
+    // 撤销:条目和导入那一节的标题都收掉,不留墓碑
+    await undoImport(ledger.id);
+    expect((await readHuman(SOUL)).content.trim()).toBe('');
+  });
+
+  it('an already-full portrait leaves every new fact unticked', async () => {
+    await writeHuman(SOUL, { content: `${'旧'.repeat(1990)}\n`, summary: 'seed', expectedVersion: (await readHuman(SOUL)).version }, 'user');
+    const p = await planned();
+    expect(p.portrait.room).toBe(0);
+    const person = p.items.filter((i) => i.dest === 'person' && !i.locked);
+    expect(person.length).toBeGreaterThan(0);
+    expect(person.every((i) => !i.checked)).toBe(true);
+    expect(person.find((i) => i.text === '你希望别人叫你阿青。')!.flags).toContain('noRoom');
+  });
+});
+
+describe('moving earlier imports out of the agent section (one-off, 11-09)', () => {
+  const SOUL = { kind: 'human' as const, file: 'SOUL.md' as const };
+  const ledgerAt = new Date(2026, 10, 3, 12).getTime();
+  const writeLedgerFile = (id: string, body: unknown) => put(join(home, 'imports', `${id}.json`), typeof body === 'string' ? body : JSON.stringify(body));
+  const id1 = '11111111-1111-4111-8111-111111111111', id2 = '22222222-2222-4222-8222-222222222222';
+  const seed = async (content: string) => writeHuman(SOUL, { content, summary: 'seed', expectedVersion: (await readHuman(SOUL)).version }, 'user');
+  const old = '# 林夏\n\n她自己写的一段。\n\n## 最近认识的\n\n- 你喜欢喝茶。\n- 你希望别人叫你阿青。\n- 你在读博。\n';
+
+  it('moves the entries the import record names into their own section, can be undone, and does nothing the second time', async () => {
+    await seed(old);
+    writeLedgerFile(id1, { id: id1, at: ledgerAt, sources: ['claude-code'], counts: { person: 2, agent: 0, project: 0, skill: 0 }, writes: [{ kind: 'person', content: '你希望别人叫你阿青。' }, { kind: 'person', content: '你在读博。' }] });
+    expect(await migrateImportedPortrait()).toEqual({ moved: 2 });
+    const doc = await readHuman(SOUL);
+    expect(doc.content).toBe('# 林夏\n\n她自己写的一段。\n\n## 最近认识的\n\n- 你喜欢喝茶。\n\n## 从其他 AI 导入 · 11-03\n\n- 你希望别人叫你阿青。 <!--tg by=import-->\n- 你在读博。 <!--tg by=import-->\n');
+    expect(doc.history[0]).toMatchObject({ source: { kind: 'import' }, canUndo: true });
+    expect(await migrateImportedPortrait()).toEqual({ moved: 0 });
+    expect((await readHuman(SOUL)).version).toBe(doc.version);
+    // 能撤销:回到迁移前
+    await writeHuman(SOUL, { expectedVersion: doc.version, undoId: doc.history[0].id }, 'user');
+    expect((await readHuman(SOUL)).content).toBe(old);
+  });
+
+  it('an unreadable import record means "do not know": the portrait is not touched', async () => {
+    await seed(old);
+    writeLedgerFile(id1, { id: id1, at: ledgerAt, sources: [], counts: { person: 1, agent: 0, project: 0, skill: 0 }, writes: [{ kind: 'person', content: '你在读博。' }] });
+    writeLedgerFile(id2, '{broken');
+    const before = await readHuman(SOUL);
+    expect(await migrateImportedPortrait()).toEqual({ moved: 0, skipped: 'unreadable' });
+    expect((await readHuman(SOUL)).version).toBe(before.version);
+    expect(readFileSync(join(home, 'imports', `${id2}.json`), 'utf8')).toBe('{broken');
+    // 能解析但形状不对(没有日期)同样算读不懂:不会写出「Invalid Date」标题
+    writeLedgerFile(id2, { id: id2, sources: [], counts: { person: 1, agent: 0, project: 0, skill: 0 }, writes: [{ kind: 'person', content: '你喜欢喝茶。' }] });
+    expect(await migrateImportedPortrait()).toEqual({ moved: 0, skipped: 'unreadable' });
+    expect((await readHuman(SOUL)).version).toBe(before.version);
+  });
+
+  it('an imported entry the human later added a continuation line to stays where it is (Codex review 11-09)', async () => {
+    await seed('## 最近认识的\n\n- 你在吃药。\n  只在头疼时。\n- 你在读博。\n');
+    writeLedgerFile(id1, { id: id1, at: ledgerAt, sources: [], counts: { person: 2, agent: 0, project: 0, skill: 0 }, writes: [{ kind: 'person', content: '你在吃药。' }, { kind: 'person', content: '你在读博。' }] });
+    expect(await migrateImportedPortrait()).toEqual({ moved: 1 });
+    expect((await readHuman(SOUL)).content).toBe('## 最近认识的\n\n- 你在吃药。\n  只在头疼时。\n\n## 从其他 AI 导入 · 11-03\n\n- 你在读博。 <!--tg by=import-->\n');
+  });
+
+  it('an undone import and an entry outside the agent section are left alone; English imports get an English heading', async () => {
+    await seed('- You like tea.\n\n## Recently learned\n\n- You are called Kiko.\n- You run at night.\n');
+    writeLedgerFile(id1, { id: id1, at: ledgerAt, sources: [], counts: { person: 1, agent: 0, project: 0, skill: 0 }, writes: [{ kind: 'person', content: 'You run at night.' }, { kind: 'person', content: 'You like tea.' }] });
+    writeLedgerFile(id2, { id: id2, at: ledgerAt, undoneAt: ledgerAt + 1, sources: [], counts: { person: 1, agent: 0, project: 0, skill: 0 }, writes: [{ kind: 'person', content: 'You are called Kiko.' }] });
+    expect(await migrateImportedPortrait()).toEqual({ moved: 1 });
+    expect((await readHuman(SOUL)).content).toBe('- You like tea.\n\n## Recently learned\n\n- You are called Kiko.\n\n## Imported from other AIs · Nov 3\n\n- You run at night. <!--tg by=import-->\n');
   });
 });

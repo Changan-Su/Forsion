@@ -21,7 +21,7 @@ import { scheduleAgentFilesSync } from '../services/agentFileSync.js';
 import { ledger } from '../services/telemetryLedger.js';
 import { listAgents, resolveMemorySlug } from './agentRegistry.js';
 import { HumanError, readHuman } from './humanStore.js';
-import { isPortraitFactForgotten, mutatePortrait, PERSON_IS, PORTRAIT_LIMIT, PORTRAIT_SCOPE, portraitEntries } from './humanPortrait.js';
+import { isPortraitFactForgotten, mutatePortrait, organizerReady, PERSON_IS, PORTRAIT_SCOPE, portraitEntries, portraitPlace } from './humanPortrait.js';
 
 export interface PortraitMoveItem {
   id: string;
@@ -237,12 +237,17 @@ export const movePortraitItem = (userId: string, id: string): Promise<PortraitMo
   const doc = await readHuman(PORTRAIT_SCOPE);
   const same = portraitEntries(doc.content).find((e) => normalizeMemoryFact(e.content) === normalizeMemoryFact(item.fact));
   // 画像里已经有这句、但排在 Agent 读得到的范围之外:删了原条目,哪个 Agent 都看不到了
-  if (same && doc.content.trim().indexOf(same.content) + same.content.length > PORTRAIT_LIMIT) throw new HumanError('PORTRAIT_FULL', 'That sentence sits past the part of the portrait agents read.');
+  // 11-09 分层:在详情里(召回 + 索引读得到)算在;常驻线外、归档里不算(搬完要删原件,原件是每轮都读的)。线外的排一次整理,腾出地方再搬
+  const place = same ? portraitPlace(doc.content, same.content) : null;
+  if (place === 'outside' || place === 'archive') {
+    if (place === 'outside' && await organizerReady()) void import('../services/memoryOrganize.js').then((o) => o.scheduleOrganize({ kind: 'portrait' })).catch(() => {});
+    throw new HumanError('PORTRAIT_FULL', 'That sentence sits past the part of the portrait agents read.');
+  }
   item.alreadyThere = !!same;
   item.state = 'moving'; writeFile(f);
   try {
     // actor agent:算进 2000 字的额度。人点的也一样,否则挪过去的话落在 Agent 读不到的那一截,还从记忆里拿掉了
-    await mutatePortrait({ action: 'add', fact: item.fact, actor: 'agent', source: { kind: 'move', agent: item.agents[0] } });
+    await mutatePortrait({ action: 'add', fact: item.fact, actor: 'agent', source: { kind: 'move', agent: item.agents[0] }, strict: true });
   } catch (e) { item.state = 'pending'; writeFile(f); throw e; }
   forgetSource(item);
   item.state = 'moved'; writeFile(f);

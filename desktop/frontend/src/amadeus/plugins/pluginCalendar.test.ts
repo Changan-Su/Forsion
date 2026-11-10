@@ -17,7 +17,8 @@ const humanWrite = vi.fn(async (data: DbFile, version: string) => {
   human = structuredClone(data); humanVersion += '+'
   return { ok: true as const, version: humanVersion }
 })
-const humanRead = vi.fn(async () => human ? { status: 'ok' as const, path: 'human://CALENDAR.db', data: structuredClone(human), version: humanVersion } : { status: 'missing' as const })
+let humanMissing: 'absent' | 'unknown' = 'absent'
+const humanRead = vi.fn(async () => human ? { status: 'ok' as const, path: 'human://CALENDAR.db', data: structuredClone(human), version: humanVersion } : { status: 'missing' as const, reason: humanMissing })
 vi.mock('../store/humanCalendarIo', () => ({
   HUMAN_CAL: 'human://CALENDAR.db', humanCalLegacy: () => '/V/Calendar.db',
   readHumanCal: (...args: []) => humanRead(...args), writeHumanCalCas: (...args: [DbFile, string]) => humanWrite(...args),
@@ -50,6 +51,8 @@ const { createCalendarApi } = await import('./pluginCalendar')
 const { createDatabasesApi } = await import('./pluginData')
 const { mutateHumanCalendar } = await import('./pluginDb')
 const { setLocaleGlobal, currentLocale } = await import('../../i18n')
+const { setAggCell, getAggDb } = await import('../store/dbAggregateStore')
+const { todoRowsOf } = await import('../store/calendarMembers')
 type Snap = import('./types').PluginCalendarSnapshot
 
 const table = (name: string, cols: DbFile['columns']): DbFile => ({ version: 1, name, columns: cols, rows: [{ id: 'r1', cells: { c1: '甲', d1: '2026-10-20' } }] })
@@ -80,7 +83,7 @@ function fakeScope() {
 
 beforeEach(() => {
   vi.clearAllMocks()
-  human = null; humanVersion = 'h0'
+  human = null; humanVersion = 'h0'; humanMissing = 'absent'
   delete disk['Calendar.db']
   localStorage.clear()
   disk['T.db'] = table('T', [{ id: 'c1', name: '名称', type: 'text' }, { id: 'd1', name: '日期', type: 'calendarDate' }, { id: 'k1', name: '完成', type: 'checkbox' }])
@@ -409,4 +412,102 @@ describe('personal calendar through the npm calendar host contract', () => {
     expect(humanWrite).toHaveBeenCalledWith(expect.objectContaining({ name: 'First name' }), '')
   })
 
+})
+
+describe('snapshot.myCalendar:读失败 ≠ 没有', () => {
+  const H = 'human://CALENDAR.db'
+  const withDate = (): DbFile => table('My calendar', [{ id: 'c1', name: 'Name', type: 'text' }, { id: 'd1', name: 'Date', type: 'calendarDate' }, { id: 'k1', name: 'Done', type: 'checkbox' }])
+  const open = async (): Promise<{ snaps: Snap[] }> => {
+    const snaps: Snap[] = []
+    createCalendarApi(fakeScope()).subscribe((s) => { snaps.push(s) })
+    await flush(); await flush()
+    return { snaps }
+  }
+  it('读到了 = ok,并且在成员里', async () => {
+    human = withDate()
+    const { snaps } = await open()
+    expect(snaps.at(-1)!.myCalendar).toBe('ok')
+    expect(snaps.at(-1)!.members[0].path).toBe(H)
+  })
+  it('宿主确认没有 = absent(成员里没有它,ready 照旧)', async () => {
+    humanMissing = 'absent'
+    const { snaps } = await open()
+    expect(snaps.at(-1)!.ready).toBe(true)
+    expect(snaps.at(-1)!.myCalendar).toBe('absent')
+    expect(snaps.at(-1)!.members.map((m) => m.path)).not.toContain(H)
+  })
+  it('没问到 = unknown,和「没有」分得开', async () => {
+    humanMissing = 'unknown'
+    const { snaps } = await open()
+    expect(snaps.at(-1)!.ready).toBe(true)
+    expect(snaps.at(-1)!.myCalendar).toBe('unknown')
+  })
+  it('读抛错也算 unknown', async () => {
+    humanRead.mockImplementationOnce(async () => { throw new Error('boom') })
+    const { snaps } = await open()
+    expect(snaps.at(-1)!.myCalendar).toBe('unknown')
+  })
+  it('先不知道、后来读到:快照推一份 ok 的,成员里补上它', async () => {
+    humanMissing = 'unknown'
+    const { snaps } = await open()
+    expect(snaps.at(-1)!.myCalendar).toBe('unknown')
+    human = withDate()
+    window.dispatchEvent(new Event('focus')); await flush(); await flush(); await flush()
+    expect(snaps.at(-1)!.myCalendar).toBe('ok')
+    expect(snaps.at(-1)!.members[0].path).toBe(H)
+  })
+  it('先不知道、后来确认没有:条目一直是 missing,快照照样推一份 absent', async () => {
+    humanMissing = 'unknown'
+    const { snaps } = await open()
+    expect(snaps.at(-1)!.myCalendar).toBe('unknown')
+    humanMissing = 'absent'
+    window.dispatchEvent(new Event('focus')); await flush(); await flush(); await flush()
+    expect(snaps.at(-1)!.myCalendar).toBe('absent')
+  })
+  it('并发重读:后到的「没问到」不覆盖先到的成功结果', async () => {
+    humanMissing = 'unknown'
+    await useDbStore.getState().reload(H, H)
+    expect(useDbStore.getState().entries[H]?.reason).toBe('unknown')
+    let release!: () => void
+    humanRead.mockImplementationOnce(() => new Promise((r) => { release = () => r({ status: 'missing' as const, reason: 'unknown' as const }) }))
+    const slow = useDbStore.getState().reload(H, H)
+    human = withDate()
+    await useDbStore.getState().reload(H, H)
+    expect(useDbStore.getState().entries[H]?.status).toBe('ok')
+    release(); await slow
+    expect(useDbStore.getState().entries[H]?.status).toBe('ok')
+  })
+  it('已经读到的日历,一次没问到不会被冲成「没有」', async () => {
+    human = withDate()
+    const { snaps } = await open()
+    expect(snaps.at(-1)!.myCalendar).toBe('ok')
+    human = null; humanMissing = 'unknown'
+    await useDbStore.getState().reloadByPath(H); await flush()
+    expect(useDbStore.getState().entries[H]?.status).toBe('ok')
+    expect(snaps.at(-1)!.myCalendar).toBe('ok')
+  })
+})
+
+describe('宿主认日程标记(cells._kind = event)', () => {
+  it('带标记且有日期的行不算待办;勾上再撤销,标记一直在、仍是日程', async () => {
+    disk['T.db'] = {
+      version: 1, name: 'T',
+      columns: [{ id: 'c1', name: '名称', type: 'text' }, { id: 'd1', name: '日期', type: 'calendarDate' }, { id: 'k1', name: '完成', type: 'checkbox' }],
+      rows: [
+        { id: 'ev', cells: { c1: '周会', d1: '2026-11-10T09:00/2026-11-10T10:00', _kind: 'event' } },
+        { id: 'td', cells: { c1: '交周报', d1: '2026-11-10' } },
+        { id: 'nodate', cells: { c1: '没排期的', _kind: 'event' } },
+      ],
+    }
+    await useDbStore.getState().reload('T.db', 'T.db')
+    const member = { db: getAggDb('T.db')!, dateCol: 'd1', checkboxCol: 'k1' }
+    expect(todoRowsOf(member).map((r) => r.rowId)).toEqual(['td', 'nodate'])
+    setAggCell(member.db, 'ev', 'k1', true)
+    expect(useDbStore.getState().entries['T.db']!.data!.rows.find((r) => r.id === 'ev')!.cells).toMatchObject({ k1: true, _kind: 'event' })
+    setAggCell(getAggDb('T.db')!, 'ev', 'k1', undefined)
+    const cells = useDbStore.getState().entries['T.db']!.data!.rows.find((r) => r.id === 'ev')!.cells
+    expect(cells._kind).toBe('event'); expect(cells.k1).toBeUndefined()
+    expect(todoRowsOf({ ...member, db: getAggDb('T.db')! }).map((r) => r.rowId)).toEqual(['td', 'nodate'])
+    expect(todoRowsOf({ db: getAggDb('T.db')!, dateCol: 'd1' })).toEqual([]) // 没勾选列 = 没有待办
+  })
 })
