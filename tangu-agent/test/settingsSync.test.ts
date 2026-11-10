@@ -3,7 +3,7 @@
  * 两个 TANGU_HOME 临时目录当两台设备,共用一份内存里的假云(seq / hash / CAS 和服务端一致)。
  * 这个族和 human/ 里别的文件不一样的地方:任何情况下都有确定的赢家,不出冲突副本。
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -194,7 +194,9 @@ describe('never a conflict copy, whatever the two sides look like', () => {
 
   it('the cloud holds an unreadable file: the readable local one wins and repairs it', async () => {
     const cloud = await pair();
-    write(homeA, '{ not json'); expect(await sync(cloud, homeA)).toMatchObject({ ok: true });
+    const junk = '{ not json';
+    cloud._rows.set(`__human__\0${REL}`, { content: junk, isBinary: false, size: junk.length, mtimeMs: Date.now(), seq: 1, hash: sha(junk), deleted: false });
+    write(homeA, junk); expect(await sync(cloud, homeA)).toMatchObject({ ok: true }); // A 和云端是同一份坏的
     write(homeB, settingsDb(good));
     expect(await sync(cloud, homeB)).toMatchObject({ ok: true, conflicts: 0 });
     expect(itemsOf(read(homeB))).toEqual(good);
@@ -300,15 +302,101 @@ describe('which files belong to the family', () => {
     expect(itemsOf(read(homeB))).toEqual({ a: '1' });
   });
 
-  it('a local file over 256 KB is not pushed; the rest of the human folder still syncs', async () => {
+  it('a local file over 256 KB is held back before upload: not pushed, not a sync failure, logged once, and it goes up once it fits', async () => {
     const cloud = fakeCloud();
     await enroll(cloud, homeA);
     write(homeA, settingsDb({ big: 'x'.repeat(260 * 1024) }));
     write(homeA, settingsDb({ small: '1' }), 'Settings/small.db');
-    const r = await sync(cloud, homeA);
-    expect(r.ok).toBe(false);
-    expect(r.error).toContain('human/Settings/calendar.db');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      for (let round = 0; round < 3; round++) {
+        const r = await sync(cloud, homeA);
+        expect(r).toMatchObject({ ok: true, conflicts: 0 });
+        expect(r.error).toBeUndefined();
+      }
+      expect(warn.mock.calls.filter((c) => String(c[0]).includes('human/Settings/calendar.db'))).toHaveLength(1); // 不每轮刷一遍
+    } finally { warn.mockRestore(); }
     expect(cloud._puts.filter((k) => k.includes('Settings'))).toEqual(['__human__/Settings/small.db']);
     expect(itemsOf(read(homeA)).big.length).toBe(260 * 1024);
+    write(homeA, settingsDb({ big: 'now it fits' }));
+    expect(await sync(cloud, homeA)).toMatchObject({ ok: true, pushed: 1 });
+    expect(itemsOf(cloudText(cloud)!)).toEqual({ big: 'now it fits' });
+  });
+
+  it('a merge that would exceed 256 KB is not written or pushed: both sides stay as they were and the sync still succeeds', async () => {
+    const cloud = fakeCloud();
+    await enroll(cloud, homeA); await enroll(cloud, homeB);
+    const a = settingsDb({ onlyA: 'a'.repeat(150 * 1024) }), b = settingsDb({ onlyB: 'b'.repeat(150 * 1024) }); // 各自没超,并集超了
+    write(homeA, a); write(homeB, b);
+    expect(await sync(cloud, homeA)).toMatchObject({ ok: true });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      for (let round = 0; round < 3; round++) {
+        const r = await sync(cloud, homeB);
+        expect(r).toMatchObject({ ok: true, conflicts: 0 });
+        expect(r.error).toBeUndefined();
+      }
+      expect(warn.mock.calls.filter((c) => String(c[0]).includes('human/Settings/calendar.db'))).toHaveLength(1);
+      expect(cloud._puts.filter((k) => k.includes('Settings'))).toHaveLength(1); // 只有 A 最初那一次
+    } finally { warn.mockRestore(); }
+    expect(read(homeB)).toBe(b);
+    expect(cloudText(cloud)).toBe(a);
+    expect(copies(homeB)).toEqual([]);
+  });
+});
+
+describe('an unreadable file never rides a fast-forward (power loss left zero bytes, a half-written file)', () => {
+  const good = { a: '1', b: '2' };
+  /** 两台都同步到同一份好的。 */
+  async function synced(): Promise<Cloud> {
+    const cloud = fakeCloud();
+    await enroll(cloud, homeA); await enroll(cloud, homeB);
+    write(homeA, settingsDb(good));
+    for (const h of [homeA, homeB]) expect(await sync(cloud, h)).toMatchObject({ ok: true });
+    return cloud;
+  }
+  for (const [what, junk] of [['zero bytes', ''], ['half a file', settingsDb(good).slice(0, 40)], ['valid JSON of the wrong shape', '{"rows":[]}']] as const) {
+    it(`this device's copy became ${what}: it is not pushed, the cloud copy repairs it, the other device never sees it`, async () => {
+      const cloud = await synced();
+      const before = JSON.stringify(cloud._rows.get(`__human__\0${REL}`));
+      write(homeA, junk);
+      expect(await sync(cloud, homeA)).toMatchObject({ ok: true, conflicts: 0 });
+      expect(itemsOf(read(homeA))).toEqual(good);
+      expect(JSON.stringify(cloud._rows.get(`__human__\0${REL}`))).toBe(before); // 云端那份没被碰
+      expect(copies(homeA)).toEqual([]);
+      expect(await sync(cloud, homeB)).toMatchObject({ ok: true });
+      expect(itemsOf(read(homeB))).toEqual(good);
+    });
+  }
+
+  it('an unreadable local file with nothing in the cloud is left where it is, not pushed', async () => {
+    const cloud = fakeCloud();
+    await enroll(cloud, homeA);
+    write(homeA, '');
+    for (let i = 0; i < 2; i++) expect(await sync(cloud, homeA)).toMatchObject({ ok: true, conflicts: 0 });
+    expect(cloud._puts.filter((k) => k.includes('Settings'))).toEqual([]);
+    expect(read(homeA)).toBe('');
+  });
+
+  it('the cloud copy became unreadable while this device did not change its own: the local copy stays and repairs the cloud', async () => {
+    const cloud = await synced();
+    const row = cloud._rows.get(`__human__\0${REL}`);
+    cloud._rows.set(`__human__\0${REL}`, { ...row, content: '{ half', size: 6, seq: row.seq + 1, hash: sha('{ half') }); // 别的写入方把坏字节传了上去
+    expect(await sync(cloud, homeB)).toMatchObject({ ok: true, conflicts: 0 });
+    expect(itemsOf(read(homeB))).toEqual(good);
+    expect(itemsOf(cloudText(cloud)!)).toEqual(good);
+    expect(copies(homeB)).toEqual([]);
+    expect(await sync(cloud, homeA)).toMatchObject({ ok: true });
+    expect(itemsOf(read(homeA))).toEqual(good);
+  });
+
+  it('a normal fast-forward is untouched: an edit on one device is pushed as is and pulled byte for byte', async () => {
+    const cloud = await synced();
+    const compact = JSON.stringify(JSON.parse(settingsDb({ a: 'edited', b: '2' }))); // 别的写入方的排版(不带缩进)
+    write(homeA, compact);
+    expect(await sync(cloud, homeA)).toMatchObject({ ok: true, pushed: 1 });
+    expect(cloudText(cloud)).toBe(compact);
+    expect(await sync(cloud, homeB)).toMatchObject({ ok: true, pushed: 0 });
+    expect(read(homeB)).toBe(compact);
   });
 });

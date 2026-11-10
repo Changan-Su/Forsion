@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { diff3Merge } from 'node-diff3';
-import { agentContentSyncable, conflictCopyName, isConflictCopyPath, isSettingsPath, mergeAgentSyncContent, mergeSettingsDb, mergeTombstoneLists, neverConflictCopy, parseTombstones, sameFactoryConfig, serializeTombstones, type WireTombstone } from './agentSyncRules.js';
+import { agentContentSyncable, conflictCopyName, isConflictCopyPath, isReadableSettingsDb, isSettingsPath, SETTINGS_MAX_BYTES, mergeAgentSyncContent, mergeSettingsDb, mergeTombstoneLists, neverConflictCopy, parseTombstones, sameFactoryConfig, serializeTombstones, type WireTombstone } from './agentSyncRules.js';
 
 const deps = { diff3: diff3Merge };
 const merge = (path: string, ours: string, base: string | null, theirs: string) => mergeAgentSyncContent(path, ours, base, theirs, deps);
@@ -119,6 +119,21 @@ describe('both syncs merge agent files the same way', () => {
         const out = merge(P, db({ shared: 'local', mine: '1' }), bad, db({ shared: 'cloud' }))!;
         expect([bad, out.conflict, items(out.content)]).toEqual([bad, false, { shared: 'cloud', mine: '1' }]);
       }
+    });
+    // ⚠️ 和 Forsion Extend test/vitest/agentContent.test.ts 的 readableSettingsDb 同一组用例
+    it('a settings file is readable only as a well-formed database file; a wrongly shaped side loses whole, it is not merged in', () => {
+      const good = { version: 2, name: 'calendar-settings', columns: [{ id: 'k', name: 'key', type: 'text' }, { id: 'v', name: 'value', type: 'text' }], rows: [{ id: 's1', cells: { k: 'a', v: '1' } }] };
+      for (const ok of [good, { ...good, rows: [] }, { ...good, views: [{ id: 'v1' }] }, { ...good, extra: 1 }]) expect([JSON.stringify(ok), isReadableSettingsDb(JSON.stringify(ok))]).toEqual([JSON.stringify(ok), true]);
+      const bad: unknown[] = [null, [], 'x', { rows: [] }, { ...good, version: '2' }, { ...good, name: 1 }, { ...good, source: { folder: 'x' } }, { ...good, columns: undefined }, { ...good, columns: [{ name: 'no id' }] },
+        { ...good, rows: 'x' }, { ...good, rows: [{ id: 1, cells: {} }] }, { ...good, rows: [{ id: 'a' }] }, { ...good, rows: [{ id: 'a', cells: [] }] }, { ...good, rows: [good.rows[0], good.rows[0]] },
+        { ...good, columns: [good.columns[0], good.columns[0]] }, { ...good, views: {} }];
+      for (const b of bad) expect([JSON.stringify(b), isReadableSettingsDb(JSON.stringify(b))]).toEqual([JSON.stringify(b), false]);
+      for (const text of ['', '{ half', 'not json']) expect([text, isReadableSettingsDb(text)]).toEqual([text, false]);
+      expect(SETTINGS_MAX_BYTES).toBe(262144);
+      // 能解析、带行、但形状不对的那份(按行合并本来合得进去):整份输给读得懂的那份
+      const stray = JSON.stringify({ rows: [{ id: 'stray', cells: { k: 'x', v: 'y' } }] });
+      expect(merge(P, stray, null, db({ a: '1' }))).toEqual({ content: db({ a: '1' }), conflict: false });
+      expect(merge(P, db({ a: '1' }), null, stray)).toEqual({ content: db({ a: '1' }), conflict: false });
     });
     it('never returns null or a conflict for any pairing, unlike the default calendar next to it', () => {
       const sides = [db({ a: '1' }), db({ a: '2', b: '1' }), db({}), '{ not json', ''];

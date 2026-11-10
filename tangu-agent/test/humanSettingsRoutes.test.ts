@@ -1,6 +1,7 @@
 /**
  * 随账号走的设置文件的本机读写接口:GET / PUT /agent/human/Settings/<name>.db。
  * 调用方(桌面渲染层)靠 GET 的四种回答决定能不能写:读到了 / 确认没有 / 文件坏了 / 不知道。
+ * 报文和云端的同名接口(/api/agent/human/Settings/<name>.db)同形:渲染层用同一套解析对两边。
  */
 import { beforeAll, afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, realpathSync, mkdirSync, readFileSync, writeFileSync, rmSync, existsSync, readdirSync, symlinkSync } from 'node:fs';
@@ -57,10 +58,10 @@ afterAll(async () => {
 beforeEach(() => { rmSync(dir(), { recursive: true, force: true }); rmSync(join(home, 'human', '.memory.lock'), { force: true }); });
 
 describe('GET: four answers the caller can tell apart', () => {
-  it('missing: the route exists and the file does not — a 200 with the family marker, never a 404', async () => {
+  it('missing: the route exists and the file does not — a 200 saying so, never a 404', async () => {
     const r = await api(URL);
     expect(r.status).toBe(200);
-    expect(r.body).toEqual({ family: 'settings', status: 'missing' });
+    expect(r.body).toEqual({ status: 'missing', exists: false, version: null });
     expect(existsSync(file())).toBe(false); // 读不会顺手建文件
   });
   it('ok: the content and its version (sha256 of the bytes on disk)', async () => {
@@ -69,7 +70,7 @@ describe('GET: four answers the caller can tell apart', () => {
     writeFileSync(file(), text);
     const r = await api(URL);
     expect(r.status).toBe(200);
-    expect(r.body).toEqual({ family: 'settings', status: 'ok', data: db({ 'sync|color|tasks.db': 'red' }), version: sha(text) });
+    expect(r.body).toEqual({ status: 'ok', exists: true, data: db({ 'sync|color|tasks.db': 'red' }), version: sha(text) });
   });
   it('corrupt: unparseable or wrongly shaped files answer 422 without a version', async () => {
     mkdirSync(dir(), { recursive: true });
@@ -77,8 +78,9 @@ describe('GET: four answers the caller can tell apart', () => {
     for (const bad of ['{ not json', '[]', JSON.stringify({ version: 2, name: 'x', columns: [] }), JSON.stringify({ ...db({}), rows: [{ cells: {} }] }), JSON.stringify(dup), '']) {
       writeFileSync(file(), bad);
       const r = await api(URL);
-      expect([bad, r.status, r.body?.error]).toEqual([bad, 422, 'HUMAN_SETTINGS_CORRUPT']);
+      expect([bad, r.status, r.body?.error, r.body?.status]).toEqual([bad, 422, 'HUMAN_SETTINGS_CORRUPT', 'corrupt']);
       expect(r.body.version).toBeUndefined();
+      expect(r.body.exists).toBeUndefined();
       expect(onDisk()).toBe(bad);
     }
   });
@@ -90,7 +92,7 @@ describe('GET: four answers the caller can tell apart', () => {
     expect(r.status).toBe(500);
     expect(r.body.status).toBeUndefined();
   });
-  it('an engine without this route answers 404, which the marker tells apart from "missing"', async () => {
+  it('an engine without this route answers 404, which a caller cannot mistake for the 200 "missing"', async () => {
     const old = express(); old.use(express.json());
     const s = old.listen(0, '127.0.0.1'); await new Promise<void>((resolve) => s.once('listening', () => resolve()));
     try {
@@ -102,7 +104,7 @@ describe('GET: four answers the caller can tell apart', () => {
 
 describe('names: the family is Settings/<name>.db', () => {
   it('serves any well-formed name and rejects the rest before touching the disk', async () => {
-    expect((await api('/agent/human/Settings/appearance-2.db')).body).toEqual({ family: 'settings', status: 'missing' });
+    expect((await api('/agent/human/Settings/appearance-2.db')).body).toEqual({ status: 'missing', exists: false, version: null });
     for (const bad of ['Calendar.db', 'calendar.json', 'calendar', '-x.db', 'a_b.db', `${'a'.repeat(65)}.db`, '..%2FCALENDAR.db', '.hidden.db', 'calendar%20(conflict%202026-11-10%200900).db']) {
       for (const method of ['GET', 'PUT']) {
         const r = await api(`/agent/human/Settings/${bad}`, method, method === 'PUT' ? { data: db({}), version: null } : undefined);
@@ -111,6 +113,9 @@ describe('names: the family is Settings/<name>.db', () => {
     }
     expect(existsSync(dir()) ? readdirSync(dir()) : []).toEqual([]);
     expect((await api('/agent/human/Settings/a/b.db')).status).toBe(404); // 更深的路径没有路由
+    // 大小写敏感,和云端那条一样:别的写法不是这条路由
+    for (const method of ['GET', 'PUT']) expect((await api('/agent/human/settings/calendar.db', method, method === 'PUT' ? { data: db({}), version: null } : undefined)).status).toBe(404);
+    expect(existsSync(dir())).toBe(false);
   });
   it('refuses a symlinked settings file instead of following it', async () => {
     mkdirSync(dir(), { recursive: true });
@@ -126,7 +131,7 @@ describe('PUT: compare-and-swap on the version', () => {
   it('creates with version null, then writes only against the version last read', async () => {
     const created = await api(URL, 'PUT', { data: db({ a: '1' }), version: null });
     expect(created.status).toBe(200);
-    expect(created.body).toEqual({ ok: true, family: 'settings', version: sha(onDisk()) });
+    expect(created.body).toEqual({ ok: true, version: sha(onDisk()) });
     expect(onDisk()).toBe(`${JSON.stringify(db({ a: '1' }), null, 2)}\n`); // 和同步合并出来的写法逐字节一样
     const read = await api(URL);
     expect(read.body.version).toBe(created.body.version);
@@ -141,16 +146,17 @@ describe('PUT: compare-and-swap on the version', () => {
     const before = onDisk();
     const stale = await api(URL, 'PUT', { data: db({ a: 'stale' }), version: first.body.version });
     expect(stale.status).toBe(409);
-    expect(stale.body).toMatchObject({ error: 'HUMAN_CONFLICT', current: { family: 'settings', status: 'ok', data: db({ a: '2' }), version: second.body.version } });
+    // 平铺带回当时 GET 会给的那份回答
+    expect(stale.body).toMatchObject({ error: 'HUMAN_CONFLICT', status: 'ok', exists: true, data: db({ a: '2' }), version: second.body.version });
     expect(onDisk()).toBe(before);
     // 拿 409 带回的票据再写就成了
-    expect((await api(URL, 'PUT', { data: db({ a: 'merged' }), version: stale.body.current.version })).status).toBe(200);
+    expect((await api(URL, 'PUT', { data: db({ a: 'merged' }), version: stale.body.version })).status).toBe(200);
   });
   it('creating a file someone else just created gets 409 too', async () => {
     await api(URL, 'PUT', { data: db({ a: 'theirs' }), version: null });
     const r = await api(URL, 'PUT', { data: db({ a: 'mine' }), version: null });
     expect(r.status).toBe(409);
-    expect(r.body.current).toMatchObject({ status: 'ok', data: db({ a: 'theirs' }) });
+    expect(r.body).toMatchObject({ error: 'HUMAN_CONFLICT', status: 'ok', exists: true, data: db({ a: 'theirs' }) });
     expect(JSON.parse(onDisk()).rows[0].cells.v).toBe('theirs');
   });
   it('a version for a file that is gone gets 409 with status missing', async () => {
@@ -158,7 +164,7 @@ describe('PUT: compare-and-swap on the version', () => {
     rmSync(file());
     const r = await api(URL, 'PUT', { data: db({ a: '2' }), version: first.body.version });
     expect(r.status).toBe(409);
-    expect(r.body.current).toEqual({ family: 'settings', status: 'missing' });
+    expect(r.body).toMatchObject({ error: 'HUMAN_CONFLICT', status: 'missing', exists: false, version: null });
     expect(existsSync(file())).toBe(false);
   });
   it('a corrupt file on disk is never overwritten, not even with its own hash as the version', async () => {
@@ -167,8 +173,8 @@ describe('PUT: compare-and-swap on the version', () => {
     writeFileSync(file(), bad);
     for (const version of [null, sha(bad), 'anything']) {
       const r = await api(URL, 'PUT', { data: db({ a: '1' }), version });
-      expect([version, r.status, r.body.error]).toEqual([version, 422, 'HUMAN_SETTINGS_CORRUPT']);
-      expect(r.body.current).toBeUndefined();
+      expect([version, r.status, r.body.error, r.body.status]).toEqual([version, 409, 'HUMAN_CONFLICT', 'corrupt']);
+      expect(r.body.version).toBeUndefined(); // 坏文件不发票据
     }
     expect(onDisk()).toBe(bad);
   });
@@ -188,7 +194,7 @@ describe('PUT: compare-and-swap on the version', () => {
   });
   it('rejects more than 256 KB and accepts a file just under it', async () => {
     const big = await api(URL, 'PUT', { data: db({ big: 'x'.repeat(256 * 1024) }), version: null });
-    expect([big.status, big.body.error]).toEqual([413, 'HUMAN_SETTINGS_TOO_LARGE']);
+    expect([big.status, big.body.error, big.body.limit]).toEqual([413, 'HUMAN_SETTINGS_TOO_LARGE', 262144]);
     expect(existsSync(file())).toBe(false);
     const fits = await api(URL, 'PUT', { data: db({ big: 'x'.repeat(250 * 1024) }), version: null });
     expect(fits.status).toBe(200);

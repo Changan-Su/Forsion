@@ -265,19 +265,33 @@ export function isSettingsContentPath(path: string): boolean {
  *  合并规则已经保证有确定的赢家(mergeSettingsDb),这里再兜住不经过合并的那几条路(云端那份标成二进制、老服务端没有版本号)。 */
 export const neverConflictCopy = (path: string): boolean => isSettingsContentPath(path);
 
+/** 设置文件的形状(本机读写接口、同步共用这一条;server 那边的同名接口照同一条写):DbFile —— version 是数字、name 是字符串、不是笔记视图(没有 source);
+ *  列 / 行(有的话还有视图)都是带字符串 id 的对象且 id 不重复(同步按 id 合并,重复的合不了);每行有 cells 对象。不解释格子里的内容。 */
+export function isSettingsDbShape(d: unknown): boolean {
+  const obj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
+  const idList = (v: unknown): v is Array<Record<string, unknown>> => Array.isArray(v) && v.every((x) => obj(x) && typeof x.id === 'string') && new Set(v.map((x) => x.id)).size === v.length;
+  return obj(d) && typeof d.version === 'number' && typeof d.name === 'string' && d.source === undefined
+    && idList(d.columns) && idList(d.rows) && d.rows.every((r) => obj(r.cells)) && (d.views === undefined || idList(d.views));
+}
+/** 这份设置文件读不读得懂:是 JSON、形状对。读不懂的(断电后零字节、写了一半、别的东西)不是「空」,是「不知道」:
+ *  接口对它回 422、不许盖;同步不拿它去盖读得懂的那份(见 mergeSettingsDb 和旧同步 reconcileFile 的快进闸)。 */
+export function isReadableSettingsDb(text: string): boolean {
+  try { return isSettingsDbShape(JSON.parse(text)); } catch { return false; }
+}
+
 /**
  * 设置文件(human/Settings/<name>.db)两边不一样怎么合。和 human/ 里别的文件不同:**任何情况下都有确定的结果,不出冲突副本**
  * (conflict 恒为 false,也不返回 null)—— 渲染层读这份文件时不会去翻副本,留副本等于悄悄丢设置。ours = 这台,theirs = 云端。
  * - 有基线:按行三方合并。一边删、另一边没动 = 删;两边改了同一行且值不同 = 云端那份赢。
  * - 没有基线(两台各自建了文件,第一次见面):行取并集;同一个行 id 两边值不同 = 云端那份赢(先同步上去的那台说了算)。
  * - 列定义、文件名这些表头两边不一样(不该发生)= 云端那份。列 id 就是字段名(k / v),不做日历那种对列。
- * - 基线读不懂 = 当没有基线。某一份读不懂(不是 DbFile、行 id 重复)= 读得懂的那份整份赢;都读不懂 = 云端那份。
+ * - 某一份读不懂(isReadableSettingsDb)= 读得懂的那份整份赢;都读不懂 = 云端那份。基线读不懂 = 当没有基线。
  */
 export function mergeSettingsDb(ours: string, base: string | null, theirs: string): AgentMergeResult {
-  const merged = mergeDbFile(ours, base, theirs, { fieldColumns: true }) ?? (base === null ? null : mergeDbFile(ours, null, theirs, { fieldColumns: true }));
-  if (merged) return { content: merged.content, conflict: false };
-  const readable = (text: string): boolean => mergeDbFile(text, null, text, { fieldColumns: true }) !== null;
-  return { content: readable(theirs) || !readable(ours) ? theirs : ours, conflict: false };
+  const o = isReadableSettingsDb(ours), t = isReadableSettingsDb(theirs);
+  if (!o || !t) return { content: t || !o ? theirs : ours, conflict: false };
+  const merged = mergeDbFile(ours, base !== null && isReadableSettingsDb(base) ? base : null, theirs, { fieldColumns: true });
+  return { content: merged ? merged.content : theirs, conflict: false };
 }
 
 const TEXT_FILE = /\.(md|txt|toml|json|yaml|yml|csv|html|xml|js|ts|py)$/i;

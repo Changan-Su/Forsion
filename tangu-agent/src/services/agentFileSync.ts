@@ -11,7 +11,7 @@ import { getAgent, listAgents, parseAgentConfig, trashAgent, resolveMemorySlug, 
 import { diff3Merge } from 'node-diff3';
 import { splitLogBlocks, mergeBlocks, mergeLogHeaders } from './memorySync.js';
 import { migrateScheduleFile } from './agentSchedule.js';
-import { agentSlugLocalOnly, isSettingsContentPath, logText, mergeAgentSyncContent, neverConflictCopy, serializeTombstones, SETTINGS_MAX_BYTES, type AgentMergeDeps } from '../contracts/agentSyncRules.js';
+import { agentSlugLocalOnly, isReadableSettingsDb, isSettingsContentPath, logText, mergeAgentSyncContent, neverConflictCopy, serializeTombstones, SETTINGS_MAX_BYTES, type AgentMergeDeps } from '../contracts/agentSyncRules.js';
 import { AgentFileConflictError, type AgentFilesBrain, type AgentFileMeta, type AgentFileContent } from '../seams/cloudBrain.js';
 import { agentSyncDefault, agentSyncPermission, agentSyncScope, captureAgentSyncDefault, captureAgentSyncPermission, agentSyncOperationSignal, agentSyncConsentSignal, agentSyncDefaultSignal, pendingAgentRemovals, clearAgentRemoval } from './cloudSyncAccount.js';
 import { agentSyncDir, assertSyncPath, atomicSyncWrite, conflictCopyName, isConflictCopyPath, isSettingsPath, isWidgetDataPath, readSyncBytes, validSyncPath, validSyncSlug } from './agentSyncPaths.js';
@@ -245,9 +245,16 @@ const mib = (n: number): string => (n / (1024 * 1024)).toFixed(1).replace(/\.0$/
  *  路径写在双引号里(JSON.stringify):诊断数据带引擎日志时按引号整段遮,文件名带空格也不会留下半截。 */
 function verifyBytes(file: { hash?: string | null }, bytes: Buffer, where: string, from: 'cloud' | 'local' | 'merged' = 'cloud'): void {
   if (bytes.length > MAX_FILE_BYTES) throw new Error(`${from} file exceeds sync limit (${mib(bytes.length)} MB > ${mib(MAX_FILE_BYTES)} MB): ${JSON.stringify(where)}`);
-  // 设置文件另有 256 KB 的上限(服务端超了就拒):这台要推上去的超了,这一份既不推也不落合并结果,别的文件照常
-  if (from !== 'cloud' && isSettingsContentPath(where) && bytes.length > SETTINGS_MAX_BYTES) throw new Error(`${from} settings file exceeds its limit (${Math.ceil(bytes.length / 1024)} KB > ${SETTINGS_MAX_BYTES / 1024} KB): ${JSON.stringify(where)}`);
   if (file.hash != null && sha256(bytes) !== file.hash) throw new Error(`cloud file hash mismatch: ${JSON.stringify(where)}`);
+}
+/** 设置文件另有 256 KB 的上限(服务端在同步通道上也按它拒):这台要推上去的那份(本机的 / 合并出来的)超了,就在这里拦下 ——
+ *  这一份不推、也不落合并结果,两边原样留着;不算这次同步失败(每轮都会遇到它,报错等于每轮刷一遍),只在同一份内容第一次遇到时记一行日志。 */
+const oversizeLogged = new Set<string>();
+function settingsTooLarge(where: string, bytes: Buffer, from: 'local' | 'merged'): boolean {
+  if (!isSettingsContentPath(where) || bytes.length <= SETTINGS_MAX_BYTES) return false;
+  const key = `${where}\0${sha256(bytes)}`;
+  if (!oversizeLogged.has(key)) { oversizeLogged.add(key); console.warn(`[agent sync] ${from} settings file exceeds its limit (${Math.ceil(bytes.length / 1024)} KB > ${SETTINGS_MAX_BYTES / 1024} KB), kept on this device only: ${JSON.stringify(where)}`); }
+  return true;
 }
 async function syncBucket(cloud: AgentFilesBrain, uid: string, slug: string, scope: string, cats: Set<Category>, manifest: AgentFileMeta[], families: { human: boolean; agentCalendar: boolean; widgetData: boolean }, signal: AbortSignal, guard: Guard, result: AgentFileSyncResult): Promise<void> {
   const dir = agentSyncDir(slug);
@@ -461,12 +468,23 @@ async function reconcileFile(cloud: AgentFilesBrain, uid: string, slug: string, 
       console.log(`[agent sync] ${initial ? '已从云端拉取覆盖' : '已从云端拉取新文件'} ${slug}/${p}(seq ${file.seq ?? '-'}${archivedAs ? `,本地版本已存为 ${archivedAs}` : ''}${delta})`);
     }
   };
+  // 设置文件的快进闸:读不懂的那份(断电后零字节、写了一半)不是「空」,不能照快进去盖读得懂的那份。
+  // - 这台读不懂、正要推:云端没有就不推(留着,接口对它回 422);云端有就交给合并规则(读得懂的那份赢 = 云端修好这台)
+  // - 正要拉、云端那份读不懂而这台读得懂:同样交给合并规则(这台那份留着,推上去修好云端)
+  let prefetched: { file: AgentFileContent; bytes: Buffer } | undefined;
+  if (noCopy && initial) {
+    const readable = (b: Buffer): boolean => isReadableSettingsDb(b.toString('utf8'));
+    if (decision.kind === 'pushCreate' && !readable(initial)) { result.skipped++; return; }
+    if (decision.kind === 'push' && !readable(initial)) decision = { kind: 'conflict' };
+    else if (decision.kind === 'pull' && modern) { prefetched = await fetchRemote(); if (!readable(prefetched.bytes) && readable(initial)) decision = { kind: 'conflict' }; }
+  }
   if (decision.kind === 'conflict' && opts.merge && modern && initial) {
-    const fetched = await fetchRemote();
+    const fetched = prefetched ?? await fetchRemote();
     // 设置文件:云端那行就算被标成二进制,字节照样按文本合(读不懂时规则里有定论),不落到「整份取云端」那条路
     const merged = fetched.file.isBinary && !noCopy ? null : mergeAgentSyncContent(contentPathOf(slug, p), initial.toString('utf8'), base, fetched.bytes.toString('utf8'), MERGE_DEPS);
     if (!merged) { await pull(true, fetched); return; }
     let out = Buffer.from(merged.content);
+    if (!out.equals(fetched.bytes) && settingsTooLarge(contentPathOf(slug, p), out, 'merged')) { result.skipped++; return; } // 并集超了上限:两边原样留着
     verifyBytes({}, out, contentPathOf(slug, p), 'merged');
     const keepOld = unsure(); // 落了合并结果、影子还没落盘就崩:下次不拿旧原文合
     try {
@@ -494,7 +512,7 @@ async function reconcileFile(cloud: AgentFilesBrain, uid: string, slug: string, 
     }
     return;
   }
-  if (decision.kind === 'pull' || decision.kind === 'conflict') { await pull(decision.kind === 'conflict'); return; }
+  if (decision.kind === 'pull' || decision.kind === 'conflict') { await pull(decision.kind === 'conflict', prefetched); return; }
   if (decision.kind === 'deleteLocal') {
     // Memory deletion is a revisioned commit; existing tombstones continue to suppress old facts.
     withMemoryDirectoryLock(dir, () => { assertUnchanged(); if (memory) memory.commit({ expectedVersion: initialMemory!.version, content: '', source: { kind: 'sync' }, signal }); else if (existsSync(abs)) unlinkSync(abs); });
@@ -512,6 +530,7 @@ async function reconcileFile(cloud: AgentFilesBrain, uid: string, slug: string, 
     result.skipped++; return;
   }
   if (!initial) return;
+  if (settingsTooLarge(contentPathOf(slug, p), initial, 'local')) { result.skipped++; return; }
   verifyBytes({}, initial, contentPathOf(slug, p), 'local'); guard(); assertUnchanged();
   const isBinary = !opts.text && !TEXT_EXTS.has(extname(p).toLowerCase());
   const keep = unsure(initial);
