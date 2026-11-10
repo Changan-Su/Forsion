@@ -415,9 +415,11 @@ function guarded(api: DockviewApi, panel: IDockviewPanel): boolean {
   return isLastPinned(useWorkspace.getState().pinned, panelRefs(api), locOfPanel(panel), panelType(panel))
 }
 
-/** 落点可不可以落:固定 View 不许跨区(区内排序、分屏照常)。提示层与提交层共用,拖动中就不给假落点。 */
+/** 提示层与提交层共用：固定 View 不许跨区，唯一标签拖回本组也没有可执行的移动。 */
 export function dropAllowed(api: DockviewApi, panelId: string, target: DropTarget): boolean {
   const panel = api.getPanel(panelId)
+  // Dockview can remove the source group while it is still the destination.
+  if (panel && panel.group === target.group && target.group.panels.length === 1) return false
   return !panel || locOf(target.group) === locOfPanel(panel) || !guarded(api, panel)
 }
 
@@ -1162,7 +1164,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     const panel = api?.getPanel(panelId)
     if (!api || !panel) return
     const loc = locOf(target.group) // 目标面板身份 → 落子后视图继承(侧栏=图标 / 主区=tab+标题)
-    if (!dropAllowed(api, panelId, target)) return // 固定 View 拖不出本区(提示层已不给落点,这里兜底)
+    if (!dropAllowed(api, panelId, target)) return
     // 拖出主区要记住源组:moveTo 会同步激活落点组里的它,那一刻 __loc 还是 main → refreshTabs 把落点组
     // 记成「最后的主区组」,下面改完 __loc 再刷也改不回来(Codex 复审)。
     const srcMainGroup = ((panel.params ?? {}) as PanelMeta).__loc === 'main' ? (panel as { group?: { id?: string } }).group?.id ?? null : null
