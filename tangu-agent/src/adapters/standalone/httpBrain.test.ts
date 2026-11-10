@@ -79,6 +79,21 @@ describe('httpBrain.streamProviderCompletion 空闲看门狗', () => {
     expect(r.usage.completion_tokens).toBe(2);
   });
 
+  it('托管 tool 帧只有 argsDelta → 按 id 拼回累积 args（出站脱敏靠它换回占位符）', async () => {
+    stubFetch(
+      [
+        frame({ t: 'tool', id: 'c1', name: 'bash', argsLen: 4, argsDelta: '{"co' }),
+        frame({ t: 'tool', id: 'c1', name: 'bash', argsLen: 13, argsDelta: 'mmand":"ls"}' }),
+        frame({ t: 'done', content: '', toolCalls: [], usage: { prompt_tokens: 1, completion_tokens: 1 } }),
+      ],
+      5,
+    );
+    const brain = createHttpBrain({ cloudUrl: 'https://cloud.test', token: 't' });
+    const seen: Array<{ args: string; argsLen: number }> = [];
+    await brain.llm.streamProviderCompletion({ payload: { __forsion_model_id: 'm' }, onToolCallDelta: (i: any) => seen.push({ args: i.args, argsLen: i.argsLen }) } as any);
+    expect(seen).toEqual([{ args: '{"co', argsLen: 4 }, { args: '{"command":"ls"}', argsLen: 13 }]);
+  });
+
   it('服务端迟迟不回响应头 → 也在窗口内判死（fetch 阶段不是裸奔）', async () => {
     process.env.TANGU_BRAIN_STREAM_IDLE_MS = '150';
     // guard 构造即开表（streamIdle.ts），所以这段等待也在看门狗覆盖内。

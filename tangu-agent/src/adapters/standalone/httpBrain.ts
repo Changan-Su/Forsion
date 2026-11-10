@@ -295,7 +295,7 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
       const reader = r.body.getReader();
       const decoder = new TextDecoder();
       let buf = '';
-      const toolProgress = new Map<string, { name: string; argsLen: number }>();
+      const toolProgress = new Map<string, { name: string; argsLen: number; args: string }>();
       guard.arm();
       while (true) {
         const { done, value } = await guard.read(reader);
@@ -325,8 +325,12 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
               : Number.isFinite(ev.argsLen) ? Math.max(0, ev.argsLen) : 0;
             if ((typeof ev.argsDelta === 'string' && ev.argsDelta)
               || argsLen > (previous?.argsLen ?? 0) || (id && name && !previous?.name)) guard.progress();
-            toolProgress.set(id, { name: name || previous?.name || '', argsLen: Math.max(argsLen, previous?.argsLen ?? 0) });
-            opts.onToolCallDelta?.({ id: ev.id, name: ev.name, argsLen: ev.argsLen, args: ev.args, argsDelta: ev.argsDelta });
+            // 托管 tool 帧不发累积串 args(server toolFrameOf,防流量平方涨),只发 argsDelta:在这里按 id 拼回,
+            // 守住 StreamOpts 的 `args: string` 契约 —— 出站脱敏要拿整串换回占位符,拿到 undefined 就 `.slice` 崩(11-10 反馈)。
+            const argsDelta = typeof ev.argsDelta === 'string' ? ev.argsDelta : '';
+            const args = typeof ev.args === 'string' ? ev.args : (previous?.args ?? '') + argsDelta;
+            toolProgress.set(id, { name: name || previous?.name || '', argsLen: Math.max(argsLen, previous?.argsLen ?? 0), args });
+            opts.onToolCallDelta?.({ id: ev.id, name: ev.name, argsLen: Number.isFinite(ev.argsLen) ? ev.argsLen : args.length, args, argsDelta });
           } else if (ev.t === 'done') {
             result.content = ev.content ?? result.content;
             result.reasoning = ev.reasoning ?? result.reasoning;
