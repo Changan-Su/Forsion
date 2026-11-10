@@ -2,6 +2,17 @@
 
 <!-- English edition of CHANGELOG.md: same "## <version> (<date>)" headings, one bullet per Chinese bullet. Add both when releasing. -->
 
+## 2.14.1-beta.1 (2026-11-10)
+
+- **Detached windows**: Search in the current window with Cmd+P or Ctrl+P, follow note links there, and open the same note in multiple windows. Dragging a tab to another window shows where it will insert or split and preserves the tabs already there. Dragging the only tab toward a split in its own window leaves the tab and draggable title bar visible.
+- **Notes**: A read failure gets a retry message. If a cloud vault cannot open while offline at startup, Forsion retries when the connection returns.
+- **Chat**: After an interruption, continue from the text already generated or start the answer again. Fixed an occasional interruption when a hosted model streams tool arguments.
+- **Intelligent UI**: Explanations stay in prose when that fits the question, with controls where interaction helps. Cards support math and note links.
+- **Agents**: Stand-ins can have their own memory and permissions. Profiles, agent memory and project memory can keep details in separate layers and recall them as needed.
+- **Calendar and tasks**: Calendar sources keep their colors when the source order changes. Agents can identify the default calendar, distinguish events from tasks and flag a start time that has already passed.
+- **Workspace**: Pane menus stay visible and clickable, and the Files panel updates when a project is removed. The editor can pick up newly enabled inline completion models.
+- Bundles Tangu engine 2.14.1 and Forsion Extend 0.10.1 on desktop.
+
 ## 2.14.0 (2026-11-09)
 
 Stable release: everything from 2.13.8-beta.1 through 2.14.0-beta.1 (see the sections below), plus these changes since 2.14.0-beta.1:
