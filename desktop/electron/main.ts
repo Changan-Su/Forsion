@@ -1,3 +1,4 @@
+import type { WindowDropPoint, WindowView } from '../shared/windowDrop'
 import { applyMcpSnapshot, mergeMcpImport, parseMcpInput } from '../shared/mcpConfig'
 import { assertMarketplaceRequirements } from '../shared/marketplace'
 import { mergeSyncContent,withContentWriteLock,contentSyncOwnership,agentContentHooks } from './contentSyncHost'
@@ -1934,7 +1935,7 @@ function showMainWindow(): void {
 }
 
 // ══ 卫星窗口:独立窗(拖出的 dockview,无 ribbon)+ mini 悬浮卡片 + floating 面板 ════════
-interface ViewDesc { type: string; params?: Record<string, unknown> }
+type ViewDesc = WindowView
 
 const detachedWindows = new Map<string, BrowserWindow>()
 const readyDetachedWindows = new WeakSet<BrowserWindow>()
@@ -2756,18 +2757,80 @@ function pollMiniCursor(m: MiniEntry): void {
 function dockviewWindows(): BrowserWindow[] {
   return [mainWindow, ...detachedWindows.values()].filter((w): w is BrowserWindow => !!w && !w.isDestroyed())
 }
-/** 屏幕点(screenX,screenY)命中哪个 dockview 窗口(排除 exclude=源窗);无则 null。z 序未细分,重叠取首个。 */
-function windowAtPoint(x: number, y: number, exclude?: BrowserWindow | null): BrowserWindow | null {
-  for (const w of dockviewWindows()) {
-    if (w === exclude || !w.isVisible()) continue
-    const b = w.getBounds()
-    if (x >= b.x && x < b.x + b.width && y >= b.y && y < b.y + b.height) return w
-  }
-  return null
+const dockviewFocusOrder = new WeakMap<BrowserWindow, number>()
+let dockviewFocusSeq = 0
+
+function windowAtPoint(point: Electron.Point): BrowserWindow | undefined {
+  return dockviewWindows()
+    .filter((win) => {
+      if (!win.isVisible() || win.isMinimized()) return false
+      const { x, y, width, height } = win.getBounds()
+      return point.x >= x && point.x < x + width && point.y >= y && point.y < y + height
+    })
+    .sort((a, b) => Number(b.isAlwaysOnTop()) - Number(a.isAlwaysOnTop())
+      || (dockviewFocusOrder.get(b) ?? 0) - (dockviewFocusOrder.get(a) ?? 0))[0]
 }
-/** 给所有 dockview 窗口清除跨窗落点预览。 */
-function clearAllDragPreview(): void {
-  for (const w of dockviewWindows()) w.webContents.send('window:dragPreview', null)
+
+function localDropPoint(win: BrowserWindow, point: Electron.Point, viewType: string): WindowDropPoint {
+  const bounds = win.getContentBounds()
+  const zoom = win.webContents.getZoomFactor()
+  return { localX: (point.x - bounds.x) / zoom, localY: (point.y - bounds.y) / zoom, viewType }
+}
+
+let viewDrag: {
+  source: BrowserWindow
+  viewType: string
+  timer: NodeJS.Timeout
+  target?: BrowserWindow
+  at?: WindowDropPoint
+} | undefined
+
+function clearViewDrag(): void {
+  if (!viewDrag) return
+  const { timer, target } = viewDrag
+  viewDrag = undefined
+  clearInterval(timer)
+  if (target && !target.isDestroyed()) target.webContents.send('window:dragPreview', null)
+}
+
+function updateViewDragPreview(): void {
+  if (!viewDrag) return
+  if (viewDrag.source.isDestroyed() || viewDrag.source.webContents.isCrashed()) { clearViewDrag(); return }
+  // The HTML drag event can stop reporting coordinates once the cursor leaves the source renderer.
+  const point = screen.getCursorScreenPoint()
+  const hit = windowAtPoint(point)
+  const target = hit === viewDrag.source ? undefined : hit
+  const previous = viewDrag.target
+  if (previous !== target && previous && !previous.isDestroyed()) previous.webContents.send('window:dragPreview', null)
+  const at = target && localDropPoint(target, point, viewDrag.viewType)
+  if (target && at && (target !== previous || at.localX !== viewDrag.at?.localX || at.localY !== viewDrag.at?.localY)) {
+    target.webContents.send('window:dragPreview', at)
+  }
+  viewDrag.target = target
+  viewDrag.at = at
+}
+
+let acceptViewSeq = 0
+
+function transferView(target: BrowserWindow, view: ViewDesc, at: WindowDropPoint): Promise<boolean> {
+  const contents = target.webContents
+  const requestId = ++acceptViewSeq
+  return new Promise((resolve) => {
+    const finish = (accepted: boolean): void => {
+      clearTimeout(timer)
+      contents.ipc.off('window:viewAccepted', receive)
+      contents.off('destroyed', destroyed)
+      resolve(accepted)
+    }
+    const receive = (_e: Electron.IpcMainEvent, id: number, accepted: boolean): void => {
+      if (id === requestId) finish(accepted === true)
+    }
+    const destroyed = (): void => finish(false)
+    const timer = setTimeout(destroyed, 1500)
+    contents.ipc.on('window:viewAccepted', receive)
+    contents.once('destroyed', destroyed)
+    contents.send('window:acceptView', requestId, view, at)
+  })
 }
 
 // 60s 内崩溃≥3 次则熔断(避免崩溃-重载风暴),弹框让用户决定重载或退出。
@@ -4425,6 +4488,7 @@ app.whenReady().then(async () => {
     try { if (want && globalShortcut.register(want, () => fireAppRef(null))) appRefAccelerator = want } catch { /* 写法不被接受 */ }
   }
   app.on('browser-window-focus', syncAppRefAccelerator)
+  app.on('browser-window-focus', (_event, win) => dockviewFocusOrder.set(win, ++dockviewFocusSeq))
   app.on('browser-window-blur', () => setImmediate(syncAppRefAccelerator)) // 失焦那一刻 getFocusedWindow 可能还是它
   // 新同步:切走 1 秒后才冲刷(1 秒内回到本应用任一窗口就不算)
   app.on('browser-window-blur', () => contentFlush.blur())
@@ -5180,30 +5244,31 @@ app.whenReady().then(async () => {
       return { ok: false, items: [], error: error instanceof Error ? error.message : String(error) }
     }
   })
-  // 跨窗撕拽:实时坐标 → 命中窗口显落点预览、其余清除。
-  ipcMain.on('window:dragUpdate', (e, p: { screenX: number; screenY: number; view: ViewDesc }) => {
-    const src = BrowserWindow.fromWebContents(e.sender)
-    const target = windowAtPoint(p.screenX, p.screenY, src)
-    for (const w of dockviewWindows()) {
-      if (w === src) continue
-      if (w === target) { const b = w.getBounds(); w.webContents.send('window:dragPreview', { localX: p.screenX - b.x, localY: p.screenY - b.y }) }
-      else w.webContents.send('window:dragPreview', null)
+  ipcMain.on('window:trackViewDrag', (e, viewType: string | null) => {
+    const source = BrowserWindow.fromWebContents(e.sender)
+    if (!source || !dockviewWindows().includes(source)) return
+    if (viewType === null) {
+      if (viewDrag?.source === source) clearViewDrag()
+      return
     }
+    if (typeof viewType !== 'string') return
+    clearViewDrag()
+    viewDrag = { source, viewType, timer: setInterval(updateViewDragPreview, 32) }
+    updateViewDragPreview()
   })
-  // 跨窗撕拽:最终落点路由。命中另一 dockview 窗 → acceptView 并入;空桌面 → 建新独立窗;都算已路由(源窗关 panel)。
-  ipcMain.handle('window:dropView', (e, p: { screenX: number; screenY: number; view: ViewDesc }) => {
-    clearAllDragPreview()
-    if (!p?.view || typeof p.view.type !== 'string') return { routed: false }
-    const src = BrowserWindow.fromWebContents(e.sender)
-    const target = windowAtPoint(p.screenX, p.screenY, src)
+  ipcMain.handle('window:dropView', async (e, view: ViewDesc) => {
+    const source = BrowserWindow.fromWebContents(e.sender)
+    if (!source || viewDrag?.source !== source || view?.type !== viewDrag.viewType) return { routed: false }
+    clearViewDrag()
+    const point = screen.getCursorScreenPoint()
+    const target = windowAtPoint(point)
+    if (target === source) return { routed: false }
     if (target) {
-      console.log('[win] dropView → merge into existing', target.id)
-      target.webContents.send('window:acceptView', p.view)
-      target.focus()
-      return { routed: true }
+      const routed = await transferView(target, view, localDropPoint(target, point, view.type))
+      if (routed && !target.isDestroyed()) target.focus()
+      return { routed }
     }
-    console.log('[win] dropView → new detached window')
-    createDetachedWindow({ views: [p.view], bounds: { x: Math.round(p.screenX), y: Math.round(p.screenY), width: 900, height: 680 } })
+    createDetachedWindow({ views: [view], bounds: { ...point, width: 900, height: 680 } })
     return { routed: true }
   })
   // mini 全局快捷键(默认 ⌘/Ctrl+⇧+M;register 返回 false=被占用,吞掉不阻塞启动)。

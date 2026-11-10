@@ -182,10 +182,10 @@ let amadeusBooted = false
  *  (日历·待办)/ Composer2 · AgentDesk · ChatWikiLink(聊天引用笔记)/ MobileRoot / MiniRoot。
  *  新壳若只挂 amadeus-editor 则谁都不触发 —— mini 卡片就是这么栽的(只挂主区 leaf,左栏永不挂载
  *  → Amadeus 恒显「打开 Vault 文件夹」空态)。 */
-export function ensureAmadeusReady(): void {
+export function ensureAmadeusReady(opts?: { attachOnly?: boolean }): void {
   if (!amadeusAvailable()) return
   if (amadeusBooted) return
   amadeusBooted = true
   installAmadeusPlugins()
-  void usePageStore.getState().restoreVault()
+  void usePageStore.getState().restoreVault(opts)
 }

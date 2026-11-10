@@ -11,6 +11,8 @@ import { useTheme } from './stores/themeStore'
 import { getLanguage } from './theme/registry'
 import { useI18n, registerMessages } from './i18n'
 import { AmadeusOverlays } from './amadeusOverlays'
+import { ensureAmadeusReady } from './amadeusPlugins'
+import { QuickFind } from './quickFind'
 import { FindBar } from './findInPage'
 import { detachedId } from './windowKind'
 import { installFileDropGuard } from './fileDropGuard'
@@ -82,6 +84,8 @@ export function DetachedRoot() {
     useApp.getState().setTr((k, vars) => t(k, vars as Record<string, string | number> | undefined))
   }, [t])
   useEffect(() => { void useApp.getState().boot() }, [])
+  // A standalone note can mount without the Notes sidebar. Initialize its own link and search index.
+  useEffect(() => { ensureAmadeusReady({ attachOnly: !WINDOW_SPACE_ID }) }, [])
   useEffect(() => installFileDropGuard(), []) // 独立窗也装全局拖放守卫
   useEffect(() => window.tangu?.onMainAction?.((action) => {
     if (action === 'agents-changed') {
@@ -133,6 +137,7 @@ export function DetachedRoot() {
       </div>
       {window.amadeus && <AmadeusOverlays />}
       {/* 分离窗口也是完整的 Shell(installHotkeys 照跑),不挂就只有 mod+f 没反应。 */}
+      <QuickFind />
       <FindBar />
     </>
   )
