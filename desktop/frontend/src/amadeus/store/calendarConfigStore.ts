@@ -5,10 +5,10 @@
 import { create } from 'zustand'
 import { isWinRoot, slashRel } from '@amadeus/lib/vaultFiles'
 import { diffVaultCfg, type CalMember, type VaultCfg } from './calendarSettingsDoc'
-import { createCalendarSettingsSync, type CalendarSettingsSync } from './calendarSettingsSync'
+import { createCalendarSettingsSync, type CalendarSettingsSync, type SettingsStorage } from './calendarSettingsSync'
 import { engineSettingsTransport } from './calendarSettingsIo'
 import { resolveCalendarSettingsKey } from './calendarSettingsKey'
-import { accountStorageId } from '../../services/engine/targets'
+import { accountStorageId, homeKind } from '../../services/engine/targets'
 
 export type { CalMember, VaultCfg } from './calendarSettingsDoc'
 
@@ -304,11 +304,24 @@ export const useCalendarConfig = create<CalCfgState>((set, get) => {
 })
 
 /** 共享那半(缺省实例):桌面问本机引擎、网页 / 手机问 server。内存换成共享那份时走 applyVc —— 照写镜像,不再记改动。 */
+/** localStorage → 同步那半要的存储(按前缀列键:挂起改动一条一个键)。每次现取 localStorage(单测会换掉全局)。 */
+const browserStorage = (): SettingsStorage => ({
+  getItem: (k) => localStorage.getItem(k),
+  setItem: (k, v) => localStorage.setItem(k, v),
+  removeItem: (k) => localStorage.removeItem(k),
+  keys: () => {
+    const out: string[] = []
+    for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k !== null) out.push(k) }
+    return out
+  },
+})
 export const calendarSettingsSync: CalendarSettingsSync = createCalendarSettingsSync({
   io: engineSettingsTransport,
-  storage: typeof localStorage === 'undefined' ? null : localStorage,
+  storage: typeof localStorage === 'undefined' ? null : browserStorage(),
   resolveKey: (root) => resolveCalendarSettingsKey(root),
   account: () => accountStorageId(),
+  // 桌面的本机引擎 = 本机;网页 / 手机打 server、桌面外部模式连的别处 = 远端(定时重读放慢)。判不出来按远端。
+  remote: () => { try { return homeKind() !== 'local' } catch { return true } },
   localTrusted: () => !loadFailed,
   hadLocalAtStart: (root) => rootsAtStart.has(root),
   getVc: (root) => useCalendarConfig.getState().byVault[root],

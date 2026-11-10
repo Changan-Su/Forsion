@@ -1,8 +1,12 @@
 /** 共享那半的状态机:假 server(带票据的比对交换写)× 两台「设备」(各自一份内存 + 一份 localStorage)。
- *  设备的写动作按 store 的口径:同步改内存,再把前后差交给 record。 */
-import { describe, expect, it, vi } from 'vitest'
+ *  设备的写动作按 store 的口径:同步改内存,再把前后差交给 record。
+ *  「同一台机器的两个窗口」= 两个实例共享同一份假 localStorage、同一份镜像、同一把锁(各自一份内存)。 */
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { DbFile } from '@amadeus-shared/db/schema'
-import { createCalendarSettingsSync, MERGED_KEY, PENDING_KEY, type SettingsKey, type SettingsStorage } from './calendarSettingsSync'
+import {
+  createCalendarSettingsSync, MERGED_KEY, OP_PREFIX, PENDING_KEY,
+  type SettingsKey, type SettingsLock, type SettingsStorage,
+} from './calendarSettingsSync'
 import { diffVaultCfg, docToVaultCfg, emptySettingsDoc, rowIdOf, type VaultCfg } from './calendarSettingsDoc'
 import type { SettingsRead, SettingsTransport, SettingsWrite } from './calendarSettingsIo'
 import { planAutoColors, EVENT_PALETTE as P } from './calendarConfigStore'
@@ -10,6 +14,9 @@ import { planAutoColors, EVENT_PALETTE as P } from './calendarConfigStore'
 const R = '/Users/me/Vault'
 const clone = <T>(x: T): T => JSON.parse(JSON.stringify(x)) as T
 const vc = (o: Partial<VaultCfg> = {}): VaultCfg => ({ colors: {}, hidden: [], defaultDbPath: null, members: {}, ...o })
+const deferred = <T = void>() => { let resolve!: (v: T) => void; const p = new Promise<T>((r) => { resolve = r }); return { p, resolve } }
+/** 让挂着的 promise 链都走完(不用假定时器的用例)。 */
+const flush = (): Promise<void> => new Promise((r) => setTimeout(r, 0))
 
 type Mode = 'ok' | 'absent' | 'corrupt' | 'down'
 function fakeServer() {
@@ -39,34 +46,73 @@ function fakeServer() {
       return { status: 'ok', version: `v${s.ver}` }
     }),
   }
-  return Object.assign(s, { io, shared: (): VaultCfg => docToVaultCfg(s.doc ?? emptySettingsDoc()) })
+  return Object.assign(s, { io, now, shared: (): VaultCfg => docToVaultCfg(s.doc ?? emptySettingsDoc()) })
 }
+type Srv = ReturnType<typeof fakeServer>
 
-function memStorage(): SettingsStorage & { data: Map<string, string> } {
+type MemStorage = SettingsStorage & { data: Map<string, string>; failSet: ((k: string) => boolean) | null; onAccess: ((k: string) => void) | null }
+function memStorage(): MemStorage {
   const data = new Map<string, string>()
-  return { data, getItem: (k) => data.get(k) ?? null, setItem: (k, v) => { data.set(k, v) } }
+  const s: MemStorage = {
+    data,
+    failSet: null,
+    onAccess: null,
+    getItem: (k) => { const v = data.get(k) ?? null; s.onAccess?.(k); return v },
+    setItem: (k, v) => { if (s.failSet?.(k)) throw new Error('QuotaExceededError'); data.set(k, v) },
+    removeItem: (k) => { data.delete(k) },
+    keys: () => { s.onAccess?.('*'); return [...data.keys()] },
+  }
+  return s
 }
+/** 一把互斥(各设备 / 各窗口自带一把;两个窗口共享同一把 = 有 Web Locks)。 */
+function mutex(): SettingsLock {
+  let tail: Promise<unknown> = Promise.resolve()
+  return <T,>(_name: string, fn: () => Promise<T>): Promise<T> => {
+    const run = tail.then(fn)
+    tail = run.then(() => undefined, () => undefined)
+    return run
+  }
+}
+/** 不互斥(模拟两个窗口之间没有锁)。 */
+const noLock: SettingsLock = (_n, fn) => fn()
 
-function device(server: ReturnType<typeof fakeServer>, opts: { acct?: string; key?: () => SettingsKey; local?: VaultCfg; trusted?: () => boolean; loginAcct?: () => string | null } = {}) {
+interface DevOpts {
+  acct?: string
+  key?: () => SettingsKey
+  local?: VaultCfg
+  trusted?: () => boolean
+  loginAcct?: () => string | null
+  storage?: MemStorage
+  /** 两个窗口共用的本机镜像(applyVc / 动作都照写它) */
+  mirror?: Map<string, VaultCfg>
+  /** 'default' = 不传(走自动探测) */
+  lock?: SettingsLock | null | 'default'
+  io?: SettingsTransport
+  remote?: () => boolean
+}
+function device(server: Srv, opts: DevOpts = {}) {
   const mem = new Map<string, VaultCfg>()
   if (opts.local) mem.set(R, clone(opts.local))
-  const storage = memStorage()
+  const storage = opts.storage ?? memStorage()
   let acct = opts.acct ?? 'A'
+  const setVc = (r: string, v: VaultCfg): void => { mem.set(r, v); opts.mirror?.set(r, clone(v)) }
   const sync = createCalendarSettingsSync({
-    io: server.io,
+    io: opts.io ?? server.io,
     storage,
     resolveKey: async () => (opts.key ? opts.key() : { kind: 'sync', acct }),
     getVc: (r) => mem.get(r),
-    applyVc: (r, v) => { mem.set(r, v) },
+    applyVc: setVc,
     hadLocalAtStart: () => !!opts.local,
     ...(opts.trusted ? { localTrusted: opts.trusted } : {}),
     ...(opts.loginAcct ? { account: opts.loginAcct } : {}),
+    ...(opts.lock === 'default' ? {} : { lock: opts.lock === undefined ? mutex() : opts.lock }),
+    ...(opts.remote ? { remote: opts.remote } : {}),
     schedule: () => {},
   })
   const act = (fn: (v: VaultCfg) => VaultCfg, auto = false, inferred = false): void => {
     const prev = mem.get(R)
     const next = fn(clone(prev ?? vc()))
-    mem.set(R, next)
+    setVc(R, next)
     sync.record(R, diffVaultCfg(prev, next, auto), { inferred })
   }
   /** 照 store 的 migrate:有日期列的表推断为成员 */
@@ -84,7 +130,16 @@ function device(server: ReturnType<typeof fakeServer>, opts: { acct?: string; ke
     tick: () => sync.tick(R),
     switchAccount: (a: string) => { acct = a },
     merged: () => JSON.parse(storage.data.get(MERGED_KEY) ?? '{}') as Record<string, true>,
-    pending: () => (JSON.parse(storage.data.get(PENDING_KEY) ?? '{"acct":{}}') as { acct: Record<string, unknown[]> }).acct,
+    /** 已认领的挂起改动,按账号(每条一个键) */
+    pending: () => {
+      const out: Record<string, unknown[]> = {}
+      for (const [k, v] of storage.data) {
+        if (!k.startsWith(`${OP_PREFIX}`)) continue
+        const r = JSON.parse(v) as { acct: string; u?: true }
+        if (!r.u) (out[r.acct] ??= []).push(r)
+      }
+      return out
+    },
   }
 }
 const ready = (o: Partial<VaultCfg> = {}): VaultCfg => vc({ migrated: true, autoColors: {}, ...o })
@@ -224,9 +279,13 @@ describe('第一次合并', () => {
     expect(d.merged()).toEqual({})
     expect(d.pending().A?.length).toBe(1)
     srv.writeResult = null
+    const puts = srv.puts.length
+    await d.tick()
+    expect(srv.puts.length).toBe(puts) // 同一份内容对同一个基线被拒过:挂起内容 / 基线没变就不再撞
+    d.act((v) => ({ ...v, colors: { 'a.db': '#121212', 'b.db': '#343434' } })) // 挂起内容变了:再写
     await d.tick()
     expect(d.merged()).toEqual({ A: true })
-    expect(srv.shared().colors).toEqual({ 'a.db': '#121212' })
+    expect(srv.shared().colors).toEqual({ 'a.db': '#121212', 'b.db': '#343434' })
     expect(d.pending()).toEqual({})
   })
   it('换账号:别的账号的本机那份不带进新账号;没带标记的老数据算当前账号的', async () => {
@@ -240,9 +299,17 @@ describe('第一次合并', () => {
     await d2.tick()
     expect(srvB.puts).toEqual([])
     expect(srvB.doc).toBeNull()
-    expect(d2.vc()?.hidden).toEqual([])
-    expect(d2.vc()?.owner).toBe('B')
+    // B 那份确认没有、B 也没东西可补:不建文件、不记合过了(E),内存不拿「没有」去盖(还是 A 那份,标记照旧是 A)
+    expect(d2.merged()).toEqual({})
+    expect(d2.vc()?.owner).toBe('A')
+    // B 有了第一个手势:写成之后才记合过了,内存换成 B 那份(A 的隐藏不带过去)
+    d2.act((v) => ({ ...v, colors: { ...v.colors, 'b.db': '#0b0b0b' } }))
+    await d2.tick()
+    expect(srvB.shared().hidden).toEqual([])
+    expect(srvB.shared().colors).toEqual({ 'b.db': '#0b0b0b' })
     expect(d2.merged()).toEqual({ B: true })
+    expect(d2.vc()?.owner).toBe('B')
+    expect(d2.vc()?.hidden).toEqual([])
   })
   it('同一个设备上换账号(运行中):上一个账号的投影不进新账号', async () => {
     const srv = fakeServer()
@@ -351,7 +418,7 @@ describe('之后:共享那份是真源', () => {
     const d1 = device(srv)
     const d2 = device(srv)
     await d1.tick()
-    await d2.tick() // 两台都合过了(都没东西),共享里还没播种
+    await d2.tick() // 两台都还没东西:共享那份确认没有,谁也不建空文件、不记合过了
     expect(d1.vc()?.autoColors).toBeUndefined()
     d1.seedColors(['a.db', 'b.db', 'c.db'])
     d2.seedColors(['c.db', 'b.db', 'a.db']) // 另一台的顺序不一样
@@ -429,6 +496,389 @@ describe('读失败 ≠ 空(评审补)', () => {
       if (order === 'shared-first') { d.migrate(['implicit.db']); await d.tick() }
       expect(Object.keys(srv.shared().members)).toEqual(['kept.db'])
       expect(Object.keys(d.vc()?.members ?? {})).toEqual(['kept.db'])
+    }
+  })
+})
+
+// ── 评审返修(第二轮):每条按评审描述的场景原样复现 ──
+
+/** 照这个账号路由到各自那份文件的 io(同一个 io,登录换了就打到另一份)。 */
+function routed(byAcct: Record<string, Srv>, login: () => string | null): SettingsTransport {
+  const cur = (): Srv => byAcct[login() ?? ''] ?? byAcct.A
+  return { read: () => cur().io.read(), write: (d, v) => cur().io.write(d, v) }
+}
+/** 读的时候先拍下当时那份,放行之后才返回(慢 GET)。 */
+function slowRead(srv: Srv): { io: SettingsTransport; started: Promise<void>; release: () => void } {
+  const gate = deferred()
+  const begun = deferred()
+  return {
+    io: {
+      read: async () => { const snap = srv.mode === 'ok' ? srv.now() : ({ status: 'unknown' } as SettingsRead); begun.resolve(); await gate.p; return snap },
+      write: (d, v) => srv.io.write(d, v),
+    },
+    started: begun.p,
+    release: () => gate.resolve(),
+  }
+}
+
+describe('A. 一轮绑定账号 + 库键 + 代次', () => {
+  it('第 1 条:A 的 GET 回 missing 时已换到 B → 不写(不拿 A 的东西写进 B 那份)、不记合过了、不改内存', async () => {
+    const srvA = fakeServer()
+    const srvB = fakeServer()
+    let login: string | null = 'A'
+    const slow = slowRead(srvA)
+    const io: SettingsTransport = { read: () => (login === 'A' ? slow.io.read() : srvB.io.read()), write: (d, v) => (login === 'A' ? srvA : srvB).io.write(d, v) }
+    const d = device(srvA, { io, loginAcct: () => login, key: () => ({ kind: 'sync', acct: login ?? 'A' }), local: ready({ hidden: ['a-secret.db'] }) })
+    const p = d.tick()
+    await slow.started
+    login = 'B'
+    slow.release()
+    await p
+    expect(srvA.puts).toEqual([])
+    expect(srvB.puts).toEqual([])
+    expect(d.merged()).toEqual({})
+  })
+  it('第 2 条:库键未知时 A 改的,换到 B 后算出 B 的同步库 → 不归 B(镜像带 A 标记 / 没标记 两种)', async () => {
+    for (const owner of ['A', undefined]) {
+      const srvA = fakeServer()
+      const srvB = fakeServer()
+      let login: string | null = 'A'
+      let key: SettingsKey = { kind: 'unknown' }
+      const d = device(srvA, { io: routed({ A: srvA, B: srvB }, () => login), loginAcct: () => login, key: () => key, local: ready({ ...(owner ? { owner } : {}) }) })
+      d.act((v) => ({ ...v, hidden: ['a-only.db'] }))
+      await d.tick()
+      login = 'B'
+      key = { kind: 'sync', acct: 'B' }
+      await d.tick()
+      await d.tick()
+      expect(srvB.puts.map((x) => JSON.stringify(x.data))).not.toContainEqual(expect.stringContaining('a-only.db'))
+      expect(srvB.shared().hidden).toEqual([])
+    }
+  })
+  it('第 3 条:A 第一次读失败期间改的设置,换到 B 后不被当成「升级前的老数据」合进 B', async () => {
+    const srvA = fakeServer()
+    srvA.mode = 'down'
+    const srvB = fakeServer()
+    let login: string | null = 'A'
+    const d = device(srvA, { io: routed({ A: srvA, B: srvB }, () => login), loginAcct: () => login, key: () => ({ kind: 'sync', acct: login ?? 'A' }), local: ready({ hidden: ['legacy.db'] }) })
+    await d.tick() // A 的库键算出来了,读失败
+    expect(d.vc()?.owner).toBe('A') // 账号一确定就打上
+    d.act((v) => ({ ...v, colors: { 'a-made.db': '#a0a0a0' } }))
+    login = 'B'
+    await d.tick()
+    d.act((v) => ({ ...v, colors: { ...v.colors, 'b-made.db': '#b0b0b0' } }))
+    await d.tick()
+    const b = srvB.shared()
+    expect(b.colors['a-made.db']).toBeUndefined()
+    expect(b.hidden).not.toContain('legacy.db')
+    expect(b.colors['b-made.db']).toBe('#b0b0b0')
+    expect(d.pending().A?.length).toBe(1) // A 的改动还在 A 名下
+  })
+})
+
+describe('B. 多窗口之间不丢、不互盖', () => {
+  it('第 4 条:两个窗口同时追加 / 一边 ack 一边追加,两边的改动都到共享文件', async () => {
+    const srv = fakeServer()
+    const storage = memStorage()
+    const mirror = new Map<string, VaultCfg>()
+    const lock = mutex()
+    const w1 = device(srv, { storage, mirror, lock, local: ready() })
+    await w1.tick()
+    const w2 = device(srv, { storage, mirror, lock, local: w1.vc() })
+    await w2.tick()
+    // 追加:w1 读队列的时候 w2 插进来追加
+    let once = true
+    storage.onAccess = (k) => {
+      if (!once || !(k === '*' || k.startsWith('amadeus.calendar.cfg.'))) return
+      once = false
+      w2.act((v) => ({ ...v, colors: { ...v.colors, 'two.db': '#222222' } }))
+    }
+    w1.act((v) => ({ ...v, colors: { ...v.colors, 'one.db': '#111111' } }))
+    storage.onAccess = null
+    // ack:w1 写成、删自己那条的时候 w2 又追加了一条
+    const write = srv.io.write
+    srv.io.write = async (d, v) => {
+      const res = await write(d, v)
+      let armed = true
+      storage.onAccess = (k) => {
+        if (!armed || !(k === '*' || k.startsWith('amadeus.calendar.cfg.'))) return
+        armed = false
+        storage.onAccess = null
+        w2.act((x) => ({ ...x, hidden: ['three.db'] }))
+      }
+      return res
+    }
+    await w1.tick()
+    srv.io.write = write
+    storage.onAccess = null
+    await w2.tick()
+    await w1.tick()
+    const s = srv.shared()
+    expect(s.colors).toMatchObject({ 'one.db': '#111111', 'two.db': '#222222' })
+    expect(s.hidden).toEqual(['three.db'])
+  })
+  for (const [label, mk] of [['共享一把锁(Web Locks)', () => mutex()], ['没有 Web Locks:进程内互斥', () => null]] as const) {
+    it(`第 8 条:两个窗口同时做第一次合并,先合完的那个随后取消了隐藏,迟到的 PUT 不把隐藏带回来 —— ${label}`, async () => {
+      const srv = fakeServer()
+      const storage = memStorage()
+      const mirror = new Map<string, VaultCfg>()
+      const lock = mk()
+      const gate = deferred()
+      const lateIo: SettingsTransport = { read: () => srv.io.read(), write: async (d, v) => { await gate.p; return srv.io.write(d, v) } }
+      const w2 = device(srv, { storage, mirror, lock, io: lateIo, local: ready({ hidden: ['x.db'] }) })
+      const w1 = device(srv, { storage, mirror, lock, local: ready({ hidden: ['x.db'] }) })
+      const p2 = w2.tick()
+      await flush()
+      const p1 = w1.tick()
+      await flush()
+      w1.act((v) => ({ ...v, hidden: [] }))
+      const p1b = w1.tick()
+      await flush()
+      gate.resolve()
+      await Promise.all([p1, p1b, p2])
+      await w1.tick()
+      await w2.tick()
+      expect(srv.shared().hidden).toEqual([])
+      expect(w1.vc()?.hidden).toEqual([])
+      expect(w2.vc()?.hidden).toEqual([])
+    })
+  }
+  const blueRed = async (lockOf: () => SettingsLock) => {
+    const srv = fakeServer()
+    const storage = memStorage()
+    const mirror = new Map<string, VaultCfg>()
+    const slow = slowRead(srv)
+    const lockA = lockOf()
+    const lockB = lockOf === mutex ? lockA : lockOf()
+    const wa = device(srv, { storage, mirror, lock: lockA, io: { read: () => srv.io.read(), write: (d, v) => srv.io.write(d, v) }, local: ready({ colors: { 'a.db': '#ff0000' } }) })
+    await wa.tick() // 合过,共享 = 红
+    const wb = device(srv, { storage, mirror, lock: lockB, local: wa.vc() })
+    await wb.tick()
+    // A 起一次慢 GET(读到红);B 改成蓝并写进去
+    const wa2 = device(srv, { storage, mirror, lock: lockA, io: slow.io, local: wa.vc() })
+    const pa = wa2.tick()
+    await slow.started
+    wb.act((v) => ({ ...v, colors: { 'a.db': '#0000ff' } }))
+    const pb = wb.tick()
+    await flush()
+    slow.release()
+    await Promise.all([pa, pb])
+    return { srv, mirror, wa2 }
+  }
+  it('第 10 条(共享锁):A 迟到的 GET(红)不在 B 写了蓝之后投影到镜像', async () => {
+    const { srv, mirror } = await blueRed(mutex)
+    expect(srv.shared().colors['a.db']).toBe('#0000ff')
+    expect(mirror.get(R)?.colors['a.db']).toBe('#0000ff')
+  })
+  it('第 10 条(两个窗口之间没有锁):靠「本机最后写成」标记,A 发现 B 写过就丢掉这次读', async () => {
+    const { srv, mirror, wa2 } = await blueRed(() => noLock)
+    expect(srv.shared().colors['a.db']).toBe('#0000ff')
+    expect(mirror.get(R)?.colors['a.db']).toBe('#0000ff')
+    expect(wa2.sync.isShared(R)).toBe(false) // 这次过时的读被丢掉了,没投影(下一轮重读)
+    await wa2.tick()
+    expect(wa2.vc()?.colors['a.db']).toBe('#0000ff')
+  })
+  it('navigator.locks 在的时候用它,按账号一把锁', async () => {
+    const request = vi.fn((_name: string, cb: () => Promise<unknown>) => cb())
+    vi.stubGlobal('navigator', { locks: { request } })
+    try {
+      const srv = fakeServer()
+      const d = device(srv, { lock: 'default', local: ready({ hidden: ['a.db'] }) })
+      await d.tick()
+      expect(request).toHaveBeenCalledWith('amadeus.calendar.cfg.sync.A', expect.any(Function))
+      expect(srv.shared().hidden).toEqual(['a.db'])
+    } finally { vi.unstubAllGlobals() }
+  })
+  it('没有 navigator.locks:退回进程内互斥,照常合并', async () => {
+    const srv = fakeServer()
+    const d = device(srv, { lock: 'default', local: ready({ hidden: ['a.db'] }) })
+    await d.tick()
+    expect(srv.shared().hidden).toEqual(['a.db'])
+    expect(d.merged()).toEqual({ A: true })
+  })
+  it('旧的整份队列:迁成单条记录重放,迁完删掉旧键', async () => {
+    const srv = fakeServer()
+    await device(srv, { local: ready() }).tick()
+    const storage = memStorage()
+    storage.data.set(MERGED_KEY, JSON.stringify({ A: true }))
+    storage.data.set(PENDING_KEY, JSON.stringify({ acct: { A: [{ id: 'old1', t: 'set', k: 'sync|hidden|q.db', v: 'true' }] } }))
+    const d = device(srv, { storage, local: ready({ owner: 'A' }) })
+    await d.tick()
+    expect(srv.shared().hidden).toEqual(['q.db'])
+    expect(storage.data.has(PENDING_KEY)).toBe(false)
+    expect(d.pending()).toEqual({})
+  })
+})
+
+describe('C. 改动的持久性', () => {
+  it('第 5 条:合过的设备,启动时库键还不知道就把红改成蓝、随即重启 → 蓝不丢、不被共享的红盖回', async () => {
+    const srv = fakeServer()
+    const d1 = device(srv, { local: ready({ colors: { 'a.db': '#ff0000' } }) })
+    await d1.tick()
+    let key: SettingsKey = { kind: 'unknown' }
+    const d2 = device(srv, { storage: d1.storage, key: () => key, local: d1.vc() })
+    await d2.tick()
+    d2.act((v) => ({ ...v, colors: { 'a.db': '#0000ff' } }))
+    // 重启:同一份 localStorage、镜像是蓝
+    key = { kind: 'sync', acct: 'A' }
+    const d3 = device(srv, { storage: d1.storage, key: () => key, local: d2.vc() })
+    await d3.tick()
+    expect(srv.shared().colors['a.db']).toBe('#0000ff')
+    expect(d3.vc()?.colors['a.db']).toBe('#0000ff')
+  })
+  it('第 7 条:挂起改动写不进 localStorage(配额满)→ 留在内存覆盖层照样重放,不被共享的旧值投影盖掉', async () => {
+    const srv = fakeServer()
+    const d = device(srv, { local: ready({ colors: { 'a.db': '#ff0000' } }) })
+    await d.tick()
+    d.storage.failSet = (k) => k.startsWith('amadeus.calendar.cfg.op.') || k === PENDING_KEY
+    srv.mode = 'down'
+    d.act((v) => ({ ...v, colors: { 'a.db': '#0000ff' } }))
+    await d.tick()
+    expect(d.vc()?.colors['a.db']).toBe('#0000ff')
+    srv.mode = 'ok'
+    await d.tick()
+    expect(d.vc()?.colors['a.db']).toBe('#0000ff')
+    expect(srv.shared().colors['a.db']).toBe('#0000ff')
+  })
+})
+
+describe('D. 同一个账号「留本机 → 又变回同步库」', () => {
+  it('第 6 条:合过后关同步(留本机)把红改成蓝,再打开同步 → 蓝重放进共享,不被红盖回', async () => {
+    const srv = fakeServer()
+    let key: SettingsKey = { kind: 'sync', acct: 'A' }
+    const d = device(srv, { key: () => key, local: ready({ colors: { 'a.db': '#ff0000' } }) })
+    await d.tick()
+    key = { kind: 'local' }
+    await d.tick()
+    d.act((v) => ({ ...v, colors: { 'a.db': '#0000ff' } }))
+    key = { kind: 'sync', acct: 'A' }
+    await d.tick()
+    expect(srv.shared().colors['a.db']).toBe('#0000ff')
+    expect(d.vc()?.colors['a.db']).toBe('#0000ff')
+  })
+  it('回来的是别的账号:留本机期间的改动不写进它那份;那个账号认领这个库后丢掉', async () => {
+    const srvA = fakeServer()
+    const srvB = fakeServer()
+    let login: string | null = 'A'
+    let key: SettingsKey = { kind: 'sync', acct: 'A' }
+    const d = device(srvA, { io: routed({ A: srvA, B: srvB }, () => login), loginAcct: () => login, key: () => key, local: ready({ colors: { 'a.db': '#ff0000' } }) })
+    await d.tick()
+    key = { kind: 'local' }
+    await d.tick()
+    d.act((v) => ({ ...v, colors: { 'a.db': '#0000ff' } }))
+    expect(d.pending().A?.length).toBe(1)
+    login = 'B'
+    key = { kind: 'sync', acct: 'B' }
+    await d.tick()
+    d.act((v) => ({ ...v, hidden: ['b.db'] }))
+    await d.tick()
+    expect(srvB.shared().colors['a.db']).toBeUndefined()
+    expect(srvA.shared().colors['a.db']).toBe('#ff0000')
+    expect(d.pending().A).toBeUndefined() // B 认领了这个库:A 留本机期间那条丢掉
+  })
+  it('从没合过的库留本机:改动一个键都不多写', async () => {
+    const srv = fakeServer()
+    const d = device(srv, { key: () => ({ kind: 'local' }), local: ready({ owner: 'A' }) })
+    await d.tick()
+    d.act((v) => ({ ...v, colors: { 'a.db': '#0000ff' } }))
+    await d.tick()
+    expect([...d.storage.data.keys()]).toEqual([])
+    expect(srv.io.read).not.toHaveBeenCalled()
+  })
+})
+
+describe('E. 「合过了」只在真的写成 / 读到之后记', () => {
+  it('第 9 条:全新设备读到 missing、没东西可补 → 不建文件、不记合过了;第一次真写成之后才记', async () => {
+    const srv = fakeServer()
+    const d = device(srv)
+    await d.tick()
+    expect(srv.puts).toEqual([])
+    expect(d.merged()).toEqual({})
+    d.act((v) => ({ ...v, hidden: ['n.db'] }))
+    await d.tick()
+    expect(srv.shared().hidden).toEqual(['n.db'])
+    expect(d.merged()).toEqual({ A: true })
+  })
+})
+
+describe('F. 轮询与重试', () => {
+  afterEach(() => { vi.useRealTimers() })
+  it('第 12 条:轮中再来的触发并成一次尾随,不排队堆积', async () => {
+    const srv = fakeServer()
+    const d = device(srv, { local: ready() })
+    await d.tick()
+    const slow = slowRead(srv)
+    const d2 = device(srv, { io: slow.io, storage: d.storage, local: d.vc() })
+    const read = vi.spyOn(slow.io, 'read')
+    const all = Promise.all([d2.tick(), d2.tick(), d2.tick(), d2.tick(), d2.tick()])
+    await slow.started
+    slow.release()
+    await all
+    expect(read).toHaveBeenCalledTimes(2)
+  })
+  it('第 12 条:慢请求 + 轮询不积压;最后一个视图卸载后纯轮询的尾随取消、定时器清零', async () => {
+    vi.useFakeTimers()
+    const srv = fakeServer()
+    const reads: number[] = []
+    const io: SettingsTransport = {
+      read: () => { reads.push(Date.now()); return new Promise((r) => setTimeout(() => r(srv.now()), 15_000)) },
+      write: (d, v) => srv.io.write(d, v),
+    }
+    const d = device(srv, { io, local: ready() })
+    const release = d.sync.acquire(() => R)
+    await vi.advanceTimersByTimeAsync(120_000)
+    const during = reads.length
+    expect(during).toBeLessThanOrEqual(5) // 每轮 15 秒读 + 至少 15 秒间隔
+    release()
+    const at = reads.length
+    await vi.advanceTimersByTimeAsync(600_000)
+    expect(reads.length - at).toBeLessThanOrEqual(0)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+  it('第 11 条:HUMAN_SETTINGS_TOO_LARGE 被拒后,挂起内容和共享基线都没变就不再重试', async () => {
+    const srv = fakeServer()
+    const d = device(srv, { local: ready() })
+    await d.tick()
+    d.act((v) => ({ ...v, hidden: ['big.db'] }))
+    srv.writeResult = { status: 'rejected', error: 'HUMAN_SETTINGS_TOO_LARGE' }
+    await d.tick()
+    const puts = srv.puts.length
+    for (let i = 0; i < 4; i++) await d.tick()
+    expect(srv.puts.length).toBe(puts)
+    srv.writeResult = null
+    srv.doc = { ...srv.doc!, rows: [...srv.doc!.rows, { id: rowIdOf('sync|color|o.db'), cells: { k: 'sync|color|o.db', v: '#0f0f0f' } }] }
+    srv.ver++ // 共享基线变了:再试一次
+    await d.tick()
+    expect(srv.shared().hidden).toEqual(['big.db'])
+  })
+  it('接口不存在(连续 unknown):重读间隔逐级拉长(15s → 30s → 2min → 5min 封顶),读到一次有效回答后恢复', async () => {
+    vi.useFakeTimers()
+    const srv = fakeServer()
+    srv.mode = 'absent'
+    const d = device(srv, { local: ready() })
+    const read = srv.io.read as ReturnType<typeof vi.fn>
+    const release = d.sync.acquire(() => R)
+    await vi.advanceTimersByTimeAsync(600_000)
+    expect(read.mock.calls.length).toBeLessThanOrEqual(6) // 0, 15s, 45s, 165s, 465s
+    expect(read.mock.calls.length).toBeGreaterThanOrEqual(4)
+    srv.mode = 'ok'
+    await vi.advanceTimersByTimeAsync(300_000) // 下一次读到了
+    const n = read.mock.calls.length
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(read.mock.calls.length - n).toBeGreaterThanOrEqual(3) // 恢复到 15 秒一次
+    release()
+  })
+  it('远端(网页 / 手机打 server):常规重读不低于 60 秒;本机引擎不低于 15 秒', async () => {
+    vi.useFakeTimers()
+    for (const [remote, max] of [[true, 6], [false, 21]] as const) {
+      const srv = fakeServer()
+      const d = device(srv, { local: ready(), remote: () => remote })
+      const read = srv.io.read as ReturnType<typeof vi.fn>
+      const release = d.sync.acquire(() => R)
+      await vi.advanceTimersByTimeAsync(300_000)
+      expect(read.mock.calls.length).toBeLessThanOrEqual(max)
+      expect(read.mock.calls.length).toBeGreaterThanOrEqual(max - 1)
+      release()
     }
   })
 })

@@ -26,6 +26,12 @@ const write = vi.fn(async (data: DbFile, version: string | null): Promise<Settin
 const resolveKey = vi.fn(async (): Promise<SettingsKey> => srv.key)
 vi.mock('./calendarSettingsIo', () => ({ engineSettingsTransport: { read: () => read(), write: (d: DbFile, v: string | null) => write(d, v) } }))
 vi.mock('./calendarSettingsKey', () => ({ resolveCalendarSettingsKey: () => resolveKey() }))
+// 登录的账号:同步那半每个 await 之后都核对它(和库键里的账号对不上 = 整轮作废)
+vi.mock('../../services/engine/targets', async (orig) => ({
+  ...(await orig<typeof import('../../services/engine/targets')>()),
+  accountStorageId: () => (srv.key.kind === 'sync' ? srv.key.acct : 'A'),
+  homeKind: () => 'local',
+}))
 
 const boot = async () => import('./calendarConfigStore')
 const disk = (): Record<string, Record<string, unknown>> => JSON.parse(localStorage.getItem(KEY) ?? '{}')
@@ -37,6 +43,8 @@ beforeEach(() => {
     getItem: (k: string) => data.get(k) ?? null,
     setItem: (k: string, v: string) => { data.set(k, v) },
     removeItem: (k: string) => { data.delete(k) },
+    get length() { return data.size },
+    key: (i: number) => [...data.keys()][i] ?? null,
   })
   vi.resetModules()
   srv.doc = null; srv.ver = 0; srv.mode = 'absent'; srv.key = { kind: 'sync', acct: 'A' }
