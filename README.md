@@ -9,7 +9,7 @@
 
 [![Latest release](https://img.shields.io/github/v/release/Changan-Su/Forsion?display_name=tag&sort=semver&label=release)](https://github.com/Changan-Su/Forsion/releases)
 ![Platforms](https://img.shields.io/badge/platforms-macOS%20%C2%B7%20Windows%20%C2%B7%20Linux%20%C2%B7%20Android%20%C2%B7%20Web-555)
-[![License](https://img.shields.io/badge/license-Modified%20Apache--2.0-6f42c1)](./LICENSE)
+[![License](https://img.shields.io/badge/license-Apache--2.0-6f42c1)](./LICENSE)
 
 [Download](https://github.com/Changan-Su/Forsion/releases/latest) · [Web app](https://ai.forsion.net) · [Quick start](./docs/getting-started/quickstart.en.md) · [Docs](./docs/README.en.md) · [Website](https://forsion.net)
 
@@ -356,10 +356,4 @@ You can view or file issues from [Issues](https://github.com/Changan-Su/Forsion/
 
 ## License
 
-Forsion Genesis uses the [Modified Apache License 2.0](./LICENSE). It is based on Apache License 2.0 with additional conditions, mainly covering:
-
-- You may not use this repository's code to operate a multi-tenant environment without written authorization;
-- When using the `desktop/`, `web/` or `mobile/` frontends, you may not remove or modify the logo, product name and copyright notices in the interface;
-- Commercial use is permitted when the additional conditions are met; a commercial license should be obtained for multi-tenant deployment or other authorizations.
-
-Please read the full license text before using, distributing or offering services based on this project. This license includes restrictions beyond Apache-2.0, so it should not be understood as the standard Apache-2.0 license alone.
+Forsion Genesis is licensed under the [Apache License 2.0](./LICENSE).

@@ -9,7 +9,7 @@
 
 [![Latest release](https://img.shields.io/github/v/release/Changan-Su/Forsion?display_name=tag&sort=semver&label=release)](https://github.com/Changan-Su/Forsion/releases)
 ![Platforms](https://img.shields.io/badge/platforms-macOS%20%C2%B7%20Windows%20%C2%B7%20Linux%20%C2%B7%20Android%20%C2%B7%20Web-555)
-[![License](https://img.shields.io/badge/license-Modified%20Apache--2.0-6f42c1)](./LICENSE)
+[![License](https://img.shields.io/badge/license-Apache--2.0-6f42c1)](./LICENSE)
 
 [立即下载](https://github.com/Changan-Su/Forsion/releases/latest) · [网页版](https://ai.forsion.net) · [快速上手](./docs/getting-started/quickstart.md) · [使用文档](./docs/README.md) · [官方网站](https://forsion.net/zh/)
 
@@ -352,10 +352,4 @@ npm test
 
 ## 许可
 
-Forsion Genesis 使用 [Modified Apache License 2.0](./LICENSE)。它以 Apache License 2.0 为基础，并包含额外条件，主要涉及：
-
-- 未经书面授权，不得使用本仓库代码运营多租户环境；
-- 使用 `desktop/`、`web/` 或 `mobile/` 前端时，不得移除或修改界面中的 Logo、产品名称与版权信息；
-- 符合附加条件时可以商业使用；需要多租户部署或其他授权时，应取得商业许可。
-
-请在使用、分发或基于本项目提供服务前阅读完整许可文本。该许可包含 Apache-2.0 之外的限制，因此不应仅按标准 Apache-2.0 许可理解。
+Forsion Genesis 使用 [Apache License 2.0](./LICENSE) 开源。
