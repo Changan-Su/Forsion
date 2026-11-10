@@ -39,8 +39,8 @@
  *   6. event  — 「帮我加个日程：明天下午三点开组会。」: one new row in the default calendar through a successful amadeus_create_event, and that
  *               row carries `_kind = "event"`. The start is reported (expected: tomorrow 15:00 on the engine's clock), not judged.
  *   7. remind — 「提醒我明天下午三点交报告。」: whatever lands in the calendar carries no `_kind`. With GPT 6 Luna on 2026-11-10 this wording
- *               went to manage_automation (a timed reminder) in 3 of 3 rounds and wrote no calendar row at all, with or without the mark in
- *               the engine: that outcome is reported and not red (red = a marked row, a row written around the tool, or nothing done).
+ *               went to manage_automation (a timed reminder) in 21 of 21 rounds and wrote no calendar row at all (12 rounds with the mark in
+ *               the engine, 9 without): that outcome is reported and not red (red = a marked row, a row written around the tool, or nothing done).
  *   8. timed  — 「帮我加一条待办：明天下午三点交报告。」: one new row through amadeus_create_event, and it carries no `_kind`: a to-do stays a
  *               to-do, time and all. This is the leg that catches "it has a time, so it is an event".
  *   9. todos  — new session 「我现在还有哪些待办？」 with the meeting and the report in the calendar at the same hour: amadeus_list_events, the
@@ -48,7 +48,9 @@
  *               Judged on the reply alone, which is printed; whether the tool result marked the row is reported.
  *              `--caltodo-kind-only` runs these four alone.
  *  Negative control for legs 6–9: the same legs on the engine without the mark (`--kind base`): leg 6 cannot pass there (nothing writes the
- *  cell), legs 7–8 pass trivially, leg 9 shows what the model does with a meeting that looks like any other unticked row. */
+ *  cell), legs 7–8 pass trivially, leg 9 shows what the model does with a meeting that looks like any other unticked row.
+ *  With GPT 6 Luna on 2026-11-10: leg 6 passed in 12 of 12 rounds with the mark and 0 of 9 without; leg 9 in 9 of 9 with it and 0 of 9
+ *  without (the base listed the meeting among the to-dos every time); leg 8 in 9 of 9 on both. */
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 
