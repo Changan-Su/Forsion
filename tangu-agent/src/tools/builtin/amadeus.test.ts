@@ -394,9 +394,10 @@ describe('events and to-dos: the `_kind` mark on a row (host)', () => {
     // props 也能写日期列:校验看最后落在日期格里的值,不是 start 参数(评审:start 过了校验,props 再把日期清空,标记照写)
     await expect(run('amadeus_create_event', { title: 'Ghost', start: '2099-01-01', kind: 'event', props: { Date: '' } })).rejects.toThrow(/an event needs a date/);
     expect(await humanDb()).toEqual(before);
-    const viaProps = idOf(await run('amadeus_create_event', { title: 'Board meeting', kind: 'event', done: false, props: { Date: '2099-01-02T10:00' } })); // 日期从 props 来也算有
-    expect(await cellsOf(viaProps)).toEqual({ name: 'Board meeting', date: '2099-01-02T10:00', _kind: 'event' });
-    for (const id of [ev, plain, todo, undated, ticked, viaProps]) await run('amadeus_delete_event', { calendar: H, eventId: id });
+    // 日程的日期要从 start 来:不给 start、只在 props 里写日期列也拒绝(返回文字是按 start 写的,不然会把带日期的日程说成没日期的待办)
+    await expect(run('amadeus_create_event', { title: 'Board meeting', kind: 'event', props: { Date: '2099-01-02T10:00' } })).rejects.toThrow(/an event needs a date: give start too/);
+    expect(await humanDb()).toEqual(before);
+    for (const id of [ev, plain, todo, undated, ticked]) await run('amadeus_delete_event', { calendar: H, eventId: id });
   }, 30_000);
 
   it('list: a marked row carries kind "event" and no done; to-do rows keep today\'s shape; events are not counted as to-dos', async () => {

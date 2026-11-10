@@ -839,6 +839,7 @@ export const amadeusProvider: ToolProvider = {
           const done = optBool(args.done);
           const kind = optKind(args.kind);
           if (!start && end) throw new Error('an end needs a start: give start too, or leave both out for a to-do without a date.');
+          if (!start && kind === 'event') throw eventNeedsStart('give start too, or leave kind out if this is a to-do without a date.');
           const doneCol = doneColOf(cal.db);
           if (!start && !doneCol) throw noDoneCol(cal, 'a row without a date would not show anywhere');
           if (done === true && !doneCol) throw noDoneCol(cal, 'nothing can be ticked done in it');
@@ -850,9 +851,10 @@ export const amadeusProvider: ToolProvider = {
           setNamedProps(cal.db, cells, args.props);
           if (doneCol && done !== undefined) setDone(cells, doneCol, done);
           // 没有勾选列的日历也照写:以后用户加了勾选列,这些行仍是日程。"todo" / 不传 = 不写这个键(和以前写出来的行一样)。
-          // 日期按最后落在日期格里的值看,不看 start 参数:props 也能写这一列(start 过了校验、props 再清空,不能照写标记)
+          // 上面按 start 参数拦过一次(日程的日期要从 start 来,返回文字也是按它写的);这里再按最后落在日期格里的值看一次:
+          // props 也能写这一列,start 过了校验、props 再清空,不能照写标记
           if (kind === 'event') {
-            if (!decodeCalDate(cells[cal.cal.id])) throw eventNeedsStart('give start too, or leave kind out if this is a to-do without a date.');
+            if (!decodeCalDate(cells[cal.cal.id])) throw eventNeedsStart('props cleared the date column: keep the start, or leave kind out if this is a to-do without a date.');
             setKind(cells, 'event');
           }
           const id = dbId();
