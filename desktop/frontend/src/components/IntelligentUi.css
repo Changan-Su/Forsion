@@ -215,3 +215,6 @@
   .intelligent-ui details::details-content { transition: none; }
   .iui-skeleton > i, .intelligent-ui[data-streamed] .iui-block { animation: none; }
 }
+
+/* Long equations scroll within their reading area, including narrow widget hosts. */
+.intelligent-ui .katex-display { max-width: 100%; overflow-x: auto; overflow-y: hidden; }

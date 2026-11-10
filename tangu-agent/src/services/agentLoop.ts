@@ -3580,8 +3580,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         // —— Sketch 交付兜底:常驻提示不足以对抗部分模型「直接写完文字就收尾」的惯性。
         //    本轮启发式命中、工具确实在场、且整 run 没调过 sketch 时,在收尾前补催一次。
         //    只催一次:模型二次检查仍认为图是噪声时允许收尾;用户的「纯文字/不要画」在信号层已排除。——
-        //    actionable(计划 / 清单 / 挑一个 / 做法)只给本轮那句提醒、不补催:这类说法宽,模型判断不该出卡时不值得再烧一轮。
-        if (sketchTurnSignal && (sketchTurnSignal.kind === 'explicit' || sketchTurnSignal.kind === 'implicit') && !sketchNudged && !lastIter && !(clientCapabilities?.includes(MARKETPLACE_CARDS_CAPABILITY) && hasMarketplaceCards(allToolResults)) && !allToolCalls.some((c) => isHtmlCardTool(c.function.name) || c.function.name === 'intelligent_ui')) {
+        //    Only explicit visual requests get a delivery reminder; inferred shapes never force a card.
+        if (sketchTurnSignal && sketchTurnSignal.kind === 'explicit' && !sketchNudged && !lastIter && !(clientCapabilities?.includes(MARKETPLACE_CARDS_CAPABILITY) && hasMarketplaceCards(allToolResults)) && !allToolCalls.some((c) => isHtmlCardTool(c.function.name) || c.function.name === 'intelligent_ui')) {
           sketchNudged = true;
           if (res.content || res.outputItems?.length) workingMessages.push(assistantTurnOf(res, res.content || ''));
           workingMessages.push({

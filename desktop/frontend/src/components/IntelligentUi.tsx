@@ -1,9 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
-import remarkCjkFriendly from 'remark-cjk-friendly/parseOnly'
-import remarkCjkFriendlyStrikethrough from 'remark-cjk-friendly-gfm-strikethrough/parseOnly'
 import { Check, ChevronDown, Copy, ExternalLink, Maximize2, Minimize2, Minus, Plus, RotateCcw, Zap } from 'lucide-react'
 import { parseUIDraft, safeUIUrl, snapUIValue, UI_VERSION, validateUIDocument, type UIBlock, type UIDocument, type UIInput, type UIResource, type UISetStep } from '../../../../tangu-agent/src/contracts/intelligentUi'
 import { applyUISteps, documentEnv, sameValue, truthy, UI_SLOT, uiTableRows, uiText, type DocumentEnv, type UIRecordRow, type UIValue } from '../../../../tangu-agent/src/contracts/intelligentUiExpr'
@@ -11,7 +7,7 @@ import type { ToolEvent } from '../../../../tangu-agent/src/contracts/clientType
 import { streamingArgString } from '../views/streamingWrite'
 import { registerMessages, useI18n } from '../i18n'
 import { ChatWebLink } from './ChatWikiLink'
-import { CodeBlock, RunContext } from './Markdown'
+import { ReadOnlyMarkdown } from './Markdown'
 import { deriveChecklist, emptyUIState, formatUIQuantity, inputValues, readUIState, stateVars, subscribeUIState, uiExpansionKey, uiStateKey, visible, writeUIState, type UIUserState } from './intelligentUiState'
 import './IntelligentUi.css'
 import { IntelligentAppCard } from './IntelligentAppCard'
@@ -73,22 +69,37 @@ export function IntelligentUi({ event, live, stateScope, onAsk, head, records, s
   return <NativeDocument key={key ?? uiStateKey('', event.id, doc.id)} doc={doc} complete={current.complete} live={live && !event.done} stateKey={key} onAsk={onAsk} head={head} records={records} />
 }
 
-type MdNode = { type: string; value?: string; children?: MdNode[] }
-/** v2: puts computed text into the parsed tree at its markers, as plain text nodes. */
+type MdNode = { type: string; value?: string; url?: string; children?: MdNode[]; data?: { hChildren?: MdNode[] } }
+/** Computed values stay text even inside math or wiki labels; never interpolate destinations. */
 const remarkSlots = (values: string[]) => () => (tree: MdNode): void => {
+  const plain = (text: string) => text.replace(UI_SLOT, (_, i: string) => values[Number(i)] ?? '')
+  const texText = (text: string) => text.replace(/[\\{}%$&#_^~]/g, c => ({ '\\': '\\textbackslash{}', '^': '\\textasciicircum{}', '~': '\\textasciitilde{}' }[c] ?? `\\${c}`)).replace(/\r?\n/g, ' ')
+  const math = (text: string) => text.replace(UI_SLOT, (_, i: string) => `\\text{${texText(values[Number(i)] ?? '')}}`)
   const walk = (node: MdNode): void => {
-    if ((node.type === 'text' || node.type === 'inlineCode') && node.value) node.value = node.value.replace(UI_SLOT, (_, i: string) => values[Number(i)] ?? '')
+    if (node.type === 'math' || node.type === 'inlineMath') {
+      if (node.value) node.value = math(node.value)
+      // remark-math also stores the TeX in the hast code children consumed by KaTeX.
+      const update = (child: MdNode): void => { if (child.value) child.value = math(child.value); child.children?.forEach(update) }
+      node.data?.hChildren?.forEach(update)
+      return
+    }
+    if ((node.type === 'text' || node.type === 'inlineCode') && node.value) node.value = plain(node.value)
     node.children?.forEach(walk)
+    if (node.type === 'link' && node.url?.startsWith('#wiki=')) {
+      let inner: string
+      try { inner = decodeURIComponent(node.url.slice(6)) } catch { return }
+      const bar = inner.indexOf('|'), target = bar < 0 ? inner : inner.slice(0, bar)
+      if (target.includes('\uE000')) {
+        node.type = 'text'; node.value = (node.children || []).map(c => c.value || '').join('')
+        delete node.url; delete node.children
+      } else if (bar >= 0) node.url = '#wiki=' + encodeURIComponent(target + '|' + plain(inner.slice(bar + 1)))
+    }
   }
   walk(tree)
 }
+
 function RichText({ text, values }: { text: string; values?: string[] }): React.JSX.Element {
-  // 同聊天正文(components/Markdown.tsx):`**怎么选：**如果` 这种 CJK 标点贴闭合定界符的写法,不加这两个插件会原样露出 `**`。须排在 remarkGfm 之后。
-  // 代码块用聊天正文那份(复制键 + 高亮)。不给「运行」:这里没接工作目录,也不知道会话是不是别的设备的。
-  return <RunContext.Provider value={{ allowRun: false }}><ReactMarkdown remarkPlugins={[remarkGfm, remarkCjkFriendly, remarkCjkFriendlyStrikethrough, ...(values ? [remarkSlots(values)] : [])]} skipHtml disallowedElements={['img', 'input']} components={{
-    a: ({ href, children }) => safeUIUrl(href) ? <ChatWebLink href={href}>{children}</ChatWebLink> : <span>{children}</span>,
-    pre: CodeBlock,
-  }}>{text}</ReactMarkdown></RunContext.Provider>
+  return <ReadOnlyMarkdown content={text} transforms={values ? [remarkSlots(values)] : []} allowWebLink={safeUIUrl} />
 }
 
 function Picture({ resource, sources, expanded, onExpand, flip }: { resource: Extract<UIResource, { kind: 'image' }>; sources: Map<string, UIResource>; expanded: boolean; onExpand: (expanded: boolean) => void; flip: string }): React.JSX.Element {

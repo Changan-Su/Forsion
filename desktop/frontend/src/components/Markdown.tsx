@@ -3,6 +3,7 @@
  * 高亮配色在 base.css 用主题 token 写(.hljs-*),不引第三方主题 CSS。
  */
 import React, { useContext, useEffect, useMemo, useState } from 'react'
+import type { PluggableList } from 'unified'
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import { remarkCachedParse } from './markdownParse'
 import { common, createLowlight } from 'lowlight'
@@ -54,7 +55,9 @@ const textOf = (n: React.ReactNode): string => typeof n === 'string' || typeof n
 const WikiAnchor = ({ href, children, node: _node, ...rest }: any) => {
   const cards = useContext(LinkCardContext)
   const cwd = useContext(RunContext)?.cwd
-  if (typeof href === 'string' && href.startsWith('#wiki=')) return <ChatWikiLink inner={decodeURIComponent(href.slice(6))} />
+  if (typeof href === 'string' && href.startsWith('#wiki=')) {
+    try { return <ChatWikiLink inner={decodeURIComponent(href.slice(6))} /> } catch { return <span>{children}</span> }
+  }
   if (typeof href === 'string' && /^https?:\/\//i.test(href)) {
     return cards ? <ChatLinkWithCard href={href} {...rest}>{children}</ChatLinkWithCard> : <ChatWebLink href={href} {...rest}>{children}</ChatWebLink>
   }
@@ -280,6 +283,29 @@ type MarkdownProps = {
   streaming?: boolean
 }
 const MD_COMPONENTS = { pre: CodeBlock, a: WikiAnchor, p: Para, td: Td, th: Th, img: MdImage, div: MathBox }
+
+/** Native cards share the reading grammar, formulas and file-link handling with chat.
+ * Extra transforms run after wiki parsing, so computed strings stay inert text.
+ * No embeds, images, raw HTML, link-preview fetching or executable code. */
+export function ReadOnlyMarkdown({ content, transforms = [], allowWebLink }: {
+  content: string; transforms?: PluggableList; allowWebLink: (href: string) => boolean
+}): React.JSX.Element {
+  const parentRun = useContext(RunContext)
+  const normalized = useMemo(() => normalizeMath(content), [content])
+  return <RunContext.Provider value={{ cwd: parentRun?.cwd, allowRun: false }}>
+    <EmbedContext.Provider value={undefined}><LinkCardContext.Provider value={false}>
+      <ReactMarkdown remarkPlugins={[remarkCachedParse, remarkWiki, ...transforms]}
+        rehypePlugins={[rehypeCachedKatex, rehypeMathBox]} skipHtml disallowedElements={['img', 'input']}
+        urlTransform={urlTransform} components={{ ...MD_COMPONENTS,
+          a: ({ href, children, ...rest }) => {
+            const local = href?.startsWith('#wiki=') || (href && parseFileHref(href))
+            return href && (local || allowWebLink(href))
+              ? <WikiAnchor href={href} {...rest}>{children}</WikiAnchor> : <span>{children}</span>
+          },
+        }}>{normalized}</ReactMarkdown>
+    </LinkCardContext.Provider></EmbedContext.Provider>
+  </RunContext.Provider>
+}
 
 /** Memoized parser/render boundary: stable blocks keep their React tree and DOM while the
  * trailing Markdown changes. Reference-style links/footnotes use the full-document path. */
