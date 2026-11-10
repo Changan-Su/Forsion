@@ -501,8 +501,8 @@ export const compactSession = (t: EngineTarget, sessionId: string, modelId?: str
 // ── 模型 / 技能 / 工具 ──
 // 带 app_id:云端 worker 服务多 app,不带就按 worker 基线(ai-studio)解析「应用模型配置」→
 // 列表/默认模型与 run 的记账 app 对不上(见 tangu-agent routes/models.ts)。
-export const listModels = (t: EngineTarget) =>
-  request<ModelsResponse>(t, `/agent/models?app_id=${encodeURIComponent(AGENT_APP_ID)}`)
+export const listModels = (t: EngineTarget, opts?: { timeoutMs?: number }) =>
+  request<ModelsResponse>(t, `/agent/models?app_id=${encodeURIComponent(AGENT_APP_ID)}`, undefined, opts)
 
 /** 直连模型所属来源的额度 / 余额(输入框上下文环弹层);来源查不到时 quota 为 null。 */
 export const getModelQuota = (t: EngineTarget, modelId: string) =>

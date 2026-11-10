@@ -255,9 +255,9 @@ describe('「补全」模型槽(ctx.tangu.fim 的模型)', () => {
   it('目录还没拉到先拉一次;拉不到才先信槽', async () => {
     home(null)
     withSlot('')
-    const ensure = vi.spyOn(catalogService, 'ensureCatalog').mockResolvedValueOnce({ models: FIMS, agents: [], defaultAgentSlug: '', skills: [], at: Date.now() } as never)
+    const ensure = vi.spyOn(catalogService, 'ensureCatalogModels').mockResolvedValueOnce(FIMS as never)
     expect(await fimModelChoice()).toEqual({ id: 'ds', name: 'DeepSeek FIM' })
-    expect(ensure).toHaveBeenCalledWith('home', { maxAgeMs: 15_000 })
+    expect(ensure).toHaveBeenCalledWith('home', 15_000)
     ensure.mockResolvedValueOnce(null)
     withSlot('cs')
     expect(await fimModelChoice()).toEqual({ id: 'cs', name: 'cs' })
@@ -270,9 +270,28 @@ describe('「补全」模型槽(ctx.tangu.fim 的模型)', () => {
     home({ models: FIMS.models, fimModels: [] })
     withSlot('')
     expect(await fimModelChoice()).toBeNull()
-    const ensure = vi.spyOn(catalogService, 'ensureCatalog').mockResolvedValueOnce({ models: FIMS } as never)
+    const ensure = vi.spyOn(catalogService, 'ensureCatalogModels').mockResolvedValueOnce(FIMS as never)
     expect(await fimModelChoice()).toEqual({ id: 'ds', name: 'DeepSeek FIM' })
-    expect(ensure).toHaveBeenCalledWith('home', { maxAgeMs: 15_000 })
+    expect(ensure).toHaveBeenCalledWith('home', 15_000)
+  })
+
+  it('目录刷新挂起时仍立即使用缓存里的补全模型', async () => {
+    home(FIMS)
+    withSlot('')
+    vi.spyOn(catalogService, 'ensureCatalogModels').mockReturnValue(new Promise(() => {}))
+    expect(await fimModelChoice()).toEqual({ id: 'ds', name: 'DeepSeek FIM' })
+  })
+
+  it('缺少模型且目录刷新慢时只等半秒，给聊天回退留时间', async () => {
+    vi.useFakeTimers()
+    try {
+      home({ models: FIMS.models, fimModels: [] })
+      withSlot('')
+      vi.spyOn(catalogService, 'ensureCatalogModels').mockReturnValue(new Promise(() => {}))
+      const result = fimModelChoice()
+      await vi.advanceTimersByTimeAsync(500)
+      expect(await result).toBeNull()
+    } finally { vi.useRealTimers() }
   })
 
   it('探针 fim:没有模型 → fim_unavailable(不发请求);有 → 带上模型回执', async () => {

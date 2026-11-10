@@ -42,7 +42,7 @@ import { completeInline, fimInline, FIM_UNAVAILABLE } from './services/inlineAi'
 import { submitDocumentTask } from './services/documentTasks'
 import { openSession } from './sessionNav'
 import { connectionTarget } from './services/engine/targets'
-import { catalogFor, ensureCatalog } from './services/engine/catalog'
+import { CATALOG_TTL_MS, catalogFor, ensureCatalog, ensureCatalogModels } from './services/engine/catalog'
 import { getCallVoice, subscribeCallVoice } from './services/callVoice'
 import { agentName } from './agentName'
 
@@ -82,15 +82,21 @@ async function translateInline(req: TanguCompleteRequest, opts: TanguCompleteOpt
 }
 
 const FIM_CATALOG_RETRY_MS = 15_000
+const FIM_CATALOG_WAIT_MS = 500
 
 /** 行内补全用点名的模型、补全槽或目录首项。目录没有可用的模型时，缩短缓存时间以发现后台刚启用的 FIM。 */
 export async function fimModelChoice(modelId?: string): Promise<{ id: string; name: string } | null> {
   let cat = catalogFor('home')?.models
   const slot = modelId ? undefined : (await window.tangu?.getConfig?.().catch(() => null))?.fimModelId
-  if (!modelId || !cat) {
-    const cachedChoice = cat?.fimModels?.some((m) => !slot || m.id === slot)
-    const maxAgeMs = cachedChoice ? undefined : FIM_CATALOG_RETRY_MS
-    cat = (await ensureCatalog('home', { maxAgeMs }).catch(() => null))?.models ?? cat
+  const cachedChoice = cat?.fimModels?.some((m) => !slot || m.id === slot)
+  if (!cat || (!modelId && !cachedChoice)) {
+    // A slow model directory can finish in the background. Leave time for the actual suggestion.
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const deadline = new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), FIM_CATALOG_WAIT_MS) })
+    try { cat = await Promise.race([ensureCatalogModels('home', FIM_CATALOG_RETRY_MS), deadline]) ?? cat }
+    finally { clearTimeout(timer) }
+  } else if (!modelId) {
+    void ensureCatalogModels('home', CATALOG_TTL_MS)
   }
   const nameOf = (id: string): string => cat?.fimModels?.find((m) => m.id === id)?.name || cat?.models.find((m) => m.id === id)?.name || id
   if (modelId) return { id: modelId, name: nameOf(modelId) }

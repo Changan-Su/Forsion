@@ -18,6 +18,7 @@ import { targetForRef } from './targets'
 
 export interface TargetCatalog {
   models: ModelsResponse | null
+  modelsAt?: number
   agents: NormalAgentDef[]
   defaultAgentSlug: string
   skills: SkillInfo[] | null
@@ -28,6 +29,7 @@ export interface TargetCatalog {
 }
 
 export const CATALOG_TTL_MS = 5 * 60_000
+const MODEL_CATALOG_TIMEOUT_MS = 5_000
 
 export const useTargetCatalogs = create<{ byKey: Partial<Record<TargetKey, TargetCatalog>> }>(() => ({ byKey: {} }))
 
@@ -53,19 +55,22 @@ function put(key: TargetKey, next: TargetCatalog): void {
 const EMPTY = (): TargetCatalog => ({ models: null, agents: [], defaultAgentSlug: 'xyra', skills: null, at: 0 })
 
 /** 局部记入(appStore 连上焦点时顺手记)。头像不收。 */
-export function rememberCatalog(key: TargetKey, patch: Partial<Omit<TargetCatalog, 'avatars' | 'at'>>): void {
+export function rememberCatalog(key: TargetKey, patch: Partial<Omit<TargetCatalog, 'avatars' | 'at' | 'modelsAt'>>): void {
   const prev = catalogFor(key) ?? EMPTY()
-  put(key, { ...prev, ...patch, avatars: prev.avatars, at: Date.now() })
+  const now = Date.now()
+  put(key, { ...prev, ...patch, ...(patch.models !== undefined ? { modelsAt: now } : {}), avatars: prev.avatars, at: now })
 }
 
 /** 清一格或全部(账号切换 / 焦点回 home 后不再需要 home 那份独立缓存时)。 */
 export function forgetCatalog(key?: TargetKey): void {
   const all = useTargetCatalogs.getState().byKey
   if (!key) {
+    modelInflight.clear()
     for (const c of Object.values(all)) revokeAvatars(c)
     useTargetCatalogs.setState({ byKey: {} })
     return
   }
+  modelInflight.delete(key)
   revokeAvatars(all[key])
   useTargetCatalogs.setState((s) => {
     const byKey = { ...s.byKey }
@@ -79,27 +84,53 @@ function refOfKey(key: TargetKey): TargetRef {
 }
 
 const inflight = new Map<TargetKey, Promise<TargetCatalog | null>>()
+const modelInflight = new Map<TargetKey, Promise<ModelsResponse | null>>()
+
+/** Recheck model availability without making a completion wait for skills, agents or avatars. */
+export function ensureCatalogModels(key: TargetKey, maxAgeMs: number): Promise<ModelsResponse | null> {
+  if (!isTargetKey(key)) return Promise.resolve(null)
+  const cached = catalogFor(key)
+  if (cached?.modelsAt && Date.now() - cached.modelsAt < maxAgeMs) return Promise.resolve(cached.models)
+  const running = modelInflight.get(key)
+  if (running) return running
+  const target = targetForRef(refOfKey(key))
+  if (!target) return Promise.resolve(cached?.models ?? null)
+  const request = listModels(target, { timeoutMs: MODEL_CATALOG_TIMEOUT_MS }).catch(() => null).then((models) => {
+    const latest = catalogFor(key)
+    if (modelInflight.get(key) !== request || latest?.modelsAt !== cached?.modelsAt) return latest?.models ?? null
+    const next = { ...(latest ?? EMPTY()), models: models ?? latest?.models ?? null, modelsAt: Date.now() }
+    put(key, next)
+    return next.models
+  }).finally(() => { if (modelInflight.get(key) === request) modelInflight.delete(key) })
+  modelInflight.set(key, request)
+  return request
+}
 
 /**
  * 保证某目标的目录在缓存里且不旧于 5 分钟(R-18)。失败的单项保留旧值(模型没拉到不把 Agent 清空);
  * 整体拉不到(目标解析不出来)→ null。
  */
-export function ensureCatalog(key: TargetKey, opts: { force?: boolean; maxAgeMs?: number } = {}): Promise<TargetCatalog | null> {
+export function ensureCatalog(key: TargetKey, opts: { force?: boolean } = {}): Promise<TargetCatalog | null> {
   if (!isTargetKey(key)) return Promise.resolve(null)
   const cached = catalogFor(key)
-  if (!opts.force && cached && cached.at > 0 && Date.now() - cached.at < (opts.maxAgeMs ?? CATALOG_TTL_MS)) return Promise.resolve(cached)
+  if (!opts.force && cached && cached.at > 0 && Date.now() - cached.at < CATALOG_TTL_MS) return Promise.resolve(cached)
   const running = inflight.get(key)
   if (running) return running
   const t = targetForRef(refOfKey(key))
   if (!t) return Promise.resolve(cached)
   const p = (async (): Promise<TargetCatalog | null> => {
-    const [models, agents, meta, skills] = await Promise.allSettled([listModels(t), listAgents(t), getAgentsMeta(t), listSkills(t)])
+    const [models, agents, meta, skills] = await Promise.allSettled([
+      listModels(t).then((models) => ({ models, at: Date.now() })), listAgents(t), getAgentsMeta(t), listSkills(t),
+    ])
     const base = catalogFor(key) ?? EMPTY()
     // 老引擎 / 异常回包可能缺字段:形状不对的单项按「没拉到」保留旧值
     const agentList = agents.status === 'fulfilled' && Array.isArray(agents.value) ? agents.value : base.agents
     const avatarPairs = await Promise.all(agentList.filter((a) => a?.avatar).map(async (a) => [a.slug, await fetchAgentAvatar(t, a.slug).catch(() => null)] as const))
+    const latest = catalogFor(key) ?? base
+    const modelUpdate = models.status === 'fulfilled' && models.value.models && models.value.at >= (latest.modelsAt ?? 0) ? models.value : null
     const next: TargetCatalog = {
-      models: models.status === 'fulfilled' && models.value ? models.value : base.models,
+      models: modelUpdate?.models ?? latest.models,
+      modelsAt: modelUpdate?.at ?? latest.modelsAt,
       agents: agentList,
       defaultAgentSlug: meta.status === 'fulfilled' ? (meta.value?.defaultSlug || 'xyra') : base.defaultAgentSlug,
       skills: skills.status === 'fulfilled' && Array.isArray(skills.value) ? skills.value : base.skills,
