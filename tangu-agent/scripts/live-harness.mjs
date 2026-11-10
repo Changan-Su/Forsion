@@ -359,6 +359,7 @@ OPT_IN.add('visualfigures');
 for (const key of ['intelligentplan', 'intelligentmedia', 'intelligentplain']) { OPT_IN.add(key); KEYS.push(key); }
 OPT_IN.add('intelligentusers'); KEYS.push('intelligentusers');
 OPT_IN.add('intelligentcards'); KEYS.push('intelligentcards');
+OPT_IN.add('iuireading'); KEYS.push('iuireading');
 OPT_IN.add('visualauto'); KEYS.push('visualauto'); // --only visualauto:消息里不点名图 / 卡时模型自己出不出卡(8 个 run);改 sketch.ts 的本轮信号 / 两段提示后跑
 OPT_IN.add('uileak'); KEYS.push('uileak'); // --only uileak:模型把卡片的文档 JSON 写进正文时,引擎让它改成真的调用工具(3 个 run);改 agentLoop 的文档自愈后跑
 OPT_IN.add('iuicalc'); KEYS.push('iuicalc'); // --only iuicalc:计算层(intelligent-ui.v2)该算的卡走原生文档、带 state / derived,不再落到 sketch;两条反例不该出计算卡(6 正 + 2 反 = 8 个 run);改 v2 说明段 / 工具描述 / 本轮信号后跑
@@ -2840,6 +2841,29 @@ try {
       return { ok: !ev.error && ev.done && success && contract && noPayloadEcho && groundedImages, detail: ev.error || `groundedImages=${groundedImages}; noPayloadEcho=${noPayloadEcho}; documents=${documents.length}; contract=${contract}; pickRow=${key === 'intelligentmedia' ? `${pickRow}; repeats=${repeats}` : 'n/a'}; correctedErrors=${errors.length}`, output: ev.content, toolCalls: ev.toolCalls, ttftMs: ttft(ev), tokens: tokensOf(ev) };
     });
   }
+  // Real model: teaching, useful interaction, then a reading follow-up in the same chat.
+  await scenario('iuireading', 'Intelligent UI reading and local interaction', async () => {
+    const opts = { clientCapabilities: ['intelligent-ui.v1', 'intelligent-ui.v2'], ui: { visuals: { value: 'auto' } } };
+    const session = `live-iuireading-${Date.now()}`;
+    const cases = [
+      ['lecture', '把统计物理 L1 和 L2 合起来给我讲一下，五段式结构：问题、核心概念、知识联系、公式与例子、可能的题型。围绕可区分粒子、微观态、占据分布、概率与平均值，不用查资料。', false],
+      ['interactive', '做一个交互式的三粒子两能级例子：让我切换激发态的粒子数，立即看到对应的微观态。', true],
+      ['reading', '算了，你直接告诉我教材哪里、怎么看好了。已知对应的是 Chapter 1 的 1.1–1.6，PDF 14–22 页，计数在 Appendix A 的 PDF 194–195 页；按这些信息给阅读顺序。', false],
+      ['proactive', '我想试着改贷款本金、年利率和期数，立即比较月供和总利息。先用本金 20 万、年利率 4%、120 期作为起点。', true],
+      ['derivation', '请按问题、概念、知识联系、公式、例子这五段式结构，解释为什么平均占据数要按概率加权，写出推导。', false],
+    ];
+    const rows = [];
+    for (const [id, prompt, visual] of cases) {
+      const ev = await run(session, prompt, 300000, { preset: 'chat' }, 'desktop/2.14.0', undefined, undefined, undefined, opts);
+      const cards = ev.toolResults.filter(r => ['intelligent_ui', 'sketch'].includes(r.name) && !r.isError && !/^Error/.test(r.result || ''));
+      const nudged = ev.statuses.some(p => p.phase === 'sketch_delivery_nudge');
+      const ok = !ev.error && ev.done && (visual ? cards.length > 0 : cards.length === 0 && ev.content.length > 100 && !nudged);
+      rows.push({ id, prompt, ok, visual, content: ev.content, cards, nudged, toolCalls: ev.toolCalls, error: ev.error });
+    }
+    writeFileSync(join(OUT, 'iuireading-evidence.json'), JSON.stringify(rows, null, 2));
+    return { ok: rows.every(r => r.ok), detail: rows.map(r => `${r.id}: ${r.ok ? 'PASS' : 'FAIL'}, cards=${r.cards.length}`).join('; '), output: rows.map(r => `【${r.id}】${r.content}`).join('\n\n'), toolCalls: rows.flatMap(r => r.toolCalls) };
+  });
+
   await scenario('intelligentplain', 'Intelligent UI 关闭偏好', async () => {
     const ev = await run(`live-intelligentplain-${Date.now()}`, '给我一个四人晚餐建议，三道菜，保持简短。', 150_000, {}, 'desktop/2.13.1', undefined, undefined, undefined, { clientCapabilities: ['intelligent-ui.v1', 'intelligent-ui.v2'], ui: { visuals: { value: 'off' } } });
     const noVisuals = !ev.toolArgs.some(c => ['intelligent_ui', 'sketch'].includes(c.name)) && !String(ev.systemPrompt).includes('## Intelligent UI');
@@ -2848,7 +2872,7 @@ try {
 
   // visualauto(10-11,用户反馈「Intelligent UI 很少触发」):消息里不出现图 / 卡 / 可视化 / 对比这类字眼,看模型自己出不出卡。
   // 六条该出的(行程、准备清单、二选一、做法、哪个更适合、请客要买什么)+ 两条不该出的(一句事实、翻译)。
-  // 判据:该出的至少 4/6 成功调了 intelligent_ui 或 sketch,不该出的一条都没有,且没有一条被收尾补催。基线 = 改动前的引擎(--kind base)。
+  // Presentation is a benefit judgment, not a card quota. Record optional cards; prose negatives and no implicit nudges are required. Positive interactions are covered by iuireading.
   await scenario('visualauto', 'visualauto 没点名时自己出卡', async () => {
     const opts = { clientCapabilities: ['intelligent-ui.v1', 'intelligent-ui.v2'], ui: { visuals: { value: 'auto', allowed: ['auto', 'less', 'off'] } } };
     const want = [
@@ -2877,7 +2901,7 @@ try {
     const stray = rows.filter((r) => !r.expect && r.cards.length);
     const line = (r) => `${r.id}=${r.cards.join('+') || '无'}${r.nudged ? '(补催)' : ''}`;
     const nudged = rows.filter((r) => r.nudged); // 这六条都是 actionable:只给本轮提醒,出现补催 = 那条不变式破了
-    return { ok: !broken.length && hits.length >= 4 && !stray.length && !nudged.length,
+    return { ok: !broken.length && !stray.length && !nudged.length,
       detail: `该出 ${hits.length}/${want.length};不该出 ${stray.length}/${plain.length};补催 ${nudged.length};${rows.map(line).join(' ')}${broken.length ? `;没跑完:${broken.map((r) => `${r.id}(${r.error || '未结束'})`).join(',')}` : ''}`,
       output: rows.map((r) => `【${r.id}${r.expect ? '' : '·不该出'}】${r.q}\n工具:${r.toolCalls.join(',') || '无'}\n${r.content}`).join('\n\n'),
       toolCalls: rows.flatMap((r) => r.toolCalls), ttftMs: rows[0]?.ttftMs, tokens: rows.reduce((n, r) => n + (r.tokens || 0), 0) };

@@ -95,10 +95,42 @@ async function main() {
   try {
     win = await app.firstWindow()
     await win.waitForSelector('#root')
-    await win.evaluate(() => { localStorage.setItem('tangu_locale', 'zh'); localStorage.setItem('forsion_theme_pref', 'light'); localStorage.setItem('forsion_default_space', 'tangu'); localStorage.setItem('forsion_tangu_onboarding_done', '1') })
+    await win.evaluate(version => { localStorage.setItem('forsion_tangu_onboarding_version', version); localStorage.setItem('tangu_locale', 'zh'); localStorage.setItem('forsion_theme_pref', 'light'); localStorage.setItem('forsion_default_space', 'tangu'); localStorage.setItem('forsion_tangu_onboarding_done', '1') }, require('../package.json').version)
     await win.reload()
     for (const label of ['跳过引导', 'Skip']) { const b = win.getByText(label, { exact: true }); if (await b.count()) await b.first().click().catch(() => {}) }
     await openSession(win)
+    if (process.argv.includes('--reading-only')) {
+      const doc = { version: 2, id: 'reading', title: 'Lecture 1–2 · Counting and probability', inputs: [], resources: [], state: [], derived: [], blocks: [
+        { id: 'formula', kind: 'text', markdown: '**One distribution, many microstates.** For distinguishable particles, $n_i$ counts particles in state $i$.\n\n$$\n\\Omega_d=\\frac{N!}{\\prod_i n_i!},\\qquad P_d=\\frac{\\Omega_d}{\\Omega}\n$$\n\n[[/tmp/course/Lecture02.pdf#page=5|Lecture 2 · page 5]] [Notes](notes.md:4)\n\n```bash\necho example\n```' },
+        { id: 'long', kind: 'text', markdown: '$$\n\\langle n_0\\rangle=\\frac{3\\times4+2\\times12+1\\times12+2\\times6+0\\times1}{35}=\\frac{60}{35}\\approx1.714285714285714\n$$' },
+        { id: 'details', kind: 'disclosure', title: 'Average occupation', markdown: '$$\n\\langle n_i\\rangle=\\sum_d P_d n_i^{(d)}\n$$' },
+      ] };
+      stub.state.messages = [record('reading', 'reading-call', doc)];
+      await win.reload(); await openSession(win);
+      const card = win.locator('[data-document-id="reading"]');
+      await card.waitFor();
+      check('historical card renders inline and display math', await card.locator('.katex').count() === 5 && await card.locator('.katex-error').count() === 0);
+      check('PDF citation renders as a native file link', await card.locator('[data-wiki="/tmp/course/Lecture02.pdf"]').count() === 1);
+      check('relative links use the real session directory', await card.locator('[data-wiki="/tmp/intelligent-ui-demo/notes.md"]').count() === 1);
+      await card.locator('summary').click();
+      await card.locator('details .katex').waitFor({ state: 'visible' });
+      check('disclosure math expands', await card.locator('details .katex').isVisible());
+      await card.locator('.md-math > button').first().click();
+      const copied = await app.evaluate(({ clipboard }) => clipboard.readText());
+      check('formula copy returns original TeX', copied.includes('\\frac{N!}') && !copied.includes('$$'));
+      check('code blocks cannot execute', await card.locator('.md-code-run').count() === 0);
+      for (const [theme, width] of [['light', 720], ['dark', 360]]) {
+        await win.evaluate(theme => localStorage.setItem('forsion_theme_pref', theme), theme);
+        await win.reload(); await openSession(win);
+        await card.locator('summary').click();
+        await card.evaluate((el, width) => { el.style.maxWidth = `${width}px`; }, width);
+        await reveal(win, card);
+        check(`reading fits ${width}px`, await card.evaluate(el => el.scrollWidth <= el.clientWidth + 1));
+        await win.screenshot({ path: path.join(OUT, `reading-${theme}.png`) });
+      }
+      fs.writeFileSync(path.join(OUT, 'reading-results.json'), JSON.stringify({ checks }, null, 2));
+      return;
+    }
     if (PREVIEW) {
       const previews = [record('preview-dinner', 'preview-dinner', fixtures.dinner), record('preview-media', 'preview-media', fixtures.media), record('preview-pick', 'preview-pick', fixtures.pick), record('preview-research', 'preview-research', fixtures.research)]
       previews[0].content = 'Intelligent UI · 本地演示。人数、选项、清单与图片可直接操作。下方附真模型生成样本；此窗口使用隔离的测试后端。'

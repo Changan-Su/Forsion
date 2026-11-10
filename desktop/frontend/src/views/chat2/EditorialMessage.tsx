@@ -18,7 +18,7 @@ import { useNoteInsertState } from './insertToNote'
 import * as api from '../../services/backendService'
 import type { UiMessage, TanguDesktopConfig, AgentConfig, StoredDesktopConfig, ToolEvent, InquiryRequest, SketchItem, LiveWait } from '../../../../../tangu-agent/src/contracts/clientTypes'
 import type { PreviewTarget } from '../../components/WorkspaceFilePreview'
-import { Markdown } from '../../components/Markdown'
+import { Markdown, RunContext } from '../../components/Markdown'
 import { ChatWikiLink, WikiText } from '../../components/ChatWikiLink'
 import { leadingCommand } from './composerTokens'
 import { RefChipView, splitLeadingRefs } from './RefChipView'
@@ -831,7 +831,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
                     : part.t === 'pluginCard'
                       ? <PluginToolCard key={`ptc-${part.event.id}`} event={part.event} claim={part.claim} onQuote={handlers?.onQuote} fallback={<ToolGroup events={[part.event]} />} />
                     : part.t === 'intelligent'
-                      ? <ChatIntelligentUi key={`intelligent-${part.event.id}`} event={part.event} live={streaming} stateScope={runSid ? `${runSid}:${msg.id}` : undefined} onAsk={handlers?.onSuggest} sessionId={runSid} />
+                      ? <RunContext.Provider key={`intelligent-${part.event.id}`} value={{ cwd: runCtx?.cwd, allowRun: false }}><ChatIntelligentUi event={part.event} live={streaming} stateScope={runSid ? `${runSid}:${msg.id}` : undefined} onAsk={handlers?.onSuggest} sessionId={runSid} /></RunContext.Provider>
                     : <SketchCards key={`sketch-${part.item.callId}`} items={[part.item]} actions={sketchActions} stateScope={runSid ? `${runSid}:${msg.id}` : undefined} onAsk={handlers?.onSuggest} />)}
                 </Fragment>
               ) : null
@@ -938,7 +938,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
         {(msg.toolEvents || []).filter(ev => isMarketplaceTool(ev) && !inlineToolIds.has(ev.id)).map(ev => <MarketPluginCards key={`market-${ev.id}`} event={ev} />)}
         {(msg.toolEvents || []).filter(ev => isSandboxCardTool(ev) && !inlineToolIds.has(ev.id)).map(ev => <PluginSandboxCard key={`sandbox-${ev.id}`} event={ev} />)}
         {(() => { const gitEvs = (msg.toolEvents || []).filter(ev => isGitTool(ev) && ev.done && !inlineToolIds.has(ev.id)); return gitEvs.length ? splitGitRuns(gitEvs).map((run) => <GitToolCard key={`git-${run[0].id}`} events={run} sessionId={runSid} />) : null })()}
-        {trailingIntelligent.map(ev => <ChatIntelligentUi key={ev.id} event={ev} live={streaming} stateScope={runSid ? `${runSid}:${msg.id}` : undefined} onAsk={handlers?.onSuggest} sessionId={runSid} />)}
+        {trailingIntelligent.map(ev => <RunContext.Provider key={ev.id} value={{ cwd: runCtx?.cwd, allowRun: false }}><ChatIntelligentUi event={ev} live={streaming} stateScope={runSid ? `${runSid}:${msg.id}` : undefined} onAsk={handlers?.onSuggest} sessionId={runSid} /></RunContext.Provider>)}
         {!!trailingSketches.length && <SketchCards items={trailingSketches} actions={sketchActions} stateScope={runSid ? `${runSid}:${msg.id}` : undefined} onAsk={handlers?.onSuggest} />}
         {trailingCards.map(({ ev, claim }) => <PluginToolCard key={`ptc-${ev.id}`} event={ev} claim={claim} onQuote={handlers?.onQuote} fallback={<ToolGroup events={[ev]} />} />)}
         {/* 审批卡在托盘里批(ApprovalTray);托盘在输入框上方的视图(预览 / 画布)流里留一行指路,对话末尾有卡片堆的不留(卡就在下面)。已兑现的不留痕 —— 结局看工具卡。
