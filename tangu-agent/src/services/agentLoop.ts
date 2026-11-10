@@ -1322,6 +1322,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   let finalTurnText = '';
   let finalTurnNoTools = false; // 收尾那一发请求没带工具头(步数用尽 / 重复工具失败的强制收尾)
   let finalReasoning = '';
+  // 在飞那次模型调用已流给用户的正文(尝试循环里 partialText 的影子)。成功收下 / 段切分回灌时清空;
+  // run 以失败或中止收尾时并进终稿 —— 否则屏上看过的最后一截不落库,「继续生成」时模型看不到,只能重写或跳过。
+  let inflightText = '';
   /** 把一段正文追加进终稿(空段 no-op)。finalize 只写 finalContent —— 中间迭代的 preamble
    *  正文(模型「先说话、再调工具」)必须经此累积,否则落库时只剩末轮收尾词,已流式给用户
    *  看过的话会凭空消失(实例:正文被一句 "NOTHING" 顶掉)。 */
@@ -3152,6 +3155,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         }
         let emitted = false;
         partialText = '';
+        inflightText = '';
         const attemptStart = Date.now();
         let acceptedAt = 0;
         let firstFrameAt = 0;
@@ -3177,7 +3181,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
               acceptedAt = Date.now();
               void publish(runId, 'status', { phase: 'llm_call', stage: 'accepted', iteration, bytes: requestBytes, uploadMs: acceptedAt - attemptStart });
             },
-            onToken: (d) => { if (sampling.signal.aborted) return; emitted = turnStarted = true; markFrame(); partialText += d; void publish(runId, 'token', { delta: d }); },
+            onToken: (d) => { if (sampling.signal.aborted) return; emitted = turnStarted = true; markFrame(); partialText += d; inflightText += d; void publish(runId, 'token', { delta: d }); },
             onReasoning: (d) => { if (sampling.signal.aborted) return; emitted = turnStarted = true; markFrame(); void publish(runId, 'reasoning', { delta: d }); },
             // 会话钉着的模型已被 admin 停用、服务端改用了别的:记进时间线(诊断导出可见),每个 run 只记一次。
             onNotice: (n) => {
@@ -3209,10 +3213,12 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
             ...(acceptedAt ? { uploadMs: acceptedAt - attemptStart } : {}),
           };
           turnStarted = true;
+          inflightText = ''; // 整段收下了:正文随 res.content 走下面的正常落库,别在后续失败时再并一次
           break;
         } catch (err) {
           if (ac.signal.aborted) throw err;
           if (sampling.signal.aborted && immediateSteers.has(runId)) {
+            inflightText = '';
             if (partialText.trim()) {
               appendFinal(partialText);
               workingMessages.push({ role: 'assistant', content: partialText });
@@ -3258,6 +3264,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           // 也允许:对长 run 而言「多等一轮再续」远好于「整 run 报废」。
           if (emitted && midstreamResumes < MIDSTREAM_MAX_RESUMES && isRetryableLlmError(err)) {
             midstreamResumes++;
+            inflightText = '';
             if (partialText.trim()) {
               appendFinal(partialText);
               workingMessages.push({ role: 'assistant', content: partialText } as ChatMessage);
@@ -3838,6 +3845,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // 先撤掉挂起项、让出一拍:挂起提问的「没等到回答」要先写进本段的工具结果,下面落库的半截段才不是「还在等」的占位
     parkAc.abort();
     await new Promise<void>((r) => setImmediate(r));
+    // 在飞那次调用已流出、还没并进终稿的正文(断线 / 额度 / 用户按停在半句上):用户屏上看过,落库与 error 事件都带上它。
+    // error 事件的 content 会原地替换在线气泡的正文 —— 不并的话非空终稿会把屏上最后那截抹掉。
+    if (inflightText.trim()) { appendFinal(inflightText); inflightText = ''; }
     // 落库「已停止/失败」时已累积的部分助手轮次:有正文或工具调用就持久化 → 留在聊天记录、且作为上下文
     // 喂给后续 run(否则被中断的这一轮凭空消失,用户与后续 agent 都读不到)。幂等 upsert,失败不二次抛。
     if (finalContent.trim() || allToolCalls.length) {

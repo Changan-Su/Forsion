@@ -36,6 +36,8 @@ import { TodoList } from '../components/InquiryCard'
 import { useMusePendingApprovals, useMusePendingTodos } from './chat2/MuseDm'
 import { useMusePendingCards } from './chat2/MuseCards'
 import { APPROVAL_UPDATE_OPEN, INQUIRY_UPDATE_OPEN, pendingPromptsOf } from './chat2/approvalQueue'
+import { isContinuationRow } from '../../../../tangu-agent/src/contracts/turnResume'
+import { turnHasOutput } from './chat2/continueTurn'
 import { CHILD_UPDATE_OPEN, ChildFromLine, ChildSessionsPill, SESSION_MESSAGE_OPEN } from './chat2/ChildSessions'
 import { RunStatsLine } from './chat2/RunStatsLine'
 import { SessionTraceLines, useSessionTraces } from '../components/SessionTraces'
@@ -139,15 +141,17 @@ function selectedCanvasSessionId(): string | undefined {
 }
 
 /** 失败行 / 右栏失败卡的「重试」(走查续六 6.3)只送一次:删消息到新 run 起来之间 running 还没置上,连点或两处各点一下
- *  会排两次 /retry,第二次把第一次的回答删掉重跑(Codex 评审)。run 起来或 30 秒后放开。 */
+ *  会排两次 /retry,第二次把第一次的回答删掉重跑(Codex 评审)。run 起来或 30 秒后放开。
+ *  「继续生成」共用这一把闸:续写和重试同时点下去,后到的那个不许再发。没发出去(返回 false)当场放开。 */
 const retrying = new Set<string>()
-function retryOnce(sid: string | null | undefined): void {
+function retryOnce(sid: string | null | undefined, act: 'retry' | 'continue' = 'retry'): void {
   if (!sid || retrying.has(sid)) return
   retrying.add(sid)
   const done = (): void => { retrying.delete(sid); off(); clearTimeout(timer) }
   const off = useApp.subscribe((s) => { if (s.runningBySession[sid]) done() })
   const timer = setTimeout(done, 30_000)
-  void useApp.getState().retry(sid)
+  const st = useApp.getState()
+  void (act === 'continue' ? st.continueRun(sid) : st.retry(sid)).then((ok) => { if (!ok) done() }, done)
 }
 
 export function ChatView({ leaf, params }: ViewProps) {
@@ -409,7 +413,7 @@ export function ChatView({ leaf, params }: ViewProps) {
   // composer ↑↓ 历史召回:本会话已发送的用户消息(旧→新)+ steer 入队即记的补充池(被删/撤回的插话
   // 仍可从 ↑ 找回;已注入的会同时出现在消息里,按文本去重)。打断标记是机器行,不进历史。
   const sentHistory = useMemo(() => {
-    const users = activeMessages.filter((m) => m.role === 'user' && !m.content.startsWith('<turn_interrupted>') && !m.content.startsWith(APPROVAL_UPDATE_OPEN) && !m.content.startsWith(INQUIRY_UPDATE_OPEN) && !m.content.startsWith(CHILD_UPDATE_OPEN) && !m.content.startsWith(SESSION_MESSAGE_OPEN)).map((m) => m.content)
+    const users = activeMessages.filter((m) => m.role === 'user' && !isContinuationRow(m.content) && !m.content.startsWith(APPROVAL_UPDATE_OPEN) && !m.content.startsWith(INQUIRY_UPDATE_OPEN) && !m.content.startsWith(CHILD_UPDATE_OPEN) && !m.content.startsWith(SESSION_MESSAGE_OPEN)).map((m) => m.content)
     const have = new Set(users)
     return [...users, ...s.steerSent.filter((x) => !have.has(x))]
   }, [activeMessages, s.steerSent])
@@ -631,6 +635,7 @@ export function ChatView({ leaf, params }: ViewProps) {
       onCopy: (text) => env().copy(text),
       onRegenerate: readOnly ? undefined : () => env().s.regenerate(id, env().activeId),
       onRetry: readOnly ? undefined : () => retryOnce(env().activeId),
+      onContinue: readOnly ? undefined : () => retryOnce(env().activeId, 'continue'),
       onBranch: childSurface ? undefined : () => void env().s.branchFromMessage(id, env().activeId),
       // 顺便问(挂在这条回答上):开在右边那块面板,不进对话
       onAside: childSurface ? undefined : () => { const e = env(); if (e.activeId) openBtw({ sessionId: e.activeId, title: e.activeSession?.title, modelId: e.mvModelId || undefined, messageId: id }) },
@@ -1161,6 +1166,7 @@ export function ChatView({ leaf, params }: ViewProps) {
         <TaskSummary
           sessionId={activeId}
           onRetry={params.readOnly ? undefined : () => retryOnce(activeId)}
+          onContinue={params.readOnly || !turnHasOutput(activeMessages) ? undefined : () => retryOnce(activeId, 'continue')}
           desk={deskEnabled && activeId ? <DeskCard key="desk" sessionId={activeId} /> : null}
           teamStatus={activeId ? <>
             {teamDesk && <TeamStatus sessionId={activeId} />}

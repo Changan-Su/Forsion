@@ -34,6 +34,7 @@ import { registerMessages, translate, translationValues } from '../../i18n'
 import { publishAccountQuota } from '../../services/accountQuota'
 import { sanitizeAnswerBy, sanitizeApprovalPreviewI18n, sanitizeApprovalReason, sanitizeApprovalRemote } from '../../approvalReason'
 import { normalizeSessionEmoji } from '../../../../../tangu-agent/src/contracts/sessionEmoji'
+import { TURN_RESUME_MARKER, isContinuationRow } from '../../../../../tangu-agent/src/contracts/turnResume'
 import { DEFAULT_APPROVAL, applyPreset, stickyDefaults, withAmadeusWorkspace } from '../../../../../tangu-agent/src/contracts/sessionDefaults'
 export { DEFAULT_APPROVAL, DEFAULT_THINKING, applyPreset, stickyDefaults, withAmadeusWorkspace } from '../../../../../tangu-agent/src/contracts/sessionDefaults'
 import type { StoreApi } from 'zustand'
@@ -985,6 +986,9 @@ export interface TanguState {
   truncateAndResend(fromIndex: number, text: string, attachments: Attachment[], sessionId?: string | null, fromQueue?: boolean): Promise<boolean>
   /** /retry:重跑最后一条用户消息。运行中 / 有排队项时排到本轮结束后,到时再取「最后一条」。 */
   retry(sessionId?: string | null, fromQueue?: boolean): Promise<boolean>
+  /** 「继续生成」:回答因报错 / 额度用完停在半截 → 什么都不删,发一条 <turn_resume> 机器行让模型接着写(retry / regenerate 是删掉重来)。
+   *  quotaFallback:额度卡上点了「改用 X」,这一次直接走后备。false = 没发出去(在跑 / 发送失败,已 toast)。 */
+  continueRun(sessionId?: string | null, opts?: { quotaFallback?: boolean }): Promise<boolean>
   editUserMessage(messageId: string, newText: string, sessionId?: string | null): void
   regenerate(messageId: string, sessionId?: string | null, opts?: { quotaFallback?: boolean }): void
   /** 返回新分支的会话 id;没建成(没有可分的回答 / 引擎拒绝)= null,已 toast。 */
@@ -3101,9 +3105,18 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     }
     const list = get().messagesBySession[sid] || []
     let u = list.length - 1
-    while (u >= 0 && list[u].role !== 'user') u--
+    // 越过「继续生成」/ 打断标记:它们不是用户的问题,重试要从真正那条用户消息重来(连同续写出来的一起删)
+    while (u >= 0 && (list[u].role !== 'user' || isContinuationRow(list[u].content))) u--
     if (u < 0) { get().toast(translate('input.slash.nothingToRetry'), true); return true } // 没得重试不算失败,别卡住队列
     return get().truncateAndResend(u, list[u].content, list[u].attachments || [], sid, true)
+  },
+
+  continueRun: async (targetSessionId, opts) => {
+    const sid = targetSessionId === undefined ? get().activeId : targetSessionId
+    if (!sid || get().runningBySession[sid]) return false
+    tanguCount('chatContinue')
+    if (opts?.quotaFallback) quotaFallbackNext.set(sid, Date.now())
+    return get().send(TURN_RESUME_MARKER, [], undefined, undefined, undefined, sid)
   },
 
   editUserMessage: (messageId, newText, targetSessionId) => {
@@ -3124,7 +3137,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     const idx = list.findIndex((m) => m.id === messageId)
     if (idx < 0) return
     let u = idx - 1
-    while (u >= 0 && list[u].role !== 'user') u--
+    while (u >= 0 && (list[u].role !== 'user' || isContinuationRow(list[u].content))) u--
     if (u < 0) { get().toast(t('app.regenNoUser'), true); return }
     tanguCount('chatRegenerate')
     if (opts?.quotaFallback) quotaFallbackNext.set(sid, Date.now())

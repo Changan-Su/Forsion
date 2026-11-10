@@ -93,6 +93,7 @@
     "check:apprefs-real": "APPREF_REAL=1 vitest run electron/appRefs.real.test.ts",
     "e2e:remotesafety": "node scripts/remote-safety.e2e.cjs",
     "e2e:chatshimmer": "node scripts/chat-shimmer.e2e.cjs",
+    "e2e:chatcontinue": "node scripts/chat-continue.e2e.cjs",
     "e2e:runstats": "node scripts/chat-runstats.e2e.cjs",
     "e2e:ctxwindow": "node scripts/ctxwindow-settings.e2e.cjs",
     "e2e:ctxlimit": "node scripts/ctxlimit-menu.e2e.cjs",

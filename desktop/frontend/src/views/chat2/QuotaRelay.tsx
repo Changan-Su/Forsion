@@ -13,6 +13,7 @@ import { getModelQuota } from '../../services/backendService'
 import { targetForSession } from '../../services/engine/targets'
 import { SUB_PROVIDER_LABELS } from '../../components/OnboardingWizard'
 import { reminderResetAt, useQuotaReminders } from '../../tangu/store/quotaReminders'
+import { turnHasOutput } from './continueTurn'
 
 registerMessages({
   'relay.line.quota': { zh: '{from} 的额度用完了（{time} 重置），这一轮改用 {to}', en: '{from} is out of quota (resets {time}), so this turn used {to}' },
@@ -97,7 +98,14 @@ export function QuotaChips({ error, messageId, sessionId, modelId }: { error?: s
     return () => { alive = false }
   }, [quota, ask])
   if (!quota || hidden || !sessionId || !window.tangu?.setConfig) return null
-  const retry = (quotaFallback?: boolean) => useApp.getState().regenerate(messageId, sessionId, quotaFallback ? { quotaFallback } : undefined)
+  const sid = sessionId
+  // 这一轮已有产出(正文 / 工具调用)→ 换模型接着写,不删已生成的;什么都没出来才整轮重发(两者此时等价)
+  const retry = (quotaFallback?: boolean) => {
+    const st = useApp.getState()
+    const opts = quotaFallback ? { quotaFallback } : undefined
+    if (turnHasOutput(st.messagesBySession[sid])) void st.continueRun(sid, opts)
+    else st.regenerate(messageId, sid, opts)
+  }
   if (ask) return (
     <span className="t2-failed">
       <button type="button" className="t2-failed-btn" onClick={() => setHidden(true)}>{t('relay.wait')}</button>
