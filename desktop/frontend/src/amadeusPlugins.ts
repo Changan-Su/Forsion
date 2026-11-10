@@ -177,6 +177,7 @@ function applyExtensionsChanged(payload?: string): void {
 }
 
 let amadeusBooted = false
+let attachToActiveVault = false
 /** 幂等应用引导:装插件 + 恢复上次 Vault。
  *  ⚠️ 触发点**不在** amadeus-editor 视图上,而是这几处宿主:左栏 AmadeusPagesView / dbAggregateStore
  *  (日历·待办)/ Composer2 · AgentDesk · ChatWikiLink(聊天引用笔记)/ MobileRoot / MiniRoot。
@@ -184,8 +185,45 @@ let amadeusBooted = false
  *  → Amadeus 恒显「打开 Vault 文件夹」空态)。 */
 export function ensureAmadeusReady(opts?: { attachOnly?: boolean }): void {
   if (!amadeusAvailable()) return
-  if (amadeusBooted) return
+  if (amadeusBooted) { retryFailedVaultRestore(); return }
   amadeusBooted = true
   installAmadeusPlugins()
-  void usePageStore.getState().restoreVault(opts)
+  attachToActiveVault = opts?.attachOnly === true
+  trackRestore(usePageStore.getState().restoreVault(opts))
+  // 云端冷启动断网(GET /vaults、/tree 失败)时库没装上:网络回来自己重开,不用重启 app。
+  // 不只靠 online —— 「请求失败但系统仍算在线」时它不会来,所以再进笔记(任一处调 ensureAmadeusReady)、
+  // 回到前台也各重试一次。只在上一次 restoreVault 抛错、且至今没有库时才动,装上了的库绝不重开(会顶掉正在看的笔记)。
+  if (typeof window !== 'undefined') {
+    window.addEventListener('online', retryFailedVaultRestore)
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') retryFailedVaultRestore() })
+  }
+}
+
+// 在途去重:vaultLoading 是按面板记的,online 与再进笔记可能同一刻到。
+let vaultRetry: Promise<void> | null = null
+// 在途时来的重试请求不能丢(Codex 评审 P2):挂住的请求 30 秒才失败,网络早就回来了,online 已经错过。
+let retryWanted = false
+let idleWatch: (() => void) | null = null
+function trackRestore(p: Promise<void>): void {
+  vaultRetry = p.finally(() => {
+    vaultRetry = null
+    if (retryWanted) { retryWanted = false; retryFailedVaultRestore() }
+  })
+}
+function retryFailedVaultRestore(): void {
+  const s = usePageStore.getState()
+  if (s.vaultRoot != null) { retryWanted = false; return }
+  if (vaultRetry) { retryWanted = true; return }
+  if (s.vaultLoading) {
+    // 别处(换账号、切云端 / 本地)发起的那一趟:等它落地再看要不要重试
+    retryWanted = true
+    idleWatch ??= usePageStore.subscribe((n) => {
+      if (n.vaultLoading) return
+      idleWatch?.(); idleWatch = null
+      if (retryWanted) { retryWanted = false; retryFailedVaultRestore() }
+    })
+    return
+  }
+  if (!s.vaultRestoreFailed) return
+  trackRestore(s.restoreVault({ keepOpenNote: true, attachOnly: attachToActiveVault }))
 }
