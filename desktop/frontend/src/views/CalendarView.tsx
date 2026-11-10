@@ -39,6 +39,7 @@ import {
   type AggRow,
 } from '../amadeus/store/dbAggregateStore'
 import { useCalendarMembers } from '../amadeus/store/calendarMembers'
+import { isEventRow } from '@amadeus-shared/db/rowKind'
 import { useCalendarConfig, colorForDb, isHidden, defaultDbPath } from '../amadeus/store/calendarConfigStore'
 import { HOUR_PX_DEFAULT, useCalendarNav, type CalDraft } from '../amadeus/store/calendarNavStore'
 import { useAgentSchedulePolling, useAgentCalDbs } from '../stores/agentScheduleStore'
@@ -188,8 +189,9 @@ function buildEvents(entries: CalEntry[], vault: string, byVault: Parameters<typ
   return out
 }
 /** 只有日期的待办(勾选列 + 单天全天)住右栏的待办,不进周 / 日视图的全天行(方案页「待办」那节)。
- *  只在桌面:手机这轮没动,待办不在右栏,滤掉就看不到了(Codex 评审)。 */
-const dateOnlyTodo = (e: CalEvent): boolean => DESK && !!e.check && e.allDay && !e.end
+ *  只在桌面:手机这轮没动,待办不在右栏,滤掉就看不到了(Codex 评审)。
+ *  带日程标记的(isEventRow)不是待办,右栏的待办里没有它 —— 得留在全天行,否则哪都看不到。 */
+const dateOnlyTodo = (e: CalEvent): boolean => DESK && !!e.check && e.allDay && !e.end && !isEventRow(e.row, e.colId)
 
 const hhmm = (d: Date): string => `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 const fmtMin = (m: number): string => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`
