@@ -97,16 +97,18 @@ describe('Unit visitor Account adapter', () => {
   it('rejects an in-flight profile and stops the old page from fetching the replacement account', async () => {
     shared.set(tokenKey, 'token-a')
     const { accountPresentation } = await installUnitAccount({ ...meta, inheritWebAccount: true }, base)
-    const profile = Promise.withResolvers<Response>()
-    const started = Promise.withResolvers<void>()
+    let finishProfile!: (value: Response) => void
+    const profile = new Promise<Response>((resolve) => { finishProfile = resolve })
+    let markStarted!: () => void
+    const started = new Promise<void>((resolve) => { markStarted = resolve })
     fetcher.mockImplementationOnce(fetcher.getMockImplementation()!).mockImplementationOnce(async () => {
-      started.resolve()
-      return profile.promise
+      markStarted()
+      return profile
     })
     const pending = expect(accountPresentation!.authStatus()).rejects.toBeInstanceOf(AccountChangedError)
-    await started.promise
+    await started
     shared.set(tokenKey, 'token-b')
-    profile.resolve(json({ id: 'a', nickname: 'Old profile' }))
+    finishProfile(json({ id: 'a', nickname: 'Old profile' }))
     await pending
 
     fetcher.mockClear()

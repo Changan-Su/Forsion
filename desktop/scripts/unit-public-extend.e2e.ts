@@ -310,6 +310,7 @@ async function main(): Promise<void> {
     check('⑨ 电脑账号菜单显示昵称、会员徽章和日／周额度', nickname === 'Alice', nickname)
     await quotaSummary.click()
     check('⑨ 额度详情显示可用的额度重置卡', await accountMenu.getByRole('button', { name: '使用额度重置卡（1 张）' }).isVisible())
+    await page.waitForTimeout(500) // Capture the fully expanded popover after its entrance animation.
     await shot(page, 'account-quota')
     await accountMenu.getByRole('button', { name: '升级会员' }).click()
     await page.locator('.mk-page [data-store-view="forsion-extend:membership"].active').waitFor()
@@ -337,6 +338,7 @@ async function main(): Promise<void> {
     const phoneQuota = phone.locator('[data-sheet-item="quota"]')
     await phoneQuota.getByText('今日 70% · 本周 76%').waitFor()
     check('⑨ 手机网页额度行可以进入会员与用量', await phoneQuota.isEnabled())
+    await phone.waitForTimeout(400) // Capture the sheet after its entrance animation.
     await shot(phone, 'phone-account-quota')
     await phoneQuota.click()
     await phone.getByText('会员与用量', { exact: true }).first().waitFor()
