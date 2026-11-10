@@ -58,6 +58,31 @@ async function main() {
     first = await copyNote(main)
     await link(first).waitFor()
     console.log('PASS Wiki resolves without the Notes Space')
+    const onlyTab = noteTab(first, 'Window Source')
+    assert.equal(await first.locator('.wb-tab:visible').count(), 1)
+    const selfDrop = await onlyTab.evaluate((tab) => {
+      const dataTransfer = new DataTransfer()
+      const group = tab.closest('.dv-groupview')
+      const content = group.querySelector('.dv-content-container').getBoundingClientRect()
+      const x = content.left + content.width / 2
+      const y = content.bottom - 20
+      const target = document.elementFromPoint(x, y)
+      const event = (type) => new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer, clientX: x, clientY: y })
+      tab.dispatchEvent(event('dragstart'))
+      const dragStarted = document.documentElement.hasAttribute('data-dv-dragging')
+      target.dispatchEvent(event('dragover'))
+      const splitPreview = document.querySelector('.wb-drop-zone')?.style.display === 'block'
+      target.dispatchEvent(event('drop'))
+      return { dragStarted, splitPreview }
+    })
+    const onlyTabAfter = {
+      tab: await onlyTab.isVisible(),
+      note: await noteBody(first, 'Source body.').isVisible(),
+      titleBar: await first.locator('.dv-tabs-and-actions-container').evaluateAll((rows) =>
+        rows.some((row) => row.getBoundingClientRect().height > 0 && getComputedStyle(row).getPropertyValue('-webkit-app-region') === 'drag')),
+    }
+    assert.deepEqual({ ...selfDrop, ...onlyTabAfter }, { dragStarted: true, splitPreview: false, tab: true, note: true, titleBar: true })
+    console.log('PASS The only tab cannot split its own group and the title bar remains draggable')
     second = await copyNote(first)
     await noteBody(second, 'Source body.').waitFor()
     assert.equal(await noteTab(main, 'Window Source').count(), 1)

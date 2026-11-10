@@ -189,14 +189,15 @@ describe('固定 View:桌面 store', () => {
     expect(at(panels, 'main')).toEqual(['filev', 'filev'])
   })
 
-  it('拖不出本区:跨区落点不允许,区内分屏 / 排序照常', () => {
+  it('最后一个固定 View 不能拖出本区或拖到自己的组', () => {
     const { api, panels } = build()
     const chat = panels.find((p) => p.params.__type === 'chatv')!
     const left = panels.find((p) => p.params.__loc === 'left')!
     const toLeft = { mode: 'tab', group: left.group, index: 0 } as unknown as DropTarget
     const within = { mode: 'split', group: chat.group, dir: 'right' } as unknown as DropTarget
     expect(dropAllowed(api, chat.id, toLeft)).toBe(false)
-    expect(dropAllowed(api, chat.id, within)).toBe(true)
+    expect(dropAllowed(api, chat.id, within)).toBe(false)
+    expect(dropAllowed(api, chat.id, { ...within, mode: 'tab' } as DropTarget)).toBe(false)
     useWorkspace.getState().dropView(chat.id, toLeft)
     expect(at(panels, 'main')).toEqual(['chatv'])
     expect(at(panels, 'left')).toEqual(['listv'])
@@ -204,6 +205,7 @@ describe('固定 View:桌面 store', () => {
     // 多开一个之后,其中一个可以拖走
     useWorkspace.getState().openView('chatv', { sessionId: 's2' }, 'main', { newTab: true })
     expect(dropAllowed(api, chat.id, toLeft)).toBe(true)
+    expect(dropAllowed(api, chat.id, within)).toBe(true)
   })
 
   it('替换视图(插件的 ctx.replaceView / Coding 进项目):固定 View 不被顶掉,新视图开在它旁边并顶到前台;退回时只摘掉新开的', () => {

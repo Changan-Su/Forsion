@@ -624,7 +624,7 @@ export const WorkspaceHost: React.FC<{
   //  提交走 moveTo(不受 app-region 影响);dragover/drop 命中 tab 栏需 data-dv-dragging 抑制窗拖区(onTabDragStart 已打)。
   //  收尾只认 dragend(HTML5 收尾信号:drop/取消/ESC 都 fire),drop 里也兜底清一次(源节点被 moveTo 移走时 dragend 可能不达 window)。
   useEffect(() => {
-    // 落点:提示与提交共用。搬的是固定 View 且落点在别的区 → 当作没有落点(不画提示、松手弹回)。
+    // 提示和提交都跳过无法执行的移动。
     const dropTargetAt = (e: DragEvent): DropTarget | null => {
       const api = useWorkspace.getState().api
       const t = api ? computeDropTarget(api, e.clientX, e.clientY) : null
