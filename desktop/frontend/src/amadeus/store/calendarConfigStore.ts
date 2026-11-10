@@ -1,27 +1,18 @@
-/** Calendar 视图偏好(按 vault 存 localStorage,不进 vault 文件/不进 git):
+/** Calendar 视图偏好(按 vault 存 localStorage,不进 vault 文件/不进 git;账号的同步库另以 human/Settings/calendar.db 为真源,
+ *  本机这份是镜像,见 calendarSettingsSync):
  *  每个源的事件颜色(手选色 colors + 第一次出现时自动定下的 autoColors)、是否可见、新建事件落入的默认库,以及「日历成员」列映射。
  *  成员制(显式):有 members[dbPath] 才算「在日历中」;旧「有 calendarDate 列即入历」经 migrate 一次性收编。 */
 import { create } from 'zustand'
 import { isWinRoot, slashRel } from '@amadeus/lib/vaultFiles'
+import { diffVaultCfg, type CalMember, type VaultCfg } from './calendarSettingsDoc'
+import { createCalendarSettingsSync, type CalendarSettingsSync } from './calendarSettingsSync'
+import { engineSettingsTransport } from './calendarSettingsIo'
+import { resolveCalendarSettingsKey } from './calendarSettingsKey'
+
+export type { CalMember, VaultCfg } from './calendarSettingsDoc'
 
 export const EVENT_PALETTE = ['#6d8fd6', '#e0925f', '#5aa98b', '#b57bd0', '#d76d8a', '#8a9a5b', '#c99a3f', '#5c9bd1']
 
-/** 日历成员的列映射:哪一列是日期锚点(必)、哪一列是完成/待办勾选(可选)。 */
-export interface CalMember {
-  dateCol: string
-  checkboxCol?: string
-}
-interface VaultCfg {
-  colors: Record<string, string> // dbPath → 用户手选的颜色(优先;自动定色永不改写它)
-  /** 来源路径 → 自动定下的调色板色:一个来源第一次出现时定一次,之后顺序怎么变都不动;来源移除后也留着(加回来还是原来的色)。
-   *  键 = 来源自己的路径(表的库内路径 / `human://…` / `agent://…` / `otherside:…` / `ics://<id>` / `mdnote://…`)。
-   *  没有这个键 = 这个库还没播种:播种那一次按老规则(排第几个取第几个色)存下当时的一整列,保证升级前后颜色不变。 */
-  autoColors?: Record<string, string>
-  hidden: string[] // 隐藏的 dbPath
-  defaultDbPath: string | null // 新建事件落入
-  members: Record<string, CalMember> // dbPath → 列映射;有键 = 「在日历中」(显式成员制)
-  migrated?: boolean // 旧「有 calendarDate 列即入历」数据一次性迁移完成;之后成员全靠显式增删
-}
 interface CalCfgState {
   byVault: Record<string, VaultCfg>
   setColor(vault: string, dbPath: string, color: string): void
@@ -32,8 +23,8 @@ interface CalCfgState {
   ensureColors(vault: string, paths: readonly string[], seed: boolean): void
   toggleHidden(vault: string, dbPath: string): void
   setDefault(vault: string, dbPath: string): void
-  /** 加入日历 / 更新列映射(同一动作:写入即成员)。 */
-  addMember(vault: string, dbPath: string, dateCol: string, checkboxCol?: string): void
+  /** 加入日历 / 更新列映射(同一动作:写入即成员)。auto = 不是用户手势(插件 ensureMember):随账号走的库上只补不覆盖。 */
+  addMember(vault: string, dbPath: string, dateCol: string, checkboxCol?: string, opts?: { auto?: boolean }): void
   /** 移出日历(不删库文件,仅撤成员)。 */
   removeMember(vault: string, dbPath: string): void
   /** 一次性迁移:把 seeds 里尚未登记的库补为成员,并置 migrated 标记。 */
@@ -169,17 +160,33 @@ export function planAutoColors(
   return out
 }
 
-export const useCalendarConfig = create<CalCfgState>((set) => ({
+/** 对随账号走的库(或还不知道是不是)把这次改动记成单项改动,交给 calendarSettingsSync 排队落共享文件;留本机的库在那边直接返回。
+ *  在 set 之后调(不在 set 的回调里):那边可能要读 store。auto = 不是用户手势(迁移 / 定色 / ensureMember):只补不覆盖。 */
+const noteChange = (vault: string, prev: VaultCfg | undefined, auto: boolean): void => {
+  const next = useCalendarConfig.getState().byVault[vault]
+  if (!vault || !next || next === prev) return
+  const ops = diffVaultCfg(prev, next, auto)
+  if (ops.length) calendarSettingsSync.record(vault, ops)
+}
+
+export const useCalendarConfig = create<CalCfgState>((set, get) => {
+  /** 包一层:动作本身照旧同步算整份 next、写镜像;算完再把前后差交给共享那半。 */
+  const tracked = (vault: string, auto: boolean, fn: (s: CalCfgState) => Partial<CalCfgState> | CalCfgState): void => {
+    const prev = get().byVault[vault]
+    set(fn)
+    noteChange(vault, prev, auto)
+  }
+  return {
   byVault: loadAll(),
   setColor: (vault, dbPath, color) =>
-    set((s) => {
+    tracked(vault, false, (s) => {
       const cur = vc(s.byVault, vault)
       const next = { ...s.byVault, [vault]: { ...cur, colors: { ...cur.colors, [dbPath]: color } } }
       persist(next)
       return { byVault: next }
     }),
   clearColor: (vault, dbPath) =>
-    set((s) => {
+    tracked(vault, false, (s) => {
       const cur = vc(s.byVault, vault)
       const colors = { ...cur.colors }
       delete colors[dbPath]
@@ -188,10 +195,18 @@ export const useCalendarConfig = create<CalCfgState>((set) => ({
       return { byVault: next }
     }),
   ensureColors: (vault, paths, seed) =>
-    set((s) => {
+    tracked(vault, true, (s) => {
       if (!vault) return s
       const cur = s.byVault[vault]
       if (!planAutoColors(cur, paths, seed)) return s // 没有新来源:不读盘、不落盘、不换引用(调用方挂在 store 订阅上,必须幂等)
+      if (calendarSettingsSync.isShared(vault)) {
+        // 随账号走的库,内存是共享那份投出来的:本机镜像只写不读 —— 盘上的旧镜像(别的窗口 / 合并前的本机色)不许盖回共享定下的色。
+        // 定下的色以 setIfAbsent 进队列:另一台先播种了,重放时让它赢,内存随后换成共享那份(变一次色,不来回跳)。
+        const auto = planAutoColors(cur, paths, seed) ?? cur?.autoColors ?? {}
+        const next = { ...s.byVault, [vault]: { ...vc(s.byVault, vault), autoColors: auto } }
+        persist(next)
+        return { byVault: next }
+      }
       // 这是唯一一处不由用户手势触发的写:别的窗口(同一份 localStorage)可能先定过色、用户也可能刚在那边改过设置 ——
       // 以盘上那份为底,盘上已有的色照用,只补盘上也没有的;落盘只动 autoColors 一个字段。
       const disk = readAll()
@@ -205,7 +220,7 @@ export const useCalendarConfig = create<CalCfgState>((set) => ({
       return { byVault: next }
     }),
   toggleHidden: (vault, dbPath) =>
-    set((s) => {
+    tracked(vault, false, (s) => {
       const cur = vc(s.byVault, vault)
       const hidden = cur.hidden.includes(dbPath) ? cur.hidden.filter((x) => x !== dbPath) : [...cur.hidden, dbPath]
       const next = { ...s.byVault, [vault]: { ...cur, hidden } }
@@ -213,21 +228,21 @@ export const useCalendarConfig = create<CalCfgState>((set) => ({
       return { byVault: next }
     }),
   setDefault: (vault, dbPath) =>
-    set((s) => {
+    tracked(vault, false, (s) => {
       const cur = vc(s.byVault, vault)
       const next = { ...s.byVault, [vault]: { ...cur, defaultDbPath: dbPath } }
       persist(next)
       return { byVault: next }
     }),
-  addMember: (vault, dbPath, dateCol, checkboxCol) =>
-    set((s) => {
+  addMember: (vault, dbPath, dateCol, checkboxCol, opts) =>
+    tracked(vault, !!opts?.auto, (s) => {
       const cur = vc(s.byVault, vault)
       const next = { ...s.byVault, [vault]: { ...cur, members: { ...cur.members, [dbPath]: member(dateCol, checkboxCol) } } }
       persist(next)
       return { byVault: next }
     }),
   removeMember: (vault, dbPath) =>
-    set((s) => {
+    tracked(vault, false, (s) => {
       const cur = vc(s.byVault, vault)
       const members = { ...cur.members }
       delete members[dbPath]
@@ -236,7 +251,7 @@ export const useCalendarConfig = create<CalCfgState>((set) => ({
       return { byVault: next }
     }),
   migrate: (vault, seeds) =>
-    set((s) => {
+    tracked(vault, true, (s) => {
       const cur = vc(s.byVault, vault)
       if (cur.migrated) return s
       const members = { ...cur.members }
@@ -246,7 +261,7 @@ export const useCalendarConfig = create<CalCfgState>((set) => ({
       return { byVault: next }
     }),
   migratePath: (vault, oldPath, newPath) =>
-    set((s) => {
+    tracked(vault, false, (s) => {
       const cur = s.byVault[vault]
       if (!cur) return s
       const colors = { ...cur.colors }
@@ -279,12 +294,28 @@ export const useCalendarConfig = create<CalCfgState>((set) => ({
       persist(next, { vault, from: oldPath, to: newPath })
       return { byVault: next }
     }),
-}))
+  }
+})
+
+/** 共享那半(缺省实例):桌面问本机引擎、网页 / 手机问 server。内存换成共享那份时走 applyVc —— 照写镜像,不再记改动。 */
+export const calendarSettingsSync: CalendarSettingsSync = createCalendarSettingsSync({
+  io: engineSettingsTransport,
+  storage: typeof localStorage === 'undefined' ? null : localStorage,
+  resolveKey: (root) => resolveCalendarSettingsKey(root),
+  getVc: (root) => useCalendarConfig.getState().byVault[root],
+  applyVc: (root, v) => {
+    const next = { ...useCalendarConfig.getState().byVault, [root]: v }
+    useCalendarConfig.setState({ byVault: next })
+    persist(next)
+  },
+})
 
 // 别的窗口写了这份设置(同一份 localStorage,各自内存里一份):把内存换成盘上最新的。不换的话,这个窗口下一次整份落盘
 // 就是拿旧内存把那边刚改的颜色 / 成员 / 显隐盖掉。storage 事件只发给别的窗口,自己写的不会回来;盘上读不出来就不动。
 // 键被删了 / 成了空串 / 某个库那一项不是对象 = 不知道,**不当成空**:内存里这份好的留着,不换、也不据此落盘。
 // 盘上没有的库照旧留在内存里(没有哪个写动作会删掉整个库的设置)。
+// 随账号走、内存已由共享那份投出来的库:镜像不拿来盖内存(那边的镜像可能比共享那份旧)—— 只取它的本机独有项,
+// 从共享 + 挂起队列(队列也在 localStorage 里,别的窗口刚做的改动已经在里面)重投一次,再去重读共享那份。
 const isObj = (x: unknown): x is Record<string, unknown> => !!x && typeof x === 'object' && !Array.isArray(x)
 /** 别的窗口写来的一项:缺的字段补空(下游直接读 hidden / colors / members),形状不对整份作废。 */
 const saneVc = (v: unknown): VaultCfg | null => {
@@ -298,20 +329,28 @@ const saneVc = (v: unknown): VaultCfg | null => {
     members: isObj(o.members) ? (o.members as VaultCfg['members']) : {},
   } as VaultCfg
 }
-if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
-  window.addEventListener('storage', (e) => {
-    if (e.key !== KEY) return
-    const r = readAll()
-    if (!r.ok || !localStorage.getItem(KEY)) return
-    const incoming: Cfg = {}
-    for (const [vault, v] of Object.entries(r.all)) {
-      const s = saneVc(v)
-      if (!s) return
-      incoming[vault] = s
-    }
-    writeBlocked = false // 内存现在包含盘上读得出来的那份,照常落盘不会盖掉什么
-    useCalendarConfig.setState((st) => ({ byVault: { ...st.byVault, ...incoming } }))
+/** storage 事件的处理(导出给单测直接调)。 */
+export function onCalendarCfgStorage(key: string | null): void {
+  if (key !== KEY) return
+  const r = readAll()
+  if (!r.ok || !localStorage.getItem(KEY)) return
+  const incoming: Cfg = {}
+  for (const [vault, v] of Object.entries(r.all)) {
+    const s = saneVc(v)
+    if (!s) return
+    incoming[vault] = s
+  }
+  writeBlocked = false // 内存现在包含盘上读得出来的那份,照常落盘不会盖掉什么
+  const shared = Object.keys(incoming).filter((vault) => calendarSettingsSync.isShared(vault))
+  useCalendarConfig.setState((st) => {
+    const next = { ...st.byVault, ...incoming }
+    for (const vault of shared) if (st.byVault[vault]) next[vault] = st.byVault[vault]
+    return { byVault: next }
   })
+  for (const vault of shared) calendarSettingsSync.onMirrorChanged(vault, incoming[vault])
+}
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+  window.addEventListener('storage', (e) => onCalendarCfgStorage(e.key))
 }
 
 /** 手选色 → 自动定下的色 → 都没有(这个库还没播种 / 新来源还没轮到定色的那一拍)才按序号取调色板。 */

@@ -2678,7 +2678,8 @@ export const usePluginStore = create<PluginState>((set, get) => {
         const apply = (vault: string): void => {
           const cal = useCalendarConfig.getState()
           if (memberOf(vault, cal.byVault, p)) return
-          cal.addMember(vault, p, dateCol, String(checkboxColId || '').trim() || undefined)
+          // auto:随账号走的库上只补不覆盖(另一台已经把这张表配成别的列,不拿插件的缺省盖掉)
+          cal.addMember(vault, p, dateCol, String(checkboxColId || '').trim() || undefined, { auto: true })
         }
         const now = usePageStore.getState().vaultRoot
         if (now) apply(now)
