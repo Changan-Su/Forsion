@@ -1,3 +1,4 @@
+import type { WindowDropPoint, WindowView } from '../../shared/windowDrop'
 import type { CorePluginUpdates } from '../../shared/corePlugins'
 import type { WebsiteRelease } from '../../shared/websiteReleases'
 import type { GitPanelStatus, GitRestoreSummary, GitVersion, ProductKind, ProductSummary, ShortcutResult } from '../../shared/products'
@@ -1012,14 +1013,10 @@ declare global {
       reportUiAppearance?(appearance: { skin: string; bg: string; mode: 'light' | 'dark' }): void
       closeSelf?(): void
       miniResize?(edge: string | null, start?: boolean, cursor?: { x: number; y: number; radius?: number }): void
-      /** 跨窗撕拽:拖拽中实时上报屏幕坐标(主进程命中测试 → 给光标下窗口发落点预览)。节流后调。 */
-      dragUpdate?(screenX: number, screenY: number, view: { type: string; params?: Record<string, unknown> }): void
-      /** 跨窗撕拽:最终落点路由(命中另一 dockview 窗→并入并返回 routed:true;空桌面→建新独立窗;命中源窗→false 不动)。 */
-      dropView?(screenX: number, screenY: number, view: { type: string; params?: Record<string, unknown> }): Promise<{ routed: boolean }>
-      /** 本窗收到跨窗拖入的视图(主进程 accept-view)→ 打开在主区。返回取消订阅。 */
-      onAcceptView?(cb: (view: { type: string; params?: Record<string, unknown> }) => void): () => void
-      /** 本窗收到跨窗拖拽实时预览(主进程 drag-preview;null=离开本窗清除)。返回取消订阅。 */
-      onDragPreview?(cb: (at: { localX: number; localY: number } | null) => void): () => void
+      trackViewDrag?(viewType: string | null): void
+      dropView?(view: WindowView): Promise<{ routed: boolean }>
+      onAcceptView?(cb: (view: WindowView, at: WindowDropPoint) => boolean): () => void
+      onDragPreview?(cb: (at: WindowDropPoint | null) => void): () => void
     }
     /** Amadeus 页面级共享+发布(web=cloudCollab / 桌面=collab IPC;移动 undefined,共享 UI 据此解闸)。 */
     amadeusCollab?: {

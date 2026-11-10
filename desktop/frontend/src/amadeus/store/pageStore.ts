@@ -292,7 +292,7 @@ interface PageState {
   bumpLinkGraph(): void
 
   openVault(): Promise<void>
-  restoreVault(): Promise<void>
+  restoreVault(opts?: { attachOnly?: boolean }): Promise<void>
   /** 本地侧换到清单里的另一个库 / 新建一个库并打开;失败抛给调用方(菜单弹提示),当前库原样不动。 */
   switchLocalVault(root: string): Promise<void>
   createLocalVault(name: string): Promise<void>
@@ -730,14 +730,18 @@ function makePageStore(opts: PageStoreOptions = {}) {
       await mountSwitched(await amadeus.createVault(name), 'local')
     },
 
-    async restoreVault() {
+    async restoreVault(opts) {
       set({ vaultLoading: true })
       try {
-        const info = await amadeus.restoreVault()
+        const info = await amadeus.restoreVault(opts?.attachOnly)
         if (!info) return
         set({ vaultRoot: info.root, pages: info.pages, folders: info.folders ?? [], files: [], filesPendingFor: info.root, error: null })
         loadFiles(info.root)
         fetchIcons(info.root)
+        if (opts?.attachOnly) {
+          await get().initVaultSide()
+          return
+        }
         const target =
           info.lastPage && info.pages.includes(info.lastPage) ? info.lastPage : info.pages[0]
         if (target) await get().loadPage(target)

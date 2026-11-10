@@ -410,7 +410,6 @@ function watchClaims(e: DragEvent): void {
     orig.call(e)
   }
 }
-let lastDragUpdate = 0 // 节流 drag→dragUpdate(屏幕坐标上报)
 let dropLineEl: HTMLDivElement | null = null
 let dropZoneEl: HTMLDivElement | null = null
 
@@ -454,6 +453,7 @@ function showTarget(t: DropTarget): void {
 
 // 收尾:清 draggingId/draggingOpen + data-dv-dragging(app-region 拖窗区复位)+ 撤源 tab 标记 + 撤提示。
 function clearDragState(): void {
+  if (draggingView) getDetachApi()?.trackDrag?.(null)
   draggingId = null
   draggingView = null
   draggingOpen = null
@@ -495,6 +495,35 @@ function openViewAtTarget(t: DropTarget, spec: { type: string; params?: Record<s
   ws.openView(spec.type, spec.params ?? {}, loc) // 该侧只剩 sidebar-empty 占位时,占位由 openView 退位
 }
 
+type CrossWindowPoint = { localX: number; localY: number; viewType: string }
+
+function crossWindowTarget(at: CrossWindowPoint): DropTarget | null {
+  const api = useWorkspace.getState().api
+  if (!api || !getView(at.viewType)) return null
+  const target = computeDropTarget(api, at.localX, at.localY)
+  return target && locOf(target.group) === 'main' ? target : null
+}
+
+export function previewCrossWindowDrop(at: CrossWindowPoint | null): void {
+  const target = at && crossWindowTarget(at)
+  if (target) showTarget(target)
+  else hideIndicator()
+}
+
+export function acceptCrossWindowDrop(view: ViewRef, at: CrossWindowPoint): boolean {
+  const target = crossWindowTarget(at)
+  if (!target) return false
+  const ws = useWorkspace.getState()
+  const first = target.group.panels[0]
+  if (target.mode === 'tab' && target.group.panels.length === 1 && tabTypeOf(first) === 'home') {
+    return !!ws.navigateLeaf(first.id, view.type, view.params ?? {})
+  }
+  const leaf = ws.openView(view.type, view.params ?? {}, 'main', { newTab: true, groupId: target.group.id })
+  if (!leaf) return false
+  ws.dropView(leaf.id, target)
+  return true
+}
+
 // WbTab 拖拽发起:记源 panelId + 标记源 tab(供 computeDropTarget/让位排除)+ 打 data-dv-dragging
 // (见 engine.css:拖拽期把 tab 栏 -webkit-app-region:drag 抑成 no-drag,否则 macOS 把窗拖区当非客户区吞掉 dragover/drop)。
 // 【关键】必须原生监听在 .wb-tab 上并 stopPropagation:Dockview 的 Html5DragSource 在祖先 .dv-tab 上挂了 dragstart,
@@ -510,6 +539,7 @@ function onTabDragStart(e: DragEvent, el: HTMLElement, panelId: string): void {
   draggingView = viewRefFromParams(panel?.params as Record<string, unknown> | undefined, (panel as { component?: string } | undefined)?.component)
   e.dataTransfer.effectAllowed = 'move'
   e.dataTransfer.setData('application/x-tangu-view', panelId)
+  if (draggingView && getView(draggingView.type)) getDetachApi()?.trackDrag?.(draggingView.type)
   document.documentElement.dataset.dvDragging = '1'
   el.closest('.dv-tab')?.classList.add('wb-tab-dragging')
 }
@@ -645,30 +675,24 @@ export const WorkspaceHost: React.FC<{
       e.preventDefault()
       openAtMain(t, open)
     }
-    // 跨窗撕拽:drag 在源元素全程触发(含移出窗口)→ 节流上报屏幕坐标,主进程给光标下窗口画落点预览。
-    const onDrag = (e: DragEvent): void => {
-      const d = getDetachApi()
-      if (!draggingView || !d?.dragUpdate || (!e.screenX && !e.screenY)) return
-      const now = Date.now()
-      if (now - lastDragUpdate < 30) return
-      lastDragUpdate = now
-      d.dragUpdate(e.screenX, e.screenY, draggingView)
-    }
-    // 收尾 + 跨窗落点:释放点落在本窗**外** → 交平台钩子路由(命中别的窗=并入 / 空桌面=新窗);routed 则关源 panel。
+    // Chromium ends the native drag in the source renderer. Only an outside release goes to the desktop router.
     const onDragEnd = (e: DragEvent): void => {
       const id = draggingId, view = draggingView
       const d = getDetachApi()
-      const outside = e.clientX < 0 || e.clientY < 0 || e.clientX > window.innerWidth || e.clientY > window.innerHeight
-      // 占位(视图没注册)不撕:对面开不出它,源面板却会被关掉。固定 View 也能撕出去,原处补一个新的(releaseLeaf)。
+      const outside = e.clientX < 0 || e.clientY < 0 || e.clientX >= window.innerWidth || e.clientY >= window.innerHeight
       if (id && view && d?.drop && outside && getView(view.type)) {
-        void d.drop(e.screenX, e.screenY, view).then((routed) => { if (routed) releaseLeaf(id) })
+        const api = useWorkspace.getState().api
+        const params = api?.getPanel(id)?.params
+        void d.drop(view).then((routed) => {
+          if (routed && api?.getPanel(id)?.params === params) releaseLeaf(id)
+        }).catch(() => {})
       }
       clearDragState()
     }
     window.addEventListener('dragover', onDragOver, true)
     window.addEventListener('drop', onDrop, true)
-    window.addEventListener('drag', onDrag, true)
     window.addEventListener('dragend', onDragEnd, true)
+    window.addEventListener('pagehide', clearDragState)
     window.addEventListener('dragover', onListDragOver)
     window.addEventListener('drop', onListDrop)
     return () => {
@@ -676,8 +700,8 @@ export const WorkspaceHost: React.FC<{
       window.removeEventListener('drop', onListDrop)
       window.removeEventListener('dragover', onDragOver, true)
       window.removeEventListener('drop', onDrop, true)
-      window.removeEventListener('drag', onDrag, true)
       window.removeEventListener('dragend', onDragEnd, true)
+      window.removeEventListener('pagehide', clearDragState)
       clearDragState()
     }
   }, [])
