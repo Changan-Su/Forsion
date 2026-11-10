@@ -51,6 +51,23 @@ describe('mergeDbFile', () => {
     expect(out.rows.map((row: any) => [row.cells.b1, row.cells.b2])).toEqual([['on B', '2026-10-21'], ['on A', '2026-10-21']]);
     expect(out.views).toEqual([{ id: 'v1', name: 'Cal', type: 'calendar', calendar: { dateCol: 'b2' } }]);
   });
+  // 日程标记是行上的保留单元格键 `_kind`(不是列):合并按整行搬,对列、换列 id 时都不能把它丢掉
+  it('keeps a reserved cell key that is not a column (the `_kind` event mark) through a merge and a column line-up', () => {
+    const cal = (rows: unknown[]) => JSON.stringify({ version: 2, name: '我的日历', columns: [{ id: 'n', name: '名称', type: 'text' }, { id: 'd', name: '日期', type: 'calendarDate' }], rows });
+    const ev = { id: 'e', cells: { n: '组会', d: '2026-11-10T15:00', _kind: 'event' } };
+    // 一边加了带标记的行,另一边加了别的行
+    const r = mergeDbFile(cal([ev]), cal([]), cal([{ id: 't', cells: { n: '交报告' } }]))!;
+    expect(r.conflict).toBe(false);
+    expect(JSON.parse(r.content).rows).toEqual([{ id: 't', cells: { n: '交报告' } }, ev]);
+    // 一边给已有的行打上标记,另一边没动这一行
+    const plain = { id: 'e', cells: { n: '组会', d: '2026-11-10T15:00' } };
+    expect(JSON.parse(mergeDbFile(cal([ev]), cal([plain]), cal([plain]))!.content).rows).toEqual([ev]);
+    expect(JSON.parse(mergeDbFile(cal([plain]), cal([plain]), cal([ev]))!.content).rows).toEqual([ev]);
+    // 第一次见面、两边列 id 不同:列对过去,标记原样
+    const seeded = (n: string, d: string, rows: unknown[]) => JSON.stringify({ version: 2, name: '我的日历', columns: [{ id: n, name: '名称', type: 'text' }, { id: d, name: '日期', type: 'calendarDate' }], rows });
+    const first = mergeDbFile(seeded('a1', 'a2', [{ id: 'e', cells: { a1: '组会', a2: '2026-11-10T15:00', _kind: 'event' } }]), null, seeded('b1', 'b2', [{ id: 'q', cells: { b1: '别的' } }]))!;
+    expect(JSON.parse(first.content).rows).toEqual([{ id: 'q', cells: { b1: '别的' } }, { id: 'e', cells: { b1: '组会', b2: '2026-11-10T15:00', _kind: 'event' } }]);
+  });
   it('a file replaced wholesale (no row or column id in common with the base) is first contact, not "delete everything"', () => {
     const reseeded = JSON.stringify({ version: 2, name: '我的日历', columns: [{ id: 'z', name: '名称', type: 'text' }], rows: [{ id: 's1', cells: { z: 'Welcome' } }] });
     const r = mergeDbFile(reseeded, base, base)!;

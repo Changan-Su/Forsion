@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import * as amadeus from './amadeus.js';
 import { amadeusProvider, amadeusVaultPath, pastStartNote } from './amadeus.js';
 import { configureTangu } from '../../seams/runtime.js';
 import { createTanguProfile } from '../../profiles/index.js';
@@ -331,6 +332,169 @@ describe('to-dos: rows of a calendar with a checkbox column (host)', () => {
   });
 });
 
+// 日程标记(11-09):带勾选列的日历表里每一行都算待办,用户在日历上建的会议、课程也全进了待办列表。
+// 日程在行上带保留单元格键 `_kind = 'event'`(不加列);没有这个键的行照旧是待办。不按有没有起止时间分。
+describe('events and to-dos: the `_kind` mark on a row (host)', () => {
+  const humanFile = () => path.join(humanDir(), 'CALENDAR.db');
+  const humanDb = async (): Promise<any> => JSON.parse(await fs.readFile(humanFile(), 'utf8'));
+  const cellsOf = async (id: string): Promise<any> => (await humanDb()).rows.find((r: any) => r.id === id)?.cells;
+  const listed = async (id: string, args: Record<string, any> = {}): Promise<any> => JSON.parse(await run('amadeus_list_events', args)).find((e: any) => e.id === id);
+  const idOf = (out: string): string => /id=(\w+)/.exec(out)![1];
+  const H = 'human://CALENDAR.db';
+  /** 往默认日历里直接放一行(别处写出来的行:桌面、日历插件)。 */
+  const plant = async (row: { id: string; cells: Record<string, unknown> }): Promise<void> => {
+    const db = await humanDb();
+    db.rows.push(row);
+    await fs.writeFile(humanFile(), `${JSON.stringify(db, null, 2)}\n`);
+  };
+  // 在还没有日程标记的代码上这个导出不存在:判定那条用例红在「不是函数」上,别的用例照常跑
+  const isEventRow = (row: unknown): boolean => (amadeus as any).isEventRow(row);
+
+  it('isEventRow: only the reserved cell `_kind` = "event" counts', () => {
+    expect(isEventRow({ id: 'a', cells: { name: 'Stand-up', _kind: 'event' } })).toBe(true);
+    // 没有键 = 没标记 = 待办;别的值、别的写法、列里叫 kind 的格子都不算
+    for (const cells of [{}, { name: 'x' }, { _kind: 'todo' }, { _kind: 'Event' }, { _kind: true }, { _kind: null }, { kind: 'event' }]) {
+      expect(isEventRow({ id: 'a', cells })).toBe(false);
+    }
+    expect(isEventRow({ id: 'a' })).toBe(false);
+    expect(isEventRow(null)).toBe(false);
+    // ⚠️不看时间:带起止时间的待办(拖到日历上排了时间)仍是待办
+    expect(isEventRow({ id: 'a', cells: { name: 'Write report', date: '2026-07-21T09:00/2026-07-21T09:30' } })).toBe(false);
+  });
+
+  it('create: kind "event" writes the mark; "todo" or no kind writes none', async () => {
+    const out = await run('amadeus_create_event', { title: 'Stand-up', start: '2026-07-21T15:00', kind: 'event' });
+    expect(out).toContain('Created event "Stand-up" (2026-07-21T15:00) in "My calendar", marked as an event: it is not on the to-do list. id=');
+    const ev = idOf(out);
+    expect(await cellsOf(ev)).toEqual({ name: 'Stand-up', date: '2026-07-21T15:00', _kind: 'event' });
+    expect((await humanDb()).columns.map((c: any) => c.id)).toEqual(['name', 'date', 'done']); // 不加列
+
+    const plainOut = await run('amadeus_create_event', { title: 'Hand in report', start: '2026-07-21T15:00' });
+    expect(plainOut).toContain('Created event "Hand in report" (2026-07-21T15:00) in "My calendar". id=');
+    const plain = idOf(plainOut);
+    expect(await cellsOf(plain)).toEqual({ name: 'Hand in report', date: '2026-07-21T15:00' });
+    const todo = idOf(await run('amadeus_create_event', { title: 'Call the bank', start: '2026-07-21T15:00', end: '2026-07-21T15:30', kind: 'todo' }));
+    expect(await cellsOf(todo)).toEqual({ name: 'Call the bank', date: '2026-07-21T15:00/2026-07-21T15:30' }); // 不写 'todo',也不因为有起止时间变成日程
+    const undated = idOf(await run('amadeus_create_event', { title: 'Renew passport', kind: 'todo' }));
+    expect(await cellsOf(undated)).toEqual({ name: 'Renew passport' });
+    const ticked = idOf(await run('amadeus_create_event', { title: 'Team lunch', start: '2026-07-20', kind: 'event', done: true }));
+    expect(await cellsOf(ticked)).toEqual({ name: 'Team lunch', date: '2026-07-20', done: true, _kind: 'event' });
+
+    // 日程没有日期 = 哪儿都不显示;认不出的 kind 不猜。两种都不写
+    const before = await humanDb();
+    await expect(run('amadeus_create_event', { title: 'Someday meeting', kind: 'event' })).rejects.toThrow(/an event needs a date/);
+    await expect(run('amadeus_create_event', { title: 'x', start: '2026-07-21', kind: 'meeting' })).rejects.toThrow(/invalid kind "meeting"/);
+    expect(await humanDb()).toEqual(before);
+    for (const id of [ev, plain, todo, undated, ticked]) await run('amadeus_delete_event', { calendar: H, eventId: id });
+  }, 30_000);
+
+  it('list: a marked row carries kind "event" and no done; to-do rows keep today\'s shape; events are not counted as to-dos', async () => {
+    const ev = idOf(await run('amadeus_create_event', { title: 'Stand-up', start: '2026-07-21T15:00', kind: 'event' }));
+    const todo = idOf(await run('amadeus_create_event', { title: 'Hand in report', start: '2026-07-21T15:00' }));
+    expect(await listed(ev)).toEqual({ calendar: 'My calendar', id: ev, title: 'Stand-up', start: '2026-07-21T15:00', allDay: false, kind: 'event', props: {}, path: H });
+    // 没标记的行:一个键都不多(没有 kind),done 照旧
+    expect(await listed(todo)).toEqual({ calendar: 'My calendar', id: todo, title: 'Hand in report', start: '2026-07-21T15:00', allDay: false, done: false, props: {}, path: H });
+    // 勾过的日程不丢这条信息
+    await run('amadeus_edit_event', { calendar: H, eventId: ev, done: true });
+    expect(await listed(ev)).toMatchObject({ kind: 'event', done: true });
+    await run('amadeus_edit_event', { calendar: H, eventId: ev, done: false });
+    expect(await listed(ev)).not.toHaveProperty('done');
+
+    // 没日期又带标记的行(工具不写,别处写出来的):不数进无日期待办,但照列出来,Agent 才看得见、能修
+    const undated = idOf(await run('amadeus_create_event', { title: 'Renew passport' }));
+    await plant({ id: 'stray', cells: { name: 'Orphan event', _kind: 'event' } });
+    const cal = JSON.parse(await run('amadeus_list_calendars'))[0];
+    expect(cal).toMatchObject({ path: H, events: 2, todoColumn: 'Done', undatedTodos: 1 });
+    const all = JSON.parse(await run('amadeus_list_events', { calendar: H }));
+    expect(all.find((e: any) => e.id === 'stray')).toEqual({ calendar: 'My calendar', id: 'stray', title: 'Orphan event', start: null, allDay: null, kind: 'event', props: {}, path: H });
+    expect(all.filter((e: any) => e.done !== undefined).map((e: any) => e.id).sort()).toEqual([todo, undated].sort()); // 带 done 的 = 待办,日程不在里面
+    expect(JSON.parse(await run('amadeus_list_events', { calendar: H, from: '2026-07-01', to: '2026-07-31' })).map((e: any) => e.id).sort()).toEqual([ev, todo].sort());
+    // 别处写出来的这种行,改标题、勾选照常(只拦这次调用造成的)
+    expect(await run('amadeus_edit_event', { calendar: H, eventId: 'stray', title: 'Orphan renamed' })).toContain('Updated');
+    expect(await cellsOf('stray')).toEqual({ name: 'Orphan renamed', _kind: 'event' });
+    for (const id of [ev, todo, undated, 'stray']) await run('amadeus_delete_event', { calendar: H, eventId: id });
+  }, 30_000);
+
+  it('edit: other fields leave the mark alone; kind switches it on and off', async () => {
+    const ev = idOf(await run('amadeus_create_event', { title: 'Stand-up', start: '2026-07-21T15:00', kind: 'event' }));
+    await run('amadeus_edit_event', { calendar: H, eventId: ev, title: 'Weekly stand-up' });
+    await run('amadeus_edit_event', { calendar: H, eventId: ev, start: '2026-07-22T10:00', end: '2026-07-22T11:00' });
+    await run('amadeus_edit_event', { calendar: H, eventId: ev, end: '' });
+    await run('amadeus_edit_event', { calendar: H, eventId: ev, allDay: true, start: '2026-07-23' });
+    await run('amadeus_edit_event', { calendar: H, eventId: ev, done: true });
+    await run('amadeus_edit_event', { calendar: H, eventId: ev, props: { Name: 'Stand-up (moved)', _kind: 'todo', kind: 'todo' } }); // props 只认列,碰不到标记
+    expect(await cellsOf(ev)).toEqual({ name: 'Stand-up (moved)', date: '2026-07-23', done: true, _kind: 'event' });
+    await run('amadeus_edit_event', { calendar: H, eventId: ev, done: false });
+    expect(await cellsOf(ev)).toEqual({ name: 'Stand-up (moved)', date: '2026-07-23', _kind: 'event' });
+    expect(await run('amadeus_edit_event', { calendar: H, eventId: ev, kind: 'event' })).toBe(`Updated event ${ev} in "My calendar".`); // 本来就是
+
+    // 日程 → 待办:删掉键(不写 'todo');再转回来
+    expect(await run('amadeus_edit_event', { calendar: H, eventId: ev, kind: 'todo' })).toBe(`Updated event ${ev} in "My calendar". It is now a to-do.`);
+    expect(await cellsOf(ev)).toEqual({ name: 'Stand-up (moved)', date: '2026-07-23' });
+    expect(await listed(ev)).toMatchObject({ done: false });
+    expect(await listed(ev)).not.toHaveProperty('kind');
+    expect(await run('amadeus_edit_event', { calendar: H, eventId: ev, kind: 'event', title: 'Stand-up' }))
+      .toBe(`Updated event ${ev} in "My calendar". It is now marked as an event: it is not on the to-do list.`);
+    expect(await cellsOf(ev)).toEqual({ name: 'Stand-up', date: '2026-07-23', _kind: 'event' });
+
+    // 摘掉日程的日期会让它哪儿都不显示:要同时说明转成待办
+    await expect(run('amadeus_edit_event', { calendar: H, eventId: ev, start: '' })).rejects.toThrow(/an event needs a date.*kind: "todo"/);
+    await expect(run('amadeus_edit_event', { calendar: H, eventId: ev, kind: 'banana' })).rejects.toThrow(/invalid kind/);
+    expect(await cellsOf(ev)).toEqual({ name: 'Stand-up', date: '2026-07-23', _kind: 'event' });
+    await run('amadeus_edit_event', { calendar: H, eventId: ev, start: '', kind: 'todo' });
+    expect(await cellsOf(ev)).toEqual({ name: 'Stand-up' });
+    // 没日期的待办打日程标记:同一次调用里要给日期
+    await expect(run('amadeus_edit_event', { calendar: H, eventId: ev, kind: 'event' })).rejects.toThrow(/an event needs a date.*set start/);
+    expect(await cellsOf(ev)).toEqual({ name: 'Stand-up' });
+    await run('amadeus_edit_event', { calendar: H, eventId: ev, kind: 'event', start: '2026-07-24T09:00' });
+    expect(await cellsOf(ev)).toEqual({ name: 'Stand-up', date: '2026-07-24T09:00', _kind: 'event' });
+    await run('amadeus_delete_event', { calendar: H, eventId: ev });
+  }, 30_000);
+
+  it('a calendar without a checkbox column takes the mark too (it stays an event if a checkbox column is added later)', async () => {
+    const file = path.join(vault, 'Trips.db');
+    const plain = { version: 1, name: 'Trips', columns: [{ id: 't', name: 'Name', type: 'text' }, { id: 'd', name: 'When', type: 'calendarDate' }], rows: [{ id: 'stray', cells: { t: 'No date, marked', _kind: 'event' } }, { id: 'nodate', cells: { t: 'Someday' } }] };
+    await fs.writeFile(file, `${JSON.stringify(plain, null, 2)}\n`);
+    const rows = async (): Promise<any[]> => JSON.parse(await fs.readFile(file, 'utf8')).rows;
+    try {
+      const id = idOf(await run('amadeus_create_event', { calendar: 'Trips', title: 'Flight to Lisbon', start: '2026-09-01T08:05', kind: 'event' }));
+      expect((await rows()).find((r) => r.id === id).cells).toEqual({ t: 'Flight to Lisbon', d: '2026-09-01T08:05', _kind: 'event' });
+      await run('amadeus_edit_event', { calendar: 'Trips', eventId: id, title: 'Flight to Porto' });
+      expect((await rows()).find((r) => r.id === id).cells).toEqual({ t: 'Flight to Porto', d: '2026-09-01T08:05', _kind: 'event' });
+      const all = JSON.parse(await run('amadeus_list_events', { calendar: 'Trips' }));
+      // 带标记又没日期的那行照列;没标记又没日期的那行在这张表里哪儿都不显示,照旧不列
+      expect(all.map((e: any) => [e.id, e.start, e.kind, e.done])).toEqual([[id, '2026-09-01T08:05', 'event', undefined], ['stray', null, 'event', undefined]]);
+      expect(JSON.parse(await run('amadeus_list_calendars')).find((c: any) => c.name === 'Trips')).toEqual({ name: 'Trips', path: 'Trips.db', events: 1, columns: [{ name: 'Name', type: 'text' }, { name: 'When', type: 'calendarDate' }] });
+      // 用户后来加了勾选列:这一行仍是日程,不数进待办
+      const db = JSON.parse(await fs.readFile(file, 'utf8'));
+      db.columns.push({ id: 'k', name: 'Done', type: 'checkbox' });
+      await fs.writeFile(file, `${JSON.stringify(db, null, 2)}\n`);
+      expect(JSON.parse(await run('amadeus_list_events', { calendar: 'Trips' })).map((e: any) => [e.id, e.kind, e.done])).toEqual([[id, 'event', undefined], ['stray', 'event', undefined], ['nodate', undefined, false]]);
+      expect(JSON.parse(await run('amadeus_list_calendars')).find((c: any) => c.name === 'Trips')).toMatchObject({ events: 1, todoColumn: 'Done', undatedTodos: 1 });
+      await run('amadeus_edit_event', { calendar: 'Trips', eventId: id, kind: 'todo' });
+      expect((await rows()).find((r) => r.id === id).cells).toEqual({ t: 'Flight to Porto', d: '2026-09-01T08:05' });
+    } finally {
+      await fs.rm(file, { force: true });
+    }
+  }, 30_000);
+
+  it('the tool definitions say when to use which, and never tie it to having a time', () => {
+    const def = (n: string): any => (tools[n].definition as any).function;
+    for (const n of ['amadeus_create_event', 'amadeus_edit_event']) {
+      expect(def(n).parameters.properties.kind).toMatchObject({ type: 'string', enum: ['event', 'todo'] });
+      expect(def(n).parameters.required).not.toContain('kind');
+    }
+    expect(def('amadeus_create_event').description).toMatch(/kind: "event".*meeting.*class.*appointment.*flight.*off the user's to-do list/s);
+    expect(def('amadeus_create_event').description).toMatch(/Leave `kind` out.*not sure/s);
+    expect(def('amadeus_list_events').description).toMatch(/kind: "event".*not on the user's to-do list/s);
+    expect(def('amadeus_list_events').description).toContain('a to-do can have a date and a time too');
+    // 上一轮的话还在
+    expect(def('amadeus_create_event').description).toContain('`default: true`');
+    expect(def('amadeus_create_event').description).toContain('do not invent one');
+    expect(def('amadeus_list_calendars').description).toContain('`default: true`');
+  });
+});
+
 describe('cloud backend (execMode≠host → deps().brain.amadeus)', () => {
   // 内存版云 vault:seq 单调递增,baseSeq 不符 → 409 同款 AmadeusConflictError(带最新 seq+content)。
   const store = new Map<string, { content: string; seq: number }>();
@@ -439,6 +603,22 @@ describe('cloud backend (execMode≠host → deps().brain.amadeus)', () => {
     await expect(runCloud('amadeus_create_event', { title: '开发票' })).rejects.toThrow(/no checkbox column/);
     await expect(runCloud('amadeus_create_event', { title: '开发票', start: '2026-07-10', done: true })).rejects.toThrow(/no checkbox column/);
     expect(store.get('Cloud.db')).toEqual(before);
+  });
+
+  it('a cloud vault calendar: the mark is written, survives a 409 replay on create and on edit, and is listed', async () => {
+    conflictOnce = true; // 第一次写冲突 → 用服务端回带的内容重放
+    const id = /id=(\w+)/.exec(await runCloud('amadeus_create_event', { title: '组会', start: '2026-07-10T15:00', kind: 'event' }))![1];
+    expect(conflictOnce).toBe(false);
+    const cells = (): any => JSON.parse(store.get('Cloud.db')!.content).rows.find((r: any) => r.id === id).cells;
+    expect(cells()).toEqual({ c1: '组会', c2: '2026-07-10T15:00', _kind: 'event' });
+    conflictOnce = true;
+    await runCloud('amadeus_edit_event', { calendar: 'CloudCal', eventId: id, title: '周会' });
+    expect(conflictOnce).toBe(false);
+    expect(cells()).toEqual({ c1: '周会', c2: '2026-07-10T15:00', _kind: 'event' });
+    expect(JSON.parse(await runCloud('amadeus_list_events', { calendar: 'CloudCal' }))[0]).toMatchObject({ id, title: '周会', kind: 'event' });
+    await runCloud('amadeus_edit_event', { calendar: 'CloudCal', eventId: id, kind: 'todo' });
+    expect(cells()).toEqual({ c1: '周会', c2: '2026-07-10T15:00' });
+    await runCloud('amadeus_delete_event', { calendar: 'CloudCal', eventId: id });
   });
 
   // ── 画布覆盖闸(codex 2026-08-17:P1 fail-open + P3 正则越界)────────────────────
@@ -622,6 +802,54 @@ describe('cloud default calendar (brain.amadeus → /agent/human/CALENDAR.db)', 
     expect(writes[writes.length - 1].version).toBe('v2'); // 照旧按版本写回
     await runCloud('amadeus_edit_event', { calendar: 'My calendar', eventId: id, done: false });
     expect(human!.data.rows.find((r: any) => r.id === id).cells).toEqual({ name: '开发票' });
+  });
+
+  // 日程标记在云端默认日历上和本机一样:写、互转、改别的字段时留着、列出与计数
+  it('events on the cloud default calendar: the mark is written, kept, switched and left out of the to-dos', async () => {
+    const ev = /id=(\w+)/.exec(await runCloud('amadeus_create_event', { title: '组会', start: '2026-12-03T15:00', kind: 'event' }))![1];
+    const todo = /id=(\w+)/.exec(await runCloud('amadeus_create_event', { title: '交报告', start: '2026-12-03T15:00' }))![1];
+    const cells = (id: string): any => human!.data.rows.find((r: any) => r.id === id).cells;
+    expect(cells(ev)).toEqual({ name: '组会', date: '2026-12-03T15:00', _kind: 'event' });
+    expect(cells(todo)).toEqual({ name: '交报告', date: '2026-12-03T15:00' });
+    expect(human!.data.columns.map((c: any) => c.id)).toEqual(['name', 'date', 'done']);
+    await expect(runCloud('amadeus_create_event', { title: '哪天开个会', kind: 'event' })).rejects.toThrow(/an event needs a date/);
+    human!.data.rows.push({ id: 'stray', cells: { name: '没日期的日程', _kind: 'event' } }, { id: 'u', cells: { name: '续签护照' } });
+
+    expect(JSON.parse(await runCloud('amadeus_list_events')).map((e: any) => [e.title, e.kind, e.done])).toEqual([
+      ['组会', 'event', undefined],
+      ['交报告', undefined, false],
+      ['没日期的日程', 'event', undefined],
+      ['续签护照', undefined, false],
+    ]);
+    expect(JSON.parse(await runCloud('amadeus_list_calendars'))[0]).toMatchObject({ events: 2, undatedTodos: 1 });
+
+    await runCloud('amadeus_edit_event', { calendar: 'My calendar', eventId: ev, title: '周会', start: '2026-12-04T10:00' });
+    await runCloud('amadeus_edit_event', { calendar: 'My calendar', eventId: ev, done: true });
+    expect(cells(ev)).toEqual({ name: '周会', date: '2026-12-04T10:00', done: true, _kind: 'event' });
+    await runCloud('amadeus_edit_event', { calendar: 'My calendar', eventId: ev, kind: 'todo' });
+    expect(cells(ev)).toEqual({ name: '周会', date: '2026-12-04T10:00', done: true });
+    await runCloud('amadeus_edit_event', { calendar: 'My calendar', eventId: todo, kind: 'event' });
+    expect(cells(todo)).toEqual({ name: '交报告', date: '2026-12-03T15:00', _kind: 'event' });
+    await expect(runCloud('amadeus_edit_event', { calendar: 'My calendar', eventId: todo, start: '' })).rejects.toThrow(/an event needs a date/);
+    expect(cells(todo)).toEqual({ name: '交报告', date: '2026-12-03T15:00', _kind: 'event' });
+  });
+
+  it('409 on the cloud default calendar: the replayed create and edit keep the mark, and the other writer\'s marks stay', async () => {
+    human = { data: { ...cloudCal(), columns: [...cloudCal().columns, { id: 'k', name: 'Done', type: 'checkbox' }] }, version: 'v0', legacy: null };
+    const other = { id: 'other', cells: { n: 'From the web', d: '2026-12-01', _kind: 'event' } };
+    beforeWrite = () => {
+      beforeWrite = () => {};
+      human = { ...human!, data: { ...human!.data, rows: [other] }, version: 'other-1' };
+    };
+    const id = /id=(\w+)/.exec(await runCloud('amadeus_create_event', { title: 'Stand-up', start: '2026-12-03T15:00', kind: 'event' }))![1];
+    expect(writes.map((w) => w.version)).toEqual(['v0', 'other-1']);
+    expect(human!.data.rows).toEqual([other, { id, cells: { n: 'Stand-up', d: '2026-12-03T15:00', _kind: 'event' } }]);
+    beforeWrite = () => {
+      beforeWrite = () => {};
+      human = { ...human!, data: { ...human!.data, rows: human!.data.rows.map((r: any) => (r.id === 'other' ? { ...r, cells: { ...r.cells, k: true } } : r)) }, version: 'other-2' };
+    };
+    await runCloud('amadeus_edit_event', { calendar: 'Work', eventId: id, title: 'Weekly stand-up' });
+    expect(human!.data.rows).toEqual([{ id: 'other', cells: { ...other.cells, k: true } }, { id, cells: { n: 'Weekly stand-up', d: '2026-12-03T15:00', _kind: 'event' } }]);
   });
 
   it('a cloud default calendar without a checkbox column (an adopted web calendar) refuses undated rows and lists none', async () => {
