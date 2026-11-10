@@ -38,9 +38,10 @@
  *  row (written by amadeus_create_event `kind: "event"`); a row without it is a to-do as before. Not told apart by having a time.
  *   6. event  — 「帮我加个日程：明天下午三点开组会。」: one new row in the default calendar through a successful amadeus_create_event, and that
  *               row carries `_kind = "event"`. The start is reported (expected: tomorrow 15:00 on the engine's clock), not judged.
- *   7. remind — 「提醒我明天下午三点交报告。」: whatever lands in the calendar carries no `_kind`. With GPT 6 Luna on 2026-11-10 this wording
- *               went to manage_automation (a timed reminder) in 21 of 21 rounds and wrote no calendar row at all (12 rounds with the mark in
- *               the engine, 9 without): that outcome is reported and not red (red = a marked row, a row written around the tool, or nothing done).
+ *   7. remind — 「提醒我明天下午三点交报告。」: one new row through amadeus_create_event, and it carries no `_kind` (still a to-do).
+ *               ⚠️ Red on 2026-11-10 with or without the mark in the engine: GPT 6 Luna took this wording to manage_automation (a timed
+ *               reminder) in 21 of 21 rounds and wrote no calendar row at all, so the leg never got to look at the mark. Whether "remind me"
+ *               should land in the to-do list is a separate question; the leg stays as specified and says in its detail where the run went.
  *   8. timed  — 「帮我加一条待办：明天下午三点交报告。」: one new row through amadeus_create_event, and it carries no `_kind`: a to-do stays a
  *               to-do, time and all. This is the leg that catches "it has a time, so it is an event".
  *   9. todos  — new session 「我现在还有哪些待办？」 with the meeting and the report in the calendar at the same hour: amadeus_list_events, the
@@ -48,7 +49,7 @@
  *               Judged on the reply alone, which is printed; whether the tool result marked the row is reported.
  *              `--caltodo-kind-only` runs these four alone.
  *  Negative control for legs 6–9: the same legs on the engine without the mark (`--kind base`): leg 6 cannot pass there (nothing writes the
- *  cell), legs 7–8 pass trivially, leg 9 shows what the model does with a meeting that looks like any other unticked row.
+ *  cell), leg 8 passes trivially, leg 9 shows what the model does with a meeting that looks like any other unticked row.
  *  With GPT 6 Luna on 2026-11-10: leg 6 passed in 12 of 12 rounds with the mark and 0 of 9 without; leg 9 in 9 of 9 with it and 0 of 9
  *  without (the base listed the meeting among the to-dos every time); leg 8 in 9 of 9 on both. */
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -294,9 +295,8 @@ export async function calTodoLive({ run, rounds = 1, home, workspace, vault, clo
     // 6–9. the event mark: an event carries it, a reminder / a timed to-do does not, and the to-do list leaves the event out (local engine only)
     if (!cloud && !laterOnly) {
       const startOf = (r) => (typeof r?.cells?.date === 'string' && r.cells.date ? r.cells.date.split('/')[0] : null);
-      // one row through the calendar tool; `marked` = whether it must carry the event mark;
-      // `orReminder` = setting up a timed reminder (manage_automation) and writing no calendar row is also an answer to this wording
-      const addOne = async (key, msg, title, marked, name, orReminder = false) => {
+      // one row through the calendar tool; `marked` = whether it must carry the event mark
+      const addOne = async (key, msg, title, marked, name) => {
         const calBefore = await readCal();
         const notesBefore6 = await notes();
         const t0 = wallClock(tzOffsetMin);
@@ -314,22 +314,22 @@ export async function calTodoLive({ run, rounds = 1, home, workspace, vault, clo
         const newNotes6 = (await notes()).filter((p) => !notesBefore6.includes(p));
         const gaveUp = DENIES.test(ev.content || '') || (!row && CANNOT.test(ev.content || ''));
         const args = ev.toolArgs.filter((t) => t.name === 'amadeus_create_event').map((t) => { try { return JSON.parse(t.arguments).kind; } catch { return '?'; } });
-        const reminder = orReminder && added6.length === 0 && okCalls(ev, 'manage_automation') >= 1;
+        const reminder = added6.length === 0 && okCalls(ev, 'manage_automation') >= 1; // went to a timed reminder instead: said in the detail, still red
         leg(`${tag}${name}`,
-          !ev.error && (reminder || (viaTool && added6.length === 1 && !!row && kindOk && (!start || CAL_TIME.test(start)))) && restIntact
+          !ev.error && viaTool && added6.length === 1 && !!row && kindOk && (!start || CAL_TIME.test(start)) && restIntact
             && ev.toolCalls.length <= MAX_STEPS_LATER && !wrong6.length && !newNotes6.length && !gaveUp,
           ev.error || `${ev.toolCalls.length} 步(${ev.toolCalls.join('→') || '无'})${ev.toolCalls.length > MAX_STEPS_LATER ? ` ✗ 超过 ${MAX_STEPS_LATER}` : ''}`
-            + `;缺省日历新行 ${added6.length}:${added6.map((r) => JSON.stringify(r.cells)).join(' / ') || (reminder ? '没写日历,建了定时提醒(manage_automation,不计红)' : '✗ 没有')}${added6.length === 1 && !row ? ';✗ 标题对不上' : ''}`
+            + `;缺省日历新行 ${added6.length}:${added6.map((r) => JSON.stringify(r.cells)).join(' / ') || (reminder ? '✗ 没有(没写日历,建了定时提醒 manage_automation)' : '✗ 没有')}${added6.length === 1 && !row ? ';✗ 标题对不上' : ''}`
             + `${row ? (marked ? (kind === 'event' ? ';带日程标记' : `;✗ 没有日程标记(_kind=${JSON.stringify(kind)})`) : (kindOk ? ';没有日程标记(仍是待办)' : `;✗ 带了标记 _kind=${JSON.stringify(kind)}`)) : ''}`
             + `;create 传的 kind:${args.length ? args.map((k) => (k === undefined ? '没传' : JSON.stringify(k))).join(',') : '没调'}`
             + `${row ? (start ? (CAL_TIME.test(start) ? `;开始时间 ${start}${start === `${tomorrow}T15:00` ? '' : `(预期 ${tomorrow}T15:00,不计红)`}` : `;✗ 日期写法不对 ${start}`) : ';没带日期(不计红)') : ''}`
-            + `${viaTool || reminder ? '' : ';✗ 没有成功的 amadeus_create_event'}${restIntact ? '' : ';✗ 原有行被改'}${wrong6.length ? `;✗ 写到了 ${wrong6.join('/')}` : ''}`
+            + `${viaTool ? '' : ';✗ 没有成功的 amadeus_create_event'}${restIntact ? '' : ';✗ 原有行被改'}${wrong6.length ? `;✗ 写到了 ${wrong6.join('/')}` : ''}`
             + `${newNotes6.length ? `;✗ 新笔记 ${newNotes6.join(',')}` : ''}${gaveUp ? ';✗ 说做不到' : ''}`,
           ev);
         return row;
       };
       const meeting = await addOne('event', EVENT, /组会/, true, '「加个日程」带日程标记');
-      await addOne('remind', REMIND, /报告/, false, '「提醒我」不带日程标记', true);
+      await addOne('remind', REMIND, /报告/, false, '「提醒我」仍是待办(不带标记)');
       const report = await addOne('timed', TIMED, /报告/, false, '带时刻的待办仍是待办(不带标记)');
 
       // 9. a new session lists the to-dos: the report is one, the meeting is not

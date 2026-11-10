@@ -747,7 +747,7 @@ export const amadeusProvider: ToolProvider = {
       "List the user's calendar events and to-dos. A row with `kind: \"event\"` is an event (a meeting, a class, an appointment): " +
         "it is not on the user's to-do list, so leave it out when the user asks for their to-dos. " +
         'Every other row of a calendar that has a checkbox column is a to-do: `done` is that checkbox ' +
-        '(events and rows of a calendar without a checkbox column have no `done`). ' +
+        '(an event has no `done` unless it was ticked; rows of a calendar without a checkbox column never have one). ' +
         'Only `kind` tells the two apart: a to-do can have a date and a time too. A to-do may have no date: then `start` is null. ' +
         'Without from/to, undated to-dos are listed too (after the dated rows); with a range only dated rows in it are, unless include_undated is true. ' +
         "Returns each row's calendar, id, title, start, end, allDay, kind, done and other properties.",
