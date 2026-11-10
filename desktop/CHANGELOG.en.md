@@ -2,6 +2,10 @@
 
 <!-- English edition of CHANGELOG.md: same "## <version> (<date>)" headings, one bullet per Chinese bullet. Add both when releasing. -->
 
+## 2.14.2-beta.1 (2026-11-10)
+
+- **Web app**: The account menu shows your avatar, display name, membership badge, and daily and weekly AI quota again. It also gives you access to quota reset cards, membership and usage, your backpack, and membership upgrades.
+
 ## 2.14.1 (2026-11-10)
 
 This stable release includes all the changes from 2.14.1-beta.1, detailed in the next section.
