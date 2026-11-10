@@ -654,27 +654,28 @@ describe('B. 多窗口之间不丢、不互盖', () => {
     await wa.tick() // 合过,共享 = 红
     const wb = device(srv, { storage, mirror, lock: lockB, local: wa.vc() })
     await wb.tick()
-    // A 起一次慢 GET(读到红);B 改成蓝并写进去
+    // A 起一次慢 GET(读到红);用户在 A 里改成蓝(进共用的队列),B 把这条写进去并 ack
     const wa2 = device(srv, { storage, mirror, lock: lockA, io: slow.io, local: wa.vc() })
     const pa = wa2.tick()
     await slow.started
-    wb.act((v) => ({ ...v, colors: { 'a.db': '#0000ff' } }))
+    wa2.act((v) => ({ ...v, colors: { 'a.db': '#0000ff' } }))
     const pb = wb.tick()
     await flush()
     slow.release()
     await Promise.all([pa, pb])
     return { srv, mirror, wa2 }
   }
-  it('第 10 条(共享锁):A 迟到的 GET(红)不在 B 写了蓝之后投影到镜像', async () => {
-    const { srv, mirror } = await blueRed(mutex)
+  it('第 10 条(共享锁):A 迟到的 GET(红)不在 B 写了蓝并 ack 之后投影到 A 的内存和镜像', async () => {
+    const { srv, mirror, wa2 } = await blueRed(mutex)
     expect(srv.shared().colors['a.db']).toBe('#0000ff')
+    expect(wa2.vc()?.colors['a.db']).toBe('#0000ff')
     expect(mirror.get(R)?.colors['a.db']).toBe('#0000ff')
   })
   it('第 10 条(两个窗口之间没有锁):靠「本机最后写成」标记,A 发现 B 写过就丢掉这次读', async () => {
     const { srv, mirror, wa2 } = await blueRed(() => noLock)
     expect(srv.shared().colors['a.db']).toBe('#0000ff')
     expect(mirror.get(R)?.colors['a.db']).toBe('#0000ff')
-    expect(wa2.sync.isShared(R)).toBe(false) // 这次过时的读被丢掉了,没投影(下一轮重读)
+    expect(wa2.vc()?.colors['a.db']).toBe('#0000ff') // 这次过时的读被丢掉了,没把红投影到 A 的内存(下一轮重读)
     await wa2.tick()
     expect(wa2.vc()?.colors['a.db']).toBe('#0000ff')
   })
