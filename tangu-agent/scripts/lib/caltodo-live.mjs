@@ -40,7 +40,7 @@
  *               row carries `_kind = "event"`. The start is reported (expected: tomorrow 15:00 on the engine's clock), not judged.
  *   7. remind — 「提醒我明天下午三点交报告。」: one new row through amadeus_create_event, and it carries no `_kind` (still a to-do).
  *               ⚠️ Red on 2026-11-10 with or without the mark in the engine: GPT 6 Luna took this wording to manage_automation (a timed
- *               reminder) in 21 of 21 rounds and wrote no calendar row at all, so the leg never got to look at the mark. Whether "remind me"
+ *               reminder) in 24 of 24 rounds and wrote no calendar row at all, so the leg never got to look at the mark. Whether "remind me"
  *               should land in the to-do list is a separate question; the leg stays as specified and says in its detail where the run went.
  *   8. timed  — 「帮我加一条待办：明天下午三点交报告。」: one new row through amadeus_create_event, and it carries no `_kind`: a to-do stays a
  *               to-do, time and all. This is the leg that catches "it has a time, so it is an event".
@@ -50,8 +50,8 @@
  *              `--caltodo-kind-only` runs these four alone.
  *  Negative control for legs 6–9: the same legs on the engine without the mark (`--kind base`): leg 6 cannot pass there (nothing writes the
  *  cell), leg 8 passes trivially, leg 9 shows what the model does with a meeting that looks like any other unticked row.
- *  With GPT 6 Luna on 2026-11-10: leg 6 passed in 12 of 12 rounds with the mark and 0 of 9 without; leg 9 in 9 of 9 with it and 0 of 9
- *  without (the base listed the meeting among the to-dos every time); leg 8 in 9 of 9 on both. */
+ *  With GPT 6 Luna on 2026-11-10: leg 6 passed in 15 of 15 rounds with the mark and 0 of 9 without; leg 9 in 12 of 12 with it and 0 of 9
+ *  without (the base listed the meeting among the to-dos every time); leg 8 in 12 of 12 with it and 9 of 9 without; leg 7 in none on either. */
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 
