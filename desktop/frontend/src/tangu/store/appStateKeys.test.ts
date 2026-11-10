@@ -11,7 +11,7 @@ const EXPECTED = [
   'authInfo', 'boot', 'branchFromMessage', 'cfg', 'cfgLoaded', 'channelWorkspaces', 'clearDraftRefs',
   'clearJumpTarget', 'clearPendingChatQuote', 'clearSteerRestore', 'cloneGitProject', 'closeAchievements',
   'closeFeedback', 'closeMarket', 'closeSettings', 'cloudProjects', 'compact', 'compactingBySession',
-  'configBySession', 'connMessage', 'connState', 'connect', 'connectOnce', 'createInWorkspace', 'ctxInfoBySession',
+  'configBySession', 'connMessage', 'connState', 'connect', 'connectOnce', 'continueRun', 'createInWorkspace', 'ctxInfoBySession',
   'decideApproval', 'defaultAgentSlug', 'defaultWorkspace', 'defaultWsDir', 'deleteSession', 'deskAutoShow',
   'deskBySession', 'deskLiveClear', 'deskLiveSync', 'deskPresent', 'deskShowFile', 'desktopConfig', 'desktopMode',
   'detailWsKey', 'discardFailed', 'dismissUpdate', 'draftRefs', 'editUserMessage', 'engineCaps', 'engines', 'ensureEngineCaps',

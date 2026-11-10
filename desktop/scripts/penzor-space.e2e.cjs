@@ -319,6 +319,8 @@ function startFakeCloud() {
 
 async function main() {
   if (PACKAGED_EXE && process.env.GITHUB_ACTIONS !== 'true') throw Error('Packaged startup changes OS integrations; run only on a dedicated GitHub Actions runner')
+  const expectedVersion = process.env.PENZOR_EXPECT_VERSION
+  if (PACKAGED_EXE && !expectedVersion) throw Error('Packaged acceptance requires PENZOR_EXPECT_VERSION')
   let launchRoot = process.env.PENZOR_SOURCE_DESKTOP || ROOT
   if (PACKAGED_EXE && process.env.PENZOR_FIXTURE_SIGNING === '1') throw Error('Packaged acceptance must retain the production trust key')
   if (process.env.PENZOR_FIXTURE_SIGNING === '1') {
@@ -349,6 +351,9 @@ async function main() {
     for (const f of ['remotesync.json', 'remotesync.dev.json']) fs.writeFileSync(path.join(d, f), JSON.stringify({ backend: 'penzor', penzor: { vault: 'WMOSv11' } }, null, 2))
     fs.writeFileSync(path.join(d, 'tangu-desktop-config.json'), JSON.stringify({ mode: 'external', backendUrl: stub.url, token: 'mock', cloudUrl: cloud.url }))
   }
+  // Exercise the signed upgrade from the installer. Otherwise first-boot prefetch can
+  // install a newer npm release before seeding, making the byte check depend on the live registry.
+  if (PACKAGED_EXE) fs.writeFileSync(path.join(userData, 'core-prefetch-version'), expectedVersion)
   const isolatedEnv = PACKAGED_EXE ? { HOME: home, USERPROFILE: home, APPDATA: path.join(home, 'AppData', 'Roaming'), LOCALAPPDATA: path.join(home, 'AppData', 'Local') } : {}
   // Windows resolves app.getPath('appData') before ready; a redirected shell folder must already exist.
   for (const dir of Object.values(isolatedEnv)) fs.mkdirSync(dir, { recursive: true })
@@ -371,7 +376,7 @@ async function main() {
   try {
     const runtime = await app.evaluate(({ app }) => ({ packaged: app.isPackaged, version: app.getVersion(), resources: process.resourcesPath, userData: app.getPath('userData') }))
     check('运行的是指定的真实安装包或源码构建', runtime.packaged === !!PACKAGED_EXE, JSON.stringify(runtime))
-    if (process.env.PENZOR_EXPECT_VERSION) check('桌面版本与候选版本一致', runtime.version === process.env.PENZOR_EXPECT_VERSION)
+    if (expectedVersion) check('桌面版本与候选版本一致', runtime.version === expectedVersion)
     fs.writeFileSync(path.join(SHOTS, 'runtime.json'), JSON.stringify(runtime, null, 2))
     const win = await app.firstWindow({ timeout: 120_000 })
     win.setDefaultTimeout(10_000)
