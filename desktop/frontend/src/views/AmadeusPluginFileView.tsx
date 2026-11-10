@@ -94,12 +94,18 @@ export function AmadeusPluginFileView({ leaf }: ViewProps) {
     // 事件从挂载起就听着:插件还没订阅时到的落点先存着(只留最后一个),订阅时补发 —— 阅读器加载中连点两条引用,
     // 后点的那条不能丢(内置阅读器的 pendingGoto 同理,e2e:pdfcite 的 C5)。补发放到微任务里:插件多半在 mount
     // 里先订阅、后建阅读器,当场回调会打在还没建好的东西上。
-    let pendingGoto = gotoTarget(leaf.params.page, leaf.params.q)
+    let initialGoto = gotoTarget(leaf.params.page, leaf.params.q)
+    let pendingGoto = initialGoto
     const gotoSubs = new Set<(target: FileGotoTarget) => void>()
     const deliverGoto = (): void => {
       const target = pendingGoto
       if (!target || !gotoSubs.size) return
       pendingGoto = null
+      if (initialGoto) {
+        initialGoto = null
+        // The link has been handed to the plugin. Space snapshots should restore its tab without replaying it.
+        leaf.setParams({ ...leaf.params, page: undefined, q: undefined })
+      }
       for (const cb of [...gotoSubs]) {
         try { cb(target) } catch (e) { console.error('[amadeus] 插件 onGoto 回调抛错', e) }
       }
