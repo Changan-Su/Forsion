@@ -104,7 +104,7 @@ export function AmadeusPluginFileView({ leaf }: ViewProps) {
       if (initialGoto) {
         initialGoto = null
         // The link has been handed to the plugin. Space snapshots should restore its tab without replaying it.
-        leaf.setParams({ page: undefined, q: undefined })
+        leaf.setParams({ ...leaf.params, page: undefined, q: undefined })
       }
       for (const cb of [...gotoSubs]) {
         try { cb(target) } catch (e) { console.error('[amadeus] 插件 onGoto 回调抛错', e) }
