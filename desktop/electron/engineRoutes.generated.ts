@@ -102,6 +102,8 @@ export const ENGINE_ROUTES: readonly EngineRoute[] = [
   { method: 'POST', path: '/agent/human/:file/undo', access: 'deny-remote', src: 'routes/human.ts', why: 'host human folder undo' },
   { method: 'GET', path: '/agent/human/CALENDAR.db', access: 'deny-remote', src: 'routes/human.ts', why: 'host default calendar (human/CALENDAR.db)' },
   { method: 'PUT', path: '/agent/human/CALENDAR.db', access: 'deny-remote', src: 'routes/human.ts', why: 'host default calendar write' },
+  { method: 'GET', path: '/agent/human/Settings/:file', access: 'deny-remote', src: 'routes/human.ts', why: 'host settings files that follow the account (human/Settings/<name>.db)' },
+  { method: 'PUT', path: '/agent/human/Settings/:file', access: 'deny-remote', src: 'routes/human.ts', why: 'host settings file write' },
   { method: 'GET', path: '/agent/human/SOUL.md/entries', access: 'deny-remote', src: 'routes/human.ts', why: 'host portrait entries (human/SOUL.md; the route itself also refuses remote origin)' },
   { method: 'POST', path: '/agent/human/SOUL.md/entries', access: 'deny-remote', src: 'routes/human.ts', why: 'host portrait entry write (receipt undo; the route itself also refuses remote origin)' },
   { method: 'GET', path: '/agent/human/SOUL.md/move', access: 'deny-remote', src: 'routes/human.ts', why: 'host portrait move card (the route itself also refuses remote origin)' },

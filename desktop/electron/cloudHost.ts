@@ -37,6 +37,8 @@ export interface CloudHost {
     claim(owned:boolean,expectedAccount?:string): Promise<void>
     changed(expectedAccount?:string): Promise<void>
     merge(path:string,ours:string,base:string|null,theirs:string): {content:string;conflict:boolean}|null
+    /** 11-10 起:merge() 按自己规则合并的可选族(contentSyncHost.CONTENT_MERGE_FAMILIES,现在是 ['settings'])。老宿主没有 → Extend 不碰这些族。 */
+    mergeFamilies?: readonly string[]
     withWriteLock(path:string|string[],commit:()=>void): Promise<void>
     trash(path:string): Promise<void>
     /** 2.13.8 起:Agent 文件夹(agents/、human/)的墓碑投影与旧同步影子(contentSyncHost.agentContentHooks)。老宿主没有 → 没有投影、没有基线。 */

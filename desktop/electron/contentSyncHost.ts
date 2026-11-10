@@ -18,6 +18,11 @@ export function contentSyncOwned(account:string|null):boolean {
   const name=createHash('sha256').update(account).digest('hex')+'.json'
   try{return JSON.parse(readFileSync(join(forsionHomeDir(),'content-sync',name),'utf8')).owned===true}catch{return false}
 }
+/** 宿主对新同步(Forsion Extend contentSync)的能力声明:这些可选族 merge() 会按它们自己的规则合并(契约 agentSyncRules)。
+ *  'settings' = 随账号走的设置文件 human/Settings/<name>.db 走 mergeSettingsDb(恒有结果、不出冲突副本、本机独有的行不丢)。
+ *  Extend 走 npm 单独更新、会跑在老桌面上:只有看到这里列了某个族才碰它;老宿主的 contentSync 里没有这个成员 = 没声明 = 那个族整个不动。
+ *  只增不改:哪天规则换了不兼容的写法,换一个新名字,别改旧名字的意思。 */
+export const CONTENT_MERGE_FAMILIES:readonly string[]=Object.freeze(['settings'])
 /** 新同步两边都改了:agents/、human/ 走和旧同步同一份规则(contracts/agentSyncRules.ts);memoryBase 给了的话,
  *  Agent 的记忆(和记忆详情)合完再按本机墓碑滤一遍(第一次见面取并集时,别把这台忘掉的事实从对方那份带回来、再传上云)。 */
 export function mergeSyncContent(path:string,ours:string,base:string|null,theirs:string,memoryBase?:string):{content:string;conflict:boolean}|null {
