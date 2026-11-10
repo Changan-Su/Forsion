@@ -19,13 +19,15 @@
  *   npm run live:harness -- --only harnessopen --harness-ui   # 工作笔记放开写入 + 真 Electron 里的更新卡与撤销(卡片从真模型的回执还原);先构建 desktop
  *   npm run live:harness -- --only projmem                  # 记忆分项目级 / 全局级(10-04):落点、同项目不同 agent 共用、跨项目隔离(改 services/projectMemory.ts / remember 的 scope 后跑)
  *   npm run live:harness -- --only projkind [--projkind-philosophy]   # 判官的项目候选按类别收(11-03):讲课式对话里「讲到哪了」和讲义内容不进项目记忆,沿用符号那类要求照收(只记不判);负对照 = 在没有这次改动的旧代码上跑同一个场景(--kind base),进度 / 内容会进去
- *   npm run live:harness -- --only projcompact              # 项目记忆写满时的压缩(10-05):前台记一条触发压缩 → 现行的留着、带网址的不动、去掉的原句能恢复;后台复盘那条路量到几次记几次(改 services/projectMemoryCompact.ts / remember 写满那条路 / localHistorian 的项目记忆写入后跑);`--compact-rounds N` 前台那条腿另外加跑 N 次、出成功率;引擎环境变量 `TANGU_COMPACT_DEBUG=1` 把模型的原样回答记进 engine.log
+ *   npm run live:harness -- --only projcompact              # 项目记忆写满时的整理(10-05;11-09 起写满不当场压缩:照写、回执 organizing,后台先挪进详情再丢过时的):前台记一条 → 等后台整理收场 → 现行的留着(常驻或详情)、带网址的不动、一句不丢、能整次撤销;后台复盘那条路量到几次记几次(改 services/projectMemoryCompact.ts / remember 写满那条路 / localHistorian 的项目记忆写入后跑);`--compact-rounds N` 前台那条腿另外加跑 N 次、出成功率;引擎环境变量 `TANGU_COMPACT_DEBUG=1` 把模型的原样回答记进 engine.log
  *   npm run live:harness -- --only rename                   # 改名即生效:同会话先答旧名,PATCH 改名+改简介后下一轮须用新名(改身份注入/人格组装后跑)
  *   npm run live:harness -- --only selfmodel --rounds 5 --model xai/grok-4.7   # 主体性探针(10-02):自己的资料库 vs 用户目录 / 提醒真落盘 / 教训落哪个存储 / 自我认知,按轮出通过率;改 Personal Folder 段 / 记忆·协作·工作笔记段后跑
  *   npm run live:harness -- --only selfschedule             # 自己的日程 vs 用户的日历(10-02):人设 agent 答应的约定进 SCHEDULE.db、用户日历不动;负对照「记进我的日历」须走 amadeus。改 Personal Folder 段 / 日程·日历工具措辞后跑
  *                                                           #   额度用完时先跑离线接线证据:node scripts/rename-identity.smoke.mjs(假模型端点,截获系统提示词)
  *   npm run live:harness -- --only caltodo [--calendar-plugin <Calendar 插件检出>] [--rounds 3]   # 用户的待办(11-07):「帮我添加两条待办」几步之内进默认日历、没日期没勾、不写笔记,再列出、勾掉;
  *                                                           #   --calendar-plugin 放进 calendar-todos 技能(桌面形态)。云端 run 用 --only cloudtodo(同 cloudcal 那样指 server scripts/calendar-local.mts)。改日历 / 待办工具定义后跑
+ *                                                           #   本机那份还有第四、五条腿:「今天晚一点…」须进缺省那本(三本日历 + 界面命令面)、时间不早于现在;点名一个已经过去的钟点时不许悄悄写进去;引擎时钟钉在晚上(--later-hour <0-23|off>,缺省 22;只在单跑 caltodo 时钉),
+ *                                                           #   --caltodo-later-only 只跑这两条(负对照用)。改日历工具的缺省日历标记 / 过去时间提醒、list_ui_commands 的返回后跑
  *   npm run live:harness -- --only chat,tool,muse            # 子集(historian→dream→recall 三连有先后依赖)
  *   npm run live:harness -- --only mask [--mask-off]          # 发给模型前脱敏(10-28,借鉴 magpie 方案 1):读 .env → run_bash 带 key 的 curl 打台架里的回显服务 → 问模型看到的值是不是 sk-proj- 开头、是不是占位符。
  *   npm run live:harness -- --only filechange               # 变动感知(11-07):读过的文件被用户改了 → 下一轮开头 / run 内续调前都带 diff 告诉模型,且不拿旧副本覆盖。改 tools/readState.ts / tools/fileChangeNotice.ts / agentLoop 那两处注入后跑;负对照 TANGU_FILE_CHANGE_NOTICE=off(①② 须红)
@@ -232,8 +234,11 @@ import { pageInstructionsLive } from './lib/page-instructions-live.mjs';
 import { realUseLive } from './lib/real-use-live.mjs';
 import { humanRealLive } from './lib/human-real-live.mjs';
 import { humanPortraitLive } from './lib/human-portrait-live.mjs';
+import { tiersLive } from './lib/tiers-live.mjs';
+import { projTiersLive } from './lib/projtiers-live.mjs';
 import { portraitMoveLive } from './lib/portrait-move-live.mjs';
 import { importLive } from './lib/import-live.mjs';
+import { standinLive, writeChannelFixture as writeStandinChannel } from './lib/standin-live.mjs';
 import { dreamSeedLive } from './lib/dream-seed-live.mjs';
 import { layersLive } from './lib/layers-live.mjs';
 import { accountLive, startFakeCloud } from './lib/account-live.mjs';
@@ -284,6 +289,8 @@ KEYS.push('musereview');
 KEYS.push('realuse');
 KEYS.push('humanreal');
 KEYS.push('humanportrait');
+KEYS.push('tiers');
+KEYS.push('projtiers');
 KEYS.push('portraitmove');
 KEYS.push('import');
 KEYS.push('projmem');
@@ -354,6 +361,7 @@ OPT_IN.add('visualfigures');
 for (const key of ['intelligentplan', 'intelligentmedia', 'intelligentplain']) { OPT_IN.add(key); KEYS.push(key); }
 OPT_IN.add('intelligentusers'); KEYS.push('intelligentusers');
 OPT_IN.add('intelligentcards'); KEYS.push('intelligentcards');
+OPT_IN.add('iuireading'); KEYS.push('iuireading');
 OPT_IN.add('visualauto'); KEYS.push('visualauto'); // --only visualauto:消息里不点名图 / 卡时模型自己出不出卡(8 个 run);改 sketch.ts 的本轮信号 / 两段提示后跑
 OPT_IN.add('uileak'); KEYS.push('uileak'); // --only uileak:模型把卡片的文档 JSON 写进正文时,引擎让它改成真的调用工具(3 个 run);改 agentLoop 的文档自愈后跑
 OPT_IN.add('iuicalc'); KEYS.push('iuicalc'); // --only iuicalc:计算层(intelligent-ui.v2)该算的卡走原生文档、带 state / derived,不再落到 sketch;两条反例不该出计算卡(6 正 + 2 反 = 8 个 run);改 v2 说明段 / 工具描述 / 本轮信号后跑
@@ -396,6 +404,8 @@ OPT_IN.add('webpublishreal'); KEYS.push('webpublishreal');
 OPT_IN.add('webcardsreal'); KEYS.push('webcardsreal');
 OPT_IN.add('realuse'); // 真实使用模拟:每轮 12 个 run(--rounds),--usage-db 再加一个 Muse 周期;单独跑。
 OPT_IN.add('suggest'); // 三个 run + 三次建议调用;只在动 services/promptSuggestion.ts(提示词 / 前缀对齐)或主循环收尾处的快照时才有信息量。
+OPT_IN.add('projtiers'); // 项目记忆分层(11-09 2b):超线的项目记忆整理后,线外的约定 / 来龙去脉问得出;只在动项目记忆 / 写满压缩 / 召回时才有信息量。
+OPT_IN.add('tiers'); // 记忆分层(11-09):超线的画像 / Agent 记忆整理后,线外的事问得出;只在动记忆分层 / 召回 / 整理时才有信息量。
 OPT_IN.add('humanportrait'); // 画像(human/SOUL.md)写没写:每轮 4 个 run + 另一个 agent 读一次;只在动 remember 的 person 档 / 画像注入时才有信息量。
 OPT_IN.add('import'); // 从其他 AI 导入(11-03):后台模型拆条 / 归位 / 拦截;不跑对话。动了 services/externalImport 的提示 / 后处理才有信息量。--import-neg = 负对照
 OPT_IN.add('portraitmove'); // 搬家的后台模型挑得准不准(10-30):不跑对话,只有人点的那几个接口;动了 agents/portraitMove.ts 的提示才有信息量。
@@ -403,10 +413,12 @@ OPT_IN.add('humanreal'); // 协作说明写成什么样:每轮 6 个 run + 1 次
 OPT_IN.add('secretenv'); KEYS.push('secretenv'); // --only secretenv:一个 run;插件经 secret_env 交给 run_bash 的值,脚本拿得到、模型看不到(动 sandbox/runSecretEnv.ts 时跑)
 OPT_IN.add('mask'); KEYS.push('mask'); // 两个 run + 本地回显服务;只在动 llm/outboundMask.ts(发给模型前脱敏)时才有信息量。
 OPT_IN.add('filechange'); KEYS.push('filechange'); // 四个 run;只在动 tools/readState.ts 的变动感知 / tools/fileChangeNotice.ts / agentLoop 的两处注入时才有信息量。负对照:TANGU_FILE_CHANGE_NOTICE=off
+OPT_IN.add('continuegen'); KEYS.push('continuegen'); // 注入:真 Codex 回答写到一半在流里报额度用完(lib/llm-fault-preload.mjs cut_after),再发 <turn_resume> 接着写;动失败落库 / 「继续生成」时跑。自带负对照腿
 OPT_IN.add('streamoverflow'); KEYS.push('streamoverflow'); // 注入:真 Codex 路径上流里回 context_length_exceeded(lib/llm-fault-preload.mjs);只在动流内报错归类 / agentLoop 的超长压缩重试时跑
 OPT_IN.add('foreignreasoning'); KEYS.push('foreignreasoning'); // 注入:回灌的加密推理被拒(400 invalid_encrypted_content);只在动 historyReplay 的推理绑定 / agentLoop 的拿掉重发时跑
 OPT_IN.add('relay'); KEYS.push('relay'); // 假提供方只回 429 usage_limit_reached;只在动 llm/quotaRelay.ts / agentLoop 的接力分支时跑。--relay-mode auto|ask|none
 KEYS.push('orgchat'); OPT_IN.add('orgchat'); // --only orgchat --org-plugin <bundle>: a multi-peer channel plugin brings its own legs in verify/orgchat.live.mjs
+OPT_IN.add('standin'); KEYS.push('standin'); // 分身(11-09):多联系人假通道 × 本体的私事;七个 run。动通道选 Agent / 分身权限域 / 文件读根 / 委派闸时跑;--kind neg 在旧代码上跑应当漏
 OPT_IN.add('appref'); // 四个 run;只在动 APP_REF_SECTION(应用 / 窗口引用那一段提示词)时才有信息量。
 const NEEDS = { dream: ['historian'], recall: ['historian', 'dream'] }; // 记忆链三连有先后依赖;其余场景自包含
 KEYS.push('marketplace', 'marketplacechat');
@@ -986,7 +998,7 @@ if (argv.includes('--selftest')) {
 
 const OUT = resolve(opt('out', process.env.TANGU_LIVE_OUT || join(tmpdir(), `tangu-live-${stamp}-${randomUUID().slice(0, 6)}`)));
 // streamoverflow / foreignreasoning:引擎以 --import 载入 lib/llm-fault-preload.mjs,场景往规则文件里写一条,真 Codex 路径上命中的请求换成厂商原文报错
-const FAULT_FILE = ONLY.has('streamoverflow') || ONLY.has('foreignreasoning') ? join(OUT, 'llm-fault.json') : null;
+const FAULT_FILE = ONLY.has('streamoverflow') || ONLY.has('foreignreasoning') || ONLY.has('continuegen') ? join(OUT, 'llm-fault.json') : null;
 // 每次布置规则先清掉上一次的记录:同一次台架里 streamoverflow 与 foreignreasoning 共用这份 .log,不清的话后跑的那个会把前一个的「被拒 / 放行」也算进来
 const armFault = (rule) => { rmSync(`${FAULT_FILE}.log`, { force: true }); writeFileSync(FAULT_FILE, JSON.stringify(rule)); };
 const disarmFault = () => rmSync(FAULT_FILE, { force: true });
@@ -1080,6 +1092,14 @@ const SELF_SCHED_CAL = join(SELF_SCHED_VAULT, 'Calendar.db');
 // 带 --calendar-plugin <Calendar 插件检出> 时把它的 manifest + skills/ 放进隔离共享域的 plugins/forsion-calendar(= 桌面装了插件的样子)。
 if (ONLY.has('caltodo')) mkdirSync(SELF_SCHED_VAULT, { recursive: true });
 const CALTODO_SKILL = ONLY.has('caltodo') ? plantCalendarSkill({ src: opt('calendar-plugin', ''), shared }) : null;
+// caltodo 的「今天晚一点」那条腿:随手填的晚上八点只有在夜里才算「已经过去」,白天跑这条腿在旧代码上也过。所以把引擎进程的本地时钟
+// 钉到晚上(缺省 22 点档,--later-hour <0-23> 换一档,--later-hour off 不钉):只换 TZ,日期、get_datetime、过去时间的判断都跟着走。
+// Etc/GMT±N 是 POSIX 记法,符号和日常写法相反(Etc/GMT-3 = UTC+3)。
+// ⚠️只在单跑 caltodo 时钉:引擎是各场景共用的一个进程,和别的场景一起跑时换了它的钟,那些按台架自己的钟算时段的场景会无故变红。
+const LATER_OFFSET_H = ONLY.size === 1 && ONLY.has('caltodo') && opt('later-hour', '22') !== 'off'
+  ? (() => { let o = (((Number(opt('later-hour', '22')) - new Date().getUTCHours()) % 24) + 24) % 24; if (o > 14) o -= 24; return o; })()
+  : null;
+const LATER_TZ = LATER_OFFSET_H == null ? null : `Etc/GMT${LATER_OFFSET_H > 0 ? '-' : '+'}${Math.abs(LATER_OFFSET_H)}`;
 if (ONLY.has('selfschedule') || ONLY.has('selfmodel')) {
   mkdirSync(SELF_SCHED_VAULT, { recursive: true });
   writeFileSync(SELF_SCHED_CAL, JSON.stringify({ version: 1, name: '我的日历', columns: [{ id: 'c1', name: '名称', type: 'text' }, { id: 'c2', name: '日期', type: 'calendarDate' }], rows: [{ id: 'r1', cells: { c1: '既有会议', c2: '2026-07-08T14:00' } }] }, null, 2));
@@ -1253,6 +1273,8 @@ if (ONLY.has('orgchat')) {
     cpSync(join(ORG_PLUGIN, 'tangu-plugins', name), join(home, 'plugins', name), { recursive: true, filter: (p) => !p.split('/').includes('node_modules') });
   }
 }
+// standin(11-09):多联系人的假通道插件(文件收发),引擎起来时装载;场景见 lib/standin-live.mjs。
+const STANDIN_CHAN = ONLY.has('standin') ? writeStandinChannel(home, join(OUT, 'standin-channel')) : null;
 // plugin(10-02):隔离 home 的插件目录里放一个夹具引擎插件,它唯一的工具回一个随机标记(引擎起来时装载)。
 const PLUGIN_MARKER = `PLUG-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
 if (ONLY.has('plugin')) {
@@ -1468,6 +1490,7 @@ const child = spawn(process.execPath, [
   // cumusic / cusend:Jev 每次请求的图和回答落进产物目录(不含密钥),场景跑完挪进自己的 <key>-evidence/jev/
   ...(CU_JEV ? { TANGU_JEV_EVIDENCE_DIR: join(OUT, JEV_REQUESTS_DIR) } : {}),
   ...(ONLY.has('selfschedule') || ONLY.has('selfmodel') || ONLY.has('caltodo') ? { FORSION_AMADEUS_VAULT: SELF_SCHED_VAULT } : {}),
+  ...(LATER_TZ ? { TZ: LATER_TZ } : {}),
   // P1-K1 remotecaller:unitWeb 盖章的密钥(桌面主进程每次启动生成,这里随机一枚);只在跑这个场景时注入,别的场景环境不变
   ...(ONLY.has('remotecaller') || ONLY.has('remotesession') ? { TANGU_REMOTE_MARK_SECRET: REMOTE_MARK } : {}),
   // P1-K2 estop:桌面主进程独占的锁文件(隔离 home 下);只在跑这个场景时注入 —— 别的场景的引擎没有桌面锁概念(env 没设 = 未锁)
@@ -2195,11 +2218,62 @@ try {
   await scenario('humanportrait', `humanportrait 画像:称呼 / 在做的事进 human/SOUL.md、旧说法被取代 ×${SELF_ROUNDS} 轮`, () =>
     humanPortraitLive({ run, api, workspace, OUT, MODEL, AGENT_CONFIG, rounds: SELF_ROUNDS }));
 
+  // ── 记忆分层:常驻 + 详情 + 召回(11-09);设计见 lib/tiers-live.mjs ──
+  await scenario('tiers', `tiers 记忆分层:超线的画像 / 记忆整理后,线外的事问得出 ×${SELF_ROUNDS} 轮`, () =>
+    tiersLive({ run, api, OUT, MODEL, AGENT_CONFIG, rounds: SELF_ROUNDS }));
+
+  // ── 项目记忆分层:常驻 + 详情 + 召回(11-09 2b);设计见 lib/projtiers-live.mjs ──
+  await scenario('projtiers', `projtiers 项目记忆分层:超线的项目记忆整理后,线外的约定 / 来龙去脉问得出 ×${SELF_ROUNDS} 轮`, () =>
+    projTiersLive({ run, api, OUT, MODEL, home, workspace, rounds: SELF_ROUNDS }));
+
   // ── 搬家:后台模型从 agent 记忆里挑「关于这个人」的条目、写成第二人称(10-30);设计见 lib/portrait-move-live.mjs ──
   await scenario('portraitmove', `portraitmove 搬家:该挑的全挑、对 Agent 的要求和项目的事一条不挑 ×${SELF_ROUNDS} 轮`, () =>
     portraitMoveLive({ api, OUT, MODEL, home, rounds: SELF_ROUNDS }));
 
   // ── 从其他 AI 导入:拆条 / 归位 / 拦截 / 合并,导入后整次撤销(11-03);设计见 lib/import-live.mjs ──
+  // 分身(11-09):通道里的 run 不是台架起的 —— 跟着引擎自己起的 run 的事件流走到收尾(有审批就批,= 通道里的人点了批准,最坏情况)。
+  const followRun = async (runId, timeoutMs, { approve = false } = {}) => {
+    const ev = { runId, toolCalls: [], toolResults: [], subTools: [], approvals: 0, content: '', error: null, done: false };
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), timeoutMs);
+    try {
+      const res = await fetch(`${base}/agent/runs/${runId}/events`, { headers: { Authorization: `Bearer ${TOKEN}` }, signal: ac.signal });
+      if (!res.ok || !res.body) { ev.error = `events ${res.status}`; return ev; }
+      let buf = '';
+      outer: for await (const chunk of res.body) {
+        buf += Buffer.from(chunk).toString('utf8');
+        let i;
+        while ((i = buf.indexOf('\n\n')) >= 0) {
+          const frame = buf.slice(0, i); buf = buf.slice(i + 2);
+          for (const line of frame.split('\n')) {
+            if (!line.startsWith('data:')) continue;
+            let e; try { e = JSON.parse(line.slice(5).trim()); } catch { continue; }
+            const p = e.payload || {};
+            if (e.type === 'tool_call') ev.toolCalls.push(p.name || '?');
+            else if (e.type === 'tool_result') { const full = String(p.result || ''); ev.toolResults.push({ id: p.id, name: p.name || '?', isError: !!p.isError, full }); }
+            else if (e.type === 'subagent' && p.phase === 'tool') ev.subTools.push({ name: p.name || '?', isError: !!p.isError, preview: String(p.preview || '') });
+            else if (e.type === 'approval_request') {
+              ev.approvals += 1;
+              const id = p.approvalId || p.id || p.approval_id;
+              if (id) await api(`/agent/runs/${p.runId || runId}/approvals/${id}`, { method: 'POST', body: JSON.stringify({ action: approve ? 'approve' : 'reject' }) }).catch(() => {});
+            } else if (e.type === 'inquiry_request') {
+              const id = p.inquiryId || p.id;
+              if (id) await api(`/agent/runs/${p.runId || runId}/inquiries/${id}`, { method: 'POST', body: JSON.stringify({ answer: '(台架无人值守,没有人能回答这个问题。)' }) }).catch(() => {});
+            } else if (e.type === 'done') { ev.done = true; ev.content = String(p.content || ''); break outer; }
+            else if (e.type === 'error') { ev.error = String(p.error || 'error'); break outer; }
+          }
+        }
+      }
+      if (!ev.done && !ev.error) ev.error = 'SSE 结束但无 done/error';
+    } catch (e) {
+      ev.error = ac.signal.aborted ? `run ${timeoutMs / 1000}s 超时` : String(e?.message || e);
+      if (ac.signal.aborted) await api(`/agent/runs/${runId}/abort`, { method: 'POST', body: '{}' }).catch(() => {});
+    } finally { clearTimeout(timer); }
+    return ev;
+  };
+  await scenario('standin', `standin 分身:通道里问不到主人私聊 / 记忆 / human/ 里的事,委派和 shell 也拿不到,多联系人互不相通,人设跟着本体${argv.includes('--standin-neg') ? '(负对照)' : ''}`, () =>
+    standinLive({ api, sleep, until, home, OUT, MODEL, run, followRun, dbPath: join(home, 'state.db'), inbox: STANDIN_CHAN.inbox, outbox: STANDIN_CHAN.outbox, neg: argv.includes('--standin-neg') }));
+
   await scenario('import', `import 从其他 AI 导入:注入句不进可勾的去处、偏好进协作说明、项目的事进项目 ×${SELF_ROUNDS} 轮${argv.includes('--import-neg') ? '(负对照)' : ''}`, () =>
     importLive({ api, OUT, MODEL, home, src: join(home, '..', 'import-src'), rounds: SELF_ROUNDS, neg: argv.includes('--import-neg') }));
 
@@ -2405,6 +2479,12 @@ try {
     await api('/agent/agents', { method: 'POST', body: JSON.stringify({ slug: b, name: 'Dune', systemPrompt: 'Be concise and respond in Chinese. In this conversation never call the remember tool: a separate background process records long-term notes for you.' }) });
     const mkS = async (slug, cwd, title) => (await api('/agent/sessions', { method: 'POST', body: JSON.stringify({ title, model_id: MODEL, project_path: cwd, agent_config: { agentSlug: slug, execMode: 'host', cwd } }) })).session.id;
     const memoryOf = async (sid) => (await api(`/agent/project-context?sessionId=${sid}`)).memory || { entries: [], chars: 0, limit: 0 };
+    // 11-09:写满不再当场压缩,后台排一次整理(3 秒后起跑)。等它收场:organize.last 有了、没在跑;老引擎没有 organize → 立刻返回
+    const settle = async (sid, maxMs = 240_000) => {
+      const t0 = Date.now(); let mem = await memoryOf(sid);
+      while (mem.organize && !(mem.organize.last && !mem.organize.running) && Date.now() - t0 < maxMs) { await sleep(3000); mem = await memoryOf(sid); }
+      return mem;
+    };
     const AREAS = ['settings page', 'billing module', 'search index', 'onboarding flow', 'export dialog', 'notification centre', 'audit log', 'theme editor', 'import wizard', 'report builder'];
     const note = (i) => `Progress on 2026-08-${String(1 + (i % 28)).padStart(2, '0')}: the ${AREAS[i % AREAS.length]} cleanup reached step ${i + 1} of its checklist; the remaining items were handed to the next session and nothing else changed that day.`;
     // 建项目目录并种一份写满的记忆;返回种下的每一行与要核对的词
@@ -2436,19 +2516,24 @@ try {
       mkdirSync(dir, { recursive: true }); writeFileSync(join(dir, 'MEMORY.md'), lines.join('\n')); writeFileSync(join(dir, 'PROJECT.json'), JSON.stringify({ project: realpathSync(p) }));
       return { p, lines, pinned, stale, current: [`test:unit-${m}`, `release/2026.10-${m}`, '6240', 'migrate:up', `stage-${m}`, 'db/migrations', 'openapi/spec-v3.yaml', 'gen:api', 'scripts/sync-vendor.sh'] };
     };
-    // 压完的这份记忆对不对:带网址那条原样在、现行的词都在、够小、不在了的原句都进了记录
+    // 整理完的这份记忆对不对(11-09 分层):带网址那条原样在、现行的词都在(常驻或详情,不算归档)、常驻回到上限以内、
+    //  种下的每一句都还找得到(常驻 / 详情 / 归档 / 压缩记录里能逐句恢复的),有整理记录
     const judge = (s, mem, mark) => {
-      const texts = mem.entries.map((e) => e.content), has = (t) => texts.some((c) => c.includes(t));
+      const texts = mem.entries.map((e) => e.content);
+      const detail = (mem.topics || []).flatMap((t) => t.entries.map((e) => e.text)), archived = (mem.archive?.entries || []).map((e) => e.text);
+      const live = [...texts, ...detail], has = (t) => live.some((c) => c.includes(t));
       const removed = (mem.compacted?.removed || []).map((r) => r.content);
-      const gone = s.lines.filter((l) => !texts.includes(l));
+      const kept = new Set([...live, ...archived, ...removed]);
+      const lost = s.lines.filter((l) => !kept.has(l));
+      const rec = mem.organizeHistory?.[0];
       const v = {
-        saved: has(mark), pinnedIntact: texts.includes(s.pinned), missing: s.current.filter((t) => !has(t)),
-        smallEnough: mem.chars <= Math.floor(mem.limit * 0.7) + 320, chars: mem.chars, entries: texts.length,
-        recorded: !!mem.compacted && mem.compacted.before.count === s.lines.length && mem.compacted.after.count < s.lines.length && gone.length > 0 && gone.every((l) => removed.includes(l)),
+        saved: has(mark), pinnedIntact: live.includes(s.pinned), missing: s.current.filter((t) => !has(t)), lost,
+        smallEnough: mem.chars <= mem.limit, chars: mem.chars, entries: texts.length, detail: detail.length, archived: archived.length,
+        recorded: (!!rec && rec.moved + rec.archived > 0) || (!!mem.compacted && mem.compacted.removed.length > 0),
         notesLeft: texts.filter((c) => c.startsWith('Progress on ')).length, staleLeft: s.stale.filter((l) => texts.includes(l)).length,
         rewritten: texts.filter((c) => !s.lines.includes(c) && !c.includes(mark)),
       };
-      return { ...v, ok: v.saved && v.pinnedIntact && !v.missing.length && v.smallEnough && v.recorded };
+      return { ...v, ok: v.saved && v.pinnedIntact && !v.missing.length && !v.lost.length && v.smallEnough && v.recorded };
     };
 
     // ── A 前台 ──
@@ -2459,17 +2544,29 @@ try {
     const env = `preprod-${randomUUID().slice(0, 6)}`;
     const evA = await run(sidA, `记一下,这条只在这个项目里成立:合并之前都要先在预发环境 ${env} 上验一遍,验过了再合。`, 300_000, { agentSlug: a, cwd: s1.p, thinkingLevel: 'low' });
     const receipts = evA.toolResults.filter((r) => r.name === 'remember').map((r) => { try { return JSON.parse(r.full); } catch { return { raw: String(r.full || '').slice(0, 400) }; } });
-    const receipt = receipts.find((r) => r.ok && typeof r.compacted === 'string');
-    const after = await memoryOf(sidA);
+    const receipt = receipts.find((r) => r.ok && (typeof r.organizing === 'string' || typeof r.compacted === 'string'));
+    const after = await settle(sidA);
     const A = judge(s1, after, env);
+    // 11-09:整次撤销这次整理 → 挪出去的原句回到常驻、新规矩还在(有压缩记录时照旧逐句恢复,见下)
+    let undone = null;
+    const lastRec = after.organizeHistory?.[0];
+    if (lastRec && !lastRec.undoneAt) {
+      try {
+        const r = await api('/agent/project-context/memory/organize/undo', { method: 'POST', body: JSON.stringify({ sessionId: sidA, id: lastRec.id }) });
+        const back = r.memory, resident = back.entries.map((e) => e.content);
+        const movedOut = [...(after.topics || []).flatMap((t) => t.entries.map((e) => e.text)), ...(after.archive?.entries || []).map((e) => e.text)];
+        undone = { ok: movedOut.every((t) => resident.includes(t)) && resident.some((c) => c.includes(env)), changed: r.changed?.length || 0, moved: movedOut.length };
+      } catch (e) { undone = { ok: false, error: String(e?.message || e).slice(0, 160) }; }
+    }
     // 恢复一句(挑一条进度流水):原样回到记忆、从记录里消失
     const pick = (after.compacted?.removed || []).find((r) => r.content.startsWith('Progress on ')) || (after.compacted?.removed || [])[0];
-    let restored = false, restoreNote = '记录里没有可恢复的原句';
+    let restored = !!undone?.ok, restoreNote = undone ? (undone.ok ? `整次撤销:挪出去的 ${undone.moved} 句回到常驻${undone.changed ? `(${undone.changed} 句之后又被改过,没动)` : ''}` : `撤销没成:${undone.error || '回来的条目对不上'}`) : '记录里没有可恢复的原句';
     if (pick) {
       try {
         const back = (await api('/agent/project-context/memory/restore', { method: 'POST', body: JSON.stringify({ sessionId: sidA, id: pick.id }) })).memory;
-        restored = back.entries.some((e) => e.content === pick.content) && !back.compacted.removed.some((r) => r.id === pick.id) && back.entries.some((e) => e.content.includes(env));
-        restoreNote = restored ? '原样回到记忆、从记录里消失' : '恢复后的记忆对不上';
+        const one = back.entries.some((e) => e.content === pick.content) && !back.compacted.removed.some((r) => r.id === pick.id) && back.entries.some((e) => e.content.includes(env));
+        restored = (undone ? undone.ok : true) && one;
+        restoreNote = `${undone ? `${restoreNote};` : ''}${one ? '压缩去掉的一句原样回到记忆、从记录里消失' : '恢复后的记忆对不上'}`;
       } catch (e) { restoreNote = `恢复报错:${String(e?.message || e).slice(0, 160)}`; }
     }
     const ask = await run(await mkS(a, s1.p, 'Compaction recall'), '这个项目合并之前要先做什么?不知道就直说不知道。不调用工具。', 120_000, { agentSlug: a, cwd: s1.p, debugSystemPrompt: true, thinkingLevel: 'low' });
@@ -2496,13 +2593,16 @@ try {
     }
     const acts = rows.map((r) => r.action);
     const foreB = evB.toolCalls.includes('remember');
-    const refusedIn = (name) => { try { return readFileSync(engineLog, 'utf8').split('\n').filter((l) => l.includes(`写满压缩没成(${name})`)).slice(-1)[0] || ''; } catch { return ''; } };
+    // 11-09:写满不再当场压缩 → 「没成」看后台整理那一行(整理没成),老引擎那一行(写满压缩没成)也认
+    const refusedIn = (name) => { try { return readFileSync(engineLog, 'utf8').split('\n').filter((l) => l.includes(`写满压缩没成(${name})`) || l.includes(`整理没成(${name})`)).slice(-1)[0] || ''; } catch { return ''; } };
+    const added = acts.includes('project_memory_added');
+    const afterB = added && !foreB ? await settle(sidB) : await memoryOf(sidB);
     const refused = refusedIn('pc-two');
-    const afterB = await memoryOf(sidB);
     const B = judge(s2, afterB, lint);
-    const bState = evB.error ? 'error' : foreB ? 'foreground' : acts.includes('project_memory_compacted') ? (acts.includes('project_memory_added') && B.ok ? 'ok' : 'wrong') : refused ? 'refused' : 'not-nominated';
-    const bNote = { ok: `复盘写时遇到写满 → 压缩(${rows.find((r) => r.action === 'project_memory_compacted')?.detail || ''})→ 记上了;带网址那条没动、现行的都在`,
-      wrong: `⚠ 压了但结果不对:${JSON.stringify({ acts, saved: B.saved, pinnedIntact: B.pinnedIntact, missing: B.missing, chars: B.chars, recorded: B.recorded })}`,
+    const organizedB = afterB.organize?.last?.outcome?.status === 'organized' || acts.includes('project_memory_compacted');
+    const bState = evB.error ? 'error' : foreB ? 'foreground' : added ? (organizedB ? (B.ok ? 'ok' : 'wrong') : refused ? 'refused' : 'wrong') : 'not-nominated';
+    const bNote = { ok: `复盘写时常驻已满 → 照写、后台整理(挪进详情 ${B.detail} 句、归档 ${B.archived} 句${acts.includes('project_memory_compacted') ? `,又压缩:${rows.find((r) => r.action === 'project_memory_compacted')?.detail || ''}` : ''})→ 记上了;带网址那条没动、现行的都在、一句没丢`,
+      wrong: `⚠ 整理了但结果不对(或没整理):${JSON.stringify({ acts, outcome: afterB.organize?.last?.outcome || null, saved: B.saved, pinnedIntact: B.pinnedIntact, missing: B.missing, lost: B.lost.length, chars: B.chars, recorded: B.recorded })}`,
       // 「没压成」分两种:failed = 那次模型调用自己没成(供应方过载 / 网络 / 超时),别的 = 模型交回的方案没被收下。都不算过,但报告里别混着说
       refused: `⚠ ${/没成\([^)]*\):failed/.test(refused) ? '压缩那次模型调用没成(供应方 / 网络 / 超时,不是方案被拒)' : '引擎没收模型交回的压缩'}:${refused.slice(-220)}`, error: `⚠ ${evB.error}`,
       foreground: `没量到:前台没听话,自己调了 remember(${B.saved ? '记上了' : '没记上'};回执 compacted ${evB.toolResults.some((r) => r.name === 'remember' && /"compacted"/.test(r.full || '')) ? '有' : '无'})`,
@@ -2518,9 +2618,9 @@ try {
       const sid = await mkS(a, s.p, `Compaction round ${k}`);
       const mark = `preprod-${randomUUID().slice(0, 6)}`;
       const ev = await run(sid, `记一下,这条只在这个项目里成立:合并之前都要先在预发环境 ${mark} 上验一遍,验过了再合。`, 300_000, { agentSlug: a, cwd: s.p, thinkingLevel: 'low' });
-      const got = ev.toolResults.some((r) => r.name === 'remember' && /"compacted":/.test(r.full || ''));
-      const v = judge(s, await memoryOf(sid), mark);
-      const row = { k, called: ev.toolCalls.includes('remember'), compacted: got, ok: got && v.ok, entries: v.entries, chars: v.chars, missing: v.missing, pinnedIntact: v.pinnedIntact, recorded: v.recorded,
+      const got = ev.toolResults.some((r) => r.name === 'remember' && /"(compacted|organizing)":/.test(r.full || ''));
+      const v = judge(s, got ? await settle(sid) : await memoryOf(sid), mark);
+      const row = { k, called: ev.toolCalls.includes('remember'), compacted: got, ok: got && v.ok, entries: v.entries, chars: v.chars, missing: v.missing, lost: v.lost, pinnedIntact: v.pinnedIntact, recorded: v.recorded,
         refusal: refusedIn(`pc-x${k}`).replace(/^.*写满压缩没成\([^)]*\):/, '').trim(), error: ev.error || '' };
       extra.push(row);
       console.log(`  前台加跑 ${k}/${COMPACT_ROUNDS}:${got ? (v.ok ? `压成、结果对(${v.entries} 条 ${v.chars} 字)` : '压成但结果不对') : `没压成(${row.error || row.refusal || (row.called ? '原因不明' : '模型没调 remember')})`}`);
@@ -2530,15 +2630,15 @@ try {
 
     writeFileSync(join(OUT, 'projcompact-evidence.json'), JSON.stringify({
       extra,
-      A: { seeded: { entries: s1.lines.length, chars: s1.lines.join('\n').length }, engineRefusal: refusedIn('pc-one'), wentToAgent, receipts, verdict: A, restore: { picked: pick?.content || null, note: restoreNote }, recalled, reply: evA.content, askReply: ask.content, entriesAfter: after.entries.map((e) => e.content), removed: (after.compacted?.removed || []).map((r) => r.content) },
+      A: { seeded: { entries: s1.lines.length, chars: s1.lines.join('\n').length }, engineRefusal: refusedIn('pc-one'), wentToAgent, receipts, verdict: A, restore: { picked: pick?.content || null, note: restoreNote, undone }, organized: after.organize?.last?.outcome || null, organizeHistory: after.organizeHistory || [], recalled, reply: evA.content, askReply: ask.content, entriesAfter: after.entries.map((e) => e.content), removed: (after.compacted?.removed || []).map((r) => r.content) },
       B: { state: bState, acts, rows: rows.map((r) => `${r.action}: ${r.detail}`), refused, verdict: B, reply: evB.content, entriesAfter: afterB.entries.map((e) => e.content) },
     }, null, 2));
     return { ok: aOk && bOk && !extraWrong.length, detail: [
       ...(extraLine ? [extraLine] : []),
-      `A ${aOk ? '✓' : '⚠'} 种子 ${s1.lines.length} 条 ${before.chars} 字 → 压完连新规矩 ${A.entries} 条 ${A.chars} 字;回执 compacted ${receipt ? '有' : `无(${refusedIn('pc-one').replace(/^.*写满压缩没成\(pc-one\):/, '引擎没压成:').slice(0, 260) || JSON.stringify(receipts).slice(0, 200)})`};新规矩${A.saved ? '记上了' : '没记上'};带网址那条${A.pinnedIntact ? '一字没动' : '被动了'};现行的词${A.missing.length ? `丢了 ${A.missing.join(' / ')}` : '都在'};不在了的原句${A.recorded ? '全在记录里' : '与记录对不上'};恢复一句:${restoreNote};新会话${recalled ? '问得出新规矩' : `问不出(${ask.error || ask.content.slice(0, 80)})`}${evA.error ? `;${evA.error}` : ''}`,
+      `A ${aOk ? '✓' : '⚠'} 种子 ${s1.lines.length} 条 ${before.chars} 字 → 整理完常驻连新规矩 ${A.entries} 条 ${A.chars} 字、详情 ${A.detail} 句、归档 ${A.archived} 句、丢了 ${A.lost.length} 句;回执 organizing ${receipt ? '有' : `无(${refusedIn('pc-one').replace(/^.*写满压缩没成\(pc-one\):/, '引擎没压成:').slice(0, 260) || JSON.stringify(receipts).slice(0, 200)})`};新规矩${A.saved ? '记上了' : '没记上'};带网址那条${A.pinnedIntact ? '一字没动' : '被动了'};现行的词${A.missing.length ? `丢了 ${A.missing.join(' / ')}` : '都在'};不在了的原句${A.recorded ? '全在记录里' : '与记录对不上'};恢复一句:${restoreNote};新会话${recalled ? '问得出新规矩' : `问不出(${ask.error || ask.content.slice(0, 80)})`}${evA.error ? `;${evA.error}` : ''}`,
       `A 只记不判:进度流水还剩 ${A.notesLeft} 条;被取代的旧说法还剩 ${A.staleLeft}/3 句;模型改写出 ${A.rewritten.length} 句;回复${/压缩|整理|compact/i.test(evA.content) ? '提到了压缩' : '没提压缩'}${wentToAgent ? ';⚠ 模型把这条项目规矩改记到了 agent 级' : ''}`,
       `B ${bState === 'ok' ? '✓' : bOk ? '—' : '⚠'} ${bNote}`,
-    ].join(' | '), output: `【A 回复】${evA.content}\n【A 回执】${receipt?.compacted || '(无)'}\n【A 模型改写出的句子】\n${A.rewritten.map((c) => `- ${c}`).join('\n') || '(无:只删没改)'}\n【A 新会话问】${ask.content}\n【B 回复】${evB.content}\n【B 后台】${bNote}${bState === 'ok' ? `\n【B 模型改写出的句子】\n${B.rewritten.map((c) => `- ${c}`).join('\n') || '(无:只删没改)'}` : ''}`, toolCalls: [...evA.toolCalls, '|', ...ask.toolCalls, '|', ...evB.toolCalls] };
+    ].join(' | '), output: `【A 回复】${evA.content}\n【A 回执】${receipt?.organizing || receipt?.compacted || '(无)'}\n【A 模型改写出的句子】\n${A.rewritten.map((c) => `- ${c}`).join('\n') || '(无:只删没改)'}\n【A 新会话问】${ask.content}\n【B 回复】${evB.content}\n【B 后台】${bNote}${bState === 'ok' ? `\n【B 模型改写出的句子】\n${B.rewritten.map((c) => `- ${c}`).join('\n') || '(无:只删没改)'}` : ''}`, toolCalls: [...evA.toolCalls, '|', ...ask.toolCalls, '|', ...evB.toolCalls] };
   });
 
   // ── 项目记忆在团队会话里(10-05)──
@@ -2753,6 +2853,29 @@ try {
       return { ok: !ev.error && ev.done && success && contract && noPayloadEcho && groundedImages, detail: ev.error || `groundedImages=${groundedImages}; noPayloadEcho=${noPayloadEcho}; documents=${documents.length}; contract=${contract}; pickRow=${key === 'intelligentmedia' ? `${pickRow}; repeats=${repeats}` : 'n/a'}; correctedErrors=${errors.length}`, output: ev.content, toolCalls: ev.toolCalls, ttftMs: ttft(ev), tokens: tokensOf(ev) };
     });
   }
+  // Real model: teaching, useful interaction, then a reading follow-up in the same chat.
+  await scenario('iuireading', 'Intelligent UI reading and local interaction', async () => {
+    const opts = { clientCapabilities: ['intelligent-ui.v1', 'intelligent-ui.v2'], ui: { visuals: { value: 'auto' } } };
+    const session = `live-iuireading-${Date.now()}`;
+    const cases = [
+      ['lecture', '把统计物理 L1 和 L2 合起来给我讲一下，五段式结构：问题、核心概念、知识联系、公式与例子、可能的题型。围绕可区分粒子、微观态、占据分布、概率与平均值，不用查资料。', false],
+      ['interactive', '做一个交互式的三粒子两能级例子：让我切换激发态的粒子数，立即看到对应的微观态。', true],
+      ['reading', '算了，你直接告诉我教材哪里、怎么看好了。已知对应的是 Chapter 1 的 1.1–1.6，PDF 14–22 页，计数在 Appendix A 的 PDF 194–195 页；按这些信息给阅读顺序。', false],
+      ['proactive', '我想试着改贷款本金、年利率和期数，立即比较月供和总利息。先用本金 20 万、年利率 4%、120 期作为起点。', true],
+      ['derivation', '请按问题、概念、知识联系、公式、例子这五段式结构，解释为什么平均占据数要按概率加权，写出推导。', false],
+    ];
+    const rows = [];
+    for (const [id, prompt, visual] of cases) {
+      const ev = await run(session, prompt, 300000, { preset: 'chat' }, 'desktop/2.14.0', undefined, undefined, undefined, opts);
+      const cards = ev.toolResults.filter(r => ['intelligent_ui', 'sketch'].includes(r.name) && !r.isError && !/^Error/.test(r.result || ''));
+      const nudged = ev.statuses.some(p => p.phase === 'sketch_delivery_nudge');
+      const ok = !ev.error && ev.done && (visual ? cards.length > 0 : cards.length === 0 && ev.content.length > 100 && !nudged);
+      rows.push({ id, prompt, ok, visual, content: ev.content, cards, nudged, toolCalls: ev.toolCalls, error: ev.error });
+    }
+    writeFileSync(join(OUT, 'iuireading-evidence.json'), JSON.stringify(rows, null, 2));
+    return { ok: rows.every(r => r.ok), detail: rows.map(r => `${r.id}: ${r.ok ? 'PASS' : 'FAIL'}, cards=${r.cards.length}`).join('; '), output: rows.map(r => `【${r.id}】${r.content}`).join('\n\n'), toolCalls: rows.flatMap(r => r.toolCalls) };
+  });
+
   await scenario('intelligentplain', 'Intelligent UI 关闭偏好', async () => {
     const ev = await run(`live-intelligentplain-${Date.now()}`, '给我一个四人晚餐建议，三道菜，保持简短。', 150_000, {}, 'desktop/2.13.1', undefined, undefined, undefined, { clientCapabilities: ['intelligent-ui.v1', 'intelligent-ui.v2'], ui: { visuals: { value: 'off' } } });
     const noVisuals = !ev.toolArgs.some(c => ['intelligent_ui', 'sketch'].includes(c.name)) && !String(ev.systemPrompt).includes('## Intelligent UI');
@@ -2761,7 +2884,7 @@ try {
 
   // visualauto(10-11,用户反馈「Intelligent UI 很少触发」):消息里不出现图 / 卡 / 可视化 / 对比这类字眼,看模型自己出不出卡。
   // 六条该出的(行程、准备清单、二选一、做法、哪个更适合、请客要买什么)+ 两条不该出的(一句事实、翻译)。
-  // 判据:该出的至少 4/6 成功调了 intelligent_ui 或 sketch,不该出的一条都没有,且没有一条被收尾补催。基线 = 改动前的引擎(--kind base)。
+  // Presentation is a benefit judgment, not a card quota. Record optional cards; prose negatives and no implicit nudges are required. Positive interactions are covered by iuireading.
   await scenario('visualauto', 'visualauto 没点名时自己出卡', async () => {
     const opts = { clientCapabilities: ['intelligent-ui.v1', 'intelligent-ui.v2'], ui: { visuals: { value: 'auto', allowed: ['auto', 'less', 'off'] } } };
     const want = [
@@ -2790,7 +2913,7 @@ try {
     const stray = rows.filter((r) => !r.expect && r.cards.length);
     const line = (r) => `${r.id}=${r.cards.join('+') || '无'}${r.nudged ? '(补催)' : ''}`;
     const nudged = rows.filter((r) => r.nudged); // 这六条都是 actionable:只给本轮提醒,出现补催 = 那条不变式破了
-    return { ok: !broken.length && hits.length >= 4 && !stray.length && !nudged.length,
+    return { ok: !broken.length && !stray.length && !nudged.length,
       detail: `该出 ${hits.length}/${want.length};不该出 ${stray.length}/${plain.length};补催 ${nudged.length};${rows.map(line).join(' ')}${broken.length ? `;没跑完:${broken.map((r) => `${r.id}(${r.error || '未结束'})`).join(',')}` : ''}`,
       output: rows.map((r) => `【${r.id}${r.expect ? '' : '·不该出'}】${r.q}\n工具:${r.toolCalls.join(',') || '无'}\n${r.content}`).join('\n\n'),
       toolCalls: rows.flatMap((r) => r.toolCalls), ttftMs: rows[0]?.ttftMs, tokens: rows.reduce((n, r) => n + (r.tokens || 0), 0) };
@@ -3360,6 +3483,43 @@ try {
       && compacting.some((x) => x.reason === 'overflow') && compacted.length >= 1 && retries.length === 0;
     const detail = `被拒 ${fired.length} 次(${fired[0]?.bytes ?? '-'}B)、放行 ${passed.length} 次(${passed[0]?.bytes ?? '-'}B);压缩 ${compacting.map((x) => x.reason).join(',') || '无'} → ${compacted.length ? (compacted[0].fallback ? '机械折叠' : `摘要 ${compacted[0].summarized ?? '?'} 条`) : '无'};llm_retry ${retries.length} 次;${b.error ? `报错:${b.error.slice(0, 140)}` : `答${b.content.includes(tok) ? '对' : '错'}`}`;
     return { ok, detail, output: b.content, tokens: tokensOf(a) + tokensOf(b), toolCalls: b.toolCalls };
+  });
+
+  // continuegen(11-10 用户反馈:报错 / 额度用完只有「重试」,前面生成的白费):真 Codex 写编号列表写到一半,流里被掐成额度用完。
+  //   ① 失败那一轮已流出的正文落了库(引擎 catch 把在飞那截并进终稿);② 发 <turn_resume>(界面「继续生成」发的就是它),
+  //   模型从断处接着写到 12,不从 1 重来。负对照腿(同一 run 内):把半截回答删掉再发同一个标记 → 模型只能从 1 写起,判据必须判它「重来」。
+  await scenario('continuegen', 'continuegen 额度用完后「继续生成」接着写', async () => {
+    const { TURN_RESUME_MARKER } = await import('../dist/contracts/turnResume.js');
+    const ask = (tag) => `${tag} 请写一个 1 到 12 的编号列表,每条一句话介绍一种常见的鸟,格式「N. 鸟名:一句介绍」,每条单独一行。直接写,不要调用任何工具,不要开场白。`;
+    const nums = (text) => [...String(text || '').matchAll(/^\s*(\d{1,2})[.、]/gm)].map((m) => Number(m[1]));
+    const leg = async (dropPartial) => {
+      const sid = `live-contgen-${dropPartial ? 'nc' : 'ok'}-${Date.now()}`;
+      const tag = `CG-${randomUUID().slice(0, 6)}`;
+      armFault({ mode: 'cut_after', match: tag, chars: 160 });
+      const a = await run(sid, ask(tag));
+      const fired = faultLog().filter((l) => l.fired === 'cut_after').length;
+      const rows = asList(await api(`/agent/sessions/${sid}/messages`).catch(() => []), 'messages');
+      // 取最后一条有正文的回答:同一轮里还可能有空的助手占位行(第一次就挑中它,负对照删错了行)
+      const partialRow = [...rows].reverse().find((m) => (m.role === 'assistant' || m.role === 'model') && String(m.content || '').trim());
+      const partial = String(partialRow?.content || '');
+      if (dropPartial && partialRow) await api(`/agent/sessions/${sid}/messages/delete`, { method: 'POST', body: JSON.stringify({ ids: [partialRow.id] }) });
+      const b = await run(sid, TURN_RESUME_MARKER);
+      disarmFault();
+      const before = nums(partial), after = nums(b.content);
+      const restarted = after[0] === 1;
+      const dump = rows.map((m) => ({ id: m.id, role: m.role, len: String(m.content || '').length, head: String(m.content || '').slice(0, 60) }));
+      return { a, b, fired, partial, before, after, restarted, reached12: after.includes(12), dump };
+    };
+    const ok1 = await leg(false);
+    const nc = await leg(true);
+    const lastBefore = ok1.before.at(-1) ?? 0;
+    const quotaErr = !!ok1.a.error && /quota/i.test(ok1.a.error);
+    const persisted = ok1.before.length >= 2; // 160 字左右至少写出两条:落库的半截里有编号
+    const continued = !ok1.b.error && ok1.b.done && !ok1.restarted && ok1.reached12 && (ok1.after[0] ?? 0) >= lastBefore;
+    const ncCaught = nc.restarted; // 没有半截时同一判据必须判「重来」,否则这条判据分不出续写
+    writeFileSync(join(OUT, 'continuegen-evidence.json'), JSON.stringify({ ok: { errA: ok1.a.error, fired: ok1.fired, partial: ok1.partial, before: ok1.before, after: ok1.after, content: ok1.b.content, rows: ok1.dump }, nc: { errA: nc.a.error, fired: nc.fired, partial: nc.partial, after: nc.after, content: nc.b.content, rows: nc.dump } }, null, 2));
+    const detail = `掐断 ${ok1.fired} 次、报错=${ok1.a.error ? ok1.a.error.slice(0, 60) : '无'};落库的半截编号 ${ok1.before.join(',') || '无'};续写编号 ${ok1.after.join(',') || '无'}(从 1 重来=${ok1.restarted},写到 12=${ok1.reached12});负对照(删掉半截)续写 ${nc.after.slice(0, 3).join(',')}… 判为重来=${ncCaught}`;
+    return { ok: quotaErr && ok1.fired === 1 && persisted && continued && ncCaught, detail, output: `【失败前落库】\n${ok1.partial}\n【继续生成】\n${ok1.b.content}\n【负对照:删掉半截后】\n${nc.b.content}`, tokens: tokensOf(ok1.a) + tokensOf(ok1.b) + tokensOf(nc.a) + tokensOf(nc.b) };
   });
 
   await scenario('taskoutcomes', 'taskoutcomes actual artifacts, rejected approvals and repeat delivery', () =>
@@ -8222,7 +8382,9 @@ Then reply with only the command output.`,
   });
   // caltodo / cloudtodo(11-07):「帮我添加两条待办」几步之内进默认日历、没日期没勾、不写笔记;再列出、勾掉。判据与负对照见 lib/caltodo-live.mjs。
   await scenario('caltodo', 'caltodo 用户的待办(本机):加两条无日期待办 → 新会话列出 → 勾掉', async () =>
-    calTodoLive({ run, rounds: Number(opt('rounds', 1)), home, workspace, vault: SELF_SCHED_VAULT, skill: CALTODO_SKILL }));
+    calTodoLive({ run, rounds: Number(opt('rounds', 1)), home, workspace, vault: SELF_SCHED_VAULT, skill: CALTODO_SKILL,
+      // 引擎本地时钟相对 UTC 的分钟数:钉了就是钉的那一档,没钉就是台架自己的(引擎继承台架的 TZ)
+      tzOffsetMin: LATER_OFFSET_H == null ? -new Date().getTimezoneOffset() : LATER_OFFSET_H * 60, laterOnly: argv.includes('--caltodo-later-only'), ...(opt('later-msg', '') ? { laterMsg: opt('later-msg', '') } : {}) }));
   await scenario('cloudtodo', 'cloudtodo 用户的待办(云端 run):加两条无日期待办 → 新会话列出 → 勾掉', async () => {
     const cloud = process.env.TANGU_LIVE_CLOUD_URL;
     if (!cloud) return { ok: false, detail: '要 TANGU_LIVE_CLOUD_URL / TANGU_LIVE_CLOUD_TOKEN 指向 server scripts/calendar-local.mts(打印的 url 与 token)' };

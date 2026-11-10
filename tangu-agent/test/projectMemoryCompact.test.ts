@@ -1,6 +1,6 @@
 /** 项目记忆写满时的压缩(10-05 用户:「参考 claude 和 codex 的做法,记忆满了就让 agent 压缩一下」):
  *  方案校验、提交与记录、逐句恢复、同一个项目只跑一次、没压成的冷却、前台 remember 写满时的接入。模型是替身。 */
-import { beforeAll, afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeAll, afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -14,8 +14,8 @@ import { STANDALONE_SCHEMA } from '../src/db/schemaStandalone.js';
 import { runMigration } from '../src/db/migrate.js';
 import { memoryLogProvider } from '../src/tools/builtin/memoryLog.js';
 import type { MemorySource } from '../src/services/memoryRepository.js';
-import { openProjectMemory, projectMemoryView, recordProjectCompaction, resolveProjectMemory, restoreCompactedFact, PROJECT_MEMORY_CHAR_BUDGET, type ProjectMemoryRef } from '../src/services/projectMemory.js';
-import { compactProjectMemory, resetProjectMemoryCompactionForTests, validateCompaction, COMPACT_ACCEPT_CHARS, COMPACT_ASK_CHARS } from '../src/services/projectMemoryCompact.js';
+import { openProjectMemory, projectMemoryView, recordProjectCompaction, resolveProjectMemory, restoreCompactedFact, PROJECT_MEMORY_CHAR_BUDGET, PROJECT_MEMORY_STORE_CAP, type ProjectMemoryRef } from '../src/services/projectMemory.js';
+import { compactProjectMemory, projectOrganizeStatus, resetProjectMemoryCompactionForTests, resetProjectMemoryOrganizeForTests, validateCompaction, COMPACT_ACCEPT_CHARS, COMPACT_ASK_CHARS } from '../src/services/projectMemoryCompact.js';
 import { saveSpecialAgentsConfig } from '../src/services/specialAgentsConfig.js';
 import { autoAdoptable } from '../src/agents/harnessStore.js';
 import { redactSecrets } from '../src/core/redact.js';
@@ -513,7 +513,8 @@ describe('逐句恢复(restoreCompactedFact)', () => {
     await fill(ref, sessionId);
     await compactProjectMemory('owner', ref, { fallbackModelId: 'run-model' });
     const repo = await openProjectMemory(ref);
-    for (let i = 50; repo.snapshot().content.length + filler(i).length + 1 <= PROJECT_MEMORY_CHAR_BUDGET; i++) repo.mutate({ action: 'add', fact: filler(i), cap: PROJECT_MEMORY_CHAR_BUDGET });
+    // 11-09 分层:恢复卡的是存储上限(常驻超线照写,排整理)
+    for (let i = 50; repo.snapshot().content.length + filler(i).length + 1 <= PROJECT_MEMORY_STORE_CAP; i++) repo.mutate({ action: 'add', fact: filler(i), cap: PROJECT_MEMORY_STORE_CAP });
     const removed = (await projectMemoryView(project)).compacted!.removed;
     const big = removed.find((r) => r.content.startsWith('Filler'))!;
     expect(await code(restoreCompactedFact(project, big.id))).toBe('MEMORY_FULL');
@@ -544,51 +545,60 @@ describe('逐句恢复(restoreCompactedFact)', () => {
   });
 });
 
+// 11-09 分层:前台写满(常驻超线)不再当场压缩 —— 写入照常成功,排一次后台整理(先挪进详情,再丢过时的);真到了存储上限才回「写满了」
 describe('前台 remember 写满时', () => {
   const remember = memoryLogProvider.tools().find((t) => t.name === 'remember')!;
   const call = (sessionId: string, args: Record<string, unknown>, extra: Record<string, unknown> = {}) =>
     runWithAgentSlug('xyra', async () => String(await remember.execute(args, { userId: 'owner', sessionId, appId: 'tangu', execMode: 'host', runId: `run-${sessionId}`, modelId: 'run-model', ...extra } as any)));
   const NEW = 'End-to-end tests need the mock service started first with pnpm mock:up.';
+  const stuff = async (ref: ProjectMemoryRef): Promise<void> => {
+    const repo = await openProjectMemory(ref);
+    for (let i = 60; repo.snapshot().content.length + filler(i).length + 1 <= PROJECT_MEMORY_STORE_CAP; i++) repo.mutate({ action: 'add', fact: filler(i), cap: PROJECT_MEMORY_STORE_CAP, source: { kind: 'historian' } });
+    // 垫到只剩二十来个字:再短的一句也放不下
+    const room = PROJECT_MEMORY_STORE_CAP - repo.snapshot().content.length - 1 - 4 - 20;
+    if (room > 0) repo.mutate({ action: 'add', fact: `Pad ${'p'.repeat(room)}`, cap: PROJECT_MEMORY_STORE_CAP, source: { kind: 'historian' } });
+  };
+  afterEach(() => resetProjectMemoryOrganizeForTests());
 
-  it('先压一遍再记这一句;回执里说明压过了、旧的 id 和版本不能再用', async () => {
+  it('常驻超线照写:不当场叫模型;回执说后台会整理、不用自己删;排上了一次整理', async () => {
     const { ref, sessionId } = await fresh();
     const { fillers } = await fill(ref, sessionId);
     const receipt = JSON.parse(await call(sessionId, { action: 'add', fact: NEW, scope: 'project' }));
-    expect(receipt).toMatchObject({ ok: true, action: 'add', scope: 'project', count: 7, entry: { content: NEW } });
+    expect(receipt).toMatchObject({ ok: true, action: 'add', scope: 'project', count: 8 + fillers.length, entry: { content: NEW }, limit: PROJECT_MEMORY_CHAR_BUDGET });
     expect(receipt.duplicate).toBeUndefined();
-    expect(receipt.compacted).toMatch(new RegExp(`^Project memory was full, so it was compacted before this was saved: ${7 + fillers.length} entries \\(\\d+ characters\\) became 6 \\(\\d+\\)\\. .*list again`));
+    expect(receipt.compacted).toBeUndefined();
+    expect(receipt.organizing).toMatch(/do not forget entries to make room/);
     expect((await openProjectMemory(ref)).snapshot().entries.at(-1)).toMatchObject({ content: NEW, source: { kind: 'explicit', sessionId } });
-    expect(resolved).toEqual(['run-model']); // 没配后台模型 → 用这个 run 的模型
-    // 活动里记了一笔,记在这个会话名下(桌面据此提醒用户)
-    expect(database.prepare(`SELECT agent, detail FROM special_agent_log WHERE action = 'project_memory_compacted' AND session_ref = ?`).all(sessionId))
-      .toEqual([{ agent: 'historian', detail: expect.stringMatching(new RegExp(`^${7 + fillers.length} → 6 entries, \\d+ → \\d+ characters \\(p\\d+\\)$`)) }]);
+    expect(calls).toHaveLength(0);
+    expect((await projectOrganizeStatus(ref)).running).toBe(true);
   });
 
-  it('模型带着刚 list 到的版本号来 add:压缩自己把版本改了,这一句照样记得上', async () => {
+  it('模型带着刚 list 到的版本号来 add:照常记得上', async () => {
     const { ref, sessionId } = await fresh();
     await fill(ref, sessionId);
     const version = (await openProjectMemory(ref)).snapshot().version;
     const receipt = JSON.parse(await call(sessionId, { action: 'add', fact: NEW, scope: 'project', expectedVersion: version }));
-    expect(receipt).toMatchObject({ ok: true, entry: { content: NEW }, compacted: expect.any(String) });
+    expect(receipt).toMatchObject({ ok: true, entry: { content: NEW }, organizing: expect.any(String) });
   });
 
-  it('压不成 → 照旧回现有条目,让模型自己删旧加新', async () => {
+  it('到了存储上限 → 回现有条目,让模型自己删旧加新;不当场叫模型', async () => {
     const { ref, sessionId } = await fresh();
     await fill(ref, sessionId);
-    answer = () => 'no';
+    await stuff(ref);
     const out = await call(sessionId, { action: 'add', fact: NEW, scope: 'project' });
-    expect(out).toMatch(new RegExp(`^Error: project memory is full \\(\\d+/${PROJECT_MEMORY_CHAR_BUDGET} characters\\)\\. Forget or shorten stale entries`));
+    expect(out).toMatch(new RegExp(`^Error: project memory is full \\(\\d+/${PROJECT_MEMORY_STORE_CAP} characters\\)\\. Forget or shorten stale entries`));
     expect(out).toContain('Current entries:');
     expect((await openProjectMemory(ref)).snapshot().entries.map((e) => e.content)).not.toContain(NEW);
-    expect(database.prepare(`SELECT id FROM special_agent_log WHERE action = 'project_memory_compacted' AND session_ref = ?`).all(sessionId)).toEqual([]);
-  });
+    expect(calls).toHaveLength(0);
+  }, 40_000);
 
-  it('update 写满不压(它带着旧版本号和旧 id)', async () => {
+  it('update 到了存储上限 → 写满', async () => {
     const { ref, sessionId } = await fresh();
     const { ids } = await fill(ref, sessionId);
+    await stuff(ref);
     const version = (await openProjectMemory(ref)).snapshot().version;
     const out = await call(sessionId, { action: 'update', id: ids[E1], expectedVersion: version, fact: `The release branch is release/2026.08 ${'and more '.repeat(30)}`.trim().slice(0, 300), scope: 'project' });
     expect(out).toMatch(/^Error: project memory is full/);
     expect(calls).toHaveLength(0);
-  });
+  }, 40_000);
 });

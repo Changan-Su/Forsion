@@ -540,6 +540,8 @@ ctx.app.writeFileScoped?.(path, text, expectedRoot, {create:true})
 
 同时声明 `databases` 与 `calendar` 的插件，在本机引擎提供个人日历时，会收到 `human://CALENDAR.db`。日历成员把它排第一并隐藏旧智库镜像。把该不透明引用原样传给 `ctx.databases`、`ctx.ui.mountRecord` 和用于表结构/名称的 `ctx.app.mutateDb`，不要交给文件系统读写 API。成员与日期/完成列映射由宿主管理，`setMember` / `removeMember` 返回 false；隐藏用 `setHidden`。只有 `databases` 能力的插件不可访问；无此来源的远程或移动宿主不列出。写入复用宿主 CAS 与冲突重放。
 
+订阅日历时快照里的 `myCalendar` 说明个人日历读得怎样（2026-11-10 起的宿主才有；老宿主没有这个字段，按你原来的办法判断）：`ok` 是读到了（文件还没建也算，第一次写就会建）；`absent` 是宿主确认这里没有它（老引擎、老服务端，或在设备页上看别人的设备），按没有个人日历的老办法处理；`unknown` 是这次没读到（引擎没起、网络错、服务端报错、文件坏了），`loading` 是还在读。后两种时别因为成员里没有它就另建一张表顶替：读失败不等于没有，先提示稍后再试，用户输入的内容留着，宿主读到后会推一份新快照。不认识的值按 `unknown` 处理。
+
 ### 共享账号
 
 桌面(装载了 Forsion Extend 时)、Unit 网页账号宿主与移动端都提供 `ctx.account`,同一份插件代码三端能跑。先判断能力存在，再使用 `status()`、`login()`、`logout()`、`request(path, init)` 与 `subscribe(listener)`。`request` 只访问账号 API，不接受其他源；宿主代发凭据并保留 FormData/Blob 文件上传。账号切换会取消旧请求并使旧响应体读取失败；插件仍须取消自己的延迟任务并清空旧账号界面。可选的 `saveDownload(blob, name)` 返回 `{ ok, error? }`：Android 保存到系统下载，浏览器保存为下载文件。不要保存、导入或传递账号令牌。

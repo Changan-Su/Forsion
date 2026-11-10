@@ -98,7 +98,7 @@ export const SKETCH_SECTION = `## Visual cards
 
 Use \`intelligent_ui_html\` when seeing or manipulating a relationship materially helps the answer: compare
 options, explore a trend, explain a process, inspect a proposed interface, or try a small simulator.
-Do not wait for the user to say "draw" when interaction would help. Use prose for a single fact,
+Do not wait for the user to say "draw" when interaction would help. Use prose for explanations, study notes, derivations and reading guidance,
 Markdown for a requested table, and normal project/file tools when the deliverable is an app or file.
 Never add a visualization just because an answer contains three values or steps.
 
@@ -154,8 +154,8 @@ timer. Use it for choices that need a new answer; keep recomputation that needs 
 the card. \`window.forsionIntelligentUi.copy(text)\` (also click-only) copies text such as a shopping list.
 
 Before calling \`intelligent_ui_html\`, check that every control works, all queried elements exist, labels fit,
-light/dark themes work, and the first render is useful. Afterwards give only the takeaway or caveat
-not already visible. For complex charts or interactions, use the bundled \`visualize\` skill.`;
+light/dark themes work, and the first render is useful. Keep the surrounding explanation in normal chat Markdown; the card only carries the part
+that benefits from seeing or operating it. Do not duplicate the same content in both places. For complex charts or interactions, use the bundled \`visualize\` skill.`;
 
 /** visuals=less 时追加在 SKETCH_SECTION 之后:常驻段仍在(用户点名要图时成品下限不变),但「不等用户说画」那条让位。 */
 export const SKETCH_LESS_NOTE = `The user has set interface visuals to "less": call \`intelligent_ui_html\` only when they explicitly ask for a
@@ -175,7 +175,7 @@ const SKETCH_INTERACTIVE_RE = /(?:计算器|滑块|筛选|过滤器|切换器|�
 const SKETCH_ANALYZE_RE = /(?:分析|对比|比较|趋势|增长|下降|变化|数据|指标)|\b(?:analy[sz]e|compare|trend|growth|decline|change|data|metric)\b/i;
 // 没有「图」的字眼、但答案是一份要照着做 / 逐项勾 / 从里面挑的东西(2026-10-11 用户反馈:没明说就不出卡)。
 // 只收指向明确的说法:「怎么做」「计划」这类在 agent 对话里天天出现的词不收(「接下来怎么做」「按计划继续」不是要一张卡)。
-const SKETCH_ACTIONABLE_RE = /(?:行程|攻略|日程|安排|清单|采购|准备(?:些|点|哪些)?(?:什么|啥)|[带买](?:些|点|哪些)?(?:什么|啥)|哪(?:个|款|种|家|台|部|本)(?:更|好|比较|最|合适|值得|划算)|(?:选|买|用|换|去|学|订|建议|推荐)哪(?:个|款|种|家|台|部|本)|怎么选|如何选|纠结|值不值|要不要(?:买|换|选)|推荐|教我|做法|教程|食谱|菜谱)|\b(?:itinerary|checklist|packing list|shopping list|to-?do list|(?:meal|study|workout|travel|trip) plan|plan (?:a|an|my|our|the)|recipe|step[- ]by[- ]step|walk me through|pros and cons|which (?:one|should|is better|would you)|should i (?:buy|get|choose|pick|go)|recommend|what (?:do|should|will) (?:i|we) (?:need|bring|buy|pack|cook|make|prepare))\b/i;
+const SKETCH_ACTIONABLE_RE = /(?:行程|攻略|日程|安排|清单|采购|准备(?:些|点|哪些)?(?:什么|啥)|[带买](?:些|点|哪些)?(?:什么|啥)|哪(?:个|款|种|家|台|部|本)(?:更|好|比较|最|合适|值得|划算)|(?:选|买|用|换|去|学|订|建议|推荐)哪(?:个|款|种|家|台|部|本)|怎么选|如何选|纠结|值不值|要不要(?:买|换|选)|推荐|做法|食谱|菜谱)|\b(?:itinerary|checklist|packing list|shopping list|to-?do list|(?:meal|study|workout|travel|trip) plan|plan (?:a|an|my|our|the)|recipe|step[- ]by[- ]step|walk me through|pros and cons|which (?:one|should|is better|would you)|should i (?:buy|get|choose|pick|go)|recommend|what (?:do|should|will) (?:i|we) (?:need|bring|buy|pack|cook|make|prepare))\b/i;
 // 两种消息不发 actionable:让我改 / 查 / 讲代码的(比下面那条窄 ——「主要写代码,买哪台笔记本」里的「写代码」不该把卡挡掉),
 // 和让我处理一段现成文字的(翻译、润色、总结:命中的词多半在那段文字里,不是用户的请求)。「还是」不进词表:它多半是「仍然」的意思。
 const SKETCH_ACTIONABLE_SKIP_RE = /(?:修复|改代码|重构|编译|报错|调试|翻译|译成|润色|改写|校对|总结|概括|摘要)|(?:解释|讲解|分析|看看|读)[^。！？\n]{0,12}(?:代码|函数|脚本)|\b(?:fix|refactor|compile|typecheck|unit test|bug|debug|translate|proofread|rewrite|rephrase|paraphrase|summari[sz]e)\b|\b(?:explain|review|walk me through|go through)\b[^.?!\n]{0,40}\b(?:code|function|class|script|diff|commit)\b|\.(?:[cm]?[jt]sx?|py|rs|go|java|swift)\b/i;
@@ -213,9 +213,10 @@ export function sketchTurnSignalFor(message: string, visuals: VisualsPref = 'aut
     return {
       kind: 'implicit',
       section:
-        '## Visual-first note for this turn\n' +
-        `This request contains a comparison, sequence, structure, data shape, or interaction that is faster to understand visually even though the user may not have said "draw". Default to calling ${tool} as part of the answer. Skip only if closer inspection shows that the relationship is trivial or the actual deliverable is code/a file rather than an explanation.` +
-        (nativeUi && computed ? ' A calculator, converter, budget, step guide or quiz is a computed `intelligent_ui` document (version 2); keep `intelligent_ui_html` for charts, diagrams and animations.' : ''),
+        '## Presentation choice for this turn\n' +
+        'A relationship or interaction may be relevant, but keywords such as structure, steps or distribution are not a reason to draw. ' +
+        PRESENTATION_CHOICE +
+        (nativeUi && computed ? ' If a useful local calculator is warranted, use a computed `intelligent_ui` document (version 2); use HTML for diagrams and simulations.' : ''),
     };
   }
   const skip = SKETCH_ACTIONABLE_SKIP_RE.test(text);
@@ -226,30 +227,19 @@ export function sketchTurnSignalFor(message: string, visuals: VisualsPref = 'aut
   return {
     kind: 'actionable',
     section:
-      '## Visual-first note for this turn\n' +
-      'The answer to this request is something the user will follow, tick off or choose from (a plan or itinerary, things to prepare or buy, a pick among options, a procedure), even though they did not ask for a card. ' +
-      (nativeUi
-        ? 'Default to answering with `intelligent_ui`: inputs for what they can adjust (people, days, the option picked), a checklist for things to do, bring or buy, a comparison for the options, disclosures for longer explanations. ' + (computed ? COMPUTED_SHAPES + ' ' : '') + VIEW_IS_THE_ANSWER
-        : 'Default to answering with an `intelligent_ui_html` card built from `fs-checklist`, `fs-compare` or `fs-choice`. Keep the prose around it to a short takeaway.') +
-      ' Skip the card only if the complete answer is a sentence or two, or the user wants something carried out (code or files changed, a task or calendar entry created) rather than an answer to read.',
+      '## Presentation choice for this turn\n' + PRESENTATION_CHOICE +
+      (nativeUi ? ' Use `intelligent_ui` for useful local controls or progress tracking.' : ' Use `intelligent_ui_html` only for a useful visual or interaction.') +
+      (computed ? ' ' + COMPUTED_SHAPES : ''),
   };
 }
 
-// 没命中任何词表的普通消息(2026-10-13,对标 ChatGPT 的 18 句同题:该出的 13 条只出 5 条,跟进 4 条只出 1 条)。
-// 词表只读得到最后一句话的字面,「那四次挥手呢」「预算一千五以内呢」「晚饭吃什么」里没有可抓的词;这里不再猜,
-// 把判断交给看得见整段对话的模型:按答案的形状定,并写明什么时候不出。只在原生文档可用时发(sketch 卡太重,不值得为清单起一张)。
-// ⚠️「先写一段话、再调用工具」这种说法别再用:真模型第 1 次(10-13)里 GPT-6 Luna 有一半写完那段话(「下面的清单可以逐项勾选」)就收尾了,卡没出。
-//    开头那段结论放进文档当第一个文字块 —— 整条回答是一份文档,模型只做一次调用,文字块先于其他区块上屏。
-const VIEW_IS_THE_ANSWER = 'The view IS the answer: make the call first, without announcing it in chat text. Its first block is a `text` block (no title) with your conclusion or recommendation and what you assumed; when an assumption would change the answer, give it a choice input and end the document with one model action that redoes the answer for the picked values (each input sits in exactly one controls block; inputs that only feed that action go in a controls block right before it). A view needs at least one block that is not text: an answer that would be text blocks only is plain chat text. After the call, stop: add one short line only for a caveat the view does not contain, and never restate the conclusion.';
-const SHAPE_NOTE = `## Answer-shape note for this turn
-Choose the form of this answer from what the answer will contain, not from the wording of the request. A short follow-up ("what about the other one", "make day two lighter") continues the subject of the earlier turns and keeps their form.
-- The whole answer is a sentence or two, a piece of writing the user asked for (an email, a message, a translation), code, or something to carry out (change files, run a command, create a task or event): answer or act as usual, with no view.
-- Part of the answer is things to tick off, bring or buy, options to compare or pick among (an "A or B?" question included), a plan, schedule or procedure to follow, amounts that follow a number the user may change, or a recommendation that hinges on a preference you had to guess: answer with one \`intelligent_ui\` call that carries those parts as native blocks, with \`text\` blocks for the reasoning between them. ${VIEW_IS_THE_ANSWER}
-- The answer walks through a whole mechanism, sequence or structure, several stages or parts of it and not one detail, that is easier to see than to read: load the \`visualize\` skill if you have not, call \`intelligent_ui_html\` for one diagram built from its parts (\`<fs-flow>\` for a sequence or process), then explain in prose.
-A follow-up that changes one part gets a view of that part only.`;
-// 10-20 计算层 live 第 3 跑:背单词、「一步一步来」被这两段的「a checklist for things to do」带成了 v1 清单。v2 客户端多一句。
-const COMPUTED_SHAPES = 'This client renders version 2: numbers that follow values the user may change are derived values shown in stats or a table, and anything gone through one item at a time (flashcards, one step after another, quiz questions) keeps its items and position in state and moves on with set buttons.';
-const SHAPE_NOTE_COMPUTED = SHAPE_NOTE.replace('\nA follow-up that changes one part', `\n- ${COMPUTED_SHAPES}\nA follow-up that changes one part`);
+// Advisory only: the model sees the task and history; keywords never require a card.
+export const PRESENTATION_CHOICE = 'Use normal chat Markdown for reading: explanations, study notes, derivations, summaries, textbook locations and static comparisons. A heading structure, formula, list or table does not require a view. Add a diagram only when seeing a relationship materially helps, and an interaction only when operating it helps the user understand or complete the task. If removing the controls would lose nothing useful, use prose or a Markdown table. Never invent controls, quizzes, choices or disclosures to justify a card. Choose the form afresh on every turn; previous cards do not make later answers cards. Keep continuous explanations, formulas and citations in chat; a useful local interaction can accompany just the relevant part without enclosing the whole answer. Honor the requested format. Do not repeat content across chat and the view.';
+const SHAPE_NOTE = `## Presentation choice for this turn
+${PRESENTATION_CHOICE}
+Use intelligent_ui for useful native interactions; intelligent_ui_html for charts, diagrams or simulations. Otherwise answer with no view.`;
+const COMPUTED_SHAPES = 'When interaction is useful, version 2 supports local calculators, flashcards and quizzes. A request to teach or explain step by step alone does not ask for a quiz or stepper.';
+const SHAPE_NOTE_COMPUTED = SHAPE_NOTE + '\n' + COMPUTED_SHAPES;
 
 const SKETCH_DEFINITION: Tool = {
   type: 'function',

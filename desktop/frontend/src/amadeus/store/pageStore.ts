@@ -296,7 +296,7 @@ interface PageState {
 
   openVault(): Promise<void>
   /** keepOpenNote:有面板已经开着笔记就不再跳到 lastPage —— 断网冷启动后的重开用(这时用户可能早就在看别的笔记了)。 */
-  restoreVault(opts?: { keepOpenNote?: boolean }): Promise<void>
+  restoreVault(opts?: { keepOpenNote?: boolean; attachOnly?: boolean }): Promise<void>
   /** 本地侧换到清单里的另一个库 / 新建一个库并打开;失败抛给调用方(菜单弹提示),当前库原样不动。 */
   switchLocalVault(root: string): Promise<void>
   createLocalVault(name: string): Promise<void>
@@ -744,13 +744,17 @@ function makePageStore(opts: PageStoreOptions = {}) {
       const stale = (): boolean => gen !== restoreGen || get().vaultRoot !== rootAtStart || get().vaultSide !== sideAtStart
       set({ vaultLoading: true })
       try {
-        const info = await amadeus.restoreVault()
+        const info = await amadeus.restoreVault(opts?.attachOnly)
         if (stale()) return
         set({ vaultRestoreFailed: false })
         if (!info) return
         set({ vaultRoot: info.root, pages: info.pages, folders: info.folders ?? [], files: [], filesPendingFor: info.root, error: null })
         loadFiles(info.root)
         fetchIcons(info.root)
+        if (opts?.attachOnly) {
+          await get().initVaultSide()
+          return
+        }
         if (opts?.keepOpenNote && anyScopeHasNote()) return
         const target =
           info.lastPage && info.pages.includes(info.lastPage) ? info.lastPage : info.pages[0]

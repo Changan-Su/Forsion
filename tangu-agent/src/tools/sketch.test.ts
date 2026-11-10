@@ -167,7 +167,7 @@ describe('sketch proactive turn signal', () => {
     '这周末想带爸妈去杭州玩两天，帮我安排一下。',
     '下周要搬家，我需要提前准备些什么？',
     '我在纠结买 MacBook Air 还是 MacBook Pro，主要写代码，偶尔剪视频，你建议哪个？',
-    '第一次自己做红烧肉，四个人吃，教我怎么做。',
+    '第一次自己做红烧肉，四个人吃，给我食谱。',
     'Notion 和 Obsidian 哪个更适合记读书笔记？',
     "I'm hosting six friends for dinner on Saturday. What should I cook, and what do I need to buy?",
   ])('flags an answer the user will follow, tick off or choose from: %s', (message) => {
@@ -204,7 +204,7 @@ describe('sketch proactive turn signal', () => {
     const s = sketchTurnSignalFor(message, 'auto', true);
     expect(s?.kind).toBe('shape');
     expect(s?.section).toContain('with no view'); // 什么时候不出写在同一句提醒里
-    expect(s?.section).toContain('not one detail'); // 只问流程里的一个细节(「第三次握手是做什么的」)不配图:visualauto 的 fact 那条钉着
+    expect(s?.section).toContain('materially helps'); // 只问流程里的一个细节(「第三次握手是做什么的」)不配图:visualauto 的 fact 那条钉着
     expect(sketchTurnSignalFor(message, 'less', true)).toBeUndefined();
     expect(sketchTurnSignalFor(message, 'auto', false)).toBeUndefined(); // 没有原生文档的客户端不发:为一份清单起 sketch 卡太重
   });
@@ -222,12 +222,13 @@ describe('sketch proactive turn signal', () => {
     expect(sketchTurnSignalFor(message, 'auto', true)).toBeUndefined();
   });
 
-  // 真模型(10-13):让它「先写一段话、再调用」时一半写完那段话就收尾。开头的结论要放进文档里,提醒里不许出现让它先说话的说法。
-  it.each(['下周要搬家，我需要提前准备些什么？', '晚饭吃什么'])('puts the opening conclusion inside the view instead of before the call: %s', (message) => {
-    const section = sketchTurnSignalFor(message, 'auto', true)?.section || '';
-    expect(section).toContain('make the call first, without announcing it');
-    expect(section).toContain('first block is a `text` block');
-    expect(section).not.toMatch(/start with [^.]*prose/i);
+  it.each(['然后你来教我 l1 和 l2', '按五段式的结构讲解两讲', '直接告诉我教材哪里，我怎么看', 'Explain the relationship between microstates and distributions'])('keeps reading and teaching advisory: %s', message => {
+    const section = sketchTurnSignalFor(message, 'auto', true, true)?.section || '';
+    expect(section).toContain('Use normal chat Markdown for reading');
+    expect(section).toContain('Choose the form afresh');
+    expect(section).not.toContain('Default to calling');
+    expect(section).not.toContain('make the call first');
+    expect(section).toContain('Never invent controls');
   });
 
   it('names the native tool only when the client can render it', () => {

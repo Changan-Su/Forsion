@@ -1,13 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { configureTangu } from '../seams/runtime.js';
-import { runWithAgentSlug } from '../seams/runContext.js';
+import { runWithAgentSlug, setRunStandIn } from '../seams/runContext.js';
 import { createLocalMemoryBrain } from '../adapters/standalone/localMemoryBrain.js';
 import { createMemoryRepository } from './memoryRepository.js';
-import { buildAgentMemoryContext, memoryQueryTerms } from './memoryRecall.js';
+import { buildAgentMemoryContext, MEMORY_RECALL_BUDGET, MEMORY_RECALL_MAX_CHARS, memoryQueryTerms } from './memoryRecall.js';
 import { searchSessions } from './sessionSearch.js';
+import { flushMemoryUseForTests, readMemoryUse } from './memoryUsage.js';
 
 vi.mock('./sessionSearch.js', async (original) => ({ ...await original<typeof import('./sessionSearch.js')>(), searchSessions: vi.fn(async () => []) }));
 let temporaryHome: string;
@@ -65,13 +66,16 @@ describe('Agent memory recall', () => {
   it('keeps resident and relevant entry evidence under a hard character cap and adds original history ids', async () => {
     configure();
     const repository = createMemoryRepository(join(temporaryHome, 'agents', 'alpha'));
-    repository.mutate({ action: 'add', fact: '普通偏好 '.repeat(300) });
+    // 11-09 分层:常驻 4000 字按整条给,放不下的(第二条起)进召回池,和这句话相关的再按召回预算带出来
+    repository.mutate({ action: 'add', fact: '普通偏好 '.repeat(500) });
+    repository.mutate({ action: 'add', fact: '另一类偏好 '.repeat(420) });
     const added = repository.mutate({ action: 'add', fact: 'AlphaProject 插件用 ESM 发布', source: { kind: 'historian', runId: 'r1' } });
     const wanted = added.entries.at(-1)!.id;
     vi.mocked(searchSessions).mockResolvedValue([{ id: 's1', title: 'topic', summary: '', updated_at: '', archived: false,
       hit: { messageId: 'm1', role: 'user', timestamp: 1000, snippet: 'AlphaProject 原文证据' } }]);
     const context = await recall('alpha');
-    expect(context.content.length).toBeLessThanOrEqual(4000);
+    expect(context.content.length).toBeLessThanOrEqual(MEMORY_RECALL_MAX_CHARS);
+    expect(context.stable).not.toContain('另一类偏好'); // 常驻按整条:放不下就整条不进,不切半句
     expect(context.content).toContain('AlphaProject 插件用 ESM 发布'); expect(context.entryIds).toContain(wanted);
     expect(context.historyMessageIds).toEqual(['m1']); expect(context.content).toContain('session_id=s1; message_id=m1;');
     expect(context.truncated).toBe(true);
@@ -122,8 +126,9 @@ describe('Agent memory recall', () => {
   it('splits stored evidence (stable) from query/session-dependent recall (volatile) and stays byte-identical when rejoined', async () => {
     configure();
     const repository = createMemoryRepository(join(temporaryHome, 'agents', 'alpha'));
-    // §1 先把自己的 cap/4 预算吃满,剩下的相关条目才会落到 §2(与下面那条既有用例同款布置)。
-    repository.mutate({ action: 'add', fact: '常驻偏好 RESIDENT_FACT ' + '普通偏好 '.repeat(300) });
+    // §1 先把常驻预算吃满,剩下的相关条目才会落到 §2(与上面那条既有用例同款布置;11-09 常驻 4000 字按整条给)。
+    repository.mutate({ action: 'add', fact: '常驻偏好 RESIDENT_FACT ' + '普通偏好 '.repeat(480) });
+    repository.mutate({ action: 'add', fact: '另一类偏好 '.repeat(420) });
     repository.mutate({ action: 'add', fact: 'AlphaProject 插件用 ESM 发布 RELEVANT_FACT', source: { kind: 'historian', runId: 'r1' } });
     vi.mocked(searchSessions).mockResolvedValue([{ id: 's1', title: 'topic', summary: '', updated_at: '', archived: false,
       hit: { messageId: 'm1', role: 'user', timestamp: 1000, snippet: 'AlphaProject 原文证据' } }]);
@@ -153,7 +158,7 @@ describe('Agent memory recall', () => {
     configure();
     createMemoryRepository(join(temporaryHome, 'agents', 'alpha')).mutate({ action: 'add', fact: '事实 '.repeat(2000) });
     const context = await recall('alpha', '');
-    expect(context.content.length).toBeLessThanOrEqual(1000);
+    expect(context.content.length).toBeLessThanOrEqual(MEMORY_RECALL_BUDGET.resident); // 11-09 分层:常驻预算 = 常驻上限 4000
     expect(searchSessions).not.toHaveBeenCalled();
   });
   it('bounded legacy fallback is explicit, while a mismatched active Agent fails closed', async () => {
@@ -209,5 +214,79 @@ describe('Agent memory recall', () => {
     vi.mocked(searchSessions).mockImplementationOnce(async () => { ac.abort(); throw new Error('aborted'); });
     await expect(runWithAgentSlug('alpha', () => buildAgentMemoryContext({ userId: 'u1', appId: 'tangu', agentSlug: 'alpha',
       query: '插件 AlphaProject', excludeSessionId: 'current', signal: ac.signal }))).rejects.toThrow();
+  });
+});
+
+// 11-09 记忆分层第二步(R5、R6):常驻 / 索引 / 召回各有预算;先在全部详情里搜再截;同一条在画像、常驻、详情里只给一次;归档不召回;用了记一笔
+describe('memory layers in recall', () => {
+  const seed = () => {
+    const dir = join(temporaryHome, 'agents', 'alpha');
+    const repository = createMemoryRepository(dir);
+    repository.mutate({ action: 'add', fact: '用户希望被叫夏夏。' });
+    repository.mutate({ action: 'add', fact: 'AlphaProject 插件用 ESM 发布。' }); // 无基线并集带回来的旧副本:详情里也有 → 不在常驻那段
+    mkdirSync(join(dir, 'Library', 'memory'), { recursive: true });
+    writeFileSync(join(dir, 'Library', 'memory', 'work.md'), '# 工作\n\n插件项目的发布与构建细节\n\n- AlphaProject 插件用 ESM 发布。 <!--tg by=agent-->\n- AlphaProject 插件每周五发版。 <!--tg by=agent-->\n');
+    writeFileSync(join(dir, 'Library', 'memory', 'archive.md'), '# 归档\n\n- AlphaProject 插件 10 月 3 日的发布会已经开过。 <!--tg by=agent-->\n');
+    return dir;
+  };
+  it('searches all details before cutting, shows each fact once, never recalls the archive, and states the index with the path', async () => {
+    configure();
+    const dir = seed();
+    const c = await recall('alpha');
+    expect(c.stable).toContain('用户希望被叫夏夏。');
+    expect(c.stable).not.toContain('ESM'); // 被详情盖过的常驻副本不在常驻那段
+    expect(c.stable).toContain('- 工作 · 2 entries — 插件项目的发布与构建细节 (' + join(dir, 'Library', 'memory', 'work.md') + ')');
+    expect(c.volatile).toContain('topic=work] AlphaProject 插件用 ESM 发布。');
+    expect(c.volatile).toContain('AlphaProject 插件每周五发版。');
+    expect(c.content.match(/用 ESM 发布/g)).toHaveLength(1);
+    expect(c.content).not.toContain('发布会已经开过');
+    expect(c.content).not.toContain('<!--tg');
+    await flushMemoryUseForTests();
+    expect(readMemoryUse(dir, '.memory-usage.json')('AlphaProject 插件每周五发版。').uses30).toBe(1);
+  });
+  it('the portrait joins recall on the host: its details come back when they match, never twice', async () => {
+    configure();
+    seed();
+    mkdirSync(join(temporaryHome, 'human'), { recursive: true });
+    writeFileSync(join(temporaryHome, 'human', 'SOUL.md'), '- 你叫林夏。\n\n## 工作 <!--tg topic=work-->\n\n项目与工具\n\n- 你在维护 AlphaProject 插件。 <!--tg by=user-->\n- AlphaProject 插件每周五发版。 <!--tg by=agent-->\n');
+    const c = await runWithAgentSlug('alpha', () => buildAgentMemoryContext({ userId: 'u1', appId: 'tangu', agentSlug: 'alpha', query: '插件 AlphaProject', excludeSessionId: 'current', portrait: true }));
+    expect(c.volatile).toContain("From the human's portrait");
+    expect(c.volatile).toContain('- 你在维护 AlphaProject 插件。');
+    expect(c.content.match(/每周五发版/g)).toHaveLength(1);
+    const off = await recall('alpha');
+    expect(off.content).not.toContain('你在维护 AlphaProject 插件'); // 不给 portrait(云端 / 通道会话)就不读画像
+  });
+  it('a stand-in never gets the portrait in recall, even when the caller passes portrait: true (run context or stand-in slug)', async () => {
+    configure();
+    seed();
+    mkdirSync(join(temporaryHome, 'human'), { recursive: true });
+    writeFileSync(join(temporaryHome, 'human', 'SOUL.md'), '- 你叫林夏。\n\n## 工作 <!--tg topic=work-->\n\n项目与工具\n\n- 你在维护 AlphaProject 插件。 <!--tg by=user-->\n');
+    const ask = (agentSlug: string) => ({ userId: 'u1', appId: 'tangu', agentSlug, query: '插件 AlphaProject', excludeSessionId: 'current', portrait: true });
+    // 分身的 run(agentLoop 在读记忆之前 setRunStandIn):调用方漏了闸也不带画像
+    const dom = { slug: 'alpha-standin-wechat', bodySlug: 'alpha', agentMd: false, library: [], roots: [] };
+    const inRun = await runWithAgentSlug('alpha-standin-wechat', async () => { setRunStandIn(dom); return buildAgentMemoryContext(ask('alpha-standin-wechat')); });
+    expect(inRun.content).not.toContain("From the human's portrait");
+    expect(inRun.content).not.toContain('你在维护 AlphaProject 插件');
+    // 不在 run 里(后台 / 别的调用方):按分身的形状认
+    const bySlug = await runWithAgentSlug('alpha-standin-wechat', () => buildAgentMemoryContext(ask('alpha-standin-wechat')));
+    expect(bySlug.content).not.toContain('你在维护 AlphaProject 插件');
+    // 正对照:本体同样的调用照旧带画像详情
+    const body = await runWithAgentSlug('alpha', () => buildAgentMemoryContext(ask('alpha')));
+    expect(body.volatile).toContain('- 你在维护 AlphaProject 插件。');
+    // 存量的同形普通 Agent(没有 stand_in_of;新建已经不许用这个形状):按持久身份认,照旧带画像(Codex 评审 11-09)
+    const { saveAgent, invalidateAgentCache } = await import('../agents/agentRegistry.js');
+    await saveAgent({ slug: 'legacyx', name: 'Legacy', systemPrompt: 'x' } as any);
+    renameSync(join(temporaryHome, 'agents', 'legacyx'), join(temporaryHome, 'agents', 'my-standin-helper'));
+    invalidateAgentCache();
+    const legacy = await runWithAgentSlug('my-standin-helper', () => buildAgentMemoryContext(ask('my-standin-helper')));
+    expect(legacy.volatile).toContain('- 你在维护 AlphaProject 插件。');
+  });
+  it('a first resident entry longer than the whole budget is still given (cut), not dropped with everything after it', async () => {
+    configure();
+    const repository = createMemoryRepository(join(temporaryHome, 'agents', 'alpha'));
+    repository.mutate({ action: 'add', fact: 'LONG_FIRST ' + '很长的一段。'.repeat(700) });
+    repository.mutate({ action: 'add', fact: 'SHORT_SECOND 用户喜欢喝茶。' });
+    const c = await recall('alpha', '');
+    expect(c.stable).toContain('LONG_FIRST'); expect(c.truncated).toBe(true);
   });
 });

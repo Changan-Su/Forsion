@@ -26,6 +26,26 @@ interface RunCtx {
   /** Bound by runLoop from the already loaded run row, never from a provider payload. */
   sessionId?: string;
   remote?: boolean;
+  /** 本 run 是分身(11-09,services/accessDomain.ts):agentLoop 在读任何上下文之前解析好放进来;子代理(in-process)沿用。 */
+  standIn?: StandInDomain;
+}
+
+/**
+ * 分身的权限域(agents/standIn.ts 解析,services/accessDomain.ts 判):放在这里是为了让工具层同步读得到、又不让 seam 依赖业务模块。
+ * library / roots 都是绝对路径;只读的那几份本体 Library 文件按文件给,不给目录。
+ */
+export interface StandInDomain {
+  slug: string;
+  bodySlug: string;
+  /** 通道 kind(通道 run 才有);channelOwner = 注册这个通道的插件 id(内置通道 null)—— 分身只给它的插件工具。 */
+  channel?: string;
+  channelOwner?: string | null;
+  /** human/AGENT.md 给不给(本体那边的开关,缺省不给)。 */
+  agentMd: boolean;
+  /** 本体勾给分身看的 Library 文件(绝对路径)。 */
+  library: string[];
+  /** 读写根:分身自己的文件夹 + 这次会话的工作目录(通道配置的工作区)。 */
+  roots: string[];
 }
 
 const als = new AsyncLocalStorage<RunCtx>();
@@ -56,7 +76,7 @@ export function enterRunContext(
     runId,
     agentSlug,
     displayAgentSlug: displayAgentSlug ?? agentSlug,
-    ...(sameRun ? { sessionId: prev?.sessionId, remote: prev?.remote } : {}),
+    ...(sameRun ? { sessionId: prev?.sessionId, remote: prev?.remote, standIn: prev?.standIn } : {}),
     // 同一 run 解析 agentSlug 时会再次 enter；未显式覆盖就保留已解析出的客户端标签。
     // 只在同一个 run 内沿用(runId 相同,或不指定 runId 的作用域细化如 Historian):排队接力的下一个 run 是在
     // 上一个 run 的收尾上下文里起的,不能继承它的标签(外部引擎 loop 之后不再设 client,会一直带着)。
@@ -117,6 +137,17 @@ export function runWithRemoteRequest<T>(remote: boolean, fn: () => T): T {
 
 export function currentRequestIsRemote(): boolean {
   return requestOrigin.getStore() === true;
+}
+
+/** agentLoop 解析出分身之后调一次(读任何上下文之前);同一 run 再 enterRunContext 也留着(见上 sameRun)。 */
+export function setRunStandIn(standIn: StandInDomain | undefined): void {
+  const s = als.getStore();
+  if (s) als.enterWith({ ...s, standIn });
+}
+
+/** 当前 run 的分身权限域(不是分身 / 不在 run 内 → undefined)。工具优先读 ctx.standIn(排队重放的调用不一定在 run 的异步子树里)。 */
+export function currentStandIn(): StandInDomain | undefined {
+  return als.getStore()?.standIn;
 }
 
 /** 当前 run 激活的 agent slug(本地记忆层据此选 agent 文件夹;不在 run 上下文内时 undefined)。 */

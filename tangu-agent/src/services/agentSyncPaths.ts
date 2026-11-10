@@ -9,7 +9,7 @@ export function validSyncSlug(slug: unknown): slug is string {
   return typeof slug === 'string' && /^[a-z0-9][a-z0-9-]{0,63}$/.test(slug) && !slug.startsWith('__');
 }
 /** 路径表、副本名和服务端 / 新同步共用一份:contracts/agentSyncRules.ts。 */
-export { validLogDate, isWidgetDataPath, conflictCopyName, isConflictCopyPath } from '../contracts/agentSyncRules.js';
+export { validLogDate, isWidgetDataPath, isSettingsPath, conflictCopyName, isConflictCopyPath } from '../contracts/agentSyncRules.js';
 /** Agent 文件夹里的相对路径能不能上云(服务端 isValidAgentFileAddress 同一张表)。 */
 export const validSyncPath = (p: unknown): p is string => validAgentFilePath(p);
 

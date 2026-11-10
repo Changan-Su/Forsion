@@ -1,385 +1,215 @@
 {
-  "schemaVersion": 1,
-  "generatedAt": "2026-09-17T19:38:40.010218+00:00",
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-10T10:43:59.506Z",
   "source": {
-    "releaseTag": "v2.11.0",
-    "commit": "5e2fe953cc86971f5d93312bd9cc71bb279592a8",
-    "desktopTree": "876c4d0bf724d43584031a33e00ce13b8bad79bf",
-    "packageVersion": "2.11.0",
-    "productTreeMatchesRelease": true
+    "releaseTag": "v2.14.0",
+    "commit": "95f819ee8fb7d5b756d04f808dae7fc0557534e2",
+    "packageVersion": "2.14.0"
   },
   "fixture": {
     "isolated": true,
+    "sample": "neighborhood book fair",
     "publicDataOnly": true,
     "personalWorkspaceData": false,
     "liveModelCalls": 0,
     "scriptedBackend": true,
-    "builtinAgentPortraits": true,
-    "ariosoSlug": "xyra"
+    "windowSize": [
+      1280,
+      800
+    ]
   },
   "assets": {
-    "workbench.png": {
+    "home.png": {
       "width": 1600,
-      "height": 900,
-      "colorType": "RGB",
-      "sha256": "a8d95a93071c43e407a4da432936119b52d0f494155272911a84e3210717de6c",
-      "captureMethod": "Electron BrowserWindow.capturePage",
-      "scenario": "Coding Studio with a public Reading room project and sample conversation",
+      "height": 1000,
+      "sha256": "82e20fa3a4ebbc01361eb9c569b00b6b7b2509d38bb59f609f6aed946cf07d0e",
+      "bytes": 1323881,
+      "language": "zh",
+      "captureMethod": "Playwright Electron window screenshot, downscaled to 1600 px wide",
+      "scenario": "Home with widgets on both sides: schedule, to-dos, a suggestion from Muse, recent notes and a checklist made in a chat",
       "crop": false,
       "matte": false,
-      "colorTreatment": false,
-      "source": {
-        "releaseTag": "v2.10.4",
-        "commit": "edfd128259535ad778fdc964ddcb049cca3603f1",
-        "desktopTree": "69c5c590ea4dbe8a7b5d4bdc682b41b5aa73ab93",
-        "packageVersion": "2.10.4",
-        "productTreeMatchesRelease": true
-      }
+      "colorTreatment": false
     },
-    "notes.png": {
+    "answer-card.png": {
       "width": 1600,
-      "height": 900,
-      "colorType": "RGB",
-      "sha256": "1851aa223c495fa53b24c00f9caa167e1d508e39f5d52a65e4b4d15eebcb8f13",
-      "captureMethod": "Playwright Electron screenshot",
-      "scenario": "Note workspace with the public Product research Markdown fixture",
+      "height": 1000,
+      "sha256": "5f0b640c0892a11a2795bf8fb35bdfcea4d755c7496832495ecb2c1f2c9bd5fd",
+      "bytes": 278930,
+      "language": "zh",
+      "captureMethod": "Playwright Electron window screenshot, downscaled to 1600 px wide",
+      "scenario": "Tangu answers about the stall fee with a card that recalculates when the numbers change",
       "crop": false,
       "matte": false,
-      "colorTreatment": false,
-      "source": {
-        "releaseTag": "v2.10.4",
-        "commit": "edfd128259535ad778fdc964ddcb049cca3603f1",
-        "desktopTree": "69c5c590ea4dbe8a7b5d4bdc682b41b5aa73ab93",
-        "packageVersion": "2.10.4",
-        "productTreeMatchesRelease": true
-      }
+      "colorTreatment": false
     },
-    "calendar.png": {
+    "dashboard.png": {
       "width": 1600,
-      "height": 900,
-      "colorType": "RGB",
-      "sha256": "b06f188415208429431540c29dc1299a5b6faeee8d53b784134f11e1f7045f13",
-      "captureMethod": "Playwright Electron screenshot",
-      "scenario": "Calendar workspace with an isolated public date and database fixture",
+      "height": 1000,
+      "sha256": "847cde4f6a771613bc98c9a52639fc40f951f62a9cd9a45bb32037e6845629d6",
+      "bytes": 241501,
+      "language": "zh",
+      "captureMethod": "Playwright Electron window screenshot, downscaled to 1600 px wide",
+      "scenario": "Book fair dashboard: the fee card, to-dos, a checklist, and numbers and charts worked out from two tables",
       "crop": false,
       "matte": false,
-      "colorTreatment": false,
-      "source": {
-        "releaseTag": "v2.10.4",
-        "commit": "edfd128259535ad778fdc964ddcb049cca3603f1",
-        "desktopTree": "69c5c590ea4dbe8a7b5d4bdc682b41b5aa73ab93",
-        "packageVersion": "2.10.4",
-        "productTreeMatchesRelease": true
-      }
+      "colorTreatment": false
+    },
+    "muse-space.png": {
+      "width": 1600,
+      "height": 1000,
+      "sha256": "7f16006c8366f072ab3e72d1c846e474934e85494e2a0d27c8ff3664e3ffefe5",
+      "bytes": 331081,
+      "language": "zh",
+      "captureMethod": "Playwright Electron window screenshot, downscaled to 1600 px wide",
+      "scenario": "Muse's own Space for the book fair",
+      "crop": false,
+      "matte": false,
+      "colorTreatment": false
+    },
+    "store.png": {
+      "width": 1600,
+      "height": 1107,
+      "sha256": "452f4c659169d85104bdc691c839ac152f84ee6e42370020ec807aa690a0a281",
+      "bytes": 434407,
+      "language": "zh",
+      "captureMethod": "Playwright Electron window screenshot, downscaled to 1600 px wide",
+      "scenario": "The store window with official plugins",
+      "crop": false,
+      "matte": false,
+      "colorTreatment": false
+    },
+    "sandbox.png": {
+      "width": 1600,
+      "height": 1000,
+      "sha256": "568a31e7a086ca29ba9e74fe4ed60dec885bf4e390ad34574c189b6d873d1d83",
+      "bytes": 287640,
+      "language": "zh",
+      "captureMethod": "Playwright Electron window screenshot, downscaled to 1600 px wide",
+      "scenario": "A small check-in plugin written by Tangu, running in a sandboxed Forsion",
+      "crop": false,
+      "matte": false,
+      "colorTreatment": false
+    },
+    "home-en.png": {
+      "width": 1600,
+      "height": 1000,
+      "sha256": "56a36569e3287b47073ebabe18ecb74c624ee3e9592ae862ca8cdba85acc4322",
+      "bytes": 1337138,
+      "language": "en",
+      "captureMethod": "Playwright Electron window screenshot, downscaled to 1600 px wide",
+      "scenario": "Home with widgets on both sides: schedule, to-dos, a suggestion from Muse, recent notes and a checklist made in a chat",
+      "crop": false,
+      "matte": false,
+      "colorTreatment": false
+    },
+    "answer-card-en.png": {
+      "width": 1600,
+      "height": 1000,
+      "sha256": "dbd9a6ba935ee6062a20a31b93e857d555c8e6cfe8aa046dba0ec4b889569c4f",
+      "bytes": 304358,
+      "language": "en",
+      "captureMethod": "Playwright Electron window screenshot, downscaled to 1600 px wide",
+      "scenario": "Tangu answers about the stall fee with a card that recalculates when the numbers change",
+      "crop": false,
+      "matte": false,
+      "colorTreatment": false
+    },
+    "dashboard-en.png": {
+      "width": 1600,
+      "height": 1000,
+      "sha256": "1eca1a8371d8cdc67dc66bb8ed7a154ea2e8f4ad86daed8665434b3c18477952",
+      "bytes": 251782,
+      "language": "en",
+      "captureMethod": "Playwright Electron window screenshot, downscaled to 1600 px wide",
+      "scenario": "Book fair dashboard: the fee card, to-dos, a checklist, and numbers and charts worked out from two tables",
+      "crop": false,
+      "matte": false,
+      "colorTreatment": false
+    },
+    "muse-space-en.png": {
+      "width": 1600,
+      "height": 1000,
+      "sha256": "32b52a10377944060bc800d8034571f43d26e957128aabc3395a53710752a739",
+      "bytes": 355673,
+      "language": "en",
+      "captureMethod": "Playwright Electron window screenshot, downscaled to 1600 px wide",
+      "scenario": "Muse's own Space for the book fair",
+      "crop": false,
+      "matte": false,
+      "colorTreatment": false
+    },
+    "store-en.png": {
+      "width": 1600,
+      "height": 1107,
+      "sha256": "60240d9ebea857dabbe51745ca55c16fa36489ae2af5611923ffa4ccbb98ddd9",
+      "bytes": 448139,
+      "language": "en",
+      "captureMethod": "Playwright Electron window screenshot, downscaled to 1600 px wide",
+      "scenario": "The store window with official plugins",
+      "crop": false,
+      "matte": false,
+      "colorTreatment": false
+    },
+    "sandbox-en.png": {
+      "width": 1600,
+      "height": 1000,
+      "sha256": "fe8598048edbf53dd6608a21cea3c056f275c280abd896bc107525153394f252",
+      "bytes": 312581,
+      "language": "en",
+      "captureMethod": "Playwright Electron window screenshot, downscaled to 1600 px wide",
+      "scenario": "A small check-in plugin written by Tangu, running in a sandboxed Forsion",
+      "crop": false,
+      "matte": false,
+      "colorTreatment": false
+    },
+    "hero-en-light.png": {
+      "width": 1600,
+      "height": 720,
+      "sha256": "b2a4a329f52772ebbb242eef25759be4b5733b35a26ec3b9281e1f152774b0b6",
+      "bytes": 460463,
+      "language": "en",
+      "theme": "light",
+      "captureMethod": "Playwright Chromium screenshot of the forsion.net first screen (navigation and buttons hidden), downscaled to 1600 px wide",
+      "scenario": "The ASCII tree with the slogan"
+    },
+    "hero-en-dark.png": {
+      "width": 1600,
+      "height": 720,
+      "sha256": "550772873442c9195e13a54deb12b84d7f8036201ab297577144ed94b3a12735",
+      "bytes": 473776,
+      "language": "en",
+      "theme": "dark",
+      "captureMethod": "Playwright Chromium screenshot of the forsion.net first screen (navigation and buttons hidden), downscaled to 1600 px wide",
+      "scenario": "The ASCII tree with the slogan"
+    },
+    "hero-zh-light.png": {
+      "width": 1600,
+      "height": 720,
+      "sha256": "017dc041d580a7e9aff21d403b41ce95f7155049930eeb0074895c4d7b69bad5",
+      "bytes": 455050,
+      "language": "zh",
+      "theme": "light",
+      "captureMethod": "Playwright Chromium screenshot of the forsion.net first screen (navigation and buttons hidden), downscaled to 1600 px wide",
+      "scenario": "The ASCII tree with the slogan"
+    },
+    "hero-zh-dark.png": {
+      "width": 1600,
+      "height": 720,
+      "sha256": "5d20d41653363688bd75a0b96be312951aa44a4858a16a98456909bcd295ef16",
+      "bytes": 467909,
+      "language": "zh",
+      "theme": "dark",
+      "captureMethod": "Playwright Chromium screenshot of the forsion.net first screen (navigation and buttons hidden), downscaled to 1600 px wide",
+      "scenario": "The ASCII tree with the slogan"
     },
     "social-preview.png": {
       "width": 1280,
       "height": 640,
-      "colorType": "RGBA",
-      "sha256": "144d491cc003b11e563387c5e41247b8692e6ecfe796112725852297efbbff0c",
-      "captureMethod": "Browser canvas export",
-      "scenario": "Designed GitHub Second Brain composition generated from the current notes.png",
-      "generatedAt": "2026-09-15T16:17:01Z",
-      "source": {
-        "releaseTag": "v2.10.4",
-        "commit": "edfd128259535ad778fdc964ddcb049cca3603f1",
-        "desktopTree": "69c5c590ea4dbe8a7b5d4bdc682b41b5aa73ab93",
-        "packageVersion": "2.10.4",
-        "productTreeMatchesRelease": true
-      }
-    },
-    "logo.svg": {
-      "sha256": "b63079a5adfaa70f94f2a8647df7e96e66a1c67eeaa3c54973c49433c58278fe",
-      "source": {
-        "releaseTag": "v2.10.4",
-        "commit": "edfd128259535ad778fdc964ddcb049cca3603f1",
-        "desktopTree": "69c5c590ea4dbe8a7b5d4bdc682b41b5aa73ab93",
-        "packageVersion": "2.10.4",
-        "productTreeMatchesRelease": true
-      }
-    },
-    "markdown-blocks.png": {
-      "width": 1600,
-      "height": 1000,
-      "colorType": "RGB",
-      "sha256": "be5f965ddfc24903a8788138b8999566e08b5d413499f736f35a485bdc439a20",
-      "source": {
-        "releaseTag": "v2.11.0",
-        "commit": "5e2fe953cc86971f5d93312bd9cc71bb279592a8",
-        "desktopTree": "876c4d0bf724d43584031a33e00ce13b8bad79bf",
-        "packageVersion": "2.11.0",
-        "productTreeMatchesRelease": true
-      },
-      "captureMethod": "Playwright Electron screenshot, full viewport, CSS pixel scale",
-      "scenario": "Markdown slash menu in the public research note",
-      "generatedAt": "2026-09-17T19:04:03.874170+00:00",
-      "crop": false,
-      "matte": false,
-      "colorTreatment": false,
-      "publicFixture": true,
-      "liveModelCalls": 0,
-      "builtinAgentPortraits": true,
-      "locale": "zh-CN"
-    },
-    "agent-memory.png": {
-      "width": 1600,
-      "height": 1000,
-      "colorType": "RGB",
-      "sha256": "415771b023d1e75a34448e45fc7b1edb28dac16a83d2fb5839e3d74b95002cfd",
-      "source": {
-        "releaseTag": "v2.11.0",
-        "commit": "5e2fe953cc86971f5d93312bd9cc71bb279592a8",
-        "desktopTree": "876c4d0bf724d43584031a33e00ce13b8bad79bf",
-        "packageVersion": "2.11.0",
-        "productTreeMatchesRelease": true
-      },
-      "captureMethod": "Playwright Electron screenshot, full viewport, CSS pixel scale",
-      "scenario": "Arioso memory panel with three public context entries",
-      "generatedAt": "2026-09-17T19:04:03.874170+00:00",
-      "crop": false,
-      "matte": false,
-      "colorTreatment": false,
-      "publicFixture": true,
-      "liveModelCalls": 0,
-      "builtinAgentPortraits": true,
-      "locale": "zh-CN"
-    },
-    "team-desk.png": {
-      "width": 1600,
-      "height": 1000,
-      "colorType": "RGB",
-      "sha256": "f89a4a746a4e3db046d01f7338a6c9778721bd62556fdd8ea8fc7de6ebbcd896",
-      "source": {
-        "releaseTag": "v2.11.0",
-        "commit": "5e2fe953cc86971f5d93312bd9cc71bb279592a8",
-        "desktopTree": "876c4d0bf724d43584031a33e00ce13b8bad79bf",
-        "packageVersion": "2.11.0",
-        "productTreeMatchesRelease": true
-      },
-      "captureMethod": "Playwright Electron screenshot, full viewport, CSS pixel scale",
-      "scenario": "TEAM public discussion and persisted member status",
-      "generatedAt": "2026-09-17T19:04:03.874170+00:00",
-      "crop": false,
-      "matte": false,
-      "colorTreatment": false,
-      "publicFixture": true,
-      "liveModelCalls": 0,
-      "builtinAgentPortraits": true,
-      "locale": "zh-CN"
-    },
-    "team-thread.png": {
-      "width": 1600,
-      "height": 1000,
-      "colorType": "RGB",
-      "sha256": "846782573c75874ee56f0ac3e709debb15ec79bc79c3182ce6958813480fc888",
-      "source": {
-        "releaseTag": "v2.11.0",
-        "commit": "5e2fe953cc86971f5d93312bd9cc71bb279592a8",
-        "desktopTree": "876c4d0bf724d43584031a33e00ce13b8bad79bf",
-        "packageVersion": "2.11.0",
-        "productTreeMatchesRelease": true
-      },
-      "captureMethod": "Playwright Electron screenshot, full viewport, CSS pixel scale",
-      "scenario": "Recita child conversation beside the public TEAM discussion",
-      "generatedAt": "2026-09-17T19:04:03.874170+00:00",
-      "crop": false,
-      "matte": false,
-      "colorTreatment": false,
-      "publicFixture": true,
-      "liveModelCalls": 0,
-      "builtinAgentPortraits": true,
-      "locale": "zh-CN"
-    },
-    "muse-inbox.png": {
-      "width": 1600,
-      "height": 1000,
-      "colorType": "RGB",
-      "sha256": "1b287e409b6a723176db0f187ad57e9344da03d117c082f66589a44e3365bcfc",
-      "source": {
-        "releaseTag": "v2.11.0",
-        "commit": "5e2fe953cc86971f5d93312bd9cc71bb279592a8",
-        "desktopTree": "876c4d0bf724d43584031a33e00ce13b8bad79bf",
-        "packageVersion": "2.11.0",
-        "productTreeMatchesRelease": true
-      },
-      "captureMethod": "Playwright Electron screenshot, full viewport, CSS pixel scale",
-      "scenario": "Muse Inbox follow-up with task details and action controls",
-      "generatedAt": "2026-09-17T19:04:03.874170+00:00",
-      "crop": false,
-      "matte": false,
-      "colorTreatment": false,
-      "publicFixture": true,
-      "liveModelCalls": 0,
-      "builtinAgentPortraits": true,
-      "locale": "zh-CN"
-    },
-    "project-note.png": {
-      "width": 1600,
-      "height": 1000,
-      "colorType": "RGB",
-      "sha256": "611e3e999f79358fac98aa7a65a5bd41731886a83a8b3a888d46e1da44810a24",
-      "source": {
-        "releaseTag": "v2.11.0",
-        "commit": "5e2fe953cc86971f5d93312bd9cc71bb279592a8",
-        "desktopTree": "876c4d0bf724d43584031a33e00ce13b8bad79bf",
-        "packageVersion": "2.11.0",
-        "productTreeMatchesRelease": true
-      },
-      "captureMethod": "Playwright Electron screenshot, full viewport, CSS pixel scale",
-      "scenario": "Local project note linking material, responsibilities and next steps",
-      "generatedAt": "2026-09-17T19:04:03.874170+00:00",
-      "crop": false,
-      "matte": false,
-      "colorTreatment": false,
-      "publicFixture": true,
-      "liveModelCalls": 0,
-      "builtinAgentPortraits": true,
-      "locale": "zh-CN"
-    },
-    "agent-memory-en.png": {
-      "width": 1600,
-      "height": 1000,
-      "colorType": "RGB",
-      "sha256": "5dcd64f182085a504fe61f5fb402b8f7bc60004d4b09b58923e2107bce209411",
-      "source": {
-        "releaseTag": "v2.11.0",
-        "commit": "aaccdd326e369e8228c77607ea607275a3bfdfef",
-        "desktopTree": "876c4d0bf724d43584031a33e00ce13b8bad79bf",
-        "packageVersion": "2.11.0",
-        "productTreeMatchesRelease": true
-      },
-      "captureMethod": "Playwright Electron screenshot, full viewport, CSS pixel scale",
-      "scenario": "Arioso memory panel with three public context entries",
-      "generatedAt": "2026-09-17T19:38:40.010218+00:00",
-      "crop": false,
-      "matte": false,
-      "colorTreatment": false,
-      "publicFixture": true,
-      "liveModelCalls": 0,
-      "builtinAgentPortraits": true,
-      "locale": "en"
-    },
-    "team-thread-en.png": {
-      "width": 1600,
-      "height": 1000,
-      "colorType": "RGB",
-      "sha256": "d566465b1f762f66729e713a1b67c49de2b14f5c0eda82dcbe4c6bf0e1136887",
-      "source": {
-        "releaseTag": "v2.11.0",
-        "commit": "aaccdd326e369e8228c77607ea607275a3bfdfef",
-        "desktopTree": "876c4d0bf724d43584031a33e00ce13b8bad79bf",
-        "packageVersion": "2.11.0",
-        "productTreeMatchesRelease": true
-      },
-      "captureMethod": "Playwright Electron screenshot, full viewport, CSS pixel scale",
-      "scenario": "Recita child conversation beside the public TEAM discussion",
-      "generatedAt": "2026-09-17T19:38:40.010218+00:00",
-      "crop": false,
-      "matte": false,
-      "colorTreatment": false,
-      "publicFixture": true,
-      "liveModelCalls": 0,
-      "builtinAgentPortraits": true,
-      "locale": "en"
-    },
-    "team-desk-en.png": {
-      "width": 1600,
-      "height": 1000,
-      "colorType": "RGB",
-      "sha256": "be453b1b5dd7efb14eaed91e9e814b9956b9e145ef42cb8eb5b2b0ed1b14cc66",
-      "source": {
-        "releaseTag": "v2.11.0",
-        "commit": "aaccdd326e369e8228c77607ea607275a3bfdfef",
-        "desktopTree": "876c4d0bf724d43584031a33e00ce13b8bad79bf",
-        "packageVersion": "2.11.0",
-        "productTreeMatchesRelease": true
-      },
-      "captureMethod": "Playwright Electron screenshot, full viewport, CSS pixel scale",
-      "scenario": "TEAM public discussion and persisted member status",
-      "generatedAt": "2026-09-17T19:38:40.010218+00:00",
-      "crop": false,
-      "matte": false,
-      "colorTreatment": false,
-      "publicFixture": true,
-      "liveModelCalls": 0,
-      "builtinAgentPortraits": true,
-      "locale": "en"
-    },
-    "muse-inbox-en.png": {
-      "width": 1600,
-      "height": 1000,
-      "colorType": "RGB",
-      "sha256": "88987008ce8dda320fc97f0370a6a7abddb2ec0aee2c0dd9081f746188995fec",
-      "source": {
-        "releaseTag": "v2.11.0",
-        "commit": "aaccdd326e369e8228c77607ea607275a3bfdfef",
-        "desktopTree": "876c4d0bf724d43584031a33e00ce13b8bad79bf",
-        "packageVersion": "2.11.0",
-        "productTreeMatchesRelease": true
-      },
-      "captureMethod": "Playwright Electron screenshot, full viewport, CSS pixel scale",
-      "scenario": "Muse Inbox follow-up with task details and action controls",
-      "generatedAt": "2026-09-17T19:38:40.010218+00:00",
-      "crop": false,
-      "matte": false,
-      "colorTreatment": false,
-      "publicFixture": true,
-      "liveModelCalls": 0,
-      "builtinAgentPortraits": true,
-      "locale": "en"
-    },
-    "project-note-en.png": {
-      "width": 1600,
-      "height": 1000,
-      "colorType": "RGB",
-      "sha256": "75f9f5f4667abf83edbc75d1951281bbceddd38b978d7cb4c62b8215b2eb196e",
-      "source": {
-        "releaseTag": "v2.11.0",
-        "commit": "aaccdd326e369e8228c77607ea607275a3bfdfef",
-        "desktopTree": "876c4d0bf724d43584031a33e00ce13b8bad79bf",
-        "packageVersion": "2.11.0",
-        "productTreeMatchesRelease": true
-      },
-      "captureMethod": "Playwright Electron screenshot, full viewport, CSS pixel scale",
-      "scenario": "Local project note linking material, responsibilities and next steps",
-      "generatedAt": "2026-09-17T19:38:40.010218+00:00",
-      "crop": false,
-      "matte": false,
-      "colorTreatment": false,
-      "publicFixture": true,
-      "liveModelCalls": 0,
-      "builtinAgentPortraits": true,
-      "locale": "en"
-    },
-    "markdown-blocks-en.png": {
-      "width": 1600,
-      "height": 1000,
-      "colorType": "RGB",
-      "sha256": "6b801c510cc779cce8f6e74e8e9815bca1a9b97464615f057661391321083404",
-      "source": {
-        "releaseTag": "v2.11.0",
-        "commit": "aaccdd326e369e8228c77607ea607275a3bfdfef",
-        "desktopTree": "876c4d0bf724d43584031a33e00ce13b8bad79bf",
-        "packageVersion": "2.11.0",
-        "productTreeMatchesRelease": true
-      },
-      "captureMethod": "Playwright Electron screenshot, full viewport, CSS pixel scale",
-      "scenario": "Markdown slash menu in the public research note",
-      "generatedAt": "2026-09-17T19:38:40.010218+00:00",
-      "crop": false,
-      "matte": false,
-      "colorTreatment": false,
-      "publicFixture": true,
-      "liveModelCalls": 0,
-      "builtinAgentPortraits": true,
-      "locale": "en"
+      "sha256": "1bbbb6a004f1921e2c2fc872917b732b39329ab82afa268de70fe6ea1291ab00",
+      "bytes": 307172,
+      "captureMethod": "Playwright Chromium screenshot of the forsion.net first screen at 1280 × 640",
+      "scenario": "GitHub social preview: the ASCII tree with the slogan"
     }
-  },
-  "captureScript": "docs/showcase/capture.cjs",
-  "captureScriptSha256": "7fb5ebfda59eff03d6a505c641a13a9b3f04b86d613a495197d942212048f215",
-  "locales": [
-    "zh-CN",
-    "en"
-  ],
-  "englishFixtureSha256": "43039d43e7341581e1da2d5169691d72f8467fbe5841804acbaa3309cbe1dd0f"
+  }
 }

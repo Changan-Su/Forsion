@@ -9,8 +9,9 @@ import type { DashboardCardSize } from '@lcl/engine'
 import { useWorkspace } from '@lcl/engine'
 import { parseCalDate } from '@amadeus-shared/db/calDate'
 import { setAggCell, firstDateCol } from '../amadeus/store/dbAggregateStore'
-import { useCalendarMembers } from '../amadeus/store/calendarMembers'
+import { todoRowsOf, useCalendarMembers } from '../amadeus/store/calendarMembers'
 import { useCalendarConfig, colorForDb, isHidden } from '../amadeus/store/calendarConfigStore'
+import { useStableCalendarColors } from '../amadeus/store/calendarColors'
 import { usePageStore } from '../amadeus/store/pageStore'
 import { startOfDay, toLocalDate } from './calendar/dateUtils'
 import { todoDueMeta } from './calendar/todoMeta'
@@ -56,7 +57,7 @@ export function TodoDashboardCard({ size }: { size: DashboardCardSize }) {
     for (const member of members) {
       if (!member.checkboxCol) continue
       const checkCol = member.checkboxCol
-      for (const row of member.db.rows) {
+      for (const row of todoRowsOf(member)) { // 日历上建的日程(带标记且有日期)不算待办
         if (row.cells[checkCol] === true) continue
         const raw = typeof row.cells[member.dateCol] === 'string' ? String(row.cells[member.dateCol]) : ''
         out.push({ key: `db:${member.db.path}:${row.rowId}`, name: row.name, complete: () => setAggCell(member.db, row.rowId, checkCol, true), due: todoDueMeta(raw, today) })
@@ -97,6 +98,7 @@ export function useAgendaItems(): AgendaItem[] {
   const other = useOtherVaultCalDbs()
   const ics = useIcsCalDbs()
   const byVault = useCalendarConfig((s) => s.byVault)
+  useStableCalendarColors()
   return useMemo(() => {
     const sources = [
       ...members.map((member) => ({ db: member.db, dateCol: member.dateCol })),

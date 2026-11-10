@@ -16,17 +16,21 @@ import { homeTarget } from '../services/engine/targets'
 interface AgentScheduleState {
   schedules: AgentScheduleInfo[]
   loaded: boolean
+  /** 上一次拉取引擎答上了(拉失败时 loaded 照样为真、schedules 留旧值):「拉过但是空的」和「引擎还没起来」靠它分开。 */
+  ok: boolean
   refresh(cfg: TanguDesktopConfig): Promise<void>
 }
 
 export const useAgentSchedules = create<AgentScheduleState>((set, get) => ({
   schedules: [],
   loaded: false,
+  ok: false,
   async refresh(cfg) {
-    const next = await getAgentSchedules(homeTarget()).catch(() => get().schedules)
+    let ok = true
+    const next = await getAgentSchedules(homeTarget()).catch(() => { ok = false; return get().schedules })
     // 旧/代理后端偶尔会以 200 返回缺字段对象；Calendar 不应因一份可选只读源把主视图一起砸掉。
     const schedules = Array.isArray(next) ? next : get().schedules
-    set({ schedules, loaded: true })
+    set({ schedules, loaded: true, ok: ok && Array.isArray(next) })
   },
 }))
 

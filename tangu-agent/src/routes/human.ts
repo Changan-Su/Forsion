@@ -1,9 +1,9 @@
-import { Router, type Response, type RequestHandler } from 'express';
+import { Router, type NextFunction, type Response, type RequestHandler } from 'express';
 import { authMiddleware, type AuthRequest } from '../core/http.js';
 import { deps } from '../seams/runtime.js';
 import { HumanError, isHumanFile, readHuman, writeHuman, type HumanScope } from '../agents/humanStore.js';
 import { mirrorLegacyHuman } from '../agents/humanFolder.js';
-import { mutatePortrait, portraitEntries, PORTRAIT_SHORT_VERSION, readPortrait } from '../agents/humanPortrait.js';
+import { dismissPortraitOverflow, mutatePortrait, portraitEntries, portraitEntryId, PORTRAIT_SHORT_VERSION, readPortrait, readPortraitOverflow } from '../agents/humanPortrait.js';
 import { keepPortraitItem, movePortraitItem, readPortraitMove, startPortraitScan, undoPortraitMove } from '../agents/portraitMove.js';
 import { getAgent, isValidSlug, resolveMemorySlug } from '../agents/agentRegistry.js';
 import { humanProjectScope } from '../services/humanContext.js';
@@ -14,13 +14,17 @@ import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { agentsDir, defaultCalendarFile, ensureHumanFolder, humanDir, tanguHome } from '../core/tanguHome.js';
 import { atomicSyncWrite, readSyncBytes } from '../services/agentSyncPaths.js';
-import { createMemoryRepository, normalizeMemoryFact, withMemoryDirectoryLock } from '../services/memoryRepository.js';
+import { isSettingsDbShape, SETTINGS_MAX_BYTES } from '../contracts/agentSyncRules.js';
+import { createMemoryRepository, MemoryRepositoryError, normalizeMemoryFact, withMemoryDirectoryLock, withMemoryDirectoryLockRetry } from '../services/memoryRepository.js';
 import { serializeDb, type DbFile } from '../services/amadeusDb.js';
+import { pinPortraitEntry, portraitOrganizeHistory, undoPortraitOrganize } from '../agents/portraitLayers.js';
+import { agentOrganizeHistory, pinAgentEntry, readAgentLayers, undoAgentOrganize } from '../services/agentMemoryLayers.js';
+import { lastOrganize, organizeAvailable, organizeRunning, runOrganize, type OrganizeTarget } from '../services/memoryOrganize.js';
 
 const router = Router();
 function fail(res: Response, e: any) {
   const code = e?.code || 'HUMAN_FAILED';
-  res.status(code === 'HUMAN_CONFLICT' || code === 'MEMORY_VERSION_CONFLICT' ? 409 : code === 'HUMAN_VERSION_REQUIRED' ? 428 : code === 'HUMAN_NOT_FOUND' || code === 'PORTRAIT_NOT_FOUND' ? 404 : 400)
+  res.status(code === 'HUMAN_CONFLICT' || code === 'MEMORY_VERSION_CONFLICT' ? 409 : code === 'HUMAN_VERSION_REQUIRED' ? 428 : code === 'HUMAN_NOT_FOUND' || code === 'PORTRAIT_NOT_FOUND' || code === 'MEMORY_NOT_FOUND' ? 404 : code === 'MEMORY_BUSY' ? 409 : 400)
     .json({ error: code, detail: e?.message || 'Collaboration request failed.' });
 }
 async function scopeOf(req: AuthRequest, res: Response): Promise<HumanScope | null> {
@@ -108,6 +112,69 @@ router.put('/agent/human/CALENDAR.db', authMiddleware, async (req: AuthRequest, 
     res.json({ ok: true, version: next });
   } catch (e: any) { res.status(500).json({ error: 'HUMAN_FAILED', detail: e?.message || 'Write failed.' }); }
 });
+// 随账号走的设置文件 human/Settings/<name>.db(11-10,第一份是日历设置 calendar.db):一行一项设置的 DbFile,和默认日历同一条同步通道。
+// 桌面渲染层读写这一对,网页 / 手机走云端的同名接口(/api/agent/human/Settings/<name>.db)—— 两边报文同形,渲染层用同一套解析;
+// 票据(version)对调用方是不透明的字符串,这里 = 文件字节的 sha256。内容当不透明的 DbFile,只校验形状。
+// 和默认日历那一对同一个边界(只在本机、拒远端)、同一把 human/ 目录锁、原子写、按内容哈希比对交换。调用方靠 GET 的四种回答决定能不能写:
+//   200 { status: 'ok', exists: true, data, version }        读到了
+//   200 { status: 'missing', exists: false, version: null }  接口在、文件还没建:可以带 version: null 新建
+//   422 { error: 'HUMAN_SETTINGS_CORRUPT', status: 'corrupt' } 文件解析不了 / 形状不对:不许覆盖(PUT 一律 409,不发票据),等同步把好的那份带下来
+//   其余(400 名字不对 / 401 / 403 / 404 / 5xx)              不知道:不写
+// 旧引擎没有这条路由,回的是 404(/agent/human/:file 那条还会回带 code 的 404):「文件还没建」从不走 404,
+// HTTP 200 + status: 'missing' + exists: false 是旧引擎给不出的回答,调用方只认它是「确认没有」。
+const SETTINGS_NAME = /^[a-z0-9][a-z0-9-]{0,63}\.db$/;
+type SettingsCurrent = { status: 'ok'; exists: true; data: DbFile; version: string } | { status: 'missing'; exists: false; version: null } | { status: 'corrupt' };
+/** 盘上这份现在是哪种状态。解析不了 / 形状不对(契约 isSettingsDbShape,同步判「读不读得懂」用的是同一条)= corrupt。读盘失败照抛(= 不知道)。 */
+function settingsCurrent(file: string): { current: SettingsCurrent; hash: string | null } {
+  const bytes = readSyncBytes(tanguHome(), file);
+  if (!bytes) return { current: { status: 'missing', exists: false, version: null }, hash: null };
+  const hash = calVersion(bytes);
+  let data: unknown;
+  try { data = JSON.parse(bytes.toString('utf8')); } catch { return { current: { status: 'corrupt' }, hash }; }
+  return { current: isSettingsDbShape(data) ? { status: 'ok', exists: true, data: data as DbFile, version: hash } : { status: 'corrupt' }, hash };
+}
+/** 路径里的文件名 → 绝对路径。大小写敏感(和云端那条一样);名字不合规矩回 400。 */
+function settingsFile(req: AuthRequest, res: Response, next: NextFunction): string | null {
+  if (!req.path.startsWith('/agent/human/Settings/')) { next(); return null; } // express 缺省不分大小写:/agent/human/settings/… 不是这条路由
+  const name = String(req.params.file ?? '');
+  if (!SETTINGS_NAME.test(name)) { res.status(400).json({ error: 'HUMAN_BAD_SETTINGS_NAME', detail: 'Settings files are Settings/<name>.db with a lowercase name.' }); return null; }
+  return join(humanDir(), 'Settings', name);
+}
+router.get('/agent/human/Settings/:file', authMiddleware, (req: AuthRequest, res, next) => {
+  if (!humanLocal(req, res)) return;
+  const file = settingsFile(req, res, next); if (!file) return;
+  try {
+    ensureHumanFolder();
+    const { current } = settingsCurrent(file);
+    if (current.status === 'corrupt') return void res.status(422).json({ error: 'HUMAN_SETTINGS_CORRUPT', detail: 'The settings file is not a valid database file; it was left untouched.', ...current });
+    res.json(current);
+  } catch (e: any) { res.status(500).json({ error: 'HUMAN_FAILED', detail: e?.message || 'Read failed.' }); }
+});
+router.put('/agent/human/Settings/:file', authMiddleware, async (req: AuthRequest, res, next) => {
+  if (!humanLocal(req, res)) return;
+  const file = settingsFile(req, res, next); if (!file) return;
+  const { data, version } = req.body ?? {};
+  // version:上次读到的那个;null = 期望文件还不存在(首次创建);不带 = 400
+  if (!isSettingsDbShape(data) || (version !== null && typeof version !== 'string')) return void res.status(400).json({ error: 'HUMAN_BAD_SETTINGS', detail: 'data must be a database file and version a string or null.' });
+  const text = serializeDb(data as DbFile);
+  if (Buffer.byteLength(text) > SETTINGS_MAX_BYTES) return void res.status(413).json({ error: 'HUMAN_SETTINGS_TOO_LARGE', detail: `A settings file is limited to ${SETTINGS_MAX_BYTES / 1024} KB.`, limit: SETTINGS_MAX_BYTES });
+  try {
+    ensureHumanFolder();
+    // 同步落盘(引擎的旧同步、桌面宿主的新同步)拿的是同一把锁:撞上了稍等重试,约 1 秒还拿不到回 503(调用方按「不知道」处理,稍后再来)
+    const outcome = await withMemoryDirectoryLockRetry(humanDir(), (): { version: string } | { current: SettingsCurrent } => {
+      const { current } = settingsCurrent(file);
+      // 坏文件没有票据:带着它的哈希来也盖不掉。票据不对(别人刚改过 / 刚建了 / 已经没了):带回现在这份,调用方合进去再写
+      if (current.status === 'corrupt' || current.version !== version) return { current };
+      atomicSyncWrite(tanguHome(), file, text);
+      return { version: calVersion(text) };
+    });
+    if ('current' in outcome) return void res.status(409).json({ error: 'HUMAN_CONFLICT', detail: 'The settings file changed since it was read.', ...outcome.current });
+    res.json({ ok: true, version: outcome.version });
+  } catch (e: any) {
+    const busy = e instanceof MemoryRepositoryError && e.code === 'MEMORY_BUSY';
+    res.status(busy ? 503 : 500).json({ error: busy ? 'HUMAN_BUSY' : 'HUMAN_FAILED', detail: e?.message || 'Write failed.' });
+  }
+});
 // 画像条目(human/SOUL.md,10-29):对话里回执行读状态 / 撤销用。和 human/ 其余接口同一个边界:只在本机、拒远端。
 // 写入按人的身份记(actor user,来源 user);删掉的条目记墓碑,后台整理不再写回。
 function humanLocal(req: AuthRequest, res: Response): boolean {
@@ -131,6 +198,15 @@ router.post('/agent/human/SOUL.md/entries', authMiddleware, async (req: AuthRequ
     const r = await mutatePortrait({ action, id, fact, expectedVersion, actor: 'user', source: { kind: 'user' } });
     res.json({ ...portraitBody(r.document), ...(r.entry ? { entry: r.entry } : {}) });
   } catch (e) { fail(res, e); }
+});
+// Dream 因为画像满了、退回各 Agent 记忆的条目(11-09):画像页提示一句、点开看是哪几条,「知道了」清掉。只在本机、拒远端。
+router.get('/agent/human/SOUL.md/overflow', authMiddleware, async (req: AuthRequest, res) => {
+  if (!humanLocal(req, res)) return;
+  try { res.json({ items: await readPortraitOverflow() }); } catch (e) { fail(res, e); }
+});
+router.post('/agent/human/SOUL.md/overflow/dismiss', authMiddleware, async (req: AuthRequest, res) => {
+  if (!humanLocal(req, res)) return;
+  try { dismissPortraitOverflow(); res.json({ items: [] }); } catch (e) { fail(res, e); }
 });
 // 搬家卡(10-30 第 2 步):人点了才扫、逐条点了才挪。同样只在本机、拒远端。
 router.get('/agent/human/SOUL.md/move', authMiddleware, async (req: AuthRequest, res) => {
@@ -191,6 +267,85 @@ router.post('/agent/agents/:slug/memory/promote', authMiddleware, async (req: Au
     ledger.inc('daily_human', 'promoteToAgentMd');
     scheduleAgentFilesSync(req.user!.userId, slug); // 记忆少了一条:和记忆视图一样排一次后台同步(没开云同步的是空操作)
     res.json({ agentMd: { version: written.document.version }, memoryVersion: after.version });
+  } catch (e) { fail(res, e); }
+});
+// ── 记忆分层(11-09 第二步):画像 / Agent 记忆的整理、整理记录(可整次撤销)、图钉。只在本机、拒远端 ──
+const organizeView = async (target: OrganizeTarget, history: Array<{ id: string; at: number; moves: Array<{ to: string }>; undoneAt?: number; before?: unknown; after?: unknown }>) => ({
+  available: await organizeAvailable(), running: organizeRunning(target), last: lastOrganize(target),
+  history: history.map((r) => ({ id: r.id, at: r.at, moved: r.moves.filter((m) => m.to !== 'archive').length, archived: r.moves.filter((m) => m.to === 'archive').length, topics: [...new Set(r.moves.map((m) => m.to))], before: r.before, after: r.after, ...(r.undoneAt ? { undoneAt: r.undoneAt } : {}) })),
+});
+router.get('/agent/human/SOUL.md/organize', authMiddleware, async (req: AuthRequest, res) => {
+  if (!humanLocal(req, res)) return;
+  try { res.json(await organizeView({ kind: 'portrait' }, await portraitOrganizeHistory())); } catch (e) { fail(res, e); }
+});
+router.post('/agent/human/SOUL.md/organize', authMiddleware, async (req: AuthRequest, res) => {
+  if (!humanLocal(req, res)) return;
+  try { res.json(await runOrganize({ kind: 'portrait' }, { userId: req.user!.userId, manual: true })); } catch (e) { fail(res, e); }
+});
+router.post('/agent/human/SOUL.md/organize/:id/undo', authMiddleware, async (req: AuthRequest, res) => {
+  if (!humanLocal(req, res)) return;
+  try { const r = await undoPortraitOrganize(String(req.params.id)); res.json({ id: r.id, undoneAt: r.undoneAt }); } catch (e) { fail(res, e); }
+});
+router.post('/agent/human/SOUL.md/pin', authMiddleware, async (req: AuthRequest, res) => {
+  if (!humanLocal(req, res)) return;
+  try {
+    // 界面按原句指(画像页画的是文件本身,不另取条目列表);id 也认(和 /entries 的号同一个)
+    const { id: given, fact, pinned, expectedVersion } = req.body ?? {};
+    const id = typeof given === 'string' && given ? given : typeof fact === 'string' && fact.trim() ? portraitEntryId(fact) : '';
+    if (!id || typeof pinned !== 'boolean') throw new HumanError('PORTRAIT_INVALID', 'id (or fact) and pinned are required.');
+    if (typeof expectedVersion !== 'string' || !expectedVersion) throw new HumanError('HUMAN_VERSION_REQUIRED', 'Read the portrait and supply expectedVersion.');
+    await pinPortraitEntry({ id, pinned, expectedVersion });
+    res.json(await readHuman(PORTRAIT_HUMAN));
+  } catch (e) { fail(res, e); }
+});
+const PORTRAIT_HUMAN: HumanScope = { kind: 'human', file: 'SOUL.md' };
+/** 这个 Agent 实际读写的那份记忆(共用默认记忆的 Agent → 默认 Agent 的文件夹,和面板、写入端同一个口径)。 */
+async function memoryBase(slug: string): Promise<{ memorySlug: string; base: string }> {
+  const def = isValidSlug(slug) ? await getAgent(slug) : null;
+  if (!def) throw new HumanError('HUMAN_NOT_FOUND', 'Agent not found.');
+  const memorySlug = resolveMemorySlug(def);
+  if (!isValidSlug(memorySlug)) throw new HumanError('HUMAN_NOT_FOUND', 'Invalid memory scope.');
+  return { memorySlug, base: join(agentsDir(), memorySlug) };
+}
+router.get('/agent/agents/:slug/memory/layers', authMiddleware, async (req: AuthRequest, res) => {
+  if (!humanLocal(req, res)) return;
+  try {
+    const { memorySlug, base } = await memoryBase(String(req.params.slug));
+    const l = readAgentLayers(base);
+    res.json({
+      version: l.version, residentChars: l.residentChars, limit: l.limit,
+      resident: l.resident.map((r) => ({ id: r.entry.id, text: r.text, pinned: r.pinned, by: r.by, shadowed: r.shadowed })),
+      topics: l.topics.map((t) => ({ key: t.key, title: t.title, about: t.about, path: t.path, entries: t.entries.map((e) => ({ id: e.entryId, text: e.text, by: e.by })) })),
+      archive: l.archive ? { key: l.archive.key, title: l.archive.title, path: l.archive.path, entries: l.archive.entries.map((e) => ({ id: e.entryId, text: e.text, by: e.by })) } : null,
+      organize: await organizeView({ kind: 'agent', slug: memorySlug }, agentOrganizeHistory(base)),
+    });
+  } catch (e) { fail(res, e); }
+});
+router.post('/agent/agents/:slug/memory/organize', authMiddleware, async (req: AuthRequest, res) => {
+  if (!humanLocal(req, res)) return;
+  try {
+    const { memorySlug } = await memoryBase(String(req.params.slug));
+    res.json(await runOrganize({ kind: 'agent', slug: memorySlug }, { userId: req.user!.userId, manual: true }));
+  } catch (e) { fail(res, e); }
+});
+router.post('/agent/agents/:slug/memory/organize/:id/undo', authMiddleware, async (req: AuthRequest, res) => {
+  if (!humanLocal(req, res)) return;
+  try {
+    const { base } = await memoryBase(String(req.params.slug));
+    const r = undoAgentOrganize(base, String(req.params.id));
+    scheduleAgentFilesSync(req.user!.userId, String(req.params.slug));
+    res.json({ id: r.id, undoneAt: r.undoneAt, changed: r.undoChanged ?? [] });
+  } catch (e) { fail(res, e); }
+});
+router.post('/agent/agents/:slug/memory/pin', authMiddleware, async (req: AuthRequest, res) => {
+  if (!humanLocal(req, res)) return;
+  try {
+    const { id, pinned, expectedVersion } = req.body ?? {};
+    if (typeof id !== 'string' || !id || typeof pinned !== 'boolean') throw new HumanError('PORTRAIT_INVALID', 'id and pinned are required.');
+    const { base } = await memoryBase(String(req.params.slug));
+    pinAgentEntry(base, { id, pinned, ...(typeof expectedVersion === 'string' && expectedVersion ? { expectedVersion } : {}) });
+    scheduleAgentFilesSync(req.user!.userId, String(req.params.slug));
+    res.json({ ok: true });
   } catch (e) { fail(res, e); }
 });
 // Keep paths explicit so the remote-access route allowlist can audit every endpoint.

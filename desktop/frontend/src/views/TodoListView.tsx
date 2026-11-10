@@ -26,7 +26,7 @@ import { DropdownMenu, DropdownMenuItem } from '@astryxdesign/core/DropdownMenu'
 import { Check, ChevronRight, Clock, ExternalLink, FileText, List, Plus } from 'lucide-react'
 import { AstryxScope } from '../theme/astryxBridge'
 import { createAggEvent, setAggCell } from '../amadeus/store/dbAggregateStore'
-import { useCalendarMembers, type CalMemberDb } from '../amadeus/store/calendarMembers'
+import { todoRowsOf, useCalendarMembers, type CalMemberDb } from '../amadeus/store/calendarMembers'
 import { patchMark, useMdMarks } from '../amadeus/store/mdMarkStore'
 import type { MdMark } from '@amadeus-shared/mdMarks'
 import { openNoteAtHeading } from '../amadeusNav'
@@ -36,6 +36,7 @@ import { parseQuickAdd } from './calendar/nlDate'
 import { TODO_DRAG_MIME } from './calendar/draft'
 import { usePageStore } from '../amadeus/store/pageStore'
 import { colorForDb, useCalendarConfig, defaultDbPath } from '../amadeus/store/calendarConfigStore'
+import { useStableCalendarColors } from '../amadeus/store/calendarColors'
 import { EventCard, type Anchor, type CardTarget } from './calendar/EventCard'
 import { rescheduleCalendarRow, rescheduleNoteTask } from './calendar/eventActions'
 import { todoDueMeta } from './calendar/todoMeta'
@@ -192,6 +193,7 @@ export function TodoListView({ params, leaf }: { params?: Record<string, unknown
   const addRef = useRef<HTMLInputElement>(null)
   const vault = usePageStore((s) => s.vaultRoot) ?? ''
   const byVault = useCalendarConfig((s) => s.byVault)
+  useStableCalendarColors()
 
   const today = useMemo(() => startOfDay(new Date()), [])
   // 全部可当待办来源的表(带勾选列)—— 清单菜单列的是这一份,不受当前筛选影响。
@@ -205,7 +207,7 @@ export function TodoListView({ params, leaf }: { params?: Record<string, unknown
     for (const m of allSources) {
       const checkCol = m.checkboxCol as string
       const color = colorForDb(vault, byVault, m.db.path, members.indexOf(m))
-      for (const r of m.db.rows) {
+      for (const r of todoRowsOf(m)) { // 日历上建的日程(带标记且有日期)不进待办
         const raw = typeof r.cells[m.dateCol] === 'string' ? (r.cells[m.dateCol] as string) : ''
         out.push({ key: `db:${m.db.path}:${r.rowId}`, name: r.name || t('todolist.untitled'), checked: r.cells[checkCol] === true, raw, source: m.db.name, short: m.db.name, color, db: m, rowId: r.rowId })
       }

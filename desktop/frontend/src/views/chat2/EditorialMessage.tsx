@@ -13,12 +13,14 @@ import { ChangeReceipt } from './ChangeReceipt'
 import { Fragment, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type Ref } from 'react'
 import { useStreamReveal } from './streamReveal'
 import { Copy, RotateCcw, GitBranch, MessageCircleQuestion, CornerUpLeft, Pencil, Volume2, Square, Loader2, LogIn, Zap, History as HistoryIcon, FileCode2, MessageSquare, ShieldQuestion, CircleCheck, CircleX, CircleHelp, Clock, Undo2 } from 'lucide-react'
-import { FileInput } from 'lucide-react'
+import { FileInput, StepForward } from 'lucide-react'
+import { turnHasOutput } from './continueTurn'
+import { TURN_RESUME_OPEN } from '../../../../../tangu-agent/src/contracts/turnResume'
 import { useNoteInsertState } from './insertToNote'
 import * as api from '../../services/backendService'
 import type { UiMessage, TanguDesktopConfig, AgentConfig, StoredDesktopConfig, ToolEvent, InquiryRequest, SketchItem, LiveWait } from '../../../../../tangu-agent/src/contracts/clientTypes'
 import type { PreviewTarget } from '../../components/WorkspaceFilePreview'
-import { Markdown } from '../../components/Markdown'
+import { Markdown, RunContext } from '../../components/Markdown'
 import { ChatWikiLink, WikiText } from '../../components/ChatWikiLink'
 import { leadingCommand } from './composerTokens'
 import { RefChipView, splitLeadingRefs } from './RefChipView'
@@ -226,6 +228,10 @@ registerMessages({
   },
   'chat.err.relogin': { zh: '重新登录 {provider}', en: 'Sign in to {provider} again' },
   'chat.retry': { zh: '重试', en: 'Retry' },
+  'chat.continue': { zh: '继续生成', en: 'Continue' },
+  'chat.continueTip': { zh: '保留已生成的内容，从断开处接着写', en: 'Keep what was generated and pick up where it stopped' },
+  'chat.regenerateTip': { zh: '删掉这一轮，从你的消息重新生成', en: 'Discard this turn and regenerate from your message' },
+  'msg.resumed': { zh: '从这里继续生成', en: 'Continued from here' },
   'chat.copyError': { zh: '复制错误', en: 'Copy error' },
   'rewind.title': { zh: '回退到这条消息', en: 'Rewind to this message' },
   'rewind.counting': { zh: '正在统计改动…', en: 'Counting changes…' },
@@ -307,12 +313,16 @@ export interface MessageHandlers {
   onQuote?: (text: string) => void
   /** 回答失败后「重试」:同 /retry(从最后一条用户消息重发)。只读视图不传 → 不出按钮。 */
   onRetry?: () => void
+  /** 回答失败后「继续生成」:不删,发 <turn_resume> 接着写(store.continueRun)。这一轮有产出时才露出;只读视图不传。 */
+  onContinue?: () => void
 }
 
 /** 失败那一行 + 下面「重试 · 复制错误」(走查续六 6.3)。只在会话最后一条、且没在跑时给重试:重试后新一轮接上,按钮自然消失。 */
 function RunErrorRow({ msg, sessionId, modelId, handlers }: { msg: UiMessage; sessionId?: string; modelId?: string; handlers?: MessageHandlers }) {
   const { t } = useI18n()
   const canRetry = useApp((s) => !!handlers?.onRetry && !!sessionId && !s.runningBySession[sessionId] && s.messagesBySession[sessionId]?.at(-1)?.id === msg.id)
+  // 这一轮已有产出(正文 / 工具调用):「重试」会把它们删掉重来 —— 拆成「继续生成」(主)与「重新生成」两条路
+  const canContinue = useApp((s) => canRetry && !!handlers?.onContinue && turnHasOutput(s.messagesBySession[sessionId!]))
   return (
     <>
       <div className="t2-tool err">
@@ -323,7 +333,8 @@ function RunErrorRow({ msg, sessionId, modelId, handlers }: { msg: UiMessage; se
       </div>
       {(canRetry || (handlers?.onCopy && msg.error)) && (
         <div className="t2-retry-row">
-          {canRetry && <button type="button" className="t2-retry-btn lead" data-testid="msg-retry" onClick={() => handlers!.onRetry!()}><RotateCcw size={13} />{t('chat.retry')}</button>}
+          {canContinue && <button type="button" className="t2-retry-btn lead" data-testid="msg-continue" title={t('chat.continueTip')} onClick={() => handlers!.onContinue!()}><StepForward size={13} />{t('chat.continue')}</button>}
+          {canRetry && <button type="button" className={canContinue ? 't2-retry-btn' : 't2-retry-btn lead'} data-testid="msg-retry" title={canContinue ? t('chat.regenerateTip') : undefined} onClick={() => handlers!.onRetry!()}><RotateCcw size={13} />{t(canContinue ? 'chat.action.regenerate' : 'chat.retry')}</button>}
           {handlers?.onCopy && msg.error && <button type="button" className="t2-retry-btn" onClick={() => handlers.onCopy!(msg.error!)}><Copy size={13} />{t('chat.copyError')}</button>}
         </div>
       )}
@@ -569,6 +580,10 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
     // 轻分隔线,不摆成用户气泡(它不是用户「说」的话)。↑ 历史召回处已同规则滤除。
     if (msg.content.startsWith('<turn_interrupted>')) {
       return <div ref={rootRef} className="t2-sys t2-interrupted">⏹ {t('msg.interrupted')}</div>
+    }
+    // 「继续生成」行(<turn_resume>,用户点失败行上的「继续生成」发的):同一种轻分隔线,标出续写从哪接上
+    if (msg.content.startsWith(TURN_RESUME_OPEN)) {
+      return <div ref={rootRef} className="t2-sys t2-interrupted" data-turn-resume="">↻ {t('msg.resumed')}</div>
     }
     // 挂起审批的结局回灌(引擎落库的 <approval_update> user 行):同理不是用户说的话 —— 每张一行结局。
     // 输出不在这里(引擎把真结果放回了原工具卡),这一行只说谁批了什么。
@@ -831,7 +846,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
                     : part.t === 'pluginCard'
                       ? <PluginToolCard key={`ptc-${part.event.id}`} event={part.event} claim={part.claim} onQuote={handlers?.onQuote} fallback={<ToolGroup events={[part.event]} />} />
                     : part.t === 'intelligent'
-                      ? <ChatIntelligentUi key={`intelligent-${part.event.id}`} event={part.event} live={streaming} stateScope={runSid ? `${runSid}:${msg.id}` : undefined} onAsk={handlers?.onSuggest} sessionId={runSid} />
+                      ? <RunContext.Provider key={`intelligent-${part.event.id}`} value={{ cwd: runCtx?.cwd, allowRun: false }}><ChatIntelligentUi event={part.event} live={streaming} stateScope={runSid ? `${runSid}:${msg.id}` : undefined} onAsk={handlers?.onSuggest} sessionId={runSid} /></RunContext.Provider>
                     : <SketchCards key={`sketch-${part.item.callId}`} items={[part.item]} actions={sketchActions} stateScope={runSid ? `${runSid}:${msg.id}` : undefined} onAsk={handlers?.onSuggest} />)}
                 </Fragment>
               ) : null
@@ -938,7 +953,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
         {(msg.toolEvents || []).filter(ev => isMarketplaceTool(ev) && !inlineToolIds.has(ev.id)).map(ev => <MarketPluginCards key={`market-${ev.id}`} event={ev} />)}
         {(msg.toolEvents || []).filter(ev => isSandboxCardTool(ev) && !inlineToolIds.has(ev.id)).map(ev => <PluginSandboxCard key={`sandbox-${ev.id}`} event={ev} />)}
         {(() => { const gitEvs = (msg.toolEvents || []).filter(ev => isGitTool(ev) && ev.done && !inlineToolIds.has(ev.id)); return gitEvs.length ? splitGitRuns(gitEvs).map((run) => <GitToolCard key={`git-${run[0].id}`} events={run} sessionId={runSid} />) : null })()}
-        {trailingIntelligent.map(ev => <ChatIntelligentUi key={ev.id} event={ev} live={streaming} stateScope={runSid ? `${runSid}:${msg.id}` : undefined} onAsk={handlers?.onSuggest} sessionId={runSid} />)}
+        {trailingIntelligent.map(ev => <RunContext.Provider key={ev.id} value={{ cwd: runCtx?.cwd, allowRun: false }}><ChatIntelligentUi event={ev} live={streaming} stateScope={runSid ? `${runSid}:${msg.id}` : undefined} onAsk={handlers?.onSuggest} sessionId={runSid} /></RunContext.Provider>)}
         {!!trailingSketches.length && <SketchCards items={trailingSketches} actions={sketchActions} stateScope={runSid ? `${runSid}:${msg.id}` : undefined} onAsk={handlers?.onSuggest} />}
         {trailingCards.map(({ ev, claim }) => <PluginToolCard key={`ptc-${ev.id}`} event={ev} claim={claim} onQuote={handlers?.onQuote} fallback={<ToolGroup events={[ev]} />} />)}
         {/* 审批卡在托盘里批(ApprovalTray);托盘在输入框上方的视图(预览 / 画布)流里留一行指路,对话末尾有卡片堆的不留(卡就在下面)。已兑现的不留痕 —— 结局看工具卡。

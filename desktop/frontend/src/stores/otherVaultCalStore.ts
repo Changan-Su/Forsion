@@ -10,18 +10,26 @@ import { usePageStore } from '../amadeus/store/pageStore'
 
 interface OtherSideState {
   dbs: AggDb[]
+  /** 上一次拉完(成功、失败、宿主没有这条接缝都算)对应的是哪一侧哪个库(otherSideKey);null = 还没拉过。
+   *  和当前的对不上 = dbs 还是别的库的 / 还没到:日历来源定色据此等它到齐,也不把别的库的来源记到这个库名下。 */
+  loadedFor: string | null
   refresh(): Promise<void>
 }
 
+/** 「此刻是哪一侧哪个库」:另一侧的日历按它重拉。 */
+export const otherSideKey = (): string => { const s = usePageStore.getState(); return `${s.vaultSide}:${s.vaultRoot}` }
+
 export const useOtherSideCal = create<OtherSideState>((set) => ({
   dbs: [],
+  loadedFor: null,
   async refresh() {
+    const loadedFor = otherSideKey()
     const api = window.amadeusSync
-    if (!api?.otherSideCalDbs) return // web/移动或旧 preload:优雅缺位
+    if (!api?.otherSideCalDbs) { set({ loadedFor }); return } // web/移动或旧 preload:优雅缺位
     try {
       const res = await api.otherSideCalDbs()
       if (!res) {
-        set({ dbs: [] })
+        set({ dbs: [], loadedFor })
         return
       }
       const dbs: AggDb[] = []
@@ -45,9 +53,9 @@ export const useOtherSideCal = create<OtherSideState>((set) => ({
         }
         if (firstDateCol(agg)) dbs.push(agg) // 有日期列才算日历源
       }
-      set({ dbs })
+      set({ dbs, loadedFor })
     } catch {
-      set({ dbs: [] })
+      set({ dbs: [], loadedFor })
     }
   },
 }))
@@ -55,7 +63,7 @@ export const useOtherSideCal = create<OtherSideState>((set) => ({
 /** 拉一次,之后活动侧根 / 侧切(vaultRoot / vaultSide 变)时重拉;返回退订。
  *  日历视图(useOtherVaultCalDbs)与插件接缝 ctx.calendar(pluginCalendar.ts)共用。 */
 export function watchOtherSideCal(): () => void {
-  const key = (): string => { const s = usePageStore.getState(); return `${s.vaultSide}:${s.vaultRoot}` }
+  const key = otherSideKey
   let last = key()
   void useOtherSideCal.getState().refresh()
   return usePageStore.subscribe(() => {

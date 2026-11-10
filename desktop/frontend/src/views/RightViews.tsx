@@ -6,8 +6,9 @@
 import { useEffect } from 'react'
 import { RightPanel } from '../components/RightPanel'
 import { FilesPanel } from './chat2/FilesPanel'
-import { useApp } from '../stores/appStore'
+import { useApp, useWorkspaceList } from '../stores/appStore'
 import { useWorkspace } from '@lcl/engine'
+import { usePageStore } from '../amadeus/store/pageStore'
 import { useShallow } from 'zustand/react/shallow'
 import { getBackgroundSessions } from '../services/backendService'
 import { targetForSession } from '../services/engine/targets'
@@ -87,14 +88,14 @@ function RightView({ view }: { view: View }) {
 /** 文件面板:列所有本地工作区文件夹(手风琴 + 逐级展开磁盘目录),与会话侧栏同构;非会话依赖。 */
 export function FilesView() {
   const s = useApp(useShallow((state) => ({
-    workspaces: state.workspaces,
     setFilePreview: state.setFilePreview,
     activeWorkspaceKey: state.activeWorkspaceKey,
     setActiveWorkspaceKey: state.setActiveWorkspaceKey,
   })))
+  const workspaces = useWorkspaceList(usePageStore((state) => state.vaultRoot)) // 订阅式:会话增删 / 移除项目时跟着变(见 appStore 的 useWorkspaceList)
   return (
     <FilesPanel
-      workspaces={s.workspaces()}
+      workspaces={workspaces}
       onOpenPreview={s.setFilePreview}
       activeWorkspaceKey={s.activeWorkspaceKey}
       onEnterWorkspace={(key) => s.setActiveWorkspaceKey(key)}

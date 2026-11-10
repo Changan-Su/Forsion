@@ -382,7 +382,13 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
     if (listed) shell.showItemInFolder(listed.root)
   })
 
-  handle(IPC.restoreVault, async () => {
+  handle(IPC.restoreVault, async (_e, reuseActive?: boolean) => {
+    // A new View window shares the mounted vault. Do not switch the global root or restart its watcher.
+    const root = reuseActive === true ? vault.getRoot() : null
+    if (root) {
+      const [pages, folders] = await Promise.all([vault.listPages(), vault.listFolders()])
+      return { root, pages, folders }
+    }
     let { lastVault } = await readConfig()
     if (!lastVault) return ensureDefaultVault() // 首启:自带默认工作区(不再落欢迎页)
     // A saved cloud root may belong to a previous account (or the old unowned

@@ -30,6 +30,7 @@ import { AGENT_SCOPED_TOOLS } from '../tools/toolRegistry.js';
 import { snapshotBeforeWrite, recordPostWrite } from './checkpoints.js';
 import { runWithAgentSlug } from '../seams/runContext.js';
 import { DEFAULT_AGENT_SLUG, readHumanFile, readUserMdForPrompt } from '../core/tanguHome.js';
+import { ABOUT_HUMAN_LIMITS, clipWholeLines } from '../contracts/promptClip.js';
 import { getAgent, MUSE_AGENT_SLUG } from '../agents/agentRegistry.js';
 import { loadSpecialAgentsConfig, resolveBackgroundModelId } from './specialAgentsConfig.js';
 import { sendInboxMessage } from '../tools/builtin/inboxSend.js';
@@ -422,9 +423,9 @@ export async function judgeApproval(input: {
       const m = await runWithAgentSlug(DEFAULT_AGENT_SLUG, () => deps().brain.memory.getMemory(input.userId));
       memory = textForThisDevice(String(m?.content || '').trim(), runTagContext(!!deps().profile.capabilities.hostExec), 'entry').slice(0, 3000); // 别台的条目折成一行(11-06)
     } catch { /* 无记忆也能判 */ }
-    const userMd = readUserMdForPrompt().trim().slice(0, 2000);
-    // 画像(human/SOUL.md,Agent 们对这个人的认识;同 renderAboutHuman 只取前 2000 字):只当背景,不是批准的依据
-    const portrait = readHumanFile('SOUL.md').trim().slice(0, 2000);
+    const userMd = clipWholeLines(readUserMdForPrompt(), ABOUT_HUMAN_LIMITS['MEMORY.md']).kept;
+    // 画像(human/SOUL.md,Agent 们对这个人的认识;同 renderAboutHuman 按整条截前 2000 字):只当背景,不是批准的依据
+    const portrait = clipWholeLines(readHumanFile('SOUL.md'), ABOUT_HUMAN_LIMITS['SOUL.md']).kept;
     const system =
       `You are ${def?.name || 'the user\'s default agent'}, deciding ON BEHALF OF THE USER whether a background agent may perform one action. ` +
       'The user is not present; you get exactly one chance. Approve ONLY if the action is clearly aligned with the user\'s known goals and preferences, ' +

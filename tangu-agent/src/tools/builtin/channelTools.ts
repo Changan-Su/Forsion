@@ -22,7 +22,7 @@ async function sendMedia(ctx: ToolContext, rawPath: string, kind: 'image' | 'fil
   if (!rel) return 'Error: path is required';
   const abs = resolveInCwd(ctx, rel);
   // 契约 C4:发给通道对端 = 读出去(P0 第三轮 E9)。凭据文件(按 realpath,软链改名同样拦)一个字节都不发。
-  const readGuard = checkReadPath(abs);
+  const readGuard = checkReadPath(abs, ctx);
   if (!readGuard.ok) return `Error: ${readGuard.reason}`;
   let buf: Buffer;
   try {

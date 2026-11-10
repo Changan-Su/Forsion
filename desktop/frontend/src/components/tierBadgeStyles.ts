@@ -10,10 +10,10 @@ export interface TierBadgeInfo extends BadgeStyle { name?: string; nameEn?: stri
 
 export const DEFAULT_BADGES: Record<string, BadgeStyle> = {
   free: { from: '#E5E7EB', to: '#D1D5DB', text: '#374151' },
-  plus: { from: '#F59E0B', to: '#F97316', text: '#FFFFFF' },
-  pro: { from: '#8B5CF6', to: '#A855F7', text: '#FFFFFF' },
-  max: { from: '#F43F5E', to: '#E11D48', text: '#FFFFFF' },
-  ultra: { from: '#71717A', to: '#3F3F46', text: '#FDE68A' },
+  plus: { from: '#E6E2AC', to: '#C6C88A', text: '#3D4317' },
+  pro: { from: '#F4DEC4', to: '#E0BD9C', text: '#552F14' },
+  max: { from: '#D0E1C9', to: '#9CBD9F', text: '#1F4130' },
+  ultra: { from: '#EBDDF1', to: '#C7D5F3', text: '#36336A' },
 }
 const FALLBACK: BadgeStyle = { from: '#6B7280', to: '#4B5563', text: '#FFFFFF' }
 const CACHE_KEY = 'forsion_tier_badges'

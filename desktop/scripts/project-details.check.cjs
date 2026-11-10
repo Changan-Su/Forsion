@@ -60,8 +60,16 @@ function contextFixture(projectDir) {
     memory: { version: 'v1', limit: 4000, chars: 212, file: path.join(projectDir, '.memory-fixture', 'MEMORY.md'), entries: [
       { id: 'pm-1', content: '这个仓的测试用 npm run test:unit 跑，npm test 是故意坏的。', updatedAt: Date.now() - 3_600_000 },
       { id: 'pm-2', content: 'Release builds are cut only from the release-2026 branch; never tag from main. The changelog entry is written before the tag, and the build number comes from the CI run rather than from package.json.', updatedAt: Date.now() - 1_800_000 },
-      { id: 'pm-3', content: '这个项目的界面文案一律先写中文稿，再补英文。', updatedAt: Date.now() - 600_000 },
+      { id: 'pm-3', content: '这个项目的界面文案一律先写中文稿，再补英文。', updatedAt: Date.now() - 600_000, pinned: true, by: 'user' },
     ],
+    // 分层(11-09):详情每份一行(点开看条目、能钉回常驻)、归档单独一行、整理记录能整次撤销;老引擎不带这些 → 照旧平铺
+    topics: [{ key: 'history', title: '来龙去脉', about: '为什么这样定、过去的决定', path: 'Library/history.md', entries: [
+      { id: 'pt-1', text: '2026-08 把消息队列从 RabbitMQ 换成了 NATS：ARM 机器上内存占用小一半。', by: 'agent' },
+      { id: 'pt-2', text: 'The checkout flow was rewritten in September after the payment provider deprecated its v1 API; the old adapter stays under legacy/ until the last merchant migrates.', by: 'user' },
+    ] }],
+    archive: { key: 'archive', title: 'Archive', path: 'Library/archive.md', entries: [{ id: 'pa-1', text: 'Progress on 2026-08-12: the search index cleanup reached step 4 of its checklist.', by: 'agent' }] },
+    organizeHistory: [{ id: 'po-1', at: Date.now() - 5_400_000, moved: 2, archived: 1, topics: ['history', 'archive'], before: { count: 6, chars: 4310 }, after: { count: 3, chars: 212 } }],
+    organize: { available: true, running: false, last: null },
     // 待确认候选(10-04):带网址 / 命令 / 权限字眼的后台候选没有直接记,等用户逐条采纳 / 丢弃
     candidates: [
       { id: 'pc-1', content: 'Deploys go through https://ci.example.test/deploy, never from a laptop.', at: Date.now() - 300_000 },
@@ -323,6 +331,34 @@ async function run(app, win, stub, seen, home, ctx) {
   await compacted.locator('[data-project-memory-removed="pr-1"]').waitFor({ state: 'detached' })
   const restore = seen.memoryRestores.at(-1)
   check('4p 点恢复 → POST /agent/project-context/memory/restore 只带 sessionId + 那一句的 id;原句记回清单末尾、记录里少一句', restore.sessionId === 'pd-main' && restore.id === 'pr-1' && Object.keys(restore).length === 2 && await memRows.count() === 4 && (await memRows.last().textContent()).includes('staging database') && await removedRows.count() === 1 && (await compacted.locator('summary').textContent()).includes('可恢复的原句：1 条'), JSON.stringify(restore))
+  // ── 4p2 分层(11-09):常驻 / 详情分开画;钉子发 /pin(带 id + 新状态 + 读出时的版本);详情点开看条目;整理记录能整次撤销 ──
+  const layered = await memCard.evaluate((el) => ({
+    flag: el.getAttribute('data-project-memory-layered'), heads: Array.from(el.querySelectorAll('.memory-layer-head')).map((h) => h.textContent),
+    topics: Array.from(el.querySelectorAll('[data-memory-topic]')).map((r) => r.getAttribute('data-memory-topic')), chips: Array.from(el.querySelectorAll('.project-chip')).map((c) => c.textContent),
+    pinnedRow: el.querySelector('[data-project-memory-entry="pm-3"]')?.getAttribute('data-pinned'), organize: !!el.querySelector('[data-memory-organize]'), records: !!el.querySelector('[data-memory-organize-records]'),
+  }))
+  check('4p2 分层的项目记忆:卡头「常驻 N 条 · 字数 / 上限」+「另有 1 份详情」;常驻 / 详情两个小标题;详情一行 + 归档一行;钉住的那条带标记;有「整理」和「整理记录」',
+    layered.flag === 'true' && layered.heads.map((h) => h.split(' ')[0]).join('|') === '常驻|详情' && layered.topics.join(',') === 'history,archive' && layered.chips.some((c) => c.startsWith('常驻 4 条')) && layered.chips.includes('另有 1 份详情') && layered.pinnedRow === 'true' && layered.organize && layered.records, JSON.stringify(layered))
+  await memCard.locator('[data-memory-topic="history"] .memory-layer-topic').click()
+  await memCard.locator('[data-memory-layer-entry="pt-2"]').waitFor()
+  const topicWraps = await memCard.locator('[data-memory-layer-entry="pt-2"] .memory-layer-text').evaluate((el) => el.scrollWidth <= el.clientWidth + 1)
+  await memCard.locator('[data-memory-organize-records]').click()
+  await memCard.locator('[data-memory-organize-record="po-1"]').waitFor()
+  await memCard.locator('[data-memory-details]').scrollIntoViewIfNeeded()
+  await win.waitForTimeout(200)
+  await details.screenshot({ path: shots.memoryLayers = shot('project-memory-layers-zh-light') })
+  check('4p3 点开「来龙去脉」→ 两条原句,长句折行不溢出;你写的那条标出来、带「钉回常驻」;整理记录一行带「撤销」',
+    await memCard.locator('[data-memory-topic="history"] [data-memory-layer-entry]').count() === 2 && topicWraps && (await memCard.locator('[data-memory-layer-entry="pt-2"]').textContent()).includes('你写的')
+      && await memCard.locator('[data-memory-layer-entry="pt-1"] button[aria-label="钉回常驻"]').count() === 1 && await memCard.locator('[data-memory-organize-record="po-1"]').getByRole('button', { name: '撤销这次整理' }).count() === 1,
+    `wraps=${topicWraps}`)
+  await memCard.locator('[data-project-memory-entry="pm-2"] .memory-layer-pin').click()
+  await memCard.locator('[data-project-memory-entry="pm-2"][data-pinned="true"]').waitFor()
+  const pin = seen.memoryPins[0]
+  check('4p4 点常驻一条的钉子 → POST /agent/project-context/memory/pin 带 sessionId + id + pinned:true + 读出时的版本;那一行变成钉住', !!pin && pin.sessionId === 'pd-main' && pin.id === 'pm-2' && pin.pinned === true && typeof pin.expectedVersion === 'string', JSON.stringify(pin))
+  await memCard.locator('[data-memory-organize-record="po-1"]').getByRole('button', { name: '撤销这次整理' }).click()
+  await memCard.locator('[data-memory-details]').waitFor({ state: 'detached' })
+  const orgUndo = seen.memoryUndos[0]
+  check('4p5 整理记录点「撤销」→ POST /organize/undo 只带 sessionId + 记录 id;挪出去的三条回到常驻、详情那段消失', !!orgUndo && orgUndo.sessionId === 'pd-main' && orgUndo.id === 'po-1' && Object.keys(orgUndo).length === 2 && await memRows.count() === 7, `${JSON.stringify(orgUndo)} rows=${await memRows.count()}`)
   // ── 4q 写满被压缩 → 通知:会话活动里冒出 project_memory_compacted → 弹一条(只弹一次),点「查看」到项目详情 ──
   await dismissToasts(win)
   seen.compactedActivity = true
@@ -1000,7 +1036,7 @@ async function run(app, win, stub, seen, home, ctx) {
       await win.waitForTimeout(200)
       await card.screenshot({ path: shots.memoryEnDark = shot('project-memory-en-dark') })
       const head = await card.locator('.project-card-head').textContent()
-      check('9f 英文 × 暗色的项目记忆卡:标题 / 说明 / 用量是英文', /Project memory/.test(head) && /Entries: 4/.test(head) && !/[一-鿿]/.test(head), head)
+      check('9f 英文 × 暗色的项目记忆卡:标题 / 说明 / 用量是英文', /Project memory/.test(head) && /Resident: 7 entries/.test(head) && !/[一-鿿]/.test(head), head)
       const pend = card.locator('[data-project-memory-candidates]')
       const pendEn = await pend.textContent()
       const comp = card.locator('[data-project-memory-compacted]')
@@ -1133,6 +1169,10 @@ async function run(app, win, stub, seen, home, ctx) {
     && del.slug === 'coder' && del.deleteChats && del.rowGone && del.undo === 1 && del.restores.join() === 'trash-coder-1' && del.rowBack, JSON.stringify({ agentDialog, del }))
 
   // 11f 移除工作区:勾「同时删除相关文件」→ 三个会话删掉、项目里的 .tangu 进废纸篓、项目文件夹本身还在
+  // 右栏的「文件」标签(不在前台,但 #583 起 renderer="always" 常驻 DOM)也按工作区列项目根;它的列表得跟着会话走,
+  // 不能停在挂载那一刻(11-09 main 上 Windows 探针连红两次的根因:FilesBody 只订阅了 workspaces 函数引用)
+  const filesTabRow = () => win.locator('.wb-view--right .t2s-folder-row').filter({ hasText: 'Demo Project' })
+  const filesTabBefore = await filesTabRow().count()
   await groupHead('Demo Project').click({ button: 'right' })
   await menuItem('ws-remove').click()
   await dialog.waitFor()
@@ -1142,13 +1182,14 @@ async function run(app, win, stub, seen, home, ctx) {
   await dialog.locator('.dialog-btn[data-danger]').click()
   for (let i = 0; i < 30 && fs.existsSync(path.join(projectDir, '.tangu')); i++) await sleep(150)
   await groupHead('Demo Project').waitFor({ state: 'detached', timeout: 5_000 }).catch(() => {})
-  const gone = { deletes: [...seen.sessionDeletes].sort(), tangu: fs.existsSync(path.join(projectDir, '.tangu')), dir: fs.existsSync(projectDir), trashed: fs.readdirSync(trashDir).filter((n) => n.endsWith('.tangu')).length, head: await groupHead('Demo Project').count() }
+  const gone = { deletes: [...seen.sessionDeletes].sort(), tangu: fs.existsSync(path.join(projectDir, '.tangu')), dir: fs.existsSync(projectDir), trashed: fs.readdirSync(trashDir).filter((n) => n.endsWith('.tangu')).length, head: await groupHead('Demo Project').count(), filesTabBefore, filesTab: await filesTabRow().count() }
   // 重载:会话是真从引擎删掉了,不是只在本地列表里藏起来
   await win.reload({ waitUntil: 'domcontentloaded' })
   await win.waitForSelector('.t2sw, .t2s-side', { timeout: 30_000 })
   await groupHead('Tangu 默认项目').waitFor({ timeout: 15_000 }).catch(() => {})
   gone.afterReload = await groupHead('Demo Project').count()
   check('11f 移除工作区 + 勾选删文件:三个会话 DELETE、.tangu 进废纸篓、项目文件夹还在、侧栏组消失且重载后不回来', gone.deletes.join() === 'pd-coder,pd-main,pd-team' && !gone.tangu && gone.dir && gone.trashed === 1 && gone.head === 0 && gone.afterReload === 0, JSON.stringify(gone))
+  check('11g 右栏「文件」标签(后台常驻)移除前列着 Demo Project、移除后当场去掉,不等重挂', gone.filesTabBefore >= 1 && gone.filesTab === 0, JSON.stringify({ filesTabBefore: gone.filesTabBefore, filesTab: gone.filesTab }))
   return shots
 }
 
@@ -1161,7 +1202,7 @@ async function main() {
   const projectDir = path.join(home, 'Demo Project')
   for (const dir of [userData, `${userData}-dev`, path.join(vault, 'Sessions'), projectDir]) fs.mkdirSync(dir, { recursive: true })
   const ctx = contextFixture(projectDir)
-  const seen = { memoryEdits: [], memoryForgets: [], memoryConflictOnce: false, memoryCandidates: [], memoryCandidateGoneOnce: false, memoryCandidateBusyOnce: false, memoryRestores: [], memoryRestoreGoneOnce: false, compactedActivity: false, candidatesActivity: false, ctxGets: [], init: 0, docPuts: [], settingsPuts: [], skills: [], sessionsCreated: 0, iconPosts: [], iconGets: 0, iconDeletes: [], sessionDeletes: [], agentDeletes: [], agentTrash: {}, trashRestores: [],
+  const seen = { memoryEdits: [], memoryForgets: [], memoryConflictOnce: false, memoryCandidates: [], memoryCandidateGoneOnce: false, memoryCandidateBusyOnce: false, memoryRestores: [], memoryRestoreGoneOnce: false, memoryPins: [], memoryUndos: [], compactedActivity: false, candidatesActivity: false, ctxGets: [], init: 0, docPuts: [], settingsPuts: [], skills: [], sessionsCreated: 0, iconPosts: [], iconGets: 0, iconDeletes: [], sessionDeletes: [], agentDeletes: [], agentTrash: {}, trashRestores: [],
     gitMessages: [], gitCommits: [], gitBranches: [], gitPushes: [], gitPulls: [], gitInits: [], gitSettingsPuts: [], gitPendings: [], gitTrusts: [], pushGate: false, hostingGets: [], hosting: null, gitPublishes: [], github: null, pushGithubUnlinkedOnce: false, gitRemotes: [], gitGithubPublishes: [], accountsGets: 0, gitPushTargets: [], pushOwnOnce: false, pushDeniedOnce: false, gitClones: [], cloneExistsOnce: false, repoGets: [], repoGit: null,
     repos: { forsion: [{ fullName: 'dave/notes', private: true, cloneUrl: 'https://git.forsion.example/dave/notes.git', updatedAt: '2026-10-10T08:00:00Z' }, { fullName: 'dave/plugin-demo', private: false, cloneUrl: 'https://git.forsion.example/dave/plugin-demo.git', updatedAt: null }], github: 'unlinked' },
     accounts: { forsionGit: { webUrl: 'https://git.forsion.example', username: 'dave' }, github: { linked: false }, identity: { name: 'Dave', email: 'dave@noreply.git.forsion.example', source: 'forsion' } } }
@@ -1353,6 +1394,21 @@ async function main() {
       const entries = b.action === 'adopt' ? [...ctx.memory.entries, { id: `pm-${b.id}`, content: item.content, updatedAt: Date.now() }] : ctx.memory.entries
       ctx.memory = { ...ctx.memory, version: `vc${seen.memoryCandidates.length}`, entries, chars: entries.reduce((n, e) => n + e.content.length, 0), candidates: ctx.memory.candidates.filter((c) => c.id !== b.id) }
       return { memory: ctx.memory }
+    }
+    // 分层(11-09):钉住 / 取消钉住常驻一条(带版本);整理记录整次撤销 → 挪出去的回到常驻
+    if (route === '/agent/project-context/memory/pin' && method === 'POST') {
+      const b = await body(); seen.memoryPins.push(b)
+      if (b.expectedVersion && b.expectedVersion !== ctx.memory.version) return { __code: 409, body: { detail: 'Memory changed since it was read', code: 'MEMORY_VERSION_CONFLICT' } }
+      const entries = ctx.memory.entries.map((e) => (e.id === b.id ? { ...e, pinned: !!b.pinned, by: e.by || 'user' } : e))
+      ctx.memory = { ...ctx.memory, version: `vp${seen.memoryPins.length}`, entries }
+      return { memory: ctx.memory }
+    }
+    if (route === '/agent/project-context/memory/organize/undo' && method === 'POST') {
+      const b = await body(); seen.memoryUndos.push(b)
+      const back = (ctx.memory.topics || []).flatMap((tp) => tp.entries).concat(ctx.memory.archive?.entries || []).map((e) => ({ id: `pm-${e.id}`, content: e.text, updatedAt: Date.now(), by: e.by }))
+      const entries = [...ctx.memory.entries, ...back]
+      ctx.memory = { ...ctx.memory, version: `vu${seen.memoryUndos.length}`, entries, chars: entries.reduce((n, e) => n + e.content.length, 0), topics: [], archive: null, organizeHistory: ctx.memory.organizeHistory.map((r) => (r.id === b.id ? { ...r, undoneAt: Date.now() } : r)) }
+      return { memory: ctx.memory, changed: [] }
     }
     if (route === '/agent/project-context/memory/restore' && method === 'POST') {
       const b = await body(); seen.memoryRestores.push(b)

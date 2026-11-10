@@ -23,6 +23,7 @@ import {
 import { getAgent } from '../../agents/agentRegistry.js';
 import { DEFAULT_AGENT_SLUG } from '../../core/tanguHome.js';
 import { effectiveRemote, remoteManagementDenied } from '../../services/remoteOrigin.js';
+import { standInManageDenied, standInOf } from '../../services/accessDomain.js';
 
 function fmt(e: ScheduleEntry): string {
   const tags = [
@@ -81,6 +82,8 @@ export const manageScheduleProvider: ToolProvider = {
         if ((ctx as any).muse && ctx.approvalMode !== 'full-auto' && args.agent && String(args.agent) !== (ctx.agentSlug || 'muse')) {
           return 'Error: in your current permission tier you can only manage your own schedule (omit the agent parameter).';
         }
+        const standInRefusal = standInManageDenied(standInOf(ctx), 'manage_schedule', args); // 分身:只管自己的日程
+        if (standInRefusal) return standInRefusal;
         const action = String(args.action || '');
         const slug = String(args.agent || ctx.agentSlug || DEFAULT_AGENT_SLUG).trim();
         const def = await getAgent(slug);

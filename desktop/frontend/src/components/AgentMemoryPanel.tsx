@@ -3,8 +3,11 @@ import { Eraser, Loader2, Pencil, Plus, RefreshCw, Search } from 'lucide-react'
 import {
   getAgentMemorySnapshot, putAgentMemory, mutateAgentMemoryEntry, listAgentMemoryRevisions, restoreAgentMemory,
   getAgentMemoryDream, configureAgentMemoryDream, startAgentMemoryDream, cancelAgentMemoryDream,
-  type AgentMemorySnapshot, type AgentMemoryRevision, type AgentMemoryDream, type AgentMemoryDreamConfig,
+  getAgentMemoryLayers, runAgentMemoryOrganize, undoAgentMemoryOrganize, pinAgentMemoryEntry,
+  type AgentMemorySnapshot, type AgentMemoryRevision, type AgentMemoryDream, type AgentMemoryDreamConfig, type AgentMemoryLayers,
 } from '../services/backendService'
+import { stripMark } from '../../../../tangu-agent/src/contracts/entryMark'
+import { DetailTopics, OrganizeBar, PinButton, organizeOutcomeText } from './MemoryLayers'
 import { registerMessages, useI18n } from '../i18n'
 import { formatDateTime } from '../format/time'
 import type { TanguDesktopConfig } from '../types'
@@ -89,7 +92,7 @@ const validDream = (d: AgentMemoryDream | null | undefined): AgentMemoryDream | 
 export const AgentMemoryPanel: React.FC<Props> = (props) => <AgentMemoryPanelBody key={JSON.stringify([connectionKey(props.cfg), props.slug, props.shareDefaultMemory])} {...props} />
 
 const AgentMemoryPanelBody: React.FC<Props> = ({ cfg, slug, shareDefaultMemory, organized = false }) => {
-  const { t } = useI18n()
+  const { t, locale } = useI18n()
   const [query, setQuery] = useState('')
   const [snapshot, setSnapshot] = useState<AgentMemorySnapshot | null>(null)
   const [dream, setDream] = useState<AgentMemoryDream | null>(null)
@@ -105,6 +108,9 @@ const AgentMemoryPanelBody: React.FC<Props> = ({ cfg, slug, shareDefaultMemory, 
   const [busy, setBusy] = useState(true)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
+  // 记忆分层(11-09 第二步):常驻 / 详情、整理记录、图钉。只在本机引擎有;云端那份 / 旧引擎 = null,照原样画
+  const [layers, setLayers] = useState<AgentMemoryLayers | null>(null)
+  const [organizing, setOrganizing] = useState(false)
   const alive = useRef(true)
   const lock = useRef(false)
   const dirty = draft !== editorBase.content
@@ -123,10 +129,16 @@ const AgentMemoryPanelBody: React.FC<Props> = ({ cfg, slug, shareDefaultMemory, 
     const results = await Promise.allSettled([getAgentMemorySnapshot(homeTarget(), slug), getAgentMemoryDream(homeTarget(), slug)])
     if (!alive.current) return
     if (results[0].status === 'fulfilled') { try { applySnapshot(results[0].value) } catch (e) { fail(e) } } else fail(results[0].reason)
+    if (organized && results[0].status === 'fulfilled' && !results[0].value.cloud) await loadLayers()
+    else setLayers(null)
     // 云端那份:Dream 在云端没有(404),不算错
     if (results[0].status === 'fulfilled' && results[0].value.cloud) { setDream(null); return }
     // 老引擎 / 外部后端可能回一个不带 status / config 的壳:当作不支持 Dream,整块不画,别让下面的 dream.status.running 崩掉整页。
     if (results[1].status === 'fulfilled') { const d = validDream(results[1].value); setDream(d); if (d) setConfigDraft(d.config) } else fail(results[1].reason)
+  }
+  const loadLayers = async () => {
+    try { const l = await getAgentMemoryLayers(homeTarget(), slug); if (alive.current) setLayers(l && Array.isArray(l.resident) ? l : null) }
+    catch { if (alive.current) setLayers(null) }
   }
   const action = async (fn: () => Promise<void>) => {
     if (lock.current || !alive.current) return
@@ -159,6 +171,7 @@ const AgentMemoryPanelBody: React.FC<Props> = ({ cfg, slug, shareDefaultMemory, 
     const next = await fn()
     if (!alive.current) return
     applySnapshot(next, true); ++revisionRequest.current; setRevisions(null); setEditing(null); setForgetting(null); setNewFact(''); setNewScope('all'); setNotice(t('agentMemory.saved'))
+    if (organized) void loadLayers()
   }
   /** 遗忘一条:理由跟着这一次写走;勾了「附上原文」,遗忘成功之后再随账号发这条的正文(不带设备标记)。 */
   const forget = (entry: AgentMemorySnapshot['entries'][number], version: string, reason: MemoryForgetReason | null, share: ShareConsent | null) => void action(async () => {
@@ -170,6 +183,19 @@ const AgentMemoryPanelBody: React.FC<Props> = ({ cfg, slug, shareDefaultMemory, 
     <ReasonPrompt question={t('reason.memoryQuestion')} reasons={MEMORY_FORGET_REASONS.map((id) => ({ id, label: t(`reason.memory.${id}`) }))}
       skipLabel={t('reason.memorySkip')} busy={busy} shareable={canShareOriginal()} onPick={(r, s) => forget(entry, version, r, s)} onCancel={() => setForgetting(null)} />
   )
+  const num = (n: number) => new Intl.NumberFormat(locale === 'zh' ? 'zh-CN' : 'en-US').format(n)
+  const runOrganize = () => { if (organizing) return; setOrganizing(true); setError(''); setNotice('')
+    void runAgentMemoryOrganize(homeTarget(), slug).then((o) => { if (alive.current) setNotice(organizeOutcomeText(t, o, num)) }).catch(fail)
+      .finally(() => { if (alive.current) { setOrganizing(false); void action(load) } }) }
+  const undoOrganize = (id: string) => void action(async () => {
+    const r = await undoAgentMemoryOrganize(homeTarget(), slug, id)
+    if (alive.current) setNotice(r.changed.length ? t('memoryLayers.undoChanged', { n: r.changed.length }) : t('memoryLayers.undoneNotice'))
+    await load(); setRevisions(null)
+  })
+  const pin = (id: string, pinned: boolean) => void action(async () => {
+    await pinAgentMemoryEntry(homeTarget(), slug, { id, pinned, ...(snapshot ? { expectedVersion: snapshot.version } : {}) })
+    await load(); setRevisions(null)
+  })
   const loadRevisions = () => {
     const request = ++revisionRequest.current
     void listAgentMemoryRevisions(homeTarget(), slug).then((items) => {
@@ -217,10 +243,17 @@ const AgentMemoryPanelBody: React.FC<Props> = ({ cfg, slug, shareDefaultMemory, 
     </details>}
   </>
   const dreamState = dream && <span role="status" style={hint}>{dream.status.running && <Loader2 size={12} className="spin" />} {t(`agentMemory.${dream.status.state}`)}</span>
-  const shown = snapshot ? snapshot.entries.filter((entry) => !organized || entry.content.toLowerCase().includes(query.trim().toLowerCase()) || editing?.id === entry.id) : []
+  // 分层视图:被详情盖过的那份(挪走后又被并集带回来的)不算常驻,不在这里画;图钉看记号
+  const layerOf = new Map((layers?.resident ?? []).map((r) => [r.id, r]))
+  const hidden = (id: string) => !!layerOf.get(id)?.shadowed
+  const shown = snapshot ? snapshot.entries.filter((entry) => !hidden(entry.id) && (!organized || entry.content.toLowerCase().includes(query.trim().toLowerCase()) || editing?.id === entry.id)) : []
+  const residentCount = snapshot ? snapshot.entries.filter((e) => !hidden(e.id)).length : 0
+  const detailTopics = (layers?.topics ?? []).map((tp) => ({ ...tp, entries: tp.entries.map((e) => ({ id: e.id, text: e.text, by: e.by })) }))
+  const archiveTopic = layers?.archive ? { key: layers.archive.key, title: layers.archive.title, about: '', path: layers.archive.path, entries: layers.archive.entries.map((e) => ({ id: e.id, text: e.text, by: e.by })) } : null
   return <div className={organized ? 'profile-memory' : undefined} data-testid="agent-memory-panel" data-agent-slug={slug} style={{ minWidth: 0 }}>
     {organized ? <div className="harness-summary">
-      <span>{snapshot ? t('agentMemory.entries', { count: snapshot.entries.length }) : t(busy ? 'agentMemory.loading' : 'agentMemory.unavailable')}{dream && dream.candidates > 0 && <> · {t('agentMemory.pendingShort', { count: dream.candidates })}</>}</span>
+      <span>{snapshot ? (layers ? t('memoryLayers.residentEntries', { count: residentCount, chars: num(layers.residentChars), limit: num(layers.limit) }) : t('agentMemory.entries', { count: snapshot.entries.length })) : t(busy ? 'agentMemory.loading' : 'agentMemory.unavailable')}
+        {layers && detailTopics.length > 0 && <> · {t('memoryLayers.detailCount', { n: detailTopics.length })}</>}{dream && dream.candidates > 0 && <> · {t('agentMemory.pendingShort', { count: dream.candidates })}</>}</span>
       <button type="button" className="profile-text-action" disabled={busy} onClick={() => void action(load)}><RefreshCw size={12} />{t('agentMemory.reload')}</button>
     </div> : <>
       <div style={{ ...row, justifyContent: 'space-between' }}>
@@ -239,6 +272,8 @@ const AgentMemoryPanelBody: React.FC<Props> = ({ cfg, slug, shareDefaultMemory, 
     </div>}
     {snapshot && <>
       <div className={organized ? 'memory-list' : undefined}>
+      {organized && layers && <OrganizeBar view={layers.organize} busy={busy} running={organizing || layers.organize.running} onOrganize={runOrganize} onUndo={undoOrganize}
+        summary={layers.organize.history[0] && !layers.organize.history[0].undoneAt ? t('memoryLayers.lastMoved', { moved: layers.organize.history[0].moved }) : t('memoryLayers.organizeHint')} />}
       {organized && <label className="profile-search"><Search size={14} /><input aria-label={t('agentMemory.search')} placeholder={t('agentMemory.search')} value={query} onChange={(e) => setQuery(e.target.value)} /></label>}
       {!organized && <p style={{ ...hint, marginTop: 12 }}>{t('agentMemory.forgetHint')}</p>}
       <details className={organized ? 'memory-add' : undefined} style={organized ? undefined : section}><summary>{organized && <Plus size={13} />}{t('agentMemory.add')}</summary><div className="field" style={{ marginTop: 8 }}>
@@ -246,6 +281,7 @@ const AgentMemoryPanelBody: React.FC<Props> = ({ cfg, slug, shareDefaultMemory, 
         <div style={row}><AppliesToSelect value={newScope} onChange={setNewScope} ctx={tagCtx} disabled={writeDisabled} />
         <button className="btn sm" disabled={writeDisabled || !newFact.trim()} onClick={() => void action(() => update(() => mutateAgentMemoryEntry(homeTarget(), slug,
           { action: 'add', fact: newFact, expectedVersion: snapshot.version, ...(newScope !== 'all' ? { appliesTo: newScope } : {}) }))) }>{t('agentMemory.add')}</button></div></div></details>
+      {organized && layers && detailTopics.length > 0 && <h4 className="memory-layer-head">{t('memoryLayers.resident')}</h4>}
       <ul className={organized ? 'harness-entries' : undefined} style={organized ? undefined : { listStyle: 'none', padding: 0, margin: 0 }}>
         {shown.map((entry) => <li key={entry.id} data-memory-entry-id={entry.id} className={organized ? 'harness-entry memory-entry' : undefined} style={organized ? undefined : section}>
           {editing?.id === entry.id ? <div className="field"><textarea aria-label={t('agentMemory.fact')} value={editing.text} disabled={busy} rows={3}
@@ -253,23 +289,25 @@ const AgentMemoryPanelBody: React.FC<Props> = ({ cfg, slug, shareDefaultMemory, 
             <div style={row}><button className="btn primary sm" disabled={busy || !editing.text.trim()} onClick={() => void action(() => update(() => mutateAgentMemoryEntry(homeTarget(), slug,
               { action: 'update', id: entry.id, fact: editing.text, expectedVersion: editing.version }))) }>{t('common.save')}</button>
               <button className="btn sm" disabled={busy} onClick={() => setEditing(null)}>{t('common.cancel')}</button></div></div>
-            : <p style={organized ? undefined : { margin: '0 0 8px', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}><ScopedText content={entry.content} ctx={tagCtx} /></p>}
+            : <p style={organized ? undefined : { margin: '0 0 8px', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}><ScopedText content={stripMark(entry.content)} ctx={tagCtx} /></p>}
           {forgetting === entry.id ? forgetPrompt(entry, snapshot.version) : organized ? <div className="memory-entry-meta">
             {/* 来源直接写在折叠标题上(对话提取 / 明确记住 / 记忆整理…),展开才是会话与证据 id —— 一眼要看的是「这条怎么来的」,不是「来源与证据」四个字 */}
             <details><summary>{t(`agentMemory.source.${entry.source.kind}`)}</summary>
               <div>{sourceText(entry.source, '')}</div><code>{entry.id}</code>
               {entry.evidenceIds.length > 0 && <div>{entry.evidenceIds.join(' · ')}</div>}</details>
-            <button type="button" className="harness-undo" disabled={writeDisabled} title={t('agentMemory.edit')} aria-label={t('agentMemory.edit')} onClick={() => { setForgetting(null); setEditing({ id: entry.id, text: splitScoped(entry.content, tagCtx).body, version: snapshot.version }) }}><Pencil size={13} /></button>
+            <button type="button" className="harness-undo" disabled={writeDisabled} title={t('agentMemory.edit')} aria-label={t('agentMemory.edit')} onClick={() => { setForgetting(null); setEditing({ id: entry.id, text: splitScoped(stripMark(entry.content), tagCtx).body, version: snapshot.version }) }}><Pencil size={13} /></button>
+            {layers && layerOf.has(entry.id) && <PinButton pinned={!!layerOf.get(entry.id)!.pinned} disabled={writeDisabled} onClick={() => pin(entry.id, !layerOf.get(entry.id)!.pinned)} />}
             <button type="button" className="harness-undo" disabled={writeDisabled} title={t('agentMemory.forget')} aria-label={t('agentMemory.forget')} onClick={() => setForgetting(entry.id)}><Eraser size={13} /></button>
           </div> : <div style={{ ...row, justifyContent: 'space-between' }}>
             <details style={{ ...hint, flex: 1 }}><summary>{t('agentMemory.source')}</summary>
               <div>{sourceText(entry.source, t(`agentMemory.source.${entry.source.kind}`))}</div><code>{entry.id}</code>
               {entry.evidenceIds.length > 0 && <div>{entry.evidenceIds.join(' · ')}</div>}</details>
-            <button className="btn sm" disabled={writeDisabled} onClick={() => { setForgetting(null); setEditing({ id: entry.id, text: splitScoped(entry.content, tagCtx).body, version: snapshot.version }) }}>{t('agentMemory.edit')}</button>
+            <button className="btn sm" disabled={writeDisabled} onClick={() => { setForgetting(null); setEditing({ id: entry.id, text: splitScoped(stripMark(entry.content), tagCtx).body, version: snapshot.version }) }}>{t('agentMemory.edit')}</button>
             <button className="btn danger sm" disabled={writeDisabled} onClick={() => setForgetting(entry.id)}>{t('agentMemory.forget')}</button>
           </div>}
         </li>)}
       </ul>
+      {organized && layers && <DetailTopics topics={detailTopics} archive={archiveTopic} busy={busy} onPinBack={(it) => pin(it.id, true)} />}
       {organized && query && snapshot.entries.length > 0 && !shown.length && <p style={hint}>{t('agentMemory.noMatches')}</p>}
       {!snapshot.entries.length && <p className={organized ? 'profile-empty' : undefined} style={organized ? undefined : hint}>{t('agentMemory.empty')}</p>}
       {organized && snapshot.entries.length > 0 && <p className="memory-footnote">{t('agentMemory.forgetHint')}</p>}

@@ -4,9 +4,9 @@ import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,rmSync,existsSync} from
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 vi.mock('./amadeus/fs/vaultHandlers',()=>({withTextWriteLock:async(_p:string,fn:()=>Promise<void>)=>fn()}))
-import {setOfflineContentOwner,mergeSyncContent,withContentWriteLock,agentContentHooks,contentSyncOwnership} from './contentSyncHost'
+import {setOfflineContentOwner,mergeSyncContent,withContentWriteLock,agentContentHooks,contentSyncOwnership,CONTENT_MERGE_FAMILIES} from './contentSyncHost'
 import {createMemoryRepository} from '../../tangu-agent/src/services/memoryRepository'
-import {mergeTombstoneLists,parseTombstones,serializeTombstones} from '../../tangu-agent/src/contracts/agentSyncRules'
+import {mergeSettingsDb,mergeTombstoneLists,parseTombstones,serializeTombstones} from '../../tangu-agent/src/contracts/agentSyncRules'
 import {cloudAccountScope,agentSyncDefault,setAgentSyncDefault} from '../../tangu-agent/src/services/cloudSyncAccount'
 let home:string,prev:string|undefined
 beforeEach(()=>{home=mkdtempSync(join(tmpdir(),'forsion-sync-host-'));prev=process.env.TANGU_HOME;process.env.TANGU_HOME=home})
@@ -25,6 +25,31 @@ it('uses the real row merger for two independently edited calendars',()=>{
  const db=(ids:string[])=>JSON.stringify({version:2,name:'Calendar',columns:[{id:'n',name:'Name',type:'text'}],rows:ids.map(id=>({id,cells:{n:id}}))})
  const result=mergeSyncContent('human/CALENDAR.db',db(['base','E']),db(['base']),db(['base','F']))!
  expect(result.conflict).toBe(false);expect(JSON.parse(result.content).rows.map((r:any)=>r.id).sort()).toEqual(['E','F','base'])
+})
+it('settings files that follow the account: the new sync gets the same no-copy rule as the engine sync, and writes under the human folder lock',async()=>{
+ const db=(items:Record<string,string>)=>JSON.stringify({version:2,name:'calendar-settings',columns:[{id:'k',name:'key',type:'text'},{id:'v',name:'value',type:'text'}],rows:Object.entries(items).map(([k,v])=>({id:'s-'+k,cells:{k,v}}))})
+ const items=(text:string)=>Object.fromEntries(JSON.parse(text).rows.map((r:any)=>[r.cells.k,r.cells.v]))
+ // 第一次见面:并集,同一行云端赢,不报冲突(报了 Extend 就会存副本)
+ const first=mergeSyncContent('human/Settings/calendar.db',db({shared:'local',mine:'1'}),null,db({shared:'cloud',theirs:'1'}))!
+ expect(first.conflict).toBe(false);expect(items(first.content)).toEqual({shared:'cloud',theirs:'1',mine:'1'})
+ // 有基线:一边删另一边没动 = 删;两边都改 = 云端
+ const base=db({a:'0',gone:'x'}),merged=mergeSyncContent('human/Settings/calendar.db',db({a:'local'}),base,db({a:'cloud',gone:'x'}))!
+ expect(merged.conflict).toBe(false);expect(items(merged.content)).toEqual({a:'cloud'})
+ // 这台改了、云端删了 = 云端那份(删);这台空了(合法的空库)= 这台删了这些行,基线照用
+ expect(items(mergeSyncContent('human/Settings/calendar.db',db({a:'1',r:'edited'}),db({a:'1',r:'0'}),db({a:'1'}))!.content)).toEqual({a:'1'})
+ const empty=JSON.stringify({version:2,name:'calendar-settings',columns:[],rows:[]})
+ expect(items(mergeSyncContent('human/Settings/calendar.db',empty,db({r:'1'}),db({r:'1',s:'2'}))!.content)).toEqual({s:'2'})
+ // 宿主把同一份契约规则递给新同步,并声明它(Extend 只认这个声明才碰这个族;老宿主没有这个成员)
+ expect(CONTENT_MERGE_FAMILIES).toContain('settings')
+ expect(mergeSyncContent('human/Settings/calendar.db',db({x:'1'}),db({x:'0'}),db({y:'2'}))).toEqual(mergeSettingsDb(db({x:'1'}),db({x:'0'}),db({y:'2'})))
+ // 读不懂也有定论,不返回 null(返回 null Extend 同样会存副本)
+ expect(mergeSyncContent('human/Settings/calendar.db','{ not json',null,db({a:'1'}))).toEqual({content:db({a:'1'}),conflict:false})
+ // 旁边的默认日历照旧:同一行不一样 = 冲突
+ expect(mergeSyncContent('human/CALENDAR.db',db({a:'1'}),null,db({a:'2'}))!.conflict).toBe(true)
+ // 落盘和引擎的读写接口、旧同步同一把锁(human/.memory.lock)
+ const dir=join(home,'human');mkdirSync(join(dir,'Settings'),{recursive:true});writeFileSync(join(dir,'.memory.lock'),'busy')
+ let committed=false;await expect(withContentWriteLock(join(dir,'Settings','calendar.db'),home,()=>{committed=true})).rejects.toThrow('locked');expect(committed).toBe(false)
+ rmSync(join(dir,'.memory.lock'));await withContentWriteLock(join(dir,'Settings','calendar.db'),home,()=>{committed=true});expect(committed).toBe(true)
 })
 it('new sync merges widget records by rows and never guesses a matching column',()=>{
  const db=(id:string,field:string)=>JSON.stringify({version:2,name:'Ledger',columns:[{id:field,name:field,type:'text'}],rows:[{id,cells:{[field]:id}}]})

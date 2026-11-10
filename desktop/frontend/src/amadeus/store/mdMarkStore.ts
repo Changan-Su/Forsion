@@ -217,6 +217,9 @@ export const effectiveDue = (m: MdMark): string => useMdMarkStore.getState().ove
 amadeus?.onStructureChange?.(() => { void useMdMarkStore.getState().load() })
 
 const MD_CAL_PATH = 'mdnote://vault-notes'
+/** 非 React:「笔记」这个日历源此刻在不在(有不带勾选框的 `@` 行才有,同 useMdCalDbs)→ 它的路径;不在 = null。 */
+export const mdCalPathNow = (): string | null =>
+  useMdMarkStore.getState().marks.some((m) => !m.isTask && (!m.parentId || m.due)) ? MD_CAL_PATH : null
 /** ⚠️ 列名是**展示文案**,必须每次求值:写成模块级常量会把语言冻结在模块加载那一刻,切英文不更新。
  *  列 id 定死(buildEvents 用 firstDateCol 找日期列),只有 name 是本地化的。 */
 const mdCalColumns = (): DbColumn[] => [

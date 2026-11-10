@@ -177,17 +177,19 @@ function applyExtensionsChanged(payload?: string): void {
 }
 
 let amadeusBooted = false
+let attachToActiveVault = false
 /** 幂等应用引导:装插件 + 恢复上次 Vault。
  *  ⚠️ 触发点**不在** amadeus-editor 视图上,而是这几处宿主:左栏 AmadeusPagesView / dbAggregateStore
  *  (日历·待办)/ Composer2 · AgentDesk · ChatWikiLink(聊天引用笔记)/ MobileRoot / MiniRoot。
  *  新壳若只挂 amadeus-editor 则谁都不触发 —— mini 卡片就是这么栽的(只挂主区 leaf,左栏永不挂载
  *  → Amadeus 恒显「打开 Vault 文件夹」空态)。 */
-export function ensureAmadeusReady(): void {
+export function ensureAmadeusReady(opts?: { attachOnly?: boolean }): void {
   if (!amadeusAvailable()) return
   if (amadeusBooted) { retryFailedVaultRestore(); return }
   amadeusBooted = true
   installAmadeusPlugins()
-  trackRestore(usePageStore.getState().restoreVault())
+  attachToActiveVault = opts?.attachOnly === true
+  trackRestore(usePageStore.getState().restoreVault(opts))
   // 云端冷启动断网(GET /vaults、/tree 失败)时库没装上:网络回来自己重开,不用重启 app。
   // 不只靠 online —— 「请求失败但系统仍算在线」时它不会来,所以再进笔记(任一处调 ensureAmadeusReady)、
   // 回到前台也各重试一次。只在上一次 restoreVault 抛错、且至今没有库时才动,装上了的库绝不重开(会顶掉正在看的笔记)。
@@ -223,5 +225,5 @@ function retryFailedVaultRestore(): void {
     return
   }
   if (!s.vaultRestoreFailed) return
-  trackRestore(s.restoreVault({ keepOpenNote: true }))
+  trackRestore(s.restoreVault({ keepOpenNote: true, attachOnly: attachToActiveVault }))
 }

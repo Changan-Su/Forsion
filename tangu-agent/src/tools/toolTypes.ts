@@ -102,6 +102,9 @@ export interface ToolContext {
   channelSession?: boolean;
   /** 这一轮查不出会话连没连通道:隐私边界按连着算(不写画像)。 */
   channelUnknown?: boolean;
+  /** 分身的权限域(11-09,services/accessDomain.ts):有它 = 这次是某个本体的分身,工具面 / 文件读写根 / 委派 / 画像都按它收。
+   *  agentLoop 解析身份后写进来,子代理随 parentCtx 继承;另有同一份在 run 的 ALS 里(currentStandIn)。 */
+  standIn?: import('../seams/runContext.js').StandInDomain;
   /** P1 · K2:这条 run 自己的来源(= remoteActivity.runCategory(input),只看引擎自写字段;loop 每 run 算一次,子代理随 parentCtx 继承)。
    *  后台进程据此打来源标签;中途被远端染色另由 effectiveRemote(ctx) 现判。 */
   runOrigin?: 'remote' | 'channel' | 'unattended' | 'local';

@@ -4,6 +4,7 @@
  *  写:与日历左栏同一组 store 动作(calendarConfigStore),按当前库生效。成员解析与日历视图同一个函数(resolveCalendarMembers)。
  *  .ics 订阅管理(ctx.calendar.ics)走 useIcsCalendars 同一组动作;联网仍是主进程的 fetchIcs(私网 / 回环 / 重定向那几道闸在那边)。 */
 import { colorForDb, defaultDbPath, isHidden, isMigrated, memberOf, useCalendarConfig } from '../store/calendarConfigStore'
+import { acquireCalendarColors } from '../store/calendarColors'
 import { migrationSeeds, resolveCalendarMembers, watchHumanCal, withHumanCal } from '../store/calendarMembers'
 import { getAggDb, isCheckboxCol, isDateCol, watchAllDatabases, type AggDb } from '../store/dbAggregateStore'
 import { HUMAN_CAL } from '../store/humanCalendarIo'
@@ -21,7 +22,8 @@ type CalendarApi = Omit<Required<NonNullable<PluginContext['calendar']>>, 'ensur
 
 const HEX = /^#[0-9a-f]{6}$/i
 
-/** 叠加源,顺序同日历左栏的图例(Agent → 另一侧 → .ics):调色板色按这个顺序取,和宿主图例对得上。 */
+/** 叠加源,顺序同日历左栏的图例(Agent → 另一侧 → .ics)。颜色是每个来源第一次出现时定下存住的(calendarColors),
+ *  不跟这个顺序走;只有这个库还没播种的那一段,才按这个顺序取调色板色(和宿主图例对得上)。 */
 function overlaysNow(): Array<{ db: AggDb; origin: PluginCalendarOverlay['origin'] }> {
   const agent = useAgentSchedules.getState().schedules
   return [
@@ -29,6 +31,16 @@ function overlaysNow(): Array<{ db: AggDb; origin: PluginCalendarOverlay['origin
     ...useOtherSideCal.getState().dbs.map((db) => ({ db, origin: 'otherVault' as const })),
     ...icsCalDbsNow().map((db) => ({ db, origin: 'ics' as const })),
   ]
+}
+
+/** 「我的日历」现在是哪种情况(PluginCalendarSnapshot.myCalendar)。读失败 ≠ 没有:只有对端明确说这个宿主没有它才是 absent;
+ *  引擎没起、网络错、5xx、文件解析不了都是 unknown —— 插件据此什么都不建、提示稍后再试。三端同一份:桌面问本机引擎,
+ *  网页 / 手机问 server,设备页问那台设备(远端访客恒为 absent)。 */
+export function myCalendarStatus(): NonNullable<PluginCalendarSnapshot['myCalendar']> {
+  const e = useDbStore.getState().entries[HUMAN_CAL]
+  if (!e || e.status === 'loading') return 'loading'
+  if (e.status === 'ok') return 'ok'
+  return e.status === 'missing' && e.reason === 'absent' ? 'absent' : 'unknown'
 }
 
 function snapshotOf(dbs: AggDb[], ready: boolean): PluginCalendarSnapshot {
@@ -47,6 +59,7 @@ function snapshotOf(dbs: AggDb[], ready: boolean): PluginCalendarSnapshot {
     hidden: [...(byVault[vault]?.hidden ?? [])],
     defaultPath: defaultDbPath(vault, byVault) ?? (human ? HUMAN_CAL : null),
     icsSubscriptions: icsSubsNow(),
+    myCalendar: myCalendarStatus(),
   }
 }
 
@@ -90,12 +103,14 @@ export function createCalendarApi(scope: DataScope): CalendarApi {
         // .ics 的列名 / 回退名随语言变 → 语言也进签名
         const sig = [dbs, ready, currentLocale(), usePageStore.getState().vaultRoot, useCalendarConfig.getState().byVault,
           useAgentSchedules.getState().schedules, useOtherSideCal.getState().dbs, useIcsCalendars.getState().subs, useIcsCalendars.getState().events,
-          useIcsCalendars.getState().errors]
+          useIcsCalendars.getState().errors, myCalendarStatus()]
         if (sig.length === last.length && sig.every((x, i) => x === last[i])) return
         last = sig
         try { cb(snapshotOf(dbs, ready)) } catch (e) { console.error('[amadeus] ctx.calendar 回调抛错', e) }
       }
       const offs = [
+        // 排第一:来源一变,先由它给新来源定色、再轮到下面的 emit 出快照(snapshotOf 只读不写)
+        acquireCalendarColors(),
         watchHumanCal(),
         acquireAgentSchedulePolling(), startIcsRefresh(), watchOtherSideCal(),
         watchAllDatabases((d, r) => {
