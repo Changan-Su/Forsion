@@ -1,175 +1,147 @@
 <div align="center">
 
-<img src="./desktop/build/icon.png" alt="Forsion 标志" width="72" />
-
-# Forsion
-
-**不止记下来，还能接着做下去。**<br>
-你的本地优先 AI 第二大脑。
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./.github/assets/showcase/hero-zh-dark.png">
+  <img src="./.github/assets/showcase/hero-zh-light.png" alt="Forsion is All You Need。本地优先的第二大脑工作台。你的积累，你和 AI 一起接着用。" width="100%">
+</picture>
 
 [English](./README.md) · **简体中文**
 
 [![Latest release](https://img.shields.io/github/v/release/Changan-Su/Forsion?display_name=tag&sort=semver&label=release)](https://github.com/Changan-Su/Forsion/releases)
-![Platforms](https://img.shields.io/badge/desktop-macOS%20%C2%B7%20Windows%20%C2%B7%20Linux-555)
-[![License](https://img.shields.io/badge/license-Modified%20Apache--2.0-6f42c1)](./LICENSE)
+![Platforms](https://img.shields.io/badge/platforms-macOS%20%C2%B7%20Windows%20%C2%B7%20Linux%20%C2%B7%20Android%20%C2%B7%20Web-555)
+[![License](https://img.shields.io/badge/license-Apache--2.0-6f42c1)](./LICENSE)
 
-[立即下载](https://github.com/Changan-Su/Forsion/releases/latest) · [快速上手](./docs/getting-started/quickstart.md) · [使用文档](./docs/README.md) · [官方网站](https://forsion.net)
+[立即下载](https://github.com/Changan-Su/Forsion/releases/latest) · [网页版](https://ai.forsion.net) · [快速上手](./docs/getting-started/quickstart.md) · [使用文档](./docs/README.md) · [官方网站](https://forsion.net/zh/)
 
 </div>
 
-Forsion（扶桑）是一个**本地优先的 AI 第二大脑**。用 Notion 风格的块编辑器整理自己的 Markdown 文件，让有长期记忆的 Agent 带着背景与你思考，用 TEAM 分工推进项目，再让 Muse 在你设定的范围内持续跟进。
+**Forsion（扶桑）是本地优先的第二大脑工作台。** 笔记、文件和项目放在你自己电脑上的一张台面上，AI 在这张台面上和你一起干活。在对话里问一句：Tangu（Forsion 自带的 Agent）先读你的文件再回答，回答是能接着用的东西，磨合出的办法留在普通文件里，别的软件也打得开。
 
-**把一次思考，变成下一次的起点。** 资料、偏好、讨论、成果与后续，在同一个工作台里接起来。
-
-| 第二大脑的一部分 | 在 Forsion 里如何工作 |
+| 台面上有 | 也就是说 |
 | --- | --- |
-| **记录与连接** | 本地 `.md` 上的块编辑，连接笔记、PDF、白板、多维表与会话。 |
-| **记住背景** | 可查看、可修订的长期记忆，让偏好和项目背景跨会话延续。 |
-| **一起思考与执行** | 有不同人格的 Agent、可长期配置的 TEAM、并行工作与 Team Desk。 |
-| **主动跟进** | Muse 按心跳、日程和规则行动，将结果与待决定事项送到收件箱。 |
-| **按需扩展** | 插件把工具、Agent、技能与专属工作空间接进同一条工作流。 |
+| **你的文件** | 笔记是本地 Markdown，和 PDF、白板、多维表、日历放在一起。Forsion 直接打开它们。 |
+| **能接着用的回答** | 回答里可以带一张能算的卡，存成小组件，放到主页或仪表盘上。 |
+| **先开口的 Agent** | 卜算子盯着你的日程和规则，先把东西备好，有事要你定才来找你。 |
+| **相互补全** | `AGENT.md` 你写给 Agent，`HUMAN.md` Agent 写给你。说定的事留在打得开的文件里。 |
+| **你自己的工具** | 商店里有二十多个官方插件。缺一个，就让 Tangu 做，先在沙箱里试。 |
 
-下面的截图来自 v2.11.0 桌面构建，使用同一套公开研究项目样例；展示真实界面，不代表一次真实模型执行。[截图来源与复现](./.github/assets/showcase/README.md)。
+比如你在筹办一场社区书展。下面的截图跟着它走一遍，是 Forsion 的真实界面和样例数据，不代表一次真实模型执行。[截图来源与复现](./.github/assets/showcase/README.md)。
 
-## Markdown 的自由，块编辑的直观
+## 主页是你的台面
 
-**在本地 `.md` 文件上，获得 Notion 风格的块状编辑体验。** 在 Amadeus 知识库里，标题、段落、待办、代码、嵌入内容都是可组织的块：写作时直接输入 Markdown，用 `/` 插入内容，用分栏安排材料，随时查看块的源码。笔记仍是磁盘上的文件，能直接打开、备份和交给 Agent 读写。
-
-<p align="center">
-  <img src="./.github/assets/showcase/markdown-blocks.png" alt="在本地 Markdown 笔记中用斜杠菜单插入内容块" width="920" />
-  <br><sub>在本地 Markdown 笔记中用斜杠菜单插入内容块 · v2.11.0 真实界面 · 公开样例数据</sub>
-</p>
-
-- **把一页组织清楚。** Markdown 快捷输入、斜杠菜单、分栏、小节折叠、callout、页面图标与封面，让长笔记也有结构。
-- **让材料彼此连接。** 用 `[[双链]]`、反向链接与关系图连接想法；嵌入笔记、图片、多维表和白板，在聊天中直接引用笔记。
-- **让资料参与工作。** Agent 在授权范围内读取来源、比较方案，把结论和待办写回项目。你与 Agent 使用同一批实际文件。
-
-| 思考和工作的形态 | 对应能力 |
-| --- | --- |
-| 整理结构化资料与项目 | 多维表：表格、看板、日历、画廊，以及筛选、排序、分组。 |
-| 展开关系与推导 | Excalidraw 兼容白板；PDF 批注直接写进 PDF 文件。 |
-| 建立自己的项目首页 | 仪表盘组合笔记、多维表、白板、图片与网页卡片。 |
-| 把下一步排进日常 | 日历聚合多维表日期与待办，可订阅外部日历。 |
-
-笔记采用本地 Markdown，双链、属性和白板使用兼容格式；分栏、数据库、插件块等扩展内容的呈现取决于打开它们的应用。
-
-[块编辑器](./docs/amadeus/editor.md) · [知识库](./docs/amadeus/overview.md) · [多维表](./docs/amadeus/databases.md) · [白板](./docs/amadeus/whiteboard.md)
-
-## 重要背景，不必每次重新交代
-
-**知识库存材料，记忆留背景。** 完整的文章、证据与产物留在项目里；你明确交代的偏好、事实和持续有用的背景，可以进入 Agent 的长期记忆，让下一次工作有前情可循。
-
-- **记住什么，看得见。** 打开记忆面板查看、修订和整理，检查来源与版本记录，也可以把内容移出活跃记忆。
-- **长期伙伴，各有积累。** 每个 Agent 有自己的人格（SOUL）、记忆、Library 和工作日志；模型、工具权限与记忆配置可分别管理。
-- **积累可以维护。** Historian 整理日志与记忆候选；按需启用 Dream 归并整理；会话回忆按 Agent 范围检索相关历史。
-
-例如：“做研究时先给结论，再列来源，单独标出不确定项。”确认它已进入记忆后，换一场会话继续同一项目，检查它如何使用这条偏好。自动 Dream 默认关闭；“遗忘”移出活跃记忆，版本历史仍保留。
+主页两边摆着小组件：今天的日程、待办、卜算子的建议、最近的笔记，还有在对话里做出来的布展清单。策划案、场地合同、展商名单都是你电脑上的普通文件，Forsion 直接打开它们。
 
 <p align="center">
-  <img src="./.github/assets/showcase/agent-memory.png" alt="打开 Arioso 的记忆面板，查看项目背景与偏好，逐条编辑或遗忘" width="920" />
-  <br><sub>打开 Arioso 的记忆面板，查看项目背景与偏好，逐条编辑或遗忘 · v2.11.0 真实界面 · 公开样例数据</sub>
+  <img src="./.github/assets/showcase/home.png" alt="主页两边的小组件：日程、待办、卜算子的建议、最近的笔记和对话里做出的布展清单" width="920" />
 </p>
 
-[了解记忆](./docs/agents/memory.md) · [配置 Agent](./docs/agents/overview.md)
+- **块编辑，还是 Markdown。** 本地 `.md` 文件上的 Notion 式块编辑：斜杠菜单、分栏、标注块、`[[双链]]`、反向链接和关系图。
+- **不只是笔记。** 多维表有表格、看板、日历、画廊视图；白板兼容 Excalidraw；PDF 批注写回 PDF 本身；日历把各处的日期和待办汇到一起。
+- **按你的习惯摆。** Space、分栏、能拖成独立窗口的标签页，还有能置顶在其他应用上面的 Mini 面板。
 
-## TEAM：让灵感有人展开，也有人认真挑错
+[块编辑器](./docs/amadeus/editor.md) · [多维表](./docs/amadeus/databases.md) · [白板](./docs/amadeus/whiteboard.md) · [工作区](./docs/getting-started/workspace.md)
 
-**一个人做项目，也可以有不同视角和持续的分工。** Aria 关注感受与创造性，Recita 检查证据、假设与可行性，Arioso 结合目标与取舍形成独立判断；Coding 聚焦实现，Muse 负责主动跟进。你可以调整它们，也可以创建自己的 Agent。
+## 问一句，回答能接着用
 
-**v2.11 的 TEAM 把协作变成可持续使用的团队：**
-
-- **团队有共同的约定。** 选两个及以上 Agent 即可开始团队模式；长期团队保存成员、职责与自定义头像，用 `TEAM.md` 写共同目标与协作约定，并有自己的 Library。
-- **成员可以同时开工。** 各自在子会话里研究、写作或执行，向主会话发送进度、问题和交接；你可以插话、点名，让讨论与执行围绕同一个目标推进。
-- **过程与成果看得见。** Team Desk 展示谁在工作、等待审批或已完成；点开成员查看完整子会话。审批请求和公开产物汇回主会话，便于审阅与接着处理。
-- **工作有明确去处。** 私聊中用 `@项目` 派遣任务，在对应项目里新开会话执行。Agents Space 管理 Agent 和团队；“轨道”侧栏把私聊、团队、项目与外部引擎放在同一入口。
-
-也可以在普通会话中委派独立子任务，或通过 ACP 接入本机已安装的 Claude Code、Codex 等外部引擎。团队与这些本地执行能力使用本地模式；任务按需传递背景，各 Agent 的记忆与工具配置仍分别管理。
+把策划案和合同交给 Tangu，问摊位费该收多少。它读完两份文件再回答。回答里带一张能算的卡：改展商数或场地费，当场算出每家多少钱，不用再问一次模型。存成小组件，主页和仪表盘上都能放。
 
 <p align="center">
-  <img src="./.github/assets/showcase/team-desk.png" alt="Aria、Recita 与 Arioso 的公开讨论，以及 Team Desk 成员状态" width="920" />
-  <br><sub>Aria、Recita 与 Arioso 的公开讨论，以及 Team Desk 成员状态 · v2.11.0 真实界面 · 公开样例数据</sub>
+  <img src="./.github/assets/showcase/answer-card.png" alt="Tangu 的回答里带一张能算的卡，改数字当场算出摊位费" width="920" />
 </p>
+
+书展的仪表盘上摆着这张卡、待办和布展清单。展商和预算记在两张表里，上面的数字和图表直接从表里算出来。
 
 <p align="center">
-  <img src="./.github/assets/showcase/team-thread.png" alt="点开 Recita 的子会话，在主讨论旁检查具体依据与建议" width="920" />
-  <br><sub>点开 Recita 的子会话，在主讨论旁检查具体依据与建议 · v2.11.0 真实界面 · 公开样例数据</sub>
+  <img src="./.github/assets/showcase/dashboard.png" alt="书展仪表盘：摊位费卡、待办、布展清单，以及从两张表算出来的数字和图表" width="920" />
 </p>
 
-[TEAM 与 Team Desk](./docs/chat/group-chat.md) · [Agent 与人格](./docs/agents/overview.md) · [外部引擎](./docs/agents/external-engines.md)
+- **Tangu 在你的文件上干活。** 在你授权的范围内读资料、比方案，把结论写回项目。每一轮改了哪些文件都有回执，可以撤销单个文件，也可以撤销整轮。
+- **不止一位 Agent。** 行香子、浣溪沙、临江仙和 Coding 各有各的性格、记忆和模型。选两位以上就能组队，各开一条子对话，Team Desk 上看得到谁在做什么。
+- **模型随你。** Forsion 托管的模型、自己的 API Key、OpenAI 兼容接口、本地 Ollama，或支持的订阅登录都行。装好的 Claude Code、Codex 也能经 ACP 接进来，在你的项目文件夹里干活；它们的记忆和审批仍是各自的。
 
-## Muse：交代之后，继续有人留意
+[对话基础](./docs/chat/basics.md) · [仪表盘](./docs/amadeus/dashboard.md) · [TEAM 与 Team Desk](./docs/chat/group-chat.md) · [模型与服务商](./docs/chat/models-and-providers.md)
 
-**需要继续跟进的事情，可以交给主动式 Agent。** Muse 启用后按心跳、日程和规则醒来，在配置的权限与预算内回顾近期工作、整理资料、提出下一步或执行任务。
+## 卜算子先开口
 
-- **把后续交出去。** 从对话任务卡交给 Muse 追踪，或设置日程、事件规则；心跳让它定期回看还有什么值得推进。
-- **把决定带回来。** 结果进入收件箱。任务卡可交给 Muse 执行、开新会话处理或忽略，待批操作可以批准或拒绝。
-- **把持续工作组织起来。** Muse 积累自己的 Library 与日志，还能编写、逐步完善自己的 Space，把资料与工作组织成可浏览的界面。
-
-本版本升级时会将尚未开启的 Muse 与 Historian 一次性打开；升级后你随时可以手动关闭，选择会被保留，不会在下次启动时重新打开。Muse 当前在本地模式运行，需要设备与相应进程保持可用；活跃时段、频率、预算和审批方式由你设置。固定流程可以交给**自动化**，用时间、事件或数据库变化串起 Agent、通知与表格操作。
+大多数 AI 等你开口。主动式 Agent 卜算子盯着你的日程和你定的规则：平面图快到期了，它按已确认的展商先排好一版，马上发消息告诉你。一周的进展不着急，就写成一封信放进收件箱：做完了什么、还差什么、它已经替你备好了什么。
 
 <p align="center">
-  <img src="./.github/assets/showcase/muse-inbox.png" alt="Muse 将跟进事项送入收件箱：查看任务书，执行、另开会话或忽略" width="920" />
-  <br><sub>Muse 将跟进事项送入收件箱：查看任务书，执行、另开会话或忽略 · v2.11.0 真实界面 · 公开样例数据</sub>
+  <img src="./.github/assets/showcase/muse-space.png" alt="卜算子自己的 Space：要你看的、它备好的、在跟的事，和它下次什么时候醒" width="920" />
 </p>
 
-[主动式 Muse](./docs/agents/muse.md) · [自动化](./docs/spaces/automation.md) · [收件箱](./docs/spaces/inbox.md)
+- **它自己的 Space。** 「今日简报」把要你看的、它备好的、在跟的事摆在一页上，还写着它下次什么时候醒。
+- **备好的就是普通文件。** 笔记和日程，打开、改、删都随你。
+- **界限你定。** 运行时段、预算和审批档都由你设。卜算子在你电脑上的 Forsion 运行时工作；Agent 也能通过你配好的微信、Telegram、QQ 通道找到你。
 
-## 插件：把你的工作方式接进来
+[主动式卜算子](./docs/agents/muse.md) · [收件箱](./docs/spaces/inbox.md) · [自动化](./docs/spaces/automation.md) · [通道](./docs/chat/channels.md)
 
-**第二大脑可以随着你的工作一起扩展。** 一个插件捆绑包可以同时提供界面、引擎工具、Agent、技能和 Space，让收集、处理与产出接在一起。
+## 人类补完计划
 
-- **收集与行动。** 青鸟收藏夹把视频整理成笔记；Computer Use 让 Agent 操作支持平台上的桌面应用；插件事件可以触发自动化。
-- **复用做事方法。** Skills 保存任务方法，MCP 接入外部工具与数据，插件扩展笔记块、视图和工作空间。
-- **建立专属环境。** 从商店安装插件、Agent、技能、Space、主题和网页应用；也可以让 Agent 借助内置扩展开发技能创建自己的扩展。
+不是覆盖，是相互补全。人和 AI 保留各自的边界，把彼此缺的能力接起来，把合作的方法留下来，两边都写在文件里。
 
-[插件体系](./docs/customization/plugins.md) · [插件开发](./docs/customization/plugin-development.md) · [商店](./docs/customization/market.md) · [Skills](./docs/agents/skills.md)
+| 文件 | 你的，在 `human/` | Agent 的，在 `agents/arioso/` |
+| --- | --- | --- |
+| `AGENT.md` | 你写，给所有 Agent | 你写，只给它（计划中） |
+| `HUMAN.md` | Agent 们写：和你的共识 | 它写：跟它合作怎样更顺 |
+| `SOUL.md` | Agent 们眼里的你 | 你写：它的样子 |
+| `MEMORY.md` | 你自己记 | 它自己记 |
 
-## 从几份资料，到一份能继续推进的研究分享
+`AGENT.md` 永远是人写给 Agent 的，`HUMAN.md` 永远是 Agent 写给人的。放在谁的文件夹里，就是谁那一边。
 
-可以用一个真实项目逐步体验这条路径：
+- **记忆看得见。** 说过一次就记得。在记忆面板里看、改，或者让它忘；忘掉的仍留着修订历史。
+- **把别的 AI 记下的带过来。** Claude Code、Codex、Gemini CLI 等记下的记忆、偏好和技能，整理成一张审阅单，勾过的才写入，整次导入可以撤销。
 
-1. **搭一页项目笔记。** 用块编辑组织目标、来源和问题，嵌入 PDF、白板或多维表。
-2. **带着背景一起想。** 引用材料，让 Agent 使用已确认的表达偏好；请 Aria 展开方向、Recita 审视依据，和 Arioso 一起权衡方案。
-3. **让 TEAM 分工推进。** 把互不依赖的调查、初稿或检查交给成员，在 Team Desk 查看进展与成果。
-4. **把判断写回文件。** 审阅结果，让 Agent 保存提纲、来源与待确认项，在 Agent Desk 打开修改。需要网页原型时，继续进入 Coding Studio 制作与预览。
-5. **留下一次跟进。** 让 Muse 在约定时间复查，通过收件箱处理结果，再把新结论补回项目。
+[记忆](./docs/agents/memory.md) · [Agent](./docs/agents/overview.md)
 
-这是可按需配置的示例路径；实际执行取决于所选模型、资料访问与工具设置。下次回来，项目文件和确认过的背景就是新的起点。
+## 缺什么，去商店
+
+商店里有 PDF 批注、思维导图、实时转写、Jupyter、闪卡……官方插件已经有二十多个。在对话里说一句，Tangu 帮你去商店找，点一下就装。也可以添加自己的来源：GitHub 仓库、npm 包或网址。
 
 <p align="center">
-  <img src="./.github/assets/showcase/project-note.png" alt="把来源、团队分工与下一步保留在同一篇本地项目笔记里" width="920" />
-  <br><sub>把来源、团队分工与下一步保留在同一篇本地项目笔记里 · v2.11.0 真实界面 · 公开样例数据</sub>
+  <img src="./.github/assets/showcase/store.png" alt="Forsion 商店：PDF 批注、思维导图、实时转写、Jupyter、闪卡等官方插件" width="920" />
 </p>
 
-## 在你自己的工作环境里
+- **Forsion Clip。** Chrome 和 Edge 的浏览器扩展，随 Forsion 桌面版附带。把网页存进 Forsion 正打开的智库，旁边就能问 Tangu；配对之后，Tangu 还能替你操作浏览器。
 
-- **摆放思考的材料。** Space、分栏、可拖拽标签、独立窗口和 Mini Panel，让会话、资料与产物并排；布局可以恢复。
-- **说话也能推进工作。** 实时语音支持停顿后自动发送；切到其他视图仍可继续通话。
-- **选择合适的模型。** Forsion 托管模型、自带 API、OpenAI 兼容接口、本地 Ollama，以及支持的订阅登录。
-- **从其他入口联系 Agent。** 配置微信、Telegram 或 QQ 通道；Web 与 Android 提供云连接入口，能力与桌面版有所不同。
-- **掌握自己的积累。** 本地文件可直接检查和备份，记忆可以修改。使用云端模型、账号同步或分享时，相应内容会发送到所用服务。
+[插件](./docs/customization/plugins.md) · [商店](./docs/customization/market.md) · [技能](./docs/agents/skills.md)
 
-[工作区](./docs/getting-started/workspace.md) · [通道](./docs/chat/channels.md) · [各端能力](./docs/reference/web-and-mobile.md) · [数据与隐私](./docs/reference/data-and-privacy.md)
+## 在它上面造东西
+
+一个文件夹就是一个插件，能带来界面、给 Agent 用的工具、一位 Agent 和一个 Space，装上一起到位。Forsion 自己的日历就是一个插件。
+
+- **三层。** Space 是一间房，管里面摆什么、摆在哪；View 是能单独打开的一块，放主区、侧栏或浮窗都行；UI 组件是 View 里的零件，输入框、表格、菜单这些。插件接在同样的三层上。
+- **现成的零件。** Forsion 自己用的零件，Chat Box、设置页、表格、Markdown 编辑器、白板层、记录卡等，插件挂上就能用，样子和应用里的一样。
+- **不写代码也行。** 把想要的说给 Tangu，它把插件写出来，先在沙箱里跑给你试：一份单独的 Forsion，空库、没登录，不碰你的笔记。满意了再装。
+- **发到商店。** 投稿，审核通过就上架。别人在商店里或对话里，点一下就能装。
+- **底下的运行时。** Tangu 也能跑成终端界面或无头 HTTP / SSE 服务；Forsion 是 ACP 宿主，别的 Agent 能在同一个项目里干活。
+
+<p align="center">
+  <img src="./.github/assets/showcase/sandbox.png" alt="Tangu 写好的插件先在沙箱里的 Forsion 跑起来：空库、没登录" width="920" />
+</p>
+
+[插件开发](./docs/customization/plugin-development.md) · [UI 组件](./docs/customization/ui-components.md) · [主题](./docs/customization/themes.md) · [外部引擎](./docs/agents/external-engines.md)
 
 ## 下载与开始使用
 
-从 [GitHub Releases](https://github.com/Changan-Su/Forsion/releases/latest) 下载最新桌面安装包。
+从 [GitHub Releases](https://github.com/Changan-Su/Forsion/releases/latest) 下载最新版本，或者直接在浏览器里打开[网页版](https://ai.forsion.net)。
 
 | 平台 | 发布产物 | 说明 |
 | --- | --- | --- |
-| macOS | `Forsion-*.dmg` | Apple Silicon（arm64）。 |
-| Windows | `Forsion-*.exe` | NSIS 安装程序。 |
-| Linux | `Forsion-*.AppImage` | 添加执行权限后运行。 |
+| macOS | `Forsion-*-arm64.dmg` | Apple 芯片。 |
+| Windows | `Forsion-*-x64.exe` | NSIS 安装程序。 |
+| Linux | `Forsion-*-x86_64.AppImage` | 添加执行权限后运行。 |
+| Android | `Forsion-Tangu-*-android.apk` | 连你的 Forsion 账号使用，功能比桌面版少。 |
+| 网页版 | [ai.forsion.net](https://ai.forsion.net) | iPhone 和 iPad 先用网页版。 |
 
 每次桌面发布提供两种安装包：`Forsion-<版本>-<架构>` 默认内置 Forsion Extend，提供账号与云端功能；`Forsion-NoExtend-<版本>-<架构>` 保留本地应用与 Agent 后端，不捆绑 Extend，云端账号、同步、发布和远程设备功能需要 Extend。两种包使用相同的应用身份与数据目录。Windows/Linux 应用内更新保持所选发行版；macOS 手动更新时下载相同文件名变体。
 
 本地打包时，在 `desktop/` 依次运行 `FORSION_BUNDLE_EXTEND=0 npm run build` 和 `FORSION_BUNDLE_EXTEND=0 npm run dist`；不设置该变量则产出默认版。
 
-1. **安装并连上模型。** 首次引导帮助你配置连接、模型和工作区，桌面安装版自带 Agent 后端与 Node.js 运行时。
-2. **带入真实背景。** 建一篇项目笔记，把目标、参考资料和下一步放进去；让 Agent 读取它，并明确告诉它值得长期记住的偏好。
-3. **完成一件小事。** 让 Agent 根据材料生成一份有用的成果，打开文件检查，再到记忆面板确认一条明确保存的偏好。TEAM、Muse 与插件可以之后按需加入。
+1. **安装并连上模型。** 首次引导帮你配置连接、模型和工作区，桌面安装版自带 Agent 后端与 Node.js 运行时。
+2. **把一个真实的项目放上台面。** 建一篇项目笔记，写上目标、参考资料和下一步；让 Tangu 读它，再告诉它一条值得记住的偏好。
+3. **完成一件小事。** 让它从这些材料里做出你要的东西，打开保存的文件看看，再到记忆面板确认那条偏好。卜算子、组队和插件之后按需加。
 
-[快速上手](./docs/getting-started/quickstart.md)会带你完成这条路径，并尝试多 Agent 与插件扩展。
+[快速上手](./docs/getting-started/quickstart.md)会带你走完这条路径。
 
 > **安装包签名说明：** macOS 构建使用 ad-hoc 签名，尚未经过 Apple 公证；Windows 构建也可能触发 SmartScreen。请从本仓库 Releases 下载。macOS 首次打开若被 Gatekeeper 拦截，可右键应用选择“打开”，或在**系统设置 → 隐私与安全性**中允许打开。
 
@@ -186,7 +158,7 @@ Forsion（扶桑）是一个**本地优先的 AI 第二大脑**。用 Notion 风
 
 建议像备份普通文档一样定期备份这两个目录。执行高权限 Agent 任务前，请确认审批档位与当前工作目录。
 
-## 开发者入口
+## 从源码构建
 
 **Forsion Genesis** 是产品家族源码仓，包含 Tangu Agent 运行时、LCL Space / View / Plugin 引擎、Desktop、Web、Android，以及 Amadeus 等产品档案。
 
@@ -380,10 +352,4 @@ npm test
 
 ## 许可
 
-Forsion Genesis 使用 [Modified Apache License 2.0](./LICENSE)。它以 Apache License 2.0 为基础，并包含额外条件，主要涉及：
-
-- 未经书面授权，不得使用本仓库代码运营多租户环境；
-- 使用 `desktop/`、`web/` 或 `mobile/` 前端时，不得移除或修改界面中的 Logo、产品名称与版权信息；
-- 符合附加条件时可以商业使用；需要多租户部署或其他授权时，应取得商业许可。
-
-请在使用、分发或基于本项目提供服务前阅读完整许可文本。该许可包含 Apache-2.0 之外的限制，因此不应仅按标准 Apache-2.0 许可理解。
+Forsion Genesis 使用 [Apache License 2.0](./LICENSE) 开源。
