@@ -154,12 +154,12 @@ state ids and starts from the values the user sent back.`
 
 const INTELLIGENT_UI_DEFINITION: Tool = { type: 'function', function: {
   name: 'intelligent_ui',
-  description: 'Render a native interactive answer: plans, images, sources, comparisons, checklists. Follow the v1 schema in the Intelligent UI instructions. Each call creates one document; local interactions do not call the model. Pictures the user picks among go on the choice options as imageId (picture cards), not in a gallery. No HTML/JS/CSS. Use intelligent_ui_html for custom simulations, normal Markdown for explanations, notes, derivations and static tables; add only interactions with a clear benefit.',
+  description: 'Render native plans, images, sources, comparisons or checklists. Follow the Intelligent UI v1 schema. One document per call; controls run locally without the model. Put choice images on options as imageId. No HTML/JS/CSS. Use intelligent_ui_html for simulations and Markdown for explanations, notes, derivations and static tables. Add interaction only when it helps.',
   parameters: { type: 'object', properties: { document: { type: 'string', description: 'JSON-encoded v1 document. Order: version, id, title, inputs, resources, blocks. Max 64 KiB.' } }, required: ['document'] },
 } }
 const INTELLIGENT_UI_V2_DEFINITION: Tool = { type: 'function', function: {
   name: 'intelligent_ui',
-  description: 'Render a native interactive answer: plans, images, sources, comparisons, checklists, and computed cards (calculators, step guides, flashcards, quizzes) that recompute locally. Follow the schema in the Intelligent UI instructions. Each call creates one document; local interactions do not call the model. Pictures the user picks among go on the choice options as imageId, not in a gallery. No HTML/JS/CSS. Use intelligent_ui_html for charts, diagrams and animations, normal Markdown for explanations, notes, derivations and static tables; add only interactions with a clear benefit.',
+  description: 'Render native plans, images, sources, comparisons, checklists or computed cards (calculators, step guides, flashcards, quizzes). Follow the Intelligent UI schema. One document per call; controls recompute locally without the model. Put choice images on options as imageId. No HTML/JS/CSS. Use intelligent_ui_html for charts, diagrams and animations, and Markdown for explanations, notes, derivations and static tables. Add interaction only when it helps.',
   parameters: { type: 'object', properties: { document: { type: 'string', description: 'JSON-encoded document, version 1 or 2 (computed). Order: version, id, title, inputs, state, derived, resources, blocks. Max 64 KiB.' } }, required: ['document'] },
 } }
 const INTELLIGENT_UI_WIDGET_DEFINITION: Tool = { type: 'function', function: {

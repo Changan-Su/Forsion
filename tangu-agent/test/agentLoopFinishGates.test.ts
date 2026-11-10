@@ -119,13 +119,13 @@ async function runToSettled(agentConfig: Record<string, any> = {}, msg = '干活
 }
 
 describe('Sketch 主动触发交付闸', () => {
-  it('桌面端的隐式对比请求:纯文字收尾会被催一次,调 sketch 后正常收尾', async () => {
+  it('明确要求对比图:纯文字收尾会被催一次,调 sketch 后正常收尾', async () => {
     script = [
       finalStep('三款产品各有优缺点。'),
       sketchStep(),
       finalStep('图中的主要取舍是协作性和本地性。'),
     ];
-    const run = await runToSettled({}, '比较 Notion、Obsidian 和 Logseq 的定位和优缺点', 'desktop/2.8.0');
+    const run = await runToSettled({}, '画一张 Notion、Obsidian 和 Logseq 的定位对比图', 'desktop/2.8.0');
     expect(run.status).toBe('done');
     expect(llmPayloads.length).toBe(3);
     // 2026-09-15 起本轮信号随 TANGU_MEMORY_VOLATILE(缺省 tail)落在最后一条 user 消息,不再进系统提示。
@@ -157,6 +157,14 @@ describe('Sketch 主动触发交付闸', () => {
     expect(sent.map((c: any) => c.function.name)).toEqual(['intelligent_ui_html']);
     expect(sent[0].function.arguments).toContain('window.forsionIntelligentUi.ask');
     expect((llmPayloads[1].messages as any[]).some((m) => m.role === 'tool' && String(m.content).includes('HTML card rendered'))).toBe(true);
+  }, 20_000);
+
+  it('没有要求画图的比较可直接用正文收尾', async () => {
+    script = [finalStep('三款产品各有优缺点。')];
+    const run = await runToSettled({}, '比较 Notion、Obsidian 和 Logseq 的定位和优缺点', 'desktop/2.8.0');
+    expect(run.status).toBe('done');
+    expect(llmPayloads).toHaveLength(1);
+    expect(userTexts(llmPayloads[0])).not.toContain('Visual-first note for this turn');
   }, 20_000);
 
   it('纯文字显式退订:不注入本轮信号、不拦收尾', async () => {
