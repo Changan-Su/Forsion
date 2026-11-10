@@ -1,6 +1,6 @@
 import { applyMcpSnapshot, mergeMcpImport, parseMcpInput } from '../shared/mcpConfig'
 import { assertMarketplaceRequirements } from '../shared/marketplace'
-import { mergeSyncContent,withContentWriteLock,contentSyncOwnership,agentContentHooks } from './contentSyncHost'
+import { mergeSyncContent,withContentWriteLock,contentSyncOwnership,agentContentHooks,CONTENT_MERGE_FAMILIES } from './contentSyncHost'
 import { asrBackendFor } from './asrSelection'
 import { qwenVoiceInputUrl, registerVoiceInputStream } from './voiceInputStream'
 import { voiceInputCloudUrl } from '../shared/voiceInputStream'
@@ -3258,6 +3258,7 @@ app.whenReady().then(async () => {
           dataDir: tanguDataDir, stopSync: () => stopAmadeusSync?.(), restartSync: () => restartAmadeusSync?.(),
         }),
         merge: (path,ours,base,theirs) => mergeSyncContent(path,ours,base,theirs,tanguDataDir()),
+        mergeFamilies: CONTENT_MERGE_FAMILIES,
         agentFiles: agentContentHooks(tanguDataDir(),()=>{const c=loadTanguCreds();return forsionAccountId(c.cloudUrl||'',c.token||'')}),
         withWriteLock:(path,commit)=>withContentWriteLock(path,tanguDataDir(),commit),
         trash: (p) => shell.trashItem(p),

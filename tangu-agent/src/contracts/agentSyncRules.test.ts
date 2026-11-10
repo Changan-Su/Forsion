@@ -88,13 +88,44 @@ describe('both syncs merge agent files the same way', () => {
       expect(out.conflict).toBe(false);
       expect(items(out.content)).toEqual({ shared: 'cloud', theirs: '1', mine: '1' });
     });
-    it('with a baseline: three-way by rows — delete holds, both changed goes to the cloud copy, an edit beats a delete', () => {
+    it('with a baseline: three-way by rows, a missing row is a value — delete holds, both changed goes to the cloud copy, a cloud delete beats a local edit', () => {
       const base = db({ same: '0', gone: 'x', goneThere: 'y', mine: '0', theirs: '0', editedHere: '0', editedThere: '0' });
       const ours = db({ same: 'local', goneThere: 'y', mine: 'local', theirs: '0', editedHere: 'local', newHere: '1' }); // 删了 gone、editedThere
       const cloud = db({ same: 'cloud', gone: 'x', mine: '0', theirs: 'cloud', editedThere: 'cloud', newThere: '1' }); // 删了 goneThere、editedHere
       const out = merge(P, ours, base, cloud)!;
       expect(out.conflict).toBe(false);
-      expect(items(out.content)).toEqual({ same: 'cloud', mine: 'local', theirs: 'cloud', editedHere: 'local', editedThere: 'cloud', newHere: '1', newThere: '1' });
+      // editedHere:这台改了、云端删了 = 两边都动了且不一样 → 云端那份(删);editedThere:这台删了、云端改了 → 云端那份(改)
+      expect(items(out.content)).toEqual({ same: 'cloud', mine: 'local', theirs: 'cloud', editedThere: 'cloud', newHere: '1', newThere: '1' });
+    });
+    it('review: a valid local reset to no columns and no rows is a delete of every row, not a replaced database — the baseline is kept', () => {
+      const base = db({ r: '1' });
+      const reset = `${JSON.stringify({ version: 2, name: 'calendar-settings', columns: [], rows: [] })}\n`;
+      const out = merge(P, reset, base, db({ r: '1', s: '2' }))!;
+      expect(out.conflict).toBe(false);
+      expect(items(out.content)).toEqual({ s: '2' }); // r 是这台删的(云端没动它):不并回来;s 是云端新加的:留下
+      expect(JSON.parse(out.content).columns.map((c: any) => c.id)).toEqual(['k', 'v']); // 列定义取云端那份
+    });
+    it('review: a row the cloud deleted while this device edited it stays deleted (the cloud copy wins, and a missing row counts)', () => {
+      const out = merge(P, db({ a: '1', r: 'edited' }), db({ a: '1', r: '0' }), db({ a: '1' }))!;
+      expect(out.conflict).toBe(false);
+      expect(items(out.content)).toEqual({ a: '1' });
+    });
+    it('the cloud column list is used unless it is empty and the local one is not; version and name come from the cloud', () => {
+      const cols = [{ id: 'k', name: 'key', type: 'text' }, { id: 'v', name: 'value', type: 'text' }];
+      const bare = (rows: Record<string, string>, extra: Record<string, unknown> = {}) => JSON.stringify({ ...JSON.parse(db(rows)), columns: [], ...extra });
+      const out = JSON.parse(merge(P, db({ a: '1' }, { version: 3, name: 'local' }), null, bare({ b: '2' }, { version: 4, name: 'cloud' }))!.content);
+      expect(out.columns).toEqual(cols);
+      expect([out.version, out.name]).toEqual([4, 'cloud']);
+      expect(JSON.parse(merge(P, bare({ a: '1' }), null, db({ b: '2' }))!.content).columns).toEqual(cols);
+    });
+    it('output is deterministic: rows sorted by id, the same bytes whichever order the rows came in; equal to the cloud copy = the cloud bytes verbatim', () => {
+      const raw = (ids: string[]) => JSON.stringify({ version: 2, name: 'calendar-settings', columns: [{ id: 'k', name: 'key', type: 'text' }], rows: ids.map((id) => ({ id, cells: { k: id } })) });
+      const a = merge(P, raw(['z', 'b']), null, raw(['m', 'a']))!.content;
+      const b = merge(P, raw(['b', 'z']), null, raw(['a', 'm']))!.content;
+      expect(a).toBe(b);
+      expect(JSON.parse(a).rows.map((r: any) => r.id)).toEqual(['a', 'b', 'm', 'z']);
+      const cloud = raw(['z', 'a']); // 云端那份没排过序、紧凑排版:结果和它一样就原样给回,不为排版再推一次
+      expect(merge(P, raw(['a']), raw(['a']), cloud)!.content).toBe(cloud);
     });
     it('differing column definitions or file name take the cloud copy', () => {
       const out = merge(P, db({ a: '1' }, { name: 'local-name', columns: [{ id: 'k', name: 'K', type: 'text' }, { id: 'v', name: 'V', type: 'text' }] }), null, db({ b: '2' }))!;

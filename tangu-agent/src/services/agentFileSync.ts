@@ -11,7 +11,7 @@ import { getAgent, listAgents, parseAgentConfig, trashAgent, resolveMemorySlug, 
 import { diff3Merge } from 'node-diff3';
 import { splitLogBlocks, mergeBlocks, mergeLogHeaders } from './memorySync.js';
 import { migrateScheduleFile } from './agentSchedule.js';
-import { agentSlugLocalOnly, isReadableSettingsDb, isSettingsContentPath, logText, mergeAgentSyncContent, neverConflictCopy, serializeTombstones, SETTINGS_MAX_BYTES, type AgentMergeDeps } from '../contracts/agentSyncRules.js';
+import { agentSlugLocalOnly, isReadableSettingsDb, isSettingsContentPath, logText, mergeAgentSyncContent, mergeSettingsDb, neverConflictCopy, serializeTombstones, SETTINGS_MAX_BYTES, type AgentMergeDeps } from '../contracts/agentSyncRules.js';
 import { AgentFileConflictError, type AgentFilesBrain, type AgentFileMeta, type AgentFileContent } from '../seams/cloudBrain.js';
 import { agentSyncDefault, agentSyncPermission, agentSyncScope, captureAgentSyncDefault, captureAgentSyncPermission, agentSyncOperationSignal, agentSyncConsentSignal, agentSyncDefaultSignal, pendingAgentRemovals, clearAgentRemoval } from './cloudSyncAccount.js';
 import { agentSyncDir, assertSyncPath, atomicSyncWrite, conflictCopyName, isConflictCopyPath, isSettingsPath, isWidgetDataPath, readSyncBytes, validSyncPath, validSyncSlug } from './agentSyncPaths.js';
@@ -471,15 +471,32 @@ async function reconcileFile(cloud: AgentFilesBrain, uid: string, slug: string, 
   // 设置文件的快进闸:读不懂的那份(断电后零字节、写了一半)不是「空」,不能照快进去盖读得懂的那份。
   // - 这台读不懂、正要推:云端没有就不推(留着,接口对它回 422);云端有就交给合并规则(读得懂的那份赢 = 云端修好这台)
   // - 正要拉、云端那份读不懂而这台读得懂:同样交给合并规则(这台那份留着,推上去修好云端)
+  // 设置文件、云端那一行没有版本信息(旧元数据:没有 seq / hash,或取到的那份没有 seq):没法做带版本的上传。
+  // 形状校验和合并照做(不看 modern),但结果只落本机、不往上推,也不记基线(拿不准),等下一轮;没有基线就按第一次见面合(并集、同一行云端赢)。
+  // 云端读不懂 = 这台原样留着(这台没有就什么都不写);合出来和这台一样 = 不写。
+  const legacySettings = async (fetched: { file: AgentFileContent; bytes: Buffer }): Promise<void> => {
+    const theirs = fetched.bytes.toString('utf8');
+    if (!isReadableSettingsDb(theirs)) { result.skipped++; return; }
+    const out = initial ? Buffer.from(mergeSettingsDb(initial.toString('utf8'), null, theirs).content) : fetched.bytes;
+    if (initial?.equals(out) || settingsTooLarge(contentPathOf(slug, p), out, 'merged')) { result.skipped++; return; }
+    withMemoryDirectoryLock(dir, () => { assertUnchanged(); atomicSyncWrite(root, abs, out, guard); });
+    result.pulled++;
+  };
+  if (noCopy && live && !modern) return legacySettings(await fetchRemote());
   let prefetched: { file: AgentFileContent; bytes: Buffer } | undefined;
   if (noCopy && initial) {
     const readable = (b: Buffer): boolean => isReadableSettingsDb(b.toString('utf8'));
     if (decision.kind === 'pushCreate' && !readable(initial)) { result.skipped++; return; }
     if (decision.kind === 'push' && !readable(initial)) decision = { kind: 'conflict' };
-    else if (decision.kind === 'pull' && modern) { prefetched = await fetchRemote(); if (!readable(prefetched.bytes) && readable(initial)) decision = { kind: 'conflict' }; }
+    else if (decision.kind === 'pull' && modern) {
+      prefetched = await fetchRemote();
+      if (typeof prefetched.file.seq !== 'number') return legacySettings(prefetched);
+      if (!readable(prefetched.bytes) && readable(initial)) decision = { kind: 'conflict' };
+    }
   }
   if (decision.kind === 'conflict' && opts.merge && modern && initial) {
     const fetched = prefetched ?? await fetchRemote();
+    if (noCopy && typeof fetched.file.seq !== 'number') return legacySettings(fetched);
     // 设置文件:云端那行就算被标成二进制,字节照样按文本合(读不懂时规则里有定论),不落到「整份取云端」那条路
     const merged = fetched.file.isBinary && !noCopy ? null : mergeAgentSyncContent(contentPathOf(slug, p), initial.toString('utf8'), base, fetched.bytes.toString('utf8'), MERGE_DEPS);
     if (!merged) { await pull(true, fetched); return; }

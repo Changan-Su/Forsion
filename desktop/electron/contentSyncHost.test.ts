@@ -4,9 +4,9 @@ import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,rmSync,existsSync} from
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 vi.mock('./amadeus/fs/vaultHandlers',()=>({withTextWriteLock:async(_p:string,fn:()=>Promise<void>)=>fn()}))
-import {setOfflineContentOwner,mergeSyncContent,withContentWriteLock,agentContentHooks,contentSyncOwnership} from './contentSyncHost'
+import {setOfflineContentOwner,mergeSyncContent,withContentWriteLock,agentContentHooks,contentSyncOwnership,CONTENT_MERGE_FAMILIES} from './contentSyncHost'
 import {createMemoryRepository} from '../../tangu-agent/src/services/memoryRepository'
-import {mergeTombstoneLists,parseTombstones,serializeTombstones} from '../../tangu-agent/src/contracts/agentSyncRules'
+import {mergeSettingsDb,mergeTombstoneLists,parseTombstones,serializeTombstones} from '../../tangu-agent/src/contracts/agentSyncRules'
 import {cloudAccountScope,agentSyncDefault,setAgentSyncDefault} from '../../tangu-agent/src/services/cloudSyncAccount'
 let home:string,prev:string|undefined
 beforeEach(()=>{home=mkdtempSync(join(tmpdir(),'forsion-sync-host-'));prev=process.env.TANGU_HOME;process.env.TANGU_HOME=home})
@@ -35,6 +35,13 @@ it('settings files that follow the account: the new sync gets the same no-copy r
  // 有基线:一边删另一边没动 = 删;两边都改 = 云端
  const base=db({a:'0',gone:'x'}),merged=mergeSyncContent('human/Settings/calendar.db',db({a:'local'}),base,db({a:'cloud',gone:'x'}))!
  expect(merged.conflict).toBe(false);expect(items(merged.content)).toEqual({a:'cloud'})
+ // 这台改了、云端删了 = 云端那份(删);这台空了(合法的空库)= 这台删了这些行,基线照用
+ expect(items(mergeSyncContent('human/Settings/calendar.db',db({a:'1',r:'edited'}),db({a:'1',r:'0'}),db({a:'1'}))!.content)).toEqual({a:'1'})
+ const empty=JSON.stringify({version:2,name:'calendar-settings',columns:[],rows:[]})
+ expect(items(mergeSyncContent('human/Settings/calendar.db',empty,db({r:'1'}),db({r:'1',s:'2'}))!.content)).toEqual({s:'2'})
+ // 宿主把同一份契约规则递给新同步,并声明它(Extend 只认这个声明才碰这个族;老宿主没有这个成员)
+ expect(CONTENT_MERGE_FAMILIES).toContain('settings')
+ expect(mergeSyncContent('human/Settings/calendar.db',db({x:'1'}),db({x:'0'}),db({y:'2'}))).toEqual(mergeSettingsDb(db({x:'1'}),db({x:'0'}),db({y:'2'})))
  // 读不懂也有定论,不返回 null(返回 null Extend 同样会存副本)
  expect(mergeSyncContent('human/Settings/calendar.db','{ not json',null,db({a:'1'}))).toEqual({content:db({a:'1'}),conflict:false})
  // 旁边的默认日历照旧:同一行不一样 = 冲突

@@ -156,12 +156,45 @@ describe('with a baseline: both devices synced the same file, then each changed 
     for (const h of [homeA, homeB]) expect(itemsOf(read(h))).toEqual({ a: '1' });
   });
 
-  it('a row one device deleted and the other edited keeps the edit, without a copy', async () => {
-    const cloud = await synced({ a: '1', b: '2' });
+  it('a row one device deleted and the other edited goes to whichever reached the cloud first, without a copy', async () => {
+    // 删的那台先同步上去 = 云端那份是「删」:另一台的改动输给它(两边都动了同一行且不一样 → 云端那份;没有这一行也是一个值)
+    let cloud = await synced({ a: '1', b: '2' });
     write(homeA, settingsDb({ a: '1' }));
     write(homeB, settingsDb({ a: '1', b: 'edited' }));
     await settle(cloud, [homeA, homeB, homeA, homeB]);
+    for (const h of [homeA, homeB]) { expect(itemsOf(read(h))).toEqual({ a: '1' }); expect(copies(h)).toEqual([]); }
+    expect(itemsOf(cloudText(cloud)!)).toEqual({ a: '1' });
+    for (const h of [homeA, homeB]) expect((await sync(cloud, h)).pushed).toBe(0);
+    // 反过来:改的那台先上去,删的那台输
+    for (const h of [homeA, homeB]) rmSync(h, { recursive: true, force: true });
+    homeA = mkdtempSync(join(tmpdir(), 'tangu-settings-a-')); homeB = mkdtempSync(join(tmpdir(), 'tangu-settings-b-'));
+    cloud = await synced({ a: '1', b: '2' });
+    write(homeA, settingsDb({ a: '1' }));
+    write(homeB, settingsDb({ a: '1', b: 'edited' }));
+    await settle(cloud, [homeB, homeA, homeB, homeA]);
     for (const h of [homeA, homeB]) { expect(itemsOf(read(h))).toEqual({ a: '1', b: 'edited' }); expect(copies(h)).toEqual([]); }
+  });
+
+  it('review: this device reset the file to no columns and no rows while the other kept r and added s — r stays deleted, and the next round pushes nothing', async () => {
+    const cloud = await synced({ r: '1' });
+    write(homeB, settingsDb({ r: '1', s: '2' }));
+    expect(await sync(cloud, homeB)).toMatchObject({ ok: true, pushed: 1 });
+    write(homeA, `${JSON.stringify({ version: 2, name: 'calendar-settings', columns: [], rows: [] })}\n`);
+    await settle(cloud, [homeA, homeB]);
+    for (const h of [homeA, homeB]) { expect(itemsOf(read(h))).toEqual({ s: '2' }); expect(copies(h)).toEqual([]); }
+    expect(itemsOf(cloudText(cloud)!)).toEqual({ s: '2' });
+    for (const h of [homeA, homeB, homeA]) expect(await sync(cloud, h)).toMatchObject({ ok: true, pushed: 0, pulled: 0 });
+  });
+
+  it('after a three-way merge both devices hold the same bytes and another round on either side pushes nothing', async () => {
+    const cloud = await synced({ a: '1', b: '1', c: '1' });
+    write(homeA, settingsDb({ c: 'A', a: '1', z: 'A' })); // 删了 b、改了 c、加了 z,行顺序也和对面不一样
+    write(homeB, settingsDb({ a: 'B', b: '1', c: 'B', y: 'B' }));
+    await settle(cloud, [homeA, homeB, homeA]);
+    expect(read(homeA)).toBe(read(homeB));
+    expect(read(homeA)).toBe(cloudText(cloud));
+    expect(itemsOf(read(homeA))).toEqual({ a: 'B', c: 'A', y: 'B', z: 'A' });
+    for (const h of [homeA, homeB, homeA, homeB]) expect(await sync(cloud, h)).toMatchObject({ ok: true, pushed: 0, pulled: 0 });
   });
 
   it('a column definition that differs takes the cloud copy', async () => {
@@ -235,6 +268,66 @@ describe('never a conflict copy, whatever the two sides look like', () => {
     expect(await sync(cloud, homeB)).toMatchObject({ conflicts: 0 });
     expect(itemsOf(read(homeB))).toEqual({ shared: 'cloud' });
     expect(copies(homeB)).toEqual([]);
+    expect(cloud._puts.filter((k) => k.includes('Settings'))).toEqual([]); // 没有版本号就没有比对交换写:不推
+  });
+});
+
+describe('review: a server entry without seq / hash (old metadata) does not bypass the settings rules', () => {
+  /** 云端那一行没有 seq / hash(旧元数据):modern 为假,只能按 mtime 判。 */
+  const legacyRow = (cloud: Cloud, text: string, mtimeMs: number): void => { cloud._rows.set(`__human__\0${REL}`, { content: text, isBinary: false, size: Buffer.byteLength(text), mtimeMs, deleted: false }); };
+  const settingsPuts = (cloud: Cloud): string[] => cloud._puts.filter((k) => k.includes('Settings'));
+
+  it('an unreadable newer cloud copy does not overwrite the readable local file', async () => {
+    const cloud = fakeCloud();
+    await enroll(cloud, homeA);
+    const good = settingsDb({ a: '1' });
+    write(homeA, good);
+    legacyRow(cloud, '{ half', Date.now() + 60_000);
+    for (let i = 0; i < 2; i++) expect(await sync(cloud, homeA)).toMatchObject({ ok: true, conflicts: 0 });
+    expect(read(homeA)).toBe(good);
+    expect(copies(homeA)).toEqual([]);
+    expect(settingsPuts(cloud)).toEqual([]);
+    expect(cloudText(cloud)).toBe('{ half');
+  });
+
+  it('two valid copies: rows only this device has are kept, the cloud wins a shared row, the result lands locally only and is not pushed', async () => {
+    const cloud = fakeCloud();
+    await enroll(cloud, homeA);
+    write(homeA, settingsDb({ shared: 'local', onlyLocal: '1' }));
+    const cloudCopy = settingsDb({ shared: 'cloud', onlyCloud: '1' });
+    legacyRow(cloud, cloudCopy, Date.now() + 60_000);
+    expect(await sync(cloud, homeA)).toMatchObject({ ok: true, conflicts: 0 });
+    expect(itemsOf(read(homeA))).toEqual({ shared: 'cloud', onlyLocal: '1', onlyCloud: '1' });
+    expect(settingsPuts(cloud)).toEqual([]);
+    expect(cloudText(cloud)).toBe(cloudCopy);
+    // 下一轮:什么都不写、不推
+    const before = read(homeA);
+    expect(await sync(cloud, homeA)).toMatchObject({ ok: true, conflicts: 0, pulled: 0 });
+    expect(read(homeA)).toBe(before);
+    expect(settingsPuts(cloud)).toEqual([]);
+    on(homeA);
+    const shadowFile = join(humanDir(), `.cloudsync-${agentSyncScope(cloud, 'u')}.json`);
+    const shadow = existsSync(shadowFile) ? JSON.parse(readFileSync(shadowFile, 'utf8')) : { files: {} };
+    expect(shadow.files[REL]).toBeUndefined(); // 拿不准就不记基线
+  });
+
+  it('a local copy newer than the cloud one is still not pushed without a version', async () => {
+    const cloud = fakeCloud();
+    await enroll(cloud, homeA);
+    legacyRow(cloud, settingsDb({ shared: 'cloud', onlyCloud: '1' }), Date.now() - 600_000);
+    write(homeA, settingsDb({ shared: 'local', onlyLocal: '1' }));
+    expect(await sync(cloud, homeA)).toMatchObject({ ok: true, conflicts: 0 });
+    expect(settingsPuts(cloud)).toEqual([]);
+    expect(itemsOf(read(homeA))).toEqual({ shared: 'cloud', onlyLocal: '1', onlyCloud: '1' });
+  });
+
+  it('no local file and an unreadable cloud copy: nothing is written', async () => {
+    const cloud = fakeCloud();
+    await enroll(cloud, homeA);
+    legacyRow(cloud, '{ half', Date.now());
+    expect(await sync(cloud, homeA)).toMatchObject({ ok: true });
+    on(homeA);
+    expect(existsSync(file())).toBe(false);
   });
 });
 

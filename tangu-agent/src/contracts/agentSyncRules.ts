@@ -279,19 +279,48 @@ export function isReadableSettingsDb(text: string): boolean {
   try { return isSettingsDbShape(JSON.parse(text)); } catch { return false; }
 }
 
+type SettingsDb = Record<string, unknown> & { columns: unknown[]; rows: Array<Record<string, unknown> & { id: string }> };
+function parseSettingsDb(text: string | null): SettingsDb | null {
+  if (text === null) return null;
+  try { const d: unknown = JSON.parse(text); return isSettingsDbShape(d) ? d as SettingsDb : null; } catch { return null; }
+}
+/** 键序无关的比较(两台写出同一行、键的先后不同,不算改动)。undefined = 这一行不存在,也是一个值。 */
+function canonValue(v: unknown): string {
+  if (Array.isArray(v)) return `[${v.map(canonValue).join(',')}]`;
+  if (v && typeof v === 'object') return `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${canonValue((v as Record<string, unknown>)[k])}`).join(',')}}`;
+  return v === undefined ? 'undefined' : JSON.stringify(v);
+}
+
 /**
  * 设置文件(human/Settings/<name>.db)两边不一样怎么合。和 human/ 里别的文件不同:**任何情况下都有确定的结果,不出冲突副本**
  * (conflict 恒为 false,也不返回 null)—— 渲染层读这份文件时不会去翻副本,留副本等于悄悄丢设置。ours = 这台,theirs = 云端。
- * - 有基线:按行三方合并。一边删、另一边没动 = 删;两边改了同一行且值不同 = 云端那份赢。
- * - 没有基线(两台各自建了文件,第一次见面):行取并集;同一个行 id 两边值不同 = 云端那份赢(先同步上去的那台说了算)。
- * - 列定义、文件名这些表头两边不一样(不该发生)= 云端那份。列 id 就是字段名(k / v),不做日历那种对列。
- * - 某一份读不懂(isReadableSettingsDb)= 读得懂的那份整份赢;都读不懂 = 云端那份。基线读不懂 = 当没有基线。
+ * 自己的一套行合并(不委托 mergeDbFile:那边的「整份重置 / 种子替换」猜测和「编辑胜删除」对这个族都不对)。「这一行不存在」也是一个值;
+ * 对每个行 id 比 基线 / 这台 / 云端 三份(整行比较,键序无关):
+ * - 有基线:这台 == 基线 → 取云端(云端删了 = 删);云端 == 基线 → 取这台(这台删了 = 删);两边都和基线不同 → 取云端(云端删了也是删)。
+ *   这台空了(合法的 columns: [] / rows: [])就是这台把这些行删了,照上面走,不当成「换了一个库」丢掉基线。
+ * - 没有基线(两台各自建了文件,第一次见面;或基线读不懂):行取并集,同一个行 id 两边不同 → 取云端。
+ * - 列定义取云端的;云端是空数组而这台有 → 取这台的。version / name 和其余表头取云端的。
+ * - 某一份读不懂(isReadableSettingsDb)= 读得懂的那份整份赢;都读不懂 = 云端那份。
+ * 输出确定:行按 id 排序(按码点比,不随系统语言)、两格缩进;结果和云端那份一模一样(同样的行、同样的表头)就原样给回云端的字节 ——
+ * 两台合出来的字节一样,下一轮是空转,不会为排版互推。
  */
 export function mergeSettingsDb(ours: string, base: string | null, theirs: string): AgentMergeResult {
-  const o = isReadableSettingsDb(ours), t = isReadableSettingsDb(theirs);
-  if (!o || !t) return { content: t || !o ? theirs : ours, conflict: false };
-  const merged = mergeDbFile(ours, base !== null && isReadableSettingsDb(base) ? base : null, theirs, { fieldColumns: true });
-  return { content: merged ? merged.content : theirs, conflict: false };
+  const O = parseSettingsDb(ours), T = parseSettingsDb(theirs);
+  if (!O || !T) return { content: T || !O ? theirs : ours, conflict: false };
+  const B = parseSettingsDb(base);
+  const index = (d: SettingsDb | null) => new Map((d?.rows ?? []).map((r) => [r.id, r]));
+  const o = index(O), t = index(T), b = index(B);
+  const same = (x: unknown, y: unknown): boolean => canonValue(x) === canonValue(y);
+  const rows: SettingsDb['rows'] = [];
+  for (const id of [...new Set([...o.keys(), ...t.keys()])].sort((x, y) => (x < y ? -1 : x > y ? 1 : 0))) {
+    const ov = o.get(id), tv = t.get(id), bv = b.get(id);
+    const pick = B ? (same(ov, bv) ? tv : same(tv, bv) ? ov : tv) : (tv ?? ov);
+    if (pick) rows.push(pick);
+  }
+  const columns = T.columns.length === 0 && O.columns.length > 0 ? O.columns : T.columns;
+  const out = { ...T, columns, rows };
+  if (same(out.columns, T.columns) && rows.length === T.rows.length && rows.every((r) => same(r, t.get(r.id)))) return { content: theirs, conflict: false };
+  return { content: `${JSON.stringify(out, null, 2)}\n`, conflict: false };
 }
 
 const TEXT_FILE = /\.(md|txt|toml|json|yaml|yml|csv|html|xml|js|ts|py)$/i;
