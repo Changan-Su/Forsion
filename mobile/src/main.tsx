@@ -110,6 +110,7 @@ void installMobileShim().then(async (ok) => {
     impl = makeBridge('cloud')
     void import('@/amadeus/store/pageStore').then((ps) => {
       ps.resetAllScopeDocs()
+      ps.invalidateVaultRestore() // 旧账号那趟在途的断网重开作废,也别再按它的失败去重试
       ps.usePageStore.setState({ vaultRoot: null, pages: [], folders: [], files: [], icons: {} })
     })
   })
