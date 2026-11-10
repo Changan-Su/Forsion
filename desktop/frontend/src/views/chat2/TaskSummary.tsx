@@ -37,6 +37,7 @@ import { BgRow, PROCESS_CAP } from './BackgroundProcs'
 import { useChangesCard } from './changeTrail'
 import { ChangeScopeSeg, ChangesCardBody } from './ChangesCard'
 import { SandboxRailCard, useSandboxRail } from './SandboxRailCard'
+import '../../tangu/messages'
 
 registerMessages({
   'tsum.title': { zh: '任务概览', en: 'Task overview' },

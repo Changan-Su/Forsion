@@ -3118,7 +3118,6 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     // 起 run 往返途中 running 还没置上:失败行、右栏卡、额度按钮各点一下也只发一次(Codex 评审)
     if (!sid || get().runningBySession[sid] || continuing.has(sid)) return false
     continuing.add(sid)
-    tanguCount('chatContinue')
     if (opts?.quotaFallback) quotaFallbackNext.set(sid, Date.now())
     try { return await get().send(TURN_RESUME_MARKER, [], undefined, undefined, undefined, sid) } finally { continuing.delete(sid) }
   },
