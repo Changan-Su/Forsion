@@ -20,6 +20,7 @@
  *     C2 没有快照(首次登录 / 快照被清):网络回来(online)自己把云端库打开,回到上次那篇。
  *     C3 没有快照、网络回来但没有 online 事件(请求失败而系统仍算在线):再进一次笔记 Space 就打开。
  *     C4 网络挂住(请求不回也不报错)冷启动:快照照样几秒内上屏,不等 30 秒超时。
+ *     C5 没有快照、打开挂在半路时网络回来:online 先到、挂住的请求随后才失败 —— 失败后自己补一次,库打开。
  *  负对照 = 这份台架对着修复前的代码(重建 dist)跑,C 必须红;E2E_NEGATIVE=1 只是撤掉故障注入。
  *
  * 种子:缺省是内置的几篇;CLOUD_SEED=<json>(`{ path: { kind, content } }`)可换成真实库的导出,只在本机用,别进仓库。
@@ -387,6 +388,18 @@ async function main() {
       await page.screenshot({ path: path.join(SHOTS, 'c4-hang.png') })
       check(shown4 && ms4 < 10000, 'C4 网络挂住冷启动:树快照 10 秒内上屏(请求超时是 30 秒)', `重载后 ${ms4}ms · 挂住的请求×${hung.length}`)
       await netBack(true)
+
+      // C5:没有快照、首次打开挂在半路时网络回来(online 先到、挂住的请求随后才失败)—— online 不能被吞(Codex 评审 P2)
+      await treeHas(target2, 6000) // 等 C4 那趟重连落定
+      await dropSnapshot()
+      await coldStart('hang')
+      fake.limit.hang = false
+      await page.evaluate(() => window.dispatchEvent(new Event('online')))
+      await page.waitForTimeout(500)
+      releaseHung() // 挂住的请求这时才失败
+      const opened5 = await treeHas(target2, 10000)
+      await page.screenshot({ path: path.join(SHOTS, 'c5-online-while-pending.png') })
+      check(opened5, 'C5 无快照、打开在途时网络回来:请求失败后自己补一次,云端库打开')
     } catch (e) { fail(`C ${target2}`, e.message) } finally { fake.limit.net = false; fake.limit.hang = false; releaseHung() }
 
     check(!(fake.hits.writes || []).length, '点开笔记没有往云端写任何文件', (fake.hits.writes || []).join(', '))

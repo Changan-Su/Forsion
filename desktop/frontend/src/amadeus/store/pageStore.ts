@@ -736,9 +736,16 @@ function makePageStore(opts: PageStoreOptions = {}) {
     },
 
     async restoreVault(opts) {
+      // 代次:断网重开的这一趟可能挂很久(请求 30 秒超时),期间用户切到本地库 / 换了账号 / 别处又开了库 ——
+      // 迟到的结果整份作废,不进店、不 loadPage(经桥代理会落到**现在**那座桥上,本地桥读不到就建空文件,Codex 评审 P1)。
+      const gen = ++restoreGen
+      const rootAtStart = get().vaultRoot
+      const sideAtStart = get().vaultSide
+      const stale = (): boolean => gen !== restoreGen || get().vaultRoot !== rootAtStart || get().vaultSide !== sideAtStart
       set({ vaultLoading: true })
       try {
         const info = await amadeus.restoreVault()
+        if (stale()) return
         set({ vaultRestoreFailed: false })
         if (!info) return
         set({ vaultRoot: info.root, pages: info.pages, folders: info.folders ?? [], files: [], filesPendingFor: info.root, error: null })
@@ -749,6 +756,7 @@ function makePageStore(opts: PageStoreOptions = {}) {
           info.lastPage && info.pages.includes(info.lastPage) ? info.lastPage : info.pages[0]
         if (target) await get().loadPage(target)
       } catch (e) {
+        if (stale()) return
         // 库没装上才记失败;装上之后 loadPage 出错归编辑器自己的「加载失败 + 重试」。
         set({ error: String(e), vaultRestoreFailed: get().vaultRoot == null })
       } finally {
@@ -2049,6 +2057,13 @@ export function clearScopeNotePaths(path: string, kind: 'file' | 'prefix'): void
     if (!a) continue
     if (kind === 'file' ? a === path : a === path || a.startsWith(`${path}/`)) s.setState({ activeNotePath: null })
   }
+}
+
+/** restoreVault 的代次(见 restoreVault):换账号 / 换桥时调 invalidateVaultRestore,让在途的那一趟作废。 */
+let restoreGen = 0
+export function invalidateVaultRestore(): void {
+  restoreGen++
+  for (const s of stores.values()) s.setState({ vaultRestoreFailed: false })
 }
 
 /** 有没有哪个面板开着(或正在打开)一篇笔记。 */

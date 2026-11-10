@@ -807,9 +807,11 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
     if (snap) {
       // asset token 仍须赶在首屏 <img> 前就位(embedImage 的 URL memo 不随 token 自愈,评审 P1):
       // await 它(内部 ensureVault + POST,永不 reject)。树拉取/SSE 留在后台 —— 快照路径省的是树。
-      // 最多等 3 秒:网络挂住(请求不回也不报错)时它要等满 30 秒超时,快照就白存了(断网冷启动照样空屏)。
-      // 超时没拿到时正文也读不出来(同一条网络),下面的重连在拉树前先补拿 token,正文读得出时它一般已就位。
-      await Promise.race([refreshAssetToken(), new Promise<void>((r) => setTimeout(r, 3000))])
+      // 网络挂住(请求不回也不报错)时它要等满 30 秒超时,快照就白存了(断网冷启动照样空屏)→ 3 秒时连 GET /vaults
+      // 都还没回(vaultId 仍空)就不等了,先上快照;/vaults 回了说明网络是通的,照旧等 token 落地 —— 不然首屏图片
+      // 记住的是没带 ?at= 的地址、之后不会自愈(Codex 评审 P2)。下面的重连在拉树前也会先补拿 token。
+      const token = refreshAssetToken()
+      await Promise.race([token, new Promise<void>((r) => setTimeout(r, 3000)).then(() => (vaultId ? token : undefined))])
       void (async () => {
         // startEvents 全会话只有这一次机会(restoreVault 被 amadeusBooted 门闩住)→ 失败必须一直重试到连上:
         // 断网冷启动走的就是这条(快照照常上屏),此前三次退避后就放弃,网络回来也不再拉树、实时同步整会话失联。
