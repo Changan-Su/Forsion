@@ -2,6 +2,12 @@
 
 <!-- English edition of CHANGELOG.md: same "## <version> (<date>)" headings, one bullet per Chinese bullet. Add both when releasing. -->
 
+## 2.14.1 (2026-11-10)
+
+This stable release includes all the changes from 2.14.1-beta.1, detailed in the next section.
+
+- **Detached windows**: Quick Find and note links work again, and you can open the same note in multiple windows. Dragging a tab across windows shows its drop position. Dragging the only tab toward a split in its own window keeps the tab bar visible.
+
 ## 2.14.1-beta.1 (2026-11-10)
 
 - **Detached windows**: Search in the current window with Cmd+P or Ctrl+P, follow note links there, and open the same note in multiple windows. Dragging a tab to another window shows where it will insert or split and preserves the tabs already there. Dragging the only tab toward a split in its own window leaves the tab and draggable title bar visible.
