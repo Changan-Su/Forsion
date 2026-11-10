@@ -436,6 +436,19 @@ describe('snapshot.myCalendar:读失败 ≠ 没有', () => {
     window.dispatchEvent(new Event('focus')); await flush(); await flush(); await flush()
     expect(snaps.at(-1)!.myCalendar).toBe('absent')
   })
+  it('并发重读:后到的「没问到」不覆盖先到的成功结果', async () => {
+    humanMissing = 'unknown'
+    await useDbStore.getState().reload(H, H)
+    expect(useDbStore.getState().entries[H]?.reason).toBe('unknown')
+    let release!: () => void
+    humanRead.mockImplementationOnce(() => new Promise((r) => { release = () => r({ status: 'missing' as const, reason: 'unknown' as const }) }))
+    const slow = useDbStore.getState().reload(H, H)
+    human = withDate()
+    await useDbStore.getState().reload(H, H)
+    expect(useDbStore.getState().entries[H]?.status).toBe('ok')
+    release(); await slow
+    expect(useDbStore.getState().entries[H]?.status).toBe('ok')
+  })
   it('已经读到的日历,一次没问到不会被冲成「没有」', async () => {
     human = withDate()
     const { snaps } = await open()

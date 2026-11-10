@@ -172,7 +172,9 @@ export const useDbStore = create<DbStoreState>((set, get) => ({
       if (gen !== get().gen) return false
       const reason: HumanCalMissingReason | undefined = r.status === 'missing' && 'reason' in r ? (r as { reason: HumanCalMissingReason }).reason : undefined
       // 没问到(引擎一时没应答)不等于文件没了:已经读到的那份和没落盘的改动都留着,和下面 catch 那条同一个规矩。
-      if (reason === 'unknown' && previous && previous.status !== 'missing' && previous.status !== 'loading') return false
+      // 看的是这次读完时的条目,不是开始时的:并发的另一次读可能已经读到了(Codex 评审)。
+      const now = get().entries[key]
+      if (reason === 'unknown' && now && now.status !== 'missing' && now.status !== 'loading') return false
       const existing = r.status !== 'missing' ? Object.values(get().entries).find(e => e.path === r.path && e.identity) : undefined
       const entry: DbEntry = reuse && existing ? existing : r.status === 'ok'
         ? { status: 'ok', path: r.path, data: r.data, version: r.version, identity: existing?.identity ?? newFileIdentity() }
