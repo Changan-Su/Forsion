@@ -33,6 +33,16 @@ function overlaysNow(): Array<{ db: AggDb; origin: PluginCalendarOverlay['origin
   ]
 }
 
+/** 「我的日历」现在是哪种情况(PluginCalendarSnapshot.myCalendar)。读失败 ≠ 没有:只有对端明确说这个宿主没有它才是 absent;
+ *  引擎没起、网络错、5xx、文件解析不了都是 unknown —— 插件据此什么都不建、提示稍后再试。三端同一份:桌面问本机引擎,
+ *  网页 / 手机问 server,设备页问那台设备(远端访客恒为 absent)。 */
+export function myCalendarStatus(): NonNullable<PluginCalendarSnapshot['myCalendar']> {
+  const e = useDbStore.getState().entries[HUMAN_CAL]
+  if (!e || e.status === 'loading') return 'loading'
+  if (e.status === 'ok') return 'ok'
+  return e.status === 'missing' && e.reason === 'absent' ? 'absent' : 'unknown'
+}
+
 function snapshotOf(dbs: AggDb[], ready: boolean): PluginCalendarSnapshot {
   const vault = usePageStore.getState().vaultRoot ?? ''
   const byVault = useCalendarConfig.getState().byVault
@@ -49,6 +59,7 @@ function snapshotOf(dbs: AggDb[], ready: boolean): PluginCalendarSnapshot {
     hidden: [...(byVault[vault]?.hidden ?? [])],
     defaultPath: defaultDbPath(vault, byVault) ?? (human ? HUMAN_CAL : null),
     icsSubscriptions: icsSubsNow(),
+    myCalendar: myCalendarStatus(),
   }
 }
 
@@ -92,7 +103,7 @@ export function createCalendarApi(scope: DataScope): CalendarApi {
         // .ics 的列名 / 回退名随语言变 → 语言也进签名
         const sig = [dbs, ready, currentLocale(), usePageStore.getState().vaultRoot, useCalendarConfig.getState().byVault,
           useAgentSchedules.getState().schedules, useOtherSideCal.getState().dbs, useIcsCalendars.getState().subs, useIcsCalendars.getState().events,
-          useIcsCalendars.getState().errors]
+          useIcsCalendars.getState().errors, myCalendarStatus()]
         if (sig.length === last.length && sig.every((x, i) => x === last[i])) return
         last = sig
         try { cb(snapshotOf(dbs, ready)) } catch (e) { console.error('[amadeus] ctx.calendar 回调抛错', e) }

@@ -19,11 +19,15 @@ const ENDPOINT = '/agent/human/CALENDAR.db'
 let legacyAbs: string | null = null
 export const humanCalLegacy = (): string | null => legacyAbs
 
-/** version '' = 引擎那边还没有这份文件:第一次写按「新建」发(version: null)。 */
+/** version '' = 引擎那边还没有这份文件:第一次写按「新建」发(version: null)。
+ *  missing 分两种(2026-11-10 日历来源方案):读失败 ≠ 没有。
+ *  · absent  —— 对端明确说这个宿主没有它:404(老引擎没这条接口 / 引擎不在本机 HUMAN_LOCAL_ONLY)、403 HUMAN_REMOTE_DENIED(设备页远端访客)。
+ *  · unknown —— 没问到:网络错、超时、引擎没起、401、5xx、其他 403、响应解析不了。之后可能就读到了。 */
+export type HumanCalMissingReason = 'absent' | 'unknown'
 export type HumanCalRead =
   | { status: 'ok'; path: string; data: DbFile; version: string }
   | { status: 'corrupt'; path: string; message: string }
-  | { status: 'missing' }
+  | { status: 'missing'; reason: HumanCalMissingReason }
 
 // 列 id 固定:两个窗口同时首次建的话,后写的那个 409 后重读前一个的表,重放的改动引用的列照样对得上(随机 id 会写到不存在的列上,Codex 评审)
 const emptyCalendar = (): DbFile => ({
@@ -37,12 +41,22 @@ const emptyCalendar = (): DbFile => ({
   rows: [],
 })
 
+/** 非 2xx 响应里哪些算「确认没有」:404 = 这条接口不在(老引擎 / 老 server)或引擎说它不在本机;
+ *  403 只认 HUMAN_REMOTE_DENIED(设备页的远端访客恒拿不到主人的日历),别的 403 可能是鉴权还没就绪,算不知道。 */
+async function absentByResponse(r: Response): Promise<boolean> {
+  if (r.status === 404) return true
+  if (r.status !== 403) return false
+  try { return (await r.json())?.error === 'HUMAN_REMOTE_DENIED' } catch { return false }
+}
+
 export async function readHumanCal(): Promise<HumanCalRead> {
   let r: Response
-  try { r = await engineFetch(homeTarget(), ENDPOINT, { method: 'GET' }) } catch { return { status: 'missing' } }
+  try { r = await engineFetch(homeTarget(), ENDPOINT, { method: 'GET' }) } catch { return { status: 'missing', reason: 'unknown' } }
   if (r.status === 422) return { status: 'corrupt', path: HUMAN_CAL, message: 'human/CALENDAR.db is not valid JSON' }
-  if (!r.ok) return { status: 'missing' } // 旧引擎没有这条接口 / 引擎不在本机
-  const body = await r.json()
+  if (!r.ok) return { status: 'missing', reason: (await absentByResponse(r)) ? 'absent' : 'unknown' }
+  let body: { status?: unknown; data?: unknown; version?: unknown; legacy?: unknown }
+  try { body = await r.json() } catch { return { status: 'missing', reason: 'unknown' } }
+  if (!body || typeof body !== 'object') return { status: 'missing', reason: 'unknown' }
   legacyAbs = typeof body.legacy === 'string' ? body.legacy : null
   if (body.status === 'ok') return { status: 'ok', path: HUMAN_CAL, data: body.data as DbFile, version: String(body.version) }
   return { status: 'ok', path: HUMAN_CAL, data: emptyCalendar(), version: '' }

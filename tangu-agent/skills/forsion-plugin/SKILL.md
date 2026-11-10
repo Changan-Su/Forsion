@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.107.0
+  version: 1.108.0
   author: Forsion
   category: Forsion
 ---
@@ -973,6 +973,9 @@ ctx.calendar?.removeMember?.(db.path)           // 只撤成员,不删表
   `setMember` 只认库里可写的表,日期列必须是日期类列(`base === 'date'` 或 `calendarDate`)、勾选列必须是勾选类列;
   `setDefault` 只认可写的成员;`removeMember` 只认显式登记过的成员,而且日历做过首次整理才收(从没打开过日历的库里,订阅会在 `ready` 后替你做这一步,成员不变 —— 先订阅、等 ready 再撤)。叠加源不能当成员、不能设默认,拿它的 path 调 `ctx.databases` 的写口也是 false。
 - 设置按**当前库**生效,和宿主日历左栏「日历」列表改的是同一处(存在本机,不进库文件、不同步)。
+- **`myCalendar`(2026-11-10 起的宿主;老宿主没有这个字段)= 个人日历 `human://CALENDAR.db` 读得怎样**:`'ok'` 读到了(文件还没建也算,第一次写会建;有日期列就在 `members` 里);
+  `'absent'` 宿主确认没有它(老引擎 / 老 server、设备页的远端访客)→ 按没有个人日历的老规矩走;`'unknown'` 没读到(引擎没起、网络、5xx、文件坏了)、`'loading'` 还在读 →
+  **读失败 ≠ 没有**:别因为成员里没它就新建别的表顶替,提示稍后再试、留住用户的输入,读到后宿主会再推一份快照。不认识的值当 `'unknown'`;字段缺失(老宿主)才退回自己的历史证据。
 - 详情页那一行会多一项「读取 Agent 日程、.ics 订阅和另一侧库里的日历，管理 .ics 订阅并改日历设置」。
 
 **.ics 订阅管理**(同一档,2026-10-17 起):和宿主日历设置里的「订阅」是同一份列表(存在本机,不进库),改了宿主那边立刻看到。

@@ -8,7 +8,7 @@ import type { DbFile } from '@amadeus-shared/db/schema'
 import { stampUpdatedRows } from '@amadeus-shared/db/stamp'
 import { amadeus } from '../api'
 import { kickAutomation } from './automationKick'
-import { HUMAN_CAL, readHumanCal, writeHumanCalCas } from './humanCalendarIo'
+import { HUMAN_CAL, readHumanCal, writeHumanCalCas, type HumanCalMissingReason } from './humanCalendarIo'
 import { onNotePathGone, usePageStore } from './pageStore'
 
 export interface DbEntry {
@@ -18,6 +18,9 @@ export interface DbEntry {
   path: string | null
   data: DbFile | null
   message?: string
+  /** missing 时为什么没有(目前只有默认日历 human://CALENDAR.db 给):absent = 对端确认这个宿主没有它;
+   *  unknown = 没问到(引擎没起 / 网络 / 5xx / 读抛错)。没给 = 普通的库里没有这个文件。读失败 ≠ 没有,插件快照据此区分。 */
+  reason?: HumanCalMissingReason
   /** 读到这份数据时的磁盘票据(宿主支持比对交换写才有;见 ipc.ts DbReadResult.version)。 */
   version?: string
 }
@@ -167,18 +170,23 @@ export const useDbStore = create<DbStoreState>((set, get) => ({
     try {
       const r = ref === HUMAN_CAL ? await readHumanCal() : await amadeus.readDatabase(pagePath, ref)
       if (gen !== get().gen) return false
+      const reason: HumanCalMissingReason | undefined = r.status === 'missing' && 'reason' in r ? (r as { reason: HumanCalMissingReason }).reason : undefined
+      // 没问到(引擎一时没应答)不等于文件没了:已经读到的那份和没落盘的改动都留着,和下面 catch 那条同一个规矩。
+      // 看的是这次读完时的条目,不是开始时的:并发的另一次读可能已经读到了(Codex 评审)。
+      const now = get().entries[key]
+      if (reason === 'unknown' && now && now.status !== 'missing' && now.status !== 'loading') return false
       const existing = r.status !== 'missing' ? Object.values(get().entries).find(e => e.path === r.path && e.identity) : undefined
       const entry: DbEntry = reuse && existing ? existing : r.status === 'ok'
         ? { status: 'ok', path: r.path, data: r.data, version: r.version, identity: existing?.identity ?? newFileIdentity() }
         : r.status === 'corrupt'
           ? { status: 'corrupt', path: r.path, data: null, message: r.message, identity: existing?.identity ?? newFileIdentity() }
-          : { status: 'missing', path: null, data: null, identity: previous?.identity }
+          : { status: 'missing', path: null, data: null, identity: previous?.identity, ...(reason ? { reason } : {}) }
       set((s) => ({ entries: publishFileEntry(s.entries, key, entry) }))
       return r.status === 'ok'
     } catch {
       if (gen !== get().gen) return false
       // A transient read failure must not discard a loaded file or pending ops.
-      if (!previous) set((s) => ({ entries: { ...s.entries, [key]: { status: 'missing', path: null, data: null } } }))
+      if (!previous) set((s) => ({ entries: { ...s.entries, [key]: { status: 'missing', path: null, data: null, reason: 'unknown' } } }))
       return false
     }
   },

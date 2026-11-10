@@ -497,6 +497,13 @@ export interface PluginCalendarSnapshot {
   /** 用户的 .ics 订阅(含导入的文件):`path` = 它在 overlays 里那张表的路径;`url` 为空 = 导入的快照(刷不了);
    *  `error` = 上次拉取失败的原因(给用户看的文案)。 */
   icsSubscriptions: Array<{ id: string; path: string; name: string; url: string; error?: string }>
+  /** 「我的日历」(`human://CALENDAR.db`)读得怎样(2026-11-10;老宿主没有这个字段):
+   *  · `'ok'`      —— 读到了(文件还没建也算:第一次写会新建)。它有日期列时就在 `members` 里。
+   *  · `'absent'`  —— 宿主确认这里没有它(老引擎 / 老 server 没这条接口、设备页的远端访客)。按没有「我的日历」的老规矩走。
+   *  · `'unknown'` —— 没读到:引擎没起、网络错、服务端报错、文件解析不了。**读失败 ≠ 没有**:别因此新建别的表顶替它,稍后再试。
+   *  · `'loading'` —— 还在读。
+   *  以后可能加新值:不认识的值一律当 `'unknown'`。 */
+  myCalendar?: 'ok' | 'absent' | 'unknown' | 'loading'
 }
 /** 笔记正文里一条带 `@` 时间标记的行(`- [ ] 交周报 @2026-10-20T15:00`)。 */
 export interface PluginNoteTask {
