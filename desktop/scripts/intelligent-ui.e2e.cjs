@@ -116,6 +116,7 @@ async function main() {
       await card.locator('details .katex').waitFor({ state: 'visible' });
       check('disclosure math expands', await card.locator('details .katex').isVisible());
       await card.locator('.md-math > button').first().click();
+      await card.locator('.md-math > button .lucide-check').first().waitFor();
       const copied = await app.evaluate(({ clipboard }) => clipboard.readText());
       check('formula copy returns original TeX', copied.includes('\\frac{N!}') && !copied.includes('$$'));
       check('code blocks cannot execute', await card.locator('.md-code-run').count() === 0);
