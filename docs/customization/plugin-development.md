@@ -565,3 +565,8 @@ LCL 统一保留并排的 View。空间不足时滚动工作区内容，Ribbon�
 `mount(el, view)` 的 `view.getLayout?.()` 返回 `{ width, height, visible, compact, phase }`；`view.onLayout?.(callback)` 立即回送快照，并在尺寸、可见性或阶段变化时通知，返回取消订阅函数。`phase` 为 `transition` 或 `settled`，`compact` 表示内容宽度不足 480px。PDF、画布、终端等可在过渡中只更新轻量外框，等 `settled && visible` 再做昂贵的适配；不要因窗口变窄而重新挂载内容或重置缩放。宿主在 View 卸载时自动取消残留订阅。旧宿主没有这些方法，仍可用 `ResizeObserver`。
 
 `preferredWidth` / `preferredHeight` 可选：新建分屏时作为初始分配权重，侧栏尚未被用户调整时作为展开尺寸；用户保存的比例和侧栏尺寸优先。
+
+
+### 文件视图的临时面板
+
+`registerFileType` 的 `mount(el, file)` 可探测 `file.extendView`，按 `view.extendView` 的同一契约打开临时面板。例如 `file.extendView?.open({ id: "ask", title: "Tangu", side: "right", mount(el) { /* ctx.tangu.mountChat(el) */ } })`。主区及独立文件窗口保留原文件，侧栏内的文件视图使用带返回按钮的覆盖面板。同一个 id 再次打开保留内容；关闭文件、导航或停用插件会关闭面板并吊销旧控制器。旧宿主缺少该字段时，不要用主区跳转代替上下文提问。
