@@ -129,3 +129,5 @@ const off = ctx.app.watchFile?.('Snippets/latex.js', () => reload())
   用户卸载时没勾「保留设置」,云端那份一起清掉(本机那份进回收站);恢复后本机这份重传,别的设备还装着时也会把它的传回来。
 - **`watchFile` 缺位时整条方法不挂**(不是空壳):`if (ctx.app.watchFile) … else 轮询` 才走得对。
   它只报「内容变了」,新建/删除/改名不报;自己 `writeFile` 落的盘不会回声。
+
+文件类型的上下文提问 / 详情使用可选的 `file.extendView.open({ id, title, side, mount })`，不要用 `startChat` 替换原文件。该控制器按文件挂载绑定，关闭 / 导航 / 停用即吊销；同 id 重开保留草稿，独立文件窗口也支持。旧宿主先探测。

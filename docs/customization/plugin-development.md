@@ -566,6 +566,12 @@ LCL 统一保留并排的 View。空间不足时滚动工作区内容，Ribbon�
 
 `preferredWidth` / `preferredHeight` 可选：新建分屏时作为初始分配权重，侧栏尚未被用户调整时作为展开尺寸；用户保存的比例和侧栏尺寸优先。
 
+
+### 文件视图的临时面板
+
+`registerFileType` 的 `mount(el, file)` 可探测 `file.extendView`，按 `view.extendView` 的同一契约打开临时面板。例如 `file.extendView?.open({ id: "ask", title: "Tangu", side: "right", mount(el) { /* ctx.tangu.mountChat(el) */ } })`。主区及独立文件窗口保留原文件，侧栏内的文件视图使用带返回按钮的覆盖面板。同一个 id 再次打开保留内容；关闭文件、导航或停用插件会关闭面板并吊销旧控制器。旧宿主缺少该字段时，不要用主区跳转代替上下文提问。
+
+
 ## Agent 读取设置与设置页锚点
 
 使用 [`ctx.registerAgentSettings`](plugin-agent-settings.md) 显式开放当前生效值。UI/引擎同契约，密钥只给配置状态。

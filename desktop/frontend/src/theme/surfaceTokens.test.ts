@@ -30,7 +30,6 @@ const SOLID_BY_DESIGN: Record<string, { file: string; why: string }> = {
   '.dash2-board': { file: 'desktop/frontend/src/views/dashCanvas.css', why: 'Dashboard 画板本身' },
   '.amx-ucard': { file: 'desktop/frontend/src/amadeus/styles.css', why: '正文里的卡' },
   '.amx-linkcard': { file: 'desktop/frontend/src/amadeus/styles.css', why: '正文里的链接卡' },
-  '.math-preview-inner': { file: 'desktop/frontend/src/amadeus/styles.css', why: '公式预览要压住正文才读得清' },
   '.startup-appearance-preview': { file: 'desktop/frontend/src/components/startupAppearance.css', why: '外观预览缩略图' },
   '.appearance-import': { file: 'desktop/frontend/src/components/startupAppearance.css', why: '外观导入卡,在设置纸面上' },
   '.mp-panel': { file: 'desktop/frontend/src/styles/motionTheme.css', why: '动效主题的预览模型,不是真浮层' },

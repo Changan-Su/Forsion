@@ -5,6 +5,7 @@
 import { useEffect, useRef } from 'react'
 import { amadeus } from '../amadeus/api'
 import { isHostPath } from '@amadeus-shared/pdfLink'
+import { scopeFileExtension } from '../amadeus/plugins/fileExtension'
 import { externalPdfSurface } from '../amadeus/plugins/externalPdfSurface'
 import { useWorkspace, type ViewProps } from '@lcl/engine'
 import { useVisualTheme as useTheme } from '../stores/themeStore'
@@ -28,7 +29,7 @@ registerMessages({
   'pluginfile.openBuiltin': { zh: '用内置阅读器打开', en: 'Open with the built-in reader' },
 })
 
-export function AmadeusPluginFileView({ leaf }: ViewProps) {
+export function AmadeusPluginFileView({ leaf, extendView }: ViewProps) {
   const { t } = useI18n()
   const filePath = useVaultRelParam(leaf, 'filePath')
   const mode = useTheme((s) => s.mode)
@@ -78,7 +79,8 @@ export function AmadeusPluginFileView({ leaf }: ViewProps) {
     const pluginId = usePluginStore.getState().fileTypes.find((o) => o.item === ft)?.pluginId ?? 'unknown'
     const vs = createPluginViewSurface(pluginId, `plug:${leaf.id}`, ft.extensions ?? [])
     const external = isHostPath(filePath) && amadeus ? externalPdfSurface(filePath, amadeus) : null
-    const disposeSurface = (): void => { external?.dispose(); vs.dispose() }
+    const extension = extendView ? scopeFileExtension(extendView) : null
+    const disposeSurface = (): void => { extension?.dispose(); external?.dispose(); vs.dispose() }
     const dereg = addPluginViewTeardown(pluginId, disposeSurface)
     // 视图内跟车:插件经 surface.loadPage 在本视图里换到另一个同类型文件(或标题栏 renamePage 改名),本 scope
     // 的 activePage 一变,leaf 参数跟着换 —— 否则布局 / 重启还指着旧文件,插件拿 file.filePath 写的也是旧文件。
@@ -123,11 +125,12 @@ export function AmadeusPluginFileView({ leaf }: ViewProps) {
     }
     let cleanup: (() => void | Promise<void>) | void
     try {
-      cleanup = ft.mount(el, { filePath, ...(external ? { io: external.io } : {}), surface: vs.surface, onGoto })
+      cleanup = ft.mount(el, { filePath, ...(external ? { io: external.io } : {}), surface: vs.surface, onGoto, ...(extension ? { extendView: extension.controller } : {}) })
     } catch (e) {
       console.error('[amadeus] 插件文件视图挂载失败', e)
     }
     return () => {
+      extension?.dispose()
       let saving: void | Promise<void> = undefined
       try { saving = cleanup?.() } catch { /* ignore */ }
       window.removeEventListener('amadeus:pdf-goto', onGotoEvent)

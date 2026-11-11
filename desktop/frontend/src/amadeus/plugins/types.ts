@@ -1093,6 +1093,8 @@ export interface FileTypeContribution {
    *  cleanup (flush/save-on-close, clear timers here). Read/write the file via ctx.app.readFile/writeFile.
    *  `file.surface` (2026-08-14, when present): a per-view page surface scoped to this tab — prefer it
    *  over ctx.app's active-page model so the view coexists with the note editor.
+   *  `file.extendView` (when present): owner-scoped temporary panel, including detached file windows.
+   *  Feature-detect; revoked on navigation, close or plugin disable. Use it for contextual chat/details.
    *  `file.onGoto` (2026-10-11, when present): subscribe to "land here" requests — a link or chat
    *  citation that points at a place inside the file. If the open that created this view carried a
    *  location, the callback gets it once right after you subscribe (asynchronously, never inside the
@@ -1101,7 +1103,7 @@ export interface FileTypeContribution {
    *  unsubscribe; the host also drops the subscription when the view closes. */
   mount(
     el: HTMLElement,
-    file: { filePath: string; io?: PluginFileIO; surface?: PluginPageSurface; onGoto?: (cb: (target: FileGotoTarget) => void) => () => void },
+    file: { filePath: string; io?: PluginFileIO; surface?: PluginPageSurface; extendView?: ExtendViewController; onGoto?: (cb: (target: FileGotoTarget) => void) => () => void },
   ): (() => void | Promise<void>) | void
 }
 

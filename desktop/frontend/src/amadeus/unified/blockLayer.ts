@@ -23,7 +23,7 @@ import type { EditorView } from '@milkdown/kit/prose/view'
 import { Fragment } from '@milkdown/kit/prose/model'
 import type { Node as ProseNode, ResolvedPos } from '@milkdown/kit/prose/model'
 import { createDropIndicatorPlugin } from 'prosemirror-drop-indicator'
-import { unfoldCalloutsForInsert } from '../blocks/markdown/callout'
+import { calloutOf, unfoldCalloutsForInsert } from '../blocks/markdown/callout'
 import { zoomOf, dropRetarget, dropHide, createsFixedContainingBlock } from '@lcl/engine'
 import { runEndOf } from './canvasEdit'
 import { tabIndent, tabOutdent, type TabFoldHooks } from '../blocks/markdown/tabIndent'
@@ -157,12 +157,12 @@ function overlayOrigin(el: HTMLElement): { x: number; y: number } {
   return { x: 0, y: 0 }
 }
 
-/** 把手可命中判定:表格/引用(callout)内部不给独立把手(整只算一块);行/列骨架自身不给把手。 */
+/** Tables and ordinary callouts remain whole units; toggle bodies expose child handles. */
 const pickableNode = ($pos: ResolvedPos, node: ProseNode | null): boolean => {
   if (!node) return false
   const name = node.type.name
   if (name === 'amadeusColumnRow' || name === 'amadeusColumnCell') return false
-  if (findParent((n) => n.type.name === 'table' || n.type.name === 'blockquote')($pos)) return false
+  if (findParent((n) => n.type.name === 'table' || (n.type.name === 'blockquote' && calloutOf(n)?.type !== 'fold'))($pos)) return false
   return true
 }
 
@@ -176,7 +176,14 @@ export interface ActiveBlock {
  *  「首子归外壳」,但 cell 内首子不归壳(列内保持逐块粒度)。异常一律 null(与上游同,try 包裹)。 */
 function pickBlockAt(view: EditorView, coords: { x: number; y: number }): ActiveBlock | null {
   try {
-    const inside = view.posAtCoords({ left: coords.x, top: coords.y })?.inside
+    // Native caret hit-testing can resolve a display widget to hidden source or the
+    // following paragraph. Resolve its owning paragraph before applying block rules.
+    const target = document.elementFromPoint(coords.x, coords.y)
+    const media = target?.closest('.wiki-inline-img-wrap, .unified-embed, .math-rendered--block')
+    const paragraph = media?.closest('p')
+    const inside = paragraph && paragraph.closest('.ProseMirror') === view.dom
+      ? view.posAtDOM(paragraph, 0) - 1
+      : view.posAtCoords({ left: coords.x, top: coords.y })?.inside
     if (inside == null || inside < 0) return null
     let $pos = view.state.doc.resolve(inside)
     let node = view.state.doc.nodeAt(inside)
@@ -2180,11 +2187,11 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
         }
         childRef = null
         if (a && !(a.pos >= sel.from && a.pos < sel.to) && pairable(view, a.pos)) {
-          const r = a.el.getBoundingClientRect()
+          const r = visualBlockElement(a.el).getBoundingClientRect()
           const side = event.clientX <= r.left + EDGE ? 'left' : event.clientX >= r.right - EDGE ? 'right' : null
           if (side) {
             pairRef = { targetPos: a.pos, side }
-            showVline(view, a.el, side)
+            showVline(view, visualBlockElement(a.el), side)
             return false
           }
         }
