@@ -565,3 +565,8 @@ Use `ctx.registerView({ layout: { minWidth: 360, minHeight: 200 }, ... })` to de
 In `mount(el, view)`, `view.getLayout?.()` returns `{ width, height, visible, compact, phase }`. `view.onLayout?.(callback)` sends an immediate snapshot and subsequent size, visibility or phase changes, and returns an unsubscribe function. `phase` is `transition` or `settled`; `compact` means content width below 480px. Expensive PDF, canvas or terminal adapters can update cheap chrome during transitions and refit when `settled && visible`. Do not remount content or reset document zoom merely because the window narrows. The host removes outstanding subscriptions when the View is disposed. Older hosts lack these methods; use `ResizeObserver` as a fallback.
 
 Optional `preferredWidth` / `preferredHeight` seed allocation weights for new splits and the initial size of a sidebar that the user has not resized. Saved user ratios and sidebar sizes take precedence.
+
+
+### Temporary panels for file views
+
+Feature-detect `file.extendView` in `registerFileType.mount(el, file)`. It follows the same contract as `view.extendView`: `file.extendView?.open({ id: "ask", title: "Tangu", side: "right", mount(el) { /* ctx.tangu.mountChat(el) */ } })`. Main and detached file windows retain the document; file views in side panels get an overlay with Back. Reopening the same id retains content. Closing, navigating or disabling the file plugin closes the extension and revokes the old controller. On older hosts without this field, do not replace the document with a main-area chat as a contextual fallback.
