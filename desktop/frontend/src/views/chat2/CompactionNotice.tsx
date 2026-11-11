@@ -4,6 +4,7 @@ import type { UiMessage } from '../../types'
 import { useI18n } from '../../i18n'
 import { skipRunCompaction } from '../../services/agentRunService'
 import { targetForSession } from '../../services/engine/targets'
+import '../../tangu/messages'
 import './compactionNotice.css'
 
 /** The server event is authoritative; an HTTP response never sends/resumes a user message. */
