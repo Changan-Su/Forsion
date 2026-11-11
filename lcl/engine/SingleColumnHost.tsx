@@ -38,6 +38,7 @@ import { Skeleton, ViewErrorBoundary, skeletonVariantOf } from './Skeleton'
 import './singleColumn.css'
 import { useEngineI18n } from './i18nSeam'
 import { ViewModeSwitch } from './viewModes'
+import { ViewNavigationFallback } from './viewNavigation'
 // ⚠️ 引擎 chrome 样式。移动端构建把 `Shell.tsx` 换成空壳(mobile/vite.config engineSwap),而
 // `import './engine.css'` 原本挂在 Shell 上 —— 外壳一换,`.cmd-overlay/.cmd-panel` 这套命令浮层
 // 样式在移动端就整个没了(CommandPalette 与 Amadeus 的 QuickSwitcher/TemplatePicker 三家共用)。
@@ -112,6 +113,7 @@ function LateMount({ children }: { children: () => ReactNode }) {
 }
 
 export function LeafHost({ extendable = true }: { extendable?: boolean } = {}) {
+  const spaceId = useSpaceStore(s => s.activeSpaceId)
   // 订阅 active 的 id、type、以及 **params 的对象身份**。标题变化仍不重渲染宿主——视图渲染期
   // 调 leaf.setTitle 会触发宿主重渲染→再调 setTitle→无限循环(React #185)。
   // params 必须订阅:主区「就地导航」在同 id 同 type 时只换 params(amadeus-editor 换 notePath、
@@ -131,7 +133,8 @@ export function LeafHost({ extendable = true }: { extendable?: boolean } = {}) {
   return (
     // data-view:主区视图默认给浮动胶囊顶栏让出一条 --mb-top 的空位(见 singleColumn.css);
     // 自己想让内容从胶囊底下滚过去的视图(如 amadeus-editor)按 type 单独退订。
-    <div className="mb-view" data-view={active.type} key={`${active.id}:${active.type}`}>
+    <div className="mb-view" data-view={active.type} key={`${spaceId}:${active.id}:${active.type}`}>
+      <ViewNavigationFallback leafId={active.id} />
       <ViewErrorBoundary type={active.type}>
         <Suspense fallback={<Skeleton variant={skeletonVariantOf(active.type)} />}>
           <LateMount>

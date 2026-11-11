@@ -67,6 +67,76 @@ async function mount() {
   await tick()
 }
 
+function rewardsBridge(balance: unknown = 1280, inviteStatus = 200) {
+  usePluginStore.setState({ settingsViews: ['backpack', 'points'].map((id) => ({ pluginId: 'forsion-extend', item: { id, category: 'forsion', mount() {} } })) })
+  window.tangu!.cloudInvoke = vi.fn() as any
+  window.tangu!.cloudFetch = vi.fn(async ({ path }: { path: string }) => ({ status: path === '/invite/my-code' ? inviteStatus : 200, json: path === '/credits/balance' ? { balance } : {} })) as any
+}
+
+it('shows zero points and opens the invitation section directly below the backpack', async () => {
+  rewardsBridge(0)
+  const { useApp } = await import('../stores/appStore')
+  const openSettings = vi.fn()
+  useApp.setState({ openSettings } as any)
+  await mount()
+  await click('Alice')
+  await tick()
+  expect(document.querySelector('[data-testid="account-points"]')?.textContent).toBe('0 积分')
+  const rows = [...document.querySelectorAll('.ap-item')].map((el) => el.textContent)
+  const backpack = rows.findIndex((text) => text?.includes('背包'))
+  expect(rows[backpack + 1]).toContain('邀请奖励')
+  await click('邀请奖励')
+  expect(openSettings).toHaveBeenCalledWith('forsion/fx:forsion-extend:points#invite')
+})
+
+it('hides invitations only when disabled, and never turns a failed balance into zero', async () => {
+  rewardsBridge(null, 404)
+  await mount()
+  await click('Alice')
+  await tick()
+  expect(document.querySelector('[data-testid="account-points"]')?.textContent).toBe('—')
+  expect(document.body.textContent).not.toContain('邀请奖励')
+  await act(async () => { window.tangu!.cloudFetch = vi.fn().mockRejectedValue(new Error('offline')); window.dispatchEvent(new Event('focus')) })
+  await tick()
+  expect(document.querySelector('[data-testid="account-points"]')?.textContent).toBe('—')
+  expect(document.body.textContent).toContain('邀请奖励')
+})
+
+it('offers registered rewards pages without public cloudInvoke, including native menus', async () => {
+  rewardsBridge(1280)
+  delete window.tangu!.cloudInvoke // Android and Unit Web keep this inside Extend's private bridge.
+  await mount()
+  await click('Alice')
+  await tick()
+  expect(document.body.textContent).toContain('邀请奖励')
+  expect(document.querySelector('[data-testid="account-points"]')?.textContent).toBe('1,280 积分')
+  await act(async () => { window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })) })
+  engine.presenter = () => true
+  await click('Alice')
+  await tick()
+  const items = engine.presented.at(-1).sections.flatMap((s: any) => s.items)
+  expect(items.find((i: any) => i.id === 'backpack').detail).toBe('1,280 积分')
+  expect(items.find((i: any) => i.id === 'invite')).toBeTruthy()
+})
+
+it('discards delayed points from the previous account', async () => {
+  rewardsBridge(90)
+  let finishOld!: (value: any) => void
+  const currentFetch = window.tangu!.cloudFetch!
+  window.tangu!.cloudFetch = vi.fn(({ path }: any) => path === '/credits/balance' ? new Promise((resolve) => { finishOld = resolve }) : currentFetch({ path })) as any
+  await mount()
+  await click('Alice')
+  await tick()
+  await click('Bob')
+  await tick()
+  window.tangu!.cloudFetch = currentFetch
+  await click('Alice')
+  await tick()
+  expect(document.querySelector('[data-testid="account-points"]')?.textContent).toBe('90 积分')
+  await act(async () => { finishOld({ status: 200, json: { balance: 9999 } }) })
+  expect(document.querySelector('[data-testid="account-points"]')?.textContent).toBe('90 积分')
+})
+
 it('offers saved accounts and an explicit login for another account', async () => {
   await mount()
   await click('Alice')

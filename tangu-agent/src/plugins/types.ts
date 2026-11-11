@@ -11,6 +11,8 @@
  * 发现/加载见 ./loader.ts;装配见 ./bootstrap.ts。
  */
 import type { Router } from 'express';
+import type { AgentSettingsContribution } from '../contracts/agentSettings.js';
+export type { AgentSettingsContribution, AgentSettingField, AgentSettingsReadContext } from '../contracts/agentSettings.js';
 import type { ToolProvider } from '../tools/toolRegistry.js';
 import type { PluginMeta } from './registry.js';
 import type * as PluginStore from './settingsStore.js';
@@ -136,6 +138,8 @@ export interface TanguPluginContext {
   /** 注册工具 provider（一律 append 在核心 builtin 之后，按插件加载序——保 tool-def 稳定）。
    *  停用时撤下但**保留槽位**,再启用回到原位(不跑到队尾)。 */
   registerToolProvider(p: ToolProvider): void;
+  /** Opt-in read-only fields exposed by read_plugin_settings. Removed on disable/reload. */
+  registerAgentSettings(contribution: AgentSettingsContribution): void;
   /** Publish live read-only skills under a host-owned namespace; revoked on disable/unload. */
   registerSkillProvider(provider: PluginSkillProvider): void;
   registerModelProvider(provider: PluginModelProvider): void;

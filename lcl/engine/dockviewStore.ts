@@ -1,3 +1,4 @@
+import { navigationSig } from './navigationTarget'
 /**
  * Workspace store(≈ Obsidian workspace)。在已集成的 Dockview 之上建薄 API:
  * openView / getActiveLeaf / splitActive / toggleSidebar / saveLayout↔restore / 命名布局。
@@ -876,7 +877,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
 
   setApi: (api) => {
     // 面板关掉后 id 会被 nextId 复用:别让新面板继承旧面板「自己改过名」的标记(Codex r3a-2)
-    api?.onDidRemovePanel?.((p) => selfTitled.delete(p.id))
+    api?.onDidRemovePanel?.((p) => { selfTitled.delete(p.id); useNav.getState().drop(p.id) })
     set({ api })
   },
   setDefaultBuilder: (fn) => set({ defaultBuilder: fn }),
@@ -1066,7 +1067,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
         // 「这个 tab 是哪个文件」:notePath = Amadeus 编辑器;path = 工作区文件预览(wsfile);PDF / 图片等见 panelFilePath。
         filePath: panelFilePath(params),
         front: (p as { group?: { activePanel?: { id?: string } } }).group?.activePanel?.id === p.id,
-        sig: identitySig(params),
+        sig: type.startsWith('plugin:') ? navigationSig(params) : identitySig(params),
       }
     })
     const prev = get().mainTabs

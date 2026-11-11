@@ -4761,6 +4761,7 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-wrap { top: calc(var(-
 .account-pop .ap-item:hover { background: var(--menu-hover); }
 .account-pop .ap-item:disabled { opacity: 0.55; cursor: default; }
 .account-pop .ap-item svg { flex-shrink: 0; opacity: 0.8; }
+.account-pop .grow { flex: 1; }
 .account-pop .ap-danger { color: var(--danger); }
 .account-pop .ap-danger:hover { background: color-mix(in srgb, var(--danger) 12%, transparent); }
 .account-pop .ap-usage { padding: 0 0 3px; }

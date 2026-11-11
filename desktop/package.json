@@ -155,6 +155,8 @@
     "check:chatfeel": "node scripts/chat-feel.check.cjs",
     "check:promptsuggest": "node scripts/prompt-suggest.check.cjs",
     "check:chatlayout": "node scripts/chat-layout.check.cjs",
+    "check:account-rewards": "node scripts/account-rewards.check.cjs",
+    "check:reading-mode": "node scripts/reading-mode.check.cjs",
     "check:chatscrollhold": "node scripts/chat-scroll-hold.check.cjs",
     "check:chatcanvasjump": "node scripts/chat-canvas-jump.check.cjs",
     "check:sendflight": "node scripts/send-flight.check.cjs",

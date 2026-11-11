@@ -11,13 +11,14 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { OverlayAt, accountMenuRows, openPanel, nativeSheetPresenter, runNativeSheetMenu, type Droplet, type SheetMenuItem, type SheetMenuSection } from '@lcl/engine'
-import { LogIn, LogOut, Loader2, Gauge, ChevronDown, ChevronRight, RotateCcw, ExternalLink, Backpack } from 'lucide-react'
+import { LogIn, LogOut, Loader2, Gauge, ChevronDown, ChevronRight, RotateCcw, ExternalLink, Backpack, Gift } from 'lucide-react'
 import type { AuthAccountInfo, AuthStatusInfo } from '../types'
 import { registerMessages, useI18n } from '../i18n'
 import { TierBadge } from './TierBadge'
 import { track } from '../achievements/store'
 import { AccountSwitcher, accountSwitcherModel } from './AccountSwitcher'
 import { formatRemaining, publishAccountQuota, remainingPercent, type AccountQuotaView } from '../services/accountQuota'
+import { loadAccountRewards, emptyAccountRewards, ACCOUNT_REWARDS_CHANGED, type AccountRewards } from '../services/accountRewards'
 import { accountChip, publishAccountChip, type AccountChip } from '../services/accountChip'
 import { useApp } from '../stores/appStore'
 import { museAvailable } from '../features/runtime'
@@ -31,6 +32,8 @@ registerMessages({
   'sidebar.account.menu.quotaLine': { zh: '今日 {daily} · 本周 {weekly}', en: 'Today {daily} · This week {weekly}' },
   'sidebar.account.menu.openAccount': { zh: '账号设置', en: 'Account settings' },
   'sidebar.account.menu.backpack': { zh: '背包', en: 'Backpack' },
+  'sidebar.account.menu.points': { zh: '{n} 积分', en: '{n} points' },
+  'sidebar.account.menu.invite': { zh: '邀请奖励', en: 'Invite rewards' },
   'sidebar.account.menu.background': { zh: '后台额度', en: 'Background quota' },
   'sidebar.account.menu.backgroundHint': {
     zh: '主额度之外额外的一份，只计 Muse 与自动化用云端默认后台模型的用量',
@@ -57,7 +60,7 @@ const shortDate = (d?: string): string => {
 }
 
 /** 「Forsion 云端」里 Extend 画的子页(registerSettingsView category 'forsion')。没有 Extend 的设备页 / 旧宿主不给跳。 */
-const openCloudPage = (id: 'account' | 'quota' | 'backpack'): void =>
+const openCloudPage = (id: 'account' | 'quota' | 'backpack' | 'points#invite'): void =>
   useApp.getState().openSettings(`forsion/fx:forsion-extend:${id}` as Parameters<ReturnType<typeof useApp.getState>['openSettings']>[0])
 
 export const AccountCard: React.FC<{
@@ -66,13 +69,17 @@ export const AccountCard: React.FC<{
   /** ribbon 紧凑态:只渲染头像钮(点击→个人中心/登录),无昵称/徽章/登出行。 */
   compact?: boolean
 }> = ({ onToast, onAuthChange, compact }) => {
-  const { t } = useI18n()
+  const { t, locale } = useI18n()
   const [auth, setAuth] = useState<AuthStatusInfo | null>(null)
   const [loggingIn, setLoggingIn] = useState(false)
   const [imgError, setImgError] = useState(false)
   const [menu, setMenu] = useState<{ x: number; y: number; anchorTop: number } | null>(null)
   const [quota, setQuota] = useState<AccountQuotaView | null>(null)
   const [quotaErr, setQuotaErr] = useState(false)
+  const [rewards, setRewards] = useState<AccountRewards>(emptyAccountRewards)
+  const rewardsRequest = useRef(0)
+  const hasPointsPage = usePluginStore((s) => s.activeIds.includes('forsion-extend') &&
+    s.settingsViews.some((v) => v.pluginId === 'forsion-extend' && v.item.id === 'points' && v.item.category === 'forsion'))
   const hasBackpackPage = usePluginStore((s) => s.activeIds.includes('forsion-extend') &&
     s.settingsViews.some((v) => v.pluginId === 'forsion-extend' && v.item.id === 'backpack' && v.item.category === 'forsion'))
   const [quotaOpen, setQuotaOpen] = useState(false)
@@ -84,6 +91,15 @@ export const AccountCard: React.FC<{
   const quotaRequest = useRef(0)
   /** 账号代次:只在登录 / 切号 / 登出时变。用卡结果只在换了账号时才丢 —— 关掉再开菜单不能丢(会按旧张数再点、多耗一张)。 */
   const accountGen = useRef(0)
+
+  const clearRewards = (): void => { ++rewardsRequest.current; setRewards(emptyAccountRewards()) }
+  const refreshRewards = useCallback(async (): Promise<AccountRewards> => {
+    const request = ++rewardsRequest.current
+    const gen = accountGen.current
+    const next = await loadAccountRewards()
+    if (request === rewardsRequest.current && gen === accountGen.current) setRewards(next)
+    return next
+  }, [])
 
   const refresh = useCallback(() => {
     const request = ++authRequest.current
@@ -101,6 +117,7 @@ export const AccountCard: React.FC<{
     // 登录态变化(本窗/他窗登录登出、CLI tangu login 等外部来源经主进程 auth.json watcher 广播)→ 重拉。
     const offAuth = window.tangu?.onAuthChanged?.(() => {
       ++accountGen.current
+      clearRewards()
       ++quotaRequest.current
       setAuth(null)
       setMenu(null)
@@ -119,6 +136,7 @@ export const AccountCard: React.FC<{
     return () => {
       ++authRequest.current
       ++quotaRequest.current
+      ++rewardsRequest.current
       off?.(); offAuth?.(); offBackend?.()
       window.removeEventListener('tangu:auth-expired', onExpired)
       window.removeEventListener('focus', onFocus)
@@ -133,6 +151,7 @@ export const AccountCard: React.FC<{
     ++authRequest.current
     ++quotaRequest.current
     ++accountGen.current
+    clearRewards()
     setLoggingIn(true)
     setMenu(null)
     setQuota(null)
@@ -154,6 +173,7 @@ export const AccountCard: React.FC<{
     ++authRequest.current
     ++quotaRequest.current
     ++accountGen.current
+    clearRewards()
     actionBusy.current = true
     setLoggingIn(true)
     setMenu(null)
@@ -180,7 +200,9 @@ export const AccountCard: React.FC<{
     setQuotaErr(false)
     setQuota(null) // 每次打开都从「加载中」起步,别让上一次的旧数据把失败盖成正常(codex#10)
     const request = ++quotaRequest.current
+    clearRewards()
     if (!auth?.loggedIn) return
+    void refreshRewards()
     void window.tangu?.accountQuota?.()
       .then((res) => {
         if (request !== quotaRequest.current) return
@@ -205,6 +227,13 @@ export const AccountCard: React.FC<{
     void d.retract().then(() => { if (drop.current === d) setMenu(null) })
   }
   const menuOpen = !!menu
+  useEffect(() => {
+    if (!menuOpen || !auth?.loggedIn) return
+    const changed = (): void => { void refreshRewards() }
+    window.addEventListener('focus', changed)
+    window.addEventListener(ACCOUNT_REWARDS_CHANGED, changed)
+    return () => { window.removeEventListener('focus', changed); window.removeEventListener(ACCOUNT_REWARDS_CHANGED, changed) }
+  }, [menuOpen, auth?.loggedIn, refreshRewards])
   const pour = (el: HTMLElement): void => {
     drop.current?.cancel(); drop.current = null; dropClosing.current = false
     const anchor = anchorRef.current
@@ -266,7 +295,7 @@ export const AccountCard: React.FC<{
   const loggedIn = !!auth?.loggedIn
   const hasQuota = !!window.tangu?.accountQuota
   // 「Forsion 云端」的账号页 / 额度页由 Extend 渲染半身画:cloudInvoke 在 = 本机装载了 Extend(设备页、网页壳没有)
-  const hasCloudPages = !!window.tangu?.cloudInvoke
+  const hasCloudPages = !!window.tangu?.cloudInvoke || (!!window.tangu?.cloudFetch && (hasPointsPage || hasBackpackPage))
   // 过期 = token 仍在(loggedIn)但 whoami 判定失效(tokenValid:false)。此时绝不当「已登录」对待。
   const expired = loggedIn && auth?.tokenValid === false
   // 引擎轴(managed 才有,external/纯 Amadeus 形态 backendState=null):与「登没登录」正交。
@@ -282,7 +311,9 @@ export const AccountCard: React.FC<{
       weekly: formatRemaining(remainingPercent(q.weeklyLimit, q.weeklyRemaining, q.weeklyPercent), t('sidebar.account.menu.unlimited')),
     })
     : failed ? t('sidebar.account.menu.quotaFail') : t('sidebar.account.menu.loading')
-  const accountItems = (q: AccountQuotaView | null, failed: boolean): Record<'head' | 'login' | 'restart' | 'quota' | 'backpack' | 'upgrade' | 'logout', SheetMenuItem | null> => ({
+  const pointsText = (r: AccountRewards): string => r.balance === null ? (r.balanceFailed ? '—' : '…')
+    : t('sidebar.account.menu.points', { n: r.balance.toLocaleString(locale === 'zh' ? 'zh-CN' : 'en-US') })
+  const accountItems = (q: AccountQuotaView | null, failed: boolean, r = rewards): Record<'head' | 'login' | 'restart' | 'quota' | 'backpack' | 'invite' | 'upgrade' | 'logout', SheetMenuItem | null> => ({
     // 头部 = 进「Forsion 云端 → 账号」(资料、会员、安全都在那);没有那几页的宿主只是个标题
     head: loggedIn && hasCloudPages ? { id: 'account', label: display, detail: t('sidebar.account.menu.openAccount'), run: () => { setMenu(null); openCloudPage('account') } } : null,
     login: !loggedIn && !engineDown ? { id: 'login', label: t('sidebar.account.login'), icon: <LogIn size={14} />, disabled: loggingIn, run: () => { setMenu(null); void login() } } : null,
@@ -290,7 +321,8 @@ export const AccountCard: React.FC<{
     // 一行 AI 额度摘要(口径同全端:剩余向下取整、不足 1% 写 <1%)→「额度与积分」
     quota: loggedIn && hasQuota ? { id: 'quota', label: t('sidebar.account.menu.quota'), detail: quotaText(q, failed), icon: <Gauge size={14} />, disabled: !hasCloudPages, run: () => { setMenu(null); openCloudPage('quota') } } : null,
     // 背包 / 升级:Web 浮层里住在别处(背包一行、升级在额度展开区),原生半屏不能就地展开 → 各占一行,免得安卓静默少入口。
-    backpack: loggedIn && hasCloudPages && hasBackpackPage ? { id: 'backpack', label: t('sidebar.account.menu.backpack'), icon: <Backpack size={14} />, run: () => { setMenu(null); openCloudPage('backpack') } } : null,
+    backpack: loggedIn && hasCloudPages && hasBackpackPage ? { id: 'backpack', label: t('sidebar.account.menu.backpack'), detail: pointsText(r), icon: <Backpack size={14} />, run: () => { setMenu(null); openCloudPage('backpack') } } : null,
+    invite: loggedIn && hasCloudPages && hasPointsPage && r.invite !== 'hidden' ? { id: 'invite', label: t('sidebar.account.menu.invite'), icon: <Gift size={14} />, run: () => { setMenu(null); openCloudPage('points#invite') } } : null,
     upgrade: loggedIn && window.tangu?.openPayCenter ? { id: 'upgrade', label: t('sidebar.account.menu.upgrade'), icon: <ExternalLink size={14} />, run: () => { setMenu(null); void window.tangu?.openPayCenter?.() } } : null,
     logout: loggedIn ? { id: 'logout', label: t('sidebar.account.logout'), icon: <LogOut size={14} />, danger: true, run: () => { setMenu(null); void logout() } } : null,
   })
@@ -313,13 +345,15 @@ export const AccountCard: React.FC<{
     const accountsP: Promise<{ accounts: AuthAccountInfo[]; failed: boolean; loaded: boolean }> = window.tangu?.authAccounts
       ? within(window.tangu.authAccounts().then((accounts) => ({ accounts, failed: false, loaded: true }), () => ({ accounts: [], failed: true, loaded: false })), { accounts: [], failed: true, loaded: false })
       : Promise.resolve({ accounts: [], failed: false, loaded: false })
-    void Promise.all([quotaP, accountsP]).then(([qr, ar]) => {
+    clearRewards()
+    const rewardsP = auth?.loggedIn ? within(refreshRewards(), emptyAccountRewards()) : Promise.resolve(emptyAccountRewards())
+    void Promise.all([quotaP, accountsP, rewardsP]).then(([qr, ar, rr]) => {
       if (request !== quotaRequest.current) return true // 期间登录态变了 / 又点了一次:这一份作废
       if (qr.q) { setQuota(qr.q); publishAccountQuota(qr.q) } else if (qr.failed) setQuotaErr(true)
-      const it = accountItems(qr.q, qr.failed)
+      const it = accountItems(qr.q, qr.failed, rr)
       const switcher = accountSwitcherModel({ ...ar, busy: loggingIn, onSelect: (id) => void login(id), onAdd: () => void login(), t })
       const sections: SheetMenuSection[] = [
-        { items: [it.head, it.login, it.restart, it.quota, it.backpack, it.upgrade].filter((x): x is SheetMenuItem => !!x) },
+        { items: [it.head, it.login, it.restart, it.quota, it.backpack, it.invite, it.upgrade].filter((x): x is SheetMenuItem => !!x) },
         { items: accountMenuRows() }, // Android 原生外壳:设置、互联设备(左栏没有底部那一排,见 lcl 的 accountMenuRows);其余宿主为空
         ...(switcher ? [{ title: switcher.title, items: switcher.items, ...(switcher.failedNote ? { footer: switcher.failedNote } : {}) }] : []),
         { items: it.logout ? [it.logout] : [] },
@@ -452,9 +486,12 @@ export const AccountCard: React.FC<{
       })()}
       {loggedIn && hasCloudPages && hasBackpackPage && (
         <button className="ap-item" onClick={() => { setMenu(null); openCloudPage('backpack') }}>
-          <Backpack size={14} /><span>{t('sidebar.account.menu.backpack')}</span>
+          <Backpack size={14} /><span>{t('sidebar.account.menu.backpack')}</span><span className="grow" /><span className="ap-dim" data-testid="account-points">{pointsText(rewards)}</span>
         </button>
       )}
+      {webItems.invite && <button className="ap-item" onClick={webItems.invite.run}>
+        <Gift size={14} /><span>{webItems.invite.label}</span><span className="grow" /><ChevronRight size={12} />
+      </button>}
       {/* 原生半屏呈现失败时的回落也得有这两行(设置不能两头都没有);桌面 / Web 上 accountMenuRows() 恒空 */}
       {accountMenuRows().map((row) => (
         <button key={row.id} className="ap-item" onClick={() => { setMenu(null); row.run?.() }}>

@@ -1,0 +1,9 @@
+.t2-compaction { padding: 8px 0; color: var(--text-muted); font-size: var(--ui-font-meta); line-height: var(--ui-line-meta); }
+.t2-compaction-line { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; }
+.t2-compaction-line > svg { flex-shrink: 0; }
+.t2-compaction-line > span { flex: 1; min-width: 0; }
+.t2-compaction-line button { border: 0; background: none; color: var(--signal); font: inherit; padding: 3px 5px; border-radius: var(--radius-sm); cursor: pointer; }
+.t2-compaction-line button:hover { background: var(--overlay-light); }
+.t2-compaction-line button:disabled { opacity: .5; cursor: default; }
+.t2-compaction-hint { margin-top: 3px; color: var(--text-faint); font-size: var(--ui-font-caption); }
+.t2-compaction-error { margin-top: 3px; color: var(--danger); }

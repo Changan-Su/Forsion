@@ -565,3 +565,13 @@ LCL 统一保留并排的 View。空间不足时滚动工作区内容，Ribbon�
 `mount(el, view)` 的 `view.getLayout?.()` 返回 `{ width, height, visible, compact, phase }`；`view.onLayout?.(callback)` 立即回送快照，并在尺寸、可见性或阶段变化时通知，返回取消订阅函数。`phase` 为 `transition` 或 `settled`，`compact` 表示内容宽度不足 480px。PDF、画布、终端等可在过渡中只更新轻量外框，等 `settled && visible` 再做昂贵的适配；不要因窗口变窄而重新挂载内容或重置缩放。宿主在 View 卸载时自动取消残留订阅。旧宿主没有这些方法，仍可用 `ResizeObserver`。
 
 `preferredWidth` / `preferredHeight` 可选：新建分屏时作为初始分配权重，侧栏尚未被用户调整时作为展开尺寸；用户保存的比例和侧栏尺寸优先。
+
+## Agent 读取设置与设置页锚点
+
+使用 [`ctx.registerAgentSettings`](plugin-agent-settings.md) 显式开放当前生效值。UI/引擎同契约，密钥只给配置状态。
+
+云端设置页可接收 `mount(el, { anchor })` 的可选第二参数；`forsion/fx:<pluginId>:<pageId>#<anchor>` 深链传入锚点。页面加载完成后自行滚动/聚焦对应区域，普通打开不抢焦点。旧 mount(el) 不受影响。
+
+### 笔记阅读渲染器
+
+通过 `ctx.registerNoteRenderer` 热替换只读阅读表面，宿主继续持有文档与保存流程。完整契约、失败回退与生命周期见[笔记阅读渲染器](./note-renderers.md)。

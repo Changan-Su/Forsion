@@ -26,6 +26,8 @@ import { isSmoothCaretOn, setSmoothCaret } from './smoothCaret'
 import { getVisualsPref, setVisualsPref, VISUALS_VALUES, type VisualsPref } from './visualsPref'
 import { noteCommandUse, useCommandStore } from '@lcl/engine/commandRegistry'
 import { settingTelemetry } from './telemetrySend'
+import { uiAgentSettings } from './amadeus/plugins/agentSettings'
+import { AGENT_SETTINGS_COMMAND } from '../../../tangu-agent/src/contracts/agentSettings'
 
 export interface UiActionResult {
   ok: boolean
@@ -220,8 +222,9 @@ export interface CommandCatalogEntry {
  *    能从市场装外置插件,它们声明了 `invoke` 的命令会进这份目录(与桌面同一条路、同一层 checkArgs)。
  */
 export function buildCommandCatalog(): CommandCatalogEntry[] {
-  const out: CommandCatalogEntry[] = []
+  const out: CommandCatalogEntry[] = [{ id: AGENT_SETTINGS_COMMAND, description: 'Read explicitly exposed plugin settings on this client. Omit pluginId to list providers. Prefer read_plugin_settings when available.', params: { type: 'object', properties: { pluginId: { type: 'string' }, keys: { type: 'array', items: { type: 'string' } } } } }]
   for (const c of useCommandStore.getState().commands) {
+    if (c.id === AGENT_SETTINGS_COMMAND) continue // Reserved host command cannot be shadowed by a plugin.
     const inv = c.invoke
     if (!inv?.description) continue
     let state: string | undefined
@@ -265,6 +268,10 @@ function checkArgs(params: Record<string, unknown> | undefined, args: Record<str
 /** 派发一条 agent 命令。未声明 invoke 的命令一律拒绝——目录之外的 id 不可达。 */
 export async function runAgentCommand(id: unknown, args?: Record<string, unknown>): Promise<UiActionResult> {
   const cid = typeof id === 'string' ? id : ''
+  if (cid === AGENT_SETTINGS_COMMAND) {
+    if (args && (Object.keys(args).some((key) => !['pluginId', 'keys'].includes(key)) || (args.pluginId !== undefined && typeof args.pluginId !== 'string') || (args.keys !== undefined && (!Array.isArray(args.keys) || args.keys.some((key) => typeof key !== 'string'))))) return { ok: false, error: 'Expected optional pluginId string and keys string array' }
+    return { ok: true, result: JSON.stringify(await uiAgentSettings.read(args?.pluginId as string | undefined, args?.keys as string[] | undefined)) }
+  }
   const cmd = useCommandStore.getState().commands.find((c) => c.id === cid)
   if (!cmd) return { ok: false, error: `no such command "${cid}" on this client` }
   if (!cmd.invoke?.description) return { ok: false, error: `command "${cid}" is not exposed to agents` }

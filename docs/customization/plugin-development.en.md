@@ -565,3 +565,13 @@ Use `ctx.registerView({ layout: { minWidth: 360, minHeight: 200 }, ... })` to de
 In `mount(el, view)`, `view.getLayout?.()` returns `{ width, height, visible, compact, phase }`. `view.onLayout?.(callback)` sends an immediate snapshot and subsequent size, visibility or phase changes, and returns an unsubscribe function. `phase` is `transition` or `settled`; `compact` means content width below 480px. Expensive PDF, canvas or terminal adapters can update cheap chrome during transitions and refit when `settled && visible`. Do not remount content or reset document zoom merely because the window narrows. The host removes outstanding subscriptions when the View is disposed. Older hosts lack these methods; use `ResizeObserver` as a fallback.
 
 Optional `preferredWidth` / `preferredHeight` seed allocation weights for new splits and the initial size of a sidebar that the user has not resized. Saved user ratios and sidebar sizes take precedence.
+
+## Agent settings and settings-page anchors
+
+Use [`ctx.registerAgentSettings`](plugin-agent-settings.en.md) to expose effective values explicitly. UI and engine plugins share the contract; secrets expose configured status only.
+
+Cloud settings pages can accept optional `mount(el, { anchor })` context. A `forsion/fx:<pluginId>:<pageId>#<anchor>` deep link supplies the section anchor. Scroll/focus the section after loading; ordinary mounts must not steal focus. Existing mount(el) implementations remain compatible.
+
+### Note reading renderers
+
+Use `ctx.registerNoteRenderer` to replace the read-only note surface while the host retains document and persistence ownership. See [Note reading renderers](./note-renderers.en.md) for the contract, failure fallback and lifecycle.

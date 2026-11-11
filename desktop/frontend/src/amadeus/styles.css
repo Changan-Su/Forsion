@@ -1318,6 +1318,12 @@ body.amx-marquee-active * {
   text-underline-offset: 2px;
 }
 .am-app .milkdown .ProseMirror a:hover { text-decoration-color: currentColor; }
+/* Explicit underline is continuous through descenders; link decorations keep their own typography. */
+.am-app .milkdown .ProseMirror u {
+  text-decoration-skip-ink: none;
+  text-underline-offset: 0.18em;
+  text-decoration-thickness: 1px;
+}
 .am-app .milkdown .ProseMirror img {
   max-width: 100%;
   border-radius: var(--radius-sm);

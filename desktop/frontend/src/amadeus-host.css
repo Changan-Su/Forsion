@@ -969,6 +969,12 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 .amx-db-urlcell { display: flex; align-items: center; gap: 4px; min-width: 0; width: 100%; padding: 4px 8px; cursor: text; }
 .amx-db-richtext { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
 .amx-db-wikilink { border: none; background: transparent; padding: 0; font: inherit; cursor: pointer; color: var(--accent-ink); text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--accent-ink) 45%, transparent); text-underline-offset: 2px; }
+.amx-reading-mode-btn { width: auto; gap: 5px; padding-inline: 7px; font-size: var(--ui-font-caption, 11px); }
+.amx-reading-mobile-head { display: flex; align-items: center; justify-content: space-between; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); }
+.amx-reading-surface .ProseMirror { cursor: text; outline: none; }
+.amx-reading-scroll { overflow-anchor: none; }
+.amx-reading-surface [data-wiki], .amx-reading-surface [data-wiki-open] { cursor: pointer; }
+.amx-reading-notice { margin-inline: auto; max-width: var(--reading-width, 920px); font-size: var(--ui-font-meta, 12px); }
 .amx-db-url { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--accent-ink, var(--accent, #6c5ce7)); text-decoration: underline; text-underline-offset: 2px; }
 .amx-db-urltext { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
 .amx-db-edit { flex: 0 0 auto; margin-left: auto; border: none; background: transparent; color: var(--text-faint, var(--text-muted)); cursor: pointer; padding: 2px 4px; border-radius: 4px; opacity: 0; transition: opacity 0.2s ease-in-out; }

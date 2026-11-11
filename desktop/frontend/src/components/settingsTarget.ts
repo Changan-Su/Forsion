@@ -41,11 +41,15 @@ export interface ResolvedSettingsTarget {
   sub?: string
   /** 子页里的页签(目前只有后台 Agent 的 Muse)。 */
   pane?: string
+  /** Optional named section in a plugin settings page. */
+  anchor?: string
 }
 
 /** 解析深链。空值 → general(调用方再按本端可用页兜底)。 */
 export function resolveSettingsTarget(target: string | null | undefined): ResolvedSettingsTarget {
   if (!target) return { tab: 'general' }
+  const fragment = /^(forsion\/fx:[a-z0-9-]+:[a-z0-9-]+)#([a-zA-Z0-9_-]{1,64})$/.exec(target)
+  if (fragment) return { ...resolveSettingsTarget(fragment[1]), anchor: fragment[2] }
   const legacy = LEGACY_TARGETS[target]
   if (legacy) return legacy[1] ? { tab: legacy[0], sub: legacy[1], ...(legacy[2] ? { pane: legacy[2] } : {}) } : { tab: legacy[0] }
   // 插件页的 id 可能含任意字符(含 `/`),前缀先放行,不拆。

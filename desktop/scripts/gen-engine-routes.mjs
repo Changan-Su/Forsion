@@ -54,6 +54,7 @@ export const CLASSIFICATION = {
   'GET /agent/runs': [A, 'list runs'],
   'GET /agent/runs/:id/events': [A, 'run event stream'],
   'POST /agent/runs/:id/abort': [A, 'stop a run'],
+  'POST /agent/runs/:id/compaction/skip': [A, 'skip an optional idle summary for an owned run and operation'],
   'POST /agent/runs/:id/steer': [A, 'steer a running run'],
   'DELETE /agent/runs/:id/steer/:messageId': [A, 'withdraw a queued steer message'],
 
