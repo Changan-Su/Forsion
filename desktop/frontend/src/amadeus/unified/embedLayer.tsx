@@ -15,11 +15,13 @@
 import { Suspense, useEffect, useRef, useState, type ReactElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { $prose } from '@milkdown/kit/utils'
-import { NodeSelection, Plugin, PluginKey, TextSelection, type Transaction } from '@milkdown/kit/prose/state'
+import { NodeSelection, Plugin, TextSelection, type Transaction } from '@milkdown/kit/prose/state'
 import { Decoration, DecorationSet } from '@milkdown/kit/prose/view'
 import type { EditorView } from '@milkdown/kit/prose/view'
 import type { Node as ProseNode } from '@milkdown/kit/prose/model'
 import { AddMarkStep, RemoveMarkStep } from '@milkdown/kit/prose/transform'
+import { buildBlockString } from '../blocks/markdown/mathLivePreview'
+import { embedSourceKey } from '../blocks/markdown/embedSource'
 import type { MilkdownPlugin } from '@milkdown/kit/ctx'
 import { lazyRetry } from '../../lazyRetry'
 import { stripPageBasename } from '@amadeus-shared/compiler/names'
@@ -442,6 +444,33 @@ const widgetIdentity = (kind: EmbedKind, text: string): string =>
   kind.k === 'db' ? `db:${kind.name}` : kind.k === 'document-agent'
     ? `document-agent:${kind.type}:${kind.type === 'instructions' ? '' : parseDocAgentSpec(kind.src)?.id}` : `${kind.k}:${text}`
 
+interface EmbedMatch { node: ProseNode; pos: number; inline: boolean }
+
+/** Embed-only soft lines get individual widgets, without splitting paragraphs or
+ * changing the user's persisted Markdown. Positions retain the paragraph convention. */
+export function embedMatches(node: ProseNode, pos: number): EmbedMatch[] {
+  if (classifyEmbed(node)) return [{ node, pos, inline: false }]
+  if (node.type.name !== 'paragraph') return []
+  const source = buildBlockString(node)
+  if (!source.includes('\n') || !source.includes('![[')) return []
+  const matches: EmbedMatch[] = []
+  let offset = 0
+  for (const line of source.split('\n')) {
+    const bang = node.nodeAt(offset + Math.max(0, line.indexOf('!')))
+    if (EMBED_RE.test(line.trim()) && !bang?.marks.some((m) => m.type.name === 'amadeusEscaped')) {
+      const part = node.type.create(node.attrs, node.content.cut(offset, offset + line.length))
+      if (part.textContent === line && classifyEmbed(part)) matches.push({ node: part, pos: pos + offset, inline: true })
+    }
+    offset += line.length + 1
+  }
+  return matches
+}
+
+function embedAt(doc: ProseNode, pos: number): EmbedMatch | null {
+  const $from = doc.resolve(Math.min(pos + 1, doc.content.size))
+  return $from.depth ? embedMatches($from.parent, $from.before()).find((m) => m.pos === pos) ?? null : null
+}
+
 interface EmbedLayerState {
   decos: DecorationSet
   sourcePos: number | null
@@ -478,13 +507,14 @@ export function embedsUntouched(tr: Transaction): boolean {
       if (ok && !(inPlainTextblock(before, oldFrom, oldTo) && inPlainTextblock(after, newFrom, newTo))) ok = false
     })
     // 不挪位置的步骤 StepMap 是空的:加 / 去标记不影响认嵌入(只看文本),改节点属性(代码块语言)会,整篇重建
-    if (!ranges && !(step instanceof AddMarkStep || step instanceof RemoveMarkStep)) ok = false
+    if (!ranges && (!(step instanceof AddMarkStep || step instanceof RemoveMarkStep) ||
+      ['code', 'inlineCode', 'amadeusEscaped'].includes(step.mark.type.name))) ok = false
   })
   return ok
 }
 function inPlainTextblock(doc: ProseNode, from: number, to: number): boolean {
   const $from = doc.resolve(from)
-  return $from.parent.isTextblock && $from.depth > 0 && $from.sameParent(doc.resolve(to)) && !classifyEmbed($from.parent)
+  return $from.parent.isTextblock && $from.depth > 0 && $from.sameParent(doc.resolve(to)) && !embedMatches($from.parent, $from.before()).length
 }
 
 export function createEmbedLayer(opts: {
@@ -496,7 +526,7 @@ export function createEmbedLayer(opts: {
   open?: (target: string, o?: { newTab?: boolean }) => void
 }): MilkdownPlugin[] {
   const plugin = $prose(() => {
-    const key = new PluginKey('UNIFIED_EMBED_LAYER')
+    const key = embedSourceKey
     const roots = new Map<string, WidgetEntry>() // key → 活 widget(同 key 复用,PM 不重建 DOM)
     // Async tasks follow the original node, never a later copy with the same persisted ID.
     const taskSources = new Set<{ from: number; to: number; deleted: boolean }>()
@@ -507,7 +537,7 @@ export function createEmbedLayer(opts: {
       builtWith = usePluginStore.getState().embedRenderers
       const decos: Decoration[] = []
       const seen = new Map<string, number>() // 同文嵌入按出现序号区分身份(Codex 终审 P1:同 key 共享 DOM 会互相拆台)
-      const visit = (node: ProseNode, pos: number): void => {
+      const visit = (node: ProseNode, pos: number, inline = false): void => {
         const kind = classifyEmbed(node)
         if (!kind) return
         if (kind.k === 'document-agent') kind.activeInstructions = doc.resolve(pos).depth === 0
@@ -529,12 +559,13 @@ export function createEmbedLayer(opts: {
           entry.render(kind) // 包括撤销/外部回灌:更新 initialView,保留 React 组件身份。
         }
         const revealed = soft && revealPos === pos
-        if (!revealed) decos.push(Decoration.inline(pos + 1, pos + node.nodeSize - 1, { class: 'wikilink-src-hidden' }))
+        decos.push(Decoration.inline(pos + 1, pos + node.nodeSize - 1,
+          { class: revealed ? 'unified-embed-line-src' : 'wikilink-src-hidden' }, { embedSource: true }))
         // 本段已归块级嵌入 → 给段落打标,行内双链层渲出来的那条链接由 CSS 收掉(2026-08-22 实报:
         // 嵌入体底下多挂一条下划线的笔记名)。inline 装饰只藏得住**文本**,藏不住 wikilink.ts 的
         // widget —— 而那层不能一刀切跳过整段:嵌入体内的只读 MarkdownBlock 没装本层,那里的
         // `![[x]]` 正是靠行内双链渲的。所以判据留在这里,由「本层确实接手了」这件事本身表达。
-        decos.push(Decoration.node(pos, pos + node.nodeSize, { class: `unified-embed-host${soft ? ' unified-embed-soft' : ''}${revealed ? ' unified-embed-src' : ''}` }))
+        if (!inline) decos.push(Decoration.node(pos, pos + node.nodeSize, { class: `unified-embed-host${soft ? ' unified-embed-soft' : ''}${revealed ? ' unified-embed-src' : ''}` }))
         decos.push(
           Decoration.widget(
             // 文件引用的嵌入体挂在**段尾**:源码露出来时自然排在它上方(Obsidian 的摆法),显隐之间 widget 不换位置、
@@ -551,21 +582,22 @@ export function createEmbedLayer(opts: {
               dom.className = 'unified-embed'
               dom.contentEditable = 'false'
               // 同文嵌入按出现序号定位(与 dkey 同口径):第二个附件的源码钮不许改到第一个。
-              const findNth = (v: EditorView): { at: number; size: number } | null => {
+              const findNth = (v: EditorView): { at: number; size: number; node: ProseNode; inline: boolean } | null => {
                 let i = 0
-                let hit: { at: number; size: number } | null = null
+                let hit: { at: number; size: number; node: ProseNode; inline: boolean } | null = null
                 v.state.doc.descendants((n, p) => {
                   if (hit) return false
                   // 定位与组件 key 共用判据,切 DB 视图后闭包仍能定位原来的嵌入;
                   // 非数据库照旧按类别 + 全文区分,避免同文代码块与段落互相误认。
-                  const candidate = classifyEmbed(n)
-                  if (candidate && widgetIdentity(candidate, n.textContent) === baseKey) {
-                    if (i === nth) {
-                      hit = { at: p, size: n.nodeSize }
-                      return false
+                  for (const match of embedMatches(n, p)) {
+                    const candidate = classifyEmbed(match.node)
+                    if (candidate && widgetIdentity(candidate, match.node.textContent) === baseKey) {
+                      if (i === nth) {
+                        hit = { at: match.pos, size: match.node.nodeSize, node: match.node, inline: match.inline }
+                        return false
+                      }
+                      i++
                     }
-                    i++
-                    return false
                   }
                   return true
                 })
@@ -584,7 +616,9 @@ export function createEmbedLayer(opts: {
                 if (!hit) return
                 e.preventDefault()
                 e.stopPropagation()
-                v.dispatch(v.state.tr.setSelection(NodeSelection.create(v.state.doc, hit.at)))
+                v.dispatch(v.state.tr.setSelection(hit.inline
+                  ? TextSelection.create(v.state.doc, hit.at + 1, hit.at + hit.size - 1)
+                  : NodeSelection.create(v.state.doc, hit.at)))
                 v.focus()
               })
               const replaceText = (next: string): void => {
@@ -617,7 +651,7 @@ export function createEmbedLayer(opts: {
               const openNow = (newTab: boolean): void => {
                 const v = viewRef
                 const hit = v ? findNth(v) : null
-                const node = v && hit ? v.state.doc.nodeAt(hit.at) : null
+                const node = hit?.node
                 const now = node ? classifyEmbed(node) : kind
                 const target = now ? openTargetOf(now) : null
                 if (!target) return
@@ -653,6 +687,10 @@ export function createEmbedLayer(opts: {
                     if (!v) return
                     const hit = findNth(v)
                     if (!hit) return
+                    if (hit.inline) {
+                      v.dispatch(v.state.tr.insertText(`\n${md}`, hit.at + hit.size - 1))
+                      return
+                    }
                     const para = v.state.schema.nodes.paragraph
                     if (!para) return
                     const blocks = md.split(/\n{2,}/).map((line) => para.create(null, line ? v.state.schema.text(line) : null))
@@ -732,7 +770,7 @@ export function createEmbedLayer(opts: {
                 if (!zone) return
                 const v = viewRef
                 const hit = v ? findNth(v) : null
-                const node = v && hit ? v.state.doc.nodeAt(hit.at) : null
+                const node = hit?.node
                 const now = node ? classifyEmbed(node) : kind
                 const inner = now ? openTargetOf(now) : null
                 if (!inner) return
@@ -785,7 +823,7 @@ export function createEmbedLayer(opts: {
       // ⚠️ 枚举口径必须与 findNth 的 doc.descendants 逐字一致:两边错位 = 点第 n 个嵌入的 `</>`
       // 会把光标送进第 m 个的源码。
       doc.descendants((node, pos) => {
-        visit(node, pos)
+        for (const match of embedMatches(node, pos)) visit(match.node, match.pos, match.inline)
         return true
       })
       return DecorationSet.create(doc, decos)
@@ -829,7 +867,7 @@ export function createEmbedLayer(opts: {
           if (sourcePos != null && tr.docChanged) sourcePos = tr.mapping.map(sourcePos)
           if (meta && typeof meta.sourcePos === 'number') sourcePos = meta.sourcePos
           else if (sourcePos != null && tr.selectionSet) {
-            const node = newState.doc.nodeAt(sourcePos)
+            const node = embedAt(newState.doc, sourcePos)?.node
             if (!node || newState.selection.to <= sourcePos || newState.selection.from >= sourcePos + node.nodeSize) sourcePos = null
           }
           // 键入中的裸 URL 段(I-13):就地键入(改动全落在光标所在段内,粘贴 / 拖放除外)把一段变成「整段一个 URL」
@@ -853,10 +891,12 @@ export function createEmbedLayer(opts: {
           // 点嵌入体里的控件(PDF 翻页、播放键)会让编辑器失焦,那一下收起源码 = 嵌入体上跳一行,按下和抬起落在两个元素上、点击落空。
           let revealPos: number | null = null
           const sel = newState.selection
-          if (sel instanceof TextSelection && sel.$from.depth > 0 && sel.$from.sameParent(sel.$to) && isSoftSourceEmbed(sel.$from.parent)) {
-            const at = sel.$from.before()
+          if (sel instanceof TextSelection && sel.$from.depth > 0 && sel.$from.sameParent(sel.$to)) {
+            const match = embedMatches(sel.$from.parent, sel.$from.before()).find((m) =>
+              isSoftSourceEmbed(m.node) && sel.from >= m.pos + 1 && sel.to <= m.pos + m.node.nodeSize - 1)
+            const at = match?.pos ?? null
             const was = old.revealPos == null ? null : tr.docChanged ? tr.mapping.map(old.revealPos) : old.revealPos
-            if (editorFocused(newState) || was === at) revealPos = at
+            if (at != null && (editorFocused(newState) || was === at)) revealPos = at
           }
           if (!tr.docChanged && !tr.selectionSet && !meta && pendingPos === old.pendingPos && revealPos === old.revealPos) return { sourcePos, pendingPos, revealPos, decos: old.decos.map(tr.mapping, tr.doc) }
           // 长笔记快路径:在普通段落里打字、只挪光标,嵌入和三处位置标记都没变 → 整篇重建(doc.descendants 全树 + 每段取全文跑正则)

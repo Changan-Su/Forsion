@@ -2980,10 +2980,10 @@ body.amx-marquee-active * {
    ponytail: 要文档内连续编号得自己数(每块独立渲染),等有人要再做。 */
 .am-app .katex .eqn-num { display: none; }
 
-/* 编辑本行时的实况预览:行内 $..$ 在源码上方弹浮层卡片、块级 $$..$$ 在源码下方居中渲染(见 mathLivePreview.ts)。 */
-.math-preview--inline { position: relative; display: inline-block; width: 0; height: 0; vertical-align: baseline; }
+/* Current inline formula preview has its own row after the source paragraph. */
+.math-preview--inline { display: block; max-width: 100%; margin-top: 8px; pointer-events: none; }
 .math-preview--inline .math-preview-inner {
-  position: absolute; bottom: 100%; left: 0; margin-bottom: 4px; z-index: 20;
+  display: inline-block; max-width: 100%; overflow-x: auto; vertical-align: top;
   padding: 4px 10px; border-radius: var(--radius-sm, 6px); white-space: nowrap; pointer-events: none;
   background: var(--bg-card, var(--bg)); border: var(--border-width, 1px) solid var(--border);
   box-shadow: var(--card-shadow, 0 6px 22px rgba(0, 0, 0, 0.12));
