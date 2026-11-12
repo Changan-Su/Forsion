@@ -10,6 +10,7 @@
     "dev": "npm run prepare-assets && vite",
     "build": "npm run prepare-assets && vite build",
     "typecheck": "tsc --noEmit",
+    "e2e:inbox": "node scripts/inbox.e2e.cjs",
     "e2e:mobile": "node scripts/mobile-parity.e2e.cjs",
     "preview": "vite preview",
     "prepare-fonts": "node ../desktop/build/gen-fonts.cjs --out public/fonts",

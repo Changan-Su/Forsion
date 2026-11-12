@@ -17,6 +17,7 @@ const { usePluginStore } = await import('./pluginStore')
 const { useCommandStore, useRibbonStore } = await import('@lcl/engine')
 const { track, useAchievements } = await import('../../achievements/store')
 const { inboxCardOf } = await import('./inboxCards')
+const { readInboxChannel } = await import('../../services/inboxChannel')
 
 const src = (over: Partial<ExternalPluginSource> & { id: string }): ExternalPluginSource => ({ name: over.id, version: '0.0.1', apiVersion: 1, code: '', ...over })
 const seen = (): Record<string, unknown> => (window as unknown as { __seen: Record<string, unknown> }).__seen
@@ -75,6 +76,19 @@ describe('使用指南接缝', () => {
     expect(useRibbonStore.getState().items).toEqual([])
     expect(useCommandStore.getState().commands.some((c) => c.id === 'open-feedback')).toBe(false)
     delete w.tangu
+  })
+
+  it('cloud inbox channel belongs only to locked Forsion Extend and is revoked on reload', async () => {
+    const code = "window.__seen[ctx.id || 'provider'] = ctx.app.provideInboxChannel({ list: async () => [], unreadCount: async () => ({ count: 0, latestId: null }), patch: async () => {}, readAll: async () => {}, remove: async () => {}, claim: async () => ({ ok: true, alreadyClaimed: false }) })"
+    env.sources = [src({ id: 'third', code })]
+    await usePluginStore.getState().loadExternal()
+    expect(readInboxChannel()).toBeNull()
+    env.sources = [src({ id: 'forsion-extend', preinstalled: true, locked: true, bundleOff: false, code })]
+    await usePluginStore.getState().loadExternal()
+    expect(readInboxChannel()).not.toBeNull()
+    env.sources = []
+    await usePluginStore.getState().loadExternal()
+    expect(readInboxChannel()).toBeNull()
   })
 
   it('achievements.count:读官方计数与自己的计数,读不到别家插件的', async () => {

@@ -581,3 +581,15 @@ LCL 统一保留并排的 View。空间不足时滚动工作区内容，Ribbon�
 ### 笔记阅读渲染器
 
 通过 `ctx.registerNoteRenderer` 热替换只读阅读表面，宿主继续持有文档与保存流程。完整契约、失败回退与生命周期见[笔记阅读渲染器](./note-renderers.md)。
+
+### 官方云端收件箱通道
+
+首方锁定的 `forsion-extend` 可通过 `ctx.app.provideInboxChannel?.(channel)` 接入账号收件箱。
+通道提供 `list(filter)`、`unreadCount()`、`patch(id, { read, archived })`、`readAll()`、`remove(id)` 与 `claim(id, client)`；
+可选 `importLegacy(messages)` 仅接入有属主的桌面历史已读／归档状态，云端已有状态优先。
+云端消息 ID 使用 `cloud:` 前缀；列表包含既有 `InboxMessage` 字段。未读响应可带 `revision` 和 `latestCreatedAt`，
+即使未读数没变，领取、归档等变更也能触发刷新。账号凭据留在 Extend 的账号适配层。
+宿主将该渠道与本地引擎的 Agent／系统消息合并，隐藏重复的旧官方广播副本。
+传入 `null` 撤回自己的通道；停用／重载时宿主同样撤回，切换账号时重新提供通道。旧宿主不提供此可选方法。
+
+旧桌面收件箱没有逐条云账号归属；升级接入先将本设备旧状态绑定到当前已验证账号，之后切账号不再重复接入。旧手机缓存不自动接入。

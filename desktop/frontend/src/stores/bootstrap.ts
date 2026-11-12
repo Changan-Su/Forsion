@@ -2,6 +2,7 @@
 import { useEffect } from 'react'
 import { useI18n } from '../i18n'
 import { useApp } from './appStore'
+import { inboxAvailable } from '../features/runtime'
 import { useInbox } from './inboxStore'
 import { useChannels } from './channelsStore'
 import { setActiveSpace } from '@lcl/engine'
@@ -53,9 +54,9 @@ export function useBootstrap(): void {
     return () => window.clearInterval(timer)
   }, [])
 
-  // 收件箱:全局常驻未读轮询(ribbon/dock 角标在任何 Space 下更新)。桌面壳 或 移动端(本地 inbox)gate;Tangu Web 不跑。
+  // 收件箱:入口、视图与全局轮询共用能力判断;Web/mobile 的云端拉取也在 store 内常驻。
   useEffect(() => {
-    if (!window.tangu?.backendStatus && !window.tangu?.mobile) return
+    if (!inboxAvailable()) return
     useInbox.getState().startPolling()
     return () => useInbox.getState().stopPolling()
   }, [])

@@ -5,6 +5,7 @@
 // sidebar, and status bar all be extended uniformly.
 
 import type { SyncSnapshot } from '../../services/syncSetup'
+import type { InboxChannel } from '../../services/inboxChannel'
 import type { ComponentType } from 'react'
 import type { PropertyTypeDef } from '../blocks/database/propertyTypes'
 import type { PluginOnboardingSpec } from '@amadeus-shared/ipc'
@@ -388,6 +389,10 @@ export interface PluginAppApi extends BlockSurfaceApi {
    *  插件停用时宿主也收。通道认不出账号时,带 `expectedAccountId` 的调用必须回 `account-changed`、不发。
    *  旧宿主没有:`ctx.app.provideFeedbackChannel?.(…)`。 */
   provideFeedbackChannel?(submit: ((input: { description: string; sessionLogJson?: string; sessionLogName?: string; expectedAccountId?: string }) => Promise<{ ok: boolean; id?: string | null; error?: string; attachmentSkipped?: boolean }>) | null): boolean
+  /** Official account inbox provider (first-party Forsion Extend only). Cloud IDs use
+   * `cloud:`; read/archive/delete and rewards remain server-authoritative. Null revokes
+   * this plugin's channel; the host also revokes it on disable/reload. Older hosts omit it. */
+  provideInboxChannel?(channel: InboxChannel | null): boolean
   /** 同步总开关(2026-10-20+,蓬洲云「同步」页):笔记库 / Agents 与记忆 / 插件数据三样的开关与状态,宿主
    *  services/syncSetup.ts 是真身。只给首方内置包、只在有本地库远程同步的桌面挂;别的插件 get() 恒 null、set 恒失败。
    *  旧宿主没有:`ctx.app.sync?.get()`。 */

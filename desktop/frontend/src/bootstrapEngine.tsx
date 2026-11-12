@@ -156,10 +156,8 @@ export function installEngine(activateTangu: (host: TanguHost) => void): void {
 
   registerAmadeusViews()
 
-  // Inbox Space:收件箱(左 统一工作区·收件箱列表源 / 主 阅读面板)。数据来自本地后端 /agent/inbox。
-  // gate = inboxAvailable():旧档案 spaces 点名 + 桌面壳 backendStatus(含 external 模式)或移动端 mobile;
-  // Unit 宿主 = tangu 包 + 本地引擎。webShim / 云端 Unit 无 backendStatus → 不注册,
-  // 旧布局引用未注册视图由 workspaceStore.layoutViewsAllRegistered 整份回退,不崩。
+  // Inbox: desktop/Unit engine inbox, or Web/mobile client storage fed by cloud broadcasts.
+  // Registration and polling share inboxAvailable(); public Unit visitors use Extend's account channel.
   if (inboxAvailable()) {
     // 收件箱列表 = 统一「工作区」视图的一个列表源(2026-09-11,与青鸟收藏夹同一条契约);阅读面板声明 workspaceSource,
     // 它做活动主视图时左栏自动切到收件箱。inbox-list 类型保留给仪表盘卡片;整页渲染也换成 WorkspaceView ——
