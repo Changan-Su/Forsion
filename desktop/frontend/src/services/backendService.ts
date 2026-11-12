@@ -1520,8 +1520,10 @@ const legacyClientInbox = () => currentPlatform() === 'mobile'
 const cloudId = (id: string) => id.startsWith('cloud:')
 const localMessages = (ms: InboxMessage[], cloud: boolean) => cloud ? ms.filter((m) => !m.origin_broadcast_id) : ms
 const importedInboxState = new WeakMap<object, Set<string>>()
+const cloudInboxSnapshots = new WeakMap<InboxChannel, Map<InboxFilter, InboxMessage[]>>()
+const cloudUnreadSnapshots = new WeakMap<InboxChannel, { count: number; latestId: string | null; revision?: string; latestCreatedAt?: string | null }>()
 const nativeInboxSnapshots = new WeakMap<InboxChannel, Map<InboxFilter, InboxMessage[]>>()
-const engineInboxList = async (t: EngineTarget, filter: InboxFilter): Promise<InboxMessage[]> => {
+const fetchEngineInboxList = async (t: EngineTarget, filter: InboxFilter): Promise<InboxMessage[]> => {
   if (usesClientInbox()) return legacyClientInbox() && !readInboxChannel() ? localInbox.list(filter) : []
   const channel = readInboxChannel()
   const messages: InboxMessage[] = []
@@ -1540,21 +1542,39 @@ const engineInboxList = async (t: EngineTarget, filter: InboxFilter): Promise<In
     snapshots.set(filter, messages)
     nativeInboxSnapshots.set(channel, snapshots)
   }
-  if (channel?.importLegacy) {
+  return messages
+}
+const engineInboxList = async (t: EngineTarget, filter: InboxFilter): Promise<InboxMessage[]> => {
+  const messages = await fetchEngineInboxList(t, filter)
+  const channel = readInboxChannel()
+  if (!usesClientInbox() && channel?.importLegacy) {
     const done = importedInboxState.get(channel) ?? new Set<string>()
-    const legacy = messages.filter((m) => m.origin_broadcast_id && (m.read_at || m.archived_at) && !done.has(m.id))
-    if (legacy.length) {
-      await channel.importLegacy(legacy)
-      legacy.forEach((m) => done.add(m.id))
-      importedInboxState.set(channel, done)
-    }
+    // Read both legacy folders before any cloud row can receive a newer decision.
+    // Otherwise an archived legacy letter could reappear unread until that folder opens.
+    const archived = !done.has('__archived') && filter !== 'archived' ? await fetchEngineInboxList(t, 'archived') : []
+    const legacy = [...messages, ...archived].filter((m) => m.origin_broadcast_id && (m.read_at || m.archived_at) && !done.has(m.id))
+    try { if (legacy.length) await channel.importLegacy(legacy) } catch { return messages }
+    legacy.forEach((m) => done.add(m.id))
+    if (nativeInboxSnapshots.get(channel)?.has('archived')) done.add('__archived')
+    importedInboxState.set(channel, done)
   }
   return messages
 }
 export const listInbox = async (t: EngineTarget, filter: InboxFilter = 'all'): Promise<InboxMessage[]> => {
   const channel = readInboxChannel()
   const native = await engineInboxList(t, filter)
-  const cloud = await channel?.list(filter) ?? []
+  let cloud: InboxMessage[] = []
+  if (channel) {
+    try {
+      cloud = await channel.list(filter)
+      const snapshots = cloudInboxSnapshots.get(channel) ?? new Map<InboxFilter, InboxMessage[]>()
+      snapshots.set(filter, cloud)
+      cloudInboxSnapshots.set(channel, snapshots)
+    } catch (error) {
+      if (usesClientInbox()) throw error
+      cloud = cloudInboxSnapshots.get(channel)?.get(filter) ?? []
+    }
+  }
   return [...localMessages(native, !!channel), ...cloud].map((m) => localizeInboxMessage(m))
     .sort((a, b) => (b.created_at ?? '').localeCompare(a.created_at ?? ''))
 }
@@ -1564,7 +1584,9 @@ export const getInboxUnreadCount = async (t: EngineTarget): Promise<{ count: num
     ? legacyClientInbox() ? localInbox.unreadCount() : { count: 0, latestId: null }
     : request(t, '/agent/inbox/unread-count')
   const native = await engineInboxList(t, 'all')
-  const cloud = await channel.unreadCount()
+  let cloud
+  try { cloud = await channel.unreadCount(); cloudUnreadSnapshots.set(channel, cloud) }
+  catch (error) { if (usesClientInbox()) throw error; cloud = cloudUnreadSnapshots.get(channel) ?? { count: 0, latestId: null } }
   const local = localMessages(native, true)
   return { count: cloud.count + local.filter((m) => !m.read_at && !m.archived_at).length,
     latestId: local[0] && (!cloud.latestId || (local[0].created_at ?? '') > (cloud.latestCreatedAt ?? '')) ? local[0].id : cloud.latestId,
@@ -1575,9 +1597,14 @@ export const patchInboxMessage = async (t: EngineTarget, id: string, patch: { re
     : usesClientInbox() ? localInbox.patch(id, patch)
     : request<{ ok: boolean }>(t, `/agent/inbox/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) })
 export const readAllInbox = async (t: EngineTarget) => {
-  await readInboxChannel()?.readAll()
-  if (!usesClientInbox()) await request(t, '/agent/inbox/read-all', { method: 'POST' })
-  else if (!readInboxChannel() && legacyClientInbox()) await localInbox.readAll()
+  const tasks: Promise<unknown>[] = []
+  const channel = readInboxChannel()
+  if (channel) tasks.push(channel.readAll())
+  if (!usesClientInbox()) tasks.push(request(t, '/agent/inbox/read-all', { method: 'POST' }))
+  else if (!channel && legacyClientInbox()) tasks.push(localInbox.readAll())
+  const results = await Promise.allSettled(tasks)
+  const failure = results.find((r) => r.status === 'rejected')
+  if (failure?.status === 'rejected') throw failure.reason
   return { ok: true }
 }
 export const deleteInboxMessage = async (t: EngineTarget, id: string) =>

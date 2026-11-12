@@ -37,4 +37,15 @@ describe('official/native inbox transport', () => {
     h.fetch.mockRejectedValue(new Error('engine offline'))
     expect((await listInbox(target)).map((m) => m.id)).toEqual(['native', 'cloud:official'])
   })
+  it('cloud outage does not hide native messages or prevent native read-all', async () => {
+    vi.stubGlobal('window', { tangu: { backendStatus: async () => ({}) } })
+    const cloud = channel()
+    vi.mocked(cloud.list).mockRejectedValue(new Error('cloud offline'))
+    vi.mocked(cloud.unreadCount).mockRejectedValue(new Error('cloud offline'))
+    provideInboxChannel('test', cloud)
+    h.fetch.mockResolvedValue(new Response(JSON.stringify({ messages: [message('native')] })))
+    expect((await listInbox(target)).map((m) => m.id)).toEqual(['native'])
+    expect(await getInboxUnreadCount(target)).toMatchObject({ count: 1, latestId: 'native' })
+  })
+
 })

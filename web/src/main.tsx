@@ -4,7 +4,7 @@
  * 主模块求值」——静态 import 会被提升到 body 之前执行,而 amadeus/api.ts 在模块求值时就捕获
  * window.amadeus,dbStore/noteViewStore 也在模块级判断 window.amadeus 并订阅事件。
  */
-import { getApiBase, getToken, installWebShim, redirectToLogin, requireLoginForPage } from './webShim'
+import { getApiBase, getToken, getWebAccount, installWebShim, redirectToLogin, requireLoginForPage } from './webShim'
 import { createCloudAmadeusBridge, setCloudNotify } from './amadeus/cloudBridge'
 import { installCloudCollab } from './amadeus/cloudCollab'
 import { openTargetWhenReady, takeOpenTarget } from './openTarget'
@@ -83,6 +83,8 @@ async function bootstrap(): Promise<void> {
         .catch((e) => console.error('[tangu-web] invite page failed:', e))
     }
   } else if (await installWebShim()) {
+    const { installStandaloneWebInbox } = await import('./inbox')
+    installStandaloneWebInbox(getWebAccount())
     const target = takeOpenTarget()
     // 已登录:同步工厂,不发网络请求;首个 Amadeus/Calendar 视图挂载时经 ensureAmadeusReady →
     // restoreVault 才真正连云(GET /vaults → tree → SSE → asset-token)。

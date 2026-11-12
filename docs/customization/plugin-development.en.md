@@ -592,3 +592,5 @@ Cloud message IDs start with `cloud:` and lists use the existing `InboxMessage` 
 Credentials remain in Extend's account adapter. The host merges this channel with native Agent/system letters and
 filters duplicate legacy official broadcasts. Pass `null` to revoke the provider. The host also revokes it on disable/reload;
 provide a fresh channel when the account changes. Older hosts omit this optional API.
+
+The legacy desktop mailbox has no per-message cloud owner. Adoption binds that device cache once to the currently verified upgrade account; later account switches cannot import it again. Unowned legacy mobile caches are not imported.

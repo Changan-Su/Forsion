@@ -170,4 +170,17 @@ describe('cloud state revision', () => {
     await useInbox.getState().refreshUnread()
     expect(useInbox.getState().messages[0].attachments?.claimed).toBe(true)
   })
+  it('retries a new revision after the corresponding list request fails', async () => {
+    vi.stubGlobal('window', {})
+    h.count.mockResolvedValue({ count: 1, latestId: 'cloud:retry', revision: 'before' })
+    h.list.mockResolvedValue([{ id: 'cloud:retry', attachments: { claimed: false } }])
+    await useInbox.getState().refreshUnread()
+    await useInbox.getState().refreshList()
+    h.count.mockResolvedValue({ count: 1, latestId: 'cloud:retry', revision: 'after' })
+    h.list.mockRejectedValueOnce(new Error('temporary failure')).mockResolvedValue([{ id: 'cloud:retry', attachments: { claimed: true } }])
+    await useInbox.getState().refreshUnread()
+    await useInbox.getState().refreshUnread()
+    expect(useInbox.getState().messages[0].attachments?.claimed).toBe(true)
+  })
+
 })

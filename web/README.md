@@ -159,3 +159,5 @@ The check covers inbox entry, cloud read/claim/archive state across two isolated
 account separation and the absence of engine-only inbox calls. APIs and reward grants are fixtures;
 server SQL/authorization is covered by `microserver/brain-api/cloudInbox.test.ts` in the backend repository.
 Screenshots and the report are written to `outputs/inbox/`.
+
+The standalone Web distribution uses a compatibility account adapter for the same server inbox API, since it has no external plugin loader. Public Unit Web and native clients receive their provider from Forsion Extend.

@@ -37,14 +37,15 @@ async function main() {
   const preview = await startPreview(ROOT); await preview.ready()
   const stub = await startStubEngine({})
   const browser = await chromium.launch({ executablePath: executable(), headless: true })
-  const open = async (mobile) => {
+  const open = async (mobile, standalone = false) => {
     const ctx = await browser.newContext({ viewport: mobile ? { width: 390, height: 844 } : { width: 1280, height: 900 }, isMobile: mobile, hasTouch: mobile, locale: mobile ? 'zh-CN' : 'en-GB' }); contexts.push(ctx)
-    await ctx.addInitScript(({ credential, mobile }) => {
-      window.__FORSION_UNIT_PAGE__ = { instanceId: 'inbox-fixture', name: 'Forsion', version: '2.14.1', projection: 'public', inheritWebAccount: true, account: { apiBase: location.origin + '/api', loginPath: '/auth' }, capabilities: { amadeus: { adapter: 'forsion-cloud-v1', apiBase: location.origin + '/api' }, tangu: { adapter: 'forsion-cloud-v1', apiBase: location.origin + '/api', execution: 'fleet' } } }
-      window.__FORSION_PRODUCT_RUNTIME__ = { id: 'inbox-fixture', displayName: 'Forsion', defaultSpace: 'tangu', spaces: [], nativeFeatures: ['tangu', 'amadeus'], market: true, agentBackend: false }
+    await ctx.addInitScript(({ credential, mobile, standalone }) => {
+      if (!standalone) window.__FORSION_UNIT_PAGE__ = { instanceId: 'inbox-fixture', name: 'Forsion', version: '2.14.1', projection: 'public', inheritWebAccount: true, account: { apiBase: location.origin + '/api', loginPath: '/auth' }, capabilities: { amadeus: { adapter: 'forsion-cloud-v1', apiBase: location.origin + '/api' }, tangu: { adapter: 'forsion-cloud-v1', apiBase: location.origin + '/api', execution: 'fleet' } } }
+      window.__FORSION_PRODUCT_RUNTIME__ = { id: 'inbox-fixture', displayName: 'Forsion', defaultSpace: 'tangu', spaces: [], nativeFeatures: ['tangu', 'amadeus'], market: true, agentBackend: false, onboarding: false }
+      if (standalone) localStorage.setItem('forsion_token', credential)
       if (!localStorage.getItem('unit:inbox-fixture:account')) localStorage.setItem('unit:inbox-fixture:account', credential)
       localStorage.setItem('forsion_tangu_onboarding_done', '1'); localStorage.setItem('tangu_locale', mobile ? 'zh' : 'en'); localStorage.setItem('forsion_theme', mobile ? 'dark' : 'light'); localStorage.setItem('forsion_theme_lang', 'lovable')
-    }, { credential: token('a'), mobile })
+    }, { credential: token(standalone ? 'b' : 'a'), mobile, standalone })
     const fixture = async (route) => {
       const req = route.request(), u = new URL(req.url()), p = u.pathname.replace(/^\/api/, '')
       const account = req.headers().authorization === `Bearer ${token('b')}` ? 'b' : 'a'
@@ -67,17 +68,25 @@ async function main() {
       if (p.endsWith('/claim')) { const m = rows[account].find((m) => p.includes(m.origin_broadcast_id)); const alreadyClaimed = m.attachments.claimed; if (!alreadyClaimed) claims++; m.attachments.claimed = true; revision++; return json({ claimed: true, alreadyClaimed }) }
       if (p.startsWith('/agent/inbox')) { forbidden.push(p); return route.fulfill({ status: 404, body: '{}' }) }
       if (p === '/amadeus/vaults') return json({ vaults: [{ id: 'default', name: 'Fixture vault', lastChangeSeq: 1 }] })
+      if (p.endsWith('/file')) return route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ detail: 'Fixture file not found' }) })
       if (p.endsWith('/tree')) return json({ pages: [], folders: [], files: [], seq: 1 })
       if (p.endsWith('/asset-token')) return json({ token: 'fixture', ttlSec: 300 })
       if (/\/events$|\/stream$/.test(p)) return route.fulfill({ contentType: 'text/event-stream', body: ': fixture\n\n' })
       return route.fulfill({ response: await route.fetch({ url: stub.url + p + u.search }) })
     }
     await ctx.route('**/api/**', fixture); await ctx.route('**/unit/**', fixture)
-    const page = await ctx.newPage(); page.on('pageerror', (e) => errors.push(e.message)); page.on('console', (m) => { if (m.type() === 'error') fs.appendFileSync(path.join(OUT, 'console.log'), m.text() + '\n') })
+    // Real Unit documents permit signed plugin evaluation; standalone Web keeps its stricter policy.
+    if (!standalone) await ctx.route('**/*', async (route) => {
+      if (route.request().resourceType() !== 'document') return route.fallback()
+      const response = await route.fetch()
+      const html = (await response.text()).replace("script-src 'self' 'unsafe-inline'", "script-src 'self' 'unsafe-inline' 'unsafe-eval'")
+      return route.fulfill({ response, body: html })
+    })
+    const page = await ctx.newPage(); page.on('pageerror', (e) => errors.push(`${mobile ? 'mobile' : 'desktop'}/${standalone ? 'standalone' : 'Unit'}: ${e.stack}`)); page.on('console', (m) => { if (m.type() === 'error') fs.appendFileSync(path.join(OUT, 'console.log'), m.text() + '\n') })
     await page.goto(preview.url + `?ui=${mobile ? 'mobile' : 'desktop'}`, { waitUntil: 'domcontentloaded' }); await page.waitForSelector(mobile ? '.bmc-chrome' : '.rb', { timeout: 60_000 })
     return { page, mobile }
   }
-  const inbox = async ({ page, mobile }) => { if (mobile) { await page.locator('[data-chrome-action="spacesAll"]').click(); await page.locator('[data-sheet-item="space:inbox"]').click(); await page.waitForSelector('.mb-shell[data-space="inbox"]') } else await page.locator('[data-space-id="inbox"]').click() }
+  const inbox = async ({ page, mobile }) => { if (mobile) { await page.locator('.bmc-dock [data-space="inbox"]').click(); await page.waitForSelector('.mb-shell[data-space="inbox"]') } else await page.locator('[data-space-id="inbox"]').first().click() }
   const wake = ({ page }) => page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')))
   let desktop, mobile
   try {
@@ -91,8 +100,9 @@ async function main() {
     await desktop.page.reload({ waitUntil: 'domcontentloaded' }); await desktop.page.waitForSelector('.rb'); assert(rows.a[0].archived_at)
     await desktop.page.evaluate((credential) => localStorage.setItem('unit:inbox-fixture:account', credential), token('b')); await desktop.page.reload({ waitUntil: 'domcontentloaded' }); await desktop.page.waitForSelector('.rb'); await inbox(desktop)
     await desktop.page.getByText('Account B message', { exact: true }).first().waitFor(); assert.equal(await desktop.page.getByText('Web welcome', { exact: true }).count(), 0)
+    const standalone = await open(false, true); await inbox(standalone); await standalone.page.getByText('Account B message', { exact: true }).first().waitFor()
     assert.equal(forbidden.length, 0); assert.deepEqual(errors, [])
-    results.push({ ok: true, shells: ['desktop/en/light', 'mobile/zh/dark'], claims, calls, checks: ['Unit inbox entry', 'Extend provider', 'read state', 'cross-client claim', 'cross-client archive', 'reload', 'account separation', 'no engine-only inbox calls'] }); console.log(JSON.stringify(results, null, 2))
+    results.push({ ok: true, shells: ['desktop/en/light', 'mobile/zh/dark', 'standalone/en/light'], claims, calls, checks: ['Unit inbox entry', 'Extend provider', 'read state', 'cross-client claim', 'cross-client archive', 'reload', 'account separation', 'no engine-only inbox calls', 'standalone Web account adapter'] }); console.log(JSON.stringify(results, null, 2))
   } catch (e) {
     for (const [name, target] of [['desktop', desktop], ['mobile', mobile]]) if (target) { await target.page.screenshot({ path: path.join(OUT, `failure-${name}.png`) }); fs.writeFileSync(path.join(OUT, `failure-${name}.txt`), await target.page.locator('body').innerText()) }
     throw e

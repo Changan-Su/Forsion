@@ -158,7 +158,12 @@ export const useInbox = create<InboxState>((set, get) => ({
               action: { label: useApp.getState().tr('ntf.view'), run: () => setActiveSpace('inbox') },
             })
           }
-        } catch { /* 静默 */ }
+        } catch {
+          // Do not acknowledge a revision whose list failed: the next poll must retry it.
+          setBadge(r.count)
+          set({ unreadCount: r.count })
+          return
+        }
       }
       setBadge(r.count)
       set({ unreadCount: r.count })
