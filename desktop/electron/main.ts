@@ -22,6 +22,7 @@ import { startMiniAutoPanel } from './miniAutoPanel'
 import { createPluginSandbox, sandboxRequiredPlugins, type PluginSandboxUiSeed } from './pluginSandbox'
 import { sandboxSelf, startSandboxChild, sandboxForward, SANDBOX_SWITCHES } from './sandboxChild'
 import { MINI_WINDOW_LIMIT, VOICE_CALL_VIEW, miniEntityKey, normalizeMiniOpenOptions, normalizeMiniSessionContext, type MiniSessionContext, type MiniOpenOptions, type MiniOpenResult, type MainPanelTarget } from '../shared/miniPanel'
+import { miniSessionState, type MiniSessionEntry } from './miniSessionState'
 import { normalizeFloatingPanelOpenOptions, normalizeMainAction, type FloatingPanelOpenOptions } from '../shared/floatingPanel'
 import { normalizeUiAppearance, normalizeUiSync, UI_APPEARANCE_CHANNEL, UI_LOCALE_CHANNEL } from '../shared/uiSync'
 /**
@@ -2282,6 +2283,9 @@ const miniLayoutsPath = (): string => join(app.getPath('userData'), 'mini-window
 /** 读成功(或文件本来就没有)才往回写:读不出 / 解析不了 = 不知道里面有什么,这次运行只记在内存里,不拿这几条盖掉它(读失败 ≠ 空)。 */
 let miniLayoutsWritable = false
 let saveMiniLayoutsTimer: NodeJS.Timeout | null = null
+let miniSessionFile: ReturnType<typeof miniSessionState> | undefined
+let savedMiniSession: MiniSessionEntry[] = []
+let miniSessionRestored = false
 const isMiniRect = (r: unknown): r is Rect => !!r && typeof r === 'object'
   && (['x', 'y', 'width', 'height'] as const).every((k) => Number.isFinite((r as Record<string, unknown>)[k]))
   && (r as Rect).width > 0 && (r as Rect).height > 0
@@ -2419,18 +2423,18 @@ function openAutoMini(sessionId: string): void {
   loadRendererWith(win, { window: 'mini', transient: '1', sessionId })
 }
 
-function createMiniWindow(opts: MiniOpenOptions | undefined, key: string): MiniEntry {
+function createMiniWindow(opts: MiniOpenOptions | undefined, key: string, restored?: MiniSessionEntry): MiniEntry {
   const wa = screen.getPrimaryDisplay().workArea
   // 位置和大小按实体键各记各的;新实体用缺省大小。记住的大小也要放得进这块屏(四周留 24px):伸出工作区的卡片一挪就会被判成贴边、折起来
-  const remembered = miniLayouts.get(key)
+  const remembered = restored?.bounds ?? miniLayouts.get(key)
   const width = Math.min(remembered?.width ?? MINI_CARD_WIDTH, wa.width - 48), height = Math.min(remembered?.height ?? MINI_CARD_HEIGHT, wa.height - 48)
   // 藏起来的也占位:再叫出来时不能和新开的叠在一处
   const occupied = liveMinis().map(miniBounds)
   const back = remembered && { x: remembered.x, y: remembered.y, width, height }
-  const pos = back && mostlyOnScreen(back, screen.getAllDisplays().map((d) => d.workArea)) && !occupied.some((o) => rectsOverlap(o, back))
+  const pos = back && mostlyOnScreen(back, screen.getAllDisplays().map((d) => d.workArea)) && (restored || !occupied.some((o) => rectsOverlap(o, back)))
     ? back : stackPosition({ width, height }, wa, occupied)
   const id = `m${++miniSeq}`
-  const pinned = opts?.pin !== false
+  const pinned = restored?.pinned ?? (opts?.pin !== false)
   const win = new BrowserWindow({
     width, height,
     x: pos.x,
@@ -2444,7 +2448,7 @@ function createMiniWindow(opts: MiniOpenOptions | undefined, key: string): MiniE
     skipTaskbar: true,
     hasShadow: true,
     backgroundColor: '#00000000',
-    show: !QUIET_WINDOWS,
+    show: !QUIET_WINDOWS && restored?.visible !== false,
     webPreferences: satelliteWebPreferences(),
   })
   const m: MiniEntry = {
@@ -2458,7 +2462,7 @@ function createMiniWindow(opts: MiniOpenOptions | undefined, key: string): MiniE
   // width/height at fractional DPI. Restore the remembered CONTENT rect after
   // native creation, just as the resize path does, before the renderer paints.
   if (process.platform === 'win32') win.setContentBounds({ x: pos.x, y: pos.y, width, height })
-  if (QUIET_WINDOWS) win.showInactive()
+  if (QUIET_WINDOWS && restored?.visible !== false) win.showInactive()
   if (pinned) win.setAlwaysOnTop(true, 'floating')
   win.webContents.setWindowOpenHandler(openUrlHandler(win.webContents))
   hardenNav(win.webContents)
@@ -2505,6 +2509,22 @@ function createMiniWindow(opts: MiniOpenOptions | undefined, key: string): MiniE
   loadRendererWith(win, { window: 'mini', ...(opts?.sessionId ? { sessionId: opts.sessionId } : {}) })
   refreshTrayMenu()
   return m
+}
+
+function restoreMiniWindows(): void {
+  for (const entry of savedMiniSession) {
+    createMiniWindow(entry.target, miniEntityKey(entry.target), entry)
+  }
+  miniSessionRestored = true
+}
+
+function saveOpenMiniWindows(): void {
+  if (!miniSessionRestored) return // Early quit must not erase windows awaiting startup restoration.
+  miniSessionFile?.write(liveMinis().filter((m) => m.key !== VOICE_CALL_VIEW).map((m) => ({
+    target: normalizeMiniOpenOptions(m.target),
+    bounds: m.dock ? expandedBounds(miniBounds(m), m.dock.edge, m.dock.workArea) : miniBounds(m),
+    pinned: m.pinned, visible: m.win.isVisible(),
+  })))
 }
 
 // ══ 侧边拼接(App Dock):对话面板贴在别的 App 窗口旁边,像一个窗口那样一起动(跟随见 electron/appDock.ts)══
@@ -2950,6 +2970,8 @@ async function downloadMarketPackage(id: string, report: (phase: 'resolve' | 'do
 
 app.whenReady().then(async () => {
   loadMiniLayouts() // Mini 按实体键记的位置和大小:放在最前、同步读,任何窗口 / 快捷键能开 Mini 之前就读完
+  miniSessionFile = miniSessionState(join(app.getPath('userData'), 'mini-session.json'))
+  savedMiniSession = miniSessionFile.read()
   await registerStartupAppearance(isTrustedSender)
   const desktopPermissions = registerDesktopPermissions({
     isTrustedSender, computerUseAvailable: PRODUCT.agentBackend, returnToApp: showMainWindow,
@@ -4985,19 +5007,25 @@ app.whenReady().then(async () => {
     return r
   })
   // 渲染层报这扇 Mini 现在显示的是哪个实体(窗里换了 Space / 会话):改写实体键,之后再开同一个就叫出这扇。
-  // 只认 Space 目标、只认本来就是 Space 的那几扇:直开的视图(插件 / 语音通话)不会被改成别的,名额也就不会被绕过。
+  // Space 目标更新实体键；直开视图只更新同类型视图的当前参数，不能改换身份。语音通话不参与恢复。
   ipcMain.on('window:miniEntity', (e, raw: unknown) => {
     const m = isTrustedSender(e) ? miniBySender(e.sender) : undefined
     const target = normalizeMiniOpenOptions(raw)
-    if (!m || !target || target.view || m.key === VOICE_CALL_VIEW || m.key.startsWith('view:')) return
+    if (!m || !target || m.key === VOICE_CALL_VIEW) return
     // 报的是哪一代目标之后的样子:不是当前这一代(新目标刚发出、渲染层还没应用)就不认
     const gen = (raw as { gen?: unknown }).gen
     if (m.target && gen !== m.gen) return
+    if (m.target?.view) {
+      if (target.view?.type !== m.target.view.type) return
+      m.target = { ...m.target, params: target.params, view: { ...m.target.view, params: target.view.params } }
+      return
+    }
+    if (target.view || m.key.startsWith('view:')) return
     // 还在同一个 Space 里:打开时带的显式 key 留着(渲染层不知道它)
     const keep = m.target && !m.target.view && m.target.spaceId === target.spaceId ? m.target.key : undefined
-    const entity: MiniOpenOptions = { spaceId: target.spaceId, sessionId: target.sessionId, ...(keep ? { key: keep } : {}) }
+    const entity: MiniOpenOptions = { spaceId: target.spaceId, sessionId: target.sessionId, params: target.params, ...(keep ? { key: keep } : {}) }
     const key = miniEntityKey(entity)
-    if (key === m.key) return // 还是原来那个:留着打开时带的参数
+    if (key === m.key) { m.target = { ...m.target, ...entity }; return }
     m.key = key
     m.target = entity // 页面重载(崩溃自愈)回到现在显示的,而不是最初打开的那个
   })
@@ -5306,6 +5334,7 @@ app.whenReady().then(async () => {
   startupWindowGate = false
   hideMainOnLaunch = pendingSpaceWindows.length > 0 && !mainRequested
   createWindow()
+  if (!SANDBOX) restoreMiniWindows()
   if (SANDBOX) startSandboxChild(SANDBOX, { getWindow: () => mainWindow, quit: () => { isQuitting = true; app.quit() }, log: (m) => console.log(m) })
   // 恢复上次退出时的独立窗(位置/尺寸 + 各窗自恢复布局);之后再开排着的 Space 快捷方式窗 —— 上次没关的同一扇
   // 已经按原位置恢复了,createDetachedWindow 按 sp_<id> 去重,只是叫到前面。
@@ -5497,6 +5526,7 @@ app.on('before-quit', (e) => {
   saveDetachedState()
   for (const m of minis.values()) rememberMiniLayout(m) // 开着的 Mini 也记下(关窗事件在退出时不一定赶得上落盘)
   saveMiniLayouts()
+  saveOpenMiniWindows()
   void pluginSandbox?.dispose() // 沙箱跟着退(它那头也会因控制通道断开自己退)
   globalShortcut.unregisterAll() // 释放 mini 全局快捷键
   miniAutoPanel?.stop(); miniAutoPanel = null

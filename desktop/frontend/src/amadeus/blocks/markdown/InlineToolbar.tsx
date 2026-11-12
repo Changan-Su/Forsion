@@ -7,6 +7,7 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
 import { AlignCenter, AlignLeft, AlignRight, Languages, MessageSquareQuote } from 'lucide-react'
 import { SelectionBarActions, type SelectionBarAction } from '@lcl/components'
+import { ColorPalettePopover } from './ColorPalette'
 import { rectAnchor } from '@lcl/engine'
 import { OverlayAt } from '../../lib/clampMenu'
 import { registerMessages, useI18n } from '../../../i18n'
@@ -99,36 +100,6 @@ export type ToolbarAction =
   | 'alignCenter'
   | 'alignRight'
 
-// 调色板(参考 AFFiNE 命名色;十六进制,后续可换 LCL token)。'' = 清除该颜色。
-// 色板的色相沿用 AFFiNE **v1** 编辑器(--affine-text-highlight-*),但文字色为 Genesis 的
-// 浅色纸面略微压暗到 AA;否则橙/黄/绿/青/灰会在某些 skin 下掉到 3–4:1。品红/粉为产品扩展。
-// 落盘存字面亮色 hex(Obsidian 可渲染);暗色由 marks.ts 的 data-hl/data-hlc 语义名 + styles.css
-// 覆盖切换 —— 改这里的值必须同步 marks.ts 的 HL_BG_NAMES/HL_FG_NAMES 与 styles.css 暗色段。
-// ⚠️ `nameKey` / `labelKey` 存的是 i18n 键,不是文案 —— 模块作用域求值会把文案冻死在加载语言上。
-const TEXT_COLORS: Array<{ nameKey: string; v: string }> = [
-  { nameKey: 'itb.color.default', v: '' },
-  { nameKey: 'itb.color.red', v: '#c62222' },
-  { nameKey: 'itb.color.orange', v: '#b9450a' },
-  { nameKey: 'itb.color.yellow', v: '#8f6203' },
-  { nameKey: 'itb.color.green', v: '#117b38' },
-  { nameKey: 'itb.color.teal', v: '#06748f' },
-  { nameKey: 'itb.color.blue', v: '#2159d3' },
-  { nameKey: 'itb.color.purple', v: '#842ed3' },
-  { nameKey: 'itb.color.magenta', v: '#941555' },
-  { nameKey: 'itb.color.grey', v: '#6a6a6a' },
-]
-const BG_COLORS: Array<{ nameKey: string; v: string }> = [
-  { nameKey: 'itb.color.default', v: '' },
-  { nameKey: 'itb.color.red', v: '#fed5d5' },
-  { nameKey: 'itb.color.orange', v: '#fedfbb' },
-  { nameKey: 'itb.color.yellow', v: '#fef3a1' },
-  { nameKey: 'itb.color.green', v: '#e1fab1' },
-  { nameKey: 'itb.color.teal', v: '#adf8e9' },
-  { nameKey: 'itb.color.blue', v: '#cce2fe' },
-  { nameKey: 'itb.color.purple', v: '#edddff' },
-  { nameKey: 'itb.color.pink', v: '#ffcece' },
-  { nameKey: 'itb.color.grey', v: '#eaecef' },
-]
 /** 缺省 = 全部露出(老调用方不传 shape 时的形态)。 */
 const FULL_SHAPE: ToolbarShape = { turnInto: true, format: true, link: true, color: true, align: true }
 
@@ -223,7 +194,7 @@ export function InlineToolbar({
   // Enter / 空格触发(原生 click,detail = 0),子面板里 ↑↓ 移动;Esc 先关子面板,再关工具栏并把焦点还给编辑器。
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') {
+      if (e.key === 'Escape' && panel !== 'color') {
         e.preventDefault()
         e.stopPropagation()
         const root = rootRef.current
@@ -243,7 +214,7 @@ export function InlineToolbar({
   }, [onClose, onReturnFocus, panel])
 
   useEffect(() => {
-    if (!panel || !panelByKey.current) return
+    if (!panel || panel === 'color' || !panelByKey.current) return
     panelByKey.current = false
     rootRef.current?.querySelector<HTMLElement>('.itb-panel button')?.focus()
   }, [panel])
@@ -313,7 +284,7 @@ export function InlineToolbar({
     // ⚠️别改回「CSS transform: translate(-50%,-100%)」那套 —— pop-in 动画也动 transform,
     // 会把摆位覆盖掉 120ms:工具栏先出现在选区右下、动画结束才跳到文字上方(用户实报)。
     // 跟随(follow):锚点每帧现量;⋯ / AI ▾ / 转换为 / 颜色面板展开时 .itb-row 钉住不动,面板往远离选区的一侧长(data-grow)。
-    <OverlayAt className="inline-toolbar" x={left} y={bottom + 8} anchorTop={top - 8} prefer="above" center boundLeft={paneLeft} boundRight={paneRight} anchor={anchor} bounds={follow?.pane} keep=".itb-row" role="toolbar" aria-label={t('itb.aria')} data-testid="inline-toolbar" data-dir={enterDir} data-order={actionsFirst ? 'actions' : 'tools'} innerRef={(el) => { rootRef.current = el }} onKeyDown={onNav}>
+    <><OverlayAt className="inline-toolbar" x={left} y={bottom + 8} anchorTop={top - 8} prefer="above" center boundLeft={paneLeft} boundRight={paneRight} anchor={anchor} bounds={follow?.pane} keep=".itb-row" role="toolbar" aria-label={t('itb.aria')} data-testid="inline-toolbar" data-dir={enterDir} data-order={actionsFirst ? 'actions' : 'tools'} innerRef={(el) => { rootRef.current = el }} onKeyDown={onNav}>
       <div className="itb-row">
         {actionsFirst && actionZone && <>{actionZone}<span className="itb-sep" /></>}
         {ai && ai.items.length > 0 && (
@@ -396,50 +367,14 @@ export function InlineToolbar({
         </div>
       )}
 
-      {panel === 'color' && (
-        <div className="itb-panel itb-colors" role="menu" aria-label={t('itb.colorMenu')}>
-          <div className="itb-color-head">{t('itb.textColor')}</div>
-          <div className="itb-swatches">
-            {TEXT_COLORS.map((c) => (
-              <button
-                key={c.v || 'def'}
-                className="itb-swatch"
-                title={t(c.nameKey)}
-                role="menuitem"
-                tabIndex={-1}
-                aria-label={`${t('itb.textColor')}: ${t(c.nameKey)}`}
-                data-fg={c.v || 'default'}
-                {...act(() => {
-                  setPanel(null)
-                  onColor(c.v)
-                })}
-              >
-                <span className="itb-swatch-a" style={{ color: c.v || 'var(--text)' }}>A</span>
-              </button>
-            ))}
-          </div>
-          <div className="itb-color-head">{t('itb.bgColor')}</div>
-          <div className="itb-swatches">
-            {BG_COLORS.map((c) => (
-              <button
-                key={c.v || 'def'}
-                className="itb-swatch"
-                title={t(c.nameKey)}
-                role="menuitem"
-                tabIndex={-1}
-                aria-label={`${t('itb.bgColor')}: ${t(c.nameKey)}`}
-                data-bg={c.v || 'default'}
-                {...act(() => {
-                  setPanel(null)
-                  onBg(c.v)
-                })}
-              >
-                <span className="itb-swatch-bg" style={{ background: c.v || 'transparent' }} />
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
     </OverlayAt>
+      {panel === 'color' && <ColorPalettePopover
+        anchor={rootRef.current?.querySelector<HTMLElement>('[data-panel="color"]') ?? null}
+        fallback={{ x: left, y: bottom + 8 }} initial="text" text={fg} fill={bg}
+        onText={(value) => { setPanel(null); onColor(value) }}
+        onFill={(value) => { setPanel(null); onBg(value) }}
+        onClose={() => { setPanel(null); onReturnFocus?.() }}
+      />}
+    </>
   )
 }

@@ -167,6 +167,7 @@ describe('画布颜色(V-08,拍板 #9:存进 amadeus_canvas 顶层 cardColors,�
 
 describe('画布颜色(V-08)· 渲染收窄与元素写侧', () => {
   it('canvasColorCss 只认预设 1–6 与 #rrggbb;认不出的一律不渲染(原值不动)', () => {
+    expect(canvasColorCss('accent')).toBe('var(--signal)')
     expect(canvasColorCss('3')).toBe('var(--amx-cv-3)')
     expect(canvasColorCss('#12AB34')).toBe('#12AB34')
     for (const bad of ['0', '7', 'red', '#abc', '#12ab34;x:y', 1, null, '']) expect(canvasColorCss(bad)).toBeNull()

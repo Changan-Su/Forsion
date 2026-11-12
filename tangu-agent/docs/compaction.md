@@ -62,10 +62,18 @@ instructions = "always keep ticket ids and the failing test names"
 | 路径 | 环上的数从哪来 |
 |---|---|
 | 手动 `/compact` | 响应里的 `contextTokens`(摘要粗估 + 上次实测的固定头),客户端就地写进环;重开应用走 `GET /usage`,同一个函数 `sessionContextTokens`(`routes/sessions.ts`):检查点**整行覆盖到最后一行**时报这个粗估,否则报实测 |
-| run 内自动压缩 | 紧跟 `compacted` 的 `compaction_budget.afterTokens`(`changed:false` 不动),下一条 usage 用实测校正。live:估 13379 → 实测 12722 |
+| run 内自动压缩 | 提交阶段的 `compaction_budget.afterTokens`(`changed:false` 不动),下一条 usage 用实测校正。live:估 13379 → 实测 12722 |
 | run 收尾的惰性检查点 | 不动:它只盖 hydrate 窗口之外的老行,窗口内照样回放,上一条实测 prompt 仍是最好的估计。⚠️ 别把 `/usage` 的判据放宽成「检查点比 usage 新」—— 惰性检查点也满足,粗估会把 30 万报成 1 万 |
 
-`status` 事件:`compacting`(`reason: threshold|overflow`)→ `compacted`(`persisted` 是否已落检查点;`fallback:true` = 机械折叠)→ `compaction_budget`(前后 token);`compaction_skipped`(hook 否决);`context_over_budget`(压缩后仍超封顶、按真实窗口照发:`estTokens / budgetTokens / windowTokens`);`context_info` 带 `compactAt` / `compactionEnabled`。摘要调用的用量走 `phase: 'compaction'` 的 usage 事件(无 run 上下文的手动 / 惰性路径不上台账)。
+`status` 事件:`compacting`(`reason: idle|threshold|overflow`)→ `compacted`(`persisted` 是否已落检查点;`fallback:true` = 机械折叠),提交阶段另发 `compaction_budget`(前后 token);`compaction_skipped`(用户跳过或 hook 否决);`compaction_failed`(失败或中止);`context_over_budget`(压缩后仍超封顶、按真实窗口照发:`estTokens / budgetTokens / windowTokens`);`context_info` 带 `compactAt` / `compactionEnabled`。摘要调用的用量走 `phase: 'compaction'` 的 usage 事件(无 run 上下文的手动 / 惰性路径不上台账)。
+
+## 运行中提示与跳过（2026-11-11）
+
+自动压缩的 `status` 先发布并 flush `compacting`，再请求摘要模型。事件带 `operationId`、`reason: idle|threshold|overflow`、`skippable`；空闲触发还带 `idleMinutes`。客户端按 run + operation 更新同一提示，终态是 `compacted`、`compaction_skipped` 或 `compaction_failed`；重连重放不能把终态恢复成可点击的开始状态。`compaction_budget` 仍给出提交后的预算估计。
+
+`POST /agent/runs/:id/compaction/skip { operationId }` 验证 run 归属，只允许跳过还在生成的 idle 摘要。成功返回 `{ ok: true, operationId, status: "skipped" }`；同一操作重复请求幂等。已经进入提交阶段返回 `ok: false, reason: "already_settled"`（HTTP 200），过期 ID、非活动操作或强制压缩返回 HTTP 409。threshold / overflow 的输入预算压缩不可跳过，跳过 idle 后仍执行正常模型输入上限检查。
+
+摘要使用独立 AbortController 和上下文副本。跳过不停止主 run、不重发用户消息；只有赢得提交权的 operation 可以替换工作上下文和保存检查点。提供者忽略 abort 时，晚结果也没有写回权限；已发出的摘要请求可能产生用量。正常完成、失败、跳过只各有一个终态，停止整轮另用既有 abort 路由。
 
 ## 仪器
 

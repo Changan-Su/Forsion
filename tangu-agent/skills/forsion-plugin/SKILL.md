@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.108.0
+  version: 1.112.0
   author: Forsion
   category: Forsion
 ---
@@ -30,10 +30,12 @@ Read the matching `references/` file before using an API listed below or followi
 
 - [references/host-ui-mounts.md](references/host-ui-mounts.md): 可复用 UI 组件：ctx.ui.mountChatBox; 原生 Markdown 编辑器 ctx.ui.mountMarkdownEditor(`vault: true` 接当前库双链); 只读 Markdown ctx.ui.mountMarkdown; 原生悬浮目录 ctx.ui.mountFloatingToc; View modes: ctx.ui.setViewModes; Tooltips and motion tokens: ctx.ui.attachTooltip; Selection bar: ctx.ui.mountSelectionBar and registerSelectionAction scopes; Tool island: ctx.ui.mountToolIsland; Floats: ctx.ui.float; Host parts (dialogs, toolbar controls, menus, popovers, empty states, icons, view head, i18n, bare elements, failed mount card): ctx.ui.confirm / openDialog / mountControl / contextMenu / popover / mountEmptyState / mountWebCard / icon / setViewHead / mount, ctx.addStyle, ctx.i18n.define; Settings parts: ctx.ui.mountSettingsPage / mountSettingsItem; 白板层 ctx.ui.mountBoard / ctx.ui.boardToSvg; 仪表盘 ctx.dashboard; 原生多维表 ctx.table.mount
 - [references/tangu-host-apis.md](references/tangu-host-apis.md): 当前模型与当前 Space:ctx.tangu; Agent 状态:agentStatus / subscribeAgentStatus; Agent 名册:agents; 开新对话:startChat; 把对话挂进自己的视图:mountChat; 新对话输入区:mountComposer; 正文 AI:ctx.tangu.complete 与 registerSelectionAction; 翻译:ctx.tangu.translate; 行内补全:ctx.tangu.fim; Agent Desk 伴随面:ctx.desk; 摘要栏插件卡:ctx.summary; 自动化规则播种:ctx.automation; agent 自建 Space 的数据:section `ctx.agent`(今天没有 agent 在用)
+- [references/agent-settings.md](references/agent-settings.md): UI and engine `ctx.registerAgentSettings`; explicit read-only fields, secret configured flags, lifecycle revocation and the `read_plugin_settings` tool.
 - [references/plugin-skill-providers.md](references/plugin-skill-providers.md): engine `ctx.registerSkillProvider` for live external skills.
 - [references/plugin-model-providers.md](references/plugin-model-providers.md): engine `ctx.registerModelProvider` for native single-inference sources.
 - [references/mini-panel.md](references/mini-panel.md): a Space's small floating window (`mini` in `space.json`)
 - [references/bundle-mcp-hooks.md](references/bundle-mcp-hooks.md): stdio MCP servers and observe-only hooks a bundle declares in its manifest
+- [references/note-reading-renderers.md](references/note-reading-renderers.md): `ctx.registerNoteRenderer`; staged read-only rendering, immutable snapshots, hot update rollback and host-owned persistence.
 - [references/note-editor-surfaces.md](references/note-editor-surfaces.md): 块表面 ctx.app.getPage / mountBlocks / insertMarkdown; ctx.registerEditorExtension / registerSettingsView / loadData / saveData / watchFile
 - [references/store-sources.md](references/store-sources.md): 商店来源 `storeSources` 与 `forsion-store.json` 目录格式、四种包出处、Forsion Git 私有仓
 - [references/local-plugin-tasks.md](references/local-plugin-tasks.md): local plugin task APIs (Dispatch host branch) and recording model choices
@@ -1328,3 +1330,12 @@ The returned disposer removes only its own current registration. Disable, unload
 ### LCL View layout coordination
 
 All docked Views inherit side-by-side constrained geometry and interruptible drawer motion. Declare `layout: { minWidth, minHeight }` on a View only when it needs larger minima. Defaults are main 320×180, left 220×180, right 240×180 and bottom 240×140 logical CSS pixels; undersized workspaces scroll, without collapsing splits into tabs. Sidebar collapse keeps mounts alive. `mount(el, view)` exposes optional `getLayout()` and `onLayout(callback)` returning an unsubscribe function. Snapshots contain `width`, `height`, `visible`, `compact` (<480px), and `phase` (`transition`/`settled`). Defer expensive content refits until visible/settled; never reset document zoom/drafts on layout. The host revokes subscriptions on disposal; feature-detect these methods on older hosts. Space-native `newPage(target)` callbacks use `target.open(type, params)` to retain the originating split across awaits.
+
+Official account inbox: only the locked `forsion-extend` package may call `ctx.app.provideInboxChannel?.(channel)`.
+Use `cloud:` IDs and server-owned read/archive/delete/reward state; return a revision for changes that do not affect unread count.
+The host merges native engine letters and filters duplicate official broadcasts. Pass null on disposal; re-provide after account changes.
+See the plugin development manual for the full channel and legacy-state import contract.
+
+### 2026-11-12 host UI additions
+
+Selection tools may expose `menu: { title, open(sel, anchor) }`; the host draws a separate arrow and passes the real anchor. Keep `run` as the primary action; dispose child menus and capture selection data before opening. Board mounts/updates accept `roundness: sharp | round` for new shapes only; never rewrite existing scene corners on load. Details and compatibility: references/host-ui-mounts.md.

@@ -377,6 +377,7 @@ ctx.ui?.mountRecord?.(el, { path, rowId, dateCol, readOnly })
 同一份东西换一种看法（对话 / 画布、文档 / 画布、转写 / 笔记 / 纪要、日 / 周 / 3 日 / 月）全应用一个摆法：胶囊在**视图头行的最左**，头行 32px、在纸卡里、不随正文滚；视图自己的标题排在胶囊后面。一个视图最多一颗，2–4 种；超过 4 种的用标签（数据库视图）。筛选、换来源的胶囊长相一样，但不放进这个位置。方案与取舍见仓根 `docs/ToBeImproved/视图模式切换标准方案_2026-10-19`。
 
 - 原生视图：`useViewModes`（`@lcl/engine`）登记，再在头行最左放 `<ViewModeSwitch leafId={leaf.id} />`；没有自己顶栏的视图整行用 `<ViewHead leafId>{按钮}</ViewHead>`。已有顶栏的（Amadeus `.amx-toolbar`、日历 `.amx-cal-bar`）给那一行加 `container: lcl-viewhead / inline-size`，窄时的退化才认得这一行的宽度。
+- 主区 View 的头行会在模式胶囊左侧自动提供前进/后退，只影响这个 View；插件无需再画历史按钮。没有使用宿主头行的 View 由宿主补导航行，手机也可用；历史在本次运行内随 Space 保存，关闭 View 时释放。
 
 ```js
 useViewModes(leaf.id, { modes, value, onChange })
@@ -564,3 +565,20 @@ el.innerHTML = '<h2>本周</h2><button>新建</button> <input placeholder="搜�
 - 实现在 `desktop/frontend/src/styles/base.css` 末尾的 `plugin-view-base` 一段，只用公开 token（`pluginContract.test.ts` 逐个核对）。仪器：`desktop/scripts/plugin-base-shots.cjs`（真 Electron，装 `scripts/fixtures/plugin-base-sample`，明 / 暗拍图并量计算样式）。
 
 **挂载失败卡**：`mount` 同步抛错，或返回的 Promise 被 reject 时，视图里显示一张卡：「插件视图加载失败」、报错的第一行（完整堆栈在控制台）和「重试」。重试只重新运行这一个视图的 `mount`，不重载插件，同一插件的其它视图和面板照常运行。所以 `mount` 要能再跑一次：抛错之前挂上的监听和定时器宿主收不到，你自己收好，或者放到可能出错的步骤之后再挂。改了代码照旧走插件重载或沙箱热重载。
+
+### Amadeus 阅读表面
+
+`UnifiedPage` 的 `onReadingMode` 提供 `{ on, busy, toggle }`，笔记 View 用 `ReadingModeButton` 展示阅读/编辑入口；`initialReading` 与 `onReadingChange` 对接 View 参数。只有显式接收该控制接口的笔记 View 登记阅读命令，收件箱和 Muse 的只读预览不占用活动笔记的命令。`ReadingSurface` 只消费不可变快照，由宿主保留编辑器与保存状态。插件替换契约见[笔记阅读渲染器](./note-renderers.md)。
+
+
+### 划线条分离菜单与形状边角（2026-11-12）
+
+`mountSelectionBar` 的工具可选 `menu: { title, open(sel, anchor) }`。主体仍执行 `run(sel)`；独立箭头执行 `menu.open` 并传入真实按钮元素，可直接用于 `ctx.ui.popover(anchor, ...)`，不要搜索宿主DOM取锚点。主体上按右箭头也打开菜单，Enter/Space可操作两颗按钮；菜单先消费Esc，之后Esc才关闭划线条。`title`由插件按当前语言提供。旧宿主忽略menu，因此保留可执行的主体动作或提供自己的菜单入口。菜单消费选区时须在打开时保存该选区数据；停用/卸载时通过dispose清理菜单，不对旧选区回写。
+
+```js
+{ id: 'underline', title: t('underline'), icon: 'underline',
+  run: (sel) => underline(sel),
+  menu: { title: t('colors'), open: (sel, anchor) => openColors(sel, anchor) } }
+```
+
+`mountBoard` / `handle.update` 可选 `roundness: 'sharp' | 'round'`，映射引擎下一笔的 `currentItemRoundness`。省略时保留原默认；此设置不改写scene中已有元素，插件要修改已有矩形须保留完整元素信息并显式更新scene。不要在加载旧scene时统一改圆角。

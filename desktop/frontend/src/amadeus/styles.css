@@ -1318,6 +1318,12 @@ body.amx-marquee-active * {
   text-underline-offset: 2px;
 }
 .am-app .milkdown .ProseMirror a:hover { text-decoration-color: currentColor; }
+/* Explicit underline is continuous through descenders; link decorations keep their own typography. */
+.am-app .milkdown .ProseMirror u {
+  text-decoration-skip-ink: none;
+  text-underline-offset: 0.18em;
+  text-decoration-thickness: 1px;
+}
 .am-app .milkdown .ProseMirror img {
   max-width: 100%;
   border-radius: var(--radius-sm);
@@ -1704,15 +1710,15 @@ body.amx-marquee-active * {
    2026-08-13 第4振:此前误取 v2 design token 整片过暗)。落盘是字面亮色 hex(Obsidian 可渲染),
    in-app 暗色下按 data-hl/data-hlc 语义名覆盖(!important 压过内联 style)。
    色值与 InlineToolbar/marks.ts 同源;品红/粉为本产品扩展,取同族明度自配。 */
-[data-mode='light'] .am-app span[data-hlc='red'], .am-app[data-mode='light'] span[data-hlc='red'] { color: #b61f1f !important; }
-[data-mode='light'] .am-app span[data-hlc='orange'], .am-app[data-mode='light'] span[data-hlc='orange'] { color: #a13c08 !important; }
-[data-mode='light'] .am-app span[data-hlc='yellow'], .am-app[data-mode='light'] span[data-hlc='yellow'] { color: #7d5603 !important; }
-[data-mode='light'] .am-app span[data-hlc='green'], .am-app[data-mode='light'] span[data-hlc='green'] { color: #0e6b31 !important; }
-[data-mode='light'] .am-app span[data-hlc='teal'], .am-app[data-mode='light'] span[data-hlc='teal'] { color: #05657e !important; }
-[data-mode='light'] .am-app span[data-hlc='blue'], .am-app[data-mode='light'] span[data-hlc='blue'] { color: #1f54c8 !important; }
-[data-mode='light'] .am-app span[data-hlc='purple'], .am-app[data-mode='light'] span[data-hlc='purple'] { color: #7c2bc7 !important; }
-[data-mode='light'] .am-app span[data-hlc='magenta'], .am-app[data-mode='light'] span[data-hlc='magenta'] { color: #941555 !important; }
-[data-mode='light'] .am-app span[data-hlc='grey'], .am-app[data-mode='light'] span[data-hlc='grey'] { color: #5c5c5c !important; }
+[data-mode='light'] .am-app span[data-hlc='red'], .am-app[data-mode='light'] span[data-hlc='red'], :root:not(.dark) .amx-color-popover span[data-hlc='red'] { color: #b61f1f !important; }
+[data-mode='light'] .am-app span[data-hlc='orange'], .am-app[data-mode='light'] span[data-hlc='orange'], :root:not(.dark) .amx-color-popover span[data-hlc='orange'] { color: #a13c08 !important; }
+[data-mode='light'] .am-app span[data-hlc='yellow'], .am-app[data-mode='light'] span[data-hlc='yellow'], :root:not(.dark) .amx-color-popover span[data-hlc='yellow'] { color: #7d5603 !important; }
+[data-mode='light'] .am-app span[data-hlc='green'], .am-app[data-mode='light'] span[data-hlc='green'], :root:not(.dark) .amx-color-popover span[data-hlc='green'] { color: #0e6b31 !important; }
+[data-mode='light'] .am-app span[data-hlc='teal'], .am-app[data-mode='light'] span[data-hlc='teal'], :root:not(.dark) .amx-color-popover span[data-hlc='teal'] { color: #05657e !important; }
+[data-mode='light'] .am-app span[data-hlc='blue'], .am-app[data-mode='light'] span[data-hlc='blue'], :root:not(.dark) .amx-color-popover span[data-hlc='blue'] { color: #1f54c8 !important; }
+[data-mode='light'] .am-app span[data-hlc='purple'], .am-app[data-mode='light'] span[data-hlc='purple'], :root:not(.dark) .amx-color-popover span[data-hlc='purple'] { color: #7c2bc7 !important; }
+[data-mode='light'] .am-app span[data-hlc='magenta'], .am-app[data-mode='light'] span[data-hlc='magenta'], :root:not(.dark) .amx-color-popover span[data-hlc='magenta'] { color: #941555 !important; }
+[data-mode='light'] .am-app span[data-hlc='grey'], .am-app[data-mode='light'] span[data-hlc='grey'], :root:not(.dark) .amx-color-popover span[data-hlc='grey'] { color: #5c5c5c !important; }
 [data-mode='dark'] .am-app mark[data-hl='red'], .am-app[data-mode='dark'] mark[data-hl='red'] { background: #6c2727 !important; }
 [data-mode='dark'] .am-app mark[data-hl='orange'], .am-app[data-mode='dark'] mark[data-hl='orange'] { background: #703a15 !important; }
 [data-mode='dark'] .am-app mark[data-hl='yellow'], .am-app[data-mode='dark'] mark[data-hl='yellow'] { background: #6a540f !important; }
@@ -1723,15 +1729,15 @@ body.amx-marquee-active * {
 [data-mode='dark'] .am-app mark[data-hl='magenta'], .am-app[data-mode='dark'] mark[data-hl='magenta'] { background: #7f5d5d !important; }
 [data-mode='dark'] .am-app mark[data-hl='grey'], .am-app[data-mode='dark'] mark[data-hl='grey'] { background: #40434a !important; }
 [data-mode='dark'] .am-app mark[data-hl] { color: inherit; }
-[data-mode='dark'] .am-app span[data-hlc='red'], .am-app[data-mode='dark'] span[data-hlc='red'] { color: #f98d8d !important; }
-[data-mode='dark'] .am-app span[data-hlc='orange'], .am-app[data-mode='dark'] span[data-hlc='orange'] { color: #fca863 !important; }
-[data-mode='dark'] .am-app span[data-hlc='yellow'], .am-app[data-mode='dark'] span[data-hlc='yellow'] { color: #fbd644 !important; }
-[data-mode='dark'] .am-app span[data-hlc='green'], .am-app[data-mode='dark'] span[data-hlc='green'] { color: #6ee599 !important; }
-[data-mode='dark'] .am-app span[data-hlc='teal'], .am-app[data-mode='dark'] span[data-hlc='teal'] { color: #57ddcc !important; }
-[data-mode='dark'] .am-app span[data-hlc='blue'], .am-app[data-mode='dark'] span[data-hlc='blue'] { color: #80b7fb !important; }
-[data-mode='dark'] .am-app span[data-hlc='purple'], .am-app[data-mode='dark'] span[data-hlc='purple'] { color: #cd9dfd !important; }
-[data-mode='dark'] .am-app span[data-hlc='magenta'], .am-app[data-mode='dark'] span[data-hlc='magenta'] { color: #f98dbb !important; }
-[data-mode='dark'] .am-app span[data-hlc='grey'], .am-app[data-mode='dark'] span[data-hlc='grey'] { color: #a8a8ad !important; }
+[data-mode='dark'] .am-app span[data-hlc='red'], .am-app[data-mode='dark'] span[data-hlc='red'], :root.dark .amx-color-popover span[data-hlc='red'] { color: #f98d8d !important; }
+[data-mode='dark'] .am-app span[data-hlc='orange'], .am-app[data-mode='dark'] span[data-hlc='orange'], :root.dark .amx-color-popover span[data-hlc='orange'] { color: #fca863 !important; }
+[data-mode='dark'] .am-app span[data-hlc='yellow'], .am-app[data-mode='dark'] span[data-hlc='yellow'], :root.dark .amx-color-popover span[data-hlc='yellow'] { color: #fbd644 !important; }
+[data-mode='dark'] .am-app span[data-hlc='green'], .am-app[data-mode='dark'] span[data-hlc='green'], :root.dark .amx-color-popover span[data-hlc='green'] { color: #6ee599 !important; }
+[data-mode='dark'] .am-app span[data-hlc='teal'], .am-app[data-mode='dark'] span[data-hlc='teal'], :root.dark .amx-color-popover span[data-hlc='teal'] { color: #57ddcc !important; }
+[data-mode='dark'] .am-app span[data-hlc='blue'], .am-app[data-mode='dark'] span[data-hlc='blue'], :root.dark .amx-color-popover span[data-hlc='blue'] { color: #80b7fb !important; }
+[data-mode='dark'] .am-app span[data-hlc='purple'], .am-app[data-mode='dark'] span[data-hlc='purple'], :root.dark .amx-color-popover span[data-hlc='purple'] { color: #cd9dfd !important; }
+[data-mode='dark'] .am-app span[data-hlc='magenta'], .am-app[data-mode='dark'] span[data-hlc='magenta'], :root.dark .amx-color-popover span[data-hlc='magenta'] { color: #f98dbb !important; }
+[data-mode='dark'] .am-app span[data-hlc='grey'], .am-app[data-mode='dark'] span[data-hlc='grey'], :root.dark .amx-color-popover span[data-hlc='grey'] { color: #a8a8ad !important; }
 .am-app .slash-scroll {
   display: flex;
   flex-direction: column;
@@ -2892,6 +2898,8 @@ body.amx-marquee-active * {
 .math-src-hidden { display: none; }
 /* 双链实况(见 blocks/markdown/wikilink.ts):离行时隐藏 [[ ]] 源码、就地渲染成链接;在行时露源码可编辑。 */
 .wikilink-src-hidden { display: none; }
+/* Empty boundary: geometry for the caret without adding DOM text. */
+.amx-inline-caret::after { content: "\200b"; }
 /* Obsidian 行内语法实况(见 blocks/markdown/obsidianInline.ts):`==高亮==` / `%%注释%%` 是纯文本 + 装饰。
    光标不在该处时定界符 / 整条注释藏起来;高亮底与无色 <mark> 同一档(上方 .ProseMirror mark),不另起色板。 */
 .amx-obs-hidden { display: none; }
@@ -2980,10 +2988,10 @@ body.amx-marquee-active * {
    ponytail: 要文档内连续编号得自己数(每块独立渲染),等有人要再做。 */
 .am-app .katex .eqn-num { display: none; }
 
-/* 编辑本行时的实况预览:行内 $..$ 在源码上方弹浮层卡片、块级 $$..$$ 在源码下方居中渲染(见 mathLivePreview.ts)。 */
-.math-preview--inline { position: relative; display: inline-block; width: 0; height: 0; vertical-align: baseline; }
+/* Current inline formula preview has its own row after the source paragraph. */
+.math-preview--inline { display: block; max-width: 100%; margin-top: 8px; pointer-events: none; }
 .math-preview--inline .math-preview-inner {
-  position: absolute; bottom: 100%; left: 0; margin-bottom: 4px; z-index: 20;
+  display: inline-block; max-width: 100%; overflow-x: auto; vertical-align: top;
   padding: 4px 10px; border-radius: var(--radius-sm, 6px); white-space: nowrap; pointer-events: none;
   background: var(--bg-card, var(--bg)); border: var(--border-width, 1px) solid var(--border);
   box-shadow: var(--card-shadow, 0 6px 22px rgba(0, 0, 0, 0.12));
@@ -3994,7 +4002,7 @@ body.amx-marquee-active * {
    色板按明暗各一套(用户内容色,与行内高亮色同一种写法);底色一律与 `--bg` 调和,两种模式自动成立。
    ⚠️ 描边类颜色规则一律带 `:not(.is-sel)`:与 `.is-sel` 同特异性,靠源码顺序定胜负的话选中态会被颜色盖掉
    (DESIGN §7.2)。不加 box-shadow(check:shadowcontract)。 */
-.am-app {
+.am-app, .amx-color-popover {
   --amx-cv-1: #e03e3e;
   --amx-cv-2: #e8780f;
   --amx-cv-3: #cf9a00;
@@ -4002,7 +4010,7 @@ body.amx-marquee-active * {
   --amx-cv-5: #0e9fa6;
   --amx-cv-6: #7b5ce5;
 }
-[data-mode='dark'] .am-app, .am-app[data-mode='dark'] {
+[data-mode='dark'] .am-app, .am-app[data-mode='dark'], :root.dark .amx-color-popover {
   --amx-cv-1: #f06a6a;
   --amx-cv-2: #f29a4a;
   --amx-cv-3: #e8c547;
@@ -4593,3 +4601,16 @@ body.amx-marquee-active * {
    这里只管 ⋯ 展开的那一块:插件动作可以带图标,一行 = 图标 + 文字。放文件末尾(DESIGN §7)。 */
 .am-app .itb-menu-item.itb-more-item { display: flex; align-items: center; gap: 8px; }
 .am-app .itb-menu-item.itb-more-item > span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Approved list numbering form and plus picker: query is UI state only. */
+.am-app .list-number-form { padding: 6px 8px; display: grid; gap: 6px; }
+.am-app .list-number-form label { display: grid; gap: 4px; color: var(--text-muted); font-size: var(--ui-font-caption); }
+.am-app .list-number-form input { width: 100%; box-sizing: border-box; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-input); color: var(--text); font: inherit; padding: 5px 8px; }
+.am-app .list-number-form > div { display: flex; justify-content: flex-end; gap: 6px; }
+.am-app .list-number-form [role='status'] { color: var(--text-muted); font-size: var(--ui-font-caption); }
+.am-app .slash-query { box-sizing: border-box; margin: 4px 8px 8px; width: calc(100% - 16px); padding: 7px 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); background: var(--bg-input); font: inherit; }
+@media (max-width: 600px) {
+  .am-app .slash-menu--picker { left: 12px !important; right: 12px; top: auto !important; bottom: max(12px, env(safe-area-inset-bottom)); width: auto; min-height: 0 !important; max-height: 70dvh; }
+}
+.am-app .math-source-command { color: var(--accent-ink); }
+.am-app .math-source-delimiter { color: var(--text-muted); }

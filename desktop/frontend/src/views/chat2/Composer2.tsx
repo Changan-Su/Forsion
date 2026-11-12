@@ -1,4 +1,5 @@
 import { useModelPickerPreferences } from '../../modelPickerPreferences'
+import { replyText } from './replyText'
 /**
  * Composer2 —— 输入区「完全重写」为编辑式新视觉(悬浮圆角卡 + 圆形发送 + 下方药丸 chips),
  * 逻辑与旧 MessageInput 等价、零功能损失:slash 命令 / @ 提及 / 附件(选/粘/拖)/ 云沙箱工作区文件 /
@@ -644,7 +645,7 @@ export const Composer2: React.FC<{
     const sid = activeSessionId
     const msgs = sid ? st.messagesBySession[sid] || [] : []
     const last = [...msgs].reverse().find((m) => m.role === 'assistant')
-    const text = (last?.content || '').trim()
+    const text = last ? replyText(last, window.tangu?.productsRegister ? ['suggest', 'task', 'creation'] : undefined).trim() : ''
     if (!text) { st.toast(t('input.slash.nothingToCopy'), true); return }
     try {
       await navigator.clipboard.writeText(text)

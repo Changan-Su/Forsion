@@ -69,6 +69,7 @@ import { manageAutomationProvider } from './builtin/manageAutomation.js';
 import { transcribeAudioProvider } from './builtin/transcribeAudio.js';
 import { viewVideoProvider } from './builtin/viewVideo.js';
 import { uiCommandsProvider } from './builtin/uiCommands.js';
+import { pluginSettingsProvider } from './builtin/pluginSettings.js';
 import { phoneToolsProvider } from './builtin/phoneTools.js';
 import { pluginSandboxProvider } from './builtin/pluginSandbox.js';
 import { reviewLoadoutProvider } from './builtin/reviewLoadout.js';
@@ -209,6 +210,7 @@ registerToolProvider(sketchProvider); // GUI 限定(ctx.client 门禁,CLI/TUI �
 registerToolProvider(transcribeAudioProvider); // host-only:transcribe_audio 经桌面桥(desktop-bridge.json)调主进程 ASR;无桥文件不可见(append 末尾,保前缀缓存)
 registerToolProvider(viewVideoProvider); // host-only:view_video 用本机 ffmpeg 抽帧「看」视频(联络表+单帧两档);无 ffmpeg 不可见(append 末尾,保前缀缓存)
 registerToolProvider(uiCommandsProvider); // GUI 限定(ctx.client + 客户端上报目录双闸,CLI/TUI/自动化不注册):读写界面设置 + 派发渲染端命令(append 末尾,保前缀缓存)
+registerToolProvider(pluginSettingsProvider); // Declared read-only plugin fields, scoped to the active UI or engine.
 registerToolProvider(teamSayProvider); // 团队成员随时向主聊天发言(append 末尾,保前缀缓存)
 registerToolProvider(browserTabsProvider); // host-only:browser_tabs 看/读用户自己 Chrome 里开着的标签(远程调试接管;append 末尾,保前缀缓存)
 registerToolProvider(museWakeProvider); // 仅 Muse 周期(ctx.muse,子代理除外):set_next_wake 按作息跳过心跳省额度(append 末尾;普通 run 不可见,快照不变)

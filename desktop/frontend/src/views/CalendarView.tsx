@@ -857,7 +857,7 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, weekSt
     shadow: HTMLElement | null // 原位置留的淡影(复制时是原件本身的样子)
     dyMin: number
     moved: boolean
-    target: { iso: string; topMin: number } | null // move 落点:目标日 + 吸附后起始分钟
+    target: { iso: string; topMin: number | null } | null // move 落点:目标日 + 吸附后起始分钟
     last?: ReactPointerEvent
   } | null>(null)
   const makeRef = useRef<{ pid: number; zone: 'time' | 'all'; col: number; min: number; cur: { col: number; min: number }; x0: number; y0: number; moved: boolean } | null>(null)
@@ -1054,6 +1054,30 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, weekSt
         d.shadow = shadow
       }
       const p = locate(e, d.grabOffY) // 减掉抓握点 = 块顶在哪
+      const sc = wrap.current
+      const allCell = sc.querySelector<HTMLElement>(`.amx-cal-allday2[data-date="${iso(days[p.col])}"]`)
+      const allBox = allCell?.getBoundingClientRect(), scBox = sc.getBoundingClientRect()
+      const inAllDay = allBox && e.clientX >= scBox.left && e.clientX <= scBox.right && e.clientY >= allBox.top && e.clientY <= allBox.bottom
+      // Reuse the all-day draft preview; its position must include the sticky row's scroll offset.
+      const preview = makeEl.current
+      if (inAllDay) {
+        d.target = { iso: iso(days[p.col]), topMin: null }
+        d.el.style.opacity = '0'
+        if (preview) {
+          preview.style.display = 'block'
+          preview.style.zIndex = 'var(--z-view-float, 20)'
+          preview.style.left = `${p.col * colw + 4}px`
+          preview.style.width = `${colw - 8}px`
+          preview.style.top = `${sc.scrollTop + HEAD_H + 14 + 3}px`
+          preview.style.height = '20px'
+          preview.textContent = `${d.ev.title} · ${t('calview.allDay')}`
+        }
+        const start = days[p.col], span = Math.max(0, diffDays(startOfDay(d.ev.end ?? d.ev.start), startOfDay(d.ev.start)))
+        onGesture?.({ ...d.ev, raw: eventValue(start, span ? addDays(start, span) : null, true) })
+        return
+      }
+      d.el.style.opacity = ''
+      if (preview) { preview.style.display = 'none'; preview.style.zIndex = '' }
       const topMin = Math.max(0, Math.min(24 * 60 - Math.min(d.durMin, 24 * 60), snap15(p.raw)))
       const sameMin = topMin === snap15(d.min0) && p.col === d.col0 // 没离开原来那一格:原样(别把 10:07 吸成 10:00)
       const top = sameMin ? d.min0 : topMin
@@ -1103,6 +1127,8 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, weekSt
     }
     onGesture?.(null)
     d.el.classList.remove('dragging')
+    d.el.style.opacity = ''
+    if (makeEl.current) { makeEl.current.style.display = 'none'; makeEl.current.style.zIndex = '' }
     if (d.mode === 'move') {
       d.el.style.transform = ''
       d.shadow?.remove()
@@ -1111,15 +1137,17 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, weekSt
         if (!d.moved) onPick(ev.key, rectOf(e))
         return
       }
-      const newStart = addMinutes(startOfDay(toLocalDate(d.target.iso)), d.target.topMin)
-      const newEnd = ev.end ? new Date(newStart.getTime() + d.msDur) : null
+      const toAllDay = d.target.topMin === null
+      const newStart = addMinutes(startOfDay(toLocalDate(d.target.iso)), d.target.topMin ?? 0)
+      const span = Math.max(0, diffDays(startOfDay(ev.end ?? ev.start), startOfDay(ev.start)))
+      const newEnd = toAllDay ? (span ? addDays(newStart, span) : null) : ev.end ? new Date(newStart.getTime() + d.msDur) : null
       if (d.tEl) d.tEl.textContent = d.t0
       if (d.dup) {
-        const value = eventValue(newStart, newEnd, ev.allDay)
+        const value = eventValue(newStart, newEnd, toAllDay)
         void cloneCalendarEvent(ev, value)
         return
       }
-      commitTime(ev, newStart, newEnd) // 跨日+改时刻,保留时长
+      commitTime(ev, newStart, newEnd, toAllDay) // 跨日+改时刻保留时长；拖到全天去掉时刻
       return
     }
     d.el.style.top = `${d.top0}px`
@@ -1147,6 +1175,8 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, weekSt
     onGesture?.(null)
     d.el.classList.remove('dragging')
     d.el.style.transform = ''
+    d.el.style.opacity = ''
+    if (makeEl.current) { makeEl.current.style.display = 'none'; makeEl.current.style.zIndex = '' }
     d.el.style.top = `${d.top0}px` // 还原成渲染时的原位;清空的话 React 值没变不会补回,块就丢了定位和高度
     d.el.style.height = `${d.h0}px`
     d.shadow?.remove()
@@ -1163,7 +1193,7 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, weekSt
       const r = sc.getBoundingClientRect()
       const x = d.last.clientX, y = d.last.clientY
       const dx = x < r.left + 24 ? -12 : x > r.right - 24 ? 12 : 0
-      const dy = y < r.top + bodyTop + 24 ? -12 : y > r.bottom - 24 ? 12 : 0
+      const dy = d.target?.topMin === null ? 0 : y < r.top + bodyTop + 24 ? -12 : y > r.bottom - 24 ? 12 : 0
       if (dx || dy) { sc.scrollBy(dx, dy); moveRef.current(d.last) }
     }, 32)
     window.addEventListener('blur', cancel)

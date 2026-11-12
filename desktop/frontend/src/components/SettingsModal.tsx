@@ -2323,7 +2323,7 @@ export const SettingsModal: React.FC<{
                 )}
 
                 {tab === 'forsion' && activeSub.startsWith('fx:') && cloudViews.filter((o) => cloudViewKey(o) === activeSub).map((o) => (
-                  <PluginSettingsView key={activeSub} pluginId={o.pluginId} def={o.item} bare />
+                  <PluginSettingsView key={activeSub} pluginId={o.pluginId} def={o.item} bare anchor={activeSub === initialTarget.sub ? initialTarget.anchor : undefined} />
                 ))}
 
                 {tab === 'sync' && activeSub === 's-remote' && <RemoteSyncSection />}

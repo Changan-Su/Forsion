@@ -341,6 +341,10 @@ export function createHttpStateStore(cfg: HttpStateStoreConfig): StateStore {
         id: m.id, content: m.content, modelId: m.modelId, attachments: m.attachments,
       });
     },
+    async hasImageDelivery(_userId, sessionId, delivery) {
+      const result = await reqJson<{ saved: boolean }>('POST', `/sessions/${encodeURIComponent(sessionId)}/image-delivery`, tokenForSession(sessionId), delivery);
+      return result?.saved === true;
+    },
     async finalizeAssistantMessage(m: FinalizeMessageInput) {
       await reqJson('POST', `/sessions/${encodeURIComponent(m.sessionId)}/assistant-message`, tokenForSession(m.sessionId), {
         messageId: m.messageId, modelId: m.modelId, content: m.content, reasoning: m.reasoning,

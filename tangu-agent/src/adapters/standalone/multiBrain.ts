@@ -274,6 +274,9 @@ export function createMultiBrain(httpBrain: CloudBrainServices, registry: Provid
       },
     },
     images: {
+      listPending: httpBrain.images?.listPending,
+      recover: httpBrain.images?.recover,
+      acknowledge: httpBrain.images?.acknowledge,
       edit: async (req: ImageEditRequest) => {
         for (const p of registry.list()) {
           const slash = req.model.startsWith(p.providerId + '/');

@@ -21,6 +21,24 @@ async function setup() {
 afterEach(() => vi.unstubAllGlobals())
 
 describe('path changes while editors are loading', () => {
+  it('cancelled navigation cannot hydrate a late response into a reused View', async () => {
+    const m = await setup()
+    const store = m.pageStoreFor('cancelled-nav')
+    await store.getState().loadPage('current.md')
+    let resolve!: (p: LoadedPage) => void
+    m.loadPage.mockImplementationOnce(() => new Promise(r => { resolve = r }))
+    const controller = new AbortController()
+    const pending = store.getState().loadPage('old.md', controller.signal)
+    const failed = expect(pending).rejects.toMatchObject({ name: 'AbortError' })
+    await vi.waitFor(() => expect(resolve).toBeTypeOf('function'))
+    controller.abort()
+    resolve(page('late old content'))
+    await failed
+    expect(store.getState().activePage).toBe('current.md')
+    expect(store.getState().blocks.b1.content).toBe('current')
+    expect(store.getState().pendingPage).toBeNull()
+  })
+
   it('completing a move cannot steal navigation to another note during the IPC wait', async () => {
     const m = await setup()
     const store = m.pageStoreFor('moving-tab')

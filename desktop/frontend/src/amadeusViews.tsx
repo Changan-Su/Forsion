@@ -22,6 +22,7 @@ import { useVisualTheme as useTheme } from './stores/themeStore'
 import { activePageScope, cascadeFdAfterRename, claimTitleFocus, disposePageScope, flushAllScopes, MAIN_SCOPE, onNotePathGone, pageStoreFor, PageScopeCtx, remapScopePaths, setActivePageScope, useActivePageScope, usePageScope, usePageStore, useScopedPageStore } from '@amadeus/store/pageStore'
 import { retireUnifiedPath, insertFilesForPath, pathHit, unifiedInsertMarkdown } from '@amadeus/unified/lifecycle'
 import { treeRefBlocks } from '@amadeus/unified/treeRefDrop'
+import { ReadingModeButton, type ReadingModeControl } from '@amadeus/unified/ReadingSurface'
 import { canExportPdf, canRevealInFileManager } from '@amadeus/lib/hostCaps'
 import { noteOwnership } from '@amadeus/lib/noteOwnership'
 import { canPageHistory } from '@amadeus/lib/hostCaps'
@@ -70,7 +71,7 @@ import { fdDirOf, isNoteMd } from '@amadeus/lib/fd'
 import { useSectionOpen } from '@amadeus/lib/sectionOpen'
 import { folderPadLeft, rowPadLeft } from '@amadeus/lib/treeIndent'
 import { compile, parsePageSource } from '@amadeus-shared/compiler'
-import { recordNav, useWorkspace, activeMainPanel, Skeleton, zoomOf, UI_MODE, startOpenDrag, inSingleColumnShell } from '@lcl/engine'
+import { recordNav, useWorkspace, useSpaceStore, activeMainPanel, Skeleton, zoomOf, UI_MODE, startOpenDrag, inSingleColumnShell } from '@lcl/engine'
 import { useNoteOutline } from '@amadeus/lib/activeNote'
 import { isCoarsePointer } from './touch'
 import type { ViewProps } from '@lcl/engine'
@@ -324,20 +325,22 @@ usePageStore.subscribe((state, prev) => {
   // 放进 microtask 里再问 activeMainPanel(),用户手快切到另一半屏时这条历史就记到隔壁去了,
   // 后退时也会把笔记退进隔壁(Codex 复审)。
   const originScope = activePageScope()
+  const originSpace = useSpaceStore.getState().activeSpaceId
   queueMicrotask(() => {
+    if (useSpaceStore.getState().activeSpaceId !== originSpace) return
     const api = useWorkspace.getState().api
     const am = api ? activeMainPanel(api) : null
     const leafId = am && ((am.params ?? {}) as { __type?: string }).__type === 'amadeus-editor' && am.id === originScope ? am.id : originScope
-    recordNav(leafId, `amadeus:${p}`, () => {
+    recordNav(leafId, `amadeus:${p}`, (context) => {
       const w = useWorkspace.getState()
       // ⚠️ 用跨端的 leafById,别用 w.api?.getPanel —— 移动单列壳 api 恒 null,那样写恒 return,
       //    安卓返回键消耗一条历史却什么都不发生(2026-08-05 修)。
       const cur = leafId ? w.leafById(leafId) : null
-      if (!cur) return
+      if (!cur) throw new Error('The note view is no longer available')
       if (cur.type !== 'amadeus-editor') w.navigateLeaf(leafId!, 'amadeus-editor', { notePath: p })
       // 对着**这条历史所属的那个面板**装,不能用 usePageStore.getState()(那是「当前活动面板」)——
       // 用户点后退时焦点完全可能已经在另外半屏,笔记就会退到隔壁去。
-      void pageStoreFor(leafId!).getState().loadPage(p)
+      return pageStoreFor(leafId!).getState().loadPage(p, context?.signal)
     })
   })
   useRecentViews.getState().record({ key: `note:${p}`, kind: 'note', id: p, title: baseName(p) })
@@ -2469,6 +2472,7 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
   /** v4 统一页交出来的画布模式(移动端专用:顶栏不渲染 = 那颗「文档 | 画布」胶囊没插槽可投)。
    *  v3 笔记不挂 UnifiedPage → 恒 null → 底栏「⋯」里自然没有这一项。 */
   const [canvasSeg, setCanvasSeg] = useState<{ on: boolean; toggle: () => void; exportCanvas?: () => void } | null>(null)
+  const [readingMode, setReadingMode] = useState<ReadingModeControl | null>(null)
   /** v4 统一页交出来的撤销 / 重做(G2-05:移动端胶囊的两颗键;v4 不设 activePage,pageStore 的 undo 够不着它)。 */
   const unifiedHistRef = useRef<UnifiedHistory | null>(null)
   /** 本 leaf 的 v4 实例的文件写口(G1-02):拖入 / 上传直接交给它,不按路径全局找 —— 同篇双开时那会找到另一个标签。 */
@@ -2824,6 +2828,7 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
   // 拖入文件 → 按 Tangu 笔记设置存放(attachments/同目录/固定夹)→ 预览开则插 ![[base]],否则插 [名](相对路径)。
   const onDrop = async (e: RDragEvent<HTMLDivElement>): Promise<void> => {
     setDragging(false) // ⚠️必须在任何 early return 之前:落个不认识的东西也得把虚线框收掉
+    if (readingMode?.on || readingMode?.busy) { e.preventDefault(); return }
     // 树行拖源对一切叶子(含图片/PDF/.db 附件)都打 kind:'note' —— 按真实类型分流:
     // .md → [[链接]];非笔记 → ![[嵌入]](与 OS 文件拖入 importToPage 的语义一致,评审 P1)。
     const treeRefs = treeRefBlocks(e.dataTransfer)
@@ -2852,6 +2857,7 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
     await importToPage(files, page) // 存到配置的附件位置 + 插入嵌入/链接(本地/云端/web 统一;失败与超限走 toast)
   }
   const onDragOver = (e: RDragEvent<HTMLDivElement>): void => {
+    if (readingMode?.on || readingMode?.busy) return
     const types = Array.from(e.dataTransfer?.types ?? [])
     // 只认 REF_MIME(笔记/会话引用),不吃 PATHS_MIME:工作区文件的绝对路径写进笔记没有意义。
     const refDrag = types.includes(REF_MIME)
@@ -2879,6 +2885,7 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
   // 粘贴图片(Cmd/Ctrl+V 截图)→ 存 .amadeus/ 并按页相对路径嵌入。标题/重命名输入框放行,
   // 某块已自行处理(defaultPrevented)也放行;正文块粘贴图片才拦。
   const onPaste = (e: RClipboardEvent<HTMLDivElement>): void => {
+    if (readingMode?.on || readingMode?.busy) return
     if (e.defaultPrevented) return
     if ((e.target as HTMLElement).closest('input, textarea, .t2s-rename')) return
     const imgs = Array.from(e.clipboardData?.items ?? [])
@@ -2900,7 +2907,7 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
       {/* 与 Chat View 同一份 LCL FloatingToc。只给文档模式:源码没有可导航标题,画布有自己的空间导航;
           mini / coarse pointer 则把稀缺横向空间留给正文。根就是本 leaf 的滚动 EditorScope,分屏互不串页。 */}
       {barPath && mode !== 'source' && !canvasSeg?.on && !leaf.params.miniSurface && !isCoarsePointer() && (
-        <NoteFloatingToc host={printHostRef} label={t('amxv.floatingToc')} scanTrigger={barPath} />
+        <NoteFloatingToc host={printHostRef} label={t('amxv.floatingToc')} scanTrigger={`${barPath}:${readingMode?.on ?? false}`} />
       )}
       {/* ⚠️ 上传用的隐藏 input **必须住在顶栏外面**:移动端整条顶栏不渲染,而底栏胶囊的「上传」
           仍旧 uploadInputRef.current?.click() —— 留在顶栏里 = 手机上 ref 恒 null,上传静默失效。 */}
@@ -2929,6 +2936,7 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
           {/* 「文档 | 画布」胶囊(用户 2026-08-17 拍板:跟路径/分享/置顶同一行)。状态在 UnifiedPage,
               经 uiOverlay 交出来 —— 与旁边那颗可视/源码的路子一致。标记在 CanvasModeSeg(harness 共用)。 */}
           <span className={SEG_SLOT} />
+          {readingMode && <ReadingModeButton control={readingMode} />}
           {window.amadeusCollab && <ShareStatus path={barPath} refreshKey={shareVer} onOpen={(x, y) => setShareCard({ x, y })} />}
           {/* 置顶图钉:写 amadeusPrefs(每 vault localStorage),侧边栏「置顶」分区同步点亮。 */}
           <button
@@ -2991,6 +2999,9 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
       )}
       {noteMenu && barPath && (
         <OverlayAt className="ctx-menu" x={noteMenu.x} y={noteMenu.y} onClick={(e) => e.stopPropagation()}>
+          {readingMode && <button disabled={readingMode.busy} onClick={() => { setNoteMenu(null); readingMode.toggle() }}>
+            {readingMode.on ? <Pencil size={13} /> : <BookOpen size={13} />} {t(readingMode.on ? 'reading.edit' : 'reading.mode')}
+          </button>}
           {pageEntries.length > 0 && <><PageStyleMenuItems entries={pageEntries} /><div className="ctx-separator" /></>}
           <button data-note-mode onClick={() => { setNoteMenu(null); useUiOverlay.getState().toggleEditorMode(leaf.id) }}>
             {mode === 'source' ? <Eye size={13} /> : <Code2 size={13} />} {mode === 'source' ? t('amxv.toVisual') : t('amxv.toSource')}
@@ -3014,6 +3025,10 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
       {shareCard && barPath && (
         <ShareCard path={barPath} anchor={shareCard} onClose={() => { setShareCard(null); setShareVer((v) => v + 1) }} />
       )}
+      {isCoarsePointer() && readingMode?.on && <div className="amx-toolbar amx-vhead amx-reading-mobile-head">
+        <span>{t('reading.mode')}</span>
+        <ReadingModeButton control={readingMode} />
+      </div>}
       {pluginOwned && notePath ? (
         /* 归插件管的文件、此刻没有插件接着它:只占位,不挂任何编辑器(见 pluginOwned)。 */
         <div className="amx-welcome" data-plugin-owned-file={notePath}>
@@ -3030,6 +3045,9 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
           compact={!!leaf.params.miniSurface}
           key={`${routeRoot}\u0000${notePath}${lockOn ? '\u0000locked' : ''}`}
           readOnly={lockOn}
+          initialReading={leaf.params.noteReading === true}
+          onReadingMode={setReadingMode}
+          onReadingChange={(noteReading) => leaf.setParams({ ...leaf.params, noteReading })}
           onUnlock={lockOn ? toggleLock : undefined}
           path={notePath}
           initial={unifiedRoute.initial}
@@ -3115,7 +3133,7 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
         这些必须做它的**兄弟**(mb-view 是 flex 列)才不会跟着正文滚。
         ⚠️ 门里**没有** `mode !== 'source'`:顶栏在移动端整行隐掉后,「切回可视编辑」只剩这条胶囊
         的「⋯」一个出口,源码模式下再把胶囊也撤了 = 用户永远回不去(只能靠命令面板)。 */}
-    {isCoarsePointer() && barPath && !loadingNote && (
+    {isCoarsePointer() && barPath && !loadingNote && !readingMode?.on && (
       <AmxMobileBar
         sourceMode={mode === 'source'}
         canvas={canvasSeg}
@@ -3127,6 +3145,7 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
         indent={canvasSeg ? (dir) => { unifiedHistRef.current?.indent?.(dir) } : null}
         onNeedFocus={() => { if (activePage) focusBody(myStore) }}
         actions={[
+          ...(readingMode ? [{ id: 'reading', icon: <BookOpen size={16} />, label: t('reading.mode'), run: readingMode.toggle }] : []),
           { id: 'mode', icon: mode === 'source' ? <Eye size={16} /> : <Code2 size={16} />, label: mode === 'source' ? t('amxv.toVisual') : t('amxv.toSource'), run: () => useUiOverlay.getState().toggleEditorMode(leaf.id) },
           // ⚠️ 门是 barPath 不是 activePage:v4 不设 activePage(见 barPath 注释),按 activePage 判
           // 这一条在每篇 v4 笔记上都会整条消失 —— 而隐藏 input 与它的 onChange 都认 unified 路。

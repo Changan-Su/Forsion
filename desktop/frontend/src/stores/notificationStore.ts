@@ -87,8 +87,8 @@ export function eventDefaultOn(event: string): boolean {
 }
 
 const MAX_VISIBLE = 4
-/** 停留时长(ms);0 = 常驻。 */
-const DURATION: Record<NotifyLevel, number> = { success: 3200, info: 5000, warning: 8000, error: 0 }
+/** 常驻由 sticky 决定；显式 sticky:false 的错误也必须有有限停留时长。 */
+const DURATION: Record<NotifyLevel, number> = { success: 3200, info: 5000, warning: 8000, error: 10_000 }
 const customDuration = (ms: unknown): number | undefined => (typeof ms === 'number' && Number.isFinite(ms) && ms > 0 ? Math.min(ms, 120_000) : undefined)
 const durationOf = (n: Pick<AppNotification, 'level' | 'durationMs'>): number => n.durationMs ?? DURATION[n.level]
 
@@ -186,7 +186,7 @@ export const useNotifications = create<NtfState>((set, get) => {
           const visible = st.items.some((n) => n.id === found.id)
           const upd: AppNotification = {
             ...found, text, title: title ?? found.title, level, count: input.settle ? 1 : found.count + 1, settle: input.settle,
-            createdAt: Date.now(), sticky: sticky || found.sticky, action: 'action' in input ? input.action : found.action, // 显式给了(含 undefined)就换,没给才沿用
+            createdAt: Date.now(), sticky: input.sticky ?? (input.settle || level !== found.level ? sticky : found.sticky), action: 'action' in input ? input.action : found.action, // 显式给了(含 undefined)就换,没给才沿用
             durationMs: durationMs ?? found.durationMs, onClose: input.onClose ?? found.onClose,
           }
           set((s) => ({

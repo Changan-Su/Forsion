@@ -1,14 +1,6 @@
-/**
- * 左上角前进/后退的 per-tab 契约(真 Chromium + 真 Dockview + 真 navStore,harness.html?dock)。
- *
- * 用户实报(2026-08-17):「前进后退控制的是当前 focus 的 view 的切换记录,A→B→C 回退到 B 再前进
- * 可以到 C,和其他 tabs 的 view 无关。现在有时候会失效,有时候会控制别的 tabs。」
- *
- * 这条只可能在 DOM 接线层看见:栈本身是 per-leaf 的(navStore 单测已绿),病在**箭头打谁**。
- * 2026-10-30 用户实报:分栏后每组左上角都重复一套前进后退 + 左栏折叠钮。现在全窗只有最左上那组有
- * 一套,作用于当前聚焦的主区 tab;右组的历史靠它走,所以这里钉「点这一套,动的是聚焦的那组」。
- *
- * 跑:npm run check:nav   (5173 没起会自起 vite,跑完自收;CHROMIUM_EXE 可覆盖)
+/** Per-View navigation wiring: real Chromium + Dockview + navStore.
+ * Each View owns arrows inside its content; the sidebar toggle remains in the first tab group.
+ * Run npm run check:nav. HARNESS_URL may target an isolated Vite server.
  */
 const fs = require('fs')
 const os = require('os')
@@ -55,23 +47,23 @@ const openTab = (page, labels) => page.evaluate(async (ls) => {
   return id
 }, labels)
 
-/** 组内当前页(读 DOM,不信 store 自证)。主区组认标签栏上的 ＋,箭头现在只有一组有。 */
-const shown = (page) => page.$$eval('.dv-groupview', (gs) => gs
-  .filter((g) => g.querySelector('.dv-new-tab'))
-  .map((g) => [...g.querySelectorAll('.navv')].filter((e) => e.getBoundingClientRect().width > 0).map((e) => e.dataset.label).join(',')))
-
-/** 每个主区组各自的「箭头 / 折叠钮」数,按屏幕从左到右排。 */
-const prefixes = (page) => page.$$eval('.dv-groupview', (gs) => gs
-  .filter((g) => g.querySelector('.dv-new-tab'))
+/** Dockview portals content outside group DOM; match visible View rectangles to group columns. */
+const shown = (page) => page.$$eval('.navv', els => els.filter(el => el.getBoundingClientRect().width > 0).map(el => el.dataset.label))
+const prefixes = (page) => page.$$eval('.dv-groupview', gs => gs
+  .filter(g => g.querySelector('.dv-new-tab'))
   .sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left)
-  .map((g) => [g.querySelectorAll('.dv-nav-btn').length, g.querySelectorAll('.dv-edge-toggle').length]))
+  .map(g => {
+    const rect = g.getBoundingClientRect()
+    const navs = [...document.querySelectorAll('.lcl-viewnav')].filter(nav => {
+      const r = nav.getBoundingClientRect()
+      return r.width > 0 && r.left >= rect.left && r.left < rect.right
+    })
+    return [navs.length * 2, g.querySelectorAll('.dv-edge-toggle').length]
+  }))
 
-/** 点全窗那一套后退/前进。按钮是灰的(disabled)本身就是一种失败症状 —— 返回 false
- *  让断言去报,别在这儿 30s 超时把后面的断言全带走。 */
-async function arrow(page, dir) {
-  const btns = await page.$$('.dv-nav-btn')
-  const btn = btns[dir === 'back' ? 0 : 1]
-  if (!btn || await btn.isDisabled()) return false
+async function arrow(page, dir, id) {
+  const btn = page.locator(`[data-view-nav="${id}"] [data-press="${dir}"]`)
+  if (!await btn.count() || await btn.isDisabled()) return false
   await btn.click()
   await page.waitForTimeout(250)
   return true
@@ -106,7 +98,7 @@ async function main() {
     )
 
     // ── 在 B 里后退:只动 B ────────────────────────────────────────────────
-    await arrow(page, 'back')
+    await arrow(page, 'back', tabB)
     let labels = await page.evaluate(() => window.__dock.nav.labels())
     check(
       '2 在 B 里后退 → B 回到 B1,A 纹丝不动(仍 A3)',
@@ -117,14 +109,14 @@ async function main() {
     // ── 切到 A:后退走 A 自己的栈,前进能回 A3 ───────────────────────────────
     await page.evaluate((id) => window.__dock.nav.activate(id), tabA)
     await page.waitForTimeout(200)
-    await arrow(page, 'back')
+    await arrow(page, 'back', tabA)
     labels = await page.evaluate(() => window.__dock.nav.labels())
     check('3 切到 A 后退 → A 到 A2(B 仍 B1)', labels[tabA] === 'A2' && labels[tabB] === 'B1', JSON.stringify({ A: labels[tabA], B: labels[tabB] }))
-    await arrow(page, 'forward')
+    await arrow(page, 'forward', tabA)
     labels = await page.evaluate(() => window.__dock.nav.labels())
     check('4 再前进 → A 回到 A3(A→B→C 退到 B 还能前进到 C)', labels[tabA] === 'A3', JSON.stringify({ A: labels[tabA] }))
 
-    // ── 分屏:全窗一套箭头,只在最左上那组,作用于聚焦的那组 ────────────────────
+    // ── 分屏:每个 View 都有自己的箭头 ──────────────────────────────────
     const tabC = await page.evaluate(async () => {
       const d = window.__dock
       const id = d.nav.split()
@@ -134,23 +126,25 @@ async function main() {
     await page.waitForTimeout(300)
     const groupsSeen = await shown(page)
     check('5 分屏成两个主区组(左 A / 右 C)', groupsSeen.length === 2, JSON.stringify(groupsSeen))
-    const twoGroups = JSON.stringify([[2, 1], [0, 0]])
-    check('⚠️5b 分屏后只有最左组有前进后退和折叠钮(修复前:每组各一套)', JSON.stringify(await prefixes(page)) === twoGroups, JSON.stringify(await prefixes(page)))
+    const twoGroups = JSON.stringify([[2, 1], [2, 0]])
+    check('5b 两个 View 各有箭头，左栏折叠钮仍只有一份', JSON.stringify(await prefixes(page)) === twoGroups, JSON.stringify(await prefixes(page)))
 
     // 焦点此刻在右组(刚分出来的):点这一套 → 动右组的 C,左组的 A 不动。点击本身不许把焦点抢到左组。
-    const hit6 = await arrow(page, 'back')
+    await page.evaluate((id) => window.__dock.nav.activate(id), tabA)
+    const hit6 = await arrow(page, 'back', tabC)
     labels = await page.evaluate(() => window.__dock.nav.labels())
     check(
-      '⚠️6 聚焦右组时点箭头 → 动右组的 tab(C→C1),左组不受影响(仍 A3)',
+      '6 左侧有焦点时点击右 View 后退，只改变右侧',
       hit6 && labels[tabC] === 'C1' && labels[tabA] === 'A3',
       JSON.stringify({ A: labels[tabA], C: labels[tabC], 按钮可点: hit6 }),
     )
     await page.evaluate((id) => window.__dock.nav.activate(id), tabA)
     await page.waitForTimeout(200)
-    const hit7 = await arrow(page, 'back')
+    await page.evaluate((id) => window.__dock.nav.activate(id), tabC)
+    const hit7 = await arrow(page, 'back', tabA)
     labels = await page.evaluate(() => window.__dock.nav.labels())
     check(
-      '⚠️7 聚焦左组时点箭头 → 动左组的 tab(A→A2),右组不受影响(仍 C1)',
+      '7 右侧有焦点时点击左 View 后退，只改变左侧',
       hit7 && labels[tabA] === 'A2' && labels[tabC] === 'C1',
       JSON.stringify({ A: labels[tabA], C: labels[tabC], 按钮可点: hit7 }),
     )
@@ -158,7 +152,7 @@ async function main() {
     // 组被拖到另一边:tab 集合没变,前缀也得跟着换到新的最左组。
     await page.evaluate(([from, to]) => window.__dock.nav.moveGroupRightOf(from, to), [tabA, tabC])
     await page.waitForTimeout(300)
-    check('⚠️7b 左右两组对调 → 那一套跟到新的最左组', JSON.stringify(await prefixes(page)) === twoGroups, JSON.stringify(await prefixes(page)))
+    check('7b 对调两组后，箭头仍归各自 View，折叠钮在最左', JSON.stringify(await prefixes(page)) === twoGroups, JSON.stringify(await prefixes(page)))
 
     // ── 8:同一个 tab 里**就地**换文件(pdfPath a→b)必须惊动 mainTabs ──────────────────
     //    导航历史与「最近使用」两条订阅都只在 mainTabs 引用变化时才回头看当前面板;此前
@@ -183,6 +177,21 @@ async function main() {
       JSON.stringify(inplace) + '(修复前:fired=0 → 历史一条都记不上)',
     )
 
+    check('9 标签栏不再出现历史箭头', await page.locator('.dv-nav-btn').count() === 0)
+    for (const custom of [false, true]) {
+      const id = await page.evaluate(custom => {
+        const d = window.__dock
+        const id = d.open('nav-headed', { custom, label: 'Head 1' }, true)
+        d.nav.visit(id, 'Head 1'); d.nav.visit(id, 'Head 2')
+        return id
+      }, custom)
+      await page.waitForTimeout(100)
+      const nav = page.locator(`[data-view-nav="${id}"]`)
+      check(`10 ${custom ? '自有头行模式胶囊' : 'ViewHead'}只出现一套箭头`, await nav.count() === 1 && await nav.evaluate(el => !!el.closest('.lcl-viewhead') && !el.closest('.lcl-viewnav-fallback')))
+      check(`11 ${custom ? '自有头行' : 'ViewHead'}后退可用`, await arrow(page, 'back', id))
+    }
+
+    if (process.env.NAV_SHOT) await page.screenshot({ path: process.env.NAV_SHOT })
     const bad = results.filter((r) => !r.ok)
     console.log(`\n${results.length - bad.length}/${results.length} 通过`)
     process.exitCode = bad.length ? 1 : 0

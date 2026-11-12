@@ -45,7 +45,7 @@ async function open(browser) {
   await p.goto(`${URL}?upage&upane&useed=${encodeURIComponent(SEED)}`, { waitUntil: 'domcontentloaded', timeout: 120000 })
   await p.waitForSelector(PM, { timeout: 120000 })
   await p.evaluate(() => {
-    window.__upage.pageStore.setState({ pages: ['Unified.md', 'notes/Imaginary Time.md'], files: ['docs/project_book (1).pdf'] })
+    window.__upage.pageStore.setState({ vaultRoot: '/tmp/link-menu-vault', pages: ['Unified.md', 'notes/Imaginary Time.md'], files: ['docs/project_book (1).pdf'] })
     const v = window.__upage.probe.view(); v.dispatch(v.state.tr.setMeta('link-menu-check', 1))
     // 观测位:系统菜单有没有被拦(捕获期挂、下一拍读 defaultPrevented)、打开事件、桥调用、剪贴板。
     window.__lm = { ctx: [], opened: [], bridge: [], clip: [] }
@@ -88,6 +88,17 @@ async function main() {
     record('M2 文件链接右键 → 多「用系统程序打开」;复制的是库内路径',
       a.includes('system') && a.includes('newtab') && st.clip[st.clip.length - 1] === 'docs/project_book (1).pdf' && !(await menuOpen(p)),
       `${JSON.stringify(a)} clip=${JSON.stringify(st.clip)}`)
+
+    await rclick(p, 'project_book')
+    const vaultRoot = await p.evaluate(() => window.__upage.pageStore.getState().vaultRoot)
+    if (process.env.SHOT_DIR) {
+      fs.mkdirSync(process.env.SHOT_DIR, { recursive: true })
+      await p.screenshot({ path: path.join(process.env.SHOT_DIR, 'copy-path-menu.png') })
+    }
+    await pick(p, 'copyabsolutepath')
+    st = await p.evaluate(() => window.__lm)
+    record('M2b 复制绝对路径包含智库根,仍保留单独的相对路径入口',
+      st.clip.at(-1) === `${vaultRoot.replace(/\/$/, '')}/docs/project_book (1).pdf`, JSON.stringify(st.clip))
 
     // M3
     await rclick(p, 'project_book')

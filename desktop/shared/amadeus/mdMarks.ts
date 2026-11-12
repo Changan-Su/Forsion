@@ -67,6 +67,16 @@ const HEADING_RE = /^ {0,3}(#{1,6})\s+(.*\S)\s*$/
 const MAX_SUB_DEPTH = 2
 const indentOf = (s: string): number => { let n = 0; for (const c of s) { if (c === ' ') n++; else if (c === '\t') n += 4; else break } return n }
 const TASK_RE = /^(\s*)[-*+]\s+\[([ xX])\]\s+(.*)$/
+/** Quotes/callouts are containers, not part of the task marker. Keep their exact prefix for writes. */
+function quoteParts(raw: string): { body: string; prefix: number; depth: number } {
+  let body = raw, depth = 0
+  for (;;) {
+    const quote = /^ {0,3}>[ \t]?/.exec(body)
+    if (!quote) return { body, prefix: raw.length - body.length, depth }
+    body = body.slice(quote[0].length)
+    depth++
+  }
+}
 /** 开/闭围栏:整串栅栏 + 其后的 info string。⚠️ 必须捕获**长度** —— 四反引号开的块可以合法地
  *  包住三反引号(CommonMark:闭围栏字符相同且不短于开围栏、且不带 info),只认固定三个会被内部
  *  的三反引号提前收口,后面的代码示例就漏成了真标记(Codex 对抗评审实测复现)。 */
@@ -117,9 +127,11 @@ export function withDue(raw: string, next: string): string | null {
 
 /** 勾/取消勾这一行的 GFM 勾选框。不是任务行 = null。 */
 export function withChecked(raw: string, checked: boolean): string | null {
-  const m = /^(\s*[-*+]\s+\[)[ xX](\]\s)/.exec(raw)
+  const { body, prefix } = quoteParts(raw)
+  const m = /^(\s*[-*+]\s+\[)[ xX](\]\s)/.exec(body)
   if (!m) return null
-  return raw.slice(0, m[1].length) + (checked ? 'x' : ' ') + raw.slice(m[1].length + 1)
+  const at = prefix + m[1].length
+  return raw.slice(0, at) + (checked ? 'x' : ' ') + raw.slice(at + 1)
 }
 
 /**
@@ -191,6 +203,8 @@ export function parseMdMarks(text: string, path: string, title: string): MdMark[
   const out: MdMark[] = []
   let heading = ''
   let fence: string | null = null
+  let fenceDepth = 0
+  let quoteDepth = 0
   const lines = text.split(/\r?\n/)
   // 同名行计数。⚠️ **每一行都要数**(围栏行、围栏内、标题、空行一律算) —— 主进程回写是按
   // 「清洗文本的第 occ 条同文行」在磁盘文件里找的,那边只会跳过 frontmatter 与注释(= stripForIndex
@@ -208,15 +222,19 @@ export function parseMdMarks(text: string, path: string, title: string): MdMark[
     const raw = lines[i]
     const occ = seen.get(raw) ?? 0
     seen.set(raw, occ + 1)
-    const f = FENCE_RE.exec(raw)
+    const { body, depth } = quoteParts(raw)
+    // A quote ending also ends its fence, but quote-looking text inside an outer fence remains code.
+    if (fence !== null && depth < fenceDepth) fence = null
+    if (fence === null && depth !== quoteDepth) { chain = []; quoteDepth = depth }
+    const f = FENCE_RE.exec(body)
     if (f) {
       // 收口三条件:同种栅栏(``` 不该被 ~~~ 关掉)、不短于开围栏、且不带 info string。
-      if (fence === null) fence = f[1]
-      else if (f[1][0] === fence[0] && f[1].length >= fence.length && !f[2].trim()) fence = null
+      if (fence === null) { fence = f[1]; fenceDepth = depth }
+      else if (depth === fenceDepth && f[1][0] === fence[0] && f[1].length >= fence.length && !f[2].trim()) fence = null
       continue
     }
     if (fence !== null) continue
-    const h = HEADING_RE.exec(raw)
+    const h = HEADING_RE.exec(body)
     if (h) {
       chain = []
       const m = extractMarks(h[2])
@@ -225,7 +243,7 @@ export function parseMdMarks(text: string, path: string, title: string): MdMark[
       heading = m ? m.rest : h[2]
       continue
     }
-    const t = TASK_RE.exec(raw)
+    const t = TASK_RE.exec(body)
     if (t) {
       const m = extractMarks(t[3])
       const indent = indentOf(t[1])
@@ -238,8 +256,8 @@ export function parseMdMarks(text: string, path: string, title: string): MdMark[
       } else if (m && push(m, m.rest, true, t[2].toLowerCase() === 'x', i + 1, raw, occ) && !up) chain = [{ indent, line: i + 1, depth: 0 }]
       continue
     }
-    if (raw.trim() && chain.length && indentOf(raw) <= chain[0].indent) chain = []
-    const m = extractMarks(raw)
+    if (body.trim() && chain.length && indentOf(body) <= chain[0].indent) chain = []
+    const m = extractMarks(body)
     if (m) push(m, m.rest.replace(LEAD_RE, '').trim(), false, false, i + 1, raw, occ)
   }
   return out

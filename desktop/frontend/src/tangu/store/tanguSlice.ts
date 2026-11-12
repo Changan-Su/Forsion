@@ -1725,6 +1725,9 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
         break
       }
       case 'done':
+        set((s) => ({ messagesBySession: { ...s.messagesBySession, [sessionId]: (s.messagesBySession[sessionId] || []).map((m) =>
+          m.compaction?.runId === runId && m.compaction.status === 'running'
+            ? { ...m, content: get().tr('ctx.compaction.failed'), compaction: { ...m.compaction, status: 'failed' as const, skippable: false } } : m) } }))
         patchMessage(sessionId, assistantId, (m) => {
           // 新引擎带 toolOffsets:终稿说了算(空串也算 —— 被丢弃的流式正文不许回填),顺序段一并收敛(见 settleSegments)。
           const settled = Array.isArray(pl.toolOffsets) && typeof pl.content === 'string'
@@ -1777,6 +1780,9 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
         else clearSuggestion(sessionId)
         break
       case 'error':
+        set((s) => ({ messagesBySession: { ...s.messagesBySession, [sessionId]: (s.messagesBySession[sessionId] || []).map((m) =>
+          m.compaction?.runId === runId && m.compaction.status === 'running'
+            ? { ...m, content: get().tr(pl.aborted ? 'ctx.compaction.aborted' : 'ctx.compaction.failed'), compaction: { ...m.compaction, status: pl.aborted ? 'aborted' as const : 'failed' as const, skippable: false } } : m) } }))
         patchMessage(sessionId, assistantId, (m) => ({
           ...m, content: pl.content || m.content, live: undefined, ...endThink(m),
           status: pl.aborted ? ('stopped' as const) : ('error' as const),
@@ -1868,6 +1874,37 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
         // changed=false = 摘要了但没变小(保留段本身就超线),环不动;下一条 usage 照常用实测值校正。
         if (pl.phase === 'compaction_budget') {
           if (pl.changed && Number(pl.afterTokens) > 0) set((s) => ({ usageBySession: { ...s.usageBySession, [sessionId]: { ...(s.usageBySession[sessionId] || { base: 0, live: 0 }), ctx: Number(pl.afterTokens) } } }))
+          break
+        }
+        // New engines give each summary an identity. Start is visible immediately; terminal
+        // events replace this same line, and replay cannot resurrect an already settled action.
+        if (typeof pl.operationId === 'string' && /^[a-zA-Z0-9_-]{1,80}$/.test(pl.operationId) &&
+          ['compacting', 'compacted', 'compaction_skipped', 'compaction_failed'].includes(pl.phase)) {
+          const id = `compaction-${runId}-${pl.operationId}`
+          const reason = pl.reason === 'idle' || pl.reason === 'overflow' ? pl.reason : 'threshold'
+          const state = pl.phase === 'compacting' ? 'running' : pl.phase === 'compacted' ? 'completed'
+            : pl.phase === 'compaction_skipped' ? 'skipped' : pl.aborted ? 'aborted' : 'failed'
+          const line = state === 'running' ? get().tr(reason === 'idle' ? 'ctx.compacting.idle' : 'ctx.compacting.required', { n: Number(pl.idleMinutes) || 60 })
+            : state === 'skipped' ? get().tr('ctx.compaction.skipped')
+              : state === 'aborted' ? get().tr('ctx.compaction.aborted')
+                : state === 'failed' ? get().tr(pl.continuing === true ? 'ctx.compaction.failedContinue' : 'ctx.compaction.failed')
+                  : Number(pl.trimmed) > 0 ? get().tr('ctx.compacted.trimmed', { n: Number(pl.trimmed) })
+                    : pl.fallback ? get().tr('ctx.compacted.auto', { saved: (Number(pl.savedChars) || 0).toLocaleString() })
+                      : get().tr(reason === 'idle' ? 'ctx.compacted.idle' : reason === 'overflow' ? 'ctx.compacted.overflow' : 'ctx.compacted.forced')
+          set((s) => {
+            const messages = s.messagesBySession[sessionId] || []
+            const old = messages.find((m) => m.id === id)
+            if (old?.compaction && old.compaction.status !== 'running') return {}
+            const message: UiMessage = {
+              id, role: 'system', content: line, status: 'done', timestamp: old?.timestamp ?? Date.now(),
+              compaction: { runId, operationId: pl.operationId, reason, status: state,
+                skippable: state === 'running' && reason === 'idle' && pl.skippable === true,
+                ...(reason === 'idle' ? { idleMinutes: Number(pl.idleMinutes) || 60 } : {}),
+                ...(pl.continuing === true ? { continuing: true } : {}),
+              },
+            }
+            return { messagesBySession: { ...s.messagesBySession, [sessionId]: old ? messages.map((m) => m.id === id ? message : m) : [...messages, message] } }
+          })
           break
         }
         // 自动压缩提示(H4):此前 ctx% 突然回落零提示,与手动 /compact 的明确回执反差。
@@ -3033,7 +3070,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
               status: status === 'aborted' ? 'stopped' as const : status === 'failed' ? 'error' as const : 'done' as const,
               ...(status === 'failed' ? { error: translate('agentrun.stopUnconfirmed') } : {}),
             } : m) } }))
-          endRun(set, get, sid, runId)
+          endRun(set, get, sid, runId, status === 'aborted' ? 'aborted' : 'failed')
         }
         return status !== 'failed'
       } catch (e: unknown) {
@@ -3707,7 +3744,7 @@ function expireRunPrompts(set: (fn: (s: AppState) => Partial<AppState>) => void,
 }
 
 /** run 结束清理(对齐 App.tsx endRun):删句柄/订阅 + 清 running + 非活跃则标未读。 */
-function endRun(set: (fn: (s: AppState) => Partial<AppState>) => void, get: () => AppState, sessionId: string, runId: string): void {
+function endRun(set: (fn: (s: AppState) => Partial<AppState>) => void, get: () => AppState, sessionId: string, runId: string, compactionEnd: 'failed' | 'aborted' = 'failed'): void {
   runAborts.get(runId)?.abort()
   runAborts.delete(runId)
   subscribedRuns.delete(runId)
@@ -3735,6 +3772,13 @@ function endRun(set: (fn: (s: AppState) => Partial<AppState>) => void, get: () =
     const rs = s.runStatsBySession[sessionId]
     return {
       runningBySession: next,
+      // Poll/confirmed stop can finish without an SSE terminal. Retire the pending action too.
+      ...((s.messagesBySession[sessionId] || []).some(m => m.compaction?.runId === runId && m.compaction.status === 'running') ? {
+        messagesBySession: { ...s.messagesBySession, [sessionId]: s.messagesBySession[sessionId].map(m =>
+          m.compaction?.runId === runId && m.compaction.status === 'running'
+            ? { ...m, content: s.tr(compactionEnd === 'aborted' ? 'ctx.compaction.aborted' : 'ctx.compaction.failed'),
+              compaction: { ...m.compaction, status: compactionEnd, skippable: false } } : m) },
+      } : {}),
       // 列表行带的 busy 是上次刷新时的快照:本端订阅的这一轮收了尾就别再让行尾转圈等下一次刷新
       ...(s.sessions.some((x) => x.id === sessionId && x.busy) ? { sessions: s.sessions.map((x) => (x.id === sessionId ? { ...x, busy: false } : x)) } : {}),
       ...(rs?.runId === runId ? { runStatsBySession: { ...s.runStatsBySession, [sessionId]: finishRunStats(rs, Date.now()) } } : {}),

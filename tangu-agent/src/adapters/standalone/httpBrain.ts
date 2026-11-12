@@ -11,7 +11,7 @@ import type {
   FimCompletionOpts,
   DecisionResult,
 } from '../../seams/cloudBrain.js';
-import { imageMimeOf, imageOutputFields, fimUnsupportedError, FIM_UNSUPPORTED } from '../../seams/cloudBrain.js';
+import { fimUnsupportedError, FIM_UNSUPPORTED } from '../../seams/cloudBrain.js';
 import {
   AMADEUS_MAX_FILE_BYTES,
   AgentFileConflictError,
@@ -33,6 +33,7 @@ import { registerAgentSyncIdentity } from '../../services/cloudSyncAccount.js';
 import { assertToolDefinitions } from '../../tools/toolDefinitionValidation.js';
 import { stringifyWellFormed } from '../../llm/wellFormedJson.js';
 import { hostOriginHeaders } from '../../core/hostOrigin.js';
+import { hostedImages } from './hostedImages.js';
 
 export interface HttpBrainConfig {
   cloudUrl: string; // 形如 https://host(无尾斜杠)
@@ -99,7 +100,6 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
   // 所有 brain 请求加超时:thin worker 的 fetch 此前无超时,上游(模型/网关/网络)一挂死,整条 run
   // 无限 await;且 worker 按 session 串行 → 该 session 后续 run 全被堵死。默认 60s,env 可调。
   const REQ_TIMEOUT_MS = Number(process.env.TANGU_BRAIN_HTTP_TIMEOUT_MS) || 60_000;
-  const IMG_TIMEOUT_MS = Number(process.env.TANGU_IMAGE_HTTP_TIMEOUT_MS) || 180_000; // 生图比 LLM 慢,单独放宽
   const GIT_INFO_TIMEOUT_MS = 4_000; // Forsion Git 的两个请求挡在用户点的推拉前面,见下面 git 段
   const GIT_CREDENTIAL_TIMEOUT_MS = 10_000;
   // 托管流的传输与语义兜底窗口。服务端 upstreamIdleGuard 默认 300s,
@@ -130,7 +130,7 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
     const body = bytes > 512 * 1024 ? `,body ${(bytes / 1024 / 1024).toFixed(1)}MB` : '';
     if (e?.name === 'TimeoutError') {
       const secs = Math.round(Math.max(sizedTimeoutMs(bytes), floorMs) / 1000);
-      return new LlmError(504, `云端 ${path} 超时(${secs}s${body}):本机到 ${base} 的上行过慢或不通`);
+      return new LlmError(504, `云端 ${path} 超时(${secs}s${body}):请求未在时限内完成，可能发生在上传、云端处理或下载阶段`);
     }
     if (e instanceof LlmError) return e;
     return new LlmError(0, `云端 ${path} 连接失败(${e?.message || e}${body}):检查本机网络与 ${base} 的连通性`);
@@ -526,36 +526,7 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
         headers: { Authorization: authHeaders().Authorization, ...origin },
       }),
     },
-    images: {
-      edit: async (req) => {
-        const r = await postJson<{ data?: Array<{ b64_json?: string }> }>(
-          '/v1/images/edits',
-          { model: req.model, prompt: req.prompt, image: req.images.map(i => `data:${i.mime};base64,${i.b64}`),
-            size: req.size || (req.outputFormat === 'gif' ? 'auto' : '1:1'), n: req.n || 1, transparent_background: !!req.transparentBackground,
-            output_format: 'png', ...imageOutputFields(req),
-            ...(req.quality ? { quality: req.quality } : {}) },
-          req.signal, IMG_TIMEOUT_MS,
-        );
-        const images = (r.data || []).filter(d => d.b64_json).map(d => ({ b64: d.b64_json!, mime: imageMimeOf(d.b64_json!) }));
-        if (!images.length) throw new Error('Image edit returned no images');
-        return { images };
-      },
-      // 托管生图:复用云端现成 /v1/images/generations(optionalAuth 接受 bearer;配额/计费在云端)。
-      // 尺寸传规范值('1:1' 等),云端自行换算成像素;返回 b64_json。
-      generate: async (req) => {
-        const r = await postJson<{ data?: Array<{ b64_json?: string }> }>(
-          '/v1/images/generations',
-          { model: req.model, prompt: req.prompt, size: req.size || (req.outputFormat === 'gif' ? 'auto' : '1:1'), n: req.n || 1,
-            transparent_background: !!req.transparentBackground, output_format: 'png', ...imageOutputFields(req),
-            ...(req.quality ? { quality: req.quality } : {}) },
-          req.signal,
-          IMG_TIMEOUT_MS, // 生图比 LLM 慢:窗口下限单独放宽,不受通用 60s 基准截断
-        );
-        const images = (r.data || []).filter((d) => d.b64_json).map((d) => ({ b64: d.b64_json as string, mime: imageMimeOf(d.b64_json as string) }));
-        if (!images.length) throw new Error('云端未返回图片');
-        return { images };
-      },
-    },
+    images: hostedImages(base, authHeaders),
     // 收件箱广播拉取:旧云端无此路由 → getJson 404 回 null → [](inboxPull 静默降级)。
     // created_at 是服务端 to_char 微秒原文,原样返回给调用方做游标,不做任何时区换算。
     inbox: {

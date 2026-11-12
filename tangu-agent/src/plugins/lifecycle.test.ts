@@ -28,6 +28,7 @@ interface Host {
 
 interface PluginSpec {
   skills?: boolean;
+  agentSettings?: boolean;
   models?: boolean;
   version?: string;
   requires?: unknown;
@@ -132,6 +133,7 @@ export default {
     ${spec.noMeta
       ? `ctx.registerToolProvider(${provider});`
       : `ctx.registerPlugin({ id: '${id}', name: '${id}', description: 'x', defaultEnabled: ${spec.defaultEnabled ?? true}, toolProvider: ${provider} });`}
+    ${spec.agentSettings ? `g.__agentSettingsCtx = ctx; ctx.registerAgentSettings({ fields: [{ key: 'language', type: 'string', description: 'Current language' }], read: () => ({ language: tag }) });` : ''}
     ${spec.skills ? `g.__skillCtx = ctx; ctx.registerSkillProvider({ id: 'external', list: async () => [{ id: 'release', name: 'Release', description: 'Release fixture', content: tag }] });` : ''}
     ${spec.models ? `g.__modelCtx = ctx; ctx.registerModelProvider({ id: 'source', listModels: async () => [{ id: 'model', name: tag }], resolveModel: async () => ({ id: 'model', name: tag }), stream: async () => ({ content: tag, reasoning: '', toolCalls: [], usage: { prompt_tokens: 1, completion_tokens: 1 } }) });` : ''}
     ${spec.route ? `ctx.registerRoutes((r) => r.userRouter.get('${spec.route}', (_req, res) => res.json({ tag })));` : ''}
@@ -168,6 +170,24 @@ async function listen(app: any): Promise<{ base: string; server: Server }> {
   await new Promise((r) => server.once('listening', r));
   return { base: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, server };
 }
+
+describe('plugin Agent settings sources', () => {
+  it('revokes on disable, rejects stale registrations and rolls back failed activation', async () => {
+    writePlugin('lc-settings', { agentSettings: true });
+    writePlugin('lc-settings-failed', { agentSettings: true, throwInActivate: true });
+    const h = await host();
+    await h.boot.activateAllPlugins();
+    const { engineAgentSettings } = await import('./agentSettings.js');
+    expect((await engineAgentSettings.read('lc-settings')).fields?.[0].value).toBe('v1');
+    expect((await engineAgentSettings.read('lc-settings-failed')).error).toBe('not_exposed');
+    const stale = (globalThis as any).__agentSettingsCtx;
+    await h.boot.setPluginEnabledLive('lc-settings', false);
+    stale.registerAgentSettings({ fields: [], read: () => ({}) });
+    expect((await engineAgentSettings.read('lc-settings')).error).toBe('not_exposed');
+    await h.boot.setPluginEnabledLive('lc-settings', true);
+    expect((await engineAgentSettings.read('lc-settings')).fields?.[0].value).toBe('v1');
+  });
+});
 
 describe('plugin skill sources', () => {
   it('owns marketplace namespaces and revokes registrations on disable, re-enable and uninstall', async () => {

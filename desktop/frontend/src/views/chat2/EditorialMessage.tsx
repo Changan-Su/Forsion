@@ -1,3 +1,5 @@
+import { PluginSettingsCard, pluginSettingsReport } from './PluginSettingsCard'
+import { CompactionNotice } from './CompactionNotice'
 import { MarketPluginCards, isMarketplaceTool } from '../../components/MarketPluginCards'
 import { PluginSandboxCard, isSandboxCardTool } from './PluginSandboxCard'
 import { GitToolCard, gitRepoKey, gitStatusSuperseded, isGitTool, splitGitRuns } from './GitToolCard'
@@ -74,6 +76,7 @@ import { runResultText, type RunResult } from '../../builtins/runCommand'
 import { SUB_PROVIDER_LABELS } from '../../components/OnboardingWizard'
 import { UI_MODE, nativeSheetPresenter, runNativeCtxMenu, runNativeSheetMenu, useEdgeNudge, type SheetMenuItem } from '@lcl/engine'
 import { splitSuggestions, type FenceKind, type SuggestState, type TaskCard } from './suggest'
+import { replyText } from './replyText'
 import { CreationCards } from './CreationCards'
 import { formatDateTime, formatMessageTime } from '../../format/time'
 
@@ -101,6 +104,7 @@ export type OrderedToolPart =
   | { t: 'intelligent'; event: ToolEvent }
   | { t: 'marketplace'; event: ToolEvent }
   | { t: 'sandbox'; event: ToolEvent }
+  | { t: 'pluginSettings'; event: ToolEvent }
   | { t: 'pluginCard'; event: ToolEvent; claim: ToolCardClaim }
   | { t: 'web'; event: ToolEvent; spec: WebCardSpec }
   | { t: 'git'; events: ToolEvent[] }
@@ -153,6 +157,7 @@ export function partitionToolSegment(events: ToolEvent[], sketches?: SketchItem[
       if (!failed) parts.push({ t: 'intelligent', event: ev })
       continue
     }
+    if (pluginSettingsReport(ev)) { flushTools(); parts.push({ t: 'pluginSettings', event: ev }); continue }
     const claim = cardOf?.(ev)
     if (claim) { flushTools(); parts.push({ t: 'pluginCard', event: ev, claim }); continue }
     if (isSandboxCardTool(ev)) { flushTools(); parts.push({ t: 'sandbox', event: ev }); continue }
@@ -565,6 +570,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
     }
   }, [rewindOpen])
   if (msg.role === 'system') {
+    if (msg.compaction) return <div ref={rootRef}><CompactionNotice message={msg} sessionId={runSid} /></div>
     if (msg.groupVote) {
       const v = msg.groupVote
       return (
@@ -837,6 +843,8 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
                     ? <ToolGroup key={`tools-${part.events.map((ev) => ev.id).join('-')}-${k + skip}`} events={part.events} running={msg.status === 'streaming'} approvals={msg.approvals} awaitingAnswer={awaitingAnswer} sessionId={runSid} />
                     : part.t === 'marketplace'
                       ? <MarketPluginCards key={`market-${part.event.id}`} event={part.event} />
+                    : part.t === 'pluginSettings'
+                      ? <PluginSettingsCard key={`ps-${part.event.id}`} event={part.event} sessionId={runSid} />
                     : part.t === 'sandbox'
                       ? <PluginSandboxCard key={`sandbox-${part.event.id}`} event={part.event} />
                     : part.t === 'web'
@@ -855,7 +863,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
             return <>{head}{handoff}{nodes}</>
           }
           // 老序:插件卡片挪到尾部(trailingCards),不在这一行里再列一遍
-          const head = (!!msg.reasoning || !!msg.toolEvents?.length) && <ToolGroup key="proc-head" events={(msg.toolEvents || []).filter((ev) => !cardOf(ev))} running={streaming} approvals={msg.approvals} awaitingAnswer={awaitingAnswer} sessionId={runSid} {...think(!body)} />
+          const head = (!!msg.reasoning || !!msg.toolEvents?.length) && <ToolGroup key="proc-head" events={(msg.toolEvents || []).filter((ev) => !cardOf(ev) && !pluginSettingsReport(ev))} running={streaming} approvals={msg.approvals} awaitingAnswer={awaitingAnswer} sessionId={runSid} {...think(!body)} />
           return (
             <>
               {head}
@@ -955,6 +963,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
         {(() => { const gitEvs = (msg.toolEvents || []).filter(ev => isGitTool(ev) && ev.done && !inlineToolIds.has(ev.id)); return gitEvs.length ? splitGitRuns(gitEvs).map((run) => <GitToolCard key={`git-${run[0].id}`} events={run} sessionId={runSid} />) : null })()}
         {trailingIntelligent.map(ev => <RunContext.Provider key={ev.id} value={{ cwd: runCtx?.cwd, allowRun: false }}><ChatIntelligentUi event={ev} live={streaming} stateScope={runSid ? `${runSid}:${msg.id}` : undefined} onAsk={handlers?.onSuggest} sessionId={runSid} /></RunContext.Provider>)}
         {!!trailingSketches.length && <SketchCards items={trailingSketches} actions={sketchActions} stateScope={runSid ? `${runSid}:${msg.id}` : undefined} onAsk={handlers?.onSuggest} />}
+        {(msg.toolEvents || []).filter(ev => pluginSettingsReport(ev) && !inlineToolIds.has(ev.id)).map(ev => <PluginSettingsCard key={`ps-${ev.id}`} event={ev} sessionId={runSid} />)}
         {trailingCards.map(({ ev, claim }) => <PluginToolCard key={`ptc-${ev.id}`} event={ev} claim={claim} onQuote={handlers?.onQuote} fallback={<ToolGroup events={[ev]} />} />)}
         {/* 审批卡在托盘里批(ApprovalTray);托盘在输入框上方的视图(预览 / 画布)流里留一行指路,对话末尾有卡片堆的不留(卡就在下面)。已兑现的不留痕 —— 结局看工具卡。
             团队成员的占位气泡已有「等待你的审批」那行,不重复。 */}
@@ -981,7 +990,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
         {footer}
         {(msg.status === 'done' || msg.status === 'stopped') && (
           <div className="t2-actions">
-            <button className="t2-iconbtn" title={t('chat.action.copy')} onClick={() => handlers?.onCopy?.(body)}><Copy size={14} /></button>
+            <button className="t2-iconbtn" title={t('chat.action.copy')} onClick={() => handlers?.onCopy?.(museCard ? body : replyText(msg, fenceKinds))}><Copy size={14} /></button>
             {handlers?.onSpeak && !!body && (
               <button className="t2-iconbtn" title={t(speakState ? 'chat.action.stopSpeak' : 'chat.action.speak')} onClick={() => handlers.onSpeak?.(body)}>
                 {speakState === 'loading' ? <Loader2 size={14} className="spin" /> : speakState === 'playing' ? <Square size={14} /> : <Volume2 size={14} />}

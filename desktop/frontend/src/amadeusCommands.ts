@@ -19,6 +19,7 @@ import { FOLD_COMMANDS } from '@amadeus/unified/foldCommands'
 import { canRevealInFileManager } from '@amadeus/lib/hostCaps'
 import { LINK_COMMANDS } from '@amadeus/unified/linkCommands'
 import { CANVAS_COMMANDS } from '@amadeus/unified/canvasToggleCommand'
+import { READING_COMMANDS } from '@amadeus/unified/readingCommands'
 
 // 「当前这篇」一律 noteOf(v4 统一页不设 activePage,只有 activeNotePath;评审 C-10)。
 const ps = () => usePageStore.getState()
@@ -58,6 +59,7 @@ export const CMDS: Command[] = [
   ...LINK_COMMANDS,
   // 文档 / 画布切换(V-20;落点 = 最近用过的那一篇,见 canvasToggleCommand)。
   ...CANVAS_COMMANDS,
+  ...READING_COMMANDS,
 ]
 
 /** 打开(或聚焦)左栏全文搜索。旧引擎只激活已存在面板,后半段保留为跨版本兜底。 */

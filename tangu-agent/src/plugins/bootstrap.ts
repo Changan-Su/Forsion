@@ -33,6 +33,7 @@ import path from 'node:path';
  */
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import { registerToolProvider, unregisterToolProvider, listToolProviders } from '../tools/toolRegistry.js';
+import { engineAgentSettings } from './agentSettings.js';
 import { registerPlugin, getPluginMeta, pluginsNeedingRestart, setPluginDormant, unregisterPlugin } from './registry.js';
 import * as pluginStore from './settingsStore.js';
 import { wechatRemote } from '../services/wechatRemote.js';
@@ -160,6 +161,10 @@ function makeContext(d: DiscoveredPlugin, inst: Instance, official = false): Tan
     registerSkillProvider: (provider) => {
       if (!live('技能')) return;
       inst.runtimeDisposers.push(registerPluginSkillProvider(id, provider));
+    },
+    registerAgentSettings: (contribution) => {
+      if (!live('Agent settings')) return;
+      inst.runtimeDisposers.push(engineAgentSettings.register({ id, name: d.manifest.name, version: d.manifest.version }, contribution));
     },
     registerModelProvider: (provider) => {
       if (!live('模型来源')) return;

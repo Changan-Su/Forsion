@@ -107,7 +107,14 @@ import { headingFoldPlugins } from './headingFold'
 import { listFoldPlugins } from './listFold'
 import { LinkHoverCard } from './linkCard'
 import { TableMenuSection, isTableSelected, tableCellAtPoint } from './tableMenu'
-import { noteLinkTarget } from '../blocks/markdown/linkHref'
+import { ColumnWidthMenu } from './ColumnWidthMenu'
+import { BlockColorMenu } from './BlockColorMenu'
+import { ListNumberingMenu } from './ListNumberingMenu'
+import { hrefKind, normalizeHref, noteLinkTarget } from '../blocks/markdown/linkHref'
+import { ReadingSurface, type ReadingModeControl } from './ReadingSurface'
+import { captureReadingPosition, prepareReadingSnapshot, readingCounterpart, readingSnapshot, restoreReadingPosition, type ReadingPosition } from './readingSnapshot'
+import type { NoteReadingSnapshot } from '../plugins/noteRenderers'
+import { registerReadingToggle } from './readingCommands'
 import { fromDisk, toDisk, type Eol } from './eol'
 import { splitFm, composeFm, patchFm, setForeignFm, foreignFmObject, foreignFmText, setAmadeusStructure, layoutLineOf, canvasLineOf, fixStructKeys } from './fm'
 import { readDocumentScroll, readNoteSurfaceMode, remapNoteViewMemory, writeDocumentScroll, writeNoteSurfaceMode } from './viewMemory'
@@ -1239,7 +1246,10 @@ export function UnifiedPage(props: Parameters<typeof UnifiedPageInner>[0]): Reac
   return <UnifiedPageInner {...props} {...prepared} />
 }
 
-function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMode, historyRef, filesRef, mdRef, onUnlock, compact = false, readOnly = false, hardBreaks = false, inheritedMove = false, moveCaret }: {
+function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMode, historyRef, filesRef, mdRef, onUnlock, initialReading = false, onReadingMode, onReadingChange, compact = false, readOnly = false, hardBreaks = false, inheritedMove = false, moveCaret }: {
+  initialReading?: boolean
+  onReadingMode?: (control: ReadingModeControl | null) => void
+  onReadingChange?: (reading: boolean) => void
   inheritedMove?: boolean
   moveCaret?: MoveSnapshot['caret']
   /** Mini Panel keeps a small editable title and body, without page decoration or metadata. */
@@ -1293,6 +1303,17 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
   const leafMode = useUiOverlay((s) => editorModeOf(s, modeKey))
   const mode = readOnly ? 'wysiwyg' : leafMode
   const { t } = useI18n()
+  const [reading, setReading] = useState(false)
+  const [readingBusy, setReadingBusy] = useState(false)
+  const [readingDoc, setReadingDoc] = useState<NoteReadingSnapshot | null>(null)
+  const readingRef = useRef(false)
+  const readingRoot = useRef<HTMLDivElement | null>(null)
+  const readingPosition = useRef<ReadingPosition | null>(null)
+  const readingRequest = useRef(0)
+  const readingVersion = useRef(0)
+  const readingChange = useRef(onReadingChange)
+  readingChange.current = onReadingChange
+  const readingToggle = useRef<() => void>(() => {})
   // 源码模式与可视模式同一个拼写检查开关(G4-07:此前源码恒关、可视恒开,两种模式口径相反)。
   const spellcheck = useNotesSpellcheck()
 
@@ -1379,6 +1400,7 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
   const canvasDoc = useMemo(() => parseCanvasJson(canvasLine), [canvasLine])
   const canvasMain = canvasDoc?.main ?? { x: 0, y: 0, w: MAIN_W }
   const toggleCanvas = (): void => {
+    if (readingRef.current) void switchReading(false)
     const next = !canvasOn
     const editing = hostApi.current?.hasFocus() ?? false
     if (editing) {
@@ -1419,7 +1441,7 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
    *  触屏笔记本上分屏两篇 v4,最后挂载的那篇会抢走落点,点「+」插进背景那篇里去。
    *  所以照抄 v3 的口径:挂载先登记一次(新开一篇不点正文也能用「+」),焦点进本页再登记一次。
    *  卸载只撤自己那份;applySlash 经 hostApi 走,实例没了就是 null → fail-closed。 */
-  const stableApply = useRef((it: SlashItem) => hostApi.current?.applySlashItem(it)).current
+  const stableApply = useRef((it: SlashItem) => { if (!readingRef.current) hostApi.current?.applySlashItem(it) }).current
   useEffect(() => {
     setFocusedBlockApply(stableApply)
     return () => { if (getFocusedBlockApply() === stableApply) setFocusedBlockApply(null) }
@@ -1441,14 +1463,14 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
   useEffect(() => {
     if (!historyRef) return
     const step = (dir: 'undo' | 'redo'): boolean => {
-      if (pipe.readOnly) return false
+      if (pipe.readOnly || readingRef.current) return false
       if (canvasModeRef.current && stageHist.current) return stageHist.current(dir)
       const v = liveView()
       return !!v && (dir === 'undo' ? pmUndo : pmRedo)(v.state, v.dispatch)
     }
     const indent = (dir: 1 | -1): boolean => {
       const v = liveView()
-      return !pipe.readOnly && !!v && layer.indent(v, dir)
+      return !pipe.readOnly && !readingRef.current && !!v && layer.indent(v, dir)
     }
     const h: UnifiedHistory = { undo: () => step('undo'), redo: () => step('redo'), indent }
     historyRef.current = h
@@ -1505,7 +1527,7 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
    *  与 fm 快照栈同寿命 —— 换页换新;编辑器整实例重建(editorKey)**不**换,陈旧 'pm' 由自愈丢弃。 */
   const undoTimeline = useMemo<UndoTimeline>(() => ({ log: [], future: [] }), [path])
   /** 满铺态。源码模式下恒否:那条分支渲染的是 textarea,把 chrome 抽掉只会让人无处改标题。 */
-  const fullCanvas = canvasOn && mode !== 'source'
+  const fullCanvas = canvasOn && mode !== 'source' && !reading
   // 模式胶囊画在**笔记顶栏** `.amx-toolbar`(用户 2026-08-17 拍板:跟路径/分享/置顶同一行)。
   // 顶栏住在宿主壳 amadeusViews 里、是本组件的**祖先**,所以胶囊由这里渲染、portal 进那一行的插槽。
   // ⚠️ 2026-08-18 从「状态进店 + 顶栏按 path 比对」改成 portal:用户实报「开机还原到一篇 md 笔记时
@@ -1771,7 +1793,7 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
     if (!blockMenu) return
     // 捕获期收(v3 BlockHost 同款):打开路径的 stopPropagation 到不了 window 冒泡,得在捕获期看目标。
     const close = (e: Event): void => {
-      if ((e.target as HTMLElement | null)?.closest?.('.ctx-menu')) return
+      if ((e.target as HTMLElement | null)?.closest?.('.ctx-menu, .amx-color-popover, .amx-column-width')) return
       setBlockMenu(null)
     }
     // Esc 关菜单并把焦点还给编辑器(此前 Esc 对块菜单完全无效,探针实测)。块还选着,
@@ -1780,6 +1802,7 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
     // 聚焦项的原生 click 执行;其余键先关菜单再照常落到编辑器 —— 绝不让方向键去挪编辑器选区(此前 ↓ 把块选区
     // 挪到下一块,「删除」删掉的是别人;菜单开着打字替换了当前块)。
     const onKey = (e: KeyboardEvent): void => {
+      if (e.target instanceof Element && e.target.closest('[data-list-numbering-form], .amx-color-popover, .amx-column-width')) return
       const menu = document.querySelector<HTMLElement>('.unified-block-menu')
       const sub = document.querySelector<HTMLElement>('.unified-block-submenu')
       const inSub = !!sub && sub.contains(document.activeElement)
@@ -2506,6 +2529,121 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
     deriveFmFromDoc()
   }
 
+  // Reading never remounts the editor. Its document, pending writes, undo stack and selection stay owned here.
+  const switchReading = async (next: boolean): Promise<void> => {
+    const request = ++readingRequest.current
+    const active = (): boolean => readingRequest.current === request && !pipe.dead && !pipe.retired
+    const scroll = scrollHostOf(segAnchorRef.current)
+    if (!next) {
+      readingPosition.current = captureReadingPosition(readingRoot.current, scroll)
+      readingRef.current = false
+      setReading(false)
+      setReadingBusy(false)
+      readingChange.current?.(false)
+      if (bodyRef.current) bodyRef.current.inert = false
+      requestAnimationFrame(() => {
+        if (active() && readingPosition.current) restoreReadingPosition(layer.getView()?.dom ?? null, scroll, readingPosition.current)
+        if (active()) scroll.classList.remove('amx-reading-scroll')
+      })
+      return
+    }
+    setReadingBusy(true)
+    try {
+      // Source mode commits through its existing relay before a snapshot is requested.
+      if (srcRef.current) {
+        useUiOverlay.getState().setEditorMode(modeKey, 'wysiwyg')
+        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+      }
+      const snapshot = await prepareReadingSnapshot({
+        active,
+        waitForComposition: async () => {
+          const deadline = performance.now() + 10000
+          while (active() && !layer.getView() && performance.now() < deadline) await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+          const view = layer.getView()
+          if (!view) throw new Error('The note editor is not ready')
+          while (active() && view.composing) await new Promise<void>((resolve) => setTimeout(resolve, 16))
+          // PM commits the composition transaction after compositionend.
+          await new Promise<void>((resolve) => setTimeout(resolve, 0))
+        },
+        capture: () => {
+          const view = layer.getView()
+          if (!view) throw new Error('The note editor is not ready')
+          readingPosition.current = captureReadingPosition(view.dom, scroll)
+          scroll.classList.add('amx-reading-scroll')
+          // Explicit blur commits focus-dependent math/wiki decorations before the static clone.
+          // Inert alone does not reliably deliver blur before an awaited save finishes.
+          if (document.activeElement instanceof HTMLElement && view.dom.contains(document.activeElement)) document.activeElement.blur()
+          const selection = document.getSelection()
+          if (selection?.anchorNode && view.dom.contains(selection.anchorNode)) selection.removeAllRanges()
+          // Freeze this local input surface during I/O; external reconciliation keeps the same document instance.
+          if (bodyRef.current) bodyRef.current.inert = true
+          readingRef.current = true
+          syncFromEditor()
+          flushPropDrafts()
+        },
+        flush: () => writeNow(true),
+        snapshot: () => {
+          const view = layer.getView()
+          if (!view) throw new Error('The note editor is no longer available')
+          syncFromEditor()
+          return readingSnapshot(view.dom, path, pipe.body, ++readingVersion.current)
+        },
+      })
+      if (!snapshot || !active()) return
+      readingRef.current = true
+      canvasModeRef.current = false
+      setCanvasOn(false)
+      setReadingDoc(snapshot)
+      setReading(true)
+      readingChange.current?.(true)
+    } catch (error) {
+      if (active()) readingRef.current = false
+      if (active()) window.dispatchEvent(new CustomEvent('amadeus:toast', { detail: { text: translate('reading.failed'), error: true } }))
+      console.error('[amadeus] reading transition failed', error)
+    } finally {
+      if (active()) {
+        setReadingBusy(false)
+        if (!readingRef.current) {
+          if (bodyRef.current) bodyRef.current.inert = false
+          if (readingPosition.current) restoreReadingPosition(layer.getView()?.dom ?? null, scroll, readingPosition.current)
+          scroll.classList.remove('amx-reading-scroll')
+        }
+      }
+    }
+  }
+  readingToggle.current = () => { void switchReading(!readingRef.current) }
+  useEffect(() => { if (mode === 'source' && readingRef.current) void switchReading(false) }, [mode]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    onReadingMode?.({ on: reading, busy: readingBusy, toggle: () => readingToggle.current() })
+    return () => onReadingMode?.(null)
+  }, [reading, readingBusy, onReadingMode])
+  useEffect(() => {
+    // Only the note View that requests controls owns the command; Inbox/Muse previews do not.
+    const off = registerReadingToggle(modeKey, () => readingToggle.current(), !!onReadingMode)
+    if (initialReading) readingToggle.current()
+    const scroll = scrollHostOf(segAnchorRef.current)
+    return () => { readingRequest.current++; scroll.classList.remove('amx-reading-scroll'); off() }
+    // initialReading is a View preference sampled only when this note mounts.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modeKey, onReadingMode])
+  useEffect(() => {
+    if (!reading) return
+    const view = layer.getView()
+    if (!view) return
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const observer = new MutationObserver(() => {
+      clearTimeout(timer)
+      timer = setTimeout(() => {
+        if (!readingRef.current || pipe.dead || pipe.retired) return
+        syncFromEditor()
+        setReadingDoc(readingSnapshot(view.dom, path, pipe.body, ++readingVersion.current))
+      }, 40)
+    })
+    observer.observe(view.dom, { subtree: true, childList: true, characterData: true })
+    return () => { observer.disconnect(); clearTimeout(timer) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reading, editorKey])
+
   const schedule = (): void => {
     if (pipe.moveHandoff) { pipe.moveHandoff.capture(); return }
     if (pipe.dead || pipe.retired || readOnly) return
@@ -2828,7 +2966,7 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
 
   /** OS 文件进本实例(存附件 + 光标处插 `![[base]]`)。只读 / 已退休 / 编辑器不在 = 不接(false),宿主据此不另找实例。 */
   const insertFilesHere = (files: File[]): boolean => {
-    if (pipe.readOnly || pipe.retired || pipe.dead || !hostApi.current) return false
+    if (readingRef.current || pipe.readOnly || pipe.retired || pipe.dead || !hostApi.current) return false
     hostApi.current.insertFiles(files)
     return true
   }
@@ -2842,7 +2980,7 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
   }, [filesRef])
   useEffect(() => {
     if (!mdRef) return
-    const f = (md: string): boolean => (pipe.readOnly || pipe.retired || pipe.dead ? false : (hostApi.current?.insertMarkdown(md, 'cursor') ?? false))
+    const f = (md: string): boolean => (readingRef.current || pipe.readOnly || pipe.retired || pipe.dead ? false : (hostApi.current?.insertMarkdown(md, 'cursor') ?? false))
     mdRef.current = f
     return () => { if (mdRef.current === f) mdRef.current = null }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2897,13 +3035,13 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
       },
       // ── 插件块表面的接缝(读 fm / 插 markdown):v4 没有块模型,插件对「当前这篇」的读写走这里。 ──
       fmNow: () => foreignFmText(pipe.fm),
-      insertMarkdown: (md, where) => (pipe.retired || pipe.readOnly ? false : (hostApi.current?.insertMarkdown(md, where) ?? false)),
+      insertMarkdown: (md, where) => (readingRef.current || pipe.retired || pipe.readOnly ? false : (hostApi.current?.insertMarkdown(md, where) ?? false)),
       // 助手回答插回(评审 G3-08):只读 / 锁定实例不登记(聊天那边据此判「没有可插的笔记」);源码模式下 hostApi 为 null → 不接。
       // 撤销只在「插入这一笔仍是撤销栈顶」时做:文档仍是插入后那一版,**且**统一撤销时间线(画布舞台的形状 / 连线 / Frame
       // 颜色这类只在 frontmatter 的操作也记在这里)自插入起没动过 —— 否则撤的会是别人的改动(Codex 复核 P1:插入后改了形状
       // 颜色,舞台仲裁先退 fm 那一格,颜色没了、回答还在)。任一条不满足就拒撤,交给用户在笔记里撤。仲裁与键盘 Cmd+Z 同路。
       insertReply: readOnly ? undefined : (md, anchor) => {
-        if (pipe.retired || pipe.dead || pipe.readOnly) return null
+        if (readingRef.current || pipe.retired || pipe.dead || pipe.readOnly) return null
         if (!hostApi.current?.insertMarkdown(md, 'cursor', { quiet: true, after: anchor, caretless: !bodyUsed.current })) return null
         const after = liveView()?.state.doc
         const tl = undoTimeline
@@ -2925,6 +3063,12 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
         return v ? docHeadings(v.state.doc) : []
       },
       revealHeading: (index, text, flash) => {
+        if (readingRef.current) {
+          const heads = [...(readingRoot.current?.querySelectorAll<HTMLElement>('h1,h2,h3,h4,h5,h6') ?? [])]
+          const heading = heads[index]?.textContent === text ? heads[index] : heads.find((h) => h.textContent === text)
+          if (heading) revealBlockAtTop(heading)
+          return
+        }
         const v = liveView()
         if (!v) return
         // 现遍历一次:大纲那份是渲染时算的,点击之间文档可能已增删标题 → 同序号未必是同一条。
@@ -2964,6 +3108,13 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
         //    它紧贴目标内容,总比跳到别人家里强。文档首行就是光杆锚时同理。
         if (isLoneBlockId(blocks[idx].text) && idx > 0 && blocks[idx - 1].parent === blocks[idx].parent) idx -= 1
         const pos = blocks[idx].pos
+        if (readingRef.current) {
+          const el = readingCounterpart(v.dom, readingRoot.current, v.nodeDOM(pos))
+          if (!el) return false
+          revealBlockAtTop(el)
+          if (flash) flashCiteTip(el.getBoundingClientRect())
+          return true
+        }
         // 先 focus、再放选区、显式贴顶滚动 —— 理由同 revealHeading(C-03)。
         v.focus()
         v.dispatch(v.state.tr.setSelection(TextSelection.near(v.state.tr.doc.resolve(pos + 1))))
@@ -2976,12 +3127,12 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
         return true
       },
       focusTitle: () => {
-        if (pipe.readOnly || pipe.retired || pipe.dead || compact || canvasModeRef.current) return false
+        if (readingRef.current || pipe.readOnly || pipe.retired || pipe.dead || compact || canvasModeRef.current) return false
         setTitleFocus((n) => n + 1)
         return true
       },
       focusBody: () => {
-        if (pipe.readOnly || pipe.retired || pipe.dead) return true
+        if (readingRef.current || pipe.readOnly || pipe.retired || pipe.dead) return true
         const v = layer.getView()
         if (!v) return false
         // 不动选区(光标留在上次 / 文首),只把焦点给正文 —— PM 的 focus 自带 preventScroll,阅读位置不跳。
@@ -2993,6 +3144,13 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
         if (!v) return false
         const hit = findTextHit(v.state.doc, needles, !!opts?.tag, opts?.nth)
         if (!hit) return false // 命中只在标题 / 属性里,或这篇还没装上正文:不动(调用方据此重试 / 放弃)
+        if (readingRef.current) {
+          const el = readingCounterpart(v.dom, readingRoot.current, v.nodeDOM(hit.block))
+          if (!el) return false
+          revealBlockAtTop(el)
+          if (opts?.flash) flashCiteTip(el.getBoundingClientRect())
+          return true
+        }
         // 顺序是死的(G4-01 / C-03):① 先展开藏着命中的会话折叠 —— 两个折叠插件的光标守卫会把放进隐藏区的
         // 选区弹回标题;② focus;③ 选中命中文字;④ 显式贴顶滚动。
         unfoldToReveal(v, hit.from)
@@ -3108,6 +3266,9 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
     probe.setFm = (patch: Record<string, unknown>) => setFm(patch, false) // 仪器造「本实例有未落盘的 fm 改动」(防抖写)
     probe.view = () => layer.getView() // 仪器直驱 PM 事务(分栏 spike/检查用)
     probe.serializeNow = () => hostApi.current?.serializeNow() ?? null // 与 200ms 监听同一条落盘序列化链(check:editorperf 计时)
+    probe.setReading = (next: boolean) => switchReading(next)
+    probe.isReading = () => readingRef.current
+    probe.readingPosition = () => readingPosition.current
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [probe])
 
@@ -3385,14 +3546,14 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
   // 页内查找替换(C-18):可编辑实例把本篇注册成 replace provider —— 所见即所得映射成 PM 事务(findReplace.ts),
   // 源码模式走 textarea(textareaFindProvider,保原生撤销栈)。只读实例不注册 = 查找条不给替换行。
   useEffect(() => {
-    if (readOnly) return
+    if (readOnly || reading) return
     if (mode === 'source') {
       const ta = srcTaRef.current
       return ta ? registerFindProvider(textareaFindProvider(ta)) : undefined
     }
     const el = bodyRef.current
     return el ? registerFindProvider(pmFindProvider(el, () => layer.getView())) : undefined
-  }, [readOnly, mode, layer])
+  }, [readOnly, reading, mode, layer])
 
   return (
     <>
@@ -3410,7 +3571,7 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
           page={path}
           cover={cover}
           coverY={coverY}
-          readOnly={readOnly}
+          readOnly={readOnly || reading}
           onSetCover={(c) => setFm({ cover: c ?? undefined, ...(c ? {} : { cover_y: undefined }) })}
           onSetCoverY={(y) => setFm({ cover_y: y })}
         />
@@ -3422,7 +3583,7 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
           path={path}
           icon={icon}
           cover={cover}
-          readOnly={readOnly}
+          readOnly={readOnly || reading}
           onSetIcon={(em) => setFm({ icon: em ?? undefined })}
           onSetCover={(c) => setFm({ cover: c })}
           onRename={doRename}
@@ -3435,7 +3596,7 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
         />
         {!compact && <PropsDraftFlushContext.Provider value={propDrafts}><AmadeusPropertiesPanel
           fmExtra={foreignFmText(pipe.fm)}
-          readOnly={readOnly}
+          readOnly={readOnly || reading}
           notePath={path}
           onCommit={(yaml) => {
             pipe.fm = setForeignFm(pipe.fm, yaml)
@@ -3502,13 +3663,31 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
           }}
         />
       ) : null}
-      {/* 源码模式下编辑器隐藏着留在原地(C-06:撤销栈 / 折叠 / 选区跨切换保住),display:none 同时摘掉它的一切交互。 */}
+      {reading && readingDoc && <ReadingSurface
+        snapshot={readingDoc}
+        rootRef={readingRoot}
+        scroll={() => scrollHostOf(segAnchorRef.current)}
+        position={readingPosition.current}
+        openLink={(href, kind) => {
+          if (kind === 'wiki') { void scoped.getState().openWikiLink(href, path); return }
+          if (href.startsWith('#')) {
+            let title = href.slice(1)
+            try { title = decodeURIComponent(title) } catch { /* malformed escapes remain literal */ }
+            title = title.replace(/-/g, ' ')
+            const heading = [...(readingRoot.current?.querySelectorAll<HTMLElement>('h1,h2,h3,h4,h5,h6') ?? [])].find((h) => h.textContent?.toLowerCase() === title.toLowerCase())
+            if (heading) revealBlockAtTop(heading)
+          } else if (hrefKind(href) === 'external') window.open(normalizeHref(href)!, '_blank', 'noopener,noreferrer')
+          else if (hrefKind(href) === 'note') void scoped.getState().openWikiLink(noteLinkTarget(href, path, scoped.getState().pages), path)
+          else if (hrefKind(href) === 'file') void amadeus.openAttachment(path, href)
+        }}
+      />}
+      {/* Source and reading surfaces leave the owning editor mounted, preserving undo and pending transactions. */}
         <div
           ref={bodyRef}
           className={`page-view unified-body${canvasOn ? ' amx-canvas' : ''}${fullCanvas ? ' amx-canvas-full' : ''}`}
           data-guide-anchor={canvasOn || readOnly ? undefined : 'note-body'}
-          style={mode === 'source' ? { display: 'none' } : fullCanvas && mainCardTitle(path) ? { '--amx-main-title': JSON.stringify(mainCardTitle(path)) } as CSSProperties : undefined}
-          aria-hidden={mode === 'source' || undefined}
+          style={mode === 'source' || reading ? { display: 'none' } : fullCanvas && mainCardTitle(path) ? { '--amx-main-title': JSON.stringify(mainCardTitle(path)) } as CSSProperties : undefined}
+          aria-hidden={mode === 'source' || reading || undefined}
           data-bare
           onFocusCapture={() => { touchActive(); bodyUsed.current = true; setFocusedBlockApply(stableApply) }}
           onPointerDownCapture={touchActive}
@@ -3563,7 +3742,7 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
                   setFmVer((v) => v + 1) // 切源码场景:srcText 用拉平后的 pipe 重算,别显示旧草稿
                 }}
                 skipFinalFlush={() => pipe.reconcileBusy > 0 || srcRef.current}
-                hidden={() => srcRef.current}
+                hidden={() => srcRef.current || readingRef.current}
                 apiRef={hostRaw}
                 probe={probe}
                 extraPlugins={editorPlugins}
@@ -3690,6 +3869,8 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
             {isTableSelected(layer.getView()) && (
               <TableMenuSection view={layer.getView()!} cell={blockMenu.cell ?? null} onDone={() => setBlockMenu(null)} />
             )}
+            {layer.getView() && <BlockColorMenu view={layer.getView()!} restore={() => restoreMenuTarget(layer.getView()!)} onDone={() => setBlockMenu(null)} />}
+            {layer.getView() && <ListNumberingMenu view={layer.getView()!} restore={() => restoreMenuTarget(layer.getView()!)} onDone={() => setBlockMenu(null)} />}
             <div className="ubm-sep" role="separator" />
             {/* 多块选中:置灰 + 说明(B-05:此前点了静默无效)。aria-disabled 而不是 disabled —— 禁用的按钮不出 title 提示。 */}
             {layer.getView() && layer.topRangeOf(layer.getView()!) ? (
@@ -3706,6 +3887,7 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
                 <Columns2 size={13} /> {t('unipage.menu.toNewColumn')}
               </button>
             )}
+            {layer.getView() && <ColumnWidthMenu view={layer.getView()!} restore={() => restoreMenuTarget(layer.getView()!)} onDone={() => setBlockMenu(null)} />}
             {/* 块在分栏的某一列里(B-08):整行解散回自然流,各列内容按列序排开。 */}
             {layer.getView() && columnRowOf(layer.getView()!.state.selection) != null && (
               <button role="menuitem" tabIndex={-1} data-act="unsplit" onClick={() => {

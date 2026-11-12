@@ -1,11 +1,11 @@
 // @vitest-environment happy-dom
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 import type { DbFile } from '@amadeus-shared/db/schema'
-const h = vi.hoisted(() => ({ action: undefined as (() => void) | undefined, read: vi.fn() }))
+const h = vi.hoisted(() => ({ action: undefined as (() => void) | undefined, read: vi.fn(), notify: vi.fn(), dismiss: vi.fn() }))
 vi.mock('../../amadeus/api', () => ({ amadeus: { writeDatabase: async () => {}, readTextFile: (...args: unknown[]) => h.read(...args), onDbExternalChange: undefined } }))
 vi.mock('../../amadeus/store/automationKick', () => ({ kickAutomation: () => {}, setAutomationKick: () => {} }))
 vi.mock('../../amadeusPlugins', () => ({ ensureAmadeusReady: () => {} }))
-vi.mock('../../stores/notificationStore', () => ({ notifyApp: (n: { action?: { run: () => void } }) => { h.action = n.action?.run } }))
+vi.mock('../../stores/notificationStore', () => ({ notifyApp: (n: { action?: { run: () => void } }) => { h.action = n.action?.run; h.notify(n); return 'calendar-notice' }, useNotifications: { getState: () => ({ dismiss: h.dismiss }) } }))
 const { useDbStore } = await import('../../amadeus/store/dbStore')
 const { usePageStore } = await import('../../amadeus/store/pageStore')
 const { useNoteViewStore } = await import('../../amadeus/store/noteViewStore')
@@ -22,12 +22,38 @@ const event = () => { const d = db(), row = d.rows[0]; return { db: d, row, colI
 const rows = () => useDbStore.getState().entries['Events.db'].data!.rows
 let generation = 0
 beforeEach(() => {
+  h.notify.mockClear()
+  h.dismiss.mockClear()
   usePageStore.setState({ vaultRoot: '/calendar-test-' + ++generation, vaultSide: 'local', files: ['Events.db'] })
   useDbStore.setState({ entries: { 'Events.db': { status: 'ok', path: 'Events.db', data: base() } } })
   clearCalendarClipboard()
 })
 afterEach(async () => { await useDbStore.getState().flushAll() })
 describe('calendar action safety', () => {
+  it('rescheduling stays quiet while keeping keyboard undo and redo; deletion still offers undo', () => {
+    const e = event()
+    rescheduleCalendarRow(e.db, e.row, 'date', e.raw, '2026-11-12', e.title)
+    expect(h.notify).not.toHaveBeenCalled()
+    expect(undoLastCalendarEdit()).toBe(true)
+    expect(rows()[0].cells.date).toBe(e.raw)
+    expect(redoLastCalendarEdit()).toBe(true)
+    expect(rows()[0].cells.date).toBe('2026-11-12')
+    expect(h.notify).not.toHaveBeenCalled()
+    deleteCalendarRow(db(), event().row, e.title)
+    expect(h.notify).toHaveBeenCalledWith(expect.objectContaining({ action: expect.any(Object) }))
+  })
+  it('silent rescheduling removes the now-stale deletion undo notice', () => {
+    useDbStore.getState().mutate('Events.db', d => ({ ...d, rows: [...d.rows, { id: 'r2', cells: { name: 'Other', date: '2026-11-12' } }] }))
+    const e = event()
+    deleteCalendarRow(e.db, e.row, e.title)
+    const other = db().rows.find(r => r.rowId === 'r2')!
+    rescheduleCalendarRow(db(), other, 'date', '2026-11-12', '2026-11-13', 'Other')
+    expect(h.dismiss).toHaveBeenCalledWith('calendar-notice')
+    expect(h.notify).toHaveBeenCalledTimes(1)
+    expect(undoLastCalendarEdit()).toBe(true)
+    expect(undoLastCalendarEdit()).toBe(true)
+    expect(rows().some(r => r.id === 'r1')).toBe(true)
+  })
   it('copy freezes fields/body and makes fresh stamps; clone preserves clipboard', async () => {
     const e = event()
     expect(copyCalendarEvent(e)).toBe(true)

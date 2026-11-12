@@ -14,7 +14,7 @@ import {
   type DockviewTheme,
 } from 'dockview-react'
 import { SpaceFloatLayer } from './SpaceFloatLayer'
-import { X, Plus, PanelLeft, PanelRight, PanelBottom, RotateCcwSquare, ArrowLeft, ArrowRight, AppWindow, PictureInPicture2, Columns2, Rows2, ListX, ArrowRightToLine, CopyX, SquareArrowOutUpRight } from 'lucide-react'
+import { X, Plus, PanelLeft, PanelRight, PanelBottom, RotateCcwSquare, AppWindow, PictureInPicture2, Columns2, Rows2, ListX, ArrowRightToLine, CopyX, SquareArrowOutUpRight } from 'lucide-react'
 import { createPortal } from 'react-dom'
 import 'dockview-react/dist/styles/dockview.css'
 import type { Leaf, ViewDefinition } from './types'
@@ -40,6 +40,7 @@ import { cycleFocusedGroupTab, tabCycleDelta } from './tabCycle'
 import { besideTarget, openMainBesideThisTask } from './openBeside'
 import { keepScroll } from './keepScroll'
 import { createViewLayout } from './viewLayout'
+import { ViewNavigationFallback } from './viewNavigation'
 
 /** tooltip「名称(快捷键)」:快捷键取该命令**当前生效**的键、按平台格式化(改了键就跟着变,解绑就只剩名称)。 */
 function withHotkey(t: (k: string, v?: Record<string, unknown>) => string, text: string, cmdId: string): string {
@@ -132,6 +133,7 @@ function makeComponent(def: ViewDefinition): React.FC<IDockviewPanelProps> {
         ref={viewRef}
         className={`wb-view wb-view--${loc}`}
       >
+        {loc === 'main' && <ViewNavigationFallback leafId={leaf.id} />}
         <ViewErrorBoundary type={def.type}>
           <Suspense fallback={<Skeleton variant={skeletonVariantOf(def.type, loc)} />}>
             {loc === 'main' ? <ExtendViewHost present={presentDockedExtension} owner={props.api} ownerKey={ownerKey}>
@@ -323,24 +325,9 @@ function makePrefixActions(): React.FC<IDockviewHeaderActionsProps> {
     // 组被拖到另一边、关掉一组时 tab 集合可能不变,mainTabs 不刷 → 单独跟布局变化重算「谁是最左上」。
     const [, relayout] = useReducer((n: number) => n + 1, 0)
     useEffect(() => { const d = containerApi.onDidLayoutChange(relayout); return () => d.dispose() }, [containerApi])
-    // per-tab 历史:全窗只有这一套箭头,作用于**当前聚焦**的主区 tab(用户 08-17 定的语义);分屏时右组靠它走历史。
-    // 订阅 mainTabs(激活变化)与 stacks 重渲。
-    useWorkspace((s) => s.mainTabs)
-    const stacks = useNav((s) => s.stacks)
-    const amId = activeMainPanel(containerApi)?.id ?? null
-    const st = amId ? stacks[amId] : undefined
-    const canBack = !!st && st.idx > 0
-    const canFwd = !!st && st.idx >= 0 && st.idx < st.entries.length - 1
     if (!isMainGroup(panels) || !isFirstMainGroup(containerApi, group)) return null
     return (
       <div className={`dv-prefix${leftCollapsed ? ' dv-prefix--edge' : ''}`}>
-        {/* 主面板常驻前进/后退(per-tab 历史,只走当前 tab 的栈;由各 feature recordNav(leafId,…) 喂)。 */}
-        <button className="dv-nav-btn" data-press="back" disabled={!canBack} title={withHotkey(t, t('lcl.nav.back'), 'nav-back')} onClick={() => { if (amId) useNav.getState().back(amId) }}>
-          <ArrowLeft size={15} />
-        </button>
-        <button className="dv-nav-btn" data-press="forward" disabled={!canFwd} title={withHotkey(t, t('lcl.nav.forward'), 'nav-forward')} onClick={() => { if (amId) useNav.getState().forward(amId) }}>
-          <ArrowRight size={15} />
-        </button>
         {!IS_VIEW_WINDOW && ( // 独立视图窗只装主区,没有左栏可开(见 uiMode.IS_VIEW_WINDOW)
           <button
             className={`dv-edge-toggle${leftCollapsed ? '' : ' is-on'}`}

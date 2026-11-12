@@ -195,6 +195,21 @@ export async function abortRun(t: EngineTarget, runId: string): Promise<void> {
   await requestAbort(t, runId)
 }
 
+/** Skips one idle summary only. The operation id prevents cancelling a later summary. */
+export async function skipRunCompaction(t: EngineTarget, runId: string, operationId: string): Promise<{ ok: boolean; status?: string; reason?: string }> {
+  const ac = new AbortController()
+  const timer = setTimeout(() => ac.abort(new DOMException('Skip request timed out', 'TimeoutError')), 5000)
+  try {
+    const r = await engineRequest(t, `/agent/runs/${encodeURIComponent(runId)}/compaction/skip`, {
+      method: 'POST', body: JSON.stringify({ operationId }), signal: ac.signal,
+    })
+    if (!r.ok && r.status !== 409) throw new Error((await r.text().catch(() => '')) || `HTTP ${r.status}`)
+    const result = await r.json()
+    if (typeof result?.ok !== 'boolean' || result.operationId !== operationId) throw new Error('Invalid compaction response')
+    return result
+  } finally { clearTimeout(timer) }
+}
+
 export type TerminalRunStatus = 'done' | 'failed' | 'aborted'
 function isTerminalStatus(status: unknown): status is TerminalRunStatus {
   return status === 'done' || status === 'failed' || status === 'aborted'

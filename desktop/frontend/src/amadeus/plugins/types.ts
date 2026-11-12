@@ -5,6 +5,7 @@
 // sidebar, and status bar all be extended uniformly.
 
 import type { SyncSnapshot } from '../../services/syncSetup'
+import type { InboxChannel } from '../../services/inboxChannel'
 import type { ComponentType } from 'react'
 import type { PropertyTypeDef } from '../blocks/database/propertyTypes'
 import type { PluginOnboardingSpec } from '@amadeus-shared/ipc'
@@ -388,6 +389,10 @@ export interface PluginAppApi extends BlockSurfaceApi {
    *  插件停用时宿主也收。通道认不出账号时,带 `expectedAccountId` 的调用必须回 `account-changed`、不发。
    *  旧宿主没有:`ctx.app.provideFeedbackChannel?.(…)`。 */
   provideFeedbackChannel?(submit: ((input: { description: string; sessionLogJson?: string; sessionLogName?: string; expectedAccountId?: string }) => Promise<{ ok: boolean; id?: string | null; error?: string; attachmentSkipped?: boolean }>) | null): boolean
+  /** Official account inbox provider (first-party Forsion Extend only). Cloud IDs use
+   * `cloud:`; read/archive/delete and rewards remain server-authoritative. Null revokes
+   * this plugin's channel; the host also revokes it on disable/reload. Older hosts omit it. */
+  provideInboxChannel?(channel: InboxChannel | null): boolean
   /** 同步总开关(2026-10-20+,蓬洲云「同步」页):笔记库 / Agents 与记忆 / 插件数据三样的开关与状态,宿主
    *  services/syncSetup.ts 是真身。只给首方内置包、只在有本地库远程同步的桌面挂;别的插件 get() 恒 null、set 恒失败。
    *  旧宿主没有:`ctx.app.sync?.get()`。 */
@@ -1093,6 +1098,8 @@ export interface FileTypeContribution {
    *  cleanup (flush/save-on-close, clear timers here). Read/write the file via ctx.app.readFile/writeFile.
    *  `file.surface` (2026-08-14, when present): a per-view page surface scoped to this tab — prefer it
    *  over ctx.app's active-page model so the view coexists with the note editor.
+   *  `file.extendView` (when present): owner-scoped temporary panel, including detached file windows.
+   *  Feature-detect; revoked on navigation, close or plugin disable. Use it for contextual chat/details.
    *  `file.onGoto` (2026-10-11, when present): subscribe to "land here" requests — a link or chat
    *  citation that points at a place inside the file. If the open that created this view carried a
    *  location, the callback gets it once right after you subscribe (asynchronously, never inside the
@@ -1101,7 +1108,7 @@ export interface FileTypeContribution {
    *  unsubscribe; the host also drops the subscription when the view closes. */
   mount(
     el: HTMLElement,
-    file: { filePath: string; io?: PluginFileIO; surface?: PluginPageSurface; onGoto?: (cb: (target: FileGotoTarget) => void) => () => void },
+    file: { filePath: string; io?: PluginFileIO; surface?: PluginPageSurface; extendView?: ExtendViewController; onGoto?: (cb: (target: FileGotoTarget) => void) => () => void },
   ): (() => void | Promise<void>) | void
 }
 
@@ -1258,7 +1265,7 @@ export interface SettingsViewContribution {
   keywords?: string
   /** 详情页打开时调用。返回的函数在面板关闭 / 插件禁用时执行(定时器、订阅、第三方编辑器实例在此收)。
    *  ⚠️同一插件的面板可能被反复挂载卸载(用户来回进出详情页),别把状态放在闭包外的模块级单例里。 */
-  mount(el: HTMLElement): void | (() => void)
+  mount(el: HTMLElement, context?: { anchor?: string }): void | (() => void)
 }
 
 /** 商店左栏里由插件提供的一页(2026-10-05):左栏多一个入口,点开后整页正文归插件画(版式、数据都归插件)。
@@ -1358,6 +1365,8 @@ export interface PluginBoardOptions {
   /** Overrides the pen's own colour / width (the engine's stroke width, e.g. 0.5, 1, 2, 4). */
   strokeColor?: string
   strokeWidth?: number
+  /** Geometry for newly created shapes only. Omit to preserve the engine default; existing scene elements are unchanged. */
+  roundness?: 'sharp' | 'round'
   /** Which theme the strokes are drawn for. Defaults to the host's current mode; pass 'light' when the
    *  surface underneath stays light in dark mode (a PDF page), or the engine recolours the ink. */
   theme?: 'light' | 'dark'
@@ -1372,7 +1381,7 @@ export interface PluginBoardOptions {
 }
 export interface PluginBoardHandle {
   /** `scene` replaces the content without going through undo (a reload from disk); the rest are live settings. */
-  update(patch: Partial<Pick<PluginBoardOptions, 'scene' | 'viewport' | 'tool' | 'pen' | 'strokeColor' | 'strokeWidth' | 'theme'>>): void
+  update(patch: Partial<Pick<PluginBoardOptions, 'scene' | 'viewport' | 'tool' | 'pen' | 'strokeColor' | 'strokeWidth' | 'roundness' | 'theme'>>): void
   /** The current content (deleted elements left out). Before the engine is ready: what you last passed in. */
   getScene(): PluginBoardScene
   undo(): void
@@ -1402,6 +1411,8 @@ export interface PluginSelectionBarTool {
   color?: string
   /** Draw it as pressed / current. */
   on?: boolean
+  /** Optional separate menu trigger. The host passes the actual button anchor; run() remains the primary action. */
+  menu?: { title: string; open(sel: PluginSelectionBarSelection, anchor: HTMLElement): void }
   run(sel: PluginSelectionBarSelection): void
 }
 
@@ -1806,6 +1817,12 @@ export interface PluginUiPartHandle<P> { update(patch: Partial<P>): void; dispos
 
 
 export interface PluginContext {
+  /** Explicit read-only Agent fields; never export a raw settings blob. Revoked on disable/reload. */
+  registerAgentSettings?(def: import('../../../../../tangu-agent/src/contracts/agentSettings').AgentSettingsContribution): void
+  /** Replace the read-only note surface (API v1). The host retains document ownership, saving and undo.
+   * Mount into the staging element and return a disposer. Failed/late mounts never replace a working surface.
+   * The latest active registration wins; disable removes it. Schema/serializer updates are not supported. */
+  registerNoteRenderer?(def: import('./noteRenderers').NoteRendererContribution): { dispose(): void }
   account?: PluginAccount
   app: PluginAppApi
   registerSlashItem(item: SlashContribution): void

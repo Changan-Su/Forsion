@@ -249,7 +249,7 @@ if (!bar) drawOwnMenu(el)                           // hosts up to 2.13.3: keep 
 - Ordinary DOM reading selections share continuous line bands with chat, notes and translation previews. Math is measured as a unit; native dragging, keyboard extension and copying remain intact. Paint lives outside the content DOM, updates on scroll/zoom and is removed by `dispose()`. Touch pointers and custom PDF/code-editor layers keep native selection paint; `watch: false` keeps the plugin's own paint.
 - For content the host cannot see into (an iframe, a canvas, a PDF text layer you position yourself) pass `watch: false` and call `bar.show({ text, rect })` and `bar.hide()` yourself. `rect` is the selection's bounding box in viewport pixels (`range.getBoundingClientRect()` as is; the host cancels the interface zoom, so do not divide).
 - To make a selection you report follow the text too, also pass `getRect` to `show` (optional, since 2026-11-08): `bar.show({ text, rect, getRect: () => the text's current bounding box })`. The host calls it on frames where something may have moved (scroll, zoom, your view's size or content) and places the bar and its result card against what it returns. Return `null` while the text is not on screen (scrolled away, page not rendered yet): the bar hides and comes back when you return a box again. Keep it cheap and side-effect free; a throw counts as `null`. Without `getRect` the host only knows `rect`, so call `hide()` yourself when the view scrolls or resizes. Older hosts ignore the field.
-- `tools` are declarative: an icon button (`icon` is a name from the plugin icon vocabulary, which gained `highlight`, `underline`, `strikethrough`, `annotate`, `copy` and `cite` for this) or a colour swatch (`color`). The host only draws the button and `run` decides what it does; once a tool has consumed the selection, clear it or call `bar.hide()` in `run`. There are no dropdowns: if you need more UI, open your own from `run`.
+- `tools` are declarative: an icon button (`icon` is a name from the plugin icon vocabulary, which gained `highlight`, `underline`, `strikethrough`, `annotate`, `copy` and `cite` for this) or a colour swatch (`color`). The host only draws the button and `run` decides what it does; once a tool has consumed the selection, clear it or call `bar.hide()` in `run`. An optional split menu can open additional UI; see the split-tool contract below.
 - `ask` replaces what Ask Tangu does when clicked (to add a page number, for example) and `false` removes that button. Without it the host hands the text and `source` to its side chat; hosts without a side chat don't draw that button.
 - The bar adds nothing to `root` and does not take it over (it floats above the page), so it coexists with `mountFloatingToc` and other mounts. The handle has `show`, `hide`, `update(opts)` and `dispose()`; the host disposes it when the plugin is disabled or reloaded.
 
@@ -377,6 +377,7 @@ ctx.ui?.mountRecord?.(el, { path, rowId, dateCol, readOnly })
 Seeing the same thing another way (Chat / Canvas, Document / Canvas, Transcript / Notes / Summary, Day / Week / 3 days / Month) has one arrangement across the app: the switch sits at the **left end of the view's head row**, a 32px row inside the paper card that does not scroll with the content; the view's own title follows the switch. One switch per view, with 2–4 modes; more than four use tabs (database views). Filter and source pills look the same but never go in that position. For the proposal and trade-offs, see `docs/ToBeImproved/视图模式切换标准方案_2026-10-19` in the repository root.
 
 - Native views: register with `useViewModes` (`@lcl/engine`), then put `<ViewModeSwitch leafId={leaf.id} />` at the left end of the head row; a view without its own top bar uses `<ViewHead leafId>{buttons}</ViewHead>` for the whole row. Views that already have a top bar (Amadeus `.amx-toolbar`, the calendar's `.amx-cal-bar`) add `container: lcl-viewhead / inline-size` to that row so the narrow-width fallback can read its width.
+- Main Views automatically receive Back and Forward buttons before their mode switch. The buttons affect only their owning View; plugins should not duplicate them. Views without a host head receive a compact navigation row, including on mobile. History stays with its Space during the current app session and is released when the View closes.
 
 ```js
 useViewModes(leaf.id, { modes, value, onChange })
@@ -564,3 +565,20 @@ el.innerHTML = '<h2>This week</h2><button>New</button> <input placeholder="Searc
 - It lives in the `plugin-view-base` block at the end of `desktop/frontend/src/styles/base.css` and uses public tokens only (`pluginContract.test.ts` checks each one). Instrument: `desktop/scripts/plugin-base-shots.cjs` (real Electron: installs `scripts/fixtures/plugin-base-sample`, shoots light and dark, measures computed styles).
 
 **Failed mount card**: when `mount` throws, or the Promise it returns rejects, the view shows a card: "Plugin view failed to load", the first line of the error (the full stack is in the console) and "Retry". Retry runs only this view's `mount` again; the plugin isn't reloaded and its other views and panels keep running. So make `mount` safe to run twice: the host can't clean up listeners or timers you set before the throw, so clean them up yourself or set them after the step that can fail. Code changes still go through a plugin reload or the sandbox's hot reload.
+
+### Amadeus reading surface
+
+`UnifiedPage.onReadingMode` exposes `{ on, busy, toggle }` for the note View’s `ReadingModeButton`; `initialReading` and `onReadingChange` connect to View parameters. Only a note View that explicitly requests this control owns the reading command; Inbox and Muse previews do not take over the active note’s command. `ReadingSurface` consumes immutable snapshots while the host retains the editor and persistence state. See [Note reading renderers](./note-renderers.en.md) for plugin replacement.
+
+
+### Split selection tools and shape corners (2026-11-12)
+
+A `mountSelectionBar` tool may declare `menu: { title, open(sel, anchor) }`. The primary button still calls `run(sel)`. Its separate arrow calls `menu.open` with the actual button element, ready for `ctx.ui.popover(anchor, ...)`; never find anchors by inspecting host DOM. ArrowRight on the primary also opens its menu; Enter/Space operate either button. A child menu consumes Escape before the bar closes. Supply `title` in the current locale. Older hosts ignore menu, so retain a usable primary action or a fallback menu entry. Capture selection data when opening a menu that consumes it, and dispose menus when the view unloads or the plugin stops; never apply a stale selection.
+
+```js
+{ id: 'underline', title: t('underline'), icon: 'underline',
+  run: (sel) => underline(sel),
+  menu: { title: t('colors'), open: (sel, anchor) => openColors(sel, anchor) } }
+```
+
+`mountBoard` and `handle.update` accept optional `roundness: 'sharp' | 'round'`, forwarded to the engine's next-shape `currentItemRoundness`. Omission preserves the existing default. It never rewrites elements already in the scene. To edit an existing rectangle, preserve its complete element data and explicitly update the scene; do not normalize old scenes to a new corner style.

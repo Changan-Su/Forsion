@@ -1,3 +1,4 @@
+import { navigationSig } from './navigationTarget'
 /**
  * 单列 workspace store：桌面 Dockview store(./dockviewStore)的**单列替身**,住在引擎里。
  * 两条路都用它:① mobile 构建 vite engineSwap 把 `engine/workspaceStore` 换成本文件;
@@ -541,7 +542,7 @@ export const useWorkspace = create<WS>((set, get) => {
           followActive: r.params.followActive !== false,
           filePath: typeof r.params.notePath === 'string' ? r.params.notePath : typeof r.params.path === 'string' ? r.params.path : undefined,
           front: active, // 单列壳同一时刻只显示一个主区 leaf → 前台即活动
-          sig: identitySig(r.params), // 就地换文件也算一次跳转,见桌面版同名字段
+          sig: r.type.startsWith('plugin:') ? navigationSig(r.params) : identitySig(r.params), // 就地换文件也算一次跳转,见桌面版同名字段
         }
       }
       const side = (arr: LeafRec[], activeId: string | null): SideTab[] => arr.map((r) => {

@@ -21,6 +21,7 @@ registerMessages({
   // 单元格 / 弹层文案
   'dbbuiltins.date': { zh: '日期', en: 'Date' },
   'dbbuiltins.end': { zh: '结束', en: 'End' },
+  'dbbuiltins.allDay': { zh: '全天', en: 'All day' },
   'dbbuiltins.allDayHint': { zh: '留空 = 全天', en: 'Leave blank for all day' },
   'dbbuiltins.setEnd': { zh: '设置结束时间', en: 'Set end time' },
   'dbbuiltins.empty': { zh: '空', en: 'Empty' },
@@ -87,6 +88,13 @@ export function CalDateFields({ value, onChange, autoFocus }: { value: string | 
           <input type="time" className="amx-cal-timein" value={e?.time ?? ''} title={t('dbbuiltins.allDayHint')} onChange={(ev) => build(s.date, s.time, e?.date ?? s.date, ev.target.value, true)} />
         </label>
       )}
+      <label className="amx-cal-check">
+        <input type="checkbox" data-calendar-all-day checked={!!cur?.allDay} disabled={!cur} onChange={(ev) => {
+          if (!cur) return
+          if (ev.target.checked) build(s.date, '', e?.date ?? s.date, '', !!e && e.date !== s.date)
+          else build(s.date, '09:00', e?.date ?? s.date, '10:00', true)
+        }} />{' '}{t('dbbuiltins.allDay')}
+      </label>
       <label className="amx-cal-check">
         <input
           type="checkbox"

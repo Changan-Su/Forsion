@@ -308,7 +308,7 @@ interface PageState {
   /** 只刷全库页面图标(path → emoji)。⚠️ refreshPages **不碰** icons —— 这张表的真源是主进程索引,
    *  改完 frontmatter 想让侧栏 emoji 跟上就得显式调它(2026-08-31 用户实报的一半症状)。 */
   refreshIcons(): void
-  loadPage(path: string): Promise<void>
+  loadPage(path: string, signal?: AbortSignal): Promise<void>
   createPage(): Promise<void>
   /** Create a new untitled page inside `folder` (vault-relative; '' = vault root) and open it. */
   createPageInFolder(folder: string): Promise<void>
@@ -804,8 +804,14 @@ function makePageStore(opts: PageStoreOptions = {}) {
       fetchIcons(get().vaultRoot)
     },
 
-    async loadPage(path) {
+    async loadPage(path, signal) {
+      signal?.throwIfAborted()
       const seq = ++loadSeq // last-request-wins:双击/多 tab 竞速时,迟到的结果不得覆盖新导航
+      const checkCancelled = (): void => {
+        if (!signal?.aborted) return
+        if (seq === loadSeq && get().pendingPage === path) set({ pendingPage: null, status: get().activePage ? 'ready' : 'idle' })
+        signal.throwIfAborted()
+      }
       // 乐观反馈先行:点击即高亮/即提示,再谈网络(云端一个往返 ~300ms,反馈不能等它)。
       set({ pendingPage: path, status: 'loading', error: null })
       // 上一页的在途保存与新页加载并行(不同文件互不相干);唯「读写同一文件」
@@ -816,13 +822,16 @@ function makePageStore(opts: PageStoreOptions = {}) {
         if (path === flushingPath) await inflightSave?.catch(() => {}) // 更早发起的在途写也要等
       }
       // 移动/改名会清掉旧路径的 pendingPage。等待保存期间路径已经失效时,不要再向旧地址发读请求。
+      checkCancelled()
       if (seq !== loadSeq || get().pendingPage !== path) return
       try {
         const page = await amadeus.loadPage(path)
+        checkCancelled()
         if (seq !== loadSeq || get().pendingPage !== path) return // 新导航或路径变更已经取代本次读取
         set({ activePage: path, pendingPage: null, ...hydrate(page), status: 'ready' })
       } catch (e) {
         if (seq === loadSeq && get().pendingPage === path) set({ status: 'idle', error: String(e), pendingPage: null })
+        if (signal) throw e // navigation transactions roll their cursor back on a failed restore
       }
     },
 

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { startImageRecoveryCloud, imageRecoveryLive } from './lib/image-recovery-live.mjs';
 /**
  * 真模型 live 台架:真 standalone 引擎 × Codex 直连(缺省 codex/gpt-5.6-luna)× 隔离 home。
  * 补的是「假引擎 / vi.fn 模型」测不到的那一层:harness 稳定性(工具回合、压缩)、
@@ -323,6 +324,7 @@ const GIT_PREFIX = 'livetest/'; const GIT_TAG = '[LIVE]';
 // 还会往隔离 home 播记忆行(会进别的场景的系统提示);deferred 要真装 liteparse 解析文档;
 // grant 是两个委派 run(慢),且只在动过 delegate.grantTools / 子代理管理面闸时才有信息量。
 const OPT_IN = new Set(['pluginsandbox', 'humandims', 'nested', 'branch', 'musedm', 'realtime', 'remember', 'musewake', 'personas', 'rename', 'selfschedule', 'selfmodel', 'teamapproval', 'parked', 'parkedask', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'fast', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'gitpush', 'multirepo', 'gitpublish', 'creation', 'human', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'appsettings', 'control', 'phone']);
+KEYS.push('imagerecovery'); OPT_IN.add('imagerecovery');
 KEYS.push('mcpsettings'); OPT_IN.add('mcpsettings');
 KEYS.push('cloudcal');
 KEYS.push('caltodo', 'cloudtodo');
@@ -430,6 +432,7 @@ OPT_IN.add('muselogdm'); KEYS.push('muselogdm'); // 一个 Muse 周期(muselogsp
 OPT_IN.add('muserulechat'); KEYS.push('muserulechat'); // 一个私聊 run:直说规则当场建好,不经过周期
 OPT_IN.add('pluginaware'); KEYS.push('pluginaware'); // 四个 run + 假云端的商店;只在动 PLUGIN_AWARENESS_SECTION(解决需求时想到插件)时才有信息量
 KEYS.push('pluginext');
+OPT_IN.add('pluginsettings'); KEYS.push('pluginsettings');
 OPT_IN.add('pluginext'); // 夹具插件在 tangu-plugin.json 里声明 stdio MCP + Stop hook(10-17);只在动 mcp/pluginServers、hooks/pluginHooks、bootstrap 的 attachManifestExtras 时跑
 OPT_IN.add('marketplace'); OPT_IN.add('marketplacechat'); // marketplacechat:同一判据跑在 chat 预设(详情工具要先 load_tools)
 // storeupdate(10-27):Tangu 替作者提交商店更新 —— 官方签名 Extend 包里的引擎插件(ctx.cloud / approvalPreview / chat 准入)。
@@ -1294,6 +1297,18 @@ if (ONLY.has('plugin')) {
 };
 `);
 }
+// Opt-in settings fixture. The undeclared marker must never reach the model.
+const SETTINGS_TAG = `SET-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+if (ONLY.has('pluginsettings')) {
+  const pdir = join(home, 'plugins', 'live-settings');
+  mkdirSync(join(pdir, 'dist'), { recursive: true });
+  writeFileSync(join(pdir, 'tangu-plugin.json'), JSON.stringify({ id: 'live-settings', name: 'Live settings', version: '1.0.0', apiVersion: 1, entry: 'dist/index.js' }));
+  writeFileSync(join(pdir, 'package.json'), '{"type":"module"}');
+  writeFileSync(join(pdir, 'dist', 'index.js'), `export default { activate(ctx) {
+    ctx.registerPlugin({ id: 'live-settings', name: 'Live settings', description: 'Settings fixture', defaultEnabled: true });
+    ctx.registerAgentSettings({ fields: [{key:'language', type:'string', description:'Current language'}, {key:'token',type:'secret',description:'Token configured'}], read: () => ({language:${JSON.stringify('engine-' + SETTINGS_TAG)}, token:true, private:'UNDECLARED-PRIVATE-SENTINEL'}) });
+  } };`);
+}
 // pluginext(10-17):夹具引擎插件只靠 manifest 声明一个 stdio MCP(假 server,echo 回 `<tag>:<text>`)和一个 Stop hook ——
 // hook 往文件里记一行,并在 stdout 回 block + continue:false(观察档:不许真的拦住 / 停掉)。入口只 registerPlugin(给它一个开关,不注册工具)。
 const EXT_TAG = `EXT-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
@@ -1446,7 +1461,7 @@ if (ONLY.has('notebook') && !NOTEBOOK_NEG) {
 }
 
 // account(10-10):假 Forsion 云端(额度 / 套餐 / 积分是已知数),只在跑它时起;显式给了 TANGU_LIVE_CLOUD_URL 的以那个为准。
-const FAKE_CLOUD = (ONLY.has('account') || ONLY.has('webpublish') || ONLY.has('pluginaware') || SIM) && !process.env.TANGU_LIVE_CLOUD_URL ? await startFakeCloud(TOKEN, { connect: SIM?.url }) : null;
+const FAKE_CLOUD = ONLY.has('imagerecovery') ? await startImageRecoveryCloud(TOKEN) : (ONLY.has('account') || ONLY.has('webpublish') || ONLY.has('pluginaware') || SIM) && !process.env.TANGU_LIVE_CLOUD_URL ? await startFakeCloud(TOKEN, { connect: SIM?.url }) : null;
 
 // computerhistory:日文件逐行加密(desktop/electron/computerHistoryCrypto.ts),钥匙像桌面那样经 stdin 私有通道交给引擎
 // (core/hostChannel.ts);只在跑这个场景时接管 stdin,别的场景的引擎环境不变
@@ -1700,7 +1715,7 @@ async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {
             ev.uiCmds.push({ kind: p.kind, key: p.key, value: p.value, id: p.id, args: p.args });
             const settings = p.kind === 'setting' && p.key ? { [p.key]: String(p.value) } : undefined;
             // uiRespond:场景自己扮渲染端(settingsnav 用它照 desktop 的口径校验 open-settings 的落点);缺省一律 ok。
-            const reply = opts.uiRespond?.(p) || { ok: true, ...(settings ? { state: String(p.value), settings } : {}) };
+            const reply = await opts.uiRespond?.(p) || { ok: true, ...(settings ? { state: String(p.value), settings } : {}) };
             await api(`/agent/runs/${runId}/inquiries/${p.ackId}`, { method: 'POST', body: JSON.stringify(reply) }).catch((err) => { ev.uiError = String(err.message); });
           }
           // 「调用过」≠「跑成了」:deferred 场景要判 read_document 真解析出了标记,不是报错后被 read_file 兜住。
@@ -3879,6 +3894,8 @@ try {
   // ③ 第三轮 edit_image 带了 previous_outputs,假后端收到的里头有上一张产出(只多带了附件记作未判定)。
   // 负对照 = dist 里两处:services/agentLoop.js 的 `if (!imageInputs.length && contextImages?.images.length)` 前加 `false && `,
   // tools/builtin/imageEdit.js 的 previousOutputs 开头 `if (refs === undefined) return []` 改成 `return []`(②③ 须红)。
+  await scenario('imagerecovery', '断线动图恢复：聊天工具入口、会话持久化和确认扣费', () => imageRecoveryLive({ run, api, cloud: FAKE_CLOUD }));
+
   await scenario('imageedit', 'imageedit edit_image 用上一条消息的图、改自己刚生成的图', async () => {
     const sid = `live-imageedit-${Date.now()}`;
     const cfg = { imageModelId: 'fakeimg/fake-edit' };
@@ -4808,6 +4825,28 @@ Then reply with only the command output.`,
   //    写明 run_ui_command open-settings 的调用形状,见 services/appSettings.ts OPEN_SETTINGS_HINT)。
   //    「打开到语音页」只认**渲染端回了 ok** 的落点:以前按「问过」算,落点被拒也记绿。
   //    --settingsnav-no-voice = 负对照:清单里删掉 voice、渲染端把它当未知落点拒掉 → 开不到语音页,必须红。
+  await scenario('pluginsettings', 'pluginsettings 显式字段、UI/engine 两源与密钥配置状态', async () => {
+    const { createAgentSettingsRegistry, AGENT_SETTINGS_COMMAND } = await import('../dist/contracts/agentSettings.js');
+    const registry = createAgentSettingsRegistry('ui');
+    registry.register({ id: 'live-settings', name: 'Live settings', version: '1' }, {
+      fields: [{ key: 'language', type: 'string', description: 'Current language' }, { key: 'token', type: 'secret', description: 'Token configured' }],
+      read: () => ({ language: 'ui-' + SETTINGS_TAG, token: false, private: 'UNDECLARED-PRIVATE-SENTINEL' }),
+    });
+    const ev = await run(`live-pluginsettings-${Date.now()}`, '请读取插件 live-settings 在当前客户端（ui）和引擎（engine）分别生效的 language 设置，以及 token 是否已配置。不要读取原始设置文件，也不要修改。分别列出两处结果。', 240_000, { preset: 'chat' }, 'desktop/live-harness', undefined, undefined, undefined, {
+      ui: {}, uiCommands: [{ id: AGENT_SETTINGS_COMMAND, description: 'Read explicitly exposed plugin settings. Use read_plugin_settings with source ui.' }],
+      uiRespond: async (p) => p.kind === 'command' && p.id === AGENT_SETTINGS_COMMAND
+        ? { ok: true, result: JSON.stringify(await registry.read(p.args?.pluginId, p.args?.keys)) }
+        : { ok: false, error: 'Unknown command' },
+    });
+    const results = ev.toolResults.filter((r) => r.name === 'read_plugin_settings');
+    const ui = results.some((r) => r.full.includes('ui-' + SETTINGS_TAG) && r.full.includes('"configured":false'));
+    const engine = results.some((r) => r.full.includes('engine-' + SETTINGS_TAG) && r.full.includes('"configured":true'));
+    const hidden = ev.content.includes('UNDECLARED-PRIVATE-SENTINEL') || ev.toolResults.some((r) => r.full.includes('UNDECLARED-PRIVATE-SENTINEL'));
+    const answered = ev.content.includes('ui-' + SETTINGS_TAG) && ev.content.includes('engine-' + SETTINGS_TAG);
+    writeFileSync(join(OUT, 'pluginsettings-evidence.json'), JSON.stringify({ ui, engine, hidden, answered, toolArgs: ev.toolArgs, results, output: ev.content }, null, 2));
+    return { ok: !ev.error && ev.done && ui && engine && answered && !hidden, detail: ev.error || `ui=${ui}; engine=${engine}; answered=${answered}; undeclared leak=${hidden}`, output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
+  });
+
   await scenario('settingsnav', 'settingsnav 「语音在哪设置」:界面命令直达设置页,不用电脑操控', async () => {
     const noVoice = argv.includes('--settingsnav-no-voice');
     const TARGETS = 'Pages: general, forsion, model, connectors, mcp, hooks, skills, agents, amadeus-plugins, browser, computer-use, channels, notes, sync, spaces, theme, shortcuts, notifications, statusbar, trash, permissions, units, remote-sessions, computer-history, advanced, developer, about. Settings: workspace-dir, keep-awake, close-action, backend-mode, sandbox, python, mirror, external-backend, forsion-account, forsion-submissions, cloud-url, memory-sync, inbox-notify, default-models, model-providers, masking, web-search, voice, theme-language, startup-appearance, palette, color-mode, ui-zoom, glass, home-motion, ambient, visuals, smooth-caret, selection-bar, prompt-suggest, chat-avatars, calm-dim, calm-reading, calm-motion, motion-theme, motion-fade, ribbon-auto-home, fonts, notes-attachments, daily-notes, agent-browser, strict-background, jev, units-switch, units-host, remote-sessions-switch, remote-approval-cap, remote-trusted-devices, remote-safety, computer-history, connectors, mcp-json, mcp-server, reset-layout, clear-data, language.';
