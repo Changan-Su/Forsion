@@ -95,6 +95,7 @@ import { linkAtCursor, linkFollowPlugin, linkKindOfEvent, type LinkAtCursor } fr
 import { mdImagePlugin } from './mdImage'
 import { focusStructuralPrefix, structuralSourcePlugin } from './structuralSource'
 import { editContextOf, slashItemApplies, type EditContext } from './menuContext'
+import { blockPickerPlugin, closeBlockPicker } from './blockPicker'
 import { takeMachineSlash } from './machineSlash'
 import { applyTrigger, applyTypedTrigger, canAutoTriggerFromBlock, matchTrigger, posAtTextAnchor, slashRange, splitTail, textBeforeCursor, triggerAtCursor, unwrapAtStart, type Trigger } from './blockTriggers'
 import { fullWidthWikiRule, mentionSuggestPlugin, selectionToolbarPlugin, slashSuggestPlugin, toolbarDismissKey, wikiSuggestPlugin, type SelRect, type WikiQuery } from './wikiAutocomplete'
@@ -166,6 +167,7 @@ registerMessages({
   'mdblock.group.advanced': { zh: '高级', en: 'Advanced' },
   'mdblock.group.plugin': { zh: '插件', en: 'Plugins' },
   // slash 菜单条目名(**唯一真源**,桌面菜单与移动端块面板共用)
+  'mdblock.picker.query': { zh: '搜索内容类型', en: 'Search block types' },
   'mdblock.slash.text': { zh: '文本', en: 'Text' },
   'mdblock.slash.h1': { zh: '标题 1', en: 'Heading 1' },
   'mdblock.slash.h2': { zh: '标题 2', en: 'Heading 2' },
@@ -616,6 +618,9 @@ export function MilkdownInner({
   const [emojiQ, setEmojiQ] = useState<WikiQuery | null>(null) // ":" emoji 短代码补全(I-21)
   const emojiDismissedFrom = useRef<number | null>(null) // Esc 闩锁(同 #)
   const [slash, setSlash] = useState<WikiQuery | null>(null) // "/" 命令菜单(query 驻留文档,同 @/[[)
+  const [picker, setPicker] = useState<WikiQuery | null>(null)
+  const [pickerQuery, setPickerQuery] = useState('')
+  const pickerOpenRef = useRef(false)
   const [toolbar, setToolbar] = useState<SelRect | null>(null) // 选中文字上浮的格式工具栏
   const [pasteAs, setPasteAs] = useState<PasteAs | null>(null) // 粘贴链接后的「粘贴为」菜单
   // Esc 闩锁:记住被关掉的那个 '@' / '/' 锚点,同锚点不再弹(否则下一击键 plugin 又 report → 关不掉)。
@@ -1221,6 +1226,7 @@ export function MilkdownInner({
       }))
       // '/' 命令菜单:query 驻留文档(同 @/[[),字符不被吞、空格自动关成字面文本。注册在
       // wiki/mention 之后 —— 好让它们的 *OpenRef 已就绪,slash 在它们开着时让位(避免叠开两个菜单)。
+      .use(blockPickerPlugin((q) => { if (q && !pickerOpenRef.current) setPickerQuery(''); pickerOpenRef.current = !!q; setPicker(q) }))
       .use(slashSuggestPlugin((q, blurred) => {
         if (!slashOpsRef) return // 整篇宿主(PlainMarkdownEditor)不启用 slash,'/' 恒字面
         // 触发真的没了(无 '/' 或 query 非法)→ 清 Esc 闩锁 + 关菜单;失焦(blurred)只关菜单、闩锁留着(L-04)。
@@ -1826,39 +1832,23 @@ export function MilkdownInner({
           }}
         />
       )}
-      {slash && onSlashPick && !wiki && !mention && !readOnly && (
-        <SlashMenu
-          query={slash.query}
-          left={slash.left}
-          top={slash.top}
-          anchorTop={slash.anchorTop}
-          hideKeys={unified ? UNIFIED_HIDDEN_SLASH : undefined}
-          ctx={slash.ctx}
-          unified={unified}
-          editorFocused={editorFocused}
-          editorDom={editorDom}
+      {(picker || slash) && onSlashPick && !wiki && !mention && !readOnly && (() => {
+        const active = picker || slash!
+        return <SlashMenu query={picker ? pickerQuery : active.query} onQuery={picker ? setPickerQuery : undefined}
+          left={active.left} top={active.top} anchorTop={active.anchorTop}
+          hideKeys={unified ? UNIFIED_HIDDEN_SLASH : undefined} ctx={active.ctx} unified={unified}
+          editorFocused={editorFocused} editorDom={editorDom}
           onPick={(it) => {
-            setSlash(null)
-            getInstance()?.action((ctx) => { takeMachineSlash(ctx.get(editorViewCtx), slash.from) }) // 选中了:标记作废
-            onSlashPick(it)
+            if (picker) getInstance()?.action((ctx) => closeBlockPicker(ctx.get(editorViewCtx)))
+            else getInstance()?.action((ctx) => { takeMachineSlash(ctx.get(editorViewCtx), active.from) })
+            setSlash(null); setPicker(null); onSlashPick(it)
           }}
           onClose={() => {
-            // ＋ 替用户敲的 `/`(B-19):关菜单 = 不要这个选择器了 → 连查询一起删掉,不留残渣。
-            // 用户自己敲的 `/` 照旧留成字面,且同一个 '/' 不再弹(Esc 闩锁)。
-            let cleared = false
-            getInstance()?.action((ctx) => {
-              const view = ctx.get(editorViewCtx)
-              if (!takeMachineSlash(view, slash.from)) return
-              const { doc } = view.state
-              if (slash.from < 1 || slash.to > doc.content.size || doc.textBetween(slash.from - 1, slash.from) !== '/') return
-              view.dispatch(view.state.tr.delete(slash.from - 1, slash.to))
-              cleared = true
-            })
-            if (!cleared) slashDismissedFrom.current = slash.from // Esc:同一 '/' 不再弹(留成字面文本)
-            setSlash(null)
-          }}
-        />
-      )}
+            if (picker) getInstance()?.action((ctx) => closeBlockPicker(ctx.get(editorViewCtx)))
+            else slashDismissedFrom.current = active.from
+            setSlash(null); setPicker(null)
+          }} />
+      })()}
       {pasteAs && !readOnly && (
         <PasteAsMenu
           left={pasteAs.left}
@@ -1869,7 +1859,7 @@ export function MilkdownInner({
           onClose={() => setPasteAs(null)}
         />
       )}
-      {toolbar && !wiki && !mention && !slash && !pasteAs && !readOnly && (
+      {toolbar && !wiki && !mention && !slash && !picker && !pasteAs && !readOnly && (
         <InlineToolbar
           left={toolbar.left}
           top={toolbar.top}
@@ -2707,8 +2697,9 @@ function PasteAsMenu({ left, top, anchorTop, url, onPick, onClose }: {
   )
 }
 
-function SlashMenu({ query, left, top, anchorTop, hideKeys, ctx, unified, editorFocused, editorDom, onPick, onClose }: {
+function SlashMenu({ query, onQuery, left, top, anchorTop, hideKeys, ctx, unified, editorFocused, editorDom, onPick, onClose }: {
   query: string; left: number; top: number; anchorTop?: number
+  onQuery?: (query: string) => void
   /** 本宿主暂不支持的项(见 UNIFIED_HIDDEN_SLASH):点了没反应比少一条更糟,直接不露。 */
   hideKeys?: ReadonlySet<string>
   /** 触发点的编辑上下文:这里做不成的项不列(B-18,menuContext.slashItemApplies 单源)。 */
@@ -2794,7 +2785,7 @@ function SlashMenu({ query, left, top, anchorTop, hideKeys, ctx, unified, editor
       // IME 组字中:一律放行给输入法(拼音选词是 Enter、候选是空格,绝不能被菜单抢走)。
       // key==='Process'/keyCode===229 覆盖 isComposing 尚未置位的首帧(AFFiNE 同款守卫)。
       if (e.isComposing || e.key === 'Process' || e.keyCode === 229) return
-      if (editorFocused && !editorFocused()) return // 焦点在别处(标题框/聊天框):不劫持(L-04)
+      if (onQuery ? !menuEl.current?.contains(document.activeElement) : editorFocused && !editorFocused()) return // 焦点在别处(标题框/聊天框):不劫持(L-04)
       const bareArrow = !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey // Mod+Shift+↑↓=块重排,别吞
       if (e.key === 'Escape') {
         stop(e)
@@ -2817,7 +2808,7 @@ function SlashMenu({ query, left, top, anchorTop, hideKeys, ctx, unified, editor
     }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
-  }, [items, active, category, q, onPick, onClose, editorFocused])
+  }, [items, active, category, q, onPick, onClose, editorFocused, onQuery])
 
   const renderItem = (it: SlashItem, i: number) => (
     <button
@@ -2857,8 +2848,9 @@ function SlashMenu({ query, left, top, anchorTop, hideKeys, ctx, unified, editor
     <>
       <div className="slash-backdrop" onMouseDown={onClose} />
       {/* 按下菜单空白/分组标签/滚动条不夺编辑器焦点:失焦即关(L-04)后,不拦这一下菜单会自己关掉。 */}
-      <OverlayAt id={menuId} className="slash-menu" x={left} y={top} anchorTop={anchorTop} style={{ minHeight }}
-        innerRef={(el) => { menuEl.current = el }} onMouseDown={(e) => e.preventDefault()}>
+      <OverlayAt id={menuId} className={`slash-menu${onQuery ? ' slash-menu--picker' : ''}`} x={left} y={top} anchorTop={anchorTop} style={{ minHeight }}
+        innerRef={(el) => { menuEl.current = el }} onMouseDown={(e) => { if (!(e.target instanceof HTMLInputElement)) e.preventDefault() }}>
+        {onQuery && <input className="slash-query" autoFocus value={query} onChange={(e) => onQuery(e.target.value)} aria-label={t('mdblock.picker.query')} placeholder={t('mdblock.picker.query')} />}
         <div className="slash-category-tabs cap-tabs" role="tablist" aria-label={t('mdblock.category.label')} ref={tabsRef}>
           {SLASH_CATEGORIES.map((tab) => (
             <button key={tab} type="button" id={`${menuId}-tab-${tab}`} className="slash-category-tab"

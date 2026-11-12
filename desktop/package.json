@@ -24,6 +24,7 @@
     "replay:intelligent-ui": "node scripts/intelligent-ui-replay.cjs",
     "check:intelligent-ui-setting": "node scripts/intelligent-ui-setting.check.cjs",
     "demo:sketch": "node scripts/sketch-demo.record.cjs",
+    "check:interactions-nov12": "node scripts/e2e-editor.cjs --check=interactions-nov12",
     "check:version": "node scripts/dev-version.check.cjs",
     "check:uninstall": "node scripts/uninstall-trash.check.cjs",
     "check:uninstall-residue": "node scripts/plugin-uninstall-residue.check.cjs",

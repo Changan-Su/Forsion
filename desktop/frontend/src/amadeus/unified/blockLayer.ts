@@ -17,6 +17,7 @@ import type { MilkdownPlugin } from '@milkdown/kit/ctx'
 import { findParent } from '@milkdown/kit/prose'
 import { keydownHandler, keymap } from '@milkdown/kit/prose/keymap'
 import { AllSelection, NodeSelection, TextSelection, Plugin, PluginKey } from '@milkdown/kit/prose/state'
+import { closeHistory } from '@milkdown/kit/prose/history'
 import type { EditorState, Transaction } from '@milkdown/kit/prose/state'
 import { Decoration, DecorationSet } from '@milkdown/kit/prose/view'
 import type { EditorView } from '@milkdown/kit/prose/view'
@@ -33,8 +34,9 @@ import { foldStateAt, foldedSectionAfter, isHiddenAt, sectionEnd, toggleFoldAt }
 import { carryFolds, unfoldNewlyHidden, withFoldedSections } from './foldCarry'
 import { isListFolded, listFoldStateAt, toggleListFoldAt } from './listFold'
 import { keyboardPlugins } from './keyboard'
-import { markMachineSlash } from '../blocks/markdown/machineSlash'
+import { openBlockPicker } from '../blocks/markdown/blockPicker'
 import { isCoarsePointer } from '../../touch'
+import { numberedMarkerAt, installNumberedMarkerLongPress } from './listNumbering'
 import { registerMessages, subscribeLocale, translate } from '../../i18n'
 import { REF_MIME } from '../../components/chatDragRef'
 
@@ -50,27 +52,27 @@ registerMessages({
   'blocklayer.phHeading': { zh: '标题 {n}', en: 'Heading {n}' },
 })
 
-/** ＋ 的落点:插什么、插在哪、光标(= `/` 之后)在哪(B-19 / B-19b)。
+/** ＋ 的落点:插什么、插在哪、空段落的光标在哪(B-19 / B-19b)。
  *  列表项 → 同级新项(待办项新项不带勾);列表整体(首项归外壳)→ 按它的首项算;其余 → 块前 / 块后一个段落。 */
 export function plusInsert(state: EditorState, node: ProseNode, pos: number, above: boolean): { at: number; node: ProseNode; caret: number } | null {
   const { schema } = state
   const para = schema.nodes.paragraph
   if (!para) return null
-  const slashPara = para.create(null, schema.text('/'))
+  const emptyPara = para.create()
   let itemPos: number | null = null
   if (node.type.name === 'list_item') itemPos = pos
   else if (/_list$/.test(node.type.name) && node.firstChild?.type.name === 'list_item') itemPos = pos + 1
   const item = itemPos == null ? null : state.doc.nodeAt(itemPos)
   if (item && itemPos != null) {
     const attrs = { ...item.attrs, ...(item.attrs.checked != null ? { checked: false } : {}) }
-    const li = item.type.createAndFill(attrs, slashPara)
+    const li = item.type.createAndFill(attrs, emptyPara)
     if (li) {
       const at = above ? itemPos : itemPos + item.nodeSize
-      return { at, node: li, caret: at + 3 } // li 开 + 段开 + `/`
+      return { at, node: li, caret: at + 2 } // li 开 + 段开
     }
   }
   const at = above ? pos : pos + node.nodeSize
-  return { at, node: slashPara, caret: at + 2 } // 段开 + `/`
+  return { at, node: emptyPara, caret: at + 1 } // 段开
 }
 
 export interface BlockLayerHooks {
@@ -1296,8 +1298,7 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
         add.textContent = '＋'
         add.title = translate('blocklayer.addBelow')
         add.setAttribute('aria-label', add.title)
-        // ＋(B-19,对标 Notion):插一个新块并当场打开块选择器(新块里先放一个 `/` 唤起 slash 菜单;
-        // Esc / 点空白关掉时 MarkdownBlock 把这个 `/` 删掉,见 machineSlash)。按住 Alt 点 = 插到上方。
+        // ＋:插入空段落并打开独立查询的块选择器，不把机器输入写进笔记。Alt 点 = 插到上方。
         // 列表项上点(B-19b)插的是同级新项 —— 此前往列表中间塞了个段落,列表被劈成两段、有序列表从 1 重新编号。
         add.addEventListener('click', (e) => {
           e.stopPropagation()
@@ -1306,11 +1307,10 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
           if (!view || !a) return
           const plan = plusInsert(view.state, a.node, a.pos, e.altKey)
           if (!plan) return
-          view.focus() // 先聚焦:slash 插件只在编辑器持焦时报菜单
-          let tr = view.state.tr.insert(plan.at, plan.node)
+          view.focus()
+          let tr = closeHistory(view.state.tr).insert(plan.at, plan.node)
           tr = tr.setSelection(TextSelection.create(tr.doc, plan.caret)).scrollIntoView()
-          markMachineSlash(view, plan.caret)
-          view.dispatch(tr)
+          view.dispatch(openBlockPicker(tr, plan.caret))
           hide()
         })
 
@@ -1696,6 +1696,14 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
         const onCtxMenu = (e: MouseEvent): void => {
           const view = viewRef
           if (!view) return
+          const numbered = numberedMarkerAt(view, e)
+          if (numbered != null) {
+            e.preventDefault()
+            view.dispatch(view.state.tr.setSelection(NodeSelection.create(view.state.doc, numbered)))
+            if (!isCoarsePointer()) view.focus()
+            hooks.onMenu({ x: e.clientX, y: e.clientY })
+            return
+          }
           // 只读实例(分享页/收件箱/Muse 预览)不接管右键:原生菜单(复制/查词)照旧,编辑块菜单
           // 不出现 —— 与 show() 不给把手同一口径(B-02:此前菜单里的「删除/转换」真的会改文档)。
           if (!view.editable) return
@@ -1733,6 +1741,10 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
           hooks.onMenu({ x: e.clientX, y: e.clientY })
         }
         editorView.dom.addEventListener('contextmenu', onCtxMenu)
+        const removeNumberLongPress = installNumberedMarkerLongPress(editorView, (pos, x, y) => {
+          editorView.dispatch(editorView.state.tr.setSelection(NodeSelection.create(editorView.state.doc, pos)))
+          hooks.onMenu({ x, y })
+        })
         // 把手区域(⠿ / ＋ / 折叠钮)上的右键 = 这一块的块菜单:右键的 mousedown 已经走 selectDragUnit 把块选好了。
         content.addEventListener('contextmenu', (e) => {
           const view = viewRef
@@ -2095,6 +2107,7 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
             root.removeEventListener('mousemove', onMouseMove)
             editorView.dom.removeEventListener('keydown', onKeyDown)
             editorView.dom.removeEventListener('contextmenu', onCtxMenu)
+            removeNumberLongPress()
             root.removeEventListener('dragover', onRootDragOver, true)
             root.removeEventListener('dragleave', onRootDragLeave, true)
             root.removeEventListener('drop', onDropCapture, true)

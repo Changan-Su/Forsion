@@ -22,6 +22,8 @@ export interface ExportBox { x: number; y: number; w: number; h: number }
 /** 一张卡:锚 + 画布上的盒(h 必须是实际高度 —— h=0 的自适应卡由调用方量 DOM)+ 颜色原值 + 内容的 markdown。 */
 export interface ExportCard extends ExportBox { ref: string; color?: unknown; md: string }
 export interface ExportInput {
+  /** Resolved theme color for formats that cannot encode semantic accent. */
+  accentColor?: string
   cards: ExportCard[]
   /** 主卡的盒与非卡正文的 markdown;null = 不导出主卡。 */
   main: (ExportBox & { md: string }) | null
@@ -55,7 +57,7 @@ export interface JsonCanvas { nodes: JcNode[]; edges: JcEdge[] }
 
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null)
 const str = (v: unknown): string | null => (typeof v === 'string' && v ? v : null)
-const colorOf = (v: unknown): string | null => (canvasColorCss(v) ? (v as string) : null)
+const fixedColor = (v: unknown): string | null => (v !== 'accent' && canvasColorCss(v) ? (v as string) : null)
 const endOf = (v: unknown): 'none' | 'arrow' | null => (v === 'none' || v === 'arrow' ? v : null)
 const geo = (b: ExportBox): { x: number; y: number; width: number; height: number } => ({
   x: Math.round(b.x), y: Math.round(b.y), width: Math.max(1, Math.round(b.w)), height: Math.max(1, Math.round(b.h)),
@@ -77,6 +79,11 @@ function sideOf(from: ExportBox, to: ExportBox): JcSide {
 }
 
 export function buildJsonCanvas(input: ExportInput): JsonCanvas {
+  // Custom theme accents resolve to rgb(), while JSON Canvas requires hex.
+  const rgb = /^rgb\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)\s*\)$/.exec(input.accentColor?.trim() || '')
+  const accent = rgb && rgb.slice(1).every((n) => Number(n) <= 255)
+    ? '#' + rgb.slice(1).map((n) => Math.round(Number(n)).toString(16).padStart(2, '0')).join('') : input.accentColor
+  const colorOf = (v: unknown): string | null => fixedColor(v === 'accent' ? accent : v)
   const groups: JcNode[] = []
   const shapes: JcNode[] = []
   const cards: JcNode[] = []
