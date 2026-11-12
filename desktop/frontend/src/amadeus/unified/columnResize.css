@@ -1,0 +1,48 @@
+/* A: one full-height line in the existing internal column gap; no persistent frame. */
+.amx-column-boundary {
+  position: absolute;
+  pointer-events: none;
+  width: 1px;
+  background: var(--signal-line);
+  opacity: 0;
+  transition: opacity var(--duration-fast) var(--ease-surface);
+}
+.amx-column-boundary[data-visible] { opacity: 1; }
+.amx-column-boundary > span {
+  position: absolute;
+  width: max-content;
+  max-width: 180px;
+  padding: 3px 7px;
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  background: var(--bg-card);
+  box-shadow: var(--card-shadow);
+  font: var(--ui-font-caption)/var(--ui-line-caption) var(--font-ui);
+}
+.amx-column-width {
+  z-index: var(--z-menu);
+  width: 278px;
+  box-sizing: border-box;
+  padding: 12px;
+  color: var(--text);
+  font: var(--ui-font-body)/var(--ui-line-body) var(--font-ui);
+}
+.amx-column-width-title { font-weight: 600; margin-bottom: 8px; }
+.amx-column-width-values, .amx-column-width-actions { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.amx-column-width-values { color: var(--text-muted); }
+.amx-column-width output { font-variant-numeric: tabular-nums; color: var(--text); }
+.amx-column-width input[type='range'] { width: 100%; margin: 0; height: 44px; accent-color: var(--signal); }
+.amx-column-width button { border: 0; background: transparent; color: var(--text); border-radius: var(--radius-sm); font: inherit; padding: 6px 10px; cursor: pointer; }
+.amx-column-width button:hover { background: var(--menu-hover); }
+.amx-column-width button:focus-visible { outline: 2px solid var(--signal); outline-offset: 1px; }
+@media (max-width: 600px) {
+  .amx-column-width { top: auto !important; left: 12px !important; right: 12px; bottom: max(12px, env(safe-area-inset-bottom)); width: auto; }
+  .amx-column-width button { min-height: 44px; }
+}
+/* Match the global guard layer so its universal opacity fade cannot override this affordance. */
+@layer forsion-guard {
+  @media (prefers-reduced-motion: reduce) {
+    .amx-column-boundary { transition: none !important; }
+  }
+  :root[data-motion-fade='on'] .amx-column-boundary { transition: none !important; }
+}

@@ -34,6 +34,7 @@ import { foldStateAt, foldedSectionAfter, isHiddenAt, sectionEnd, toggleFoldAt }
 import { carryFolds, unfoldNewlyHidden, withFoldedSections } from './foldCarry'
 import { isListFolded, listFoldStateAt, toggleListFoldAt } from './listFold'
 import { keyboardPlugins } from './keyboard'
+import { installColumnResize } from './columnResize'
 import { openBlockPicker } from '../blocks/markdown/blockPicker'
 import { isCoarsePointer } from '../../touch'
 import { numberedMarkerAt, installNumberedMarkerLongPress } from './listNumbering'
@@ -2008,68 +2009,7 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
         }
         root.addEventListener('drop', onDropCapture, true)
 
-        // 列宽拖拽:按在行的列缝(gap 背景属于 row 元素本身)→ 实时 flexGrow 预览,松手写回 attrs。
-        let resizeCleanup: (() => void) | null = null // 拖拽中途卸载/pointercancel 也要摘 window 监听(Codex 终审 P2)
-        const onPointerDown = (e: PointerEvent): void => {
-          const view = viewRef
-          const t = e.target as HTMLElement | null
-          if (!view || !t || !t.classList?.contains('amx-ucolrow')) return
-          const rowEl = t
-          const cells = [...rowEl.children].filter((c): c is HTMLElement => c instanceof HTMLElement && 'amxColcell' in c.dataset)
-          let li = -1
-          for (let i = 0; i < cells.length - 1; i++) {
-            if (e.clientX >= cells[i].getBoundingClientRect().right - 2 && e.clientX <= cells[i + 1].getBoundingClientRect().left + 2) {
-              li = i
-              break
-            }
-          }
-          if (li < 0) return
-          e.preventDefault()
-          const L = cells[li]
-          const R = cells[li + 1]
-          const lLeft = L.getBoundingClientRect().left
-          const pxTotal = R.getBoundingClientRect().right - lLeft
-          const sumW = (Number(L.dataset.width) || 1) + (Number(R.dataset.width) || 1)
-          const frac = (ev: PointerEvent): number => Math.min(0.85, Math.max(0.15, (ev.clientX - lLeft) / pxTotal))
-          const move = (ev: PointerEvent): void => {
-            const f = frac(ev)
-            L.style.flexGrow = String(sumW * f)
-            R.style.flexGrow = String(sumW * (1 - f))
-          }
-          const stop = (): void => {
-            window.removeEventListener('pointermove', move)
-            window.removeEventListener('pointerup', up)
-            window.removeEventListener('pointercancel', stop)
-            resizeCleanup = null
-          }
-          const up = (ev: PointerEvent): void => {
-            stop()
-            const f = frac(ev)
-            const round4 = (n: number): number => Math.round(n * 10000) / 10000
-            try {
-              const rowPos = view.posAtDOM(rowEl, 0) - 1
-              const rowNode = view.state.doc.nodeAt(rowPos)
-              if (!rowNode || rowNode.type.name !== 'amadeusColumnRow') return
-              let at = rowPos + 1
-              let tr = view.state.tr
-              for (let i = 0; i < rowNode.childCount; i++) {
-                const c = rowNode.child(i)
-                if (i === li) tr = tr.setNodeMarkup(at, undefined, { ...c.attrs, width: round4(sumW * f) })
-                if (i === li + 1) tr = tr.setNodeMarkup(at, undefined, { ...c.attrs, width: round4(sumW * (1 - f)) })
-                at += c.nodeSize
-              }
-              tr.setMeta('amxColumns', true)
-              view.dispatch(tr)
-            } catch {
-              // posAtDOM 失效(行刚被改掉):放弃写回,预览样式随下次渲染消失
-            }
-          }
-          window.addEventListener('pointermove', move)
-          window.addEventListener('pointerup', up)
-          window.addEventListener('pointercancel', stop)
-          resizeCleanup = stop
-        }
-        container.addEventListener('pointerdown', onPointerDown)
+        const columnResize = installColumnResize(editorView, container, root, overlayOrigin)
 
         // 三颗常驻钮的 title 只在建 DOM 时写过一次 —— 切语言不重建编辑器,不订阅就永远停在旧语言。
         // (fold.title 每次 syncFold 重算、空块 placeholder 随 decorations 重算,都不用管。)
@@ -2089,6 +2029,7 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
           //    `<span style="color:">`、或多吃一个字(评审 2026-09-27 B-16b,P0)。所以越界/解析失败
           //    一律按「锚点块已不在」处理 = hide(),本函数绝不许抛。仪器:check:dragdel。
           update: (v) => {
+            columnResize.update()
             const a = activeRef
             if (!a) return
             let same = false
@@ -2114,9 +2055,8 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
             root.removeEventListener('dragstart', onImageDragStart, true)
             blockDragViews.delete(editorView)
             root.removeEventListener('mouseleave', onLeave)
-            container.removeEventListener('pointerdown', onPointerDown)
             offLocale()
-            resizeCleanup?.()
+            columnResize.destroy()
             window.removeEventListener('scroll', onScroll, { capture: true })
             window.removeEventListener('dragover', onDragOver)
             content.remove()
