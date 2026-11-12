@@ -109,6 +109,7 @@ const uploads: Array<{ name: string | null; ascii: string | null; body: string; 
 /** 云端收到的反馈单(POST /api/feedback 的 JSON)。 */
 const tickets: Array<{ description?: string; attachments?: Array<{ filename?: string; size?: number }> }> = []
 
+let invitationsEnabled = true
 function fakeCloud(req: http.IncomingMessage, res: http.ServerResponse): boolean {
   const url = req.url || '/'
   if (url.startsWith('/pay') || url.startsWith('/account')) { res.writeHead(200, { 'Content-Type': 'text/html' }); res.end('<!doctype html><title>pay</title>'); return true }
@@ -117,6 +118,7 @@ function fakeCloud(req: http.IncomingMessage, res: http.ServerResponse): boolean
   const key = `${req.method} ${url}`
   const hit = key in API ? API[key] : API[`${req.method} ${url.split('?')[0]}`]
   if (String(req.headers.authorization || '') !== `Bearer ${TOKEN}`) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end('{"error":"unauthorized"}'); return true }
+  if (url === '/api/invite/my-code' && !invitationsEnabled) { res.writeHead(404, { 'Content-Type': 'application/json' }); res.end('{}'); return true }
   if (req.method === 'POST' && url === '/api/files/upload') {
     const chunks: Buffer[] = []
     req.on('data', (c: Buffer) => chunks.push(c))
@@ -308,6 +310,8 @@ async function main(): Promise<void> {
     await accountMenu.getByText('Pro', { exact: true }).waitFor()
     const nickname = await accountMenu.locator('.ap-name').innerText()
     check('⑨ 电脑账号菜单显示昵称、会员徽章和日／周额度', nickname === 'Alice', nickname)
+    await accountMenu.getByTestId('account-points').getByText('1,240 积分').waitFor()
+    check('⑨ 访客积分与邀请菜单通过账号桥读取，未开放cloudFetch', await accountMenu.getByRole('button', { name: '邀请奖励' }).isVisible() && await page.evaluate(() => !window.tangu?.cloudFetch))
     await quotaSummary.click()
     check('⑨ 额度详情显示可用的额度重置卡', await accountMenu.getByRole('button', { name: '使用额度重置卡（1 张）' }).isVisible())
     await page.waitForTimeout(500) // Capture the fully expanded popover after its entrance animation.
@@ -317,8 +321,12 @@ async function main(): Promise<void> {
     await page.locator('.mk-page .settings-back').first().click()
     await page.locator('.mk-page').waitFor({ state: 'detached' })
 
+    invitationsEnabled = false
     await avatar.click()
     await quotaSummary.getByText('今日 70% · 本周 76%').waitFor()
+    await page.waitForFunction(() => ![...document.querySelectorAll('.account-pop button')].some(el => el.textContent?.includes('邀请奖励')))
+    check('⑨ 邀请关闭后菜单隐藏入口，积分仍可见', await accountMenu.getByTestId('account-points').innerText() === '1,240 积分')
+    invitationsEnabled = true
     await quotaSummary.click()
     await accountMenu.getByRole('button', { name: '使用额度重置卡（1 张）' }).click()
     const resetRequests = () => seen.filter((r) => r.method === 'POST' && r.url === '/api/token-quota/reset-card/use')

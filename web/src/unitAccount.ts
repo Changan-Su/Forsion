@@ -156,6 +156,16 @@ export async function installUnitAccount(meta: {
       }
     },
     accountQuota: () => accountJson('/token-quota/my'),
+    // Fixed read-only endpoints; never expose a general cloud transport to Unit visitors.
+    accountRewards: async () => {
+      const results = await Promise.allSettled([
+        accountJson('/credits/balance'), accountJson('/invite/my-code'),
+      ])
+      if (bootGeneration !== account.generation) throw new AccountChangedError()
+      const read = (result: typeof results[number]) => result.status === 'fulfilled'
+        ? result.value : { status: 0, json: null }
+      return { balance: read(results[0]), invite: read(results[1]) }
+    },
     accountUseResetCard: async (type?: string) => {
       if (type !== undefined && type !== 'both') return { status: 400, json: { error: 'invalid_type' } }
       return accountJson('/token-quota/reset-card/use', { method: 'POST',
