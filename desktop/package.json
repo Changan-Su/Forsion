@@ -26,6 +26,7 @@
     "demo:sketch": "node scripts/sketch-demo.record.cjs",
     "check:column-width": "node scripts/e2e-editor.cjs --check=column-width",
     "check:interactions-nov12": "node scripts/e2e-editor.cjs --check=interactions-nov12",
+    "check:muse-notifications": "node scripts/muse-notifications.check.cjs",
     "check:version": "node scripts/dev-version.check.cjs",
     "check:uninstall": "node scripts/uninstall-trash.check.cjs",
     "check:uninstall-residue": "node scripts/plugin-uninstall-residue.check.cjs",

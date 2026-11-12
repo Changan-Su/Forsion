@@ -39,52 +39,69 @@ export function asksUser(text: string): boolean {
   return endsWithQuestion(text) || /[?？][^?？]{1,40}$/.test(text.trim()); // 尾巴另起一行也算
 }
 
+// All proactive writers for a local user share this queue (one Muse direct chat). Allocate timestamps only
+// inside it, after any asynchronous quota checks, so delayed sends cannot move unread
+// backwards or collide within one millisecond (the watermark is persisted across restarts).
+const dmWrites = new Map<string, Promise<unknown>>();
+function serializeDm<T>(sessionId: string, write: () => Promise<T>): Promise<T> {
+  const pending = (dmWrites.get(sessionId) ?? Promise.resolve()).catch(() => {}).then(write);
+  dmWrites.set(sessionId, pending);
+  void pending.finally(() => { if (dmWrites.get(sessionId) === pending) dmWrites.delete(sessionId); }).catch(() => {});
+  return pending;
+}
+
 export async function postMuseDm(userId: string, content: string, origin: ProactiveOrigin = 'proactive'): Promise<MuseDmResult> {
   const text = String(content || '').trim();
   if (!text) return { ok: false, error: 'Error: the message is empty' };
-  // 动态导入:routes/solo → routes/sessions → agentLoop → 工具注册表 → 本文件,静态导入会成环。
-  const { ensureSoloSession } = await import('../routes/solo.js');
-  const s = await ensureSoloSession(userId, 'agent', MUSE_AGENT_SLUG).catch(() => null);
-  if (!s) return { ok: false, error: 'Error: the direct chat with the user is not available here' };
-  const now = Date.now();
-  if (origin === 'proactive') {
-    const [r] = await query<any[]>(
-      `SELECT COUNT(*) AS n FROM chat_messages WHERE session_id = ? AND origin = 'proactive' AND timestamp >= ?`,
-      [s.id, now - 3600_000],
-    );
-    if ((Number(r?.n) || 0) >= MUSE_DM_PER_HOUR) {
-      return suppressed({ ok: false, error: `Error: you already sent the user ${MUSE_DM_PER_HOUR} messages in the last hour. Fold this into your next message, or write it in your journal.` });
-    }
-  }
-  if (origin === 'proactive' || origin === 'proactive:card') {
-    // 一天的上限来自配置(0 = 不限);磨合期再封一道,作息外也不发(周期被规则 / 日程叫醒时会走到这里)
-    const muse = loadSpecialAgentsConfig().muse;
-    const onboarding = onboardingActive(await readMuseOnboarding().catch(() => null));
-    if (onboarding && !isWithinActiveHours(muse, new Date().getHours())) return suppressed({ ok: false, error: 'Error: it is outside the user\'s active hours. Keep this for your next cycle.' });
-    const cap = onboarding ? Math.min(muse.maxDmPerDay || MUSE_ONBOARDING_DAILY_CAP, MUSE_ONBOARDING_DAILY_CAP) : muse.maxDmPerDay;
-    if (cap) {
+  return serializeDm(userId, async (): Promise<MuseDmResult> => {
+    // 动态导入:routes/solo → routes/sessions → agentLoop → 工具注册表 → 本文件,静态导入会成环。
+    const { ensureSoloSession } = await import('../routes/solo.js');
+    const s = await ensureSoloSession(userId, 'agent', MUSE_AGENT_SLUG).catch(() => null);
+    if (!s) return { ok: false, error: 'Error: the direct chat with the user is not available here' };
+    let now = Date.now();
+    if (origin === 'proactive') {
       const [r] = await query<any[]>(
-        `SELECT COUNT(*) AS n FROM chat_messages WHERE session_id = ? AND origin IN ('proactive', 'proactive:card') AND timestamp >= ?`,
-        [s.id, now - 86_400_000],
+        `SELECT COUNT(*) AS n FROM chat_messages WHERE session_id = ? AND origin = 'proactive' AND timestamp >= ?`,
+        [s.id, now - 3600_000],
       );
-      if ((Number(r?.n) || 0) >= cap) return suppressed({ ok: false, error: `Error: you already reached the user ${cap} times in the last 24 hours. Save this for your journal or the next day.` });
+      if ((Number(r?.n) || 0) >= MUSE_DM_PER_HOUR) {
+        return suppressed({ ok: false, error: `Error: you already sent the user ${MUSE_DM_PER_HOUR} messages in the last hour. Fold this into your next message, or write it in your journal.` });
+      }
     }
-  }
-  const id = uuidv4();
-  await query(
-    `INSERT INTO chat_messages (id, session_id, role, content, timestamp, model_id, is_error, agent_slug, origin)
-     VALUES (?, ?, 'model', ?, ?, NULL, ?, ?, ?)`,
-    [id, s.id, text, now, false, MUSE_AGENT_SLUG, origin],
-  );
-  const ask = origin === 'proactive' && asksUser(text);
-  await query(
-    `UPDATE chat_sessions SET updated_at = CURRENT_TIMESTAMP, proactive_at = ?${ask ? ', awaiting_user = TRUE' : ''} WHERE id = ?`,
-    [now, s.id],
-  );
-  ledger.inc('daily_muse', DM_FIELD[origin]);
-  if (ask) ledger.inc('daily_muse', 'dmAwaitingUser');
-  if (origin === 'proactive') noteMuseProduced('producedDms');
-  return { ok: true, sessionId: s.id, messageId: id };
+    if (origin === 'proactive' || origin === 'proactive:card') {
+      // 一天的上限来自配置(0 = 不限);磨合期再封一道,作息外也不发(周期被规则 / 日程叫醒时会走到这里)
+      const muse = loadSpecialAgentsConfig().muse;
+      const onboarding = onboardingActive(await readMuseOnboarding().catch(() => null));
+      if (onboarding && !isWithinActiveHours(muse, new Date().getHours())) return suppressed({ ok: false, error: 'Error: it is outside the user\'s active hours. Keep this for your next cycle.' });
+      const cap = onboarding ? Math.min(muse.maxDmPerDay || MUSE_ONBOARDING_DAILY_CAP, MUSE_ONBOARDING_DAILY_CAP) : muse.maxDmPerDay;
+      if (cap) {
+        const [r] = await query<any[]>(
+          `SELECT COUNT(*) AS n FROM chat_messages WHERE session_id = ? AND origin IN ('proactive', 'proactive:card') AND timestamp >= ?`,
+          [s.id, now - 86_400_000],
+        );
+        if ((Number(r?.n) || 0) >= cap) return suppressed({ ok: false, error: `Error: you already reached the user ${cap} times in the last 24 hours. Save this for your journal or the next day.` });
+      }
+    }
+    const [clock] = await query<any[]>(`SELECT proactive_at, last_read_at,
+      (SELECT MAX(timestamp) FROM chat_messages WHERE session_id = ?) AS latest
+      FROM chat_sessions WHERE id = ?`, [s.id, s.id]);
+    now = Math.max(Date.now(), Number(clock?.latest || 0) + 1, Number(clock?.proactive_at || 0) + 1, Number(clock?.last_read_at || 0) + 1);
+    const id = uuidv4();
+    await query(
+      `INSERT INTO chat_messages (id, session_id, role, content, timestamp, model_id, is_error, agent_slug, origin)
+       VALUES (?, ?, 'model', ?, ?, NULL, ?, ?, ?)`,
+      [id, s.id, text, now, false, MUSE_AGENT_SLUG, origin],
+    );
+    const ask = origin === 'proactive' && asksUser(text);
+    await query(
+      `UPDATE chat_sessions SET updated_at = CURRENT_TIMESTAMP, proactive_at = ?${ask ? ', awaiting_user = TRUE' : ''} WHERE id = ?`,
+      [now, s.id],
+    );
+    ledger.inc('daily_muse', DM_FIELD[origin]);
+    if (ask) ledger.inc('daily_muse', 'dmAwaitingUser');
+    if (origin === 'proactive') noteMuseProduced('producedDms');
+    return { ok: true, sessionId: s.id, messageId: id };
+  });
 }
 
 /** Muse 私聊会话 id(不建)。attention 端点据此把 Muse 后台待批算到这条私聊上。 */
