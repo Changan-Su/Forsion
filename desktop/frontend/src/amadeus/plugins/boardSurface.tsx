@@ -108,6 +108,7 @@ export function mountPluginBoard(el: HTMLElement, initial: PluginBoardOptions): 
     const patch = {
       ...(o.strokeColor ? { currentItemStrokeColor: o.strokeColor, ...(pen.backgroundColor && pen.backgroundColor !== 'transparent' ? { currentItemBackgroundColor: o.strokeColor } : null) } : null),
       ...(o.strokeWidth ? widthPatch(o.strokeWidth) : null),
+      ...(o.roundness === 'sharp' || o.roundness === 'round' ? { currentItemRoundness: o.roundness } : null),
     }
     if (Object.keys(patch).length) api.updateScene({ appState: patch as unknown as AppPatch, captureUpdate: CaptureUpdateAction.NEVER })
   }
@@ -164,7 +165,7 @@ export function mountPluginBoard(el: HTMLElement, initial: PluginBoardOptions): 
       if ('tool' in patch || 'theme' in patch) mount.render(tree())
       if (patch.scene) pushScene()
       if (!api) return // 笔和视口:引擎好了的那一刻按 o 里最新的套(见 bind)
-      if ('pen' in patch || 'strokeColor' in patch || 'strokeWidth' in patch) pushStyle()
+      if ('pen' in patch || 'strokeColor' in patch || 'strokeWidth' in patch || 'roundness' in patch) pushStyle()
       if (patch.viewport) pushViewport()
     },
     getScene: () => (api ? { elements: api.getSceneElements(), files: api.getFiles() } : o.scene),

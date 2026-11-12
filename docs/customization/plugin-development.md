@@ -593,3 +593,16 @@ LCL 统一保留并排的 View。空间不足时滚动工作区内容，Ribbon�
 传入 `null` 撤回自己的通道；停用／重载时宿主同样撤回，切换账号时重新提供通道。旧宿主不提供此可选方法。
 
 旧桌面收件箱没有逐条云账号归属；升级接入先将本设备旧状态绑定到当前已验证账号，之后切账号不再重复接入。旧手机缓存不自动接入。
+
+
+### 划线条分离菜单与形状边角（2026-11-12）
+
+`mountSelectionBar` 的工具可选 `menu: { title, open(sel, anchor) }`。主体仍执行 `run(sel)`；独立箭头执行 `menu.open` 并传入真实按钮元素，可直接用于 `ctx.ui.popover(anchor, ...)`，不要搜索宿主DOM取锚点。主体上按右箭头也打开菜单，Enter/Space可操作两颗按钮；菜单先消费Esc，之后Esc才关闭划线条。`title`由插件按当前语言提供。旧宿主忽略menu，因此保留可执行的主体动作或提供自己的菜单入口。菜单消费选区时须在打开时保存该选区数据；停用/卸载时通过dispose清理菜单，不对旧选区回写。
+
+```js
+{ id: 'underline', title: t('underline'), icon: 'underline',
+  run: (sel) => underline(sel),
+  menu: { title: t('colors'), open: (sel, anchor) => openColors(sel, anchor) } }
+```
+
+`mountBoard` / `handle.update` 可选 `roundness: 'sharp' | 'round'`，映射引擎下一笔的 `currentItemRoundness`。省略时保留原默认；此设置不改写scene中已有元素，插件要修改已有矩形须保留完整元素信息并显式更新scene。不要在加载旧scene时统一改圆角。

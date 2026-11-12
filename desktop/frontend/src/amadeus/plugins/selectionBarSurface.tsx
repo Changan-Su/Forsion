@@ -44,6 +44,7 @@ export function mountPluginSelectionBar(root: HTMLElement, pluginId: string, ini
               color: str(t.color),
               icon: icon ? <span className="selbar-ico">{icon}</span> : undefined,
               on: t.on == null ? undefined : !!t.on,
+              menu: t.menu && typeof t.menu.open === 'function' ? { title: String(t.menu.title ?? t.title ?? t.id), onOpen: (anchor: HTMLElement) => guard(`tool menu "${t.id}"`, () => t.menu!.open(pick(s), anchor)) } : undefined,
               onRun: () => guard(`tool "${t.id}"`, () => t.run(pick(s))),
             }
           })}

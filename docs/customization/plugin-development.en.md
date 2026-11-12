@@ -594,3 +594,16 @@ filters duplicate legacy official broadcasts. Pass `null` to revoke the provider
 provide a fresh channel when the account changes. Older hosts omit this optional API.
 
 The legacy desktop mailbox has no per-message cloud owner. Adoption binds that device cache once to the currently verified upgrade account; later account switches cannot import it again. Unowned legacy mobile caches are not imported.
+
+
+### Split selection tools and shape corners (2026-11-12)
+
+A `mountSelectionBar` tool may declare `menu: { title, open(sel, anchor) }`. The primary button still calls `run(sel)`. Its separate arrow calls `menu.open` with the actual button element, ready for `ctx.ui.popover(anchor, ...)`; never find anchors by inspecting host DOM. ArrowRight on the primary also opens its menu; Enter/Space operate either button. A child menu consumes Escape before the bar closes. Supply `title` in the current locale. Older hosts ignore menu, so retain a usable primary action or a fallback menu entry. Capture selection data when opening a menu that consumes it, and dispose menus when the view unloads or the plugin stops; never apply a stale selection.
+
+```js
+{ id: 'underline', title: t('underline'), icon: 'underline',
+  run: (sel) => underline(sel),
+  menu: { title: t('colors'), open: (sel, anchor) => openColors(sel, anchor) } }
+```
+
+`mountBoard` and `handle.update` accept optional `roundness: 'sharp' | 'round'`, forwarded to the engine's next-shape `currentItemRoundness`. Omission preserves the existing default. It never rewrites elements already in the scene. To edit an existing rectangle, preserve its complete element data and explicitly update the scene; do not normalize old scenes to a new corner style.
