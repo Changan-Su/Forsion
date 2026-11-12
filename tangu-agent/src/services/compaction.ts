@@ -23,7 +23,7 @@ import {
   compactionThreshold, estimateMessageTokens, estimateMessagesTokens, estimateTokensRough,
   isLossy, modelContextWindow, HISTORY_MSG_MAX_CHARS,
 } from './contextBudget.js';
-import { dropCoveredCalls, loadReplaySteps, replayAssistantHistory } from './historyReplay.js';
+import { dropCoveredCalls, loadReplaySteps, replayAssistantHistory, replayUserContext } from './historyReplay.js';
 import { DEFAULT_COMPACTION_SETTINGS, type CompactionSettings } from './compactionSettings.js';
 import { historyRevision } from './historyRevision.js';
 import { declaredPersistPlaceholder } from '../tools/toolRegistry.js';
@@ -747,7 +747,8 @@ export async function compactSession(
     const role = r.role === 'model' ? 'assistant' : r.role;
     const raw = String(r.content || '');
     if (role === 'user') {
-      if (raw.trim()) messages.push({ role: 'user', content: raw } as ChatMessage); // 持久摘要读原文,不经单条硬帽
+      if (raw.trim()) messages.push({ role: 'user', content: raw } as ChatMessage);
+      messages.push(...replayUserContext(r.id, steps.get(r.id))); // 持久摘要读原文,不经单条硬帽
     } else if (role === 'assistant') {
       let replayed: ChatMessage[];
       if (raw.length > HISTORY_MSG_MAX_CHARS) {

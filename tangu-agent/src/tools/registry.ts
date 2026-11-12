@@ -1,3 +1,5 @@
+import { readToolOutputProvider } from './builtin/readToolOutput.js';
+import { readOnlyCodeProvider } from './builtin/readOnlyCode.js';
 /**
  * 工具系统门面(G3 拆分后)。工具实现按域拆在 builtin/* 各 provider,经 toolRegistry 自注册;
  * 本文件只负责:① 固定顺序注册内置 provider ② 保持 getToolDefinitions/executeTool 既有签名
@@ -591,3 +593,7 @@ registerToolProvider(intelligentUiProvider); // Native document renderer, explic
 registerToolProvider(childSessionsProvider); // host-only:start_session + send_to_session(deferred)(父子会话;append 末尾,保前缀缓存)
 registerToolProvider(museStartersProvider); // Muse 的新对话开场建议;仅 ctx.muse 且 muse.chatStarters 开着可见(append 末尾,保前缀缓存)
 registerToolProvider(museSpaceToolProvider); // 仅 Muse(周期与手聊,子代理与远程除外):muse_space 读 / 改今日简报布局、建自己的小组件(append 末尾,普通 run 不可见,快照不变)
+
+registerToolProvider(readOnlyCodeProvider);
+
+registerToolProvider(readToolOutputProvider);

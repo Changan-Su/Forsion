@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { replayAssistantHistory, stepLlmResponse, STEP_ITEMS_MAX_BYTES, type ReplayStep } from './historyReplay.js';
+import { replayAssistantHistory, stepLlmResponse, replayUserContext, STEP_ITEMS_MAX_BYTES, type ReplayStep } from './historyReplay.js';
 import { assistantTurnOf } from './contextBudget.js';
 
 const call = (id: string) => ({ id, type: 'function', function: { name: 'find_roots', arguments: '{"text":"Music"}' } });
@@ -372,5 +372,22 @@ describe('dropCoveredCalls — 压缩检查点的行内切点', () => {
     expect(dropCoveredCalls(dup, 'call_fb_0')).toBe(dup);
     expect(dropCoveredCalls(dup, 'missing')).toBe(dup);
     expect(dropCoveredCalls(dup, '')).toBe(dup);
+  });
+});
+
+
+describe('durable runtime context snapshots', () => {
+  const context = { version: 1 as const, assistantMessageId: 'owner', sourceMessageId: 'user', text: '[Current runtime] original snapshot' };
+  it('replays before a text-only assistant and remains compatible with old records', () => {
+    const steps = [{ stepNo: 0, llmResponse: stepLlmResponse({ content: 'answer' }, undefined, context) }];
+    expect(replayUserContext('user', steps)).toEqual([{ role: 'user', content: context.text }]);
+    expect(replayUserContext('another-user', steps)).toEqual([]);
+    expect(replayAssistantHistory({ id: 'steered-row', content: 'answer' }, steps)).toEqual([{ role: 'assistant', content: 'answer' }]);
+  });
+  it('rejects oversized, unknown-version and malformed snapshots', () => {
+    expect(stepLlmResponse({}, undefined, { ...context, text: 'x'.repeat(65537) })).not.toHaveProperty('turnContext');
+    for (const bad of [{ ...context, version: 2 }, { ...context, text: { role: 'system' } }]) {
+      expect(replayAssistantHistory({ id: 'owner', content: 'answer' }, [{ llmResponse: { turnContext: bad } }])).toEqual([{ role: 'assistant', content: 'answer' }]);
+    }
   });
 });

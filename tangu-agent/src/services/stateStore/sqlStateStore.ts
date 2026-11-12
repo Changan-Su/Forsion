@@ -141,9 +141,10 @@ export function createSqlStateStore(): StateStore {
       const rows = await query<any[]>(
         `SELECT r.assistant_message_id AS message_id, s.step_no, s.llm_response, s.tool_calls
            FROM agent_steps s JOIN agent_runs r ON r.id = s.run_id
-          WHERE r.session_id = ? AND r.assistant_message_id IN (${messageIds.map(() => '?').join(',')})
+          WHERE r.session_id = ? AND (r.assistant_message_id IN (${messageIds.map(() => '?').join(',')})
+            OR (s.llm_response -> 'turnContext' ->> 'sourceMessageId') IN (${messageIds.map(() => '?').join(',')}))
           ORDER BY s.step_no ASC`,
-        [sessionId, ...messageIds],
+        [sessionId, ...messageIds, ...messageIds],
       );
       return rows.map((r) => ({
         messageId: String(r.message_id),
