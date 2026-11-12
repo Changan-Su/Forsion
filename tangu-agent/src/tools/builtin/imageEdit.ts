@@ -1,6 +1,7 @@
+import { deliverImages } from './imageDelivery.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { deps } from '../../seams/runtime.js';
 import type { ImageGenRequest } from '../../seams/cloudBrain.js';
 import type { ToolProvider } from '../toolRegistry.js';
@@ -109,7 +110,7 @@ export function makeImageEditTool(pickModel: PickModel): ReturnType<ToolProvider
   return {
     name: 'edit_image', mode: 'both', deferred: true,
     deferHint: 'Edit images the user attached or that were generated in this conversation, using reference pixels; change details, restyle, extend a scene or remove a background.',
-    capabilities: { sideEffect: 'network', parallel: false, defaultTimeoutMs: 200_000 },
+    capabilities: { sideEffect: 'network', parallel: false, defaultTimeoutMs: 1_000_000 },
     definition: { type: 'function', function: {
       name: 'edit_image',
       description: 'Edit images with an image model. Use this instead of generate_image when the user wants to modify an existing image or preserve a reference. Sources: (1) the images attached to the latest user message that carries images and that you can currently see (the current message if it has any), selected by image_indices from 1; (2) images generated earlier in this conversation by generate_image or edit_image, selected by file name in previous_outputs. Write a concrete English prompt describing changes and what to preserve. Transparent source margins can guide expansion. For background removal request transparent_background and preserve the subject. This is generative editing: exact pixel preservation, masks and automatic layer decomposition are not supported. Do not invent indices or file names, and do not pass paths, base64 or URLs. If neither source has the image you need, ask the user to attach it. Results are already displayed; do not call display_file again.',
@@ -157,19 +158,7 @@ export function makeImageEditTool(pickModel: PickModel): ReturnType<ToolProvider
         ctx.signal?.throwIfAborted();
         if (!result.images?.length) throw new Error('The model returned no edited images.');
         assertImageOutputFormat(options.outputFormat, result.images);
-        const names: string[] = [];
-        for (const image of result.images) {
-          const extension = imageOutputExtension(image.mime);
-          const name = `edit-${randomUUID()}.${extension}`;
-          if (ctx.execMode === 'host' && ctx.cwd) {
-            const file = path.resolve(ctx.cwd, 'generated', name);
-            await fs.mkdir(path.dirname(file), { recursive: true });
-            const bytes = Buffer.from(image.b64, 'base64');
-            await fs.writeFile(file, bytes);
-            ctx.displayFile({ name, mime: image.mime, path: file, source: 'edit_image', sha256: sha256(bytes) });
-          } else ctx.displayFile({ name, mime: image.mime, dataUrl: `data:${image.mime};base64,${image.b64}`, source: 'edit_image' });
-          names.push(name);
-        }
+        const names = await deliverImages(result, ctx, 'edit_image');
         const saved = ctx.execMode === 'host' && ctx.cwd ? 'saved to the generated/ folder as' : 'saved as';
         const reuse = result.images.every(image => image.mime === 'image/gif') ? '' : '; to edit one again, pass its file name in previous_outputs';
         return `Edited ${result.images.length} image(s) using ${sources}. Results are displayed and ${saved} ${names.join(', ')}${reuse}. ` +

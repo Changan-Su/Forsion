@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { startImageRecoveryCloud, imageRecoveryLive } from './lib/image-recovery-live.mjs';
 /**
  * 真模型 live 台架:真 standalone 引擎 × Codex 直连(缺省 codex/gpt-5.6-luna)× 隔离 home。
  * 补的是「假引擎 / vi.fn 模型」测不到的那一层:harness 稳定性(工具回合、压缩)、
@@ -323,6 +324,7 @@ const GIT_PREFIX = 'livetest/'; const GIT_TAG = '[LIVE]';
 // 还会往隔离 home 播记忆行(会进别的场景的系统提示);deferred 要真装 liteparse 解析文档;
 // grant 是两个委派 run(慢),且只在动过 delegate.grantTools / 子代理管理面闸时才有信息量。
 const OPT_IN = new Set(['pluginsandbox', 'humandims', 'nested', 'branch', 'musedm', 'realtime', 'remember', 'musewake', 'personas', 'rename', 'selfschedule', 'selfmodel', 'teamapproval', 'parked', 'parkedask', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'fast', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'gitpush', 'multirepo', 'gitpublish', 'creation', 'human', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'appsettings', 'control', 'phone']);
+KEYS.push('imagerecovery'); OPT_IN.add('imagerecovery');
 KEYS.push('mcpsettings'); OPT_IN.add('mcpsettings');
 KEYS.push('cloudcal');
 KEYS.push('caltodo', 'cloudtodo');
@@ -1459,7 +1461,7 @@ if (ONLY.has('notebook') && !NOTEBOOK_NEG) {
 }
 
 // account(10-10):假 Forsion 云端(额度 / 套餐 / 积分是已知数),只在跑它时起;显式给了 TANGU_LIVE_CLOUD_URL 的以那个为准。
-const FAKE_CLOUD = (ONLY.has('account') || ONLY.has('webpublish') || ONLY.has('pluginaware') || SIM) && !process.env.TANGU_LIVE_CLOUD_URL ? await startFakeCloud(TOKEN, { connect: SIM?.url }) : null;
+const FAKE_CLOUD = ONLY.has('imagerecovery') ? await startImageRecoveryCloud(TOKEN) : (ONLY.has('account') || ONLY.has('webpublish') || ONLY.has('pluginaware') || SIM) && !process.env.TANGU_LIVE_CLOUD_URL ? await startFakeCloud(TOKEN, { connect: SIM?.url }) : null;
 
 // computerhistory:日文件逐行加密(desktop/electron/computerHistoryCrypto.ts),钥匙像桌面那样经 stdin 私有通道交给引擎
 // (core/hostChannel.ts);只在跑这个场景时接管 stdin,别的场景的引擎环境不变
@@ -3892,6 +3894,8 @@ try {
   // ③ 第三轮 edit_image 带了 previous_outputs,假后端收到的里头有上一张产出(只多带了附件记作未判定)。
   // 负对照 = dist 里两处:services/agentLoop.js 的 `if (!imageInputs.length && contextImages?.images.length)` 前加 `false && `,
   // tools/builtin/imageEdit.js 的 previousOutputs 开头 `if (refs === undefined) return []` 改成 `return []`(②③ 须红)。
+  await scenario('imagerecovery', '断线动图恢复：聊天工具入口、会话持久化和确认扣费', () => imageRecoveryLive({ run, api, cloud: FAKE_CLOUD }));
+
   await scenario('imageedit', 'imageedit edit_image 用上一条消息的图、改自己刚生成的图', async () => {
     const sid = `live-imageedit-${Date.now()}`;
     const cfg = { imageModelId: 'fakeimg/fake-edit' };

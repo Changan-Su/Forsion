@@ -1,3 +1,4 @@
+import { retryImageDeliveries } from '../tools/builtin/imageDelivery.js';
 import { clearRunSecretEnv } from '../sandbox/runSecretEnv.js';
 import { hasMarketplaceCards, MARKETPLACE_CARDS_CAPABILITY } from '../shared/marketplace.js';
 import { normalizeUIAppCards } from '../shared/intelligentCards.js';
@@ -2513,6 +2514,18 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           void publish(runId, 'display_file', item); // 即时扇出给在线桌面端
         }
       },
+      persistImageFiles: async (items) => {
+        if (!items.length || pendingDisplayFiles.length + items.length > MAX_DISPLAY_FILES_PER_RUN) {
+          throw new Error('Image display limit reached. Use recover_image in a new turn; no points were charged.');
+        }
+        // A thin worker's publish only queues an event. Persist the complete message first;
+        // this HTTP/SQL call must succeed before the image tool can acknowledge delivery.
+        const files = [...pendingDisplayFiles, ...items];
+        await finalizeAssistantMessage(currentAssistantId, sessionId, modelId, finalContent, finalReasoning,
+          [...allToolCalls], [...allToolResults], files);
+        pendingDisplayFiles.push(...items);
+        for (const item of items) await publish(runId, 'display_file', item);
+      },
       presentDesk: (spec) => {
         if (spec && Array.isArray(spec.views) && spec.views.length && deskPresentCount < MAX_DESK_PRESENTS_PER_RUN) {
           deskPresentCount++;
@@ -2529,6 +2542,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       contextWindow: ctxWindowTokens,
       getRunStatus,
     };
+    void retryImageDeliveries(toolCtx).catch(error => console.warn('[image delivery] saved receipt retry pending:', error instanceof Error ? error.message : String(error)));
     let toolDefs = getToolDefinitions(toolCtx);
     // A4:工具头字节量(load_tools 解锁后重算)随 usage 事件出账。**按本轮真实发出去的那份算**,
     // 末轮不发 tools / 工具集为空时都记 0 字节、指纹也按空串 —— 否则 `/loop 1`(首轮即末轮)与顶到
