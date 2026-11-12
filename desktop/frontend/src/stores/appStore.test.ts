@@ -442,6 +442,38 @@ describe('appStore.reduceEvent', () => {
     expect(msg().live).toBeUndefined()
   })
 
+  it('shows compaction before completion and replaces the same operation on replay', () => {
+    const ref = { current: 'a1' }
+    const emit = (seq: number, payload: Record<string, unknown>) => useApp.getState().reduceEvent('s1', 'r1', ref, { seq, type: 'status', payload } as AgentRunEvent)
+    const before = useApp.getState().messagesBySession.s1.length
+    emit(1, { phase: 'compacting', operationId: 'compact-1', reason: 'idle', skippable: true, idleMinutes: 60 })
+    expect(useApp.getState().messagesBySession.s1).toHaveLength(before + 1)
+    expect(useApp.getState().messagesBySession.s1.at(-1)?.compaction).toMatchObject({ operationId: 'compact-1', status: 'running', skippable: true })
+    const id = useApp.getState().messagesBySession.s1.at(-1)!.id
+    emit(2, { phase: 'compaction_skipped', operationId: 'compact-1', reason: 'idle', byUser: true })
+    emit(3, { phase: 'compacting', operationId: 'compact-1', reason: 'idle', skippable: true })
+    expect(useApp.getState().messagesBySession.s1).toHaveLength(before + 1)
+    expect(useApp.getState().messagesBySession.s1.at(-1)).toMatchObject({ id, compaction: { status: 'skipped', skippable: false } })
+  })
+
+  it.each(['compacted', 'compaction_failed'] as const)('keeps required compaction non-skippable and settles %s in place', (phase) => {
+    const ref = { current: 'a1' }
+    const emit = (seq: number, payload: Record<string, unknown>) => useApp.getState().reduceEvent('s1', 'r1', ref, { seq, type: 'status', payload } as AgentRunEvent)
+    emit(1, { phase: 'compacting', operationId: 'required', reason: 'overflow', skippable: true })
+    const notice = useApp.getState().messagesBySession.s1.at(-1)!
+    expect(notice.compaction).toMatchObject({ status: 'running', skippable: false })
+    emit(2, { phase, operationId: 'required', reason: 'overflow' })
+    expect(useApp.getState().messagesBySession.s1.at(-1)).toMatchObject({ id: notice.id, timestamp: notice.timestamp,
+      compaction: { status: phase === 'compacted' ? 'completed' : 'failed', skippable: false } })
+  })
+
+  it('settles an unfinished compaction action when the run is stopped', () => {
+    const ref = { current: 'a1' }
+    useApp.getState().reduceEvent('s1', 'r1', ref, { seq: 1, type: 'status', payload: { phase: 'compacting', operationId: 'pending', reason: 'idle', skippable: true } })
+    useApp.getState().reduceEvent('s1', 'r1', ref, { seq: 2, type: 'error', payload: { aborted: true, message: 'Stopped' } })
+    expect(useApp.getState().messagesBySession.s1.find(m => m.compaction)?.compaction).toMatchObject({ status: 'aborted', skippable: false })
+  })
+
   it('usage 事件存 runCost/costLimit,越 80% 提示一次;status compacted 落一条系统提示', () => {
     const ref = { current: 'a1' }
     let seq = 0 // per-run 单调:compacted/costwarn 的消息 id 掺 seq 防撞

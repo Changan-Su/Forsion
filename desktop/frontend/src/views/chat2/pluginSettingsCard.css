@@ -1,0 +1,13 @@
+.plugin-settings-card{margin:10px 0;border:1px solid var(--border);border-radius:var(--radius-md);font-family:var(--font-ui);font-size:var(--ui-font-body);line-height:var(--ui-line-body);color:var(--text);overflow:hidden}
+.plugin-settings-card header{display:flex;align-items:center;gap:8px;padding:10px 12px;border-bottom:1px solid var(--border)}
+.plugin-settings-card header strong{font-weight:550;min-width:0;overflow-wrap:anywhere}
+.plugin-settings-card header>span{color:var(--text-muted);font-size:var(--ui-font-meta);margin-left:auto;white-space:nowrap}
+.plugin-settings-card button{background:transparent;color:var(--text-secondary);border:0;border-radius:var(--radius-sm);padding:4px 6px;font:inherit;cursor:pointer;white-space:nowrap}
+.plugin-settings-card button:hover{background:var(--menu-hover);color:var(--text)}
+.plugin-settings-card dl,.plugin-settings-card ul{margin:0;padding:0;list-style:none}
+.plugin-settings-card dl>div,.plugin-settings-card li{display:flex;justify-content:space-between;gap:16px;padding:8px 12px;border-top:1px solid var(--border)}
+.plugin-settings-card dl>div:first-child,.plugin-settings-card li:first-child{border-top:0}
+.plugin-settings-card dt{min-width:0;overflow-wrap:anywhere}
+.plugin-settings-card dt small{display:block;font-size:var(--ui-font-meta);color:var(--text-muted)}
+.plugin-settings-card dd{margin:0;max-width:65%;white-space:pre-wrap;overflow-wrap:anywhere;text-align:right}
+.plugin-settings-card p{margin:0;padding:10px 12px;color:var(--text-muted)}

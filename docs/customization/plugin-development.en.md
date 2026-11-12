@@ -570,3 +570,14 @@ Optional `preferredWidth` / `preferredHeight` seed allocation weights for new sp
 ### Temporary panels for file views
 
 Feature-detect `file.extendView` in `registerFileType.mount(el, file)`. It follows the same contract as `view.extendView`: `file.extendView?.open({ id: "ask", title: "Tangu", side: "right", mount(el) { /* ctx.tangu.mountChat(el) */ } })`. Main and detached file windows retain the document; file views in side panels get an overlay with Back. Reopening the same id retains content. Closing, navigating or disabling the file plugin closes the extension and revokes the old controller. On older hosts without this field, do not replace the document with a main-area chat as a contextual fallback.
+
+
+## Agent settings and settings-page anchors
+
+Use [`ctx.registerAgentSettings`](plugin-agent-settings.en.md) to expose effective values explicitly. UI and engine plugins share the contract; secrets expose configured status only.
+
+Cloud settings pages can accept optional `mount(el, { anchor })` context. A `forsion/fx:<pluginId>:<pageId>#<anchor>` deep link supplies the section anchor. Scroll/focus the section after loading; ordinary mounts must not steal focus. Existing mount(el) implementations remain compatible.
+
+### Note reading renderers
+
+Use `ctx.registerNoteRenderer` to replace the read-only note surface while the host retains document and persistence ownership. See [Note reading renderers](./note-renderers.en.md) for the contract, failure fallback and lifecycle.

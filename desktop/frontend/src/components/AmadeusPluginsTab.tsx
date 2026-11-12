@@ -420,14 +420,14 @@ const PluginSyncRow: React.FC<{ p: AmadeusPlugin }> = ({ p }) => {
  *    重挂一次面板(用户正在输入的内容当场清零)。
  *  ②**dispose 必须接异常**:第三方 dispose 抛错不能把 React 的 cleanup 链带崩,否则下一个面板
  *    挂不上去。 */
-export const PluginSettingsView: React.FC<{ pluginId: string; def: SettingsViewContribution; bare?: boolean }> = ({ pluginId, def, bare }) => {
+export const PluginSettingsView: React.FC<{ pluginId: string; def: SettingsViewContribution; bare?: boolean; anchor?: string }> = ({ pluginId, def, bare, anchor }) => {
   const ref = useRef<HTMLDivElement | null>(null)
   useEffect(() => {
     const el = ref.current
     if (!el) return
     let dispose: (() => void) | void
     try {
-      dispose = def.mount(el)
+      dispose = def.mount(el, { anchor })
     } catch (e) {
       console.error(`[amadeus] 插件 ${pluginId} 的设置面板 mount 抛错`, e)
       el.textContent = ''
@@ -441,7 +441,7 @@ export const PluginSettingsView: React.FC<{ pluginId: string; def: SettingsViewC
       }
       el.textContent = '' // 插件没清干净也不给下一次挂载留残渣
     }
-  }, [pluginId, def])
+  }, [pluginId, def, anchor])
   // bare:挂进宿主一级页当整页(「Forsion 云端」的子页),版式归插件 —— 不套卡片、不画小标题(左栏子项就是标题)
   if (bare) return <div className="plugin-settings-page" data-plugin-settings={`${pluginId}:${def.id}`} ref={ref} />
   const title = typeof def.title === 'function' ? def.title() : def.title

@@ -377,6 +377,7 @@ ctx.ui?.mountRecord?.(el, { path, rowId, dateCol, readOnly })
 Seeing the same thing another way (Chat / Canvas, Document / Canvas, Transcript / Notes / Summary, Day / Week / 3 days / Month) has one arrangement across the app: the switch sits at the **left end of the view's head row**, a 32px row inside the paper card that does not scroll with the content; the view's own title follows the switch. One switch per view, with 2–4 modes; more than four use tabs (database views). Filter and source pills look the same but never go in that position. For the proposal and trade-offs, see `docs/ToBeImproved/视图模式切换标准方案_2026-10-19` in the repository root.
 
 - Native views: register with `useViewModes` (`@lcl/engine`), then put `<ViewModeSwitch leafId={leaf.id} />` at the left end of the head row; a view without its own top bar uses `<ViewHead leafId>{buttons}</ViewHead>` for the whole row. Views that already have a top bar (Amadeus `.amx-toolbar`, the calendar's `.amx-cal-bar`) add `container: lcl-viewhead / inline-size` to that row so the narrow-width fallback can read its width.
+- Main Views automatically receive Back and Forward buttons before their mode switch. The buttons affect only their owning View; plugins should not duplicate them. Views without a host head receive a compact navigation row, including on mobile. History stays with its Space during the current app session and is released when the View closes.
 
 ```js
 useViewModes(leaf.id, { modes, value, onChange })
@@ -564,3 +565,7 @@ el.innerHTML = '<h2>This week</h2><button>New</button> <input placeholder="Searc
 - It lives in the `plugin-view-base` block at the end of `desktop/frontend/src/styles/base.css` and uses public tokens only (`pluginContract.test.ts` checks each one). Instrument: `desktop/scripts/plugin-base-shots.cjs` (real Electron: installs `scripts/fixtures/plugin-base-sample`, shoots light and dark, measures computed styles).
 
 **Failed mount card**: when `mount` throws, or the Promise it returns rejects, the view shows a card: "Plugin view failed to load", the first line of the error (the full stack is in the console) and "Retry". Retry runs only this view's `mount` again; the plugin isn't reloaded and its other views and panels keep running. So make `mount` safe to run twice: the host can't clean up listeners or timers you set before the throw, so clean them up yourself or set them after the step that can fail. Code changes still go through a plugin reload or the sandbox's hot reload.
+
+### Amadeus reading surface
+
+`UnifiedPage.onReadingMode` exposes `{ on, busy, toggle }` for the note View’s `ReadingModeButton`; `initialReading` and `onReadingChange` connect to View parameters. Only a note View that explicitly requests this control owns the reading command; Inbox and Muse previews do not take over the active note’s command. `ReadingSurface` consumes immutable snapshots while the host retains the editor and persistence state. See [Note reading renderers](./note-renderers.en.md) for plugin replacement.

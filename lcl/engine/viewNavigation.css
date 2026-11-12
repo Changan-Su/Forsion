@@ -1,0 +1,9 @@
+.lcl-viewnav { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 1px; pointer-events: auto; -webkit-app-region: no-drag; }
+.lcl-viewnav > button { display: inline-flex; align-items: center; justify-content: center; width: 27px; height: 26px; padding: 4px; border: 0; border-radius: var(--radius-sm, 6px); background: none; box-shadow: none; color: var(--text-muted); cursor: pointer; }
+.lcl-viewnav > button:hover:not(:disabled) { background: var(--overlay-light); color: var(--text); }
+.lcl-viewnav > button:disabled { opacity: .3; cursor: default; }
+.lcl-viewnav > button:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: 1px; }
+.lcl-viewnav-error { font-size: var(--ui-font-caption, 11px); color: var(--text-muted); max-width: 140px; }
+.lcl-viewnav-fallback { display: flex; align-items: center; flex: 0 0 32px; padding: 0 10px; }
+.mb-view > .lcl-viewnav-fallback { flex-basis: 40px; }
+.mb-view > .lcl-viewnav-fallback .lcl-viewnav > button { width: 36px; height: 36px; }

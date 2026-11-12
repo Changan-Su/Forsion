@@ -1260,7 +1260,7 @@ export interface SettingsViewContribution {
   keywords?: string
   /** 详情页打开时调用。返回的函数在面板关闭 / 插件禁用时执行(定时器、订阅、第三方编辑器实例在此收)。
    *  ⚠️同一插件的面板可能被反复挂载卸载(用户来回进出详情页),别把状态放在闭包外的模块级单例里。 */
-  mount(el: HTMLElement): void | (() => void)
+  mount(el: HTMLElement, context?: { anchor?: string }): void | (() => void)
 }
 
 /** 商店左栏里由插件提供的一页(2026-10-05):左栏多一个入口,点开后整页正文归插件画(版式、数据都归插件)。
@@ -1808,6 +1808,12 @@ export interface PluginUiPartHandle<P> { update(patch: Partial<P>): void; dispos
 
 
 export interface PluginContext {
+  /** Explicit read-only Agent fields; never export a raw settings blob. Revoked on disable/reload. */
+  registerAgentSettings?(def: import('../../../../../tangu-agent/src/contracts/agentSettings').AgentSettingsContribution): void
+  /** Replace the read-only note surface (API v1). The host retains document ownership, saving and undo.
+   * Mount into the staging element and return a disposer. Failed/late mounts never replace a working surface.
+   * The latest active registration wins; disable removes it. Schema/serializer updates are not supported. */
+  registerNoteRenderer?(def: import('./noteRenderers').NoteRendererContribution): { dispose(): void }
   account?: PluginAccount
   app: PluginAppApi
   registerSlashItem(item: SlashContribution): void

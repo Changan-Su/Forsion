@@ -5,6 +5,7 @@ import { ArrowDown, CircleAlert, Folder, MessageCircleQuestion, MessageSquare, Q
 import type { AgentConfig, UiMessage } from '../../../../tangu-agent/src/contracts/clientTypes'
 import type { FailedSend } from '../tangu/store/failedSend'
 import { Composer2 } from './chat2/Composer2'
+import { chatReadingKey, readChatPosition, trackChatReading, type ChatReadingController } from './chat2/chatReadingPosition'
 import { AgentSelectStrip } from '../components/AgentSelectStrip'
 import { displaySessionTitle, soloSessionTitle } from '../sessionTitle'
 import { ProjectSelector } from '../components/ProjectSelector'
@@ -162,6 +163,8 @@ export function ChatView({ leaf, params }: ViewProps) {
   const chatScrollRef = useRef<HTMLDivElement>(null)
   const streamingNodeRef = useRef<HTMLDivElement | null>(null)
   const stickToBottom = useRef(true)
+  const readingPosition = useRef<ChatReadingController | null>(null)
+  const ownerSpace = useRef(useSpaceStore.getState().activeSpaceId).current
   const pendingCountRef = useRef(0)
   const globalActiveId = useApp((state) => state.activeId)
   const followActive = params.followActive !== false
@@ -289,7 +292,9 @@ export function ChatView({ leaf, params }: ViewProps) {
   const replyCount = useMemo(() => activeMessages.reduce((n, m) => (m.role === 'user' ? n : n + 1), 0), [activeMessages])
   // 画到流里的那一段(长会话先是末尾几条、空闲时往上补,见 useTailFirst;桌面与网页 10-16 起也这样,原来只有手机);
   // 数据层的判断一律仍看 activeMessages。要跳到某条消息(搜索命中)时整段挂。
-  const shownMessages = useTailFirst(activeMessages, activeId || null, s.jumpTarget?.sessionId !== activeId)
+  const readingKey = activeId ? chatReadingKey(ownerSpace, leaf.id, activeId, s.execConfig.engineId) : ''
+  const restoringEarlierMessages = !!readingKey && readChatPosition(readingKey)?.follow === false
+  const shownMessages = useTailFirst(activeMessages, activeId || null, !restoringEarlierMessages && s.jumpTarget?.sessionId !== activeId)
   // 运行中发出、Agent 还没读到的插话:按下 Enter 就画进对话末尾(像 Codex / Claude 那样「发出去了」),不再挂在输入框上方排队。
   // 引擎读到时 turn_boundary 带回**同一个 id** 的用户消息,插在收尾那段之后 —— 和这里的位置一样,同 key 原地转正、不重挂。
   // 画布模式没有这条流,等待区照旧留在输入框上方(Composer2 steerInline)。
@@ -473,7 +478,7 @@ export function ChatView({ leaf, params }: ViewProps) {
   useEffect(() => {
     const jt = s.jumpTarget
     if (!jt || jt.sessionId !== activeId || historyLoading) return
-    const el = document.getElementById(`tocmsg-${jt.messageId}`)
+    const el = [...(chatScrollRef.current?.querySelectorAll<HTMLElement>('[id^="tocmsg-"]') ?? [])].find(item => item.id === `tocmsg-${jt.messageId}`)
     if (!el) {
       if (activeMessages.length) { s.toast(t('search.jumpOutOfWindow'), true); s.clearJumpTarget() }
       return // 消息还没渲染出来:等下一次 activeMessages 变更再试
@@ -505,18 +510,27 @@ export function ChatView({ leaf, params }: ViewProps) {
   const scrollToBottom = useCallback((smooth = false): void => {
     const el = chatScrollRef.current
     if (!el) return
+    readingPosition.current?.cancel()
     cancelScrollToElement(el) // 刚点过目录 / 搜索跳转:那边落地后的补正不许再把人拉回去
     el.scrollTo({ top: el.scrollHeight, behavior: smooth ? 'smooth' : 'auto' })
     stickToBottom.current = true
     setShowJump(false)
+    readingPosition.current?.save()
   }, [])
 
   // Follow actual content height, including complete team remarks and their presentation animation.
   // Only an upward user gesture releases the anchor; a layout-induced scroll event cannot release it.
   useLayoutEffect(() => {
-    stickToBottom.current = !s.jumpTarget
-    pendingCountRef.current = 0
-  }, [activeId])
+    const root = chatScrollRef.current
+    pendingCountRef.current = activeMessages.reduce((count, message) => count + (message.planProposal ? message.inquiries?.filter(q => q.status === 'pending' && q.kind === 'plan').length || 0 : 0), 0)
+    if (!root || !activeId) { stickToBottom.current = !s.jumpTarget; return }
+    const controller = trackChatReading(readingKey, root, stickToBottom, !!s.jumpTarget)
+    readingPosition.current = controller
+    setShowJump(!stickToBottom.current)
+    controller.restore(historyLoading)
+    return () => { controller.dispose(); if (readingPosition.current === controller) readingPosition.current = null }
+  }, [activeId, readingKey]) // eslint-disable-line react-hooks/exhaustive-deps
+  useLayoutEffect(() => { readingPosition.current?.restore(historyLoading || shownMessages.length < activeMessages.length) }, [activeMessages, historyLoading, shownMessages.length])
   useEffect(() => {
     const el = chatScrollRef.current
     const content = el?.querySelector('.t2-stream-inner')
@@ -528,7 +542,7 @@ export function ChatView({ leaf, params }: ViewProps) {
     let previousTop: number | undefined
     let pointerDown = false
     let resumeOnDown = false
-    const release = (): void => { stickToBottom.current = false; resumeOnDown = false; setShowJump(true) }
+    const release = (): void => { readingPosition.current?.cancel(); stickToBottom.current = false; resumeOnDown = false; setShowJump(true) }
     const update = (): void => {
       const top = el.scrollTop
       const atBottom = el.scrollHeight - top - el.clientHeight < 40
@@ -556,7 +570,8 @@ export function ChatView({ leaf, params }: ViewProps) {
       else if (['ArrowDown', 'PageDown', 'End', ' '].includes(e.key)) resumeOnDown = true
     }
     const follow = (): void => {
-      if (stickToBottom.current) {
+      if (readingPosition.current?.restoring) return
+      if (stickToBottom.current && el.isConnected && el.clientHeight > 0) {
         el.scrollTop = el.scrollHeight
         setShowJump(false)
       }
@@ -588,7 +603,7 @@ export function ChatView({ leaf, params }: ViewProps) {
 
   const compactingOn = s.compacting !== undefined
   useLayoutEffect(() => {
-    if (stickToBottom.current && !s.jumpTarget) scrollToBottom()
+    if (stickToBottom.current && !s.jumpTarget && !readingPosition.current?.restoring) scrollToBottom()
   }, [activeMessages, historyLoading, scrollToBottom, compactingOn])
 
   // 新计划待拍板时强制定位到底部:拍板区在输入框上方的托盘里,但计划正文在流里,得让人看得到。
@@ -598,7 +613,7 @@ export function ChatView({ leaf, params }: ViewProps) {
     for (const m of activeMessages) {
       pending += m.planProposal ? m.inquiries?.filter((q) => q.status === 'pending' && q.kind === 'plan').length || 0 : 0
     }
-    if (pending > pendingCountRef.current) scrollToBottom(true)
+    if (pending > pendingCountRef.current && stickToBottom.current) scrollToBottom(true)
     pendingCountRef.current = pending
   }, [activeMessages, scrollToBottom])
 

@@ -48,6 +48,7 @@ export const LCL_MESSAGES: Record<string, { zh: string; en: string }> = {
   'lcl.tab.splitDown': { zh: '向下拆分', en: 'Split down' },
   'lcl.tab.new': { zh: '新建标签页', en: 'New tab' },
   'lcl.nav.back': { zh: '后退', en: 'Back' },
+  'lcl.nav.failed': { zh: '无法打开目标，请重试或选择其他内容', en: 'Could not open the destination. Try again or choose another item.' },
   'lcl.nav.forward': { zh: '前进', en: 'Forward' },
   'lcl.edge.left': { zh: '左侧栏', en: 'Toggle left panel' },
   'lcl.edge.right': { zh: '右侧栏', en: 'Toggle right panel' },

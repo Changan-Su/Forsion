@@ -6,6 +6,10 @@ import { SETTINGS_SEARCH_INDEX } from './settingsSearchIndex'
 
 // U-02:登录失效 / 订阅过期 / `/login` 三条入口必须落到按钮所在的子页,不许再被归一到第一项「连接」。
 describe('resolveSettingsTarget', () => {
+  it('preserves a cloud page section anchor without altering plugin ids', () => {
+    expect(resolveSettingsTarget('forsion/fx:forsion-extend:points#invite')).toEqual({ tab: 'forsion', sub: 'fx:forsion-extend:points', anchor: 'invite' })
+    expect(resolveSettingsTarget('fplugin:my-plugin#literal')).toEqual({ tab: 'fplugin:my-plugin#literal' })
+  })
   it.each([
     [undefined, { tab: 'general' }],
     ['', { tab: 'general' }],

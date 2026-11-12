@@ -300,6 +300,9 @@ export { TANGU_PLUGIN_API } from './plugins/types.js';
 export type {
   TanguPlugin,
   TanguPluginContext,
+  AgentSettingsContribution,
+  AgentSettingField,
+  AgentSettingsReadContext,
   TanguPluginManifest,
   PluginCommand,
   PluginRouters,

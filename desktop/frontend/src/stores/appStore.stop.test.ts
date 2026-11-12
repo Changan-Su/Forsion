@@ -84,6 +84,15 @@ describe('confirmed stop and restart', () => {
     expect(useApp.getState().messagesBySession.s[0].content).toBe('partial work')
   })
 
+  it('settles the summary notice when stop is confirmed without an SSE terminal', async () => {
+    event('status', { phase: 'compacting', operationId: 'pending', reason: 'idle', skippable: true })
+    service.stop.mockResolvedValue('aborted')
+    expect(await useApp.getState().stop('s')).toBe(true)
+    expect(useApp.getState().messagesBySession.s.find(m => m.compaction)?.compaction).toMatchObject({ status: 'aborted', skippable: false })
+    event('status', { phase: 'compacting', operationId: 'pending', reason: 'idle', skippable: true })
+    expect(useApp.getState().messagesBySession.s.find(m => m.compaction)?.compaction?.status).toBe('aborted')
+  })
+
   it('retains the active run on failure, reports it, and permits another stop attempt', async () => {
     service.stop.mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce('aborted')
     expect(await useApp.getState().stop('s')).toBe(false)

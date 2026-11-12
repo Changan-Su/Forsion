@@ -15,6 +15,7 @@ import { resolveProfile } from '../seams/appProfile.js';
 import { createRun, getRunForUser, listActiveRunsBySession, listEventsFrom } from '../services/runStore.js';
 import { enqueueRun, abortRun, enqueueSteer, expediteSteer, cancelSteer, waitForRunSettlement } from '../services/agentLoop.js';
 import { subscribe, type AgentEvent } from '../services/eventBus.js';
+import { skipRunCompaction } from '../services/runCompaction.js';
 import { parseRemoteOrigin, sanitizeRemoteAgentConfig, taintRunRemote, remoteCwdViolation, remoteCwdErrorBody } from '../services/remoteOrigin.js';
 
 const router = Router();
@@ -434,6 +435,22 @@ router.post('/agent/runs/:id/abort', authMiddleware, async (req: AuthRequest, re
     res.json({ success: true, settled, status: fresh?.status || run.status });
   } catch (err: any) {
     res.status(500).json({ detail: err?.message || 'Failed to abort run' });
+  }
+});
+
+// Cancel only the optional idle summary, bound to an explicit operation and run owner.
+router.post('/agent/runs/:id/compaction/skip', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const operationId = req.body?.operationId;
+    if (typeof operationId !== 'string' || !/^[a-zA-Z0-9_-]{1,80}$/.test(operationId)) {
+      return res.status(400).json({ detail: 'operationId is required' });
+    }
+    const run = await getRunForUser(req.params.id, req.user!.userId);
+    if (!run) return res.status(404).json({ detail: 'Run not found' });
+    const result = skipRunCompaction(req.params.id, operationId);
+    return res.status(result.ok || result.reason === 'already_settled' ? 200 : 409).json(result);
+  } catch (err: any) {
+    res.status(500).json({ detail: err?.message || 'Failed to skip compaction' });
   }
 });
 

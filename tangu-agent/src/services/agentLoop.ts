@@ -61,9 +61,10 @@ import {
 } from './contextBudget.js';
 import {
   getLatestSummary, compactWorkingMessages, compactSession, summaryMessage, rowCoverage, idleCompactionDue,
-  tagMessageSource, messageSource, persistCheckpoint, messageTimestamp, type CompactBoundary,
+  tagMessageSource, messageSource, persistCheckpoint, messageTimestamp, type CompactBoundary, type CompactWorkingResult,
 } from './compaction.js';
 import { compactionSettingsFor, type CompactionSettings } from './compactionSettings.js';
+import { releaseRunCompaction, runCompactionOperation, type CompactionCommitResult } from './runCompaction.js';
 import { isContextOverflowError, learnFromUpstreamError } from './contextWindowStore.js';
 import { getAgent, isValidSlug, libDirOf, MUSE_AGENT_SLUG, type NormalAgentDef } from '../agents/agentRegistry.js';
 import { loadHarness, shelvedOf, renderHarnessSection, isRefineInvocation, REFINE_DIRECTIVE, consumeHarnessCandidates, renderPendingHarnessCandidates } from '../agents/harnessStore.js';
@@ -365,6 +366,7 @@ export function startRun(runId: string): void {
   // P1-K2:活动登记与中止原因同样在所有收尾路径清掉(dispatchRun 登记,这里是唯一一定会跑到的出口)。
   }).finally(() => {
     runTasks.delete(runId);
+    releaseRunCompaction(runId);
     if (!exiting) void deps().mcp?.reloadConfig?.().catch(e => console.warn('[mcp] settings reload failed:', e?.message));
     clearRunRemoteTaint(runId); unregisterRun(runId); abortReasons.delete(runId);
     // 父子会话:子会话这一轮的结果送回主会话 / 主会话收它名下积着的回报(终态已落库、队列已推进)。
@@ -2954,59 +2956,62 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         void publish(runId, 'status', { phase: 'compaction_skipped', reason: 'hook', iteration });
         return false;
       }
-      void publish(runId, 'status', { phase: 'compacting', forced: true, reason, iteration });
-      // 换算比例只认 provider 实测(上游拒收时下界 = 窗口);纯粗估不冒充实测。越线本身已成立,故一律 force。
       const measured = contextUsage.measured(workingMessages);
-      const cr = compactionCfg.enabled
-        ? await compactWorkingMessages(workingMessages, callModelId, appId, ac.signal, {
-          // idle 不是越线:没有保留段之外的内容就不压(force=false)
-          settings: compactionCfg, runThinking: thinkingLevel, windowTokens: ctxWindowTokens, force: reason !== 'idle',
-          overheadTokens: toolsOverhead,
-          measuredTokens: reason === 'overflow' ? Math.max(measured ?? 0, ctxWindowTokens) : measured,
-        })
-        : { ok: false, reason: 'llm compaction disabled' }; // enabled=false:不做摘要,只走下面的机械兜底
-      let changed = false;
-      if (reason === 'idle' && !(cr.ok && cr.summary)) {
-        // 按时间压缩只为省缓存未命中,没越线:摘要不成就原样发,不走下面为越线准备的机械折叠 / 裁剪
-        console.warn(`[agent-core] run=${runId} 空闲压缩未成: ${cr.reason}`);
-        return false;
-      }
-      if (cr.ok && cr.summary) {
-        changed = true;
-        contextUsage.invalidate();
-        const persisted = await recordBoundary(cr.summary, cr.boundary);
-        void publish(runId, 'status', { phase: 'compacted', forced: true, reason, persisted, summarized: cr.summarizedCount, iteration, ...(reason === 'idle' ? { idleMinutes: compactionCfg.idleMinutes } : {}) });
-      } else {
-        // 上游拒收时实测的下界 = 窗口(与摘要那边同一口径):估算可能还在触发线下,但 provider 已经说装不下了 → 照裁。
-        const floor = reason === 'overflow' ? Math.max(measured ?? 0, ctxWindowTokens) : measured;
-        const rough = estimateMessagesTokens(workingMessages) + toolsOverhead; // 折叠前:与 measured 同一份消息
-        const scale = floor && rough > 0 ? Math.max(1, floor / rough) : 1;
-        const r = compactContext(workingMessages);
-        if (r.changed) contextUsage.invalidate();
-        // 机械折叠也压不下(最近 20 条受保护、折过的不再折):从最旧处成段丢,直到回到触发线的 70% 以下。
-        // 实测比粗估大(截图按定额估)时目标按比例收紧。没有这一步,摘要一失败就只剩「估算 ≥ 窗口 → 报废」
-        // (10-26 生产:Opus / DeepSeek 两个长会话都是摘要撞输出上限后死在这里)。
-        // ponytail: 70% 是给后续几轮留的余量,不是算出来的最优值。
-        // 「最近一条 user」只认落过库的真消息:工具截图 / 恢复提示也是 role:user,按它保护会把真正的任务裁掉(Codex 10-26 #2)。
-        const trim = reason === 'overflow' || contextUsage.estimate(workingMessages, toolsOverhead) > compactAt
-          ? trimOldestToFit(workingMessages, Math.floor((compactAt * 0.7) / scale), toolsOverhead, (m) => !!messageSource(m))
-          : { dropped: 0 };
-        if (trim.dropped) { contextUsage.invalidate(); trimmedThisRun = true; }
-        if (r.changed || trim.dropped) {
-          changed = true;
-          // 只在真改动了才宣告,且带 savedChars / trimmed:fallback 是机械兜底,不许对用户谎称「已生成摘要」
-          void publish(runId, 'status', {
-            phase: 'compacted', forced: true, fallback: true, reason, savedChars: r.savedChars, iteration,
-            ...(trim.dropped ? { trimmed: trim.dropped } : {}),
-          });
-        } else {
-          console.warn(`[agent-core] run=${runId} 压缩未改动上下文: ${cr.reason}`);
-        }
-      }
-      const afterTokens = contextUsage.estimate(workingMessages, toolsOverhead);
-      compactionGuard.record(afterTokens, ctxWindowTokens, workingMessages, compactAt);
-      void publish(runId, 'status', { phase: 'compaction_budget', iteration, beforeTokens, afterTokens, changed: afterTokens < beforeTokens });
-      return changed;
+      // compactWorkingMessages splices only this detached candidate. Skip may resume the run
+      // while an abort-ignoring provider finishes; it never receives the live array.
+      const candidate = workingMessages.slice();
+      return runCompactionOperation({
+        runId, reason, signal: ac.signal, idleMinutes: compactionCfg.idleMinutes, iteration,
+        publish: async (payload) => {
+          await publish(runId, 'status', payload);
+          // Persist/forward start before the provider call, so reconnect also sees it.
+          if (payload.phase === 'compacting') await drain(runId);
+        },
+        prepare: async (signal): Promise<CompactWorkingResult> => compactionCfg.enabled
+          ? compactWorkingMessages(candidate, callModelId, appId, signal, {
+            settings: compactionCfg, runThinking: thinkingLevel, windowTokens: ctxWindowTokens, force: reason !== 'idle',
+            overheadTokens: toolsOverhead,
+            measuredTokens: reason === 'overflow' ? Math.max(measured ?? 0, ctxWindowTokens) : measured,
+          })
+          : { ok: false, reason: 'llm compaction disabled' },
+        commit: async (cr): Promise<CompactionCommitResult> => {
+          ac.signal.throwIfAborted();
+          let changed = false;
+          let receipt: CompactionCommitResult = { phase: 'compaction_failed', changed: false, continuing: reason === 'idle' };
+          if (reason === 'idle' && !(cr.ok && cr.summary)) {
+            // Idle optimization is optional. The normal input-budget gate still runs afterwards.
+            console.warn(`[agent-core] run=${runId} idle compaction failed: ${cr.reason}`);
+            return receipt;
+          }
+          if (cr.ok && cr.summary) {
+            // Operation has atomically claimed commit; Skip now reports already_settled.
+            workingMessages.splice(0, workingMessages.length, ...candidate);
+            changed = true;
+            contextUsage.invalidate();
+            const persisted = await recordBoundary(cr.summary, cr.boundary);
+            receipt = { phase: 'compacted', changed, persisted, summarized: cr.summarizedCount };
+          } else {
+            const floor = reason === 'overflow' ? Math.max(measured ?? 0, ctxWindowTokens) : measured;
+            const rough = estimateMessagesTokens(workingMessages) + toolsOverhead;
+            const scale = floor && rough > 0 ? Math.max(1, floor / rough) : 1;
+            const r = compactContext(workingMessages);
+            if (r.changed) contextUsage.invalidate();
+            // Preserve the latest real user message; attachment surrogates are not its identity.
+            const trim = reason === 'overflow' || contextUsage.estimate(workingMessages, toolsOverhead) > compactAt
+              ? trimOldestToFit(workingMessages, Math.floor((compactAt * 0.7) / scale), toolsOverhead, (m) => !!messageSource(m))
+              : { dropped: 0 };
+            if (trim.dropped) { contextUsage.invalidate(); trimmedThisRun = true; }
+            if (r.changed || trim.dropped) {
+              changed = true;
+              receipt = { phase: 'compacted', changed, fallback: true, savedChars: r.savedChars, ...(trim.dropped ? { trimmed: trim.dropped } : {}) };
+            } else console.warn(`[agent-core] run=${runId} compaction did not change context: ${cr.reason}`);
+          }
+          const afterTokens = contextUsage.estimate(workingMessages, toolsOverhead);
+          compactionGuard.record(afterTokens, ctxWindowTokens, workingMessages, compactAt);
+          void publish(runId, 'status', { phase: 'compaction_budget', iteration, beforeTokens, afterTokens, changed: afterTokens < beforeTokens });
+          return receipt;
+        },
+      });
     };
     let modelFallbackNoted = false; // 服务端「停用模型已改用 X」的提示,一个 run 只记一次
     for (let iteration = 0; iteration < maxIterations; iteration++) {

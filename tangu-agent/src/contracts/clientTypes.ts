@@ -1039,6 +1039,16 @@ export interface LiveWait {
   since: number
 }
 
+export interface RunCompactionNotice {
+  runId: string
+  operationId: string
+  reason: 'idle' | 'threshold' | 'overflow'
+  status: 'running' | 'completed' | 'skipped' | 'failed' | 'aborted'
+  skippable: boolean
+  idleMinutes?: number
+  continuing?: boolean
+}
+
 export interface UiMessage {
   id: string
   /** system=客户端本地通知行(斜杠命令反馈等;不持久化,reload 会消失)。 */
@@ -1071,6 +1081,8 @@ export interface UiMessage {
   sketches?: SketchItem[]
   /** 模型调用等待期:sending=正在上传上下文,accepted=已送达等首帧;首帧/工具/结束即清(见 appStore reduceEvent)。 */
   live?: LiveWait
+  /** Persisted run events reconstruct this in-place summary process line on reconnect. */
+  compaction?: RunCompactionNotice
   /** 并行团队(09-16 第四轮):成员在自己的工作会话里干活,这条气泡是它本次激活的占位,发言到达(group_speaker end 带 text)才填正文;
    *  activity = 当前工具一行动态(team_activity),waiting = 等审批 / 询问。end 即清。 */
   work?: TeamWork

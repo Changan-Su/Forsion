@@ -570,3 +570,14 @@ LCL 统一保留并排的 View。空间不足时滚动工作区内容，Ribbon�
 ### 文件视图的临时面板
 
 `registerFileType` 的 `mount(el, file)` 可探测 `file.extendView`，按 `view.extendView` 的同一契约打开临时面板。例如 `file.extendView?.open({ id: "ask", title: "Tangu", side: "right", mount(el) { /* ctx.tangu.mountChat(el) */ } })`。主区及独立文件窗口保留原文件，侧栏内的文件视图使用带返回按钮的覆盖面板。同一个 id 再次打开保留内容；关闭文件、导航或停用插件会关闭面板并吊销旧控制器。旧宿主缺少该字段时，不要用主区跳转代替上下文提问。
+
+
+## Agent 读取设置与设置页锚点
+
+使用 [`ctx.registerAgentSettings`](plugin-agent-settings.md) 显式开放当前生效值。UI/引擎同契约，密钥只给配置状态。
+
+云端设置页可接收 `mount(el, { anchor })` 的可选第二参数；`forsion/fx:<pluginId>:<pageId>#<anchor>` 深链传入锚点。页面加载完成后自行滚动/聚焦对应区域，普通打开不抢焦点。旧 mount(el) 不受影响。
+
+### 笔记阅读渲染器
+
+通过 `ctx.registerNoteRenderer` 热替换只读阅读表面，宿主继续持有文档与保存流程。完整契约、失败回退与生命周期见[笔记阅读渲染器](./note-renderers.md)。

@@ -221,6 +221,7 @@ export const ENGINE_ROUTES: readonly EngineRoute[] = [
   { method: 'GET', path: '/agent/runs', access: 'allow', src: 'routes/runs.ts', why: 'list runs' },
   { method: 'POST', path: '/agent/runs', access: 'allow', src: 'routes/runs.ts', why: 'start a run (field / approval-mode clamping is engine-side, P0 ④)' },
   { method: 'POST', path: '/agent/runs/:id/abort', access: 'allow', src: 'routes/runs.ts', why: 'stop a run' },
+  { method: 'POST', path: '/agent/runs/:id/compaction/skip', access: 'allow', src: 'routes/runs.ts', why: 'skip an optional idle summary for an owned run and operation' },
   { method: 'GET', path: '/agent/runs/:id/events', access: 'allow', src: 'routes/runs.ts', why: 'run event stream' },
   { method: 'POST', path: '/agent/runs/:id/steer', access: 'allow', src: 'routes/runs.ts', why: 'steer a running run' },
   { method: 'DELETE', path: '/agent/runs/:id/steer/:messageId', access: 'allow', src: 'routes/runs.ts', why: 'withdraw a queued steer message' },
