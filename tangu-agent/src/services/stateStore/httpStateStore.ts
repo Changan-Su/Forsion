@@ -420,6 +420,7 @@ export function createHttpStateStore(cfg: HttpStateStoreConfig): StateStore {
         ...(durable ? { runId, completionKey: outbox!.key(runId!), completionSequence: outbox!.sequence(runId!, m.messageId) } : {}),
       });
       rememberHistoryEntry(m.sessionId, result?.historyEntry);
+      if (durable && result?.saved === false) throw new Error('Assistant message not committed; retained for completion delivery');
       if (durable) outbox!.acknowledgeMessage(runId!, m.messageId);
       } catch (error) {
         if (durable) console.warn(`[tangu-worker] assistant message queued for completion delivery run=${runId}`);
