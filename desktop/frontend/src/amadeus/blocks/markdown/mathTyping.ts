@@ -62,3 +62,44 @@ export function mathPairBackspace(view: EditorView, event: KeyboardEvent): boole
   view.dispatch(view.state.tr.delete(from - 1, from + 1))
   return true
 }
+
+const BRACKET_PAIRS: Record<string, string> = { '(': ')', '[': ']', '{': '}' }
+const BRACKET_CLOSERS = new Set(Object.values(BRACKET_PAIRS))
+
+/** Insert a harmless probe character to recognize empty paired math as well as
+ * populated formulas. Closed delimiters keep ordinary prose out of this path. */
+function mathBracketContext(view: EditorView, from: number, to: number) {
+  const c = context(view, from, to)
+  if (!c || /(?:^|[^\\])(?:\\\\)*\\$/.test(c.left)) return null
+  const probe = c.text.slice(0, c.offset) + 'x' + c.text.slice(c.offset)
+  const inside = scanMath(probe).some(s => {
+    const delimiter = s.display ? 2 : 1
+    return c.offset >= s.from + delimiter && c.offset < s.to - delimiter
+  })
+  return inside ? c : null
+}
+
+export function mathBracketInput(view: EditorView, from: number, to: number, input: string): boolean {
+  if (input.length !== 1 || (!BRACKET_PAIRS[input] && !BRACKET_CLOSERS.has(input))) return false
+  const c = mathBracketContext(view, from, to)
+  if (!c) return false
+  if (BRACKET_CLOSERS.has(input) && c.right.startsWith(input)) {
+    view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, from + 1)))
+    return true
+  }
+  const close = BRACKET_PAIRS[input]
+  if (!close || /[\p{L}\p{N}_]/u.test(c.right[0] ?? '')) return false
+  const tr = view.state.tr.insertText(input + close, from, to)
+  view.dispatch(tr.setSelection(TextSelection.create(tr.doc, from + 1)))
+  return true
+}
+
+export function mathBracketBackspace(view: EditorView, event: KeyboardEvent): boolean {
+  if (event.key !== 'Backspace' || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || event.isComposing) return false
+  const { from, to } = view.state.selection
+  const c = mathBracketContext(view, from, to)
+  if (!c || !BRACKET_PAIRS[c.left.at(-1) ?? ''] || BRACKET_PAIRS[c.left.at(-1)!] !== c.right[0]) return false
+  if (/(?:^|[^\\])(?:\\\\)*\\$/.test(c.left.slice(0, -1))) return false
+  view.dispatch(view.state.tr.delete(from - 1, from + 1))
+  return true
+}

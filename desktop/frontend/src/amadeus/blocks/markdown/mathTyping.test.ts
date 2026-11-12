@@ -57,3 +57,32 @@ describe('math dollar typing', () => {
     } finally { await b.destroy() }
   })
 })
+
+describe('bracket typing in math', () => {
+  it.each([['(', ')'], ['[', ']'], ['{', '}']])('pairs %s, overtypes its closer, and deletes an empty pair', async (open, close) => {
+    const b = await bootEditor('$$$$', { extra: [mathLivePreviewPlugin()] })
+    try {
+      const v = b.view
+      const type = (ch: string) => { const { from, to } = v.state.selection; return v.someProp('handleTextInput', f => f(v, from, to, ch, () => v.state.tr.insertText(ch, from, to))) }
+      v.dispatch(v.state.tr.setSelection(TextSelection.create(v.state.doc, 3)))
+      expect(type(open)).toBe(true)
+      expect(v.state.doc.textContent).toBe(`$$${open}${close}$$`)
+      expect(v.state.selection.$head.parentOffset).toBe(3)
+      expect(type(close)).toBe(true)
+      expect(v.state.doc.textContent).toBe(`$$${open}${close}$$`)
+      expect(v.state.selection.$head.parentOffset).toBe(4)
+      v.dispatch(v.state.tr.setSelection(TextSelection.create(v.state.doc, 4)))
+      expect(v.someProp('handleKeyDown', f => f(v, new KeyboardEvent('keydown', { key: 'Backspace' })))).toBe(true)
+      expect(v.state.doc.textContent).toBe('$$$$')
+    } finally { await b.destroy() }
+  })
+  it.each([['prose', 5], ['$x$', 1], ['$\\\\x$', 2], ['`$x$`', 1]])('does not pair outside math, before a word, or after an escape: %s', async (seed, offset) => {
+    const b = await bootEditor(seed as string, { extra: [mathLivePreviewPlugin()] })
+    try {
+      const v = b.view
+      const pos = (offset as number) + 1
+      v.dispatch(v.state.tr.setSelection(TextSelection.create(v.state.doc, pos)))
+      expect(v.someProp('handleTextInput', f => f(v, pos, pos, '(', () => v.state.tr.insertText('(', pos)))).toBeFalsy()
+    } finally { await b.destroy() }
+  })
+})

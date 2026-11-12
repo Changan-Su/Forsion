@@ -49,7 +49,10 @@ describe('EventCard 属性行只读面', () => {
     const host = document.getElementById('host')!
     root = createRoot(host)
     await act(async () => { root!.render(createElement(EventCard, { ev: ev as never, at: { left: 0, top: 0, right: 10, bottom: 10 }, onClose: () => {} })) })
-    const fieldOf = (name: string): HTMLElement => [...host.querySelectorAll<HTMLElement>('.amx-cal-card-prop')].find((e) => e.textContent?.includes(name))!
+    // Desktop cards render in a body portal so workbench dividers cannot cover their fields.
+    const card = document.body.querySelector<HTMLElement>('.amx-cal-cardwrap')
+    expect(card).not.toBeNull()
+    const fieldOf = (name: string): HTMLElement => [...card!.querySelectorAll<HTMLElement>('.amx-cal-card-prop')].find((e) => e.textContent?.includes(name))!
     const rel = fieldOf('配件')
     expect(rel.querySelector('input')).toBeNull()
     expect(rel.querySelector('.amx-cal-card-val')?.textContent).toBe('CPU, 显卡, 已失联')

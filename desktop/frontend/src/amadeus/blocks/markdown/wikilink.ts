@@ -27,6 +27,7 @@ import { FILE_ICON, IMG_EXT_RE, fileIconKind } from './fileIcon'
 import { parseAppRefInner, type AppRef } from '../../../../../shared/appRefs'
 import { AppRefChip } from '../../../components/appRefs'
 import { HostLocaleProvider } from '../../../i18n'
+import { inlinePreviewCaret } from './inlinePreviewCaret'
 
 function fileIconEl(kind: keyof typeof FILE_ICON): SVGSVGElement {
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
@@ -379,6 +380,7 @@ function buildDecorations(
           { side: -1, ignoreSelection: true, key: `w:${m[0]}:${ok ? 1 : 0}:${emoji ?? ''}` },
         ),
       )
+      if (!img && to === cs + node.content.size) decos.push(inlinePreviewCaret(from, to, `wiki:${m[0]}`))
     }
     return false // 不深入内联
   })

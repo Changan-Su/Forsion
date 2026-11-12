@@ -13,7 +13,8 @@ import 'katex/dist/katex.min.css'
 import { attachCopyButton, attachSourceButton, revealSource } from './sourceToggle'
 import { editorFocusKey, editorFocused } from './editorFocus'
 import { registerMessages, translate } from '../../../i18n'
-import { mathDollarInput, mathPairBackspace } from './mathTyping'
+import { mathDollarInput, mathPairBackspace, mathBracketInput, mathBracketBackspace } from './mathTyping'
+import { inlinePreviewCaret, inlinePreviewEdgeClick, inlinePreviewEdgeKeyDown } from './inlinePreviewCaret'
 
 registerMessages({
   'mathlive.renderFailedTitle': { zh: 'LaTeX 无法渲染', en: 'LaTeX could not be rendered' },
@@ -336,6 +337,7 @@ function buildDecorations(state: EditorState): DecorationSet {
         ignoreSelection: true,
         key: `m:${display ? 'b' : 'i'}:${latex}`,
       }))
+      if (!display && to === cs + node.content.size) decos.push(inlinePreviewCaret(from, to, `math:${latex}`))
     }
     return false // 不深入内联
   })
@@ -348,8 +350,9 @@ export function mathLivePreviewPlugin() {
       new Plugin({
         key: mathKey,
         props: {
-          handleTextInput: (view, from, to, text) => mathDollarInput(view, from, to, text),
-          handleKeyDown: mathPairBackspace,
+          handleTextInput: (view, from, to, text) => mathDollarInput(view, from, to, text) || mathBracketInput(view, from, to, text),
+          handleKeyDown: (view, event) => mathPairBackspace(view, event) || mathBracketBackspace(view, event) || inlinePreviewEdgeKeyDown(view, event),
+          handleClick: (view, _pos, event) => inlinePreviewEdgeClick(view, event),
           // 失焦 → 全部渲染(每个 Amadeus 块独立编辑器:点别的块 = 本块失焦,公式即渲染)。焦点态读 editorFocus。
           decorations: (state) => buildDecorations(state),
         },

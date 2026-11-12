@@ -22,6 +22,7 @@ import { isPdfLinkInner, parseBlockSubpath, parseMediaLinkInner } from '@amadeus
 import { openNote, opensAsTab, revealBlockWhenReady, revealHeadingWhenReady } from './amadeusNav'
 import { extHit } from './viewFileMatch'
 import { registerMessages, useI18n } from './i18n'
+import { vaultClipboardPath } from './lib/vaultClipboardPath'
 
 registerMessages({
   'linkmenu.aria': { zh: '链接菜单', en: 'Link menu' },
@@ -29,7 +30,8 @@ registerMessages({
   'linkmenu.split': { zh: '在分屏中打开', en: 'Open in split' },
   'linkmenu.system': { zh: '用系统程序打开', en: 'Open with the system app' },
   'linkmenu.reveal': { zh: '在文件管理器中显示', en: 'Show in file manager' },
-  'linkmenu.copyPath': { zh: '复制路径', en: 'Copy path' },
+  'linkmenu.copyPath': { zh: '复制相对路径', en: 'Copy relative path' },
+  'linkmenu.copyAbsolutePath': { zh: '复制绝对路径', en: 'Copy absolute path' },
   'linkmenu.edit': { zh: '编辑链接', en: 'Edit link' },
   'linkmenu.create': { zh: '创建笔记', en: 'Create note' },
   'linkmenu.browser': { zh: '在浏览器中打开', en: 'Open in browser' },
@@ -48,7 +50,7 @@ function activatePaneOf(el: Element): void {
 
 /** embed = 右键的是一块嵌入(embedLayer 派的):网页嵌入也接,给「浏览器 / 复制链接 / 编辑」;正文里的外链照旧交系统菜单。 */
 interface MenuDetail { inner?: string; x?: number; y?: number; edit?: () => void; embed?: boolean; attachment?: boolean }
-interface LinkMenu { x: number; y: number; inner: string; src?: string; target: WikiTarget; edit?: () => void; host: HTMLElement; attachment?: boolean }
+interface LinkMenu { x: number; y: number; inner: string; src?: string; target: WikiTarget; edit?: () => void; host: HTMLElement; attachment?: boolean; vaultRoot: string | null }
 
 export function WikiLinkMenuHost(): ReactElement | null {
   const { t } = useI18n()
@@ -70,7 +72,7 @@ export function WikiLinkMenuHost(): ReactElement | null {
       if (target.kind === 'missing' && !d.edit && (isPdfLinkInner(inner) || !!parseMediaLinkInner(inner) || attachment)) return
       e.preventDefault()
       // 挂到链接所在的 .am-app 下:菜单的主题作用域与编辑器自己的块菜单一致(同 OverlayPortal 的做法)。
-      setMenu({ x: d.x, y: d.y, inner, src, target, edit: d.edit, attachment, host: el?.closest?.<HTMLElement>('.am-app') ?? document.body })
+      setMenu({ x: d.x, y: d.y, inner, src, target, edit: d.edit, attachment, vaultRoot: st.vaultRoot, host: el?.closest?.<HTMLElement>('.am-app') ?? document.body })
     }
     // 捕获阶段:赶在部件自己的 mousedown(当场就开)之前,左键 / 中键 / 右键都算。
     const onDown = (e: MouseEvent): void => {
@@ -153,6 +155,12 @@ export function WikiLinkMenuHost(): ReactElement | null {
             <button data-act="reveal" onClick={run(() => void amadeus.revealInFileManager(target.path))}><FolderOpen size={13} /> {t('linkmenu.reveal')}</button>
           )}
           <button data-act="copypath" onClick={run(() => void navigator.clipboard?.writeText(target.path).catch(() => {}))}><Copy size={13} /> {t('linkmenu.copyPath')}</button>
+          {vaultClipboardPath(menu.vaultRoot, target.path) && (
+            <button data-act="copyabsolutepath" onClick={run(() => {
+              const path = vaultClipboardPath(menu.vaultRoot, target.path)
+              if (path) void navigator.clipboard?.writeText(path).catch(() => {})
+            })}><Copy size={13} /> {t('linkmenu.copyAbsolutePath')}</button>
+          )}
         </>
       )}
       {menu.edit && <button data-act="edit" onClick={run(menu.edit)}><Pencil size={13} /> {t('linkmenu.edit')}</button>}

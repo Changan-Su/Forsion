@@ -27,6 +27,7 @@ import { openCloudSyncDialog } from '../components/CloudSyncDialog'
 import { isSafeVaultPath } from '../deepLinkPlan'
 import { canTrash, deleteFileMsg, deleteNoteFlow, deleteNoteMsg } from '../noteDelete'
 import { registerMessages, translate } from '../i18n'
+import { vaultClipboardPath } from '../lib/vaultClipboardPath'
 
 registerMessages({
   'objects.file.label': { zh: '文件', en: 'File' },
@@ -45,7 +46,8 @@ registerMessages({
   'amxv.menu.openDrawing': { zh: '打开白板', en: 'Open whiteboard' },
   'amxv.menu.deleteNote': { zh: '删除笔记', en: 'Delete note' },
   'objects.file.reveal': { zh: '在文件管理器中显示', en: 'Show in file manager' },
-  'objects.file.copyPath': { zh: '复制路径', en: 'Copy path' },
+  'objects.file.copyPath': { zh: '复制相对路径', en: 'Copy relative path' },
+  'objects.file.copyAbsolutePath': { zh: '复制绝对路径', en: 'Copy absolute path' },
   'objects.file.deleteOk': { zh: '删除', en: 'Delete' },
   'objects.file.gone': { zh: '这个文件已经不在了', en: 'This file no longer exists' },
   'objects.file.changed': { zh: '这个文件刚刚变过，请重新打开菜单再试', en: 'This file just changed. Open the menu again and retry.' },
@@ -255,6 +257,16 @@ export function installNoteObject(): void {
     icon: Copy,
     title: () => translate('objects.file.copyPath'),
     run: async ([r]) => { await navigator.clipboard.writeText(r.id) },
+  })
+
+  registerObjectAction({
+    id: 'note.copyAbsolutePath', types: [NOTE], group: 'share', order: 2, icon: Copy,
+    title: () => translate('objects.file.copyAbsolutePath'),
+    when: ([r]) => !!vaultClipboardPath(r.scope, r.id),
+    run: async ([r]) => {
+      const path = vaultClipboardPath(r.scope, r.id)
+      if (path) await navigator.clipboard.writeText(path)
+    },
   })
 
   // ── 删除:确认归执行层(一次);笔记照旧走 deleteNoteFlow(问独占附件),其余文件直接删(有回收站就进回收站) ──
