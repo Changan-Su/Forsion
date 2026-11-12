@@ -140,6 +140,7 @@ export interface StateStore {
    *  返回是否真改了。可选:没实现的存储(云端 http)就不改正,只影响显示。 */
   correctUserMessage?(m: { id: string; sessionId: string; content: string }): Promise<boolean>;
   finalizeAssistantMessage(m: FinalizeMessageInput): Promise<void>;
+  hasImageDelivery?(userId: string, sessionId: string, delivery: { id: string; receipt: string }): Promise<boolean>;
 
   // ── sessions ──
   /** 返回 session 的 owner userId(不存在=null);供 runs.ts 起 run 前校验。 */

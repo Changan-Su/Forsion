@@ -344,6 +344,8 @@ export interface ImageGenResult {
   /** `mime` must describe the bytes: Seedream answers JPEG even when everything else is PNG, and edit_image
    *  later re-validates attachment bytes against their declared type — a JPEG labelled PNG fails there. */
   images: Array<{ b64: string; mime: string }>;
+  /** Hosted result receipt. Acknowledge only after saving/displaying all returned images. */
+  delivery?: { id: string; receipt: string };
 }
 
 /** Image type from the first bytes of a base64 payload (PNG / JPEG / WebP / GIF); unknown → PNG, the old default. */
@@ -361,6 +363,9 @@ export interface ImageEditRequest extends ImageGenRequest {
 export interface ImagesBrain {
   generate(req: ImageGenRequest): Promise<ImageGenResult>;
   edit?(req: ImageEditRequest): Promise<ImageGenResult>;
+  listPending?(): Promise<Array<{ id: string; state: string; receipt?: string; model: string; prompt: string; createdAt: string }>>;
+  recover?(id: string, signal?: AbortSignal): Promise<ImageGenResult>;
+  acknowledge?(delivery: NonNullable<ImageGenResult['delivery']>): Promise<void>;
 }
 
 /** 语音合成(朗读按钮/自动朗读用)。direct:调 provider 自有 OpenAI 兼容 /audio/speech;没命中直连的走 Forsion 云端 /api/brain/tts。 */

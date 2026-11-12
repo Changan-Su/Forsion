@@ -187,6 +187,15 @@ export function createSqlStateStore(): StateStore {
         return Array.isArray(files) ? [...files].reverse() : [];
       });
     },
+    async hasImageDelivery(userId, _sessionId, delivery) {
+      // Query the small receipt only, never load historical base64 payloads into memory.
+      const proof = getDbType() === 'sqlite'
+        ? `EXISTS (SELECT 1 FROM json_each(m.display_files) f WHERE json_extract(f.value, '$.imageDelivery.id') = ? AND json_extract(f.value, '$.imageDelivery.receipt') = ?)`
+        : `EXISTS (SELECT 1 FROM jsonb_array_elements(m.display_files) f WHERE f->'imageDelivery'->>'id' = ? AND f->'imageDelivery'->>'receipt' = ?)`;
+      const rows = await query<any[]>(`SELECT m.id FROM chat_messages m JOIN chat_sessions s ON s.id = m.session_id
+        WHERE s.user_id = ? AND m.display_files IS NOT NULL AND ${proof} LIMIT 1`, [userId, delivery.id, delivery.receipt]);
+      return rows.length > 0;
+    },
     async correctUserMessage(m) {
       const rows = await query<any[]>(
         `UPDATE chat_messages SET content = ? WHERE id = ? AND session_id = ? AND role = 'user' AND content <> ? RETURNING id`,

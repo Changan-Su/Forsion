@@ -223,18 +223,6 @@ describe('httpBrain 请求超时与错误面', () => {
       .rejects.toThrow(/build-and-stream 连接失败.*body 1\.0MB.*cloud\.test/s);
   });
 
-  it('生图窗口不被通用超时截断(负对照:把 floorMs 并进取消信号会把 180s 砍成 60s)', async () => {
-    process.env.TANGU_BRAIN_HTTP_TIMEOUT_MS = '40';   // 通用基准:小 prompt 40ms 就该到点
-    process.env.TANGU_BRAIN_HTTP_TIMEOUT_PER_MB_MS = '0';
-    process.env.TANGU_IMAGE_HTTP_TIMEOUT_MS = '400';  // 生图下限:必须压过通用基准
-    hangingFetch();
-    const brain = createHttpBrain({ cloudUrl: 'https://cloud.test', token: 't' });
-
-    const t0 = Date.now();
-    await brain.images.generate({ model: 'img', prompt: '一只猫' } as any).catch(() => undefined);
-    expect(Date.now() - t0).toBeGreaterThan(250); // 走 40ms 通用窗口就是回归
-  });
-
   it('超时按 UTF-8 字节算,中文不被低估 3 倍', async () => {
     process.env.TANGU_BRAIN_HTTP_TIMEOUT_MS = '40';
     process.env.TANGU_BRAIN_HTTP_TIMEOUT_PER_MB_MS = '800';

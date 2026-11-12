@@ -155,6 +155,8 @@ export interface ToolContext {
    * 缺省(未装配此闸,如 TUI/纯云)时工具应优雅降级,不要假定一定可用。
    */
   displayFile?: (item: DisplayFileItem) => void;
+  /** Persist image files in the conversation before acknowledging paid delivery. Throws on capacity/storage failure. */
+  persistImageFiles?: (items: DisplayFileItem[]) => Promise<void>;
   /**
    * 「Agent Desk」演出闸(desk_present 用):把要给用户看的视图清单交给 loop,loop 即时 publish
    * 'desk_present' 事件,桌面端在聊天右侧的实验性 Agent Desk 面板里并排展示(不落库、不回灌上下文)。
@@ -236,6 +238,8 @@ export interface DeskPresentSpec {
 
 /** 展示给用户的文件:path=工作区文件(前端懒加载字节);dataUrl=内联字节(无工作区路径,如表情包 blob)。二选一。 */
 export interface DisplayFileItem {
+  /** Durable receipt: retry settlement after reconnect/restart without regenerating. */
+  imageDelivery?: { id: string; receipt: string };
   name: string;
   mime?: string;
   /** 工作区相对路径(host=cwd 相对;sandbox=工作区相对)。前端按会话形态读字节。 */
