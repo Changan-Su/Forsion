@@ -3660,22 +3660,23 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   .settings-control-row[data-fit='wrap'] .settings-voice-tts > input { flex: 1 1 auto; width: auto; }
 }
 
-/* 移动预览手机框内的通用二级界面兜底。SettingsModal 会在文件末尾用
+/* 手机预览与实际手机商店共用二级界面布局。SettingsModal 会在文件末尾用
    .settings-page--mobile 覆盖成一级列表 → 二级详情;市场 / 成就仍沿用横向入口。 */
-.sc-device .settings-page {
-  grid-template-columns: 1fr;
+:is(.sc-device, [data-mobile-market]) .settings-page {
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr);
 }
-.sc-device .settings-nav {
+:is(.sc-device, [data-mobile-market]) .settings-nav {
+  min-width: 0;
   border-right: none;
   border-bottom: var(--border-width) solid var(--border);
 }
 /* 手机框预览跑在 macOS 桌面上,[data-platform="mac"] 会给 .settings-nav-top 塞 36px 交通灯留白 →
    框内是「手机」不该有,复位成常规留白(否则顶部一段空白,看着像错位)。 */
-.sc-device .settings-nav-top { padding-top: 14px; }
-.sc-device .settings-nav-brand { display: none; }
+:is(.sc-device, [data-mobile-market]) .settings-nav-top { padding-top: 14px; }
+:is(.sc-device, [data-mobile-market]) .settings-nav-brand { display: none; }
 /* 左栏分类:竖排列表 → 横向滚动标签条;分组扁平成一条(隐藏组标题、去掉组间竖直间距)。 */
-.sc-device .settings-nav-list {
+:is(.sc-device, [data-mobile-market]) .settings-nav-list {
   flex-direction: row;
   gap: 4px;
   padding: 6px 8px;
@@ -3683,12 +3684,12 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   overflow-y: hidden;
   scrollbar-width: none;
 }
-.sc-device .settings-nav-list::-webkit-scrollbar { display: none; }
-.sc-device .settings-nav-group,
-.sc-device .settings-nav-group + .settings-nav-group { flex-direction: row; gap: 4px; margin-top: 0; }
-.sc-device .settings-nav-grouphead { display: none; }
-.sc-device .settings-nav-list button { width: auto; flex: 0 0 auto; white-space: nowrap; }
-.sc-device .mk-grid { grid-template-columns: 1fr; }
+:is(.sc-device, [data-mobile-market]) .settings-nav-list::-webkit-scrollbar { display: none; }
+:is(.sc-device, [data-mobile-market]) .settings-nav-group,
+:is(.sc-device, [data-mobile-market]) .settings-nav-group + .settings-nav-group { flex-direction: row; gap: 4px; margin-top: 0; }
+:is(.sc-device, [data-mobile-market]) .settings-nav-grouphead { display: none; }
+:is(.sc-device, [data-mobile-market]) .settings-nav-list button { width: auto; flex: 0 0 auto; white-space: nowrap; }
+:is(.sc-device, [data-mobile-market]) .mk-grid { grid-template-columns: 1fr; }
 
 .field { margin-bottom: 14px; }
 .field label {
@@ -5027,16 +5028,16 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-wrap { top: calc(var(-
   .mk-detail-sidebar { position: static; }
   .mk-grid { grid-template-columns: 1fr; }
 }
-.sc-device .mk-nav-brand { display: none; }
-.sc-device .mk-page .mk-main-head { grid-template-columns: 1fr; padding-top: 18px; }
-.sc-device .mk-page .mk-title-subtitle, .sc-device .mk-sort { display: none; }
-.sc-device .mk-featured, .sc-device .mk-submit, .sc-device .mk-detail-layout { grid-template-columns: 1fr; }
-.sc-device .mk-featured-copy, .sc-device .mk-submit-copy { padding: 22px; }
-.sc-device .mk-featured-art { min-height: 140px; }
-.sc-device .mk-recent-grid { grid-template-columns: 1fr; }
-.sc-device .mk-detail-hero { padding: 18px; }
-.sc-device .mk-detail-icon { width: 54px; height: 54px; }
-.sc-device .mk-detail-sidebar { position: static; }
+:is(.sc-device, [data-mobile-market]) .mk-nav-brand { display: none; }
+:is(.sc-device, [data-mobile-market]) .mk-page .mk-main-head { grid-template-columns: 1fr; padding-top: 18px; }
+:is(.sc-device, [data-mobile-market]) .mk-page .mk-title-subtitle, :is(.sc-device, [data-mobile-market]) .mk-sort { display: none; }
+:is(.sc-device, [data-mobile-market]) .mk-featured, :is(.sc-device, [data-mobile-market]) .mk-submit, :is(.sc-device, [data-mobile-market]) .mk-detail-layout { grid-template-columns: 1fr; }
+:is(.sc-device, [data-mobile-market]) .mk-featured-copy, :is(.sc-device, [data-mobile-market]) .mk-submit-copy { padding: 22px; }
+:is(.sc-device, [data-mobile-market]) .mk-featured-art { min-height: 140px; }
+:is(.sc-device, [data-mobile-market]) .mk-recent-grid { grid-template-columns: 1fr; }
+:is(.sc-device, [data-mobile-market]) .mk-detail-hero { padding: 18px; }
+:is(.sc-device, [data-mobile-market]) .mk-detail-icon { width: 54px; height: 54px; }
+:is(.sc-device, [data-mobile-market]) .mk-detail-sidebar { position: static; }
 
 /* ── Shell 层叠封箱 ──
  * dockview 分割条(.dv-sash)自带 z-index:99、resize tick 更高,若 Shell 不建层叠上下文,
