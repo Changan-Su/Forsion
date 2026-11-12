@@ -34,3 +34,23 @@ it('editing the end still sets only the end', async () => {
 it('a start without an end stays without one', async () => {
   expect(await edit('2026-11-02', 0, '2026-11-05')).toBe('2026-11-05')
 })
+
+async function toggleAllDay(value: string): Promise<string | undefined> {
+  document.body.innerHTML = '<div id="t"></div>'
+  const host = document.getElementById('t')!, onChange = vi.fn()
+  root = createRoot(host)
+  await act(async () => root!.render(createElement(CalDateFields, { value, onChange })))
+  const el = host.querySelector<HTMLInputElement>('input[data-calendar-all-day]')
+  expect(el).not.toBeNull()
+  await act(async () => el!.click())
+  return onChange.mock.calls.at(-1)?.[0]
+}
+it('all-day clears both times while retaining an inclusive multi-day range', async () => {
+  expect(await toggleAllDay('2026-11-02T11:00/2026-11-04T12:00')).toBe('2026-11-02/2026-11-04')
+})
+it('all-day converts a one-day time range without adding a second date', async () => {
+  expect(await toggleAllDay('2026-11-02T11:00/2026-11-02T12:00')).toBe('2026-11-02')
+})
+it('turning all-day off restores editable time fields with a one-hour default', async () => {
+  expect(await toggleAllDay('2026-11-02')).toBe('2026-11-02T09:00/2026-11-02T10:00')
+})

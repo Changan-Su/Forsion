@@ -66,9 +66,9 @@ const labels = (paths: string[], place: Place = TREE): string[] =>
 describe('库内文件的菜单', () => {
   it('树上的笔记:新标签页打开 | 收藏 | 本处(新建子笔记、重命名) | 在文件管理器中显示、复制路径 | 删除', () => {
     expect(ids(['A.md'], TREE, ['new-child', 'rename'])).toEqual([
-      ['note.openInNewTab'], ['note.star'], ['new-child', 'rename'], ['note.reveal', 'note.copyPath'], ['note.delete'],
+      ['note.openInNewTab'], ['note.star'], ['new-child', 'rename'], ['note.reveal', 'note.copyPath', 'note.copyAbsolutePath'], ['note.delete'],
     ])
-    expect(labels(['A.md'])).toEqual(['在新标签页打开', '收藏', '在文件管理器中显示', '复制路径', '删除'])
+    expect(labels(['A.md'])).toEqual(['在新标签页打开', '收藏', '在文件管理器中显示', '复制相对路径', '复制绝对路径', '删除'])
   })
 
   it('PDF 被插件接管:打开 / 用内置阅读器打开 / 用系统程序打开;没接管就没有内置阅读器那条', () => {
@@ -84,7 +84,7 @@ describe('库内文件的菜单', () => {
 
   it('笔记「⋯」:不列打开(这篇已经开着),删除叫「删除笔记」', () => {
     const more: Place = { kind: 'note-more', container: 'leaf-1' }
-    expect(ids(['A.md'], more)).toEqual([['note.star'], ['note.reveal', 'note.copyPath'], ['note.delete']])
+    expect(ids(['A.md'], more)).toEqual([['note.star'], ['note.reveal', 'note.copyPath', 'note.copyAbsolutePath'], ['note.delete']])
     expect(labels(['A.md'], more).at(-1)).toBe('删除笔记')
   })
 
@@ -100,7 +100,7 @@ describe('库内文件的菜单', () => {
   it('手机 sheet 的行:同一份动作,收藏开着时高亮', () => {
     h.starred = ['A.md']
     const rows = noteSheetRows('A.md', { kind: 'note-more', container: 'leaf-1' })
-    expect(rows.map((r) => r.id)).toEqual(['note.star', 'note.reveal', 'note.copyPath', 'note.delete'])
+    expect(rows.map((r) => r.id)).toEqual(['note.star', 'note.reveal', 'note.copyPath', 'note.copyAbsolutePath', 'note.delete'])
     expect(rows[0]).toMatchObject({ label: '取消收藏', on: true })
     expect(rows.at(-1)).toMatchObject({ label: '删除笔记', danger: true })
   })

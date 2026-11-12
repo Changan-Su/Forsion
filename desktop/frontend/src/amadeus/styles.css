@@ -2898,6 +2898,8 @@ body.amx-marquee-active * {
 .math-src-hidden { display: none; }
 /* 双链实况(见 blocks/markdown/wikilink.ts):离行时隐藏 [[ ]] 源码、就地渲染成链接;在行时露源码可编辑。 */
 .wikilink-src-hidden { display: none; }
+/* Empty boundary: geometry for the caret without adding DOM text. */
+.amx-inline-caret::after { content: "\200b"; }
 /* Obsidian 行内语法实况(见 blocks/markdown/obsidianInline.ts):`==高亮==` / `%%注释%%` 是纯文本 + 装饰。
    光标不在该处时定界符 / 整条注释藏起来;高亮底与无色 <mark> 同一档(上方 .ProseMirror mark),不另起色板。 */
 .amx-obs-hidden { display: none; }

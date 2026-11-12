@@ -15,6 +15,14 @@ afterEach(() => {
 })
 
 describe('notificationStore', () => {
+  it('an explicit non-sticky error expires, and a settled success clears inherited stickiness', () => {
+    notifyApp({ text: 'temporary error', level: 'error', sticky: false, dedupeKey: 'temp' })
+    const id = notifyApp({ text: 'failed', level: 'error', dedupeKey: 'operation' })
+    notifyApp({ text: 'recovered', level: 'success', settle: true, dedupeKey: 'operation' })
+    expect(useNotifications.getState().items.find((n) => n.id === id)?.sticky).toBe(false)
+    vi.advanceTimersByTime(12_000)
+    expect(useNotifications.getState().items).toHaveLength(0)
+  })
   it('手机上把浏览器的原话 Failed to fetch 换成一句人话(单独出现 / 拼在别的话后面);桌面不换', () => {
     vi.stubGlobal('window', { tangu: { mobile: true } })
     try {

@@ -1656,7 +1656,7 @@ html.dark .amx-cal-chip-ev, html.dark .amx-cal-event {
 .amx-cal-tscroll { position: relative; flex: 1; min-width: 0; min-height: 0; overflow: auto; }
 .amx-cal-tgrid2 { display: grid; position: relative; }
 /* 悬停时「点下去会建在哪」(默认 1 小时)与按住拖出时的预览块:命令式定位,默认隐藏,不挡指针。 */
-.amx-cal-making { position: absolute; display: none; z-index: 6; box-sizing: border-box; border-radius: var(--radius-sm, 6px); background: var(--amx-event-color); color: #fff; box-shadow: 0 2px 8px color-mix(in srgb, var(--amx-event-color) 35%, transparent); padding: 3px 8px; font-size: var(--ui-font-caption, 11px); line-height: 1.3; font-weight: 600; font-variant-numeric: tabular-nums; overflow: hidden; pointer-events: none; }
+.amx-cal-making { position: absolute; display: none; z-index: 6; box-sizing: border-box; border-radius: var(--radius-sm, 6px); background: var(--amx-event-color); color: #fff; box-shadow: 0 2px 8px color-mix(in srgb, var(--amx-event-color) 35%, transparent); padding: 3px 8px; font-size: var(--ui-font-caption, 11px); line-height: 1.3; font-weight: 600; font-variant-numeric: tabular-nums; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; pointer-events: none; }
 .amx-cal-thead2 { position: sticky; top: 0; z-index: 8; background: var(--bg); border-left: 1px solid var(--amx-cal-line, var(--border)); border-bottom: 1px solid var(--amx-cal-line, var(--border)); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; }
 .amx-cal-thead2.today .amx-cal-tdate { color: var(--accent-ink, var(--accent, #6c5ce7)); }
 .amx-cal-tdow { font-size: var(--ui-font-caption, 11px); color: var(--text-muted); }
@@ -1710,7 +1710,7 @@ html.dark .amx-cal-chip-ev, html.dark .amx-cal-event {
 .amx-cal-agenda-time { color: var(--text-muted); font-size: var(--ui-font-caption, 11px); font-variant-numeric: tabular-nums; }
 
 /* 事件卡片(块旁不覆盖:透明捕获层点外关闭,卡片 fixed 定位在块旁) */
-.amx-cal-cardcatch { position: fixed; inset: 0; z-index: 60; background: transparent; }
+.amx-cal-cardcatch { position: fixed; inset: 0; z-index: var(--z-window-float, 90); background: transparent; }
 /* 承载面 = app 自己的浮层主题(--bg-card + 0.5px 描边环 + 柔投影,与 .amx-db-pop 同一套 token),
  * 刻意不套 astryx Card/Scope —— 那会把整卡盖成 astryx 中性灰、与 app 暖色主题不搭。
  * 视觉对标 Notion Calendar 事件 peek:图标引导的行、时段大标题 + 时长徽章、值右对齐可就地编辑。 */
@@ -1782,7 +1782,7 @@ textarea.amx-cal-card-title { display: block; resize: none; field-sizing: conten
 .amx-calside2 { height: 100%; display: flex; flex-direction: column; min-height: 0; }
 .amx-calside2 > * { flex: 1; min-height: 0; }
 /* 草稿卡:沿用事件卡的承载面,不盖捕获层(标题还在格子里打,点网格别处照常收草稿)。 */
-.amx-cal-draftcard { z-index: 60; width: 300px; color: var(--text); padding-top: 4px; }
+.amx-cal-draftcard { z-index: var(--z-window-float, 90); width: 300px; color: var(--text); padding-top: 4px; }
 /* 右栏待办「快速添加」旁的 N 快捷键提示(原是右栏详情的 Esc 提示,同一个样子) */
 .amx-cal-panel-kbd { margin-left: auto; font-family: var(--font-ui); font-size: var(--ui-font-caption, 11px); line-height: 14px; padding: 1px 5px; border-radius: 4px; outline: 0.5px solid var(--border); color: var(--text-faint, var(--text-muted)); }
 .amx-cal-draft-title { padding: 6px 12px 2px; font-size: var(--ui-font-title, 16px); line-height: 22px; font-weight: 600; overflow-wrap: anywhere; }
