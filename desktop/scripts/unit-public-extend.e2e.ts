@@ -12,6 +12,7 @@
  *     ⑧ 反馈(2026-11-09):Extend 把提交通道交给宿主后,Ribbon 有反馈图标(商店后面)、命令面板有「反馈」、聊天输入框认 /feedback,
  *        提交落到云端 /api/feedback、盖访客 token;window.tangu 上只多 submitFeedback 这一个键。
  *        EXTEND_DIR 里的包还没有这条接缝(老版本 Extend × 新宿主)时,只钉「照旧没有入口、不报错」。
+ *     ⑨ 电脑和手机网页的账号入口显示访客头像与额度,能从菜单进入会员页。
  *
  * 前置:node scripts/build-unit-web.mjs(产物在 desktop/unit-web-dist);EXTEND_DIR = build 过的 Extend 检出(dist/main.js 在)。
  * 跑:EXTEND_DIR=… npx tsx scripts/unit-public-extend.e2e.ts   截图落 SHOT_DIR(缺省 /tmp)。CHROMIUM_EXE 可覆盖。
@@ -61,6 +62,7 @@ function check(name: string, ok: boolean, detail?: string): void {
 // ── 假云端:形状照 Extend 渲染层测试的夹具(test/vitest/renderer/harness.ts、penzorData.test.ts)──
 const MB = 1024 * 1024
 const ME = { id: 'u1', username: 'alice', role: 'USER', email: 'alice@example.com', phone: null, avatar: null, nickname: 'Alice' }
+const AVATAR = 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Ccircle cx=%2220%22 cy=%2220%22 r=%2220%22 fill=%22blue%22/%3E%3C/svg%3E'
 const QUOTA = {
   dailyLimit: 100, dailyUsed: 30, dailyRemaining: 70, dailyPercent: 30, weeklyLimit: 500, weeklyUsed: 120, weeklyRemaining: 380, weeklyPercent: 24,
   weeklyResetAt: '2026-10-26', background: { sharePercent: 15, dailyLimit: 15, dailyUsed: 0, dailyRemaining: 15, dailyPercent: 0, weeklyLimit: 75, weeklyUsed: 0, weeklyRemaining: 75, weeklyPercent: 0, autoMain: false, modelId: null },
@@ -68,12 +70,14 @@ const QUOTA = {
 }
 const PLANS = [
   { id: 'p-plus', name: 'Plus', tier: 'plus', description: '日常轻度使用', priceMonthly: 29.9, priceQuarterly: 79.9, priceYearly: 299, currency: 'CNY', isActive: true },
-  { id: 'p-pro', name: 'Pro', tier: 'pro', description: '4 倍 Plus 额度', priceMonthly: 99, priceQuarterly: 259, priceYearly: 999, currency: 'CNY', isActive: true },
+  { id: 'p-pro', name: 'Pro', tier: 'pro', description: '4 倍 Plus 额度', priceMonthly: 99, priceQuarterly: 259, priceYearly: 999, currency: 'CNY', isActive: true, badge: { from: '#F4DEC4', to: '#E0BD9C', text: '#552F14' } },
 ]
 const API: Record<string, unknown> = {
   'GET /api/announcements/pending': { announcement: null },
   'POST /api/auth/handoff': { code: 'one-time-code' },
   'GET /api/auth/me': ME,
+  'GET /api/brain/users/me': { ...ME, avatar: AVATAR, membershipTier: 'pro' },
+  'GET /api/membership/plans': PLANS,
   'GET /api/profile/me': { username: 'alice', nickname: 'Alice', bio: '', avatar: null },
   'GET /api/profile/me/works': { items: [] },
   'GET /api/membership/my': { membership: { tier: 'plus', status: 'active', expiresAt: '2026-11-20T00:00:00.000Z', plan: { name: 'Plus' } } },
@@ -83,6 +87,7 @@ const API: Record<string, unknown> = {
   'GET /api/shop/products': [{ id: 'reset-card', name: '额度重置卡', description: '立即恢复今日与本周 AI 额度', icon: '⚡', type: 'reset_card', pricePoints: 150, priceRmb: 0, currency: 'CNY', isActive: true }],
   'GET /api/shop/inventory': { items: [] },
   'GET /api/token-quota/my': QUOTA,
+  'POST /api/token-quota/reset-card/use': { success: true, resetCards: 0, quota: { ...QUOTA, dailyRemaining: 100, weeklyRemaining: 500 } },
   'GET /api/invite/my-code': { code: 'ABCD1234', invitedCount: 0, totalReward: 0, claim: { eligible: false } },
   'GET /api/market/mine': { items: [] },
   'GET /api/feedback': { tickets: [] },
@@ -104,6 +109,7 @@ const uploads: Array<{ name: string | null; ascii: string | null; body: string; 
 /** 云端收到的反馈单(POST /api/feedback 的 JSON)。 */
 const tickets: Array<{ description?: string; attachments?: Array<{ filename?: string; size?: number }> }> = []
 
+let invitationsEnabled = true
 function fakeCloud(req: http.IncomingMessage, res: http.ServerResponse): boolean {
   const url = req.url || '/'
   if (url.startsWith('/pay') || url.startsWith('/account')) { res.writeHead(200, { 'Content-Type': 'text/html' }); res.end('<!doctype html><title>pay</title>'); return true }
@@ -112,6 +118,7 @@ function fakeCloud(req: http.IncomingMessage, res: http.ServerResponse): boolean
   const key = `${req.method} ${url}`
   const hit = key in API ? API[key] : API[`${req.method} ${url.split('?')[0]}`]
   if (String(req.headers.authorization || '') !== `Bearer ${TOKEN}`) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end('{"error":"unauthorized"}'); return true }
+  if (url === '/api/invite/my-code' && !invitationsEnabled) { res.writeHead(404, { 'Content-Type': 'application/json' }); res.end('{}'); return true }
   if (req.method === 'POST' && url === '/api/files/upload') {
     const chunks: Buffer[] = []
     req.on('data', (c: Buffer) => chunks.push(c))
@@ -163,7 +170,7 @@ async function main(): Promise<void> {
         if (p !== '/unit/account') return false
         const ok = req.headers.authorization === `Bearer ${TOKEN}`
         res.writeHead(ok ? 200 : 401, { 'Content-Type': 'application/json' })
-        res.end(JSON.stringify(ok ? { userId: 'u1', username: 'alice', role: 'USER', nickname: 'Alice' } : { error: 'Authentication required' }))
+        res.end(JSON.stringify(ok ? { userId: 'u1', username: 'alice', role: 'USER' } : { error: 'Authentication required' }))
         return true
       },
     },
@@ -292,6 +299,59 @@ async function main(): Promise<void> {
     await page.locator('.floating-panel-layer').waitFor({ state: 'detached' }).catch(() => {})
     await page.waitForTimeout(300)
 
+    // ⑨ 真实 Unit 身份接口只有用户名,展示资料和额度由访客会话另外拉取。
+    const avatar = page.locator('.rb [data-id="rb-account"] .account-avatar, .rb .ribbon-account .account-avatar').first()
+    await avatar.waitFor()
+    check('⑨ 电脑网页左下角的账号头像已加载', await avatar.evaluate((el) => el instanceof HTMLImageElement && el.complete && el.naturalWidth > 0))
+    await avatar.click()
+    const accountMenu = page.locator('.account-pop')
+    const quotaSummary = accountMenu.getByRole('button', { name: /AI 额度/ })
+    await quotaSummary.getByText('今日 70% · 本周 76%').waitFor()
+    await accountMenu.getByText('Pro', { exact: true }).waitFor()
+    const nickname = await accountMenu.locator('.ap-name').innerText()
+    check('⑨ 电脑账号菜单显示昵称、会员徽章和日／周额度', nickname === 'Alice', nickname)
+    await accountMenu.getByTestId('account-points').getByText('1,240 积分').waitFor()
+    check('⑨ 访客积分与邀请菜单通过账号桥读取，未开放cloudFetch', await accountMenu.getByRole('button', { name: '邀请奖励' }).isVisible() && await page.evaluate(() => !window.tangu?.cloudFetch))
+    await quotaSummary.click()
+    check('⑨ 额度详情显示可用的额度重置卡', await accountMenu.getByRole('button', { name: '使用额度重置卡（1 张）' }).isVisible())
+    await page.waitForTimeout(500) // Capture the fully expanded popover after its entrance animation.
+    await shot(page, 'account-quota')
+    await accountMenu.getByRole('button', { name: '升级会员' }).click()
+    await page.locator('.mk-page [data-store-view="forsion-extend:membership"].active').waitFor()
+    await page.locator('.mk-page .settings-back').first().click()
+    await page.locator('.mk-page').waitFor({ state: 'detached' })
+
+    invitationsEnabled = false
+    await avatar.click()
+    await quotaSummary.getByText('今日 70% · 本周 76%').waitFor()
+    await page.waitForFunction(() => ![...document.querySelectorAll('.account-pop button')].some(el => el.textContent?.includes('邀请奖励')))
+    check('⑨ 邀请关闭后菜单隐藏入口，积分仍可见', await accountMenu.getByTestId('account-points').innerText() === '1,240 积分')
+    invitationsEnabled = true
+    await quotaSummary.click()
+    await accountMenu.getByRole('button', { name: '使用额度重置卡（1 张）' }).click()
+    const resetRequests = () => seen.filter((r) => r.method === 'POST' && r.url === '/api/token-quota/reset-card/use')
+    check('⑨ 首次点重置卡只请求确认', resetRequests().length === 0)
+    await accountMenu.getByRole('button', { name: '再点一次确认使用' }).click()
+    await accountMenu.waitFor({ state: 'detached' })
+    check('⑨ 确认后只发送一次使用请求', resetRequests().length === 1)
+    await page.locator('.reset-ceremony-close').click()
+
+    const phone = await context.newPage()
+    await phone.setViewportSize({ width: 390, height: 844 })
+    await phone.goto(`${base}/web/?ui=mobile`)
+    const phoneAccount = phone.locator('[data-chrome-action="account"]')
+    await phoneAccount.locator('img').waitFor()
+    check('⑨ 手机网页顶栏显示账号头像', await phoneAccount.locator('img').evaluate((el) => el instanceof HTMLImageElement && el.complete && el.naturalWidth > 0))
+    await phoneAccount.click()
+    const phoneQuota = phone.locator('[data-sheet-item="quota"]')
+    await phoneQuota.getByText('今日 70% · 本周 76%').waitFor()
+    check('⑨ 手机网页额度行可以进入会员与用量', await phoneQuota.isEnabled())
+    await phone.waitForTimeout(400) // Capture the sheet after its entrance animation.
+    await shot(phone, 'phone-account-quota')
+    await phoneQuota.click()
+    await phone.getByText('会员与用量', { exact: true }).first().waitFor()
+    await phone.close()
+
     // ⑤ 蓬洲云
     const penzor = page.locator('[data-space-id="forsion-penzor"], [data-id="forsion-penzor"]').first()
     let penzorOk = false
@@ -405,6 +465,8 @@ async function main(): Promise<void> {
     check('⑦ 没装 Extend:没有商店入口', !bareIds.includes('rb-market') && bareMarket === 'undefined', `${bareIds.join(', ')} marketList=${bareMarket}`)
     const bareFeedback = await page2.evaluate(() => typeof (window as any).tangu?.submitFeedback)
     check('⑦ 没装 Extend:没有反馈入口', !bareIds.includes('rb-feedback') && bareFeedback === 'undefined', `submitFeedback=${bareFeedback}`)
+    check('⑦ 普通 Unit 公开页不暴露官方网页的额度与重置卡接口',
+      await page2.evaluate(() => !window.tangu?.accountQuota && !window.tangu?.accountUseResetCard))
     await page2.locator('.rb [data-id="rb-settings"]').first().click()
     await page2.locator('.settings-nav').first().waitFor()
     const bareNav = await page2.locator('.settings-nav').first().innerText()

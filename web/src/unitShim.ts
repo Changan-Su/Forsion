@@ -231,6 +231,7 @@ export async function installUnitShim(): Promise<boolean> {
       return mergedConfig()
     },
     authStatus: visitor?.account.authStatus || (async () => ({ loggedIn: false, cloudUrl: '', username: meta.name, nickname: meta.name, tokenSource: null })),
+    ...visitor?.accountPresentation,
     ...(!published ? {
     // 直连 provider 元数据(对方已剥 apiKey/baseUrl):模型选择器据此认出直连模型 ——
     // 缺了它直连模型不进清单,选择器显示「选择模型」(2026-08-24 用户实报)。
