@@ -2,6 +2,19 @@
 
 <!-- English edition of CHANGELOG.md: same "## <version> (<date>)" headings, one bullet per Chinese bullet. Add both when releasing. -->
 
+## 2.14.2-beta.2 (2026-11-12)
+
+Preview build: available to people who chose the preview channel.
+
+- **Note columns and formatting**: Hover between columns inside a note to reveal a full-height divider. Drag it to resize, or use the menu or keyboard. Text and block colors share a palette with theme colors, custom colors and narrow-screen support. Numbered lists can continue, restart or use a chosen starting number, and the block-side plus button opens the block picker directly.
+- **Editing and reading**: Fixed math boundaries, selections and embeds after soft line breaks. Commands and delimiters are easier to distinguish in math source. Reading mode, navigation within each View and folding behave more consistently, with improvements to media drops and image resizing. Copy file paths as absolute or relative paths.
+- **Chat**: The sidebar follows the actual hierarchy of nested conversations. Copying a complete reply includes text on both sides of tool calls. Idle compaction shows its status and can be skipped.
+- **Mini windows and reminders**: Note and plugin windows return after restarting, keeping their individual position, edge attachment, hidden state and pinning. Fixed reminder dismissal and updates to quoted calendar tasks, along with calendar date fields and card placement in detached windows.
+- **Accounts and cloud**: Inbox messages sync across desktop and web and support manual refresh. Account pages include points and invitations. Web restores avatars, membership and daily/weekly quotas, with access to account pages, the store and cloud files. Improved sync recovery after reconnecting or switching accounts, and fixed store content being squeezed by the sidebar on narrow phones.
+- **Covers and image jobs**: Improved cover selection, caching and recovery. Longer image generation jobs and GIF downloads recover more reliably after interruptions or slow transfers.
+- **PDF and plugins**: Open Tangu beside a PDF, including in detached windows. Read-only plugin settings remain viewable. Companion releases include Better PDF 0.1.10 for annotation colors and shape corners, and LaTeX Suite 1.1.1 for formula selection and highlighting.
+- Bundles Tangu engine 2.14.2 and Calendar 0.1.9; the default desktop distribution includes Forsion Extend 0.10.4.
+
 ## 2.14.1 (2026-11-10)
 
 This stable release includes all the changes from 2.14.1-beta.1, detailed in the next section.
