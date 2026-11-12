@@ -89,6 +89,18 @@ export function buildWhatsNewEntries(input: {
     combined.installed ||= installed === '2.13.5'
     map.delete('2.13.5')
   }
+  // The published 2.14.1 article covers both stable releases. Offline, keep both
+  // bundled sections in the combined entry instead of hiding the 2.14.0 notes.
+  const combined2141 = map.get('2.14.1')
+  if (combined2141 && (combined2141.markdown || combined2141.lines?.length)) {
+    combined2141.displayVersion = '2.14.0–2.14.1'
+    combined2141.installed ||= installed === '2.14.0'
+    if (!combined2141.markdown) {
+      const previous = input.changelog.find(c => c.version === '2.14.0')
+      combined2141.lines = [...combined2141.lines!, ...(previous?.lines ?? [])]
+    }
+    map.delete('2.14.0')
+  }
   return [...map.values()].sort((a, b) => compareVersions(b.version, a.version))
 }
 
