@@ -173,7 +173,7 @@ type SwitchProps = { className?: string; testId?: string; compact?: boolean } & 
 /** 看法胶囊。给 `leafId` = 画那个视图登记的那份(手机上由顶栏画,视图里这颗返回 null);给 `spec` = 当普通零件用(插件零件、表单里)。 */
 export function ViewModeSwitch(props: SwitchProps): React.ReactElement | null {
   const inHead = useContext(NavigationInHead)
-  const navigation = props.leafId && !props.inTopbar && !inHead && !inSingleColumnShell() ? <ViewNavigation leafId={props.leafId} /> : null
+  const navigation = IS_MINI_PANEL && props.leafId && !props.inTopbar && !inHead ? <ViewNavigation leafId={props.leafId} /> : null
   const reg = useViewModesOf(props.leafId)
   const spec = props.spec ?? reg
   const { t } = useEngineI18n()
@@ -278,7 +278,7 @@ export function ViewModeSwitch(props: SwitchProps): React.ReactElement | null {
 export function ViewHead({ leafId, children, className, testId, title }: { leafId: string | null | undefined; children?: ReactNode; className?: string; testId?: string; title?: string }): React.ReactElement | null {
   const spec = useViewModesOf(leafId)
   const showSwitch = !!spec && spec.modes.length > 1 && !inSingleColumnShell()
-  const navigation = !!leafId && !inSingleColumnShell()
+  const navigation = IS_MINI_PANEL && !!leafId
   if (!navigation && !showSwitch && !children && !title) return null
   return (
     <div className={`lcl-viewhead${className ? ` ${className}` : ''}`}>

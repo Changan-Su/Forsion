@@ -1,5 +1,5 @@
 /** Per-View navigation wiring: real Chromium + Dockview + navStore.
- * Each View owns arrows inside its content; the sidebar toggle remains in the first tab group.
+ * Each group owns arrows in its tab strip, bound to its active View; only the first group has a sidebar toggle.
  * Run npm run check:nav. HARNESS_URL may target an isolated Vite server.
  */
 const fs = require('fs')
@@ -53,12 +53,7 @@ const prefixes = (page) => page.$$eval('.dv-groupview', gs => gs
   .filter(g => g.querySelector('.dv-new-tab'))
   .sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left)
   .map(g => {
-    const rect = g.getBoundingClientRect()
-    const navs = [...document.querySelectorAll('.lcl-viewnav')].filter(nav => {
-      const r = nav.getBoundingClientRect()
-      return r.width > 0 && r.left >= rect.left && r.left < rect.right
-    })
-    return [navs.length * 2, g.querySelectorAll('.dv-edge-toggle').length]
+    return [g.querySelectorAll('.dv-prefix .lcl-viewnav > button').length, g.querySelectorAll('.dv-edge-toggle').length]
   }))
 
 async function arrow(page, dir, id) {
@@ -72,7 +67,7 @@ async function arrow(page, dir, id) {
 async function main() {
   let vite = null
   if (!(await ping())) {
-    vite = spawn('npx', ['vite', 'frontend'], { cwd: path.resolve(__dirname, '..'), stdio: 'ignore' })
+    vite = spawn('npx', ['vite', 'frontend', '--port', new global.URL(BASE).port || '5173', '--strictPort'], { cwd: path.resolve(__dirname, '..'), stdio: 'ignore' })
     let up = false
     for (let i = 0; i < 60 && !up; i++) {
       await new Promise((r) => setTimeout(r, 500))
@@ -83,6 +78,8 @@ async function main() {
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })
   try {
     const page = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1400, height: 900 } })
+    page.on('pageerror', e => console.error('PAGEERROR', e.message))
+    page.on('console', m => { if (m.type() === 'error') console.error('CONSOLE', m.text()) })
     await page.goto(URL)
     await page.waitForSelector('.dockh-body[data-tag="main"]', { timeout: 20000 })
     await page.waitForTimeout(500)
@@ -177,7 +174,7 @@ async function main() {
       JSON.stringify(inplace) + '(修复前:fired=0 → 历史一条都记不上)',
     )
 
-    check('9 标签栏不再出现历史箭头', await page.locator('.dv-nav-btn').count() === 0)
+    check('9 正文内没有历史箭头或兜底行', await page.locator('.wb-view .lcl-viewnav, .wb-view .lcl-viewnav-fallback').count() === 0)
     for (const custom of [false, true]) {
       const id = await page.evaluate(custom => {
         const d = window.__dock
@@ -187,8 +184,21 @@ async function main() {
       }, custom)
       await page.waitForTimeout(100)
       const nav = page.locator(`[data-view-nav="${id}"]`)
-      check(`10 ${custom ? '自有头行模式胶囊' : 'ViewHead'}只出现一套箭头`, await nav.count() === 1 && await nav.evaluate(el => !!el.closest('.lcl-viewhead') && !el.closest('.lcl-viewnav-fallback')))
+      check(`10 ${custom ? '自有头行模式胶囊' : 'ViewHead'}仅在标签栏出现一套箭头`, await nav.count() === 1 && await nav.evaluate(el => !!el.closest('.dv-prefix') && !el.closest('.wb-view')))
       check(`11 ${custom ? '自有头行' : 'ViewHead'}后退可用`, await arrow(page, 'back', id))
+    }
+
+    const empty = await page.evaluate(() => window.__dock.open('nav-empty-head', {}, true))
+    await page.waitForTimeout(100)
+    check('12 空 ViewHead 不制造额外空行', await page.locator('.nav-empty-head .lcl-viewhead, .wb-view .lcl-viewnav-fallback').count() === 0)
+    check('13 新标签无历史时禁用前后退', await page.locator(`[data-view-nav="${empty}"] button:disabled`).count() === 2)
+    await page.evaluate(id => window.__dock.nav.activate(id), tabC)
+    await page.waitForTimeout(100)
+    check('14 切回旧标签后绑定其历史', await page.locator(`[data-view-nav="${tabC}"] [data-press="back"]`).isDisabled() && !await page.locator(`[data-view-nav="${tabC}"] [data-press="forward"]`).isDisabled())
+    for (const width of [760, 1400]) {
+      await page.setViewportSize({ width, height: 900 })
+      await page.waitForTimeout(100)
+      check(`15 ${width}px 分屏导航仍位于标签栏且未进正文`, JSON.stringify(await prefixes(page)) === twoGroups && await page.locator('.wb-view .lcl-viewnav').count() === 0)
     }
 
     if (process.env.NAV_SHOT) await page.screenshot({ path: process.env.NAV_SHOT })

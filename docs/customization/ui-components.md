@@ -377,7 +377,7 @@ ctx.ui?.mountRecord?.(el, { path, rowId, dateCol, readOnly })
 同一份东西换一种看法（对话 / 画布、文档 / 画布、转写 / 笔记 / 纪要、日 / 周 / 3 日 / 月）全应用一个摆法：胶囊在**视图头行的最左**，头行 32px、在纸卡里、不随正文滚；视图自己的标题排在胶囊后面。一个视图最多一颗，2–4 种；超过 4 种的用标签（数据库视图）。筛选、换来源的胶囊长相一样，但不放进这个位置。方案与取舍见仓根 `docs/ToBeImproved/视图模式切换标准方案_2026-10-19`。
 
 - 原生视图：`useViewModes`（`@lcl/engine`）登记，再在头行最左放 `<ViewModeSwitch leafId={leaf.id} />`；没有自己顶栏的视图整行用 `<ViewHead leafId>{按钮}</ViewHead>`。已有顶栏的（Amadeus `.amx-toolbar`、日历 `.amx-cal-bar`）给那一行加 `container: lcl-viewhead / inline-size`，窄时的退化才认得这一行的宽度。
-- 主区 View 的头行会在模式胶囊左侧自动提供前进/后退，只影响这个 View；插件无需再画历史按钮。没有使用宿主头行的 View 由宿主补导航行，手机也可用；历史在本次运行内随 Space 保存，关闭 View 时释放。
+- 桌面/Web 桌面布局的每个主区分屏在标签栏提供前进/后退，绑定该组当前 View；插件无需适配或重复绘制，正文不追加导航行。手机单栏保留原有活动 View 导航入口。历史在本次运行内随 Space 保存，关闭 View 时释放。
 
 ```js
 useViewModes(leaf.id, { modes, value, onChange })

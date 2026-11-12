@@ -720,6 +720,7 @@ if (new URLSearchParams(location.search).has('dock')) {
     useViewModes(leaf.id, { modes: [{ value: 'one', label: 'Document' }, { value: 'two', label: 'Canvas' }], value: 'one', onChange: () => {} })
     return <>{params.custom ? <div className="lcl-viewhead"><ViewModeSwitch leafId={leaf.id} /></div> : <ViewHead leafId={leaf.id} title="Navigation" />}<div className="navv" data-label={String(params.label ?? '')}>{String(params.label ?? '')}</div></>
   }
+  registerView({ type: 'nav-empty-head', displayName: 'Empty head', icon: Square, factory: ({ leaf }) => <div className="nav-empty-head"><ViewHead leafId={leaf.id} /><p>Content</p></div> })
   registerView({ type: 'nav-headed', displayName: 'Headed navigation', icon: Square, factory: props => <HeadedNav {...props} /> })
   useWorkspace.setState({ sidebarDefaults: { left: [{ type: 'sidev', params: {} }], right: [{ type: 'sidev', params: {} }], bottom: [] } })
   probe.mainW = () => {
