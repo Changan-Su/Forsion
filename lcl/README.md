@@ -28,7 +28,7 @@ Genesis 当前使用这份 LCL。`apps/Archived/Forsion-LCL` 是早期组合引�
 
 ## 长内容导航
 
-前进/后退归每个主区 View。`ViewHead` 和带 `leafId` 的 `ViewModeSwitch` 自动在原头行左侧放箭头；没有宿主头行的 View（包括插件）由 WorkspaceHost 补一条紧凑导航行，手机在活动 View 内提供同样入口。标签栏只保留框架动作。历史按 Space 与稳定 leaf id 在本次运行内保留，关闭 View / 显式重置布局清理对应栈；不会写入文档。
+前进/后退归每个主区 View。桌面/Web 桌面布局在每个主区分屏的标签栏提供一套箭头，绑定该组当前标签；`ViewHead`、`ViewModeSwitch` 与无头行插件均不在正文内追加导航。左栏折叠钮仍仅在最左上组。手机单栏布局保留原有活动 View 导航入口。历史按 Space 与稳定 leaf id 在本次运行内保留，关闭 View / 显式重置布局清理对应栈；不会写入文档。
 
 `recordNav(leafId, key, restore, title?)` 的恢复回调返回真实 Promise，可接收 `NavRestoreContext`（`signal`、`isCurrent()`）。同 View 快速连续导航合并到最新目标，异步恢复按顺序结束；不同 View 不互相阻塞。异步读完、写入 View 状态之前须检查取消信号，不能在回调里 `void` 丢掉恢复 Promise。失败回滚历史索引并给出提示，旧 Space 的恢复结果不得写入新 Space。文件恢复保留全部用户参数；插件参数按 JSON 对象身份记录。台架：`desktop` 的 `npm run check:nav`，竞态负对照及回归：`lcl/engine/navStore.races.test.ts`。
 

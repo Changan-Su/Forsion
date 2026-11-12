@@ -774,7 +774,7 @@ html[data-dv-dragging] .dockview-theme-lcl .dv-tabs-and-actions-container,
 html[data-dv-dragging] .dockview-theme-lcl .dv-void-container,
 html[data-dv-dragging] .t2s-side { -webkit-app-region: no-drag; }
 
-/* 主区标签栏左前缀:左栏折叠钮 */
+/* 主区标签栏左前缀:每组导航 + 最左组的左栏折叠钮。 */
 .dv-prefix { display: inline-flex; align-items: center; gap: 2px; padding-left: 4px; }
 /* 左栏收起 → 主区折叠钮成为最左,躲开 mac 交通灯(与左栏 tab 同款避让)。 */
 [data-platform='mac'] .dv-prefix--edge { padding-left: 26px; }

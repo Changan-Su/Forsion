@@ -40,7 +40,7 @@ import { cycleFocusedGroupTab, tabCycleDelta } from './tabCycle'
 import { besideTarget, openMainBesideThisTask } from './openBeside'
 import { keepScroll } from './keepScroll'
 import { createViewLayout } from './viewLayout'
-import { ViewNavigationFallback } from './viewNavigation'
+import { ViewNavigation } from './viewNavigation'
 
 /** tooltip「名称(快捷键)」:快捷键取该命令**当前生效**的键、按平台格式化(改了键就跟着变,解绑就只剩名称)。 */
 function withHotkey(t: (k: string, v?: Record<string, unknown>) => string, text: string, cmdId: string): string {
@@ -133,7 +133,6 @@ function makeComponent(def: ViewDefinition): React.FC<IDockviewPanelProps> {
         ref={viewRef}
         className={`wb-view wb-view--${loc}`}
       >
-        {loc === 'main' && <ViewNavigationFallback leafId={leaf.id} />}
         <ViewErrorBoundary type={def.type}>
           <Suspense fallback={<Skeleton variant={skeletonVariantOf(def.type, loc)} />}>
             {loc === 'main' ? <ExtendViewHost present={presentDockedExtension} owner={props.api} ownerKey={ownerKey}>
@@ -314,10 +313,9 @@ function isFirstMainGroup(api: DockviewApi, group: IDockviewHeaderActionsProps['
   return rects[0]?.g === group
 }
 
-/** 主区标签栏左侧前缀:前进后退 + 左栏折叠钮(在左panel右缘)。主区常驻 →
- *  折叠左栏后此钮仍在原处(左panel右缘=主区左缘),可重开。分屏也只有最左上那组有一份。 */
+/** 每个主区组的标签栏都有导航,目标是该组当前 View;左栏折叠钮仅在最左上组。 */
 function makePrefixActions(): React.FC<IDockviewHeaderActionsProps> {
-  return function PrefixActions({ panels, containerApi, group }) {
+  return function PrefixActions({ panels, containerApi, group, activePanel }) {
     // 左栏收起后,主区组成为最左 → 折叠钮要躲开 mac 交通灯(加 --edge,见 engine.css)。
     const leftCollapsed = !useWorkspace((s) => s.leftVisible)
     const { t } = useEngineI18n()
@@ -325,10 +323,11 @@ function makePrefixActions(): React.FC<IDockviewHeaderActionsProps> {
     // 组被拖到另一边、关掉一组时 tab 集合可能不变,mainTabs 不刷 → 单独跟布局变化重算「谁是最左上」。
     const [, relayout] = useReducer((n: number) => n + 1, 0)
     useEffect(() => { const d = containerApi.onDidLayoutChange(relayout); return () => d.dispose() }, [containerApi])
-    if (!isMainGroup(panels) || !isFirstMainGroup(containerApi, group)) return null
+    if (!isMainGroup(panels)) return null
+    const first = isFirstMainGroup(containerApi, group)
     return (
-      <div className={`dv-prefix${leftCollapsed ? ' dv-prefix--edge' : ''}`}>
-        {!IS_VIEW_WINDOW && ( // 独立视图窗只装主区,没有左栏可开(见 uiMode.IS_VIEW_WINDOW)
+      <div className={`dv-prefix${first && leftCollapsed ? ' dv-prefix--edge' : ''}`}>
+        {first && !IS_VIEW_WINDOW && ( // 独立视图窗只装主区,没有左栏可开(见 uiMode.IS_VIEW_WINDOW)
           <button
             className={`dv-edge-toggle${leftCollapsed ? '' : ' is-on'}`}
             aria-pressed={!leftCollapsed}
@@ -338,6 +337,7 @@ function makePrefixActions(): React.FC<IDockviewHeaderActionsProps> {
             <PanelLeft size={15} />
           </button>
         )}
+        <ViewNavigation leafId={activePanel?.id} />
       </div>
     )
   }
