@@ -205,7 +205,8 @@ describe('私聊 attention(Muse 主动发来 / 等你)', () => {
     expect(useAttention.getState().dm.dm1.unread).toBe(true)
   })
 
-  it('questions preserve the waiting preference and successful pending receipts are sent only once', async () => {
+  it('questions preserve waiting preference; pending receipts retry with backoff until delivery settles', async () => {
+    vi.useFakeTimers()
     useApp.setState({ sessions: [solo], configBySession: {}, activeId: null, refreshSessions: vi.fn(async () => []) } as any)
     await useAttention.getState().refresh(); await flush()
     state.dm.mockImplementation(async (path: string) => json(path.endsWith('/read') ? { ok: true, unread: false, awaiting: true } : { sessions: [{ id: 'dm1', unread: true, awaiting: true, count: 1, at: 300 }] }))
@@ -215,6 +216,13 @@ describe('私聊 attention(Muse 主动发来 / 等你)', () => {
     useAttention.getState().markRead('dm1', 'pending'); await flush()
     useAttention.getState().markRead('dm1', 'pending'); await flush()
     expect(state.dm.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(10001)
+    state.dm.mockImplementation(async () => json({ ok: true, unread: false, awaiting: false }))
+    useAttention.getState().markRead('dm1', 'pending'); await flush()
+    expect(state.dm.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(2)
+    expect(useApp.getState().sessions[0].awaiting_user).toBe(false)
+    useAttention.getState().markRead('dm1', 'pending'); await flush()
+    expect(state.dm.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(2)
   })
 
   it('后台第一次建出的私聊本地列表里没有 → 补拉一次会话列表,角标 / 通知才认得它;每个 id 只补拉一次(Codex 10-18 #2)', async () => {

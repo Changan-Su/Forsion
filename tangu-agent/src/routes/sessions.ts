@@ -184,14 +184,16 @@ router.post('/agent/sessions/:id/read', authMiddleware, async (req: AuthRequest,
     // New clients identify the message actually rendered. Keep legacy clients compatible,
     // but never let a delayed bounded receipt consume a later proactive arrival.
     let through = Date.now();
+    let proactive = true; // Legacy unbounded receipts keep their existing behavior.
     if (req.body?.messageId !== undefined) {
       if (typeof req.body.messageId !== 'string' || !req.body.messageId) return res.status(400).json({ detail: 'Invalid messageId' });
-      const [message] = await query<any[]>(`SELECT timestamp FROM chat_messages WHERE id = ? AND session_id = ?`, [req.body.messageId, s.id]);
+      const [message] = await query<any[]>(`SELECT timestamp, origin FROM chat_messages WHERE id = ? AND session_id = ?`, [req.body.messageId, s.id]);
       if (!message) return res.status(404).json({ detail: 'Message not found' });
       through = Number(message.timestamp);
+      proactive = typeof message.origin === 'string' && message.origin.startsWith('proactive');
       if (!Number.isSafeInteger(through) || through <= 0) return res.status(400).json({ detail: 'Invalid message timestamp' });
     }
-    const result = await acknowledgeSessionRead(s.id, through);
+    const result = await acknowledgeSessionRead(s.id, through, proactive);
     res.json({ ok: true, ...result });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'mark read failed' });

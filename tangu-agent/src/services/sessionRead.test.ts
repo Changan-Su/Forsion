@@ -28,6 +28,10 @@ describe('bounded read receipt', () => {
     h.db.exec("DELETE FROM chat_messages WHERE id='reply'; INSERT INTO chat_messages VALUES ('other', 'elsewhere', 400)");
     expect((await acknowledgeSessionRead('s', 200)).awaiting).toBe(false);
   });
+  it('ordinary reply with equal or later timestamp cannot read an unseen proactive message', async () => {
+    expect(await acknowledgeSessionRead('s', 200, false)).toEqual({ unread: true, awaiting: true });
+    expect(await acknowledgeSessionRead('s', 300, false)).toEqual({ unread: true, awaiting: true });
+  });
   it('pending child delivery keeps awaiting', async () => {
     h.db.exec("UPDATE chat_sessions SET report_run_id='run'");
     expect(await acknowledgeSessionRead('s', 200)).toEqual({ unread: false, awaiting: true });

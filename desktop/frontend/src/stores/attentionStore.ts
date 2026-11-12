@@ -112,7 +112,7 @@ export const useAttention = create<AttentionState>((set, get) => ({
     void engineFetch(targetForSession(sessionId), `/agent/sessions/${encodeURIComponent(sessionId)}/read`, { method: 'POST', body: JSON.stringify({ messageId }), headers: { 'Content-Type': 'application/json' } }, { timeoutMs: REQUEST_TIMEOUT_MS })
       .then(async (r) => {
         const j = r.ok ? await r.json().catch(() => null) as { awaiting?: unknown; unread?: unknown } | null : null
-        if (j && typeof j.unread === 'boolean') acknowledged.set(sessionId, messageId)
+        if (j?.unread === false && j.awaiting === false) acknowledged.set(sessionId, messageId)
         // Only the engine can acknowledge the observed watermark; a newer arrival stays unread.
         if (j?.unread === false && get().dm[sessionId] === cur) set((s) => ({ dm: { ...s.dm, [sessionId]: { ...s.dm[sessionId], unread: false, count: 0 } } }))
         if (j?.awaiting !== false) return

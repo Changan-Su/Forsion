@@ -24,9 +24,10 @@ export function trackChatReadReceipt(viewport: HTMLElement, sessionId: string): 
     for (const id of sessions) {
       const dm = useAttention.getState().dm[id]
       if (!dm?.unread && !app.sessions.some((s) => s.id === id && s.awaiting_user)) continue
-      // Only the latest loaded assistant message, actually on screen, can acknowledge.
+      // Unread proactive messages require seeing the proactive message itself. An ordinary
+      // reply with an equal/later timestamp cannot acknowledge an unseen proactive message.
       // Canvas cards/readers carry their own session, independent of the global selection.
-      const message = [...(app.messagesBySession[id] || [])].reverse().find((m) => m.role === 'assistant')
+      const message = [...(app.messagesBySession[id] || [])].reverse().find((m) => m.role === 'assistant' && (!dm?.unread || m.origin?.startsWith('proactive')))
       if (!message || message.status === 'streaming') continue
       const visible = Array.from(viewport.querySelectorAll<HTMLElement>('[id^="tocmsg-"]'))
         .some((el) => el.id === `tocmsg-${message.id}` && messageIsVisible(el, viewport))

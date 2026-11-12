@@ -40,7 +40,7 @@ it('reading old history, hidden tabs and unmounted messages do not count', () =>
 it('receipts follow rendered split session, not global activeId; cleanup stops them', async () => {
   const read = vi.spyOn(useAttention.getState(), 'markRead').mockImplementation(() => {})
   useAttention.setState({ dm: { pinned: { unread: true, awaiting: false, count: 1 } } })
-  useApp.setState({ activeId: 'other', messagesBySession: { pinned: [{ id: 'm1', role: 'assistant', content: 'hello', timestamp: 100, status: 'done' }] } } as any)
+  useApp.setState({ activeId: 'other', messagesBySession: { pinned: [{ id: 'm1', role: 'assistant', origin: 'proactive', content: 'hello', timestamp: 100, status: 'done' }] } } as any)
   const off = trackChatReadReceipt(viewport, 'pinned')
   await vi.advanceTimersByTimeAsync(750)
   expect(read).toHaveBeenCalledWith('pinned', 'm1')
@@ -61,5 +61,18 @@ it('visible canvas branch acknowledges its own session even when a hidden stream
   const off = trackChatReadReceipt(viewport, 'other')
   await vi.advanceTimersByTimeAsync(750)
   expect(read).toHaveBeenCalledWith('branch', 'm2')
+  off()
+})
+
+it('a visible ordinary reply cannot acknowledge an unseen proactive message with the same timestamp', async () => {
+  const read = vi.spyOn(useAttention.getState(), 'markRead').mockImplementation(() => {})
+  useAttention.setState({ dm: { s: { unread: true, awaiting: true, count: 1 } } })
+  useApp.setState({ sessions: [{ id: 's', awaiting_user: true }], messagesBySession: { s: [
+    { id: 'unseen', role: 'assistant', origin: 'proactive', content: 'new', timestamp: 100, status: 'done' },
+    { id: 'm1', role: 'assistant', content: 'reply', timestamp: 100, status: 'done' },
+  ] } } as any)
+  const off = trackChatReadReceipt(viewport, 's')
+  await vi.advanceTimersByTimeAsync(750)
+  expect(read).not.toHaveBeenCalled()
   off()
 })
