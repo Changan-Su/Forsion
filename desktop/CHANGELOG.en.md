@@ -1,6 +1,8 @@
 # Forsion changelog
 
-<!-- English edition of CHANGELOG.md: same "## 2.14.2-beta.2 (2026-11-12)
+<!-- English edition of CHANGELOG.md: same "## <version> (<date>)" headings, one bullet per Chinese bullet. Add both when releasing. -->
+
+## 2.14.2-beta.2 (2026-11-12)
 
 Preview build: available to people who chose the preview channel.
 
@@ -12,8 +14,6 @@ Preview build: available to people who chose the preview channel.
 - **Covers and image jobs**: Improved cover selection, caching and recovery. Longer image generation jobs and GIF downloads recover more reliably after interruptions or slow transfers.
 - **PDF and plugins**: Open Tangu beside a PDF, including in detached windows. Read-only plugin settings remain viewable. Companion releases include Better PDF 0.1.10 for annotation colors and shape corners, and LaTeX Suite 1.1.1 for formula selection and highlighting.
 - Bundles Tangu engine 2.14.2 and Calendar 0.1.9; the default desktop distribution includes Forsion Extend 0.10.4.
-
-## <version> (<date>)" headings, one bullet per Chinese bullet. Add both when releasing. -->
 
 ## 2.14.1 (2026-11-10)
 
