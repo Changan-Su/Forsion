@@ -15,8 +15,6 @@ import { App as CapApp } from '@capacitor/app'
 import { useApp } from '@/stores/appStore'
 import { useTheme, useVisualTheme } from '@/stores/themeStore'
 import { useBootstrap } from '@/stores/bootstrap'
-import { useInbox } from '@/stores/inboxStore'
-import { pullInbox } from '@/services/backendService'
 import { SettingsModal } from '@/components/SettingsModal'
 import { MarketModal } from '@/components/MarketModal'
 import { PluginOnboardingHost } from '@/components/PluginOnboardingModal'
@@ -46,31 +44,9 @@ import { CommandPalette } from '@lcl/engine/CommandPalette'
 import { buildDefaultLayout } from '@/bootstrapEngine'
 import { MobileUnitsSheet, useUnitsSheet } from './UnitsSheet'
 import { exitHint, onBackGesture } from './nativeBack'
-import { homeTarget } from '@/services/engine/targets'
 import { BrowserChrome, browserChromeInstalled } from './browserChrome'
 import { installBrowserBack, type BrowserBackPlan } from './browserBack'
 import { subscribeBrowserSheet } from './browserSheet'
-
-/** 移动端本地 inbox 内容来自云端广播,但无服务端 inboxPull 调度器 → 客户端定时静默拉(绕开 inboxStore.pull 的 toast)。 */
-function useInboxAutoPull(): void {
-  useEffect(() => {
-    const doPull = async () => {
-      if (!window.tangu?.mobile || useApp.getState().connState !== 'ok') return
-      try {
-        const r = await pullInbox(homeTarget())
-        if (r.added) { void useInbox.getState().refreshList(); void useInbox.getState().refreshUnread() }
-      } catch { /* 静默 */ }
-    }
-    void doPull()
-    const timer = window.setInterval(doPull, 5 * 60_000)
-    let prev = useApp.getState().connState
-    const unsub = useApp.subscribe((s) => { if (s.connState === 'ok' && prev !== 'ok') void doPull(); prev = s.connState })
-    // P1-K3:回到前台立即拉(电脑上的远程会话等你批准时投的提醒信,要一打开 App 就看得到,别等 5 分钟那一轮)
-    const onVisible = (): void => { if (!document.hidden) void doPull() }
-    document.addEventListener('visibilitychange', onVisible)
-    return () => { window.clearInterval(timer); unsub(); document.removeEventListener('visibilitychange', onVisible) }
-  }, [])
-}
 
 /** 主页上两次返回之间最多隔多久算「再返回一次」(= 系统短 Toast 显示的时长)。 */
 const EXIT_WINDOW_MS = 2000
@@ -219,7 +195,6 @@ const subscribeBtwPage = (cb: () => void): (() => void) => readTanguShell()?.sub
 
 export function MobileRoot() {
   useBootstrap()
-  useInboxAutoPull()
   useAndroidBack()
   useBrowserBack()
   // 通知事件接线(幂等)。三段里 A(amadeusSync)/B(remoteSync)在移动端是可选链 no-op,真正生效的是

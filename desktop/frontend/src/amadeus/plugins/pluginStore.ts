@@ -144,6 +144,7 @@ import { CHAT_BOX_CAPABILITIES } from '../../../../shared/chatBox'
 import { windowKind } from '../../windowKind'
 import { addRibbonAction } from './ribbonAction'
 import { provideFeedbackChannel } from '../../feedbackChannel'
+import { provideInboxChannel } from '../../services/inboxChannel'
 import { compileDashboardRecipe } from '@amadeus-shared/dashboardRecipe'
 import { openWebFloatingPanel } from '../../pluginPanelSeam'
 import { connectionTarget, homeTarget } from '../../services/engine/targets'
@@ -699,6 +700,11 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
       if (!ok() || typeof submit !== 'function' || !usePluginStore.getState().plugins.find((p) => p.id === pluginId)?.locked) return false
       return provideFeedbackChannel(pluginId, submit)
     },
+    provideInboxChannel: (channel) => {
+      if (channel === null) return provideInboxChannel(pluginId, null)
+      if (!ok() || pluginId !== 'forsion-extend' || !usePluginStore.getState().plugins.find((p) => p.id === pluginId)?.locked) return false
+      return provideInboxChannel(pluginId, channel)
+    },
     // 同步总开关(2026-10-20,蓬洲云「同步」页):只给首方包(同 spotlight 认 locked)、只在有本地库远程同步的桌面
     ...(typeof window !== 'undefined' && window.remoteSync && !hostTangu()?.mobile ? { sync: syncSeam(pluginId, ok) } : {}),
     // 自己弹出来的弹窗排队(2026-10-19,Extend 公告):同一时间只露一个,插件排在宿主的协议更新 / What's new 后面;停用时 teardown 收掉
@@ -763,6 +769,7 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
       ribbonActions.forEach((off) => off())
       ribbonActions.clear()
       provideFeedbackChannel(pluginId, null)
+      provideInboxChannel(pluginId, null)
       alive = false
       surface.revoke()
       for (const u of Array.from(fileUnsubs)) {

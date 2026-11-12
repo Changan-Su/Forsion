@@ -79,6 +79,7 @@ const GATE_FILES = [
 
 /** 移动端**故意**不要的东西:名字 → 理由。理由留空 = 视为未声明,照样红灯。 */
 const SKIP = {
+  homeTarget: 'Root 仅为桌面 dev 命令的 listSkills 预取使用;Web/mobile 收件箱拉取已收口到共享 inboxStore,MobileRoot 不再直接调用',
   SyncSetupHost: '首登同步卡片管的是本地库远程同步(window.remoteSync,桌面专属);手机没有同步引擎、直接读云端(云同步开启方案 2026-10-20 第六节)',
   // —— 启动序列 ——
   loadTanguEntry: 'Tangu 界面热更新只做桌面(落地计划 §2):桌面 / 网页经它在界面包与编进宿主的那份之间挑;手机照旧静态编进 APK,mobileEntry 直接静态 import activateTangu 交给 installEngine',
@@ -129,6 +130,7 @@ const SKIP = {
 
 /** bootstrapEngine 里已知的 host 门控。新增门控 = 又一条「web/移动端会静默少一块」的通道,必须登记。 */
 const KNOWN_GATES = {
+  'window.tangu?.unitPublicEntry': '服务器 Unit 的公共网页入口以访客账号接入 Extend 云端收件箱;配对设备投影继续只用该设备引擎,手机浏览器装共享 mobile 壳也沿用此边界',
   'window.tangu?.restartForUpdate': '桌面宿主的待重启更新入口与本机任务退出保护；web / mobile 不替换 Electron 或本机核心插件，不提供该 IPC。',
   'window.tangu?.account': '共享账号能力：Unit 网页投射安装账号提供方时也显示原生 AccountCard；desktop/mobile 常规产品由 window.tangu?.authStatus 显示相同组件。',
   'window.tangu?.authStatus': '账号卡 rb-account 随 Forsion Extend 出现(auth:* 五通道住在 Extend,authStatus 是桥键;缺包 / 验签失败就没有账号卡)。web / mobile 的 shim 都自带 authStatus,三端照常显示。',

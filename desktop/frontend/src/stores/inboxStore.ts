@@ -17,6 +17,8 @@ import {
 import { currentClientId } from '../services/agentRunService'
 import { homeTarget } from '../services/engine/targets'
 import { agentName } from '../agentName'
+import { usesClientInbox } from '../services/platform'
+import { readInboxChannel, subscribeInboxChannel } from '../services/inboxChannel'
 
 export type { InboxMessage, InboxFilter }
 
@@ -25,6 +27,10 @@ export type { InboxMessage, InboxFilter }
 let pollTimer: number | null = null
 let unsubConn: (() => void) | null = null
 let unsubLocale: (() => void) | null = null
+let inboxGeneration = 0
+let lastRevision: string | undefined
+let unsubChannel: (() => void) | null = null
+let stopClientPull: (() => void) | null = null
 let lastLatestId: string | null | undefined = undefined
 /** 未读轮询单飞(Codex 09-11 P2):挂载刷新、15s 轮询、多个列表实例撞在一起时,并发的 refreshUnread 会在
  *  lastLatestId 更新前都判成「新消息」→ 同一条通知两遍。同一时刻只跑一个,期间再来的合成一次尾随重跑。 */
@@ -110,10 +116,11 @@ export const useInbox = create<InboxState>((set, get) => ({
   loading: false,
 
   refreshList: async () => {
+    const generation = inboxGeneration
     set({ loading: true })
     try {
       const messages = await listInbox(homeTarget(), 'all')
-      set({ messages, listLoaded: true })
+      if (generation === inboxGeneration) set({ messages, listLoaded: true })
     } catch { /* 静默:断连/老后端 404 */ } finally {
       set({ loading: false })
     }
@@ -123,19 +130,23 @@ export const useInbox = create<InboxState>((set, get) => ({
   refreshUnread: () => {
     if (unreadRun) { unreadAgain = true; return unreadRun }
     const once = async (): Promise<void> => {
-      let r: { count: number; latestId: string | null }
+      const generation = inboxGeneration
+      let r: { count: number; latestId: string | null; revision?: string }
       try { r = await getInboxUnreadCount(homeTarget()) } catch { return }
+      if (generation !== inboxGeneration) return
       // 服务端和手上的对不上就重拉列表:最新一封换了,或未读数不等于本地这份(本地这份已含「点开即已读」等乐观改动)。
       // 旧判据拿「上一次轮询的未读数」比:读掉一封、同一轮询间隔里又来一封时是 1 → 1,判成没新信 → 红点亮了列表不动。
       const had = get().unreadCount
       const latestChanged = r.latestId !== lastLatestId
-      if (lastLatestId !== undefined && (latestChanged || r.count !== had)) {
+      if (lastLatestId !== undefined && (latestChanged || r.count !== had || r.revision !== lastRevision)) {
         try {
           const held = get().messages
           const msgs = await listInbox(homeTarget(), 'all')
           // 拉列表这会儿本地又动过(点开 / 标记 / 删除,或别处刚刷过):这份快照是旧的,盖回去会吃掉那次改动 —— 丢掉,重跑一遍。
+          if (generation !== inboxGeneration) return
           if (get().messages !== held) { unreadAgain = true; return }
           set({ messages: msgs, listLoaded: true })
+          if (r.revision !== lastRevision && get().archivedLoaded) await get().refreshArchived()
           const m = latestChanged && r.count > had ? msgs.find((x) => x.id === r.latestId) : undefined
           // 收件箱新消息 → 统一通知入口(应用内卡片 + 系统通知由 notifyApp 一并发,受通知设置门控;
           // 不再单发 notifyInbox,避免与统一系统通知重复)。
@@ -152,13 +163,15 @@ export const useInbox = create<InboxState>((set, get) => ({
       setBadge(r.count)
       set({ unreadCount: r.count })
       lastLatestId = r.latestId
+      lastRevision = r.revision
     }
     unreadRun = (async () => { do { unreadAgain = false; await once() } while (unreadAgain) })().finally(() => { unreadRun = null })
     return unreadRun
   },
 
   refreshArchived: async () => {
-    try { set({ archived: await listInbox(homeTarget(), 'archived'), archivedLoaded: true }) } catch { /* 静默:同 refreshList */ }
+    const generation = inboxGeneration
+    try { const archived = await listInbox(homeTarget(), 'archived'); if (generation === inboxGeneration) set({ archived, archivedLoaded: true }) } catch { /* 静默:同 refreshList */ }
   },
 
   // 选中即乐观标已读(Gmail 语义);PATCH 失败以服务器为准回收。
@@ -255,26 +268,64 @@ export const useInbox = create<InboxState>((set, get) => ({
 
   startPolling: () => {
     if (pollTimer != null) return
+    const clientInbox = usesClientInbox()
+    // Cloud mail does not depend on the chat worker being healthy. Config/token
+    // readiness is enough; the broadcast API verifies the account itself.
+    const ready = () => !!readInboxChannel() || (clientInbox ? !!useApp.getState().cfg.token : useApp.getState().connState === 'ok')
     const tickBody = () => {
-      if (useApp.getState().connState !== 'ok') return
+      if (!ready()) return
       void get().refreshUnread()
+    }
+    let alive = true
+    let pulling = false
+    const pull = async () => {
+      if (!alive || !clientInbox || !ready() || pulling) return
+      pulling = true
+      try {
+        const r = await pullInbox(homeTarget())
+        if (alive && r.pulled) { await get().refreshList(); await get().refreshUnread() }
+      } catch { /* Retry at the next tick or when the page becomes visible. */ }
+      finally { pulling = false }
+    }
+    if (clientInbox) {
+      const timer = window.setInterval(() => { void pull() }, 5 * 60_000)
+      const onVisible = () => { if (!document.hidden) { tickBody(); void pull() } }
+      document.addEventListener('visibilitychange', onVisible)
+      stopClientPull = () => { alive = false; window.clearInterval(timer); document.removeEventListener('visibilitychange', onVisible) }
+      void pull()
     }
     pollTimer = window.setInterval(tickBody, 15_000)
     // 连接从非 ok → ok 立即首拉(角标零等待);boot 已 ok 时下一 tick 也只有 15s。
     let prev = useApp.getState().connState
+    let prevToken = useApp.getState().cfg.token
     unsubConn = useApp.subscribe((s) => {
       if (s.connState === 'ok' && prev !== 'ok') void get().refreshUnread()
+      if ((s.connState === 'ok' && prev !== 'ok') || s.cfg.token !== prevToken) void pull()
       prev = s.connState
+      prevToken = s.cfg.token
     })
     // 广播的中英文在 listInbox 里挑:切界面语言时重拉一遍已载入的列表
     unsubLocale = subscribeLocale(() => {
       void get().refreshList()
       if (get().archivedLoaded) void get().refreshArchived()
     })
+    unsubChannel = subscribeInboxChannel(() => {
+      inboxGeneration++
+      lastLatestId = undefined
+      lastRevision = undefined
+      set({ messages: [], archived: [], archivedLoaded: false, listLoaded: false, selectedId: null, unreadCount: 0 })
+      setBadge(0)
+      void get().refreshList()
+      void get().refreshUnread()
+    })
     tickBody()
   },
 
   stopPolling: () => {
+    unsubChannel?.()
+    unsubChannel = null
+    stopClientPull?.()
+    stopClientPull = null
     if (pollTimer != null) { window.clearInterval(pollTimer); pollTimer = null }
     unsubConn?.()
     unsubConn = null

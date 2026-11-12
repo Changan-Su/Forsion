@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.110.0
+  version: 1.111.0
   author: Forsion
   category: Forsion
 ---
@@ -1330,3 +1330,8 @@ The returned disposer removes only its own current registration. Disable, unload
 ### LCL View layout coordination
 
 All docked Views inherit side-by-side constrained geometry and interruptible drawer motion. Declare `layout: { minWidth, minHeight }` on a View only when it needs larger minima. Defaults are main 320×180, left 220×180, right 240×180 and bottom 240×140 logical CSS pixels; undersized workspaces scroll, without collapsing splits into tabs. Sidebar collapse keeps mounts alive. `mount(el, view)` exposes optional `getLayout()` and `onLayout(callback)` returning an unsubscribe function. Snapshots contain `width`, `height`, `visible`, `compact` (<480px), and `phase` (`transition`/`settled`). Defer expensive content refits until visible/settled; never reset document zoom/drafts on layout. The host revokes subscriptions on disposal; feature-detect these methods on older hosts. Space-native `newPage(target)` callbacks use `target.open(type, params)` to retain the originating split across awaits.
+
+Official account inbox: only the locked `forsion-extend` package may call `ctx.app.provideInboxChannel?.(channel)`.
+Use `cloud:` IDs and server-owned read/archive/delete/reward state; return a revision for changes that do not affect unread count.
+The host merges native engine letters and filters duplicate official broadcasts. Pass null on disposal; re-provide after account changes.
+See the plugin development manual for the full channel and legacy-state import contract.

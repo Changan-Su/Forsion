@@ -581,3 +581,14 @@ Cloud settings pages can accept optional `mount(el, { anchor })` context. A `for
 ### Note reading renderers
 
 Use `ctx.registerNoteRenderer` to replace the read-only note surface while the host retains document and persistence ownership. See [Note reading renderers](./note-renderers.en.md) for the contract, failure fallback and lifecycle.
+
+### Official cloud inbox channel
+
+The locked first-party `forsion-extend` package can provide the account inbox through `ctx.app.provideInboxChannel?.(channel)`.
+The channel implements `list(filter)`, `unreadCount()`, `patch(id, { read, archived })`, `readAll()`, `remove(id)` and `claim(id, client)`.
+Optional `importLegacy(messages)` adopts owned desktop read/archive flags only when no cloud state exists.
+Cloud message IDs start with `cloud:` and lists use the existing `InboxMessage` fields. Unread results may include
+`revision` and `latestCreatedAt`, allowing reward and archive changes to refresh even when the unread count is unchanged.
+Credentials remain in Extend's account adapter. The host merges this channel with native Agent/system letters and
+filters duplicate legacy official broadcasts. Pass `null` to revoke the provider. The host also revokes it on disable/reload;
+provide a fresh channel when the account changes. Older hosts omit this optional API.

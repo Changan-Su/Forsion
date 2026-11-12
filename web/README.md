@@ -149,3 +149,13 @@ curl -I http://localhost:8090/api/health           # /api 反代是否通(通=�
 - **登录跳转打不开** → `/auth` 没反代到 server,查 `BACKEND_URL` 与 nginx `location ~ ^/(auth|account|shared|oauth)`。
 
 > 云端 web 的语音消息插件探测已门禁(cloudWeb 直接视为关),不再向 localhost:8787 发探测。
+
+### Inbox regression check
+
+Build this Web checkout and the matching Forsion Extend checkout, then run
+`EXTEND_BUNDLE=/absolute/Forsion-Extend/dist/main.js npm run e2e:inbox`.
+The built desktop and mobile browser shells load the real Extend bundle into a public Unit fixture.
+The check covers inbox entry, cloud read/claim/archive state across two isolated clients, reload,
+account separation and the absence of engine-only inbox calls. APIs and reward grants are fixtures;
+server SQL/authorization is covered by `microserver/brain-api/cloudInbox.test.ts` in the backend repository.
+Screenshots and the report are written to `outputs/inbox/`.
