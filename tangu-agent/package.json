@@ -56,7 +56,8 @@
     "desktop:install": "cd ../desktop && npm install",
     "desktop:dev": "cd ../desktop && npm run dev",
     "desktop:build": "npm run build && cd ../desktop && npm run build",
-    "sync:commands": "node scripts/sync-command-catalog.mjs"
+    "sync:commands": "node scripts/sync-command-catalog.mjs",
+    "test:cloud-state": "vitest run src/services/stateStore src/services/compactionRuntime.test.ts src/services/compaction.test.ts src/services/agentLoop.compaction.test.ts src/routes/runs.sessionToken.worker.test.ts src/routes/runs.queuedAbortToken.worker.test.ts"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "^0.14.1",

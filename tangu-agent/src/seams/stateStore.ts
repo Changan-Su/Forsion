@@ -84,6 +84,13 @@ export interface FinalizeMessageInput {
 export interface PendingRunRow { id: string; session_id: string; status: string; owner: string | null }
 
 export interface StateStore {
+  /** Remote compaction storage. Local engines keep the SQL implementation in compaction.ts. */
+  compaction?: {
+    latest(sessionId: string): Promise<import('../services/compaction.js').Checkpoint | null>;
+    persist(sessionId: string, summary: string, through: import('../services/compaction.js').CheckpointThrough): Promise<boolean>;
+    messageTimestamp(messageId: string): Promise<number>;
+    messages(sessionId: string): Promise<RawMessageRow[]>;
+  };
   // ── runs ──
   createRun(run: {
     id: string;

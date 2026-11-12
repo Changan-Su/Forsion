@@ -26,6 +26,7 @@ import type {
   StepRow,
 } from '../../seams/stateStore.js';
 import type { SessionHit, SessionTranscript } from '../sessionSearch.js';
+import { CompletionOutbox } from './completionOutbox.js';
 
 // ── per-dispatch token 登记表(runId/sessionId → token) + 请求期作用域 ──
 /** stale = 续期链断了(续期请求失败不重试 / 链到顶):这枚到期即废,不会再换新。 */
@@ -105,6 +106,8 @@ export interface HttpStateStoreConfig {
   cloudUrl: string; // 形如 https://server(无尾斜杠)
   /** fleet 通道密钥(与网关/server 共享):证明本进程是 fleet worker,随每个 state-API 请求发 X-Fleet-Auth。 */
   fleetSecret?: string;
+  /** Persistent worker volume; required by createThinWorker for restart-safe terminal writes. */
+  completionOutboxDir?: string;
 }
 
 type Frame =
@@ -142,6 +145,14 @@ export function createHttpStateStore(cfg: HttpStateStoreConfig): StateStore {
   const base = cfg.cloudUrl.replace(/\/+$/, '') + '/api/agent-state';
   const buffers = new Map<string, RunBuffer>();
   const refreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  const historyStamps = new Map<string, { through: number; digest: string; entries: Array<{ id: string; ts: number; digest: string }> }>();
+  const historyKey = (sessionId: string) => `${currentRunId() || tokenForSession(sessionId) || ''}:${sessionId}`;
+  const rememberHistoryEntry = (sessionId: string, entry: any) => {
+    const history = historyStamps.get(historyKey(sessionId));
+    if (history && entry?.digest && Number(entry.ts) > history.through) {
+      history.entries = [...history.entries.filter(e => e.id !== entry.id), { ...entry, ts: Number(entry.ts) }];
+    }
+  };
 
   const headers = (token: string | undefined): Record<string, string> => {
     const h: Record<string, string> = {
@@ -162,7 +173,8 @@ export function createHttpStateStore(cfg: HttpStateStoreConfig): StateStore {
       // 调用方(run 取消)的 signal 与超时二选一先到;老 Node 没有 AbortSignal.any 时只保留超时。
       signal: signal && typeof AbortSignal.any === 'function' ? AbortSignal.any([signal, timeout]) : timeout,
     });
-    if (r.status === 404) return null as unknown as T;
+    if (r.status === 404 && method === 'GET') return null as unknown as T;
+    if (r.status === 404) throw new LlmError(404, 'agent-state route missing or resource not found; upgrade the gateway if needed');
     if (!r.ok) {
       const detail = await r.text().catch(() => '');
       throw new LlmError(r.status, detail || `agent-state ${method} ${path} ${r.status}`);
@@ -170,6 +182,11 @@ export function createHttpStateStore(cfg: HttpStateStoreConfig): StateStore {
     const txt = await r.text();
     return (txt ? JSON.parse(txt) : null) as T;
   }
+
+  const outbox = cfg.completionOutboxDir ? new CompletionOutbox(cfg.completionOutboxDir,
+    job => { const { acknowledged: _acknowledged, ...payload } = job; return reqJson<void>('POST', `/runs/${encodeURIComponent(job.runId)}/completion`, undefined, payload); },
+    id => { clearRefresh(id); buffers.delete(id); dropRunToken(id); },
+  ) : undefined;
 
   // ── 批量通道 ──
   function bufFor(runId: string): RunBuffer {
@@ -256,13 +273,53 @@ export function createHttpStateStore(cfg: HttpStateStoreConfig): StateStore {
   }
 
   return {
+    compaction: {
+      async latest(sessionId) {
+        const key = historyKey(sessionId);
+        historyStamps.delete(key);
+        const r = await reqJson<any>('GET', `/sessions/${encodeURIComponent(sessionId)}/compaction`, tokenForSession(sessionId));
+        if (!r?.history) throw new Error('Gateway does not support cloud compaction');
+        if (historyStamps.size >= 1_000) historyStamps.delete(historyStamps.keys().next().value!);
+        historyStamps.set(key, { ...r.history, entries: [] });
+        return r.checkpoint ?? null;
+      },
+      async persist(sessionId, summary, through) {
+        const history = historyStamps.get(historyKey(sessionId));
+        if (!history) return false; // Never persist a summary without its original history snapshot.
+        const r = await reqJson<{ saved: boolean }>('POST', `/sessions/${encodeURIComponent(sessionId)}/compaction`, tokenForSession(sessionId), { summary, through, history });
+        return r?.saved === true;
+      },
+      async messageTimestamp(messageId) {
+        const r = await reqJson<{ timestamp: number }>('GET', `/messages/${encodeURIComponent(messageId)}/timestamp`, currentToken());
+        return Number(r?.timestamp) || 0;
+      },
+      async messages(sessionId) {
+        const rows = await reqJson<RawMessageRow[]>('GET', `/sessions/${encodeURIComponent(sessionId)}/compaction/messages`, tokenForSession(sessionId));
+        if (!Array.isArray(rows)) throw new Error('Gateway does not support cloud compaction history');
+        for (const row of rows as any[]) rememberHistoryEntry(sessionId, { id: row.id, ts: row.timestamp, digest: row.compactionDigest });
+        return rows;
+      },
+    },
     // ── runs ──
     async createRun(run) {
       const token = tokenForSession(run.sessionId);
-      await reqJson('POST', '/runs', token, {
+      const completionKey = outbox?.create(run.id);
+      try { const result = await reqJson<{ completionReceipt?: boolean }>('POST', '/runs', token, {
         id: run.id, sessionId: run.sessionId, appId: run.appId, modelId: run.modelId,
         assistantMessageId: run.assistantMessageId, input: run.input,
+        ...(completionKey ? { completionKey } : {}),
       });
+      if (completionKey && !result?.completionReceipt) {
+        outbox!.discard(run.id);
+        console.warn('[tangu-worker] gateway lacks completion receipts; using legacy status writes until the gateway is upgraded');
+      }
+      } catch (error: any) {
+        if (outbox?.has(run.id)) {
+          outbox.finish(run.id, 'failed', { error: `run creation acknowledgement failed: ${error?.message || error}` });
+          await outbox.flush(run.id);
+        }
+        throw error;
+      }
       // 建成了才绑:被拒 / 失败的那次不能把自己的令牌留在会话上(同会话在飞的 run 之后按会话取到的就是它)。
       if (token) bindRunToken(run.id, run.sessionId, token);
       scheduleRefresh(run.id, run.sessionId); // 长 run 跨 TTL 自动续期
@@ -276,6 +333,13 @@ export function createHttpStateStore(cfg: HttpStateStoreConfig): StateStore {
     },
     async updateRunStatus(id, status, extra) {
       if (TERMINAL.has(status)) {
+        if (outbox?.has(id)) {
+          // Persist before awaiting any network operation. A process restart can now finish this write.
+          outbox.finish(id, status, extra);
+          await flush(id);
+          await outbox.flush(id);
+          return;
+        }
         await flush(id); // 终态前确保 append-only 帧已上报有序
         await reqJson('POST', `/runs/${encodeURIComponent(id)}/status`, tokenForRun(id), { status, ...extra });
         clearRefresh(id);
@@ -337,19 +401,30 @@ export function createHttpStateStore(cfg: HttpStateStoreConfig): StateStore {
       return (await reqJson<RawMessageRow[]>('GET', `/sessions/${encodeURIComponent(sessionId)}/messages?limit=${limit}&offset=${offset}`, tokenForSession(sessionId))) || [];
     },
     async insertUserMessage(m) {
-      await reqJson('POST', `/sessions/${encodeURIComponent(m.sessionId)}/user-message`, tokenForSession(m.sessionId), {
+      const result = await reqJson<any>('POST', `/sessions/${encodeURIComponent(m.sessionId)}/user-message`, tokenForSession(m.sessionId), {
         id: m.id, content: m.content, modelId: m.modelId, attachments: m.attachments,
       });
+      rememberHistoryEntry(m.sessionId, result?.historyEntry);
     },
     async hasImageDelivery(_userId, sessionId, delivery) {
       const result = await reqJson<{ saved: boolean }>('POST', `/sessions/${encodeURIComponent(sessionId)}/image-delivery`, tokenForSession(sessionId), delivery);
       return result?.saved === true;
     },
     async finalizeAssistantMessage(m: FinalizeMessageInput) {
-      await reqJson('POST', `/sessions/${encodeURIComponent(m.sessionId)}/assistant-message`, tokenForSession(m.sessionId), {
+      const runId = currentRunId();
+      const durable = !!runId && !!outbox?.has(runId);
+      if (durable) outbox!.stageMessage(runId!, m);
+      try { const result = await reqJson<any>('POST', `/sessions/${encodeURIComponent(m.sessionId)}/assistant-message`, tokenForSession(m.sessionId), {
         messageId: m.messageId, modelId: m.modelId, content: m.content, reasoning: m.reasoning,
         toolCalls: m.toolCalls, toolResults: m.toolResults, displayFiles: m.displayFiles, agentSlug: m.agentSlug,
+        ...(durable ? { runId, completionKey: outbox!.key(runId!), completionSequence: outbox!.sequence(runId!, m.messageId) } : {}),
       });
+      rememberHistoryEntry(m.sessionId, result?.historyEntry);
+      if (durable) outbox!.acknowledgeMessage(runId!, m.messageId);
+      } catch (error) {
+        if (durable) console.warn(`[tangu-worker] assistant message queued for completion delivery run=${runId}`);
+        throw error; // Callers must not acknowledge a DB write that has only reached the local outbox.
+      }
     },
 
     // ── sessions ──
