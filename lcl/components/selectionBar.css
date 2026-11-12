@@ -153,3 +153,9 @@
 @media (prefers-reduced-motion: no-preference) {
   html:root .selbar[data-dir]:not([data-lcl-exit]) { animation: selbar-in var(--tip-enter, 150ms) var(--ease-surface, cubic-bezier(0.22, 1, 0.36, 1)); }
 }
+
+/* Split tools keep action and menu as two independent, keyboard reachable buttons. */
+.selbar-tool, .selbar-split { display: inline-flex; align-items: center; }
+.selbar-split { gap: 0; }
+.selbar .selbar-menu-trigger { min-width: 18px; padding-inline: 2px; }
+@media (pointer: coarse) { .selbar .selbar-menu-trigger { min-width: 32px; } }

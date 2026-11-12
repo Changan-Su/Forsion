@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.111.0
+  version: 1.112.0
   author: Forsion
   category: Forsion
 ---
@@ -1335,3 +1335,7 @@ Official account inbox: only the locked `forsion-extend` package may call `ctx.a
 Use `cloud:` IDs and server-owned read/archive/delete/reward state; return a revision for changes that do not affect unread count.
 The host merges native engine letters and filters duplicate official broadcasts. Pass null on disposal; re-provide after account changes.
 See the plugin development manual for the full channel and legacy-state import contract.
+
+### 2026-11-12 host UI additions
+
+Selection tools may expose `menu: { title, open(sel, anchor) }`; the host draws a separate arrow and passes the real anchor. Keep `run` as the primary action; dispose child menus and capture selection data before opening. Board mounts/updates accept `roundness: sharp | round` for new shapes only; never rewrite existing scene corners on load. Details and compatibility: references/host-ui-mounts.md.

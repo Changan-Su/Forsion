@@ -1710,15 +1710,15 @@ body.amx-marquee-active * {
    2026-08-13 第4振:此前误取 v2 design token 整片过暗)。落盘是字面亮色 hex(Obsidian 可渲染),
    in-app 暗色下按 data-hl/data-hlc 语义名覆盖(!important 压过内联 style)。
    色值与 InlineToolbar/marks.ts 同源;品红/粉为本产品扩展,取同族明度自配。 */
-[data-mode='light'] .am-app span[data-hlc='red'], .am-app[data-mode='light'] span[data-hlc='red'] { color: #b61f1f !important; }
-[data-mode='light'] .am-app span[data-hlc='orange'], .am-app[data-mode='light'] span[data-hlc='orange'] { color: #a13c08 !important; }
-[data-mode='light'] .am-app span[data-hlc='yellow'], .am-app[data-mode='light'] span[data-hlc='yellow'] { color: #7d5603 !important; }
-[data-mode='light'] .am-app span[data-hlc='green'], .am-app[data-mode='light'] span[data-hlc='green'] { color: #0e6b31 !important; }
-[data-mode='light'] .am-app span[data-hlc='teal'], .am-app[data-mode='light'] span[data-hlc='teal'] { color: #05657e !important; }
-[data-mode='light'] .am-app span[data-hlc='blue'], .am-app[data-mode='light'] span[data-hlc='blue'] { color: #1f54c8 !important; }
-[data-mode='light'] .am-app span[data-hlc='purple'], .am-app[data-mode='light'] span[data-hlc='purple'] { color: #7c2bc7 !important; }
-[data-mode='light'] .am-app span[data-hlc='magenta'], .am-app[data-mode='light'] span[data-hlc='magenta'] { color: #941555 !important; }
-[data-mode='light'] .am-app span[data-hlc='grey'], .am-app[data-mode='light'] span[data-hlc='grey'] { color: #5c5c5c !important; }
+[data-mode='light'] .am-app span[data-hlc='red'], .am-app[data-mode='light'] span[data-hlc='red'], :root:not(.dark) .amx-color-popover span[data-hlc='red'] { color: #b61f1f !important; }
+[data-mode='light'] .am-app span[data-hlc='orange'], .am-app[data-mode='light'] span[data-hlc='orange'], :root:not(.dark) .amx-color-popover span[data-hlc='orange'] { color: #a13c08 !important; }
+[data-mode='light'] .am-app span[data-hlc='yellow'], .am-app[data-mode='light'] span[data-hlc='yellow'], :root:not(.dark) .amx-color-popover span[data-hlc='yellow'] { color: #7d5603 !important; }
+[data-mode='light'] .am-app span[data-hlc='green'], .am-app[data-mode='light'] span[data-hlc='green'], :root:not(.dark) .amx-color-popover span[data-hlc='green'] { color: #0e6b31 !important; }
+[data-mode='light'] .am-app span[data-hlc='teal'], .am-app[data-mode='light'] span[data-hlc='teal'], :root:not(.dark) .amx-color-popover span[data-hlc='teal'] { color: #05657e !important; }
+[data-mode='light'] .am-app span[data-hlc='blue'], .am-app[data-mode='light'] span[data-hlc='blue'], :root:not(.dark) .amx-color-popover span[data-hlc='blue'] { color: #1f54c8 !important; }
+[data-mode='light'] .am-app span[data-hlc='purple'], .am-app[data-mode='light'] span[data-hlc='purple'], :root:not(.dark) .amx-color-popover span[data-hlc='purple'] { color: #7c2bc7 !important; }
+[data-mode='light'] .am-app span[data-hlc='magenta'], .am-app[data-mode='light'] span[data-hlc='magenta'], :root:not(.dark) .amx-color-popover span[data-hlc='magenta'] { color: #941555 !important; }
+[data-mode='light'] .am-app span[data-hlc='grey'], .am-app[data-mode='light'] span[data-hlc='grey'], :root:not(.dark) .amx-color-popover span[data-hlc='grey'] { color: #5c5c5c !important; }
 [data-mode='dark'] .am-app mark[data-hl='red'], .am-app[data-mode='dark'] mark[data-hl='red'] { background: #6c2727 !important; }
 [data-mode='dark'] .am-app mark[data-hl='orange'], .am-app[data-mode='dark'] mark[data-hl='orange'] { background: #703a15 !important; }
 [data-mode='dark'] .am-app mark[data-hl='yellow'], .am-app[data-mode='dark'] mark[data-hl='yellow'] { background: #6a540f !important; }
@@ -1729,15 +1729,15 @@ body.amx-marquee-active * {
 [data-mode='dark'] .am-app mark[data-hl='magenta'], .am-app[data-mode='dark'] mark[data-hl='magenta'] { background: #7f5d5d !important; }
 [data-mode='dark'] .am-app mark[data-hl='grey'], .am-app[data-mode='dark'] mark[data-hl='grey'] { background: #40434a !important; }
 [data-mode='dark'] .am-app mark[data-hl] { color: inherit; }
-[data-mode='dark'] .am-app span[data-hlc='red'], .am-app[data-mode='dark'] span[data-hlc='red'] { color: #f98d8d !important; }
-[data-mode='dark'] .am-app span[data-hlc='orange'], .am-app[data-mode='dark'] span[data-hlc='orange'] { color: #fca863 !important; }
-[data-mode='dark'] .am-app span[data-hlc='yellow'], .am-app[data-mode='dark'] span[data-hlc='yellow'] { color: #fbd644 !important; }
-[data-mode='dark'] .am-app span[data-hlc='green'], .am-app[data-mode='dark'] span[data-hlc='green'] { color: #6ee599 !important; }
-[data-mode='dark'] .am-app span[data-hlc='teal'], .am-app[data-mode='dark'] span[data-hlc='teal'] { color: #57ddcc !important; }
-[data-mode='dark'] .am-app span[data-hlc='blue'], .am-app[data-mode='dark'] span[data-hlc='blue'] { color: #80b7fb !important; }
-[data-mode='dark'] .am-app span[data-hlc='purple'], .am-app[data-mode='dark'] span[data-hlc='purple'] { color: #cd9dfd !important; }
-[data-mode='dark'] .am-app span[data-hlc='magenta'], .am-app[data-mode='dark'] span[data-hlc='magenta'] { color: #f98dbb !important; }
-[data-mode='dark'] .am-app span[data-hlc='grey'], .am-app[data-mode='dark'] span[data-hlc='grey'] { color: #a8a8ad !important; }
+[data-mode='dark'] .am-app span[data-hlc='red'], .am-app[data-mode='dark'] span[data-hlc='red'], :root.dark .amx-color-popover span[data-hlc='red'] { color: #f98d8d !important; }
+[data-mode='dark'] .am-app span[data-hlc='orange'], .am-app[data-mode='dark'] span[data-hlc='orange'], :root.dark .amx-color-popover span[data-hlc='orange'] { color: #fca863 !important; }
+[data-mode='dark'] .am-app span[data-hlc='yellow'], .am-app[data-mode='dark'] span[data-hlc='yellow'], :root.dark .amx-color-popover span[data-hlc='yellow'] { color: #fbd644 !important; }
+[data-mode='dark'] .am-app span[data-hlc='green'], .am-app[data-mode='dark'] span[data-hlc='green'], :root.dark .amx-color-popover span[data-hlc='green'] { color: #6ee599 !important; }
+[data-mode='dark'] .am-app span[data-hlc='teal'], .am-app[data-mode='dark'] span[data-hlc='teal'], :root.dark .amx-color-popover span[data-hlc='teal'] { color: #57ddcc !important; }
+[data-mode='dark'] .am-app span[data-hlc='blue'], .am-app[data-mode='dark'] span[data-hlc='blue'], :root.dark .amx-color-popover span[data-hlc='blue'] { color: #80b7fb !important; }
+[data-mode='dark'] .am-app span[data-hlc='purple'], .am-app[data-mode='dark'] span[data-hlc='purple'], :root.dark .amx-color-popover span[data-hlc='purple'] { color: #cd9dfd !important; }
+[data-mode='dark'] .am-app span[data-hlc='magenta'], .am-app[data-mode='dark'] span[data-hlc='magenta'], :root.dark .amx-color-popover span[data-hlc='magenta'] { color: #f98dbb !important; }
+[data-mode='dark'] .am-app span[data-hlc='grey'], .am-app[data-mode='dark'] span[data-hlc='grey'], :root.dark .amx-color-popover span[data-hlc='grey'] { color: #a8a8ad !important; }
 .am-app .slash-scroll {
   display: flex;
   flex-direction: column;
@@ -4002,7 +4002,7 @@ body.amx-marquee-active * {
    色板按明暗各一套(用户内容色,与行内高亮色同一种写法);底色一律与 `--bg` 调和,两种模式自动成立。
    ⚠️ 描边类颜色规则一律带 `:not(.is-sel)`:与 `.is-sel` 同特异性,靠源码顺序定胜负的话选中态会被颜色盖掉
    (DESIGN §7.2)。不加 box-shadow(check:shadowcontract)。 */
-.am-app {
+.am-app, .amx-color-popover {
   --amx-cv-1: #e03e3e;
   --amx-cv-2: #e8780f;
   --amx-cv-3: #cf9a00;
@@ -4010,7 +4010,7 @@ body.amx-marquee-active * {
   --amx-cv-5: #0e9fa6;
   --amx-cv-6: #7b5ce5;
 }
-[data-mode='dark'] .am-app, .am-app[data-mode='dark'] {
+[data-mode='dark'] .am-app, .am-app[data-mode='dark'], :root.dark .amx-color-popover {
   --amx-cv-1: #f06a6a;
   --amx-cv-2: #f29a4a;
   --amx-cv-3: #e8c547;
@@ -4601,3 +4601,16 @@ body.amx-marquee-active * {
    这里只管 ⋯ 展开的那一块:插件动作可以带图标,一行 = 图标 + 文字。放文件末尾(DESIGN §7)。 */
 .am-app .itb-menu-item.itb-more-item { display: flex; align-items: center; gap: 8px; }
 .am-app .itb-menu-item.itb-more-item > span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Approved list numbering form and plus picker: query is UI state only. */
+.am-app .list-number-form { padding: 6px 8px; display: grid; gap: 6px; }
+.am-app .list-number-form label { display: grid; gap: 4px; color: var(--text-muted); font-size: var(--ui-font-caption); }
+.am-app .list-number-form input { width: 100%; box-sizing: border-box; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-input); color: var(--text); font: inherit; padding: 5px 8px; }
+.am-app .list-number-form > div { display: flex; justify-content: flex-end; gap: 6px; }
+.am-app .list-number-form [role='status'] { color: var(--text-muted); font-size: var(--ui-font-caption); }
+.am-app .slash-query { box-sizing: border-box; margin: 4px 8px 8px; width: calc(100% - 16px); padding: 7px 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); background: var(--bg-input); font: inherit; }
+@media (max-width: 600px) {
+  .am-app .slash-menu--picker { left: 12px !important; right: 12px; top: auto !important; bottom: max(12px, env(safe-area-inset-bottom)); width: auto; min-height: 0 !important; max-height: 70dvh; }
+}
+.am-app .math-source-command { color: var(--accent-ink); }
+.am-app .math-source-delimiter { color: var(--text-muted); }

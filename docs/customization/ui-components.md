@@ -569,3 +569,16 @@ el.innerHTML = '<h2>本周</h2><button>新建</button> <input placeholder="搜�
 ### Amadeus 阅读表面
 
 `UnifiedPage` 的 `onReadingMode` 提供 `{ on, busy, toggle }`，笔记 View 用 `ReadingModeButton` 展示阅读/编辑入口；`initialReading` 与 `onReadingChange` 对接 View 参数。只有显式接收该控制接口的笔记 View 登记阅读命令，收件箱和 Muse 的只读预览不占用活动笔记的命令。`ReadingSurface` 只消费不可变快照，由宿主保留编辑器与保存状态。插件替换契约见[笔记阅读渲染器](./note-renderers.md)。
+
+
+### 划线条分离菜单与形状边角（2026-11-12）
+
+`mountSelectionBar` 的工具可选 `menu: { title, open(sel, anchor) }`。主体仍执行 `run(sel)`；独立箭头执行 `menu.open` 并传入真实按钮元素，可直接用于 `ctx.ui.popover(anchor, ...)`，不要搜索宿主DOM取锚点。主体上按右箭头也打开菜单，Enter/Space可操作两颗按钮；菜单先消费Esc，之后Esc才关闭划线条。`title`由插件按当前语言提供。旧宿主忽略menu，因此保留可执行的主体动作或提供自己的菜单入口。菜单消费选区时须在打开时保存该选区数据；停用/卸载时通过dispose清理菜单，不对旧选区回写。
+
+```js
+{ id: 'underline', title: t('underline'), icon: 'underline',
+  run: (sel) => underline(sel),
+  menu: { title: t('colors'), open: (sel, anchor) => openColors(sel, anchor) } }
+```
+
+`mountBoard` / `handle.update` 可选 `roundness: 'sharp' | 'round'`，映射引擎下一笔的 `currentItemRoundness`。省略时保留原默认；此设置不改写scene中已有元素，插件要修改已有矩形须保留完整元素信息并显式更新scene。不要在加载旧scene时统一改圆角。

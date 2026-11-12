@@ -107,6 +107,9 @@ import { headingFoldPlugins } from './headingFold'
 import { listFoldPlugins } from './listFold'
 import { LinkHoverCard } from './linkCard'
 import { TableMenuSection, isTableSelected, tableCellAtPoint } from './tableMenu'
+import { ColumnWidthMenu } from './ColumnWidthMenu'
+import { BlockColorMenu } from './BlockColorMenu'
+import { ListNumberingMenu } from './ListNumberingMenu'
 import { hrefKind, normalizeHref, noteLinkTarget } from '../blocks/markdown/linkHref'
 import { ReadingSurface, type ReadingModeControl } from './ReadingSurface'
 import { captureReadingPosition, prepareReadingSnapshot, readingCounterpart, readingSnapshot, restoreReadingPosition, type ReadingPosition } from './readingSnapshot'
@@ -1790,7 +1793,7 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
     if (!blockMenu) return
     // 捕获期收(v3 BlockHost 同款):打开路径的 stopPropagation 到不了 window 冒泡,得在捕获期看目标。
     const close = (e: Event): void => {
-      if ((e.target as HTMLElement | null)?.closest?.('.ctx-menu')) return
+      if ((e.target as HTMLElement | null)?.closest?.('.ctx-menu, .amx-color-popover, .amx-column-width')) return
       setBlockMenu(null)
     }
     // Esc 关菜单并把焦点还给编辑器(此前 Esc 对块菜单完全无效,探针实测)。块还选着,
@@ -1799,6 +1802,7 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
     // 聚焦项的原生 click 执行;其余键先关菜单再照常落到编辑器 —— 绝不让方向键去挪编辑器选区(此前 ↓ 把块选区
     // 挪到下一块,「删除」删掉的是别人;菜单开着打字替换了当前块)。
     const onKey = (e: KeyboardEvent): void => {
+      if (e.target instanceof Element && e.target.closest('[data-list-numbering-form], .amx-color-popover, .amx-column-width')) return
       const menu = document.querySelector<HTMLElement>('.unified-block-menu')
       const sub = document.querySelector<HTMLElement>('.unified-block-submenu')
       const inSub = !!sub && sub.contains(document.activeElement)
@@ -3865,6 +3869,8 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
             {isTableSelected(layer.getView()) && (
               <TableMenuSection view={layer.getView()!} cell={blockMenu.cell ?? null} onDone={() => setBlockMenu(null)} />
             )}
+            {layer.getView() && <BlockColorMenu view={layer.getView()!} restore={() => restoreMenuTarget(layer.getView()!)} onDone={() => setBlockMenu(null)} />}
+            {layer.getView() && <ListNumberingMenu view={layer.getView()!} restore={() => restoreMenuTarget(layer.getView()!)} onDone={() => setBlockMenu(null)} />}
             <div className="ubm-sep" role="separator" />
             {/* 多块选中:置灰 + 说明(B-05:此前点了静默无效)。aria-disabled 而不是 disabled —— 禁用的按钮不出 title 提示。 */}
             {layer.getView() && layer.topRangeOf(layer.getView()!) ? (
@@ -3881,6 +3887,7 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
                 <Columns2 size={13} /> {t('unipage.menu.toNewColumn')}
               </button>
             )}
+            {layer.getView() && <ColumnWidthMenu view={layer.getView()!} restore={() => restoreMenuTarget(layer.getView()!)} onDone={() => setBlockMenu(null)} />}
             {/* 块在分栏的某一列里(B-08):整行解散回自然流,各列内容按列序排开。 */}
             {layer.getView() && columnRowOf(layer.getView()!.state.selection) != null && (
               <button role="menuitem" tabIndex={-1} data-act="unsplit" onClick={() => {

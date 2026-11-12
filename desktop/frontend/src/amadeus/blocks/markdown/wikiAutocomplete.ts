@@ -258,7 +258,7 @@ const paneOf = (view: EditorView): DOMRect | undefined => view.dom.closest('.dv-
  *  那段被整体选中的源码文本(wikilink.ts 的选中态就是这么表示的)。
  *  行内格式工具栏据此让位:对图片来说 B/I/U 毫无意义,浮条还会盖住正文(截图自查发现)。 */
 const IMG_EMBED_SEL_RE = /^!\[\[[^\]\n|]+\.(png|jpe?g|gif|webp|svg|avif|bmp)(\|\d+)?\]\]$/i
-const toolbarFocused = (): boolean => !!(document.activeElement as Element | null)?.closest?.('.inline-toolbar')
+const toolbarFocused = (): boolean => !!(document.activeElement as Element | null)?.closest?.('.inline-toolbar, .amx-color-popover')
 
 function isImageSelection(state: EditorState): boolean {
   const sel = state.selection

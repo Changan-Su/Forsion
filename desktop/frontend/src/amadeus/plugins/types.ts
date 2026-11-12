@@ -1365,6 +1365,8 @@ export interface PluginBoardOptions {
   /** Overrides the pen's own colour / width (the engine's stroke width, e.g. 0.5, 1, 2, 4). */
   strokeColor?: string
   strokeWidth?: number
+  /** Geometry for newly created shapes only. Omit to preserve the engine default; existing scene elements are unchanged. */
+  roundness?: 'sharp' | 'round'
   /** Which theme the strokes are drawn for. Defaults to the host's current mode; pass 'light' when the
    *  surface underneath stays light in dark mode (a PDF page), or the engine recolours the ink. */
   theme?: 'light' | 'dark'
@@ -1379,7 +1381,7 @@ export interface PluginBoardOptions {
 }
 export interface PluginBoardHandle {
   /** `scene` replaces the content without going through undo (a reload from disk); the rest are live settings. */
-  update(patch: Partial<Pick<PluginBoardOptions, 'scene' | 'viewport' | 'tool' | 'pen' | 'strokeColor' | 'strokeWidth' | 'theme'>>): void
+  update(patch: Partial<Pick<PluginBoardOptions, 'scene' | 'viewport' | 'tool' | 'pen' | 'strokeColor' | 'strokeWidth' | 'roundness' | 'theme'>>): void
   /** The current content (deleted elements left out). Before the engine is ready: what you last passed in. */
   getScene(): PluginBoardScene
   undo(): void
@@ -1409,6 +1411,8 @@ export interface PluginSelectionBarTool {
   color?: string
   /** Draw it as pressed / current. */
   on?: boolean
+  /** Optional separate menu trigger. The host passes the actual button anchor; run() remains the primary action. */
+  menu?: { title: string; open(sel: PluginSelectionBarSelection, anchor: HTMLElement): void }
   run(sel: PluginSelectionBarSelection): void
 }
 

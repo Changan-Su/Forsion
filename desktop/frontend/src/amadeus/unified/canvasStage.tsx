@@ -110,6 +110,7 @@ registerMessages({
   'canvasstage.ends.end': { zh: '箭头指向终点', en: 'Arrow at end' },
   'canvasstage.ends.start': { zh: '箭头指向起点', en: 'Arrow at start' },
   'canvasstage.ends.both': { zh: '双向箭头', en: 'Arrows at both ends' },
+  'canvasstage.color.accent': { zh: '跟随强调色', en: 'Follow accent' },
   'canvasstage.ends.none': { zh: '无箭头', en: 'No arrows' },
 })
 
@@ -117,6 +118,7 @@ registerMessages({
  *  ⚠️ nameKey 存 i18n 键,渲染期再 t() —— 模块作用域求值会把文案冻死在加载时的语言上。 */
 const COLOR_SWATCHES: Array<{ v: string; nameKey: string }> = [
   { v: '', nameKey: 'canvasstage.color.none' },
+  { v: 'accent', nameKey: 'canvasstage.color.accent' },
   { v: '1', nameKey: 'canvasstage.color.red' },
   { v: '2', nameKey: 'canvasstage.color.orange' },
   { v: '3', nameKey: 'canvasstage.color.yellow' },
@@ -1652,6 +1654,7 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
     const mainBox = measureMain(host)
     const mainMd = rest.length ? ser?.(Fragment.fromArray(rest))?.trim() ?? '' : ''
     const json = buildJsonCanvas({
+      accentColor: getComputedStyle(host).getPropertyValue('--signal').trim(),
       cards,
       main: mainBox ? { ...mainBox, md: mainMd } : null,
       elements: cbRef.current.elements,

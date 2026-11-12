@@ -364,6 +364,7 @@ const COLOR_RE = /^(?:[1-6]|#[0-9a-fA-F]{6})$/
 /** 盘上的 color → 可渲染的 CSS 值;认不出 → null(**不渲染,但原值逐字保留**,老端绝不吞新端)。
  *  ⚠️ fm 可被手改 / 外部工具写:只有过了这条正则的值才会进 style,别放宽成「是字符串就行」。 */
 export function canvasColorCss(v: unknown): string | null {
+  if (v === 'accent') return 'var(--signal)'
   if (typeof v !== 'string' || !COLOR_RE.test(v)) return null
   return v.length === 1 ? `var(--amx-cv-${v})` : v
 }
