@@ -2,6 +2,13 @@
 
 <!-- English edition of CHANGELOG.md: same "## <version> (<date>)" headings, one bullet per Chinese bullet. Add both when releasing. -->
 
+## 2.14.2 (2026-11-12)
+
+- **PDF reading**: With Better PDF 0.1.9, Ask Tangu opens an extension panel beside the PDF so you can read and ask questions together, including in detached windows. Fixed cross-page selection menus jumping to the top and overlapping selection colors around formulas, italics, and superscripts.
+- **Note editing and reading**: Fixed math editing, embedded content, and block interactions. Improved reading views and navigation between views.
+- **Plugin settings and chat**: Improved plugin settings and note reading renderer APIs. Shows idle context compaction status and lets you skip the current idle compaction.
+- Includes Tangu engine 2.14.2.
+
 ## 2.14.1 (2026-11-10)
 
 This stable release includes all the changes from 2.14.1-beta.1, detailed in the next section.
