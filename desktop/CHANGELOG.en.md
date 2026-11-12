@@ -12,8 +12,10 @@ Preview build: available to people who chose the preview channel.
 - **Mini windows and reminders**: Note and plugin windows return after restarting, keeping their individual position, edge attachment, hidden state and pinning. Fixed reminder dismissal and updates to quoted calendar tasks, along with calendar date fields and card placement in detached windows.
 - **Accounts and cloud**: Inbox messages sync across desktop and web and support manual refresh. Account pages include points and invitations. Web restores avatars, membership and daily/weekly quotas, with access to account pages, the store and cloud files. Improved sync recovery after reconnecting or switching accounts, and fixed store content being squeezed by the sidebar on narrow phones.
 - **Covers and image jobs**: Improved cover selection, caching and recovery. Longer image generation jobs and GIF downloads recover more reliably after interruptions or slow transfers.
-- **PDF and plugins**: Open Tangu beside a PDF, including in detached windows. Read-only plugin settings remain viewable. Companion releases include Better PDF 0.1.10 for annotation colors and shape corners, and LaTeX Suite 1.1.1 for formula selection and highlighting.
+- **PDF and plugins**: Open Tangu beside a PDF, including in detached windows. Read-only plugin settings remain viewable. Companion releases include Better PDF 0.1.10 for annotation colors and shape corners, and LaTeX Suite 1.1.1 for Greek snippets at formula starts, Tab navigation past coincident empty stops and out of math, and the default Psi entry.
 - Bundles Tangu engine 2.14.2 and Calendar 0.1.9; the default desktop distribution includes Forsion Extend 0.10.4.
+
+Subsequent core plugin update: Forsion Extend 0.10.5 adds account inbox sync and direct navigation to invite rewards. The original beta.2 installers still bundle 0.10.4. Core plugin updates can download 0.10.5 after installation; restart to activate it.
 
 ## 2.14.1 (2026-11-10)
 
