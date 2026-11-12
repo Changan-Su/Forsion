@@ -9,11 +9,20 @@ export const emptyAccountRewards = (): AccountRewards => ({ balance: null, balan
 
 export async function loadAccountRewards(): Promise<AccountRewards> {
   const fetch = window.tangu?.cloudFetch
-  if (!fetch) return { balance: null, balanceFailed: true, invite: 'unknown' }
-  const [balance, invite] = await Promise.allSettled([
-    fetch({ path: '/credits/balance', timeoutMs: 6000 }),
-    fetch({ path: '/invite/my-code', timeoutMs: 6000 }),
-  ])
+  const visitorRewards = window.tangu?.accountRewards
+  if (!visitorRewards && !fetch) return { balance: null, balanceFailed: true, invite: 'unknown' }
+  // Official Unit Web has fixed account reads, while desktop keeps its cloud transport.
+  const [balance, invite] = visitorRewards
+    ? await visitorRewards().then((result) => [
+      { status: 'fulfilled', value: result.balance } as const,
+      { status: 'fulfilled', value: result.invite } as const,
+    ]).catch(() => [
+      { status: 'rejected' } as const, { status: 'rejected' } as const,
+    ])
+    : await Promise.allSettled([
+      fetch!({ path: '/credits/balance', timeoutMs: 6000 }),
+      fetch!({ path: '/invite/my-code', timeoutMs: 6000 }),
+    ])
   const value = balance.status === 'fulfilled' && balance.value.status === 200 ? balance.value.json?.balance : null
   const n = typeof value === 'number' || (typeof value === 'string' && value.trim()) ? Number(value) : NaN
   return {

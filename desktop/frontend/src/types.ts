@@ -626,6 +626,8 @@ declare global {
       openPayCenter?(): Promise<{ ok: boolean }>
       /** 头像菜单额度视图(GET /api/token-quota/my 透传,含 resetCards)。 */
       accountQuota?(): Promise<{ status: number; json: any }>
+      /** Official Web visitor: fixed read-only points/invite presentation, no generic cloud access. */
+      accountRewards?(): Promise<{ balance: { status: number; json: any }; invite: { status: number; json: any } }>
       /** 用掉一张限额重置卡(今日+本周已用清零)。 */
       /** 周卡 2026-08-05 下线,只收缺省或 'both'。 */
       accountUseResetCard?(type?: 'both'): Promise<{ status: number; json: any }>
