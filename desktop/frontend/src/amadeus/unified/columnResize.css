@@ -15,7 +15,8 @@
   padding: 3px 7px;
   border-radius: var(--radius-sm);
   color: var(--text);
-  background: var(--bg-card);
+  background: var(--surface-float, var(--bg-card));
+  backdrop-filter: var(--surface-blur, none);
   box-shadow: var(--card-shadow);
   font: var(--ui-font-caption)/var(--ui-line-caption) var(--font-ui);
 }
