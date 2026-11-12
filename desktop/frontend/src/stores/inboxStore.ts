@@ -266,8 +266,10 @@ export const useInbox = create<InboxState>((set, get) => ({
     try {
       const r = await pullInbox(homeTarget())
       if (!r.pulled && r.detail) { useApp.getState().toast(r.detail, true); return }
-      useApp.getState().toast(r.added > 0 ? t('inbox.pullOk', { n: r.added }) : t('inbox.pullNone'))
-      if (r.added > 0) { void get().refreshList(); void get().refreshUnread() }
+      const before = new Set(get().messages.map((m) => m.id))
+      if (r.pulled) { await get().refreshList(); await get().refreshUnread() }
+      const added = Math.max(r.added, get().messages.filter((m) => !before.has(m.id)).length)
+      useApp.getState().toast(added > 0 ? t('inbox.pullOk', { n: added }) : t('inbox.pullNone'))
     } catch (e: any) { fail(e) }
   },
 
