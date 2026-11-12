@@ -7,6 +7,8 @@ import { createPortal } from 'react-dom'
 import { Search, Images, Image, Link2, Upload, X, Check } from 'lucide-react'
 import { create } from 'zustand'
 import './pageChrome.css'
+import { UNSPLASH_COVERS, searchFeaturedCovers } from './coverImages'
+import { useCoverImage } from './useCoverImage'
 import { UploadRing } from '@lcl/components'
 import { cancelUpload, oneSaveAtATime, retryUpload, startUpload, uploadFraction, useUploads } from '../../services/uploads'
 import { OverlayAt } from '@lcl/engine'
@@ -26,7 +28,12 @@ registerMessages({
   'pgchrome.coverRemove': { zh: '移除', en: 'Remove' },
   'pgchrome.coverTitle': { zh: '封面', en: 'Cover' },
   'pgchrome.close': { zh: '关闭封面选择器', en: 'Close cover picker' },
-  'pgchrome.featured': { zh: '精选图片', en: 'Featured images' },
+  'pgchrome.featured': { zh: 'Unsplash 精选', en: 'Unsplash picks' },
+  'pgchrome.imageFailed': { zh: '图片加载失败', en: 'Image failed to load' },
+  'pgchrome.coverFailed': { zh: '封面加载失败，请检查网络或更换图片。', en: 'The cover could not load. Check your connection or choose another image.' },
+  'pgchrome.cacheFailed': { zh: '图片已显示，但无法保存本地缓存。', en: 'The image is displayed, but could not be saved for offline use.' },
+  'pgchrome.retryImage': { zh: '重试', en: 'Retry' },
+  'pgchrome.galleryHint': { zh: '搜索范围为 Unsplash 精选图片。', en: 'Search the curated Unsplash collection.' },
   'pgchrome.results': { zh: '搜索结果', en: 'Search results' },
   'pgchrome.chooseCover': { zh: '选择封面 {index}', en: 'Choose cover {index}' },
   'pgchrome.imageUrl': { zh: '图片链接', en: 'Image URL' },
@@ -35,10 +42,9 @@ registerMessages({
   'pgchrome.tabGallery': { zh: '图库', en: 'Gallery' },
   'pgchrome.tabUrl': { zh: '链接', en: 'Link' },
   'pgchrome.tabUpload': { zh: '上传', en: 'Upload' },
-  'pgchrome.searchPlaceholder': { zh: '搜索图片…', en: 'Search images…' },
+  'pgchrome.searchPlaceholder': { zh: '搜索精选图片…', en: 'Search featured images…' },
   'pgchrome.search': { zh: '搜索', en: 'Search' },
-  'pgchrome.searchUnavailable': { zh: '图库接口暂不可达，可从上方精选挑，或用「链接/上传」。', en: 'The image library is unreachable right now — pick a featured cover above, or use Link or Upload.' },
-  'pgchrome.searchEmpty': { zh: '没搜到结果，上方为精选封面。', en: 'No results — the covers above are our featured picks.' },
+  'pgchrome.searchEmpty': { zh: '未找到匹配的精选图片，可使用链接或上传。', en: 'No matching featured images. Try Link or Upload.' },
   'pgchrome.urlPlaceholder': { zh: '粘贴图片地址（https://…)', en: 'Paste an image URL (https://…)' },
   'pgchrome.setCover': { zh: '设为封面', en: 'Set as cover' },
   'pgchrome.coverUploadFailed': { zh: '封面没传上去', en: 'The cover didn’t upload' },
@@ -137,6 +143,7 @@ export function NoteCover({ page, cover: coverProp, coverY, onSetCover, onSetCov
   const scoped = useScopedPageStore()
   const [pick, setPick] = useState<{ x: number; y: number } | null>(null)
   const [dragY, setDragY] = useState<number | null>(null)
+  const [imageAttempt, setImageAttempt] = useState(0)
   const [reposition, setReposition] = useState(false) // 「调整位置」模式:默认图片锁定,点按钮才解锁可拖
   const [slack, setSlack] = useState(0) // 纵向可调余量(见 coverSlack);≤0 不给「调整位置」
   const imgRef = useRef<HTMLImageElement | null>(null)
@@ -166,15 +173,17 @@ export function NoteCover({ page, cover: coverProp, coverY, onSetCover, onSetCov
   const setCover = onSetCover ?? ((c: string | null) => { if (target) void scoped.getState().setPageCover(target, c) })
   const setY = onSetCoverY ?? ((y: number) => { if (target) void scoped.getState().setPageCoverY(target, y) })
   setCoverRef.current = setCover
+  const originalSrc = cover ? (/^https?:\/\//i.test(cover) ? cover : toAssetUrl(cover)) : ''
+  const image = useCoverImage(originalSrc, imageAttempt)
   const pending = usePendingCovers((all) => (target ? all[target] : undefined))
   if (target && pending) return <PendingCover page={target} {...pending} />
   if (!target || !cover) return null
-  const src = /^https?:\/\//i.test(cover) ? cover : toAssetUrl(cover)
   return (
-    <div className={`amx-cover${reposition ? ' amx-cover-repo' : ''}`}>
+    <div className={`amx-cover${reposition ? ' amx-cover-repo' : ''}${image.failed ? ' amx-cover--failed' : ''}`}>
       <img
         ref={imgRef}
-        src={src}
+        src={image.src || undefined}
+        hidden={image.failed || !image.src}
         alt=""
         draggable={false}
         style={{ objectPosition: `50% ${posY}%` }}
@@ -207,9 +216,19 @@ export function NoteCover({ page, cover: coverProp, coverY, onSetCover, onSetCov
           if (y !== d.base) setY(y)
         }}
         onPointerCancel={() => { drag.current = null; setDragY(null) }}
-        onError={(e) => { (e.target as HTMLElement).style.opacity = '0.15' }}
+
       />
       <div className="amx-cover-grad" />
+      {image.failed && <div className="amx-cover-error" role="status">
+        <Image size={24} aria-hidden="true" />
+        <span>{t('pgchrome.coverFailed')}</span>
+        <div className="amx-cover-error-actions">
+          <button onClick={() => setImageAttempt((n) => n + 1)}>{t('pgchrome.retryImage')}</button>
+          {!readOnly && <button onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); setPick({ x: r.right, y: r.bottom + 6 }) }}>{t('pgchrome.coverChange')}</button>}
+          {!readOnly && <button onClick={() => setCover(null)}>{t('pgchrome.coverRemove')}</button>}
+        </div>
+      </div>}
+      {image.loaded && image.uncached && <div className="amx-cover-cache-hint" role="status">{t('pgchrome.cacheFailed')}</div>}
       {reposition && <div className="amx-cover-hint">{t('pgchrome.coverDragHint')}</div>}
       {!readOnly && (
         <div className="amx-cover-tools">
@@ -229,14 +248,20 @@ export function NoteCover({ page, cover: coverProp, coverY, onSetCover, onSetCov
   )
 }
 
-/** 无关键词时的默认精选封面(Notion 式):picsum 固定 seed 免 key、图随 seed 稳定,
- *  纯 <img> 直载不走主进程(须 index.html CSP img-src 放行 https:),故三端(含 web)都可用。 */
-const FEATURED_COVERS: Array<{ thumb: string; full: string; author?: string; source?: string }> = [
-  'aurora', 'forest', 'ocean', 'alpine', 'metro', 'night', 'coast', 'mist', 'valley', 'dune', 'lake', 'bloom',
-].map((s) => ({ thumb: `https://picsum.photos/seed/${s}/320/180`, full: `https://picsum.photos/seed/${s}/1600/900`, source: 'Picsum' }))
+/** 缩略图与横幅共用设备缓存;失败时禁用选择,点击失败项可重试。 */
+type ThumbnailState = 'loading' | 'ready' | 'failed'
+function CoverThumbnail({ source, attempt, onState }: { source: string; attempt: number; onState: (state: ThumbnailState) => void }) {
+  const { t } = useI18n()
+  const image = useCoverImage(source, attempt)
+  const status: ThumbnailState = image.failed ? 'failed' : image.loaded ? 'ready' : 'loading'
+  useEffect(() => { onState(status) }, [status, onState])
+  return image.failed
+    ? <span className="amx-coverpick-failed">{t('pgchrome.imageFailed')} · {t('pgchrome.retryImage')}</span>
+    : <img src={image.src || undefined} alt="" hidden={!image.src} />
+}
 
 /** 封面选择器:独立的媒体 popover,共享应用浮层材质与字号。
- *  tab = 图库(打开即精选,可搜 Openverse)/ 链接 / 上传;点缩略图即换封面但**不关闭**(可连选),点浮层外关闭。 */
+ *  tab = 图库(打开即精选,可搜 Unsplash 精选)/ 链接 / 上传;点缩略图即换封面但**不关闭**(可连选),点浮层外关闭。 */
 export function CoverPicker({ page, x, y, onClose, onApply }: {
   page: string
   x: number
@@ -246,13 +271,12 @@ export function CoverPicker({ page, x, y, onClose, onApply }: {
   onApply?: (cover: string) => void
 }) {
   const { t } = useI18n()
-  const hasSearch = !!amadeus.searchImages
   const scoped = useScopedPageStore() // 写本面板的 store(理由同 NoteCover:插件视图里 ps() 会写到隔壁)
   const [tab, setTab] = useState<'gallery' | 'url' | 'upload'>('gallery')
   const [q, setQ] = useState('')
   const [hits, setHits] = useState<Array<{ thumb: string; full: string; author?: string }> | null>(null)
-  const [busy, setBusy] = useState(false)
-  const [err, setErr] = useState(false)
+  const [thumbnailAttempts, setThumbnailAttempts] = useState<Record<string, number>>({})
+  const [thumbnailStates, setThumbnailStates] = useState<Record<string, ThumbnailState>>({})
   const [url, setUrl] = useState('')
   const [picked, setPicked] = useState<string | null>(null)
   const panelId = useId()
@@ -285,15 +309,7 @@ export function CoverPicker({ page, x, y, onClose, onApply }: {
     if (onApply) onApply(cover)
     else void scoped.getState().setPageCover(page, cover) // 不自动关闭:用户可连选换图,点浮层外才关
   }
-  const search = (): void => {
-    const query = q.trim()
-    if (!query || !amadeus.searchImages) return
-    setBusy(true)
-    setErr(false)
-    void amadeus.searchImages(query)
-      .then((r) => { setHits(r); setBusy(false) })
-      .catch(() => { setHits(null); setErr(true); setBusy(false) }) // 失败显式提示,不静默
-  }
+  const search = (): void => { setHits(q.trim() ? searchFeaturedCovers(q) : null) }
   const upload = (): void => {
     const input = document.createElement('input')
     input.type = 'file'
@@ -324,10 +340,10 @@ export function CoverPicker({ page, x, y, onClose, onApply }: {
   const grid = (items: Array<{ thumb: string; full: string; author?: string; source?: string }>) => (
     <div className="amx-coverpick-grid">
       {items.map((h, index) => (
-        <button key={h.full} className="amx-coverpick-item" aria-label={t('pgchrome.chooseCover', { index: index + 1 })} aria-pressed={picked === h.full} onClick={() => apply(h.full)}>
+        <button key={h.full} className="amx-coverpick-item" aria-label={t('pgchrome.chooseCover', { index: index + 1 })} aria-pressed={picked === h.full} aria-busy={!thumbnailStates[h.thumb] || thumbnailStates[h.thumb] === 'loading'} onClick={() => { if (thumbnailStates[h.thumb] === 'failed') setThumbnailAttempts((all) => ({ ...all, [h.thumb]: (all[h.thumb] || 0) + 1 })); else if (thumbnailStates[h.thumb] === 'ready') apply(h.full) }}>
           <span className="amx-coverpick-thumb">
             <Image size={20} strokeWidth={1.7} aria-hidden="true" />
-            <img src={h.thumb} alt="" loading="lazy" onError={(e) => { e.currentTarget.hidden = true }} />
+            <CoverThumbnail source={h.thumb} attempt={thumbnailAttempts[h.thumb] || 0} onState={(status) => setThumbnailStates((all) => all[h.thumb] === status ? all : { ...all, [h.thumb]: status })} />
             {picked === h.full && <span className="amx-coverpick-selected"><Check size={14} aria-hidden="true" /></span>}
           </span>
           {h.author && <span className="amx-coverpick-cap">{h.author}</span>}
@@ -363,17 +379,16 @@ export function CoverPicker({ page, x, y, onClose, onApply }: {
         <div id={panelId} role="tabpanel" aria-labelledby={`${panelId}-${tab}`} className="amx-coverpick-panel">
         {tab === 'gallery' && (
           <div className="amx-coverpick-body">
-            {hasSearch && (
-              <div className="amx-coverpick-search">
+            <div className="amx-coverpick-search">
                 <Search size={14} strokeWidth={1.7} aria-hidden="true" />
                 <input aria-label={t('pgchrome.searchPlaceholder')} placeholder={t('pgchrome.searchPlaceholder')} value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') search() }} />
-                <button className="amx-coverpick-go" disabled={busy || !q.trim()} onClick={search}>{busy ? '…' : t('pgchrome.search')}</button>
-              </div>
-            )}
+                <button className="amx-coverpick-go" disabled={!q.trim()} onClick={search}>{t('pgchrome.search')}</button>
+            </div>
             <div className="amx-coverpick-section">{t(hits?.length ? 'pgchrome.results' : 'pgchrome.featured')}</div>
-            {grid(hits && hits.length > 0 ? hits : FEATURED_COVERS)}
-            {!busy && err && <div className="amx-coverpick-hint">{t('pgchrome.searchUnavailable')}</div>}
-            {!busy && !err && hits?.length === 0 && <div className="amx-coverpick-hint">{t('pgchrome.searchEmpty')}</div>}
+            {grid(hits ?? UNSPLASH_COVERS)}
+            {hits?.length === 0 && <div className="amx-coverpick-hint">{t('pgchrome.searchEmpty')}</div>}
+            <a className="amx-coverpick-source" href="https://unsplash.com/?utm_source=forsion&utm_medium=referral" target="_blank" rel="noreferrer">Unsplash</a>
+            <div className="amx-coverpick-hint">{t('pgchrome.galleryHint')}</div>
           </div>
         )}
         {tab === 'url' && (

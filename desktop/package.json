@@ -207,6 +207,7 @@
     "check:embedkeep": "node scripts/e2e-editor.cjs --check=embed-keep",
     "check:embedsource": "node scripts/e2e-editor.cjs --check=embed-source",
     "check:outlinereveal": "node scripts/e2e-editor.cjs --check=outline-reveal",
+    "check:covercache": "node scripts/e2e-editor.cjs --check=cover-cache",
     "check:coverrepo": "node scripts/e2e-editor.cjs --check=cover-reposition",
     "check:pagestyle": "node scripts/e2e-editor.cjs --check=page-style",
     "check:pagehistory": "node scripts/e2e-editor.cjs --check=page-history",
