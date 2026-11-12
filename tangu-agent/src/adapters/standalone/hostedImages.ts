@@ -9,6 +9,7 @@ interface Job {
 }
 const TOTAL_MS = 15 * 60_000;
 const POLL_MS = 2000;
+const TRANSFER_MS = 300_000; // Allow slow uploads and complete GIF downloads.
 
 /** Long image generation is a durable cloud task. A broken HTTP leg never creates a new task. */
 export function hostedImages(base: string, headers: () => Record<string, string>): ImagesBrain {
@@ -36,7 +37,7 @@ export function hostedImages(base: string, headers: () => Record<string, string>
     let current = job;
     while (current.state === 'running' && Date.now() < deadline) {
       await delay(POLL_MS, undefined, { signal });
-      try { current = await call(`/jobs/${encodeURIComponent(job.id)}`, auth, undefined, signal) as Job; }
+      try { current = await call(`/jobs/${encodeURIComponent(job.id)}`, auth, undefined, signal, TRANSFER_MS) as Job; }
       catch (error) {
         if (signal?.aborted) throw error;
         if (error instanceof LlmError && error.status < 500) throw error;
@@ -59,7 +60,7 @@ export function hostedImages(base: string, headers: () => Record<string, string>
     let job: Job | undefined;
     for (let attempt = 0; attempt < 3 && !job; attempt++) {
       req.signal?.throwIfAborted();
-      try { job = await call('/jobs', auth, body, req.signal, 300_000) as Job; }
+      try { job = await call('/jobs', auth, body, req.signal, TRANSFER_MS) as Job; }
       catch (error) {
         if (req.signal?.aborted) throw error;
         if (error instanceof LlmError && error.status < 500) {
@@ -84,7 +85,7 @@ export function hostedImages(base: string, headers: () => Record<string, string>
     listPending: async () => (await call('/jobs', headers()) as any).jobs,
     recover: async (id, signal) => {
       const auth = headers();
-      return wait(await call(`/jobs/${encodeURIComponent(id)}`, auth, undefined, signal) as Job, auth, signal);
+      return wait(await call(`/jobs/${encodeURIComponent(id)}`, auth, undefined, signal, TRANSFER_MS) as Job, auth, signal);
     },
     acknowledge: async delivery => {
       const auth = headers();
