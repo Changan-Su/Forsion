@@ -4,7 +4,6 @@ import { useEffect, useMemo } from 'react'
 import { usePageStore } from './pageStore'
 import { dbBusy, useDbStore } from './dbStore'
 import { HUMAN_CAL, humanCalLegacy, readHumanCal } from './humanCalendarIo'
-import { isEventRow } from '@amadeus-shared/db/rowKind'
 import { useCalendarConfig, memberOf, isMigrated } from './calendarConfigStore'
 import {
   getAggDb,
@@ -110,8 +109,9 @@ export function resolveCalendarMembers(all: AggDb[], vault: string, byVault: Par
   return out
 }
 
-/** 这张成员表里算待办的行:有勾选列才有待办;带日程标记且有日期的行(isEventRow)是日程,不算。
+/** 这张成员表里算待办的行:只看表有没有设勾选列(列映射的 checkboxCol)。有就每一行都是待办(有没有日期都算),没有就是纯日历。
+ *  不按行细分:行上旧的 `_kind` 键(2026-11-09 那套日程记号,已撤)没人读,原样留在文件里。
  *  宿主自己列待办的地方(仪表盘待办卡、内置待办视图)都从这里取,和日历插件、引擎同一条规则。 */
 export function todoRowsOf(m: CalMemberDb): AggDb['rows'] {
-  return m.checkboxCol ? m.db.rows.filter((r) => !isEventRow(r, m.dateCol)) : []
+  return m.checkboxCol ? m.db.rows : []
 }

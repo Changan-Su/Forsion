@@ -488,8 +488,8 @@ describe('snapshot.myCalendar:读失败 ≠ 没有', () => {
   })
 })
 
-describe('宿主认日程标记(cells._kind = event)', () => {
-  it('带标记且有日期的行不算待办;勾上再撤销,标记一直在、仍是日程', async () => {
+describe('待办只看表有没有勾选列:行上旧的 _kind 键没人读', () => {
+  it('带勾选列的表里每一行都是待办(带旧记号的、有没有日期都算);勾上再撤销,旧键和别的格子原样留着', async () => {
     disk['T.db'] = {
       version: 1, name: 'T',
       columns: [{ id: 'c1', name: '名称', type: 'text' }, { id: 'd1', name: '日期', type: 'calendarDate' }, { id: 'k1', name: '完成', type: 'checkbox' }],
@@ -501,13 +501,14 @@ describe('宿主认日程标记(cells._kind = event)', () => {
     }
     await useDbStore.getState().reload('T.db', 'T.db')
     const member = { db: getAggDb('T.db')!, dateCol: 'd1', checkboxCol: 'k1' }
-    expect(todoRowsOf(member).map((r) => r.rowId)).toEqual(['td', 'nodate'])
+    expect(todoRowsOf(member).map((r) => r.rowId)).toEqual(['ev', 'td', 'nodate'])
     setAggCell(member.db, 'ev', 'k1', true)
-    expect(useDbStore.getState().entries['T.db']!.data!.rows.find((r) => r.id === 'ev')!.cells).toMatchObject({ k1: true, _kind: 'event' })
+    expect(useDbStore.getState().entries['T.db']!.data!.rows.find((r) => r.id === 'ev')!.cells)
+      .toEqual({ c1: '周会', d1: '2026-11-10T09:00/2026-11-10T10:00', _kind: 'event', k1: true })
     setAggCell(getAggDb('T.db')!, 'ev', 'k1', undefined)
-    const cells = useDbStore.getState().entries['T.db']!.data!.rows.find((r) => r.id === 'ev')!.cells
-    expect(cells._kind).toBe('event'); expect(cells.k1).toBeUndefined()
-    expect(todoRowsOf({ ...member, db: getAggDb('T.db')! }).map((r) => r.rowId)).toEqual(['td', 'nodate'])
-    expect(todoRowsOf({ db: getAggDb('T.db')!, dateCol: 'd1' })).toEqual([]) // 没勾选列 = 没有待办
+    expect(useDbStore.getState().entries['T.db']!.data!.rows.find((r) => r.id === 'ev')!.cells)
+      .toEqual({ c1: '周会', d1: '2026-11-10T09:00/2026-11-10T10:00', _kind: 'event' }) // 不迁移、不顺手删
+    expect(todoRowsOf({ ...member, db: getAggDb('T.db')! }).map((r) => r.rowId)).toEqual(['ev', 'td', 'nodate'])
+    expect(todoRowsOf({ db: getAggDb('T.db')!, dateCol: 'd1' })).toEqual([]) // 没勾选列 = 纯日历,没有待办
   })
 })

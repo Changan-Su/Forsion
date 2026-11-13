@@ -57,7 +57,7 @@ export function TodoDashboardCard({ size }: { size: DashboardCardSize }) {
     for (const member of members) {
       if (!member.checkboxCol) continue
       const checkCol = member.checkboxCol
-      for (const row of todoRowsOf(member)) { // 日历上建的日程(带标记且有日期)不算待办
+      for (const row of todoRowsOf(member)) {
         if (row.cells[checkCol] === true) continue
         const raw = typeof row.cells[member.dateCol] === 'string' ? String(row.cells[member.dateCol]) : ''
         out.push({ key: `db:${member.db.path}:${row.rowId}`, name: row.name, complete: () => setAggCell(member.db, row.rowId, checkCol, true), due: todoDueMeta(raw, today) })
