@@ -46,6 +46,12 @@ Successful `use_skill` results are instruction text, not optional data previews.
 The tool declares the internal `outputKind: instructions` delivery category, so
 the loop preserves the complete result within the skill loader's existing
 120,000-character source limit, even when `read_tool_output` is unavailable.
+Before admitting the result, the loop estimates the current context plus the
+complete instructions using provider-calibrated usage and the existing model
+window/reserve budget. If they do not fit, the tool returns a recoverable error
+stating that the instructions were not loaded; no partial skill or spill handle
+is presented as a successful load. The model can retry with a larger context
+window or a smaller complete skill instead of terminating on the next iteration.
 The category is read from the registered tool, never from model arguments or
 returned text; it grants no additional tool access, approval or filesystem rights.
 Ordinary results and errors still use the data budget and spill reader. Privacy
@@ -56,6 +62,8 @@ Regression checks: `npx vitest run test/agentLoopSkillOutput.test.ts
 src/tools/builtin/skills.test.ts src/tools/outputPersist.test.ts` from `tangu-agent`.
 The loop check uses SQLite and captures the actual provider messages and stored
 tool results, including a long instruction's middle and the ordinary error path.
+It also checks a 24k model window and a larger window whose remaining budget is
+too small for the complete skill.
 
 Measure actual provider usage, including cached inputs, output/reasoning and task
 correctness. Fewer tokens and lower charged cost are distinct metrics. Subscription

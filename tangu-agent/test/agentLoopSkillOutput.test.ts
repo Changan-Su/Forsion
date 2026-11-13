@@ -11,7 +11,7 @@ import { toSqliteDDL } from '../src/core/dialectDDL.js';
 import { STANDALONE_SCHEMA } from '../src/db/schemaStandalone.js';
 import { runMigration } from '../src/db/migrate.js';
 import { query } from '../src/core/db.js';
-import { createRun, listEventsFrom } from '../src/services/runStore.js';
+import { createRun, getRun, listEventsFrom } from '../src/services/runStore.js';
 import { subscribe } from '../src/services/eventBus.js';
 import { abortRun, enqueueRun, waitForRunSettlement } from '../src/services/agentLoop.js';
 
@@ -37,7 +37,13 @@ afterEach(async () => {
   rmSync(home, { recursive: true, force: true });
 });
 
-it.each([false, true])('preserves successful instructions but keeps skill errors on the data path (error: %s)', async (fail) => {
+it.each([
+  { window: 200_000, prompt: 100, fail: false, budgetError: false },
+  { window: 200_000, prompt: 100, fail: true, budgetError: false },
+  { window: 24_000, prompt: 100, fail: false, budgetError: true },
+  { window: 80_000, prompt: 60_000, fail: false, budgetError: true },
+  { window: 80_000, prompt: 30_000, fail: false, budgetError: false, calls: 2 },
+])('loads complete instructions or returns a recoverable error: %j', async ({ window, prompt, fail, budgetError, calls = 1 }) => {
   let reads = 0;
   const { host, db } = createSqliteHost({ dataDir: 'memory', localToken: 'x', userId: 'u1' });
   db.exec(toSqliteDDL(STANDALONE_SCHEMA));
@@ -49,12 +55,12 @@ it.each([false, true])('preserves successful instructions but keeps skill errors
         return skill;
       } },
       llm: {
-        resolveModelAndKey: async () => ({ model: { provider: 'test', name: 'test', contextWindow: 200_000 }, apiKey: 'k', baseUrl: 'b', apiModelId: 'm' }),
+        resolveModelAndKey: async () => ({ model: { provider: 'test', name: 'test', contextWindow: window }, apiKey: 'k', baseUrl: 'b', apiModelId: 'm' }),
         buildProviderPayload: async (o: any) => ({ messages: structuredClone(o.messages), tools: o.tools }),
         streamProviderCompletion: async (o: any) => {
           if (o.onToken) {
             payloads.push(o.payload.messages);
-            if (payloads.length === 1) return { content: '', toolCalls: [{ id: 'skill-call', type: 'function', function: { name: 'use_skill', arguments: JSON.stringify({ skill_id: skill.id }) } }], usage: { prompt_tokens: 100, completion_tokens: 10 }, finishReason: 'tool_calls' };
+            if (payloads.length === 1) return { content: '', toolCalls: Array.from({ length: calls }, (_, i) => ({ id: `skill-call-${i}`, type: 'function', function: { name: 'use_skill', arguments: JSON.stringify({ skill_id: skill.id }) } })), usage: { prompt_tokens: prompt, completion_tokens: 10 }, finishReason: 'tool_calls' };
             o.onToken('Done.');
           }
           return { content: 'Done.', toolCalls: [], usage: { prompt_tokens: 100, completion_tokens: 2 }, finishReason: 'stop' };
@@ -79,22 +85,36 @@ it.each([false, true])('preserves successful instructions but keeps skill errors
   });
   enqueueRun('S', runId);
   await done; await waitForRunSettlement(runId, 2000);
+  expect((await getRun(runId))?.status).toBe('done');
   expect(payloads).toHaveLength(2);
-  const result = payloads[1].find(m => m.role === 'tool' && m.tool_call_id === 'skill-call');
   const events = await listEventsFrom(runId, 0);
-  const event = events.find(e => e.type === 'tool_result' && e.payload.id === 'skill-call')!;
-  expect(event.payload.isError).toBe(fail);
-  if (fail) {
-    expect(result?.content).not.toContain('MIDDLE_INSTRUCTION');
-    expect(result?.content).toContain('read_tool_output');
-  } else {
-    expect(result?.content).toContain('MIDDLE_INSTRUCTION: Publish through the Store.');
-    expect(result?.content).toBe(expected);
-    expect(existsSync(join(home, '.agent', 'tool-outputs'))).toBe(false);
-    expect(existsSync(join(home, 'tool-spill'))).toBe(false);
-  }
-  expect(event.payload.result).toBe(result.content);
   const rows = await query<any[]>(`SELECT tool_results FROM chat_messages WHERE session_id = 'S' AND role = 'model'`);
   const stored = typeof rows[0].tool_results === 'string' ? JSON.parse(rows[0].tool_results) : rows[0].tool_results;
-  expect(stored.find((r: any) => r.tool_call_id === 'skill-call').content).toBe(result.content);
+  for (let i = 0; i < calls; i++) {
+    const id = `skill-call-${i}`;
+    const result = payloads[1].find(m => m.role === 'tool' && m.tool_call_id === id);
+    const event = events.find(e => e.type === 'tool_result' && e.payload.id === id)!;
+    // In the two-call fixture the first skill fits; the second must include the
+    // first one's already admitted tokens instead of independently passing.
+    const exceedsBudget = budgetError || i > 0;
+    expect(event.payload.isError).toBe(fail || exceedsBudget);
+    if (exceedsBudget) {
+      expect(result?.content).toContain('instructions were not loaded');
+      expect(result?.content).toContain('larger-context model');
+      expect(result?.content).not.toContain('MIDDLE_INSTRUCTION');
+      expect(result?.content).not.toContain('read_tool_output');
+      expect(existsSync(join(home, '.agent', 'tool-outputs'))).toBe(false);
+      expect(existsSync(join(home, 'tool-spill'))).toBe(false);
+    } else if (fail) {
+      expect(result?.content).not.toContain('MIDDLE_INSTRUCTION');
+      expect(result?.content).toContain('read_tool_output');
+    } else {
+      expect(result?.content).toContain('MIDDLE_INSTRUCTION: Publish through the Store.');
+      expect(result?.content).toBe(expected);
+      expect(existsSync(join(home, '.agent', 'tool-outputs'))).toBe(false);
+      expect(existsSync(join(home, 'tool-spill'))).toBe(false);
+    }
+    expect(event.payload.result).toBe(result.content);
+    expect(stored.find((r: any) => r.tool_call_id === id).content).toBe(result.content);
+  }
 }, 15_000);

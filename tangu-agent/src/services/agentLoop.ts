@@ -2684,10 +2684,25 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       // 入列时定型(append-only):普通数据缩为可回读预览;按需加载的技能指令保留源工具限额内全文。
       // 类别来自引擎工具声明,不是调用参数/返回正文;隐私占位和 PTC 仍先走各自边界。
       const privateResult = !result.isError && !!declaredPersistPlaceholder(result.name);
+      const outputKind = result.isError ? 'data' : getToolCapabilities(result.name, executionContext).outputKind;
+      if (!ptc && !privateResult && outputKind === 'instructions') {
+        // Latest tool batches cannot be compacted away. Refuse an instruction
+        // load that would consume the remaining input/output budget, before any
+        // successful result is published or persisted. Never pass a partial skill.
+        // use_skill remains serial, so prior loads in the batch are already counted.
+        const complete: ChatMessage = { role: 'tool', tool_call_id: call.id,
+          content: preCtxText ? `${result.result}\n\n${preCtxText}` : result.result };
+        const inputBudget = compactionThreshold(Math.max(ctxWindowTokens, ctxWindowMax), compactionCfg.reserveTokens);
+        if (contextUsage.estimate([...workingMessages, complete], toolsOverhead) >= inputBudget) {
+          result.isError = true;
+          result.result = 'Error: Skill instructions were not loaded because the complete instructions do not fit the remaining model input budget. '
+            + 'Use a larger-context model or a smaller complete skill, then retry. Do not treat a partial skill as successfully loaded.';
+        }
+      }
       const capped = ptc ? result.result : privateResult
         ? result.result.slice(0, 48_000) // private data must not create a spill file
         : await formatToolOutput(executionContext, result.name, result.result,
-          result.isError ? 'data' : getToolCapabilities(result.name, executionContext).outputKind);
+          result.isError ? 'data' : outputKind);
       const elapsedMs = Date.now() - startedAt;
       const artifactPath = artifactPathFromText(result.name, capped, result.artifactPath);
       // 落库面(tool_result 事件 → agent_run_events、toolResult → agent_steps / chat_messages)与模型面(下面的 toolMessage)

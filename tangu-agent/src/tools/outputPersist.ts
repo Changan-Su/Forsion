@@ -76,6 +76,8 @@ export async function persistLargeOutput(ctx: ToolContext, _label: string, fullT
 export async function formatToolOutput(ctx: ToolContext, label: string, fullText: string, kind: ToolCapabilities['outputKind'] = 'data'): Promise<string> {
   // Skill loading is already an explicit on-demand read. Making its instructions
   // an optional preview can silently omit requirements before the model acts.
+  // The loop checks its remaining context budget before admitting this result;
+  // if the full instructions cannot fit, it returns a recoverable tool error.
   if (kind === 'instructions') return fullText;
   // Restricted tool loadouts must not receive a handle they cannot open.
   if (ctx.canReadToolOutput === false && !ctx.ptcRead) return capToolResult(fullText);
