@@ -15,7 +15,7 @@
  *    UI 必须如实写明覆盖范围,否则用户会在护栏之外信任它。
  */
 import { promises as fs } from 'node:fs';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { checkpointsDir } from '../core/tanguHome.js';
 import { withWriteLock } from '../tools/writeLock.js';
@@ -59,7 +59,7 @@ export interface CpEntry {
 
 export interface CpManifest {
   runId: string;
-  /** 该 run 首次改文件的时刻(ms);恢复的时间轴就按它比。 */
+  /** 首次改文件的时刻(ms),新检查点在会话内保持递增;同毫秒/时钟回退不合并恢复边界。 */
   at: number;
   entries: CpEntry[];
   /**
@@ -125,6 +125,22 @@ async function readManifest(sessionId: string, runId: string): Promise<CpManifes
   }
 }
 
+/** Called under the session serializer. Read persisted manifests rather than a
+ * process-local clock so restart, empty checkpoints and legacy manifests retain
+ * their ordering. Existing runs keep their original at/pre-image. */
+async function nextCheckpointAt(sessionId: string): Promise<number> {
+  let at = Date.now();
+  const ids = await fs.readdir(sessionDir(sessionId)).catch((error) => {
+    if (error?.code === 'ENOENT') return [];
+    throw error;
+  });
+  for (const id of ids) {
+    const previous = await readManifest(sessionId, id);
+    if (previous && Number.isFinite(previous.at)) at = Math.max(at, previous.at + 1);
+  }
+  return at;
+}
+
 /**
  * 原子写:先写同目录 tmp 再 rename。就地截断重写的话,进程在写 manifest 的瞬间被杀(退出/崩溃/断电)
  * 会留下半截 JSON,解析失败 → 整个 run 的 pre-image 全部从时间线上消失,而恢复照样报成功。
@@ -152,7 +168,7 @@ export async function snapshotBeforeWrite(
   const paths = [...new Set(absPaths.filter((p) => p && path.isAbsolute(p)))];
   if (!sessionId || !runId || !paths.length) return async () => {};
   return serialize(sessionId, async () => {
-    const m = (await readManifest(sessionId, runId)) || { runId, at: Date.now(), entries: [], next: 0 };
+    const m = (await readManifest(sessionId, runId)) || { runId, at: await nextCheckpointAt(sessionId), entries: [], next: 0 };
     const known = new Set(m.entries.map((e) => e.path));
     const added: CpEntry[] = [];
     let next = m.next ?? m.entries.length;
@@ -371,7 +387,7 @@ async function restoreCodeSinceLocked(
   }
 
   // 回退本身也要可回退:动手前把**现状**存成一个新检查点(用户回退错了/手改过的东西还能再捞回来)。
-  const restoreRunId = `restore-${Date.now()}`;
+  const restoreRunId = `restore-${randomUUID()}`;
   await snapshotBeforeWrite(sessionId, restoreRunId, [...plan.keys()], { prune: false });
 
   for (const { e, runId } of plan.values()) {
