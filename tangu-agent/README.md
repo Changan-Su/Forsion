@@ -325,3 +325,9 @@ Steering regression checks preserve the same run, completed tool evidence and qu
 ## 📄 许可证
 
 [Apache License 2.0](./LICENSE) © Forsion / Tangu 贡献者
+
+### Muse delivery diagnostics / Muse 投递排查
+
+`npm run diagnose:muse-delivery -- --db <state.db> --since YYYY-MM-DD` reads an existing database without writing and reports cycle status, delivery attempts, maintenance calls and dates of stored proactive messages. It does not print message bodies or credentials.
+
+该命令只读现有数据库，区分“周期没有运行”“运行但没有尝试投递”和“已经落库的主动消息”，只输出聚合与日期，不输出正文或凭据。真模型对照使用 `live:harness -- --only musedm --muse-silence-history --muse-dm-iterations 60 --model codex/gpt-6-luna`；旧等待反馈日志为合成夹具，60 步用于排除台架默认 16 步的限制，不改变产品配置。

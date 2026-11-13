@@ -342,7 +342,7 @@ function tierKickoff(cfg: MuseConfig): string {
   const common = `Your workspace is your Library (${lib}): keep drafts, notes, plugin drafts and your daily journal (Journal/<date>.md) there — the user can browse it in the app. `;
   // 10-19:Windows 上 Muse 拿 run_bash 的 dir / findstr 读自己的 LOG 和 Library,ask 档每条都排成一张等用户的审批卡。
   // 看 / 读 / 搜文件的工具本来免审批,这句把它们点出来。
-  const reads = ' To look at files (your log, Library and Journal included) use list_dir, read_file, glob_files, search_files or read_log — no approval needed, while run_bash commands usually wait for approval.';
+  const reads = ' For work requiring approval, invoke the intended tool once to submit the request; saying it needs approval does not queue anything. Only a deferred tool result means it was queued. To look at files (your log, Library and Journal included) use list_dir, read_file, glob_files, search_files or read_log — no approval needed, while run_bash commands usually wait for approval.';
   // 「Space 目录免审」必须写进档位句本身:09-27 实机 Muse 只读到「Library 免审、别处排队」,把 Space 当成「Library 外」
   // 等批准(实际 extraRoots 三档都放行),于是只敢改文案。
   if (cfg.mode === 'auto') {
@@ -567,9 +567,10 @@ export async function museDmHint(userId: string): Promise<string> {
       .map((r) => {
         const who = r.role === 'user' ? 'user' : r.origin ? 'you, from a cycle' : 'you';
         const text = String(r.content).replace(/\s+/g, ' ').trim();
-        return `- ${who} (${localTime(new Date(Number(r.timestamp) || 0))}): ${text.length > 300 ? `${text.slice(0, 300)}…` : text}`;
+        const when = new Date(Number(r.timestamp) || 0);
+        return `- ${who} (${localDate(when)} ${localTime(when)}): ${text.length > 300 ? `${text.slice(0, 300)}…` : text}`;
       });
-    return lines.length ? `\n\n[Your direct chat with the user, latest messages oldest first — do not repeat what you already said]\n${lines.join('\n')}` : '';
+    return lines.length ? `\n\n[Your direct chat with the user, last 7 days, oldest first — dates are when sent, not today; avoid repeating the same item]\n${lines.join('\n')}` : '';
   } catch {
     return '';
   }
@@ -743,6 +744,17 @@ export function museChatSection(): string {
     'When the user wants a card moved, hidden or removed, tell them to do it on the page with the edit button at the top; you cannot.';
 }
 
+/** Every cycle is private. Delivery is a task outcome, not a side effect of updating the dashboard.
+ * Kept independent of the saved persona so existing installs receive the same contract. */
+export const MUSE_DELIVERY_GUIDANCE =
+  'This background cycle is private: your final response, log, journal, Space and chat starters do not notify the user. ' +
+  'Deliver a requested result or a new actionable finding before optional Space or starter maintenance: ' +
+  'use message_user for a short heads-up or a question that needs their decision; use inbox_send for finished work to read later. ' +
+  'Check the tool result before saying something was sent or marking that delivery task complete. ' +
+  'No new feedback on an earlier item is not a request to stay silent about unrelated new work. A dismissal applies to that item, not all future contact. ' +
+  'Respect explicit quiet preferences, delivery limits and prior messages; do not repeat a pending question or send filler merely because time passed. ' +
+  'If nothing new is worth delivering, staying quiet is fine. ';
+
 /**
  * 周期消息拆两半(纯函数,单测钉)。C1b(2026-09-14):
  *   message       = **落库**的短指令。同一份配置下逐字不变 → 会话内每个后续周期回放的都是同一段前缀,
@@ -758,6 +770,7 @@ export function buildCycleMessages(
 ): { message: string; ephemeralHint: string } {
   const message =
     'Start this round: first use read_log to review your own recent cycles, the [feedback] entries showing how the user handled your previous todos, and any [approval] entries about actions you deferred earlier. ' +
+    MUSE_DELIVERY_GUIDANCE +
     'Then combine your long-term memory with the context below to find the 1-3 most worthwhile things to do for the user right now — and do them where your permission tier allows. ' +
     // 10-13:电脑历史摘要由 agentLoop 现算、拼在简报最后(开着才有)。这句只说「有的话怎么用」,不点工具名 ——
     // 这段指令是落库的稳定前缀,电脑历史没开时工具并不存在。也不写摘要的围栏标签原文:台架拿「agent_runs.input 里
@@ -772,9 +785,7 @@ export function buildCycleMessages(
     spaceKickoff() + ' ' +
     (cfg.escalateTo ? `For work that needs a stronger model, delegate to the agent "${cfg.escalateTo}". ` : '') +
     // 10-18 方案 B:要用户回话 / 拍板的进私聊,做好的成品进收件箱;notify 只管日报(每天一封 Journal)发不发。
-    'Reaching the user: what needs their reply or decision, or a one-screen heads-up, goes to your direct chat via message_user ' +
-    // 10-18 live:「写对比给我以后看」被存进 Library、或 display_file 给周期会话看,都没发信 —— 点明这两条都送不到。
-    '(todos and approval requests already post there); finished work for them to read later (a report, research, a comparison) goes to their inbox via inbox_send — saving it in your Library or showing it with display_file does not reach them' +
+    'Todos and approval requests already post to your direct chat; do not duplicate them. Saving work in your Library or showing it with display_file does not deliver it' +
     (cfg.notify === 'digest' ? '; your journal also reaches them as a daily digest, so routine progress needs no message. ' : '. ') +
     // 10-30 live:写在节奏规矩前面时,Muse 有一半周期收尾忘了 set_next_wake(同代码去掉这句 4/4 睡,带着 2/4),所以放在「怎么找用户」之后。
     'A rule that should fire on a condition (they open an app, an event nears): call manage_automation set' +
