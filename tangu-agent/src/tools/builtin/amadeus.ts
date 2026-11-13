@@ -854,6 +854,8 @@ export const amadeusProvider: ToolProvider = {
             if (cur) row.cells[cal.cal.id] = encodeCalDate(cur.start, end || undefined);
           }
           setNamedProps(cal.db, row.cells, args.props);
+          // props 写日期列也能把日期清掉:没有勾选列的表里,没日期的行日历不画、待办不列,和 start: "" 同一条规矩
+          if (!doneCol && decodeCalDate(dateBefore) && !decodeCalDate(row.cells[cal.cal.id])) throw noDoneCol(cal, 'removing the date would make this row disappear');
           if (doneCol && done !== undefined) setDone(row.cells, doneCol, done);
           // 只在这次调用改了开始时间时看(start,或 props 写日期列):勾掉一条早就过期的待办、改标题、只动结束时间,不该被提醒「时间过去了」
           const startOf = (v: CellValue | undefined): string | undefined => decodeCalDate(v)?.start;

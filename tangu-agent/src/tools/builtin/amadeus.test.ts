@@ -313,6 +313,21 @@ describe('to-dos: rows of a calendar with a checkbox column (host)', () => {
     await run('amadeus_delete_event', { calendar: 'My calendar', eventId: id });
   }, 30_000);
 
+  it('a calendar without a checkbox column: a dated row cannot lose its date, by start or through props', async () => {
+    const file = path.join(vault, 'Classes.db');
+    const plain = { version: 1, name: 'Classes', columns: [{ id: 't', name: 'Name', type: 'text' }, { id: 'd', name: 'When', type: 'calendarDate' }], rows: [{ id: 'c1', cells: { t: 'Piano', d: '2026-09-01', _kind: 'event' } }] };
+    await fs.writeFile(file, `${JSON.stringify(plain, null, 2)}\n`);
+    try {
+      await expect(run('amadeus_edit_event', { calendar: 'Classes', eventId: 'c1', start: '' })).rejects.toThrow(/no checkbox column/);
+      await expect(run('amadeus_edit_event', { calendar: 'Classes', eventId: 'c1', title: 'Violin', props: { When: '' } })).rejects.toThrow(/no checkbox column/);
+      expect(JSON.parse(await fs.readFile(file, 'utf8'))).toEqual(plain); // 一个字节都没动,标题也没被改掉
+      await run('amadeus_edit_event', { calendar: 'Classes', eventId: 'c1', props: { When: '2026-09-02' } }); // 改到别的日期照常
+      expect(JSON.parse(await fs.readFile(file, 'utf8')).rows[0].cells).toEqual({ t: 'Piano', d: '2026-09-02', _kind: 'event' });
+    } finally {
+      await fs.rm(file, { force: true });
+    }
+  }, 30_000);
+
   it('a calendar without a checkbox column has no to-dos: undated rows are refused there and its undated rows are not listed', async () => {
     const file = path.join(vault, 'Trips.db');
     const plain = { version: 1, name: 'Trips', columns: [{ id: 't', name: 'Name', type: 'text' }, { id: 'd', name: 'When', type: 'calendarDate' }], rows: [{ id: 'nodate', cells: { t: 'Someday' } }] };
