@@ -19,6 +19,17 @@
  * 有没有日期都收,没日期的进「未排期」)。所以日历工具同时是待办工具:create 可以不给 start(= 无日期待办,日期格不写),
  * list 能列出无日期的行,create / edit 的 done 写第一个勾选列。待办是什么、怎么用,写在日历插件的 calendar-todos 技能里;
  * 这里只改工具定义(用户定:引擎系统提示不加待办段)。
+ *
+ * 缺省日历与过去的时间(11-09):一次真实会话里 Agent 面对三本日历挑了不是缺省的那本,还填了一个已经过去的时刻。
+ * list_calendars 给缺省那本标 `default: true`(= 不带 calendar 时 create 实际落的那本,见 defaultCalOf);
+ * create / edit 写进去的开始时间已经过去时,返回里带一句提示(只提示不拒绝,见 pastStartNote)。
+ *
+ * 日程标记(11-09):上面那条规则把日历上的会议、课程也全算成了待办。现在「日程」和「待办」按怎么建的分:
+ * 日程在行上带一个保留单元格键 `_kind = 'event'`(不加列;见 isEventRow),不进待办列表;没有这个键的行照旧是待办,已有数据不动。
+ * ⚠️不按有没有起止时间分:把待办拖到日历上排时间,写的就是起止时间,按时间分它就从待办列表里消失了。
+ * create / edit 的 `kind` 写 / 去掉这个键;list 给带标记的行标 `kind: "event"`、不出 `done`,数待办时不数它。
+ * 带标记的行只有在有日期时才算日程(和日历插件读的规则一样):没日期的带标记行在带勾选列的表里照旧是未排期的待办,
+ * 否则「排期 → 当日程 → 撤销排期」之后它日历不画、待办不列,哪都看不到。工具摘掉日程的日期时把标记一起删掉。
  */
 import { promises as fs, existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -137,6 +148,35 @@ function setDone(cells: Record<string, CellValue>, col: DbColumn, done: boolean)
   if (done) cells[col.id] = true;
   else delete cells[col.id];
 }
+/** 日程标记:行的保留单元格键(不是列 id,所以不加列、表格里也不显示),和日历插件同一份契约。 */
+const KIND_KEY = '_kind';
+/** 行上有没有日程标记(只读这个键,不是「算不算日程」的判定,判定在 isEventRow)。别的值 = 没标记。 */
+const hasEventMark = (row: { cells?: Record<string, CellValue> } | null | undefined): boolean => row?.cells?.[KIND_KEY] === 'event';
+/**
+ * 这一行算不算日程(发生在某个时间的事,不在待办列表里)。全文件只有这一处判定,和日历插件读的是同一条规则:
+ *  - 没有标记 = 待办(有没有起止时间都一样);
+ *  - 带标记且有日期(`dated`)= 日程;
+ *  - 带标记但没日期:表有勾选列(`todoTable`)时它照旧是一条未排期的待办 —— 排了期、当成日程、又撤销排期的行就是这样,
+ *    不这么算它日历不画、待办不列;表没有勾选列时没日期的行本来哪都不显示,仍按日程列出来(start: null),Agent 才看得见、能补日期。
+ */
+export function isEventRow(row: { cells?: Record<string, CellValue> } | null | undefined, dated: boolean, todoTable: boolean): boolean {
+  return hasEventMark(row) && (dated || !todoTable);
+}
+/** 写标记 / 去掉标记。去掉 = 删键(不写 'todo'):没有键就是待办。 */
+function setKind(cells: Record<string, CellValue>, kind: 'event' | 'todo'): void {
+  if (kind === 'event') cells[KIND_KEY] = 'event';
+  else delete cells[KIND_KEY];
+}
+/** 可选的 kind 参数:没给 / 空串 = undefined(不动);别的值报错,不猜。 */
+function optKind(v: unknown): 'event' | 'todo' | undefined {
+  const k = optStr(v)?.toLowerCase();
+  if (!k) return undefined;
+  if (k !== 'event' && k !== 'todo') throw new Error(`invalid kind "${String(v)}": use "event" or "todo", or leave it out.`);
+  return k;
+}
+/** 日程没有日期 = 日历上没有、待办列表里也没有,哪儿都不显示:不写这种行。 */
+const eventNeedsStart = (how: string): Error =>
+  new Error(`an event needs a date: ${how}`);
 /** 可选字符串参数:没给 / null = undefined;给了就去掉首尾空白(空串 = 显式清空)。 */
 function optStr(v: unknown): string | undefined {
   return v == null ? undefined : String(v).trim();
@@ -154,6 +194,50 @@ function noDoneCol(cal: Cal, what: string): Error {
     `calendar "${cal.db.name}" has no checkbox column, so ${what}: it holds calendar events, not to-dos. ` +
       'Put to-dos in a calendar whose amadeus_list_calendars entry has a todoColumn (normally the default one, human://CALENDAR.db). ' +
       'If none has one, tell the user: a dated row in a calendar without a checkbox column shows on the calendar but never in the to-do list.',
+  );
+}
+
+/** DATE_RE 只管写法;这里再核一遍是不是真有这一天、这个时刻。 */
+function isRealCalTime(t: string): boolean {
+  const m = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2}))?$/.exec(t);
+  if (!m) return false;
+  const [y, mo, day] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  if (mo < 1 || mo > 12 || day < 1 || day > new Date(Date.UTC(y, mo, 0)).getUTCDate()) return false;
+  return m[4] === undefined || (Number(m[4]) < 24 && Number(m[5]) < 60);
+}
+const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+/** 云端认「已经过去」的余量:地球上最晚的时区是 UTC−12,早于「UTC 现在 − 12 小时」的时刻在哪个时区看都过去了。 */
+const ANYWHERE_PAST_MS = 12 * 3_600_000;
+/**
+ * 刚写进去的开始时间已经过去时,给模型的一句提示;没过去 / 没日期 = 空串。只提示不拒绝:补记已发生的事是正当用法。
+ * `value` 是写进日期格的值(encodeCalDate 之后的:allDay 去掉了时刻)。只看开始时间:结束时间还没到也照报
+ * (晚上十点多写「20:00–23:00」正是要提醒的那种;真是进行中的事,提示里说了留着就行)。
+ *
+ * 「现在」用哪个钟:
+ *  - host:引擎和用户在同一台机器上,用进程的本地时钟(和系统提示的 Current Date、get_datetime 同一个口径)。
+ *  - 云端:请求里没有用户的时区,worker 的钟不代表用户。只在「哪个时区看都已经过去」时才报(UTC 现在 − 12 小时为界),
+ *    提示里写明用的是 UTC、不知道用户时区。⚠️代价:同一天里晚了几小时的那种在云端报不出来,要等客户端随请求带上时区。
+ *    别为了报得出来改成拿 worker 的钟直接比:UTC 的 worker 对东八区用户会把「今晚八点」在下午就报成过去。
+ */
+export function pastStartNote(value: CellValue | undefined, host: boolean, now: Date = new Date()): string {
+  const d = decodeCalDate(value);
+  // 写法对、但不是真实日期 / 时刻的(2 月 31 日、47 点)不判:桌面会把它归到别的日子,照字面比会把将来的事报成过去
+  if (!d || !isRealCalTime(d.start) || (d.end && !isRealCalTime(d.end))) return '';
+  const p2 = (n: number): string => String(n).padStart(2, '0');
+  // 和 start 同一个写法(YYYY-MM-DDTHH:mm),字符串直接比大小
+  const ref = host
+    ? `${now.getFullYear()}-${p2(now.getMonth() + 1)}-${p2(now.getDate())}T${p2(now.getHours())}:${p2(now.getMinutes())}`
+    : new Date(now.getTime() - ANYWHERE_PAST_MS).toISOString().slice(0, 16);
+  const isPast = (t: string): boolean => (t.includes('T') ? t < ref : t < ref.slice(0, 10));
+  if (!isPast(d.start)) return '';
+  const timed = d.start.includes('T');
+  const clock = host
+    ? `it is now ${timed ? ref : ref.slice(0, 10)} (${WEEKDAYS[now.getDay()]}, this machine's local time)`
+    : `it is now ${now.toISOString().slice(0, 16)} UTC, and the user's timezone is not known here, so this is only reported once it is past in every timezone`;
+  return (
+    `\nNote: this ${timed ? 'start' : 'date'} (${d.start}) is already in the past: ${clock}. ` +
+    'If the user meant a time still to come (for example "later today"), correct it with amadeus_edit_event. ' +
+    'If they are recording something that already happened, leave it as it is.'
   );
 }
 
@@ -416,12 +500,15 @@ export async function localCalendarRows(): Promise<Array<{ rel: string; columns:
   }
   return out;
 }
+/** 缺省日历 = calendars() 的第一本:有默认日历 human/CALENDAR.db 就是它;它读不出来(文件坏了 / 老云端没有这份)时是库里按路径排第一的那本。
+ *  「不带 calendar 的 create 落在哪」和「list_calendars 标 default 的是谁」都从这里取,两边不会说岔。 */
+const defaultCalOf = (cals: Cal[]): Cal | undefined => cals[0];
 async function findCalendar(be: AmadeusBackend, nameOrPath?: string): Promise<Cal> {
   const cals = await calendars(be);
   if (!cals.length) {
     throw new Error('no calendar database found. A calendar is a multi-dimensional table with a "calendarDate" column; open the Calendar space in the app to create one.');
   }
-  if (!nameOrPath) return cals[0];
+  if (!nameOrPath) return defaultCalOf(cals)!;
   const q = nameOrPath.trim();
   const found = cals.find(
     (c) => c.rel === q || c.db.name === q || path.basename(c.rel).replace(/\.db$/i, '') === q,
@@ -479,7 +566,10 @@ interface CalRow {
   start: string | null;
   end?: string;
   allDay: boolean | null;
-  /** 只在表有勾选列时出现:有它 = 这一行在用户的待办列表里。 */
+  /** 只在算日程的行上出现(见 isEventRow:带标记且有日期;没有勾选列的表里没日期的带标记行也算):不在用户的待办列表里。 */
+  kind?: 'event';
+  /** 待办行(表有勾选列、行不算日程)上总有:有它 = 这一行在用户的待办列表里。
+   *  日程行上只在那一格真勾着时才出现(done: true),免得一条没勾的日程被数成没做完的待办。 */
   done?: boolean;
   props: Record<string, string>;
 }
@@ -487,6 +577,8 @@ function rowToEvent(cal: Cal, r: DbRow): CalRow {
   const cd = decodeCalDate(r.cells[cal.cal.id]);
   const nameCol = cal.db.columns[0];
   const doneCol = doneColOf(cal.db);
+  const isEvent = isEventRow(r, !!cd, !!doneCol);
+  const ticked = !!doneCol && r.cells[doneCol.id] === true;
   const props: Record<string, string> = {};
   for (const c of cal.db.columns) {
     if (c.id === nameCol?.id || c.id === cal.cal.id || c.id === doneCol?.id) continue;
@@ -500,7 +592,8 @@ function rowToEvent(cal: Cal, r: DbRow): CalRow {
     start: cd ? cd.start : null,
     end: cd?.end,
     allDay: cd ? cd.allDay : null,
-    ...(doneCol ? { done: r.cells[doneCol.id] === true } : {}),
+    ...(isEvent ? { kind: 'event' as const } : {}),
+    ...(doneCol && (!isEvent || ticked) ? { done: ticked } : {}),
     props,
   };
 }
@@ -625,8 +718,9 @@ export const amadeusProvider: ToolProvider = {
     deferCalendar(mk(
       'amadeus_list_calendars',
       "List the user's calendars (multi-dimensional tables that have a calendarDate column) with their names, paths, columns and counts. " +
-        'The default calendar (path human://CALENDAR.db) comes first. Every row of a calendar that has a checkbox column is also on the ' +
-        "user's to-do list (the checkbox = done), whether or not it has a date.",
+        "The first entry, marked `default: true`, is the user's default calendar (normally path human://CALENDAR.db): new events and to-dos " +
+        'belong there unless the user names another calendar. Every row of a calendar that has a checkbox column is also on the ' +
+        "user's to-do list (the checkbox = done), whether or not it has a date — except rows marked as events (`kind: \"event\"` in amadeus_list_events).",
       {},
       [],
       READ_CAPS,
@@ -636,6 +730,7 @@ export const amadeusProvider: ToolProvider = {
         if (!be.exists()) return noVault;
         const cals = await calendars(be);
         if (!cals.length) return 'No calendars found (a calendar is a table with a "calendarDate" column).';
+        const dflt = defaultCalOf(cals);
         return JSON.stringify(
           cals.map((c) => {
             const dated = c.db.rows.filter((r) => decodeCalDate(r.cells[c.cal.id])).length;
@@ -643,8 +738,10 @@ export const amadeusProvider: ToolProvider = {
             return {
               name: c.db.name,
               path: c.rel,
+              // 只出现在缺省那本上:不带 calendar 的 create 就落在它里面
+              ...(c === dflt ? { default: true } : {}),
               events: dated,
-              // 有勾选列 = 待办来源:没有日期的那些行只在待办列表里,events 不数它们
+              // 有勾选列 = 待办来源:没有日期的那些行只在待办列表里,events 不数它们(带不带日程标记都算:没日期的带标记行就是未排期待办)
               ...(doneCol ? { todoColumn: doneCol.name, undatedTodos: c.db.rows.length - dated } : {}),
               columns: c.db.columns.map((col) => ({ name: col.name, type: col.type })),
             };
@@ -656,10 +753,14 @@ export const amadeusProvider: ToolProvider = {
     ), "List the user's calendars, where their events and to-dos live (start here; loads the whole calendar set)."),
     deferCalendar(mk(
       'amadeus_list_events',
-      "List the user's calendar events and to-dos. Every row of a calendar that has a checkbox column is on the user's to-do list: " +
-        '`done` is that checkbox (rows of a calendar without one have no `done`). A to-do may have no date: then `start` is null. ' +
+      "List the user's calendar events and to-dos. A row with `kind: \"event\"` is an event (a meeting, a class, an appointment): " +
+        "it is not on the user's to-do list, so leave it out when the user asks for their to-dos. " +
+        'Every other row of a calendar that has a checkbox column is a to-do: `done` is that checkbox ' +
+        '(an event has no `done` unless it was ticked; rows of a calendar without a checkbox column never have one). ' +
+        'Only `kind` tells the two apart: a to-do can have a date and a time too, and an event that loses its date is a to-do again. ' +
+        'A to-do may have no date: then `start` is null. ' +
         'Without from/to, undated to-dos are listed too (after the dated rows); with a range only dated rows in it are, unless include_undated is true. ' +
-        "Returns each row's calendar, id, title, start, end, allDay, done and other properties.",
+        "Returns each row's calendar, id, title, start, end, allDay, kind, done and other properties.",
       {
         calendar: { type: 'string', description: 'Optional calendar name or path to restrict to.' },
         from: { type: 'string', description: 'Optional inclusive start date filter, YYYY-MM-DD.' },
@@ -685,8 +786,10 @@ export const amadeusProvider: ToolProvider = {
             if (seen.has(r.id)) continue;
             const ev = rowToEvent(cal, r);
             if (ev.start === null) {
-              // 没日期的行只有在带勾选列的表里才是「东西」(待办列表里的未排期);别的表里它哪儿都不显示,不列
-              if (ev.done === undefined) continue;
+              // 没日期的行只有在带勾选列的表里才是「东西」(待办列表里的未排期,带不带日程标记都是);别的表里它哪儿都不显示,不列。
+              // 例外是没有勾选列的表里带日程标记的行(工具不写这种行,只可能是别处写出来的):照列出来(kind: "event"、start: null),
+              // Agent 才看得见、能补上日期;跳过就等于把它藏起来了。rowToEvent 已经按 isEventRow 判过:这种行才会 start 为 null 还带 kind
+              if (ev.kind !== 'event' && ev.done === undefined) continue;
               seen.add(r.id);
               if (undated) todos.push({ ...ev, path: cal.rel });
               continue;
@@ -703,11 +806,16 @@ export const amadeusProvider: ToolProvider = {
         if (!events.length) return 'No events or to-dos found for that query.';
         return JSON.stringify(events, null, 2);
       },
-    ), "Read the user's events and to-dos (to-dos are calendar rows; checkbox = done; they may have no date)."),
+    ), "Read the user's events and to-dos (to-dos are calendar rows; checkbox = done; they may have no date; rows with kind \"event\" are not to-dos)."),
     deferCalendar(mk(
       'amadeus_create_event',
-      "Add an event or a to-do to the user's calendar. The user's to-dos are rows in their calendar (the default one unless they name another), " +
-        'not notes. A to-do may have no date: when the user gives no date or time, leave `start` out — do not invent one. ' +
+      "Add an event or a to-do to the user's calendar. The user's to-dos are rows in their calendar, not notes. " +
+        'Leave `calendar` out and the row goes into the default calendar (the one amadeus_list_calendars marks `default: true`); ' +
+        'name a calendar only when the user asked for that one. ' +
+        'A to-do may have no date: when the user gives no date or time, leave `start` out — do not invent one. ' +
+        'Pass `kind: "event"` when the user is putting something that happens at a time on their calendar — a meeting, a class, an appointment, a flight: ' +
+        "it shows on the calendar and stays off the user's to-do list. Leave `kind` out for something to get done or to be reminded of " +
+        '(a to-do, with or without a date and time), and whenever you are not sure. ' +
         'Times are "YYYY-MM-DD" (all-day) or "YYYY-MM-DDTHH:mm" (with a time). One call adds one row.',
       {
         title: { type: 'string', description: 'Event or to-do title.' },
@@ -715,7 +823,8 @@ export const amadeusProvider: ToolProvider = {
         end: { type: 'string', description: 'Optional end, same format as start (needs a start).' },
         allDay: { type: 'boolean', description: 'Optional; force all-day (drops any time component).' },
         done: { type: 'boolean', description: "Optional; true adds it already ticked (the calendar's checkbox column, e.g. 完成 / Done)." },
-        calendar: { type: 'string', description: 'Optional calendar name/path; defaults to the first calendar (the default one).' },
+        kind: { type: 'string', enum: ['event', 'todo'], description: 'Optional. "event" = something that happens at a time (a meeting, a class, an appointment, a flight): it is kept off the to-do list and needs a start. "todo" or left out = a to-do. Leave it out when unsure.' },
+        calendar: { type: 'string', description: 'Optional calendar name/path. Leave it out unless the user named a calendar: the row then goes into the default calendar.' },
         props: { type: 'object', description: 'Optional extra column values, keyed by column name.' },
       },
       ['title'],
@@ -728,7 +837,9 @@ export const amadeusProvider: ToolProvider = {
           const start = optStr(args.start);
           const end = optStr(args.end);
           const done = optBool(args.done);
+          const kind = optKind(args.kind);
           if (!start && end) throw new Error('an end needs a start: give start too, or leave both out for a to-do without a date.');
+          if (!start && kind === 'event') throw eventNeedsStart('give start too, or leave kind out if this is a to-do without a date.');
           const doneCol = doneColOf(cal.db);
           if (!start && !doneCol) throw noDoneCol(cal, 'a row without a date would not show anywhere');
           if (done === true && !doneCol) throw noDoneCol(cal, 'nothing can be ticked done in it');
@@ -739,22 +850,32 @@ export const amadeusProvider: ToolProvider = {
           if (nameCol && nameCol.id !== cal.cal.id) cells[nameCol.id] = String(args.title ?? '');
           setNamedProps(cal.db, cells, args.props);
           if (doneCol && done !== undefined) setDone(cells, doneCol, done);
+          // 没有勾选列的日历也照写:以后用户加了勾选列,这些行仍是日程。"todo" / 不传 = 不写这个键(和以前写出来的行一样)。
+          // 上面按 start 参数拦过一次(日程的日期要从 start 来,返回文字也是按它写的);这里再按最后落在日期格里的值看一次:
+          // props 也能写这一列,start 过了校验、props 再清空,不能照写标记
+          if (kind === 'event') {
+            if (!decodeCalDate(cells[cal.cal.id])) throw eventNeedsStart('props cleared the date column: keep the start, or leave kind out if this is a to-do without a date.');
+            setKind(cells, 'event');
+          }
           const id = dbId();
           cal.db.rows.push({ id, cells });
           const ticked = doneCol && cells[doneCol.id] === true ? ', done' : '';
           return {
             ok: true,
             msg: value
-              ? `Created event "${args.title}" (${value}${ticked}) in "${cal.db.name}". id=${id}`
+              ? `Created event "${args.title}" (${value}${ticked}) in "${cal.db.name}"${kind === 'event' ? ', marked as an event: it is not on the to-do list' : ''}. id=${id}`
+                // 看最后落在日期格里的值(props 也能写这一列);加进来就勾上的 = 补记做完的事,不用提醒
+                + (ticked ? '' : pastStartNote(cells[cal.cal.id], ctx?.execMode === 'host'))
               : `Created to-do "${args.title}" (no date${ticked}) in "${cal.db.name}"; it shows in the user's to-do list. id=${id}`,
           };
         });
       },
-    ), "Add an event or a to-do to the user's calendar; a to-do may have no date (don't invent one)."),
+    ), "Add an event (kind \"event\") or a to-do to the user's calendar; a to-do may have no date (don't invent one)."),
     deferCalendar(mk(
       'amadeus_edit_event',
       'Edit an existing event or to-do by id. Only the fields you pass are changed. Tick a to-do with done: true (false unticks it); ' +
-        'start: "" removes the date, leaving a to-do without a date.',
+        'start: "" removes the date, leaving a to-do without a date (an event becomes a to-do again). ' +
+        '`kind: "event"` turns the row into an event (off the user\'s to-do list), `kind: "todo"` turns an event back into a to-do; leave `kind` out to keep it as it is.',
       {
         calendar: { type: 'string', description: 'Calendar name or path the row is in.' },
         eventId: { type: 'string', description: 'The event / to-do id (from amadeus_list_events).' },
@@ -763,6 +884,7 @@ export const amadeusProvider: ToolProvider = {
         end: { type: 'string', description: 'New end, same format; pass empty string to clear.' },
         allDay: { type: 'boolean', description: 'Force all-day (drops time).' },
         done: { type: 'boolean', description: "true ticks it done (the calendar's checkbox column), false unticks it." },
+        kind: { type: 'string', enum: ['event', 'todo'], description: '"event" marks the row as an event (kept off the to-do list; it needs a date), "todo" turns it back into a to-do. Leave it out to keep it as it is.' },
         props: { type: 'object', description: 'Extra column values to set, keyed by column name.' },
       },
       ['calendar', 'eventId'],
@@ -778,9 +900,11 @@ export const amadeusProvider: ToolProvider = {
           const start = optStr(args.start);
           const end = optStr(args.end);
           const done = optBool(args.done);
+          const kind = optKind(args.kind);
           if (start === '' && !doneCol) throw noDoneCol(cal, 'removing the date would make this row disappear');
           if (done !== undefined && !doneCol) throw noDoneCol(cal, 'nothing can be ticked done in it');
           const nameCol = cal.db.columns[0];
+          const dateBefore = row.cells[cal.cal.id];
           if (args.title !== undefined && nameCol && nameCol.id !== cal.cal.id) row.cells[nameCol.id] = String(args.title);
           if (start === '') {
             delete row.cells[cal.cal.id]; // 去掉日期 = 变回未排期的待办(结束时间一并没了)
@@ -795,7 +919,40 @@ export const amadeusProvider: ToolProvider = {
           }
           setNamedProps(cal.db, row.cells, args.props);
           if (doneCol && done !== undefined) setDone(row.cells, doneCol, done);
-          return { ok: true, msg: `Updated event ${args.eventId} in "${cal.db.name}".` };
+          // 不传 kind = 标记原样留着(上面都是按列 id 就地改 row.cells,碰不到这个键)。
+          // 下面都按最后落在日期格里的值看(start 和 props 都能改这一列)
+          const hadDate = !!decodeCalDate(dateBefore);
+          const hasDate = !!decodeCalDate(row.cells[cal.cal.id]);
+          const wasMarked = hasEventMark(row);
+          const wasEvent = isEventRow(row, hadDate, !!doneCol);
+          if (kind === 'event' && !hasDate) throw eventNeedsStart('this row would have none, so set start in the same call.');
+          if (kind) setKind(row.cells, kind);
+          let unscheduled = false;
+          if (hasEventMark(row) && hadDate && !hasDate) {
+            // 这次调用摘掉了日程的日期。没有勾选列的表里没日期的行哪都不显示,照 start: "" 的规矩拒绝(那条在上面,这里兜 props 清日期的路);
+            // 带勾选列的表里它变回没有日期的待办,标记一起删掉:不留「带标记、没日期」的行
+            if (!doneCol) throw noDoneCol(cal, 'removing the date would make this row disappear');
+            setKind(row.cells, 'todo');
+            unscheduled = true;
+          }
+          // 去掉标记之后既没日期、表又没有勾选列:这一行连 include_undated 都列不出来,桌面两边也不显示。先补日期
+          if (wasMarked && kind === 'todo' && !hasDate && !doneCol) {
+            throw new Error(
+              `this row has no date and calendar "${cal.db.name}" has no checkbox column: without its event mark it would show nowhere and could not be listed again, ` +
+                'so set start first (or in the same call) and then change kind.',
+            );
+          }
+          const isEvent = isEventRow(row, hasDate, !!doneCol);
+          const kindNote = isEvent === wasEvent ? ''
+            : isEvent ? ' It is now marked as an event: it is not on the to-do list.'
+            : unscheduled ? ' It is now a to-do without a date.' : ' It is now a to-do.';
+          // 只在这次调用改了开始时间时看(start,或 props 写日期列):勾掉一条早就过期的待办、改标题、只动结束时间,不该被提醒「时间过去了」
+          const startOf = (v: CellValue | undefined): string | undefined => decodeCalDate(v)?.start;
+          const movedStart = startOf(row.cells[cal.cal.id]) !== startOf(dateBefore) && !(doneCol && row.cells[doneCol.id] === true);
+          return {
+            ok: true,
+            msg: `Updated event ${args.eventId} in "${cal.db.name}".${kindNote}` + (movedStart ? pastStartNote(row.cells[cal.cal.id], ctx?.execMode === 'host') : ''),
+          };
         });
       },
     ), "Change an event or a to-do on the user's calendar, or tick a to-do done."),

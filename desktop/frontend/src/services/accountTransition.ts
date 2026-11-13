@@ -34,7 +34,7 @@ export function installAccountTransition(): () => void {
       await restoring
       if (request !== version || disposed) return
       if (!window.amadeus) return
-      const [{ flushAllScopes, resetAllScopeDocs, usePageStore }, { useDbStore }, { useDrawStore }, lifecycle] = await Promise.all([
+      const [{ flushAllScopes, resetAllScopeDocs, invalidateVaultRestore, usePageStore }, { useDbStore }, { useDrawStore }, lifecycle] = await Promise.all([
         import('../amadeus/store/pageStore'), import('../amadeus/store/dbStore'),
         import('../amadeus/store/drawingStore'), import('../amadeus/unified/lifecycle'),
       ])
@@ -44,6 +44,7 @@ export function installAccountTransition(): () => void {
       if (cloudWasOpen) {
         lifecycle.retireAllUnifiedScopes()
         resetAllScopeDocs()
+        invalidateVaultRestore() // 旧账号那趟在途的断网重开作废
         usePageStore.setState({ vaultRoot: null, pages: [], folders: [], files: [], icons: {} })
       }
     } catch (error) {

@@ -48,6 +48,24 @@ const check=(name,ok,detail)=>{results.push({name,ok,detail});console.log(`${ok?
   await win.reload();await win.waitForSelector('.wb-workspace-viewport');await win.waitForTimeout(1800)
   check('split layout restores after renderer reload',await mainGroups().count()===count)
   await win.screenshot({path:path.join(out,'restored.png')})
+  // A restored layout can create overlays in any DOM order. A fixed menu / click-away layer opened in one pane
+  // that spills across its edge must stay on top of the neighbouring pane, in both directions.
+  const spill=await win.evaluate(()=>{
+   const panes=[...document.querySelectorAll('.dv-render-overlay[data-lcl-group][data-lcl-visible="true"]')].map(o=>({o,r:o.getBoundingClientRect()})).filter(p=>p.r.width>40&&p.r.height>40)
+   const out=[]
+   for(const a of panes)for(const b of panes){
+    if(a===b||Math.abs(a.r.right-b.r.left)>12||Math.min(a.r.bottom,b.r.bottom)-Math.max(a.r.top,b.r.top)<80)continue
+    for(const [from,into] of [[a,b],[b,a]]){
+     const top=Math.max(a.r.top,b.r.top)+40,edge=from===a?a.r.right:b.r.left,el=document.createElement('div')
+     el.style.cssText=`position:fixed;left:${edge-30}px;top:${top}px;width:60px;height:30px;z-index:80;background:rgba(255,0,0,.01)`
+     ;(from.o.querySelector('.dv-react-part')??from.o).append(el)
+     const x=from===a?edge+20:edge-20,hit=document.elementFromPoint(x,top+15)
+     out.push({from:from.o.dataset.lclLoc,into:into.o.dataset.lclLoc,ok:hit===el,hit:hit&&hit.className&&String(hit.className).slice(0,40)});el.remove()
+    }
+   }
+   return out
+  })
+  check('fixed layers spilling out of a pane stay above the neighbouring pane (both directions)',spill.length>=2&&spill.every(s=>s.ok),spill)
  }catch(e){console.error(e);check('acceptance completes',false,String(e));await win.screenshot({path:path.join(out,'failure.png')}).catch(()=>{})}
  finally{fs.writeFileSync(path.join(out,'results.json'),JSON.stringify(results,null,2));await env.close();console.log(`Artifacts: ${out}`);if(results.some(r=>!r.ok))process.exitCode=1}
 })().catch(e=>{console.error(e);process.exitCode=1})

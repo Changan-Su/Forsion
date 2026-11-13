@@ -1,6 +1,9 @@
 import type { ReactElement, RefObject } from 'react'
-import { FloatingToc } from '@lcl/engine'
+import { FloatingToc, defaultFloatingTocItem, type FloatingTocItemReader } from '@lcl/engine'
 import { READING_GAP, stickyTopInset } from './revealScroll'
+
+const visibleNoteHeading: FloatingTocItemReader = (element, index) =>
+  element.closest('[aria-hidden="true"]') ? null : defaultFloatingTocItem(element, index)
 
 /** 笔记正文的浮动目录(LCL FloatingToc 的笔记适配)。落点与右栏大纲跳转(revealBlockAtTop)同一口径:
  *  标题顶停在「sticky 顶栏下 12px」。此前只用了 LCL 缺省 topOffset=24,顶栏 37px 高 → 跳过去标题被盖住 14px
@@ -15,6 +18,7 @@ export function NoteFloatingToc({ host, label, scanTrigger }: {
       scrollContainer={host}
       contentRoot={host}
       selector=".page-view h1, .page-view h2, .page-view h3"
+      itemFromElement={visibleNoteHeading}
       label={label}
       scanTrigger={scanTrigger}
       placement="sticky"

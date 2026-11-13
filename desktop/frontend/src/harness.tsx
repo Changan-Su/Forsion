@@ -8,6 +8,7 @@ import { setAssetUrlBuilder } from '@amadeus-shared/assets'
 import './harnessBridge' // ⚠️须早于任何拉到 amadeus/api 的 import(见该文件)
 import './styles/base.css'
 import './amadeus-host.css' // 编辑器块样式经它的 @import 进来(同生产 main.tsx);别再单独 import styles.css —— 级联会反过来(评审 P-14 / §5)
+import { ReadingModeButton, type ReadingModeControl } from './amadeus/unified/ReadingSurface'
 import { MarkdownBlock } from './amadeus/blocks/markdown/MarkdownBlock'
 import { FindBar, openFindBar } from './findInPage'
 import { AskStringHost } from './amadeus/components/askString'
@@ -38,7 +39,7 @@ import './views/chat2/composer2.css'
 import { Ribbon } from '@lcl/engine/Ribbon'
 import { WorkspaceHost } from '@lcl/engine/WorkspaceHost'
 import { presentDockedExtension } from '@lcl/engine/dockviewStore'
-import { addCommand, addRibbonIcon, getActiveSpace, installHotkeys, recordNav, registerSpace, registerView, setActiveSpaceCold, startOpenDrag, unregisterView, useNav, useRibbonStore, useSpaceStore, useWorkspace } from '@lcl/engine'
+import { addCommand, addRibbonIcon, getActiveSpace, installHotkeys, recordNav, registerSpace, registerView, setActiveSpaceCold, startOpenDrag, unregisterView, useNav, useRibbonStore, useSpaceStore, useWorkspace, ViewHead, ViewModeSwitch, useViewModes } from '@lcl/engine'
 import type { SpaceDefinition, ViewProps } from '@lcl/engine/types'
 import '@lcl/engine/engine.css'
 import { usePageStore, pageStoreFor, remapScopePaths, PageScopeCtx, onNotePathGone } from './amadeus/store/pageStore'
@@ -715,6 +716,12 @@ if (new URLSearchParams(location.search).has('dock')) {
   registerView({ type: 'navv', displayName: 'nav', icon: Square, factory: ({ params }) => (
     <div className="navv" data-label={String(params.label ?? '')} style={{ padding: 12 }}>{String(params.label ?? '')}</div>
   ) })
+  const HeadedNav = ({ leaf, params }: ViewProps) => {
+    useViewModes(leaf.id, { modes: [{ value: 'one', label: 'Document' }, { value: 'two', label: 'Canvas' }], value: 'one', onChange: () => {} })
+    return <>{params.custom ? <div className="lcl-viewhead"><ViewModeSwitch leafId={leaf.id} /></div> : <ViewHead leafId={leaf.id} title="Navigation" />}<div className="navv" data-label={String(params.label ?? '')}>{String(params.label ?? '')}</div></>
+  }
+  registerView({ type: 'nav-empty-head', displayName: 'Empty head', icon: Square, factory: ({ leaf }) => <div className="nav-empty-head"><ViewHead leafId={leaf.id} /><p>Content</p></div> })
+  registerView({ type: 'nav-headed', displayName: 'Headed navigation', icon: Square, factory: props => <HeadedNav {...props} /> })
   useWorkspace.setState({ sidebarDefaults: { left: [{ type: 'sidev', params: {} }], right: [{ type: 'sidev', params: {} }], bottom: [] } })
   probe.mainW = () => {
     const p = useWorkspace.getState().api?.panels.find((x) => ((x.params ?? {}) as { __loc?: string }).__loc === 'main')
@@ -2207,7 +2214,7 @@ if (new URLSearchParams(location.search).has('dock')) {
       const d = routeNote(path, raw, true, new Date().toISOString())
       return d.editor === 'unified' ? { path, initial: d.initial, diskRaw: d.diskRaw } : { path, initial: raw, block: true }
     }
-    function UPageHost({ file, probe = upageProbe, onPath }: { file?: string; probe?: Record<string, unknown>; onPath?: (path: string) => void }): React.ReactElement {
+    function UPageHost({ file, probe = upageProbe, onPath, onReading }: { file?: string; probe?: Record<string, unknown>; onPath?: (path: string) => void; onReading?: (reading: boolean) => void }): React.ReactElement {
       const [st, setSt] = useState<{ path: string; initial: string; diskRaw?: string; block?: true }>(() => routeOf(file ?? 'Unified.md', vault.get(file ?? 'Unified.md') ?? seedMd))
       // 页面排版选项(评审 C-21)的菜单一半,镜像 amadeusViews:顶栏 ⋯ 开的是生产同一个 PageStyleMenuItems(入口集合 pageStyleEntries);
       // 属性一半在 UPane(= 生产 EditorScope)上。库根 null(台架无库)。仪器:scripts/page-style.check.cjs。
@@ -2215,6 +2222,7 @@ if (new URLSearchParams(location.search).has('dock')) {
       const pageStyle = useNotePageStyle(null, st.path)
       const [styleMenu, setStyleMenu] = useState<{ x: number; y: number } | null>(null)
       const [historyOpen, setHistoryOpen] = useState(false)
+      const [readingMode, setReadingMode] = useState<ReadingModeControl | null>(null)
       const { t: histT } = useI18n()
       useEffect(() => {
         if (!styleMenu) return
@@ -2269,6 +2277,7 @@ if (new URLSearchParams(location.search).has('dock')) {
           {barReady && (
             <div className="amx-toolbar">
               <span className={SEG_SLOT} />
+              {readingMode && <ReadingModeButton control={readingMode} />}
               <button className="amx-mode-btn amx-more-btn" type="button" onClick={(e) => {
                 e.stopPropagation()
                 const r = e.currentTarget.getBoundingClientRect()
@@ -2313,6 +2322,8 @@ if (new URLSearchParams(location.search).has('dock')) {
             onUnlock={locked ? () => { void switchNoteLock(null, st.path, false) } : undefined}
             onRenamed={(np) => setSt({ path: np, initial: vault.get(np) ?? '' })}
             // 生产由 amadeusViews 收(⋯ 菜单 / 移动端胶囊);台架挂在探针上,仪器经它调「导出 JSON Canvas」(V-19,C107)。
+            onReadingMode={setReadingMode}
+            onReadingChange={onReading}
             onCanvasMode={(s) => { if (probe) probe.canvasSeg = s }}
           /></div>}
           <AskStringHost />{/* 画布元素文字编辑走 askString(双击形状/连线标签);不挂它,仪器测不到弹窗 */}
@@ -2391,6 +2402,7 @@ if (new URLSearchParams(location.search).has('dock')) {
     // `&utoc`(配 &upane):挂生产的笔记浮动目录(与 amadeusViews 同一个 NoteFloatingToc,根 = 滚动的 .amx-pane),评审 C-04。
     function UPane(): React.ReactElement {
       const paneRef = useRef<HTMLDivElement | null>(null)
+      const [reading, setReading] = useState(false)
       // 页面排版选项(C-21)挂壳上,同生产 EditorScope。`&udark` = 暗色壳(截图自查用)。
       const [path, setPath] = useState('Unified.md')
       const pageStyle = useNotePageStyle(null, path)
@@ -2400,8 +2412,8 @@ if (new URLSearchParams(location.search).has('dock')) {
       const wb = new URLSearchParams(location.search).has('uwb')
       const pane = (
         <div ref={paneRef} className="am-app tangu-lovable amx-pane amx-editor" data-mode={new URLSearchParams(location.search).has('udark') ? 'dark' : 'light'} data-flat="0" {...pageStyleAttrs(pageStyle)} style={{ position: wb ? 'absolute' : 'fixed', inset: 0 }}>
-          {new URLSearchParams(location.search).has('utoc') && <NoteFloatingToc host={paneRef} label="toc" scanTrigger="Unified.md" />}
-          <UPageHost onPath={setPath} />
+          {new URLSearchParams(location.search).has('utoc') && <NoteFloatingToc host={paneRef} label="toc" scanTrigger={reading} />}
+          <UPageHost onPath={setPath} onReading={setReading} />
           {/* `&umbar`:移动端底栏胶囊 + ⋯ sheet(生产同一个 AmxMobileBar),sheet 里只放页面排版那几行(C-21)。 */}
           {new URLSearchParams(location.search).has('umbar') && (
             <AmxMobileBar

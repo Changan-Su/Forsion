@@ -22,7 +22,7 @@ function currentSpaceEntity(): MiniOpenOptions | null {
   const leaf = useWorkspace.getState().getActiveLeaf()
   const params = leaf?.type === space.mini!.view.type ? leaf.params ?? {} : {}
   const sessionId = space.id === 'tangu' && typeof params.sessionId === 'string' && !params.followActive ? params.sessionId : undefined
-  return { spaceId: space.id, ...(sessionId ? { sessionId } : {}) }
+  return { spaceId: space.id, params: { ...params }, ...(sessionId ? { sessionId } : {}) }
 }
 
 let directMini: MiniOpenOptions | null = null
@@ -94,8 +94,12 @@ function MiniPanelRoot() {
     // 主进程随目标发来的代号;报实体时带回去,主进程只认当前这一代之后的报告
     let appliedGen: number | undefined
     const report = (): void => {
-      if (!ready || pending || applying || directMini || transient) return
-      const entity = currentSpaceEntity()
+      if (!ready || pending || applying || transient) return
+      const leaf = useWorkspace.getState().getActiveLeaf()
+      const params = directMini?.view && leaf?.type === directMini.view.type ? { ...directMini.view.params, ...directMini.params, ...leaf.params } : null
+      const entity = directMini?.view
+        ? params && { ...directMini, params, view: { type: directMini.view.type, params } }
+        : currentSpaceEntity()
       const sig = entity ? JSON.stringify([entity, appliedGen]) : ''
       if (!entity || sig === reported) return
       reported = sig

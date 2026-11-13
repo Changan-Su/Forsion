@@ -1849,6 +1849,8 @@ const zh: Dict = {
   'ntf.pluginEventsHint': '每个插件一个开关（ctx.notify 的来源；关掉即静音该插件）。',
   'ntf.view': '查看',
   'ntf.dmWaiting': '在等你回复或拍板',
+  'ntf.dmMessage': '主动发来了一条新消息',
+  'ntf.event.dmMessage': '私聊主动消息',
   'ntf.syncError': '在线同步失败：{e}',
   // 主进程原因码 → 文案(frontend/src/ipcError.ts;主进程只给语言中立的码,{detail} 是路径 / 底层报错)
   'ipcerr.notLoggedIn': '未登录 Forsion 账号',
@@ -3678,6 +3680,8 @@ const en: Dict = {
   'ntf.pluginEventsHint': 'One switch per plugin (the source of ctx.notify; turn off to mute that plugin).',
   'ntf.view': 'View',
   'ntf.dmWaiting': 'Waiting for your reply or decision',
+  'ntf.dmMessage': 'Sent you a new message',
+  'ntf.event.dmMessage': 'Proactive direct messages',
   'ntf.syncError': 'Online sync failed: {e}',
   'ipcerr.notLoggedIn': 'Not signed in to Forsion',
   'ipcerr.loginExpired': 'Your Forsion sign-in has expired. Sign in again',

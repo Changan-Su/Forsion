@@ -28,7 +28,7 @@ registerMessages({
   'amxbridge.renamedElsewhere': { zh: '这篇笔记已在别处改名为「{name}」，本次修改已保存到新名字', en: 'This note was renamed to “{name}” elsewhere; your edits were saved under the new name' },
   'amxbridge.deletedElsewhere': { zh: '这篇笔记已在别处被删除或移走，本次修改没有写到云端（请另存为新笔记）', en: "This note was deleted or moved elsewhere, so your edits weren't saved to the cloud (save them as a new note)" },
   'amxbridge.deletedElsewhereSaved': { zh: '这篇笔记已在别处被删除或移走，本端未保存的修改已另存为「{name}」', en: 'This note was deleted or moved elsewhere; your unsaved edits were saved as “{name}”' },
-  'amxbridge.connectFailed': { zh: '云端连接失败，内容可能不是最新 —— 请刷新页面', en: 'Lost the connection to the cloud, so content may be out of date — please refresh the page' },
+  'amxbridge.connectFailed': { zh: '连不上云端，内容可能不是最新 —— 网络恢复后会自动重连', en: "Can't reach the cloud, so content may be out of date — it reconnects once the network is back" },
   'amxbridge.tooLarge': { zh: '笔记过大，云端拒绝保存', en: 'The note is too large for the cloud to save' },
   'amxbridge.imageNameFailed': { zh: '无法为图片分配文件名', en: "Couldn't pick a file name for the image" },
   'amxbridge.attachmentNameFailed': { zh: '无法为附件分配文件名', en: "Couldn't pick a file name for the attachment" },

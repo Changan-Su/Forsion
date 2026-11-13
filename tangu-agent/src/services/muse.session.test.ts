@@ -11,12 +11,14 @@ const db = vi.hoisted(() => ({
   calls: [] as Array<{ sql: string; params: any[] }>,
   sessionRows: [] as any[],
   msgCount: 0,
+  dmRows: [] as any[],
   usageRows: [] as any[],
 }));
 
 vi.mock('../core/db.js', () => ({
   query: vi.fn(async (sql: string, params: any[] = []) => {
     db.calls.push({ sql, params });
+    if (/SELECT role, content, timestamp, origin FROM chat_messages/.test(sql)) return db.dmRows;
     if (/FROM chat_sessions/.test(sql)) return db.sessionRows;
     if (/COUNT\(\*\) AS n FROM chat_messages/.test(sql)) return [{ n: db.msgCount }];
     if (/FROM agent_run_events/.test(sql)) return db.usageRows;
@@ -24,13 +26,14 @@ vi.mock('../core/db.js', () => ({
   }),
   getOlderThanSql: (col: string, minutes: number) => `${col} < CURRENT_TIMESTAMP - INTERVAL '${minutes} minutes'`,
 }));
+vi.mock('./museDm.js', () => ({ museDmSessionId: async () => 'dm' }));
 vi.mock('../seams/runtime.js', () => ({
   deps: () => ({ profile: { appId: 'tangu', capabilities: { hostExec: true } }, host: { log: () => {} } }),
 }));
 
 import {
   shouldRotateMuseSession, MUSE_SESSION_MAX_MESSAGES, getMuseSessionId, ensureMuseSession,
-  tokensInWindow, buildCycleMessages, museChatSection, museAgentConfig, museLibraryDir, readLastCycleAt, writeLastCycleAt, museStateFile, SPACE_LAYOUT_NOTE,
+  museDmHint, localDate, MUSE_DELIVERY_GUIDANCE, tokensInWindow, buildCycleMessages, museChatSection, museAgentConfig, museLibraryDir, readLastCycleAt, writeLastCycleAt, museStateFile, SPACE_LAYOUT_NOTE,
 } from './muse.js';
 import { readMuseSessionId } from './museState.js';
 import { SPECIAL_AGENTS_DEFAULTS } from './specialAgentsConfig.js';
@@ -41,6 +44,7 @@ beforeEach(() => {
   db.sessionRows = [];
   db.usageRows = [];
   db.msgCount = 0;
+  db.dmRows = [];
 });
 
 describe('C1a 会话轮换', () => {
@@ -148,6 +152,7 @@ describe('C1b kickoff 拆分', () => {
       const { message } = buildCycleMessages({ ...cfg, mode }, {});
       expect(message).toContain('use list_dir, read_file, glob_files, search_files or read_log — no approval needed');
       expect(message).toContain('run_bash commands usually wait for approval');
+      expect(message).toContain('saying it needs approval does not queue anything');
     }
     expect(buildCycleMessages({ ...cfg, mode: 'auto' }, {}).message).not.toContain('run_bash commands usually');
   });
@@ -288,5 +293,33 @@ describe('C2 lastCycleAt 落盘', () => {
     await withHome(async () => {
       expect(protectedHostPaths()).toContain(museStateFile());
     });
+  });
+});
+
+
+describe('Muse delivery context', () => {
+  it('keeps the date on old messages instead of making six-day-old contact look like today', async () => {
+    const old = new Date(2026, 10, 6, 16, 0);
+    const today = new Date(2026, 10, 12, 16, 0);
+    db.dmRows = [
+      { role: 'user', content: 'new reply', timestamp: today.getTime(), origin: null },
+      { role: 'model', content: 'old notice', timestamp: old.getTime(), origin: 'proactive:card' },
+    ];
+    const hint = await museDmHint('u');
+    expect(hint).toContain(`${localDate(old)} 16:00`);
+    expect(hint).toContain(`${localDate(today)} 16:00`);
+    expect(hint.indexOf('old notice')).toBeLessThan(hint.indexOf('new reply'));
+  });
+  it('does not create history when no messages were loaded', async () => {
+    expect(await museDmHint('u')).toBe('');
+  });
+  it('gives existing personas the delivery contract before housekeeping, while preserving quiet preferences', () => {
+    const { message } = buildCycleMessages(SPECIAL_AGENTS_DEFAULTS.muse, {});
+    expect(message).toContain(MUSE_DELIVERY_GUIDANCE);
+    expect(message.indexOf(MUSE_DELIVERY_GUIDANCE)).toBeLessThan(message.indexOf('set_chat_starters'));
+    expect(MUSE_DELIVERY_GUIDANCE).toContain('do not notify the user');
+    expect(MUSE_DELIVERY_GUIDANCE).toContain('No new feedback');
+    expect(MUSE_DELIVERY_GUIDANCE).toContain('Respect explicit quiet preferences');
+    expect(MUSE_DELIVERY_GUIDANCE).toContain('Check the tool result');
   });
 });

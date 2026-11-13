@@ -2,7 +2,7 @@
 //  旧病:按框高换算 Δ% 且符号反了 —— 图片与手反向,16:9 约 1.3 倍、1:2 甩出框外、3:1 只有 0.37 倍;松手在 setState 的
 //  updater 里调父级 setY,React 报「Cannot update a component while rendering a different component」。
 //  现在:object-position Y% 的语义是「纵向余量(画出来的高 − 框高)的百分之几落在上方」,Δ% = −Δpx / 余量 × 100 → 图片跟手 1:1。
-//  R1 三种比例(1:2 竖图 / 16:9 / 3:1 宽幅):指针下移 30px → 图片内容下移 30px(±1),松手落盘的 cover_y 与拖动末值一致
+//  R1 三种比例(1:2 竖图 / 16:9 / 3:1 宽幅):指针下移 30px → 图片内容下移 min(30, 上侧余量)px(±1),松手落盘的 cover_y 与拖动末值一致
 //  R2 整个拖动 + 松手过程零 React 警告
 //  R3 比框还扁的图(10:1)没有纵向余量 → 不给「调整位置」按钮
 // 用法:npm run check:coverrepo(= node scripts/e2e-editor.cjs --check=cover-reposition;worktree 里设 HARNESS_URL)
@@ -80,7 +80,7 @@ async function drag(b, w, h) {
   await page.waitForTimeout(1300)
   const disk = await page.evaluate(() => { const ws = window.__upage.writes; const m = ws.length ? ws[ws.length - 1].text.match(/^cover_y: (.*)$/m) : null; return m ? parseFloat(m[1]) : null })
   await page.close()
-  return { ratio: `${w}x${h}`, dMove: +(t1.top - t0.top).toFixed(1), yDrag: +t1.y.toFixed(1), disk, errors: errors.length }
+  return { ratio: `${w}x${h}`, dMove: +(t1.top - t0.top).toFixed(1), expectedMove: +Math.min(30, -t0.top).toFixed(1), yDrag: +t1.y.toFixed(1), disk, errors: errors.length }
 }
 
 async function main() {
@@ -88,8 +88,8 @@ async function main() {
   try {
     const rs = []
     for (const [w, h] of [[800, 1600], [1600, 900], [3000, 1000]]) rs.push(await drag(browser, w, h))
-    record('R1 三种比例:指针下移 30px → 图片内容跟手下移 30px,落盘 cover_y = 拖动末值',
-      rs.every((r) => Math.abs(r.dMove - 30) <= 1 && r.disk != null && Math.abs(r.disk - r.yDrag) <= 0.1), JSON.stringify(rs))
+    record('R1 三种比例:指针下移 30px → 图片内容跟手下移(到图片边缘为止),落盘 cover_y = 拖动末值',
+      rs.every((r) => Math.abs(r.dMove - r.expectedMove) <= 1 && r.disk != null && Math.abs(r.disk - r.yDrag) <= 0.1), JSON.stringify(rs))
     record('R2 拖动 + 松手零 React 警告(setY 不在 updater 里)', rs.every((r) => r.errors === 0), JSON.stringify(rs.map((r) => r.errors)))
     const { page } = await openCover(browser, 3000, 300)
     const btns = await page.evaluate(() => [...document.querySelectorAll('.amx-cover-tools button')].map((x) => x.textContent))

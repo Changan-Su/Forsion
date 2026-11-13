@@ -1,3 +1,4 @@
+import type { WindowDropPoint, WindowView } from '../shared/windowDrop'
 /**
  * Preload:contextBridge 暴露最小安全 API(配置读写 + 托管后端状态)。
  * agent 调用 renderer 直连 HTTP,不经主进程。
@@ -679,18 +680,18 @@ const api = {
   /** Mini 卡片自绘缩放边:edge = n / s / e / w 的组合;start = 起手;null = 松手。位移由主进程读光标算。 */
   miniResize: (edge: string | null, start?: boolean, cursor?: { x: number; y: number; radius?: number }): void => ipcRenderer.send('window:miniResize', edge, start === true, cursor),
   cursorScreenPoint: (): { screenX: number; screenY: number } => ipcRenderer.sendSync('window:cursorScreenPoint'),
-  // 跨窗撕拽:实时坐标(节流 send)+ 最终落点路由(invoke)+ 目标窗接收订阅(on)。
-  dragUpdate: (screenX: number, screenY: number, view: { type: string; params?: Record<string, unknown> }): void =>
-    ipcRenderer.send('window:dragUpdate', { screenX, screenY, view }),
-  dropView: (screenX: number, screenY: number, view: { type: string; params?: Record<string, unknown> }): Promise<{ routed: boolean }> =>
-    ipcRenderer.invoke('window:dropView', { screenX, screenY, view }),
-  onAcceptView: (cb: (view: { type: string; params?: Record<string, unknown> }) => void): (() => void) => {
-    const listener = (_e: unknown, view: { type: string; params?: Record<string, unknown> }): void => cb(view)
+  trackViewDrag: (viewType: string | null): void => ipcRenderer.send('window:trackViewDrag', viewType),
+  dropView: (view: WindowView): Promise<{ routed: boolean }> => ipcRenderer.invoke('window:dropView', view),
+  onAcceptView: (cb: (view: WindowView, at: WindowDropPoint) => boolean): (() => void) => {
+    const listener = (_e: unknown, requestId: number, view: WindowView, at: WindowDropPoint): void => {
+      let accepted = false
+      try { accepted = cb(view, at) } finally { ipcRenderer.send('window:viewAccepted', requestId, accepted) }
+    }
     ipcRenderer.on('window:acceptView', listener)
     return () => ipcRenderer.removeListener('window:acceptView', listener)
   },
-  onDragPreview: (cb: (at: { localX: number; localY: number } | null) => void): (() => void) => {
-    const listener = (_e: unknown, at: { localX: number; localY: number } | null): void => cb(at)
+  onDragPreview: (cb: (at: WindowDropPoint | null) => void): (() => void) => {
+    const listener = (_e: unknown, at: WindowDropPoint | null): void => cb(at)
     ipcRenderer.on('window:dragPreview', listener)
     return () => ipcRenderer.removeListener('window:dragPreview', listener)
   },

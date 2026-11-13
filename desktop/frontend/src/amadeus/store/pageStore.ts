@@ -274,6 +274,9 @@ interface PageState {
   error: string | null
   /** 启动恢复 Vault 在途(云端首开 GET /vaults+/tree):侧栏树据此显示骨架屏,别把加载态当「未开 Vault」空态。 */
   vaultLoading: boolean
+  /** 上一次 restoreVault 抛错了(云端冷启动断网:GET /vaults 或 /tree 失败)、没装上库。ensureAmadeusReady 据此在
+   *  联网 / 再进笔记时重试;返回 null(本地没选过库)不算失败。 */
+  vaultRestoreFailed: boolean
   /** A pending request to move the caret into a specific block (after create/delete/nav). */
   /** anchor:源码↔可视切换带过来的「光标前文本」,块内按它找回落点(见 lib/modeCursor)。 */
   focusRequest: { id: BlockId; place: FocusPlace; goalX?: number; anchor?: string } | null
@@ -292,7 +295,8 @@ interface PageState {
   bumpLinkGraph(): void
 
   openVault(): Promise<void>
-  restoreVault(): Promise<void>
+  /** keepOpenNote:有面板已经开着笔记就不再跳到 lastPage —— 断网冷启动后的重开用(这时用户可能早就在看别的笔记了)。 */
+  restoreVault(opts?: { keepOpenNote?: boolean; attachOnly?: boolean }): Promise<void>
   /** 本地侧换到清单里的另一个库 / 新建一个库并打开;失败抛给调用方(菜单弹提示),当前库原样不动。 */
   switchLocalVault(root: string): Promise<void>
   createLocalVault(name: string): Promise<void>
@@ -304,7 +308,7 @@ interface PageState {
   /** 只刷全库页面图标(path → emoji)。⚠️ refreshPages **不碰** icons —— 这张表的真源是主进程索引,
    *  改完 frontmatter 想让侧栏 emoji 跟上就得显式调它(2026-08-31 用户实报的一半症状)。 */
   refreshIcons(): void
-  loadPage(path: string): Promise<void>
+  loadPage(path: string, signal?: AbortSignal): Promise<void>
   createPage(): Promise<void>
   /** Create a new untitled page inside `folder` (vault-relative; '' = vault root) and open it. */
   createPageInFolder(folder: string): Promise<void>
@@ -627,6 +631,7 @@ function makePageStore(opts: PageStoreOptions = {}) {
     status: 'idle',
     error: null,
     vaultLoading: false,
+    vaultRestoreFailed: false,
     focusRequest: null,
     dndActiveId: null,
     dndOverId: null,
@@ -730,19 +735,34 @@ function makePageStore(opts: PageStoreOptions = {}) {
       await mountSwitched(await amadeus.createVault(name), 'local')
     },
 
-    async restoreVault() {
+    async restoreVault(opts) {
+      // 代次:断网重开的这一趟可能挂很久(请求 30 秒超时),期间用户切到本地库 / 换了账号 / 别处又开了库 ——
+      // 迟到的结果整份作废,不进店、不 loadPage(经桥代理会落到**现在**那座桥上,本地桥读不到就建空文件,Codex 评审 P1)。
+      const gen = ++restoreGen
+      const rootAtStart = get().vaultRoot
+      const sideAtStart = get().vaultSide
+      const stale = (): boolean => gen !== restoreGen || get().vaultRoot !== rootAtStart || get().vaultSide !== sideAtStart
       set({ vaultLoading: true })
       try {
-        const info = await amadeus.restoreVault()
+        const info = await amadeus.restoreVault(opts?.attachOnly)
+        if (stale()) return
+        set({ vaultRestoreFailed: false })
         if (!info) return
         set({ vaultRoot: info.root, pages: info.pages, folders: info.folders ?? [], files: [], filesPendingFor: info.root, error: null })
         loadFiles(info.root)
         fetchIcons(info.root)
+        if (opts?.attachOnly) {
+          await get().initVaultSide()
+          return
+        }
+        if (opts?.keepOpenNote && anyScopeHasNote()) return
         const target =
           info.lastPage && info.pages.includes(info.lastPage) ? info.lastPage : info.pages[0]
         if (target) await get().loadPage(target)
       } catch (e) {
-        set({ error: String(e) })
+        if (stale()) return
+        // 库没装上才记失败;装上之后 loadPage 出错归编辑器自己的「加载失败 + 重试」。
+        set({ error: String(e), vaultRestoreFailed: get().vaultRoot == null })
       } finally {
         set({ vaultLoading: false })
       }
@@ -784,8 +804,14 @@ function makePageStore(opts: PageStoreOptions = {}) {
       fetchIcons(get().vaultRoot)
     },
 
-    async loadPage(path) {
+    async loadPage(path, signal) {
+      signal?.throwIfAborted()
       const seq = ++loadSeq // last-request-wins:双击/多 tab 竞速时,迟到的结果不得覆盖新导航
+      const checkCancelled = (): void => {
+        if (!signal?.aborted) return
+        if (seq === loadSeq && get().pendingPage === path) set({ pendingPage: null, status: get().activePage ? 'ready' : 'idle' })
+        signal.throwIfAborted()
+      }
       // 乐观反馈先行:点击即高亮/即提示,再谈网络(云端一个往返 ~300ms,反馈不能等它)。
       set({ pendingPage: path, status: 'loading', error: null })
       // 上一页的在途保存与新页加载并行(不同文件互不相干);唯「读写同一文件」
@@ -796,13 +822,16 @@ function makePageStore(opts: PageStoreOptions = {}) {
         if (path === flushingPath) await inflightSave?.catch(() => {}) // 更早发起的在途写也要等
       }
       // 移动/改名会清掉旧路径的 pendingPage。等待保存期间路径已经失效时,不要再向旧地址发读请求。
+      checkCancelled()
       if (seq !== loadSeq || get().pendingPage !== path) return
       try {
         const page = await amadeus.loadPage(path)
+        checkCancelled()
         if (seq !== loadSeq || get().pendingPage !== path) return // 新导航或路径变更已经取代本次读取
         set({ activePage: path, pendingPage: null, ...hydrate(page), status: 'ready' })
       } catch (e) {
         if (seq === loadSeq && get().pendingPage === path) set({ status: 'idle', error: String(e), pendingPage: null })
+        if (signal) throw e // navigation transactions roll their cursor back on a failed restore
       }
     },
 
@@ -1864,10 +1893,11 @@ export function setActivePageScope(id: string): void {
 // 状态分两类:**文档级**(activePage/manifest/blocks/status/focusRequest…)每个面板各一份 —— 这才是分屏;
 // **仓库级**(vault 根、页面/文件/文件夹清单、页面图标)全局只有一份真相,必须在面板间镜像:
 // 新面板的 store 生下来是空的,不同步的话它里面的 [[ 补全没有候选、双链全判成未解析(红链)。
-const VAULT_KEYS = ['vaultRoot', 'vaultSide', 'pages', 'folders', 'files', 'filesPendingFor', 'icons'] as const
+// vaultRestoreFailed 也是仓库级:restoreVault 写进当时的活动面板,ensureAmadeusReady 的重试读的是重试那刻的活动面板(11-09 台架实测两者不同)。
+const VAULT_KEYS = ['vaultRoot', 'vaultSide', 'pages', 'folders', 'files', 'filesPendingFor', 'icons', 'vaultRestoreFailed'] as const
 type VaultSlice = Pick<PageState, (typeof VAULT_KEYS)[number]>
 const vaultSlice = (s: PageState): VaultSlice =>
-  ({ vaultRoot: s.vaultRoot, vaultSide: s.vaultSide, pages: s.pages, folders: s.folders, files: s.files, filesPendingFor: s.filesPendingFor, icons: s.icons })
+  ({ vaultRoot: s.vaultRoot, vaultSide: s.vaultSide, pages: s.pages, folders: s.folders, files: s.files, filesPendingFor: s.filesPendingFor, icons: s.icons, vaultRestoreFailed: s.vaultRestoreFailed })
 
 /**
  * 换库(切本地/云端、换根)、改名、移动前:**所有面板**的待存内容先在旧根 / 旧路径落盘。
@@ -2040,6 +2070,22 @@ export function clearScopeNotePaths(path: string, kind: 'file' | 'prefix'): void
     if (!a) continue
     if (kind === 'file' ? a === path : a === path || a.startsWith(`${path}/`)) s.setState({ activeNotePath: null })
   }
+}
+
+/** restoreVault 的代次(见 restoreVault):换账号 / 换桥时调 invalidateVaultRestore,让在途的那一趟作废。 */
+let restoreGen = 0
+export function invalidateVaultRestore(): void {
+  restoreGen++
+  for (const s of stores.values()) s.setState({ vaultRestoreFailed: false })
+}
+
+/** 有没有哪个面板开着(或正在打开)一篇笔记。 */
+function anyScopeHasNote(): boolean {
+  for (const s of stores.values()) {
+    const st = s.getState()
+    if (noteOf(st) || st.pendingPage) return true
+  }
+  return false
 }
 
 /**

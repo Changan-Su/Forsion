@@ -332,7 +332,7 @@ export function label(v: string | (() => string)): string {
  *  「同一个 View 里发生页面跳转,前进后退无法识别」)。 */
 export function identitySig(params: Record<string, unknown>): string {
   return Object.keys(params)
-    .filter((k) => /path$/i.test(k) || k === 'sessionId')
+    .filter((k) => /(?:path|id|key|slug|url|uri)$/i.test(k) || k === 'route')
     .sort()
     .map((k) => `${k}=${String(params[k])}`)
     .join('&')

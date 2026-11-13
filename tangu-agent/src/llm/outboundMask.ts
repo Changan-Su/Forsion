@@ -452,13 +452,17 @@ export function withOutboundMasking(llm: LlmBrain, settings: () => MaskSettings 
       const text = createStreamRestorer(map);
       const think = createStreamRestorer(map);
       const argsSeen = new Map<string, string>();
+      const argsRaw = new Map<string, string>();
       const res = await llm.streamProviderCompletion({
         ...opts,
         payload: masked.payload,
         onToken: opts.onToken && ((d) => { const r = text.push(d); if (r) opts.onToken!(r); }),
         onReasoning: opts.onReasoning && ((d) => { const r = think.push(d); if (r) opts.onReasoning!(r); }),
         onToolCallDelta: opts.onToolCallDelta && ((info) => {
-          const full = restoreText(info.args.slice(0, holdFrom(info.args)), map, jsonEsc);
+          // 不信上游一定给累积串:没给就按 id 自己拼 argsDelta(托管帧、插件模型都可能只给片段)
+          const raw = typeof info.args === 'string' ? info.args : (argsRaw.get(info.id) ?? '') + (info.argsDelta ?? '');
+          argsRaw.set(info.id, raw);
+          const full = restoreText(raw.slice(0, holdFrom(raw)), map, jsonEsc);
           const prev = argsSeen.get(info.id) ?? '';
           argsSeen.set(info.id, full);
           opts.onToolCallDelta!({ ...info, args: full, argsLen: full.length, argsDelta: full.startsWith(prev) ? full.slice(prev.length) : full });

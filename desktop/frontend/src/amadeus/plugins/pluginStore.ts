@@ -57,6 +57,8 @@ import { isBuiltinFileType, isOverridableBuiltinType, OVERRIDABLE_BUILTIN_SUFFIX
 import { isHostPath } from '@amadeus-shared/pdfLink'
 import { claimHostMount, createBlockSurface, mountHostReact } from './blockSurface'
 import { addEditorExtension, clearEditorExtensions } from './editorExtensions'
+import { registerNoteRenderer, beginNoteRendererReload, settleNoteRendererReload, clearNoteRendererReload } from './noteRenderers'
+import { uiAgentSettings } from './agentSettings'
 import { registerPluginSeries, track, unregisterPluginAchievements, useAchievements } from '../../achievements/store'
 import { setInboxCard, type PluginInboxCard } from './inboxCards'
 import { act } from '../../activity/log'
@@ -142,6 +144,7 @@ import { CHAT_BOX_CAPABILITIES } from '../../../../shared/chatBox'
 import { windowKind } from '../../windowKind'
 import { addRibbonAction } from './ribbonAction'
 import { provideFeedbackChannel } from '../../feedbackChannel'
+import { provideInboxChannel } from '../../services/inboxChannel'
 import { compileDashboardRecipe } from '@amadeus-shared/dashboardRecipe'
 import { openWebFloatingPanel } from '../../pluginPanelSeam'
 import { connectionTarget, homeTarget } from '../../services/engine/targets'
@@ -697,6 +700,11 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
       if (!ok() || typeof submit !== 'function' || !usePluginStore.getState().plugins.find((p) => p.id === pluginId)?.locked) return false
       return provideFeedbackChannel(pluginId, submit)
     },
+    provideInboxChannel: (channel) => {
+      if (channel === null) return provideInboxChannel(pluginId, null)
+      if (!ok() || pluginId !== 'forsion-extend' || !usePluginStore.getState().plugins.find((p) => p.id === pluginId)?.locked) return false
+      return provideInboxChannel(pluginId, channel)
+    },
     // 同步总开关(2026-10-20,蓬洲云「同步」页):只给首方包(同 spotlight 认 locked)、只在有本地库远程同步的桌面
     ...(typeof window !== 'undefined' && window.remoteSync && !hostTangu()?.mobile ? { sync: syncSeam(pluginId, ok) } : {}),
     // 自己弹出来的弹窗排队(2026-10-19,Extend 公告):同一时间只露一个,插件排在宿主的协议更新 / What's new 后面;停用时 teardown 收掉
@@ -761,6 +769,7 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
       ribbonActions.forEach((off) => off())
       ribbonActions.clear()
       provideFeedbackChannel(pluginId, null)
+      provideInboxChannel(pluginId, null)
       alive = false
       surface.revoke()
       for (const u of Array.from(fileUnsubs)) {
@@ -1993,6 +2002,12 @@ export const usePluginStore = create<PluginState>((set, get) => {
     },
     registerEmbedRenderer: (def) =>
       set((s) => ({ embedRenderers: [...s.embedRenderers, { pluginId, item: def }] })),
+    registerNoteRenderer: (def) => {
+      if (!ctxAlive()) return DEAD_HANDLE
+      const off = registerNoteRenderer(pluginId, def)
+      const dispose = scope.own('noteRenderer', off, def.id)
+      return { dispose }
+    },
     registerFileCreator: (def) =>
       set((s) => ({ fileCreators: [...s.fileCreators, { pluginId, item: def }] })),
     // 只收形状对的;认不认领(工具是不是本插件引擎半身注册的)在画的时候按引擎报的名下工具现判(toolResultCards.claimToolCard)。
@@ -2072,6 +2087,11 @@ export const usePluginStore = create<PluginState>((set, get) => {
       return { update: (next) => { if (ctxAlive() && typeof next === 'string') st.textContent = next }, dispose: () => dispose() }
     },
     subscribeLocale: (cb) => scope.own('subscription', subscribeLocale(cb), 'locale'),
+    registerAgentSettings: (def) => {
+      if (!ctxAlive()) return
+      const p = get().plugins.find((p) => p.id === pluginId)
+      scope.own('subscription', uiAgentSettings.register({ id: pluginId, name: p?.name || pluginId, version: p?.version || '' }, def), 'agentSettings')
+    },
     // 同 key 重注册即覆盖:宿主自动注册的标准行(如 workFolder)插件可用自己的定义顶掉。
     registerSetting: (def) =>
       set((s) => ({ settings: [...s.settings.filter((o) => !(o.pluginId === pluginId && o.item.key === def.key)), { pluginId, item: def }] })),
@@ -3077,6 +3097,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
     const scope = liveScopes.get(id)!
     registerGuideTips(id, plugin.guide?.tips, plugin) // 上手提示(manifest guide):teardown 里撤
     const fail = (e: unknown): void => {
+      settleNoteRendererReload(id, false)
       loaded('error', e)
       console.error(`[amadeus] plugin "${id}" setup failed`, e)
       useUiStore.getState().notify(translate('pluginhost.setupFailed', { name: plugin.name }))
@@ -3094,7 +3115,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
     }
     if (r && typeof (r as PromiseLike<unknown>).then === 'function') {
       void Promise.resolve(r).then((d) => {
-        if (scope.alive()) { loaded('ok'); markSetupSettled(id) }
+        if (scope.alive()) { loaded('ok'); markSetupSettled(id); settleNoteRendererReload(id, true) }
         if (typeof d !== 'function') return
         if (scope.alive()) set((s) => ({ disposers: { ...s.disposers, [id]: d } }))
         else try { d() } catch (e) { console.error(`[amadeus] plugin "${id}" stale disposer failed`, e) }
@@ -3105,7 +3126,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
         reconcile()
       })
     }
-    else loaded('ok')
+    else { loaded('ok'); settleNoteRendererReload(id, true) }
     set((s) => ({
       activeIds: [...s.activeIds, id],
       disposers: { ...s.disposers, [id]: typeof r === 'function' ? r : undefined },
@@ -3162,6 +3183,11 @@ export const usePluginStore = create<PluginState>((set, get) => {
     const s0 = get()
     const keep = (cur: AmadeusPlugin, src: ExternalPluginSource | undefined): src is ExternalPluginSource =>
       !!src && !force && sameRuntime(cur, src) && !s0.lastSetupError[cur.id]
+    const replacing = s0.plugins.filter((p) => !p.builtin && (only === undefined || p.id === only) && !keep(p, sources.find((x) => x.id === p.id)))
+    for (const p of replacing) {
+      if (sources.some((src) => src.id === p.id)) beginNoteRendererReload(p.id)
+      else clearNoteRendererReload(p.id)
+    }
     // 没了的、换代的先连同正在跑的依赖方拆:依赖方手里攥着的是前置旧那一代,得跟着重起(对齐那轮再按依赖顺序起回来)。
     stopWithDependents(s0.plugins.filter((p) => !p.builtin && (only === undefined || p.id === only)
       && !keep(p, sources.find((x) => x.id === p.id))).map((p) => p.id))
@@ -3197,6 +3223,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
       return { plugins: next, lastSetupError }
     })
     reconcile()
+    for (const p of replacing) if (!get().activeIds.includes(p.id)) settleNoteRendererReload(p.id, false)
   }
 
   return {
@@ -3255,6 +3282,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
     },
 
     disable(id) {
+      clearNoteRendererReload(id)
       const plugin = get().plugins.find((p) => p.id === id)
       const wasOn = !!plugin && (get().activeIds.includes(id) || pluginWanted(plugin))
       if (plugin && !get().disabledIds.includes(id)) sendTelemetry('plugin_lifecycle', { ...telemetryPluginRef(plugin), action: 'disable' })
@@ -3263,7 +3291,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
       const before = get().activeIds
       reconcile() // 依赖它的先停,再停它
       // 连带停掉的依赖方也要收:它们的预设已撤,选中的图标 / 开屏不能留着。
-      for (const stopped of new Set([id, ...before])) if (!get().activeIds.includes(stopped)) clearPluginAppearance(stopped)
+      for (const stopped of new Set([id, ...before])) if (!get().activeIds.includes(stopped)) { clearPluginAppearance(stopped); clearNoteRendererReload(stopped) }
       // 用户明确禁用 → 它种下的自动化规则一并停(卸载走 applySources 那条;非 Tangu 宿主没有探针就没有规则可关)。
       if (wasOn && automationHost()) {
         void disablePluginRules(id).catch((e) => console.warn(`[amadeus] plugin "${id}" 停用自动化规则失败`, e))
@@ -3274,6 +3302,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
       // 别的窗口拨了开关:只对齐本窗的实例,不重放用户侧的自动化动作(那边已经做过)。
       // locked 包不跟 localStorage(pluginWanted),别的窗口拨了它本窗也不拆装 —— 它的开关到重启才生效。
       set({ disabledIds: readDisabled() })
+      for (const id of get().disabledIds) clearNoteRendererReload(id)
       reconcile()
     },
 

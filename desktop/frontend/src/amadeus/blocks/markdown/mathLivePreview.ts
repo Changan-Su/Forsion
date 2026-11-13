@@ -1,5 +1,5 @@
 // LaTeX 实况预览(Obsidian 式):数学公式在文档里**始终是纯文本** `$…$` / `$$…$$`(零 schema、零序列化改动,
-// .md 落盘原样),仅当光标**不在这一行**时用 ProseMirror 装饰把该行的公式渲染成 KaTeX;光标回到这一行 → 露出
+// .md 落盘原样),仅当光标**不在这一处公式**时用 ProseMirror 装饰渲染成 KaTeX;光标回到公式 → 露出
 // 源码可编辑。因此不再用 @milkdown/plugin-math 的原子节点(那套一敲完就变原子、无法再编辑)。
 //
 // 为什么用装饰而非节点:节点是原子,光标进不去、编辑=删了重打;装饰不动文档,源码就是原生文本,光标天然可编辑,
@@ -13,6 +13,9 @@ import 'katex/dist/katex.min.css'
 import { attachCopyButton, attachSourceButton, revealSource } from './sourceToggle'
 import { editorFocusKey, editorFocused } from './editorFocus'
 import { registerMessages, translate } from '../../../i18n'
+import { mathDollarInput, mathPairBackspace, mathBracketInput, mathBracketBackspace } from './mathTyping'
+import { inlinePreviewCaret, inlinePreviewEdgeClick, inlinePreviewEdgeKeyDown } from './inlinePreviewCaret'
+import { mathSourceHighlights } from './mathSourceHighlight'
 
 registerMessages({
   'mathlive.renderFailedTitle': { zh: 'LaTeX 无法渲染', en: 'LaTeX could not be rendered' },
@@ -109,7 +112,7 @@ function katexInto(el: HTMLElement, latex: string, display: boolean): void {
   }
 }
 
-/** 离行渲染(点击回到源码可编辑)。preview=true → 作「本行实况预览」:行内 $..$ 浮层在上方、块级 $$..$$ 渲染在下方,不拦鼠标(光标已在源码)。
+/** 渲染公式(点击回到源码)。preview=true → 当前公式在源码下方预览，不拦鼠标。
  *  srcFrom 是**取值函数**(widget 的 getPos):装饰 key 不带位置(P-04),上方一打字 PM 就原样复用这份 DOM,
  *  构建时捕获的数字会指向旧位置 —— 点公式 / `</>` 时现算。 */
 function renderMath(view: EditorView, latex: string, display: boolean, srcFrom: () => number | undefined, preview = false): HTMLElement {
@@ -308,23 +311,20 @@ function buildDecorations(state: EditorState): DecorationSet {
     if (s.indexOf('$') === -1) return false
     const spans = scanMath(s)
     if (!spans.length) return false
-    // 若聚焦且选区落在本块 → 算出光标所在「行」(以 '\n' 为界)的字符区间,该行的公式露源码、其余行照常渲染。
-    let lineFrom = -1
-    let lineTo = -1
-    if (focus && selFrom <= cs + node.content.size && selTo >= cs) {
-      const a = Math.max(0, Math.min(s.length, selFrom - cs))
-      const b = Math.max(0, Math.min(s.length, selTo - cs))
-      lineFrom = s.lastIndexOf('\n', a - 1) + 1
-      const nl = s.indexOf('\n', b)
-      lineTo = nl === -1 ? s.length : nl
-    }
     for (const sp of spans) {
-      const onActiveLine = lineFrom !== -1 && sp.from < lineTo && sp.to > lineFrom
-      if (onActiveLine) {
-        // 本行 → 源码保持可编辑,同时给一个实况预览:行内 $..$ 浮层在上方、块级 $$..$$ 渲染在源码下方。
-        const anchor = sp.display ? cs + sp.to : cs + sp.from
+      const editing = focus && (selFrom === selTo
+        ? selFrom >= cs + sp.from && selFrom < cs + sp.to
+        : selFrom < cs + sp.to && selTo > cs + sp.from)
+      if (editing) {
+        for (const token of mathSourceHighlights(s.slice(sp.from, sp.to), cs + sp.from, { from: selFrom, to: selTo })) {
+          decos.push(Decoration.inline(token.from, token.to, { class: token.className }))
+        }
+        // Only the formula containing the caret gets a preview. Inline previews
+        // occupy a row after the paragraph, so neither source nor adjacent text is covered.
+        if (selFrom !== selTo) continue
+        const anchor = sp.display ? cs + sp.to : cs + node.content.size
         decos.push(Decoration.widget(anchor, (v, getPos) => renderMath(v, sp.latex, sp.display, getPos, true), {
-          side: sp.display ? 1 : -1,
+          side: 1,
           ignoreSelection: true,
           key: `p:${sp.display ? 'b' : 'i'}:${sp.latex}`, // 不带位置(P-04):预览不读位置,内容相同即可复用
         }))
@@ -341,6 +341,7 @@ function buildDecorations(state: EditorState): DecorationSet {
         ignoreSelection: true,
         key: `m:${display ? 'b' : 'i'}:${latex}`,
       }))
+      if (!display && to === cs + node.content.size) decos.push(inlinePreviewCaret(from, to, `math:${latex}`))
     }
     return false // 不深入内联
   })
@@ -353,6 +354,9 @@ export function mathLivePreviewPlugin() {
       new Plugin({
         key: mathKey,
         props: {
+          handleTextInput: (view, from, to, text) => mathDollarInput(view, from, to, text) || mathBracketInput(view, from, to, text),
+          handleKeyDown: (view, event) => mathPairBackspace(view, event) || mathBracketBackspace(view, event) || inlinePreviewEdgeKeyDown(view, event),
+          handleClick: (view, _pos, event) => inlinePreviewEdgeClick(view, event),
           // 失焦 → 全部渲染(每个 Amadeus 块独立编辑器:点别的块 = 本块失焦,公式即渲染)。焦点态读 editorFocus。
           decorations: (state) => buildDecorations(state),
         },

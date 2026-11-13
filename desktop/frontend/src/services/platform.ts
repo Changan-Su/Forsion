@@ -17,3 +17,9 @@ export function currentPlatform(): ClientPlatform {
     : window.tangu?.cloudWeb ? 'web'
     : 'desktop'
 }
+
+/** Web/mobile and a public Unit entry have no native inbox; Extend supplies the
+ * visitor account channel. Paired device projections retain their engine inbox. */
+export function usesClientInbox(): boolean {
+  return currentPlatform() === 'mobile' || (currentPlatform() === 'web' && (!window.tangu?.unitPage || !!window.tangu?.unitPublicEntry))
+}

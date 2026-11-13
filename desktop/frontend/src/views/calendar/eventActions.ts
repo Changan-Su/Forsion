@@ -4,7 +4,7 @@ import { useDbStore } from '../../amadeus/store/dbStore'
 import { isStamped } from '../../amadeus/blocks/database/propertyTypes'
 import { effectiveDue, patchMark, useMdMarkStore } from '../../amadeus/store/mdMarkStore'
 import { resolveMark, type MdMark } from '@amadeus-shared/mdMarks'
-import { notifyApp } from '../../stores/notificationStore'
+import { notifyApp, useNotifications } from '../../stores/notificationStore'
 import { registerMessages, translate } from '../../i18n'
 
 registerMessages({
@@ -17,7 +17,7 @@ registerMessages({
   'calevtact.conflict': { zh: '事件已发生变化，未覆盖后续编辑。', en: 'The event changed. Later edits were kept.' },
 })
 
-interface Edit { vault: string; undo: () => boolean; redo?: () => boolean }
+interface Edit { vault: string; undo: () => boolean; redo?: () => boolean; feedback: boolean }
 const past: Edit[] = []
 const future: Edit[] = []
 export const canUndoCalendarEdit = (): boolean => past.at(-1)?.vault === vaultKey()
@@ -31,7 +31,7 @@ export function undoLastCalendarEdit(): boolean {
   if (!edit.undo()) { conflict(); return false }
   if (edit.redo) future.push(edit)
   // 走查续七 7.13:撤销成功(⌘Z、提示上的按钮、插件 ctx.events.undo 都走这里)→ 同一条提示原地换成「已撤销」,去掉按钮,1.2 秒后淡出
-  settled(translate('calevtact.undone'))
+  if (edit.feedback) settled(translate('calevtact.undone'))
   return true
 }
 export function redoLastCalendarEdit(): boolean {
@@ -40,13 +40,14 @@ export function redoLastCalendarEdit(): boolean {
   future.pop()
   if (!edit.redo?.()) { conflict(); return false }
   past.push(edit)
-  settled(translate('calevtact.redone')) // 不然「已撤销」还挂着,和刚重做回来的状态对不上
+  if (edit.feedback) settled(translate('calevtact.redone')) // 不然「已撤销」还挂着,和刚重做回来的状态对不上
   return true
 }
 const UNDO_KEY = 'calendar-undo'
-const settled = (text: string): void => { notifyApp({ level: 'info', text, dedupeKey: UNDO_KEY, action: undefined, durationMs: 1200, settle: true }) }
+let undoNotice: string | null = null
+const settled = (text: string): void => { undoNotice = null; notifyApp({ level: 'info', text, dedupeKey: UNDO_KEY, action: undefined, durationMs: 1200, settle: true }) }
 // 冲突同样换掉那条「撤销」提示(不再留一个点了也没用的按钮)
-const conflict = (): void => { notifyApp({ level: 'warning', text: translate('calevtact.conflict'), dedupeKey: UNDO_KEY, action: undefined, settle: true }) }
+const conflict = (): void => { undoNotice = null; notifyApp({ level: 'warning', text: translate('calevtact.conflict'), dedupeKey: UNDO_KEY, action: undefined, settle: true }) }
 export function calendarScope(): string { return vaultKey() }
 export function currentCalendarRow(db: AggDb, id: string): AggRow | undefined {
   if (db.isNoteView) return getAggDb(db.path)?.rows.find((r) => r.rowId === id)
@@ -68,17 +69,24 @@ const vaultKey = (): string => { const s = usePageStore.getState(); return `${s.
 
 /** 撤销只生效一次(⌘Z 与通知条按钮共用),且只在记下它的那个库里生效:
  *  库路径是相对的,换了库再撤会把 A 库的行写进 B 库(Codex 评审 P1)。 */
-export function offerCalendarUndo(text: string, run: () => boolean, redo?: () => boolean): void {
+export function offerCalendarUndo(text: string, run: () => boolean, redo?: () => boolean, feedback = true): void {
   const vault = vaultKey()
-  const edit: Edit = { vault, undo: run, redo }
+  const edit: Edit = { vault, undo: run, redo, feedback }
   past.push(edit)
   if (past.length > 20) past.shift()
   future.length = 0
+  // Moving an event already updates the card/grid. Keep history without repeated success toasts.
+  if (!feedback) {
+    // Its action only applies to the latest history entry; don't leave an older deletion's button inert.
+    if (undoNotice) useNotifications.getState().dismiss(undoNotice)
+    undoNotice = null
+    return
+  }
   const once = (): boolean => {
     if (past.at(-1) !== edit || vaultKey() !== vault) return false
     return undoLastCalendarEdit()
   }
-  notifyApp({
+  undoNotice = notifyApp({
     text,
     level: 'info',
     dedupeKey: UNDO_KEY,
@@ -122,7 +130,7 @@ export function rescheduleCalendarRow(db: AggDb, row: AggRow, colId: string, bef
     setAggCell(db, row.rowId, colId, next || undefined, { value: expected || undefined })
     return true
   }
-  offerCalendarUndo(translate('calevtact.moved', { title: title || translate('calevtact.untitled') }), () => change(after, before), () => change(before, after))
+  offerCalendarUndo(translate('calevtact.moved', { title: title || translate('calevtact.untitled') }), () => change(after, before), () => change(before, after), false)
 }
 
 /** 笔记正文任务改日期(待办视图拖到分组头):改那一行的 `@日期`,撤销 = 改回原值。
@@ -135,5 +143,5 @@ export function rescheduleNoteTask(mark: MdMark, before: string, after: string, 
     const hit = resolveMark(useMdMarkStore.getState().marks, mark)
     if (hit && effectiveDue(hit) === after) return patchMark(hit, { due: before })
     return false
-  })
+  }, undefined, false)
 }

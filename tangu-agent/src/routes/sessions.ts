@@ -1,3 +1,4 @@
+import { acknowledgeSessionRead } from '../services/sessionRead.js';
 /**
  * 会话 CRUD + 历史消息 + 会话级 agent 配置(桌面/多端客户端用;handler 自带 authMiddleware)。
  *   GET    /agent/sessions?archived=&limit=        列出本人本 app 的会话(updated_at 降序)
@@ -28,7 +29,7 @@ import { resolveChildModel, startChildSession } from '../services/childSessions.
 import { museDmSessionId } from '../services/museDm.js';
 import { getAgent, MUSE_AGENT_SLUG } from '../agents/agentRegistry.js';
 import { branchSession } from '../services/sessionBranch.js';
-import { listCheckpoints, restoreCodeSince, listChanges, type ChangeWindow } from '../services/checkpoints.js';
+import { listCheckpoints, restoreCodeSince, restoreCodeCheckpoint, CheckpointNotFoundError, listChanges, type ChangeWindow } from '../services/checkpoints.js';
 import { listGitChangesMulti } from '../services/gitChanges.js';
 import { extraRootsOf, listProjectRepos, repoCwd } from '../services/gitRepos.js';
 import { canonicalProjectPath } from '../services/projectContext.js';
@@ -180,11 +181,20 @@ router.post('/agent/sessions/:id/read', authMiddleware, async (req: AuthRequest,
   try {
     const s = await getOwnSession(req.params.id, req.user!.userId);
     if (!s) return res.status(404).json({ detail: 'Session not found' });
-    await query(
-      `UPDATE chat_sessions SET last_read_at = ?, awaiting_user = CASE WHEN report_run_id IS NULL THEN FALSE ELSE awaiting_user END WHERE id = ?`,
-      [Date.now(), s.id]);
-    const [r] = await query<any[]>(`SELECT awaiting_user FROM chat_sessions WHERE id = ?`, [s.id]);
-    res.json({ ok: true, awaiting: !!r?.awaiting_user });
+    // New clients identify the message actually rendered. Keep legacy clients compatible,
+    // but never let a delayed bounded receipt consume a later proactive arrival.
+    let through = Date.now();
+    let proactive = true; // Legacy unbounded receipts keep their existing behavior.
+    if (req.body?.messageId !== undefined) {
+      if (typeof req.body.messageId !== 'string' || !req.body.messageId) return res.status(400).json({ detail: 'Invalid messageId' });
+      const [message] = await query<any[]>(`SELECT timestamp, origin FROM chat_messages WHERE id = ? AND session_id = ?`, [req.body.messageId, s.id]);
+      if (!message) return res.status(404).json({ detail: 'Message not found' });
+      through = Number(message.timestamp);
+      proactive = typeof message.origin === 'string' && message.origin.startsWith('proactive');
+      if (!Number.isSafeInteger(through) || through <= 0) return res.status(400).json({ detail: 'Invalid message timestamp' });
+    }
+    const result = await acknowledgeSessionRead(s.id, through, proactive);
+    res.json({ ok: true, ...result });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'mark read failed' });
   }
@@ -999,8 +1009,19 @@ router.post('/agent/sessions/:id/checkpoints/restore', authMiddleware, async (re
   try {
     const s = await getOwnSession(req.params.id, req.user!.userId);
     if (!s) return res.status(404).json({ detail: 'Session not found' });
-    const at = Number(req.body?.at);
-    if (!Number.isFinite(at) || at <= 0) return res.status(400).json({ detail: 'at (ms timestamp) is required' });
+    // 消息回退用墙钟 at;检查点撤销用明确身份,不能把排序序号冒充时间戳。
+    const rawAt = req.body?.at;
+    const checkpointId = req.body?.checkpointId;
+    const hasAt = rawAt !== undefined;
+    const hasCheckpointId = checkpointId !== undefined;
+    if (hasAt === hasCheckpointId) return res.status(400).json({ detail: 'exactly one of at or checkpointId is required' });
+    const at = Number(rawAt);
+    if (hasAt && ((typeof rawAt !== 'number' && typeof rawAt !== 'string') || !Number.isFinite(at) || at <= 0)) {
+      return res.status(400).json({ detail: 'at must be a positive ms timestamp' });
+    }
+    if (hasCheckpointId && (typeof checkpointId !== 'string' || !checkpointId.length || checkpointId.length > 128 || checkpointId.trim() !== checkpointId)) {
+      return res.status(400).json({ detail: 'checkpointId must be a non-empty ID of at most 128 characters' });
+    }
     // 单文件撤销:paths 只恢复这些路径。只有「没传」才是全部 —— null / [] 一律 400,
     // 免得前端一个空值把整段代码都回退了。
     const rawPaths = req.body?.paths;
@@ -1019,8 +1040,11 @@ router.post('/agent/sessions/:id/checkpoints/restore', authMiddleware, async (re
     const opts: { paths?: string[]; keepEdited?: boolean } = {};
     if (rawPaths !== undefined) opts.paths = rawPaths as string[];
     if (keepEdited !== undefined) opts.keepEdited = keepEdited;
-    res.json(await restoreCodeSince(req.params.id, at, opts));
+    res.json(hasCheckpointId
+      ? await restoreCodeCheckpoint(req.params.id, checkpointId, opts)
+      : await restoreCodeSince(req.params.id, at, opts));
   } catch (e: any) {
+    if (e instanceof CheckpointNotFoundError) return res.status(404).json({ detail: 'Checkpoint not found' });
     res.status(500).json({ detail: e?.message || 'restore checkpoint failed' });
   }
 });

@@ -27,6 +27,23 @@ const check = (name, ok, detail) => { ok ? pass++ : fail++; console.log(`${ok ? 
     const held = await st()
     check('① 用户往上滚三屏停得住(没被拽回底部)', held.gap > 1500, held)
 
+    // A Space switch destroys/rebuilds the View, unlike a tab's DOM detach.
+    const readingAnchor = () => win.evaluate(() => {
+      const root = document.querySelector('.t2-stream'), rect = root.getBoundingClientRect()
+      const node = [...root.querySelectorAll('[id^="tocmsg-"]')].find(el => el.getBoundingClientRect().bottom > rect.top + 1)
+      return { id: node?.id, offset: node ? Math.round(node.getBoundingClientRect().top - rect.top) : null }
+    })
+    const beforeSpace = await readingAnchor()
+    for (let round = 0; round < 2; round++) {
+      const away = await U.enterSpace(win, 'home', { real: true })
+      const back = await U.enterSpace(win, 'tangu', { real: true })
+      await sleep(1800)
+      const afterSpace = await readingAnchor()
+      check(`Space 往返 ${round + 1} 保留原消息和偏移`, away && back && afterSpace.id === beforeSpace.id && Math.abs(afterSpace.offset - beforeSpace.offset) <= 4, { beforeSpace, afterSpace, ...(await st()) })
+    }
+    if (process.env.CHAT_READING_SHOT) await win.screenshot({ path: process.env.CHAT_READING_SHOT })
+
+
     await win.locator('.lcl-ftoc').first().hover(); await sleep(400)
     const items = win.locator('.lcl-ftoc-item')
     const pick = items.nth(Math.floor((await items.count()) / 3))
@@ -56,6 +73,19 @@ const check = (name, ok, detail) => { ok ? pass++ : fail++; console.log(`${ok ? 
     await win.evaluate(() => { const s = document.querySelector('.t2-stream'); s.scrollTop = s.scrollHeight }); await sleep(800)
     await win.evaluate(() => { const s = document.querySelector('.t2-stream'); s.scrollTop = s.scrollHeight }); await sleep(800)
     check('③ 回到底部后还在底部', (await st()).gap < 40, await st())
+
+    // openSession publishes activeId before opening its new tab: that synchronous
+    // interval must not put the destination session into the original View's history.
+    const navState = () => win.evaluate(() => [...document.querySelectorAll('[data-view-nav]')]
+      .filter(el => el.getBoundingClientRect().width > 0)
+      .map(el => ({ id: el.dataset.viewNav, buttons: [...el.querySelectorAll('button')].map(b => [b.dataset.press, b.disabled, b.title]) })))
+    const originalNav = await navState()
+    await win.locator('.t2s-srow, .t2o-row').filter({ hasText: 'Probe session two' }).first().click({ modifiers: [process.platform === 'darwin' ? 'Meta' : 'Control'] })
+    await sleep(800)
+    await win.locator('.dv-tab').filter({ hasText: 'Probe session one' }).first().click()
+    await sleep(800)
+    const returnedNav = await navState()
+    check('另开会话标签不污染原 View 的导航历史', JSON.stringify(originalNav) === JSON.stringify(returnedNav), { originalNav, returnedNav })
   } finally { await close() }
   console.log(`\n${pass}/${pass + fail} passed`)
   process.exit(fail ? 1 : 0)

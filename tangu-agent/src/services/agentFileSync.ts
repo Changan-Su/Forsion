@@ -11,10 +11,10 @@ import { getAgent, listAgents, parseAgentConfig, trashAgent, resolveMemorySlug, 
 import { diff3Merge } from 'node-diff3';
 import { splitLogBlocks, mergeBlocks, mergeLogHeaders } from './memorySync.js';
 import { migrateScheduleFile } from './agentSchedule.js';
-import { agentSlugLocalOnly, logText, mergeAgentSyncContent, serializeTombstones, type AgentMergeDeps } from '../contracts/agentSyncRules.js';
+import { agentSlugLocalOnly, isReadableSettingsDb, isSettingsContentPath, logText, mergeAgentSyncContent, mergeSettingsDb, neverConflictCopy, serializeTombstones, SETTINGS_MAX_BYTES, type AgentMergeDeps } from '../contracts/agentSyncRules.js';
 import { AgentFileConflictError, type AgentFilesBrain, type AgentFileMeta, type AgentFileContent } from '../seams/cloudBrain.js';
 import { agentSyncDefault, agentSyncPermission, agentSyncScope, captureAgentSyncDefault, captureAgentSyncPermission, agentSyncOperationSignal, agentSyncConsentSignal, agentSyncDefaultSignal, pendingAgentRemovals, clearAgentRemoval } from './cloudSyncAccount.js';
-import { agentSyncDir, assertSyncPath, atomicSyncWrite, conflictCopyName, isConflictCopyPath, isWidgetDataPath, readSyncBytes, validSyncPath, validSyncSlug } from './agentSyncPaths.js';
+import { agentSyncDir, assertSyncPath, atomicSyncWrite, conflictCopyName, isConflictCopyPath, isSettingsPath, isWidgetDataPath, readSyncBytes, validSyncPath, validSyncSlug } from './agentSyncPaths.js';
 import { ledger } from './telemetryLedger.js';
 import { createLocalMemoryStore } from '../adapters/standalone/localMemoryBrain.js';
 import { createMemoryRepository, withMemoryDirectoryLock, type MemoryTombstone } from './memoryRepository.js';
@@ -62,6 +62,12 @@ function humanWidgetFiles(root: string, dir: string): string[] {
   const base = assertSyncPath(root, join(dir, 'WidgetData'));
   if (!existsSync(base)) return [];
   return readdirSync(base, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => `WidgetData/${e.name}/data.db`).filter((p) => isWidgetDataPath(p) && existsSync(join(dir, p)));
+}
+/** human/Settings/<name>.db(随账号走的设置文件)。软链、名字不合规矩的不算。 */
+function humanSettingsFiles(root: string, dir: string): string[] {
+  const base = assertSyncPath(root, join(dir, 'Settings'));
+  if (!existsSync(base)) return [];
+  return readdirSync(base, { withFileTypes: true }).filter((e) => e.isFile()).map((e) => `Settings/${e.name}`).filter(isSettingsPath);
 }
 interface ShadowVer { seq: number; hash: string }
 interface RemoteVer { seq: number; hash: string | null }
@@ -141,6 +147,7 @@ async function syncAccount(cloud: AgentFilesBrain, userId: string, scope: string
   const humanFolder = manifest.paths?.includes('human-folder') === true;
   const agentCalendar = manifest.paths?.includes('agent-calendar') === true;
   const widgetData = manifest.paths?.includes('widget-data') === true;
+  const settings = manifest.paths?.includes('settings') === true;
   // 老账号存档(11-06,方案页 Agent设备隔离方案 round3「老账号:B」):云端的 Agent 数据进了存档、在线那份清空了。
   // 旧同步从此不碰任何 Agent —— 不删云端、不发现、不推不拉(云端没有 ≠ 别处删了,本机一个文件都不动);
   // 只同步 human/。想同步哪个 Agent,到同步页逐个开(新同步)。
@@ -227,7 +234,7 @@ async function syncAccount(cloud: AgentFilesBrain, userId: string, scope: string
     const mirror = async (): Promise<void> => { try { result.conflicts += (await mirrorLegacyHuman({ legacy })).conflicts; } catch (e) { fail(result, e); } };
     await mirror();
     if (humanFolder) {
-      try { await syncHumanSlot(cloud, userId, scope, bySlug.get(HUMAN_SLOT) ?? [], widgetData, signal, check, result); } catch (e) { fail(result, e); }
+      try { await syncHumanSlot(cloud, userId, scope, bySlug.get(HUMAN_SLOT) ?? [], { widgetData, settings }, signal, check, result); } catch (e) { fail(result, e); }
       await mirror();
     }
   }
@@ -239,6 +246,15 @@ const mib = (n: number): string => (n / (1024 * 1024)).toFixed(1).replace(/\.0$/
 function verifyBytes(file: { hash?: string | null }, bytes: Buffer, where: string, from: 'cloud' | 'local' | 'merged' = 'cloud'): void {
   if (bytes.length > MAX_FILE_BYTES) throw new Error(`${from} file exceeds sync limit (${mib(bytes.length)} MB > ${mib(MAX_FILE_BYTES)} MB): ${JSON.stringify(where)}`);
   if (file.hash != null && sha256(bytes) !== file.hash) throw new Error(`cloud file hash mismatch: ${JSON.stringify(where)}`);
+}
+/** 设置文件另有 256 KB 的上限(服务端在同步通道上也按它拒):这台要推上去的那份(本机的 / 合并出来的)超了,就在这里拦下 ——
+ *  这一份不推、也不落合并结果,两边原样留着;不算这次同步失败(每轮都会遇到它,报错等于每轮刷一遍),只在同一份内容第一次遇到时记一行日志。 */
+const oversizeLogged = new Set<string>();
+function settingsTooLarge(where: string, bytes: Buffer, from: 'local' | 'merged'): boolean {
+  if (!isSettingsContentPath(where) || bytes.length <= SETTINGS_MAX_BYTES) return false;
+  const key = `${where}\0${sha256(bytes)}`;
+  if (!oversizeLogged.has(key)) { oversizeLogged.add(key); console.warn(`[agent sync] ${from} settings file exceeds its limit (${Math.ceil(bytes.length / 1024)} KB > ${SETTINGS_MAX_BYTES / 1024} KB), kept on this device only: ${JSON.stringify(where)}`); }
+  return true;
 }
 async function syncBucket(cloud: AgentFilesBrain, uid: string, slug: string, scope: string, cats: Set<Category>, manifest: AgentFileMeta[], families: { human: boolean; agentCalendar: boolean; widgetData: boolean }, signal: AbortSignal, guard: Guard, result: AgentFileSyncResult): Promise<void> {
   const dir = agentSyncDir(slug);
@@ -331,7 +347,7 @@ const MERGE_DEPS: AgentMergeDeps = { diff3: diff3Merge, portrait: mergePortrait 
 const contentPathOf = (slug: string, p: string): string => slug === HUMAN_SLOT ? `human/${p}` : slug === '__user__' ? p : `agents/${slug}/${p}`;
 export { mergeFactLines } from '../contracts/agentSyncRules.js';
 
-async function syncHumanSlot(cloud: AgentFilesBrain, uid: string, scope: string, manifest: AgentFileMeta[], widgetData: boolean, signal: AbortSignal, guard: Guard, result: AgentFileSyncResult): Promise<void> {
+async function syncHumanSlot(cloud: AgentFilesBrain, uid: string, scope: string, manifest: AgentFileMeta[], families: { widgetData: boolean; settings: boolean }, signal: AbortSignal, guard: Guard, result: AgentFileSyncResult): Promise<void> {
   const home = tanguHome(); const dir = humanDir();
   assertSyncPath(home, dir); mkdirSync(dir, { recursive: true }); assertSyncPath(home, dir);
   const prev = readPrev(dir, scope, home);
@@ -343,8 +359,11 @@ async function syncHumanSlot(cloud: AgentFilesBrain, uid: string, scope: string,
     if (next !== saved) { withMemoryDirectoryLock(dir, () => atomicSyncWrite(home, join(dir, `.cloudsync-${scope}.json`), next, guard)); saved = next; }
   };
   // 小组件的记录:用户级、项目卡都在这(服务端声明了 widget-data 才同步)
-  const widgetFiles = widgetData ? [...new Set([...humanWidgetFiles(home, dir), ...remote.keys(), ...Object.keys(prev.files)])].filter(isWidgetDataPath) : [];
-  for (const p of [...HUMAN_SYNC_FILES, ...widgetFiles]) {
+  const widgetFiles = families.widgetData ? [...new Set([...humanWidgetFiles(home, dir), ...remote.keys(), ...Object.keys(prev.files)])].filter(isWidgetDataPath) : [];
+  // 随账号走的设置文件(服务端声明了 settings 才同步):老服务端不认这个族 = 当没有云端那份,不推不拉不记影子,本机那份原样留着,
+  // 等它升级后按第一次见面合。名字不合规矩的(云端清单里的也一样)不碰。
+  const settingsFiles = families.settings ? [...new Set([...humanSettingsFiles(home, dir), ...remote.keys(), ...Object.keys(prev.files)])].filter(isSettingsPath) : [];
+  for (const p of [...HUMAN_SYNC_FILES, ...widgetFiles, ...settingsFiles]) {
     guard();
     try { await reconcileFile(cloud, uid, HUMAN_SLOT, dir, p, remote.get(p), prev, signal, guard, result, home, { plain: true, merge: true, text: true, persist }); }
     catch (e) { fail(result, e); }
@@ -407,8 +426,10 @@ async function reconcileFile(cloud: AgentFilesBrain, uid: string, slug: string, 
     if ((current === null ? null : sha256(current)) !== hash) throw new Error(`local file changed during sync: ${p}`);
   };
   let archivedAs = '';
+  // 设置文件(human/Settings/)不出冲突副本:合并规则恒有确定的赢家;不经过合并的路(老服务端没有版本号)也一样,取云端那份
+  const noCopy = neverConflictCopy(contentPathOf(slug, p));
   const archive = (): void => {
-    if (!initial) return;
+    if (!initial || noCopy) return;
     const now = new Date();
     let name = conflictCopyName(p, now);
     for (let n = 2; existsSync(join(dir, name)); n++) name = conflictCopyName(p, now, n);
@@ -447,11 +468,43 @@ async function reconcileFile(cloud: AgentFilesBrain, uid: string, slug: string, 
       console.log(`[agent sync] ${initial ? '已从云端拉取覆盖' : '已从云端拉取新文件'} ${slug}/${p}(seq ${file.seq ?? '-'}${archivedAs ? `,本地版本已存为 ${archivedAs}` : ''}${delta})`);
     }
   };
+  // 设置文件的快进闸:读不懂的那份(断电后零字节、写了一半)不是「空」,不能照快进去盖读得懂的那份。
+  // - 这台读不懂、正要推:云端没有就不推(留着,接口对它回 422);云端有就交给合并规则(读得懂的那份赢 = 云端修好这台)
+  // - 正要拉、云端那份读不懂而这台读得懂:同样交给合并规则(这台那份留着,推上去修好云端)
+  // 设置文件、云端那一行没有版本信息(旧元数据:没有 seq / hash,或取到的那份没有 seq):没法做带版本的上传。
+  // 形状校验和合并照做(不看 modern),但结果只落本机、不往上推,也不记基线(拿不准),等下一轮;没有基线就按第一次见面合(并集、同一行云端赢)。
+  // 云端读不懂 = 这台原样留着(这台没有就什么都不写);合出来和这台一样 = 不写。
+  const legacySettings = async (fetched: { file: AgentFileContent; bytes: Buffer }): Promise<void> => {
+    const theirs = fetched.bytes.toString('utf8');
+    if (!isReadableSettingsDb(theirs)) { result.skipped++; return; }
+    const out = initial ? Buffer.from(mergeSettingsDb(initial.toString('utf8'), null, theirs).content) : fetched.bytes;
+    if (initial?.equals(out) || settingsTooLarge(contentPathOf(slug, p), out, 'merged')) { result.skipped++; return; }
+    // 本机要换成这份了:原来的影子(基线)不再是这台的祖先,先作废并落盘再写 —— 留着它,等服务端有了版本号,
+    // 会把这次没从云端带来的行当成「这台删了」推上去(Codex 返修复核 P1)。不装新的基线:按第一次见面合
+    if (prev.files[p]) { delete prev.files[p]; opts.persist?.(); }
+    withMemoryDirectoryLock(dir, () => { assertUnchanged(); atomicSyncWrite(root, abs, out, guard); });
+    result.pulled++;
+  };
+  if (noCopy && live && !modern) return legacySettings(await fetchRemote());
+  let prefetched: { file: AgentFileContent; bytes: Buffer } | undefined;
+  if (noCopy && initial) {
+    const readable = (b: Buffer): boolean => isReadableSettingsDb(b.toString('utf8'));
+    if (decision.kind === 'pushCreate' && !readable(initial)) { result.skipped++; return; }
+    if (decision.kind === 'push' && !readable(initial)) decision = { kind: 'conflict' };
+    else if (decision.kind === 'pull' && modern) {
+      prefetched = await fetchRemote();
+      if (typeof prefetched.file.seq !== 'number') return legacySettings(prefetched);
+      if (!readable(prefetched.bytes) && readable(initial)) decision = { kind: 'conflict' };
+    }
+  }
   if (decision.kind === 'conflict' && opts.merge && modern && initial) {
-    const fetched = await fetchRemote();
-    const merged = fetched.file.isBinary ? null : mergeAgentSyncContent(contentPathOf(slug, p), initial.toString('utf8'), base, fetched.bytes.toString('utf8'), MERGE_DEPS);
+    const fetched = prefetched ?? await fetchRemote();
+    if (noCopy && typeof fetched.file.seq !== 'number') return legacySettings(fetched);
+    // 设置文件:云端那行就算被标成二进制,字节照样按文本合(读不懂时规则里有定论),不落到「整份取云端」那条路
+    const merged = fetched.file.isBinary && !noCopy ? null : mergeAgentSyncContent(contentPathOf(slug, p), initial.toString('utf8'), base, fetched.bytes.toString('utf8'), MERGE_DEPS);
     if (!merged) { await pull(true, fetched); return; }
     let out = Buffer.from(merged.content);
+    if (!out.equals(fetched.bytes) && settingsTooLarge(contentPathOf(slug, p), out, 'merged')) { result.skipped++; return; } // 并集超了上限:两边原样留着
     verifyBytes({}, out, contentPathOf(slug, p), 'merged');
     const keepOld = unsure(); // 落了合并结果、影子还没落盘就崩:下次不拿旧原文合
     try {
@@ -479,7 +532,7 @@ async function reconcileFile(cloud: AgentFilesBrain, uid: string, slug: string, 
     }
     return;
   }
-  if (decision.kind === 'pull' || decision.kind === 'conflict') { await pull(decision.kind === 'conflict'); return; }
+  if (decision.kind === 'pull' || decision.kind === 'conflict') { await pull(decision.kind === 'conflict', prefetched); return; }
   if (decision.kind === 'deleteLocal') {
     // Memory deletion is a revisioned commit; existing tombstones continue to suppress old facts.
     withMemoryDirectoryLock(dir, () => { assertUnchanged(); if (memory) memory.commit({ expectedVersion: initialMemory!.version, content: '', source: { kind: 'sync' }, signal }); else if (existsSync(abs)) unlinkSync(abs); });
@@ -497,6 +550,7 @@ async function reconcileFile(cloud: AgentFilesBrain, uid: string, slug: string, 
     result.skipped++; return;
   }
   if (!initial) return;
+  if (settingsTooLarge(contentPathOf(slug, p), initial, 'local')) { result.skipped++; return; }
   verifyBytes({}, initial, contentPathOf(slug, p), 'local'); guard(); assertUnchanged();
   const isBinary = !opts.text && !TEXT_EXTS.has(extname(p).toLowerCase());
   const keep = unsure(initial);

@@ -184,6 +184,23 @@ describe('native package contribution boundary', () => {
     state.profile.spaces = spaces
   })
 
+  it('enables ordinary Web inbox without a local engine, while keeping Unit projections isolated', () => {
+    state.profile.nativeFeatures = undefined
+    state.profile.spaces = [...state.profile.spaces, 'inbox']
+    vi.stubGlobal('window', { tangu: { cloudWeb: true } })
+    expect(inboxAvailable()).toBe(true)
+    expect(museAvailable()).toBe(false)
+    vi.stubGlobal('window', { tangu: { cloudWeb: true, unitPage: true } })
+    expect(inboxAvailable()).toBe(false)
+    vi.stubGlobal('window', { tangu: { cloudWeb: true, unitPage: true, unitPublicEntry: true } })
+    expect(inboxAvailable()).toBe(true)
+    state.profile.spaces = state.profile.spaces.filter((s) => s !== 'inbox')
+    vi.stubGlobal('window', { tangu: { cloudWeb: true } })
+    expect(inboxAvailable()).toBe(false)
+    state.profile.nativeFeatures = []
+    expect(inboxAvailable()).toBe(false)
+  })
+
   it('provides stable Space identities and never lets legacy flags bypass an explicit empty list', () => {
     expect(nativeFeatureSpaceIds(['amadeus', 'calendar', 'amadeus'])).toEqual(['amadeus', 'calendar'])
     expect(isNativeFeatureId('server-admin')).toBe(false)

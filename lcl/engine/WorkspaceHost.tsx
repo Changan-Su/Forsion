@@ -14,7 +14,7 @@ import {
   type DockviewTheme,
 } from 'dockview-react'
 import { SpaceFloatLayer } from './SpaceFloatLayer'
-import { X, Plus, PanelLeft, PanelRight, PanelBottom, RotateCcwSquare, ArrowLeft, ArrowRight, AppWindow, PictureInPicture2, Columns2, Rows2, ListX, ArrowRightToLine, CopyX, SquareArrowOutUpRight } from 'lucide-react'
+import { X, Plus, PanelLeft, PanelRight, PanelBottom, RotateCcwSquare, AppWindow, PictureInPicture2, Columns2, Rows2, ListX, ArrowRightToLine, CopyX, SquareArrowOutUpRight } from 'lucide-react'
 import { createPortal } from 'react-dom'
 import 'dockview-react/dist/styles/dockview.css'
 import type { Leaf, ViewDefinition } from './types'
@@ -40,6 +40,7 @@ import { cycleFocusedGroupTab, tabCycleDelta } from './tabCycle'
 import { besideTarget, openMainBesideThisTask } from './openBeside'
 import { keepScroll } from './keepScroll'
 import { createViewLayout } from './viewLayout'
+import { ViewNavigation } from './viewNavigation'
 
 /** tooltip「名称(快捷键)」:快捷键取该命令**当前生效**的键、按平台格式化(改了键就跟着变,解绑就只剩名称)。 */
 function withHotkey(t: (k: string, v?: Record<string, unknown>) => string, text: string, cmdId: string): string {
@@ -312,10 +313,9 @@ function isFirstMainGroup(api: DockviewApi, group: IDockviewHeaderActionsProps['
   return rects[0]?.g === group
 }
 
-/** 主区标签栏左侧前缀:前进后退 + 左栏折叠钮(在左panel右缘)。主区常驻 →
- *  折叠左栏后此钮仍在原处(左panel右缘=主区左缘),可重开。分屏也只有最左上那组有一份。 */
+/** 每个主区组的标签栏都有导航,目标是该组当前 View;左栏折叠钮仅在最左上组。 */
 function makePrefixActions(): React.FC<IDockviewHeaderActionsProps> {
-  return function PrefixActions({ panels, containerApi, group }) {
+  return function PrefixActions({ panels, containerApi, group, activePanel }) {
     // 左栏收起后,主区组成为最左 → 折叠钮要躲开 mac 交通灯(加 --edge,见 engine.css)。
     const leftCollapsed = !useWorkspace((s) => s.leftVisible)
     const { t } = useEngineI18n()
@@ -323,25 +323,11 @@ function makePrefixActions(): React.FC<IDockviewHeaderActionsProps> {
     // 组被拖到另一边、关掉一组时 tab 集合可能不变,mainTabs 不刷 → 单独跟布局变化重算「谁是最左上」。
     const [, relayout] = useReducer((n: number) => n + 1, 0)
     useEffect(() => { const d = containerApi.onDidLayoutChange(relayout); return () => d.dispose() }, [containerApi])
-    // per-tab 历史:全窗只有这一套箭头,作用于**当前聚焦**的主区 tab(用户 08-17 定的语义);分屏时右组靠它走历史。
-    // 订阅 mainTabs(激活变化)与 stacks 重渲。
-    useWorkspace((s) => s.mainTabs)
-    const stacks = useNav((s) => s.stacks)
-    const amId = activeMainPanel(containerApi)?.id ?? null
-    const st = amId ? stacks[amId] : undefined
-    const canBack = !!st && st.idx > 0
-    const canFwd = !!st && st.idx >= 0 && st.idx < st.entries.length - 1
-    if (!isMainGroup(panels) || !isFirstMainGroup(containerApi, group)) return null
+    if (!isMainGroup(panels)) return null
+    const first = isFirstMainGroup(containerApi, group)
     return (
-      <div className={`dv-prefix${leftCollapsed ? ' dv-prefix--edge' : ''}`}>
-        {/* 主面板常驻前进/后退(per-tab 历史,只走当前 tab 的栈;由各 feature recordNav(leafId,…) 喂)。 */}
-        <button className="dv-nav-btn" data-press="back" disabled={!canBack} title={withHotkey(t, t('lcl.nav.back'), 'nav-back')} onClick={() => { if (amId) useNav.getState().back(amId) }}>
-          <ArrowLeft size={15} />
-        </button>
-        <button className="dv-nav-btn" data-press="forward" disabled={!canFwd} title={withHotkey(t, t('lcl.nav.forward'), 'nav-forward')} onClick={() => { if (amId) useNav.getState().forward(amId) }}>
-          <ArrowRight size={15} />
-        </button>
-        {!IS_VIEW_WINDOW && ( // 独立视图窗只装主区,没有左栏可开(见 uiMode.IS_VIEW_WINDOW)
+      <div className={`dv-prefix${first && leftCollapsed ? ' dv-prefix--edge' : ''}`}>
+        {first && !IS_VIEW_WINDOW && ( // 独立视图窗只装主区,没有左栏可开(见 uiMode.IS_VIEW_WINDOW)
           <button
             className={`dv-edge-toggle${leftCollapsed ? '' : ' is-on'}`}
             aria-pressed={!leftCollapsed}
@@ -351,6 +337,7 @@ function makePrefixActions(): React.FC<IDockviewHeaderActionsProps> {
             <PanelLeft size={15} />
           </button>
         )}
+        <ViewNavigation leafId={activePanel?.id} />
       </div>
     )
   }
@@ -410,7 +397,6 @@ function watchClaims(e: DragEvent): void {
     orig.call(e)
   }
 }
-let lastDragUpdate = 0 // 节流 drag→dragUpdate(屏幕坐标上报)
 let dropLineEl: HTMLDivElement | null = null
 let dropZoneEl: HTMLDivElement | null = null
 
@@ -454,6 +440,7 @@ function showTarget(t: DropTarget): void {
 
 // 收尾:清 draggingId/draggingOpen + data-dv-dragging(app-region 拖窗区复位)+ 撤源 tab 标记 + 撤提示。
 function clearDragState(): void {
+  if (draggingView) getDetachApi()?.trackDrag?.(null)
   draggingId = null
   draggingView = null
   draggingOpen = null
@@ -495,6 +482,35 @@ function openViewAtTarget(t: DropTarget, spec: { type: string; params?: Record<s
   ws.openView(spec.type, spec.params ?? {}, loc) // 该侧只剩 sidebar-empty 占位时,占位由 openView 退位
 }
 
+type CrossWindowPoint = { localX: number; localY: number; viewType: string }
+
+function crossWindowTarget(at: CrossWindowPoint): DropTarget | null {
+  const api = useWorkspace.getState().api
+  if (!api || !getView(at.viewType)) return null
+  const target = computeDropTarget(api, at.localX, at.localY)
+  return target && locOf(target.group) === 'main' ? target : null
+}
+
+export function previewCrossWindowDrop(at: CrossWindowPoint | null): void {
+  const target = at && crossWindowTarget(at)
+  if (target) showTarget(target)
+  else hideIndicator()
+}
+
+export function acceptCrossWindowDrop(view: ViewRef, at: CrossWindowPoint): boolean {
+  const target = crossWindowTarget(at)
+  if (!target) return false
+  const ws = useWorkspace.getState()
+  const first = target.group.panels[0]
+  if (target.mode === 'tab' && target.group.panels.length === 1 && tabTypeOf(first) === 'home') {
+    return !!ws.navigateLeaf(first.id, view.type, view.params ?? {})
+  }
+  const leaf = ws.openView(view.type, view.params ?? {}, 'main', { newTab: true, groupId: target.group.id })
+  if (!leaf) return false
+  ws.dropView(leaf.id, target)
+  return true
+}
+
 // WbTab 拖拽发起:记源 panelId + 标记源 tab(供 computeDropTarget/让位排除)+ 打 data-dv-dragging
 // (见 engine.css:拖拽期把 tab 栏 -webkit-app-region:drag 抑成 no-drag,否则 macOS 把窗拖区当非客户区吞掉 dragover/drop)。
 // 【关键】必须原生监听在 .wb-tab 上并 stopPropagation:Dockview 的 Html5DragSource 在祖先 .dv-tab 上挂了 dragstart,
@@ -510,6 +526,7 @@ function onTabDragStart(e: DragEvent, el: HTMLElement, panelId: string): void {
   draggingView = viewRefFromParams(panel?.params as Record<string, unknown> | undefined, (panel as { component?: string } | undefined)?.component)
   e.dataTransfer.effectAllowed = 'move'
   e.dataTransfer.setData('application/x-tangu-view', panelId)
+  if (draggingView && getView(draggingView.type)) getDetachApi()?.trackDrag?.(draggingView.type)
   document.documentElement.dataset.dvDragging = '1'
   el.closest('.dv-tab')?.classList.add('wb-tab-dragging')
 }
@@ -594,7 +611,7 @@ export const WorkspaceHost: React.FC<{
   //  提交走 moveTo(不受 app-region 影响);dragover/drop 命中 tab 栏需 data-dv-dragging 抑制窗拖区(onTabDragStart 已打)。
   //  收尾只认 dragend(HTML5 收尾信号:drop/取消/ESC 都 fire),drop 里也兜底清一次(源节点被 moveTo 移走时 dragend 可能不达 window)。
   useEffect(() => {
-    // 落点:提示与提交共用。搬的是固定 View 且落点在别的区 → 当作没有落点(不画提示、松手弹回)。
+    // 提示和提交都跳过无法执行的移动。
     const dropTargetAt = (e: DragEvent): DropTarget | null => {
       const api = useWorkspace.getState().api
       const t = api ? computeDropTarget(api, e.clientX, e.clientY) : null
@@ -645,30 +662,24 @@ export const WorkspaceHost: React.FC<{
       e.preventDefault()
       openAtMain(t, open)
     }
-    // 跨窗撕拽:drag 在源元素全程触发(含移出窗口)→ 节流上报屏幕坐标,主进程给光标下窗口画落点预览。
-    const onDrag = (e: DragEvent): void => {
-      const d = getDetachApi()
-      if (!draggingView || !d?.dragUpdate || (!e.screenX && !e.screenY)) return
-      const now = Date.now()
-      if (now - lastDragUpdate < 30) return
-      lastDragUpdate = now
-      d.dragUpdate(e.screenX, e.screenY, draggingView)
-    }
-    // 收尾 + 跨窗落点:释放点落在本窗**外** → 交平台钩子路由(命中别的窗=并入 / 空桌面=新窗);routed 则关源 panel。
+    // Chromium ends the native drag in the source renderer. Only an outside release goes to the desktop router.
     const onDragEnd = (e: DragEvent): void => {
       const id = draggingId, view = draggingView
       const d = getDetachApi()
-      const outside = e.clientX < 0 || e.clientY < 0 || e.clientX > window.innerWidth || e.clientY > window.innerHeight
-      // 占位(视图没注册)不撕:对面开不出它,源面板却会被关掉。固定 View 也能撕出去,原处补一个新的(releaseLeaf)。
+      const outside = e.clientX < 0 || e.clientY < 0 || e.clientX >= window.innerWidth || e.clientY >= window.innerHeight
       if (id && view && d?.drop && outside && getView(view.type)) {
-        void d.drop(e.screenX, e.screenY, view).then((routed) => { if (routed) releaseLeaf(id) })
+        const api = useWorkspace.getState().api
+        const params = api?.getPanel(id)?.params
+        void d.drop(view).then((routed) => {
+          if (routed && api?.getPanel(id)?.params === params) releaseLeaf(id)
+        }).catch(() => {})
       }
       clearDragState()
     }
     window.addEventListener('dragover', onDragOver, true)
     window.addEventListener('drop', onDrop, true)
-    window.addEventListener('drag', onDrag, true)
     window.addEventListener('dragend', onDragEnd, true)
+    window.addEventListener('pagehide', clearDragState)
     window.addEventListener('dragover', onListDragOver)
     window.addEventListener('drop', onListDrop)
     return () => {
@@ -676,8 +687,8 @@ export const WorkspaceHost: React.FC<{
       window.removeEventListener('drop', onListDrop)
       window.removeEventListener('dragover', onDragOver, true)
       window.removeEventListener('drop', onDrop, true)
-      window.removeEventListener('drag', onDrag, true)
       window.removeEventListener('dragend', onDragEnd, true)
+      window.removeEventListener('pagehide', clearDragState)
       clearDragState()
     }
   }, [])

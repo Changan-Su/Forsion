@@ -804,7 +804,7 @@ export interface WorkFolderMigrationResult { status: 'needed' | 'complete'; back
 export interface AmadeusApi {
   openVault(): Promise<VaultInfo | null>
   /** Re-open the last vault (persisted across launches), or null if none/unavailable. */
-  restoreVault(): Promise<VaultInfo | null>
+  restoreVault(reuseActive?: boolean): Promise<VaultInfo | null>
   /** Local vault list (optional: web / mobile hosts have one vault). */
   listVaults?(): Promise<LocalVaultRow[]>
   /** Open a listed local vault; throws when the folder is gone. */

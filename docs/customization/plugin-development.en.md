@@ -565,3 +565,45 @@ Use `ctx.registerView({ layout: { minWidth: 360, minHeight: 200 }, ... })` to de
 In `mount(el, view)`, `view.getLayout?.()` returns `{ width, height, visible, compact, phase }`. `view.onLayout?.(callback)` sends an immediate snapshot and subsequent size, visibility or phase changes, and returns an unsubscribe function. `phase` is `transition` or `settled`; `compact` means content width below 480px. Expensive PDF, canvas or terminal adapters can update cheap chrome during transitions and refit when `settled && visible`. Do not remount content or reset document zoom merely because the window narrows. The host removes outstanding subscriptions when the View is disposed. Older hosts lack these methods; use `ResizeObserver` as a fallback.
 
 Optional `preferredWidth` / `preferredHeight` seed allocation weights for new splits and the initial size of a sidebar that the user has not resized. Saved user ratios and sidebar sizes take precedence.
+
+
+### Temporary panels for file views
+
+Feature-detect `file.extendView` in `registerFileType.mount(el, file)`. It follows the same contract as `view.extendView`: `file.extendView?.open({ id: "ask", title: "Tangu", side: "right", mount(el) { /* ctx.tangu.mountChat(el) */ } })`. Main and detached file windows retain the document; file views in side panels get an overlay with Back. Reopening the same id retains content. Closing, navigating or disabling the file plugin closes the extension and revokes the old controller. On older hosts without this field, do not replace the document with a main-area chat as a contextual fallback.
+
+
+## Agent settings and settings-page anchors
+
+Use [`ctx.registerAgentSettings`](plugin-agent-settings.en.md) to expose effective values explicitly. UI and engine plugins share the contract; secrets expose configured status only.
+
+Cloud settings pages can accept optional `mount(el, { anchor })` context. A `forsion/fx:<pluginId>:<pageId>#<anchor>` deep link supplies the section anchor. Scroll/focus the section after loading; ordinary mounts must not steal focus. Existing mount(el) implementations remain compatible.
+
+### Note reading renderers
+
+Use `ctx.registerNoteRenderer` to replace the read-only note surface while the host retains document and persistence ownership. See [Note reading renderers](./note-renderers.en.md) for the contract, failure fallback and lifecycle.
+
+### Official cloud inbox channel
+
+The locked first-party `forsion-extend` package can provide the account inbox through `ctx.app.provideInboxChannel?.(channel)`.
+The channel implements `list(filter)`, `unreadCount()`, `patch(id, { read, archived })`, `readAll()`, `remove(id)` and `claim(id, client)`.
+Optional `importLegacy(messages)` adopts owned desktop read/archive flags only when no cloud state exists.
+Cloud message IDs start with `cloud:` and lists use the existing `InboxMessage` fields. Unread results may include
+`revision` and `latestCreatedAt`, allowing reward and archive changes to refresh even when the unread count is unchanged.
+Credentials remain in Extend's account adapter. The host merges this channel with native Agent/system letters and
+filters duplicate legacy official broadcasts. Pass `null` to revoke the provider. The host also revokes it on disable/reload;
+provide a fresh channel when the account changes. Older hosts omit this optional API.
+
+The legacy desktop mailbox has no per-message cloud owner. Adoption binds that device cache once to the currently verified upgrade account; later account switches cannot import it again. Unowned legacy mobile caches are not imported.
+
+
+### Split selection tools and shape corners (2026-11-12)
+
+A `mountSelectionBar` tool may declare `menu: { title, open(sel, anchor) }`. The primary button still calls `run(sel)`. Its separate arrow calls `menu.open` with the actual button element, ready for `ctx.ui.popover(anchor, ...)`; never find anchors by inspecting host DOM. ArrowRight on the primary also opens its menu; Enter/Space operate either button. A child menu consumes Escape before the bar closes. Supply `title` in the current locale. Older hosts ignore menu, so retain a usable primary action or a fallback menu entry. Capture selection data when opening a menu that consumes it, and dispose menus when the view unloads or the plugin stops; never apply a stale selection.
+
+```js
+{ id: 'underline', title: t('underline'), icon: 'underline',
+  run: (sel) => underline(sel),
+  menu: { title: t('colors'), open: (sel, anchor) => openColors(sel, anchor) } }
+```
+
+`mountBoard` and `handle.update` accept optional `roundness: 'sharp' | 'round'`, forwarded to the engine's next-shape `currentItemRoundness`. Omission preserves the existing default. It never rewrites elements already in the scene. To edit an existing rectangle, preserve its complete element data and explicitly update the scene; do not normalize old scenes to a new corner style.

@@ -17,6 +17,7 @@ import { WIKILINK_RE, linkTarget } from '@amadeus-shared/links'
 import { isPdfLinkInner, parseBlockSubpath, parseMediaLinkInner, splitLinkInner } from '@amadeus-shared/pdfLink'
 import { toAssetUrl } from '@amadeus-shared/assets'
 import { buildBlockString } from './mathLivePreview'
+import { embedSourceKey } from './embedSource'
 import { editorFocused } from './editorFocus'
 import { attachOpenButton, attachSourceButton, revealSource } from './sourceToggle'
 import { attachResizeHandle } from '../../lib/imageResize'
@@ -26,6 +27,7 @@ import { FILE_ICON, IMG_EXT_RE, fileIconKind } from './fileIcon'
 import { parseAppRefInner, type AppRef } from '../../../../../shared/appRefs'
 import { AppRefChip } from '../../../components/appRefs'
 import { HostLocaleProvider } from '../../../i18n'
+import { inlinePreviewCaret } from './inlinePreviewCaret'
 
 function fileIconEl(kind: keyof typeof FILE_ICON): SVGSVGElement {
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
@@ -192,6 +194,10 @@ function buildDecorations(
       // 用户只好把每张图单独放一个块(实报)。
       const bang = m.index > 0 && s[m.index - 1] === '!'
       const img = imageEmbed(m[1], bang)
+      const embedFrom = cs + m.index - 1
+      const embedTo = cs + m.index + m[0].length
+      if (bang && !img && embedSourceKey.getState(state)?.decos.find(embedFrom, embedTo,
+        (spec) => spec.embedSource === true).some((d) => d.from <= embedFrom && d.to >= embedTo)) continue
       const spFrom = img ? m.index - 1 : m.index
       const spTo = m.index + m[0].length
       const from = cs + spFrom
@@ -374,6 +380,7 @@ function buildDecorations(
           { side: -1, ignoreSelection: true, key: `w:${m[0]}:${ok ? 1 : 0}:${emoji ?? ''}` },
         ),
       )
+      if (!img && to === cs + node.content.size) decos.push(inlinePreviewCaret(from, to, `wiki:${m[0]}`))
     }
     return false // 不深入内联
   })
@@ -409,11 +416,11 @@ function syncPicked(view: EditorView): void {
     else delete el.dataset.rangeSelected
   }
   const prev = marked.get(view) ?? null
-  // 独占段图片选中的是外层 paragraph NodeSelection(分栏/拖拽/Tab 子树都以块为单位);
+  // 独占段图片选中外层 textblock(含标题):点击与选中态同步须用同一个范围;
   // 行内图片仍精确选源码区间。两档最后都映射回同一枚 widget。
   let pickFrom = from
   let pickTo = to
-  if (view.state.selection instanceof NodeSelection && view.state.selection.node.type.name === 'paragraph') {
+  if (view.state.selection instanceof NodeSelection && view.state.selection.node.isTextblock) {
     pickFrom = from + 1
     pickTo = to - 1
   }

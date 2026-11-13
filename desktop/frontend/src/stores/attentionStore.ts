@@ -3,7 +3,7 @@
  *
  * 两路合并(mergeAttention):
  *   ① 引擎的待批索引 GET /agent/approvals/pending(只给按会话的计数,远端经隧道可读)—— 覆盖**没订阅**的会话:
- *      手机驱动的远程 run、后台 Agent、别的窗口开着的会话。20s 轮询 + 回前台立即拉 + 隐藏时暂停,?rev= 未变只回几十字节。
+ *      手机驱动的远程 run、后台 Agent、别的窗口开着的会话。20s 轮询(后台继续，以便发系统通知) + 回前台立即拉,?rev= 未变只回几十字节。
  *   ② 本地派生:订阅着的会话(runningBySession)以本地 messagesBySession 的待批卡为准 —— 更新鲜(事件流实时),
  *      答掉的那一刻点就灭,不等下一轮轮询。
  *
@@ -45,8 +45,8 @@ export interface DmAttention { unread: boolean; awaiting: boolean; count: number
 interface AttentionState {
   byTarget: Record<string, TargetAttention>
   dm: Record<string, DmAttention>
-  /** 读过:本地先熄、再告诉引擎(proactive_at ≤ last_read_at,收尾问句的 awaiting_user 一并清 —— 看过就不再算等你)。 */
-  markRead(sessionId: string): void
+  /** 只确认实际显示过的消息；以引擎回执为准，不用全局 activeId 推断已读。 */
+  markRead(sessionId: string, messageId: string): void
   /** 装轮询(幂等,可重复调用 —— StrictMode 双 effect 只装一份);返回卸载。 */
   install(): () => void
   refresh(targetKey?: string): Promise<void>
@@ -83,10 +83,12 @@ function sanitizeDm(raw: unknown): Record<string, DmAttention> {
 }
 
 const inflight = new Set<string>()
+const acknowledged = new Map<string, string>() // Successful rendered-message receipts, including still-pending child reports.
+const readAttemptAt = new Map<string, number>()
 const reading = new Set<string>() // POST /read 在途的会话 id(列表引用每变一次都会问一遍,别叠请求)
 let dmDisabled = false // 老引擎没有这个端点(404):本次启动不再拉
 let dmLoaded = false
-/** 引擎上一次报的每条私聊「最近一条主动消息」签名(at:count)。本地 markRead 先熄不改它,免得把「刚读过」当成新来的;
+/** 引擎上一次报的每条私聊「最近一条主动消息」签名(at (旧引擎回退 count))。markRead 不改它,免得把「刚读过」当成新来的;
  *  读过后再来一条时条数可能不变,所以要带 at(老引擎不报 at = 只能按条数认,读过后同数的那条认不出,Codex 11-04)。 */
 let lastDmSig: Record<string, string> = {}
 const listTried = new Set<string>() // 为它补拉过会话列表的私聊 id(见 refresh)
@@ -97,17 +99,22 @@ export const useAttention = create<AttentionState>((set, get) => ({
   byTarget: {},
   dm: {},
 
-  markRead(sessionId) {
+  markRead(sessionId, messageId) {
     const cur = get().dm[sessionId]
     const listed = useApp.getState().sessions.some((x) => x.id === sessionId && x.awaiting_user)
-    if (!cur?.unread && !listed) return
-    if (cur?.unread) set((s) => ({ dm: { ...s.dm, [sessionId]: { ...cur, unread: false, count: 0 } } }))
-    if (reading.has(sessionId)) return
+    if ((!cur?.unread && !listed) || !messageId) return
+    if (reading.has(sessionId) || acknowledged.get(sessionId) === messageId) return
+    const attemptKey = `${sessionId}:${messageId}`
+    if (Date.now() - (readAttemptAt.get(attemptKey) ?? 0) < REQUEST_TIMEOUT_MS) return
+    readAttemptAt.set(attemptKey, Date.now())
     // 等你不在本地先熄:引擎说了算(Muse 后台待批、回报没送回的子会话读了也留着;老引擎不回 awaiting = 没清)。
     reading.add(sessionId)
-    void engineFetch(targetForSession(sessionId), `/agent/sessions/${encodeURIComponent(sessionId)}/read`, { method: 'POST' }, { timeoutMs: REQUEST_TIMEOUT_MS })
+    void engineFetch(targetForSession(sessionId), `/agent/sessions/${encodeURIComponent(sessionId)}/read`, { method: 'POST', body: JSON.stringify({ messageId }), headers: { 'Content-Type': 'application/json' } }, { timeoutMs: REQUEST_TIMEOUT_MS })
       .then(async (r) => {
-        const j = r.ok ? await r.json().catch(() => null) as { awaiting?: unknown } | null : null
+        const j = r.ok ? await r.json().catch(() => null) as { awaiting?: unknown; unread?: unknown } | null : null
+        if (j?.unread === false && j.awaiting === false) acknowledged.set(sessionId, messageId)
+        // Only the engine can acknowledge the observed watermark; a newer arrival stays unread.
+        if (j?.unread === false && get().dm[sessionId] === cur) set((s) => ({ dm: { ...s.dm, [sessionId]: { ...s.dm[sessionId], unread: false, count: 0 } } }))
         if (j?.awaiting !== false) return
         useApp.setState((s) => ({ sessions: s.sessions.map((x) => (x.id === sessionId && x.awaiting_user ? { ...x, awaiting_user: false } : x)) }))
         if (get().dm[sessionId]?.awaiting) void get().refresh('home') // 私聊的等你来自轮询,重拉一次(待批那路照样亮)
@@ -140,13 +147,13 @@ export const useAttention = create<AttentionState>((set, get) => ({
           // 已在列表里的私聊又来了新的主动消息:引擎那边 updated_at 已前移,重拉列表它才排到最上面(列表按最近活动排)
           const sig: Record<string, string> = {}
           for (const r of Array.isArray(j.sessions) ? j.sessions as any[] : []) {
-            if (dm[r?.id]?.unread) sig[r.id] = `${Number(r.at) || 0}:${dm[r.id].count}`
+            if (dm[r?.id]?.unread) sig[r.id] = Number(r.at) > 0 ? String(Number(r.at)) : `count:${dm[r.id].count}`
           }
           const fresh = !first && Object.entries(sig).some(([id, v]) => v !== lastDmSig[id])
+          const previousSig = lastDmSig
           lastDmSig = sig
           if (unknown.length || fresh) { unknown.forEach((id) => listTried.add(id)); await st.refreshSessions(st.cfg).catch(() => {}) }
-          readActiveDm()
-          if (!first) notifyNewWaits(prev, dm) // 启动那一拉不弹:那些是之前就在等的
+          if (!first) notifyNewWaits(prev, dm, previousSig, sig) // 启动那一拉不弹:那些是之前就在等的
         })
         .catch(() => {})
         .finally(() => inflight.delete('dm'))
@@ -180,21 +187,16 @@ export const useAttention = create<AttentionState>((set, get) => ({
     installs++
     if (!teardown && typeof window !== 'undefined') {
       const tick = (): void => {
-        if (typeof document !== 'undefined' && document.hidden) return // 隐藏时暂停(移动端后台 / 桌面最小化)
         void get().refresh()
       }
       const timer = window.setInterval(tick, ATTENTION_POLL_MS)
       const onVis = (): void => { if (typeof document !== 'undefined' && !document.hidden) void get().refresh() }
       if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVis)
-      // 连上的那一刻拉一次(启动 / 断线重连 / 引擎重启):别等 20s。打开一条会话 = 读过;
-      // 正看着的那条一轮以问句收尾、列表刷新带回 awaiting_user,也当场算读过(否则切走后黄点留着,点回来也不灭)。
+      // 连上时立即拉；已读只来自 ChatView 的可见消息回执。
       let prevConn = useApp.getState().connState
-      let prevActive = useApp.getState().activeId
-      let prevSessions = useApp.getState().sessions
       const unsub = useApp.subscribe((s) => {
         if (s.connState === 'ok' && prevConn !== 'ok') void get().refresh()
         prevConn = s.connState
-        if (s.activeId !== prevActive || s.sessions !== prevSessions) { prevActive = s.activeId; prevSessions = s.sessions; readActiveDm() }
       })
       tick()
       teardown = () => {
@@ -214,26 +216,21 @@ export const useAttention = create<AttentionState>((set, get) => ({
   },
 }))
 
-/** 私聊新进入「等你」→ 系统通知(只这一种弹;提醒只亮角标)。用户正看着那条就不弹。 */
-function notifyNewWaits(prev: Record<string, DmAttention>, next: Record<string, DmAttention>): void {
+/** 主动消息按消息签名通知；待批状态单独通知。同一消息轮询不重复，新消息不会被旧的等待状态吞掉。 */
+function notifyNewWaits(prev: Record<string, DmAttention>, next: Record<string, DmAttention>, previousSig: Record<string, string>, sig: Record<string, string>): void {
   const st = useApp.getState()
-  const visible = typeof document === 'undefined' || !document.hidden
   for (const [id, d] of Object.entries(next)) {
-    if (!d.awaiting || prev[id]?.awaiting || (id === st.activeId && visible)) continue
+    const newMessage = d.unread && sig[id] !== previousSig[id]
+    const newWait = d.awaiting && !prev[id]?.awaiting
+    if (!newMessage && !newWait) continue
     const x = st.sessions.find((s) => s.id === id)
     if (!x || !soloOf(st.configBySession[id] ?? x.agent_config)) continue
     notifyApp({
-      event: 'dm.waiting', level: 'info', dedupeKey: `dm.waiting:${id}`,
-      title: x.title || '', text: st.tr('ntf.dmWaiting'),
+      event: newWait ? 'dm.waiting' : 'dm.message', level: 'info', dedupeKey: `dm:${id}:${sig[id] || 'waiting'}`,
+      title: x.title || '', text: st.tr(newWait ? 'ntf.dmWaiting' : 'ntf.dmMessage'),
       action: { label: st.tr('ntf.view'), run: () => { setActiveSpace('tangu'); void import('../sessionNav').then((m) => m.openSession(id)) } },
     })
   }
-}
-
-/** 正开着(窗口可见)的那条会话有新消息 / 在等回话 → 就地算读过(用户就在看它)。 */
-function readActiveDm(): void {
-  const id = useApp.getState().activeId
-  if (id && (typeof document === 'undefined' || !document.hidden)) useAttention.getState().markRead(id)
 }
 
 /**
@@ -320,6 +317,8 @@ export function __resetAttentionForTests(): void {
   lastDmSig = {}
   listTried.clear()
   reading.clear()
+  acknowledged.clear()
+  readAttemptAt.clear()
   useAttention.setState({ byTarget: {}, dm: {} })
 }
 

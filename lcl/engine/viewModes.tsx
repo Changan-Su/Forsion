@@ -12,7 +12,7 @@
  * ⚠️ 住在引擎而不是 lcl/components:SingleColumnHost(引擎)要画它,components 反过来依赖引擎会成环。
  *    components/index.ts 只是转出口。也别放进 WorkspaceHost.tsx —— 手机构建把那个文件整个换成 emptyHost。
  */
-import React, { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ComponentType, type ReactNode } from 'react'
+import React, { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ComponentType, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { Check, ChevronDown } from 'lucide-react'
 import { addCommand, commandHotkeyText, removeCommand, useCommandStore } from './commandRegistry'
@@ -23,6 +23,8 @@ import { OverlayAt } from './menuAnchor'
 import { nativeChromeInstalled } from './nativeChrome'
 import { useSegFlow } from './segFlow'
 import './viewModes.css'
+import { ViewNavigation } from './viewNavigation'
+const NavigationInHead = createContext(false)
 
 export interface ViewModeOption {
   value: string
@@ -170,6 +172,8 @@ type SwitchProps = { className?: string; testId?: string; compact?: boolean } & 
 
 /** 看法胶囊。给 `leafId` = 画那个视图登记的那份(手机上由顶栏画,视图里这颗返回 null);给 `spec` = 当普通零件用(插件零件、表单里)。 */
 export function ViewModeSwitch(props: SwitchProps): React.ReactElement | null {
+  const inHead = useContext(NavigationInHead)
+  const navigation = IS_MINI_PANEL && props.leafId && !props.inTopbar && !inHead ? <ViewNavigation leafId={props.leafId} /> : null
   const reg = useViewModesOf(props.leafId)
   const spec = props.spec ?? reg
   const { t } = useEngineI18n()
@@ -191,7 +195,7 @@ export function ViewModeSwitch(props: SwitchProps): React.ReactElement | null {
     window.addEventListener('keydown', esc)
     return () => { window.removeEventListener('pointerdown', close, true); window.removeEventListener('keydown', esc) }
   }, [menu])
-  if (!spec || spec.modes.length < 2) return null
+  if (!spec || spec.modes.length < 2) return navigation
   if (props.leafId !== undefined && !props.inTopbar && inSingleColumnShell()) return null
   const n = spec.modes.length
   const i = Math.max(0, spec.modes.findIndex((m) => m.value === spec.value))
@@ -222,7 +226,7 @@ export function ViewModeSwitch(props: SwitchProps): React.ReactElement | null {
   }
   const aria = spec.ariaLabel || t('lcl.viewMode.aria')
   return (
-    <div
+    <>{navigation}<div
       className={`lcl-vmode${props.className ? ` ${props.className}` : ''}`}
       data-n={n}
       data-icons={spec.modes.every((m) => m.icon) ? '' : undefined}
@@ -264,7 +268,7 @@ export function ViewModeSwitch(props: SwitchProps): React.ReactElement | null {
         </OverlayAt>,
         document.body,
       )}
-    </div>
+    </div></>
   )
 }
 
@@ -274,10 +278,12 @@ export function ViewModeSwitch(props: SwitchProps): React.ReactElement | null {
 export function ViewHead({ leafId, children, className, testId, title }: { leafId: string | null | undefined; children?: ReactNode; className?: string; testId?: string; title?: string }): React.ReactElement | null {
   const spec = useViewModesOf(leafId)
   const showSwitch = !!spec && spec.modes.length > 1 && !inSingleColumnShell()
-  if (!showSwitch && !children && !title) return null
+  const navigation = IS_MINI_PANEL && !!leafId
+  if (!navigation && !showSwitch && !children && !title) return null
   return (
     <div className={`lcl-viewhead${className ? ` ${className}` : ''}`}>
-      {showSwitch ? <ViewModeSwitch leafId={leafId} testId={testId} /> : null}
+      {navigation ? <ViewNavigation leafId={leafId} /> : null}
+      {showSwitch ? <NavigationInHead.Provider value><ViewModeSwitch leafId={leafId} testId={testId} /></NavigationInHead.Provider> : null}
       {title ? <span className="lcl-viewhead-title">{title}</span> : null}
       <div className="lcl-viewhead-actions">{children}</div>
     </div>

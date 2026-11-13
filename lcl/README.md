@@ -28,6 +28,12 @@ Genesis 当前使用这份 LCL。`apps/Archived/Forsion-LCL` 是早期组合引�
 
 ## 长内容导航
 
+前进/后退归每个主区 View。桌面/Web 桌面布局在每个主区分屏的标签栏提供一套箭头，绑定该组当前标签；`ViewHead`、`ViewModeSwitch` 与无头行插件均不在正文内追加导航。左栏折叠钮仍仅在最左上组。手机单栏布局保留原有活动 View 导航入口。历史按 Space 与稳定 leaf id 在本次运行内保留，关闭 View / 显式重置布局清理对应栈；不会写入文档。
+
+`recordNav(leafId, key, restore, title?)` 的恢复回调返回真实 Promise，可接收 `NavRestoreContext`（`signal`、`isCurrent()`）。同 View 快速连续导航合并到最新目标，异步恢复按顺序结束；不同 View 不互相阻塞。异步读完、写入 View 状态之前须检查取消信号，不能在回调里 `void` 丢掉恢复 Promise。失败回滚历史索引并给出提示，旧 Space 的恢复结果不得写入新 Space。文件恢复保留全部用户参数；插件参数按 JSON 对象身份记录。台架：`desktop` 的 `npm run check:nav`，竞态负对照及回归：`lcl/engine/navStore.races.test.ts`。
+
+Chat 的阅读位置按 Space / View / 会话 / 引擎分开记消息 ID、消息内偏移和是否跟随末尾。恢复旧消息时一次挂出完整消息序列，避免末尾分批渲染隐藏锚点；搜索、用户滚动、回到最新优先于未完成的恢复。新增计划与普通流式内容不强制拉走正在阅读旧消息的用户。构建后运行 `npm run check:chatscrollhold`，`CHAT_READING_SHOT` 可指定截图路径。
+
 目录、搜索和画布定位使用 `@lcl/engine` 的 `scrollToElement`；它先在目标滚动容器派发内部 `SCROLL_TO_ELEMENT_EVENT`，再滚动并校正延迟布局。带自动跟随的宿主监听这个意图来暂停跟随，不能从 `scrollTop` 的变化猜测用户意图（`content-visibility` 与浏览器锚定也会改变位置）。恢复到底部前调用 `cancelScrollToElement`，避免旧跳转的校正覆盖新位置。此事件属于内置宿主协作，不改变插件 `ctx.ui.mountFloatingToc` 契约。
 
 ## 对象与动作(Objects)

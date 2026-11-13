@@ -79,6 +79,21 @@ describe('httpBrain.streamProviderCompletion 空闲看门狗', () => {
     expect(r.usage.completion_tokens).toBe(2);
   });
 
+  it('托管 tool 帧只有 argsDelta → 按 id 拼回累积 args（出站脱敏靠它换回占位符）', async () => {
+    stubFetch(
+      [
+        frame({ t: 'tool', id: 'c1', name: 'bash', argsLen: 4, argsDelta: '{"co' }),
+        frame({ t: 'tool', id: 'c1', name: 'bash', argsLen: 13, argsDelta: 'mmand":"ls"}' }),
+        frame({ t: 'done', content: '', toolCalls: [], usage: { prompt_tokens: 1, completion_tokens: 1 } }),
+      ],
+      5,
+    );
+    const brain = createHttpBrain({ cloudUrl: 'https://cloud.test', token: 't' });
+    const seen: Array<{ args: string; argsLen: number }> = [];
+    await brain.llm.streamProviderCompletion({ payload: { __forsion_model_id: 'm' }, onToolCallDelta: (i: any) => seen.push({ args: i.args, argsLen: i.argsLen }) } as any);
+    expect(seen).toEqual([{ args: '{"co', argsLen: 4 }, { args: '{"command":"ls"}', argsLen: 13 }]);
+  });
+
   it('服务端迟迟不回响应头 → 也在窗口内判死（fetch 阶段不是裸奔）', async () => {
     process.env.TANGU_BRAIN_STREAM_IDLE_MS = '150';
     // guard 构造即开表（streamIdle.ts），所以这段等待也在看门狗覆盖内。
@@ -206,18 +221,6 @@ describe('httpBrain 请求超时与错误面', () => {
     vi.stubGlobal('fetch', () => Promise.reject(new TypeError('fetch failed')));
     await expect(upload(buildOpts(1024 * 1024)))
       .rejects.toThrow(/build-and-stream 连接失败.*body 1\.0MB.*cloud\.test/s);
-  });
-
-  it('生图窗口不被通用超时截断(负对照:把 floorMs 并进取消信号会把 180s 砍成 60s)', async () => {
-    process.env.TANGU_BRAIN_HTTP_TIMEOUT_MS = '40';   // 通用基准:小 prompt 40ms 就该到点
-    process.env.TANGU_BRAIN_HTTP_TIMEOUT_PER_MB_MS = '0';
-    process.env.TANGU_IMAGE_HTTP_TIMEOUT_MS = '400';  // 生图下限:必须压过通用基准
-    hangingFetch();
-    const brain = createHttpBrain({ cloudUrl: 'https://cloud.test', token: 't' });
-
-    const t0 = Date.now();
-    await brain.images.generate({ model: 'img', prompt: '一只猫' } as any).catch(() => undefined);
-    expect(Date.now() - t0).toBeGreaterThan(250); // 走 40ms 通用窗口就是回归
   });
 
   it('超时按 UTF-8 字节算,中文不被低估 3 倍', async () => {

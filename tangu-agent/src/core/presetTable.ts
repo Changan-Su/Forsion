@@ -79,7 +79,7 @@ export const CODING_PRESET_DEFERRED: ReadonlySet<string> = new Set([
  *  「我休息前在做什么」这种问法模型不会先想到 load_tools,关着时它本就不在场,不占 defs。 */
 export const CHAT_PRESET_RESIDENT: ReadonlySet<string> = new Set([
   'search_marketplace',
-  'run_python', 'web_fetch', 'web_search', 'read_file', 'display_file', 'pip_install', 'write_file',
+  'run_python', 'web_fetch', 'web_search', 'read_file', 'read_tool_output', 'display_file', 'pip_install', 'write_file',
   'load_tools', 'list_files', 'get_datetime', 'intelligent_ui_html', 'intelligent_ui', 'list_intelligent_cards', 'remember', 'read_computer_history', 'manage_human',
 ]);
 
@@ -88,7 +88,8 @@ export const CHAT_PRESET_RESIDENT: ReadonlySet<string> = new Set([
 export const CHAT_PRESET_DEFERRED: ReadonlySet<string> = new Set([
   'search_sessions', 'read_session', 'todo_write', 'todo_read', 'search_files', 'glob_files',
   'amadeus_list_notes', 'amadeus_read_note', 'amadeus_list_calendars', 'amadeus_list_events',
-  'calculator', 'generate_image', 'edit_image', 'read_log', 'log_event',
+  'calculator', 'generate_image', 'edit_image', 'recover_image', 'read_log', 'log_event',
+  'read_plugin_settings', // Explicit read-only plugin fields; source capability is checked independently.
   'session_status', // 只读:本会话的上下文占用 / 已花 token / 用时(「上下文还剩多少」多半就是在聊天里问的)
   'forsion_account', 'forsion_account_action', 'publish_web_page', // Forsion 账号:读额度 / 积分 / 套餐;动作每次由用户在卡上确认(approval:'always',聊天会话照样问)
   // 手机操控 T1(clientCapability 中央闸另管可见性;带能力的工具在 chat 面按能力放行,这里列名是让内置五件按需装载)
@@ -106,7 +107,7 @@ export const CHAT_PRESET_OFFICIAL_PLUGIN: ReadonlySet<string> = new Set(['store_
 /** D11 形态:chat 落在 host execMode 时(桌面 standalone 的 rootless 会话仍是 sandbox,这里是纵深防御),
  *  search_files/glob_files 按 cwd 爬用户真实磁盘且由模型发起 → 一并拒;generate_image 是 mode:'both' 却在 host 下
  *  往 cwd/generated/ 写真实磁盘(creview 二轮 #2)→ 同拒。display_file 不入列(交付原语)。 */
-export const CHAT_HOST_DISK_HIDDEN: ReadonlySet<string> = new Set(['search_files', 'glob_files', 'generate_image', 'edit_image']);
+export const CHAT_HOST_DISK_HIDDEN: ReadonlySet<string> = new Set(['search_files', 'glob_files', 'generate_image', 'edit_image', 'recover_image']);
 
 const EMPTY: ReadonlySet<string> = new Set();
 

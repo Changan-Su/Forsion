@@ -11,7 +11,7 @@ import type {
   FimCompletionOpts,
   DecisionResult,
 } from '../../seams/cloudBrain.js';
-import { imageMimeOf, imageOutputFields, fimUnsupportedError, FIM_UNSUPPORTED } from '../../seams/cloudBrain.js';
+import { fimUnsupportedError, FIM_UNSUPPORTED } from '../../seams/cloudBrain.js';
 import {
   AMADEUS_MAX_FILE_BYTES,
   AgentFileConflictError,
@@ -33,6 +33,7 @@ import { registerAgentSyncIdentity } from '../../services/cloudSyncAccount.js';
 import { assertToolDefinitions } from '../../tools/toolDefinitionValidation.js';
 import { stringifyWellFormed } from '../../llm/wellFormedJson.js';
 import { hostOriginHeaders } from '../../core/hostOrigin.js';
+import { hostedImages } from './hostedImages.js';
 
 export interface HttpBrainConfig {
   cloudUrl: string; // 形如 https://host(无尾斜杠)
@@ -99,7 +100,6 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
   // 所有 brain 请求加超时:thin worker 的 fetch 此前无超时,上游(模型/网关/网络)一挂死,整条 run
   // 无限 await;且 worker 按 session 串行 → 该 session 后续 run 全被堵死。默认 60s,env 可调。
   const REQ_TIMEOUT_MS = Number(process.env.TANGU_BRAIN_HTTP_TIMEOUT_MS) || 60_000;
-  const IMG_TIMEOUT_MS = Number(process.env.TANGU_IMAGE_HTTP_TIMEOUT_MS) || 180_000; // 生图比 LLM 慢,单独放宽
   const GIT_INFO_TIMEOUT_MS = 4_000; // Forsion Git 的两个请求挡在用户点的推拉前面,见下面 git 段
   const GIT_CREDENTIAL_TIMEOUT_MS = 10_000;
   // 托管流的传输与语义兜底窗口。服务端 upstreamIdleGuard 默认 300s,
@@ -130,7 +130,7 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
     const body = bytes > 512 * 1024 ? `,body ${(bytes / 1024 / 1024).toFixed(1)}MB` : '';
     if (e?.name === 'TimeoutError') {
       const secs = Math.round(Math.max(sizedTimeoutMs(bytes), floorMs) / 1000);
-      return new LlmError(504, `云端 ${path} 超时(${secs}s${body}):本机到 ${base} 的上行过慢或不通`);
+      return new LlmError(504, `云端 ${path} 超时(${secs}s${body}):请求未在时限内完成，可能发生在上传、云端处理或下载阶段`);
     }
     if (e instanceof LlmError) return e;
     return new LlmError(0, `云端 ${path} 连接失败(${e?.message || e}${body}):检查本机网络与 ${base} 的连通性`);
@@ -295,7 +295,7 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
       const reader = r.body.getReader();
       const decoder = new TextDecoder();
       let buf = '';
-      const toolProgress = new Map<string, { name: string; argsLen: number }>();
+      const toolProgress = new Map<string, { name: string; argsLen: number; args: string }>();
       guard.arm();
       while (true) {
         const { done, value } = await guard.read(reader);
@@ -325,8 +325,12 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
               : Number.isFinite(ev.argsLen) ? Math.max(0, ev.argsLen) : 0;
             if ((typeof ev.argsDelta === 'string' && ev.argsDelta)
               || argsLen > (previous?.argsLen ?? 0) || (id && name && !previous?.name)) guard.progress();
-            toolProgress.set(id, { name: name || previous?.name || '', argsLen: Math.max(argsLen, previous?.argsLen ?? 0) });
-            opts.onToolCallDelta?.({ id: ev.id, name: ev.name, argsLen: ev.argsLen, args: ev.args, argsDelta: ev.argsDelta });
+            // 托管 tool 帧不发累积串 args(server toolFrameOf,防流量平方涨),只发 argsDelta:在这里按 id 拼回,
+            // 守住 StreamOpts 的 `args: string` 契约 —— 出站脱敏要拿整串换回占位符,拿到 undefined 就 `.slice` 崩(11-10 反馈)。
+            const argsDelta = typeof ev.argsDelta === 'string' ? ev.argsDelta : '';
+            const args = typeof ev.args === 'string' ? ev.args : (previous?.args ?? '') + argsDelta;
+            toolProgress.set(id, { name: name || previous?.name || '', argsLen: Math.max(argsLen, previous?.argsLen ?? 0), args });
+            opts.onToolCallDelta?.({ id: ev.id, name: ev.name, argsLen: Number.isFinite(ev.argsLen) ? ev.argsLen : args.length, args, argsDelta });
           } else if (ev.t === 'done') {
             result.content = ev.content ?? result.content;
             result.reasoning = ev.reasoning ?? result.reasoning;
@@ -522,36 +526,7 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
         headers: { Authorization: authHeaders().Authorization, ...origin },
       }),
     },
-    images: {
-      edit: async (req) => {
-        const r = await postJson<{ data?: Array<{ b64_json?: string }> }>(
-          '/v1/images/edits',
-          { model: req.model, prompt: req.prompt, image: req.images.map(i => `data:${i.mime};base64,${i.b64}`),
-            size: req.size || (req.outputFormat === 'gif' ? 'auto' : '1:1'), n: req.n || 1, transparent_background: !!req.transparentBackground,
-            output_format: 'png', ...imageOutputFields(req),
-            ...(req.quality ? { quality: req.quality } : {}) },
-          req.signal, IMG_TIMEOUT_MS,
-        );
-        const images = (r.data || []).filter(d => d.b64_json).map(d => ({ b64: d.b64_json!, mime: imageMimeOf(d.b64_json!) }));
-        if (!images.length) throw new Error('Image edit returned no images');
-        return { images };
-      },
-      // 托管生图:复用云端现成 /v1/images/generations(optionalAuth 接受 bearer;配额/计费在云端)。
-      // 尺寸传规范值('1:1' 等),云端自行换算成像素;返回 b64_json。
-      generate: async (req) => {
-        const r = await postJson<{ data?: Array<{ b64_json?: string }> }>(
-          '/v1/images/generations',
-          { model: req.model, prompt: req.prompt, size: req.size || (req.outputFormat === 'gif' ? 'auto' : '1:1'), n: req.n || 1,
-            transparent_background: !!req.transparentBackground, output_format: 'png', ...imageOutputFields(req),
-            ...(req.quality ? { quality: req.quality } : {}) },
-          req.signal,
-          IMG_TIMEOUT_MS, // 生图比 LLM 慢:窗口下限单独放宽,不受通用 60s 基准截断
-        );
-        const images = (r.data || []).filter((d) => d.b64_json).map((d) => ({ b64: d.b64_json as string, mime: imageMimeOf(d.b64_json as string) }));
-        if (!images.length) throw new Error('云端未返回图片');
-        return { images };
-      },
-    },
+    images: hostedImages(base, authHeaders),
     // 收件箱广播拉取:旧云端无此路由 → getJson 404 回 null → [](inboxPull 静默降级)。
     // created_at 是服务端 to_char 微秒原文,原样返回给调用方做游标,不做任何时区换算。
     inbox: {
@@ -596,7 +571,8 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
       getManifest: async (_userId: string, opts?: { signal?: AbortSignal }) => {
         // device / client:服务端按设备记版本,回答这个账号还有没有旧客户端在用 USER.md(新版据此停镜像)
         // agent-archive:认得老账号存档(11-06)—— 已存档的账号上服务端照回清单 + agentArchive,不声明的旧客户端整轮 410
-        const q = `paths=human,human-folder,agent-calendar,widget-data,agent-archive&device=${encodeURIComponent(getDeviceId())}&client=${encodeURIComponent(`tangu/${engineVersion()}`)}`;
+        // settings:认得随账号走的设置文件 human/Settings/<name>.db(11-10)—— 不声明的旧客户端清单里看不到这些路径
+        const q = `paths=human,human-folder,agent-calendar,widget-data,agent-archive,settings&device=${encodeURIComponent(getDeviceId())}&client=${encodeURIComponent(`tangu/${engineVersion()}`)}`;
         const r = await getJson<{ agents: any[]; paths?: string[]; legacy?: string[]; legacySeenAt?: number | null; agentArchive?: { state?: unknown; at?: unknown } }>(`/api/brain/agents/manifest?${q}`, opts?.signal);
         return Object.assign(r?.agents ?? [], Array.isArray(r?.paths) ? { paths: r.paths } : {},
           Array.isArray(r?.legacy) ? { legacy: r.legacy.filter((x): x is string => typeof x === 'string'), legacySeenAt: typeof r?.legacySeenAt === 'number' ? r.legacySeenAt : null } : {},

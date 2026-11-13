@@ -774,7 +774,7 @@ html[data-dv-dragging] .dockview-theme-lcl .dv-tabs-and-actions-container,
 html[data-dv-dragging] .dockview-theme-lcl .dv-void-container,
 html[data-dv-dragging] .t2s-side { -webkit-app-region: no-drag; }
 
-/* 主区标签栏左前缀:左栏折叠钮 */
+/* 主区标签栏左前缀:每组导航 + 最左组的左栏折叠钮。 */
 .dv-prefix { display: inline-flex; align-items: center; gap: 2px; padding-left: 4px; }
 /* 左栏收起 → 主区折叠钮成为最左,躲开 mac 交通灯(与左栏 tab 同款避让)。 */
 [data-platform='mac'] .dv-prefix--edge { padding-left: 26px; }
@@ -1085,3 +1085,11 @@ html[data-space-switch-axis='x'][data-space-switch]::view-transition-new(space-w
 /* Upstream's GPU hint/containment would rebase fixed menus inside a View. Geometry already
  * moves via native layout; these contents need the same fixed-position semantics as before. */
 .dv-render-overlay[data-lcl-group] { transform: none; will-change: auto; contain: none; }
+/* Upstream also makes every docked overlay its own stacking context (z-index: 1 + isolation).
+ * Overlays are siblings whose DOM order follows creation order, so a fixed menu or click-away
+ * layer opened in one View (side legend ⋯, .amx-db-popwrap z 80) ends under the next View's
+ * overlay wherever it spills across the pane edge — visibly cut off and unclickable once a
+ * restored layout creates the side overlay first. Docked overlays never overlap each other, so
+ * no stacking context is needed: in-View z-indexes compete globally again, as they did inside
+ * .dv-content-container. Floating groups keep dockview's own stacking (inline z-index per level). */
+.dv-render-overlay[data-lcl-group]:not(.dv-render-overlay-float) { z-index: auto; isolation: auto; }

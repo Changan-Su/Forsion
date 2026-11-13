@@ -23,6 +23,8 @@ export interface SelectionBarTool {
   color?: string
   label?: string
   on?: boolean
+  /** Secondary trigger keeps the primary action intact and supplies a real anchor. */
+  menu?: { title: string; onOpen(anchor: HTMLElement): void }
   onRun(): void
 }
 
@@ -113,7 +115,7 @@ export function SelectionBar({ tools, actions, more, moreHeading, moreLabel, ord
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key !== 'Escape' || e.isComposing) return
+      if (e.key !== 'Escape' || e.isComposing || e.defaultPrevented) return
       // Someone is typing elsewhere (a command palette, a search box opened over the view): Escape is theirs.
       const a = document.activeElement
       const bar = rowRef.current?.parentElement
@@ -127,8 +129,8 @@ export function SelectionBar({ tools, actions, more, moreHeading, moreLabel, ord
       }
       onClose?.()
     }
-    window.addEventListener('keydown', onKey, true)
-    return () => window.removeEventListener('keydown', onKey, true)
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
   }, [open, onClose])
 
   useEffect(() => {
@@ -138,13 +140,27 @@ export function SelectionBar({ tools, actions, more, moreHeading, moreLabel, ord
   }, [open])
 
   const hasMore = !!more?.length
-  const toolEls = tools?.length ? tools.map((t) => t.color ? (
-    <button key={t.id} type="button" className={`selbar-dot${t.on ? ' on' : ''}`} style={{ '--c': t.color } as CSSProperties} data-act={t.id} title={t.title} aria-label={t.title} aria-pressed={!!t.on} {...press(t.onRun)} />
-  ) : (
-    <button key={t.id} type="button" className={`selbar-btn${t.label ? ' selbar-act' : ''}${t.on ? ' on' : ''}`} data-act={t.id} title={t.title} aria-label={t.title} aria-pressed={t.on == null ? undefined : t.on} {...press(t.onRun)}>
-      {t.icon}{t.label}
-    </button>
-  )) : null
+  const toolEls = tools?.length ? tools.map((t) => {
+    const menuKey = (e: ReactKeyboardEvent<HTMLButtonElement>): void => {
+      if (!t.menu || e.key !== 'ArrowRight') return
+      e.preventDefault(); e.stopPropagation(); t.menu.onOpen(e.currentTarget)
+    }
+    const primary = t.color ? (
+      <button type="button" className={`selbar-dot${t.on ? ' on' : ''}`} style={{ '--c': t.color } as CSSProperties} data-act={t.id} title={t.title} aria-label={t.title} aria-pressed={!!t.on} {...press(t.onRun)} onKeyDown={menuKey} />
+    ) : (
+      <button type="button" className={`selbar-btn${t.label ? ' selbar-act' : ''}${t.on ? ' on' : ''}`} data-act={t.id} title={t.title} aria-label={t.title} aria-pressed={t.on == null ? undefined : t.on} {...press(t.onRun)} onKeyDown={menuKey}>
+        {t.icon}{t.label}
+      </button>
+    )
+    return <span className={t.menu ? 'selbar-split' : 'selbar-tool'} key={t.id}>
+      {primary}
+      {t.menu && <button type="button" className="selbar-btn selbar-menu-trigger" data-menu-for={t.id} title={t.menu.title} aria-label={t.menu.title} aria-haspopup="menu"
+        onMouseDown={(e) => { e.preventDefault(); if (e.button === 0) t.menu!.onOpen(e.currentTarget) }}
+        onClick={(e) => { if (e.detail === 0) t.menu!.onOpen(e.currentTarget) }} onKeyDown={menuKey}>
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><path d="m9 5 7 7-7 7" /></svg>
+      </button>}
+    </span>
+  }) : null
   const actionEls = (
     <SelectionBarActions
       actions={actions}

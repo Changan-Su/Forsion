@@ -33,6 +33,28 @@ beforeEach(() => {
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
 describe('catalogFor / ensureCatalog', () => {
+  it('model refresh is deduplicated and does not fetch or refresh unrelated catalog data', async () => {
+    C.rememberCatalog(KEY, { agents: [{ slug: 'cached-agent' } as never] })
+    const before = C.catalogFor(KEY)!
+    const [a, b] = await Promise.all([C.ensureCatalogModels(KEY, 15_000), C.ensureCatalogModels(KEY, 15_000)])
+    expect(a).toBe(b)
+    expect(a?.defaultModelId).toBe('m')
+    expect(await C.ensureCatalogModels(KEY, 15_000)).toBe(a)
+    expect(authFetch.mock.calls.map(([url]) => new URL(url).pathname.split('/').at(-1))).toEqual(['models'])
+    expect(C.catalogFor(KEY)).toMatchObject({ at: before.at, agents: before.agents })
+  })
+
+  it('forgetting a target discards a pending model refresh', async () => {
+    let respond!: (response: Response) => void
+    authFetch.mockImplementationOnce(() => new Promise((resolve) => { respond = resolve }))
+    const refresh = C.ensureCatalogModels(KEY, 15_000)
+    await vi.waitFor(() => expect(respond).toBeDefined())
+    C.forgetCatalog(KEY)
+    respond(new Response(JSON.stringify({ models: [] })))
+    expect(await refresh).toBeNull()
+    expect(C.catalogFor(KEY)).toBeNull()
+  })
+
   it('没有 → null;拉一次后命中缓存 5 分钟,过期或 force 再拉', async () => {
     expect(C.catalogFor(KEY)).toBeNull()
     const now = Date.now()

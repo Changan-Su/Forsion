@@ -1295,7 +1295,7 @@ export function ChatCanvas({ rootId, activeId, dir, onDir, onChat, exiting, onEx
                 key={c.key}
                 ref={track}
                 className="t2cv-turn"
-                data-cv-node={c.key}
+                data-cv-node={c.key} data-read-session-id={c.sid}
                 data-kid={kidHead ? 'head' : kid ? '' : undefined}
                 data-anchor={c.key === switching?.key ? '' : undefined}
                 data-dim={dim ? '' : undefined}
@@ -1469,7 +1469,7 @@ export function ChatCanvas({ rootId, activeId, dir, onDir, onChat, exiting, onEx
       {/* 阅读栏:舞台外面(手势层不吞它的滚动和点击),对话页那套排版。顶上这一支的每一轮,底下一排操作(同卡边 ⊕ 的规则);关掉时还留 READ_CLOSE_MS 往右淡出 */}
       {paneCard && (
         <aside
-          ref={readCard ? readRef : undefined} tabIndex={-1} className="t2cv-read" aria-label={t('chatcanvas.read.aria')} data-testid="cv-read" data-cv-read={paneCard.key}
+          ref={readCard ? readRef : undefined} tabIndex={-1} className="t2cv-read" aria-label={t('chatcanvas.read.aria')} data-testid="cv-read" data-cv-read={paneCard.key} data-read-session-id={paneCard.sid}
           data-out={readCard ? undefined : ''}
         >
           <div className="t2cv-read-grip" role="separator" aria-orientation="vertical" aria-label={t('chatcanvas.read.resize')} title={t('chatcanvas.read.resize')} onPointerDown={onGrip} />

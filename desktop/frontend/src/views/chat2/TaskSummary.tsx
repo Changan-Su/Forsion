@@ -14,7 +14,7 @@
  * 出现/收起仍是纯 CSS(容器查询 + 过渡,见 chat2.css `.t2-tsum`);窄了整栈收掉,后台进程退到输入框上方那一行。
  */
 import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { AlertTriangle, ArrowDownToLine, ArrowUpToLine, CheckCircle2, ChevronRight, CircleStop, FileText, FolderOpen, Globe, GripVertical, LayoutGrid, MinusCircle, Pencil, Plus, RotateCcw, Search, X, XCircle } from 'lucide-react'
+import { AlertTriangle, ArrowDownToLine, ArrowUpToLine, CheckCircle2, ChevronRight, CircleStop, FileText, FolderOpen, Globe, GripVertical, LayoutGrid, MinusCircle, Pencil, Plus, RotateCcw, Search, StepForward, X, XCircle } from 'lucide-react'
 import { createDropIndicator, land, landWhenMoved } from '@lcl/engine'
 import { describeTool, toolVerb } from '../../components/ToolGroup'
 import { ContextMenu, type CtxMenu } from '../../components/RightPanel'
@@ -37,6 +37,7 @@ import { BgRow, PROCESS_CAP } from './BackgroundProcs'
 import { useChangesCard } from './changeTrail'
 import { ChangeScopeSeg, ChangesCardBody } from './ChangesCard'
 import { SandboxRailCard, useSandboxRail } from './SandboxRailCard'
+import '../../tangu/messages'
 
 registerMessages({
   'tsum.title': { zh: '任务概览', en: 'Task overview' },
@@ -297,9 +298,11 @@ function RailWidgetCard({ id, open, onToggle, bodyCap, squeezed }: { id: string;
   )
 }
 
-export function TaskSummary({ sessionId, desk, messages, running, cwd, hostCwd, onJumpToAttention, onShowEditing, onOpenFile, extraRoots = [], lockedRoots = [], onAddRoot, onRemoveRoot, modelId, teamStatus, onRetry }: {
+export function TaskSummary({ sessionId, desk, messages, running, cwd, hostCwd, onJumpToAttention, onShowEditing, onOpenFile, extraRoots = [], lockedRoots = [], onAddRoot, onRemoveRoot, modelId, teamStatus, onRetry, onContinue }: {
   /** 失败卡的「重试」(同 /retry);只读视图不传。 */
   onRetry?: () => void
+  /** 失败卡的「继续生成」(store.continueRun);这一轮有产出才传,传了「重试」就改叫「重新生成」退居次位。 */
+  onContinue?: () => void
   /** 当前会话;新对话草稿 = null(没有后台进程,也不挂插件卡)。 */
   sessionId?: string | null
   /** Agent Desk 卡(DeskCard);栈里的一张,和别的卡一起排序。 */
@@ -423,7 +426,10 @@ export function TaskSummary({ sessionId, desk, messages, running, cwd, hostCwd, 
         {f.state === 'error' && f.error && <div className="t2-tsum-sub err" title={f.error}>{humanizeRunError(f.error, t)}</div>}
         {f.state === 'error' && <ReloginChip error={f.error ?? undefined} modelId={modelId} />}
         {f.state === 'error' && !running && onRetry && (
-          <div className="t2-retry-row t2-tsum-retry"><button type="button" className="t2-retry-btn lead" data-testid="tsum-retry" onClick={onRetry}><RotateCcw size={13} />{t('chat.retry')}</button></div>
+          <div className="t2-retry-row t2-tsum-retry">
+            {onContinue && <button type="button" className="t2-retry-btn lead" data-testid="tsum-continue" title={t('chat.continueTip')} onClick={onContinue}><StepForward size={13} />{t('chat.continue')}</button>}
+            <button type="button" className={onContinue ? 't2-retry-btn' : 't2-retry-btn lead'} data-testid="tsum-retry" title={onContinue ? t('chat.regenerateTip') : undefined} onClick={onRetry}><RotateCcw size={13} />{t(onContinue ? 'chat.action.regenerate' : 'chat.retry')}</button>
+          </div>
         )}
         {f.attention.length > 0 && (
           <button className="t2-tsum-attn" onClick={onJumpToAttention}>

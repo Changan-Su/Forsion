@@ -304,7 +304,11 @@ const displayMathSpans = (s: string): Array<[number, number]> => {
   for (let i = 0; ;) {
     const o = s.indexOf('$$', i)
     if (o < 0) break
-    if (s[o + 2] === '$') { i = o + 3; continue }
+    if (s[o + 2] === '$') {
+      if (s.slice(o, o + 4) === '$$$$' && s[o + 4] !== '$') { out.push([o, o + 4]); i = o + 4 }
+      else i = o + 3
+      continue
+    }
     const c = s.indexOf('$$', o + 2)
     if (c < 0) break
     out.push([o, c + 2])
@@ -319,7 +323,13 @@ const enterInDisplayMath: Command = (state, dispatch) => {
   if (!br || !$from.parent.textContent.includes('$$')) return false
   const a = $from.parentOffset
   const b = $to.parentOffset
-  if (!displayMathSpans(buildBlockString($from.parent)).some(([o, c]) => a >= o + 2 && b <= c - 2)) return false
+  const span = displayMathSpans(buildBlockString($from.parent)).find(([o, c]) => a >= o + 2 && b <= c - 2)
+  if (!span) return false
+  if (span[1] - span[0] === 4 && a === b) {
+    const tr = state.tr.replaceWith($from.pos, $to.pos, [br.create({ isInline: true }), br.create({ isInline: true })])
+    dispatch?.(tr.setSelection(TextSelection.create(tr.doc, $from.pos + 1)).scrollIntoView())
+    return true
+  }
   dispatch?.(state.tr.replaceSelectionWith(br.create({ isInline: true }), false).scrollIntoView())
   return true
 }

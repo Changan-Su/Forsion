@@ -170,7 +170,7 @@ describe('首轮 system 目录 × 真实工具面', () => {
 });
 
 /**
- * 尾部 user 通道的落点(Codex 评审三轮 #9):只认「本轮那条 user 消息且它就在对话末尾」。
+ * 尾部 user 通道的落点:运行时注入使用独立载体,用户消息原文不变。
  * 倒扫「历史里最后一条 user」会在空消息 run(Muse/自动化/续跑,历史以 assistant 收尾)
  * 把 ephemeralHint 插到后面那些消息**之前** —— 既改写了历史,又不再是「尾部」。
  */
@@ -199,18 +199,21 @@ describe('尾部 user 通道的落点', () => {
     expect(lastAssistant).toBeLessThan(msgs.length - 1);
   }, 30_000);
 
-  it('正常 run:hint 仍拼进本轮那条 user 消息,不新起一条(前缀字节不多一条消息)', async () => {
+  it('正常 run:hint 使用独立尾部载体,本轮用户原文在 wire 与数据库都不变', async () => {
     script = [finalStep('好。')];
     const run = await runToSettled('今天怎么样', { ephemeralHint: 'EPHEMERAL-MARK' });
     expect(run.status).toBe('done');
     const msgs = (llmPayloads[0].messages as any[]);
     const users = msgs.filter((m) => m.role === 'user');
-    expect(users.length).toBe(1);
-    expect(String(users[0].content)).toContain('今天怎么样');
-    expect(String(users[0].content)).toContain('EPHEMERAL-MARK');
+    expect(users.length).toBe(2);
+    expect(String(users[0].content)).toBe('今天怎么样');
+    expect(String(users[1].content)).toContain('EPHEMERAL-MARK');
+    expect(String(users[1].content)).not.toContain('今天怎么样');
+    const rows = await query<any[]>(`SELECT content FROM chat_messages WHERE session_id = 'S' AND role = 'user'`);
+    expect(rows.map((r) => r.content)).toEqual(['今天怎么样']);
   }, 20_000);
 
-  it('边界:历史以一条非本轮 user 收尾(上一 run 在 assistant 落库前中断)+ 空消息 run —— 就地追加,不造出两条连续 user', async () => {
+  it('边界:历史以非本轮 user 收尾 + 空消息 run —— 独立载体不改写中断前用户消息', async () => {
     script = [finalStep('答一。')];
     expect((await runToSettled('第一问')).status).toBe('done');
     // 上一个 run 在 assistant 落库前被中断 → 历史以一条 user 收尾(它不是本轮那条)。
@@ -227,20 +230,21 @@ describe('尾部 user 通道的落点', () => {
     expect(run2.status).toBe('done');
 
     const msgs = (llmPayloads[0].messages as any[]);
-    // 请求里不允许出现两条相邻同为 user:openaiToAnthropicBody 只合并相邻 tool,同角色 user 逐条 push。
-    const adjacentUserPairs = msgs.filter((m, i) => i > 0 && m.role === 'user' && msgs[i - 1].role === 'user');
-    expect(adjacentUserPairs).toEqual([]);
-    // hint 就地追加进末尾那条 user,仍是「尾部 user 通道」。
+    // 相邻 user 是独立运行时载体;不得为了合并角色而改写用户历史。
+    const orphan = msgs[msgs.length - 2];
+    expect(orphan.role).toBe('user');
+    expect(String(orphan.content)).toBe('半路中断的一问');
     const last = msgs[msgs.length - 1];
     expect(last.role).toBe('user');
-    expect(String(last.content)).toContain('半路中断的一问');
+    expect(String(last.content)).not.toContain('半路中断的一问');
     expect(String(last.content)).toContain('EPHEMERAL-MARK');
     // 更早的那条 user(历史中段)一字不动。
     const older = msgs.find((m) => m.role === 'user' && String(m.content).includes('第一问'));
     expect(String(older.content)).toBe('第一问');
-    // 尾部通道恒不落库:追加进历史消息也一样。
+    // 尾部通道恒不落库,中断前用户消息保持原文。
     const rows = await query<any[]>(`SELECT content FROM chat_messages WHERE session_id = 'S'`);
     expect(rows.some((r) => String(r.content).includes('EPHEMERAL-MARK'))).toBe(false);
+    expect(rows.some((r) => r.content === '半路中断的一问')).toBe(true);
   }, 30_000);
 });
 

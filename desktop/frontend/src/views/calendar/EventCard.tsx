@@ -1,3 +1,4 @@
+import { CalendarOverlay } from './CalendarOverlay'
 /** 事件/待办 旁弹编辑卡 —— 从 CalendarView 抽出,CalendarView 与 TodoListView 共用。
  *  target.colId = calendarDate 列 id(null = 该表没有日历列,不渲染时间区,todo 表常见)。
  *  透明捕获层点外即关;卡片 fixed 定位在锚点旁,不依赖事件块 DOM。
@@ -138,6 +139,7 @@ export function EventCard({ ev, at, onClose, maxRight, calendar = false, onActio
   }, [calendar, focusTitle])
 
   return (
+    <CalendarOverlay enabled={!mobile}>
     <div className={`amx-cal-cardcatch${calendar ? ' calendar' : ''}${mobile ? ' mobile' : ''}`} onMouseDown={calendar ? undefined : onClose}>
       <div
         className={`amx-cal-cardwrap${mobile ? ' amx-cal-drawer' : ''}${collapsed ? ' collapsed' : ''}`}
@@ -160,6 +162,7 @@ export function EventCard({ ev, at, onClose, maxRight, calendar = false, onActio
         </div> : <EventCardBody ev={ev} onClose={onClose} closeRef={closeRef} onActions={onActions} />)}
       </div>
     </div>
+    </CalendarOverlay>
   )
 }
 

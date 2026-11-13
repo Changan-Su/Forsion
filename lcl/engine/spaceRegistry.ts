@@ -12,6 +12,7 @@ import { clearSingleColumnLayouts } from './singleColumnStore'
 import { onePageRedirect, mainPageLanding } from './pinnedViews'
 import { getView } from './viewRegistry'
 import { mainOpensBeside } from './openBeside'
+import { beginNavSpace, finishNavSpace, forgetNavSpace } from './navStore'
 
 const ACTIVE_KEY = IS_MINI_PANEL ? 'forsion_mini_active_space' : 'forsion_tangu_active_space'
 /** 每个 Space 的布局存进既有命名布局表,用此前缀的保留名。 */
@@ -66,7 +67,7 @@ export const useSpaceStore = create<SpaceState>((set, get) => ({
   registerSpace: (def) =>
     set((s) => ({ spaces: [...s.spaces.filter((x) => x.id !== def.id), def] })),
 
-  unregisterSpace: (id) => set((s) => ({ spaces: s.spaces.filter((x) => x.id !== id) })),
+  unregisterSpace: (id) => { forgetNavSpace(id); set((s) => ({ spaces: s.spaces.filter((x) => x.id !== id) })) },
 
   setActiveSpace: (toId) => {
     const { spaces, activeSpaceId: fromId } = get()
@@ -87,6 +88,7 @@ export const useSpaceStore = create<SpaceState>((set, get) => ({
     //    → 屏上是空布局,谁的现场都不是。存了就写进 space:<上次退出的那个 Space>,之后再进它就是一片空白(2026-10-13 实报)。
     if (!IS_MINI_PANEL && !(bootLayoutFellThrough() && liveLayoutOwner() === null)) ws.saveNamed(spaceLayoutName(liveLayoutOwner() ?? fromId))
     const recent = IS_MAIN_WINDOW ? bumpRecent(get().recent, toId, fromId) : get().recent
+    beginNavSpace(liveLayoutOwner() ?? fromId, toId)
     set({ activeSpaceId: toId, recent })   // 2. 先切 id(defaultBuilder 经 getActiveSpace 取新 Space)
     try {
       if (!IS_TRANSIENT_MINI_PANEL) localStorage.setItem(ACTIVE_KEY, toId)
@@ -95,6 +97,7 @@ export const useSpaceStore = create<SpaceState>((set, get) => ({
     if (IS_MINI_PANEL) {
       // Never restore the old Mini/mobile workspace blob or build desktop sidebars.
       ws.resetLayout()
+      finishNavSpace(useWorkspace.getState().mainTabs.map(tab => tab.id))
       return
     }
     ws.setSidebarDefaults(toSpace.sidebarDefaults) // 3. 两路都需(applyNamed 不跑 build)
@@ -106,9 +109,17 @@ export const useSpaceStore = create<SpaceState>((set, get) => ({
     // per-tab 历史由 applyNamed / resetLayout 各自在换布局时清(两种 store 都是)。⚠️ 这里别再补一次 reset:
     // 它跑在重建之后,会把还原出来的前台文件视图刚记下的栈底一起清掉 → 后退恒灰(09-16 active-tab.e2e)。
     // 已存布局里缺了固定 View(插件停用时被清场、Space 后来新增了固定项…)→ 补回来;resetLayout 那一路由 build() 负责。
-    if (saved && ws.applyNamed(spaceLayoutName(toId))) { ws.ensurePinned(); ws.saveCurrent() }
-    else ws.resetLayout()
-    landOnMainPage() // 5. 声明了默认主页的 Space:进来先看到那一页,而不是上次离开时的前台
+    try {
+      if (saved && ws.applyNamed(spaceLayoutName(toId))) { ws.ensurePinned(); ws.saveCurrent() }
+      else ws.resetLayout()
+      landOnMainPage()
+    } finally {
+      finishNavSpace(useWorkspace.getState().mainTabs.map(tab => tab.id))
+      // Layout reconstruction emits temporary identities. Seed only the settled layout,
+      // after its own Space's histories have returned.
+      useWorkspace.setState({ mainTabs: [] })
+      useWorkspace.getState().refreshTabs()
+    }
   },
 }))
 

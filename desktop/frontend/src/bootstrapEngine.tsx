@@ -1,3 +1,4 @@
+import { navigationParams, navigationSig } from '@lcl/engine/navigationTarget'
 import { openMiniWindow } from './mini/openMiniWindow'
 import { registerAmadeusViews } from './features/amadeus'
 import { inboxAvailable } from './features/runtime'
@@ -155,10 +156,8 @@ export function installEngine(activateTangu: (host: TanguHost) => void): void {
 
   registerAmadeusViews()
 
-  // Inbox Space:收件箱(左 统一工作区·收件箱列表源 / 主 阅读面板)。数据来自本地后端 /agent/inbox。
-  // gate = inboxAvailable():旧档案 spaces 点名 + 桌面壳 backendStatus(含 external 模式)或移动端 mobile;
-  // Unit 宿主 = tangu 包 + 本地引擎。webShim / 云端 Unit 无 backendStatus → 不注册,
-  // 旧布局引用未注册视图由 workspaceStore.layoutViewsAllRegistered 整份回退,不崩。
+  // Inbox: desktop/Unit engine inbox, or Web/mobile client storage fed by cloud broadcasts.
+  // Registration and polling share inboxAvailable(); public Unit visitors use Extend's account channel.
   if (inboxAvailable()) {
     // 收件箱列表 = 统一「工作区」视图的一个列表源(2026-09-11,与青鸟收藏夹同一条契约);阅读面板声明 workspaceSource,
     // 它做活动主视图时左栏自动切到收件箱。inbox-list 类型保留给仪表盘卡片;整页渲染也换成 WorkspaceView ——
@@ -269,32 +268,36 @@ export function installEngine(activateTangu: (host: TanguHost) => void): void {
   // 对话会话切换 → 喂 per-tab 导航历史 + 启动器「最近使用」。
   // 时序:点会话列表是 setActiveId → openView,订阅同步 fire 时目标 chat leaf 可能尚未就位/激活,
   // 推迟一拍(microtask)再问当前活动主 leaf。back/forward 复原:restore() 同步触发本订阅时
-  // go() 的 navDepth 仍未回零(其 finally 注册晚于订阅排队),microtask 里 record 仍被闸 ✓。
+  // go() 的该 leaf 恢复事务仍在运行,microtask 里 record 仍被闸。
   // ⚠️ 归属必须是**主区活动 leaf**,不能用 focusedChatLeafId:它跟着「最后被激活的聊天」跑,而侧栏那份
   //    常驻陪伴聊天一被点就把它抢走 —— 历史记进侧栏的栈,箭头只读主区活动 tab 的栈 → 箭头恒灰(实报的
   //    「有时候失效」)。侧栏聊天自身不记历史(用户 2026-08-17 拍板:谁都不记)。
   useApp.subscribe((s, p) => {
     const id = s.activeId
     if (!id || id === p.activeId) return
+    const originSpace = useSpaceStore.getState().activeSpaceId
     queueMicrotask(() => {
-      // ⚠️ 移动单列壳 `api` 恒 null(同 amadeusViews 那条 leafById 告警)→ 必须退回 focusedChatLeafId,
-      //    否则安卓返回键再也走不动会话(手机没有侧栏聊天,抢不走它,上面那个坑在单列壳里不存在)。
-      //    check:parity 抓不到这种「不是类型错、也不崩,只是静默少功能」。
+      if (useSpaceStore.getState().activeSpaceId !== originSpace || app().activeId !== id) return
+      // openSession sets activeId before opening/activating its destination. Read
+      // the settled owner here: capturing the source would pollute it on ⌘-click.
+      // Dockview's activePanel may be a sidebar; keep using the focused main group.
+      // The mobile shell has no Dockview API and exposes its main leaf directly.
       const api = ws().api
-      const am = api ? activeMainPanel(api) : null
-      const leafId = api
-        ? (am && ((am.params ?? {}) as { __type?: string }).__type === 'chat' ? am.id : null)
-        : ws().focusedChatLeafId
-      recordNav(leafId, `chat:${id}`, () => {
+      const main = api ? activeMainPanel(api) : null
+      const owner = api ? main ? ws().leafById(main.id) : null : ws().getActiveLeaf()
+      const leafId = owner?.loc === 'main' && owner.type === 'chat' ? owner.id : null
+      recordNav(leafId, `chat:${id}`, (context) => {
+        if (context && !context.isCurrent()) return
         // 状态在**复原当时**现读:主聊天可能已被冻成钉住档(见 sessionNav.freezeMainPrimary)。
         const w = ws()
         const cur = leafId ? w.leafById(leafId) : null
+        if (!cur) throw new Error('Navigation View no longer exists')
         switch (planChatRestore(cur)) {
           case 'follow': app().setActiveId(id); break
           case 'pin': cur!.setParams({ sessionId: id }); break
           case 'navigate': w.navigateLeaf(leafId!, 'chat', { sessionId: id, followActive: false }); break
         }
-      })
+      }, app().sessions.find(session => session.id === id)?.title ?? undefined)
     })
     const title = s.sessions.find((x) => x.id === id)?.title
     useRecentViews.getState().record({ key: `chat:${id}`, kind: 'chat', id, title: title || app().tr('workbench.chat') })
@@ -324,15 +327,26 @@ export function installEngine(activateTangu: (host: TanguHost) => void): void {
     const params = (p?.params ?? {}) as Record<string, unknown>
     const type = tab ? tab.type : typeof params.__type === 'string' ? params.__type : ''
     const fileParam = RECENT_FILE_PARAM[type]
-    // per-tab 导航历史(2026-08-17):PDF/白板/多维表/图片/仪表盘/插件文件/工作区预览此前一条都不记,
-    // 于是这类标签的箭头恒灰,同一标签里「笔记→PDF→笔记」中间那步也会被跳过。restore 只碰本 leaf。
-    // ⚠️ 记在 lastRecentKey 去重**之前**:那是「最近使用」用的全局单值,拿它挡会漏掉「同一个文件在
-    //    第二个标签里打开」——那个新标签的栈会一条都没有(=箭头恒灰,又一种「失效」)。
-    const navKey = fileParam && typeof params[fileParam] === 'string' ? `file:${type}:${params[fileParam] as string}`
-      : (RECENT_VIEW_TYPES.has(type) || type.startsWith('plugin:')) ? `view:${type}` : null
-    if (p && navKey) {
-      const restoreParams = fileParam ? { [fileParam]: params[fileParam] } : {}
-      recordNav(p.id, navKey, () => useWorkspace.getState().navigateLeaf(p.id, type, restoreParams))
+    // Record every changed View, including a non-focused half of a split. Recently-used
+    // presentation below still follows the focused View; navigation belongs to its owner.
+    for (const tab of st.mainTabs) {
+      const old = prev.mainTabs.find(item => item.id === tab.id)
+      if (old && old.type === tab.type && old.sig === tab.sig && old.title === tab.title) continue
+      const owner = ws().leafById(tab.id)
+      if (!owner) continue
+      const snapshot = navigationParams(owner.params)
+      const field = RECENT_FILE_PARAM[owner.type]
+      const sid = owner.type === 'chat' ? (snapshot.followActive === false ? snapshot.sessionId : app().activeId) : undefined
+      const key = sid ? `chat:${String(sid)}`
+        : field && typeof snapshot[field] === 'string' ? `file:${owner.type}:${String(snapshot[field])}`
+          : RECENT_VIEW_TYPES.has(owner.type) || owner.type.startsWith('plugin:') ? `view:${owner.type}:${navigationSig(snapshot)}` : null
+      if (!key) continue
+      const targetType = owner.type, targetId = owner.id
+      recordNav(targetId, key, (context) => {
+        if (context && !context.isCurrent()) return
+        if (!ws().leafById(targetId)) throw new Error('Navigation View no longer exists')
+        ws().navigateLeaf(targetId, targetType, sid ? { ...snapshot, sessionId: sid, followActive: false } : snapshot)
+      }, tab.title)
     }
     if (fileParam && typeof params[fileParam] === 'string') {
       const path = params[fileParam] as string
@@ -465,7 +479,7 @@ export function installEngine(activateTangu: (host: TanguHost) => void): void {
   // per-tab 前进/后退(Ctrl/⌘+{ 与 }):只走当前活动主 leaf 的历史栈;与主区左上角箭头同源。
   const navGo = (dir: 'back' | 'forward'): void => {
     const api = ws().api
-    const id = api ? activeMainPanel(api)?.id : null
+    const id = api ? activeMainPanel(api)?.id : ws().getActiveLeaf()?.id
     if (id) useNav.getState()[dir](id)
   }
   addCommand({ id: 'nav-back', title: () => app().tr('command.navBack'), keywords: 'back history 后退 历史', hotkey: 'mod+shift+[', run: () => navGo('back') })

@@ -8,6 +8,7 @@ const fixture = vi.hoisted(() => ({
 vi.mock('../amadeus/store/pageStore', () => ({
   flushAllScopes: fixture.flush,
   resetAllScopeDocs: fixture.reset,
+  invalidateVaultRestore: vi.fn(),
   usePageStore: { getState: () => ({ vaultSide: fixture.side, restoreVault: fixture.restore, initVaultSide: fixture.initSide }), setState: fixture.setState },
 }))
 vi.mock('../amadeus/store/dbStore', () => ({ useDbStore: { getState: () => ({ flushAll: fixture.db }) } }))

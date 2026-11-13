@@ -291,7 +291,7 @@ const SPACES: SpaceDefinition[] = [
   // Calendar 已是**内置插件**(builtins/calendar:Space + 三个视图随插件启停)。这里仍按槽位声明式带上,
   // 保住 ribbon 默认序与「上次退出停在日历」的启动恢复;插件页关掉后下次启动即整条不出现。
   ...(calendarAvailable() && builtinEnabled('calendar') ? [calendarSpace] : []),
-  // Inbox 与视图注册同门控(inboxAvailable:旧档案 spaces 点名 + backendStatus/mobile;Unit 宿主 = tangu 包 + 本地引擎)。
+  // Inbox 与视图、轮询共用 inboxAvailable:桌面/Unit 引擎,或 Web/mobile 客户端收件箱。
   ...(inboxAvailable() ? [inboxSpace] : []),
   ...(hasNativeFeature('tangu') ? [agentsSpace] : []),
   // Coding 依赖 host 文件桥 + 本地静态预览服务器(仅桌面 electron;Tangu Web 无 codePreviewServe → 不注册)。

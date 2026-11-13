@@ -1,0 +1,26 @@
+:root, .am-app, .amx-color-popover { --amx-accent-fill: color-mix(in srgb, var(--signal) 14%, transparent); }
+.amx-color-popover { width: 278px; box-sizing: border-box; padding: 8px; font: var(--ui-font-body)/var(--ui-line-body) var(--font-ui); color: var(--text); z-index: var(--z-menu); }
+.amx-palette-head, .amx-palette-head > [role='tablist'] { display: flex; align-items: center; gap: 4px; }
+.amx-palette-head { margin-bottom: 6px; }
+.amx-color-popover button { border: 0; color: inherit; background: transparent; cursor: pointer; font: inherit; border-radius: var(--radius-sm); padding: 5px 8px; }
+.amx-color-popover button:hover, .amx-color-popover button[aria-selected='true'] { background: var(--menu-hover); }
+.amx-color-popover button:focus-visible { outline: 2px solid var(--signal); outline-offset: 1px; }
+.amx-palette-close { margin-left: auto; display: flex; }
+.amx-palette-option { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; min-height: 30px; }
+.amx-palette-option > span { flex: 1; }
+.amx-palette-accent { width: 16px; height: 16px; background: var(--signal); border-radius: var(--radius-sm); }
+.amx-palette-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; padding: 4px 0; }
+.amx-palette-grid > button { position: relative; display: flex; align-items: center; justify-content: center; height: 32px; }
+.amx-palette-grid i { width: 22px; height: 22px; border-radius: var(--radius-sm); }
+.amx-palette-grid svg { position: absolute; right: 2px; bottom: 2px; color: var(--text); background: var(--bg-card); border-radius: var(--radius-sm); }
+.amx-palette-scope { color: var(--text-muted); font-size: var(--ui-font-caption); padding: 6px 8px 2px; }
+.amx-palette-custom { display: flex; flex-wrap: wrap; gap: 6px; }
+.amx-palette-custom input:not([type='color']) { min-width: 0; width: 100px; color: var(--text); background: var(--bg-input); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.amx-palette-custom input[type='color'] { width: 36px; padding: 0; border: 0; background: transparent; }
+/* The same controls form a bottom sheet on narrow screens. OverlayAt still owns desktop zoom/clamping. */
+@media (max-width: 600px) {
+  .amx-color-popover { top: auto !important; left: 12px !important; right: 12px; bottom: max(12px, env(safe-area-inset-bottom)); width: auto; max-height: 70dvh; overflow-y: auto; }
+  .amx-palette-grid > button { height: 40px; }
+}
+/* Explicit card fill is also readable in document mode; it adds no hover frame. */
+.am-app .unified-body:not(.amx-canvas) .amx-ucard[data-color] { background: color-mix(in srgb, var(--amx-color, var(--bg)) 10%, transparent); }

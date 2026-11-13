@@ -204,9 +204,13 @@ describe('真路由 × 真 loop:手机上传的附件进 host run 的本轮 user
     // 反方向:本机上传不进远程 run,留给下一条本机 run
     await upload(sid, [{ path: 'desk.txt', content: 'local' }], { local: true });
     await runToSettled(sid, 'X3', 'phone turn', R);
-    expect(lastUser(llmPayloads[2]).split('\n')[0], '远程 run 第一行不带本机上传的路径(之后可能跟着召回块)').toBe('phone turn');
-    expect(lastUser(llmPayloads[2])).not.toContain('desk.txt');
+    const phoneUser = await userRow('U-X3');
+    expect(phoneUser).toBe('phone turn');
+    expect(llmPayloads[2].messages.some((m: any) => m.role === 'user' && textOf(m) === phoneUser), '用户原文与召回载体分开传递').toBe(true);
+    expect(JSON.stringify(llmPayloads[2].messages)).not.toContain('desk.txt');
     await runToSettled(sid, 'X4', 'desk turn');
-    expect(lastUser(llmPayloads[3]).split('\n')[0]).toBe(`"${join(dir, 'desk.txt')}"`);
+    const deskUser = await userRow('U-X4');
+    expect(deskUser).toBe(`"${join(dir, 'desk.txt')}"\ndesk turn`);
+    expect(llmPayloads[3].messages.some((m: any) => m.role === 'user' && textOf(m) === deskUser)).toBe(true);
   });
 });

@@ -322,7 +322,7 @@ const PLAN_MODE_TOOLS = new Set([
   'get_datetime', 'calculator', 'web_search', 'web_fetch',
   'browser_search', 'browser_navigate', 'browser_snapshot', 'browser_screenshot', 'browser_tabs',
   'search_files', 'glob_files', 'list_files', 'read_file', 'list_dir', 'view_image', 'view_video',
-  'read_log', 'use_skill', 'todo_write', 'todo_read',
+  'read_log', 'use_skill', 'todo_write', 'todo_read', 'read_only_code', 'read_tool_output',
   'read_session', 'search_sessions', // 只读回看过去会话;规划「继续上次讨论」类任务离不开
   'session_status', // 只读:上下文占用 / 已花 token / 步数;规划长任务前估预算
   'forsion_account', // 只读:账号额度 / 积分 / 套餐(动作那件不进计划模式)

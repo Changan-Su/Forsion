@@ -29,7 +29,7 @@ describe('Intelligent UI v2 renderer', () => {
     const out = html(doc)
     expect(out).not.toContain('<a')
     expect(out).not.toContain('<strong>')
-    expect(out.match(/<td>/g)).toHaveLength(2)
+    expect(out.match(/<td\b/g)).toHaveLength(2)
     expect(out).toContain('https://evil.example')
   })
   it('renders a written-out table, computing only its {{ }} cells', () => {

@@ -103,11 +103,30 @@ function itemsCoverCalls(items: any[], calls: ToolCall[]): boolean {
  * parse 回来键序按插入序原样复现。SQLite 的 TEXT 列天然保序,**看不出**这条(见 hydration 测试里的
  * jsonb 归一化模拟)。没有别处读这个字段,故不再同时存一份解析好的 outputItems(读侧仍兼容旧行)。
  */
+export interface TurnContextSnapshot {
+  version: 1;
+  assistantMessageId: string;
+  sourceMessageId: string;
+  text: string;
+}
+const TURN_CONTEXT_MAX_BYTES = 64 * 1024;
+function validTurnContext(value: any): value is TurnContextSnapshot {
+  return value?.version === 1 && typeof value.assistantMessageId === 'string'
+    && typeof value.sourceMessageId === 'string' && !!value.sourceMessageId
+    && typeof value.text === 'string' && !!value.text
+    && Buffer.byteLength(value.text, 'utf8') <= TURN_CONTEXT_MAX_BYTES;
+}
+
 export function stepLlmResponse(
   res: { content?: string; usage?: any; outputItems?: any[] },
   binding?: StepItemBinding,
+  context?: TurnContextSnapshot,
 ): Record<string, any> {
   const base: Record<string, any> = { content: res.content, usage: res.usage };
+  // Never copy arbitrary requests: only the explicitly selected runtime snapshot.
+  const contextText = context?.text;
+  if (validTurnContext(context)) base.turnContext = { ...context };
+  else if (contextText) base.turnContextDropped = { reason: 'size-or-invalid', bytes: Buffer.byteLength(contextText, 'utf8') };
   const apiModelId = typeof binding?.apiModelId === 'string' ? binding.apiModelId : '';
   const items = pickReplayItems(res.outputItems);
   // 没有模型绑定就不落:回放判不了「是不是同一个模型签的」,落了也永远用不上,只是白占体积。
@@ -162,7 +181,8 @@ export async function loadReplaySteps(
   const map = new Map<string, ReplayStep[]>();
   const state = deps().state;
   const load = state?.listStepsForMessages;
-  const ids = rows.filter((r) => r.role === 'model' || r.role === 'assistant').map((r) => r.id);
+  const ids = rows.map((r) => r.id);
+  const users = new Set(rows.filter(r => r.role === 'user').map(r => r.id));
   if (!load || !ids.length) return map;
   try {
     for (const s of await load.call(state, sessionId, ids)) {
@@ -170,12 +190,25 @@ export async function loadReplaySteps(
       const step: ReplayStep = { stepNo: s.stepNo, llmResponse: s.llmResponse, toolCalls: s.toolCalls };
       if (list) list.push(step);
       else map.set(s.messageId, [step]);
+      const context = s.llmResponse?.turnContext;
+      if (validTurnContext(context) && users.has(context.sourceMessageId)) {
+        const contexts = map.get(context.sourceMessageId) || [];
+        contexts.push(step); map.set(context.sourceMessageId, contexts);
+      }
     }
   } catch (e: any) {
     console.warn('[agent-core] 分步回放读取失败,本次回退扁平回放:', e?.message || e);
     return new Map();
   }
   return map;
+}
+
+/** Context follows its original user row, even when steering discarded the first
+ * assistant row. Call only for uncovered user rows so compaction cannot resurrect it. */
+export function replayUserContext(sourceMessageId: string, steps?: ReplayStep[]): ChatMessage[] {
+  const saved = steps?.map(s => (s.llm_response ?? s.llmResponse)?.turnContext)
+    .find(c => validTurnContext(c) && c.sourceMessageId === sourceMessageId);
+  return saved ? [{ role: 'user', content: saved.text }] : [];
 }
 
 function sanitizeCalls(value: unknown): ToolCall[] {
@@ -231,7 +264,7 @@ function flatToolMessage(call: ToolCall, results: Map<string, any>): ChatMessage
  *     (末轮正文 + 循环耗尽/额度不足等提示)原样挂成最后一条 assistant 消息,一个字节不丢。
  */
 export function replayAssistantHistory(
-  row: { content?: string | null; tool_calls?: unknown; tool_results?: unknown },
+  row: { id?: string; content?: string | null; tool_calls?: unknown; tool_results?: unknown },
   steps?: ReplayStep[],
   /** 本次 run 的上游模型 + **下一次请求要走的协议**。缺省 / 对不上 → 重建交错但不挂 providerItems
    *  (见文件头 ①)。protocol 取模型上的静态标记(hydrate 时 payload 还没造),故只会假不匹配。 */

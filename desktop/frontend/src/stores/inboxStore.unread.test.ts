@@ -1,16 +1,18 @@
 /** 未读轮询单飞(Codex 09-11 P2):并发的 refreshUnread 只跑一个 + 一次尾随重跑;同一条新消息只通知一次。 */
 import { describe, it, expect, vi } from 'vitest'
 
-const h = vi.hoisted(() => ({ count: vi.fn(), list: vi.fn(), notify: vi.fn(), patch: vi.fn(() => Promise.resolve()) }))
+const h = vi.hoisted(() => ({ count: vi.fn(), list: vi.fn(), notify: vi.fn(), patch: vi.fn(() => Promise.resolve()), pull: vi.fn() }))
 vi.mock('../services/backendService', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   getInboxUnreadCount: h.count,
   listInbox: h.list,
   patchInboxMessage: h.patch,
+  pullInbox: h.pull,
 }))
 vi.mock('./notificationStore', () => ({ notifyApp: h.notify }))
 
 import { inboxLetterPops, useInbox } from './inboxStore'
+import { useApp } from './appStore'
 
 // store 更新角标时摸 window.tangu(桌面桥);node 环境下给个空壳即可。
 vi.stubGlobal('window', {})
@@ -118,3 +120,67 @@ describe('点开 Muse 已读的信', () => {
   })
 })
 
+
+
+describe('client inbox automatic delivery', () => {
+  it('pulls at token readiness even if chat is disconnected, refreshes on foreground/timer, and stops cleanly', async () => {
+    vi.useFakeTimers()
+    const previous = useApp.getState()
+    const doc = Object.assign(new EventTarget(), { hidden: false })
+    vi.stubGlobal('document', doc)
+    vi.stubGlobal('window', { tangu: { cloudWeb: true }, setInterval, clearInterval })
+    h.pull.mockResolvedValue({ pulled: true, added: 1 })
+    h.count.mockResolvedValue({ count: 1, latestId: 'web' })
+    h.list.mockResolvedValue([])
+    useApp.setState({ cfg: { ...previous.cfg, token: '' }, connState: 'err' })
+    try {
+      useInbox.getState().startPolling()
+      expect(h.pull).not.toHaveBeenCalled()
+      useApp.setState({ cfg: { ...previous.cfg, token: 'cloud-token' } })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(h.pull).toHaveBeenCalledTimes(1)
+      doc.dispatchEvent(new Event('visibilitychange'))
+      await vi.advanceTimersByTimeAsync(0)
+      expect(h.pull).toHaveBeenCalledTimes(2)
+      await vi.advanceTimersByTimeAsync(5 * 60_000)
+      expect(h.pull).toHaveBeenCalledTimes(3)
+      useInbox.getState().stopPolling()
+      doc.dispatchEvent(new Event('visibilitychange'))
+      await vi.advanceTimersByTimeAsync(5 * 60_000)
+      expect(h.pull).toHaveBeenCalledTimes(3)
+    } finally {
+      useInbox.getState().stopPolling()
+      useApp.setState(previous)
+      vi.useRealTimers()
+      vi.unstubAllGlobals()
+    }
+  })
+})
+
+
+describe('cloud state revision', () => {
+  it('refreshes a claim when latest ID and unread count do not change', async () => {
+    vi.stubGlobal('window', {})
+    h.count.mockResolvedValue({ count: 1, latestId: 'cloud:one', revision: 'before' })
+    h.list.mockResolvedValue([{ id: 'cloud:one', attachments: { claimed: false } }])
+    await useInbox.getState().refreshUnread()
+    await useInbox.getState().refreshList()
+    h.list.mockResolvedValue([{ id: 'cloud:one', attachments: { claimed: true } }])
+    h.count.mockResolvedValue({ count: 1, latestId: 'cloud:one', revision: 'after' })
+    await useInbox.getState().refreshUnread()
+    expect(useInbox.getState().messages[0].attachments?.claimed).toBe(true)
+  })
+  it('retries a new revision after the corresponding list request fails', async () => {
+    vi.stubGlobal('window', {})
+    h.count.mockResolvedValue({ count: 1, latestId: 'cloud:retry', revision: 'before' })
+    h.list.mockResolvedValue([{ id: 'cloud:retry', attachments: { claimed: false } }])
+    await useInbox.getState().refreshUnread()
+    await useInbox.getState().refreshList()
+    h.count.mockResolvedValue({ count: 1, latestId: 'cloud:retry', revision: 'after' })
+    h.list.mockRejectedValueOnce(new Error('temporary failure')).mockResolvedValue([{ id: 'cloud:retry', attachments: { claimed: true } }])
+    await useInbox.getState().refreshUnread()
+    await useInbox.getState().refreshUnread()
+    expect(useInbox.getState().messages[0].attachments?.claimed).toBe(true)
+  })
+
+})

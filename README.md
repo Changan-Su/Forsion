@@ -1,175 +1,147 @@
 <div align="center">
 
-<img src="./desktop/build/icon.png" alt="Forsion logo" width="72" />
-
-# Forsion
-
-**Remember it. Think it through. Keep it moving.**<br>
-A local-first AI second brain you own.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./.github/assets/showcase/hero-en-dark.png">
+  <img src="./.github/assets/showcase/hero-en-light.png" alt="Forsion is All You Need. A local-first second-brain workbench. What you've built up, you and AI carry forward together." width="100%">
+</picture>
 
 **English** · [简体中文](./README.zh-CN.md)
 
 [![Latest release](https://img.shields.io/github/v/release/Changan-Su/Forsion?display_name=tag&sort=semver&label=release)](https://github.com/Changan-Su/Forsion/releases)
-![Platforms](https://img.shields.io/badge/desktop-macOS%20%C2%B7%20Windows%20%C2%B7%20Linux-555)
-[![License](https://img.shields.io/badge/license-Modified%20Apache--2.0-6f42c1)](./LICENSE)
+![Platforms](https://img.shields.io/badge/platforms-macOS%20%C2%B7%20Windows%20%C2%B7%20Linux%20%C2%B7%20Android%20%C2%B7%20Web-555)
+[![License](https://img.shields.io/badge/license-Apache--2.0-6f42c1)](./LICENSE)
 
-[Download](https://github.com/Changan-Su/Forsion/releases/latest) · [Quick start](./docs/getting-started/quickstart.en.md) · [Documentation (中文)](./docs/README.md) · [Website](https://forsion.net)
+[Download](https://github.com/Changan-Su/Forsion/releases/latest) · [Web app](https://ai.forsion.net) · [Quick start](./docs/getting-started/quickstart.en.md) · [Docs](./docs/README.en.md) · [Website](https://forsion.net)
 
 </div>
 
-Forsion is a **local-first AI second brain**. Organize your own Markdown files in a Notion-style block editor, think with Agents that retain useful context, build a TEAM to move projects forward, and let Muse follow up within the boundaries you set.
+**Forsion is a local-first second-brain workbench.** Your notes, files and projects sit on one desk on your own computer, and AI works on that desk with you. Ask in a chat: Tangu, the agent built into Forsion, reads your files before it answers, the answer comes back as something you can keep using, and what you work out stays in plain files you can open anywhere.
 
-**Make each piece of thinking a starting point for the next.** Sources, preferences, discussions, outputs, and follow-ups come together in one workspace.
-
-| Part of your second brain | How it works in Forsion |
+| On the desk | What it means |
 | --- | --- |
-| **Capture and connect** | Block editing on local `.md` files, linked to notes, PDFs, whiteboards, databases, and conversations. |
-| **Remember context** | Inspectable, editable long-term memory that carries preferences and project background across conversations. |
-| **Think and act together** | Agents with distinct personalities, persistent TEAMs, parallel work, and Team Desk. |
-| **Follow through** | Muse wakes on heartbeats, schedules, and rules, bringing results and decisions to Inbox. |
-| **Extend your workflow** | Plugins bring tools, Agents, skills, and dedicated workspaces into the same flow. |
+| **Your files** | Notes are Markdown on disk, next to PDFs, whiteboards, databases and calendars. Forsion opens them where they are. |
+| **Answers you can use** | An answer can carry a card that works things out. Keep it as a widget on Home or a dashboard. |
+| **An agent that speaks first** | Muse watches your schedule and rules, gets things ready, and messages you when something needs you. |
+| **Completing each other** | You write `AGENT.md` for agents; they write `HUMAN.md` for you. What you agree on stays in files you can read. |
+| **Your own tools** | Over twenty official plugins in the store. Missing one? Ask Tangu to build it and try it in a sandbox first. |
 
-The screenshots below come from the v2.11.0 desktop build and use one public research-project fixture. They show the real interface, not a live model run. [Capture provenance and reproduction](./.github/assets/showcase/README.md).
+Say you're running a neighborhood book fair. The screenshots below follow it through the real Forsion interface with sample data; they are not a live model run. [How they were captured](./.github/assets/showcase/README.md).
 
-## Markdown files. A block editor you can think in.
+## Home is your desk
 
-**Notion-style block editing, built on local `.md` files.** In the Amadeus knowledge base, headings, paragraphs, to-dos, code, and embedded content become blocks you can organize. Write with Markdown shortcuts, insert content with `/`, arrange sources in columns, and inspect block source. Your notes remain files on disk that you can open, back up, and ask an Agent to read or update.
-
-<p align="center">
-  <img src="./.github/assets/showcase/markdown-blocks-en.png" alt="Insert blocks through the slash menu in a local Markdown note" width="920" />
-  <br><sub>Insert blocks through the slash menu in a local Markdown note · v2.11.0 interface · Public sample data</sub>
-</p>
-
-- **Give a page structure.** Markdown shortcuts, slash commands, columns, section folding, callouts, page icons, and covers help organize longer notes.
-- **Connect your material.** Use `[[wikilinks]]`, backlinks, and a graph to connect ideas. Embed notes, images, databases, and whiteboards; reference notes directly in chat.
-- **Put sources to work.** Within the access you authorize, Agents can read sources, compare approaches, and write conclusions and next steps back to the project. You and your Agents work with the same actual files.
-
-| A way to think or work | The tools to support it |
-| --- | --- |
-| Organize structured research and projects | Databases with table, board, calendar, and gallery views, plus filtering, sorting, and grouping. |
-| Explore relationships and reasoning | Excalidraw-compatible whiteboards; PDF annotations saved into the PDF itself. |
-| Build a project home | Dashboards combining notes, databases, whiteboards, images, and webpage cards. |
-| Bring next steps into your day | Calendar aggregates database dates and to-dos, with external calendar subscriptions. |
-
-Notes use local Markdown, with compatible formats for links, properties, and whiteboards. Rendering of extensions such as columns, databases, and plugin blocks depends on the application opening them.
-
-[Block editor (中文)](./docs/amadeus/editor.md) · [Knowledge base (中文)](./docs/amadeus/overview.md) · [Databases (中文)](./docs/amadeus/databases.md) · [Whiteboards (中文)](./docs/amadeus/whiteboard.md)
-
-## Keep the background worth carrying forward
-
-**Your knowledge base holds the material. Memory carries useful context.** Full articles, evidence, and outputs stay in the project. Preferences, facts, and lasting background you explicitly share can become Agent memory, giving the next conversation somewhere to begin.
-
-- **See what it remembers.** Inspect, revise, and organize memories in the memory panel. Check sources and revision history, or remove an item from active memory.
-- **Give each Agent its own continuity.** Agents have a personality (SOUL), memory, Library, and work journal, with individually manageable models, tool permissions, and memory settings.
-- **Maintain the accumulated context.** Historian organizes logs and memory candidates. Enable Dream when you want memory consolidation; conversation recall searches relevant history within the Agent's scope.
-
-Try: “When helping me research, lead with conclusions, then sources, and call out uncertainty separately.” Check that it was saved, then start another conversation about the project and inspect how it uses that preference. Automatic Dream maintenance is off by default; forgetting removes active memory while retaining revision history.
+Home lays out your widgets on both sides: today's schedule, your to-dos, a suggestion from Muse, your recent notes, and the setup checklist you made in a chat. The plan, the venue agreement and the exhibitor list are plain files on your computer, and Forsion opens them where they are.
 
 <p align="center">
-  <img src="./.github/assets/showcase/agent-memory-en.png" alt="Inspect project context and preferences in Arioso’s memory panel, with edit and forget controls" width="920" />
-  <br><sub>Inspect project context and preferences in Arioso’s memory panel, with edit and forget controls · v2.11.0 interface · Public sample data</sub>
+  <img src="./.github/assets/showcase/home-en.png" alt="Home with widgets on both sides: schedule, to-dos, a suggestion from Muse, recent notes and a checklist made in a chat" width="920" />
 </p>
 
-[Memory (中文)](./docs/agents/memory.md) · [Configure Agents (中文)](./docs/agents/overview.md)
+- **Write in blocks, keep Markdown.** A Notion-style block editor on local `.md` files: slash commands, columns, callouts, `[[wikilinks]]`, backlinks and a graph.
+- **More than notes.** Databases with table, board, calendar and gallery views; Excalidraw-compatible whiteboards; PDF annotations saved into the PDF itself; a calendar that gathers dates and to-dos.
+- **Arrange it your way.** Spaces, split panels, tabs you can drag out into their own windows, and a Mini panel that can stay on top of other apps.
 
-## TEAM: room for imagination, scrutiny, and shared work
+[Block editor (中文)](./docs/amadeus/editor.md) · [Databases (中文)](./docs/amadeus/databases.md) · [Whiteboards (中文)](./docs/amadeus/whiteboard.md) · [Workspace (中文)](./docs/getting-started/workspace.md)
 
-**A solo project can still have different perspectives and lasting roles.** Aria attends to feeling and creative possibilities; Recita examines evidence, assumptions, and feasibility; Arioso weighs your aims and tradeoffs with independent judgment. Coding focuses on implementation, while Muse follows up proactively. Customize them or create your own Agents.
+## Ask, and the answer stays useful
 
-**TEAM in v2.11 makes collaboration something you can build on:**
-
-- **Shared expectations.** Select two or more Agents to start team mode. Persistent teams retain members, roles, and a custom avatar, have a Library, and use `TEAM.md` for common goals and working agreements.
-- **Parallel work.** Members research, write, or execute in their own child conversations, posting progress, questions, and handoffs to the main conversation. Interject or @ a member to keep the work focused.
-- **Visible progress and outputs.** Team Desk shows who is working, awaiting approval, or done. Open a member's full child conversation; review approval requests and public outputs in the main conversation.
-- **A home for each task.** Use `@project` in a private chat to dispatch work into a new conversation in that project. Agents Space manages Agents and teams; the Orbits sidebar brings private chats, teams, projects, and external engines together.
-
-You can also delegate independent subtasks from an ordinary conversation or connect installed Claude Code and Codex engines through ACP. Teams and these local execution features use local mode. Context is passed as needed; Agent memories and tool settings remain individually managed.
+Hand the plan and the agreement to Tangu and ask what the stall fee should be. It reads both files before it answers. The answer comes with a card that works things out: change the number of exhibitors or the venue fee and it recalculates on the spot, without asking the model again. Keep it as a widget, and it sits on Home or a dashboard.
 
 <p align="center">
-  <img src="./.github/assets/showcase/team-desk-en.png" alt="Public discussion from Aria, Recita, and Arioso alongside member status in Team Desk" width="920" />
-  <br><sub>Public discussion from Aria, Recita, and Arioso alongside member status in Team Desk · v2.11.0 interface · Public sample data</sub>
+  <img src="./.github/assets/showcase/answer-card-en.png" alt="Tangu answers with a card that recalculates the stall fee when you change the numbers" width="920" />
 </p>
+
+The book fair dashboard holds that card, your to-dos and the setup checklist. The exhibitors and the budget live in two tables, and the numbers and charts are worked out straight from them.
 
 <p align="center">
-  <img src="./.github/assets/showcase/team-thread-en.png" alt="Open Recita’s child conversation to examine evidence and suggestions beside the main discussion" width="920" />
-  <br><sub>Open Recita’s child conversation to examine evidence and suggestions beside the main discussion · v2.11.0 interface · Public sample data</sub>
+  <img src="./.github/assets/showcase/dashboard-en.png" alt="A book fair dashboard with the fee card, to-dos, a checklist, and charts worked out from two tables" width="920" />
 </p>
 
-[TEAM and Team Desk](./docs/chat/group-chat.en.md) · [Agents and personalities (中文)](./docs/agents/overview.md) · [External engines (中文)](./docs/agents/external-engines.md)
+- **Tangu works on your files.** Within the access you grant, it reads sources, compares options and writes conclusions back to the project. Every turn lists the files it changed, and you can undo one file or the whole turn.
+- **More than one agent.** Arioso, Aria, Recita and Coding each have their own personality, memory and model. Pick two or more to work as a team, each in its own thread, with Team Desk showing who is doing what.
+- **Any model.** Forsion-hosted models, your own API keys, OpenAI-compatible endpoints, local Ollama, or a supported subscription login. Installed Claude Code and Codex can join through ACP and work in your project folder; their memory and approvals stay their own.
 
-## Muse: keep the follow-up moving
+[Chat basics (中文)](./docs/chat/basics.md) · [Dashboards (中文)](./docs/amadeus/dashboard.md) · [TEAM and Team Desk](./docs/chat/group-chat.en.md) · [Models (中文)](./docs/chat/models-and-providers.md)
 
-**Hand ongoing work to a proactive Agent.** Once enabled, Muse wakes on heartbeats, schedules, and rules to review recent work, organize material, suggest next steps, or carry out tasks within configured permissions and budgets.
+## Muse speaks first
 
-- **Hand over a next step.** Assign a conversation task card to Muse, or configure schedules and event rules. Heartbeats let it periodically revisit work worth moving forward.
-- **Bring decisions back to you.** Results arrive in Inbox. Execute a task with Muse, continue in a new conversation, or dismiss it; approve or reject pending actions.
-- **Give ongoing work a place.** Muse builds its own Library and journals, and can write and gradually improve its own Space to make that work browsable.
-
-This version turns on Muse and Historian once for anyone who has not enabled them. You can turn either off at any time, and that choice survives restarts. Muse currently runs in local mode, with the device and relevant processes available. You set active hours, frequency, budgets, and approval behavior. For defined processes, **Automation** connects time, events, or database changes to Agent actions, notifications, and table operations.
+Most AI waits for you to say something. Muse, the proactive agent, keeps an eye on your schedule and the rules you set. With the floor plan nearly due, it drafts one from the confirmed exhibitors and messages you right away. The week's progress can wait, so it comes as a letter in your Inbox: what's done, what's left, and what it already got ready for you.
 
 <p align="center">
-  <img src="./.github/assets/showcase/muse-inbox-en.png" alt="Review a Muse follow-up in Inbox, inspect the task, execute it, start a new conversation, or dismiss it" width="920" />
-  <br><sub>Review a Muse follow-up in Inbox, inspect the task, execute it, start a new conversation, or dismiss it · v2.11.0 interface · Public sample data</sub>
+  <img src="./.github/assets/showcase/muse-space-en.png" alt="Muse's own Space: what needs you, what it got ready, what it is following and when it wakes next" width="920" />
 </p>
 
-[Proactive Muse (中文)](./docs/agents/muse.md) · [Automation (中文)](./docs/spaces/automation.md) · [Inbox (中文)](./docs/spaces/inbox.md)
+- **Its own Space.** Today's briefing puts what needs you, what it got ready and what it is following on one page, along with when it wakes next.
+- **Ordinary files.** What it prepares is notes and calendar entries you can open, edit or delete.
+- **Your limits.** You set active hours, budgets and approval levels. Muse works while Forsion is running on your computer, and agents can reach you through the WeChat, Telegram or QQ channels you set up.
 
-## Plugins: bring your way of working
+[Proactive Muse (中文)](./docs/agents/muse.md) · [Inbox (中文)](./docs/spaces/inbox.md) · [Automation](./docs/spaces/automation.en.md) · [Channels (中文)](./docs/chat/channels.md)
 
-**Your second brain can grow with your work.** A plugin bundle can deliver an interface, engine tools, Agents, skills, and a Space together, connecting collection, processing, and output.
+## The Human Completion Plan
 
-- **Collect and act.** Bluebird turns videos into notes; Computer Use lets Agents operate desktop applications on supported platforms; plugin events can trigger automation.
-- **Reuse a method.** Skills preserve ways of doing tasks, MCP connects external tools and data, and plugins extend note blocks, views, and workspaces.
-- **Build your own environment.** Install plugins, Agents, skills, Spaces, themes, and web apps from the store. Agents can also use built-in extension-development skills to create extensions for you.
+Not overwriting each other, but completing each other. People and AI keep their own boundaries, fill in what the other lacks, and keep the ways they have learned to work together, in files on both sides.
 
-[Plugins (中文)](./docs/customization/plugins.md) · [Plugin development](./docs/customization/plugin-development.md) · [Store (中文)](./docs/customization/market.md) · [Skills (中文)](./docs/agents/skills.md)
+| File | Yours, in `human/` | An agent's, in `agents/arioso/` |
+| --- | --- | --- |
+| `AGENT.md` | You write it, for every agent | You write it, just for this one *(planned)* |
+| `HUMAN.md` | Agents write it: what you've agreed on | It writes it: how working with it goes better |
+| `SOUL.md` | You, as agents see you | You write it: who it is |
+| `MEMORY.md` | You keep it | It keeps it |
 
-## From a few sources to a research talk you can keep developing
+`AGENT.md` is always people writing to agents. `HUMAN.md` is always agents writing to people. Whose folder a file sits in tells you whose side it's on.
 
-Try building up this workflow with a real project:
+- **Memory you can see.** Tell an agent something once and it remembers. Read, edit or forget any memory in the memory panel; forgetting keeps the revision history.
+- **Bring what other AIs know.** Import memories, preferences and skills that Claude Code, Codex or Gemini CLI have kept, as a review list. Only what you tick is written, and the whole import can be undone.
 
-1. **Create a project note.** Organize goals, sources, and questions with blocks; embed PDFs, whiteboards, or databases.
-2. **Think with context.** Reference your material and a confirmed writing preference. Ask Aria to explore directions, Recita to examine evidence, and Arioso to help weigh the options.
-3. **Divide the work with TEAM.** Assign independent investigations, drafts, or checks to members, then follow progress and outputs in Team Desk.
-4. **Write decisions back to files.** Review the result and ask an Agent to save the outline, sources, and open questions. Inspect and edit them in Agent Desk; continue in Coding Studio if you need a webpage prototype.
-5. **Leave a follow-up.** Ask Muse to revisit the project at an agreed time, handle its results in Inbox, and add new conclusions to the project.
+[Memory (中文)](./docs/agents/memory.md) · [Agents (中文)](./docs/agents/overview.md)
 
-This is a configurable example, dependent on the model, source access, and tools you choose. When you return, the project files and confirmed context give you a starting point.
+## Missing something? Get it from the store
+
+The store has PDF annotation, mind maps, live transcription, Jupyter notebooks, flashcards and more, with over twenty official plugins so far. Ask in a chat and Tangu finds the plugin for you; install it with a click. You can also add your own sources: a GitHub repository, an npm package or a URL.
 
 <p align="center">
-  <img src="./.github/assets/showcase/project-note-en.png" alt="Keep sources, team responsibilities, and next steps together in a local project note" width="920" />
-  <br><sub>Keep sources, team responsibilities, and next steps together in a local project note · v2.11.0 interface · Public sample data</sub>
+  <img src="./.github/assets/showcase/store-en.png" alt="The Forsion store with official plugins for PDF annotation, mind maps, live transcription, notebooks and flashcards" width="920" />
 </p>
 
-## Work in an environment you control
+- **Forsion Clip.** A Chrome and Edge extension that comes with Forsion Desktop. Save a web page into the vault Forsion has open and ask Tangu about it on the side; once paired, Tangu can also operate the browser for you.
 
-- **Arrange your thinking space.** Spaces, split panels, draggable tabs, independent windows, and Mini Panel keep conversations, material, and outputs side by side, with restorable layouts.
-- **Talk through the work.** Hands-free live voice sends after you pause; the call continues when you switch to other views.
-- **Choose your models.** Use Forsion-hosted models, your own API connection, OpenAI-compatible endpoints, local Ollama, or supported subscription logins.
-- **Reach Agents elsewhere.** Configure WeChat, Telegram, or QQ channels. Web and Android offer cloud-connected access, with capabilities that differ from Desktop.
-- **Keep access to your accumulated work.** Inspect and back up local files, and edit memory. Cloud models, account sync, and sharing send the relevant content to the services involved.
+[Plugins](./docs/customization/plugins.en.md) · [Store (中文)](./docs/customization/market.md) · [Skills (中文)](./docs/agents/skills.md)
 
-[Workspace (中文)](./docs/getting-started/workspace.md) · [Channels (中文)](./docs/chat/channels.md) · [Client capabilities (中文)](./docs/reference/web-and-mobile.md) · [Data and privacy (中文)](./docs/reference/data-and-privacy.md)
+## Build on it
+
+A plugin is a folder. One folder can bring an interface, tools for agents, an agent of its own and a Space, all installed together. Forsion's own calendar is a plugin.
+
+- **Three layers.** A Space is a room laid out for one kind of work. A View is a panel you can open on its own, in the main area, the sidebar or a floating window. UI components are the parts inside a View: the chat box, tables, menus. Plugins hook into the same three layers.
+- **Ready-made parts.** The parts Forsion uses itself, such as the chat box, settings page, table, Markdown editor, whiteboard layer and record card, are open to plugins and look the same as in the app.
+- **No code needed.** Tell Tangu what you want. It writes the plugin and runs it in a sandbox first: a separate Forsion with an empty vault, signed out, away from your notes. Install it once you're happy.
+- **Share it.** Submit it to the store. Once approved, anyone can install it from the store or from a chat.
+- **The runtime underneath.** Tangu also runs as a terminal UI or a headless HTTP / SSE service, and Forsion hosts other agents through ACP.
+
+<p align="center">
+  <img src="./.github/assets/showcase/sandbox-en.png" alt="A plugin Tangu wrote, running in a sandboxed Forsion with an empty vault before it is installed" width="920" />
+</p>
+
+[Plugin development](./docs/customization/plugin-development.en.md) · [UI components](./docs/customization/ui-components.en.md) · [Themes](./docs/customization/themes.en.md) · [External engines (中文)](./docs/agents/external-engines.md)
 
 ## Download and start
 
-Download the latest desktop installer from [GitHub Releases](https://github.com/Changan-Su/Forsion/releases/latest).
+Download the latest release from [GitHub Releases](https://github.com/Changan-Su/Forsion/releases/latest), or open the [web app](https://ai.forsion.net) in a browser.
 
 | Platform | Release artifact | Notes |
 | --- | --- | --- |
-| macOS | `Forsion-*.dmg` | Apple Silicon (arm64). |
-| Windows | `Forsion-*.exe` | NSIS installer. |
-| Linux | `Forsion-*.AppImage` | Add execute permission, then run. |
+| macOS | `Forsion-*-arm64.dmg` | Apple silicon. |
+| Windows | `Forsion-*-x64.exe` | NSIS installer. |
+| Linux | `Forsion-*-x86_64.AppImage` | Add execute permission, then run. |
+| Android | `Forsion-Tangu-*-android.apk` | Connects to your Forsion account; fewer features than Desktop. |
+| Web | [ai.forsion.net](https://ai.forsion.net) | Use this on iPhone and iPad. |
 
 Every desktop release includes two distributions. `Forsion-<version>-<arch>` bundles Forsion Extend for account and cloud features. `Forsion-NoExtend-<version>-<arch>` includes the local app and Agent backend without bundling Extend; cloud account, sync, publishing and remote device features require Extend. Both use the same app identity and data folders. Windows/Linux updates stay within the chosen distribution; on macOS, download the same filename variant when updating.
 
 For local builds, run `FORSION_BUNDLE_EXTEND=0 npm run build`, then `FORSION_BUNDLE_EXTEND=0 npm run dist` from `desktop/`. Omitting the variable produces the default distribution.
 
-1. **Install and connect a model.** First launch helps configure your connection, model, and workspace. The desktop installer includes the Agent backend and Node.js runtime.
-2. **Bring some real context.** Create a project note with a goal, sources, and next steps. Ask an Agent to read it, and explicitly tell it a preference worth remembering.
-3. **Finish one useful task.** Ask an Agent to produce something from your material, inspect the saved file, and check an explicitly saved preference in the memory panel. Add TEAM, Muse, and plugins when you need them.
+1. **Install and connect a model.** First launch helps configure your connection, model and workspace. The desktop installer includes the Agent backend and Node.js runtime.
+2. **Put a real project on the desk.** Create a project note with a goal, sources and next steps. Ask Tangu to read it, and tell it one preference worth remembering.
+3. **Finish one useful task.** Ask for something you need from that material, open the saved file, and check the preference in the memory panel. Add Muse, teams and plugins when you need them.
 
-The [quick start](./docs/getting-started/quickstart.en.md) walks through this path and introduces multi-agent work and plugins.
+The [quick start](./docs/getting-started/quickstart.en.md) walks through this path.
 
 > **Installer signing:** macOS builds use ad-hoc signing and are not yet notarized; Windows builds may trigger SmartScreen. Download from this repository's Releases. If Gatekeeper blocks the first open on macOS, right-click the app and choose “Open”, or allow it in **System Settings → Privacy & Security**.
 
@@ -186,7 +158,7 @@ The dev build uses separate `~/.forsion-dev/` and `~/Forsion-Dev/` so it won't p
 
 Back up these two directories regularly, just like ordinary documents. Before running high-privilege Agent tasks, confirm the approval tier and the current working directory.
 
-## For developers
+## Build from source
 
 **Forsion Genesis** is the source repository for the product family: the Tangu Agent runtime, the LCL Space / View / Plugin engine, Desktop, Web, Android, and product profiles such as Amadeus.
 
@@ -384,10 +356,4 @@ You can view or file issues from [Issues](https://github.com/Changan-Su/Forsion/
 
 ## License
 
-Forsion Genesis uses the [Modified Apache License 2.0](./LICENSE). It is based on Apache License 2.0 with additional conditions, mainly covering:
-
-- You may not use this repository's code to operate a multi-tenant environment without written authorization;
-- When using the `desktop/`, `web/` or `mobile/` frontends, you may not remove or modify the logo, product name and copyright notices in the interface;
-- Commercial use is permitted when the additional conditions are met; a commercial license should be obtained for multi-tenant deployment or other authorizations.
-
-Please read the full license text before using, distributing or offering services based on this project. This license includes restrictions beyond Apache-2.0, so it should not be understood as the standard Apache-2.0 license alone.
+Forsion Genesis is licensed under the [Apache License 2.0](./LICENSE).

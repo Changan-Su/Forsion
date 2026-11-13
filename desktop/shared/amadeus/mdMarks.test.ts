@@ -26,6 +26,28 @@ describe('parseMdMarks', () => {
     expect(r.map((m) => [m.text, m.isTask])).toEqual([['交周报', true], ['周会', false]])
   })
 
+  it('引用与折叠块里的勾选框仍是待办，子任务只跟随同一引用层', () => {
+    const r = parse(`> [!fold]- 本周\n> - [ ] 交周报 @${D}\n>   - [x] 附件\n> > - [ ] 嵌套引用 @${D}\n  - [ ] 外面的未排期`)
+    expect(r.map((m) => [m.text, m.isTask, m.checked, m.parentId])).toEqual([
+      ['交周报', true, false, undefined], ['附件', true, true, `${P}:2`], ['嵌套引用', true, false, undefined],
+    ])
+    expect(r[0].raw).toBe(`> - [ ] 交周报 @${D}`)
+    expect(withChecked(r[0].raw, true)).toBe(`> - [x] 交周报 @${D}`)
+    expect(withChecked(`> > + [X] 已完成 @${D}`, false)).toBe(`> > + [ ] 已完成 @${D}`)
+  })
+
+  it('引用里的围栏示例不进入待办或日历，离开引用后恢复解析', () => {
+    expect(parse(`> \`\`\`md\n> - [ ] 示例 @${D}\n> \`\`\`\n> - [ ] 真的 @${D}\n- [ ] 外面 @${D}`).map((m) => [m.text, m.isTask])).toEqual([
+      ['真的', true], ['外面', true],
+    ])
+    expect(parse(`> \`\`\`\n> - [ ] 示例 @${D}\n- [ ] 外面 @${D}`).map((m) => m.text)).toEqual(['外面'])
+  })
+
+  it('围栏内像引用的文本不打断外围任务的子任务链', () => {
+    const r = parse(`- [ ] Parent @${D}\n  \`\`\`md\n  > example\n  \`\`\`\n  - [ ] Child`)
+    expect(r.map((m) => [m.text, m.parentId])).toEqual([['Parent', undefined], ['Child', `${P}:1`]])
+  })
+
   it('落盘串就是 calendarDate 编码 —— 下游 parseCalDate 直接吃(零适配的根据)', () => {
     const r = parse(`周会 @2026-09-01T09:00/2026-09-01T10:30`)
     expect(parseCalDate(r[0].due)).toEqual({ start: '2026-09-01T09:00', end: '2026-09-01T10:30', allDay: false })

@@ -102,6 +102,8 @@ export function createThinWorker(cfg: { cloudUrl: string; workerKey?: string }):
   console.log(`${line}\n`);
 
   const { host } = createHttpWorkerHost({ fleetSecret: key });
-  const state = createHttpStateStore({ cloudUrl: cfg.cloudUrl, fleetSecret: key });
+  const state = createHttpStateStore({ cloudUrl: cfg.cloudUrl, fleetSecret: key,
+    completionOutboxDir: path.join(process.env.TANGU_HOME || path.join(os.homedir(), '.tangu'), 'completion-outbox'),
+  });
   return { host, state, brainToken: () => currentToken() ?? '', workerKey: key };
 }

@@ -24,6 +24,17 @@ afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi
 
 const move = (target: EventTarget) => act(async () => { target.dispatchEvent(new PointerEvent('pointermove', { bubbles: true })) })
 
+it('leaving the window and unmounting the host cannot leave notification timers paused', async () => {
+  notifyApp({ text: 'first' })
+  await act(async () => root.render(React.createElement(NotificationHost)))
+  await act(async () => useNotifications.getState().pause())
+  await act(async () => window.dispatchEvent(new Event('blur')))
+  expect(useNotifications.getState().paused).toBe(false)
+  await act(async () => useNotifications.getState().pause())
+  await act(async () => root.render(null))
+  expect(useNotifications.getState().paused).toBe(false)
+})
+
 it('点掉指针下最后一张卡片:暂停随之解除', async () => {
   notifyApp({ text: 'Layout restored', action: { label: 'Undo', run: () => {} }, durationMs: 8000 })
   await act(async () => root.render(React.createElement(NotificationHost)))

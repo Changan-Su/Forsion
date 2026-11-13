@@ -84,4 +84,52 @@ describe('websiteReleases', () => {
     expect(entries.map(e => e.version)).toEqual(['2.13.6', '2.13.5'])
     expect(entries.every(e => !e.displayVersion)).toBe(true)
   })
+
+  it.each(['zh', 'en'] as const)('combines the 2.14 stable editions in the %s list without changing installer identity', locale => {
+    for (const installed of ['2.13.7', '2.14.0', '2.14.1', '2.14.2']) {
+      const entries = buildWhatsNewEntries({ locale, installed, website: [
+        { version: '2.14.1', date: '2026-11-10', scope: {}, markdown: { zh: '# 合并更新', en: '# Combined release' } },
+        { version: '2.14.0', date: '2026-11-09', scope: {}, markdown: { zh: '# 原文章', en: '# Previous article' } },
+      ], changelog: [
+        { version: '2.14.1', date: '', lines: ['Window fixes'] },
+        { version: '2.14.0', date: '', lines: ['Main features'] },
+        { version: '2.13.7', date: '', lines: ['History'] },
+      ], update: { version: '2.14.1', notes: '- Update' } })
+      expect(entries.map(e => e.version)).toEqual(['2.14.1', '2.13.7'])
+      expect(entries[0]).toMatchObject({
+        version: '2.14.1', displayVersion: '2.14.0–2.14.1',
+        markdown: locale === 'zh' ? '# 合并更新' : '# Combined release',
+        isNew: installed === '2.13.7' || installed === '2.14.0',
+        installed: installed === '2.14.0' || installed === '2.14.1',
+      })
+      expect(entries[0].lines).toBeUndefined()
+      expect(websiteReleaseUrl(entries[0].version)).toBe('https://forsion.net/releases/#release-2-14-1')
+    }
+  })
+
+  it.each(['zh', 'en'] as const)('retains both bundled stable sections in the %s combined entry offline or with older website content', locale => {
+    const changelog = [
+      { version: '2.14.1', date: '2026-11-10', lines: ['Window fixes'] },
+      { version: '2.14.0', date: '2026-11-09', lines: ['Main features', '  Nested detail'] },
+      { version: '2.14.0-beta.1', date: '', lines: ['Preview'] },
+    ]
+    for (const website of [null, [{ version: '2.14.0', date: '2026-11-09', scope: {}, markdown: { en: '# Older website article' } }]]) {
+      const input = { locale, installed: '2.14.0', website, changelog }
+      for (let repeat = 0; repeat < 2; repeat++) {
+        const entries = buildWhatsNewEntries(input)
+        expect(entries.map(e => e.version)).toEqual(['2.14.1', '2.14.0-beta.1'])
+        expect(entries[0]).toMatchObject({ displayVersion: '2.14.0–2.14.1', isNew: true, installed: true, lines: ['Window fixes', 'Main features', '  Nested detail'] })
+      }
+    }
+    expect(changelog[0].lines).toEqual(['Window fixes'])
+    expect(changelog[1].lines).toEqual(['Main features', '  Nested detail'])
+  })
+
+  it('keeps 2.14.0 separate while only pending 2.14.1 updater notes are available', () => {
+    const entries = buildWhatsNewEntries({ website: null, locale: 'en', installed: '2.14.0', changelog: [
+      { version: '2.14.0', date: '', lines: ['Existing stable release'] },
+    ], update: { version: '2.14.1', notes: '- Window fixes' } })
+    expect(entries.map(e => e.version)).toEqual(['2.14.1', '2.14.0'])
+    expect(entries.every(e => !e.displayVersion)).toBe(true)
+  })
 })

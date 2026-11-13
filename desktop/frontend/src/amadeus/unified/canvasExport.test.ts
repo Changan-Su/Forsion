@@ -35,6 +35,12 @@ describe('buildJsonCanvas', () => {
     expect(node('card-k1')).toEqual({ id: 'card-k1', type: 'text', x: 480, y: 0, width: 300, height: 120, text: '## 卡 K1\n\n正文', color: '2' })
     expect(node('card-k3')).toEqual({ id: 'card-k3', type: 'text', x: 880, y: 300, width: 300, height: 80, text: '![[不存在的笔记]]' })
   })
+  it('resolves semantic accent for JSON Canvas without emitting an unsupported color', () => {
+    const input = { ...base, cards: [{ ...base.cards[0], color: 'accent' }], accentColor: '#117733' }
+    expect(buildJsonCanvas(input).nodes.find((n) => n.id === 'card-k1')?.color).toBe('#117733')
+    expect(buildJsonCanvas({ ...input, accentColor: 'rgb(16, 111, 48)' }).nodes.find((n) => n.id === 'card-k1')?.color).toBe('#106f30')
+    expect(buildJsonCanvas({ ...input, accentColor: undefined }).nodes.find((n) => n.id === 'card-k1')?.color).toBeUndefined()
+  })
   it('卡恰好是一个能解析的嵌入 → file 节点(库内路径 + subpath,别名丢)', () => {
     expect(node('card-k2')).toEqual({ id: 'card-k2', type: 'file', x: 880, y: 0, width: 300, height: 80, file: '子夹/会议纪要.md', subpath: '#议程' })
   })

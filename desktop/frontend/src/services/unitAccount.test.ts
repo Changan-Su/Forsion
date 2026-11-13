@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { installUnitAccount } from '../../../../web/src/unitAccount'
+import { loadAccountRewards } from './accountRewards'
+import { AccountChangedError } from '../../../../web/src/account'
 import { contentStorageKey } from '@lcl/engine/contentStorageScope'
 
 const meta = { instanceId: 'unit-one', account: { apiBase: '/api', loginPath: '/auth' } }
@@ -45,6 +47,49 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals())
 
 describe('Unit visitor Account adapter', () => {
+  it('reads official rewards through the verified visitor and hides disabled invites without cloudFetch', async () => {
+    shared.set(tokenKey, 'token-b')
+    const authority = fetcher.getMockImplementation()!
+    fetcher.mockImplementation(async (input, init) => {
+      const path = new URL(String(input)).pathname
+      if (path === '/api/credits/balance' || path === '/api/invite/my-code') {
+        expect(init?.method ?? 'GET').toBe('GET')
+        expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer token-b')
+        return path.endsWith('/balance') ? json({ balance: '1240' }) : json({}, 404)
+      }
+      return authority(input, init)
+    })
+    const visitor = await installUnitAccount({ ...meta, inheritWebAccount: true }, base)
+    Object.assign(window, { tangu: visitor.accountPresentation })
+    expect(window.tangu?.cloudFetch).toBeUndefined()
+    expect(await loadAccountRewards()).toEqual({ balance: 1240, balanceFailed: false, invite: 'hidden' })
+    expect((await installUnitAccount(meta, base)).accountPresentation).toBeUndefined()
+    await visitor.account.clearSession({ prepare: false })
+    await expect(visitor.accountPresentation!.accountRewards()).rejects.toBeInstanceOf(AccountChangedError)
+  })
+
+  it('keeps the invite switch readable when points fail', async () => {
+    shared.set(tokenKey, 'token-b')
+    const authority = fetcher.getMockImplementation()!
+    fetcher.mockImplementation(async (input, init) => {
+      const path = new URL(String(input)).pathname
+      if (path === '/api/credits/balance') throw new Error('offline')
+      if (path === '/api/invite/my-code') return json({}, 404)
+      return authority(input, init)
+    })
+    const visitor = await installUnitAccount({ ...meta, inheritWebAccount: true }, base)
+    Object.assign(window, { tangu: visitor.accountPresentation })
+    expect(await loadAccountRewards()).toEqual({ balance: null, balanceFailed: true, invite: 'hidden' })
+  })
+
+  it('preserves desktop points and invites through cloudFetch', async () => {
+    const cloudFetch = vi.fn(async ({ path }: { path: string }) => ({ status: 200,
+      json: path === '/credits/balance' ? { balance: 90 } : { code: 'INVITE' } }))
+    Object.assign(window, { tangu: { cloudFetch } })
+    expect(await loadAccountRewards()).toEqual({ balance: 90, balanceFailed: false, invite: 'available' })
+    expect(cloudFetch.mock.calls.map(([request]) => request.path)).toEqual(['/credits/balance', '/invite/my-code'])
+  })
+
   it('inherits an existing Web login only for the configured official entry, after Unit verification', async () => {
     shared.set('forsion_token', 'token-b')
     shared.set('old-note-cache', 'keep')
@@ -91,6 +136,28 @@ describe('Unit visitor Account adapter', () => {
     pageEvents.mockClear()
     await installUnitAccount(meta, base)
     expect(pageEvents.mock.calls.some(([event]) => event === 'storage')).toBe(false)
+  })
+
+  it('rejects an in-flight profile and stops the old page from fetching the replacement account', async () => {
+    shared.set(tokenKey, 'token-a')
+    const { accountPresentation } = await installUnitAccount({ ...meta, inheritWebAccount: true }, base)
+    let finishProfile!: (value: Response) => void
+    const profile = new Promise<Response>((resolve) => { finishProfile = resolve })
+    let markStarted!: () => void
+    const started = new Promise<void>((resolve) => { markStarted = resolve })
+    fetcher.mockImplementationOnce(fetcher.getMockImplementation()!).mockImplementationOnce(async () => {
+      markStarted()
+      return profile
+    })
+    const pending = expect(accountPresentation!.authStatus()).rejects.toBeInstanceOf(AccountChangedError)
+    await started
+    shared.set(tokenKey, 'token-b')
+    finishProfile(json({ id: 'a', nickname: 'Old profile' }))
+    await pending
+
+    fetcher.mockClear()
+    await expect(accountPresentation!.authStatus()).rejects.toBeInstanceOf(AccountChangedError)
+    expect(fetcher).not.toHaveBeenCalled()
   })
 
   it('recovers through a reload when another tab changes the login while this one is still starting', async () => {

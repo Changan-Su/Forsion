@@ -52,10 +52,10 @@ const HARD_REJECTED = [
 describe('registry 级:chat 正向工具面', () => {
   const base: ToolContext = { userId: 'u1', sessionId: 's1', appId: cloud.appId, profile: cloud, execMode: 'sandbox', unlockTools: () => {} };
 
-  it('云端 sandbox:常驻面恰为 A 档 + 显式记忆 + 商店搜索共 12 个(注册序不重排),≤ 9,750 B;GUI 端共 13 个,≤ 12,500 B', () => {
+  it('云端 sandbox:常驻面包含输出读取器共 13 个,GUI 端共 14 个;注册序与字节预算固定', () => {
     configureTangu({ host: stub, brain: stub, billing: stub, profile: cloud });
     const chat = names({ ...base, preset: 'chat' });
-    expect(chat).toEqual(['get_datetime', 'remember', 'web_search', 'list_files', 'read_file', 'write_file', 'pip_install', 'run_python', 'web_fetch', 'display_file', 'load_tools', 'search_marketplace']);
+    expect(chat).toEqual(['get_datetime', 'remember', 'web_search', 'list_files', 'read_file', 'write_file', 'pip_install', 'run_python', 'web_fetch', 'display_file', 'load_tools', 'search_marketplace', 'read_tool_output']);
     // 09-22:remember 描述带上形状规则(何时记 / 何时不记 / 取代旧条目用 update)+136 B,预算 8,500 → 8,600、11,900 → 12,000。
     // 09-28 P1-DL:display_file 描述写明这是把文件交给用户的方式(手机上要文件 → 出卡片下载,live deliver 场景钉着)+160 B,
     // 实测 8,727 → 预算 8,600 → 8,750;GUI 端实测 10,640,仍在 12,000 内。
@@ -63,27 +63,30 @@ describe('registry 级:chat 正向工具面', () => {
     // 实测 8,737 → 8,828,预算 8,750 → 8,850;GUI 端实测 10,874、带 intelligent_ui 的 11,548,仍在 12,000 内。
     // 10-17 商店:search_marketplace 常驻(「帮我找个插件」模型不会先想到 load_tools),get_marketplace_plugin 进 B 档;
     // 两段描述压过一轮,实测 8,827 → 9,707,预算 8,850 → 9,750;GUI 端 11,753、带 intelligent_ui 的 12,427,预算 12,000 → 12,450。
-    expect(bytes({ ...base, preset: 'chat' })).toBeLessThanOrEqual(9_750);
+    // 11-13 read_tool_output 常驻:溢出输出各预设都必须能按引用读取。定义 668 B + 数组分隔符 1 B;
+    // 原工具面预算保持不变,仅显式增加这个已审阅工具的成本。
+    const outputReaderBytes = 669;
+    expect(bytes({ ...base, preset: 'chat' })).toBeLessThanOrEqual(9_750 + outputReaderBytes);
     const gui = names({ ...base, preset: 'chat', client: 'web/1.0.0' });
-    const core = chat.slice(0, -1); // search_marketplace 注册在 sketch 之后(append 末尾)
-    expect(gui).toEqual([...core, 'intelligent_ui_html', 'search_marketplace']);
-    expect(bytes({ ...base, preset: 'chat', client: 'web/1.0.0' })).toBeLessThanOrEqual(12_450);
+    const core = chat.slice(0, -2); // 商店在 HTML 卡之后,输出读取器最后注册。
+    expect(gui).toEqual([...core, 'intelligent_ui_html', 'search_marketplace', 'read_tool_output']);
+    expect(bytes({ ...base, preset: 'chat', client: 'web/1.0.0' })).toBeLessThanOrEqual(12_450 + outputReaderBytes);
     const native = { ...base, preset: 'chat' as const, client: 'web/2.13.1', clientCapabilities: ['intelligent-ui.v1'] };
-    expect(names(native)).toEqual([...core, 'intelligent_ui_html', 'search_marketplace', 'intelligent_ui']);
+    expect(names(native)).toEqual([...core, 'intelligent_ui_html', 'search_marketplace', 'intelligent_ui', 'read_tool_output']);
     // 10-20 HTML 卡改名 sketch → intelligent_ui_html(工具名 + 描述里的几处提名):GUI 端 11,753 → 11,773、带 intelligent_ui 的 12,427 → 12,460,
     // 预算 12,450 → 12,500;带 v2 的 12,645 → 12,678,仍在 12,700 内。
     // 11-02 HTML 卡加 <form> 与导航那句说明(#393 #397)后实测 12,514,预算 12,500 → 12,550。
-    expect(bytes(native)).toBeLessThanOrEqual(12_550);
+    expect(bytes(native)).toBeLessThanOrEqual(12_550 + outputReaderBytes);
     // 10-20 计算层:带 intelligent-ui.v2 的客户端换两段描述(intelligent_ui 多「计算卡」、sketch 把计算器让出去),
     // 实测 12,427 → 12,645(+218 B),预算 12,700;不带 v2 的客户端逐字不变(上一行)。
     const computed = { ...native, clientCapabilities: ['intelligent-ui.v1', 'intelligent-ui.v2'] };
     expect(names(computed)).toEqual(names(native));
-    expect(bytes(computed)).toBeLessThanOrEqual(12_750);
-    // 对照:work 面(25 个),chat 是过滤出来的子集,不是重排
+    expect(bytes(computed)).toBeLessThanOrEqual(12_750 + outputReaderBytes);
+    // 对照:work 面(26 个),chat 是过滤出来的子集,不是重排
     // 28 → 23:E2(§五「延迟候选」)把 amadeus 日历 CRUD ×5 转成静态 deferred,云端 sandbox 面同受影响。
     // chat 面本身逐字未变(上面那条 toEqual 仍绿):两个日历读工具本就在 CHAT_PRESET_DEFERRED 里。
     const work = names(base);
-    expect(work.length).toBe(25); // 10-17 +2:search_marketplace / get_marketplace_plugin
+    expect(work.length).toBe(26); // 11-13 +1:read_tool_output
     expect(work.filter((n) => chat.includes(n))).toEqual(chat);
   });
 

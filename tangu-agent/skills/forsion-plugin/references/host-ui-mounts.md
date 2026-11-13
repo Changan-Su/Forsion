@@ -594,3 +594,16 @@ refresh = (rows) => h.update({ ...spec, rows })   // 数据刷新走 update:排�
   否则一个单元会被页边切成两半。宿主不认 `fold`(没有 `caps.fold`)时字段被静默忽略 = 成员行平铺。
 - 旧宿主没有:`if (ctx.table && ctx.table.mount) { … } else { 画自己的经典表格 }`。整个 `ctx.table` 会**不存在**
   (不是空壳),抛出来的错也当「宿主不收」处理 —— 两种情况都走降级 UI。
+
+
+### Split selection tools and shape corners (2026-11-12)
+
+A `mountSelectionBar` tool may declare `menu: { title, open(sel, anchor) }`. The primary button still calls `run(sel)`. Its separate arrow calls `menu.open` with the actual button element, ready for `ctx.ui.popover(anchor, ...)`; never find anchors by inspecting host DOM. ArrowRight on the primary also opens its menu; Enter/Space operate either button. A child menu consumes Escape before the bar closes. Supply `title` in the current locale. Older hosts ignore menu, so retain a usable primary action or a fallback menu entry. Capture selection data when opening a menu that consumes it, and dispose menus when the view unloads or the plugin stops; never apply a stale selection.
+
+```js
+{ id: 'underline', title: t('underline'), icon: 'underline',
+  run: (sel) => underline(sel),
+  menu: { title: t('colors'), open: (sel, anchor) => openColors(sel, anchor) } }
+```
+
+`mountBoard` and `handle.update` accept optional `roundness: 'sharp' | 'round'`, forwarded to the engine's next-shape `currentItemRoundness`. Omission preserves the existing default. It never rewrites elements already in the scene. To edit an existing rectangle, preserve its complete element data and explicitly update the scene; do not normalize old scenes to a new corner style.

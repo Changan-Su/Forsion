@@ -70,10 +70,10 @@ describe('Muse 主动发私聊', () => {
     expect(msgs[0].origin).toBe('proactive');
 
     expect((await api('/agent/sessions/attention')).sessions).toMatchObject([{ id: sid, unread: true, awaiting: true, count: 1 }]);
-    expect(await api(`/agent/sessions/${sid}/read`, { method: 'POST' })).toEqual({ ok: true, awaiting: false });
+    expect(await api(`/agent/sessions/${sid}/read`, { method: 'POST' })).toEqual({ ok: true, unread: false, awaiting: false });
     expect((await api('/agent/sessions/attention')).sessions).toEqual([]);
     await query(`UPDATE chat_sessions SET awaiting_user = TRUE, report_run_id = 'rr' WHERE id = ?`, [sid]); // 回报没送回的子会话:读了也留着
-    expect(await api(`/agent/sessions/${sid}/read`, { method: 'POST' })).toEqual({ ok: true, awaiting: true });
+    expect(await api(`/agent/sessions/${sid}/read`, { method: 'POST' })).toEqual({ ok: true, unread: false, awaiting: true });
     expect((await api('/agent/sessions/attention')).sessions).toMatchObject([{ id: sid, unread: false, awaiting: true, count: 0 }]);
     await onRunStart(sid, { origin: 'client' }, 'r1');
     expect((await api('/agent/sessions/attention')).sessions).toEqual([]);

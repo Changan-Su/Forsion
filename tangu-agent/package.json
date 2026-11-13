@@ -1,7 +1,7 @@
 {
   "name": "@forsion/tangu-agent",
-  "version": "2.14.0",
-  "license": "SEE LICENSE IN LICENSE",
+  "version": "2.14.3",
+  "license": "Apache-2.0",
   "description": "Tangu Agent — 与宿主无关的服务端 agent runtime;可作为 Forsion 微后端插件,也可独立运行(云端大脑客户端)。",
   "type": "module",
   "main": "./dist/index.js",
@@ -56,7 +56,9 @@
     "desktop:install": "cd ../desktop && npm install",
     "desktop:dev": "cd ../desktop && npm run dev",
     "desktop:build": "npm run build && cd ../desktop && npm run build",
-    "sync:commands": "node scripts/sync-command-catalog.mjs"
+    "sync:commands": "node scripts/sync-command-catalog.mjs",
+    "test:cloud-state": "vitest run src/services/stateStore src/services/compactionRuntime.test.ts src/services/compaction.test.ts src/services/agentLoop.compaction.test.ts src/routes/runs.sessionToken.worker.test.ts src/routes/runs.queuedAbortToken.worker.test.ts",
+    "diagnose:muse-delivery": "node scripts/muse-delivery-report.mjs"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "^0.14.1",
@@ -72,6 +74,7 @@
     "node-diff3": "^3.2.1",
     "pg": "^8.18.0",
     "pngjs": "^7.0.0",
+    "quickjs-emscripten": "0.32.0",
     "react": "^18.3.1",
     "smol-toml": "^1.3.1",
     "uuid": "^9.0.1",

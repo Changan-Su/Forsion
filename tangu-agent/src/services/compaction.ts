@@ -23,7 +23,7 @@ import {
   compactionThreshold, estimateMessageTokens, estimateMessagesTokens, estimateTokensRough,
   isLossy, modelContextWindow, HISTORY_MSG_MAX_CHARS,
 } from './contextBudget.js';
-import { dropCoveredCalls, loadReplaySteps, replayAssistantHistory } from './historyReplay.js';
+import { dropCoveredCalls, loadReplaySteps, replayAssistantHistory, replayUserContext } from './historyReplay.js';
 import { DEFAULT_COMPACTION_SETTINGS, type CompactionSettings } from './compactionSettings.js';
 import { historyRevision } from './historyRevision.js';
 import { declaredPersistPlaceholder } from '../tools/toolRegistry.js';
@@ -185,6 +185,8 @@ export interface Checkpoint {
 /** 读会话最新压缩检查点(无则 null)。失败 → null(fail-safe)。 */
 export async function getLatestSummary(sessionId: string): Promise<Checkpoint | null> {
   try {
+    const remote = deps().state?.compaction;
+    if (remote) return await remote.latest(sessionId);
     const rows = await query<any[]>(
       `SELECT id, summary, through_timestamp, through_message_id, through_tool_call_id FROM session_summaries
        WHERE session_id = ? ORDER BY through_timestamp DESC, created_at DESC LIMIT 1`,
@@ -227,6 +229,8 @@ export function rowCoverage(row: { id: string; timestamp?: number | null }, cp: 
 /** 某条 chat_messages 行落库后的真实时间戳(店里是 Date.now() 写的,调用方拿不到);读不到 → 0。 */
 export async function messageTimestamp(messageId: string): Promise<number> {
   try {
+    const remote = deps().state?.compaction;
+    if (remote) return await remote.messageTimestamp(messageId);
     const rows = await query<any[]>(`SELECT timestamp FROM chat_messages WHERE id = ? LIMIT 1`, [messageId]);
     return Number(rows[0]?.timestamp) || 0;
   } catch {
@@ -267,6 +271,8 @@ export async function persistCheckpoint(
       console.warn(`[agent-core] session=${sessionId} 历史在摘要期间被删改,丢弃这份检查点`);
       return false;
     }
+    const remote = deps().state?.compaction;
+    if (remote) return await remote.persist(sessionId, summary, through);
     const latest = await getLatestSummary(sessionId);
     if (latest && latest.throughTimestamp > through.ts) return false;
     if (latest && latest.id && latest.throughTimestamp === through.ts && latest.throughMessageId && latest.throughMessageId === through.messageId) {
@@ -714,10 +720,13 @@ export async function compactSession(
   if (!sessionId || !modelId) return { ok: false, reason: 'missing session or model' };
   const settings = opts.settings ?? DEFAULT_COMPACTION_SETTINGS;
   const revision = historyRevision(sessionId); // 摘要期间历史被删改 → 落库前复核,丢弃陈旧结果
+  // Capture the remote history fingerprint before loading/summarizing its rows.
+  const remote = deps().state?.compaction;
+  let prev = remote ? await getLatestSummary(sessionId) : null;
 
   let rows: any[];
   try {
-    rows = await query<any[]>(
+    rows = remote ? await remote.messages(sessionId) : await query<any[]>(
       `SELECT id, role, content, timestamp, tool_calls, tool_results FROM chat_messages WHERE session_id = ? ORDER BY timestamp ASC`,
       [sessionId],
     );
@@ -726,8 +735,8 @@ export async function compactSession(
     return { ok: false, reason: e?.message || 'load messages failed' };
   }
 
-  const prev = await getLatestSummary(sessionId);
   signal?.throwIfAborted();
+  if (!remote) prev = await getLatestSummary(sessionId);
   const limit = opts.throughTs && opts.throughTs > 0 ? opts.throughTs : Number.POSITIVE_INFINITY;
   const pending = rows.filter((r) => rowCoverage(r, prev) !== 'covered' && (Number(r.timestamp) || 0) <= limit);
   const steps = await loadReplaySteps(sessionId, pending);
@@ -738,7 +747,8 @@ export async function compactSession(
     const role = r.role === 'model' ? 'assistant' : r.role;
     const raw = String(r.content || '');
     if (role === 'user') {
-      if (raw.trim()) messages.push({ role: 'user', content: raw } as ChatMessage); // 持久摘要读原文,不经单条硬帽
+      if (raw.trim()) messages.push({ role: 'user', content: raw } as ChatMessage);
+      messages.push(...replayUserContext(r.id, steps.get(r.id))); // 持久摘要读原文,不经单条硬帽
     } else if (role === 'assistant') {
       let replayed: ChatMessage[];
       if (raw.length > HISTORY_MSG_MAX_CHARS) {

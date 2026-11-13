@@ -2,6 +2,7 @@
  *  标题仍在格子里直接打 —— 卡片不抢焦点(按钮 mousedown 不夺焦),也不像事件卡那样盖捕获层,点网格别处照常收草稿。
  *  卡片 fixed 贴在草稿块旁;时间格横竖都会滚,滚动 / 窗口变化时跟着草稿块重算,草稿块滚出可视区就先藏起来。 */
 import { useLayoutEffect, useState, type RefObject } from 'react'
+import { CalendarOverlay } from './CalendarOverlay'
 import { Check } from 'lucide-react'
 import { zoomOf, UI_MODE, UI_ZOOM_EVENT, useNativeChromeClaim } from '@lcl/engine'
 import { parseCalDate } from '@amadeus-shared/db/calDate'
@@ -81,7 +82,7 @@ export function DraftCard({ rootRef, onPasted }: { rootRef: RefObject<HTMLElemen
   }
   const keep = (e: { preventDefault(): void }): void => e.preventDefault() // 点卡片不夺走格子里标题框的焦点
   return (
-    <section className={`amx-cal-cardwrap amx-cal-draftcard${mobile ? ' amx-cal-drawer' : ''}`} data-kb-rise={mobile ? 'bar' : undefined} ref={mobile ? undefined : place.ref} style={mobile ? undefined : place.style} role="dialog" aria-modal="false" aria-label={t('calside.newEvent')} onMouseDown={mobile ? undefined : keep} onPointerDown={(e) => e.stopPropagation()}>
+    <CalendarOverlay enabled={!mobile}><section className={`amx-cal-cardwrap amx-cal-draftcard${mobile ? ' amx-cal-drawer' : ''}`} data-kb-rise={mobile ? 'bar' : undefined} ref={mobile ? undefined : place.ref} style={mobile ? undefined : place.style} role="dialog" aria-modal="false" aria-label={t('calside.newEvent')} onMouseDown={mobile ? undefined : keep} onPointerDown={(e) => e.stopPropagation()}>
       {mobile ? <>
         <button className="amx-cal-drawer-grab" aria-label={t('calside.cancel')} onClick={close}><span /></button>
         <input className="amx-cal-card-title" value={draft.title} placeholder={t('calside.newEvent')} aria-label={t('calside.newEvent')}
@@ -122,6 +123,6 @@ export function DraftCard({ rootRef, onPasted }: { rootRef: RefObject<HTMLElemen
         <button className="amx-cal-draft-cancel" onMouseDown={mobile ? undefined : keep} onClick={mobile ? close : () => api?.cancel()}>{t('calside.cancel')}</button>
         <button className="amx-cal-draft-save" disabled={!draft.title.trim()} onMouseDown={keep} onClick={() => api?.commit()}>{t('calside.save')}</button>
       </div>
-    </section>
+    </section></CalendarOverlay>
   )
 }

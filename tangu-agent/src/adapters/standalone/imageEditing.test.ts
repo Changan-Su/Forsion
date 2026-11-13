@@ -4,11 +4,11 @@ import { createMultiBrain } from './multiBrain.js';
 const req = { model: 'image-model', prompt: 'Preserve the object; replace the background', images: [{ mime: 'image/png', b64: 'iVBORw0KGgo=' }], size: '3:2', n: 1, transparentBackground: true };
 afterEach(() => vi.unstubAllGlobals());
 it('managed edits forward source pixels, alpha request and cancellation to the edit endpoint', async () => {
-  const fetcher = vi.fn(async () => new Response(JSON.stringify({ data: [{ b64_json: 'output' }] }))); vi.stubGlobal('fetch', fetcher);
+  const fetcher = vi.fn(async () => new Response(JSON.stringify({ id: 'job1', state: 'ready', receipt: 'hash', result: { data: [{ b64_json: 'output' }] } }))); vi.stubGlobal('fetch', fetcher);
   const ac = new AbortController(), brain = createHttpBrain({ cloudUrl: 'https://example.com', token: 'test' });
-  expect(await brain.images!.edit!({ ...req, signal: ac.signal })).toEqual({ images: [{ b64: 'output', mime: 'image/png' }] });
+  expect(await brain.images!.edit!({ ...req, signal: ac.signal })).toMatchObject({ images: [{ b64: 'output', mime: 'image/png' }] });
   const [url, init] = fetcher.mock.calls[0] as unknown as [string, RequestInit];
-  expect(url).toBe('https://example.com/v1/images/edits');
+  expect(url).toBe('https://example.com/v1/images/jobs');
   expect(JSON.parse(init.body as string)).toMatchObject({ image: ['data:image/png;base64,iVBORw0KGgo='], transparent_background: true, size: '3:2' });
   ac.abort(); expect(init.signal?.aborted).toBe(true);
 });

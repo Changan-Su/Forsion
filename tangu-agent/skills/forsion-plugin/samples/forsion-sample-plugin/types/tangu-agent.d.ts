@@ -419,7 +419,29 @@ export interface PluginModelProvider {
   stream(input: PluginModelRequest): Promise<PluginModelResult>;
 }
 
+/** Shared, browser-safe opt-in contract. No access to plugin storage is implied. */
+export type AgentSettingValue = string | number | boolean | null;
+export interface AgentSettingField {
+  key: string;
+  type: 'string' | 'number' | 'boolean' | 'secret';
+  description: string;
+  scope?: 'device' | 'account' | 'workspace';
+}
+export interface AgentSettingsReadContext {
+  userId?: string;
+  workspaceId?: string;
+  signal?: AbortSignal;
+  keys: readonly string[];
+}
+export interface AgentSettingsContribution {
+  fields: readonly AgentSettingField[];
+  /** Return current effective values for declared keys only. A secret MUST return a boolean configured flag. */
+  read(context: AgentSettingsReadContext): Record<string, AgentSettingValue> | Promise<Record<string, AgentSettingValue>>;
+}
+
 export interface TanguPluginContext {
+  /** Explicit read-only fields; secret read values must be boolean configured flags. */
+  registerAgentSettings(contribution: AgentSettingsContribution): void;
   registerPlugin(meta: PluginMeta): void;
   registerToolProvider(p: ToolProvider): void;
   /** Live read-only source; IDs are local:plugin/<engineId>/<providerId>/<entryId>.

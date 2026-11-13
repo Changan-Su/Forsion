@@ -1,4 +1,4 @@
-import { Router, type Response, type RequestHandler } from 'express';
+import { Router, type NextFunction, type Response, type RequestHandler } from 'express';
 import { authMiddleware, type AuthRequest } from '../core/http.js';
 import { deps } from '../seams/runtime.js';
 import { HumanError, isHumanFile, readHuman, writeHuman, type HumanScope } from '../agents/humanStore.js';
@@ -14,7 +14,8 @@ import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { agentsDir, defaultCalendarFile, ensureHumanFolder, humanDir, tanguHome } from '../core/tanguHome.js';
 import { atomicSyncWrite, readSyncBytes } from '../services/agentSyncPaths.js';
-import { createMemoryRepository, normalizeMemoryFact, withMemoryDirectoryLock } from '../services/memoryRepository.js';
+import { isSettingsDbShape, SETTINGS_MAX_BYTES } from '../contracts/agentSyncRules.js';
+import { createMemoryRepository, MemoryRepositoryError, normalizeMemoryFact, withMemoryDirectoryLock, withMemoryDirectoryLockRetry } from '../services/memoryRepository.js';
 import { serializeDb, type DbFile } from '../services/amadeusDb.js';
 import { pinPortraitEntry, portraitOrganizeHistory, undoPortraitOrganize } from '../agents/portraitLayers.js';
 import { agentOrganizeHistory, pinAgentEntry, readAgentLayers, undoAgentOrganize } from '../services/agentMemoryLayers.js';
@@ -110,6 +111,69 @@ router.put('/agent/human/CALENDAR.db', authMiddleware, async (req: AuthRequest, 
     try { await mirrorLegacyHuman(); } catch (e) { console.warn('[human mirror]', e instanceof Error ? e.message : e); }
     res.json({ ok: true, version: next });
   } catch (e: any) { res.status(500).json({ error: 'HUMAN_FAILED', detail: e?.message || 'Write failed.' }); }
+});
+// 随账号走的设置文件 human/Settings/<name>.db(11-10,第一份是日历设置 calendar.db):一行一项设置的 DbFile,和默认日历同一条同步通道。
+// 桌面渲染层读写这一对,网页 / 手机走云端的同名接口(/api/agent/human/Settings/<name>.db)—— 两边报文同形,渲染层用同一套解析;
+// 票据(version)对调用方是不透明的字符串,这里 = 文件字节的 sha256。内容当不透明的 DbFile,只校验形状。
+// 和默认日历那一对同一个边界(只在本机、拒远端)、同一把 human/ 目录锁、原子写、按内容哈希比对交换。调用方靠 GET 的四种回答决定能不能写:
+//   200 { status: 'ok', exists: true, data, version }        读到了
+//   200 { status: 'missing', exists: false, version: null }  接口在、文件还没建:可以带 version: null 新建
+//   422 { error: 'HUMAN_SETTINGS_CORRUPT', status: 'corrupt' } 文件解析不了 / 形状不对:不许覆盖(PUT 一律 409,不发票据),等同步把好的那份带下来
+//   其余(400 名字不对 / 401 / 403 / 404 / 5xx)              不知道:不写
+// 旧引擎没有这条路由,回的是 404(/agent/human/:file 那条还会回带 code 的 404):「文件还没建」从不走 404,
+// HTTP 200 + status: 'missing' + exists: false 是旧引擎给不出的回答,调用方只认它是「确认没有」。
+const SETTINGS_NAME = /^[a-z0-9][a-z0-9-]{0,63}\.db$/;
+type SettingsCurrent = { status: 'ok'; exists: true; data: DbFile; version: string } | { status: 'missing'; exists: false; version: null } | { status: 'corrupt' };
+/** 盘上这份现在是哪种状态。解析不了 / 形状不对(契约 isSettingsDbShape,同步判「读不读得懂」用的是同一条)= corrupt。读盘失败照抛(= 不知道)。 */
+function settingsCurrent(file: string): { current: SettingsCurrent; hash: string | null } {
+  const bytes = readSyncBytes(tanguHome(), file);
+  if (!bytes) return { current: { status: 'missing', exists: false, version: null }, hash: null };
+  const hash = calVersion(bytes);
+  let data: unknown;
+  try { data = JSON.parse(bytes.toString('utf8')); } catch { return { current: { status: 'corrupt' }, hash }; }
+  return { current: isSettingsDbShape(data) ? { status: 'ok', exists: true, data: data as DbFile, version: hash } : { status: 'corrupt' }, hash };
+}
+/** 路径里的文件名 → 绝对路径。大小写敏感(和云端那条一样);名字不合规矩回 400。 */
+function settingsFile(req: AuthRequest, res: Response, next: NextFunction): string | null {
+  if (!req.path.startsWith('/agent/human/Settings/')) { next(); return null; } // express 缺省不分大小写:/agent/human/settings/… 不是这条路由
+  const name = String(req.params.file ?? '');
+  if (!SETTINGS_NAME.test(name)) { res.status(400).json({ error: 'HUMAN_BAD_SETTINGS_NAME', detail: 'Settings files are Settings/<name>.db with a lowercase name.' }); return null; }
+  return join(humanDir(), 'Settings', name);
+}
+router.get('/agent/human/Settings/:file', authMiddleware, (req: AuthRequest, res, next) => {
+  if (!humanLocal(req, res)) return;
+  const file = settingsFile(req, res, next); if (!file) return;
+  try {
+    ensureHumanFolder();
+    const { current } = settingsCurrent(file);
+    if (current.status === 'corrupt') return void res.status(422).json({ error: 'HUMAN_SETTINGS_CORRUPT', detail: 'The settings file is not a valid database file; it was left untouched.', ...current });
+    res.json(current);
+  } catch (e: any) { res.status(500).json({ error: 'HUMAN_FAILED', detail: e?.message || 'Read failed.' }); }
+});
+router.put('/agent/human/Settings/:file', authMiddleware, async (req: AuthRequest, res, next) => {
+  if (!humanLocal(req, res)) return;
+  const file = settingsFile(req, res, next); if (!file) return;
+  const { data, version } = req.body ?? {};
+  // version:上次读到的那个;null = 期望文件还不存在(首次创建);不带 = 400
+  if (!isSettingsDbShape(data) || (version !== null && typeof version !== 'string')) return void res.status(400).json({ error: 'HUMAN_BAD_SETTINGS', detail: 'data must be a database file and version a string or null.' });
+  const text = serializeDb(data as DbFile);
+  if (Buffer.byteLength(text) > SETTINGS_MAX_BYTES) return void res.status(413).json({ error: 'HUMAN_SETTINGS_TOO_LARGE', detail: `A settings file is limited to ${SETTINGS_MAX_BYTES / 1024} KB.`, limit: SETTINGS_MAX_BYTES });
+  try {
+    ensureHumanFolder();
+    // 同步落盘(引擎的旧同步、桌面宿主的新同步)拿的是同一把锁:撞上了稍等重试,约 1 秒还拿不到回 503(调用方按「不知道」处理,稍后再来)
+    const outcome = await withMemoryDirectoryLockRetry(humanDir(), (): { version: string } | { current: SettingsCurrent } => {
+      const { current } = settingsCurrent(file);
+      // 坏文件没有票据:带着它的哈希来也盖不掉。票据不对(别人刚改过 / 刚建了 / 已经没了):带回现在这份,调用方合进去再写
+      if (current.status === 'corrupt' || current.version !== version) return { current };
+      atomicSyncWrite(tanguHome(), file, text);
+      return { version: calVersion(text) };
+    });
+    if ('current' in outcome) return void res.status(409).json({ error: 'HUMAN_CONFLICT', detail: 'The settings file changed since it was read.', ...outcome.current });
+    res.json({ ok: true, version: outcome.version });
+  } catch (e: any) {
+    const busy = e instanceof MemoryRepositoryError && e.code === 'MEMORY_BUSY';
+    res.status(busy ? 503 : 500).json({ error: busy ? 'HUMAN_BUSY' : 'HUMAN_FAILED', detail: e?.message || 'Write failed.' });
+  }
 });
 // 画像条目(human/SOUL.md,10-29):对话里回执行读状态 / 撤销用。和 human/ 其余接口同一个边界:只在本机、拒远端。
 // 写入按人的身份记(actor user,来源 user);删掉的条目记墓碑,后台整理不再写回。

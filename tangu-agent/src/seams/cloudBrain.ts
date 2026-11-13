@@ -283,7 +283,7 @@ export interface AgentFilePutBody {
   /** CAS 票据:0=仅创建;>0=期望当前 seq。不符 → httpBrain 抛 AgentFileConflictError。缺省 = 旧 mtime-LWW。 */
   baseSeq?: number;
 }
-/** paths = 服务端回带的、它认识的可选路径族('human' = agent 文件夹里的 HUMAN.md;'human-folder' = 人的文件夹 __human__ 整个槽位;'widget-data' = 小组件的记录 WidgetData/<id>/data.db)。老服务端不回带 → 那一族本次不同步(推上去只会 400)。
+/** paths = 服务端回带的、它认识的可选路径族('human' = agent 文件夹里的 HUMAN.md;'human-folder' = 人的文件夹 __human__ 整个槽位;'widget-data' = 小组件的记录 WidgetData/<id>/data.db;'settings' = 随账号走的设置文件 __human__ 槽位里的 Settings/<name>.db)。老服务端不回带 → 那一族本次不同步(推上去只会 400)。
  *  反方向同理:客户端请求清单时声明自己认识哪些族,服务端只对声明了的客户端列出那些文件(老客户端见到不认识的路径会判整次同步失败)。 */
 /** legacy:这个账号还有谁在用人的资料的旧位置(目前只有 'user-md' = 云端 USER.md);服务端没说 = 不知道。legacySeenAt:最后一次见到旧客户端(毫秒)。 */
 /** agentArchive:这个账号云端的 Agent 数据进了存档(老账号 B,2026-11-06);有它就不再碰任何 Agent,只同步 human/。
@@ -344,6 +344,8 @@ export interface ImageGenResult {
   /** `mime` must describe the bytes: Seedream answers JPEG even when everything else is PNG, and edit_image
    *  later re-validates attachment bytes against their declared type — a JPEG labelled PNG fails there. */
   images: Array<{ b64: string; mime: string }>;
+  /** Hosted result receipt. Acknowledge only after saving/displaying all returned images. */
+  delivery?: { id: string; receipt: string };
 }
 
 /** Image type from the first bytes of a base64 payload (PNG / JPEG / WebP / GIF); unknown → PNG, the old default. */
@@ -361,6 +363,9 @@ export interface ImageEditRequest extends ImageGenRequest {
 export interface ImagesBrain {
   generate(req: ImageGenRequest): Promise<ImageGenResult>;
   edit?(req: ImageEditRequest): Promise<ImageGenResult>;
+  listPending?(): Promise<Array<{ id: string; state: string; receipt?: string; model: string; prompt: string; createdAt: string }>>;
+  recover?(id: string, signal?: AbortSignal): Promise<ImageGenResult>;
+  acknowledge?(delivery: NonNullable<ImageGenResult['delivery']>): Promise<void>;
 }
 
 /** 语音合成(朗读按钮/自动朗读用)。direct:调 provider 自有 OpenAI 兼容 /audio/speech;没命中直连的走 Forsion 云端 /api/brain/tts。 */

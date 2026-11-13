@@ -1,11 +1,25 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { abortRun, abortRunAndWait, expediteSteer, listActiveRuns } from './agentRunService'
+import { abortRun, abortRunAndWait, expediteSteer, listActiveRuns, skipRunCompaction } from './agentRunService'
 import { connectionTarget } from './engine/targets'
 
 const cfg = { backendUrl: 'https://example.test', token: 'test' } as any
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers() })
 
 describe('stop transport must not report false success', () => {
+  it('skips the named summary without aborting or resending the run', async () => {
+    const fetcher = vi.fn(async (_url: string, _init?: RequestInit) => Response.json({ ok: true, operationId: 'op', status: 'skipped' }))
+    vi.stubGlobal('fetch', fetcher)
+    expect(await skipRunCompaction(connectionTarget(cfg), 'r', 'op')).toMatchObject({ ok: true, status: 'skipped' })
+    expect(fetcher).toHaveBeenCalledOnce()
+    expect(fetcher.mock.calls[0][0]).toBe('https://example.test/agent/runs/r/compaction/skip')
+    expect(JSON.parse((fetcher.mock.calls[0] as any)[1].body)).toEqual({ operationId: 'op' })
+  })
+  it('keeps required-summary rejection explicit and rejects mismatched receipts', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ ok: false, operationId: 'op', reason: 'required' }, { status: 409 })))
+    expect(await skipRunCompaction(connectionTarget(cfg), 'r', 'op')).toMatchObject({ ok: false, reason: 'required' })
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ ok: true, operationId: 'another' })))
+    await expect(skipRunCompaction(connectionTarget(cfg), 'r', 'op')).rejects.toThrow('Invalid compaction response')
+  })
   it('flushes queued steering through the existing route without aborting or resending content', async () => {
     const fetcher = vi.fn(async (_url: string, _init?: RequestInit) => Response.json({ ok: true }))
     vi.stubGlobal('fetch', fetcher)

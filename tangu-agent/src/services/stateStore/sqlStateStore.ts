@@ -141,9 +141,10 @@ export function createSqlStateStore(): StateStore {
       const rows = await query<any[]>(
         `SELECT r.assistant_message_id AS message_id, s.step_no, s.llm_response, s.tool_calls
            FROM agent_steps s JOIN agent_runs r ON r.id = s.run_id
-          WHERE r.session_id = ? AND r.assistant_message_id IN (${messageIds.map(() => '?').join(',')})
+          WHERE r.session_id = ? AND (r.assistant_message_id IN (${messageIds.map(() => '?').join(',')})
+            OR (s.llm_response -> 'turnContext' ->> 'sourceMessageId') IN (${messageIds.map(() => '?').join(',')}))
           ORDER BY s.step_no ASC`,
-        [sessionId, ...messageIds],
+        [sessionId, ...messageIds, ...messageIds],
       );
       return rows.map((r) => ({
         messageId: String(r.message_id),
@@ -186,6 +187,15 @@ export function createSqlStateStore(): StateStore {
         if (typeof files === 'string') try { files = JSON.parse(files); } catch { files = null; }
         return Array.isArray(files) ? [...files].reverse() : [];
       });
+    },
+    async hasImageDelivery(userId, _sessionId, delivery) {
+      // Query the small receipt only, never load historical base64 payloads into memory.
+      const proof = getDbType() === 'sqlite'
+        ? `EXISTS (SELECT 1 FROM json_each(m.display_files) f WHERE json_extract(f.value, '$.imageDelivery.id') = ? AND json_extract(f.value, '$.imageDelivery.receipt') = ?)`
+        : `EXISTS (SELECT 1 FROM jsonb_array_elements(m.display_files) f WHERE f->'imageDelivery'->>'id' = ? AND f->'imageDelivery'->>'receipt' = ?)`;
+      const rows = await query<any[]>(`SELECT m.id FROM chat_messages m JOIN chat_sessions s ON s.id = m.session_id
+        WHERE s.user_id = ? AND m.display_files IS NOT NULL AND ${proof} LIMIT 1`, [userId, delivery.id, delivery.receipt]);
+      return rows.length > 0;
     },
     async correctUserMessage(m) {
       const rows = await query<any[]>(

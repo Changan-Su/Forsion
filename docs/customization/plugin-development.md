@@ -565,3 +565,44 @@ LCL 统一保留并排的 View。空间不足时滚动工作区内容，Ribbon�
 `mount(el, view)` 的 `view.getLayout?.()` 返回 `{ width, height, visible, compact, phase }`；`view.onLayout?.(callback)` 立即回送快照，并在尺寸、可见性或阶段变化时通知，返回取消订阅函数。`phase` 为 `transition` 或 `settled`，`compact` 表示内容宽度不足 480px。PDF、画布、终端等可在过渡中只更新轻量外框，等 `settled && visible` 再做昂贵的适配；不要因窗口变窄而重新挂载内容或重置缩放。宿主在 View 卸载时自动取消残留订阅。旧宿主没有这些方法，仍可用 `ResizeObserver`。
 
 `preferredWidth` / `preferredHeight` 可选：新建分屏时作为初始分配权重，侧栏尚未被用户调整时作为展开尺寸；用户保存的比例和侧栏尺寸优先。
+
+
+### 文件视图的临时面板
+
+`registerFileType` 的 `mount(el, file)` 可探测 `file.extendView`，按 `view.extendView` 的同一契约打开临时面板。例如 `file.extendView?.open({ id: "ask", title: "Tangu", side: "right", mount(el) { /* ctx.tangu.mountChat(el) */ } })`。主区及独立文件窗口保留原文件，侧栏内的文件视图使用带返回按钮的覆盖面板。同一个 id 再次打开保留内容；关闭文件、导航或停用插件会关闭面板并吊销旧控制器。旧宿主缺少该字段时，不要用主区跳转代替上下文提问。
+
+
+## Agent 读取设置与设置页锚点
+
+使用 [`ctx.registerAgentSettings`](plugin-agent-settings.md) 显式开放当前生效值。UI/引擎同契约，密钥只给配置状态。
+
+云端设置页可接收 `mount(el, { anchor })` 的可选第二参数；`forsion/fx:<pluginId>:<pageId>#<anchor>` 深链传入锚点。页面加载完成后自行滚动/聚焦对应区域，普通打开不抢焦点。旧 mount(el) 不受影响。
+
+### 笔记阅读渲染器
+
+通过 `ctx.registerNoteRenderer` 热替换只读阅读表面，宿主继续持有文档与保存流程。完整契约、失败回退与生命周期见[笔记阅读渲染器](./note-renderers.md)。
+
+### 官方云端收件箱通道
+
+首方锁定的 `forsion-extend` 可通过 `ctx.app.provideInboxChannel?.(channel)` 接入账号收件箱。
+通道提供 `list(filter)`、`unreadCount()`、`patch(id, { read, archived })`、`readAll()`、`remove(id)` 与 `claim(id, client)`；
+可选 `importLegacy(messages)` 仅接入有属主的桌面历史已读／归档状态，云端已有状态优先。
+云端消息 ID 使用 `cloud:` 前缀；列表包含既有 `InboxMessage` 字段。未读响应可带 `revision` 和 `latestCreatedAt`，
+即使未读数没变，领取、归档等变更也能触发刷新。账号凭据留在 Extend 的账号适配层。
+宿主将该渠道与本地引擎的 Agent／系统消息合并，隐藏重复的旧官方广播副本。
+传入 `null` 撤回自己的通道；停用／重载时宿主同样撤回，切换账号时重新提供通道。旧宿主不提供此可选方法。
+
+旧桌面收件箱没有逐条云账号归属；升级接入先将本设备旧状态绑定到当前已验证账号，之后切账号不再重复接入。旧手机缓存不自动接入。
+
+
+### 划线条分离菜单与形状边角（2026-11-12）
+
+`mountSelectionBar` 的工具可选 `menu: { title, open(sel, anchor) }`。主体仍执行 `run(sel)`；独立箭头执行 `menu.open` 并传入真实按钮元素，可直接用于 `ctx.ui.popover(anchor, ...)`，不要搜索宿主DOM取锚点。主体上按右箭头也打开菜单，Enter/Space可操作两颗按钮；菜单先消费Esc，之后Esc才关闭划线条。`title`由插件按当前语言提供。旧宿主忽略menu，因此保留可执行的主体动作或提供自己的菜单入口。菜单消费选区时须在打开时保存该选区数据；停用/卸载时通过dispose清理菜单，不对旧选区回写。
+
+```js
+{ id: 'underline', title: t('underline'), icon: 'underline',
+  run: (sel) => underline(sel),
+  menu: { title: t('colors'), open: (sel, anchor) => openColors(sel, anchor) } }
+```
+
+`mountBoard` / `handle.update` 可选 `roundness: 'sharp' | 'round'`，映射引擎下一笔的 `currentItemRoundness`。省略时保留原默认；此设置不改写scene中已有元素，插件要修改已有矩形须保留完整元素信息并显式更新scene。不要在加载旧scene时统一改圆角。

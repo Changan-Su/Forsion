@@ -1,12 +1,12 @@
+import { deliverImages, recoverImageTool } from './imageDelivery.js';
+import type { ImageGenResult } from '../../seams/cloudBrain.js';
 /**
  * generate_image —— 文生图,把 AI Studio 的生图体验搬到 Tangu(生成→落盘工作区→在对话区内联展示+点击放大)。
  * 模型走 Tangu 现有模型体系(brain.images):Forsion 托管图像模型(/v1/images,含配额计费)或用户自配 provider 的
  * /images/generations(imageModelIds)。未指定 model 时自动取第一个可用生图模型。
  * host 会话把图片写进 cwd/generated/ 并以路径展示(可在工作区找到、无 base64 膨胀);沙箱/无 cwd 时以 dataUrl 内联展示。
  */
-import fs from 'node:fs/promises';
-import { makeImageEditTool, imageQuality, imageOutputSchema, imageOutputOptions, imageOutputExtension, assertImageOutputFormat, sha256 } from './imageEdit.js';
-import path from 'node:path';
+import { makeImageEditTool, imageQuality, imageOutputSchema, imageOutputOptions, assertImageOutputFormat } from './imageEdit.js';
 import { deps } from '../../seams/runtime.js';
 import type { ToolProvider } from '../toolRegistry.js';
 import type { ToolContext } from '../toolTypes.js';
@@ -50,7 +50,7 @@ export const imageGenProvider: ToolProvider = {
       mode: 'both',
       deferred: true, // P0-2:1KB schema,非常驻需求 → 按需装载
       deferHint: 'Generate an image from a text prompt (text-to-image).',
-      capabilities: { sideEffect: 'network', parallel: false, defaultTimeoutMs: 200_000 },
+      capabilities: { sideEffect: 'network', parallel: false, defaultTimeoutMs: 1_000_000 },
       definition: {
         type: 'function',
         function: {
@@ -107,9 +107,10 @@ export const imageGenProvider: ToolProvider = {
 
         const n = Math.min(Math.max(1, Number(args.n) || 1), 4);
         let images: Array<{ b64: string; mime: string }>;
+        let result: ImageGenResult;
         try {
           const options = imageOutputOptions(args);
-          const r = await brain.images.generate({
+          const r = result = await brain.images.generate({
             model: modelId, prompt, size: String(args.size || (options.outputFormat === 'gif' ? 'auto' : '1:1')), n,
             transparentBackground: !!args.transparent_background, quality: imageQuality(args.quality), signal: ctx.signal, ...options,
           });
@@ -125,31 +126,8 @@ export const imageGenProvider: ToolProvider = {
           return 'Error: 生图未返回图片。';
         }
 
-        const stamp = Date.now();
-        const isHost = ctx.execMode === 'host' && !!ctx.cwd;
-        const shown: string[] = [];
-        const names: string[] = [];
-        for (let i = 0; i < images.length; i++) {
-          const buf = Buffer.from(images[i].b64, 'base64');
-          const mime = images[i].mime || 'image/png';
-          const ext = imageOutputExtension(mime);
-          const name = `${stamp}${images.length > 1 ? `-${i + 1}` : ''}.${ext}`;
-          const rel = `generated/${name}`;
-          names.push(name);
-          if (isHost) {
-            const abs = path.resolve(ctx.cwd!, rel);
-            try {
-              await fs.mkdir(path.dirname(abs), { recursive: true });
-              await fs.writeFile(abs, buf);
-              ctx.displayFile({ name, mime, path: abs, source: 'generate_image', sha256: sha256(buf) });
-              shown.push(rel);
-              continue;
-            } catch { /* 落盘失败 → 退化为 dataUrl 内联 */ }
-          }
-          // 沙箱 / 无 cwd / 落盘失败:dataUrl 内联展示(单图,占用可控)。
-          ctx.displayFile({ name, mime, dataUrl: `data:${mime};base64,${images[i].b64}`, source: 'generate_image' });
-          shown.push(name);
-        }
+        const names = await deliverImages(result, ctx, 'generate_image');
+        const shown = names;
         const stillNames = names.filter((_, index) => images[index].mime !== 'image/gif');
         const reuse = stillNames.length ? ` To edit a still image later, pass its file name (${stillNames.join(', ')}) in edit_image previous_outputs.` : '';
         return `Generated ${shown.length} image(s), shown in the chat (${shown.join(', ')}).${reuse} ` +
@@ -157,5 +135,6 @@ export const imageGenProvider: ToolProvider = {
       },
     },
     makeImageEditTool(firstImageModelId),
+    recoverImageTool,
   ],
 };

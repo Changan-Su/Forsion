@@ -2,6 +2,49 @@
 
 <!-- English edition of CHANGELOG.md: same "## <version> (<date>)" headings, one bullet per Chinese bullet. Add both when releasing. -->
 
+## 2.14.2-beta.3 (2026-11-13)
+
+Preview build: available to people who chose the preview channel.
+
+- **Calendar and tasks**: Fixed events and tasks disappearing from Calendar after switching to all-day. Dated note events now appear alongside tasks in the same date groups, with calendar icons and checkboxes distinguishing their types. The Tasks view, Calendar companion and Mini all support opening the source note and rescheduling while preserving the original text.
+- **Inbox**: Installers now include Forsion Extend 0.10.5, adding account message history, archive and read-state sync, plus direct navigation to invite rewards.
+- **Split navigation**: Back and Forward return to each split's tab bar and follow its active View. PDF, browser and other views no longer reserve an extra navigation row.
+- **Muse**: Ordinary proactive messages also trigger notifications, and only chat content you actually see is marked read. Private background work is tracked separately from delivered results, with a clear approval entry when needed.
+- **Tangu**: Improved context recovery and reduced repeated runtime information. Large read-only tool results can be processed in sections and inspected on demand while keeping the full result available for follow-up. Loaded skills retain their full instructions so intermediate steps are not lost in generic previews. Fixed undoing a rollback selecting the wrong checkpoint when checkpoints were created in quick succession.
+- Bundles Tangu engine 2.14.3 and Calendar 0.1.10; the default desktop distribution includes Forsion Extend 0.10.5. This release does not update the web app or backend services.
+
+## 2.14.2-beta.2 (2026-11-12)
+
+Preview build: available to people who chose the preview channel.
+
+- **Note columns and formatting**: Hover between columns inside a note to reveal a full-height divider. Drag it to resize, or use the menu or keyboard. Text and block colors share a palette with theme colors, custom colors and narrow-screen support. Numbered lists can continue, restart or use a chosen starting number, and the block-side plus button opens the block picker directly.
+- **Editing and reading**: Fixed math boundaries, selections and embeds after soft line breaks. Commands and delimiters are easier to distinguish in math source. Reading mode, navigation within each View and folding behave more consistently, with improvements to media drops and image resizing. Copy file paths as absolute or relative paths.
+- **Chat**: The sidebar follows the actual hierarchy of nested conversations. Copying a complete reply includes text on both sides of tool calls. Idle compaction shows its status and can be skipped.
+- **Mini windows and reminders**: Note and plugin windows return after restarting, keeping their individual position, edge attachment, hidden state and pinning. Fixed reminder dismissal and updates to quoted calendar tasks, along with calendar date fields and card placement in detached windows.
+- **Accounts and cloud**: Inbox messages sync across desktop and web and support manual refresh. Account pages include points and invitations. Web restores avatars, membership and daily/weekly quotas, with access to account pages, the store and cloud files. Improved sync recovery after reconnecting or switching accounts, and fixed store content being squeezed by the sidebar on narrow phones.
+- **Covers and image jobs**: Improved cover selection, caching and recovery. Longer image generation jobs and GIF downloads recover more reliably after interruptions or slow transfers.
+- **PDF and plugins**: Open Tangu beside a PDF, including in detached windows. Read-only plugin settings remain viewable. Companion releases include Better PDF 0.1.10 for annotation colors and shape corners, and LaTeX Suite 1.1.1 for Greek snippets at formula starts, Tab navigation past coincident empty stops and out of math, and the default Psi entry.
+- Bundles Tangu engine 2.14.2 and Calendar 0.1.9; the default desktop distribution includes Forsion Extend 0.10.4.
+
+Subsequent core plugin update: Forsion Extend 0.10.5 adds account inbox sync and direct navigation to invite rewards. The original beta.2 installers still bundle 0.10.4. Core plugin updates can download 0.10.5 after installation; restart to activate it.
+
+## 2.14.1 (2026-11-10)
+
+This stable release includes all the changes from 2.14.1-beta.1, detailed in the next section.
+
+- **Detached windows**: Quick Find and note links work again, and you can open the same note in multiple windows. Dragging a tab across windows shows its drop position. Dragging the only tab toward a split in its own window keeps the tab bar visible.
+
+## 2.14.1-beta.1 (2026-11-10)
+
+- **Detached windows**: Search in the current window with Cmd+P or Ctrl+P, follow note links there, and open the same note in multiple windows. Dragging a tab to another window shows where it will insert or split and preserves the tabs already there. Dragging the only tab toward a split in its own window leaves the tab and draggable title bar visible.
+- **Notes**: A read failure gets a retry message. If a cloud vault cannot open while offline at startup, Forsion retries when the connection returns.
+- **Chat**: After an interruption, continue from the text already generated or start the answer again. Fixed an occasional interruption when a hosted model streams tool arguments.
+- **Intelligent UI**: Explanations stay in prose when that fits the question, with controls where interaction helps. Cards support math and note links.
+- **Agents**: Stand-ins can have their own memory and permissions. Profiles, agent memory and project memory can keep details in separate layers and recall them as needed.
+- **Calendar and tasks**: Calendar sources keep their colors when the source order changes. Agents can identify the default calendar, distinguish events from tasks and flag a start time that has already passed.
+- **Workspace**: Pane menus stay visible and clickable, and the Files panel updates when a project is removed. The editor can pick up newly enabled inline completion models.
+- Bundles Tangu engine 2.14.1 and Forsion Extend 0.10.1 on desktop.
+
 ## 2.14.0 (2026-11-09)
 
 Stable release: everything from 2.13.8-beta.1 through 2.14.0-beta.1 (see the sections below), plus these changes since 2.14.0-beta.1:

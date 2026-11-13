@@ -1,3 +1,6 @@
+import { formatToolOutput, toolOutputWorkspaceKey } from '../tools/outputPersist.js';
+import { READ_ONLY_PROGRAM_TOOLS } from '../tools/readOnlyProgram.js';
+import { retryImageDeliveries } from '../tools/builtin/imageDelivery.js';
 import { clearRunSecretEnv } from '../sandbox/runSecretEnv.js';
 import { hasMarketplaceCards, MARKETPLACE_CARDS_CAPABILITY } from '../shared/marketplace.js';
 import { normalizeUIAppCards } from '../shared/intelligentCards.js';
@@ -56,14 +59,15 @@ import { resolveHostSandboxPolicy } from '../sandbox/hostSandboxPolicy.js';
 import { listFilesLocal, sanitizeProjectName } from '../tools/fileWorkspace.js';
 import {
   effectiveContextWindowInfo, INPUT_HARD_RATIO, INPUT_WARN_RATIO, compactionThreshold,
-  estimateTokensRough, estimateMessagesTokens, compactContext, trimOldestToFit, capToolResult, capHistoryContent, pinMessage,
+  estimateTokensRough, estimateMessagesTokens, compactContext, trimOldestToFit, capHistoryContent, pinMessage,
   ContextUsageTracker, CompactionAttemptGuard, assistantTurnOf, markLossy, HISTORY_MSG_MAX_CHARS,
 } from './contextBudget.js';
 import {
   getLatestSummary, compactWorkingMessages, compactSession, summaryMessage, rowCoverage, idleCompactionDue,
-  tagMessageSource, messageSource, persistCheckpoint, messageTimestamp, type CompactBoundary,
+  tagMessageSource, messageSource, persistCheckpoint, messageTimestamp, type CompactBoundary, type CompactWorkingResult,
 } from './compaction.js';
 import { compactionSettingsFor, type CompactionSettings } from './compactionSettings.js';
+import { releaseRunCompaction, runCompactionOperation, type CompactionCommitResult } from './runCompaction.js';
 import { isContextOverflowError, learnFromUpstreamError } from './contextWindowStore.js';
 import { getAgent, isValidSlug, libDirOf, MUSE_AGENT_SLUG, type NormalAgentDef } from '../agents/agentRegistry.js';
 import { loadHarness, shelvedOf, renderHarnessSection, isRefineInvocation, REFINE_DIRECTIVE, consumeHarnessCandidates, renderPendingHarnessCandidates } from '../agents/harnessStore.js';
@@ -82,7 +86,7 @@ import { fitUserImages, normalizeImageAttachments, toImageParts } from './imageA
 import { describeImages, NO_VISION_NOTE, resolveVisionModelId, shouldDescribeImages, whyNoImages, type NoImagesReason } from './visionService.js';
 import { toolImageMessages, type ToolImage } from './toolImages.js';
 import { dropStaleToolImages } from './toolImageWindow.js';
-import { replayAssistantHistory, stepLlmResponse, loadReplaySteps, dropCoveredCalls, reasoningAccountKey } from './historyReplay.js';
+import { replayAssistantHistory, replayUserContext, stepLlmResponse, loadReplaySteps, dropCoveredCalls, reasoningAccountKey } from './historyReplay.js';
 import { looksLikeToolCallText } from '../llm/textToolCalls.js';
 import { isRetryableLlmError, isAuthExpiredLlmError, isQuotaExhaustedLlmError, isForeignReasoningLlmError, withLlmRetry, MODEL_MAX_RETRIES, MODEL_RETRY_BASE_MS, llmRetryBudgetExceeded, sleepOrAbort } from '../llm/retry.js';
 import { relaySettings, noteQuotaExhausted, quotaExhaustedUntil, quotaResetAt, quotaAskSuffix } from '../llm/quotaRelay.js';
@@ -365,6 +369,7 @@ export function startRun(runId: string): void {
   // P1-K2:活动登记与中止原因同样在所有收尾路径清掉(dispatchRun 登记,这里是唯一一定会跑到的出口)。
   }).finally(() => {
     runTasks.delete(runId);
+    releaseRunCompaction(runId);
     if (!exiting) void deps().mcp?.reloadConfig?.().catch(e => console.warn('[mcp] settings reload failed:', e?.message));
     clearRunRemoteTaint(runId); unregisterRun(runId); abortReasons.delete(runId);
     // 父子会话:子会话这一轮的结果送回主会话 / 主会话收它名下积着的回报(终态已落库、队列已推进)。
@@ -946,6 +951,7 @@ export async function hydrateHistory(
         lastUserImagesRow = { id: r.id, ts: src.ts };
       }
     }
+    if (role === 'user') for (const context of replayUserContext(r.id, stepsByMessage.get(r.id))) out.push(tagMessageSource(context, src));
   }
   const contextImages = lastUserWithImages >= 0 ? { images: lastUserImages, rowId: lastUserImagesRow.id, ts: lastUserImagesRow.ts } : undefined;
   if (lastUserWithImages >= 0) {
@@ -1286,7 +1292,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
 
   // —— Lifecycle Hooks 派发上下文（host-only；云端因 hostExec:false 在 runHooks 顶部即空判定，绝不 spawn）——
   let runHostSandbox: ToolContext['hostSandbox'];
-  const hookCtx = (): HookRunContext => ({ profile, execMode, cwd, sessionId, runId, agentSlug: activeAgentSlug, signal: ac.signal, hostSandbox: runHostSandbox });
+  const hookCtx = (signal = ac.signal): HookRunContext => ({ profile, execMode, cwd, sessionId, runId, agentSlug: activeAgentSlug, signal, hostSandbox: runHostSandbox });
   const hookParseArgs = (s: string): any => { try { return s ? JSON.parse(s) : {}; } catch { return {}; } };
   /** 把 hook 的 additionalContext / systemMessage 拼成一段可注入文本（无则空串）。 */
   const hookContextText = (v: HookVerdict): string =>
@@ -1302,12 +1308,14 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   const sessKey = { userId, appId, sessionId, wsProject };
   // run 开始使沙箱懒 hydrate 失效:拉到其它端/会话此前写入的 Project 文件与客户端新上传的文件。
   refreshSessionWorkspace(sessKey);
+  if (execMode !== 'host') refreshSessionWorkspace(toolOutputWorkspaceKey(sessKey));
   let flushed = false;
   const flush = async () => {
     if (flushed) return;
     flushed = true;
     try {
       const changed = await snapshotSession(sessKey);
+      if (execMode !== 'host') await snapshotSession(toolOutputWorkspaceKey(sessKey));
       if (changed.length) console.log(`[agent-core] run=${runId} snapshot ${changed.length} file(s) → workspace`);
     } catch (e) {
       console.warn('[agent-core] session snapshot failed:', e);
@@ -1322,6 +1330,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   let finalTurnText = '';
   let finalTurnNoTools = false; // 收尾那一发请求没带工具头(步数用尽 / 重复工具失败的强制收尾)
   let finalReasoning = '';
+  // 在飞那次模型调用已流给用户的正文(尝试循环里 partialText 的影子)。成功收下 / 段切分回灌时清空;
+  // run 以失败或中止收尾时并进终稿 —— 否则屏上看过的最后一截不落库,「继续生成」时模型看不到,只能重写或跳过。
+  let inflightText = '';
   /** 把一段正文追加进终稿(空段 no-op)。finalize 只写 finalContent —— 中间迭代的 preamble
    *  正文(模型「先说话、再调工具」)必须经此累积,否则落库时只剩末轮收尾词,已流式给用户
    *  看过的话会凭空消失(实例:正文被一句 "NOTHING" 顶掉)。 */
@@ -1899,6 +1910,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       muse: !!agentConfig.muse,
       activityAccess: !!agentConfig.activityAccess,
       automationOrigin: typeof agentConfig.automationOrigin === 'string' ? agentConfig.automationOrigin : undefined,
+      supportsReadOnlyCode: true,
       toolsStrict: agentConfig.toolsStrict === true,
       toolsMode,
       toolsList,
@@ -2168,58 +2180,21 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       telemetry: { agentRole: agentRoleOf(activeAgentSlug), ...(recallStats ?? {}) },
     });
 
-    // 尾部 user 通道(与下面 /skill、/refine、@ 提及、运行时 git/todo 同一条):把追加文本拼进**最后一条
-    // user 消息**,不落库、不上屏、不动 system 前缀字节。B1 的易变记忆与 C-3 的 ephemeralHint 都走这条。
-    // 先把「追加之前」的内容留一份快照:A2 的 tail:runtime 段靠它作差,既有那几处倒扫循环一行不动。
-    // 落点只认**本轮那条 user 消息、且它正好在对话末尾**:倒扫「历史里最后一条 user」会在空消息 run
-    // (Muse/自动化/续跑,历史以 assistant/tool 收尾)把 ephemeralHint / 召回记忆插到后面那些消息**之前**,
-    // 违背「尾部 user 通道」语义(Codex 评审三轮 #9)。不满足先看下面那条边界,再不满足才新起一条不落库的尾部 user 消息。
-    const currentUserPos = currentUserIndex >= 0 ? workingMessages.length - history.length + currentUserIndex : -1;
-    let tailUserIndex = currentUserPos >= 0 && currentUserPos === workingMessages.length - 1 ? currentUserPos : -1;
-    // 边界:本轮没有可挂的 user(空消息 run),但历史正好**以一条 user 收尾**(上一 run 在 assistant 落库前
-    // 中断)—— 就地追加,不新起。新起会让本次请求出现两条连续 role:'user':openaiToAnthropicBody 只把相邻
-    // tool 并成一条 user,同角色 user 是逐条 push 的(src/llm/anthropicMessages.ts),上游合不合并各家不一。
-    // 末尾那条本来就在对话尾部,追加它既没改写历史中段,也没把注入插到后面的消息之前。
-    if (tailUserIndex < 0 && workingMessages[workingMessages.length - 1]?.role === 'user') {
-      tailUserIndex = workingMessages.length - 1;
-    }
-    const tailContentBefore = tailUserIndex >= 0 ? workingMessages[tailUserIndex].content : undefined;
+    // Append runtime context after the current user message. Keep durable snapshots
+    // separate from revocable/transient inputs and leave original chat rows unchanged.
+    const runtimeStart = workingMessages.length;
+    let tailUserIndex = -1;
     const appendToLastUserMessage = (text: string): void => {
       if (tailUserIndex < 0) {
-        // 本轮没有可挂的尾部 user 消息(空消息 run / 空会话 / 历史以 assistant·tool 收尾)——
-        // 新起一条挂在**对话最末**,绝不让记忆/hint 静默蒸发,也绝不回头改写历史里的旧 user。
         workingMessages.push({ role: 'user', content: text } as ChatMessage);
         tailUserIndex = workingMessages.length - 1;
-        return;
+      } else {
+        const m = workingMessages[tailUserIndex];
+        m.content = `${m.content}\n\n${text}`;
       }
-      const m = workingMessages[tailUserIndex];
-      const src = messageSource(m); // 换了对象身份,来源行标记要跟着搬(压缩边界靠它认「这条已落库」)
-      if (typeof m.content === 'string') {
-        workingMessages[tailUserIndex] = { ...m, content: m.content ? `${m.content}\n\n${text}` : text };
-      } else if (Array.isArray(m.content)) {
-        workingMessages[tailUserIndex] = { ...m, content: [...m.content, { type: 'text', text }] } as ChatMessage;
-      }
-      if (src) tagMessageSource(workingMessages[tailUserIndex], src);
     };
-    const tailRuntimeText = (): string => {
-      if (tailUserIndex < 0) return '';
-      const now = workingMessages[tailUserIndex]?.content;
-      if (typeof now === 'string') {
-        return typeof tailContentBefore === 'string' && now.startsWith(tailContentBefore) ? now.slice(tailContentBefore.length) : now;
-      }
-      if (Array.isArray(now)) return JSON.stringify(Array.isArray(tailContentBefore) ? now.slice(tailContentBefore.length) : now);
-      return '';
-    };
-    // B1:记忆易变段(§2/§3)+ sketch 本轮信号走尾部通道。放在 /skill 等之前 —— 它们比运行时现场稳定。
-    // UI edits/undo are newer than old successful write receipts. Surface the current
-    // user-edited state through the existing transient runtime channel as well; it is
-    // never persisted as a fabricated chat message and never grants tool permissions.
-    if (humanCorrections.length) appendToLastUserMessage('[Collaboration settings updated outside this chat. The following are separate scopes: an empty project handbook does not cancel the Agent handbook. Current saved context, not tool authorization.]\n' + humanCurrentBlocks.join('\n\n'));
-    if (volatilePlacement === 'tail') {
-      if (volatileMemory) appendToLastUserMessage(RECALLED_MEMORY_HEADER + volatileMemory);
-      if (sketchTurnSignal) appendToLastUserMessage(sketchTurnSignal.section);
-    }
-
+    const tailRuntimeText = (): string => workingMessages.slice(runtimeStart)
+      .filter(m => m.role === 'user').map(m => String(m.content || '')).join('\n\n');
     // /skill 点名技能(参考 Hermes 的「指针+按需加载」):强指令拼到**尾部 user 消息**,正文由模型
     // 按需 use_skill 取回、作为工具结果落对话尾部。不进 system → /skill 轮不改 system 前缀字节,前缀
     // 缓存照常命中(旧做法把正文塞 system,/skill 轮整段前缀 miss)。同图片回流的「尾部追加」策略。
@@ -2230,16 +2205,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         skillLoadout.requested
           .map((s) => `- ${s.name} (id: \`${s.id}\`)${s.description ? ` — ${s.description}` : ''}`)
           .join('\n');
-      for (let i = workingMessages.length - 1; i >= 0; i--) {
-        const m = workingMessages[i];
-        if (m.role !== 'user') continue;
-        if (typeof m.content === 'string') {
-          workingMessages[i] = { ...m, content: m.content ? `${m.content}\n\n${directive}` : directive };
-        } else if (Array.isArray(m.content)) {
-          workingMessages[i] = { ...m, content: [...m.content, { type: 'text', text: directive }] } as ChatMessage;
-        }
-        break;
-      }
+      appendToLastUserMessage(directive);
     }
 
     // /refine 复盘轮(同 /skill 的尾部通道):**本 run 的输入消息**以 /refine 开头 → 注入单源复盘指令
@@ -2254,16 +2220,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         const pending = await consumeHarnessCandidates(activeAgentSlug);
         if (pending.length) refineText += `\n\n${renderPendingHarnessCandidates(pending)}`;
       } catch { /* ignore */ }
-      for (let i = workingMessages.length - 1; i >= 0; i--) {
-        const m = workingMessages[i];
-        if (m.role !== 'user') continue;
-        if (typeof m.content === 'string') {
-          workingMessages[i] = { ...m, content: `${m.content}\n\n${refineText}` };
-        } else if (Array.isArray(m.content)) {
-          workingMessages[i] = { ...m, content: [...m.content, { type: 'text', text: refineText }] } as ChatMessage;
-        }
-        break;
-      }
+      appendToLastUserMessage(refineText);
     }
 
     // @ 提及的项目(私聊里派遣,方案 §5.4):用户 @ 了某个项目 → 提示 agent 用 start_project_session 在那边开会话干活。
@@ -2279,16 +2236,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         'If the request is a question you can answer from here, just answer.\n' +
         'Mentioned projects:\n' +
         mentionedProjects.map((p) => `- ${p.name} — \`${p.path}\``).join('\n');
-      for (let i = workingMessages.length - 1; i >= 0; i--) {
-        const m = workingMessages[i];
-        if (m.role !== 'user') continue;
-        if (typeof m.content === 'string') {
-          workingMessages[i] = { ...m, content: m.content ? `${m.content}\n\n${directive}` : directive };
-        } else if (Array.isArray(m.content)) {
-          workingMessages[i] = { ...m, content: [...m.content, { type: 'text', text: directive }] } as ChatMessage;
-        }
-        break;
-      }
+      appendToLastUserMessage(directive);
     }
 
     // @ 提及的 agent(单聊):用户 @ 了别的 Normal Agent → 提示主 agent 用 delegate(agentSlug=…) 把相关
@@ -2307,22 +2255,13 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           '- `start_discussion` with `peer` = the matching slug — a genuine back-and-forth deliberation (a fork of you debates them until both sides are done; collect it with `wait_discussion`). Use when the question benefits from real discussion/disagreement.\n' +
           'Mentioned agents:\n' +
           mentioned.map((a) => `- ${a.name} (slug: \`${a.slug}\`)${a.description ? ` — ${a.description}` : ''}`).join('\n');
-        for (let i = workingMessages.length - 1; i >= 0; i--) {
-          const m = workingMessages[i];
-          if (m.role !== 'user') continue;
-          if (typeof m.content === 'string') {
-            workingMessages[i] = { ...m, content: m.content ? `${m.content}\n\n${directive}` : directive };
-          } else if (Array.isArray(m.content)) {
-            workingMessages[i] = { ...m, content: [...m.content, { type: 'text', text: directive }] } as ChatMessage;
-          }
-          break;
-        }
+        appendToLastUserMessage(directive);
       }
     }
 
     // 运行时现场注入(Codex/PI 式 grounding):todo 清单现状(有未完项才注) + git 状态(仅 host)。
     // 拼进尾部 user 消息(与 /skill 指令同通道):不动 system 前缀字节,前缀缓存只失效最短尾巴;
-    // 不落库不上屏。配合 <turn_interrupted> 标记与 Persistence 段,「继续」类消息不再靠翻记录猜进度。
+    // 快照随步骤保留,不上屏。配合 <turn_interrupted> 标记与 Persistence 段,「继续」类消息不再靠翻记录猜进度。
     // git 现场带上 remote / runId(P1-G5):远程污点 run 的 `git status` 同样套写保护 —— 被批准的远程命令在仓库里摆的
     // clean filter 由引擎这一跑执行,不带污点就是以用户身份裸跑,能改写 config.json 的远程上限档。
     {
@@ -2330,21 +2269,43 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       const rc = formatRuntimeContext([
         renderTodoState(rcTodos),
         execMode === 'host' && ps.hostWorkspace ? await collectGitState(cwd, { cwd, execMode, hostSandbox: runHostSandbox, signal: ac.signal, remote, runId }) : null,
-        // 读过 / 写过的文件被文件工具之外改了(用户在编辑器里写、别的程序、run_bash):带 diff 报一次(tools/fileChangeNotice.ts)
-        execMode === 'host' ? await fileChangeSection({ sessionId, cwd, runId }, 'turn-start') : null,
       ]);
       if (rc) {
-        for (let i = workingMessages.length - 1; i >= 0; i--) {
-          const m = workingMessages[i];
-          if (m.role !== 'user') continue;
-          if (typeof m.content === 'string') {
-            workingMessages[i] = { ...m, content: m.content ? `${m.content}\n\n${rc}` : rc };
-          } else if (Array.isArray(m.content)) {
-            workingMessages[i] = { ...m, content: [...m.content, { type: 'text', text: rc }] } as ChatMessage;
-          }
-          break;
-        }
+        appendToLastUserMessage(rc);
       }
+    }
+
+    const turnContext = {
+      version: 1 as const,
+      assistantMessageId: currentAssistantId,
+      sourceMessageId: input.userMessageId || '',
+      text: tailUserIndex >= 0 ? String(workingMessages[tailUserIndex].content || '') : '',
+    };
+    const contextSource = currentUserIndex >= 0 ? messageSource(history[currentUserIndex]) : undefined;
+    if (tailUserIndex >= 0 && contextSource) tagMessageSource(workingMessages[tailUserIndex], contextSource);
+    let contextSaved = false;
+    const responseForStep = (res: Parameters<typeof stepLlmResponse>[0], binding?: Parameters<typeof stepLlmResponse>[1]) => {
+      const saved = stepLlmResponse(res, binding, !contextSaved && contextSource ? turnContext : undefined);
+      contextSaved = true;
+      return saved;
+    };
+    // Privacy-limited hints and computer-history digests must never enter step JSON.
+    tailUserIndex = -1;
+
+    // Revocable memories/handbooks and file diffs retain their transient contract.
+    // B1:记忆易变段(§2/§3)+ sketch 本轮信号走尾部通道。放在 /skill 等之前 —— 它们比运行时现场稳定。
+    // UI edits/undo are newer than old successful write receipts. Surface the current
+    // user-edited state through the existing transient runtime channel as well; it is
+    // never persisted as a fabricated chat message and never grants tool permissions.
+    if (humanCorrections.length) appendToLastUserMessage('[Collaboration settings updated outside this chat. The following are separate scopes: an empty project handbook does not cancel the Agent handbook. Current saved context, not tool authorization.]\n' + humanCurrentBlocks.join('\n\n'));
+    if (volatilePlacement === 'tail') {
+      if (volatileMemory) appendToLastUserMessage(RECALLED_MEMORY_HEADER + volatileMemory);
+      if (sketchTurnSignal) appendToLastUserMessage(sketchTurnSignal.section);
+    }
+
+    if (execMode === 'host') {
+      const notice = await fileChangeSection({ sessionId, cwd, runId }, 'turn-start');
+      if (notice) appendToLastUserMessage(formatRuntimeContext([notice]) || notice);
     }
 
     // C-3 一次性 hint(Muse 每周期的 kickoff 摘要走这条):只进本 run 上下文,**不落 chat_messages、
@@ -2508,6 +2469,18 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           void publish(runId, 'display_file', item); // 即时扇出给在线桌面端
         }
       },
+      persistImageFiles: async (items) => {
+        if (!items.length || pendingDisplayFiles.length + items.length > MAX_DISPLAY_FILES_PER_RUN) {
+          throw new Error('Image display limit reached. Use recover_image in a new turn; no points were charged.');
+        }
+        // A thin worker's publish only queues an event. Persist the complete message first;
+        // this HTTP/SQL call must succeed before the image tool can acknowledge delivery.
+        const files = [...pendingDisplayFiles, ...items];
+        await finalizeAssistantMessage(currentAssistantId, sessionId, modelId, finalContent, finalReasoning,
+          [...allToolCalls], [...allToolResults], files);
+        pendingDisplayFiles.push(...items);
+        for (const item of items) await publish(runId, 'display_file', item);
+      },
       presentDesk: (spec) => {
         if (spec && Array.isArray(spec.views) && spec.views.length && deskPresentCount < MAX_DESK_PRESENTS_PER_RUN) {
           deskPresentCount++;
@@ -2515,6 +2488,17 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         }
       },
       // self_brainstorm 的共享前缀真源:执行时取 workingMessages 当刻浅拷贝(逐消息拷,防分身侧误改)。
+      runReadOnlyTool: async (name, args, signal, parentCallId) => {
+        const caps = getToolCapabilities(name, toolCtx);
+        if (!READ_ONLY_PROGRAM_TOOLS.has(name) || sourceOf(name) !== 'builtin'
+          || !['none', 'read'].includes(caps.sideEffect || '') || caps.approval || declaredPersistPlaceholder(name)) {
+          throw new Error(`Tool ${name} is not an admitted built-in read-only tool`);
+        }
+        signal.throwIfAborted();
+        const nested = await executeOneToolCall({ id: uuidv4(), type: 'function', function: { name, arguments: JSON.stringify(args) } }, undefined, { parentCallId, signal });
+        if (nested.toolResult.isError) throw new Error(String(nested.toolMessage.content));
+        return String(nested.toolMessage.content);
+      },
       getWorkingMessages: () => workingMessages.map((m) => ({ ...m })),
       getImageInputs: () => imageInputs,
       getImageInputsSentAt: () => imageInputsSentAt,
@@ -2524,6 +2508,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       contextWindow: ctxWindowTokens,
       getRunStatus,
     };
+    void retryImageDeliveries(toolCtx).catch(error => console.warn('[image delivery] saved receipt retry pending:', error instanceof Error ? error.message : String(error)));
+    toolCtx.canReadToolOutput = getToolCapabilities('read_tool_output', toolCtx).sideEffect === 'read';
     let toolDefs = getToolDefinitions(toolCtx);
     // A4:工具头字节量(load_tools 解锁后重算)随 usage 事件出账。**按本轮真实发出去的那份算**,
     // 末轮不发 tools / 工具集为空时都记 0 字节、指纹也按空串 —— 否则 `/loop 1`(首轮即末轮)与顶到
@@ -2584,18 +2570,19 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       return s;
     };
     // 拒绝/拦截时的统一工具结果（用户审批 reject 与 PreToolUse hook block 共用）。
-    const mkRejected = async (call: ToolCall, startedAt: number, parallelGroup: string | undefined, msg: string): Promise<ExecutedToolCall> => {
+    const mkRejected = async (call: ToolCall, startedAt: number, parallelGroup: string | undefined, msg: string, parentCallId?: string): Promise<ExecutedToolCall> => {
       const elapsedMs = Date.now() - startedAt;
       await publish(runId, 'tool_result', {
         id: call.id, name: call.function.name, result: msg, isError: true, startedAt, elapsedMs, outputChars: msg.length, parallelGroup, source: sourceOf(call.function.name),
+        ...(parentCallId ? { parentCallId } : {}),
       });
       return {
         toolResult: { tool_call_id: call.id, name: call.function.name, content: msg, isError: true, startedAt, elapsedMs, outputChars: msg.length, parallelGroup },
         toolMessage: { role: 'tool', content: msg, tool_call_id: call.id } as ChatMessage,
       };
     };
-    const executeOneToolCall = async (call: ToolCall, parallelGroup?: string): Promise<ExecutedToolCall> => {
-      if (ac.signal.aborted) throw new AbortLikeError();
+    const executeOneToolCall = async (call: ToolCall, parallelGroup?: string, ptc?: { parentCallId: string; signal: AbortSignal }): Promise<ExecutedToolCall> => {
+      (ptc?.signal ?? ac.signal).throwIfAborted();
       const startedAt = Date.now();
       const basePayload = {
         id: call.id,
@@ -2604,6 +2591,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         startedAt,
         parallelGroup,
         source: sourceOf(call.function.name),
+        ...(ptc ? { parentCallId: ptc.parentCallId } : {}),
       };
       await publish(runId, 'tool_call', basePayload);
       // 商店卡片已经画出来了还要 sketch / intelligent_ui = 同一批插件画两遍(10-17 live 6 次里 2 次);标志见 marketplaceCardsShown。
@@ -2616,11 +2604,11 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       const preV = await runHooks('PreToolUse', {
         tool_name: call.function.name, tool_input: hookParseArgs(call.function.arguments),
         session_id: sessionId, run_id: runId, cwd, agent_slug: activeAgentSlug,
-      }, hookCtx());
-      if (ac.signal.aborted) throw new AbortLikeError();
+      }, hookCtx(ptc?.signal));
+      (ptc?.signal ?? ac.signal).throwIfAborted();
       if (preV.block) {
         // 模型面英文,且写清是 hook 挡的(不是用户拒的):同 approvals 的 rejectReason 口径
-        return mkRejected(call, startedAt, parallelGroup, `Blocked by a PreToolUse hook, so this tool call was NOT run: ${preV.blockReason || 'no reason given.'}`);
+        return mkRejected(call, startedAt, parallelGroup, `Blocked by a PreToolUse hook, so this tool call was NOT run: ${preV.blockReason || 'no reason given.'}`, ptc?.parentCallId);
       }
       // hook 改写参数 → 用改写后的 call 走审批与执行（审批基于改写后的内容，更安全）。
       const effCall = preV.updatedInput
@@ -2658,12 +2646,12 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       // 托盘 run:要问用户的调用挂起(park)——审批请求照发、不等,先给模型占位结果,拍板后在迭代边界兑现。
       const decision = await gateToolCall(runId, effCall, {
         sessionId, execMode, approvalMode, modeSessionId, cwd, extraRoots, profile,
-        approvalDeferral, userId, agentSlug: activeAgentSlug, park: approvalTray, remote,
+        approvalDeferral, userId, agentSlug: activeAgentSlug, park: approvalTray && !ptc, remote,
         // 无人值守(自动化 / Muse):没人能答审批卡 —— 保护路径写入直接拒(Muse ask/agent 档另有 approvalDeferral 排队通道)。
         unattended: (typeof agentConfig.automationOrigin === 'string' && !!agentConfig.automationOrigin) || input.background === 'muse',
-      }, approvalTray ? parkAc.signal : ac.signal);
+      }, ptc?.signal ?? (approvalTray ? parkAc.signal : ac.signal));
 
-      if (ac.signal.aborted) throw new AbortLikeError();
+      (ptc?.signal ?? ac.signal).throwIfAborted();
       if (decision.action === 'park') {
         const entry: ParkedCall = { call, effCall, preview: decision.preview, preCtxText, parallelGroup };
         parked.set(call.id, entry);
@@ -2679,9 +2667,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       if (decision.action === 'reject') {
         // 模型面文案英文、按原因区分:规则 / hook / 无人值守排队 / 中止各自带 rejectReason;
         // 没带 = 用户在审批卡或通道里点了拒绝(中止在上一行已抛 AbortLikeError,不会走到这里)。
-        return mkRejected(call, startedAt, parallelGroup, decision.rejectReason || USER_REJECT_REASON);
+        return mkRejected(call, startedAt, parallelGroup, decision.rejectReason || USER_REJECT_REASON, ptc?.parentCallId);
       }
-      return runApprovedCall(call, withArgsOverride(effCall, decision), startedAt, parallelGroup, preCtxText, decision.writeProtect);
+      return runApprovedCall(call, withArgsOverride(effCall, decision), startedAt, parallelGroup, preCtxText, decision.writeProtect, ptc);
     };
     // 审批时用户改了参数（如修订 bash 命令）→ 用覆盖后的参数执行。
     const withArgsOverride = (effCall: ToolCall, d: ApprovalDecision): ToolCall => (d.argsOverride
@@ -2689,17 +2677,39 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       : effCall);
     // 放行之后的执行段:执行 → 封顶 → tool_result → PostToolUse。常规调用与「挂起后被批准」的调用共用这一条路。
     // writeProtect:闸门按 known-safe 放行的 git 读命令(没人看过卡)→ 这一次在写拒绝 profile 里跑(G5 方案 B,macOS、宿主沙箱关)。
-    const runApprovedCall = async (call: ToolCall, execCall: ToolCall, startedAt: number, parallelGroup: string | undefined, preCtxText: string, writeProtect?: boolean): Promise<ExecutedToolCall> => {
-      const result = await executeTool(execCall, writeProtect ? { ...toolCtx, writeProtectShell: true } : toolCtx);
-      // 入列硬帽(写入即定型,append-only):各工具自有更小的帽,这里兜未封顶路径
-      // (host list_dir 大目录、custom provider 等),保证单条结果不可能把上下文炸穿。
-      const capped = capToolResult(result.result);
+    const runApprovedCall = async (call: ToolCall, execCall: ToolCall, startedAt: number, parallelGroup: string | undefined, preCtxText: string, writeProtect?: boolean, ptc?: { parentCallId: string; signal: AbortSignal }): Promise<ExecutedToolCall> => {
+      (ptc?.signal ?? ac.signal).throwIfAborted();
+      const executionContext = { ...toolCtx, toolCallId: call.id, ...(writeProtect ? { writeProtectShell: true } : {}), ...(ptc ? { ptcRead: true, signal: ptc.signal } : {}) };
+      const result = await executeTool(execCall, executionContext);
+      // 入列时定型(append-only):普通数据缩为可回读预览;按需加载的技能指令保留源工具限额内全文。
+      // 类别来自引擎工具声明,不是调用参数/返回正文;隐私占位和 PTC 仍先走各自边界。
+      const privateResult = !result.isError && !!declaredPersistPlaceholder(result.name);
+      const outputKind = result.isError ? 'data' : getToolCapabilities(result.name, executionContext).outputKind;
+      if (!ptc && !privateResult && outputKind === 'instructions') {
+        // Latest tool batches cannot be compacted away. Refuse an instruction
+        // load that would consume the remaining input/output budget, before any
+        // successful result is published or persisted. Never pass a partial skill.
+        // use_skill remains serial, so prior loads in the batch are already counted.
+        const complete: ChatMessage = { role: 'tool', tool_call_id: call.id,
+          content: preCtxText ? `${result.result}\n\n${preCtxText}` : result.result };
+        const inputBudget = compactionThreshold(Math.max(ctxWindowTokens, ctxWindowMax), compactionCfg.reserveTokens);
+        if (contextUsage.estimate([...workingMessages, complete], toolsOverhead) >= inputBudget) {
+          result.isError = true;
+          result.result = 'Error: Skill instructions were not loaded because the complete instructions do not fit the remaining model input budget. '
+            + 'Use a larger-context model or a smaller complete skill, then retry. Do not treat a partial skill as successfully loaded.';
+        }
+      }
+      const capped = ptc ? result.result : privateResult
+        ? result.result.slice(0, 48_000) // private data must not create a spill file
+        : await formatToolOutput(executionContext, result.name, result.result,
+          result.isError ? 'data' : outputKind);
       const elapsedMs = Date.now() - startedAt;
       const artifactPath = artifactPathFromText(result.name, capped, result.artifactPath);
       // 落库面(tool_result 事件 → agent_run_events、toolResult → agent_steps / chat_messages)与模型面(下面的 toolMessage)
       // 在这里分叉:声明了 persistPlaceholder 的工具(read_computer_history)只落占位,全文只进本轮 workingMessages。
       // 出错结果不含数据,照常落库。占位查询不走 ctx 门禁(见 declaredPersistPlaceholder)。
-      const stored = (!result.isError && declaredPersistPlaceholder(result.name)) || capped;
+      const stored = ptc && !result.isError ? `[Read-only program consumed ${capped.length} characters; selected evidence is in the parent result.]`
+        : (!result.isError && declaredPersistPlaceholder(result.name)) || capped;
       // 发给模型前会被遮住的值在哪(位置 + 占位符,不含原值):界面在工具组上写「遮住 N 个值」并给这些值垫底色
       const masked = maskSkipped ? [] : [
         ...maskSpans(call.function.arguments || '').map((m) => ({ ...m, at: 'args' as const })),
@@ -2717,6 +2727,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         source: sourceOf(call.function.name),
         artifactPath,
         metadata: result.metadata,
+        ...(ptc ? { parentCallId: ptc.parentCallId } : {}),
         ...(masked.length ? { masked } : {}),
       };
       await publish(runId, 'tool_result', payload);
@@ -2728,7 +2739,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         tool_name: result.name, tool_input: hookParseArgs(execCall.function.arguments),
         tool_response: stored, is_error: result.isError,
         session_id: sessionId, run_id: runId, cwd, agent_slug: activeAgentSlug,
-      }, hookCtx());
+      }, hookCtx(ptc?.signal));
       // Pre/Post 注入上下文 + PostToolUse block 反馈 → 追加到本工具结果消息尾部
       // （追加进 tool 消息本身，保持 tool 消息与 assistant tool_calls 的相邻性，不破坏消息序）。
       const hookExtra = [
@@ -2951,59 +2962,62 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         void publish(runId, 'status', { phase: 'compaction_skipped', reason: 'hook', iteration });
         return false;
       }
-      void publish(runId, 'status', { phase: 'compacting', forced: true, reason, iteration });
-      // 换算比例只认 provider 实测(上游拒收时下界 = 窗口);纯粗估不冒充实测。越线本身已成立,故一律 force。
       const measured = contextUsage.measured(workingMessages);
-      const cr = compactionCfg.enabled
-        ? await compactWorkingMessages(workingMessages, callModelId, appId, ac.signal, {
-          // idle 不是越线:没有保留段之外的内容就不压(force=false)
-          settings: compactionCfg, runThinking: thinkingLevel, windowTokens: ctxWindowTokens, force: reason !== 'idle',
-          overheadTokens: toolsOverhead,
-          measuredTokens: reason === 'overflow' ? Math.max(measured ?? 0, ctxWindowTokens) : measured,
-        })
-        : { ok: false, reason: 'llm compaction disabled' }; // enabled=false:不做摘要,只走下面的机械兜底
-      let changed = false;
-      if (reason === 'idle' && !(cr.ok && cr.summary)) {
-        // 按时间压缩只为省缓存未命中,没越线:摘要不成就原样发,不走下面为越线准备的机械折叠 / 裁剪
-        console.warn(`[agent-core] run=${runId} 空闲压缩未成: ${cr.reason}`);
-        return false;
-      }
-      if (cr.ok && cr.summary) {
-        changed = true;
-        contextUsage.invalidate();
-        const persisted = await recordBoundary(cr.summary, cr.boundary);
-        void publish(runId, 'status', { phase: 'compacted', forced: true, reason, persisted, summarized: cr.summarizedCount, iteration, ...(reason === 'idle' ? { idleMinutes: compactionCfg.idleMinutes } : {}) });
-      } else {
-        // 上游拒收时实测的下界 = 窗口(与摘要那边同一口径):估算可能还在触发线下,但 provider 已经说装不下了 → 照裁。
-        const floor = reason === 'overflow' ? Math.max(measured ?? 0, ctxWindowTokens) : measured;
-        const rough = estimateMessagesTokens(workingMessages) + toolsOverhead; // 折叠前:与 measured 同一份消息
-        const scale = floor && rough > 0 ? Math.max(1, floor / rough) : 1;
-        const r = compactContext(workingMessages);
-        if (r.changed) contextUsage.invalidate();
-        // 机械折叠也压不下(最近 20 条受保护、折过的不再折):从最旧处成段丢,直到回到触发线的 70% 以下。
-        // 实测比粗估大(截图按定额估)时目标按比例收紧。没有这一步,摘要一失败就只剩「估算 ≥ 窗口 → 报废」
-        // (10-26 生产:Opus / DeepSeek 两个长会话都是摘要撞输出上限后死在这里)。
-        // ponytail: 70% 是给后续几轮留的余量,不是算出来的最优值。
-        // 「最近一条 user」只认落过库的真消息:工具截图 / 恢复提示也是 role:user,按它保护会把真正的任务裁掉(Codex 10-26 #2)。
-        const trim = reason === 'overflow' || contextUsage.estimate(workingMessages, toolsOverhead) > compactAt
-          ? trimOldestToFit(workingMessages, Math.floor((compactAt * 0.7) / scale), toolsOverhead, (m) => !!messageSource(m))
-          : { dropped: 0 };
-        if (trim.dropped) { contextUsage.invalidate(); trimmedThisRun = true; }
-        if (r.changed || trim.dropped) {
-          changed = true;
-          // 只在真改动了才宣告,且带 savedChars / trimmed:fallback 是机械兜底,不许对用户谎称「已生成摘要」
-          void publish(runId, 'status', {
-            phase: 'compacted', forced: true, fallback: true, reason, savedChars: r.savedChars, iteration,
-            ...(trim.dropped ? { trimmed: trim.dropped } : {}),
-          });
-        } else {
-          console.warn(`[agent-core] run=${runId} 压缩未改动上下文: ${cr.reason}`);
-        }
-      }
-      const afterTokens = contextUsage.estimate(workingMessages, toolsOverhead);
-      compactionGuard.record(afterTokens, ctxWindowTokens, workingMessages, compactAt);
-      void publish(runId, 'status', { phase: 'compaction_budget', iteration, beforeTokens, afterTokens, changed: afterTokens < beforeTokens });
-      return changed;
+      // compactWorkingMessages splices only this detached candidate. Skip may resume the run
+      // while an abort-ignoring provider finishes; it never receives the live array.
+      const candidate = workingMessages.slice();
+      return runCompactionOperation({
+        runId, reason, signal: ac.signal, idleMinutes: compactionCfg.idleMinutes, iteration,
+        publish: async (payload) => {
+          await publish(runId, 'status', payload);
+          // Persist/forward start before the provider call, so reconnect also sees it.
+          if (payload.phase === 'compacting') await drain(runId);
+        },
+        prepare: async (signal): Promise<CompactWorkingResult> => compactionCfg.enabled
+          ? compactWorkingMessages(candidate, callModelId, appId, signal, {
+            settings: compactionCfg, runThinking: thinkingLevel, windowTokens: ctxWindowTokens, force: reason !== 'idle',
+            overheadTokens: toolsOverhead,
+            measuredTokens: reason === 'overflow' ? Math.max(measured ?? 0, ctxWindowTokens) : measured,
+          })
+          : { ok: false, reason: 'llm compaction disabled' },
+        commit: async (cr): Promise<CompactionCommitResult> => {
+          ac.signal.throwIfAborted();
+          let changed = false;
+          let receipt: CompactionCommitResult = { phase: 'compaction_failed', changed: false, continuing: reason === 'idle' };
+          if (reason === 'idle' && !(cr.ok && cr.summary)) {
+            // Idle optimization is optional. The normal input-budget gate still runs afterwards.
+            console.warn(`[agent-core] run=${runId} idle compaction failed: ${cr.reason}`);
+            return receipt;
+          }
+          if (cr.ok && cr.summary) {
+            // Operation has atomically claimed commit; Skip now reports already_settled.
+            workingMessages.splice(0, workingMessages.length, ...candidate);
+            changed = true;
+            contextUsage.invalidate();
+            const persisted = await recordBoundary(cr.summary, cr.boundary);
+            receipt = { phase: 'compacted', changed, persisted, summarized: cr.summarizedCount };
+          } else {
+            const floor = reason === 'overflow' ? Math.max(measured ?? 0, ctxWindowTokens) : measured;
+            const rough = estimateMessagesTokens(workingMessages) + toolsOverhead;
+            const scale = floor && rough > 0 ? Math.max(1, floor / rough) : 1;
+            const r = compactContext(workingMessages);
+            if (r.changed) contextUsage.invalidate();
+            // Preserve the latest real user message; attachment surrogates are not its identity.
+            const trim = reason === 'overflow' || contextUsage.estimate(workingMessages, toolsOverhead) > compactAt
+              ? trimOldestToFit(workingMessages, Math.floor((compactAt * 0.7) / scale), toolsOverhead, (m) => !!messageSource(m))
+              : { dropped: 0 };
+            if (trim.dropped) { contextUsage.invalidate(); trimmedThisRun = true; }
+            if (r.changed || trim.dropped) {
+              changed = true;
+              receipt = { phase: 'compacted', changed, fallback: true, savedChars: r.savedChars, ...(trim.dropped ? { trimmed: trim.dropped } : {}) };
+            } else console.warn(`[agent-core] run=${runId} compaction did not change context: ${cr.reason}`);
+          }
+          const afterTokens = contextUsage.estimate(workingMessages, toolsOverhead);
+          compactionGuard.record(afterTokens, ctxWindowTokens, workingMessages, compactAt);
+          void publish(runId, 'status', { phase: 'compaction_budget', iteration, beforeTokens, afterTokens, changed: afterTokens < beforeTokens });
+          return receipt;
+        },
+      });
     };
     let modelFallbackNoted = false; // 服务端「停用模型已改用 X」的提示,一个 run 只记一次
     for (let iteration = 0; iteration < maxIterations; iteration++) {
@@ -3152,6 +3166,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         }
         let emitted = false;
         partialText = '';
+        inflightText = '';
         const attemptStart = Date.now();
         let acceptedAt = 0;
         let firstFrameAt = 0;
@@ -3177,7 +3192,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
               acceptedAt = Date.now();
               void publish(runId, 'status', { phase: 'llm_call', stage: 'accepted', iteration, bytes: requestBytes, uploadMs: acceptedAt - attemptStart });
             },
-            onToken: (d) => { if (sampling.signal.aborted) return; emitted = turnStarted = true; markFrame(); partialText += d; void publish(runId, 'token', { delta: d }); },
+            onToken: (d) => { if (sampling.signal.aborted) return; emitted = turnStarted = true; markFrame(); partialText += d; inflightText += d; void publish(runId, 'token', { delta: d }); },
             onReasoning: (d) => { if (sampling.signal.aborted) return; emitted = turnStarted = true; markFrame(); void publish(runId, 'reasoning', { delta: d }); },
             // 会话钉着的模型已被 admin 停用、服务端改用了别的:记进时间线(诊断导出可见),每个 run 只记一次。
             onNotice: (n) => {
@@ -3209,10 +3224,12 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
             ...(acceptedAt ? { uploadMs: acceptedAt - attemptStart } : {}),
           };
           turnStarted = true;
+          inflightText = ''; // 整段收下了:正文随 res.content 走下面的正常落库,别在后续失败时再并一次
           break;
         } catch (err) {
           if (ac.signal.aborted) throw err;
           if (sampling.signal.aborted && immediateSteers.has(runId)) {
+            inflightText = '';
             if (partialText.trim()) {
               appendFinal(partialText);
               workingMessages.push({ role: 'assistant', content: partialText });
@@ -3258,6 +3275,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           // 也允许:对长 run 而言「多等一轮再续」远好于「整 run 报废」。
           if (emitted && midstreamResumes < MIDSTREAM_MAX_RESUMES && isRetryableLlmError(err)) {
             midstreamResumes++;
+            inflightText = '';
             if (partialText.trim()) {
               appendFinal(partialText);
               workingMessages.push({ role: 'assistant', content: partialText } as ChatMessage);
@@ -3464,7 +3482,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           void publish(runId, 'status', { phase: 'toolcall_format_recovery', iteration });
           await appendStep({
             id: uuidv4(), runId, stepNo: iteration,
-            llmResponse: { content: res.content, usage: res.usage },
+            llmResponse: responseForStep(res),
           });
           continue;
         }
@@ -3488,7 +3506,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           void publish(runId, 'status', { phase: 'ui_document_recovery', iteration });
           await appendStep({
             id: uuidv4(), runId, stepNo: iteration,
-            llmResponse: { content: res.content, usage: res.usage },
+            llmResponse: responseForStep(res),
           });
           continue;
         }
@@ -3573,8 +3591,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         // —— Sketch 交付兜底:常驻提示不足以对抗部分模型「直接写完文字就收尾」的惯性。
         //    本轮启发式命中、工具确实在场、且整 run 没调过 sketch 时,在收尾前补催一次。
         //    只催一次:模型二次检查仍认为图是噪声时允许收尾;用户的「纯文字/不要画」在信号层已排除。——
-        //    actionable(计划 / 清单 / 挑一个 / 做法)只给本轮那句提醒、不补催:这类说法宽,模型判断不该出卡时不值得再烧一轮。
-        if (sketchTurnSignal && (sketchTurnSignal.kind === 'explicit' || sketchTurnSignal.kind === 'implicit') && !sketchNudged && !lastIter && !(clientCapabilities?.includes(MARKETPLACE_CARDS_CAPABILITY) && hasMarketplaceCards(allToolResults)) && !allToolCalls.some((c) => isHtmlCardTool(c.function.name) || c.function.name === 'intelligent_ui')) {
+        //    Only explicit visual requests get a delivery reminder; inferred shapes never force a card.
+        if (sketchTurnSignal && sketchTurnSignal.kind === 'explicit' && !sketchNudged && !lastIter && !(clientCapabilities?.includes(MARKETPLACE_CARDS_CAPABILITY) && hasMarketplaceCards(allToolResults)) && !allToolCalls.some((c) => isHtmlCardTool(c.function.name) || c.function.name === 'intelligent_ui')) {
           sketchNudged = true;
           if (res.content || res.outputItems?.length) workingMessages.push(assistantTurnOf(res, res.content || ''));
           workingMessages.push({
@@ -3663,7 +3681,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           id: uuidv4(), runId, stepNo: iteration,
           // 收尾轮不带 tool_calls → 回放的 interleave 不把它当一轮(正文走「尾巴」那支),挂在它上面的
           // providerItems 永远读不到,故这里仍只落 { content, usage }。上面那个纠错轮同理。
-          llmResponse: { content: res.content, usage: res.usage },
+          llmResponse: responseForStep(res),
         });
         break;
       }
@@ -3702,7 +3720,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         void publish(runId, 'status', { phase: 'toolcalls_truncated', iteration, count: res.toolCalls.length });
         await appendStep({
           id: uuidv4(), runId, stepNo: iteration,
-          llmResponse: stepLlmResponse(res, { ...stepItemBinding, protocol: wireProtocolOf(payload) }),
+          llmResponse: responseForStep(res, { ...stepItemBinding, protocol: wireProtocolOf(payload) }),
           toolCalls: res.toolCalls,
           toolResults: truncatedResults,
         });
@@ -3761,7 +3779,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         // 「cap.viaResponses × 思考开」把同一个模型这一轮改道 Responses,下一 run 关思考又退回
         // chat-completions —— 只记静态标记,回放就会把 Responses 私有 items 灌给严格的
         // /chat/completions 端点(historyReplay 文件头 ①)。
-        llmResponse: stepLlmResponse(res, { ...stepItemBinding, protocol: wireProtocolOf(payload) }),
+        llmResponse: responseForStep(res, { ...stepItemBinding, protocol: wireProtocolOf(payload) }),
         toolCalls: res.toolCalls,
         toolResults,
       });
@@ -3838,6 +3856,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // 先撤掉挂起项、让出一拍:挂起提问的「没等到回答」要先写进本段的工具结果,下面落库的半截段才不是「还在等」的占位
     parkAc.abort();
     await new Promise<void>((r) => setImmediate(r));
+    // 在飞那次调用已流出、还没并进终稿的正文(断线 / 额度 / 用户按停在半句上):用户屏上看过,落库与 error 事件都带上它。
+    // error 事件的 content 会原地替换在线气泡的正文 —— 不并的话非空终稿会把屏上最后那截抹掉。
+    if (inflightText.trim()) { appendFinal(inflightText); inflightText = ''; }
     // 落库「已停止/失败」时已累积的部分助手轮次:有正文或工具调用就持久化 → 留在聊天记录、且作为上下文
     // 喂给后续 run(否则被中断的这一轮凭空消失,用户与后续 agent 都读不到)。幂等 upsert,失败不二次抛。
     if (finalContent.trim() || allToolCalls.length) {

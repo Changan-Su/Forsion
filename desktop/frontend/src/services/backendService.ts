@@ -12,7 +12,9 @@ import { targetCaps, type TargetCaps } from './engine/targetCaps'
 import { classify, noteReachable, noteVerdict } from './engine/health'
 import './engine/messages'
 import { AGENT_APP_ID, unitFailureMessage } from './agentRunService'
-import { localInbox, localizeInboxMessage } from './localInbox' // 移动端(window.tangu?.mobile)下 inbox 走设备本地存储
+import { currentPlatform, usesClientInbox } from './platform'
+import { readInboxChannel, type InboxChannel } from './inboxChannel'
+import { localInbox, localizeInboxMessage } from './localInbox' // Web/mobile 的云端来信走客户端收件箱
 import { registerMessages, translate } from '../i18n'
 import { LOCAL_ONLY_CODE, localOnlyMessage, remoteRefusalMessage } from './localOnly'
 import { saveResponseAs } from './nativeDownload'
@@ -373,6 +375,14 @@ export const restoreCheckpoint = (t: EngineTarget, sessionId: string, at: number
     { method: 'POST', body: JSON.stringify({ at, ...(opts?.paths ? { paths: opts.paths } : {}), ...(opts?.keepEdited ? { keepEdited: true } : {}) }) },
   )
 
+/** 按 listCheckpoints 返回的 runId 恢复到该检查点之前;同毫秒或时钟回退时仍精确选中。
+ *  消息时间轴回退继续用 restoreCheckpoint(at),不要把检查点身份当时间。 */
+export const restoreCheckpointById = (t: EngineTarget, sessionId: string, checkpointId: string, opts?: { paths?: string[]; keepEdited?: boolean }) =>
+  requestCap<{ restored: string[]; deleted: string[]; skipped: string[]; conflicts?: string[]; failed: Array<{ path: string; error: string }> }>(
+    t, 'checkpointRestore', `/agent/sessions/${encodeURIComponent(sessionId)}/checkpoints/restore`,
+    { method: 'POST', body: JSON.stringify({ checkpointId, ...(opts?.paths ? { paths: opts.paths } : {}), ...(opts?.keepEdited ? { keepEdited: true } : {}) }) },
+  )
+
 /** 某段时间里 Agent 用写文件工具改过的一个文件(引擎 services/checkpoints.ts 的 FileChange 镜像)。
  *  增减按「这段开始前的原样 vs 这段结束时」逐行算;比不了时 adds / dels 为 null,reason 说明为什么。 */
 export interface FileChange {
@@ -501,8 +511,8 @@ export const compactSession = (t: EngineTarget, sessionId: string, modelId?: str
 // ── 模型 / 技能 / 工具 ──
 // 带 app_id:云端 worker 服务多 app,不带就按 worker 基线(ai-studio)解析「应用模型配置」→
 // 列表/默认模型与 run 的记账 app 对不上(见 tangu-agent routes/models.ts)。
-export const listModels = (t: EngineTarget) =>
-  request<ModelsResponse>(t, `/agent/models?app_id=${encodeURIComponent(AGENT_APP_ID)}`)
+export const listModels = (t: EngineTarget, opts?: { timeoutMs?: number }) =>
+  request<ModelsResponse>(t, `/agent/models?app_id=${encodeURIComponent(AGENT_APP_ID)}`, undefined, opts)
 
 /** 直连模型所属来源的额度 / 余额(输入框上下文环弹层);来源查不到时 quota 为 null。 */
 export const getModelQuota = (t: EngineTarget, modelId: string) =>
@@ -1513,52 +1523,120 @@ export interface InboxMessage {
 }
 export type InboxFilter = 'all' | 'unread' | 'archived'
 
-// 移动端(window.tangu?.mobile)inbox 走设备本地存储(localInbox);桌面/web 走远程 /agent/inbox。
-export const listInbox = (t: EngineTarget, filter: InboxFilter = 'all') =>
-  (window.tangu?.mobile
-    ? localInbox.list(filter)
-    : request<{ messages: InboxMessage[] }>(t, `/agent/inbox?filter=${filter}&limit=200`).then((r) => r.messages)
-  ).then((ms) => ms.map((m) => localizeInboxMessage(m)))
-
-export const getInboxUnreadCount = (t: EngineTarget) =>
-  window.tangu?.mobile
-    ? localInbox.unreadCount()
-    : request<{ count: number; latestId: string | null }>(t, '/agent/inbox/unread-count')
-
-export const patchInboxMessage = (t: EngineTarget, id: string, patch: { read?: boolean; archived?: boolean }) =>
-  window.tangu?.mobile
-    ? localInbox.patch(id, patch)
+// Official cloud mail is provided by Extend; native Agent/system mail stays on its engine.
+const legacyClientInbox = () => currentPlatform() === 'mobile'
+const cloudId = (id: string) => id.startsWith('cloud:')
+const localMessages = (ms: InboxMessage[], cloud: boolean) => cloud ? ms.filter((m) => !m.origin_broadcast_id) : ms
+const importedInboxState = new WeakMap<object, Set<string>>()
+const cloudInboxSnapshots = new WeakMap<InboxChannel, Map<InboxFilter, InboxMessage[]>>()
+const cloudUnreadSnapshots = new WeakMap<InboxChannel, { count: number; latestId: string | null; revision?: string; latestCreatedAt?: string | null }>()
+const nativeInboxSnapshots = new WeakMap<InboxChannel, Map<InboxFilter, InboxMessage[]>>()
+const fetchEngineInboxList = async (t: EngineTarget, filter: InboxFilter): Promise<InboxMessage[]> => {
+  if (usesClientInbox()) return legacyClientInbox() && !readInboxChannel() ? localInbox.list(filter) : []
+  const channel = readInboxChannel()
+  const messages: InboxMessage[] = []
+  let offset = 0
+  try { do {
+    const page = await request<{ messages: InboxMessage[] }>(t, `/agent/inbox?filter=${filter}&limit=200${offset ? `&offset=${offset}` : ''}`)
+    messages.push(...page.messages)
+    if (!channel || page.messages.length < 200) break
+    offset += page.messages.length
+  } while (true) } catch (error) {
+    if (!channel) throw error
+    return nativeInboxSnapshots.get(channel)?.get(filter) ?? []
+  }
+  if (channel) {
+    const snapshots = nativeInboxSnapshots.get(channel) ?? new Map<InboxFilter, InboxMessage[]>()
+    snapshots.set(filter, messages)
+    nativeInboxSnapshots.set(channel, snapshots)
+  }
+  return messages
+}
+const engineInboxList = async (t: EngineTarget, filter: InboxFilter): Promise<InboxMessage[]> => {
+  const messages = await fetchEngineInboxList(t, filter)
+  const channel = readInboxChannel()
+  if (!usesClientInbox() && channel?.importLegacy) {
+    const done = importedInboxState.get(channel) ?? new Set<string>()
+    // Read both legacy folders before any cloud row can receive a newer decision.
+    // Otherwise an archived legacy letter could reappear unread until that folder opens.
+    const archived = !done.has('__archived') && filter !== 'archived' ? await fetchEngineInboxList(t, 'archived') : []
+    const legacy = [...messages, ...archived].filter((m) => m.origin_broadcast_id && (m.read_at || m.archived_at) && !done.has(m.id))
+    try { if (legacy.length) await channel.importLegacy(legacy) } catch { return messages }
+    legacy.forEach((m) => done.add(m.id))
+    if (nativeInboxSnapshots.get(channel)?.has('archived')) done.add('__archived')
+    importedInboxState.set(channel, done)
+  }
+  return messages
+}
+export const listInbox = async (t: EngineTarget, filter: InboxFilter = 'all'): Promise<InboxMessage[]> => {
+  const channel = readInboxChannel()
+  const native = await engineInboxList(t, filter)
+  let cloud: InboxMessage[] = []
+  if (channel) {
+    try {
+      cloud = await channel.list(filter)
+      const snapshots = cloudInboxSnapshots.get(channel) ?? new Map<InboxFilter, InboxMessage[]>()
+      snapshots.set(filter, cloud)
+      cloudInboxSnapshots.set(channel, snapshots)
+    } catch (error) {
+      if (usesClientInbox()) throw error
+      cloud = cloudInboxSnapshots.get(channel)?.get(filter) ?? []
+    }
+  }
+  return [...localMessages(native, !!channel), ...cloud].map((m) => localizeInboxMessage(m))
+    .sort((a, b) => (b.created_at ?? '').localeCompare(a.created_at ?? ''))
+}
+export const getInboxUnreadCount = async (t: EngineTarget): Promise<{ count: number; latestId: string | null; revision?: string }> => {
+  const channel = readInboxChannel()
+  if (!channel) return usesClientInbox()
+    ? legacyClientInbox() ? localInbox.unreadCount() : { count: 0, latestId: null }
+    : request(t, '/agent/inbox/unread-count')
+  const native = await engineInboxList(t, 'all')
+  let cloud
+  try { cloud = await channel.unreadCount(); cloudUnreadSnapshots.set(channel, cloud) }
+  catch (error) { if (usesClientInbox()) throw error; cloud = cloudUnreadSnapshots.get(channel) ?? { count: 0, latestId: null } }
+  const local = localMessages(native, true)
+  return { count: cloud.count + local.filter((m) => !m.read_at && !m.archived_at).length,
+    latestId: local[0] && (!cloud.latestId || (local[0].created_at ?? '') > (cloud.latestCreatedAt ?? '')) ? local[0].id : cloud.latestId,
+    revision: `${cloud.revision ?? ''}:${local.map((m) => `${m.id}:${m.read_at}:${m.archived_at}`).join('|')}` }
+}
+export const patchInboxMessage = async (t: EngineTarget, id: string, patch: { read?: boolean; archived?: boolean }) =>
+  cloudId(id) ? requiredInboxChannel().patch(id, patch)
+    : usesClientInbox() ? localInbox.patch(id, patch)
     : request<{ ok: boolean }>(t, `/agent/inbox/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) })
-
-export const readAllInbox = (t: EngineTarget) =>
-  window.tangu?.mobile
-    ? localInbox.readAll()
-    : request<{ ok: boolean }>(t, '/agent/inbox/read-all', { method: 'POST' })
-
-export const deleteInboxMessage = (t: EngineTarget, id: string) =>
-  window.tangu?.mobile
-    ? localInbox.remove(id)
+export const readAllInbox = async (t: EngineTarget) => {
+  const tasks: Promise<unknown>[] = []
+  const channel = readInboxChannel()
+  if (channel) tasks.push(channel.readAll())
+  if (!usesClientInbox()) tasks.push(request(t, '/agent/inbox/read-all', { method: 'POST' }))
+  else if (!channel && legacyClientInbox()) tasks.push(localInbox.readAll())
+  const results = await Promise.allSettled(tasks)
+  const failure = results.find((r) => r.status === 'rejected')
+  if (failure?.status === 'rejected') throw failure.reason
+  return { ok: true }
+}
+export const deleteInboxMessage = async (t: EngineTarget, id: string) =>
+  cloudId(id) ? requiredInboxChannel().remove(id)
+    : usesClientInbox() ? localInbox.remove(id)
     : request<{ ok: boolean }>(t, `/agent/inbox/${encodeURIComponent(id)}`, { method: 'DELETE' })
-
-export const pullInbox = (t: EngineTarget) =>
-  window.tangu?.mobile
-    ? localInbox.pull(t)
-    : request<{ pulled: boolean; added: number; detail?: string }>(t, '/agent/inbox/pull', { method: 'POST' })
-
-/** 领取广播附件(发放全在服务端)。client=`desktop/2.10.1`,服务端按它判最低版本。移动端本地收件箱无广播,不承载。 */
-/** Muse 私聊清单里的「领取」:信在 Muse 所在的那台引擎上,手机点它也打那台(手机本地收件箱领不了,所以不走下面那条)。 */
+export const pullInbox = async (t: EngineTarget): Promise<{ pulled: boolean; added: number; detail?: string }> => {
+  if (readInboxChannel()) { await readInboxChannel()!.unreadCount(); return { pulled: true, added: 0 } }
+  if (usesClientInbox()) return legacyClientInbox() ? localInbox.pull(t) : { pulled: false, added: 0 }
+  return request(t, '/agent/inbox/pull', { method: 'POST' })
+}
+const requiredInboxChannel = () => {
+  const channel = readInboxChannel()
+  if (!channel) throw new Error('Cloud inbox unavailable')
+  return channel
+}
+/** Muse letters belong to the selected engine. */
 export const claimOnEngine = (t: EngineTarget, id: string, client?: string) =>
   request<{ ok: boolean; alreadyClaimed: boolean }>(t, `/agent/inbox/${encodeURIComponent(id)}/claim`, { method: 'POST', body: JSON.stringify({ client }) })
-
-export const claimInboxAttachment = (t: EngineTarget, id: string, client?: string) =>
-  window.tangu?.mobile
-    ? Promise.reject(new Error('not supported on mobile'))
-    : request<{ ok: boolean; alreadyClaimed: boolean }>(t, `/agent/inbox/${encodeURIComponent(id)}/claim`, { method: 'POST', body: JSON.stringify({ client }) })
-
-/** 本地系统消息(sender_kind='system';壳自用:插件引导提醒等)。移动端本地收件箱不承载,静默 no-op。 */
+export const claimInboxAttachment = async (t: EngineTarget, id: string, client?: string) =>
+  cloudId(id) ? requiredInboxChannel().claim(id, client)
+    : usesClientInbox() ? Promise.reject(new Error('Cloud inbox unavailable')) : claimOnEngine(t, id, client)
 export const postInboxMessage = (t: EngineTarget, msg: { title: string; body?: string; sender_id?: string }) =>
-  window.tangu?.mobile
-    ? Promise.resolve({ ok: false, id: '' })
+  usesClientInbox() ? Promise.resolve({ ok: false, id: '' })
     : request<{ ok: boolean; id: string }>(t, '/agent/inbox', { method: 'POST', body: JSON.stringify(msg) })
 
 // ── Slash 命令目录（内置来自引擎的 commandCatalog；custom 来自 ~/.tangu/commands/*.md）──

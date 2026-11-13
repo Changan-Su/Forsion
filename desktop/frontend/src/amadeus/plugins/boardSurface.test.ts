@@ -92,6 +92,18 @@ describe('ctx.ui.mountBoard 的那一层', () => {
     expect(onReady).toHaveBeenCalledTimes(1)
   })
 
+  it('roundness only changes the next shape style; existing scene geometry stays unchanged', async () => {
+    const h = await mount({ roundness: 'sharp' })
+    expect(eng.appState.currentItemRoundness).toBe('sharp')
+    const oldElements = structuredClone(eng.elements)
+    h.update({ roundness: 'round' })
+    expect(eng.appState.currentItemRoundness).toBe('round')
+    expect(eng.elements).toEqual(oldElements)
+    h.update({ roundness: 'sharp' })
+    expect(eng.appState.currentItemRoundness).toBe('sharp')
+    expect(eng.elements).toEqual(oldElements)
+  })
+
   it('update({ viewport }) 推给引擎;引擎自己动了视口(空格拖 / 双指)会被拉回', async () => {
     const h1 = await mount()
     h1.update({ viewport: { scrollX: 100, scrollY: 200, zoom: 2 } })

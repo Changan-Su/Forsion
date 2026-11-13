@@ -8,10 +8,12 @@ import { PRODUCT } from '../product'
  * i18n 是 hook,store 在 React 外 → 持 tr 函数,由 bootstrap 从 useI18n 注入。
  */
 import { create } from 'zustand'
+import { useShallow } from 'zustand/react/shallow'
+import { useMemo, useRef } from 'react'
 import { contentStorageKey } from '@lcl/engine/contentStorageScope'
 import { useSpaceStore } from '@lcl/engine/spaceRegistry'
 import { getView } from '@lcl/engine/viewRegistry'
-import type { AuthStatusInfo, ModelsResponse, SessionRecord, SkillInfo, TanguDesktopConfig, StoredDesktopConfig, DefaultModelSlot } from '../types'
+import type { AuthStatusInfo, ModelsResponse, SessionRecord, WorkspaceDescriptor, SkillInfo, TanguDesktopConfig, StoredDesktopConfig, DefaultModelSlot } from '../types'
 import { isHomeSession } from '../types'
 import * as api from '../services/backendService'
 import { clearSessionBindings, connectionKey, focusName, focusRef, focusTarget, homeTarget, installEngineHost, knownTargets, nameOfRef, refForSession, refreshDesktopRelay, restoreFocus, restoreSessionBindings, sameRef, setFocusTarget, targetForSession, targetKeyOf, HOME_REF, type TargetKey, type TargetRef } from '../services/engine/targets'
@@ -172,7 +174,7 @@ export interface HostState {
   feedbackOpen: boolean
   feedbackDraft: string
   marketOpen: boolean
-  marketTarget: { itemId?: string; detailTab?: string; q?: string; tab?: string; nonce?: number } | null
+  marketTarget: { itemId?: string; detailTab?: string; q?: string; tab?: string; storeView?: string; nonce?: number } | null
   achievementsOpen: boolean
   onboarding: boolean
   /** 这次引导是版本更新后弹的短引导(只在开机的版本检查里置上;手动重开、首启都是完整引导)。 */
@@ -197,7 +199,7 @@ export interface HostState {
    *  target(P1-K6 S2):哪台引擎回的 401;unit = 先复检账号,账号有效只记那台「引擎鉴权」,绝不重启本机引擎。 */
   handleAuthExpired(target?: TargetKey): void
   /** query = 打开时预填的搜索词(插件详情页「在市场中查找」前置插件)。 */
-  openMarket(query?: string, target?: { itemId?: string; detailTab?: string; tab?: string; nonce?: number }): void
+  openMarket(query?: string, target?: { itemId?: string; detailTab?: string; tab?: string; storeView?: string; nonce?: number }): void
   closeMarket(): void
   openAchievements(): void
   closeAchievements(): void
@@ -828,6 +830,38 @@ export const useApp = create<AppState>((set, get) => ({
   setUpdateAvailable: (v) => set({ updateAvailable: v }),
   dismissUpdate: () => set({ updateDismissed: true }),
 }) as HostState as AppState)
+
+/**
+ * 订阅式的工作区列表。`state.workspaces` 是个函数,引用永远不变 —— 只把它放进 useShallow、再在 useMemo 里调用,
+ * 会话增删 / 移除项目时组件不会重算,列表停在挂载那一刻。以前看不出来:Dockview 把不在前台的标签整块卸载,
+ * 切回来重挂就是新的;11-09 #583 改成 renderer="always" 后右栏「文件」标签常驻,移除项目后它一直列着那个项目
+ * (probe-windows-contracts 11f 连红两次)。这里订阅 workspaces() 读的每一项,缺一项就会在那一项变化时漏刷新。
+ * vaultRoot:workspaces() 还读活动 Vault(pageStore.vaultRoot)—— 调用方传 `usePageStore((s) => s.vaultRoot)`,
+ * 不在这里直引 pageStore(它拖着整个 Amadeus 编译器,appStore 不该为一个钩子背上)。
+ */
+export function useWorkspaceList(vaultRoot: string | null | undefined): WorkspaceDescriptor[] {
+  const s = useApp(useShallow((state) => ({
+    workspaces: state.workspaces,
+    // ↓ 与 tanguSlice 里 workspaces() 读的字段一一对应
+    sessions: state.sessions,
+    archivedSessions: state.archivedSessions,
+    cloudProjects: state.cloudProjects,
+    channelWorkspaces: state.channelWorkspaces,
+    defaultWsDir: state.defaultWsDir,
+    homeDir: state.homeDir,
+    tr: state.tr,
+  })))
+  // 流式运行时 sessions 每次刷 updated_at 都换引用 —— 内容没变就交回上一份数组,后台常驻的文件面板不跟着重渲染
+  // (Codex 评审 11-09)。描述符是纯数据,JSON 签名就是完整比对。
+  const prev = useRef<{ sig: string; list: WorkspaceDescriptor[] } | null>(null)
+  return useMemo(() => {
+    const list = s.workspaces()
+    const sig = JSON.stringify(list)
+    if (prev.current?.sig === sig) return prev.current.list
+    prev.current = { sig, list }
+    return list
+  }, [s, vaultRoot]) // eslint-disable-line react-hooks/exhaustive-deps
+}
 
 const revoke = (url: string): void => { try { URL.revokeObjectURL(url) } catch { /* ignore */ } }
 

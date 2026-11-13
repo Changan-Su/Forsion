@@ -17,10 +17,10 @@ export interface DetachApi {
   ribbonPointerDrag?: boolean
   /** Snapshot OS cursor DIP coordinates at release, including mixed-DPI monitors. */
   cursorScreenPoint?(): { screenX: number; screenY: number }
-  /** 跨窗拖拽:拖拽中实时上报屏幕坐标(节流后调;主进程据此给光标下窗口发落点预览)。 */
-  dragUpdate?(screenX: number, screenY: number, view: ViewRef): void
-  /** 跨窗拖拽:最终落点路由。返回是否已跨窗处理(true → 源窗应关掉该 panel)。 */
-  drop?(screenX: number, screenY: number, view: ViewRef): Promise<boolean>
+  /** Start and stop tracking the native cursor for a tab drag. */
+  trackDrag?(viewType: string | null): void
+  /** Finish a drag outside the source window. Close the source panel only after acceptance. */
+  drop?(view: ViewRef): Promise<boolean>
 }
 
 let current: DetachApi | null = null

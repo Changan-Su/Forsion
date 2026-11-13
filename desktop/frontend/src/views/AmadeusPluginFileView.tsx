@@ -5,6 +5,7 @@
 import { useEffect, useRef } from 'react'
 import { amadeus } from '../amadeus/api'
 import { isHostPath } from '@amadeus-shared/pdfLink'
+import { scopeFileExtension } from '../amadeus/plugins/fileExtension'
 import { externalPdfSurface } from '../amadeus/plugins/externalPdfSurface'
 import { useWorkspace, type ViewProps } from '@lcl/engine'
 import { useVisualTheme as useTheme } from '../stores/themeStore'
@@ -28,7 +29,7 @@ registerMessages({
   'pluginfile.openBuiltin': { zh: '用内置阅读器打开', en: 'Open with the built-in reader' },
 })
 
-export function AmadeusPluginFileView({ leaf }: ViewProps) {
+export function AmadeusPluginFileView({ leaf, extendView }: ViewProps) {
   const { t } = useI18n()
   const filePath = useVaultRelParam(leaf, 'filePath')
   const mode = useTheme((s) => s.mode)
@@ -78,7 +79,8 @@ export function AmadeusPluginFileView({ leaf }: ViewProps) {
     const pluginId = usePluginStore.getState().fileTypes.find((o) => o.item === ft)?.pluginId ?? 'unknown'
     const vs = createPluginViewSurface(pluginId, `plug:${leaf.id}`, ft.extensions ?? [])
     const external = isHostPath(filePath) && amadeus ? externalPdfSurface(filePath, amadeus) : null
-    const disposeSurface = (): void => { external?.dispose(); vs.dispose() }
+    const extension = extendView ? scopeFileExtension(extendView) : null
+    const disposeSurface = (): void => { extension?.dispose(); external?.dispose(); vs.dispose() }
     const dereg = addPluginViewTeardown(pluginId, disposeSurface)
     // 视图内跟车:插件经 surface.loadPage 在本视图里换到另一个同类型文件(或标题栏 renamePage 改名),本 scope
     // 的 activePage 一变,leaf 参数跟着换 —— 否则布局 / 重启还指着旧文件,插件拿 file.filePath 写的也是旧文件。
@@ -94,12 +96,18 @@ export function AmadeusPluginFileView({ leaf }: ViewProps) {
     // 事件从挂载起就听着:插件还没订阅时到的落点先存着(只留最后一个),订阅时补发 —— 阅读器加载中连点两条引用,
     // 后点的那条不能丢(内置阅读器的 pendingGoto 同理,e2e:pdfcite 的 C5)。补发放到微任务里:插件多半在 mount
     // 里先订阅、后建阅读器,当场回调会打在还没建好的东西上。
-    let pendingGoto = gotoTarget(leaf.params.page, leaf.params.q)
+    let initialGoto = gotoTarget(leaf.params.page, leaf.params.q)
+    let pendingGoto = initialGoto
     const gotoSubs = new Set<(target: FileGotoTarget) => void>()
     const deliverGoto = (): void => {
       const target = pendingGoto
       if (!target || !gotoSubs.size) return
       pendingGoto = null
+      if (initialGoto) {
+        initialGoto = null
+        // The link has been handed to the plugin. Space snapshots should restore its tab without replaying it.
+        leaf.setParams({ ...leaf.params, page: undefined, q: undefined })
+      }
       for (const cb of [...gotoSubs]) {
         try { cb(target) } catch (e) { console.error('[amadeus] 插件 onGoto 回调抛错', e) }
       }
@@ -117,11 +125,12 @@ export function AmadeusPluginFileView({ leaf }: ViewProps) {
     }
     let cleanup: (() => void | Promise<void>) | void
     try {
-      cleanup = ft.mount(el, { filePath, ...(external ? { io: external.io } : {}), surface: vs.surface, onGoto })
+      cleanup = ft.mount(el, { filePath, ...(external ? { io: external.io } : {}), surface: vs.surface, onGoto, ...(extension ? { extendView: extension.controller } : {}) })
     } catch (e) {
       console.error('[amadeus] 插件文件视图挂载失败', e)
     }
     return () => {
+      extension?.dispose()
       let saving: void | Promise<void> = undefined
       try { saving = cleanup?.() } catch { /* ignore */ }
       window.removeEventListener('amadeus:pdf-goto', onGotoEvent)
