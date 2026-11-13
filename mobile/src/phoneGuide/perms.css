@@ -1,0 +1,5 @@
+/* 手机首次引导第 3 屏「想让 Forsion 帮你做哪些事」:一张卡(ob3-card,不描边)里每项一行,行用 ob3-muse-h 的排法,开关是设置页那唯一一种。
+   只补这一屏特有的排距;颜色、字号、圆角全走现有 token。 */
+.ob3-card.ob3-perms { display: grid; gap: 14px; padding: 14px 16px; }
+.ob3-muse-h.ob3-perm { align-items: center; }
+.ob3-perms-result { margin: 0; }

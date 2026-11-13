@@ -139,6 +139,11 @@ export function registerTanguViews(): void {
       if (d.text && !cur?.text) setDraftField(key, 'text', d.text)
       if (d.pastes.length && !cur?.pastes.length) setDraftField(key, 'pastes', d.pastes)
     },
+    // 手机主页的起步建议:已问过用户(或里面就是上一条建议)才会调到这里
+    replace: (key, d) => {
+      setDraftField(key, 'text', d.text)
+      setDraftField(key, 'pastes', d.pastes)
+    },
     subscribe: (fn) => useComposerDrafts.subscribe(fn),
   })
   // 主页「卜算子·建议」卡(11-07):宿主画行,数据与填进草稿(含引用芯片、发出去才算采纳)留在这边

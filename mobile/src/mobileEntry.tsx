@@ -35,6 +35,7 @@ import { browserChromeInstalled, installBrowserChrome } from './browserChrome'
 import { installNativeFilePicker } from './nativeFiles'
 import { installShareInbox } from './shareInbox'
 import { installPhoneControl } from './phoneControl'
+import { installPhoneGuideHost } from './phoneGuide'
 import { installTapRipple } from './tapRipple'
 import { Capacitor } from '@capacitor/core'
 
@@ -98,6 +99,8 @@ try {
   installCallKeep()
   // 手机操控(T1):把原生 PhoneControl 登记成 client surface `phone`(设置行 + startRun 的能力声明)。
   installPhoneControl()
+  // 手机首次引导:把「在哪运行」「想让它做哪些事」两屏和名册预读登记给共用向导(只在手机 App 的包里,向导挂载前)。
+  installPhoneGuideHost()
 } catch (err) {
   console.error('[tangu-mobile] init failed, continue to mount:', err)
   recordError('init', err) // 同 desktop main.tsx:被 catch 吞掉的启动错误不派发 window 'error'

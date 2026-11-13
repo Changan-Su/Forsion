@@ -387,6 +387,8 @@ export interface TanguDrafts {
   read(): Record<string, TanguDraftText>
   /** 只填空着的那份:那个会话里已经有字 / 长粘贴就不动。 */
   fill(key: string, d: TanguDraftText): void
+  /** 整份换掉文字和长粘贴(附件、引用芯片不动)。只给调用方自己先问过用户、或确认里面是它自己填的那句时用;fill 照旧不覆盖。 */
+  replace(key: string, d: TanguDraftText): void
   subscribe(fn: () => void): () => void
 }
 

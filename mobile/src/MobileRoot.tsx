@@ -19,6 +19,7 @@ import { SettingsModal } from '@/components/SettingsModal'
 import { MarketModal } from '@/components/MarketModal'
 import { PluginOnboardingHost } from '@/components/PluginOnboardingModal'
 import { OnboardingWizard } from '@/components/OnboardingWizard'
+import { phoneGuide } from '@/components/onboarding/phoneGuide'
 import { NotificationHost } from '@/components/NotificationHost'
 import { WhatsNewHost } from '@/components/WhatsNewDialog'
 import { TermsUpdateHost } from '@/components/TermsUpdateDialog'
@@ -86,7 +87,9 @@ function planBack(): BrowserBackPlan & { slide?: 'left' | 'right' } {
   const app = useApp.getState()
   // 引导是全屏浮层(zIndex 60):不在这儿吃掉返回,它下面的 leaf 会被 closeLeaf 关掉/直接挂起 app。
   // 不自动关引导 —— 退出引导只走里面的「跳过」(那条会记 dismiss),否则下次启动又弹一遍。
-  if (app.onboarding) return { run: () => {} }
+  // 第二屏起引导自己接返回(上一屏,见 OnboardingWizard);走到这里 = 在第一屏上:原生壳登记了 minimize 就收起 App
+  // (做到哪一屏记着,下次接着来);网页版 / 浏览器里没登记,照旧不动。
+  if (app.onboarding) return { run: () => { phoneGuide()?.minimize?.() } }
   // 旁聊全屏页在最上层:返回先关它。判据与 BtwHost 同一条 —— 它因切了会话而隐着时不能白吞一次返回
   const shell = readTanguShell()
   if (shell?.btwPageVisible(app.activeId)) return { run: () => shell.closeBtwPage() }
@@ -363,9 +366,9 @@ export function MobileRoot() {
         )}
       </AnimatePresence>
 
-      {/* 首启引导:移动端走通用步(欢迎/后台 Agent/外观/完成),后台开关即时写入引擎 API。
-          连接、模型、默认目录和环境检测依赖本机 host,步骤序按 OnboardingWizard.stepOrder 收缩。
-          onFinish 不重连:后台开关已保存,引导不改变移动端的连接配置。 */}
+      {/* 首启引导:手机 App(登记了 phoneGuide)= 在哪运行 → 外观 → 想让它做哪些事,步骤序按 phoneGuidePlan;
+          网页版没登记,只有外观一屏(stepOrder)。系统返回 = 上一屏,第一屏上收起 App(planBack),不关引导。
+          onFinish 不重连:引导不改变这里的连接配置(在哪运行那屏自己切运行位置)。 */}
       <AnimatePresence>
         {a.onboarding && (
           <motion.div

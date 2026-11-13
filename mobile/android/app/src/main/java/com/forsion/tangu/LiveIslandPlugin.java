@@ -145,7 +145,9 @@ public class LiveIslandPlugin extends Plugin {
     public void show(PluginCall call) {
         // Android 13+ 通知是运行时权限:先贴后问 = 第一轮被系统静默丢掉。首次用到时问一次,答完再贴;
         // 拒了也照走 —— 前台服务照样保活 run,只是通知不显示。
-        if (Build.VERSION.SDK_INT >= 33 && !askedPermission && getPermissionState("notifications") != PermissionState.GRANTED) {
+        // 手机首次引导里已经弹过这个框(PhonePermissionsPlugin 记的那笔):不再问第二次,没开就照「拒了」走。
+        if (Build.VERSION.SDK_INT >= 33 && !askedPermission && getPermissionState("notifications") != PermissionState.GRANTED
+            && !PhonePermissionsPlugin.notificationsAsked(getContext())) {
             askedPermission = true;
             askedAt = epoch.get();
             requestPermissionForAlias("notifications", call, "afterPermission");

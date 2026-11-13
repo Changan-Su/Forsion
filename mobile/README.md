@@ -23,6 +23,8 @@ npm run dev   # http://localhost:5274,同源经 vite proxy 到 BACKEND_URL(缺�
 要固定端口(比如想自己开浏览器看)用 `E2E_PORT=<端口> npm run e2e:boot`(`e2e:runon` 原先单独的 `PORT_RUNON` 不再认,一样用 `E2E_PORT`)。
 一条例外:`e2e:localasset` 还没走这个库,内联着更早的同款做法(端口同样由系统分配、自己的预览一退出就报错,
 但不核对端口上答的是不是本检出的构建,也不能固定端口)。
+另一条:`e2e:phoneguide`(手机首次引导)不用先 build,自己起 `vite dev`(要从 app 自己那份模块里读状态);
+`ONLY=s1,s15` 只跑几段、`OUT=<目录>` 放截图。真的系统权限框、登录前那一屏、返回键收起 App 在模拟器上验:`npm run emu:phoneguide`(用法见脚本头)。
 
 ## 出 Android APK
 

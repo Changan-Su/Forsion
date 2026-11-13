@@ -103,6 +103,10 @@ function unitRef(unitId: string): UnitRef {
   return { kind: 'unit', unitId: unitId.toLowerCase() }
 }
 
+/** 名册请求的先后:发出时取号,写进 store 时记下写的是几号。同时在途的几次里,晚发的写过之后,早发的再回来不写。 */
+let rosterSeq = 0
+let rosterWrittenSeq = 0
+
 export const useDeviceSessions = create<DeviceSessionsState>((set, get) => ({
   gen: 0,
   units: null,
@@ -113,6 +117,7 @@ export const useDeviceSessions = create<DeviceSessionsState>((set, get) => ({
   refreshRoster: async () => {
     if (!rosterAvailable() || !window.tangu?.unitsList) return null
     const gen = get().gen
+    const seq = ++rosterSeq
     let listed: UnitInfo[] | null = null
     try {
       const r = await window.tangu.unitsList()
@@ -123,6 +128,9 @@ export const useDeviceSessions = create<DeviceSessionsState>((set, get) => ({
     const self = await selfInfo()
     const units = runnableDesktops(listed, self.id)
     if (gen !== get().gen) return null
+    // 更晚发出的那次已经写进去了:这次是卡了很久才回来的旧回答,不拿它盖新的(晚发的那次要是没读到,这次照样算数)
+    if (seq < rosterWrittenSeq) return get().units
+    rosterWrittenSeq = seq
     for (const u of units) noteUnitName(unitRef(u.id), u.name)
     set({ units, selfRegistered: self.registered })
     return units

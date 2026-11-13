@@ -77,6 +77,12 @@ export function usePhoneControlStatus(): PhoneControlStatus | null {
   return useSyncExternalStore(subscribeStatus, () => status)
 }
 
+/** 现读一次原生状态(不用可能过时的缓存);null = 读不到(不知道,不是「关」)。手机引导的能力屏用。 */
+export async function readPhoneControlStatus(): Promise<PhoneControlStatus | null> {
+  await refreshStatus()
+  return status
+}
+
 /** 开关:开启走原生确认框(用户拒绝 = 仍是关);无论结果如何,界面只认之后重读的原生状态。 */
 export async function setPhoneControlEnabled(enabled: boolean): Promise<void> {
   try {

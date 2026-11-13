@@ -89,6 +89,7 @@ import { AgentClisTab } from './AgentClisTab'
 import { likelyMainlandChina } from './OnboardingWizard'
 import { EnvProbeSection } from './EnvProbeSection'
 import { DesktopPermissions, hasDesktopPermissions } from './DesktopPermissions'
+import { phoneGuide } from './onboarding/phoneGuide'
 import { ComputerHistorySettings, computerHistoryApi } from './ComputerHistorySettings'
 import { TrashSettings } from './TrashSettings'
 import { RemoteSessionsSettings, remoteSessionsApi } from './RemoteSessionsSettings' // P1-K4
@@ -597,7 +598,8 @@ export const SettingsModal: React.FC<{
     ['advanced', t('settings.tab.advanced')],
     // 回收站(卸载的 Agent / 技能 / 插件放 30 天):只在本机引擎有,手机原生外壳同一页;放「系统」组、设备权限上面。
     ...(isDesktop || window.tangu?.mobile ? ([['trash', t('trash.tab')]] as Array<[Tab, string]>) : []),
-    ...(hasDesktopPermissions() ? ([['permissions', t('desktopPermissions.title')]] as Array<[Tab, string]>) : []),
+    // 手机 App 的同名页(通知 / 操作这台手机 / 麦克风)由手机入口登记(phoneGuide().PermissionsPanel);两者不会同时成立(桌面那份排除了 mobile)。
+    ...(hasDesktopPermissions() || phoneGuide()?.PermissionsPanel ? ([['permissions', t('desktopPermissions.title')]] as Array<[Tab, string]>) : []),
     // 设置 › 设备(原 Ribbon 胶囊菜单,10-17 搬进来):只在有 Unit 主进程桥的真桌面列。
     ...(window.tangu?.unitHostStatus || window.tangu?.unitsList ? ([['units', t('unit.tab')]] as Array<[Tab, string]>) : []),
     // P1-K4:只在执行设备本机(有主进程 API)列;设备页 / web / 手机没有 —— 开关只能在本机改。
@@ -1238,7 +1240,8 @@ export const SettingsModal: React.FC<{
     'amadeus-plugins': PRODUCT.nativeFeatures !== undefined ? 'settings.amadeusPlugins.unitIntro' : 'settings.page.pluginsDescription',
     advanced: 'settings.page.advancedDescription',
     trash: 'trash.page',
-    permissions: 'desktopPermissions.description',
+    // 手机 App 的同名页是通知 / 操作这台手机 / 麦克风三项,不是电脑的那几项权限
+    permissions: hasDesktopPermissions() ? 'desktopPermissions.description' : 'phonePerms.pageDescription',
     units: 'unit.page',
     'remote-sessions': 'remoteSessions.page', // P1-K4
     'computer-history': 'settingsmodal.page.computerHistory',
@@ -1732,7 +1735,9 @@ export const SettingsModal: React.FC<{
           <ErrorBoundary key={`${tab}:${activeSub}`}>
           <div key={`${tab}:${activeSub}`} className={`settings-sub settings-sub--${tab}`} id={cloudTabs.length ? 'settings-cloud-panel' : undefined} role={cloudTabs.length ? 'tabpanel' : undefined} aria-labelledby={cloudTabs.length ? `settings-cloud-tab-${activeSub}` : undefined} data-dir={subDir} data-settings-sub={activeSub || undefined}>
                 {tab === 'trash' && <TrashSettings />}
-                {tab === 'permissions' && hasDesktopPermissions() && <DesktopPermissions mode={p.themeMode} />}
+                {tab === 'permissions' && (hasDesktopPermissions()
+                  ? <DesktopPermissions mode={p.themeMode} />
+                  : (() => { const Panel = phoneGuide()?.PermissionsPanel; return Panel ? <Panel /> : null })())}
                 {tab === 'computer-history' && <ComputerHistorySettings mode={p.themeMode} anchor="computer-history" />}
                 {tab === 'units' && <UnitSettings />}
                 {tab === 'remote-sessions' && <RemoteSessionsSettings />}

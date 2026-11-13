@@ -30,6 +30,8 @@ import type { OpenVoiceInput } from '../../desktop/shared/voiceInputStream'
 import { createSaveDownload, type ForsionDownloadsPlugin } from './saveDownload'
 import { createCloudFetch } from './cloudFetch'
 import { createMobileAccount } from './pluginAccount'
+// 只有本机记号和纯逻辑(类型以外不带依赖),登录前读「走没走过引导」用。
+import { readPhoneGuideKeys } from '@/components/onboarding/phoneGuide'
 
 // 语音转写失败时给用户看的话。服务端的 detail 只有中文(brain-api/routes.ts),不原样透出,按状态码换成这几句。
 registerMessages({
@@ -406,13 +408,45 @@ function setWindowTangu(backendUrl: string, token: string, native: boolean): voi
   })
 }
 
-/** 装垫片。返回 true=已就绪可挂载;false=未登录(已发起登录/跳转),调用方停止挂载。 */
+/**
+ * 原生壳没登录时的那一屏(手机首次引导第 0 屏,方案 A)。以前这里直接开登录页:页面背后是空的,
+ * 用户把登录页关掉就只剩一张白纸、没有任何按钮,只能杀掉重开。
+ * - 第一次打开(本机没有引导完成记号):不自动开登录页,先画欢迎,按「登录并开始」才去。
+ * - 走过引导的人(或本机记号读不出来 = 不知道,按老样子办):照旧马上开登录页,背后垫一屏简版(标题 + 登录按钮),关掉登录页也有路回去。
+ * 欢迎屏所在的块是动态 import 的;块加载失败时第一次打开的人也要能登录,所以退回直接开登录页。
+ * 登录回跳仍走 bindDeepLinkAuth → reload,这一屏随整页丢掉。
+ */
+async function showSignInWelcome(): Promise<void> {
+  const keys = readPhoneGuideKeys()
+  const returning = keys === null || keys.done
+  if (returning) await startNativeLogin()
+  try {
+    const el = document.getElementById('root')
+    if (!el) throw new Error('#root missing')
+    const { mountSignInWelcome } = await import('./signInWelcome')
+    mountSignInWelcome({
+      el,
+      returning,
+      onSignIn: () => startNativeLogin(),
+      // 从登录页回来(没登成)= App 回到前台:把按钮放回来,好再按一次
+      onResume: (cb) => {
+        const handle = App.addListener('resume', cb)
+        return () => { void handle.then((h) => h.remove()).catch(() => {}) }
+      },
+    })
+  } catch (err) {
+    console.error('[tangu-mobile] sign-in welcome failed:', err)
+    if (!returning) await startNativeLogin()
+  }
+}
+
+/** 装垫片。返回 true=已就绪可挂载;false=未登录(原生壳已画登录前那一屏、按需开了登录页 / web 已跳 /auth),调用方停止挂载。 */
 export async function installMobileShim(): Promise<boolean> {
   if (isNative()) {
     // 深链回跳:拿到 token 后 reload,本函数再跑一遍即带 token 挂载。
     bindDeepLinkAuth(() => { location.reload() })
     const token = await getStoredToken()
-    if (!token) { await startNativeLogin(); return false }
+    if (!token) { await showSignInWelcome(); return false }
     // 滑动续期(2 周窗口):不阻塞启动——本次仍用手上这枚(还有效,续期不吊销旧的),换来的下次启动吃到。
     void refreshStoredToken()
     setWindowTangu(apiBase(), token, true)

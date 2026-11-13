@@ -2,13 +2,15 @@
  *  方案:docs/ToBeImproved/首启引导第三轮方案_2026-11-04/revised.html(11-05 定稿):开始 → 外观 → 关于你 → 认识你的 Agents 团队。 */
 import { cmpVersion } from '@amadeus-shared/ipc'
 
-/** welcome 只在升级短引导里出现(「已更新到 X」那一屏);完整引导第一屏就是 start。 */
-export type Step = 'welcome' | 'start' | 'theme' | 'you' | 'team'
+/** welcome 只在升级短引导里出现(「已更新到 X」那一屏);完整引导第一屏就是 start。
+ *  where / perms 是手机 App 的两屏(在哪运行、想让它做哪些事),步骤序在 onboarding/phoneGuide.ts 的 phoneGuidePlan 里定,不走这里的 stepOrder。 */
+export type Step = 'welcome' | 'start' | 'theme' | 'you' | 'team' | 'where' | 'perms'
 
 /**
  * 完整引导的步骤,按宿主能力收缩。
  * - 桌面(本机引擎 + 配置接口):开始 → 外观 → 关于你 → 团队。
- * - 网页 / 手机:只有外观。账号跟着主机走(没有「开始」);human/ 与卜算子的设置都不接受远程写(没有「关于你」「团队」)。
+ * - 网页 / 设备页:只有外观。账号跟着主机走(没有「开始」);human/ 与卜算子的设置都不接受远程写(没有「关于你」「团队」)。
+ * - 手机 App 另有自己的步骤序(phoneGuidePlan);没登记手机引导的宿主才落到这里。
  */
 export function stepOrder(caps: { host: boolean }): Step[] {
   return caps.host ? ['start', 'theme', 'you', 'team'] : ['theme']
