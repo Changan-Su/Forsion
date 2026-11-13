@@ -889,6 +889,26 @@ declare global {
       /** Computer Use:最近被操控窗口的一帧画面。只读——helper 没跑就 active:false,绝不因此拉起它。
        *  仅 macOS(Windows helper 是 stdio 子进程,桌面够不着);拿不到图会带 error 而不是伪造画面。 */
       computerUseLiveView?(opts?: { maxDimension?: number; quality?: number; activeWithinMs?: number; image?: boolean; sinceFrame?: string }): Promise<CuLiveFrame>
+      /** Computer Use 悬浮小画面(宿主私有桥,不是公开插件 API;只有 Electron 桌面有)。
+       *  open() 只在用户点「移到悬浮窗」时调:已开着就叫到原处回 true,插件没装 / 没启用回 false 且不开窗。 */
+      computerUsePip?: { open(): Promise<boolean>; close(): Promise<void>; isOpen(): Promise<boolean> }
+      /** pip 窗自己用:视图挂上了(带内容高)/ 插件不在;之后内容高变了再报。 */
+      pipReady?(ok: boolean, height?: number): void
+      pipResize?(height: number): void
+      /** pip 窗里的停止 / 状态经主进程转给跑着这一轮的窗口(computerUsePipAgent.ts)。 */
+      pipAgent?: {
+        stop(target: unknown): Promise<boolean>
+        watch(key: string, target: unknown): void
+        unwatch(key: string): void
+        onStatus(cb: (key: string, status: unknown) => void): () => void
+      }
+      /** 非 pip 窗口的应答方(computerUsePipHost.ts)。 */
+      pipAgentHost?: {
+        ready(): void
+        onRequest(cb: (req: { id?: number; op: string; key?: string; target?: unknown }) => void): () => void
+        reply(id: number, value: unknown): void
+        status(key: string, status: unknown): void
+      }
       /** 侧边拼接(App Dock,仅 macOS):对话面板贴在别的 App 窗口旁边。open 任何窗口可调(打开面板,先挑窗口);
        *  其余只在面板窗口自己里调得通,别处调回空结果。 */
       appDockOpen?(): Promise<{ ok: boolean; error?: string }>

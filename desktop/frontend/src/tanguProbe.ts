@@ -35,6 +35,7 @@ import {
 import { activeChatModelId, useApp, type AppState } from './stores/appStore'
 import { stickyDefaults } from '../../../tangu-agent/src/contracts/sessionDefaults'
 import { agentStatusOfTarget, resolveStatusTarget, statusKey } from './stores/agentStatus'
+import { pipAgentClient } from './computerUsePipAgent'
 import { usePluginChat } from './stores/pluginChatStore'
 import type { TanguDesktopConfig } from './types'
 import { getSessionDetail, getAgentSchedules, getMuseLibrary, getMuseLibraryFile, getMuseStatus, getMuseTodos, patchMuseTodo } from './services/backendService'
@@ -524,6 +525,8 @@ function museSelf(): TanguAgentSelf {
 }
 
 export function installTanguProbe(fromTangu: Pick<TanguProbe, 'askInChat'> = {}): void {
+  // Computer Use 悬浮小画面(?window=pip)里:这一轮跑在别的窗口,停止 / 状态经主进程转过去(computerUsePipAgent.ts)
+  const pip = pipAgentClient()
   setTanguProbe({
     hostExecution: () => window.tangu?.executionCapabilities?.host ?? (useApp.getState().desktopConfig?.mode === 'managed'),
     activeModel: readActiveModel,
@@ -542,10 +545,10 @@ export function installTanguProbe(fromTangu: Pick<TanguProbe, 'askInChat'> = {})
     session: readSession,
     waitBackend,
     subscribeReady,
-    agentStatus: readAgentStatus,
-    subscribeAgentStatus,
+    agentStatus: pip ? pip.read : readAgentStatus,
+    subscribeAgentStatus: pip ? pip.subscribe : subscribeAgentStatus,
     // 停止(2026-11-13+):store 的 stop 在 Tangu 的 store 半身里,没有对话能力的档案不给
-    ...(hasNativeFeature('tangu') ? { stop: stopAgentRun } : {}),
+    ...(hasNativeFeature('tangu') ? { stop: pip ? pip.stop : stopAgentRun } : {}),
     startChat,
     ...(hasNativeFeature('tangu') ? { openSession: async (id: string, alive: () => boolean = () => true) => {
       const cfg = await waitBackend(15_000);

@@ -19,6 +19,8 @@ import { windowKind } from './windowKind'
 import { DetachedRoot } from './DetachedRoot'
 import { MiniRoot } from './MiniRoot'
 import { FloatingRoot } from './FloatingRoot'
+import { PipRoot } from './PipRoot'
+import { installComputerUsePipHost } from './computerUsePipHost'
 import { installMultiWindow } from './multiWindow'
 import { installKeepAwakeReport } from './keepAwakeReport'
 import { installTelemetryReport } from './telemetryReport'
@@ -92,6 +94,8 @@ function boot(activateTangu: Parameters<typeof installEngine>[0]): void {
     installEngine(activateTangu)
     // 多窗接线:把引擎 detach 缝接到 window.tangu(桌面);web/移动 no-op。须在任何 WbTab 渲染前设好缝。
     installMultiWindow()
+    // Computer Use 悬浮小画面:别的窗口替 pip 回答「停止 / 这一轮的状态」(pip 自己没挂上那一轮);pip 窗与 web/移动 no-op。
+    installComputerUsePipHost()
     // 有会话运行时不休眠(设置→常规,默认关):在飞 run 数报主进程;web/移动 no-op。
     installKeepAwakeReport()
     // 帮助改进 Forsion:本窗的崩溃 / 卡顿 / 功能使用报给主进程(转给 Extend,发不发它定);没有带遥测的 Extend 时 no-op。
@@ -115,7 +119,7 @@ function boot(activateTangu: Parameters<typeof installEngine>[0]): void {
     <LocaleProvider>
       <HostMotionConfig>
         <ErrorBoundary>
-          {isPreview ? <PreviewChat /> : kind === 'mini' ? <MiniRoot /> : kind === 'floating' ? <FloatingRoot /> : kind === 'detached' ? <DetachedRoot /> : <Root />}
+          {isPreview ? <PreviewChat /> : kind === 'mini' ? <MiniRoot /> : kind === 'floating' ? <FloatingRoot /> : kind === 'pip' ? <PipRoot /> : kind === 'detached' ? <DetachedRoot /> : <Root />}
         </ErrorBoundary>
       </HostMotionConfig>
     </LocaleProvider>,
