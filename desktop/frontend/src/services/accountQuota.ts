@@ -14,6 +14,12 @@ export interface AccountQuotaView {
   weeklyPercent?: number
   weeklyResetAt?: string
   resetCards?: number
+  /** 额度用完后用积分继续(用户手动开,缺省关;2026-11-13 起服务端真按它扣积分,之前恒 false)。 */
+  pointsAutoDeduct?: boolean
+  /** 积分余额(2026-11-13 起随额度视图下发;旧服务端没有 = 不知道,别当 0)。 */
+  pointsBalance?: number
+  /** 这个账号能用的模型倍率上限,-1 = 不限(2026-11-13 起;旧服务端没有 = 不知道,不标任何模型)。 */
+  modelMultiplierCap?: number
   /** 后台额度(Muse / 自动化;2026-09-24 起服务端才下发,旧服务端无此字段)。 */
   background?: BackgroundQuotaView
 }
@@ -45,6 +51,24 @@ export type QuotaAdvisory = {
   threshold: 0 | 5 | 10 | 15
   exhausted: boolean
   critical: boolean
+}
+
+/**
+ * 写操作(用卡 / 转入 / 开关)的回包只带部分额度视图:auto-deduct 不含 resetCards / pointsBalance,用卡另给 resetCards。
+ * 回包里没有的字段留旧值,有的覆盖 —— 各处都照这个合并,别再「展开回包 + 手补一个字段」把别的新字段丢掉。
+ */
+export function mergeQuotaView(prev: AccountQuotaView | null | undefined, patch: Partial<AccountQuotaView> | null | undefined, extra: Partial<AccountQuotaView> = {}): AccountQuotaView {
+  const out: Record<string, unknown> = { ...(prev || {}) }
+  for (const source of [patch || {}, extra]) {
+    for (const [key, value] of Object.entries(source)) if (value !== undefined) out[key] = value
+  }
+  return out as unknown as AccountQuotaView
+}
+
+/** 积分余额:不是有限数 = 不知道(旧服务端 / 读失败),返回 null,调用方别把它当 0 去提示充值。 */
+export function pointsBalanceOf(quota: AccountQuotaView | null | undefined): number | null {
+  const n = quota?.pointsBalance
+  return typeof n === 'number' && Number.isFinite(n) ? Math.max(0, n) : null
 }
 
 export const ACCOUNT_QUOTA_EVENT = 'tangu:account-quota'

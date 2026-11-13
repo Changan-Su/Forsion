@@ -1400,6 +1400,9 @@ button.t2-bg-url:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.
 }
 .t2-quota-advisory-copy > svg { flex: 0 0 auto; color: var(--warning); }
 .t2-quota-advisory[data-level='critical'] .t2-quota-advisory-copy > svg { color: var(--danger); }
+/* 正在用积分继续:普通告知,不是警告 —— 图标退成弱信息色 */
+.t2-quota-advisory[data-level='info'] .t2-quota-advisory-copy > svg { color: var(--text-muted); }
+.t2-quota-advisory-sub { flex: none; color: var(--text-muted); font-weight: 450; white-space: nowrap; }
 .t2-quota-advisory-actions { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 2px; }
 .t2-quota-action,
 .t2-quota-dismiss {
@@ -1414,6 +1417,7 @@ button.t2-bg-url:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.
 .t2-quota-action.reset { color: var(--text-muted); }
 .t2-quota-action.convert { color: var(--accent-ink); }
 .t2-quota-action.settings { color: var(--text-muted); }
+.t2-quota-action.points, .t2-quota-action.recharge { color: var(--accent-ink); }
 .t2-quota-action:hover:not(:disabled), .t2-quota-dismiss:hover { background: var(--overlay-medium); }
 .t2-quota-action:disabled { color: var(--text-faint); cursor: default; }
 .t2-quota-dismiss {

@@ -10,11 +10,12 @@ import { modelPickerPresenter, pickerChanges, type ModelPickerRequest, type Mode
  * 在后续会话继续继承。外部 ACP 引擎没有 Tangu 推理档与辅助模型时，保留单独的模型选择行。
  */
 import React, { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
-import { ChevronDown, ChevronRight, Bot, Search } from 'lucide-react'
+import { ArrowUpRight, ChevronDown, ChevronRight, Bot, Lock, Search } from 'lucide-react'
 import { nestedPanelPlacement, nestedPanelTop, UI_ZOOM_EVENT, zoomOf, useEdgeNudge, NATIVE_MENU_MAX_ITEMS, nativeSheetPresenter, runNativeSheetMenu } from '@lcl/engine'
 import { useKnobFlow } from '@lcl/engine/segFlow'
 import type { NestedPanelPlacement, SheetMenu, SheetMenuItem } from '@lcl/engine'
 import { registerMessages, useI18n } from '../i18n'
+import { isModelTierLocked, useModelMultiplierCap } from '../services/modelTierLock'
 import { THINKING_LEVELS } from '../types'
 import { thinkingLabel } from './thinkingLabel'
 import { ComposerMenuSurface, ComposerMenuHeader, composerMenuHasFocus, useComposerLayout } from './ComposerMenuSurface'
@@ -59,6 +60,10 @@ registerMessages({
   'pill.rowUltrafast': { zh: '极速模式', en: 'Ultrafast mode' },
   'pill.ultrafastTag': { zh: '极速', en: 'Ultrafast' },
   'pill.ultrafastDesc': { zh: '比快速更快，约 {price} 倍单价', en: 'Faster than Fast, {price}x price' },
+  // 模型倍率门槛(2026-11-13):当前会员档位用不了的云端模型照常列出,变淡 + 锁,点了就地说明
+  'pill.locked': { zh: '升级后可用', en: 'Upgrade to use' },
+  'pill.lockTip': { zh: '当前会员档位不能使用 {name}。升级会员或换一个模型。', en: "Your current plan can't use {name}. Upgrade your membership or pick another model." },
+  'pill.lockUpgrade': { zh: '升级会员', en: 'Upgrade membership' },
 })
 
 /** Fast 说明原文 → 当前语言:Codex 目录给速度(「2x speed, increased usage」),官方 API 给单价倍数(「2x price」);认不出的格式原样显示。 */
@@ -396,7 +401,16 @@ export const ModelPill: React.FC<{
   const hasModels = all.length > 0
   const current = all.find((m) => m.id === modelId) || modelsResponse?.models.find((m) => m.id === modelId)
   const readonly = !onThinkingChange && !hasModels && !!emptyLabel
+  // 倍率门槛:cap 读不到(没登录 / 老扩展 / 读失败)= null,一个都不锁
+  const multiplierCap = useModelMultiplierCap()
+  const lockedModel = (id?: string | null): boolean => {
+    if (!id) return false
+    return isModelTierLocked(all.find((m) => m.id === id) || modelsResponse?.models.find((m) => m.id === id), multiplierCap)
+  }
+  const currentLocked = isModelTierLocked(current, multiplierCap)
   const label = current?.name || emptyLabel || t('input.selectModel')
+  const [lockTip, setLockTip] = useState<string | null>(null)
+  useEffect(() => { if (!open || !pane) setLockTip(null) }, [open, pane])
   const isUltra = allowUltra && !!ultra
   // Ultra 开着时请求档恒 max(引擎同口径),存值是什么都不看。
   const effLevel: Thinking = isUltra ? 'max' : thinkingLevel || 'medium'
@@ -471,6 +485,7 @@ export const ModelPill: React.FC<{
   const paneGroups = rawPaneGroups.map((g) => ({ ...g, options: g.options.filter((m) => `${g.label} ${m.name} ${m.id} ${m.tags?.map((tag) => tag.text).join(' ') || ''}`.toLowerCase().includes(q)) })).filter((g) => g.options.length)
   const paneValue = pane === 'model' ? modelId : slot ? (defaultModelIds?.[slot] || '') : ''
   const selectDefault = (slot: DefaultModelSlot, id: string): void => {
+    if (lockedModel(id)) { setLockTip(id); return }
     onDefaultModelChange?.(slot, id)
     cancelHover()
     setPane(null)
@@ -487,11 +502,26 @@ export const ModelPill: React.FC<{
     cancelHover(); setPane(null); setQuery('')
   }
 
+  const canUpgrade = typeof window !== 'undefined' && !!window.tangu?.openPayCenter
+  const openUpgrade = (): void => { setPillOpen(false); void window.tangu?.openPayCenter?.() }
+  /** 选中了当前档位用不了的模型:不选,就地说明。原生菜单那两条路答回后菜单已收,改弹一张原生小卡;没有原生面就回到网页菜单里那一行下面说。 */
+  const lockedPicked = (id: string): void => {
+    const name = all.find((m) => m.id === id)?.name || modelName(id)
+    if (nativeSheetPresenter()) {
+      void runNativeSheetMenu({ title: name, sections: [{
+        items: canUpgrade ? [{ id: 'upgrade', label: t('pill.lockUpgrade'), run: openUpgrade }] : [{ id: 'locked', label: t('pill.locked') }],
+        footer: t('pill.lockTip', { name }),
+      }] })
+      return
+    }
+    setPillOpen(true); setPane('model'); setLockTip(id)
+  }
+
   /** 原生呈现的两种形态(模型选择器 / 合并菜单)共用的一份字段:目录、当前值、可选项。 */
   const pickerFields = (): PickerField[] => {
     const toGroups = (input: ModelPillGroup[]): PickerGroup[] => input.map(g => ({ label: g.label, options: g.options.map(m => ({
       value: m.id, label: m.name, detail: m.tags?.map(tag => tag.text).join(' · ') || m.description,
-      ...(m.source === 'forsion' && m.multiplier != null ? { badge: `${m.multiplier.toFixed(2)}x` } : {}),
+      ...(m.source === 'forsion' && m.multiplier != null ? { badge: `${m.multiplier.toFixed(2)}x${isModelTierLocked(m, multiplierCap) ? ` · ${t('pill.locked')}` : ''}` } : {}),
     })) }))
     const fields: PickerField[] = [{ id: 'model', label: t('pill.rowModel'), value: modelId || '', groups: toGroups(groups) }]
     if (onThinkingChange) fields.push({ id: 'thinking', label: t('pill.rowEffort'), value: isUltra ? 'ultra' : effLevel, groups: [{ label: '', options: [
@@ -516,6 +546,8 @@ export const ModelPill: React.FC<{
   /** 把原生答回的改动落到调用方(两种形态同一条路)。 */
   const applyChanges = (changes: ModelPickerValues): void => {
     const patch: { modelId?: string; thinkingLevel?: Thinking; ultra?: boolean } = {}
+    // 唯一的选模型闸(原生选择器、合并菜单都经这里):用不了的不落,改给说明;别的改动照常
+    if ('model' in changes && lockedModel(changes.model)) { lockedPicked(changes.model); changes = { ...changes }; delete changes.model }
     if ('model' in changes) patch.modelId = changes.model
     if ('thinking' in changes) {
       patch.thinkingLevel = changes.thinking === 'ultra' ? 'max' : changes.thinking as Thinking
@@ -609,19 +641,23 @@ export const ModelPill: React.FC<{
     <span ref={wrapRef} className={`model-pill-wrap${open && !nativeOpen ? ' is-open' : ''}${className ? ` ${className}` : ''}`} data-compact={compact || undefined} data-cmenu>
       <button type="button"
         className={`composer-chip model-pill-btn${open && !nativeOpen ? ' is-open' : ''}${effortCls}${modelPickerPresenter() ? ' model-pill-btn--native' : ''}`}
-        title={`${title || t('input.modelChipTitle')}: ${label}${effort}`}
-        aria-label={`${label}${effort}`}
+        title={`${title || t('input.modelChipTitle')}: ${label}${effort}${currentLocked ? ` · ${t('pill.locked')}` : ''}`}
+        aria-label={`${label}${effort}${currentLocked ? ` · ${t('pill.locked')}` : ''}`}
+        data-tier-locked={currentLocked || undefined}
         disabled={disabled}
         aria-expanded={open}
         onClick={() => { void openPicker() }}
       >
         {isUltra && <span ref={streaksRef} className="pill-ultra-streaks" aria-hidden="true">{[0, 1, 2, 3].map((i) => <i key={i} />)}</span>}
         {icon === undefined ? <Bot size={13} /> : icon}
-        {/* Ultra:模型名照常字色,「Ultra」单独成渐变字标签(主次分明);包一层,展开态的三列网格(图标 | 标签 | 箭头)不被挤出第四列 */}
+        {/* Ultra:模型名照常字色,「Ultra」单独成渐变字标签(主次分明);包一层,展开态的三列网格(图标 | 标签 | 箭头)不被挤出第四列。
+            当前模型用不了(老会话 / 换了档位)时锁也进这一层:不替用户换模型,只标出来 */}
         {isUltra
-          ? <span className="pill-ultra-label"><MarqueeLabel text={label} /><span className="pill-ultra-tag">{effortText}</span></span>
-          : <MarqueeLabel text={label + effort} />}
-        <span className="model-pill-compact" aria-hidden="true"><span>{compactName}</span>{compactEffort && <span className="model-pill-compact-effort"> · {compactEffort}</span>}{fastOn && <span> · {speedTag}</span>}</span>
+          ? <span className="pill-ultra-label"><MarqueeLabel text={label} />{currentLocked && <Lock size={11} className="pill-lock" aria-hidden="true" />}<span className="pill-ultra-tag">{effortText}</span></span>
+          : currentLocked
+            ? <span className="pill-ultra-label"><MarqueeLabel text={label + effort} /><Lock size={11} className="pill-lock" aria-hidden="true" /></span>
+            : <MarqueeLabel text={label + effort} />}
+        <span className="model-pill-compact" aria-hidden="true"><span>{compactName}</span>{compactEffort && <span className="model-pill-compact-effort"> · {compactEffort}</span>}{fastOn && <span> · {speedTag}</span>}{currentLocked && <Lock size={10} className="pill-lock" />}</span>
         <ChevronDown size={10} />
       </button>
       {open && !nativeOpen && (
@@ -839,21 +875,41 @@ export const ModelPill: React.FC<{
                     <React.Fragment key={g.key || g.label}>
                       {g.source && paneGroups[index - 1]?.source !== g.source && <div className="menu-source">{t(g.source === 'forsion' ? 'model.group.forsion' : 'model.group.direct')}</div>}
                       {g.label && <div className="menu-section">{g.label}</div>}
-                      {g.options.map((m) => (
-                        <button type="button"
-                          key={m.id}
-                          className={`menu-item${m.id === paneValue ? ' active' : ''}`}
-                          title={m.description}
-                          onClick={() => {
-                            if (pane === 'model') { onSelect(m.id); setPillOpen(false) }
-                            else if (slot) selectDefault(slot, m.id)
-                          }}
-                        >
-                          <span className="grow">{m.name}</span>
-                          {m.source && <ModelMetadata model={{ source: m.source, tags: m.tags, multiplier: m.multiplier }} />}
-                          <span className="mi-check">{m.id === paneValue ? '✓' : ''}</span>
-                        </button>
-                      ))}
+                      {g.options.map((m) => {
+                        const locked = isModelTierLocked(m, multiplierCap)
+                        return (
+                          <React.Fragment key={m.id}>
+                            <button type="button"
+                              className={`menu-item${m.id === paneValue ? ' active' : ''}${locked ? ' is-locked' : ''}`}
+                              title={m.description}
+                              aria-disabled={locked || undefined}
+                              aria-expanded={locked ? lockTip === m.id : undefined}
+                              onClick={() => {
+                                // 用不了的:不选中,在这一行下面说明(再点一次收起);键盘回车同一条路
+                                if (locked) { setLockTip((prev) => prev === m.id ? null : m.id); return }
+                                if (pane === 'model') { onSelect(m.id); setPillOpen(false) }
+                                else if (slot) selectDefault(slot, m.id)
+                              }}
+                            >
+                              <span className="grow">{m.name}</span>
+                              {locked && <span className="model-lock-note"><Lock size={11} aria-hidden="true" />{t('pill.locked')}</span>}
+                              {m.source && <ModelMetadata model={{ source: m.source, tags: m.tags, multiplier: m.multiplier }} />}
+                              <span className="mi-check">{m.id === paneValue ? '✓' : ''}</span>
+                            </button>
+                            {locked && lockTip === m.id && (
+                              <div className="cm-lock-tip" role="note">
+                                <div className="menu-section cm-foot">{t('pill.lockTip', { name: m.name })}</div>
+                                {canUpgrade && (
+                                  <button type="button" className="menu-item cm-lock-upgrade" onClick={openUpgrade}>
+                                    <span className="grow">{t('pill.lockUpgrade')}</span>
+                                    <ArrowUpRight size={12} aria-hidden="true" />
+                                  </button>
+                                )}
+                              </div>
+                            )}
+                          </React.Fragment>
+                        )
+                      })}
                     </React.Fragment>
                   ))}
                   {!paneGroups.length && <div className="menu-section">{t('pill.noModels')}</div>}

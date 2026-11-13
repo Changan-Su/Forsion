@@ -1047,8 +1047,25 @@ if (new URLSearchParams(location.search).has('dock')) {
     { label: 'zhipu', options: [{ id: 'glm-4.7', name: 'GLM-4.7' }, { id: 'glm-4.6', name: 'GLM-4.6' }, { id: 'glm-air', name: 'GLM-4.5-Air' }] },
     { label: 'deepseek', options: [{ id: 'ds-v32', name: 'DeepSeek-V3.2-Exp' }, { id: 'ds-r1', name: 'DeepSeek-R1' }] },
   ]
+  // ?tierlock[=<上限>]:Forsion 云端组带倍率,额度视图下发 modelMultiplierCap(缺省 2.5)→ 倍率更高的变淡带锁;
+  // ?tierlock&current 起步就选着一个用不了的(老会话 / 换了档位),看药丸上的锁
+  const tierLock = modelPillParams.has('tierlock')
+  if (tierLock) {
+    const cap = Number(modelPillParams.get('tierlock') || 2.5)
+    GROUPS.unshift({ label: 'Forsion', source: 'forsion', options: [
+      { id: 'f-luna', name: 'GPT-6 Luna', source: 'forsion', multiplier: 1 },
+      { id: 'f-sol', name: 'GPT-6 Sol', source: 'forsion', multiplier: 2.5 },
+      { id: 'f-opus', name: 'Claude Opus', source: 'forsion', multiplier: 5 },
+      { id: 'f-ultra', name: 'Gemini Ultra', source: 'forsion', multiplier: 8 },
+    ] } as never)
+    window.tangu = {
+      ...(window.tangu || {}),
+      accountQuota: async () => ({ status: 200, json: { dailyLimit: 100, weeklyLimit: 100, modelMultiplierCap: cap } }),
+      openPayCenter: async () => { (window as unknown as { __payOpened?: number }).__payOpened = ((window as unknown as { __payOpened?: number }).__payOpened || 0) + 1; return { ok: true } },
+    } as never
+  }
   const PillHarness = (): React.ReactElement => {
-    const [id, setId] = useState('glm-4.7')
+    const [id, setId] = useState(tierLock && modelPillParams.has('current') ? 'f-opus' : 'glm-4.7')
     const [lv, setLv] = useState<'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'>(modelPillParams.has('max') || modelPillParams.has('ultra') ? 'max' : 'high')
     // ?ultra 起步就在 Ultra 档;?allowultra 起步在「深」但滑杆带 Ultra 格(拍切进 Ultra 那一下的冲击波)
     const allowUltra = modelPillParams.has('ultra') || modelPillParams.has('allowultra')

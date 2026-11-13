@@ -18,7 +18,8 @@ import { registerMessages, useI18n } from '../i18n'
 import { TierBadge } from './TierBadge'
 import { track } from '../achievements/store'
 import { AccountSwitcher, accountSwitcherModel } from './AccountSwitcher'
-import { formatRemaining, publishAccountQuota, remainingPercent, type AccountQuotaView } from '../services/accountQuota'
+import { pointsReadToken, reconcilePointsRead } from '../services/pointsAutoDeduct'
+import { formatRemaining, mergeQuotaView, publishAccountQuota, remainingPercent, type AccountQuotaView } from '../services/accountQuota'
 import { loadAccountRewards, emptyAccountRewards, ACCOUNT_REWARDS_CHANGED, type AccountRewards } from '../services/accountRewards'
 import { accountChip, publishAccountChip, type AccountChip } from '../services/accountChip'
 import { useApp } from '../stores/appStore'
@@ -213,11 +214,12 @@ export const AccountCard: React.FC<{
     clearRewards()
     if (!auth?.loggedIn) return
     void refreshRewards()
+    const pointsToken = pointsReadToken()
     void window.tangu?.accountQuota?.()
       .then((res) => {
         if (request !== quotaRequest.current) return
         if (res?.status === 200 && res.json) {
-          const next = res.json as AccountQuotaView
+          const next = reconcilePointsRead(res.json as AccountQuotaView, pointsToken)
           setQuota(next)
           publishAccountQuota(next)
         } else setQuotaErr(true)
@@ -281,13 +283,14 @@ export const AccountCard: React.FC<{
     setUsingCard(true)
     const gen = accountGen.current
     const before = quota
+    const pointsToken = pointsReadToken()
     try {
       const r = await window.tangu?.accountUseResetCard?.('both')
       if (gen !== accountGen.current) return
       ++quotaRequest.current // 在途的额度 GET 作废:它可能比用卡早读到旧张数
       setMenu(null)
       if (r?.status === 200 && r.json?.success) {
-        const next = { ...(r.json.quota || {}), resetCards: r.json.resetCards } as AccountQuotaView
+        const next = reconcilePointsRead(mergeQuotaView(before, r.json.quota, { resetCards: r.json.resetCards }), pointsToken)
         setQuota(next)
         publishAccountQuota(next)
         presentResetCardCeremony({ scope: 'both', before, after: next, remainingCards: r.json.resetCards })

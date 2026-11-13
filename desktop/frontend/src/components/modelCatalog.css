@@ -127,3 +127,9 @@
 .provider-import-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 14px 18px 16px; }
 /* 「后台额度」标签(BackgroundQuotaTag):同 .model-tag,绿色读作「另送的」;跟主题明暗走 */
 .model-tag.bgq-tag { --tag-ink: var(--green); flex: none; }
+
+/* 模型倍率门槛(2026-11-13):当前会员档位用不了的云端模型 —— 行变淡(同 .menu-item:disabled)、锁 + 「升级后可用」挨着倍率,
+   点了在行下面就地说明(menu-section.cm-foot 那套菜单内提示)。药丸上的锁跟在模型名后面。 */
+.model-lock-note { flex: none; display: inline-flex; align-items: center; gap: 3px; color: var(--text-muted); font-size: var(--ui-font-caption, 11px); white-space: nowrap; }
+.cm-lock-tip .cm-foot { margin-top: 2px; }
+.pill-lock { flex: none; color: var(--text-muted); }
