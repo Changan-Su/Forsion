@@ -657,6 +657,21 @@ describe('cloud default calendar (brain.amadeus → /agent/human/CALENDAR.db)', 
     expect(human!.data.rows.find((r: any) => r.id === id).cells).toEqual({ name: '开发票' });
   });
 
+  // 11-13 撤掉日程记号:云端默认日历上带旧 `_kind` 的行也是普通行;409 重放后它和别处写的行都原样留着
+  it('a cloud default-calendar row still carrying the withdrawn `_kind` mark: listed as a to-do, kept through an edit and a 409 replay', async () => {
+    const withDone = () => ({ ...cloudCal(), columns: [...cloudCal().columns, { id: 'k', name: 'Done', type: 'checkbox' }] });
+    const other = { id: 'other', cells: { n: 'From the web', d: '2026-12-01', _kind: 'event' } };
+    human = { data: { ...withDone(), rows: [{ id: 'old', cells: { n: 'Stand-up', d: '2026-12-03T15:00', _kind: 'event' } }] }, version: 'v0', legacy: null };
+    expect(JSON.parse(await runCloud('amadeus_list_events'))).toEqual([{ calendar: 'Work', id: 'old', title: 'Stand-up', start: '2026-12-03T15:00', allDay: false, done: false, props: {}, path: 'human://CALENDAR.db' }]);
+    beforeWrite = () => {
+      beforeWrite = () => {};
+      human = { ...human!, data: { ...human!.data, rows: [...human!.data.rows, other] }, version: 'other-1' };
+    };
+    await runCloud('amadeus_edit_event', { calendar: 'Work', eventId: 'old', title: 'Weekly stand-up', done: true });
+    expect(writes.map((w) => w.version)).toEqual(['v0', 'other-1']);
+    expect(human!.data.rows).toEqual([{ id: 'old', cells: { n: 'Weekly stand-up', d: '2026-12-03T15:00', _kind: 'event', k: true } }, other]);
+  });
+
   it('a cloud default calendar without a checkbox column (an adopted web calendar) refuses undated rows and lists none', async () => {
     human = { data: cloudCal([{ id: 'u', cells: { n: 'No date here' } }]), version: 'v0', legacy: null };
     await expect(runCloud('amadeus_create_event', { title: '开发票' })).rejects.toThrow(/no checkbox column/);
