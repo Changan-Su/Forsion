@@ -192,12 +192,47 @@ export function toolLabelOf(
     if (labels.some((l) => l.item.tools.includes(ev.name))) kickStale()
     return undefined
   }
-  const at = context.findIndex((e) => e.id === ev.id)
-  const before = at > 0 ? context.slice(0, at) : []
-  const earlier = before
-    .filter((e) => pluginOwnsTool(plugins, engineTools, hit.pluginId, e.name))
-    .slice(-EARLIER_MAX)
-    .map((e) => Object.freeze(e.result !== undefined ? { tool: e.name, args: argsOf(e), result: e.result } : { tool: e.name, args: argsOf(e) }))
+  // earlier:从这次调用往前倒着取,取满 EARLIER_MAX 条本插件的调用就停(下标按上下文数组建一次索引,不每行从头找)
+  const at = indexIn(context, ev.id)
+  const prior: ToolEvent[] = []
+  for (let i = at - 1; i >= 0 && prior.length < EARLIER_MAX; i--) {
+    const e = context[i]
+    if (pluginOwnsTool(plugins, engineTools, hit.pluginId, e.name)) prior.push(e)
+  }
+  prior.reverse()
+  // 句子按「这次调用的事件对象 + phase + locale + 登记 / 插件表 / 名单 + earlier 那几条事件对象」缓存:store 里事件对象是
+  // 不可变更新的(改一处换一个新对象),键没变就不再调 describe —— 流式出字时整条回答的各步不跟着每个 token 重算
+  const slots = labelCache.get(ev)
+  const cached = slots?.[phase]
+  if (cached && cached.labels === labels && cached.plugins === plugins && cached.engineTools === engineTools && cached.locale === locale
+    && cached.earlier.length === prior.length && cached.earlier.every((e, i) => e === prior[i])) return cached.out
+  const out = describeOnce(hit, ev, phase, locale, prior)
+  labelCache.set(ev, { ...slots, [phase]: { labels, plugins, engineTools, locale, earlier: prior, out } })
+  return out
+}
+
+interface LabelCacheEntry {
+  labels: readonly OwnedLabel[]
+  plugins: readonly Pick<AmadeusPlugin, 'id' | 'bundle'>[]
+  engineTools: Readonly<Record<string, readonly string[]>>
+  locale: 'zh' | 'en'
+  earlier: readonly ToolEvent[]
+  out: HostToolLabel | undefined
+}
+const labelCache = new WeakMap<ToolEvent, Partial<Record<ToolLabelPhase, LabelCacheEntry>>>()
+const indexCache = new WeakMap<readonly ToolEvent[], Map<string, number>>()
+function indexIn(context: readonly ToolEvent[], id: string): number {
+  let idx = indexCache.get(context)
+  if (!idx) {
+    idx = new Map()
+    for (let i = 0; i < context.length; i++) if (!idx.has(context[i].id)) idx.set(context[i].id, i)
+    indexCache.set(context, idx)
+  }
+  return idx.get(id) ?? -1
+}
+
+function describeOnce(hit: OwnedLabel, ev: ToolEvent, phase: ToolLabelPhase, locale: 'zh' | 'en', prior: readonly ToolEvent[]): HostToolLabel | undefined {
+  const earlier = prior.map((e) => Object.freeze(e.result !== undefined ? { tool: e.name, args: argsOf(e), result: e.result } : { tool: e.name, args: argsOf(e) }))
   const call: ToolLabelCall = {
     tool: ev.name,
     args: argsOf(ev),

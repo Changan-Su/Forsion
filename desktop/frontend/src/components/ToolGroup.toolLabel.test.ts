@@ -125,6 +125,9 @@ describe('② describe 的结果', () => {
     expect([toolVerb(d, ev, (k) => k), d.target, d.sentence, d.appBundleId]).toEqual(['已在 Chatter 中点击「发送」', '', true, 'com.example.chatter'])
     expect(toolVerb(describeTool(ev, () => '电脑操作', () => undefined), ev, (k) => k)).toBe('电脑操作 · act ui')
     expect(describeTool(call('r', 'read_file', { path: 'a/b.md' }), undefined, lab)).toMatchObject({ verbKey: 'tool.verb.read', target: 'b.md' })
+    // kind 与有没有句子无关:折叠时不给看不见的行求句子,汇总计数不能因此变
+    const br = call('b', 'browser_click', { text: 'x' })
+    expect(describeTool(br, undefined, lab).kind).toBe(describeTool(br, undefined, () => undefined).kind)
   })
 })
 
@@ -177,6 +180,27 @@ describe('③④ 在过程行里', () => {
     expect(rows()).toEqual(['已在 Chatter 中点击「发送」'])
     await act(async () => setLocaleGlobal('en'))
     expect(rows()).toEqual(['Clicked “Send” in Chatter'])
+  })
+
+  it('成本:折叠着做完的组不求值;同一份 props 重渲染 N 次 describe 次数不涨;流式只有文字在变时为 0 次', async () => {
+    const spy = vi.fn(cuDescribe)
+    usePluginStore.setState({ toolLabels: [{ pluginId: 'cu', item: { tools: ['act_ui', 'observe_ui'], describe: spy } }] })
+    const steps = Array.from({ length: 30 }, (_, i) => call(`s${i}`, i % 2 ? 'act_ui' : 'observe_ui', { n: i }, { result: 'Observed 3 elements in Chatter.' }))
+    await render({ events: steps, context: steps })
+    expect(spy, '折叠头是宿主汇总,看不见的行不求值').toHaveBeenCalledTimes(0)
+    await act(async () => head().click())
+    const opened = spy.mock.calls.length
+    expect(opened).toBeGreaterThan(0)
+    for (let i = 0; i < 6; i++) await render({ events: steps, context: steps })
+    expect(spy.mock.calls.length, '重渲染不重算').toBe(opened)
+    const live = [...steps, call('cur', 'act_ui', { n: 'cur' }, { done: false, result: undefined })]
+    await render({ events: live, context: live, running: true, reasoning: 'a' })
+    const streaming = spy.mock.calls.length
+    for (let i = 0; i < 6; i++) {
+      const copy = live.slice() // store 的不可变更新:数组换新,事件对象不变
+      await render({ events: copy, context: copy, running: true, reasoning: 'a'.repeat(i + 2) })
+    }
+    expect(spy.mock.calls.length, '只有文字在变').toBe(streaming)
   })
 
   it('describe 抛错 → 照旧「插件名 · 工具」,不连坐整组', async () => {

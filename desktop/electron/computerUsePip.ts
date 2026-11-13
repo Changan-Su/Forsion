@@ -94,13 +94,10 @@ export function createComputerUsePip(deps: PipControllerDeps): PipController {
     clearTimer(p.timer)
     p.resolve(ok)
   }
-  const drop = (): void => {
-    const w = win
-    win = null
-    shown = false
-    settle(false)
-    if (w && !w.isDestroyed()) w.destroy()
-  }
+  /** 「窗口没了」唯一的收尾(就绪超时 / 插件不在 / 未上屏就关 / dispose / closed 回调都走这里):每扇窗只走一次,
+   *  只有当前这扇才清状态、收挂起的 open、通知 onGone(relay 撤订阅与挂起请求)。 */
+  let end: (() => void) | null = null
+  const drop = (): void => { end?.() }
   const live = (): PipWindowLike | null => (win && !win.isDestroyed() ? win : null)
 
   return {
@@ -118,20 +115,30 @@ export function createComputerUsePip(deps: PipControllerDeps): PipController {
       pending = { promise, resolve, timer: null }
       const self = pending
       self.timer = setTimer(() => { if (pending === self) drop() }, deps.readyTimeoutMs ?? PIP_READY_TIMEOUT_MS)
-      const created = deps.create(pipInitialBounds(deps.primaryWorkArea()), () => {
-        if (win !== created) return
-        win = null
-        shown = false
-        settle(false)
-        deps.onGone?.()
-      })
+      let created: PipWindowLike | null = null
+      let ended = false
+      const finish = (): void => {
+        if (ended) return
+        ended = true
+        const current = created !== null && win === created
+        if (current) {
+          win = null
+          shown = false
+          end = null
+          settle(false)
+        }
+        if (created && !created.isDestroyed()) created.destroy()
+        if (current) deps.onGone?.()
+      }
+      created = deps.create(pipInitialBounds(deps.primaryWorkArea()), finish)
       win = created
+      end = finish
       return promise
     },
     close() {
       const w = live()
       if (!w) return
-      if (!shown) { drop(); deps.onGone?.(); return }
+      if (!shown) { drop(); return }
       w.close()
     },
     isOpen: () => !!live() && shown,
@@ -139,7 +146,7 @@ export function createComputerUsePip(deps: PipControllerDeps): PipController {
     ready(id, ok, height) {
       const w = live()
       if (!w || w.webContents.id !== id || shown) return
-      if (!ok) { drop(); deps.onGone?.(); return }
+      if (!ok) { drop(); return }
       w.setBounds(pipResizedBounds(w.getBounds(), height))
       shown = true
       w.showInactive()
@@ -193,7 +200,44 @@ export const PIP_AGENT_CHANNELS = {
   status: 'pipAgent:status',
 } as const
 
-type Status = { phase?: unknown; runId?: unknown } & Record<string, unknown>
+type Status = { phase: string; runId?: string | null } & Record<string, unknown>
+
+const PIP_PHASES = new Set(['idle', 'thinking', 'speaking', 'tool', 'waiting', 'error', 'done'])
+/** 宿主窗口推来的状态逐字段重建(同 TanguAgentStatus):字符串截长、数值要有限、枚举只认已知值,别的一律丢掉。
+ *  缺的字段不补缺省值。不像状态(phase 不认识)→ null。绝不抛:载荷来自渲染层,可能带循环引用 / BigInt / getter。 */
+export function sanitizePipStatus(raw: unknown): Status | null {
+  try {
+    if (!raw || typeof raw !== 'object') return null
+    const o = raw as Record<string, unknown>
+    const phase = o.phase
+    if (typeof phase !== 'string' || !PIP_PHASES.has(phase)) return null
+    const out: Status = { phase }
+    const str = (k: string, max: number): void => { const v = o[k]; if (typeof v === 'string') out[k] = v.slice(0, max) }
+    const strOrNull = (k: string, max: number): void => { const v = o[k]; if (typeof v === 'string') out[k] = v.slice(0, max); else if (v === null) out[k] = null }
+    const num = (k: string): void => { const v = o[k]; if (typeof v === 'number' && Number.isFinite(v)) out[k] = v }
+    const oneOf = (k: string, allowed: readonly string[]): void => { const v = o[k]; if (typeof v === 'string' && allowed.includes(v)) out[k] = v }
+    strOrNull('sessionId', 256)
+    strOrNull('runId', 128)
+    str('tool', 128)
+    oneOf('toolStage', ['args', 'exec'])
+    oneOf('waitingFor', ['approval', 'inquiry'])
+    num('since'); num('until')
+    str('messageId', 128)
+    num('textChars'); num('reasoningChars')
+    str('agentSlug', 128)
+    str('agentName', 200)
+    const level = o.speechLevel
+    if (typeof level === 'number' && Number.isFinite(level)) out.speechLevel = Math.max(0, Math.min(1, level))
+    return out
+  } catch {
+    return null
+  }
+}
+
+/** pip 里的停止要等多久:底层 appStore.stop → abortRunAndWait 确认停下最多约 10 s,单次 HTTP 5 s,留足余量。 */
+export const PIP_STOP_TIMEOUT_MS = 12_000
+/** 宿主窗口先回的「这一轮在我这儿,在停」:不 resolve,只表示别再去问别的窗口。 */
+export const PIP_STOP_ACCEPTED = 'accepted'
 
 export interface PipAgentRelayDeps {
   /** 能回答的窗口(主窗排第一);每次现取。 */
@@ -213,19 +257,27 @@ export interface PipAgentRelayDeps {
 export function createPipAgentRelay(deps: PipAgentRelayDeps) {
   const setTimer = deps.setTimer ?? ((fn, ms) => setTimeout(fn, ms))
   const clearTimer = deps.clearTimer ?? ((t) => clearTimeout(t as ReturnType<typeof setTimeout>))
-  const timeoutMs = deps.replyTimeoutMs ?? 4000
+  const timeoutMs = deps.replyTimeoutMs ?? PIP_STOP_TIMEOUT_MS
   let seq = 0
-  const pendingReplies = new Map<number, { hostId: number; resolve: (v: unknown) => void; timer: unknown }>()
+  /** clear() 一次加一:在途的 stop 循环看到代数变了就不再问下一扇窗(pip 已经没了 / 重载了)。 */
+  let gen = 0
+  const pendingReplies = new Map<number, { hostId: number; resolve: (v: unknown) => void; timer: unknown; accepted?: boolean }>()
   const watches = new Map<string, PipAgentTarget>()
   /** key → hostId → 最近一份快照 */
   const snapshots = new Map<string, Map<number, Status>>()
   const lastPushed = new Map<string, string>()
 
-  const ask = (host: PipAgentHost, payload: Record<string, unknown>): Promise<unknown> => new Promise((resolve) => {
+  /** 问一扇窗;accepted = 它中途回过「已接手」。 */
+  const ask = (host: PipAgentHost, payload: Record<string, unknown>): Promise<{ value: unknown; accepted: boolean }> => new Promise((resolve) => {
     const id = ++seq
-    const timer = setTimer(() => { if (pendingReplies.delete(id)) resolve(undefined) }, timeoutMs)
-    pendingReplies.set(id, { hostId: host.id, resolve, timer })
-    try { host.send(PIP_AGENT_CHANNELS.request, { ...payload, id }) } catch { pendingReplies.delete(id); clearTimer(timer); resolve(undefined) }
+    const done = (value: unknown): void => {
+      const p = pendingReplies.get(id)
+      pendingReplies.delete(id)
+      resolve({ value, accepted: !!p?.accepted })
+    }
+    const timer = setTimer(() => { if (pendingReplies.has(id)) done(undefined) }, timeoutMs)
+    pendingReplies.set(id, { hostId: host.id, resolve: done, timer })
+    try { host.send(PIP_AGENT_CHANNELS.request, { ...payload, id }) } catch { clearTimer(timer); done(undefined) }
   })
 
   const merged = (key: string): Status | null => {
@@ -244,7 +296,7 @@ export function createPipAgentRelay(deps: PipAgentRelayDeps) {
     if (!watches.has(key)) return
     const st = merged(key)
     if (!st) return
-    const sig = JSON.stringify(st)
+    const sig = JSON.stringify(st) // st 是 sanitizePipStatus 重建的纯标量对象
     if (lastPushed.get(key) === sig) return
     lastPushed.set(key, sig)
     deps.toPip(key, st)
@@ -261,8 +313,12 @@ export function createPipAgentRelay(deps: PipAgentRelayDeps) {
       const target = normalizePipTarget(rawTarget)
       const hosts = deps.hosts()
       const candidates = targetIsByRun(target) ? hosts : hosts.filter((h) => h.main)
+      const myGen = gen
       for (const host of candidates) {
-        if ((await ask(host, { op: 'stop', target })) === true) return true
+        if (gen !== myGen) return false
+        const { value, accepted } = await ask(host, { op: 'stop', target })
+        if (value === true) return true
+        if (accepted || gen !== myGen) return false // 这一轮在它那儿:停没停成都不是别的窗口的事
       }
       return false
     },
@@ -270,14 +326,15 @@ export function createPipAgentRelay(deps: PipAgentRelayDeps) {
       if (typeof id !== 'number') return
       const p = pendingReplies.get(id)
       if (!p || p.hostId !== hostId) return // 别的窗口不能替人回答
-      pendingReplies.delete(id)
+      if (value === PIP_STOP_ACCEPTED) { p.accepted = true; return }
       clearTimer(p.timer)
       p.resolve(value)
     },
     watch(rawKey: unknown, rawTarget: unknown): void {
       if (typeof rawKey !== 'string' || !rawKey || rawKey.length > 600) return
       const target = normalizePipTarget(rawTarget)
-      if (watches.has(rawKey)) { push(rawKey); return }
+      // client 每个 key 只 watch 一次:同一个 key 又来 = pip 重载后的新一代,它的缓存是空的,当前快照必须再推一份
+      if (watches.has(rawKey)) { lastPushed.delete(rawKey); push(rawKey); return }
       if (watches.size >= 32) return // pip 只看一两个目标;封顶防页面刷爆
       watches.set(rawKey, target)
       for (const host of deps.hosts()) try { host.send(PIP_AGENT_CHANNELS.request, { op: 'watch', key: rawKey, target }) } catch { /* window gone */ }
@@ -285,10 +342,12 @@ export function createPipAgentRelay(deps: PipAgentRelayDeps) {
     unwatch,
     /** 宿主窗口推来一份快照。 */
     status(hostId: number, rawKey: unknown, status: unknown): void {
-      if (typeof rawKey !== 'string' || !watches.has(rawKey) || !status || typeof status !== 'object') return
+      if (typeof rawKey !== 'string' || !watches.has(rawKey)) return
+      const clean = sanitizePipStatus(status)
+      if (!clean) return
       let per = snapshots.get(rawKey)
       if (!per) snapshots.set(rawKey, per = new Map())
-      per.set(hostId, status as Status)
+      per.set(hostId, clean)
       push(rawKey)
     },
     /** 宿主窗口(重)载好了:它之前的快照作废,还在的订阅重发给它。 */
@@ -299,12 +358,14 @@ export function createPipAgentRelay(deps: PipAgentRelayDeps) {
       for (const key of watches.keys()) push(key)
     },
     hostGone(hostId: number): void {
-      for (const [id, p] of pendingReplies) if (p.hostId === hostId) { pendingReplies.delete(id); clearTimer(p.timer); p.resolve(undefined) }
+      for (const [, p] of [...pendingReplies]) if (p.hostId === hostId) { clearTimer(p.timer); p.resolve(undefined) }
       for (const per of snapshots.values()) per.delete(hostId)
       for (const key of watches.keys()) push(key)
     },
-    /** pip 关了:撤掉所有订阅。 */
+    /** pip 关了 / 重载了 / 渲染进程没了:撤掉所有订阅,挂起的停止当没人回答,在途的 stop 不再问下一扇窗。 */
     clear(): void {
+      gen++
+      for (const [, p] of [...pendingReplies]) { clearTimer(p.timer); p.resolve(undefined) }
       for (const key of [...watches.keys()]) unwatch(key)
     },
     watchCount: () => watches.size,

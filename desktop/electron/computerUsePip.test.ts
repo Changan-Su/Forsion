@@ -221,3 +221,82 @@ describe('PiP stop / status relay', () => {
     expect(normalizePipTarget(7)).toBe(undefined)
   })
 })
+
+describe('评审返修(11-13)', () => {
+  it('窗口没了只走一条路:就绪超时 / dispose / 关窗 各只调一次 onGone', async () => {
+    const { pip, made, onGone } = fixture()
+    const a = pip.open() // 一直等不到就绪
+    await vi.advanceTimersByTimeAsync(1001)
+    await expect(a).resolves.toBe(false)
+    expect(made[0].destroyed).toBe(true)
+    expect(onGone).toHaveBeenCalledTimes(1)
+    const b = pip.open() // 加载中退出
+    pip.dispose()
+    await expect(b).resolves.toBe(false)
+    expect(onGone).toHaveBeenCalledTimes(2)
+    const c = pip.open(); pip.ready(made[2].webContents.id, true, 200); await c
+    pip.close() // closed 回调 + 销毁:只算一次
+    expect(onGone).toHaveBeenCalledTimes(3)
+    pip.dispose()
+    expect(onGone).toHaveBeenCalledTimes(3)
+    vi.useRealTimers()
+  })
+
+  function relayFixture(replyTimeoutMs?: number) {
+    vi.useFakeTimers()
+    const sent: Array<{ host: number; payload: Record<string, unknown> }> = []
+    const hosts: PipAgentHost[] = [
+      { id: 1, main: true, send: (_c, p) => sent.push({ host: 1, payload: p as Record<string, unknown> }) },
+      { id: 2, main: false, send: (_c, p) => sent.push({ host: 2, payload: p as Record<string, unknown> }) },
+    ]
+    const pushed: Array<{ key: string; status: unknown }> = []
+    const relay = createPipAgentRelay({ hosts: () => hosts, toPip: (key, status) => pushed.push({ key, status }), ...(replyTimeoutMs ? { replyTimeoutMs } : {}) })
+    return { relay, sent, pushed }
+  }
+
+  it('宿主推来的畸形状态(循环引用 / BigInt / 非有限数)不抛,只按已知字段重建', () => {
+    const { relay, pushed } = relayFixture()
+    relay.watch('o:r:r1', { runId: 'r1' })
+    const evil: Record<string, unknown> = { phase: 'tool', sessionId: 's1', runId: 'r1', tool: 'x'.repeat(500), since: Infinity, textChars: 3, big: 10n, toolStage: 'nope', speechLevel: 0.5 }
+    evil.self = evil
+    expect(() => relay.status(1, 'o:r:r1', evil)).not.toThrow()
+    expect(pushed.at(-1)).toEqual({ key: 'o:r:r1', status: { phase: 'tool', sessionId: 's1', runId: 'r1', tool: 'x'.repeat(128), textChars: 3, speechLevel: 0.5 } })
+    const n = pushed.length
+    expect(() => relay.status(1, 'o:r:r1', { phase: 7n })).not.toThrow()
+    expect(() => relay.status(1, 'o:r:r1', { phase: 'nope' })).not.toThrow()
+    expect(pushed).toHaveLength(n)
+    vi.useRealTimers()
+  })
+
+  it('pip 重载:同一个 key 再 watch = 新一代,马上收到当前快照;clear 收掉挂起的停止,在途的 stop 不再问下一扇窗', async () => {
+    const { relay, sent, pushed } = relayFixture()
+    relay.watch('active', undefined)
+    relay.status(1, 'active', { phase: 'tool', sessionId: 's1', runId: 'r1' })
+    expect(pushed).toHaveLength(1)
+    relay.watch('active', undefined) // 重载后的新 client 同一个 key
+    expect(pushed).toHaveLength(2)
+    expect(pushed[1]).toEqual(pushed[0])
+
+    const p = relay.stop({ runId: 'r1' })
+    expect(sent.at(-1)!.payload.op).toBe('stop')
+    relay.clear()
+    await expect(p).resolves.toBe(false)
+    expect(sent.filter((s) => s.payload.op === 'stop').map((s) => s.host)).toEqual([1])
+    vi.useRealTimers()
+  })
+
+  it('stop 的转发等得够久(底层确认最多约 10 s);对方回「已接手」后不再问别的窗口', async () => {
+    const { relay, sent } = relayFixture()
+    const p = relay.stop({ runId: 'r1' })
+    await vi.advanceTimersByTimeAsync(9000)
+    relay.reply(1, sent[0].payload.id, true)
+    await expect(p).resolves.toBe(true)
+    sent.length = 0
+    const q = relay.stop({ runId: 'r1' })
+    relay.reply(1, sent[0].payload.id, 'accepted')
+    await vi.advanceTimersByTimeAsync(20_000)
+    await expect(q).resolves.toBe(false)
+    expect(sent.map((s) => s.host)).toEqual([1])
+    vi.useRealTimers()
+  })
+})

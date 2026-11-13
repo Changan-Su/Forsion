@@ -41,23 +41,39 @@ export interface PipAgentClient {
   stop(target?: TanguSessionTarget): Promise<boolean>
 }
 
+const PASSIVE_MAX = 16
+
 /** 纯构造(测试直接喂假 bridge)。 */
 export function createPipAgentClient(bridge: PipAgentBridge): PipAgentClient {
   const cache = new Map<string, TanguAgentStatus>()
   const listeners = new Map<string, Set<(s: TanguAgentStatus) => void>>()
-  /** 被 read() 拉起的订阅:pip 窗活多久它就留多久(只看一两个目标,封顶 16)。 */
-  const passive = new Set<string>()
+  /** 被 read() 拉起的订阅(Map 的插入序 = 最近读的排最后):封顶 PASSIVE_MAX,满了退掉最久没读的;
+   *  按 run 的目标见过在跑、又回到 idle(runId 为 null)= 那一轮结束了,就地释放。有 listener 的 key 不归这里退。 */
+  const passive = new Map<string, { byRun: boolean; seenActive: boolean }>()
   const watched = new Set<string>()
   const ensure = (key: string, target: TanguSessionTarget): void => {
     if (watched.has(key)) return
     watched.add(key)
     bridge.watch(key, target)
   }
+  const release = (key: string): void => {
+    passive.delete(key)
+    if (listeners.get(key)?.size) return
+    listeners.delete(key)
+    watched.delete(key)
+    cache.delete(key)
+    bridge.unwatch(key)
+  }
   bridge.onStatus((key, raw) => {
     const next = asStatus(raw)
     if (!next || !watched.has(key)) return
     const prev = cache.get(key)
     cache.set(key, next)
+    const p = passive.get(key)
+    if (p?.byRun) {
+      if (next.phase !== 'idle' || next.runId !== null) p.seenActive = true
+      else if (p.seenActive && !listeners.get(key)?.size) { release(key); return }
+    }
     if (prev && statusKey(prev) === statusKey(next)) return
     for (const cb of [...(listeners.get(key) ?? [])]) {
       try { cb(next) } catch (e) { console.error('[tangu] agentStatus subscriber threw', e) }
@@ -68,9 +84,15 @@ export function createPipAgentClient(bridge: PipAgentBridge): PipAgentClient {
   return {
     read(target) {
       const key = pipTargetKey(target)
+      const p = passive.get(key)
+      if (p) { passive.delete(key); passive.set(key, p) } // 刷新最近读的顺序:每帧在读的那个不会先被退
       const hit = cache.get(key)
       if (hit) return hit
-      if (!watched.has(key) && passive.size < 16) { passive.add(key); ensure(key, target) }
+      if (!watched.has(key)) {
+        while (passive.size >= PASSIVE_MAX) release(passive.keys().next().value as string)
+        passive.set(key, { byRun: !!target && typeof target === 'object' && 'runId' in target, seenActive: false })
+        ensure(key, target)
+      }
       return cache.get(key) ?? fallback(target)
     },
     subscribe(cb, target) {

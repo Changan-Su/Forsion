@@ -2464,6 +2464,11 @@ const computerUsePip = createComputerUsePip({
       if (pipWindow === win) pipWindow = null
       onClosed()
     })
+    // 整窗重载 / 渲染进程崩了重起:新一代 client 缓存是空的,撤掉旧一代的转发订阅与挂起的停止,让它重订、重新拿首份快照
+    win.webContents.on('did-start-navigation', (_e, _url, isInPlace, isMainFrame) => {
+      if (isMainFrame && !isInPlace && pipWindow === win) pipAgentRelay.clear()
+    })
+    win.webContents.on('render-process-gone', () => { if (pipWindow === win) pipAgentRelay.clear() })
     loadRendererWith(win, { window: 'pip' })
     return win
   },

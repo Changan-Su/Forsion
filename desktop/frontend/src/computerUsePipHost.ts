@@ -29,6 +29,13 @@ export function servePipAgent(bridge: PipAgentHostBridge, deps: PipAgentHostDeps
     const target = req.target as TanguSessionTarget
     if (req.op === 'stop' && typeof req.id === 'number') {
       const id = req.id
+      // 这一轮就在本窗:先回「已接手」,主进程不再去问别的窗口(确认停下最多要约 10 s)
+      let mine = false
+      try {
+        const st = deps.read(target)
+        mine = !!st.runId && st.phase !== 'idle' && st.phase !== 'done' && st.phase !== 'error'
+      } catch { /* 读不到 = 不说 */ }
+      if (mine) bridge.reply(id, 'accepted')
       void deps.stop(target).then((ok) => bridge.reply(id, ok === true), () => bridge.reply(id, false))
       return
     }

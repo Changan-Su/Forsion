@@ -140,4 +140,54 @@ describe('createPipAgentClient(假桥)', () => {
     expect(pipTargetKey({})).toBe('active')
     expect(pipTargetKey(null)).toBe('draft')
   })
+
+  it('read 拉起的被动订阅可淘汰:第 17 个以后的目标照样能订上,最久没读的先退,一直在读的不退', () => {
+    const { client, calls, push } = fake()
+    for (let i = 0; i < 20; i++) {
+      client.read({ runId: `r${i}` })
+      client.read({ runId: 'hot' }) // 每帧都在读的那个
+    }
+    expect(calls.filter((c) => c.startsWith('watch'))).toContain('watch o:r:r19')
+    expect(calls).toContain('unwatch o:r:r0')
+    expect(calls).not.toContain('unwatch o:r:hot')
+    push('o:r:r19', st('tool', 'r19'))
+    expect(client.read({ runId: 'r19' })).toMatchObject({ phase: 'tool', runId: 'r19' })
+    // 有人订着的不因淘汰退订
+    const off = client.subscribe(() => {}, { runId: 'sub' })
+    for (let i = 0; i < 20; i++) client.read({ runId: `x${i}` })
+    expect(calls).not.toContain('unwatch o:r:sub')
+    off()
+  })
+  it('按 run 读的目标:见过在跑、再回到 idle(runId 为 null)就释放;首份 idle 不算', () => {
+    const { client, calls, push } = fake()
+    client.read({ runId: 'r' })
+    push('o:r:r', st('idle', null)) // 还没跑起来
+    expect(calls).not.toContain('unwatch o:r:r')
+    push('o:r:r', st('tool', 'r'))
+    push('o:r:r', st('idle', null)) // 这一轮结束
+    expect(calls).toContain('unwatch o:r:r')
+    expect(client.read({ runId: 'r' })).toMatchObject({ phase: 'idle', runId: null })
+    expect(calls.filter((c) => c === 'watch o:r:r')).toHaveLength(2) // 再读会重新订
+  })
+})
+
+describe('servePipAgent 的停止', () => {
+  it('这一轮就在本窗:先回「已接手」,停完再回结果;不在本窗不说', async () => {
+    let onReq: ((r: { id?: number; op: string; target?: unknown }) => void) | null = null
+    const replies: Array<[number, unknown]> = []
+    const running = { phase: 'tool', sessionId: 's1', runId: 'r1', since: 0, textChars: 0, reasoningChars: 0 } as const
+    let resolveStop!: (v: boolean) => void
+    servePipAgent({ ready: () => {}, onRequest: (cb) => { onReq = cb as never; return () => {} }, reply: (id, v) => replies.push([id, v]), status: () => {} }, {
+      read: (t) => (t && typeof t === 'object' && t.runId === 'r1' ? running : { ...running, phase: 'idle', runId: null }) as never,
+      subscribe: () => () => {},
+      stop: () => new Promise((r) => { resolveStop = r }),
+    })
+    onReq!({ id: 1, op: 'stop', target: { runId: 'r1' } })
+    expect(replies).toEqual([[1, 'accepted']])
+    resolveStop(true)
+    await Promise.resolve(); await Promise.resolve()
+    expect(replies).toEqual([[1, 'accepted'], [1, true]])
+    onReq!({ id: 2, op: 'stop', target: { runId: 'other' } })
+    expect(replies.filter(([id]) => id === 2)).toEqual([])
+  })
 })

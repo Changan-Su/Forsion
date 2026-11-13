@@ -216,7 +216,8 @@ export function describeTool(ev: ToolEvent, pluginName?: (tool: string) => strin
     default: {
       // 插件给自家工具写了整句(只认本捆绑包引擎半身名下的工具):整句照用,不拼插件名、不跟参数原文
       const lab = labelOf?.(ev)
-      if (lab) return { kind: 'other', verbKey: '', label: lab.text, sentence: true, ...(lab.appBundleId ? { appBundleId: lab.appBundleId } : {}), target: '', isFile: false }
+      // kind 与有没有句子无关(折叠时不给看不见的行求句子,汇总计数不能因此变)
+      if (lab) return { kind: ev.name.startsWith('browser_') ? 'browse' : 'other', verbKey: '', label: lab.text, sentence: true, ...(lab.appBundleId ? { appBundleId: lab.appBundleId } : {}), target: '', isFile: false }
       if (ev.name.startsWith('browser_')) return { kind: 'browse', verbKey: 'tool.verb.browsed', target: String(a.url ?? a.text ?? ev.name.replace('browser_', '')), isFile: false }
       const target = typeof a.command === 'string' ? a.command : typeof a.path === 'string' ? a.path : typeof a.query === 'string' ? a.query : firstString(a, ev.arguments)
       // mcp__github__search_issues → 「Github · search issues」:服务名首字母大写,不另猜品牌写法
@@ -389,7 +390,12 @@ export const ToolGroup: React.FC<{
   // to the ordinary audit trail; only the active row is replaced, so mixed/parallel tool groups keep context.
   const activeImageJobs = running ? events.filter((event) => (event.name === 'generate_image' || event.name === 'edit_image') && !event.done) : []
   const groupedEvents = activeImageJobs.length ? events.filter((event) => !activeImageJobs.includes(event)) : events
-  const descs = groupedEvents.map((ev) => describeTool(ev, pluginName, labelOf))
+  const thinking = !!running && !!thinkingProp && !!reasoning
+  // 运行中:展示第一个未完成的调用作为「当前」;都完成则无。思考中优先(它是这一行最新的动静)。
+  const curIdx = running && !thinking ? groupedEvents.findIndex((e) => !e.done) : -1
+  // 插件句子只给看得见的行求值:展开时每行;折叠时只有头上那条「当前这步」(做完后的折叠头本来就是宿主的汇总)。
+  // 句子不影响汇总计数(describeTool 里有没有句子 kind 一样),所以折叠 / 展开算出的摘要一致。
+  const descs = groupedEvents.map((ev, i) => describeTool(ev, pluginName, open || i === curIdx ? labelOf : undefined))
   const counts = { write: 0, edit: 0, run: 0, read: 0, search: 0, browse: 0, session: 0, handoff: 0, other: 0 } as Record<Kind, number>
   descs.forEach((d) => { counts[d.kind]++ })
   // 写 / 改按文件数(方案 A:同一个文件改了几次只算一个;先写后改的算在「写入」里),拿不到路径的照调用数
@@ -401,7 +407,6 @@ export const ToolGroup: React.FC<{
     search: 'tool.sum.searched', browse: 'tool.sum.browsed', session: 'tool.sum.sessions', handoff: 'tool.sum.handoff', other: 'tool.sum.other',
   }
   const order: Kind[] = ['write', 'edit', 'run', 'read', 'search', 'browse', 'session', 'handoff', 'other']
-  const thinking = !!running && !!thinkingProp && !!reasoning
   const thinkLabel = reasoning ? (thinking ? t('tool.thinkingNow') : thoughtLabel(t, reasoningMs)) : ''
   const summary = [...(thinking ? [] : [thinkLabel]), ...order.filter((k) => counts[k] > 0).map((k) => t(SUM[k], { n: counts[k] }))].filter(Boolean).join(' · ')
   // 窄列的短摘要只报个数;整组都是开子会话 / 挪活时照样说那一句(「开了 N 个子会话」「把手头的活挪到了子会话」就是这组在干什么)
@@ -418,8 +423,6 @@ export const ToolGroup: React.FC<{
   const anyParked = groupedEvents.some((e) => e.parked)
   // 挂起的提问还在等你答:agent 在干别的(当前步骤照常写在头上),暂停图标标出「这组里有个问题等你」
   const parkedAsk = groupedEvents.some((e) => e.parked && asksYou(e))
-  // 运行中:展示第一个未完成的调用作为「当前」;都完成则无。思考中优先(它是这一行最新的动静)。
-  const curIdx = running && !thinking ? groupedEvents.findIndex((e) => !e.done) : -1
   const curAsks = curIdx >= 0 && asksYou(groupedEvents[curIdx])
   const active = !!running && groupedEvents.length > 0 && !allDone && !curAsks
   const busy = active || thinking
