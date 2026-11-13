@@ -1206,6 +1206,47 @@ export interface ToolResultRendererContribution {
   mount(el: HTMLElement, call: ToolResultCall): (() => void) | void
 }
 
+/** One call handed to ToolLabelContribution.describe (2026-11-13+). */
+export interface ToolLabelCall {
+  /** The engine tool name. */
+  tool: string
+  /** Parsed JSON arguments (the raw string when they are not valid JSON). */
+  args: unknown
+  /** The tool result text, when there is one. */
+  result?: string
+  /** `running` while the call runs, `done` once it finished, `error` when it failed or was cut off. */
+  phase: 'running' | 'done' | 'error'
+  /** The interface language right now. The host calls `describe` again when it changes. */
+  locale: 'zh' | 'en'
+  /** Earlier calls of **your own** tools in the same reply, oldest first, at most the 40 closest ones. Use them to
+   *  recover names that only an earlier result carried (an app name, a control name). */
+  earlier: ReadonlyArray<{ tool: string; args: unknown; result?: string }>
+}
+
+/** What a ToolLabelContribution returns for one call. */
+export interface ToolLabel {
+  /** The whole line, as a sentence in `call.locale` (for example "Clicking “Send” in Chatter"). The host shows it as is:
+   *  no plugin name in front, no argument text after it. Keep it short; the host cuts it at 200 characters. */
+  text: string
+  /** `appBundleId`: show that app's icon in front of the line where the host can resolve it (desktop on macOS);
+   *  elsewhere, and while it loads, the usual tool icon shows. */
+  icon?: { appBundleId?: string }
+}
+
+/** Plain-language lines for your engine half's tools in the chat's process rows (ctx.registerToolLabel, 2026-11-13+).
+ *  Claiming works like ToolResultRendererContribution: only tools your bundle's engine plugins registered are handed to
+ *  you, and nothing is claimed until the host has the engine's tool list. While a call runs, the folded process row
+ *  rolls through each step's `running` sentence; once everything finished the folded row keeps the host's summary and
+ *  the expanded list shows each call's `done` (or `error`) sentence. The host calls `describe` again on every render
+ *  that needs the line — after a reload of the history, on a language switch — so keep it synchronous and cheap.
+ *  Throwing, or returning nothing / an empty `text`, keeps the host's generic line for that call. Contributions are
+ *  removed when your plugin is disabled or reloaded. Older hosts do not have it: call `ctx.registerToolLabel?.(…)`. */
+export interface ToolLabelContribution {
+  /** One engine tool name, or several, exactly as your engine half registered them. */
+  tool: string | string[]
+  describe(call: ToolLabelCall): ToolLabel | null | undefined | void
+}
+
 /** A user-tunable setting a plugin declares. The host renders the form on the plugin's detail
  *  page and persists values to localStorage `plugin.<pluginId>.<key>` — the plugin reads the
  *  same key at use time (poll-loop reads pick changes up next round; no change notification). */
@@ -1859,6 +1900,9 @@ export interface PluginContext {
   /** Contribute a native result card for one of your engine half's tools (2026-10-19+). Absent on older hosts: call as
    *  `ctx.registerToolResultRenderer?.(…)`. See ToolResultRendererContribution. */
   registerToolResultRenderer?(def: ToolResultRendererContribution): void
+  /** Describe your engine half's tool calls in plain language in the chat's process rows (2026-11-13+). Absent on older
+   *  hosts: call as `ctx.registerToolLabel?.(…)`. See ToolLabelContribution. */
+  registerToolLabel?(def: ToolLabelContribution): void
   /** Contribute a "新建 …" entry into the file tree's right-click menu (root + folder). See FileCreatorContribution. */
   registerFileCreator(def: FileCreatorContribution): void
   /** Open (or focus) one of this plugin's own registered views. Defaults to the main area;

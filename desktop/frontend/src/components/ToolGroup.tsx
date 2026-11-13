@@ -17,7 +17,8 @@ import { ImageGenerationLoader } from '../views/chat2/ImageGenerationLoader'
 import { MaskTag, MaskedText, collectMasked, type MaskedValue } from './MaskedValues'
 import { isSelfWriteReceipt } from '../services/selfUpdates'
 import '../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
-import { kickToolOwners, useEngineTools } from '../amadeus/plugins/toolResultCards'
+import { kickToolOwners, useEngineTools, useToolLabelOf, type HostToolLabel, type ToolLabelPhase } from '../amadeus/plugins/toolResultCards'
+import { useAppIcon } from './appRefs'
 
 registerMessages({
   'tool.parked.waiting': { zh: '已挂起，等你批准。Agent 先做别的，拍板后结果会补在这里。', en: 'Parked until you approve it. The agent carries on meanwhile; the result lands here once you decide.' },
@@ -67,7 +68,11 @@ interface Desc { kind: Kind; verbKey: string; label?: string; unowned?: boolean;
   /** 写 / 改到的文件全路径:摘要按文件数算(同一个文件改三次只算一个),不按调用数。 */
   file?: string
   /** 一次改了好几个文件(apply_patch):全部路径,摘要按它们算。 */
-  files?: string[] }
+  files?: string[]
+  /** label 是插件 describe 给的整句(ctx.registerToolLabel):不拼目标、不加插件名。 */
+  sentence?: boolean
+  /** 句子带的应用图标(bundle id);取不到图标时照旧用类别图标。 */
+  appBundleId?: string }
 
 /** 过程行里的动作名:内置工具走词条,MCP / 插件工具走人话名字,都取不到就是原名(不猜)。 */
 export function toolVerb(d: Desc, ev: ToolEvent, t: (key: string) => string): string {
@@ -136,8 +141,9 @@ export function countFiles(descs: readonly Pick<Desc, 'kind' | 'file' | 'files'>
 }
 
 /** 把一次工具调用描述成「动作 + 目标(+增/-删)」,供分组摘要与逐行展示。
- *  pluginName:工具名 → 所属插件的显示名(ToolGroup 从引擎插件名单里取;不给 = 插件工具照原名)。 */
-export function describeTool(ev: ToolEvent, pluginName?: (tool: string) => string | undefined): Desc {
+ *  pluginName:工具名 → 所属插件的显示名(ToolGroup 从引擎插件名单里取;不给 = 插件工具照原名)。
+ *  labelOf:插件给自家工具写的整句(ctx.registerToolLabel);只问内置工具以外的(default 分支),给不出就照旧写法。 */
+export function describeTool(ev: ToolEvent, pluginName?: (tool: string) => string | undefined, labelOf?: (ev: ToolEvent) => HostToolLabel | undefined): Desc {
   let a: any = {}
   try { a = ev.arguments ? JSON.parse(ev.arguments) : {} } catch { /* keep {} */ }
   const path = typeof a.path === 'string' ? a.path : ''
@@ -207,17 +213,19 @@ export function describeTool(ev: ToolEvent, pluginName?: (tool: string) => strin
       return { kind: 'run', verbKey: 'tool.verb.gitPublish', target: typeof a.name === 'string' ? a.name : '', isFile: false }
     case COMPUTER_HISTORY_TOOL:
       return { kind: 'read', verbKey: 'tool.verb.readComputerHistory', target: String(a.query ?? a.app ?? ''), isFile: false }
-    default:
+    default: {
+      // 插件给自家工具写了整句(只认本捆绑包引擎半身名下的工具):整句照用,不拼插件名、不跟参数原文
+      const lab = labelOf?.(ev)
+      if (lab) return { kind: 'other', verbKey: '', label: lab.text, sentence: true, ...(lab.appBundleId ? { appBundleId: lab.appBundleId } : {}), target: '', isFile: false }
       if (ev.name.startsWith('browser_')) return { kind: 'browse', verbKey: 'tool.verb.browsed', target: String(a.url ?? a.text ?? ev.name.replace('browser_', '')), isFile: false }
-      {
-        const target = typeof a.command === 'string' ? a.command : typeof a.path === 'string' ? a.path : typeof a.query === 'string' ? a.query : firstString(a, ev.arguments)
-        // mcp__github__search_issues → 「Github · search issues」:服务名首字母大写,不另猜品牌写法
-        const mcp = /^mcp__(.+?)__(.+)$/.exec(ev.name)
-        if (mcp) return { kind: 'other', verbKey: '', label: `${mcp[1].charAt(0).toUpperCase()}${words(mcp[1]).slice(1)} · ${words(mcp[2])}`, target, isFile: false }
-        // 插件工具:插件显示名 + 工具名(去掉插件自己加的 `xxx__` 前缀);名单里没有就原名
-        const owner = pluginName?.(ev.name)
-        return { kind: 'other', verbKey: '', label: owner ? `${owner} · ${words(ev.name.split('__').pop() || ev.name)}` : undefined, unowned: !!pluginName && !owner, target, isFile: false }
-      }
+      const target = typeof a.command === 'string' ? a.command : typeof a.path === 'string' ? a.path : typeof a.query === 'string' ? a.query : firstString(a, ev.arguments)
+      // mcp__github__search_issues → 「Github · search issues」:服务名首字母大写,不另猜品牌写法
+      const mcp = /^mcp__(.+?)__(.+)$/.exec(ev.name)
+      if (mcp) return { kind: 'other', verbKey: '', label: `${mcp[1].charAt(0).toUpperCase()}${words(mcp[1]).slice(1)} · ${words(mcp[2])}`, target, isFile: false }
+      // 插件工具:插件显示名 + 工具名(去掉插件自己加的 `xxx__` 前缀);名单里没有就原名
+      const owner = pluginName?.(ev.name)
+      return { kind: 'other', verbKey: '', label: owner ? `${owner} · ${words(ev.name.split('__').pop() || ev.name)}` : undefined, unowned: !!pluginName && !owner, target, isFile: false }
+    }
   }
 }
 
@@ -232,6 +240,16 @@ const Stat: React.FC<{ d: Desc }> = ({ d }) =>
   ) : null
 
 const KIND_ICON: Record<Kind, LucideIcon> = { write: FilePlus2, edit: Pencil, run: Terminal, read: FileText, search: Search, browse: Globe, session: MessagesSquare, handoff: Split, other: Wrench }
+
+/** 插件句子带了应用 bundle id:取得到图标就画应用图标,取不到(网页 / 手机 / 还没取回来)照旧类别图标。 */
+const AppOrKindIcon: React.FC<{ bundleId: string; Fallback: LucideIcon }> = ({ bundleId, Fallback }) => {
+  const src = useAppIcon(bundleId)
+  return src ? <img className="tool-row-app-ic" src={src} alt="" width={13} height={13} draggable={false} style={{ display: 'block', borderRadius: 3 }} /> : <Fallback size={13} />
+}
+
+/** describe 的 phase:做完 = done / error;没做完而消息还在跑 = running;没做完但消息已经停了(被打断)= error。 */
+export const labelPhase = (ev: ToolEvent, running: boolean): ToolLabelPhase =>
+  ev.done ? (ev.isError ? 'error' : 'done') : running ? 'running' : 'error'
 
 /** 正在进行的那一步:三个小点(纯 CSS,减少动态效果时静止)。 */
 const Dots: React.FC = () => <span className="proc-dots" aria-hidden="true"><i /><i /><i /></span>
@@ -292,11 +310,11 @@ const ToolRow: React.FC<{ ev: ToolEvent; desc: Desc; running: boolean; waiting: 
   return (
     <div className="tool-row">
       <button className="tool-row-head" aria-busy={active} aria-expanded={open} onClick={() => setOpen((o) => !o)}>
-        <span className="tool-row-ic">{active ? <Dots /> : <Icon size={13} />}</span>
+        <span className="tool-row-ic">{active ? <Dots /> : desc.appBundleId ? <AppOrKindIcon bundleId={desc.appBundleId} Fallback={Icon} /> : <Icon size={13} />}</span>
         <span className="tool-row-copy">
           <span className={`tool-row-copy-text${active ? ' chat-run-shimmer-text' : ''}`}>
             <span className="tool-row-verb">{verb}</span>
-            <span className={`tool-row-target${desc.isFile ? ' file' : ''}`}><MaskedText text={desc.target} masked={masked} /></span>
+            {!desc.sentence && <span className={`tool-row-target${desc.isFile ? ' file' : ''}`}><MaskedText text={desc.target} masked={masked} /></span>}
           </span>
         </span>
         <Stat d={desc} />
@@ -330,7 +348,7 @@ const ToolRow: React.FC<{ ev: ToolEvent; desc: Desc; running: boolean; waiting: 
 }
 
 /** 工具名 → 插件显示名(按当前语言),供 describeTool。 */
-function usePluginToolName(): (tool: string) => string | undefined {
+export function usePluginToolName(): (tool: string) => string | undefined {
   const owners = useEngineTools((s) => s.toolOwner)
   const { locale } = useI18n()
   return useMemo(() => (tool: string) => { const o = owners[tool]; return o && (locale === 'en' ? o.nameEn || o.name : o.name) }, [owners, locale])
@@ -350,10 +368,14 @@ export const ToolGroup: React.FC<{
   thinking?: boolean
   /** 这组调用所在的会话(「从不遮住」写进跑这个会话的那台引擎)。 */
   sessionId?: string
-}> = ({ events: allEvents, running, approvals, awaitingAnswer, reasoning, reasoningMs, thinking: thinkingProp, sessionId }) => {
-  const { t } = useI18n()
+  /** 整条回答的全部工具调用(按先后):插件句子的 earlier 从这里取「同一条回答里更早的本插件调用」。不给 = 只看这一组。 */
+  context?: readonly ToolEvent[]
+}> = ({ events: allEvents, running, approvals, awaitingAnswer, reasoning, reasoningMs, thinking: thinkingProp, sessionId, context }) => {
+  const { t, locale } = useI18n()
   const [open, setOpen] = useState(false)
   const pluginName = usePluginToolName()
+  const labelFor = useToolLabelOf(locale)
+  const labelOf = (ev: ToolEvent): HostToolLabel | undefined => labelFor(ev, labelPhase(ev, !!running), context ?? allEvents)
   // Agent 自己写成了的记忆 / 进化记录 / 协作说明,由回复下面的回执行和请求卡呈现,这里不再重复列一行(没写成的照旧留着)。
   // 唯一不带回执行的调用方是外观预览(ChatPreview),它的样例消息里没有这三种调用。
   const events = allEvents.filter((ev) => !isSelfWriteReceipt(ev))
@@ -366,7 +388,7 @@ export const ToolGroup: React.FC<{
   // to the ordinary audit trail; only the active row is replaced, so mixed/parallel tool groups keep context.
   const activeImageJobs = running ? events.filter((event) => (event.name === 'generate_image' || event.name === 'edit_image') && !event.done) : []
   const groupedEvents = activeImageJobs.length ? events.filter((event) => !activeImageJobs.includes(event)) : events
-  const descs = groupedEvents.map((ev) => describeTool(ev, pluginName))
+  const descs = groupedEvents.map((ev) => describeTool(ev, pluginName, labelOf))
   const counts = { write: 0, edit: 0, run: 0, read: 0, search: 0, browse: 0, session: 0, handoff: 0, other: 0 } as Record<Kind, number>
   descs.forEach((d) => { counts[d.kind]++ })
   // 写 / 改按文件数(方案 A:同一个文件改了几次只算一个;先写后改的算在「写入」里),拿不到路径的照调用数
@@ -421,8 +443,7 @@ export const ToolGroup: React.FC<{
             ) : !open && curDesc ? (
               <span className="tool-group-cur">
                 <span className="tool-group-cur-copy chat-run-shimmer-text">
-                  {curVerb}{' '}
-                  <span className={curDesc.isFile ? 'file' : undefined}>{curDesc.target}</span>…
+                  {curDesc.sentence ? <>{curVerb}…</> : <>{curVerb}{' '}<span className={curDesc.isFile ? 'file' : undefined}>{curDesc.target}</span>…</>}
                 </span>
                 {groupedEvents.length > 1 && <span className="tool-group-step"> · {t('tool.step', { n: curIdx + 1 })}</span>}
               </span>

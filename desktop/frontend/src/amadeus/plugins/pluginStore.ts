@@ -127,6 +127,7 @@ import type {
   StatusItemContribution,
   ThemeContribution,
   ToolResultRendererContribution,
+  ToolLabelContribution,
   ViewContribution,
   ListSourceContribution,
   PluginAutomationRule,
@@ -198,6 +199,9 @@ async function resolveExternalSources(): Promise<ExternalPluginSource[]> {
   return amadeus.listPlugins()
 }
 
+/** registerToolLabel 收进来的样子:工具名统一成去重后的名单。 */
+export interface NormalizedToolLabel { tools: string[]; describe: ToolLabelContribution['describe'] }
+
 interface Owned<T> {
   pluginId: string
   item: T
@@ -232,6 +236,8 @@ interface PluginState {
   embedRenderers: Owned<EmbedRendererContribution>[]
   /** 插件给自己引擎半身的工具挂的原生结果卡片(ctx.registerToolResultRenderer);认领校验在 toolResultCards.ts。 */
   toolResultRenderers: Owned<ToolResultRendererContribution>[]
+  /** 插件给自己引擎半身的工具写的过程行句子(ctx.registerToolLabel,2026-11-13+);认领同 toolResultRenderers。 */
+  toolLabels: Owned<NormalizedToolLabel>[]
   fileCreators: Owned<FileCreatorContribution>[]
   /** 宿主注入的视图打开器(桌面壳=workspace.openView);无工作台的宿主保持 null,ctx.openView 即 no-op。 */
   viewOpener: ((type: string, loc?: PluginViewLocation, params?: Record<string, unknown>) => void) | null
@@ -1340,7 +1346,7 @@ function afterReconcile(): void {
 type OwnedKey = { [K in keyof PluginState]: PluginState[K] extends Owned<unknown>[] ? K : never }[keyof PluginState]
 const SLICE_KEYS = Object.keys({
   slashItems: 1, selectionActions: 1, commands: 1, themes: 1, panels: 1, statusItems: 1, propertyTypes: 1, settings: 1,
-  settingsViews: 1, storeViews: 1, readiness: 1, views: 1, listSources: 1, fileTypes: 1, embedRenderers: 1, toolResultRenderers: 1, fileCreators: 1,
+  settingsViews: 1, storeViews: 1, readiness: 1, views: 1, listSources: 1, fileTypes: 1, embedRenderers: 1, toolResultRenderers: 1, toolLabels: 1, fileCreators: 1,
 } satisfies Record<OwnedKey, 1>) as OwnedKey[]
 
 /** 摘掉 id 的全部切片贡献;没有它的切片保持原数组身份(订阅者不白白重渲)。 */
@@ -2020,6 +2026,18 @@ export const usePluginStore = create<PluginState>((set, get) => {
       }
       const item: ToolResultRendererContribution = { ...def, tool, surface: def.surface === 'desk' ? 'desk' : 'inline' }
       set((s) => ({ toolResultRenderers: [...s.toolResultRenderers, { pluginId, item }] }))
+    },
+    // 过程行句子(2026-11-13+):同上,只收形状;认领在画的时候按引擎名下工具现判(toolResultCards.claimToolLabel)。
+    registerToolLabel: (def) => {
+      if (!ctxAlive()) return
+      const raw = Array.isArray(def?.tool) ? def.tool : [def?.tool]
+      const tools = [...new Set(raw.map((t) => (typeof t === 'string' ? t.trim() : '')).filter(Boolean))]
+      if (!tools.length || typeof def?.describe !== 'function') {
+        console.warn(`[plugin:${pluginId}] registerToolLabel 被拒:要有 tool(引擎工具名或名单)和 describe`)
+        return
+      }
+      const item: NormalizedToolLabel = { tools, describe: def.describe }
+      set((s) => ({ toolLabels: [...s.toolLabels, { pluginId, item }] }))
     },
     // 打开自己的视图:类型名由宿主统一命名空间(plugin:<id>:<viewId>),防跨插件顶替。
     // 2.13.8 起(LCL 表面规范第三期)一律经 workspace.open(lcl/engine/workspaceOpen.ts):openMiniPanel / openFloatingPanel
@@ -3253,6 +3271,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
     fileTypes: [],
     embedRenderers: [],
     toolResultRenderers: [],
+    toolLabels: [],
     fileCreators: [],
     viewOpener: null,
     viewLocations: null,
