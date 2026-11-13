@@ -203,7 +203,7 @@ export function acpErrorText(e: any): string {
 /**
  * 续接失败是哪一种(只在 session/load、session/resume 被引擎拒绝时问):
  *   - 'gone'  那个会话在引擎那边没有了(删了、换了目录、重装)。措辞取自实测:DSH 回 -32602「session is not resumable」;
- *             ACP 规范的「资源不存在」是 -32002。
+ *             ACP 规范的「资源不存在」是 -32002,只在报错说的是会话(不是文件 / 目录)时才算。
  *   - 'busy'  会话还在,但被另一个进程占着(用户自己开着 DSH 界面并点开了这一场)。实测 DSH 回 -32603,
  *             data.details「… is already owned by an active write handle」。
  *   - 'other' 其余(超时、进程死了、参数不对……)。
@@ -212,7 +212,14 @@ export function acpErrorText(e: any): string {
 export function classifyResumeFailure(e: any): 'gone' | 'busy' | 'other' {
   const text = acpErrorText(e);
   if (/already owned|active write handle|already active|in use by another/i.test(text)) return 'busy';
-  if (e?.code === -32002 || /not resumable|session not found|no such session|unknown session|does not exist/i.test(text)) return 'gone';
+  // 「没有了」只认说的是**会话**的:-32002 在规范里是泛指的「资源不存在」,工作目录 / 文件不在也可能回它(报错文字
+  // 或 data.uri 指着一个路径),那种情况会话本身还好好的 —— 判成 gone 会在 run 上留下「别再找它」的记号,把一场完好的会话丢掉。
+  if (/not resumable|session not found|no such session|unknown session/i.test(text)) return 'gone';
+  const uri = typeof e?.data?.uri === 'string' ? e.data.uri : '';
+  const aboutFiles = /\b(file|director(y|ies)|folder|path|workspace|cwd)\b/i.test(text) || /^(file:|\/|[A-Za-z]:[\\/])/.test(uri);
+  if (aboutFiles) return 'other';
+  if (e?.code === -32002) return 'gone'; // 续接请求里能「不存在」的资源,除了文件 / 目录就是那个会话
+  if (/session/i.test(text) && /does not exist|no longer exists|was deleted/i.test(text)) return 'gone';
   return 'other';
 }
 
@@ -248,7 +255,11 @@ export function createAcpClient(
   const toolCalls: ToolCall[] = [];
   const toolResults: any[] = [];
   const toolNames = new Map<string, string>(); // toolCallId -> name（给 tool_result 补名）
-  const toolInputs = new Map<string, unknown>(); // toolCallId -> rawInput（审批请求只带 id 时补参数,见 requestPermission）
+  // toolCallId -> 最新的 rawInput / 标题(审批请求只带 id 时拿来补,见 requestPermission)。**必须跟着 tool_call_update 更新**:
+  // 引擎可以先发一条参数不全(或还是别的参数)的 tool_call,再用 update 改成真正要跑的;卡上要是还显示头一条,
+  // 用户看到的是一条命令、批准的是另一条。
+  const toolInputs = new Map<string, unknown>();
+  const toolTitles = new Map<string, string>();
 
   const client: Client = {
     async sessionUpdate(params: SessionNotification): Promise<void> {
@@ -275,6 +286,7 @@ export function createAcpClient(
           const name = u.title || u.kind || 'tool';
           toolNames.set(u.toolCallId, name);
           if (u.rawInput != null) toolInputs.set(u.toolCallId, u.rawInput);
+          if (typeof u.title === 'string' && u.title) toolTitles.set(u.toolCallId, u.title);
           const args = u.rawInput ? JSON.stringify(u.rawInput) : '{}';
           toolCalls.push({ id: u.toolCallId, type: 'function', function: { name, arguments: args } });
           // source(遥测契约 §7):外部引擎自己的工具名不归 Tangu,按 plugin 记 —— Extend 不外发 plugin 的工具名
@@ -282,6 +294,9 @@ export function createAcpClient(
           break;
         }
         case 'tool_call_update': {
+          // 规范:update 里出现的字段整个替换原值。只更新审批用的这两份;已经发给界面的 tool_call 事件和结果里的工具名不动。
+          if (u.rawInput != null) toolInputs.set(u.toolCallId, u.rawInput);
+          if (typeof u.title === 'string' && u.title) toolTitles.set(u.toolCallId, u.title);
           if (u.status === 'completed' || u.status === 'failed') {
             const name = toolNames.get(u.toolCallId) || '';
             const result = toolUpdateText(u.content);
@@ -312,7 +327,7 @@ export function createAcpClient(
       const tc: any = params.toolCall;
       // 规范里这里的 toolCall 是一条「更新」,可以只带 toolCallId(DSH 就是):标题和参数在它前面那条 tool_call 里。
       // 不补的话审批卡上只有一个「tool」和空参数,用户不知道自己在批什么。
-      const seenName = tc?.toolCallId ? toolNames.get(tc.toolCallId) : undefined;
+      const seenName = tc?.toolCallId ? (toolTitles.get(tc.toolCallId) || toolNames.get(tc.toolCallId)) : undefined;
       const title = tc?.title || seenName || tc?.kind || 'tool';
       const raw = tc?.rawInput ?? (tc?.toolCallId ? toolInputs.get(tc.toolCallId) : undefined);
       const preview = `[${engineName}] ${title}${raw ? ' · ' + JSON.stringify(raw).slice(0, 160) : ''}`;

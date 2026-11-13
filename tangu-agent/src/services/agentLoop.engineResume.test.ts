@@ -14,9 +14,10 @@ import { query } from '../core/db.js';
 import { createRun } from './runStore.js';
 import { subscribe } from './eventBus.js';
 import { abortRun, enqueueRun, waitForRunSettlement } from './agentLoop.js';
+import { bumpHistoryRevision, historyEpoch } from './historyRevision.js';
 import type { EngineManager, EngineRunCtx } from '../engines/manager.js';
 
-type Behavior = { hang?: boolean; gone?: boolean };
+type Behavior = { hang?: boolean; gone?: boolean; busy?: boolean };
 let home: string;
 let calls: Array<{ engineId: string; resume?: string; message: string }>;
 let next: Behavior[];
@@ -31,6 +32,7 @@ const engines: EngineManager = {
   run: async (ctx: EngineRunCtx) => {
     const b = next.shift() || {};
     calls.push({ engineId: ctx.engineId, resume: ctx.resumeSessionId, message: ctx.message });
+    if (b.busy) throw new Error('Fake Harness has this conversation open in another window or process, so it cannot be continued here.');
     if (b.gone) throw Object.assign(new Error('Fake Harness no longer has the earlier session of this conversation (not resumable).'), { externalSessionGone: true });
     const id = ctx.resumeSessionId || `ext-${++seq}`;
     await ctx.onSession?.({ id, resumable: true, resumed: !!ctx.resumeSessionId, via });
@@ -92,8 +94,8 @@ describe('普通引擎对话的续接', () => {
     expect((await turn(2)).done).toBe(true);
     expect((await turn(3)).done).toBe(true);
     expect(resumes()).toEqual([null, 'ext-1', 'ext-1']);
-    expect((await resultOf(1)).result.externalSession).toEqual({ id: 'ext-1', engineId: 'dsh', cwd: home, after: null });
-    expect((await resultOf(2)).result.externalSession).toEqual({ id: 'ext-1', engineId: 'dsh', cwd: home, after: 'a1' });
+    expect((await resultOf(1)).result.externalSession).toEqual({ id: 'ext-1', engineId: 'dsh', cwd: home, after: null, rev: 0, epoch: historyEpoch });
+    expect((await resultOf(2)).result.externalSession).toEqual({ id: 'ext-1', engineId: 'dsh', cwd: home, after: 'a1', rev: 0, epoch: historyEpoch });
     // 会话配置里不留指针(那一份客户端能整份改写、分支会照抄)
     const [{ agent_config }] = await query<any[]>(`SELECT agent_config FROM chat_sessions WHERE id = 'S'`);
     expect(JSON.stringify(agent_config ?? '')).not.toContain('ext-1');
@@ -117,6 +119,37 @@ describe('普通引擎对话的续接', () => {
     expect((await turn(3)).done).toBe(true);
     expect(resumes()).toEqual([null, 'ext-1', 'ext-1']);
   }, 20_000);
+
+  // 被停的那一轮在库里什么都不留(引擎对话的用户消息引擎这边不落库,回答还没有):改没改过只能靠历史版本号认。
+  // 客户端的截断重发(重试 / 改了再发 / 重新生成)和回退都走删消息那个入口,入口会让版本号加一 —— 这里直接加。
+  it('第二轮被停后,那一句被改了重发 → 不续接:引擎会话里还记着被弃掉的那一句', async () => {
+    await turn(1);
+    next = [{ hang: true }];
+    await turn(2, {}, { stopWhenStarted: true });
+    bumpHistoryRevision('S');
+    await turn(3);
+    expect(resumes()).toEqual([null, 'ext-1', null]);
+    await turn(4); // 新开的那个往后照常续接
+    expect(resumes()[3]).toBe('ext-2');
+    expect((await resultOf(3)).result.externalSession).toMatchObject({ id: 'ext-2', rev: 1 });
+  }, 20_000);
+
+  it('指针不是本进程记的(引擎重启过,版本号从头数)→ 不知道改没改过,不拿两个数字硬比', async () => {
+    await turn(1);
+    const [row] = await query<any[]>(`SELECT result FROM agent_runs WHERE id = 'r1'`);
+    const result = JSON.parse(row.result);
+    result.externalSession.epoch = 'another-process'; result.externalSession.rev = 7;
+    await query(`UPDATE agent_runs SET result = ? WHERE id = 'r1'`, [JSON.stringify(result)]);
+    await turn(2);
+    expect(resumes()).toEqual([null, 'ext-1']);
+  }, 20_000);
+
+  it('中间夹着十几次没建成引擎会话的失败(一直被占着)→ 指针不被挤出去,那边放开后照样续接', async () => {
+    await turn(1);
+    for (let i = 2; i <= 15; i++) { next = [{ busy: true }]; expect((await turn(i)).error).toMatch(/open in another window/); }
+    expect((await turn(16)).done).toBe(true);
+    expect(resumes().slice(1)).toEqual(Array(15).fill('ext-1'));
+  }, 40_000);
 
   it('第一轮就被停 → 第二轮接的是同一个引擎会话(指针在 prompt 之前就记下了)', async () => {
     next = [{ hang: true }];

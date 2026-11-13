@@ -39,6 +39,13 @@ describe('mapAcpConfigOptions', () => {
     expect(sel.currentThoughtLevel).toBe('high');
   });
 
+  it('模型值里带斜杠、冒号、引号的(用户自己配的供应商)逐字原样,不拆不改', () => {
+    const odd = '["my/provider:8080","org/model:free \\"x\\""]';
+    const sel = mapAcpConfigOptions([{ id: 'model', category: 'model', type: 'select', currentValue: odd, options: [{ value: odd, name: 'Odd' }] }]);
+    expect(sel.models[0].id).toBe(odd);
+    expect(sel.currentModelId).toBe(odd);
+  });
+
   it('没写 category 的按 id 兜底;写了别的 category 的同名项不认', () => {
     const flat = [{ id: 'model', type: 'select', currentValue: 'a', options: [{ value: 'a', name: 'A' }, { value: 'b' }] }];
     expect(mapAcpConfigOptions(flat).models).toEqual([{ id: 'a', name: 'A', description: undefined }, { id: 'b', name: 'b', description: undefined }]);
@@ -66,6 +73,16 @@ describe('classifyResumeFailure', () => {
     expect(classifyResumeFailure(e)).toBe('busy');
     expect(acpErrorText(e)).toBe('Internal error: session "d8216a14" is already owned by an active write handle');
     expect(classifyResumeFailure({ code: -32602, message: 'Invalid params: session is already active: 0b89fa2c' })).toBe('busy');
+  });
+
+  it('不存在的是文件 / 工作目录(会话本身还在)→ other,不留下「别再找它」的记号', () => {
+    expect(classifyResumeFailure({ code: -32002, message: 'Resource not found', data: { uri: 'file:///w/proj/notes.md' } })).toBe('other');
+    expect(classifyResumeFailure({ code: -32002, message: 'Resource not found', data: { uri: '/w/proj' } })).toBe('other');
+    expect(classifyResumeFailure({ code: -32602, message: 'Invalid params: working directory does not exist: /w/proj' })).toBe('other');
+    expect(classifyResumeFailure({ code: -32002, message: 'Resource not found: file /w/proj/a.txt' })).toBe('other');
+    // 说的是会话的照旧算没有了
+    expect(classifyResumeFailure({ code: -32602, message: 'Invalid params: session 0b89fa2c does not exist' })).toBe('gone');
+    expect(classifyResumeFailure({ code: -32002, message: 'Resource not found', data: { uri: '0b89fa2c-1111-4222-8333-444455556666' } })).toBe('gone');
   });
 
   it('认不出的(超时、别的参数错)→ other,不当成「没有了」', () => {
@@ -98,6 +115,21 @@ describe('审批请求只带 toolCallId(DSH)', () => {
     expect(JSON.parse(asked[0].args)).toEqual(rawInput);
     expect(asked[0].preview).toContain('[DeepSeek Harness] write');
     expect(asked[0].preview).toContain('/w/outside/a.txt');
+  });
+
+  it('引擎用 tool_call_update 改过参数和标题 → 卡上是改过之后的那一份(看到的和批准的是同一条)', async () => {
+    const { client, asked } = setup();
+    await client.sessionUpdate({ sessionId: 's', update: { sessionUpdate: 'tool_call', toolCallId: 't9', title: 'bash', kind: 'execute', status: 'pending', rawInput: { command: 'ls' } } } as any);
+    await client.sessionUpdate({ sessionId: 's', update: { sessionUpdate: 'tool_call_update', toolCallId: 't9', title: 'bash: rm', rawInput: { command: 'rm -rf ./work' } } } as any);
+    await client.requestPermission({ sessionId: 's', toolCall: { toolCallId: 't9' }, options: OPTIONS } as any);
+    expect(asked[0].name).toBe('bash: rm');
+    expect(JSON.parse(asked[0].args)).toEqual({ command: 'rm -rf ./work' });
+    expect(asked[0].preview).toContain('rm -rf ./work');
+    expect(asked[0].preview).not.toContain('"ls"');
+    // 只改了状态、没带参数的 update 不清掉已有的
+    await client.sessionUpdate({ sessionId: 's', update: { sessionUpdate: 'tool_call_update', toolCallId: 't9', status: 'in_progress' } } as any);
+    await client.requestPermission({ sessionId: 's', toolCall: { toolCallId: 't9' }, options: OPTIONS } as any);
+    expect(JSON.parse(asked[1].args)).toEqual({ command: 'rm -rf ./work' });
   });
 
   it('请求自己带了标题和参数的(Claude Code / Codex)以它为准', async () => {

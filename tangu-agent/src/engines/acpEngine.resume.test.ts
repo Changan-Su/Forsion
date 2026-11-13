@@ -6,6 +6,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'no
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { probeAcpEngine, runAcpEngine } from './acpEngine.js';
+import { createEngineManager } from './manager.js';
 import type { EngineDef } from './config.js';
 import type { EngineRunCtx } from './manager.js';
 
@@ -157,5 +158,24 @@ describe('probeAcpEngine × 只会 resume 的引擎', () => {
     // 记着的那个探测会话没了 → 新建一个并报回新的 id
     const c = await probeAcpEngine(def(), { reuseSessionId: 'sess-404', reuseCwd: dir });
     expect(c.probeSessionId).toBe('sess-2');
+  }, 30_000);
+});
+
+describe('引擎管理器 × 同时来问能力清单', () => {
+  const savedHome = process.env.TANGU_HOME;
+  afterAll(() => { if (savedHome === undefined) delete process.env.TANGU_HOME; else process.env.TANGU_HOME = savedHome; });
+
+  it('缓存没命中时两处同时问 → 只探测一次,不因为抢同一个探测会话而多留空会话', async () => {
+    process.env.TANGU_HOME = path.join(dir, `home-${n}`);
+    const cfg = path.join(dir, `engines-${n}.json`);
+    writeFileSync(cfg, JSON.stringify({ engines: [def()] }));
+    const mgr = createEngineManager(cfg);
+    const [a, b] = await Promise.all([mgr.capabilities('fake'), mgr.capabilities('fake')]);
+    expect(a.models.map((m) => m.id)).toEqual(['["p","a"]', '["p","b"]']);
+    expect(b).toBe(a);
+    expect(lines().filter((l) => l === 'initialize')).toHaveLength(1);
+    expect(Object.keys(sessions())).toEqual(['sess-1']);
+    expect((a as any).probeSessionId).toBeUndefined(); // 探测会话的 id 不外露
+    await mgr.dispose();
   }, 30_000);
 });

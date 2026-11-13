@@ -292,6 +292,23 @@ const SCENARIOS = {
       ['三轮是同一个 DSH 会话', ps.length === 3 && !!ps[0].ext && ps.every((p) => p.ext === ps[0].ext), ps.map((p) => `${p.status}:${p.ext?.slice(0, 8)}`).join(' → ')],
     ], `被停的那一句${has(req, 'STOPPED-TURN-6') ? '也在' : '不在'} DSH 的上文里`);
   },
+  // 停掉一轮之后把那一句改了重发:被弃掉的那一句不该还留在 DSH 的上文里。被停的那一轮在引擎库里什么都没留
+  // (用户消息引擎这边不落库,回答还没有),认出「改写过」靠的是删消息入口记的那一次改写。
+  stopedit: async () => {
+    const sid = await newSession('stopedit');
+    stub.script([{ text: 'Noted: the code word is SE-5.' }]); const a = await run(sid, 'Remember the code word SE-5.');
+    const n0 = stub.mark(); stub.script([{ hang: true }]);
+    const b = await run(sid, 'DISCARDED-PROMPT-7 remove the build folder.', {}, { stopOn: () => stub.mark() > n0 });
+    // 客户端的「改了再发」:把被停的那一句和它的空占位的 id 交给删消息入口(这两条只在客户端有)
+    await api(`/agent/sessions/${sid}/messages/delete`, { method: 'POST', body: JSON.stringify({ ids: ['client-only-user-message', 'client-only-placeholder'] }) });
+    const n = stub.mark(); stub.script([{ text: 'fresh' }]); const c = await run(sid, 'REPLACEMENT-PROMPT-7 list the build folder.');
+    const req = stub.since(n)[0]; const ps = await pointers(sid);
+    record('stopedit', '停掉一轮后把那一句改了重发,DSH 不再记得被弃掉的那一句', [
+      ['第一轮跑完、第二轮被停、第三轮跑完', a.done && b.aborted && c.done, `${a.error || ''} ${b.error || ''} ${c.error || ''}`],
+      ['被弃掉的那一句不在请求里', !has(req, 'DISCARDED-PROMPT-7')],
+      ['改写后的这一轮换了一个 DSH 会话', ps.length === 3 && !!ps[1].ext && !!ps[2].ext && ps[2].ext !== ps[1].ext, ps.map((p) => `${p.status}:${p.ext?.slice(0, 8)}`).join(' → ')],
+    ], '改写后的这一轮是全新的 DSH 会话,连第一轮也不带(已知的限制)');
+  },
   // 第一句就被停掉:第二句接得上同一个 DSH 会话
   stopfirst: async () => {
     const sid = await newSession('stopfirst');

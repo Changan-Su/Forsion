@@ -93,6 +93,9 @@ export function createEngineManager(configFile?: string): EngineManager {
   const engines = loadEngines(configFile);
   const byId = new Map<string, EngineDef>(engines.map((e) => [e.id, e]));
   const capsCache = new Map<string, { caps: EngineCapabilities; at: number }>();
+  // 同一个引擎正在跑的那次探测:缓存没命中时两处同时来问(两个窗口各开一次模型下拉)要合成一次。分开跑的话第二个
+  // 续不上探测会话(被第一个占着),会另建一个并顶掉记着的那个 —— 每撞一次就在引擎的历史里多留一个空会话。
+  const probing = new Map<string, Promise<EngineCapabilities>>();
   let prefs = loadEnginePrefs();
   return {
     list: () => engines.map((e) => {
@@ -110,16 +113,22 @@ export function createEngineManager(configFile?: string): EngineManager {
       }
       const hit = capsCache.get(id);
       if (hit && Date.now() - hit.at < CAPS_TTL_MS) return hit.caps;
-      // 探测会话的固定工作目录(只有复用探测会话的引擎用得上,见 probeAcpEngine):本引擎自己的目录,不落在用户的项目里。
-      const probeDir = path.join(tanguHome(), 'engines', id, 'probe');
-      try { mkdirSync(probeDir, { recursive: true }); } catch { /* 建不出来就让引擎自己报错 */ }
-      const { probeSessionId, ...caps } = await probeAcpEngine(def, { reuseSessionId: prefs[id]?.probeSessionId, reuseCwd: probeDir });
-      if (probeSessionId && probeSessionId !== prefs[id]?.probeSessionId) {
-        saveEngineProbeSession(id, probeSessionId);
-        prefs = loadEnginePrefs();
-      }
-      capsCache.set(id, { caps, at: Date.now() });
-      return caps;
+      const running = probing.get(id);
+      if (running) return running;
+      const task = (async () => {
+        // 探测会话的固定工作目录(只有复用探测会话的引擎用得上,见 probeAcpEngine):本引擎自己的目录,不落在用户的项目里。
+        const probeDir = path.join(tanguHome(), 'engines', id, 'probe');
+        try { mkdirSync(probeDir, { recursive: true }); } catch { /* 建不出来就让引擎自己报错 */ }
+        const { probeSessionId, ...caps } = await probeAcpEngine(def, { reuseSessionId: prefs[id]?.probeSessionId, reuseCwd: probeDir });
+        if (probeSessionId && probeSessionId !== prefs[id]?.probeSessionId) {
+          saveEngineProbeSession(id, probeSessionId);
+          prefs = loadEnginePrefs();
+        }
+        capsCache.set(id, { caps, at: Date.now() });
+        return caps;
+      })().finally(() => probing.delete(id));
+      probing.set(id, task);
+      return task;
     },
     setDefaultModel: (id, modelId) => {
       saveEngineDefaultModel(id, modelId);

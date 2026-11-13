@@ -96,6 +96,7 @@ import { CORRECTION_SIGNAL, NUDGE_SIGNAL, correctionVerdict, looksLikeCorrection
 import { loadSpecialAgentsConfig } from './specialAgentsConfig.js';
 import { runGroupChat, sanitizeTempAgents, teamMemberSection } from './groupChat.js';
 import { query, getDbType } from '../core/db.js';
+import { historyEpoch, historyRevision } from './historyRevision.js';
 import { SELF_OWNER, ownerAlive } from './runOwner.js';
 import { TEAMWORK_KIND } from './teamRuns.js';
 import { getTeam } from '../agents/teamRegistry.js';
@@ -549,7 +550,11 @@ async function dispatchRun(runId: string, ac: AbortController): Promise<void> {
 
 /** 普通引擎对话的续接指针:这一轮跑在引擎自己的哪个会话里。记在每轮 run 的 result.externalSession 上 —— 不放会话配置:
  *  那一份客户端能整份改写、分支会照抄,引擎这边读了再写还会盖掉用户中途切的审批档。after = 这一轮开跑时会话里最新的那条回答。 */
-export interface ExternalSessionPointer { id: string; engineId: string; cwd: string; after: string | null }
+export interface ExternalSessionPointer {
+  id: string; engineId: string; cwd: string; after: string | null;
+  /** 记指针时这场对话的历史版本号,和记它的那个进程(见 historyRevision.ts)。老指针没有这两项 = 不知道,只按上面几项判。 */
+  rev?: number; epoch?: string;
+}
 
 function parseRunResult(v: unknown): any {
   if (typeof v === 'string') return safeParse(v);
@@ -565,6 +570,9 @@ function parseRunResult(v: unknown): any {
  *    (新会话没有 run)都落在这里。引擎会话里记着界面上已经没有的东西,不能接着用。
  *  - 只看最近那一次,不往更早找:更早的指针指的是同一个引擎会话的旧状态,对得上也已经被后面的轮次写过了。
  *  - 引擎或工作目录换了、上一次续接时引擎说那个会话没有了(externalSessionReset),也不续接。
+ *  - 对话自那一轮以后被改写过(截断重发 / 回退,都会让历史版本号加一)也不续接。上面那条「最新的回答」认不出一种情况:
+ *    那一轮被停掉、什么都没落库,用户随后把那一句改了重发 —— 库里看起来和没改过一样,引擎会话里却还记着被弃掉的那一句。
+ *    版本号是进程内的:指针不是本进程记的(引擎重启过)就不知道改没改过,只按上面几条判。
  * 返回 latest(会话里最新一条回答的 id,没有为 null),本轮的指针拿它当 after。回答在 chat_messages 里的 role 是 'model'。
  */
 export async function resumableExternalSession(
@@ -578,8 +586,12 @@ export async function resumableExternalSession(
   // 「最近一次」要排得准:created_at 只到秒,一轮失败可以和上一轮结束落在同一秒 —— 排反了就会去续接一个已经被后面
   // 的轮次写过(或者引擎已经说没有了)的会话。同一场会话的 run 按创建顺序执行,SQLite 上用插入顺序(rowid)补排,
   // 与 plugins/runs.ts 同一做法;外部引擎只在本机形态跑,库就是 SQLite,另一支只是兜底。
+  // 只取带指针 / 带「没有了」记号的 run 再截断:中间夹着多少次没建成引擎会话的失败(被占着、起不来)都不该把它挤出去 ——
+  // 挤出去就成了不声不响地新开。两个键名都以 `"externalSession` 开头且紧跟冒号(externalSessionId 不算)。
   const runs = await query<any[]>(
-    `SELECT status, assistant_message_id, result FROM agent_runs WHERE session_id = ? AND id <> ? ORDER BY created_at DESC${getDbType() === 'sqlite' ? ', rowid DESC' : ', updated_at DESC'} LIMIT 12`,
+    `SELECT status, assistant_message_id, result FROM agent_runs WHERE session_id = ? AND id <> ?
+       AND (CAST(result AS TEXT) LIKE '%"externalSession":%' OR CAST(result AS TEXT) LIKE '%"externalSessionReset":%')
+     ORDER BY created_at DESC${getDbType() === 'sqlite' ? ', rowid DESC' : ', updated_at DESC'} LIMIT 4`,
     [sessionId, runId],
   );
   for (const r of runs) {
@@ -589,7 +601,8 @@ export async function resumableExternalSession(
     if (!p || typeof p !== 'object' || typeof p.id !== 'string' || !p.id) continue;
     const own: string | null = r.assistant_message_id ?? null;
     const inStep = (own !== null && latest === own) || (r.status !== 'done' && latest === (p.after ?? null));
-    return { latest, resumeId: p.engineId === engineId && p.cwd === cwd && inStep ? p.id : undefined };
+    const rewritten = p.epoch === historyEpoch && typeof p.rev === 'number' && p.rev !== historyRevision(sessionId);
+    return { latest, resumeId: p.engineId === engineId && p.cwd === cwd && inStep && !rewritten ? p.id : undefined };
   }
   return { latest };
 }
@@ -665,7 +678,8 @@ async function externalEngineLoop(runId: string, ac: AbortController, run: any, 
       // 而它们的普通对话今天是好的 —— 没测过就打开,坏了是「每场对话的第二句都失败」。测过之后去掉 via 这个条件即可。
       onSession: chatResume ? async ({ id, resumable, via }) => {
         if (!resumable || via !== 'resume') return;
-        pointer = { id, engineId, cwd: pointerCwd, after: chain?.latest ?? null };
+        // 删消息的入口在有 run 在跑时一律拒绝,所以这里记下的版本号到本轮结束都不会变。
+        pointer = { id, engineId, cwd: pointerCwd, after: chain?.latest ?? null, rev: historyRevision(sessionId), epoch: historyEpoch };
         await updateRunStatus(runId, 'running', { result: { externalSession: pointer } });
       } : undefined,
       message: String(input.message || ''),
