@@ -77,6 +77,9 @@ async function perm() {
   }
   async function round(endsFirst) {
     adb('shell', 'am', 'force-stop', PKG)
+    // 手机引导问过通知就记一笔(PhonePermissionsPlugin 的 forsion_phone_permissions),记着的话首次上岛不再问 ——
+    // 撤权限清不掉这个文件,要在进程停着时删掉,这一轮才是「引导没问过」的那条路。debug 包才有 run-as。
+    adb('shell', 'run-as', PKG, 'rm', '-f', 'shared_prefs/forsion_phone_permissions.xml')
     adb('shell', 'pm', 'revoke', PKG, 'android.permission.POST_NOTIFICATIONS')
     adb('shell', 'pm', 'clear-permission-flags', PKG, 'android.permission.POST_NOTIFICATIONS', 'user-set', 'user-fixed')
     adb('shell', 'am', 'start', '-n', `${PKG}/com.forsion.tangu.MainActivity`)

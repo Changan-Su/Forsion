@@ -29,7 +29,7 @@ const vaultMode = (): 'local' | 'cloud' => {
 }
 
 void installMobileShim().then(async (ok) => {
-  if (!ok) return // 未就绪:已发起登录(native 开系统浏览器 / web 跳 /auth),不挂载。
+  if (!ok) return // 未就绪:native 已画登录前那一屏(走过引导的人同时开了登录页)/ web 已跳 /auth,不挂载。
   const cfg = await (window as unknown as {
     tangu: { getConfig(): Promise<{ backendUrl: string; token: string; cloudApiBase?: string; cloudUrl?: string }> }
   }).tangu.getConfig()

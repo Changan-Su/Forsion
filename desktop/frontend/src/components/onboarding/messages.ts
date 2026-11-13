@@ -57,6 +57,7 @@ registerMessages({
   // ② 外观
   'ob3.theme.title': { zh: '选一个看着舒服的样子', en: 'Pick a look you like' },
   'ob3.theme.desc': { zh: '整个 Forsion 跟着变，后面几页就是你选的样子。以后在 设置 › 外观 里改。', en: 'All of Forsion follows it, starting with the next screens. Change it any time in Settings › Appearance.' },
+  'ob3.theme.descPhone': { zh: '点了马上生效。以后在 设置 › 外观 里改。', en: 'Changes apply right away. Change them later in Settings › Appearance.' },
   'ob3.theme.style': { zh: '风格', en: 'Style' },
   'ob3.theme.fontHint': { zh: '字体在 设置 › 外观 里', en: 'Fonts are in Settings › Appearance' },
 

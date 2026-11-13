@@ -40,6 +40,7 @@ const { PRODUCT } = await import('../product')
 const { openAgentsSpace } = await import('../views/agentProfileNav')
 const { CH_ASK_KEY } = await import('./computerHistoryAskMark')
 const { applyOnboardingSync } = await import('../services/syncSetup')
+const phoneGuideMod = await import('./onboarding/phoneGuide')
 
 let host: HTMLDivElement
 let root: Root
@@ -922,4 +923,197 @@ it('closing only once: Enter while the guide is closing does not save a skipped 
   await flush()
   expect(props.onFinish).toHaveBeenCalledTimes(1)
   expect(human.saveHumanDocument).not.toHaveBeenCalled()
+})
+
+// ── 手机引导(11-13,做法 A):手机入口登记了 phoneGuide 才走;下面用一个假的登记 ──────────────────────────────
+type PhoneScreenProps = import('./onboarding/phoneGuide').PhoneScreenProps
+function phoneHost(o: {
+  where?: boolean; perms?: boolean; prepare?: () => Promise<void>
+  permsLabel?: string; permsCommit?: () => Promise<void | boolean>
+} = {}) {
+  const screen = (step: 'where' | 'perms') => function FakeScreen({ commitRef, setPrimaryLabel }: PhoneScreenProps) {
+    React.useEffect(() => {
+      if (step === 'perms') {
+        if (o.permsLabel) setPrimaryLabel(o.permsLabel)
+        commitRef.current = o.permsCommit ?? null
+      }
+      return () => { commitRef.current = null }
+    }, [])
+    return React.createElement('div', { 'data-fake-screen': step }, React.createElement('h1', { tabIndex: -1, 'data-ob-title': '' }, step))
+  }
+  const fake = {
+    prepare: vi.fn(o.prepare ?? (async () => {})),
+    available: (s: 'where' | 'perms') => (s === 'where' ? o.where ?? true : o.perms ?? true),
+    screens: { where: screen('where'), perms: screen('perms') },
+    minimize: vi.fn(),
+  }
+  delete (window.tangu as any).envCheck
+  ;(window.tangu as any).mobile = true
+  phoneGuideMod.installPhoneGuide(fake)
+  return fake
+}
+afterEach(() => phoneGuideMod.installPhoneGuide(null))
+const backEvent = (probe: boolean) => {
+  const e = new CustomEvent('forsion:mobile-back', { cancelable: true, detail: probe ? { probe: true } : null })
+  window.dispatchEvent(e)
+  return e.defaultPrevented
+}
+
+it('phone: waits for prepare behind the bare shell, then where → theme → perms', async () => {
+  let release!: () => void
+  const fake = phoneHost({ prepare: () => new Promise<void>((r) => { release = r }) })
+  await render()
+  expect(fake.prepare).toHaveBeenCalledTimes(1)
+  expect(stepNow()).toBe('pending')
+  expect(host.querySelector('.ob3-paper')).not.toBeNull()
+  expect(host.querySelector('[data-ob-primary]')).toBeNull()
+  expect(host.querySelector('.ob3-top')).toBeNull()
+  await act(async () => release())
+  await flush()
+  expect(stepNow()).toBe('where')
+  expect(host.querySelector('.ob-flow')?.getAttribute('data-phone')).toBe('full')
+  expect(host.querySelector('[data-fake-screen="where"]')).not.toBeNull()
+  expect(host.querySelectorAll('.ob3-dots button')).toHaveLength(3)
+  expect(host.querySelector('.ob-skip')).not.toBeNull()
+  expect(localStorage.getItem(phoneGuideMod.PHONE_GUIDE_STEP_KEY)).toBe('where')
+  await next()
+  expect(stepNow()).toBe('theme')
+  expect(localStorage.getItem(phoneGuideMod.PHONE_GUIDE_STEP_KEY)).toBe('theme')
+  await next()
+  expect(stepNow()).toBe('perms')
+  expect(primary().textContent).toBe(translate('ob3.getStarted'))
+})
+
+it('phone: prepare that never settles is capped, the guide still appears', async () => {
+  phoneHost({ prepare: () => new Promise<void>(() => {}) })
+  await render()
+  expect(stepNow()).toBe('pending')
+  await act(async () => { await new Promise((r) => setTimeout(r, 2600)) })
+  await flush()
+  expect(stepNow()).toBe('where')
+}, 10_000)
+
+it('phone: local marks unreadable = unknown → no phone guide is assumed, nothing phone-specific is written', async () => {
+  phoneHost()
+  // 本机记号读不出来(隐私模式之类):不当成新人走完整的手机引导,落回没登记时的步骤序
+  const get = vi.spyOn(localStorage, 'getItem').mockImplementation(() => { throw new Error('denied') })
+  try {
+    await render()
+    expect(stepNow()).toBe('theme')
+    expect(host.querySelector('.ob-flow')?.hasAttribute('data-phone')).toBe(false)
+    expect(host.querySelectorAll('.ob3-dots button')).toHaveLength(0)
+  } finally { get.mockRestore() }
+  await next()
+  expect(localStorage.getItem(phoneGuideMod.PHONE_GUIDE_REV_KEY)).toBeNull()
+  expect(localStorage.getItem(phoneGuideMod.PHONE_GUIDE_SUGGEST_KEY)).toBeNull()
+})
+
+it('phone: only one place to run → no "where"; the theme screen is the phone variant', async () => {
+  phoneHost({ where: false })
+  await render()
+  expect(stepNow()).toBe('theme')
+  expect(host.querySelectorAll('.ob3-dots button')).toHaveLength(2)
+  expect(host.querySelector('.ob3-styles')).toBeNull()
+  expect(host.querySelector('.ob3-preview')).toBeNull()
+  expect(host.querySelector('.ob3-theme.phone')).not.toBeNull()
+  expect(host.querySelector('.ob3-col.narrow .ob3-head p')?.textContent).toBe(translate('ob3.theme.descPhone'))
+  expect(host.querySelector('.ob3-foot-in')?.classList.contains('narrow')).toBe(true)
+  expect(host.querySelector('[data-ob-mode]')).not.toBeNull()
+})
+
+it('desktop / web theme screen keeps style and preview', async () => {
+  delete (window.tangu as any).envCheck
+  await render()
+  expect(stepNow()).toBe('theme')
+  expect(host.querySelector('.ob3-styles')).not.toBeNull()
+  expect(host.querySelector('.ob3-preview')).not.toBeNull()
+  expect(host.querySelector('.ob3-theme.phone')).toBeNull()
+  expect(host.querySelector('.ob-flow')?.hasAttribute('data-phone')).toBe(false)
+})
+
+it('phone: a screen label wins, is reset on leaving; commit false stays without an error', async () => {
+  const commit = vi.fn<() => Promise<void | boolean>>().mockResolvedValueOnce(false).mockResolvedValue(undefined)
+  phoneHost({ where: false, permsLabel: 'Turn on 2', permsCommit: commit })
+  await render()
+  await next()
+  expect(stepNow()).toBe('perms')
+  expect(primary().textContent).toBe('Turn on 2')
+  await next()
+  expect(commit).toHaveBeenCalledTimes(1)
+  expect(stepNow()).toBe('perms')
+  expect(host.querySelector('.ob3-error')).toBeNull()
+  expect(props.onFinish).not.toHaveBeenCalled()
+  await act(async () => host.querySelector<HTMLButtonElement>('.ob3-back')!.click())
+  await flush()
+  expect(stepNow()).toBe('theme')
+  expect(primary().textContent).toBe(translate('ob3.next'))
+  await next()
+  await next()
+  expect(commit).toHaveBeenCalledTimes(2)
+  expect(props.onFinish).toHaveBeenCalledTimes(1)
+})
+
+it('phone: resumes at the screen it was killed on; finishing writes both keys, the rev and the suggestion mark', async () => {
+  localStorage.setItem(phoneGuideMod.PHONE_GUIDE_STEP_KEY, 'perms')
+  phoneHost()
+  await render()
+  expect(stepNow()).toBe('perms')
+  const dots = host.querySelectorAll<HTMLButtonElement>('.ob3-dots button')
+  expect(dots[0].disabled).toBe(false)
+  await next()
+  expect(props.onFinish).toHaveBeenCalledTimes(1)
+  expect(localStorage.getItem(ONBOARDING_DISMISS_KEY)).toBe('1')
+  expect(localStorage.getItem(ONBOARDING_VERSION_KEY)).toBe('2.14.0')
+  expect(localStorage.getItem(phoneGuideMod.PHONE_GUIDE_REV_KEY)).toBe(String(phoneGuideMod.PHONE_GUIDE_REV))
+  expect(localStorage.getItem(phoneGuideMod.PHONE_GUIDE_SUGGEST_KEY)).toBe('1')
+  expect(localStorage.getItem(phoneGuideMod.PHONE_GUIDE_STEP_KEY)).toBeNull()
+})
+
+it('phone update: an existing user sees only the new screen, no dots / skip, and no home suggestions', async () => {
+  localStorage.setItem(ONBOARDING_DISMISS_KEY, '1')
+  localStorage.setItem(ONBOARDING_VERSION_KEY, '2.13.7')
+  phoneHost()
+  await render()
+  expect(stepNow()).toBe('perms')
+  expect(host.querySelector('.ob-flow')?.getAttribute('data-phone')).toBe('update')
+  expect(host.querySelector('.ob-flow')?.getAttribute('data-mode')).toBe('full')
+  expect(host.querySelectorAll('.ob3-dots button')).toHaveLength(0)
+  expect(host.querySelector('.ob-skip')).toBeNull()
+  expect(primary().textContent).toBe(translate('ob3.getStarted'))
+  await next()
+  expect(props.onFinish).toHaveBeenCalledTimes(1)
+  expect(localStorage.getItem(phoneGuideMod.PHONE_GUIDE_REV_KEY)).toBe(String(phoneGuideMod.PHONE_GUIDE_REV))
+  expect(localStorage.getItem(phoneGuideMod.PHONE_GUIDE_SUGGEST_KEY)).toBeNull()
+})
+
+it('phone: skipping a full guide still records the rev', async () => {
+  phoneHost()
+  await render()
+  await clickText(translate('onboarding.nav.skip'))
+  expect(props.onFinish).toHaveBeenCalledTimes(1)
+  expect(localStorage.getItem(phoneGuideMod.PHONE_GUIDE_REV_KEY)).toBe(String(phoneGuideMod.PHONE_GUIDE_REV))
+})
+
+it('phone: system back goes to the previous screen and never closes; first screen is left to MobileRoot', async () => {
+  phoneHost()
+  await render()
+  expect(stepNow()).toBe('where')
+  expect(backEvent(true)).toBe(false)
+  await next()
+  expect(stepNow()).toBe('theme')
+  expect(backEvent(true)).toBe(true)
+  await flush()
+  expect(stepNow()).toBe('theme') // probe 只答「我接」,不动手
+  await act(async () => { backEvent(false) })
+  await flush()
+  expect(stepNow()).toBe('where')
+  expect(props.onFinish).not.toHaveBeenCalled()
+  expect(backEvent(true)).toBe(false)
+})
+
+it('without a phone host the back event is never claimed', async () => {
+  delete (window.tangu as any).envCheck
+  ;(window.tangu as any).mobile = true
+  await render()
+  expect(backEvent(true)).toBe(false)
 })

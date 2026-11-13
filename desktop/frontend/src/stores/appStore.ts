@@ -28,6 +28,7 @@ import { windowKind } from '../windowKind'
 import type { SettingsTarget as SettingsTab } from '../components/SettingsModal'
 import { ONBOARDING_DISMISS_KEY, ONBOARDING_VERSION_KEY } from '../components/OnboardingWizard'
 import { needsFullGuide } from '../components/onboardingFlow'
+import { phoneGuide, phoneGuidePlan, readPhoneGuideKeys } from '../components/onboarding/phoneGuide'
 import { act } from '../activity/log'
 import { notifyApp } from './notificationStore'
 import { agentWriteKnown, noteAgentWriteEnd, noteAgentWriteLive, noteAgentWriteStart } from './agentWriteLedger'
@@ -567,9 +568,17 @@ export const useApp = create<AppState>((set, get) => ({
       } catch { /* 引导判定失败不阻断 */ }
     } else if (guideAllowed && stored) {
       // web / 移动端(无 envCheck):登录早在挂载前由 webShim / mobileShim 完成(无 token 直接跳
-      // /auth),也没有 provider / 本机环境这些概念 —— 「首启」的唯一信号就是没跳过过。
-      // 步骤序同步收缩到 welcome/theme/done,见 OnboardingWizard.stepOrder。
-      try { if (!localStorage.getItem(ONBOARDING_DISMISS_KEY)) set({ onboarding: true }) } catch { /* 私密模式 */ }
+      // /auth),也没有 provider / 本机环境这些概念 —— 「首启」的信号是没跳过过。网页版只有外观一屏(stepOrder)。
+      // 手机 App(登记了 phoneGuide)另有一条:走过旧引导、但手机引导新加了这台手机有内容的屏 → 只补那几屏(phoneGuidePlan 的 update)。
+      // 不置 onboardingUpdate(那是桌面「已更新到 X」更新日志那屏);本机记号读不出(null)= 不知道,不弹。
+      try {
+        if (!localStorage.getItem(ONBOARDING_DISMISS_KEY)) set({ onboarding: true })
+        else {
+          const guide = phoneGuide()
+          const keys = guide ? readPhoneGuideKeys() : null
+          if (guide && keys && phoneGuidePlan(keys, (s) => guide.available(s)).mode === 'update') set({ onboarding: true })
+        }
+      } catch { /* 私密模式 */ }
     }
     // 版本更新后再进一次引导(展示 What's New);完成时记录版本(见 OnboardingWizard.finish)。
     // 只在 host 生效(web/移动端没有 appVersion,这条自然 no-op):web 每次发版都全屏拦一次

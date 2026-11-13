@@ -14,7 +14,8 @@ export function onboardingMode(o: { brief: boolean; updateMode: boolean; returni
   return o.brief ? 'brief' : o.updateMode ? 'update' : o.returning ? 'returning' : 'full'
 }
 
-const MS_FIELD: Record<Step, string> = { welcome: 'msWelcome', start: 'msStart', theme: 'msTheme', you: 'msYou', team: 'msTeam' }
+// where / perms 是手机引导的两屏(手机上现在不发遥测,字段先对上,免得哪天接上了落成 undefined 键)
+const MS_FIELD: Record<Step, string> = { welcome: 'msWelcome', start: 'msStart', theme: 'msTheme', you: 'msYou', team: 'msTeam', where: 'msWhere', perms: 'msPerms' }
 
 /** 屏里那几项选择:团队屏(Muse 开没开、电脑历史开没开)、关于你那屏(写没写)在各自保存时记一笔。 */
 let notes: { museOn?: boolean; computerHistoryOn?: boolean; youWritten?: boolean } = {}

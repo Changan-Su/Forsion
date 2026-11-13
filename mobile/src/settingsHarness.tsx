@@ -4,6 +4,7 @@
  *   ?onboarding 看首启引导——台架 window.tangu 无 envCheck，走的正是 web/移动端的收缩步骤序)
  *   ?phone 看「高级 → 测试性功能」里的手机操控设置行(真机才注册;台架给 PhoneControl 挂假 web 实现)
  *   ?tab=notifications 直达某一页(SettingsModal 的 initialTab,手机上也直达二级页)
+ *   ?pg=wizard|panel|welcome 看手机首次引导的真组件(假原生能力,参数见 mountPhoneGuideHarness;scripts/phone-guide.e2e.cjs 用)
  *   ?parts 看设置零件(ctx.ui.mountSettingsPage 那套)的演示页:额度条、步进器、输入框 + 按钮、「选了就执行」→ 手机半屏
  *
  * 裸挂生产 SettingsModal + 生产主题/CSS,绕过移动端登录与后端启动,供两层 IA 截图和触控回归。
@@ -191,7 +192,135 @@ async function mountPhoneRow(): Promise<void> {
   await setPhoneControlEnabled(false) // 顺带拉一次状态
 }
 
-void (phone ? mountPhoneRow() : Promise.resolve()).finally(() => {
+/**
+ * ?pg=wizard|panel|welcome:手机首次引导的真组件 + 假原生能力(e2e:phoneguide 用)。
+ *   每项能力 ?notify= / ?control= / ?voice= 写「初值[,ask 的结果]」:初值 on|off|blocked|unknown(读不到),
+ *   ask 结果 on|off|blocked|throw,缺省 off,on;?caps=notify,voice 只列这几项(缺省三项都在)。
+ *   ?where=1 让「在哪运行」屏算有内容(缺省没有;台架没有名册);?user=fresh|existing|done 先种本机记号(同一标签页只种一次,
+ *   刷新不重种);?step=<step> 一起种「做到哪」;?returning=1 看登录前那屏的回头客版;?skin=<id> 换主题色与背景色。
+ *   假能力每次 ask / openSettings 都记进 window.__pg.log,onFinish / onSignIn 记次数。
+ */
+type PgWindow = Window & { __pg?: { log: string[]; finished: number; signIn: number; plan?: string } }
+const pgMode = new URLSearchParams(location.search).get('pg')
+
+async function mountPhoneGuideHarness(el: HTMLElement): Promise<void> {
+  const q = new URLSearchParams(location.search)
+  const w = window as PgWindow
+  const pg: NonNullable<PgWindow['__pg']> = { log: [], finished: 0, signIn: 0 }
+  w.__pg = pg
+  const skin = q.get('skin')
+  if (skin) applyTheme(initialLang, skin, skin, initialMode)
+
+  // 本机记号:同一标签页只种一次(刷新要看到上一轮写下的)
+  const user = q.get('user')
+  if (user && !sessionStorage.getItem('pg-seeded')) {
+    sessionStorage.setItem('pg-seeded', '1')
+    for (const k of ['forsion_tangu_onboarding_done', 'forsion_tangu_onboarding_version', 'forsion_phone_guide_rev', 'forsion_phone_guide_step', 'forsion_phone_guide_suggest']) localStorage.removeItem(k)
+    if (user === 'existing' || user === 'done') localStorage.setItem('forsion_tangu_onboarding_done', '1')
+    if (user === 'existing') localStorage.setItem('forsion_tangu_onboarding_version', '2.13.8')
+    const step = q.get('step')
+    if (step) localStorage.setItem('forsion_phone_guide_step', step)
+  }
+
+  if (pgMode === 'welcome') {
+    const { mountSignInWelcome } = await import('./signInWelcome')
+    mountSignInWelcome({ el, returning: q.has('returning'), onSignIn: async () => { pg.signIn++ } })
+    return
+  }
+
+  const [{ setPhoneCapsForTest }, { PermsScreen, PermissionsPanel }, { WhereScreen }, guide] = await Promise.all([
+    import('./phoneGuide/caps'), import('./phoneGuide/PermsScreen'), import('./phoneGuide/WhereScreen'), import('@/components/onboarding/phoneGuide'),
+  ])
+  type CapId = 'notify' | 'control' | 'voice'
+  type St = 'on' | 'off' | 'blocked'
+  const ids = (q.get('caps') ?? 'notify,control,voice').split(',').filter(Boolean) as CapId[]
+  const caps = ids.map((id) => {
+    const [init = 'off', ask = 'on'] = (q.get(id) ?? '').split(',').filter(Boolean)
+    let state: St | null = init === 'unknown' ? null : (init as St)
+    return {
+      id,
+      read: async () => state,
+      ask: async () => {
+        pg.log.push(`ask:${id}`)
+        if (ask === 'throw') throw new Error('fake ask failed')
+        state = ask as St
+        return state
+      },
+      ...(id === 'control' ? {} : { openSettings: async () => { pg.log.push(`openSettings:${id}`) } }),
+    }
+  })
+  setPhoneCapsForTest(caps)
+
+  if (pgMode === 'panel') {
+    // 设置页那一行「操作这台手机」是真的 PhoneControlRow(不认假能力):照 ?phone 挂假的 PhoneControl web 实现
+    let enabled = false
+    registerPlugin('PhoneControl', {
+      web: {
+        status: async () => ({ enabled, capabilities: enabled ? ['phone.intents'] : [], foreground: true, proto: 1 }),
+        setEnabled: async (o: { enabled: boolean }) => { pg.log.push(`phoneControl:${o.enabled}`); enabled = o.enabled; return { enabled } },
+        configure: async () => ({}),
+        exec: async () => ({ accepted: false }),
+      },
+    })
+    createRoot(el).render(
+      <LocaleProvider>
+        <div className="settings-page settings-page--mobile" style={{ position: 'fixed', inset: 0, display: 'block', background: 'var(--bg)' }}>
+          <div className="settings-body" style={{ height: '100%', padding: 16 }} data-harness-panel=""><PermissionsPanel /></div>
+        </div>
+      </LocaleProvider>,
+    )
+    return
+  }
+
+  const host = {
+    prepare: async () => {},
+    available: (step: 'where' | 'perms') => step === 'perms' ? caps.length > 0 : q.get('where') === '1',
+    screens: { where: WhereScreen, perms: PermsScreen },
+    PermissionsPanel,
+  }
+  guide.installPhoneGuide(host)
+  // 开不开向导照 appStore 的手机分支:没有完成记号 = 开;有 = 只在手机引导要补看时开
+  const keys = guide.readPhoneGuideKeys()
+  const open = !keys || !keys.done || guide.phoneGuidePlan(keys, host.available).mode === 'update'
+  pg.plan = keys ? guide.phoneGuidePlan(keys, host.available).mode : 'unknown'
+  createRoot(el).render(
+    <LocaleProvider>
+      {open ? <PhoneGuideWizard onFinish={() => { pg.finished++ }} /> : <div data-harness-nowizard="" />}
+    </LocaleProvider>,
+  )
+}
+
+function PhoneGuideWizard({ onFinish }: { onFinish: () => void }) {
+  const [lang, setLang] = useState(initialLang)
+  const [skin, setSkin] = useState(() => new URLSearchParams(location.search).get('skin') ?? initialSkin)
+  const [mode, setMode] = useState<'light' | 'dark'>(initialMode)
+  const [seed, setSeed] = useState('#8b7fd6')
+  const [done, setDone] = useState(false)
+  if (done) return <div data-harness-finished="" />
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'var(--bg)' }}>
+      <OnboardingWizard
+        themeLang={lang}
+        themeSkin={skin}
+        themeMode={mode}
+        themeModePref={mode}
+        themeSeed={seed}
+        onThemeChange={(nextLang, nextSkin, nextMode) => {
+          const effective = nextMode === 'system' ? mode : nextMode
+          setLang(nextLang); setSkin(nextSkin); setMode(effective)
+          applyTheme(nextLang, nextSkin, initialBg, effective)
+        }}
+        onSeedChange={setSeed}
+        onReconnect={() => undefined}
+        onFinish={() => { onFinish(); setDone(true) }}
+      />
+    </div>
+  )
+}
+
+if (pgMode) {
+  void mountPhoneGuideHarness(document.getElementById('root')!)
+} else void (phone ? mountPhoneRow() : Promise.resolve()).finally(() => {
   createRoot(document.getElementById('root')!).render(
     <LocaleProvider>
       <SettingsHarness />

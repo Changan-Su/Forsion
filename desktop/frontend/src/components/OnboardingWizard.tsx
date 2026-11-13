@@ -7,7 +7,11 @@
  * - 上次看引导记下的版本早于 2.13.8(或没记录)= 完整走一遍,原来走过的叫「欢迎回来」;之后的升级只看「已更新到 X」+ 这一版新增的屏。
  * - 换屏有动效(11-08):外壳 data-nav 记方向,新的一屏从前进方向滑进,旧的那屏留一个替身(useExitGhost)往反方向滑出;
  *   减少动态效果 / 只淡入淡出时由全局规则收成瞬间。引导开着时 html 挂 data-ob-open,把菜单层抬到引导上面(模型选择器的下拉 portal 到 body)。
- * 台架靠的名字:.ob-shell.ob-flow、data-step、data-mode、.ob-skip(「跳过引导」)。
+ * - 手机 App(11-13,方案 docs/ToBeImproved/手机首次引导方案_2026-11-13,做法 A):手机入口登记了 phoneGuide 才走这条 ——
+ *   先只画外壳底子(data-step="pending")等 host.prepare() 读名册(最多 2.5 秒),再按 phoneGuidePlan 定一次步骤序:
+ *   在哪运行 → 外观(手机版:没有风格和预览)→ 想让它做哪些事;走过旧引导的只补新屏。做到哪一屏记在本机,App 被杀后接着来。
+ *   系统返回 = 上一屏;第一屏上不接,交给 MobileRoot 收起 App。没登记(桌面、网页版、设备页)= 和以前一模一样,同步挂载。
+ * 台架靠的名字:.ob-shell.ob-flow、data-step、data-mode、.ob-skip(「跳过引导」);手机引导多一个 data-phone(full / update)。
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { ArrowLeft, ArrowRight, CircleAlert, Loader2, RotateCcw } from 'lucide-react'
@@ -32,6 +36,9 @@ import { useApp } from '../stores/appStore'
 import { connectionTarget } from '../services/engine/targets'
 import { applyOnboardingSync, type SyncKind } from '../services/syncSetup'
 import { createOnboardingTracker, onboardingMode } from './onboarding/onboardingTelemetry'
+import { finishPhoneGuide, notePhoneGuideStep, phoneGuide, phoneGuidePlan, readPhoneGuideKeys, resumePhoneGuideAt,
+  type PhoneGuideHost, type PhoneGuidePlan } from './onboarding/phoneGuide'
+import { useMobileBackClose } from '../amadeus/lib/mobileBack'
 import './onboardingMessages'
 import './onboarding/messages'
 import '../views/homepage.css'
@@ -62,18 +69,61 @@ const readKey = (key: string): string | null => {
 }
 const errText = (e: unknown): string => String((e as Error)?.message || e).replace(/^Error invoking remote method '[^']+': Error: /, '')
 const FOOT_WIDTH: Partial<Record<Step, string>> = { start: 'mid', theme: 'mid', you: 'narrow', team: 'team' }
+/** 等手机入口读名册最多这么久:读不到也要画出第一屏,不能让人对着空底子干等(名册没读到时「在哪运行」那屏自己说明并给重试)。 */
+const PHONE_PREPARE_CAP_MS = 2500
 
-export const OnboardingWizard: React.FC<{
+interface WizardProps {
   themeLang: string; themeSkin: string; themeMode: 'light' | 'dark'; themeModePref: 'light' | 'dark' | 'system'; themeSeed: string
   onThemeChange: (lang: string, skin: string, pref: 'light' | 'dark' | 'system') => void
   onSeedChange: (hex: string) => void; onReconnect: () => void; onFinish: () => void
-}> = ({ themeLang, themeSkin, themeMode, themeModePref, themeSeed, onThemeChange, onSeedChange, onReconnect, onFinish }) => {
+}
+/** 手机引导这一次的安排(准备完定一次,之后不变)。mode 'none' = 照常走没登记时的步骤序。 */
+type PhoneRun = PhoneGuidePlan & { host: PhoneGuideHost }
+
+export const OnboardingWizard: React.FC<WizardProps> = (props) => {
+  // 挂载时读一次:登记只在手机入口挂载前做,之后不会变;没登记就是原来那条路,同步画出第一屏(单测和桌面台架都靠它)。
+  const [host] = useState(phoneGuide)
+  return host ? <PhoneGate host={host} {...props} /> : <WizardFlow {...props} phone={null} />
+}
+
+/** 手机:先只画外壳底子,等 host.prepare()(最多 PHONE_PREPARE_CAP_MS)回来再定步骤序、画真引导。 */
+function PhoneGate({ host, ...props }: WizardProps & { host: PhoneGuideHost }) {
+  const [run, setRun] = useState<PhoneRun | null>(null)
+  const reduceMotion = useReducedMotionPref()
+  useEffect(() => {
+    let live = true
+    let settled = false
+    const settle = (): void => {
+      if (!live || settled) return
+      settled = true
+      clearTimeout(timer)
+      // 本机记号读不出来 = 不知道这个人走没走过:不当成新人去走完整的手机引导,也不据此记手机引导的版本和主页建议 ——
+      // 落回没登记时的步骤序(只有外观一屏)。正常走不到这里:记号读不了时 appStore 那边根本不会打开引导。
+      const keys = readPhoneGuideKeys()
+      setRun({ host, ...(keys ? phoneGuidePlan(keys, (s) => host.available(s)) : { mode: 'none' as const, order: [] }) })
+    }
+    const timer = setTimeout(settle, PHONE_PREPARE_CAP_MS)
+    let ready: Promise<void>
+    try { ready = Promise.resolve(host.prepare()) } catch { ready = Promise.resolve() }
+    void ready.catch(() => {}).then(settle)
+    return () => { live = false; clearTimeout(timer) }
+  }, [host])
+  if (run) return <WizardFlow {...props} phone={run} />
+  return <div className="ob-shell ob-flow ob3" data-step="pending">
+    <div className="ob3-paper" aria-hidden="true"><div className="hp-wallpaper-art"><HomeWallpaperArt preset="orbit" hour={12} minute={0} still={reduceMotion} /></div></div>
+  </div>
+}
+
+function WizardFlow({ themeLang, themeSkin, themeMode, themeModePref, themeSeed, onThemeChange, onSeedChange, onReconnect, onFinish, phone }: WizardProps & { phone: PhoneRun | null }) {
   const { t } = useI18n()
+  /** 手机引导这一趟(full / update);'none' 和没登记一样走下面原来的步骤序。 */
+  const phoneRun = phone && phone.mode !== 'none' ? phone : null
   // 挂载时定死:结束时 store 会清掉标志,退场动效那半秒里不能变回完整版;步骤序也不能中途变。
   const [updateMode] = useState(() => !!useApp.getState().onboardingUpdate)
   /** 以前走过 / 跳过过引导(有完成记号):完整引导第一屏叫「欢迎回来」,电脑历史不替他预开。 */
   const [returning] = useState(() => readKey(ONBOARDING_DISMISS_KEY) !== null)
   const [order] = useState<Step[]>(() => {
+    if (phoneRun) return phoneRun.order
     const full = stepOrder({ host: onHost() })
     const seen = readKey(ONBOARDING_VERSION_KEY)
     return updateMode && !needsFullGuide(seen) ? updateOrder(full, seen) : full
@@ -82,14 +132,19 @@ export const OnboardingWizard: React.FC<{
   const brief = order[0] === 'welcome'
   // 匿名遥测:每屏停留、往回跳、收尾方式,关掉时发一条(onboarding/onboardingTelemetry.ts)
   const [tele] = useState(() => createOnboardingTracker(onboardingMode({ brief, updateMode, returning })))
-  const [step, setStep] = useState<Step>(order[0])
-  const [furthest, setFurthest] = useState(0)
+  // 手机:App 被杀前做到哪一屏就从哪一屏接着来(前面那几屏算到过,进度点能点回去)
+  const [startAt] = useState(() => phoneRun ? resumePhoneGuideAt(order) : 0)
+  const [step, setStep] = useState<Step>(order[startAt])
+  const [furthest, setFurthest] = useState(startAt)
   const idx = order.indexOf(step)
   const last = idx === order.length - 1
   const [saving, setSaving] = useState(false)
   const [screenBusy, setScreenBusy] = useState(false)
   const [saveError, setSaveError] = useState('')
-  const commitRef = useRef<(() => Promise<void>) | null>(null)
+  /** 返回 false = 留在这一屏、不报错(手机权限那屏刚过完系统框,要让人看到结果)。 */
+  const commitRef = useRef<(() => Promise<void | boolean>) | null>(null)
+  /** 这一屏换掉的主按钮文字(手机屏:「开启 2 项」「跳过」);换屏时在 go() 里清掉。 */
+  const [screenLabel, setScreenLabel] = useState<string | null>(null)
   const mainRef = useRef<HTMLElement | null>(null)
   /** 上一次换屏的方向(第一屏没有,不动)。 */
   const [nav, setNav] = useState<'fwd' | 'back' | null>(null)
@@ -131,6 +186,7 @@ export const OnboardingWizard: React.FC<{
   // 换屏:清掉上一屏的错误,焦点落在这一屏的标题上(读屏器从标题读起)
   useEffect(() => {
     tele.enter(step, order.indexOf(step))
+    if (phoneRun) notePhoneGuideStep(step)
     setSaveError('')
     const id = requestAnimationFrame(() => {
       mainRef.current?.querySelector<HTMLElement>('[data-ob-title]')?.focus({ preventScroll: true })
@@ -155,6 +211,8 @@ export const OnboardingWizard: React.FC<{
       localStorage.setItem(ONBOARDING_DISMISS_KEY, '1')
       localStorage.setItem(ONBOARDING_VERSION_KEY, version)
     } catch { /* 隐私窗口里可能写不了 */ }
+    // 手机:记下看过这一版手机引导、清掉「做到哪」;走的是完整引导才让主页出那四条建议(老用户补看不出)
+    if (phoneRun) finishPhoneGuide(phoneRun.mode === 'full')
     // 后台去开,不挡收尾。不跳蓬洲云「同步」页(11-08):云端已有数据要用户定的,回主页由首登卡片带着数字问
     if (pick && syncBase && window.remoteSync) {
       const kinds = (['notes', 'plugins'] as const).filter((k) => (k !== 'notes' || syncBase.notesShown) && pick[k] !== syncBase[k])
@@ -168,7 +226,7 @@ export const OnboardingWizard: React.FC<{
     const run = commitRef.current
     if (!run) return true
     setSaving(true); setSaveError('')
-    try { await run(); return true } catch (e) {
+    try { return (await run()) !== false } catch (e) {
       setSaveError(t('ob3.saveFail', { error: errText(e) }))
       return false
     } finally { setSaving(false) }
@@ -177,6 +235,8 @@ export const OnboardingWizard: React.FC<{
     if (next < 0 || next >= order.length) return
     setFurthest((f) => Math.max(f, next))
     setNav(next > idx ? 'fwd' : 'back')
+    // 和换屏同一批清掉:新一屏自己的挂载效果先于外壳的效果跑,放到换屏效果里清会把它刚设的字冲掉
+    setScreenLabel(null)
     setStep(order[next])
   }
   const forward = async (): Promise<void> => {
@@ -191,6 +251,10 @@ export const OnboardingWizard: React.FC<{
     go(target)
   }
   const locked = saving || screenBusy
+
+  // 手机系统返回 = 上一屏。第一屏上不接(交给 MobileRoot 收起 App);锁着时接住但不动,免得落到下面去收起 App。
+  // 返回永远不关引导:退出只走「跳过引导」,那条会记完成记号。
+  useMobileBackClose(!!phone && idx > 0, () => { if (!finished.current && !locked) go(idx - 1) })
 
   // 回车 = 右下角的主按钮。焦点在输入框、按钮、开关这类自己要吃回车的控件上,或有弹窗开着时不接。
   const primaryRef = useRef({ run: forward, disabled: locked })
@@ -214,9 +278,9 @@ export const OnboardingWizard: React.FC<{
   const onBusyChange = useCallback((v: boolean) => setScreenBusy(v), [])
   const onOpenAgents = useCallback((v: boolean) => { openAgents.current = v }, [])
 
-  const primaryLabel = last
+  const primaryLabel = screenLabel ?? (last
     ? t(brief ? (order.length === 1 ? 'onboarding.update.continue' : 'onboarding.update.finish') : 'ob3.getStarted')
-    : step === 'start' && !connected ? t('ob3.skipConnect') : t('ob3.next')
+    : step === 'start' && !connected ? t('ob3.skipConnect') : t('ob3.next'))
   const hint = step === 'start' ? t('ob3.changeLater') : step === 'theme' ? t('ob3.theme.fontHint')
     : step === 'you' ? t('ob3.you.skipHint') : step === 'team' ? t('ob3.team.skipHint') : ''
   const reduceMotion = useReducedMotionPref()
@@ -233,14 +297,19 @@ export const OnboardingWizard: React.FC<{
       case 'start': return <StartScreen resolveTarget={onboardingTarget} returning={returning} syncPick={syncPick} syncBase={syncBase} onSyncPick={setSyncPick} onSyncSeed={onSyncSeed} onSyncSeen={onSyncSeen}
         onConnected={onConnected} onSignedIn={onSignedIn} onReconnect={onReconnect} onBusyChange={onBusyChange} />
       case 'theme': return <ThemeScreen themeLang={themeLang} themeSkin={themeSkin} themeMode={themeMode} themeModePref={themeModePref} themeSeed={themeSeed}
-        onThemeChange={onThemeChange} onSeedChange={onSeedChange} />
-      case 'you': return <YouScreen resolveTarget={onboardingTarget} commitRef={commitRef} />
-      case 'team': return <TeamScreen resolveTarget={onboardingTarget} commitRef={commitRef} signedIn={signedIn} fresh={!returning && !brief}
+        onThemeChange={onThemeChange} onSeedChange={onSeedChange} variant={phoneRun ? 'phone' : undefined} />
+      case 'you': return <YouScreen resolveTarget={onboardingTarget} commitRef={commitRef as React.MutableRefObject<(() => Promise<void>) | null>} />
+      case 'team': return <TeamScreen resolveTarget={onboardingTarget} commitRef={commitRef as React.MutableRefObject<(() => Promise<void>) | null>} signedIn={signedIn} fresh={!returning && !brief}
         onOpenAgents={onOpenAgents} onBusyChange={onBusyChange} />
+      case 'where': case 'perms': {
+        // 手机特有的两屏由手机入口登记进来(共用代码不 import mobile/src);步骤序里有它们就一定登记过
+        const Screen = phone?.host.screens[step]
+        return Screen ? <Screen commitRef={commitRef} setPrimaryLabel={setScreenLabel} onBusyChange={onBusyChange} /> : null
+      }
     }
   }
 
-  return <div className="ob-shell ob-flow ob3" data-step={step} data-mode={brief ? 'update' : 'full'} data-nav={nav || undefined}>
+  return <div className="ob-shell ob-flow ob3" data-step={step} data-mode={brief ? 'update' : 'full'} data-nav={nav || undefined} data-phone={phoneRun?.mode}>
     <div className="ob3-paper" aria-hidden="true"><div className="hp-wallpaper-art"><HomeWallpaperArt preset="orbit" hour={12} minute={0} still={reduceMotion} /></div></div>
     <header className="ob3-top">
       {order.length > 1 ? <nav className="ob3-dots" aria-label={t('ob3.progress', { n: idx + 1, total: order.length })}>
@@ -259,7 +328,7 @@ export const OnboardingWizard: React.FC<{
       </ErrorBoundary>
     </StepPane>
     <footer className="ob3-foot">
-      <div className={`ob3-foot-in ${FOOT_WIDTH[step] || 'narrow'}`}>
+      <div className={`ob3-foot-in ${(phoneRun ? undefined : FOOT_WIDTH[step]) || 'narrow'}`}>
         <button type="button" className="ob3-back" disabled={idx === 0 || locked} onClick={() => go(idx - 1)}><ArrowLeft size={14} aria-hidden="true" />{t('onboarding.nav.prev')}</button>
         <span className="ob3-foot-hint">{saveError ? <span className="ob3-error" role="alert">{saveError}</span> : hint}</span>
         <button type="button" className="btn primary" data-ob-primary="" disabled={locked} onClick={() => void forward()}>
