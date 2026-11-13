@@ -570,13 +570,17 @@ function parseRunResult(v: unknown): any {
  *    (新会话没有 run)都落在这里。引擎会话里记着界面上已经没有的东西,不能接着用。
  *  - 只看最近那一次,不往更早找:更早的指针指的是同一个引擎会话的旧状态,对得上也已经被后面的轮次写过了。
  *  - 引擎或工作目录换了、上一次续接时引擎说那个会话没有了(externalSessionReset),也不续接。
- *  - 对话自那一轮以后被改写过(截断重发 / 回退,都会让历史版本号加一)也不续接。上面那条「最新的回答」认不出一种情况:
- *    那一轮被停掉、什么都没落库,用户随后把那一句改了重发 —— 库里看起来和没改过一样,引擎会话里却还记着被弃掉的那一句。
+ *  - 「最新的回答」那一条认不出一种情况:那一轮没跑完(被停 / 中途出错),什么都没落库,用户随后把那一句**改成了别的话**
+ *    重发 —— 库里看起来和没改过一样,引擎会话里却还记着被弃掉的那一句。所以没跑完的那一支多看两样:对话自那以后被改写过
+ *    (截断重发 / 回退都走删消息入口,历史版本号加一),并且这次发的不是那一轮的原话 → 不续接。
+ *    原样重试(客户端的「重试」也走截断重发)照旧续接:同一句话再说一遍,没有被弃掉的东西,新开反而是不声不响丢上文。
+ *    跑完的那一支不看版本号:截断只删尾部,删到引擎见过的东西时「最新的回答」已经对不上了;而它后面那些没建成引擎会话的
+ *    失败(被占着、起不来)被重试时也会让版本号加一,那不该挡住续接。
  *    版本号是进程内的:指针不是本进程记的(引擎重启过)就不知道改没改过,只按上面几条判。
  * 返回 latest(会话里最新一条回答的 id,没有为 null),本轮的指针拿它当 after。回答在 chat_messages 里的 role 是 'model'。
  */
 export async function resumableExternalSession(
-  sessionId: string, runId: string, assistantId: string, engineId: string, cwd: string,
+  sessionId: string, runId: string, assistantId: string, engineId: string, cwd: string, message = '',
 ): Promise<{ resumeId?: string; latest: string | null }> {
   const msgs = await query<any[]>(
     `SELECT id FROM chat_messages WHERE session_id = ? AND role = 'model' AND id <> ? ORDER BY timestamp DESC LIMIT 1`,
@@ -589,7 +593,7 @@ export async function resumableExternalSession(
   // 只取带指针 / 带「没有了」记号的 run 再截断:中间夹着多少次没建成引擎会话的失败(被占着、起不来)都不该把它挤出去 ——
   // 挤出去就成了不声不响地新开。两个键名都以 `"externalSession` 开头且紧跟冒号(externalSessionId 不算)。
   const runs = await query<any[]>(
-    `SELECT status, assistant_message_id, result FROM agent_runs WHERE session_id = ? AND id <> ?
+    `SELECT status, assistant_message_id, result, input FROM agent_runs WHERE session_id = ? AND id <> ?
        AND (CAST(result AS TEXT) LIKE '%"externalSession":%' OR CAST(result AS TEXT) LIKE '%"externalSessionReset":%')
      ORDER BY created_at DESC${getDbType() === 'sqlite' ? ', rowid DESC' : ', updated_at DESC'} LIMIT 4`,
     [sessionId, runId],
@@ -600,9 +604,11 @@ export async function resumableExternalSession(
     const p = result.externalSession;
     if (!p || typeof p !== 'object' || typeof p.id !== 'string' || !p.id) continue;
     const own: string | null = r.assistant_message_id ?? null;
-    const inStep = (own !== null && latest === own) || (r.status !== 'done' && latest === (p.after ?? null));
+    const finished = r.status === 'done';
+    const inStep = (own !== null && latest === own) || (!finished && latest === (p.after ?? null));
     const rewritten = p.epoch === historyEpoch && typeof p.rev === 'number' && p.rev !== historyRevision(sessionId);
-    return { latest, resumeId: p.engineId === engineId && p.cwd === cwd && inStep && !rewritten ? p.id : undefined };
+    const discarded = !finished && rewritten && String(parseRunResult(r.input).message ?? '') !== message;
+    return { latest, resumeId: p.engineId === engineId && p.cwd === cwd && inStep && !discarded ? p.id : undefined };
   }
   return { latest };
 }
@@ -661,7 +667,7 @@ async function externalEngineLoop(runId: string, ac: AbortController, run: any, 
     // 不传 cwd 的会话,引擎进程落在本进程的当前目录:指针里记实际目录,目录变了就不续接(引擎续接时要核对工作目录)。
     chatResume = !storedAgentConfig?.pluginOwner;
     const pointerCwd = engineCwd ?? process.cwd();
-    const chain = chatResume ? await resumableExternalSession(sessionId, runId, assistantId, engineId, pointerCwd) : undefined;
+    const chain = chatResume ? await resumableExternalSession(sessionId, runId, assistantId, engineId, pointerCwd, String(input.message || '')) : undefined;
     ac.signal.throwIfAborted();
     const result = await engines.run({
       engineId,

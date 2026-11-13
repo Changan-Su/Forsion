@@ -309,6 +309,21 @@ const SCENARIOS = {
       ['改写后的这一轮换了一个 DSH 会话', ps.length === 3 && !!ps[1].ext && !!ps[2].ext && ps[2].ext !== ps[1].ext, ps.map((p) => `${p.status}:${p.ext?.slice(0, 8)}`).join(' → ')],
     ], '改写后的这一轮是全新的 DSH 会话,连第一轮也不带(已知的限制)');
   },
+  // 停掉一轮之后原样重试(客户端的「重试」也走删消息入口):同一句话再说一遍,没有被弃掉的东西,仍然接着原来的会话
+  stopretry: async () => {
+    const sid = await newSession('stopretry');
+    stub.script([{ text: 'Noted: the code word is SR-6.' }]); const a = await run(sid, 'Remember the code word SR-6.');
+    const n0 = stub.mark(); stub.script([{ hang: true }]);
+    const b = await run(sid, 'RETRIED-PROMPT-8 what is the code word?', {}, { stopOn: () => stub.mark() > n0 });
+    await api(`/agent/sessions/${sid}/messages/delete`, { method: 'POST', body: JSON.stringify({ ids: ['client-only-user-message', 'client-only-placeholder'] }) });
+    const n = stub.mark(); stub.script([{ text: 'SR-6.' }]); const c = await run(sid, 'RETRIED-PROMPT-8 what is the code word?');
+    const req = stub.since(n)[0]; const ps = await pointers(sid);
+    record('stopretry', '停掉一轮后原样重试,仍然记得前面的', [
+      ['第一轮跑完、第二轮被停、第三轮跑完', a.done && b.aborted && c.done, `${a.error || ''} ${b.error || ''} ${c.error || ''}`],
+      ['重试的这一轮仍带着第一句', has(req, 'Remember the code word SR-6.')],
+      ['三轮是同一个 DSH 会话', ps.length === 3 && !!ps[0].ext && ps.every((p) => p.ext === ps[0].ext), ps.map((p) => `${p.status}:${p.ext?.slice(0, 8)}`).join(' → ')],
+    ]);
+  },
   // 第一句就被停掉:第二句接得上同一个 DSH 会话
   stopfirst: async () => {
     const sid = await newSession('stopfirst');
@@ -351,6 +366,8 @@ const SCENARIOS = {
     const n1 = stub.mark(); const b = await run(sid, 'What is the code word?');
     const askedModel = stub.mark() > n1;
     await holder.kill();
+    // 放开后用户点的是「重试」:客户端先把失败的那一句交给删消息入口(截断重发),再原样发一遍
+    await api(`/agent/sessions/${sid}/messages/delete`, { method: 'POST', body: JSON.stringify({ ids: ['client-only-user-message', 'client-only-placeholder'] }) });
     const n = stub.mark(); stub.script([{ text: 'BUSY-2.' }]); const c = await run(sid, 'What is the code word?');
     const req = stub.since(n)[0];
     record('busy', '会话被另一个 DSH 进程占着:照实失败,放开后接得上', [
@@ -358,7 +375,7 @@ const SCENARIOS = {
       ['另一个进程占住了它', !!held.result, JSON.stringify(held.error || '')],
       ['占着的时候这一轮失败,说明了原因', !!b.error && /another window or process/.test(b.error), b.error || '(没报错)'],
       ['失败的那一轮没有偷偷新开会话去问模型', !askedModel],
-      ['放开后再发,跑完并记得第一句', c.done && has(req, 'Remember the code word BUSY-2.'), c.error || ''],
+      ['放开后点重试,跑完并记得第一句', c.done && has(req, 'Remember the code word BUSY-2.'), c.error || ''],
     ]);
   },
   // 续接被拒 · 那场会话在 DSH 那边没有了:这一句照实失败,再发一次新开

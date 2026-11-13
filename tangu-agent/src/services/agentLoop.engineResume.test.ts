@@ -68,11 +68,11 @@ afterEach(async () => {
 });
 
 /** 发一句,等这一轮结束。stopWhenStarted = 引擎会话建立后按停止键。回 { done, error }。 */
-async function turn(n: number, cfg: Record<string, unknown> = {}, opts: { stopWhenStarted?: boolean; session?: string } = {}) {
+async function turn(n: number, cfg: Record<string, unknown> = {}, opts: { stopWhenStarted?: boolean; session?: string; message?: string } = {}) {
   const runId = `r${n}`; runs.push(runId);
   const sid = opts.session || 'S';
   await createRun({ id: runId, sessionId: sid, userId: 'u1', appId: 'tangu', modelId: 'm1', assistantMessageId: `a${n}`,
-    input: { message: `q${n}`, userMessageId: `u${n}`, attachments: [], agentConfig: { engineId: 'dsh', execMode: 'host', cwd: home, approvalMode: 'readonly', compaction: { enabled: false }, ...cfg } } });
+    input: { message: opts.message ?? `q${n}`, userMessageId: `u${n}`, attachments: [], agentConfig: { engineId: 'dsh', execMode: 'host', cwd: home, approvalMode: 'readonly', compaction: { enabled: false }, ...cfg } } });
   const out = { done: false, error: '' };
   const ended = new Promise<void>((resolve) => {
     const off = subscribe(runId, (event) => {
@@ -134,8 +134,32 @@ describe('普通引擎对话的续接', () => {
     expect((await resultOf(3)).result.externalSession).toMatchObject({ id: 'ext-2', rev: 1 });
   }, 20_000);
 
-  it('指针不是本进程记的(引擎重启过,版本号从头数)→ 不知道改没改过,不拿两个数字硬比', async () => {
+  // 客户端的「重试」也走截断重发(版本号加一),但发的是原话:没有被弃掉的东西,照旧续接 —— 新开等于不声不响丢上文。
+  it('第二轮被停 / 中途出错后原样重试 → 照样续接', async () => {
     await turn(1);
+    next = [{ hang: true }];
+    await turn(2, {}, { stopWhenStarted: true });
+    bumpHistoryRevision('S');
+    expect((await turn(3, {}, { message: 'q2' })).done).toBe(true);
+    expect(resumes()).toEqual([null, 'ext-1', 'ext-1']);
+  }, 20_000);
+
+  it('一轮没建成引擎会话就失败了(被占着),那边放开后点重试 → 照样续接上一轮的会话', async () => {
+    await turn(1);
+    next = [{ busy: true }];
+    expect((await turn(2)).error).toMatch(/open in another window/);
+    bumpHistoryRevision('S'); // 重试:截断重发把失败的那一句删了再发
+    expect((await turn(3, {}, { message: 'q2' })).done).toBe(true);
+    bumpHistoryRevision('S'); // 改成别的话再发也一样:那一句引擎从没见过,没有什么要弃掉
+    next = [{ busy: true }]; await turn(4);
+    bumpHistoryRevision('S');
+    expect((await turn(5, {}, { message: 'something else' })).done).toBe(true);
+    expect(resumes()).toEqual([null, 'ext-1', 'ext-1', 'ext-1', 'ext-1']);
+  }, 20_000);
+
+  it('指针不是本进程记的(引擎重启过,版本号从头数)→ 不知道改没改过,不拿两个数字硬比', async () => {
+    next = [{ hang: true }];
+    await turn(1, {}, { stopWhenStarted: true });
     const [row] = await query<any[]>(`SELECT result FROM agent_runs WHERE id = 'r1'`);
     const result = JSON.parse(row.result);
     result.externalSession.epoch = 'another-process'; result.externalSession.rev = 7;
