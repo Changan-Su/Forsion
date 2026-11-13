@@ -68,6 +68,19 @@ it('retains the legacy cap when the current tool loadout cannot retrieve spill h
   expect(await formatToolOutput({ ...ctx, canReadToolOutput: false }, 'unit', text)).toBe(text);
 });
 
+it('preserves instruction text with or without a reader while the same ordinary data still spills', async () => {
+  const text = 'Instruction paragraph.\n'.repeat(2500) + 'MIDDLE_REQUIREMENT\n' + 'More instructions.\n'.repeat(2500);
+  for (const canReadToolOutput of [true, false]) {
+    expect(await formatToolOutput({ ...ctx, canReadToolOutput }, 'use_skill', text, 'instructions')).toBe(text);
+  }
+  expect(await fs.readdir(home)).toEqual([]);
+  // The label alone is not authority to bypass output limits.
+  const data = await formatToolOutput(ctx, 'use_skill', text);
+  expect(data).not.toContain('MIDDLE_REQUIREMENT');
+  expect(data).toContain('read_tool_output');
+  expect(estimateTokensRough(data)).toBeLessThanOrEqual(toolOutputTokenBudget(ctx));
+});
+
 it('bounds serialized pages so escape-heavy text and many tiny matches never spill again', async () => {
   const small = { ...ctx, contextWindow: 8000 };
   for (const full of ['FINDING ' + '\u0000'.repeat(4000), 'x\n'.repeat(2500)]) {

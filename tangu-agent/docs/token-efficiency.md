@@ -42,6 +42,21 @@ read the source again. Existing history is not repeatedly re-truncated. Data wit
 artifacts follow their home/workspace lifecycle, so long-lived local stores can
 grow. Forked sessions do not inherit another session's handles.
 
+Successful `use_skill` results are instruction text, not optional data previews.
+The tool declares the internal `outputKind: instructions` delivery category, so
+the loop preserves the complete result within the skill loader's existing
+120,000-character source limit, even when `read_tool_output` is unavailable.
+The category is read from the registered tool, never from model arguments or
+returned text; it grants no additional tool access, approval or filesystem rights.
+Ordinary results and errors still use the data budget and spill reader. Privacy
+placeholders and read-only program boundaries run before this formatting choice
+and are unchanged. General context budgets, compaction and history size limits
+still apply; skills remain loaded on demand instead of entering the system prefix.
+Regression checks: `npx vitest run test/agentLoopSkillOutput.test.ts
+src/tools/builtin/skills.test.ts src/tools/outputPersist.test.ts` from `tangu-agent`.
+The loop check uses SQLite and captures the actual provider messages and stored
+tool results, including a long instruction's middle and the ordinary error path.
+
 Measure actual provider usage, including cached inputs, output/reasoning and task
 correctness. Fewer tokens and lower charged cost are distinct metrics. Subscription
 usage does not establish a per-request monetary bill. The matched production
