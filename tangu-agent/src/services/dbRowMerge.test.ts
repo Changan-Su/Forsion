@@ -51,8 +51,8 @@ describe('mergeDbFile', () => {
     expect(out.rows.map((row: any) => [row.cells.b1, row.cells.b2])).toEqual([['on B', '2026-10-21'], ['on A', '2026-10-21']]);
     expect(out.views).toEqual([{ id: 'v1', name: 'Cal', type: 'calendar', calendar: { dateCol: 'b2' } }]);
   });
-  // 日程标记是行上的保留单元格键 `_kind`(不是列):合并按整行搬,对列、换列 id 时都不能把它丢掉
-  it('keeps a reserved cell key that is not a column (the `_kind` event mark) through a merge and a column line-up', () => {
+  // 行上不是列的单元格键(例:11-09 那版日程记号 `_kind`,11-13 已撤、没人读,但旧数据里还有):合并按整行搬,对列、换列 id 时都不能把它丢掉
+  it('keeps a cell key that is not a column (the withdrawn `_kind` mark still in old files) through a merge and a column line-up', () => {
     const cal = (rows: unknown[]) => JSON.stringify({ version: 2, name: '我的日历', columns: [{ id: 'n', name: '名称', type: 'text' }, { id: 'd', name: '日期', type: 'calendarDate' }], rows });
     const ev = { id: 'e', cells: { n: '组会', d: '2026-11-10T15:00', _kind: 'event' } };
     // 一边加了带标记的行,另一边加了别的行

@@ -207,7 +207,7 @@ export function TodoListView({ params, leaf }: { params?: Record<string, unknown
     for (const m of allSources) {
       const checkCol = m.checkboxCol as string
       const color = colorForDb(vault, byVault, m.db.path, members.indexOf(m))
-      for (const r of todoRowsOf(m)) { // 日历上建的日程(带标记且有日期)不进待办
+      for (const r of todoRowsOf(m)) {
         const raw = typeof r.cells[m.dateCol] === 'string' ? (r.cells[m.dateCol] as string) : ''
         out.push({ key: `db:${m.db.path}:${r.rowId}`, name: r.name || t('todolist.untitled'), checked: r.cells[checkCol] === true, raw, source: m.db.name, short: m.db.name, color, db: m, rowId: r.rowId })
       }
