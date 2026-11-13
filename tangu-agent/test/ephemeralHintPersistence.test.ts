@@ -127,10 +127,13 @@ describe('尾部 user 通道:本轮可见 / 不落库 / 不回放', () => {
     script = [finalStep('答一。')];
     expect((await runToSettled(FIRST_MESSAGE, { ephemeralHint: HINT })).status).toBe('done');
 
-    // ① 本轮 wire:两个乘客都挂在**最后一条 user 消息**上
+    // ① 本轮 wire:原文独立保留,两个乘客使用最后一条运行时 user 载体。
+    const users = llmPayloads[0].messages.filter((m: any) => m.role === 'user');
+    expect(textOf(users[0])).toBe(FIRST_MESSAGE);
+    expect(users).toHaveLength(2);
     const tail = tailOf(llmPayloads[0]);
     expect(tail.role).toBe('user');
-    expect(textOf(tail)).toContain(FIRST_MESSAGE);
+    expect(textOf(tail)).not.toContain(FIRST_MESSAGE);
     expect(textOf(tail)).toContain(HINT);
     expect(textOf(tail)).toContain(RECALL_HEADER);
     expect(textOf(tail)).toContain('VOLATILE-EVIDENCE-2');

@@ -3,7 +3,7 @@
  *
  * 为什么是硬门禁:直连的功能在 thin worker(云端 Web / 移动端)天生是死的——2026-09 记忆系统「桌面全血、
  * 云端残血」的唯一根因就是五个服务长在 fs + query 上(memoryRepository / memoryCandidates / memoryDream /
- * localHistorian / sessionSearch)。会话召回已改走 StateStore,SQL 后端在 BACKENDS 里逐文件放行(只放行 core/db.js)。
+ * localHistorian / sessionSearch)。会话召回已改走 StateStore,物理后端在 BACKENDS 里逐文件、逐能力放行。
  *
  * 棘轮语义(照 desktop 的 check:parity):
  *   - 范围内的文件不得含被禁 import;新文件默认受管。范围 = services/ 与 tools/builtin/ **递归**、按文件名模式;
@@ -27,10 +27,11 @@ const BANNED: Array<{ id: string; re: RegExp }> = [
   { id: 'node:fs', re: /(from\s*|import\s*\(\s*|require\s*\(\s*)['"](node:fs|fs|node:fs\/promises|fs\/promises)['"]/ },
   { id: 'core/db.js', re: /(from\s*|import\s*\(\s*|require\s*\(\s*)['"](\.\.\/)+core\/db\.js['"]/ },
 ];
-/** 持库后端实现:逐文件、逐 import 放行(只放 core/db.js,node:fs 一律不放)。 */
+/** 物理后端实现:SQL 查询只放 core/db.js;HTTP 终态投递日志只放 node:fs。应用服务不直接访问日志。 */
 const BACKENDS: Record<string, string[]> = {
   'services/sessionSearchSql.ts': ['core/db.js'],
   'services/stateStore/sqlStateStore.ts': ['core/db.js'],
+  'services/stateStore/completionOutbox.ts': ['node:fs'],
 };
 /** 存量欠债:清一个删一行。理由写清「为什么还在」与「哪一步清」。 */
 const KNOWN_DEBT: Record<string, { imports: string[]; reason: string }> = {
@@ -88,11 +89,20 @@ describe('memory / historian / session-recall seam boundary', () => {
     const leaks = scopedFiles().filter((f) => !KNOWN_DEBT[f] && !BACKENDS[f]).map((f) => ({ f, banned: bannedIn(f) })).filter((x) => x.banned.length);
     expect(leaks, '新增直连 fs/db 的记忆层文件:云端(thin worker)会整体不可用,改走 deps().state / deps().brain').toEqual([]);
   });
-  it('backends may touch only what they are allowed to (core/db.js), never node:fs', () => {
+  it('backends may touch only their explicitly assigned storage capability', () => {
     for (const [f, allowed] of Object.entries(BACKENDS)) {
       expect(scopedFiles(), `${f} 已不在范围内,更新 BACKENDS`).toContain(f);
       expect(bannedIn(f).filter((id) => !allowed.includes(id)), `${f} 越过了后端放行清单`).toEqual([]);
     }
+  });
+  it('the durable completion journal is private to the HTTP StateStore backend', () => {
+    const importers = walk(ROOT).filter((full) => {
+      const src = stripComments(readFileSync(full, 'utf8'));
+      return /(from\s*|import\s*\(\s*|require\s*\(\s*)['"][^'"]*\/completionOutbox\.js['"]/.test(src);
+    }).map((full) => relative(ROOT, full).split(sep).join('/'));
+    expect(importers).toEqual(['services/stateStore/httpStateStore.ts']);
+    expect(bannedIn('services/stateStore/httpStateStore.ts')).toEqual([]);
+    expect(bannedIn('services/stateStore/completionOutbox.ts')).toEqual(['node:fs']);
   });
   it('KNOWN_DEBT entries are still real (a cleared file must be removed from the list)', () => {
     for (const [f, debt] of Object.entries(KNOWN_DEBT)) {
