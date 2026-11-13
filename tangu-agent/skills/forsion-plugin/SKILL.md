@@ -810,7 +810,7 @@ ctx.registerToolLabel?.({
     return {
       text: call.locale === 'en'
         ? `${call.phase === 'running' ? 'Clicking' : 'Clicked'} “Send” in ${app}`
-        : `${call.phase === 'running' ? '正在' : '已'}在 ${app} 中点击「发送」`,
+        : `${call.phase === 'running' ? '正在' : '已在'} ${app} 中点击「发送」`,
       icon: { appBundleId: bundleIdFor(app) },  // optional; the usual tool icon shows where it cannot be resolved
     }
   },

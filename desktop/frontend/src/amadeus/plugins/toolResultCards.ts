@@ -155,6 +155,7 @@ export interface HostToolLabel { text: string; appBundleId?: string }
 const LABEL_MAX = 200
 const EARLIER_MAX = 40
 const BUNDLE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$/
+const labelWarned = new Set<string>()
 
 /** toolName 归哪条句子贡献:注册序先到先得,且必须是本插件引擎半身名下的工具。 */
 export function claimToolLabel(
@@ -207,7 +208,12 @@ export function toolLabelOf(
   }
   let out: ToolLabel | null | undefined | void
   try { out = hit.item.describe(call) } catch (e) {
-    console.warn(`[plugin:${hit.pluginId}] registerToolLabel describe threw`, e)
+    // 每次渲染都会调(流式期间按 token),只报一次,别刷屏
+    const key = `${hit.pluginId}\u0000${ev.name}`
+    if (!labelWarned.has(key)) {
+      labelWarned.add(key)
+      console.warn(`[plugin:${hit.pluginId}] registerToolLabel describe threw (reported once per tool)`, e)
+    }
     return undefined
   }
   const text = out && typeof out === 'object' && typeof out.text === 'string' ? out.text.replace(/\s+/g, ' ').trim().slice(0, LABEL_MAX) : ''
@@ -270,6 +276,7 @@ export function toolCardTitle(item: ToolResultRendererContribution): string {
 /** 仅供单测复位。 */
 export const __resetToolCards = (): void => {
   cardStates.clear()
+  labelWarned.clear()
   lastStaleKick = 0
   ownerKick = 0
   useEngineTools.setState({ byEngine: {}, official: [], toolOwner: {}, loaded: false })

@@ -547,8 +547,7 @@ describe('subscribeAgentStatus(Desk 伴随面 / ctx.tangu.subscribeAgentStatus �
   })})
 
 // ctx.tangu.stop / 按 runId 取状态(2026-11-13):停止走 appStore.stop(输入框停止按钮那条),会话先钉死。
-// 负对照(已实跑红):stopAgentRun 里 `{ runId }` 找不到时回落 activeId → 「不命中不停别的会话」红;
-// subscribeAgentStatus 的按 run 引用里去掉 runningBySession → 「run 出现时响」红。
+// 负对照(已实跑红):resolveStatusTarget 在 `{ runId }` 找不到时回落 activeId → 「不命中不停别的会话」「run 结束响一次 idle」红。
 describe('ctx.tangu.stop 与 { runId } 参数', () => {
   const T0 = 6_000_000
   const user = (id: string): UiMessage => ({ id, role: 'user', content: 'hi', status: 'done', timestamp: T0 })

@@ -301,7 +301,7 @@ export function subscribeAgentStatus(cb: (s: TanguAgentStatus) => void, target?:
     const sessionId = resolveStatusTarget(s, target).sessionId
     return (sessionId === undefined ? s.activeId : sessionId) ?? null
   }
-  // 按 runId 订:那个 run 何时出现 / 结束看 runningBySession 本身,它也得进引用比较
+  // 按 runId 订:那个 run 何时出现 / 结束看 runningBySession 本身。sidOf 在 null ↔ 会话间翻也会改引用形状,这条是兜底
   const refsOf = (s: AppState): unknown[] => (byRun ? [s.runningBySession, ...statusRefs(s, sidOf(s))] : statusRefs(s, sidOf(s)))
   const s0 = useApp.getState()
   let last = statusOf(s0, target, Date.now())

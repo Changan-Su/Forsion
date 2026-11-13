@@ -85,7 +85,8 @@ describe('② describe 的结果', () => {
   it('抛错 / 返回空 / text 不是字符串 → undefined;text 去空白截 200 字;图标只收像 bundle id 的串', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     expect(toolLabelOf(one(() => { throw new Error('bug') }), plugins, engine, 'zh', ev, 'done')).toBeUndefined()
-    expect(warn).toHaveBeenCalled()
+    expect(toolLabelOf(one(() => { throw new Error('bug') }), plugins, engine, 'zh', ev, 'running')).toBeUndefined()
+    expect(warn).toHaveBeenCalledTimes(1) // 每次渲染都调,同一个工具只报一次
     warn.mockRestore()
     expect(toolLabelOf(one(() => undefined), plugins, engine, 'zh', ev, 'done')).toBeUndefined()
     expect(toolLabelOf(one(() => ({ text: '   ' })), plugins, engine, 'zh', ev, 'done')).toBeUndefined()

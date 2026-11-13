@@ -313,7 +313,8 @@ const ToolRow: React.FC<{ ev: ToolEvent; desc: Desc; running: boolean; waiting: 
         <span className="tool-row-ic">{active ? <Dots /> : desc.appBundleId ? <AppOrKindIcon bundleId={desc.appBundleId} Fallback={Icon} /> : <Icon size={13} />}</span>
         <span className="tool-row-copy">
           <span className={`tool-row-copy-text${active ? ' chat-run-shimmer-text' : ''}`}>
-            <span className="tool-row-verb">{verb}</span>
+            {/* 插件整句可能带着脱敏过的原值(比如输入的文字):和目标一样过 MaskedText */}
+            <span className="tool-row-verb">{desc.sentence ? <MaskedText text={verb} masked={masked} /> : verb}</span>
             {!desc.sentence && <span className={`tool-row-target${desc.isFile ? ' file' : ''}`}><MaskedText text={desc.target} masked={masked} /></span>}
           </span>
         </span>
