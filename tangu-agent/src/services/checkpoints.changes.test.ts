@@ -2,7 +2,7 @@
  * 文件改动记录契约(listChanges / recordPostWrite 写后指纹 / restoreCodeSince 的 paths 与 keepEdited):
  * 真临时目录、真 snapshotBeforeWrite + recordPostWrite + 写盘,与 checkpoints.test 同一套 home 隔离。
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -38,6 +38,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   if (prevHome === undefined) delete process.env.TANGU_HOME;
   else process.env.TANGU_HOME = prevHome;
   rmSync(home, { recursive: true, force: true });
@@ -45,6 +46,35 @@ afterEach(() => {
 });
 
 describe('listChanges', () => {
+  async function writesAcrossClockRollback(): Promise<void> {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(2000);
+    write('other.txt', 'other before\n');
+    await agentWrite('s1', 'old', 'other.txt', 'other after\n');
+    clock.mockReturnValue(1000);
+    write('a.txt', 'v1\n');
+    await agentWrite('s1', 'before-prompt', 'a.txt', 'v2\n');
+    clock.mockReturnValue(1200);
+    await agentWrite('s1', 'after-prompt', 'a.txt', 'v3\n');
+  }
+
+  it('消息时间窗使用原始墙钟,不把回拨后的两次写入错分到旧检查点之后', async () => {
+    await writesAcrossClockRollback();
+    const [beforePrompt, afterPrompt] = await listChanges('s1', [{ since: 900, until: 1100 }, { since: 1100, until: 1300 }], { diff: true });
+    expect(beforePrompt).toHaveLength(1);
+    expect(afterPrompt).toHaveLength(1);
+    expect(beforePrompt[0]).toMatchObject({ path: f('a.txt'), runs: 1 });
+    expect(afterPrompt[0]).toMatchObject({ path: f('a.txt'), runs: 1 });
+    expect(beforePrompt[0].patch).toContain('-v1\n+v2');
+    expect(afterPrompt[0].patch).toContain('-v2\n+v3');
+  });
+
+  it('回退到消息墙钟1100保留1000已完成的修改,只撤销1200之后的目标写入', async () => {
+    await writesAcrossClockRollback();
+    const result = await restoreCodeSince('s1', 1100);
+    expect(result.failed).toEqual([]);
+    expect(readFileSync(f('a.txt'), 'utf8')).toBe('v2\n');
+  });
+
   it('modified:20 行里插一行 → +1 −0,hunk 头带真实行号', async () => {
     const before = lines(20);
     write('a.txt', before);
