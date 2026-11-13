@@ -65,7 +65,7 @@ import { act } from '../../activity/log'
 import { notifyApp } from '../../stores/notificationStore'
 import { panelToast } from '../../components/PanelNotice'
 import { currentLocale, registerMessages, subscribeLocale, translate } from '../../i18n'
-import { idleAgentStatus, readTangu, type TanguAgentStatus, type TanguCompleteRequest, type TanguStartChatResult } from './tanguSeam'
+import { idleAgentStatus, readTangu, type TanguAgentStatus, type TanguSessionTarget, type TanguCompleteRequest, type TanguStartChatResult } from './tanguSeam'
 import { registerDeskCompanion, revokeDeskCompanions, type DeskCompanionContribution, type DeskCompanionHandle } from './deskCompanion'
 import { registerSummaryCard, revokeSummaryCards, type SummaryCardContribution, type SummaryCardHandle } from './summaryCards'
 // ctx.desk 的宿主闸:端判定单源(currentPlatform)+ UI 模式(叶子模块,不经 @lcl/engine barrel)。
@@ -2780,11 +2780,19 @@ export const usePluginStore = create<PluginState>((set, get) => {
             subscribe: (cb: () => void) => scope.own('subscription', readTangu()?.subscribe(cb) ?? (() => {}), 'tangu'),
             // Agent 状态(2026-09-19):调用时才读探针(台架可以事后换探针)。探针缺这条(旧台架)→ 恒 idle,
             // 与契约「缺席按 idle 处理」同口径;省略 sessionId 时此处拿不到 activeId(appStore 有 import 环),报 null。
-            agentStatus: (sid?: string | null): TanguAgentStatus => readTangu()?.agentStatus?.(sid) ?? idleAgentStatus(sid ?? null),
-            subscribeAgentStatus: (cb: (s: TanguAgentStatus) => void, sid?: string | null): (() => void) => {
+            // 2026-11-13 起会话参数也收 { sessionId?, runId? }(按 runId 找正在跑它的会话,见 stores/agentStatus.ts)
+            agentStatus: (sid?: TanguSessionTarget): TanguAgentStatus => readTangu()?.agentStatus?.(sid) ?? idleAgentStatus(typeof sid === 'string' ? sid : null),
+            subscribeAgentStatus: (cb: (s: TanguAgentStatus) => void, sid?: TanguSessionTarget): (() => void) => {
               if (!ctxAlive()) return () => {}
               return scope.own('subscription', readTangu()?.subscribeAgentStatus?.(cb, sid) ?? (() => {}), 'agentStatus')
             },
+            // 停止(2026-11-13+):探针给得出才注入。停用后的插件停不了任何 run。
+            ...(readTangu()?.stop ? {
+              stop: async (target?: TanguSessionTarget): Promise<boolean> => {
+                if (!ctxAlive()) return false
+                return (await readTangu()?.stop?.(target)) === true
+              },
+            } : {}),
             // 开一个可见的新对话:探针给得出才注入(同 automation 的闸)。放行规则都在这一层:
             //  ① send:true 只对**本插件捆绑包播种的** Agent 生效(清单有 + 播种标记是本插件),别家 Agent /
             //     撞名没播成的 slug 降级为预填、由用户按回车 —— 插件不能替用户花别人的 token、开别家 Agent 的 host 工具;

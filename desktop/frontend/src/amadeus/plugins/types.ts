@@ -2298,12 +2298,30 @@ export interface PluginContext {
      *  sessionId 省略 = 主区活动会话;null = 新对话草稿(恒 idle)。拉取式;要口型包络就按帧拉 textChars。
      *  2026-09-20 起还带 `agentSlug` / `agentName`(这会话归哪个 Agent;外部引擎会话没有)。
      *  2026-10-04 起会话在语音通话时带 `speechLevel`(模型出声的真实电平):有它就按它做口型,别用 textChars。
-     *  旧宿主没有 → `ctx.tangu?.agentStatus?.()`,缺席按 idle 处理。 */
-    agentStatus?(sessionId?: string | null): import('./tanguSeam').TanguAgentStatus
+     *  旧宿主没有 → `ctx.tangu?.agentStatus?.()`,缺席按 idle 处理。
+     *
+     *  Since 2026-11-13 the argument may also be `{ sessionId?, runId? }`. With a `runId` key the host
+     *  reports the session that is **currently running that run**; when no session is running it, the result
+     *  is idle with `runId: null` (the host never falls back to the active session). Older hosts only accept
+     *  a string / null, so feature-detect before relying on the object form. */
+    agentStatus?(sessionId?: import('./tanguSeam').TanguSessionTarget): import('./tanguSeam').TanguAgentStatus
     /** 变更过滤订阅:只在 phase / tool / toolStage / waitingFor / sessionId / agentSlug 变了时回调
      *  (每个 token 不回调,改 Agent 展示名也不回调),done/error 余韵到期时再回调一次(回 idle)。
-     *  返回退订;禁用/重载时宿主统一收掉。 */
-    subscribeAgentStatus?(cb: (s: import('./tanguSeam').TanguAgentStatus) => void, sessionId?: string | null): () => void
+     *  返回退订;禁用/重载时宿主统一收掉。
+     *
+     *  Since 2026-11-13 the session argument accepts `{ sessionId?, runId? }` like `agentStatus`. With a
+     *  `runId`, the subscription follows whichever session runs it and fires once more (idle, `runId: null`)
+     *  when that run ends. */
+    subscribeAgentStatus?(cb: (s: import('./tanguSeam').TanguAgentStatus) => void, sessionId?: import('./tanguSeam').TanguSessionTarget): () => void
+    /** Stop a running agent run (2026-11-13+). Same path as the stop button in the chat input.
+     *  - string / `null` / omitted: a session id, same meaning as `agentStatus(sessionId?)` (omitted = the
+     *    active session in the main area).
+     *  - `{ runId }`: stop the session that is **currently running that run id**. If none is, nothing is
+     *    stopped and the promise resolves to `false`; another session is never stopped instead.
+     *  Resolves `true` only when a running run was actually asked to stop and the engine confirmed it.
+     *  Older hosts and profiles without chat do not have it: call `ctx.tangu?.stop?.({ runId })` and hide
+     *  your stop button when it is missing. */
+    stop?(target?: import('./tanguSeam').TanguSessionTarget): Promise<boolean>
     /** 用指定 Agent 开一个**可见的**新对话(2026-09-19+):离开主页 Space → 新对话 → 选 Agent → 预填或送出。
      *  - `send:true` **只对本插件捆绑包真正播种出来的 Agent 生效**(`agents/<slug>/` 且引擎播种时写下了本插件的
      *    `.bundle-origin` 来源标记;同名 slug 早已存在 = 不是你播的,一样降级);别家 Agent 一律降级为预填,

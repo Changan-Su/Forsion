@@ -28,12 +28,13 @@ import {
   type TanguFimResult,
   type TanguModelInfo,
   type TanguSessionInfo,
+  type TanguSessionTarget,
   type TanguStartChatOptions,
   type TanguStartChatResult,
 } from '@amadeus/plugins/tanguSeam'
 import { activeChatModelId, useApp, type AppState } from './stores/appStore'
 import { stickyDefaults } from '../../../tangu-agent/src/contracts/sessionDefaults'
-import { agentStatusOf, statusKey } from './stores/agentStatus'
+import { agentStatusOfTarget, resolveStatusTarget, statusKey } from './stores/agentStatus'
 import { usePluginChat } from './stores/pluginChatStore'
 import type { TanguDesktopConfig } from './types'
 import { getSessionDetail, getAgentSchedules, getMuseLibrary, getMuseLibraryFile, getMuseStatus, getMuseTodos, patchMuseTodo } from './services/backendService'
@@ -253,8 +254,8 @@ function withCallVoice(st: TanguAgentStatus): TanguAgentStatus {
   if (v.phase === 'thinking' && st.phase === 'idle') return { ...st, phase: 'thinking', since: v.since, speechLevel: 0 }
   return { ...st, speechLevel: 0 }
 }
-const statusOf = (s: AppState, sessionId: string | null | undefined, now: number): TanguAgentStatus =>
-  withCallVoice(agentStatusOf(s, sessionId, now))
+const statusOf = (s: AppState, target: TanguSessionTarget, now: number): TanguAgentStatus =>
+  withCallVoice(agentStatusOfTarget(s, target, now))
 /** 通话相位进引用比较(见 statusRefs):只认本会话的那通,别的会话在通话与我无关。 */
 const callPhaseRef = (sid: string | null): string | null => {
   const v = getCallVoice()
@@ -262,8 +263,21 @@ const callPhaseRef = (sid: string | null): string | null => {
 }
 
 /** 某会话 agent 状态的快照(推导见 stores/agentStatus.ts;正在语音通话的会话再叠一层 withCallVoice)。 */
-export const readAgentStatus = (sessionId?: string | null): TanguAgentStatus =>
-  statusOf(useApp.getState(), sessionId, Date.now())
+export const readAgentStatus = (target?: TanguSessionTarget): TanguAgentStatus =>
+  statusOf(useApp.getState(), target, Date.now())
+
+/**
+ * 停掉某会话正在跑的 run(ctx.tangu.stop,2026-11-13+)。走的是输入框停止按钮那条 `appStore.stop(sid)`,
+ * 只是先把会话钉死:`{ runId }` 反查 runningBySession,找不到就 false —— 绝不回落到主区活动会话。
+ * 没有在跑的 run 也回 false(appStore.stop 对「没在跑」回 true,那不是「确实停了一个」)。
+ */
+export function stopAgentRun(target?: TanguSessionTarget): Promise<boolean> {
+  const s = useApp.getState()
+  const r = resolveStatusTarget(s, target)
+  const sid = r.sessionId === undefined ? s.activeId : r.sessionId
+  if (!sid || !s.runningBySession[sid]) return Promise.resolve(false)
+  return s.stop(sid).catch(() => false)
+}
 
 /** 推导依赖的那几个引用。全等 = 状态不可能变 → 连推导都省掉(toast / 别的会话的 token 走这条)。
  *  activeId 恒在:sessionId 省略时它决定看哪个会话。
@@ -281,12 +295,18 @@ const statusRefs = (s: AppState, sid: string | null): unknown[] => (sid
  *  done / error 带 until → 到期那一刻定时器再推一次(回 idle,store 那一刻不会 set)。
  *  语音通话的相位变化不经 store,单独订一条(subscribeCallVoice)敲同一个 fire。
  *  流式回答期间每个 token 都换 messagesBySession[sid] 的引用 → 会重算,但键不变 → 不回调。 */
-export function subscribeAgentStatus(cb: (s: TanguAgentStatus) => void, sessionId?: string | null): () => void {
-  const sidOf = (s: AppState): string | null => (sessionId === undefined ? s.activeId : sessionId) ?? null
+export function subscribeAgentStatus(cb: (s: TanguAgentStatus) => void, target?: TanguSessionTarget): () => void {
+  const byRun = resolveStatusTarget({ runningBySession: {} }, target).byRun
+  const sidOf = (s: AppState): string | null => {
+    const sessionId = resolveStatusTarget(s, target).sessionId
+    return (sessionId === undefined ? s.activeId : sessionId) ?? null
+  }
+  // 按 runId 订:那个 run 何时出现 / 结束看 runningBySession 本身,它也得进引用比较
+  const refsOf = (s: AppState): unknown[] => (byRun ? [s.runningBySession, ...statusRefs(s, sidOf(s))] : statusRefs(s, sidOf(s)))
   const s0 = useApp.getState()
-  let last = statusOf(s0, sessionId, Date.now())
+  let last = statusOf(s0, target, Date.now())
   let lastKey = statusKey(last)
-  let refs = statusRefs(s0, sidOf(s0))
+  let refs = refsOf(s0)
   let timer: ReturnType<typeof setTimeout> | undefined
   let off = false
   const arm = (): void => {
@@ -297,11 +317,11 @@ export function subscribeAgentStatus(cb: (s: TanguAgentStatus) => void, sessionI
   function fire(): void {
     if (off) return
     const s = useApp.getState()
-    const r = statusRefs(s, sidOf(s))
+    const r = refsOf(s)
     const expired = last.until != null && Date.now() >= last.until
     if (!expired && r.length === refs.length && r.every((v, i) => v === refs[i])) return
     refs = r
-    const next = statusOf(s, sessionId, Date.now())
+    const next = statusOf(s, target, Date.now())
     const k = statusKey(next)
     if (k === lastKey) return
     last = next
@@ -524,6 +544,8 @@ export function installTanguProbe(fromTangu: Pick<TanguProbe, 'askInChat'> = {})
     subscribeReady,
     agentStatus: readAgentStatus,
     subscribeAgentStatus,
+    // 停止(2026-11-13+):store 的 stop 在 Tangu 的 store 半身里,没有对话能力的档案不给
+    ...(hasNativeFeature('tangu') ? { stop: stopAgentRun } : {}),
     startChat,
     ...(hasNativeFeature('tangu') ? { openSession: async (id: string, alive: () => boolean = () => true) => {
       const cfg = await waitBackend(15_000);
