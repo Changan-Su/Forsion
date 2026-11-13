@@ -201,14 +201,25 @@ export function toolLabelOf(
   }
   prior.reverse()
   // 句子按「这次调用的事件对象 + phase + locale + 登记 / 插件表 / 名单 + earlier 那几条事件对象」缓存:store 里事件对象是
-  // 不可变更新的(改一处换一个新对象),键没变就不再调 describe —— 流式出字时整条回答的各步不跟着每个 token 重算
+  // 不可变更新的(改一处换一个新对象),键没变就不再调 describe —— 流式出字时整条回答的各步不跟着每个 token 重算。
+  // 句子还依赖 call 以外的东西时(Computer Use 的应用图标表是看到实时画面后才学到的),插件给 revision():它变了也重算。
+  const rev = revisionOf(hit)
   const slots = labelCache.get(ev)
   const cached = slots?.[phase]
-  if (cached && cached.labels === labels && cached.plugins === plugins && cached.engineTools === engineTools && cached.locale === locale
+  if (cached && cached.labels === labels && cached.plugins === plugins && cached.engineTools === engineTools && cached.locale === locale && cached.rev === rev
     && cached.earlier.length === prior.length && cached.earlier.every((e, i) => e === prior[i])) return cached.out
   const out = describeOnce(hit, ev, phase, locale, prior)
-  labelCache.set(ev, { ...slots, [phase]: { labels, plugins, engineTools, locale, earlier: prior, out } })
+  labelCache.set(ev, { ...slots, [phase]: { labels, plugins, engineTools, locale, rev, earlier: prior, out } })
   return out
+}
+
+/** 插件自报的「describe 读的外部数据变没变」:只收数字 / 字符串;没给、抛错、别的类型 = 没有(undefined),不连坐这一行。 */
+function revisionOf(hit: OwnedLabel): number | string | undefined {
+  if (typeof hit.item.revision !== 'function') return undefined
+  try {
+    const v = hit.item.revision()
+    return typeof v === 'string' ? v.slice(0, 64) : typeof v === 'number' && Number.isFinite(v) ? v : undefined
+  } catch { return undefined }
 }
 
 interface LabelCacheEntry {
@@ -216,6 +227,7 @@ interface LabelCacheEntry {
   plugins: readonly Pick<AmadeusPlugin, 'id' | 'bundle'>[]
   engineTools: Readonly<Record<string, readonly string[]>>
   locale: 'zh' | 'en'
+  rev: number | string | undefined
   earlier: readonly ToolEvent[]
   out: HostToolLabel | undefined
 }
@@ -243,7 +255,7 @@ function describeOnce(hit: OwnedLabel, ev: ToolEvent, phase: ToolLabelPhase, loc
   }
   let out: ToolLabel | null | undefined | void
   try { out = hit.item.describe(call) } catch (e) {
-    // 每次渲染都会调(流式期间按 token),只报一次,别刷屏
+    // 键一变就会再调一次(换语言、earlier 变了…),同一个工具只报一次,别刷屏
     const key = `${hit.pluginId}\u0000${ev.name}`
     if (!labelWarned.has(key)) {
       labelWarned.add(key)

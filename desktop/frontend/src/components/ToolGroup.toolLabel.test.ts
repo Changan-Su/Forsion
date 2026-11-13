@@ -119,6 +119,26 @@ describe('② describe 的结果', () => {
     expect(seen[1].earlier).toEqual([])
   })
 
+  it('revision:插件自报的外部数据变了才重算(图标表后来才学到);没变照旧用缓存;revision 抛错不连坐', () => {
+    let rev = 0
+    let icon: string | undefined
+    const spy = vi.fn(() => (icon ? { text: '已点击', icon: { appBundleId: icon } } : { text: '已点击' }))
+    const labels = [{ pluginId: 'cu', item: { tools: ['act_ui'], describe: spy, revision: () => rev } }]
+    const ev = call('rev1', 'act_ui', { stateId: 's1' })
+    expect(toolLabelOf(labels, plugins, engine, 'zh', ev, 'done')).toEqual({ text: '已点击' })
+    toolLabelOf(labels, plugins, engine, 'zh', ev, 'done')
+    expect(spy, 'revision 没变:不重算').toHaveBeenCalledTimes(1)
+    icon = 'com.example.chatter'
+    expect(toolLabelOf(labels, plugins, engine, 'zh', ev, 'done'), 'revision 没动:外部数据变了宿主看不见(所以要报)').toEqual({ text: '已点击' })
+    rev = 1
+    expect(toolLabelOf(labels, plugins, engine, 'zh', ev, 'done'), 'revision 变了 → 重算,图标补上').toEqual({ text: '已点击', appBundleId: 'com.example.chatter' })
+    expect(spy).toHaveBeenCalledTimes(2)
+    const boom = [{ pluginId: 'cu', item: { tools: ['act_ui'], describe: spy, revision: () => { throw new Error('x') } } }]
+    expect(toolLabelOf(boom, plugins, engine, 'zh', ev, 'done')?.text, 'revision 抛错:当没有,句子照出').toBe('已点击')
+    const odd = [{ pluginId: 'cu', item: { tools: ['act_ui'], describe: spy, revision: () => ({}) as never } }]
+    expect(toolLabelOf(odd, plugins, engine, 'zh', ev, 'done')?.text, 'revision 给了别的类型:当没有').toBe('已点击')
+  })
+
   it('describeTool:认领到就整句,不拼插件名、不跟参数;只问内置工具以外的', () => {
     const lab = () => ({ text: '已在 Chatter 中点击「发送」', appBundleId: 'com.example.chatter' })
     const d = describeTool(ev, () => '电脑操作', lab)

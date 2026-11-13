@@ -817,6 +817,10 @@ ctx.registerToolLabel?.({
 })
 ```
 
+- **Cached, so keep it pure**: the host keeps each line and calls `describe` again only when the call, its phase, the
+  locale or the earlier calls change. If a line also depends on something outside `call` (an icon table you fill in
+  later), add `revision: () => counter` to the contribution and bump the counter when that something changes; the
+  host re-asks when it differs. Throwing from `revision` counts as none.
 - **Ownership**: same rule as tool result cards. Only tools one of your bundle's engine plugins has registered right
   now are handed to you; until the host has the engine's tool list nothing is claimed.
 - **What shows**: `text` is the whole line (the host cuts it at 200 characters). The host adds no plugin name in front

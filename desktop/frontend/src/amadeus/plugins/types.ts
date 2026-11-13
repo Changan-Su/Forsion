@@ -1241,14 +1241,22 @@ export interface ToolLabel {
  *  Claiming works like ToolResultRendererContribution: only tools your bundle's engine plugins registered are handed to
  *  you, and nothing is claimed until the host has the engine's tool list. While a call runs, the folded process row
  *  rolls through each step's `running` sentence; once everything finished the folded row keeps the host's summary and
- *  the expanded list shows each call's `done` (or `error`) sentence. The host calls `describe` again on every render
- *  that needs the line — after a reload of the history, on a language switch — so keep it synchronous and cheap.
+ *  the expanded list shows each call's `done` (or `error`) sentence. The host works a line out when it first needs
+ *  it and again after a reload of the history or a language switch, and keeps the answer in between: `describe` is
+ *  called again only when the call itself, its phase, the locale or the earlier calls change. Treat it as a pure
+ *  function of `call` — synchronous, cheap, no side effects. If a line also depends on something outside `call`
+ *  (a table you fill in later, say), provide `revision`.
  *  Throwing, or returning nothing / an empty `text`, keeps the host's generic line for that call. Contributions are
  *  removed when your plugin is disabled or reloaded. Older hosts do not have it: call `ctx.registerToolLabel?.(…)`. */
 export interface ToolLabelContribution {
   /** One engine tool name, or several, exactly as your engine half registered them. */
   tool: string | string[]
   describe(call: ToolLabelCall): ToolLabel | null | undefined | void
+  /** Optional. Return a number or string that changes whenever something `describe` reads **outside** `call` changes
+   *  (for example a table of app icons you learn later). The host compares it each time it draws a line and calls
+   *  `describe` again when it differs; lines already on screen pick the change up on their next render. Keep it
+   *  trivial (read a counter). Throwing, or returning anything else, counts as "no revision". */
+  revision?(): number | string
 }
 
 /** A user-tunable setting a plugin declares. The host renders the form on the plugin's detail

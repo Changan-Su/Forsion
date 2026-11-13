@@ -327,6 +327,8 @@ Tangu folds a reply's tool calls into one process row; expanded, each call is on
 
 The host calls the plugin's `describe` whenever it draws that line, passing the call's arguments, its result, its phase (running, done or error), the interface language, and the plugin's own earlier calls in the same reply (up to 40, so app and button names from earlier results can be reused). While the tool runs, the folded process row rolls through each step's sentence; once everything finished, the folded row keeps its summary and each line of the expanded list shows the "done" sentence. The current-step line in the Tangu summary panel uses the same sentence. Lines are rebuilt when you reopen an old conversation or switch the interface language. If `describe` throws or gives no sentence, the line shows as before; the sentences go away when the plugin is disabled or reloaded. App icons show only in the desktop app on macOS; elsewhere the usual tool icon shows. Only this line for people changes: what the model sees (tool descriptions and results) stays the same.
 
+The host remembers each sentence: it asks again only when the call itself, its phase, the interface language or the earlier calls change. Write `describe` as a function of the data passed in, with no side effects. If a sentence or icon also depends on something else (an app icon you only learn later, for example), add `revision()` returning a number or string that changes along with it; the host asks again when it differs.
+
 ```js
 ctx.registerToolLabel?.({ tool: ['act_ui', 'observe_ui'], describe(call) { return { text, icon: { appBundleId } } } })
 ```

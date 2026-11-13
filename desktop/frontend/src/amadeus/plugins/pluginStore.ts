@@ -200,7 +200,7 @@ async function resolveExternalSources(): Promise<ExternalPluginSource[]> {
 }
 
 /** registerToolLabel 收进来的样子:工具名统一成去重后的名单。 */
-export interface NormalizedToolLabel { tools: string[]; describe: ToolLabelContribution['describe'] }
+export interface NormalizedToolLabel { tools: string[]; describe: ToolLabelContribution['describe']; revision?: ToolLabelContribution['revision'] }
 
 interface Owned<T> {
   pluginId: string
@@ -2036,7 +2036,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
         console.warn(`[plugin:${pluginId}] registerToolLabel 被拒:要有 tool(引擎工具名或名单)和 describe`)
         return
       }
-      const item: NormalizedToolLabel = { tools, describe: def.describe }
+      const item: NormalizedToolLabel = { tools, describe: def.describe, ...(typeof def.revision === 'function' ? { revision: def.revision } : {}) }
       set((s) => ({ toolLabels: [...s.toolLabels, { pluginId, item }] }))
     },
     // 打开自己的视图:类型名由宿主统一命名空间(plugin:<id>:<viewId>),防跨插件顶替。
