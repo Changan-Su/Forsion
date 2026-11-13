@@ -58,14 +58,18 @@ export function PipRoot() {
     const el = rootRef.current
     if (!available || !el) return
     const height = (): number => Math.ceil(el.getBoundingClientRect().height)
-    const first = requestAnimationFrame(() => {
+    const report = (): void => {
       if (reported.current) return
       reported.current = true
       window.tangu?.pipReady?.(true, height())
-    })
+    }
+    // 这扇窗此刻还藏着:页面不可见时浏览器可以不出帧,rAF 不保证会跑 —— 定时器兜底,谁先到算谁
+    // (只靠 rAF 的话,open() 会一直等到主进程的超时才回 false)
+    const first = requestAnimationFrame(report)
+    const fallback = window.setTimeout(report, 150)
     const ro = new ResizeObserver(() => { if (reported.current) window.tangu?.pipResize?.(height()) })
     ro.observe(el)
-    return () => { cancelAnimationFrame(first); ro.disconnect() }
+    return () => { cancelAnimationFrame(first); window.clearTimeout(fallback); ro.disconnect() }
   }, [available])
 
   const close = (): void => window.tangu?.closeSelf?.()

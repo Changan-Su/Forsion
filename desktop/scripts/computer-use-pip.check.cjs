@@ -51,7 +51,8 @@ function writeProbe(pluginsDir) {
   fs.mkdirSync(dir, { recursive: true })
   fs.writeFileSync(path.join(dir, 'main.js'), PROBE_MAIN)
   fs.writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify({
-    id: 'tangu-computer-use', name: 'PiP probe', version: '0.0.1', minAppVersion: '0.0.1',
+    // 版本写得比随包那份高:启动时的内置播种「永不降级」,写 0.0.1 会被随包的真插件整个换掉(11-13 实跑:窗里挂的是真插件,探针不见了)
+    id: 'tangu-computer-use', name: 'PiP probe', version: '99.0.0', minAppVersion: '0.0.1',
     description: 'computer-use-pip.check probe; not the product plugin',
   }, null, 2))
 }
@@ -106,7 +107,16 @@ async function main() {
     check('2 264 宽、主屏右上角距边 24', !!w && w.bounds.width === 264 && w.bounds.x === expectX && w.bounds.y === w.work.y + 24, JSON.stringify(w))
     check('2 置顶、不可聚焦、无父窗、可见', !!w && w.top && !w.focusable && !w.parent && w.visible)
     const pip = await until(() => app.windows().find((p) => p.url().includes('window=pip')))
-    await pip.waitForSelector('.pip-probe', { timeout: 15000 })
+    const pipLogs = []
+    pip.on('console', (m) => { if (pipLogs.length < 40) pipLogs.push(`${m.type()}: ${m.text().slice(0, 300)}`) })
+    pip.on('pageerror', (e) => { pipLogs.push(`pageerror: ${String(e && e.message).slice(0, 300)}`) })
+    try { await pip.waitForSelector('.pip-probe', { timeout: 15000 }) } catch (e) {
+      // 视图没挂上:把这扇窗里实际画了什么、控制台说了什么打出来再抛(否则只有一句超时,无从下手)
+      const dom = await pip.evaluate(() => document.body.innerHTML.replace(/\s+/g, ' ').slice(0, 2400)).catch((x) => `读不到 DOM: ${x}`)
+      console.error('[cupip] pip 窗的 DOM:', dom)
+      console.error('[cupip] pip 窗的控制台:', JSON.stringify(pipLogs, null, 1))
+      throw e
+    }
     const surface = await pip.evaluate(() => document.querySelector('.pip-probe')?.dataset.surface)
     check('3 视图上下文 surface === pip', surface === 'pip', String(surface))
     check('3 没有 Mini 卡头', await pip.evaluate(() => !document.querySelector('.mini-card-chrome')))
