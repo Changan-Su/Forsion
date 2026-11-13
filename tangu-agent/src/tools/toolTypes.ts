@@ -269,6 +269,10 @@ export interface ToolResult {
 }
 
 export interface ToolCapabilities {
+  /** Internal delivery semantics, never caller-controlled authority. Instructions
+   * loaded on demand must reach the model intact; ordinary data uses output spill.
+   * Source limits, approval/visibility and privacy retention policies still apply. */
+  outputKind?: 'data' | 'instructions';
   /** 副作用类别；unknown/write/system/browser 均默认串行。 */
   sideEffect?: 'none' | 'read' | 'network' | 'browser' | 'write' | 'system' | 'unknown';
   /** 仅显式声明 true 的工具可被 agentLoop 并发执行。 */

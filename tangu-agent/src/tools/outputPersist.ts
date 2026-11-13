@@ -7,7 +7,7 @@ import { getSessionDir, markSessionDirty } from '../sandbox/sessionSandbox.js';
 import { anchoredRoot, mkdirConfined, readConfined, writeConfined } from '../sandbox/confinedFs.js';
 import { tanguHome } from '../core/tanguHome.js';
 import { estimateTokensRough, capToolResult } from '../services/contextBudget.js';
-import type { ToolContext } from './toolTypes.js';
+import type { ToolCapabilities, ToolContext } from './toolTypes.js';
 
 const MAX_ARTIFACT_BYTES = 16 * 1024 * 1024;
 const hash = (s: string) => createHash('sha256').update(s).digest('hex');
@@ -73,7 +73,12 @@ export async function persistLargeOutput(ctx: ToolContext, _label: string, fullT
     return { preview: `${preview}\n[Full output could not be saved. Narrow the original query or read its source in smaller ranges; this preview is incomplete.]`, path: null };
   }
 }
-export async function formatToolOutput(ctx: ToolContext, label: string, fullText: string): Promise<string> {
+export async function formatToolOutput(ctx: ToolContext, label: string, fullText: string, kind: ToolCapabilities['outputKind'] = 'data'): Promise<string> {
+  // Skill loading is already an explicit on-demand read. Making its instructions
+  // an optional preview can silently omit requirements before the model acts.
+  // The loop checks its remaining context budget before admitting this result;
+  // if the full instructions cannot fit, it returns a recoverable tool error.
+  if (kind === 'instructions') return fullText;
   // Restricted tool loadouts must not receive a handle they cannot open.
   if (ctx.canReadToolOutput === false && !ctx.ptcRead) return capToolResult(fullText);
   const result = await persistLargeOutput(ctx, label, fullText);

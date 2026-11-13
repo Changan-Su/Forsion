@@ -90,6 +90,7 @@ export const skillsProvider: ToolProvider = {
   tools: () => [
     {
       name: 'use_skill',
+      capabilities: { outputKind: 'instructions' },
       definition: {
         type: 'function',
         function: {

@@ -597,6 +597,38 @@
           "additionalProperties": false
         }
       }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_tool_output",
+        "description": "Retrieve a range or literal-matching lines from a spilled tool result in this session. Offsets and limits count JavaScript string characters, not lines. Follow nextOffset until null when completeness matters. Missing artifacts must be read again from the original source.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "offset": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 8000
+            },
+            "contains": {
+              "type": "string",
+              "description": "Optional literal substring to select matching lines (not a regex)."
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "additionalProperties": false
+        }
+      }
     }
   ],
   "ai-studio:sandbox+skills": [
@@ -1216,6 +1248,38 @@
           "additionalProperties": false
         }
       }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_tool_output",
+        "description": "Retrieve a range or literal-matching lines from a spilled tool result in this session. Offsets and limits count JavaScript string characters, not lines. Follow nextOffset until null when completeness matters. Missing artifacts must be read again from the original source.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "offset": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 8000
+            },
+            "contains": {
+              "type": "string",
+              "description": "Optional literal substring to select matching lines (not a regex)."
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "additionalProperties": false
+        }
+      }
     }
   ],
   "ai-studio:host": [
@@ -1639,6 +1703,38 @@
           "properties": {
             "id": {
               "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_tool_output",
+        "description": "Retrieve a range or literal-matching lines from a spilled tool result in this session. Offsets and limits count JavaScript string characters, not lines. Follow nextOffset until null when completeness matters. Missing artifacts must be read again from the original source.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "offset": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 8000
+            },
+            "contains": {
+              "type": "string",
+              "description": "Optional literal substring to select matching lines (not a regex)."
             }
           },
           "required": [
@@ -2089,6 +2185,38 @@
           "properties": {
             "id": {
               "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_tool_output",
+        "description": "Retrieve a range or literal-matching lines from a spilled tool result in this session. Offsets and limits count JavaScript string characters, not lines. Follow nextOffset until null when completeness matters. Missing artifacts must be read again from the original source.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "offset": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 8000
+            },
+            "contains": {
+              "type": "string",
+              "description": "Optional literal substring to select matching lines (not a regex)."
             }
           },
           "required": [
@@ -2947,6 +3075,38 @@
             "title",
             "brief"
           ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_tool_output",
+        "description": "Retrieve a range or literal-matching lines from a spilled tool result in this session. Offsets and limits count JavaScript string characters, not lines. Follow nextOffset until null when completeness matters. Missing artifacts must be read again from the original source.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "offset": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 8000
+            },
+            "contains": {
+              "type": "string",
+              "description": "Optional literal substring to select matching lines (not a regex)."
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "additionalProperties": false
         }
       }
     }
@@ -3818,6 +3978,38 @@
             "title",
             "brief"
           ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_tool_output",
+        "description": "Retrieve a range or literal-matching lines from a spilled tool result in this session. Offsets and limits count JavaScript string characters, not lines. Follow nextOffset until null when completeness matters. Missing artifacts must be read again from the original source.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "offset": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 8000
+            },
+            "contains": {
+              "type": "string",
+              "description": "Optional literal substring to select matching lines (not a regex)."
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "additionalProperties": false
         }
       }
     }
@@ -5112,6 +5304,38 @@
             "title",
             "brief"
           ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_tool_output",
+        "description": "Retrieve a range or literal-matching lines from a spilled tool result in this session. Offsets and limits count JavaScript string characters, not lines. Follow nextOffset until null when completeness matters. Missing artifacts must be read again from the original source.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "offset": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 8000
+            },
+            "contains": {
+              "type": "string",
+              "description": "Optional literal substring to select matching lines (not a regex)."
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "additionalProperties": false
         }
       }
     }
@@ -6427,6 +6651,38 @@
           ]
         }
       }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_tool_output",
+        "description": "Retrieve a range or literal-matching lines from a spilled tool result in this session. Offsets and limits count JavaScript string characters, not lines. Follow nextOffset until null when completeness matters. Missing artifacts must be read again from the original source.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "offset": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 8000
+            },
+            "contains": {
+              "type": "string",
+              "description": "Optional literal substring to select matching lines (not a regex)."
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "additionalProperties": false
+        }
+      }
     }
   ],
   "tangu-none:sandbox": [
@@ -7236,6 +7492,38 @@
             "title",
             "brief"
           ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_tool_output",
+        "description": "Retrieve a range or literal-matching lines from a spilled tool result in this session. Offsets and limits count JavaScript string characters, not lines. Follow nextOffset until null when completeness matters. Missing artifacts must be read again from the original source.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "offset": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 8000
+            },
+            "contains": {
+              "type": "string",
+              "description": "Optional literal substring to select matching lines (not a regex)."
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "additionalProperties": false
         }
       }
     }
@@ -8066,6 +8354,38 @@
             "title",
             "brief"
           ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_tool_output",
+        "description": "Retrieve a range or literal-matching lines from a spilled tool result in this session. Offsets and limits count JavaScript string characters, not lines. Follow nextOffset until null when completeness matters. Missing artifacts must be read again from the original source.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "offset": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 8000
+            },
+            "contains": {
+              "type": "string",
+              "description": "Optional literal substring to select matching lines (not a regex)."
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "additionalProperties": false
         }
       }
     }
@@ -9360,6 +9680,38 @@
             "title",
             "brief"
           ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_tool_output",
+        "description": "Retrieve a range or literal-matching lines from a spilled tool result in this session. Offsets and limits count JavaScript string characters, not lines. Follow nextOffset until null when completeness matters. Missing artifacts must be read again from the original source.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "offset": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 8000
+            },
+            "contains": {
+              "type": "string",
+              "description": "Optional literal substring to select matching lines (not a regex)."
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "additionalProperties": false
         }
       }
     }
@@ -10673,6 +11025,38 @@
             "title",
             "brief"
           ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_tool_output",
+        "description": "Retrieve a range or literal-matching lines from a spilled tool result in this session. Offsets and limits count JavaScript string characters, not lines. Follow nextOffset until null when completeness matters. Missing artifacts must be read again from the original source.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "offset": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 8000
+            },
+            "contains": {
+              "type": "string",
+              "description": "Optional literal substring to select matching lines (not a regex)."
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "additionalProperties": false
         }
       }
     }
@@ -12027,6 +12411,38 @@
           ]
         }
       }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_tool_output",
+        "description": "Retrieve a range or literal-matching lines from a spilled tool result in this session. Offsets and limits count JavaScript string characters, not lines. Follow nextOffset until null when completeness matters. Missing artifacts must be read again from the original source.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "offset": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 8000
+            },
+            "contains": {
+              "type": "string",
+              "description": "Optional literal substring to select matching lines (not a regex)."
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "additionalProperties": false
+        }
+      }
     }
   ],
   "ai-studio:sandbox+chat": [
@@ -12322,6 +12738,38 @@
           },
           "required": [
             "query"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_tool_output",
+        "description": "Retrieve a range or literal-matching lines from a spilled tool result in this session. Offsets and limits count JavaScript string characters, not lines. Follow nextOffset until null when completeness matters. Missing artifacts must be read again from the original source.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "offset": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 8000
+            },
+            "contains": {
+              "type": "string",
+              "description": "Optional literal substring to select matching lines (not a regex)."
+            }
+          },
+          "required": [
+            "id"
           ],
           "additionalProperties": false
         }
@@ -12949,6 +13397,38 @@
           "additionalProperties": false
         }
       }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_tool_output",
+        "description": "Retrieve a range or literal-matching lines from a spilled tool result in this session. Offsets and limits count JavaScript string characters, not lines. Follow nextOffset until null when completeness matters. Missing artifacts must be read again from the original source.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "offset": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 8000
+            },
+            "contains": {
+              "type": "string",
+              "description": "Optional literal substring to select matching lines (not a regex)."
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "additionalProperties": false
+        }
+      }
     }
   ],
   "ai-studio:sandbox+gui+chat": [
@@ -13267,6 +13747,38 @@
           },
           "required": [
             "query"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_tool_output",
+        "description": "Retrieve a range or literal-matching lines from a spilled tool result in this session. Offsets and limits count JavaScript string characters, not lines. Follow nextOffset until null when completeness matters. Missing artifacts must be read again from the original source.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "offset": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 8000
+            },
+            "contains": {
+              "type": "string",
+              "description": "Optional literal substring to select matching lines (not a regex)."
+            }
+          },
+          "required": [
+            "id"
           ],
           "additionalProperties": false
         }
@@ -14732,6 +15244,38 @@
             "title",
             "brief"
           ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_tool_output",
+        "description": "Retrieve a range or literal-matching lines from a spilled tool result in this session. Offsets and limits count JavaScript string characters, not lines. Follow nextOffset until null when completeness matters. Missing artifacts must be read again from the original source.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "offset": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 8000
+            },
+            "contains": {
+              "type": "string",
+              "description": "Optional literal substring to select matching lines (not a regex)."
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "additionalProperties": false
         }
       }
     }

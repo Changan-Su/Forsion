@@ -2,6 +2,17 @@
 
 <!-- English edition of CHANGELOG.md: same "## <version> (<date>)" headings, one bullet per Chinese bullet. Add both when releasing. -->
 
+## 2.14.2-beta.3 (2026-11-13)
+
+Preview build: available to people who chose the preview channel.
+
+- **Calendar and tasks**: Fixed events and tasks disappearing from Calendar after switching to all-day. Dated note events now appear alongside tasks in the same date groups, with calendar icons and checkboxes distinguishing their types. The Tasks view, Calendar companion and Mini all support opening the source note and rescheduling while preserving the original text.
+- **Inbox**: Installers now include Forsion Extend 0.10.5, adding account message history, archive and read-state sync, plus direct navigation to invite rewards.
+- **Split navigation**: Back and Forward return to each split's tab bar and follow its active View. PDF, browser and other views no longer reserve an extra navigation row.
+- **Muse**: Ordinary proactive messages also trigger notifications, and only chat content you actually see is marked read. Private background work is tracked separately from delivered results, with a clear approval entry when needed.
+- **Tangu**: Improved context recovery and reduced repeated runtime information. Large read-only tool results can be processed in sections and inspected on demand while keeping the full result available for follow-up. Loaded skills retain their full instructions so intermediate steps are not lost in generic previews.
+- Bundles Tangu engine 2.14.3 and Calendar 0.1.10; the default desktop distribution includes Forsion Extend 0.10.5. This release does not update the web app or backend services.
+
 ## 2.14.2-beta.2 (2026-11-12)
 
 Preview build: available to people who chose the preview channel.

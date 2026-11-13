@@ -123,7 +123,7 @@ describe('start_project_session', () => {
     expect(tool().isEnabledFor!(createAiStudioProfile(), base)).toBe(false);
   });
 
-  it('agentLoop:run 带 mentionedProjects → 末条 user 消息尾部注入派遣指令(提到 start_project_session 与路径)', async () => {
+  it('agentLoop:mentionedProjects 指令使用独立运行时载体,用户原文不变', async () => {
     const { project } = await setup();
     await query(`INSERT INTO chat_sessions (id, user_id, app_id, title, model_id, kind, projectless, agent_config) VALUES ('S', 'u1', 'tangu', 't', 'm1', 'user', 1, ?)`,
       [JSON.stringify({ soloAgentSlug: DEFAULT_AGENT_SLUG, agentSlug: DEFAULT_AGENT_SLUG, execMode: 'host', cwd: project })]);
@@ -131,10 +131,14 @@ describe('start_project_session', () => {
       input: { message: '去 @Proj A 把 README 写了', userMessageId: 'R1-u', attachments: [], agentConfig: { execMode: 'host', cwd: project, mentionedProjects: [{ name: 'Proj A', path: project }] } } });
     enqueueRun('S', 'R1');
     expect(await waitRun('R1')).toBe('done');
-    const lastUser = String(llmPayloads.at(-1)!.messages.filter((m: any) => m.role === 'user').at(-1)!.content);
-    expect(lastUser).toContain('去 @Proj A 把 README 写了');
+    const users = llmPayloads.at(-1)!.messages.filter((m: any) => m.role === 'user');
+    expect(String(users[0].content)).toBe('去 @Proj A 把 README 写了');
+    const lastUser = String(users.at(-1)!.content);
+    expect(lastUser).not.toContain('去 @Proj A 把 README 写了');
     expect(lastUser).toContain('## Mentioned Projects for This Turn');
     expect(lastUser).toContain('start_project_session');
     expect(lastUser).toContain(project);
+    const rows = await query<any[]>(`SELECT content FROM chat_messages WHERE session_id = 'S' AND role = 'user'`);
+    expect(rows.map((r) => r.content)).toEqual(['去 @Proj A 把 README 写了']);
   });
 });
