@@ -600,6 +600,12 @@ const api = {
     unchanged?: boolean
     ageMs?: number
     error?: string
+    // helper 协议 20 起的可选字段,见 electron/computerUse.ts 的 CuLiveFrame
+    cursor?: { x: number; y: number }
+    lastAction?: { kind: string; seq: number; ageMs: number; x?: number; y?: number; label?: string }
+    actionCount?: number
+    runId?: string
+    turnActive?: boolean
   }> => ipcRenderer.invoke('computerUse:liveView', opts),
   // 本地语音模型(SenseVoice)下载 / 状态 / 删除 + 下载进度订阅。
   asrLocalStatus: (): Promise<{ ready: boolean; sizeBytes: number }> => ipcRenderer.invoke('asr:localStatus'),

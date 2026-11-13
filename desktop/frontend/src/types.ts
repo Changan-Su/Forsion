@@ -33,6 +33,17 @@ export interface CuLiveFrame {
   unchanged?: boolean
   ageMs?: number
   error?: string
+  // ── helper 协议 20 起(旧 helper / 整屏旧路径不给)──
+  /** Agent 光标位置,相对这一帧的比例 0..1,原点左上。 */
+  cursor?: { x: number; y: number }
+  /** 最近一次动作;kind 如 click / doubleClick / scroll / type …,seq 单调递增,label 最长 80 字。 */
+  lastAction?: { kind: string; seq: number; ageMs: number; x?: number; y?: number; label?: string }
+  /** helper 启动以来的动作总数,单调递增。 */
+  actionCount?: number
+  /** 最近一次 act 带来的 runId。 */
+  runId?: string
+  /** 这一轮是否还在进行中。 */
+  turnActive?: boolean
 }
 
 export interface StartRunResult {

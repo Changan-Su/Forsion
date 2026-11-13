@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
@@ -84,6 +85,60 @@ describe('normalizeLiveView', () => {
     expect(frame.active).toBe(true)
     expect(frame.jpegBase64).toBeUndefined()
     expect(frame.error).toBe('screen_recording_denied')
+  })
+})
+
+describe('normalizeLiveView · helper 协议 20 的五个字段', () => {
+  // 三路共用的样例,逐字照抄,不改
+  const sample = JSON.parse(readFileSync(path.join(__dirname, 'computerUse.liveview-reply.v20.json'), 'utf8')) as Record<string, unknown>
+
+  it('样例里的五个新字段原样出来', () => {
+    const frame = normalizeLiveView(sample)
+    expect(frame.cursor).toEqual(sample.cursor)
+    expect(frame.lastAction).toEqual(sample.lastAction)
+    expect(frame.actionCount).toBe(sample.actionCount)
+    expect(frame.runId).toBe(sample.runId)
+    expect(frame.turnActive).toBe(sample.turnActive)
+    // 现有字段照旧
+    expect(frame).toMatchObject({ active: true, windowId: 4211, pid: 5120, app: 'Chatter', bundleId: 'com.example.chatter', width: 800, height: 524, ageMs: 42 })
+  })
+
+  it('旧回包(协议 19)不多出任何键', () => {
+    const frame = normalizeLiveView({ active: true, windowId: 1, app: 'TextEdit', frameSeq: '9', ageMs: 5 })
+    for (const k of ['cursor', 'lastAction', 'actionCount', 'runId', 'turnActive']) expect(k in frame).toBe(false)
+  })
+
+  it('比例夹到 0..1,长串截短', () => {
+    const frame = normalizeLiveView({
+      active: true,
+      cursor: { x: -0.5, y: 3 },
+      lastAction: { kind: 'k'.repeat(40), seq: 3.9, ageMs: 12, x: 2, y: -1, label: `  ${'L'.repeat(200)}  ` },
+      runId: 'r'.repeat(300),
+    })
+    expect(frame.cursor).toEqual({ x: 0, y: 1 })
+    expect(frame.lastAction).toEqual({ kind: 'k'.repeat(24), seq: 3, ageMs: 12, x: 1, y: 0, label: 'L'.repeat(80) })
+    expect(frame.runId).toHaveLength(128)
+  })
+
+  it('坏值逐项丢掉,不连坐别的字段', () => {
+    const frame = normalizeLiveView({
+      active: true,
+      app: 'Chatter',
+      cursor: { x: 'a', y: 0.5 },
+      lastAction: { kind: 'click', seq: 'x', ageMs: 1 },
+      actionCount: -3,
+      runId: '   ',
+      turnActive: 'yes',
+    })
+    expect(frame.app).toBe('Chatter')
+    for (const k of ['cursor', 'lastAction', 'actionCount', 'runId', 'turnActive']) expect(k in frame).toBe(false)
+    expect(normalizeLiveView({ active: true, cursor: null, lastAction: 'click' })).not.toHaveProperty('cursor')
+    expect(normalizeLiveView({ active: true, actionCount: Infinity })).not.toHaveProperty('actionCount')
+    // 动作没有合法坐标 / 标签时只丢那一项
+    const a = normalizeLiveView({ active: true, lastAction: { kind: 'key', seq: 2, ageMs: 0, x: NaN, y: 0.2, label: 42 } }).lastAction
+    expect(a).toEqual({ kind: 'key', seq: 2, ageMs: 0 })
+    // turnActive:false 是有意义的值,要留着
+    expect(normalizeLiveView({ active: true, turnActive: false }).turnActive).toBe(false)
   })
 })
 
