@@ -9,6 +9,13 @@ import type { AppProfile } from '../seams/appProfile.js';
 import type { Preset } from '../core/presetTable.js';
 
 export interface ToolContext {
+  /** Internal read-only PTC bridge; policy checks remain in the agent loop. */
+  supportsReadOnlyCode?: boolean;
+  canReadToolOutput?: boolean;
+  runReadOnlyTool?: (name: string, args: Record<string, unknown>, signal: AbortSignal, parentCallId: string) => Promise<string>;
+  toolCallId?: string;
+  /** Nested reads return raw text to the isolated reducer, not directly to the model. */
+  ptcRead?: boolean;
   userId: string;
   sessionId: string;
   appId: string;
