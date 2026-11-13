@@ -375,6 +375,14 @@ export const restoreCheckpoint = (t: EngineTarget, sessionId: string, at: number
     { method: 'POST', body: JSON.stringify({ at, ...(opts?.paths ? { paths: opts.paths } : {}), ...(opts?.keepEdited ? { keepEdited: true } : {}) }) },
   )
 
+/** 按 listCheckpoints 返回的 runId 恢复到该检查点之前;同毫秒或时钟回退时仍精确选中。
+ *  消息时间轴回退继续用 restoreCheckpoint(at),不要把检查点身份当时间。 */
+export const restoreCheckpointById = (t: EngineTarget, sessionId: string, checkpointId: string, opts?: { paths?: string[]; keepEdited?: boolean }) =>
+  requestCap<{ restored: string[]; deleted: string[]; skipped: string[]; conflicts?: string[]; failed: Array<{ path: string; error: string }> }>(
+    t, 'checkpointRestore', `/agent/sessions/${encodeURIComponent(sessionId)}/checkpoints/restore`,
+    { method: 'POST', body: JSON.stringify({ checkpointId, ...(opts?.paths ? { paths: opts.paths } : {}), ...(opts?.keepEdited ? { keepEdited: true } : {}) }) },
+  )
+
 /** 某段时间里 Agent 用写文件工具改过的一个文件(引擎 services/checkpoints.ts 的 FileChange 镜像)。
  *  增减按「这段开始前的原样 vs 这段结束时」逐行算;比不了时 adds / dels 为 null,reason 说明为什么。 */
 export interface FileChange {

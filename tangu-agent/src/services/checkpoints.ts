@@ -59,8 +59,10 @@ export interface CpEntry {
 
 export interface CpManifest {
   runId: string;
-  /** 首次改文件的时刻(ms),新检查点在会话内保持递增;同毫秒/时钟回退不合并恢复边界。 */
+  /** 首次改文件的墙钟时刻(ms);消息回退与改动窗口仍按它筛选。 */
   at: number;
+  /** 持久创建顺序,只用于精确检查点身份/写入顺序,不能当消息时间。旧记录回落 at。 */
+  order?: number;
   entries: CpEntry[];
   /**
    * 下一个快照文件序号 —— **只增不减**。绝不能用 entries.length 派生:撤销会摘掉中间的条目,
@@ -117,6 +119,7 @@ async function readManifest(sessionId: string, runId: string): Promise<CpManifes
     return {
       runId: String(m.runId || runId),
       at: Number(m.at) || 0,
+      ...(Number.isSafeInteger(m.order) && m.order >= 0 ? { order: m.order } : {}),
       entries,
       next: Number.isFinite(m.next) ? Number(m.next) : entries.length,
     };
@@ -128,17 +131,17 @@ async function readManifest(sessionId: string, runId: string): Promise<CpManifes
 /** Called under the session serializer. Read persisted manifests rather than a
  * process-local clock so restart, empty checkpoints and legacy manifests retain
  * their ordering. Existing runs keep their original at/pre-image. */
-async function nextCheckpointAt(sessionId: string): Promise<number> {
-  let at = Date.now();
+async function nextCheckpointOrder(sessionId: string): Promise<number> {
+  let order = Date.now();
   const ids = await fs.readdir(sessionDir(sessionId)).catch((error) => {
     if (error?.code === 'ENOENT') return [];
     throw error;
   });
   for (const id of ids) {
     const previous = await readManifest(sessionId, id);
-    if (previous && Number.isFinite(previous.at)) at = Math.max(at, previous.at + 1);
+    if (previous && Number.isFinite(checkpointOrder(previous))) order = Math.max(order, checkpointOrder(previous) + 1);
   }
-  return at;
+  return order;
 }
 
 /**
@@ -168,7 +171,7 @@ export async function snapshotBeforeWrite(
   const paths = [...new Set(absPaths.filter((p) => p && path.isAbsolute(p)))];
   if (!sessionId || !runId || !paths.length) return async () => {};
   return serialize(sessionId, async () => {
-    const m = (await readManifest(sessionId, runId)) || { runId, at: await nextCheckpointAt(sessionId), entries: [], next: 0 };
+    const m = (await readManifest(sessionId, runId)) || { runId, at: Date.now(), order: await nextCheckpointOrder(sessionId), entries: [], next: 0 };
     const known = new Set(m.entries.map((e) => e.path));
     const added: CpEntry[] = [];
     let next = m.next ?? m.entries.length;
@@ -308,24 +311,23 @@ async function unchangedOnDisk(sessionId: string, runId: string, e: CpEntry): Pr
 
 /** 本会话的检查点(按时间升序)。 */
 export async function listCheckpoints(sessionId: string): Promise<CpSummary[]> {
-  let runIds: string[];
-  try {
-    runIds = await fs.readdir(sessionDir(sessionId));
-  } catch {
-    return [];
-  }
-  const out: CpSummary[] = [];
-  for (const rid of runIds) {
-    const m = await readManifest(sessionId, rid);
-    if (!m || !m.entries.length) continue;
-    out.push({
+  return (await loadAllManifests(sessionId)).filter((m) => m.entries.length).map((m) => ({
       runId: m.runId,
       at: m.at,
       files: m.entries.map((e) => e.path),
       skipped: m.entries.filter((e) => e.skipped).map((e) => e.path),
-    });
-  }
-  return out.sort((a, b) => a.at - b.at);
+    }));
+}
+
+type RestoreOptions = { paths?: string[]; keepEdited?: boolean };
+type RestoreBoundary = { at: number } | { checkpointId: string };
+export class CheckpointNotFoundError extends Error {
+  constructor(checkpointId: string) { super(`Checkpoint "${checkpointId}" not found`); this.name = 'CheckpointNotFoundError'; }
+}
+
+/** Exact checkpoint identity, unlike the wall-clock boundary accepted by restoreCodeSince. */
+export async function restoreCodeCheckpoint(sessionId: string, checkpointId: string, opts?: RestoreOptions): Promise<RestoreReport> {
+  return withWriteLock(() => restoreCodeSinceLocked(sessionId, { checkpointId }, opts));
 }
 
 /**
@@ -340,33 +342,34 @@ export async function restoreCodeSince(
    * keepEdited:modified 条目若在「最后一次写它的那个 run」之后又被改过(写后指纹对不上 / 文件没了)
    *   → 不覆盖,报 conflicts。created 条目照旧走既有冲突判据。缺省 = 既有行为。
    */
-  opts?: { paths?: string[]; keepEdited?: boolean },
+  opts?: RestoreOptions,
 ): Promise<RestoreReport> {
   // ⚠️整段恢复必须和写类工具**同一把锁**(codex 2026-08-17 P1)。路由只检查「被恢复的这个会话」
   // 有没有在跑的 run;**别的**会话在同一个工作区里跑着的 run 照样在写盘。不加锁的话:
   //   ① 下面那句「把现状存成新检查点」会拍到一个写了一半的文件;
   //   ② 恢复的写盘会和对方在飞的 edit 交叠(读-改-写互相覆盖)。
   // 写锁可重入,所以里面调 snapshotBeforeWrite 之类不会死锁。
-  return withWriteLock(() => restoreCodeSinceLocked(sessionId, at, opts));
+  return withWriteLock(() => restoreCodeSinceLocked(sessionId, { at }, opts));
 }
 
 async function restoreCodeSinceLocked(
   sessionId: string,
-  at: number,
-  opts?: { paths?: string[]; keepEdited?: boolean },
+  boundary: RestoreBoundary,
+  opts?: RestoreOptions,
 ): Promise<RestoreReport> {
   const report: RestoreReport = { restored: [], deleted: [], skipped: [], conflicts: [], failed: [] };
   let runIds: string[];
   try {
     runIds = await fs.readdir(sessionDir(sessionId));
   } catch {
+    if ('checkpointId' in boundary) throw new CheckpointNotFoundError(boundary.checkpointId);
     return report;
   }
-  const manifests: CpManifest[] = [];
+  let manifests: CpManifest[] = [];
   const all: CpManifest[] = []; // keepEdited 要找「最后一次写它的 run」,不限时刻
   for (const rid of runIds) {
     const m = await readManifest(sessionId, rid);
-    if (m) { all.push(m); if (m.at >= at) manifests.push(m); continue; }
+    if (m) { all.push(m); if ('at' in boundary && m.at >= boundary.at) manifests.push(m); continue; }
     // 文件在却读不出 = 「这个 run 的改动恢复不了」,不能静默跳过(报成功却少恢复最坏)。
     // 目录里根本没 manifest(半路被删 / 无关文件)则不吵。
     const mf = path.join(runDir(sessionId, rid), 'manifest.json');
@@ -374,8 +377,12 @@ async function restoreCodeSinceLocked(
       report.failed.push({ path: mf, error: 'manifest unreadable' });
     }
   }
-  manifests.sort((a, b) => a.at - b.at);
-  sortManifests(all);
+  all.sort(compareCheckpointOrder);
+  if ('checkpointId' in boundary) {
+    const index = all.findIndex((m) => m.runId === boundary.checkpointId);
+    if (index < 0) throw new CheckpointNotFoundError(boundary.checkpointId);
+    manifests = all.slice(index);
+  } else sortManifests(manifests); // Message timestamps always keep wall-clock semantics.
   const only = opts?.paths ? new Set(opts.paths) : null;
   // 同一路径取最早那份 pre-image —— 那才是目标时刻的样子(只回滚最后一个 run 不叫回退)。
   const plan = new Map<string, { e: CpEntry; runId: string }>();
@@ -453,7 +460,7 @@ export async function removeSessionCheckpoints(sessionId: string): Promise<void>
   await fs.rm(sessionDir(sessionId), { recursive: true, force: true }).catch(() => {});
 }
 
-/** 超出保留数 → 删最旧(按 manifest.at)。 */
+/** 超出保留数 → 删最旧的创建记录(旧 manifest 回落 at)。 */
 async function prune(sessionId: string): Promise<void> {
   let runIds: string[];
   try {
@@ -462,9 +469,9 @@ async function prune(sessionId: string): Promise<void> {
     return;
   }
   if (runIds.length <= MAX_CHECKPOINTS) return;
-  const dated: Array<{ rid: string; at: number }> = [];
-  for (const rid of runIds) dated.push({ rid, at: (await readManifest(sessionId, rid))?.at ?? 0 });
-  dated.sort((a, b) => a.at - b.at);
+  const dated: Array<{ rid: string; order: number }> = [];
+  for (const rid of runIds) { const m = await readManifest(sessionId, rid); dated.push({ rid, order: m ? checkpointOrder(m) : 0 }); }
+  dated.sort((a, b) => a.order - b.order);
   for (const d of dated.slice(0, dated.length - MAX_CHECKPOINTS)) {
     await fs.rm(path.join(sessionDir(sessionId), safeSeg(d.rid)), { recursive: true, force: true }).catch(() => {});
   }
@@ -517,12 +524,17 @@ const BINARY_SNIFF_BYTES = 8000;
 type Side = { t: 'absent' } | { t: 'unknown' } | { t: 'large' } | { t: 'bytes'; buf: Buffer };
 
 const isRestoreRun = (m: CpManifest): boolean => m.runId.startsWith('restore-');
+const checkpointOrder = (m: CpManifest): number => m.order ?? m.at;
 
-/** at 升序;同 at 时 agent run 在 restore-* 之前(恢复只能发生在 run 之后),再按 runId,保证结果确定。 */
-function sortManifests(list: CpManifest[]): CpManifest[] {
-  return list.sort((a, b) => a.at - b.at
+function compareCheckpointOrder(a: CpManifest, b: CpManifest): number {
+  return checkpointOrder(a) - checkpointOrder(b)
     || Number(isRestoreRun(a)) - Number(isRestoreRun(b))
-    || (a.runId < b.runId ? -1 : a.runId > b.runId ? 1 : 0));
+    || (a.runId < b.runId ? -1 : a.runId > b.runId ? 1 : 0);
+}
+
+/** Wall-clock windows retain their old ordering; the independent order only resolves ties. */
+function sortManifests(list: CpManifest[]): CpManifest[] {
+  return list.sort((a, b) => a.at - b.at || compareCheckpointOrder(a, b));
 }
 
 async function loadAllManifests(sessionId: string): Promise<CpManifest[]> {
@@ -785,6 +797,7 @@ export async function listChanges(
   opts?: { diff?: boolean; path?: string },
 ): Promise<FileChange[][]> {
   const all = await loadAllManifests(sessionId);
+  const writes = [...all].sort(compareCheckpointOrder);
   const agentRuns = all.filter((m) => !isRestoreRun(m));
   const out: FileChange[][] = [];
   // 一次回应里 patch 的总字节封顶:单个 patch 有行数上限,但几百个长行文件叠起来能把 JSON 撑爆。
@@ -821,7 +834,7 @@ export async function listChanges(
         }
         after = next ? await entrySide(sessionId, next.m, next.e) : await diskSide(p);
       }
-      const fc = describeChange(p, before, after, runs, !!opts?.diff && patchBudget > 0, w.until === null ? lastWriteEntry(all, p) : undefined);
+      const fc = describeChange(p, before, after, runs, !!opts?.diff && patchBudget > 0, w.until === null ? lastWriteEntry(writes, p) : undefined);
       if (opts?.diff) {
         const size = fc.patch?.length ?? 0;
         if (fc.adds !== null && (fc.adds || fc.dels) && (patchBudget <= 0 || size > patchBudget)) { delete fc.patch; fc.truncated = true; patchBudget = 0; }

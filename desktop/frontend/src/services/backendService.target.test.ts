@@ -70,6 +70,7 @@ describe('deny-remote 的五个:服务层预判,不发请求', () => {
     ['deleteSession', () => api.deleteSession(targetForSession('s1'), 's1')],
     ['deleteMessages', () => api.deleteMessages(targetForSession('s1'), 's1', ['m1'])],
     ['restoreCheckpoint', () => api.restoreCheckpoint(targetForSession('s1'), 's1', 1)],
+    ['restoreCheckpointById', () => api.restoreCheckpointById(targetForSession('s1'), 's1', 'restore-fixture')],
     ['putSessionConfig', () => api.putSessionConfig(targetForSession('s1'), 's1', { execMode: 'host' })],
     ['deleteWorkspaceFile', () => api.deleteWorkspaceFile(targetForSession('s1'), 's1', 'a.txt')],
   ])('%s → 异步拒(调用方 .catch 接得住)、LOCAL_ONLY、零请求', async (_name, call) => {
@@ -90,6 +91,25 @@ describe('deny-remote 的五个:服务层预判,不发请求', () => {
     router = (_url, method) => (method === 'PATCH' ? { status: 404, body: { detail: 'Not found' } } : { status: 200, body: {} })
     await expect(api.patchSessionConfig(targetForSession('s1'), 's1', { approvalMode: 'readonly' }, () => ({}))).rejects.toMatchObject({ status: 404 })
     expect(calls.map((c) => c.method)).toEqual(['PATCH'])
+  })
+})
+
+describe('检查点时间与身份选择互不混用', () => {
+  it('本端入口分别发送 at 与 checkpointId,保留路径和编辑保护,会话 ID 编码', async () => {
+    const opts = { paths: ['/project/a.txt'], keepEdited: true }
+    await api.restoreCheckpoint(targetForSession('h1'), 'h/1', 1100, opts)
+    await api.restoreCheckpointById(targetForSession('h1'), 'h/1', 'restore-fixture', opts)
+    expect(calls.map((c) => [c.method, c.url, JSON.parse(c.body!), (c.opts as { target?: string })?.target])).toEqual([
+      ['POST', `${API}/agent/sessions/h%2F1/checkpoints/restore`, { at: 1100, ...opts }, undefined],
+      ['POST', `${API}/agent/sessions/h%2F1/checkpoints/restore`, { checkpointId: 'restore-fixture', ...opts }, undefined],
+    ])
+  })
+
+  it('未知身份的 404 原样交给调用方,不回落到墙钟或扩大恢复范围', async () => {
+    router = () => ({ status: 404, body: { detail: 'Checkpoint not found' } })
+    await expect(api.restoreCheckpointById(targetForSession('h1'), 'h1', 'missing')).rejects.toMatchObject({ status: 404 })
+    expect(calls).toHaveLength(1)
+    expect(JSON.parse(calls[0].body!)).toEqual({ checkpointId: 'missing' })
   })
 })
 

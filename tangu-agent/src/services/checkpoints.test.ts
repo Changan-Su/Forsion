@@ -6,7 +6,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, mkdirSync, chmodSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { snapshotBeforeWrite, listCheckpoints, restoreCodeSince, removeSessionCheckpoints } from './checkpoints.js';
+import { snapshotBeforeWrite, listCheckpoints, restoreCodeSince, restoreCodeCheckpoint, removeSessionCheckpoints } from './checkpoints.js';
 
 let home = '';
 let work = '';
@@ -14,6 +14,7 @@ const prevHome = process.env.TANGU_HOME;
 
 const f = (name: string): string => join(work, name);
 const write = (name: string, body: string): void => writeFileSync(f(name), body, 'utf8');
+const manifest = (runId: string): any => JSON.parse(readFileSync(join(home, 'checkpoints', 's1', runId, 'manifest.json'), 'utf8'));
 
 beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), 'cp-home-'));
@@ -152,13 +153,14 @@ describe('checkpoints', () => {
 
     const cps = await listCheckpoints('s1');
     expect(cps).toHaveLength(2); // 多出一个「回退前」的检查点
-    expect(cps[1].at).toBeGreaterThan(cps[0].at);
-    await restoreCodeSince('s1', cps[1].at);
+    expect(cps[1].at).toBe(cps[0].at); // 外部仍是墙钟;同一毫秒不能靠数字分辨身份。
+    await restoreCodeCheckpoint('s1', cps[1].runId);
     expect(readFileSync(f('a.txt'), 'utf8')).toBe('v2'); // 把回退撤回来
     const restored = await listCheckpoints('s1');
     expect(restored).toHaveLength(3);
     expect(new Set(restored.map((c) => c.runId)).size).toBe(3);
-    expect(restored[2].at).toBeGreaterThan(restored[1].at);
+    expect(restored.map((c) => c.at)).toEqual([t1, t1, t1]);
+    expect(manifest(restored[2].runId).order).toBeGreaterThan(manifest(restored[1].runId).order);
   });
 
   it('时钟回退仍隔开新恢复边界,既有 run 保留首次时刻与 pre-image', async () => {
@@ -169,12 +171,13 @@ describe('checkpoints', () => {
     clock.mockReturnValue(1_700_000_000_000);
     await snapshotBeforeWrite('s1', 'r2', [f('a.txt')]);
     const cps = await listCheckpoints('s1');
-    expect(cps[1].at).toBeGreaterThan(cps[0].at);
+    expect(cps.find((c) => c.runId === 'r2')!.at).toBe(1_700_000_000_000);
+    expect(manifest('r2').order).toBeGreaterThan(manifest('r1').order);
     write('a.txt', 'v3');
     clock.mockReturnValue(1_600_000_000_000);
     await snapshotBeforeWrite('s1', 'r2', [f('a.txt')]);
     expect((await listCheckpoints('s1')).map((c) => c.at)).toEqual(cps.map((c) => c.at));
-    await restoreCodeSince('s1', cps[1].at);
+    await restoreCodeCheckpoint('s1', 'r2');
     expect(readFileSync(f('a.txt'), 'utf8')).toBe('v2');
   });
 
@@ -185,6 +188,7 @@ describe('checkpoints', () => {
     const manifestPath = join(home, 'checkpoints', 's1', 'r1', 'manifest.json');
     const legacy = JSON.parse(readFileSync(manifestPath, 'utf8'));
     delete legacy.next; // 老 schema 没有序号字段,仍然可以继续使用。
+    delete legacy.order;
     writeFileSync(manifestPath, JSON.stringify(legacy));
     const before = readFileSync(manifestPath, 'utf8');
     const undo = await snapshotBeforeWrite('s1', 'empty', [f('a.txt')]);
@@ -197,10 +201,30 @@ describe('checkpoints', () => {
     const restarted = await import('./checkpoints.js');
     await restarted.snapshotBeforeWrite('s1', 'r2', [f('a.txt')]);
     const cps = await restarted.listCheckpoints('s1');
-    expect(cps.find((c) => c.runId === 'r2')!.at).toBeGreaterThan(empty.at);
+    expect(cps.find((c) => c.runId === 'r2')!.at).toBe(1_700_000_000_000);
+    expect(manifest('r2').order).toBeGreaterThan(empty.order);
     expect(readFileSync(manifestPath, 'utf8')).toBe(before);
     write('a.txt', 'v3');
-    await restarted.restoreCodeSince('s1', cps.find((c) => c.runId === 'r2')!.at);
+    await restarted.restoreCodeCheckpoint('s1', 'r2');
+    expect(readFileSync(f('a.txt'), 'utf8')).toBe('v2');
+  });
+
+  it('升级后旧进程写入无order记录仍按墙钟排序,不会强排到所有新记录之前', async () => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(1000);
+    write('a.txt', 'v1');
+    await snapshotBeforeWrite('s1', 'new-first', [f('a.txt')]);
+    write('a.txt', 'v2');
+    clock.mockReturnValue(3000);
+    await snapshotBeforeWrite('s1', 'old-process', [f('a.txt')]);
+    const legacy = manifest('old-process'); delete legacy.order;
+    writeFileSync(join(home, 'checkpoints', 's1', 'old-process', 'manifest.json'), JSON.stringify(legacy));
+    write('a.txt', 'v3');
+    clock.mockReturnValue(2000);
+    await snapshotBeforeWrite('s1', 'new-last', [f('a.txt')]);
+    expect(manifest('new-last').at).toBe(2000);
+    expect(manifest('new-last').order).toBeGreaterThan(legacy.at);
+    write('a.txt', 'v4');
+    await restoreCodeCheckpoint('s1', 'old-process');
     expect(readFileSync(f('a.txt'), 'utf8')).toBe('v2');
   });
 
