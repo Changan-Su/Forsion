@@ -68,6 +68,19 @@ const off = ctx.tangu?.subscribeAgentStatus?.((s) => avatar.play(s.phase), /* se
   (被钉住的分屏聊天,会话 ≠ 主区活动会话)。
 - 旧宿主 / 台架假探针没有 → 方法不存在或恒 `idle`;按 idle 处理即可。
 
+**按 run 跟状态、停掉一轮(2026-11-13 起)** —— 给「跟着某一轮 run 画进度」的插件用(例:Computer Use 的实时画面知道 helper 报来的 `runId`,但不知道它属于哪个会话):
+
+```js
+const st = ctx.tangu?.agentStatus?.({ runId })               // 当前正在跑这个 run 的会话的状态
+const off = ctx.tangu?.subscribeAgentStatus?.((s) => draw(s), { runId })
+const stopped = await ctx.tangu?.stop?.({ runId })           // true = 确实停了一个在跑的 run
+```
+
+- 会话参数可以是字符串 / `null` / 不传(和以前一样),也可以是 `{ sessionId?, runId? }`。对象里**有 `runId` 这个键**就按 run 找:找的是此刻**正在跑**这个 run 的会话;没有会话在跑它 → 状态是 `idle`、`runId: null`,`stop` 回 `false`。宿主**绝不**回落到主区活动会话(`{ runId: undefined }` 也算按 run 找,同样找不到)。
+- 按 run 订阅时,run 出现、结束各响一次;结束那次是 `idle`(不报 `done` 余韵 —— 那一刻已经没有会话在跑它)。用「`runId` 从你的值变成 `null`」判这一轮结束。
+- `stop(target?)` 和输入框的停止按钮走同一条路(引擎确认停下后才 resolve)。字符串 / 不传 = 那个会话 / 主区活动会话。会话没在跑、找不到 run、引擎没确认 → `false`。插件停用后调用一律 `false`。
+- 没有对话能力的档案和旧宿主没有 `stop` → 不画停止按钮;旧宿主的 `agentStatus` 不认对象参数,先确认有 `stop` 再用 `{ runId }`(两者同一版加的)。
+
 **这个会话归哪个 Agent(`agentSlug` / `agentName`,2026-09-20 起)** —— 给「每个 Agent 一套设置」的插件用(Live3D 让每个 Agent 有自己的形象):
 
 - `agentSlug` = 这个会话的 Agent。没显式选过 → 用户的默认 Agent;草稿会话(`sessionId: null`)→ 新对话界面上选中的那个。**外部引擎会话**(Claude Code 等 ACP 引擎,根本没有 Tangu agent)与推导不出来时**整条不给** —— 退回通用外观,别自己编一个 slug。
