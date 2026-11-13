@@ -69,7 +69,7 @@ ctx.openMiniPanel?.('note', {
 
 | 成员 | 行为 |
 | --- | --- |
-| `surface` | `mini`、`floating` 或 `main`；Mini/Floating 不提供 `extendView` |
+| `surface` | `mini`、`floating`、`main`，或 `pip`（2026-11-13 起）；Mini/Floating/pip 不提供 `extendView`。`pip` 是宿主自己的置顶悬浮小画面（只在桌面、只在用户主动点了以后才开，目前只给 Computer Use 的实时画面）：在那里画紧凑卡，没有 `showInMainPanel`，`close?.()` 关掉那扇窗。旧宿主不会报 `pip`；碰到不认识的值按 `floating` 处理 |
 | `getParams()` | 当前实例的实体或筛选参数 |
 | `setParams(patch)` | 合并参数，更新主面板定位目标 |
 | `onParamsChanged(fn)` | 参数变化通知；返回取消订阅，不重挂 DOM |

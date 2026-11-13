@@ -1196,6 +1196,7 @@ ctx.openFloatingPanel?.('inspector', {
 - 桌面端是真 BrowserWindow：可拖、可缩放、可最小化/关闭，并保持在主窗口上方；相同插件 view id 复用窗口。
 - Web 是主界面上方固定居中的面板，**故意不可拖**；移动端不伪造桌面窗口，回退普通主视图。
 - `mount(el, view)` 收到 `view.surface === 'floating'`，没有 `extendView`；`getParams/setParams/onParamsChanged` 照常，`showInMainPanel?.()` 将当前参数交回主区。
+- `view.surface` 还有 `'pip'`(2026-11-13 起):宿主自己开的置顶悬浮小画面(只在桌面、用户点了才开,目前只挂 Computer Use 实时画面),画紧凑卡;不认识的 `surface` 值按 `'floating'` 处理。
 - 宿主自动命名空间，插件只写自己的相对 id；禁用插件或反注册 view 后，已开的原生窗口/Web 面板自动关闭。`mount` disposer 必须收订阅和计时器。
 - 详细契约见 `Forsion-Genesis/docs/customization/floating-panel-development.md`；桌面回归 `npm run build && npm run check:floatingpanel`。
 

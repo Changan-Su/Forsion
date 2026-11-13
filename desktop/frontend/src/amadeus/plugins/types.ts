@@ -736,8 +736,12 @@ export interface PluginViewContext {
   /** Immediate snapshot, then geometry/visibility/phase changes. Unsubscribe on cleanup. */
   onLayout?(listener: (layout: Readonly<PluginViewLayout>) => void): () => void
   /** Mount location. Mini/Floating receive no extendView/full workspace chrome. Feature-detect on older hosts.
-   *  A view that `ctx.workspace.open` floats inside the window (2.13.8+) reports 'mini' for the Mini look and 'floating' otherwise. */
-  surface?: 'main' | 'mini' | 'floating'
+   *  A view that `ctx.workspace.open` floats inside the window (2.13.8+) reports 'mini' for the Mini look and 'floating' otherwise.
+   *  'pip' (2026-11-13+): the host's small always-on-top picture-in-picture window (desktop only). Only the host opens
+   *  it, only on an explicit user action, and only for views it knows (today: the Computer Use live view); draw a
+   *  compact card there (no workspace chrome, no extendView, no showInMainPanel; `close?.()` closes the window).
+   *  Older hosts never report it, and a plugin must not assume the value set is closed: treat unknown values like 'floating'. */
+  surface?: 'main' | 'mini' | 'floating' | 'pip'
   /** Current entity/filter params, live for this mount. Keep entity keys identical in mini/main views. */
   getParams?(): Readonly<Record<string, unknown>>
   /** Merge entity/filter changes into this leaf; also updates the host's main-panel target. */
