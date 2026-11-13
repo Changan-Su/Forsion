@@ -95,7 +95,7 @@ import { RepeatedToolFailureGuard, MAX_REPEATED_TOOL_FAILURES } from './repeated
 import { CORRECTION_SIGNAL, NUDGE_SIGNAL, correctionVerdict, looksLikeCorrection, noteRunSignals, noteUserStop, takePendingStop, toolLoopSignal, verdictLine } from './judgeSignals.js';
 import { loadSpecialAgentsConfig } from './specialAgentsConfig.js';
 import { runGroupChat, sanitizeTempAgents, teamMemberSection } from './groupChat.js';
-import { query } from '../core/db.js';
+import { query, getDbType } from '../core/db.js';
 import { SELF_OWNER, ownerAlive } from './runOwner.js';
 import { TEAMWORK_KIND } from './teamRuns.js';
 import { getTeam } from '../agents/teamRegistry.js';
@@ -547,6 +547,53 @@ async function dispatchRun(runId: string, ac: AbortController): Promise<void> {
   return runLoop(runId, ac);
 }
 
+/** 普通引擎对话的续接指针:这一轮跑在引擎自己的哪个会话里。记在每轮 run 的 result.externalSession 上 —— 不放会话配置:
+ *  那一份客户端能整份改写、分支会照抄,引擎这边读了再写还会盖掉用户中途切的审批档。after = 这一轮开跑时会话里最新的那条回答。 */
+export interface ExternalSessionPointer { id: string; engineId: string; cwd: string; after: string | null }
+
+function parseRunResult(v: unknown): any {
+  if (typeof v === 'string') return safeParse(v);
+  return v && typeof v === 'object' ? v : {};
+}
+
+/**
+ * 这一轮该续接哪个引擎会话(普通引擎对话;插件任务另走 taskPolicy.externalSession)。规则只有一条:
+ * **这场对话里最新的那条回答,必须就是那个引擎会话里最新的一条。**
+ *  - 取本会话最近一次带指针的 run(本轮除外)。它跑完了 → 最新的回答应当就是它那一条(assistant_message_id);
+ *    它没跑完(被停 / 出错)→ 最新的回答是它留下的那条半截回答,或者(没留下)还是它开跑时的那一条(pointer.after)。
+ *  - 对不上就不续接、新开一个:编辑重发 / 重新生成(那条回答被删了)、中间换 Tangu 或别的引擎答过一轮、分支
+ *    (新会话没有 run)都落在这里。引擎会话里记着界面上已经没有的东西,不能接着用。
+ *  - 只看最近那一次,不往更早找:更早的指针指的是同一个引擎会话的旧状态,对得上也已经被后面的轮次写过了。
+ *  - 引擎或工作目录换了、上一次续接时引擎说那个会话没有了(externalSessionReset),也不续接。
+ * 返回 latest(会话里最新一条回答的 id,没有为 null),本轮的指针拿它当 after。回答在 chat_messages 里的 role 是 'model'。
+ */
+export async function resumableExternalSession(
+  sessionId: string, runId: string, assistantId: string, engineId: string, cwd: string,
+): Promise<{ resumeId?: string; latest: string | null }> {
+  const msgs = await query<any[]>(
+    `SELECT id FROM chat_messages WHERE session_id = ? AND role = 'model' AND id <> ? ORDER BY timestamp DESC LIMIT 1`,
+    [sessionId, assistantId],
+  );
+  const latest: string | null = msgs[0]?.id ?? null;
+  // 「最近一次」要排得准:created_at 只到秒,一轮失败可以和上一轮结束落在同一秒 —— 排反了就会去续接一个已经被后面
+  // 的轮次写过(或者引擎已经说没有了)的会话。同一场会话的 run 按创建顺序执行,SQLite 上用插入顺序(rowid)补排,
+  // 与 plugins/runs.ts 同一做法;外部引擎只在本机形态跑,库就是 SQLite,另一支只是兜底。
+  const runs = await query<any[]>(
+    `SELECT status, assistant_message_id, result FROM agent_runs WHERE session_id = ? AND id <> ? ORDER BY created_at DESC${getDbType() === 'sqlite' ? ', rowid DESC' : ', updated_at DESC'} LIMIT 12`,
+    [sessionId, runId],
+  );
+  for (const r of runs) {
+    const result = parseRunResult(r.result);
+    if (result.externalSessionReset) return { latest };
+    const p = result.externalSession;
+    if (!p || typeof p !== 'object' || typeof p.id !== 'string' || !p.id) continue;
+    const own: string | null = r.assistant_message_id ?? null;
+    const inStep = (own !== null && latest === own) || (r.status !== 'done' && latest === (p.after ?? null));
+    return { latest, resumeId: p.engineId === engineId && p.cwd === cwd && inStep ? p.id : undefined };
+  }
+  return { latest };
+}
+
 /**
  * 外部引擎 run:把整个 turn 委托给 deps().engines(ACP 客户端),复用 eventBus/审批/落库/队列接缝。
  * 镜像 runLoop 的 finalize/catch/finally(见本文件末);不做 flush(外部 agent 直接在 host cwd 操作,
@@ -566,6 +613,9 @@ async function externalEngineLoop(runId: string, ac: AbortController, run: any, 
   let displayAgentSlug: string | undefined;
   let finalContent = '';
   let toolServer: Awaited<ReturnType<typeof import('../engines/toolServer.js').createRunToolServer>> | undefined;
+  // 普通引擎对话(不是插件任务)才用 run 上的续接指针;pointer = 本轮确立的那个。
+  let chatResume = false;
+  let pointer: ExternalSessionPointer | undefined;
   try {
     // 在外部 loop 自己的终态处理内拒绝,不能从 dispatchRun 抛出后被 catch 静默回落自有 loop。
     // ACP 引擎的任意工具/进程不受本地 OS 沙箱约束,请求里的 agentConfig 也不能放宽可信策略。
@@ -594,6 +644,12 @@ async function externalEngineLoop(runId: string, ac: AbortController, run: any, 
         toolsStrict:true,toolsList:allowedBridge },allowedBridge);
     }
     const previous = taskPolicy.externalSession;
+    // 续接哪个引擎会话:插件任务用插件点名的那个(照旧);普通引擎对话用上一轮记在 run 上的指针,且对话自那以后没被改写。
+    // 不传 cwd 的会话,引擎进程落在本进程的当前目录:指针里记实际目录,目录变了就不续接(引擎续接时要核对工作目录)。
+    chatResume = !storedAgentConfig?.pluginOwner;
+    const pointerCwd = engineCwd ?? process.cwd();
+    const chain = chatResume ? await resumableExternalSession(sessionId, runId, assistantId, engineId, pointerCwd) : undefined;
+    ac.signal.throwIfAborted();
     const result = await engines.run({
       engineId,
       runId,
@@ -603,7 +659,15 @@ async function externalEngineLoop(runId: string, ac: AbortController, run: any, 
       engineModelId: agentConfig.engineModelId,
       readOnly: taskPolicy.pluginReadOnly === true,
       mcpServers: toolServer ? [toolServer.server] : undefined,
-      resumeSessionId: previous?.engineId === engineId && previous?.cwd === engineCwd ? previous.id : undefined,
+      resumeSessionId: chatResume ? chain?.resumeId : (previous?.engineId === engineId && previous?.cwd === engineCwd ? previous.id : undefined),
+      // 引擎会话一建立(prompt 之前)就把指针记到本轮 run 上:这一轮中途被停掉,下一轮照样接得上。
+      // 只给走 session/resume 的引擎(DSH)记:走 session/load 的(Claude Code / Codex)在普通对话里续接还没有用真引擎测过,
+      // 而它们的普通对话今天是好的 —— 没测过就打开,坏了是「每场对话的第二句都失败」。测过之后去掉 via 这个条件即可。
+      onSession: chatResume ? async ({ id, resumable, via }) => {
+        if (!resumable || via !== 'resume') return;
+        pointer = { id, engineId, cwd: pointerCwd, after: chain?.latest ?? null };
+        await updateRunStatus(runId, 'running', { result: { externalSession: pointer } });
+      } : undefined,
       message: String(input.message || ''),
       attachments: input.attachments || [],
       // 引擎私聊的工作区由身份派生(engines/<id>/Library),不信 run 值;普通引擎会话照旧取 run 的 cwd。
@@ -628,21 +692,26 @@ async function externalEngineLoop(runId: string, ac: AbortController, run: any, 
     );
     await drain(runId);
     await publish(runId, 'done', { content: finalContent });
-    await updateRunStatus(runId, 'done', { tokensTotal: result.tokensTotal, result: { content: finalContent, externalSessionId: result.externalSessionId } });
+    await updateRunStatus(runId, 'done', { tokensTotal: result.tokensTotal, result: { content: finalContent, externalSessionId: result.externalSessionId, ...(pointer ? { externalSession: pointer } : {}) } });
     // Historian 从会话解析记忆域；文件同步使用已捕获的展示身份，不能拿共享记忆桶替代。
     // 引擎私聊没有 Tangu 记忆:不跑 Historian(它找不到会话 Agent 会回落默认 Agent,把 Codex/PI 的对话写进 Xyra 的 LOG/MEMORY),也不同步 Agent 文件。
     if (!engineSolo) void onUserRunDone(sessionId, userId, undefined, undefined, !!(remoteOf(run.input) || effectiveRemote({ runId }))).finally(() => scheduleAgentFilesSync(userId, displayAgentSlug));
   } catch (err: any) {
     const aborted = err?.name === 'AbortError' || ac.signal.aborted;
     const status = aborted ? 'aborted' : 'failed';
-    const msg = aborted ? 'aborted' : err?.message || String(err);
+    // 要续接的引擎会话在引擎那边已经没有了:这一轮照实失败(不悄悄换新会话丢上文),并在 run 上留一个记号,
+    // 下一次发送就不再去找它、直接新开 —— 否则这场对话从此每一句都失败。
+    const sessionGone = !aborted && chatResume && err?.externalSessionGone === true;
+    const msg = aborted ? 'aborted'
+      : sessionGone ? `${err.message} Send your message again to continue in a new session. It will not include the earlier context.`
+      : err?.message || String(err);
     console.error(`[agent-core] external engine run ${runId} ${status}:`, msg);
     if (finalContent.trim()) {
       await finalizeAssistantMessage(assistantId, sessionId, modelId, finalContent, '', [], []).catch(() => {});
     }
     await publish(runId, 'error', { error: msg, aborted, content: finalContent, ...(aborted ? reasonOf(runId) : {}) }).catch(() => {});
     await drain(runId).catch(() => {});
-    await updateRunStatus(runId, status, { error: msg }).catch(() => {});
+    await updateRunStatus(runId, status, { error: msg, ...(sessionGone ? { result: { externalSessionReset: true } } : {}) }).catch(() => {});
   } finally {
     await toolServer?.close().catch(() => {});
     setApprovalTray(runId, false);
