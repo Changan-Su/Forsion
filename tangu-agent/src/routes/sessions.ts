@@ -1,3 +1,4 @@
+import { acknowledgeSessionRead } from '../services/sessionRead.js';
 /**
  * 会话 CRUD + 历史消息 + 会话级 agent 配置(桌面/多端客户端用;handler 自带 authMiddleware)。
  *   GET    /agent/sessions?archived=&limit=        列出本人本 app 的会话(updated_at 降序)
@@ -180,11 +181,20 @@ router.post('/agent/sessions/:id/read', authMiddleware, async (req: AuthRequest,
   try {
     const s = await getOwnSession(req.params.id, req.user!.userId);
     if (!s) return res.status(404).json({ detail: 'Session not found' });
-    await query(
-      `UPDATE chat_sessions SET last_read_at = ?, awaiting_user = CASE WHEN report_run_id IS NULL THEN FALSE ELSE awaiting_user END WHERE id = ?`,
-      [Date.now(), s.id]);
-    const [r] = await query<any[]>(`SELECT awaiting_user FROM chat_sessions WHERE id = ?`, [s.id]);
-    res.json({ ok: true, awaiting: !!r?.awaiting_user });
+    // New clients identify the message actually rendered. Keep legacy clients compatible,
+    // but never let a delayed bounded receipt consume a later proactive arrival.
+    let through = Date.now();
+    let proactive = true; // Legacy unbounded receipts keep their existing behavior.
+    if (req.body?.messageId !== undefined) {
+      if (typeof req.body.messageId !== 'string' || !req.body.messageId) return res.status(400).json({ detail: 'Invalid messageId' });
+      const [message] = await query<any[]>(`SELECT timestamp, origin FROM chat_messages WHERE id = ? AND session_id = ?`, [req.body.messageId, s.id]);
+      if (!message) return res.status(404).json({ detail: 'Message not found' });
+      through = Number(message.timestamp);
+      proactive = typeof message.origin === 'string' && message.origin.startsWith('proactive');
+      if (!Number.isSafeInteger(through) || through <= 0) return res.status(400).json({ detail: 'Invalid message timestamp' });
+    }
+    const result = await acknowledgeSessionRead(s.id, through, proactive);
+    res.json({ ok: true, ...result });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'mark read failed' });
   }

@@ -123,7 +123,7 @@ describe('refresh', () => {
 })
 
 describe('install', () => {
-  it('20s 轮询;隐藏时暂停,回前台立即拉;重复 install 只装一份;全部卸载后停', async () => {
+  it('20s 轮询;隐藏时继续,回前台立即拉;重复 install 只装一份;全部卸载后停', async () => {
     vi.useFakeTimers()
     state.fetch.mockImplementation(async () => json({ rev: 'b:1', sessions: [] }))
     const off1 = useAttention.getState().install()
@@ -134,17 +134,17 @@ describe('install', () => {
     expect(state.fetch).toHaveBeenCalledTimes(2)
     Object.defineProperty(document, 'hidden', { configurable: true, get: () => true })
     await vi.advanceTimersByTimeAsync(ATTENTION_POLL_MS * 3)
-    expect(state.fetch).toHaveBeenCalledTimes(2)
+    expect(state.fetch).toHaveBeenCalledTimes(5)
     Object.defineProperty(document, 'hidden', { configurable: true, get: () => false })
     document.dispatchEvent(new Event('visibilitychange'))
     await flush()
-    expect(state.fetch).toHaveBeenCalledTimes(3)
+    expect(state.fetch).toHaveBeenCalledTimes(6)
     off1()
     await vi.advanceTimersByTimeAsync(ATTENTION_POLL_MS)
-    expect(state.fetch).toHaveBeenCalledTimes(4) // 还有一份在用
+    expect(state.fetch).toHaveBeenCalledTimes(7) // 还有一份在用
     off2()
     await vi.advanceTimersByTimeAsync(ATTENTION_POLL_MS * 3)
-    expect(state.fetch).toHaveBeenCalledTimes(4)
+    expect(state.fetch).toHaveBeenCalledTimes(7)
   })
 
   it('连上的那一刻(connState → ok)立即拉,不等 20s', async () => {
@@ -163,55 +163,66 @@ describe('install', () => {
 
 describe('私聊 attention(Muse 主动发来 / 等你)', () => {
   const solo = { id: 'dm1', title: 'Muse', agent_config: { soloAgentSlug: 'muse' } }
-  it('拉到未读 / 等你;打开那条 = 读过(本地先熄 + POST read);新进入等你才弹(启动那一拉不弹),正看着的不弹', async () => {
-    useApp.setState({ sessions: [solo, { id: 'p1', title: 'x', agent_config: {} }], configBySession: {}, activeId: null } as any)
-    state.dm.mockImplementation(async () => json({ sessions: [{ id: 'dm1', unread: true, awaiting: false }, { id: 7 }] }))
-    await useAttention.getState().refresh()
-    await flush()
-    expect(useAttention.getState().dm).toEqual({ dm1: { unread: true, awaiting: false, count: 0 } }) // 老引擎不回 count → 0
-    expect(state.notify).not.toHaveBeenCalled()
+  it('ordinary proactive messages notify even for activeId; polls deduplicate, later messages notify again', async () => {
+    useApp.setState({ sessions: [solo], configBySession: {}, activeId: 'dm1', refreshSessions: vi.fn(async () => []) } as any)
+    await useAttention.getState().refresh(); await flush()
+    let at = 100
+    state.dm.mockImplementation(async () => json({ sessions: [{ id: 'dm1', unread: true, awaiting: false, count: 1, at }] }))
+    await useAttention.getState().refresh(); await flush()
+    expect(state.notify).toHaveBeenCalledTimes(1)
+    expect(state.notify.mock.calls[0][0]).toMatchObject({ event: 'dm.message', title: 'Muse' })
+    await useAttention.getState().refresh(); await flush()
+    expect(state.notify).toHaveBeenCalledTimes(1)
+    at = 200
+    await useAttention.getState().refresh(); await flush()
+    expect(state.notify).toHaveBeenCalledTimes(2)
+    expect(state.dm.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false)
+  })
 
-    state.dm.mockImplementation(async (path: string) => (path.endsWith('/read') ? json({ ok: true }) : json({ sessions: [{ id: 'dm1', unread: true, awaiting: true }, { id: 'p1', unread: false, awaiting: true }] })))
-    await useAttention.getState().refresh()
+  it('changing activeId or refreshing the list never acknowledges; rendered message receipt does', async () => {
+    useApp.setState({ sessions: [{ ...solo, awaiting_user: true }], configBySession: {}, activeId: null } as any)
+    const off = useAttention.getState().install(); await flush()
+    useApp.setState({ activeId: 'dm1', sessions: [{ ...solo, awaiting_user: true }] } as any)
     await flush()
-    expect(state.notify).toHaveBeenCalledTimes(1) // 只弹私聊那条;项目会话的等你不弹
-    expect(state.notify.mock.calls[0][0]).toMatchObject({ event: 'dm.waiting', title: 'Muse' })
-
-    const off = useAttention.getState().install()
-    useApp.setState({ activeId: 'dm1' } as any)
-    await flush()
-    expect(useAttention.getState().dm.dm1).toEqual({ unread: false, awaiting: true, count: 0 }) // 等你听引擎的(这里 /read 没回 awaiting:false)
-    expect(state.dm.mock.calls.some(([path, init]) => path === '/agent/sessions/dm1/read' && (init as any)?.method === 'POST')).toBe(true)
+    expect(state.dm.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false)
+    useAttention.setState({ dm: { dm1: { unread: true, awaiting: true, count: 1 } } })
+    state.dm.mockImplementation(async (path: string) => json(path.endsWith('/read') ? { ok: true, unread: false, awaiting: false } : { sessions: [{ id: 'dm1', unread: false, awaiting: false }] }))
+    useAttention.getState().markRead('dm1', 'message-1'); await flush()
+    expect(state.dm.mock.calls.find(([path]) => path.endsWith('/read'))).toEqual(['/agent/sessions/dm1/read', expect.objectContaining({ body: JSON.stringify({ messageId: 'message-1' }) })])
+    expect(useAttention.getState().dm.dm1.unread).toBe(false)
+    expect(useApp.getState().sessions[0].awaiting_user).toBe(false)
     off()
   })
 
-  it('收尾问句的等你(awaiting_user):点进去算看过;正看着的那条列表刷新带回 awaiting_user 也当场熄(10-27 黄点不灭)', async () => {
-    let still = new Set<string>()
-    state.dm.mockImplementation(async (path: string) => json({ ok: true, awaiting: still.has(path) }))
-    useApp.setState({ sessions: [{ id: 'p1', title: 'x', awaiting_user: true }, { id: 'p2', title: 'y', awaiting_user: true }], configBySession: {}, activeId: null } as any)
-    const off = useAttention.getState().install()
-    await flush()
-    const reads = (): string[] => state.dm.mock.calls.filter(([, init]) => (init as any)?.method === 'POST').map(([path]) => path as string)
-    useApp.setState({ activeId: 'p1' } as any)
-    await flush()
-    expect(useApp.getState().sessions.map((x: any) => x.awaiting_user)).toEqual([false, true])
-    expect(reads()).toEqual(['/agent/sessions/p1/read'])
+  it('failed receipt or a newer arrival keeps unread', async () => {
+    useApp.setState({ sessions: [solo] } as any)
+    useAttention.setState({ dm: { dm1: { unread: true, awaiting: false, count: 1 } } })
+    state.dm.mockRejectedValueOnce(new Error('offline'))
+    useAttention.getState().markRead('dm1', 'old'); await flush()
+    expect(useAttention.getState().dm.dm1.unread).toBe(true)
+    state.dm.mockResolvedValueOnce(json({ ok: true, unread: true, awaiting: true }))
+    useAttention.getState().markRead('dm1', 'new'); await flush()
+    expect(useAttention.getState().dm.dm1.unread).toBe(true)
+  })
 
-    useApp.setState({ sessions: [{ id: 'p1', title: 'x', awaiting_user: true }, { id: 'p2', title: 'y', awaiting_user: true }] } as any) // 一轮问句收尾后列表刷新
-    await flush()
-    expect(useApp.getState().sessions.map((x: any) => x.awaiting_user)).toEqual([false, true])
-    expect(reads()).toEqual(['/agent/sessions/p1/read', '/agent/sessions/p1/read'])
-
-    useApp.setState({ sessions: [...useApp.getState().sessions] } as any) // 没在等:不再发
-    await flush()
-    expect(reads()).toHaveLength(2)
-
-    still = new Set(['/agent/sessions/p2/read']) // 引擎说读了还在等(回报没送回的子会话 / 老引擎)→ 不熄
-    useApp.setState({ activeId: 'p2' } as any)
-    await flush()
-    expect(reads()).toHaveLength(3)
-    expect(useApp.getState().sessions.map((x: any) => x.awaiting_user)).toEqual([false, true])
-    off()
+  it('questions preserve waiting preference; pending receipts retry with backoff until delivery settles', async () => {
+    vi.useFakeTimers()
+    useApp.setState({ sessions: [solo], configBySession: {}, activeId: null, refreshSessions: vi.fn(async () => []) } as any)
+    await useAttention.getState().refresh(); await flush()
+    state.dm.mockImplementation(async (path: string) => json(path.endsWith('/read') ? { ok: true, unread: false, awaiting: true } : { sessions: [{ id: 'dm1', unread: true, awaiting: true, count: 1, at: 300 }] }))
+    await useAttention.getState().refresh(); await flush()
+    expect(state.notify.mock.calls[0][0].event).toBe('dm.waiting')
+    useApp.setState({ sessions: [{ ...solo, awaiting_user: true }] } as any)
+    useAttention.getState().markRead('dm1', 'pending'); await flush()
+    useAttention.getState().markRead('dm1', 'pending'); await flush()
+    expect(state.dm.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(10001)
+    state.dm.mockImplementation(async () => json({ ok: true, unread: false, awaiting: false }))
+    useAttention.getState().markRead('dm1', 'pending'); await flush()
+    expect(state.dm.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(2)
+    expect(useApp.getState().sessions[0].awaiting_user).toBe(false)
+    useAttention.getState().markRead('dm1', 'pending'); await flush()
+    expect(state.dm.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(2)
   })
 
   it('后台第一次建出的私聊本地列表里没有 → 补拉一次会话列表,角标 / 通知才认得它;每个 id 只补拉一次(Codex 10-18 #2)', async () => {

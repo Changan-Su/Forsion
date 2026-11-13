@@ -4,6 +4,7 @@ import { AnimatePresence } from 'framer-motion'
 import { ArrowDown, CircleAlert, Folder, MessageCircleQuestion, MessageSquare, Quote, Waypoints } from 'lucide-react'
 import type { AgentConfig, UiMessage } from '../../../../tangu-agent/src/contracts/clientTypes'
 import type { FailedSend } from '../tangu/store/failedSend'
+import { trackChatReadReceipt } from './chat2/chatReadReceipt'
 import { Composer2 } from './chat2/Composer2'
 import { chatReadingKey, readChatPosition, trackChatReading, type ChatReadingController } from './chat2/chatReadingPosition'
 import { AgentSelectStrip } from '../components/AgentSelectStrip'
@@ -695,6 +696,12 @@ export function ChatView({ leaf, params }: ViewProps) {
   const deskQuote = useCallback((text: string) => setQuoteDraft((prev) => quoteAdded(prev, quoteSid, text)), [quoteSid])
   // 插件结果卡片的 Desk 落点只在 Desk 真看得见时成立(判定在 toolCardDeskFor;这里量聊天视图宽度,对齐 CSS 容器查询)
   const chatViewRef = useRef<HTMLDivElement>(null)
+  const readReceiptCleanup = useRef<(() => void) | null>(null)
+  const registerChatView = useCallback((el: HTMLDivElement | null) => {
+    readReceiptCleanup.current?.()
+    chatViewRef.current = el
+    readReceiptCleanup.current = el && activeId && !params.readOnly ? trackChatReadReceipt(el, activeId) : null
+  }, [activeId, params.readOnly])
   const chatColRef = useRef<HTMLDivElement>(null)
   const [chatViewW, setChatViewW] = useState(Infinity)
   useEffect(() => {
@@ -801,7 +808,7 @@ export function ChatView({ leaf, params }: ViewProps) {
   return (
     <ToolCardDeskContext.Provider value={toolCardDesk}>
     <div
-      ref={chatViewRef}
+      ref={registerChatView}
       className={`t2-chat-view${refDrop ? ' refdrop' : ''}`}
       data-chat-surface={leaf.type}
       data-canvas={canvasOn ? '' : undefined}

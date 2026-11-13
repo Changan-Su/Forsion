@@ -5,7 +5,7 @@ const h = vi.hoisted(() => ({ db: null as any, muse: { maxDmPerDay: 0, activeHou
 vi.mock('../core/db.js', async () => {
   const { default: Database } = await import('better-sqlite3');
   h.db = new Database(':memory:');
-  h.db.exec(`CREATE TABLE chat_sessions (id TEXT, updated_at TEXT, proactive_at BIGINT, awaiting_user INT)`);
+  h.db.exec(`CREATE TABLE chat_sessions (id TEXT, updated_at TEXT, proactive_at BIGINT, awaiting_user INT, last_read_at BIGINT)`);
   h.db.exec(`CREATE TABLE chat_messages (id TEXT, session_id TEXT, role TEXT, content TEXT, timestamp BIGINT, model_id TEXT, is_error INT, agent_slug TEXT, origin TEXT)`);
   return { query: async (sql: string, params: any[] = []) => { const st = h.db.prepare(sql); return st.reader ? st.all(...params) : (st.run(...params.map((p) => (typeof p === 'boolean' ? Number(p) : p))), []); } };
 });
@@ -93,4 +93,16 @@ describe('磨合期', () => {
     expect(onboardingActive({ startedAt: now, fresh: false }, now)).toBe(false);
     expect(onboardingActive(null, now)).toBe(false);
   });
+});
+
+it('concurrent sends with a frozen clock get distinct monotonic persisted watermarks', async () => {
+  await import('../routes/solo.js'); // Resolve Vitest's dynamic mock before racing writers.
+  const frozen = vi.spyOn(Date, 'now').mockReturnValue(1000);
+  try {
+    h.db.exec("INSERT INTO chat_sessions (id, proactive_at, last_read_at) VALUES ('s', 2000, 3000)");
+    const result = await Promise.all([postMuseDm('u', 'first', 'proactive:notice'), postMuseDm('u', 'second', 'proactive:notice')]);
+    expect(result).toEqual([expect.objectContaining({ ok: true }), expect.objectContaining({ ok: true })]);
+    expect(h.db.prepare('SELECT timestamp FROM chat_messages ORDER BY timestamp').all()).toEqual([{ timestamp: 3001 }, { timestamp: 3002 }]);
+    expect(h.db.prepare('SELECT proactive_at FROM chat_sessions').get().proactive_at).toBe(3002);
+  } finally { frozen.mockRestore(); }
 });

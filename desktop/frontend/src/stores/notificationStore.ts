@@ -69,7 +69,8 @@ export const NOTIFY_EVENTS: Array<{ id: string; labelKey: string; defaultOn: boo
   { id: 'sync.doneOnline', labelKey: 'ntf.event.syncDoneOnline', defaultOn: false },
   { id: 'agent.done', labelKey: 'ntf.event.agentDone', defaultOn: true },
   { id: 'inbox.message', labelKey: 'ntf.event.inbox', defaultOn: true },
-  // 私聊里有人等你(Muse 问了一句 / 它后台有待批,10-18 方案 B):只这一种弹;它发来的提醒只亮角标。
+  { id: 'dm.message', labelKey: 'ntf.event.dmMessage', defaultOn: true },
+  // 私聊里有人等你(Muse 问了一句 / 它后台有待批,10-18 方案 B):主动消息另外走 dm.message。
   { id: 'dm.waiting', labelKey: 'ntf.event.dmWaiting', defaultOn: true },
   // 笔记正文 `@remind:2026-09-01T09:00` 到点提醒(见 notificationWiring 的 E 段)。
   { id: 'note.reminder', labelKey: 'ntf.event.noteReminder', defaultOn: true },
