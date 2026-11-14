@@ -152,7 +152,7 @@ import { SPACE_SHORTCUT, createSpaceShortcut, createWindowShortcut, iconPngFromD
 import { UNIT_SHORTCUT, handleUnitAddToDesktop, isUnitId, parseRosterResponse, parseUnitWindowState, unitWindowIdFromUrl, type RosterRead, type UnitShortcutResult, type UnitWindowEntry } from './unitShortcut'
 import { isMachineOwner, setHostRole } from './hostRole'
 import { LOCAL_UNIT_QUIT_ARG } from '../shared/localUnits'
-import { LOCAL_UNIT_SHORTCUT, clearLocalUnitRunRecord, defaultUserDataDir, localUnitAppUserModelId, localUnitChannel, localUnitRegistryFile, localUnitSpawnArgs, localUnitSpawnEnv, localUnitsDefaultParent, macAppBundleOf, parseLocalUnitArgs, resolveLocalUnitLaunch, writeLocalUnitRunRecord } from './localUnits'
+import { LOCAL_UNIT_SHORTCUT, clearLocalUnitRunRecord, defaultUserDataDir, dropStaleLocalUnitRunRecord, localUnitAppUserModelId, localUnitChannel, localUnitRegistryFile, localUnitSpawnArgs, localUnitSpawnEnv, localUnitsDefaultParent, macAppBundleOf, parseLocalUnitArgs, resolveLocalUnitLaunch, writeLocalUnitRunRecord } from './localUnits'
 import { createLocalUnitsHost, showInstallBlocked, type LocalUnitsHost } from './localUnitsHost'
 import { clearDataPaths } from './clearDataPaths'
 
@@ -238,7 +238,8 @@ function forwardToDefaultUnit(items: string[]): void {
 if (!app.requestSingleInstanceLock()) app.exit(0)
 else if (LOCAL_UNIT) {
   // `--forsion-unit-quit` 而那台没在跑(锁拿到了)→ 什么也不做立刻退出
-  if (LOCAL_UNIT_ARGS.quit) { app.releaseSingleInstanceLock(); process.exit(0) }
+  // 锁在手里 = 它没在跑:顺手删掉崩溃留下的运行记录(pid 被复用时判活会误判成在跑,挡住装更新);先删再放锁
+  if (LOCAL_UNIT_ARGS.quit) { dropStaleLocalUnitRunRecord(LOCAL_UNIT.paths.appData); app.releaseSingleInstanceLock(); process.exit(0) }
   const appData = LOCAL_UNIT.paths.appData
   try { writeLocalUnitRunRecord(appData, process.pid) } catch (e) { console.error('[local-units] run record not written:', e) }
   process.on('exit', () => clearLocalUnitRunRecord(appData, process.pid))

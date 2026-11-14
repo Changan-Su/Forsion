@@ -261,6 +261,13 @@ export function clearLocalUnitRunRecord(appData: string, pid: number): void {
     if (rec?.pid === pid) rmSync(f, { force: true })
   } catch { /* 没有 / 坏了:不管 */ }
 }
+/**
+ * 不看 pid 直接删。只在手里攥着这台 Unit 的单实例锁时调:锁在我们手里 = 它没在跑,剩下的记录是崩溃留下的
+ * (pid 可能已被别的进程复用,判活会误判成「在跑」而一直挡住装更新)。
+ */
+export function dropStaleLocalUnitRunRecord(appData: string): void {
+  try { rmSync(join(appData, LOCAL_UNIT_RUN_FILE), { force: true }) } catch { /* 删不掉:下次正常启动会覆盖 */ }
+}
 export function pidAlive(pid: number): boolean {
   if (!Number.isSafeInteger(pid) || pid <= 0) return false
   try { process.kill(pid, 0); return true } catch (e) { return (e as NodeJS.ErrnoException).code === 'EPERM' }

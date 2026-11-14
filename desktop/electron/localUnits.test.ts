@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { LOCAL_UNIT_MARKER } from '../shared/localUnits'
 import {
-  addExistingLocalUnit, clearLocalUnitRunRecord, createLocalUnit, defaultUserDataDir, listLocalUnits, localUnitDisplayPath,
+  addExistingLocalUnit, clearLocalUnitRunRecord, createLocalUnit, dropStaleLocalUnitRunRecord, defaultUserDataDir, listLocalUnits, localUnitDisplayPath,
   localUnitPaths, localUnitRunningPid, localUnitSpawnArgs, localUnitSpawnEnv, localUnitsDefaultParent, lookupLocalUnit,
   mutateLocalUnitRegistry, parseLocalUnitArgs, readLocalUnitMarker, readLocalUnitRegistry, removeLocalUnit, renameLocalUnit,
   resolveLocalUnitLaunch, writeLocalUnitMarker, writeLocalUnitRunRecord, type LocalUnitsContext,
@@ -229,6 +229,14 @@ describe('运行记录', () => {
     expect(localUnitRunningPid(ad)).toBeNull() // 进程没了
     writeFileSync(join(ad, 'local-unit-run.json'), '')
     expect(localUnitRunningPid(ad)).toBeNull()
+  })
+  it('拿到锁的退出请求删掉崩溃留下的记录,哪怕记的 pid 被别的活进程复用了', () => {
+    const ad = join(root, 'stale')
+    writeLocalUnitRunRecord(ad, process.pid) // 复用:记录里的 pid 恰好是个活进程
+    expect(localUnitRunningPid(ad)).toBe(process.pid)
+    dropStaleLocalUnitRunRecord(ad)
+    expect(existsSync(join(ad, 'local-unit-run.json'))).toBe(false)
+    dropStaleLocalUnitRunRecord(join(root, 'nothing-here')) // 没有也不抛
   })
 })
 
