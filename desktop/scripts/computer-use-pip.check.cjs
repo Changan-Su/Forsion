@@ -107,6 +107,8 @@ async function main() {
     check('2 264 宽、主屏右上角距边 24', !!w && w.bounds.width === 264 && w.bounds.x === expectX && w.bounds.y === w.work.y + 24, JSON.stringify(w))
     check('2 置顶、不可聚焦、无父窗、可见', !!w && w.top && !w.focusable && !w.parent && w.visible)
     const pip = await until(() => app.windows().find((p) => p.url().includes('window=pip')))
+    // 这扇窗是主窗开出来的,不属于启动流程:上屏那一刻不该还盖着启动闪屏(盖着的话人先看到开屏画面,一两秒后才是实时画面)
+    check('2 上屏时不挂启动闪屏', !!pip && await pip.evaluate(() => !document.getElementById('tangu-splash')))
     const pipLogs = []
     pip.on('console', (m) => { if (pipLogs.length < 40) pipLogs.push(`${m.type()}: ${m.text().slice(0, 300)}`) })
     pip.on('pageerror', (e) => { pipLogs.push(`pageerror: ${String(e && e.message).slice(0, 300)}`) })
