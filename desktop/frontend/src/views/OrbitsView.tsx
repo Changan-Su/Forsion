@@ -14,6 +14,7 @@
  * 样式全在 `chat2/orbits.css`(`.t2o-` 前缀,不改 `sidebar2.css` 本体);几何见该文件头注。
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react'
+import { isRosterEngine } from '../components/agentEngine'
 import { Archive, Info, MoreHorizontal, Pencil, Pin, PinOff, Plus, Settings, SquarePen, Trash2, UserPlus, Users, UsersRound, FolderPlus, MessageSquarePlus } from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
 import { OverlayAt, setActiveSpace, useCommandStore, useListFirst, useNativeChromeExtras, useNativeSheetMenu, useSegDir, useSpaceStore, useSegFlow, type SheetMenuItem } from '@lcl/engine'
@@ -249,6 +250,9 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
   const agents = useMemo(() => s.agentDefs.filter((a) => !a.disabled && (a.slug === 'muse' ? (hasMuseSpace || !!a.libraryDir) : a.createdBy !== 'system')), [s.agentDefs, hasMuseSpace])
   const cloudAgent = (slug: string): boolean => !agents.find((a) => a.slug === slug)?.libraryDir
   const installedEngines = useMemo(() => s.engines.filter((e) => e.status !== 'not-installed'), [s.engines])
+  // 名册里有 Agent 形态的引擎(DSH,11-14):它以 Agent 的身份出现在上面那几行里,引擎行不再单列 ——
+  // 只有以前和这个引擎私聊过(还有活动的引擎私聊会话)时留着那一行,不然那几场对话在左栏就找不到了。
+  const engineRows = useMemo(() => installedEngines.filter((e) => !isRosterEngine(e.id) || s.sessions.some((x) => s.configBySession[x.id]?.soloEngineId === e.id)), [installedEngines, s.sessions, s.configBySession])
   /** 幽灵会话(creview 09-16):活动会话里带轨道身份、但对应实体已不在(agent 删了 / 引擎卸了 / 团队删了但会话未归档)——
    *  它们被 inOrbit 从项目区剔除,若不给一行入口,切走之后就再也回不去。每个身份一行「墓碑」,点击直接打开最新那条会话。 */
   const tombstones = useMemo(() => {
@@ -321,7 +325,7 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
   const activeCfg = s.activeId ? s.configBySession[s.activeId] : undefined
   const activeSpaceId = useSpaceStore((st) => st.activeSpaceId)
   // Agent workspaces are local-only; the cloud sidebar does not expose them.
-  const showOrbitBlock = sideFilter !== 'cloud' && (agents.length > 0 || installedEngines.length > 0 || teams.length > 0 || tombstones.length > 0)
+  const showOrbitBlock = sideFilter !== 'cloud' && (agents.length > 0 || engineRows.length > 0 || teams.length > 0 || tombstones.length > 0)
 
   const openMuse = (): void => {
     // ⚠️ Muse Space 只在 museAvailable() && 内建插件启用时注册;未注册就切等于点了个死按钮,如实告诉用户。
@@ -422,7 +426,7 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
   if (showOrbitBlock) {
     const at = (key: string): number => activityByIdent.get(key) || 0
     for (const a of agents) orbitRows.push({ key: `agent:${a.slug}`, at: at(`agent:${a.slug}`), node: agentRow(a.slug, agentName(a)) })
-    for (const e of installedEngines) {
+    for (const e of engineRows) {
       orbitRows.push({ key: `engine:${e.id}`, at: at(`engine:${e.id}`), node: orbitRow({
         rowKey: `engine:${e.id}`, entryKey: `row:engine:${e.id}`, kind: 'engine', slug: e.id, active: activeCfg?.soloEngineId === e.id,
         tip: rowTip(e.name || e.id, 'agentSelect.direct', `engine:${e.id}`),

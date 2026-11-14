@@ -72,7 +72,13 @@ function delegatedAgentView<T extends { approvalMode?: string }>(a: T, cap: CapM
 
 /** 远端写 Agent 定义(POST / PATCH;今天只有委托管理员档够得着,unitWeb 对其余远端来路整条拒)不收的字段:
  *  cloudSync / shareDefaultMemory —— 同步与共享记忆;activityAccess —— 电脑历史;standIn* —— 通道分身(本机才有)。存值照留。 */
-const REMOTE_AGENT_WRITE_STRIPPED = ['cloudSync', 'shareDefaultMemory', 'activityAccess', 'standInOff', 'standInLibrary', 'standInAgentMd'] as const;
+const REMOTE_AGENT_WRITE_STRIPPED = ['cloudSync', 'shareDefaultMemory', 'activityAccess', 'standInOff', 'standInLibrary', 'standInAgentMd', 'engine'] as const;
+/** 「由谁来跑」只收本机设置页的:它决定这个 Agent 之后的每一轮交给哪个本机程序跑(那边的工具不经 Forsion 的路径策略),
+ *  远端(上面那张表)和云端名册(没有本机引擎)都不收,存值照留。manage_agent 不经这里,它自己的入参里没有这一项。 */
+const engineFieldsOf = (b: Record<string, any>, local: boolean): { engine?: string; engineModel?: string } => ({
+  ...(local && b.engine != null ? { engine: String(b.engine) } : {}),
+  ...(b.engineModel != null ? { engineModel: String(b.engineModel) } : {}),
+});
 const THREE_MODES = new Set(['readonly', 'auto-edit', 'full-auto']);
 
 /**
@@ -194,6 +200,7 @@ router.post('/agent/agents', authMiddleware, async (req: AuthRequest, res) => {
       activityAccess: b.activityAccess != null ? !!b.activityAccess : undefined,
       toolsMode: b.toolsMode !== undefined ? b.toolsMode : undefined,
       toolsList: b.toolsList !== undefined ? b.toolsList : undefined,
+      ...engineFieldsOf(b, !cloud && !parseRemoteOrigin(req.headers)),
       createdBy: 'user' as const,
       // 上面的唯一化是锁外预读:查完到落盘之间冒出同 slug 的(连点两次提交 / manage_agent create 同名)→ 锁内现读报错、
       // 什么都不写(回 409),不把刚建好的那个连同它的审批档悄悄盖掉。
@@ -261,6 +268,7 @@ router.patch('/agent/agents/:slug', authMiddleware, async (req: AuthRequest, res
       standInOff: Array.isArray(b.standInOff) ? b.standInOff.map(String) : undefined,
       standInLibrary: Array.isArray(b.standInLibrary) ? b.standInLibrary.map(String) : undefined,
       standInAgentMd: b.standInAgentMd != null ? !!b.standInAgentMd : undefined,
+      ...engineFieldsOf(b, !cloud && !remote),
     };
     // 分身本身的设置跟着本体走,这一节只在本体上改
     if (cur.standInOf && (fields.standInOff || fields.standInLibrary || fields.standInAgentMd !== undefined)) return res.status(400).json({ detail: 'Stand-in settings belong to the agent it stands in for' });

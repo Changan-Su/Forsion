@@ -95,6 +95,7 @@ import { refForSession, targetForSession, useSessionHostName } from '../../servi
 import { AttachmentTile } from '../../components/AttachmentTile'
 import { ImageStack, stackable } from '../../components/ImageStack'
 import { UserFold } from './UserFold'
+import { agentEngineErrorText } from '../../components/agentEngine'
 export type { TaskLanding }
 import './chat2.css'
 import '../../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
@@ -220,6 +221,8 @@ const ERR_RULES: Array<[RegExp, string]> = [
   [/(^|\D)5\d\d(\D|$)|bad gateway|overloaded/i, 'chat.err.server'],
 ]
 export function humanizeRunError(raw: string | undefined, t: (k: string, v?: Record<string, unknown>) => string, modelName = ''): string {
+  const engineAgent = agentEngineErrorText(raw, t) // 跑在 DSH 上的 Agent 没跑起来(引擎发的 agent_engine_* 码,带引擎名)
+  if (engineAgent) return `${engineAgent}(${raw})`
   if (!raw) return t('chat.error')
   raw = stripQuotaAsk(raw)
   if (isEngineModelNoApiKey(raw)) return engineModelNoApiKeyText(raw, t)
