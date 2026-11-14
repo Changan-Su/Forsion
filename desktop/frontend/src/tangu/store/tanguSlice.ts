@@ -1794,9 +1794,9 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
         expireRunPrompts(set, sessionId, runId)
         endRun(set, get, sessionId, runId) // planAutoStart 的作废清理在 endRun 里统一做(含 stop/看门狗路径)
         clearSuggestion(sessionId)
-        // 外部引擎的当前模型缺 API key:提示叫用户去模型菜单里换一个,而菜单里那份清单启动后只取一次 —— 这时重取,
-        // 用户照提示去引擎那边登录 / 填了 key 之后新出现的模型才选得到。
-        if (!pl.aborted && isEngineModelNoApiKey(pl.error)) get().ensureEngineCaps(sessionConfigBaseOf(get(), sessionId)?.engineId, true)
+        // 外部引擎的当前模型缺 API key:提示叫用户去模型菜单里换一个(或先去引擎那边登录)。菜单里那份清单启动后只取一次,
+        // 记下它可能过时了:用户登录之后再打开模型菜单,就让引擎重新探测(这时当场取没用:多半还没登录)。
+        if (!pl.aborted && isEngineModelNoApiKey(pl.error)) get().ensureEngineCaps(sessionConfigBaseOf(get(), sessionId)?.engineId, 'stale')
         // 托管模式下 token 过期不会让本地端点 401,而是表现为 run 出错(后端→云端 401)。做一次真实 whoami 复检,
         // 仅确认凭证已失效才提示重登录(避免把模型/网络错误误判为过期)。
         if (!pl.aborted && get().authInfo?.loggedIn) {

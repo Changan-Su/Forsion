@@ -193,8 +193,9 @@ export interface HostState {
   patchConfig(patch: Partial<TanguDesktopConfig>): void
   /** Chat View「高级」的默认辅助 / 生图 / 识图模型；先乐观更新，再写入 config.json。 */
   setDefaultModel(slot: DefaultModelSlot, modelId: string): void
-  /** refresh = 已经取过也重新问一次(引擎那边的模型清单变了:登录了、填了 key)。重取失败或回空时留着原来那份。 */
-  ensureEngineCaps(engineId: string | undefined, refresh?: boolean): void
+  /** 取某引擎的能力清单(模型下拉用),取过就不再取。mark = 'stale':只记下「这份可能过时了」(当前模型缺 API key 的失败后),
+   *  不当场取 —— 用户这时多半还没照提示去登录;下一次调用(打开模型菜单、切到这场对话)再让引擎重新探测。 */
+  ensureEngineCaps(engineId: string | undefined, mark?: 'stale'): void
   openSettings(tab?: SettingsTab, skillKey?: string): void
   closeSettings(): void
   /** 检测到 Forsion 登录过期(401/凭证失效):清登录态 + 提示 + 引导重登录。幂等;standalone/未登录不触发。
@@ -349,6 +350,10 @@ export function installTanguSlice(mod: TanguSliceModule): void {
 
 /** openFeedback 等账号查询时的请求号:新的一次打开 / 关闭都会让在途的那次作废。 */
 let feedbackAsk = 0
+
+/** 能力清单可能过时了的引擎(见 ensureEngineCaps 的 mark);每个引擎最近一次去取的序号(晚回来的旧请求不盖新的)。 */
+const staleEngineCaps = new Set<string>()
+const engineCapsReq = new Map<string, number>()
 
 export const useApp = create<AppState>((set, get) => ({
   tr: (k) => k,
@@ -691,11 +696,18 @@ export const useApp = create<AppState>((set, get) => ({
     void window.tangu?.setConfig?.({ [slot]: modelId }).catch(() => {})
   },
 
-  ensureEngineCaps: (engineId, refresh) => {
-    if (!engineId || (!refresh && get().engineCaps[engineId])) return
-    void api.getEngineCapabilities(homeTarget(), engineId).then((caps) => {
-      // 取不到时 getEngineCapabilities 回的是空清单:那是「不知道」,不拿它盖掉已经有的那份
-      if (refresh && !caps.models.length && get().engineCaps[engineId]) return
+  ensureEngineCaps: (engineId, mark) => {
+    if (!engineId) return
+    if (mark === 'stale') { staleEngineCaps.add(engineId); return }
+    const stale = staleEngineCaps.has(engineId)
+    if (!stale && get().engineCaps[engineId]) return
+    staleEngineCaps.delete(engineId)
+    const req = (engineCapsReq.get(engineId) ?? 0) + 1
+    engineCapsReq.set(engineId, req)
+    void api.getEngineCapabilities(homeTarget(), engineId, stale).then((caps) => {
+      if (engineCapsReq.get(engineId) !== req) return // 后面又发了一次:以那次为准,先发的晚回来也不盖
+      // 取不到时 getEngineCapabilities 回的是空清单:那是「不知道」,不拿它盖掉已经有的那份(过时的记号也留着,下次再取)
+      if (!caps.models.length && get().engineCaps[engineId]) { if (stale) staleEngineCaps.add(engineId); return }
       set((s) => ({ engineCaps: { ...s.engineCaps, [engineId]: caps } }))
     })
   },

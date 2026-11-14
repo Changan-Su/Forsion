@@ -561,13 +561,13 @@ export const importEngineAsset = (t: EngineTarget, engineId: string, kind: 'skil
     body: JSON.stringify({ kind, name }),
   })
 
-/** 懒探测某引擎能力(模型 + slash 命令);首次会 spawn(慢),后端缓存。失败 → 空。 */
-export const getEngineCapabilities = (t: EngineTarget, engineId: string) =>
+/** 懒探测某引擎能力(模型 + slash 命令);首次会 spawn(慢),后端缓存。fresh = 让后端不用缓存、重新探测。失败 → 空。 */
+export const getEngineCapabilities = (t: EngineTarget, engineId: string, fresh = false) =>
   request<{
     models?: Array<{ id: string; name: string; description?: string }>
     currentModelId?: string
     commands?: Array<{ name: string; description: string; hint?: string }>
-  }>(t, `/agent/engines/${encodeURIComponent(engineId)}/capabilities`, undefined, { timeoutMs: 45000 })
+  }>(t, `/agent/engines/${encodeURIComponent(engineId)}/capabilities${fresh ? '?fresh=1' : ''}`, undefined, { timeoutMs: 45000 })
     .then((r) => ({ models: r.models || [], currentModelId: r.currentModelId, commands: r.commands || [] }))
     .catch(() => ({
       models: [] as Array<{ id: string; name: string; description?: string }>,

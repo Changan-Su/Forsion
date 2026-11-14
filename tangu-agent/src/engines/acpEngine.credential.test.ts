@@ -16,17 +16,17 @@ import { parseEngineModelNoApiKey } from '../contracts/engineModelError.js';
 // 真 DSH 的原话(一字不差)
 const DSH_RAW = 'Internal error: turn failed: llm-deepseek: no API key for provider route "deepseek-official"; store DEEPSEEK_API_KEY through the credentials service (the web Models page writes it), or export DEEPSEEK_API_KEY in the launching environment';
 // 引擎换成的那句话。桌面那边的测试(desktop/frontend/src/views/chat2/runError.test.ts)拿同一句去拆,两边要一起改。
-const WITH_OTHERS = 'engine_model_no_api_key: Fake Harness needs an API key for its current model ("deepseek-v4-flash") and none is set up. '
+const WITH_OTHERS = 'engine_model_no_api_key {"engine":"Fake Harness","model":"deepseek-v4-flash","others":["DeepSeek-V4.1-Flash","DeepSeek-V4-Pro"]}: Fake Harness needs an API key for its current model ("deepseek-v4-flash") and none is set up. '
   + 'Pick another model in the model menu and send again. Other models it offers include: "DeepSeek-V4.1-Flash", "DeepSeek-V4-Pro". '
   + `[${DSH_RAW}]`;
-const NO_OTHERS = 'engine_model_no_api_key: Fake Harness needs an API key for its current model ("deepseek-v4-flash") and none is set up. '
+const NO_OTHERS = 'engine_model_no_api_key {"engine":"Fake Harness","model":"deepseek-v4-flash","others":[]}: Fake Harness needs an API key for its current model ("deepseek-v4-flash") and none is set up. '
   + 'It offers no other model: sign in or add an API key in Fake Harness itself, then send again. '
   + `[${DSH_RAW}]`;
 
 const OFFICIAL_PRO = '["deepseek-official","deepseek-v4-pro"]';
 const ACCOUNT_FLASH = '["deepseek-account","deepseek-flash"]';
 
-/** FAKE_KEY:有 API key。FAKE_ACCOUNT(或者 <store>.account 这个文件在):用账号登录了。FAKE_KEY_LISTED:清单里列着要 key 的那条线的模型,发的时候却没有 key
+/** FAKE_KEY:有 API key。FAKE_ACCOUNT(或者进程起来时 <store>.account 这个文件在):用账号登录了。<store>.slow 在:session/new 晚 800ms 回。FAKE_KEY_LISTED:清单里列着要 key 的那条线的模型,发的时候却没有 key
  *  (key 刚被删掉)。FAKE_PROMPT_ERROR:这一轮因为别的原因失败,报这句话。 */
 const FAKE_AGENT = String.raw`
 import { readFileSync, writeFileSync, existsSync, appendFileSync } from 'node:fs';
@@ -63,6 +63,7 @@ function handle(m) {
   const err = (code, message) => send({ jsonrpc: '2.0', id: m.id, error: { code, message } });
   const st = load(); const p = m.params || {};
   if (m.method === 'initialize') return ok({ protocolVersion: 1, agentInfo: { name: 'fake-dsh-agent', version: '0' }, agentCapabilities: { sessionCapabilities: { resume: {}, close: {}, list: {} } } });
+  if (m.method === 'session/new' && existsSync(store + '.slow') && !m.delayed) { m.delayed = true; return setTimeout(() => handle(m), 800); }
   if (m.method === 'session/new') { const id = 'sess-' + (Object.keys(st.sessions).length + 1); st.sessions[id] = { turns: 0, model: DEFAULT }; save(st); return ok({ sessionId: id, configOptions: options(st.sessions[id]) }); }
   if (m.method === 'session/resume') { const s = st.sessions[p.sessionId]; if (!s) return err(-32602, 'Invalid params: session is not resumable: ' + p.sessionId); return ok({ configOptions: options(s) }); }
   if (m.method === 'session/set_config_option') { const s = st.sessions[p.sessionId]; log('set ' + p.configId + '=' + p.value); if (p.configId === 'model') s.model = p.value; save(st); return ok({ configOptions: options(s) }); }
@@ -158,24 +159,48 @@ describe('runAcpEngine × 当前模型缺 API key', () => {
 describe('引擎管理器 × 当前模型缺 API key', () => {
   const savedHome = process.env.TANGU_HOME;
   afterAll(() => { if (savedHome === undefined) delete process.env.TANGU_HOME; else process.env.TANGU_HOME = savedHome; });
-
-  it('这样失败一次之后,缓存着的模型清单作废:下次问能力清单重新探测,看得到失败之后才登录出来的模型', async () => {
+  const manager = () => {
     process.env.TANGU_HOME = path.join(dir, `home-${n}`);
     const cfg = path.join(dir, `engines-${n}.json`);
     writeFileSync(cfg, JSON.stringify({ engines: [def()] })); // 起初什么凭据都没有
-    const mgr = createEngineManager(cfg);
+    return createEngineManager(cfg);
+  };
+  const probes = (): number => lines().filter((l) => l === 'initialize').length;
+  const names = (c: { models: Array<{ name: string }> }): string[] => c.models.map((m) => m.name);
+  const LOGGED_IN = ['deepseek-v4-flash', 'DeepSeek-V4.1-Flash', 'DeepSeek-V4-Pro'];
+
+  it('失败之后缓存作废;用户照提示登录之后,fresh 探测看得到新模型(界面打开模型菜单时发的就是它)', async () => {
+    const mgr = manager();
     const cached = await mgr.capabilities('fake');
-    expect(cached.models.map((m) => m.name)).toEqual(['deepseek-v4-flash']);
+    expect(names(cached)).toEqual(['deepseek-v4-flash']);
     expect(await mgr.capabilities('fake')).toBe(cached); // 没出事时一直用缓存
 
     const err = await failure(mgr.run(ctx()));
     expect(err.message).toBe(NO_OTHERS);
-    writeFileSync(`${store}.account`, ''); // 用户照提示去引擎那边用账号登录了
+    const p0 = probes();
+    expect(names(await mgr.capabilities('fake'))).toEqual(['deepseek-v4-flash']); // 作废了:重新探测(这时还没登录)
+    expect(probes()).toBe(p0 + 1);
 
-    const probes = lines().filter((l) => l === 'initialize').length;
-    const again = await mgr.capabilities('fake');
-    expect(lines().filter((l) => l === 'initialize').length).toBe(probes + 1);
-    expect(again.models.map((m) => m.name)).toEqual(['deepseek-v4-flash', 'DeepSeek-V4.1-Flash', 'DeepSeek-V4-Pro']);
+    writeFileSync(`${store}.account`, ''); // 之后用户去引擎那边用账号登录了
+    expect(names(await mgr.capabilities('fake'))).toEqual(['deepseek-v4-flash']); // 普通的问:照旧用缓存
+    expect(names(await mgr.capabilities('fake', { fresh: true }))).toEqual(LOGGED_IN);
+    expect(names(await mgr.capabilities('fake'))).toEqual(LOGGED_IN); // 新的进了缓存
+    await mgr.dispose();
+  }, 60_000);
+
+  it('作废时正有一个旧探测在跑:新来的问不搭它,它的旧清单也不回填缓存', async () => {
+    const mgr = manager();
+    writeFileSync(`${store}.slow`, '');
+    const old = mgr.capabilities('fake'); // 登录之前开始的探测
+    for (let i = 0; i < 100 && !lines().includes('session/new'); i++) await new Promise((r) => setTimeout(r, 20));
+    expect(lines()).toContain('session/new');
+    writeFileSync(`${store}.account`, '');
+    const fresh = mgr.capabilities('fake', { fresh: true });
+    expect(names(await old)).toEqual(['deepseek-v4-flash']);
+    expect(names(await fresh)).toEqual(LOGGED_IN);
+    expect(probes()).toBe(2);
+    expect(names(await mgr.capabilities('fake'))).toEqual(LOGGED_IN);
+    expect(probes()).toBe(2);
     await mgr.dispose();
   }, 60_000);
 });
@@ -221,6 +246,6 @@ describe('modelNoApiKeyError × 引擎怎么分组', () => {
   });
   it('引擎根本没报模型选项:照样给出一句话,不叫人换模型', () => {
     const e = modelNoApiKeyError('E', mapAcpConfigOptions(undefined), 'r', 'raw');
-    expect(e.message).toBe('engine_model_no_api_key: E needs an API key for its current model and none is set up. It offers no other model: sign in or add an API key in E itself, then send again. [raw]');
+    expect(e.message).toBe('engine_model_no_api_key {"engine":"E","others":[]}: E needs an API key for its current model and none is set up. It offers no other model: sign in or add an API key in E itself, then send again. [raw]');
   });
 });

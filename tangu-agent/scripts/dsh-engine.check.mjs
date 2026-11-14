@@ -465,7 +465,7 @@ const SCENARIOS = {
       // 提示分两支靠的是这一条:DSH 只列凭据探得到的模型,当前模型单独塞进清单。它哪天改成不管有没有凭据都列,这里先红。
       ['没有凭据时,清单里只有当前模型自己', names.length === 1 && (caps.models || [])[0]?.id === caps.currentModelId, names.join(' / ')],
       ['这一轮失败了(没有 key,到不了模型)', !a.done && !!a.error && !a.aborted, err],
-      ['失败原因以固定的码开头', err.startsWith('engine_model_no_api_key: ')],
+      ['失败原因以固定的码开头', err.startsWith('engine_model_no_api_key {')],
       ['点名了引擎和当前模型', err.includes(`DeepSeek Harness (no key) needs an API key for its current model (${JSON.stringify(names[0] ?? '')}) and none is set up.`)],
       ['没有别的模型可换:说的是去 DSH 里登录或填 key,不叫人换模型', err.includes('It offers no other model: sign in or add an API key in DeepSeek Harness (no key) itself, then send again.') && !err.includes('Pick another model')],
       ['DSH 的原话留在最后的方括号里', /\[Internal error: turn failed: .*no API key for provider route "deepseek-official".*\]$/.test(err)],

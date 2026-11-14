@@ -1,12 +1,20 @@
 /**
  * 外部引擎报「当前模型要 API key,而这台电脑上没有配」时,引擎写进 run 的那句失败原因。
  *
- * 一行英文(日志、TUI 原样看得懂),开头是一个固定的码。界面认出这个码之后把引擎名、当前模型、可以换的模型拆出来,
- * 换成界面语言的说法(desktop 的 humanizeRunError)。拼和拆放在同一个文件里,引擎和界面各带一份(契约目录,纯 TS,
- * 不引任何别的模块):改句式时拆的那半跟着改,两边不会各说各的。测试在 engineModelError.test.ts。
+ * 一行,形如:
+ *   engine_model_no_api_key {"engine":…,"model":…,"others":[…]}: <给人看的英文句子> [<引擎的原话>]
+ * 开头的码只认整句开头;紧跟的 JSON 是界面要用的字段(引擎名、当前模型、可以换的模型),后面的英文句子给日志 / TUI 看,
+ * 由同样的字段生成。界面认出码后换成界面语言的说法(desktop 的 humanizeRunError)。
+ *
+ * 拆的时候只走一遍(找 JSON 的结尾是线性扫描,后面是逐字比对),不用正则去切:原话来自外部进程,整句还会存进
+ * 对话记录、每次打开对话都要拆 —— 带回溯的正则遇上构造过的长串会卡住界面。字段只从 JSON 里读,所以引擎名、
+ * 模型名里写什么都不会被当成句子的结构。
+ *
+ * 拼和拆放在同一个文件里,引擎和界面各带一份(契约目录,纯 TS,不引任何别的模块)。测试在 engineModelError.test.ts。
  */
 
 export const ENGINE_MODEL_NO_API_KEY = 'engine_model_no_api_key';
+const PREFIX = `${ENGINE_MODEL_NO_API_KEY} {`;
 
 export interface EngineModelNoApiKey {
   /** 引擎的显示名。 */
@@ -21,40 +29,61 @@ export interface EngineModelNoApiKey {
 
 /** 句子里最多点名几个可以换的模型:清单再长,这句话也不会长到没人看。 */
 export const MAX_OTHERS = 5;
+/** 超过这么长的不拆(正常的一句不到 1 KB;原话被截到这么长以内)。 */
+export const MAX_LENGTH = 16_384;
+const MAX_RAW = 4_000;
 
 const quote = (name: string): string => JSON.stringify(name);
-const QUOTED = '"(?:[^"\\\\]|\\\\.)*"';
-const SENTENCE = new RegExp(
-  `${ENGINE_MODEL_NO_API_KEY}: (.+?) needs an API key for its current model(?: \\((${QUOTED})\\))? and none is set up\\. `
-  + `(?:Pick another model in the model menu and send again\\. Other models it offers include: (${QUOTED}(?:, ${QUOTED})*)\\.`
-  + `|It offers no other model: sign in or add an API key in .+? itself, then send again\\.)`
-  + ` \\[([\\s\\S]*)\\]$`,
-);
+const oneLine = (s: string): string => s.replace(/\s+/g, ' ').trim();
 
-/** 界面先用它判断是不是这一类失败(句式对不上、拆不出细节时也要认得出)。 */
+function sentence(info: Omit<EngineModelNoApiKey, 'raw'>): string {
+  const what = `${info.engine} needs an API key for its current model${info.model ? ` (${quote(info.model)})` : ''} and none is set up.`;
+  const next = info.others.length
+    ? `Pick another model in the model menu and send again. Other models it offers include: ${info.others.map(quote).join(', ')}.`
+    : `It offers no other model: sign in or add an API key in ${info.engine} itself, then send again.`;
+  return `${what} ${next}`;
+}
+
+/** 界面先用它判断是不是这一类失败(拆不出细节时也要认得出)。只认整句开头。 */
 export function isEngineModelNoApiKey(text: unknown): boolean {
-  return typeof text === 'string' && text.includes(`${ENGINE_MODEL_NO_API_KEY}:`);
+  return typeof text === 'string' && text.startsWith(PREFIX);
 }
 
 export function formatEngineModelNoApiKey(info: EngineModelNoApiKey): string {
-  const others = info.others.slice(0, MAX_OTHERS);
-  const what = `${info.engine} needs an API key for its current model${info.model ? ` (${quote(info.model)})` : ''} and none is set up.`;
-  const next = others.length
-    ? `Pick another model in the model menu and send again. Other models it offers include: ${others.map(quote).join(', ')}.`
-    : `It offers no other model: sign in or add an API key in ${info.engine} itself, then send again.`;
-  return `${ENGINE_MODEL_NO_API_KEY}: ${what} ${next} [${info.raw}]`;
+  const fields = { engine: oneLine(info.engine), ...(info.model ? { model: oneLine(info.model) } : {}), others: info.others.slice(0, MAX_OTHERS).map(oneLine) };
+  const raw = oneLine(info.raw).slice(0, MAX_RAW);
+  return `${ENGINE_MODEL_NO_API_KEY} ${JSON.stringify(fields)}: ${sentence(fields)} [${raw}]`;
 }
 
-/** 拆回去。句式对不上(被别处截断、改写过)→ null,调用方退回不点名的说法。 */
-export function parseEngineModelNoApiKey(text: unknown): EngineModelNoApiKey | null {
-  if (typeof text !== 'string') return null;
-  const m = SENTENCE.exec(text);
-  if (!m) return null;
-  try {
-    const names = (list: string | undefined): string[] => (list ? (list.match(new RegExp(QUOTED, 'g')) || []).map((q) => String(JSON.parse(q))) : []);
-    const model = m[2] ? String(JSON.parse(m[2])) : undefined;
-    return { engine: m[1], ...(model ? { model } : {}), others: names(m[3]), raw: m[4] };
-  } catch {
-    return null;
+/** 从 start(一个 '{')起找到与它配对的 '}' 的下标;一遍扫描,认 JSON 字符串里的引号和转义。找不到 → -1。 */
+function objectEnd(text: string, start: number): number {
+  let depth = 0;
+  let inString = false;
+  for (let i = start; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    if (inString) {
+      if (c === 92 /* \ */) i++;
+      else if (c === 34 /* " */) inString = false;
+    } else if (c === 34) inString = true;
+    else if (c === 123 /* { */ || c === 91 /* [ */) depth++;
+    else if (c === 125 /* } */ || c === 93 /* ] */) { depth--; if (depth === 0) return c === 125 ? i : -1; }
   }
+  return -1;
+}
+
+/** 拆回去。句式对不上(被截断、改写过、太长)→ null,调用方退回不点名的说法。 */
+export function parseEngineModelNoApiKey(text: unknown): EngineModelNoApiKey | null {
+  if (typeof text !== 'string' || text.length > MAX_LENGTH || !text.startsWith(PREFIX)) return null;
+  const open = PREFIX.length - 1;
+  const close = objectEnd(text, open);
+  if (close < 0) return null;
+  let fields: any;
+  try { fields = JSON.parse(text.slice(open, close + 1)); } catch { return null; }
+  if (!fields || typeof fields !== 'object' || typeof fields.engine !== 'string' || !fields.engine) return null;
+  if (fields.model !== undefined && typeof fields.model !== 'string') return null;
+  if (!Array.isArray(fields.others) || fields.others.length > MAX_OTHERS || !fields.others.every((o: unknown) => typeof o === 'string')) return null;
+  const info = { engine: fields.engine as string, ...(fields.model ? { model: fields.model as string } : {}), others: fields.others as string[] };
+  const head = `: ${sentence(info)} [`;
+  if (!text.startsWith(head, close + 1) || !text.endsWith(']')) return null;
+  return { ...info, raw: text.slice(close + 1 + head.length, -1) };
 }

@@ -76,10 +76,10 @@ describe('额度用完 ≠ 限流', () => {
 describe('外部引擎的当前模型缺 API key(DSH 只用账号登录、不选模型时每一句都这样失败)', () => {
   // DSH 0.2.2-rc.3 的原话,和引擎换成的那一句 —— 与 tangu-agent/src/engines/acpEngine.credential.test.ts 里断言的是同一句,两边一起改。
   const DSH_RAW = 'Internal error: turn failed: llm-deepseek: no API key for provider route "deepseek-official"; store DEEPSEEK_API_KEY through the credentials service (the web Models page writes it), or export DEEPSEEK_API_KEY in the launching environment'
-  const WITH_OTHERS = 'engine_model_no_api_key: Fake Harness needs an API key for its current model ("deepseek-v4-flash") and none is set up. '
+  const WITH_OTHERS = 'engine_model_no_api_key {"engine":"Fake Harness","model":"deepseek-v4-flash","others":["DeepSeek-V4.1-Flash","DeepSeek-V4-Pro"]}: Fake Harness needs an API key for its current model ("deepseek-v4-flash") and none is set up. '
     + 'Pick another model in the model menu and send again. Other models it offers include: "DeepSeek-V4.1-Flash", "DeepSeek-V4-Pro". '
     + `[${DSH_RAW}]`
-  const NO_OTHERS = 'engine_model_no_api_key: Fake Harness needs an API key for its current model ("deepseek-v4-flash") and none is set up. '
+  const NO_OTHERS = 'engine_model_no_api_key {"engine":"Fake Harness","model":"deepseek-v4-flash","others":[]}: Fake Harness needs an API key for its current model ("deepseek-v4-flash") and none is set up. '
     + 'It offers no other model: sign in or add an API key in Fake Harness itself, then send again. '
     + `[${DSH_RAW}]`
   // 把传进来的变量也印出来:看得到引擎名、当前模型、可以换的模型有没有进到译文里
@@ -105,5 +105,12 @@ describe('外部引擎的当前模型缺 API key(DSH 只用账号登录、不选
 
   it('DSH 的原话没经引擎换过(老引擎):原样透出,不冒认', () => {
     expect(humanizeRunError(DSH_RAW, t)).toBe(DSH_RAW)
+  })
+})
+
+describe('缺 API key 的码只认整句开头', () => {
+  it('别的报错里引到这几个字,照原来的规则走', () => {
+    const raw = 'Internal error: failed to read configuration field "engine_model_no_api_key:"'
+    expect(humanizeRunError(raw, t)).toBe(raw)
   })
 })
