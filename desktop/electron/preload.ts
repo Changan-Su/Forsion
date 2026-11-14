@@ -11,6 +11,7 @@ import type { DocumentTaskClaimsApi } from '../shared/documentTasks'
 import type { DesktopPermissionId, DesktopPermissionRequestOptions, DesktopPermissionsSnapshot } from '../shared/desktopPermissions'
 import type { ComputerHistoryApi, ComputerHistoryView } from '../shared/computerHistory'
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
+import type { LocalUnitRow, LocalUnitsApi, LocalUnitsResult, LocalUnitsSnapshot } from '../shared/localUnits'
 import type { SecretStorageStatus } from '../shared/secretStorage' // P1-K5
 import type { RemoteSessionsApi, RemoteSessionsView } from '../shared/remoteSessions' // P1-K4
 import type { RemoteSafetyApi, RemoteSafetyState } from '../shared/remoteSafety' // P1-K2
@@ -171,6 +172,25 @@ const api = {
    *  url = 主进程按名册定下的加载地址(共享过来的 Unit 只能用它,渲染层不自己拼)。 */
   unitsBindFrame: (input: { webContentsId: number; unitId: string }): Promise<{ ok: true; url?: string } | { ok: false; code: string }> =>
     ipcRenderer.invoke('units:bindFrame', input),
+  /** 本机多 Unit(shared/localUnits.ts):名册在默认那台的 userData,路径只在主进程里解析;渲染层只拿 id。 */
+  localUnits: {
+    list: (): Promise<LocalUnitsSnapshot> => ipcRenderer.invoke('localUnits:list'),
+    create: (input: { name: string; icon: string; parentDir?: string }): Promise<LocalUnitsResult<{ unit: LocalUnitRow }>> =>
+      ipcRenderer.invoke('localUnits:create', input),
+    chooseParent: (): Promise<{ path: string; display: string } | null> => ipcRenderer.invoke('localUnits:chooseParent'),
+    addExisting: (): Promise<LocalUnitsResult<{ unit: LocalUnitRow }>> => ipcRenderer.invoke('localUnits:addExisting'),
+    open: (id: string): Promise<LocalUnitsResult> => ipcRenderer.invoke('localUnits:open', id),
+    rename: (id: string, patch: { name?: string; icon?: string }): Promise<LocalUnitsResult<{ unit: LocalUnitRow }>> =>
+      ipcRenderer.invoke('localUnits:rename', id, patch),
+    reveal: (id: string): Promise<LocalUnitsResult> => ipcRenderer.invoke('localUnits:reveal', id),
+    remove: (id: string): Promise<LocalUnitsResult> => ipcRenderer.invoke('localUnits:remove', id),
+    addToDesktop: (id: string): Promise<LocalUnitsResult> => ipcRenderer.invoke('localUnits:addToDesktop', id),
+    onChanged: (cb: () => void): (() => void) => {
+      const listener = () => cb()
+      ipcRenderer.on('localUnits:changed', listener)
+      return () => { ipcRenderer.removeListener('localUnits:changed', listener) }
+    },
+  } satisfies LocalUnitsApi,
   /** 这扇窗口重新拿到焦点(主进程 browser-window-focus 转告;webview 占着焦点时宿主页自己的 focus 事件不可靠)。 */
   onWindowFocused: (cb: () => void): (() => void) => {
     const listener = (): void => cb()
@@ -819,6 +839,7 @@ const AGENT_KEYS = [
   'envCheck', 'envRun', 'onEnvOutput',
   'pluginsUserInstalled', 'pluginsUninstall',
   'unitsList', 'unitsOpenInBrowser', 'unitsUpdate', 'unitsRemove', 'unitHostStatus', 'unitsPairedList', 'unitsPairedRemove', 'unitsProbeLan', 'unitsP2pOpen', 'unitRelay', 'unitsAddToDesktop', 'unitsOpenWindow', 'unitsShowMain', 'unitsBindFrame', // 设备互联依赖 agent 后端
+  'localUnits', // 本机多 Unit:每份都带自己的引擎
   // P1-K5
   'secretStorageStatus', 'secretStorageRetry', 'secretStorageResetUnitPairing', 'secretStorageRelaunch', // 设备凭据提示挂在设备互联脚部,同属 agent 后端
   // P1-K4
@@ -865,7 +886,8 @@ const on = <T,>(channel: string) => (cb: (v: T) => void): (() => void) => {
   return () => { ipcRenderer.removeListener(channel, listener) }
 }
 if (sandboxSelf) {
-  (api as Record<string, unknown>).sandbox = {
+  delete (api as Record<string, unknown>).localUnits // 沙箱里不管本机 Unit
+  ;(api as Record<string, unknown>).sandbox = {
     self: sandboxSelf,
     action: (a: string, note?: string) => ipcRenderer.invoke('pluginSandbox:childAction', a, note),
     changed: () => ipcRenderer.send('pluginSandbox:changed'),
