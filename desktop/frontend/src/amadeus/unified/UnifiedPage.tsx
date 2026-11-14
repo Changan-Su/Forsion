@@ -1727,6 +1727,7 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
   // 分栏列节点 schema + per-page fold(闭包现读 pipe.fm,多页并发不串,Codex 终审 P1)+ 嵌入层。
   // ⚠️ 稳定引用:MilkdownInner 只建一次编辑器。
   const typingDraft = useRef<TypingDraftPacer | null>(null) // 连打期间的草稿节拍(见 typingDraft.ts),装在下面 G2-08 那条 effect 里
+  const recoveryOpen = useRef(false) // 「恢复草稿」条还在等用户决定:那份草稿和本实例同一格,连打节拍不许盖掉它
   const editorPlugins = useMemo(
     () => [
       ...layer.plugins,
@@ -2837,6 +2838,9 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
       // 写下去就是拿旧全文盖掉别的实例 / 窗口刚写的新版。
       if (!pipe.writing && isPristine()) {
         pipe.pending = false
+        // 连打期间存过草稿、随后又撤回成「没有用户改动」:那份草稿已过时,留着会在下次打开时误弹恢复。
+        if (pipe.stashed != null) clearDraft(vaultRoot, path, pipe.stashed, pipe.slot)
+        pipe.stashed = null
         return
       }
       // D-04:写是异步的,切走 / 关窗后未必来得及完成,也可能失败 —— 先同步把草稿存进本机,写成功再删
@@ -2953,7 +2957,8 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
     const pacer = createTypingDraftPacer({
       stash: typingStash,
       composing: () => isComposing() || !!layer.getView()?.composing,
-      blocked: () => !!pipe.held || !!pipe.moveHandoff, // 挪动在途:旧路径随时会没,这时存草稿就是孤儿(N-5)
+      // 挪动在途:旧路径随时会没,这时存草稿就是孤儿(N-5)。恢复条还开着:同一格里是用户还没决定的旧草稿,不能被盖掉。
+      blocked: () => !!pipe.held || !!pipe.moveHandoff || recoveryOpen.current,
     })
     typingDraft.current = pacer
     const onHidden = (): void => { if (document.visibilityState === 'hidden') flushNow(true) }
@@ -3250,6 +3255,7 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
     if (draft) clearDraft(vaultRoot, path, undefined, draft.slot)
     setDraft(null)
   }
+  recoveryOpen.current = draft != null
   const restoreDraft = (): void => {
     const d = draft
     setDraft(null)

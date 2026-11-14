@@ -43,6 +43,7 @@
 //   T1 打字途中盘上一次没写(写盘节奏照旧等停手),但本机草稿已在、且只落后最后约 2 秒
 //   T2 「崩溃」:只带着那一刻的本机草稿、用旧盘重开 → 出「恢复草稿」条,点了字就回来
 //   T3 停手后照常落盘,打字途中存的草稿随之删掉(没有过时草稿留下误弹恢复)
+//   T4 重开后「恢复草稿」条还没决定时接着连打 → 那份旧草稿不被连打节拍盖掉
 //
 // 用法:npm run check:unifiedcas(= node scripts/e2e-editor.cjs --check=unifiedcas;worktree 里设 HARNESS_URL)
 const fs = require('fs'), os = require('os'), path = require('path')
@@ -914,6 +915,12 @@ async function groupT(browser) {
     await q.waitForSelector(PM, { timeout: 60000 })
     await q.waitForTimeout(800)
     const bar = await q.evaluate(() => !![...document.querySelectorAll('.unified-page [data-save="draft"] button')].find((b) => b.textContent === '恢复草稿'))
+    // T4:恢复条还开着时在这篇里接着连打 3 秒 → 那份还没决定的草稿不许被连打节拍盖掉
+    await caretAfter(q, 0, '第一段。')
+    await q.keyboard.type('zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz', { delay: 80 })
+    const kept = await q.evaluate((k) => localStorage.getItem(k), mid.key)
+    record('T4 恢复条未决时连打:原草稿原样留着', kept === mid.raw, JSON.stringify({ same: kept === mid.raw }))
+    await q.evaluate(() => { const v = window.__upage.probe.view(); v.dispatch(v.state.tr.delete(v.state.selection.from - 36, v.state.selection.from)) })
     await q.evaluate(() => [...document.querySelectorAll('[data-save="draft"] button')].find((b) => b.textContent === '恢复草稿')?.click())
     await q.waitForTimeout(1500)
     const back = await q.evaluate(() => window.__upage.vault.get('Unified.md'))

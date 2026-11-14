@@ -226,3 +226,22 @@ describe('typing drafts wired into the unified page', () => {
     expect(readDraft(VAULT, PATH)).toBeNull()
   })
 })
+
+describe('unmount flush after typing back to nothing (no user edits left)', () => {
+  const unmountFlush = between('    const flush = (): void => {\n      syncFromEditor()', '    const onUnload =')
+  it('clears the draft the typing pacer stored, so reopening does not offer undone text', () => {
+    const h = mountPage(DISK)
+    h.editor.body = DISK + 'undone later'
+    h.typingStash()
+    expect(readDraft(VAULT, PATH)).not.toBeNull()
+    // 撤回成只差编辑器规范化(isPristine 为真、但文本 ≠ lastSaved),下一跳之前就关掉
+    const pipe = { ...h.pipe, body: DISK + ' ', retired: false, readOnly: false, timer: null }
+    const flush = runInNewContext(transform(`${unmountFlush}\nflush`, { transforms: ['typescript'] }).code, {
+      pipe, vaultRoot: VAULT, path: PATH, composeFm, stashDraft, clearDraft, clearTimeout,
+      syncFromEditor() {}, flushPropDrafts() {}, settleUnsaved() {}, writeNow: vi.fn(), isPristine: () => true,
+    }) as () => void
+    flush()
+    expect(readDraft(VAULT, PATH)).toBeNull()
+    expect(reopen(DISK)).toBeNull()
+  })
+})
