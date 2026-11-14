@@ -184,7 +184,8 @@ const api = {
       ipcRenderer.invoke('localUnits:rename', id, patch),
     reveal: (id: string): Promise<LocalUnitsResult> => ipcRenderer.invoke('localUnits:reveal', id),
     remove: (id: string): Promise<LocalUnitsResult> => ipcRenderer.invoke('localUnits:remove', id),
-    addToDesktop: (id: string): Promise<LocalUnitsResult> => ipcRenderer.invoke('localUnits:addToDesktop', id),
+    addToDesktop: (id: string, opts?: { iconPng?: string; fallbackName?: string }): Promise<LocalUnitsResult> =>
+      ipcRenderer.invoke('localUnits:addToDesktop', id, opts),
     onChanged: (cb: () => void): (() => void) => {
       const listener = () => cb()
       ipcRenderer.on('localUnits:changed', listener)
@@ -876,6 +877,12 @@ const CLOUD_KEYS: Record<string, string> = {
 }
 for (const [k, channel] of Object.entries(CLOUD_KEYS)) if (!cloudPresent().has(channel)) delete (api as Record<string, unknown>)[k]
 if (!cloudPresent().size) delete (api as Record<string, unknown>).cloudInvoke
+
+// 角色(electron/hostRole.ts):不是这台电脑的主人(插件沙箱 / 文件夹 Unit)→ 没有 Clip 安装(Clip 连默认那台);
+// 文件夹 Unit 不录电脑历史(整机一份,归默认那台)。主进程对应的处理器也不注册,留着键只会 reject "No handler registered"。
+const hostRole = ipcRenderer.sendSync('host:role') as { machineOwner?: boolean; folderUnit?: boolean } | null
+if (hostRole?.machineOwner === false) delete (api as Record<string, unknown>).clipExtension
+if (hostRole?.folderUnit === true) delete (api as Record<string, unknown>).computerHistory
 
 // 插件沙箱(electron/pluginSandbox.ts / sandboxChild.ts):用户那份 Forsion 拿控制面 pluginSandbox;沙箱那份拿 sandbox(自身信息 +
 // 沙箱条按钮)。两者互斥:沙箱里不能再起沙箱。主进程两种身份都答 pluginSandbox:self(普通实例答 null),同步问一次就分得清。

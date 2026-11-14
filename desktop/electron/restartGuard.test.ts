@@ -25,6 +25,12 @@ describe('restart protection', () => {
     answer(true)
     expect(await first).toEqual({ ok: true }); expect(restart).toHaveBeenCalledTimes(1)
   })
+  it('a restart that blocks itself (Units on this computer still open) reports ok:false and can be retried', async () => {
+    const restart = vi.fn().mockResolvedValueOnce({ ok: false }).mockResolvedValueOnce(undefined)
+    const request = createRestartGuard({ inspect: async () => ({ tasks: 0, processes: 0 }), confirm: vi.fn(), restart })
+    expect(await request(true)).toEqual({ ok: false })
+    expect(await request(true)).toEqual({ ok: true })
+  })
   it('does not interpret an unreachable engine as no work; cancellation allows a later retry', async () => {
     const confirm = vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true), restart = vi.fn()
     const request = createRestartGuard({ inspect: async () => { throw new Error('offline') }, confirm, restart })

@@ -40,7 +40,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, writ
 import { ensureCliInstalled } from './cliInstall'
 import { PRODUCT } from './product'
 import { readSpaceIconDataUrl } from './spaceIcon'
-import { bindDevTanguHome, forsionHomeDir, tanguDataDir, migrateForsionHome, migrateEngineData, migratePair, setDevMode, defaultWorkspaceDir as forsionWorkspaceDir } from './forsionHome'
+import { bindDevTanguHome, bindFolderUnitWorkspace, forsionHomeDir, tanguDataDir, migrateForsionHome, migrateEngineData, migratePair, setDevMode, defaultWorkspaceDir as forsionWorkspaceDir } from './forsionHome'
 import { moveToDesktopTrash } from './trashWriter'
 import { privateHostReason } from './netGuard'
 import { execFile, execFileSync, spawn } from 'child_process'
@@ -67,7 +67,7 @@ import { parseSourcePref } from '../shared/updateSource'
 import { fetchWebsiteReleases } from './websiteReleases'
 import { createRestartGuard, readRestartActivity } from './restartGuard'
 import { createTray, MINI_ACCELERATOR, mergeTrayReports, refreshTrayMenu, sanitizeTraySessions, setTrayIndicator, setTraySessions, traySessions, trayLang } from './tray'
-import { initMainLocale, mainLocale, mt } from './mainI18n'
+import { initMainLocale, mainLocale, mt, mtFor } from './mainI18n'
 import { createQuitGuards } from './quitGuard'
 import { closeDialogOptions, closeDialogPick, storedCloseAction, type CloseAction } from './closeAction'
 import { createContentFlush } from './contentSyncFlush'
@@ -150,27 +150,108 @@ import { createMiniDockMotion, miniDockFrame } from './miniDockMotion'
 import { isForsionUrl, pushDeepLink, drainDeepLinks, filesFromArgv, pushOpenFile, drainOpenFiles } from './deepLink'
 import { SPACE_SHORTCUT, createSpaceShortcut, createWindowShortcut, iconPngFromDataUrl, isSpaceId, spaceIconFile, spaceShortcutMetaFile, spaceWindowIdFromUrl, windowShortcutAppUserModelId, windowShortcutLink, type WindowShortcutKind } from './spaceShortcut'
 import { UNIT_SHORTCUT, handleUnitAddToDesktop, isUnitId, parseRosterResponse, parseUnitWindowState, unitWindowIdFromUrl, type RosterRead, type UnitShortcutResult, type UnitWindowEntry } from './unitShortcut'
+import { isMachineOwner, setHostRole } from './hostRole'
+import { LOCAL_UNIT_QUIT_ARG } from '../shared/localUnits'
+import { LOCAL_UNIT_SHORTCUT, clearLocalUnitRunRecord, defaultUserDataDir, localUnitAppUserModelId, localUnitChannel, localUnitRegistryFile, localUnitSpawnArgs, localUnitSpawnEnv, localUnitsDefaultParent, macAppBundleOf, parseLocalUnitArgs, resolveLocalUnitLaunch, writeLocalUnitRunRecord } from './localUnits'
+import { createLocalUnitsHost, showInstallBlocked, type LocalUnitsHost } from './localUnitsHost'
+import { clearDataPaths } from './clearDataPaths'
 
 /** ~/.tangu(与包内 core/tanguHome.ts 同约定;TANGU_HOME 可整体重定向)。 */
 setDevMode(!app.isPackaged) // dev 数据目录 ~/.forsion-dev,与正式版隔离(模块装载即定,先于一切路径解析)
 /** 本进程是插件沙箱(用户那份 Forsion 按需另起的,见 pluginSandbox.ts)。沙箱不碰整机共享的东西:协议注册、托盘、全局快捷键、
  *  CLI、MCP 固定端口、更新检查、自动 Mini;关窗即退出。数据目录由父进程经 --user-data-dir / TANGU_HOME / FORSION_WORKSPACE_DIR 指进去。 */
 const SANDBOX = sandboxSelf()
+
+// ── 本机多 Unit(localUnits.ts):`--forsion-unit=<id>` 必须在决定 userData / home 之前读 ─────────────────────────
+// 名册在**默认那台**的 userData 下:先记下它(此刻还没改 userData;开发版同下面那行挂 -dev),再按名册 + 标记文件核对 id 与通道。
+// 对不上 → 一句错误、不建任何目录、退出(不回落成默认那台:那样会把参数交给正在跑的默认那台、主窗被叫出来)。
+// 插件沙箱带着父进程给的身份,不认这个参数。
+const DEFAULT_USER_DATA = defaultUserDataDir(app.getPath('userData'), app.isPackaged)
+const LOCAL_UNIT_REGISTRY_FILE = localUnitRegistryFile(DEFAULT_USER_DATA)
+const LOCAL_UNIT_CHANNEL = localUnitChannel(app.isPackaged)
+const LOCAL_UNIT_ARGS = parseLocalUnitArgs(process.argv.slice(1))
+/** 这个 --user-data-dir(若启动时带着)定的是「哪一台是默认那台」:拉起同一家的别的实例时原样转交(台架靠它隔离;安装版平时没有)。 */
+const USER_DATA_DIR_SWITCH = app.commandLine.getSwitchValue('user-data-dir') || null
+if (!SANDBOX && LOCAL_UNIT_ARGS.quit && !LOCAL_UNIT_ARGS.present) process.exit(0) // 只有退出请求、没说哪一台:什么也不做
+const LOCAL_UNIT = (() => {
+  if (SANDBOX || !LOCAL_UNIT_ARGS.present) return null
+  const r = resolveLocalUnitLaunch({ id: LOCAL_UNIT_ARGS.id, registryFile: LOCAL_UNIT_REGISTRY_FILE, channel: LOCAL_UNIT_CHANNEL })
+  if (r.ok) return r
+  if (!LOCAL_UNIT_ARGS.quit) { // 退出请求对不上就安静退出(装更新前的那一轮不弹框)
+    let langs: string[] = []
+    try { langs = app.getPreferredSystemLanguages() } catch { /* 拿不到就英文 */ }
+    const lang = langs.some((l) => /^zh/i.test(l)) ? 'zh' : 'en'
+    const title = mtFor(lang, 'main.localUnits.refuseTitle')
+    const msg = mtFor(lang, `main.localUnits.refuse.${r.reason}`)
+    // 台架(TANGU_HARNESS_QUIET=1)里没人点模态框:写 stderr,退出码 3
+    if (process.env.TANGU_HARNESS_QUIET === '1') { console.error(`[local-units] refused (${r.reason}): ${msg}`); process.exit(3) }
+    dialog.showErrorBox(title, msg)
+    process.exit(1)
+  }
+  process.exit(0)
+})()
+setHostRole({ pluginSandbox: !!SANDBOX, folderUnitId: LOCAL_UNIT?.id ?? null })
+/** 这台电脑的主人(默认那台):只有它碰整机共享的东西(hostRole.ts)。插件沙箱与文件夹 Unit 都不是。 */
+const MACHINE_OWNER = isMachineOwner()
+if (LOCAL_UNIT) {
+  // 文件夹 Unit 住在自己的文件夹里:userData = app-data(不挂 -dev)、引擎 home = home/、工作区 = Forsion/(同进同退)。
+  app.setPath('userData', LOCAL_UNIT.paths.appData)
+  process.env.TANGU_HOME = LOCAL_UNIT.paths.home
+  delete process.env.FORSION_WORKSPACE_DIR
+  bindFolderUnitWorkspace(LOCAL_UNIT.paths.workspace)
+  // 电脑操作助手是整机的:socket 指到不存在的地方(主进程与引擎都读这个变量),这一份绝不连上默认那台的助手
+  process.env.PI_CU_SOCKET_PATH = join(LOCAL_UNIT.paths.appData, 'no-computer-use.sock')
+}
+// Chromium 开关:只给插件沙箱(它平时压在别的窗口底下还要截图)。文件夹 Unit 是用户正常在用的窗口,不加 —— 加了只会让它在后台照样耗电。
 if (SANDBOX) for (const sw of SANDBOX_SWITCHES) app.commandLine.appendSwitch(sw) // 压在底下的沙箱窗口照样出新帧(截图不截到旧画面)
 // dev 与安装版的 Electron userData 默认共用同一目录 appData/forsion-desktop(app.getName() 取 package.json
 // name="forsion-desktop";electron-builder 的 productName 只改 .app 包名/CFBundleName「Forsion」,不动 userData)。
 // → 二者抢同一把 userData/SingletonLock,后启者 requestSingleInstanceLock() 返 false 被下方 app.exit(0)(即
 // 「安装版在跑时 npm run dev 静默退出」)。dev 重定向 userData 到独立目录,彻底隔离(锁 + 壳层配置 + 窗口状态)→ 可同开。
-if (!app.isPackaged) app.setPath('userData', app.getPath('userData') + '-dev')
+if (!app.isPackaged && !LOCAL_UNIT) app.setPath('userData', app.getPath('userData') + '-dev')
 // productName 改名(Tangu Agent 2.0 → Forsion)→ userData 目录随名走:一次性迁移壳层配置(打包态才有产品名目录)。
-if (app.isPackaged) migratePair(join(app.getPath('appData'), 'Tangu Agent 2.0'), join(app.getPath('appData'), 'Forsion'))
+if (app.isPackaged && !LOCAL_UNIT) migratePair(join(app.getPath('appData'), 'Tangu Agent 2.0'), join(app.getPath('appData'), 'Forsion'))
 const tanguHomeDir = forsionHomeDir // 品牌迁移后真身在 ~/.forsion(名字保留,少动 20+ 调用点)
 /** ~/.tangu/themes:拖入式主题目录(每主题一子目录:theme.json + theme.css)。 */
 const themesDir = (): string => join(tanguHomeDir(), 'themes')
 
+/** 另起一份 Forsion(默认那台 / 别的文件夹 Unit / 叫某台退出 / 把链接和文件交给默认那台):同一个可执行文件 + 开发版的 appPath,
+ *  先清掉这一份的身份与重定向环境变量(localUnitSpawnEnv),detached + unref。拉不起来 = false。 */
+function spawnForsionInstance(o: { unitId?: string; quit?: boolean; forward?: string[] } = {}): boolean {
+  try {
+    const args = localUnitSpawnArgs({ appArgs: app.isPackaged ? [] : [app.getAppPath()], userDataDirSwitch: USER_DATA_DIR_SWITCH, ...o })
+    const child = spawn(process.execPath, args, { env: localUnitSpawnEnv(process.env), detached: true, stdio: 'ignore' })
+    child.on('error', (e) => console.error('[local-units] spawn failed:', e.message))
+    child.unref()
+    return typeof child.pid === 'number'
+  } catch (e) {
+    console.error('[local-units] spawn failed:', e)
+    return false
+  }
+}
+/** 文件夹 Unit 收到的链接 / 文件(mac 上系统可能投给它):原样交给默认那台,自己不处理。 */
+function forwardToDefaultUnit(items: string[]): void {
+  if (items.length) spawnForsionInstance({ forward: items })
+}
+
 // 单实例锁:托盘常驻语义下,再次启动只唤起已开的窗口后立即退出(app.exit 同步,不再往下建二号窗)。
+// 文件夹 Unit 的锁按它自己的 userData(app-data/):同一个文件夹开两次 = 第二个把参数交给第一个就退出。
 if (!app.requestSingleInstanceLock()) app.exit(0)
+else if (LOCAL_UNIT) {
+  // `--forsion-unit-quit` 而那台没在跑(锁拿到了)→ 什么也不做立刻退出
+  if (LOCAL_UNIT_ARGS.quit) { app.releaseSingleInstanceLock(); process.exit(0) }
+  const appData = LOCAL_UNIT.paths.appData
+  try { writeLocalUnitRunRecord(appData, process.pid) } catch (e) { console.error('[local-units] run record not written:', e) }
+  process.on('exit', () => clearLocalUnitRunRecord(appData, process.pid))
+}
 app.on('second-instance', (_e, argv, cwd) => {
+  if (LOCAL_UNIT) {
+    // 装更新前默认那台发来的退出请求:走正常退出(退出前确认照旧)
+    if (argv.includes(LOCAL_UNIT_QUIT_ARG)) { isQuitting = true; app.quit(); return }
+    forwardToDefaultUnit([...argv.filter(isForsionUrl), ...filesFromArgv(argv.slice(1), cwd)])
+    showMainWindow()
+    return
+  }
   // Space 桌面快捷方式(win/linux 带着 forsion://space/<id>?window=standalone 二启):只开那个 Space 的窗,主窗不出来。
   if (!argv.some((a) => spaceWindowIdFromUrl(a) || unitWindowIdFromUrl(a))) showMainWindow()
   for (const a of argv) if (isForsionUrl(a) && !routeSpaceWindowLink(a)) deliverDeepLink(a) // win/linux:二启的 forsion:// 在 argv 里
@@ -180,7 +261,7 @@ app.on('second-instance', (_e, argv, cwd) => {
 // ── forsion:// deep link(入站;与出站外链回投的 app:open-url 无关)────────────────────────
 // 正典:docs/ToBeImproved/View基座统一化方案_2026-08-25.md §4。只导航不执行;白名单在渲染层 resolver。
 // 系统 handler 仅打包版注册:dev 注册会把裸 electron 二进制写进 LaunchServices/注册表,污染整机。
-if (app.isPackaged && !SANDBOX) app.setAsDefaultProtocolClient('forsion')
+if (app.isPackaged && MACHINE_OWNER) app.setAsDefaultProtocolClient('forsion') // 整机只有一个处理者:默认那台(文件夹 Unit / 插件沙箱都不注册)
 /** 渲染层已 drain 过 → 之后直推;窗口 reload/重建把它翻回 false(Cmd+R 会换掉监听者,推进虚空)。 */
 let deepLinkReady = false
 // ── Space 桌面快捷方式:forsion://space/<id>?window=standalone 在主进程就截下,直接开那个 Space 的独立窗(spaceShortcut.ts)。
@@ -215,10 +296,11 @@ function deliverDeepLink(url: string): void {
   }
 }
 // mac:open-url 必须在 whenReady 之前挂上,冷启动经 Dock/浏览器唤起的 URL 才接得到。
-// 沙箱与用户那份同一个 bundle:系统可能把链接 / 文件投给沙箱,转回给用户那份
-app.on('open-url', (e, url) => { e.preventDefault(); if (isForsionUrl(url)) { if (SANDBOX) sandboxForward('url', url); else if (!routeSpaceWindowLink(url)) deliverDeepLink(url) } })
+// 沙箱与用户那份同一个 bundle:系统可能把链接 / 文件投给沙箱,转回给用户那份;投给文件夹 Unit 的原样交给默认那台(拉起它、链接放进 argv)
+app.on('open-url', (e, url) => { e.preventDefault(); if (isForsionUrl(url)) { if (SANDBOX) sandboxForward('url', url); else if (LOCAL_UNIT) forwardToDefaultUnit([url]); else if (!routeSpaceWindowLink(url)) deliverDeepLink(url) } })
 // win/linux 首启:URL 直接躺在 process.argv(mac 走 open-url,不经 argv)。
-for (const a of process.argv.slice(1)) if (isForsionUrl(a) && !routeSpaceWindowLink(a)) pushDeepLink(a)
+if (LOCAL_UNIT) forwardToDefaultUnit([...process.argv.slice(1).filter(isForsionUrl), ...filesFromArgv(process.argv.slice(1), process.cwd())])
+else for (const a of process.argv.slice(1)) if (isForsionUrl(a) && !routeSpaceWindowLink(a)) pushDeepLink(a)
 
 // ── 外部文件打开(文件关联见 electron-builder.config.cjs 的 fileAssociations)──────────────────
 // 渲染层落点:库外 → wsfile 临时标签页(预览 / .md 就地编辑写回,不导入笔记库);本地库内 → Amadeus 原生视图。
@@ -232,9 +314,9 @@ function deliverOpenFile(p: string): void {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('app:open-file')
 }
 // mac:Finder 双击 / 打开方式 / 拖到 Dock 图标。同 open-url,必须在 whenReady 之前挂上,冷启动才接得到。
-app.on('open-file', (e, p) => { e.preventDefault(); if (SANDBOX) sandboxForward('file', p); else deliverOpenFile(p) })
-// win/linux 首启:文件路径在 argv 里(argv[0] 是可执行文件本身,切掉)。
-for (const f of filesFromArgv(process.argv.slice(1), process.cwd())) pushOpenFile(f)
+app.on('open-file', (e, p) => { e.preventDefault(); if (SANDBOX) sandboxForward('file', p); else if (LOCAL_UNIT) forwardToDefaultUnit([p]); else deliverOpenFile(p) })
+// win/linux 首启:文件路径在 argv 里(argv[0] 是可执行文件本身,切掉)。文件夹 Unit 的已在上面整批交给默认那台。
+if (!LOCAL_UNIT) for (const f of filesFromArgv(process.argv.slice(1), process.cwd())) pushOpenFile(f)
 
 /**
  * 加载 ~/.tangu/.env 进 process.env(不覆盖真实环境;与包内 tanguHome.loadTanguEnv 同语义)。
@@ -667,6 +749,7 @@ async function ensureDefaultWorkspaceDir(stored: TanguStoredConfig): Promise<str
     const old = vault && join(vault, 'Sessions')
     if (old && (await stat(old).then((s) => s.isDirectory()).catch(() => false))) dir = old
   }
+  if (!dir && LOCAL_UNIT) dir = join(forsionWorkspaceDir(), 'Sessions') // 文件夹 Unit 不认家目录里的老 ~/Tangu(那是默认那台的)
   if (!dir) {
     const legacy = join(app.getPath('home'), 'Tangu')
     const isRealLegacyDir = await lstat(legacy).then((s) => s.isDirectory() && !s.isSymbolicLink()).catch(() => false)
@@ -752,7 +835,8 @@ const globalHotkeyPause = createGlobalHotkeyPause({ log: (m) => console.log(m) }
 const remoteSafety = createRemoteSafety({
   file: () => join(app.getPath('userData'), REMOTE_LOCK_FILE),
   engine: () => { const st = backend.getStatus(); return { url: st.state === 'ready' ? st.url : null, token: backend.getToken() } },
-  shortcuts: { register: (acc, cb) => globalShortcut.register(acc, cb), unregister: (acc) => globalShortcut.unregister(acc) },
+  // 急停控制器各份都有(文件夹 Unit 的引擎有自己的远程会话);全局热键是整机的,只有默认那台注册 —— 别的份注册函数恒回 false(设置页显示热键不可用)
+  shortcuts: { register: (acc, cb) => (MACHINE_OWNER ? globalShortcut.register(acc, cb) : false), unregister: (acc) => globalShortcut.unregister(acc) },
   notify: (title, body) => { if (Notification.isSupported()) new Notification({ title: title.slice(0, 200), body: body.slice(0, 300) }).show() },
   refreshTray: (ind) => { refreshTrayMenu(); setTrayIndicator(ind.title, ind.tooltip) },
   keepAwake,
@@ -997,6 +1081,8 @@ async function migrateCloudTokenToAuthJson(): Promise<void> {
 
 const backend = new BackendManager()
 let mainWindow: BrowserWindow | null = null
+/** 本机多 Unit 的 IPC 与变化广播(localUnitsHost.ts);whenReady 里建,有本机引擎、不是插件沙箱时才有。 */
+let localUnitsHost: LocalUnitsHost | null = null
 // 托盘常驻:关窗默认只隐藏;仅托盘「退出」/before-quit 置 true 后才放行真正关闭。
 let isQuitting = false
 // 新同步的冲刷时机(electron/contentSyncFlush.ts):切走窗口 1 秒后 / 合盖前 / 退出前,让还在静默期里的改动立刻推
@@ -1041,7 +1127,9 @@ const mcpLifecycle = createMcpLifecycle({
     },
     homeDir: forsionHomeDir(),
     log: (m) => console.log(m),
-  }),
+  // 文件夹 Unit 不占 3591 起的固定口(那是默认那台的,外部 agent 按它找):引擎的桌面桥照样要,系统随机分一个口,
+  // 发现文件(desktop-bridge.json / forsion-mcp.json)只写进它自己的 home,引擎从那里读
+  }, LOCAL_UNIT ? { port: 0, tries: 1 } : undefined),
   homeDir: () => forsionHomeDir(),
   localSecret: () => backend.localSecret(),
   log: (m) => console.log(m),
@@ -1310,7 +1398,7 @@ async function openUnitScopedFile(p: string): ReturnType<typeof openUnitHostRegu
  *  startUnitWeb 撞 EADDRINUSE → 落 port 0 → 悄悄换掉用户刚抄走的直连端口。 */
 let unitRefreshChain: Promise<void> = Promise.resolve()
 function refreshUnitHost(): Promise<void> {
-  if (SANDBOX) return Promise.resolve() // 沙箱不做设备互联(局域网端口、云端通道都是整机的)
+  if (!MACHINE_OWNER) return Promise.resolve() // 插件沙箱与文件夹 Unit 都不做设备互联(局域网端口、门铃 / Clip 固定口、云端通道都是整机的)
   unitRefreshChain = unitRefreshChain
     .then(() => doRefreshUnitHost())
     .catch((e) => { console.error('[unit] refresh failed:', e) })
@@ -1904,7 +1992,7 @@ function createWindow(): void {
   // 隐藏 = 常驻托盘(后端/Muse 不中断);退出走和托盘「退出」同一条路(before-quit 的退出前确认、停后端照旧)。
   mainWindow.on('close', (e) => {
     if (isQuitting) return
-    if (SANDBOX) { isQuitting = true; app.quit(); return } // 沙箱不进托盘:关窗就停
+    if (!MACHINE_OWNER) { isQuitting = true; app.quit(); return } // 沙箱与文件夹 Unit 不进托盘(没有托盘):关窗就停
     e.preventDefault()
     void onMainWindowClose()
   })
@@ -3110,7 +3198,8 @@ app.whenReady().then(async () => {
   }) : undefined
   // 电脑历史:IPC 先登记(设置页随时会问,handler 里等 ready),配置读完再 start(见下方活动日志那段)。
   // 读者是 agent 工具 / Muse,没有 agent 后端的产品形态不建(preload 同步收掉 window.tangu.computerHistory)。
-  if (PRODUCT.agentBackend) {
+  // 文件夹 Unit 不录电脑历史(整机只录一份,归默认那台;preload 同步收掉 window.tangu.computerHistory)
+  if (PRODUCT.agentBackend && !LOCAL_UNIT) {
     const socketPath = helperSocketPath()
     const chRoot = join(forsionHomeDir(), 'computer-history')
     computerHistory = new ComputerHistory({
@@ -3138,7 +3227,8 @@ app.whenReady().then(async () => {
     registerComputerHistoryIpc(computerHistory, isTrustedSender, (on) => telemetry.setting('computerHistory.enabled', on))
   }
   // Windows 系统通知前提(无 AppUserModelId 时 Notification 可能不弹);mac/linux 无副作用。
-  app.setAppUserModelId('com.forsion.tangu')
+  // 文件夹 Unit 各自一组(与它的桌面快捷方式同一个 id),任务栏上按 Unit 分开
+  app.setAppUserModelId(LOCAL_UNIT ? localUnitAppUserModelId(LOCAL_UNIT.id) : 'com.forsion.tangu')
   // 媒体权限(麦克风,语音输入):Electron 层放行——部分平台/版本默认拒 getUserMedia。callback(true) 沿用
   // 「未设 handler=全放行」的既有默认,不回归其他权限(通知等)。macOS 仍受系统隐私设置门控(拒了要去设置改)。
   session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) => callback(true))
@@ -3529,6 +3619,12 @@ app.whenReady().then(async () => {
       return (await dialog.showMessageBox(mainWindow, options)).response === 1
     },
     restart: async (install) => {
+      // 装更新前先关掉这台电脑上在跑的文件夹 Unit(同一份安装,文件被它们占着):最多等 15 秒,还有没关的就不装、提示一声。
+      // 放在 isQuitting 之前:挡下来时这一份照常能用。
+      if (install && localUnitsHost) {
+        const left = await localUnitsHost.quitRunningForInstall(15_000)
+        if (left !== 0) { await showInstallBlocked(mainWindow, left); return { ok: false } }
+      }
       // 还有文件在传(蓬洲云):重启 / 装更新前先问一次;点了退出,后面的 before-quit 就不再问
       if (!(await quitGuards.confirmFirst())) return
       isQuitting = true
@@ -3552,7 +3648,7 @@ app.whenReady().then(async () => {
   })
   ipcMain.handle('updater:restart', (e) => {
     if (!isTrustedSender(e)) throw new Error('forbidden')
-    return guardedRestart(canInstallUpdate() && getUpdaterStatus().phase === 'downloaded')
+    return guardedRestart(MACHINE_OWNER && canInstallUpdate() && getUpdaterStatus().phase === 'downloaded')
   })
   // 定时 / 唤醒触发的检查:下载中别插一脚(下载完 checkForUpdates 自己会原样返回)。
   const checkAppUpdateQuietly = (): void => { if (getUpdaterStatus().phase !== 'downloading') void checkForUpdates() }
@@ -3562,7 +3658,7 @@ app.whenReady().then(async () => {
     return checkForUpdates()
   }
   ipcMain.handle('updater:core-status', () => corePluginUpdater.snapshot())
-  if (app.isPackaged && !SANDBOX) {
+  if (app.isPackaged && MACHINE_OWNER) {
     setTimeout(() => {
       void corePluginUpdater.check()
       // 应用本体也跟着每 6 小时查一次:原来只在渲染层启动时查,一直开着不退的人永远收不到新版本(What's new 弹窗靠这个广播)
@@ -3570,7 +3666,7 @@ app.whenReady().then(async () => {
     }, 60_000).unref()
   }
   // tangu CLI 自动安装/自愈:shim 指向 App 内部资源(App 自动更新 → CLI 同步),幂等注入 PATH;吞错不阻塞。
-  if (PRODUCT.agentBackend && !SANDBOX) void ensureCliInstalled({
+  if (PRODUCT.agentBackend && MACHINE_OWNER) void ensureCliInstalled({
     isPackaged: app.isPackaged,
     platform: process.platform,
     execPath: process.execPath,
@@ -3650,7 +3746,7 @@ app.whenReady().then(async () => {
     keepAwake.rearm()
     computerHistory?.recheck()
     unitHub?.reconnect('resume')
-    if (app.isPackaged) checkAppUpdateQuietly() // 合盖一夜回来,新版本在这时候提示
+    if (app.isPackaged && MACHINE_OWNER) checkAppUpdateQuietly() // 合盖一夜回来,新版本在这时候提示
   })
 
   ipcMain.handle('config:get', () => effectiveConfig())
@@ -4190,8 +4286,29 @@ app.whenReady().then(async () => {
     e.sender.startDrag({ file: filePath, icon })
   })
   registerPlatformAccountsIpc() // 插件的平台账号(B 站登录信息等):只读内置浏览器分区、按插件授权
-  registerClipExtensionIpc() // Forsion Clip 手动安装:复制出包的扩展文件夹、打开 Chrome / Edge 扩展页(拖拽复用上面的 fs:startDrag)
-  if (!SANDBOX) startClipVersionSync(localEngineRef) // Forsion 更新后连着的 Clip 换成随包版本并重载
+  // 本机多 Unit(localUnitsHost.ts):不依赖登录或 Extend —— 新建的文件夹 Unit 没登录,也要能从面板回到这台电脑的别的 Unit
+  if (PRODUCT.agentBackend && !SANDBOX) localUnitsHost = createLocalUnitsHost({
+    registryFile: LOCAL_UNIT_REGISTRY_FILE,
+    channel: LOCAL_UNIT_CHANNEL,
+    self: LOCAL_UNIT ? { id: LOCAL_UNIT.id, dir: LOCAL_UNIT.paths.dir } : null,
+    defaultParent: localUnitsDefaultParent(app.isPackaged, homedir()),
+    home: homedir(),
+    isMainSender: (e) => isTrustedSender(e) && !!mainWindow && !mainWindow.isDestroyed() && e.sender === mainWindow.webContents,
+    mainWindow: () => (mainWindow && !mainWindow.isDestroyed() ? mainWindow : null),
+    showMainWindow,
+    spawnInstance: (o) => spawnForsionInstance(o),
+    addToDesktop: (unit, o) => createWindowShortcut(LOCAL_UNIT_SHORTCUT, unit, {
+      isPackaged: app.isPackaged, desktopDir: app.getPath('desktop'), execPath: process.execPath, appImage: process.env.APPIMAGE,
+      fallbackName: typeof o.fallbackName === 'string' && o.fallbackName.trim() ? o.fallbackName.slice(0, 200) : 'Forsion Unit',
+      iconDir: join(app.getPath('userData'), 'local-unit-shortcuts'), iconPng: shortcutIconSource(o.iconPng),
+      writeShortcutLink: process.platform === 'win32' ? (p, opt) => shell.writeShortcutLink(p, 'create', opt) : undefined,
+      appBundle: process.platform === 'darwin' ? macAppBundleOf(process.execPath) : undefined,
+    }),
+    log: (m) => console.log(m),
+  })
+  // Clip 连的是默认那台的引擎与固定口:只有它装 / 同步 Clip(别的份 preload 同步收掉 window.tangu.clipExtension)
+  if (MACHINE_OWNER) registerClipExtensionIpc() // Forsion Clip 手动安装:复制出包的扩展文件夹、打开 Chrome / Edge 扩展页(拖拽复用上面的 fs:startDrag)
+  if (MACHINE_OWNER) startClipVersionSync(localEngineRef) // Forsion 更新后连着的 Clip 换成随包版本并重载
 
   ipcMain.handle('backend:getStatus', () => backend.getStatus())
   ipcMain.handle('backend:getLogs', () => backend.getLogs())
@@ -4503,7 +4620,7 @@ app.whenReady().then(async () => {
     return { url: voiceInputCloudUrl(cloudUrl.replace(/\/+$/, '') + '/api', modelId, `desktop/${app.getVersion()}`), token: creds.token }
   })
   // 全局语音输入(LCL 表面规范第四期):快捷键、语音胶囊(桌面作用域浮层)、往别的应用写字都在 electron/dictation/,这里只接线。
-  registerDictation({ isTrustedSender, globalHotkeyPause, sandbox: !!SANDBOX, dirname: __dirname, rendererUrl: process.env.ELECTRON_RENDERER_URL, userData: app.getPath('userData') })
+  registerDictation({ isTrustedSender, globalHotkeyPause, machineOwner: MACHINE_OWNER, dirname: __dirname, rendererUrl: process.env.ELECTRON_RENDERER_URL, userData: app.getPath('userData') })
 
   ipcMain.handle('asr:transcribe', async (_e, req: { audioBase64: string; mime?: string; modelId?: string; backend?: 'local' | 'cloud'; language?: string; timestamps?: boolean }) =>
     runTranscribe(Buffer.from(req?.audioBase64 || '', 'base64'), req || {}))
@@ -4638,7 +4755,8 @@ app.whenReady().then(async () => {
   // 界面说了算:送来的是这条命令此刻生效的热键('' = 解绑)。成对修饰键 → 订阅对应手势;普通组合键 → 注册全局快捷键。
   // 换了键:之前的「助手太旧 / 问过了」作废(新手势要的版本可能更高,该再问一次)。
   ipcMain.on('appRefs:globalHotkey', (e, raw: unknown) => {
-    if (!isTrustedSender(e) || (process.platform !== 'darwin' && process.platform !== 'win32')) return
+    // 全局手势 / 快捷键是整机的:只有默认那台订阅(文件夹 Unit 与插件沙箱一律不订)
+    if (!isTrustedSender(e) || !MACHINE_OWNER || (process.platform !== 'darwin' && process.platform !== 'win32')) return
     const hk = raw === true ? 'mod+mod' : typeof raw === 'string' ? raw.slice(0, 64) : ''
     const next = Object.hasOwn(HOTKEY_GESTURES, hk) ? HOTKEY_GESTURES[hk] : null
     if (next !== appRefGesture) { appRefHelperAsked = false; appRefHelperOutdated = false }
@@ -4650,7 +4768,7 @@ app.whenReady().then(async () => {
   // 普通组合键只在 Forsion 不在前台时注册成全局快捷键(同手势那边的 excludePids):在前台时交给窗口里的命令分发 ——
   // 不然全局注册会把键吞掉,设置里录这个组合也录不到。注册不上(被别的应用占了)就只在 Forsion 里管用,下次失焦再试。
   function syncAppRefAccelerator(): void {
-    const want = BrowserWindow.getFocusedWindow() || SANDBOX ? null : appRefWantedAccel
+    const want = BrowserWindow.getFocusedWindow() || !MACHINE_OWNER ? null : appRefWantedAccel
     if (want === appRefAccelerator) return
     if (appRefAccelerator) globalShortcut.unregister(appRefAccelerator)
     appRefAccelerator = null
@@ -4715,7 +4833,8 @@ app.whenReady().then(async () => {
   })
 
   // ── 应用内自动更新(electron-updater;检查 → 下载 → 重启安装。mac 仅检测,UI 引导手动下载)──
-  ipcMain.handle('updater:check', () => (SANDBOX ? { phase: 'unsupported' } : checkAllUpdates()))
+  // 更新是整机的(一份安装):只有默认那台查 / 下 / 装;插件沙箱与文件夹 Unit 一律 unsupported
+  ipcMain.handle('updater:check', () => (!MACHINE_OWNER ? { phase: 'unsupported' } : checkAllUpdates()))
   ipcMain.handle('updater:status', () => getUpdaterStatus())
   // 测试版通道开关。落 config.json 的 updater 段;updater.ts 每次检查现读,改完无需重启。
   ipcMain.handle('updater:getBeta', () => betaChannelOn())
@@ -4744,10 +4863,10 @@ app.whenReady().then(async () => {
     showMainWindow()
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('whatsNew:open')
   })
-  ipcMain.handle('updater:download', () => downloadUpdate())
+  ipcMain.handle('updater:download', () => (!MACHINE_OWNER ? { ok: false } : downloadUpdate()))
   ipcMain.handle('updater:install', async (e) => {
     if (!isTrustedSender(e)) throw new Error('forbidden')
-    if (!canInstallUpdate() || getUpdaterStatus().phase !== 'downloaded') return { ok: false }
+    if (!MACHINE_OWNER || !canInstallUpdate() || getUpdaterStatus().phase !== 'downloaded') return { ok: false }
     return guardedRestart(true)
   })
 
@@ -4763,23 +4882,22 @@ app.whenReady().then(async () => {
     await ensureChain // 在途那次收尾(它可能正要重建默认工作区目录)再删
     // 与配置写入同排一队:在途的写先落完再删;删完同一拍就退出,排在后面的写来不及把 config.json(含 apiKey)写回来
     await configQueue(async () => {
-      if (opts?.tangu) {
-        // 显式 TANGU_HOME=…/tangu 时 forsionHomeDir() 是推导出的父目录(可能是 ~ 或整块数据盘)→ 绝不整删,只删用户指定的那个。
-        // ponytail: 该形态下父目录里的共享域文件(auth/config.json 等)会留下;要连带清就得逐项列共享域条目。
-        for (const p of [process.env.TANGU_HOME || forsionHomeDir(), forsionWorkspaceDir(), join(homedir(), '.tangu'), join(homedir(), 'Tangu')]) {
-          await rm(p, { recursive: true, force: true }).catch(() => {})
-        }
-        // 电脑历史根目录单独再删(显式 TANGU_HOME 时它不在上面删的目录里);在途写超时没落定的,等它落定后再删一次。
-        // 就在配置队列里做:删完同一拍退出的约束不破。
-        await chWipe?.afterWipe()
-      }
-      if (opts?.desktop) {
-        // ⚠️ P1-K2 / G11:remote-lock.json **不在**清理列表 —— 清数据 = 不经系统认证解锁(远端锁定只能本机认证后解)
-        for (const f of ['tangu-desktop-config.json', 'amadeus-config.json', REMOTE_SESSIONS_FILE]) { // P1-K4:remote-sessions.json(重置远程会话开关与信任)
-          await rm(join(app.getPath('userData'), f), { force: true }).catch(() => {})
-        }
-        await deviceSecrets.wipe().catch(() => {}) // P1-K5:device-secrets.json(配对 / external token)
-      }
+      // 删哪些路径由 clearDataPaths 按身份算(单测钉住):显式 TANGU_HOME=…/tangu 时只删它本身、不删推导出的父目录;
+      // 插件沙箱不碰整机的 ~/.tangu、~/Tangu 兼容软链;文件夹 Unit 只删本文件夹下的 home/ 与 Forsion/,绝不碰默认那台的数据目录。
+      // ⚠️ P1-K2 / G11:remote-lock.json **不在**桌面那半的清理列表 —— 清数据 = 不经系统认证解锁(远端锁定只能本机认证后解)
+      // ponytail: 显式 TANGU_HOME 形态下父目录里的共享域文件(auth/config.json 等)会留下;要连带清就得逐项列共享域条目。
+      const plan = clearDataPaths({
+        role: LOCAL_UNIT ? 'folder' : SANDBOX ? 'sandbox' : 'owner', tangu: !!opts?.tangu, desktop: !!opts?.desktop,
+        envTanguHome: process.env.TANGU_HOME, forsionHome: forsionHomeDir(), workspace: forsionWorkspaceDir(),
+        userData: app.getPath('userData'), home: homedir(), folderDir: LOCAL_UNIT?.paths.dir,
+        desktopFiles: ['tangu-desktop-config.json', 'amadeus-config.json', REMOTE_SESSIONS_FILE], // P1-K4:remote-sessions.json(重置远程会话开关与信任)
+      })
+      if (plan.refused.length) console.warn('[clear-data] refused to delete:', plan.refused.join(', '))
+      for (const p of plan.remove) await rm(p, { recursive: true, force: true }).catch(() => {})
+      // 电脑历史根目录单独再删(显式 TANGU_HOME 时它不在上面删的目录里);在途写超时没落定的,等它落定后再删一次。
+      // 就在配置队列里做:删完同一拍退出的约束不破。
+      if (opts?.tangu) await chWipe?.afterWipe()
+      if (opts?.desktop) await deviceSecrets.wipe().catch(() => {}) // P1-K5:device-secrets.json(配对 / external token)
     })
     app.relaunch()
     app.exit(0)
@@ -5505,8 +5623,8 @@ app.whenReady().then(async () => {
   // mini 全局快捷键(默认 ⌘/Ctrl+⇧+M;register 返回 false=被占用,吞掉不阻塞启动)。
   const MINI_ACCEL = MINI_ACCELERATOR // 托盘菜单「新建 Mini 对话」显示的是同一个
   const registerMiniShortcut = (): void => { try { globalShortcut.register(MINI_ACCEL, openMiniFromShell) } catch { /* 快捷键冲突 */ } }
-  if (!SANDBOX) registerMiniShortcut()
-  if (!SANDBOX) globalHotkeyPause.add({ pause: () => globalShortcut.unregister(MINI_ACCEL), resume: registerMiniShortcut })
+  if (MACHINE_OWNER) registerMiniShortcut()
+  if (MACHINE_OWNER) globalHotkeyPause.add({ pause: () => globalShortcut.unregister(MINI_ACCEL), resume: registerMiniShortcut })
   if (PRODUCT.agentBackend && !SANDBOX) approvalDelivery.start() // P1-K3:订阅本机引擎待批流(引擎未就绪时 idle,ready 后自连)
   if (PRODUCT.agentBackend && !SANDBOX) void remoteSafety.start() // P1-K2:读锁文件(跨重启)→ 注册急停热键 ⌃⌥⇧.(失败托盘 / 设置页可见)→ 订引擎活动流
 
@@ -5522,7 +5640,7 @@ app.whenReady().then(async () => {
   // ⚠️必须**先于** createWindow / restoreDetachedWindows:恢复的终端 tab 一挂载就 pty:spawn,
   // 那时 handler 还没注册的话 IPC 直接「No handler registered」,视图落进已退出态且不会重试。
   registerPtyIpc(isTrustedSender)
-  if (PRODUCT.agentBackend && process.platform === 'darwin' && !SANDBOX) {
+  if (PRODUCT.agentBackend && process.platform === 'darwin' && MACHINE_OWNER) {
     miniAutoPanel = startMiniAutoPanel({
       readForeground: readComputerUseForeground,
       // 用户按住自动 Mini 拖走时焦点落在它自己身上 —— 不算「回到 Forsion」,否则一拖就收起。
@@ -5536,7 +5654,7 @@ app.whenReady().then(async () => {
   startupWindowGate = false
   hideMainOnLaunch = (pendingSpaceWindows.length > 0 || pendingUnitWindows.length > 0) && !mainRequested
   createWindow()
-  if (!SANDBOX) restoreMiniWindows()
+  if (MACHINE_OWNER) restoreMiniWindows()
   if (SANDBOX) startSandboxChild(SANDBOX, { getWindow: () => mainWindow, quit: () => { isQuitting = true; app.quit() }, log: (m) => console.log(m) })
   // 恢复上次退出时的独立窗(位置/尺寸 + 各窗自恢复布局);之后再开排着的 Space 快捷方式窗 —— 上次没关的同一扇
   // 已经按原位置恢复了,createDetachedWindow 按 sp_<id> 去重,只是叫到前面。
@@ -5547,7 +5665,7 @@ app.whenReady().then(async () => {
   })
   // 系统托盘 / mac 菜单栏图标:显示窗口 / 检查更新 / 退出。
   const ch = computerHistory
-  if (!SANDBOX) createTray({
+  if (MACHINE_OWNER) createTray({
     show: showMainWindow,
     checkUpdates: () => { void checkAllUpdates() },
     quit: () => { isQuitting = true; app.quit() },
@@ -5598,6 +5716,8 @@ app.whenReady().then(async () => {
 // ── 插件沙箱(契约 tangu-agent/docs/plugin-sandbox.md)────────────────────────────────────────
 // 两种身份都答 pluginSandbox:self(preload 同步问一次分身份):沙箱答自己的信息,用户那份答 null。
 ipcMain.on('pluginSandbox:self', (e) => { e.returnValue = SANDBOX ? { ...SANDBOX, appVersion: app.getVersion() } : null })
+// 角色(hostRole.ts):preload 同步问一次,收掉不归这一份管的桥键(Clip 安装只归默认那台;文件夹 Unit 不录电脑历史)。
+ipcMain.on('host:role', (e) => { e.returnValue = { machineOwner: MACHINE_OWNER, folderUnit: !!LOCAL_UNIT } })
 /** 父进程渲染层最近一次带来的主题键(起沙箱时随 exec 报上来)。 */
 let sandboxStorage: Record<string, string> = {}
 /** 开发夹具可替换系统命令。Windows PowerShell 走环境变量传参，隐藏控制台。 */

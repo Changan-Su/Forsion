@@ -23,6 +23,7 @@ import {
   type LocalUnitsErrorCode, type LocalUnitsResult, type LocalUnitsSnapshot,
 } from '../shared/localUnits'
 import { dirIdentity, sameDevIno } from './dirIdentity'
+import type { WindowShortcutKind } from './spaceShortcut'
 
 /** 文件夹 Unit 跑起来以后在自己 app-data 里写的运行记录(退出删;判活看 pid)。 */
 export const LOCAL_UNIT_RUN_FILE = 'local-unit-run.json'
@@ -64,8 +65,27 @@ export function localUnitPaths(dir: string): LocalUnitPaths {
   }
 }
 
-/** Windows 任务栏分组用的 AppUserModelID:每台文件夹 Unit 一组。 */
-export const localUnitAppUserModelId = (id: string): string => `com.forsion.tangu.unit.${id}`
+/** Windows 任务栏分组用的 AppUserModelID:每台文件夹 Unit 一组(进程与它的 .lnk 同一个)。 */
+const LOCAL_UNIT_AUMID = 'com.forsion.tangu.unit'
+export const localUnitAppUserModelId = (id: string): string => `${LOCAL_UNIT_AUMID}.${id}`
+
+/** 「添加到桌面」的种类表条目(落盘那套在 spaceShortcut.ts):快捷方式里只有 id,带 --forsion-unit=<id> 另起一份;
+ *  文件夹搬家后照样能开。没有 forsion:// 链接 —— 链接不能指定文件夹 Unit。 */
+export const LOCAL_UNIT_SHORTCUT: WindowShortcutKind = {
+  host: 'local-unit',
+  isId: isLocalUnitId,
+  aumid: LOCAL_UNIT_AUMID,
+  bundle: 'net.forsion.local-unit-shortcut',
+  plistKey: 'ForsionLocalUnitId',
+  scriptComment: '# Forsion Unit shortcut: opens this Unit on this computer in its own Forsion.',
+  argv: (id) => [`${LOCAL_UNIT_ARG}=${id}`],
+}
+
+/** mac:可执行文件所在的 .app(Contents/MacOS/<名> 往上三层);不在 .app 里(开发版的裸 Electron 也在 .app 里,但开发版不建快捷方式)→ undefined。 */
+export function macAppBundleOf(execPath: string): string | undefined {
+  const bundle = resolve(execPath, '..', '..', '..')
+  return bundle.endsWith('.app') ? bundle : undefined
+}
 
 // ── 启动参数 ────────────────────────────────────────────────────────────────────────────
 

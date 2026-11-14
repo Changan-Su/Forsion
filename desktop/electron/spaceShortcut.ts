@@ -48,6 +48,9 @@ export interface WindowShortcutKind {
   plistKey: string
   /** launch 脚本里的一行注释(固定文案,不含任何名字)。 */
   scriptComment: string
+  /** 有它 = 这一种不经 forsion:// 链接,而是带启动参数另起一份 Forsion(本机文件夹 Unit,localUnitsShortcut.ts)。
+   *  返回的参数只能由已过 isId 白名单的 id 拼成。 */
+  argv?: (id: string) => string[]
 }
 
 export const SPACE_SHORTCUT: WindowShortcutKind = {
@@ -196,7 +199,12 @@ export interface SpaceShortcutOpts {
   icns?: Buffer
   /** linux:Icon= 指向的 png 路径。 */
   iconPath?: string
+  /** mac 且 kind 带 argv:Forsion 安装包(.app)的路径,脚本用 `open -n -a` 另起一份。 */
+  appBundle?: string
 }
+
+/** POSIX 单引号转义(路径不在白名单里,一律整段单引号)。 */
+const shQuote = (s: string): string => `'${s.replace(/'/g, `'\\''`)}'`
 
 /** 返回 null = 平台不支持。名字(stem)不含扩展名,写盘时再拼后缀与 ` (n)`。 */
 export function spaceShortcutPlan(platform: NodeJS.Platform, opts: SpaceShortcutOpts): SpaceShortcutPlan | null {
@@ -204,9 +212,14 @@ export function spaceShortcutPlan(platform: NodeJS.Platform, opts: SpaceShortcut
 }
 
 export function windowShortcutPlan(kind: WindowShortcutKind, platform: NodeJS.Platform, opts: SpaceShortcutOpts): SpaceShortcutPlan | null {
-  const link = windowShortcutLink(kind, opts.id)
+  if (!kind.isId(opts.id)) throw new Error(`Invalid ${kind.host} id: ${String(opts.id)}`)
+  // 两种启动方式:链接(交给已在跑的那份截下来开窗)/ 启动参数(另起一份 Forsion)。参数只由 id 拼成,名字绝不进去。
+  const argv = kind.argv ? kind.argv(opts.id) : null
+  const link = argv ? null : windowShortcutLink(kind, opts.id)
+  if (argv && argv.some((a) => !/^[A-Za-z0-9=._-]+$/.test(a))) throw new Error('Unsafe shortcut argument')
   const stem = safeShortcutName(opts.name, opts.fallbackName)
   if (platform === 'darwin') {
+    if (argv && !opts.appBundle) return null
     const plist = [
       '<?xml version="1.0" encoding="UTF-8"?>',
       '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">',
@@ -227,10 +240,11 @@ export function windowShortcutPlan(kind: WindowShortcutKind, platform: NodeJS.Pl
       '</plist>',
     ].join('\n') + '\n'
     // id 已过该种类的白名单(只有字母数字 . _ -),放进双引号里没有可展开的字符;名字绝不进脚本。
+    // 启动参数那种:-n 另起一份(同一份已在跑时,新进程把参数交给它就退出);安装包路径整段单引号。
     const script = [
       '#!/bin/sh',
       kind.scriptComment,
-      `exec /usr/bin/open "${link}"`,
+      argv ? `exec /usr/bin/open -n -a ${shQuote(opts.appBundle!)} --args ${argv.join(' ')}` : `exec /usr/bin/open "${link}"`,
     ].join('\n') + '\n'
     const files: Array<{ rel: string; content: string | Buffer; mode?: number }> = [
       { rel: 'Contents/Info.plist', content: plist },
@@ -241,14 +255,14 @@ export function windowShortcutPlan(kind: WindowShortcutKind, platform: NodeJS.Pl
     return { kind: 'bundle', name: stem, files }
   }
   if (platform === 'win32') {
-    return { kind: 'lnk', name: stem, args: `"${link}"`, description: stem, appUserModelId: windowShortcutAppUserModelId(kind, opts.id) }
+    return { kind: 'lnk', name: stem, args: argv ? argv.join(' ') : `"${link}"`, description: stem, appUserModelId: windowShortcutAppUserModelId(kind, opts.id) }
   }
   if (platform === 'linux') {
     const lines = [
       '[Desktop Entry]',
       'Type=Application',
       `Name=${desktopValue(stem)}`,
-      `Exec=${execArg(opts.appImage || opts.execPath)} ${execArg(link)}`,
+      `Exec=${execArg(opts.appImage || opts.execPath)} ${argv ? argv.map(execArg).join(' ') : execArg(link!)}`,
       'Terminal=false',
       'Categories=Utility;',
     ]
@@ -274,6 +288,8 @@ export interface CreateSpaceShortcutDeps {
   writeShortcutLink?: (path: string, options: { target: string; args: string; description?: string; icon?: string; iconIndex?: number; appUserModelId?: string }) => boolean
   /** 排到队头、动盘之前再核一次请求还作不作数(设备快捷方式:发起时的账号没换);false = 什么都不写。 */
   stillCurrent?: () => boolean
+  /** mac 且 kind 带 argv:Forsion 安装包(.app)的路径。 */
+  appBundle?: string
 }
 
 const pngs = (sizes: number[], iconPng: CreateSpaceShortcutDeps['iconPng']): SizedPng[] => {
@@ -341,7 +357,7 @@ async function createWindowShortcutNow(kind: WindowShortcutKind, space: { id: st
     }
     plan = windowShortcutPlan(kind, platform, {
       id: space.id, name: space.name, fallbackName: deps.fallbackName,
-      execPath: deps.execPath, appImage: deps.appImage, icns, iconPath,
+      execPath: deps.execPath, appImage: deps.appImage, icns, iconPath, appBundle: deps.appBundle,
     })
   } catch (e) { return { ok: false, code: 'error', detail: detailOf(e) } }
   if (!plan) return { ok: false, code: 'unsupported' }

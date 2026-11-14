@@ -8,7 +8,9 @@ import {
   localUnitPaths, localUnitRunningPid, localUnitSpawnArgs, localUnitSpawnEnv, localUnitsDefaultParent, lookupLocalUnit,
   mutateLocalUnitRegistry, parseLocalUnitArgs, readLocalUnitMarker, readLocalUnitRegistry, removeLocalUnit, renameLocalUnit,
   resolveLocalUnitLaunch, writeLocalUnitMarker, writeLocalUnitRunRecord, type LocalUnitsContext,
+  LOCAL_UNIT_SHORTCUT, localUnitAppUserModelId, macAppBundleOf,
 } from './localUnits'
+import { createWindowShortcut, windowShortcutPlan } from './spaceShortcut'
 
 let root = ''
 let registryFile = ''
@@ -267,6 +269,37 @@ describe('拉起别的实例', () => {
     expect(localUnitSpawnArgs({ appArgs: [], unitId: ID(1), quit: true })).toEqual([`--forsion-unit=${ID(1)}`, '--forsion-unit-quit'])
     expect(localUnitSpawnArgs({ appArgs: [], forward: ['forsion://space/a'] })).toEqual(['forsion://space/a'])
     expect(() => localUnitSpawnArgs({ appArgs: [], unitId: '../x' })).toThrow()
+  })
+})
+
+describe('添加到桌面:本机 Unit 这一种', () => {
+  const opts = { id: ID(1), name: 'My "Unit" $(x)', execPath: '/Applications/Forsion\'s.app/Contents/MacOS/Forsion', appBundle: "/Applications/Forsion's.app" }
+  it('mac:脚本 App 用 open -n -a 带 --forsion-unit=<id>;安装包路径单引号转义,名字不进脚本', () => {
+    const plan = windowShortcutPlan(LOCAL_UNIT_SHORTCUT, 'darwin', opts)
+    expect(plan?.kind).toBe('bundle')
+    const script = plan?.kind === 'bundle' ? String(plan.files.find((f) => f.rel === 'Contents/MacOS/launch')!.content) : ''
+    expect(script).toContain(`exec /usr/bin/open -n -a '/Applications/Forsion'\\''s.app' --args --forsion-unit=${ID(1)}`)
+    expect(script).not.toContain('forsion://')
+    expect(script).not.toContain('My')
+    expect(windowShortcutPlan(LOCAL_UNIT_SHORTCUT, 'darwin', { ...opts, appBundle: undefined })).toBeNull()
+  })
+  it('Windows:.lnk 参数只有 --forsion-unit=<id>,AUMID 与进程一致;Linux:Exec 带同一个参数', () => {
+    const lnk = windowShortcutPlan(LOCAL_UNIT_SHORTCUT, 'win32', opts)
+    expect(lnk).toMatchObject({ kind: 'lnk', args: `--forsion-unit=${ID(1)}`, appUserModelId: localUnitAppUserModelId(ID(1)) })
+    expect(localUnitAppUserModelId(ID(1))).toBe(`com.forsion.tangu.unit.${ID(1)}`)
+    const desk = windowShortcutPlan(LOCAL_UNIT_SHORTCUT, 'linux', { ...opts, execPath: '/opt/Forsion/forsion' })
+    expect(desk?.kind === 'file' && desk.content).toContain(`Exec="/opt/Forsion/forsion" "--forsion-unit=${ID(1)}"`)
+    expect(() => windowShortcutPlan(LOCAL_UNIT_SHORTCUT, 'linux', { ...opts, id: '../x' })).toThrow()
+  })
+  it('真写一次(mac 形态):桌面上多出 .app,开发版拒绝', async () => {
+    const desktop = join(root, 'Desktop')
+    mkdirSync(desktop)
+    const deps = { platform: 'darwin' as const, isPackaged: true, desktopDir: desktop, execPath: opts.execPath, appBundle: opts.appBundle, iconDir: join(root, 'icons') }
+    expect(await createWindowShortcut(LOCAL_UNIT_SHORTCUT, { id: ID(1), name: 'Work' }, deps)).toEqual({ ok: true, path: join(desktop, 'Work.app') })
+    expect(readFileSync(join(desktop, 'Work.app', 'Contents', 'Info.plist'), 'utf8')).toContain(`<key>ForsionLocalUnitId</key>\t<string>${ID(1)}</string>`)
+    expect(await createWindowShortcut(LOCAL_UNIT_SHORTCUT, { id: ID(1), name: 'Work' }, { ...deps, isPackaged: false })).toEqual({ ok: false, code: 'unpackaged' })
+    expect(macAppBundleOf('/Applications/Forsion.app/Contents/MacOS/Forsion')).toBe('/Applications/Forsion.app')
+    expect(macAppBundleOf('/opt/forsion/forsion')).toBeUndefined()
   })
 })
 
