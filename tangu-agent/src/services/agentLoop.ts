@@ -1247,7 +1247,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     else delete agentConfig.maxIterations;
   }
   const sessionMaxIterations: number | null = agentConfig.maxIterations ?? null;
-  const { activeAgentSlug, memScopeSlug, profile: agentProfile, agentApprovalMode } = await applyAgentActivation(
+  const { activeAgentSlug, memScopeSlug, profile: agentProfile, agentApprovalMode, agentReadFailed } = await applyAgentActivation(
     agentConfig,
     userId,
     inlineMemberDef ? async (slug: string) => (slug === inlineMemberDef.slug ? inlineMemberDef : getAgent(slug)) : getAgentForRun, // 分身:人设白名单从本体现读
@@ -1267,7 +1267,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   // start_discussion 起的讨论 run 不继承本 run 的档(成员各按自己的定义 / 缺省),与通道设置那层同样,这里没管。
   // 分身(缺省开着)自己的定义不带档:再加本体的档,读不到按只读 —— 面对别人的分身不该比本体松。
   if (channelSourceOf(plainObject(input.source))) {
-    const agentModes: unknown[] = [agentApprovalMode];
+    const agentModes: unknown[] = [agentReadFailed ? 'readonly' : agentApprovalMode]; // 读定义抛错 = 不知道它设了什么,按只读,不当成没设
     if (standIn) agentModes.push(await getAgent(standIn.bodySlug).then((d) => (d ? d.approvalMode : 'readonly'), () => 'readonly'));
     agentConfig.approvalMode = tightenChannelApprovalForAgent(agentConfig.approvalMode, agentModes);
   }

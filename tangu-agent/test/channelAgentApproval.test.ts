@@ -5,7 +5,14 @@
  *   ① 普通通道消息(本体关了分身)② 多联系人通道 ③ 分身(缺省开着:自己的定义不带档,按本体的档)④ 通道里委派的子代理。
  * 对照:Agent 没设 → 照通道档;Agent 比通道松 → 仍按通道;Agent 是 custom → 只读。
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+
+// ⑤ 读 Agent 定义抛错:按开关让 getAgentForRun 对某个 slug 抛(只换这一个导出,其余照真模块)
+const readFail = vi.hoisted(() => ({ slug: '' }));
+vi.mock('../src/agents/standIn.js', async (importOriginal) => {
+  const real: any = await importOriginal();
+  return { ...real, getAgentForRun: async (slug: string) => { if (slug === readFail.slug) throw new Error('EIO: simulated read failure'); return real.getAgentForRun(slug); } };
+});
 import { mkdtempSync, mkdirSync, rmSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -72,6 +79,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  readFail.slug = '';
   delete process.env.TANGU_HOME;
   for (const d of [home, ws]) try { rmSync(d, { recursive: true, force: true }); } catch { /* ignore */ }
 });
@@ -186,6 +194,22 @@ describe('④ 通道里委派的子代理', () => {
   it('对照:Agent 没设档 → 子代理照通道档直接写', async () => {
     agent('plain', '', { standIn: false });
     expect(await channelRun('plain', 'full-auto', { message: 'go-delegate' })).toEqual([]);
+    expect(written().length).toBe(1);
+  });
+});
+
+describe('⑤ 读 Agent 定义抛错 ≠ 没设档', () => {
+  // 只有缺省 Agent 读失败时 run 还能跑下去(激活兜底到缺省身份);别的 slug 读失败 run 直接失败,本来就不会放宽
+  it('读抛错 → 通道 run 按只读收紧', async () => {
+    agent('xyra', '', { standIn: false });
+    readFail.slug = 'xyra';
+    expect(modes(await channelRun('xyra', 'full-auto'))).toEqual(['readonly']);
+    expect(written()).toEqual([]);
+  });
+
+  it('对照:同一个 Agent 读得到、没设档 → 照通道档', async () => {
+    agent('xyra', '', { standIn: false });
+    expect(await channelRun('xyra', 'full-auto')).toEqual([]);
     expect(written().length).toBe(1);
   });
 });

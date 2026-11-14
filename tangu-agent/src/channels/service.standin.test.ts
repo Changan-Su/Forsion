@@ -204,3 +204,45 @@ describe('分身:通道层', () => {
     expect(bindingOf('pa').session_id).not.toBe(sid);
   });
 });
+
+// approvalModeFor:/approval /status 报的档,与 agentLoop 收紧同一口径(通道设置 × 绑定 × 这次会用的 Agent;分身再加本体)
+describe('approvalModeFor', () => {
+  const modeFor = (svc: ChannelService, peer: string | null, slug: string): Promise<string> =>
+    (svc as any).approvalModeFor({ id: 'b', user_id: 'u1', channel: 'chat', account_id: 'acc', peer_id: peer, session_id: 's', remote_approval_mode: 'full-auto' }, slug);
+
+  it('Agent 没设档 → 只看通道 × 绑定', async () => {
+    const { svc } = harness();
+    state.settings.approvalMode = 'full-auto';
+    state.agents.aria = { slug: 'aria', name: 'Aria', approvalMode: '', standInOff: ['im', 'plugin'] };
+    expect(await modeFor(svc, 'p1', 'aria')).toBe('full-auto');
+  });
+
+  it('Agent 自己设了只读 / custom → 只读;设得更松 → 仍按通道', async () => {
+    const { svc } = harness();
+    state.settings.approvalMode = 'full-auto';
+    state.agents.aria = { slug: 'aria', name: 'Aria', approvalMode: 'readonly', standInOff: ['im', 'plugin'] };
+    expect(await modeFor(svc, 'p1', 'aria')).toBe('readonly');
+    state.agents.aria.approvalMode = 'custom';
+    expect(await modeFor(svc, 'p1', 'aria')).toBe('readonly');
+    state.settings.approvalMode = 'auto-edit';
+    state.agents.aria.approvalMode = 'full-auto';
+    expect(await modeFor(svc, 'p1', 'aria')).toBe('auto-edit');
+  });
+
+  it('分身(还没建出来):按本体的档;本体没设 → 通道档', async () => {
+    const { svc } = harness();
+    state.settings.approvalMode = 'full-auto';
+    state.agents.aria = { slug: 'aria', name: 'Aria', approvalMode: 'readonly' };
+    expect(await modeFor(svc, 'p1', 'aria')).toBe('readonly');
+    state.agents.aria.approvalMode = '';
+    expect(await modeFor(svc, 'p1', 'aria')).toBe('full-auto');
+  });
+
+  it('分身已建、自己没设档:仍按本体的档', async () => {
+    const { svc } = harness();
+    state.settings.approvalMode = 'full-auto';
+    state.agents.aria = { slug: 'aria', name: 'Aria', approvalMode: 'auto-edit' };
+    state.agents[standInOf('p1')] = { slug: standInOf('p1'), standInOf: 'aria', standInChannel: 'chat', approvalMode: '' };
+    expect(await modeFor(svc, 'p1', 'aria')).toBe('auto-edit');
+  });
+});
