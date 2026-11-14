@@ -111,7 +111,8 @@ router.get('/agent/agents', authMiddleware, async (req: AuthRequest, res) => {
     if (parseRemoteOrigin(req.headers)) {
       const cap = remoteApprovalCap();
       const delegated = remoteRole(req.headers) === 'delegated-admin';
-      return void res.json({ agents: agents.map((a) => (delegated ? delegatedAgentView(a, cap) : remoteAgentView(a, cap))), remote: true });
+      // approvalCap:委托管理员的编辑器据它收起超过上限的审批档(写也按它钳,见 remoteAgentApprovalMode)。别的来路回包不变。
+      return void res.json({ agents: agents.map((a) => (delegated ? delegatedAgentView(a, cap) : remoteAgentView(a, cap))), remote: true, ...(delegated ? { approvalCap: cap } : {}) });
     }
     res.json({ agents });
   } catch (e: any) {

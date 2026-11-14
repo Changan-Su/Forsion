@@ -13,6 +13,7 @@ import { useApp } from '../stores/appStore'
 import { panelToast } from './PanelNotice'
 import { ipcErrorText } from '../ipcError'
 import { homeTarget } from '../services/engine/targets'
+import { isDelegatedAdmin } from '../services/delegatedAdmin'
 import {
   agentUninstallPreview, deleteSkillCatalogEntry, restoreTrashEntry, skillUninstallPreview,
   type AgentUninstallPreview, type SkillUninstallPreview, type TrashEntry,
@@ -228,6 +229,8 @@ export function AgentUninstallDialog({ slug, name: fallbackName, onDone, onClose
   useEffect(() => {
     let live = true
     // 预览只在本机引擎有(云端 Agent 没有本机文件 / 回收站):拿不到就按云端那句说,照旧能删。
+    // 委托管理员:预览在白名单外,远端删又不连带删私聊 —— 直接按「移出名册、历史会话保留」那句说。
+    if (isDelegatedAdmin()) { setPv('cloud'); return }
     agentUninstallPreview(homeTarget(), slug).then((r) => { if (live) setPv(r) }, () => { if (live) setPv('cloud') })
     return () => { live = false }
   }, [slug])

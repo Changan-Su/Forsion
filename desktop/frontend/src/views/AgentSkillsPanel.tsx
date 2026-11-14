@@ -12,6 +12,7 @@ import {
 } from '../services/backendService'
 import type { SkillCatalogEntry, SkillInfo, TanguDesktopConfig } from '../../../../tangu-agent/src/contracts/clientTypes'
 import { homeTarget } from '../services/engine/targets'
+import { isDelegatedAdmin } from '../services/delegatedAdmin'
 import { SkillUninstallDialog } from '../components/UninstallDialog'
 import { nextExtraSelection } from './agentSkillSelection'
 
@@ -71,6 +72,8 @@ export function AgentSkillsPanel({ cfg, agentSlug, surface, selectedIds, onSelec
   const [reopen, setReopen] = useState(0)
   const detailSlot = useMemo(() => Object.assign(document.createElement('div'), { className: 'agent-skill-extend' }), [])
   const mode = selectedIds == null ? 'auto' : selectedIds.length ? 'selected' : 'off'
+  // 委托管理员:只能按 Agent 启停技能(PUT …/disabled 带 agentSlug)。技能详情、新建、导入、复制、改、删都在那台设备的白名单外 —— 不出入口。
+  const delegated = isDelegatedAdmin()
   useEffect(() => {
     skillEditorDrafts.set(cacheKey, { detailKey, editing, createOpen, copyOpen, copySlug, slug, name, description, content })
   }, [cacheKey, detailKey, editing, createOpen, copyOpen, copySlug, slug, name, description, content])
@@ -219,13 +222,13 @@ export function AgentSkillsPanel({ cfg, agentSlug, surface, selectedIds, onSelec
   const row = (entry: SkillCatalogEntry) => <div key={entry.key} className="agent-skill-entry">
     <div className={`agent-skill-row${checked(entry) ? ' enabled' : ''}${extendView && detailKey === entry.key ? ' current' : ''}`} data-skill-key={entry.key}>
     <label title={status(entry)}><input type="checkbox" checked={checked(entry)} disabled={!!busyKey || mode === 'off' || legacyDirectory(entry) || entry.availability === 'shadowed' || (entry.scope === 'user' && entry.disabled)} onChange={(event) => toggle(entry, event.target.checked)} aria-label={t('agentProfile.skillForAgent', { name: entry.name })} /></label>
-    <button type="button" className="agent-skill-summary" onClick={() => {
+    {delegated ? <span className="agent-skill-summary"><strong>{entry.name}</strong><span>{entry.description || entry.slug}</span><small>{status(entry)}</small></span> : <button type="button" className="agent-skill-summary" onClick={() => {
       if (extendView && detailKey === entry.key && !extendHandle.current?.isOpen) { setReopen((n) => n + 1); return } // draft kept after the owner hid
       setCreateOpen(false); setEditing(false); setCopyOpen(false); setNotice(''); setError(''); setDetailKey(detailKey === entry.key ? null : entry.key)
     }} aria-expanded={extendView ? undefined : detailKey === entry.key} aria-current={extendView && detailKey === entry.key ? true : undefined}>
       <strong>{entry.name}</strong><span>{entry.description || entry.slug}</span><small>{status(entry)}{entry.readOnly ? ` · ${t('agentProfile.skillReadOnly')}` : ''}</small>
-    </button>
-    <ChevronRight size={14} className={!extendView && detailKey === entry.key ? 'open' : ''} aria-hidden="true" />
+    </button>}
+    {!delegated && <ChevronRight size={14} className={!extendView && detailKey === entry.key ? 'open' : ''} aria-hidden="true" />}
     </div>
     {!extendView && detailKey === entry.key && detailView()}
   </div>
@@ -332,8 +335,8 @@ export function AgentSkillsPanel({ cfg, agentSlug, surface, selectedIds, onSelec
     </div><p className="agent-skills-policy-hint">{t(`agentProfile.skillPolicy.${mode}`)}</p></div>
     {loading && <p className="agent-profile-muted" role="status"><Loader2 size={14} className="spin" /> {t('agentProfile.loading')}</p>}
     {!messagesInDetail && messages}
-    <div className="agent-skill-section-head"><div><h3>{t('agentProfile.agentSkills')}</h3><p>{t('agentProfile.agentSkillsHint')}</p></div><button type="button" className="btn ghost sm" onClick={() => { setDetailKey(null); setCreateOpen(!createOpen); setSlug(''); setName(''); setDescription(''); setContent('') }}><Plus size={13} />{t('agentProfile.addSkill')}</button></div>
-    {createOpen && <form className="agent-skill-editor" onSubmit={(e) => { e.preventDefault(); void create() }}>
+    <div className="agent-skill-section-head"><div><h3>{t('agentProfile.agentSkills')}</h3><p>{t('agentProfile.agentSkillsHint')}</p></div>{!delegated && <button type="button" className="btn ghost sm" onClick={() => { setDetailKey(null); setCreateOpen(!createOpen); setSlug(''); setName(''); setDescription(''); setContent('') }}><Plus size={13} />{t('agentProfile.addSkill')}</button>}</div>
+    {createOpen && !delegated && <form className="agent-skill-editor" onSubmit={(e) => { e.preventDefault(); void create() }}>
       <label>{t('agentProfile.skillFolder')}<input required pattern="[a-z0-9][a-z0-9-]*" value={slug} onChange={(e) => setSlug(e.target.value)} placeholder="my-skill" /></label>
       <label>{t('agentProfile.name')}<input required value={name} onChange={(e) => setName(e.target.value)} /></label>
       <label>{t('agentProfile.description')}<input value={description} onChange={(e) => setDescription(e.target.value)} /></label>

@@ -7,7 +7,9 @@ import { ListFab } from '../components/phoneList'
 import type { ViewProps } from '@lcl/engine/types'
 import { useApp } from '../stores/appStore'
 import { useI18n } from '../i18n'
-import { deleteAgentAvatar, fetchAgentAvatar, getAgentHarness, listAgents, listSkills, listTools, putAgentsMeta, renameAgentDef, saveAgentDef, uploadAgentAvatar } from '../services/backendService'
+import { deleteAgentAvatar, fetchAgentAvatar, fetchToolCatalog, getAgentHarness, listAgents, listSkills, listTools, putAgentsMeta, renameAgentDef, saveAgentDef, uploadAgentAvatar } from '../services/backendService'
+import { MODE_KEY } from '../approvalReason'
+import { delegatedAdminName, delegatedApprovalField, isDelegatedAdmin, useDelegatedApprovalCap } from '../services/delegatedAdmin'
 import { openAgentCreation, openAgentProfile, openHumanProfile } from './agentProfileNav'
 import { HumanProfile, useMeIdentity } from './HumanProfile'
 import { AgentMemoryPanel } from '../components/AgentMemoryPanel'
@@ -44,6 +46,9 @@ const GROWTH_ICON = { memory: BookOpen, log: ScrollText, evolution: Sprout } as 
 const SECTIONS: Array<{ id: Section; icon: typeof Bot }> = [
   { id: 'config', icon: Settings2 }, { id: 'skills', icon: Sparkles }, { id: 'mcp', icon: Plug }, { id: 'human', icon: BookOpen }, { id: 'growth', icon: Sprout }, { id: 'schedule', icon: CalendarClock },
 ]
+/** 委托管理员只看得到这三页:MCP / 协作(human/)/ 成长(记忆、日志、工作笔记)的数据面都在那台设备的白名单外。 */
+const DELEGATED_SECTIONS = new Set<Section>(['config', 'skills', 'schedule'])
+const sectionsFor = (): typeof SECTIONS => (isDelegatedAdmin() ? SECTIONS.filter((x) => DELEGATED_SECTIONS.has(x.id)) : SECTIONS)
 const EMPTY_CONFIG: AgentConfig = {}
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,63}$/ // 与引擎 agentRegistry 同
 const slugOf = (name: string): string => name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64)
@@ -230,24 +235,29 @@ export function AgentsRosterView() {
   // 删除走与侧栏同一个卸载确认框(逐项写去向、进回收站);删掉的是正在看的那个 → 换到名册第一个
   const [removing, setRemoving] = useState<NormalAgentDef | null>(null)
   const standIns = useStandInsByBody() // 分身挂在本体下(不进名册、不能拖排序)
+  // 委托管理员:名册顺序与默认 Agent 存在 agents-meta 的写里(白名单外),「我」(human/)也不归它看 —— 这几样不出。
+  const delegated = isDelegatedAdmin()
   return <aside className="agents-roster">
       {/* 创建入口只留底部那一个(评审 U-25:标题行的 ＋ 与底部链接重复)。 */}
       <div className="agents-roster-heading"><span>{t('agentProfile.roster')} <small>{agents.length}</small></span></div>
+      {delegated && <p className="agent-profile-muted" data-delegated-admin>{delegatedAdminName() ? t('delegatedAdmin.signedInAs', { name: delegatedAdminName() }) : t('delegatedAdmin.role')}</p>}
       {/* 「我」置顶(human/ 文件夹),不进搜索、不能拖排序 */}
-      <div className="agents-roster-row" data-roster-me><button type="button" className={`agents-roster-item${!creating && selected.me ? ' selected' : ''}`} aria-pressed={!creating && selected.me} onClick={() => { setRosterError(''); openHumanProfile() }}>
+      {!delegated && <div className="agents-roster-row" data-roster-me><button type="button" className={`agents-roster-item${!creating && selected.me ? ' selected' : ''}`} aria-pressed={!creating && selected.me} onClick={() => { setRosterError(''); openHumanProfile() }}>
         <span className="agent-portrait small"><AgentAvatar name={meIdentity.name} url={meIdentity.avatar} fill /></span><span><strong>{meIdentity.name}</strong><small>{t('human.me.rowHint')}</small></span>
-      </button></div>
+      </button></div>}
       <label className="agents-search"><Search size={14} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t('agentProfile.search')} aria-label={t('agentProfile.search')} /></label>
-      <div className={`agents-roster-list${phone ? ' pl-fab-room' : ''}`}>{filtered.map((a) => <Fragment key={a.slug}><div className={`agents-roster-row${dragSlug === a.slug ? ' dragging' : ''}`} draggable={!rosterBusy && !query}
+      <div className={`agents-roster-list${phone ? ' pl-fab-room' : ''}`}>{filtered.map((a) => <Fragment key={a.slug}><div className={`agents-roster-row${dragSlug === a.slug ? ' dragging' : ''}`} draggable={!rosterBusy && !query && !delegated}
         onDragStart={(e) => { setDragSlug(a.slug); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', a.slug); startOpenDrag(e.dataTransfer, { open: () => selectAgent(a.slug) }) }} onDragEnd={() => setDragSlug(null)}
         onDragOver={(e) => { if (dragSlug && dragSlug !== a.slug) e.preventDefault() }} onDrop={(e) => { e.preventDefault(); if (dragSlug) void reorder(dragSlug, a.slug) }}>
         <button type="button" className={`agents-roster-item${viewing(a.slug) ? ' selected' : ''}`} onClick={() => selectAgent(a.slug)} aria-pressed={viewing(a.slug)}>
           <span className="agent-portrait small"><AgentAvatar name={agentName(a)} url={avatars[a.slug]} siblings={rosterNames} fill /></span><span><strong>{agentName(a)}{a.slug === defaultSlug && <Star size={12} aria-label={t('agentProfile.isDefault')} fill="currentColor" />}{a.disabled && <em className="agents-roster-off">{t('agentProfile.disabledTag')}</em>}</strong><small>{agentDescription(a, t) || a.slug}</small></span>
         </button>
         <CapabilityMenu label={t('agentProfile.actionsFor', { name: agentName(a) })} className="agents-roster-more" items={[
+          ...(delegated ? [] : [
           { id: 'up', label: t('agentProfile.moveUp'), icon: <ArrowUp size={14} />, disabled: rosterBusy || agents[0]?.slug === a.slug, onSelect: () => void reorder(a.slug, agents[agents.indexOf(a) - 1]?.slug || a.slug) },
           { id: 'down', label: t('agentProfile.moveDown'), icon: <ArrowDown size={14} />, disabled: rosterBusy || agents.at(-1)?.slug === a.slug, onSelect: () => void reorder(a.slug, agents[agents.indexOf(a) + 1]?.slug || a.slug, true) },
           { id: 'default', label: t('agentProfile.makeDefault'), icon: <Star size={14} />, disabled: rosterBusy || a.slug === defaultSlug || !!a.disabled, onSelect: () => void setDefault(a.slug) },
+          ]),
           { id: 'disable', label: t(a.disabled ? 'agentProfile.enable' : 'agentProfile.disable'), icon: a.disabled ? <Eye size={14} /> : <EyeOff size={14} />, disabled: rosterBusy || (!a.disabled && (a.slug === 'xyra' || a.slug === defaultSlug || a.slug === 'muse')), onSelect: () => void toggleDisabled(a) },
           { id: 'delete', label: t('agentProfile.delete'), icon: <Trash2 size={14} />, danger: true, disabled: rosterBusy || a.slug === 'xyra' || a.slug === defaultSlug, onSelect: () => { setRosterError(''); setRemoving(a) } },
         ]}><MoreHorizontal size={15} /></CapabilityMenu>
@@ -288,7 +298,10 @@ function AgentProfile({ agent, compact = false, sessionId, rewriteSessionId, evo
   const rewriteSid = sessionId || rewriteSessionId
   const rewriteHuman = rewriteSid && humanRewritable(s.rewriteConfig) && (s.rewriteConfig!.agentSlug || s.rewriteConfig!.soloAgentSlug || s.defaultSlug) === agent.slug
     ? () => { void useApp.getState().send(t('human.rewrite.agentPrompt'), [], undefined, undefined, undefined, rewriteSid) } : null
-  const [section, setSection] = useState<Section>(humanJump ? 'human' : evolutionJumpAt ? 'growth' : 'config')
+  const delegated = isDelegatedAdmin()
+  const sections = sectionsFor()
+  const approvalCap = useDelegatedApprovalCap((x) => x.cap)
+  const [section, setSection] = useState<Section>(!delegated && humanJump ? 'human' : !delegated && evolutionJumpAt ? 'growth' : 'config')
   const navRef = useSectionNavSlide(section)
   const [growth, setGrowth] = useState<Growth>(evolutionJumpAt ? 'evolution' : 'memory')
   const [visitedMemory, setVisitedMemory] = useState(false)
@@ -327,7 +340,9 @@ function AgentProfile({ agent, compact = false, sessionId, rewriteSessionId, evo
   useEffect(() => {
     let active = true
     setLoading(true); setLoadError('')
-    void Promise.allSettled([listSkills(homeTarget(), agent.slug), listTools(homeTarget())]).then(([skillResult, toolResult]) => {
+    // 委托管理员:工具名单只读 tool-catalog(/agent/tools 带 MCP 服务器明细,在白名单外);MCP 那页本来就不出。
+    const tools = delegated ? fetchToolCatalog(homeTarget()).then((tools) => ({ builtins: tools.map((x) => ({ ...x, mode: 'both' as const })), mcp: [] })) : listTools(homeTarget())
+    void Promise.allSettled([listSkills(homeTarget(), agent.slug), tools]).then(([skillResult, toolResult]) => {
       if (!active) return
       if (skillResult.status === 'fulfilled') setSkills(skillResult.value)
       if (toolResult.status === 'fulfilled') { setMcp(toolResult.value.mcp || []); setBuiltins(toolResult.value.builtins || []) }
@@ -340,7 +355,7 @@ function AgentProfile({ agent, compact = false, sessionId, rewriteSessionId, evo
   // 工作笔记面板挂着时(成长 › 进化)不读:面板自己在读同一个接口并经 onCandidates 报数,两边都读 = 每个沿两次同样的请求。
   const harnessOpen = section === 'growth' && growth === 'evolution'
   useEffect(() => {
-    if (harnessOpen) return
+    if (harnessOpen || delegated) return // 工作笔记(成长 › 进化)在委托管理员的白名单外,角标也不读
     let active = true
     getAgentHarness(homeTarget(), agent.slug).then((r) => { if (active) setCandidates(r.candidates?.length ?? 0) }).catch(() => { if (active) setCandidates(0) })
     return () => { active = false }
@@ -351,8 +366,8 @@ function AgentProfile({ agent, compact = false, sessionId, rewriteSessionId, evo
   }
   // 记忆面板和日志面板各有自己的草稿:第一次看到它才挂,之后一直留着(切标签 / 切分段都不卸)。
   useEffect(() => { if (section === 'growth' && growth === 'memory') setVisitedMemory(true); if (section === 'growth' && growth === 'log') setVisitedLog(true) }, [section, growth])
-  useEffect(() => { if (evolutionJumpAt) { navigate('growth'); setGrowth('evolution') } }, [evolutionJumpAt]) // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { if (humanJump?.at) navigate('human') }, [humanJump?.at]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (evolutionJumpAt && !delegated) { navigate('growth'); setGrowth('evolution') } }, [evolutionJumpAt]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (humanJump?.at && !delegated) navigate('human') }, [humanJump?.at]) // eslint-disable-line react-hooks/exhaustive-deps
   const patch = (p: Partial<NormalAgentDef>) => {
     Object.keys(p).forEach((key) => dirtyFields.current.add(key as keyof NormalAgentDef))
     setDraft((d) => {
@@ -406,7 +421,7 @@ function AgentProfile({ agent, compact = false, sessionId, rewriteSessionId, evo
   // 文件夹名 = slug = 主键。改名走引擎的 renameAgent(搬目录 + 改会话 / 消息 / 团队 / 自动化 / 通道里的引用);
   // 这里只把本地 store 里已加载的会话配置一并改掉,免得头像 / 昵称在重拉会话前按「已删 agent」渲染。
   // 详情栏(compact)不开放:那里连「在 Agents 中打开」都要一跳,改主键这种事放在全页。
-  const canRename = !compact && !dirty && !!agent.libraryDir && !isStockAgent(agent.slug)
+  const canRename = !compact && !dirty && !!agent.libraryDir && !isStockAgent(agent.slug) && !delegated // 改名路由在委托管理员的白名单外
   const rename = async () => {
     const old = agent.slug
     const next = slugDraft.trim()
@@ -540,9 +555,12 @@ function AgentProfile({ agent, compact = false, sessionId, rewriteSessionId, evo
     <ProfileModelField field="model" models={s.models || []} value={draft.model || ''} label={t('agentProfile.model')} onChange={(model) => patch({ model })} />
     {/* 三个同级下拉一种控件(10-25 第四轮 4.3):模型那颗触发器 + 就地展开;审批档的名字与输入框模式菜单同一套。 */}
     <ProfileSelectField field="thinking" label={t('agentProfile.thinking')} value={draft.thinkingLevel || ''} options={thinkingOptions(t)} onChange={(v) => patch({ thinkingLevel: v as NormalAgentDef['thinkingLevel'] })} />
-    <ProfileSelectField field="approval" label={t('agentProfile.approval')} value={draft.approvalMode || ''} options={approvalOptions(t)} onChange={(v) => patch({ approvalMode: v as NormalAgentDef['approvalMode'] })} />
+    {/* 委托管理员:只列不超过那台设备远程上限的三档,不给「跟随会话」(远端写空值会被钳成上限本身);存值为空时显示成上限那档(不写回);存着「自定义」时只读。 */}
+    {delegated ? (() => { const f = delegatedApprovalField(draft.approvalMode, approvalCap, approvalOptions(t)); return <ProfileSelectField field="approval" label={t('agentProfile.approval')} value={f.value} disabled={f.disabled} options={f.options} onChange={(v) => patch({ approvalMode: v as NormalAgentDef['approvalMode'] })} /> })()
+      : <ProfileSelectField field="approval" label={t('agentProfile.approval')} value={draft.approvalMode || ''} options={approvalOptions(t)} onChange={(v) => patch({ approvalMode: v as NormalAgentDef['approvalMode'] })} />}
+    {delegated && <p className="agent-profile-muted" data-approval-cap={approvalCap || ''}>{t('delegatedAdmin.approvalCapHint', { mode: t(MODE_KEY[approvalCap || 'readonly']) })}</p>}
     {/* Muse 有两个档:这里的只管和它聊天时;后台周期按「权限档」(设置 › Agent › 后台 Agent)。两处互相指路(10-13 用户反馈「放权了还要批」)。 */}
-    {agent.slug === 'muse' && <button type="button" className="agent-profile-link" data-act="muse-tier-link" onClick={() => useApp.getState().openSettings('agents/ag-special/muse')}>{t('agentProfile.museApprovalScope')}<ExternalLink size={13} /></button>}
+    {agent.slug === 'muse' && !delegated && <button type="button" className="agent-profile-link" data-act="muse-tier-link" onClick={() => useApp.getState().openSettings('agents/ag-special/muse')}>{t('agentProfile.museApprovalScope')}<ExternalLink size={13} /></button>}
   </>
   const agentConfiguration = <>
     <ProfileGroup title={t('agentProfile.instructions')} hint={t('agentProfile.instructionsHint')}>
@@ -554,11 +572,12 @@ function AgentProfile({ agent, compact = false, sessionId, rewriteSessionId, evo
       {loadError && <p className="agent-profile-error">{loadError}<button onClick={() => setRetry((v) => v + 1)}>{t('agentProfile.retry')}</button></p>}
       {draft.toolsMode && <div className="agent-equipment-list">{builtins.map((tool) => <EquipmentRow key={tool.name} name={tool.name} description={tool.description} checked={(draft.toolsList || []).includes(tool.name)}
         onChange={(checked) => patch({ toolsList: checked ? [...(draft.toolsList || []), tool.name] : (draft.toolsList || []).filter((n) => n !== tool.name) })} />)}</div>}
-      <label className="agent-equipment-item"><input type="checkbox" checked={!!draft.activityAccess} onChange={(e) => patch({ activityAccess: e.target.checked })} />{t('agentProfile.activityAccess')}</label>
+      {/* 电脑历史 / 云同步:引擎不收远端写这两样(委托管理员),开关不出 */}
+      {!delegated && <label className="agent-equipment-item" data-field="activityAccess"><input type="checkbox" checked={!!draft.activityAccess} onChange={(e) => patch({ activityAccess: e.target.checked })} />{t('agentProfile.activityAccess')}</label>}
     </div></details>
     <details className="profile-disclosure"><summary>{t('agentProfile.advanced')}</summary><div className="agent-config-fields">
       <label className="agent-field">{t('agentProfile.maxIterations')}<input type="number" min="1" placeholder={t('agentProfile.default')} value={draft.maxIterations ?? ''} onChange={(e) => patch({ maxIterations: e.target.value ? Math.max(1, Math.floor(Number(e.target.value))) : null })} /></label>
-      {!!window.tangu?.authStatus && <label className="agent-equipment-item"><input type="checkbox" checked={!!draft.cloudSync} onChange={(e) => patch({ cloudSync: e.target.checked })} />{t('agentProfile.cloudSync')}</label>}
+      {!!window.tangu?.authStatus && !delegated && <label className="agent-equipment-item" data-field="cloudSync"><input type="checkbox" checked={!!draft.cloudSync} onChange={(e) => patch({ cloudSync: e.target.checked })} />{t('agentProfile.cloudSync')}</label>}
     </div></details>
   </>
   return <div className={`agent-profile${compact ? ' compact' : ''}`} data-agent-profile={agent.slug} onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === 's') { e.preventDefault(); e.stopPropagation(); if (dirty) void save() } }}>
@@ -592,10 +611,10 @@ function AgentProfile({ agent, compact = false, sessionId, rewriteSessionId, evo
     <nav ref={navRef} className="agent-section-nav" aria-label={t('agentProfile.currentSection')} role="tablist" onKeyDown={(e) => {
       if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return
       e.preventDefault()
-      const index = SECTIONS.findIndex((x) => x.id === section)
-      const next = e.key === 'Home' ? 0 : e.key === 'End' ? SECTIONS.length - 1 : (index + (e.key === 'ArrowRight' ? 1 : -1) + SECTIONS.length) % SECTIONS.length
-      navigate(SECTIONS[next].id); (e.currentTarget.children[next] as HTMLElement).focus()
-    }}>{SECTIONS.map(({ id: tab, icon: Icon }) => {
+      const index = sections.findIndex((x) => x.id === section)
+      const next = e.key === 'Home' ? 0 : e.key === 'End' ? sections.length - 1 : (index + (e.key === 'ArrowRight' ? 1 : -1) + sections.length) % sections.length
+      navigate(sections[next].id); (e.currentTarget.children[next] as HTMLElement).focus()
+    }}>{sections.map(({ id: tab, icon: Icon }) => {
       // 待复盘候选角标:aria-hidden 不改标签的可访问名(台架与读屏都按「进化」找),数字进 title。
       const badge = tab === 'growth' && candidates > 0 ? t('settings.agents.harnessCandidates', { count: candidates }) : ''
       return <button key={tab} id={`${id}-${tab}`} role="tab" title={badge ? `${t(`agentProfile.${tab}`)} · ${badge}` : t(`agentProfile.${tab}`)} aria-selected={section === tab} aria-controls={`${id}-content`} tabIndex={section === tab ? 0 : -1} onClick={() => navigate(tab)} className={section === tab ? 'selected' : ''}><Icon size={15} /><span>{t(`agentProfile.${tab}`)}</span>{badge && <i className="profile-tab-badge" aria-hidden="true">{candidates}</i>}</button>
@@ -610,7 +629,7 @@ function AgentProfile({ agent, compact = false, sessionId, rewriteSessionId, evo
           <ProfileModelField models={s.models || []} value={s.session.model_id || ''} label={t('agentProfile.sessionModel')} onChange={(model) => { tanguCount('modelSwitchUser'); useApp.getState().setSessionModel(model, sessionId, false) }} />
           <small>{t('agentProfile.sessionModelHint')}</small>
         </section>}
-        {agent.libraryDir && !agent.standInOf && agent.slug !== 'muse' && <AgentStandInGroup agent={agent} draft={draft} patch={patch} cfg={s.cfg} />}
+        {agent.libraryDir && !agent.standInOf && agent.slug !== 'muse' && !delegated && <AgentStandInGroup agent={agent} draft={draft} patch={patch} cfg={s.cfg} />}
         <ProfileGroup title={t('agentProfile.quickSettings')} hint={t('agentProfile.defaultsHint')}>{runSettings}</ProfileGroup>
         {agentConfiguration}
         {s.usage && <p className="agent-profile-muted">{t('agentProfile.context')} · {s.usage.ctx.toLocaleString()} tokens</p>}

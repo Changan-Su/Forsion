@@ -64,6 +64,15 @@ async function pairFlow(meta: UnitMeta): Promise<string | null> {
   }
 }
 
+/** whoami 回包 → 委托管理员角色(只认 role 与显示名;别的形状 = 不是这个角色)。 */
+export function delegatedRoleOf(body: unknown): { name: string } | null {
+  if (!body || typeof body !== 'object') return null
+  const b = body as { role?: unknown; operator?: { name?: unknown } | null }
+  if (b.role !== 'delegated-admin') return null
+  const name = typeof b.operator?.name === 'string' ? b.operator.name.slice(0, 120) : ''
+  return { name }
+}
+
 /** 装载设备页垫片。false = 用户中止(不挂载应用)。 */
 export async function installUnitShim(): Promise<boolean> {
   const meta = (window as unknown as { __FORSION_UNIT_PAGE__?: UnitMeta }).__FORSION_UNIT_PAGE__
@@ -91,6 +100,9 @@ export async function installUnitShim(): Promise<boolean> {
     headers: token ? { Authorization: `Bearer ${token}` } : undefined,
   }).catch(() => null)
   if (published && !probe?.ok) throw new Error('Unit projection is unavailable')
+  // 委托管理员(经中转进来的管理员,只管 Agent):那台设备在 whoami 里带 role。壳在这个角色下不发白名单外的请求、只露 Agent 管理
+  // (门控统一问 desktop 的 services/delegatedAdmin.ts)。只认非公开投射上的 200 回包;别的来路回包里没有这个字段。
+  const delegated = !published && probe?.ok ? delegatedRoleOf(await probe.clone().json().catch(() => null)) : null
   if (!published && (!probe || probe.status === 401)) {
     const fresh = local ? await (await import('./unitOwnerAccess')).ownerAccess(meta.name, base()) : await pairFlow(meta)
     if (!fresh) return false
@@ -127,7 +139,9 @@ export async function installUnitShim(): Promise<boolean> {
     visitor: visitor!, pluginData: pluginData!,
   }) : null
   if (cloud?.amadeus) window.amadeus = cloud.amadeus
-  else {
+  else if (delegated) {
+    // 笔记库整个在白名单外(vault/*、asset-token、events 都 403):不挂文件桥,笔记 / 日历 / 插件这些面也就不长出来。
+  } else {
     const { createUnitAmadeusBridge } = await import('./amadeus/unitBridge')
     window.amadeus = await createUnitAmadeusBridge({
       base: base().href,
@@ -178,9 +192,10 @@ export async function installUnitShim(): Promise<boolean> {
     ...(published ? { unitPublicEntry: true } : {}),
     /** 远端身份:unitWeb 给本页的 /engine 请求盖 x-forsion-remote(工作区主人的本地投影除外,那是直通)。
      *  审批卡据此不给改命令 / 总允许(引擎对远端不兑现这两样)。 */
-    remoteCaller: !local,
-    hostFiles: !published,
-    executionCapabilities: { host: local ? !!meta.localCapabilities?.host : !published },
+    remoteCaller: !local || !!delegated,
+    hostFiles: !published && !delegated,
+    executionCapabilities: { host: delegated ? false : local ? !!meta.localCapabilities?.host : !published },
+    ...(delegated ? { delegatedAdmin: delegated } : {}),
     ...(cloud ? { cloudWeb: true } : {}),
     initialConfig: mergedConfig(),
     // 商店:网页版装不了插件(marketTypes 空 → 不列目录、不给安装),只开插件提供的页(Extend 的会员 / 积分 / 道具)和投稿。
@@ -193,7 +208,7 @@ export async function installUnitShim(): Promise<boolean> {
       onAuthChanged: visitor.capability.subscribe,
       onAuthWillChange: visitor.onAuthWillChange,
     } : {}),
-    ...(local ? { backendStatus: async () => {
+    ...(local && !delegated ? { backendStatus: async () => {
       const response = await fetch(new URL('unit/meta', base()))
       if (!response.ok) throw new Error('Unit status unavailable')
       const live = await response.json()
@@ -220,6 +235,8 @@ export async function installUnitShim(): Promise<boolean> {
         sessionStorage.setItem(`unit:${meta.instanceId}:preferences`, JSON.stringify(remotePrefs))
         return mergedConfig()
       }
+      // 委托管理员只读得到 unit/config(写在白名单外):偏好改动只留在这一页。
+      if (delegated) { remotePrefs = { ...remotePrefs, ...patch }; return mergedConfig() }
       try {
         const r = await fetch(new URL('unit/config', base()), {
           method: 'PUT',
@@ -232,7 +249,7 @@ export async function installUnitShim(): Promise<boolean> {
     },
     authStatus: visitor?.account.authStatus || (async () => ({ loggedIn: false, cloudUrl: '', username: meta.name, nickname: meta.name, tokenSource: null })),
     ...visitor?.accountPresentation,
-    ...(!published ? {
+    ...(!published && !delegated ? {
     // 直连 provider 元数据(对方已剥 apiKey/baseUrl):模型选择器据此认出直连模型 ——
     // 缺了它直连模型不进清单,选择器显示「选择模型」(2026-08-24 用户实报)。
     listProviders: async () => {
@@ -274,13 +291,13 @@ export async function installUnitShim(): Promise<boolean> {
     } : {}),
     // Space 配方(只读):loadUserSpaces 按本方法存在性门控 —— 缺了它插件 Space 全不装,
     // Ribbon 上一个插件图标都没有(2026-08-24 实测)。spacesSave/Delete 刻意不给:设备页不写对方布局。
-    spacesList: async () => {
+    ...(delegated ? {} : { spacesList: async () => {
       const r = await fetch(new URL('unit/spaces', base()), {
         headers: fixedToken && fixedToken !== 'tunnel' ? { Authorization: `Bearer ${fixedToken}` } : undefined,
       })
       if (!r.ok) throw new Error(`unit spaces HTTP ${r.status}`)
       return ((await r.json()) as { spaces?: unknown[] }).spaces || []
-    },
+    } }),
   }
   document.title = `${meta.name} · Forsion`
   return true

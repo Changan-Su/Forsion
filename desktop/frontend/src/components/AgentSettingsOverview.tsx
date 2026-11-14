@@ -6,6 +6,7 @@ import { registerMessages, useI18n } from '../i18n'
 import './agentSettingsOverview.css'
 import { homeTarget } from '../services/engine/targets'
 import { agentName } from '../agentName'
+import { isDelegatedAdmin } from '../services/delegatedAdmin'
 
 registerMessages({
   'agentSettings.rosterTitle': { zh: 'Agent 名册', en: 'Agent roster' },
@@ -30,6 +31,8 @@ export function AgentSettingsOverview({ cfg, onOpenAgent }: { cfg: TanguDesktopC
   const [savedProfile, setSavedProfile] = useState('')
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
+  // 委托管理员:用户画像(human/)不归它看也不归它改(那台设备的白名单外)—— 不读,整块不出。
+  const delegated = isDelegatedAdmin()
   useEffect(() => {
     let active = true
     const refreshAgents = (): void => {
@@ -40,7 +43,7 @@ export function AgentSettingsOverview({ cfg, onOpenAgent }: { cfg: TanguDesktopC
       })
     }
     refreshAgents()
-    void getUserProfile(homeTarget()).then((value) => {
+    if (!delegated) void getUserProfile(homeTarget()).then((value) => {
       if (active) { setProfile(value); setSavedProfile(value) }
     }).catch(() => {})
     window.addEventListener('forsion:agents-changed', refreshAgents)
@@ -62,9 +65,9 @@ export function AgentSettingsOverview({ cfg, onOpenAgent }: { cfg: TanguDesktopC
       </div>
       <div className="agso-actions"><button className="btn ghost sm" type="button" onClick={() => onOpenAgent(current?.slug || 'xyra')}>{t('agentSettings.open')}<ChevronRight size={13} /></button></div>
     </section>
-    <section className="settings-panel agso-panel">
+    {!delegated && <section className="settings-panel agso-panel">
       <div className="settings-panel-head"><span className="settings-panel-icon"><UserRound size={16} /></span><div><strong>{t('agentSettings.userTitle')}</strong><p>{t('agentSettings.userDescription')}</p></div></div>
       <div className="agso-profile"><textarea value={profile} onChange={(event) => setProfile(event.target.value)} rows={8} placeholder={t('agentSettings.userPlaceholder')} aria-label={t('agentSettings.userTitle')} /><div><button className="btn primary sm" type="button" disabled={busy || profile === savedProfile} onClick={() => void save()}>{busy && <Loader2 size={13} className="spin" />}{t('agentSettings.save')}</button>{message && <span role="status">{message}</span>}</div></div>
-    </section>
+    </section>}
   </div>
 }

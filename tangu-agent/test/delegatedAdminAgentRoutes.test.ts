@@ -89,6 +89,7 @@ describe('GET /agent/agents', () => {
     expect(wide.soul).toBe(SECRET_SOUL);
     expect(wide.approvalMode).toBe('auto-edit');
     expect(r.body.agents.find((a: any) => a.slug === 'da-custom').approvalMode).toBe('custom');
+    expect(r.body.approvalCap).toBe('auto-edit'); // 编辑器据它收起超过上限的档
   });
   it('普通隧道 / 标记不对的角色头:照旧藏人设', async () => {
     for (const h of [TUNNEL, { ...ADMIN, 'x-forsion-remote-mark': 'forged' }, { ...ADMIN, 'x-forsion-remote': 'lan' }]) {
@@ -96,7 +97,9 @@ describe('GET /agent/agents', () => {
       expect(r.status).toBe(200);
       expect(r.raw).not.toContain(SECRET_SOUL);
       expect(r.raw).not.toContain(SECRET_DI);
+      expect(r.body.approvalCap).toBeUndefined(); // 别的来路回包不多这个字段
     }
+    expect((await call('GET', '/agent/agents')).body.approvalCap).toBeUndefined();
   });
 });
 

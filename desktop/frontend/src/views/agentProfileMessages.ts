@@ -188,6 +188,8 @@ registerMessages({
   'agentProfile.scheduleOpenCalendar': { zh: '在日历中查看', en: 'View in Calendar' },
   'agentProfile.scheduleOpenAutomation': { zh: '在自动化中管理', en: 'Manage in Automation' },
   'agentProfile.scheduleDeleteConfirm': { zh: '删除日程「{name}」？到点将不再执行。', en: 'Delete the schedule entry "{name}"? It will no longer run.' },
+  'agentProfile.scheduleNew': { zh: '新建日程', en: 'New schedule entry' },
+  'agentProfile.scheduleAdd': { zh: '添加日程', en: 'Add entry' },
   'agentProfile.scheduleEmpty': { zh: '还没有日程。在对话里告诉它「每天 9 点帮我整理新闻」这类定时的事，它会自己排进这里，并显示在日历上。', en: 'No schedule yet. Ask it in a conversation for something timed, such as "summarize the news every day at 9", and it will add the entry here and to your Calendar.' },
   'agentProfile.scheduleEmptyMuse': { zh: '还没有日程。Muse 为自己安排的后续跟进会出现在这里；把它的待办交给它执行，也会排进来。两者都会显示在日历上。', en: 'No schedule yet. Follow-ups Muse plans for itself appear here, and so do todos you hand over for it to carry out. Both show up in your Calendar.' },
   'agentProfile.folder': { zh: '文件夹名', en: 'Folder name' },

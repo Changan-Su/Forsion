@@ -31,6 +31,8 @@ import { needsFullGuide } from '../components/onboardingFlow'
 import { phoneGuide, phoneGuidePlan, readPhoneGuideKeys } from '../components/onboarding/phoneGuide'
 import { act } from '../activity/log'
 import { notifyApp } from './notificationStore'
+import { isDelegatedAdmin } from '../services/delegatedAdmin'
+import { localOnlyMessage } from '../services/localOnly'
 import { agentWriteKnown, noteAgentWriteEnd, noteAgentWriteLive, noteAgentWriteStart } from './agentWriteLedger'
 import { translate } from '../i18n'
 import type { TanguSliceDeps, TanguState, createTanguSlice } from '@tangu/ui/tangu/store/tanguSlice'
@@ -389,6 +391,13 @@ export const useApp = create<AppState>((set, get) => ({
 
   // 垫片:旧 toast(text, error) → 通知系统(error 走 error 级=常驻手动关,其余 info 自动消失)。
   toast: (text, error = false) => {
+    // 委托管理员:同一种提示只留一条(计数叠加)。白名单外的请求本不该发,漏网的「只能在本机进行」不管从哪条请求来都并成一条。
+    if (isDelegatedAdmin()) {
+      const localOnly = localOnlyMessage()
+      const merged = text.includes(localOnly) ? localOnly : text
+      notifyApp({ text: merged, level: error ? 'error' : 'info', dedupeKey: `delegated:${merged}` })
+      return
+    }
     notifyApp({ text, level: error ? 'error' : 'info' })
   },
 
@@ -433,6 +442,15 @@ export const useApp = create<AppState>((set, get) => ({
       return
     }
     lastOkConnectKey = connectKey(c)
+    // 委托管理员只管 Agent:会话 / 项目 / 外部引擎 / 后台 Agent 配置 / 团队都在那台设备的白名单外 —— 不发,只拉 Agent 管理要的三份目录。
+    if (isDelegatedAdmin()) {
+      connectedOnce = true
+      const key = focusKey()
+      void api.listModels(target).then((m) => { if (latest()) { set({ modelsResp: m }); rememberCatalog(key, { models: m }) } }).catch(() => { if (latest()) set({ modelsResp: null }) })
+      void api.listSkills(target).then((s) => { if (latest()) { set({ skillsList: s }); rememberCatalog(key, { skills: s }) } }).catch(() => { if (latest()) set({ skillsList: null }) })
+      get().refreshAgents()
+      return
+    }
     try {
       const act = await get().refreshSessions(c)
       if (!latest()) return
@@ -462,6 +480,8 @@ export const useApp = create<AppState>((set, get) => ({
 
   refreshSpecialEnabled: async (c) => {
     void c
+    // 后台 Agent 配置在委托管理员的白名单外(关设置等调用点一并不发)
+    if (isDelegatedAdmin()) { set({ specialEnabled: { historian: false, muse: false } }); return }
     const generation = catalogToken()
     try {
       const r = await api.getSpecialConfig(focusTarget())

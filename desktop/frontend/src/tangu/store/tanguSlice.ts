@@ -10,6 +10,7 @@ import { useChildChat } from '../../stores/childChatStore'
 import { createRunEventBatch } from './runEventBatch'
 import type { ProjectSettings, AgentConfig, AgentRunEvent, Attachment, CtxInfo, ModelsResponse, NormalAgentDef, MsgSeg, SessionRecord, SketchItem, SubChat, TanguDesktopConfig, ToolEvent, UiMessage, WorkspaceDescriptor, StoredDesktopConfig, TeamDef, ThinkingLevel } from '../../../../../tangu-agent/src/contracts/clientTypes'
 import { clearDeviceSticky, noteDeviceRefusal } from '../../services/deviceMarks' // P1-K7a
+import { isDelegatedAdmin } from '../../services/delegatedAdmin'
 import { DEFAULT_CLOUD_PROJECT, DEFAULT_LOCAL_WORKSPACE_KEY, ROOTLESS_WORKSPACE_KEY, cloudProjectKey, isHomeSession, isIndependentOrbitConfig, isTeamImageAvatar, sessionWorkspaceKey, SHOW_SYSTEM_PROMPT_KEY, THINKING_LEVELS } from '../../../../../tangu-agent/src/contracts/clientTypes'
 import * as api from '../../services/backendService'
 import { bindSession, focusRef, focusTarget, forgetSession, homeTarget, inheritBinding, inheritChildRows, refForSession, sameRef, setFocusTarget, targetForRef, targetForSession, targetKeyOf, withLocation, yieldToHomeListing, HOME_REF, type EngineTarget, type TargetKey, type TargetRef } from '../../services/engine/targets'
@@ -2052,6 +2053,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
 
   refreshSessions: async (c) => {
     void c // 请求走 homeTarget()(活目标现读 store.cfg);c 只是历史签名
+    if (isDelegatedAdmin()) return [] // 委托管理员:会话与消息不归它管,那台设备也不放(删 Agent 后的刷新等调用点一并不发)
     const generation = host.authGen()
     // P1-K6 S4(INTEGRATION R-17):列表**只拉本端**,并保留已注入的 unit 记录(在那台电脑上建的 / K7 打开的那一条)。
     // 不把整台电脑的会话列表并进 appStore.sessions —— 22 个读者(workspaces() 等)会把 Mac 的路径当成本机项目;设备分组归 K7。
@@ -2504,6 +2506,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
   },
 
   refreshCloudProjects: async (c) => {
+    if (isDelegatedAdmin()) return // 项目列表在委托管理员的白名单外
     const generation = host.catalogToken()
     try {
       const names = await api.listProjects(focusTarget())
@@ -3499,6 +3502,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
   teams: [],
   teamAvatars: {},
   refreshTeams: async () => {
+    if (isDelegatedAdmin()) return // 团队在委托管理员的白名单外
     const c = focusTarget() // S2:团队目录随焦点
     const generation = host.catalogToken()
     const listed = await api.listTeams(c)

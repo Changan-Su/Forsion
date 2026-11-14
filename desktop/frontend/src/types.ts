@@ -543,6 +543,9 @@ declare global {
       /** 设备页以**远端身份**驱动对方的引擎(unitShim 注入;便携 Unit 的工作区主人 projection=local 不算):
        *  引擎按远程钳制 —— 审批改参数被拒(REMOTE_ARGS_OVERRIDE_FORBIDDEN)、「总允许」降成单次,界面据此收起这两样。 */
       remoteCaller?: boolean
+      /** 委托管理员角色(unitShim 按 unit/whoami 的 role 注入,只在 Unit 网页的这一种来路出现):壳只做 Agent 管理,
+       *  白名单外的请求不发、入口收起。判断一律走 services/delegatedAdmin.ts 的 isDelegatedAdmin()。 */
+      delegatedAdmin?: { name: string }
       /** A local engine sharing the active vault filesystem. Cloud/virtual vaults never qualify. */
       executionCapabilities?: { host: boolean }
       /** Explicit host filesystem availability; published cloud Units set false. */

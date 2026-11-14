@@ -10,9 +10,14 @@
 import { create } from 'zustand'
 import { engineFetch, targetForRef, type EngineTarget, type TargetKey } from './targets'
 import { isTargetKey, type TargetRef } from './target'
+import { isDelegatedAdmin } from '../delegatedAdmin'
 
 /** /health 之后追打的带鉴权探针(无副作用、体积小;远端 allow)。agentRunService 的 AUTH_PROBE_PATH 即它。 */
 export const AUTH_PROBE_PATH = '/agent/special/config'
+/** 委托管理员的带鉴权探针:后台 Agent 配置在它的白名单外,换成同样轻量、无副作用、白名单内的 Agent 名册元数据。 */
+export const DELEGATED_AUTH_PROBE_PATH = '/agent/agents-meta'
+/** 这一页该打哪条探针(只有委托管理员换路径,别的形态照旧)。 */
+export const authProbePath = (): string => (isDelegatedAdmin() ? DELEGATED_AUTH_PROBE_PATH : AUTH_PROBE_PATH)
 
 export type Verdict =
   | 'ok'
@@ -167,7 +172,7 @@ export async function probeTarget(t: EngineTarget, signal?: AbortSignal): Promis
     code = codeOf(b) || undefined
     refusal = refusalOf(b)
     if (v === 'ok') {
-      const p = await engineFetch(t, AUTH_PROBE_PATH, signal ? { signal } : {}, { timeoutMs: 15000 })
+      const p = await engineFetch(t, authProbePath(), signal ? { signal } : {}, { timeoutMs: 15000 })
       const pb = p.ok ? null : await bodyOf(p)
       const pv = classify(p.status, pb)
       // 401 = 这台引擎(或 hub)拒了凭据;其余非 2xx(403 / 404 / 5xx)不把连接判死(与 testConnection 同口径)
