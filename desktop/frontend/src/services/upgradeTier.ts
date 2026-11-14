@@ -15,9 +15,13 @@ export interface UpgradeTier {
   /** 这一档只有一个方案时带它的中英文名;同档多个方案不带名字(同会员徽章的规矩),显示档位键 */
   name?: string
   nameEn?: string
-  /** 这一档所有方案里最低的上限(-1 = 不限):同档每个方案都够用才说「X 起可用」 */
+  /** 这一档所有方案里最低的上限(-1 = 全都不限) */
   cap: number
+  /** 这一档所有方案里最高的上限(-1 = 有方案不限) */
+  maxCap: number
 }
+
+const fits = (cap: number, multiplier: number) => cap < 0 || multiplier <= cap
 
 const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : undefined)
 
@@ -40,18 +44,24 @@ export function upgradeTiersFromOfferings(json: unknown): UpgradeTier[] | null {
   for (const tier of TIER_ORDER) {
     const e = byTier.get(tier)
     if (!e) continue
-    // 任一方案不限、其余有数 → 取有数里最低的;全都不限才算不限
     const finite = e.caps.filter((c) => c >= 0)
     const cap = finite.length ? Math.min(...finite) : -1
-    out.push({ tier, cap, ...(e.plans.length === 1 ? e.plans[0] : {}) })
+    const maxCap = finite.length === e.caps.length ? Math.max(...finite) : -1
+    out.push({ tier, cap, maxCap, ...(e.plans.length === 1 ? e.plans[0] : {}) })
   }
   return out
 }
 
-/** 倍率 m 的模型最低要哪一档:档位最低、且上限不限或 ≥ m(与 isModelTierLocked 的「> 上限才锁」同一口径)。没有 → null。 */
+/**
+ * 倍率 m 的模型最低要哪一档:第一个有方案上限不限或 ≥ m 的档位(与 isModelTierLocked 的「> 上限才锁」同一口径)。
+ * 文案说的是「X 起可用 / 升级到 X 或以上」,所以只在说得准时才给:这一档每个方案都够用、更高的档也每个都够用。
+ * 后台把上限配得不规整(同档方案上限不一卡在中间、高档比低档还低)时回 null,调用方回落「升级后可用」,别把人引去买了还用不了的档。
+ */
 export function minTierForMultiplier(tiers: UpgradeTier[] | null | undefined, multiplier: number | null | undefined): UpgradeTier | null {
   if (!tiers || typeof multiplier !== 'number' || !Number.isFinite(multiplier)) return null
-  return tiers.find((t) => t.cap < 0 || multiplier <= t.cap) ?? null
+  const i = tiers.findIndex((t) => fits(t.maxCap, multiplier))
+  if (i < 0) return null
+  return tiers.slice(i).every((t) => fits(t.cap, multiplier)) ? tiers[i] : null
 }
 
 /** 档位显示名:英文界面用英文名,没填回落中文 / 通用名,再没有就首字母大写的档位键(同 badgeLabel)。 */

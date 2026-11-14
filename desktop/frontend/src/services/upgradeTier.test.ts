@@ -8,13 +8,13 @@ describe('upgradeTiersFromOfferings', () => {
     const tiers = upgradeTiersFromOfferings({ membershipPlans: [plan('max', -1), plan('team', 9), plan('plus', 2.5, { name: 'Plus' }), plan('pro', 5)] })
     expect(tiers?.map((t) => t.tier)).toEqual(['plus', 'pro', 'max'])
   })
-  it('同档多个方案:上限取最低(每个方案都够用才算),不带方案名', () => {
+  it('同档多个方案:记最低与最高上限(有不限的最高算不限),不带方案名', () => {
     const tiers = upgradeTiersFromOfferings({ membershipPlans: [plan('pro', 5, { name: '专业月' }), plan('pro', 3, { name: '专业年' }), plan('pro', -1)] })
-    expect(tiers).toEqual([{ tier: 'pro', cap: 3 }])
+    expect(tiers).toEqual([{ tier: 'pro', cap: 3, maxCap: -1 }])
   })
   it('同档全都不限 = 不限;单个方案带中英文名', () => {
     expect(upgradeTiersFromOfferings({ membershipPlans: [plan('max', -1, { name: '旗舰', nameEn: 'Flagship' })] }))
-      .toEqual([{ tier: 'max', cap: -1, name: '旗舰', nameEn: 'Flagship' }])
+      .toEqual([{ tier: 'max', cap: -1, maxCap: -1, name: '旗舰', nameEn: 'Flagship' }])
   })
   it('回包不对 / 旧服务端没有 perks = 不知道(null),不当空列表', () => {
     expect(upgradeTiersFromOfferings(null)).toBeNull()
@@ -37,13 +37,21 @@ describe('minTierForMultiplier', () => {
     expect(minTierForMultiplier(null, 3)).toBeNull()
     expect(minTierForMultiplier(tiers, undefined)).toBeNull()
   })
+  it('配得不规整、说不准时不给档位(评审 P2):同档上限不一卡在中间 / 更高的档反而不够', () => {
+    const mixed = upgradeTiersFromOfferings({ membershipPlans: [plan('plus', 2.5), plan('pro', 3), plan('pro', 5), plan('max', -1)] })
+    expect(minTierForMultiplier(mixed, 4)).toBeNull() // 只有一个 Pro 方案够:不能说「Pro 起」,也不能说「Max 起」
+    expect(minTierForMultiplier(mixed, 3)?.tier).toBe('pro') // 两个 Pro 都够
+    const inverted = upgradeTiersFromOfferings({ membershipPlans: [plan('plus', 2.5), plan('pro', 5), plan('max', 3), plan('ultra', -1)] })
+    expect(minTierForMultiplier(inverted, 4)).toBeNull() // 升到 Max 反而用不了:「Pro 或以上」不成立
+    expect(minTierForMultiplier(inverted, 3)?.tier).toBe('pro')
+  })
 })
 
 describe('upgradeTierLabel', () => {
   it('英文界面用英文名,没填回落中文 / 通用名,再没有就首字母大写的档位键', () => {
-    expect(upgradeTierLabel({ tier: 'pro', cap: 5, name: '专业版', nameEn: 'Pro' }, 'en')).toBe('Pro')
-    expect(upgradeTierLabel({ tier: 'pro', cap: 5, name: '专业版', nameEn: 'Pro' }, 'zh')).toBe('专业版')
-    expect(upgradeTierLabel({ tier: 'pro', cap: 5, name: 'Pro' }, 'en')).toBe('Pro')
-    expect(upgradeTierLabel({ tier: 'max', cap: -1 }, 'zh')).toBe('Max')
+    expect(upgradeTierLabel({ tier: 'pro', cap: 5, maxCap: 5, name: '专业版', nameEn: 'Pro' }, 'en')).toBe('Pro')
+    expect(upgradeTierLabel({ tier: 'pro', cap: 5, maxCap: 5, name: '专业版', nameEn: 'Pro' }, 'zh')).toBe('专业版')
+    expect(upgradeTierLabel({ tier: 'pro', cap: 5, maxCap: 5, name: 'Pro' }, 'en')).toBe('Pro')
+    expect(upgradeTierLabel({ tier: 'max', cap: -1, maxCap: -1 }, 'zh')).toBe('Max')
   })
 })
