@@ -21,6 +21,7 @@ import { toSqliteDDL } from '../src/core/dialectDDL.js';
 import { STANDALONE_SCHEMA } from '../src/db/schemaStandalone.js';
 import { runMigration } from '../src/db/migrate.js';
 import agentsRouter, { remoteAgentApprovalMode } from '../src/routes/agents.js';
+import assetsRouter from '../src/routes/assets.js';
 import { saveAgent, getAgent } from '../src/agents/agentRegistry.js';
 import { remoteRole } from '../src/services/remoteOrigin.js';
 
@@ -55,7 +56,7 @@ beforeAll(async () => {
   await saveAgent({ slug: 'da-wide', name: 'Wide', description: 'probe', systemPrompt: SECRET_DI, soul: SECRET_SOUL, approvalMode: 'full-auto' } as any);
   await saveAgent({ slug: 'da-custom', name: 'Custom', description: 'probe', systemPrompt: SECRET_DI, approvalMode: 'custom' } as any);
   await saveAgent({ slug: 'da-tight', name: 'Tight', description: 'probe', systemPrompt: SECRET_DI, approvalMode: 'readonly' } as any);
-  const app = express(); app.use(express.json()); app.use(agentsRouter);
+  const app = express(); app.use(express.json()); app.use(agentsRouter); app.use(assetsRouter);
   srv = app.listen(0); base = `http://127.0.0.1:${(srv.address() as any).port}`;
 });
 afterAll(async () => {
@@ -102,8 +103,11 @@ describe('GET /agent/agents', () => {
 describe('remoteAgentApprovalMode', () => {
   it('钳到上限;custom 不收;存值 custom 不改写;提交「钳后的存值」不动存值', () => {
     expect(remoteAgentApprovalMode('full-auto', undefined, 'auto-edit')).toBe('auto-edit');
+    // 新建时没给 / 给了不收的值:落上限本身,不留空(留空 = 跟随会话,本机会话缺省可能比上限宽)
+    expect(remoteAgentApprovalMode(undefined, undefined, 'readonly')).toBe('readonly');
+    expect(remoteAgentApprovalMode('custom', undefined, 'readonly')).toBe('readonly');
+    expect(remoteAgentApprovalMode(undefined, '', 'readonly')).toBeUndefined(); // PATCH 不提交 = 不动
     expect(remoteAgentApprovalMode('readonly', undefined, 'auto-edit')).toBe('readonly');
-    expect(remoteAgentApprovalMode('custom', undefined, 'auto-edit')).toBeUndefined();
     expect(remoteAgentApprovalMode('bogus', 'readonly', 'auto-edit')).toBeUndefined();
     expect(remoteAgentApprovalMode('readonly', 'custom', 'auto-edit')).toBeUndefined();
     expect(remoteAgentApprovalMode('auto-edit', 'full-auto', 'auto-edit')).toBeUndefined(); // 名册里看到的就是 auto-edit
@@ -143,7 +147,10 @@ describe('远端写 Agent', () => {
     expect(made?.shareDefaultMemory).toBeFalsy();
     const custom = await call('POST', '/agent/agents', ADMIN, { name: 'Custom remote', slug: 'da-new-custom', systemPrompt: 'p', approvalMode: 'custom' });
     expect(custom.status).toBe(200);
-    expect((await getAgent('da-new-custom'))?.approvalMode || '').not.toBe('custom');
+    expect((await getAgent('da-new-custom'))?.approvalMode).toBe('auto-edit');
+    const bare = await call('POST', '/agent/agents', ADMIN, { name: 'No mode', slug: 'da-new-bare', systemPrompt: 'p' });
+    expect(bare.status).toBe(200);
+    expect((await getAgent('da-new-bare'))?.approvalMode).toBe('auto-edit');
   });
   it('本机请求不受影响:照写 full-auto 与 activityAccess', async () => {
     expect((await call('PATCH', '/agent/agents/da-tight', {}, { approvalMode: 'full-auto', activityAccess: true })).status).toBe(200);
@@ -157,5 +164,14 @@ describe('远端写 Agent', () => {
     expect(r.body.ok).toBe(true);
     expect(r.body.keptAt).toBeUndefined();
     expect(await getAgent('da-new')).toBeFalsy();
+  });
+});
+
+describe('远端启停技能只能按 Agent', () => {
+  it('不带 agentSlug(= 改全局停用表)→ 400;本机不受影响', async () => {
+    const r = await call('PUT', '/agent/skills/catalog/local%3Ax/disabled', ADMIN, { disabled: true });
+    expect(r.status).toBe(400);
+    expect(r.raw).toContain('agentSlug');
+    expect((await call('PUT', '/agent/skills/catalog/local%3Ax/disabled', {}, { disabled: true })).raw).not.toContain('agentSlug is required');
   });
 });

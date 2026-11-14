@@ -84,17 +84,20 @@ const THREE_MODES = new Set(['readonly', 'auto-edit', 'full-auto']);
  * 返回 undefined = 这次不改审批档。
  */
 export function remoteAgentApprovalMode(want: unknown, stored: string | undefined, cap: CapMode): CapMode | undefined {
+  // 新建:没给 / 给了不收的值 → 落上限本身(留空 = 跟随会话,本机会话的缺省档可能比上限宽)
+  if (stored === undefined && (typeof want !== 'string' || !THREE_MODES.has(want))) return cap;
   if (typeof want !== 'string' || !THREE_MODES.has(want)) return undefined;
   if (stored === 'custom') return undefined;
   if (stored && THREE_MODES.has(stored) && clampApprovalMode(stored, cap) === want) return undefined;
   return clampApprovalMode(want, cap) as CapMode;
 }
 
-function remoteAgentBody(b: Record<string, any>, stored: string | undefined): Record<string, any> {
+/** 剥掉远端不收的字段;审批档只在新建时就地定(PATCH 的审批档在 patchAgent 的锁内按现读的存值定,见 PATCH 路由)。 */
+function remoteAgentBody(b: Record<string, any>, create: boolean): Record<string, any> {
   const out: Record<string, any> = { ...b };
   for (const k of REMOTE_AGENT_WRITE_STRIPPED) delete out[k];
-  const mode = remoteAgentApprovalMode(b.approvalMode, stored, remoteApprovalCap());
-  if (mode) out.approvalMode = mode; else delete out.approvalMode;
+  delete out.approvalMode;
+  if (create) out.approvalMode = remoteAgentApprovalMode(b.approvalMode, undefined, remoteApprovalCap());
   return out;
 }
 
@@ -147,7 +150,7 @@ router.post('/agent/agents', authMiddleware, async (req: AuthRequest, res) => {
   const cloud = cloudAgentsEnabled();
   if (!cloud && !ensureLocal(res)) return;
   try {
-    const b = parseRemoteOrigin(req.headers) ? remoteAgentBody(req.body || {}, undefined) : (req.body || {});
+    const b = parseRemoteOrigin(req.headers) ? remoteAgentBody(req.body || {}, true) : (req.body || {});
     const name = String(b.name || b.nameZh || b.nameEn || '');
     if (!name || !b.systemPrompt) return res.status(400).json({ detail: 'name 与 systemPrompt 必填' });
     const uid = req.user!.userId;
@@ -216,7 +219,8 @@ router.patch('/agent/agents/:slug', authMiddleware, async (req: AuthRequest, res
     // 预读:不存在 → 404 先于下面的 400 校验(旧行为)。合并**不用**它 —— 见下面的 patchAgent / cloudPatchAgent。
     const cur = cloud ? await cloudGetAgent(req.user!.userId, slug) : await getAgent(slug);
     if (!cur) return res.status(404).json({ detail: 'Agent not found' });
-    const b = parseRemoteOrigin(req.headers) ? remoteAgentBody(req.body || {}, cur.approvalMode) : (req.body || {});
+    const remote = !!parseRemoteOrigin(req.headers);
+    const b = remote ? remoteAgentBody(req.body || {}, false) : (req.body || {});
     const scope = cloud ? null : agentSyncScope(deps().brain.agentFiles, req.user!.userId);
     if (!cloud && b.cloudSync && !scope) return res.status(400).json({ detail: 'Sign in to a Forsion account before enabling cloud sync' });
     if (Number(b.maxIterations) > 0 && Number(b.maxIterations) < AGENT_MAX_ITERATIONS_MIN) return res.status(400).json({ detail: `max_iterations must be at least ${AGENT_MAX_ITERATIONS_MIN}` });
@@ -263,7 +267,12 @@ router.patch('/agent/agents/:slug', authMiddleware, async (req: AuthRequest, res
     // 审批档没提交就 KEEP、恒 mustExist。旧口径用上面锁外预读的 cur 补齐全部未提交字段(含审批档)再整份保存 ——
     // 并发的用户收紧(另一个窗口 / 另一台设备)被这份旧快照盖回去;并发的 DELETE 被这次保存建回来(复活)。
     // 现在被删了 → AgentNotFoundError → 404(云端墓碑过的预设也算删了:预读按预设兜底放行,锁内现读认墓碑)。
-    const agent = cloud ? await cloudPatchAgent(req.user!.userId, slug, fields) : await patchAgent(slug, fields);
+    // 远端改审批档:在按 slug 串行化的保存里对**锁内现读**的存值判(本机刚改成 custom / 更严的档不会被锁外快照盖回去)。
+    const wantMode = remote ? req.body?.approvalMode : undefined;
+    const remoteCap = remote ? remoteApprovalCap() : undefined;
+    const agent = cloud ? await cloudPatchAgent(req.user!.userId, slug, fields)
+      : remote ? await patchAgent(slug, (locked) => ({ ...fields, approvalMode: remoteAgentApprovalMode(wantMode, locked.approvalMode || '', remoteCap!) }))
+      : await patchAgent(slug, fields);
     if (!cloud && scope && (b.cloudSync != null || b.shareDefaultMemory != null)) {
       const enabled = b.cloudSync != null ? !!b.cloudSync : agentSyncPermission(slug, scope).enabled;
       setAgentSyncPermission(slug, scope, enabled, agent.shareDefaultMemory === true);

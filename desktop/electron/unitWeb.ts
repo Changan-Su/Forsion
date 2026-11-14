@@ -659,17 +659,11 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
 
   const handler = async (req: http.IncomingMessage, res: http.ServerResponse): Promise<void> => {
     if (opts.doorbell && !DOORBELL_PATHS.has(plainPath(req))) { json(res, 503, HOST_OFF_BODY); return }
-    // P1-K2 顶层锁定闸(routeRequest 之前,INTEGRATION §2.3):/engine 与 /vault/rpc 各在分支里按更细的表判,工作区主人不受影响。
-    if (!ownerRequest(authInfo(req).via) && lockedNow()) {
-      const p = plainPath(req)
-      if (!(p === '/engine' || p.startsWith('/engine/')) && p !== '/vault/rpc' && !lockedRequestAllowed(req.method || 'GET', p)) {
-        json(res, 423, REMOTE_LOCKED_BODY)
-        return
-      }
-    }
-    // 委托管理员档(开关开 + 隧道 + 验过的 role=admin 操作者声明):先于插件后端挂载判,缺省全拒。开关关着时不在这里验(按今天的隧道档,
-    // 断言照旧只在 /engine 与 /unit/remote-access 分支里验)。
+    gc() // 先于一切早退:被拒的请求也会往重放表里记,不能让它们绕过清理
+    // 委托管理员档(开关开 + 隧道 + 验过的 role=admin 操作者声明):先于急停锁与插件后端挂载判,缺省全拒;写在这里就挂上留痕(被拒的也记)。
+    // 开关关着时不在这里验(按今天的隧道档,断言照旧只在 /engine 与 /unit/remote-access 分支里验)。
     let delegated: ProxyOperator | null = null
+    const delegatedPath = plainPath(req)
     if (delegatedAdminOn()) {
       const ingress = authInfo(req)
       if (ingress.via === 'tunnel' && req.headers[UNIT_CALLER_HEADER] !== undefined) {
@@ -680,18 +674,26 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
     }
     if (delegated) {
       const method = (req.method || 'GET').toUpperCase()
+      if (method !== 'GET' && method !== 'HEAD') auditDelegatedWrite(res, delegated, method, delegatedPath)
+    }
+    // P1-K2 顶层锁定闸(routeRequest 之前,INTEGRATION §2.3):/engine 与 /vault/rpc 各在分支里按更细的表判,工作区主人不受影响。
+    if (!ownerRequest(authInfo(req).via) && lockedNow()) {
       const p = plainPath(req)
-      if (method !== 'GET' && method !== 'HEAD') auditDelegatedWrite(res, delegated, method, p)
-      if (!(p === '/engine' || p.startsWith('/engine/')) && !delegatedNonEngineAllowed(method, p)) { json(res, 403, LOCAL_ONLY_BODY); return }
+      if (!(p === '/engine' || p.startsWith('/engine/')) && p !== '/vault/rpc' && !lockedRequestAllowed(req.method || 'GET', p)) {
+        json(res, 423, REMOTE_LOCKED_BODY)
+        return
+      }
+    }
+    if (delegated) {
+      if (!(delegatedPath === '/engine' || delegatedPath.startsWith('/engine/')) && !delegatedNonEngineAllowed(req.method || 'GET', delegatedPath)) { json(res, 403, LOCAL_ONLY_BODY); return }
     } else if (await deps.routeRequest?.(req, res)) return
-    gc()
     let url = req.url || '/'
     if (deps.projection) {
       const prefix = deps.projection.basePath.replace(/\/$/, '')
-      if (url === prefix || url.startsWith(prefix + '?')) {
-        // 隧道来路给相对地址:浏览器那头还隔着中转的路径前缀,绝对的 /web/ 会跳出这台设备。
-        const target = authInfo(req).via === 'tunnel' ? prefix.slice(prefix.lastIndexOf('/') + 1) : prefix
-        res.writeHead(308, { Location: target + '/' + url.slice(prefix.length) }); res.end(); return
+      // 隧道来路不跳转:中转那头会带着签给原目标的断言跟随跳转(必然验不过),而绝对的 /web/ 又会跳出这台设备。
+      // 直接回壳,index.html 的相对基址(relativeBaseHref)从 `…/web` 也能落回投影根。
+      if ((url === prefix || url.startsWith(prefix + '?')) && authInfo(req).via !== 'tunnel') {
+        res.writeHead(308, { Location: prefix + '/' + url.slice(prefix.length) }); res.end(); return
       }
       if (url.startsWith(prefix + '/')) url = url.slice(prefix.length)
     }

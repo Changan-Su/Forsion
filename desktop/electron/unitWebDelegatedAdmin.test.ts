@@ -146,15 +146,16 @@ describe('index.html 基址:隧道相对、本机 / 局域网照旧绝对', () =
       expect(r.text, p).toContain(`<head><base href="${base}"><script>`)
       expect(r.text, p).not.toContain('<base href="/web/">')
     }
-    const redirect = await tunnel(b, 'GET', '/web?x=1', { operator: null })
-    expect(redirect.status).toBe(308)
-    expect(redirect.headers.get('location')).toBe('web/?x=1')
+    // 不带尾斜杠的入口:隧道不跳转(中转会带着签给原目标的断言去跟随),直接回壳,基址从 …/web 落回投影根
+    const bare = await tunnel(b, 'GET', '/web?x=1', { operator: null })
+    expect(bare.status).toBe(200)
+    expect(bare.text).toContain('<base href="web/">')
   })
 })
 
 describe('委托管理员档(开关开)', () => {
   it('白名单内的引擎读写放行:盖隧道来路、远端标记与角色头;写不过会话档闸;caller 可缺', async () => {
-    const b = await boot({ delegated: true, gate: () => ({ ok: false, status: 403, body: { code: 'REMOTE_SESSIONS_OFF' } }) })
+    const b = await boot({ delegated: true, gate: () => ({ ok: false, status: 403, body: { code: 'REMOTE_SESSIONS_OFF', detail: 'off' } }) })
     const allowed: Array<[string, string, unknown?]> = [
       ['GET', '/web/engine/health'],
       ['GET', '/web/engine/agent/agents'],
@@ -280,10 +281,20 @@ describe('委托管理员档(开关开)', () => {
     expect(b.logs.join('\n')).not.toContain('secret-query')
   })
 
-  it('急停锁定照旧生效:白名单里的写 423,读放行', async () => {
+  it('急停锁定照旧生效:白名单里的写 423,读放行;锁定挡下的写也留痕', async () => {
     const b = await boot({ delegated: true, locked: true })
     expect((await tunnel(b, 'GET', '/web/engine/agent/agents')).status).toBe(200)
     expect((await tunnel(b, 'PATCH', '/web/engine/agent/agents/demo', { body: {} })).status).toBe(423)
+    expect((await tunnel(b, 'PUT', '/web/unit/config', { body: {} })).status).toBe(423)
+    const lines = b.logs.filter((l) => l.includes('delegated admin write'))
+    expect(lines.map((l) => / (PATCH|PUT) (\S+) -> (\d+)/.exec(l)?.slice(1).join(' '))).toEqual(['PATCH /engine/agent/agents/demo 423', 'PUT /unit/config 423'])
+  })
+
+  it('不带尾斜杠的入口带着委托管理员断言也能打开(不经 308)', async () => {
+    const b = await boot({ delegated: true })
+    const r = await tunnel(b, 'GET', '/web')
+    expect(r.status).toBe(200)
+    expect(r.text).toContain('<base href="web/">')
   })
 
   it('入站的角色头一律不透传:没有操作者声明的隧道请求、局域网主人都盖不上', async () => {
