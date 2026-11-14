@@ -6,9 +6,9 @@ import { readFileSync } from 'node:fs'
 import { runInNewContext } from 'node:vm'
 import { transform } from 'sucrase'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { composeFm } from './fm'
+import { composeFm, splitFm } from './fm'
 import { fromDisk } from './eol'
-import { clearDraft, readDraft, stashDraft, type UnsavedDraft } from './writeSafety'
+import { clearDraft, createCanonicalMemo, peekDraftText, readDraft, stashDraft, type UnsavedDraft } from './writeSafety'
 import {
   TYPING_DRAFT_COMPOSE_POLL_MS,
   TYPING_DRAFT_MAX_MS,
@@ -124,6 +124,7 @@ const between = (a: string, b: string): string => {
 const typingStashSrc = between('    const typingStash = (): void => {', '    const pacer = createTypingDraftPacer(')
 const settleSrc = between('  const settleUnsaved = (written?: string): void => {', '  /** 写成功:收掉')
 const restoreSrc = between('  const [draft, setDraft] = useState<UnsavedDraft | null>(() => {', '  const discardDraft = ')
+const isPristineSrc = between('  const [canonMemo] = useState(createCanonicalMemo)', '  /** 回灌入口')
 
 const VAULT = '/vault'
 const PATH = 'Typing.md'
@@ -137,8 +138,10 @@ function mountPage(disk: string, slot: string | null = null) {
     stashed: null as string | null, slot, failed: false, retryTimer: null as unknown, retryN: 0, pending: false,
   }
   const setSaveFailed = vi.fn()
+  const focus = { value: true }
   const ctx = {
-    pipe, vaultRoot: VAULT, path: PATH, composeFm, stashDraft, clearDraft, setSaveFailed, clearTimeout,
+    pipe, vaultRoot: VAULT, path: PATH, composeFm, stashDraft, clearDraft, peekDraftText, setSaveFailed, clearTimeout,
+    document: { hasFocus: () => focus.value },
     syncFromEditor: () => { pipe.body = editor.body },
     isPristine: () => pipe.body === pipe.lastSaved,
   }
@@ -146,7 +149,7 @@ function mountPage(disk: string, slot: string | null = null) {
     settleUnsaved: (written?: string) => void
     typingStash: () => void
   }
-  return { pipe, editor, ...fns }
+  return { pipe, editor, focus, ...fns }
 }
 
 /** 重开同一篇:挂载时的恢复判断(只提示不覆盖;草稿 = 盘上就静默删)。 */
@@ -224,6 +227,91 @@ describe('typing drafts wired into the unified page', () => {
     h.pipe.readOnly = true
     h.typingStash()
     expect(readDraft(VAULT, PATH)).toBeNull()
+  })
+})
+
+describe('typing drafts never overwrite a draft this instance did not store', () => {
+  it('another window (same slot number) stored newer text in the cell: the tick skips, and resumes once the cell is free', () => {
+    const a = mountPage(DISK)
+    a.editor.body = DISK + 'A1'
+    a.typingStash()
+    a.editor.body = DISK + 'A1A2'
+    a.typingStash() // 格子里正是自己上次那份:照常更新
+    expect(readDraft(VAULT, PATH)?.text).toBe(DISK + 'A1A2')
+    // 另一个窗口(槽位号相同)失焦,把它更新的字存进同一格
+    stashDraft(VAULT, PATH, DISK + 'B newer', DISK)
+    a.editor.body = DISK + 'A1A2A3'
+    a.typingStash()
+    expect(readDraft(VAULT, PATH)?.text).toBe(DISK + 'B newer')
+    expect(a.pipe.stashed).toBe(DISK + 'A1A2')
+    // 那个窗口写盘成功、收掉了自己的草稿:格子空了,节拍照常接手
+    clearDraft(VAULT, PATH, DISK + 'B newer')
+    a.typingStash()
+    expect(readDraft(VAULT, PATH)?.text).toBe(DISK + 'A1A2A3')
+  })
+
+  it('an unreadable cell counts as someone else\'s, not as empty', () => {
+    const a = mountPage(DISK)
+    const key = 'amadeus.unsavedDraft:' + VAULT + ':' + PATH
+    localStorage.setItem(key, '{not json')
+    a.editor.body = DISK + 'typed'
+    a.typingStash()
+    expect(localStorage.getItem(key)).toBe('{not json')
+  })
+
+  it('a window without focus does not store on the typing tick', () => {
+    const a = mountPage(DISK)
+    a.focus.value = false
+    a.editor.body = DISK + 'typed elsewhere'
+    a.typingStash()
+    expect(readDraft(VAULT, PATH)).toBeNull()
+    a.focus.value = true
+    a.typingStash()
+    expect(readDraft(VAULT, PATH)?.text).toBe(DISK + 'typed elsewhere')
+  })
+})
+
+describe('isPristine re-parses a given saved base only once', () => {
+  function pristineOf(lastSaved: string, body: string) {
+    const canonical = vi.fn((stored: string) => stored + '<!-- normalized -->')
+    const host = { current: { canonical } as { canonical: (s: string) => string | null } | null }
+    const pipe = { lastSaved, fm: splitFm(lastSaved).fmText, body, peerPatch: null }
+    const isPristine = runInNewContext(transform(`${isPristineSrc}\nisPristine`, { transforms: ['typescript'] }).code, {
+      useState: (init: unknown) => [typeof init === 'function' ? (init as () => unknown)() : init],
+      createCanonicalMemo, splitFm, pipe, hostApi: host,
+      patchFm: () => { throw new Error('not used') }, layoutLineOf: () => null, canvasLineOf: () => null,
+    }) as () => boolean
+    return { isPristine, canonical, pipe, host }
+  }
+
+  it('a burst of ticks against the same base calls canonical once; the answer does not change', () => {
+    const h = pristineOf(DISK, DISK + 'typing')
+    for (let i = 0; i < 20; i++) {
+      h.pipe.body = DISK + 'typing' + 'x'.repeat(i)
+      expect(h.isPristine()).toBe(false)
+    }
+    h.pipe.body = DISK + '<!-- normalized -->' // 撤回到基线规范化后的样子(≠ 基线原文)
+    expect(h.isPristine()).toBe(true)
+    expect(h.canonical).toHaveBeenCalledTimes(1)
+  })
+
+  it('a new base or a new editor instance recomputes; an editor that is not ready is not cached', () => {
+    const h = pristineOf(DISK, DISK + 'x')
+    h.isPristine()
+    h.pipe.lastSaved = DISK + 'saved'
+    h.isPristine()
+    expect(h.canonical).toHaveBeenCalledTimes(2)
+    const other = vi.fn((s: string) => s)
+    h.host.current = { canonical: other }
+    h.isPristine()
+    expect(other).toHaveBeenCalledTimes(1)
+    const memo = createCanonicalMemo()
+    const flaky = { canonical: vi.fn<(s: string) => string | null>().mockReturnValueOnce(null).mockReturnValue('ok') }
+    expect(memo.get(flaky, 'base')).toBeNull()
+    expect(memo.get(flaky, 'base')).toBe('ok')
+    expect(memo.get(flaky, 'base')).toBe('ok')
+    expect(flaky.canonical).toHaveBeenCalledTimes(2)
+    expect(memo.get(null, 'base')).toBeNull()
   })
 })
 

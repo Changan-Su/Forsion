@@ -40,10 +40,14 @@
 //   L1 接着切走(卸载冲洗)→ 撤回落盘;两发写之间本机草稿一直在(前一发的 ack 不许删掉比它新的草稿)、零提示
 //   L2 停在原页(schedule)→ 撤回同样落盘
 //  T 组(连续打字期间崩溃不丢字,typingDraft.ts):字与字间隔 80ms(短于监听防抖)连打约 5 秒 ——
-//   T1 打字途中盘上一次没写(写盘节奏照旧等停手),但本机草稿已在、且只落后最后约 2 秒
-//   T2 「崩溃」:只带着那一刻的本机草稿、用旧盘重开 → 出「恢复草稿」条,点了字就回来
+//   T1 打字没停手时草稿照样一跳跳地存(不随按键重置),每一份都盖住了当时盘上没有的字;同一份基线的规范化只算一次
+//      (判定不看机器快慢:机器忙、中途卡顿超过约 1 秒时正常写盘照写,断言按每次存草稿那一刻的盘上内容算)
+//   T2 「崩溃」:只带着某一刻的本机草稿和那一刻的盘重开 → 出「恢复草稿」条,点了字就回来
 //   T3 停手后照常落盘,打字途中存的草稿随之删掉(没有过时草稿留下误弹恢复)
 //   T4 重开后「恢复草稿」条还没决定时接着连打 → 那份旧草稿不被连打节拍盖掉
+//   T5 输入法组字(CDP Input.imeSetComposition)跨过到点:组字中一份草稿都不存;提交(Input.insertText)后下一跳存的是提交后的字
+//   T6 两个窗口(同源共享 localStorage,槽位号相同):B 失焦存下的更新的字在格子里时,A 的连打节拍不许盖掉它
+//  CPU_THROTTLE=4 跑:CDP 把页面 CPU 放慢 4 倍(负载下的稳定性自查)
 //
 // 用法:npm run check:unifiedcas(= node scripts/e2e-editor.cjs --check=unifiedcas;worktree 里设 HARNESS_URL)
 const fs = require('fs'), os = require('os'), path = require('path')
@@ -71,8 +75,9 @@ const record = (name, ok, detail) => {
 }
 const wait = (ms) => new Promise((r) => setTimeout(r, ms))
 
-async function open(browser, seed, flags = '') {
-  const p = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1200, height: 1100 } })
+async function open(browser, seed, flags = '', context = null) {
+  const p = await (context ?? browser).newPage(context ? undefined : { locale: 'zh-CN', viewport: { width: 1200, height: 1100 } })
+  if (Number(process.env.CPU_THROTTLE) > 1) await (await p.context().newCDPSession(p)).send('Emulation.setCPUThrottlingRate', { rate: Number(process.env.CPU_THROTTLE) })
   p.errs = []
   p.on('pageerror', (e) => { p.errs.push(e.message); console.log('[pageerror]', e.message) })
   // 从第一帧就收 toast(挂载补读、首次失败都可能很早)
@@ -117,6 +122,22 @@ const toasts = (p) => p.evaluate(() => window.__toasts.map(({ run, ...t }) => t)
 const domText = (p, idx) => p.evaluate(([s, idx]) => document.querySelectorAll(s)[idx]?.innerText ?? '', [PM, idx])
 const writeCount = (p) => p.evaluate(() => window.__upage.writes.length)
 const draftKeys = (p) => p.evaluate(() => Object.keys(localStorage).filter((k) => k.startsWith('amadeus.unsavedDraft:')))
+/** 记下本页每一次存 / 删草稿那一刻:正文、当时盘上那版、已落盘次数、时刻(Date.now,跨页可比)。 */
+const recordDrafts = (p) => p.evaluate(() => {
+  window.__drafts = []
+  const proto = Storage.prototype
+  const set = proto.setItem, rm = proto.removeItem
+  const mine = (k) => String(k).startsWith('amadeus.unsavedDraft:')
+  proto.setItem = function (k, v) {
+    if (mine(k)) window.__drafts.push({ op: 'set', at: Date.now(), key: k, raw: v, text: JSON.parse(v).text, disk: window.__upage.vault.get('Unified.md') ?? null, writes: window.__upage.writes.length })
+    return set.call(this, k, v)
+  }
+  proto.removeItem = function (k) {
+    if (mine(k)) window.__drafts.push({ op: 'rm', at: Date.now(), key: k, writes: window.__upage.writes.length })
+    return rm.call(this, k)
+  }
+})
+const draftLog = (p) => p.evaluate(() => window.__drafts)
 
 async function groupG(browser) {
   const p = await open(browser, '# 标题\n\n第一段。\n\n## 小节\n\n第二段。\n', '&udual')
@@ -890,47 +911,97 @@ async function groupT(browser) {
   const seed = '# 标题\n\n第一段。\n'
   const p = await open(browser, seed)
   await p.evaluate(() => localStorage.clear())
+  await recordDrafts(p)
+  const before = await p.evaluate(() => ({ calls: window.__upage.probe.canonicalCalls(), writes: window.__upage.writes.length }))
   await caretAfter(p, 0, '第一段。')
-  const burst = 'abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ' // 62 击 × 80ms ≈ 5s
-  const t0 = Date.now()
-  const typing = p.keyboard.type(burst, { delay: 80 })
-  await wait(4200)
-  const mid = await p.evaluate(() => {
-    const k = Object.keys(localStorage).find((x) => x.startsWith('amadeus.unsavedDraft:'))
-    return { key: k ?? null, raw: k ? localStorage.getItem(k) : null, writes: window.__upage.writes.length, disk: window.__upage.vault.get('Unified.md'), dom: document.querySelector('.unified-body .ProseMirror').innerText }
-  })
-  const at = Date.now() - t0
-  const draftText = mid.raw ? JSON.parse(mid.raw).text : ''
-  const typedInDraft = (draftText.match(/第一段。([0-9A-Za-z]*)/) || [, ''])[1].length
-  const typedInDom = (mid.dom.match(/第一段。([0-9A-Za-z]*)/) || [, ''])[1].length
-  // 80ms 一击:2 秒 ≈ 25 击;给 6 击的调度余量
-  record('T1 连打途中零写盘,本机草稿已在且只落后最后约 2 秒', mid.writes === 0 && mid.disk === seed && !!mid.key && typedInDraft > 0 && typedInDom - typedInDraft <= 31,
-    JSON.stringify({ at, writes: mid.writes, typedInDraft, typedInDom, key: mid.key }))
-  await typing
-  // T2:「崩溃」—— 新页面(新的存储上下文)只带那一刻的草稿,盘上还是旧文
-  if (mid.key) {
+  const burst = 'abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz' // 88 击 × 80ms ≈ 7s:至少三跳
+  await p.keyboard.type(burst, { delay: 80 })
+  const endAt = await p.evaluate(() => Date.now())
+  const after = await p.evaluate(() => ({ calls: window.__upage.probe.canonicalCalls(), writes: window.__upage.writes.length }))
+  const during = (await draftLog(p)).filter((d) => d.op === 'set' && d.at <= endAt)
+  const typedOf = (t) => ((t ?? '').match(/第一段。([0-9A-Za-z]*)/) || [, ''])[1]
+  const covers = during.every((d) => typedOf(d.text).length > 0 && burst.startsWith(typedOf(d.text)) && typedOf(d.text).length >= typedOf(d.disk).length)
+  const writesDuring = after.writes - before.writes
+  const calls = after.calls - before.calls
+  record('T1 连打没停手:草稿一跳跳地存(≥2 份)、每份都盖住当时盘上没有的字;基线规范化只随基线变才重算',
+    during.length >= 2 && covers && calls <= 1 + writesDuring,
+    JSON.stringify({ stashes: during.length, writesDuring, canonicalCalls: calls, typed: during.map((d) => typedOf(d.text).length + '/' + typedOf(d.disk).length) }))
+  // T2:「崩溃」—— 新页面(新的存储上下文)只带某一刻的草稿和那一刻的盘
+  const crash = during[during.length - 1]
+  if (crash) {
     const q = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1200, height: 1100 } })
-    await q.addInitScript(([k, v]) => { if (!sessionStorage.getItem('__seeded')) { localStorage.setItem(k, v); sessionStorage.setItem('__seeded', '1') } }, [mid.key, mid.raw])
-    await q.goto(`${URL}?upage&useed=${encodeURIComponent(seed)}`, { waitUntil: 'domcontentloaded' })
+    await q.addInitScript(([k, v]) => { if (!sessionStorage.getItem('__seeded')) { localStorage.setItem(k, v); sessionStorage.setItem('__seeded', '1') } }, [crash.key, crash.raw])
+    await q.goto(`${URL}?upage&useed=${encodeURIComponent(crash.disk ?? seed)}`, { waitUntil: 'domcontentloaded' })
     await q.waitForSelector(PM, { timeout: 60000 })
     await q.waitForTimeout(800)
     const bar = await q.evaluate(() => !![...document.querySelectorAll('.unified-page [data-save="draft"] button')].find((b) => b.textContent === '恢复草稿'))
     // T4:恢复条还开着时在这篇里接着连打 3 秒 → 那份还没决定的草稿不许被连打节拍盖掉
     await caretAfter(q, 0, '第一段。')
     await q.keyboard.type('zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz', { delay: 80 })
-    const kept = await q.evaluate((k) => localStorage.getItem(k), mid.key)
-    record('T4 恢复条未决时连打:原草稿原样留着', kept === mid.raw, JSON.stringify({ same: kept === mid.raw }))
+    const kept = await q.evaluate((k) => localStorage.getItem(k), crash.key)
+    record('T4 恢复条未决时连打:原草稿原样留着', kept === crash.raw, JSON.stringify({ same: kept === crash.raw }))
     await q.evaluate(() => { const v = window.__upage.probe.view(); v.dispatch(v.state.tr.delete(v.state.selection.from - 36, v.state.selection.from)) })
     await q.evaluate(() => [...document.querySelectorAll('[data-save="draft"] button')].find((b) => b.textContent === '恢复草稿')?.click())
-    await q.waitForTimeout(1500)
+    await q.waitForFunction((t) => window.__upage.vault.get('Unified.md') === t, crash.text, { timeout: 10000 }).catch(() => {})
     const back = await q.evaluate(() => window.__upage.vault.get('Unified.md'))
-    record('T2 崩溃后重开:出「恢复草稿」条,点了打字途中的字回到盘上', bar && back === draftText, JSON.stringify({ bar, back }))
+    record('T2 崩溃后重开:出「恢复草稿」条,点了打字途中的字回到盘上', bar && back === crash.text, JSON.stringify({ bar, back }))
     await q.close()
   } else record('T2 崩溃后重开', false, 'T1 没有草稿可恢复')
-  await wait(1600)
+  await p.waitForFunction((b) => (window.__upage.vault.get('Unified.md') ?? '').includes('第一段。' + b) && !Object.keys(localStorage).some((k) => k.startsWith('amadeus.unsavedDraft:')), burst, { timeout: 10000 }).catch(() => {})
   const end = await p.evaluate(() => ({ disk: window.__upage.vault.get('Unified.md'), keys: Object.keys(localStorage).filter((k) => k.startsWith('amadeus.unsavedDraft:')) }))
   record('T3 停手后照常落盘,打字途中存的草稿已删掉', end.disk.includes('第一段。' + burst) && end.keys.length === 0, JSON.stringify(end))
   await p.close()
+
+  // T5:输入法组字。先打一个字让节拍起算,紧接着组字并保持 3 秒(跨过 2 秒到点)
+  const r = await open(browser, seed)
+  await r.evaluate(() => localStorage.clear())
+  await recordDrafts(r)
+  // 写一直在路上:停手后的正常写盘落不了盘,「这一刻没有待写」就遮不住组到一半时存不存草稿这件事
+  await r.evaluate(() => { window.__upage.casDelayMs = 30000 })
+  await caretAfter(r, 0, '第一段。')
+  const cdp = await r.context().newCDPSession(r)
+  await r.keyboard.type('q')
+  await cdp.send('Input.imeSetComposition', { text: 'zhong', selectionStart: 5, selectionEnd: 5 })
+  await wait(400)
+  await cdp.send('Input.imeSetComposition', { text: 'zhongwen', selectionStart: 8, selectionEnd: 8 })
+  await wait(2600)
+  const held = { dom: await domText(r, 0), composing: await r.evaluate(() => !!window.__upage.probe.view().composing), sets: (await draftLog(r)).filter((d) => d.op === 'set').map((d) => d.text), doc: await r.evaluate(() => window.__upage.probe.view().state.doc.textContent) }
+  await cdp.send('Input.insertText', { text: '中文' })
+  await r.waitForFunction(() => window.__drafts.some((d) => d.op === 'set'), null, { timeout: 5000 }).catch(() => {})
+  const firstSet = (await draftLog(r)).find((d) => d.op === 'set')
+  record('T5 输入法组字中到点不存草稿(没有组到一半的拼音),提交后下一跳存的是提交后的字',
+    held.composing && held.dom.includes('zhongwen') && held.sets.length === 0 && !!firstSet && firstSet.text.includes('第一段。q中文') && !firstSet.text.includes('zhong'),
+    JSON.stringify({ held, first: firstSet?.text ?? null }))
+  await r.close()
+
+  // T6:两个窗口同源(共享 localStorage)、同一篇、槽位号相同。B 的写一直在路上(它失焦存下的草稿就留在格子里)
+  const context = await browser.newContext({ locale: 'zh-CN', viewport: { width: 1200, height: 1100 } })
+  const a = await open(browser, seed, '', context)
+  const b = await open(browser, seed, '', context)
+  await a.evaluate(() => localStorage.clear())
+  await recordDrafts(a)
+  await recordDrafts(b)
+  const focus = [await a.evaluate(() => document.hasFocus()), await b.evaluate(() => document.hasFocus())]
+  await b.evaluate(() => { window.__upage.casDelayMs = 60000 })
+  await caretAfter(a, 0, '第一段。')
+  await a.keyboard.type('a'.repeat(55), { delay: 80 }) // ≈ 4.4s:A 自己存两跳(第二跳盖的是自己那份)
+  await caretAfter(b, 0, '第一段。')
+  await b.keyboard.type('BBB')
+  await b.evaluate(() => window.dispatchEvent(new Event('blur')))
+  const bDraft = (await draftLog(b)).find((d) => d.op === 'set' && d.text.includes('BBB'))
+  await caretAfter(a, 0, 'aaa')
+  await a.keyboard.type('c'.repeat(40), { delay: 80 }) // ≈ 3.2s:A 的节拍至少再到点一次
+  await wait(2500)
+  const aSets = (await draftLog(a)).filter((d) => d.op === 'set')
+  const cell = await a.evaluate(() => { const k = Object.keys(localStorage).find((x) => x.startsWith('amadeus.unsavedDraft:')); return k ? localStorage.getItem(k) : null })
+  const bAt = bDraft?.at ?? Infinity
+  const aBefore = aSets.filter((d) => d.at < bAt).length
+  const aAfter = aSets.filter((d) => d.at > bAt).length
+  const cellText = cell ? JSON.parse(cell).text : null // B 自己的节拍可能用同样的字再存一遍(时间戳不同),按正文比
+  record('T6 另一个窗口刚存下的更新的草稿在格子里:本窗连打节拍跳过、不盖掉它(格子空 / 是自己那份时照常存)',
+    focus.every(Boolean) && aBefore >= 2 && !!bDraft && aAfter === 0 && cellText === bDraft.text,
+    JSON.stringify({ focus, aBefore, aAfter, bStored: bDraft?.text ?? null, cell: cellText }))
+  await context.close()
 }
 
 async function main() {

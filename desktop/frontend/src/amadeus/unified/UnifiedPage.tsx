@@ -51,7 +51,7 @@ import { unfoldCalloutsForInsert } from '../blocks/markdown/callout'
 import type { TextWriteResult } from '@amadeus-shared/ipc'
 import { textFingerprint } from '@amadeus-shared/writeConflict'
 import { formatDateTime } from '../../format/time'
-import { SAVE_RETRY_MS, clearDraft, isElectronHost, mergeMovedText, readDraft, stashDraft, toastConflictCopy, toastGoneUnsaved, toastRenameCopy, toastRescued, toastSaveFailed, writeConflictCopy, type UnsavedDraft } from './writeSafety'
+import { SAVE_RETRY_MS, clearDraft, createCanonicalMemo, isElectronHost, mergeMovedText, peekDraftText, readDraft, stashDraft, toastConflictCopy, toastGoneUnsaved, toastRenameCopy, toastRescued, toastSaveFailed, writeConflictCopy, type UnsavedDraft } from './writeSafety'
 import { docHeadings } from './outline'
 import { revealBlockAtTop } from './revealScroll'
 import { createStatsReader, createStatsTicker } from './noteStats'
@@ -2203,14 +2203,16 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
   /** 本实例相对基线(lastSaved)**有没有用户自己的改动**:fm 逐字相同,且正文 = 编辑器对基线的规范化结果 → 没有。
    *  用途:CAS 拒写时「让位回灌」还是「本地胜 + 保全」、卸载冲洗要不要写、押后回灌时 pending 是不是只因规范化。
    *  判不出来(编辑器不在 / 有分栏画布结构键 —— 那两类的 parse 带折叠副作用,不拿来空跑)一律按「有改动」:
-   *  宁可多出一份冲突副本,也不把用户的字当规范化噪音让掉。 */
+   *  宁可多出一份冲突副本,也不把用户的字当规范化噪音让掉。
+   *  基线的规范化结果按「编辑器实例 + 基线原文」缓存一格:连打期间每一跳草稿都会问到这里,大笔记整篇重解析一次要几百毫秒起。 */
+  const [canonMemo] = useState(createCanonicalMemo)
   const isPristine = (): boolean => {
     const base = splitFm(pipe.lastSaved)
     // 同篇另一个实例正替两边写的 fm 补丁不算本实例的改动(G1-02 返修,见 Pipe.peerPatch)—— 只豁免那一份补丁。
     if (base.fmText !== pipe.fm && (pipe.peerPatch == null || patchFm(base.fmText, pipe.peerPatch) !== pipe.fm)) return false
     if (base.body === pipe.body) return true
     if (layoutLineOf(pipe.fm) != null || canvasLineOf(pipe.fm) != null) return false
-    const canon = hostApi.current?.canonical(base.body)
+    const canon = canonMemo.get(hostApi.current, base.body)
     return canon != null && canon === pipe.body
   }
   /** 回灌入口(住在下面的回灌 effect 里,按路径重装);CAS 让位与同窗通知从这里进。 */
@@ -2943,6 +2945,8 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
     // 主动收掉本实例存过的草稿 —— 不然打了字又撤回到盘上那版,这份过时草稿会在下次打开时误弹「恢复」。
     const typingStash = (): void => {
       if (pipe.readOnly || pipe.retired || pipe.dead) return
+      // 窗口没焦点:用户不在这里打字,停手后的正常写盘(及失焦那条)会接手;也省一次整篇序列化。
+      if (!document.hasFocus()) return
       syncFromEditor()
       const text = composeFm(pipe.fm, pipe.body)
       if (!pipe.writing && text === pipe.lastSaved) { settleUnsaved(); return }
@@ -2951,6 +2955,10 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
         pipe.stashed = null
         return
       }
+      // 这一格里是别人存的(另一个窗口槽位号相同、或同篇别处刚失焦存下的更新的字;读不出也算):不盖,跳过这一跳。
+      // 只有空格、或里面正是本实例上次存的那份,才轮得到节拍写。
+      const held = peekDraftText(vaultRoot, path, pipe.slot)
+      if (held !== null && held !== pipe.stashed) return
       pipe.stashed = text
       stashDraft(vaultRoot, path, text, pipe.lastSaved, pipe.slot)
     }
@@ -3299,6 +3307,7 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
     probe.setFm = (patch: Record<string, unknown>) => setFm(patch, false) // 仪器造「本实例有未落盘的 fm 改动」(防抖写)
     probe.view = () => layer.getView() // 仪器直驱 PM 事务(分栏 spike/检查用)
     probe.serializeNow = () => hostApi.current?.serializeNow() ?? null // 与 200ms 监听同一条落盘序列化链(check:editorperf 计时)
+    probe.canonicalCalls = () => canonMemo.calls // isPristine 实际重算基线规范化的次数(check:unifiedcas T1)
     probe.setReading = (next: boolean) => switchReading(next)
     probe.isReading = () => readingRef.current
     probe.readingPosition = () => readingPosition.current
