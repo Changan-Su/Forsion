@@ -2008,8 +2008,11 @@ async function loadUnitWindowState(): Promise<void> {
     return
   }
   const parsed = parseUnitWindowState(raw)
-  if (parsed) { persistedUnitWindows = parsed; unitWindowStateWritable = true }
-  else console.warn('[win] unit-windows.json unreadable; not restoring and not overwriting it this run')
+  if (!parsed) { console.warn('[win] unit-windows.json unreadable; not restoring and not overwriting it this run'); return }
+  persistedUnitWindows = parsed.entries
+  // 有不认识的条目:合法的照样恢复,但这次运行不写回(否则就把那份文件覆盖了)
+  unitWindowStateWritable = parsed.clean
+  if (!parsed.clean) console.warn('[win] unit-windows.json has entries this version does not recognise; restoring the valid ones, not overwriting it this run')
 }
 let saveUnitWindowsTimer: NodeJS.Timeout | null = null
 function saveUnitWindowState(): void {

@@ -287,13 +287,19 @@ describe('half-written .app', () => {
 
 describe('parseUnitWindowState (Unit window restore, unit-windows.json)', () => {
   const b = { x: 10, y: 20, width: 1100, height: 760 }
-  it('keeps well-formed entries; ids must pass the whitelist again; duplicates dropped', () => {
-    expect(parseUnitWindowState(JSON.stringify([{ unit: ID, bounds: b }, { unit: '../x', bounds: b }, { unit: ID, bounds: b }, { unit: 'abcdefgh', bounds: { ...b, width: 'x' } }]))).toEqual([{ unit: ID, bounds: b }])
+  it('a fully recognised file is clean (may be written back)', () => {
+    expect(parseUnitWindowState(JSON.stringify([{ unit: ID, bounds: b }]))).toEqual({ entries: [{ unit: ID, bounds: b }], clean: true })
+    expect(parseUnitWindowState('[]')).toEqual({ entries: [], clean: true })
   })
-  it('a corrupt file is "unknown" (null), never an empty list the caller could write back', () => {
+  it('any entry it does not recognise: the valid windows still restore, but the file is not clean (no write-back this run)', () => {
+    expect(parseUnitWindowState(JSON.stringify([{ unit: ID, bounds: b }, { unit: '../x', bounds: b }]))).toEqual({ entries: [{ unit: ID, bounds: b }], clean: false })
+    expect(parseUnitWindowState(JSON.stringify([{ unit: ID, bounds: b }, { unit: ID, bounds: b }]))).toEqual({ entries: [{ unit: ID, bounds: b }], clean: false })
+    expect(parseUnitWindowState(JSON.stringify([{ unit: 'abcdefgh', bounds: { ...b, width: 'x' } }]))).toEqual({ entries: [], clean: false })
+    expect(parseUnitWindowState(JSON.stringify([null, { future: 1 }]))).toEqual({ entries: [], clean: false })
+  })
+  it('a corrupt file is "unknown" (null): nothing restored, nothing written back', () => {
     expect(parseUnitWindowState('')).toBeNull()
     expect(parseUnitWindowState('{"unit":1}')).toBeNull()
     expect(parseUnitWindowState('[{"unit"')).toBeNull()
-    expect(parseUnitWindowState('[]')).toEqual([])
   })
 })

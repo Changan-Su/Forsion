@@ -105,20 +105,24 @@ export async function handleUnitAddToDesktop(raw: unknown, deps: UnitAddToDeskto
 
 export interface UnitWindowEntry { unit: string; bounds: { x: number; y: number; width: number; height: number } }
 
-/** 读回来的清单:每条的设备 id 仍要过白名单、位置大小要是有限数。文件读坏(JSON 坏 / 不是数组)→ null = 不知道,调用方据此不写回。 */
-export function parseUnitWindowState(raw: string): UnitWindowEntry[] | null {
+/** 读回来的清单:每条的设备 id 仍要过白名单、位置大小要是有限数。
+ *  - 整份读坏(JSON 坏 / 不是数组)→ null = 不知道:不恢复、这次运行不写回;
+ *  - 读得出、但**有任何一条**不认识(坏条目 / 重复)→ entries 照样给合法的那几扇,clean = false:这次运行也不写回(写回就把坏文件覆盖了);
+ *  - 每条都认得 → clean = true,可以写回。 */
+export function parseUnitWindowState(raw: string): { entries: UnitWindowEntry[]; clean: boolean } | null {
   let arr: unknown
   try { arr = JSON.parse(raw) } catch { return null }
   if (!Array.isArray(arr)) return null
-  const out: UnitWindowEntry[] = []
+  const entries: UnitWindowEntry[] = []
+  let clean = true
   for (const x of arr) {
     const e = x as { unit?: unknown; bounds?: Record<string, unknown> } | null
     const b = e?.bounds
-    if (!e || !isUnitId(e.unit) || !b || out.some((o) => o.unit === e.unit)) continue
+    if (!e || !isUnitId(e.unit) || !b || entries.some((o) => o.unit === e.unit)) { clean = false; continue }
     const n = (k: string): number | null => (typeof b[k] === 'number' && Number.isFinite(b[k]) ? Math.round(b[k] as number) : null)
     const [bx, by, w, h] = [n('x'), n('y'), n('width'), n('height')]
-    if (bx === null || by === null || w === null || h === null || w <= 0 || h <= 0) continue
-    out.push({ unit: e.unit, bounds: { x: bx, y: by, width: w, height: h } })
+    if (bx === null || by === null || w === null || h === null || w <= 0 || h <= 0) { clean = false; continue }
+    entries.push({ unit: e.unit, bounds: { x: bx, y: by, width: w, height: h } })
   }
-  return out
+  return { entries, clean }
 }
