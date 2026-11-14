@@ -1245,4 +1245,26 @@ export interface UnitInfo {
   capsAt?: string | null
   /** 这份 caps 是不是设备**当前这次连接**里报的。 */
   capsLive?: boolean
+  // ── 别人共享给当前账号的 Unit(名册带 `shared` 时才有;解析与校验在 desktop/shared/sharedUnits.ts)──
+  /** 有这个对象 = 不是当前账号名下的设备,而是别人共享过来的。 */
+  shared?: UnitSharedInfo
+  /** 进这台的地址(只在 shared.enter = 'frame' 时有):这台自己的子域上的 `/api/units/<id>/proxy/…`。 */
+  webUrl?: string
+  /** 睡着了;进的时候云端会叫醒它。 */
+  sleeping?: boolean
+}
+
+/** 按界面语言取的一段文案(至少有一种语言;缺的那种回落到有的)。 */
+export interface UnitSharedLabel { zh?: string; en?: string }
+
+/** 共享过来的 Unit 在名册里多带的那一段。 */
+export interface UnitSharedInfo {
+  /** 面板里按它分组;title = 组标题。 */
+  group: { id: string; title: UnitSharedLabel }
+  /** 行尾的灰字。 */
+  roleLabel: UnitSharedLabel
+  /** frame = 点了整窗切到这台;none = 不能进。 */
+  enter: 'frame' | 'none'
+  /** enter = none 时点了打开什么:某个插件(manifest id)的主 Space。缺省 = 这一行点不动。 */
+  open?: { kind: 'space'; plugin: string }
 }

@@ -4808,6 +4808,10 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-wrap { top: calc(var(-
 .account-pop .ap-unit-state { flex: none; white-space: nowrap; }
 .account-pop .ap-unit.ap-unit--off { color: var(--text-muted); }
 .account-pop .ap-unit.ap-unit--off .ap-unit-ic { opacity: 0.6; }
+/* 共享过来的、点不动的那一行(不能进、也没有能打开的 Space):不是按钮,悬停不变色 */
+.account-pop .ap-item.ap-unit--inert { cursor: default; color: var(--text-muted); }
+.account-pop .ap-item.ap-unit--inert:hover { background: none; }
+.account-pop .ap-item.ap-unit--inert .ap-unit-ic { opacity: 0.6; }
 .account-pop .ap-unit-check { color: var(--accent-ink); }
 .account-pop .ap-item svg.ap-unit-check { opacity: 1; }
 .account-pop .ap-unit-fold .ap-unit-name { color: var(--text-muted); }

@@ -110,6 +110,7 @@ describe('前缀与云端地址', () => {
 describe('handleUnitFrameBind', () => {
   const deps = (over: Partial<UnitFrameBindDeps> = {}): UnitFrameBindDeps & { bind: ReturnType<typeof vi.fn> } => ({
     trusted: true,
+    fromMain: true,
     guestAlive: () => true,
     generation: () => 0,
     accountKey: () => ACCT,
@@ -121,7 +122,7 @@ describe('handleUnitFrameBind', () => {
 
   it('名册里有这台 → 绑定(账号 / 云端取发起时的)', async () => {
     const d = deps()
-    expect(await handleUnitFrameBind(A, d)).toEqual({ ok: true })
+    expect(await handleUnitFrameBind(A, d)).toEqual({ ok: true, url: `${CLOUD}/api/units/${A}/proxy/` })
     expect(d.bind).toHaveBeenCalledWith({ unitId: A, accountKey: ACCT, cloudBase: CLOUD })
   })
   it('发起方不可信 → 拒,名册都不读', async () => {
@@ -177,7 +178,7 @@ describe('handleUnitFrameBind × 世代号', () => {
     const scope = createUnitFrameScope()
     const bind = vi.fn()
     const r = await handleUnitFrameBind(A, {
-      generation: () => scope.generation(), trusted: true, guestAlive: () => true, accountKey: () => ACCT, cloudBase: () => CLOUD,
+      generation: () => scope.generation(), trusted: true, fromMain: true, guestAlive: () => true, accountKey: () => ACCT, cloudBase: () => CLOUD,
       readRoster: async () => { scope.clear(); return { ok: true, units: [{ id: A }] } },
       bind,
     })

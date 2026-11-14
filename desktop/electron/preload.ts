@@ -148,7 +148,9 @@ const api = {
     return () => ipcRenderer.removeListener(APPROVAL_OPEN_CHANNEL, listener)
   },
   // ── 设备互联(Forsion Unit):名册 + 本机 host 状态(token 留主进程)──
-  unitsList: (): Promise<{ status: number; json: any }> => ipcRenderer.invoke('units:list'),
+  /** opts.shared = 连同别人共享给当前账号的 Unit 一起要(只在严格为 true 时才往下带参数;旧版 Extend 忽略它)。 */
+  unitsList: (opts?: { shared?: boolean }): Promise<{ status: number; json: any }> =>
+    opts?.shared === true ? ipcRenderer.invoke('units:list', { shared: true }) : ipcRenderer.invoke('units:list'),
   /** 系统浏览器开中转引导页:main 代拼 `#token=` 登录态递交(token 不进渲染层)。 */
   unitsOpenInBrowser: (id: string): Promise<void> => ipcRenderer.invoke('units:openInBrowser', id),
   /** P2P 直连打开设备:成了回本机代理地址(webview 当 lanUrl 用);失败 reject 可读错误,UI 回落中转。 */
@@ -165,9 +167,16 @@ const api = {
   unitsProbeLan: (lanUrl: string): Promise<{ instanceId: string; name: string } | null> => ipcRenderer.invoke('units:probeLan', lanUrl),
   /** 设备的 Unit 窗(只主窗):一台设备一扇,再开 = 叫到前面。 */
   unitsOpenWindow: (id: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('units:openWindow', id),
-  /** 设备页 webview 绑定到一台设备(主窗,或这台的 Unit 窗):主进程核名册后,只给这张 webview、只给这台设备自己的路径补登录头。 */
-  unitsBindFrame: (input: { webContentsId: number; unitId: string }): Promise<{ ok: true } | { ok: false; code: string }> =>
+  /** 设备页 webview 绑定到一台设备(主窗,或这台的 Unit 窗):主进程核名册后,只给这张 webview、只给这台设备自己的路径补登录头。
+   *  url = 主进程按名册定下的加载地址(共享过来的 Unit 只能用它,渲染层不自己拼)。 */
+  unitsBindFrame: (input: { webContentsId: number; unitId: string }): Promise<{ ok: true; url?: string } | { ok: false; code: string }> =>
     ipcRenderer.invoke('units:bindFrame', input),
+  /** 这扇窗口重新拿到焦点(主进程 browser-window-focus 转告;webview 占着焦点时宿主页自己的 focus 事件不可靠)。 */
+  onWindowFocused: (cb: () => void): (() => void) => {
+    const listener = (): void => cb()
+    ipcRenderer.on('window:focused', listener)
+    return () => ipcRenderer.removeListener('window:focused', listener)
+  },
   /** Unit 窗里的「打开 Forsion」:把主窗叫出来。 */
   unitsShowMain: (): void => ipcRenderer.send('units:showMain'),
   /** 设备「添加到桌面」(只主窗):主进程按名册核对 id、取名册里的名字;快捷方式里只有 id(electron/unitShortcut.ts)。 */

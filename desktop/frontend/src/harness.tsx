@@ -948,7 +948,8 @@ if (new URLSearchParams(location.search).has('dock')) {
       // 父开关变了:真主进程经 refreshUnitHost → remoteSessions.notifyChanged 广播,桩在这里补同一拍(P1-K4)
       setConfig: async (patch: Record<string, unknown>) => { const next = Object.assign(cfg, patch); (window as unknown as { __rsPush?: () => unknown }).__rsPush?.(); return next },
       openExternal: async (url: string) => { opened.push(url) }, // openBrowser 在无浏览器视图时的回落口
-      unitsList: async () => ({ status: 200, json: { units: [...units] } }), // 每次新数组(同真 IPC):名册刷新才看得出变化
+      // 每次新数组(同真 IPC):名册刷新才看得出变化。&shared:带 { shared: true } 时多回一组「别人共享给当前账号的 Unit」(window.__sharedUnits 可改)
+      unitsList: async (opts?: { shared?: boolean }) => ({ status: 200, json: { units: [...units], ...(opts?.shared === true && (window as unknown as { __sharedUnits?: unknown[] }).__sharedUnits ? { shared: [...(window as unknown as { __sharedUnits: unknown[] }).__sharedUnits] } : {}) } }),
       unitsUpdate: async () => ({ status: 200, json: { ok: true } }),
       unitsRemove: async () => ({ status: 200, json: { ok: true } }),
       unitHostStatus: async () => ({ running: cfg.unitHostEnabled as boolean, connected: false, unitId: null, lastError: null, webPort: 8791, lanUrl: 'http://192.168.1.5:8791' }),
@@ -1042,6 +1043,18 @@ if (new URLSearchParams(location.search).has('dock')) {
       })
       const winCalls: unknown[][] = []
       ;(window as unknown as { __unitWinCalls: typeof winCalls }).__unitWinCalls = winCalls
+      // &shared:别人共享给当前账号的 Unit(一组三行:能进且睡着、不能进但要开的插件没装、不能进也没给 open;另一组一行只有英文标题)
+      if (panelQ.has('shared')) {
+        const g = { id: 'group-1', title: { zh: '星河工作室', en: 'Galaxy Studio' } }
+        const role = { zh: '管理员', en: 'Admin' }
+        ;(window as unknown as { __sharedUnits: unknown[] }).__sharedUnits = [
+          { id: 's-studio-0001', name: '工作室 Unit', platform: 'linux', icon: null, online: true, sleeping: true, shared: { group: g, roleLabel: role, enter: 'frame' }, webUrl: 'https://s-studio-0001.units.cloud.test/api/units/s-studio-0001/proxy/web/' },
+          { id: 's-biz-00002', name: '插件那台', platform: 'linux', icon: null, online: true, shared: { group: g, roleLabel: role, enter: 'none', open: { kind: 'space', plugin: 'not-installed' } } },
+          { id: 's-plain-0003', name: '只读那台', platform: 'linux', icon: null, online: false, shared: { group: g, roleLabel: { zh: '成员', en: 'Member' }, enter: 'none' } },
+          { id: 's-other-0004', name: 'Lab box', platform: 'linux', icon: null, online: true, shared: { group: { id: 'group-2', title: { en: 'Lab' } }, roleLabel: { en: 'Admin' }, enter: 'frame' }, webUrl: 'https://s-other-0004.units.cloud.test/api/units/s-other-0004/proxy/web/' },
+          { id: 'bad', name: 'broken row', shared: { enter: 'frame' } }, // 坏行:丢
+        ]
+      }
       // &self:名册里有本机自己(互联关着,unitId 为 null、selfUnitId 认得出)→ 面板和设置页都不许列它
       if (panelQ.has('self')) {
         units.push({ id: 'u-self', name: '本机自己', platform: 'darwin', icon: null, online: true, lanUrl: null })
