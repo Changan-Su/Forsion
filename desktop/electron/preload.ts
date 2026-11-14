@@ -163,6 +163,10 @@ const api = {
   unitsPairedList: (): Promise<Array<{ id: string; name: string; createdAt: number }>> => ipcRenderer.invoke('units:pairedList'),
   unitsPairedRemove: (id: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('units:pairedRemove', id),
   unitsProbeLan: (lanUrl: string): Promise<{ instanceId: string; name: string } | null> => ipcRenderer.invoke('units:probeLan', lanUrl),
+  /** 设备的 Unit 窗(只主窗):一台设备一扇,再开 = 叫到前面。 */
+  unitsOpenWindow: (id: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('units:openWindow', id),
+  /** Unit 窗里的「打开 Forsion」:把主窗叫出来。 */
+  unitsShowMain: (): void => ipcRenderer.send('units:showMain'),
   /** 设备「添加到桌面」(只主窗):主进程按名册核对 id、取名册里的名字;快捷方式里只有 id(electron/unitShortcut.ts)。 */
   unitsAddToDesktop: (input: { id: string; fallbackName?: string; iconPng?: string }): Promise<{ ok: true; path: string } | { ok: false; code: string; detail?: string }> =>
     ipcRenderer.invoke('units:addToDesktop', input),
@@ -802,7 +806,7 @@ const AGENT_KEYS = [
   'openAgentDir', 'openSkillsDir',
   'envCheck', 'envRun', 'onEnvOutput',
   'pluginsUserInstalled', 'pluginsUninstall',
-  'unitsList', 'unitsOpenInBrowser', 'unitsUpdate', 'unitsRemove', 'unitHostStatus', 'unitsPairedList', 'unitsPairedRemove', 'unitsProbeLan', 'unitsP2pOpen', 'unitRelay', 'unitsAddToDesktop', // 设备互联依赖 agent 后端
+  'unitsList', 'unitsOpenInBrowser', 'unitsUpdate', 'unitsRemove', 'unitHostStatus', 'unitsPairedList', 'unitsPairedRemove', 'unitsProbeLan', 'unitsP2pOpen', 'unitRelay', 'unitsAddToDesktop', 'unitsOpenWindow', 'unitsShowMain', // 设备互联依赖 agent 后端
   // P1-K5
   'secretStorageStatus', 'secretStorageRetry', 'secretStorageResetUnitPairing', 'secretStorageRelaunch', // 设备凭据提示挂在设备互联脚部,同属 agent 后端
   // P1-K4

@@ -76,3 +76,25 @@ export async function resolveUnitShortcutTarget(
   const unit = roster.units.find((u) => u.id === id)
   return unit ? { ok: true, unit } : { ok: false, code: 'not_found' }
 }
+
+// ── Unit 窗的重启恢复(单独一份 unit-windows.json,不进独立窗那份清单:老版本不认这个文件,降级不会多出一扇空窗)──
+
+export interface UnitWindowEntry { unit: string; bounds: { x: number; y: number; width: number; height: number } }
+
+/** 读回来的清单:每条的设备 id 仍要过白名单、位置大小要是有限数。文件读坏(JSON 坏 / 不是数组)→ null = 不知道,调用方据此不写回。 */
+export function parseUnitWindowState(raw: string): UnitWindowEntry[] | null {
+  let arr: unknown
+  try { arr = JSON.parse(raw) } catch { return null }
+  if (!Array.isArray(arr)) return null
+  const out: UnitWindowEntry[] = []
+  for (const x of arr) {
+    const e = x as { unit?: unknown; bounds?: Record<string, unknown> } | null
+    const b = e?.bounds
+    if (!e || !isUnitId(e.unit) || !b || out.some((o) => o.unit === e.unit)) continue
+    const n = (k: string): number | null => (typeof b[k] === 'number' && Number.isFinite(b[k]) ? Math.round(b[k] as number) : null)
+    const [bx, by, w, h] = [n('x'), n('y'), n('width'), n('height')]
+    if (bx === null || by === null || w === null || h === null || w <= 0 || h <= 0) continue
+    out.push({ unit: e.unit, bounds: { x: bx, y: by, width: w, height: h } })
+  }
+  return out
+}

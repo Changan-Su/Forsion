@@ -147,7 +147,7 @@ import { tabTitleBarOptions, parseTabTitleBar, watchTabTitleBar } from './tabTit
 import { createMiniDockMotion, miniDockFrame } from './miniDockMotion'
 import { isForsionUrl, pushDeepLink, drainDeepLinks, filesFromArgv, pushOpenFile, drainOpenFiles } from './deepLink'
 import { SPACE_SHORTCUT, createSpaceShortcut, createWindowShortcut, iconPngFromDataUrl, isSpaceId, spaceIconFile, spaceShortcutMetaFile, spaceWindowIdFromUrl, windowShortcutAppUserModelId, windowShortcutLink, type WindowShortcutKind } from './spaceShortcut'
-import { UNIT_SHORTCUT, parseRosterResponse, resolveUnitShortcutTarget, type RosterRead, type UnitShortcutResult } from './unitShortcut'
+import { UNIT_SHORTCUT, isUnitId, parseRosterResponse, parseUnitWindowState, resolveUnitShortcutTarget, unitWindowIdFromUrl, type RosterRead, type UnitShortcutResult, type UnitWindowEntry } from './unitShortcut'
 
 /** ~/.tangu(与包内 core/tanguHome.ts 同约定;TANGU_HOME 可整体重定向)。 */
 setDevMode(!app.isPackaged) // dev 数据目录 ~/.forsion-dev,与正式版隔离(模块装载即定,先于一切路径解析)
@@ -170,7 +170,7 @@ const themesDir = (): string => join(tanguHomeDir(), 'themes')
 if (!app.requestSingleInstanceLock()) app.exit(0)
 app.on('second-instance', (_e, argv, cwd) => {
   // Space 桌面快捷方式(win/linux 带着 forsion://space/<id>?window=standalone 二启):只开那个 Space 的窗,主窗不出来。
-  if (!argv.some((a) => spaceWindowIdFromUrl(a))) showMainWindow()
+  if (!argv.some((a) => spaceWindowIdFromUrl(a) || unitWindowIdFromUrl(a))) showMainWindow()
   for (const a of argv) if (isForsionUrl(a) && !routeSpaceWindowLink(a)) deliverDeepLink(a) // win/linux:二启的 forsion:// 在 argv 里
   for (const f of filesFromArgv(argv.slice(1), cwd)) deliverOpenFile(f) // win/linux:已开着时双击文件
 })
@@ -185,11 +185,19 @@ let deepLinkReady = false
 // 不进 deep link 队列:那条路会 showMainWindow 并让主窗渲染层切 Space,用户要的恰恰是「不露出 Forsion 本体」。
 // 启动还没走到恢复独立窗那一步(IPC 没注册全、主窗还没建)之前先排着;冷启动因它而起时,主窗建好也不显示(hideMainOnLaunch)。
 const pendingSpaceWindows: string[] = []
+/** 同上,设备快捷方式 forsion://unit/<id>?window=standalone(unitShortcut.ts):直接开那台设备的 Unit 窗。 */
+const pendingUnitWindows: string[] = []
 let spaceWindowsLive = false
 let hideMainOnLaunch = false
 /** 启动以来有没有人明确要过主窗(showMainWindow 置位)。 */
 let mainRequested = false
 function routeSpaceWindowLink(url: string): boolean {
+  const unit = unitWindowIdFromUrl(url)
+  if (unit) {
+    if (!spaceWindowsLive) { if (!pendingUnitWindows.includes(unit)) pendingUnitWindows.push(unit) }
+    else createDetachedWindow({ unit })
+    return true
+  }
   const id = spaceWindowIdFromUrl(url)
   if (!id) return false
   if (!spaceWindowsLive) { if (!pendingSpaceWindows.includes(id)) pendingSpaceWindows.push(id) }
@@ -1988,6 +1996,48 @@ function removeDetachedState(id: string): void {
   scheduleSaveDetachedState()
 }
 
+// Unit 窗(一台设备一扇,id = un_<设备 id>)的重启恢复单独存一份:只有设备 id + 位置大小(unitShortcut.parseUnitWindowState)。
+// 读坏了 = 不知道:这次运行不写回,免得把上次的清单覆盖成空的。
+let persistedUnitWindows: UnitWindowEntry[] = []
+let unitWindowStateWritable = false
+const unitWindowStatePath = (): string => join(app.getPath('userData'), 'unit-windows.json')
+async function loadUnitWindowState(): Promise<void> {
+  let raw: string
+  try { raw = await readFile(unitWindowStatePath(), 'utf8') } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') unitWindowStateWritable = true
+    return
+  }
+  const parsed = parseUnitWindowState(raw)
+  if (parsed) { persistedUnitWindows = parsed; unitWindowStateWritable = true }
+  else console.warn('[win] unit-windows.json unreadable; not restoring and not overwriting it this run')
+}
+let saveUnitWindowsTimer: NodeJS.Timeout | null = null
+function saveUnitWindowState(): void {
+  if (saveUnitWindowsTimer) clearTimeout(saveUnitWindowsTimer)
+  saveUnitWindowsTimer = null
+  if (!unitWindowStateWritable) return
+  const file = unitWindowStatePath(), tmp = `${file}.${process.pid}.tmp`
+  try {
+    writeFileSync(tmp, JSON.stringify(persistedUnitWindows), { encoding: 'utf8', mode: 0o600 })
+    renameSync(tmp, file)
+  } catch (error) {
+    try { rmSync(tmp, { force: true }) } catch { /* best effort */ }
+    console.error('[win] could not save unit window state:', error)
+  }
+}
+function upsertUnitWindow(unit: string, bounds: Electron.Rectangle): void {
+  const i = persistedUnitWindows.findIndex((x) => x.unit === unit)
+  if (i >= 0) persistedUnitWindows[i].bounds = bounds
+  else persistedUnitWindows.push({ unit, bounds })
+  if (saveUnitWindowsTimer) clearTimeout(saveUnitWindowsTimer)
+  saveUnitWindowsTimer = setTimeout(saveUnitWindowState, 400)
+}
+function removeUnitWindow(unit: string): void {
+  persistedUnitWindows = persistedUnitWindows.filter((x) => x.unit !== unit)
+  if (saveUnitWindowsTimer) clearTimeout(saveUnitWindowsTimer)
+  saveUnitWindowsTimer = setTimeout(saveUnitWindowState, 400)
+}
+
 function nextDetachedId(): string { detachedSeq += 1; return `d${Date.now().toString(36)}_${detachedSeq}` }
 
 /** Space id 的形状(同 shared/spaceAppearance 的 ID):进 URL 参数与布局键之前先过一遍。 */
@@ -1995,21 +2045,24 @@ const SPACE_ID = /^[A-Za-z0-9._-]{1,128}$/
 
 /** space = 把整个 Space 开在这扇窗里(渲染层据 ?space= 进入该 Space 并锁在里面)。一个 Space 一扇:id 由 Space id 定,
  *  已开着就叫到前面;布局键跟着 id 走,所以关了再开还是这扇窗上次的样子。 */
-function createDetachedWindow(opts: { id?: string; views?: ViewDesc[]; bounds?: Partial<Electron.Rectangle>; space?: string }): string {
-  const space = opts.space
-  const id = opts.id || (space ? `sp_${space}` : nextDetachedId())
+function createDetachedWindow(opts: { id?: string; views?: ViewDesc[]; bounds?: Partial<Electron.Rectangle>; space?: string; unit?: string }): string {
+  // unit = 设备的 Unit 窗(渲染层据 ?unit= 只画设备页的框,UnitWindowRoot):一台设备一扇,id = un_<设备 id>,不进独立窗清单。
+  const unit = !opts.space && isUnitId(opts.unit) ? opts.unit : undefined
+  const space = unit ? undefined : opts.space
+  const id = unit ? `un_${unit}` : opts.id || (space ? `sp_${space}` : nextDetachedId())
   const open = detachedWindows.get(id)
   if (open && !open.isDestroyed()) {
     // 先开着窗、后加的快捷方式:从快捷方式再叫它时补上任务栏身份(Codex 评审)。
     if (space && process.platform === 'win32') applySpaceTaskbarIdentity(open, space)
+    if (unit && process.platform === 'win32') applyShortcutTaskbarIdentity(open, UNIT_SHORTCUT, unit)
     if (open.isMinimized()) open.restore()
     if (readyDetachedWindows.has(open)) present(open)
     return id
   }
   if (opts.views?.length) pendingDetachedViews.set(id, opts.views)
   const win = new BrowserWindow({
-    width: opts.bounds?.width ?? (space ? 1100 : 900),
-    height: opts.bounds?.height ?? (space ? 760 : 680),
+    width: opts.bounds?.width ?? (space || unit ? 1100 : 900),
+    height: opts.bounds?.height ?? (space || unit ? 760 : 680),
     x: opts.bounds?.x,
     y: opts.bounds?.y,
     minWidth: 480,
@@ -2024,6 +2077,7 @@ function createDetachedWindow(opts: { id?: string; views?: ViewDesc[]; bounds?: 
   watchTabTitleBar(win)
   sinkForHarness(win)
   if (space && process.platform === 'win32') applySpaceTaskbarIdentity(win, space)
+  if (unit && process.platform === 'win32') applyShortcutTaskbarIdentity(win, UNIT_SHORTCUT, unit)
   win.once('ready-to-show', () => {
     if (win.isDestroyed()) return
     if (process.platform === 'win32' && opts.bounds) {
@@ -2048,23 +2102,29 @@ function createDetachedWindow(opts: { id?: string; views?: ViewDesc[]; bounds?: 
   win.webContents.setWindowOpenHandler(openUrlHandler(win.webContents))
   hardenNav(win.webContents)
   let closing = false
-  const persist = (): void => { if (!closing && !win.isDestroyed()) upsertDetachedBounds(id, win.getBounds()) }
+  const persist = (): void => {
+    if (closing || win.isDestroyed()) return
+    if (unit) upsertUnitWindow(unit, win.getBounds())
+    else upsertDetachedBounds(id, win.getBounds())
+  }
   // move/resize cover programmatic bounds changes too; Windows resized fires only for a manual resize.
   win.on('move', persist)
   win.on('resize', persist)
+  const forget = (): void => { if (unit) removeUnitWindow(unit); else removeDetachedState(id) }
   win.on('close', () => {
     closing = true
-    if (!isQuitting) removeDetachedState(id) // Record the close intent before a subsequent app quit.
+    if (!isQuitting) forget() // Record the close intent before a subsequent app quit.
   })
   win.on('closed', () => {
     console.log('[win] detached closed', id)
     detachedWindows.delete(id)
     pendingDetachedViews.delete(id)
-    if (!isQuitting) removeDetachedState(id) // Also handles webContents being closed directly by a harness.
+    if (!isQuitting) forget() // Also handles webContents being closed directly by a harness.
   })
-  upsertDetachedBounds(id, win.getBounds(), space) // 立即登记(拖出后崩溃也能恢复)
-  console.log('[win] detached open', id, space ? `space=${space}` : `views=${opts.views?.map((v) => v.type).join(',')}`)
-  loadRendererWith(win, { window: 'detached', id, ui: 'desktop', ...(space ? { space } : {}) })
+  if (unit) upsertUnitWindow(unit, win.getBounds())
+  else upsertDetachedBounds(id, win.getBounds(), space) // 立即登记(拖出后崩溃也能恢复)
+  console.log('[win] detached open', id, unit ? `unit=${unit}` : space ? `space=${space}` : `views=${opts.views?.map((v) => v.type).join(',')}`)
+  loadRendererWith(win, { window: 'detached', id, ui: 'desktop', ...(space ? { space } : {}), ...(unit ? { unit } : {}) })
   return id
 }
 
@@ -2113,6 +2173,8 @@ function applyShortcutTaskbarIdentity(win: BrowserWindow, kind: WindowShortcutKi
 }
 
 async function restoreDetachedWindows(): Promise<void> {
+  await loadUnitWindowState()
+  for (const { unit, bounds } of [...persistedUnitWindows]) createDetachedWindow({ unit, bounds })
   await loadDetachedState()
   for (const { id, bounds, space } of [...persistedDetached]) {
     createDetachedWindow({ id, bounds, space: typeof space === 'string' && SPACE_ID.test(space) ? space : undefined })
@@ -5020,6 +5082,14 @@ app.whenReady().then(async () => {
   })
   // 设备「添加到桌面」(账号面板 Unit 段的右键)。渲染层只给:设备 id、名字洗空时的本地化兜底名、画好的图标;
   // id 过正则且必须在此刻读到的名册里,**名字取名册的**(unitShortcut.resolveUnitShortcutTarget)。快捷方式里只有 id。
+  // 设备的 Unit 窗:账号面板 Unit 段的「在新窗口打开」(只主窗)。一台设备一扇,再开 = 叫到前面;离线 / 不在名册由窗里自己画。
+  ipcMain.handle('units:openWindow', (e, raw: unknown): { ok: boolean } => {
+    if (!isTrustedSender(e) || e.sender !== mainWindow?.webContents || !isUnitId(raw)) return { ok: false }
+    createDetachedWindow({ unit: raw })
+    return { ok: true }
+  })
+  // Unit 窗里的「打开 Forsion」(没登录 / 设备不在名下):把主窗叫出来,不带参数。
+  ipcMain.on('units:showMain', (e) => { if (isTrustedSender(e)) showMainWindow() })
   ipcMain.handle('units:addToDesktop', async (e, raw: unknown): Promise<UnitShortcutResult> => {
     if (!isTrustedSender(e) || e.sender !== mainWindow?.webContents) return { ok: false, code: 'error', detail: 'untrusted sender' }
     const target = await resolveUnitShortcutTarget(raw, () => readUnitRoster(e))
@@ -5369,7 +5439,7 @@ app.whenReady().then(async () => {
     app.on('browser-window-focus', (_e, w) => { if (w !== autoMiniWindow) lastFocusedWindow = w; miniAutoPanel?.refresh() })
   }
   startupWindowGate = false
-  hideMainOnLaunch = pendingSpaceWindows.length > 0 && !mainRequested
+  hideMainOnLaunch = (pendingSpaceWindows.length > 0 || pendingUnitWindows.length > 0) && !mainRequested
   createWindow()
   if (!SANDBOX) restoreMiniWindows()
   if (SANDBOX) startSandboxChild(SANDBOX, { getWindow: () => mainWindow, quit: () => { isQuitting = true; app.quit() }, log: (m) => console.log(m) })
@@ -5378,6 +5448,7 @@ app.whenReady().then(async () => {
   void restoreDetachedWindows().catch((e) => console.error('[win] restore detached failed:', e)).finally(() => {
     spaceWindowsLive = true
     for (const id of pendingSpaceWindows.splice(0)) createDetachedWindow({ space: id })
+    for (const unit of pendingUnitWindows.splice(0)) createDetachedWindow({ unit })
   })
   // 系统托盘 / mac 菜单栏图标:显示窗口 / 检查更新 / 退出。
   const ch = computerHistory
