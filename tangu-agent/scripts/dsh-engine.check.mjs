@@ -9,6 +9,9 @@
  *   node scripts/dsh-engine.check.mjs --node <Node ≥ 24 的可执行文件> --dsh <@deepseek-ai/dsh 的 lib/bin.js> --root <全新目录>
  *     [--only twoturn,model,…]   只跑某几项(见下面 SCENARIOS 的 key)
  *     [--engine-entry <别处的 dist/standalone/main.js>]   负对照:拿没有这次改动的旧构建跑同一套,twoturn 应当红
+ *     [--live --key-file <一行 key 的文件> | --live --dsh-home <已登录的 DSH 目录>]   真模型:看模型自己的回答(caps / twoturn /
+ *                                    model / edit / stop / stopedit / approval);key 只进子进程环境,不落盘、不打印
+ *     [--live-dry]                   不要凭据,用假模型里的自动脑把真模型那套走一遍,只证台架没写错
  *
  * 准备 DSH(只装官方包,不装任何社区插件;和你自己的 DSH 无关):
  *   mkdir rt && cd rt && npm init -y && npm install --ignore-scripts @deepseek-ai/dsh
@@ -31,6 +34,15 @@ const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const NODE = opt('node', ''), BIN = opt('dsh', ''), ROOT_ARG = opt('root', '');
 const ENTRY = resolve(opt('engine-entry', join(root, 'dist', 'standalone', 'main.js')));
 const ONLY = new Set((opt('only', '') || '').split(',').filter(Boolean));
+// 真模型模式:DSH 不指到假模型,断言看模型自己的回答。凭据二选一:--key-file(文件里一行 DeepSeek key,只进子进程的环境,
+// 不落盘、不打印)或 --dsh-home(一份已经登录过的 DSH 目录,原样用它)。--live-dry:不要凭据,用假模型里一个「记得住暗号」的
+// 自动脑把真模型那套场景走一遍,只证台架自己没写错。
+const LIVE = argv.includes('--live'), LIVE_DRY = argv.includes('--live-dry');
+const KEY_FILE = opt('key-file', ''), DSH_HOME_ARG = opt('dsh-home', '');
+if (LIVE && !KEY_FILE && !DSH_HOME_ARG) { console.error('--live 要 --key-file <文件> 或 --dsh-home <已登录的 DSH 目录>'); process.exit(2); }
+if (LIVE && KEY_FILE && !existsSync(KEY_FILE)) { console.error(`找不到 --key-file:${KEY_FILE}`); process.exit(2); }
+const LIVE_KEY = LIVE && KEY_FILE ? readFileSync(KEY_FILE, 'utf8').trim() : '';
+if (LIVE && KEY_FILE && !LIVE_KEY) { console.error('--key-file 是空的'); process.exit(2); }
 if (!NODE || !BIN || !ROOT_ARG) { console.error('用法见文件头:--node <node24> --dsh <dsh 的 lib/bin.js> --root <全新目录>'); process.exit(2); }
 for (const [what, p] of [['--node', NODE], ['--dsh', BIN], ['引擎入口(先 npm run build)', ENTRY]]) if (!existsSync(p)) { console.error(`找不到 ${what}:${p}`); process.exit(2); }
 mkdirSync(ROOT_ARG, { recursive: true });
@@ -43,13 +55,28 @@ for (const t of [tmpdir(), '/tmp', '/private/tmp', '/var/folders', '/private/var
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const until = async (fn, ms, every = 300) => { const end = Date.now() + ms; for (;;) { const v = await fn(); if (v) return v; if (Date.now() > end) return null; await sleep(every); } };
 const D = (name) => { const p = join(R, name); mkdirSync(p, { recursive: true }); return p; };
-const HOME = D('home'), DSH_HOME = D('dsh'), WS = D('ws'), OUTSIDE = D('outside'), TMP = D('tmp');
+const HOME = D('home'), DSH_HOME = LIVE && DSH_HOME_ARG ? resolve(DSH_HOME_ARG) : D('dsh'), WS = D('ws'), OUTSIDE = D('outside'), TMP = D('tmp');
 const TANGU_HOME = D(join('forsion', 'tangu'));
 const LOG = join(R, 'engine.log');
-const clean = (s) => String(s).split(R).join('<root>').replace(/\/Users\/[^/\s"'\\]+/g, '/Users/<user>');
+const clean = (s) => (LIVE_KEY ? String(s).split(LIVE_KEY).join('<key>') : String(s)).split(R).join('<root>').replace(/\/Users\/[^/\s"'\\]+/g, '/Users/<user>');
 
 // ── 本机假模型(Anthropic Messages 格式,DSH 0.2.2 调的是 POST {DEEPSEEK_BASE_URL}/v1/messages)。只听 127.0.0.1。
 //    剧本的每一步对应一次带工具的模型请求:{ text } | { tool, args } | { hang: true }(一直不回,等这一轮被停掉)。剧本用完回「ok」。
+// --live-dry 的自动脑:记得住上文里出现过的暗号(形如 QUOKKA-1234),被要求数数就一直不回(等着被停)。
+function autoBrain(body) {
+  // 只看最新的那一句。它不一定是最后一个文本块:DSH 会在提问前后夹环境说明 / 换模型提示;被停掉的一轮没有回答,
+  // 它的提问还会和下一句并进同一条 user 消息。所以在最后一条 user 消息里从后往前找第一个像我们发的话的文本块。
+  const msgs = body?.messages || []; const lastUser = [...msgs].reverse().find((m) => m.role === 'user');
+  const blocks = typeof lastUser?.content === 'string' ? [lastUser.content] : (lastUser?.content || []).map((b) => b.text).filter((t) => typeof t === 'string');
+  const last = [...blocks].reverse().find((t) => /numbers from 1 to|code word/i.test(t)) || '';
+  if (/numbers from 1 to/i.test(last)) return { hang: true };
+  if (/What code word did I ask|List every code word/i.test(last)) {
+    const earlier = JSON.stringify(msgs).split(JSON.stringify(last).slice(1, -1)).join(''); // 上文 = 整个请求去掉这一句自己
+    const seen = [...new Set(earlier.match(/\b[A-Z]{4,8}-\d{4}\b/g) || [])];
+    return { text: seen.length ? seen.join(' ') : 'I do not know any code word.' };
+  }
+  return { text: 'OK' };
+}
 const stub = await (async () => {
   const requests = []; let queue = []; const hanging = new Set();
   const server = createServer((req, res) => {
@@ -60,7 +87,8 @@ const stub = await (async () => {
       if (req.method === 'POST' && /\/messages\/count_tokens$/.test(path)) { res.writeHead(200, { 'content-type': 'application/json' }); return res.end(JSON.stringify({ input_tokens: 10 })); }
       if (!(req.method === 'POST' && /\/messages$/.test(path))) { res.writeHead(404, { 'content-type': 'application/json' }); return res.end(JSON.stringify({ error: { message: `stub: no such route ${path}` } })); }
       const withTools = Array.isArray(body?.tools) && body.tools.length > 0;
-      const step = withTools ? (queue.shift() || {}) : { text: 'check session' }; // 不带工具的是起标题之类的旁路请求,不占剧本
+      let step = withTools ? (queue.shift() || {}) : { text: 'check session' }; // 不带工具的是起标题之类的旁路请求,不占剧本
+      if (withTools && LIVE_DRY) step = autoBrain(body);
       if (withTools) requests.push(body);
       if (step.hang) { hanging.add(res); req.on('close', () => hanging.delete(res)); return; }
       const blocks = [];
@@ -91,15 +119,19 @@ const stub = await (async () => {
 })();
 
 // ── DSH 子进程的环境:全部另指,假 key 只会发给上面那个假模型
-const dshEnv = (extra = {}) => ({
+//    真模型模式:不指到假模型;真 key(--key-file)只放进引擎进程和这里直接起的 DSH 的环境里(引擎会把自己的环境传给它起的 DSH),
+//    不写进下面那份 engines.json。
+const modelEnv = LIVE ? (LIVE_KEY ? { DEEPSEEK_API_KEY: LIVE_KEY } : {}) : { DEEPSEEK_BASE_URL: stub.url, DEEPSEEK_API_KEY: 'stub-not-a-real-key' };
+const dshEnvOnDisk = (extra = {}) => ({
   PATH: `${dirname(NODE)}:/usr/bin:/bin`, HOME, DSH_HOME, TMPDIR: TMP,
   XDG_CACHE_HOME: D('xc'), XDG_DATA_HOME: D('xd'), XDG_STATE_HOME: D('xs'),
-  DEEPSEEK_BASE_URL: stub.url, DEEPSEEK_API_KEY: 'stub-not-a-real-key', DSH_TELEMETRY_DISABLED: '1', ...extra,
+  DSH_TELEMETRY_DISABLED: '1', ...(LIVE ? {} : modelEnv), ...extra,
 });
+const dshEnv = (extra = {}) => ({ ...dshEnvOnDisk(extra), ...modelEnv });
 // 引擎清单:按 id 覆盖内置的 dsh(内置那条跑的是 PATH 上的 `dsh`,这里指到 --dsh 给的那份);dsh-ro = 只读模式,给审批那一项用
 writeFileSync(join(TANGU_HOME, 'engines.json'), JSON.stringify({ engines: [
-  { id: 'dsh', name: 'DeepSeek Harness', command: NODE, args: [BIN, '--profile', 'acp'], env: dshEnv() },
-  { id: 'dsh-ro', name: 'DeepSeek Harness (read-only)', command: NODE, args: [BIN, '--profile', 'acp'], env: dshEnv({ DSH_PERMISSION_MODE: 'read-only' }) },
+  { id: 'dsh', name: 'DeepSeek Harness', command: NODE, args: [BIN, '--profile', 'acp'], env: dshEnvOnDisk() },
+  { id: 'dsh-ro', name: 'DeepSeek Harness (read-only)', command: NODE, args: [BIN, '--profile', 'acp'], env: dshEnvOnDisk({ DSH_PERMISSION_MODE: 'read-only' }) },
 ] }, null, 2));
 
 // ── 直接和 DSH 说 ACP(只用来看它那边的会话清单、扮「另一个开着这场会话的进程」)
@@ -126,10 +158,11 @@ async function startEngine() {
   engine = spawn(process.execPath, [ENTRY, '--port', String(port), '--host', '127.0.0.1', '--data-dir', join(TANGU_HOME, 'state.db'), '--sandbox', 'auto', '--cloud-url', 'http://127.0.0.1:9', '--token', TOKEN], {
     cwd: WS,
     env: { PATH: `${dirname(process.execPath)}:/usr/bin:/bin`, HOME, TMPDIR: TMP, TANGU_HOME, TANGU_DEFAULT_WORKSPACE: WS, TANGU_BROWSER_CDP: 'off', TANGU_BROWSER_EXTENSION: '0',
-      FORSION_DESKTOP_CONFIG: join(R, 'userData', 'tangu-desktop-config.json'), LANG: 'en_US.UTF-8' },
+      FORSION_DESKTOP_CONFIG: join(R, 'userData', 'tangu-desktop-config.json'), LANG: 'en_US.UTF-8', ...(LIVE ? modelEnv : {}) },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
-  engine.stdout.on('data', (d) => appendFileSync(LOG, d)); engine.stderr.on('data', (d) => appendFileSync(LOG, d));
+  const log = (d) => appendFileSync(LOG, LIVE_KEY ? String(d).split(LIVE_KEY).join('<key>') : d);
+  engine.stdout.on('data', log); engine.stderr.on('data', log);
   let exited = false; engine.once('exit', () => { exited = true; });
   const ok = await until(() => (exited ? Promise.resolve(null) : fetch(`${base}/health`).then((r) => (r.ok ? true : null)).catch(() => null)), 40_000, 400);
   if (!ok) throw new Error(`引擎没起来,见 ${LOG}`);
@@ -415,11 +448,117 @@ const SCENARIOS = {
   },
 };
 
+// ── 真模型那一套:看的是模型自己的回答(假模型那套看的是交给模型的请求)。暗号每次现编,模型猜不到。
+const codeWord = (prefix) => `${prefix}-${1000 + Math.floor(Math.random() * 9000)}`;
+const ASK = 'What code word did I ask you to remember? Reply with just the code word.';
+const ASK_ALL = 'List every code word I asked you to remember in this conversation. Reply with just the code words.';
+const said = (r) => `模型原话:${(r.text || '').trim().replace(/\s+/g, ' ').slice(0, 200) || '(空)'}`;
+const LIVE_MS = 180_000;
+const liveRun = (sid, message, cfg = {}, o = {}) => run(sid, message, cfg, { timeoutMs: LIVE_MS, ...o });
+/** 发一句注定很长的话,模型开始回答(或过了几秒)就按停止键。 */
+const stoppedTurn = async (sid, message) => {
+  const n0 = stub.mark(), t0 = Date.now();
+  return liveRun(sid, message, {}, { stopOn: (ev) => ev.text.length > 20 || (LIVE_DRY ? stub.mark() > n0 : Date.now() - t0 > 10_000) });
+};
+const truncate = (sid, ids) => api(`/agent/sessions/${sid}/messages/delete`, { method: 'POST', body: JSON.stringify({ ids }) });
+const LIVE_SCENARIOS = {
+  caps: SCENARIOS.caps,
+  twoturn: async () => {
+    const word = codeWord('QUOKKA'); const sid = await newSession('live-twoturn');
+    const a = await liveRun(sid, `Remember this code word for later: ${word}. Reply with just: OK`);
+    const b = await liveRun(sid, ASK);
+    const c = await liveRun(await newSession('live-twoturn-control'), ASK);
+    const ps = await pointers(sid);
+    record('twoturn', '第二句记得第一句', [
+      ['两轮都跑完', a.done && b.done, a.error || b.error || ''],
+      ['第二句的回答里有第一句给的暗号', b.text.includes(word), said(b)],
+      ['两轮用的是同一个 DSH 会话', ps.length === 2 && !!ps[0].ext && ps[0].ext === ps[1].ext, ps.map((p) => p.ext?.slice(0, 8)).join(' → ')],
+      ['对照:另开一场对话问同一句,答不出这个暗号', c.done && !c.text.includes(word), said(c)],
+    ]);
+  },
+  model: async (caps) => {
+    const other = (caps?.models || []).find((m) => m.id !== caps.currentModelId);
+    if (!other) return record('model', '换模型之后仍然记得', [['清单里有第二个模型可换', false]]);
+    const word = codeWord('MARMOT'); const sid = await newSession('live-model');
+    const a = await liveRun(sid, `Remember this code word for later: ${word}. Reply with just: OK`);
+    const b = await liveRun(sid, ASK, { engineModelId: other.id });
+    const ps = await pointers(sid);
+    // 到 DSH 那边看这场会话的当前模型(上一轮的 DSH 进程刚被杀,可能还占着,等它放开)
+    let current;
+    await until(async () => { const d = rawDsh(); try { await d.init(); const r = await d.call('session/resume', { sessionId: ps[0]?.ext, cwd: WS, mcpServers: [] });
+      current = (r.result?.configOptions || []).find((o) => o.category === 'model' || o.id === 'model')?.currentValue; return !!r.result; } finally { await d.kill(); } }, 12_000, 800);
+    record('model', '换模型之后仍然记得', [
+      ['两轮都跑完', a.done && b.done, a.error || b.error || ''],
+      ['换了模型的那一轮答得出暗号', b.text.includes(word), said(b)],
+      ['两轮用的是同一个 DSH 会话', ps.length === 2 && !!ps[0].ext && ps[0].ext === ps[1].ext],
+      ['DSH 那边这场会话的当前模型就是选的那个', current === other.id, `选的 ${other.name};DSH 报 ${current}`],
+    ]);
+  },
+  edit: async () => {
+    const keep = codeWord('WALRUS'), gone = codeWord('PELICAN'); const sid = await newSession('live-edit');
+    const a = await liveRun(sid, `Remember this code word for later: ${keep}. Reply with just: OK`);
+    const b = await liveRun(sid, `Remember a second code word: ${gone}. Reply with just: OK`);
+    await truncate(sid, (await messages(sid)).slice(-1).map((m) => m.id).concat('client-only-user-message'));
+    const c = await liveRun(sid, ASK_ALL);
+    const ps = await pointers(sid);
+    record('edit', '删掉重发的那一轮,DSH 不再记得', [
+      ['三轮都跑完', a.done && b.done && c.done, a.error || b.error || c.error || ''],
+      ['被删掉的那一轮里的暗号,模型答不出来', !c.text.includes(gone), said(c)],
+      ['重发的那一轮换了一个 DSH 会话', ps.length === 3 && ps[2].ext !== ps[1].ext, ps.map((p) => p.ext?.slice(0, 8)).join(' → ')],
+    ], `第一轮的暗号${c.text.includes(keep) ? '还' : '也不'}在回答里(重发后是全新的 DSH 会话,已知的限制)`);
+  },
+  stop: async () => {
+    const word = codeWord('OTTER'); const sid = await newSession('live-stop');
+    const a = await liveRun(sid, `Remember this code word for later: ${word}. Reply with just: OK`);
+    const b = await stoppedTurn(sid, 'Write the numbers from 1 to 2000, one per line, and nothing else.');
+    const c = await liveRun(sid, ASK);
+    const ps = await pointers(sid);
+    record('stop', '中途停掉一轮,下一句仍然记得', [
+      ['第一轮跑完、第二轮被停、第三轮跑完', a.done && b.aborted && c.done, `${a.error || ''} ${b.error || ''} ${c.error || ''}`],
+      ['停掉之后还答得出第一句给的暗号', c.text.includes(word), said(c)],
+      ['三轮是同一个 DSH 会话', ps.length === 3 && !!ps[0].ext && ps.every((p) => p.ext === ps[0].ext), ps.map((p) => `${p.status}:${p.ext?.slice(0, 8)}`).join(' → ')],
+    ]);
+  },
+  stopedit: async () => {
+    const keep = codeWord('BADGER'), gone = codeWord('PUFFIN'); const sid = await newSession('live-stopedit');
+    const a = await liveRun(sid, `Remember this code word for later: ${keep}. Reply with just: OK`);
+    const b = await stoppedTurn(sid, `Remember a second code word: ${gone}. Then write the numbers from 1 to 2000, one per line.`);
+    await truncate(sid, ['client-only-user-message', 'client-only-placeholder']);
+    const c = await liveRun(sid, ASK_ALL);
+    const ps = await pointers(sid);
+    record('stopedit', '停掉一轮后把那一句改了重发,DSH 不再记得被弃掉的那一句', [
+      ['第一轮跑完、第二轮被停、第三轮跑完', a.done && b.aborted && c.done, `${a.error || ''} ${b.error || ''} ${c.error || ''}`],
+      ['被弃掉的那一句里的暗号,模型答不出来', !c.text.includes(gone), said(c)],
+      ['改写后的这一轮换了一个 DSH 会话', ps.length === 3 && !!ps[1].ext && !!ps[2].ext && ps[2].ext !== ps[1].ext, ps.map((p) => `${p.status}:${p.ext?.slice(0, 8)}`).join(' → ')],
+    ]);
+  },
+  // 审批:真模型自己得走到「被沙箱拒了 → 带放宽权限重试」那一步,DSH 才会来问。这一项测的就是它走不走得到。
+  approval: async () => {
+    if (LIVE_DRY) { console.log('\n(--live-dry 不演 approval:自动脑不调工具;工具剧本在普通模式里测)'); return; }
+    const leg = async (tag, action) => {
+      const sid = await newSession(`live-approval-${tag}`); const file = join(OUTSIDE, `live-${tag}.txt`);
+      const r = await liveRun(sid, `Create a file at the exact path ${file} whose content is the single line "${tag}". Use your file-writing tool. The sandbox will refuse because that path is outside the workspace; when it does, retry the same tool call with elevated sandbox permissions so that I am asked to approve it. Do not write anywhere else.`,
+        { engineId: 'dsh-ro' }, { onApproval: () => action });
+      return { r, file, card: r.approvals[0] };
+    };
+    const ok = await leg('approved', 'approve'), no = await leg('rejected', 'reject');
+    record('approval', 'DSH 来问审批时,卡上有工具名和参数;批准 / 拒绝都生效', [
+      ['两轮都跑完', ok.r.done && no.r.done, ok.r.error || no.r.error || ''],
+      ['模型走到了来问审批那一步(两轮各至少一次)', ok.r.approvals.length >= 1 && no.r.approvals.length >= 1, `${ok.r.approvals.length} / ${no.r.approvals.length};${said(ok.r)}`],
+      ['卡上的工具名不是笼统的 tool', !!ok.card?.name && ok.card.name !== 'tool', String(ok.card?.name)],
+      ['卡上带着要写的路径', String(ok.card?.arguments || '').includes(ok.file), clean(ok.card?.preview || '').slice(0, 200)],
+      ['批准的那次写进去了', existsSync(ok.file), existsSync(ok.file) ? JSON.stringify(readFileSync(ok.file, 'utf8').slice(0, 40)) : ''],
+      ['拒绝的那次没写', !existsSync(no.file)],
+    ], `调过的工具:${[...new Set(ok.r.tools.map((t) => t.name))].join(' / ') || '(无)'}`);
+  },
+};
+
 let exitCode = 0;
 try {
   await startEngine();
   let caps = null;
-  for (const [key, fn] of Object.entries(SCENARIOS)) {
+  if (LIVE) console.log(`真模型模式:凭据来自${LIVE_KEY ? ' --key-file(只在子进程环境里)' : ` --dsh-home(${clean(DSH_HOME)})`}`);
+  for (const [key, fn] of Object.entries(LIVE || LIVE_DRY ? LIVE_SCENARIOS : SCENARIOS)) {
     if (ONLY.size && !ONLY.has(key) && !(key === 'caps' && ONLY.has('model'))) continue;
     try { const r = await fn(caps); if (key === 'caps') caps = r; }
     catch (e) { record(key, '场景自己出错', [['跑完', false, e.message]]); }
