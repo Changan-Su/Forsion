@@ -13,7 +13,7 @@ vi.mock('../src/agents/standIn.js', async (importOriginal) => {
   const real: any = await importOriginal();
   return { ...real, getAgentForRun: async (slug: string) => { if (slug === readFail.slug) throw new Error('EIO: simulated read failure'); return real.getAgentForRun(slug); } };
 });
-import { mkdtempSync, mkdirSync, rmSync, readdirSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, mkdirSync, rmSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { configureTangu } from '../src/seams/runtime.js';
@@ -210,6 +210,40 @@ describe('⑤ 读 Agent 定义抛错 ≠ 没设档', () => {
   it('对照:同一个 Agent 读得到、没设档 → 照通道档', async () => {
     agent('xyra', '', { standIn: false });
     expect(await channelRun('xyra', 'full-auto')).toEqual([]);
+    expect(written().length).toBe(1);
+  });
+});
+
+describe('⑥ 真实读取链:config.toml 在但读不出来 / 解析不了 ≠ 没设档', () => {
+  // 注册表把这两种都吞成「没设」(激活照常成功);通道 run 用只读探针分清,按只读
+  const cfgPath = (slug: string): string => join(home, 'agents', slug, 'config.toml');
+
+  it('解析不了的 config.toml → 只读', async () => {
+    agent('broken', '', { standIn: false });
+    writeFileSync(cfgPath('broken'), 'name = "broken\nstand_in_off = ["im", "plugin"]\n[[[\n');
+    expect(modes(await channelRun('broken', 'full-auto'))).toEqual(['readonly']);
+    expect(written()).toEqual([]);
+  });
+
+  it.skipIf(process.getuid?.() === 0)('读 config.toml 报 EACCES → 只读', async () => {
+    agent('locked', '', { standIn: false });
+    chmodSync(cfgPath('locked'), 0o000);
+    try {
+      expect(modes(await channelRun('locked', 'full-auto'))).toEqual(['readonly']);
+      expect(written()).toEqual([]);
+    } finally { chmodSync(cfgPath('locked'), 0o600); }
+  });
+
+  it('分身:本体的 config.toml 解析不了 → 只读', async () => {
+    agent('body3', '');
+    writeFileSync(cfgPath('body3'), 'name = "body3\n[[[\n');
+    expect(modes(await channelRun('body3', 'full-auto', { multiPeer: true }))).toEqual(['readonly']);
+    expect(written()).toEqual([]);
+  });
+
+  it('对照:读得到、没设档 → 照通道档', async () => {
+    agent('fine', '', { standIn: false });
+    expect(await channelRun('fine', 'full-auto')).toEqual([]);
     expect(written().length).toBe(1);
   });
 });

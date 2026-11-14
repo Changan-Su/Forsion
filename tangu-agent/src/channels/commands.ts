@@ -258,8 +258,9 @@ export class ChannelCommandCenter {
         case '/model': return this.cmdModel(rt, key, cmd.arg);
         case '/think': return this.cmdThink(rt, cmd.arg);
         case '/approval': {
+          // 读不到当前会话 = 不知道它选的是哪个 Agent:只报通道 × 绑定的基础档,不套任何 Agent(套通道默认 Agent 的档可能报得比实际严)
           const s = await rt.readSession().catch(() => null);
-          const a = approvalLine(L, await this.effectiveApproval(rt, s?.agentConfig ?? {}));
+          const a = approvalLine(L, s ? await this.effectiveApproval(rt, s.agentConfig) : rt.approvalMode);
           return channelMsg(L, 'approvalShow', { label: a.label, desc: a.desc });
         }
         case '/loop': return this.cmdLoop(rt, cmd.arg);

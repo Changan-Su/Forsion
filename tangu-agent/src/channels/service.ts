@@ -36,7 +36,7 @@ import { remoteLocked } from '../services/remoteLock.js';
 import { resolveInquiry } from '../services/inquiries.js';
 import { patchSessionAgentConfig, readSessionSettings, requestRunThinking, setSessionModelId } from '../services/sessionSettings.js';
 import { chatModels, listModelCatalog } from '../services/modelCatalog.js';
-import { readAgentsMeta, listAgents, getAgent, agentCapOf, isValidSlug } from '../agents/agentRegistry.js';
+import { readAgentsMeta, listAgents, getAgent, agentCapOf, isValidSlug, probeAgentApprovalMode } from '../agents/agentRegistry.js';
 import { isStandInSlugShape, resolveRunIdentity } from '../agents/standIn.js';
 import { resolveReplySegment, splitMessage, segmentDelayMs } from '../services/replySegment.js';
 import { resolveVoiceMessage, synthesizeVoiceWav, VOICE_MESSAGE_PLUGIN_ID } from '../services/voiceMessage.js';
@@ -1390,8 +1390,13 @@ export class ChannelService {
     const modes: unknown[] = [];
     try {
       const id = await resolveRunIdentity(agentSlug, { kind: this.kind, accountId: binding.account_id, peerId: binding.peer_id ?? '', multiPeer: this.multiPeer });
-      modes.push((await getAgent(id.slug).catch(() => null))?.approvalMode);
-      if (id.kind === 'standin') modes.push((await getAgent(id.bodySlug).catch(() => null))?.approvalMode ?? 'readonly');
+      // 与 agentLoop 同一个探针:不在 = 不参与(分身还没建出来);读不出来 / 解析不了 = 只读;本体不在也按只读
+      const probe = async (slug: string, absent: unknown): Promise<unknown> => {
+        const p = await probeAgentApprovalMode(slug).catch(() => ({ state: 'unreadable' as const }));
+        return p.state === 'ok' ? p.mode : p.state === 'absent' ? absent : 'readonly';
+      };
+      modes.push(await probe(id.slug, undefined));
+      if (id.kind === 'standin') modes.push(await probe(id.bodySlug, 'readonly'));
     } catch {
       modes.push('readonly');
     }

@@ -85,6 +85,12 @@ vi.mock('../agents/agentRegistry.js', () => ({
   readAgentsMeta: () => ({ defaultSlug: 'xyra' }),
   listAgents: vi.fn(async () => []),
   getAgent: vi.fn(async (slug: string) => state.agents[slug] ?? null),
+  // 'unreadable' 标记 = 文件在但读不出来
+  probeAgentApprovalMode: vi.fn(async (slug: string) => {
+    const a = state.agents[slug];
+    if (!a) return { state: 'absent' };
+    return a.unreadable ? { state: 'unreadable' } : { state: 'ok', mode: a.approvalMode ?? '' };
+  }),
   agentCapOf: () => null,
   isValidSlug: (s: string) => /^[a-z0-9][a-z0-9-]{0,63}$/.test(s),
   saveAgent: vi.fn(),
@@ -244,5 +250,14 @@ describe('approvalModeFor', () => {
     state.agents.aria = { slug: 'aria', name: 'Aria', approvalMode: 'auto-edit' };
     state.agents[standInOf('p1')] = { slug: standInOf('p1'), standInOf: 'aria', standInChannel: 'chat', approvalMode: '' };
     expect(await modeFor(svc, 'p1', 'aria')).toBe('auto-edit');
+  });
+
+  it('Agent / 本体的定义读不出来 → 只读(不当成没设)', async () => {
+    const { svc } = harness();
+    state.settings.approvalMode = 'full-auto';
+    state.agents.aria = { slug: 'aria', name: 'Aria', approvalMode: '', standInOff: ['im', 'plugin'], unreadable: true };
+    expect(await modeFor(svc, 'p1', 'aria')).toBe('readonly');
+    state.agents.aria = { slug: 'aria', name: 'Aria', approvalMode: '', unreadable: true }; // 分身开着:本体读不出来
+    expect(await modeFor(svc, 'p1', 'aria')).toBe('readonly');
   });
 });
