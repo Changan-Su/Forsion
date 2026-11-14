@@ -146,7 +146,8 @@ import { applyWindowMaterial, parseWindowMaterialRequest } from './windowMateria
 import { tabTitleBarOptions, parseTabTitleBar, watchTabTitleBar } from './tabTitleBar'
 import { createMiniDockMotion, miniDockFrame } from './miniDockMotion'
 import { isForsionUrl, pushDeepLink, drainDeepLinks, filesFromArgv, pushOpenFile, drainOpenFiles } from './deepLink'
-import { createSpaceShortcut, isSpaceId, spaceAppUserModelId, spaceIconFile, spaceShortcutMetaFile, spaceWindowIdFromUrl, spaceWindowLink } from './spaceShortcut'
+import { SPACE_SHORTCUT, createSpaceShortcut, createWindowShortcut, iconPngFromDataUrl, isSpaceId, spaceIconFile, spaceShortcutMetaFile, spaceWindowIdFromUrl, windowShortcutAppUserModelId, windowShortcutLink, type WindowShortcutKind } from './spaceShortcut'
+import { UNIT_SHORTCUT, parseRosterResponse, resolveUnitShortcutTarget, type RosterRead, type UnitShortcutResult } from './unitShortcut'
 
 /** ~/.tangu(与包内 core/tanguHome.ts 同约定;TANGU_HOME 可整体重定向)。 */
 setDevMode(!app.isPackaged) // dev 数据目录 ~/.forsion-dev,与正式版隔离(模块装载即定,先于一切路径解析)
@@ -2069,24 +2070,46 @@ function createDetachedWindow(opts: { id?: string; views?: ViewDesc[]; bounds?: 
 
 /** Space 快捷方式的图标 / 名字存放处(userData,随安装走;dev 是 -dev 那份)。 */
 const spaceShortcutDir = (): string => join(app.getPath('userData'), 'space-shortcuts')
+/** 设备快捷方式的那份:和 Space 分开放 —— 文件名只按 id 算,Space id 和设备 id 可能长得一样。 */
+const unitShortcutDir = (): string => join(app.getPath('userData'), 'unit-shortcuts')
+
+/** Extend 登记的 units:list 处理器(名册住在 Extend)。主进程校验「添加到桌面」要现读一次名册;没装 Extend = null。 */
+let unitsListHandler: ((e: Electron.IpcMainInvokeEvent, ...args: any[]) => unknown) | null = null
+/** 以这次 IPC 的发送方身份现读名册(Extend 自己验发送方)。读不到 = 不知道,不是空名册。 */
+async function readUnitRoster(e: Electron.IpcMainInvokeEvent): Promise<RosterRead> {
+  if (!unitsListHandler) return { ok: false, code: 'roster_unavailable', detail: 'no roster bridge' }
+  return parseRosterResponse(await unitsListHandler(e))
+}
+
+/** 渲染层画好的 PNG 图标 → 按尺寸缩放的取图函数(nativeImage);没有 / 不合格就 undefined(快捷方式照建,只是没自定义图标)。 */
+function shortcutIconSource(raw: unknown): ((size: number) => Buffer | undefined) | undefined {
+  const buf = iconPngFromDataUrl(raw)
+  const src = buf ? nativeImage.createFromBuffer(buf) : null
+  return src && !src.isEmpty() ? (size: number): Buffer | undefined => src.resize({ width: size, height: size, quality: 'best' }).toPNG() : undefined
+}
 
 /** Windows:给加过桌面快捷方式的 Space 窗换上它自己的任务栏身份 —— 与 .lnk 同一个 AppUserModelID,任务栏上单独一格、
- *  显示 Space 图标、固定到任务栏后点开还是这个 Space 窗。没加过快捷方式的 Space 窗照旧归在 Forsion 那一格里。 */
+ *  显示 Space 图标、固定到任务栏后点开还是这个 Space 窗。没加过快捷方式的 Space 窗照旧归在 Forsion 那一格里。
+ *  Unit 窗同一套(UNIT_SHORTCUT,图标 / 名字记录在 unit-shortcuts)。 */
 function applySpaceTaskbarIdentity(win: BrowserWindow, space: string): void {
+  applyShortcutTaskbarIdentity(win, SPACE_SHORTCUT, space)
+}
+function applyShortcutTaskbarIdentity(win: BrowserWindow, kind: WindowShortcutKind, id: string): void {
+  const dir = kind === UNIT_SHORTCUT ? unitShortcutDir() : spaceShortcutDir()
   let name: unknown
-  try { name = JSON.parse(readFileSync(spaceShortcutMetaFile(spaceShortcutDir(), space), 'utf8'))?.name } catch { return }
+  try { name = JSON.parse(readFileSync(spaceShortcutMetaFile(dir, id), 'utf8'))?.name } catch { return }
   if (typeof name !== 'string' || !name) return
-  const ico = spaceIconFile(spaceShortcutDir(), space, 'win32')
+  const ico = spaceIconFile(dir, id, 'win32', kind)
   const hasIcon = !!ico && existsSync(ico)
   try {
     win.setAppDetails({
-      appId: spaceAppUserModelId(space),
-      relaunchCommand: `"${process.execPath}" "${spaceWindowLink(space)}"`,
+      appId: windowShortcutAppUserModelId(kind, id),
+      relaunchCommand: `"${process.execPath}" "${windowShortcutLink(kind, id)}"`,
       relaunchDisplayName: name,
       ...(hasIcon && ico ? { appIconPath: ico, appIconIndex: 0 } : {}),
     })
     if (hasIcon && ico) win.setIcon(ico)
-  } catch (e) { console.warn('[win] space taskbar identity failed:', e) }
+  } catch (e) { console.warn('[win] shortcut taskbar identity failed:', e) }
 }
 
 async function restoreDetachedWindows(): Promise<void> {
@@ -3291,7 +3314,7 @@ app.whenReady().then(async () => {
         const creds = loadTanguCreds()
         return { base: (stored.cloudUrl || creds.cloudUrl || DEFAULT_CLOUD_URL).replace(/\/+$/, ''), token: creds.token || '' }
       },
-      handle: (channel, fn) => { ipcMain.handle(channel, fn); cloudChannels.add(channel) },
+      handle: (channel, fn) => { ipcMain.handle(channel, fn); cloudChannels.add(channel); if (channel === 'units:list') unitsListHandler = fn },
       openExternal: (url) => shell.openExternal(url),
       isTrustedSender,
       log: (m) => console.log(m),
@@ -3357,7 +3380,7 @@ app.whenReady().then(async () => {
     initBundleSwitches(Array.isArray(off) ? off.filter((x): x is string => typeof x === 'string') : [])
     for (const s of bundleSources) if (s.desktop && bundleOff(s.id)) console.log(`[cloud-host] ${s.id} 已在插件页停用,不装载主进程半身`)
     const loaded = await loadBuiltinDesktopEntries({ pluginsRoot: join(forsionHomeDir(), 'plugins'), sources: bundleSources.filter((s) => !bundleOff(s.id)), appVersion: app.getVersion(), host, tempRoot: app.getPath('userData') })
-    if (!loaded.includes('forsion-extend')) cloudChannels.clear()
+    if (!loaded.includes('forsion-extend')) { cloudChannels.clear(); unitsListHandler = null }
   }
   ipcMain.on('cloud:present', (e) => { e.returnValue = [...cloudChannels] })
   // 插件页拨带主进程半身的内置包(Forsion Extend):只改下次开机装不装,回「是否待重启」。别的 id 一律拒(开关名单不收杂项)。
@@ -4983,15 +5006,7 @@ app.whenReady().then(async () => {
     const input = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
     if (!isSpaceId(input.id)) return { ok: false, code: 'not_found' }
     const text = (v: unknown, max: number): string => (typeof v === 'string' ? v.slice(0, max) : '')
-    const iconUrl = text(input.iconPng, 8 * 1024 * 1024)
-    // 解码前先读 PNG 头里的宽高:压缩后 1 MB 的图可以解出上 GB 的像素,主进程会被拖死(Codex 评审)。渲染层只画 1024。
-    const iconBuf = iconUrl.startsWith('data:image/png;base64,') ? Buffer.from(iconUrl.slice('data:image/png;base64,'.length), 'base64') : null
-    const sane = !!iconBuf && iconBuf.length > 24 && iconBuf.readUInt32BE(0) === 0x89504e47 && iconBuf.toString('ascii', 12, 16) === 'IHDR'
-      && iconBuf.readUInt32BE(16) <= 2048 && iconBuf.readUInt32BE(20) <= 2048
-    const src = sane && iconBuf ? nativeImage.createFromBuffer(iconBuf) : null
-    const iconPng = src && !src.isEmpty()
-      ? (size: number): Buffer | undefined => src.resize({ width: size, height: size, quality: 'best' }).toPNG()
-      : undefined
+    const iconPng = shortcutIconSource(input.iconPng)
     const result = await createSpaceShortcut({ id: input.id, name: text(input.name, 200) }, {
       isPackaged: app.isPackaged, desktopDir: app.getPath('desktop'), execPath: process.execPath,
       appImage: process.env.APPIMAGE, fallbackName: text(input.fallbackName, 200),
@@ -5001,6 +5016,23 @@ app.whenReady().then(async () => {
     // 这个 Space 的窗此刻开着的话,当场换上任务栏身份(Windows)。
     const live = detachedWindows.get(`sp_${input.id}`)
     if (result.ok && live && !live.isDestroyed() && process.platform === 'win32') applySpaceTaskbarIdentity(live, input.id)
+    return result
+  })
+  // 设备「添加到桌面」(账号面板 Unit 段的右键)。渲染层只给:设备 id、名字洗空时的本地化兜底名、画好的图标;
+  // id 过正则且必须在此刻读到的名册里,**名字取名册的**(unitShortcut.resolveUnitShortcutTarget)。快捷方式里只有 id。
+  ipcMain.handle('units:addToDesktop', async (e, raw: unknown): Promise<UnitShortcutResult> => {
+    if (!isTrustedSender(e) || e.sender !== mainWindow?.webContents) return { ok: false, code: 'error', detail: 'untrusted sender' }
+    const target = await resolveUnitShortcutTarget(raw, () => readUnitRoster(e))
+    if (!target.ok) return target
+    const input = raw as Record<string, unknown>
+    const result = await createWindowShortcut(UNIT_SHORTCUT, { id: target.unit.id, name: target.unit.name }, {
+      isPackaged: app.isPackaged, desktopDir: app.getPath('desktop'), execPath: process.execPath,
+      appImage: process.env.APPIMAGE, fallbackName: typeof input.fallbackName === 'string' ? input.fallbackName.slice(0, 200) : '',
+      iconDir: unitShortcutDir(), iconPng: shortcutIconSource(input.iconPng),
+      writeShortcutLink: process.platform === 'win32' ? (p, o) => shell.writeShortcutLink(p, 'create', o) : undefined,
+    })
+    const live = detachedWindows.get(`un_${target.unit.id}`)
+    if (result.ok && live && !live.isDestroyed() && process.platform === 'win32') applyShortcutTaskbarIdentity(live, UNIT_SHORTCUT, target.unit.id)
     return result
   })
   // invoke:结果交回调用方(满了由它提示用户,不静默失败)。

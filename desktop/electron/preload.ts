@@ -163,6 +163,9 @@ const api = {
   unitsPairedList: (): Promise<Array<{ id: string; name: string; createdAt: number }>> => ipcRenderer.invoke('units:pairedList'),
   unitsPairedRemove: (id: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('units:pairedRemove', id),
   unitsProbeLan: (lanUrl: string): Promise<{ instanceId: string; name: string } | null> => ipcRenderer.invoke('units:probeLan', lanUrl),
+  /** 设备「添加到桌面」(只主窗):主进程按名册核对 id、取名册里的名字;快捷方式里只有 id(electron/unitShortcut.ts)。 */
+  unitsAddToDesktop: (input: { id: string; fallbackName?: string; iconPng?: string }): Promise<{ ok: true; path: string } | { ok: false; code: string; detail?: string }> =>
+    ipcRenderer.invoke('units:addToDesktop', input),
   // P1-K5 ── 设备凭据存储状态(降级 / 锁定提示;重试与重新登记只在本机,主进程校验发送方)──
   secretStorageStatus: (): Promise<SecretStorageStatus> => ipcRenderer.invoke('secrets:status'),
   secretStorageRetry: (): Promise<SecretStorageStatus> => ipcRenderer.invoke('secrets:retry'),
@@ -799,7 +802,7 @@ const AGENT_KEYS = [
   'openAgentDir', 'openSkillsDir',
   'envCheck', 'envRun', 'onEnvOutput',
   'pluginsUserInstalled', 'pluginsUninstall',
-  'unitsList', 'unitsOpenInBrowser', 'unitsUpdate', 'unitsRemove', 'unitHostStatus', 'unitsPairedList', 'unitsPairedRemove', 'unitsProbeLan', 'unitsP2pOpen', 'unitRelay', // 设备互联依赖 agent 后端
+  'unitsList', 'unitsOpenInBrowser', 'unitsUpdate', 'unitsRemove', 'unitHostStatus', 'unitsPairedList', 'unitsPairedRemove', 'unitsProbeLan', 'unitsP2pOpen', 'unitRelay', 'unitsAddToDesktop', // 设备互联依赖 agent 后端
   // P1-K5
   'secretStorageStatus', 'secretStorageRetry', 'secretStorageResetUnitPairing', 'secretStorageRelaunch', // 设备凭据提示挂在设备互联脚部,同属 agent 后端
   // P1-K4
