@@ -73,7 +73,9 @@ async function boot(page, extra = '', { expanded = true } = {}) {
   await page.waitForTimeout(150)
 }
 async function openPanel(page) {
-  await page.click('.account-card, .ribbon-account')
+  // 整窗形态看着别的设备时,本机账号卡被远程面盖住:点宿主画在左下角的那枚头像(.unitfr-avatar)
+  const framed = await page.evaluate(() => !!document.querySelector('.unitrs--whole:not(.unitrs-hidden) .unitfr-avatar'))
+  await page.click(framed ? '.unitfr-avatar' : '.account-card, .ribbon-account')
   await page.waitForSelector(POP, { timeout: 5000 })
   await page.waitForTimeout(450) // 液滴流出
 }
@@ -176,23 +178,26 @@ async function main() {
       order.first === 'account-units' && order.divider && order.second.includes('ap-head') && order.quotaAfter && order.last === '退出登录', JSON.stringify(order))
     check('A 面板宽 320', Math.abs(order.width - 320) < 1, String(order.width))
     check('A Unit 段末行 =「管理 Unit…」', order.manageLast === '管理 Unit…', order.manageLast)
+    // 探针桩异步点亮客厅 mini(云端不在线、直连探得通 → 走直连,不算离线)
+    await page.waitForFunction((s) => Array.from(document.querySelectorAll(`${s} .ap-unit-name`)).some((n) => n.textContent.trim() === '客厅 mini'), UNITS, { timeout: 5000 }).catch(() => {})
     let rows = await readUnits(page)
     const names = rows.map((r) => (r.sec ? `#${r.name}` : r.name))
-    check('A 分组:这台电脑 / 我的设备(在线在前)/ 离线折叠 / 管理',
-      JSON.stringify(names) === JSON.stringify(['#这台电脑', '这台电脑', '#我的设备', 'MacBook Air', '离线 2 台', '管理 Unit…']), JSON.stringify(names))
+    check('A 分组:这台电脑 / 我的设备(走得通的在前,含只剩直连的)/ 离线折叠 / 管理',
+      JSON.stringify(names) === JSON.stringify(['#这台电脑', '这台电脑', '#我的设备', 'MacBook Air', '客厅 mini', '离线 1 台', '管理 Unit…']), JSON.stringify(names))
     // ── B 勾选态 + 行的构成 ──
     const local = rows[1], mba = rows[3]
     check('B 没在看别的设备:「这台电脑」打勾', local.check && local.current, JSON.stringify(local))
-    check('B 在线行 = emoji 图标 + 名字 + 灰字「在线 · 中转」(临时规则只走中转),不打勾',
+    check('B 在线行 = emoji 图标 + 名字 + 灰字「在线 · 中转」(没选过、云端在线 → 中转,探通了也不改直连),不打勾',
       mba.emoji === '🦊' && mba.state === '在线 · 中转' && !mba.check && !mba.off, JSON.stringify(mba))
-    check('C 手机 / 本机不列;离线缺省折起', !names.some((n) => n.includes('Pixel')) && !names.some((n) => n.includes('书房')) && rows[4].fold === 'false')
+    check('B 云端不在线、直连探得通 → 灰字「在线 · 直连」,不算离线', rows[4].state === '在线 · 直连' && !rows[4].off, JSON.stringify(rows[4]))
+    check('C 手机 / 本机不列;离线缺省折起', !names.some((n) => n.includes('Pixel')) && !names.some((n) => n.includes('书房')) && rows[5].fold === 'false')
     shots.push(await shot(page, 'light'))
 
     // ── C 展开离线 ──
     await page.click(`${UNITS} .ap-unit-fold`)
     rows = await readUnits(page)
     const pc = rows.find((r) => r.name === '书房 PC'), mini = rows.find((r) => r.name === '客厅 mini')
-    check('C 点开「离线 2 台」→ 书房 PC / 客厅 mini 灰显、灰字「离线」', pc?.off && pc.state === '离线' && mini?.off && mini.state === '离线', JSON.stringify([pc, mini]))
+    check('C 点开「离线 1 台」→ 书房 PC 灰显、灰字「离线」(客厅 mini 留在外面)', pc?.off && pc.state === '离线' && !mini?.off && rows.indexOf(mini) < rows.indexOf(pc), JSON.stringify([pc, mini]))
 
     // ── D 点离线行 ──
     await clickUnit(page, '书房 PC')
@@ -227,8 +232,8 @@ async function main() {
     rows = await readUnits(page)
     const gNames = rows.map((r) => (r.sec ? `#${r.name}` : r.name))
     const pc2 = rows.find((r) => r.name === '书房 PC')
-    check('G 正在看的那台掉线了也不折(在外面、打勾),折叠剩「离线 1 台」',
-      gNames.indexOf('书房 PC') > -1 && gNames.indexOf('书房 PC') < gNames.indexOf('离线 1 台') && pc2.check && !pc2.off, JSON.stringify(gNames))
+    check('G 正在看的那台掉线了也不折(在外面、打勾),折叠没了(唯一一台离线的就是它)',
+      gNames.indexOf('书房 PC') > -1 && !gNames.some((n) => n.startsWith('离线')) && pc2.check && !pc2.off, JSON.stringify(gNames))
     shots.push(await shot(page, 'viewing-offline'))
     await page.keyboard.press('Escape')
     await closedSoon(page)
@@ -384,6 +389,93 @@ async function main() {
     const rM2 = await remoteState(page)
     check('M 面板压在远程面之上,真点击「这台电脑」→ 回到本机、面板关', onTop && (await closedSoon(page)) && !rM2.active, JSON.stringify({ onTop, rM2 }))
 
+    // ── N 整窗的框(UNIT_SURFACE_WHOLE):左下角宿主头像 + 角标、标题条胶囊、失败态与回落、记住的通路、弹窗让路 ──
+    const fire = (name, props = {}) => page.evaluate(([n, p]) => { const e = new Event(n); Object.assign(e, p); document.querySelector('.unitrs-web').dispatchEvent(e) }, [name, props])
+    const frameAvatar = () => page.evaluate(() => {
+      const a = document.querySelector('.unitfr-avatar')
+      if (!a) return null
+      const r = a.getBoundingClientRect()
+      return { x: r.left, y: r.top, w: r.width, h: r.height, visible: getComputedStyle(a).visibility === 'visible', badge: a.querySelector('.unitfr-badge')?.textContent ?? null }
+    })
+    for (const z of [1, 1.1]) {
+      await page.setViewportSize({ width: 1200, height: 720 })
+      await boot(page, '', { expanded: false })
+      if (z !== 1) await page.evaluate((v) => { document.body.style.zoom = String(v); window.dispatchEvent(new Event('forsion:uizoom')) }, z)
+      await page.waitForTimeout(150)
+      const local = await page.evaluate(() => { const r = document.querySelector('.ribbon-account').getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height } })
+      const before = await frameAvatar()
+      await page.evaluate(() => window.__runUnitRoute({ kind: 'unit', id: 'u-mba', name: 'MacBook Air', icon: '🦊', platform: 'darwin', via: 'tunnel' }))
+      await page.waitForSelector('.unitfr-avatar', { timeout: 5000 })
+      const fa = await frameAvatar()
+      const d = { dx: +(fa.x - local.x).toFixed(2), dy: +(fa.y - local.y).toFixed(2), dw: +(fa.w - local.w).toFixed(2) }
+      check(`N 宿主头像盖在本机折叠态账号槽上(差 ≤ 1px,缩放 ${z})`, Math.abs(d.dx) <= 1 && Math.abs(d.dy) <= 1 && Math.abs(d.dw) <= 1, JSON.stringify({ d, local, fa }))
+      if (z === 1) {
+        check('N 角标只在远程面激活时出现(那台的图标)', before === null && fa.visible && fa.badge === '🦊', JSON.stringify({ before, fa }))
+        await page.click('.unitfr-avatar')
+        await page.waitForSelector(POP, { timeout: 5000 })
+        await page.waitForTimeout(450)
+        rows = await readUnits(page)
+        const anchored = await page.evaluate(() => { const p = document.querySelector('.account-pop').getBoundingClientRect(); const a = document.querySelector('.unitfr-avatar').getBoundingClientRect(); return { gap: +(a.top - p.bottom).toFixed(2) } })
+        const mbaN = rows.find((r) => r.name === 'MacBook Air')
+        check('N 点宿主头像 → 本机账号面板,锚在这枚头像上、打勾的是那台', mbaN?.check && !rows.find((r) => !r.sec && r.name === '这台电脑').check && anchored.gap >= -0.5 && anchored.gap < 2, JSON.stringify({ anchored, mbaN }))
+        shots.push(await shot(page, 'frame-panel'))
+        await page.click('.unitfr-avatar')
+        check('N 再点宿主头像 → 面板收起', await closedSoon(page))
+        check('N 看着别的设备时本机弹窗 / 上手提示让路(popupQueue.blocked)', await page.evaluate(() => window.__popupQueue.getState().blocked))
+        await page.click('.unitfr-back')
+        await page.waitForTimeout(150)
+        const afterBack = await frameAvatar()
+        check('N 回到本机:角标(连同宿主头像)收起,弹窗不再挡', !afterBack?.visible && !(await page.evaluate(() => window.__popupQueue.getState().blocked)), JSON.stringify(afterBack))
+      }
+    }
+    await page.evaluate(() => { document.body.style.zoom = ''; window.dispatchEvent(new Event('forsion:uizoom')) })
+
+    // 记住的通路:设置页明确点「直连」且加载成功 → 记下;面板灰字跟着写「在线 · 直连」,点下去走直连
+    await page.evaluate(() => localStorage.removeItem('forsion_unit_via:u-mba'))
+    await page.evaluate(() => window.__runUnitRoute({ kind: 'unit', id: 'u-mba', name: 'MacBook Air', icon: '🦊', platform: 'darwin', via: 'lan', lanUrl: 'http://192.168.1.20:8791', explicit: true }))
+    await page.waitForTimeout(100)
+    await fire('did-fail-load', { errorCode: -3, isMainFrame: true }) // ABORTED 不算失败
+    await fire('did-finish-load')
+    const remembered = await page.evaluate(() => localStorage.getItem('forsion_unit_via:u-mba'))
+    check('A 设置页明确选的直连、加载成功 → 记住(-3 ABORTED 不算失败)', remembered === 'lan', String(remembered))
+    await page.click('.unitfr-back')
+    await openPanel(page)
+    rows = await readUnits(page)
+    check('A 记住直连 + 探针通 → 面板灰字「在线 · 直连」', rows.find((r) => r.name === 'MacBook Air')?.state === '在线 · 直连', JSON.stringify(rows.find((r) => r.name === 'MacBook Air')))
+    await clickUnit(page, 'MacBook Air')
+    const rLan = await remoteState(page)
+    check('A 点它 → 走直连', rLan.key === 'u-mba:lan' && rLan.src === 'http://192.168.1.20:8791/', JSON.stringify(rLan))
+    // 主框架加载失败 → 这台在线 → 出声改走中转
+    await fire('did-fail-load', { errorCode: -105, isMainFrame: true })
+    await page.waitForTimeout(150)
+    const rFb = await remoteState(page)
+    check('A 直连加载失败、这台在线 → 自动改走中转', rFb.active && rFb.key === 'u-mba:tunnel' && rFb.src.endsWith('/api/units/u-mba/proxy/'), JSON.stringify(rFb))
+    check('A 面板行自己走出来的 / 回落的中转不算「选」,记住的仍是直连', (await page.evaluate(() => localStorage.getItem('forsion_unit_via:u-mba'))) === 'lan')
+    // 中转也失败 → 宿主画的失败态
+    await fire('did-fail-load', { errorCode: -105, isMainFrame: true })
+    await page.waitForSelector('.unitfr-fail', { timeout: 3000 }).catch(() => {})
+    const failA = await page.evaluate(() => ({ text: document.querySelector('.unitfr-fail')?.textContent ?? '', avatar: getComputedStyle(document.querySelector('.unitfr-avatar')).visibility }))
+    check('B5 中转还失败 →「连不上这台设备」+ 重试 + 回到这台电脑,头像照常', failA.text === '连不上这台设备重试回到这台电脑' && failA.avatar === 'visible', JSON.stringify(failA))
+    shots.push(await shot(page, 'frame-fail'))
+    await page.click('.unitfr-fail .btn.primary')
+    await page.waitForTimeout(150)
+    check('B5 重试 → 失败态收起、页面重挂', !(await page.evaluate(() => !!document.querySelector('.unitfr-fail'))) && !!(await page.evaluate(() => document.querySelector('.unitrs-web'))))
+    await fire('render-process-gone')
+    await page.waitForSelector('.unitfr-fail', { timeout: 3000 }).catch(() => {})
+    const crash = await page.evaluate(() => document.querySelector('.unitfr-fail-title')?.textContent ?? '')
+    check('B5 渲染进程没了 → 失败态', crash === '这台设备的页面停止响应了', crash)
+    await page.click('.unitfr-fail .btn:not(.primary)')
+    await page.waitForTimeout(150)
+    check('B5 失败态里「回到这台电脑」可点 → 回本机', !(await remoteState(page)).active)
+    // 记住直连、这次探针不通 → 灰字「在线 · 中转」,点下去走中转
+    await page.evaluate(async () => { window.tangu.unitsProbeLan = async () => null; await window.__roster.getState().refresh(); await new Promise((r) => setTimeout(r, 50)) })
+    await openPanel(page)
+    rows = await readUnits(page)
+    check('A 记住直连、这次探针不通 → 灰字「在线 · 中转」', rows.find((r) => r.name === 'MacBook Air')?.state === '在线 · 中转', JSON.stringify(rows.find((r) => r.name === 'MacBook Air')))
+    await clickUnit(page, 'MacBook Air')
+    check('A 点它 → 这次走中转', (await remoteState(page)).key === 'u-mba:tunnel')
+    await page.evaluate(() => { window.__unitRemote.getState().hide(); localStorage.removeItem('forsion_unit_via:u-mba') })
+
     // ── 截图:深色 / 青绿 / 英文 ──
     for (const [extra, name, opts] of [['&dark', 'dark', {}], ['&skin=teal', 'teal', {}], ['&lang=en', 'en', { locale: 'en-US' }]]) {
       const p2 = await browser.newPage({ locale: opts.locale || 'zh-CN', viewport: { width: 1200, height: 720 } })
@@ -395,8 +487,8 @@ async function main() {
       if (name === 'en') {
         const en = await readUnits(p2)
         const enNames = en.map((r) => (r.sec ? `#${r.name}` : r.name))
-        check('英文:This computer / My devices / Online · Relay / 1 offline… / Manage Units…',
-          JSON.stringify(enNames) === JSON.stringify(['#This computer', 'This computer', '#My devices', 'MacBook Air', '2 offline', 'Manage Units…']) && en[3].state === 'Online · Relay', JSON.stringify({ enNames, s: en[3]?.state }))
+        check('英文:This computer / My devices / Online · Relay / Online · Direct / 1 offline / Manage Units…',
+          JSON.stringify(enNames) === JSON.stringify(['#This computer', 'This computer', '#My devices', 'MacBook Air', '客厅 mini', '1 offline', 'Manage Units…']) && en[3].state === 'Online · Relay' && en[4].state === 'Online · Direct', JSON.stringify({ enNames, s: en[3]?.state }))
       }
       shots.push(await shot(p2, name))
       await p2.close()

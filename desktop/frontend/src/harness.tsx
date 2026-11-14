@@ -1018,6 +1018,8 @@ if (new URLSearchParams(location.search).has('dock')) {
     // &dark / &skin=<配色> / &lang=en 拍截图。
     const panelQ = new URLSearchParams(location.search)
     const unitPanel = panelQ.has('unitpanel')
+    // &surface=part:远程面按旧形态(盖 .shell-work、Ribbon 留着)跑,验 UNIT_SURFACE_WHOLE=false 那一支(check:unitswitcher 用)
+    if (panelQ.get('surface') === 'part') (window as unknown as { __forsionUnitSurfacePart?: boolean }).__forsionUnitSurfacePart = true
     if (unitPanel) {
       if (panelQ.has('many')) {
         for (let i = 1; i <= 18; i++) units.push({ id: `u-extra-${i}`, name: `Studio ${i}`, platform: i % 2 ? 'linux' : 'darwin', icon: null, online: true, lanUrl: null })
@@ -1046,18 +1048,18 @@ if (new URLSearchParams(location.search).has('dock')) {
       applyRealTheme(resolveInitialLang(), panelQ.get('skin') || resolveInitialSkin(), panelQ.get('skin') || resolveInitialBg(), panelQ.has('dark') ? 'dark' : 'light')
       if (panelQ.get('lang') === 'en') setLocaleGlobal('en')
     }
-    void Promise.all([import('./components/UnitSwitcher'), import('./stores/appStore'), import('./components/AccountCard'), import('./components/unitRoster')]).then(([{ UnitSwitcher, UnitRemoteSurface, UnitSettings, useUnitRemote, runUnitRoute }, { useApp }, { AccountCard }, { useUnitRoster }]) => {
+    void Promise.all([import('./components/UnitSwitcher'), import('./stores/appStore'), import('./components/AccountCard'), import('./components/unitRoster'), import('./stores/popupQueue')]).then(([{ UnitSwitcher, UnitRemoteSurface, UnitSettings, useUnitRemote, runUnitRoute }, { useApp }, { AccountCard }, { useUnitRoster }, { usePopupQueue }]) => {
       useApp.setState({ desktopConfig: { ...cfg } as never })
       addRibbonIcon({ id: 'rb-unit', side: 'bottom', component: UnitSwitcher })
       if (unitPanel) {
         const toasts: string[] = []
-        Object.assign(window as unknown as Record<string, unknown>, { __unitRemote: useUnitRemote, __runUnitRoute: runUnitRoute, __roster: useUnitRoster, __units: units, __toasts: toasts })
+        Object.assign(window as unknown as Record<string, unknown>, { __unitRemote: useUnitRemote, __runUnitRoute: runUnitRoute, __roster: useUnitRoster, __units: units, __toasts: toasts, __popupQueue: usePopupQueue })
         addRibbonIcon({ id: 'rb-account', side: 'bottom', pinned: true, component: ({ expanded }: { expanded: boolean }) => <AccountCard compact={!expanded} onToast={(text) => { toasts.push(text) }} /> })
       }
       // 远程面(设备行「整个主区切过去」)也挂上:裸 harness 无 .shell-work → 组件原地渲染,CSS 退化 fixed 覆盖
       const rsHost = document.createElement('div')
       // 同产品的 Shell 封箱(.shell-host { isolation: isolate }):远程面 z 400 关在箱里,body 一层的账号面板稳压其上
-      if (unitPanel) rsHost.style.isolation = 'isolate'
+      rsHost.style.isolation = 'isolate'
       document.body.appendChild(rsHost)
       // 设置 › 设备:胶囊点开走 openSettings('units')(harness 无浮窗 = 窗内设置),这里只挂那一页(真 SettingsModal 太重)。
       const UnitSettingsHost = (): React.ReactElement | null => {

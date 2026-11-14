@@ -203,7 +203,10 @@ export const AccountCard: React.FC<{
   }
 
   // ── 账号菜单(点击头像弹出;portal + OverlayAt,任意外部点击/Esc/失焦关闭) ──
+  /** 这次菜单锚在哪(缺省账号卡;设备页的框里是宿主画的那枚头像,见 accountChip.activate(anchor))。 */
+  const menuAnchorRef = useRef<HTMLElement | null>(null)
   const openMenu = (el: HTMLElement): void => {
+    menuAnchorRef.current = el
     const r = el.getBoundingClientRect()
     setMenu({ x: r.left, y: r.top, anchorTop: r.top })
     setQuotaOpen(false) // 同 09-28 前:每次打开从收起的一行摘要起步
@@ -247,7 +250,7 @@ export const AccountCard: React.FC<{
   }, [menuOpen, auth?.loggedIn, refreshRewards])
   const pour = (el: HTMLElement): void => {
     drop.current?.cancel(); drop.current = null; dropClosing.current = false
-    const anchor = anchorRef.current
+    const anchor = menuAnchorRef.current?.isConnected ? menuAnchorRef.current : anchorRef.current
     const src = anchor?.querySelector<HTMLElement>('.account-avatar') ?? anchor
     if (src) drop.current = openPanel(src, el) // 按动效主题:液滴 / 拉伸 / 淡入微缩
   }
@@ -261,7 +264,7 @@ export const AccountCard: React.FC<{
   useEffect(() => {
     if (!menu) return
     // 按在头像上不算「点别处」:那一下的 click 自己会收(见 activate)
-    const onDown = (e: PointerEvent): void => { if (!(e.target instanceof Node && anchorRef.current?.contains(e.target))) dismissMenu() }
+    const onDown = (e: PointerEvent): void => { if (!(e.target instanceof Node && (anchorRef.current?.contains(e.target) || menuAnchorRef.current?.contains(e.target)))) dismissMenu() }
     const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') dismissMenu() }
     window.addEventListener('pointerdown', onDown)
     window.addEventListener('keydown', onKey)
@@ -396,12 +399,13 @@ export const AccountCard: React.FC<{
     else if (hasAccountPage) openCloudPage('account')
   }
   // 菜单开着时再点头像 = 收起(倒放);正倒放着又点 = 从这一帧掉头、停在打开(同悬浮目录)
-  const activate = (e: React.MouseEvent | React.KeyboardEvent): void => {
-    if (!menu) { activateOn(e.currentTarget as HTMLElement); return }
+  const toggleFrom = (el: HTMLElement): void => {
+    if (!menu) { activateOn(el); return }
     if (dropClosing.current && drop.current?.reopen?.()) dropClosing.current = false
     else if (dropClosing.current && popRef.current) pour(popRef.current)
     else dismissMenu()
   }
+  const activate = (e: React.MouseEvent | React.KeyboardEvent): void => toggleFrom(e.currentTarget as HTMLElement)
   const stateClass = engineDown ? ' engine-down' : expired ? ' expired' : ''
   const subText = engineDown ? t('sidebar.account.engineDown')
     : engineStarting ? t('sidebar.account.engineStarting')
@@ -412,12 +416,12 @@ export const AccountCard: React.FC<{
   const stateLabel = engineDown ? t('sidebar.account.engineDown') : engineStarting ? t('sidebar.account.engineStarting') : expired ? t('sidebar.account.expired') : loggedIn ? display : t('sidebar.account.login')
   const picture = loggedIn && auth?.avatar && !imgError ? auth.avatar : undefined
   const anchorRef = useRef<HTMLElement | null>(null)
-  const activateRef = useRef(activateOn)
-  activateRef.current = activateOn
+  const activateRef = useRef(toggleFrom)
+  activateRef.current = toggleFrom
   useEffect(() => {
     const mine: AccountChip = {
       label: stateLabel, loggedIn, initial, ...(picture ? { avatar: picture } : {}),
-      activate: () => { if (anchorRef.current) activateRef.current(anchorRef.current) },
+      activate: (anchor) => { const el = anchor ?? anchorRef.current; if (el) activateRef.current(el) },
     }
     publishAccountChip(mine)
     return () => { if (accountChip() === mine) publishAccountChip(null) }
