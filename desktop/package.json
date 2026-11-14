@@ -58,6 +58,7 @@
     "e2e:ribbon": "node scripts/ribbon-dnd.e2e.cjs",
     "e2e:spacewindow": "node scripts/space-window.e2e.cjs",
     "e2e:spaceshortcut": "node scripts/space-shortcut.e2e.cjs",
+    "e2e:unitwindow": "node scripts/unit-window.e2e.cjs",
     "e2e:lclobjects": "node scripts/lcl-objects.e2e.cjs",
     "e2e:detach": "node scripts/detach-window.e2e.cjs",
     "e2e:detached-workflow": "node scripts/detached-workflow.e2e.cjs",

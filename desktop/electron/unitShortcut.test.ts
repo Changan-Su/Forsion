@@ -5,7 +5,7 @@ import os from 'node:os'
 import { createWindowShortcut, iconPngFromDataUrl, spaceIconFile, spaceShortcutMetaFile, windowShortcutPlan, type CreateSpaceShortcutDeps, type SpaceShortcutPlan } from './spaceShortcut'
 import { createProductShortcut, serialShortcutWrite } from './productShortcut'
 import {
-  UNIT_SHORTCUT, handleUnitAddToDesktop, isUnitId, parseRosterResponse, resolveUnitShortcutTarget, unitAppUserModelId, unitWindowIdFromUrl, unitWindowLink, type RosterRead,
+  UNIT_SHORTCUT, handleUnitAddToDesktop, isUnitId, parseUnitWindowState, parseRosterResponse, resolveUnitShortcutTarget, unitAppUserModelId, unitWindowIdFromUrl, unitWindowLink, type RosterRead,
 } from './unitShortcut'
 
 type Writer = NonNullable<CreateSpaceShortcutDeps['writeShortcutLink']>
@@ -282,5 +282,18 @@ describe('half-written .app', () => {
     const r = await createWindowShortcut(UNIT_SHORTCUT, { id: ID, name: 'Den' }, deps({ platform: 'darwin' }))
     expect(r).toMatchObject({ ok: false, code: 'error', detail: 'disk full' })
     expect(await fs.readdir(desktop)).toEqual([])
+  })
+})
+
+describe('parseUnitWindowState (Unit window restore, unit-windows.json)', () => {
+  const b = { x: 10, y: 20, width: 1100, height: 760 }
+  it('keeps well-formed entries; ids must pass the whitelist again; duplicates dropped', () => {
+    expect(parseUnitWindowState(JSON.stringify([{ unit: ID, bounds: b }, { unit: '../x', bounds: b }, { unit: ID, bounds: b }, { unit: 'abcdefgh', bounds: { ...b, width: 'x' } }]))).toEqual([{ unit: ID, bounds: b }])
+  })
+  it('a corrupt file is "unknown" (null), never an empty list the caller could write back', () => {
+    expect(parseUnitWindowState('')).toBeNull()
+    expect(parseUnitWindowState('{"unit":1}')).toBeNull()
+    expect(parseUnitWindowState('[{"unit"')).toBeNull()
+    expect(parseUnitWindowState('[]')).toEqual([])
   })
 })
