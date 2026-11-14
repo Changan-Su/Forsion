@@ -39,6 +39,7 @@
 // strong/emphasis 走 `guardSurrogate()` 包一层上游 handler(不复刻四×四表)。
 // 代价:这些情况下 mark 退化成字面(= 修复前的行为),但一个字符都不会被改坏。
 import { handleText as handleTextSafe } from './textSafe'
+import { withLiteralStars } from './literalBoldFlag'
 import { config, remarkStringifyOptionsCtx } from '@milkdown/kit/core'
 import { defaultHandlers } from 'mdast-util-to-markdown'
 import { classifyCharacter } from 'micromark-util-classify-character'
@@ -315,7 +316,7 @@ const handleRoot = (node: any, parent: unknown, state: any, info: any): string =
  *  这种垢),所以只改这条直通分支:正文照常过 safe(`after` = 尾随空白的首字,转义判据与整段一致),尾随空白原样接回。
  *  其余文本与 milkdown 原版同口径(`encode: []`)。 */
 // 实现唯一一份在 ./textSafe(K-20b 与 L-09b 同根,合并时收成一处)。
-const handleText = handleTextSafe
+const handleText = withLiteralStars(handleTextSafe) // PROBE inline-literal-bold: no-op with the switch off
 
 /** attention mark 的落盘 handler(+ root 预处理 + text 直通分支的转义修正)。测试直接吃这个对象,与生产同一份。 */
 export const attentionHandlers = {

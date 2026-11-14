@@ -2903,6 +2903,8 @@ body.amx-marquee-active * {
 /* Obsidian 行内语法实况(见 blocks/markdown/obsidianInline.ts):`==高亮==` / `%%注释%%` 是纯文本 + 装饰。
    光标不在该处时定界符 / 整条注释藏起来;高亮底与无色 <mark> 同一档(上方 .ProseMirror mark),不另起色板。 */
 .amx-obs-hidden { display: none; }
+/* PROBE inline-literal-bold: bold as text + decoration (blocks/markdown/literalBold.ts). */
+.am-app .ProseMirror .amx-lit-bold { font-weight: 700; }
 .am-app .ProseMirror .amx-obs-hl {
   background: color-mix(in srgb, var(--primary, var(--accent)) 18%, transparent);
   border-radius: 2px;

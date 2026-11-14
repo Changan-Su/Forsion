@@ -50,6 +50,7 @@ import {
   underlineSchema,
 } from './marks'
 import { obsidianInlinePlugin, toggleObsHighlight } from './obsidianInline'
+import { literalBoldPlugin } from './literalBold'
 import { blankLineRemark, softBreakRemark, stripEmptyLineBr } from './softBreak'
 import { tabIndent, tabOutdent } from './tabIndent'
 import { commonmarkWithIndent, setTextAlignment, type TextAlignment } from './paragraphIndent'
@@ -1139,6 +1140,7 @@ export function MilkdownInner({
       // 只能在这儿(ProseMirror 按插件顺序问 handleKeyDown,排在后面永远够不着)。
       // 契约:high 桶的插件不该自己处理的必须返回 false,否则内置行为在它手里静默消失。
       .use(pluginEditorExtensions('high', { pagePath: () => pagePathRef.current }))
+      .use(literalBoldPlugin()) // PROBE inline-literal-bold: inert unless the switch is on (Mod-b / `*` before keymaps and input rules)
       .use(commonmarkWithIndent)
       .use(gfmWithAnchoredRules) // gfm 原位替换版:删除线输入规则带锚(I-01,见 ./anchoredMarkRules)
       .use(structuralIndentRemark)

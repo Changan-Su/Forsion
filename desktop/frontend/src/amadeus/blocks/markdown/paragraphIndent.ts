@@ -23,6 +23,7 @@ import { commonmarkMarkRuleReplacements } from './anchoredMarkRules'
 import { listFormatPlugins } from './listFormat'
 import { verbatimDocSchema, verbatimPlugins } from './verbatim'
 import { literalEscapePlugins, literalEscapeRemark } from './literalEscape'
+import { literalBoldRemark } from './literalBold'
 
 export const clampIndent = (n: number): number => Math.max(0, Math.min(MAX_INDENT, Math.floor(n) || 0))
 
@@ -192,6 +193,7 @@ const PARSE_FIDELITY = [
   ...inlineBrRemark, // D-06:行内 / 单元格里的 `<br>` → 带原文的 break(否则被 preserve-empty-line 删掉)
   ...mathEscapeRemark, // R-01:公式里被 markdown 当转义吃掉的反斜杠补回(按源串认公式,与落盘 unescapeMathSource 同一口径)
   ...literalEscapeRemark, // D-11:公式外的转义拆成转义字面(记录由上一步留下,见 ./literalEscape)
+  ...literalBoldRemark, // PROBE inline-literal-bold: strong -> delimiter text (only with the switch on)
   ...refDefinitionsRemark, // D-12:定义行 → 字面段落、引用 → 带 ref 的链接(须在 remark-inline-links 之前,它会删定义)
 ]
 const presetWithReplacements = commonmark.map((p) =>
