@@ -86,4 +86,12 @@ describe('fimInline', () => {
     fetchMock.impl = () => new Response(JSON.stringify({ detail: 'Too many inline requests in flight' }), { status: 429 })
     await expect(fimInline({ before: 'a' }, 'ds')).rejects.toThrow('Too many inline requests in flight')
   })
+
+  it('补全模型被会员档位拦下(403 model_tier_locked)→ 静默当没有补全,不落回 complete 也不报错', async () => {
+    // 云端 HTTP 403 的 JSON 回包被引擎原样包进 SSE error
+    fetchMock.impl = () => sse({ type: 'error', error: JSON.stringify({ detail: 'model_tier_locked', code: 'model_tier_locked', modelId: 'ds', modelName: 'DS', multiplier: 5, cap: 2.5 }) })
+    await expect(fimInline({ before: 'a' }, 'ds')).resolves.toEqual({ text: '' })
+    fetchMock.impl = () => sse({ type: 'error', error: 'model_tier_locked' })
+    await expect(fimInline({ before: 'a' }, 'ds')).resolves.toEqual({ text: '' })
+  })
 })

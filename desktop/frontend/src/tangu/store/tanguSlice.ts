@@ -31,7 +31,7 @@ import { AGENT_WRITE_TOOLS, DESK_EDIT_TOOLS, DESK_PERSIST_KEY, agentWriteChecks,
 import { deskAcceptsFiles } from '../../amadeus/plugins/deskCompanion'
 import { usePageStore } from '../../amadeus/store/pageStore'
 import { registerMessages, translate, translationValues } from '../../i18n'
-import { publishAccountQuota } from '../../services/accountQuota'
+import { pointsReadToken, publishAccountQuota, reconcilePointsRead } from '../../services/accountQuota'
 import { sanitizeAnswerBy, sanitizeApprovalPreviewI18n, sanitizeApprovalReason, sanitizeApprovalRemote } from '../../approvalReason'
 import { normalizeSessionEmoji } from '../../../../../tangu-agent/src/contracts/sessionEmoji'
 import { TURN_RESUME_MARKER, isContinuationRow } from '../../../../../tangu-agent/src/contracts/turnResume'
@@ -360,9 +360,11 @@ function checkQuotaExhausted(toast: (m: string, err?: boolean) => void, tr: (k: 
   if (quotaCheckBusy) return
   quotaCheckBusy = true
   const generation = host.authGen()
+  const pointsToken = pointsReadToken()
   void window.tangu.accountQuota().then((r) => {
     if (generation !== host.authGen()) return
-    const j = r?.status === 200 ? r.json : null
+    // 发出之后「用积分继续」被写过:这份是旧读取,开关以已确认的值为准(别把开着的显示回关)
+    const j = reconcilePointsRead(r?.status === 200 ? r.json : null, pointsToken)
     if (!j) return
     // Chat View 的内联额度提示与 run 收尾共用这份刚拉到的真值，避免结束瞬间再打一遍额度请求。
     publishAccountQuota(j)
@@ -370,7 +372,10 @@ function checkQuotaExhausted(toast: (m: string, err?: boolean) => void, tr: (k: 
     const daily = j.dailyLimit >= 0 && Number(j.dailyRemaining) <= 0
     const state = weekly ? 'weekly' : daily ? 'daily' : ''
     if (state && state !== lastQuotaExhaustState) {
-      toast(tr(state === 'weekly' ? 'quota.exhausted.weekly' : 'quota.exhausted.daily'), true)
+      // 开着「用积分继续」且还有积分:额度虽尽,下一轮照样能跑 —— 只是告知,不是错误(积分为 0 / 读不到照旧报已用尽)
+      const pointsOn = j.pointsAutoDeduct === true && typeof j.pointsBalance === 'number' && j.pointsBalance > 0
+      if (pointsOn) toast(tr('quota.exhausted.pointsOn'))
+      else toast(tr(state === 'weekly' ? 'quota.exhausted.weekly' : 'quota.exhausted.daily'), true)
     }
     lastQuotaExhaustState = state
   }).catch(() => {}).finally(() => { if (generation === host.authGen()) quotaCheckBusy = false })
