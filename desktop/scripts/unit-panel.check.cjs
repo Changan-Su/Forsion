@@ -11,7 +11,8 @@
  *   F 面板开着点远程面 → 关;窗口失焦(真 Electron 里点 <webview> 只表现为宿主 blur)→ 关
  *   G 正在看的那台掉线了也不折;手输地址的目标正看着时单独一行
  *   H 点「这台电脑」= 回到本机(远程面收起,胶囊回「本地」,不动智库侧)
- *   I 右键三项「切换到这台」「改名字」「改图标」;点菜单外只收菜单、Esc 只收菜单;改名 / 改图标各走一次 unitsUpdate、只带自己那个字段
+ *   I 右键五项「切换到这台」「在新窗口打开」「添加到桌面」「改名字」「改图标」;点菜单外只收菜单、Esc 只收菜单;改名 / 改图标各走一次 unitsUpdate、只带自己那个字段
+ *   K 在线行悬停 / 键盘聚焦才露「在新窗口打开」;离线行右键也有新窗口 / 桌面两项;添加到桌面不交名字;手输地址那行没有右键
  *   J 「管理 Unit…」→ 设置 › 设备
  *   K web 主入口(没有设备桥)不出现 Unit 段
  *   L 不出视口、不压头像:1200×720 / 1200×520 × 缩放 1 / 1.1,Unit 多了只滚 Unit 段;名册刷新变高后重新夹位置
@@ -259,8 +260,8 @@ async function main() {
     }, UNITS)
     await page.waitForSelector('.ap-unit-ctx', { timeout: 3000 }).catch(() => {})
     const ctxItems = await page.evaluate(() => Array.from(document.querySelectorAll('.ap-unit-ctx button')).map((b) => b.textContent.trim()))
-    check('I 右键三项:切换到这台 / 改名字 / 改图标(.ctx-menu 样式)',
-      JSON.stringify(ctxItems) === JSON.stringify(['切换到这台', '改名字', '改图标']) && await page.evaluate(() => !!document.querySelector('.ctx-menu.ap-unit-ctx')), JSON.stringify(ctxItems))
+    check('I 右键五项:切换到这台 / 在新窗口打开 / 添加到桌面 / 改名字 / 改图标(.ctx-menu 样式)',
+      JSON.stringify(ctxItems) === JSON.stringify(['切换到这台', '在新窗口打开', '添加到桌面', '改名字', '改图标']) && await page.evaluate(() => !!document.querySelector('.ctx-menu.ap-unit-ctx')), JSON.stringify(ctxItems))
     // 点面板里(菜单外)→ 只收菜单
     const headBox = await page.evaluate(() => { const r = document.querySelector('.account-pop .ap-sec').getBoundingClientRect(); return { x: r.left + 40, y: r.top + r.height / 2 } })
     await page.mouse.click(headBox.x, headBox.y)
@@ -292,14 +293,14 @@ async function main() {
       return true
     }
     await ctxOn()
-    await page.click('.ap-unit-ctx button:nth-child(2)')
+    await page.click('.ap-unit-ctx button:nth-child(4)')
     const asked1 = await answer('书桌 Air')
     const secondDialog = await page.evaluate(() => !!document.querySelector('.dialog-overlay input'))
     let updates = await page.evaluate(() => window.__unitUpdates.slice())
     check('I「改名字」→ 面板关、只弹一个输入框,unitsUpdate(id, { name })',
       asked1 && !secondDialog && !(await panelOpen(page)) && JSON.stringify(updates) === JSON.stringify([['u-mba', { name: '书桌 Air' }]]), JSON.stringify({ secondDialog, updates }))
     await ctxOn()
-    await page.click('.ap-unit-ctx button:nth-child(3)')
+    await page.click('.ap-unit-ctx button:nth-child(5)')
     const asked2 = await answer('🐼')
     updates = await page.evaluate(() => window.__unitUpdates.slice())
     check('I「改图标」→ 只带 icon,unitsUpdate(id, { icon })',
@@ -315,6 +316,76 @@ async function main() {
     const r3 = await remoteState(page)
     check('I 右键「切换到这台」→ 切过去、面板关', (await closedSoon(page)) && r3.active && r3.key === 'u-mba:tunnel', JSON.stringify(r3))
     await page.evaluate(() => window.__unitRemote.getState().hide())
+
+    // ── K 新窗口入口(第二包):在线行悬停 / 键盘聚焦才露「在新窗口打开」;右键「在新窗口打开」「添加到桌面」离线行也有,手输地址那行没有 ──
+    await page.evaluate(() => { window.__unitWinCalls.length = 0 })
+    await openPanel(page)
+    const newwin = (name) => page.evaluate(([sel, n]) => {
+      const wrap = Array.from(document.querySelectorAll(`${sel} .ap-unit-wrap`)).find((w) => w.querySelector('.ap-unit-name')?.textContent.trim() === n)
+      const b = wrap?.querySelector('.ap-unit-newwin')
+      if (!b) return null
+      const r = b.getBoundingClientRect()
+      return { opacity: getComputedStyle(b).opacity, pe: getComputedStyle(b).pointerEvents, title: b.getAttribute('title'), x: r.left + r.width / 2, y: r.top + r.height / 2,
+        stateHidden: getComputedStyle(wrap.querySelector('.ap-unit-state') ?? wrap).visibility === 'hidden' }
+    }, [UNITS, name])
+    await page.mouse.move(5, 5)
+    const idle = await newwin('MacBook Air')
+    check('K 在线行的「在新窗口打开」不常驻(没悬停时透明且点不到)', !!idle && idle.opacity === '0' && idle.pe === 'none', JSON.stringify(idle))
+    const rowBox = await page.evaluate((sel) => { const r = Array.from(document.querySelectorAll(`${sel} .ap-unit-wrap`)).find((w) => w.textContent.includes('MacBook Air')).getBoundingClientRect(); return { x: r.left + 60, y: r.top + r.height / 2 } }, UNITS)
+    await page.mouse.move(rowBox.x, rowBox.y)
+    await page.waitForTimeout(120)
+    const hover = await newwin('MacBook Air')
+    check('K 悬停在线行 → 行尾出现「在新窗口打开」(带 tooltip),盖住灰字', !!hover && hover.opacity === '1' && hover.pe === 'auto' && hover.title === '在新窗口打开' && hover.stateHidden, JSON.stringify(hover))
+    await page.mouse.move(5, 5)
+    await page.evaluate((sel) => Array.from(document.querySelectorAll(`${sel} .ap-unit-wrap`)).find((w) => w.textContent.includes('MacBook Air')).querySelector('.ap-unit').focus(), UNITS)
+    const focused = await newwin('MacBook Air')
+    check('K 键盘聚焦在线行 → 同样出现', !!focused && focused.opacity === '1', JSON.stringify(focused))
+    const offlineHasBtn = await page.evaluate((sel) => Array.from(document.querySelectorAll(`${sel} .ap-unit--off`)).some((r) => r.parentElement?.querySelector('.ap-unit-newwin')), UNITS)
+    check('K 离线行没有悬停按钮', !offlineHasBtn)
+    await page.mouse.move(rowBox.x, rowBox.y)
+    await page.waitForTimeout(120)
+    const hv = await newwin('MacBook Air')
+    await page.mouse.click(hv.x, hv.y)
+    let wc = await page.evaluate(() => window.__unitWinCalls.slice())
+    check('K 点悬停按钮 → unitsOpenWindow(那台的 id)、面板关、不切换主窗', (await closedSoon(page)) && JSON.stringify(wc) === JSON.stringify([['window', 'u-mba']]) && !(await remoteState(page)).active, JSON.stringify(wc))
+    // 离线行(展开折叠)的右键:两项照样可用
+    await openPanel(page)
+    if ((await page.evaluate((sel) => document.querySelector(`${sel} .ap-unit-fold`)?.getAttribute('aria-expanded'), UNITS)) === 'false') await page.click(`${UNITS} .ap-unit-fold`)
+    const offCtx = async () => {
+      if (!(await panelOpen(page))) await openPanel(page)
+      if ((await page.evaluate((sel) => document.querySelector(`${sel} .ap-unit-fold`)?.getAttribute('aria-expanded'), UNITS)) === 'false') await page.click(`${UNITS} .ap-unit-fold`)
+      await page.evaluate((sel) => {
+        const row = document.querySelector(`${sel} .ap-unit--off`)
+        row.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 200, clientY: 300 }))
+      }, UNITS)
+      await page.waitForSelector('.ap-unit-ctx', { timeout: 3000 })
+    }
+    await offCtx()
+    const offItems = await page.evaluate(() => Array.from(document.querySelectorAll('.ap-unit-ctx button')).map((b) => b.textContent.trim()))
+    const offId = await page.evaluate((sel) => document.querySelector(`${sel} .ap-unit--off`).getAttribute('data-unit-id'), UNITS)
+    check('K 离线行右键照样有「在新窗口打开」「添加到桌面」', offItems.includes('在新窗口打开') && offItems.includes('添加到桌面'), JSON.stringify(offItems))
+    await page.click('.ap-unit-ctx [data-unit-act="window"]')
+    await closedSoon(page)
+    await offCtx()
+    await page.click('.ap-unit-ctx [data-unit-act="desktop"]')
+    await page.waitForFunction(() => window.__unitWinCalls.length >= 3, null, { timeout: 8000 }).catch(() => {})
+    wc = await page.evaluate(() => window.__unitWinCalls.slice())
+    check('K 离线行「在新窗口打开」→ unitsOpenWindow(离线那台)', JSON.stringify(wc[1]) === JSON.stringify(['window', offId]), JSON.stringify(wc))
+    check('K「添加到桌面」→ 只交 id + 兜底名 + 画好的 PNG 图标,**不交名字**', JSON.stringify(wc[2]) === JSON.stringify(['desktop', offId, 'fallbackName,iconPng,id', 'png']), JSON.stringify(wc[2]))
+    // 手输地址那行:没有右键菜单
+    await page.evaluate(() => window.__runUnitRoute({ kind: 'addr', url: 'http://192.168.1.77:8791/' }))
+    await openPanel(page)
+    await page.evaluate((sel) => {
+      const row = Array.from(document.querySelectorAll(`${sel} .ap-item`)).find((r) => r.textContent.includes('192.168.1.77'))
+      row.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 200, clientY: 300 }))
+    }, UNITS)
+    await page.waitForTimeout(200)
+    check('K 手输地址那行没有右键(也就没有新窗口 / 桌面两项)', !(await page.evaluate(() => !!document.querySelector('.ap-unit-ctx'))))
+    // 远程面开着时焦点在 webview 里,宿主收不到 Esc:再点一次头像收面板
+    await page.click('.unitfr-avatar')
+    await closedSoon(page)
+    await page.evaluate(() => window.__unitRemote.getState().hide())
+    await page.waitForTimeout(450) // 液滴缩回
 
     // ── J 管理 Unit… ──
     await openPanel(page)

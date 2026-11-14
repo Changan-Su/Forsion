@@ -1033,7 +1033,15 @@ if (new URLSearchParams(location.search).has('dock')) {
         forsionLogout: async () => ({ ok: true }),
         accountQuota: async () => ({ status: 200, json: { dailyPercent: 28, weeklyPercent: 28, dailyLimit: 100, weeklyLimit: 500, weeklyResetAt: '2026-11-16' } }),
         unitsUpdate: async (id: string, patch: unknown) => { calls.push([id, patch]); return { status: 200, json: { ok: true } } },
+        // 第二包:「在新窗口打开」「添加到桌面」只记下调用(主进程那半由 e2e:unitwindow 真跑)
+        unitsOpenWindow: async (id: string) => { winCalls.push(['window', id]); return { ok: true } },
+        unitsAddToDesktop: async (input: { id: string; fallbackName?: string; iconPng?: string }) => {
+          winCalls.push(['desktop', input.id, Object.keys(input).sort().join(','), typeof input.iconPng === 'string' && input.iconPng.startsWith('data:image/png') ? 'png' : 'no-icon'])
+          return { ok: false, code: 'unpackaged' }
+        },
       })
+      const winCalls: unknown[][] = []
+      ;(window as unknown as { __unitWinCalls: typeof winCalls }).__unitWinCalls = winCalls
       // &self:名册里有本机自己(互联关着,unitId 为 null、selfUnitId 认得出)→ 面板和设置页都不许列它
       if (panelQ.has('self')) {
         units.push({ id: 'u-self', name: '本机自己', platform: 'darwin', icon: null, online: true, lanUrl: null })
