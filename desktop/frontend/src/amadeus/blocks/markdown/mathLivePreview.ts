@@ -147,26 +147,172 @@ function renderMath(view: EditorView, latex: string, display: boolean, srcFrom: 
   return el
 }
 
-/** 围栏代码块切分:偶数下标 = 正文,奇数下标 = 围栏代码块(块内的 $…$ 不是公式,原样保留)。 */
-const FENCE_SPLIT = /(^```[\s\S]*?^```[^\n]*$)/m
+// ── 「哪些地方不算公式」:按 Markdown 解析的口径把代码 / 地址抹成空格 ──────────────────────────────────
+// 抹掉的区域:围栏代码(任意长度的 ` 或 ~,闭栏同字符且不短于开栏;未闭合到文末)、缩进代码块、
+// 任意长度反引号的行内代码(闭合按同长度配对,不跨空行;被转义的反引号不开代码)、链接 / 图片地址(含标题)、
+// 引用定义的地址。抹成等长空格(换行保留)→ 偏移不变,`$` 贴着代码时的开闭判据与显示侧
+// buildBlockString(code 文本抹成空格)一致。
+// 读写两侧都在「原文」上调它:读侧是磁盘原文,写侧是序列化结果。序列化器对代码 / 地址不加转义、对正文里的反引号
+// 加 `\`,用户写的转义在写侧是 ESCAPE_SENTINEL(NUL,见 ./literalEscape)—— 所以「被转义」认 奇数个反斜杠 或 NUL。
+const blank = (s: string): string => s.replace(/[^\n]/g, ' ')
+const FENCE_OPEN = /^((?:[ \t]*>)*[ \t]*)(`{3,}|~{3,})(.*)$/
+const LIST_ITEM = /^[ \t]*(?:[-+*]|\d{1,9}[.)])(?:[ \t]|$)/
+const QUOTE_PREFIX = /^(?:[ \t]*>)*/
+/** 行首的引用层数(`>` 个数)与去掉引用前缀后的缩进。 */
+const quoteDepth = (line: string): number => (QUOTE_PREFIX.exec(line)![0].match(/>/g) ?? []).length
+const indentAfterQuote = (line: string): number => /^[ \t]*/.exec(line.slice(QUOTE_PREFIX.exec(line)![0].length))![0].length
+/** 新起一块的行首(段落里的行内代码不跨过它):标题、列表项、围栏、分隔线(引用另按层数判)。 */
+const BLOCK_START = /^ {0,3}(?:#{1,6}(?:[ \t]|$)|[-+*](?:[ \t]|$)|\d{1,9}[.)](?:[ \t]|$)|`{3,}|~{3,}|(?:[-*_][ \t]*){3,}$)/
+
+function escapedAt(s: string, i: number): boolean {
+  if (s[i - 1] === '\u0000') return true
+  let k = 0
+  while (s[i - 1 - k] === '\\') k++
+  // 写侧 `NUL\` = 用户转义过的反斜杠(字面 `\`),它吃掉这串里的第一个反斜杠。
+  if (k && s[i - 1 - k] === '\u0000') k--
+  return k % 2 === 1
+}
+
+/** 行级:围栏 + 缩进代码块。 */
+function maskCodeBlocks(md: string): string {
+  const lines = md.split('\n')
+  // depth:开栏所在的引用层数;inList/indent:开在列表续行里时的缩进 —— 容器结束,围栏随之结束(未闭合也一样)。
+  let fence: { ch: string; len: number; depth: number; indent: number; inList: boolean } | null = null
+  let prevBlank = true // 上一行是空行(或文首)
+  let inCode = false   // 上一个非空行属于缩进代码块
+  let inList = false   // 处在列表上下文里(列表项之后的缩进是续行,不是代码)
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    if (fence && (quoteDepth(line) < fence.depth || (fence.inList && line.trim() && indentAfterQuote(line) < fence.indent))) fence = null
+    if (fence) {
+      const m = FENCE_OPEN.exec(line)
+      if (m && m[2][0] === fence.ch && m[2].length >= fence.len && !m[3].trim()) fence = null
+      lines[i] = blank(line)
+      prevBlank = false
+      continue
+    }
+    const m = FENCE_OPEN.exec(line)
+    if (m && !(m[2][0] === '`' && m[3].includes('`'))) {
+      fence = { ch: m[2][0], len: m[2].length, depth: quoteDepth(line), indent: indentAfterQuote(line), inList: inList && indentAfterQuote(line) > 0 }
+      lines[i] = blank(line)
+      inCode = false
+      continue
+    }
+    if (!line.trim()) { prevBlank = true; continue }
+    // 缩进代码块:4 空格 / Tab 起手,不能打断段落(前面得是空行或代码块本身)。
+    const indented = /^(?: {4}| {0,3}\t)/.test(line)
+    if (indented && !inList && (inCode || prevBlank)) {
+      lines[i] = blank(line)
+      inCode = true
+    } else {
+      inCode = false
+      if (LIST_ITEM.test(line)) inList = true
+      else if (!indented && prevBlank) inList = false // 顶格的新段落结束列表(懒续行不结束)
+    }
+    prevBlank = false
+  }
+  return lines.join('\n')
+}
+
+/** 行内:反引号代码(按段落:不跨空行,也不跨进下一块 —— 标题 / 列表项 / 围栏等新起一块的行;引用里的段落按引用续行算)。 */
+function maskCodeSpans(s: string): string {
+  let out = ''
+  let last = 0
+  let i = 0
+  const n = s.length
+  while (i < n) {
+    if (s[i] !== '`') { i++; continue }
+    if (escapedAt(s, i)) { i++; continue } // 转义只吃掉第一个反引号,剩下的照常成串
+    let j = i
+    while (s[j] === '`') j++
+    const len = j - i
+    // 找同长度的闭合串(代码里反斜杠不转义);空行、新起一块处截断
+    const lineStart = s.lastIndexOf('\n', i) + 1
+    const openDepth = quoteDepth(s.slice(lineStart, i))
+    let k = j
+    let close = -1
+    while (k < n) {
+      if (s[k] === '\n') {
+        const nl = s.indexOf('\n', k + 1)
+        const next = s.slice(k + 1, nl === -1 ? n : nl)
+        if (!next.trim()) break
+        // 引用层数变了 = 新起一块或引用结束(懒续行不细分,两侧同一判据即可)
+        if (quoteDepth(next) !== openDepth) break
+        const body = next.slice(QUOTE_PREFIX.exec(next)![0].length)
+        if (!body.trim() || BLOCK_START.test(body)) break
+      }
+      if (s[k] === '`') {
+        let e = k
+        while (s[e] === '`') e++
+        if (e - k === len) { close = e; break }
+        k = e
+        continue
+      }
+      k++
+    }
+    if (close === -1) { i = j; continue }
+    out += s.slice(last, i) + blank(s.slice(i, close))
+    last = i = close
+  }
+  return out + s.slice(last)
+}
+
+/** 链接 / 图片地址、引用定义地址。
+ *  尖括号自动链接不抹:序列化器会把其中的反斜杠翻倍,抹掉就反转义不回来,越存越多(公式里写 `<ab:x\{y\}>` 这种)。 */
+function maskLinkTargets(s: string): string {
+  const a = s.split('')
+  const fill = (from: number, to: number): void => { for (let x = from; x < to; x++) if (a[x] !== '\n') a[x] = ' ' }
+  // 引用定义 `[label]: dest "title"`(整行剩余部分)
+  for (const m of s.matchAll(/^((?:[ \t]*>)*[ \t]{0,3}\[[^\]\n]+\]:)([^\n]*)$/gm)) fill(m.index! + m[1].length, m.index! + m[0].length)
+  // 行内链接 / 图片 `](dest "title")`:`]` 之前同段里要有对应的 `[`
+  for (let i = s.indexOf(']('); i !== -1; i = s.indexOf('](', i + 1)) {
+    if (escapedAt(s, i)) continue
+    let depth = 0
+    let open = -1
+    for (let b = i - 1; b >= 0; b--) {
+      if (s[b] === '\n' && s[b - 1] === '\n') break
+      if (escapedAt(s, b)) continue
+      if (s[b] === ']') depth++
+      else if (s[b] === '[') { if (depth === 0) { open = b; break } depth-- }
+    }
+    if (open === -1) continue
+    let p = i + 2
+    let paren = 0
+    let end = -1
+    if (s[p] === '<') {
+      const gt = s.indexOf('>', p)
+      if (gt === -1) continue
+      p = gt + 1
+    }
+    for (; p < s.length; p++) {
+      const c = s[p]
+      if (c === '\\') { p++; continue }
+      if (c === '"' || c === "'") { const q = s.indexOf(c, p + 1); if (q === -1) break; p = q; continue }
+      if (c === '(') paren++
+      else if (c === ')') { if (paren === 0) { end = p; break } paren-- }
+      else if (c === '\n' && s[p + 1] === '\n') break
+    }
+    if (end !== -1) fill(i + 2, end)
+  }
+  return a.join('')
+}
+
+/** md 里「不算公式」的区域抹成等长空格(偏移不变)。导出供单测。 */
+export function maskNonMath(md: string): string {
+  return maskLinkTargets(maskCodeSpans(maskCodeBlocks(md)))
+}
 
 /** 一段 markdown **原文**里的公式跨度(偏移相对 md)—— 落盘反转义与解析补反斜杠**共用这一份**,别再各写一套。
  *  R-01 返修(评审 2026-09-27):读侧曾按 PM 视图认公式(行内代码抹空、链接地址不计、mark 定界符不计),写侧按原文认;
  *  `` `$HOME` `` / `[a](http://x/?$b)` 里的 `$` 让两侧配出不同的对 —— 读侧补了反斜杠、写侧不还原,每存一次翻一倍。
  *  两侧都在「原文」上用这一个函数,认出的跨度就一致(写侧的原文 = 序列化结果,与打开时的原文逐字相同)。
- *  ponytail: 行内代码 / 链接地址里的 `$` 照旧参与配对(与返修前的落盘侧同一口径)—— 这类段落里的公式可能认不出、
- *  反斜杠一次性丢掉(同 R-01 修前),但不会越存越多。 */
+ *  代码 / 链接地址按 Markdown 解析的口径排除(maskNonMath):两侧照样同一口径,而且代码里的 `\_` 不再被当公式反转义删掉。
+ *  ponytail: 公式旁的 `\$` 仍按 `$` 参与配对(读侧见 restoreMathEscapes 的 view;写侧看到的是序列化器翻倍后的形态,
+ *  两侧对「被转义」的判据对不齐,改了反而让 `$a\\$` 这类合法公式认不出)。 */
 export function mdMathSpans(md: string): MathSpan[] {
   if (md.indexOf('$') === -1) return []
-  const out: MathSpan[] = []
-  let base = 0
-  md.split(FENCE_SPLIT).forEach((part, idx) => {
-    if (idx % 2 === 0 && part.indexOf('$') !== -1) {
-      for (const sp of scanMath(part)) out.push({ ...sp, from: sp.from + base, to: sp.to + base })
-    }
-    base += part.length
-  })
-  return out
+  const masked = maskNonMath(md)
+  return scanMath(masked).map((sp) => (sp.display ? { ...sp, latex: md.slice(sp.from + 2, sp.to - 2).trim() } : { ...sp, latex: md.slice(sp.from + 1, sp.to - 1) }))
 }
 
 /** 落盘前把 remark 在 $…$/$$…$$ 里加的反斜杠转义抹掉,让公式按原文持久化(对齐 Obsidian/remark-math)。
@@ -176,12 +322,16 @@ export function mdMathSpans(md: string): MathSpan[] {
  *  命令名和 \\ 换行全丢 → 矩阵/数组(\begin{array}…\hline)当场炸。字符类同 mdast escapeBackslashes 的 [!-/:-@[-`{-~]。
  *  跨度由 mdMathSpans 给(围栏代码块跳过——块内的 $…$ 不是公式,反转义会破坏代码里的 \n 等序列)。 */
 export function unescapeMathSource(md: string): string {
-  const spans = mdMathSpans(md)
+  if (md.indexOf('$') === -1) return md
+  const masked = maskNonMath(md)
+  const spans = scanMath(masked)
   if (!spans.length) return md
   let out = ''
   let last = 0
   for (const sp of spans) {
-    out += md.slice(last, sp.from) + md.slice(sp.from, sp.to).replace(/\\([!-/:-@[-`{-~])/g, '$1')
+    // 公式跨度里夹着的行内代码 / 地址(已被抹空)原样保留:只反转义未被抹掉的「\标点」。
+    out += md.slice(last, sp.from) + md.slice(sp.from, sp.to).replace(/\\([!-/:-@[-`{-~])/g, (all, ch: string, off: number) =>
+      masked[sp.from + off] === '\\' ? ch : all)
     last = sp.to
   }
   return out + md.slice(last)

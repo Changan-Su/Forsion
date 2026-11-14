@@ -145,9 +145,81 @@ describe('mdMathSpans(读写两侧共用的公式跨度)', () => {
     const md = 'a $x$\n```\n$not$\n```\nb $$y$$'
     expect(mdMathSpans(md).map((sp) => md.slice(sp.from, sp.to))).toEqual(['$x$', '$$y$$'])
   })
-  it('与 unescapeMathSource 同一口径:行内代码里的 `$` 照旧参与配对(两侧一致比「认得准」要紧)', () => {
+  it('行内代码里的 `$` 不参与配对(与 Markdown 解析一致;读写两侧共用,口径照样一致)', () => {
     const md = '用`$`包裹公式,例如$\\{a\\}$'
-    expect(mdMathSpans(md).map((sp) => md.slice(sp.from, sp.to))).toEqual(['$`包裹公式,例如$'])
+    expect(mdMathSpans(md).map((sp) => md.slice(sp.from, sp.to))).toEqual(['$\\{a\\}$'])
+  })
+  const spansOf = (md: string): string[] => mdMathSpans(md).map((sp) => md.slice(sp.from, sp.to))
+  it('任意长度反引号的行内代码:闭合按同长度配对,转义的反引号不开代码', () => {
+    expect(spansOf('a ``x $b` c$ y`` $z$')).toEqual(['$z$'])
+    expect(spansOf('a \\`$x$` b')).toEqual(['$x$']) // `\`` 是字面反引号,后面的 `$x$` 是公式
+    expect(spansOf('a `$x$`` b')).toEqual(['$x$'])  // 长度对不上 → 没有代码,`$x$` 是公式
+  })
+  it('围栏:任意长度、` 或 ~,闭栏不短于开栏;未闭合的围栏到文末', () => {
+    expect(spansOf('````md\n```\n$a$\n```\n$b$\n````\n$c$')).toEqual(['$c$'])
+    expect(spansOf('~~~\n$a$\n~~~\n$b$')).toEqual(['$b$'])
+    expect(spansOf('  ```\n$a$\n  ```\n$b$')).toEqual(['$b$'])
+    expect(spansOf('```\n$a$\n')).toEqual([])
+  })
+  it('缩进代码块里的 `$` 不是公式;列表续行的缩进不当代码', () => {
+    expect(spansOf('para\n\n    $a$ x\n\n$b$')).toEqual(['$b$'])
+    expect(spansOf('- item\n\n    $a$\n')).toEqual(['$a$'])
+  })
+  it('链接 / 图片地址里的 `$` 不参与配对;链接文字里的公式照认', () => {
+    expect(spansOf('[文档](http://x/?$top=1)里$\\{a\\}$')).toEqual(['$\\{a\\}$'])
+    expect(spansOf('![i]($p.png "t$") $x$')).toEqual(['$x$'])
+    expect(spansOf('[$x$](http://y)')).toEqual(['$x$'])
+  })
+  it('行内代码不跨进下一块;引用里的围栏随引用结束', () => {
+    expect(spansOf('P `\n# $\\{x}$\n`')).toEqual(['$\\{x}$'])
+    expect(spansOf('> ```\n> x\n\n$\\{x}$')).toEqual(['$\\{x}$'])
+    expect(spansOf('> a `x\n> $y$` b')).toEqual([])
+  })
+})
+
+// F03/F04(Obsidian 手感对齐):代码 / 链接地址里的 `\_` `\{` 曾被写侧当公式反转义删掉,且第二轮保持损坏。
+describe('代码与链接地址里的反斜杠逐字(不被公式反转义误删)', () => {
+  it('写侧:代码 / 地址里的反斜杠不动', () => {
+    for (const md of [
+      'before `$a\\_b$ and $\\{x\\}$` after\n',
+      '````md\n```\n$a\\_b$ \\{x\\}\n```\n````\n',
+      '~~~\n$a\\_b$ \\{x\\}$\n~~~\n',
+      'para\n\n    $a\\_b$ \\{x\\}$\n',
+      '[l](http://x/$a\\_b$) 与 $x$\n',
+    ]) expect(unescapeMathSource(md)).toBe(md)
+  })
+  it('写侧:同一段里代码之外的真公式照旧反转义', () => {
+    expect(unescapeMathSource('`$a\\_b$` 与 $c\\_d$\n')).toBe('`$a\\_b$` 与 $c_d$\n')
+  })
+  it.each([
+    ['行内代码里的公式样文字(实测 F12)', 'before `$a\\_b$ and $\\{x\\}$` after\n'],
+    ['双反引号行内代码', 'x ``a $b\\_c$ ` d$`` 与 $\\{y\\}$\n'],
+    ['四反引号围栏里包三反引号', '````md\n```\n$a\\_b$ \\{x\\}\n```\n````\n'],
+    ['行内代码里的单个 `$` 挨着公式', '用`$`包裹公式,例如$\\{a,b\\}$\n'],
+    ['行内代码里的 $HOME 挨着公式', '先设置`$HOME`,再看集合$\\{a,b\\}$\n'],
+    ['链接地址里的 `$` 挨着公式', '[文档](http://x/?$top=1)里$\\{a\\}$\n'],
+    ['转义的反斜杠后面紧跟行内代码', 'P\n\n\\{$\\\\`x$`\n'],
+    ['公式里的尖括号自动链接(序列化器翻倍反斜杠,不许越存越多)', '$<ab:x\\{y\\}>$\n'],
+  ])('端到端逐字:%s', async (_label, md) => {
+    const once = await roundTrip(md)
+    expect(once).toBe(md)
+    expect(await roundTrip(once)).toBe(md)
+  })
+  // 块结构本身会规范化(补空行 / 补闭栏,既定行为),这里只钉公式里的 `\\` 不丢、此后逐字。
+  it.each([
+    ['反引号不跨进下一块的标题', 'P `\n# $\\\\{x}$\n`\n'],
+    ['引用里未闭合的围栏随引用结束', '> ```\n> x\n\n$\\\\{x}$\n'],
+  ])('块边界:%s', async (_label, md) => {
+    const seq = await saves(md)
+    for (const x of seq.slice(1)) expect(x).toContain('$\\\\{x}$')
+    expectStable(seq)
+  })
+  it('段首敲一个字:行内代码里的反斜杠不丢(实测 F12)', async () => {
+    const b = await bootEditor('before `$a\\_b$ and $\\{x\\}$` after\n')
+    try {
+      b.view.dispatch(b.view.state.tr.insertText('Z', 3))
+      expect(b.md()).toBe('beZfore `$a\\_b$ and $\\{x\\}$` after\n')
+    } finally { await b.destroy() }
   })
 })
 
@@ -199,6 +271,23 @@ describe('公式反斜杠:重开再存不增长(R-01 返修)', () => {
     }
     expect(bad).toEqual([])
   }, 120_000)
+
+  // F03/F04:代码 / 围栏 / 链接地址的排除域进了 mdMathSpans 之后,两侧照样同一口径(片段表偏向反引号与地址)。
+  it('种子 fuzz(代码与地址):三轮存盘稳定、反斜杠不增', async () => {
+    let seed = 4242
+    const rnd = (n: number): number => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed % n }
+    const FRAG = ['$', '$', '$', '`', '``', '`$a\\_b$`', '``x`$``', '\\`', '\n```\n', '\n~~~~\n', '\n\n    ', '[t](http://a/$b)', '<http://q/$>', '](', '\\{', '\\_', '\\\\', '\\$', 'x', 'y', ' ', ' ', '\n', '\n\n', '中文']
+    const bad: string[][] = []
+    for (let t = 0; t < 300; t++) {
+      let src = 'P'
+      const k = 3 + rnd(12)
+      for (let i = 0; i < k; i++) src += FRAG[rnd(FRAG.length)]
+      const seq = await saves(src + '\n')
+      const rising = seq.slice(2).some((x, i) => backslashes(x) > backslashes(seq[i + 1]))
+      if (rising || seq[2] !== seq[1] || seq[3] !== seq[2]) bad.push(seq)
+    }
+    expect(bad).toEqual([])
+  }, 180_000)
 })
 
 describe('切块 / 剪贴板结构化复制(normalizeFragmentMd)', () => {
