@@ -11,7 +11,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useShallow } from 'zustand/react/shallow'
-import { OverlayAt, accountMenuRows, openPanel, nativeSheetPresenter, runNativeSheetMenu, type Droplet, type SheetMenuItem, type SheetMenuSection } from '@lcl/engine'
+import { OverlayAt, accountMenuRows, openPanel, nativeSheetPresenter, runNativeSheetMenu, zoomOf, type Droplet, type SheetMenuItem, type SheetMenuSection } from '@lcl/engine'
 import { LogIn, LogOut, Loader2, Gauge, ChevronDown, ChevronRight, RotateCcw, ExternalLink, Backpack, Gift } from 'lucide-react'
 import type { AuthAccountInfo, AuthStatusInfo } from '../types'
 import { registerMessages, useI18n } from '../i18n'
@@ -25,6 +25,7 @@ import { useApp } from '../stores/appStore'
 import { museAvailable } from '../features/runtime'
 import { presentResetCardCeremony } from './ResetCardCeremony'
 import { usePluginStore } from '../amadeus/plugins/pluginStore'
+import { AccountUnitSection, unitPanelAvailable } from './AccountUnitSection'
 
 registerMessages({
   'sidebar.account.notSignedIn': { zh: '未登录', en: 'Not signed in' },
@@ -429,8 +430,11 @@ export const AccountCard: React.FC<{
   )
 
   const webItems = accountItems(quota, quotaErr)
+  // Unit 段(只在真桌面主窗):面板加宽到 320,整张限高 = 头像上沿往上到窗口顶留 8px(既不出窗口、也不压头像),
+  // 多出来的只滚 Unit 那一段(base.css .account-pop--units)。
+  const units = !!menu && unitPanelAvailable()
   // Keep a single fade target, including rows that mount while the panel is animating.
-  const menuContent = menu && <div>
+  const menuContent = menu && <div className={units ? 'ap-body' : undefined}>
       {/* 头部 = 进「Forsion 云端 → 账号」(资料、会员、安全都在那);没有那几页的宿主只是个标题 */}
       <div
         className={`ap-head${webItems.head ? ' ap-head--link' : ''}`}
@@ -446,6 +450,7 @@ export const AccountCard: React.FC<{
         {loggedIn && <TierBadge tier={auth?.membershipTier} />}
         {webItems.head && <ChevronRight size={13} className="ap-head-go" aria-hidden="true" />}
       </div>
+      {units && <AccountUnitSection onClose={() => setMenu(null)} onToast={onToast} />}
       {!loggedIn && !engineDown && <button className="ap-item" disabled={loggingIn} onClick={() => { setMenu(null); void login() }}>
         <LogIn size={14} /><span>{t('sidebar.account.login')}</span>
       </button>}
@@ -526,7 +531,8 @@ export const AccountCard: React.FC<{
   </div>
   const menuEl = menu ? createPortal(
     <OverlayAt
-      className="account-pop"
+      className={`account-pop${units ? ' account-pop--units' : ''}`}
+      style={units ? { '--ap-max': `${Math.max(0, menu.anchorTop - 8) / zoomOf(document.body)}px` } as React.CSSProperties : undefined}
       innerRef={(el) => { popRef.current = el }}
       x={menu.x}
       y={menu.y}

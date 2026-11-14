@@ -75,7 +75,7 @@ registerMessages({
   'unit.notLoggedIn': { zh: '登录以查看你的其他设备', en: 'Sign in to see your other devices' },
 })
 
-function deviceIcon(u: { icon?: string | null; platform?: string | null }, size = 15): React.ReactNode {
+export function deviceIcon(u: { icon?: string | null; platform?: string | null }, size = 15): React.ReactNode {
   if (u.icon) return <span className="unitsw-emoji" aria-hidden>{u.icon}</span>
   if (u.platform === 'android' || u.platform === 'ios') return <Smartphone size={size} />
   if (u.platform === 'win32' || u.platform === 'linux') return <Monitor size={size} />

@@ -4779,6 +4779,39 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-wrap { top: calc(var(-
 .account-pop .ap-dim { color: var(--text-muted); font-size: var(--ui-font-caption, 11px); }
 /* 菜单里的分组小标题(「切换账号」):灰色小字,不带分隔线,别长得像可点的行(W-01) */
 .account-pop .ap-sec { padding: 6px 9px 2px; color: var(--text-faint); font-size: var(--ui-font-caption, 11px); }
+/* 账号面板上半的 Unit 段(AccountUnitSection,只在真桌面主窗):面板加宽到 320;整张限高 = --ap-max
+   (头像上沿往上到窗口顶留 8px,已按 body zoom 折成局部 px,AccountCard 写在浮层上),
+   多出来的只滚 Unit 列表,账号项不动。行从 .ap-item 派生,不另起一套。 */
+.account-pop.account-pop--units { width: 320px; }
+.account-pop--units > .ap-body {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  max-height: calc(var(--ap-max, 100vh) - 2 * var(--menu-shell-padding) - 2 * var(--border-width));
+  overflow-y: auto; /* 最后一道:连 Unit 列表压到 0 都放不下时整张滚,不出窗口 */
+}
+.account-pop--units > .ap-body > * { flex: none; }
+.account-pop--units > .ap-body > .ap-units {
+  flex: 0 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding-bottom: 4px;
+  margin-bottom: 4px;
+  border-bottom: var(--border-width) solid var(--border);
+}
+.account-pop .ap-units > * { flex: none; }
+.account-pop .ap-units > .ap-units-list { flex: 0 1 auto; min-height: 0; overflow-y: auto; }
+.account-pop .ap-unit-ic { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 14px; color: var(--text-muted); }
+.account-pop .ap-unit-ic .unitsw-emoji { font-size: 13px; }
+.account-pop .ap-unit-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.account-pop .ap-unit-state { flex: none; white-space: nowrap; }
+.account-pop .ap-unit.ap-unit--off { color: var(--text-muted); }
+.account-pop .ap-unit.ap-unit--off .ap-unit-ic { opacity: 0.6; }
+.account-pop .ap-unit-check { color: var(--accent-ink); }
+.account-pop .ap-item svg.ap-unit-check { opacity: 1; }
+.account-pop .ap-unit-fold .ap-unit-name { color: var(--text-muted); }
+.account-pop .ap-unit-note { padding: 2px 9px 4px 31px; color: var(--text-muted); font-size: var(--ui-font-caption, 11px); }
 
 /* ── 文件区:选中 / 拖入目标 / OS 文件悬停 ── */
 .file-row.selected { background: var(--accent-light); }

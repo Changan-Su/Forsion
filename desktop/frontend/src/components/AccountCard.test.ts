@@ -390,3 +390,14 @@ it('desktop / web: no host rows, the popover is exactly the account menu', async
   await tick()
   expect(document.querySelector('.account-pop')!.textContent).not.toContain('Forsion Unit 切换')
 })
+
+it('web entry: the account menu has no Unit section (only real desktop main windows get it)', async () => {
+  window.tangu!.unitPublicEntry = true // 网页主入口:没有 unitsList / unitHostStatus
+  await mount()
+  await click('Alice')
+  await tick()
+  expect(document.querySelector('.account-pop')).toBeTruthy()
+  expect(document.querySelector('[data-testid="account-units"]')).toBeNull()
+  expect(document.querySelector('.account-pop--units')).toBeNull()
+  expect(document.body.textContent).not.toContain('管理 Unit')
+})

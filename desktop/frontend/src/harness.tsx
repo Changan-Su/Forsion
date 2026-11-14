@@ -1012,9 +1012,42 @@ if (new URLSearchParams(location.search).has('dock')) {
       })(),
     }
     w.amadeusSync = { get: async () => ({ state: 'idle', side: 'local' }), onStatus: () => () => {} }
-    void Promise.all([import('./components/UnitSwitcher'), import('./stores/appStore')]).then(([{ UnitSwitcher, UnitRemoteSurface, UnitSettings }, { useApp }]) => {
+    // &unitpanel:再挂账号卡(头像面板上半的 Unit 段,AccountUnitSection;scripts/unit-panel.check.cjs)。
+    // 账号是假的(authStatus 桩,不碰真登录);&many 多塞 18 台在线设备(考「只滚 Unit 段」);
+    // &web = 网页主入口的桥(没有 unitsList / unitHostStatus,带 unitPublicEntry)→ 面板里不许出现 Unit 段;
+    // &dark / &skin=<配色> / &lang=en 拍截图。
+    const panelQ = new URLSearchParams(location.search)
+    const unitPanel = panelQ.has('unitpanel')
+    if (unitPanel) {
+      if (panelQ.has('many')) {
+        for (let i = 1; i <= 18; i++) units.push({ id: `u-extra-${i}`, name: `Studio ${i}`, platform: i % 2 ? 'linux' : 'darwin', icon: null, online: true, lanUrl: null })
+      }
+      const calls: Array<[string, unknown]> = []
+      ;(window as unknown as { __unitUpdates: typeof calls }).__unitUpdates = calls
+      Object.assign(w.tangu!, {
+        authStatus: async () => ({ loggedIn: true, tokenValid: true, cloudUrl: 'https://cloud.test', tokenSource: 'tangu-login', username: 'Lin', nickname: '林一' }),
+        authAccounts: async () => [{ id: 'lin', cloudUrl: 'https://cloud.test', username: 'Lin', active: true }],
+        forsionLogin: async () => { throw new Error('harness') },
+        forsionLogout: async () => ({ ok: true }),
+        accountQuota: async () => ({ status: 200, json: { dailyPercent: 28, weeklyPercent: 28, dailyLimit: 100, weeklyLimit: 500, weeklyResetAt: '2026-11-16' } }),
+        unitsUpdate: async (id: string, patch: unknown) => { calls.push([id, patch]); return { status: 200, json: { ok: true } } },
+      })
+      if (panelQ.has('web')) {
+        delete w.tangu!.unitsList
+        delete w.tangu!.unitHostStatus
+        w.tangu!.unitPublicEntry = true
+      }
+      applyRealTheme(resolveInitialLang(), panelQ.get('skin') || resolveInitialSkin(), panelQ.get('skin') || resolveInitialBg(), panelQ.has('dark') ? 'dark' : 'light')
+      if (panelQ.get('lang') === 'en') setLocaleGlobal('en')
+    }
+    void Promise.all([import('./components/UnitSwitcher'), import('./stores/appStore'), import('./components/AccountCard')]).then(([{ UnitSwitcher, UnitRemoteSurface, UnitSettings, useUnitRemote, runUnitRoute }, { useApp }, { AccountCard }]) => {
       useApp.setState({ desktopConfig: { ...cfg } as never })
       addRibbonIcon({ id: 'rb-unit', side: 'bottom', component: UnitSwitcher })
+      if (unitPanel) {
+        const toasts: string[] = []
+        Object.assign(window as unknown as Record<string, unknown>, { __unitRemote: useUnitRemote, __runUnitRoute: runUnitRoute, __toasts: toasts })
+        addRibbonIcon({ id: 'rb-account', side: 'bottom', pinned: true, component: ({ expanded }: { expanded: boolean }) => <AccountCard compact={!expanded} onToast={(text) => { toasts.push(text) }} /> })
+      }
       // 远程面(设备行「整个主区切过去」)也挂上:裸 harness 无 .shell-work → 组件原地渲染,CSS 退化 fixed 覆盖
       const rsHost = document.createElement('div')
       document.body.appendChild(rsHost)
