@@ -3,7 +3,7 @@
  * harness.html?ribbon&unit&unitpanel(名册 / 探针 / 账号全是桩,不碰真登录、真隧道)。
  *
  * 判据:
- *   A 分组与排序:账号头部 → Unit 段(这台电脑 / 我的设备 / 管理 Unit…)→ 账号项,退出登录是最后一行;面板宽 320
+ *   A 分组与排序(方案图 ②):Unit 段(这台电脑 / 我的设备 / 管理 Unit…)→ 分隔线 → 账号头部 → 账号项,退出登录是最后一行;面板宽 320
  *   B 勾选态:没在看别的设备时「这台电脑」打勾;一行 = 图标 + 名字 + 灰字(在线 · 中转)
  *   C 离线折成「离线 N 台」,点开灰显;手机不列;本机不列
  *   D 点离线行:不切,面板里就地说「那台没开 Forsion」
@@ -164,15 +164,16 @@ async function main() {
       const kids = Array.from(body?.children ?? [])
       const items = Array.from(document.querySelectorAll('.account-pop .ap-item'))
       return {
-        first: kids[0]?.className ?? '', second: kids[1]?.getAttribute('data-testid') ?? '',
+        first: kids[0]?.getAttribute('data-testid') ?? '', second: kids[1]?.className ?? '',
+        divider: (() => { const u = kids[0]; return !!u && parseFloat(getComputedStyle(u).borderBottomWidth) > 0 })(),
         quotaAfter: (() => { const u = kids.findIndex((k) => k.getAttribute('data-testid') === 'account-units'); const q = kids.findIndex((k) => k.textContent.includes('AI 额度')); return q > u && u >= 0 })(),
         last: items[items.length - 1]?.textContent.trim() ?? '',
         width: document.querySelector('.account-pop').getBoundingClientRect().width,
         manageLast: (() => { const box = document.querySelector('[data-testid="account-units"]'); const b = Array.from(box.querySelectorAll('.ap-item')); return b[b.length - 1]?.textContent.trim() })(),
       }
     })
-    check('A 账号头部 → Unit 段 → 账号项(AI 额度在 Unit 段之后),退出登录最后一行',
-      order.first.includes('ap-head') && order.second === 'account-units' && order.quotaAfter && order.last === '退出登录', JSON.stringify(order))
+    check('A Unit 段在最上面 → 分隔线 → 账号头部 → 账号项(AI 额度在 Unit 段之后),退出登录最后一行',
+      order.first === 'account-units' && order.divider && order.second.includes('ap-head') && order.quotaAfter && order.last === '退出登录', JSON.stringify(order))
     check('A 面板宽 320', Math.abs(order.width - 320) < 1, String(order.width))
     check('A Unit 段末行 =「管理 Unit…」', order.manageLast === '管理 Unit…', order.manageLast)
     let rows = await readUnits(page)

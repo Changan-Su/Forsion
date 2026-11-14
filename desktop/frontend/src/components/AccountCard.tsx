@@ -430,11 +430,13 @@ export const AccountCard: React.FC<{
   )
 
   const webItems = accountItems(quota, quotaErr)
-  // Unit 段(只在真桌面主窗):面板加宽到 320,整张限高 = 头像上沿往上到窗口顶留 8px(既不出窗口、也不压头像),
+  // Unit 段(只在真桌面主窗,排在最上面):面板加宽到 320,整张限高 = 头像上沿往上到窗口顶留 8px(既不出窗口、也不压头像),
   // 多出来的只滚 Unit 那一段(base.css .account-pop--units)。
   const units = !!menu && unitPanelAvailable()
   // Keep a single fade target, including rows that mount while the panel is animating.
   const menuContent = menu && <div className={units ? 'ap-body' : undefined}>
+      {/* Unit 段在最上面(方案图 ②):这台电脑 / 我的设备 / 管理 Unit…,分隔线以下才是账号头部和账号项 */}
+      {units && <AccountUnitSection onClose={() => setMenu(null)} onToast={onToast} />}
       {/* 头部 = 进「Forsion 云端 → 账号」(资料、会员、安全都在那);没有那几页的宿主只是个标题 */}
       <div
         className={`ap-head${webItems.head ? ' ap-head--link' : ''}`}
@@ -450,7 +452,6 @@ export const AccountCard: React.FC<{
         {loggedIn && <TierBadge tier={auth?.membershipTier} />}
         {webItems.head && <ChevronRight size={13} className="ap-head-go" aria-hidden="true" />}
       </div>
-      {units && <AccountUnitSection onClose={() => setMenu(null)} onToast={onToast} />}
       {!loggedIn && !engineDown && <button className="ap-item" disabled={loggingIn} onClick={() => { setMenu(null); void login() }}>
         <LogIn size={14} /><span>{t('sidebar.account.login')}</span>
       </button>}
