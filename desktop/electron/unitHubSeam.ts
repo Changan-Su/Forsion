@@ -52,6 +52,18 @@ export function pairingWriters(isCurrent: () => boolean, write: (p: UnitPairing 
   }
 }
 
+/** 本机在名册里的 id(units:hostStatus 的 selfUnitId;渲染层拿它把本机从「我的设备」里滤掉)。
+ *  配对存在 device-secrets.json 里,和 secret 加密在同一条:互联关着时**不去解密**(读 = 可能弹钥匙串,见 refreshUnitHost),
+ *  所以只记这次运行里读到 / 登记到的那份。没读到过 = 不知道(null),渲染层照「不知道」处理、不滤;
+ *  清配对(重新登记)时留着旧值:旧 id 若还在名册里,它也确实是本机留下的。 */
+export function selfUnitIdMemo(): { note(p: UnitPairing | null | undefined): void; get(): string | null } {
+  let id: string | null = null
+  return {
+    note: (p) => { if (p && typeof p.unitId === 'string' && p.unitId) id = p.unitId },
+    get: () => id,
+  }
+}
+
 /** 引擎态 → caps.engine。seeded = 本机项目根种子做完(没做完之前 unitWeb 对远端回 503 ENGINE_NOT_READY,手机上应显示「在启动」)。 */
 export function engineCapsState(i: { agentBackend: boolean; backend: 'stopped' | 'starting' | 'ready' | 'crashed'; seeded: boolean }): EngineCapsState {
   if (!i.agentBackend) return 'external'

@@ -45,7 +45,7 @@ function findChromium() {
 }
 
 const BASE = process.env.HARNESS_URL || 'http://localhost:5173/harness.html'
-const URL = `${BASE}?ribbon&unit`
+const URL = `${BASE}?ribbon&unit&surface=part`
 const SHOT_DIR = process.env.UNITSW_SHOT_DIR || '/tmp'
 
 function ping() {
@@ -217,6 +217,13 @@ async function main() {
     await clickRow('MacBook Air中转')
     await page.waitForFunction(() => document.querySelector('.unitrs-web')?.getAttribute('src') === 'https://cloud.test/api/units/u-mba/proxy/', null, { timeout: 5000 })
     check('点中转行 → 远程面换隧道页(尾斜杠)', true)
+    // 旧形态(UNIT_SURFACE_WHOLE=false,本台架带 &surface=part):本机 Ribbon 留着,点它的视图槽 = 回本机
+    await page.click('.rb-slot[data-id="tA"] .rb-btn')
+    await page.waitForTimeout(120)
+    check('旧形态:点本机 Ribbon 的视图槽 → 远程面收起(回本机)', await page.evaluate(() => getComputedStyle(document.querySelector('.unitrs')).visibility === 'hidden'))
+    await openPage()
+    await clickRow('MacBook Air中转')
+    await page.waitForFunction(() => getComputedStyle(document.querySelector('.unitrs')).visibility === 'visible', null, { timeout: 5000 })
 
     // 右键菜单两项:改图标 / 在系统浏览器打开
     await openPage()
@@ -290,6 +297,46 @@ async function main() {
     check('设备凭据未加密:K5 提示 → 子开关(置灰、显示关)', locked.secBefore && locked.disabled && locked.on === 'false', JSON.stringify(locked))
     await page.waitForTimeout(300)
     await page.screenshot({ path: path.join(SHOT_DIR, 'unit-switcher-remote-locked.png') })
+
+    // ── 整窗形态(缺省 UNIT_SURFACE_WHOLE=true):同一台架不带 &surface=part ──
+    const pw = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1100, height: 720 } })
+    pw.on('pageerror', (e) => console.log('[pageerror]', e.message))
+    await pw.addInitScript(() => localStorage.clear())
+    await pw.goto(`${BASE}?ribbon&unit`, { waitUntil: 'domcontentloaded' })
+    await pw.waitForSelector('.rb-bottom .unitsw-pill', { timeout: 20000 })
+    await pw.evaluate(() => { window.__rb.setState({ expanded: true }) })
+    await pw.click('.unitsw-pill')
+    await pw.waitForSelector('.unitset-page', { timeout: 5000 })
+    await pw.waitForFunction((sel) => Array.from(document.querySelectorAll(sel)).some((r) => r.textContent.includes('MacBook Air中转')), LIST, { timeout: 5000 })
+    await pw.evaluate((sel) => Array.from(document.querySelectorAll(sel)).find((r) => r.textContent.includes('MacBook Air中转')).dispatchEvent(new MouseEvent('click', { bubbles: true })), LIST)
+    await pw.waitForSelector('.unitrs--whole .unitfr-bar', { timeout: 5000 }).catch(() => {})
+    const whole = await pw.evaluate(() => {
+      const rs = document.querySelector('.unitrs--whole')?.getBoundingClientRect()
+      const rb = document.querySelector('.rb').getBoundingClientRect()
+      const pill = document.querySelector('.unitsw-pill').getBoundingClientRect()
+      const hit = document.elementFromPoint(pill.left + pill.width / 2, pill.top + pill.height / 2)
+      const bar = document.querySelector('.unitfr-bar')
+      return {
+        covers: !!rs && rs.left <= rb.left + 0.5 && rs.right >= rb.right && rs.top <= 0.5 && rs.bottom >= innerHeight - 0.5,
+        pillCovered: !!hit?.closest('.unitrs'),
+        barH: bar?.getBoundingClientRect().height ?? 0,
+        barRegion: bar ? getComputedStyle(bar).getPropertyValue('-webkit-app-region') || getComputedStyle(bar).webkitAppRegion : null,
+        pillText: document.querySelector('.unitfr-pill')?.textContent ?? '',
+        webTop: document.querySelector('.unitrs-web')?.getBoundingClientRect().top ?? -1,
+      }
+    })
+    check('整窗形态:远程面盖住整窗含本机 Ribbon(命令区胶囊被盖住),顶上一条 30px 的标题条',
+      whole.covers && whole.pillCovered && Math.abs(whole.barH - 30) < 0.6 && Math.abs(whole.webTop - 30) < 0.6, JSON.stringify(whole))
+    check('整窗形态:标题条中间胶囊 = 名字 · 我的设备 | 回到这台电脑', whole.pillText === '🦊MacBook Air我的设备回到这台电脑', whole.pillText)
+    // 整窗形态不挂「点 Ribbon 视图槽 = 回本机」(Ribbon 被盖着,够不着);合成点击打到被盖住的槽上也不退场
+    await pw.evaluate(() => document.querySelector('.rb-slot[data-id="tA"] .rb-btn').dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    await pw.waitForTimeout(120)
+    check('整窗形态:不挂 Ribbon 视图槽那段监听(远程面还在)', await pw.evaluate(() => getComputedStyle(document.querySelector('.unitrs')).visibility === 'visible'))
+    await pw.click('.unitfr-back')
+    await pw.waitForTimeout(120)
+    const backed = await pw.evaluate(() => ({ hidden: getComputedStyle(document.querySelector('.unitrs')).visibility === 'hidden', alive: !!document.querySelector('.unitrs-web'), pill: document.querySelector('.unitsw-pill .unitsw-name')?.textContent?.trim() }))
+    check('整窗形态:点「回到这台电脑」→ 回本机,webview 保活,胶囊回「本地」', backed.hidden && backed.alive && backed.pill === '本地', JSON.stringify(backed))
+    await pw.close()
   } finally {
     await browser.close()
     if (vite) vite.kill()

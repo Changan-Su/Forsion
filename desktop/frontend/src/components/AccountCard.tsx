@@ -11,7 +11,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useShallow } from 'zustand/react/shallow'
-import { OverlayAt, accountMenuRows, openPanel, nativeSheetPresenter, runNativeSheetMenu, type Droplet, type SheetMenuItem, type SheetMenuSection } from '@lcl/engine'
+import { OverlayAt, accountMenuRows, openPanel, nativeSheetPresenter, runNativeSheetMenu, zoomOf, type Droplet, type SheetMenuItem, type SheetMenuSection } from '@lcl/engine'
 import { LogIn, LogOut, Loader2, Gauge, ChevronDown, ChevronRight, RotateCcw, ExternalLink, Backpack, Gift } from 'lucide-react'
 import type { AuthAccountInfo, AuthStatusInfo } from '../types'
 import { registerMessages, useI18n } from '../i18n'
@@ -25,6 +25,7 @@ import { useApp } from '../stores/appStore'
 import { museAvailable } from '../features/runtime'
 import { presentResetCardCeremony } from './ResetCardCeremony'
 import { usePluginStore } from '../amadeus/plugins/pluginStore'
+import { AccountUnitSection, unitPanelAvailable } from './AccountUnitSection'
 
 registerMessages({
   'sidebar.account.notSignedIn': { zh: '未登录', en: 'Not signed in' },
@@ -202,7 +203,10 @@ export const AccountCard: React.FC<{
   }
 
   // ── 账号菜单(点击头像弹出;portal + OverlayAt,任意外部点击/Esc/失焦关闭) ──
+  /** 这次菜单锚在哪(缺省账号卡;设备页的框里是宿主画的那枚头像,见 accountChip.activate(anchor))。 */
+  const menuAnchorRef = useRef<HTMLElement | null>(null)
   const openMenu = (el: HTMLElement): void => {
+    menuAnchorRef.current = el
     const r = el.getBoundingClientRect()
     setMenu({ x: r.left, y: r.top, anchorTop: r.top })
     setQuotaOpen(false) // 同 09-28 前:每次打开从收起的一行摘要起步
@@ -247,7 +251,7 @@ export const AccountCard: React.FC<{
   }, [menuOpen, auth?.loggedIn, refreshRewards])
   const pour = (el: HTMLElement): void => {
     drop.current?.cancel(); drop.current = null; dropClosing.current = false
-    const anchor = anchorRef.current
+    const anchor = menuAnchorRef.current?.isConnected ? menuAnchorRef.current : anchorRef.current
     const src = anchor?.querySelector<HTMLElement>('.account-avatar') ?? anchor
     if (src) drop.current = openPanel(src, el) // 按动效主题:液滴 / 拉伸 / 淡入微缩
   }
@@ -261,7 +265,7 @@ export const AccountCard: React.FC<{
   useEffect(() => {
     if (!menu) return
     // 按在头像上不算「点别处」:那一下的 click 自己会收(见 activate)
-    const onDown = (e: PointerEvent): void => { if (!(e.target instanceof Node && anchorRef.current?.contains(e.target))) dismissMenu() }
+    const onDown = (e: PointerEvent): void => { if (!(e.target instanceof Node && (anchorRef.current?.contains(e.target) || menuAnchorRef.current?.contains(e.target)))) dismissMenu() }
     const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') dismissMenu() }
     window.addEventListener('pointerdown', onDown)
     window.addEventListener('keydown', onKey)
@@ -397,12 +401,13 @@ export const AccountCard: React.FC<{
     else if (hasAccountPage) openCloudPage('account')
   }
   // 菜单开着时再点头像 = 收起(倒放);正倒放着又点 = 从这一帧掉头、停在打开(同悬浮目录)
-  const activate = (e: React.MouseEvent | React.KeyboardEvent): void => {
-    if (!menu) { activateOn(e.currentTarget as HTMLElement); return }
+  const toggleFrom = (el: HTMLElement): void => {
+    if (!menu) { activateOn(el); return }
     if (dropClosing.current && drop.current?.reopen?.()) dropClosing.current = false
     else if (dropClosing.current && popRef.current) pour(popRef.current)
     else dismissMenu()
   }
+  const activate = (e: React.MouseEvent | React.KeyboardEvent): void => toggleFrom(e.currentTarget as HTMLElement)
   const stateClass = engineDown ? ' engine-down' : expired ? ' expired' : ''
   const subText = engineDown ? t('sidebar.account.engineDown')
     : engineStarting ? t('sidebar.account.engineStarting')
@@ -413,12 +418,12 @@ export const AccountCard: React.FC<{
   const stateLabel = engineDown ? t('sidebar.account.engineDown') : engineStarting ? t('sidebar.account.engineStarting') : expired ? t('sidebar.account.expired') : loggedIn ? display : t('sidebar.account.login')
   const picture = loggedIn && auth?.avatar && !imgError ? auth.avatar : undefined
   const anchorRef = useRef<HTMLElement | null>(null)
-  const activateRef = useRef(activateOn)
-  activateRef.current = activateOn
+  const activateRef = useRef(toggleFrom)
+  activateRef.current = toggleFrom
   useEffect(() => {
     const mine: AccountChip = {
       label: stateLabel, loggedIn, initial, ...(picture ? { avatar: picture } : {}),
-      activate: () => { if (anchorRef.current) activateRef.current(anchorRef.current) },
+      activate: (anchor) => { const el = anchor ?? anchorRef.current; if (el) activateRef.current(el) },
     }
     publishAccountChip(mine)
     return () => { if (accountChip() === mine) publishAccountChip(null) }
@@ -431,8 +436,13 @@ export const AccountCard: React.FC<{
   )
 
   const webItems = accountItems(quota, quotaErr)
+  // Unit 段(只在真桌面主窗,排在最上面):面板加宽到 320,整张限高 = 头像上沿往上到窗口顶留 8px(既不出窗口、也不压头像),
+  // 多出来的只滚 Unit 那一段(base.css .account-pop--units)。
+  const units = !!menu && unitPanelAvailable()
   // Keep a single fade target, including rows that mount while the panel is animating.
-  const menuContent = menu && <div>
+  const menuContent = menu && <div className={units ? 'ap-body' : undefined}>
+      {/* Unit 段在最上面(方案图 ②):这台电脑 / 我的设备 / 管理 Unit…,分隔线以下才是账号头部和账号项 */}
+      {units && <AccountUnitSection onClose={() => setMenu(null)} onToast={onToast} />}
       {/* 头部 = 进「Forsion 云端 → 账号」(资料、会员、安全都在那);没有那几页的宿主只是个标题 */}
       <div
         className={`ap-head${webItems.head ? ' ap-head--link' : ''}`}
@@ -528,7 +538,8 @@ export const AccountCard: React.FC<{
   </div>
   const menuEl = menu ? createPortal(
     <OverlayAt
-      className="account-pop"
+      className={`account-pop${units ? ' account-pop--units' : ''}`}
+      style={units ? { '--ap-max': `${Math.max(0, menu.anchorTop - 8) / zoomOf(document.body)}px` } as React.CSSProperties : undefined}
       innerRef={(el) => { popRef.current = el }}
       x={menu.x}
       y={menu.y}

@@ -56,7 +56,7 @@ import { findGit } from './gitHistory'
 import { downloadUrlFor, installCommandFor, requiredProgram } from './envInstall'
 import { createKeepAwake } from './keepAwake'
 import { createMcpLifecycle, startForsionMcp } from './mcpServer'
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { loadTanguCreds, saveTanguCreds, assertTanguCredsWritable, forsionAccountId, loadAccountCloudSettings, saveAccountCloudSettings } from './forsionAuth'
 import { createAccountCore } from './accountCore'
 import { importMcp, scanAll } from './discovery'
@@ -115,7 +115,7 @@ import { COMPUTER_HISTORY_DESKTOP_CONFIG_FILE } from '../shared/computerHistory'
 // Amadeus Space:vendored 笔记后端(vault IPC + 资产协议)。renderImport 别名后保持 verbatim。
 import { registerIpc as registerAmadeusIpc } from './amadeus/ipc'
 import type { AmadeusSyncFactory } from './amadeus/cloudSeam'
-import { engineCapsState, pairingWriters, type UnitHubFactory, type UnitHubInstance } from './unitHubSeam' // 设备互联云端通道的接缝(Forsion Extend 0.6 起)
+import { engineCapsState, pairingWriters, selfUnitIdMemo, type UnitHubFactory, type UnitHubInstance } from './unitHubSeam' // 设备互联云端通道的接缝(Forsion Extend 0.6 起)
 import { makeCallerHeaders } from './unitCaller'
 import { newPairStore, startUnitWeb, type UnitWebHandle, type PairedDevice, startClipEntrance, CLIP_ENTRANCE_PORTS, type ClipEntranceHandle } from './unitWeb'
 import { createRemoteSessions, lookupRosterUnit, registerRemoteSessionsIpc, REMOTE_SESSIONS_FILE, withRemoteCap } from './remoteSessions' // P1-K4
@@ -146,7 +146,8 @@ import { applyWindowMaterial, parseWindowMaterialRequest } from './windowMateria
 import { tabTitleBarOptions, parseTabTitleBar, watchTabTitleBar } from './tabTitleBar'
 import { createMiniDockMotion, miniDockFrame } from './miniDockMotion'
 import { isForsionUrl, pushDeepLink, drainDeepLinks, filesFromArgv, pushOpenFile, drainOpenFiles } from './deepLink'
-import { createSpaceShortcut, isSpaceId, spaceAppUserModelId, spaceIconFile, spaceShortcutMetaFile, spaceWindowIdFromUrl, spaceWindowLink } from './spaceShortcut'
+import { SPACE_SHORTCUT, createSpaceShortcut, createWindowShortcut, iconPngFromDataUrl, isSpaceId, spaceIconFile, spaceShortcutMetaFile, spaceWindowIdFromUrl, windowShortcutAppUserModelId, windowShortcutLink, type WindowShortcutKind } from './spaceShortcut'
+import { UNIT_SHORTCUT, handleUnitAddToDesktop, isUnitId, parseRosterResponse, parseUnitWindowState, unitWindowIdFromUrl, type RosterRead, type UnitShortcutResult, type UnitWindowEntry } from './unitShortcut'
 
 /** ~/.tangu(与包内 core/tanguHome.ts 同约定;TANGU_HOME 可整体重定向)。 */
 setDevMode(!app.isPackaged) // dev 数据目录 ~/.forsion-dev,与正式版隔离(模块装载即定,先于一切路径解析)
@@ -169,7 +170,7 @@ const themesDir = (): string => join(tanguHomeDir(), 'themes')
 if (!app.requestSingleInstanceLock()) app.exit(0)
 app.on('second-instance', (_e, argv, cwd) => {
   // Space 桌面快捷方式(win/linux 带着 forsion://space/<id>?window=standalone 二启):只开那个 Space 的窗,主窗不出来。
-  if (!argv.some((a) => spaceWindowIdFromUrl(a))) showMainWindow()
+  if (!argv.some((a) => spaceWindowIdFromUrl(a) || unitWindowIdFromUrl(a))) showMainWindow()
   for (const a of argv) if (isForsionUrl(a) && !routeSpaceWindowLink(a)) deliverDeepLink(a) // win/linux:二启的 forsion:// 在 argv 里
   for (const f of filesFromArgv(argv.slice(1), cwd)) deliverOpenFile(f) // win/linux:已开着时双击文件
 })
@@ -184,11 +185,19 @@ let deepLinkReady = false
 // 不进 deep link 队列:那条路会 showMainWindow 并让主窗渲染层切 Space,用户要的恰恰是「不露出 Forsion 本体」。
 // 启动还没走到恢复独立窗那一步(IPC 没注册全、主窗还没建)之前先排着;冷启动因它而起时,主窗建好也不显示(hideMainOnLaunch)。
 const pendingSpaceWindows: string[] = []
+/** 同上,设备快捷方式 forsion://unit/<id>?window=standalone(unitShortcut.ts):直接开那台设备的 Unit 窗。 */
+const pendingUnitWindows: string[] = []
 let spaceWindowsLive = false
 let hideMainOnLaunch = false
 /** 启动以来有没有人明确要过主窗(showMainWindow 置位)。 */
 let mainRequested = false
 function routeSpaceWindowLink(url: string): boolean {
+  const unit = unitWindowIdFromUrl(url)
+  if (unit) {
+    if (!spaceWindowsLive) { if (!pendingUnitWindows.includes(unit)) pendingUnitWindows.push(unit) }
+    else createDetachedWindow({ unit })
+    return true
+  }
   const id = spaceWindowIdFromUrl(url)
   if (!id) return false
   if (!spaceWindowsLive) { if (!pendingSpaceWindows.includes(id)) pendingSpaceWindows.push(id) }
@@ -1076,6 +1085,8 @@ let stopAmadeusSync: (() => Promise<void>) | null = null
 let amadeusSyncFactory: AmadeusSyncFactory | null = null
 let unitHostCloudUrl = DEFAULT_CLOUD_URL
 let unitHostPairing: { unitId: string; secret: string } | null = null
+/** 本机名册 id 的记忆(units:hostStatus.selfUnitId;互联关着时 unitHub.status().unitId 是 null)。 */
+const selfUnitId = selfUnitIdMemo()
 // P1-KF:主进程文案(mt)的界面语言 = 渲染层报来的生效语言(ui:locale),上次的值落 userData/ui-locale.json 供窗口载入前用。
 const uiLocale = createUiLocaleSync({ file: () => join(app.getPath('userData'), UI_LOCALE_FILE), log: (m) => console.log(m) })
 /** 渲染层报来的本机外观(主题色 / 背景色 / 明暗),给已配对的 Forsion Clip 跟随;语言另取 mainLocale()。 */
@@ -1345,6 +1356,7 @@ async function doRefreshUnitHost(): Promise<void> {
   // P1-K5:配对从 device-secrets.json 读,只在互联开着时读(读 = 可能解密 = macOS 可能弹钥匙串)。
   const pairing: deviceSecrets.PairingRead = stored.unitHostEnabled ? await deviceSecrets.unitPairing() : { state: 'ok', value: null }
   unitHostPairing = pairing.state === 'ok' ? pairing.value : null
+  selfUnitId.note(unitHostPairing)
   if (unitHub) { unitHub.stop(); unitHub = null } // stop() 也让 caps 上报器停报(onChannelDown)
   if (unitWeb) { const w = unitWeb; unitWeb = null; await w.close() } // 必须等旧服务真放掉端口,否则新起撞自己
   if (unitDoorbell) { const d = unitDoorbell; unitDoorbell = null; await d.close() }
@@ -1532,7 +1544,7 @@ async function doRefreshUnitHost(): Promise<void> {
     getPairing: () => unitHostPairing,
     // 入册回包到达时这个通道已被 refreshUnitHost 换掉(停用 / 换账号):旧那一轮的配对不许落盘(Codex 评审 P1)。
     // 残余窗口(检查通过后才换号)由通道 403/404 → clearPairing → 重新入册自愈。
-    ...pairingWriters(() => unitHub === hub, async (p) => { unitHostPairing = p; await deviceSecrets.setUnitPairing(p) }),
+    ...pairingWriters(() => unitHub === hub, async (p) => { unitHostPairing = p; selfUnitId.note(p); await deviceSecrets.setUnitPairing(p) }),
     // caps 上报器每次现算(通道 ready 之后报一次,backend.onStatus / 种子做完再报变化)
     engineCaps: () => engineCapsState({ agentBackend: PRODUCT.agentBackend, backend: backend.getStatus().state, seeded: unitSessionRootsSource().seeded() }),
     log: (m) => console.log(m),
@@ -1984,6 +1996,51 @@ function removeDetachedState(id: string): void {
   scheduleSaveDetachedState()
 }
 
+// Unit 窗(一台设备一扇,id = un_<设备 id>)的重启恢复单独存一份:只有设备 id + 位置大小(unitShortcut.parseUnitWindowState)。
+// 读坏了 = 不知道:这次运行不写回,免得把上次的清单覆盖成空的。
+let persistedUnitWindows: UnitWindowEntry[] = []
+let unitWindowStateWritable = false
+const unitWindowStatePath = (): string => join(app.getPath('userData'), 'unit-windows.json')
+async function loadUnitWindowState(): Promise<void> {
+  let raw: string
+  try { raw = await readFile(unitWindowStatePath(), 'utf8') } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') unitWindowStateWritable = true
+    return
+  }
+  const parsed = parseUnitWindowState(raw)
+  if (!parsed) { console.warn('[win] unit-windows.json unreadable; not restoring and not overwriting it this run'); return }
+  persistedUnitWindows = parsed.entries
+  // 有不认识的条目:合法的照样恢复,但这次运行不写回(否则就把那份文件覆盖了)
+  unitWindowStateWritable = parsed.clean
+  if (!parsed.clean) console.warn('[win] unit-windows.json has entries this version does not recognise; restoring the valid ones, not overwriting it this run')
+}
+let saveUnitWindowsTimer: NodeJS.Timeout | null = null
+function saveUnitWindowState(): void {
+  if (saveUnitWindowsTimer) clearTimeout(saveUnitWindowsTimer)
+  saveUnitWindowsTimer = null
+  if (!unitWindowStateWritable) return
+  const file = unitWindowStatePath(), tmp = `${file}.${process.pid}.tmp`
+  try {
+    writeFileSync(tmp, JSON.stringify(persistedUnitWindows), { encoding: 'utf8', mode: 0o600 })
+    renameSync(tmp, file)
+  } catch (error) {
+    try { rmSync(tmp, { force: true }) } catch { /* best effort */ }
+    console.error('[win] could not save unit window state:', error)
+  }
+}
+function upsertUnitWindow(unit: string, bounds: Electron.Rectangle): void {
+  const i = persistedUnitWindows.findIndex((x) => x.unit === unit)
+  if (i >= 0) persistedUnitWindows[i].bounds = bounds
+  else persistedUnitWindows.push({ unit, bounds })
+  if (saveUnitWindowsTimer) clearTimeout(saveUnitWindowsTimer)
+  saveUnitWindowsTimer = setTimeout(saveUnitWindowState, 400)
+}
+function removeUnitWindow(unit: string): void {
+  persistedUnitWindows = persistedUnitWindows.filter((x) => x.unit !== unit)
+  if (saveUnitWindowsTimer) clearTimeout(saveUnitWindowsTimer)
+  saveUnitWindowsTimer = setTimeout(saveUnitWindowState, 400)
+}
+
 function nextDetachedId(): string { detachedSeq += 1; return `d${Date.now().toString(36)}_${detachedSeq}` }
 
 /** Space id 的形状(同 shared/spaceAppearance 的 ID):进 URL 参数与布局键之前先过一遍。 */
@@ -1991,21 +2048,24 @@ const SPACE_ID = /^[A-Za-z0-9._-]{1,128}$/
 
 /** space = 把整个 Space 开在这扇窗里(渲染层据 ?space= 进入该 Space 并锁在里面)。一个 Space 一扇:id 由 Space id 定,
  *  已开着就叫到前面;布局键跟着 id 走,所以关了再开还是这扇窗上次的样子。 */
-function createDetachedWindow(opts: { id?: string; views?: ViewDesc[]; bounds?: Partial<Electron.Rectangle>; space?: string }): string {
-  const space = opts.space
-  const id = opts.id || (space ? `sp_${space}` : nextDetachedId())
+function createDetachedWindow(opts: { id?: string; views?: ViewDesc[]; bounds?: Partial<Electron.Rectangle>; space?: string; unit?: string }): string {
+  // unit = 设备的 Unit 窗(渲染层据 ?unit= 只画设备页的框,UnitWindowRoot):一台设备一扇,id = un_<设备 id>,不进独立窗清单。
+  const unit = !opts.space && isUnitId(opts.unit) ? opts.unit : undefined
+  const space = unit ? undefined : opts.space
+  const id = unit ? `un_${unit}` : opts.id || (space ? `sp_${space}` : nextDetachedId())
   const open = detachedWindows.get(id)
   if (open && !open.isDestroyed()) {
     // 先开着窗、后加的快捷方式:从快捷方式再叫它时补上任务栏身份(Codex 评审)。
     if (space && process.platform === 'win32') applySpaceTaskbarIdentity(open, space)
+    if (unit && process.platform === 'win32') applyShortcutTaskbarIdentity(open, UNIT_SHORTCUT, unit)
     if (open.isMinimized()) open.restore()
     if (readyDetachedWindows.has(open)) present(open)
     return id
   }
   if (opts.views?.length) pendingDetachedViews.set(id, opts.views)
   const win = new BrowserWindow({
-    width: opts.bounds?.width ?? (space ? 1100 : 900),
-    height: opts.bounds?.height ?? (space ? 760 : 680),
+    width: opts.bounds?.width ?? (space || unit ? 1100 : 900),
+    height: opts.bounds?.height ?? (space || unit ? 760 : 680),
     x: opts.bounds?.x,
     y: opts.bounds?.y,
     minWidth: 480,
@@ -2020,6 +2080,7 @@ function createDetachedWindow(opts: { id?: string; views?: ViewDesc[]; bounds?: 
   watchTabTitleBar(win)
   sinkForHarness(win)
   if (space && process.platform === 'win32') applySpaceTaskbarIdentity(win, space)
+  if (unit && process.platform === 'win32') applyShortcutTaskbarIdentity(win, UNIT_SHORTCUT, unit)
   win.once('ready-to-show', () => {
     if (win.isDestroyed()) return
     if (process.platform === 'win32' && opts.bounds) {
@@ -2044,49 +2105,79 @@ function createDetachedWindow(opts: { id?: string; views?: ViewDesc[]; bounds?: 
   win.webContents.setWindowOpenHandler(openUrlHandler(win.webContents))
   hardenNav(win.webContents)
   let closing = false
-  const persist = (): void => { if (!closing && !win.isDestroyed()) upsertDetachedBounds(id, win.getBounds()) }
+  const persist = (): void => {
+    if (closing || win.isDestroyed()) return
+    if (unit) upsertUnitWindow(unit, win.getBounds())
+    else upsertDetachedBounds(id, win.getBounds())
+  }
   // move/resize cover programmatic bounds changes too; Windows resized fires only for a manual resize.
   win.on('move', persist)
   win.on('resize', persist)
+  const forget = (): void => { if (unit) removeUnitWindow(unit); else removeDetachedState(id) }
   win.on('close', () => {
     closing = true
-    if (!isQuitting) removeDetachedState(id) // Record the close intent before a subsequent app quit.
+    if (!isQuitting) forget() // Record the close intent before a subsequent app quit.
   })
   win.on('closed', () => {
     console.log('[win] detached closed', id)
     detachedWindows.delete(id)
     pendingDetachedViews.delete(id)
-    if (!isQuitting) removeDetachedState(id) // Also handles webContents being closed directly by a harness.
+    if (!isQuitting) forget() // Also handles webContents being closed directly by a harness.
   })
-  upsertDetachedBounds(id, win.getBounds(), space) // 立即登记(拖出后崩溃也能恢复)
-  console.log('[win] detached open', id, space ? `space=${space}` : `views=${opts.views?.map((v) => v.type).join(',')}`)
-  loadRendererWith(win, { window: 'detached', id, ui: 'desktop', ...(space ? { space } : {}) })
+  if (unit) upsertUnitWindow(unit, win.getBounds())
+  else upsertDetachedBounds(id, win.getBounds(), space) // 立即登记(拖出后崩溃也能恢复)
+  console.log('[win] detached open', id, unit ? `unit=${unit}` : space ? `space=${space}` : `views=${opts.views?.map((v) => v.type).join(',')}`)
+  loadRendererWith(win, { window: 'detached', id, ui: 'desktop', ...(space ? { space } : {}), ...(unit ? { unit } : {}) })
   return id
 }
 
 /** Space 快捷方式的图标 / 名字存放处(userData,随安装走;dev 是 -dev 那份)。 */
 const spaceShortcutDir = (): string => join(app.getPath('userData'), 'space-shortcuts')
+/** 设备快捷方式的那份:和 Space 分开放 —— 文件名只按 id 算,Space id 和设备 id 可能长得一样。 */
+const unitShortcutDir = (): string => join(app.getPath('userData'), 'unit-shortcuts')
+
+/** Extend 登记的 units:list 处理器(名册住在 Extend)。主进程校验「添加到桌面」要现读一次名册;没装 Extend = null。 */
+let unitsListHandler: ((e: Electron.IpcMainInvokeEvent, ...args: any[]) => unknown) | null = null
+/** 以这次 IPC 的发送方身份现读名册(Extend 自己验发送方)。读不到 = 不知道,不是空名册。 */
+async function readUnitRoster(e: Electron.IpcMainInvokeEvent): Promise<RosterRead> {
+  if (!unitsListHandler) return { ok: false, code: 'roster_unavailable', detail: 'no roster bridge' }
+  return parseRosterResponse(await unitsListHandler(e))
+}
+
+/** 渲染层画好的 PNG 图标 → 按尺寸缩放的取图函数(nativeImage);没有 / 不合格就 undefined(快捷方式照建,只是没自定义图标)。 */
+function shortcutIconSource(raw: unknown): ((size: number) => Buffer | undefined) | undefined {
+  const buf = iconPngFromDataUrl(raw)
+  const src = buf ? nativeImage.createFromBuffer(buf) : null
+  return src && !src.isEmpty() ? (size: number): Buffer | undefined => src.resize({ width: size, height: size, quality: 'best' }).toPNG() : undefined
+}
 
 /** Windows:给加过桌面快捷方式的 Space 窗换上它自己的任务栏身份 —— 与 .lnk 同一个 AppUserModelID,任务栏上单独一格、
- *  显示 Space 图标、固定到任务栏后点开还是这个 Space 窗。没加过快捷方式的 Space 窗照旧归在 Forsion 那一格里。 */
+ *  显示 Space 图标、固定到任务栏后点开还是这个 Space 窗。没加过快捷方式的 Space 窗照旧归在 Forsion 那一格里。
+ *  Unit 窗同一套(UNIT_SHORTCUT,图标 / 名字记录在 unit-shortcuts)。 */
 function applySpaceTaskbarIdentity(win: BrowserWindow, space: string): void {
+  applyShortcutTaskbarIdentity(win, SPACE_SHORTCUT, space)
+}
+function applyShortcutTaskbarIdentity(win: BrowserWindow, kind: WindowShortcutKind, id: string): void {
+  const dir = kind === UNIT_SHORTCUT ? unitShortcutDir() : spaceShortcutDir()
   let name: unknown
-  try { name = JSON.parse(readFileSync(spaceShortcutMetaFile(spaceShortcutDir(), space), 'utf8'))?.name } catch { return }
+  try { name = JSON.parse(readFileSync(spaceShortcutMetaFile(dir, id), 'utf8'))?.name } catch { return }
   if (typeof name !== 'string' || !name) return
-  const ico = spaceIconFile(spaceShortcutDir(), space, 'win32')
+  const ico = spaceIconFile(dir, id, 'win32', kind)
   const hasIcon = !!ico && existsSync(ico)
   try {
     win.setAppDetails({
-      appId: spaceAppUserModelId(space),
-      relaunchCommand: `"${process.execPath}" "${spaceWindowLink(space)}"`,
+      appId: windowShortcutAppUserModelId(kind, id),
+      relaunchCommand: `"${process.execPath}" "${windowShortcutLink(kind, id)}"`,
       relaunchDisplayName: name,
       ...(hasIcon && ico ? { appIconPath: ico, appIconIndex: 0 } : {}),
     })
     if (hasIcon && ico) win.setIcon(ico)
-  } catch (e) { console.warn('[win] space taskbar identity failed:', e) }
+  } catch (e) { console.warn('[win] shortcut taskbar identity failed:', e) }
 }
 
 async function restoreDetachedWindows(): Promise<void> {
+  await loadUnitWindowState()
+  for (const { unit, bounds } of [...persistedUnitWindows]) createDetachedWindow({ unit, bounds })
   await loadDetachedState()
   for (const { id, bounds, space } of [...persistedDetached]) {
     createDetachedWindow({ id, bounds, space: typeof space === 'string' && SPACE_ID.test(space) ? space : undefined })
@@ -3288,7 +3379,7 @@ app.whenReady().then(async () => {
         const creds = loadTanguCreds()
         return { base: (stored.cloudUrl || creds.cloudUrl || DEFAULT_CLOUD_URL).replace(/\/+$/, ''), token: creds.token || '' }
       },
-      handle: (channel, fn) => { ipcMain.handle(channel, fn); cloudChannels.add(channel) },
+      handle: (channel, fn) => { ipcMain.handle(channel, fn); cloudChannels.add(channel); if (channel === 'units:list') unitsListHandler = fn },
       openExternal: (url) => shell.openExternal(url),
       isTrustedSender,
       log: (m) => console.log(m),
@@ -3354,7 +3445,7 @@ app.whenReady().then(async () => {
     initBundleSwitches(Array.isArray(off) ? off.filter((x): x is string => typeof x === 'string') : [])
     for (const s of bundleSources) if (s.desktop && bundleOff(s.id)) console.log(`[cloud-host] ${s.id} 已在插件页停用,不装载主进程半身`)
     const loaded = await loadBuiltinDesktopEntries({ pluginsRoot: join(forsionHomeDir(), 'plugins'), sources: bundleSources.filter((s) => !bundleOff(s.id)), appVersion: app.getVersion(), host, tempRoot: app.getPath('userData') })
-    if (!loaded.includes('forsion-extend')) cloudChannels.clear()
+    if (!loaded.includes('forsion-extend')) { cloudChannels.clear(); unitsListHandler = null }
   }
   ipcMain.on('cloud:present', (e) => { e.returnValue = [...cloudChannels] })
   // 插件页拨带主进程半身的内置包(Forsion Extend):只改下次开机装不装,回「是否待重启」。别的 id 一律拒(开关名单不收杂项)。
@@ -3680,6 +3771,8 @@ app.whenReady().then(async () => {
   })
   ipcMain.handle('units:hostStatus', () => ({
     ...(unitHub ? unitHub.status() : { running: false, connected: false, unitId: null, lastError: null }),
+    // 新增字段,不改 unitId 的语义:互联关着也尽量认得出本机(这次运行里读到过配对才有;没有 = 不知道)
+    selfUnitId: unitHub?.status().unitId ?? selfUnitId.get(),
     webPort: unitWeb?.port ?? null,
     lanUrl: unitLanUrl(),
   }))
@@ -4978,15 +5071,7 @@ app.whenReady().then(async () => {
     const input = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
     if (!isSpaceId(input.id)) return { ok: false, code: 'not_found' }
     const text = (v: unknown, max: number): string => (typeof v === 'string' ? v.slice(0, max) : '')
-    const iconUrl = text(input.iconPng, 8 * 1024 * 1024)
-    // 解码前先读 PNG 头里的宽高:压缩后 1 MB 的图可以解出上 GB 的像素,主进程会被拖死(Codex 评审)。渲染层只画 1024。
-    const iconBuf = iconUrl.startsWith('data:image/png;base64,') ? Buffer.from(iconUrl.slice('data:image/png;base64,'.length), 'base64') : null
-    const sane = !!iconBuf && iconBuf.length > 24 && iconBuf.readUInt32BE(0) === 0x89504e47 && iconBuf.toString('ascii', 12, 16) === 'IHDR'
-      && iconBuf.readUInt32BE(16) <= 2048 && iconBuf.readUInt32BE(20) <= 2048
-    const src = sane && iconBuf ? nativeImage.createFromBuffer(iconBuf) : null
-    const iconPng = src && !src.isEmpty()
-      ? (size: number): Buffer | undefined => src.resize({ width: size, height: size, quality: 'best' }).toPNG()
-      : undefined
+    const iconPng = shortcutIconSource(input.iconPng)
     const result = await createSpaceShortcut({ id: input.id, name: text(input.name, 200) }, {
       isPackaged: app.isPackaged, desktopDir: app.getPath('desktop'), execPath: process.execPath,
       appImage: process.env.APPIMAGE, fallbackName: text(input.fallbackName, 200),
@@ -4996,6 +5081,39 @@ app.whenReady().then(async () => {
     // 这个 Space 的窗此刻开着的话,当场换上任务栏身份(Windows)。
     const live = detachedWindows.get(`sp_${input.id}`)
     if (result.ok && live && !live.isDestroyed() && process.platform === 'win32') applySpaceTaskbarIdentity(live, input.id)
+    return result
+  })
+  // 设备「添加到桌面」(账号面板 Unit 段的右键)。渲染层只给:设备 id、名字洗空时的本地化兜底名、画好的图标;
+  // id 过正则且必须在此刻读到的名册里,**名字取名册的**(unitShortcut.resolveUnitShortcutTarget)。快捷方式里只有 id。
+  // 设备的 Unit 窗:账号面板 Unit 段的「在新窗口打开」(只主窗)。一台设备一扇,再开 = 叫到前面;离线 / 不在名册由窗里自己画。
+  ipcMain.handle('units:openWindow', (e, raw: unknown): { ok: boolean } => {
+    if (!isTrustedSender(e) || e.sender !== mainWindow?.webContents || !isUnitId(raw)) return { ok: false }
+    createDetachedWindow({ unit: raw })
+    return { ok: true }
+  })
+  // Unit 窗里的「打开 Forsion」(没登录 / 设备不在名下):把主窗叫出来,不带参数。
+  ipcMain.on('units:showMain', (e) => { if (isTrustedSender(e)) showMainWindow() })
+  ipcMain.handle('units:addToDesktop', async (e, raw: unknown): Promise<UnitShortcutResult> => {
+    const input = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
+    const result = await handleUnitAddToDesktop(raw, {
+      trusted: isTrustedSender(e) && e.sender === mainWindow?.webContents,
+      // 账号身份(同 forsionAccountId);令牌不是 JWT 形状解不出用户时,退回按令牌本身认(登出 = 没令牌 = null)
+      accountKey: () => {
+        const c = loadTanguCreds()
+        const token = c.token || ''
+        return forsionAccountId(c.cloudUrl || '', token) ?? (token ? `token:${createHash('sha256').update(token).digest('hex')}` : null)
+      },
+      readRoster: () => readUnitRoster(e),
+      create: (unit, stillCurrent) => createWindowShortcut(UNIT_SHORTCUT, { id: unit.id, name: unit.name }, {
+        isPackaged: app.isPackaged, desktopDir: app.getPath('desktop'), execPath: process.execPath,
+        appImage: process.env.APPIMAGE, fallbackName: typeof input.fallbackName === 'string' ? input.fallbackName.slice(0, 200) : '',
+        iconDir: unitShortcutDir(), iconPng: shortcutIconSource(input.iconPng), stillCurrent,
+        writeShortcutLink: process.platform === 'win32' ? (p, o) => shell.writeShortcutLink(p, 'create', o) : undefined,
+      }),
+    })
+    const id = typeof input.id === 'string' ? input.id : ''
+    const live = result.ok ? detachedWindows.get(`un_${id}`) : undefined
+    if (live && !live.isDestroyed() && process.platform === 'win32') applyShortcutTaskbarIdentity(live, UNIT_SHORTCUT, id)
     return result
   })
   // invoke:结果交回调用方(满了由它提示用户,不静默失败)。
@@ -5332,7 +5450,7 @@ app.whenReady().then(async () => {
     app.on('browser-window-focus', (_e, w) => { if (w !== autoMiniWindow) lastFocusedWindow = w; miniAutoPanel?.refresh() })
   }
   startupWindowGate = false
-  hideMainOnLaunch = pendingSpaceWindows.length > 0 && !mainRequested
+  hideMainOnLaunch = (pendingSpaceWindows.length > 0 || pendingUnitWindows.length > 0) && !mainRequested
   createWindow()
   if (!SANDBOX) restoreMiniWindows()
   if (SANDBOX) startSandboxChild(SANDBOX, { getWindow: () => mainWindow, quit: () => { isQuitting = true; app.quit() }, log: (m) => console.log(m) })
@@ -5341,6 +5459,7 @@ app.whenReady().then(async () => {
   void restoreDetachedWindows().catch((e) => console.error('[win] restore detached failed:', e)).finally(() => {
     spaceWindowsLive = true
     for (const id of pendingSpaceWindows.splice(0)) createDetachedWindow({ space: id })
+    for (const unit of pendingUnitWindows.splice(0)) createDetachedWindow({ unit })
   })
   // 系统托盘 / mac 菜单栏图标:显示窗口 / 检查更新 / 退出。
   const ch = computerHistory
@@ -5524,6 +5643,12 @@ app.on('before-quit', (e) => {
     if (win && !win.isDestroyed()) state.bounds = win.getBounds()
   }
   saveDetachedState()
+  // Unit 窗清单同理:同步记下此刻的位置大小再存一次(定时保存可能还没赶上;不可写就不写,见 saveUnitWindowState)
+  for (const state of persistedUnitWindows) {
+    const win = detachedWindows.get(`un_${state.unit}`)
+    if (win && !win.isDestroyed()) state.bounds = win.getBounds()
+  }
+  saveUnitWindowState()
   for (const m of minis.values()) rememberMiniLayout(m) // 开着的 Mini 也记下(关窗事件在退出时不一定赶得上落盘)
   saveMiniLayouts()
   saveOpenMiniWindows()

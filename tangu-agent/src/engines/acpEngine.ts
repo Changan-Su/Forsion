@@ -4,7 +4,11 @@
  * 不实现任何 loop/工具——loop/工具/上下文全在外部 agent 自己那边。
  *
  * 流程（见 SDK examples/client.js）：spawn → Writable/Readable.toWeb → ndJsonStream → ClientSideConnection
- *   → initialize → newSession → prompt（阻塞到 turn 结束，期间经 sessionUpdate 回调流式吐内容）。
+ *   → initialize → newSession（或续接上一轮的会话）→ prompt（阻塞到 turn 结束，期间经 sessionUpdate 回调流式吐内容）。
+ * 续接:一 run 一进程,所以「第二句记得第一句」靠引擎自己存的会话 —— 引擎报 `loadSession` 就走 session/load(回放的旧
+ *   消息、以及回包之后到发 prompt 之前补发的通知,都丢掉不上屏),只报 `sessionCapabilities.resume` 的(DSH)走
+ *   session/resume(不回放)。
+ * 模型:引擎给 `models` 的走 session/set_model;把模型和思考档放在 `configOptions` 里的(DSH)走 session/set_config_option。
  * 审批：ACP 的 session/request_permission（Client 回调）→ 复用 Tangu requestApproval（同审批弹窗/HTTP 端点）。
  *
  * 纯翻译逻辑抽成 createAcpClient(无进程)，单测直接喂伪造通知即可，见 acpEngine.test.ts。
@@ -141,6 +145,99 @@ export function mapAcpModels(ms: any): { models: EngineCapabilities['models']; c
   return { models, currentModelId: ms?.currentModelId };
 }
 
+/** configOptions 里读出来的模型与思考档。`*ConfigId` 是改它时要回传的 configId(DSH 是 'model' / 'reasoning_effort')。 */
+export interface AcpConfigSelection {
+  modelConfigId?: string;
+  models: EngineCapabilities['models'];
+  currentModelId?: string;
+  thoughtConfigId?: string;
+  thoughtLevels: NonNullable<EngineCapabilities['thoughtLevels']>;
+  currentThoughtLevel?: string;
+}
+
+/**
+ * ACP `configOptions`(session/new、session/resume、session/set_config_option 的回包里都有)→ 模型清单 + 思考档。
+ * 按 category 认('model' / 'thought_level'),没写 category 的老实现按 id 兜底。选项可以是平的,也可以按组嵌一层
+ * (DSH 按供应商分组);value 是不透明的串(DSH 的模型值是一段 JSON 文本),原样当 id,绝不解析。纯函数,供探测 + 单测。
+ */
+export function mapAcpConfigOptions(configOptions: unknown): AcpConfigSelection {
+  const out: AcpConfigSelection = { models: [], thoughtLevels: [] };
+  if (!Array.isArray(configOptions)) return out;
+  const flat = (options: unknown): Array<{ id: string; name: string; description?: string }> => {
+    const items: Array<{ id: string; name: string; description?: string }> = [];
+    for (const o of Array.isArray(options) ? (options as any[]) : []) {
+      if (Array.isArray(o?.options)) {
+        // 一组:组名补进没有自带说明的选项,下拉里看得出是哪家的
+        for (const item of flat(o.options)) items.push({ ...item, description: item.description ?? (typeof o.name === 'string' && o.name ? o.name : undefined) });
+      } else if (typeof o?.value === 'string' && o.value) {
+        items.push({ id: o.value, name: typeof o.name === 'string' && o.name ? o.name : o.value, description: typeof o.description === 'string' && o.description ? o.description : undefined });
+      }
+    }
+    return items;
+  };
+  const pick = (category: string, fallbackId: string): any =>
+    (configOptions as any[]).find((o) => o?.type === 'select' && o?.category === category)
+    ?? (configOptions as any[]).find((o) => o?.type === 'select' && o?.category == null && o?.id === fallbackId);
+  const model = pick('model', 'model');
+  if (model && typeof model.id === 'string') {
+    out.modelConfigId = model.id;
+    out.models = flat(model.options);
+    if (typeof model.currentValue === 'string') out.currentModelId = model.currentValue;
+  }
+  const thought = pick('thought_level', 'reasoning_effort');
+  if (thought && typeof thought.id === 'string') {
+    out.thoughtConfigId = thought.id;
+    out.thoughtLevels = flat(thought.options);
+    if (typeof thought.currentValue === 'string') out.currentThoughtLevel = thought.currentValue;
+  }
+  return out;
+}
+
+/** JSON-RPC 错误(SDK 原样抛出 { code, message, data })或普通 Error → 一行可读的话。DSH 把真话放在 data.details 里,
+ *  message 只有「Internal error」。 */
+export function acpErrorText(e: any): string {
+  const message = typeof e?.message === 'string' && e.message ? e.message : String(e);
+  const details = typeof e?.data?.details === 'string' ? e.data.details : typeof e?.data === 'string' ? e.data : '';
+  return details && !message.includes(details) ? `${message}: ${details}` : message;
+}
+
+/**
+ * 续接失败是哪一种(只在 session/load、session/resume 被引擎拒绝时问):
+ *   - 'gone'  那个会话在引擎那边没有了(删了、换了目录、重装)。措辞取自实测:DSH 回 -32602「session is not resumable」;
+ *             ACP 规范的「资源不存在」是 -32002,只在报错说的是会话(不是文件 / 目录)时才算。
+ *   - 'busy'  会话还在,但被另一个进程占着(用户自己开着 DSH 界面并点开了这一场)。实测 DSH 回 -32603,
+ *             data.details「… is already owned by an active write handle」。
+ *   - 'other' 其余(超时、进程死了、参数不对……)。
+ * 认不出的一律 'other':宁可照实失败,也不把「不知道」当成「没有了」而悄悄丢掉上文。
+ */
+export function classifyResumeFailure(e: any): 'gone' | 'busy' | 'other' {
+  const text = acpErrorText(e);
+  if (/already owned|active write handle|already active|in use by another/i.test(text)) return 'busy';
+  // 「没有了」只认说的是**会话**的:-32002 在规范里是泛指的「资源不存在」,工作目录 / 文件不在也可能回它(报错文字
+  // 或 data.uri 指着一个路径),那种情况会话本身还好好的 —— 判成 gone 会在 run 上留下「别再找它」的记号,把一场完好的会话丢掉。
+  if (/not resumable|session not found|no such session|unknown session/i.test(text)) return 'gone';
+  const uri = typeof e?.data?.uri === 'string' ? e.data.uri : '';
+  const aboutFiles = /\b(file|director(y|ies)|folder|path|workspace|cwd)\b/i.test(text) || /^(file:|\/|[A-Za-z]:[\\/])/.test(uri);
+  if (aboutFiles) return 'other';
+  if (e?.code === -32002) return 'gone'; // 续接请求里能「不存在」的资源,除了文件 / 目录就是那个会话
+  if (/session/i.test(text) && /does not exist|no longer exists|was deleted/i.test(text)) return 'gone';
+  return 'other';
+}
+
+/**
+ * 走 session/load 的适配器(续接时把历史重放一遍)里,普通对话的续接用真引擎核过的那几家。按握手里报的适配器名认
+ * (和只读模式的核对同一个写法),不按引擎清单里的 id:那个 id 用户可以在 engines.json 里改指到别的命令。
+ * 核的是:重放的旧消息都在 session/load 回包之前到(之后才到的会被当成这一轮的输出发给界面)、一轮中途被杀之后
+ * 那个会话还 load 得回来、历史很长时重放要多久。实测脚本 scripts/engine-resume.check.mjs(真引擎、真模型,本机跑)。
+ * 没核过的(Claude Code)在普通对话里照旧每轮新开一个会话 —— 没核过就打开,坏了是「每场对话的第二句都失败」。
+ */
+const LOAD_RESUME_VERIFIED = new Set(['@agentclientprotocol/codex-acp']);
+
+/** 普通对话里这个引擎会话下一轮能不能接着用:走 session/resume 的(不重放)都算,走 session/load 的只算上面那份名单里的。 */
+export function chatResumeVerified(via: 'load' | 'resume' | undefined, agentName: unknown): boolean {
+  return via === 'resume' || (via === 'load' && typeof agentName === 'string' && LOAD_RESUME_VERIFIED.has(agentName));
+}
+
 /** ACP available_commands_update.availableCommands → Tangu 形状（取 input.hint）。纯函数，供探测 + 单测。 */
 export function mapAcpCommands(availableCommands: any): EngineCapabilities['commands'] {
   return (availableCommands || []).map((c: any) => ({
@@ -173,6 +270,11 @@ export function createAcpClient(
   const toolCalls: ToolCall[] = [];
   const toolResults: any[] = [];
   const toolNames = new Map<string, string>(); // toolCallId -> name（给 tool_result 补名）
+  // toolCallId -> 最新的 rawInput / 标题(审批请求只带 id 时拿来补,见 requestPermission)。**必须跟着 tool_call_update 更新**:
+  // 引擎可以先发一条参数不全(或还是别的参数)的 tool_call,再用 update 改成真正要跑的;卡上要是还显示头一条,
+  // 用户看到的是一条命令、批准的是另一条。
+  const toolInputs = new Map<string, unknown>();
+  const toolTitles = new Map<string, string>();
 
   const client: Client = {
     async sessionUpdate(params: SessionNotification): Promise<void> {
@@ -198,6 +300,8 @@ export function createAcpClient(
         case 'tool_call': {
           const name = u.title || u.kind || 'tool';
           toolNames.set(u.toolCallId, name);
+          if (u.rawInput != null) toolInputs.set(u.toolCallId, u.rawInput);
+          if (typeof u.title === 'string' && u.title) toolTitles.set(u.toolCallId, u.title);
           const args = u.rawInput ? JSON.stringify(u.rawInput) : '{}';
           toolCalls.push({ id: u.toolCallId, type: 'function', function: { name, arguments: args } });
           // source(遥测契约 §7):外部引擎自己的工具名不归 Tangu,按 plugin 记 —— Extend 不外发 plugin 的工具名
@@ -205,6 +309,9 @@ export function createAcpClient(
           break;
         }
         case 'tool_call_update': {
+          // 规范:update 里出现的字段整个替换原值。只更新审批用的这两份;已经发给界面的 tool_call 事件和结果里的工具名不动。
+          if (u.rawInput != null) toolInputs.set(u.toolCallId, u.rawInput);
+          if (typeof u.title === 'string' && u.title) toolTitles.set(u.toolCallId, u.title);
           if (u.status === 'completed' || u.status === 'failed') {
             const name = toolNames.get(u.toolCallId) || '';
             const result = toolUpdateText(u.content);
@@ -233,8 +340,11 @@ export function createAcpClient(
     async requestPermission(params: RequestPermissionRequest): Promise<RequestPermissionResponse> {
       if (ctx.signal.aborted) return { outcome: { outcome: 'cancelled' } };
       const tc: any = params.toolCall;
-      const title = tc?.title || tc?.kind || 'tool';
-      const raw = tc?.rawInput;
+      // 规范里这里的 toolCall 是一条「更新」,可以只带 toolCallId(DSH 就是):标题和参数在它前面那条 tool_call 里。
+      // 不补的话审批卡上只有一个「tool」和空参数,用户不知道自己在批什么。
+      const seenName = tc?.toolCallId ? (toolTitles.get(tc.toolCallId) || toolNames.get(tc.toolCallId)) : undefined;
+      const title = tc?.title || seenName || tc?.kind || 'tool';
+      const raw = tc?.rawInput ?? (tc?.toolCallId ? toolInputs.get(tc.toolCallId) : undefined);
       const preview = `[${engineName}] ${title}${raw ? ' · ' + JSON.stringify(raw).slice(0, 160) : ''}`;
       const synth: ToolCall = {
         id: tc?.toolCallId || 'acp',
@@ -257,6 +367,39 @@ export function createAcpClient(
     client,
     result: () => ({ content, reasoning, toolCalls, toolResults, tokensTotal }),
   };
+}
+
+/** 引擎会话 id → 上一轮那个进程「真的退了」的 promise。一 run 一进程:下一轮要在新进程里续接同一个会话,而上一轮的进程
+ *  被杀之后要过一会儿才放开会话(DSH 的会话写入权按进程持有;SIGTERM 后它先收尾)。紧跟着发的下一句(排队的消息)
+ *  赶在它退之前去续接,会被当成「另一个进程占着」拒掉 —— 所以续接前先等它。 */
+const exitingSessions = new Map<string, Promise<void>>();
+const EXIT_WAIT_MS = 3000; // 收尾是 SIGTERM → 2s → SIGKILL,给够这一段
+
+function trackExit(sessionId: string, child: ChildProcess): void {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  const gone = new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, EXIT_WAIT_MS);
+    timer.unref?.();
+    child.once('exit', () => { clearTimeout(timer); resolve(); });
+  }).finally(() => { if (exitingSessions.get(sessionId) === gone) exitingSessions.delete(sessionId); });
+  exitingSessions.set(sessionId, gone);
+}
+
+/** session/load 回包之后,等引擎补发的通知静下来再发 prompt:LOAD_SETTLE_QUIET_MS 内没有新通知就算静了,最多等
+ *  LOAD_SETTLE_MAX_MS(一直有通知也不无限等)。lastAt() = 最近一条被丢掉的通知的时刻(刚回包时 = 回包的时刻)。
+ *  必须真的让出事件循环:回包和它后面那几条通知常常在同一批管道数据里,而回包之后到发 prompt 之间可以一个真等待都没有
+ *  (记指针是同步写库)—— 不等的话 prompt 先发出去,那几条通知就落在这一轮里了。 */
+const LOAD_SETTLE_QUIET_MS = 120;
+const LOAD_SETTLE_MAX_MS = 1500;
+async function settleAfterLoad(lastAt: () => number, signal: AbortSignal): Promise<void> {
+  const deadline = Date.now() + LOAD_SETTLE_MAX_MS;
+  for (;;) {
+    if (signal.aborted) return;
+    const now = Date.now();
+    const wait = Math.min(lastAt() + LOAD_SETTLE_QUIET_MS - now, deadline - now);
+    if (wait <= 0) return;
+    await new Promise<void>((r) => setTimeout(r, wait));
+  }
 }
 
 export async function runAcpEngine(def: EngineDef, ctx: EngineRunCtx): Promise<EngineResult> {
@@ -284,6 +427,7 @@ export async function runAcpEngine(def: EngineDef, ctx: EngineRunCtx): Promise<E
   child.once('exit', () => { if (killTimer) { clearTimeout(killTimer); killTimer = null; } });
 
   let sessionId = '';
+  let resumable = false;
   const onAbort = (): void => {
     try {
       if (sessionId) void conn.cancel({ sessionId });
@@ -303,9 +447,21 @@ export async function runAcpEngine(def: EngineDef, ctx: EngineRunCtx): Promise<E
     engineIdle = setTimeout(() => { try { onAbort(); } catch { /* ignore */ } }, ENGINE_IDLE_MS);
   };
   // 包一层 ctx:每次事件回灌续命；审批期间停表(审批不经 publish，等用户点批准不能被 idle 误杀)。
+  // 续接走 session/load 时,从发出 load 到发出这一句(prompt)之前,引擎说的都不算这一轮的输出,一律丢掉:
+  //  - 回包之前到的,是它重放的历史;
+  //  - 回包之后紧跟着到的,是它补发的会话状态。实测 Codex 的适配器(2.6.0)每次 load 回包后 1~2 毫秒会补一条
+  //    agent_message_chunk(把 Codex 自己的配置警告当正文发,例如「Warning: clamping SessionEnd hook timeout …」)和一条
+  //    usage_update(上一轮的用量)。回包一到就放开的话,它们成了这一轮回答的开头。
+  // 所以回包之后先等通知静下来(settleAfterLoad),到发 prompt 那一刻才放开。条数只进日志:看得出续接有没有真的走到重放这一步。
   let replaying = false;
+  let loadAnswered = false;
+  let loadMs = 0;
+  const dropped = { replayed: 0, trailing: 0, lastAt: 0 };
   const wrappedCtx: AcpClientCtx = {
-    replaying: () => replaying,
+    replaying: () => {
+      if (replaying) { if (loadAnswered) dropped.trailing += 1; else dropped.replayed += 1; dropped.lastAt = Date.now(); }
+      return replaying;
+    },
     signal: ctx.signal,
     publish: (type, payload) => { armEngineIdle(); ctx.publish(type, payload); },
     requestApproval: async (preview, toolCall) => {
@@ -347,28 +503,92 @@ export async function runAcpEngine(def: EngineDef, ctx: EngineRunCtx): Promise<E
     const codexReadOnly=ctx.readOnly && initialized.agentInfo?.name==='@agentclientprotocol/codex-acp';
     if(ctx.readOnly&&!claudeReadOnly&&!codexReadOnly)throw new Error('Read-only execution is not verified for this ACP adapter');
     const meta=claudeReadOnly?{disableBuiltInTools:true,claudeCode:{options:{strictMcpConfig:true,settingSources:[]}}}:undefined;
+    // 续接:报 loadSession 的引擎(Claude Code / Codex)照旧走 session/load,回放的旧消息丢掉;只报 resume 的(DSH)走
+    // session/resume,它不回放。两样都不报 = 这个引擎每轮都是新会话。
+    const canLoad = !!initialized.agentCapabilities?.loadSession;
+    const canResume = !!(initialized.agentCapabilities as any)?.sessionCapabilities?.resume;
+    const via = canLoad ? 'load' as const : canResume ? 'resume' as const : undefined;
+    const agentName = typeof initialized.agentInfo?.name === 'string' ? initialized.agentInfo.name : undefined;
+    const verifiedForChat = chatResumeVerified(via, agentName);
+    // 普通对话的续接指针是和记它的那家适配器绑在一起的(ctx.resumeFromAgent)。握手报的不是那一家(同一个引擎 id 被改指到了
+    // 别的命令),或者这一家的普通对话续接没核过 → 那个会话 id 对它没有意义:不拿去问,新开一个,和「换了引擎」同样处理。
+    // 拿去问的话,它多半回一个认不出是「没有了」的错,而失败的那一轮不留记号,这场对话从此每一句都失败。
+    let resumeSessionId = ctx.resumeSessionId;
+    if (resumeSessionId && ctx.resumeFromAgent !== undefined && !(verifiedForChat && (ctx.resumeFromAgent === null || ctx.resumeFromAgent === agentName))) {
+      const why = verifiedForChat ? `it was recorded by ${ctx.resumeFromAgent}, this is ${agentName}` : `continuing an ordinary chat is not verified for ${agentName ?? 'this agent'}`;
+      console.log(`[engine:${def.id}] not continuing session ${resumeSessionId}: ${why}; starting a new session`);
+      resumeSessionId = undefined;
+    }
     let s: any;
-    if (ctx.resumeSessionId) {
-      if (!initialized.agentCapabilities?.loadSession) throw new Error('This external engine cannot resume an existing session');
-      replaying = true;
-      try { s = await guard(conn.loadSession({ cwd, mcpServers, _meta:meta, sessionId: ctx.resumeSessionId }), 'loadSession'); }
-      finally { replaying = false; }
-      sessionId = ctx.resumeSessionId;
+    if (resumeSessionId) {
+      await exitingSessions.get(resumeSessionId); // 上一轮的进程还在收尾 → 等它退了再续接(见 exitingSessions)
+      ctx.signal.throwIfAborted();
+      try {
+        if (canLoad) {
+          replaying = true; // 到发 prompt 之前才放开,见上面 replaying 的说明
+          const loadStarted = Date.now();
+          try { s = await guard(conn.loadSession({ cwd, mcpServers, _meta:meta, sessionId: resumeSessionId }), 'loadSession'); }
+          catch (e) {
+            console.log(`[engine:${def.id}] session/load ${resumeSessionId} failed after ${Date.now() - loadStarted}ms, dropped ${dropped.replayed} replayed updates`);
+            throw e;
+          }
+          loadAnswered = true;
+          loadMs = Date.now() - loadStarted;
+          dropped.lastAt = Date.now();
+        } else if (canResume) {
+          s = await guard(conn.unstable_resumeSession({ cwd, mcpServers, _meta:meta, sessionId: resumeSessionId }), 'resumeSession');
+        } else {
+          throw Object.assign(new Error('This external engine cannot resume an existing session'), { resumeUnsupported: true });
+        }
+        sessionId = resumeSessionId;
+      } catch (e: any) {
+        if (ctx.signal.aborted) throw e;
+        // 续接失败一律照实失败:不悄悄换一个新会话丢掉上文,也不回落到别的引擎。「没有了」单独标出来(externalSessionGone),
+        // 调用方据此决定下一次要不要新开(见 agentLoop.externalEngineLoop)。
+        const kind = e?.resumeUnsupported ? 'gone' : classifyResumeFailure(e);
+        if (kind === 'gone') throw Object.assign(new Error(`${def.name} no longer has the earlier session of this conversation (${acpErrorText(e)}).`), { externalSessionGone: true });
+        if (kind === 'busy') throw new Error(`${def.name} has this conversation open in another window or process, so it cannot be continued here. Close it there, then send again. (${acpErrorText(e)})`);
+        if (e instanceof Error) throw e;
+        throw new Error(`${def.name} could not continue the earlier session: ${acpErrorText(e)}`);
+      }
     } else {
       s = await guard(conn.newSession({ cwd, mcpServers, _meta:meta }), 'newSession'); sessionId = s.sessionId;
     }
+    resumable = canLoad || canResume;
+    // 会话一建立就告诉调用方(在 prompt 之前):这一轮中途被停掉 / 崩了,下一轮也接得上。记不下来不拦这一轮。
+    try { await ctx.onSession?.({ id: sessionId, resumable, resumed: !!resumeSessionId, via, verifiedForChat, ...(agentName ? { agent: agentName } : {}) }); }
+    catch (e: any) { console.warn(`[engine] onSession failed: ${e?.message || e}`); }
     if (ctx.readOnly) {
       const mode = s.modes?.availableModes?.find((m: any) => (claudeReadOnly ? m.id==='plan' : m.id==='read-only'));
       if (!mode) throw new Error('This external engine does not advertise a read-only or plan mode');
       await guard(conn.setSessionMode({ sessionId, modeId: mode.id }), 'setSessionMode');
     }
-    // 应用用户为该引擎选的模型(若与当前不同);失败不阻断,用引擎默认继续。
-    if (ctx.engineModelId && ctx.engineModelId !== (s as any).models?.currentModelId) {
+    // 应用用户为该引擎选的模型(若与当前不同);失败不阻断,用引擎当前的继续。
+    // 引擎给 `models` 的走 session/set_model;没有 `models`、模型在 configOptions 里的(DSH)走 session/set_config_option。
+    // 续接的会话记着上次选的模型,所以每轮都对一下「当前值」而不是只在新建时设。
+    // (DSH 实测:换模型会把思考档重置成那个模型的缺省值。这里不碰思考档。)
+    if (ctx.engineModelId) {
+      const sel = mapAcpConfigOptions((s as any)?.configOptions);
       try {
-        await conn.unstable_setSessionModel({ sessionId, modelId: ctx.engineModelId });
+        if (!(s as any)?.models && sel.modelConfigId) {
+          if (ctx.engineModelId !== sel.currentModelId) {
+            // 存着的选择不在这次的清单里(引擎那边换了目录 / 下架)→ 不发,照引擎当前的跑
+            if (!sel.models.some((m) => m.id === ctx.engineModelId)) console.warn(`[engine] model ${ctx.engineModelId} is not offered by ${def.id} any more; keeping ${sel.currentModelId ?? 'the engine default'}`);
+            else await guard(conn.setSessionConfigOption({ sessionId, configId: sel.modelConfigId, value: ctx.engineModelId }), 'setSessionConfigOption');
+          }
+        } else if (ctx.engineModelId !== (s as any)?.models?.currentModelId) {
+          await conn.unstable_setSessionModel({ sessionId, modelId: ctx.engineModelId });
+        }
       } catch (e: any) {
-        console.warn(`[engine] setSessionModel(${ctx.engineModelId}) failed: ${e?.message || e}`);
+        console.warn(`[engine] set model(${ctx.engineModelId}) failed: ${acpErrorText(e)}`);
       }
+    }
+    if (replaying) {
+      await settleAfterLoad(() => dropped.lastAt, ctx.signal);
+      ctx.signal.throwIfAborted();
+      replaying = false;
+      // 续接的每一轮都要付这段重放的时间。重放条数为 0 = 引擎没重放;这一行根本没出现 = 这一轮没走到续接。
+      console.log(`[engine:${def.id}] session/load ${sessionId} took ${loadMs}ms, dropped ${dropped.replayed} replayed updates and ${dropped.trailing} sent after the response`);
     }
     armEngineIdle(); // turn 开始起表
     // prompt 不设握手超时(一轮可以跑很久),但**子进程半路死掉要立刻知道** —— 否则只能等 5 分钟的
@@ -377,20 +597,22 @@ export async function runAcpEngine(def: EngineDef, ctx: EngineRunCtx): Promise<E
       conn.prompt({ sessionId, prompt: [{ type: 'text', text: ctx.message }] }),
       spawnFailed,
     ]);
-    return { ...result(), stopReason: res.stopReason, externalSessionId: initialized.agentCapabilities?.loadSession ? sessionId : undefined };
+    return { ...result(), stopReason: res.stopReason, externalSessionId: resumable ? sessionId : undefined };
   } finally {
     startup.disarm(); // 到此子进程的死活不再是「起不来」:下面 killNow() 是我们自己杀的
     if (engineIdle) clearTimeout(engineIdle);
     ctx.signal.removeEventListener('abort', onAbort);
     killNow();
+    if (resumable && sessionId) trackExit(sessionId, child); // 不在这里等(不拖慢这一轮收尾),下一轮续接前等
   }
 }
 
 /**
- * 懒探测引擎能力:spawn → initialize → newSession(取 models) → 短窗口收一次 available_commands_update → dispose。
+ * 懒探测引擎能力:spawn → initialize → newSession(取 models / configOptions) → 短窗口收一次 available_commands_update → dispose。
  * 不累积正文/不接审批(与 createAcpClient 区分);仅用于 UI 填模型/命令选择器。
+ * opts.reuseSessionId / reuseCwd:只对「会 resume、不会 load」的引擎生效,见函数内注释;回包里的 probeSessionId 由调用方存起来下次传回。
  */
-export async function probeAcpEngine(def: EngineDef): Promise<EngineCapabilities> {
+export async function probeAcpEngine(def: EngineDef, opts?: { reuseSessionId?: string; reuseCwd?: string }): Promise<EngineCapabilities & { probeSessionId?: string }> {
   const child = spawnEngine(def);
   // 原本空 error 处理器吞掉了 Windows 上的 spawn 失败 → initialize 永久 await → /capabilities 永不返回 → UI 卡死。
   const startup = watchEngineStartup(child, def.id, ' (probe)');
@@ -428,11 +650,43 @@ export async function probeAcpEngine(def: EngineDef): Promise<EngineCapabilities
       protocolVersion: PROTOCOL_VERSION,
       clientCapabilities: { fs: { readTextFile: false, writeTextFile: false } },
     }), 'initialize');
-    const s = await guard(conn.newSession({ cwd: process.cwd(), mcpServers: [] }), 'newSession');
-    const { models, currentModelId } = mapAcpModels((s as any).models);
+    const canLoad = !!initialized.agentCapabilities?.loadSession;
+    const sessionCaps = (initialized.agentCapabilities as any)?.sessionCapabilities;
+    const canResume = !!sessionCaps?.resume;
+    // 探测要建一个会话才拿得到模型清单。只会 resume 的引擎(DSH)连没发过话的空会话也存下来(实测:关掉、杀进程后仍在
+    // session/list 里),每探一次留一个,用户自己的 DSH 历史里就会攒一堆空会话 → 这类引擎复用同一个探测会话,
+    // 工作目录也固定(续接要核对工作目录)。上次那个没了 / 被占着就新建一个,由调用方记下新的。
+    const reuse = canResume && !canLoad;
+    const cwd = reuse && opts?.reuseCwd ? opts.reuseCwd : process.cwd();
+    let s: any;
+    let probeSessionId: string | undefined;
+    if (reuse && opts?.reuseSessionId) {
+      try {
+        s = await guard(conn.unstable_resumeSession({ cwd, mcpServers: [], sessionId: opts.reuseSessionId }), 'resumeSession');
+        probeSessionId = opts.reuseSessionId;
+      } catch { s = undefined; }
+    }
+    if (!s) {
+      s = await guard(conn.newSession({ cwd, mcpServers: [] }), 'newSession');
+      if (reuse) probeSessionId = s.sessionId;
+    }
+    const viaModels = mapAcpModels((s as any).models);
+    const sel = mapAcpConfigOptions((s as any).configOptions);
+    // 模型清单:引擎给 `models` 就用它;没有、而 configOptions 里有模型选项(DSH)就用后者。
+    const fromConfig = !viaModels.models.length && sel.models.length > 0;
     // 命令在 newSession 后异步到达;收到即返回,否则 1.5s 超时。
     await Promise.race([commandsReceived, new Promise<void>((r) => setTimeout(r, 1500))]);
-    return { models, currentModelId, commands, loadSession:!!initialized.agentCapabilities?.loadSession, modes:(s as any).modes?.availableModes };
+    // 关掉探测会话再杀进程:让引擎把它落稳,下次才续得上同一个(SDK 0.14 没有 close 的封装,走扩展方法发原名)。
+    if (reuse && sessionCaps?.close && probeSessionId) {
+      await withTimeout(conn.extMethod('session/close', { sessionId: probeSessionId }), 3000, 'closeSession').catch(() => {});
+    }
+    return {
+      models: fromConfig ? sel.models : viaModels.models,
+      currentModelId: fromConfig ? sel.currentModelId : viaModels.currentModelId,
+      commands, loadSession: canLoad, resume: canResume, modes:(s as any).modes?.availableModes,
+      ...(sel.thoughtLevels.length ? { thoughtLevels: sel.thoughtLevels, currentThoughtLevel: sel.currentThoughtLevel } : {}),
+      ...(probeSessionId ? { probeSessionId } : {}),
+    };
   } finally {
     startup.disarm(); // 下面这刀是我们自己捅的,不算「起不来」
     if (process.platform === 'win32') await killProcessTree(child);
