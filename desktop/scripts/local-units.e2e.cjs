@@ -127,7 +127,7 @@ async function main() {
     await page.evaluate(() => { window.__luChanged = 0; window.tangu.localUnits.onChanged(() => { window.__luChanged++ }) })
 
     const snap0 = await lu('list')
-    check('list:默认那台、空名册、开发版缺省父目录在(临时)家目录的 .forsion-dev/units 下', snap0.self.kind === 'default' && snap0.registry === 'ok' && snap0.units.length === 0 && snap0.defaultParent === path.join(FAKE_HOME, '.forsion-dev', 'units'), snap0)
+    check('list:默认那台、空名册、开发版缺省父目录在(临时)家目录的 .forsion-dev-units(不在开发版 home 里面)', snap0.self.kind === 'default' && snap0.registry === 'ok' && snap0.units.length === 0 && snap0.defaultParent === path.join(FAKE_HOME, '.forsion-dev-units'), snap0)
 
     // ── 1 新建 ──
     const made = await lu('create', { name: 'Bench A', icon: '🧪', parentDir: PARENT })
@@ -161,6 +161,8 @@ async function main() {
     check('默认那台面板收到 localUnits:changed(A 起来了)', await until(async () => (await page.evaluate(() => window.__luChanged)) > changedBefore, 10000), await page.evaluate(() => window.__luChanged))
     const rowA = (await lu('list')).units.find((u) => u.id === idA)
     check('list:A 是 running', rowA?.state === 'running', rowA)
+    const rmRunning = await lu('remove', idA)
+    check('A 开着时从列表移除 → io + 说明,名册里还在(装更新前要靠名册关它)', rmRunning.ok === false && rmRunning.code === 'io' && !!rmRunning.message && JSON.parse(fs.readFileSync(REGISTRY, 'utf8')).units.some((u) => u.id === idA), rmRunning)
 
     // ── 4 再开一次 ──
     const again = await lu('open', idA)
