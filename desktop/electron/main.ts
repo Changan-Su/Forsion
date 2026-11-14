@@ -115,7 +115,7 @@ import { COMPUTER_HISTORY_DESKTOP_CONFIG_FILE } from '../shared/computerHistory'
 // Amadeus Space:vendored 笔记后端(vault IPC + 资产协议)。renderImport 别名后保持 verbatim。
 import { registerIpc as registerAmadeusIpc } from './amadeus/ipc'
 import type { AmadeusSyncFactory } from './amadeus/cloudSeam'
-import { adoptFromOpenGrant, createUnitFrameScope, createUnitOpenGrants, handleUnitFrameBind, normalizeCloudBase, replaceAuthorization, sharedOnlyUnit, shouldInjectUnitAuth, type UnitFrameRosterRead } from './unitAuthScope' // 设备页补登录头的范围
+import { adoptFromOpenGrant, createUnitFrameScope, createUnitOpenGrants, handleUnitFrameBind, normalizeCloudBase, replaceAuthorization, shouldInjectUnitAuth, type UnitFrameRosterRead } from './unitAuthScope' // 设备页补登录头的范围
 import { parseSharedUnits } from '../shared/sharedUnits'
 import { engineCapsState, pairingWriters, selfUnitIdMemo, type UnitHubFactory, type UnitHubInstance } from './unitHubSeam' // 设备互联云端通道的接缝(Forsion Extend 0.6 起)
 import { makeCallerHeaders } from './unitCaller'
@@ -5141,12 +5141,9 @@ app.whenReady().then(async () => {
   // 设备「添加到桌面」(账号面板 Unit 段的右键)。渲染层只给:设备 id、名字洗空时的本地化兜底名、画好的图标;
   // id 过正则且必须在此刻读到的名册里,**名字取名册的**(unitShortcut.resolveUnitShortcutTarget)。快捷方式里只有 id。
   // 设备的 Unit 窗:账号面板 Unit 段的「在新窗口打开」(只主窗)。一台设备一扇,再开 = 叫到前面;离线 / 不在名册由窗里自己画。
-  // 别人共享给当前账号的 Unit 不开它自己的窗(只在主窗里进):现读一次带共享的名册,这台只在共享行里 → 拒。
-  // 名册读不到 = 不知道,照旧开(窗里自己读名册画状态;共享行在那里也只会是「不在当前账号名下」、不挂页面)。
-  ipcMain.handle('units:openWindow', async (e, raw: unknown): Promise<{ ok: boolean }> => {
+  // 共享过来的 Unit 在面板里没有开窗入口;万一拿它的 id 开了,窗里只按自己名下的名册核 → 画「不在当前账号名下」、不挂页面(e2e:unitwindow SH9 钉着)。
+  ipcMain.handle('units:openWindow', (e, raw: unknown): { ok: boolean } => {
     if (!isTrustedSender(e) || e.sender !== mainWindow?.webContents || !isUnitId(raw)) return { ok: false }
-    const roster = await readUnitRosterWithShared(e).catch((): UnitFrameRosterRead => ({ ok: false, code: 'roster_unavailable' }))
-    if (sharedOnlyUnit(roster, raw)) return { ok: false }
     createDetachedWindow({ unit: raw })
     return { ok: true }
   })

@@ -168,13 +168,6 @@ export async function handleUnitFrameBind(unitId: unknown, d: UnitFrameBindDeps)
   return { ok: true, url: binding.webUrl ?? `${cloud}/api/units/${unitId}/proxy/` }
 }
 
-/** units:openWindow 的名册核对:id 只在共享行里、不在自己名下 → 拒(共享过来的 Unit 不开它自己的窗)。
- *  名册读不到 = 不知道,照旧放行(窗里自己读名册画状态,共享行在那里也只会是「不在当前账号名下」)。 */
-export function sharedOnlyUnit(roster: UnitFrameRosterRead, unitId: string): boolean {
-  if (!roster.ok) return false
-  return !roster.units.some((u) => u.id === unitId) && !!roster.shared?.some((u) => u.id === unitId)
-}
-
 /** webContents id → 绑定。webContents id 在一次运行里不复用;销毁时由调用方 unbind。 */
 export function createUnitFrameScope(): {
   bind(webContentsId: number, b: UnitFrameBinding): void

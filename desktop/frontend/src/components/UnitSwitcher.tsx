@@ -164,32 +164,34 @@ export const REMOTE_ACCOUNT_SELECTORS = ['.rb .ribbon-account', '.rb .account-ca
 const HIDE_REMOTE_ACCOUNT_CSS = `${REMOTE_ACCOUNT_SELECTORS.join(', ')} { visibility: hidden !important; }`
 
 type WebviewEl = HTMLElement & { insertCSS?: (css: string) => Promise<string>; reload?: () => void; getWebContentsId?: () => number }
-/** pending = 主框架回了错误状态码、还在判是哪种(盖一层空白,不让服务端回的 JSON 露出来)。
+/** pending = 主框架回了错误状态码、还没定是哪种(盖一层空白,不让服务端回的 JSON 露出来)。
  *  waking / wakeFailed / forbidden 只给共享过来的 Unit。 */
 type SurfaceFail = null | 'unreachable' | 'crashed' | 'pending' | 'waking' | 'wakeFailed' | 'forbidden'
 
 /** 共享 Unit 正在唤醒:每隔多久重载一次、最多几次(约 1 分钟)。 */
 export const WAKE_RETRY_MS = 5000
 export const WAKE_RETRY_MAX = 12
-/** 唤醒中最长等多久(从第一次回 503 唤醒中算,按墙钟,不按次数:每次回包本身也要时间)。 */
+/** 唤醒中最长等多久(从第一次回 503 算,按墙钟,不按次数:每次回包本身也要时间)。 */
 export const WAKE_DEADLINE_MS = 60_000
 
-/** 主框架那一次加载的 HTTP 结果 → 宿主画哪种状态(只用于共享过来的 Unit)。bodyCode = 回包 JSON 里的 code(读不到 = undefined)。
- *  2xx / 3xx / 非 HTTP(-1)= null(照常显示页面)。 */
-export function sharedLoadState(status: number, bodyCode?: string): Exclude<SurfaceFail, null | 'crashed' | 'pending' | 'wakeFailed'> | null {
-  if (status < 400) return null
-  if (status === 503 && bodyCode === 'UNIT_WAKING') return 'waking'
-  if (status === 403 || status === 404) return 'forbidden'
-  return 'unreachable'
+/** 唤醒的间隔与封顶。产品里恒为上面两个常量;台架(harness / e2e)可以在宿主页上设 `__forsionUnitWakeTiming` 缩短,
+ *  只许往短里调(间隔 ≥ 50ms、封顶 ≥ 间隔),调不长。 */
+export function wakeTiming(): { retryMs: number; deadlineMs: number; maxTries: number } {
+  const o = (window as unknown as { __forsionUnitWakeTiming?: { retryMs?: unknown; deadlineMs?: unknown } }).__forsionUnitWakeTiming
+  const num = (v: unknown, lo: number, hi: number): number | null => (typeof v === 'number' && Number.isFinite(v) && v >= lo && v <= hi ? v : null)
+  const retryMs = num(o?.retryMs, 50, WAKE_RETRY_MS) ?? WAKE_RETRY_MS
+  const deadlineMs = num(o?.deadlineMs, retryMs, WAKE_DEADLINE_MS) ?? WAKE_DEADLINE_MS
+  return { retryMs, deadlineMs, maxTries: retryMs === WAKE_RETRY_MS && deadlineMs === WAKE_DEADLINE_MS ? WAKE_RETRY_MAX : Math.max(1, Math.round(deadlineMs / retryMs)) }
 }
 
-/** 从回包正文(页面上的纯文本)里取 JSON 的 code;不是 JSON / 没有 = undefined。 */
-export function bodyErrorCode(text: unknown): string | undefined {
-  if (typeof text !== 'string' || !text.trim().startsWith('{')) return undefined
-  try {
-    const code = (JSON.parse(text) as { code?: unknown })?.code
-    return typeof code === 'string' ? code : undefined
-  } catch { return undefined }
+/** 主框架那一次加载的 HTTP 状态码 → 宿主画哪种状态(只用于共享过来的 Unit)。宿主不读对面回包的内容:
+ *  任何 503 都按「正在唤醒」(云端对睡着 / 不在线的那台都回 503);403 / 404 = 不能进入;其它错误 = 连不上。
+ *  2xx / 3xx / 非 HTTP(-1)= null(照常显示页面)。 */
+export function sharedLoadState(status: number): Exclude<SurfaceFail, null | 'crashed' | 'pending' | 'wakeFailed'> | null {
+  if (status < 400) return null
+  if (status === 503) return 'waking'
+  if (status === 403 || status === 404) return 'forbidden'
+  return 'unreachable'
 }
 
 /** 进一台共享过来的 Unit(账号面板里 enter = frame 的行):整窗切过去。不经 pickUnitRoute,没有直连 / P2P / 回落中转。 */
@@ -370,29 +372,22 @@ export function UnitRemoteSurface(): React.ReactElement | null {
       const status = typeof ev.httpResponseCode === 'number' ? ev.httpResponseCode : -1
       httpErr = status >= 400
       if (!httpErr) { wakeTries.current = 0; wakeSince.current = null; return }
-      setFail('pending')
+      setFail('pending') // 先盖住:错误回包画出来之前就不让它露
+      const st = sharedLoadState(status)
+      if (st !== 'waking') { setFail(st ?? 'unreachable'); return }
+      const timing = wakeTiming()
+      const now = Date.now()
+      wakeSince.current ??= now
+      if (wakeTries.current >= timing.maxTries || now - wakeSince.current >= timing.deadlineMs) { setFail('wakeFailed'); return }
+      wakeTries.current += 1
+      setFail('waking')
       const mine = liveInstance.current
-      const decide = (code?: string): void => {
-        if (liveInstance.current !== mine) return // 读回包期间换了 webview(去了别的设备):这次的结果不归现在这张管
-        const st = sharedLoadState(status, code)
-        if (st !== 'waking') { setFail(st ?? 'unreachable'); return }
-        const now = Date.now()
-        wakeSince.current ??= now
-        if (wakeTries.current >= WAKE_RETRY_MAX || now - wakeSince.current >= WAKE_DEADLINE_MS) { setFail('wakeFailed'); return }
-        wakeTries.current += 1
-        setFail('waking')
-        if (wakeTimer.current) clearTimeout(wakeTimer.current)
-        wakeTimer.current = setTimeout(() => {
-          wakeTimer.current = null
-          if (liveInstance.current !== mine) return
-          try { webRef.current?.reload?.() } catch { /* 已卸下 */ }
-        }, WAKE_RETRY_MS)
-      }
-      // 状态码在事件里;唤醒中要看回包的 code:只在 503 时读一次页面上的纯文本(错误回包是云端给的 JSON,不是那台的页面)
-      if (status !== 503) { decide(); return }
-      const ex = (el as WebviewEl & { executeJavaScript?: (code: string) => Promise<unknown> }).executeJavaScript
-      if (!ex) { decide(); return }
-      void ex.call(el, 'document.body ? document.body.innerText.slice(0, 4096) : ""').then((txt) => decide(bodyErrorCode(txt)), () => decide())
+      if (wakeTimer.current) clearTimeout(wakeTimer.current)
+      wakeTimer.current = setTimeout(() => {
+        wakeTimer.current = null
+        if (liveInstance.current !== mine) return // 等的时候换了 webview(去了别的设备):不归现在这张管
+        try { webRef.current?.reload?.() } catch { /* 已卸下 */ }
+      }, timing.retryMs)
     }
     const onFail = (e: Event): void => {
       const ev = e as Event & { errorCode?: number; isMainFrame?: boolean }

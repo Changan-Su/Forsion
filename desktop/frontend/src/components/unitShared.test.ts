@@ -6,7 +6,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { resolvePluginSpace, sharedTargetKey, unitPanelModel } from './unitPanelModel'
 import { onSharedRoster, sharedStillEnterable, useUnitRoster } from './unitRoster'
-import { bodyErrorCode, sharedLoadState, WAKE_DEADLINE_MS, WAKE_RETRY_MAX, WAKE_RETRY_MS } from './UnitSwitcher'
+import { sharedLoadState, wakeTiming, WAKE_DEADLINE_MS, WAKE_RETRY_MAX, WAKE_RETRY_MS } from './UnitSwitcher'
 import type { SharedUnit } from '../../../shared/sharedUnits'
 import type { UnitInfo } from '../types'
 
@@ -144,25 +144,27 @@ describe('resolvePluginSpace', () => {
 })
 
 describe('进去之后宿主画哪种状态', () => {
-  it('503 + UNIT_WAKING → 唤醒中;403 / 404 → 不能进入;其它错误 → 连不上;成功 → 照常', () => {
-    expect(sharedLoadState(503, 'UNIT_WAKING')).toBe('waking')
-    expect(sharedLoadState(503)).toBe('unreachable')
-    expect(sharedLoadState(503, 'OTHER')).toBe('unreachable')
+  it('只看状态码、不读回包:任何 503 → 唤醒中;403 / 404 → 不能进入;其它错误 → 连不上;成功 → 照常', () => {
+    expect(sharedLoadState(503)).toBe('waking')
     expect(sharedLoadState(403)).toBe('forbidden')
-    expect(sharedLoadState(404, 'UNIT_WAKING')).toBe('forbidden')
+    expect(sharedLoadState(404)).toBe('forbidden')
     expect(sharedLoadState(401)).toBe('unreachable')
     expect(sharedLoadState(500)).toBe('unreachable')
+    expect(sharedLoadState(502)).toBe('unreachable')
     expect(sharedLoadState(200)).toBeNull()
     expect(sharedLoadState(304)).toBeNull()
     expect(sharedLoadState(-1)).toBeNull()
   })
-  it('从页面纯文本里取 JSON 的 code;不是 JSON = 没有', () => {
-    expect(bodyErrorCode('{"code":"UNIT_WAKING","detail":"x"}')).toBe('UNIT_WAKING')
-    expect(bodyErrorCode('  {"code":"X"}')).toBe('X')
-    expect(bodyErrorCode('<html>')).toBeUndefined()
-    expect(bodyErrorCode('{bad')).toBeUndefined()
-    expect(bodyErrorCode('{"code":3}')).toBeUndefined()
-    expect(bodyErrorCode(undefined)).toBeUndefined()
+  it('唤醒间隔 / 封顶:产品里是常量;台架只能往短里调', () => {
+    const w = window as unknown as { __forsionUnitWakeTiming?: unknown }
+    expect(wakeTiming()).toEqual({ retryMs: WAKE_RETRY_MS, deadlineMs: WAKE_DEADLINE_MS, maxTries: WAKE_RETRY_MAX })
+    w.__forsionUnitWakeTiming = { retryMs: 200, deadlineMs: 1000 }
+    expect(wakeTiming()).toEqual({ retryMs: 200, deadlineMs: 1000, maxTries: 5 })
+    w.__forsionUnitWakeTiming = { retryMs: 60_000, deadlineMs: 600_000 } // 调长:不认
+    expect(wakeTiming()).toEqual({ retryMs: WAKE_RETRY_MS, deadlineMs: WAKE_DEADLINE_MS, maxTries: WAKE_RETRY_MAX })
+    w.__forsionUnitWakeTiming = { retryMs: 'x', deadlineMs: -1 }
+    expect(wakeTiming()).toEqual({ retryMs: WAKE_RETRY_MS, deadlineMs: WAKE_DEADLINE_MS, maxTries: WAKE_RETRY_MAX })
+    delete w.__forsionUnitWakeTiming
   })
   it('唤醒:每 5 秒一次、最多约 1 分钟', () => {
     expect(WAKE_RETRY_MS).toBe(5000)

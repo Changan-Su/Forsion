@@ -684,6 +684,26 @@ async function main() {
         check('S8 英文:组标题 / 灰字 / 休眠字样走英文', all.some((r) => r.sec === 'Galaxy Studio') && sh[0].state === 'Admin · Asleep' && sh[2].state === 'Member', JSON.stringify(sh.map((r) => r.state)))
         shots.push(await shot(pq, 'shared-en'))
       }
+      if (extra.includes('shared') && lang !== 'en') {
+        // S9 点不动的行看得出来:名字用次要文字色(--text-muted)、光标不是手、悬停没有底色变化(浅色 / 深色各一遍)
+        if (!(await pq.locator('.account-pop').count())) await openPanel(pq)
+        const inertSel = `${UNITS} [data-unit-shared][data-unit-id="s-plain-0003"]`
+        const look = () => pq.evaluate((sel) => {
+          const n = document.querySelector(sel)
+          const probe = document.createElement('span'); probe.style.color = 'var(--text-muted)'; n.parentElement.appendChild(probe)
+          const muted = getComputedStyle(probe).color; probe.remove()
+          const live = document.querySelector(sel.replace('s-plain-0003', 's-studio-0001'))
+          const cs = getComputedStyle(n)
+          return { name: getComputedStyle(n.querySelector('.ap-unit-name')).color, muted, live: getComputedStyle(live.querySelector('.ap-unit-name')).color, cursor: cs.cursor, bg: cs.backgroundColor }
+        }, inertSel)
+        await pq.mouse.move(2, 2); await pq.waitForTimeout(200)
+        const rest = await look()
+        await pq.hover(inertSel); await pq.waitForTimeout(250)
+        const hov = await look()
+        check(`S9 点不动的行(${extra.includes('dark') ? '深色' : '浅色'}):名字 = 次要文字色、和能进的行不同;光标不是手;悬停底色不变`,
+          rest.name === rest.muted && rest.name !== rest.live && hov.cursor === 'default' && hov.bg === rest.bg, JSON.stringify({ rest, hov }))
+        shots.push(await shot(pq, extra.includes('dark') ? 'shared-inert-dark' : 'shared-inert-light'))
+      }
       if (extra.includes('dark')) shots.push(await shot(pq, 'shared-dark'))
       await pq.close()
     }

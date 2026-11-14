@@ -1,10 +1,10 @@
 /**
  * 设备页补登录头 × 别人共享给当前账号的 Unit:绑定(只认 enter = frame、只在主窗、只用名册给的地址)、
- * 补头前缀只有那台子域、Authorization 替换、开窗拒共享行。
+ * 补头前缀只有那台子域、Authorization 替换、开窗 / 加桌面只按自己名下的名册核。
  */
 import { describe, expect, it, vi } from 'vitest'
 import {
-  createUnitOpenGrants, handleUnitFrameBind, replaceAuthorization, sharedOnlyUnit, shouldInjectUnitAuth, unitAllowedPrefixes,
+  createUnitOpenGrants, handleUnitFrameBind, replaceAuthorization, shouldInjectUnitAuth, unitAllowedPrefixes,
   type UnitFrameBinding, type UnitFrameBindDeps, type UnitFrameRosterRead,
 } from './unitAuthScope'
 import { parseRosterResponse } from './unitShortcut'
@@ -109,16 +109,6 @@ describe('replaceAuthorization', () => {
     const h3: Record<string, string> = {}
     replaceAuthorization(h3, 'Bearer real')
     expect(h3).toEqual({ Authorization: 'Bearer real' })
-  })
-})
-
-describe('sharedOnlyUnit(units:openWindow 拒共享行)', () => {
-  it('只在共享里 → true;自己名下 / 都没有 / 名册读失败 → false', () => {
-    expect(sharedOnlyUnit(roster(), S)).toBe(true)
-    expect(sharedOnlyUnit(roster(), OWN)).toBe(false)
-    expect(sharedOnlyUnit(roster(), 'aaaaaaaa-0000-4000-8000-000000000009')).toBe(false)
-    expect(sharedOnlyUnit({ ok: false, code: 'roster_unavailable' }, S)).toBe(false)
-    expect(sharedOnlyUnit({ ok: true, units: [{ id: S }], shared: [sharedRow(S, 'frame', WEB)] }, S)).toBe(false)
   })
 })
 
