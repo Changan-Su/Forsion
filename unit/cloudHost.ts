@@ -16,6 +16,8 @@ import type { AmadeusConfig, AmadeusSyncFactory, AmadeusSyncHostDeps, AmadeusSyn
 import type { LocalRuntime, RuntimeVault } from './runtimeTypes'
 
 const DEFAULT_CLOUD_URL = 'https://api.forsion.net'
+/** Relay caps feature: this Unit accepts hub operator claims and enforces the delegated admin tier itself (unitWeb.ts). */
+export const DELEGATED_ADMIN_FEATURE = 'delegated-admin'
 const WATCH_MS = 5000
 
 /** Pinned by the desktop's bundle list, so the signature check below is the same one the desktop runs. */
@@ -147,6 +149,8 @@ export interface CloudRuntimeOptions {
   vault: () => RuntimeVault | null
   engine: () => { status(): unknown } | undefined
   web: () => { url: string; internalSecret: string; proxyCallerKey: string } | null
+  /** Relay caps features, read on every report. Always given, so an empty list withdraws an earlier declaration. */
+  capsFeatures?: () => readonly string[]
   log: (message: string) => void
 }
 export interface AccountControl {
@@ -202,6 +206,7 @@ export async function createCloudRuntime(o: CloudRuntimeOptions, bundle = cloudB
         pairing = next
       }),
       engineCaps: () => engineCapsState({ agentBackend: !!o.engine(), backend: ((o.engine()?.status() as { state?: 'stopped' | 'starting' | 'ready' | 'crashed' })?.state) ?? 'stopped', seeded: true }),
+      ...(o.capsFeatures ? { capsFeatures: o.capsFeatures } : {}),
       log,
     })
     hub = created

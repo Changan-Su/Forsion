@@ -34,7 +34,7 @@ import { loadHarness, readJournal, applyHarnessEdit, peekHarnessCandidates, reso
 import { renameAgent, AgentRenameError } from '../agents/agentRename.js';
 import { deviceTagContext, factWithScope } from '../services/deviceTagContext.js';
 import type { DeviceTagContext } from '../contracts/deviceTags.js';
-import { parseRemoteOrigin, clampApprovalMode, remoteApprovalCap } from '../services/remoteOrigin.js';
+import { parseRemoteOrigin, clampApprovalMode, remoteApprovalCap, remoteRole, type CapMode } from '../services/remoteOrigin.js';
 import { noteUserDocumentEdit, noteUserEntryEdit, noteUserRestore } from '../services/memoryTelemetry.js';
 import { channelHub } from '../channels/hub.js';
 
@@ -65,6 +65,39 @@ function remoteAgentView<T extends { systemPrompt?: string; soul?: string; appro
   return { ...rest, systemPrompt: '', ...(a.approvalMode ? { approvalMode: clampApprovalMode(a.approvalMode, cap) } : {}) };
 }
 
+/** 委托管理员(remoteRole):管 Agent 的人要看到并编辑人设,所以 systemPrompt / soul 原样回;审批档仍按远程上限钳后回(与它能写的一致)。 */
+function delegatedAgentView<T extends { approvalMode?: string }>(a: T, cap: CapMode) {
+  return { ...a, ...(a.approvalMode ? { approvalMode: clampApprovalMode(a.approvalMode, cap) } : {}) };
+}
+
+/** 远端写 Agent 定义(POST / PATCH;今天只有委托管理员档够得着,unitWeb 对其余远端来路整条拒)不收的字段:
+ *  cloudSync / shareDefaultMemory —— 同步与共享记忆;activityAccess —— 电脑历史;standIn* —— 通道分身(本机才有)。存值照留。 */
+const REMOTE_AGENT_WRITE_STRIPPED = ['cloudSync', 'shareDefaultMemory', 'activityAccess', 'standInOff', 'standInLibrary', 'standInAgentMd'] as const;
+const THREE_MODES = new Set(['readonly', 'auto-edit', 'full-auto']);
+
+/**
+ * 远端写 Agent 定义时的审批档(照远端上限钳,不新增放宽的能力):
+ *   · 只收三档之一,'custom' 与其它值一律不收(存值照留);
+ *   · 存值是 custom → 永不改写(custom 的规则是本机写死的约束);
+ *   · 提交的值等于「存值按上限钳后」(远端名册里看到的就是它,整表回存时会原样带回)→ 不动存值,免得悄悄把本机设的更宽档压下来;
+ *   · 其余 → 钳到上限后写。新建(stored 为 undefined)同样钳到上限。
+ * 返回 undefined = 这次不改审批档。
+ */
+export function remoteAgentApprovalMode(want: unknown, stored: string | undefined, cap: CapMode): CapMode | undefined {
+  if (typeof want !== 'string' || !THREE_MODES.has(want)) return undefined;
+  if (stored === 'custom') return undefined;
+  if (stored && THREE_MODES.has(stored) && clampApprovalMode(stored, cap) === want) return undefined;
+  return clampApprovalMode(want, cap) as CapMode;
+}
+
+function remoteAgentBody(b: Record<string, any>, stored: string | undefined): Record<string, any> {
+  const out: Record<string, any> = { ...b };
+  for (const k of REMOTE_AGENT_WRITE_STRIPPED) delete out[k];
+  const mode = remoteAgentApprovalMode(b.approvalMode, stored, remoteApprovalCap());
+  if (mode) out.approvalMode = mode; else delete out.approvalMode;
+  return out;
+}
+
 router.get('/agent/agents', authMiddleware, async (req: AuthRequest, res) => {
   try {
     if (cloudAgentsEnabled()) return void res.json({ agents: await cloudListAgents(req.user!.userId) });
@@ -74,7 +107,8 @@ router.get('/agent/agents', authMiddleware, async (req: AuthRequest, res) => {
     // 头在就按远程(值不在契约内也算 —— 同 parseRemoteOrigin 的 fail-closed:标记只会收紧)
     if (parseRemoteOrigin(req.headers)) {
       const cap = remoteApprovalCap();
-      return void res.json({ agents: agents.map((a) => remoteAgentView(a, cap)), remote: true });
+      const delegated = remoteRole(req.headers) === 'delegated-admin';
+      return void res.json({ agents: agents.map((a) => (delegated ? delegatedAgentView(a, cap) : remoteAgentView(a, cap))), remote: true });
     }
     res.json({ agents });
   } catch (e: any) {
@@ -113,7 +147,7 @@ router.post('/agent/agents', authMiddleware, async (req: AuthRequest, res) => {
   const cloud = cloudAgentsEnabled();
   if (!cloud && !ensureLocal(res)) return;
   try {
-    const b = req.body || {};
+    const b = parseRemoteOrigin(req.headers) ? remoteAgentBody(req.body || {}, undefined) : (req.body || {});
     const name = String(b.name || b.nameZh || b.nameEn || '');
     if (!name || !b.systemPrompt) return res.status(400).json({ detail: 'name 与 systemPrompt 必填' });
     const uid = req.user!.userId;
@@ -182,7 +216,7 @@ router.patch('/agent/agents/:slug', authMiddleware, async (req: AuthRequest, res
     // 预读:不存在 → 404 先于下面的 400 校验(旧行为)。合并**不用**它 —— 见下面的 patchAgent / cloudPatchAgent。
     const cur = cloud ? await cloudGetAgent(req.user!.userId, slug) : await getAgent(slug);
     if (!cur) return res.status(404).json({ detail: 'Agent not found' });
-    const b = req.body || {};
+    const b = parseRemoteOrigin(req.headers) ? remoteAgentBody(req.body || {}, cur.approvalMode) : (req.body || {});
     const scope = cloud ? null : agentSyncScope(deps().brain.agentFiles, req.user!.userId);
     if (!cloud && b.cloudSync && !scope) return res.status(400).json({ detail: 'Sign in to a Forsion account before enabling cloud sync' });
     if (Number(b.maxIterations) > 0 && Number(b.maxIterations) < AGENT_MAX_ITERATIONS_MIN) return res.status(400).json({ detail: `max_iterations must be at least ${AGENT_MAX_ITERATIONS_MIN}` });
@@ -254,13 +288,15 @@ router.delete('/agent/agents/:slug', authMiddleware, async (req: AuthRequest, re
   try {
     // 进回收站(services/agentUninstall):?deleteChats=1 连私聊一起删,缺省归档。
     // ?keepFiles=1 是旧版桌面的参数:照旧回 keptAt(回收站里那份目录),它勾了「同时删除相关文件」会再移进系统废纸篓。
-    const r = await uninstallAgent(req.user!.userId, deps().profile.appId, req.params.slug, { deleteChats: req.query.deleteChats === '1' });
+    // 远端删 Agent 不连带删私聊(会话与消息不归远端管),也不回本机回收站路径。
+    const remote = !!parseRemoteOrigin(req.headers);
+    const r = await uninstallAgent(req.user!.userId, deps().profile.appId, req.params.slug, { deleteChats: !remote && req.query.deleteChats === '1' });
     if (r.busy) return res.status(409).json({ detail: 'run_active' }); // 一起解散的团队还在跑(同删团队)
     if (!r.ok && req.params.slug === MUSE_AGENT_SLUG) {
       return res.status(400).json({ detail: 'Muse 正在启用中,请先在 设置·后台智能体 关闭 Muse 再删除' });
     }
     const dir = r.entry?.items.find((i) => i.role === 'dir');
-    res.json({ ok: r.ok, ...(r.entry ? { trashId: r.entry.id } : {}), ...(req.query.keepFiles === '1' && dir ? { keptAt: path.join(trashDir(), r.entry!.id, dir.stored) } : {}) });
+    res.json({ ok: r.ok, ...(r.entry ? { trashId: r.entry.id } : {}), ...(!remote && req.query.keepFiles === '1' && dir ? { keptAt: path.join(trashDir(), r.entry!.id, dir.stored) } : {}) });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'delete agent failed' });
   }
