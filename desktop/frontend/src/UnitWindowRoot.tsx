@@ -23,6 +23,7 @@ import { AccountCard } from './components/AccountCard'
 import { UnitFrame, UnitRemoteSurface, leaveUnitRemote, runUnitRoute, useUnitRemote } from './components/UnitSwitcher'
 import { pickUnitRoute, readRememberedVia, unitWindowRosterState } from './components/unitPanelModel'
 import { useUnitRoster } from './components/unitRoster'
+import { onAccountWillChange } from './services/accountTransition'
 import type { UnitInfo } from './types'
 
 registerMessages({
@@ -49,6 +50,8 @@ export function UnitWindowRoot(): React.ReactElement {
   /** 每次重新判定 +1:迟到的回包只在自己仍是最后一次时落。 */
   const epoch = useRef(0)
   const lastCheck = useRef(0)
+  /** 换账号握手开始的时刻(0 = 没在换):这期间不复查名册;切换完成的广播一到就清零重验。 */
+  const switchingSince = useRef(0)
 
   useEffect(() => { useApp.getState().setTr((k, vars) => t(k, vars as Record<string, string | number> | undefined)) }, [t])
 
@@ -100,14 +103,23 @@ export function UnitWindowRoot(): React.ReactElement {
 
   useEffect(() => {
     void resolve()
-    const offAuth = window.tangu?.onAuthChanged?.(() => { void resolve() })
+    // 握手阶段(新凭据写下去之前)就卸掉旧页面、作废在途的名册回包;只接现成的 onAccountWillChange,不另订一条握手事件
+    const offWill = onAccountWillChange(() => {
+      switchingSince.current = Date.now()
+      epoch.current++
+      drop()
+      setState('loading')
+    })
+    const offAuth = window.tangu?.onAuthChanged?.(() => { switchingSince.current = 0; void resolve() })
     // 回到前台复查名册(被移除 / 换号):只在「已打开」时安静地查,别把正在用的页面闪一下
     const onFocus = (): void => {
+      // 正在换号:等切换完成的广播(握手卡住超过一分钟才放行,免得一直停在「正在连接」)
+      if (switchingSince.current && Date.now() - switchingSince.current < 60_000) return
       if (Date.now() - lastCheck.current < RECHECK_MS) return
       void resolve({ quiet: useUnitRemote.getState().target?.unitId === id })
     }
     window.addEventListener('focus', onFocus)
-    return () => { offAuth?.(); window.removeEventListener('focus', onFocus); epoch.current++ }
+    return () => { offWill(); offAuth?.(); window.removeEventListener('focus', onFocus); epoch.current++ }
   }, [resolve, id])
 
   const openForsion = (): void => { window.tangu?.unitsShowMain?.() }

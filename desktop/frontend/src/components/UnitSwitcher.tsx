@@ -40,6 +40,7 @@ import { accountChip, subscribeAccountChip } from '../services/accountChip'
 import { rememberVia, type UnitVia } from './unitPanelModel'
 import { useUnitRoster } from './unitRoster'
 import { setPopupsBlocked } from '../stores/popupQueue'
+import { onAccountWillChange } from '../services/accountTransition'
 import '../styles/unitSwitcher.css'
 
 registerMessages({
@@ -186,6 +187,13 @@ export function UnitRemoteSurface(): React.ReactElement | null {
   /** 保活在暗处时加载失败了:回落留到用户回到这台再做。 */
   const deferredFallback = useRef(false)
   useEffect(() => { setFail(null) }, [target?.url])
+  // 换账号 / 登出:握手阶段(新凭据写下去之前)就把远程面收掉并清 target —— webview 卸掉,
+  // 不等切换完成的广播(那之前旧页面的隧道请求已经会带上新账号的登录头)。迟到的打洞 / 回落经 leaveUnitRemote 作废。
+  useEffect(() => onAccountWillChange(() => {
+    leaveUnitRemote()
+    useUnitRemote.setState({ target: null, active: false })
+    useUnitRoster.getState().clear()
+  }), [])
   useEffect(() => { okUrl.current = null; deferredFallback.current = false }, [target?.url, nonce])
   // 切进来把键盘直接交给对方页面(不点一下打不了字)。
   useEffect(() => { if (active) webRef.current?.focus() }, [active, target?.url, nonce])
