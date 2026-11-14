@@ -4,18 +4,23 @@
  * null = 不知道(没登录 / 读失败 / 旧服务端)或不限。
  */
 import { useEffect, useState } from 'react'
-import { modelMultiplierCapOf, subscribeAccountQuota } from '../services/accountQuota'
+import { accountQuotaEpoch, modelMultiplierCapOf, subscribeAccountQuota, subscribeAccountQuotaScope } from '../services/accountQuota'
 
 export function useQuotaMultiplierCap(enabled: boolean): number | null {
   const [cap, setCap] = useState<number | null>(null)
+  const [scope, setScope] = useState(accountQuotaEpoch)
+  useEffect(() => subscribeAccountQuotaScope(() => setScope(accountQuotaEpoch())), [])
   useEffect(() => {
-    setCap(null)
+    setCap(null) // 换号后先当不知道,不沿用上个账号的上限
     if (!enabled) return
     let alive = true
     let pushed = false
+    const epoch = accountQuotaEpoch()
     const off = subscribeAccountQuota((q) => { if (alive) { pushed = true; setCap(modelMultiplierCapOf(q)) } })
-    void window.tangu?.accountQuota?.().then((r) => { if (alive && !pushed && r?.status === 200 && r.json) setCap(modelMultiplierCapOf(r.json)) }).catch(() => {})
+    void window.tangu?.accountQuota?.().then((r) => {
+      if (alive && !pushed && epoch === accountQuotaEpoch() && r?.status === 200 && r.json) setCap(modelMultiplierCapOf(r.json))
+    }).catch(() => {})
     return () => { alive = false; off() }
-  }, [enabled])
+  }, [enabled, scope])
   return cap
 }

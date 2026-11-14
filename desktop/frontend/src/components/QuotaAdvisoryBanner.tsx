@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { AlertTriangle, ArrowLeftRight, ArrowUpRight, Coins, RotateCcw, Settings2, X } from 'lucide-react'
 import { registerMessages, useI18n } from '../i18n'
 import {
@@ -10,12 +10,13 @@ import {
   pointsBalanceOf,
   pointsReadToken,
   reconcilePointsRead,
+  subscribeAccountQuotaScope,
   publishAccountQuota,
   quotaAdvisoryFor,
   subscribeAccountQuota,
   type AccountQuotaView,
 } from '../services/accountQuota'
-import { pointsAutoDeductAvailable, setPointsAutoDeduct } from '../tangu/pointsAutoDeduct'
+import { pointsAutoDeductAvailable, pointsPhaseBusy, pointsPhaseUnknown, pointsWritePhase, recoverPointsState, setPointsAutoDeduct, settlePointsFromRead, subscribePointsWritePhase } from '../tangu/pointsAutoDeduct'
 import { museAvailable } from '../features/runtime'
 import { useApp } from '../stores/appStore'
 import { ResetCardCeremony, type ResetCardResult } from './ResetCardCeremony'
@@ -74,11 +75,13 @@ export function QuotaAdvisoryBanner({ loggedIn, onToast }: Props) {
   const [confirmConvert, setConfirmConvert] = useState(false)
   const [converting, setConverting] = useState(false)
   const [confirmPoints, setConfirmPoints] = useState(false)
-  const [enablingPoints, setEnablingPoints] = useState(false)
-  /** 写开关后确定不了服务端状态、重读也失败:显示「状态未知 + 重试」,绝不显示成没开 */
-  const [pointsUnknown, setPointsUnknown] = useState(false)
+  /** 写开关在途 / 结果不确定是账号级共享状态(tangu/pointsAutoDeduct):分栏里每条提醒条看到的都是同一份 */
+  const pointsPhase = useSyncExternalStore(subscribePointsWritePhase, pointsWritePhase, pointsWritePhase)
+  const pointsBusy = pointsPhaseBusy(pointsPhase)
   const quotaRequest = useRef(0)
   const resetRequest = useRef(0)
+  /** 积分开关自己的请求号:与用卡 / 转入分开,谁也别把对方的结果当旧的丢掉 */
+  const pointsRequest = useRef(0)
 
   const refresh = useCallback(() => {
     if (!loggedIn || !window.tangu?.accountQuota) {
@@ -93,30 +96,13 @@ export function QuotaAdvisoryBanner({ loggedIn, onToast }: Props) {
         // 发出之后开关被写过:用已确认的值,别让这份旧读取盖掉
         const next = reconcilePointsRead(response?.status === 200 && response.json ? response.json as AccountQuotaView : null, token)
         notePointsConfirmed(next, token)
-        if (next && token === pointsReadToken() && typeof next.pointsAutoDeduct === 'boolean') setPointsUnknown(false)
+        // 写的结果不确定时,这份读取若是在那之后发出的,就是服务端确认:清掉「状态未知」(所有提醒条一起)
+        settlePointsFromRead(next, token)
         setQuota(next)
         if (next) publishAccountQuota(next)
       })
       .catch(() => { if (id === quotaRequest.current) setQuota(null) })
   }, [loggedIn])
-
-  /** 写开关结果不确定时重读一次,以服务端为准;读不到就停在「未知」(保留原来那份视图,不清空横幅)。 */
-  const rereadPoints = useCallback(async (): Promise<void> => {
-    const id = ++quotaRequest.current
-    const token = pointsReadToken()
-    try {
-      const response = await window.tangu?.accountQuota?.()
-      if (id !== quotaRequest.current) return
-      const next = response?.status === 200 && response.json && typeof response.json.pointsAutoDeduct === 'boolean' ? response.json as AccountQuotaView : null
-      if (!next) { setPointsUnknown(true); return }
-      notePointsConfirmed(next, token)
-      setPointsUnknown(false)
-      setQuota(next)
-      publishAccountQuota(next)
-    } catch {
-      if (id === quotaRequest.current) setPointsUnknown(true)
-    }
-  }, [])
 
   useEffect(() => {
     if (!loggedIn) {
@@ -127,9 +113,8 @@ export function QuotaAdvisoryBanner({ loggedIn, onToast }: Props) {
       setConfirmReset(false)
       setConverting(false)
       setConfirmConvert(false)
-      setEnablingPoints(false)
+      ++pointsRequest.current
       setConfirmPoints(false)
-      setPointsUnknown(false)
       setCeremony(null)
       return
     }
@@ -142,6 +127,15 @@ export function QuotaAdvisoryBanner({ loggedIn, onToast }: Props) {
       window.removeEventListener('focus', onFocus)
     }
   }, [loggedIn, refresh])
+
+  // 换号(登出 / 切号):上个账号的请求都作废,按新账号重读
+  useEffect(() => subscribeAccountQuotaScope(() => {
+    ++resetRequest.current
+    ++pointsRequest.current
+    setConfirmReset(false)
+    setConfirmPoints(false)
+    refresh()
+  }), [refresh])
 
   useEffect(() => subscribeAccountQuota((next) => {
     if (loggedIn) setQuota(next)
@@ -157,7 +151,7 @@ export function QuotaAdvisoryBanner({ loggedIn, onToast }: Props) {
   // 主额度用尽后的三态:没开积分 / 正在用积分 / 积分也用完了。开关状态进 key:关掉过「已用尽」,之后打开了积分照样提示一次
   const balance = pointsBalanceOf(quota)
   const pointsState = !picked || isBg || !picked.advisory.exhausted ? null
-    : pointsUnknown ? 'unknown'
+    : pointsPhaseUnknown(pointsPhase) ? 'unknown'
     : !quota?.pointsAutoDeduct ? 'off'
       : balance === 0 ? 'out' : 'on'
   const advisoryKey = picked ? `${picked.bucket}:${picked.advisory.period}:${picked.advisory.threshold}${pointsState ? `:${pointsState}` : ''}` : null
@@ -187,7 +181,8 @@ export function QuotaAdvisoryBanner({ loggedIn, onToast }: Props) {
   const canPay = !!window.tangu?.openPayCenter
 
   const redeemResetCard = async (): Promise<void> => {
-    if (!resetCards || resetting || !window.tangu?.accountUseResetCard) return
+    // 用卡与开积分互斥:任一在途另一个不动(两边结果互不覆盖)
+    if (!resetCards || resetting || pointsBusy || !window.tangu?.accountUseResetCard) return
     if (!confirmReset) {
       setConfirmReset(true)
       setConfirmPoints(false)
@@ -247,38 +242,41 @@ export function QuotaAdvisoryBanner({ loggedIn, onToast }: Props) {
     }
   }
 
-  /** 打开「额度用完后用积分继续」(两击确认,与用卡同一姿势)。成功后横幅自己变成「正在用积分继续」。 */
+  /** 打开「额度用完后用积分继续」(两击确认,与用卡同一姿势)。成功后横幅自己变成「正在用积分继续」。
+   *  在途与不确定是共享状态:按钮在所有提醒条上一起禁用 / 变成「状态未知 + 重试」。 */
   const enablePoints = async (): Promise<void> => {
-    if (enablingPoints || !pointsAutoDeductAvailable(quota)) return
+    if (pointsBusy || resetting || !pointsAutoDeductAvailable(quota)) return
     if (!confirmPoints) {
       setConfirmPoints(true)
       setConfirmReset(false)
       return
     }
-    setEnablingPoints(true)
-    const id = ++resetRequest.current
+    const id = ++pointsRequest.current
     try {
       const result = await setPointsAutoDeduct(true, quota)
-      if (id !== resetRequest.current) return
       if (result.ok) {
-        setPointsUnknown(false)
-        setQuota(result.quota)
+        // 已在模块里确认;广播给所有读额度的人(本条提醒条也经订阅收到)
         publishAccountQuota(result.quota)
+        if (id === pointsRequest.current) setQuota(result.quota)
       } else if (result.reason === 'unknown') {
-        // 确定不了:服务端可能已经打开了。保持忙碌态重读一次,以服务端的开关状态为准;重读也失败 → 「未知 + 重试」
-        await rereadPoints()
-      } else {
+        // 确定不了:服务端可能已经打开了。重读一次,以服务端为准;重读也失败 → 停在「状态未知 + 重试」
+        const recovered = await recoverPointsState()
+        if (recovered.ok && id === pointsRequest.current) setQuota(recovered.quota)
+      } else if (result.reason !== 'busy' && result.reason !== 'stale') {
         // no-bridge:扩展没有这条通道(宿主比扩展新),按钮随即消失;一下点击别白点,照样说一句
-        onToast?.(result.reason === 'failed' ? result.detail || t('quota.banner.pointsFail') : t('quota.banner.pointsUnavailable'), true)
+        if (id === pointsRequest.current) onToast?.(result.reason === 'failed' ? result.detail || t('quota.banner.pointsFail') : t('quota.banner.pointsUnavailable'), true)
       }
     } catch (error: any) {
-      if (id === resetRequest.current) onToast?.(String(error?.message || error || t('quota.banner.pointsFail')), true)
+      if (id === pointsRequest.current) onToast?.(String(error?.message || error || t('quota.banner.pointsFail')), true)
     } finally {
-      if (id === resetRequest.current) {
-        setEnablingPoints(false)
-        setConfirmPoints(false)
-      }
+      if (id === pointsRequest.current) setConfirmPoints(false)
     }
+  }
+
+  const retryPoints = async (): Promise<void> => {
+    const id = ++pointsRequest.current
+    const recovered = await recoverPointsState()
+    if (recovered.ok && id === pointsRequest.current) setQuota(recovered.quota)
   }
 
   const level = pointsState === 'on' ? 'info' : advisory.critical ? 'critical' : advisory.threshold === 10 ? 'near' : 'low'
@@ -296,8 +294,8 @@ export function QuotaAdvisoryBanner({ loggedIn, onToast }: Props) {
   const pointsButton = pointsState === 'off' && balance !== null && (
     balance > 0
       ? pointsAutoDeductAvailable(quota) && (
-        <button className="t2-quota-action points" disabled={enablingPoints} title={t('quota.banner.usePointsTip')} onClick={() => void enablePoints()}>
-          <Coins size={12} className={enablingPoints ? 'spin' : undefined} aria-hidden="true" />
+        <button className="t2-quota-action points" disabled={pointsBusy || resetting} title={t('quota.banner.usePointsTip')} onClick={() => void enablePoints()}>
+          <Coins size={12} className={pointsBusy ? 'spin' : undefined} aria-hidden="true" />
           {confirmPoints ? t('quota.banner.confirmPoints') : t('quota.banner.usePoints')}
         </button>
       )
@@ -336,7 +334,7 @@ export function QuotaAdvisoryBanner({ loggedIn, onToast }: Props) {
         {resetCards > 0 && !!window.tangu?.accountUseResetCard && (
           <button
             className="t2-quota-action reset"
-            disabled={resetting}
+            disabled={resetting || pointsBusy}
             onClick={() => void redeemResetCard()}
           >
             <RotateCcw size={12} className={resetting ? 'spin' : undefined} aria-hidden="true" />
@@ -345,11 +343,8 @@ export function QuotaAdvisoryBanner({ loggedIn, onToast }: Props) {
         )}
         {pointsButton}
         {pointsState === 'unknown' && (
-          <button className="t2-quota-action points" disabled={enablingPoints} onClick={() => {
-            setEnablingPoints(true)
-            void rereadPoints().finally(() => setEnablingPoints(false))
-          }}>
-            <RotateCcw size={12} className={enablingPoints ? 'spin' : undefined} aria-hidden="true" /> {t('quota.banner.retry')}
+          <button className="t2-quota-action points" disabled={pointsBusy} onClick={() => void retryPoints()}>
+            <RotateCcw size={12} className={pointsBusy ? 'spin' : undefined} aria-hidden="true" /> {t('quota.banner.retry')}
           </button>
         )}
       </span>}

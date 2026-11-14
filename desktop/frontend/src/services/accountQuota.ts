@@ -185,8 +185,31 @@ export function notePointsConfirmed(view: AccountQuotaView | null | undefined, t
 export function beginPointsWrite(): void { pointsWriteGen++; pointsConfirmed = undefined }
 /** 写开关得到服务端回包:记下它说的值;写期间发出的读取也算旧的。 */
 export function confirmPointsWrite(value: boolean): void { pointsConfirmed = value; pointsWriteGen++ }
-/** 仅测试用。 */
+/** 仅测试用(换号时由 resetAccountQuotaScope 一并清)。 */
 export function resetPointsWriteState(): void { pointsWriteGen = 0; pointsConfirmed = undefined }
+
+// ── 账号作用域(换号 / 登出)─────────────────────────────────────────────────────────────────
+/**
+ * 额度相关的模块级状态都按账号算:开关已确认值、读写代数、倍率上限、写入在途 / 不确定。
+ * 换号信号沿用宿主现成的 onAuthChanged(appStore 那条处理里调 resetAccountQuotaScope),这里只负责推进账号代数、
+ * 清掉开关状态、广播 null(= 不知道),并通知订阅者(上限读法、写开关模块)按新账号重来。
+ * 发请求前记下 accountQuotaEpoch(),回来时变了就整个丢弃 —— A 的晚到回包别落到 B 头上。
+ */
+export const ACCOUNT_QUOTA_SCOPE_EVENT = 'tangu:account-quota-scope'
+let accountEpoch = 0
+export function accountQuotaEpoch(): number { return accountEpoch }
+export function resetAccountQuotaScope(): void {
+  accountEpoch++
+  resetPointsWriteState()
+  if (typeof window === 'undefined') return
+  window.dispatchEvent(new CustomEvent(ACCOUNT_QUOTA_SCOPE_EVENT))
+  publishAccountQuota(null)
+}
+export function subscribeAccountQuotaScope(listener: () => void): () => void {
+  if (typeof window === 'undefined') return () => {}
+  window.addEventListener(ACCOUNT_QUOTA_SCOPE_EVENT, listener)
+  return () => window.removeEventListener(ACCOUNT_QUOTA_SCOPE_EVENT, listener)
+}
 
 // ── 模型倍率门槛(2026-11-13)───────────────────────────────────────────────────────────────
 /**

@@ -4,7 +4,8 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { LocaleProvider } from '../i18n'
 import { QuotaAdvisoryBanner } from './QuotaAdvisoryBanner'
-import { resetPointsAutoDeductBridge } from '../tangu/pointsAutoDeduct'
+import { pointsWritePhase, recoverPointsState, resetAccountQuotaScope, resetPointsAutoDeductBridge, setPointsAutoDeduct } from '../tangu/pointsAutoDeduct'
+import { pointsReadToken, reconcilePointsRead } from '../services/accountQuota'
 
 let host: HTMLDivElement
 let root: Root
@@ -302,6 +303,80 @@ describe('额度用完:用重置卡 / 用积分继续两条路', () => {
     await act(async () => { stale.resolve(exhausted({ pointsAutoDeduct: false })) })
     await tick()
     expect(host.textContent).toContain('正在用积分继续')
+  })
+})
+
+describe('评审第三轮:开关绝不显示「关」而服务端其实开着', () => {
+  const view = (over: Record<string, unknown> = {}) => ({ dailyLimit: 100, dailyRemaining: 40, weeklyLimit: 100, weeklyRemaining: 0, resetCards: 2, pointsAutoDeduct: false, pointsBalance: 500, modelMultiplierCap: 2.5, ...over })
+  const deferred = <T,>() => { let resolve!: (v: T) => void; const promise = new Promise<T>((r) => { resolve = r }); return { promise, resolve } }
+  const has = (text: string) => [...host.querySelectorAll('button')].some((el) => el.textContent?.includes(text))
+
+  it('1 结果不确定 → 恢复读到「开」:写期间发出的旧读取(读到「关」)晚到也被对齐成「开」', async () => {
+    const write = deferred<any>()
+    ;(window.tangu as any).cloudInvoke = vi.fn().mockReturnValue(write.promise)
+    window.tangu!.accountQuota = vi.fn().mockResolvedValue({ status: 200, json: view({ pointsAutoDeduct: true }) }) as any
+    const pending = setPointsAutoDeduct(true, null)
+    const duringWrite = pointsReadToken() // run 结束后查额度,在写的途中发出
+    write.resolve({ status: 0, error: 'network' })
+    expect(await pending).toMatchObject({ ok: false, reason: 'unknown' })
+    expect(await recoverPointsState()).toMatchObject({ ok: true })
+    expect(reconcilePointsRead(view({ pointsAutoDeduct: false }), duringWrite)?.pointsAutoDeduct).toBe(true)
+    expect(pointsWritePhase()).toBe('idle')
+  })
+
+  it('2 开积分在途时用卡被拦下,积分的结果不会被用卡那一下丢掉', async () => {
+    const write = deferred<any>()
+    window.tangu!.accountQuota = vi.fn().mockResolvedValue({ status: 200, json: view() }) as any
+    ;(window.tangu as any).cloudInvoke = vi.fn().mockReturnValue(write.promise)
+    window.tangu!.accountUseResetCard = vi.fn().mockResolvedValue({ status: 500, json: { detail: 'boom' } }) as any
+    await mount()
+    await act(async () => button('用积分继续').click())
+    await act(async () => button('确认用积分继续').click())
+    const reset = [...host.querySelectorAll<HTMLButtonElement>('button.reset')][0]
+    expect(reset.disabled).toBe(true)
+    await act(async () => { reset.click(); reset.click() })
+    expect(window.tangu!.accountUseResetCard).not.toHaveBeenCalled()
+    await act(async () => { write.resolve({ status: 200, json: { success: true, pointsAutoDeduct: true, quota: view({ pointsAutoDeduct: true }) } }) })
+    await tick()
+    expect(host.textContent).toContain('正在用积分继续')
+  })
+
+  it('3 分栏两条提醒条共享在途 / 不确定:一条在途另一条也禁用;不确定时两条都显示「状态未知」', async () => {
+    const write = deferred<any>()
+    window.tangu!.accountQuota = vi.fn().mockResolvedValueOnce({ status: 200, json: view() }).mockResolvedValueOnce({ status: 200, json: view() })
+      .mockRejectedValue(new Error('offline')) as any
+    ;(window.tangu as any).cloudInvoke = vi.fn().mockReturnValue(write.promise)
+    await mount()
+    const host2 = document.createElement('div'); document.body.append(host2); const root2 = createRoot(host2)
+    await act(async () => root2.render(React.createElement(LocaleProvider, { children: React.createElement(QuotaAdvisoryBanner, { loggedIn: true, onToast }) })))
+    await tick()
+    try {
+      await act(async () => button('用积分继续').click())
+      await act(async () => button('确认用积分继续').click())
+      const other = host2.querySelector<HTMLButtonElement>('button.points')
+      expect(other?.disabled).toBe(true)
+      await act(async () => { write.resolve({ status: 0, error: 'network' }) })
+      await tick()
+      for (const el of [host, host2]) {
+        expect(el.textContent).toContain('暂时确认不了「用积分继续」开没开')
+        expect([...el.querySelectorAll('button')].some((b) => b.textContent?.includes('用积分继续'))).toBe(false)
+      }
+    } finally {
+      await act(async () => root2.unmount()); host2.remove()
+    }
+  })
+
+  it('4 账号 A 的写在途时换到 B:A 的晚到成功整个丢弃,不把 B 的读取对齐成 A 的「开」', async () => {
+    const write = deferred<any>()
+    ;(window.tangu as any).cloudInvoke = vi.fn().mockReturnValue(write.promise)
+    const pending = setPointsAutoDeduct(true, null)
+    resetAccountQuotaScope() // 换号
+    expect(pointsWritePhase()).toBe('idle')
+    const bRead = pointsReadToken()
+    write.resolve({ status: 200, json: { success: true, pointsAutoDeduct: true, quota: view({ pointsAutoDeduct: true }) } })
+    expect(await pending).toMatchObject({ ok: false, reason: 'stale' })
+    expect(reconcilePointsRead(view({ pointsAutoDeduct: false }), bRead)?.pointsAutoDeduct).toBe(false)
+    expect(has('正在用积分继续')).toBe(false)
   })
 })
 

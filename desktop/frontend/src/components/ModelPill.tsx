@@ -403,9 +403,12 @@ export const ModelPill: React.FC<{
   const readonly = !onThinkingChange && !hasModels && !!emptyLabel
   // 倍率门槛:cap 读不到(没登录 / 老扩展 / 读失败)= null,一个都不锁
   const multiplierCap = useModelMultiplierCap()
+  // 原生选择器 / 合并菜单答回时用的是打开那一刻的闭包:上限可能在那之后才读到,判定读 ref 里最新的值
+  const multiplierCapRef = useRef(multiplierCap)
+  multiplierCapRef.current = multiplierCap
   const lockedModel = (id?: string | null): boolean => {
     if (!id) return false
-    return isModelTierLocked(all.find((m) => m.id === id) || modelsResponse?.models.find((m) => m.id === id), multiplierCap)
+    return isModelTierLocked(all.find((m) => m.id === id) || modelsResponse?.models.find((m) => m.id === id), multiplierCapRef.current)
   }
   const currentLocked = isModelTierLocked(current, multiplierCap)
   const label = current?.name || emptyLabel || t('input.selectModel')

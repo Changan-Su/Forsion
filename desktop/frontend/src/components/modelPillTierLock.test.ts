@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { installNativeSheetPresenter, type NativeSheetPayload } from '@lcl/engine'
 import { setLocaleGlobal } from '../i18n'
 import { installModelPickerPresenter } from './modelPickerHost'
+import { resetAccountQuotaScope } from '../services/accountQuota'
 import { ModelPill, type ModelPillGroup } from './ModelPill'
 
 const GROUPS = [{ label: 'Forsion', source: 'forsion', options: [
@@ -122,3 +123,53 @@ describe('原生模型选择器(辅助模型槽也走同一道闸)', () => {
     } finally { off() }
   })
 })
+
+describe('评审第三轮:换号与晚到的上限', () => {
+  const deferred = <T,>() => { let resolve!: (v: T) => void; const promise = new Promise<T>((r) => { resolve = r }); return { promise, resolve } }
+
+  it('5 换号:清掉上个账号的上限并按新账号重读;新账号读不到 = 不标锁;旧账号回包晚到丢弃', async () => {
+    const lateA = deferred<any>()
+    window.tangu!.accountQuota = vi.fn()
+      .mockResolvedValueOnce({ status: 200, json: { dailyLimit: 1, weeklyLimit: 1, modelMultiplierCap: 1 } }) // A
+      .mockResolvedValueOnce({ status: 200, json: { dailyLimit: 1, weeklyLimit: 1, modelMultiplierCap: 2.5 } }) // 换到 B
+      .mockReturnValueOnce(lateA.promise) // 再换到 C 时,一份 A 时代的回包晚到
+      .mockRejectedValue(new Error('offline')) as any
+    await mount()
+    await openModelPane()
+    expect(item('Edge').classList.contains('is-locked')).toBe(true) // A:上限 1
+    await act(async () => { el.querySelector<HTMLButtonElement>('.model-pill-btn')!.click() }) // 收起菜单
+    await act(async () => { resetAccountQuotaScope() })
+    await tick()
+    await openModelPane()
+    expect(item('Edge').classList.contains('is-locked')).toBe(false) // B:上限 2.5,是重读出来的
+    expect(item('Pricey').classList.contains('is-locked')).toBe(true)
+    await act(async () => { el.querySelector<HTMLButtonElement>('.model-pill-btn')!.click() }) // 收起菜单
+    await act(async () => { resetAccountQuotaScope() }) // 换到 C:这次读取挂着
+    await act(async () => { resetAccountQuotaScope() }) // 又换到 D:D 的读取失败
+    await act(async () => { lateA.resolve({ status: 200, json: { dailyLimit: 1, weeklyLimit: 1, modelMultiplierCap: 1 } }) })
+    await tick()
+    await openModelPane()
+    expect(document.querySelectorAll('.cm-sub .menu-item.is-locked')).toHaveLength(0)
+  })
+
+  it('6 原生选择器在上限读到之前打开:答回时按最新上限拦下超限模型', async () => {
+    const quota = deferred<any>()
+    window.tangu!.accountQuota = vi.fn().mockReturnValue(quota.promise) as any
+    const answer = deferred<any>()
+    const off = installModelPickerPresenter(async (request) => {
+      await answer.promise
+      return Object.fromEntries(request.fields.map((f) => [f.id, f.id === 'model' ? 'pricey' : f.value]))
+    })
+    try {
+      const onSelect = await mount()
+      await act(async () => { el.querySelector<HTMLButtonElement>('.model-pill-btn')!.click() })
+      await act(async () => { quota.resolve({ status: 200, json: { dailyLimit: 1, weeklyLimit: 1, modelMultiplierCap: 2.5 } }) })
+      await tick()
+      await act(async () => { answer.resolve(null) })
+      await tick()
+      expect(onSelect).not.toHaveBeenCalled()
+      expect(document.querySelector('.cm-lock-tip')?.textContent).toContain('Pricey')
+    } finally { off() }
+  })
+})
+
