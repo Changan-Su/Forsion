@@ -350,6 +350,7 @@ export function lookupLocalUnit(ctx: LocalUnitsContext, id: unknown):
   if (!marker) return fail('not_a_unit', 'folder or marker file is missing')
   if (marker.channel !== ctx.channel) return fail('channel_mismatch')
   if (marker.id !== id) return fail('not_a_unit', 'marker id does not match')
+  if (!localUnitFolderSafe(entry.path)) return fail('not_a_unit', 'a sub-folder is a link or a file')
   return { ok: true, entry, marker, row: rowFor(entry, ctx) }
 }
 
