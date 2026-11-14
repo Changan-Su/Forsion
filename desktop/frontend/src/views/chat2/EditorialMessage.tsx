@@ -95,7 +95,7 @@ import { refForSession, targetForSession, useSessionHostName } from '../../servi
 import { AttachmentTile } from '../../components/AttachmentTile'
 import { ImageStack, stackable } from '../../components/ImageStack'
 import { UserFold } from './UserFold'
-import { agentEngineErrorText } from '../../components/agentEngine'
+import { agentEngineErrorText } from '../../tangu/agentEngine'
 export type { TaskLanding }
 import './chat2.css'
 import '../../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)

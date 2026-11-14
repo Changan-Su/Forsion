@@ -33,7 +33,7 @@ import { putAgentsMeta } from '../services/backendService'
 import { homeTarget } from '../services/engine/targets'
 import type { AgentConfig } from '../types'
 import { agentName, agentNames } from '../agentName'
-import { agentEngineLabel, agentEngineOf, agentEngineState, isRosterEngine } from './agentEngine'
+import { agentEngineLabel, agentEngineOf, agentEngineState, isRosterEngine } from '../tangu/agentEngine'
 
 registerMessages({
   'agentSelect.title': { zh: '选择 Agent', en: 'Pick agents' },

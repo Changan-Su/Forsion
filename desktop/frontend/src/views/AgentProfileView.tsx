@@ -37,7 +37,7 @@ import { track } from '../achievements/store'
 import { agentName, hasHan } from '../agentName'
 import '../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
 import { tanguCount } from '../tangu/telemetry'
-import { agentEngineLabel, agentEngineOf, agentEngineState, AGENT_ENGINE_IDS } from '../components/agentEngine'
+import { agentEngineLabel, agentEngineOf, agentEngineState, AGENT_ENGINE_IDS } from '../tangu/agentEngine'
 
 type Section = 'config' | 'skills' | 'mcp' | 'growth' | 'schedule' | 'human'
 // 成长 = Agent 随时间积累的两层:记忆(它知道什么)+ 进化(HARNESS 工作笔记:它怎么做事)。09-19 从两个一级标签并成一个,

@@ -162,11 +162,23 @@ writeFileSync(join(TANGU_HOME, 'engines.json'), JSON.stringify({ engines: [
 // Forsion 这边的直连 provider(假模型的 OpenAI 兼容口):provider 只在引擎启动时读一次,所以开跑前写好;Historian 缺省关着,
 // agent 那一项开跑时才打开(每一轮都评),跑完关掉 —— 别的项不受影响。config.json 每次现读,改了立即生效。
 const JUDGE_MODEL = 'stubjudge/judge';
-const writeConfig = (historian) => writeFileSync(join(TANGU_HOME, 'config.json'), JSON.stringify({
-  providers: [{ providerId: 'stubjudge', baseUrl: `${stub.url}/v1`, apiKey: 'stub-not-a-real-key', modelIds: ['judge'] }],
-  ...(historian ? { specialAgents: { historian: { enabled: true, everyRounds: 1, firstRoundTrigger: true, modelId: JUDGE_MODEL } } } : {}),
-}, null, 2));
-writeConfig(false);
+// config.json 在 TANGU_HOME 的上一级(目录名是 tangu 时,见 core/tanguHome.ts 的 forsionSharedDir)。读出来再改:引擎启动时
+// 会往里迁别的段(engines.json 就被它收走了、specialAgents 补缺省),整份覆盖会把那些冲掉。
+const CONFIG_FILE = join(dirname(TANGU_HOME), 'config.json');
+const readConfig = () => { try { return JSON.parse(readFileSync(CONFIG_FILE, 'utf8')) || {}; } catch { return {}; } };
+const writeConfigFile = (cur) => writeFileSync(CONFIG_FILE, JSON.stringify(cur, null, 2));
+{ const cur = readConfig(); cur.providers = [{ providerId: 'stubjudge', baseUrl: `${stub.url}/v1`, apiKey: 'stub-not-a-real-key', modelIds: ['judge'] }]; writeConfigFile(cur); }
+/** 打开 Historian(每轮都评、判官用假模型)跑 fn,跑完把原来那段放回去。 */
+async function withHistorian(fn) {
+  const cur = readConfig(); const prev = cur.specialAgents?.historian;
+  cur.specialAgents = { ...(cur.specialAgents || {}), historian: { ...(prev || {}), enabled: true, everyRounds: 1, firstRoundTrigger: true, modelId: JUDGE_MODEL } };
+  writeConfigFile(cur);
+  try { return await fn(); } finally {
+    const back = readConfig(); back.specialAgents = { ...(back.specialAgents || {}) };
+    if (prev === undefined) delete back.specialAgents.historian; else back.specialAgents.historian = prev;
+    writeConfigFile(back);
+  }
+}
 
 // ── 直接和 DSH 说 ACP(只用来看它那边的会话清单、扮「另一个开着这场会话的进程」)
 function rawDsh() {
@@ -271,6 +283,7 @@ const memoryTrail = (slug) => {
   const rawFile = join(agentDir(slug), '.memory-raw.md');
   return { logs, raw: existsSync(rawFile) ? readFileSync(rawFile, 'utf8') : '' };
 };
+const KESTREL_SAY = 'Remember the code word KESTREL-77. It is written on the shelf that holds the spare keys for the lab cabinet, next to the blue toolbox.';
 /** 「由谁来跑」那一项的 Agent:建一个跑在 DSH 上的(走保存接口,顺带证 engine 字段收得下)。 */
 const makeDshAgent = async (slug) => {
   await api('/agent/agents', { method: 'POST', body: JSON.stringify({ slug, name: 'DSH mate', systemPrompt: 'You are a test agent.', engine: 'dsh' }) });
@@ -493,13 +506,13 @@ const SCENARIOS = {
     const builtin = roster.find((a) => a.slug === 'dsh');
     const mate = await makeDshAgent('dshmate');
     const before = memoryTrail('xyra');
-    writeConfig(true);
-    try {
+    await withHistorian(async () => {
       const sid = await newSession('agent');
       const cfg = { engineId: undefined, agentSlug: 'dshmate' };
       const n0 = stub.mark(), j0 = stub.judged.length;
-      stub.script([{ text: 'Noted: the code word is KESTREL-77.' }]);
-      const a = await run(sid, 'Remember the code word KESTREL-77.', cfg, { modelId: JUDGE_MODEL });
+      // 第一句写长一点:Historian 自上次维护以来新增不到 120 个字符的一轮当琐碎轮跳过(产品规则),两句短话评不到
+      stub.script([{ text: 'Noted: the code word is KESTREL-77, the label of the shelf with the spare keys for the lab cabinet.' }]);
+      const a = await run(sid, `${KESTREL_SAY}`, cfg, { modelId: JUDGE_MODEL });
       const n1 = stub.mark(); stub.script([{ text: 'The code word is KESTREL-77.' }]);
       const b = await run(sid, 'What is the code word?', cfg, { modelId: JUDGE_MODEL });
       const req = stub.since(n1)[0]; const ps = await pointers(sid); const rows = await chatRows(sid);
@@ -512,15 +525,15 @@ const SCENARIOS = {
         ['保存接口收下了「由 DSH 来跑」', mate?.engine === 'dsh', `engine=${mate?.engine}`],
         ['两轮都跑完', a.done && b.done, a.error || b.error || ''],
         ['两轮都交给了 DSH,Tangu 自己的循环一次没调', stub.since(n0).length >= 2 && tanguLoop === 0, `DSH 请求 ${stub.since(n0).length} 次,Tangu 带工具的请求 ${tanguLoop} 次`],
-        ['第二轮交给模型的请求里有第一句的原话', has(req, 'Remember the code word KESTREL-77.')],
+        ['第二轮交给模型的请求里有第一句的原话', has(req, KESTREL_SAY)],
         ['两轮用的是同一个 DSH 会话', ps.length === 2 && !!ps[0].ext && ps[0].ext === ps[1].ext, ps.map((p) => p.ext?.slice(0, 8)).join(' → ')],
-        ['用户那两句落了库', rows.filter((r) => r.role === 'user').map((r) => r.content).join(' | ') === 'Remember the code word KESTREL-77. | What is the code word?', rows.filter((r) => r.role === 'user').length + ' 条'],
+        ['用户那两句落了库', rows.filter((r) => r.role === 'user').map((r) => r.content).join(' | ') === `${KESTREL_SAY} | What is the code word?`, rows.filter((r) => r.role === 'user').length + ' 条'],
         ['回答记在它名下', rows.filter((r) => r.role === 'model').length === 2 && rows.filter((r) => r.role === 'model').every((r) => r.agent_slug === 'dshmate'), rows.filter((r) => r.role === 'model').map((r) => r.agent_slug).join(' / ')],
         ['Historian 的日志写在它的文件夹里', trail.logs.includes('KESTREL-77'), `判官被问了 ${stub.judged.length - j0} 次`],
         ['记忆候选写在它的文件夹里', trail.raw.includes('KESTREL-77')],
         ['缺省 Agent(xyra)那边什么都没多', after.logs === before.logs && after.raw === before.raw],
       ]);
-    } finally { writeConfig(false); }
+    });
   },
   probe: async () => {
     const probeDir = join(TANGU_HOME, 'engines', 'dsh', 'probe');
@@ -673,12 +686,11 @@ const LIVE_SCENARIOS = {
     const word = codeWord('HERON');
     const mate = (((await api('/agent/agents')).agents) || []).find((a) => a.slug === 'dshmate') || await makeDshAgent('dshmate');
     const before = memoryTrail('xyra');
-    writeConfig(true);
-    try {
+    await withHistorian(async () => {
       const sid = await newSession('live-agent');
       const cfg = { engineId: undefined, agentSlug: 'dshmate' };
       const stopOn = (ev) => ev.tools.length > 0;
-      const a = await liveRun(sid, REMEMBER(word), cfg, { modelId: JUDGE_MODEL, stopOn });
+      const a = await liveRun(sid, REMEMBER(word, 'It is written on the shelf that holds the spare keys for the lab cabinet, next to the blue toolbox. '), cfg, { modelId: JUDGE_MODEL, stopOn });
       const b = await liveRun(sid, ASK, cfg, { modelId: JUDGE_MODEL, stopOn });
       const ps = await pointers(sid); const rows = await chatRows(sid);
       const trail = (await until(() => { const t = memoryTrail('dshmate'); return t.logs.includes(word) && t.raw.includes(word) ? t : null; }, 40_000, 500)) || memoryTrail('dshmate');
@@ -693,7 +705,7 @@ const LIVE_SCENARIOS = {
         ['Historian 的日志与记忆候选写在它的文件夹里', trail.logs.includes(word) && trail.raw.includes(word)],
         ['缺省 Agent(xyra)那边什么都没多', after.logs === before.logs && after.raw === before.raw],
       ]);
-    } finally { writeConfig(false); }
+    });
   },
   // 审批:真模型自己得走到「被沙箱拒了 → 带放宽权限重试」那一步,DSH 才会来问。这一项测的就是它走不走得到。
   approval: async () => {

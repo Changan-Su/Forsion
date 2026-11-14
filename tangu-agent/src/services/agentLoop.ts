@@ -547,6 +547,12 @@ async function dispatchRun(runId: string, ac: AbortController): Promise<void> {
         const agentEngine = agentEngineOf(def);
         if (def && agentEngine) {
           const refuse = async (error: string, detail: string): Promise<void> => {
+            // 先把用户这一句落库(和两条 loop 同口径、幂等):在这里就被拒的一轮也不能让人重开对话时丢了自己打的字(Codex 评审 11-14)
+            const said = String(input?.message || '');
+            const atts = Array.isArray(input?.attachments) ? input.attachments : [];
+            if (typeof input?.userMessageId === 'string' && input.userMessageId && (said || atts.length)) {
+              await deps().state.insertUserMessage({ id: input.userMessageId, sessionId: run.session_id, content: said, modelId: run.model_id || '', attachments: atts.length ? atts : null }).catch(() => {});
+            }
             await publish(runId, 'error', { error, detail }).catch(() => {});
             await drain(runId).catch(() => {});
             await updateRunStatus(runId, 'failed', { error }).catch(() => {});
@@ -560,7 +566,9 @@ async function dispatchRun(runId: string, ac: AbortController): Promise<void> {
           const storedRaw: any = await deps().state.getAgentConfig(run.session_id).catch(() => null);
           const stored = plainObject(typeof storedRaw === 'string' ? safeParse(storedRaw) : storedRaw);
           const ac0 = plainObject(input?.agentConfig);
+          // 插件任务的会话:存值里记着 pluginOwner,之后客户端追问的 run 本身不带这个标记,也照插件任务算(Codex 评审 11-14)
           const interactive = input?.origin === 'client' && !input?.pluginOwner && !input?.pluginNotification
+            && !stored.pluginOwner && !stored.pluginNotification
             && !ac0.teamMember && !stored.teamMember && !ac0.groupChat;
           if (interactive) {
             if (!isKnownAgentEngine(agentEngine) || !engines?.has(agentEngine)) {
@@ -612,7 +620,7 @@ function parseRunResult(v: unknown): any {
  *    (新会话没有 run)都落在这里。引擎会话里记着界面上已经没有的东西,不能接着用。
  *  - 只看最近那一次,不往更早找:更早的指针指的是同一个引擎会话的旧状态,对得上也已经被后面的轮次写过了。
  *  - 引擎或工作目录换了、上一次续接时引擎说那个会话没有了(externalSessionReset),也不续接。
- *  - 「最新的回答」那一条认不出一种情况:那一轮没跑完(被停 / 中途出错),回答没落库(用户那一句落了,但改了重发时客户端先把它删掉),用户随后把那一句**改成了别的话**
+ *  - 「最新的回答」那一条认不出一种情况:那一轮没跑完(被停 / 中途出错),没有回答落库,用户随后把那一句**改成了别的话**
  *    重发 —— 库里看起来和没改过一样,引擎会话里却还记着被弃掉的那一句。所以没跑完的那一支多看两样:对话自那以后被改写过
  *    (截断重发 / 回退都走删消息入口,历史版本号加一),并且这次发的不是那一轮的原话 → 不续接。
  *    原样重试(客户端的「重试」也走截断重发)照旧续接:同一句话再说一遍,没有被弃掉的东西,新开反而是不声不响丢上文。
@@ -683,6 +691,17 @@ async function externalEngineLoop(runId: string, ac: AbortController, run: any, 
   let chatResume = false;
   let pointer: ExternalSessionPointer | undefined;
   try {
+    // 用户这一句落库,与 runLoop 同口径(run 真正开始时才写,排队的 run 排在上一轮回答之后;幂等;纯附件也写)。
+    // 放在最前面:下面任何一步失败,重开对话时这一句都还在,失败原因由消息接口按它从 agent_runs 带出(routes/sessions.ts)。
+    // 正文是交给引擎的原话(引擎这边不拼工作区上传引用,也不取走待用的上传)。续接规则只看 model 行,不受它影响。
+    const userText = String(input.message || '');
+    const userAttachments = Array.isArray(input.attachments) ? input.attachments : [];
+    if (input.userMessageId && (userText || userAttachments.length)) {
+      await deps().state.insertUserMessage({
+        id: input.userMessageId, sessionId, content: userText, modelId,
+        attachments: userAttachments.length ? userAttachments : null,
+      });
+    }
     // 在外部 loop 自己的终态处理内拒绝,不能从 dispatchRun 抛出后被 catch 静默回落自有 loop。
     // ACP 引擎的任意工具/进程不受本地 OS 沙箱约束,请求里的 agentConfig 也不能放宽可信策略。
     if (resolveHostSandboxPolicy().mode !== 'off') {
@@ -701,13 +720,6 @@ async function externalEngineLoop(runId: string, ac: AbortController, run: any, 
     if (input.approvalTray === true) setApprovalTray(runId, true);
     await updateRunStatus(runId, 'running');
     await publish(runId, 'status', { state: 'running' });
-    // 用户这一句落库(与 runLoop 同一时机:真正开跑时,排队的 run 才排在上一轮回答之后)。11-14 之前引擎对话只存回答:
-    // 重开对话时用户那一侧是空的,Historian 也只看得到回答。幂等(ON CONFLICT DO NOTHING)。
-    const turnText = String(input.message || '');
-    const turnAttachments = Array.isArray(input.attachments) ? input.attachments : [];
-    if (typeof input.userMessageId === 'string' && input.userMessageId && (turnText || turnAttachments.length)) {
-      await deps().state.insertUserMessage({ id: input.userMessageId, sessionId, content: turnText, modelId, attachments: turnAttachments.length ? turnAttachments : null });
-    }
     // 工作区:引擎私聊由引擎身份派生;Agent 私聊由 Agent 身份派生(它的 Library,不信 run 值,同 bindSessionFacts);其余取 run 的 cwd,
     // 由 Agent 来跑、对话又没给目录时落在这个 Agent 的 Library(不落在本进程的当前目录)。
     const runCwd = typeof agentConfig.cwd === 'string' && agentConfig.cwd ? agentConfig.cwd : undefined;

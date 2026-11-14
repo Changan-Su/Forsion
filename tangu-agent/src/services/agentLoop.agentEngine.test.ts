@@ -154,8 +154,16 @@ describe('跑在外部引擎上的 Agent', () => {
     expect(calls).toEqual([]); expect(llmCalls).toBe(0);
   }, 20_000);
 
-  it('仅聊天模式的会话:明确失败', async () => {
+  it('仅聊天模式的会话:明确失败;被拒的这一句也落库,重开对话不丢', async () => {
     expect((await turn(1, { preset: 'chat' })).error).toBe('agent_engine_chat_preset:dsh');
+    expect(calls).toEqual([]); expect(llmCalls).toBe(0);
+    expect((await rows()).filter((m) => m.role === 'user').map((m) => m.content)).toEqual(['q1']);
+  }, 20_000);
+
+  it('插件任务的会话(存值里有 pluginOwner):客户端追问也不交给 DSH,走到那道闸被拒', async () => {
+    await query(`INSERT INTO chat_sessions (id, user_id, app_id, title, model_id, kind, agent_config) VALUES ('PL', 'u1', 'tangu', 't', 'm1', 'user', ?)`,
+      [JSON.stringify({ agentSlug: 'ds', execMode: 'host', cwd: home, preset: null, pluginOwner: 'some-plugin' })]);
+    expect((await turn(1, {}, { origin: 'client' }, 'PL')).error).toMatch(/^agent_engine_elsewhere:dsh /);
     expect(calls).toEqual([]); expect(llmCalls).toBe(0);
   }, 20_000);
 

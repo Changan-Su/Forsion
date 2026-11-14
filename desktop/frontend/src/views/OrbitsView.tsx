@@ -14,7 +14,7 @@
  * 样式全在 `chat2/orbits.css`(`.t2o-` 前缀,不改 `sidebar2.css` 本体);几何见该文件头注。
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { isRosterEngine } from '../components/agentEngine'
+import { isRosterEngine } from '../tangu/agentEngine'
 import { Archive, Info, MoreHorizontal, Pencil, Pin, PinOff, Plus, Settings, SquarePen, Trash2, UserPlus, Users, UsersRound, FolderPlus, MessageSquarePlus } from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
 import { OverlayAt, setActiveSpace, useCommandStore, useListFirst, useNativeChromeExtras, useNativeSheetMenu, useSegDir, useSpaceStore, useSegFlow, type SheetMenuItem } from '@lcl/engine'
