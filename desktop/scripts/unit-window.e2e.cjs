@@ -594,13 +594,13 @@ async function main() {
     const shRows = { frameEnter: 'frame', sleeping: true }
     const sharedRow = (id, name, enter, extra = {}) => ({
       id, name, platform: 'linux', icon: null, online: true,
-      shared: { group: { id: 'org-1', title: { zh: '星河工作室', en: 'Galaxy Studio' } }, roleLabel: { zh: '管理员', en: 'Admin' }, enter, ...(extra.open ? { open: extra.open } : {}) },
+      shared: { group: { id: 'group-1', title: { zh: '星河工作室', en: 'Galaxy Studio' } }, roleLabel: { zh: '管理员', en: 'Admin' }, enter, ...(extra.open ? { open: extra.open } : {}) },
       ...(extra.webUrl ? { webUrl: extra.webUrl } : {}), ...(extra.sleeping ? { sleeping: true } : {}),
     })
     cloud.state.shared = () => [
       sharedRow(UID_SH, '工作室 Unit', shRows.frameEnter, { webUrl: shRows.frameEnter === 'frame' ? WEB : undefined, sleeping: shRows.sleeping }),
       // 不能进,但名册「误」给了合格地址:绑定只认 enter(SH5 / 负对照 enter)
-      sharedRow(UID_SH_NONE, '商业版', 'none', { open: { kind: 'space', plugin: 'shared-probe' }, webUrl: `http://${UID_SH_NONE}.localhost:${sub.port}/api/units/${UID_SH_NONE}/proxy/web/` }),
+      sharedRow(UID_SH_NONE, '插件那台', 'none', { open: { kind: 'space', plugin: 'shared-probe' }, webUrl: `http://${UID_SH_NONE}.localhost:${sub.port}/api/units/${UID_SH_NONE}/proxy/web/` }),
       sharedRow(UID_SH_INERT, '另一台', 'none', { open: { kind: 'space', plugin: 'not-installed' } }),
     ]
     cloud.state.mode = 'ok'

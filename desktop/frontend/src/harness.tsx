@@ -1045,13 +1045,13 @@ if (new URLSearchParams(location.search).has('dock')) {
       ;(window as unknown as { __unitWinCalls: typeof winCalls }).__unitWinCalls = winCalls
       // &shared:别人共享给当前账号的 Unit(一组三行:能进且睡着、不能进但要开的插件没装、不能进也没给 open;另一组一行只有英文标题)
       if (panelQ.has('shared')) {
-        const g = { id: 'org-1', title: { zh: '星河工作室', en: 'Galaxy Studio' } }
+        const g = { id: 'group-1', title: { zh: '星河工作室', en: 'Galaxy Studio' } }
         const role = { zh: '管理员', en: 'Admin' }
         ;(window as unknown as { __sharedUnits: unknown[] }).__sharedUnits = [
           { id: 's-studio-0001', name: '工作室 Unit', platform: 'linux', icon: null, online: true, sleeping: true, shared: { group: g, roleLabel: role, enter: 'frame' }, webUrl: 'https://s-studio-0001.units.cloud.test/api/units/s-studio-0001/proxy/web/' },
-          { id: 's-biz-00002', name: '商业版', platform: 'linux', icon: null, online: true, shared: { group: g, roleLabel: role, enter: 'none', open: { kind: 'space', plugin: 'not-installed' } } },
+          { id: 's-biz-00002', name: '插件那台', platform: 'linux', icon: null, online: true, shared: { group: g, roleLabel: role, enter: 'none', open: { kind: 'space', plugin: 'not-installed' } } },
           { id: 's-plain-0003', name: '只读那台', platform: 'linux', icon: null, online: false, shared: { group: g, roleLabel: { zh: '成员', en: 'Member' }, enter: 'none' } },
-          { id: 's-other-0004', name: 'Lab box', platform: 'linux', icon: null, online: true, shared: { group: { id: 'org-2', title: { en: 'Lab' } }, roleLabel: { en: 'Admin' }, enter: 'frame' }, webUrl: 'https://s-other-0004.units.cloud.test/api/units/s-other-0004/proxy/web/' },
+          { id: 's-other-0004', name: 'Lab box', platform: 'linux', icon: null, online: true, shared: { group: { id: 'group-2', title: { en: 'Lab' } }, roleLabel: { en: 'Admin' }, enter: 'frame' }, webUrl: 'https://s-other-0004.units.cloud.test/api/units/s-other-0004/proxy/web/' },
           { id: 'bad', name: 'broken row', shared: { enter: 'frame' } }, // 坏行:丢
         ]
       }

@@ -644,7 +644,7 @@ async function main() {
         const idx = (t) => all.findIndex((r) => r.sec === t)
         check('S1 「我的设备」之后按组分:星河工作室(三行)、Lab(一行,只有英文标题 → 回落英文);坏行丢掉',
           secs.join('|') === '这台电脑|我的设备|星河工作室|Lab' && idx('星河工作室') > all.findIndex((r) => r.name === '离线 1 台')
-          && JSON.stringify(sh.map((r) => r.name)) === JSON.stringify(['工作室 Unit', '商业版', '只读那台', 'Lab box']) && !all.some((r) => r.name === 'broken row'), JSON.stringify({ secs, names: sh.map((r) => r.name) }))
+          && JSON.stringify(sh.map((r) => r.name)) === JSON.stringify(['工作室 Unit', '插件那台', '只读那台', 'Lab box']) && !all.some((r) => r.name === 'broken row'), JSON.stringify({ secs, names: sh.map((r) => r.name) }))
         check('S2 行尾灰字按语言 + 休眠中字样;离线的共享行不折进「离线 N 台」',
           sh[0].state === '管理员 · 休眠中' && sh[1].state === '管理员' && sh[2].state === '成员' && sh[3].state === 'Admin', JSON.stringify(sh.map((r) => r.state)))
         check('S3 能进的是按钮;要开的插件没装 / 没给 open 的不是按钮(点不动)', sh[0].tag === 'BUTTON' && sh[1].tag === 'DIV' && sh[2].tag === 'DIV' && sh[3].tag === 'BUTTON', JSON.stringify(sh.map((r) => r.tag)))
