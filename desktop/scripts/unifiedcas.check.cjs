@@ -39,6 +39,10 @@
 //  L 组(在途自写 × 撤回,返修 R1;`__upage.writeLagMs` 造「盘先落、ack 晚回」):写在路上时用户把字删回旧基线 ——
 //   L1 接着切走(卸载冲洗)→ 撤回落盘;两发写之间本机草稿一直在(前一发的 ack 不许删掉比它新的草稿)、零提示
 //   L2 停在原页(schedule)→ 撤回同样落盘
+//  T 组(连续打字期间崩溃不丢字,typingDraft.ts):字与字间隔 80ms(短于监听防抖)连打约 5 秒 ——
+//   T1 打字途中盘上一次没写(写盘节奏照旧等停手),但本机草稿已在、且只落后最后约 2 秒
+//   T2 「崩溃」:只带着那一刻的本机草稿、用旧盘重开 → 出「恢复草稿」条,点了字就回来
+//   T3 停手后照常落盘,打字途中存的草稿随之删掉(没有过时草稿留下误弹恢复)
 //
 // 用法:npm run check:unifiedcas(= node scripts/e2e-editor.cjs --check=unifiedcas;worktree 里设 HARNESS_URL)
 const fs = require('fs'), os = require('os'), path = require('path')
@@ -881,10 +885,51 @@ async function groupW(browser) {
   await p.close()
 }
 
+async function groupT(browser) {
+  const seed = '# 标题\n\n第一段。\n'
+  const p = await open(browser, seed)
+  await p.evaluate(() => localStorage.clear())
+  await caretAfter(p, 0, '第一段。')
+  const burst = 'abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ' // 62 击 × 80ms ≈ 5s
+  const t0 = Date.now()
+  const typing = p.keyboard.type(burst, { delay: 80 })
+  await wait(4200)
+  const mid = await p.evaluate(() => {
+    const k = Object.keys(localStorage).find((x) => x.startsWith('amadeus.unsavedDraft:'))
+    return { key: k ?? null, raw: k ? localStorage.getItem(k) : null, writes: window.__upage.writes.length, disk: window.__upage.vault.get('Unified.md'), dom: document.querySelector('.unified-body .ProseMirror').innerText }
+  })
+  const at = Date.now() - t0
+  const draftText = mid.raw ? JSON.parse(mid.raw).text : ''
+  const typedInDraft = (draftText.match(/第一段。([0-9A-Za-z]*)/) || [, ''])[1].length
+  const typedInDom = (mid.dom.match(/第一段。([0-9A-Za-z]*)/) || [, ''])[1].length
+  // 80ms 一击:2 秒 ≈ 25 击;给 6 击的调度余量
+  record('T1 连打途中零写盘,本机草稿已在且只落后最后约 2 秒', mid.writes === 0 && mid.disk === seed && !!mid.key && typedInDraft > 0 && typedInDom - typedInDraft <= 31,
+    JSON.stringify({ at, writes: mid.writes, typedInDraft, typedInDom, key: mid.key }))
+  await typing
+  // T2:「崩溃」—— 新页面(新的存储上下文)只带那一刻的草稿,盘上还是旧文
+  if (mid.key) {
+    const q = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1200, height: 1100 } })
+    await q.addInitScript(([k, v]) => { if (!sessionStorage.getItem('__seeded')) { localStorage.setItem(k, v); sessionStorage.setItem('__seeded', '1') } }, [mid.key, mid.raw])
+    await q.goto(`${URL}?upage&useed=${encodeURIComponent(seed)}`, { waitUntil: 'domcontentloaded' })
+    await q.waitForSelector(PM, { timeout: 60000 })
+    await q.waitForTimeout(800)
+    const bar = await q.evaluate(() => !![...document.querySelectorAll('.unified-page [data-save="draft"] button')].find((b) => b.textContent === '恢复草稿'))
+    await q.evaluate(() => [...document.querySelectorAll('[data-save="draft"] button')].find((b) => b.textContent === '恢复草稿')?.click())
+    await q.waitForTimeout(1500)
+    const back = await q.evaluate(() => window.__upage.vault.get('Unified.md'))
+    record('T2 崩溃后重开:出「恢复草稿」条,点了打字途中的字回到盘上', bar && back === draftText, JSON.stringify({ bar, back }))
+    await q.close()
+  } else record('T2 崩溃后重开', false, 'T1 没有草稿可恢复')
+  await wait(1600)
+  const end = await p.evaluate(() => ({ disk: window.__upage.vault.get('Unified.md'), keys: Object.keys(localStorage).filter((k) => k.startsWith('amadeus.unsavedDraft:')) }))
+  record('T3 停手后照常落盘,打字途中存的草稿已删掉', end.disk.includes('第一段。' + burst) && end.keys.length === 0, JSON.stringify(end))
+  await p.close()
+}
+
 async function main() {
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })
   try {
-    const groups = { G: groupG, H: async (b) => { await groupH(b); await groupH7(b) }, C: groupC, D: groupD, F: groupF, L: groupL, V: groupV, W: groupW }
+    const groups = { G: groupG, H: async (b) => { await groupH(b); await groupH7(b) }, C: groupC, D: groupD, F: groupF, L: groupL, V: groupV, W: groupW, T: groupT }
     for (const [k, fn] of Object.entries(groups)) if (!only.length || only.includes(k)) await fn(browser)
   } finally {
     await browser.close()

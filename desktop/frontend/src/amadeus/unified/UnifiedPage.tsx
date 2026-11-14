@@ -25,7 +25,8 @@ import { amadeus } from '../api'
 import { getAttachmentPrefs } from '../lib/attachments'
 import { useMobileBackClose } from '../lib/mobileBack'
 import { touchScrollMarginPlugin } from './touchScroll'
-import { awaitTypingQuiet, installTypingGuard } from '../store/typingGuard'
+import { awaitTypingQuiet, installTypingGuard, isComposing } from '../store/typingGuard'
+import { createTypingDraftPacer, typingDraftPlugin, type TypingDraftPacer } from './typingDraft'
 import {
   DbLinkPicker, MilkdownInner, normalizeSerializedMd, serializeUnified, stampedFileName,
   PREFIX_TRIGGERS, SLASH_SENTINELS, slashTurnFailed, getFocusedBlockApply, setFocusedBlockApply, type SlashItem, type SlashOps,
@@ -1725,6 +1726,7 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
   }
   // 分栏列节点 schema + per-page fold(闭包现读 pipe.fm,多页并发不串,Codex 终审 P1)+ 嵌入层。
   // ⚠️ 稳定引用:MilkdownInner 只建一次编辑器。
+  const typingDraft = useRef<TypingDraftPacer | null>(null) // 连打期间的草稿节拍(见 typingDraft.ts),装在下面 G2-08 那条 effect 里
   const editorPlugins = useMemo(
     () => [
       ...layer.plugins,
@@ -1757,6 +1759,7 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
         },
       }),
       touchScrollMarginPlugin(), // 触屏:光标行不滚到悬浮胶囊底下(G2-11)
+      typingDraftPlugin(() => typingDraft.current?.edit()), // 每个改文档的事务都给草稿节拍报一声
       ...createPendingInsert(), // 异步 slash 项的锚与「进行中」占位(G3-06)
       // 画布模式的两个编辑器侧插件(2026-08-18):跨卡选区夹断 + 统一撤销时间线的 PM 记账。
       // 都经闭包/共享对象现读状态,文档模式下零行为(夹断有 inCanvas 闸,记账在文档模式照记 ——
@@ -2931,6 +2934,28 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
       if (pipe.reconcileBusy) return
       void writeNow()
     }
+    // 连续打字期间的本机草稿(max-wait,见 typingDraft.ts):两级防抖在连打时一直被重置,崩溃会丢整段。只存草稿、不写盘,
+    // 写盘节奏照旧等停手。和上面 stashNow 的差别:后面没有一发 writeNow 来收尾,所以不碰 pending,且「没有待写」时要
+    // 主动收掉本实例存过的草稿 —— 不然打了字又撤回到盘上那版,这份过时草稿会在下次打开时误弹「恢复」。
+    const typingStash = (): void => {
+      if (pipe.readOnly || pipe.retired || pipe.dead) return
+      syncFromEditor()
+      const text = composeFm(pipe.fm, pipe.body)
+      if (!pipe.writing && text === pipe.lastSaved) { settleUnsaved(); return }
+      if (!pipe.writing && isPristine()) {
+        if (pipe.stashed != null) clearDraft(vaultRoot, path, pipe.stashed, pipe.slot)
+        pipe.stashed = null
+        return
+      }
+      pipe.stashed = text
+      stashDraft(vaultRoot, path, text, pipe.lastSaved, pipe.slot)
+    }
+    const pacer = createTypingDraftPacer({
+      stash: typingStash,
+      composing: () => isComposing() || !!layer.getView()?.composing,
+      blocked: () => !!pipe.held || !!pipe.moveHandoff, // 挪动在途:旧路径随时会没,这时存草稿就是孤儿(N-5)
+    })
+    typingDraft.current = pacer
     const onHidden = (): void => { if (document.visibilityState === 'hidden') flushNow(true) }
     const onLeave = (): void => flushNow(true)
     // 窗口失焦要节流:在几个窗口间来回切是常态,每切一次都整篇写一遍没必要。属性框的草稿不在这里提交 ——
@@ -2960,6 +2985,8 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
       document.removeEventListener('pause', onLeave)
       window.removeEventListener('blur', onBlur)
       if (trail) clearTimeout(trail)
+      pacer.dispose()
+      if (typingDraft.current === pacer) typingDraft.current = null
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [path])
@@ -3660,6 +3687,7 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
             pipe.fm = fixStructKeys(fmText)
             pipe.body = body
             schedule()
+            typingDraft.current?.edit()
           }}
         />
       ) : null}
