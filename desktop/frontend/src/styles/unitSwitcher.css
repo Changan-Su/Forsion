@@ -286,7 +286,7 @@
 .am-app .dialog-btn.lu-iconbtn { display: inline-flex; align-items: center; justify-content: center; width: 40px; padding: 0; color: var(--text-sec); }
 .am-app .dialog-btn.lu-iconbtn .unitsw-emoji { font-size: 16px; line-height: 1; }
 .am-app .lu-dlg .dialog-btn:disabled { opacity: .5; cursor: default; }
-.am-app .lu-hint { font-size: var(--ui-font-meta, 12px); }
+.am-app .dialog-msg.lu-hint { font-size: var(--ui-font-meta, 12px); }
 .am-app .lu-err { font-size: var(--ui-font-meta, 12px); line-height: 1.5; color: var(--danger); }
 .am-app .lu-other { font-size: var(--ui-font-meta, 12px); color: var(--text-muted); }
 .am-app .lu-link { margin-left: 4px; padding: 0; border: 0; background: none; color: var(--text); font: inherit; cursor: pointer; }

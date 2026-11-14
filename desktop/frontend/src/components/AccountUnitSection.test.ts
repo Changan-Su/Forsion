@@ -343,6 +343,42 @@ describe('local Units in the panel', () => {
     expect(q('[data-lu-dialog]')).toBeNull()
   })
 
+  it('Add Unit: a typed name that cannot be a folder says so right away and keeps the button off', async () => {
+    await mount()
+    await click(q('[data-local-add]'))
+    await typeInto(q<HTMLInputElement>('[data-lu="name"]')!, '///')
+    expect(q<HTMLButtonElement>('[data-lu="create"]')!.disabled).toBe(true)
+    expect(text(q('.lu-err'))).toBe('这个名字用不了：不能留空、不能太长，也不能只有符号。')
+    expect(api.create).not.toHaveBeenCalled()
+  })
+
+  it('Name and icon…: only the changed field goes to rename(); an unchanged save makes no call', async () => {
+    await mount()
+    const openEdit = async () => {
+      await rightClick(local('demo'))
+      await click(q('[data-unit-act="edit"]'))
+      expect(q('[data-lu-dialog="edit"]')).toBeTruthy()
+    }
+    await openEdit()
+    expect(q<HTMLInputElement>('[data-lu="name"]')!.value).toBe('demo')
+    await click(q('[data-lu="save"]')) // 没改:不调,关掉
+    expect(api.rename).not.toHaveBeenCalled()
+    expect(q('[data-lu-dialog]')).toBeNull()
+    await openEdit()
+    await typeInto(q<HTMLInputElement>('[data-lu="name"]')!, 'Demo 2')
+    await click(q('[data-lu="save"]'))
+    expect(api.rename).toHaveBeenLastCalledWith('demo', { name: 'Demo 2' })
+    expect(q('[data-lu-dialog]')).toBeNull()
+    await openEdit()
+    await click(q('[data-lu="icon"]'))
+    const em = q('.amx-iconpick-item')!
+    const picked = text(em)
+    await click(em)
+    expect(text(q('[data-lu="icon"]'))).toBe(picked)
+    await click(q('[data-lu="save"]'))
+    expect(api.rename).toHaveBeenLastCalledWith('demo', { icon: picked })
+  })
+
   it('Add Unit: path_exists lands under the location, and the dialog stays', async () => {
     await mount()
     await click(q('[data-local-add]'))

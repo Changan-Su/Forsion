@@ -385,7 +385,7 @@ export function AccountUnitSection({ onClose, onToast }: {
             const row = ctx.row
             return <button role="menuitem" data-unit-act="switch" onClick={() => { setCtx(null); openShared(row) }}><ArrowUpRight size={14} />{t('unit.panel.switchTo')}</button>
           })() : ctx.row.kind === 'local' ? (() => {
-            // 本机的文件夹 Unit(方案细节页「本机多 Unit 的规矩」):在自己的窗口打开 / 添加到桌面 / 改名字和图标… / 在访达中显示 / 从列表移除…
+            // 本机的文件夹 Unit:在自己的窗口打开 / 添加到桌面 / 改名字和图标… / 在访达中显示 / 从列表移除…
             // 自己那一行:不开自己、不移除自己;找不到 / 对不上:只剩「从列表移除…」
             const row = ctx.row
             const u = row.unit

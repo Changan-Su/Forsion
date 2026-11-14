@@ -153,6 +153,8 @@ function AddUnitDialog({ onClose, toast }: { onClose: () => void; toast: Toast }
   const parentDisplay = parent?.display ?? snap?.defaultParentDisplay ?? ''
   const location = joinDisplay(parentDisplay, folder ?? '…')
   const canCreate = isValidLocalUnitName(name) && !busy
+  // 打了字但用不了(只有符号 / 太长):按钮灰着的同时就地说为什么,不等提交
+  const nameHint = name.trim() && !isValidLocalUnitName(name) ? localUnitErrorText('name_invalid') : null
 
   const create = async (): Promise<void> => {
     if (!canCreate) return
@@ -222,7 +224,7 @@ function AddUnitDialog({ onClose, toast }: { onClose: () => void; toast: Toast }
         </div>
         {mode === 'new' ? (
           <>
-            <NameIconRow name={name} icon={icon} onName={(v) => { setName(v); if (err?.at === 'name' || err?.at === 'location') setErr(null) }} onIcon={setIcon} onEnter={() => void create()} err={err?.at === 'name' ? err.text : null} />
+            <NameIconRow name={name} icon={icon} onName={(v) => { setName(v); if (err?.at === 'name' || err?.at === 'location') setErr(null) }} onIcon={setIcon} onEnter={() => void create()} err={err?.at === 'name' ? err.text : nameHint} />
             <div className="lu-field">
               <span className="lu-label">{t('unit.local.location')}</span>
               <div className="lu-row">
@@ -266,6 +268,7 @@ function EditUnitDialog({ unit, onClose, toast }: { unit: LocalUnitRow; onClose:
   }
   const dirty = Object.keys(patch).length > 0
   const canSave = !busy && isValidLocalUnitName(name)
+  const nameHint = name.trim() && !isValidLocalUnitName(name) ? localUnitErrorText('name_invalid') : null
   const save = async (): Promise<void> => {
     if (!canSave) return
     if (!dirty) { onClose(); return }
@@ -284,7 +287,7 @@ function EditUnitDialog({ unit, onClose, toast }: { unit: LocalUnitRow; onClose:
     <DialogOverlay onMouseDown={onClose}>
       <div className="dialog lu-dlg lu-dlg--edit" role="dialog" aria-modal="true" aria-labelledby={titleId} data-lu-dialog="edit" onMouseDown={(e) => e.stopPropagation()}>
         <div className="dialog-title" id={titleId}>{t('unit.local.editTitle')}</div>
-        <NameIconRow name={name} icon={icon} onName={(v) => { setName(v); if (err) setErr(null) }} onIcon={setIcon} onEnter={() => void save()} err={err?.text ?? null} />
+        <NameIconRow name={name} icon={icon} onName={(v) => { setName(v); if (err) setErr(null) }} onIcon={setIcon} onEnter={() => void save()} err={err?.text ?? nameHint} />
         <div className="dialog-actions">
           <button type="button" className="dialog-btn" onClick={onClose}>{t('amdlg.cancel')}</button>
           <button type="button" className="dialog-btn" data-primary data-lu="save" disabled={!canSave} onClick={() => void save()}>{t('unit.local.save')}</button>

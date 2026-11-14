@@ -1066,7 +1066,7 @@ if (new URLSearchParams(location.search).has('dock')) {
         delete w.tangu!.unitHostStatus
         w.tangu!.unitPublicEntry = true
       }
-      // &local[=self|unreadable|failed]:本机多 Unit 的桥桩(window.tangu.localUnits;主进程那半由 A 包的 e2e:localunits 真跑)。
+      // &local[=self|unreadable|failed]:本机多 Unit 的桥桩(window.tangu.localUnits;主进程那半由 e2e:localunits 真跑)。
       // 名册四行:跑着的、没跑的(路径很长,考省略)、找不到的、对不上的。self = 当前进程就是第一行那台文件夹 Unit;
       // unreadable = 名册读不出;failed = list() 抛错。调用记在 window.__localCalls;window.__localExisting 控制「打开已有的」回什么码
       // (缺省 duplicate_id;'ok' = 加进来);window.__localOpenFail = open 回的错误码。
