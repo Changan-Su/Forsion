@@ -144,7 +144,7 @@ export async function realtimeSocket(t: EngineTarget): Promise<{ url: string; pr
   const u = new URL(`${t.base}/agent/realtime`, location.href)
   u.protocol = u.protocol === 'https:' ? 'wss:' : 'ws:'
   if (t.via === 'cloud') return { url: u.href, protocols: [REALTIME_BEARER_PROTOCOL, token] }
-  u.searchParams.set('token', token)
+  if (token) u.searchParams.set('token', token) // 设备页没有本页令牌时不带(凭据走壳注入 / Cookie)
   return { url: u.href }
 }
 
