@@ -58,9 +58,9 @@ describe('mergeUnsavedEdits (unsaved editor text × newer stored version)', () =
     expect(mergeUnsavedEdits(base, base.replace('a: 1', 'a: 1\nmine: x') + 'x\n', base.replace('z: 9', 'z: 9\ntheirs: y'))).toBeNull()
   })
 
-  it('layout / canvas structure lines must be identical in all three versions', async () => {
+  it('column / canvas notes never merge (any version carrying a layout or canvas structure line)', async () => {
     const { mergeUnsavedEdits } = await load()
-    expect(mergeUnsavedEdits(LAYOUT + B, LAYOUT + ours, LAYOUT + theirs)).toBe(LAYOUT + ours.replace('para1', 'para1 remote'))
+    expect(mergeUnsavedEdits(LAYOUT + B, LAYOUT + ours, LAYOUT + theirs)).toBeNull() // 三版结构行相同也不合
     const moved = LAYOUT.replace('"rows":[]', '"rows":[{"columns":[{"refs":["a1"],"width":1}]}]')
     expect(mergeUnsavedEdits(LAYOUT + B, LAYOUT + ours, moved + theirs)).toBeNull()
     expect(mergeUnsavedEdits(LAYOUT + B, moved + ours, LAYOUT + theirs)).toBeNull()

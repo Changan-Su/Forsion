@@ -189,17 +189,14 @@ export function mergeMovedText(base: string, ours: string, theirs: string): stri
  *  - 正文按行三方合并(mergeMovedText);同一行 / 相邻行两边都改了、两边都在文末追加 → 合不拢。
  *  - frontmatter **不按行合**:两边在不同位置加同一个键会合出重复键(YAML 读不了)。只有一边改了 fm 就整块用那一边的;
  *    两边都改了且不一样 → 合不拢。
- *  - 分栏 / 画布的结构行(amadeus_layout / amadeus_canvas)三版必须逐字相同:它们靠正文里的锚注释定位,
- *    哪一边动了结构都交给冲突副本(fm 整块取自一边,合并结果的结构行因此也与三版相同)。
+ *  - 分栏 / 画布笔记(三版里任一版带 amadeus_layout / amadeus_canvas 结构行)一律不合:结构靠正文里的锚注释定位、
+ *    装进编辑器时的折叠有副作用(isPristine 同理不拿它们空跑),合并出来的锚排布没有真编辑器验证 → 照旧冲突副本。
  *  合不拢 → null,调用方照旧本地胜 + 冲突副本。 */
 export function mergeUnsavedEdits(base: string, ours: string, theirs: string): string | null {
   const b = splitFm(base)
   const o = splitFm(ours)
   const t = splitFm(theirs)
-  for (const lineOf of [layoutLineOf, canvasLineOf]) {
-    const line = lineOf(b.fmText)
-    if (lineOf(o.fmText) !== line || lineOf(t.fmText) !== line) return null
-  }
+  for (const { fmText } of [b, o, t]) if (layoutLineOf(fmText) != null || canvasLineOf(fmText) != null) return null
   const fmText = o.fmText === t.fmText || t.fmText === b.fmText ? o.fmText : o.fmText === b.fmText ? t.fmText : null
   if (fmText == null) return null
   const body = mergeMovedText(b.body, o.body, t.body)

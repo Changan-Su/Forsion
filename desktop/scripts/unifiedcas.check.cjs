@@ -10,6 +10,8 @@
 //   C1 盘上被别的窗口悄悄改了(回灌通知还在路上)、改的正是本地在打的那一行 → 本地有改动的写被拒 → 盘上那版进冲突副本 + 本地版落盘
 //   C1m(2026-11-14)同上,但别处改的是**另一段** → 三方合并:两边的字都在盘上、编辑器里看得见别处那段,零副本零 error,
 //      只有一条不带级别的「已合并」提示
+//   C1s(Codex 复核 P0)合并落在编辑器监听器的 200ms 防抖窗里:合并前那一击排着的回调拿的是旧 doc,
+//      不许把合并进来的那段抹掉(之后写盘照样两边都在、零副本)
 //   C2 同上但本实例**没有用户改动**(只是编辑器规范化)→ 让位回灌,盘上那版原样保留、零副本
 //   C3 陈旧且没改动的 B 被关掉 → 不许拿旧全文盖掉盘上新版(卸载冲洗的 isPristine 闸)
 //  D 组(D-03 打字中外部改动):外部改的正是本地在打的那一行,100ms / 600ms / 连续打字中 fire → 本地胜 + 冲突副本 = 外部那版
@@ -215,6 +217,33 @@ async function groupC(browser) {
       rejects >= 1 && d === '# T\n\n甲段。别处写的\n\n乙段。本地\n' && c.length === 0 && dom.includes('别处写的') && dom.includes('乙段。本地') &&
         !t.some((x) => x.level === 'error') && t.filter((x) => !x.level && /合并/.test(x.text)).length === 1,
       JSON.stringify({ rejects, d, copies: c.map(([k]) => k), toasts: t.map((x) => [x.level, x.text]) }))
+    await p.close()
+  }
+  // C1s(Codex 复核 P0):一击之后立刻冲洗 —— CAS 拒写、合并都发生在这一击的监听器回调(防抖 200ms)之前。
+  // Milkdown 的监听器跳过合并那个不进撤销栈的事务,随后回调报的是这一击时的 doc(有 Z、没有别处那段)。
+  {
+    const p = await open(browser, '# T\n\n甲段。\n\n乙段。\n')
+    await p.evaluate(() => window.__upage.vault.set('Unified.md', '# T\n\n甲段。别处写的\n\n乙段。\n'))
+    const ok = await p.evaluate(async () => {
+      const view = window.__upage.probe.view()
+      let at = -1
+      view.state.doc.descendants((node, pos) => {
+        if (at >= 0) return false
+        if (node.isText) { const i = node.text.indexOf('乙段。'); if (i >= 0) { at = pos + i + 3; return false } }
+        return true
+      })
+      if (at < 0) return false
+      view.dispatch(view.state.tr.insertText('Z', at)) // 一次普通的用户输入(进撤销栈 → 监听器排上回调)
+      await window.__upage.probe.flush()
+      return true
+    })
+    await wait(2500)
+    const d = await disk(p)
+    const c = await copies(p)
+    const dom = await domText(p, 0)
+    record('C1s 合并落在监听器防抖窗里:排着的旧 doc 回调不抹掉合并进来的那段,盘上两边都在、零副本',
+      ok && d === '# T\n\n甲段。别处写的\n\n乙段。Z\n' && c.length === 0 && dom.includes('别处写的'),
+      JSON.stringify({ ok, d, copies: c.map(([k]) => k) }))
     await p.close()
   }
   // C2:本实例没有用户改动(只是编辑器把 __粗__ 规范化成 **粗**)。
