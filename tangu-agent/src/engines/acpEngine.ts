@@ -6,7 +6,8 @@
  * 流程（见 SDK examples/client.js）：spawn → Writable/Readable.toWeb → ndJsonStream → ClientSideConnection
  *   → initialize → newSession（或续接上一轮的会话）→ prompt（阻塞到 turn 结束，期间经 sessionUpdate 回调流式吐内容）。
  * 续接:一 run 一进程,所以「第二句记得第一句」靠引擎自己存的会话 —— 引擎报 `loadSession` 就走 session/load(回放的旧
- *   消息丢掉不上屏),只报 `sessionCapabilities.resume` 的(DSH)走 session/resume(不回放)。
+ *   消息、以及回包之后到发 prompt 之前补发的通知,都丢掉不上屏),只报 `sessionCapabilities.resume` 的(DSH)走
+ *   session/resume(不回放)。
  * 模型:引擎给 `models` 的走 session/set_model;把模型和思考档放在 `configOptions` 里的(DSH)走 session/set_config_option。
  * 审批：ACP 的 session/request_permission（Client 回调）→ 复用 Tangu requestApproval（同审批弹窗/HTTP 端点）。
  *
@@ -223,6 +224,20 @@ export function classifyResumeFailure(e: any): 'gone' | 'busy' | 'other' {
   return 'other';
 }
 
+/**
+ * 走 session/load 的适配器(续接时把历史重放一遍)里,普通对话的续接用真引擎核过的那几家。按握手里报的适配器名认
+ * (和只读模式的核对同一个写法),不按引擎清单里的 id:那个 id 用户可以在 engines.json 里改指到别的命令。
+ * 核的是:重放的旧消息都在 session/load 回包之前到(之后才到的会被当成这一轮的输出发给界面)、一轮中途被杀之后
+ * 那个会话还 load 得回来、历史很长时重放要多久。实测脚本 scripts/engine-resume.check.mjs(真引擎、真模型,本机跑)。
+ * 没核过的(Claude Code)在普通对话里照旧每轮新开一个会话 —— 没核过就打开,坏了是「每场对话的第二句都失败」。
+ */
+const LOAD_RESUME_VERIFIED = new Set(['@agentclientprotocol/codex-acp']);
+
+/** 普通对话里这个引擎会话下一轮能不能接着用:走 session/resume 的(不重放)都算,走 session/load 的只算上面那份名单里的。 */
+export function chatResumeVerified(via: 'load' | 'resume' | undefined, agentName: unknown): boolean {
+  return via === 'resume' || (via === 'load' && typeof agentName === 'string' && LOAD_RESUME_VERIFIED.has(agentName));
+}
+
 /** ACP available_commands_update.availableCommands → Tangu 形状（取 input.hint）。纯函数，供探测 + 单测。 */
 export function mapAcpCommands(availableCommands: any): EngineCapabilities['commands'] {
   return (availableCommands || []).map((c: any) => ({
@@ -370,6 +385,23 @@ function trackExit(sessionId: string, child: ChildProcess): void {
   exitingSessions.set(sessionId, gone);
 }
 
+/** session/load 回包之后,等引擎补发的通知静下来再发 prompt:LOAD_SETTLE_QUIET_MS 内没有新通知就算静了,最多等
+ *  LOAD_SETTLE_MAX_MS(一直有通知也不无限等)。lastAt() = 最近一条被丢掉的通知的时刻(刚回包时 = 回包的时刻)。
+ *  必须真的让出事件循环:回包和它后面那几条通知常常在同一批管道数据里,而回包之后到发 prompt 之间可以一个真等待都没有
+ *  (记指针是同步写库)—— 不等的话 prompt 先发出去,那几条通知就落在这一轮里了。 */
+const LOAD_SETTLE_QUIET_MS = 120;
+const LOAD_SETTLE_MAX_MS = 1500;
+async function settleAfterLoad(lastAt: () => number, signal: AbortSignal): Promise<void> {
+  const deadline = Date.now() + LOAD_SETTLE_MAX_MS;
+  for (;;) {
+    if (signal.aborted) return;
+    const now = Date.now();
+    const wait = Math.min(lastAt() + LOAD_SETTLE_QUIET_MS - now, deadline - now);
+    if (wait <= 0) return;
+    await new Promise<void>((r) => setTimeout(r, wait));
+  }
+}
+
 export async function runAcpEngine(def: EngineDef, ctx: EngineRunCtx): Promise<EngineResult> {
   const cwd = ctx.cwd || process.cwd();
   // host 能力下运行：继承父 env（等价于用户自己在终端跑 claude），叠加 def.env。适配器据此读 ANTHROPIC_API_KEY/~/.claude。
@@ -415,9 +447,21 @@ export async function runAcpEngine(def: EngineDef, ctx: EngineRunCtx): Promise<E
     engineIdle = setTimeout(() => { try { onAbort(); } catch { /* ignore */ } }, ENGINE_IDLE_MS);
   };
   // 包一层 ctx:每次事件回灌续命；审批期间停表(审批不经 publish，等用户点批准不能被 idle 误杀)。
+  // 续接走 session/load 时,从发出 load 到发出这一句(prompt)之前,引擎说的都不算这一轮的输出,一律丢掉:
+  //  - 回包之前到的,是它重放的历史;
+  //  - 回包之后紧跟着到的,是它补发的会话状态。实测 Codex 的适配器(2.6.0)每次 load 回包后 1~2 毫秒会补一条
+  //    agent_message_chunk(把 Codex 自己的配置警告当正文发,例如「Warning: clamping SessionEnd hook timeout …」)和一条
+  //    usage_update(上一轮的用量)。回包一到就放开的话,它们成了这一轮回答的开头。
+  // 所以回包之后先等通知静下来(settleAfterLoad),到发 prompt 那一刻才放开。条数只进日志:看得出续接有没有真的走到重放这一步。
   let replaying = false;
+  let loadAnswered = false;
+  let loadMs = 0;
+  const dropped = { replayed: 0, trailing: 0, lastAt: 0 };
   const wrappedCtx: AcpClientCtx = {
-    replaying: () => replaying,
+    replaying: () => {
+      if (replaying) { if (loadAnswered) dropped.trailing += 1; else dropped.replayed += 1; dropped.lastAt = Date.now(); }
+      return replaying;
+    },
     signal: ctx.signal,
     publish: (type, payload) => { armEngineIdle(); ctx.publish(type, payload); },
     requestApproval: async (preview, toolCall) => {
@@ -469,9 +513,16 @@ export async function runAcpEngine(def: EngineDef, ctx: EngineRunCtx): Promise<E
       ctx.signal.throwIfAborted();
       try {
         if (canLoad) {
-          replaying = true;
+          replaying = true; // 到发 prompt 之前才放开,见上面 replaying 的说明
+          const loadStarted = Date.now();
           try { s = await guard(conn.loadSession({ cwd, mcpServers, _meta:meta, sessionId: ctx.resumeSessionId }), 'loadSession'); }
-          finally { replaying = false; }
+          catch (e) {
+            console.log(`[engine:${def.id}] session/load ${ctx.resumeSessionId} failed after ${Date.now() - loadStarted}ms, dropped ${dropped.replayed} replayed updates`);
+            throw e;
+          }
+          loadAnswered = true;
+          loadMs = Date.now() - loadStarted;
+          dropped.lastAt = Date.now();
         } else if (canResume) {
           s = await guard(conn.unstable_resumeSession({ cwd, mcpServers, _meta:meta, sessionId: ctx.resumeSessionId }), 'resumeSession');
         } else {
@@ -493,7 +544,8 @@ export async function runAcpEngine(def: EngineDef, ctx: EngineRunCtx): Promise<E
     }
     resumable = canLoad || canResume;
     // 会话一建立就告诉调用方(在 prompt 之前):这一轮中途被停掉 / 崩了,下一轮也接得上。记不下来不拦这一轮。
-    try { await ctx.onSession?.({ id: sessionId, resumable, resumed: !!ctx.resumeSessionId, via: canLoad ? 'load' : canResume ? 'resume' : undefined }); }
+    const via = canLoad ? 'load' as const : canResume ? 'resume' as const : undefined;
+    try { await ctx.onSession?.({ id: sessionId, resumable, resumed: !!ctx.resumeSessionId, via, verifiedForChat: chatResumeVerified(via, initialized.agentInfo?.name) }); }
     catch (e: any) { console.warn(`[engine] onSession failed: ${e?.message || e}`); }
     if (ctx.readOnly) {
       const mode = s.modes?.availableModes?.find((m: any) => (claudeReadOnly ? m.id==='plan' : m.id==='read-only'));
@@ -519,6 +571,13 @@ export async function runAcpEngine(def: EngineDef, ctx: EngineRunCtx): Promise<E
       } catch (e: any) {
         console.warn(`[engine] set model(${ctx.engineModelId}) failed: ${acpErrorText(e)}`);
       }
+    }
+    if (replaying) {
+      await settleAfterLoad(() => dropped.lastAt, ctx.signal);
+      ctx.signal.throwIfAborted();
+      replaying = false;
+      // 续接的每一轮都要付这段重放的时间。重放条数为 0 = 引擎没重放;这一行根本没出现 = 这一轮没走到续接。
+      console.log(`[engine:${def.id}] session/load ${sessionId} took ${loadMs}ms, dropped ${dropped.replayed} replayed updates and ${dropped.trailing} sent after the response`);
     }
     armEngineIdle(); // turn 开始起表
     // prompt 不设握手超时(一轮可以跑很久),但**子进程半路死掉要立刻知道** —— 否则只能等 5 分钟的

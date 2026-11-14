@@ -24,8 +24,10 @@ export interface EngineRunCtx {
   resumeSessionId?: string;
   /** 上一行:要续接的引擎会话。续不上一律失败(不悄悄新开);那个会话在引擎那边已经没有了时,抛出的错误带 externalSessionGone。 */
   /** 引擎会话一建立(新建或续上)就回调,在 prompt 之前。resumable = 这个引擎下一轮接得上它;
-   *  via = 下一轮会怎么接:'load'(session/load,回放历史)/ 'resume'(session/resume,不回放)。 */
-  onSession?: (info: { id: string; resumable: boolean; resumed: boolean; via?: 'load' | 'resume' }) => void | Promise<void>;
+   *  via = 下一轮会怎么接:'load'(session/load,回放历史)/ 'resume'(session/resume,不回放)。
+   *  verifiedForChat = 普通对话里下一轮可以接着用它:走 resume 的都算,走 load 的只算用真引擎核过的适配器
+   *  (名单见 acpEngine.ts 的 LOAD_RESUME_VERIFIED)。插件任务不看这一项,照旧按 resumable 续接。 */
+  onSession?: (info: { id: string; resumable: boolean; resumed: boolean; via?: 'load' | 'resume'; verifiedForChat?: boolean }) => void | Promise<void>;
   readOnly?: boolean;
   mcpServers?: import('@agentclientprotocol/sdk').McpServer[];
   message: string;

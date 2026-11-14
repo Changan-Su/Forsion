@@ -25,6 +25,7 @@ let seq: number;
 let started: () => void;
 let runs: string[];
 let via: 'load' | 'resume';
+let verified: boolean; // 引擎层按握手里的适配器名给的:普通对话里这个引擎会话下一轮能不能接着用
 
 const engines: EngineManager = {
   list: () => [], has: (id) => id === 'dsh' || id === 'codex',
@@ -35,7 +36,7 @@ const engines: EngineManager = {
     if (b.busy) throw new Error('Fake Harness has this conversation open in another window or process, so it cannot be continued here.');
     if (b.gone) throw Object.assign(new Error('Fake Harness no longer has the earlier session of this conversation (not resumable).'), { externalSessionGone: true });
     const id = ctx.resumeSessionId || `ext-${++seq}`;
-    await ctx.onSession?.({ id, resumable: true, resumed: !!ctx.resumeSessionId, via });
+    await ctx.onSession?.({ id, resumable: true, resumed: !!ctx.resumeSessionId, via, verifiedForChat: verified });
     started();
     if (b.hang) await new Promise((_, reject) => ctx.signal.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })), { once: true }));
     return { content: `answer to ${ctx.message}`, externalSessionId: id };
@@ -45,7 +46,7 @@ const engines: EngineManager = {
 beforeEach(async () => {
   home = mkdtempSync(join(tmpdir(), 'tangu-engine-resume-'));
   process.env.TANGU_HOME = home;
-  calls = []; next = []; seq = 0; runs = []; started = () => {}; via = 'resume';
+  calls = []; next = []; seq = 0; runs = []; started = () => {}; via = 'resume'; verified = true;
   const { host, db } = createSqliteHost({ dataDir: 'memory', localToken: 'x', userId: 'u1' });
   db.exec(toSqliteDDL(STANDALONE_SCHEMA));
   configureTangu({ host, engines, profile: createTanguProfile({ sandboxMode: 'none', toolBuiltins: ['read_file'] }),
@@ -222,12 +223,29 @@ describe('普通引擎对话的续接', () => {
   }, 20_000);
 });
 
-describe('走 session/load 的引擎(Claude Code / Codex)', () => {
-  it('普通对话里先不续接:没用真引擎测过,不动它们今天的行为', async () => {
-    via = 'load';
+// 走 session/load 的引擎续接时会把历史重放一遍。哪几家的适配器用真引擎核过,由引擎层判(acpEngine 的 chatResumeVerified,
+// 按握手里的适配器名);这里只看对话循环照不照它办。
+describe('走 session/load 的引擎', () => {
+  it('用真引擎核过的适配器(Codex)→ 第二句、第三句续接,指针记在 run 上', async () => {
+    via = 'load'; verified = true;
+    await turn(1, { engineId: 'codex' }); await turn(2, { engineId: 'codex' }); await turn(3, { engineId: 'codex' });
+    expect(resumes()).toEqual([null, 'ext-1', 'ext-1']);
+    expect((await resultOf(1)).result.externalSession).toMatchObject({ id: 'ext-1', engineId: 'codex', after: null });
+    expect((await resultOf(2)).result.externalSession).toMatchObject({ id: 'ext-1', engineId: 'codex', after: 'a1' });
+  }, 20_000);
+
+  it('还没核过的适配器(Claude Code)→ 照旧每轮新开、不记指针:不动它今天的行为', async () => {
+    via = 'load'; verified = false;
     await turn(1); await turn(2);
     expect(resumes()).toEqual([null, null]);
     expect((await resultOf(1)).result.externalSession).toBeUndefined();
+    expect((await resultOf(2)).result.externalSession).toBeUndefined();
+  }, 20_000);
+
+  it('引擎层没说核过(老的引擎管理器不带这一项)→ 当成没核过', async () => {
+    via = 'resume'; verified = undefined as unknown as boolean;
+    await turn(1); await turn(2);
+    expect(resumes()).toEqual([null, null]);
   }, 20_000);
 });
 

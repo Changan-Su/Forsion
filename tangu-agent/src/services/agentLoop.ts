@@ -680,10 +680,11 @@ async function externalEngineLoop(runId: string, ac: AbortController, run: any, 
       mcpServers: toolServer ? [toolServer.server] : undefined,
       resumeSessionId: chatResume ? chain?.resumeId : (previous?.engineId === engineId && previous?.cwd === engineCwd ? previous.id : undefined),
       // 引擎会话一建立(prompt 之前)就把指针记到本轮 run 上:这一轮中途被停掉,下一轮照样接得上。
-      // 只给走 session/resume 的引擎(DSH)记:走 session/load 的(Claude Code / Codex)在普通对话里续接还没有用真引擎测过,
-      // 而它们的普通对话今天是好的 —— 没测过就打开,坏了是「每场对话的第二句都失败」。测过之后去掉 via 这个条件即可。
-      onSession: chatResume ? async ({ id, resumable, via }) => {
-        if (!resumable || via !== 'resume') return;
+      // 只给续接核过的引擎记(verifiedForChat,引擎层按握手里的适配器名判):走 session/resume 的(DSH)都算;走 session/load 的
+      // (续接时把历史重放一遍)只算用真引擎核过的 —— 今天是 Codex。Claude Code 还没核,它在普通对话里照旧每轮新开:
+      // 它的普通对话今天是好的,没核过就打开,坏了是「每场对话的第二句都失败」。
+      onSession: chatResume ? async ({ id, resumable, verifiedForChat }) => {
+        if (!resumable || !verifiedForChat) return;
         // 删消息的入口在有 run 在跑时一律拒绝,所以这里记下的版本号到本轮结束都不会变。
         pointer = { id, engineId, cwd: pointerCwd, after: chain?.latest ?? null, rev: historyRevision(sessionId), epoch: historyEpoch };
         await updateRunStatus(runId, 'running', { result: { externalSession: pointer } });
