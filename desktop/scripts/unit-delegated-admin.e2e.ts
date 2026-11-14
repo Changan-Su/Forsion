@@ -134,10 +134,13 @@ function fixture(method: string, p: string, body: unknown): { status?: number; j
   return { status: 404, json: { detail: 'fixture: no data' } }
 }
 
+// The admin only ever arrives through the cloud relay, so the page is opened under the relay path (the shell keys its
+// strict identity handling on that). Device surfaces under the prefix are answered here with the prefix stripped.
+const RELAY_PREFIX = '/api/units/0f8fad5b-d9cb-469f-a165-70867728950e/proxy/'
 async function device(route: Route): Promise<void> {
   const req = route.request()
   const u = new URL(req.url())
-  const p = u.pathname
+  const p = u.pathname.startsWith(RELAY_PREFIX) ? `/${u.pathname.slice(RELAY_PREFIX.length)}` : u.pathname
   const method = req.method().toUpperCase()
   const engine = p === '/engine' || p.startsWith('/engine/')
   const allowed = engine ? delegatedEngineAllowed(method, p.slice('/engine'.length) || '/') : delegatedNonEngineAllowed(method, p)
@@ -237,10 +240,12 @@ async function main(): Promise<void> {
       } catch { /* ignore */ }
     })
     // Pathname prefix only: vite serves modules from paths like /@fs/…/services/engine/targets.ts.
-    await ctx.route((u) => /^\/(?:unit|vault|engine|api)(?:\/|$)/.test(u.pathname), device)
+    await ctx.route((u) => /^\/(?:unit|vault|engine|api)(?:\/|$)/.test(u.pathname.startsWith(RELAY_PREFIX) ? `/${u.pathname.slice(RELAY_PREFIX.length)}` : u.pathname), device)
     await ctx.route('**/*', async (route) => {
       if (route.request().resourceType() !== 'document') return route.fallback()
-      const response = await route.fetch()
+      // The relay page itself: the dev server's index (vite would proxy /api away).
+      const relayDoc = new URL(route.request().url()).pathname.startsWith(RELAY_PREFIX)
+      const response = await route.fetch(relayDoc ? { url: vite.url } : undefined)
       const html = (await response.text()).replace("script-src 'self' 'unsafe-inline'", "script-src 'self' 'unsafe-inline' 'unsafe-eval'")
       return route.fulfill({ response, body: html })
     })
@@ -273,7 +278,7 @@ async function main(): Promise<void> {
     if (process.env.MOBILE === '1') {
       // Phone shell (web loads the mobile entry for ?ui=mobile): boot only, then count outside hits.
       await page.setViewportSize({ width: 390, height: 844 })
-      await page.goto(vite.url + '?ui=mobile', { waitUntil: 'domcontentloaded' })
+      await page.goto(new URL(RELAY_PREFIX.slice(1), vite.url).href + '?ui=mobile', { waitUntil: 'domcontentloaded' })
       await page.waitForSelector('[data-agents-space], .agents-roster', { timeout: 120_000 }).catch(() => null)
       await page.waitForTimeout(6000)
       await shot(page, 'admin-home-phone')
@@ -283,7 +288,7 @@ async function main(): Promise<void> {
       await storageChecks(page, 'phone shell')
       return
     }
-    await page.goto(vite.url, { waitUntil: 'domcontentloaded' })
+    await page.goto(new URL(RELAY_PREFIX.slice(1), vite.url).href, { waitUntil: 'domcontentloaded' })
     await page.waitForSelector('.rb', { timeout: 120_000 })
     await page.waitForSelector('[data-agents-space]', { timeout: 30_000 }).catch(() => null)
     await page.waitForTimeout(3000)

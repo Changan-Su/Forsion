@@ -7,6 +7,7 @@
 import type { UnitCloudCapabilities } from './unitCloudTransport'
 import { setContentStorageScope } from '@lcl/engine/contentStorageScope'
 import { installScopedStorage } from './scopedStorage'
+import { parseRelayUrl } from '../../mobile/src/relayPaths'
 
 interface UnitMeta { instanceId: string; name: string; version: string; projection?: 'public' | 'local'; inheritWebAccount?: boolean; localCapabilities?: { vault: boolean; engine: boolean; host: boolean }; browserStorage?: boolean; account?: { apiBase: string; loginPath: string }; capabilities?: UnitCloudCapabilities }
 
@@ -88,6 +89,16 @@ export function whoamiVerdict(status: number | null, body: unknown): WhoamiVerdi
   return { kind: 'unknown' }
 }
 
+/**
+ * 页面是不是经云端中转打开的(地址里带 `/api/units/<id>/proxy/`)。委托管理员只可能从这条来路进来,所以「身份读不准 → 停」
+ * 只在这条来路上生效;局域网 / 本机直接打开照改动前的走法。判定复用手机中继的地址语法(parseRelayUrl):把页面基址
+ * 当成中继面上的一条 engine 请求来认,uuid、`/proxy/` 段的规则与中转口同一份。
+ */
+export function openedViaRelay(pageBase: string = base().href): boolean {
+  const at = pageBase.lastIndexOf('/api/units/')
+  return at >= 0 && parseRelayUrl(pageBase.slice(0, at + '/api'.length), `${pageBase}engine`)?.kind === 'relay'
+}
+
 /** 带总超时的 whoami:请求与读回包体共用一个计时器(只在 200 时读体)。 */
 async function fetchWhoami(token: string): Promise<{ probe: Response | null; status: number | null; body: unknown }> {
   const ctl = typeof AbortController === 'function' ? new AbortController() : null
@@ -131,12 +142,17 @@ export async function installUnitShim(): Promise<boolean> {
   }
 
   // 探针:隧道来的(桌面壳分区注入,unitHost 加内部密钥)直接 200;局域网未配对 → 401 → 配对流。
-  const { probe, status, body } = await fetchWhoami(token)
-  if (published && !probe?.ok) throw new Error('Unit projection is unavailable')
   // 委托管理员(经中转进来的管理员,只管 Agent):那台设备在 whoami 里带 role。壳在这个角色下不发白名单外的请求、只露 Agent 管理
-  // (门控统一问 desktop 的 services/delegatedAdmin.ts)。身份读不准(失败 / 超时 / 回包畸形 / role 不认识)就停在启动失败页:
-  // 按普通身份往下走会读写这个浏览器里设备主人的布局等存储(管理员的存储作用域只在认出角色后才设)。
-  const verdict: WhoamiVerdict = published ? { kind: 'owner' } : whoamiVerdict(status, body)
+  // (门控统一问 desktop 的 services/delegatedAdmin.ts)。经中转打开的页面上身份读不准(失败 / 超时 / 回包畸形 / role 不认识)
+  // 就停在启动失败页:按普通身份往下走会读写这个浏览器里设备主人的布局等存储(管理员的存储作用域只在认出角色后才设)。
+  // 局域网 / 本机直接打开、公开投射:与改动前逐字节一致(无超时、网络失败照旧进配对流,不认 role)。
+  const relay = !published && openedViaRelay()
+  const { probe, status, body } = relay ? await fetchWhoami(token) : await fetch(new URL('unit/whoami', base()), {
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+  }).then((r) => ({ probe: r, status: r.status, body: null as unknown }), () => ({ probe: null, status: null, body: null as unknown }))
+  if (published && !probe?.ok) throw new Error('Unit projection is unavailable')
+  const verdict: WhoamiVerdict = relay ? whoamiVerdict(status, body)
+    : !published && (!probe || probe.status === 401) ? { kind: 'unpaired' } : { kind: 'owner' }
   if (verdict.kind === 'unknown') throw new Error('Unit identity is unavailable')
   const delegated = verdict.kind === 'delegated' ? { name: verdict.name } : null
   // 委托管理员:这个页面里所有 Web Storage 读写都落在本角色的前缀下(布局、Ribbon、主位槽、主题偏好、提醒存档……一律),

@@ -5,13 +5,20 @@
  *   · 白名单外的请求被拒是 403,不触发 401 那条「清令牌 + 整页重载」(文件桥上 403 不调 onAuthError);
  *   · 别的来路(whoami 不带 role)照旧挂桥;
  *   · 身份读不准(502 / 超时 / 回包不是 JSON / role 不认识)→ 抛错停在启动失败页:不设 window.tangu、不写任何本地存储、
- *     除了给 whoami 用的配对令牌键之外什么也不读。
+ *     除了给 whoami 用的配对令牌键之外什么也不读 —— 只在经云端中转打开的页面上(管理员只可能从这条来路进来);
+ *   · 局域网 / 本机直接打开:whoami 的各种失败照改动前的走法(网络失败进配对流、502 / 畸形照常启动、不认 role、无超时)。
  * 跑:cd desktop && npx vitest run frontend/src/unitShimDelegated.test.ts
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { WHOAMI_TIMEOUT_MS, installUnitShim, whoamiVerdict } from '../../../web/src/unitShim'
+import { WHOAMI_TIMEOUT_MS, installUnitShim, openedViaRelay, whoamiVerdict } from '../../../web/src/unitShim'
 import { createUnitAmadeusBridge } from '../../../web/src/amadeus/unitBridge'
 
+const RELAY = 'https://cloud.test/api/units/0f8fad5b-d9cb-469f-a165-70867728950e/proxy/'
+const LAN = 'http://unit.test/web/'
+let pageBase = RELAY
+vi.mock('../../../web/src/unitOwnerAccess', () => ({ ownerAccess: vi.fn(async () => null) }))
+const { ownerAccess } = await import('../../../web/src/unitOwnerAccess')
+let whoamiFails = false
 const hits: Array<{ method: string; path: string }> = []
 let whoami: Record<string, unknown> = { ok: true }
 /** whoami 的整条回包(状态 + 原文);null = 照 whoami 对象回 200。'hang' = 永不回(只认 abort)。 */
@@ -31,23 +38,28 @@ beforeEach(() => {
   hits.length = 0
   storageOps.length = 0
   whoamiRaw = null
+  whoamiFails = false
+  vi.mocked(ownerAccess).mockClear()
   vi.stubGlobal('window', { __FORSION_UNIT_PAGE__: { instanceId: 'u1', name: 'Studio Mac', version: '1', projection: 'local', localCapabilities: { vault: true, engine: true, host: true } }, addEventListener: () => {} })
-  vi.stubGlobal('document', { baseURI: 'http://unit.test/web/', title: '' })
-  vi.stubGlobal('location', { hash: '', pathname: '/web/', search: '', href: 'http://unit.test/web/', origin: 'http://unit.test', reload: vi.fn() })
+  const b = new URL(pageBase)
+  vi.stubGlobal('document', { baseURI: pageBase, title: '' })
+  vi.stubGlobal('location', { hash: '', pathname: b.pathname, search: '', href: pageBase, origin: b.origin, reload: vi.fn() })
   vi.stubGlobal('history', { replaceState: () => {} })
   vi.stubGlobal('sessionStorage', store('session'))
   vi.stubGlobal('localStorage', store('local'))
   vi.stubGlobal('EventSource', class { close() {} })
   vi.stubGlobal('fetch', vi.fn(async (input: URL | string, init?: RequestInit) => {
     const url = new URL(String(input))
-    hits.push({ method: (init?.method || 'GET').toUpperCase(), path: url.pathname })
-    if (url.pathname === '/web/unit/whoami') {
+    const path = '/' + url.pathname.slice(new URL(pageBase).pathname.length)
+    hits.push({ method: (init?.method || 'GET').toUpperCase(), path })
+    if (path === '/unit/whoami') {
+      if (whoamiFails) throw new TypeError('Failed to fetch')
       if (whoamiRaw === 'hang') return new Promise<Response>((_, reject) => init?.signal?.addEventListener('abort', () => reject(new Error('aborted'))))
       if (whoamiRaw) return new Response(whoamiRaw.text, { status: whoamiRaw.status })
       return new Response(JSON.stringify(whoami))
     }
-    if (url.pathname === '/web/unit/config') return new Response(JSON.stringify({ config: {} }))
-    if (url.pathname === '/web/vault/asset-token') return new Response(JSON.stringify({ token: 'at', ttlSec: 600 }))
+    if (path === '/unit/config') return new Response(JSON.stringify({ config: {} }))
+    if (path === '/vault/asset-token') return new Response(JSON.stringify({ token: 'at', ttlSec: 600 }))
     return new Response(JSON.stringify({ code: 'LOCAL_ONLY' }), { status: 403 })
   }))
 })
@@ -65,16 +77,27 @@ describe('whoamiVerdict', () => {
   })
 })
 
-describe('installUnitShim · 身份读不准就停', () => {
+describe('openedViaRelay', () => {
+  it('只认中转地址 /api/units/<uuid>/proxy/', () => {
+    expect(openedViaRelay(RELAY)).toBe(true)
+    expect(openedViaRelay(LAN)).toBe(false)
+    expect(openedViaRelay('http://127.0.0.1:8792/')).toBe(false)
+    expect(openedViaRelay('https://cloud.test/api/units/not-a-uuid/proxy/')).toBe(false)
+    expect(openedViaRelay('https://cloud.test/api/units/0f8fad5b-d9cb-469f-a165-70867728950e/')).toBe(false)
+  })
+})
+
+describe('installUnitShim · 经中转打开时身份读不准就停', () => {
   const stopped = async (): Promise<void> => {
     await expect(installUnitShim()).rejects.toThrow(/identity/)
     const w = (globalThis as any).window
     expect(w.tangu).toBeUndefined()
     expect(w.amadeus).toBeUndefined()
-    expect(hits).toEqual([{ method: 'GET', path: '/web/unit/whoami' }])
+    expect(hits).toEqual([{ method: 'GET', path: '/unit/whoami' }])
     // 只读了给 whoami 用的配对令牌键;一条写都没有
     expect(storageOps).toEqual(['session.get unit_owner_u1'])
   }
+  it('网络失败', async () => { whoamiFails = true; await stopped() })
   it('502', async () => { whoamiRaw = { status: 502, text: 'Bad gateway' }; await stopped() })
   it('200 但回包不是 JSON', async () => { whoamiRaw = { status: 200, text: '<html>oops' }; await stopped() })
   it('200 但 role 不认识', async () => { whoami = { ok: true, role: 'super-admin', operator: { name: 'x' } }; await stopped() })
@@ -101,8 +124,8 @@ describe('installUnitShim · 委托管理员', () => {
     expect(w.amadeus).toBeUndefined()
     for (const k of ['backendStatus', 'listProviders', 'readHostFile', 'listDir', 'spacesList']) expect(w.tangu[k], k).toBeUndefined()
     await w.tangu.setConfig({ theme: 'dark' })
-    expect(hits).toEqual([{ method: 'GET', path: '/web/unit/whoami' }, { method: 'GET', path: '/web/unit/config' }, { method: 'GET', path: '/web/unit/config' }].slice(0, hits.length))
-    expect(hits.every((h) => h.method === 'GET' && (h.path === '/web/unit/whoami' || h.path === '/web/unit/config'))).toBe(true)
+    expect(hits).toEqual([{ method: 'GET', path: '/unit/whoami' }, { method: 'GET', path: '/unit/config' }, { method: 'GET', path: '/unit/config' }].slice(0, hits.length))
+    expect(hits.every((h) => h.method === 'GET' && (h.path === '/unit/whoami' || h.path === '/unit/config'))).toBe(true)
   })
   it('负对照:whoami 不带 role → 照旧挂文件桥(会去要资源令牌)', async () => {
     whoami = { ok: true }
@@ -110,7 +133,50 @@ describe('installUnitShim · 委托管理员', () => {
     const w = (globalThis as any).window
     expect(w.tangu.delegatedAdmin).toBeUndefined()
     expect(w.amadeus).toBeTruthy()
-    expect(hits.some((h) => h.path === '/web/vault/asset-token')).toBe(true)
+    expect(hits.some((h) => h.path === '/vault/asset-token')).toBe(true)
+  })
+})
+
+describe('installUnitShim · 局域网 / 本机直接打开:与改动前一致', () => {
+  beforeEach(() => { pageBase = LAN })
+  afterEach(() => { pageBase = RELAY })
+  // beforeEach 顺序:外层先跑(按当时的 pageBase 装了 RELAY 的桩),这里换基址后重装一遍 document / location
+  beforeEach(() => {
+    const b = new URL(pageBase)
+    vi.stubGlobal('document', { baseURI: pageBase, title: '' })
+    vi.stubGlobal('location', { hash: '', pathname: b.pathname, search: '', href: pageBase, origin: b.origin, reload: vi.fn() })
+  })
+  it('whoami 网络失败 → 进配对流程(主人进入)', async () => {
+    whoamiFails = true
+    expect(await installUnitShim()).toBe(false) // ownerAccess 桩返回 null = 用户没完成
+    expect(ownerAccess).toHaveBeenCalledTimes(1)
+  })
+  it('502 → 照常启动(挂文件桥)', async () => {
+    whoamiRaw = { status: 502, text: 'Bad gateway' }
+    expect(await installUnitShim()).toBe(true)
+    expect((globalThis as any).window.amadeus).toBeTruthy()
+    expect(ownerAccess).not.toHaveBeenCalled()
+  })
+  it('200 但回包不是 JSON → 照常启动', async () => {
+    whoamiRaw = { status: 200, text: '<html>oops' }
+    expect(await installUnitShim()).toBe(true)
+    expect((globalThis as any).window.amadeus).toBeTruthy()
+  })
+  it('回包带管理员 role 也不认(管理员只可能经中转来)', async () => {
+    whoami = { ok: true, role: 'delegated-admin', operator: { name: 'Alex' } }
+    expect(await installUnitShim()).toBe(true)
+    expect((globalThis as any).window.tangu.delegatedAdmin).toBeUndefined()
+    expect((globalThis as any).window.amadeus).toBeTruthy()
+  })
+  it('请求挂住:没有超时(15s 后仍在等)', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      whoamiRaw = 'hang'
+      let settled = false
+      void installUnitShim().then(() => { settled = true }, () => { settled = true })
+      await vi.advanceTimersByTimeAsync(WHOAMI_TIMEOUT_MS * 2)
+      expect(settled).toBe(false)
+    } finally { vi.useRealTimers() }
   })
 })
 
