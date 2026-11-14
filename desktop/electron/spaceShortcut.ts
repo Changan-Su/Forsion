@@ -320,7 +320,9 @@ export function createWindowShortcut(kind: WindowShortcutKind, space: { id: stri
 }
 
 async function createWindowShortcutNow(kind: WindowShortcutKind, space: { id: string; name: string }, deps: CreateSpaceShortcutDeps): Promise<WindowShortcutResult> {
-  if (deps.stillCurrent && !deps.stillCurrent()) return { ok: false, code: 'account_changed' }
+  /** 请求还作不作数:队头核一次,之后每个平台**第一次往桌面动盘的紧前面**再核一次(中间隔着 stat / taken 这些异步等待)。 */
+  const stale = (): boolean => !!deps.stillCurrent && !deps.stillCurrent()
+  if (stale()) return { ok: false, code: 'account_changed' }
   if (!deps.isPackaged) return { ok: false, code: 'unpackaged' }
   const platform = deps.platform ?? process.platform
   if (!kind.isId(space.id)) return { ok: false, code: 'not_found' }
@@ -355,6 +357,7 @@ async function createWindowShortcutNow(kind: WindowShortcutKind, space: { id: st
         // writeShortcutLink 的 create 会覆盖:先查再写(同造物那条,竞态接受)。
         if (await taken(target)) continue
         if (!deps.writeShortcutLink) return { ok: false, code: 'error', detail: 'Shortcut writer is unavailable' }
+        if (stale()) return { ok: false, code: 'account_changed' }
         const options = {
           target: deps.execPath, args: plan.args, description: plan.description, appUserModelId: plan.appUserModelId,
           ...(iconPath ? { icon: iconPath, iconIndex: 0 } : {}),
@@ -365,6 +368,7 @@ async function createWindowShortcutNow(kind: WindowShortcutKind, space: { id: st
         return { ok: true, path: target }
       }
       if (plan.kind === 'file') {
+        if (stale()) return { ok: false, code: 'account_changed' }
         const fh = await fs.open(target, 'wx', plan.mode ?? 0o644).catch((e: NodeJS.ErrnoException) => {
           if (e.code === 'EEXIST') return null
           throw e
@@ -377,6 +381,7 @@ async function createWindowShortcutNow(kind: WindowShortcutKind, space: { id: st
         return { ok: true, path: target }
       }
       // .app 是目录:mkdir 不带 recursive,已存在(文件 / 目录 / 软链)一律 EEXIST → 换下一个名字。
+      if (stale()) return { ok: false, code: 'account_changed' }
       try { await fs.mkdir(target) } catch (e) {
         if ((e as NodeJS.ErrnoException).code === 'EEXIST') continue
         throw e

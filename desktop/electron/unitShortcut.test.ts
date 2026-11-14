@@ -303,3 +303,23 @@ describe('parseUnitWindowState (Unit window restore, unit-windows.json)', () => 
     expect(parseUnitWindowState('[{"unit"')).toBeNull()
   })
 })
+
+describe('the account is checked again right before the first desktop write', () => {
+  for (const platform of ['darwin', 'win32', 'linux'] as const) {
+    it(`${platform}: account switched while stat(desktop) was pending → nothing written`, async () => {
+      let account = 'acct-a'
+      let release!: () => void
+      const realStat = fs.stat.bind(fs)
+      vi.spyOn(fs, 'stat').mockImplementation(((p: Parameters<typeof fs.stat>[0]) =>
+        path.resolve(String(p)) === desktop ? new Promise((r) => { release = () => r(realStat(p)) }) : realStat(p)) as typeof fs.stat)
+      const writer = vi.fn<Writer>(() => true)
+      const pending = createWindowShortcut(UNIT_SHORTCUT, { id: ID, name: 'Den' }, deps({ platform, writeShortcutLink: writer, stillCurrent: () => account === 'acct-a' }))
+      await new Promise((r) => setTimeout(r, 20))
+      account = 'acct-b'
+      release()
+      expect(await pending).toEqual({ ok: false, code: 'account_changed' })
+      expect(writer).not.toHaveBeenCalled()
+      expect(await fs.readdir(desktop)).toEqual([])
+    })
+  }
+})
