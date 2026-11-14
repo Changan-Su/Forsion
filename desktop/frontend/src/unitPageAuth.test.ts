@@ -124,6 +124,18 @@ describe('401 reload guard', () => {
     expect(third.reload).toHaveBeenCalledTimes(1)
   })
 
+  it('placeholder: a 401 suppressed inside the window does not disable the same page forever', () => {
+    let t = 2_000_000
+    sessionStorage.setItem('unit_auth_reload_u1', String(t - 5_000)) // 上一页 5 秒前重载过
+    const page = handler(UNIT_TOKEN_PLACEHOLDER, () => t)
+    page.fire(); page.fire()
+    expect(page.reload).not.toHaveBeenCalled()
+    // 同一页、同一个处理器,窗口过后再收到 401 → 再试一次,之后不再重复
+    t += UNIT_AUTH_RELOAD_WINDOW_MS
+    page.fire(); page.fire()
+    expect(page.reload).toHaveBeenCalledTimes(1)
+  })
+
   it('placeholder via the real bridge: two failing calls reload once', async () => {
     stubNetwork(401)
     const reload = vi.fn()
