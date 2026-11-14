@@ -168,7 +168,6 @@ describe('委托管理员档(开关开)', () => {
       ['GET', '/web/engine/agent/skills/catalog?agentSlug=demo'],
       ['PUT', '/web/engine/agent/skills/catalog/local%3Ax/disabled?agentSlug=demo', { disabled: true }],
       ['GET', '/web/engine/agent/special/schedule'],
-      ['POST', '/web/engine/agent/special/schedule/demo/entries', { title: 't' }],
       ['DELETE', '/web/engine/agent/special/schedule/demo/entries/e1'],
     ]
     for (const [method, path, body] of allowed) {
@@ -253,6 +252,9 @@ describe('委托管理员档(开关开)', () => {
       ['PATCH', '/web/engine/agent/skills/catalog/k', {}],
       ['POST', '/web/engine/agent/agents/demo/rename', {}],
       ['PUT', '/web/engine/agent/agents-meta', {}],
+      // 日程的新建 / 覆盖写(到点无人值守、完全放行的运行):读与删放,建与改不放
+      ['POST', '/web/engine/agent/special/schedule/demo/entries', { title: 't', auto: true, prompt: 'p' }],
+      ['POST', '/web/engine/agent/special/schedule/demo/entries', { id: 'e1', title: 't' }],
       // 表里没有的引擎路径
       ['GET', '/web/engine/agent/not-a-route'],
     ]
@@ -384,13 +386,13 @@ describe('开关关着:合法的操作者声明不升档,按今天的隧道档',
 })
 
 describe('白名单的数据形状', () => {
-  it('引擎半:路由表里带 delegatedAdmin 标记的就是这 17 条(增删要同改生成器 DELEGATED_ADMIN 与这里)', () => {
+  it('引擎半:路由表里带 delegatedAdmin 标记的就是这 16 条(增删要同改生成器 DELEGATED_ADMIN 与这里)', () => {
     const marked = ENGINE_ROUTES.filter((r) => r.delegatedAdmin).map((r) => `${r.method} ${r.path}`).sort()
     expect(marked).toEqual([
       'DELETE /agent/agents/:slug', 'DELETE /agent/agents/:slug/avatar', 'DELETE /agent/special/schedule/:slug/entries/:id',
       'GET /agent/agents', 'GET /agent/agents-meta', 'GET /agent/agents/:slug/avatar', 'GET /agent/models',
       'GET /agent/skills', 'GET /agent/skills/catalog', 'GET /agent/special/schedule', 'GET /agent/tool-catalog', 'GET /health',
-      'PATCH /agent/agents/:slug', 'POST /agent/agents', 'POST /agent/agents/:slug/avatar', 'POST /agent/special/schedule/:slug/entries',
+      'PATCH /agent/agents/:slug', 'POST /agent/agents', 'POST /agent/agents/:slug/avatar',
       'PUT /agent/skills/catalog/:key/disabled',
     ])
   })
@@ -400,6 +402,9 @@ describe('白名单的数据形状', () => {
     expect(delegatedEngineAllowed('GET', '/agent/agents/demo/harness')).toBe(false)
     expect(delegatedEngineAllowed('GET', '/agent/sessions')).toBe(false)
     expect(delegatedEngineAllowed('GET', '/agent/nope')).toBe(false)
+    expect(delegatedEngineAllowed('GET', '/agent/special/schedule')).toBe(true)
+    expect(delegatedEngineAllowed('DELETE', '/agent/special/schedule/demo/entries/e1')).toBe(true)
+    expect(delegatedEngineAllowed('POST', '/agent/special/schedule/demo/entries')).toBe(false)
     // :key 与字面段同时命中的那类:catalog/import(POST)只命中不带标记的行
     expect(delegatedEngineAllowed('POST', '/agent/skills/catalog/import')).toBe(false)
     for (const [m, p] of DELEGATED_ADMIN_UNIT_ROUTES) expect(delegatedNonEngineAllowed(m, p)).toBe(true)

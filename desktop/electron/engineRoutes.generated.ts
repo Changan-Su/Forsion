@@ -302,7 +302,7 @@ export const ENGINE_ROUTES: readonly EngineRoute[] = [
   { method: 'DELETE', path: '/agent/special/muse/triggers/:id', access: 'deny-remote', src: 'routes/special.ts', why: 'Muse trigger config' },
   { method: 'POST', path: '/agent/special/muse/wake', access: 'deny-remote', src: 'routes/special.ts', why: 'starts a Muse round now (spends the background budget); the engine refuses remote origins too' },
   { method: 'GET', path: '/agent/special/schedule', access: 'allow', delegatedAdmin: true, src: 'routes/special.ts', why: 'Agent schedules' },
-  { method: 'POST', path: '/agent/special/schedule/:slug/entries', access: 'deny-remote', delegatedAdmin: true, src: 'routes/special.ts', why: 'creates persistent follow-up execution (design appendix C)' },
+  { method: 'POST', path: '/agent/special/schedule/:slug/entries', access: 'deny-remote', src: 'routes/special.ts', why: 'creates persistent follow-up execution (design appendix C)' },
   { method: 'DELETE', path: '/agent/special/schedule/:slug/entries/:id', access: 'deny-remote', delegatedAdmin: true, src: 'routes/special.ts', why: 'schedule write' },
   { method: 'GET', path: '/agent/teams', access: 'allow', src: 'routes/teams.ts', why: 'team list' },
   { method: 'POST', path: '/agent/teams', access: 'deny-remote', src: 'routes/teams.ts', why: 'create team' },
