@@ -177,7 +177,8 @@ function handleStar(state: EditorState, from: number, to: number, dispatch: (tr:
   const text = $from.parent.textBetween(0, $from.parent.content.size, '\n', '￼')
   const prev = text[off - 1] ?? ''
   const next = text[off] ?? ''
-  if (prev === '*' && next === '*' && text[off - 2] !== '*' && text[off + 1] !== '*') {
+  // `*|*` freshly auto-paired (nothing or whitespace before it) -> `**|**`; `**cd*|*` steps over instead.
+  if (prev === '*' && next === '*' && (off < 2 || /\s/.test(text[off - 2])) && text[off + 1] !== '*') {
     // `*|*` -> `**|**`
     const tr = state.tr.insertText('**', from)
     tr.setSelection(TextSelection.create(tr.doc, from + 1))
@@ -188,7 +189,8 @@ function handleStar(state: EditorState, from: number, to: number, dispatch: (tr:
     dispatch(state.tr.setSelection(TextSelection.create(state.doc, from + 1)))
     return true
   }
-  if (next === '' || /\s/.test(next)) {
+  // No auto-pair at the start of a block: `* ` there is a list bullet (the input rule would leave the pair's `*` behind).
+  if (off > 0 && (next === '' || /\s/.test(next))) {
     const tr = state.tr.insertText('**', from)
     tr.setSelection(TextSelection.create(tr.doc, from + 1))
     dispatch(tr)
@@ -294,11 +296,10 @@ export function literalBoldPlugin() {
   return $prose(
     (ctx) => {
       const schema = ctx.get(schemaCtx)
-      return new Plugin({
+      const clip = literalClipboardSerializer(schema)
+      const plugin = new Plugin({
         key,
         props: {
-          // Copy: only the HTML flavour turns literal `**x**` into <strong>; text/plain keeps the delimiters (Obsidian).
-          clipboardSerializer: literalClipboardSerializer(schema),
           decorations: (state) => (literalBoldEnabled() ? buildDecorations(state) : DecorationSet.empty),
           transformPasted: (slice, view) => literalPaste(slice, view.state.schema),
           handleKeyDown: (view, e) => {
@@ -313,6 +314,10 @@ export function literalBoldPlugin() {
           },
         },
       })
+      // Copy: only the HTML flavour turns literal `**x**` into <strong>; text/plain keeps the delimiters (Obsidian).
+      // A getter so the prop is absent with the switch off (someProp then falls through exactly as on main).
+      Object.defineProperty(plugin.props, 'clipboardSerializer', { get: () => (literalBoldEnabled() ? clip : undefined), enumerable: true })
+      return plugin
     },
   )
 }
