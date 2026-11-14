@@ -21,8 +21,19 @@ import { deps } from '../seams/runtime.js';
 import { CONTEXT_WINDOW_TOKENS } from '../services/contextBudget.js';
 import { MIN_OVERRIDE_TOKENS, setModelContextWindow } from '../services/modelOverrides.js';
 import { listModelCatalog } from '../services/modelCatalog.js';
+import { remoteRole } from '../services/remoteOrigin.js';
 
 const router = Router();
+
+/** 去掉每个直连 provider 的 baseUrl(只用于委托管理员来路)。 */
+export function withoutBaseUrl<T>(providers: T): T {
+  if (!Array.isArray(providers)) return providers;
+  return providers.map((p) => {
+    if (!p || typeof p !== 'object') return p;
+    const { baseUrl: _drop, ...rest } = p as Record<string, unknown>;
+    return rest;
+  }) as unknown as T;
+}
 
 // 旧导入点(测试 / 外部)不断:口径搬进 services/modelCatalog.ts。
 export { visionOverrideOf } from '../services/modelCatalog.js';
@@ -59,7 +70,8 @@ router.get('/agent/models', authMiddleware, async (req: AuthRequest, res) => {
     // 默认模型:admin 的 project 默认 > profile 静态默认。后台/生图槽供客户端「未显式设置即跟随」。
     res.json({
       models: cat.models,
-      directProviders: cat.directProviders,
+      // 委托管理员(remoteRole)只给它选模型要的字段:直连 provider 的 baseUrl 是原样串(中转站偶尔把凭据写进 URL),去掉;别的来路原样。
+      directProviders: remoteRole(req.headers) === 'delegated-admin' ? withoutBaseUrl(cat.directProviders) : cat.directProviders,
       defaultModelId: cat.defaultModelId,
       backgroundModelId: cat.backgroundModelId,
       imageModelId: cat.imageModelId,

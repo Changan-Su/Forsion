@@ -200,6 +200,21 @@ describe('委托管理员档(开关开)', () => {
     expect(b.routed).toEqual([])
   })
 
+  it('unit/whoami 在这一档带出角色与操作者显示名;别的来路回包逐字节不变', async () => {
+    const b = await boot({ delegated: true })
+    const admin = await tunnel(b, 'GET', '/web/unit/whoami')
+    expect(admin.status).toBe(200)
+    expect(admin.json).toEqual({ ok: true, role: 'delegated-admin', operator: { name: ADMIN.name } })
+    expect(admin.text).not.toContain(ADMIN.uid) // 只给显示名,不给 hub 用户 id
+    // 同一台开着开关:不带操作者声明的隧道、局域网主人 → 原样 {"ok":true}
+    expect((await tunnel(b, 'GET', '/web/unit/whoami', { operator: null })).text).toBe('{"ok":true}')
+    expect((await tunnel(b, 'GET', '/web/unit/whoami', { operator: null, caller: PHONE })).text).toBe('{"ok":true}')
+    expect((await lan(b, '/web/unit/whoami')).text).toBe('{"ok":true}')
+    // 开关关着:合法的操作者声明也不带角色
+    const off = await boot({ delegated: false })
+    expect((await tunnel(off, 'GET', '/web/unit/whoami')).text).toBe('{"ok":true}')
+  })
+
   it('不放的每一类都 403 LOCAL_ONLY(GET 也算),且引擎收不到', async () => {
     const b = await boot({ delegated: true })
     const denied: Array<[string, string, unknown?]> = [

@@ -779,7 +779,9 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
     }
     if (path === '/unit/whoami' && req.method === 'GET') {
       if (!authed(req)) { json(res, 401, { detail: '未配对', code: 'UNPAIRED' }); return }
-      json(res, 200, { ok: true })
+      // 委托管理员档:壳据 role 只做 Agent 管理(web/src/unitShim.ts);operator.name 只作界面显示(不可信串,已净化)。
+      // 别的来路回包与改版前逐字节一致。
+      json(res, 200, delegated ? { ok: true, role: DELEGATED_ADMIN_ROLE, operator: { name: delegated.name } } : { ok: true })
       return
     }
     if (path === '/unit/appearance' && req.method === 'GET') {

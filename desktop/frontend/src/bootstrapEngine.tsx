@@ -8,7 +8,7 @@ import { registerMiniViews } from './mini/miniViews'
 /** 真实引擎装配:注册视图(会话/对话)+ ribbon + 命令 + 默认布局。替代 demoBootstrap。 */
 import { Folder, Plus, Command as CommandIcon, Moon, Languages, Store, Settings, FileText, ListTree, Search, Inbox, Mail, PanelLeft, PanelRight, PanelBottom, Code2, Trophy, Activity, AppWindow, Sun, TextCursorInput } from 'lucide-react'
 import type { LucideIcon, LucideProps } from 'lucide-react'
-import { registerView, addCommand, addRibbonIcon, openCommandPalette, useWorkspace, useSpaceStore, getActiveSpace, setActiveSpaceCold, setActiveSpace, openRedirectType, adoptSpaceLayoutCold, seedSpaceWindowLayout, BOOT_ACTIVE_SPACE_ID, getView, label, recordNav, useNav, activeMainPanel, setEngineI18n, setRibbonActions, openObject, UI_MODE, WINDOW_SPACE_ID, supportsMiniPanel, LCL_MESSAGES, installViewModeCommands } from '@lcl/engine'
+import { registerView, addCommand, addRibbonIcon, openCommandPalette, useCommandStore, useWorkspace, useSpaceStore, getActiveSpace, setActiveSpaceCold, setActiveSpace, openRedirectType, adoptSpaceLayoutCold, seedSpaceWindowLayout, BOOT_ACTIVE_SPACE_ID, getView, label, recordNav, useNav, activeMainPanel, setEngineI18n, setRibbonActions, openObject, UI_MODE, WINDOW_SPACE_ID, supportsMiniPanel, LCL_MESSAGES, installViewModeCommands } from '@lcl/engine'
 import { toggleSpaceOrganizer } from './views/SpaceOrganizer'
 import { requestHomeEdit } from './views/homeWidgets'
 import type { ViewProps } from '@lcl/engine'
@@ -62,6 +62,7 @@ import { installOpenFiles } from './openFileInstall'
 import { FILE_VIEW_PARAM } from './viewFileMatch'
 import { presentResetCardCeremony } from './components/ResetCardCeremony'
 import type { AccountQuotaView } from './services/accountQuota'
+import { isDelegatedAdmin } from './services/delegatedAdmin'
 
 // 本文件自有的词条(命名空间 `bootengine.*`,勿与别处撞键)。视图 displayName / 命令 title 都是
 // **惰性**求值的函数,所以一律在函数体里调 translate(),语言切换后重取即新文案(勿提到模块常量里)。
@@ -96,6 +97,8 @@ const ThemeModeIcon = ((props: LucideProps) => {
 }) as unknown as LucideIcon
 
 let installed = false
+/** 委托管理员下命令面板 / 快捷键留下的命令(见 installEngine 末尾的剪枝)。 */
+const DELEGATED_COMMANDS = new Set(['toggle-left', 'toggle-right', 'theme-mode', 'theme-skin', 'theme-lang', 'toggle-locale', 'nav-back', 'nav-forward', 'reset-layout', 'open-settings'])
 
 /** activateTangu = Tangu 唯一的入口(features/tangu.tsx 导出的那个):静态 import 进来的(dev / 网页 / 手机),
  *  或者打包版从界面包里取出来的(coreTangu/load.ts,界面热更新 4b)。这里不静态引它:一引,打包版的主产物里
@@ -195,7 +198,8 @@ export function installEngine(activateTangu: (host: TanguHost) => void): void {
     // 点名的 Space(固定档 / 主位槽里的插件 Space)还没注册 → target 只是回落值:只改内存、不落盘(口径同 registerSpaces 的归一)。
     // 落了盘,补定位没赶上的那一程(下面)盘上就留着「上次退出 = 回落 Space」。人先停在回落 Space 上等它(parkOnStartupFallback)。
     const parked = awaitedStartupSpace() !== null
-    setActiveSpaceCold(target, !parked)
+    // 委托管理员恒落 Agent 管理:不把它写成「上次退出在哪」(那把键是设备主人的)
+    setActiveSpaceCold(target, !parked && !isDelegatedAdmin())
     adoptSpaceLayoutCold(lastExit, target)
     if (parked) parkOnStartupFallback()
   }
@@ -215,7 +219,9 @@ export function installEngine(activateTangu: (host: TanguHost) => void): void {
   // unit 设备页(B 端渲染)没有 vault 桥(window.amadeus 缺席,本地 vault 面=v2.1)但**必须装宿主**:
   // 对方设备的插件清单经 unit/plugins 分发,视图/命令类插件不依赖 vault 即可工作(方案 §11.4)。
   // 插件的 Tangu 只读探针(ctx.tangu)已由上面的 activateTangu 装好(必须早于这里)。见 amadeus/plugins/tanguSeam.ts。
-  if (window.amadeus || window.tangu?.unitPage) installAmadeusPlugins()
+  // 委托管理员不装插件:插件前端自己发请求、自己加入口,全在那台设备的白名单外(unit/plugins 放行只为老壳启动不报错)。
+  const delegatedAdmin = isDelegatedAdmin()
+  if ((window.amadeus || window.tangu?.unitPage) && !delegatedAdmin) installAmadeusPlugins()
   // 插件的 ctx.app.openSettings(插件层发窗口事件,这里转给应用层;口径同宿主深链)
   window.addEventListener('forsion:open-settings', (e) => {
     const target = (e as CustomEvent<unknown>).detail
@@ -238,7 +244,7 @@ export function installEngine(activateTangu: (host: TanguHost) => void): void {
   //  · 上次退出的 Space:布局键里本来就是它的现场(tryRestoreLayout 已吃下),只是 registerSpaces() 把
   //    活动 id 归一成了产品默认 → **冷**定位回去(setActiveSpace 会把这份现场 saveNamed 进产品默认的槽
   //    = 归档到别人名下),顺手补该 Space 的侧栏默认/可拖宽画像。
-  if (window.tangu?.spacesList) void loadUserSpaces().then(settleAsyncStartupSpace)
+  if (window.tangu?.spacesList && !delegatedAdmin) void loadUserSpaces().then(settleAsyncStartupSpace)
 
   // 「当前会话」按 Space 分账(2026-08-23):切 Space 时把老 Space 那条存进账本、还原新 Space 上次那条。
   // 不分账的话所有跟随档 chat leaf 共用一个 activeId —— Tangu 主 tab 开的会话会原样出现在 Amadeus 侧栏
@@ -373,7 +379,8 @@ export function installEngine(activateTangu: (host: TanguHost) => void): void {
   // 无持久顺序时注册序即上下序；已有自定义排序不覆盖。移动端设备入口仍在 head。
   // 红点 = 有「已达成未领取」的成就(本机 + 已登录时的云端;收进「更多」时红点挂到「更多」上,见 RibbonItem.dot)。
   initCloudAchievements() // 云端成就:有 cloudFetch 桥(桌面装了 Extend / Android)才启动,首拉延后几秒,登录状态变化重拉
-  addRibbonIcon({ id: 'rb-achievements', side: 'bottom', icon: Trophy, tooltip: () => app().tr('achievements.title'), onClick: () => app().openAchievements(), dot: { get: () => hasClaimable(), subscribe: (cb) => useAchievements.subscribe(cb), label: () => translate('achievements.claimable') } }) // label 在渲染期求值(读屏):app().tr 要等父组件 effect 才换语言,会晚一拍
+  // 委托管理员的 Ribbon 只留 Agent 管理、明暗与设置:成就 / 命令面板通向的面在这个角色下都不在。
+  if (!delegatedAdmin) addRibbonIcon({ id: 'rb-achievements', side: 'bottom', icon: Trophy, tooltip: () => app().tr('achievements.title'), onClick: () => app().openAchievements(), dot: { get: () => hasClaimable(), subscribe: (cb) => useAchievements.subscribe(cb), label: () => translate('achievements.claimable') } }) // label 在渲染期求值(读屏):app().tr 要等父组件 effect 才换语言,会晚一拍
   // Unit 切换器(设备互联):吸收原「本地|云端」胶囊,列表式切换 本地/云端/其他设备。
   // 默认顺序为成就 → 设备互联 → 明暗；用户保存的自定义顺序仍优先。
   // 桌面 = preload 的 unitsList IPC;mobile 垫片也有 unitsList(UnitsSheet 数据面)→ 移动端照旧挂 head:
@@ -395,7 +402,7 @@ export function installEngine(activateTangu: (host: TanguHost) => void): void {
   if (window.tangu?.submitFeedback) installFeedbackIcon()
   // 单列壳(手机)的「⋯」里也叫「命令面板」(末尾的 ⌘K 由 moreRowLabel 剥掉)。10-05 改叫过「搜索」+ 放大镜:
   // 排在一串插件命令上面读不出是命令面板,用户自己都没认出来 → 2026-10-13 改回,别再另起名字。
-  addRibbonIcon({ id: 'rb-cmd', side: 'bottom', icon: CommandIcon, tooltip: () => app().tr('command.palette'), onClick: openCommandPalette })
+  if (!delegatedAdmin) addRibbonIcon({ id: 'rb-cmd', side: 'bottom', icon: CommandIcon, tooltip: () => app().tr('command.palette'), onClick: openCommandPalette })
   // 底部常驻(side:'bottom'),无持久顺序时注册序即上下序:… → 命令 → 设置 → 账号(账号钉死最底)。
   // 用户拖过底部区后 bottomOrder 非空,新注册项按 rankIds 排到区末尾(反馈那条由注册处的一次性迁移兜住)。
   // ⚠️快速查找/语言**刻意不在条上**(2026-08-31):下区是杂物抽屉,八个同色图标一列谁也认不出,
@@ -408,7 +415,8 @@ export function installEngine(activateTangu: (host: TanguHost) => void): void {
   if (window.tangu?.restartForUpdate) addRibbonIcon({ id: 'rb-restart-update', side: 'bottom', pinned: true, component: RestartUpdateButton })
   // 账号卡随 Forsion Extend 出现:登录 / 登出 / 切号 / 状态那五个通道都住在 Extend(authStatus 是它们的桥键);
   // 没装 Extend(验签失败 / 缺包)连卡都不画,引擎重启入口仍在设置 → 连接。Unit 网页投射装了账号提供方时照旧(tangu.account)。
-  if (window.tangu?.authStatus || window.tangu?.account) addRibbonIcon({
+  // 委托管理员:这一页的「账号」是那台设备,不是来访的管理员(名册顶上已写明是谁在管)—— 不挂账号卡。
+  if ((window.tangu?.authStatus || window.tangu?.account) && !delegatedAdmin) addRibbonIcon({
     id: 'rb-account',
     side: 'bottom',
     pinned: true, // 账号卡钉死最底:不参与拖拽/收纳/溢出
@@ -424,6 +432,8 @@ export function installEngine(activateTangu: (host: TanguHost) => void): void {
   // ribbon 空白/＋ 号菜单的 feature 动作(引擎不 import feature 代码):新建空白 Space + 文本输入用 askString
   // (Electron 无 window.prompt)。newSpace 仅桌面(需 spacesSave 落盘);无则菜单不显示该项。
   setRibbonActions({
+    // 委托管理员:Ribbon 只看不改(新建 Space / 添加命令 / 收纳夹都不给)
+    ...(delegatedAdmin ? { editable: false } : {}),
     newSpace: window.tangu?.spacesSave ? () => { void askString(app().tr('spaces.namePrompt')).then((v) => { const name = v?.trim(); if (name) void createBlankSpace(name) }) } : undefined,
     prompt: (title, initial) => askString(title, initial),
     // 引擎的一次性提示(如「已恢复默认布局 · 撤销」)→ 宿主通知。独立事件 id:不挂在 system.generic 上。
@@ -635,6 +645,18 @@ export function installEngine(activateTangu: (host: TanguHost) => void): void {
   // 开发者选项那三个 ⌘K 入口:真源在 localStorage × 主进程 config,单源重算见 devCommands.ts
   // (设置浮窗里拨开关时会请主窗再跑一次这个函数 —— 命令注册表每个渲染进程各一份)。
   syncDevCommands()
+
+  // 委托管理员:命令面板 / 快捷键只留与 Agent 管理无关痛痒的界面命令(布局、明暗、语言、设置)。别的命令(新对话、打开笔记、
+  // 快速查找、成就…)通向的面都在那台设备的白名单外;晚注册的(Tangu、视图看法、开发者命令)同样随注随剪。
+  if (delegatedAdmin) {
+    const keep = (id: string): boolean => DELEGATED_COMMANDS.has(id)
+    const prune = (): void => {
+      const { commands } = useCommandStore.getState()
+      if (commands.some((c) => !keep(c.id))) useCommandStore.setState({ commands: commands.filter((c) => keep(c.id)) })
+    }
+    prune()
+    useCommandStore.subscribe(prune)
+  }
 
   // forsion:// deep link(仅桌面主窗;内部自门控 window.tangu?.onDeepLink,web/mobile 各有通道)。
   installDeepLinks()

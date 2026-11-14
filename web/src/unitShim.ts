@@ -7,6 +7,9 @@
 import type { UnitCloudCapabilities } from './unitCloudTransport'
 import { UNIT_TOKEN_PLACEHOLDER, unitAuthHeader } from '@/services/unitToken'
 import { createUnitAuthErrorHandler } from './unitAuthReload'
+import { setContentStorageScope } from '@lcl/engine/contentStorageScope'
+import { installScopedStorage } from './scopedStorage'
+import { parseRelayUrl } from '../../mobile/src/relayPaths'
 
 interface UnitMeta { instanceId: string; name: string; version: string; projection?: 'public' | 'local'; inheritWebAccount?: boolean; localCapabilities?: { vault: boolean; engine: boolean; host: boolean }; browserStorage?: boolean; account?: { apiBase: string; loginPath: string }; capabilities?: UnitCloudCapabilities }
 
@@ -66,6 +69,60 @@ async function pairFlow(meta: UnitMeta): Promise<string | null> {
   }
 }
 
+/** whoami 的请求与读回包体合计的上限:超时 = 身份不知道,停在启动失败页。 */
+export const WHOAMI_TIMEOUT_MS = 15_000
+
+/**
+ * 非公开投射上 whoami 的结论。身份「不知道」≠「不是管理员」:
+ *   · 401 → unpaired(配对 / 主人进入,与改动前一样);
+ *   · 200 且回包是 `{ ok: true }`、不带 role → owner(原路径,与改动前一样);
+ *   · 200 且 role === 'delegated-admin'、operator.name 是字符串 → delegated;
+ *   · 其余(网络失败 / 超时 / 别的状态码 / 回包不是 JSON / role 不认识 / 形状不对)→ unknown:不装载应用、不碰本地存储。
+ */
+export type WhoamiVerdict = { kind: 'unpaired' } | { kind: 'owner' } | { kind: 'delegated'; name: string } | { kind: 'unknown' }
+export function whoamiVerdict(status: number | null, body: unknown): WhoamiVerdict {
+  if (status === 401) return { kind: 'unpaired' }
+  if (status !== 200 || !body || typeof body !== 'object' || Array.isArray(body)) return { kind: 'unknown' }
+  const b = body as { ok?: unknown; role?: unknown; operator?: unknown }
+  if (b.ok !== true) return { kind: 'unknown' }
+  if (b.role === undefined) return { kind: 'owner' }
+  const op = b.operator as { name?: unknown } | null | undefined
+  if (b.role === 'delegated-admin' && op && typeof op === 'object' && typeof op.name === 'string') return { kind: 'delegated', name: op.name.slice(0, 120) }
+  return { kind: 'unknown' }
+}
+
+/**
+ * 页面是不是经云端中转打开的(地址里带 `/api/units/<id>/proxy/`)。委托管理员只可能从这条来路进来,所以「身份读不准 → 停」
+ * 只在这条来路上生效;局域网 / 本机直接打开照改动前的走法。
+ * 真实页面在中转前缀之后还有一段投影基址(`…/proxy/web/`,深链再往下),桌面托管的设备没有这一段(`…/proxy/`)。
+ * 所以先切出「云端 API 基址 + `/units/<id>/proxy/`」这一截,再把它当成中继面上的一条 engine 请求交给手机中继的地址语法
+ * (parseRelayUrl)认 —— id 形状、`/proxy/` 段的规则与中转口同一份,这里不另判。
+ */
+export function openedViaRelay(pageBase: string = base().href): boolean {
+  const m = /^(.*\/api)\/units\/[^/]+\/proxy\//.exec(pageBase)
+  return !!m && parseRelayUrl(m[1], `${m[0]}engine`)?.kind === 'relay'
+}
+
+/** 带总超时的 whoami:请求与读回包体共用一个计时器(只在 200 时读体)。 */
+async function fetchWhoami(token: string): Promise<{ probe: Response | null; status: number | null; body: unknown }> {
+  const ctl = typeof AbortController === 'function' ? new AbortController() : null
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const deadline = new Promise<never>((_, reject) => { timer = setTimeout(() => { ctl?.abort(); reject(new Error('whoami timeout')) }, WHOAMI_TIMEOUT_MS) })
+  try {
+    return await Promise.race([deadline, (async () => {
+      const probe = await fetch(new URL('unit/whoami', base()), {
+        headers: unitAuthHeader(token),
+        signal: ctl?.signal,
+      })
+      if (probe.status !== 200) return { probe, status: probe.status, body: null }
+      const body = await probe.clone().json().catch(() => undefined)
+      return { probe, status: probe.status, body }
+    })()])
+  } catch {
+    return { probe: null, status: null, body: null }
+  } finally { clearTimeout(timer) }
+}
+
 /** 装载设备页垫片。false = 用户中止(不挂载应用)。 */
 export async function installUnitShim(): Promise<boolean> {
   const meta = (window as unknown as { __FORSION_UNIT_PAGE__?: UnitMeta }).__FORSION_UNIT_PAGE__
@@ -89,11 +146,23 @@ export async function installUnitShim(): Promise<boolean> {
   }
 
   // 探针:隧道来的(桌面壳分区注入,unitHost 加内部密钥)直接 200;局域网未配对 → 401 → 配对流。
-  const probe = await fetch(new URL('unit/whoami', base()), {
+  // 委托管理员(经中转进来的管理员,只管 Agent):那台设备在 whoami 里带 role。壳在这个角色下不发白名单外的请求、只露 Agent 管理
+  // (门控统一问 desktop 的 services/delegatedAdmin.ts)。经中转打开的页面上身份读不准(失败 / 超时 / 回包畸形 / role 不认识)
+  // 就停在启动失败页:按普通身份往下走会读写这个浏览器里设备主人的布局等存储(管理员的存储作用域只在认出角色后才设)。
+  // 局域网 / 本机直接打开、公开投射:与改动前逐字节一致(无超时、网络失败照旧进配对流,不认 role)。
+  const relay = !published && openedViaRelay()
+  const { probe, status, body } = relay ? await fetchWhoami(token) : await fetch(new URL('unit/whoami', base()), {
     headers: unitAuthHeader(token),
-  }).catch(() => null)
+  }).then((r) => ({ probe: r, status: r.status, body: null as unknown }), () => ({ probe: null, status: null, body: null as unknown }))
   if (published && !probe?.ok) throw new Error('Unit projection is unavailable')
-  if (!published && (!probe || probe.status === 401)) {
+  const verdict: WhoamiVerdict = relay ? whoamiVerdict(status, body)
+    : !published && (!probe || probe.status === 401) ? { kind: 'unpaired' } : { kind: 'owner' }
+  if (verdict.kind === 'unknown') throw new Error('Unit identity is unavailable')
+  const delegated = verdict.kind === 'delegated' ? { name: verdict.name } : null
+  // 委托管理员:这个页面里所有 Web Storage 读写都落在本角色的前缀下(布局、Ribbon、主位槽、主题偏好、提醒存档……一律),
+  // 同一浏览器里设备主人存下的键既读不到也写不着。换不上就当失败(不往下走成「读写主人存储」的样子)。
+  if (delegated && !installScopedStorage(`delegated-admin:${meta.instanceId}:`)) throw new Error('Unit identity storage is unavailable')
+  if (verdict.kind === 'unpaired') {
     const fresh = local ? await (await import('./unitOwnerAccess')).ownerAccess(meta.name, base()) : await pairFlow(meta)
     if (!fresh) return false
     token = fresh
@@ -128,8 +197,13 @@ export async function installUnitShim(): Promise<boolean> {
     capabilities: meta.capabilities!, accountApiBase: meta.account!.apiBase, projectionBase: base().href,
     visitor: visitor!, pluginData: pluginData!,
   }) : null
+  // 委托管理员的布局另存一处(同一浏览器里设备主人存下的会话 / 笔记标签不会被还原进来,管理员摆的也不会盖掉主人的)。
+  // 必须先于 workspace 模块加载(它们在求值时定下布局键),loadApp 在本函数返回之后。
+  if (delegated) setContentStorageScope(`delegated-admin:${meta.instanceId}`)
   if (cloud?.amadeus) window.amadeus = cloud.amadeus
-  else {
+  else if (delegated) {
+    // 笔记库整个在白名单外(vault/*、asset-token、events 都 403):不挂文件桥,笔记 / 日历 / 插件这些面也就不长出来。
+  } else {
     const { createUnitAmadeusBridge } = await import('./amadeus/unitBridge')
     window.amadeus = await createUnitAmadeusBridge({
       base: base().href,
@@ -182,9 +256,10 @@ export async function installUnitShim(): Promise<boolean> {
     ...(published ? { unitPublicEntry: true } : {}),
     /** 远端身份:unitWeb 给本页的 /engine 请求盖 x-forsion-remote(工作区主人的本地投影除外,那是直通)。
      *  审批卡据此不给改命令 / 总允许(引擎对远端不兑现这两样)。 */
-    remoteCaller: !local,
-    hostFiles: !published,
-    executionCapabilities: { host: local ? !!meta.localCapabilities?.host : !published },
+    remoteCaller: !local || !!delegated,
+    hostFiles: !published && !delegated,
+    executionCapabilities: { host: delegated ? false : local ? !!meta.localCapabilities?.host : !published },
+    ...(delegated ? { delegatedAdmin: delegated } : {}),
     ...(cloud ? { cloudWeb: true } : {}),
     initialConfig: mergedConfig(),
     // 商店:网页版装不了插件(marketTypes 空 → 不列目录、不给安装),只开插件提供的页(Extend 的会员 / 积分 / 道具)和投稿。
@@ -197,7 +272,7 @@ export async function installUnitShim(): Promise<boolean> {
       onAuthChanged: visitor.capability.subscribe,
       onAuthWillChange: visitor.onAuthWillChange,
     } : {}),
-    ...(local ? { backendStatus: async () => {
+    ...(local && !delegated ? { backendStatus: async () => {
       const response = await fetch(new URL('unit/meta', base()))
       if (!response.ok) throw new Error('Unit status unavailable')
       const live = await response.json()
@@ -224,6 +299,8 @@ export async function installUnitShim(): Promise<boolean> {
         sessionStorage.setItem(`unit:${meta.instanceId}:preferences`, JSON.stringify(remotePrefs))
         return mergedConfig()
       }
+      // 委托管理员只读得到 unit/config(写在白名单外):偏好改动只留在这一页。
+      if (delegated) { remotePrefs = { ...remotePrefs, ...patch }; return mergedConfig() }
       try {
         const r = await fetch(new URL('unit/config', base()), {
           method: 'PUT',
@@ -236,7 +313,7 @@ export async function installUnitShim(): Promise<boolean> {
     },
     authStatus: visitor?.account.authStatus || (async () => ({ loggedIn: false, cloudUrl: '', username: meta.name, nickname: meta.name, tokenSource: null })),
     ...visitor?.accountPresentation,
-    ...(!published ? {
+    ...(!published && !delegated ? {
     // 直连 provider 元数据(对方已剥 apiKey/baseUrl):模型选择器据此认出直连模型 ——
     // 缺了它直连模型不进清单,选择器显示「选择模型」(2026-08-24 用户实报)。
     listProviders: async () => {
@@ -278,13 +355,13 @@ export async function installUnitShim(): Promise<boolean> {
     } : {}),
     // Space 配方(只读):loadUserSpaces 按本方法存在性门控 —— 缺了它插件 Space 全不装,
     // Ribbon 上一个插件图标都没有(2026-08-24 实测)。spacesSave/Delete 刻意不给:设备页不写对方布局。
-    spacesList: async () => {
+    ...(delegated ? {} : { spacesList: async () => {
       const r = await fetch(new URL('unit/spaces', base()), {
         headers: authHeaders(),
       })
       if (!r.ok) throw new Error(`unit spaces HTTP ${r.status}`)
       return ((await r.json()) as { spaces?: unknown[] }).spaces || []
-    },
+    } }),
   }
   document.title = `${meta.name} · Forsion`
   return true
