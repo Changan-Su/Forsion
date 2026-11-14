@@ -12,9 +12,6 @@ on:
       - 'tangu-agent/src/services/gitActions.ts'
       - 'tangu-agent/test/acpEngine*'
       - 'tangu-agent/test/engine*'
-      - 'tangu-agent/src/contracts/agentEngine.ts'
-      - 'tangu-agent/src/agents/agentEngine.test.ts'
-      - 'tangu-agent/src/services/agentLoop.agentEngine.test.ts'
       - '.github/workflows/dispatch-contracts.yml'
   pull_request:
     paths: *paths
@@ -40,4 +37,4 @@ jobs:
           cache-dependency-path: tangu-agent/package-lock.json
       - run: npm ci --ignore-scripts
       - run: npm run typecheck
-      - run: npx vitest run src/plugins/automation.test.ts src/plugins/externalTools.test.ts src/plugins/workspaces.test.ts src/tools/registryStrict.test.ts test/acpEngine.test.ts test/acpEngineSpawn.test.ts src/engines/acpEngine.startup.test.ts src/engines/acpEngine.config.test.ts src/engines/acpEngine.resume.test.ts src/engines/acpEngine.load.test.ts src/engines/acpEngine.credential.test.ts src/contracts/engineModelError.test.ts test/engineDetect.test.ts test/engineSandboxBoundary.test.ts src/agents/agentEngine.test.ts src/services/agentLoop.agentEngine.test.ts
+      - run: npx vitest run src/plugins/automation.test.ts src/plugins/externalTools.test.ts src/plugins/workspaces.test.ts src/tools/registryStrict.test.ts test/acpEngine.test.ts test/acpEngineSpawn.test.ts src/engines/acpEngine.startup.test.ts src/engines/acpEngine.config.test.ts src/engines/acpEngine.resume.test.ts src/engines/acpEngine.load.test.ts src/engines/acpEngine.credential.test.ts src/contracts/engineModelError.test.ts test/engineDetect.test.ts test/engineSandboxBoundary.test.ts
