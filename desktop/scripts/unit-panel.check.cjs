@@ -457,9 +457,11 @@ async function main() {
     const failA = await page.evaluate(() => ({ text: document.querySelector('.unitfr-fail')?.textContent ?? '', avatar: getComputedStyle(document.querySelector('.unitfr-avatar')).visibility }))
     check('B5 中转还失败 →「连不上这台设备」+ 重试 + 回到这台电脑,头像照常', failA.text === '连不上这台设备重试回到这台电脑' && failA.avatar === 'visible', JSON.stringify(failA))
     shots.push(await shot(page, 'frame-fail'))
+    await page.evaluate(() => { document.querySelector('.unitrs-web').__beforeRetry = 1 })
     await page.click('.unitfr-fail .btn.primary')
     await page.waitForTimeout(150)
-    check('B5 重试 → 失败态收起、页面重挂', !(await page.evaluate(() => !!document.querySelector('.unitfr-fail'))) && !!(await page.evaluate(() => document.querySelector('.unitrs-web'))))
+    // 「重挂」= 换了一个新的 webview 节点(旧节点上的记号不在了),不是只看节点还在(Codex 评审:原断言去掉重挂也会过)
+    check('B5 重试 → 失败态收起、页面重挂', !(await page.evaluate(() => !!document.querySelector('.unitfr-fail'))) && (await page.evaluate(() => { const w = document.querySelector('.unitrs-web'); return !!w && w.__beforeRetry !== 1 })))
     await fire('render-process-gone')
     await page.waitForSelector('.unitfr-fail', { timeout: 3000 }).catch(() => {})
     const crash = await page.evaluate(() => document.querySelector('.unitfr-fail-title')?.textContent ?? '')
@@ -474,6 +476,48 @@ async function main() {
     check('A 记住直连、这次探针不通 → 灰字「在线 · 中转」', rows.find((r) => r.name === 'MacBook Air')?.state === '在线 · 中转', JSON.stringify(rows.find((r) => r.name === 'MacBook Air')))
     await clickUnit(page, 'MacBook Air')
     check('A 点它 → 这次走中转', (await remoteState(page)).key === 'u-mba:tunnel')
+    await page.evaluate(() => { window.__unitRemote.getState().hide(); localStorage.removeItem('forsion_unit_via:u-mba') })
+
+    // ── R 回到本机以后,迟到的东西不许把远程面重新打开;同一张已加载的页面被明确选中要记住(Codex 评审三条)──
+    const lanRoute = { kind: 'unit', id: 'u-mba', name: 'MacBook Air', icon: '🦊', platform: 'darwin', via: 'lan', lanUrl: 'http://192.168.1.20:8791' }
+    const tunRoute = { kind: 'unit', id: 'u-mba', name: 'MacBook Air', icon: '🦊', platform: 'darwin', via: 'tunnel' }
+    // R1 直连页还没加载完就回本机,保活在暗处的页面这时才失败:不回落、不激活;用户回到这台才回落中转
+    await page.evaluate((r) => window.__runUnitRoute(r), lanRoute)
+    await page.waitForTimeout(100)
+    await page.click('.unitfr-back')
+    await page.waitForTimeout(100)
+    await fire('did-fail-load', { errorCode: -105, isMainFrame: true })
+    await page.waitForTimeout(200)
+    const rHid = await remoteState(page)
+    check('R1 保活在暗处的页面加载失败 → 不把人拽回设备页、目标不换', !rHid.active && rHid.key === 'u-mba:lan', JSON.stringify(rHid))
+    await page.evaluate((r) => window.__runUnitRoute(r), lanRoute)
+    await page.waitForTimeout(200)
+    const rBackIn = await remoteState(page)
+    check('R1 用户回到那台 → 这时才回落中转', rBackIn.active && rBackIn.key === 'u-mba:tunnel', JSON.stringify(rBackIn))
+    // R2 正看着 A,选了 B 的 P2P,打洞期间回本机:迟到的成功回包 / 失败回落都不再打开远程面
+    for (const how of ['res', 'rej']) {
+      await page.evaluate(() => { window.__p2p = {}; window.tangu.unitsP2pOpen = () => new Promise((res, rej) => { window.__p2p.res = res; window.__p2p.rej = rej }) })
+      await page.evaluate((r) => window.__runUnitRoute(r), tunRoute)
+      await page.waitForTimeout(100)
+      await page.evaluate(() => window.__runUnitRoute({ kind: 'unit', id: 'u-b', name: 'B', platform: 'darwin', via: 'p2p' }))
+      await page.waitForTimeout(50)
+      await page.click('.unitfr-back')
+      await page.evaluate((h) => { if (h === 'res') window.__p2p.res({ url: 'http://127.0.0.1:47123/' }); else window.__p2p.rej(new Error('打洞超时(桩)')) }, how)
+      await page.waitForTimeout(200)
+      const rP = await remoteState(page)
+      check(`R2 打洞期间回到本机 → 迟到的${how === 'res' ? '成功回包' : '失败回落'}不再打开远程面`, !rP.active && rP.key === 'u-mba:tunnel', JSON.stringify(rP))
+    }
+    // R3 不是明确选的直连加载成功 → 不记;同一张已加载的页面随后在设置页被明确点中 → 不重载也记住
+    await page.evaluate(() => localStorage.removeItem('forsion_unit_via:u-mba'))
+    await page.evaluate((r) => window.__runUnitRoute(r), lanRoute)
+    await page.waitForTimeout(100)
+    await fire('did-finish-load')
+    check('R3 不是明确选的 → 加载成功也不记', (await page.evaluate(() => localStorage.getItem('forsion_unit_via:u-mba'))) === null)
+    await page.evaluate(() => { document.querySelector('.unitrs-web').__same = 1 })
+    await page.evaluate((r) => window.__runUnitRoute({ ...r, explicit: true }), lanRoute)
+    await page.waitForTimeout(150)
+    const same = await page.evaluate(() => ({ kept: document.querySelector('.unitrs-web').__same === 1, via: localStorage.getItem('forsion_unit_via:u-mba') }))
+    check('R3 同一张已加载成功的页面被明确选中 → 不重载也记住', same.kept && same.via === 'lan', JSON.stringify(same))
     await page.evaluate(() => { window.__unitRemote.getState().hide(); localStorage.removeItem('forsion_unit_via:u-mba') })
 
     // ── 截图:深色 / 青绿 / 英文 ──

@@ -12,7 +12,7 @@ import { registerMessages, useI18n, translate } from '../i18n'
 import { windowKind } from '../windowKind'
 import { useApp } from '../stores/appStore'
 import { askString } from '../amadeus/components/askString'
-import { deviceIcon, runUnitRoute, sayUnit, useUnitRemote } from './UnitSwitcher'
+import { deviceIcon, leaveUnitRemote, runUnitRoute, sayUnit, useUnitRemote } from './UnitSwitcher'
 import { readRememberedVia, unitPanelModel, type UnitPanelRow } from './unitPanelModel'
 import { useUnitRoster } from './unitRoster'
 import type { UnitInfo } from '../types'
@@ -88,7 +88,7 @@ export function AccountUnitSection({ onClose, onToast }: {
   })
 
   const backHome = (): void => {
-    if (useUnitRemote.getState().active) useUnitRemote.getState().hide() // 只收远程面,不动智库的「本地 / 云端」
+    leaveUnitRemote() // 只收远程面(并作废还没落地的切换),不动智库的「本地 / 云端」
     onClose()
   }
   const openRow = (row: UnitPanelRow): void => {
