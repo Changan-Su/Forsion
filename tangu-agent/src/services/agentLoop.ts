@@ -31,7 +31,8 @@ import { makeClientActionRequester } from './clientAck.js';
 import { runHooks, type HookRunContext, type HookVerdict } from '../hooks/index.js';
 import { enterRunContext, currentDisplayAgentSlug, currentRunId, setRunClientTag, setRunCwd, setRunSessionContext, setRunStandIn } from '../seams/runContext.js';
 import { getAgentForRun } from '../agents/standIn.js';
-import { resolveRunStandIn, standInSection } from './standInRun.js';
+import { channelSourceOf, resolveRunStandIn, standInSection } from './standInRun.js';
+import { tightenChannelApprovalForAgent } from '../channels/runApproval.js';
 import { isStandInSlugShape } from '../contracts/agentSyncRules.js';
 import { standInSearchDenied } from './accessDomain.js';
 import path from 'node:path';
@@ -1246,7 +1247,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     else delete agentConfig.maxIterations;
   }
   const sessionMaxIterations: number | null = agentConfig.maxIterations ?? null;
-  const { activeAgentSlug, memScopeSlug, profile: agentProfile } = await applyAgentActivation(
+  const { activeAgentSlug, memScopeSlug, profile: agentProfile, agentApprovalMode } = await applyAgentActivation(
     agentConfig,
     userId,
     inlineMemberDef ? async (slug: string) => (slug === inlineMemberDef.slug ? inlineMemberDef : getAgent(slug)) : getAgentForRun, // 分身:人设白名单从本体现读
@@ -1260,6 +1261,14 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   ac.signal.throwIfAborted();
   if (agentConfig.agentSlug && activeAgentSlug !== agentConfig.agentSlug) {
     throw new Error('The selected Agent could not be activated. The run was not started with another Agent.');
+  }
+  // 通道 run:通道层定的档(设置 × 绑定)再按 Agent 自己设的档收紧(只收紧;没设 = 原样)。身份到这里才定(会话钉 slug、分身),
+  // 下游的快照、工具 ctx、委派子代理、团队成员都读这一个值(通道 run 不现读会话存档;会话互通工具对通道 run 不开)。
+  // 分身(缺省开着)自己的定义不带档:再加本体的档,读不到按只读 —— 面对别人的分身不该比本体松。
+  if (channelSourceOf(plainObject(input.source))) {
+    const agentModes: unknown[] = [agentApprovalMode];
+    if (standIn) agentModes.push(await getAgent(standIn.bodySlug).then((d) => (d ? d.approvalMode : 'readonly'), () => 'readonly'));
+    agentConfig.approvalMode = tightenChannelApprovalForAgent(agentConfig.approvalMode, agentModes);
   }
   // 压缩旋钮:run 级(会话 / Agent config.toml 的 [compaction],已由 applyAgentActivation 并入)> config.json > 缺省。
   const compactionCfg = compactionSettingsFor(agentConfig.compaction);

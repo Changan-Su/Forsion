@@ -44,6 +44,7 @@ import { setPluginEnabled, setScopeSettings } from '../plugins/settingsStore.js'
 import { channelSettings, channelWorkspaceDir, saveChannelSettings } from './config.js';
 import { ChannelCommandCenter, normalizeChannelText, parseChannelCommand, stopReply, type ChannelCommandRuntime, type ChannelUsage } from './commands.js';
 import { CHANNEL_NAME, CHANNEL_REPLY_MAX, channelMsg, clipReply, resolveChannelLocale, type ChannelLocale } from './messages.js';
+import { channelApprovalLadder, tightenChannelApprovalForAgent } from './runApproval.js';
 import type { ApprovalMode, BuiltinChannelKind, ChannelApprovalAction, ChannelApprovalCard, ChannelApprovalOutcome, ChannelDriver, ChannelInbound, ChannelKind, SendResult } from './types.js';
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
@@ -94,9 +95,7 @@ export const INQUIRY_QUESTION_MAX = PREVIEW_PART_MAX * 3;
 /** 审批档从严到宽的名次(启动对齐只收紧、建 run 取更严时比大小用)。 */
 const APPROVAL_RANK: Record<ApprovalMode, number> = { readonly: 0, 'auto-edit': 1, 'full-auto': 2 };
 /** 通道三档阶梯:custom / 不认识的档一律按 readonly 算(通道设置只提供三档;custom 只可能是遗留 / 手改的绑定值)。 */
-function approvalLadder(m: EngineApprovalMode | undefined): ApprovalMode {
-  return m === 'auto-edit' || m === 'full-auto' ? m : 'readonly';
-}
+const approvalLadder = channelApprovalLadder;
 
 interface BindingRow {
   id: string;
@@ -234,15 +233,17 @@ export function effectiveApprovalMode(binding: Pick<BindingRow, 'remote_approval
 }
 
 /**
- * 通道 run **实际**用的审批档:通道设置与绑定里**更严**的那档(readonly < auto-edit < full-auto;custom / 不认识的按 readonly)。
+ * 通道 run **实际**用的审批档:通道设置、绑定、Agent 自己的档(agentModes,设了才算)里**最严**的那档
+ * (readonly < auto-edit < full-auto;custom / 不认识的按 readonly)。建 run 时只合前两者(身份还没定);
+ * Agent 那层由 agentLoop 激活后按同一个函数收紧(runApproval.tightenChannelApprovalForAgent),/approval /status 报时带上。
  * 设置页收紧档位时先存设置、再异步同步绑定 —— 同步失败或还没轮到时,只看绑定就会按旧的宽档接单。取更严的一档,
  * 收紧即刻生效;放宽要等同步成功(绑定仍是记录值,不在这里改写)。通道 run 不现读会话存值(approvalModeSessionId),
  * 这里算出的就是整个 run 的档。
  */
-export function channelRunApprovalMode(settingsMode: unknown, binding: Pick<BindingRow, 'remote_approval_mode'>): ApprovalMode {
+export function channelRunApprovalMode(settingsMode: unknown, binding: Pick<BindingRow, 'remote_approval_mode'>, agentModes: readonly unknown[] = []): ApprovalMode {
   const s = approvalLadder(normalizeApprovalMode(settingsMode, 'channel settings') ?? 'auto-edit');
   const b = approvalLadder(effectiveApprovalMode(binding));
-  return APPROVAL_RANK[s] <= APPROVAL_RANK[b] ? s : b;
+  return tightenChannelApprovalForAgent(APPROVAL_RANK[s] <= APPROVAL_RANK[b] ? s : b, agentModes);
 }
 
 /** 按行切 preview(尽量在换行处断,不拆代理对),每段 ≤ size。只切不删:各段拼回去就是原文。 */
@@ -1381,6 +1382,22 @@ export class ChannelService {
    * 抛而不是静默跳过:commands.ts 在写之后还有同步副作用(对在跑 run 改思考档、记 / 忘编号列表、存通道默认模型),抛了整条命令收手。
    * 列模型虽是读,也在返回前过闸:/model 紧接着同步记下编号列表,不挡的话新一代回个数字会按用户没见过的列表换模型。
    */
+  /**
+   * /approval /status 报的档,与 agentLoop 激活后收紧的同一口径:通道设置 × 绑定 × 这次会用的 Agent 自己的档
+   * (通道里按本体开关可能换成分身:再加上本体的档;读不到本体按 readonly)。只读不建:分身还没建出来 = 它自己没设档。
+   */
+  private async approvalModeFor(binding: BindingRow, agentSlug: string): Promise<ApprovalMode> {
+    const modes: unknown[] = [];
+    try {
+      const id = await resolveRunIdentity(agentSlug, { kind: this.kind, accountId: binding.account_id, peerId: binding.peer_id ?? '', multiPeer: this.multiPeer });
+      modes.push((await getAgent(id.slug).catch(() => null))?.approvalMode);
+      if (id.kind === 'standin') modes.push((await getAgent(id.bodySlug).catch(() => null))?.approvalMode ?? 'readonly');
+    } catch {
+      modes.push('readonly');
+    }
+    return channelRunApprovalMode(this.settings().approvalMode, binding, modes);
+  }
+
   private commandRuntime(binding: BindingRow, key: string, locale: ChannelLocale, gone: () => boolean): ChannelCommandRuntime {
     const userId = binding.user_id;
     const sessionId = binding.session_id;
@@ -1388,7 +1405,8 @@ export class ChannelService {
     return {
       kind: this.kind,
       locale,
-      approvalMode: channelRunApprovalMode(this.settings().approvalMode, binding), // 与建 run 同一口径:/approval /status 报的就是会生效的档
+      approvalMode: channelRunApprovalMode(this.settings().approvalMode, binding), // 与建 run 同一口径(通道 × 绑定;Agent 那层见 approvalModeFor)
+      approvalModeFor: (agentSlug) => this.approvalModeFor(binding, agentSlug),
       channelDefaults: () => { const st = this.settings(); return { agentSlug: st.agentSlug, modelId: st.modelId }; },
       defaultAgentSlug: () => readAgentsMeta().defaultSlug,
       workspaceDir: () => this.workspaceDir(),
