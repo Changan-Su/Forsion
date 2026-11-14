@@ -1,7 +1,7 @@
 /**
  * 账号面板上半的「Unit」段(组织 Agent 管理第三轮 A3 第一步的前半):
  *   这台电脑 → 我的设备(在线在前、离线折成「离线 N 台」、正在看的那台掉线了也不折)→ 管理 Unit…
- * 一台设备一行;点下去走哪条路只由 pickUnitRoute 决定(unitPanelModel.ts),切换复用 runUnitRoute。
+ * 一台设备一行;点下去走哪条路只由 pickUnitRoute 决定(unitPanelModel.ts:记住的通路 → 中转 → 只剩直连通时走直连),切换复用 runUnitRoute。
  * 只在真桌面的主窗出现(unitPanelAvailable):网页、手机壳、Android 原生半屏、独立窗都不画。
  */
 import React, { useEffect, useState } from 'react'
@@ -12,8 +12,8 @@ import { registerMessages, useI18n, translate } from '../i18n'
 import { windowKind } from '../windowKind'
 import { useApp } from '../stores/appStore'
 import { askString } from '../amadeus/components/askString'
-import { deviceIcon, runUnitRoute, useUnitRemote } from './UnitSwitcher'
-import { unitPanelModel, type UnitPanelRow } from './unitPanelModel'
+import { deviceIcon, runUnitRoute, sayUnit, useUnitRemote } from './UnitSwitcher'
+import { readRememberedVia, unitPanelModel, type UnitPanelRow } from './unitPanelModel'
 import { useUnitRoster } from './unitRoster'
 import type { UnitInfo } from '../types'
 
@@ -84,6 +84,7 @@ export function AccountUnitSection({ onClose, onToast }: {
     units, hostUnitId, lanOk,
     p2p: !!window.tangu?.unitsP2pOpen,
     remote: { active, key: target?.key ?? null, name: target?.name },
+    remembered: readRememberedVia,
   })
 
   const backHome = (): void => {
@@ -95,6 +96,7 @@ export function AccountUnitSection({ onClose, onToast }: {
     if (row.kind !== 'unit') return
     if (!row.via) { setNote(t('unit.panel.offlineNote')); return }
     const u = row.unit
+    if (row.downgraded) sayUnit(translate('unit.frame.lanDown', { name: u.name })) // 记住的是直连,这次探不通
     runUnitRoute({ kind: 'unit', id: u.id, name: u.name, icon: u.icon, platform: u.platform, via: row.via, lanUrl: u.lanUrl })
     onClose()
   }
