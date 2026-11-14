@@ -9,7 +9,7 @@ import { useApp } from '../stores/appStore'
 import { useI18n } from '../i18n'
 import { deleteAgentAvatar, fetchAgentAvatar, fetchToolCatalog, getAgentHarness, listAgents, listSkills, listTools, putAgentsMeta, renameAgentDef, saveAgentDef, uploadAgentAvatar } from '../services/backendService'
 import { MODE_KEY } from '../approvalReason'
-import { delegatedAdminName, delegatedApprovalField, isDelegatedAdmin, useDelegatedApprovalCap } from '../services/delegatedAdmin'
+import { delegatedApprovalField, tanguDelegatedAdmin as isDelegatedAdmin, tanguDelegatedAdminName as delegatedAdminName } from '../tangu/delegatedRole'
 import { openAgentCreation, openAgentProfile, openHumanProfile } from './agentProfileNav'
 import { HumanProfile, useMeIdentity } from './HumanProfile'
 import { AgentMemoryPanel } from '../components/AgentMemoryPanel'
@@ -300,7 +300,7 @@ function AgentProfile({ agent, compact = false, sessionId, rewriteSessionId, evo
     ? () => { void useApp.getState().send(t('human.rewrite.agentPrompt'), [], undefined, undefined, undefined, rewriteSid) } : null
   const delegated = isDelegatedAdmin()
   const sections = sectionsFor()
-  const approvalCap = useDelegatedApprovalCap((x) => x.cap)
+  const approvalCap = useApp((x) => x.delegatedApprovalCap ?? null)
   const [section, setSection] = useState<Section>(!delegated && humanJump ? 'human' : !delegated && evolutionJumpAt ? 'growth' : 'config')
   const navRef = useSectionNavSlide(section)
   const [growth, setGrowth] = useState<Growth>(evolutionJumpAt ? 'evolution' : 'memory')

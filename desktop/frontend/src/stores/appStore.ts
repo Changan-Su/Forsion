@@ -31,7 +31,7 @@ import { needsFullGuide } from '../components/onboardingFlow'
 import { phoneGuide, phoneGuidePlan, readPhoneGuideKeys } from '../components/onboarding/phoneGuide'
 import { act } from '../activity/log'
 import { notifyApp } from './notificationStore'
-import { isDelegatedAdmin } from '../services/delegatedAdmin'
+import { isDelegatedAdmin, useDelegatedApprovalCap } from '../services/delegatedAdmin'
 import { localOnlyMessage } from '../services/localOnly'
 import { agentWriteKnown, noteAgentWriteEnd, noteAgentWriteLive, noteAgentWriteStart } from './agentWriteLedger'
 import { translate } from '../i18n'
@@ -164,6 +164,9 @@ export interface HostState {
   homeDir: string | undefined
   defaultWsDir: string
   modelsResp: ModelsResponse | null
+  /** 委托管理员:那台设备给远端定的审批档上限(引擎在 Agent 名册回包里带;镜像自 services/delegatedAdmin 的记录)。
+   *  放进 app store 是给 Tangu 界面读的(它不直接引宿主模块);别的来路恒为 undefined。 */
+  delegatedApprovalCap?: 'readonly' | 'auto-edit' | 'full-auto' | null
   skillsList: SkillInfo[] | null
   authInfo: AuthStatusInfo | null
   engines: Array<{ id: string; name: string; available?: boolean; status?: 'available' | 'needs-signin' | 'not-installed'; defaultModel?: string }>
@@ -1065,3 +1068,6 @@ if (import.meta.env.DEV && typeof window !== 'undefined') {
     downloadWorkspaceFile: (sessionId: string, path: string) => api.downloadWorkspaceFile(targetForSession(sessionId), sessionId, path),
   }
 }
+
+// 委托管理员的审批档上限 → app store(Tangu 界面从这里读)
+useDelegatedApprovalCap.subscribe((s) => { if (useApp.getState().delegatedApprovalCap !== s.cap) useApp.setState({ delegatedApprovalCap: s.cap }) })

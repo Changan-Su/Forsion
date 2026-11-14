@@ -12,7 +12,7 @@ import {
 } from '../services/backendService'
 import type { SkillCatalogEntry, SkillInfo, TanguDesktopConfig } from '../../../../tangu-agent/src/contracts/clientTypes'
 import { homeTarget } from '../services/engine/targets'
-import { isDelegatedAdmin } from '../services/delegatedAdmin'
+import { tanguDelegatedAdmin as isDelegatedAdmin } from '../tangu/delegatedRole'
 import { SkillUninstallDialog } from '../components/UninstallDialog'
 import { nextExtraSelection } from './agentSkillSelection'
 

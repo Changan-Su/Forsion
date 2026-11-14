@@ -5,7 +5,7 @@
  * 到点去查额度、弹卡片的是 views/chat2/quotaReminderScheduler.ts。
  */
 import { create } from 'zustand'
-import { isDelegatedAdmin } from '../../services/delegatedAdmin'
+import { tanguDelegatedAdmin } from '../delegatedRole'
 
 export interface QuotaReminder {
   sessionId: string
@@ -50,7 +50,7 @@ export const sameReminder = (a: QuotaReminder | undefined, b: QuotaReminder | un
 
 // 只认真浏览器窗口:单测会把 window 换成空对象再 import 本模块(notificationWiring.test),那时没有 addEventListener
 // 委托管理员不挂:那份存档是设备主人的(本角色的存储另有前缀,这里只是连监听都不留)
-if (typeof window !== 'undefined' && typeof window.addEventListener === 'function' && !isDelegatedAdmin()) window.addEventListener('storage', (e) => { if (e.key === KEY) useQuotaReminders.setState({ items: read() }) })
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function' && !tanguDelegatedAdmin()) window.addEventListener('storage', (e) => { if (e.key === KEY) useQuotaReminders.setState({ items: read() }) })
 
 export const cancelQuotaReminder = (sessionId: string) => useQuotaReminders.getState().cancel(sessionId)
 

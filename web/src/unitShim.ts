@@ -91,12 +91,14 @@ export function whoamiVerdict(status: number | null, body: unknown): WhoamiVerdi
 
 /**
  * 页面是不是经云端中转打开的(地址里带 `/api/units/<id>/proxy/`)。委托管理员只可能从这条来路进来,所以「身份读不准 → 停」
- * 只在这条来路上生效;局域网 / 本机直接打开照改动前的走法。判定复用手机中继的地址语法(parseRelayUrl):把页面基址
- * 当成中继面上的一条 engine 请求来认,uuid、`/proxy/` 段的规则与中转口同一份。
+ * 只在这条来路上生效;局域网 / 本机直接打开照改动前的走法。
+ * 真实页面在中转前缀之后还有一段投影基址(`…/proxy/web/`,深链再往下),桌面托管的设备没有这一段(`…/proxy/`)。
+ * 所以先切出「云端 API 基址 + `/units/<id>/proxy/`」这一截,再把它当成中继面上的一条 engine 请求交给手机中继的地址语法
+ * (parseRelayUrl)认 —— id 形状、`/proxy/` 段的规则与中转口同一份,这里不另判。
  */
 export function openedViaRelay(pageBase: string = base().href): boolean {
-  const at = pageBase.lastIndexOf('/api/units/')
-  return at >= 0 && parseRelayUrl(pageBase.slice(0, at + '/api'.length), `${pageBase}engine`)?.kind === 'relay'
+  const m = /^(.*\/api)\/units\/[^/]+\/proxy\//.exec(pageBase)
+  return !!m && parseRelayUrl(m[1], `${m[0]}engine`)?.kind === 'relay'
 }
 
 /** 带总超时的 whoami:请求与读回包体共用一个计时器(只在 200 时读体)。 */

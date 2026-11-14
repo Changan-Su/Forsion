@@ -8,7 +8,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import { CalendarClock, CalendarDays, ExternalLink, Loader2, Trash2, Zap } from 'lucide-react'
 import { setActiveSpace, useSpaceStore } from '@lcl/engine'
 import { deleteAgentScheduleEntry, getAgentSchedules, getMuseTriggers } from '../services/backendService'
-import { isDelegatedAdmin } from '../services/delegatedAdmin'
+import { tanguDelegatedAdmin } from '../tangu/delegatedRole'
 import { useApp } from '../stores/appStore'
 import { useI18n } from '../i18n'
 import { formatRepeat } from '../format/repeat'
@@ -30,7 +30,7 @@ const AgentScheduleBody: React.FC<Props> = ({ cfg, slug, running }) => {
   const [rules, setRules] = useState<MuseTriggerInfo[]>([])
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
-  const delegated = isDelegatedAdmin()
+  const delegated = tanguDelegatedAdmin()
   const alive = useRef(true)
   const seq = useRef(0)
   useEffect(() => { alive.current = true; return () => { alive.current = false } }, [])

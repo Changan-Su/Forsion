@@ -136,7 +136,7 @@ function fixture(method: string, p: string, body: unknown): { status?: number; j
 
 // The admin only ever arrives through the cloud relay, so the page is opened under the relay path (the shell keys its
 // strict identity handling on that). Device surfaces under the prefix are answered here with the prefix stripped.
-const RELAY_PREFIX = '/api/units/0f8fad5b-d9cb-469f-a165-70867728950e/proxy/'
+const RELAY_PREFIX = '/api/units/0f8fad5b-d9cb-469f-a165-70867728950e/proxy/web/' // as in production: the Unit's /web/ projection base under the relay
 async function device(route: Route): Promise<void> {
   const req = route.request()
   const u = new URL(req.url())

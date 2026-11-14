@@ -9,7 +9,7 @@ import { getModelQuota, listMessages } from '../../services/backendService'
 import { targetForSession } from '../../services/engine/targets'
 import { openSession } from '../../sessionNav'
 import { GIVE_UP_AFTER_MS, nextCheckAt, quotaIsBack, sameReminder, useQuotaReminders, type QuotaReminder } from '../../tangu/store/quotaReminders'
-import { isDelegatedAdmin } from '../../services/delegatedAdmin'
+import { tanguDelegatedAdmin } from '../../tangu/delegatedRole'
 
 export type CheckResult = 'back' | 'wait' | 'gone'
 export const CHECK_TIMEOUT_MS = 30_000
@@ -100,6 +100,6 @@ let started: ReturnType<typeof createReminderScheduler> | null = null
 /** 幂等:主窗 Root 装一次。 */
 export function startQuotaReminders(): void {
   // 委托管理员:不碰设备主人的会话额度提醒存档,也不按它去请求会话消息(白名单外)
-  if (started || isDelegatedAdmin()) return
+  if (started || tanguDelegatedAdmin()) return
   started = createReminderScheduler({ now: Date.now, setTimer: (fn, ms) => setTimeout(fn, ms), clearTimer: (h) => clearTimeout(h as ReturnType<typeof setTimeout>), check, fire })
 }

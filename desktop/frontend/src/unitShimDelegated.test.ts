@@ -13,7 +13,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { WHOAMI_TIMEOUT_MS, installUnitShim, openedViaRelay, whoamiVerdict } from '../../../web/src/unitShim'
 import { createUnitAmadeusBridge } from '../../../web/src/amadeus/unitBridge'
 
-const RELAY = 'https://cloud.test/api/units/0f8fad5b-d9cb-469f-a165-70867728950e/proxy/'
+const UID = '0f8fad5b-d9cb-469f-a165-70867728950e'
+/** 真环境的中转页:Unit 带 `/web/` 投影基址 */
+const RELAY = `https://cloud.test/api/units/${UID}/proxy/web/`
+/** 桌面托管的设备:没有投影基址 */
+const RELAY_BARE = `https://cloud.test/api/units/${UID}/proxy/`
 const LAN = 'http://unit.test/web/'
 let pageBase = RELAY
 vi.mock('../../../web/src/unitOwnerAccess', () => ({ ownerAccess: vi.fn(async () => null) }))
@@ -78,8 +82,14 @@ describe('whoamiVerdict', () => {
 })
 
 describe('openedViaRelay', () => {
-  it('只认中转地址 /api/units/<uuid>/proxy/', () => {
+  it('只认中转地址 /api/units/<uuid>/proxy/(带不带投影基址、深链、云端带路径前缀都认)', () => {
     expect(openedViaRelay(RELAY)).toBe(true)
+    expect(openedViaRelay(RELAY_BARE)).toBe(true)
+    expect(openedViaRelay(`${RELAY}space/agents`)).toBe(true)
+    expect(openedViaRelay(`https://cloud.test/forsion/api/units/${UID}/proxy/web/`)).toBe(true)
+    expect(openedViaRelay(`https://cloud.test/api/units/${UID.toUpperCase()}/proxy/web/`)).toBe(false) // id 必须是小写 uuid
+    expect(openedViaRelay('https://cloud.test/api/units/../proxy/web/')).toBe(false)
+    expect(openedViaRelay(`https://cloud.test/api/units/${UID}/web/`)).toBe(false)
     expect(openedViaRelay(LAN)).toBe(false)
     expect(openedViaRelay('http://127.0.0.1:8792/')).toBe(false)
     expect(openedViaRelay('https://cloud.test/api/units/not-a-uuid/proxy/')).toBe(false)
@@ -87,7 +97,14 @@ describe('openedViaRelay', () => {
   })
 })
 
-describe('installUnitShim · 经中转打开时身份读不准就停', () => {
+describe.each([['带 /web/ 投影基址', RELAY], ['不带投影基址(桌面托管)', RELAY_BARE]])('installUnitShim · 经中转打开(%s)时身份读不准就停', (_name, relayBase) => {
+  beforeEach(() => {
+    pageBase = relayBase
+    const b = new URL(pageBase)
+    vi.stubGlobal('document', { baseURI: pageBase, title: '' })
+    vi.stubGlobal('location', { hash: '', pathname: b.pathname, search: '', href: pageBase, origin: b.origin, reload: vi.fn() })
+  })
+  afterEach(() => { pageBase = RELAY })
   const stopped = async (): Promise<void> => {
     await expect(installUnitShim()).rejects.toThrow(/identity/)
     const w = (globalThis as any).window

@@ -11,12 +11,6 @@ import { create } from 'zustand'
 import { registerMessages } from '../i18n'
 
 registerMessages({
-  'delegatedAdmin.role': { zh: '管理员', en: 'Admin' },
-  'delegatedAdmin.signedInAs': { zh: '管理员 · {name}', en: 'Admin · {name}' },
-  'delegatedAdmin.approvalCapHint': {
-    zh: '远程管理时审批最高到「{mode}」，更宽的档只能在那台设备上设置',
-    en: 'Remote admins can set approval up to “{mode}”. Wider modes can only be set on that device',
-  },
   'delegatedAdmin.agentsDescription': { zh: '管理这台设备上的 Agent 名册。', en: 'Manage the agent roster on this device.' },
   'delegatedAdmin.skillsReadOnly': {
     zh: '远程管理时这里只能查看。要给某个 Agent 启用或停用技能，请到该 Agent 的「技能」页',
@@ -25,7 +19,6 @@ registerMessages({
 })
 
 export type ApprovalCap = 'readonly' | 'auto-edit' | 'full-auto'
-const RANK: Record<ApprovalCap, number> = { readonly: 0, 'auto-edit': 1, 'full-auto': 2 }
 
 /** 这个页面是不是委托管理员角色。 */
 export function isDelegatedAdmin(): boolean {
@@ -39,7 +32,8 @@ export function delegatedAdminName(): string {
   return (isDelegatedAdmin() && window.tangu?.delegatedAdmin?.name) || ''
 }
 
-/** 那台设备给远端定的审批档上限(引擎在委托管理员的 Agent 名册回包里带 approvalCap)。没读到 = null(编辑器按最严的理解)。 */
+/** 那台设备给远端定的审批档上限(引擎在委托管理员的 Agent 名册回包里带 approvalCap)。没读到 = null(编辑器按最严的理解)。
+ *  stores/appStore 把它镜像成 delegatedApprovalCap 给 Tangu 界面读;下拉的过滤规则在 tangu/delegatedRole.ts。 */
 export const useDelegatedApprovalCap = create<{ cap: ApprovalCap | null }>(() => ({ cap: null }))
 
 /** Agent 名册回包到手时记下上限;只在这个角色下记(别的来路回包里本来就没有这个字段)。 */
@@ -47,30 +41,6 @@ export function noteApprovalCap(value: unknown): void {
   if (!isDelegatedAdmin()) return
   if (value === 'readonly' || value === 'auto-edit' || value === 'full-auto') {
     if (useDelegatedApprovalCap.getState().cap !== value) useDelegatedApprovalCap.setState({ cap: value })
-  }
-}
-
-/**
- * 审批档选项在这个角色下能不能选:只收三档,且不超过上限。'' (跟随会话)与 'custom' 远端写不进去(引擎不收),一律不可选。
- * 上限没读到时只放 readonly(引擎的缺省上限是 auto-edit,宁可少给)。
- */
-export function approvalModeSelectable(mode: string, cap: ApprovalCap | null): boolean {
-  if (mode !== 'readonly' && mode !== 'auto-edit' && mode !== 'full-auto') return false
-  return RANK[mode] <= RANK[cap ?? 'readonly']
-}
-
-/**
- * 委托管理员编辑器里的审批档下拉:可选项严格按上限过滤(不给「跟随会话」—— 引擎把远端的空值落成上限本身,不是空)。
- * 存值为空 → 选中态显示成上限那一档(只是显示,不写回;下拉只在用户真的换档时 onChange)。
- * 当前值超出上限(上限没读到 / 后来降了)或是 custom → 照列这一项但 disabled(只作展示,选不回去);custom 时整个字段只读。
- */
-export function delegatedApprovalField<O extends { value: string }>(stored: string | undefined, cap: ApprovalCap | null, options: O[]): { value: string; options: Array<O & { disabled?: boolean }>; disabled: boolean } {
-  const shown = stored || cap || 'readonly'
-  return {
-    value: shown,
-    options: options.flatMap((o) => approvalModeSelectable(o.value, cap) ? [o]
-      : o.value === shown && o.value !== '' ? [{ ...o, disabled: true }] : []),
-    disabled: stored === 'custom',
   }
 }
 

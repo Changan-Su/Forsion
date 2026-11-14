@@ -1,13 +1,27 @@
 /**
- * 委托管理员的单一问法与审批档换算(services/delegatedAdmin.ts)。
+ * 委托管理员的单一问法(宿主 services/delegatedAdmin.ts 与 Tangu 一侧 tangu/delegatedRole.ts 一致)与审批档换算(tangu/delegatedRole.ts),
+ * 以及上限经 app store 镜像给 Tangu 界面。
  * 跑:cd desktop && npx vitest run frontend/src/services/delegatedAdmin.test.ts
  */
 import { afterEach, describe, expect, it } from 'vitest'
-import { approvalModeSelectable, delegatedAdminName, delegatedApprovalField, isDelegatedAdmin, noteApprovalCap, useDelegatedApprovalCap } from './delegatedAdmin'
+import { approvalModeSelectable, delegatedApprovalField, tanguDelegatedAdmin, tanguDelegatedAdminName } from '../tangu/delegatedRole'
+import { delegatedAdminName, isDelegatedAdmin, noteApprovalCap, useDelegatedApprovalCap } from './delegatedAdmin'
+const { useApp } = await import('../stores/appStore')
 
 const OPTIONS = ['', 'readonly', 'auto-edit', 'full-auto', 'custom'].map((value) => ({ value, label: value || 'follow' }))
 const setTangu = (t: Record<string, unknown> | undefined): void => { (globalThis as any).window = t === undefined ? {} : { tangu: t } }
 afterEach(() => { delete (globalThis as any).window; useDelegatedApprovalCap.setState({ cap: null }) })
+
+describe('Tangu 一侧的同一判定(tangu/delegatedRole.ts)', () => {
+  it('与 isDelegatedAdmin 逐格一致', () => {
+    for (const t of [undefined, {}, { platform: 'darwin' }, { unitPage: true }, { delegatedAdmin: { name: 'x' } }, { mobile: true, delegatedAdmin: { name: 'x' } },
+      { unitPage: true, delegatedAdmin: { name: '' } }, { unitPage: true, delegatedAdmin: null }, { unitPage: false, delegatedAdmin: { name: 'x' } }]) {
+      setTangu(t as Record<string, unknown> | undefined)
+      expect(tanguDelegatedAdmin(), JSON.stringify(t)).toBe(isDelegatedAdmin())
+      expect(tanguDelegatedAdminName(), JSON.stringify(t)).toBe(delegatedAdminName())
+    }
+  })
+})
 
 describe('isDelegatedAdmin', () => {
   it('缺省 false:桌面 / 手机 / 普通网页 / 别的 Unit 来路都不设这个键', () => {
@@ -37,6 +51,7 @@ describe('审批档上限', () => {
     expect(useDelegatedApprovalCap.getState().cap).toBeNull()
     noteApprovalCap('auto-edit')
     expect(useDelegatedApprovalCap.getState().cap).toBe('auto-edit')
+    expect(useApp.getState().delegatedApprovalCap).toBe('auto-edit') // 镜像给 Tangu 界面
   })
   it('approvalModeSelectable:不超过上限;空与 custom 恒不可选;上限未知只放 readonly', () => {
     expect(['readonly', 'auto-edit', 'full-auto'].map((m) => approvalModeSelectable(m, 'auto-edit'))).toEqual([true, true, false])
