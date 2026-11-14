@@ -11,7 +11,7 @@
  *   F 面板开着点远程面 → 关;窗口失焦(真 Electron 里点 <webview> 只表现为宿主 blur)→ 关
  *   G 正在看的那台掉线了也不折;手输地址的目标正看着时单独一行
  *   H 点「这台电脑」= 回到本机(远程面收起,胶囊回「本地」,不动智库侧)
- *   I 右键两项「切换到这台」「改名字和图标」;点菜单外只收菜单、Esc 只收菜单;改名走 unitsUpdate
+ *   I 右键三项「切换到这台」「改名字」「改图标」;点菜单外只收菜单、Esc 只收菜单;改名 / 改图标各走一次 unitsUpdate、只带自己那个字段
  *   J 「管理 Unit…」→ 设置 › 设备
  *   K web 主入口(没有设备桥)不出现 Unit 段
  *   L 不出视口、不压头像:1200×720 / 1200×520 × 缩放 1 / 1.1,Unit 多了只滚 Unit 段;名册刷新变高后重新夹位置
@@ -254,8 +254,8 @@ async function main() {
     }, UNITS)
     await page.waitForSelector('.ap-unit-ctx', { timeout: 3000 }).catch(() => {})
     const ctxItems = await page.evaluate(() => Array.from(document.querySelectorAll('.ap-unit-ctx button')).map((b) => b.textContent.trim()))
-    check('I 右键两项:切换到这台 / 改名字和图标(.ctx-menu 样式)',
-      JSON.stringify(ctxItems) === JSON.stringify(['切换到这台', '改名字和图标']) && await page.evaluate(() => !!document.querySelector('.ctx-menu.ap-unit-ctx')), JSON.stringify(ctxItems))
+    check('I 右键三项:切换到这台 / 改名字 / 改图标(.ctx-menu 样式)',
+      JSON.stringify(ctxItems) === JSON.stringify(['切换到这台', '改名字', '改图标']) && await page.evaluate(() => !!document.querySelector('.ctx-menu.ap-unit-ctx')), JSON.stringify(ctxItems))
     // 点面板里(菜单外)→ 只收菜单
     const headBox = await page.evaluate(() => { const r = document.querySelector('.account-pop .ap-sec').getBoundingClientRect(); return { x: r.left + 40, y: r.top + r.height / 2 } })
     await page.mouse.click(headBox.x, headBox.y)
@@ -269,24 +269,36 @@ async function main() {
     await page.keyboard.press('Escape')
     await page.waitForTimeout(150)
     check('I Esc → 只收右键菜单,面板留着', !(await page.evaluate(() => !!document.querySelector('.ap-unit-ctx'))) && await panelOpen(page))
-    // 「改名字和图标」:名字改成「书桌 Air」,图标那一步取消 → unitsUpdate 只带 name
-    await page.evaluate((sel) => {
-      const row = Array.from(document.querySelectorAll(`${sel} .ap-item`)).find((r) => r.textContent.includes('MacBook Air'))
-      row.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 200, clientY: 300 }))
-    }, UNITS)
-    await page.waitForSelector('.ap-unit-ctx', { timeout: 3000 })
-    await page.click('.ap-unit-ctx button:nth-child(2)')
-    const input = await page.waitForSelector('.dialog-overlay input', { timeout: 3000 }).catch(() => null)
-    if (input) {
-      await input.fill('书桌 Air')
-      await page.keyboard.press('Enter')
-      await page.waitForTimeout(200)
-      await page.keyboard.press('Escape') // 图标那一步:取消 = 不改图标
-      await page.waitForFunction(() => window.__unitUpdates.length > 0, null, { timeout: 3000 }).catch(() => {})
+    // 「改名字」/「改图标」各弹一个输入框:改名只带 name,且只弹一次(没有第二个框);改图标只带 icon
+    const ctxOn = async () => {
+      if (!(await panelOpen(page))) await openPanel(page)
+      await page.evaluate((sel) => {
+        const row = Array.from(document.querySelectorAll(`${sel} .ap-item`)).find((r) => r.textContent.includes('MacBook Air'))
+        row.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 200, clientY: 300 }))
+      }, UNITS)
+      await page.waitForSelector('.ap-unit-ctx', { timeout: 3000 })
     }
-    const updates = await page.evaluate(() => window.__unitUpdates)
-    check('I 改名字和图标 → 面板关,unitsUpdate(id, { name }) 只带改了的字段',
-      !(await panelOpen(page)) && JSON.stringify(updates) === JSON.stringify([['u-mba', { name: '书桌 Air' }]]), JSON.stringify(updates))
+    const answer = async (text) => {
+      const input = await page.waitForSelector('.dialog-overlay input', { timeout: 3000 }).catch(() => null)
+      if (!input) return false
+      await input.fill(text)
+      await page.keyboard.press('Enter')
+      await page.waitForTimeout(250)
+      return true
+    }
+    await ctxOn()
+    await page.click('.ap-unit-ctx button:nth-child(2)')
+    const asked1 = await answer('书桌 Air')
+    const secondDialog = await page.evaluate(() => !!document.querySelector('.dialog-overlay input'))
+    let updates = await page.evaluate(() => window.__unitUpdates.slice())
+    check('I「改名字」→ 面板关、只弹一个输入框,unitsUpdate(id, { name })',
+      asked1 && !secondDialog && !(await panelOpen(page)) && JSON.stringify(updates) === JSON.stringify([['u-mba', { name: '书桌 Air' }]]), JSON.stringify({ secondDialog, updates }))
+    await ctxOn()
+    await page.click('.ap-unit-ctx button:nth-child(3)')
+    const asked2 = await answer('🐼')
+    updates = await page.evaluate(() => window.__unitUpdates.slice())
+    check('I「改图标」→ 只带 icon,unitsUpdate(id, { icon })',
+      asked2 && JSON.stringify(updates[1]) === JSON.stringify(['u-mba', { icon: '🐼' }]) && updates.length === 2, JSON.stringify(updates))
     // 右键「切换到这台」
     await openPanel(page)
     await page.evaluate((sel) => {

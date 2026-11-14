@@ -25,7 +25,8 @@ registerMessages({
   'unit.panel.offlineCount': { zh: '离线 {n} 台', en: '{n} offline' },
   'unit.panel.offlineNote': { zh: '那台没开 Forsion', en: "That device isn't running Forsion" },
   'unit.panel.switchTo': { zh: '切换到这台', en: 'Switch to this device' },
-  'unit.panel.edit': { zh: '改名字和图标', en: 'Rename and change icon' },
+  'unit.panel.rename': { zh: '改名字', en: 'Rename' },
+  'unit.panel.changeIcon': { zh: '改图标', en: 'Change icon' },
   'unit.panel.renameAsk': { zh: '设备名字', en: 'Device name' },
   'unit.panel.editFailed': { zh: '没改成：{error}', en: "Couldn't save: {error}" },
 })
@@ -97,15 +98,19 @@ export function AccountUnitSection({ onClose, onToast }: {
     runUnitRoute({ kind: 'unit', id: u.id, name: u.name, icon: u.icon, platform: u.platform, via: row.via, lanUrl: u.lanUrl })
     onClose()
   }
-  const editUnit = async (u: UnitInfo): Promise<void> => {
+  /** 改名字 / 改图标各弹各的输入框,只带改了的那一个字段。 */
+  const editUnit = async (u: UnitInfo, field: 'name' | 'icon'): Promise<void> => {
     onClose()
-    const name = await askString(t('unit.panel.renameAsk'), u.name)
-    if (name == null) return
-    const icon = await askString(t('unit.setEmoji'), u.icon || '')
     const patch: { name?: string; icon?: string } = {}
-    if (name.trim() && name.trim() !== u.name) patch.name = name.trim()
-    if (icon != null && icon.trim().slice(0, 8) !== (u.icon || '')) patch.icon = icon.trim().slice(0, 8)
-    if (!patch.name && patch.icon === undefined) return
+    if (field === 'name') {
+      const name = (await askString(t('unit.panel.renameAsk'), u.name))?.trim()
+      if (!name || name === u.name) return
+      patch.name = name
+    } else {
+      const icon = (await askString(t('unit.setEmoji'), u.icon || ''))?.trim().slice(0, 8)
+      if (icon == null || icon === (u.icon || '')) return
+      patch.icon = icon
+    }
     const r = await window.tangu?.unitsUpdate?.(u.id, patch)
       .catch((e: unknown) => ({ status: 0, json: { detail: String((e as Error)?.message || e) } }))
     if (!r || r.status !== 200) {
@@ -181,7 +186,8 @@ export function AccountUnitSection({ onClose, onToast }: {
       {ctx && createPortal(
         <OverlayAt className="ctx-menu ap-unit-ctx" role="menu" x={ctx.x} y={ctx.y} onPointerDown={(e) => e.stopPropagation()}>
           <button role="menuitem" onClick={() => { const row = ctx.row; setCtx(null); openRow(row) }}>{t('unit.panel.switchTo')}</button>
-          <button role="menuitem" onClick={() => { const u = ctx.row.unit; setCtx(null); void editUnit(u) }}>{t('unit.panel.edit')}</button>
+          <button role="menuitem" onClick={() => { const u = ctx.row.unit; setCtx(null); void editUnit(u, 'name') }}>{t('unit.panel.rename')}</button>
+          <button role="menuitem" onClick={() => { const u = ctx.row.unit; setCtx(null); void editUnit(u, 'icon') }}>{t('unit.panel.changeIcon')}</button>
         </OverlayAt>,
         document.body,
       )}
