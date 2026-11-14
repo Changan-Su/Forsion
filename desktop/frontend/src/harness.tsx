@@ -948,7 +948,7 @@ if (new URLSearchParams(location.search).has('dock')) {
       // 父开关变了:真主进程经 refreshUnitHost → remoteSessions.notifyChanged 广播,桩在这里补同一拍(P1-K4)
       setConfig: async (patch: Record<string, unknown>) => { const next = Object.assign(cfg, patch); (window as unknown as { __rsPush?: () => unknown }).__rsPush?.(); return next },
       openExternal: async (url: string) => { opened.push(url) }, // openBrowser 在无浏览器视图时的回落口
-      unitsList: async () => ({ status: 200, json: { units } }),
+      unitsList: async () => ({ status: 200, json: { units: [...units] } }), // 每次新数组(同真 IPC):名册刷新才看得出变化
       unitsUpdate: async () => ({ status: 200, json: { ok: true } }),
       unitsRemove: async () => ({ status: 200, json: { ok: true } }),
       unitHostStatus: async () => ({ running: cfg.unitHostEnabled as boolean, connected: false, unitId: null, lastError: null, webPort: 8791, lanUrl: 'http://192.168.1.5:8791' }),
@@ -1040,12 +1040,12 @@ if (new URLSearchParams(location.search).has('dock')) {
       applyRealTheme(resolveInitialLang(), panelQ.get('skin') || resolveInitialSkin(), panelQ.get('skin') || resolveInitialBg(), panelQ.has('dark') ? 'dark' : 'light')
       if (panelQ.get('lang') === 'en') setLocaleGlobal('en')
     }
-    void Promise.all([import('./components/UnitSwitcher'), import('./stores/appStore'), import('./components/AccountCard')]).then(([{ UnitSwitcher, UnitRemoteSurface, UnitSettings, useUnitRemote, runUnitRoute }, { useApp }, { AccountCard }]) => {
+    void Promise.all([import('./components/UnitSwitcher'), import('./stores/appStore'), import('./components/AccountCard'), import('./components/unitRoster')]).then(([{ UnitSwitcher, UnitRemoteSurface, UnitSettings, useUnitRemote, runUnitRoute }, { useApp }, { AccountCard }, { useUnitRoster }]) => {
       useApp.setState({ desktopConfig: { ...cfg } as never })
       addRibbonIcon({ id: 'rb-unit', side: 'bottom', component: UnitSwitcher })
       if (unitPanel) {
         const toasts: string[] = []
-        Object.assign(window as unknown as Record<string, unknown>, { __unitRemote: useUnitRemote, __runUnitRoute: runUnitRoute, __toasts: toasts })
+        Object.assign(window as unknown as Record<string, unknown>, { __unitRemote: useUnitRemote, __runUnitRoute: runUnitRoute, __roster: useUnitRoster, __units: units, __toasts: toasts })
         addRibbonIcon({ id: 'rb-account', side: 'bottom', pinned: true, component: ({ expanded }: { expanded: boolean }) => <AccountCard compact={!expanded} onToast={(text) => { toasts.push(text) }} /> })
       }
       // 远程面(设备行「整个主区切过去」)也挂上:裸 harness 无 .shell-work → 组件原地渲染,CSS 退化 fixed 覆盖
@@ -1056,7 +1056,7 @@ if (new URLSearchParams(location.search).has('dock')) {
         const open = useApp((s) => s.settingsOpen && s.settingsTab === 'units')
         return open ? <div className="unitset-harness" style={{ position: 'fixed', left: 260, top: 24, width: 560, maxHeight: 'calc(100vh - 48px)', overflow: 'auto', zIndex: 500 }}><UnitSettings /></div> : null
       }
-      createRoot(rsHost).render(<><UnitRemoteSurface /><UnitSettingsHost /></>)
+      createRoot(rsHost).render(<><UnitRemoteSurface /><UnitSettingsHost />{unitPanel && <AskStringHost />}</>)
     })
   }
   installHotkeys() // 裸挂 Ribbon 没有 Shell,热键分发得自己装
