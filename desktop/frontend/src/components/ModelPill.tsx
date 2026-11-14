@@ -558,7 +558,10 @@ export const ModelPill: React.FC<{
       else { if (patch.modelId !== undefined) onSelect(patch.modelId); if (patch.thinkingLevel) onThinkingChange?.(patch.thinkingLevel, patch.ultra) }
     }
     if ('speed' in changes) onFastChange?.(changes.speed === 'ultra' ? 'ultra' : changes.speed === 'fast')
-    for (const { slot } of slotRows) if (slot in changes) onDefaultModelChange?.(slot, changes[slot])
+    for (const { slot } of slotRows) if (slot in changes) {
+      if (lockedModel(changes[slot])) lockedPicked(changes[slot])
+      else onDefaultModelChange?.(slot, changes[slot])
+    }
     // 原生菜单填不了数,自定义只在网页面板里;这里只有默认 / 另一档(512k 或 272k)/ 最大
     if ('context' in changes && !('model' in changes) && modelId) onContextWindowChange?.(modelId, changes.context === 'max' ? ctx?.maxTokens ?? null : changes.context === 'alt' ? ctx?.altTokens ?? null : null)
   }
@@ -891,8 +894,10 @@ export const ModelPill: React.FC<{
                                 else if (slot) selectDefault(slot, m.id)
                               }}
                             >
-                              <span className="grow">{m.name}</span>
-                              {locked && <span className="model-lock-note"><Lock size={11} aria-hidden="true" />{t('pill.locked')}</span>}
+                              {/* 名字是这一行的主信息:锁住的行把「升级后可用」放到名字下面,别把名字挤成「Claude…」 */}
+                              {locked
+                                ? <span className="grow model-lock-name"><span>{m.name}</span><span className="model-lock-note"><Lock size={11} aria-hidden="true" />{t('pill.locked')}</span></span>
+                                : <span className="grow">{m.name}</span>}
                               {m.source && <ModelMetadata model={{ source: m.source, tags: m.tags, multiplier: m.multiplier }} />}
                               <span className="mi-check">{m.id === paneValue ? '✓' : ''}</span>
                             </button>

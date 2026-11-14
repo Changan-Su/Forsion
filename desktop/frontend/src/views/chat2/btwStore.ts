@@ -25,7 +25,7 @@ import { useChildChat } from '../../stores/childChatStore'
 import { deleteAside, listAsides, type SavedAside } from '../../services/backendService'
 import { mimeForExt, previewKindFor } from '../../services/fileKinds'
 import { windowKind } from '../../windowKind'
-import { isTierLockedError, tierLockedText } from '../../services/modelTierLock'
+import { isTierLockedError, tierLockedText } from '../../services/accountQuota'
 
 registerMessages({
   'btw.title': { zh: '顺便问', en: 'By the way' },

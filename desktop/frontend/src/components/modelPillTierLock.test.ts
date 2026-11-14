@@ -5,6 +5,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { installNativeSheetPresenter, type NativeSheetPayload } from '@lcl/engine'
 import { setLocaleGlobal } from '../i18n'
+import { installModelPickerPresenter } from './modelPickerHost'
 import { ModelPill, type ModelPillGroup } from './ModelPill'
 
 const GROUPS = [{ label: 'Forsion', source: 'forsion', options: [
@@ -40,7 +41,7 @@ const openModelPane = async () => {
   await act(async () => { el.querySelector<HTMLButtonElement>('.model-pill-btn')!.click() })
   await act(async () => { document.querySelector<HTMLButtonElement>('[data-pane-trigger="model"]')!.click() })
 }
-const item = (name: string) => [...document.querySelectorAll<HTMLButtonElement>('.cm-sub .menu-item')].find((b) => b.querySelector('.grow')?.textContent === name)!
+const item = (name: string) => [...document.querySelectorAll<HTMLButtonElement>('.cm-sub .menu-item')].find((b) => (b.querySelector('.model-lock-name > span') || b.querySelector('.grow'))?.textContent === name)!
 
 describe('网页菜单', () => {
   it('倍率 > 上限的变淡带锁,= 上限与自带模型照常;点它不选中,行下说明 + 升级会员', async () => {
@@ -100,6 +101,24 @@ describe('手机原生合并菜单', () => {
       expect(last.kind === 'menu' && last.title).toBe('Pricey')
       const models = seen[0].kind === 'menu' ? seen[0].sections[0].items[0].children!.flatMap((s) => s.items) : []
       expect(models[2].detail).toContain('升级后可用')
+    } finally { off() }
+  })
+})
+
+describe('原生模型选择器(辅助模型槽也走同一道闸)', () => {
+  it('在原生选择器里把辅助模型选成用不了的:不写进设置', async () => {
+    const off = installModelPickerPresenter(async (request) => Object.fromEntries(request.fields.map((f) => [f.id, f.id === 'backgroundModelId' ? 'pricey' : f.id === 'model' ? 'pricey' : f.value])))
+    try {
+      const onDefaultModelChange = vi.fn()
+      const modelsResponse = { models: [
+        { id: 'cheap', name: 'Cheap', provider: 'f', source: 'forsion', modelType: 'llm', multiplier: 1 },
+        { id: 'pricey', name: 'Pricey', provider: 'f', source: 'forsion', modelType: 'llm', multiplier: 5 },
+      ], directProviders: [] } as never
+      const onSelect = await mount({ modelsResponse, defaultModelIds: { backgroundModelId: '', imageModelId: '', visionModelId: '' }, onDefaultModelChange })
+      await act(async () => { el.querySelector<HTMLButtonElement>('.model-pill-btn')!.click() })
+      await tick()
+      expect(onDefaultModelChange).not.toHaveBeenCalled()
+      expect(onSelect).not.toHaveBeenCalled()
     } finally { off() }
   })
 })

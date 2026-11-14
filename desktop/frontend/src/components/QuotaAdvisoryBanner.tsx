@@ -5,14 +5,17 @@ import {
   backgroundAdvisoryFor,
   formatRemaining,
   mergeQuotaView,
+  notePointsConfirmed,
   pickQuotaAdvisory,
   pointsBalanceOf,
+  pointsReadToken,
+  reconcilePointsRead,
   publishAccountQuota,
   quotaAdvisoryFor,
   subscribeAccountQuota,
   type AccountQuotaView,
 } from '../services/accountQuota'
-import { notePointsConfirmed, pointsAutoDeductAvailable, pointsReadToken, reconcilePointsRead, setPointsAutoDeduct } from '../services/pointsAutoDeduct'
+import { pointsAutoDeductAvailable, setPointsAutoDeduct } from '../tangu/pointsAutoDeduct'
 import { museAvailable } from '../features/runtime'
 import { useApp } from '../stores/appStore'
 import { ResetCardCeremony, type ResetCardResult } from './ResetCardCeremony'

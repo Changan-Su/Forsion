@@ -45,7 +45,7 @@ async function startFakeForsionCloud(opts = {}) {
       weeklyLimit: LIMIT.weekly, weeklyUsed: state.used.weekly, weeklyRemaining: Math.max(LIMIT.weekly - state.used.weekly, 0), weeklyPercent: Math.round(state.used.weekly / LIMIT.weekly * 100),
       weeklyResetAt: '2026-10-05', monthlyLimit: -1, monthlyUsed: 0, monthlyRemaining: -1, monthlyPercent: 0,
       extraTokenPoints: 0, tier: 'plus', hasOverride: false, pointsAutoDeduct: state.pointsAutoDeduct,
-      pointsBalance: 1234, modelMultiplierCap: 2.5,
+      pointsBalance: 1234, modelMultiplierCap: -1, // 不限:别的台架的模型表不被锁住
       background: {
         sharePercent: 15, modelId: 'glm-bg', autoMain: state.bg.autoMain,
         dailyLimit: d, dailyUsed: state.bg.daily, dailyRemaining: Math.max(d - state.bg.daily, 0), dailyPercent: Math.round(state.bg.daily / d * 100),

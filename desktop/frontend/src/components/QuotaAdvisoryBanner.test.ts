@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { LocaleProvider } from '../i18n'
 import { QuotaAdvisoryBanner } from './QuotaAdvisoryBanner'
-import { resetPointsAutoDeductBridge } from '../services/pointsAutoDeduct'
+import { resetPointsAutoDeductBridge } from '../tangu/pointsAutoDeduct'
 
 let host: HTMLDivElement
 let root: Root

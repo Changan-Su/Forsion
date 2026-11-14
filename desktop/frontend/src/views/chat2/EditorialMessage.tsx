@@ -17,7 +17,8 @@ import { useStreamReveal } from './streamReveal'
 import { Copy, RotateCcw, GitBranch, MessageCircleQuestion, CornerUpLeft, Pencil, Volume2, Square, Loader2, LogIn, Zap, History as HistoryIcon, FileCode2, MessageSquare, ShieldQuestion, CircleCheck, CircleX, CircleHelp, Clock, Undo2 } from 'lucide-react'
 import { ArrowUpRight, FileInput, StepForward } from 'lucide-react'
 import { turnHasOutput } from './continueTurn'
-import { isTierLockedError, tierLockedText } from '../../services/modelTierLock'
+import { isModelTierLocked, isTierLockedError, tierLockedText } from '../../services/accountQuota'
+import { useQuotaMultiplierCap } from '../../tangu/quotaCap'
 import { TURN_RESUME_OPEN } from '../../../../../tangu-agent/src/contracts/turnResume'
 import { useNoteInsertState } from './insertToNote'
 import * as api from '../../services/backendService'
@@ -343,7 +344,11 @@ function RunErrorRow({ msg, sessionId, modelId, handlers }: { msg: UiMessage; se
   const canRetry = useApp((s) => !!handlers?.onRetry && !!sessionId && !s.runningBySession[sessionId] && s.messagesBySession[sessionId]?.at(-1)?.id === msg.id)
   // 这一轮已有产出(正文 / 工具调用):「重试」会把它们删掉重来 —— 拆成「继续生成」(主)与「重新生成」两条路
   const canContinue = useApp((s) => canRetry && !!handlers?.onContinue && turnHasOutput(s.messagesBySession[sessionId!]))
-  const modelName = useApp((s) => (modelId && s.modelsResp?.models.find((m) => m.id === modelId)?.name) || '')
+  // 模型被会员档位拦下:modelId 是会话「现在」选着的模型,不一定是当时那个 —— 只有它确实还锁着才点名,否则说「这个模型」
+  const tierLocked = isTierLockedError(msg.error)
+  const multiplierCap = useQuotaMultiplierCap(tierLocked)
+  const sessionModel = useApp((s) => (tierLocked && modelId ? s.modelsResp?.models.find((m) => m.id === modelId) : undefined))
+  const modelName = sessionModel && isModelTierLocked(sessionModel, multiplierCap) ? sessionModel.name : ''
   return (
     <>
       <div className="t2-tool err">

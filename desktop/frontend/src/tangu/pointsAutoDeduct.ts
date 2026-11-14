@@ -6,31 +6,14 @@
  * 桥不在(老扩展没注册这条通道 / 没装扩展 / 网页 / 手机没有 cloudInvoke)= 不给「用积分继续」,只留用卡与升级;
  * 刻意不回落通用云请求 —— 回落了老扩展上也会出现按钮,与「没有通道就不显示」的降级相反。
  */
-import { type AccountQuotaView, mergeQuotaView } from './accountQuota'
+import { beginPointsWrite, confirmPointsWrite, mergeQuotaView, resetPointsWriteState, type AccountQuotaView } from '../services/accountQuota'
 
 export const POINTS_AUTO_DEDUCT_CHANNEL = 'account:pointsAutoDeduct'
 
 /** 本次运行里调过一次、扩展说没有这条通道(宿主比扩展新):之后不再露按钮。 */
 let channelMissing = false
 /** 仅测试用。 */
-export function resetPointsAutoDeductBridge(): void { channelMissing = false; writeGen = 0; confirmed = undefined }
-
-/**
- * 旧读取晚到不能盖掉已确认的开关状态(界面绝不能显示「关」而服务端其实开着)。
- * 每次写开关都推进代数;读额度视图的人在发请求前取一枚 pointsReadToken(),回来后经 reconcilePointsRead 合并:
- * 读取发出之后有过写,就用本地已确认的值(确认不了时留读到的值,由横幅的「待定」态兜底)。
- */
-let writeGen = 0
-let confirmed: boolean | undefined
-export function pointsReadToken(): number { return writeGen }
-export function reconcilePointsRead<T extends AccountQuotaView | null | undefined>(view: T, token: number): T {
-  if (!view || token === writeGen || confirmed === undefined) return view
-  return { ...view, pointsAutoDeduct: confirmed }
-}
-/** 一次在所有写之后发出的读取拿到了服务端的真值:记为已确认。 */
-export function notePointsConfirmed(view: AccountQuotaView | null | undefined, token: number): void {
-  if (view && token === writeGen && typeof view.pointsAutoDeduct === 'boolean') confirmed = view.pointsAutoDeduct
-}
+export function resetPointsAutoDeductBridge(): void { channelMissing = false; resetPointsWriteState() }
 
 const isNum = (v: unknown): boolean => typeof v === 'number' && Number.isFinite(v)
 
@@ -54,8 +37,7 @@ export async function setPointsAutoDeduct(enabled: boolean, prev: AccountQuotaVi
   const invoke = typeof window !== 'undefined' ? window.tangu?.cloudInvoke : undefined
   if (typeof invoke !== 'function' || channelMissing) return { ok: false, reason: 'no-bridge' }
   let response: { status?: number; json?: any } | null
-  writeGen++ // 在这之前发出的读取都算旧的
-  confirmed = undefined
+  beginPointsWrite() // 在这之前发出的读取都算旧的
   try {
     response = await invoke(POINTS_AUTO_DEDUCT_CHANNEL, enabled) as { status?: number; json?: any } | null
   } catch (error: any) {
@@ -66,8 +48,7 @@ export async function setPointsAutoDeduct(enabled: boolean, prev: AccountQuotaVi
   const json = response?.json
   if (status === 200 && json?.success && typeof json.pointsAutoDeduct === 'boolean') {
     // 按回包显示,不按点的是什么
-    confirmed = json.pointsAutoDeduct
-    writeGen++
+    confirmPointsWrite(json.pointsAutoDeduct)
     return { ok: true, quota: mergeQuotaView(prev, json.quota, { pointsAutoDeduct: json.pointsAutoDeduct }) }
   }
   if ((status === 503 && json?.error === 'points_fallback_unavailable') || (status === 410 && json?.error === 'auto_deduct_removed')) {
