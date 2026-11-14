@@ -5638,6 +5638,12 @@ app.on('before-quit', (e) => {
     if (win && !win.isDestroyed()) state.bounds = win.getBounds()
   }
   saveDetachedState()
+  // Unit 窗清单同理:同步记下此刻的位置大小再存一次(定时保存可能还没赶上;不可写就不写,见 saveUnitWindowState)
+  for (const state of persistedUnitWindows) {
+    const win = detachedWindows.get(`un_${state.unit}`)
+    if (win && !win.isDestroyed()) state.bounds = win.getBounds()
+  }
+  saveUnitWindowState()
   for (const m of minis.values()) rememberMiniLayout(m) // 开着的 Mini 也记下(关窗事件在退出时不一定赶得上落盘)
   saveMiniLayouts()
   saveOpenMiniWindows()
