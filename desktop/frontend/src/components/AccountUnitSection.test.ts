@@ -45,6 +45,17 @@ describe('unitPanelAvailable', () => {
     engine.presenter = () => true
     expect(unitPanelAvailable()).toBe(false)
   })
+  it('the Unit window (detached + ?unit=) → no Unit section, and it is recognised as a Unit window', async () => {
+    const { unitWindowId } = await import('../windowKind')
+    window.tangu = desktop() as any
+    history.replaceState(null, '', '/?window=detached&id=un_3f2a9c1e-7b4d&unit=3f2a9c1e-7b4d')
+    expect(unitWindowId()).toBe('3f2a9c1e-7b4d')
+    expect(unitPanelAvailable()).toBe(false)
+    history.replaceState(null, '', '/?window=detached&unit=../../x')
+    expect(unitWindowId()).toBeNull()
+    history.replaceState(null, '', '/?unit=3f2a9c1e-7b4d') // 主窗带了 unit 参数也不算
+    expect(unitWindowId()).toBeNull()
+  })
   it('detached / floating / mini windows → no', () => {
     window.tangu = desktop() as any
     for (const kind of ['detached', 'floating', 'mini']) {

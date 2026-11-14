@@ -28,7 +28,7 @@ import { askString } from '../amadeus/components/askString'
 import { Webview } from '../builtins/browserView'
 import { BROWSER_PARTITION } from '../../../shared/browser'
 import { registerMessages, translate, useI18n } from '../i18n'
-import { windowKind } from '../windowKind'
+import { unitWindowId, windowKind } from '../windowKind'
 import { SettingsPanel, SettingsRow, SettingsSwitch } from './SettingsPrimitives'
 import { ipcErrorText } from '../ipcError'
 import { SecretStorageNotice } from './SecretStorageNotice' // P1-K5
@@ -82,6 +82,7 @@ registerMessages({
   'unit.frame.unreachable': { zh: '连不上这台设备', en: "Can't reach this device" },
   'unit.frame.crashed': { zh: '这台设备的页面停止响应了', en: "This device's page stopped responding" },
   'unit.frame.retry': { zh: '重试', en: 'Retry' },
+  'unit.frame.closeWindow': { zh: '关闭窗口', en: 'Close window' },
   'unit.frame.relayFallback': { zh: '「{name}」这条路没接通，已改走中转', en: 'Couldn\'t connect to "{name}" that way — switched to relay' },
   'unit.frame.lanDown': { zh: '「{name}」这次直连不通，改走中转', en: '"{name}" isn\'t reachable directly right now — using relay' },
 })
@@ -94,7 +95,7 @@ export function deviceIcon(u: { icon?: string | null; platform?: string | null }
 }
 
 /** 设备的隧道页地址:经 server 通用隧道回到该设备的 unitWeb(尾斜杠必须留 —— 页面用相对 base)。 */
-function tunnelPageUrl(cloudUrl: string | undefined, unitId: string): string {
+export function tunnelPageUrl(cloudUrl: string | undefined, unitId: string): string {
   return `${(cloudUrl || '').replace(/\/+$/, '')}/api/units/${unitId}/proxy/`
 }
 
@@ -263,34 +264,23 @@ export function UnitRemoteSurface(): React.ReactElement | null {
   if (whole) {
     // 渲染期查询而非挂载期缓存:target/active 每变一次都重查,Shell 罕见重挂后切一次设备即自愈。无 Shell(harness)→ 原地渲染。
     const host = document.querySelector('.shell')
-    const isAddr = target.key.startsWith('addr:')
+    // Unit 窗里没有「回到这台电脑」(关窗就是回来);失败态的第二个按钮是「关闭窗口」。
+    const inWindow = !!unitWindowId()
     const node = (
-      <div className={`unitrs unitrs--whole${active ? '' : ' unitrs-hidden'}`} data-unit-frame="">
-        <div className="unitfr-bar">
-          <div className="unitfr-pill" data-unitfr-pill="">
-            <span className="unitfr-pill-ic">{isAddr ? <Globe size={13} /> : deviceIcon(target, 13)}</span>
-            <span className="unitfr-pill-text">
-              <span className="unitfr-pill-name">{target.name}</span>
-              {!isAddr && <span className="unitfr-pill-kind">{t('unit.frame.kind')}</span>}
-            </span>
-            <span className="unitfr-pill-sep" aria-hidden="true" />
-            <button type="button" className="unitfr-back" onClick={back}>{t('unit.frame.back')}</button>
-          </div>
-        </div>
-        <div className="unitfr-body">
-          {web}
-          {fail && (
-            <div className="unitfr-fail" role="alert">
-              <div className="unitfr-fail-title">{t(fail === 'crashed' ? 'unit.frame.crashed' : 'unit.frame.unreachable')}</div>
-              <div className="unitfr-fail-actions">
-                <button type="button" className="btn primary" onClick={retry}>{t('unit.frame.retry')}</button>
-                <button type="button" className="btn" onClick={back}>{t('unit.frame.back')}</button>
-              </div>
+      <UnitFrame target={target} active={active} onBack={inWindow ? undefined : back}>
+        {web}
+        {fail && (
+          <div className="unitfr-fail" role="alert">
+            <div className="unitfr-fail-title">{t(fail === 'crashed' ? 'unit.frame.crashed' : 'unit.frame.unreachable')}</div>
+            <div className="unitfr-fail-actions">
+              <button type="button" className="btn primary" onClick={retry}>{t('unit.frame.retry')}</button>
+              {inWindow
+                ? <button type="button" className="btn" onClick={() => window.tangu?.closeSelf?.()}>{t('unit.frame.closeWindow')}</button>
+                : <button type="button" className="btn" onClick={back}>{t('unit.frame.back')}</button>}
             </div>
-          )}
-        </div>
-        <UnitFrameAvatar target={target} />
-      </div>
+          </div>
+        )}
+      </UnitFrame>
     )
     return host ? createPortal(node, host) : node
   }
@@ -306,9 +296,38 @@ export function UnitRemoteSurface(): React.ReactElement | null {
   return host ? createPortal(node, host) : node // 无 Shell(harness/web)→ 原地渲染,CSS 退化为 fixed 覆盖层
 }
 
+/** 整窗形态的框:顶上一条标题条(正中胶囊 `[图标] 名字 · 我的设备 | 回到这台电脑`)、标题条以下的 body、左下角宿主头像。
+ *  主窗的设备页和 Unit 窗共用;onBack 不给 = 胶囊里没有「回到这台电脑」(Unit 窗:关窗就是回来)。 */
+export function UnitFrame({ target, active = true, onBack, children }: {
+  target: Pick<UnitRemoteTarget, 'key' | 'name' | 'icon' | 'platform'>
+  active?: boolean
+  onBack?: () => void
+  children: React.ReactNode
+}): React.ReactElement {
+  const { t } = useI18n()
+  const isAddr = target.key.startsWith('addr:')
+  return (
+    <div className={`unitrs unitrs--whole${active ? '' : ' unitrs-hidden'}`} data-unit-frame="">
+      <div className="unitfr-bar">
+        <div className="unitfr-pill" data-unitfr-pill="">
+          <span className="unitfr-pill-ic">{isAddr ? <Globe size={13} /> : deviceIcon(target, 13)}</span>
+          <span className="unitfr-pill-text">
+            <span className="unitfr-pill-name">{target.name}</span>
+            {!isAddr && <span className="unitfr-pill-kind">{t('unit.frame.kind')}</span>}
+          </span>
+          {onBack && <span className="unitfr-pill-sep" aria-hidden="true" />}
+          {onBack && <button type="button" className="unitfr-back" onClick={onBack}>{t('unit.frame.back')}</button>}
+        </div>
+      </div>
+      <div className="unitfr-body">{children}</div>
+      <UnitFrameAvatar target={target} />
+    </div>
+  )
+}
+
 /** 整窗形态左下角:本机用户自己的头像(数据走 services/accountChip 的接缝),右下角叠那台的小图标。
  *  盖在远端账号卡的位置上(Ribbon 折叠态账号槽的几何,见 unitSwitcher.css .unitfr-rail);点它 = 开本机账号面板,锚在这枚头像上。 */
-function UnitFrameAvatar({ target }: { target: UnitRemoteTarget }): React.ReactElement | null {
+function UnitFrameAvatar({ target }: { target: Pick<UnitRemoteTarget, 'key' | 'icon' | 'platform'> }): React.ReactElement | null {
   const chip = useSyncExternalStore(subscribeAccountChip, accountChip, accountChip)
   const [imgError, setImgError] = useState(false)
   if (!chip) return null

@@ -105,3 +105,13 @@ export function unitPanelModel(input: {
   if (viewingKey?.startsWith('addr:')) rows.push({ kind: 'addr', key: viewingKey, name: remote.name || viewingKey.slice(5), current: true })
   return { localCurrent: !viewingKey, rows, offline }
 }
+
+/** Unit 窗:名册回包 → 这扇窗的状态。list: undefined = 没有名册桥;抛错由调用方折成 'unknown'。 */
+export function unitWindowRosterState(list: { status: number; json: { units?: UnitInfo[] } | null } | undefined, id: string): { state: 'signedOut' | 'missing' | 'unknown' | 'noBridge' } | { state: 'found'; unit: UnitInfo; units: UnitInfo[] } {
+  if (list === undefined) return { state: 'noBridge' }
+  if (list.status === 401) return { state: 'signedOut' }
+  const units = list.status === 200 ? list.json?.units : undefined
+  if (!Array.isArray(units)) return { state: 'unknown' }
+  const unit = units.find((u) => u?.id === id)
+  return unit ? { state: 'found', unit, units } : { state: 'missing' }
+}
