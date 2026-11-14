@@ -5,9 +5,11 @@
  */
 import type { ToolCall } from '../core/types.js';
 import type { ApprovalDecision } from '../services/approvals.js';
-import { loadEngines, engineStatus, loadEnginePrefs, saveEngineDefaultModel, type EngineDef, type EngineStatus } from './config.js';
+import { mkdirSync } from 'node:fs';
+import path from 'node:path';
+import { loadEngines, engineStatus, loadEnginePrefs, saveEngineDefaultModel, saveEngineProbeSession, type EngineDef, type EngineStatus } from './config.js';
+import { tanguHome } from '../core/tanguHome.js';
 import { runAcpEngine, probeAcpEngine } from './acpEngine.js';
-import { seedDshFiles } from './dsh.js';
 import { isHostSandboxRestricted } from '../sandbox/hostSandboxPolicy.js';
 
 /** externalEngineLoop 传入：一次外部引擎 turn 所需的上下文 + 回灌接缝。 */
@@ -20,6 +22,17 @@ export interface EngineRunCtx {
   /** 用户为外部引擎选的模型(经 ACP unstable_setSessionModel 应用);空=用引擎默认。 */
   engineModelId?: string;
   resumeSessionId?: string;
+  /** 上一行:要续接的引擎会话。续不上一律失败(不悄悄新开);那个会话在引擎那边已经没有了时,抛出的错误带 externalSessionGone。 */
+  /** 普通对话的续接才传:那个引擎会话是哪家适配器记下的(握手里报的名字;null = 老指针没记)。握手之后核对 ——
+   *  名字对不上(同一个引擎 id 在 engines.json 里被改指到了别的命令),或者当前这家的普通对话续接没核过,就不拿旧会话 id 去问它,
+   *  直接新开一个会话(等于引擎换了)。插件任务不传(undefined),照旧按 resumeSessionId 续接。 */
+  resumeFromAgent?: string | null;
+  /** 引擎会话一建立(新建或续上)就回调,在 prompt 之前。resumable = 这个引擎下一轮接得上它;
+   *  via = 下一轮会怎么接:'load'(session/load,回放历史)/ 'resume'(session/resume,不回放)。
+   *  verifiedForChat = 普通对话里下一轮可以接着用它:走 resume 的都算,走 load 的只算用真引擎核过的适配器
+   *  (名单见 acpEngine.ts 的 LOAD_RESUME_VERIFIED)。插件任务不看这一项,照旧按 resumable 续接。
+   *  agent = 握手里报的适配器名(普通对话把它和指针记在一起,见 resumeFromAgent)。 */
+  onSession?: (info: { id: string; resumable: boolean; resumed: boolean; via?: 'load' | 'resume'; verifiedForChat?: boolean; agent?: string }) => void | Promise<void>;
   readOnly?: boolean;
   mcpServers?: import('@agentclientprotocol/sdk').McpServer[];
   message: string;
@@ -45,6 +58,11 @@ export interface EngineResult {
 /** 引擎能力(懒探测得到):可选模型 + 当前模型 + slash 命令。 */
 export interface EngineCapabilities {
   loadSession?: boolean;
+  /** 引擎报了 sessionCapabilities.resume(续接但不回放,DSH)。 */
+  resume?: boolean;
+  /** 思考档(ACP configOptions 里 category = thought_level 的那一项)。只读出来,本引擎目前不改它。 */
+  thoughtLevels?: Array<{ id: string; name: string; description?: string }>;
+  currentThoughtLevel?: string;
   modes?: Array<{id: string; name: string}>;
   models: Array<{ id: string; name: string; description?: string }>;
   currentModelId?: string;
@@ -79,10 +97,12 @@ export interface EngineManager {
 const CAPS_TTL_MS = 10 * 60 * 1000; // 软 TTL:能力变动慢,缓存 10 分钟;进程重启即清
 
 export function createEngineManager(configFile?: string): EngineManager {
-  seedDshFiles(); // 幂等落 ~/.tangu/engines/dsh/{package.json,cordis.yml,README.md};用户跑一次 npm i 才算装上
   const engines = loadEngines(configFile);
   const byId = new Map<string, EngineDef>(engines.map((e) => [e.id, e]));
   const capsCache = new Map<string, { caps: EngineCapabilities; at: number }>();
+  // 同一个引擎正在跑的那次探测:缓存没命中时两处同时来问(两个窗口各开一次模型下拉)要合成一次。分开跑的话第二个
+  // 续不上探测会话(被第一个占着),会另建一个并顶掉记着的那个 —— 每撞一次就在引擎的历史里多留一个空会话。
+  const probing = new Map<string, Promise<EngineCapabilities>>();
   let prefs = loadEnginePrefs();
   return {
     list: () => engines.map((e) => {
@@ -100,9 +120,22 @@ export function createEngineManager(configFile?: string): EngineManager {
       }
       const hit = capsCache.get(id);
       if (hit && Date.now() - hit.at < CAPS_TTL_MS) return hit.caps;
-      const caps = await probeAcpEngine(def);
-      capsCache.set(id, { caps, at: Date.now() });
-      return caps;
+      const running = probing.get(id);
+      if (running) return running;
+      const task = (async () => {
+        // 探测会话的固定工作目录(只有复用探测会话的引擎用得上,见 probeAcpEngine):本引擎自己的目录,不落在用户的项目里。
+        const probeDir = path.join(tanguHome(), 'engines', id, 'probe');
+        try { mkdirSync(probeDir, { recursive: true }); } catch { /* 建不出来就让引擎自己报错 */ }
+        const { probeSessionId, ...caps } = await probeAcpEngine(def, { reuseSessionId: prefs[id]?.probeSessionId, reuseCwd: probeDir });
+        if (probeSessionId && probeSessionId !== prefs[id]?.probeSessionId) {
+          saveEngineProbeSession(id, probeSessionId);
+          prefs = loadEnginePrefs();
+        }
+        capsCache.set(id, { caps, at: Date.now() });
+        return caps;
+      })().finally(() => probing.delete(id));
+      probing.set(id, task);
+      return task;
     },
     setDefaultModel: (id, modelId) => {
       saveEngineDefaultModel(id, modelId);

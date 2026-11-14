@@ -91,6 +91,8 @@ const SKIP = {
   installCreationAutoVersion: '造物的 git 版本由桌面主进程在托管根(~/Forsion/Project)上做,手机端既没有这个目录也没有 codeStudio git IPC;实现本身缺 window.tangu.codeStudioGitCommit 即 no-op',
   windowKind: '多窗分流(?window=detached/mini);移动端只有一个 WebView',
   DetachedRoot: '同上:拖出来的独立窗',
+  UnitWindowRoot: '设备的 Unit 窗:主进程开的独立窗(一台设备一扇),手机 / 网页没有多窗口',
+  unitWindowId: '同上:判这扇独立窗是不是 Unit 窗(?unit=)',
   MiniRoot: '同上:悬浮 mini 卡片',
   FloatingRoot: '第六种 Panel 的 Electron 原生子窗口根;移动端按产品约定继续使用全屏二级页面,不模拟桌面窗口',
   PipRoot: 'Computer Use 悬浮小画面(?window=pip)的根:一扇置顶的 Electron 系统小窗,只有桌面主进程开得出来;手机没有 window.tangu.computerUsePip,插件就不画「移到悬浮窗」',

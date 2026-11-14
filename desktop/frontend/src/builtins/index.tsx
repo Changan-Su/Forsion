@@ -21,7 +21,7 @@ import { registerMessages, useI18n } from '../i18n'
 import { SettingsSwitch } from '../components/SettingsPrimitives'
 import { useApp } from '../stores/appStore'
 import { useUnitRemote } from '../components/UnitSwitcher'
-import { windowKind } from '../windowKind'
+import { unitWindowId, windowKind } from '../windowKind'
 import { PluginLogo } from '../components/PluginLogo'
 import { calendarAvailable, installCalendarSpace, installCalendarViews, removeCalendarSpace } from './calendar'
 import { museAvailable, installMuseSpace, installMuseViews, removeMuseSpace } from './muse'
@@ -221,6 +221,13 @@ function applyToggle(def: BuiltinDef, on: boolean): void {
  *  登录态与注入的凭据;远程设备页的附件交给系统浏览器就是 401)。 */
 export function routeExternalUrl(url: string, fromGuest = false): void {
   const s = useBuiltins.getState()
+  // Unit 窗(一扇窗只看一台设备)没有工作台:不许动本窗的远程面(藏起来就再没有按钮能回来),
+  // 链接开在一扇独立视图窗的内置浏览器里(同一个浏览器分区,远端附件靠它的凭据),不把主窗叫出来。
+  if (unitWindowId()) {
+    if ((s.inAppLinks || fromGuest) && s.enabled.browser && window.tangu?.openDetached) void window.tangu.openDetached([{ type: 'browser', params: { url } }]).catch(() => { void window.tangu?.openExternal?.(url) })
+    else void window.tangu?.openExternal?.(url)
+    return
+  }
   if ((s.inAppLinks || fromGuest) && s.enabled.browser && windowKind() !== 'mini') {
     // 设备远程面(UnitRemoteSurface)开着时必须先退场:回投来的新标签(含远程页里 window.open
     // 的附件,见 main.ts did-attach-webview)会开在远程面**底下**,观感=点了没反应。

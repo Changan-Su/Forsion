@@ -7,10 +7,9 @@ vi.mock('../src/core/config.js', () => ({
 }));
 vi.mock('../src/engines/config.js', () => ({
   loadEngines: () => [{ id: 'test', name: 'Test', command: '/must-not-spawn' }],
-  loadEnginePrefs: () => ({}), saveEngineDefaultModel: vi.fn(), engineStatus: () => 'available',
+  loadEnginePrefs: () => ({}), saveEngineDefaultModel: vi.fn(), saveEngineProbeSession: vi.fn(), engineStatus: () => 'available',
 }));
 vi.mock('../src/engines/acpEngine.js', () => ({ probeAcpEngine: state.probe, runAcpEngine: state.run }));
-vi.mock('../src/engines/dsh.js', () => ({ seedDshFiles: vi.fn() }));
 import { createEngineManager } from '../src/engines/manager.js';
 
 beforeEach(() => { state.mode = 'off'; vi.clearAllMocks(); state.probe.mockResolvedValue({ models: [], commands: [] }); state.run.mockResolvedValue({ content: 'done' }); });
