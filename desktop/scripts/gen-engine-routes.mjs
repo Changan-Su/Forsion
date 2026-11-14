@@ -438,7 +438,8 @@ export const CLASSIFICATION = {
 /**
  * 委托管理员档(独立 Unit 的隧道来路 + 验过的操作者声明 role=admin + 本机打开了 cloud.delegatedAdmin)能用的引擎路由。
  * 这一档**缺省全拒,GET 也算**,不看上面的 allow / deny-remote:只放这里点名的(命中的每一行都得在这里,unitWeb 才放)。
- * 范围 = 管 Agent 本身:名册与人设、建 / 改 / 删、头像、按 Agent 启停技能、Agent 日程;外加壳要的健康探针与两张只读目录。
+ * 范围 = 管 Agent 本身:名册与人设、建 / 改 / 删、头像、按 Agent 启停技能、Agent 日程的读与删;外加壳要的健康探针与两张只读目录。
+ * 日程的新建 / 覆盖写(POST …/entries)不放:到点是无人值守、完全放行的运行,界面也没有这个入口。
  * 刻意不放:会话与消息、记忆、HARNESS 工作笔记、human/、电脑历史、收件箱、用量、Hooks(读写)、MCP 配置与探测(含 /agent/tools 的
  * MCP 状态)、审批规则、通道、插件、同步、技能上传 / 导入 / 编辑。
  * 改审批档的写在引擎里照远端上限钳(routes/agents.ts),这里不放宽任何东西。键必须在 CLASSIFICATION 里(孤儿 = 失败)。
@@ -459,7 +460,6 @@ export const DELEGATED_ADMIN = new Set([
   'GET /agent/skills/catalog',
   'PUT /agent/skills/catalog/:key/disabled',
   'GET /agent/special/schedule',
-  'POST /agent/special/schedule/:slug/entries',
   'DELETE /agent/special/schedule/:slug/entries/:id',
 ])
 
