@@ -13,6 +13,9 @@
  *   S1–S4 离线 / 没登录 / 不在名册 / 名册读失败 各画各的,且这几种状态下**一律没有 webview**(名册确认前不挂页面)
  *   S5 「打开 Forsion」把藏起来的主窗叫出来
  *   L1 非法 id 的链接(forsion://unit/bad?window=standalone)不开 Unit 窗
+ *   I1 Unit 窗的渲染层直接调 units:openWindow / units:addToDesktop → 被真实 IPC 的发送方检查挡掉(对照:主窗同一调用放行到下一步)
+ *   P1 设备页里 window.open → Unit 窗的远程面不动,链接开在另一扇独立视图窗的内置浏览器里
+ *   A  登出:Unit 窗与主窗设备页的 webview 在握手阶段就卸掉;迟到的旧名册回包不把页面挂回来
  *   C1–C2 冷启动带链接 → Unit 窗出来、主窗建了但不露面;二启同理(第二个进程退出、第一个只开 Unit 窗)
  * 截图(SHOT_DIR,缺省系统临时目录):主窗 + Unit 窗并排、四种状态、悬停按钮、右键菜单、深色、110%。
  *
@@ -55,7 +58,7 @@ async function startUnit() {
 
 /** 假云端:账号 / 额度 / 名册(mode 可切)+ 中转(/api/units/<UID_ON>/proxy/* → 那台 Unit 的 /web/*,其余未知路径原样转给它)。 */
 function startCloud(unit) {
-  const state = { mode: 'ok', hits: [] }
+  const state = { mode: 'ok', hits: [], rosterDelay: 0 }
   const roster = () => [
     { id: UID_ON, name: '书桌 mini', platform: 'darwin', icon: '🦊', online: true, lanUrl: null },
     { id: UID_OFF, name: '客厅 PC', platform: 'win32', icon: null, online: false, lanUrl: null },
@@ -74,9 +77,10 @@ function startCloud(unit) {
     if (p.startsWith(tunnel)) { state.hits.push(p); return forward(req, res, `/web/${p.slice(tunnel.length)}${u.search}`) }
     if (p === '/api/brain/users/me') return send(200, { username: 'linyi', nickname: '林一', membershipTier: 'plus' })
     if (p === '/api/units') {
-      if (state.mode === 'unauth') return send(401, { detail: 'unauthorized' })
-      if (state.mode === 'fail') return send(502, { detail: 'bad gateway' })
-      return send(200, { units: roster() })
+      // rosterDelay:按请求到达时的状态作答、晚这么久才回(造「迟到的旧名册」)
+      const mode = state.mode
+      const answer = () => (mode === 'unauth' ? send(401, { detail: 'unauthorized' }) : mode === 'fail' ? send(502, { detail: 'bad gateway' }) : send(200, { units: roster() }))
+      return state.rosterDelay ? void setTimeout(answer, state.rosterDelay) : answer()
     }
     if (p === '/api/token-quota/my') return send(200, { dailyLimit: 100, dailyUsed: 28, dailyRemaining: 72, dailyPercent: 28, weeklyLimit: 500, weeklyUsed: 140, weeklyRemaining: 360, weeklyPercent: 28, weeklyResetAt: '2026-11-16', resetCards: 1 })
     if (p.startsWith('/api/')) return send(404, { detail: 'not in fixture' })
@@ -237,6 +241,34 @@ async function main() {
     R.check('W3 Unit 窗里点头像 → 账号面板打开,没有 Unit 段', pop.pop && !pop.units, pop)
     await captureById(app, uw.id, shot('panel')); shots.push(shot('panel'))
     await page.click('.unitfr-avatar').catch(() => {})
+
+    // I1 Unit 窗的渲染层直接调主窗才许调的 IPC:真实的发送方检查把它挡掉(对照:主窗同一个调用走到了「开发模式恒拒」)
+    const before = (await wins(app)).length
+    const fromUnit = await page.evaluate(async (off) => ({
+      open: await window.tangu.unitsOpenWindow(off).catch((e) => ({ threw: String(e) })),
+      desk: await window.tangu.unitsAddToDesktop({ id: off }).catch((e) => ({ threw: String(e) })),
+    }), UID_OFF)
+    await sleep(1500)
+    const fromMain = await win.evaluate(async (off) => window.tangu.unitsAddToDesktop({ id: off }), UID_OFF)
+    R.check('I1 Unit 窗直接调 units:openWindow → 被拒、没有多开窗', fromUnit.open?.ok === false && (await wins(app)).length === before, { open: fromUnit.open, before, after: (await wins(app)).length })
+    R.check('I1 Unit 窗直接调 units:addToDesktop → 被拒(untrusted sender);主窗同一调用走到开发模式恒拒', fromUnit.desk?.ok === false && fromUnit.desk?.detail === 'untrusted sender' && fromMain?.code === 'unpackaged', { unit: fromUnit.desk, main: fromMain })
+
+    // P1 设备页里触发 window.open:Unit 窗的远程面不动,链接开在另一扇独立视图窗的内置浏览器里
+    const popupUrl = `http://127.0.0.1:${unit.port}/web/?popup=1`
+    const opened = await app.evaluate(async ({ webContents }, { origin, url }) => {
+      const wc = webContents.getAllWebContents().filter((w) => !w.isDestroyed() && w.getType() === 'webview' && w.getURL().startsWith(origin)).pop()
+      if (!wc) return 'no-webview'
+      await wc.executeJavaScript(`window.open(${JSON.stringify(url)}, '_blank'); true`, true)
+      return 'ok'
+    }, { origin: `${cloud.url}/api/units/${UID_ON}/proxy/`, url: popupUrl })
+    const popupWin = await until(async () => (await wins(app)).find((w) => w.kind === 'detached' && !w.unit && w.visible), 15000)
+    await sleep(1200)
+    const unitStill = await page.evaluate(() => ({ active: !!document.querySelector('.unitrs--whole:not(.unitrs-hidden)'), web: document.querySelectorAll('.unitrs-web').length, fail: !!document.querySelector('.unitfr-fail') }))
+    const popupPage = popupWin ? app.windows().find((p) => p.url().includes(`id=${popupWin.wid}`)) : null
+    const popupSrc = popupPage ? await until(() => popupPage.evaluate(() => document.querySelector('webview')?.getAttribute('src') || ''), 10000) : ''
+    R.check('P1 设备页里 window.open → Unit 窗的远程面仍在、仍可用', opened === 'ok' && unitStill.active && unitStill.web === 1 && !unitStill.fail, { opened, unitStill })
+    R.check('P1 链接开在另一扇独立视图窗的内置浏览器里(同一分区)', !!popupWin && String(popupSrc).startsWith(popupUrl.split('?')[0]), { popupWin, popupSrc })
+    if (popupWin) await app.evaluate(({ BrowserWindow }, id) => BrowserWindow.fromId(id)?.close(), popupWin.id)
     await sleep(500)
 
     // 主窗 + Unit 窗并排
@@ -312,6 +344,43 @@ async function main() {
       await closeUnitWindows(app); await sleep(800)
     }
     await win.evaluate(() => { localStorage.setItem('forsion_theme_pref', 'light'); localStorage.setItem('forsion_ui_zoom', '1') })
+    // A 换账号(登出):握手阶段就卸掉旧页面 —— Unit 窗与主窗设备页都是;迟到的旧名册回包不把页面挂回来
+    await openVia(UID_ON)
+    const ap = await unitPage(app, UID_ON)
+    await ap.waitForSelector('.unitrs-web', { timeout: 20_000 }).catch(() => {})
+    // 主窗也切到那台(设备页)
+    await app.evaluate(({ BrowserWindow }, p) => {
+      const w = BrowserWindow.getAllWindows().find((x) => !x.isDestroyed() && !/[?&]window=/.test(x.webContents.getURL()))
+      w.webContents.send('window:mainAction', 'unit-route', p)
+    }, JSON.stringify({ kind: 'unit', id: UID_ON, name: '书桌 mini', via: 'tunnel' }))
+    await win.waitForSelector('.unitrs-web', { timeout: 10_000 }).catch(() => {})
+    const pre = { unit: await ap.locator('.unitrs-web').count(), main: await win.locator('.unitrs-web').count() }
+    // 再开一扇正在等名册的窗(名册故意慢 4 秒),趁它在途时登出
+    cloud.state.rosterDelay = 4000
+    await openVia(UID_OFF)
+    const lp = await unitPage(app, UID_OFF)
+    await lp.waitForSelector('[data-unit-window="loading"]', { timeout: 10_000 }).catch(() => {})
+    const unloadSeen = { unit: null, main: null }
+    const watch = Promise.all([
+      ap.waitForFunction(() => !document.querySelector('.unitrs-web'), null, { timeout: 15_000 }).then(() => { unloadSeen.unit = Date.now() }).catch(() => {}),
+      win.waitForFunction(() => !document.querySelector('.unitrs-web'), null, { timeout: 15_000 }).then(() => { unloadSeen.main = Date.now() }).catch(() => {}),
+    ])
+    cloud.state.mode = 'unauth' // 之后再读名册就是 401;在途那份(请求时设备还在)照旧按 200 迟到
+    const t0 = Date.now()
+    const out = await win.evaluate(async () => { try { await window.tangu.forsionLogout(); return 'ok' } catch (e) { return String(e) } })
+    const tDone = Date.now()
+    await watch
+    await sleep(6000) // 等那份迟到的旧名册(200 + 设备在)回来
+    cloud.state.rosterDelay = 0
+    const after1 = await ap.evaluate(() => ({ state: document.querySelector('.unitwin')?.getAttribute('data-unit-window'), web: document.querySelectorAll('.unitrs-web').length }))
+    const after2 = await lp.evaluate(() => ({ state: document.querySelector('.unitwin')?.getAttribute('data-unit-window'), web: document.querySelectorAll('.unitrs-web').length }))
+    const mainAfterOut = await win.evaluate(() => ({ web: document.querySelectorAll('.unitrs-web').length, active: !!document.querySelector('.unitrs:not(.unitrs-hidden)') }))
+    R.check('A 登出前两边都开着那台的页面', pre.unit === 1 && pre.main === 1, pre)
+    R.check('A 登出:Unit 窗的 webview 被卸掉,显示「先在 Forsion 里登录」', after1.web === 0 && after1.state === 'signedOut', { out, after1 })
+    R.check('A 登出:主窗设备页的 webview 也被卸掉', mainAfterOut.web === 0 && !mainAfterOut.active, mainAfterOut)
+    R.check('A 卸掉发生在握手阶段(不晚于登出调用返回)', !!unloadSeen.unit && !!unloadSeen.main && unloadSeen.unit <= tDone + 50 && unloadSeen.main <= tDone + 50, { t0, tDone, unloadSeen })
+    R.check('A 迟到的旧名册(设备还在)不把页面挂回来:那扇等名册的窗停在「没登录」、没有 webview', after2.web === 0 && after2.state === 'signedOut', after2)
+    await closeUnitWindows(app); await sleep(800)
     await L.close(); L = null
 
     // ══ 第二段:冷启动带链接 / 二启 ══
