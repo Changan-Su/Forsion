@@ -19,7 +19,7 @@
 import React, { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 import { create } from 'zustand'
-import { Check, ChevronDown, Cloud, Globe, Laptop, Monitor, MonitorSmartphone, Smartphone, X } from 'lucide-react'
+import { Check, ChevronDown, Cloud, Globe, Laptop, Monitor, MonitorSmartphone, Smartphone, Users, X } from 'lucide-react'
 import { OverlayAt } from '@lcl/engine'
 import { useApp } from '../stores/appStore'
 import { usePageStore } from '../amadeus/store/pageStore'
@@ -37,8 +37,9 @@ import { SECRET_STORE_INSECURE, type RemoteSessionsView } from '../../../shared/
 import './remoteSessionsCopy' // P1-K4
 import type { UnitInfo, UnitPairedDevice } from '../types'
 import { accountChip, subscribeAccountChip } from '../services/accountChip'
-import { rememberVia, type UnitVia } from './unitPanelModel'
-import { useUnitRoster } from './unitRoster'
+import { rememberVia, sharedTargetKey, type UnitVia } from './unitPanelModel'
+import { onSharedRoster, sharedStillEnterable, useUnitRoster } from './unitRoster'
+import { sharedLabel, type SharedUnit, type UnitSharedLabel } from '../../../shared/sharedUnits'
 import { setPopupsBlocked } from '../stores/popupQueue'
 import { onAccountWillChange } from '../services/accountTransition'
 import '../styles/unitSwitcher.css'
@@ -86,9 +87,16 @@ registerMessages({
   'unit.frame.closeWindow': { zh: '关闭窗口', en: 'Close window' },
   'unit.frame.relayFallback': { zh: '「{name}」这条路没接通，已改走中转', en: 'Couldn\'t connect to "{name}" that way — switched to relay' },
   'unit.frame.lanDown': { zh: '「{name}」这次直连不通，改走中转', en: '"{name}" isn\'t reachable directly right now — using relay' },
+  // 别人共享给当前账号的 Unit
+  'unit.frame.waking': { zh: '正在唤醒…', en: 'Waking it up…' },
+  'unit.frame.wakingHint': { zh: '这台 Unit 刚才在休眠，通常几十秒内就好', en: 'This Unit was asleep. It usually takes under a minute' },
+  'unit.frame.wakeFailed': { zh: '没能唤醒这台 Unit', en: "Couldn't wake this Unit" },
+  'unit.frame.forbidden': { zh: '你现在不能进入这台 Unit', en: "You can't enter this Unit right now" },
+  'unit.shared.revoked': { zh: '你已不能进入「{name}」，已回到这台电脑', en: 'You can no longer enter "{name}". Back on this computer' },
 })
 
-export function deviceIcon(u: { icon?: string | null; platform?: string | null }, size = 15): React.ReactNode {
+export function deviceIcon(u: { icon?: string | null; platform?: string | null; shared?: unknown }, size = 15): React.ReactNode {
+  if (u.shared) return <Users size={size} /> // 别人共享过来的:按「一组人的」画,不按设备平台
   if (u.icon) return <span className="unitsw-emoji" aria-hidden>{u.icon}</span>
   if (u.platform === 'android' || u.platform === 'ios') return <Smartphone size={size} />
   if (u.platform === 'win32' || u.platform === 'linux') return <Monitor size={size} />
@@ -114,6 +122,9 @@ export interface UnitRemoteTarget {
   via?: UnitVia
   /** 用户在 设置 › 设备 里明确点的这条通路:加载成功后记下来(rememberVia),面板下次按它走。 */
   remember?: boolean
+  /** 别人共享给当前账号的 Unit:没有 via(不选路、不回落中转、不记通路);加载地址由主进程绑定时给(url 只作身份)。
+   *  title = 标题条胶囊上「名字 · 组标题」的组标题。 */
+  shared?: { title: UnitSharedLabel }
 }
 /** 回到本机的**唯一**入口(标题条胶囊、失败态按钮、账号面板的「这台电脑」、旧形态点 Ribbon 槽):
  *  先作废还没落地的切换(P2P 打洞的迟到回包 / 迟到的回落会把远程面重新打开,Codex 评审 P1),再把远程面藏起来。
@@ -153,7 +164,37 @@ export const REMOTE_ACCOUNT_SELECTORS = ['.rb .ribbon-account', '.rb .account-ca
 const HIDE_REMOTE_ACCOUNT_CSS = `${REMOTE_ACCOUNT_SELECTORS.join(', ')} { visibility: hidden !important; }`
 
 type WebviewEl = HTMLElement & { insertCSS?: (css: string) => Promise<string>; reload?: () => void; getWebContentsId?: () => number }
-type SurfaceFail = null | 'unreachable' | 'crashed'
+/** pending = 主框架回了错误状态码、还在判是哪种(盖一层空白,不让服务端回的 JSON 露出来)。
+ *  waking / wakeFailed / forbidden 只给共享过来的 Unit。 */
+type SurfaceFail = null | 'unreachable' | 'crashed' | 'pending' | 'waking' | 'wakeFailed' | 'forbidden'
+
+/** 共享 Unit 正在唤醒:每隔多久重载一次、最多几次(约 1 分钟)。 */
+export const WAKE_RETRY_MS = 5000
+export const WAKE_RETRY_MAX = 12
+
+/** 主框架那一次加载的 HTTP 结果 → 宿主画哪种状态(只用于共享过来的 Unit)。bodyCode = 回包 JSON 里的 code(读不到 = undefined)。
+ *  2xx / 3xx / 非 HTTP(-1)= null(照常显示页面)。 */
+export function sharedLoadState(status: number, bodyCode?: string): Exclude<SurfaceFail, null | 'crashed' | 'pending' | 'wakeFailed'> | null {
+  if (status < 400) return null
+  if (status === 503 && bodyCode === 'UNIT_WAKING') return 'waking'
+  if (status === 403 || status === 404) return 'forbidden'
+  return 'unreachable'
+}
+
+/** 从回包正文(页面上的纯文本)里取 JSON 的 code;不是 JSON / 没有 = undefined。 */
+export function bodyErrorCode(text: unknown): string | undefined {
+  if (typeof text !== 'string' || !text.trim().startsWith('{')) return undefined
+  try {
+    const code = (JSON.parse(text) as { code?: unknown })?.code
+    return typeof code === 'string' ? code : undefined
+  } catch { return undefined }
+}
+
+/** 进一台共享过来的 Unit(账号面板里 enter = frame 的行):整窗切过去。不经 pickUnitRoute,没有直连 / P2P / 回落中转。 */
+export function openSharedUnit(u: Pick<SharedUnit, 'id' | 'name' | 'icon' | 'platform' | 'webUrl' | 'shared'>): void {
+  routeSeq++ // 作废还没落地的别的切换(迟到的打洞结果)
+  useUnitRemote.getState().open({ key: sharedTargetKey(u.id), name: u.name, icon: u.icon, platform: u.platform, url: u.webUrl ?? `shared:${u.id}`, unitId: u.id, shared: { title: u.shared.group.title } })
+}
 
 /** 加载失败:不是中转、这台在线(名册说不准就当在线)→ 出声改走中转;否则交给宿主画失败态。
  *  `from` = 出事的那个目标:目标已经换成别的了就不动(那次失败不归现在这台管)。
@@ -186,18 +227,23 @@ export function UnitRemoteSurface(): React.ReactElement | null {
   const okUrl = useRef<string | null>(null)
   /** 保活在暗处时加载失败了:回落留到用户回到这台再做。 */
   const deferredFallback = useRef(false)
+  /** 共享 Unit 唤醒中已经自动重载了几次(换目标 / 手动重试清零)。 */
+  const wakeTries = useRef(0)
   // 中转设备页:主进程只给**绑定过的** webview、只给那台设备自己的路径补登录头(electron/unitAuthScope.ts)。
   // 先挂一张空白页,把它的 webContentsId 和设备 id 报给主进程(主进程自己核名册),绑上了才换成真地址;
   // 重试 / 回落中转 / 换目标都是新的一张 webview,各自重新绑。局域网 / P2P / 手输地址不经这里。
   const webKey = target ? `${target.url}#${nonce}` : ''
-  const needsBind = !!target?.unitId && target.via === 'tunnel' && !!window.tangu?.unitsBindFrame
+  const isShared = !!target?.shared
+  const needsBind = !!target?.unitId && (target.via === 'tunnel' || isShared) && !!window.tangu?.unitsBindFrame
   // 就绪状态绑在**这一张** webview 上:webKey 一变(换通路 / 重试 / 卸掉)就换一个实例记号。
   // 只认 webKey 会出事:A 中转 → 局域网 → 回 A 中转,webKey 和上次绑上的一样,新 webview 会跳过空白页直接加载真实地址(没绑定 = 401)
   const instance = useRef({ key: '', seq: 0 })
   if (instance.current.key !== webKey) instance.current = { key: webKey, seq: instance.current.seq + 1 }
   const instanceKey = `${instance.current.seq}:${webKey}`
-  const [boundKey, setBoundKey] = useState<string | null>(null)
-  const ready = !needsBind || boundKey === instanceKey
+  const [bound, setBound] = useState<{ key: string; url?: string } | null>(null)
+  // 共享过来的 Unit 没有绑定桥就进不去(地址只由主进程给)
+  const ready = isShared ? !!window.tangu?.unitsBindFrame && bound?.key === instanceKey && !!bound.url : !needsBind || bound?.key === instanceKey
+  const loadUrl = isShared ? (bound?.key === instanceKey ? bound.url : undefined) : target?.url
   const readyRef = useRef(ready)
   readyRef.current = ready
   useEffect(() => {
@@ -213,7 +259,13 @@ export function UnitRemoteSurface(): React.ReactElement | null {
       if (id < 0) return
       sent = true
       void window.tangu!.unitsBindFrame!({ webContentsId: id, unitId }).then(
-        (r) => { if (!cancelled) { if (r?.ok) setBoundKey(instanceKey); else setFail('unreachable') } },
+        (r) => {
+          if (cancelled) return
+          if (!r?.ok) { setFail('unreachable'); return }
+          // 共享过来的:只加载主进程给的地址;主进程没给 = 进不去
+          if (isShared && !(typeof r.url === 'string' && r.url)) { setFail('unreachable'); return }
+          setBound({ key: instanceKey, url: r.url })
+        },
         () => { if (!cancelled) setFail('unreachable') },
       )
     }
@@ -223,6 +275,29 @@ export function UnitRemoteSurface(): React.ReactElement | null {
     return () => { cancelled = true; el.removeEventListener('did-attach', bind); el.removeEventListener('dom-ready', bind) }
   }, [instanceKey, needsBind]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { setFail(null) }, [target?.url])
+  // 共享过来的,但这一端没有绑定桥(主进程不给地址):直接画失败态
+  useEffect(() => { if (isShared && !window.tangu?.unitsBindFrame) setFail('unreachable') }, [isShared, instanceKey])
+  // 正看着(或保活着)的共享 Unit 被撤了(名册里没了 / 不能进了)→ 卸掉页面、退回这台电脑,人在里面时说一句。名册读失败不算被撤。
+  useEffect(() => {
+    onSharedRoster((list) => {
+      const cur = useUnitRemote.getState()
+      const tg = cur.target
+      if (!tg?.shared || !tg.unitId || sharedStillEnterable(list, tg.unitId)) return
+      const wasActive = cur.active
+      leaveUnitRemote()
+      useUnitRemote.setState({ target: null, active: false })
+      if (wasActive) sayUnit(translate('unit.shared.revoked', { name: tg.name }))
+    })
+    return () => onSharedRoster(null)
+  }, [])
+  // 人在共享的那台里:窗口重新拿到焦点就复核一次名册(webview 占着焦点时宿主页自己的 focus 不一定来,主进程转告为准)
+  useEffect(() => {
+    if (!active || !isShared) return
+    const again = (): void => { void useUnitRoster.getState().refresh() }
+    const off = window.tangu?.onWindowFocused?.(again)
+    window.addEventListener('focus', again)
+    return () => { off?.(); window.removeEventListener('focus', again) }
+  }, [active, isShared])
   // 换账号 / 登出:握手阶段(新凭据写下去之前)就把远程面收掉并清 target —— webview 卸掉,
   // 不等切换完成的广播(那之前旧页面的隧道请求已经会带上新账号的登录头)。迟到的打洞 / 回落经 leaveUnitRemote 作废。
   useEffect(() => onAccountWillChange(() => {
@@ -230,7 +305,7 @@ export function UnitRemoteSurface(): React.ReactElement | null {
     useUnitRemote.setState({ target: null, active: false })
     useUnitRoster.getState().clear()
   }), [])
-  useEffect(() => { okUrl.current = null; deferredFallback.current = false }, [target?.url, nonce])
+  useEffect(() => { okUrl.current = null; deferredFallback.current = false; wakeTries.current = 0 }, [target?.url, nonce])
   // 切进来把键盘直接交给对方页面(不点一下打不了字)。
   useEffect(() => { if (active) webRef.current?.focus() }, [active, target?.url, nonce])
   // 旧形态:点了本机 ribbon 的视图槽(视图图标 / Space)= 用户要回本机 —— Space 切换语义,自动退场。
@@ -267,8 +342,35 @@ export function UnitRemoteSurface(): React.ReactElement | null {
     // 同一张已经加载成功的页面,又被用户在设置页明确点了一次:地址没变、webview 不重载,等不来 did-finish-load,就地记。
     if (target.remember && target.unitId && target.via && okUrl.current === target.url) rememberVia(target.unitId, target.via)
     let failed = false
+    /** 共享 Unit 主框架这一次加载回的是错误状态码(did-frame-navigate 先于 did-finish-load 到)。 */
+    let httpErr = false
+    let wakeTimer: ReturnType<typeof setTimeout> | null = null
     // 绑定之前那张空白页的加载事件不算(见上:中转设备页先挂空白页)
     const onStart = (): void => { if (readyRef.current) failed = false }
+    // 共享过来的 Unit:主框架回 503 唤醒中 / 403 / 404 / 其它错误码时宿主自己画状态,服务端回的 JSON 不露出来
+    const onFrameNav = (e: Event): void => {
+      if (!target.shared || !readyRef.current) return
+      const ev = e as Event & { isMainFrame?: boolean; httpResponseCode?: number; url?: string }
+      if (!ev.isMainFrame || ev.url === 'about:blank') return
+      const status = typeof ev.httpResponseCode === 'number' ? ev.httpResponseCode : -1
+      httpErr = status >= 400
+      if (!httpErr) { wakeTries.current = 0; return }
+      setFail('pending')
+      const decide = (code?: string): void => {
+        const st = sharedLoadState(status, code)
+        if (st !== 'waking') { setFail(st ?? 'unreachable'); return }
+        if (wakeTries.current >= WAKE_RETRY_MAX) { setFail('wakeFailed'); return }
+        wakeTries.current += 1
+        setFail('waking')
+        if (wakeTimer) clearTimeout(wakeTimer)
+        wakeTimer = setTimeout(() => { wakeTimer = null; try { el.reload?.() } catch { /* 已卸下 */ } }, WAKE_RETRY_MS)
+      }
+      // 状态码在事件里;唤醒中要看回包的 code:只在 503 时读一次页面上的纯文本(错误回包是云端给的 JSON,不是那台的页面)
+      if (status !== 503) { decide(); return }
+      const ex = (el as WebviewEl & { executeJavaScript?: (code: string) => Promise<unknown> }).executeJavaScript
+      if (!ex) { decide(); return }
+      void ex.call(el, 'document.body ? document.body.innerText.slice(0, 4096) : ""').then((txt) => decide(bodyErrorCode(txt)), () => decide())
+    }
     const onFail = (e: Event): void => {
       const ev = e as Event & { errorCode?: number; isMainFrame?: boolean }
       if (!readyRef.current || ev.isMainFrame === false || ev.errorCode === -3) return
@@ -283,7 +385,7 @@ export function UnitRemoteSurface(): React.ReactElement | null {
       if (!fallBackToRelay(target)) setFail('unreachable')
     }
     const onFinish = (): void => {
-      if (failed || !readyRef.current) return
+      if (failed || httpErr || !readyRef.current) return
       try { if ((el as WebviewEl & { getURL?: () => string }).getURL?.() === 'about:blank') return } catch { /* 还没挂上 */ }
       setFail(null)
       okUrl.current = target.url
@@ -292,9 +394,9 @@ export function UnitRemoteSurface(): React.ReactElement | null {
     }
     const onReady = (): void => { if (whole) void el.insertCSS?.(HIDE_REMOTE_ACCOUNT_CSS)?.catch?.(() => {}) }
     const onGone = (): void => setFail('crashed')
-    const on: Array<[string, (e: Event) => void]> = [['did-start-loading', onStart], ['did-fail-load', onFail], ['did-finish-load', onFinish], ['dom-ready', onReady], ['render-process-gone', onGone], ['crashed', onGone]]
+    const on: Array<[string, (e: Event) => void]> = [['did-start-loading', onStart], ['did-frame-navigate', onFrameNav], ['did-fail-load', onFail], ['did-finish-load', onFinish], ['dom-ready', onReady], ['render-process-gone', onGone], ['crashed', onGone]]
     for (const [n, f] of on) el.addEventListener(n, f)
-    return () => { for (const [n, f] of on) el.removeEventListener(n, f) }
+    return () => { if (wakeTimer) clearTimeout(wakeTimer); for (const [n, f] of on) el.removeEventListener(n, f) }
   }, [target, nonce, whole])
   // 暗处失败过的那台,用户回来了:现在才回落中转(能回落就换目标、失败态随地址变化自己收;不能就留着失败态)。
   useEffect(() => {
@@ -305,7 +407,7 @@ export function UnitRemoteSurface(): React.ReactElement | null {
   if (!target) return null
   const retry = (): void => { setFail(null); setNonce((n) => n + 1) }
   const back = (): void => leaveUnitRemote()
-  const web = <Webview ref={webRef} key={instanceKey} className="unitrs-web" src={ready ? target.url : 'about:blank'} partition={BROWSER_PARTITION} allowpopups="true" />
+  const web = <Webview ref={webRef} key={instanceKey} className="unitrs-web" src={ready && loadUrl ? loadUrl : 'about:blank'} partition={BROWSER_PARTITION} allowpopups="true" />
 
   if (whole) {
     // 渲染期查询而非挂载期缓存:target/active 每变一次都重查,Shell 罕见重挂后切一次设备即自愈。无 Shell(harness)→ 原地渲染。
@@ -315,14 +417,17 @@ export function UnitRemoteSurface(): React.ReactElement | null {
     const node = (
       <UnitFrame target={target} active={active} onBack={inWindow ? undefined : back}>
         {web}
-        {fail && (
-          <div className="unitfr-fail" role="alert">
-            <div className="unitfr-fail-title">{t(fail === 'crashed' ? 'unit.frame.crashed' : 'unit.frame.unreachable')}</div>
+        {fail === 'pending' && <div className="unitfr-fail" data-unitfr-state="pending" aria-busy="true" />}
+        {fail && fail !== 'pending' && (
+          <div className="unitfr-fail" role={fail === 'waking' ? 'status' : 'alert'} data-unitfr-state={fail}>
+            <div className="unitfr-fail-title">{t(FAIL_TITLE[fail])}</div>
+            {fail === 'waking' && <div className="unitfr-fail-hint">{t('unit.frame.wakingHint')}</div>}
             <div className="unitfr-fail-actions">
-              <button type="button" className="btn primary" onClick={retry}>{t('unit.frame.retry')}</button>
+              {/* 不能进入:不给重试循环;唤醒中:自己在重试 */}
+              {fail !== 'forbidden' && fail !== 'waking' && <button type="button" className="btn primary" onClick={retry}>{t('unit.frame.retry')}</button>}
               {inWindow
                 ? <button type="button" className="btn" onClick={() => window.tangu?.closeSelf?.()}>{t('unit.frame.closeWindow')}</button>
-                : <button type="button" className="btn" onClick={back}>{t('unit.frame.back')}</button>}
+                : <button type="button" className={`btn${fail === 'forbidden' ? ' primary' : ''}`} onClick={back}>{t('unit.frame.back')}</button>}
             </div>
           </div>
         )}
@@ -342,16 +447,22 @@ export function UnitRemoteSurface(): React.ReactElement | null {
   return host ? createPortal(node, host) : node // 无 Shell(harness/web)→ 原地渲染,CSS 退化为 fixed 覆盖层
 }
 
-/** 整窗形态的框:顶上一条标题条(正中胶囊 `[图标] 名字 · 我的设备 | 回到这台电脑`)、标题条以下的 body、左下角宿主头像。
+const FAIL_TITLE: Record<Exclude<SurfaceFail, null | 'pending'>, string> = {
+  unreachable: 'unit.frame.unreachable', crashed: 'unit.frame.crashed',
+  waking: 'unit.frame.waking', wakeFailed: 'unit.frame.wakeFailed', forbidden: 'unit.frame.forbidden',
+}
+
+/** 整窗形态的框:顶上一条标题条(正中胶囊 `[图标] 名字 · 我的设备 | 回到这台电脑`;共享过来的 = `名字 · 组标题`)、标题条以下的 body、左下角宿主头像。
  *  主窗的设备页和 Unit 窗共用;onBack 不给 = 胶囊里没有「回到这台电脑」(Unit 窗:关窗就是回来)。 */
 export function UnitFrame({ target, active = true, onBack, children }: {
-  target: Pick<UnitRemoteTarget, 'key' | 'name' | 'icon' | 'platform'>
+  target: Pick<UnitRemoteTarget, 'key' | 'name' | 'icon' | 'platform' | 'shared'>
   active?: boolean
   onBack?: () => void
   children: React.ReactNode
 }): React.ReactElement {
-  const { t } = useI18n()
+  const { t, locale } = useI18n()
   const isAddr = target.key.startsWith('addr:')
+  const kind = target.shared ? sharedLabel(target.shared.title, locale === 'en' ? 'en' : 'zh') : t('unit.frame.kind')
   return (
     <div className={`unitrs unitrs--whole${active ? '' : ' unitrs-hidden'}`} data-unit-frame="">
       <div className="unitfr-bar">
@@ -359,7 +470,7 @@ export function UnitFrame({ target, active = true, onBack, children }: {
           <span className="unitfr-pill-ic">{isAddr ? <Globe size={13} /> : deviceIcon(target, 13)}</span>
           <span className="unitfr-pill-text">
             <span className="unitfr-pill-name">{target.name}</span>
-            {!isAddr && <span className="unitfr-pill-kind">{t('unit.frame.kind')}</span>}
+            {!isAddr && <span className="unitfr-pill-kind">{kind}</span>}
           </span>
           {onBack && <span className="unitfr-pill-sep" aria-hidden="true" />}
           {onBack && <button type="button" className="unitfr-back" onClick={onBack}>{t('unit.frame.back')}</button>}
@@ -373,7 +484,7 @@ export function UnitFrame({ target, active = true, onBack, children }: {
 
 /** 整窗形态左下角:本机用户自己的头像(数据走 services/accountChip 的接缝),右下角叠那台的小图标。
  *  盖在远端账号卡的位置上(Ribbon 折叠态账号槽的几何,见 unitSwitcher.css .unitfr-rail);点它 = 开本机账号面板,锚在这枚头像上。 */
-function UnitFrameAvatar({ target }: { target: Pick<UnitRemoteTarget, 'key' | 'icon' | 'platform'> }): React.ReactElement | null {
+function UnitFrameAvatar({ target }: { target: Pick<UnitRemoteTarget, 'key' | 'icon' | 'platform' | 'shared'> }): React.ReactElement | null {
   const chip = useSyncExternalStore(subscribeAccountChip, accountChip, accountChip)
   const [imgError, setImgError] = useState(false)
   if (!chip) return null

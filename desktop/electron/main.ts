@@ -115,7 +115,8 @@ import { COMPUTER_HISTORY_DESKTOP_CONFIG_FILE } from '../shared/computerHistory'
 // Amadeus Space:vendored 笔记后端(vault IPC + 资产协议)。renderImport 别名后保持 verbatim。
 import { registerIpc as registerAmadeusIpc } from './amadeus/ipc'
 import type { AmadeusSyncFactory } from './amadeus/cloudSeam'
-import { adoptFromOpenGrant, createUnitFrameScope, createUnitOpenGrants, handleUnitFrameBind, normalizeCloudBase, shouldInjectUnitAuth } from './unitAuthScope' // 设备页补登录头的范围
+import { adoptFromOpenGrant, createUnitFrameScope, createUnitOpenGrants, handleUnitFrameBind, normalizeCloudBase, replaceAuthorization, sharedOnlyUnit, shouldInjectUnitAuth, type UnitFrameRosterRead } from './unitAuthScope' // 设备页补登录头的范围
+import { parseSharedUnits } from '../shared/sharedUnits'
 import { engineCapsState, pairingWriters, selfUnitIdMemo, type UnitHubFactory, type UnitHubInstance } from './unitHubSeam' // 设备互联云端通道的接缝(Forsion Extend 0.6 起)
 import { makeCallerHeaders } from './unitCaller'
 import { newPairStore, startUnitWeb, type UnitWebHandle, type PairedDevice, startClipEntrance, CLIP_ENTRANCE_PORTS, type ClipEntranceHandle } from './unitWeb'
@@ -2162,6 +2163,16 @@ async function readUnitRoster(e: Electron.IpcMainInvokeEvent): Promise<RosterRea
   if (!unitsListHandler) return { ok: false, code: 'roster_unavailable', detail: 'no roster bridge' }
   return parseRosterResponse(await unitsListHandler(e))
 }
+/** 同上,连同别人共享给当前账号的 Unit 一起读(Extend 把 `{ shared: true }` 转成 ?shared=1;旧版忽略 → 没有 shared,当没有这一组)。
+ *  自己名下的 units 照 parseRosterResponse 那份读;共享行另放 shared,绝不混进 units。 */
+async function readUnitRosterWithShared(e: Electron.IpcMainInvokeEvent): Promise<UnitFrameRosterRead> {
+  if (!unitsListHandler) return { ok: false, code: 'roster_unavailable', detail: 'no roster bridge' }
+  const res = await unitsListHandler(e, { shared: true })
+  const own = parseRosterResponse(res)
+  if (!own.ok) return own
+  const shared = parseSharedUnits((res as { json?: unknown } | null)?.json)
+  return { ok: true, units: own.units, ...(shared ? { shared } : {}) }
+}
 
 /** 渲染层画好的 PNG 图标 → 按尺寸缩放的取图函数(nativeImage);没有 / 不合格就 undefined(快捷方式照建,只是没自定义图标)。 */
 function shortcutIconSource(raw: unknown): ((size: number) => Buffer | undefined) | undefined {
@@ -3227,7 +3238,9 @@ app.whenReady().then(async () => {
       }
       if (binding && shouldInjectUnitAuth({ url: details.url, binding, accountKey: unitAccountKey(cr()), cloudBase: unitCloudBase, secFetchSite: sfs })) {
         const token = cr().token
-        if (token) h.Authorization = `Bearer ${token}`
+        // **替换**页面自己带的(设备网页壳没有主人口令时会自带一枚占位的 `Bearer tunnel`;大小写不同的同名键先删干净)——
+        // 只加不删会让服务端认了占位值回 401,壳收到 401 整页重载,死循环。
+        if (token) replaceAuthorization(h, `Bearer ${token}`)
       } else if (trustedInitiator) {
         // P2P 本机代理(方案 §12):同机制注入 per-proxy 秘密 —— loopback 上别的进程没有它,
         // 打不动对端;表极小(同时开着的 P2P 设备数),线性查无所谓。
@@ -4649,6 +4662,8 @@ app.whenReady().then(async () => {
   // 新同步:切走 1 秒后才冲刷(1 秒内回到本应用任一窗口就不算)
   app.on('browser-window-blur', () => contentFlush.blur())
   app.on('browser-window-focus', () => contentFlush.focus())
+  // 窗口重新拿到焦点转告它的渲染层(设备页的 webview 占着焦点时,宿主页自己的 focus 事件等不来;共享 Unit 的名册复核用)
+  app.on('browser-window-focus', (_e, w) => { if (!w.isDestroyed() && !w.webContents.isDestroyed()) w.webContents.send('window:focused') })
   // 按下快捷键时那扇窗口的截图(附进输入框,同 ChatGPT)。只截这次运行里经手过的窗口(按快捷键 / 列候选时记下的);
   // macOS 由助手截(屏幕录制权限在它身上;没授权就没有图,绝不为此弹框),Windows 用系统自带的窗口截图。截不到 → null,只挂引用。
   ipcMain.handle('appRefs:snapshot', async (e, raw: unknown) => {
@@ -5126,8 +5141,12 @@ app.whenReady().then(async () => {
   // 设备「添加到桌面」(账号面板 Unit 段的右键)。渲染层只给:设备 id、名字洗空时的本地化兜底名、画好的图标;
   // id 过正则且必须在此刻读到的名册里,**名字取名册的**(unitShortcut.resolveUnitShortcutTarget)。快捷方式里只有 id。
   // 设备的 Unit 窗:账号面板 Unit 段的「在新窗口打开」(只主窗)。一台设备一扇,再开 = 叫到前面;离线 / 不在名册由窗里自己画。
-  ipcMain.handle('units:openWindow', (e, raw: unknown): { ok: boolean } => {
+  // 别人共享给当前账号的 Unit 不开它自己的窗(只在主窗里进):现读一次带共享的名册,这台只在共享行里 → 拒。
+  // 名册读不到 = 不知道,照旧开(窗里自己读名册画状态;共享行在那里也只会是「不在当前账号名下」、不挂页面)。
+  ipcMain.handle('units:openWindow', async (e, raw: unknown): Promise<{ ok: boolean }> => {
     if (!isTrustedSender(e) || e.sender !== mainWindow?.webContents || !isUnitId(raw)) return { ok: false }
+    const roster = await readUnitRosterWithShared(e).catch((): UnitFrameRosterRead => ({ ok: false, code: 'roster_unavailable' }))
+    if (sharedOnlyUnit(roster, raw)) return { ok: false }
     createDetachedWindow({ unit: raw })
     return { ok: true }
   })
@@ -5142,16 +5161,18 @@ app.whenReady().then(async () => {
     const wcId = typeof input.webContentsId === 'number' && Number.isSafeInteger(input.webContentsId) ? input.webContentsId : -1
     const guest = wcId >= 0 ? webContents.fromId(wcId) : undefined
     const owner = typeof unitId === 'string' ? detachedWindows.get(`un_${unitId}`) : undefined
-    const fromOwner = e.sender === mainWindow?.webContents || (!!owner && !owner.isDestroyed() && e.sender === owner.webContents)
+    const fromMain = !!mainWindow && e.sender === mainWindow.webContents
+    const fromOwner = fromMain || (!!owner && !owner.isDestroyed() && e.sender === owner.webContents)
     const guestOk = (): boolean => !!guest && !guest.isDestroyed() && guest.getType() === 'webview'
       && guest.hostWebContents === e.sender && guest.session === session.fromPartition(BROWSER_PARTITION)
     return handleUnitFrameBind(unitId, {
       generation: () => unitFrames.generation(),
       trusted: isTrustedSender(e) && fromOwner && guestOk(),
+      fromMain,
       guestAlive: guestOk,
       accountKey: unitAccountKey,
       cloudBase: () => unitCloudBase,
-      readRoster: () => readUnitRoster(e),
+      readRoster: () => readUnitRosterWithShared(e),
       bind: (b) => {
         const g = guest!
         if (!unitFrames.get(g.id)) g.once('destroyed', () => unitFrames.unbind(g.id))

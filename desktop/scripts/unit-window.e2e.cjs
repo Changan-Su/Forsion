@@ -24,7 +24,19 @@
  *   G7 已绑定的设备页导航到外站(不发 referrer),外站脚本 window.open 这台的中转 → 新页不带登录头
  *   A  登出:Unit 窗与主窗设备页的 webview 在握手阶段就卸掉;迟到的旧名册回包不把页面挂回来
  *   C1–C2 冷启动带链接 → Unit 窗出来、主窗建了但不露面;二启同理(第二个进程退出、第一个只开 Unit 窗)
- * 截图(SHOT_DIR,缺省系统临时目录):主窗 + Unit 窗并排、四种状态、悬停按钮、右键菜单、深色、110%。
+ *   SH 别人共享给当前账号的 Unit(第三段,另起一份隔离实例,装 EXTEND_SHARED 指的那份 Extend —— 缺省 <仓根>/.worktrees/extend-shared-units,
+ *      要带 `{ shared: true }` 透传的版本,签名用本机的 Extend 签名钥;找不到就明确跳过这一段):
+ *      假云端只在 ?shared=1 时回 `shared`;那台的页面在 http://<id>.localhost:<端口> 上(另起的「子域」服务,转给同一台真 Unit)。
+ *      SH1 面板:「我的设备」之后按组分、组标题、灰字、休眠中字样、点不动的行不是按钮;右键只有「切换到这台」,打开 Space 的行没有菜单
+ *      SH2 点能进的行 → 整窗切过去、胶囊「名字 · 组标题」、页面加载自子域;面板里那一行选中
+ *      SH3 子域上的请求带登录头,页面自带的占位 `authorization: Bearer tunnel`(小写)被换掉;页面脚本打云端名册 / 云端中转 / 别台子域 → 不带
+ *      SH4 宿主把这张已绑定的 webview 直接导航到云端中转(Sec-Fetch-Site: none,只剩前缀在把关)→ 不带
+ *      SH5 enter = none 的行(哪怕名册给了合格地址)绑不上;units:openWindow / addToDesktop 对共享行一律拒
+ *      SH6 503 UNIT_WAKING →「正在唤醒…」并按 5 秒自动重试到成功;403 →「你现在不能进入这台 Unit」,没有重试
+ *      SH7 名册里这一行改成 enter = none,窗口重新拿到焦点 → 退回这台电脑并说一句
+ *      SH8 enter = none 的行点了 → 切到假插件(商店身份 market-<UUID>,manifest id 对上)的 Space;点不动的行点了什么都不发生
+ *      UW_SHARED_ONLY=1 只跑这一段;UW_NEG=cloudprefix / UW_NEG=enter 是两条负对照的说明(改码后跑,对应断言应红)。
+ * 截图(SHOT_DIR,缺省系统临时目录):主窗 + Unit 窗并排、四种状态、悬停按钮、右键菜单、深色、110%;共享:面板(亮 / 暗)、整窗、唤醒中、不能进入。
  *
  * 跑:node <仓根>/.claude/hooks/devlock.cjs run --vehicle=e2e -- npm run e2e:unitwindow(量的是 out/,先 npm run build)
  * 负对照:UW_QUICK=1 只跑 W1 与 L1。
@@ -46,6 +58,12 @@ const UID_ON = '3f2a9c1e-7b4d-4e8a-9c21-5d6e7f8a9b0c'
 const UID_OFF = '8b1d0c2e-1111-4e8a-9c21-000000000002'
 const UID_GONE = 'aaaaaaaa-0000-4000-8000-000000000009'
 const LINK = (id) => `forsion://unit/${id}?window=standalone`
+
+const UID_SH = '9c0e1d2f-2222-4e8a-9c21-000000000003' // 共享过来、能进
+const UID_SH_NONE = '9c0e1d2f-3333-4e8a-9c21-000000000004' // 共享过来、不能进,点了开插件 Space
+const UID_SH_INERT = '9c0e1d2f-4444-4e8a-9c21-000000000005' // 共享过来、不能进,插件没装 → 点不动
+const SHARED_PLUGIN_DIR = 'market-5b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d'
+const EXTEND_SHARED = process.env.EXTEND_SHARED || [path.join(REPO_ROOT, '.worktrees/extend-shared-units'), path.join(path.resolve(DESK, '../..'), '.worktrees/extend-shared-units')].find((p) => fs.existsSync(path.join(p, 'dist/desktop.mjs')))
 
 const portFree = (p) => new Promise((r) => { const s = net.createServer(); s.once('error', () => r(false)); s.listen(p, '127.0.0.1', () => s.close(() => r(true))) })
 async function freePort(from) { let p = from; while (!(await portFree(p))) p++; return p }
@@ -69,7 +87,7 @@ const FIXTURE_TOKEN = 'unitwindow-fixture-token'
 /** 假云端:账号 / 额度 / 名册(mode 可切)+ 中转(/api/units/<UID_ON>/proxy/* → 那台 Unit 的 /web/*,其余未知路径原样转给它)。
  *  reqs 如实记下每条请求**收到的** Authorization(转发给 Unit 时才换成主人令牌),补头范围的断言看它。 */
 function startCloud(unit) {
-  const state = { mode: 'ok', hits: [], rosterDelay: 0, reqs: [] }
+  const state = { mode: 'ok', hits: [], rosterDelay: 0, reqs: [], shared: null, rosterQueries: [] }
   const roster = () => [
     { id: UID_ON, name: '书桌 mini', platform: 'darwin', icon: '🦊', online: true, lanUrl: null },
     { id: UID_OFF, name: '客厅 PC', platform: 'win32', icon: null, online: false, lanUrl: null },
@@ -95,7 +113,10 @@ function startCloud(unit) {
     if (p === '/api/units') {
       // rosterDelay:按请求到达时的状态作答、晚这么久才回(造「迟到的旧名册」)
       const mode = state.mode
-      const answer = () => (mode === 'unauth' ? send(401, { detail: 'unauthorized' }) : mode === 'fail' ? send(502, { detail: 'bad gateway' }) : send(200, { units: roster() }))
+      // 共享过来的 Unit:只在 ?shared=1 时回(和真云端一样,不带参数时回包与旧版逐字节一致)
+      const withShared = u.searchParams.get('shared') === '1' && state.shared
+      state.rosterQueries.push(u.search)
+      const answer = () => (mode === 'unauth' ? send(401, { detail: 'unauthorized' }) : mode === 'fail' ? send(502, { detail: 'bad gateway' }) : send(200, { units: roster(), ...(withShared ? { shared: state.shared() } : {}) }))
       return state.rosterDelay ? void setTimeout(answer, state.rosterDelay) : answer()
     }
     if (p === '/api/token-quota/my') return send(200, { dailyLimit: 100, dailyUsed: 28, dailyRemaining: 72, dailyPercent: 28, weeklyLimit: 500, weeklyUsed: 140, weeklyRemaining: 360, weeklyPercent: 28, weeklyResetAt: '2026-11-16', resetCards: 1 })
@@ -189,6 +210,19 @@ async function main() {
   const shot = (name) => path.join(SHOTS, `unit-window-${name}.png`)
   let L = null
   try {
+    if (!process.env.UW_SHARED_ONLY) await firstSegments()
+    if (!process.env.UW_QUICK) {
+      if (L) { await L.close(); L = null }
+      await sharedSegment()
+    }
+  } finally {
+    if (L) await L.close()
+    cloud.close(); unit.close(); outside.close()
+  }
+  console.log('截图:\n' + shots.join('\n'))
+  process.exit(R.summary() ? 1 : 0)
+
+  async function firstSegments() {
     // ══ 第一段:正常启动,从面板开 ══
     L = await launch({ tag: 'unitwindow', fixtures: { agents: [{ slug: 'xyra', name: 'Xyra', description: '', createdBy: 'user' }], sessions: [] }, beforeLaunch: authFixture(cloud) })
     const { app, win } = L
@@ -224,12 +258,7 @@ async function main() {
 
     if (process.env.UW_QUICK) R.note('UW_QUICK:只跑 W1 与 L1(负对照用)')
     else await full(app, win)
-  } finally {
-    if (L) await L.close()
-    cloud.close(); unit.close(); outside.close()
   }
-  console.log('截图:\n' + shots.join('\n'))
-  process.exit(R.summary() ? 1 : 0)
 
   async function full(app, win) {
     /** 设备页(按宿主窗口挑)里 window.open 一个地址。 */
@@ -548,5 +577,305 @@ async function main() {
     R.check('C2 二启带链接:第二个进程退出,第一个开出 Unit 窗', second.code === 0 && !!sw, { second, sw })
     R.check('C2 主窗仍然不露面', !!m2 && !m2.visible, m2)
   }
+
+  // ══ 第三段:别人共享给当前账号的 Unit ══
+  async function sharedSegment() {
+    if (!EXTEND_SHARED || !fs.existsSync(path.join(EXTEND_SHARED, 'scripts/signature.mjs'))) {
+      R.note('SH 跳过:找不到带共享名册透传的 Extend 检出(设 EXTEND_SHARED 指过去)')
+      return
+    }
+    if (!fs.readFileSync(path.join(EXTEND_SHARED, 'dist/desktop.mjs'), 'utf8').includes('shared=1')) {
+      R.note('SH 跳过:EXTEND_SHARED 的 dist 不认 { shared: true }(先在那份检出里 build)')
+      return
+    }
+    const sub = await startSubdomain(unit)
+    const SUB = `http://${UID_SH}.localhost:${sub.port}`
+    const WEB = `${SUB}/api/units/${UID_SH}/proxy/web/`
+    const shRows = { frameEnter: 'frame', sleeping: true }
+    const sharedRow = (id, name, enter, extra = {}) => ({
+      id, name, platform: 'linux', icon: null, online: true,
+      shared: { group: { id: 'org-1', title: { zh: '星河工作室', en: 'Galaxy Studio' } }, roleLabel: { zh: '管理员', en: 'Admin' }, enter, ...(extra.open ? { open: extra.open } : {}) },
+      ...(extra.webUrl ? { webUrl: extra.webUrl } : {}), ...(extra.sleeping ? { sleeping: true } : {}),
+    })
+    cloud.state.shared = () => [
+      sharedRow(UID_SH, '工作室 Unit', shRows.frameEnter, { webUrl: shRows.frameEnter === 'frame' ? WEB : undefined, sleeping: shRows.sleeping }),
+      // 不能进,但名册「误」给了合格地址:绑定只认 enter(SH5 / 负对照 enter)
+      sharedRow(UID_SH_NONE, '商业版', 'none', { open: { kind: 'space', plugin: 'shared-probe' }, webUrl: `http://${UID_SH_NONE}.localhost:${sub.port}/api/units/${UID_SH_NONE}/proxy/web/` }),
+      sharedRow(UID_SH_INERT, '另一台', 'none', { open: { kind: 'space', plugin: 'not-installed' } }),
+    ]
+    cloud.state.mode = 'ok'
+    cloud.state.rosterDelay = 0
+    try {
+      L = await launch({ tag: 'unitwindow-shared', fixtures: { agents: [], sessions: [] }, beforeLaunch: async (ctx) => { authFixture(cloud)(ctx); await installSharedExtend(ctx.home); installSharedPlugin(ctx.home) } })
+      const { app, win } = L
+      await boot(app, win, { space: null, width: 1180, height: 780 })
+      await win.evaluate(() => { localStorage.setItem('forsion_tangu_ribbon_expanded', '0') })
+      await win.reload({ waitUntil: 'domcontentloaded' })
+      await win.waitForSelector('.dv-groupview', { timeout: 30_000 })
+      await sleep(3000)
+      const mainId = (await wins(app)).find((w) => w.kind === 'main').id
+      const UNITS = '[data-testid="account-units"]'
+      const openPanel = async () => {
+        if (await win.locator('.account-pop').count()) return
+        await win.evaluate(() => (document.querySelector('.unitrs--whole:not(.unitrs-hidden) .unitfr-avatar') || document.querySelector('.rb .ribbon-account, .rb .account-card'))?.click())
+        await win.waitForSelector(`${UNITS} [data-unit-shared]`, { timeout: 10_000 }).catch(() => {})
+        await sleep(600)
+      }
+      const closePanel = async () => { await win.keyboard.press('Escape'); await sleep(400) }
+      const readShared = () => win.evaluate((sel) => Array.from(document.querySelectorAll(`${sel} .ap-sec, ${sel} [data-unit-shared]`)).map((n) => ({
+        sec: n.classList.contains('ap-sec') ? n.textContent.trim() : null, group: n.getAttribute('data-shared-group'),
+        id: n.getAttribute('data-unit-id'), tag: n.tagName, name: n.querySelector('.ap-unit-name')?.textContent.trim() ?? null,
+        state: n.querySelector('.ap-unit-state')?.textContent.trim() ?? null, current: n.getAttribute('aria-current') === 'true', check: !!n.querySelector('.ap-unit-check'),
+      })), UNITS)
+      const remote = () => win.evaluate(() => ({
+        active: !!document.querySelector('.unitrs--whole:not(.unitrs-hidden)'), web: document.querySelector('.unitrs-web')?.getAttribute('src') ?? null,
+        pill: document.querySelector('.unitfr-pill')?.textContent ?? '', fail: document.querySelector('.unitfr-fail')?.getAttribute('data-unitfr-state') ?? null,
+        failText: document.querySelector('.unitfr-fail')?.textContent ?? '', retry: !!Array.from(document.querySelectorAll('.unitfr-fail .btn')).find((b) => /重试/.test(b.textContent)),
+      }))
+      const guest = (fn, arg) => app.evaluate(async ({ webContents, BrowserWindow }, { origin, fn, arg }) => {
+        const main = BrowserWindow.getAllWindows().find((x) => !x.isDestroyed() && !/[?&]window=/.test(x.webContents.getURL()))
+        const wc = webContents.getAllWebContents().filter((w) => !w.isDestroyed() && w.getType() === 'webview' && w.hostWebContents === main.webContents && w.getURL().startsWith(origin)).pop()
+        if (!wc) return 'no-webview'
+        return wc.executeJavaScript(`(${fn})(${JSON.stringify(arg)})`, true)
+      }, { origin: SUB, fn: fn.toString(), arg })
+      const shot = async (name) => { await captureById(app, mainId, shotFile(name)); shots.push(shotFile(name)) }
+      const shotFile = (name) => path.join(SHOTS, `unit-shared-${name}.png`)
+      const clickShared = async (id) => { await openPanel(); await win.click(`${UNITS} [data-unit-shared][data-unit-id="${id}"]`) }
+      const toLocalTunnel = () => app.evaluate(({ BrowserWindow }, p) => {
+        const w = BrowserWindow.getAllWindows().find((x) => !x.isDestroyed() && !/[?&]window=/.test(x.webContents.getURL()))
+        w.webContents.send('window:mainAction', 'unit-route', p)
+      }, JSON.stringify({ kind: 'unit', id: UID_ON, name: '书桌 mini', via: 'tunnel' }))
+      const pageLoaded = () => until(() => guest(() => ({ ok: !document.body.innerText.includes('unauthorized') && !document.body.innerText.includes('UNIT_') && document.querySelectorAll('script').length > 0 })).then((r) => (r && r.ok ? r : undefined)), 20000)
+
+      // SH1 面板
+      await openPanel()
+      const rows = await readShared()
+      const secs = rows.filter((r) => r.sec).map((r) => r.sec)
+      const sh = rows.filter((r) => r.id)
+      const byId = (id) => sh.find((r) => r.id === id)
+      R.check('SH0 名册带 ?shared=1 去要(新版 Extend 透传参数)', cloud.state.rosterQueries.some((q) => q.includes('shared=1')), cloud.state.rosterQueries)
+      R.check('SH1 「我的设备」之后有一组「星河工作室」,三行都在组里', secs.indexOf('我的设备') >= 0 && secs.indexOf('星河工作室') > secs.indexOf('我的设备') && sh.length === 3, rows)
+      R.check('SH1 行尾灰字 = 管理员;睡着的那台带「休眠中」', byId(UID_SH)?.state === '管理员 · 休眠中' && byId(UID_SH_NONE)?.state === '管理员' && byId(UID_SH_INERT)?.state === '管理员', sh)
+      R.check('SH1 能进 / 能开 Space 的是按钮,插件没装的那行不是按钮(点不动)', byId(UID_SH)?.tag === 'BUTTON' && byId(UID_SH_NONE)?.tag === 'BUTTON' && byId(UID_SH_INERT)?.tag === 'DIV', sh)
+      await shot('panel-light')
+      // 右键:能进的只有「切换到这台」;开 Space 的、点不动的都没有菜单
+      await win.click(`${UNITS} [data-unit-shared][data-unit-id="${UID_SH}"]`, { button: 'right' })
+      await sleep(400)
+      const ctxItems = await win.evaluate(() => Array.from(document.querySelectorAll('.ap-unit-ctx [role="menuitem"]')).map((b) => b.textContent.trim()))
+      await win.keyboard.press('Escape'); await sleep(300)
+      await win.click(`${UNITS} [data-unit-shared][data-unit-id="${UID_SH_NONE}"]`, { button: 'right' })
+      await sleep(400)
+      const ctxNone = await win.locator('.ap-unit-ctx').count()
+      await win.click(`${UNITS} [data-unit-shared][data-unit-id="${UID_SH_INERT}"]`, { button: 'right' })
+      await sleep(400)
+      const ctxInert = await win.locator('.ap-unit-ctx').count()
+      R.check('SH1 右键能进的行:只有「切换到这台」(没有新窗口 / 桌面 / 改名 / 改图标)', JSON.stringify(ctxItems) === JSON.stringify(['切换到这台']), ctxItems)
+      R.check('SH1 右键开 Space 的行 / 点不动的行:没有菜单', ctxNone === 0 && ctxInert === 0, { ctxNone, ctxInert })
+      // 悬停不冒「在新窗口打开」
+      await win.hover(`${UNITS} [data-unit-shared][data-unit-id="${UID_SH}"]`)
+      R.check('SH1 共享行没有悬停的「在新窗口打开」', (await win.locator(`${UNITS} .ap-unit-wrap [data-unit-shared]`).count()) === 0 && (await win.locator(`${UNITS} [data-unit-shared] ~ .ap-unit-newwin`).count()) === 0)
+      // SH8b 点不动的行:点了什么都不发生
+      await win.click(`${UNITS} [data-unit-shared][data-unit-id="${UID_SH_INERT}"]`)
+      await sleep(500)
+      const inertAfter = { panel: await win.locator('.account-pop').count(), remote: await remote() }
+      R.check('SH8 点不动的行:点了面板还开着、没切到哪', inertAfter.panel === 1 && !inertAfter.remote.active, inertAfter)
+
+      // SH2 点能进的行 → 整窗切过去
+      const subMark = sub.state.reqs.length
+      await win.click(`${UNITS} [data-unit-shared][data-unit-id="${UID_SH}"]`)
+      await until(async () => { const r = await remote(); return r.active && (r.web || '').startsWith(SUB) ? r : undefined }, 15000)
+      const loaded = await pageLoaded()
+      const r2 = await remote()
+      R.check('SH2 点能进的行 → 整窗切过去,页面地址是名册给的子域 webUrl(主进程给的)', r2.active && r2.web === WEB && !!loaded, { r2, loaded })
+      R.check('SH2 胶囊 = 名字 · 组标题(没有「我的设备」)', r2.pill.startsWith('工作室 Unit星河工作室') && !r2.pill.includes('我的设备'), r2.pill)
+      const docReqs = sub.state.reqs.slice(subMark).filter((r) => r.host === UID_SH && r.path.startsWith(`/api/units/${UID_SH}/proxy/`))
+      R.check('SH3 子域上这台路径下的请求都带登录头(只有一份)', docReqs.length > 0 && docReqs.every((r) => r.auth === `Bearer ${FIXTURE_TOKEN}` && r.n === 1), { n: docReqs.length, bad: docReqs.filter((r) => r.auth !== `Bearer ${FIXTURE_TOKEN}` || r.n !== 1).slice(0, 5) })
+      await openPanel()
+      const cur = await readShared()
+      R.check('SH2 面板里那一行选中(打勾),「这台电脑」不勾', cur.find((r) => r.id === UID_SH)?.current === true && cur.find((r) => r.id === UID_SH)?.check === true && !(await win.evaluate(() => document.querySelector('[data-unit-local]')?.getAttribute('aria-current') === 'true')), cur)
+      await closePanel()
+      await shot('frame')
+
+      // SH3 页面自己带的占位 Authorization(小写)被换掉;发去云端名册 / 云端中转 / 别台子域的不带
+      const probes = [
+        [`/api/units/${UID_SH}/proxy/probe`, 'own-placeholder', { authorization: 'Bearer tunnel' }],
+        [`${cloud.url}/api/units`, 'cloud-roster', {}],
+        [`${cloud.url}/api/units/${UID_SH}/proxy/`, 'cloud-proxy', {}],
+      ]
+      const fired = await guest((ps) => Promise.all(ps.map(([u, tag, h]) => fetch(u + '?probe=sh-' + tag, { headers: h, mode: u.startsWith('/') ? 'same-origin' : 'no-cors' }).then((r) => r.status, (e) => String(e)))), probes)
+      await sleep(600)
+      const seen = (tag) => [...cloud.state.reqs, ...sub.state.reqs].filter((r) => r.probe === `sh-${tag}`)
+      const own = seen('own-placeholder')
+      R.check('SH3 页面自带 `authorization: Bearer tunnel` 打自己的子域 → 收到的是登录头、只有一份', own.length > 0 && own.every((r) => r.auth === `Bearer ${FIXTURE_TOKEN}` && r.n === 1), { fired, own })
+      // 别台子域:从这台子域上的素页发(真 Unit 页面的 CSP 不放行 http 的别台子域)
+      const loadInGuest = (url) => app.evaluate(async ({ webContents, BrowserWindow }, { origin, url }) => {
+        const main = BrowserWindow.getAllWindows().find((x) => !x.isDestroyed() && !/[?&]window=/.test(x.webContents.getURL()))
+        const wc = webContents.getAllWebContents().filter((w) => !w.isDestroyed() && w.getType() === 'webview' && w.hostWebContents === main.webContents && w.getURL().startsWith(origin)).pop()
+        if (!wc) return 'no-webview'
+        try { await wc.loadURL(url) } catch (e) { return String(e) }
+        return 'ok'
+      }, { origin: SUB, url })
+      const pp = await loadInGuest(`${SUB}/api/units/${UID_SH}/proxy/probe-page`)
+      const firedOther = await guest((u) => fetch(u, { mode: 'no-cors' }).then((r) => r.status, (e) => String(e)), `http://${UID_SH_NONE}.localhost:${sub.port}/api/units/${UID_SH_NONE}/proxy/web/?probe=sh-other-sub`)
+      await sleep(400)
+      for (const tag of ['cloud-roster', 'cloud-proxy', 'other-sub']) {
+        const got = seen(tag)
+        R.check(`SH3 页面脚本打 ${tag} → 收到了、不带登录头`, got.length > 0 && got.every((r) => !r.auth), { fired, pp, firedOther, got })
+      }
+      // SH4b 宿主把它导航到别台的子域(主框架)→ 不带
+      const navOther = await loadInGuest(`http://${UID_SH_NONE}.localhost:${sub.port}/api/units/${UID_SH_NONE}/proxy/web/?probe=sh-nav-other`)
+      await sleep(400)
+      const navOtherReqs = seen('nav-other')
+      R.check('SH4 已绑定的共享页被导航到别台的子域(主框架)→ 不带登录头', navOther === 'ok' && navOtherReqs.length > 0 && navOtherReqs.every((r) => !r.auth), { navOther, navOtherReqs })
+      await app.evaluate(async ({ webContents, BrowserWindow }, { origin, url }) => {
+        const main = BrowserWindow.getAllWindows().find((x) => !x.isDestroyed() && !/[?&]window=/.test(x.webContents.getURL()))
+        const wc = webContents.getAllWebContents().filter((w) => !w.isDestroyed() && w.getType() === 'webview' && w.hostWebContents === main.webContents && w.getURL().startsWith(origin)).pop()
+        if (wc) await wc.loadURL(url).catch(() => {})
+      }, { origin: `http://${UID_SH_NONE}.localhost`, url: WEB })
+      await pageLoaded()
+      // SH4 宿主直接把这张已绑定的 webview 导航到云端中转(主框架、Sec-Fetch-Site: none)→ 不带;再导航回来
+      const nav = await app.evaluate(async ({ webContents, BrowserWindow }, { origin, url }) => {
+        const main = BrowserWindow.getAllWindows().find((x) => !x.isDestroyed() && !/[?&]window=/.test(x.webContents.getURL()))
+        const wc = webContents.getAllWebContents().filter((w) => !w.isDestroyed() && w.getType() === 'webview' && w.hostWebContents === main.webContents && w.getURL().startsWith(origin)).pop()
+        if (!wc) return 'no-webview'
+        try { await wc.loadURL(url) } catch (e) { return String(e) }
+        return 'ok'
+      }, { origin: SUB, url: `${cloud.url}/api/units/${UID_SH}/proxy/?probe=sh-nav-cloud` })
+      await sleep(500)
+      const navReqs = seen('nav-cloud')
+      R.check('SH4 已绑定的共享页被导航到云端中转(主框架)→ 不带登录头(共享绑定没有云端中转前缀)', nav === 'ok' && navReqs.length > 0 && navReqs.every((r) => !r.auth), { nav, navReqs })
+      await app.evaluate(async ({ webContents, BrowserWindow }, { origin, url }) => {
+        const main = BrowserWindow.getAllWindows().find((x) => !x.isDestroyed() && !/[?&]window=/.test(x.webContents.getURL()))
+        const wc = webContents.getAllWebContents().filter((w) => !w.isDestroyed() && w.getType() === 'webview' && w.hostWebContents === main.webContents && w.getURL().startsWith(origin)).pop()
+        if (wc) await wc.loadURL(url).catch(() => {})
+      }, { origin: cloud.url, url: WEB })
+
+      // SH5 enter = none 的行绑不上;共享行开不了窗、加不了桌面
+      const bindNone = await win.evaluate(async (id) => {
+        const el = document.querySelector('.unitrs-web')
+        return window.tangu.unitsBindFrame({ webContentsId: el.getWebContentsId(), unitId: id })
+      }, UID_SH_NONE)
+      R.check('SH5 enter = none 的行(名册给了合格地址也一样)→ 绑不上(not_enterable)', bindNone?.ok === false && bindNone?.code === 'not_enterable', bindNone)
+      const before = (await wins(app)).length
+      const openSh = await win.evaluate((id) => window.tangu.unitsOpenWindow(id), UID_SH)
+      await sleep(1500)
+      const deskSh = await win.evaluate((id) => window.tangu.unitsAddToDesktop({ id }), UID_SH)
+      R.check('SH5 units:openWindow 对共享行 → 拒,没有多开窗', openSh?.ok === false && (await wins(app)).length === before, { openSh })
+      R.check('SH5 units:addToDesktop 对共享行 → not_found(只按自己名下的名册核)', deskSh?.ok === false && deskSh?.code === 'not_found', deskSh)
+
+      // SH6 唤醒中:先去别的设备再回来(新一张 webview、新一次加载),前两次 503 UNIT_WAKING
+      const reenter = async () => {
+        await toLocalTunnel()
+        await until(async () => ((await remote()).web || '').startsWith(cloud.url) || undefined, 10000)
+        await sleep(800)
+        await clickShared(UID_SH)
+      }
+      sub.state.wakeLeft = 2
+      const wakeMark = sub.state.reqs.length
+      await reenter()
+      const waking = await until(async () => { const r = await remote(); return r.fail === 'waking' ? r : undefined }, 15000)
+      R.check('SH6 503 UNIT_WAKING →「正在唤醒…」(盖着,服务端那段 JSON 不露),没有重试按钮', !!waking && /正在唤醒/.test(waking.failText) && !waking.failText.includes('UNIT_WAKING') && !waking.retry, waking)
+      await shot('waking')
+      const woke = await until(async () => { const r = await remote(); return !r.fail && r.active ? r : undefined }, 25000)
+      const wakeDocs = sub.state.reqs.slice(wakeMark).filter((r) => r.host === UID_SH && r.path === `/api/units/${UID_SH}/proxy/web/`)
+      R.check('SH6 按间隔自动重试到成功(3 次文档请求:503、503、200),页面露出', !!woke && wakeDocs.length === 3 && !!(await pageLoaded()), { woke, docs: wakeDocs.length })
+      // 403
+      sub.state.mode = 'forbidden'
+      await reenter()
+      const forb = await until(async () => { const r = await remote(); return r.fail === 'forbidden' ? r : undefined }, 15000)
+      R.check('SH6 403 →「你现在不能进入这台 Unit」+「回到这台电脑」,没有重试', !!forb && /你现在不能进入这台 Unit/.test(forb.failText) && /回到这台电脑/.test(forb.failText) && !forb.retry && !forb.failText.includes('UNIT_PATH'), forb)
+      await shot('forbidden')
+      sub.state.mode = 'ok'
+
+      // SH7 人在里面时被撤:名册里这一行改成 enter = none,窗口重新拿到焦点 → 退回并说一句
+      await reenter()
+      await pageLoaded()
+      const inBefore = await remote()
+      shRows.frameEnter = 'none'
+      const rq = cloud.state.rosterQueries.length
+      await app.evaluate(({ BrowserWindow }, id) => { const w = BrowserWindow.fromId(id); w.blur(); w.focus() }, mainId)
+      await win.evaluate(() => window.dispatchEvent(new Event('focus'))) // 台架窗口不一定拿得到系统焦点:两条路都给
+      const out = await until(async () => { const r = await remote(); return !r.active ? r : undefined }, 10000)
+      const toast = await until(() => win.evaluate(() => document.body.innerText.includes('你已不能进入「工作室 Unit」') || undefined), 5000)
+      R.check('SH7 名册里那台变成不能进 → 退回这台电脑、页面卸掉、说一句', inBefore.active && !!out && out.web === null && !!toast, { inBefore: inBefore.active, out, toast: !!toast, rosterReads: cloud.state.rosterQueries.length - rq })
+      shRows.frameEnter = 'frame'
+
+      // SH8 enter = none 的行 → 切到假插件的 Space(商店身份 market-<UUID>,按 manifest id 对上)
+      await clickShared(UID_SH_NONE)
+      const space = await until(() => win.evaluate(() => { const el = document.querySelector('.shared-probe-full'); return el && el.getBoundingClientRect().width > 0 ? el.textContent : undefined }), 10000)
+      R.check('SH8 enter = none 的行 → 打开假插件的主 Space、面板收起', space === 'Shared probe space' && (await win.locator('.account-pop').count()) === 0, { space })
+
+      // 截图:暗色面板(带休眠行)
+      await win.evaluate(() => { localStorage.setItem('forsion_theme_pref', 'dark') })
+      await win.reload({ waitUntil: 'domcontentloaded' })
+      await win.waitForSelector('.dv-groupview', { timeout: 30_000 })
+      await sleep(2500)
+      await openPanel()
+      await shot('panel-dark')
+      await closePanel()
+    } finally {
+      sub.close()
+    }
+  }
 }
+
+/** 共享过来的那台「自己的子域」:http://<id>.localhost:<端口>(Chromium 把 *.localhost 解析到回环)。
+ *  只认夹具账号的登录头(没带 / 带错 = 401);`/api/units/<id>/proxy/<rest>` 转给同一台真 Unit 的 `/<rest>`(webUrl 带 /web/),
+ *  其余路径(页面的绝对路径资源)原样转;别台的子域只记账回 200。mode:ok / forbidden;wakeLeft = 还要回几次 503 UNIT_WAKING。
+ *  reqs 如实记下收到的 Authorization(多值时原样记成数组),补头范围的断言看它。 */
+function startSubdomain(unit) {
+  const state = { mode: 'ok', wakeLeft: 0, reqs: [] }
+  const srv = http.createServer((req, res) => {
+    const u = new URL(req.url, 'http://x')
+    const p = u.pathname
+    const host = String(req.headers.host || '')
+    const auths = []
+    for (let i = 0; i < req.rawHeaders.length; i += 2) if (req.rawHeaders[i].toLowerCase() === 'authorization') auths.push(req.rawHeaders[i + 1])
+    state.reqs.push({ host: host.split('.')[0], method: req.method, path: p, probe: u.searchParams.get('probe'), auth: auths.length ? auths.join(' | ') : null, n: auths.length })
+    const send = (code, body) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(body)) }
+    if (!host.startsWith(`${UID_SH}.localhost`)) return send(200, { other: true })
+    const prefix = `/api/units/${UID_SH}/proxy/`
+    const fwd = (to) => {
+      const up = http.request({ host: '127.0.0.1', port: unit.port, method: req.method, path: to, headers: { ...req.headers, host: `127.0.0.1:${unit.port}`, authorization: `Bearer ${unit.token}` } }, (r) => { res.writeHead(r.statusCode || 502, r.headers); r.pipe(res) })
+      up.on('error', () => { res.writeHead(502); res.end() })
+      req.pipe(up)
+    }
+    if (p.startsWith(prefix)) {
+      if (req.headers.authorization !== `Bearer ${FIXTURE_TOKEN}`) return send(401, { detail: 'unauthorized' })
+      if (state.mode === 'forbidden') return send(403, { code: 'UNIT_PATH_FORBIDDEN', detail: 'forbidden' })
+      if (state.wakeLeft > 0 && p === `${prefix}web/`) { state.wakeLeft--; return send(503, { code: 'UNIT_WAKING', detail: 'waking up' }) }
+      // 不带 CSP 的素页(真 Unit 页面的 CSP 只放行 https: 与回环 IP,挡掉了台架里 http 的别台子域,与补头无关)
+      if (p.startsWith(`${prefix}probe-page`)) { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); return res.end('<!doctype html><title>probe</title><p>probe</p>') }
+      if (p.startsWith(`${prefix}probe`)) return send(200, { ok: true })
+      return fwd(`/${p.slice(prefix.length)}${u.search}`)
+    }
+    return fwd(`${p}${u.search}`)
+  })
+  // 不写 host:双栈监听(*.localhost 可能先解析到 ::1)
+  return new Promise((r) => srv.listen(0, () => r({ port: srv.address().port, state, close: () => srv.close() })))
+}
+
+/** 隔离实例里装一份带共享名册透传的 Extend(版本抬高,免得被随包那份覆盖;签名用本机的 Extend 签名钥)。只动临时 home。 */
+async function installSharedExtend(home) {
+  const { createPrivateKey } = require('crypto')
+  const { pathToFileURL } = require('url')
+  const dir = path.join(home, 'plugins/forsion-extend')
+  fs.mkdirSync(path.join(dir, 'dist'), { recursive: true })
+  const files = ['package.json', 'manifest.json', 'dist/main.js', 'dist/desktop.mjs']
+  for (const f of files) fs.copyFileSync(path.join(EXTEND_SHARED, f), path.join(dir, f))
+  for (const f of ['package.json', 'manifest.json']) { const p = path.join(dir, f), data = JSON.parse(fs.readFileSync(p)); data.version = '99.0.0-e2e'; fs.writeFileSync(p, JSON.stringify(data)) }
+  const key = process.env.EXTEND_SIGNING_KEY || fs.readFileSync(path.join(os.homedir(), '.forsion-dev/secrets/forsion-extend-signing/key.pem'), 'utf8')
+  const { signFiles } = await import(pathToFileURL(path.join(EXTEND_SHARED, 'scripts/signature.mjs')).href)
+  fs.writeFileSync(path.join(dir, 'SIGNATURE'), JSON.stringify(await signFiles(dir, files, createPrivateKey(key))))
+}
+
+/** 假插件:商店身份目录(market-<UUID>),manifest id = shared-probe,带一个 Space(主区一个视图)。 */
+function installSharedPlugin(home) {
+  const dir = path.join(home, 'plugins', SHARED_PLUGIN_DIR)
+  fs.mkdirSync(path.join(dir, 'spaces', 'shared-probe'), { recursive: true })
+  fs.writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify({ id: 'shared-probe', name: 'Shared probe', version: '1.0.0', minAppVersion: '0.0.1' }))
+  fs.writeFileSync(path.join(dir, 'main.js'), `ctx.registerView({ id: 'full', title: 'Shared probe', mount(el) { const d = document.createElement('div'); d.className = 'shared-probe-full'; d.textContent = 'Shared probe space'; el.append(d); return () => d.remove() } })`)
+  fs.writeFileSync(path.join(dir, 'spaces', 'shared-probe', 'space.json'), JSON.stringify({ id: 'shared-probe', name: { zh: '共享探针', en: 'Shared probe' }, layout: { main: [{ type: 'plugin:shared-probe:full' }] } }))
+}
+
 main().catch((e) => { console.error(e); process.exit(1) })

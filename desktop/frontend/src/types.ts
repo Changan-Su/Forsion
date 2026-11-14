@@ -564,7 +564,8 @@ declare global {
       onBackendStatus?(cb: (st: BackendStatusInfo) => void): () => void
       onConfigChanged?(cb: () => void): () => void
       // ── 设备互联(Forsion Unit):名册 + 本机 host 状态(token 留主进程,渲染层只拿结果)──
-      unitsList?(): Promise<{ status: number; json: { units?: UnitInfo[] } | null }>
+      /** shared = 连同别人共享给当前账号的 Unit 一起要(旧版 Extend 忽略这个参数,回包里就没有 `shared`)。 */
+      unitsList?(opts?: { shared?: boolean }): Promise<{ status: number; json: { units?: UnitInfo[]; shared?: unknown } | null }>
       /** 系统浏览器开中转引导页:main 代拼 `#token=` 登录态递交(forsion_token 不下发渲染层)。 */
       unitsOpenInBrowser?(unitId: string): Promise<void>
       unitsUpdate?(id: string, patch: { name?: string; icon?: string }): Promise<{ status: number; json: any }>
@@ -573,7 +574,9 @@ declare global {
       unitHostStatus?(): Promise<{ running: boolean; connected: boolean; unitId: string | null; selfUnitId?: string | null; lastError: string | null; webPort: number | null; lanUrl: string | null }>
       unitsOpenWindow?(id: string): Promise<{ ok: boolean }>
       /** 设备页 webview 绑定到一台设备(主进程核名册;之后只给这张 webview、只给这台自己的路径补登录头)。 */
-      unitsBindFrame?(input: { webContentsId: number; unitId: string }): Promise<{ ok: true } | { ok: false; code: string }>
+      unitsBindFrame?(input: { webContentsId: number; unitId: string }): Promise<{ ok: true; url?: string } | { ok: false; code: string }>
+      /** 这扇窗口重新拿到焦点(主进程 browser-window-focus;webview 占着焦点时渲染层自己的 focus 事件不可靠)。 */
+      onWindowFocused?(cb: () => void): () => void
       unitsShowMain?(): void
       unitsAddToDesktop?(input: { id: string; fallbackName?: string; iconPng?: string }): Promise<{ ok: true; path: string } | { ok: false; code: string; detail?: string }>
       /** 本机已配对的来访设备(T1)与回收。 */

@@ -5,6 +5,8 @@
  * 设置 › 设备照旧按通路拆行,不走这里。
  */
 import type { UnitInfo } from '../types'
+import { sharedLabel, type SharedUnit } from '../../../shared/sharedUnits'
+import { pluginDependencyIndex } from '../../../../tangu-agent/src/contracts/pluginAliases'
 
 export type UnitVia = 'lan' | 'p2p' | 'tunnel'
 
@@ -63,6 +65,22 @@ export type UnitPanelRow =
   /** 手输地址连着的那个目标(没有名册条目;只在正看着它时出现)。 */
   | { kind: 'addr'; key: string; name: string; current: true }
 
+/** 别人共享给当前账号的 Unit 那一行。clickable = 点得动:能进(frame),或能打开它指的那个插件的主 Space。 */
+export interface SharedPanelRow {
+  kind: 'shared'
+  key: string
+  unit: SharedUnit
+  /** 行尾灰字(按界面语言取好的)。 */
+  role: string
+  /** frame = 点了整窗切到这台;space = 点了打开那个插件的主 Space(spaceId);null = 点不动。 */
+  action: { kind: 'frame' } | { kind: 'space'; spaceId: string } | null
+  sleeping: boolean
+  current: boolean
+}
+
+/** 一组共享过来的 Unit(按 shared.group.id 分,组标题按界面语言)。 */
+export interface SharedPanelGroup { id: string; title: string; rows: SharedPanelRow[] }
+
 export interface UnitPanelModel {
   /** 「这台电脑」打勾:没在看别的设备。 */
   localCurrent: boolean
@@ -70,9 +88,31 @@ export interface UnitPanelModel {
   rows: UnitPanelRow[]
   /** 折进「离线 N 台」的。 */
   offline: UnitPanelRow[]
+  /** 「我的设备」之后:共享过来的 Unit,按组排(组按名册里第一次出现的顺序);不折进「离线」。 */
+  shared: SharedPanelGroup[]
 }
 
-/** 远程面目标 key = `<设备 id>:<lan|p2p|tunnel>` 或 `addr:<url>`;取出设备 id(addr 回 null)。 */
+/** 共享过来的 Unit 的远程面目标 key。 */
+export const sharedTargetKey = (unitId: string): string => `${unitId}:shared`
+export const isSharedTargetKey = (key: string | null | undefined): boolean => !!key && key.endsWith(':shared') && !key.startsWith('addr:')
+
+/**
+ * 按插件的 manifest id 找它的主 Space:先认运行身份等于它的插件,再认改名身份(商店装的 `market-<UUID>`,
+ * manifest id 记在 packageId;同一个 manifest id 只对上一个时才认)。找到后取它注册的第一个 Space(Space 列表的顺序)。
+ * 插件没装 / 停用了(停用的插件的 Space 不注册)/ 没注册 Space → null。
+ */
+export function resolvePluginSpace(
+  manifestId: string,
+  plugins: ReadonlyArray<{ id: string; packageId?: string }>,
+  spaceIds: readonly string[],
+  ownerOf: (spaceId: string) => string | undefined,
+): string | null {
+  const p = pluginDependencyIndex(plugins).get(manifestId)
+  if (!p) return null
+  return spaceIds.find((sid) => ownerOf(sid) === p.id) ?? null
+}
+
+/** 远程面目标 key = `<设备 id>:<lan|p2p|tunnel|shared>` 或 `addr:<url>`;取出设备 id(addr 回 null)。 */
 export function remoteUnitId(key: string | null | undefined): string | null {
   if (!key || key.startsWith('addr:')) return null
   const at = key.lastIndexOf(':')
@@ -87,9 +127,15 @@ export function unitPanelModel(input: {
   remote: { active: boolean; key: string | null; name?: string }
   /** 记住的通路(缺省 = 都没选过)。 */
   remembered?: (unitId: string) => UnitVia | null
+  /** 共享过来的 Unit(缺省 = 没有)。 */
+  shared?: readonly SharedUnit[]
+  lang?: 'zh' | 'en'
+  /** enter = none 的行:按插件 manifest id 找它的主 Space(resolvePluginSpace);找不到 = null(行点不动)。 */
+  pluginSpace?: (manifestId: string) => string | null
 }): UnitPanelModel {
   const { units, hostUnitId, lanOk, p2p, remote, remembered } = input
   const viewingKey = remote.active ? remote.key : null
+  const viewingShared = isSharedTargetKey(viewingKey)
   const viewingId = remoteUnitId(viewingKey)
   const rows: UnitPanelRow[] = []
   const offline: UnitPanelRow[] = []
@@ -98,12 +144,29 @@ export function unitPanelModel(input: {
     if (u.id === hostUnitId || u.kind === 'phone') continue
     const pick = pickUnitRoute(u, { lanOk: !!lanOk[u.id], p2p, remembered: remembered?.(u.id) ?? null })
     const via = pick?.via ?? null
-    const row: UnitPanelRow = { kind: 'unit', key: u.id, unit: u, via, ...(pick?.downgraded ? { downgraded: true } : {}), current: u.id === viewingId }
+    const row: UnitPanelRow = { kind: 'unit', key: u.id, unit: u, via, ...(pick?.downgraded ? { downgraded: true } : {}), current: !viewingShared && u.id === viewingId }
     if (via || row.current) rows.push(row)
     else offline.push(row)
   }
   if (viewingKey?.startsWith('addr:')) rows.push({ kind: 'addr', key: viewingKey, name: remote.name || viewingKey.slice(5), current: true })
-  return { localCurrent: !viewingKey, rows, offline }
+  // 共享过来的:自己名下已有的 id / 本机 / 手机不列;按组排,组内名册顺序
+  const lang = input.lang ?? 'zh'
+  const own = new Set((units ?? []).map((u) => u.id))
+  const groups = new Map<string, SharedPanelGroup>()
+  for (const u of input.shared ?? []) {
+    if (own.has(u.id) || u.id === hostUnitId || u.kind === 'phone') continue
+    const s = u.shared
+    const spaceId = s.enter === 'none' && s.open ? input.pluginSpace?.(s.open.plugin) ?? null : null
+    const row: SharedPanelRow = {
+      kind: 'shared', key: sharedTargetKey(u.id), unit: u, role: sharedLabel(s.roleLabel, lang),
+      action: s.enter === 'frame' ? { kind: 'frame' } : spaceId ? { kind: 'space', spaceId } : null,
+      sleeping: !!u.sleeping, current: viewingShared && u.id === viewingId,
+    }
+    let g = groups.get(s.group.id)
+    if (!g) groups.set(s.group.id, (g = { id: s.group.id, title: sharedLabel(s.group.title, lang), rows: [] }))
+    g.rows.push(row)
+  }
+  return { localCurrent: !viewingKey, rows, offline, shared: [...groups.values()] }
 }
 
 /** Unit 窗:名册回包 → 这扇窗的状态。list: undefined = 没有名册桥;抛错由调用方折成 'unknown'。 */

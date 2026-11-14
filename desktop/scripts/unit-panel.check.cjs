@@ -15,6 +15,8 @@
  *   K 在线行悬停 / 键盘聚焦才露「在新窗口打开」;离线行右键也有新窗口 / 桌面两项;添加到桌面不交名字;手输地址那行没有右键
  *   J 「管理 Unit…」→ 设置 › 设备
  *   K web 主入口(没有设备桥)不出现 Unit 段
+ *   S 别人共享给当前账号的 Unit(&shared):按组分、组标题与灰字按语言(缺了回落)、休眠中字样、点不动的行不是按钮、
+ *     右键只有「切换到这台」、没有悬停新窗口、点能进的行 → 共享目标 + 胶囊「名字 · 组标题」+ 面板选中;没有绑定桥 → 失败态
  *   L 不出视口、不压头像:1200×720 / 1200×520 × 缩放 1 / 1.1,Unit 多了只滚 Unit 段;名册刷新变高后重新夹位置
  * 顺带拍截图(浅色 / 深色 / 青绿配色 / 英文 / 缩放 110%)到 UNITPANEL_SHOT_DIR。
  *
@@ -622,6 +624,69 @@ async function main() {
     const selfSettings = await ps.evaluate(() => document.querySelector('.unitset-list')?.textContent ?? '')
     check('K2 本机(selfUnitId)不出现在面板、也不出现在设置 › 设备', !selfPanel.includes('本机自己') && selfPanel.includes('MacBook Air') && !!selfSettings && !selfSettings.includes('本机自己'), JSON.stringify({ panel: selfPanel.slice(0, 80), settings: selfSettings.slice(0, 80) }))
     await ps.close()
+
+    // ── S 别人共享给当前账号的 Unit(&shared)──
+    for (const [extra, lang] of [['&shared', 'zh'], ['&shared&lang=en', 'en'], ['&shared&dark', 'zh']]) {
+      const pq = await browser.newPage({ locale: lang === 'en' ? 'en-US' : 'zh-CN', viewport: { width: 1200, height: 720 } })
+      pq.on('pageerror', (e) => console.log('[pageerror]', e.message))
+      await pq.addInitScript(() => localStorage.clear())
+      await boot(pq, extra)
+      await openPanel(pq)
+      await pq.waitForSelector(`${UNITS} [data-unit-shared]`, { timeout: 5000 }).catch(() => {})
+      const read = () => pq.evaluate((sel) => Array.from(document.querySelectorAll(`${sel} .ap-sec, ${sel} .ap-item`)).map((n) => ({
+        sec: n.classList.contains('ap-sec') ? n.textContent.trim() : null, shared: n.hasAttribute('data-unit-shared'), id: n.getAttribute('data-unit-id'), tag: n.tagName,
+        name: (n.querySelector('.ap-unit-name') ?? n).textContent.trim(), state: n.querySelector('.ap-unit-state')?.textContent.trim() ?? '', current: n.getAttribute('aria-current') === 'true', check: !!n.querySelector('.ap-unit-check'),
+      })), UNITS)
+      const all = await read()
+      if (extra === '&shared') {
+        const secs = all.filter((r) => r.sec).map((r) => r.sec)
+        const sh = all.filter((r) => r.shared)
+        const idx = (t) => all.findIndex((r) => r.sec === t)
+        check('S1 「我的设备」之后按组分:星河工作室(三行)、Lab(一行,只有英文标题 → 回落英文);坏行丢掉',
+          secs.join('|') === '这台电脑|我的设备|星河工作室|Lab' && idx('星河工作室') > all.findIndex((r) => r.name === '离线 1 台')
+          && JSON.stringify(sh.map((r) => r.name)) === JSON.stringify(['工作室 Unit', '商业版', '只读那台', 'Lab box']) && !all.some((r) => r.name === 'broken row'), JSON.stringify({ secs, names: sh.map((r) => r.name) }))
+        check('S2 行尾灰字按语言 + 休眠中字样;离线的共享行不折进「离线 N 台」',
+          sh[0].state === '管理员 · 休眠中' && sh[1].state === '管理员' && sh[2].state === '成员' && sh[3].state === 'Admin', JSON.stringify(sh.map((r) => r.state)))
+        check('S3 能进的是按钮;要开的插件没装 / 没给 open 的不是按钮(点不动)', sh[0].tag === 'BUTTON' && sh[1].tag === 'DIV' && sh[2].tag === 'DIV' && sh[3].tag === 'BUTTON', JSON.stringify(sh.map((r) => r.tag)))
+        // 右键:能进的只有「切换到这台」;点不动的没有菜单;悬停没有「在新窗口打开」
+        await pq.click(`${UNITS} [data-unit-shared][data-unit-id="s-studio-0001"]`, { button: 'right' })
+        await pq.waitForTimeout(300)
+        const items = await pq.evaluate(() => Array.from(document.querySelectorAll('.ap-unit-ctx [role="menuitem"]')).map((b) => b.textContent.trim()))
+        await pq.keyboard.press('Escape'); await pq.waitForTimeout(200)
+        await pq.click(`${UNITS} [data-unit-shared][data-unit-id="s-biz-00002"]`, { button: 'right' })
+        await pq.waitForTimeout(300)
+        const inertMenu = await pq.locator('.ap-unit-ctx').count()
+        await pq.hover(`${UNITS} [data-unit-shared][data-unit-id="s-studio-0001"]`)
+        const newwin = await pq.evaluate((sel) => !!document.querySelector(`${sel} [data-unit-shared]`)?.closest('.ap-unit-wrap'), UNITS)
+        check('S4 右键能进的行只有「切换到这台」;点不动的行没有菜单;没有悬停「在新窗口打开」', JSON.stringify(items) === JSON.stringify(['切换到这台']) && inertMenu === 0 && !newwin, JSON.stringify({ items, inertMenu, newwin }))
+        // 点不动的行:点了面板还在、不切
+        await pq.click(`${UNITS} [data-unit-shared][data-unit-id="s-plain-0003"]`)
+        await pq.waitForTimeout(250)
+        const stay = await pq.evaluate(() => ({ pop: !!document.querySelector('.account-pop'), active: window.__unitRemote.getState().active }))
+        check('S5 点不动的行:点了面板还在、没有切走', stay.pop && !stay.active, JSON.stringify(stay))
+        shots.push(await shot(pq, 'shared'))
+        // 点能进的行 → 远程面目标 = 共享 key;再开面板那一行选中、「这台电脑」不勾
+        await pq.click(`${UNITS} [data-unit-shared][data-unit-id="s-studio-0001"]`)
+        await pq.waitForTimeout(300)
+        const tg = await pq.evaluate(() => { const s = window.__unitRemote.getState(); return { active: s.active, key: s.target?.key, shared: !!s.target?.shared, pill: document.querySelector('.unitfr-pill')?.textContent ?? '' } })
+        await openPanel(pq)
+        const after = await read()
+        const row = after.find((r) => r.id === 's-studio-0001')
+        const local = after.find((r) => r.name === '这台电脑' && !r.sec)
+        check('S6 点能进的行 → 整窗切到这台(目标是共享的、胶囊「名字 · 组标题」);再开面板那一行选中,「这台电脑」不勾',
+          tg.active && tg.key === 's-studio-0001:shared' && tg.shared && tg.pill.includes('工作室 Unit星河工作室') && row?.current && row?.check && !local?.current, JSON.stringify({ tg, row, local }))
+        // 没有绑定桥的端:进不去 → 失败态(不自己拼地址)
+        const fail = await pq.evaluate(() => document.querySelector('.unitfr-fail')?.getAttribute('data-unitfr-state') ?? null)
+        check('S7 这一端没有绑定桥(拿不到主进程给的地址)→ 画失败态、webview 停在空白页', fail === 'unreachable' && (await pq.evaluate(() => document.querySelector('.unitrs-web')?.getAttribute('src'))) === 'about:blank', JSON.stringify({ fail }))
+      }
+      if (lang === 'en') {
+        const sh = all.filter((r) => r.shared)
+        check('S8 英文:组标题 / 灰字 / 休眠字样走英文', all.some((r) => r.sec === 'Galaxy Studio') && sh[0].state === 'Admin · Asleep' && sh[2].state === 'Member', JSON.stringify(sh.map((r) => r.state)))
+        shots.push(await shot(pq, 'shared-en'))
+      }
+      if (extra.includes('dark')) shots.push(await shot(pq, 'shared-dark'))
+      await pq.close()
+    }
 
     // ── K web ──
     const pw = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1200, height: 720 } })

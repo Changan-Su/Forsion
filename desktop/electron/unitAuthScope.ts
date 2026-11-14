@@ -6,13 +6,15 @@
  *   1. 发请求的 webContents 已被主进程**绑定**到某一台设备(绑定由主进程自己核:id 过白名单正则、
  *      在主进程此刻读到的当前账号名册里;渲染层只能提出「这张 webview 要看哪台」,地址前缀由主进程拼);
  *   2. 绑定时的账号 = 此刻的账号、绑定时的云端地址 = 此刻的云端地址(换号 / 登出 / 改云端地址后一律不补);
- *   3. 请求地址落在**这台设备自己**允许的前缀里(unitAllowedPrefixes,今天只有中转的 proxy/),
+ *   3. 请求地址落在**这台设备自己**允许的前缀里(unitAllowedPrefixes:自己名下的设备 = 云端中转的 proxy/;
+ *      别人共享给当前账号的 Unit = 名册给的那台自己子域上的 proxy/,不含云端中转),
  *      名册管理接口(列表、改 / 删别的设备、调用方凭据……)一概不在内;
  *   4. Fetch Metadata 可信(same-origin / none / 缺省),第三方页发起的一律不补。
  *
  * 无 Electron 依赖(纯函数 + 小状态),可测。
  */
 import { UNIT_ID_RE } from './unitShortcut'
+import { sharedFramePrefix, validateSharedWebUrl, type SharedUnit } from '../shared/sharedUnits'
 
 export { UNIT_ID_RE }
 export const isUnitFrameId = (id: unknown): id is string => typeof id === 'string' && UNIT_ID_RE.test(id)
@@ -24,6 +26,9 @@ export interface UnitFrameBinding {
   accountKey: string
   /** 绑定时的云端地址(不含尾斜杠)。 */
   cloudBase: string
+  /** 别人共享给当前账号的 Unit:主进程自己从名册读到、校验过的进入地址(validateSharedWebUrl)。
+   *  有它 = 补头前缀只有这台子域上的 proxy/,没有云端中转那一条。 */
+  webUrl?: string
 }
 
 /** 云端地址规整:去尾斜杠;解析不了 / 不是 http(s) = null。 */
@@ -37,14 +42,29 @@ export function normalizeCloudBase(cloudUrl: string | null | undefined): string 
 }
 
 /**
- * 这台设备允许补头的地址前缀(都以 `/` 结尾)。今天只有中转的 `<cloud>/api/units/<id>/proxy/`:
- * 云端那一侧 `/open` 不需要登录头、`/session` 只在设备自己的子域上才有(服务端 unitHostPathAllowed),
- * 其余 `/api/units/<id>/…`(caps / channel / caller-* / attention…)与名册接口都不归设备页用。
- * 以后「这台自己的子域」上线时在这里加一项。
+ * 这台设备允许补头的地址前缀(都以 `/` 结尾):
+ *   - 自己名下的设备:中转的 `<cloud>/api/units/<id>/proxy/`;
+ *     云端那一侧 `/open` 不需要登录头、`/session` 只在设备自己的子域上才有(服务端 unitHostPathAllowed),
+ *     其余 `/api/units/<id>/…`(caps / channel / caller-* / attention…)与名册接口都不归设备页用;
+ *   - 别人共享给当前账号的 Unit(给了 webUrl):**只有** `<webUrl 的源>/api/units/<id>/proxy/`,不给云端中转那一条。
+ *     webUrl 再核一遍(不合格 = 空,一个都不补)。
  */
-export function unitAllowedPrefixes(cloudBase: string, unitId: string): string[] {
+export function unitAllowedPrefixes(cloudBase: string, unitId: string, webUrl?: string): string[] {
   if (!isUnitFrameId(unitId)) return []
+  if (webUrl !== undefined) {
+    const ok = validateSharedWebUrl(webUrl, unitId, cloudBase)
+    return ok ? [sharedFramePrefix(ok, unitId)] : []
+  }
   return [`${cloudBase}/api/units/${unitId}/proxy/`]
+}
+
+/** 一个绑定允许补头的前缀。 */
+export const bindingPrefixes = (b: UnitFrameBinding): string[] => unitAllowedPrefixes(b.cloudBase, b.unitId, b.webUrl)
+
+/** 把请求头里的 Authorization 换成 value:大小写不同的同名键先全删(页面自己带的占位值,如设备网页壳的 `Bearer tunnel`),再写一份。 */
+export function replaceAuthorization(headers: Record<string, string | string[]>, value: string): void {
+  for (const k of Object.keys(headers)) if (k.toLowerCase() === 'authorization') delete headers[k]
+  headers.Authorization = value
 }
 
 /** 前缀之后那段路径里不许出现「解码后才冒出来的」上跳 / 反斜杠(反代可能先解码再路由)。 */
@@ -87,21 +107,25 @@ export function shouldInjectUnitAuth(i: UnitAuthDecisionInput): boolean {
   if (b.accountKey !== i.accountKey || b.cloudBase !== i.cloudBase) return false
   const sfs = i.secFetchSite
   if (sfs && sfs !== 'none' && sfs !== 'same-origin') return false
-  return urlInPrefixes(i.url, unitAllowedPrefixes(b.cloudBase, b.unitId))
+  return urlInPrefixes(i.url, bindingPrefixes(b))
 }
 
 /** 名册读法(和「添加到桌面」同一条:Extend 的 units:list 处理器,以发起 IPC 的窗口身份读)。 */
+/** shared = 别人共享给当前账号的 Unit(名册带 `shared` 时;没有 = 旧版云端 / Extend,当没有这一组)。 */
 export type UnitFrameRosterRead =
-  | { ok: true; units: Array<{ id: string }> }
+  | { ok: true; units: Array<{ id: string }>; shared?: SharedUnit[] }
   | { ok: false; code: string; detail?: string }
 
-export type UnitFrameBindResult = { ok: true } | { ok: false; code: 'untrusted' | 'not_found' | 'signed_out' | 'roster_unavailable' | 'account_changed' | 'gone' }
+/** url = 渲染层要加载的地址(主进程定;共享行是名册里校验过的 webUrl,自己名下的设备是中转地址)。 */
+export type UnitFrameBindResult = { ok: true; url: string } | { ok: false; code: 'untrusted' | 'not_found' | 'signed_out' | 'roster_unavailable' | 'account_changed' | 'gone' | 'not_enterable' }
 
 export interface UnitFrameBindDeps {
   /** 绑定表的世代号(clear 一次 +1):读名册前记下,回来后变了 = 期间换过号,不绑。 */
   generation: () => number
   /** 发起方可信(主窗,或这台设备自己的 Unit 窗),且 webContentsId 指向它挂着的那张 webview(在设备页分区里)。 */
   trusted: boolean
+  /** 发起方是主窗:共享过来的 Unit 只在主窗里进(不开它的 Unit 窗)。 */
+  fromMain: boolean
   /** 那张 webview 还活着、还挂在发起方下面。 */
   guestAlive: () => boolean
   accountKey: () => string | null
@@ -112,8 +136,9 @@ export interface UnitFrameBindDeps {
 
 /**
  * units:bindFrame 的全部判断:发起方不可信 → 拒;id 不过正则 → not_found(名册都不读);
- * 记下发起时的账号与云端 → 读名册(读失败 = 不知道,不绑定)→ 名册里没有 → not_found;
- * 名册回来时账号 / 云端变了 → account_changed;webview 已经没了 → gone;都过了才绑定。
+ * 记下发起时的账号与云端 → 读名册(读失败 = 不知道,不绑定)→ 自己名下有 → 按中转绑;
+ * 不在自己名下、在共享行里:只认主窗发起、`enter === 'frame'`、webUrl 过校验 → 按这台子域绑(否则 not_enterable);
+ * 都没有 → not_found;名册回来时账号 / 云端变了 → account_changed;webview 已经没了 → gone;都过了才绑定。
  */
 export async function handleUnitFrameBind(unitId: unknown, d: UnitFrameBindDeps): Promise<UnitFrameBindResult> {
   if (!d.trusted) return { ok: false, code: 'untrusted' }
@@ -126,11 +151,28 @@ export async function handleUnitFrameBind(unitId: unknown, d: UnitFrameBindDeps)
   let roster: UnitFrameRosterRead
   try { roster = await d.readRoster() } catch { return { ok: false, code: 'roster_unavailable' } }
   if (!roster.ok) return { ok: false, code: roster.code === 'signed_out' ? 'signed_out' : 'roster_unavailable' }
-  if (!roster.units.some((u) => u.id === unitId)) return { ok: false, code: 'not_found' }
+  let binding: UnitFrameBinding
+  if (roster.units.some((u) => u.id === unitId)) {
+    binding = { unitId, accountKey: account, cloudBase: cloud }
+  } else {
+    const s = roster.shared?.find((u) => u.id === unitId)
+    if (!s) return { ok: false, code: 'not_found' }
+    if (!d.fromMain || s.shared.enter !== 'frame') return { ok: false, code: 'not_enterable' }
+    const webUrl = validateSharedWebUrl(s.webUrl, unitId, cloud)
+    if (!webUrl) return { ok: false, code: 'not_enterable' }
+    binding = { unitId, accountKey: account, cloudBase: cloud, webUrl }
+  }
   if (d.generation() !== gen || d.accountKey() !== account || d.cloudBase() !== cloud) return { ok: false, code: 'account_changed' }
   if (!d.guestAlive()) return { ok: false, code: 'gone' }
-  d.bind({ unitId, accountKey: account, cloudBase: cloud })
-  return { ok: true }
+  d.bind(binding)
+  return { ok: true, url: binding.webUrl ?? `${cloud}/api/units/${unitId}/proxy/` }
+}
+
+/** units:openWindow 的名册核对:id 只在共享行里、不在自己名下 → 拒(共享过来的 Unit 不开它自己的窗)。
+ *  名册读不到 = 不知道,照旧放行(窗里自己读名册画状态,共享行在那里也只会是「不在当前账号名下」)。 */
+export function sharedOnlyUnit(roster: UnitFrameRosterRead, unitId: string): boolean {
+  if (!roster.ok) return false
+  return !roster.units.some((u) => u.id === unitId) && !!roster.shared?.some((u) => u.id === unitId)
 }
 
 /** webContents id → 绑定。webContents id 在一次运行里不复用;销毁时由调用方 unbind。 */
@@ -190,7 +232,7 @@ export function createUnitOpenGrants(now: () => number = Date.now, ttlMs = UNIT_
   return {
     issue(b, url, accountKey, cloudBase, from) {
       if (!b || !accountKey || !cloudBase || b.accountKey !== accountKey || b.cloudBase !== cloudBase) return false
-      const prefixes = unitAllowedPrefixes(b.cloudBase, b.unitId)
+      const prefixes = bindingPrefixes(b)
       const key = grantUrlKey(url)
       if (!key || !urlInPrefixes(key, prefixes)) return false
       if (!from?.pageUrl || !urlInPrefixes(from.pageUrl, prefixes)) return false
