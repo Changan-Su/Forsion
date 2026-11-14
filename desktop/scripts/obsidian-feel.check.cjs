@@ -10,7 +10,7 @@
 //   结果记在名单的 reopen 字段,规则同上。
 //
 // 用法:npm run check:obsfeel(由 e2e-editor 自起 / 复用 Vite;worktree 里设 HARNESS_URL 指到自己的端口)
-//   --only=K01,R,F12   只跑这些场景(单个大写字母 = 这一组全部)
+//   --only=K01,R,F12   只跑这些场景(单个大写字母 = 这一组全部;每个选择器都得选中可跑的场景,否则退出非零)
 //   --update           按这次的结果重写名单(带 --only 时只动这些场景;已有的「刻意保留」和理由留着)
 //   --dump=<文件>      把这次 Forsion 一侧的结果写成 JSON(排查用)
 // 跑一遍全套要几分钟,不进 PR 的 CI。
@@ -30,9 +30,21 @@ const MOD = process.platform === 'darwin' ? 'Meta' : 'Control'
 const PM = '.unified-body .ProseMirror'
 
 const BASE = JSON.parse(fs.readFileSync(path.join(DIR, 'baseline.json'), 'utf8'))
-const SCENARIOS = require('./obsidian-feel/scenarios.cjs')
-  .filter((s) => s.dim !== 'perf')
-  .filter((s) => !ONLY.length || ONLY.some((o) => s.id === o || (/^[A-Z]$/.test(o) && s.id.startsWith(o))))
+// 场景表全量(含不跑的计时类):名单清理按它判断「场景表里还有没有」,别用过滤后的表。
+const ALL_SCENARIOS = require('./obsidian-feel/scenarios.cjs')
+const ALL_IDS = ALL_SCENARIOS.map((s) => s.id)
+const RUNNABLE = ALL_SCENARIOS.filter((s) => s.dim !== 'perf')
+const selects = (o, s) => s.id === o || (/^[A-Z]$/.test(o) && s.id.startsWith(o))
+const SCENARIOS = RUNNABLE.filter((s) => !ONLY.length || ONLY.some((o) => selects(o, s)))
+/** --only 里一个可跑场景都没选中的选择器(只选中计时类的也算没选中)。 */
+function unmatchedSelectors(only, runnable) {
+  return only.filter((o) => !runnable.some((s) => selects(o, s)))
+}
+/** 名单里有、场景表(未过滤)里已经没有的编号;被跳过没跑的场景不算。 */
+function staleIds(status, allIds) {
+  const ids = new Set(allIds)
+  return [...new Set([...Object.keys(status.items || {}), ...Object.keys(status.reopen || {})])].filter((id) => !ids.has(id))
+}
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const key = (k) => k.replace(/\bMod\b/g, MOD)
 
@@ -179,21 +191,35 @@ function kindOf(a, b) {
   if (typeof a === 'string' && typeof b === 'string' && a.replace(/\n+$/, '') === b.replace(/\n+$/, '')) return 'eol'
   return 'content'
 }
-/** 一个场景的全部比较项:snap:<快照名>、trace:<步骤>、clip:<步骤>(只比 text/plain;text/html 两边注定不同)。 */
+/**
+ * 一个场景的全部比较项:snap:<快照名>、trace:<步骤>、clip:<步骤>(只比 text/plain;text/html 两边注定不同)。
+ * 先核对观测键:基线里有、这次没采到的进 missing;这次采到、基线里没有的进 extra。两者都不进 items,
+ * 免得「没采到」被当成一条内容差异、被名单上的 pending / keep 放行。
+ */
 function compare(s, r) {
   const b = BASE.scenarios[s.id]
   if (!b) throw new Error(`基线里没有 ${s.id}`)
-  const items = {}
-  for (const [n, md] of Object.entries(b.snaps)) items[`snap:${n}`] = { kind: kindOf(r.snaps[n], md), got: r.snaps[n], want: md }
+  const items = {}, missing = [], extra = []
+  const has = (o, k) => Object.prototype.hasOwnProperty.call(o, k)
+  const keys = (cat, want, got) => {
+    for (const k of Object.keys(want)) if (!has(got, k)) missing.push(`${cat}:${k}`)
+    for (const k of Object.keys(got)) if (!has(want, k)) extra.push(`${cat}:${k}`)
+  }
+  keys('snap', b.snaps || {}, r.snaps)
+  keys('trace', b.traces || {}, r.traces)
+  keys('clip', b.clips || {}, r.clips)
+  for (const [n, md] of Object.entries(b.snaps || {})) if (has(r.snaps, n)) items[`snap:${n}`] = { kind: kindOf(r.snaps[n], md), got: r.snaps[n], want: md }
   for (const [k, arr] of Object.entries(b.traces || {})) {
+    if (!has(r.traces, k)) continue
     const got = r.traces[k]
     items[`trace:${k}`] = { kind: JSON.stringify(got) === JSON.stringify(arr) ? 'same' : 'content', got, want: arr }
   }
   for (const [k, c] of Object.entries(b.clips || {})) {
+    if (!has(r.clips, k)) continue
     const got = r.clips[k]?.data?.['text/plain'] ?? null, want = c.data?.['text/plain'] ?? null
     items[`clip:${k}`] = { kind: kindOf(got, want), got, want }
   }
-  return items
+  return { items, missing, extra }
 }
 
 // ── 名单 ────────────────────────────────────────────────────
@@ -239,7 +265,14 @@ function judge(kind, old, ref = '基线') {
 }
 const show = (x) => (x == null ? 'null' : JSON.stringify(x))
 
-;(async () => {
+async function main() {
+  // 每个 --only 选择器都得至少选中一个可跑的场景,否则直接退出(不许选空了还报全绿、或悄悄漏掉一个)。
+  const unmatched = unmatchedSelectors(ONLY, RUNNABLE)
+  if (unmatched.length) {
+    console.error(`--only 里这些选择器没选中任何可跑的场景:${unmatched.join(', ')}(编号写全,或单个大写字母选一组;计时类场景这条检查不跑)`)
+    process.exit(2)
+  }
+  if (!SCENARIOS.length) { console.error('没有要跑的场景'); process.exit(2) }
   const status = loadStatus()
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })
   // 先确认台架页能挂上编辑器:挂不上的话每个场景都要等满超时,全套跑几个小时才报错。
@@ -272,7 +305,18 @@ const show = (x) => (x == null ? 'null' : JSON.stringify(x))
       console.log(`FAIL  ${s.id}  出错:${r.error}  (${ms}ms)`)
       continue
     }
-    const items = compare(s, r)
+    const { items, missing, extra } = compare(s, r)
+    if (missing.length || extra.length) {
+      // 观测键对不上:不判差异、不动名单(--update 也一样),整个场景算红。
+      r.keyError = true
+      fails++
+      const msg = [
+        ...missing.map((k) => `      ${k}:基线里有,这次没采到(场景表里这一步被删了 / 改名了?)`),
+        ...extra.map((k) => `      ${k}:这次采到了,基线里没有这一项,要重录基线`),
+      ]
+      console.log(`FAIL  ${s.id}  观测项对不上,名单条目没动  (${ms}ms)\n${msg.join('\n')}`)
+      continue
+    }
     const oldItems = status.items[s.id] || {}
     const lines = []
     const nextItems = {}
@@ -297,18 +341,17 @@ const show = (x) => (x == null ? 'null' : JSON.stringify(x))
   await browser.close()
   if (DUMP) fs.writeFileSync(path.resolve(DUMP), JSON.stringify(all, null, 1))
 
-  // 名单里有、场景表里已经没有的(没带 --only 时才查)
+  // 名单里有、场景表里已经没有的(没带 --only 时才查)。按未过滤的场景表判断:跳过没跑的(计时类)原样保留。
   if (!ONLY.length) {
-    const ids = new Set(SCENARIOS.map((s) => s.id))
-    for (const id of Object.keys(status.items)) if (!ids.has(id)) { if (UPDATE) { delete status.items[id]; delete status.reopen[id]; changes.push(`${id}:场景表里没有了,删掉`) } else { fails++; console.log(`FAIL  ${id}  名单里有,场景表里没有了(用 --update)`) } }
+    for (const id of staleIds(status, ALL_IDS)) { if (UPDATE) { delete status.items[id]; delete status.reopen[id]; changes.push(`${id}:场景表里没有了,删掉`) } else { fails++; console.log(`FAIL  ${id}  名单里有,场景表里没有了(用 --update)`) } }
   }
 
-  // 汇总:只数这次跑到的场景
-  const ran = SCENARIOS.filter((s) => !all[s.id].error).map((s) => s.id)
+  // 汇总:只数这次跑到、观测项也对得上的场景
+  const ran = SCENARIOS.filter((s) => !all[s.id].error && !all[s.id].keyError).map((s) => s.id)
   const count = { same: 0, pending: 0, keep: 0 }, eol = { pending: 0, keep: 0 }, re = { same: 0, pending: 0, keep: 0 }
   for (const id of ran) {
     // 汇总按这次的实际结果算(--update 前后一致;不带 --update 时也反映现状)
-    const s = SCENARIOS.find((x) => x.id === id), items = compare(s, all[id])
+    const s = SCENARIOS.find((x) => x.id === id), { items } = compare(s, all[id])
     for (const [k, it] of Object.entries(items)) {
       const st = judge(it.kind, (status.items[id] || {})[k]).next
       count[st.status]++; if (st.status !== 'same' && st.diff === 'eol') eol[st.status]++
@@ -321,14 +364,17 @@ const show = (x) => (x == null ? 'null' : JSON.stringify(x))
     console.log(`\n名单已更新(${path.relative(process.cwd(), STATUS_FILE)}),改动 ${changes.length} 条:`)
     for (const c of changes) console.log('  ' + c)
   }
-  console.log(`\n场景 ${SCENARIOS.length} 个(出错 ${SCENARIOS.length - ran.length}),耗时 ${Math.round((Date.now() - t0) / 1000)}s`)
+  console.log(`\n场景 ${SCENARIOS.length} 个(出错或观测项对不上 ${SCENARIOS.length - ran.length}),耗时 ${Math.round((Date.now() - t0) / 1000)}s`)
   console.log(`比较项:相同 ${count.same} · 待对齐 ${count.pending}(其中只差文末换行 ${eol.pending})· 刻意保留 ${count.keep}(其中只差文末换行 ${eol.keep})`)
   console.log(`重开稳定:稳定 ${re.same} · 不稳定待对齐 ${re.pending} · 不稳定刻意保留 ${re.keep}`)
   if (UPDATE) {
     const bad = SCENARIOS.length - ran.length
-    console.log(bad ? `\n有 ${bad} 个场景出错,它们的名单条目没动;exit 1` : '\n名单已按这次结果重写;exit 0')
+    console.log(bad ? `\n有 ${bad} 个场景出错或观测项对不上,它们的名单条目没动;exit 1` : '\n名单已按这次结果重写;exit 0')
     process.exit(bad ? 1 : 0)
   }
   console.log(fails ? `\n${fails} 个场景红` : '\n全绿')
   process.exit(fails ? 1 : 0)
-})().catch((e) => { console.error(e); process.exit(1) })
+}
+
+module.exports = { unmatchedSelectors, staleIds, selects }
+if (require.main === module) main().catch((e) => { console.error(e); process.exit(1) })
