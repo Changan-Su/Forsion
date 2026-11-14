@@ -48,6 +48,14 @@ export function withLiteralStars<H extends (node: any, parent: any, state: any, 
     const orig = state.unsafe
     state.unsafe = literalUnsafe(orig)
     try {
+      // textSafe's "trailing whitespace stays raw" fast path skips values containing `*` / `_`; with the switch on
+      // every bold paragraph has them, so keep the trailing whitespace raw here (else a typed space saves as `&#x20;`).
+      const value = String(node?.value ?? '')
+      const m = /\s+$/.exec(value)
+      if (m && m.index > 0 && !value.includes('\\')) {
+        const tail = value.slice(m.index)
+        return handler({ ...node, value: value.slice(0, m.index) }, parent, state, { ...info, after: tail[0] }) + tail
+      }
       return handler(node, parent, state, info)
     } finally {
       state.unsafe = orig

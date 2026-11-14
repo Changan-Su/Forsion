@@ -50,7 +50,8 @@ import {
   underlineSchema,
 } from './marks'
 import { obsidianInlinePlugin, toggleObsHighlight } from './obsidianInline'
-import { literalBoldPlugin } from './literalBold'
+import { literalBoldPlugin, toggleLiteralBold } from './literalBold'
+import { literalBoldEnabled } from './literalBoldFlag'
 import { blankLineRemark, softBreakRemark, stripEmptyLineBr } from './softBreak'
 import { tabIndent, tabOutdent } from './tabIndent'
 import { commonmarkWithIndent, setTextAlignment, type TextAlignment } from './paragraphIndent'
@@ -1744,7 +1745,11 @@ export function MilkdownInner({
       return
     }
     const map: Partial<Record<ToolbarAction, () => void>> = {
-      bold: () => runCmd(toggleStrongCommand.key),
+      bold: () => {
+        // PROBE inline-literal-bold: the toolbar's bold follows Mod-b (literal delimiters) when the switch is on
+        if (literalBoldEnabled()) { getInstance()?.action((ctx) => { const v = ctx.get(editorViewCtx); toggleLiteralBold(v.state, v.dispatch); v.focus() }); return }
+        runCmd(toggleStrongCommand.key)
+      },
       italic: () => runCmd(toggleEmphasisCommand.key),
       underline: () => runCmd(toggleUnderlineCommand.key),
       strike: () => runCmd(toggleStrikethroughCommand.key),

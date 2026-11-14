@@ -13,9 +13,10 @@
 //           the constructs that would really change meaning (list bullet, thematic break) are still escaped.
 //           User-escaped chars keep their backslash through the existing amadeusEscaped mark.
 import { $prose, $remark } from '@milkdown/kit/utils'
+import { schemaCtx } from '@milkdown/kit/core'
 import { Plugin, PluginKey, TextSelection, type Command, type EditorState } from '@milkdown/kit/prose/state'
 import { Decoration, DecorationSet } from '@milkdown/kit/prose/view'
-import type { Node as PMNode } from '@milkdown/kit/prose/model'
+import { DOMSerializer, Fragment, Slice, type Node as PMNode, type Schema } from '@milkdown/kit/prose/model'
 import { buildBlockString, scanMath } from './mathLivePreview'
 import { editorFocused } from './editorFocus'
 import { literalBoldEnabled } from './literalBoldFlag'
@@ -196,13 +197,110 @@ function handleStar(state: EditorState, from: number, to: number, dispatch: (tr:
   return false
 }
 
+
+// ── clipboard ──
+/** Copy: literal `**x**` -> strong mark, so text/html carries <strong> and the markdown text serializer writes `**x**`
+ *  (it would also write `**` from the literal text, but the HTML side has no other way to be bold). */
+function literalToMarks(frag: Fragment, schema: Schema): Fragment {
+  const strong = schema.marks.strong
+  if (!strong) return frag
+  const out: PMNode[] = []
+  frag.forEach((node) => {
+    if (!node.isTextblock || node.type.spec.code) {
+      out.push(node.childCount && !node.isTextblock ? node.copy(literalToMarks(node.content, schema)) : node)
+      return
+    }
+    const spans = scanLiteralBold(scanString(node))
+    if (!spans.length) {
+      out.push(node)
+      return
+    }
+    const kids: PMNode[] = []
+    node.forEach((child, offset) => {
+      if (!child.isText) {
+        kids.push(child)
+        return
+      }
+      const t = child.text ?? ''
+      let i = 0
+      while (i < t.length) {
+        const at = offset + i
+        const sp = spans.find((x) => at >= x.from && at < x.to)
+        const inDelim = sp && (at < sp.from + 2 || at >= sp.to - 2)
+        // run until the next boundary
+        let j = i + 1
+        const bound = (k: number): boolean => {
+          const p = offset + k
+          return spans.some((x) => p === x.from || p === x.from + 2 || p === x.to - 2 || p === x.to)
+        }
+        while (j < t.length && !bound(j)) j++
+        if (!inDelim) {
+          const marks = sp ? strong.create({ marker: sp.delim[0] }).addToSet(child.marks) : child.marks
+          kids.push(schema.text(t.slice(i, j), marks))
+        }
+        i = j
+      }
+    })
+    out.push(node.copy(Fragment.fromArray(kids)))
+  })
+  return Fragment.fromArray(out)
+}
+
+/** Paste / drop: strong marks (HTML <b>/<strong>, our own copies) -> literal delimiters, so the document stays mark-free. */
+function marksToLiteral(frag: Fragment, schema: Schema): Fragment {
+  const out: PMNode[] = []
+  frag.forEach((node) => {
+    if (!node.isTextblock) {
+      out.push(node.childCount ? node.copy(marksToLiteral(node.content, schema)) : node)
+      return
+    }
+    if (!node.content.size) {
+      out.push(node)
+      return
+    }
+    const kids: PMNode[] = []
+    let open: string | null = null
+    let lastMarks: readonly import('@milkdown/kit/prose/model').Mark[] = []
+    node.forEach((child) => {
+      const sm = child.marks.find((m) => m.type.name === 'strong')
+      const rest = sm ? sm.removeFromSet(child.marks) : child.marks
+      if (sm && !open) {
+        open = sm.attrs.marker === '_' ? '__' : '**'
+        kids.push(schema.text(open, rest))
+      } else if (!sm && open) {
+        kids.push(schema.text(open, lastMarks))
+        open = null
+      }
+      kids.push(child.isText ? schema.text(child.text ?? '', rest) : child.mark(rest))
+      lastMarks = rest
+    })
+    if (open) kids.push(schema.text(open, lastMarks))
+    out.push(node.copy(Fragment.fromArray(kids)))
+  })
+  return Fragment.fromArray(out)
+}
+
+function literalClipboardSerializer(schema: Schema): DOMSerializer {
+  const base = DOMSerializer.fromSchema(schema)
+  const ser = Object.create(base) as DOMSerializer
+  ser.serializeFragment = (frag, options, target) =>
+    base.serializeFragment(literalBoldEnabled() ? literalToMarks(frag, schema) : frag, options, target)
+  return ser
+}
+export const literalPaste = (slice: Slice, schema: Schema): Slice =>
+  literalBoldEnabled() ? new Slice(marksToLiteral(slice.content, schema), slice.openStart, slice.openEnd) : slice
+
 export function literalBoldPlugin() {
   return $prose(
-    () =>
-      new Plugin({
+    (ctx) => {
+      const schema = ctx.get(schemaCtx)
+      return new Plugin({
         key,
         props: {
+          // Copy: only the HTML flavour turns literal `**x**` into <strong>; text/plain keeps the delimiters (Obsidian).
+          clipboardSerializer: literalClipboardSerializer(schema),
           decorations: (state) => (literalBoldEnabled() ? buildDecorations(state) : DecorationSet.empty),
+          transformPasted: (slice, view) => literalPaste(slice, view.state.schema),
           handleKeyDown: (view, e) => {
             if (!literalBoldEnabled()) return false
             const mod = navigator.platform.includes('Mac') ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey
@@ -214,7 +312,8 @@ export function literalBoldPlugin() {
             return handleStar(view.state, from, to, view.dispatch)
           },
         },
-      }),
+      })
+    },
   )
 }
 /* eslint-enable @typescript-eslint/no-explicit-any */
