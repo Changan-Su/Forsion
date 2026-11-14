@@ -1050,6 +1050,8 @@ if (new URLSearchParams(location.search).has('dock')) {
       }
       // 远程面(设备行「整个主区切过去」)也挂上:裸 harness 无 .shell-work → 组件原地渲染,CSS 退化 fixed 覆盖
       const rsHost = document.createElement('div')
+      // 同产品的 Shell 封箱(.shell-host { isolation: isolate }):远程面 z 400 关在箱里,body 一层的账号面板稳压其上
+      if (unitPanel) rsHost.style.isolation = 'isolate'
       document.body.appendChild(rsHost)
       // 设置 › 设备:胶囊点开走 openSettings('units')(harness 无浮窗 = 窗内设置),这里只挂那一页(真 SettingsModal 太重)。
       const UnitSettingsHost = (): React.ReactElement | null => {

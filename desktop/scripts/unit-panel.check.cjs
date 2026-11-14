@@ -334,6 +334,43 @@ async function main() {
     const after = await geometry(page)
     check('L 名册刷新变高后重新夹位置(仍在视口内、不压头像、列表改为可滚)', after.bottom - after.top > before.bottom - before.top + 20 && inside(after) && after.listScrolls, JSON.stringify({ before: [before.top, before.bottom], after }))
 
+    // ── M Ribbon 收起态(缺省形态:紧凑头像)──
+    for (const [h, z] of [[720, 1], [520, 1], [720, 1.1], [520, 1.1]]) {
+      await page.setViewportSize({ width: 1200, height: h })
+      await boot(page, '&many', { expanded: false })
+      if (z !== 1) await page.evaluate((v) => { document.body.style.zoom = String(v); window.dispatchEvent(new Event('forsion:uizoom')) }, z)
+      await page.waitForTimeout(150)
+      await openPanel(page)
+      await page.waitForFunction((s) => document.querySelectorAll(`${s} .ap-item`).length >= 4, UNITS, { timeout: 5000 }).catch(() => {})
+      await page.waitForTimeout(250)
+      const g = await geometry(page)
+      const tag = `收起态 1200×${h} 缩放 ${z} · 20 台`
+      check(`M 不出视口、不压头像、只滚 Unit 段(${tag})`, inside(g) && Math.abs(g.width - 320 * z) < 1.5 && g.listScrolls && !g.bodyScrolls && g.lastVisible, JSON.stringify(g))
+    }
+    await page.setViewportSize({ width: 1200, height: 720 })
+    await boot(page, '', { expanded: false })
+    await openPanel(page)
+    shots.push(await shot(page, 'collapsed'))
+    await page.keyboard.press('Escape')
+    await closedSoon(page)
+    // 正看着别的设备:真点击头像不许把远程面踢回本机(远程面会把 .rb-slot 上的点击当「回本机」);
+    // 面板画在远程面之上,真点击「这台电脑」那一行能点到(不被远程面拦)并回到本机
+    await page.evaluate(() => window.__runUnitRoute({ kind: 'unit', id: 'u-mba', name: 'MacBook Air', icon: '🦊', platform: 'darwin', via: 'tunnel' }))
+    await page.waitForTimeout(150)
+    await openPanel(page)
+    const rM = await remoteState(page)
+    check('M 收起态:正看着别的设备时点头像 → 远程面还在、面板打开', rM.active && (await panelOpen(page)), JSON.stringify(rM))
+    shots.push(await shot(page, 'collapsed-viewing'))
+    const onTop = await page.evaluate(() => {
+      const row = document.querySelector('[data-unit-local]')
+      const b = row.getBoundingClientRect()
+      const hit = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2)
+      return !!hit && row.contains(hit)
+    })
+    await page.click('[data-unit-local]', { timeout: 3000 })
+    const rM2 = await remoteState(page)
+    check('M 面板压在远程面之上,真点击「这台电脑」→ 回到本机、面板关', onTop && (await closedSoon(page)) && !rM2.active, JSON.stringify({ onTop, rM2 }))
+
     // ── 截图:深色 / 青绿 / 英文 ──
     for (const [extra, name, opts] of [['&dark', 'dark', {}], ['&skin=teal', 'teal', {}], ['&lang=en', 'en', { locale: 'en-US' }]]) {
       const p2 = await browser.newPage({ locale: opts.locale || 'zh-CN', viewport: { width: 1200, height: 720 } })
