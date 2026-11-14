@@ -178,11 +178,10 @@ const LOCAL_UNIT = (() => {
   const r = resolveLocalUnitLaunch({ id: LOCAL_UNIT_ARGS.id, registryFile: LOCAL_UNIT_REGISTRY_FILE, channel: LOCAL_UNIT_CHANNEL })
   if (r.ok) return r
   if (!LOCAL_UNIT_ARGS.quit) { // 退出请求对不上就安静退出(装更新前的那一轮不弹框)
-    let langs: string[] = []
-    try { langs = app.getPreferredSystemLanguages() } catch { /* 拿不到就英文 */ }
-    const lang = langs.some((l) => /^zh/i.test(l)) ? 'zh' : 'en'
-    const title = mtFor(lang, 'main.localUnits.refuseTitle')
-    const msg = mtFor(lang, `main.localUnits.refuse.${r.reason}`)
+    // 这时还没定界面语言(主进程的语言源只在 whenReady 里注入一次):中英两段都写上
+    const both = (key: string): string => `${mtFor('zh', key)}\n\n${mtFor('en', key)}`
+    const title = `${mtFor('zh', 'main.localUnits.refuseTitle')} / ${mtFor('en', 'main.localUnits.refuseTitle')}`
+    const msg = both(`main.localUnits.refuse.${r.reason}`)
     // 台架(TANGU_HARNESS_QUIET=1)里没人点模态框:写 stderr,退出码 3
     if (process.env.TANGU_HARNESS_QUIET === '1') { console.error(`[local-units] refused (${r.reason}): ${msg}`); process.exit(3) }
     dialog.showErrorBox(title, msg)

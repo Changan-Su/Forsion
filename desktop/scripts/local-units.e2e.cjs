@@ -203,6 +203,50 @@ async function main() {
     const r2 = await within(direct.done, 25000)
     check('直接起的 A 收到退出请求后退出', r2.code !== 'timeout', r2.code)
 
+    // ── 9 从文件夹 Unit 里面看(Playwright 起 A = 快捷方式那条路):角色、桥键、面板对自己、更新、叫出默认那台 ──
+    const noHandler = []
+    const watchPage = (pg) => {
+      pg.on('pageerror', (e) => { if (/No handler registered|computerHistory|clipExtension|localUnits/.test(String(e))) noHandler.push(String(e).slice(0, 200)) })
+      pg.on('console', (m) => { if (m.type() === 'error' && /No handler registered/.test(m.text())) noHandler.push(m.text().slice(0, 200)) })
+    }
+    const appA = await electron.launch({ args: [`--user-data-dir=${UD}`, '--lang=zh-CN', ROOT, `--forsion-unit=${idA}`], cwd: ROOT, env: BASE })
+    const pidA = appA.process().pid
+    ours.add(pidA)
+    appA.on('window', watchPage)
+    for (const w of appA.windows()) watchPage(w)
+    try {
+      const pageA = await until(async () => {
+        for (const p of appA.windows()) {
+          if (/[?&]window=/.test(p.url())) continue
+          if (await p.evaluate(() => !!window.tangu?.localUnits).catch(() => false)) return p
+        }
+        return undefined
+      }, 60000, 500)
+      check('文件夹 Unit 起来,主窗有 window.tangu.localUnits(不依赖登录 / Extend)', !!pageA && runPid(A) === pidA, { run: runPid(A), pidA })
+      if (pageA) {
+        const luA = (fn, ...a) => pageA.evaluate(([f, args]) => window.tangu.localUnits[f](...args), [fn, a])
+        const snapA = await luA('list')
+        const selfRow = snapA.units.find((u) => u.id === idA)
+        check('文件夹 Unit 的 list:self = folder(id / 名字 / 路径对),自己那一行 current + running', snapA.self.kind === 'folder' && snapA.self.id === idA && snapA.self.name === 'Bench A' && snapA.self.path === A && selfRow?.current === true && selfRow?.state === 'running', { self: snapA.self, selfRow })
+        check('文件夹 Unit 里从列表移除自己 → is_self', (await luA('remove', idA)).code === 'is_self')
+        const keysA = await pageA.evaluate(() => ({ ch: typeof window.tangu.computerHistory, clip: typeof window.tangu.clipExtension }))
+        const keysD = await page.evaluate(() => ({ ch: typeof window.tangu.computerHistory, clip: typeof window.tangu.clipExtension }))
+        check('桥键:文件夹 Unit 没有 computerHistory / clipExtension,默认那台有(正面对照)', keysA.ch === 'undefined' && keysA.clip === 'undefined' && keysD.ch === 'object' && keysD.clip === 'object', { keysA, keysD })
+        const upd = await pageA.evaluate(() => window.tangu.checkForUpdates())
+        check('文件夹 Unit 查更新 → unsupported', upd?.phase === 'unsupported', upd)
+        const defaultMains = () => processTable().filter((r) => r.cmd.includes(`--user-data-dir=${UD}`) && !r.cmd.includes('--forsion-unit') && !r.cmd.includes('--type=')).map((r) => r.pid)
+        const od = await luA('open', 'default')
+        await sleep(6000)
+        const dm = defaultMains()
+        check('文件夹 Unit 里 open(\'default\'):ok;默认那台在跑 → 拉起的那份交给它后退出,只剩原来那一个默认主进程', od.ok && dm.length === 1 && dm[0] === dPid, { od, dm, dPid })
+        await sleep(1000)
+        check('文件夹 Unit 的渲染层没有因收掉的桥键报 No handler registered', noHandler.length === 0, noHandler.slice(0, 5))
+      }
+    } finally {
+      await appA.close().catch(() => {})
+    }
+    check('Playwright 关掉文件夹 Unit 后运行记录删掉', await until(() => !fs.existsSync(path.join(A, 'app-data', 'local-unit-run.json')), 15000))
+
     // ── 7 拒绝:不建目录、名册不动 ──
     const regBytes = fs.readFileSync(REGISTRY, 'utf8')
     const before = snapshotDir(T).filter(notDefaults)

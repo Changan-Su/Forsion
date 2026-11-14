@@ -8,7 +8,7 @@ import {
   localUnitPaths, localUnitRunningPid, localUnitSpawnArgs, localUnitSpawnEnv, localUnitsDefaultParent, lookupLocalUnit,
   mutateLocalUnitRegistry, parseLocalUnitArgs, readLocalUnitMarker, readLocalUnitRegistry, removeLocalUnit, renameLocalUnit,
   resolveLocalUnitLaunch, writeLocalUnitMarker, writeLocalUnitRunRecord, type LocalUnitsContext,
-  LOCAL_UNIT_SHORTCUT, localUnitAppUserModelId, macAppBundleOf,
+  LOCAL_UNIT_SHORTCUT, localUnitAppUserModelId, macAppBundleOf, quitLocalUnitsForInstall,
 } from './localUnits'
 import { createWindowShortcut, windowShortcutPlan } from './spaceShortcut'
 
@@ -251,6 +251,37 @@ describe('启动核对:不对就拒,盘上不留东西', () => {
     expect(go(ID(5))).toEqual({ ok: false, reason: 'unsafe' })
     writeFileSync(registryFile, '{')
     expect(go(ID(1))).toEqual({ ok: false, reason: 'registry_unreadable' })
+  })
+})
+
+describe('装更新前关掉文件夹 Unit', () => {
+  const clock = () => { let t = 0; return { now: () => t, sleep: async (ms: number) => { t += ms } } }
+  it('没有在跑的 → 0,不发请求;自己那一份不算', async () => {
+    await create('Self')
+    writeLocalUnitRunRecord(localUnitPaths(join(parent, 'Self')).appData, 111)
+    const asked: string[] = []
+    expect(await quitLocalUnitsForInstall({ registryFile, selfId: ID(1), requestQuit: (id) => asked.push(id), alive: () => true, ...clock() })).toBe(0)
+    expect(asked).toEqual([])
+  })
+  it('都按请求退了 → 0;有一台过了期限还在 → 1(只数在跑的)', async () => {
+    for (const n of ['A', 'B', 'C']) await create(n)
+    writeLocalUnitRunRecord(localUnitPaths(join(parent, 'A')).appData, 101)
+    writeLocalUnitRunRecord(localUnitPaths(join(parent, 'B')).appData, 102) // C 没在跑
+    const live = new Set([101, 102])
+    const asked: string[] = []
+    const ok = await quitLocalUnitsForInstall({ registryFile, requestQuit: (id) => { asked.push(id); live.delete(id === ID(1) ? 101 : 102) }, alive: (p) => live.has(p), ...clock() })
+    expect(ok).toBe(0)
+    expect(asked).toEqual([ID(1), ID(2)])
+    const stubborn = new Set([101, 102])
+    const c = clock()
+    const left = await quitLocalUnitsForInstall({ registryFile, timeoutMs: 15_000, requestQuit: (id) => { if (id === ID(1)) stubborn.delete(101) }, alive: (p) => stubborn.has(p), ...c })
+    expect(left).toBe(1)
+    expect(c.now()).toBeGreaterThanOrEqual(15_000)
+  })
+  it('名册读不出 → -1(不知道,不当成没有在跑的)', async () => {
+    mkdirSync(join(root, 'default-ud'), { recursive: true })
+    writeFileSync(registryFile, '')
+    expect(await quitLocalUnitsForInstall({ registryFile, requestQuit: () => {}, ...clock() })).toBe(-1)
   })
 })
 

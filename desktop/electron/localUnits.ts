@@ -464,6 +464,41 @@ export async function removeLocalUnit(ctx: LocalUnitsContext & { id: unknown }):
   return r.result ? { ok: true } : fail('not_found')
 }
 
+// ── 装更新前关掉文件夹 Unit ──────────────────────────────────────────────────────────────
+
+/** 名册里在跑的文件夹 Unit(自己除外)逐个发退出请求,最多等 timeoutMs。回还在跑的个数;名册读不出 = -1(不知道 ≠ 没有在跑的)。 */
+export async function quitLocalUnitsForInstall(o: {
+  registryFile: string
+  selfId?: string | null
+  requestQuit: (id: string) => void
+  alive?: (pid: number) => boolean
+  sleep?: (ms: number) => Promise<void>
+  now?: () => number
+  timeoutMs?: number
+  log?: (m: string) => void
+}): Promise<number> {
+  const alive = o.alive ?? pidAlive
+  const sleep = o.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)))
+  const now = o.now ?? Date.now
+  const read = readLocalUnitRegistry(o.registryFile)
+  if (read.state !== 'ok') return -1
+  const running = read.registry.units
+    .filter((u) => u.id !== o.selfId)
+    .map((u) => ({ id: u.id, pid: localUnitRunningPid(localUnitPaths(u.path).appData, alive) }))
+    .filter((u): u is { id: string; pid: number } => u.pid !== null)
+  for (const u of running) {
+    o.log?.(`[local-units] asking Unit ${u.id} (pid ${u.pid}) to quit before installing the update`)
+    o.requestQuit(u.id)
+  }
+  const deadline = now() + (o.timeoutMs ?? 15_000)
+  let left = running
+  while (left.length && now() < deadline) {
+    await sleep(250)
+    left = left.filter((u) => alive(u.pid))
+  }
+  return left.length
+}
+
 // ── 拉起别的实例 ──────────────────────────────────────────────────────────────────────
 
 /** 拉起默认那台 / 别的文件夹 Unit 前先清掉的环境变量:它们都是「这一份」的身份或重定向,带过去就会让对方住进这一份的目录、

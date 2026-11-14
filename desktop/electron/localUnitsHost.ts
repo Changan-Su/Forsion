@@ -16,7 +16,7 @@ import { LOCAL_UNIT_MARKER, LOCAL_UNIT_REGISTRY } from '../shared/localUnits'
 import { defineMainMessages, mt } from './mainI18n'
 import {
   LOCAL_UNIT_RUN_FILE, addExistingLocalUnit, createLocalUnit, isLocalUnitId, listLocalUnits, localUnitDisplayPath, localUnitPaths,
-  localUnitRunningPid, lookupLocalUnit, pidAlive, readLocalUnitRegistry, removeLocalUnit, renameLocalUnit, type LocalUnitsContext,
+  lookupLocalUnit, quitLocalUnitsForInstall, readLocalUnitRegistry, removeLocalUnit, renameLocalUnit, type LocalUnitsContext,
 } from './localUnits'
 import type { WindowShortcutResult } from './spaceShortcut'
 
@@ -183,26 +183,12 @@ export function createLocalUnitsHost(d: LocalUnitsHostDeps): LocalUnitsHost {
 
   return {
     async quitRunningForInstall(timeoutMs = 15_000) {
-      const read = readLocalUnitRegistry(d.registryFile)
-      if (read.state !== 'ok') return -1
-      const running = read.registry.units
-        .filter((u) => u.id !== d.self?.id)
-        .map((u) => ({ id: u.id, appData: localUnitPaths(u.path).appData }))
-        .map((u) => ({ ...u, pid: localUnitRunningPid(u.appData) }))
-        .filter((u): u is { id: string; appData: string; pid: number } => u.pid !== null)
-      if (!running.length) return 0
-      for (const u of running) {
-        d.log(`[local-units] asking Unit ${u.id} (pid ${u.pid}) to quit before installing the update`)
-        d.spawnInstance({ unitId: u.id, quit: true })
-      }
-      const deadline = Date.now() + timeoutMs
-      let left = running
-      while (left.length && Date.now() < deadline) {
-        await new Promise((r) => setTimeout(r, 250))
-        left = left.filter((u) => pidAlive(u.pid))
-      }
+      const left = await quitLocalUnitsForInstall({
+        registryFile: d.registryFile, selfId: d.self?.id ?? null, timeoutMs, log: d.log,
+        requestQuit: (id) => { d.spawnInstance({ unitId: id, quit: true }) },
+      })
       soon()
-      return left.length
+      return left
     },
     dispose() {
       app.off('browser-window-focus', onFocus)
