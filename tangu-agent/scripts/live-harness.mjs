@@ -87,6 +87,7 @@ import { startImageRecoveryCloud, imageRecoveryLive } from './lib/image-recovery
  *   TANGU_CONTEXT_WINDOW_TOKENS=100000 npm run live:harness -- --only ultra --model codex/gpt-5.6-luna  # Ultra 拉满上下文(09-27):上限压到 100k,族表 272k 的模型 Ultra 两跑窗口须 272k、对照 100k
  *   npm run live:harness -- --only churn                     # 同会话 6 连发的后续调用命中画像(不设命中率阈值,六个 run 须跑完)
  *   npm run live:harness -- --only ttft --ttft-rounds 5      # 首 token 延迟:preset(chat|work)× 思考档(off|medium)2×2,每格 N 会话 × 2 轮(冷/热缓存),交错跑
+ *   npm run live:harness -- --only chanagentmode             # 通道 run 的审批档再按 Agent 自己设的档收紧(11-14):假通道 × 完全放行,Agent 只读 / 分身的本体只读 → 写之前要批;没设档 → 照通道直接写。改 channels/runApproval.ts / agentLoop 那处收紧后跑;负对照 = 还原那处收紧(--kind neg,前两条须红)
  *   npm run live:harness -- --only agentapproval             # 审批档只归用户(09-27):模型被要求把一个 agent 调成完全放行,manage_agent 不收 approval_mode、用户设的只读原样保留;改 manage_agent / manage-agents-guide 后跑
  *   npm run live:harness -- --only teamapproval              # 团队 × 完全通行(09-21 反馈):成员 config 自带 auto-edit / run 启动后才切档,两条都须 0 次审批;改审批闸 / teamRuns 档位后跑
  *   npm run live:harness -- --only parkedask                 # 提问挂起(10-23 待确认卡片 B):托盘 run 里 ask_user 不停下来 —— 真模型先干不依赖答案的活、不重问,收尾后才答 → 答案回到原工具结果、<inquiry_update> 回灌、按答案做完;改 agentLoop 挂起询问 / parkedInquiryResult 措辞后跑
@@ -241,6 +242,7 @@ import { projTiersLive } from './lib/projtiers-live.mjs';
 import { portraitMoveLive } from './lib/portrait-move-live.mjs';
 import { importLive } from './lib/import-live.mjs';
 import { standinLive, writeChannelFixture as writeStandinChannel } from './lib/standin-live.mjs';
+import { chanAgentModeLive } from './lib/chanagentmode-live.mjs';
 import { dreamSeedLive } from './lib/dream-seed-live.mjs';
 import { layersLive } from './lib/layers-live.mjs';
 import { accountLive, startFakeCloud } from './lib/account-live.mjs';
@@ -421,7 +423,8 @@ OPT_IN.add('streamoverflow'); KEYS.push('streamoverflow'); // 注入:真 Codex �
 OPT_IN.add('foreignreasoning'); KEYS.push('foreignreasoning'); // 注入:回灌的加密推理被拒(400 invalid_encrypted_content);只在动 historyReplay 的推理绑定 / agentLoop 的拿掉重发时跑
 OPT_IN.add('relay'); KEYS.push('relay'); // 假提供方只回 429 usage_limit_reached;只在动 llm/quotaRelay.ts / agentLoop 的接力分支时跑。--relay-mode auto|ask|none
 KEYS.push('orgchat'); OPT_IN.add('orgchat'); // --only orgchat --org-plugin <bundle>: a multi-peer channel plugin brings its own legs in verify/orgchat.live.mjs
-OPT_IN.add('standin'); KEYS.push('standin'); // 分身(11-09):多联系人假通道 × 本体的私事;七个 run。动通道选 Agent / 分身权限域 / 文件读根 / 委派闸时跑;--kind neg 在旧代码上跑应当漏
+OPT_IN.add('standin'); KEYS.push('standin');
+OPT_IN.add('chanagentmode'); KEYS.push('chanagentmode'); // 通道 run 按 Agent 自己设的审批档收紧(11-14):同一个假通道,Agent 只读 / 分身按本体只读 → 要批不写;没设档 → 照通道完全放行;--kind neg 在没收紧的代码上跑应当红 // 分身(11-09):多联系人假通道 × 本体的私事;七个 run。动通道选 Agent / 分身权限域 / 文件读根 / 委派闸时跑;--kind neg 在旧代码上跑应当漏
 OPT_IN.add('appref'); // 四个 run;只在动 APP_REF_SECTION(应用 / 窗口引用那一段提示词)时才有信息量。
 const NEEDS = { dream: ['historian'], recall: ['historian', 'dream'] }; // 记忆链三连有先后依赖;其余场景自包含
 KEYS.push('marketplace', 'marketplacechat');
@@ -1278,7 +1281,7 @@ if (ONLY.has('orgchat')) {
   }
 }
 // standin(11-09):多联系人的假通道插件(文件收发),引擎起来时装载;场景见 lib/standin-live.mjs。
-const STANDIN_CHAN = ONLY.has('standin') ? writeStandinChannel(home, join(OUT, 'standin-channel')) : null;
+const STANDIN_CHAN = ONLY.has('standin') || ONLY.has('chanagentmode') ? writeStandinChannel(home, join(OUT, 'standin-channel')) : null;
 // plugin(10-02):隔离 home 的插件目录里放一个夹具引擎插件,它唯一的工具回一个随机标记(引擎起来时装载)。
 const PLUGIN_MARKER = `PLUG-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
 if (ONLY.has('plugin')) {
@@ -2289,6 +2292,9 @@ try {
   };
   await scenario('standin', `standin 分身:通道里问不到主人私聊 / 记忆 / human/ 里的事,委派和 shell 也拿不到,多联系人互不相通,人设跟着本体${argv.includes('--standin-neg') ? '(负对照)' : ''}`, () =>
     standinLive({ api, sleep, until, home, OUT, MODEL, run, followRun, dbPath: join(home, 'state.db'), inbox: STANDIN_CHAN.inbox, outbox: STANDIN_CHAN.outbox, neg: argv.includes('--standin-neg') }));
+
+  await scenario('chanagentmode', 'chanagentmode 通道 run 按 Agent 自己设的审批档收紧:Agent 只读 / 分身的本体只读 → 写之前要批;Agent 没设档 → 照通道档直接写', () =>
+    chanAgentModeLive({ api, sleep, until, MODEL, OUT, followRun, dbPath: join(home, 'state.db'), inbox: STANDIN_CHAN.inbox, outbox: STANDIN_CHAN.outbox }));
 
   await scenario('import', `import 从其他 AI 导入:注入句不进可勾的去处、偏好进协作说明、项目的事进项目 ×${SELF_ROUNDS} 轮${argv.includes('--import-neg') ? '(负对照)' : ''}`, () =>
     importLive({ api, OUT, MODEL, home, src: join(home, '..', 'import-src'), rounds: SELF_ROUNDS, neg: argv.includes('--import-neg') }));

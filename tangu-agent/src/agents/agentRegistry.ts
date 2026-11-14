@@ -329,6 +329,30 @@ export async function parseAgentFolder(slug: string, dir: string): Promise<Norma
   return parseAgentConfig(slug, tomlRaw, soul);
 }
 
+/**
+ * 只读小探针:这个 Agent 自己设的审批档,分清三种情况(通道 run 按 Agent 档收紧时用,见 agentLoop / channels/runApproval.ts):
+ *   absent     —— 没有这个 Agent(文件夹 / config.toml 不在)→ 不参与;
+ *   ok         —— 读到并解析了 config.toml,mode 是它设的档('' = 没设,不参与);
+ *   unreadable —— 文件在但读不出来(EIO / EACCES …)或整份解析不了 → 不知道它设了什么,调用方按只读。
+ * 和 getAgent / parseAgentFolder 不同:那两条把读失败吞成「没设」/ null(对它们的调用方是对的),这里不吞。只读,不迁移、不建任何东西。
+ * 遗留扁平 .md(还没迁成文件夹)按 unreadable:正常情况下激活那一步的 getAgent 已经迁过了,迁不动才会走到这里。
+ */
+export async function probeAgentApprovalMode(slug: string): Promise<{ state: 'absent' } | { state: 'ok'; mode: ApprovalMode } | { state: 'unreadable' }> {
+  if (!slug || !isValidSlug(slug)) return { state: 'absent' };
+  const adir = path.join(agentsDir(), slug);
+  const missing = async (p: string): Promise<boolean | 'error'> => fs.stat(p).then(() => false, (e: any) => (e?.code === 'ENOENT' || e?.code === 'ENOTDIR' ? true : 'error'));
+  const cfg = await missing(path.join(adir, 'config.toml'));
+  if (cfg === 'error') return { state: 'unreadable' };
+  if (cfg) {
+    const flat = await missing(path.join(agentsDir(), `${slug}.md`));
+    return flat === true ? { state: 'absent' } : { state: 'unreadable' };
+  }
+  let raw: string;
+  try { raw = await fs.readFile(path.join(adir, 'config.toml'), 'utf-8'); } catch { return { state: 'unreadable' }; }
+  try { parseToml(raw); } catch { return { state: 'unreadable' }; }
+  return { state: 'ok', mode: parseAgentConfig(slug, raw, '').approvalMode };
+}
+
 /** 序列化 def 为 config.toml 内容(SOUL/MEMORY/LOG/Library 不在此,各自单独落盘)。 */
 export function serializeAgentConfig(def: NormalAgentDef): string {
   const obj: Record<string, unknown> = { name: def.name };

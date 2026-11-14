@@ -31,7 +31,8 @@ import { makeClientActionRequester } from './clientAck.js';
 import { runHooks, type HookRunContext, type HookVerdict } from '../hooks/index.js';
 import { enterRunContext, currentDisplayAgentSlug, currentRunId, setRunClientTag, setRunCwd, setRunSessionContext, setRunStandIn } from '../seams/runContext.js';
 import { getAgentForRun } from '../agents/standIn.js';
-import { resolveRunStandIn, standInSection } from './standInRun.js';
+import { channelSourceOf, resolveRunStandIn, standInSection } from './standInRun.js';
+import { tightenChannelApprovalForAgent } from '../channels/runApproval.js';
 import { isStandInSlugShape } from '../contracts/agentSyncRules.js';
 import { standInSearchDenied } from './accessDomain.js';
 import path from 'node:path';
@@ -69,7 +70,7 @@ import {
 import { compactionSettingsFor, type CompactionSettings } from './compactionSettings.js';
 import { releaseRunCompaction, runCompactionOperation, type CompactionCommitResult } from './runCompaction.js';
 import { isContextOverflowError, learnFromUpstreamError } from './contextWindowStore.js';
-import { getAgent, isValidSlug, libDirOf, MUSE_AGENT_SLUG, type NormalAgentDef } from '../agents/agentRegistry.js';
+import { getAgent, isValidSlug, libDirOf, MUSE_AGENT_SLUG, probeAgentApprovalMode, type NormalAgentDef } from '../agents/agentRegistry.js';
 import { loadHarness, shelvedOf, renderHarnessSection, isRefineInvocation, REFINE_DIRECTIVE, consumeHarnessCandidates, renderPendingHarnessCandidates } from '../agents/harnessStore.js';
 import { loadSchedule, entriesOf, upcomingScheduleLines } from './agentSchedule.js';
 import { agentIdentitySection, applyAgentActivation } from './agentActivation.js';
@@ -1246,7 +1247,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     else delete agentConfig.maxIterations;
   }
   const sessionMaxIterations: number | null = agentConfig.maxIterations ?? null;
-  const { activeAgentSlug, memScopeSlug, profile: agentProfile } = await applyAgentActivation(
+  const { activeAgentSlug, memScopeSlug, profile: agentProfile, agentApprovalMode, agentReadFailed } = await applyAgentActivation(
     agentConfig,
     userId,
     inlineMemberDef ? async (slug: string) => (slug === inlineMemberDef.slug ? inlineMemberDef : getAgent(slug)) : getAgentForRun, // 分身:人设白名单从本体现读
@@ -1260,6 +1261,23 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   ac.signal.throwIfAborted();
   if (agentConfig.agentSlug && activeAgentSlug !== agentConfig.agentSlug) {
     throw new Error('The selected Agent could not be activated. The run was not started with another Agent.');
+  }
+  // 通道 run:通道层定的档(设置 × 绑定)再按 Agent 自己设的档收紧(只收紧;没设 = 原样)。身份到这里才定(会话钉 slug、分身),
+  // 下游的快照、工具 ctx、delegate 子代理都读这一个值(通道 run 不现读会话存档;会话互通工具对通道 run 不开)。
+  // start_discussion 起的讨论 run 不继承本 run 的档(成员各按自己的定义 / 缺省),与通道设置那层同样,这里没管。
+  // 分身(缺省开着)自己的定义不带档:再加本体的档,读不到按只读 —— 面对别人的分身不该比本体松。
+  if (channelSourceOf(plainObject(input.source))) {
+    // 档从磁盘现探(probeAgentApprovalMode):注册表的读取会把 EIO / 解析不了吞成「没设」,这里分清 不在 / 读到了 / 读不出来(按只读)。
+    // 只在本机形态(hostExec:定义就在本机磁盘上);别的形态通道不跑,保底用激活读到的值。
+    const probe = async (slug: string): Promise<{ known: boolean; mode?: unknown }> => {
+      const p = await probeAgentApprovalMode(slug).catch(() => ({ state: 'unreadable' as const }));
+      return p.state === 'ok' ? { known: true, mode: p.mode } : p.state === 'absent' ? { known: false } : { known: true, mode: 'readonly' };
+    };
+    const local = profile.capabilities.hostExec && typeof agentConfig.agentSlug === 'string' && agentConfig.agentSlug;
+    const own = agentReadFailed ? { known: true, mode: 'readonly' } : local ? await probe(String(agentConfig.agentSlug)) : { known: false };
+    const agentModes: unknown[] = [own.known ? own.mode : agentApprovalMode]; // 读定义抛错 / 文件读不出 = 不知道它设了什么,按只读,不当成没设
+    if (standIn) { const b = await probe(standIn.bodySlug); agentModes.push(b.known ? b.mode : 'readonly'); } // 本体不在也按只读
+    agentConfig.approvalMode = tightenChannelApprovalForAgent(agentConfig.approvalMode, agentModes);
   }
   // 压缩旋钮:run 级(会话 / Agent config.toml 的 [compaction],已由 applyAgentActivation 并入)> config.json > 缺省。
   const compactionCfg = compactionSettingsFor(agentConfig.compaction);
