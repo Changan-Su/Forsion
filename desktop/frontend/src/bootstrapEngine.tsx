@@ -432,6 +432,8 @@ export function installEngine(activateTangu: (host: TanguHost) => void): void {
   // ribbon 空白/＋ 号菜单的 feature 动作(引擎不 import feature 代码):新建空白 Space + 文本输入用 askString
   // (Electron 无 window.prompt)。newSpace 仅桌面(需 spacesSave 落盘);无则菜单不显示该项。
   setRibbonActions({
+    // 委托管理员:Ribbon 只看不改(新建 Space / 添加命令 / 收纳夹都不给)
+    ...(delegatedAdmin ? { editable: false } : {}),
     newSpace: window.tangu?.spacesSave ? () => { void askString(app().tr('spaces.namePrompt')).then((v) => { const name = v?.trim(); if (name) void createBlankSpace(name) }) } : undefined,
     prompt: (title, initial) => askString(title, initial),
     // 引擎的一次性提示(如「已恢复默认布局 · 撤销」)→ 宿主通知。独立事件 id:不挂在 system.generic 上。

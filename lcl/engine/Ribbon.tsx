@@ -938,6 +938,7 @@ export function Ribbon() {
   const onZoneCtx = (zone: RibbonZone) => (e: React.MouseEvent): void => {
     if (e.defaultPrevented) return // 图标级菜单(用户 Space 删除/收纳夹/命令)优先
     e.preventDefault()
+    if (ribbonActions.editable === false) return
     setMenu({ x: e.clientX, y: e.clientY, entries: zoneMenu(zone), opener: bubbledOpener(e) })
   }
   const bubbledOpener = (e: React.MouseEvent): string | undefined => {
@@ -949,6 +950,7 @@ export function Ribbon() {
     // 预览卡在 Ribbon 的 React 树里,卡里(含它挂到 body 的菜单)的右键会冒到这儿:那是 View 自己的事,不弹 Ribbon 的区菜单。
     if (e.defaultPrevented || e.nativeEvent === peekCtx.current) return
     e.preventDefault()
+    if (ribbonActions.editable === false) return
     // 两区合起来的菜单里只留一个「新建收纳夹」(建在 Space 区):去掉限定词后两行会一模一样。命令区的收纳夹从命令区的 ＋ / 空白右键建。
     setMenu({ x: e.clientX, y: e.clientY, entries: [...zoneMenu('top'), ...zoneMenu('bottom', false)], opener: bubbledOpener(e) })
   }
@@ -1089,7 +1091,7 @@ export function Ribbon() {
   }
   // 两个 ＋ 各说各的:上区 = 新建 Space / 收纳夹,命令区 = 添加命令(原来都叫「添加」,分不清)。
   const plusName = (zone: RibbonZone): string => t(zone === 'top' ? 'lcl.ribbon.addSpaceOrFolder' : 'lcl.ribbon.addCommand')
-  const renderPlusBtn = (zone: RibbonZone): React.ReactNode => (
+  const renderPlusBtn = (zone: RibbonZone): React.ReactNode => ribbonActions.editable === false ? null : (
     <button
       className="rb-btn rb-plus"
       data-menu-open={menu?.opener === `plus:${zone}` ? '' : undefined}

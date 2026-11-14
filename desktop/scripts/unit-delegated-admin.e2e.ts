@@ -6,7 +6,7 @@
  *   · /unit/whoami answers the delegated admin role (operator name + approval cap);
  *   · allowed routes answer fixtures; everything else answers 403 LOCAL_ONLY and is recorded as an "outside hit".
  *
- * Asserts: lands on Agent management; walk list → edit description + save → disable a skill → add a schedule entry →
+ * Asserts: lands on Agent management; walk list → edit description + save → disable a skill → schedule tab lists + deletes an entry →
  * create an Agent → upload its avatar → delete it (no undo offered); idle past the poll window; owner layout untouched; zero outside hits; no local-only notice on the page; no notes / chat / calendar in the ribbon;
  * no Hooks / MCP in settings; no full-page reload.
  *
@@ -22,7 +22,6 @@ import os from 'node:os'
 import path from 'node:path'
 import { chromium, type Page, type Route } from 'playwright-core'
 import { delegatedEngineAllowed, delegatedNonEngineAllowed } from '../electron/unitWeb'
-import { validateEntryInput } from '../../tangu-agent/src/services/agentSchedule'
 
 const WEB = path.resolve(import.meta.dirname, '../../web')
 const SHOT_DIR = process.env.SHOT_DIR || ''
@@ -85,8 +84,10 @@ const catalog = [
   { key: 'user:summarize', id: 'local:summarize', slug: 'summarize', name: 'Summarize', description: 'Summarize long text', scope: 'user', provenance: 'user', availability: 'available', disabled: false, disabledForAgent: false, path: '/x/skills/summarize' },
   { key: 'user:translate', id: 'local:translate', slug: 'translate', name: 'Translate', description: 'Translate text', scope: 'user', provenance: 'user', availability: 'available', disabled: false, disabledForAgent: false, path: '/x/skills/translate' },
 ]
-const scheduleRejects: string[] = []
-const schedules: Record<string, Array<Record<string, unknown>>> = { xyra: [], writer: [] }
+const schedules: Record<string, Array<Record<string, unknown>>> = {
+  xyra: [],
+  writer: [{ id: 'e1', name: '周五写周报', date: '2099-11-20T09:00', repeat: '7d', auto: true, prompt: '写本周周报', description: '', todo: false, lastRun: '' }],
+}
 
 function fixture(method: string, p: string, body: unknown): { status?: number; json?: unknown; text?: string; contentType?: string } {
   if (p === '/unit/whoami') return { json: { ok: true, role: 'delegated-admin', operator: { name: 'Alex Chen' } } }
@@ -128,16 +129,6 @@ function fixture(method: string, p: string, body: unknown): { status?: number; j
     return { json: { ok: true } }
   }
   if (e === '/agent/special/schedule') return { json: { schedules: Object.entries(schedules).map(([slug, entries]) => ({ slug, name: slug, entries })) } }
-  m = e.match(/^\/agent\/special\/schedule\/([^/]+)\/entries$/)
-  if (m && method === 'POST') {
-    const b = body as Record<string, unknown>
-    // Same validation the engine runs on this route, so a malformed form body fails here too.
-    const v = validateEntryInput(b as Parameters<typeof validateEntryInput>[0], { slug: m[1] })
-    if (!v.ok) { scheduleRejects.push(v.error); return { status: 400, json: { detail: v.error } } }
-    const entry = { id: `e${Date.now()}`, name: '', date: '', repeat: '', auto: false, prompt: '', description: '', todo: false, lastRun: '', ...b }
-    ;(schedules[m[1]] ||= []).push(entry)
-    return { json: { entry, created: true } }
-  }
   m = e.match(/^\/agent\/special\/schedule\/([^/]+)\/entries\/([^/]+)$/)
   if (m && method === 'DELETE') { schedules[m[1]] = (schedules[m[1]] || []).filter((x) => x.id !== m![2]); return { json: { ok: true } } }
   return { status: 404, json: { detail: 'fixture: no data' } }
@@ -256,6 +247,12 @@ async function main(): Promise<void> {
     check('ribbon has no notes / chat / calendar / inbox', !spaces.some((s) => ['amadeus', 'tangu', 'calendar', 'inbox', 'home'].includes(String(s))), `spaces=${spaces.join(',')}`)
     const ribbonLabels = await page.locator('.rb button[aria-label], .rb [role="button"][aria-label]').evaluateAll((els) => els.map((e) => e.getAttribute('aria-label')))
     check('ribbon has no command palette / achievements / store / account', !ribbonLabels.some((l) => /命令面板|成就|商店|账号/.test(String(l))), ribbonLabels.join(','))
+    check('ribbon has no add buttons (new Space / add command)', (await page.locator('.rb .rb-plus').count()) === 0)
+    await page.locator('.rb').click({ button: 'right', position: { x: 20, y: 400 } })
+    await page.waitForTimeout(300)
+    check('ribbon blank right-click opens no add menu', !/新建收纳夹|添加命令|新建 Space/.test(await page.locator('body').innerText()))
+    await page.keyboard.press('Escape')
+    await page.screenshot({ path: path.join(SHOT_DIR || os.tmpdir(), 'admin-ribbon-light.png'), clip: { x: 0, y: 0, width: 300, height: 820 } })
     // The new-tab launcher must not offer notes / chat / calendar either.
     await page.locator('.wb-tabs-new, [aria-label="新建标签页"], button[title="新建标签页"]').first().click().catch(() => null)
     await page.waitForTimeout(800)
@@ -313,16 +310,16 @@ async function main(): Promise<void> {
     await page.waitForTimeout(800)
     check('skill disabled for the Agent', catalog.find((c) => c.key === 'user:translate')?.disabledForAgent === true)
 
-    // Add a schedule entry
+    // Schedule tab: same as the desktop page (list + delete), no create form
     await page.getByRole('tab', { name: '日程' }).click()
-    await page.locator('[data-act="schedule-new"]').click()
-    await page.locator('[data-schedule-form] input[name="name"]').fill('周五写周报')
-    await page.locator('[data-schedule-form] input[name="date"]').fill('2026-11-20T09:00')
-    await page.locator('[data-schedule-form] textarea[name="prompt"]').fill('写本周周报')
-    await shot(page, 'admin-schedule-form-light')
-    await page.locator('[data-schedule-form] button[type="submit"]').click()
-    await page.waitForSelector('[data-schedule-entry]', { timeout: 10_000 })
-    check('schedule entry created', (schedules.writer || []).some((x) => x.name === '周五写周报'))
+    await page.waitForSelector('[data-agent-schedule="writer"] [data-schedule-entry="e1"]', { timeout: 10_000 })
+    check('schedule tab lists the entry', (await page.locator('[data-schedule-entry]').count()) === 1 && (await page.locator('[data-schedule-form], [data-act="schedule-new"]').count()) === 0)
+    await page.waitForTimeout(800) // let the tab switch finish before the screenshot
+    await shot(page, 'admin-schedule-light')
+    page.once('dialog', (d) => void d.accept())
+    await page.locator('[data-schedule-entry="e1"] .harness-undo').click()
+    await page.waitForSelector('[data-schedule-entry="e1"]', { state: 'detached', timeout: 10_000 })
+    check('schedule entry deleted', (schedules.writer || []).length === 0 && writes.some((w) => w.method === 'DELETE' && w.path === '/engine/agent/special/schedule/writer/entries/e1'))
 
     // Create an Agent
     await page.locator('.agents-roster-create').click()
@@ -332,7 +329,6 @@ async function main(): Promise<void> {
     await page.locator('.agent-create-form button[type="submit"]').click()
     await page.waitForSelector('[data-agent-profile="researcher"]', { timeout: 10_000 })
     check('new Agent created', agents.some((a) => a.slug === 'researcher'))
-    check('schedule body passes the engine validator', scheduleRejects.length === 0, scheduleRejects.join(' ; '))
 
     // Avatar upload on the new Agent
     const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', 'base64')
@@ -343,8 +339,12 @@ async function main(): Promise<void> {
     // Delete the new Agent: roster menu → confirm; the done notice offers no undo (restore is not reachable remotely)
     await page.locator('.agents-roster-row', { hasText: '研究员' }).first().locator('.agents-roster-more').click()
     await page.getByRole('menuitem', { name: '删除' }).click()
+    check('delete dialog says it cannot be undone here', /撤销不了/.test(await page.locator('.un-dlg').innerText()))
+    await page.waitForTimeout(600)
+    await shot(page, 'admin-delete-dialog-light')
     await page.locator('.un-dlg button[data-danger]').click()
     await page.waitForTimeout(1200)
+    check('no achievement toast in this role', (await page.locator('body').innerText()).indexOf('成就达成') < 0)
     check('Agent deleted', !agents.some((a) => a.slug === 'researcher') && writes.some((w) => w.method === 'DELETE' && w.path === '/engine/agent/agents/researcher'))
     check('delete notice offers no undo', (await page.getByRole('button', { name: '撤销' }).count()) === 0)
 
@@ -367,6 +367,19 @@ async function main(): Promise<void> {
     const navText = await page.evaluate(() => (document.querySelector('.settings-nav, .settings-sidebar, [class*="settings"][class*="nav"]') as HTMLElement | null)?.innerText || '')
     check('settings nav shows Agent / skills only (no Hooks / MCP / sync / channels / models)', /Agent/.test(navText) && /技能/.test(navText) && !/Hooks|MCP|同步|通道|模型|常规/.test(navText), navText.replace(/\n+/g, ' / '))
     await shot(page, 'admin-settings-light')
+    // Settings search must not surface the pages hidden in this role
+    const search = page.getByPlaceholder(/搜索设置/).first()
+    let leaked = ''
+    for (const q of ['MCP', 'Hooks', '同步', '通道', '模型', '主题', '快捷键']) {
+      await search.fill(q); await page.waitForTimeout(250)
+      const nav = await page.evaluate(() => (document.querySelector('.settings-nav, .settings-sidebar, [class*="settings"][class*="nav"]') as HTMLElement | null)?.innerText || '')
+      if (nav.split('\n').some((l) => l.includes(q) && !/搜索/.test(l))) leaked += `${q}: ${nav.replace(/\n+/g, ' / ')} ; `
+    }
+    // positive control: the search box does filter (a kept page is still found)
+    await search.fill('名册'); await page.waitForTimeout(250)
+    const kept = await page.evaluate(() => (document.querySelector('.settings-nav') as HTMLElement | null)?.innerText || '')
+    await search.fill('')
+    check('settings search surfaces no hidden page (and still finds kept ones)', !leaked && kept.includes('Agent 名册'), leaked || kept.replace(/\n+/g, ' / '))
     await page.getByRole('button', { name: '技能', exact: true }).first().click()
     await page.waitForTimeout(1500)
     check('settings skills page is a read-only list', (await page.locator('[data-delegated-admin]').count()) > 0 && (await page.locator('.gsk-row[data-skill-key]').count()) === 2)

@@ -5,9 +5,9 @@
  * 日程怎么来:Agent 用 manage_schedule 自己排(「每天 9 点帮我…」),或你把 Muse 的待办交给它执行。桌面没有新建入口,所以空态要把这件事说清楚。
  */
 import React, { useEffect, useRef, useState } from 'react'
-import { CalendarClock, CalendarDays, ExternalLink, Loader2, Plus, Trash2, Zap } from 'lucide-react'
+import { CalendarClock, CalendarDays, ExternalLink, Loader2, Trash2, Zap } from 'lucide-react'
 import { setActiveSpace, useSpaceStore } from '@lcl/engine'
-import { deleteAgentScheduleEntry, getAgentSchedules, getMuseTriggers, saveAgentScheduleEntry } from '../services/backendService'
+import { deleteAgentScheduleEntry, getAgentSchedules, getMuseTriggers } from '../services/backendService'
 import { isDelegatedAdmin } from '../services/delegatedAdmin'
 import { useApp } from '../stores/appStore'
 import { useI18n } from '../i18n'
@@ -30,10 +30,7 @@ const AgentScheduleBody: React.FC<Props> = ({ cfg, slug, running }) => {
   const [rules, setRules] = useState<MuseTriggerInfo[]>([])
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
-  // 委托管理员没有对话可以让 Agent 自己排日程,给一个就地新建的入口(桌面照旧只靠 Agent 的 manage_schedule 与日历)。
   const delegated = isDelegatedAdmin()
-  const [creating, setCreating] = useState(false)
-  const [draft, setDraft] = useState({ name: '', date: '', repeat: '', prompt: '', auto: true })
   const alive = useRef(true)
   const seq = useRef(0)
   useEffect(() => { alive.current = true; return () => { alive.current = false } }, [])
@@ -57,28 +54,6 @@ const AgentScheduleBody: React.FC<Props> = ({ cfg, slug, running }) => {
     catch (e: any) { if (alive.current) setError(String(e?.message || e)) }
     finally { if (alive.current) setBusy(false) }
   }
-  const create = async (): Promise<void> => {
-    const name = draft.name.trim(), date = draft.date.trim(), prompt = draft.prompt.trim()
-    if (busy || !name || !date || (draft.auto && !prompt)) return
-    setBusy(true); setError('')
-    try {
-      await saveAgentScheduleEntry(homeTarget(), slug, { name, date, repeat: draft.repeat.trim(), auto: draft.auto, prompt, description: '', todo: false })
-      if (!alive.current) return
-      setCreating(false); setDraft({ name: '', date: '', repeat: '', prompt: '', auto: true })
-      await load()
-    } catch (e: any) { if (alive.current) setError(String(e?.message || e)) }
-    finally { if (alive.current) setBusy(false) }
-  }
-  const createForm = delegated && (creating
-    ? <form className="agent-create-form agent-schedule-form" data-schedule-form onSubmit={(e) => { e.preventDefault(); void create() }}>
-      <label className="agent-field">{t('automation.sched.name')}<input name="name" required maxLength={120} value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} /></label>
-      <label className="agent-field">{t('automation.sched.date')}<input name="date" type="datetime-local" required value={draft.date} onChange={(e) => setDraft({ ...draft, date: e.target.value })} /></label>
-      <label className="agent-field">{t('automation.sched.repeat')}<input name="repeat" value={draft.repeat} placeholder="24h / 7d" onChange={(e) => setDraft({ ...draft, repeat: e.target.value })} /><small>{t('automation.sched.repeatHint')}</small></label>
-      <label className="agent-field">{t('automation.builder.prompt')}<textarea name="prompt" rows={3} maxLength={500} required={draft.auto} value={draft.prompt} onChange={(e) => setDraft({ ...draft, prompt: e.target.value })} /></label>
-      <label className="agent-equipment-item"><input type="checkbox" checked={draft.auto} onChange={(e) => setDraft({ ...draft, auto: e.target.checked })} />{t('agentProfile.scheduleAuto')}</label>
-      <div><button type="button" className="btn" disabled={busy} onClick={() => setCreating(false)}>{t('common.cancel')}</button><button type="submit" className="btn primary" disabled={busy || !draft.name.trim() || !draft.date.trim() || (draft.auto && !draft.prompt.trim())}>{busy && <Loader2 size={13} className="spin" />}{t('agentProfile.scheduleAdd')}</button></div>
-    </form>
-    : <button type="button" className="agent-profile-link" data-act="schedule-new" onClick={() => { setCreating(true); setError('') }}><Plus size={14} />{t('agentProfile.scheduleNew')}</button>)
   const go = (space: string): void => { useApp.getState().closeSettings(); setActiveSpace(space) }
   const has = (space: string): boolean => spaces.some((s) => s.id === space)
 
@@ -104,7 +79,6 @@ const AgentScheduleBody: React.FC<Props> = ({ cfg, slug, running }) => {
 
   return <div className="agent-harness agent-schedule" data-agent-schedule={slug}>
     {error && <p className="agent-profile-error" role="alert">{error}</p>}
-    {createForm}
     {entries === null ? <p className="agent-profile-muted" role="status"><Loader2 size={14} className="spin" /> {t('agentProfile.scheduleLoading')}</p>
       : !rows.length && !rules.length ? !error && <div className="harness-empty">
         <CalendarClock size={22} strokeWidth={1.6} aria-hidden="true" />
