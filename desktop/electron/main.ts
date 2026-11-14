@@ -1833,7 +1833,7 @@ app.on('web-contents-created', (_e, contents) => {
     guest.setWindowOpenHandler((d) => {
       // 已绑定的设备页开**它自己**中转下的地址(撕出视图 / 同源 window.open):给回投后新开的那张页发一次性许可
       const b = unitFrames.get(guest.id)
-      if (b) unitOpenGrants.issue(b, d.url, unitAccountKey(), unitCloudBase)
+      if (b && !guest.isDestroyed()) unitOpenGrants.issue(b, d.url, unitAccountKey(), unitCloudBase, { pageUrl: guest.getURL(), referrerUrl: d.referrer?.url })
       return open(d)
     })
   })
@@ -5146,6 +5146,7 @@ app.whenReady().then(async () => {
     const guestOk = (): boolean => !!guest && !guest.isDestroyed() && guest.getType() === 'webview'
       && guest.hostWebContents === e.sender && guest.session === session.fromPartition(BROWSER_PARTITION)
     return handleUnitFrameBind(unitId, {
+      generation: () => unitFrames.generation(),
       trusted: isTrustedSender(e) && fromOwner && guestOk(),
       guestAlive: guestOk,
       accountKey: unitAccountKey,

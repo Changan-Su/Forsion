@@ -98,6 +98,8 @@ export type UnitFrameRosterRead =
 export type UnitFrameBindResult = { ok: true } | { ok: false; code: 'untrusted' | 'not_found' | 'signed_out' | 'roster_unavailable' | 'account_changed' | 'gone' }
 
 export interface UnitFrameBindDeps {
+  /** 绑定表的世代号(clear 一次 +1):读名册前记下,回来后变了 = 期间换过号,不绑。 */
+  generation: () => number
   /** 发起方可信(主窗,或这台设备自己的 Unit 窗),且 webContentsId 指向它挂着的那张 webview(在设备页分区里)。 */
   trusted: boolean
   /** 那张 webview 还活着、还挂在发起方下面。 */
@@ -120,11 +122,12 @@ export async function handleUnitFrameBind(unitId: unknown, d: UnitFrameBindDeps)
   const cloud = d.cloudBase()
   if (!account) return { ok: false, code: 'signed_out' }
   if (!cloud) return { ok: false, code: 'roster_unavailable' }
+  const gen = d.generation()
   let roster: UnitFrameRosterRead
   try { roster = await d.readRoster() } catch { return { ok: false, code: 'roster_unavailable' } }
   if (!roster.ok) return { ok: false, code: roster.code === 'signed_out' ? 'signed_out' : 'roster_unavailable' }
   if (!roster.units.some((u) => u.id === unitId)) return { ok: false, code: 'not_found' }
-  if (d.accountKey() !== account || d.cloudBase() !== cloud) return { ok: false, code: 'account_changed' }
+  if (d.generation() !== gen || d.accountKey() !== account || d.cloudBase() !== cloud) return { ok: false, code: 'account_changed' }
   if (!d.guestAlive()) return { ok: false, code: 'gone' }
   d.bind({ unitId, accountKey: account, cloudBase: cloud })
   return { ok: true }
@@ -135,15 +138,19 @@ export function createUnitFrameScope(): {
   bind(webContentsId: number, b: UnitFrameBinding): void
   unbind(webContentsId: number): void
   get(webContentsId: number | undefined): UnitFrameBinding | undefined
+  /** 全清,并让世代号 +1:在途的绑定申请(读名册期间)回来后作废。 */
   clear(): void
+  generation(): number
   size(): number
 } {
   const m = new Map<number, UnitFrameBinding>()
+  let gen = 0
   return {
     bind: (id, b) => { m.set(id, { ...b }) },
     unbind: (id) => { m.delete(id) },
     get: (id) => (typeof id === 'number' ? m.get(id) : undefined),
-    clear: () => { m.clear() },
+    clear: () => { m.clear(); gen++ },
+    generation: () => gen,
     size: () => m.size,
   }
 }
@@ -169,8 +176,10 @@ export function grantUrlKey(raw: string): string | null {
 export interface UnitOpenGrant { binding: UnitFrameBinding; url: string; expiresAt: number }
 
 export function createUnitOpenGrants(now: () => number = Date.now, ttlMs = UNIT_OPEN_GRANT_TTL_MS): {
-  /** 已绑定的设备页要开 url:目标在这台自己的前缀里、账号 / 云端仍是绑定时的,才发许可。回发没发。 */
-  issue(binding: UnitFrameBinding | undefined, url: string, accountKey: string | null, cloudBase: string | null): boolean
+  /** 已绑定的设备页要开 url:目标在这台自己的前缀里、账号 / 云端仍是绑定时的,
+   *  且发起页**此刻主框架**的地址(主进程自己读的 getURL)也在这台的前缀里 —— 绑定过的 webview 导航到外站后绑定还在,
+   *  外站脚本开这台的地址不能借它拿许可;referrer 拿得到时也必须在前缀里(拿不到以主框架地址为准)。回发没发。 */
+  issue(binding: UnitFrameBinding | undefined, url: string, accountKey: string | null, cloudBase: string | null, from: { pageUrl: string | null | undefined; referrerUrl?: string | null }): boolean
   /** 一张还没绑定的 webview 的主框架第一次请求 url:有对得上的许可就消费(只能用一次),回它的绑定。 */
   consume(url: string, accountKey: string | null, cloudBase: string | null): UnitFrameBinding | undefined
   clear(): void
@@ -179,10 +188,13 @@ export function createUnitOpenGrants(now: () => number = Date.now, ttlMs = UNIT_
   let list: UnitOpenGrant[] = []
   const prune = (): void => { const t = now(); list = list.filter((g) => g.expiresAt > t) }
   return {
-    issue(b, url, accountKey, cloudBase) {
+    issue(b, url, accountKey, cloudBase, from) {
       if (!b || !accountKey || !cloudBase || b.accountKey !== accountKey || b.cloudBase !== cloudBase) return false
+      const prefixes = unitAllowedPrefixes(b.cloudBase, b.unitId)
       const key = grantUrlKey(url)
-      if (!key || !urlInPrefixes(key, unitAllowedPrefixes(b.cloudBase, b.unitId))) return false
+      if (!key || !urlInPrefixes(key, prefixes)) return false
+      if (!from?.pageUrl || !urlInPrefixes(from.pageUrl, prefixes)) return false
+      if (from.referrerUrl && !urlInPrefixes(from.referrerUrl, prefixes)) return false
       prune()
       if (list.length >= 32) list.shift() // 封顶:页面狂开窗也只留最近的
       list.push({ binding: { ...b }, url: key, expiresAt: now() + ttlMs })

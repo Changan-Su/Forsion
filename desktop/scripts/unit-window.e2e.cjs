@@ -20,6 +20,8 @@
  *   G3 主窗的设备页(远程面)同样先经主进程绑定,之后的中转请求带登录头
  *   G4 Unit 窗设备页 window.open 自己的中转 → 独立视图窗里那张页带登录头、加载成功;开别台的中转 → 不带
  *   G5 主窗设备页 window.open 自己的中转 → 内置浏览器标签带登录头、加载成功
+ *   G6 主窗 中转 → 直连地址 → 回中转:第二次仍先挂空白页、绑上再导航,带登录头加载成功
+ *   G7 已绑定的设备页导航到外站(不发 referrer),外站脚本 window.open 这台的中转 → 新页不带登录头
  *   A  登出:Unit 窗与主窗设备页的 webview 在握手阶段就卸掉;迟到的旧名册回包不把页面挂回来
  *   C1–C2 冷启动带链接 → Unit 窗出来、主窗建了但不露面;二启同理(第二个进程退出、第一个只开 Unit 窗)
  * 截图(SHOT_DIR,缺省系统临时目录):主窗 + Unit 窗并排、四种状态、悬停按钮、右键菜单、深色、110%。
@@ -103,6 +105,12 @@ function startCloud(unit) {
   return new Promise((r) => srv.listen(0, '127.0.0.1', () => r({ url: `http://127.0.0.1:${srv.address().port}`, state, close: () => srv.close() })))
 }
 
+/** 外站:另起的本地源,页面不发 referrer(攻击者能自己定 referrer 策略,只能靠「发起页此刻在哪」挡)。 */
+function startOutside() {
+  const srv = http.createServer((_req, res) => { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); res.end('<!doctype html><meta name="referrer" content="no-referrer"><title>outside</title><p>outside</p>') })
+  return new Promise((r) => srv.listen(0, '127.0.0.1', () => r({ url: `http://127.0.0.1:${srv.address().port}/`, close: () => srv.close() })))
+}
+
 /** 主进程眼里的窗口。 */
 const wins = (app) => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().filter((w) => !w.isDestroyed()).map((w) => {
   const url = w.webContents.getURL()
@@ -176,6 +184,7 @@ async function main() {
   }
   const unit = await startUnit()
   const cloud = await startCloud(unit)
+  const outside = await startOutside()
   const shots = []
   const shot = (name) => path.join(SHOTS, `unit-window-${name}.png`)
   let L = null
@@ -217,7 +226,7 @@ async function main() {
     else await full(app, win)
   } finally {
     if (L) await L.close()
-    cloud.close(); unit.close()
+    cloud.close(); unit.close(); outside.close()
   }
   console.log('截图:\n' + shots.join('\n'))
   process.exit(R.summary() ? 1 : 0)
@@ -350,6 +359,22 @@ async function main() {
     if (g4owin) await app.evaluate(({ BrowserWindow }, id) => BrowserWindow.fromId(id)?.close(), g4owin.id)
     await sleep(500)
 
+    // G7 Unit 窗已绑定的设备页被导航到外站(绑定还在),外站脚本 window.open 这台的中转 → 新页不带登录头
+    const g7 = await app.evaluate(async ({ webContents }, { prefix, outside, url }) => {
+      const wc = webContents.getAllWebContents().filter((w) => !w.isDestroyed() && w.getType() === 'webview' && w.getURL().startsWith(prefix) && /[?&]unit=/.test(w.hostWebContents?.getURL() || '')).pop()
+      if (!wc) return 'no-webview'
+      try { await wc.loadURL(outside) } catch (e) { return 'load:' + String(e) }
+      if (!wc.getURL().startsWith(outside)) return 'not-outside:' + wc.getURL()
+      await wc.executeJavaScript(`window.open(${JSON.stringify(url)}, '_blank'); true`, true)
+      return 'ok'
+    }, { prefix: `${cloud.url}/api/units/${UID_ON}/proxy/`, outside: outside.url, url: `${cloud.url}/api/units/${UID_ON}/proxy/?probe=g7-outside` })
+    const g7win = await until(async () => (await wins(app)).find((w) => w.kind === 'detached' && !w.unit && w.visible), 15000)
+    await until(async () => probeReqs('g7-outside').length > 0 || undefined, 10000)
+    const g7reqs = probeReqs('g7-outside')
+    R.check('G7 已绑定的设备页导航到外站后,外站 window.open 这台的中转 → 新页不带登录头', g7 === 'ok' && g7reqs.length > 0 && g7reqs.every((r) => !r.auth), { g7, g7reqs })
+    if (g7win) await app.evaluate(({ BrowserWindow }, id) => BrowserWindow.fromId(id)?.close(), g7win.id)
+    await sleep(500)
+
     // 主窗 + Unit 窗并排
     const mainId = (await wins(app)).find((w) => w.kind === 'main').id
     await captureById(app, mainId, shot('main-only'))
@@ -440,6 +465,33 @@ async function main() {
     await sleep(1500)
     const mainHits = cloud.state.reqs.slice(mark).filter((r) => r.path.startsWith(`/api/units/${UID_ON}/proxy/`))
     R.check('G3 主窗设备页:绑定后换上中转地址,收到的中转请求都带登录头', !!mainSrc && mainHits.length > 0 && mainHits.every((r) => r.auth === `Bearer ${FIXTURE_TOKEN}`), { mainSrc, hits: mainHits.length, noAuth: mainHits.filter((r) => !r.auth).length })
+    // G6 中转 → 直连地址 → 回中转:第二张中转 webview 仍先挂空白页、绑上再导航,带登录头加载成功
+    const routeMain = (p) => app.evaluate(({ BrowserWindow }, p) => {
+      const w = BrowserWindow.getAllWindows().find((x) => !x.isDestroyed() && !/[?&]window=/.test(x.webContents.getURL()))
+      w.webContents.send('window:mainAction', 'unit-route', p)
+    }, JSON.stringify(p))
+    await routeMain({ kind: 'addr', url: `http://127.0.0.1:${unit.port}/web/` })
+    await until(() => win.evaluate(() => (document.querySelector('.unitrs-web')?.getAttribute('src') || '').includes('/web/') || undefined), 10000)
+    await sleep(1500)
+    await win.evaluate(() => {
+      const seen = (window.__g6Srcs = [])
+      const rec = () => { const s = document.querySelector('.unitrs-web')?.getAttribute('src'); if (s && seen[seen.length - 1] !== s) seen.push(s) }
+      rec(); new MutationObserver(rec).observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['src'] })
+    })
+    const g6mark = cloud.state.reqs.length
+    await routeMain({ kind: 'unit', id: UID_ON, name: '书桌 mini', via: 'tunnel' })
+    const g6src = await until(() => win.evaluate((u) => { const s = document.querySelector('.unitrs-web')?.getAttribute('src') || ''; return s.startsWith(u) ? s : '' }, tunnelUrl), 10000)
+    const g6load = await until(() => app.evaluate(async ({ webContents, BrowserWindow }, u) => {
+      const main = BrowserWindow.getAllWindows().find((x) => !x.isDestroyed() && !/[?&]window=/.test(x.webContents.getURL()))
+      const wc = webContents.getAllWebContents().filter((w) => !w.isDestroyed() && w.getType() === 'webview' && w.hostWebContents === main.webContents && w.getURL().startsWith(u)).pop()
+      if (!wc || wc.isLoading()) return undefined
+      return wc.executeJavaScript(`({ ok: !document.body.innerText.includes('unauthorized') && document.querySelectorAll('script').length > 0 })`, true)
+    }, tunnelUrl), 15000)
+    const g6srcs = await win.evaluate(() => window.__g6Srcs)
+    const g6hits = cloud.state.reqs.slice(g6mark).filter((r) => r.path.startsWith(`/api/units/${UID_ON}/proxy/`))
+    R.check('G6 中转 → 直连 → 回中转:第二次先挂空白页再换中转地址,中转请求都带登录头、页面加载成功',
+      !!g6src && g6srcs.includes('about:blank') && g6srcs.indexOf('about:blank') < g6srcs.findIndex((x) => x.startsWith(tunnelUrl)) && g6hits.every((r) => r.auth === `Bearer ${FIXTURE_TOKEN}`) && g6load?.ok === true,
+      { g6srcs, hits: g6hits.length, noAuth: g6hits.filter((r) => !r.auth).length, g6load })
     const pre = { unit: await ap.locator('.unitrs-web').count(), main: await win.locator('.unitrs-web').count() }
     // G5 主窗设备页 window.open 自己中转下的地址 → 开在内置浏览器标签里,那张页带登录头、加载成功
     const g5open = await openFromDevicePage('main', `${cloud.url}/api/units/${UID_ON}/proxy/?probe=g5-own`)

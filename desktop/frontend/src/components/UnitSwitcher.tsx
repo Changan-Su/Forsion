@@ -191,8 +191,13 @@ export function UnitRemoteSurface(): React.ReactElement | null {
   // 重试 / 回落中转 / 换目标都是新的一张 webview,各自重新绑。局域网 / P2P / 手输地址不经这里。
   const webKey = target ? `${target.url}#${nonce}` : ''
   const needsBind = !!target?.unitId && target.via === 'tunnel' && !!window.tangu?.unitsBindFrame
+  // 就绪状态绑在**这一张** webview 上:webKey 一变(换通路 / 重试 / 卸掉)就换一个实例记号。
+  // 只认 webKey 会出事:A 中转 → 局域网 → 回 A 中转,webKey 和上次绑上的一样,新 webview 会跳过空白页直接加载真实地址(没绑定 = 401)
+  const instance = useRef({ key: '', seq: 0 })
+  if (instance.current.key !== webKey) instance.current = { key: webKey, seq: instance.current.seq + 1 }
+  const instanceKey = `${instance.current.seq}:${webKey}`
   const [boundKey, setBoundKey] = useState<string | null>(null)
-  const ready = !needsBind || boundKey === webKey
+  const ready = !needsBind || boundKey === instanceKey
   const readyRef = useRef(ready)
   readyRef.current = ready
   useEffect(() => {
@@ -208,7 +213,7 @@ export function UnitRemoteSurface(): React.ReactElement | null {
       if (id < 0) return
       sent = true
       void window.tangu!.unitsBindFrame!({ webContentsId: id, unitId }).then(
-        (r) => { if (!cancelled) { if (r?.ok) setBoundKey(webKey); else setFail('unreachable') } },
+        (r) => { if (!cancelled) { if (r?.ok) setBoundKey(instanceKey); else setFail('unreachable') } },
         () => { if (!cancelled) setFail('unreachable') },
       )
     }
@@ -216,7 +221,7 @@ export function UnitRemoteSurface(): React.ReactElement | null {
     el.addEventListener('dom-ready', bind)
     bind()
     return () => { cancelled = true; el.removeEventListener('did-attach', bind); el.removeEventListener('dom-ready', bind) }
-  }, [webKey, needsBind]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [instanceKey, needsBind]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { setFail(null) }, [target?.url])
   // 换账号 / 登出:握手阶段(新凭据写下去之前)就把远程面收掉并清 target —— webview 卸掉,
   // 不等切换完成的广播(那之前旧页面的隧道请求已经会带上新账号的登录头)。迟到的打洞 / 回落经 leaveUnitRemote 作废。
@@ -300,7 +305,7 @@ export function UnitRemoteSurface(): React.ReactElement | null {
   if (!target) return null
   const retry = (): void => { setFail(null); setNonce((n) => n + 1) }
   const back = (): void => leaveUnitRemote()
-  const web = <Webview ref={webRef} key={webKey} className="unitrs-web" src={ready ? target.url : 'about:blank'} partition={BROWSER_PARTITION} allowpopups="true" />
+  const web = <Webview ref={webRef} key={instanceKey} className="unitrs-web" src={ready ? target.url : 'about:blank'} partition={BROWSER_PARTITION} allowpopups="true" />
 
   if (whole) {
     // 渲染期查询而非挂载期缓存:target/active 每变一次都重查,Shell 罕见重挂后切一次设备即自愈。无 Shell(harness)→ 原地渲染。
