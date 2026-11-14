@@ -769,10 +769,10 @@ async function main() {
       await pu.click('[data-local-unit="lu-demo"]', { button: 'right' })
       await pu.waitForTimeout(300)
       const items = await menuOf(pu)
-      const want5 = en ? ['Open in its own window', 'Add to desktop', 'Rename and change icon…', 'Show in Finder', 'Remove from list…']
+      const want5 = en ? ['Open in own window', 'Add to desktop', 'Name and icon…', 'Show in Finder', 'Remove from list…']
         : ['在自己的窗口打开', '添加到桌面', '改名字和图标…', '在访达中显示', '从列表移除…']
-      const menuGeo = await pu.evaluate(() => { const r = document.querySelector('.ap-unit-ctx').getBoundingClientRect(); return { inView: r.left >= 0 && r.top >= 0 && r.right <= innerWidth && r.bottom <= innerHeight, danger: document.querySelector('.ap-unit-ctx [data-unit-act="remove"]').classList.contains('danger'), icons: document.querySelectorAll('.ap-unit-ctx [role="menuitem"] > svg').length } })
-      check(`U4 右键文件夹 Unit(${variant}):五项照方案、移除是危险色、每项都有图标、菜单在视口里`, JSON.stringify(items) === JSON.stringify(want5) && menuGeo.inView && menuGeo.danger && menuGeo.icons === 5, JSON.stringify({ items, menuGeo }))
+      const menuGeo = await pu.evaluate(() => { const r = document.querySelector('.ap-unit-ctx').getBoundingClientRect(); return { inView: r.left >= 0 && r.top >= 0 && r.right <= innerWidth && r.bottom <= innerHeight, danger: document.querySelector('.ap-unit-ctx [data-unit-act="remove"]').classList.contains('danger'), icons: document.querySelectorAll('.ap-unit-ctx [role="menuitem"] > svg').length, oneLine: (() => { const hs = Array.from(document.querySelectorAll('.ap-unit-ctx [role="menuitem"]')).map((b) => b.getBoundingClientRect().height); return Math.max(...hs) - Math.min(...hs) < 2 })() } })
+      check(`U4 右键文件夹 Unit(${variant}):五项照方案、移除是危险色、每项都有图标、每项一行不折、菜单在视口里`, JSON.stringify(items) === JSON.stringify(want5) && menuGeo.inView && menuGeo.danger && menuGeo.icons === 5 && menuGeo.oneLine, JSON.stringify({ items, menuGeo }))
       await pu.mouse.move(1150, 40)
       shots.push(await shot(pu, `local-ctx-${variant}`))
       await pu.keyboard.press('Escape'); await pu.waitForTimeout(200)

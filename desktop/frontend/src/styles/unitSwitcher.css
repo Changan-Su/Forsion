@@ -274,8 +274,9 @@
 .am-app .lu-mode[aria-checked='true'] { background: var(--menu-hover); color: var(--text); }
 .am-app .lu-mode:focus-visible { outline: var(--focus-ring) solid var(--sel-line); outline-offset: 1px; }
 .am-app .lu-mode-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.am-app .lu-mode-title { font-size: var(--ui-font-body, 13px); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.am-app .lu-mode-sub { font-size: var(--ui-font-meta, 12px); color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 长语言(英文)里卡片标题会长:折行,不省略 —— 两张卡按网格等高 */
+.am-app .lu-mode-title { font-size: var(--ui-font-body, 13px); font-weight: 500; overflow-wrap: anywhere; }
+.am-app .lu-mode-sub { font-size: var(--ui-font-meta, 12px); color: var(--text-muted); overflow-wrap: anywhere; }
 .am-app .lu-field { display: flex; flex-direction: column; gap: 6px; }
 .am-app .lu-label { font-size: var(--ui-font-meta, 12px); color: var(--text-sec); }
 .am-app .lu-row { display: flex; align-items: stretch; gap: 8px; }
