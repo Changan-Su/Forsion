@@ -10,7 +10,10 @@ const engine = vi.hoisted(() => ({
   presenter: undefined as (() => unknown) | undefined,
   presented: [] as any[],
 }))
-vi.mock('@lcl/engine', () => ({
+// 其余照真的(账号面板的 Unit 段要 Space store、switchSpace 这些;只换掉和宿主形态有关的几个)
+vi.mock('@lcl/engine', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@lcl/engine')>()),
+  UI_MODE: 'desktop',
   OverlayAt: ({ children, className }: any) => React.createElement('div', { className }, children),
   nativeSheetPresenter: () => engine.presenter,
   runNativeSheetMenu: async (menu: any) => { if (!engine.presenter) return false; engine.presented.push(menu); return true },
@@ -366,6 +369,40 @@ it('still goes straight to sign-in when signed out on a host without those rows'
   await tick()
   expect(window.tangu!.forsionLogin).toHaveBeenCalledOnce()
   expect(document.querySelector('.account-pop')).toBeNull()
+})
+
+// 本机多 Unit:新建的文件夹 Unit 没登录、可能也没有 Extend —— 点头像照样开面板(Unit 段在上、登录是一行),才回得到这台电脑。
+// 负对照:activateOn 去掉 `|| unitPanelForcesMenu()` → 这条红(直接去登录)。
+it('local Units: signed out without Extend, the avatar opens the panel with the Unit section instead of signing in', async () => {
+  const { resetLocalUnitsForTest } = await import('./localUnits')
+  resetLocalUnitsForTest()
+  delete window.tangu!.authAccounts
+  vi.mocked(window.tangu!.authStatus!).mockResolvedValue(signedOut as any)
+  window.tangu!.localUnits = {
+    list: vi.fn().mockResolvedValue({ self: { kind: 'default' }, units: [], registry: 'ok', defaultParent: '/u/Forsion Units', defaultParentDisplay: '~/Forsion Units' }),
+    onChanged: vi.fn(() => () => {}),
+  } as any
+  await mount()
+  await act(async () => { host.querySelector<HTMLElement>('.account-card')!.click() })
+  await tick()
+  expect(window.tangu!.forsionLogin).not.toHaveBeenCalled()
+  expect(document.querySelector('[data-testid="account-units"]')).toBeTruthy()
+  expect(document.querySelector('[data-local-add]')).toBeTruthy()
+  expect(document.querySelector('.account-pop')!.textContent).toContain('登录') // 登录还是面板里的一行
+  expect(document.querySelector('[data-local-badge]')).toBeNull() // 默认那台:头像不带角标
+})
+
+it('local Units: inside a folder Unit the avatar carries that Unit\'s icon in its corner', async () => {
+  const { resetLocalUnitsForTest } = await import('./localUnits')
+  resetLocalUnitsForTest()
+  window.tangu!.localUnits = {
+    list: vi.fn().mockResolvedValue({ self: { kind: 'folder', id: 'lab', name: 'Lab', icon: '🧪', path: '/u/Lab', displayPath: '~/Lab' }, units: [], registry: 'ok', defaultParent: '/u/Forsion Units', defaultParentDisplay: '~/Forsion Units' }),
+    onChanged: vi.fn(() => () => {}),
+  } as any
+  await mount()
+  await tick()
+  const badge = host.querySelector('.account-card [data-local-badge] .unitfr-badge')
+  expect(badge?.textContent).toBe('🧪')
 })
 
 it('native sheet: the host rows are one section between the account rows and the switcher / sign out', async () => {

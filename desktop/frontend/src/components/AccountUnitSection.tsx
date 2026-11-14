@@ -3,23 +3,29 @@
  *   这台电脑 → 我的设备(在线在前、离线折成「离线 N 台」、正在看的那台掉线了也不折)
  *   → 别人共享给当前账号的 Unit(按组分,组标题 + 行尾灰字;不折进「离线」;没有新窗口 / 桌面 / 改名 / 改图标 / 通路)→ 管理 Unit…
  * 一台设备一行;点下去走哪条路只由 pickUnitRoute 决定(unitPanelModel.ts:记住的通路 → 中转 → 只剩直连通时走直连),切换复用 runUnitRoute。
+ * 「这台电脑」组里除了默认那一行,还列本机多 Unit 的文件夹 Unit(shared/localUnits.ts):行尾 ↗ 常驻(它只在自己的窗口里开),
+ * 找不到 / 对不上的整行变灰、只能从列表移除;名册读不出就写一行「读不出」。底部「添加 Unit…」开对话框(LocalUnitDialogs)。
  * 只在真桌面的主窗出现(unitPanelAvailable):网页、手机壳、Android 原生半屏、独立窗都不画。
  */
 import React, { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { AppWindow, Check, ChevronDown, ChevronRight, Globe, Laptop, Settings2, Users } from 'lucide-react'
+import { AppWindow, ArrowUpRight, Check, ChevronDown, ChevronRight, FolderSearch, Globe, Laptop, MonitorDown, Pencil, Plus, Settings2, SmilePlus, Trash2, Users } from 'lucide-react'
 import { OverlayAt, UI_MODE, nativeSheetPresenter, switchSpace, useSpaceStore } from '@lcl/engine'
 import { registerMessages, useI18n, translate } from '../i18n'
 import { windowKind } from '../windowKind'
 import { useApp } from '../stores/appStore'
 import { askString } from '../amadeus/components/askString'
 import { deviceIcon, leaveUnitRemote, openSharedUnit, runUnitRoute, sayUnit, useUnitRemote } from './UnitSwitcher'
-import { readRememberedVia, resolvePluginSpace, unitPanelModel, type SharedPanelRow, type UnitPanelRow } from './unitPanelModel'
+import { readRememberedVia, resolvePluginSpace, unitPanelModel, type LocalFolderPanelRow, type SharedPanelRow, type UnitPanelRow } from './unitPanelModel'
 import { usePluginStore } from '../amadeus/plugins/pluginStore'
 import { pluginSpaceOwner } from '../stores/spaceProgress'
 import { useUnitRoster } from './unitRoster'
 import type { UnitInfo } from '../types'
 import { addUnitToDesktop } from '../unitShortcut'
+import { localUnitsAvailable } from '../features/runtime'
+import { LocalUnitIcon, addLocalUnitToDesktop, localUnitCall, localUnitErrorText, revealLabelKey, useLocalUnits } from './localUnits'
+import type { LocalUnitsResult } from '../../../shared/localUnits'
+import { useLocalUnitDialog } from './LocalUnitDialogs'
 
 registerMessages({
   'unit.panel.thisComputer': { zh: '这台电脑', en: 'This computer' },
@@ -39,13 +45,19 @@ registerMessages({
 })
 
 /** 账号面板里出不出 Unit 段。判别式照 bootstrapEngine 注册 rb-unit 那套(有设备桥、不是单列壳),
- *  再加:只在主窗(windowKind)、不在设备页 / 网页主入口(unitPage / unitPublicEntry)、不在 Android 原生半屏宿主。 */
+ *  再加:只在主窗(windowKind)、不在设备页 / 网页主入口(unitPage / unitPublicEntry)、不在 Android 原生半屏宿主。
+ *  有本机多 Unit(localUnits)就够了 —— 不看 Extend、不看登录:新建的文件夹 Unit 还没登录,面板不出来就回不到这台电脑。 */
 export function unitPanelAvailable(): boolean {
   if (windowKind() !== 'main') return false
   const t = window.tangu
   if (!t || t.mobile || t.unitPage || t.unitPublicEntry) return false
-  if (!t.unitsList && !t.unitHostStatus) return false
+  if (!t.unitsList && !t.unitHostStatus && !localUnitsAvailable()) return false
   return UI_MODE !== 'mobile' && !nativeSheetPresenter()
+}
+
+/** 点头像一定开面板(不直接去登录):面板里有本机多 Unit 的时候。没登录的文件夹 Unit 得从这里回到默认那台。 */
+export function unitPanelForcesMenu(): boolean {
+  return localUnitsAvailable() && unitPanelAvailable()
 }
 
 const VIA_KEY = { lan: 'unit.viaLan', p2p: 'unit.viaP2p', tunnel: 'unit.viaTunnel' } as const
@@ -65,12 +77,19 @@ export function AccountUnitSection({ onClose, onToast }: {
   const lanOk = useUnitRoster((s) => s.lanOk)
   const target = useUnitRemote((s) => s.target)
   const active = useUnitRemote((s) => s.active)
+  const localSnap = useLocalUnits((s) => s.snapshot)
+  const localFailed = useLocalUnits((s) => s.failed)
+  const hasLocal = localUnitsAvailable()
   const [offlineOpen, setOfflineOpen] = useState(false)
   const [note, setNote] = useState<string | null>(null)
-  const [ctx, setCtx] = useState<{ row: Extract<UnitPanelRow, { kind: 'unit' }> | SharedPanelRow; x: number; y: number } | null>(null)
+  const [ctx, setCtx] = useState<{ row: Extract<UnitPanelRow, { kind: 'unit' }> | SharedPanelRow | LocalFolderPanelRow; x: number; y: number } | null>(null)
+  const toast = (text: string, error?: boolean): void => { if (onToast) onToast(text, error); else useApp.getState().toast(text, error) }
 
   // 先画缓存,同时后台刷新(内容变高后 OverlayAt 的 ResizeObserver 会重新夹位置)
-  useEffect(() => { void useUnitRoster.getState().refresh() }, [])
+  useEffect(() => {
+    void useUnitRoster.getState().refresh()
+    if (localUnitsAvailable()) void useLocalUnits.getState().refresh()
+  }, [])
 
   // 右键菜单开着:点它外面只收它(捕获阶段,赶在账号面板的「点别处关面板」之前);Esc 也只收它。
   useEffect(() => {
@@ -92,6 +111,7 @@ export function AccountUnitSection({ onClose, onToast }: {
   }, [ctx])
 
   const model = unitPanelModel({
+    ...(hasLocal ? { local: { snapshot: localSnap, failed: localFailed } } : {}),
     units, hostUnitId, lanOk,
     p2p: !!window.tangu?.unitsP2pOpen,
     remote: { active, key: target?.key ?? null, name: target?.name },
@@ -156,6 +176,76 @@ export function AccountUnitSection({ onClose, onToast }: {
       if (cur && cur.key.startsWith(`${u.id}:`)) useUnitRemote.setState({ target: { ...cur, name: patch.name ?? cur.name, icon: patch.icon ?? cur.icon } })
     }
     void useUnitRoster.getState().refresh()
+  }
+
+  // ── 本机多 Unit ──
+  /** 打开一台本机 Unit(文件夹 Unit 起自己的进程;'default' = 叫出默认那台)。面板先收,打不开再说一句。 */
+  const openLocalUnit = async (id: string, name: string): Promise<void> => {
+    onClose()
+    const r = await localUnitCall((api) => api.open(id))
+    if (!r.ok) {
+      const text = localUnitErrorText(r.code)
+      if (text) toast(translate('unit.local.openFailed', { name, error: text }), true)
+    }
+  }
+  /** 「这台电脑」那一行:在默认那台 = 回到本机(收远程面);在文件夹 Unit 里 = 叫出默认那台(它在自己的窗口里)。 */
+  const clickDefault = (): void => {
+    if (model.local.inFolder) void openLocalUnit('default', t('unit.panel.thisComputer'))
+    else backHome()
+  }
+  /** 文件夹 Unit 那一行:自己 = 回到这台(收远程面);别的 = 在它自己的窗口里打开;找不到 / 对不上的点不动。 */
+  const clickLocal = (row: LocalFolderPanelRow): void => {
+    if (row.self) { backHome(); return }
+    if (!row.usable) return
+    void openLocalUnit(row.unit.id, row.unit.name)
+  }
+  /** 右键里那几样不开窗的动作(显示文件夹、添加到桌面):做不成说一句。开发版不生成桌面快捷方式(主进程回 io + unpackaged),照设备那条说。 */
+  const localAct = async (result: Promise<LocalUnitsResult>, ok?: string): Promise<void> => {
+    const r = await result
+    if (r.ok) { if (ok) toast(ok); return }
+    if (r.message === 'unpackaged') { toast(translate('unitShortcut.toast.unpackaged'), true); return }
+    const text = localUnitErrorText(r.code)
+    if (text) toast(translate('unit.local.actionFailed', { error: text }), true)
+  }
+  const openDialog = useLocalUnitDialog((s) => s.open)
+  const localState = (row: LocalFolderPanelRow): string =>
+    row.unit.state === 'missing' ? t('unit.local.missing') : row.unit.state === 'mismatch' ? t('unit.local.mismatch') : row.unit.displayPath
+
+  const localRowEl = (row: LocalFolderPanelRow): React.ReactElement => {
+    const u = row.unit
+    const inner = (
+      <>
+        <span className="ap-unit-ic"><LocalUnitIcon icon={u.icon} size={14} /></span>
+        <span className="ap-unit-name">{u.name}</span>
+        <span className="grow" />
+        <span className="ap-dim ap-unit-path" title={row.usable ? u.displayPath : undefined}>{localState(row)}</span>
+        {row.checked
+          ? <Check size={14} className="ap-unit-check" />
+          : row.usable && !row.self && <ArrowUpRight size={13} className="ap-unit-go" aria-hidden="true" />}
+      </>
+    )
+    // 名册读不出时只画自己那一行、不给菜单(不出「添加」以外的写操作)
+    const menu = !model.local.unreadable
+      ? (e: React.MouseEvent) => { e.preventDefault(); e.stopPropagation(); setCtx({ row, x: e.clientX, y: e.clientY }) }
+      : (e: React.MouseEvent) => { e.preventDefault(); e.stopPropagation() }
+    if (!row.usable) {
+      // 找不到 / 对不上:整行变灰,不是按钮;右键只有「从列表移除…」
+      return <div key={row.key} className="ap-item ap-unit ap-unit--inert" data-local-unit={u.id} data-local-state={u.state} aria-disabled="true" onContextMenu={menu}>{inner}</div>
+    }
+    return (
+      <button
+        key={row.key}
+        className={`ap-item ap-unit ap-unit--local${row.checked ? ' ap-unit--current' : ''}`}
+        data-local-unit={u.id}
+        data-local-state={u.state}
+        aria-current={row.checked || undefined}
+        title={row.self ? undefined : t('unit.local.openOwn')}
+        onClick={() => clickLocal(row)}
+        onContextMenu={menu}
+      >
+        {inner}
+      </button>
+    )
   }
 
   const rowEl = (row: UnitPanelRow): React.ReactElement => {
@@ -243,12 +333,22 @@ export function AccountUnitSection({ onClose, onToast }: {
     <div className="ap-units" data-testid="account-units">
       <div className="ap-units-list">
         <div className="ap-sec">{t('unit.panel.thisComputer')}</div>
-        <button className={`ap-item ap-unit${model.localCurrent ? ' ap-unit--current' : ''}`} data-unit-local="" aria-current={model.localCurrent || undefined} onClick={backHome}>
+        <button
+          className={`ap-item ap-unit${model.localCurrent ? ' ap-unit--current' : ''}`}
+          data-unit-local=""
+          aria-current={model.localCurrent || undefined}
+          title={model.local.inFolder ? t('unit.local.openOwn') : undefined}
+          onClick={clickDefault}
+        >
           <span className="ap-unit-ic"><Laptop size={14} /></span>
           <span className="ap-unit-name">{t('unit.panel.thisComputer')}</span>
           <span className="grow" />
           {model.localCurrent && <Check size={14} className="ap-unit-check" />}
+          {/* 在文件夹 Unit 里,默认那台也是「在它自己的窗口里开」 */}
+          {model.local.inFolder && <ArrowUpRight size={13} className="ap-unit-go" aria-hidden="true" />}
         </button>
+        {model.local.rows.map(localRowEl)}
+        {model.local.unreadable && <div className="ap-unit-note" role="status" data-local-unreadable="">{t('unit.local.unreadable')}</div>}
         {hasDevices && <div className="ap-sec">{t('unit.panel.myDevices')}</div>}
         {model.rows.map(rowEl)}
         {model.offline.length > 0 && (
@@ -268,6 +368,12 @@ export function AccountUnitSection({ onClose, onToast }: {
         ))}
       </div>
       {note !== null && <div className="ap-unit-note" role="status">{note}</div>}
+      {hasLocal && (
+        <button className="ap-item ap-unit-add" data-local-add="" onClick={() => { onClose(); openDialog({ kind: 'add' }) }}>
+          <span className="ap-unit-ic"><Plus size={14} /></span>
+          <span>{t('unit.local.add')}</span>
+        </button>
+      )}
       <button className="ap-item ap-unit-manage" onClick={() => { onClose(); useApp.getState().openSettings('units') }}>
         <span className="ap-unit-ic"><Settings2 size={14} /></span>
         <span>{t('unit.panel.manage')}</span>
@@ -277,16 +383,31 @@ export function AccountUnitSection({ onClose, onToast }: {
           {ctx.row.kind === 'shared' ? (() => {
             // 共享过来的:只有「切换到这台」(没有新窗口 / 桌面 / 改名 / 改图标)
             const row = ctx.row
-            return <button role="menuitem" data-unit-act="switch" onClick={() => { setCtx(null); openShared(row) }}>{t('unit.panel.switchTo')}</button>
+            return <button role="menuitem" data-unit-act="switch" onClick={() => { setCtx(null); openShared(row) }}><ArrowUpRight size={14} />{t('unit.panel.switchTo')}</button>
+          })() : ctx.row.kind === 'local' ? (() => {
+            // 本机的文件夹 Unit(方案细节页「本机多 Unit 的规矩」):在自己的窗口打开 / 添加到桌面 / 改名字和图标… / 在访达中显示 / 从列表移除…
+            // 自己那一行:不开自己、不移除自己;找不到 / 对不上:只剩「从列表移除…」
+            const row = ctx.row
+            const u = row.unit
+            const done = (): void => { setCtx(null); onClose() }
+            return (
+              <>
+                {row.usable && !row.self && <button role="menuitem" data-unit-act="open" onClick={() => { setCtx(null); void openLocalUnit(u.id, u.name) }}><AppWindow size={14} />{t('unit.local.openOwn')}</button>}
+                {row.usable && <button role="menuitem" data-unit-act="desktop" onClick={() => { done(); void localAct(addLocalUnitToDesktop(u), translate('unitShortcut.toast.ok', { name: u.name })) }}><MonitorDown size={14} />{t('unit.panel.addToDesktop')}</button>}
+                {row.usable && <button role="menuitem" data-unit-act="edit" onClick={() => { done(); openDialog({ kind: 'edit', unit: u }) }}><Pencil size={14} />{t('unit.local.edit')}</button>}
+                {row.usable && <button role="menuitem" data-unit-act="reveal" onClick={() => { done(); void localAct(localUnitCall((api) => api.reveal(u.id))) }}><FolderSearch size={14} />{t(revealLabelKey())}</button>}
+                {!row.self && <button role="menuitem" className="danger" data-unit-act="remove" onClick={() => { done(); openDialog({ kind: 'remove', unit: u }) }}><Trash2 size={14} />{t('unit.local.remove')}</button>}
+              </>
+            )
           })() : (() => {
             const row = ctx.row
             return (
               <>
-                <button role="menuitem" data-unit-act="switch" onClick={() => { setCtx(null); openRow(row) }}>{t('unit.panel.switchTo')}</button>
-                {canWindow && <button role="menuitem" data-unit-act="window" onClick={() => { setCtx(null); openWindow(row.unit) }}>{t('unit.panel.openWindow')}</button>}
-                {canDesktop && <button role="menuitem" data-unit-act="desktop" onClick={() => { setCtx(null); onClose(); void addUnitToDesktop(row.unit) }}>{t('unit.panel.addToDesktop')}</button>}
-                <button role="menuitem" onClick={() => { setCtx(null); void editUnit(row.unit, 'name') }}>{t('unit.panel.rename')}</button>
-                <button role="menuitem" onClick={() => { setCtx(null); void editUnit(row.unit, 'icon') }}>{t('unit.panel.changeIcon')}</button>
+                <button role="menuitem" data-unit-act="switch" onClick={() => { setCtx(null); openRow(row) }}><ArrowUpRight size={14} />{t('unit.panel.switchTo')}</button>
+                {canWindow && <button role="menuitem" data-unit-act="window" onClick={() => { setCtx(null); openWindow(row.unit) }}><AppWindow size={14} />{t('unit.panel.openWindow')}</button>}
+                {canDesktop && <button role="menuitem" data-unit-act="desktop" onClick={() => { setCtx(null); onClose(); void addUnitToDesktop(row.unit) }}><MonitorDown size={14} />{t('unit.panel.addToDesktop')}</button>}
+                <button role="menuitem" onClick={() => { setCtx(null); void editUnit(row.unit, 'name') }}><Pencil size={14} />{t('unit.panel.rename')}</button>
+                <button role="menuitem" onClick={() => { setCtx(null); void editUnit(row.unit, 'icon') }}><SmilePlus size={14} />{t('unit.panel.changeIcon')}</button>
               </>
             )
           })()}

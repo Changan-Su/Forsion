@@ -4832,6 +4832,10 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-wrap { top: calc(var(-
 .account-pop .ap-unit-wrap:focus-within .ap-unit-state,
 .account-pop .ap-unit-wrap:focus-within .ap-unit-check { visibility: hidden; }
 .account-pop .ap-unit-newwin:hover { background: color-mix(in srgb, var(--text) 8%, transparent); color: var(--text); }
+/* 本机的文件夹 Unit(本机多 Unit):灰字是路径,长了从尾部省略(名字和路径一起让,不撑出 320);行尾 ↗ 常驻 = 它在自己的窗口里开 */
+.account-pop .ap-unit-path { flex: 0 1 auto; min-width: 4em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.account-pop .ap-unit[data-local-unit] > .ap-unit-name { flex-shrink: 0; max-width: 58%; }
+.account-pop .ap-item svg.ap-unit-go { color: var(--text-muted); margin-left: -2px; }
 
 /* ── 文件区:选中 / 拖入目标 / OS 文件悬停 ── */
 .file-row.selected { background: var(--accent-light); }

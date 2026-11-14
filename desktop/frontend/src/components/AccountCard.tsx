@@ -25,7 +25,9 @@ import { useApp } from '../stores/appStore'
 import { museAvailable } from '../features/runtime'
 import { presentResetCardCeremony } from './ResetCardCeremony'
 import { usePluginStore } from '../amadeus/plugins/pluginStore'
-import { AccountUnitSection, unitPanelAvailable } from './AccountUnitSection'
+import { AccountUnitSection, unitPanelAvailable, unitPanelForcesMenu } from './AccountUnitSection'
+import { LocalUnitIcon, useLocalUnits } from './localUnits'
+import { LocalUnitDialogHost } from './LocalUnitDialogs'
 
 registerMessages({
   'sidebar.account.notSignedIn': { zh: '未登录', en: 'Not signed in' },
@@ -102,6 +104,10 @@ export const AccountCard: React.FC<{
   const quotaRequest = useRef(0)
   /** 账号代次:只在登录 / 切号 / 登出时变。用卡结果只在换了账号时才丢 —— 关掉再开菜单不能丢(会按旧张数再点、多耗一张)。 */
   const accountGen = useRef(0)
+  // 本机多 Unit:头像角标要在面板没开时就知道「我在不在文件夹 Unit 里」,挂载就拉一次快照(之后跟 onChanged)。
+  // 只在主窗拉(unitPanelForcesMenu 含主窗判定):主进程只接主窗的调用,Unit 窗里那枚隐藏的账号卡不白问。
+  const localSelf = useLocalUnits((s) => s.snapshot?.self)
+  useEffect(() => { if (unitPanelForcesMenu()) void useLocalUnits.getState().refresh() }, [])
 
   const clearRewards = (): void => { ++rewardsRequest.current; setRewards(emptyAccountRewards()) }
   const refreshRewards = useCallback(async (): Promise<AccountRewards> => {
@@ -394,7 +400,8 @@ export const AccountCard: React.FC<{
   // 引擎未运行 → 点击重启引擎;过期 → 重新登录;已登录(有效)→ 弹账号菜单(无 IPC 则直开账号中心);未登录 → 登录。
   const activateOn = (el: HTMLElement): void => {
     // 菜单里带着设置 / 互联设备时(Android 原生外壳)恒开菜单:未登录、登录过期也得进得了设置 —— 登录是菜单里的一行。
-    if (window.tangu?.authAccounts || accountMenuRows().length) { showMenu(el); return }
+    // 本机多 Unit 同理:新建的文件夹 Unit 没登录,点头像得开得出 Unit 段,才回得到这台电脑(unitPanelForcesMenu)。
+    if (window.tangu?.authAccounts || accountMenuRows().length || unitPanelForcesMenu()) { showMenu(el); return }
     if (engineDown) { void window.tangu?.backendRestart?.().finally(refresh); return }
     if (!loggedIn || expired) { void login(); return }
     if (window.tangu?.accountQuota || window.tangu?.forsionLogin) showMenu(el)
@@ -434,6 +441,14 @@ export const AccountCard: React.FC<{
   ) : (
     <span className="account-avatar fallback">{loggingIn ? <Loader2 size={14} className="spin" /> : initial}</span>
   )
+  // 文件夹 Unit 里(本机多 Unit):左下角头像右下角叠这台 Unit 的图标(同远端 Unit 的角标 .unitfr-badge);默认那台不画。
+  // 只叠在侧栏 / Ribbon 那枚上,面板头部那枚是账号本身,不叠。
+  const badgedAvatarEl = localSelf?.kind === 'folder' ? (
+    <span className="account-avatar-slot" data-local-badge="">
+      {avatarEl}
+      <span className="unitfr-badge" aria-hidden="true"><LocalUnitIcon icon={localSelf.icon} size={9} /></span>
+    </span>
+  ) : avatarEl
 
   const webItems = accountItems(quota, quotaErr)
   // Unit 段(只在真桌面主窗,排在最上面):面板加宽到 320,整张限高 = 头像上沿往上到窗口顶留 8px(既不出窗口、也不压头像),
@@ -562,9 +577,10 @@ export const AccountCard: React.FC<{
           title={stateLabel}
           onClick={activate}
         >
-          {avatarEl}
+          {badgedAvatarEl}
         </button>
         {menuEl}
+        <LocalUnitDialogHost onToast={onToast} />
       </>
     )
   }
@@ -580,7 +596,7 @@ export const AccountCard: React.FC<{
         onClick={activate}
         onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); activate(e) } }}
       >
-        {avatarEl}
+        {badgedAvatarEl}
         <span className="account-meta">
           <span className="account-name-row">
             <span className="account-name">{loggedIn ? display : (loggingIn ? t('sidebar.account.loggingIn') : t('sidebar.account.login'))}</span>
@@ -599,6 +615,7 @@ export const AccountCard: React.FC<{
         )}
       </div>
       {menuEl}
+      <LocalUnitDialogHost onToast={onToast} />
     </>
   )
 }

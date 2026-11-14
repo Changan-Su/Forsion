@@ -111,3 +111,277 @@ describe('useUnitRoster', () => {
     expect(useUnitRoster.getState().hostUnitId).toBeNull()
   })
 })
+
+// ── 本机多 Unit(window.tangu.localUnits 桩;主进程那半在 electron/) ──
+describe('local Units in the panel', () => {
+  type Row = { id: string; name: string; icon: string; path: string; displayPath: string; state: 'running' | 'stopped' | 'missing' | 'mismatch'; current: boolean }
+  const mk = (id: string, state: Row['state'], current = false): Row =>
+    ({ id, name: id, icon: '', path: `/Users/x/Forsion Units/${id}`, displayPath: `~/Forsion Units/${id}`, state, current })
+  let rows: Row[]
+  let self: { kind: 'default' } | { kind: 'folder'; id: string; name: string; icon: string; path: string; displayPath: string }
+  let registry: 'ok' | 'unreadable'
+  let listFails = false
+  let api: Record<string, ReturnType<typeof vi.fn>>
+  let changed: (() => void) | null = null
+
+  const React = () => import('react')
+  let host: HTMLDivElement
+  let root: import('react-dom/client').Root
+  const onClose = vi.fn()
+  const onToast = vi.fn()
+
+  const localApi = () => {
+    api = {
+      list: vi.fn(async () => {
+        if (listFails) throw new Error("No handler registered for 'localUnits:list'")
+        return { self, units: registry === 'ok' ? rows.map((r) => ({ ...r })) : [], registry, defaultParent: '/Users/x/Forsion Units', defaultParentDisplay: '~/Forsion Units' }
+      }),
+      create: vi.fn(async (input: { name: string; icon: string }) => ({ ok: true, unit: { ...mk('new-1', 'stopped'), name: input.name } })),
+      chooseParent: vi.fn(async () => ({ path: '/Users/x/Desktop', display: '~/Desktop' })),
+      addExisting: vi.fn(async () => ({ ok: false, code: 'duplicate_id' })),
+      open: vi.fn(async () => ({ ok: true })),
+      rename: vi.fn(async () => ({ ok: true, unit: rows[0] })),
+      reveal: vi.fn(async () => ({ ok: true })),
+      remove: vi.fn(async () => ({ ok: true })),
+      addToDesktop: vi.fn(async () => ({ ok: true })),
+      onChanged: vi.fn((cb: () => void) => { changed = cb; return () => { changed = null } }),
+    }
+    return api
+  }
+  const tick = async () => { const { act } = await React(); await act(async () => { await new Promise((r) => setTimeout(r, 0)) }) }
+  async function mount() {
+    const R = await React()
+    const { createRoot } = await import('react-dom/client')
+    const { AccountUnitSection } = await import('./AccountUnitSection')
+    const { LocalUnitDialogHost } = await import('./LocalUnitDialogs')
+    const { LocaleProvider } = await import('../i18n')
+    host = document.createElement('div')
+    document.body.append(host)
+    root = createRoot(host)
+    await R.act(async () => root.render(R.createElement(LocaleProvider, null,
+      R.createElement('div', { className: 'account-pop' }, R.createElement(AccountUnitSection, { onClose, onToast })),
+      R.createElement(LocalUnitDialogHost, { onToast }))))
+    await tick()
+    await tick()
+  }
+  const q = <T extends Element = HTMLElement>(sel: string) => document.querySelector(sel) as T | null
+  const local = (id: string) => q(`[data-local-unit="${id}"]`)!
+  const text = (el: Element | null) => (el?.textContent ?? '').replace(/\s+/g, ' ').trim()
+  async function click(el: Element | null) { const { act } = await React(); expect(el).toBeTruthy(); await act(async () => { (el as HTMLElement).click() }); await tick() }
+  async function rightClick(el: Element) {
+    const { act } = await React()
+    await act(async () => { el.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 40, clientY: 40 })) })
+    await tick()
+  }
+  const menuItems = () => Array.from(document.querySelectorAll('.ap-unit-ctx [role="menuitem"]')).map((b) => text(b))
+  async function typeInto(el: HTMLInputElement, value: string) {
+    const { act } = await React()
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+    await act(async () => { setter.call(el, value); el.dispatchEvent(new Event('input', { bubbles: true })) })
+  }
+
+  beforeEach(async () => {
+    ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
+    rows = [mk('lab', 'running'), mk('demo', 'stopped'), mk('old', 'missing'), mk('copy', 'mismatch')]
+    self = { kind: 'default' }
+    registry = 'ok'
+    listFails = false
+    onClose.mockReset(); onToast.mockReset()
+    const { resetLocalUnitsForTest } = await import('./localUnits')
+    resetLocalUnitsForTest()
+    const { useLocalUnitDialog } = await import('./LocalUnitDialogs')
+    useLocalUnitDialog.getState().close()
+    useUnitRoster.getState().clear()
+    // 没有 Extend:没有名册桥 / 账号桥,只有本机多 Unit
+    window.tangu = { platform: 'darwin', localUnits: localApi() } as any
+  })
+  afterEach(async () => {
+    const { act } = await React()
+    if (root) await act(async () => root.unmount())
+    host?.remove()
+    document.body.innerHTML = ''
+  })
+
+  it('localUnits alone (no Extend, no device bridge) shows the panel, and the avatar opens it even signed out', async () => {
+    const { unitPanelForcesMenu } = await import('./AccountUnitSection')
+    expect(unitPanelAvailable()).toBe(true)
+    expect(unitPanelForcesMenu()).toBe(true)
+    window.tangu = { unitHostStatus: vi.fn() } as any // 有设备桥、没有本机多 Unit:面板照旧,但不强行开菜单
+    expect(unitPanelAvailable()).toBe(true)
+    expect(unitPanelForcesMenu()).toBe(false)
+  })
+
+  it('"This computer" lists each folder Unit: path as grey text, ↗ on openable rows, missing / mismatch greyed and inert', async () => {
+    await mount()
+    const secs = Array.from(document.querySelectorAll('.ap-sec')).map(text)
+    expect(secs).toEqual(['这台电脑']) // 没有 Extend:没有「我的设备」
+    const order = Array.from(document.querySelectorAll('[data-unit-local], [data-local-unit]')).map((el) => el.getAttribute('data-local-unit') ?? 'default')
+    expect(order).toEqual(['default', 'lab', 'demo', 'old', 'copy'])
+    expect(q('[data-unit-local]')!.getAttribute('aria-current')).toBe('true')
+    expect(text(local('lab').querySelector('.ap-unit-path'))).toBe('~/Forsion Units/lab')
+    expect(local('lab').querySelector('.ap-unit-go')).toBeTruthy()
+    expect(local('lab').tagName).toBe('BUTTON')
+    expect(text(local('old').querySelector('.ap-unit-path'))).toBe('找不到这个文件夹')
+    expect(text(local('copy').querySelector('.ap-unit-path'))).toBe('文件夹对不上')
+    for (const id of ['old', 'copy']) {
+      expect(local(id).tagName).toBe('DIV')
+      expect(local(id).getAttribute('aria-disabled')).toBe('true')
+      expect(local(id).querySelector('.ap-unit-go')).toBeNull()
+    }
+    expect(q('[data-local-add]')).toBeTruthy()
+    expect(q('[data-local-unreadable]')).toBeNull()
+  })
+
+  it('click a folder row = open(id) in its own window; a failed open says why in plain words', async () => {
+    await mount()
+    await click(local('demo'))
+    expect(api.open).toHaveBeenCalledWith('demo')
+    expect(onClose).toHaveBeenCalled()
+    api.open.mockResolvedValueOnce({ ok: false, code: 'channel_mismatch' })
+    await click(local('lab'))
+    expect(onToast).toHaveBeenLastCalledWith(expect.stringContaining('另一个版本的 Forsion'), true)
+    // 找不到的行点不动
+    api.open.mockClear()
+    await click(local('old'))
+    expect(api.open).not.toHaveBeenCalled()
+  })
+
+  it('right-click: open / add to desktop / rename and icon / reveal (per platform) / remove; missing rows only remove', async () => {
+    await mount()
+    await rightClick(local('demo'))
+    expect(menuItems()).toEqual(['在自己的窗口打开', '添加到桌面', '改名字和图标…', '在访达中显示', '从列表移除…'])
+    await click(q('[data-unit-act="reveal"]'))
+    expect(api.reveal).toHaveBeenCalledWith('demo')
+    await rightClick(local('old'))
+    expect(menuItems()).toEqual(['从列表移除…'])
+    ;(window.tangu as any).platform = 'win32'
+    await rightClick(local('lab'))
+    expect(menuItems()).toContain('在资源管理器中显示')
+    ;(window.tangu as any).platform = 'linux'
+    await rightClick(local('lab'))
+    expect(menuItems()).toContain('在文件管理器中显示')
+  })
+
+  it('add to desktop hands over the icon and a fallback name; a development build says shortcuts need the installed app', async () => {
+    await mount()
+    await rightClick(local('demo'))
+    await click(q('[data-unit-act="desktop"]'))
+    await tick()
+    // happy-dom 画不了 canvas → 没有 iconPng,兜底名照给(真 Chromium 里有 PNG:check:unitpanel U16)
+    expect(api.addToDesktop).toHaveBeenCalledWith('demo', { fallbackName: 'Forsion 本机 Unit' })
+    expect(onToast.mock.lastCall?.[0]).toContain('已添加到桌面')
+    expect(onToast.mock.lastCall?.[1]).toBeFalsy()
+    api.addToDesktop.mockResolvedValueOnce({ ok: false, code: 'io', message: 'unpackaged' })
+    await rightClick(local('demo'))
+    await click(q('[data-unit-act="desktop"]'))
+    await tick()
+    expect(onToast).toHaveBeenLastCalledWith('桌面快捷方式只在安装版里可用（开发模式下不生成）', true)
+  })
+
+  it('remove asks first and says the folder stays; confirming calls remove(id)', async () => {
+    await mount()
+    await rightClick(local('demo'))
+    await click(q('[data-unit-act="remove"]'))
+    const dlg = q('.dialog')!
+    expect(text(dlg)).toContain('从列表移除「demo」？')
+    expect(text(dlg)).toContain('只是从列表里拿掉，文件夹和里面的数据都还在。')
+    expect(api.remove).not.toHaveBeenCalled()
+    await click(Array.from(dlg.querySelectorAll('button')).find((b) => text(b) === '移除')!)
+    expect(api.remove).toHaveBeenCalledWith('demo')
+    expect(onToast).toHaveBeenLastCalledWith('已从列表移除「demo」')
+  })
+
+  it('registry unreadable: one grey line, no rows, no write menus — "Add Unit…" stays', async () => {
+    registry = 'unreadable'
+    await mount()
+    expect(text(q('[data-local-unreadable]'))).toBe('读不出本机 Unit 列表')
+    expect(document.querySelectorAll('[data-local-unit]').length).toBe(0)
+    expect(q('[data-local-add]')).toBeTruthy()
+  })
+
+  it('a list() that throws is "unreadable", never an empty list', async () => {
+    listFails = true
+    await mount()
+    expect(q('[data-local-unreadable]')).toBeTruthy()
+    const { useLocalUnits } = await import('./localUnits')
+    expect(useLocalUnits.getState()).toMatchObject({ failed: true, snapshot: null })
+    // 主进程那边好了、广播一次变化 → 重新读
+    listFails = false
+    const { act } = await React()
+    await act(async () => { changed?.() })
+    await tick()
+    expect(document.querySelectorAll('[data-local-unit]').length).toBe(4)
+  })
+
+  it('inside a folder Unit: its row is checked and cannot be removed; "This computer" opens the default Unit', async () => {
+    self = { kind: 'folder', id: 'lab', name: 'lab', icon: '', path: '/Users/x/Forsion Units/lab', displayPath: '~/Forsion Units/lab' }
+    rows[0].current = true
+    await mount()
+    const def = q('[data-unit-local]')!
+    expect(def.getAttribute('aria-current')).toBeNull()
+    expect(def.querySelector('.ap-unit-go')).toBeTruthy()
+    expect(local('lab').getAttribute('aria-current')).toBe('true')
+    await rightClick(local('lab'))
+    expect(menuItems()).toEqual(['添加到桌面', '改名字和图标…', '在访达中显示'])
+    await click(def)
+    expect(api.open).toHaveBeenCalledWith('default')
+  })
+
+  it('Add Unit: name → location under the default parent; Change… picks another; Create and open = create, then open', async () => {
+    await mount()
+    await click(q('[data-local-add]'))
+    const name = q<HTMLInputElement>('[data-lu="name"]')!
+    expect(q<HTMLButtonElement>('[data-lu="create"]')!.disabled).toBe(true) // 没名字不能建
+    await typeInto(name, '实验/用')
+    expect(q<HTMLInputElement>('[data-lu="location"]')!.value).toBe('~/Forsion Units/实验 用')
+    expect(text(q('.lu-hint'))).toBe('这个文件夹会装下这台 Unit 的登录、设置、Agent、插件、对话和笔记。')
+    await click(q('[data-lu="change"]'))
+    expect(q<HTMLInputElement>('[data-lu="location"]')!.value).toBe('~/Desktop/实验 用')
+    await click(q('[data-lu="create"]'))
+    expect(api.create).toHaveBeenCalledWith({ name: '实验/用', icon: '', parentDir: '/Users/x/Desktop' })
+    expect(api.open).toHaveBeenCalledWith('new-1')
+    expect(q('[data-lu-dialog]')).toBeNull()
+  })
+
+  it('Add Unit: path_exists lands under the location, and the dialog stays', async () => {
+    await mount()
+    await click(q('[data-local-add]'))
+    api.create.mockResolvedValueOnce({ ok: false, code: 'path_exists' })
+    await typeInto(q<HTMLInputElement>('[data-lu="name"]')!, 'lab')
+    await click(q('[data-lu="create"]'))
+    expect(text(q('.lu-err'))).toBe('那里已经有同名的文件夹了，换个名字或位置。')
+    expect(api.open).not.toHaveBeenCalled()
+    expect(q('[data-lu-dialog="add"]')).toBeTruthy()
+  })
+
+  it('Open an existing folder: duplicate_id is explained in plain words; cancelled says nothing', async () => {
+    await mount()
+    await click(q('[data-local-add]'))
+    await click(q('[data-lu-mode="existing"]'))
+    await click(q('[data-lu="choose"]'))
+    expect(api.addExisting).toHaveBeenCalled()
+    expect(text(q('[data-lu="error"]'))).toBe('这个文件夹像是从另一个 Unit 拷贝出来的，两份会互相顶掉登录，暂时不能加入。')
+    api.addExisting.mockResolvedValueOnce({ ok: false, code: 'cancelled' })
+    await click(q('[data-lu="choose"]'))
+    expect(q('[data-lu="error"]')).toBeNull()
+    expect(q('[data-lu-dialog="add"]')).toBeTruthy()
+  })
+
+  it('every error code has its own plain-words line; cancelled is silent; unknown codes read as io', async () => {
+    const { localUnitErrorText } = await import('./localUnits')
+    const codes = ['name_invalid', 'path_exists', 'parent_invalid', 'not_a_unit', 'channel_mismatch', 'duplicate_id', 'registry_unreadable', 'not_found', 'is_self', 'io'] as const
+    const lines = codes.map((c) => localUnitErrorText(c))
+    expect(lines.every((l) => typeof l === 'string' && l.length > 6)).toBe(true)
+    expect(new Set(lines).size).toBe(codes.length)
+    expect(localUnitErrorText('cancelled')).toBeNull()
+    expect(localUnitErrorText('something_new')).toBe(localUnitErrorText('io'))
+  })
+
+  it('an IPC that throws (main process not wired) folds into io instead of crashing', async () => {
+    const { localUnitCall } = await import('./localUnits')
+    api.open.mockRejectedValueOnce(new Error("No handler registered for 'localUnits:open'"))
+    expect(await localUnitCall((a) => a.open('lab'))).toEqual({ ok: false, code: 'io' })
+    api.open.mockResolvedValueOnce(undefined as any)
+    expect(await localUnitCall((a) => a.open('lab'))).toEqual({ ok: false, code: 'io' })
+  })
+})

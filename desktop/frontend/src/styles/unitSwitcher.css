@@ -256,3 +256,42 @@
 /* ── Unit 窗(UnitWindowRoot):整扇窗就是设备页的框;账号卡只当头像数据源,不显示 ── */
 .unitwin-account { display: none; }
 .unitwin .unitfr-fail-title.unitwin-dim { color: var(--text-muted); font-weight: inherit; }
+
+/* ── 本机多 Unit(LocalUnitDialogs):「添加 Unit」「改名字和图标」用真对话框的壳(.am-app .dialog),里面按方案图 ⑦ ── */
+.am-app .dialog.lu-dlg { width: min(480px, calc(100vw - 32px)); gap: 14px; }
+.am-app .dialog.lu-dlg--edit { width: min(400px, calc(100vw - 32px)); }
+/* 两种添加方式:两张并排的选择卡(选中那张底色深一档),不描边 */
+.am-app .lu-modes { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.am-app .lu-mode {
+  display: flex; align-items: flex-start; gap: 8px; min-width: 0;
+  padding: 10px 12px; border: var(--border-width) solid transparent; border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--text) 3%, transparent); color: var(--text-sec);
+  text-align: left; cursor: pointer;
+  transition: background-color var(--duration-fast) var(--ease-calm), color var(--duration-fast) var(--ease-calm);
+}
+.am-app .lu-mode > svg { flex: none; margin-top: 2px; }
+.am-app .lu-mode:hover { background: var(--menu-hover); color: var(--text); }
+.am-app .lu-mode[aria-checked='true'] { background: var(--menu-hover); color: var(--text); }
+.am-app .lu-mode:focus-visible { outline: var(--focus-ring) solid var(--sel-line); outline-offset: 1px; }
+.am-app .lu-mode-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.am-app .lu-mode-title { font-size: var(--ui-font-body, 13px); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.am-app .lu-mode-sub { font-size: var(--ui-font-meta, 12px); color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.am-app .lu-field { display: flex; flex-direction: column; gap: 6px; }
+.am-app .lu-label { font-size: var(--ui-font-meta, 12px); color: var(--text-sec); }
+.am-app .lu-row { display: flex; align-items: stretch; gap: 8px; }
+.am-app .lu-row > .dialog-input { flex: 1; min-width: 0; }
+.am-app .lu-row > .dialog-btn { flex: none; }
+.am-app .dialog-input.lu-path { color: var(--text-sec); text-overflow: ellipsis; cursor: default; }
+.am-app .dialog-btn.lu-iconbtn { display: inline-flex; align-items: center; justify-content: center; width: 40px; padding: 0; color: var(--text-sec); }
+.am-app .dialog-btn.lu-iconbtn .unitsw-emoji { font-size: 16px; line-height: 1; }
+.am-app .lu-dlg .dialog-btn:disabled { opacity: .5; cursor: default; }
+.am-app .lu-hint { font-size: var(--ui-font-meta, 12px); }
+.am-app .lu-err { font-size: var(--ui-font-meta, 12px); line-height: 1.5; color: var(--danger); }
+.am-app .lu-other { font-size: var(--ui-font-meta, 12px); color: var(--text-muted); }
+.am-app .lu-link { margin-left: 4px; padding: 0; border: 0; background: none; color: var(--text); font: inherit; cursor: pointer; }
+.am-app .lu-link:hover { text-decoration: underline; }
+/* 名字旁的图标钮点开的 emoji 选择(IconPicker,挂在 body):盖在对话框遮罩之上 —— 从弹窗里开出来的在弹窗之上 */
+.lu-iconlayer { position: fixed; inset: 0; z-index: var(--z-dialog); }
+
+/* 文件夹 Unit 里:左下角自己的头像右下角叠这台 Unit 的图标(同远端 Unit 的 .unitfr-badge;在默认那台不画) */
+.account-avatar-slot { position: relative; display: inline-flex; flex-shrink: 0; }
