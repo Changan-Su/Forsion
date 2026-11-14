@@ -6,6 +6,7 @@
 
 import type { UnitCloudCapabilities } from './unitCloudTransport'
 import { setContentStorageScope } from '@lcl/engine/contentStorageScope'
+import { installScopedStorage } from './scopedStorage'
 
 interface UnitMeta { instanceId: string; name: string; version: string; projection?: 'public' | 'local'; inheritWebAccount?: boolean; localCapabilities?: { vault: boolean; engine: boolean; host: boolean }; browserStorage?: boolean; account?: { apiBase: string; loginPath: string }; capabilities?: UnitCloudCapabilities }
 
@@ -65,13 +66,46 @@ async function pairFlow(meta: UnitMeta): Promise<string | null> {
   }
 }
 
-/** whoami 回包 → 委托管理员角色(只认 role 与显示名;别的形状 = 不是这个角色)。 */
-export function delegatedRoleOf(body: unknown): { name: string } | null {
-  if (!body || typeof body !== 'object') return null
-  const b = body as { role?: unknown; operator?: { name?: unknown } | null }
-  if (b.role !== 'delegated-admin') return null
-  const name = typeof b.operator?.name === 'string' ? b.operator.name.slice(0, 120) : ''
-  return { name }
+/** whoami 的请求与读回包体合计的上限:超时 = 身份不知道,停在启动失败页。 */
+export const WHOAMI_TIMEOUT_MS = 15_000
+
+/**
+ * 非公开投射上 whoami 的结论。身份「不知道」≠「不是管理员」:
+ *   · 401 → unpaired(配对 / 主人进入,与改动前一样);
+ *   · 200 且回包是 `{ ok: true }`、不带 role → owner(原路径,与改动前一样);
+ *   · 200 且 role === 'delegated-admin'、operator.name 是字符串 → delegated;
+ *   · 其余(网络失败 / 超时 / 别的状态码 / 回包不是 JSON / role 不认识 / 形状不对)→ unknown:不装载应用、不碰本地存储。
+ */
+export type WhoamiVerdict = { kind: 'unpaired' } | { kind: 'owner' } | { kind: 'delegated'; name: string } | { kind: 'unknown' }
+export function whoamiVerdict(status: number | null, body: unknown): WhoamiVerdict {
+  if (status === 401) return { kind: 'unpaired' }
+  if (status !== 200 || !body || typeof body !== 'object' || Array.isArray(body)) return { kind: 'unknown' }
+  const b = body as { ok?: unknown; role?: unknown; operator?: unknown }
+  if (b.ok !== true) return { kind: 'unknown' }
+  if (b.role === undefined) return { kind: 'owner' }
+  const op = b.operator as { name?: unknown } | null | undefined
+  if (b.role === 'delegated-admin' && op && typeof op === 'object' && typeof op.name === 'string') return { kind: 'delegated', name: op.name.slice(0, 120) }
+  return { kind: 'unknown' }
+}
+
+/** 带总超时的 whoami:请求与读回包体共用一个计时器(只在 200 时读体)。 */
+async function fetchWhoami(token: string): Promise<{ probe: Response | null; status: number | null; body: unknown }> {
+  const ctl = typeof AbortController === 'function' ? new AbortController() : null
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const deadline = new Promise<never>((_, reject) => { timer = setTimeout(() => { ctl?.abort(); reject(new Error('whoami timeout')) }, WHOAMI_TIMEOUT_MS) })
+  try {
+    return await Promise.race([deadline, (async () => {
+      const probe = await fetch(new URL('unit/whoami', base()), {
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        signal: ctl?.signal,
+      })
+      if (probe.status !== 200) return { probe, status: probe.status, body: null }
+      const body = await probe.clone().json().catch(() => undefined)
+      return { probe, status: probe.status, body }
+    })()])
+  } catch {
+    return { probe: null, status: null, body: null }
+  } finally { clearTimeout(timer) }
 }
 
 /** 装载设备页垫片。false = 用户中止(不挂载应用)。 */
@@ -97,14 +131,18 @@ export async function installUnitShim(): Promise<boolean> {
   }
 
   // 探针:隧道来的(桌面壳分区注入,unitHost 加内部密钥)直接 200;局域网未配对 → 401 → 配对流。
-  const probe = await fetch(new URL('unit/whoami', base()), {
-    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-  }).catch(() => null)
+  const { probe, status, body } = await fetchWhoami(token)
   if (published && !probe?.ok) throw new Error('Unit projection is unavailable')
   // 委托管理员(经中转进来的管理员,只管 Agent):那台设备在 whoami 里带 role。壳在这个角色下不发白名单外的请求、只露 Agent 管理
-  // (门控统一问 desktop 的 services/delegatedAdmin.ts)。只认非公开投射上的 200 回包;别的来路回包里没有这个字段。
-  const delegated = !published && probe?.ok ? delegatedRoleOf(await probe.clone().json().catch(() => null)) : null
-  if (!published && (!probe || probe.status === 401)) {
+  // (门控统一问 desktop 的 services/delegatedAdmin.ts)。身份读不准(失败 / 超时 / 回包畸形 / role 不认识)就停在启动失败页:
+  // 按普通身份往下走会读写这个浏览器里设备主人的布局等存储(管理员的存储作用域只在认出角色后才设)。
+  const verdict: WhoamiVerdict = published ? { kind: 'owner' } : whoamiVerdict(status, body)
+  if (verdict.kind === 'unknown') throw new Error('Unit identity is unavailable')
+  const delegated = verdict.kind === 'delegated' ? { name: verdict.name } : null
+  // 委托管理员:这个页面里所有 Web Storage 读写都落在本角色的前缀下(布局、Ribbon、主位槽、主题偏好、提醒存档……一律),
+  // 同一浏览器里设备主人存下的键既读不到也写不着。换不上就当失败(不往下走成「读写主人存储」的样子)。
+  if (delegated && !installScopedStorage(`delegated-admin:${meta.instanceId}:`)) throw new Error('Unit identity storage is unavailable')
+  if (verdict.kind === 'unpaired') {
     const fresh = local ? await (await import('./unitOwnerAccess')).ownerAccess(meta.name, base()) : await pairFlow(meta)
     if (!fresh) return false
     token = fresh

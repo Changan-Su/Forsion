@@ -53,6 +53,18 @@ describe('审批档上限', () => {
     const custom = delegatedApprovalField('custom', 'auto-edit', OPTIONS)
     expect(custom).toMatchObject({ value: 'custom', disabled: true })
     expect(custom.options.map((o) => o.value)).toEqual(['readonly', 'auto-edit', 'custom'])
+    expect(custom.options.find((o) => o.value === 'custom')?.disabled).toBe(true)
     expect(delegatedApprovalField('full-auto', 'full-auto', OPTIONS).options.map((o) => o.value)).toEqual(['readonly', 'auto-edit', 'full-auto'])
+  })
+  it('超出上限的当前值只作不可选的展示(上限没读到 / 上限后来降了)', () => {
+    const unknownCap = delegatedApprovalField('auto-edit', null, OPTIONS)
+    expect(unknownCap.value).toBe('auto-edit')
+    expect(unknownCap.options.map((o) => [o.value, !!o.disabled])).toEqual([['readonly', false], ['auto-edit', true]])
+    const lowered = delegatedApprovalField('full-auto', 'auto-edit', OPTIONS)
+    expect(lowered.value).toBe('full-auto')
+    expect(lowered.options.map((o) => [o.value, !!o.disabled])).toEqual([['readonly', false], ['auto-edit', false], ['full-auto', true]])
+    expect(lowered.disabled).toBe(false)
+    // 在上限内的当前值照常可选
+    expect(delegatedApprovalField('readonly', 'auto-edit', OPTIONS).options.every((o) => !o.disabled)).toBe(true)
   })
 })

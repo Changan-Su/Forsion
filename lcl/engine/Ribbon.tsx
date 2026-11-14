@@ -35,6 +35,9 @@ import { openPanel } from './panelMotion'
 import { PEEK_CLOSE_DELAY, PEEK_OPEN_DELAY, peekShouldClose, peekViews, type PeekZone } from './spacePeekRules'
 import type { PersistedPanel } from './layoutPersist'
 
+/** 宿主声明 Ribbon 只读(ribbonActions.editable === false):不出任何改配置的入口 —— ＋、区 / 空白右键、图标 / 收纳夹右键、拖拽。 */
+const readOnly = (): boolean => ribbonActions.editable === false
+
 type Entry =
   | { kind: 'item'; id: string; item: RibbonItem }
   | { kind: 'cmd'; id: string; cmd: Command } // id = 'cmd:<commandId>'
@@ -728,6 +731,7 @@ export function Ribbon() {
 
   // ---- 拖拽:区内重排 / 拖入收纳夹 / 浮层内重排、拖出;跨区一律拒收 ----
   const startDrag = (e: React.DragEvent, id: string, zone: RibbonZone, from: string | null): void => {
+    if (readOnly()) { e.preventDefault(); return }
     e.dataTransfer.effectAllowed = 'move'
     // 拖影对齐抓取点(与左栏分组拖动同款):默认幽灵图会带整槽留白偏移。
     const r = e.currentTarget.getBoundingClientRect()
@@ -905,7 +909,7 @@ export function Ribbon() {
   }
   /** geo = false:从「+N」浮层拖出来的 —— 别拿浮层的行距当条上的槽距,落点几何到了条上当场量(measure)。 */
   const pointerDown = (e: React.PointerEvent, id: string, zone: RibbonZone, from: string | null, geo = true): void => {
-    if (!getDetachApi()?.ribbonPointerDrag || !spaceIdOf(id) || e.button !== 0 || !e.isPrimary) return
+    if (readOnly() || !getDetachApi()?.ribbonPointerDrag || !spaceIdOf(id) || e.button !== 0 || !e.isPrimary) return
     e.stopPropagation()
     pointerCancel.current?.()
     const source = e.currentTarget as HTMLElement, d = { id, zone, from }
@@ -919,7 +923,7 @@ export function Ribbon() {
       cancel: endDrag,
     })
   }
-  const nativeDraggable = (id: string): boolean => !(getDetachApi()?.ribbonPointerDrag && spaceIdOf(id))
+  const nativeDraggable = (id: string): boolean => !readOnly() && !(getDetachApi()?.ribbonPointerDrag && spaceIdOf(id))
 
   // ---- 菜单(右键 / + 号共用) ----
   const ask = ribbonActions.prompt ?? ((t: string, i?: string) => Promise.resolve(window.prompt(t, i)))
@@ -938,7 +942,7 @@ export function Ribbon() {
   const onZoneCtx = (zone: RibbonZone) => (e: React.MouseEvent): void => {
     if (e.defaultPrevented) return // 图标级菜单(用户 Space 删除/收纳夹/命令)优先
     e.preventDefault()
-    if (ribbonActions.editable === false) return
+    if (readOnly()) return
     setMenu({ x: e.clientX, y: e.clientY, entries: zoneMenu(zone), opener: bubbledOpener(e) })
   }
   const bubbledOpener = (e: React.MouseEvent): string | undefined => {
@@ -950,7 +954,7 @@ export function Ribbon() {
     // 预览卡在 Ribbon 的 React 树里,卡里(含它挂到 body 的菜单)的右键会冒到这儿:那是 View 自己的事,不弹 Ribbon 的区菜单。
     if (e.defaultPrevented || e.nativeEvent === peekCtx.current) return
     e.preventDefault()
-    if (ribbonActions.editable === false) return
+    if (readOnly()) return
     // 两区合起来的菜单里只留一个「新建收纳夹」(建在 Space 区):去掉限定词后两行会一模一样。命令区的收纳夹从命令区的 ＋ / 空白右键建。
     setMenu({ x: e.clientX, y: e.clientY, entries: [...zoneMenu('top'), ...zoneMenu('bottom', false)], opener: bubbledOpener(e) })
   }
@@ -962,6 +966,7 @@ export function Ribbon() {
   const folderCtx = (f: RibbonFolder) => (e: React.MouseEvent): void => {
     e.preventDefault()
     e.stopPropagation()
+    if (readOnly()) return
     const x = e.clientX, y = e.clientY
     setMenu({
       x, y, opener: f.id, entries: [
@@ -989,6 +994,7 @@ export function Ribbon() {
   }
   const itemCtx = (item: RibbonItem, opener: string = item.id) => (e: React.MouseEvent): void => {
     if (e.defaultPrevented) return // 组件自己接了右键(主位槽)
+    if (readOnly()) { e.preventDefault(); e.stopPropagation(); return }
     if (!openItemMenu(item, e.clientX, e.clientY, opener)) { ctxOpener.current = { ev: e.nativeEvent, key: opener }; return } // 没有自己的项 → 放它冒泡到区菜单,发起格照记
     e.preventDefault()
     e.stopPropagation()
@@ -996,6 +1002,7 @@ export function Ribbon() {
   const cmdCtx = (cmdId: string, opener: string = `cmd:${cmdId}`) => (e: React.MouseEvent): void => {
     e.preventDefault()
     e.stopPropagation()
+    if (readOnly()) return
     const x = e.clientX, y = e.clientY
     setMenu({ x, y, opener, entries: [
       { label: t('lcl.ribbon.setIcon'), icon: Shapes, onClick: () => pickIcon(x, y, st().commandIcons[cmdId], (name) => st().setCommandIcon(cmdId, name)) },
@@ -1091,7 +1098,7 @@ export function Ribbon() {
   }
   // 两个 ＋ 各说各的:上区 = 新建 Space / 收纳夹,命令区 = 添加命令(原来都叫「添加」,分不清)。
   const plusName = (zone: RibbonZone): string => t(zone === 'top' ? 'lcl.ribbon.addSpaceOrFolder' : 'lcl.ribbon.addCommand')
-  const renderPlusBtn = (zone: RibbonZone): React.ReactNode => ribbonActions.editable === false ? null : (
+  const renderPlusBtn = (zone: RibbonZone): React.ReactNode => readOnly() ? null : (
     <button
       className="rb-btn rb-plus"
       data-menu-open={menu?.opener === `plus:${zone}` ? '' : undefined}
@@ -1184,7 +1191,7 @@ export function Ribbon() {
           data-id={e.id}
           data-rb-folder={e.folder.id}
           className={`rb-fly-sub rb-fly-folderhead${drag?.id === e.id ? ' dragging' : ''}${overFolder === e.folder.id ? ' drag-into' : ''}`}
-          draggable
+          draggable={!readOnly()}
           onDragStart={(ev) => { ev.stopPropagation(); startDrag(ev, e.id, zone, null) }}
           onDragEnd={finishDrag}
           onContextMenu={folderCtx(e.folder)}

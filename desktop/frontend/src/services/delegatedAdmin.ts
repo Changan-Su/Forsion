@@ -60,15 +60,16 @@ export function approvalModeSelectable(mode: string, cap: ApprovalCap | null): b
 }
 
 /**
- * 委托管理员编辑器里的审批档下拉:只列不超过上限的三档(不给「跟随会话」—— 引擎把远端的空值落成上限本身,不是空)。
+ * 委托管理员编辑器里的审批档下拉:可选项严格按上限过滤(不给「跟随会话」—— 引擎把远端的空值落成上限本身,不是空)。
  * 存值为空 → 选中态显示成上限那一档(只是显示,不写回;下拉只在用户真的换档时 onChange)。
- * 存值 custom → 照列这一项且只读(引擎对远端既不收也不改写 custom)。
+ * 当前值超出上限(上限没读到 / 后来降了)或是 custom → 照列这一项但 disabled(只作展示,选不回去);custom 时整个字段只读。
  */
-export function delegatedApprovalField<O extends { value: string }>(stored: string | undefined, cap: ApprovalCap | null, options: O[]): { value: string; options: O[]; disabled: boolean } {
+export function delegatedApprovalField<O extends { value: string }>(stored: string | undefined, cap: ApprovalCap | null, options: O[]): { value: string; options: Array<O & { disabled?: boolean }>; disabled: boolean } {
   const shown = stored || cap || 'readonly'
   return {
     value: shown,
-    options: options.filter((o) => (stored === 'custom' && o.value === 'custom') || approvalModeSelectable(o.value, cap) || (o.value === shown && o.value !== '')),
+    options: options.flatMap((o) => approvalModeSelectable(o.value, cap) ? [o]
+      : o.value === shown && o.value !== '' ? [{ ...o, disabled: true }] : []),
     disabled: stored === 'custom',
   }
 }

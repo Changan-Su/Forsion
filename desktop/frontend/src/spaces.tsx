@@ -322,7 +322,8 @@ export function registerSpaces(): void {
   }
   // 主位槽:把它指着的那个 Space 的图标从上区搬到中间的 home 槽(改 side,不动持久顺序)。
   // 必须在上面那轮 addRibbonIcon 之后 —— 它靠 upsert 覆盖刚注册的那一份。
-  installHomeSlot()
+  // 委托管理员只有一个 Space、Ribbon 只读:不装主位槽(它的右键菜单会改主位指向)
+  if (!isDelegatedAdmin()) installHomeSlot()
   // 活动 Space 不在本产品档案里 → 回落档案默认(单品变体首启:localStorage 可能存着全家桶的 'tangu')。
   // ⚠️ 只改内存,**不写 localStorage**:此刻不在表里的 id 多半是异步注册的用户 / 插件 Space,盘上那个值是「上次退出在哪」
   // 的唯一记录(下次启动的 BOOT_ACTIVE_SPACE_ID)。写回由真正定了位的人做 —— bootstrapEngine 的 setActiveSpaceCold、

@@ -142,6 +142,7 @@ async function device(route: Route): Promise<void> {
   const engine = p === '/engine' || p.startsWith('/engine/')
   const allowed = engine ? delegatedEngineAllowed(method, p.slice('/engine'.length) || '/') : delegatedNonEngineAllowed(method, p)
   const hit = { method, path: p }
+  if (p === '/unit/whoami') storageWrites.push(WHOAMI_MARK) // writes after this point happen with the identity known
   if (!allowed || p.startsWith('/api/')) {
     outside.push(hit)
     await route.fulfill({ status: 403, contentType: 'application/json', body: JSON.stringify({ code: 'LOCAL_ONLY', detail: 'This action is only available on the device itself' }) })
@@ -161,6 +162,38 @@ function check(name: string, ok: boolean, detail?: string): void {
   results.push({ name, ok, detail })
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? '  | ' + detail : ''}`)
   if (!ok && !KEEP_GOING) throw new Error(`step failed: ${name}`)
+}
+
+const storageWrites: string[] = []
+const ADMIN_SCOPE = 'delegated-admin:delegated-fixture:'
+const WHOAMI_MARK = '— whoami answered —'
+const RELOAD_MARK = '— page reload —'
+/**
+ * Written by the inline boot scripts in index.html before any identity exists (the page can't know the role yet):
+ * layout mode by viewport (lcl.uiMode / its auto marker), which splash verse was shown last, and the `debug` library's
+ * own flag. Device-level cosmetics, no owner content. Anything else before whoami, or any unscoped write after it, fails.
+ */
+const PRE_IDENTITY_KEYS = new Set(['lcl.uiMode', 'lcl.uiMode.auto', 'forsion_startup_verse', 'debug'])
+const OWNER_KEYS = { tangu2_layout_v4: 'OWNER-LAYOUT', forsion_home_slot_space: 'amadeus', forsion_tangu_ribbon_order: '["amadeus","tangu"]', forsion_tangu_active_space: 'amadeus', 'forsion.quotaReminders': '{"s1":{"sessionId":"s1","resetAt":1,"createdAt":1}}' }
+async function storageChecks(page: Page, label: string): Promise<void> {
+  const keyOf = (op: string): string => op.split(' ').slice(1).join(' ')
+  // Per boot (the dark reload boots again): before its whoami only the pre-identity keys; after it, admin scope only.
+  let known = false
+  const pre: string[] = [], bad: string[] = []
+  for (const op of storageWrites) {
+    if (op === WHOAMI_MARK) { known = true; continue }
+    if (op === RELOAD_MARK) { known = false; continue }
+    if (op.startsWith('local.set ') || op.startsWith('local.remove ') || op.startsWith('session.')) {
+      if (keyOf(op).startsWith(ADMIN_SCOPE)) continue
+      if (!known && PRE_IDENTITY_KEYS.has(keyOf(op))) { pre.push(op); continue }
+      if (op === 'session.set e2e-seeded') continue
+      bad.push(`${known ? 'after' : 'before'} whoami: ${op}`)
+    } else bad.push(op)
+  }
+  check(`${label}: after whoami every storage write carries the admin scope prefix (before it only boot cosmetics)`, bad.length === 0,
+    `${storageWrites.filter((o) => o !== WHOAMI_MARK && o !== RELOAD_MARK).length} writes; pre-identity: ${[...new Set(pre)].join(' ; ')}; bad: ${[...new Set(bad)].join(' ; ')}`)
+  const owner = await page.evaluate((keys: string[]) => { const raw = (window as unknown as { __rawLocalStorage: Storage }).__rawLocalStorage; return Object.fromEntries(keys.map((k) => [k, raw.getItem(k)])) }, Object.keys(OWNER_KEYS))
+  check(`${label}: owner keys untouched`, JSON.stringify(owner) === JSON.stringify(OWNER_KEYS), JSON.stringify(owner))
 }
 
 const LOCAL_ONLY_ZH = '只能在那台设备本机上进行'
@@ -196,6 +229,9 @@ async function main(): Promise<void> {
         if (!sessionStorage.getItem('e2e-seeded')) {
           localStorage.setItem('forsion_tangu_active_space', 'amadeus')
           localStorage.setItem('tangu2_layout_v4', 'OWNER-LAYOUT')
+          localStorage.setItem('forsion_home_slot_space', 'amadeus')
+          localStorage.setItem('forsion_tangu_ribbon_order', '["amadeus","tangu"]')
+          localStorage.setItem('forsion.quotaReminders', '{"s1":{"sessionId":"s1","resetAt":1,"createdAt":1}}')
           sessionStorage.setItem('e2e-seeded', '1')
         }
       } catch { /* ignore */ }
@@ -217,6 +253,19 @@ async function main(): Promise<void> {
         return orig.call(this, input, init)
       } as typeof fetch
     }, process.env.TRACE)
+    await ctx.exposeFunction('__e2eStorageWrite', (op: string) => { storageWrites.push(op) })
+    // Every raw Web Storage write from here on (the app's, through whatever wrapper) is reported with its real key;
+    // the seeding script above runs first and is not reported. String form: tsx's keepNames would wrap these functions in __name.
+    await ctx.addInitScript({ content: `(() => {
+      const w = window
+      w.__rawLocalStorage = localStorage
+      const proto = Storage.prototype
+      const set = proto.setItem, remove = proto.removeItem, clear = proto.clear
+      const area = (st) => (st === w.__rawLocalStorage ? 'local' : 'session')
+      proto.setItem = function (k, v) { w.__e2eStorageWrite && w.__e2eStorageWrite(area(this) + '.set ' + k); return set.call(this, k, v) }
+      proto.removeItem = function (k) { w.__e2eStorageWrite && w.__e2eStorageWrite(area(this) + '.remove ' + k); return remove.call(this, k) }
+      proto.clear = function () { w.__e2eStorageWrite && w.__e2eStorageWrite(area(this) + '.clear'); return clear.call(this) }
+    })()` })
     const page = await ctx.newPage()
     if (process.env.TRACE) page.on('console', (m) => { if (m.text().startsWith('[trace]')) console.log(m.text().slice(0, 2000)) })
     page.on('pageerror', (e) => errors.push(String(e.stack || e)))
@@ -231,6 +280,7 @@ async function main(): Promise<void> {
       check('phone shell: lands on Agent management', await page.locator('[data-agents-space], .agents-roster').count() > 0)
       check('phone shell: outside-whitelist hits = 0', outside.length === 0, outside.map((h) => `${h.method} ${h.path}`).join(' ; '))
       check('phone shell: no page errors', errors.length === 0, errors.slice(0, 3).join(' || '))
+      await storageChecks(page, 'phone shell')
       return
     }
     await page.goto(vite.url, { waitUntil: 'domcontentloaded' })
@@ -252,6 +302,18 @@ async function main(): Promise<void> {
     await page.waitForTimeout(300)
     check('ribbon blank right-click opens no add menu', !/新建收纳夹|添加命令|新建 Space/.test(await page.locator('body').innerText()))
     await page.keyboard.press('Escape')
+    const ribbonOrder = async (): Promise<string[]> => page.locator('.rb button[aria-label], .rb [role="button"][aria-label]').evaluateAll((els) => els.map((e) => e.getAttribute('aria-label') || ''))
+    const before = await ribbonOrder()
+    await page.locator('.rb [data-space-id="agents"]').first().click({ button: 'right' })
+    await page.waitForTimeout(300)
+    const menus = await page.locator('.rb-menu, [role="menu"]').count()
+    check('ribbon icon right-click opens no menu', menus === 0, `menus=${menus}`)
+    await page.keyboard.press('Escape')
+    const draggables = await page.locator('.rb [draggable="true"]').count()
+    await page.locator('.rb').getByRole('button', { name: '设置' }).first().dragTo(page.locator('.rb').getByRole('button', { name: '切换明暗模式' }).first()).catch(() => null)
+    await page.waitForTimeout(300)
+    const after = await ribbonOrder()
+    check('ribbon has nothing draggable and a drag changes nothing', draggables === 0 && JSON.stringify(before) === JSON.stringify(after), `draggables=${draggables} before=${before.join(',')} after=${after.join(',')}`)
     await page.screenshot({ path: path.join(SHOT_DIR || os.tmpdir(), 'admin-ribbon-light.png'), clip: { x: 0, y: 0, width: 300, height: 820 } })
     // The new-tab launcher must not offer notes / chat / calendar either.
     await page.locator('.wb-tabs-new, [aria-label="新建标签页"], button[title="新建标签页"]').first().click().catch(() => null)
@@ -397,13 +459,15 @@ async function main(): Promise<void> {
     // Dark first screen
     await page.emulateMedia({ colorScheme: 'dark' })
     await page.evaluate(() => { localStorage.setItem('forsion_theme', 'dark') })
+    storageWrites.push(RELOAD_MARK)
     await page.reload({ waitUntil: 'domcontentloaded' })
     await page.waitForSelector('[data-agents-space]', { timeout: 60_000 })
     await page.waitForTimeout(2500)
     await shot(page, 'admin-home-dark')
 
-    const layouts = await page.evaluate(() => ({ owner: localStorage.getItem('tangu2_layout_v4'), scoped: Object.keys(localStorage).filter((k) => k.startsWith('tangu2_layout_v4:account:')) }))
-    check('owner layout untouched; this role keeps its own', layouts.owner === 'OWNER-LAYOUT' && layouts.scoped.length > 0, JSON.stringify(layouts))
+    const layouts = await page.evaluate(() => { const raw = (window as unknown as { __rawLocalStorage: Storage }).__rawLocalStorage; return { owner: raw.getItem('tangu2_layout_v4'), scoped: Object.keys(raw).filter((k) => k.includes('tangu2_layout_v4')) } })
+    check('owner layout untouched; this role keeps its own', layouts.owner === 'OWNER-LAYOUT' && layouts.scoped.some((k) => k.startsWith('delegated-admin:delegated-fixture:')), JSON.stringify(layouts))
+    await storageChecks(page, 'whole walk')
     const body = await page.locator('body').innerText()
     check('no local-only notice on the page', !body.includes(LOCAL_ONLY_ZH))
     check('outside-whitelist hits = 0', outside.length === 0, outside.map((h) => `${h.method} ${h.path}`).join(' ; '))
