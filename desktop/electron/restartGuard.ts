@@ -39,7 +39,8 @@ export async function readRestartActivity(url: string, token: string, fetchFn: t
 export function createRestartGuard(deps: {
   inspect(): Promise<RestartActivity>
   confirm(options: RestartDialog): Promise<boolean>
-  restart(install: boolean): Promise<void>
+  /** 回 { ok: false } = 自己挡下了(比如装更新前还有文件夹 Unit 没关掉),这一次不算重启。 */
+  restart(install: boolean): Promise<void | { ok: false }>
 }) {
   let pending: Promise<{ ok: boolean }> | undefined
   return (install = false): Promise<{ ok: boolean }> => {
@@ -47,8 +48,8 @@ export function createRestartGuard(deps: {
     pending = (async () => {
       const activity = await deps.inspect().catch(() => ({ tasks: 0, processes: 0, unknown: true }))
       if ((activity.unknown || activity.tasks || activity.processes) && !await deps.confirm(restartDialog(activity))) return { ok: false }
-      await deps.restart(install)
-      return { ok: true }
+      const r = await deps.restart(install)
+      return r && r.ok === false ? { ok: false } : { ok: true }
     })().finally(() => { pending = undefined })
     return pending
   }

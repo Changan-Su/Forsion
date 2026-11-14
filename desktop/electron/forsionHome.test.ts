@@ -3,7 +3,7 @@ import { describe, it, expect, afterEach, vi } from 'vitest'
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, lstatSync, realpathSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { bindDevTanguHome, migratePair, migrateEngineData, setDevMode, forsionHomeDir, tanguDataDir, defaultWorkspaceDir } from './forsionHome'
+import { bindDevTanguHome, bindFolderUnitWorkspace, machineWorkspaceDir, migratePair, migrateEngineData, setDevMode, forsionHomeDir, tanguDataDir, defaultWorkspaceDir } from './forsionHome'
 // 故意跨包 import 引擎源码(只依赖 node:*):下面逐字比对两边的解析结果,任一侧改规则都会红,别当脏依赖清掉。
 import { authFile, configFile, providerAuthFile } from '../../tangu-agent/src/core/tanguHome'
 
@@ -152,6 +152,21 @@ describe('dev 态目录隔离', () => {
     vi.stubEnv('FORSION_WORKSPACE_DIR', '  ')
     setDevMode(true)
     expect(defaultWorkspaceDir().endsWith('Forsion-Dev')).toBe(true)
+  })
+
+  it('文件夹 Unit 的工作区:安装版(isPackaged 为真)也认,且压过 FORSION_WORKSPACE_DIR;解绑后回到原规则', () => {
+    vi.stubEnv('FORSION_WORKSPACE_DIR', '/tmp/bench-workspace')
+    setDevMode(false) // = app.isPackaged 为真
+    bindFolderUnitWorkspace('/Units/A/Forsion')
+    try {
+      expect(defaultWorkspaceDir()).toBe('/Units/A/Forsion')
+      setDevMode(true)
+      expect(defaultWorkspaceDir()).toBe('/Units/A/Forsion')
+      expect(machineWorkspaceDir().endsWith('Forsion-Dev')).toBe(true)
+    } finally { bindFolderUnitWorkspace(null) }
+    expect(defaultWorkspaceDir()).toBe('/tmp/bench-workspace')
+    setDevMode(false)
+    expect(defaultWorkspaceDir().endsWith('Forsion')).toBe(true)
   })
 
   it('OAuth 动态模块在 dev 中绑定同一个引擎 home，不再写进正式目录', () => {

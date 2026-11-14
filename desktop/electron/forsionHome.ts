@@ -17,7 +17,8 @@ import { homedir } from 'os'
 let devMode = false
 export function setDevMode(v: boolean): void { devMode = v }
 export const isDevMode = (): boolean => devMode
-/** 插件沙箱子进程:父进程 spawn 时带 FORSION_SANDBOX=1,TANGU_HOME / FORSION_WORKSPACE_DIR 都指进沙箱目录(pluginSandbox.ts)。 */
+/** 插件沙箱子进程:父进程 spawn 时带 FORSION_SANDBOX=1,TANGU_HOME / FORSION_WORKSPACE_DIR 都指进沙箱目录(pluginSandbox.ts)。
+ *  只用于「沙箱的工作区可被环境变量挪走」这一件事;「是不是整机的主人」看 hostRole.ts 的 isMachineOwner()。 */
 export const isSandboxMode = (): boolean => process.env.FORSION_SANDBOX === '1'
 
 /** Forsion 根 = 共享域(auth/provider-auth/config.json/activity/desktop-bridge)+ desktop 自有内容。
@@ -47,12 +48,21 @@ export function bindDevTanguHome(): void {
   if (devMode && !process.env.TANGU_HOME) process.env.TANGU_HOME = tanguDataDir()
 }
 
+/** 文件夹 Unit 的工作区(<文件夹>/Forsion):main.ts 在决定 userData / home 的同一段里绑上,之后不变。
+ *  进程内状态,不走环境变量 —— 环境变量会漏进引擎和从这里起的插件沙箱。 */
+let folderUnitWorkspace: string | null = null
+export function bindFolderUnitWorkspace(dir: string | null): void { folderUnitWorkspace = dir }
+
 /** 默认本机工作区(会话 host 执行 cwd 兜底;默认笔记库 Amadeus/、Coding / 造物的 Project/ 都在它下面)。
+ *  文件夹 Unit(安装版也一样)= 它自己的 <文件夹>/Forsion,和它的 home 同进同退。
  *  FORSION_WORKSPACE_DIR 只在 dev 态与插件沙箱里认,给台架用(scripts/lib/launch-electron.cjs 自动补):临时 TANGU_HOME 管不到这里,
  *  不挪的话没预置库配置的台架一恢复库,打开的就是开发者真实的 ~/Forsion-Dev/Amadeus。
  *  刻意不做成「跟着 TANGU_HOME 走」:bindDevTanguHome 会给平时的 dev 实例也设上 TANGU_HOME,那样真实工作区就被挪走了。 */
 export const defaultWorkspaceDir = (): string =>
-  ((devMode || isSandboxMode()) && process.env.FORSION_WORKSPACE_DIR?.trim()) || join(homedir(), devMode ? 'Forsion-Dev' : 'Forsion')
+  folderUnitWorkspace
+  ?? (((devMode || isSandboxMode()) && process.env.FORSION_WORKSPACE_DIR?.trim()) || machineWorkspaceDir())
+/** 默认那台的工作区(~/Forsion,dev ~/Forsion-Dev):不管当前进程是谁。 */
+export const machineWorkspaceDir = (): string => join(homedir(), devMode ? 'Forsion-Dev' : 'Forsion')
 
 const lstatOrNull = (p: string): ReturnType<typeof lstatSync> | null => {
   try { return lstatSync(p) } catch { return null }
