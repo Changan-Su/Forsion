@@ -22,7 +22,7 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import type { ShortcutResult } from '../shared/products'
 import { SPACE_ID_RE } from '../shared/spaceAppearance'
-import { desktopValue, detailOf, execArg, safeShortcutName, taken, xml } from './productShortcut'
+import { desktopValue, detailOf, execArg, safeShortcutName, serialShortcutWrite, taken, xml } from './productShortcut'
 
 /** 链接上标「开成独立窗」的参数。 */
 export const SPACE_WINDOW_PARAM = 'window'
@@ -272,6 +272,8 @@ export interface CreateSpaceShortcutDeps {
   /** 渲染层画好的源图,按尺寸给出 PNG(宿主用 nativeImage 缩放);没有图标就不传。 */
   iconPng?: (size: number) => Buffer | undefined
   writeShortcutLink?: (path: string, options: { target: string; args: string; description?: string; icon?: string; iconIndex?: number; appUserModelId?: string }) => boolean
+  /** 排到队头、动盘之前再核一次请求还作不作数(设备快捷方式:发起时的账号没换);false = 什么都不写。 */
+  stillCurrent?: () => boolean
 }
 
 const pngs = (sizes: number[], iconPng: CreateSpaceShortcutDeps['iconPng']): SizedPng[] => {
@@ -303,20 +305,22 @@ async function writeIconFile(file: string | null, data: Buffer | undefined): Pro
  * 在系统桌面创建 Space 快捷方式。同名绝不覆盖,改用 `名字 (1)`、`(2)`……
  * dev 下恒拒:未打包时 execPath 是裸 electron,forsion:// 也只在安装版注册。
  */
-/** 一次只建一个:Windows 那条是「先查名字没占、再写 .lnk」(writeShortcutLink 会覆盖),两个同名 Space 并发会写到同一个文件上(Codex 评审)。 */
-let queue: Promise<unknown> = Promise.resolve()
+/** 一次只建一个:Windows 那条是「先查名字没占、再写 .lnk」(writeShortcutLink 会覆盖),两个同名并发会写到同一个文件上(Codex 评审)。
+ *  造物 / Space / 设备三种快捷方式排同一条队列(productShortcut.serialShortcutWrite)。 */
 export function createSpaceShortcut(space: { id: string; name: string }, deps: CreateSpaceShortcutDeps): Promise<ShortcutResult> {
-  return createWindowShortcut(SPACE_SHORTCUT, space, deps)
+  return createWindowShortcut(SPACE_SHORTCUT, space, deps) as Promise<ShortcutResult>
 }
 
-/** 同上,任一种类;Space / Unit 共用一条队列(Windows 先查后写的竞态两种之间也存在)。 */
-export function createWindowShortcut(kind: WindowShortcutKind, space: { id: string; name: string }, deps: CreateSpaceShortcutDeps): Promise<ShortcutResult> {
-  const run = queue.then(() => createWindowShortcutNow(kind, space, deps))
-  queue = run.catch(() => {})
-  return run
+/** 排到队头真正开始写之前,stillCurrent() 说「请求已经不作数了」(比如发起时的账号已经换掉)→ 什么都不写。 */
+export type WindowShortcutResult = ShortcutResult | { ok: false; code: 'account_changed' }
+
+/** 同上,任一种类。 */
+export function createWindowShortcut(kind: WindowShortcutKind, space: { id: string; name: string }, deps: CreateSpaceShortcutDeps): Promise<WindowShortcutResult> {
+  return serialShortcutWrite(() => createWindowShortcutNow(kind, space, deps))
 }
 
-async function createWindowShortcutNow(kind: WindowShortcutKind, space: { id: string; name: string }, deps: CreateSpaceShortcutDeps): Promise<ShortcutResult> {
+async function createWindowShortcutNow(kind: WindowShortcutKind, space: { id: string; name: string }, deps: CreateSpaceShortcutDeps): Promise<WindowShortcutResult> {
+  if (deps.stillCurrent && !deps.stillCurrent()) return { ok: false, code: 'account_changed' }
   if (!deps.isPackaged) return { ok: false, code: 'unpackaged' }
   const platform = deps.platform ?? process.platform
   if (!kind.isId(space.id)) return { ok: false, code: 'not_found' }

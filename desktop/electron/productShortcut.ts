@@ -148,11 +148,25 @@ export async function taken(target: string): Promise<boolean> {
   catch (e) { if ((e as NodeJS.ErrnoException).code === 'ENOENT') return false; throw e }
 }
 
+/** 往桌面写快捷方式一次只做一件(造物 / Space / 设备共用这一条队列):Windows 那条是「先查名字没占、再写 .lnk」
+ *  (writeShortcutLink 会覆盖),两个同名的并发就会写到同一个文件上(Codex 评审)。前一件失败不挡后一件。 */
+let shortcutQueue: Promise<unknown> = Promise.resolve()
+export function serialShortcutWrite<T>(fn: () => Promise<T>): Promise<T> {
+  const run = shortcutQueue.then(fn)
+  shortcutQueue = run.catch(() => {})
+  return run
+}
+
 /**
  * 在系统桌面创建产物快捷方式。同名文件**绝不覆盖**,改用 `名字 (1)`、`(2)`…… 递增。
  * dev 下恒拒:未打包时 process.execPath 是裸 electron 二进制,且 forsion:// scheme 只在打包安装时注册。
+ * 和 Space / 设备的快捷方式排同一条队列(serialShortcutWrite)。
  */
-export async function createProductShortcut(product: { id: string; name: string }, deps: CreateShortcutDeps): Promise<ShortcutResult> {
+export function createProductShortcut(product: { id: string; name: string }, deps: CreateShortcutDeps): Promise<ShortcutResult> {
+  return serialShortcutWrite(() => createProductShortcutNow(product, deps))
+}
+
+async function createProductShortcutNow(product: { id: string; name: string }, deps: CreateShortcutDeps): Promise<ShortcutResult> {
   if (!deps.isPackaged) return { ok: false, code: 'unpackaged' }
   const platform = deps.platform ?? process.platform
   let link: string
