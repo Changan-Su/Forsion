@@ -88,15 +88,15 @@ describe('内置引擎清单 — 新增三个外部引擎', () => {
     expect(pi.args?.join(' ')).toMatch(/pi-acp@\d+\.\d+\.\d+/);
   });
 
-  it('dsh:命令指向引擎目录、静态声明空 models/commands(automation-only,不探测)', () => {
+  it('dsh:跑用户自己装的 DSH 的官方对话入口;不静态声明 models/commands(靠探测读);命令不在就是未安装', () => {
     const dsh = loadEngines('/nonexistent/engines.json').find((e) => e.id === 'dsh')!;
-    expect(dsh.command).toBe('npm');
-    expect(dsh.args).toContain('--prefix');
-    expect(dsh.args?.some((a) => a.endsWith('cordis.yml'))).toBe(true);
-    expect(dsh.models).toEqual([]);
-    expect(dsh.commands).toEqual([]);
-    // 只认 node_modules:文件是我们种的,种了≠能跑
-    expect(dsh.detect?.dirs?.[0]).toMatch(/node_modules$/);
+    expect([dsh.command, ...(dsh.args || [])]).toEqual(['dsh', '--profile', 'acp']);
+    expect(dsh.models).toBeUndefined();
+    expect(dsh.commands).toBeUndefined();
+    // 只检测、不托管:不往引擎目录里种文件,看的是 DSH 自己的目录和 dsh 这个命令本身
+    expect(dsh.detect?.bin).toBe('dsh');
+    expect(dsh.detect?.requireBin).toBe(true);
+    expect(dsh.detect?.dirs?.[0]).not.toMatch(/node_modules/);
   });
 });
 

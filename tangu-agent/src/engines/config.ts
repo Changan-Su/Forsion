@@ -23,8 +23,10 @@ export interface EngineDef {
   /** 静态声明模型/命令(配了则跳过运行时探测——留旋钮;一般留空走懒探测)。 */
   models?: Array<{ id: string; name: string; description?: string }>;
   commands?: Array<{ name: string; description: string; hint?: string }>;
-  /** 检测提示(快速判断该 agent 是否已装/已登录;任一命中即「detected」)。无则默认可用。 */
-  detect?: { dirs?: string[]; env?: string[]; bin?: string };
+  /** 检测提示(快速判断该 agent 是否已装/已登录;任一命中即「detected」)。无则默认可用。
+   *  requireBin:启动命令就是 `bin` 本身(不经 npx 拉适配器)的引擎用 —— bin 不在 PATH 上一律「未安装」,
+   *  哪怕配置目录还在(卸载后目录会留下);否则会报成可用、到 spawn 才失败。 */
+  detect?: { dirs?: string[]; env?: string[]; bin?: string; requireBin?: boolean };
   /** 未检测到时给用户看的一行安装命令(设置页「Agent CLIs」显示)。语言中立,不进 i18n。 */
   setup?: string;
 }
@@ -90,7 +92,7 @@ export function loadEngines(configFile?: string): EngineDef[] {
     else fromFile(enginesFile());
   }
   const byId = new Map<string, EngineDef>();
-  // dsh 的启动命令含绝对路径(随 TANGU_HOME),故按调用时求值,不能进模块级 BUILTIN 常量。
+  // dsh 的检测目录随 $DSH_HOME,故按调用时求值,不进模块级 BUILTIN 常量。
   for (const e of [...BUILTIN, dshEngineDef()]) byId.set(e.id, e);
   for (const e of custom) if (e?.id && e?.command) byId.set(e.id, e); // 校验 id+command 才纳入
   return [...byId.values()];
@@ -154,10 +156,12 @@ export type EngineStatus = 'available' | 'needs-signin' | 'not-installed';
  * - `not-installed` — 三者全不命中。
  * 依据:claude-code/codex 运行走 `npx @…-acp`,`bin` 只是「装了」的探测提示;有 ~/.claude / API key 即真正可用,
  * 故「有 auth 无 bin」并入 available、不设独立 unavailable 态(三态够用)。
+ * 例外:detect.requireBin 的引擎(DSH)跑的就是 bin 本身,bin 不在即 not-installed。
  */
 export function engineStatus(def: EngineDef): EngineStatus {
   const d = def.detect;
   if (!d) return 'available';
+  if (d.requireBin && !(d.bin && binOnPath(d.bin))) return 'not-installed';
   const hasAuth = !!(d.dirs?.some((p) => existsSync(expandHome(p))) || d.env?.some((k) => !!process.env[k]));
   if (hasAuth) return 'available';
   if (d.bin && binOnPath(d.bin)) return 'needs-signin';
@@ -170,7 +174,8 @@ export function isEngineAvailable(def: EngineDef): boolean {
 }
 
 export interface EnginePrefs {
-  [id: string]: { defaultModel?: string };
+  /** probeSessionId:探测模型清单时复用的那个引擎会话(见 acpEngine.probeAcpEngine),不是用户的选择。 */
+  [id: string]: { defaultModel?: string; probeSessionId?: string };
 }
 
 /** 读引擎偏好:config.json 的 enginePrefs 段优先,缺失回落 ~/.tangu/engine-prefs.json;损坏 → {}。 */
@@ -192,6 +197,18 @@ export function saveEngineDefaultModel(id: string, modelId: string): void {
     updateSection('enginePrefs', (sec) => { // 锁内读改写
       const prefs = enginePrefsFrom(sec);
       return { ...prefs, [id]: { ...(prefs[id] || {}), defaultModel: modelId || undefined } };
+    });
+  } catch (e: any) {
+    console.warn('[engines] 保存 engine-prefs 失败:', e?.message || e);
+  }
+}
+
+/** 记下某引擎的探测会话(同一段 enginePrefs;只动这一个键,defaultModel 原样留着)。 */
+export function saveEngineProbeSession(id: string, sessionId: string): void {
+  try {
+    updateSection('enginePrefs', (sec) => {
+      const prefs = enginePrefsFrom(sec);
+      return { ...prefs, [id]: { ...(prefs[id] || {}), probeSessionId: sessionId } };
     });
   } catch (e: any) {
     console.warn('[engines] 保存 engine-prefs 失败:', e?.message || e);
