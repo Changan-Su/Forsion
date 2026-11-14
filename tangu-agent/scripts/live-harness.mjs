@@ -190,7 +190,10 @@ import { startImageRecoveryCloud, imageRecoveryLive } from './lib/image-recovery
  *                                                           #   留在 <场景>-evidence/。--cu-jev-mode auto|vision|elements(缺省 auto)、--cu-jev-threshold(缺省 = 插件缺省)、--cu-timeout(cusend 缺省 900)。
  *                                                           #   捆绑包同 cuvision:以装着的那份为底,另外把插件仓的 scripts/ 也覆盖进去。会真的动鼠标,走 devlock。
  *                                                           #   cuambig:收件人有歧义先问;cuscroll(反馈 d995c9a2):播放「我喜欢的音乐」第 18 首,要先滚(滚动交给 Jev,不许 act_ui 滚)。
- *   npm run live:harness -- --only cuweb,cuwebdead --cu-plugin <捆绑包目录>   # 网页按钮的后台 AXPress(10-31):一次性 Electron 窗口;cuweb 全程不许抢前台,cuwebdead 用只认真实悬停的按钮验「再按一次走真实点击」。
+ *   npm run live:harness -- --only cuweb,cuwebdead,cuwebcovered --cu-plugin <捆绑包目录>   # 网页按钮的后台 AXPress(10-31):一次性 Electron 窗口;cuweb 全程不许抢前台,cuwebdead 用只认真实悬停的按钮验「再按一次走真实点击」。
+ *   npm run live:harness -- --only cuweb --cu-plugin <新协议的捆绑包> --cu-replace-installed-helper   # 验已装 helper 的真实升级(11-14):不设 PI_* 变量,
+ *                                                           #   插件第一次调用时自己判过期、换掉 /Applications 里的 helper、重启真实 socket 上的守护进程。
+ *                                                           #   ⚠️会换掉机器上装着的 helper(开着的桌面共用它):先备份,验完放回。缺省(不带这个开关)照旧拒跑。
  *   npm run live:harness -- --only inline                    # 正文生成式 AI(09-28,G3-07):POST /agent/inline 润色保事实 / 翻译 / 续写 / 选区里的注入不照做 / 缺字段 400 / 不落会话;改 services/inlineAi.ts 提示词后跑
  *   npm run live:harness -- --only pageinstructions         # 页级 Instructions:分页读带本页约束、下一页不继承、inline 约束与用户当前要求优先
  *   npm run live:harness -- --only tool,stalewrite           # G3-02(09-28):读后被用户改过的文件,write_file 须拒写 → 模型重读 → 终稿留着用户那行;改 write_file / read_file / 读后指纹(readState)后跑
@@ -1089,7 +1092,7 @@ if (ONLY.has('dispatch')) {
 const CU_FIXTURE = opt('cu-fixture', cuDefaultFixture());
 if (ONLY.has('cuvision')) cuVisionSetup({ bundle: opt('cu-plugin', ''), fixture: CU_FIXTURE, shared });
 const CU_JEV = CU_JEV_KEYS.some((k) => ONLY.has(k));
-if (CU_JEV || CU_WEB_KEYS.some((k) => ONLY.has(k))) cuJevSetup({ bundle: opt('cu-plugin', ''), shared });
+if (CU_JEV || CU_WEB_KEYS.some((k) => ONLY.has(k))) cuJevSetup({ bundle: opt('cu-plugin', ''), shared, replaceInstalledHelper: argv.includes('--cu-replace-installed-helper') });
 
 // selfschedule:隔离的 Amadeus 笔记库(一个带 calendarDate 列的日历,一行既有事件)。不设 FORSION_AMADEUS_VAULT 引擎会落到
 // 开发机真实的 ~/Forsion/Amadeus —— 负对照那一腿真会往里写事件,所以只在跑这个场景时注入,且一定指进产物目录。
@@ -4037,7 +4040,7 @@ try {
 
   // cuweb / cuwebdead(10-31):网页按钮的后台 AXPress。说明和判据在 lib/cu-web-live.mjs。
   for (const key of CU_WEB_KEYS) {
-    await scenario(key, { cuweb: 'cuweb 网页按钮后台按下,不抢前台', cuwebdead: 'cuwebdead AXPress 没反应时再按一次走真实点击' }[key], () =>
+    await scenario(key, { cuweb: 'cuweb 网页按钮后台按下,不抢前台', cuwebdead: 'cuwebdead AXPress 没反应时再按一次走真实点击', cuwebcovered: 'cuwebcovered 窗口被盖住时按一次就够,不提窗口就读到新状态' }[key], () =>
       cuWebLive({ key, api, run, OUT, electron: process.env.CU_ELECTRON || join(root, '..', 'desktop', 'node_modules', 'electron', 'dist', 'Electron.app', 'Contents', 'MacOS', 'Electron'), timeoutMs: Number(opt('cu-timeout', '420')) * 1000, tokensOf, ttft }));
   }
 
