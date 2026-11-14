@@ -15,6 +15,7 @@ import { createRun } from './runStore.js';
 import { subscribe } from './eventBus.js';
 import { abortRun, enqueueRun, waitForRunSettlement } from './agentLoop.js';
 import { bumpHistoryRevision, historyEpoch } from './historyRevision.js';
+import { failedRunsFor } from './failedRuns.js';
 import type { EngineManager, EngineRunCtx } from '../engines/manager.js';
 
 type Behavior = { hang?: boolean; gone?: boolean; busy?: boolean };
@@ -124,7 +125,7 @@ describe('普通引擎对话的续接', () => {
     expect(resumes()).toEqual([null, 'ext-1', 'ext-1']);
   }, 20_000);
 
-  // 被停的那一轮在库里什么都不留(引擎对话的用户消息引擎这边不落库,回答还没有):改没改过只能靠历史版本号认。
+  // 被停的那一轮在库里只留下用户那一句(续接规则不看 user 行),回答还没有:改没改过只能靠历史版本号认。
   // 客户端的截断重发(重试 / 改了再发 / 重新生成)和回退都走删消息那个入口,入口会让版本号加一 —— 这里直接加。
   it('第二轮被停后,那一句被改了重发 → 不续接:引擎会话里还记着被弃掉的那一句', async () => {
     await turn(1);
@@ -223,6 +224,76 @@ describe('普通引擎对话的续接', () => {
     await turn(2, {}, { session: 'B' });
     await turn(3);
     expect(resumes()).toEqual([null, null, 'ext-1']);
+  }, 20_000);
+});
+
+// 重开对话时看到的就是库里的:用户那一句要落库(与自有循环同口径),失败那一轮的原因从 run 上带出来。
+describe('引擎对话重开后', () => {
+  const history = () => query<any[]>(`SELECT id, role, content, timestamp FROM chat_messages WHERE session_id = 'S' ORDER BY timestamp, rowid`);
+
+  it('用户的每一句都落库,成功和失败的都在;失败的那一轮按用户那一句带出原因', async () => {
+    expect((await turn(1)).done).toBe(true);
+    next = [{ busy: true }];
+    expect((await turn(2)).error).toMatch(/open in another window/);
+    const rows = await history();
+    expect(rows.map((r) => [r.id, r.role, r.content])).toEqual([['u1', 'user', 'q1'], ['a1', 'model', 'answer to q1'], ['u2', 'user', 'q2']]);
+    const failed = await failedRunsFor('S', rows);
+    expect(failed).toEqual([{ assistant_message_id: 'a2', user_message_id: 'u2', error: expect.stringMatching(/open in another window/), timestamp: Number(rows[2].timestamp) + 1 }]);
+    // 用户那一句不进续接规则:下一句照样接 ext-1
+    expect((await turn(3)).done).toBe(true);
+    expect(resumes()).toEqual([null, 'ext-1', 'ext-1']);
+  }, 20_000);
+
+  it('引擎会话没有了的那一句也留下原话和原因;点重试(截断重发删掉那一句)后不再带出', async () => {
+    await turn(1);
+    next = [{ gone: true }];
+    await turn(2);
+    let rows = await history();
+    expect((await failedRunsFor('S', rows)).map((f) => [f.assistant_message_id, f.error])).toEqual([['a2', expect.stringMatching(/Send your message again/)]]);
+    await query(`DELETE FROM chat_messages WHERE id = 'u2'`);
+    rows = await history();
+    expect(await failedRunsFor('S', rows)).toEqual([]);
+  }, 20_000);
+
+  it('被停的一轮不算失败;用户那一句照样在', async () => {
+    next = [{ hang: true }];
+    await turn(1, {}, { stopWhenStarted: true });
+    const rows = await history();
+    expect(rows.map((r) => r.id)).toEqual(['u1']);
+    expect(await failedRunsFor('S', rows)).toEqual([]);
+  }, 20_000);
+
+  it('跑动中被插过话的那一轮不带(分不出失败落在哪一段);下一个 run 自己的那一句不算插话', async () => {
+    next = [{ busy: true }];
+    await turn(1);
+    // 插话:不属于任何 run 的用户行,夹在 u1 之后
+    await query(`INSERT INTO chat_messages (id, session_id, role, content, timestamp) VALUES ('steer1', 'S', 'user', 'also this', ?)`, [Date.now() + 5]);
+    expect(await failedRunsFor('S', await history())).toEqual([]);
+    await query(`DELETE FROM chat_messages WHERE id = 'steer1'`);
+    next = [{ busy: true }];
+    await turn(2);
+    expect((await failedRunsFor('S', await history())).map((f) => f.user_message_id)).toEqual(['u1', 'u2']);
+  }, 20_000);
+
+  it('失败的轮数再多,本页里每一句的失败都带得回(不先截最近 N 个 run)', async () => {
+    for (let i = 1; i <= 120; i++) {
+      await createRun({ id: `x${i}`, sessionId: 'S', userId: 'u1', appId: 'tangu', modelId: 'm1', assistantMessageId: `xa${i}`, input: { message: `m${i}`, userMessageId: `xu${i}` } });
+      await query(`UPDATE agent_runs SET status = 'failed', error = ? WHERE id = ?`, [`boom ${i}`, `x${i}`]);
+      await query(`INSERT INTO chat_messages (id, session_id, role, content, timestamp) VALUES (?, 'S', 'user', ?, ?)`, [`xu${i}`, `m${i}`, 1000 + i]);
+    }
+    const failed = await failedRunsFor('S', await history());
+    expect(failed).toHaveLength(120);
+    expect(failed[0]).toEqual({ assistant_message_id: 'xa1', user_message_id: 'xu1', error: 'boom 1', timestamp: 1002 });
+  }, 20_000);
+
+  it('同一 id 再写一遍不重复(恢复 / 重试同一条)', async () => {
+    await turn(1);
+    await query(`UPDATE agent_runs SET status = 'queued' WHERE id = 'r1'`);
+    await createRun({ id: 'r1b', sessionId: 'S', userId: 'u1', appId: 'tangu', modelId: 'm1', assistantMessageId: 'a1b',
+      input: { message: 'q1', userMessageId: 'u1', attachments: [], agentConfig: { engineId: 'dsh', execMode: 'host', cwd: home, approvalMode: 'readonly' } } });
+    await query(`UPDATE agent_runs SET status = 'done' WHERE id = 'r1'`);
+    runs.push('r1b'); enqueueRun('S', 'r1b'); await waitForRunSettlement('r1b', 5000);
+    expect((await history()).filter((r) => r.id === 'u1')).toHaveLength(1);
   }, 20_000);
 });
 

@@ -8,7 +8,7 @@
  */
 import { useChildChat } from '../../stores/childChatStore'
 import { createRunEventBatch } from './runEventBatch'
-import type { ProjectSettings, AgentConfig, AgentRunEvent, Attachment, CtxInfo, ModelsResponse, NormalAgentDef, MsgSeg, SessionRecord, SketchItem, SubChat, TanguDesktopConfig, ToolEvent, UiMessage, WorkspaceDescriptor, StoredDesktopConfig, TeamDef, ThinkingLevel } from '../../../../../tangu-agent/src/contracts/clientTypes'
+import type { ProjectSettings, AgentConfig, AgentRunEvent, Attachment, CtxInfo, FailedRunRecord, ModelsResponse, NormalAgentDef, MsgSeg, SessionRecord, SketchItem, SubChat, TanguDesktopConfig, ToolEvent, UiMessage, WorkspaceDescriptor, StoredDesktopConfig, TeamDef, ThinkingLevel } from '../../../../../tangu-agent/src/contracts/clientTypes'
 import { clearDeviceSticky, noteDeviceRefusal } from '../../services/deviceMarks' // P1-K7a
 import { tanguDelegatedAdmin } from '../delegatedRole'
 import { DEFAULT_CLOUD_PROJECT, DEFAULT_LOCAL_WORKSPACE_KEY, ROOTLESS_WORKSPACE_KEY, cloudProjectKey, isHomeSession, isIndependentOrbitConfig, isTeamImageAvatar, sessionWorkspaceKey, SHOW_SYSTEM_PROMPT_KEY, THINKING_LEVELS } from '../../../../../tangu-agent/src/contracts/clientTypes'
@@ -187,6 +187,27 @@ export function recordToUi(r: any, resolveGroup?: (name: string, slug?: string) 
   }
   if (r.is_error) msg.status = 'error'
   return msg
+}
+
+/**
+ * 重开对话时补回失败的那几轮(引擎 services/failedRuns.ts 随消息一起带来)。失败而没有正文的一轮不落回答行,
+ * 原因只在 run 上:有半截回答落了库的,在那一行上补失败状态与原因;没有的,按在线时那个气泡的 id 补一行(排在用户那一句后面)。
+ * 原因是 run 上记的原串,与在线 error 事件同一串,渲染层照旧翻译。已是失败 / 停止状态的不动。
+ */
+export function withFailedRuns(ui: UiMessage[], failed: FailedRunRecord[], stamp: { agentId?: string; agentName?: string } = {}): UiMessage[] {
+  if (!failed.length) return ui
+  const out = [...ui]
+  for (const f of failed) {
+    if (!f?.assistant_message_id) continue
+    const error = f.error || 'error'
+    const i = out.findIndex((m) => m.id === f.assistant_message_id)
+    if (i >= 0) {
+      if (out[i].role === 'assistant' && out[i].status !== 'error' && out[i].status !== 'stopped') out[i] = { ...out[i], status: 'error', error }
+      continue
+    }
+    out.push({ id: f.assistant_message_id, role: 'assistant', content: '', status: 'error', error, timestamp: Number(f.timestamp) || Date.now(), ...stamp })
+  }
+  return out
 }
 
 type GroupRef = { current: string; groupSeen?: boolean; group?: boolean; groupEnded?: boolean; reuseNext?: boolean }
@@ -2201,8 +2222,8 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     set((s) => ({ historyLoading: { ...s.historyLoading, [sessionId]: true } }))
     try {
       const c = get().cfg
-      const [records, config, active] = await Promise.all([
-        api.listMessages(targetForSession(sessionId), sessionId),
+      const [{ messages: records, failedRuns }, config, active] = await Promise.all([
+        api.listHistory(targetForSession(sessionId), sessionId),
         api.getSessionConfig(targetForSession(sessionId), sessionId).catch(() => ({} as AgentConfig)),
         listActiveRuns(targetForSession(sessionId), sessionId),
       ])
@@ -2223,6 +2244,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
       void api.getSessionUsage(targetForSession(sessionId), sessionId)
         .then(({ base, ctx }) => set((s) => ({ usageBySession: { ...s.usageBySession, [sessionId]: { ...s.usageBySession[sessionId], ctx: s.usageBySession[sessionId]?.ctx || ctx, base, live: 0 } } })))
         .catch(() => {})
+      const stamp = agentStamp(get(), config)
       set((s) => {
         const existing = s.messagesBySession[sessionId] || []
         const resolveGroup = groupSpeakerResolver(s.agentDefs, t('group.host'))
@@ -2230,9 +2252,10 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
         const ui = records.map((r) => recordToUi(r, resolveGroup, resolveSlug))
         const byId = new Map(ui.map((m) => [m.id, m] as const))
         for (const m of existing) byId.set(m.id, m)
-        return { messagesBySession: { ...s.messagesBySession, [sessionId]: [...byId.values()].sort((a, b) => a.timestamp - b.timestamp) } }
+        // 失败轮在本地已有那一行之后再补:本地那一行可能被看门狗收成了 done(终态事件丢了),以引擎记的失败为准
+        const merged = withFailedRuns([...byId.values()], failedRuns, stamp)
+        return { messagesBySession: { ...s.messagesBySession, [sessionId]: merged.sort((a, b) => a.timestamp - b.timestamp) } }
       })
-      const stamp = agentStamp(get(), config)
       for (const run of active) {
         if ((run.status === 'running' || run.status === 'queued') && run.assistant_message_id) {
           const amid = run.assistant_message_id
@@ -2287,11 +2310,12 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     }
     try {
       const c = get().cfg
-      const [records, active] = await Promise.all([
-        api.listMessages(targetForSession(sessionId), sessionId),
+      const [{ messages: records, failedRuns }, active] = await Promise.all([
+        api.listHistory(targetForSession(sessionId), sessionId),
         listActiveRuns(targetForSession(sessionId), sessionId).catch(() => []),
       ])
       if (get().activeId !== sessionId || get().runningBySession[sessionId]) return
+      const failStamp = agentStamp(get(), get().configBySession[sessionId])
       set((s) => {
         const existing = s.messagesBySession[sessionId] || []
         const resolveGroup = groupSpeakerResolver(s.agentDefs, get().tr('group.host'))
@@ -2299,7 +2323,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
         const ui = records.map((r) => recordToUi(r, resolveGroup, resolveSlug))
         const byId = new Map(ui.map((m) => [m.id, m] as const))
         for (const m of existing) byId.set(m.id, m)
-        const merged = [...byId.values()].sort((a, b) => a.timestamp - b.timestamp)
+        const merged = withFailedRuns([...byId.values()], failedRuns, failStamp).sort((a, b) => a.timestamp - b.timestamp) // 同 loadHistory:合并后再补
         if (merged.length === existing.length && merged.every((m, i) => m === existing[i])) return s
         return { messagesBySession: { ...s.messagesBySession, [sessionId]: merged } }
       })

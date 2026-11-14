@@ -494,6 +494,17 @@ export interface MessageRecord {
   origin?: string | null
 }
 
+/** 消息接口一并带出的失败轮(services/failedRuns.ts):用户那一句还在、run 以 failed 收尾的那几轮。老引擎不带这一项。 */
+export interface FailedRunRecord {
+  /** 这一轮回答的行 id(与在线时的气泡同一个);可能有半截回答落了库,也可能没有。 */
+  assistant_message_id: string
+  user_message_id: string
+  /** agent_runs.error 原样(与在线 error 事件同一串,界面照旧翻译)。 */
+  error: string
+  /** 没有回答行时这一行的排序时间:用户那一句的时间 + 1。 */
+  timestamp: number
+}
+
 export interface ModelInfo {
   groupId?: string | null
   groupName?: string | null
