@@ -144,13 +144,10 @@ export function localUnitGlyph(icon: string | null | undefined): AppIconGlyph {
   return { kind: 'component', Icon: Folder as unknown as NonNullable<SpaceDefinition['icon']> }
 }
 
-/** addToDesktop 的第二个参数(主进程那半加的:渲染层画好的 1024px PNG + 兜底名,同 Space / 设备的「添加到桌面」)。 */
-type AddToDesktop = (id: string, opts?: { iconPng?: string; fallbackName?: string }) => Promise<LocalUnitsResult>
-
 /** 把这台本机 Unit 放到桌面:图标在这里画好交过去(主进程只认 id,名字按标记文件取)。 */
 export async function addLocalUnitToDesktop(u: Pick<LocalUnitRow, 'id' | 'icon'>): Promise<LocalUnitsResult> {
   const iconPng = await renderAppIconPng(localUnitGlyph(u.icon)).catch(() => undefined)
-  return localUnitCall((api) => (api.addToDesktop as AddToDesktop)(u.id, { ...(iconPng ? { iconPng } : {}), fallbackName: translate('unit.local.fallbackName') }))
+  return localUnitCall((api) => api.addToDesktop(u.id, { ...(iconPng ? { iconPng } : {}), fallbackName: translate('unit.local.fallbackName') }))
 }
 
 /** 标记文件里的图标:宿主图标名 → 那枚线条图标;别的非空串 → 当 emoji 画;空 → 文件夹。 */
