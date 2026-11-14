@@ -12,6 +12,7 @@ import { amadeus } from '../api'
 import { conflictCopyPath, conflictCopyVariant, textFingerprint } from '@amadeus-shared/writeConflict'
 import { registerMessages, translate } from '../../i18n'
 import { legacyWinRel } from '../lib/vaultFiles'
+import { canvasLineOf, composeFm, layoutLineOf, splitFm } from './fm'
 
 registerMessages({
   'unisave.conflict.toast': {
@@ -23,6 +24,14 @@ registerMessages({
     en: 'Tangu changed "{name}" while you were editing. Your version was kept, and Tangu’s changes were saved as "{copy}".',
   },
   'unisave.conflict.open': { zh: '打开副本', en: 'Open copy' },
+  'unisave.merged.toast': {
+    zh: '「{name}」在你编辑时被别处改过，已把那边的改动合并进来。',
+    en: '"{name}" was changed elsewhere while you were editing. Those changes were merged in.',
+  },
+  'unisave.merged.agentToast': {
+    zh: 'Tangu 在你编辑时改了「{name}」，已把它的改动合并进来。',
+    en: 'Tangu changed "{name}" while you were editing. Its changes were merged in.',
+  },
   'unisave.failed.toast': {
     zh: '「{name}」没能保存（{reason}），正在自动重试。保存成功之前请不要关闭它。',
     en: 'Couldn’t save "{name}" ({reason}). Retrying automatically — keep it open until it’s saved.',
@@ -173,6 +182,34 @@ export function mergeMovedText(base: string, ours: string, theirs: string): stri
     out.push(...r.ok)
   }
   return out.join('\n')
+}
+
+/** 盘上那版(theirs)离开了本实例的基线(base)、本实例手里又有没落盘的字(ours)—— CAS 拒写 / 打字中回灌(2026-11-14:
+ *  两台设备改同一篇的不同段落,不该出冲突副本)。三份都是内存形(LF,见 eol.ts),base 必须是 ours 的祖先(调用方保证)。
+ *  - 正文按行三方合并(mergeMovedText);同一行 / 相邻行两边都改了、两边都在文末追加 → 合不拢。
+ *  - frontmatter **不按行合**:两边在不同位置加同一个键会合出重复键(YAML 读不了)。只有一边改了 fm 就整块用那一边的;
+ *    两边都改了且不一样 → 合不拢。
+ *  - 分栏 / 画布的结构行(amadeus_layout / amadeus_canvas)三版必须逐字相同:它们靠正文里的锚注释定位,
+ *    哪一边动了结构都交给冲突副本(fm 整块取自一边,合并结果的结构行因此也与三版相同)。
+ *  合不拢 → null,调用方照旧本地胜 + 冲突副本。 */
+export function mergeUnsavedEdits(base: string, ours: string, theirs: string): string | null {
+  const b = splitFm(base)
+  const o = splitFm(ours)
+  const t = splitFm(theirs)
+  for (const lineOf of [layoutLineOf, canvasLineOf]) {
+    const line = lineOf(b.fmText)
+    if (lineOf(o.fmText) !== line || lineOf(t.fmText) !== line) return null
+  }
+  const fmText = o.fmText === t.fmText || t.fmText === b.fmText ? o.fmText : o.fmText === b.fmText ? t.fmText : null
+  if (fmText == null) return null
+  const body = mergeMovedText(b.body, o.body, t.body)
+  return body == null ? null : composeFm(fmText, body)
+}
+
+/** 上面那种合并合上了、编辑器里多了别处的改动:不出副本,只给一条会自己消失的底部提示(不带 level = 不进右上角通知栈,
+ *  不是错误)。agent = 别处那版是 Tangu 写的(归属账本认得出;编辑器里同时把它的改动标出来)。 */
+export function toastMergedRemote(path: string, agent = false): void {
+  emitAmadeusToast({ text: translate(agent ? 'unisave.merged.agentToast' : 'unisave.merged.toast', { name: noteName(path) }) })
 }
 
 /** 兜底(评审 G1-08):另存副本也写不进去时,最后的入口是剪贴板。复制在点按钮时发生(用户手势,剪贴板写得进)。

@@ -7,10 +7,14 @@
 //   G6 B 打一个字就关(卸载冲洗)→ 字落盘、A 回灌看得见、先前谁的字都没丢
 //   G7 停手后 3s 写盘次数不再增长(两个实例互相规范化 = 乒乓写)
 //  C 组(CAS,writeTextFile 带基线指纹):
-//   C1 盘上被别的窗口悄悄改了(回灌通知还在路上)→ 本地有改动的写被拒 → 盘上那版进冲突副本 + 本地版落盘
+//   C1 盘上被别的窗口悄悄改了(回灌通知还在路上)、改的正是本地在打的那一行 → 本地有改动的写被拒 → 盘上那版进冲突副本 + 本地版落盘
+//   C1m(2026-11-14)同上,但别处改的是**另一段** → 三方合并:两边的字都在盘上、编辑器里看得见别处那段,零副本零 error,
+//      只有一条不带级别的「已合并」提示
 //   C2 同上但本实例**没有用户改动**(只是编辑器规范化)→ 让位回灌,盘上那版原样保留、零副本
 //   C3 陈旧且没改动的 B 被关掉 → 不许拿旧全文盖掉盘上新版(卸载冲洗的 isPristine 闸)
-//  D 组(D-03 打字中外部改动):100ms / 600ms / 连续打字中 fire → 本地胜 + 冲突副本 = 外部那版 + error 提示带「打开副本」;
+//  D 组(D-03 打字中外部改动):外部改的正是本地在打的那一行,100ms / 600ms / 连续打字中 fire → 本地胜 + 冲突副本 = 外部那版
+//   + error 提示带「打开副本」;Dm1–Dm3(2026-11-14)外部改的是**另一段** → 三方合并:两边的字都在盘上、编辑器里看得见,
+//   零副本零 error,一条「已合并」提示;
 //   负对照:已落盘后 fire / 没改动时 fire → 照常回灌、零副本零提示
 //   假冲突(返修 B1,盘上没离开本实例基线):D6 打字中 fire 原样内容 · D7 标题回车改名后立刻打正文 ·
 //   D8 在途自写(盘先落 ack 晚回,`__upage.writeLagMs`)的回声 × 接着打字 → 一律零副本零提示、字照常落盘
@@ -181,10 +185,10 @@ async function groupG(browser) {
 }
 
 async function groupC(browser) {
-  // C1:本地有改动 + 盘上被悄悄改过(另一个窗口的写,externalChange 还在路上)
+  // C1:本地有改动 + 盘上被悄悄改过(另一个窗口的写,externalChange 还在路上),改的正是本地在打的那一行 → 合不拢
   {
     const p = await open(browser, '# T\n\n甲段。\n\n乙段。\n')
-    await p.evaluate(() => window.__upage.vault.set('Unified.md', '# T\n\n甲段。别处写的\n\n乙段。\n'))
+    await p.evaluate(() => window.__upage.vault.set('Unified.md', '# T\n\n甲段。\n\n乙段。别处写的\n'))
     await typeIn(p, 0, '乙段。', '本地')
     await wait(1800)
     const d = await disk(p)
@@ -194,6 +198,23 @@ async function groupC(browser) {
     record('C1 CAS 拒掉陈旧写 → 盘上那版进冲突副本 + error 提示,本地版随后落盘',
       rejects >= 1 && d.includes('乙段。本地') && c.length === 1 && c[0][1].includes('别处写的') && t.some((x) => x.level === 'error' && x.action?.label),
       JSON.stringify({ rejects, d, copies: c.map(([k, v]) => [k, v]), toasts: t.length }))
+    await p.close()
+  }
+  // C1m(2026-11-14):同上,但别处改的是另一段 → CAS 拒写后三方合并,两边的字都留下,不出副本
+  {
+    const p = await open(browser, '# T\n\n甲段。\n\n乙段。\n')
+    await p.evaluate(() => window.__upage.vault.set('Unified.md', '# T\n\n甲段。别处写的\n\n乙段。\n'))
+    await typeIn(p, 0, '乙段。', '本地')
+    await wait(1800)
+    const d = await disk(p)
+    const c = await copies(p)
+    const t = await toasts(p)
+    const rejects = await p.evaluate(() => window.__upage.casRejects.length)
+    const dom = await domText(p, 0)
+    record('C1m CAS 拒写、别处改的是另一段 → 三方合并:两边的字都在盘上与编辑器里,零副本零 error,一条「已合并」提示',
+      rejects >= 1 && d === '# T\n\n甲段。别处写的\n\n乙段。本地\n' && c.length === 0 && dom.includes('别处写的') && dom.includes('乙段。本地') &&
+        !t.some((x) => x.level === 'error') && t.filter((x) => !x.level && /合并/.test(x.text)).length === 1,
+      JSON.stringify({ rejects, d, copies: c.map(([k]) => k), toasts: t.map((x) => [x.level, x.text]) }))
     await p.close()
   }
   // C2:本实例没有用户改动(只是编辑器把 __粗__ 规范化成 **粗**)。
@@ -231,6 +252,8 @@ async function groupC(browser) {
 async function groupD(browser) {
   const MD = '# T\n\npara1 AAA\n\npara2 BBB\n\npara3 CCC\n'
   const EXT = '# T\n\npara1 AAA AGENT-WROTE-THIS\n\npara2 BBB\n\npara3 CCC\n'
+  // D1–D3 外部改的是本地正在打的那一行(para3):合不拢,本地胜 + 冲突副本。另一段的情形见下面 Dm1–Dm3。
+  const SAME = '# T\n\npara1 AAA\n\npara2 BBB\n\npara3 CCC AGENT-WROTE-THIS\n'
   const cases = [
     { label: 'D1 fire 于打字后 100ms', type: true, delay: 100 },
     { label: 'D2 fire 于打字后 600ms(防抖写之前)', type: true, delay: 600 },
@@ -240,15 +263,15 @@ async function groupD(browser) {
     const p = await open(browser, MD)
     await typeIn(p, 0, 'CCC', ' local')
     await wait(k.delay)
-    await p.evaluate((t) => window.__upage.fire('Unified.md', t), EXT)
+    await p.evaluate((t) => window.__upage.fire('Unified.md', t), SAME)
     if (k.continuous) for (let i = 0; i < 6; i++) { await p.keyboard.type('x'); await wait(250) }
     await wait(3000)
     const d = await disk(p)
     const c = await copies(p)
     const t = await toasts(p)
     const err = t.find((x) => x.level === 'error')
-    record(`${k.label}:本地胜 + 冲突副本 = 外部那版 + error 提示「打开副本」`,
-      d.includes('CCC local') && !d.includes('AGENT-WROTE-THIS') && c.length === 1 && c[0][1] === EXT && !!err && !!err.action?.label && err.text.includes(c[0][0].replace(/\.md$/, '')),
+    record(`${k.label}(同一行):本地胜 + 冲突副本 = 外部那版 + error 提示「打开副本」`,
+      d.includes('CCC local') && !d.includes('AGENT-WROTE-THIS') && c.length === 1 && c[0][1] === SAME && !!err && !!err.action?.label && err.text.includes(c[0][0].replace(/\.md$/, '')),
       JSON.stringify({ d, copies: c.map(([k2]) => k2), toast: err?.text }))
     if (k.label.startsWith('D1')) {
       // 「打开副本」= 导航门面事件(amadeusOverlays → openNote),路径正是副本
@@ -262,6 +285,25 @@ async function groupD(browser) {
       }))
       record('D1b 「打开副本」动作 = 导航到副本路径', nav === c[0]?.[0], JSON.stringify(nav))
     }
+    await p.close()
+  }
+  // Dm1–Dm3(2026-11-14):外部改的是另一段(para1),本地在 para3 打字 → 回灌等静默后三方合并,不出副本
+  for (const k of cases) {
+    const p = await open(browser, MD)
+    await typeIn(p, 0, 'CCC', ' local')
+    await wait(k.delay)
+    await p.evaluate((t) => window.__upage.fire('Unified.md', t), EXT)
+    if (k.continuous) for (let i = 0; i < 6; i++) { await p.keyboard.type('x'); await wait(250) }
+    await wait(3000)
+    const d = await disk(p)
+    const c = await copies(p)
+    const t = await toasts(p)
+    const dom = await domText(p, 0)
+    const mine = k.continuous ? 'para3 CCC localxxxxxx' : 'para3 CCC local'
+    record(`${k.label.replace(/^D/, 'Dm')}(另一段):三方合并,两边的字都在盘上与编辑器里,零副本零 error,一条「已合并」提示`,
+      d === EXT.replace('para3 CCC', mine) && c.length === 0 && dom.includes('AGENT-WROTE-THIS') && dom.includes(mine) &&
+        !t.some((x) => x.level === 'error') && t.filter((x) => !x.level && /合并/.test(x.text)).length === 1,
+      JSON.stringify({ d, copies: c.map(([k2]) => k2), toasts: t.map((x) => [x.level, x.text]) }))
     await p.close()
   }
   for (const k of [{ label: 'D4 负对照:已落盘后 fire', type: true, delay: 2500 }, { label: 'D5 负对照:没有本地改动时 fire', type: false, delay: 500 }]) {
