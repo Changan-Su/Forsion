@@ -14,6 +14,12 @@ export interface AccountQuotaView {
   weeklyPercent?: number
   weeklyResetAt?: string
   resetCards?: number
+  /** 额度用完后用积分继续(用户手动开,缺省关;2026-11-13 起服务端真按它扣积分,之前恒 false)。 */
+  pointsAutoDeduct?: boolean
+  /** 积分余额(2026-11-13 起随额度视图下发;旧服务端没有 = 不知道,别当 0)。 */
+  pointsBalance?: number
+  /** 这个账号能用的模型倍率上限,-1 = 不限(2026-11-13 起;旧服务端没有 = 不知道,不标任何模型)。 */
+  modelMultiplierCap?: number
   /** 后台额度(Muse / 自动化;2026-09-24 起服务端才下发,旧服务端无此字段)。 */
   background?: BackgroundQuotaView
 }
@@ -45,6 +51,24 @@ export type QuotaAdvisory = {
   threshold: 0 | 5 | 10 | 15
   exhausted: boolean
   critical: boolean
+}
+
+/**
+ * 写操作(用卡 / 转入 / 开关)的回包只带部分额度视图:auto-deduct 不含 resetCards / pointsBalance,用卡另给 resetCards。
+ * 回包里没有的字段留旧值,有的覆盖 —— 各处都照这个合并,别再「展开回包 + 手补一个字段」把别的新字段丢掉。
+ */
+export function mergeQuotaView(prev: AccountQuotaView | null | undefined, patch: Partial<AccountQuotaView> | null | undefined, extra: Partial<AccountQuotaView> = {}): AccountQuotaView {
+  const out: Record<string, unknown> = { ...(prev || {}) }
+  for (const source of [patch || {}, extra]) {
+    for (const [key, value] of Object.entries(source)) if (value !== undefined) out[key] = value
+  }
+  return out as unknown as AccountQuotaView
+}
+
+/** 积分余额:不是有限数 = 不知道(旧服务端 / 读失败),返回 null,调用方别把它当 0 去提示充值。 */
+export function pointsBalanceOf(quota: AccountQuotaView | null | undefined): number | null {
+  const n = quota?.pointsBalance
+  return typeof n === 'number' && Number.isFinite(n) ? Math.max(0, n) : null
 }
 
 export const ACCOUNT_QUOTA_EVENT = 'tangu:account-quota'
@@ -137,4 +161,100 @@ export function pickQuotaAdvisory(
 ): { advisory: QuotaAdvisory; bucket: 'main' | 'background' } | null {
   if (main && (!background || main.remainingPercent <= background.remainingPercent)) return { advisory: main, bucket: 'main' }
   return background ? { advisory: background, bucket: 'background' } : null
+}
+
+// ── 「用积分继续」开关的读写代数(2026-11-13)──────────────────────────────────────────────
+/**
+ * 旧读取晚到不能盖掉已确认的开关状态(界面绝不能显示「关」而服务端其实开着)。
+ * 每次写开关都推进代数;读额度视图的人在发请求前取一枚 pointsReadToken(),回来后经 reconcilePointsRead 合并:
+ * 读取发出之后有过写,就用本地已确认的值(确认不了时留读到的值,由提醒条的「待定」态兜底)。
+ * 放在这里(而不是写开关的模块里):账号菜单(宿主)与提醒条 / run 收尾(Tangu 界面)都要用,这是两边共用的额度接缝。
+ */
+let pointsWriteGen = 0
+let pointsConfirmed: boolean | undefined
+export function pointsReadToken(): number { return pointsWriteGen }
+export function reconcilePointsRead<T extends AccountQuotaView | null | undefined>(view: T, token: number): T {
+  if (!view || token === pointsWriteGen || pointsConfirmed === undefined) return view
+  return { ...view, pointsAutoDeduct: pointsConfirmed }
+}
+/** 一次在所有写之后发出的读取拿到了服务端的真值:记为已确认。 */
+export function notePointsConfirmed(view: AccountQuotaView | null | undefined, token: number): void {
+  if (view && token === pointsWriteGen && typeof view.pointsAutoDeduct === 'boolean') pointsConfirmed = view.pointsAutoDeduct
+}
+/** 写开关开始:之前发出的读取都算旧的,已确认值作废。 */
+export function beginPointsWrite(): void { pointsWriteGen++; pointsConfirmed = undefined }
+/** 写开关得到服务端回包:记下它说的值;写期间发出的读取也算旧的。 */
+export function confirmPointsWrite(value: boolean): void { pointsConfirmed = value; pointsWriteGen++ }
+/** 仅测试用(换号时由 resetAccountQuotaScope 一并清)。 */
+export function resetPointsWriteState(): void { pointsWriteGen = 0; pointsConfirmed = undefined }
+
+// ── 账号作用域(换号 / 登出)─────────────────────────────────────────────────────────────────
+/**
+ * 额度相关的模块级状态都按账号算:开关已确认值、读写代数、倍率上限、写入在途 / 不确定。
+ * 换号信号沿用宿主现成的 onAuthChanged(appStore 那条处理里调 resetAccountQuotaScope),这里只负责推进账号代数、
+ * 清掉开关状态、广播 null(= 不知道),并通知订阅者(上限读法、写开关模块)按新账号重来。
+ * 发请求前记下 accountQuotaEpoch(),回来时变了就整个丢弃 —— A 的晚到回包别落到 B 头上。
+ */
+export const ACCOUNT_QUOTA_SCOPE_EVENT = 'tangu:account-quota-scope'
+let accountEpoch = 0
+export function accountQuotaEpoch(): number { return accountEpoch }
+export function resetAccountQuotaScope(): void {
+  accountEpoch++
+  resetPointsWriteState()
+  if (typeof window === 'undefined') return
+  window.dispatchEvent(new CustomEvent(ACCOUNT_QUOTA_SCOPE_EVENT))
+  publishAccountQuota(null)
+}
+export function subscribeAccountQuotaScope(listener: () => void): () => void {
+  if (typeof window === 'undefined') return () => {}
+  window.addEventListener(ACCOUNT_QUOTA_SCOPE_EVENT, listener)
+  return () => window.removeEventListener(ACCOUNT_QUOTA_SCOPE_EVENT, listener)
+}
+
+// ── 模型倍率门槛(2026-11-13)───────────────────────────────────────────────────────────────
+/**
+ * 每档会员只能用倍率不高于上限的 Forsion 云端模型,严格大于才用不了。上限 = 额度视图的 modelMultiplierCap(-1 = 不限)。
+ * 拿不到(没登录 / 老扩展 / 旧服务端 / 读失败)= 不知道,一个都不标 —— 读失败不能把整张模型表锁死。
+ * 用户自己接的模型没有 multiplier,天然不受影响。
+ */
+export function modelMultiplierCapOf(quota: AccountQuotaView | null | undefined): number | null {
+  const cap = quota?.modelMultiplierCap
+  return typeof cap === 'number' && Number.isFinite(cap) && cap >= 0 ? cap : null
+}
+
+export function isModelTierLocked(
+  model: { multiplier?: number | null; source?: string } | null | undefined,
+  cap: number | null | undefined,
+): boolean {
+  if (!model || typeof cap !== 'number' || !Number.isFinite(cap) || cap < 0) return false
+  if (model.source && model.source !== 'forsion') return false
+  return typeof model.multiplier === 'number' && Number.isFinite(model.multiplier) && model.multiplier > cap
+}
+
+/**
+ * 服务端拦下用不了的模型:主链路 SSE `{ t:'error', status:403, message:'model_tier_locked', detail }`,引擎把它变成 run 错误串
+ * `model_tier_locked`;HTTP 403 那条路(非流式 / 补全)到这里是整段 JSON 回包。两种都不锚定地认这个码。
+ * 文案键 chat.err.tierLocked / tierLockedBare 在 i18n.tsx 的主字典里(宿主与 Tangu 界面包都要用)。
+ */
+export const TIER_LOCKED_RE = /model_tier_locked/i
+
+export function isTierLockedError(raw: string | null | undefined): boolean {
+  return !!raw && TIER_LOCKED_RE.test(raw)
+}
+
+/** 回包里带了 modelName 就用它(HTTP 403 的 JSON);只有裸码时返回 ''。 */
+export function tierLockedModelName(raw: string): string {
+  const start = raw.indexOf('{')
+  if (start < 0) return ''
+  try {
+    const body = JSON.parse(raw.slice(start))
+    const name = body?.modelName ?? body?.detail?.modelName
+    return typeof name === 'string' ? name.trim() : ''
+  } catch { return '' }
+}
+
+/** 人话:有模型名说名字,没有就说「这个模型」。fallbackName = 调用方确认过「确实还锁着」的那个模型的显示名。 */
+export function tierLockedText(raw: string, t: (key: string, vars?: Record<string, string>) => string, fallbackName = ''): string {
+  const model = tierLockedModelName(raw) || fallbackName
+  return model ? t('chat.err.tierLocked', { model }) : t('chat.err.tierLockedBare')
 }

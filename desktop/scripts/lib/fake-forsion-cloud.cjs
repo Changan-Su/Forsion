@@ -17,6 +17,7 @@ async function startFakeForsionCloud(opts = {}) {
     cards: 2,
     used: { daily: 880, weekly: 3000 },
     bg: { daily: 120, weekly: 200, autoMain: false },
+    pointsAutoDeduct: false,
     nickname: '演示用户',
     avatar: null,
     // 公告(opts.announcement 给了才有;形状 = server GET /api/announcements/pending 的 announcement)
@@ -43,7 +44,8 @@ async function startFakeForsionCloud(opts = {}) {
       dailyLimit: LIMIT.daily, dailyUsed: state.used.daily, dailyRemaining: Math.max(LIMIT.daily - state.used.daily, 0), dailyPercent: Math.round(state.used.daily / LIMIT.daily * 100),
       weeklyLimit: LIMIT.weekly, weeklyUsed: state.used.weekly, weeklyRemaining: Math.max(LIMIT.weekly - state.used.weekly, 0), weeklyPercent: Math.round(state.used.weekly / LIMIT.weekly * 100),
       weeklyResetAt: '2026-10-05', monthlyLimit: -1, monthlyUsed: 0, monthlyRemaining: -1, monthlyPercent: 0,
-      extraTokenPoints: 0, tier: 'plus', hasOverride: false, pointsAutoDeduct: false,
+      extraTokenPoints: 0, tier: 'plus', hasOverride: false, pointsAutoDeduct: state.pointsAutoDeduct,
+      pointsBalance: 1234, modelMultiplierCap: -1, // 不限:别的台架的模型表不被锁住
       background: {
         sharePercent: 15, modelId: 'glm-bg', autoMain: state.bg.autoMain,
         dailyLimit: d, dailyUsed: state.bg.daily, dailyRemaining: Math.max(d - state.bg.daily, 0), dailyPercent: Math.round(state.bg.daily / d * 100),
@@ -121,8 +123,13 @@ async function startFakeForsionCloud(opts = {}) {
         state.cards += n
         return send(res, 200, { success: true, cardsGranted: n, pointsSpent: n * 100, pricePerCard: 100, newPointsBalance: 1234 - n * 100, resetCards: state.cards })
       }
-      // 积分自动抵扣 09-29 下线:服务端回 410
-      if (p === '/api/token-quota/auto-deduct') return send(res, 410, { error: 'auto_deduct_removed', detail: '积分自动抵扣已下线' })
+      // 额度用完后用积分继续(2026-11-13 恢复;09-29 到这之前回 410):回包的 quota 不含 resetCards / pointsBalance
+      if (p === '/api/token-quota/auto-deduct') {
+        if (typeof body.enabled !== 'boolean') return send(res, 400, { error: 'invalid_request' })
+        state.pointsAutoDeduct = body.enabled
+        const { resetCards: _c, pointsBalance: _b, ...view } = quota()
+        return send(res, 200, { success: true, pointsAutoDeduct: state.pointsAutoDeduct, quota: view })
+      }
       // 公告:只回最新一条且没看过的
       if (p === '/api/announcements/pending') return send(res, 200, { announcement: state.announcement && !state.seenAnnouncements.has(state.announcement.id) ? state.announcement : null })
       { const m = /^\/api\/announcements\/([^/]+)\/seen$/.exec(p); if (m && req.method === 'POST') { state.seenAnnouncements.add(decodeURIComponent(m[1])); return send(res, 200, { success: true }) } }
