@@ -51,7 +51,7 @@ import { unfoldCalloutsForInsert } from '../blocks/markdown/callout'
 import type { TextWriteResult } from '@amadeus-shared/ipc'
 import { textFingerprint } from '@amadeus-shared/writeConflict'
 import { formatDateTime } from '../../format/time'
-import { SAVE_RETRY_MS, clearDraft, createCanonicalMemo, isElectronHost, mergeMovedText, peekDraftText, readDraft, stashDraft, toastConflictCopy, toastGoneUnsaved, toastRenameCopy, toastRescued, toastSaveFailed, writeConflictCopy, type UnsavedDraft } from './writeSafety'
+import { SAVE_RETRY_MS, clearDraft, createCanonicalMemo, isElectronHost, mergeMovedText, mergeUnsavedEdits, peekDraftText, readDraft, stashDraft, toastConflictCopy, toastGoneUnsaved, toastMergedRemote, toastRenameCopy, toastRescued, toastSaveFailed, writeConflictCopy, type UnsavedDraft } from './writeSafety'
 import { docHeadings } from './outline'
 import { revealBlockAtTop } from './revealScroll'
 import { createStatsReader, createStatsTicker } from './noteStats'
@@ -346,6 +346,13 @@ interface Pipe {
    *  「补丁后的整份 fm」,把本实例没落盘的 fm 修改一并豁免了,回灌随即用盘上版本整份换掉,既不保存也不留副本)。
    *  回灌采纳盘上版本、本实例写成功后清掉。 */
   peerPatch: Record<string, unknown> | null
+  /** lastSaved **已不是**编辑器内容的祖先(2026-11-14,Codex 复核 P1):本地胜把它挪到了编辑器从没含过的盘上版本,
+   *  或恢复的草稿基于别的版本。这时拿它当三方合并的基线 = 把那版的改动当成本地删掉的、悄悄撤销,所以一律不合
+   *  (见 mergeIntoEditor)。跨写失败 / 重试一直记着,只在写成功、采纳盘上版本、合并成功时清掉。 */
+  foreignBase?: boolean
+  /** 合并刚把别处的改动装进编辑器(不进撤销栈的事务,Milkdown 的监听器不认它):排在 200ms 防抖里的那个回调手里
+   *  还是合并**之前**最后一击时的 doc。下一次 onChange 改取编辑器此刻的 doc(见 onEditorChange,Codex 复核 P0)。 */
+  listenerStale?: boolean
 }
 
 /** insertMd 的附加项。quiet = 助手回答插回(评审 G3-08,经 lifecycle.unifiedInsertReply):**不抢焦点**(用户此刻在聊天框里)、
@@ -2259,6 +2266,50 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
     }
   }
 
+  /** 盘上那版(theirs,内存形;theirsRaw = 盘上原字节,认 Tangu 用)离开了本实例的基线、本实例手里又有没落盘的字 ——
+   *  CAS 拒写(writeNow)与打字中回灌(回灌 effect)两条路在这里先试三方合并,合不拢才走「本地胜 + 冲突副本」
+   *  (2026-11-14:两台设备改同一篇的不同段落,不该出冲突副本)。
+   *  'merged' = 已装进编辑器(pipe.fm / body 已是合并结果),调用方把基线换成 theirs、带着它的 CAS 写下去;
+   *  'later'  = 合得拢,但此刻正在输入法组字 —— 不往编辑器里派事务(typingGuard 顶注那条 bug),交给回灌等静默后再合
+   *             (只有 canDefer 才给:严格冲洗等不了);
+   *  null     = 合不拢 / 装不进,调用方照旧本地胜 + 冲突副本。
+   *  ⚠️ 基线必须是编辑器内容的祖先:待保全的外部版本(unpreserved)还在 / foreignBase = 本地胜(或恢复了基于别的版本的
+   *     草稿)把 lastSaved 挪到了编辑器从没含过的那版,拿它当基线「合」= 悄悄撤销那版的改动,一律不合。
+   *  ⚠️ 合并的事务不进撤销栈,Milkdown 监听器排着的回调还是合并前的 doc:置 listenerStale,onEditorChange 改取此刻的 doc。
+   *  ⚠️ 从拉平编辑器到 applyBody 之间不许有 await:中间落下的击键会被合并结果盖掉。
+   *  ⚠️ 装不进就原样退回,绝不 setEditorKey 重建:写盘不在回灌冻结期里,旧 doc 的终末快照会盖回 pipe.body。 */
+  const mergeIntoEditor = (theirs: string, theirsRaw: string, canDefer: boolean): 'merged' | 'later' | null => {
+    if (pipe.readOnly || pipe.dead || pipe.unpreserved != null || pipe.foreignBase) return null
+    const host = hostApi.current // 源码模式(textarea 才是真源)/ 编辑器不在 = null:不合
+    if (!host) return null
+    syncFromEditor() // 合的是编辑器**此刻**的内容(在途写盘期间落下的击键也算)
+    const merged = mergeUnsavedEdits(pipe.lastSaved, composeFm(pipe.fm, pipe.body), theirs)
+    if (merged == null) return null
+    if (isComposing()) return canDefer && reconcileRef.current ? 'later' : null
+    const { fmText, body } = splitFm(merged)
+    const prevFm = pipe.fm
+    const bodyChanged = body !== pipe.body
+    let agent = false
+    pipe.fm = fmText // fold 闭包现读 pipe.fm:必须先于 applyBody 的重 parse(同回灌)
+    if (bodyChanged) {
+      // 归属(G3-03):别处那版是 Tangu 写的 → 并进来的那几处按 Tangu 的改动标出来(编辑器里的差异正是 theirs 带来的)。
+      agent = claimAgentWrite(agentAbsPath, theirsRaw)
+      const owned = new Set(pipe.ownedCards)
+      pipe.ownedCards.clear() // 归属集合按 parse 世代重建(同回灌)
+      if (!host.applyBody(body, agent)) {
+        pipe.fm = prevFm
+        pipe.ownedCards = owned
+        return null
+      }
+      pipe.body = body
+      pipe.listenerStale = true
+    }
+    pipe.peerPatch = null // 基线换成了盘上那版:同篇写者替我们写的 fm 补丁已在里面
+    setFmVer((v) => v + 1)
+    if (bodyChanged || fmText !== prevFm) toastMergedRemote(path, agent)
+    return 'merged'
+  }
+
   /** 挪动 IPC 落定后放手(lifecycle.holdUnifiedPath;按住期间 writeNow 一个字都不写)。没挪成 → 有待写就照旧写原路径。
    *  挪成了 → 本实例退休,按住期间打的字交接到新路径:主进程已按新位置改写过这篇的图片 / 附件引用与 [[链接]],拿手里的
    *  正文直接写 = 把改写盖回去(图又裂),所以与盘上那版按行三方合并(基线 = 挪之前落盘的那版)再比对交换写。
@@ -2412,6 +2463,7 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
           return
         }
         let res: void | TextWriteResult
+        const sentBase = pipe.lastSaved // 这发写的 CAS 基线;await 期间被回灌挪动过就不拿它当合并基线
         try {
           // 要盖掉的盘上版本还没保全(打字中外部改动 / CAS 拒写后本地胜)→ 先落冲突副本;落不下就当写失败,不许覆盖。
           if (pipe.unpreserved != null && pipe.unpreserved !== text) await preserveExternal(pipe.unpreserved)
@@ -2445,6 +2497,7 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
           const current = cur.text
           if (current === text) {
             pipe.lastSaved = text // 殊途同归:别人写的正是这份
+            pipe.foreignBase = false
             continue
           }
           if (++conflicts > 3) {
@@ -2461,12 +2514,29 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
             reconcileNow()
             return
           }
+          // 两边改的不是同一处:三方合并装进编辑器,基线换成盘上那版,下一圈带着它的 CAS 把合并结果写下去。
+          if (pipe.lastSaved === sentBase) {
+            const merged = mergeIntoEditor(current, res.current, !strict)
+            if (merged === 'later') {
+              // 正在输入法组字:交给回灌(等组字结束 → 重读 → 同一个合并),写盘随回灌收尾补发。
+              pipe.pending = true
+              reconcileNow()
+              return
+            }
+            if (merged === 'merged') {
+              pipe.lastSaved = current
+              continue
+            }
+          }
           // 本地胜(拍板 #6):盘上那版登记为待保全,换基线再写一轮 —— 循环开头先落副本。
+          // 基线从此不是编辑器内容的祖先(foreignBase):这一版写成功之前,哪条路都不许再拿它合并。
+          pipe.foreignBase = true
           pipe.unpreserved = current
           pipe.lastSaved = current
           continue
         }
         pipe.lastSaved = text
+        pipe.foreignBase = false
         scoped.getState().bumpLinkGraph() // v4 自写账本不经 store 的 save → 反链/图谱/![[嵌入]] 只能靠这一声
         // 只有「写的就是此刻的状态」才算清账(Codex A9):await 期间落进来的新编辑不能被
         // 旧写入顺手抹掉 dirty 标志,否则回灌会把脏编辑器当干净实例覆盖。
@@ -2665,6 +2735,21 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
     }, SAVE_DEBOUNCE_MS)
   }
 
+  /** 编辑器监听器(Milkdown,防抖 200ms)报来的正文(stored md)。 */
+  const onEditorChange = (stored: string): void => {
+    if (srcRef.current) return // 源码模式:textarea 是唯一真源,隐藏编辑器的事务(回灌喂进去的)不回写(C-06)
+    // 合并刚把别处的改动装进编辑器(mergeIntoEditor,不进撤销栈):Milkdown 的监听器跳过那种事务,排着的这个回调拿的是
+    // 合并**之前**最后一击时的 doc —— 照收 = 把别处的字从 pipe 里抹掉,下一发写带着刚换好的 CAS 基线把它静默盖掉
+    // (Codex 复核 P0)。改取编辑器此刻的 doc(与冲洗前的 syncFromEditor 同一条序列化链)。
+    if (pipe.listenerStale) {
+      pipe.listenerStale = false
+      stored = hostApi.current?.serializeNow() ?? stored
+    }
+    pipe.body = stored
+    deriveFmFromDoc() // 分栏 layout 单一真源 = 当前 doc(Codex A13)
+    schedule()
+  }
+
   // 源码模式草稿:声明在 setFm 之前 —— chrome 写 fm 时若正处源码模式,textarea 草稿必须跟着
   // 重组(Codex P1:否则下一次击键会从旧草稿整文重拆,把刚落盘的 chrome 变更又抹掉)。
   const [srcDraft, setSrcDraft] = useState<string | null>(null)
@@ -2751,7 +2836,17 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
           // ⚠️ 只有盘上**真的离开了本实例的基线**才算外部改动(评审 D-03 返修 B1):raw === lastSaved = 盘上还是
           //    自己上次写的那版(挂载补读、自写回声、改名重挂后接着打字、切篇后立刻打字),没有任何东西要保全;
           //    漏了这一项,每次「读回自己 + 手上有未落盘的字」都会凭空生出一份冲突副本 + error 提示。
-          if (raw !== pipe.lastSaved && raw !== composeFm(pipe.fm, pipe.body)) pipe.unpreserved = raw
+          const ours = composeFm(pipe.fm, pipe.body)
+          if (raw !== pipe.lastSaved && raw !== ours) {
+            // 先试三方合并(2026-11-14):两边改的不是同一处 → 别处那版并进编辑器,基线换成它,pending 留着,
+            // finally 的补发带着它的 CAS 把合并结果写下去 —— 不出副本。合不拢才照旧登记待保全。
+            if (mergeIntoEditor(raw, rawDisk, false) === 'merged') {
+              pipe.lastSaved = raw
+              return
+            }
+            pipe.unpreserved = raw
+            pipe.foreignBase = true // 基线挪到了编辑器没含过的这版(见 Pipe.foreignBase)
+          } else if (raw === ours) pipe.foreignBase = false
           pipe.lastSaved = raw
           return
         }
@@ -2783,6 +2878,7 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
           setEditorKey((k) => k + 1)
         }
         pipe.lastSaved = raw
+        pipe.foreignBase = false
         pipe.pending = false
         // 采纳了盘上版本 = 本地与盘上重新一致(收口 N-4):写失败后撤回、外部改动随后被采纳时,退避重试 / 恢复信号
         // 都因 !pending 直接返回,不在这里收,「未保存」条就一直挂着,失败时存的旧草稿留到下次提示恢复。
@@ -3280,6 +3376,8 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
     // 新打的字);没打过字但草稿之后盘上又被别处写过(基线指纹对不上)→ 保全盘上那版。都不是 = 纯恢复,无可保全。
     const keep = local !== disk ? local : textFingerprint(disk) !== d.base ? disk : null
     if (keep != null && keep !== d.text) pipe.unpreserved = keep
+    // 草稿不是在 lastSaved 上改出来的(之后盘上又被写过):写成功之前不拿 lastSaved 当合并基线(见 Pipe.foreignBase)。
+    if (textFingerprint(disk) !== d.base) pipe.foreignBase = true
     const { fmText, body } = splitFm(d.text)
     pipe.fm = fmText
     setFmVer((v) => v + 1)
@@ -3772,12 +3870,7 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
                 path={path}
                 pageDir={pageDir}
                 body={pipe.body}
-                onChange={(stored) => {
-                  if (srcRef.current) return // 源码模式:textarea 是唯一真源,隐藏编辑器的事务(回灌喂进去的)不回写(C-06)
-                  pipe.body = stored
-                  deriveFmFromDoc() // 分栏 layout 单一真源 = 当前 doc(Codex A13)
-                  schedule()
-                }}
+                onChange={onEditorChange}
                 onFinalFlush={(stored) => {
                   pipe.body = stored
                   deriveFmFromDoc()
