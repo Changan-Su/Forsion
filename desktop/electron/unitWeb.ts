@@ -14,6 +14,8 @@
  * 入站同名头一律不透传(契约 C1)。
  * 调用方身份(P1 · K1):隧道来路带 unitHost 签的 x-unit-caller → resolveCaller 验签(每请求只调一次、一次性消费),
  * 通过才在从零重建的头表里盖 x-forsion-remote-caller;验不过 403 BAD_CALLER_ASSERTION(不降级);局域网 / P2P 来路的该头一律无视。
+ * 委托管理员档(deps.delegatedAdmin 打开时):隧道来路的断言里带 role=admin 的操作者声明 → 这条请求只按 DELEGATED_ADMIN_* 两张表放
+ * (缺省全拒,GET 也算),引擎请求另盖 x-forsion-remote-role: delegated-admin;每次写在本机日志留一行。开关关着时操作者声明一律无视。
  *
  * ⚠️ 刻意零 electron 依赖(deps 注入):vitest 直接跑真 HTTP 全链(scripts 之外的脊柱测试
  * electron/unitWeb.test.ts —— 配对/鉴权/反代盖章/SSE 直通都在那里钉)。
@@ -29,7 +31,7 @@ import { IPC } from '../shared/amadeus/ipc'
 import type { VaultFace } from './amadeus/ipc'
 import { PRODUCT, type ProductProfile } from './product'
 import { ENGINE_ROUTES } from './engineRoutes.generated'
-import { callerOf, encodeEngineCaller, ENGINE_CALLER_HEADER, gcSeenCallers, UNIT_CALLER_HEADER, verifyProxyCaller, type ProxyCaller, type UnitCaller } from './unitCaller'
+import { callerOf, encodeEngineCaller, ENGINE_CALLER_HEADER, gcSeenCallers, UNIT_CALLER_HEADER, verifyProxyCaller, type ProxyCaller, type ProxyOperator, type UnitCaller } from './unitCaller'
 import { baseTierOnly } from './remoteSessionGate' // P1-K4
 import { lockedEngineAllowed, lockedRequestAllowed, REMOTE_LOCKED_BODY, VAULT_RPC_READ } from './remoteLockGate' // P1-K2
 import type { GateResult, RemoteAccessStatus } from '../shared/remoteSessions' // P1-K4
@@ -66,6 +68,31 @@ export type UnitIngress = 'tunnel' | 'p2p' | 'lan'
 /** 隧道(unitHost)与 P2P 执行器(unitP2p)各自盖的内部密钥头。 */
 export const UNIT_INTERNAL_HEADER = 'x-unit-internal'
 export const UNIT_P2P_HEADER = 'x-unit-p2p'
+
+/** unitWeb → 引擎:委托管理员档的角色头(引擎只在远端标记有效且来路为隧道时读;入站同名头从不透传 —— 头表从零重建)。 */
+export const ENGINE_ROLE_HEADER = 'x-forsion-remote-role'
+export const DELEGATED_ADMIN_ROLE = 'delegated-admin'
+
+/**
+ * 委托管理员档里 unitWeb 自己伺服的非引擎面(方法 + 去投影前缀后的路径,精确匹配)。壳启动要的四条只读;
+ * 引擎那半在路由表(engineRoutes.generated.ts 的 delegatedAdmin 标记,生成器 DELEGATED_ADMIN 集)。
+ * 另放静态资源:GET / HEAD 且不落在 /unit、/vault、/engine 之下的路径(只伺服 web 构建,不进插件后端挂载)。
+ * 其余一律 403 LOCAL_ONLY:/unit/config 的写、/unit/meta、配对、主机文件、远程会话状态、/vault/* 全部(含 asset-token / events)。
+ */
+export const DELEGATED_ADMIN_UNIT_ROUTES: ReadonlyArray<readonly [method: string, path: string]> = [
+  ['GET', '/unit/whoami'],
+  ['GET', '/unit/config'],
+  ['GET', '/unit/plugins'],
+  ['GET', '/unit/spaces'],
+]
+const DELEGATED_UNIT_KEYS = new Set(DELEGATED_ADMIN_UNIT_ROUTES.map(([m, p]) => `${m} ${p}`))
+
+/** 委托管理员档下一条非引擎请求放不放(HEAD 按 GET)。path = 去投影前缀、去 query 后的路径。 */
+export function delegatedNonEngineAllowed(method: string, path: string): boolean {
+  const m = method.toUpperCase() === 'HEAD' ? 'GET' : method.toUpperCase()
+  if (DELEGATED_UNIT_KEYS.has(`${m} ${path}`)) return true
+  return m === 'GET' && !/^\/(?:unit|vault|engine)(?:\/|$)/i.test(path)
+}
 
 /** 引擎路由里远端不许用的回包(设备页据 code 出本地化提示,见 frontend services/localOnly.ts)。 */
 const LOCAL_ONLY_BODY = { code: 'LOCAL_ONLY', detail: 'This action is only available on the device itself' }
@@ -119,6 +146,7 @@ const escapeRe = (x: string): string => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 const COMPILED_ROUTES = ENGINE_ROUTES.map((r) => ({
   method: r.method,
   access: r.access,
+  delegatedAdmin: r.delegatedAdmin === true,
   re: new RegExp('^' + r.path.split('/').map((seg) => (seg.startsWith(':') ? '[^/]+' : escapeRe(seg.toLowerCase()))).join('/') + '$'),
 }))
 
@@ -137,6 +165,36 @@ export function engineRouteAccess(method: string, normPath: string): 'allow' | '
     allowed = true
   }
   return allowed ? 'allow' : 'unknown'
+}
+
+/**
+ * 委托管理员档下规整后引擎路径放不放:至少命中一行,且命中的**每一行**都带 delegatedAdmin 标记(allow / deny-remote 一概不看)。
+ * 表里没有的(运行期插件路由、拼错的路径)一律拒。HEAD 按 GET。
+ */
+export function delegatedEngineAllowed(method: string, normPath: string): boolean {
+  const m = method.toUpperCase() === 'HEAD' ? 'GET' : method.toUpperCase()
+  const p = normPath.toLowerCase()
+  let hit = false
+  for (const r of COMPILED_ROUTES) {
+    if (r.method !== m || !r.re.test(p)) continue
+    if (!r.delegatedAdmin) return false
+    hit = true
+  }
+  return hit
+}
+
+/**
+ * 隧道来路的 index.html 基址(相对):从这次请求的目录走到投影根。设备页经 server 中转时浏览器地址多一段
+ * `…/api/units/<id>/proxy` 前缀,绝对的 `<base href="/web/">` 会把资源全打到中转源的 `/web/…`(那里没有这台设备);
+ * 相对基址与前缀无关。rawPath = unitWeb 收到的原始路径(未去前缀、不含 query)。
+ */
+export function relativeBaseHref(rawPath: string, basePath: string): string {
+  const from = rawPath.split('/').slice(1, -1)
+  const to = basePath.split('/').slice(1, -1)
+  let k = 0
+  while (k < from.length && k < to.length && from[k] === to[k]) k++
+  const href = '../'.repeat(from.length - k) + to.slice(k).map((seg) => seg + '/').join('')
+  return href || './'
 }
 
 /** RPC 里字节参数/返回值的 JSON 包裹形态(Uint8Array ↔ base64)。 */
@@ -211,6 +269,9 @@ export interface UnitWebDeps {
   // P1-K2 ── 急停后的远程锁定(remoteSafety.isLocked,同步内存镜像;每请求现查)。缺省 = 未锁(便携 Unit 不传)。
   //   锁定时非本机入口只剩读 + 中止(remoteLockGate.ts);工作区主人(projection local)不受影响。
   remoteLock?: () => boolean
+  /** 委托管理员档的本机开关(独立 Unit 的 unit.json cloud.delegatedAdmin;每请求现读)。缺省 / false = 关:
+   *  隧道断言里的操作者声明一律无视,按今天的隧道档。桌面不传。 */
+  delegatedAdmin?: () => boolean
 }
 
 export interface UnitWebHandle {
@@ -364,14 +425,40 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
    * 就算带着用正确钥签出的断言也不作数(K1 S5)。隧道上缺头 = 账号级未识别(caller:null);在场却验不过 → ok:false
    * (调用方回 403 BAD_CALLER_ASSERTION,不降级)。/engine 分支与 K4 的 /unit/remote-access* 共用。
    */
-  const resolveCaller = (req: http.IncomingMessage, info: { via: UnitIngress | null }): { ok: true; caller: ProxyCaller | null } | { ok: false } => {
-    if (info.via !== 'tunnel') return { ok: true, caller: null }
+  type CallerResolution = { ok: true; caller: ProxyCaller | null; operator: ProxyOperator | null } | { ok: false }
+  /** 一个请求的验签结果只算一次(委托管理员档在 handler 顶部就要看操作者声明,/engine 分支再取同一份):第二次验必是 replay。 */
+  const callerMemo = new WeakMap<http.IncomingMessage, CallerResolution>()
+  const resolveCaller = (req: http.IncomingMessage, info: { via: UnitIngress | null }): CallerResolution => {
+    if (info.via !== 'tunnel') return { ok: true, caller: null, operator: null }
     const raw = req.headers[UNIT_CALLER_HEADER]
-    if (raw === undefined) return { ok: true, caller: null }
-    if (typeof raw !== 'string') return { ok: false }
-    const r = verifyProxyCaller(proxyCallerKey, raw, { method: req.method || 'GET', url: req.url || '' }, seenCallerDispatch)
-    if (!r.ok) { deps.log(`[unit-web] 调用方断言无效(${r.reason}),已拒绝`); return { ok: false } }
-    return { ok: true, caller: r.caller }
+    if (raw === undefined) return { ok: true, caller: null, operator: null }
+    const memo = callerMemo.get(req)
+    if (memo) return memo
+    let out: CallerResolution
+    if (typeof raw !== 'string') out = { ok: false }
+    else {
+      const r = verifyProxyCaller(proxyCallerKey, raw, { method: req.method || 'GET', url: req.url || '' }, seenCallerDispatch)
+      if (!r.ok) deps.log(`[unit-web] 调用方断言无效(${r.reason}),已拒绝`)
+      out = r.ok ? { ok: true, caller: r.caller, operator: r.operator } : { ok: false }
+    }
+    callerMemo.set(req, out)
+    return out
+  }
+  /** 本机开关读不出按关(失败偏严:关着 = 今天的隧道档,不升档)。 */
+  const delegatedAdminOn = (): boolean => {
+    if (!deps.delegatedAdmin) return false
+    try { return deps.delegatedAdmin() === true } catch { return false }
+  }
+  /** 委托管理员留痕:每次写(非 GET / HEAD,含被拒的)一行 —— 操作者、方法、路径(不含 query)、时刻、结果码;不记请求体。 */
+  const auditDelegatedWrite = (res: http.ServerResponse, op: ProxyOperator, method: string, path: string): void => {
+    let done = false
+    const write = (): void => {
+      if (done) return
+      done = true
+      deps.log(`[unit-web] delegated admin write: uid=${op.uid} name=${JSON.stringify(op.name)} ${method} ${path} -> ${res.headersSent ? res.statusCode : 'aborted'} at ${new Date().toISOString()}`)
+    }
+    res.once('finish', write)
+    res.once('close', write)
   }
 
   /** 资源令牌活性:未过期 + 发行者(若为配对设备)仍在已配对列表里。 */
@@ -423,7 +510,7 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
    *  via 非空 = 远端来路:盖 x-forsion-remote(+ 标记密钥)。头是**白名单拷贝**,入站的 x-forsion-remote* / x-unit-caller
    *  (以及一切别的头)根本不会被带过去 —— 远端没法把自己伪装成别的通路或本机。
    *  caller = resolveCaller 验过的调用方:只在隧道来路盖 x-forsion-remote-caller(引擎在 marked && tunnel 时才读)。 */
-  const proxyEngine = (req: http.IncomingMessage, res: http.ServerResponse, path: string, via: UnitIngress | null, caller: ProxyCaller | null): void => {
+  const proxyEngine = (req: http.IncomingMessage, res: http.ServerResponse, path: string, via: UnitIngress | null, caller: ProxyCaller | null, delegated = false): void => {
     const engine = deps.getEngine()
     if (!engine.url) { json(res, 503, { detail: '本机引擎未就绪', code: 'ENGINE_NOT_READY' }); return }
     const target = new URL(engine.url)
@@ -438,6 +525,7 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
       headers['x-forsion-remote'] = via
       if (engine.remoteMark) headers['x-forsion-remote-mark'] = engine.remoteMark
       if (via === 'tunnel' && caller) headers[ENGINE_CALLER_HEADER] = encodeEngineCaller(caller)
+      if (via === 'tunnel' && delegated) headers[ENGINE_ROLE_HEADER] = DELEGATED_ADMIN_ROLE
     }
     const up = http.request({
       host: target.hostname,
@@ -460,7 +548,8 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
     req.pipe(up)
   }
 
-  const serveStatic = async (res: http.ServerResponse, urlPath: string): Promise<void> => {
+  /** baseHref:index.html 的 <base>;缺省 = 投影的绝对基址(本机 / 局域网来路,与改版前逐字节一致),隧道来路传相对基址。 */
+  const serveStatic = async (res: http.ServerResponse, urlPath: string, baseHref?: string): Promise<void> => {
     const dist = deps.webDistDir()
     if (!dist) {
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache' })
@@ -481,7 +570,7 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
         // 注入 unit 标记 + 元数据:同一份 web 构建两用,web/src/main.tsx 据此在登录跳转之前改装 unitShim。
         const encode = (value: unknown): string => JSON.stringify(value).replace(/</g, '\\u003c')
         const meta = { ...deps.meta, ...(deps.projection ? { projection: deps.projection.mode, browserStorage: deps.projection.mode === 'public', inheritWebAccount: deps.projection.inheritWebAccount === true, account: deps.account?.metadata(), capabilities: deps.projection.capabilities?.(), localCapabilities: deps.projection.mode === 'local' ? deps.projection.localCapabilities?.() : undefined } : {}) }
-        const baseTag = deps.projection ? `<base href="${deps.projection.basePath}">` : ''
+        const baseTag = deps.projection ? `<base href="${baseHref ?? deps.projection.basePath}">` : ''
         const inject = `${baseTag}<script>window.__FORSION_UNIT_PAGE__=${encode(meta)};window.__FORSION_PRODUCT_RUNTIME__=${encode(deps.projection?.product ?? PRODUCT)}</script>`
         let html = buf.toString('utf8').replace(/<head>/i, `<head>${inject}`)
         // ⚠️ 设备页必须放行 'unsafe-eval':插件宿主用 new Function 求值插件代码,而 web 构建的
@@ -570,6 +659,23 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
 
   const handler = async (req: http.IncomingMessage, res: http.ServerResponse): Promise<void> => {
     if (opts.doorbell && !DOORBELL_PATHS.has(plainPath(req))) { json(res, 503, HOST_OFF_BODY); return }
+    gc() // 先于一切早退:被拒的请求也会往重放表里记,不能让它们绕过清理
+    // 委托管理员档(开关开 + 隧道 + 验过的 role=admin 操作者声明):先于急停锁与插件后端挂载判,缺省全拒;写在这里就挂上留痕(被拒的也记)。
+    // 开关关着时不在这里验(按今天的隧道档,断言照旧只在 /engine 与 /unit/remote-access 分支里验)。
+    let delegated: ProxyOperator | null = null
+    const delegatedPath = plainPath(req)
+    if (delegatedAdminOn()) {
+      const ingress = authInfo(req)
+      if (ingress.via === 'tunnel' && req.headers[UNIT_CALLER_HEADER] !== undefined) {
+        const rc = resolveCaller(req, ingress)
+        if (!rc.ok) { json(res, 403, BAD_CALLER_BODY); return }
+        if (rc.operator?.role === 'admin') delegated = rc.operator
+      }
+    }
+    if (delegated) {
+      const method = (req.method || 'GET').toUpperCase()
+      if (method !== 'GET' && method !== 'HEAD') auditDelegatedWrite(res, delegated, method, delegatedPath)
+    }
     // P1-K2 顶层锁定闸(routeRequest 之前,INTEGRATION §2.3):/engine 与 /vault/rpc 各在分支里按更细的表判,工作区主人不受影响。
     if (!ownerRequest(authInfo(req).via) && lockedNow()) {
       const p = plainPath(req)
@@ -578,12 +684,15 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
         return
       }
     }
-    if (await deps.routeRequest?.(req, res)) return
-    gc()
+    if (delegated) {
+      if (!(delegatedPath === '/engine' || delegatedPath.startsWith('/engine/')) && !delegatedNonEngineAllowed(req.method || 'GET', delegatedPath)) { json(res, 403, LOCAL_ONLY_BODY); return }
+    } else if (await deps.routeRequest?.(req, res)) return
     let url = req.url || '/'
     if (deps.projection) {
       const prefix = deps.projection.basePath.replace(/\/$/, '')
-      if (url === prefix || url.startsWith(prefix + '?')) {
+      // 隧道来路不跳转:中转那头会带着签给原目标的断言跟随跳转(必然验不过),而绝对的 /web/ 又会跳出这台设备。
+      // 直接回壳,index.html 的相对基址(relativeBaseHref)从 `…/web` 也能落回投影根。
+      if ((url === prefix || url.startsWith(prefix + '?')) && authInfo(req).via !== 'tunnel') {
         res.writeHead(308, { Location: prefix + '/' + url.slice(prefix.length) }); res.end(); return
       }
       if (url.startsWith(prefix + '/')) url = url.slice(prefix.length)
@@ -777,6 +886,15 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
       // (url,不是按 `?` 切过的 path):`#` 可能藏在 query 之后,也可能藏在路径里。
       const target = engineTarget(url.slice('/engine'.length))
       if (!target) { json(res, 400, { detail: 'Ambiguous engine path', code: 'BAD_PATH' }); return }
+      if (delegated) {
+        // 委托管理员档:只看路由表的 delegatedAdmin 标记;急停锁照旧生效;不过会话档闸(白名单里没有会话面,写由这张表与引擎侧钳制管)。
+        if (!delegatedEngineAllowed(method, target.path)) { json(res, 403, LOCAL_ONLY_BODY); return }
+        const rc = resolveCaller(req, info)
+        if (!rc.ok) { json(res, 403, BAD_CALLER_BODY); return }
+        if (lockedNow() && !lockedEngineAllowed(method, target.path)) { json(res, 423, REMOTE_LOCKED_BODY); return }
+        proxyEngine(req, res, target.path + target.query, info.via, rc.caller, true)
+        return
+      }
       if (engineRouteAccess(method, target.path) !== 'allow') { json(res, 403, LOCAL_ONLY_BODY); return }
       const rc = resolveCaller(req, info) // K1:每请求只调一次(重放表一次性消费)
       if (!rc.ok) { json(res, 403, BAD_CALLER_BODY); return }
@@ -885,7 +1003,7 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
     }
 
     if (req.method !== 'GET' && req.method !== 'HEAD') { json(res, 405, { detail: 'method not allowed' }); return }
-    await serveStatic(res, path)
+    await serveStatic(res, path, deps.projection && authInfo(req).via === 'tunnel' ? relativeBaseHref((req.url || '/').split('?')[0], deps.projection.basePath) : undefined)
   }
 
   const handleRequest = async (req: http.IncomingMessage, res: http.ServerResponse): Promise<void> => {

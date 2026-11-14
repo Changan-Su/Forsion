@@ -128,3 +128,44 @@ describe('Unit resume watch', () => {
     expect(reasons).toHaveLength(3)
   })
 })
+
+describe('Unit relay caps features', () => {
+  // A signed stand-in for the account bundle: its registerCloud captures the deps the Unit hands the relay factory.
+  const boot = async (capsFeatures?: () => readonly string[]) => {
+    const { createCloudRuntime } = await import('../../unit/cloudHost')
+    const { signDir, testKeyPair } = await import('./bundleSignature.testutil')
+    const key = testKeyPair()
+    const pkg = join(dir, 'pkg'), data = join(dir, 'data')
+    await mkdir(join(pkg, 'dist'), { recursive: true })
+    await writeFile(join(pkg, 'manifest.json'), JSON.stringify({ id: 'forsion-extend', version: '9.0.0', apiVersion: 1, main: 'dist/main.js' }))
+    await writeFile(join(pkg, 'dist', 'main.js'), '')
+    await writeFile(join(pkg, 'dist', 'desktop.mjs'), `export function registerCloud(host) { host.setUnitHubFactory((deps) => { globalThis.__unitHubDeps = deps; return { start() {}, stop() {}, reconnect() {}, status: () => ({ running: false, connected: false, unitId: null, lastError: null }), engineChanged() {} } }) }`)
+    await signDir(pkg, key.privateKey)
+    await mkdir(join(data, 'cloud'), { recursive: true })
+    const claims = Buffer.from(JSON.stringify({ userId: 'u1' })).toString('base64url')
+    await writeFile(join(data, 'cloud', 'auth.json'), JSON.stringify({ cloudUrl: 'http://127.0.0.1:9', token: `h.${claims}.s` }))
+    ;(globalThis as { __unitHubDeps?: unknown }).__unitHubDeps = undefined
+    const runtime = await createCloudRuntime({ packageDir: pkg, dataDir: data, workspaceDir: join(dir, 'ws'), version: '9.9.9', relay: true, syncVault: false,
+      vault: () => null, engine: () => undefined, web: () => ({ url: 'http://127.0.0.1:1', internalSecret: 's', proxyCallerKey: 'k' }), log: () => {}, ...(capsFeatures ? { capsFeatures } : {}) },
+      { pkg: '@forsion/extend', id: 'forsion-extend', platforms: ['darwin', 'win32', 'linux'], desktop: { entry: 'dist/desktop.mjs', signingKey: key.publicKeyPem } } as never)
+    const deps = (globalThis as { __unitHubDeps?: { capsFeatures?: () => readonly string[] } }).__unitHubDeps
+    return { deps, close: () => runtime.close() }
+  }
+
+  it('hands the switch to the relay as a feature, and an empty list when it is off', async () => {
+    let on = true
+    const { deps, close } = await boot(() => (on ? ['delegated-admin'] : []))
+    try {
+      expect(deps?.capsFeatures?.()).toEqual(['delegated-admin'])
+      on = false
+      expect(deps?.capsFeatures?.()).toEqual([])
+    } finally { await close() }
+  })
+  it('leaves the relay deps without capsFeatures when the host gives none (desktop-identical caps body)', async () => {
+    const { deps, close } = await boot()
+    try {
+      expect(deps).toBeTruthy()
+      expect('capsFeatures' in (deps as object)).toBe(false)
+    } finally { await close() }
+  })
+})

@@ -15,7 +15,7 @@ import type { LocalRuntime, RuntimeFactory } from './runtimeTypes'
 import { createManagement, MANAGEMENT_PATH, type ManagementCommand } from './management'
 import { OperationError, RollbackIncomplete } from './errors'
 import { validateWebEntries, type WebEntry } from './webEntries'
-import { cloudBundle, createCloudRuntime } from './cloudHost'
+import { cloudBundle, createCloudRuntime, DELEGATED_ADMIN_FEATURE } from './cloudHost'
 export { loadPackages } from './packages'
 
 export interface PluginInstallation { path: string; enabled?: boolean; publish?: boolean; config?: Record<string, unknown>; env?: Record<string, string> }
@@ -24,8 +24,10 @@ export interface UnitConfig {
   basePath: string; webDist: string; plugins: Array<string | PluginInstallation>
   defaultSpace?: string; dataDir?: string; workerFile?: string
   workspace?: { mode: 'local'; path?: string }
-  /** relay defaults on once signed in; syncVault also publishes an existing, non-empty vault to the first account. */
-  cloud?: { relay?: boolean; syncVault?: boolean }
+  /** relay defaults on once signed in; syncVault also publishes an existing, non-empty vault to the first account.
+   *  delegatedAdmin (default off): relayed requests that carry a hub-signed operator claim with role admin get the delegated admin tier
+   *  (Agent management only, everything else denied), and the Unit declares 'delegated-admin' in its relay caps. */
+  cloud?: { relay?: boolean; syncVault?: boolean; delegatedAdmin?: boolean }
   /** trustedKeys: ed25519 public keys (PEM) whose signed releases remote install / update accept. */
   management?: { enabled: boolean; trustedKeys?: string[] }
   webEntries?: WebEntry[]
@@ -108,6 +110,8 @@ export async function startBasicUnit(config: UnitConfig, managementOptions: { ex
     && (rec.package.manifest.requires || []).every((id) => !mustGet(id).package.manifest.frontend || visible(mustGet(id)))
   const published = () => [...records.values()].filter(visible)
   const product = resolveProduct(undefined, { ...basic, market: false, onboarding: false, nativeFeatures: [] })
+  // Read once from unit.json at start; there is no runtime path that changes it, so the relay caps never need capsChanged().
+  const delegatedAdmin = () => local && config.cloud?.delegatedAdmin === true
   const capabilities = (visible = published()): CloudServices => {
     const services: CloudServices = {}
     if (local) return services
@@ -182,6 +186,7 @@ export async function startBasicUnit(config: UnitConfig, managementOptions: { ex
       if (local && cloudBundle(id)) {
         runtime = await createCloudRuntime({ packageDir: rec.package.root, dataDir, workspaceDir, version: config.version,
           relay: config.cloud?.relay !== false, syncVault: config.cloud?.syncVault === true, vault: () => runtimeVault(), engine: () => runtimeEngine(),
+          capsFeatures: () => delegatedAdmin() ? [DELEGATED_ADMIN_FEATURE] : [],
           web: () => ({ url: `http://${localHost}:${web.port}`, internalSecret: web.internalSecret, proxyCallerKey: web.proxyCallerKey }),
           log: (m) => console.log(`[plugin:${id}] ${m}`) })
       }
@@ -278,6 +283,7 @@ export async function startBasicUnit(config: UnitConfig, managementOptions: { ex
     webDistDir: () => config.webDist, vault: () => null, log: (message) => console.log(message),
   }, { port: 0, mountOnly: true }) })))
   const web = await startUnitWeb({
+    delegatedAdmin,
     account: local ? undefined : { metadata: () => accountProvider()?.account.metadata, handle: accountHttp },
     meta: { instanceId: config.instanceId, name: config.name, version: config.version },
     projection: { mode: local ? 'local' : 'public', basePath: config.basePath, product, capabilities: () => capabilities(), localCapabilities: () => ({ vault: !!runtimeVault(), engine: !!runtimeEngine()?.endpoint().url, host: !!runtimeEngine()?.endpoint().url }) },
