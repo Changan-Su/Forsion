@@ -228,12 +228,12 @@ const ORDER = require('./obsidian-feel/scenarios.cjs').map((s) => s.id)
 const byId = (a, b) => ORDER.indexOf(a) - ORDER.indexOf(b)
 
 /** 现在的结果 + 名单里的旧条目 → 这一项该怎么判、--update 时写成什么。 */
-function judge(kind, old) {
+function judge(kind, old, ref = '基线') {
   const next = kind === 'same' ? { status: 'same' } : old && old.status === 'keep' ? { status: 'keep', diff: kind, reason: old.reason } : { status: 'pending', diff: kind }
   let verdict = 'ok', why = ''
   if (!old) { verdict = 'fail'; why = '名单里没有这一项,用 --update 补上' }
   else if (old.status === 'same' && kind !== 'same') { verdict = 'fail'; why = `回归:名单记相同,现在${kind === 'eol' ? '只差文末换行' : '不同'}` }
-  else if (old.status !== 'same' && kind === 'same') { verdict = 'fail'; why = `名单记${old.status === 'keep' ? '刻意保留' : '待对齐'},现在和基线相同了:用 --update 把名单更新` }
+  else if (old.status !== 'same' && kind === 'same') { verdict = 'fail'; why = `名单记${old.status === 'keep' ? '刻意保留' : '待对齐'},现在和${ref}相同了:用 --update 把名单更新` }
   else if (old.status !== 'same' && old.diff !== kind) { verdict = 'fail'; why = `差异类型变了(${old.diff} → ${kind}):用 --update 把名单更新` }
   return { verdict, why, next }
 }
@@ -242,6 +242,20 @@ const show = (x) => (x == null ? 'null' : JSON.stringify(x))
 ;(async () => {
   const status = loadStatus()
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })
+  // 先确认台架页能挂上编辑器:挂不上的话每个场景都要等满超时,全套跑几个小时才报错。
+  {
+    const page = await browser.newPage()
+    try {
+      await page.goto(`${URL}?upage&useed=${encodeURIComponent('ready\n')}`, { waitUntil: 'domcontentloaded', timeout: 120000 })
+      await page.waitForSelector(PM, { timeout: 120000 })
+    } catch (e) {
+      console.error(`台架页 ${URL}?upage 两分钟内没挂上编辑器:${e.message.split('\n')[0]}`)
+      console.error('新开的 worktree 先看 frontend/public 下 postinstall 生成的资源(excalidraw 等)在不在;或者端口上是不是别的服务。')
+      await browser.close()
+      process.exit(1)
+    }
+    await page.close()
+  }
   const all = {}
   let fails = 0
   const changes = []
@@ -270,7 +284,7 @@ const show = (x) => (x == null ? 'null' : JSON.stringify(x))
     }
     for (const k of Object.keys(oldItems)) if (!items[k]) { lines.push(`      ${k}:名单里有,这次没有这一项(场景改过?用 --update)`); changes.push(`${s.id} ${k}:删掉`) }
     const rk = r.reopen.first === r.reopen.again ? 'same' : kindOf(r.reopen.again, r.reopen.first)
-    const rj = judge(rk, status.reopen[s.id])
+    const rj = judge(rk, status.reopen[s.id], '第一次取到的')
     if (rj.verdict === 'fail') lines.push(`      重开稳定:${rj.why}\n        第一次 ${show(r.reopen.first)}\n        重开后 ${show(r.reopen.again)}`)
     if (show(status.reopen[s.id]) !== show(rj.next)) changes.push(`${s.id} reopen:${show(status.reopen[s.id])} → ${show(rj.next)}`)
     if (UPDATE) { status.items[s.id] = nextItems; status.reopen[s.id] = rj.next }
