@@ -334,8 +334,9 @@ export function runUnitRoute(r: UnitRoute): void {
     return
   }
   if (r.kind === 'addr') {
-    // 手输地址没有名册条目:key 带 addr: 前缀防与设备 id 撞,名字就用主机段。
-    remote.open({ key: `addr:${r.url}`, name: r.url.replace(/^https?:\/\//i, '').replace(/\/+$/, ''), url: r.url })
+    // 手输地址没有名册条目:key 带 addr: 前缀防与设备 id 撞,名字就用主机段(+ 路径)。
+    // ⚠️ 名字会画在标题条胶囊和账号面板里:`?查询` / `#片段` 一律不带 —— `#unit-owner=…` 是对方的主人密钥。
+    remote.open({ key: `addr:${r.url}`, name: addrLabel(r.url), url: r.url })
     return
   }
   const cloudUrl = useApp.getState().desktopConfig?.cloudUrl
@@ -354,6 +355,15 @@ export function runUnitRoute(r: UnitRoute): void {
     return
   }
   to(tunnelPageUrl(cloudUrl, r.id), 'tunnel')
+}
+
+/** 手输地址目标显示用的名字:主机(+ 路径),不带协议、查询和片段。 */
+export function addrLabel(url: string): string {
+  try {
+    const u = new URL(url)
+    const p = u.pathname.replace(/\/+$/, '')
+    return `${u.host}${p}`
+  } catch { return url.replace(/^https?:\/\//i, '').replace(/[?#].*$/, '').replace(/\/+$/, '') }
 }
 
 /** 手输的设备地址规范化:没写协议补 http://;只给**路径**补尾斜杠(页面用相对 base),

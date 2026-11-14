@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { describe, expect, it } from 'vitest'
-import { normalizeUnitAddress, REMOTE_ACCOUNT_SELECTORS, unitSurfaceWhole, UNIT_SURFACE_WHOLE } from './UnitSwitcher'
+import { addrLabel, normalizeUnitAddress, REMOTE_ACCOUNT_SELECTORS, unitSurfaceWhole, UNIT_SURFACE_WHOLE } from './UnitSwitcher'
 
 describe('normalizeUnitAddress', () => {
   it('adds the scheme and a trailing slash to the path only', () => {
@@ -29,5 +29,13 @@ describe('surface switch', () => {
   })
   it('hides the remote account card by the classes AccountCard renders', () => {
     expect([...REMOTE_ACCOUNT_SELECTORS]).toEqual(['.rb .ribbon-account', '.rb .account-card'])
+  })
+})
+
+describe('addrLabel', () => {
+  it('shows host (+ path) only — never the query or the #unit-owner secret', () => {
+    expect(addrLabel('http://127.0.0.1:3260/web/#unit-owner=secret')).toBe('127.0.0.1:3260/web')
+    expect(addrLabel('http://192.168.1.77:8791/')).toBe('192.168.1.77:8791')
+    expect(addrLabel('https://host/x/?token=1')).toBe('host/x')
   })
 })

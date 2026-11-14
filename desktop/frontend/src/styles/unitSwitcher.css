@@ -172,6 +172,7 @@
 .unitfr-pill-kind::before { content: '·'; margin-right: 6px; }
 .unitfr-pill-sep { flex: none; align-self: center; width: var(--border-width, 1px); height: 12px; background: var(--border); }
 .unitfr-back {
+  -webkit-app-region: no-drag;
   flex: none;
   height: calc(100% - 4px);
   padding: 0 9px;
