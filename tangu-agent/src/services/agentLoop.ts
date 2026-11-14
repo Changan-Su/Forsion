@@ -1263,7 +1263,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     throw new Error('The selected Agent could not be activated. The run was not started with another Agent.');
   }
   // 通道 run:通道层定的档(设置 × 绑定)再按 Agent 自己设的档收紧(只收紧;没设 = 原样)。身份到这里才定(会话钉 slug、分身),
-  // 下游的快照、工具 ctx、委派子代理、团队成员都读这一个值(通道 run 不现读会话存档;会话互通工具对通道 run 不开)。
+  // 下游的快照、工具 ctx、delegate 子代理都读这一个值(通道 run 不现读会话存档;会话互通工具对通道 run 不开)。
+  // start_discussion 起的讨论 run 不继承本 run 的档(成员各按自己的定义 / 缺省),与通道设置那层同样,这里没管。
   // 分身(缺省开着)自己的定义不带档:再加本体的档,读不到按只读 —— 面对别人的分身不该比本体松。
   if (channelSourceOf(plainObject(input.source))) {
     const agentModes: unknown[] = [agentApprovalMode];
