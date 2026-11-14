@@ -148,7 +148,14 @@ export function createEngineManager(configFile?: string): EngineManager {
       if (!def) throw new Error(`unknown engine: ${ctx.engineId}`);
       // 用户未在本会话选模型 → 回退该引擎的默认模型偏好(设置页「Agent CLIs」配置)。
       const engineModelId = ctx.engineModelId || prefs[ctx.engineId]?.defaultModel;
-      return runAcpEngine(def, { ...ctx, engineModelId });
+      try {
+        return await runAcpEngine(def, { ...ctx, engineModelId });
+      } catch (e: any) {
+        // 「当前模型缺 API key」的提示叫用户去模型下拉里换一个:缓存着的清单这时作废,下次问能力清单重新探测 ——
+        // 用户照提示去引擎那边登录 / 填了 key 之后,新出现的模型才选得到(不然要等缓存过期)。
+        if (e?.engineModelNoApiKey) capsCache.delete(ctx.engineId);
+        throw e;
+      }
     },
     dispose: async () => {
       /* 一 run 一进程，无全局资源 */

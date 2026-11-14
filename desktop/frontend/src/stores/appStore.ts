@@ -193,7 +193,8 @@ export interface HostState {
   patchConfig(patch: Partial<TanguDesktopConfig>): void
   /** Chat View「高级」的默认辅助 / 生图 / 识图模型；先乐观更新，再写入 config.json。 */
   setDefaultModel(slot: DefaultModelSlot, modelId: string): void
-  ensureEngineCaps(engineId: string | undefined): void
+  /** refresh = 已经取过也重新问一次(引擎那边的模型清单变了:登录了、填了 key)。重取失败或回空时留着原来那份。 */
+  ensureEngineCaps(engineId: string | undefined, refresh?: boolean): void
   openSettings(tab?: SettingsTab, skillKey?: string): void
   closeSettings(): void
   /** 检测到 Forsion 登录过期(401/凭证失效):清登录态 + 提示 + 引导重登录。幂等;standalone/未登录不触发。
@@ -690,9 +691,13 @@ export const useApp = create<AppState>((set, get) => ({
     void window.tangu?.setConfig?.({ [slot]: modelId }).catch(() => {})
   },
 
-  ensureEngineCaps: (engineId) => {
-    if (!engineId || get().engineCaps[engineId]) return
-    void api.getEngineCapabilities(homeTarget(), engineId).then((caps) => set((s) => ({ engineCaps: { ...s.engineCaps, [engineId]: caps } })))
+  ensureEngineCaps: (engineId, refresh) => {
+    if (!engineId || (!refresh && get().engineCaps[engineId])) return
+    void api.getEngineCapabilities(homeTarget(), engineId).then((caps) => {
+      // 取不到时 getEngineCapabilities 回的是空清单:那是「不知道」,不拿它盖掉已经有的那份
+      if (refresh && !caps.models.length && get().engineCaps[engineId]) return
+      set((s) => ({ engineCaps: { ...s.engineCaps, [engineId]: caps } }))
+    })
   },
 
   openSettings: (tab, skillKey) => {
