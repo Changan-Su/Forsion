@@ -1796,7 +1796,10 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
         clearSuggestion(sessionId)
         // 外部引擎的当前模型缺 API key:提示叫用户去模型菜单里换一个(或先去引擎那边登录)。菜单里那份清单启动后只取一次,
         // 记下它可能过时了:用户登录之后再打开模型菜单,就让引擎重新探测(这时当场取没用:多半还没登录)。
-        if (!pl.aborted && isEngineModelNoApiKey(pl.error)) get().ensureEngineCaps(sessionConfigBaseOf(get(), sessionId)?.engineId, 'stale')
+        if (!pl.aborted && isEngineModelNoApiKey(pl.error)) {
+          const cfg = sessionConfigBaseOf(get(), sessionId)
+          get().ensureEngineCaps(cfg?.engineId || cfg?.soloEngineId, 'stale') // 私聊会话两样都存着,以防只剩身份键
+        }
         // 托管模式下 token 过期不会让本地端点 401,而是表现为 run 出错(后端→云端 401)。做一次真实 whoami 复检,
         // 仅确认凭证已失效才提示重登录(避免把模型/网络错误误判为过期)。
         if (!pl.aborted && get().authInfo?.loggedIn) {
