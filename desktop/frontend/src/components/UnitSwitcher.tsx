@@ -134,7 +134,7 @@ export const useUnitRemote = create<{
 }))
 
 /**
- * 远程面两种形态的**唯一**开关(组织 Agent 管理第三轮 · 切过去以后的框):
+ * 远程面两种形态的**唯一**开关:
  *   true  = 整窗:从 Ribbon 到主区都是那台画的;宿主只留顶上一条标题条(中间胶囊带「回到这台电脑」)和左下角自己的头像。
  *   false = 08-25 那版:portal 进 .shell-work 盖主区,本机 Ribbon 留着,点 Ribbon 的视图槽 = 回本机。
  * 两种形态的差别(portal 目标、CSS 类、点 Ribbon 回本机那段监听、远端账号卡的隐藏)只走这里。
