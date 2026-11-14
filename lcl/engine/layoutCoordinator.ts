@@ -281,6 +281,10 @@ export class LayoutCoordinator {
       const root = overlay.parentElement!, rr = root.getBoundingClientRect(), r = reference.getBoundingClientRect()
       const zoom = root.offsetWidth ? rr.width / root.offsetWidth : 1
       for (const [name, value] of Object.entries({ x: (r.left - rr.left) / zoom, y: (r.top - rr.top) / zoom, w: r.width / zoom, h: r.height / zoom })) overlay.style.setProperty(`--lcl-panel-${name}`, `${value}px`)
+      // Dockview hides a new overlay until its own next-frame placement. A panel rebuilt under the same id inside
+      // that frame never gets one: the pending placement stays bound to the removed element and blocks a new
+      // request, so the View stays blank until the next resize. Geometry is already owned here; reveal it.
+      if (overlay.style.visibility === 'hidden') { overlay.style.visibility = ''; overlay.style.pointerEvents = '' }
     }
   }
   dispose(): void {
