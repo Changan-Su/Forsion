@@ -3,7 +3,6 @@
  * 本机 = 隔离实例(桩引擎 + 本机假云端,夹具登录,不碰真账号);远端 = 真 Unit 网页
  * (UNIT_DIST,缺省 <仓根>/.worktrees/biz-unit-host/unit/dist,local 模式;找不到就明确跳过)。
  * 远端裸 Unit 没装账号提供方就不画账号卡 → 对客页 webContents 用 debugger 注入 tangu.account 夹具(只为画出账号卡)。
- * 起手式改自 docs/ToBeImproved/组织Agent管理方案_2026-11-13/instrument/cur-surface.cjs。
  *
  * 判据:
  *   1 整窗后窗口里只有一条 Ribbon(远端的):本机 Ribbon 被盖住(命中测试落在远程面里),远端 Ribbon 在窗口左缘

@@ -113,6 +113,14 @@ export interface UnitRemoteTarget {
   /** 用户在 设置 › 设备 里明确点的这条通路:加载成功后记下来(rememberVia),面板下次按它走。 */
   remember?: boolean
 }
+/** 回到本机的**唯一**入口(标题条胶囊、失败态按钮、账号面板的「这台电脑」、旧形态点 Ribbon 槽):
+ *  先作废还没落地的切换(P2P 打洞的迟到回包 / 迟到的回落会把远程面重新打开,Codex 评审 P1),再把远程面藏起来。
+ *  不动智库的「本地 / 云端」;target 保留 = webview 保活。 */
+export function leaveUnitRemote(): void {
+  routeSeq++
+  useUnitRemote.getState().hide()
+}
+
 export const useUnitRemote = create<{
   target: UnitRemoteTarget | null
   active: boolean
@@ -126,7 +134,7 @@ export const useUnitRemote = create<{
 }))
 
 /**
- * 远程面两种形态的**唯一**开关(组织 Agent 管理第三轮 · 切过去以后的框):
+ * 远程面两种形态的**唯一**开关:
  *   true  = 整窗:从 Ribbon 到主区都是那台画的;宿主只留顶上一条标题条(中间胶囊带「回到这台电脑」)和左下角自己的头像。
  *   false = 08-25 那版:portal 进 .shell-work 盖主区,本机 Ribbon 留着,点 Ribbon 的视图槽 = 回本机。
  * 两种形态的差别(portal 目标、CSS 类、点 Ribbon 回本机那段监听、远端账号卡的隐藏)只走这里。
@@ -145,9 +153,13 @@ const HIDE_REMOTE_ACCOUNT_CSS = `${REMOTE_ACCOUNT_SELECTORS.join(', ')} { visibi
 type WebviewEl = HTMLElement & { insertCSS?: (css: string) => Promise<string>; reload?: () => void }
 type SurfaceFail = null | 'unreachable' | 'crashed'
 
-/** 加载失败:不是中转、这台在线(名册说不准就当在线)→ 出声改走中转;否则交给宿主画失败态。 */
-function fallBackToRelay(): boolean {
+/** 加载失败:不是中转、这台在线(名册说不准就当在线)→ 出声改走中转;否则交给宿主画失败态。
+ *  `from` = 出事的那个目标:目标已经换成别的了就不动(那次失败不归现在这台管)。
+ *  ⚠️ 只在远程面**正显示着**时调:它经 runUnitRoute → open() 会把远程面激活,隐藏着的保活页失败了走这里
+ *  = 用户在本机干着活被拽回设备页(Codex 评审 P1)。隐藏态的失败先记着,等用户回到这台再回落。 */
+function fallBackToRelay(from: UnitRemoteTarget): boolean {
   const t = useUnitRemote.getState().target
+  if (t?.key !== from.key) return true
   if (!t?.unitId || !t.via || t.via === 'tunnel') return false
   const u = useUnitRoster.getState().units?.find((x) => x.id === t.unitId)
   if (u && !u.online) return false
@@ -168,7 +180,12 @@ export function UnitRemoteSurface(): React.ReactElement | null {
   const webRef = useRef<WebviewEl>(null)
   const [fail, setFail] = useState<SurfaceFail>(null)
   const [nonce, setNonce] = useState(0)
+  /** 这张 webview 加载成功过的地址(换地址 / 重试即作废)。 */
+  const okUrl = useRef<string | null>(null)
+  /** 保活在暗处时加载失败了:回落留到用户回到这台再做。 */
+  const deferredFallback = useRef(false)
   useEffect(() => { setFail(null) }, [target?.url])
+  useEffect(() => { okUrl.current = null; deferredFallback.current = false }, [target?.url, nonce])
   // 切进来把键盘直接交给对方页面(不点一下打不了字)。
   useEffect(() => { if (active) webRef.current?.focus() }, [active, target?.url, nonce])
   // 旧形态:点了本机 ribbon 的视图槽(视图图标 / Space)= 用户要回本机 —— Space 切换语义,自动退场。
@@ -179,7 +196,7 @@ export function UnitRemoteSurface(): React.ReactElement | null {
     if (!active || whole) return
     const onClick = (e: MouseEvent): void => {
       const el = e.target as HTMLElement | null
-      if (el?.closest?.('.rb-slot') && !el.closest('.unitsw-pill')) useUnitRemote.getState().hide()
+      if (el?.closest?.('.rb-slot') && !el.closest('.unitsw-pill')) leaveUnitRemote()
     }
     document.addEventListener('click', onClick, true)
     return () => document.removeEventListener('click', onClick, true)
@@ -202,17 +219,27 @@ export function UnitRemoteSurface(): React.ReactElement | null {
   useEffect(() => {
     const el = webRef.current
     if (!el || !target) return
+    // 同一张已经加载成功的页面,又被用户在设置页明确点了一次:地址没变、webview 不重载,等不来 did-finish-load,就地记。
+    if (target.remember && target.unitId && target.via && okUrl.current === target.url) rememberVia(target.unitId, target.via)
     let failed = false
     const onStart = (): void => { failed = false }
     const onFail = (e: Event): void => {
       const ev = e as Event & { errorCode?: number; isMainFrame?: boolean }
       if (ev.isMainFrame === false || ev.errorCode === -3) return
       failed = true
-      if (!fallBackToRelay()) setFail('unreachable')
+      okUrl.current = null
+      if (!useUnitRemote.getState().active) {
+        // 保活在暗处:只记失败,不回落(回落会把远程面重新激活)。用户回到这台时再回落,见下一个 effect。
+        deferredFallback.current = true
+        setFail('unreachable')
+        return
+      }
+      if (!fallBackToRelay(target)) setFail('unreachable')
     }
     const onFinish = (): void => {
       if (failed) return
       setFail(null)
+      okUrl.current = target.url
       const cur = useUnitRemote.getState().target
       if (cur?.remember && cur.unitId && cur.via && cur.url === target.url) rememberVia(cur.unitId, cur.via)
     }
@@ -222,9 +249,15 @@ export function UnitRemoteSurface(): React.ReactElement | null {
     for (const [n, f] of on) el.addEventListener(n, f)
     return () => { for (const [n, f] of on) el.removeEventListener(n, f) }
   }, [target, nonce, whole])
+  // 暗处失败过的那台,用户回来了:现在才回落中转(能回落就换目标、失败态随地址变化自己收;不能就留着失败态)。
+  useEffect(() => {
+    if (!active || !target || !deferredFallback.current) return
+    deferredFallback.current = false
+    fallBackToRelay(target)
+  }, [active, target])
   if (!target) return null
   const retry = (): void => { setFail(null); setNonce((n) => n + 1) }
-  const back = (): void => useUnitRemote.getState().hide()
+  const back = (): void => leaveUnitRemote()
   const web = <Webview ref={webRef} key={`${target.url}#${nonce}`} className="unitrs-web" src={target.url} partition={BROWSER_PARTITION} allowpopups="true" />
 
   if (whole) {
