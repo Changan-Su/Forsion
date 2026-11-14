@@ -72,3 +72,20 @@ describe('额度用完 ≠ 限流', () => {
     expect(humanizeRunError('usage_limit_reached [quota_fallback_ask:forsion/auto]', tv)).not.toContain('quota_fallback_ask')
   })
 })
+
+describe('会员档位用不了这个模型(model_tier_locked)', () => {
+  const tv = (k: string, v?: Record<string, unknown>) => (v?.model ? `${k}:${v.model}` : k)
+  it('裸码 → 用会话模型名说人话,不再挂机器码;不会被通用 403 规则抢走', () => {
+    expect(humanizeRunError('model_tier_locked', tv, 'GPT-6 Sol')).toBe('chat.err.tierLocked:GPT-6 Sol')
+    expect(humanizeRunError('model_tier_locked', tv)).toBe('chat.err.tierLockedBare')
+  })
+  it('HTTP 403 的 JSON 回包里带 modelName 时优先用它', () => {
+    const raw = JSON.stringify({ detail: 'model_tier_locked', code: 'model_tier_locked', modelId: 'x', modelName: 'Claude Z', multiplier: 5, cap: 2.5 })
+    expect(humanizeRunError(raw, tv, 'Other')).toBe('chat.err.tierLocked:Claude Z')
+  })
+  it('真实中英文案', async () => {
+    const { translateFor } = await import('../../i18n')
+    expect(humanizeRunError('model_tier_locked', (k, v) => translateFor('zh', k, v), 'GPT-6 Sol')).toBe('当前会员档位不能使用 GPT-6 Sol。升级会员或换一个模型。')
+    expect(humanizeRunError('model_tier_locked', (k, v) => translateFor('en', k, v), 'GPT-6 Sol')).toBe("Your current plan can't use GPT-6 Sol. Upgrade your membership or pick another model.")
+  })
+})

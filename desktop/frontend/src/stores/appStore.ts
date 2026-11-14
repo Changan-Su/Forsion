@@ -34,6 +34,7 @@ import { notifyApp } from './notificationStore'
 import { agentWriteKnown, noteAgentWriteEnd, noteAgentWriteLive, noteAgentWriteStart } from './agentWriteLedger'
 import { translate } from '../i18n'
 import type { TanguSliceDeps, TanguState, createTanguSlice } from '@tangu/ui/tangu/store/tanguSlice'
+import { resetAccountQuotaScope } from '../services/accountQuota'
 
 
 export type { SettingsTab }
@@ -603,6 +604,7 @@ export const useApp = create<AppState>((set, get) => ({
       connectInflight = null
       lastOkConnectKey = ''
       tangu?.resetAuthScope()
+      resetAccountQuotaScope() // 额度相关的模块级状态(积分开关已确认值 / 在途 / 不确定、倍率上限)按账号清空
       Object.values(get().agentAvatars).forEach((url) => { try { URL.revokeObjectURL(url) } catch { /* ignore */ } })
       const managed = get().desktopMode === 'managed'
       if (!managed) useChildChat.setState({ selected: {}, sessions: {} })

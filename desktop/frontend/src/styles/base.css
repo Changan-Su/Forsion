@@ -5566,8 +5566,8 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-wrap { top: calc(var(-
 .mb-shell[data-native-chrome][data-wide] .mb-view[data-view='amadeus-drawing'] .amx-boardhost[data-cap-row='gap'] .excalidraw:not(.excalidraw--mobile) .App-menu_top::after { flex: 1 1 max(0px, (12 + var(--nc-capr-w, 0)) * 1px - var(--editor-container-padding)); min-width: 0; }
 
 /* chat / work 模式位:会话创建后只读(disabled),悬浮 title 解释「换模式请新建会话」。 */
-.composer-menu .menu-item:disabled { opacity: 0.55; cursor: default; }
-.composer-menu .menu-item:disabled:hover { background: none; }
+.composer-menu .menu-item:disabled, .composer-menu .menu-item.is-locked { opacity: 0.55; cursor: default; }
+.composer-menu .menu-item:disabled:hover, .composer-menu .menu-item.is-locked:hover { background: none; }
 
 /* 市场自己的提示条(安装 / 卸载结果):市场住在浮窗或全屏覆盖层里,全局通知在那儿看不见(09-21 实报
    「点安装只转圈没反馈」)。夹在标题区与滚动区之间(flex 列里不收缩),正文怎么滚都在视野内。

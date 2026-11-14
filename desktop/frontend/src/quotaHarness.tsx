@@ -18,12 +18,19 @@ const themeParams = new URLSearchParams(location.search)
 const dark = themeParams.has('dark')
 applyTheme(themeParams.get('theme') || 'lovable', themeParams.get('skin') || 'cream', themeParams.get('bg') || 'cream', dark ? 'dark' : 'light')
 
+// ?points=off|on|out:额度已用尽的三态(没开积分 / 正在用积分 / 积分也用完了);?points=off&cards=0&balance=0 拍「充值积分」
+const pointsMode = themeParams.get('points')
 let quota: AccountQuotaView = {
   dailyLimit: 100,
   dailyRemaining: 62,
   weeklyLimit: 100,
-  weeklyRemaining: 8,
-  resetCards: 2,
+  weeklyRemaining: pointsMode ? 0 : 8,
+  resetCards: Number(themeParams.get('cards') ?? 2),
+  ...(pointsMode ? {
+    pointsAutoDeduct: pointsMode !== 'off',
+    pointsBalance: pointsMode === 'out' ? 0 : Number(themeParams.get('balance') ?? 1280),
+    modelMultiplierCap: 2.5,
+  } : {}),
 }
 
 window.tangu = {
@@ -41,6 +48,13 @@ window.tangu = {
   accountUseResetCard: async () => {
     quota = { ...quota, dailyRemaining: 100, weeklyRemaining: 100, resetCards: Math.max(0, (quota.resetCards || 0) - 1) }
     return { status: 200, json: { success: true, quota, resetCards: quota.resetCards } }
+  },
+  // 云账号扩展的通道(用积分继续):回包不含 resetCards / pointsBalance,同服务端
+  cloudInvoke: async (channel: string, enabled: unknown) => {
+    if (channel !== 'account:pointsAutoDeduct') throw new Error(`No handler registered for '${channel}'`)
+    quota = { ...quota, pointsAutoDeduct: !!enabled }
+    const { resetCards: _c, pointsBalance: _b, ...view } = quota
+    return { status: 200, json: { success: true, pointsAutoDeduct: !!enabled, quota: view } }
   },
   openPayCenter: async () => {
     ;(window as unknown as { __quotaHarness: { upgraded: boolean } }).__quotaHarness.upgraded = true

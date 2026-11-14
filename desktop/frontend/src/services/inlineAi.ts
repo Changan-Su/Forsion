@@ -7,6 +7,7 @@ import { registerMessages, translate } from '../i18n'
 import { engineFetch, homeTarget } from './engine/targets'
 import { AGENT_APP_ID, currentClientId } from './agentRunService'
 import { protectTranslation } from './translationContent'
+import { isTierLockedError, tierLockedText } from './modelTierLock'
 import type { TanguCompleteOptions, TanguCompleteRequest, TanguCompleteResult, TanguFimRequest } from '../amadeus/plugins/tanguSeam'
 
 registerMessages({
@@ -20,7 +21,7 @@ registerMessages({
 type InlineEvent = { type: 'delta'; text?: string } | { type: 'done'; content?: string; toolCallText?: boolean } | { type: 'error'; error?: string }
 
 /** 引擎的机器码 → 人话:额度用尽与主聊天同一句(chat.err.quota)。 */
-const readable = (raw: string): string => (/token_quota_exceeded/i.test(raw) ? translate('chat.err.quota') : raw)
+const readable = (raw: string): string => (/token_quota_exceeded/i.test(raw) ? translate('chat.err.quota') : isTierLockedError(raw) ? tierLockedText(raw, translate) : raw)
 
 export async function completeInline(req: TanguCompleteRequest, modelId: string | null, opts: TanguCompleteOptions = {}): Promise<TanguCompleteResult> {
   const model = req.modelId || modelId
@@ -63,6 +64,9 @@ export async function fimInline(req: TanguFimRequest, modelId: string, opts: Tan
     return { text: (await streamInline(body, modelId, opts)).text }
   } catch (e: any) {
     if (opts.signal?.aborted) throw e
+    // 补全模型被会员档位拦下(服务端 403 model_tier_locked):静默当「没有补全」。别映射成 fim_unavailable ——
+    // 那会让插件落回 complete、拿同一个模型再撞一次并弹错
+    if (isTierLockedError(`${e?.code || ''} ${e?.message || ''}`)) return { text: '' }
     if (e?.status === 400 || e?.status === 404 || e?.code === 'fim_unsupported') throw new Error(FIM_UNAVAILABLE)
     throw e
   }
