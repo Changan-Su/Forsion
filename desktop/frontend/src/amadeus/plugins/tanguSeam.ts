@@ -86,6 +86,11 @@ export interface TanguAgentStatus {
 /** Agent 名册的一条(2026-09-20+)。 */
 export interface TanguAgentInfo { slug: string; name: string }
 
+/** `agentStatus` / `subscribeAgentStatus` / `stop` 的会话参数(2026-11-13+ 起可传对象)。
+ *  字符串 / null / 不传 = 会话 id(不传 = 主区活动会话,null = 草稿);
+ *  对象里**只要有 `runId` 这个键**就按 run 找:当前正在跑这个 run 的会话,找不到就当没有(绝不回落到活动会话)。 */
+export type TanguSessionTarget = string | null | undefined | { sessionId?: string | null; runId?: string | null }
+
 /** 「什么都不知道」时的状态:草稿、没有探针的宿主、探针缺 agentStatus 的旧台架都回它。 */
 export const idleAgentStatus = (sessionId: string | null): TanguAgentStatus =>
   ({ phase: 'idle', sessionId, runId: null, since: 0, textChars: 0, reasoningChars: 0 })
@@ -203,11 +208,14 @@ export interface TanguProbe {
   subscribeReady?(cb: () => void): () => void
   /** 某会话的 agent 状态快照(2026-09-19+)。sessionId 省略 = 全局活动会话(`activeId`);null = 草稿(恒 idle)。
    *  可选:台架假探针 / 旧宿主不给 = 插件那边拿不到状态(按 idle 处理)。 */
-  agentStatus?(sessionId?: string | null): TanguAgentStatus
+  agentStatus?(sessionId?: TanguSessionTarget): TanguAgentStatus
   /** 同一会话口径的**变更过滤**订阅:只在 phase / tool / toolStage / waitingFor / sessionId / agentSlug
    *  变了时回调,done/error 余韵到期那一刻再回调一次(回 idle)。token / 推理增量、改 Agent 展示名**不**回调。
    *  返回退订。 */
-  subscribeAgentStatus?(cb: (s: TanguAgentStatus) => void, sessionId?: string | null): () => void
+  subscribeAgentStatus?(cb: (s: TanguAgentStatus) => void, sessionId?: TanguSessionTarget): () => void
+  /** 停掉某会话正在跑的 run(2026-11-13+),走输入框停止按钮同一条路(appStore.stop)。
+   *  true = 确实对一个在跑的 run 发出了停止且引擎确认;没有在跑的 / `{ runId }` 找不到 → false。 */
+  stop?(target?: TanguSessionTarget): Promise<boolean>
   /** 用指定 Agent 开一个新对话(离开主页 Space → 新对话草稿 → 选 Agent → 预填或送出)。
    *  放行规则(send 只给自家捆绑 Agent、cwd 钳在库内)在 pluginStore 那层,这里只执行。 */
   startChat?(o: TanguStartChatOptions): Promise<TanguStartChatResult>

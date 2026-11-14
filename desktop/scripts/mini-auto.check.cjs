@@ -1,13 +1,21 @@
 /** Automatic Mini: real IPC, two isolated Electron processes and a replayable running session.
  * Default: companion process owns OS focus; helper lease is simulated (no physical HID).
  * npm run build && npm run check:miniauto
- * --native-helper [executable]: real helper/HID path against our own fixture window. */
+ * --native-helper [executable | .app]: real helper/HID path against our own fixture window. A path ending in .app is
+ *   started through LaunchServices on a socket of its own, so macOS grants it by its own bundle id and certificate
+ *   (a bare executable inherits this terminal's grants, which usually lack Accessibility). It moves the real pointer.
+ * --raise-only (with --native-helper): instead of the HID leg, the helper brings the fixture app forward with no
+ *   physical input, which is what the adapter does for a covered web page. Nothing touches the pointer. Needs a helper
+ *   that signals such a raise (Computer Use after 0.7.2); with an older one "a raise without input opens the current
+ *   conversation" is red, which is the negative control. */
 const fs = require('fs'), os = require('os'), path = require('path'), http = require('http')
 const electron = require('./lib/launch-electron.cjs')
 const { startStubEngine } = require('./lib/stub-engine.cjs')
 const { skipOnboarding } = require('./lib/skip-onboarding.cjs')
 const nativeArg = process.argv.indexOf('--native-helper')
-const nativeExecutable = nativeArg < 0 ? null : (process.argv[nativeArg + 1] || '/Applications/tangu-computer-use.app/Contents/MacOS/bridge')
+const nativePath = nativeArg < 0 ? null : process.argv[nativeArg + 1]
+const nativeExecutable = nativeArg < 0 ? null : (nativePath && !nativePath.startsWith('--') ? nativePath : '/Applications/tangu-computer-use.app/Contents/MacOS/bridge')
+const raiseOnly = process.argv.includes('--raise-only')
 const ROOT = path.resolve(__dirname, '..'), temp = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-mini-auto-'))
 const pause = (ms) => new Promise((r) => setTimeout(r, ms)), results = []
 function check(name, ok) { results.push(!!ok); console.log(`${ok ? 'PASS' : 'FAIL'} ${name}`); if (!ok) throw new Error(name) }
@@ -66,7 +74,7 @@ async function main() {
     const w = new BrowserWindow({ width: 540, height: 240, title: 'Mini automatic test — foreground fixture' });
     w.loadURL('data:text/html,<h2>Computer Use foreground fixture</h2><p>Isolated test window for Mini Panel.</p>');
   });`)
-  let app, external, heartbeat, nativeHelper, nativeAsk
+  let app, external, heartbeat, nativeHelper, nativeAsk, nativeStarted = false
   const signal = () => { const now = Date.now(); fs.writeFileSync(path.join(temp, 'foreground.json'), JSON.stringify({ v: 1, active: true, updatedAt: now, expiresAt: now + 2500, helperPid: process.pid })) }
   const startInput = () => { signal(); heartbeat = setInterval(signal, 500) }
   const stopInput = () => { clearInterval(heartbeat); heartbeat = null; fs.rmSync(path.join(temp, 'foreground.json'), { force: true }) }
@@ -122,16 +130,37 @@ async function main() {
           catch (error) { finish(error) }
         })
       })
-      nativeHelper = spawn(nativeExecutable, ['serve', '--socket', path.join(temp, 'bridge.sock')], { stdio: 'ignore' })
-      let nativeError; nativeHelper.on('error', (error) => { nativeError = error })
+      const viaApp = nativeExecutable.endsWith('.app')
+      let nativeError
+      if (viaApp) { nativeStarted = true; require('child_process').execFileSync('open', ['-n', '-g', nativeExecutable, '--args', 'serve', '--socket', path.join(temp, 'bridge.sock')]) }
+      else { nativeHelper = spawn(nativeExecutable, ['serve', '--socket', path.join(temp, 'bridge.sock')], { stdio: 'ignore' }); nativeHelper.on('error', (error) => { nativeError = error }) }
       const diagnostics = await until(async () => { if (nativeError) throw nativeError; return nativeAsk({ cmd: 'diagnostics' }).catch(() => false) })
       check('real helper has Accessibility permission', diagnostics.accessibility === true)
       const initial = JSON.parse(fs.readFileSync(path.join(temp, 'foreground.json'), 'utf8'))
-      check('packaged helper creates its own idle signal', initial.v === 1 && !initial.active && initial.helperPid === nativeHelper.pid)
+      check('packaged helper creates its own idle signal', initial.v === 1 && !initial.active && (viaApp ? Number.isInteger(initial.helperPid) : initial.helperPid === nativeHelper.pid))
       const pid = await external.evaluate(() => process.pid)
       const roots = await nativeAsk({ cmd: 'listWindows', pid })
       const target = roots.find((w) => w.windowId)
       check('native helper resolves only the owned fixture window', !!target)
+      const mainFocused = () => app.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getFocusedWindow(); return !!w && !w.webContents.getURL().includes('window=') })
+      if (raiseOnly) {
+        // A raise with no physical input: the adapter brings a covered page's app forward (restoreUserFocus). It takes
+        // the screen like a click does, so the conversation must appear and Forsion must come back when the run ends.
+        await focusMain()
+        check('Mini is absent before the raise', (await autoWindows()).length === 0)
+        const raised = await nativeAsk({ cmd: 'restoreUserFocus', pid })
+        check('helper brings the fixture app forward with no physical input', raised.appRestored === true && await until(async () => (await nativeAsk({ cmd: 'getFrontmost' })).pid === pid))
+        check('a raise without input opens the current conversation', !!await until(autoVisible, 5000).catch(() => null))
+        check('the raised app keeps the focus', (await nativeAsk({ cmd: 'getFrontmost' })).pid === pid)
+        await pause(1300)
+        check('the one-second lease has run out and the conversation stays', JSON.parse(fs.readFileSync(path.join(temp, 'foreground.json'), 'utf8')).expiresAt < Date.now() && !!await autoVisible())
+        backend.emit(run, 'done', {}); await until(async () => (await autoWindows()).length === 0)
+        check('run completion after a raise closes the conversation panel', true)
+        check('run completion after a raise returns focus to the Forsion main window', await until(mainFocused))
+        check('no renderer errors', errors.length === 0)
+        console.log(`SCREENSHOTS ${shots}\n${results.filter(Boolean).length}/${results.length} passed (real native helper, raise only)`)
+        return
+      }
       const look = await nativeAsk({ cmd: 'look', pid, windowId: target.windowId, includeImage: true, readText: 'never' })
       await focusMain()
       check('Mini is absent before real foreground activation', (await autoWindows()).length === 0)
@@ -236,9 +265,9 @@ async function main() {
     if (app) for (const [i, page] of app.windows().entries()) { await page.screenshot({ path: path.join(shots, `failure-${i}.png`) }).catch(() => {}); console.log((await page.locator('body').innerText().catch(() => '')).slice(0, 2200)) }
     console.error(`FAILURE_SCREENSHOTS ${shots}`); throw e
   } finally {
-    if (nativeHelper) {
+    if (nativeHelper || nativeStarted) {
       await nativeAsk({ cmd: 'shutdown' }).catch(() => {}); await pause(300)
-      if (nativeHelper.exitCode === null) nativeHelper.kill('SIGTERM')
+      if (nativeHelper && nativeHelper.exitCode === null) nativeHelper.kill('SIGTERM')
     }
     if (!nativeExecutable) stopInput()
     if (external) await external.close().catch(() => {}); if (app) await app.close().catch(() => {}); await backend.close()

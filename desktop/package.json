@@ -301,6 +301,7 @@
     "check:workspaceopen": "node scripts/workspace-open.check.cjs",
     "check:minidock": "node scripts/mini-dock.e2e.cjs",
     "check:floatingpanel": "node scripts/floating-panel.check.cjs",
+    "check:cupip": "node scripts/computer-use-pip.check.cjs",
     "check:quietfocus": "node scripts/quiet-focus.check.cjs",
     "check:windows-background": "node scripts/background-desktop.check.cjs",
     "check:windows-icons": "node scripts/windows-icons.check.cjs",

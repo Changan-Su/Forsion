@@ -1,0 +1,19 @@
+{
+  "active": true,
+  "windowId": 4211,
+  "pid": 5120,
+  "app": "Chatter",
+  "bundleId": "com.example.chatter",
+  "title": "Chatter — Zhang San",
+  "width": 800,
+  "height": 524,
+  "jpegBase64": "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////2wBDAf//////////////////////////////////////////////////////////////////////////////////////wAARCAABAAEDASIAAhEBAxEB/8QAFAABAAAAAAAAAAAAAAAAAAAAA//EABQQAQAAAAAAAAAAAAAAAAAAAAD/xAAUAQEAAAAAAAAAAAAAAAAAAAAA/8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAwDAQACEQMRAD8AMf/Z",
+  "frameSeq": 318,
+  "unchanged": false,
+  "ageMs": 42,
+  "cursor": { "x": 0.6425, "y": 0.8811 },
+  "lastAction": { "kind": "click", "seq": 17, "ageMs": 180, "x": 0.6425, "y": 0.8811, "label": "Send" },
+  "actionCount": 17,
+  "runId": "run_01HZX8Q2W3",
+  "turnActive": true
+}

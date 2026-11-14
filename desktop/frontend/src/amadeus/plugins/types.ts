@@ -736,8 +736,12 @@ export interface PluginViewContext {
   /** Immediate snapshot, then geometry/visibility/phase changes. Unsubscribe on cleanup. */
   onLayout?(listener: (layout: Readonly<PluginViewLayout>) => void): () => void
   /** Mount location. Mini/Floating receive no extendView/full workspace chrome. Feature-detect on older hosts.
-   *  A view that `ctx.workspace.open` floats inside the window (2.13.8+) reports 'mini' for the Mini look and 'floating' otherwise. */
-  surface?: 'main' | 'mini' | 'floating'
+   *  A view that `ctx.workspace.open` floats inside the window (2.13.8+) reports 'mini' for the Mini look and 'floating' otherwise.
+   *  'pip' (2026-11-13+): the host's small always-on-top picture-in-picture window (desktop only). Only the host opens
+   *  it, only on an explicit user action, and only for views it knows (today: the Computer Use live view); draw a
+   *  compact card there (no workspace chrome, no extendView, no showInMainPanel; `close?.()` closes the window).
+   *  Older hosts never report it, and a plugin must not assume the value set is closed: treat unknown values like 'floating'. */
+  surface?: 'main' | 'mini' | 'floating' | 'pip'
   /** Current entity/filter params, live for this mount. Keep entity keys identical in mini/main views. */
   getParams?(): Readonly<Record<string, unknown>>
   /** Merge entity/filter changes into this leaf; also updates the host's main-panel target. */
@@ -1204,6 +1208,55 @@ export interface ToolResultRendererContribution {
   /** Render into the host element (themed, no frame of its own needed); return a cleanup. Called again on every move
    *  (the old mount is cleaned up first) — restore view state from `call.state`. */
   mount(el: HTMLElement, call: ToolResultCall): (() => void) | void
+}
+
+/** One call handed to ToolLabelContribution.describe (2026-11-13+). */
+export interface ToolLabelCall {
+  /** The engine tool name. */
+  tool: string
+  /** Parsed JSON arguments (the raw string when they are not valid JSON). */
+  args: unknown
+  /** The tool result text, when there is one. */
+  result?: string
+  /** `running` while the call runs, `done` once it finished, `error` when it failed or was cut off. */
+  phase: 'running' | 'done' | 'error'
+  /** The interface language right now. The host calls `describe` again when it changes. */
+  locale: 'zh' | 'en'
+  /** Earlier calls of **your own** tools in the same reply, oldest first, at most the 40 closest ones. Use them to
+   *  recover names that only an earlier result carried (an app name, a control name). */
+  earlier: ReadonlyArray<{ tool: string; args: unknown; result?: string }>
+}
+
+/** What a ToolLabelContribution returns for one call. */
+export interface ToolLabel {
+  /** The whole line, as a sentence in `call.locale` (for example "Clicking “Send” in Chatter"). The host shows it as is:
+   *  no plugin name in front, no argument text after it. Keep it short; the host cuts it at 200 characters. */
+  text: string
+  /** `appBundleId`: show that app's icon in front of the line where the host can resolve it (desktop on macOS);
+   *  elsewhere, and while it loads, the usual tool icon shows. */
+  icon?: { appBundleId?: string }
+}
+
+/** Plain-language lines for your engine half's tools in the chat's process rows (ctx.registerToolLabel, 2026-11-13+).
+ *  Claiming works like ToolResultRendererContribution: only tools your bundle's engine plugins registered are handed to
+ *  you, and nothing is claimed until the host has the engine's tool list. While a call runs, the folded process row
+ *  rolls through each step's `running` sentence; once everything finished the folded row keeps the host's summary and
+ *  the expanded list shows each call's `done` (or `error`) sentence. The host works a line out when it first needs
+ *  it and again after a reload of the history or a language switch, and keeps the answer in between: `describe` is
+ *  called again only when the call itself, its phase, the locale or the earlier calls change. Treat it as a pure
+ *  function of `call` — synchronous, cheap, no side effects. If a line also depends on something outside `call`
+ *  (a table you fill in later, say), provide `revision`.
+ *  Throwing, or returning nothing / an empty `text`, keeps the host's generic line for that call. Contributions are
+ *  removed when your plugin is disabled or reloaded. Older hosts do not have it: call `ctx.registerToolLabel?.(…)`. */
+export interface ToolLabelContribution {
+  /** One engine tool name, or several, exactly as your engine half registered them. */
+  tool: string | string[]
+  describe(call: ToolLabelCall): ToolLabel | null | undefined | void
+  /** Optional. Return a number or string that changes whenever something `describe` reads **outside** `call` changes
+   *  (for example a table of app icons you learn later). The host compares it each time it draws a line and calls
+   *  `describe` again when it differs; lines already on screen pick the change up on their next render. Keep it
+   *  trivial (read a counter). Throwing, or returning anything else, counts as "no revision". */
+  revision?(): number | string
 }
 
 /** A user-tunable setting a plugin declares. The host renders the form on the plugin's detail
@@ -1859,6 +1912,9 @@ export interface PluginContext {
   /** Contribute a native result card for one of your engine half's tools (2026-10-19+). Absent on older hosts: call as
    *  `ctx.registerToolResultRenderer?.(…)`. See ToolResultRendererContribution. */
   registerToolResultRenderer?(def: ToolResultRendererContribution): void
+  /** Describe your engine half's tool calls in plain language in the chat's process rows (2026-11-13+). Absent on older
+   *  hosts: call as `ctx.registerToolLabel?.(…)`. See ToolLabelContribution. */
+  registerToolLabel?(def: ToolLabelContribution): void
   /** Contribute a "新建 …" entry into the file tree's right-click menu (root + folder). See FileCreatorContribution. */
   registerFileCreator(def: FileCreatorContribution): void
   /** Open (or focus) one of this plugin's own registered views. Defaults to the main area;
@@ -2298,12 +2354,30 @@ export interface PluginContext {
      *  sessionId 省略 = 主区活动会话;null = 新对话草稿(恒 idle)。拉取式;要口型包络就按帧拉 textChars。
      *  2026-09-20 起还带 `agentSlug` / `agentName`(这会话归哪个 Agent;外部引擎会话没有)。
      *  2026-10-04 起会话在语音通话时带 `speechLevel`(模型出声的真实电平):有它就按它做口型,别用 textChars。
-     *  旧宿主没有 → `ctx.tangu?.agentStatus?.()`,缺席按 idle 处理。 */
-    agentStatus?(sessionId?: string | null): import('./tanguSeam').TanguAgentStatus
+     *  旧宿主没有 → `ctx.tangu?.agentStatus?.()`,缺席按 idle 处理。
+     *
+     *  Since 2026-11-13 the argument may also be `{ sessionId?, runId? }`. With a `runId` key the host
+     *  reports the session that is **currently running that run**; when no session is running it, the result
+     *  is idle with `runId: null` (the host never falls back to the active session). Older hosts only accept
+     *  a string / null, so feature-detect before relying on the object form. */
+    agentStatus?(sessionId?: import('./tanguSeam').TanguSessionTarget): import('./tanguSeam').TanguAgentStatus
     /** 变更过滤订阅:只在 phase / tool / toolStage / waitingFor / sessionId / agentSlug 变了时回调
      *  (每个 token 不回调,改 Agent 展示名也不回调),done/error 余韵到期时再回调一次(回 idle)。
-     *  返回退订;禁用/重载时宿主统一收掉。 */
-    subscribeAgentStatus?(cb: (s: import('./tanguSeam').TanguAgentStatus) => void, sessionId?: string | null): () => void
+     *  返回退订;禁用/重载时宿主统一收掉。
+     *
+     *  Since 2026-11-13 the session argument accepts `{ sessionId?, runId? }` like `agentStatus`. With a
+     *  `runId`, the subscription follows whichever session runs it and fires once more (idle, `runId: null`)
+     *  when that run ends. */
+    subscribeAgentStatus?(cb: (s: import('./tanguSeam').TanguAgentStatus) => void, sessionId?: import('./tanguSeam').TanguSessionTarget): () => void
+    /** Stop a running agent run (2026-11-13+). Same path as the stop button in the chat input.
+     *  - string / `null` / omitted: a session id, same meaning as `agentStatus(sessionId?)` (omitted = the
+     *    active session in the main area).
+     *  - `{ runId }`: stop the session that is **currently running that run id**. If none is, nothing is
+     *    stopped and the promise resolves to `false`; another session is never stopped instead.
+     *  Resolves `true` only when a running run was actually asked to stop and the engine confirmed it.
+     *  Older hosts and profiles without chat do not have it: call `ctx.tangu?.stop?.({ runId })` and hide
+     *  your stop button when it is missing. */
+    stop?(target?: import('./tanguSeam').TanguSessionTarget): Promise<boolean>
     /** 用指定 Agent 开一个**可见的**新对话(2026-09-19+):离开主页 Space → 新对话 → 选 Agent → 预填或送出。
      *  - `send:true` **只对本插件捆绑包真正播种出来的 Agent 生效**(`agents/<slug>/` 且引擎播种时写下了本插件的
      *    `.bundle-origin` 来源标记;同名 slug 早已存在 = 不是你播的,一样降级);别家 Agent 一律降级为预填,

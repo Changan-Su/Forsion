@@ -1943,8 +1943,8 @@ if (new URLSearchParams(location.search).has('dock')) {
   let pvStatus: TanguAgentStatus = idleAgentStatus('pv-session')
   const pvStatusSubs = new Set<(s: TanguAgentStatus) => void>()
   const pvChats: TanguStartChatOptions[] = []
-  const withSid = (s: TanguAgentStatus, sid: string | null | undefined): TanguAgentStatus =>
-    (sid === undefined ? s : { ...s, sessionId: sid })
+  const withSid = (s: TanguAgentStatus, sid: unknown): TanguAgentStatus =>
+    (sid === undefined || (sid !== null && typeof sid !== 'string') ? s : { ...s, sessionId: sid as string | null })
   const installPvTangu = (): void => setTanguProbe({
     activeModel: () => pvModel,
     models: () => [pvModel],

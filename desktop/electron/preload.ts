@@ -607,7 +607,46 @@ const api = {
     unchanged?: boolean
     ageMs?: number
     error?: string
+    // helper 协议 20 起的可选字段,见 electron/computerUse.ts 的 CuLiveFrame
+    cursor?: { x: number; y: number }
+    lastAction?: { kind: string; seq: number; ageMs: number; x?: number; y?: number; label?: string }
+    actionCount?: number
+    runId?: string
+    turnActive?: boolean
   }> => ipcRenderer.invoke('computerUse:liveView', opts),
+  // Computer Use 悬浮小画面:宿主私有桥(只有 Electron 桌面有;网页 / 手机没有 → 插件不画「移到悬浮窗」)。
+  // 不是公开插件 API,不写进插件作者手册;契约见 electron/computerUsePip.ts。open() 只在用户点了「移到悬浮窗」时调:
+  // 已开着就叫到原处回 true;插件没装 / 没启用回 false、不开窗。
+  computerUsePip: {
+    open: (): Promise<boolean> => ipcRenderer.invoke('computerUsePip:open'),
+    close: (): Promise<void> => ipcRenderer.invoke('computerUsePip:close'),
+    isOpen: (): Promise<boolean> => ipcRenderer.invoke('computerUsePip:isOpen'),
+  },
+  /** pip 窗自己用:视图挂上了(ok + 内容高)/ 插件不在;之后内容高变了再报。 */
+  pipReady: (ok: boolean, height?: number): void => ipcRenderer.send('computerUsePip:ready', ok, height),
+  pipResize: (height: number): void => ipcRenderer.send('computerUsePip:resize', height),
+  /** pip 窗里的 ctx.tangu.stop / agentStatus 经主进程转给跑着这一轮的窗口(见 frontend/src/computerUsePipAgent.ts)。 */
+  pipAgent: {
+    stop: (target: unknown): Promise<boolean> => ipcRenderer.invoke('pipAgent:stop', target),
+    watch: (key: string, target: unknown): void => ipcRenderer.send('pipAgent:watch', key, target),
+    unwatch: (key: string): void => ipcRenderer.send('pipAgent:unwatch', key),
+    onStatus: (cb: (key: string, status: unknown) => void): (() => void) => {
+      const listener = (_e: unknown, msg: { key?: unknown; status?: unknown }): void => { if (msg && typeof msg.key === 'string') cb(msg.key, msg.status) }
+      ipcRenderer.on('pipAgent:status', listener)
+      return () => ipcRenderer.removeListener('pipAgent:status', listener)
+    },
+  },
+  /** 其余窗口的应答方:主进程转来 pip 的请求,这边用本窗的 store 回答。 */
+  pipAgentHost: {
+    ready: (): void => ipcRenderer.send('pipAgent:hostReady'),
+    onRequest: (cb: (req: { id?: number; op: string; key?: string; target?: unknown }) => void): (() => void) => {
+      const listener = (_e: unknown, req: { id?: number; op: string; key?: string; target?: unknown }): void => cb(req)
+      ipcRenderer.on('pipAgent:request', listener)
+      return () => ipcRenderer.removeListener('pipAgent:request', listener)
+    },
+    reply: (id: number, value: unknown): void => ipcRenderer.send('pipAgent:reply', id, value),
+    status: (key: string, status: unknown): void => ipcRenderer.send('pipAgent:hostStatus', key, status),
+  },
   // 本地语音模型(SenseVoice)下载 / 状态 / 删除 + 下载进度订阅。
   asrLocalStatus: (): Promise<{ ready: boolean; sizeBytes: number }> => ipcRenderer.invoke('asr:localStatus'),
   asrLocalDownload: (): Promise<{ ok: boolean; ready: boolean }> => ipcRenderer.invoke('asr:localDownload'),

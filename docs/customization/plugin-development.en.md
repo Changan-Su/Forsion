@@ -321,6 +321,28 @@ A plugin with an engine half can give the tools it registers a result card: afte
 
 A card sits in the chat by default, with "Open in Desk" at its top right. A plugin can also declare that a card goes straight into the Agent Desk (for whiteboards and boards that need room); the chat then keeps a placeholder card that says "Showing in Desk", and "Back to chat" moves it back. The ⋯ menu at the top of the Desk has "Move back to chat" too. The plugin keeps state such as zoom and scroll position across moves. On phones, with the Agent Desk turned off, or when the window is too narrow for the Desk, cards always show in the chat. A card can quote part of its content above the chat input, the same as selecting text in a reply and quoting it, and you decide whether to send it; cards cannot write files or send messages for you. For the API, see the "Tool result cards" section of the plugin development skill.
 
+## Process-row sentences
+
+Tangu folds a reply's tool calls into one process row; expanded, each call is one line. A plugin tool's line reads "plugin name · tool name" plus its first argument by default. A plugin with an engine half can call `ctx.registerToolLabel?.(…)` to describe its own tools in plain language instead, such as "Clicking “Send” in Chatter" or "Typed “See you tomorrow” in Chatter", optionally with the icon of the app being worked on. Claiming works like tool result cards: only tools the plugin's own engine half registered are handed to it.
+
+The host calls the plugin's `describe` whenever it draws that line, passing the call's arguments, its result, its phase (running, done or error), the interface language, and the plugin's own earlier calls in the same reply (up to 40, so app and button names from earlier results can be reused). While the tool runs, the folded process row rolls through each step's sentence; once everything finished, the folded row keeps its summary and each line of the expanded list shows the "done" sentence. The current-step line in the Tangu summary panel uses the same sentence. Lines are rebuilt when you reopen an old conversation or switch the interface language. If `describe` throws or gives no sentence, the line shows as before; the sentences go away when the plugin is disabled or reloaded. App icons show only in the desktop app on macOS; elsewhere the usual tool icon shows. Only this line for people changes: what the model sees (tool descriptions and results) stays the same.
+
+The host remembers each sentence: it asks again only when the call itself, its phase, the interface language or the earlier calls change. Write `describe` as a function of the data passed in, with no side effects. If a sentence or icon also depends on something else (an app icon you only learn later, for example), add `revision()` returning a number or string that changes along with it; the host asks again when it differs.
+
+```js
+ctx.registerToolLabel?.({ tool: ['act_ui', 'observe_ui'], describe(call) { return { text, icon: { appBundleId } } } })
+```
+
+## Stopping a run and following a run's status
+
+`ctx.tangu.agentStatus` / `subscribeAgentStatus` take a session. From 2026-11-13 they also take `{ runId }`, which means the session that is running that run right now. That suits views that know a `runId` but not the session (such as the Computer Use live view). When no session is running it, the status is idle with an empty `runId`.
+
+`ctx.tangu.stop?.(…)` stops a run the same way the stop button in the chat input does: with no argument it stops the current session in the main area, with a session id that session, and with `{ runId }` the session running that run. If the run cannot be found or the session is not running, nothing is stopped and it returns `false`; it never stops another session instead. Older versions and setups without chat do not have it, so do not show a stop button there. For the API, see the "Agent status" section of the plugin development skill.
+
+```js
+const ok = await ctx.tangu?.stop?.({ runId })
+```
+
 ## Summary panel cards
 
 The summary panel on the right of a Tangu chat (desktop versions after 2.13.8-beta.1) is a stack of cards: Progress, Background, Outputs, Sources, Scope and the Agent Desk. A plugin adds a card with `ctx.summary?.registerCard`. It sits in the same stack as the built-in cards; plugin cards start out above the Agent Desk, and the host remembers the order people drag them into. Cards open and close with their content: a card opens by itself when its `count` goes up. When someone opens or collapses a card by hand, that lasts until the current chat turn ends and is not remembered. `defaultCollapsed` decides whether the card stays collapsed while nothing new arrives. When the panel runs out of room, the host first collapses the card that has gone longest without anything new, or makes the last card's body shorter, so do not count on a 240px body. `mount` runs once in each chat's summary panel (switching chats unmounts and mounts again), and `host.sessionId` is the chat this copy belongs to. `host.update({ count, hidden })` sets the count in the card header or hides the card for now. The body is at most 240px tall (less when the panel is short), and the host scrolls anything longer. Only desktop Tangu has the summary panel, so use optional chaining; earlier versions have no `ctx.summary`. For the API, see the summary panel plugin card section of the plugin development skill.

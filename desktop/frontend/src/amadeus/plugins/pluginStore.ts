@@ -65,7 +65,7 @@ import { act } from '../../activity/log'
 import { notifyApp } from '../../stores/notificationStore'
 import { panelToast } from '../../components/PanelNotice'
 import { currentLocale, registerMessages, subscribeLocale, translate } from '../../i18n'
-import { idleAgentStatus, readTangu, type TanguAgentStatus, type TanguCompleteRequest, type TanguStartChatResult } from './tanguSeam'
+import { idleAgentStatus, readTangu, type TanguAgentStatus, type TanguSessionTarget, type TanguCompleteRequest, type TanguStartChatResult } from './tanguSeam'
 import { registerDeskCompanion, revokeDeskCompanions, type DeskCompanionContribution, type DeskCompanionHandle } from './deskCompanion'
 import { registerSummaryCard, revokeSummaryCards, type SummaryCardContribution, type SummaryCardHandle } from './summaryCards'
 // ctx.desk 的宿主闸:端判定单源(currentPlatform)+ UI 模式(叶子模块,不经 @lcl/engine barrel)。
@@ -127,6 +127,7 @@ import type {
   StatusItemContribution,
   ThemeContribution,
   ToolResultRendererContribution,
+  ToolLabelContribution,
   ViewContribution,
   ListSourceContribution,
   PluginAutomationRule,
@@ -198,6 +199,9 @@ async function resolveExternalSources(): Promise<ExternalPluginSource[]> {
   return amadeus.listPlugins()
 }
 
+/** registerToolLabel 收进来的样子:工具名统一成去重后的名单。 */
+export interface NormalizedToolLabel { tools: string[]; describe: ToolLabelContribution['describe']; revision?: ToolLabelContribution['revision'] }
+
 interface Owned<T> {
   pluginId: string
   item: T
@@ -232,6 +236,8 @@ interface PluginState {
   embedRenderers: Owned<EmbedRendererContribution>[]
   /** 插件给自己引擎半身的工具挂的原生结果卡片(ctx.registerToolResultRenderer);认领校验在 toolResultCards.ts。 */
   toolResultRenderers: Owned<ToolResultRendererContribution>[]
+  /** 插件给自己引擎半身的工具写的过程行句子(ctx.registerToolLabel,2026-11-13+);认领同 toolResultRenderers。 */
+  toolLabels: Owned<NormalizedToolLabel>[]
   fileCreators: Owned<FileCreatorContribution>[]
   /** 宿主注入的视图打开器(桌面壳=workspace.openView);无工作台的宿主保持 null,ctx.openView 即 no-op。 */
   viewOpener: ((type: string, loc?: PluginViewLocation, params?: Record<string, unknown>) => void) | null
@@ -1340,7 +1346,7 @@ function afterReconcile(): void {
 type OwnedKey = { [K in keyof PluginState]: PluginState[K] extends Owned<unknown>[] ? K : never }[keyof PluginState]
 const SLICE_KEYS = Object.keys({
   slashItems: 1, selectionActions: 1, commands: 1, themes: 1, panels: 1, statusItems: 1, propertyTypes: 1, settings: 1,
-  settingsViews: 1, storeViews: 1, readiness: 1, views: 1, listSources: 1, fileTypes: 1, embedRenderers: 1, toolResultRenderers: 1, fileCreators: 1,
+  settingsViews: 1, storeViews: 1, readiness: 1, views: 1, listSources: 1, fileTypes: 1, embedRenderers: 1, toolResultRenderers: 1, toolLabels: 1, fileCreators: 1,
 } satisfies Record<OwnedKey, 1>) as OwnedKey[]
 
 /** 摘掉 id 的全部切片贡献;没有它的切片保持原数组身份(订阅者不白白重渲)。 */
@@ -2020,6 +2026,18 @@ export const usePluginStore = create<PluginState>((set, get) => {
       }
       const item: ToolResultRendererContribution = { ...def, tool, surface: def.surface === 'desk' ? 'desk' : 'inline' }
       set((s) => ({ toolResultRenderers: [...s.toolResultRenderers, { pluginId, item }] }))
+    },
+    // 过程行句子(2026-11-13+):同上,只收形状;认领在画的时候按引擎名下工具现判(toolResultCards.claimToolLabel)。
+    registerToolLabel: (def) => {
+      if (!ctxAlive()) return
+      const raw = Array.isArray(def?.tool) ? def.tool : [def?.tool]
+      const tools = [...new Set(raw.map((t) => (typeof t === 'string' ? t.trim() : '')).filter(Boolean))]
+      if (!tools.length || typeof def?.describe !== 'function') {
+        console.warn(`[plugin:${pluginId}] registerToolLabel 被拒:要有 tool(引擎工具名或名单)和 describe`)
+        return
+      }
+      const item: NormalizedToolLabel = { tools, describe: def.describe, ...(typeof def.revision === 'function' ? { revision: def.revision } : {}) }
+      set((s) => ({ toolLabels: [...s.toolLabels, { pluginId, item }] }))
     },
     // 打开自己的视图:类型名由宿主统一命名空间(plugin:<id>:<viewId>),防跨插件顶替。
     // 2.13.8 起(LCL 表面规范第三期)一律经 workspace.open(lcl/engine/workspaceOpen.ts):openMiniPanel / openFloatingPanel
@@ -2780,11 +2798,19 @@ export const usePluginStore = create<PluginState>((set, get) => {
             subscribe: (cb: () => void) => scope.own('subscription', readTangu()?.subscribe(cb) ?? (() => {}), 'tangu'),
             // Agent 状态(2026-09-19):调用时才读探针(台架可以事后换探针)。探针缺这条(旧台架)→ 恒 idle,
             // 与契约「缺席按 idle 处理」同口径;省略 sessionId 时此处拿不到 activeId(appStore 有 import 环),报 null。
-            agentStatus: (sid?: string | null): TanguAgentStatus => readTangu()?.agentStatus?.(sid) ?? idleAgentStatus(sid ?? null),
-            subscribeAgentStatus: (cb: (s: TanguAgentStatus) => void, sid?: string | null): (() => void) => {
+            // 2026-11-13 起会话参数也收 { sessionId?, runId? }(按 runId 找正在跑它的会话,见 stores/agentStatus.ts)
+            agentStatus: (sid?: TanguSessionTarget): TanguAgentStatus => readTangu()?.agentStatus?.(sid) ?? idleAgentStatus(typeof sid === 'string' ? sid : null),
+            subscribeAgentStatus: (cb: (s: TanguAgentStatus) => void, sid?: TanguSessionTarget): (() => void) => {
               if (!ctxAlive()) return () => {}
               return scope.own('subscription', readTangu()?.subscribeAgentStatus?.(cb, sid) ?? (() => {}), 'agentStatus')
             },
+            // 停止(2026-11-13+):探针给得出才注入。停用后的插件停不了任何 run。
+            ...(readTangu()?.stop ? {
+              stop: async (target?: TanguSessionTarget): Promise<boolean> => {
+                if (!ctxAlive()) return false
+                return (await readTangu()?.stop?.(target)) === true
+              },
+            } : {}),
             // 开一个可见的新对话:探针给得出才注入(同 automation 的闸)。放行规则都在这一层:
             //  ① send:true 只对**本插件捆绑包播种的** Agent 生效(清单有 + 播种标记是本插件),别家 Agent /
             //     撞名没播成的 slug 降级为预填、由用户按回车 —— 插件不能替用户花别人的 token、开别家 Agent 的 host 工具;
@@ -3245,6 +3271,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
     fileTypes: [],
     embedRenderers: [],
     toolResultRenderers: [],
+    toolLabels: [],
     fileCreators: [],
     viewOpener: null,
     viewLocations: null,

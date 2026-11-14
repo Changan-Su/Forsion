@@ -16,7 +16,8 @@
 import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { AlertTriangle, ArrowDownToLine, ArrowUpToLine, CheckCircle2, ChevronRight, CircleStop, FileText, FolderOpen, Globe, GripVertical, LayoutGrid, MinusCircle, Pencil, Plus, RotateCcw, Search, StepForward, X, XCircle } from 'lucide-react'
 import { createDropIndicator, land, landWhenMoved } from '@lcl/engine'
-import { describeTool, toolVerb } from '../../components/ToolGroup'
+import { describeTool, toolVerb, usePluginToolName } from '../../components/ToolGroup'
+import { useToolLabelOf } from '../../amadeus/plugins/toolResultCards'
 import { ContextMenu, type CtxMenu } from '../../components/RightPanel'
 import { humanizeRunError, ReloginChip } from './EditorialMessage'
 import { registerMessages, useI18n } from '../../i18n'
@@ -329,7 +330,9 @@ export function TaskSummary({ sessionId, desk, messages, running, cwd, hostCwd, 
   onAddRoot?: () => void
   onRemoveRoot?: (path: string) => void
 }) {
-  const { t } = useI18n()
+  const { t, locale } = useI18n()
+  const toolOwnerName = usePluginToolName()
+  const toolLabelFor = useToolLabelOf(locale)
   const f0 = useMemo(() => summarizeTask(messages, running, hostCwd), [messages, running, hostCwd])
   // 「改动」卡(方案 C):引擎给得出真改动时,写盘工具改的文件归它(带增减、能撤销),「产物」只留展示出来的文件和图
   const changes = useChangesCard(sessionId)
@@ -366,7 +369,8 @@ export function TaskSummary({ sessionId, desk, messages, running, cwd, hostCwd, 
 
   const elapsed = running && f.startedAt ? now - f.startedAt : 0
   const done = f.todos.filter((x) => x.status === 'completed').length
-  const act = f.action ? describeTool(f.action) : null
+  // 「正在做」那一行跟过程行同一套写法:插件给了整句就用整句(earlier 取它所在那条回答里更早的调用)
+  const act = f.action ? describeTool(f.action, toolOwnerName, (ev) => toolLabelFor(ev, 'running', messages.find((m) => m.toolEvents?.some((x) => x.id === ev.id))?.toolEvents)) : null
   const StateIcon = f.state === 'attention' ? AlertTriangle
     : f.state === 'error' ? XCircle
     : f.state === 'stopped' ? CircleStop
@@ -416,7 +420,7 @@ export function TaskSummary({ sessionId, desk, messages, running, cwd, hostCwd, 
       >
         {teamStatus}
         {elapsed >= 30_000 && <div className="t2-tsum-sub">{t('tsum.elapsed', { t: fmtDur(elapsed) })}</div>}
-        {act && <div className="t2-tsum-sub" title={act.target}>{toolVerb(act, f.action!, t)} {act.target}</div>}
+        {act && <div className="t2-tsum-sub" title={act.sentence ? toolVerb(act, f.action!, t) : act.target}>{toolVerb(act, f.action!, t)}{act.sentence ? null : ` ${act.target}`}</div>}
         {editing && onShowEditing && (
           <button className="t2-tsum-edit" title={`${t('tsum.editingTip')}:${editing.path}`} onClick={() => onShowEditing(editing.path)}>
             <Pencil size={11} />

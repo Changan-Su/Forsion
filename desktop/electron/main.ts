@@ -19,6 +19,8 @@ import { createMiniResizeQueue } from './miniResizeQueue'
 import { miniResizeShape } from './miniResizeShape'
 import { protectWindowsAudioClock } from './windowsAudioClock'
 import { startMiniAutoPanel } from './miniAutoPanel'
+import { createDesktopFloat } from './desktopFloat'
+import { createComputerUsePip, createPipAgentRelay, PIP_AGENT_CHANNELS, PIP_MARGIN, PIP_WIDTH, type PipAgentHost } from './computerUsePip'
 import { createPluginSandbox, sandboxRequiredPlugins, type PluginSandboxUiSeed } from './pluginSandbox'
 import { sandboxSelf, startSandboxChild, sandboxForward, SANDBOX_SWITCHES } from './sandboxChild'
 import { MINI_WINDOW_LIMIT, VOICE_CALL_VIEW, miniEntityKey, normalizeMiniOpenOptions, normalizeMiniSessionContext, type MiniSessionContext, type MiniOpenOptions, type MiniOpenResult, type MainPanelTarget } from '../shared/miniPanel'
@@ -2513,6 +2515,56 @@ function openAutoMini(sessionId: string): void {
   })
   loadRendererWith(win, { window: 'mini', transient: '1', sessionId })
 }
+
+// ══ Computer Use 悬浮小画面(宿主私有桥 window.tangu.computerUsePip;纯逻辑与契约见 electron/computerUsePip.ts)══
+// 不进 minis 名册:不随启动恢复(saveOpenMiniWindows 只看 minis)、不占 MINI_WINDOW_LIMIT、不算 manualMiniVisible
+// (自动 Mini 照旧出没)、托盘「全部 Mini」里也没有它。无父窗:子窗跨屏会让 Electron 40 在第一下按键 SIGSEGV。
+/** 已报过「我能回答停止 / 状态」的渲染窗口(main.tsx 里非 pip 的窗口都装了应答方)。 */
+const pipAgentHostIds = new Set<number>()
+function pipAgentHosts(): PipAgentHost[] {
+  const out: PipAgentHost[] = []
+  const mainId = mainWindow && !mainWindow.isDestroyed() ? mainWindow.webContents.id : -1
+  for (const id of pipAgentHostIds) {
+    const wc = webContents.fromId(id)
+    if (!wc || wc.isDestroyed() || computerUsePip.owns(id)) { pipAgentHostIds.delete(id); continue }
+    out.push({ id, main: id === mainId, send: (channel, payload) => { if (!wc.isDestroyed()) wc.send(channel, payload) } })
+  }
+  return out.sort((a, b) => Number(b.main) - Number(a.main))
+}
+let pipWindow: BrowserWindow | null = null
+const pipAgentRelay = createPipAgentRelay({
+  hosts: pipAgentHosts,
+  toPip: (key, status) => { if (pipWindow && !pipWindow.isDestroyed()) pipWindow.webContents.send(PIP_AGENT_CHANNELS.status, { key, status }) },
+})
+const computerUsePip = createComputerUsePip({
+  primaryWorkArea: () => screen.getPrimaryDisplay().workArea,
+  create: (bounds, onClosed) => {
+    // focus 'keep':出现、更新都不抢焦点(mac = panel 型窗 + focusable:false + showInactive;点它照样会激活 Forsion,见 desktopFloat.ts)
+    const win = createDesktopFloat({
+      anchor: 'top-end', role: 'panel', focus: 'keep', pin: true, movable: true,
+      width: PIP_WIDTH, height: bounds.height, margin: PIP_MARGIN, workArea: screen.getPrimaryDisplay().workArea,
+      title: 'Computer Use', webPreferences: satelliteWebPreferences(),
+    })
+    win.setBounds(bounds)
+    // 系统阴影照 Mini:卡片整块铺满透明窗(没有给页面阴影留边),浮在别的 App 上要有一圈轮廓
+    if (process.platform === 'darwin') win.setHasShadow(true)
+    // 台架里压到普通窗口之下(Mini 那条「台架自己压」的坑:置顶小窗会浮在用户所有 App 上面)
+    if (QUIET_WINDOWS && process.platform === 'darwin') win.setAlwaysOnTop(true, 'normal', -1)
+    pipWindow = win
+    win.on('closed', () => {
+      if (pipWindow === win) pipWindow = null
+      onClosed()
+    })
+    // 整窗重载 / 渲染进程崩了重起:新一代 client 缓存是空的,撤掉旧一代的转发订阅与挂起的停止,让它重订、重新拿首份快照
+    win.webContents.on('did-start-navigation', (_e, _url, isInPlace, isMainFrame) => {
+      if (isMainFrame && !isInPlace && pipWindow === win) pipAgentRelay.clear()
+    })
+    win.webContents.on('render-process-gone', () => { if (pipWindow === win) pipAgentRelay.clear() })
+    loadRendererWith(win, { window: 'pip' })
+    return win
+  },
+  onGone: () => pipAgentRelay.clear(),
+})
 
 function createMiniWindow(opts: MiniOpenOptions | undefined, key: string, restored?: MiniSessionEntry): MiniEntry {
   const wa = screen.getPrimaryDisplay().workArea
@@ -5282,6 +5334,27 @@ app.whenReady().then(async () => {
     if (a) uiAppearance = a
   })
   ipcMain.on('window:closeSelf', (e) => BrowserWindow.fromWebContents(e.sender)?.close())
+  // Computer Use 悬浮小画面(宿主私有桥;插件作者手册里没有它):只响应 open(),插件不在 → false、不上屏
+  ipcMain.handle('computerUsePip:open', (e) => (isTrustedSender(e) && !computerUsePip.owns(e.sender.id) ? computerUsePip.open() : false))
+  ipcMain.handle('computerUsePip:close', (e) => { if (isTrustedSender(e)) computerUsePip.close() })
+  ipcMain.handle('computerUsePip:isOpen', (e) => isTrustedSender(e) && computerUsePip.isOpen())
+  ipcMain.on('computerUsePip:ready', (e, ok: unknown, height: unknown) => { if (isTrustedSender(e)) computerUsePip.ready(e.sender.id, ok === true, height) })
+  ipcMain.on('computerUsePip:resize', (e, height: unknown) => { if (isTrustedSender(e)) computerUsePip.resize(e.sender.id, height) })
+  // pip 窗里的 ctx.tangu.stop / agentStatus:转给真正跑着这一轮的窗口(runningBySession 每个渲染进程一份)
+  ipcMain.handle('pipAgent:stop', (e, target: unknown) => (isTrustedSender(e) && computerUsePip.owns(e.sender.id) ? pipAgentRelay.stop(target) : false))
+  ipcMain.on('pipAgent:watch', (e, key: unknown, target: unknown) => { if (isTrustedSender(e) && computerUsePip.owns(e.sender.id)) pipAgentRelay.watch(key, target) })
+  ipcMain.on('pipAgent:unwatch', (e, key: unknown) => { if (isTrustedSender(e) && computerUsePip.owns(e.sender.id)) pipAgentRelay.unwatch(key) })
+  ipcMain.on('pipAgent:hostReady', (e) => {
+    if (!isTrustedSender(e) || computerUsePip.owns(e.sender.id)) return
+    const id = e.sender.id
+    if (!pipAgentHostIds.has(id)) {
+      pipAgentHostIds.add(id)
+      e.sender.once('destroyed', () => { pipAgentHostIds.delete(id); pipAgentRelay.hostGone(id) })
+    }
+    pipAgentRelay.hostReady(id)
+  })
+  ipcMain.on('pipAgent:reply', (e, id: unknown, value: unknown) => { if (pipAgentHostIds.has(e.sender.id)) pipAgentRelay.reply(e.sender.id, id, value) })
+  ipcMain.on('pipAgent:hostStatus', (e, key: unknown, status: unknown) => { if (pipAgentHostIds.has(e.sender.id)) pipAgentRelay.status(e.sender.id, key, status) })
   // 系统浏览器兜底(内置浏览器关掉 / mini 窗 / 用户点「用系统浏览器打开」);只放 http(s),
   // 别的 scheme 经 openExternal 等于让页面唤起任意本机协议处理器。scheme 用 URL 解析比对,
   // 不靠正则(`https:/\evil` 之类畸形串别指望正则拿捏)。
@@ -5655,6 +5728,7 @@ app.on('before-quit', (e) => {
   void pluginSandbox?.dispose() // 沙箱跟着退(它那头也会因控制通道断开自己退)
   globalShortcut.unregisterAll() // 释放 mini 全局快捷键
   miniAutoPanel?.stop(); miniAutoPanel = null
+  computerUsePip.dispose() // 悬浮小画面跟着退,下次启动也不会回来(它从不落盘)
   approvalDelivery.stop() // P1-K3
   remoteSafety.dispose() // P1-K2:断活动流、注销急停热键、放掉强制防休眠(锁文件原样留着 = 锁跨重启)
   flushAllNoteEdits() // 活动日志:5 分钟合并窗口内未落盘的 note.edit 冲出去
