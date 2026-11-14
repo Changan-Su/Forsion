@@ -32,9 +32,10 @@ export function miniSessionId(): string | null {
 }
 
 /** 设备的 Unit 窗(主进程 createDetachedWindow({ unit }) 开的独立窗,?unit=<设备 id>):只画设备页的框,见 UnitWindowRoot。
- *  id 过同一条白名单(同服务端 UNIT_ID_PATH);不是 / 不合法 = null。 */
+ *  id 过同一条白名单(同服务端 UNIT_ID_PATH);不是 / 不合法 = null。
+ *  只认桌面:要有 Unit 窗用得到的那座桥(unitsShowMain,preload 才给)。web 复用同一个入口,手拼 `?window=detached&unit=…` 照常走普通入口。 */
 export function unitWindowId(): string | null {
-  if (windowKind() !== 'detached') return null
+  if (windowKind() !== 'detached' || typeof window === 'undefined' || !window.tangu?.unitsShowMain) return null
   const id = params().get('unit')
   return id && /^[0-9a-zA-Z-]{8,64}$/.test(id) ? id : null
 }
