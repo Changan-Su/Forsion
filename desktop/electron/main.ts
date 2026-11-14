@@ -115,7 +115,7 @@ import { COMPUTER_HISTORY_DESKTOP_CONFIG_FILE } from '../shared/computerHistory'
 // Amadeus Space:vendored 笔记后端(vault IPC + 资产协议)。renderImport 别名后保持 verbatim。
 import { registerIpc as registerAmadeusIpc } from './amadeus/ipc'
 import type { AmadeusSyncFactory } from './amadeus/cloudSeam'
-import { createUnitFrameScope, handleUnitFrameBind, normalizeCloudBase, shouldInjectUnitAuth } from './unitAuthScope' // 设备页补登录头的范围
+import { adoptFromOpenGrant, createUnitFrameScope, createUnitOpenGrants, handleUnitFrameBind, normalizeCloudBase, shouldInjectUnitAuth } from './unitAuthScope' // 设备页补登录头的范围
 import { engineCapsState, pairingWriters, selfUnitIdMemo, type UnitHubFactory, type UnitHubInstance } from './unitHubSeam' // 设备互联云端通道的接缝(Forsion Extend 0.6 起)
 import { makeCallerHeaders } from './unitCaller'
 import { newPairStore, startUnitWeb, type UnitWebHandle, type PairedDevice, startClipEntrance, CLIP_ENTRANCE_PORTS, type ClipEntranceHandle } from './unitWeb'
@@ -1120,9 +1120,12 @@ if (approvalE2E) (globalThis as Record<string, unknown>).__forsionE2E = { approv
 let unitCloudBase: string | null = null
 /** 设备页 webview 的绑定(units:bindFrame 建,webview 销毁 / 换账号清)。 */
 const unitFrames = createUnitFrameScope()
+/** 设备页自己 window.open 自己中转地址时的一次性许可(unitAuthScope.ts;换号时随绑定一起清)。 */
+const unitOpenGrants = createUnitOpenGrants()
+/** 发过主框架请求的 webview(只有「第一次主框架请求」能消费开窗许可)。 */
+const unitGuestNavigated = new WeakSet<Electron.WebContents>()
 /** 当前账号标识(同「添加到桌面」那份:forsionAccountId,解不出用户时退回令牌哈希;没登录 = null)。 */
-function unitAccountKey(): string | null {
-  const c = loadTanguCreds()
+function unitAccountKey(c: { cloudUrl?: string; token?: string } = loadTanguCreds()): string | null {
   const token = c.token || ''
   return forsionAccountId(c.cloudUrl || '', token) ?? (token ? `token:${createHash('sha256').update(token).digest('hex')}` : null)
 }
@@ -1826,7 +1829,13 @@ app.on('web-contents-created', (_e, contents) => {
     delete params.webpreferences
   })
   contents.on('did-attach-webview', (_ev, guest) => {
-    guest.setWindowOpenHandler(openUrlHandler(contents, true))
+    const open = openUrlHandler(contents, true)
+    guest.setWindowOpenHandler((d) => {
+      // 已绑定的设备页开**它自己**中转下的地址(撕出视图 / 同源 window.open):给回投后新开的那张页发一次性许可
+      const b = unitFrames.get(guest.id)
+      if (b) unitOpenGrants.issue(b, d.url, unitAccountKey(), unitCloudBase)
+      return open(d)
+    })
   })
 })
 
@@ -3197,9 +3206,27 @@ app.whenReady().then(async () => {
       const sfs = String(h['Sec-Fetch-Site'] || h['sec-fetch-site'] || '')
       const trustedInitiator = !sfs || sfs === 'none' || sfs === 'same-origin'
       // 设备页:只给主进程绑定过的那张 webview、只给那台设备自己的路径(unitAuthScope.ts;名册接口一概不补)。
-      const binding = unitFrames.get(details.webContentsId)
-      if (binding && shouldInjectUnitAuth({ url: details.url, binding, accountKey: unitAccountKey(), cloudBase: unitCloudBase, secFetchSite: sfs })) {
-        const token = loadTanguCreds().token
+      // 凭据文件每条请求最多读一次,且只在要判的时候读。
+      let creds: ReturnType<typeof loadTanguCreds> | null = null
+      const cr = (): ReturnType<typeof loadTanguCreds> => (creds ??= loadTanguCreds())
+      const wc = details.webContents
+      const isMainFrame = details.resourceType === 'mainFrame'
+      const isGuest = !!wc && !wc.isDestroyed() && wc.getType() === 'webview'
+      const firstMainFrame = isMainFrame && isGuest && !unitGuestNavigated.has(wc!)
+      if (firstMainFrame) unitGuestNavigated.add(wc!)
+      let binding = unitFrames.get(details.webContentsId)
+      // 设备页自己开的窗口:还没绑定的新 webview 第一次主框架请求恰好是许可里的地址 → 绑到同一台
+      if (!binding && firstMainFrame && unitOpenGrants.size()) {
+        const adopted = adoptFromOpenGrant(unitOpenGrants, { url: details.url, isMainFrame, isGuest, alreadyBound: false, firstMainFrame, accountKey: unitAccountKey(cr()), cloudBase: unitCloudBase })
+        if (adopted) {
+          const g = wc!
+          unitFrames.bind(g.id, adopted)
+          g.once('destroyed', () => unitFrames.unbind(g.id))
+          binding = adopted
+        }
+      }
+      if (binding && shouldInjectUnitAuth({ url: details.url, binding, accountKey: unitAccountKey(cr()), cloudBase: unitCloudBase, secFetchSite: sfs })) {
+        const token = cr().token
         if (token) h.Authorization = `Bearer ${token}`
       } else if (trustedInitiator) {
         // P2P 本机代理(方案 §12):同机制注入 per-proxy 秘密 —— loopback 上别的进程没有它,
@@ -3327,7 +3354,7 @@ app.whenReady().then(async () => {
     broadcast: (channel, payload) => { for (const w of BrowserWindow.getAllWindows()) w.webContents.send(channel, payload) },
     stopSync: () => stopAmadeusSync?.(),
     restartSync: () => restartAmadeusSync?.(),
-    onWillChange: () => unitFrames.clear(), // 换号 / 登出的握手一开始:设备页的绑定全清(之后要看得重新绑)
+    onWillChange: () => { unitFrames.clear(); unitOpenGrants.clear() }, // 换号 / 登出的握手一开始:设备页的绑定与开窗许可全清(之后要看得重新绑)
     log: (m) => console.error(m),
   })
   // Manual checks and background checks share state and a single in-flight run.

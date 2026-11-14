@@ -18,6 +18,8 @@
  *   G1 补头范围:设备页里的脚本打名册 / 改删别台 / 调用方凭据 / 别台的中转 → 假云端收到的不带登录头;打自己的中转带
  *   G2 同分区没绑定的内置浏览器标签页导航到这台的中转 → 不带登录头
  *   G3 主窗的设备页(远程面)同样先经主进程绑定,之后的中转请求带登录头
+ *   G4 Unit 窗设备页 window.open 自己的中转 → 独立视图窗里那张页带登录头、加载成功;开别台的中转 → 不带
+ *   G5 主窗设备页 window.open 自己的中转 → 内置浏览器标签带登录头、加载成功
  *   A  登出:Unit 窗与主窗设备页的 webview 在握手阶段就卸掉;迟到的旧名册回包不把页面挂回来
  *   C1–C2 冷启动带链接 → Unit 窗出来、主窗建了但不露面;二启同理(第二个进程退出、第一个只开 Unit 窗)
  * 截图(SHOT_DIR,缺省系统临时目录):主窗 + Unit 窗并排、四种状态、悬停按钮、右键菜单、深色、110%。
@@ -221,6 +223,21 @@ async function main() {
   process.exit(R.summary() ? 1 : 0)
 
   async function full(app, win) {
+    /** 设备页(按宿主窗口挑)里 window.open 一个地址。 */
+    const openFromDevicePage = (hostKind, url) => app.evaluate(async ({ webContents }, { prefix, url, hostKind }) => {
+      const wc = webContents.getAllWebContents().filter((w) => !w.isDestroyed() && w.getType() === 'webview' && w.getURL().startsWith(prefix)
+        && (hostKind === 'unit' ? /[?&]unit=/.test(w.hostWebContents?.getURL() || '') : !/[?&]window=/.test(w.hostWebContents?.getURL() || ''))).pop()
+      if (!wc) return 'no-webview'
+      await wc.executeJavaScript(`window.open(${JSON.stringify(url)}, '_blank'); true`, true)
+      return 'ok'
+    }, { prefix: `${cloud.url}/api/units/${UID_ON}/proxy/`, url, hostKind })
+    /** 新开的那张页(按地址里的 probe 认)加载成功了吗:不是 401 的 JSON、有脚本。 */
+    const popupLoaded = (probe) => until(() => app.evaluate(async ({ webContents }, probe) => {
+      const wc = webContents.getAllWebContents().filter((w) => !w.isDestroyed() && w.getType() === 'webview' && w.getURL().includes(`probe=${probe}`)).pop()
+      if (!wc || wc.isLoading()) return undefined
+      return wc.executeJavaScript(`({ ok: !document.body.innerText.includes('unauthorized') && document.querySelectorAll('script').length > 0, text: document.body.innerText.slice(0, 80) })`, true)
+    }, probe), 15000)
+    const probeReqs = (probe) => cloud.state.reqs.filter((r) => r.probe === probe)
     // W2 窗里只有设备页的框
     const page = await unitPage(app, UID_ON)
     await page.waitForSelector('.unitrs--whole .unitfr-pill', { timeout: 20_000 })
@@ -316,6 +333,23 @@ async function main() {
     if (popupWin) await app.evaluate(({ BrowserWindow }, id) => BrowserWindow.fromId(id)?.close(), popupWin.id)
     await sleep(500)
 
+    // G4 Unit 窗的设备页 window.open 自己中转下的地址 → 新开的独立视图窗那张页带登录头、加载成功;开别台的中转 → 不带
+    const ownUrl = `${cloud.url}/api/units/${UID_ON}/proxy/?probe=g4-own`
+    const g4open = await openFromDevicePage('unit', ownUrl)
+    const g4win = await until(async () => (await wins(app)).find((w) => w.kind === 'detached' && !w.unit && w.visible), 15000)
+    const g4load = await popupLoaded('g4-own')
+    const g4reqs = probeReqs('g4-own')
+    R.check('G4 Unit 窗设备页 window.open 自己的中转 → 新页带登录头且加载成功', g4open === 'ok' && !!g4win && g4reqs.length > 0 && g4reqs.every((r) => r.auth === `Bearer ${FIXTURE_TOKEN}`) && g4load?.ok === true, { g4open, g4win: !!g4win, g4reqs, g4load })
+    if (g4win) await app.evaluate(({ BrowserWindow }, id) => BrowserWindow.fromId(id)?.close(), g4win.id)
+    await sleep(500)
+    const g4other = await openFromDevicePage('unit', `${cloud.url}/api/units/${UID_OFF}/proxy/?probe=g4-other`)
+    const g4owin = await until(async () => (await wins(app)).find((w) => w.kind === 'detached' && !w.unit && w.visible), 15000)
+    await until(async () => probeReqs('g4-other').length > 0 || undefined, 10000)
+    const g4oreqs = probeReqs('g4-other')
+    R.check('G4 Unit 窗设备页 window.open 别台的中转 → 新页不带登录头', g4other === 'ok' && g4oreqs.length > 0 && g4oreqs.every((r) => !r.auth), { g4other, g4oreqs })
+    if (g4owin) await app.evaluate(({ BrowserWindow }, id) => BrowserWindow.fromId(id)?.close(), g4owin.id)
+    await sleep(500)
+
     // 主窗 + Unit 窗并排
     const mainId = (await wins(app)).find((w) => w.kind === 'main').id
     await captureById(app, mainId, shot('main-only'))
@@ -407,6 +441,11 @@ async function main() {
     const mainHits = cloud.state.reqs.slice(mark).filter((r) => r.path.startsWith(`/api/units/${UID_ON}/proxy/`))
     R.check('G3 主窗设备页:绑定后换上中转地址,收到的中转请求都带登录头', !!mainSrc && mainHits.length > 0 && mainHits.every((r) => r.auth === `Bearer ${FIXTURE_TOKEN}`), { mainSrc, hits: mainHits.length, noAuth: mainHits.filter((r) => !r.auth).length })
     const pre = { unit: await ap.locator('.unitrs-web').count(), main: await win.locator('.unitrs-web').count() }
+    // G5 主窗设备页 window.open 自己中转下的地址 → 开在内置浏览器标签里,那张页带登录头、加载成功
+    const g5open = await openFromDevicePage('main', `${cloud.url}/api/units/${UID_ON}/proxy/?probe=g5-own`)
+    const g5load = await popupLoaded('g5-own')
+    const g5reqs = probeReqs('g5-own')
+    R.check('G5 主窗设备页 window.open 自己的中转 → 内置浏览器新标签带登录头且加载成功', g5open === 'ok' && g5reqs.length > 0 && g5reqs.every((r) => r.auth === `Bearer ${FIXTURE_TOKEN}`) && g5load?.ok === true, { g5open, g5reqs, g5load })
     // 再开一扇正在等名册的窗(名册故意慢 4 秒),趁它在途时登出
     cloud.state.rosterDelay = 4000
     await openVia(UID_OFF)

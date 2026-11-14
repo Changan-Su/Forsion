@@ -147,3 +147,66 @@ export function createUnitFrameScope(): {
     size: () => m.size,
   }
 }
+
+// ── 设备页自己开的窗口:一次性许可 ────────────────────────────────────────────
+// 已绑定的设备页 window.open(撕出视图 / 同源地址)时,主进程把地址回投给宿主渲染层,开成一张新的内置浏览器 webview
+// (主窗:内置浏览器标签;Unit 窗:独立视图窗)。那张新 webview 没绑定,不补头就 401。
+// 许可由主进程在「已绑定的页面发起 + 目标在**它自己**的前缀里」时发,不由渲染层申请;
+// 之后同分区里一张还没绑定、还没导航过的 webview,主框架第一次请求**恰好**这个地址时消费,把它绑到同一台。
+
+/** 许可有效期:开窗回投 → 渲染层开标签 → 新 webview 发出第一条请求,正常在一两秒内。 */
+export const UNIT_OPEN_GRANT_TTL_MS = 10_000
+
+/** 比较用的地址:URL 规整后去掉片段(片段不上网络,请求里看不到)。解析不了 = null。 */
+export function grantUrlKey(raw: string): string | null {
+  let u: URL
+  try { u = new URL(raw) } catch { return null }
+  if (u.username || u.password) return null
+  u.hash = ''
+  return u.href
+}
+
+export interface UnitOpenGrant { binding: UnitFrameBinding; url: string; expiresAt: number }
+
+export function createUnitOpenGrants(now: () => number = Date.now, ttlMs = UNIT_OPEN_GRANT_TTL_MS): {
+  /** 已绑定的设备页要开 url:目标在这台自己的前缀里、账号 / 云端仍是绑定时的,才发许可。回发没发。 */
+  issue(binding: UnitFrameBinding | undefined, url: string, accountKey: string | null, cloudBase: string | null): boolean
+  /** 一张还没绑定的 webview 的主框架第一次请求 url:有对得上的许可就消费(只能用一次),回它的绑定。 */
+  consume(url: string, accountKey: string | null, cloudBase: string | null): UnitFrameBinding | undefined
+  clear(): void
+  size(): number
+} {
+  let list: UnitOpenGrant[] = []
+  const prune = (): void => { const t = now(); list = list.filter((g) => g.expiresAt > t) }
+  return {
+    issue(b, url, accountKey, cloudBase) {
+      if (!b || !accountKey || !cloudBase || b.accountKey !== accountKey || b.cloudBase !== cloudBase) return false
+      const key = grantUrlKey(url)
+      if (!key || !urlInPrefixes(key, unitAllowedPrefixes(b.cloudBase, b.unitId))) return false
+      prune()
+      if (list.length >= 32) list.shift() // 封顶:页面狂开窗也只留最近的
+      list.push({ binding: { ...b }, url: key, expiresAt: now() + ttlMs })
+      return true
+    },
+    consume(url, accountKey, cloudBase) {
+      prune()
+      const key = grantUrlKey(url)
+      if (!key || !accountKey || !cloudBase) return undefined
+      const i = list.findIndex((g) => g.url === key && g.binding.accountKey === accountKey && g.binding.cloudBase === cloudBase)
+      if (i < 0) return undefined
+      const [g] = list.splice(i, 1)
+      return { ...g.binding }
+    },
+    clear() { list = [] },
+    size() { prune(); return list.length },
+  }
+}
+
+/** 请求时:这条请求能不能消费许可(主进程只在这里调 consume)。不是主框架 / 已绑定 / 不是这张 webview 的第一次主框架请求 → 不认、也不消耗许可。 */
+export function adoptFromOpenGrant(
+  grants: Pick<ReturnType<typeof createUnitOpenGrants>, 'consume'>,
+  i: { url: string; isMainFrame: boolean; isGuest: boolean; alreadyBound: boolean; firstMainFrame: boolean; accountKey: string | null; cloudBase: string | null },
+): UnitFrameBinding | undefined {
+  if (!i.isMainFrame || !i.isGuest || i.alreadyBound || !i.firstMainFrame) return undefined
+  return grants.consume(i.url, i.accountKey, i.cloudBase)
+}

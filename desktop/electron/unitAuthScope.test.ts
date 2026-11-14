@@ -2,7 +2,7 @@
  * 设备页补登录头的范围(unitAuthScope.ts):判定矩阵 + 绑定处理器。
  */
 import { describe, expect, it, vi } from 'vitest'
-import { createUnitFrameScope, handleUnitFrameBind, normalizeCloudBase, shouldInjectUnitAuth, unitAllowedPrefixes, urlInPrefixes, type UnitFrameBinding, type UnitFrameBindDeps } from './unitAuthScope'
+import { adoptFromOpenGrant, createUnitFrameScope, createUnitOpenGrants, grantUrlKey, UNIT_OPEN_GRANT_TTL_MS, handleUnitFrameBind, normalizeCloudBase, shouldInjectUnitAuth, unitAllowedPrefixes, urlInPrefixes, type UnitFrameBinding, type UnitFrameBindDeps } from './unitAuthScope'
 
 const CLOUD = 'https://api.example.test'
 const A = '3f2a9c1e-7b4d-4e8a-9c21-5d6e7f8a9b0c'
@@ -194,5 +194,89 @@ describe('createUnitFrameScope', () => {
     expect(at(10, `${CLOUD}/api/units/${A}/proxy/`)).toBe(false)
     s.clear()
     expect(at(9, `${CLOUD}/api/units/${A}/proxy/`)).toBe(false)
+  })
+})
+
+describe('设备页自己开的窗口:一次性许可', () => {
+  const own = `${CLOUD}/api/units/${A}/proxy/?view=chat&popout=1`
+  const mk = () => { let t = 1000; const g = createUnitOpenGrants(() => t); return { g, tick: (ms: number) => { t += ms } } }
+  const adopt = (g: ReturnType<typeof createUnitOpenGrants>, url: string, over: Partial<Parameters<typeof adoptFromOpenGrant>[1]> = {}) =>
+    adoptFromOpenGrant(g, { url, isMainFrame: true, isGuest: true, alreadyBound: false, firstMainFrame: true, accountKey: ACCT, cloudBase: CLOUD, ...over })
+
+  it('已绑定的页面开自己中转下的地址 → 发许可;新 webview 主框架第一次请求恰好这个地址 → 绑到同一台;只能用一次', () => {
+    const { g } = mk()
+    expect(g.issue(bound, own, ACCT, CLOUD)).toBe(true)
+    expect(adopt(g, own)).toEqual(bound)
+    expect(adopt(g, own)).toBeUndefined()
+    expect(g.size()).toBe(0)
+  })
+  it('片段不上网络:开的地址带 #,请求里没有 → 认;主机名大小写规整后相等 → 认', () => {
+    const { g } = mk()
+    g.issue(bound, `${own}#tab=2`, ACCT, CLOUD)
+    expect(adopt(g, own)).toEqual(bound)
+    g.issue(bound, own.replace('api.example.test', 'API.example.test'), ACCT, CLOUD)
+    expect(adopt(g, own)).toEqual(bound)
+  })
+  it('目标不在这台自己的前缀里 → 不发许可(别台的中转、名册接口、管理接口、外站、混淆路径)', () => {
+    const { g } = mk()
+    for (const u of [
+      `${CLOUD}/api/units/${B}/proxy/`, `${CLOUD}/api/units`, `${CLOUD}/api/units/`, `${CLOUD}/api/units/${A}`,
+      `${CLOUD}/api/units/${A}/caller-token`, `${CLOUD}/api/units/${A}/open`, 'https://evil.test/', `${CLOUD}/api/units/${A}/proxy/..%2f..%2f${B}`,
+      `${CLOUD}/api/units/${B}/proxy/?next=/api/units/${A}/proxy/`, 'not a url',
+    ]) expect(g.issue(bound, u, ACCT, CLOUD), u).toBe(false)
+    expect(g.size()).toBe(0)
+  })
+  it('发起页没绑定 / 账号或云端已经变了 → 不发', () => {
+    const { g } = mk()
+    expect(g.issue(undefined, own, ACCT, CLOUD)).toBe(false)
+    expect(g.issue(bound, own, 'user-2', CLOUD)).toBe(false)
+    expect(g.issue(bound, own, null, CLOUD)).toBe(false)
+    expect(g.issue(bound, own, ACCT, 'https://other.test')).toBe(false)
+    expect(g.size()).toBe(0)
+  })
+  it('过期 → 不认', () => {
+    const { g, tick } = mk()
+    g.issue(bound, own, ACCT, CLOUD)
+    tick(UNIT_OPEN_GRANT_TTL_MS + 1)
+    expect(adopt(g, own)).toBeUndefined()
+  })
+  it('地址不完全相等(多一个查询参数、少斜杠、别的路径)→ 不认,许可留着', () => {
+    const { g } = mk()
+    g.issue(bound, own, ACCT, CLOUD)
+    expect(adopt(g, `${own}&x=1`)).toBeUndefined()
+    expect(adopt(g, `${CLOUD}/api/units/${A}/proxy/`)).toBeUndefined()
+    expect(adopt(g, `${CLOUD}/api/units/${A}/proxy/other`)).toBeUndefined()
+    expect(g.size()).toBe(1)
+  })
+  it('不是主框架 / 不是 webview / 已绑定 / 不是第一次主框架请求 → 不认,也不消耗许可', () => {
+    const { g } = mk()
+    g.issue(bound, own, ACCT, CLOUD)
+    expect(adopt(g, own, { isMainFrame: false })).toBeUndefined()
+    expect(adopt(g, own, { isGuest: false })).toBeUndefined()
+    expect(adopt(g, own, { alreadyBound: true })).toBeUndefined()
+    expect(adopt(g, own, { firstMainFrame: false })).toBeUndefined()
+    expect(g.size()).toBe(1)
+    expect(adopt(g, own)).toEqual(bound)
+  })
+  it('换号 / 换云端后消费 → 不认;clear(换号握手)后 → 没有许可', () => {
+    const { g } = mk()
+    g.issue(bound, own, ACCT, CLOUD)
+    expect(adopt(g, own, { accountKey: 'user-2' })).toBeUndefined()
+    expect(adopt(g, own, { accountKey: null })).toBeUndefined()
+    expect(adopt(g, own, { cloudBase: 'https://other.test' })).toBeUndefined()
+    g.clear()
+    expect(adopt(g, own)).toBeUndefined()
+  })
+  it('许可绑的是发起页那台:消费后的绑定照样只给那台补头', () => {
+    const { g } = mk()
+    g.issue(bound, own, ACCT, CLOUD)
+    const b = adopt(g, own)
+    expect(shouldInjectUnitAuth({ url: own, binding: b, accountKey: ACCT, cloudBase: CLOUD, secFetchSite: 'none' })).toBe(true)
+    expect(shouldInjectUnitAuth({ url: `${CLOUD}/api/units/${B}/proxy/`, binding: b, accountKey: ACCT, cloudBase: CLOUD, secFetchSite: 'same-origin' })).toBe(false)
+  })
+  it('grantUrlKey:去片段、拒带凭据与解析不了的', () => {
+    expect(grantUrlKey(`${own}#x`)).toBe(own)
+    expect(grantUrlKey('https://u:p@h.test/')).toBeNull()
+    expect(grantUrlKey('::')).toBeNull()
   })
 })
