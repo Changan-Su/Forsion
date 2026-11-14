@@ -56,7 +56,7 @@ import { findGit } from './gitHistory'
 import { downloadUrlFor, installCommandFor, requiredProgram } from './envInstall'
 import { createKeepAwake } from './keepAwake'
 import { createMcpLifecycle, startForsionMcp } from './mcpServer'
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { loadTanguCreds, saveTanguCreds, assertTanguCredsWritable, forsionAccountId, loadAccountCloudSettings, saveAccountCloudSettings } from './forsionAuth'
 import { createAccountCore } from './accountCore'
 import { importMcp, scanAll } from './discovery'
@@ -5097,7 +5097,12 @@ app.whenReady().then(async () => {
     const input = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
     const result = await handleUnitAddToDesktop(raw, {
       trusted: isTrustedSender(e) && e.sender === mainWindow?.webContents,
-      accountKey: () => { const c = loadTanguCreds(); return forsionAccountId(c.cloudUrl || '', c.token || '') },
+      // 账号身份(同 forsionAccountId);令牌不是 JWT 形状解不出用户时,退回按令牌本身认(登出 = 没令牌 = null)
+      accountKey: () => {
+        const c = loadTanguCreds()
+        const token = c.token || ''
+        return forsionAccountId(c.cloudUrl || '', token) ?? (token ? `token:${createHash('sha256').update(token).digest('hex')}` : null)
+      },
       readRoster: () => readUnitRoster(e),
       create: (unit, stillCurrent) => createWindowShortcut(UNIT_SHORTCUT, { id: unit.id, name: unit.name }, {
         isPackaged: app.isPackaged, desktopDir: app.getPath('desktop'), execPath: process.execPath,
