@@ -390,3 +390,28 @@ it('desktop / web: no host rows, the popover is exactly the account menu', async
   await tick()
   expect(document.querySelector('.account-pop')!.textContent).not.toContain('Forsion Unit 切换')
 })
+
+it('web entry: the account menu has no Unit section (only real desktop main windows get it)', async () => {
+  window.tangu!.unitPublicEntry = true // 网页主入口:没有 unitsList / unitHostStatus
+  await mount()
+  await click('Alice')
+  await tick()
+  expect(document.querySelector('.account-pop')).toBeTruthy()
+  expect(document.querySelector('[data-testid="account-units"]')).toBeNull()
+  expect(document.querySelector('.account-pop--units')).toBeNull()
+  expect(document.body.textContent).not.toContain('管理 Unit')
+})
+
+// 设备页的框(UnitSwitcher 整窗形态)往对面页面注样式,靠这两个类把远端自己的账号卡藏起来(REMOTE_ACCOUNT_SELECTORS)。
+// AccountCard 改类名要同步那边,否则切到另一台时左下角会叠出两个头像。
+it('renders the two account-card classes the device frame hides on the remote page', async () => {
+  const { REMOTE_ACCOUNT_SELECTORS } = await import('./UnitSwitcher')
+  const classes = REMOTE_ACCOUNT_SELECTORS.map((sel) => sel.replace(/^\.rb\s+\./, ''))
+  expect(classes).toEqual(['ribbon-account', 'account-card'])
+  await act(async () => root.render(React.createElement(LocaleProvider, { children: React.createElement(AccountCard, { onToast, compact: true }) })))
+  await tick()
+  expect(host.querySelector('.ribbon-account')).toBeTruthy()
+  await act(async () => root.render(React.createElement(LocaleProvider, { children: React.createElement(AccountCard, { onToast }) })))
+  await tick()
+  expect(host.querySelector('.account-card')).toBeTruthy()
+})

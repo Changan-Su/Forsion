@@ -948,7 +948,7 @@ if (new URLSearchParams(location.search).has('dock')) {
       // 父开关变了:真主进程经 refreshUnitHost → remoteSessions.notifyChanged 广播,桩在这里补同一拍(P1-K4)
       setConfig: async (patch: Record<string, unknown>) => { const next = Object.assign(cfg, patch); (window as unknown as { __rsPush?: () => unknown }).__rsPush?.(); return next },
       openExternal: async (url: string) => { opened.push(url) }, // openBrowser 在无浏览器视图时的回落口
-      unitsList: async () => ({ status: 200, json: { units } }),
+      unitsList: async () => ({ status: 200, json: { units: [...units] } }), // 每次新数组(同真 IPC):名册刷新才看得出变化
       unitsUpdate: async () => ({ status: 200, json: { ok: true } }),
       unitsRemove: async () => ({ status: 200, json: { ok: true } }),
       unitHostStatus: async () => ({ running: cfg.unitHostEnabled as boolean, connected: false, unitId: null, lastError: null, webPort: 8791, lanUrl: 'http://192.168.1.5:8791' }),
@@ -1012,18 +1012,61 @@ if (new URLSearchParams(location.search).has('dock')) {
       })(),
     }
     w.amadeusSync = { get: async () => ({ state: 'idle', side: 'local' }), onStatus: () => () => {} }
-    void Promise.all([import('./components/UnitSwitcher'), import('./stores/appStore')]).then(([{ UnitSwitcher, UnitRemoteSurface, UnitSettings }, { useApp }]) => {
+    // &unitpanel:再挂账号卡(头像面板上半的 Unit 段,AccountUnitSection;scripts/unit-panel.check.cjs)。
+    // 账号是假的(authStatus 桩,不碰真登录);&many 多塞 18 台在线设备(考「只滚 Unit 段」);
+    // &web = 网页主入口的桥(没有 unitsList / unitHostStatus,带 unitPublicEntry)→ 面板里不许出现 Unit 段;
+    // &dark / &skin=<配色> / &lang=en 拍截图。
+    const panelQ = new URLSearchParams(location.search)
+    const unitPanel = panelQ.has('unitpanel')
+    // &surface=part:远程面按旧形态(盖 .shell-work、Ribbon 留着)跑,验 UNIT_SURFACE_WHOLE=false 那一支(check:unitswitcher 用)
+    if (panelQ.get('surface') === 'part') (window as unknown as { __forsionUnitSurfacePart?: boolean }).__forsionUnitSurfacePart = true
+    if (unitPanel) {
+      if (panelQ.has('many')) {
+        for (let i = 1; i <= 18; i++) units.push({ id: `u-extra-${i}`, name: `Studio ${i}`, platform: i % 2 ? 'linux' : 'darwin', icon: null, online: true, lanUrl: null })
+      }
+      const calls: Array<[string, unknown]> = []
+      ;(window as unknown as { __unitUpdates: typeof calls }).__unitUpdates = calls
+      Object.assign(w.tangu!, {
+        authStatus: async () => ({ loggedIn: true, tokenValid: true, cloudUrl: 'https://cloud.test', tokenSource: 'tangu-login', username: 'Lin', nickname: '林一' }),
+        authAccounts: async () => [{ id: 'lin', cloudUrl: 'https://cloud.test', username: 'Lin', active: true }],
+        forsionLogin: async () => { throw new Error('harness') },
+        forsionLogout: async () => ({ ok: true }),
+        accountQuota: async () => ({ status: 200, json: { dailyPercent: 28, weeklyPercent: 28, dailyLimit: 100, weeklyLimit: 500, weeklyResetAt: '2026-11-16' } }),
+        unitsUpdate: async (id: string, patch: unknown) => { calls.push([id, patch]); return { status: 200, json: { ok: true } } },
+      })
+      // &self:名册里有本机自己(互联关着,unitId 为 null、selfUnitId 认得出)→ 面板和设置页都不许列它
+      if (panelQ.has('self')) {
+        units.push({ id: 'u-self', name: '本机自己', platform: 'darwin', icon: null, online: true, lanUrl: null })
+        const status = w.tangu!.unitHostStatus as () => Promise<Record<string, unknown>>
+        w.tangu!.unitHostStatus = (async () => ({ ...(await status()), unitId: null, selfUnitId: 'u-self' })) as never
+      }
+      if (panelQ.has('web')) {
+        delete w.tangu!.unitsList
+        delete w.tangu!.unitHostStatus
+        w.tangu!.unitPublicEntry = true
+      }
+      applyRealTheme(resolveInitialLang(), panelQ.get('skin') || resolveInitialSkin(), panelQ.get('skin') || resolveInitialBg(), panelQ.has('dark') ? 'dark' : 'light')
+      if (panelQ.get('lang') === 'en') setLocaleGlobal('en')
+    }
+    void Promise.all([import('./components/UnitSwitcher'), import('./stores/appStore'), import('./components/AccountCard'), import('./components/unitRoster'), import('./stores/popupQueue')]).then(([{ UnitSwitcher, UnitRemoteSurface, UnitSettings, useUnitRemote, runUnitRoute }, { useApp }, { AccountCard }, { useUnitRoster }, { usePopupQueue }]) => {
       useApp.setState({ desktopConfig: { ...cfg } as never })
       addRibbonIcon({ id: 'rb-unit', side: 'bottom', component: UnitSwitcher })
+      if (unitPanel) {
+        const toasts: string[] = []
+        Object.assign(window as unknown as Record<string, unknown>, { __unitRemote: useUnitRemote, __runUnitRoute: runUnitRoute, __roster: useUnitRoster, __units: units, __toasts: toasts, __popupQueue: usePopupQueue })
+        addRibbonIcon({ id: 'rb-account', side: 'bottom', pinned: true, component: ({ expanded }: { expanded: boolean }) => <AccountCard compact={!expanded} onToast={(text) => { toasts.push(text) }} /> })
+      }
       // 远程面(设备行「整个主区切过去」)也挂上:裸 harness 无 .shell-work → 组件原地渲染,CSS 退化 fixed 覆盖
       const rsHost = document.createElement('div')
+      // 同产品的 Shell 封箱(.shell-host { isolation: isolate }):远程面 z 400 关在箱里,body 一层的账号面板稳压其上
+      rsHost.style.isolation = 'isolate'
       document.body.appendChild(rsHost)
       // 设置 › 设备:胶囊点开走 openSettings('units')(harness 无浮窗 = 窗内设置),这里只挂那一页(真 SettingsModal 太重)。
       const UnitSettingsHost = (): React.ReactElement | null => {
         const open = useApp((s) => s.settingsOpen && s.settingsTab === 'units')
         return open ? <div className="unitset-harness" style={{ position: 'fixed', left: 260, top: 24, width: 560, maxHeight: 'calc(100vh - 48px)', overflow: 'auto', zIndex: 500 }}><UnitSettings /></div> : null
       }
-      createRoot(rsHost).render(<><UnitRemoteSurface /><UnitSettingsHost /></>)
+      createRoot(rsHost).render(<><UnitRemoteSurface /><UnitSettingsHost />{unitPanel && <AskStringHost />}</>)
     })
   }
   installHotkeys() // 裸挂 Ribbon 没有 Shell,热键分发得自己装

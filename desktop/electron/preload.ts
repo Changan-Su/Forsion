@@ -158,7 +158,7 @@ const api = {
   unitsUpdate: (id: string, patch: { name?: string; icon?: string }): Promise<{ status: number; json: any }> =>
     ipcRenderer.invoke('units:update', id, patch),
   unitsRemove: (id: string): Promise<{ status: number; json: any }> => ipcRenderer.invoke('units:remove', id),
-  unitHostStatus: (): Promise<{ running: boolean; connected: boolean; unitId: string | null; lastError: string | null; webPort: number | null; lanUrl: string | null }> =>
+  unitHostStatus: (): Promise<{ running: boolean; connected: boolean; unitId: string | null; selfUnitId?: string | null; lastError: string | null; webPort: number | null; lanUrl: string | null }> =>
     ipcRenderer.invoke('units:hostStatus'),
   unitsPairedList: (): Promise<Array<{ id: string; name: string; createdAt: number }>> => ipcRenderer.invoke('units:pairedList'),
   unitsPairedRemove: (id: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('units:pairedRemove', id),

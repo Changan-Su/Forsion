@@ -132,6 +132,103 @@
  * 用「父级不是 .shell-work」判形态,portal 正身(.shell-work > .unitrs)不受此条影响。 */
 :not(.shell-work) > .unitrs { position: fixed; left: 44px; }
 
+/* ── 整窗形态(UNIT_SURFACE_WHOLE):从 Ribbon 到主区都是那台画的;宿主只画标题条 + 胶囊 + 左下角自己的头像 ──
+ * portal 到 .shell 末尾(DOM 晚于被盖的拖窗条),fixed 盖满窗口;在 .shell-host 的层叠封箱里,body 一层的账号面板稳压其上。
+ * 标题条高:mac = Ribbon 顶上的红绿灯留白(--rb-mac-top),红绿灯落在它左端;Windows = 原生按钮区高 32(tabTitleBar.ts 按这条对高),
+ * 右端让出 --windows-caption-width(视口 px,除 --uiz 折回局部 px);Linux 也画,在系统标题栏下面。 */
+.unitrs.unitrs--whole,
+:not(.shell-work) > .unitrs.unitrs--whole { position: fixed; inset: 0; left: 0; flex-direction: column; --unitfr-bar-h: var(--rb-mac-top, 30px); }
+[data-platform='win'] .unitrs--whole { --unitfr-bar-h: 32px; }
+.unitfr-bar {
+  flex: none;
+  height: var(--unitfr-bar-h);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 calc(var(--windows-caption-width, 0px) / var(--uiz, 1)) 0 0;
+  background: var(--sidebar-bg);
+  -webkit-app-region: drag;
+}
+.unitfr-pill {
+  -webkit-app-region: no-drag;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: min(560px, calc(100% - 160px));
+  height: calc(var(--unitfr-bar-h) - 8px);
+  padding: 0 3px 0 10px;
+  border-radius: var(--radius-pill, 999px);
+  background: var(--overlay-light);
+  color: var(--text);
+  font-size: var(--ui-font-meta, 12px);
+  line-height: 1;
+}
+.unitfr-pill-ic { flex: none; display: inline-flex; align-items: center; color: var(--text-muted); }
+.unitfr-pill-ic .unitsw-emoji { font-size: 12px; }
+.unitfr-pill-text { min-width: 0; display: inline-flex; align-items: center; gap: 6px; overflow: hidden; }
+.unitfr-pill-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.unitfr-pill-kind { flex: none; color: var(--text-muted); white-space: nowrap; }
+.unitfr-pill-kind::before { content: '·'; margin-right: 6px; }
+.unitfr-pill-sep { flex: none; align-self: center; width: var(--border-width, 1px); height: 12px; background: var(--border); }
+.unitfr-back {
+  -webkit-app-region: no-drag;
+  flex: none;
+  height: calc(100% - 4px);
+  padding: 0 9px;
+  border: none;
+  border-radius: var(--radius-pill, 999px);
+  background: transparent;
+  color: var(--accent-ink);
+  font: inherit;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.unitfr-back:hover { background: var(--overlay-medium); }
+/* 窄窗:只留图标 + 「回到这台电脑」 */
+@media (max-width: 559px) { .unitfr-pill-text { display: none; } }
+.unitfr-body { flex: 1; min-height: 0; position: relative; display: flex; }
+.unitfr-fail {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  background: var(--bg);
+  color: var(--text);
+}
+.unitfr-fail-title { font-size: var(--ui-font-heading, 14px); font-weight: 600; }
+.unitfr-fail-actions { display: flex; gap: 8px; }
+/* 左下角:Ribbon 折叠态账号槽的几何(宽 --rb-w、底内距 --rb-pad-y,头像本身是 .ribbon-account),盖在远端账号卡的位置上 */
+.unitfr-rail {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: var(--rb-w, 44px);
+  padding-bottom: var(--rb-pad-y, 8px);
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+.unitfr-avatar { position: relative; pointer-events: auto; }
+.unitfr-badge {
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  width: 15px;
+  height: 15px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-pill, 999px);
+  background: var(--bg-card);
+  border: 1.5px solid var(--sidebar-bg);
+  color: var(--text-muted);
+}
+.unitfr-badge .unitsw-emoji { font-size: 9px; }
+
 /* P1-K4 「允许远程会话」子开关(父开关 → K5 提示 → 本行):标签缩进到父开关标签的左缘(9px 内距 + 7px 状态点 + 8px 间距),
  * 开关与父开关的开关右缘对齐,「设置 ›」深链夹在两者之间。设备凭据没加密时置灰(原因在上面的 K5 提示里)。 */
 .unitsw-subrow { display: flex; align-items: center; gap: 6px; padding: 4px 9px 4px 24px; border-radius: var(--radius-sm); color: var(--text-light); font-size: var(--ui-font-caption, 11px); cursor: pointer; }

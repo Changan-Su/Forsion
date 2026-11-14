@@ -16,7 +16,7 @@
  * 设备行图标可自定义 emoji(右键行);下半页 = 「允许其他设备连接本机」开关 + 本机直连地址 +
  * 已配对来访设备回收(无回收的配对不许上线;缺省折起)。
  */
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 import { create } from 'zustand'
 import { Check, ChevronDown, Cloud, Globe, Laptop, Monitor, MonitorSmartphone, Smartphone, X } from 'lucide-react'
@@ -36,6 +36,10 @@ import { remoteSessionsApi } from '../services/remoteSessionsApi' // P1-K4
 import { SECRET_STORE_INSECURE, type RemoteSessionsView } from '../../../shared/remoteSessions' // P1-K4
 import './remoteSessionsCopy' // P1-K4
 import type { UnitInfo, UnitPairedDevice } from '../types'
+import { accountChip, subscribeAccountChip } from '../services/accountChip'
+import { rememberVia, type UnitVia } from './unitPanelModel'
+import { useUnitRoster } from './unitRoster'
+import { setPopupsBlocked } from '../stores/popupQueue'
 import '../styles/unitSwitcher.css'
 
 registerMessages({
@@ -73,9 +77,16 @@ registerMessages({
   'unit.setEmoji': { zh: '设备图标（输入一个 emoji，留空恢复默认）', en: 'Device icon (one emoji; empty = default)' },
   'unit.switcher': { zh: 'Forsion Unit 切换', en: 'Switch Forsion Unit' },
   'unit.notLoggedIn': { zh: '登录以查看你的其他设备', en: 'Sign in to see your other devices' },
+  'unit.frame.kind': { zh: '我的设备', en: 'My device' },
+  'unit.frame.back': { zh: '回到这台电脑', en: 'Back to this computer' },
+  'unit.frame.unreachable': { zh: '连不上这台设备', en: "Can't reach this device" },
+  'unit.frame.crashed': { zh: '这台设备的页面停止响应了', en: "This device's page stopped responding" },
+  'unit.frame.retry': { zh: '重试', en: 'Retry' },
+  'unit.frame.relayFallback': { zh: '「{name}」这条路没接通，已改走中转', en: 'Couldn\'t connect to "{name}" that way — switched to relay' },
+  'unit.frame.lanDown': { zh: '「{name}」这次直连不通，改走中转', en: '"{name}" isn\'t reachable directly right now — using relay' },
 })
 
-function deviceIcon(u: { icon?: string | null; platform?: string | null }, size = 15): React.ReactNode {
+export function deviceIcon(u: { icon?: string | null; platform?: string | null }, size = 15): React.ReactNode {
   if (u.icon) return <span className="unitsw-emoji" aria-hidden>{u.icon}</span>
   if (u.platform === 'android' || u.platform === 'ios') return <Smartphone size={size} />
   if (u.platform === 'win32' || u.platform === 'linux') return <Monitor size={size} />
@@ -87,8 +98,8 @@ function tunnelPageUrl(cloudUrl: string | undefined, unitId: string): string {
   return `${(cloudUrl || '').replace(/\/+$/, '')}/api/units/${unitId}/proxy/`
 }
 
-/** 当前远程面目标。key = `<设备 id>:<lan|tunnel>` 或 `addr:<url>`(手输地址)——
- *  同一台设备的两条通路是两个目标,勾选态才落得到点中的那一行;hide 不清 target —— webview
+/** 当前远程面目标。key = `<设备 id>:<lan|p2p|tunnel>` 或 `addr:<url>`(手输地址)——
+ *  同一台设备的几条通路是几个目标,勾选态才落得到点中的那一行;hide 不清 target —— webview
  *  保活在暗处,切回来免重载(换目标才按 url 重挂)。 */
 export interface UnitRemoteTarget {
   key: string
@@ -96,7 +107,20 @@ export interface UnitRemoteTarget {
   icon?: string | null
   platform?: string | null
   url: string
+  /** 名册里的设备(手输地址没有)。 */
+  unitId?: string
+  via?: UnitVia
+  /** 用户在 设置 › 设备 里明确点的这条通路:加载成功后记下来(rememberVia),面板下次按它走。 */
+  remember?: boolean
 }
+/** 回到本机的**唯一**入口(标题条胶囊、失败态按钮、账号面板的「这台电脑」、旧形态点 Ribbon 槽):
+ *  先作废还没落地的切换(P2P 打洞的迟到回包 / 迟到的回落会把远程面重新打开,Codex 评审 P1),再把远程面藏起来。
+ *  不动智库的「本地 / 云端」;target 保留 = webview 保活。 */
+export function leaveUnitRemote(): void {
+  routeSeq++
+  useUnitRemote.getState().hide()
+}
+
 export const useUnitRemote = create<{
   target: UnitRemoteTarget | null
   active: boolean
@@ -109,46 +133,211 @@ export const useUnitRemote = create<{
   hide: () => set({ active: false }),
 }))
 
-/** 设备远程面:portal 进 .shell-work,盖满「tab 栏 + 内容 + 侧栏 + 状态栏」而留下 ribbon 与
- *  mac 标题条 —— 观感 = 整个主区切换到那台设备,胶囊(显示当前设备)就是回来的路。
+/**
+ * 远程面两种形态的**唯一**开关:
+ *   true  = 整窗:从 Ribbon 到主区都是那台画的;宿主只留顶上一条标题条(中间胶囊带「回到这台电脑」)和左下角自己的头像。
+ *   false = 08-25 那版:portal 进 .shell-work 盖主区,本机 Ribbon 留着,点 Ribbon 的视图槽 = 回本机。
+ * 两种形态的差别(portal 目标、CSS 类、点 Ribbon 回本机那段监听、远端账号卡的隐藏)只走这里。
+ */
+export const UNIT_SURFACE_WHOLE = true
+/** 台架开关(harness `&surface=part`):产品里不设,恒等于 UNIT_SURFACE_WHOLE。 */
+export function unitSurfaceWhole(): boolean {
+  return UNIT_SURFACE_WHOLE && !(window as unknown as { __forsionUnitSurfacePart?: boolean }).__forsionUnitSurfacePart
+}
+
+/** 整窗形态下远端页面自己的账号卡(AccountCard 渲染的这两个类)藏起来、占位留着:左下角那枚是宿主画的。
+ *  只往对面注样式,不从对面读任何东西。AccountCard 改类名要同步这里(AccountCard.test 钉着)。 */
+export const REMOTE_ACCOUNT_SELECTORS = ['.rb .ribbon-account', '.rb .account-card'] as const
+const HIDE_REMOTE_ACCOUNT_CSS = `${REMOTE_ACCOUNT_SELECTORS.join(', ')} { visibility: hidden !important; }`
+
+type WebviewEl = HTMLElement & { insertCSS?: (css: string) => Promise<string>; reload?: () => void }
+type SurfaceFail = null | 'unreachable' | 'crashed'
+
+/** 加载失败:不是中转、这台在线(名册说不准就当在线)→ 出声改走中转;否则交给宿主画失败态。
+ *  `from` = 出事的那个目标:目标已经换成别的了就不动(那次失败不归现在这台管)。
+ *  ⚠️ 只在远程面**正显示着**时调:它经 runUnitRoute → open() 会把远程面激活,隐藏着的保活页失败了走这里
+ *  = 用户在本机干着活被拽回设备页(Codex 评审 P1)。隐藏态的失败先记着,等用户回到这台再回落。 */
+function fallBackToRelay(from: UnitRemoteTarget): boolean {
+  const t = useUnitRemote.getState().target
+  if (t?.key !== from.key) return true
+  if (!t?.unitId || !t.via || t.via === 'tunnel') return false
+  const u = useUnitRoster.getState().units?.find((x) => x.id === t.unitId)
+  if (u && !u.online) return false
+  sayUnit(translate('unit.frame.relayFallback', { name: t.name }))
+  runUnitRoute({ kind: 'unit', id: t.unitId, name: t.name, icon: t.icon, platform: t.platform, via: 'tunnel' })
+  return true
+}
+
+/** 设备远程面。整窗形态:portal 到 Shell 根(.shell)的末尾、fixed 盖满窗口;
+ *  旧形态:portal 进 .shell-work,盖满「tab 栏 + 内容 + 侧栏 + 状态栏」而留下 ribbon 与 mac 标题条。
  *  ⚠️ 根必须 no-drag 且 DOM 晚于被盖的拖窗条(拖窗区按 DOM 顺序几何合成、无视 z-index,
- *  见 base.css「Electron 拖窗区兜底」);portal 追加在 .shell-work 末尾天然满足。 */
+ *  见 base.css「Electron 拖窗区兜底」);portal 追加在容器末尾天然满足。整窗形态的标题条在根里面再把 drag 补回来。 */
 export function UnitRemoteSurface(): React.ReactElement | null {
+  const { t } = useI18n()
   const target = useUnitRemote((s) => s.target)
   const active = useUnitRemote((s) => s.active)
-  const webRef = useRef<HTMLElement>(null)
+  const whole = unitSurfaceWhole()
+  const webRef = useRef<WebviewEl>(null)
+  const [fail, setFail] = useState<SurfaceFail>(null)
+  const [nonce, setNonce] = useState(0)
+  /** 这张 webview 加载成功过的地址(换地址 / 重试即作废)。 */
+  const okUrl = useRef<string | null>(null)
+  /** 保活在暗处时加载失败了:回落留到用户回到这台再做。 */
+  const deferredFallback = useRef(false)
+  useEffect(() => { setFail(null) }, [target?.url])
+  useEffect(() => { okUrl.current = null; deferredFallback.current = false }, [target?.url, nonce])
   // 切进来把键盘直接交给对方页面(不点一下打不了字)。
-  useEffect(() => { if (active) webRef.current?.focus() }, [active, target?.url])
-  // 点了本机 ribbon 的视图槽(视图图标 / Space)= 用户要回本机 —— Space 切换语义,自动退场。
+  useEffect(() => { if (active) webRef.current?.focus() }, [active, target?.url, nonce])
+  // 旧形态:点了本机 ribbon 的视图槽(视图图标 / Space)= 用户要回本机 —— Space 切换语义,自动退场。
   // 胶囊自己与尾部账号/设置不算:它们开的是浮层,盖在远程面之上,关掉还该在设备页里。
   // ⚠️ 10-02 起胶囊住进命令区,自己也在 .rb-slot 里 —— 不排除它,点胶囊想换设备就先被踢回本机(check:unitswitcher 勾选态那条)。
+  // 整窗形态 Ribbon 被盖住,够不着这段:回来的路是标题条胶囊和头像面板里的「这台电脑」。
   useEffect(() => {
-    if (!active) return
+    if (!active || whole) return
     const onClick = (e: MouseEvent): void => {
-      const t = e.target as HTMLElement | null
-      if (t?.closest?.('.rb-slot') && !t.closest('.unitsw-pill')) useUnitRemote.getState().hide()
+      const el = e.target as HTMLElement | null
+      if (el?.closest?.('.rb-slot') && !el.closest('.unitsw-pill')) leaveUnitRemote()
     }
     document.addEventListener('click', onClick, true)
     return () => document.removeEventListener('click', onClick, true)
+  }, [active, whole])
+  // 看着别的设备时,本机自己弹出来的弹窗和上手提示(guideTips 认 popupQueue.blocked)先排着,别浮在对面的页面上;回到本机再出
+  useEffect(() => {
+    if (!active) return
+    setPopupsBlocked(true, 'unit-remote')
+    return () => setPopupsBlocked(false, 'unit-remote')
   }, [active])
+  // 整窗时给 Windows 原生按钮区对高度(tabTitleBar.ts 认这个标记,按标题条的高度调 titleBarOverlay)
+  useEffect(() => {
+    if (!active || !whole) return
+    const root = document.documentElement
+    root.dataset.unitFrame = '1'
+    return () => { delete root.dataset.unitFrame }
+  }, [active, whole])
+  // webview 事件:主框架加载失败(-3 ABORTED 不算)→ 回落中转或画失败态;渲染进程没了 → 失败态;
+  // 加载成功 → 用户明确选的通路记下来;每次主框架 dom-ready 都重新注入「藏远端账号卡」的样式。
+  useEffect(() => {
+    const el = webRef.current
+    if (!el || !target) return
+    // 同一张已经加载成功的页面,又被用户在设置页明确点了一次:地址没变、webview 不重载,等不来 did-finish-load,就地记。
+    if (target.remember && target.unitId && target.via && okUrl.current === target.url) rememberVia(target.unitId, target.via)
+    let failed = false
+    const onStart = (): void => { failed = false }
+    const onFail = (e: Event): void => {
+      const ev = e as Event & { errorCode?: number; isMainFrame?: boolean }
+      if (ev.isMainFrame === false || ev.errorCode === -3) return
+      failed = true
+      okUrl.current = null
+      if (!useUnitRemote.getState().active) {
+        // 保活在暗处:只记失败,不回落(回落会把远程面重新激活)。用户回到这台时再回落,见下一个 effect。
+        deferredFallback.current = true
+        setFail('unreachable')
+        return
+      }
+      if (!fallBackToRelay(target)) setFail('unreachable')
+    }
+    const onFinish = (): void => {
+      if (failed) return
+      setFail(null)
+      okUrl.current = target.url
+      const cur = useUnitRemote.getState().target
+      if (cur?.remember && cur.unitId && cur.via && cur.url === target.url) rememberVia(cur.unitId, cur.via)
+    }
+    const onReady = (): void => { if (whole) void el.insertCSS?.(HIDE_REMOTE_ACCOUNT_CSS)?.catch?.(() => {}) }
+    const onGone = (): void => setFail('crashed')
+    const on: Array<[string, (e: Event) => void]> = [['did-start-loading', onStart], ['did-fail-load', onFail], ['did-finish-load', onFinish], ['dom-ready', onReady], ['render-process-gone', onGone], ['crashed', onGone]]
+    for (const [n, f] of on) el.addEventListener(n, f)
+    return () => { for (const [n, f] of on) el.removeEventListener(n, f) }
+  }, [target, nonce, whole])
+  // 暗处失败过的那台,用户回来了:现在才回落中转(能回落就换目标、失败态随地址变化自己收;不能就留着失败态)。
+  useEffect(() => {
+    if (!active || !target || !deferredFallback.current) return
+    deferredFallback.current = false
+    fallBackToRelay(target)
+  }, [active, target])
   if (!target) return null
-  // 渲染期查询而非挂载期缓存:target/active 每变一次都重查,Shell 罕见重挂后切一次设备即自愈。
+  const retry = (): void => { setFail(null); setNonce((n) => n + 1) }
+  const back = (): void => leaveUnitRemote()
+  const web = <Webview ref={webRef} key={`${target.url}#${nonce}`} className="unitrs-web" src={target.url} partition={BROWSER_PARTITION} allowpopups="true" />
+
+  if (whole) {
+    // 渲染期查询而非挂载期缓存:target/active 每变一次都重查,Shell 罕见重挂后切一次设备即自愈。无 Shell(harness)→ 原地渲染。
+    const host = document.querySelector('.shell')
+    const isAddr = target.key.startsWith('addr:')
+    const node = (
+      <div className={`unitrs unitrs--whole${active ? '' : ' unitrs-hidden'}`} data-unit-frame="">
+        <div className="unitfr-bar">
+          <div className="unitfr-pill" data-unitfr-pill="">
+            <span className="unitfr-pill-ic">{isAddr ? <Globe size={13} /> : deviceIcon(target, 13)}</span>
+            <span className="unitfr-pill-text">
+              <span className="unitfr-pill-name">{target.name}</span>
+              {!isAddr && <span className="unitfr-pill-kind">{t('unit.frame.kind')}</span>}
+            </span>
+            <span className="unitfr-pill-sep" aria-hidden="true" />
+            <button type="button" className="unitfr-back" onClick={back}>{t('unit.frame.back')}</button>
+          </div>
+        </div>
+        <div className="unitfr-body">
+          {web}
+          {fail && (
+            <div className="unitfr-fail" role="alert">
+              <div className="unitfr-fail-title">{t(fail === 'crashed' ? 'unit.frame.crashed' : 'unit.frame.unreachable')}</div>
+              <div className="unitfr-fail-actions">
+                <button type="button" className="btn primary" onClick={retry}>{t('unit.frame.retry')}</button>
+                <button type="button" className="btn" onClick={back}>{t('unit.frame.back')}</button>
+              </div>
+            </div>
+          )}
+        </div>
+        <UnitFrameAvatar target={target} />
+      </div>
+    )
+    return host ? createPortal(node, host) : node
+  }
+
   const host = document.querySelector('.shell-work')
   // 无 Shell 的 fixed 兜底必须量 ribbon 实宽:展开态 ribbon 远宽于 44px,写死会把胶囊(回来的路)盖死。
   const freeLeft = host ? undefined : (document.querySelector('.rb') as HTMLElement | null)?.offsetWidth
   const node = (
     <div className={`unitrs${active ? '' : ' unitrs-hidden'}`} style={freeLeft != null ? { left: freeLeft } : undefined}>
-      <Webview ref={webRef} key={target.url} className="unitrs-web" src={target.url} partition={BROWSER_PARTITION} allowpopups="true" />
+      {web}
     </div>
   )
   return host ? createPortal(node, host) : node // 无 Shell(harness/web)→ 原地渲染,CSS 退化为 fixed 覆盖层
+}
+
+/** 整窗形态左下角:本机用户自己的头像(数据走 services/accountChip 的接缝),右下角叠那台的小图标。
+ *  盖在远端账号卡的位置上(Ribbon 折叠态账号槽的几何,见 unitSwitcher.css .unitfr-rail);点它 = 开本机账号面板,锚在这枚头像上。 */
+function UnitFrameAvatar({ target }: { target: UnitRemoteTarget }): React.ReactElement | null {
+  const chip = useSyncExternalStore(subscribeAccountChip, accountChip, accountChip)
+  const [imgError, setImgError] = useState(false)
+  if (!chip) return null
+  return (
+    <div className="unitfr-rail">
+      <button
+        type="button"
+        className="ribbon-account unitfr-avatar"
+        title={chip.label}
+        aria-label={chip.label}
+        // 面板开着时按在这里不算「点别处」:交给 click 去开合
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={(e) => accountChip()?.activate(e.currentTarget)}
+      >
+        {chip.avatar && !imgError
+          ? <img className="account-avatar" src={chip.avatar} alt="" onError={() => setImgError(true)} />
+          : <span className="account-avatar fallback">{chip.initial}</span>}
+        <span className="unitfr-badge" aria-hidden="true">{target.key.startsWith('addr:') ? <Globe size={9} /> : deviceIcon(target, 9)}</span>
+      </button>
+    </div>
+  )
 }
 
 /** 设置页里点中的去处。设置在桌面是独立浮窗(独立 store),远程面 / vaultSide 都在主窗 ——
  *  浮窗把去处序列化成 `unit-route` 主窗动作,由主窗执行(打洞也在主窗跑:浮窗随即关掉,等不到结果)。 */
 export type UnitRoute =
   | { kind: 'side'; side: 'local' | 'cloud' }
-  | { kind: 'unit'; id: string; name: string; icon?: string | null; platform?: string | null; via: 'lan' | 'p2p' | 'tunnel'; lanUrl?: string | null }
+  /** explicit:设置 › 设备里点的通路行(用户明确选的;加载成功后记住)。面板行自己走出来的不算。 */
+  | { kind: 'unit'; id: string; name: string; icon?: string | null; platform?: string | null; via: 'lan' | 'p2p' | 'tunnel'; lanUrl?: string | null; explicit?: boolean }
   | { kind: 'addr'; url: string }
 
 function parseUnitRoute(raw: string): UnitRoute | null {
@@ -161,7 +350,7 @@ function parseUnitRoute(raw: string): UnitRoute | null {
   return null
 }
 
-const sayUnit = (text: string): void => { notifyApp({ text, event: 'system.unit' }) }
+export const sayUnit = (text: string): void => { notifyApp({ text, event: 'system.unit' }) }
 
 /** 每次选去处 +1:迟到的打洞结果只在自己仍是最后一次选择时才落(否则会把用户后来选的面顶掉,Codex 评审)。 */
 let routeSeq = 0
@@ -178,13 +367,14 @@ export function runUnitRoute(r: UnitRoute): void {
     return
   }
   if (r.kind === 'addr') {
-    // 手输地址没有名册条目:key 带 addr: 前缀防与设备 id 撞,名字就用主机段。
-    remote.open({ key: `addr:${r.url}`, name: r.url.replace(/^https?:\/\//i, '').replace(/\/+$/, ''), url: r.url })
+    // 手输地址没有名册条目:key 带 addr: 前缀防与设备 id 撞,名字就用主机段(+ 路径)。
+    // ⚠️ 名字会画在标题条胶囊和账号面板里:`?查询` / `#片段` 一律不带 —— `#unit-owner=…` 是对方的主人密钥。
+    remote.open({ key: `addr:${r.url}`, name: addrLabel(r.url), url: r.url })
     return
   }
   const cloudUrl = useApp.getState().desktopConfig?.cloudUrl
   const to = (url: string, via = r.via): void => {
-    useUnitRemote.getState().open({ key: `${r.id}:${via}`, name: r.name, icon: r.icon, platform: r.platform, url })
+    useUnitRemote.getState().open({ key: `${r.id}:${via}`, name: r.name, icon: r.icon, platform: r.platform, url, unitId: r.id, via, remember: !!r.explicit && via === r.via })
   }
   if (r.via === 'lan' && r.lanUrl) return to(r.lanUrl.endsWith('/') ? r.lanUrl : `${r.lanUrl}/`)
   if (r.via === 'p2p' && window.tangu?.unitsP2pOpen) {
@@ -198,6 +388,28 @@ export function runUnitRoute(r: UnitRoute): void {
     return
   }
   to(tunnelPageUrl(cloudUrl, r.id), 'tunnel')
+}
+
+/** 手输地址目标显示用的名字:主机(+ 路径),不带协议、查询和片段。 */
+export function addrLabel(url: string): string {
+  try {
+    const u = new URL(url)
+    const p = u.pathname.replace(/\/+$/, '')
+    return `${u.host}${p}`
+  } catch { return url.replace(/^https?:\/\//i, '').replace(/[?#].*$/, '').replace(/\/+$/, '') }
+}
+
+/** 手输的设备地址规范化:没写协议补 http://;只给**路径**补尾斜杠(页面用相对 base),
+ *  `#片段` / `?查询` 原样留着(`http://host:3260/#unit-owner=…` 不能被补成 `…/`)。解析不了 = null。 */
+export function normalizeUnitAddress(raw: string): string | null {
+  const s = raw.trim()
+  if (!s || /^https?:\/\/?$/i.test(s)) return null
+  try {
+    const u = new URL(/^https?:\/\//i.test(s) ? s : `http://${s}`)
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return null
+    if (!u.pathname.endsWith('/')) u.pathname = `${u.pathname}/`
+    return u.toString()
+  } catch { return null }
 }
 
 /** 主窗收 `unit-route` 动作(Root 的 onMainAction 调)。 */
@@ -244,7 +456,7 @@ export function UnitSettings(): React.ReactElement {
   const vaultSide = usePageStore((s) => s.vaultSide)
   const initSide = usePageStore((s) => s.initVaultSide)
   const [units, setUnits] = useState<UnitInfo[] | null>(null)
-  const [host, setHost] = useState<{ running: boolean; connected: boolean; unitId: string | null; lanUrl: string | null } | null>(null)
+  const [host, setHost] = useState<{ running: boolean; connected: boolean; unitId: string | null; selfUnitId?: string | null; lanUrl: string | null } | null>(null)
   const [paired, setPaired] = useState<UnitPairedDevice[]>([])
   const [busy, setBusy] = useState(false)
   /** 页内提示:本页可能在浮窗里,浮窗没有通知宿主 —— 出错 / 离线说明就地显示(Codex 评审)。 */
@@ -316,15 +528,13 @@ export function UnitSettings(): React.ReactElement {
    *  —— 择路会让被顶掉的那条通路在界面上消失。 */
   const openUnit = (u: UnitInfo, via: 'lan' | 'p2p' | 'tunnel'): void => {
     if (via !== 'lan' && !u.online) { setNote(t('unit.offlineNote', { name: u.name })); return }
-    go({ kind: 'unit', id: u.id, name: u.name, icon: u.icon, platform: u.platform, via, lanUrl: u.lanUrl })
+    go({ kind: 'unit', id: u.id, name: u.name, icon: u.icon, platform: u.platform, via, lanUrl: u.lanUrl, explicit: true })
   }
 
   const openByAddress = (): void => {
     void askString(t('unit.byAddressAsk'), 'http://').then((v) => {
-      const raw = v?.trim()
-      if (!raw) return
-      const base = /^https?:\/\//i.test(raw) ? raw : `http://${raw}`
-      go({ kind: 'addr', url: base.endsWith('/') ? base : `${base}/` })
+      const url = normalizeUnitAddress(v ?? '')
+      if (url) go({ kind: 'addr', url })
     })
   }
 
@@ -370,7 +580,9 @@ export function UnitSettings(): React.ReactElement {
   const remotePermitted = remoteView?.permitted === true
 
   // 本页可能在浮窗里:远程面状态在主窗,这里不知道正在看哪台 —— 勾选态只跟 vaultSide(本机笔记库在哪一侧)。
-  const listed = units?.filter((u) => u.id !== host?.unitId && u.kind !== 'phone') ?? []
+  // 本机:互联开着认 unitId;关着时 unitId 为 null,退到 selfUnitId(这次运行里读到过配对才有,没有就不滤)
+  const selfId = host?.unitId ?? host?.selfUnitId ?? null
+  const listed = units?.filter((u) => u.id !== selfId && u.kind !== 'phone') ?? []
   const isOffline = (u: UnitInfo): boolean => !u.online && !lanOk[u.id]
   const onlineUnits = listed.filter((u) => !isOffline(u))
   const offlineUnits = listed.filter(isOffline)
