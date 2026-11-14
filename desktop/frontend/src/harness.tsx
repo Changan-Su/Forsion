@@ -1056,8 +1056,27 @@ if (new URLSearchParams(location.search).has('dock')) {
       applyRealTheme(resolveInitialLang(), panelQ.get('skin') || resolveInitialSkin(), panelQ.get('skin') || resolveInitialBg(), panelQ.has('dark') ? 'dark' : 'light')
       if (panelQ.get('lang') === 'en') setLocaleGlobal('en')
     }
+    // &unitbind:中转设备页的绑定桩(真主进程那半由 e2e:unitwindow 跑)。裸 Chromium 的 <webview> 是未知元素:
+    // 给它补一个按元素递增的 getWebContentsId;unitsBindFrame 记下调用那一刻那张 webview 的 src,晚一点回 ok。
+    if (panelQ.has('unitbind')) {
+      const ids = new WeakMap<Element, number>()
+      let next = 100
+      Object.defineProperty(HTMLElement.prototype, 'getWebContentsId', {
+        configurable: true,
+        value(this: HTMLElement) { if (this.tagName !== 'WEBVIEW') throw new Error('not a webview'); if (!ids.has(this)) ids.set(this, next++); return ids.get(this) },
+      })
+      const binds: Array<{ webContentsId: number; unitId: string; srcAtCall: string | null }> = []
+      ;(window as unknown as { __unitBinds: typeof binds }).__unitBinds = binds
+      w.tangu!.unitsBindFrame = (async (input: { webContentsId: number; unitId: string }) => {
+        const el = Array.from(document.querySelectorAll('webview')).find((x) => ids.get(x) === input.webContentsId)
+        binds.push({ ...input, srcAtCall: el?.getAttribute('src') ?? null })
+        await new Promise((r) => setTimeout(r, 150))
+        return { ok: true }
+      }) as never
+    }
     void Promise.all([import('./components/UnitSwitcher'), import('./stores/appStore'), import('./components/AccountCard'), import('./components/unitRoster'), import('./stores/popupQueue')]).then(([{ UnitSwitcher, UnitRemoteSurface, UnitSettings, useUnitRemote, runUnitRoute }, { useApp }, { AccountCard }, { useUnitRoster }, { usePopupQueue }]) => {
       useApp.setState({ desktopConfig: { ...cfg } as never })
+      if (panelQ.has('unitbind')) Object.assign(window as unknown as Record<string, unknown>, { __unitRemote: useUnitRemote })
       addRibbonIcon({ id: 'rb-unit', side: 'bottom', component: UnitSwitcher })
       if (unitPanel) {
         const toasts: string[] = []

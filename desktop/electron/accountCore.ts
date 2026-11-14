@@ -45,6 +45,8 @@ export interface AccountCoreDeps {
   /** 迟绑定:registerAmadeusIpc 之后才有;没有就跳过(null)。 */
   stopSync(): Promise<void> | null | undefined
   restartSync(): Promise<void> | null | undefined
+  /** 握手开始那一刻(渲染层收到 auth:will-change 之前)同步调一次:宿主丢掉绑在旧账号上的东西(设备页的登录头绑定)。 */
+  onWillChange?(): void
   log(message: string): void
 }
 
@@ -88,6 +90,7 @@ export function createAccountCore(d: AccountCoreDeps): AccountCore {
     return task
   }
   const prepareAccountTransition = async (): Promise<void> => {
+    try { d.onWillChange?.() } catch (error) { d.log(`[auth] onWillChange failed: ${(error as Error)?.message || error}`) }
     try { await waitForAccountRenderers(d.renderers(), d.events) } catch (error) {
       d.broadcast('auth:changed', { loggedIn: !!d.loadCreds().token })
       throw error
