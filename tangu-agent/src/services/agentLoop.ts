@@ -554,6 +554,9 @@ export interface ExternalSessionPointer {
   id: string; engineId: string; cwd: string; after: string | null;
   /** 记指针时这场对话的历史版本号,和记它的那个进程(见 historyRevision.ts)。老指针没有这两项 = 不知道,只按上面几项判。 */
   rev?: number; epoch?: string;
+  /** 记指针时握手里报的适配器名。续接时交给引擎层核对:engineId 没变、背后的命令却换了一家(engines.json 里改指),
+   *  那个会话 id 对新的那家没有意义(见 EngineRunCtx.resumeFromAgent)。老指针没有这一项 = 不知道。 */
+  agent?: string;
 }
 
 function parseRunResult(v: unknown): any {
@@ -581,7 +584,7 @@ function parseRunResult(v: unknown): any {
  */
 export async function resumableExternalSession(
   sessionId: string, runId: string, assistantId: string, engineId: string, cwd: string, message = '',
-): Promise<{ resumeId?: string; latest: string | null }> {
+): Promise<{ resumeId?: string; resumeAgent?: string; latest: string | null }> {
   const msgs = await query<any[]>(
     `SELECT id FROM chat_messages WHERE session_id = ? AND role = 'model' AND id <> ? ORDER BY timestamp DESC LIMIT 1`,
     [sessionId, assistantId],
@@ -608,7 +611,8 @@ export async function resumableExternalSession(
     const inStep = (own !== null && latest === own) || (!finished && latest === (p.after ?? null));
     const rewritten = p.epoch === historyEpoch && typeof p.rev === 'number' && p.rev !== historyRevision(sessionId);
     const discarded = !finished && rewritten && String(parseRunResult(r.input).message ?? '') !== message;
-    return { latest, resumeId: p.engineId === engineId && p.cwd === cwd && inStep && !discarded ? p.id : undefined };
+    if (!(p.engineId === engineId && p.cwd === cwd && inStep && !discarded)) return { latest };
+    return { latest, resumeId: p.id, resumeAgent: typeof p.agent === 'string' && p.agent ? p.agent : undefined };
   }
   return { latest };
 }
@@ -679,13 +683,16 @@ async function externalEngineLoop(runId: string, ac: AbortController, run: any, 
       readOnly: taskPolicy.pluginReadOnly === true,
       mcpServers: toolServer ? [toolServer.server] : undefined,
       resumeSessionId: chatResume ? chain?.resumeId : (previous?.engineId === engineId && previous?.cwd === engineCwd ? previous.id : undefined),
+      // 普通对话的指针连同记它的那家适配器一起交给引擎层核对(null = 老指针没记);插件任务不传。
+      resumeFromAgent: chatResume && chain?.resumeId ? chain.resumeAgent ?? null : undefined,
       // 引擎会话一建立(prompt 之前)就把指针记到本轮 run 上:这一轮中途被停掉,下一轮照样接得上。
-      // 只给走 session/resume 的引擎(DSH)记:走 session/load 的(Claude Code / Codex)在普通对话里续接还没有用真引擎测过,
-      // 而它们的普通对话今天是好的 —— 没测过就打开,坏了是「每场对话的第二句都失败」。测过之后去掉 via 这个条件即可。
-      onSession: chatResume ? async ({ id, resumable, via }) => {
-        if (!resumable || via !== 'resume') return;
+      // 只给续接核过的引擎记(verifiedForChat,引擎层按握手里的适配器名判):走 session/resume 的(DSH)都算;走 session/load 的
+      // (续接时把历史重放一遍)只算用真引擎核过的 —— 今天是 Codex。Claude Code 还没核,它在普通对话里照旧每轮新开:
+      // 它的普通对话今天是好的,没核过就打开,坏了是「每场对话的第二句都失败」。
+      onSession: chatResume ? async ({ id, resumable, verifiedForChat, agent }) => {
+        if (!resumable || !verifiedForChat) return;
         // 删消息的入口在有 run 在跑时一律拒绝,所以这里记下的版本号到本轮结束都不会变。
-        pointer = { id, engineId, cwd: pointerCwd, after: chain?.latest ?? null, rev: historyRevision(sessionId), epoch: historyEpoch };
+        pointer = { id, engineId, cwd: pointerCwd, after: chain?.latest ?? null, rev: historyRevision(sessionId), epoch: historyEpoch, ...(agent ? { agent } : {}) };
         await updateRunStatus(runId, 'running', { result: { externalSession: pointer } });
       } : undefined,
       message: String(input.message || ''),
