@@ -115,6 +115,7 @@ import { COMPUTER_HISTORY_DESKTOP_CONFIG_FILE } from '../shared/computerHistory'
 // Amadeus Space:vendored 笔记后端(vault IPC + 资产协议)。renderImport 别名后保持 verbatim。
 import { registerIpc as registerAmadeusIpc } from './amadeus/ipc'
 import type { AmadeusSyncFactory } from './amadeus/cloudSeam'
+import { createUnitFrameScope, handleUnitFrameBind, normalizeCloudBase, shouldInjectUnitAuth } from './unitAuthScope' // 设备页补登录头的范围
 import { engineCapsState, pairingWriters, selfUnitIdMemo, type UnitHubFactory, type UnitHubInstance } from './unitHubSeam' // 设备互联云端通道的接缝(Forsion Extend 0.6 起)
 import { makeCallerHeaders } from './unitCaller'
 import { newPairStore, startUnitWeb, type UnitWebHandle, type PairedDevice, startClipEntrance, CLIP_ENTRANCE_PORTS, type ClipEntranceHandle } from './unitWeb'
@@ -1114,8 +1115,17 @@ const approvalDelivery = createApprovalDelivery({
   log: (m) => console.log(m),
 })
 if (approvalE2E) (globalThis as Record<string, unknown>).__forsionE2E = { approvalDelivery, notifications: approvalE2E.notifications }
-/** 内置浏览器注入 Authorization 的隧道前缀(effectiveConfig 刷新)。 */
-let unitTunnelPrefix = ''
+/** 内置浏览器给设备页补 Authorization 的云端地址(effectiveConfig 刷新;normalizeCloudBase 之后,不知道 = null)。
+ *  补不补、补给谁由 unitAuthScope.ts 判:只给主进程绑定过的那张 webview、只给那台设备自己的路径。 */
+let unitCloudBase: string | null = null
+/** 设备页 webview 的绑定(units:bindFrame 建,webview 销毁 / 换账号清)。 */
+const unitFrames = createUnitFrameScope()
+/** 当前账号标识(同「添加到桌面」那份:forsionAccountId,解不出用户时退回令牌哈希;没登录 = null)。 */
+function unitAccountKey(): string | null {
+  const c = loadTanguCreds()
+  const token = c.token || ''
+  return forsionAccountId(c.cloudUrl || '', token) ?? (token ? `token:${createHash('sha256').update(token).digest('hex')}` : null)
+}
 /** P2P 直连(方案 §12):隐藏窗 WebRTC 宿主,懒建;身份变化点 closeAll(站着的已鉴权信道,
  *  不像 T2 逐请求重验 owner)。 */
 let p2pMgr: P2pManager | null = null
@@ -1572,7 +1582,7 @@ async function effectiveConfig(): Promise<
   // 默认工作区目录折算为有效绝对路径(并确保存在),renderer 用它建「Tangu 默认工作区」会话。
   const defaultWorkspaceDir = await ensureDefaultWorkspaceDir(stored)
   // 内置浏览器给隧道设备页注入 Authorization 的前缀(effectiveConfig 被 boot/配置变更高频调用,借道刷新)。
-  unitTunnelPrefix = `${stored.cloudUrl.replace(/\/+$/, '')}/api/units/`
+  unitCloudBase = normalizeCloudBase(stored.cloudUrl)
   const externalConnection = { backendUrl: stored.backendUrl, token: stored.token }
   if (stored.mode === 'managed' && st.state === 'ready' && st.url) {
     return { ...stored, backendUrl: st.url, token: backend.getToken(), backendState: st, homeDir, defaultWorkspaceDir, forsionMcp, externalConnection }
@@ -3176,8 +3186,8 @@ app.whenReady().then(async () => {
       })
     })
     // 设备互联 T2(方案 §11.2):内置浏览器打开「经 server 隧道的设备页」时,webview 的文档与子资源
-    // 请求无法自带 Bearer —— 在分区层对**当前云端的隧道前缀**注入 Authorization。绝不走 URL query
-    // (隐私铁律);前缀随 effectiveConfig 刷新,其余站点请求原样放行。
+    // 请求无法自带 Bearer —— 在分区层给**主进程绑定过的那张 webview、那台设备自己的路径**注入 Authorization
+    // (unitAuthScope.ts)。绝不走 URL query(隐私铁律);其余站点 / 没绑定的标签页 / 名册接口原样放行。
     bs.webRequest.onBeforeSendHeaders((details, cb) => {
       const h = details.requestHeaders
       // ⚠️ BROWSER_PARTITION 同时承载内置浏览器的任意第三方页面——按 URL 前缀盲注 = 把凭据发给
@@ -3186,9 +3196,11 @@ app.whenReady().then(async () => {
       // 第三方页发起的一律 cross-site/same-site → 不注入。P2P 代理侧还有同规的 403 兜底。
       const sfs = String(h['Sec-Fetch-Site'] || h['sec-fetch-site'] || '')
       const trustedInitiator = !sfs || sfs === 'none' || sfs === 'same-origin'
-      if (unitTunnelPrefix && details.url.startsWith(unitTunnelPrefix)) {
+      // 设备页:只给主进程绑定过的那张 webview、只给那台设备自己的路径(unitAuthScope.ts;名册接口一概不补)。
+      const binding = unitFrames.get(details.webContentsId)
+      if (binding && shouldInjectUnitAuth({ url: details.url, binding, accountKey: unitAccountKey(), cloudBase: unitCloudBase, secFetchSite: sfs })) {
         const token = loadTanguCreds().token
-        if (token && trustedInitiator) h.Authorization = `Bearer ${token}`
+        if (token) h.Authorization = `Bearer ${token}`
       } else if (trustedInitiator) {
         // P2P 本机代理(方案 §12):同机制注入 per-proxy 秘密 —— loopback 上别的进程没有它,
         // 打不动对端;表极小(同时开着的 P2P 设备数),线性查无所谓。
@@ -3315,6 +3327,7 @@ app.whenReady().then(async () => {
     broadcast: (channel, payload) => { for (const w of BrowserWindow.getAllWindows()) w.webContents.send(channel, payload) },
     stopSync: () => stopAmadeusSync?.(),
     restartSync: () => restartAmadeusSync?.(),
+    onWillChange: () => unitFrames.clear(), // 换号 / 登出的握手一开始:设备页的绑定全清(之后要看得重新绑)
     log: (m) => console.error(m),
   })
   // Manual checks and background checks share state and a single in-flight run.
@@ -5093,6 +5106,31 @@ app.whenReady().then(async () => {
   })
   // Unit 窗里的「打开 Forsion」(没登录 / 设备不在名下):把主窗叫出来,不带参数。
   ipcMain.on('units:showMain', (e) => { if (isTrustedSender(e)) showMainWindow() })
+  // 设备页 webview 的绑定(unitAuthScope.ts):渲染层先挂一张空白 webview,报上它的 webContentsId 和要看的设备 id;
+  // 主进程核发起方(主窗,或这台设备自己的 Unit 窗)、核 webview 确实挂在发起方下面且在设备页分区里、
+  // id 过正则且在此刻读到的名册里 —— 都过了才绑,之后这张 webview 只有这台设备自己的路径会被补登录头。
+  ipcMain.handle('units:bindFrame', async (e, raw: unknown) => {
+    const input = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
+    const unitId = input.unitId
+    const wcId = typeof input.webContentsId === 'number' && Number.isSafeInteger(input.webContentsId) ? input.webContentsId : -1
+    const guest = wcId >= 0 ? webContents.fromId(wcId) : undefined
+    const owner = typeof unitId === 'string' ? detachedWindows.get(`un_${unitId}`) : undefined
+    const fromOwner = e.sender === mainWindow?.webContents || (!!owner && !owner.isDestroyed() && e.sender === owner.webContents)
+    const guestOk = (): boolean => !!guest && !guest.isDestroyed() && guest.getType() === 'webview'
+      && guest.hostWebContents === e.sender && guest.session === session.fromPartition(BROWSER_PARTITION)
+    return handleUnitFrameBind(unitId, {
+      trusted: isTrustedSender(e) && fromOwner && guestOk(),
+      guestAlive: guestOk,
+      accountKey: unitAccountKey,
+      cloudBase: () => unitCloudBase,
+      readRoster: () => readUnitRoster(e),
+      bind: (b) => {
+        const g = guest!
+        if (!unitFrames.get(g.id)) g.once('destroyed', () => unitFrames.unbind(g.id))
+        unitFrames.bind(g.id, b)
+      },
+    })
+  })
   ipcMain.handle('units:addToDesktop', async (e, raw: unknown): Promise<UnitShortcutResult> => {
     const input = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
     const result = await handleUnitAddToDesktop(raw, {

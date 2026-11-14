@@ -2,7 +2,7 @@
  * 设备的 Unit 窗(一台设备一扇独立窗)真 Electron 实机断言 + 截图。
  * 本机 = 隔离实例(桩引擎 + 本机假云端,夹具登录,不碰真账号);名册由假云端 /api/units 给(主进程经 Extend 读,和真机同一条路);
  * 中转 = 假云端把 /api/units/<id>/proxy/* 转给真的 Unit 网页(UNIT_DIST,缺省 <仓根>/.worktrees/biz-unit-host/unit/dist,local 模式;
- * 转发时把本机注入的账号令牌换成那台 Unit 的主人令牌)。找不到 Unit 网页就明确跳过。
+ * 中转只认夹具账号的登录头(没带 / 带错 = 401,同真云端),转发时才换成那台 Unit 的主人令牌;收到的头如实记在 state.reqs)。找不到 Unit 网页就明确跳过。
  * ⚠️ 不走「本机开互联后连自己」:远端是自己起的临时 Unit,端口先查空闲。
  *
  * 判据:
@@ -15,6 +15,9 @@
  *   L1 非法 id 的链接(forsion://unit/bad?window=standalone)不开 Unit 窗
  *   I1 Unit 窗的渲染层直接调 units:openWindow / units:addToDesktop → 被真实 IPC 的发送方检查挡掉(对照:主窗同一调用放行到下一步)
  *   P1 设备页里 window.open → Unit 窗的远程面不动,链接开在另一扇独立视图窗的内置浏览器里
+ *   G1 补头范围:设备页里的脚本打名册 / 改删别台 / 调用方凭据 / 别台的中转 → 假云端收到的不带登录头;打自己的中转带
+ *   G2 同分区没绑定的内置浏览器标签页导航到这台的中转 → 不带登录头
+ *   G3 主窗的设备页(远程面)同样先经主进程绑定,之后的中转请求带登录头
  *   A  登出:Unit 窗与主窗设备页的 webview 在握手阶段就卸掉;迟到的旧名册回包不把页面挂回来
  *   C1–C2 冷启动带链接 → Unit 窗出来、主窗建了但不露面;二启同理(第二个进程退出、第一个只开 Unit 窗)
  * 截图(SHOT_DIR,缺省系统临时目录):主窗 + Unit 窗并排、四种状态、悬停按钮、右键菜单、深色、110%。
@@ -56,9 +59,13 @@ async function startUnit() {
   return { port, token, close: () => { try { child.kill() } catch { /* 只收自己起的 PID */ } try { fs.rmSync(work, { recursive: true, force: true }) } catch { /* */ } } }
 }
 
-/** 假云端:账号 / 额度 / 名册(mode 可切)+ 中转(/api/units/<UID_ON>/proxy/* → 那台 Unit 的 /web/*,其余未知路径原样转给它)。 */
+/** 夹具账号的令牌(authFixture 写进 auth.json;中转只认它,和真云端一样没带 / 带错就 401)。 */
+const FIXTURE_TOKEN = 'unitwindow-fixture-token'
+
+/** 假云端:账号 / 额度 / 名册(mode 可切)+ 中转(/api/units/<UID_ON>/proxy/* → 那台 Unit 的 /web/*,其余未知路径原样转给它)。
+ *  reqs 如实记下每条请求**收到的** Authorization(转发给 Unit 时才换成主人令牌),补头范围的断言看它。 */
 function startCloud(unit) {
-  const state = { mode: 'ok', hits: [], rosterDelay: 0 }
+  const state = { mode: 'ok', hits: [], rosterDelay: 0, reqs: [] }
   const roster = () => [
     { id: UID_ON, name: '书桌 mini', platform: 'darwin', icon: '🦊', online: true, lanUrl: null },
     { id: UID_OFF, name: '客厅 PC', platform: 'win32', icon: null, online: false, lanUrl: null },
@@ -73,8 +80,13 @@ function startCloud(unit) {
     const u = new URL(req.url, 'http://x')
     const p = u.pathname
     const send = (code, body) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(body)) }
+    state.reqs.push({ method: req.method, path: p, probe: u.searchParams.get('probe'), auth: req.headers.authorization ?? null })
     const tunnel = `/api/units/${UID_ON}/proxy/`
-    if (p.startsWith(tunnel)) { state.hits.push(p); return forward(req, res, `/web/${p.slice(tunnel.length)}${u.search}`) }
+    if (p.startsWith(tunnel)) {
+      state.hits.push(p)
+      if (req.headers.authorization !== `Bearer ${FIXTURE_TOKEN}`) return send(401, { detail: 'unauthorized' })
+      return forward(req, res, `/web/${p.slice(tunnel.length)}${u.search}`)
+    }
     if (p === '/api/brain/users/me') return send(200, { username: 'linyi', nickname: '林一', membershipTier: 'plus' })
     if (p === '/api/units') {
       // rosterDelay:按请求到达时的状态作答、晚这么久才回(造「迟到的旧名册」)
@@ -136,7 +148,7 @@ function secondInstance(L, link) {
   })
 }
 
-const authFixture = (cloud) => ({ home }) => { fs.writeFileSync(path.join(home, 'auth.json'), JSON.stringify({ cloudUrl: cloud.url, token: 'unitwindow-fixture-token' }), { mode: 0o600 }) }
+const authFixture = (cloud) => ({ home }) => { fs.writeFileSync(path.join(home, 'auth.json'), JSON.stringify({ cloudUrl: cloud.url, token: FIXTURE_TOKEN }), { mode: 0o600 }) }
 
 /** 主窗面板:点账号卡开面板 → 右键那台 → 点菜单项(或悬停按钮)。 */
 async function panelAction(win, name, act) {
@@ -231,6 +243,29 @@ async function main() {
       return wc.executeJavaScript(`(() => { const a = document.querySelector('.rb .ribbon-account, .rb .account-card'); return a ? getComputedStyle(a).visibility : 'none' })()`, true)
     }, `${cloud.url}/api/units/${UID_ON}/proxy/`)
     R.check('W2 远端自己的账号卡藏起(没有账号卡也算)', remoteAcct === 'hidden' || remoteAcct === 'none', remoteAcct)
+
+    // G1 补头范围:设备页里的脚本去打名册 / 管理接口和别台的中转 —— 假云端收到的请求不带登录头;同一页打自己的中转带
+    const probes = [
+      ['GET', '/api/units', 'roster'], ['GET', '/api/units/', 'roster-slash'],
+      ['PATCH', `/api/units/${UID_OFF}`, 'patch-other'], ['DELETE', `/api/units/${UID_OFF}`, 'delete-other'],
+      ['POST', `/api/units/${UID_ON}/caller-token`, 'caller-token'], ['POST', `/api/units/${UID_OFF}/caller-secret`, 'caller-secret-other'],
+      ['GET', `/api/units/${UID_OFF}/proxy/`, 'proxy-other'],
+      ['GET', `/api/units/${UID_ON}/proxy/`, 'proxy-own'],
+    ]
+    const fired = await app.evaluate(async ({ webContents }, { origin, probes }) => {
+      const wc = webContents.getAllWebContents().filter((w) => !w.isDestroyed() && w.getType() === 'webview' && w.getURL().startsWith(origin)).pop()
+      if (!wc) return 'no-webview'
+      return wc.executeJavaScript(`Promise.all(${JSON.stringify(probes)}.map(([m, p, tag]) => fetch(p + '?probe=g1-' + tag, { method: m, headers: m === 'GET' ? {} : { 'Content-Type': 'application/json' }, body: m === 'GET' ? undefined : '{}' }).then((r) => r.status, (e) => String(e))))`, true)
+    }, { origin: `${cloud.url}/api/units/${UID_ON}/proxy/`, probes })
+    await sleep(500)
+    const seen = (tag) => cloud.state.reqs.filter((r) => r.probe === `g1-${tag}`)
+    const leaked = probes.filter(([, , tag]) => tag !== 'proxy-own').map(([m, p, tag]) => ({ tag, m, p, got: seen(tag) })).filter((x) => !x.got.length || x.got.some((r) => r.auth))
+    for (const [m, p, tag] of probes.filter(([, , t]) => t !== 'proxy-own')) {
+      const got = seen(tag)
+      R.check(`G1 设备页脚本 ${m} ${p.replace(UID_OFF, '<别台>').replace(UID_ON, '<这台>')} → 假云端收到了、且不带登录头`, got.length > 0 && got.every((r) => !r.auth), { fired, got })
+    }
+    const own = seen('proxy-own')
+    R.check('G1 同一页打这台自己的中转 → 带登录头', own.length > 0 && own.every((r) => r.auth === `Bearer ${FIXTURE_TOKEN}`), { fired, own, leaked: leaked.length })
     await captureById(app, uw.id, shot('light')); shots.push(shot('light'))
 
     // W3 窗里的账号面板没有 Unit 段
@@ -268,6 +303,16 @@ async function main() {
     const popupSrc = popupPage ? await until(() => popupPage.evaluate(() => document.querySelector('webview')?.getAttribute('src') || ''), 10000) : ''
     R.check('P1 设备页里 window.open → Unit 窗的远程面仍在、仍可用', opened === 'ok' && unitStill.active && unitStill.web === 1 && !unitStill.fail, { opened, unitStill })
     R.check('P1 链接开在另一扇独立视图窗的内置浏览器里(同一分区)', !!popupWin && String(popupSrc).startsWith(popupUrl.split('?')[0]), { popupWin, popupSrc })
+    // G2 同分区的普通标签页(上面那扇内置浏览器,没绑定)由宿主直接导航到这台的中转(Sec-Fetch-Site: none)→ 不带登录头
+    const tabNav = await app.evaluate(async ({ webContents }, { prefix, url }) => {
+      const wc = webContents.getAllWebContents().filter((w) => !w.isDestroyed() && w.getType() === 'webview' && w.getURL().startsWith(prefix)).pop()
+      if (!wc) return 'no-webview'
+      try { await wc.loadURL(url) } catch (e) { return String(e) }
+      return 'ok'
+    }, { prefix: popupUrl.split('?')[0], url: `${cloud.url}/api/units/${UID_ON}/proxy/?probe=g2-tab` })
+    await sleep(500)
+    const tabReqs = cloud.state.reqs.filter((r) => r.probe === 'g2-tab')
+    R.check('G2 同分区没绑定的标签页导航到这台的中转 → 假云端收到的请求不带登录头', tabReqs.length > 0 && tabReqs.every((r) => !r.auth), { tabNav, tabReqs })
     if (popupWin) await app.evaluate(({ BrowserWindow }, id) => BrowserWindow.fromId(id)?.close(), popupWin.id)
     await sleep(500)
 
@@ -348,12 +393,19 @@ async function main() {
     await openVia(UID_ON)
     const ap = await unitPage(app, UID_ON)
     await ap.waitForSelector('.unitrs-web', { timeout: 20_000 }).catch(() => {})
-    // 主窗也切到那台(设备页)
+    // 主窗也切到那台(设备页);G3 从这里起数假云端收到的中转请求
+    const mark = cloud.state.reqs.length
     await app.evaluate(({ BrowserWindow }, p) => {
       const w = BrowserWindow.getAllWindows().find((x) => !x.isDestroyed() && !/[?&]window=/.test(x.webContents.getURL()))
       w.webContents.send('window:mainAction', 'unit-route', p)
     }, JSON.stringify({ kind: 'unit', id: UID_ON, name: '书桌 mini', via: 'tunnel' }))
     await win.waitForSelector('.unitrs-web', { timeout: 10_000 }).catch(() => {})
+    // G3 主窗的设备页同样经主进程绑定:绑上了才从空白页换成中转地址,且这之后假云端收到的中转请求带登录头
+    const tunnelUrl = `${cloud.url}/api/units/${UID_ON}/proxy/`
+    const mainSrc = await until(() => win.evaluate((u) => { const s = document.querySelector('.unitrs-web')?.getAttribute('src') || ''; return s.startsWith(u) ? s : '' }, tunnelUrl), 10000)
+    await sleep(1500)
+    const mainHits = cloud.state.reqs.slice(mark).filter((r) => r.path.startsWith(`/api/units/${UID_ON}/proxy/`))
+    R.check('G3 主窗设备页:绑定后换上中转地址,收到的中转请求都带登录头', !!mainSrc && mainHits.length > 0 && mainHits.every((r) => r.auth === `Bearer ${FIXTURE_TOKEN}`), { mainSrc, hits: mainHits.length, noAuth: mainHits.filter((r) => !r.auth).length })
     const pre = { unit: await ap.locator('.unitrs-web').count(), main: await win.locator('.unitrs-web').count() }
     // 再开一扇正在等名册的窗(名册故意慢 4 秒),趁它在途时登出
     cloud.state.rosterDelay = 4000

@@ -165,6 +165,9 @@ const api = {
   unitsProbeLan: (lanUrl: string): Promise<{ instanceId: string; name: string } | null> => ipcRenderer.invoke('units:probeLan', lanUrl),
   /** 设备的 Unit 窗(只主窗):一台设备一扇,再开 = 叫到前面。 */
   unitsOpenWindow: (id: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('units:openWindow', id),
+  /** 设备页 webview 绑定到一台设备(主窗,或这台的 Unit 窗):主进程核名册后,只给这张 webview、只给这台设备自己的路径补登录头。 */
+  unitsBindFrame: (input: { webContentsId: number; unitId: string }): Promise<{ ok: true } | { ok: false; code: string }> =>
+    ipcRenderer.invoke('units:bindFrame', input),
   /** Unit 窗里的「打开 Forsion」:把主窗叫出来。 */
   unitsShowMain: (): void => ipcRenderer.send('units:showMain'),
   /** 设备「添加到桌面」(只主窗):主进程按名册核对 id、取名册里的名字;快捷方式里只有 id(electron/unitShortcut.ts)。 */
@@ -806,7 +809,7 @@ const AGENT_KEYS = [
   'openAgentDir', 'openSkillsDir',
   'envCheck', 'envRun', 'onEnvOutput',
   'pluginsUserInstalled', 'pluginsUninstall',
-  'unitsList', 'unitsOpenInBrowser', 'unitsUpdate', 'unitsRemove', 'unitHostStatus', 'unitsPairedList', 'unitsPairedRemove', 'unitsProbeLan', 'unitsP2pOpen', 'unitRelay', 'unitsAddToDesktop', 'unitsOpenWindow', 'unitsShowMain', // 设备互联依赖 agent 后端
+  'unitsList', 'unitsOpenInBrowser', 'unitsUpdate', 'unitsRemove', 'unitHostStatus', 'unitsPairedList', 'unitsPairedRemove', 'unitsProbeLan', 'unitsP2pOpen', 'unitRelay', 'unitsAddToDesktop', 'unitsOpenWindow', 'unitsShowMain', 'unitsBindFrame', // 设备互联依赖 agent 后端
   // P1-K5
   'secretStorageStatus', 'secretStorageRetry', 'secretStorageResetUnitPairing', 'secretStorageRelaunch', // 设备凭据提示挂在设备互联脚部,同属 agent 后端
   // P1-K4
@@ -836,6 +839,8 @@ const CLOUD_KEYS: Record<string, string> = {
   connectListingApply: 'connect:listingApply', connectListingWithdraw: 'connect:listingWithdraw', connectStore: 'connect:store',
   // 设备名册(0.6 起):没有 Extend 就不列账号名下的其他设备;unitHostStatus / 局域网探针 / 已配对设备 / P2P 留宿主,局域网直连照常。
   unitsList: 'units:list', unitsUpdate: 'units:update', unitsRemove: 'units:remove', unitsOpenInBrowser: 'units:openInBrowser',
+  // 设备页 webview 的绑定要现读名册(通道在宿主,但名册在 Extend):没名册就没有中转设备页,键一起删
+  unitsBindFrame: 'units:list',
   // 帮助改进(2.13.8 起):通道是宿主自己的 host-telemetry:report,但只在 Extend 接得住(注册了 telemetry:get)时才留
   telemetryReport: 'telemetry:get',
 }

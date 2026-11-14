@@ -572,6 +572,8 @@ declare global {
       /** selfUnitId:本机在名册里的 id(互联关着时 unitId 为 null,它还可能认得;null / 缺 = 不知道,不滤)。 */
       unitHostStatus?(): Promise<{ running: boolean; connected: boolean; unitId: string | null; selfUnitId?: string | null; lastError: string | null; webPort: number | null; lanUrl: string | null }>
       unitsOpenWindow?(id: string): Promise<{ ok: boolean }>
+      /** 设备页 webview 绑定到一台设备(主进程核名册;之后只给这张 webview、只给这台自己的路径补登录头)。 */
+      unitsBindFrame?(input: { webContentsId: number; unitId: string }): Promise<{ ok: true } | { ok: false; code: string }>
       unitsShowMain?(): void
       unitsAddToDesktop?(input: { id: string; fallbackName?: string; iconPng?: string }): Promise<{ ok: true; path: string } | { ok: false; code: string; detail?: string }>
       /** 本机已配对的来访设备(T1)与回收。 */
