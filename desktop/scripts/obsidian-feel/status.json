@@ -1,0 +1,662 @@
+{
+ "about": [ "和 Obsidian 的手感对照的名单,由 obsidian-feel.check.cjs --update 生成;说明见 README.md。", "items:每个场景的每个比较项一条。status = same(和基线逐字节相同)/ pending(待对齐)/ keep(刻意保留,带 reason)。", "diff:不同的那种是哪一类 —— eol = 只差文末换行个数,content = 内容不同。", "reopen:每个场景跑完后「把结果当新笔记重开、不编辑再取一次」是否逐字节相同,status 口径同上(same = 稳定)。" ],
+ "items": {
+  "K01": {
+   "snap:续项后": {"status":"same"},
+   "snap:空项": {"status":"pending","diff":"content"},
+   "snap:空项再回车": {"status":"same"},
+   "snap:接着打字": {"status":"pending","diff":"content"}
+  },
+  "K02": {
+   "snap:新子项": {"status":"pending","diff":"content"},
+   "snap:空子项回车一次": {"status":"pending","diff":"content"},
+   "snap:回车两次": {"status":"pending","diff":"content"},
+   "snap:回车三次": {"status":"pending","diff":"content"}
+  },
+  "K03": {
+   "snap:插入后": {"status":"same"}
+  },
+  "K04": {
+   "snap:新项": {"status":"same"}
+  },
+  "K05": {
+   "snap:拆开后": {"status":"pending","diff":"content"}
+  },
+  "K06": {
+   "snap:退格1": {"status":"pending","diff":"content"},
+   "snap:退格2": {"status":"same"},
+   "snap:退格3": {"status":"same"}
+  },
+  "K07": {
+   "snap:续行": {"status":"pending","diff":"content"},
+   "snap:空行": {"status":"pending","diff":"content"},
+   "snap:空行再回车": {"status":"pending","diff":"content"}
+  },
+  "K08": {
+   "snap:Tab后": {"status":"same"},
+   "snap:ShiftTab后": {"status":"same"}
+  },
+  "K09": {
+   "snap:缩进": {"status":"pending","diff":"content"},
+   "snap:反缩进": {"status":"same"}
+  },
+  "K10": {
+   "snap:退格1": {"status":"pending","diff":"content"},
+   "snap:退格2": {"status":"pending","diff":"content"},
+   "snap:退格3": {"status":"same"}
+  },
+  "K11": {
+   "snap:左括号": {"status":"pending","diff":"content"},
+   "snap:右括号": {"status":"same"},
+   "snap:成对退格": {"status":"same"}
+  },
+  "K12a": {
+   "snap:敲下后": {"status":"pending","diff":"content"},
+   "snap:接着打字": {"status":"pending","diff":"content"}
+  },
+  "K12b": {
+   "snap:敲下后": {"status":"pending","diff":"content"},
+   "snap:接着打字": {"status":"pending","diff":"content"}
+  },
+  "K12c": {
+   "snap:敲下后": {"status":"same"},
+   "snap:接着打字": {"status":"same"}
+  },
+  "K12d": {
+   "snap:敲下后": {"status":"pending","diff":"content"},
+   "snap:接着打字": {"status":"pending","diff":"content"}
+  },
+  "K12e": {
+   "snap:敲下后": {"status":"pending","diff":"content"},
+   "snap:接着打字": {"status":"pending","diff":"content"}
+  },
+  "K12f": {
+   "snap:敲下后": {"status":"same"},
+   "snap:接着打字": {"status":"same"}
+  },
+  "K12g": {
+   "snap:敲下后": {"status":"pending","diff":"content"},
+   "snap:接着打字": {"status":"pending","diff":"content"}
+  },
+  "K12h": {
+   "snap:敲下后": {"status":"pending","diff":"content"},
+   "snap:接着打字": {"status":"pending","diff":"content"}
+  },
+  "K13": {
+   "snap:星号包裹": {"status":"pending","diff":"content"}
+  },
+  "K13b": {
+   "snap:反引号包裹": {"status":"same"},
+   "snap:方括号包裹": {"status":"pending","diff":"content"},
+   "snap:美元包裹": {"status":"pending","diff":"content"}
+  },
+  "K13c": {
+   "snap:圆括号包裹": {"status":"same"},
+   "snap:引号包裹": {"status":"same"},
+   "snap:等号包裹": {"status":"pending","diff":"content"}
+  },
+  "K14": {
+   "snap:井号空格": {"status":"pending","diff":"content"},
+   "snap:标题字": {"status":"same"},
+   "snap:退格1": {"status":"pending","diff":"content"},
+   "snap:退格2": {"status":"pending","diff":"content"},
+   "snap:退格3": {"status":"pending","diff":"eol"}
+  },
+  "K15a": {
+   "snap:横杠空格": {"status":"pending","diff":"content"},
+   "snap:打字后": {"status":"pending","diff":"content"}
+  },
+  "K15b": {
+   "snap:星号列表": {"status":"pending","diff":"content"},
+   "snap:加号列表": {"status":"pending","diff":"content"}
+  },
+  "K15c": {
+   "snap:数字点": {"status":"same"},
+   "snap:数字括号": {"status":"pending","diff":"content"}
+  },
+  "K15d": {
+   "snap:大于号空格": {"status":"keep","diff":"content","reason":"「> 空格」开的是折叠块(照 Notion 的做法,2026-11-14 定),引用用「| 空格」开。"},
+   "snap:打字后": {"status":"keep","diff":"content","reason":"「> 空格」开的是折叠块(照 Notion 的做法,2026-11-14 定),引用用「| 空格」开。"}
+  },
+  "K15e": {
+   "snap:待办标记": {"status":"pending","diff":"content"},
+   "snap:打字后": {"status":"pending","diff":"content"}
+  },
+  "K16": {
+   "snap:围栏首行": {"status":"pending","diff":"content"},
+   "snap:围栏内": {"status":"same"},
+   "snap:下方向键两次后打字": {"status":"pending","diff":"content"}
+  },
+  "K17": {
+   "snap:三横杠": {"status":"pending","diff":"content"},
+   "snap:回车后": {"status":"pending","diff":"content"}
+  },
+  "K18": {
+   "snap:段内": {"status":"pending","diff":"content"},
+   "snap:列表内": {"status":"pending","diff":"content"}
+  },
+  "K19": {
+   "snap:ModEnter": {"status":"pending","diff":"content"},
+   "snap:ModL": {"status":"same"},
+   "snap:段落ModL一次": {"status":"pending","diff":"content"},
+   "snap:段落ModL两次": {"status":"pending","diff":"content"}
+  },
+  "K20": {
+   "snap:选区加粗": {"status":"same"},
+   "snap:空选区按下": {"status":"pending","diff":"content"},
+   "snap:接着打字": {"status":"pending","diff":"content"}
+  },
+  "K21": {
+   "snap:Mod斜杠": {"status":"pending","diff":"content"},
+   "snap:ModD": {"status":"pending","diff":"content"},
+   "snap:ModE": {"status":"pending","diff":"content"}
+  },
+  "K22": {
+   "snap:Tab到下一格": {"status":"pending","diff":"content"},
+   "snap:末格Tab": {"status":"pending","diff":"content"},
+   "snap:格内回车": {"status":"pending","diff":"content"}
+  },
+  "K23": {
+   "snap:段首退格": {"status":"pending","diff":"content"},
+   "snap:段尾Delete": {"status":"pending","diff":"content"}
+  },
+  "K24": {
+   "snap:回车后": {"status":"same"},
+   "snap:Tab后": {"status":"pending","diff":"content"}
+  },
+  "K25": {
+   "snap:回车一次": {"status":"pending","diff":"content"},
+   "snap:回车两次": {"status":"pending","diff":"content"},
+   "snap:退格七次后": {"status":"pending","diff":"content"},
+   "trace:9:Backspace×7": {"status":"pending","diff":"content"}
+  },
+  "K26": {
+   "snap:退格七次后": {"status":"pending","diff":"eol"},
+   "trace:2:Backspace×7": {"status":"keep","diff":"content","reason":"空待办项按一次退格就整个清空(连同 - [ ] 标记),不一个字符一个字符删。"}
+  },
+  "K27": {
+   "snap:标题末回车": {"status":"pending","diff":"content"}
+  },
+  "K28": {
+   "snap:缩进后": {"status":"pending","diff":"content"},
+   "snap:反缩进后": {"status":"same"}
+  },
+  "K29": {
+   "snap:缩进后": {"status":"pending","diff":"content"}
+  },
+  "K30": {
+   "snap:退格1": {"status":"pending","diff":"content"},
+   "snap:退格2": {"status":"same"}
+  },
+  "K31": {
+   "snap:反缩进后": {"status":"pending","diff":"content"}
+  },
+  "K32": {
+   "snap:拆开后": {"status":"pending","diff":"content"}
+  },
+  "K33": {
+   "snap:回车后": {"status":"pending","diff":"content"}
+  },
+  "R01": {
+   "snap:光标在别行": {"status":"same"},
+   "snap:同一行不相邻": {"status":"same"},
+   "snap:光标在加粗里": {"status":"same"},
+   "snap:光标贴着左边界": {"status":"same"}
+  },
+  "R02": {
+   "snap:光标在别行": {"status":"same"},
+   "snap:光标在标题里": {"status":"same"}
+  },
+  "R03": {
+   "snap:光标在别行": {"status":"same"},
+   "snap:光标在链接里": {"status":"same"}
+  },
+  "R04": {
+   "snap:光标在别行": {"status":"same"},
+   "snap:光标在别名里": {"status":"same"},
+   "snap:光标在双链里": {"status":"same"}
+  },
+  "R05": {
+   "snap:光标在别行": {"status":"same"},
+   "snap:在代码里": {"status":"same"},
+   "snap:在删除线里": {"status":"same"},
+   "snap:在高亮里": {"status":"same"}
+  },
+  "R06": {
+   "snap:光标在别行": {"status":"same"},
+   "snap:光标在待办里": {"status":"same"},
+   "snap:光标在待办文字开头": {"status":"same"}
+  },
+  "R07": {
+   "snap:光标在别行": {"status":"same"},
+   "snap:光标在 callout 标题": {"status":"same"},
+   "snap:光标在 callout 正文": {"status":"same"},
+   "snap:光标在引用里": {"status":"same"}
+  },
+  "R08": {
+   "snap:光标在别行": {"status":"same"},
+   "snap:光标在代码里": {"status":"same"}
+  },
+  "R09": {
+   "snap:光标在别行": {"status":"same"},
+   "snap:光标在行内公式里": {"status":"same"},
+   "snap:光标在块公式里": {"status":"same"}
+  },
+  "R10": {
+   "snap:光标在别行": {"status":"pending","diff":"content"},
+   "snap:光标在单元格里": {"status":"pending","diff":"content"}
+  },
+  "R11": {
+   "snap:光标在别行": {"status":"same"},
+   "snap:光标在标签里": {"status":"same"},
+   "snap:光标在注释里": {"status":"same"}
+  },
+  "R12": {
+   "snap:光标在别行": {"status":"pending","diff":"content"},
+   "snap:方向键走到分割线": {"status":"pending","diff":"content"}
+  },
+  "R13": {
+   "snap:光标贴着右边界": {"status":"same"},
+   "snap:退格一次": {"status":"pending","diff":"content"}
+  },
+  "R14": {
+   "snap:刚打完": {"status":"same"},
+   "snap:再打一个空格": {"status":"same"}
+  },
+  "R15": {
+   "snap:左一次": {"status":"same"},
+   "snap:左两次": {"status":"same"},
+   "snap:左三次": {"status":"same"}
+  },
+  "R16": {
+   "snap:走到标题行": {"status":"same"},
+   "snap:走到正文行": {"status":"same"}
+  },
+  "R17": {
+   "snap:左一次": {"status":"same"},
+   "snap:左两次": {"status":"same"}
+  },
+  "R18": {
+   "snap:上一次后打字": {"status":"pending","diff":"content"}
+  },
+  "C01": {
+   "snap:走完": {"status":"same"}
+  },
+  "C02": {
+   "snap:走完": {"status":"same"}
+  },
+  "C03": {
+   "snap:走完": {"status":"same"}
+  },
+  "C04": {
+   "snap:走完": {"status":"pending","diff":"content"}
+  },
+  "C05": {
+   "snap:标题Home": {"status":"same"},
+   "snap:标题End": {"status":"same"},
+   "snap:列表Home": {"status":"same"},
+   "snap:列表Mod左": {"status":"same"}
+  },
+  "C06": {
+   "snap:第一次": {"status":"same"},
+   "snap:第二次": {"status":"same"},
+   "snap:第三次": {"status":"same"}
+  },
+  "C07": {
+   "snap:选中加粗复制": {"status":"same"},
+   "snap:空选区复制": {"status":"same"},
+   "snap:跨块复制": {"status":"same"},
+   "clip:2": {"status":"same"},
+   "clip:5": {"status":"pending","diff":"content"},
+   "clip:8": {"status":"same"}
+  },
+  "C08": {
+   "snap:粘贴后": {"status":"same"}
+  },
+  "C09": {
+   "snap:粘贴后": {"status":"pending","diff":"content"}
+  },
+  "C10": {
+   "snap:粘贴后": {"status":"pending","diff":"content"}
+  },
+  "C11": {
+   "snap:粘贴后": {"status":"pending","diff":"content"}
+  },
+  "C12": {
+   "snap:双击": {"status":"same"},
+   "snap:三击": {"status":"same"}
+  },
+  "C13": {
+   "snap:扩选后": {"status":"same"}
+  },
+  "C14": {
+   "snap:点加粗": {"status":"same"},
+   "snap:点链接": {"status":"same"}
+  },
+  "C15": {
+   "snap:走完": {"status":"same"}
+  },
+  "C16": {
+   "snap:按一次": {"status":"same"},
+   "snap:按两次": {"status":"same"},
+   "snap:按三次": {"status":"same"}
+  },
+  "C17": {
+   "snap:链接末尾打字": {"status":"pending","diff":"content"},
+   "snap:代码末尾打字": {"status":"pending","diff":"content"}
+  },
+  "C18": {
+   "snap:加粗末尾打字": {"status":"same"},
+   "snap:右移两次后打字": {"status":"pending","diff":"content"}
+  },
+  "C19": {
+   "snap:空选区剪切后": {"status":"pending","diff":"content"},
+   "clip:2": {"status":"pending","diff":"content"}
+  },
+  "C20": {
+   "snap:退格一次": {"status":"pending","diff":"content"},
+   "snap:退格两次": {"status":"pending","diff":"content"}
+  },
+  "C21": {
+   "snap:点击后": {"status":"pending","diff":"eol"},
+   "snap:接着打字": {"status":"pending","diff":"content"}
+  },
+  "C22": {
+   "snap:点公式后": {"status":"same"}
+  },
+  "S01": {
+   "snap:撤销1": {"status":"same"},
+   "snap:撤销2": {"status":"same"}
+  },
+  "S02": {
+   "snap:撤销1": {"status":"same"},
+   "snap:撤销2": {"status":"same"},
+   "snap:重做1": {"status":"same"}
+  },
+  "S03": {
+   "snap:撤销1": {"status":"same"},
+   "snap:撤销2": {"status":"same"},
+   "snap:撤销3": {"status":"same"}
+  },
+  "S04": {
+   "snap:撤销1": {"status":"keep","diff":"content","reason":"敲「# 空格」立刻转成标题;撤销一次回到字面的「# 」,而不是连带撤掉之前的编辑。"},
+   "snap:撤销2": {"status":"same"}
+  },
+  "S05": {
+   "snap:上屏后": {"status":"same"},
+   "snap:撤销一次": {"status":"same"}
+  },
+  "S06": {
+   "snap:加粗里上屏": {"status":"same"},
+   "snap:公式前上屏": {"status":"same"}
+  },
+  "S07": {
+   "snap:上屏后": {"status":"pending","diff":"content"},
+   "snap:第二项": {"status":"pending","diff":"content"}
+  },
+  "S08": {
+   "snap:全角方括号": {"status":"same"}
+  },
+  "S09": {
+   "snap:弹出联想": {"status":"pending","diff":"content"},
+   "snap:回车选中": {"status":"pending","diff":"content"}
+  },
+  "S10": {
+   "snap:斜杠": {"status":"same"},
+   "snap:井号标签": {"status":"same"}
+  },
+  "S11": {
+   "snap:撤销1": {"status":"pending","diff":"content"},
+   "snap:撤销2": {"status":"same"}
+  },
+  "S12": {
+   "snap:外部改动到达后": {"status":"same"},
+   "snap:撤销一次": {"status":"keep","diff":"content","reason":"外部改动(同步、Agent、别的程序)不进撤销记录,⌘Z 只撤本地自己的修改,免得一把撤掉别人的改动。"}
+  },
+  "S13": {
+   "snap:三秒半后": {"status":"pending","diff":"content"}
+  },
+  "S14": {
+   "snap:撤销1": {"status":"same"},
+   "snap:撤销2": {"status":"same"}
+  },
+  "S15": {
+   "snap:上屏后": {"status":"same"}
+  },
+  "F01": {
+   "snap:打一个Z后": {"status":"pending","diff":"content"}
+  },
+  "F02": {
+   "snap:打一个Z后": {"status":"same"}
+  },
+  "F03": {
+   "snap:打一个Z后": {"status":"pending","diff":"content"}
+  },
+  "F04": {
+   "snap:打一个Z后": {"status":"same"}
+  },
+  "F05": {
+   "snap:打一个Z后": {"status":"pending","diff":"content"}
+  },
+  "F06": {
+   "snap:打一个Z后": {"status":"pending","diff":"content"}
+  },
+  "F07": {
+   "snap:打一个Z后": {"status":"same"}
+  },
+  "F08": {
+   "snap:打一个Z后": {"status":"pending","diff":"content"}
+  },
+  "F09": {
+   "snap:打一个Z后": {"status":"pending","diff":"content"}
+  },
+  "F10": {
+   "snap:打一个Z后": {"status":"pending","diff":"content"}
+  },
+  "F11": {
+   "snap:打一个Z后": {"status":"same"}
+  },
+  "F21": {
+   "snap:打一个Z后": {"status":"pending","diff":"content"}
+  },
+  "F22": {
+   "snap:打一个Z后": {"status":"same"}
+  },
+  "F23": {
+   "snap:打一个Z后": {"status":"same"}
+  },
+  "F24": {
+   "snap:打一个Z后": {"status":"pending","diff":"content"}
+  },
+  "F25": {
+   "snap:打一个Z后": {"status":"same"}
+  },
+  "F12": {
+   "snap:打一个Z后": {"status":"pending","diff":"content"}
+  },
+  "F13": {
+   "snap:打一个Z后": {"status":"same"}
+  },
+  "F14": {
+   "snap:打一个Z后": {"status":"same"}
+  },
+  "F15": {
+   "snap:打一个Z后": {"status":"same"}
+  },
+  "F16": {
+   "snap:打一个Z后": {"status":"same"}
+  },
+  "F17": {
+   "snap:打一个Z后": {"status":"same"}
+  },
+  "F18": {
+   "snap:打一个Z后": {"status":"pending","diff":"content"}
+  },
+  "F19": {
+   "snap:打一个Z后": {"status":"same"}
+  },
+  "F20": {
+   "snap:打一个Z后": {"status":"pending","diff":"content"}
+  },
+  "F26": {
+   "snap:打一个Z后": {"status":"pending","diff":"content"}
+  },
+  "F27": {
+   "snap:打一个Z后": {"status":"pending","diff":"content"}
+  },
+  "F28": {
+   "snap:打一个Z后": {"status":"pending","diff":"content"}
+  },
+  "F29": {
+   "snap:打一个Z后": {"status":"pending","diff":"content"}
+  },
+  "F30": {
+   "snap:打一个Z后": {"status":"pending","diff":"content"}
+  },
+  "F31": {
+   "snap:打一个Z后": {"status":"same"}
+  },
+  "F32": {
+   "snap:打一个Z后": {"status":"pending","diff":"content"}
+  },
+  "F33": {
+   "snap:打一个Z后": {"status":"pending","diff":"content"}
+  }
+ },
+ "reopen": {
+  "K01": {"status":"same"},
+  "K02": {"status":"same"},
+  "K03": {"status":"same"},
+  "K04": {"status":"same"},
+  "K05": {"status":"same"},
+  "K06": {"status":"same"},
+  "K07": {"status":"same"},
+  "K08": {"status":"same"},
+  "K09": {"status":"same"},
+  "K10": {"status":"same"},
+  "K11": {"status":"same"},
+  "K12a": {"status":"same"},
+  "K12b": {"status":"same"},
+  "K12c": {"status":"same"},
+  "K12d": {"status":"same"},
+  "K12e": {"status":"same"},
+  "K12f": {"status":"same"},
+  "K12g": {"status":"same"},
+  "K12h": {"status":"same"},
+  "K13": {"status":"same"},
+  "K13b": {"status":"same"},
+  "K13c": {"status":"same"},
+  "K14": {"status":"same"},
+  "K15a": {"status":"same"},
+  "K15b": {"status":"same"},
+  "K15c": {"status":"same"},
+  "K15d": {"status":"same"},
+  "K15e": {"status":"same"},
+  "K16": {"status":"same"},
+  "K17": {"status":"same"},
+  "K18": {"status":"same"},
+  "K19": {"status":"same"},
+  "K20": {"status":"same"},
+  "K21": {"status":"same"},
+  "K22": {"status":"same"},
+  "K23": {"status":"same"},
+  "K24": {"status":"same"},
+  "K25": {"status":"same"},
+  "K26": {"status":"same"},
+  "K27": {"status":"same"},
+  "K28": {"status":"same"},
+  "K29": {"status":"same"},
+  "K30": {"status":"same"},
+  "K31": {"status":"same"},
+  "K32": {"status":"same"},
+  "K33": {"status":"same"},
+  "R01": {"status":"same"},
+  "R02": {"status":"same"},
+  "R03": {"status":"same"},
+  "R04": {"status":"same"},
+  "R05": {"status":"same"},
+  "R06": {"status":"same"},
+  "R07": {"status":"same"},
+  "R08": {"status":"same"},
+  "R09": {"status":"same"},
+  "R10": {"status":"same"},
+  "R11": {"status":"same"},
+  "R12": {"status":"same"},
+  "R13": {"status":"same"},
+  "R14": {"status":"same"},
+  "R15": {"status":"same"},
+  "R16": {"status":"same"},
+  "R17": {"status":"same"},
+  "R18": {"status":"same"},
+  "C01": {"status":"same"},
+  "C02": {"status":"same"},
+  "C03": {"status":"same"},
+  "C04": {"status":"same"},
+  "C05": {"status":"same"},
+  "C06": {"status":"same"},
+  "C07": {"status":"same"},
+  "C08": {"status":"same"},
+  "C09": {"status":"same"},
+  "C10": {"status":"same"},
+  "C11": {"status":"same"},
+  "C12": {"status":"same"},
+  "C13": {"status":"same"},
+  "C14": {"status":"same"},
+  "C15": {"status":"same"},
+  "C16": {"status":"same"},
+  "C17": {"status":"same"},
+  "C18": {"status":"same"},
+  "C19": {"status":"same"},
+  "C20": {"status":"same"},
+  "C21": {"status":"same"},
+  "C22": {"status":"same"},
+  "S01": {"status":"same"},
+  "S02": {"status":"same"},
+  "S03": {"status":"same"},
+  "S04": {"status":"same"},
+  "S05": {"status":"same"},
+  "S06": {"status":"same"},
+  "S07": {"status":"same"},
+  "S08": {"status":"same"},
+  "S09": {"status":"same"},
+  "S10": {"status":"same"},
+  "S11": {"status":"same"},
+  "S12": {"status":"same"},
+  "S13": {"status":"same"},
+  "S14": {"status":"same"},
+  "S15": {"status":"same"},
+  "F01": {"status":"same"},
+  "F02": {"status":"same"},
+  "F03": {"status":"same"},
+  "F04": {"status":"same"},
+  "F05": {"status":"same"},
+  "F06": {"status":"same"},
+  "F07": {"status":"same"},
+  "F08": {"status":"same"},
+  "F09": {"status":"same"},
+  "F10": {"status":"same"},
+  "F11": {"status":"same"},
+  "F21": {"status":"same"},
+  "F22": {"status":"same"},
+  "F23": {"status":"same"},
+  "F24": {"status":"same"},
+  "F25": {"status":"same"},
+  "F12": {"status":"same"},
+  "F13": {"status":"same"},
+  "F14": {"status":"same"},
+  "F15": {"status":"same"},
+  "F16": {"status":"same"},
+  "F17": {"status":"same"},
+  "F18": {"status":"same"},
+  "F19": {"status":"same"},
+  "F20": {"status":"same"},
+  "F26": {"status":"same"},
+  "F27": {"status":"same"},
+  "F28": {"status":"same"},
+  "F29": {"status":"same"},
+  "F30": {"status":"same"},
+  "F31": {"status":"same"},
+  "F32": {"status":"same"},
+  "F33": {"status":"same"}
+ }
+}

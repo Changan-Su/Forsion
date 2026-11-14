@@ -1,0 +1,857 @@
+{
+ "about": [
+  "录自 Obsidian 1.15.1,实况预览(Live Preview),关掉全部核心插件、社区插件和拼写检查,其余缺省设置。",
+  "同一份起始 Markdown(场景的 md 加一个文末换行)+ 同一串按键(scenarios.cjs),每个快照记编辑器里的全文,原样不裁剪空白。",
+  "traces 只收 traceMd 这一种(每按一次之后的全文);录制时已去掉文末换行,检查对 Forsion 一侧做同样的裁剪再比。",
+  "clips 是复制 / 剪切事件交给剪贴板的数据(按步骤序号);粘贴步骤没有数据,不收。",
+  "计时类场景(P 开头)不在基线里。"
+ ],
+ "obsidian": "1.15.1",
+ "scenarios": {
+  "K01": {
+   "snaps": {
+    "续项后": "- one\n- two\n",
+    "空项": "- one\n- two\n- \n",
+    "空项再回车": "- one\n- two\n\n",
+    "接着打字": "- one\n- two\nx\n"
+   }
+  },
+  "K02": {
+   "snaps": {
+    "新子项": "- a\n    - b\n    - \n",
+    "空子项回车一次": "- a\n    - b\n- \n",
+    "回车两次": "- a\n    - b\n\n",
+    "回车三次": "- a\n    - b\n\n\n"
+   }
+  },
+  "K03": {
+   "snaps": {
+    "插入后": "1. a\n2. x\n3. b\n4. c\n"
+   }
+  },
+  "K04": {
+   "snaps": {
+    "新项": "- [x] done\n- [ ] next\n"
+   }
+  },
+  "K05": {
+   "snaps": {
+    "拆开后": "# Hello\nworld\n"
+   }
+  },
+  "K06": {
+   "snaps": {
+    "退格1": "##Title\n\nbody\n",
+    "退格2": "#Title\n\nbody\n",
+    "退格3": "Title\n\nbody\n"
+   }
+  },
+  "K07": {
+   "snaps": {
+    "续行": "> quote\n> more\n",
+    "空行": "> quote\n> more\n> \n",
+    "空行再回车": "> quote\n> more\n\n\n"
+   }
+  },
+  "K08": {
+   "snaps": {
+    "Tab后": "\tpara\n",
+    "ShiftTab后": "para\n"
+   }
+  },
+  "K09": {
+   "snaps": {
+    "缩进": "- a\n\t- b\n",
+    "反缩进": "- a\n- b\n"
+   }
+  },
+  "K10": {
+   "snaps": {
+    "退格1": "- a\n-b\n",
+    "退格2": "- a\nb\n",
+    "退格3": "- ab\n"
+   }
+  },
+  "K11": {
+   "snaps": {
+    "左括号": "ab ()\n",
+    "右括号": "ab (a)\n",
+    "成对退格": "ab (a) \n"
+   }
+  },
+  "K12a": {
+   "snaps": {
+    "敲下后": "ab **\n",
+    "接着打字": "ab *x*\n"
+   }
+  },
+  "K12b": {
+   "snaps": {
+    "敲下后": "ab ``\n",
+    "接着打字": "ab `x`\n"
+   }
+  },
+  "K12c": {
+   "snaps": {
+    "敲下后": "ab $\n",
+    "接着打字": "ab $x\n"
+   }
+  },
+  "K12d": {
+   "snaps": {
+    "敲下后": "ab [[]]\n",
+    "接着打字": "ab [[x]]\n"
+   }
+  },
+  "K12e": {
+   "snaps": {
+    "敲下后": "ab \"\"\n",
+    "接着打字": "ab \"x\"\n"
+   }
+  },
+  "K12f": {
+   "snaps": {
+    "敲下后": "ab ==\n",
+    "接着打字": "ab ==x\n"
+   }
+  },
+  "K12g": {
+   "snaps": {
+    "敲下后": "ab __\n",
+    "接着打字": "ab _x_\n"
+   }
+  },
+  "K12h": {
+   "snaps": {
+    "敲下后": "ab [{}]\n",
+    "接着打字": "ab [{x}]\n"
+   }
+  },
+  "K13": {
+   "snaps": {
+    "星号包裹": "hello *world*\n"
+   }
+  },
+  "K13b": {
+   "snaps": {
+    "反引号包裹": "hello `world` there\n",
+    "方括号包裹": "hello `world` [there]\n",
+    "美元包裹": "$hello$ `world` [there]\n"
+   }
+  },
+  "K13c": {
+   "snaps": {
+    "圆括号包裹": "hello (world) there\n",
+    "引号包裹": "hello (world) \"there\"\n",
+    "等号包裹": "=hello= (world) \"there\"\n"
+   }
+  },
+  "K14": {
+   "snaps": {
+    "井号空格": "start\n\n# \n",
+    "标题字": "start\n\n# T\n",
+    "退格1": "start\n\n# \n",
+    "退格2": "start\n\n#\n",
+    "退格3": "start\n\n\n"
+   }
+  },
+  "K15a": {
+   "snaps": {
+    "横杠空格": "start\n\n- \n",
+    "打字后": "start\n\n- a\n"
+   }
+  },
+  "K15b": {
+   "snaps": {
+    "星号列表": "start\n\n* a*\n\nw\n",
+    "加号列表": "start\n\n* a*\n\n+ b\n"
+   }
+  },
+  "K15c": {
+   "snaps": {
+    "数字点": "start\n\n1. a\n\nw\n",
+    "数字括号": "start\n\n1. a\n\n2) b\n"
+   }
+  },
+  "K15d": {
+   "snaps": {
+    "大于号空格": "start\n\n> \n",
+    "打字后": "start\n\n> c\n"
+   }
+  },
+  "K15e": {
+   "snaps": {
+    "待办标记": "start\n\n- [ ] \n",
+    "打字后": "start\n\n- [ ] d\n"
+   }
+  },
+  "K16": {
+   "snaps": {
+    "围栏首行": "start\n\n```js\n```\n",
+    "围栏内": "start\n\n```js\nlet a = 1\n```\n",
+    "下方向键两次后打字": "start\n\n```js\nlet a = 1\n```\nafter"
+   }
+  },
+  "K17": {
+   "snaps": {
+    "三横杠": "start\n\n---\n",
+    "回车后": "start\n\n---\nafter\n"
+   }
+  },
+  "K18": {
+   "snaps": {
+    "段内": "a\nb\n\n- cd\n",
+    "列表内": "a\nb\n\n- c\n  d\n"
+   }
+  },
+  "K19": {
+   "snaps": {
+    "ModEnter": "- [ ] todo\n\nplain\n",
+    "ModL": "- [x] todo\n\nplain\n",
+    "段落ModL一次": "- [x] todo\n\n- [ ] plain\n",
+    "段落ModL两次": "- [x] todo\n\n- [x] plain\n"
+   }
+  },
+  "K20": {
+   "snaps": {
+    "选区加粗": "hello **world**\n",
+    "空选区按下": "hello **world** ****\n",
+    "接着打字": "hello **world** **x**\n"
+   }
+  },
+  "K21": {
+   "snaps": {
+    "Mod斜杠": "aaa\n\n%%bbb%%\n\nccc\n",
+    "ModD": "aaa\n\n\nccc\n",
+    "ModE": "aaa\n\n\nccc\n"
+   }
+  },
+  "K22": {
+   "snaps": {
+    "Tab到下一格": "| a   | b   |\n| --- | --- |\n| 1   | x   |\n\nafter\n",
+    "末格Tab": "| a   | b   |\n| --- | --- |\n| 1   | x   |\n|     |     |\n\nafter\n",
+    "格内回车": "| a   | b   |\n| --- | --- |\n| 1   | x   |\n|     |     |\n|     |     |\n\nafter\n"
+   }
+  },
+  "K23": {
+   "snaps": {
+    "段首退格": "one\ntwo\n\n- three\n",
+    "段尾Delete": "one\ntwo\n- three\n"
+   }
+  },
+  "K24": {
+   "snaps": {
+    "回车后": "```js\nif (a) {\nx\n```\n",
+    "Tab后": "```js\nif (a) {\n\tx\n```\n"
+   }
+  },
+  "K25": {
+   "snaps": {
+    "回车一次": "one\ntwo\n",
+    "回车两次": "one\ntwo\n\nthree\n",
+    "退格七次后": "one\ntwo\n"
+   },
+   "traces": {
+    "9:Backspace×7": [
+     "one\ntwo\n\nthre",
+     "one\ntwo\n\nthr",
+     "one\ntwo\n\nth",
+     "one\ntwo\n\nt",
+     "one\ntwo",
+     "one\ntwo",
+     "one\ntwo"
+    ]
+   }
+  },
+  "K26": {
+   "snaps": {
+    "退格七次后": "\n"
+   },
+   "traces": {
+    "2:Backspace×7": [
+     "- [ ] ",
+     "- [ ]",
+     "- [ ",
+     "- [",
+     "- ",
+     "-",
+     ""
+    ]
+   }
+  },
+  "K27": {
+   "snaps": {
+    "标题末回车": "## Title\nx\n"
+   }
+  },
+  "K28": {
+   "snaps": {
+    "缩进后": "1. a\n\t1. b\n2. c\n",
+    "反缩进后": "1. a\n2. b\n3. c\n"
+   }
+  },
+  "K29": {
+   "snaps": {
+    "缩进后": "- a\n\t- b\n\t    - c\n"
+   }
+  },
+  "K30": {
+   "snaps": {
+    "退格1": "before\n\n>quote text\n",
+    "退格2": "before\n\nquote text\n"
+   }
+  },
+  "K31": {
+   "snaps": {
+    "反缩进后": "- one\n- two\n"
+   }
+  },
+  "K32": {
+   "snaps": {
+    "拆开后": "- one\n- two\n    - child\n"
+   }
+  },
+  "K33": {
+   "snaps": {
+    "回车后": "```js\n  let a = 1\n  b\n```\n"
+   }
+  },
+  "R01": {
+   "snaps": {
+    "光标在别行": "plain **bold** tail\n\nnext\n",
+    "同一行不相邻": "plain **bold** tail\n\nnext\n",
+    "光标在加粗里": "plain **bold** tail\n\nnext\n",
+    "光标贴着左边界": "plain **bold** tail\n\nnext\n"
+   }
+  },
+  "R02": {
+   "snaps": {
+    "光标在别行": "## Heading\n\ntext\n",
+    "光标在标题里": "## Heading\n\ntext\n"
+   }
+  },
+  "R03": {
+   "snaps": {
+    "光标在别行": "see [site](https://example.com) now\n\nnext\n",
+    "光标在链接里": "see [site](https://example.com) now\n\nnext\n"
+   }
+  },
+  "R04": {
+   "snaps": {
+    "光标在别行": "see [[Note|alias]] and [[Other]] now\n\nnext\n",
+    "光标在别名里": "see [[Note|alias]] and [[Other]] now\n\nnext\n",
+    "光标在双链里": "see [[Note|alias]] and [[Other]] now\n\nnext\n"
+   }
+  },
+  "R05": {
+   "snaps": {
+    "光标在别行": "a `code` b ~~del~~ c ==hi== d *em* e\n\nnext\n",
+    "在代码里": "a `code` b ~~del~~ c ==hi== d *em* e\n\nnext\n",
+    "在删除线里": "a `code` b ~~del~~ c ==hi== d *em* e\n\nnext\n",
+    "在高亮里": "a `code` b ~~del~~ c ==hi== d *em* e\n\nnext\n"
+   }
+  },
+  "R06": {
+   "snaps": {
+    "光标在别行": "- item\n- [ ] todo\n- [x] done\n\n1. one\n2. two\n\nnext\n",
+    "光标在待办里": "- item\n- [ ] todo\n- [x] done\n\n1. one\n2. two\n\nnext\n",
+    "光标在待办文字开头": "- item\n- [ ] todo\n- [x] done\n\n1. one\n2. two\n\nnext\n"
+   }
+  },
+  "R07": {
+   "snaps": {
+    "光标在别行": "> plain quote\n\n> [!note] Title\n> body text\n\nnext\n",
+    "光标在 callout 标题": "> plain quote\n\n> [!note] Title\n> body text\n\nnext\n",
+    "光标在 callout 正文": "> plain quote\n\n> [!note] Title\n> body text\n\nnext\n",
+    "光标在引用里": "> plain quote\n\n> [!note] Title\n> body text\n\nnext\n"
+   }
+  },
+  "R08": {
+   "snaps": {
+    "光标在别行": "```js\nlet a = 1\n```\n\nnext\n",
+    "光标在代码里": "```js\nlet a = 1\n```\n\nnext\n"
+   }
+  },
+  "R09": {
+   "snaps": {
+    "光标在别行": "a $x^2+1$ b\n\n$$\n\\frac{a}{b}\n$$\n\nnext\n",
+    "光标在行内公式里": "a $x^2+1$ b\n\n$$\n\\frac{a}{b}\n$$\n\nnext\n",
+    "光标在块公式里": "a $x^2+1$ b\n\n$$\n\\frac{a}{b}\n$$\n\nnext\n"
+   }
+  },
+  "R10": {
+   "snaps": {
+    "光标在别行": "| name | qty |\n| ---- | --- |\n| pen  | 2   |\n\nnext\n",
+    "光标在单元格里": "| name | qty |\n| ---- | --- |\n| pen  | 2   |\n\nnext\n"
+   }
+  },
+  "R11": {
+   "snaps": {
+    "光标在别行": "text #tag more[^1] x %%hidden%% y <u>under</u> z\n\n[^1]: note\n\nnext\n",
+    "光标在标签里": "text #tag more[^1] x %%hidden%% y <u>under</u> z\n\n[^1]: note\n\nnext\n",
+    "光标在注释里": "text #tag more[^1] x %%hidden%% y <u>under</u> z\n\n[^1]: note\n\nnext\n"
+   }
+  },
+  "R12": {
+   "snaps": {
+    "光标在别行": "---\ntitle: T\ntags: [a, b]\n---\n\nabove\n\n---\n\nnext\n",
+    "方向键走到分割线": "---\ntitle: T\ntags: [a, b]\n---\n\nabove\n\n---\n\nnext\n"
+   }
+  },
+  "R13": {
+   "snaps": {
+    "光标贴着右边界": "a **bold** z\n",
+    "退格一次": "a **bold* z\n"
+   }
+  },
+  "R14": {
+   "snaps": {
+    "刚打完": "see [[Note]]x\n",
+    "再打一个空格": "see [[Note]] x\n"
+   }
+  },
+  "R15": {
+   "snaps": {
+    "左一次": "go [site](https://example.com) end\n",
+    "左两次": "go [site](https://example.com) end\n",
+    "左三次": "go [site](https://example.com) end\n"
+   }
+  },
+  "R16": {
+   "snaps": {
+    "走到标题行": "para\n\n> [!note] Title\n> body\n\nend\n",
+    "走到正文行": "para\n\n> [!note] Title\n> body\n\nend\n"
+   }
+  },
+  "R17": {
+   "snaps": {
+    "左一次": "* one\n* two\n",
+    "左两次": "* one\n* two\n"
+   }
+  },
+  "R18": {
+   "snaps": {
+    "上一次后打字": "para\n\n| a | b |\n| --- | --- |\n| 1 | 2 |\nX\nend\n"
+   }
+  },
+  "C01": {
+   "snaps": {
+    "走完": "ab **cd** ef\n"
+   }
+  },
+  "C02": {
+   "snaps": {
+    "走完": "a [l](https://e.com) b [[N]] c\n"
+   }
+  },
+  "C03": {
+   "snaps": {
+    "走完": "a $x$ b\n"
+   }
+  },
+  "C04": {
+   "snaps": {
+    "走完": "top\n\n$$\nx+y\n$$\n\n```\ncode\n```\n\n| a   |\n| --- |\n| 1   |\n\nbottom\n"
+   }
+  },
+  "C05": {
+   "snaps": {
+    "标题Home": "## Heading here\n\n- item text\n",
+    "标题End": "## Heading here\n\n- item text\n",
+    "列表Home": "## Heading here\n\n- item text\n",
+    "列表Mod左": "## Heading here\n\n- item text\n"
+   }
+  },
+  "C06": {
+   "snaps": {
+    "第一次": "para one\n\npara two\n\n- li\n",
+    "第二次": "para one\n\npara two\n\n- li\n",
+    "第三次": "para one\n\npara two\n\n- li\n"
+   }
+  },
+  "C07": {
+   "snaps": {
+    "选中加粗复制": "plain **bold** tail\n\n- [ ] todo $x$ [[N]]\n",
+    "空选区复制": "plain **bold** tail\n\n- [ ] todo $x$ [[N]]\n",
+    "跨块复制": "plain **bold** tail\n\n- [ ] todo $x$ [[N]]\n"
+   },
+   "clips": {
+    "2": {
+     "kind": "copy",
+     "handled": true,
+     "data": {
+      "text/plain": "bold",
+      "text/markdown": "bold",
+      "text/html": "<!-- obsidian --><p>bold</p>"
+     }
+    },
+    "5": {
+     "kind": "copy",
+     "handled": true,
+     "data": {
+      "text/plain": "plain **bold** tail",
+      "text/markdown": "plain **bold** tail",
+      "text/html": "<!-- obsidian --><p>plain <strong>bold</strong> tail</p>"
+     }
+    },
+    "8": {
+     "kind": "copy",
+     "handled": true,
+     "data": {
+      "text/plain": "plain **bold** tail\n\n- [ ] todo",
+      "text/markdown": "plain **bold** tail\n\n- [ ] todo",
+      "text/html": "<!-- obsidian --><p>plain <strong>bold</strong> tail</p>\n<ul class=\"contains-task-list\">\n<li class=\"task-list-item\" data-task=\" \"><input class=\"task-list-item-checkbox\" type=\"checkbox\">todo</li>\n</ul>"
+     }
+    }
+   }
+  },
+  "C08": {
+   "snaps": {
+    "粘贴后": "hello [world](https://example.com)\n"
+   }
+  },
+  "C09": {
+   "snaps": {
+    "粘贴后": "start\n\n**b** and [l](https://e.com)\n- x\n- y\n"
+   }
+  },
+  "C10": {
+   "snaps": {
+    "粘贴后": "start\n\nHello **bold** [link](https://e.com)\n\n- one\n"
+   }
+  },
+  "C11": {
+   "snaps": {
+    "粘贴后": "start\n\nline one\nline two\n\nline four\n"
+   }
+  },
+  "C12": {
+   "snaps": {
+    "双击": "hello brave world\n\nsecond para\n",
+    "三击": "hello brave world\n\nsecond para\n"
+   }
+  },
+  "C13": {
+   "snaps": {
+    "扩选后": "ab **cd** $x$ ef\n"
+   }
+  },
+  "C14": {
+   "snaps": {
+    "点加粗": "see [site](https://example.com) and **bold** end\n",
+    "点链接": "see [site](https://example.com) and **bold** end\n"
+   }
+  },
+  "C15": {
+   "snaps": {
+    "走完": "hello brave world 你好世界今天天气不错\n"
+   }
+  },
+  "C16": {
+   "snaps": {
+    "按一次": "top\n\n$$\nx+y\n$$\n\nbottom\n",
+    "按两次": "top\n\n$$\nx+y\n$$\n\nbottom\n",
+    "按三次": "top\n\n$$\nx+y\n$$\n\nbottom\n"
+   }
+  },
+  "C17": {
+   "snaps": {
+    "链接末尾打字": "see [siteX](https://example.com) and `code` end\n",
+    "代码末尾打字": "see [siteX](https://example.com) and `codeY` end\n"
+   }
+  },
+  "C18": {
+   "snaps": {
+    "加粗末尾打字": "a **boldX** b\n",
+    "右移两次后打字": "a **boldX**Y b\n"
+   }
+  },
+  "C19": {
+   "snaps": {
+    "空选区剪切后": "line one\n\n\nline three\n"
+   },
+   "clips": {
+    "2": {
+     "kind": "cut",
+     "handled": true,
+     "data": {
+      "text/plain": "line two",
+      "text/markdown": "line two",
+      "text/html": "<!-- obsidian --><p>line two</p>"
+     }
+    }
+   }
+  },
+  "C20": {
+   "snaps": {
+    "退格一次": "ends with $x+y\n",
+    "退格两次": "ends with $x+\n"
+   }
+  },
+  "C21": {
+   "snaps": {
+    "点击后": "only line\n",
+    "接着打字": "only line\nx"
+   }
+  },
+  "C22": {
+   "snaps": {
+    "点公式后": "a $x+y$ b\n\nnext\n"
+   }
+  },
+  "S01": {
+   "snaps": {
+    "撤销1": "start\n",
+    "撤销2": "start\n"
+   }
+  },
+  "S02": {
+   "snaps": {
+    "撤销1": "start aaa\n",
+    "撤销2": "start\n",
+    "重做1": "start aaa\n"
+   }
+  },
+  "S03": {
+   "snaps": {
+    "撤销1": "- a\n",
+    "撤销2": "- a\n",
+    "撤销3": "- a\n"
+   }
+  },
+  "S04": {
+   "snaps": {
+    "撤销1": "start\n\nq\n",
+    "撤销2": "start\n\nq\n"
+   }
+  },
+  "S05": {
+   "snaps": {
+    "上屏后": "start 你好\n",
+    "撤销一次": "start\n"
+   }
+  },
+  "S06": {
+   "snaps": {
+    "加粗里上屏": "a **bol中d** b $x$ c\n",
+    "公式前上屏": "a **bol中d** b 文$x$ c\n"
+   }
+  },
+  "S07": {
+   "snaps": {
+    "上屏后": "start\n\n- 项\n",
+    "第二项": "start\n\n- 项\n- 二\n"
+   }
+  },
+  "S08": {
+   "snaps": {
+    "全角方括号": "start\n\n[[\n"
+   }
+  },
+  "S09": {
+   "snaps": {
+    "弹出联想": "start [[]]\n",
+    "回车选中": "start [[Embedded]]\n"
+   }
+  },
+  "S10": {
+   "snaps": {
+    "斜杠": "start\n\n/\n",
+    "井号标签": "start\n\n#ta\n"
+   }
+  },
+  "S11": {
+   "snaps": {
+    "撤销1": "start xy\n",
+    "撤销2": "start\n"
+   }
+  },
+  "S12": {
+   "snaps": {
+    "外部改动到达后": "Hello\nWorld\n",
+    "撤销一次": "Hello\n"
+   }
+  },
+  "S13": {
+   "snaps": {
+    "三秒半后": "line oneAAA\nline twoBBB\n"
+   }
+  },
+  "S14": {
+   "snaps": {
+    "撤销1": "- a\n",
+    "撤销2": "- a\n"
+   }
+  },
+  "S15": {
+   "snaps": {
+    "上屏后": "let $x$是 be\n"
+   }
+  },
+  "F01": {
+   "snaps": {
+    "打一个Z后": "one _em_ __st__ twoZ\n"
+   }
+  },
+  "F02": {
+   "snaps": {
+    "打一个Z后": "* a\n* bZ\n"
+   }
+  },
+  "F03": {
+   "snaps": {
+    "打一个Z后": "+ a\n    + b\n\n1) x\n2) yZ\n"
+   }
+  },
+  "F04": {
+   "snaps": {
+    "打一个Z后": "- a\n\n- b\n\n- cZ\n"
+   }
+  },
+  "F05": {
+   "snaps": {
+    "打一个Z后": "| a   |   b |\n| :-- | --: |\n| 1Z  |   2 |\n"
+   }
+  },
+  "F06": {
+   "snaps": {
+    "打一个Z后": "TitleZ\n=====\n\ntext\n"
+   }
+  },
+  "F07": {
+   "snaps": {
+    "打一个Z后": "a \\* b 1\\. c \\_ d \\# eZ\n"
+   }
+  },
+  "F08": {
+   "snaps": {
+    "打一个Z后": "line one  \nline two\\\nline threeZ\n"
+   }
+  },
+  "F09": {
+   "snaps": {
+    "打一个Z后": "~~~py\nprint(1)Z\n~~~\n\n````md\n```js\nx\n```\n````\n"
+   }
+  },
+  "F10": {
+   "snaps": {
+    "打一个Z后": "see <https://e.com> and [a][ref] okZ\n\n[ref]: https://e.com\n"
+   }
+  },
+  "F11": {
+   "snaps": {
+    "打一个Z后": "a <span style=\"color:red\">r</span> b <kbd>K</kbd> tailZ\n"
+   }
+  },
+  "F21": {
+   "snaps": {
+    "打一个Z后": "- a\n    - b\n    - cZ\n"
+   }
+  },
+  "F22": {
+   "snaps": {
+    "打一个Z后": "top\n\n---\n\n***\n\n___\n\nendZ\n"
+   }
+  },
+  "F23": {
+   "snaps": {
+    "打一个Z后": "a [t](<my file.md> \"Title\") b ![img](p.png \"T\") tailZ\n"
+   }
+  },
+  "F24": {
+   "snaps": {
+    "打一个Z后": "x *a* _b_ ***c*** __*d*__ tailZ\n"
+   }
+  },
+  "F25": {
+   "snaps": {
+    "打一个Z后": "#tag at start and C\\# tailZ\n"
+   }
+  },
+  "F12": {
+   "snaps": {
+    "打一个Z后": "beZfore `$a\\_b$ and $\\{x\\}$` after\n"
+   }
+  },
+  "F13": {
+   "snaps": {
+    "打一个Z后": "aZ\n\n\n\nb\n"
+   }
+  },
+  "F14": {
+   "snaps": {
+    "打一个Z后": "5. a\n6. bZ\n"
+   }
+  },
+  "F15": {
+   "snaps": {
+    "打一个Z后": "中文**加粗**中文 尾Z\n"
+   }
+  },
+  "F16": {
+   "snaps": {
+    "打一个Z后": "x [[Note|别名]] #tag $a_b$ ==hl== %%c%% yZ\n"
+   }
+  },
+  "F17": {
+   "snaps": {
+    "打一个Z后": "line one\nline two\nline threeZ\n"
+   }
+  },
+  "F18": {
+   "snaps": {
+    "打一个Z后": "##  Spaced titleZ ##\n\ntext\n"
+   }
+  },
+  "F19": {
+   "snaps": {
+    "打一个Z后": "paraZ\n\n    indented code\n\n\ttabbed\n"
+   }
+  },
+  "F20": {
+   "snaps": {
+    "打一个Z后": "- [X] a\n* [ ] bZ\n"
+   }
+  },
+  "F26": {
+   "snaps": {
+    "打一个Z后": "snake_case andZ 5 * 3 tail\n"
+   }
+  },
+  "F27": {
+   "snaps": {
+    "打一个Z后": "- aZ\n\t- b\n\t\t- c\n"
+   }
+  },
+  "F28": {
+   "snaps": {
+    "打一个Z后": "> [!note] Title\n> bodyZ tail\n"
+   }
+  },
+  "F29": {
+   "snaps": {
+    "打一个Z后": "text[^1] and[^2] end\n\n[^1]: oneZ\n[^2]: two\n"
+   }
+  },
+  "F30": {
+   "snaps": {
+    "打一个Z后": "![](<a b.png>)\n\nother tailZ\n"
+   }
+  },
+  "F31": {
+   "snaps": {
+    "打一个Z后": "1. aZ\n2. b\n3. c\n"
+   }
+  },
+  "F32": {
+   "snaps": {
+    "打一个Z后": "- oneZ\n- _two_ and __x__\n- [link](<my file.md>)\n- 1 * 2 tail\n"
+   }
+  },
+  "F33": {
+   "snaps": {
+    "打一个Z后": "a tailZ\n\n\nb\n"
+   }
+  }
+ }
+}
