@@ -147,7 +147,7 @@ import { tabTitleBarOptions, parseTabTitleBar, watchTabTitleBar } from './tabTit
 import { createMiniDockMotion, miniDockFrame } from './miniDockMotion'
 import { isForsionUrl, pushDeepLink, drainDeepLinks, filesFromArgv, pushOpenFile, drainOpenFiles } from './deepLink'
 import { SPACE_SHORTCUT, createSpaceShortcut, createWindowShortcut, iconPngFromDataUrl, isSpaceId, spaceIconFile, spaceShortcutMetaFile, spaceWindowIdFromUrl, windowShortcutAppUserModelId, windowShortcutLink, type WindowShortcutKind } from './spaceShortcut'
-import { UNIT_SHORTCUT, isUnitId, parseRosterResponse, parseUnitWindowState, resolveUnitShortcutTarget, unitWindowIdFromUrl, type RosterRead, type UnitShortcutResult, type UnitWindowEntry } from './unitShortcut'
+import { UNIT_SHORTCUT, handleUnitAddToDesktop, isUnitId, parseRosterResponse, parseUnitWindowState, unitWindowIdFromUrl, type RosterRead, type UnitShortcutResult, type UnitWindowEntry } from './unitShortcut'
 
 /** ~/.tangu(与包内 core/tanguHome.ts 同约定;TANGU_HOME 可整体重定向)。 */
 setDevMode(!app.isPackaged) // dev 数据目录 ~/.forsion-dev,与正式版隔离(模块装载即定,先于一切路径解析)
@@ -5091,18 +5091,21 @@ app.whenReady().then(async () => {
   // Unit 窗里的「打开 Forsion」(没登录 / 设备不在名下):把主窗叫出来,不带参数。
   ipcMain.on('units:showMain', (e) => { if (isTrustedSender(e)) showMainWindow() })
   ipcMain.handle('units:addToDesktop', async (e, raw: unknown): Promise<UnitShortcutResult> => {
-    if (!isTrustedSender(e) || e.sender !== mainWindow?.webContents) return { ok: false, code: 'error', detail: 'untrusted sender' }
-    const target = await resolveUnitShortcutTarget(raw, () => readUnitRoster(e))
-    if (!target.ok) return target
-    const input = raw as Record<string, unknown>
-    const result = await createWindowShortcut(UNIT_SHORTCUT, { id: target.unit.id, name: target.unit.name }, {
-      isPackaged: app.isPackaged, desktopDir: app.getPath('desktop'), execPath: process.execPath,
-      appImage: process.env.APPIMAGE, fallbackName: typeof input.fallbackName === 'string' ? input.fallbackName.slice(0, 200) : '',
-      iconDir: unitShortcutDir(), iconPng: shortcutIconSource(input.iconPng),
-      writeShortcutLink: process.platform === 'win32' ? (p, o) => shell.writeShortcutLink(p, 'create', o) : undefined,
+    const input = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
+    const result = await handleUnitAddToDesktop(raw, {
+      trusted: isTrustedSender(e) && e.sender === mainWindow?.webContents,
+      accountKey: () => { const c = loadTanguCreds(); return forsionAccountId(c.cloudUrl || '', c.token || '') },
+      readRoster: () => readUnitRoster(e),
+      create: (unit, stillCurrent) => createWindowShortcut(UNIT_SHORTCUT, { id: unit.id, name: unit.name }, {
+        isPackaged: app.isPackaged, desktopDir: app.getPath('desktop'), execPath: process.execPath,
+        appImage: process.env.APPIMAGE, fallbackName: typeof input.fallbackName === 'string' ? input.fallbackName.slice(0, 200) : '',
+        iconDir: unitShortcutDir(), iconPng: shortcutIconSource(input.iconPng), stillCurrent,
+        writeShortcutLink: process.platform === 'win32' ? (p, o) => shell.writeShortcutLink(p, 'create', o) : undefined,
+      }),
     })
-    const live = detachedWindows.get(`un_${target.unit.id}`)
-    if (result.ok && live && !live.isDestroyed() && process.platform === 'win32') applyShortcutTaskbarIdentity(live, UNIT_SHORTCUT, target.unit.id)
+    const id = typeof input.id === 'string' ? input.id : ''
+    const live = result.ok ? detachedWindows.get(`un_${id}`) : undefined
+    if (live && !live.isDestroyed() && process.platform === 'win32') applyShortcutTaskbarIdentity(live, UNIT_SHORTCUT, id)
     return result
   })
   // invoke:结果交回调用方(满了由它提示用户,不静默失败)。

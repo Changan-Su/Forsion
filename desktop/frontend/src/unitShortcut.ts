@@ -16,6 +16,7 @@ registerMessages({
   'unitShortcut.toast.notFound': { zh: '这台设备不在当前账号名下', en: "This device isn't on your current account" },
   'unitShortcut.toast.signedOut': { zh: '先在 Forsion 里登录', en: 'Sign in to Forsion first' },
   'unitShortcut.toast.rosterUnavailable': { zh: '暂时连不上 Forsion 云端，稍后再试', en: "Can't reach Forsion cloud right now. Try again later" },
+  'unitShortcut.toast.accountChanged': { zh: '账号刚换过，这次没有添加；在新账号下再试一次', en: 'Your account just changed, so nothing was added. Try again under the new account' },
   'unitShortcut.toast.failed': { zh: '添加到桌面失败：{detail}', en: 'Could not add to desktop: {detail}' },
 })
 
@@ -41,6 +42,7 @@ export async function addUnitToDesktop(u: Pick<UnitInfo, 'id' | 'name' | 'icon' 
     else if (result.code === 'unpackaged') toast(translate('unitShortcut.toast.unpackaged'), true)
     else if (result.code === 'not_found') toast(translate('unitShortcut.toast.notFound'), true)
     else if (result.code === 'signed_out') toast(translate('unitShortcut.toast.signedOut'), true)
+    else if (result.code === 'account_changed') toast(translate('unitShortcut.toast.accountChanged'), true)
     else if (result.code === 'roster_unavailable') toast(translate('unitShortcut.toast.rosterUnavailable'), true)
     else toast(translate('unitShortcut.toast.failed', { detail: result.detail || result.code }), true)
   } catch (e) {

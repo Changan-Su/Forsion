@@ -3,8 +3,9 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { createWindowShortcut, iconPngFromDataUrl, spaceIconFile, spaceShortcutMetaFile, windowShortcutPlan, type CreateSpaceShortcutDeps, type SpaceShortcutPlan } from './spaceShortcut'
+import { createProductShortcut, serialShortcutWrite } from './productShortcut'
 import {
-  UNIT_SHORTCUT, isUnitId, parseRosterResponse, resolveUnitShortcutTarget, unitAppUserModelId, unitWindowIdFromUrl, unitWindowLink, type RosterRead,
+  UNIT_SHORTCUT, handleUnitAddToDesktop, isUnitId, parseRosterResponse, resolveUnitShortcutTarget, unitAppUserModelId, unitWindowIdFromUrl, unitWindowLink, type RosterRead,
 } from './unitShortcut'
 
 type Writer = NonNullable<CreateSpaceShortcutDeps['writeShortcutLink']>
@@ -198,5 +199,88 @@ describe('iconPngFromDataUrl', () => {
     expect(iconPngFromDataUrl(`data:image/jpeg;base64,${pngHead(16, 16).toString('base64')}`)).toBeNull()
     expect(iconPngFromDataUrl('data:image/png;base64,AAAA')).toBeNull()
     expect(iconPngFromDataUrl(undefined)).toBeNull()
+  })
+})
+
+describe('units:addToDesktop handler (handleUnitAddToDesktop) with the real writer', () => {
+  const den = { id: ID, name: 'Den', icon: null, platform: 'darwin' }
+  const real = (stillCurrentSpy?: (ok: boolean) => void) => (unit: { id: string; name: string }, stillCurrent: () => boolean) =>
+    createWindowShortcut(UNIT_SHORTCUT, unit, deps({ platform: 'darwin', stillCurrent: () => { const ok = stillCurrent(); stillCurrentSpy?.(ok); return ok } }))
+
+  it('an untrusted sender is refused: nothing read, nothing written', async () => {
+    const readRoster = vi.fn(async (): Promise<RosterRead> => ({ ok: true, units: [den] }))
+    const create = vi.fn(real())
+    expect(await handleUnitAddToDesktop({ id: ID }, { trusted: false, accountKey: () => 'acct-a', readRoster, create })).toMatchObject({ ok: false, code: 'error' })
+    expect(readRoster).not.toHaveBeenCalled()
+    expect(create).not.toHaveBeenCalled()
+    expect(await fs.readdir(desktop)).toEqual([])
+  })
+
+  it('failed validation writes nothing (bad id / not in roster / roster unreadable / signed out)', async () => {
+    const create = vi.fn(real())
+    const run = (raw: unknown, read: RosterRead, account: string | null = 'acct-a') =>
+      handleUnitAddToDesktop(raw, { trusted: true, accountKey: () => account, readRoster: async () => read, create })
+    expect(await run({ id: '../../x' }, { ok: true, units: [den] })).toMatchObject({ code: 'not_found' })
+    expect(await run({ id: 'abcdefgh-0000' }, { ok: true, units: [den] })).toMatchObject({ code: 'not_found' })
+    expect(await run({ id: ID }, { ok: false, code: 'roster_unavailable' })).toMatchObject({ code: 'roster_unavailable' })
+    expect(await run({ id: ID }, { ok: true, units: [den] }, null)).toMatchObject({ code: 'signed_out' })
+    expect(create).not.toHaveBeenCalled()
+    expect(await fs.readdir(desktop)).toEqual([])
+  })
+
+  it('account switched while the roster was loading → nothing written', async () => {
+    let account = 'acct-a'
+    let answer!: (r: RosterRead) => void
+    const create = vi.fn(real())
+    const pending = handleUnitAddToDesktop({ id: ID }, { trusted: true, accountKey: () => account, readRoster: () => new Promise((r) => { answer = r }), create })
+    await Promise.resolve()
+    account = 'acct-b' // 等名册时换了号
+    answer({ ok: true, units: [den] }) // A 的名册迟到
+    expect(await pending).toEqual({ ok: false, code: 'account_changed' })
+    expect(create).not.toHaveBeenCalled()
+    expect(await fs.readdir(desktop)).toEqual([])
+  })
+
+  it('account switched while queued behind another shortcut → checked again at the head of the queue, nothing written', async () => {
+    let account = 'acct-a'
+    let release!: () => void
+    void serialShortcutWrite(() => new Promise<void>((r) => { release = r })) // 前面排着一件
+    const seen: boolean[] = []
+    const pending = handleUnitAddToDesktop({ id: ID }, { trusted: true, accountKey: () => account, readRoster: async () => ({ ok: true, units: [den] }), create: real((ok) => seen.push(ok)) })
+    await new Promise((r) => setTimeout(r, 10))
+    account = '' // 登出(accountKey 变了)
+    release()
+    expect(await pending).toEqual({ ok: false, code: 'account_changed' })
+    expect(seen).toEqual([false])
+    expect(await fs.readdir(desktop)).toEqual([])
+  })
+
+  it('same account all the way → written', async () => {
+    const r = await handleUnitAddToDesktop({ id: ID, name: 'ignored $(x)' }, { trusted: true, accountKey: () => 'acct-a', readRoster: async () => ({ ok: true, units: [den] }), create: real() })
+    expect(r).toEqual({ ok: true, path: path.join(desktop, 'Den.app') })
+  })
+})
+
+describe('one write queue for every desktop shortcut', () => {
+  it('windows: a device and a creation with the same name at once → both kept, different names', async () => {
+    const fsSync = await import('node:fs')
+    const writer = vi.fn<Writer>((p) => { fsSync.writeFileSync(p, 'lnk'); return true })
+    const [a, b] = await Promise.all([
+      createWindowShortcut(UNIT_SHORTCUT, { id: ID, name: 'Notes' }, deps({ platform: 'win32', writeShortcutLink: writer })),
+      createProductShortcut({ id: 'p_0123456789ab', name: 'Notes' }, { platform: 'win32', isPackaged: true, desktopDir: desktop, execPath: EXEC, writeShortcutLink: writer }),
+    ])
+    expect([a, b].map((r) => r.ok && path.basename(r.path)).sort()).toEqual(['Notes (1).lnk', 'Notes.lnk'])
+    expect((await fs.readdir(desktop)).sort()).toEqual(['Notes (1).lnk', 'Notes.lnk'])
+  })
+})
+
+describe('half-written .app', () => {
+  it('a failure in the middle removes the whole bundle (no "damaged app" left on the desktop)', async () => {
+    const realOpen = fs.open.bind(fs)
+    vi.spyOn(fs, 'open').mockImplementation(((p: Parameters<typeof fs.open>[0], ...rest: unknown[]) =>
+      String(p).endsWith(path.join('MacOS', 'launch')) ? Promise.reject(Object.assign(new Error('disk full'), { code: 'ENOSPC' })) : (realOpen as (...a: unknown[]) => ReturnType<typeof fs.open>)(p, ...rest)) as typeof fs.open)
+    const r = await createWindowShortcut(UNIT_SHORTCUT, { id: ID, name: 'Den' }, deps({ platform: 'darwin' }))
+    expect(r).toMatchObject({ ok: false, code: 'error', detail: 'disk full' })
+    expect(await fs.readdir(desktop)).toEqual([])
   })
 })

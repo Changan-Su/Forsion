@@ -13,7 +13,7 @@
  * 无 Electron 依赖(纯 node,可测)。
  */
 import type { ShortcutResult } from '../shared/products'
-import { windowShortcutAppUserModelId, windowShortcutIdFromUrl, windowShortcutLink, type WindowShortcutKind } from './spaceShortcut'
+import { windowShortcutAppUserModelId, windowShortcutIdFromUrl, windowShortcutLink, type WindowShortcutKind, type WindowShortcutResult } from './spaceShortcut'
 
 /** 设备 id 的白名单(同服务端 UNIT_ID_PATH、渲染层 runLocation.UNIT_ID_RE)。 */
 export const UNIT_ID_RE = /^[0-9a-zA-Z-]{8,64}$/
@@ -40,7 +40,7 @@ export type RosterRead =
   | { ok: true; units: RosterUnit[] }
   | { ok: false; code: 'signed_out' | 'roster_unavailable'; detail?: string }
 
-export type UnitShortcutResult = ShortcutResult | { ok: false; code: 'signed_out' | 'roster_unavailable'; detail?: string }
+export type UnitShortcutResult = ShortcutResult | { ok: false; code: 'signed_out' | 'roster_unavailable' | 'account_changed'; detail?: string }
 
 /** 把 units:list 处理器的原样回包({status, json})折成 RosterRead。抛错 / 非 200 / 形状不对 = roster_unavailable,401 = signed_out。 */
 export function parseRosterResponse(res: unknown): RosterRead {
@@ -75,6 +75,30 @@ export async function resolveUnitShortcutTarget(
   if (!roster.ok) return roster
   const unit = roster.units.find((u) => u.id === id)
   return unit ? { ok: true, unit } : { ok: false, code: 'not_found' }
+}
+
+/** units:addToDesktop 处理器的全部判断(主进程只注入 Electron 那几样,见 main.ts),可测:
+ *  1. 发送方不可信 → 拒,什么都不读不写;
+ *  2. 记下**发起时的账号**(没登录 = signed_out);
+ *  3. 校验 id、现读名册(resolveUnitShortcutTarget);
+ *  4. 名册回来时账号已经换了 / 登出了 → account_changed,不写;
+ *  5. 交给 create 写盘,并把「账号还是发起时那个」交给它在排到队头、动盘之前再核一次。 */
+export interface UnitAddToDesktopDeps {
+  trusted: boolean
+  /** 当前账号的标识(同 forsionAccountId);没登录 = null。 */
+  accountKey: () => string | null
+  readRoster: () => Promise<RosterRead>
+  create: (unit: RosterUnit, stillCurrent: () => boolean) => Promise<WindowShortcutResult>
+}
+export async function handleUnitAddToDesktop(raw: unknown, deps: UnitAddToDesktopDeps): Promise<UnitShortcutResult> {
+  if (!deps.trusted) return { ok: false, code: 'error', detail: 'untrusted sender' }
+  const account = deps.accountKey()
+  if (!account) return { ok: false, code: 'signed_out' }
+  const target = await resolveUnitShortcutTarget(raw, deps.readRoster)
+  if (!target.ok) return target
+  const stillCurrent = (): boolean => deps.accountKey() === account
+  if (!stillCurrent()) return { ok: false, code: 'account_changed' }
+  return deps.create(target.unit, stillCurrent)
 }
 
 // ── Unit 窗的重启恢复(单独一份 unit-windows.json,不进独立窗那份清单:老版本不认这个文件,降级不会多出一扇空窗)──
