@@ -39,6 +39,9 @@ const ONLY = new Set((opt('only', '') || '').split(',').filter(Boolean));
 // 自动脑把真模型那套场景走一遍,只证台架自己没写错。
 const LIVE = argv.includes('--live'), LIVE_DRY = argv.includes('--live-dry');
 const KEY_FILE = opt('key-file', ''), DSH_HOME_ARG = opt('dsh-home', '');
+// --model <片段>:真模型那套每一轮都用清单里 id 或名字含这段文字的那个模型。用账号登录(不是 API key)的 DSH,新会话的缺省模型
+// 走的是要 key 的那条线(deepseek-official),不指定的话每一句都是「no API key for provider route」。
+const LIVE_MODEL = opt('model', '');
 if (LIVE && !KEY_FILE && !DSH_HOME_ARG) { console.error('--live 要 --key-file <文件> 或 --dsh-home <已登录的 DSH 目录>'); process.exit(2); }
 if (LIVE && KEY_FILE && !existsSync(KEY_FILE)) { console.error(`找不到 --key-file:${KEY_FILE}`); process.exit(2); }
 const LIVE_KEY = LIVE && KEY_FILE ? readFileSync(KEY_FILE, 'utf8').trim() : '';
@@ -450,11 +453,19 @@ const SCENARIOS = {
 
 // ── 真模型那一套:看的是模型自己的回答(假模型那套看的是交给模型的请求)。暗号每次现编,模型猜不到。
 const codeWord = (prefix) => `${prefix}-${1000 + Math.floor(Math.random() * 9000)}`;
-const ASK = 'What code word did I ask you to remember? Reply with just the code word.';
-const ASK_ALL = 'List every code word I asked you to remember in this conversation. Reply with just the code words.';
+// DSH 的 agent 有 shell,缺省能读整块盘:答不上来的问题它会自己去翻(2026-11-14 实跑:对照那一问它翻了测试库和本脚本的
+// 输出,还列了项目里别的目录)。所以每一问都写明只凭上文、不许用工具,并且把「这一问用没用工具」记进判据 —— 用了工具,
+// 答对答错都不作数(答案可能是从盘上翻来的)。
+const NO_TOOLS = 'Answer only from what was said in this conversation. Do not use any tools, do not read files, do not run commands.';
+const ASK = `${NO_TOOLS} What code word did I ask you to remember? Reply with just the code word, or NONE if I never gave you one.`;
+const ASK_ALL = `${NO_TOOLS} List every code word I asked you to remember in this conversation. Reply with just the code words, or NONE.`;
+const REMEMBER = (word, extra = '') => `Remember this code word for later: ${word}. ${extra}Do not use any tools. Reply with just: OK`;
+const noTools = (r) => ['这一问没有动用工具(答案只能来自上文)', r.tools.length === 0, r.tools.length ? `用了 ${r.tools.length} 次:${[...new Set(r.tools.map((t) => t.name))].join(' / ')}` : ''];
 const said = (r) => `模型原话:${(r.text || '').trim().replace(/\s+/g, ' ').slice(0, 200) || '(空)'}`;
 const LIVE_MS = 180_000;
-const liveRun = (sid, message, cfg = {}, o = {}) => run(sid, message, cfg, { timeoutMs: LIVE_MS, ...o });
+let liveModel = null; // --model 选中的那个(caps 之后定)
+const routeOf = (m) => { try { const v = JSON.parse(m.id); return Array.isArray(v) ? v[0] : undefined; } catch { return undefined; } }; // 只是台架为了挑「同一条线上的另一个模型」
+const liveRun = (sid, message, cfg = {}, o = {}) => run(sid, message, { ...(liveModel ? { engineModelId: liveModel.id } : {}), ...cfg }, { timeoutMs: LIVE_MS, ...o });
 /** 发一句注定很长的话,模型开始回答(或过了几秒)就按停止键。 */
 const stoppedTurn = async (sid, message) => {
   const n0 = stub.mark(), t0 = Date.now();
@@ -462,25 +473,35 @@ const stoppedTurn = async (sid, message) => {
 };
 const truncate = (sid, ids) => api(`/agent/sessions/${sid}/messages/delete`, { method: 'POST', body: JSON.stringify({ ids }) });
 const LIVE_SCENARIOS = {
-  caps: SCENARIOS.caps,
+  caps: async () => {
+    const caps = await SCENARIOS.caps();
+    if (LIVE_MODEL) {
+      liveModel = (caps.models || []).find((m) => m.id.includes(LIVE_MODEL) || m.name.includes(LIVE_MODEL)) || null;
+      console.log(liveModel ? `   · 这一套用的模型:${liveModel.name}(${liveModel.id})` : `   ✗ 清单里没有含「${LIVE_MODEL}」的模型:${(caps.models || []).map((m) => m.id).join(' | ')}`);
+      if (!liveModel) throw new Error(`--model ${LIVE_MODEL}: no such model`);
+    }
+    return caps;
+  },
   twoturn: async () => {
     const word = codeWord('QUOKKA'); const sid = await newSession('live-twoturn');
-    const a = await liveRun(sid, `Remember this code word for later: ${word}. Reply with just: OK`);
+    const a = await liveRun(sid, REMEMBER(word));
     const b = await liveRun(sid, ASK);
     const c = await liveRun(await newSession('live-twoturn-control'), ASK);
     const ps = await pointers(sid);
     record('twoturn', '第二句记得第一句', [
       ['两轮都跑完', a.done && b.done, a.error || b.error || ''],
       ['第二句的回答里有第一句给的暗号', b.text.includes(word), said(b)],
+      noTools(b),
       ['两轮用的是同一个 DSH 会话', ps.length === 2 && !!ps[0].ext && ps[0].ext === ps[1].ext, ps.map((p) => p.ext?.slice(0, 8)).join(' → ')],
-      ['对照:另开一场对话问同一句,答不出这个暗号', c.done && !c.text.includes(word), said(c)],
+      ['对照:另开一场对话问同一句,没用工具、也答不出这个暗号', c.done && c.tools.length === 0 && !c.text.includes(word), `${said(c)}${c.tools.length ? `;用了 ${c.tools.length} 次工具,这条对照不作数` : ''}`],
     ]);
   },
   model: async (caps) => {
-    const other = (caps?.models || []).find((m) => m.id !== caps.currentModelId);
+    const from = liveModel || (caps?.models || []).find((m) => m.id === caps.currentModelId);
+    const other = (caps?.models || []).find((m) => m.id !== from?.id && routeOf(m) === routeOf(from || {})) || (caps?.models || []).find((m) => m.id !== from?.id);
     if (!other) return record('model', '换模型之后仍然记得', [['清单里有第二个模型可换', false]]);
     const word = codeWord('MARMOT'); const sid = await newSession('live-model');
-    const a = await liveRun(sid, `Remember this code word for later: ${word}. Reply with just: OK`);
+    const a = await liveRun(sid, REMEMBER(word));
     const b = await liveRun(sid, ASK, { engineModelId: other.id });
     const ps = await pointers(sid);
     // 到 DSH 那边看这场会话的当前模型(上一轮的 DSH 进程刚被杀,可能还占着,等它放开)
@@ -490,45 +511,50 @@ const LIVE_SCENARIOS = {
     record('model', '换模型之后仍然记得', [
       ['两轮都跑完', a.done && b.done, a.error || b.error || ''],
       ['换了模型的那一轮答得出暗号', b.text.includes(word), said(b)],
+      noTools(b),
       ['两轮用的是同一个 DSH 会话', ps.length === 2 && !!ps[0].ext && ps[0].ext === ps[1].ext],
       ['DSH 那边这场会话的当前模型就是选的那个', current === other.id, `选的 ${other.name};DSH 报 ${current}`],
     ]);
   },
   edit: async () => {
     const keep = codeWord('WALRUS'), gone = codeWord('PELICAN'); const sid = await newSession('live-edit');
-    const a = await liveRun(sid, `Remember this code word for later: ${keep}. Reply with just: OK`);
-    const b = await liveRun(sid, `Remember a second code word: ${gone}. Reply with just: OK`);
+    const a = await liveRun(sid, REMEMBER(keep));
+    const b = await liveRun(sid, `Remember a second code word: ${gone}. Do not use any tools. Reply with just: OK`);
     await truncate(sid, (await messages(sid)).slice(-1).map((m) => m.id).concat('client-only-user-message'));
     const c = await liveRun(sid, ASK_ALL);
     const ps = await pointers(sid);
     record('edit', '删掉重发的那一轮,DSH 不再记得', [
       ['三轮都跑完', a.done && b.done && c.done, a.error || b.error || c.error || ''],
       ['被删掉的那一轮里的暗号,模型答不出来', !c.text.includes(gone), said(c)],
+      noTools(c),
       ['重发的那一轮换了一个 DSH 会话', ps.length === 3 && ps[2].ext !== ps[1].ext, ps.map((p) => p.ext?.slice(0, 8)).join(' → ')],
     ], `第一轮的暗号${c.text.includes(keep) ? '还' : '也不'}在回答里(重发后是全新的 DSH 会话,已知的限制)`);
   },
   stop: async () => {
     const word = codeWord('OTTER'); const sid = await newSession('live-stop');
-    const a = await liveRun(sid, `Remember this code word for later: ${word}. Reply with just: OK`);
-    const b = await stoppedTurn(sid, 'Write the numbers from 1 to 2000, one per line, and nothing else.');
-    const c = await liveRun(sid, ASK);
+    const a = await liveRun(sid, REMEMBER(word));
+    const b = await stoppedTurn(sid, 'Without using any tools, write out the numbers from 1 to 300 in English words, one per line.');
+    // 被停的那一句在 DSH 的会话里还算没答完:真模型下一轮常常先把它接着做完再回答新的(实跑见过),所以明说不用再做
+    const c = await liveRun(sid, `Never mind the numbers, do not continue them. ${ASK}`);
     const ps = await pointers(sid);
     record('stop', '中途停掉一轮,下一句仍然记得', [
       ['第一轮跑完、第二轮被停、第三轮跑完', a.done && b.aborted && c.done, `${a.error || ''} ${b.error || ''} ${c.error || ''}`],
       ['停掉之后还答得出第一句给的暗号', c.text.includes(word), said(c)],
+      noTools(c),
       ['三轮是同一个 DSH 会话', ps.length === 3 && !!ps[0].ext && ps.every((p) => p.ext === ps[0].ext), ps.map((p) => `${p.status}:${p.ext?.slice(0, 8)}`).join(' → ')],
     ]);
   },
   stopedit: async () => {
     const keep = codeWord('BADGER'), gone = codeWord('PUFFIN'); const sid = await newSession('live-stopedit');
-    const a = await liveRun(sid, `Remember this code word for later: ${keep}. Reply with just: OK`);
-    const b = await stoppedTurn(sid, `Remember a second code word: ${gone}. Then write the numbers from 1 to 2000, one per line.`);
+    const a = await liveRun(sid, REMEMBER(keep));
+    const b = await stoppedTurn(sid, `Remember a second code word: ${gone}. Then, without using any tools, write out the numbers from 1 to 300 in English words, one per line.`);
     await truncate(sid, ['client-only-user-message', 'client-only-placeholder']);
     const c = await liveRun(sid, ASK_ALL);
     const ps = await pointers(sid);
     record('stopedit', '停掉一轮后把那一句改了重发,DSH 不再记得被弃掉的那一句', [
       ['第一轮跑完、第二轮被停、第三轮跑完', a.done && b.aborted && c.done, `${a.error || ''} ${b.error || ''} ${c.error || ''}`],
       ['被弃掉的那一句里的暗号,模型答不出来', !c.text.includes(gone), said(c)],
+      noTools(c),
       ['改写后的这一轮换了一个 DSH 会话', ps.length === 3 && !!ps[1].ext && !!ps[2].ext && ps[2].ext !== ps[1].ext, ps.map((p) => `${p.status}:${p.ext?.slice(0, 8)}`).join(' → ')],
     ]);
   },
@@ -537,7 +563,7 @@ const LIVE_SCENARIOS = {
     if (LIVE_DRY) { console.log('\n(--live-dry 不演 approval:自动脑不调工具;工具剧本在普通模式里测)'); return; }
     const leg = async (tag, action) => {
       const sid = await newSession(`live-approval-${tag}`); const file = join(OUTSIDE, `live-${tag}.txt`);
-      const r = await liveRun(sid, `Create a file at the exact path ${file} whose content is the single line "${tag}". Use your file-writing tool. The sandbox will refuse because that path is outside the workspace; when it does, retry the same tool call with elevated sandbox permissions so that I am asked to approve it. Do not write anywhere else.`,
+      const r = await liveRun(sid, `Create a file at the exact path ${file} whose content is the single line "${tag}". Use your file-writing tool. The sandbox will refuse because that path is outside the workspace; when it does, retry the same tool call with elevated sandbox permissions so that I am asked to approve it. Do not write anywhere else, and do not read or list any other file or directory.`,
         { engineId: 'dsh-ro' }, { onApproval: () => action });
       return { r, file, card: r.approvals[0] };
     };
@@ -553,6 +579,9 @@ const LIVE_SCENARIOS = {
   },
 };
 
+// 开跑前就在的 DSH 进程不算这次留下的(--dsh-home 时用户自己可能还开着那份 DSH 的界面)
+const dshPids = () => { try { return execFileSync('pgrep', ['-fl', BIN], { encoding: 'utf8' }).trim().split('\n').filter(Boolean); } catch { return []; } };
+const pidsBefore = new Set(dshPids().map((l) => l.split(' ')[0]));
 let exitCode = 0;
 try {
   await startEngine();
@@ -567,8 +596,7 @@ try {
   await stopEngine(); await stub.close();
 }
 await sleep(2500); // 引擎杀 DSH 是 SIGTERM → 2 秒 → SIGKILL
-let leftover = '';
-try { leftover = execFileSync('pgrep', ['-fl', BIN], { encoding: 'utf8' }).trim(); } catch { leftover = ''; }
+const leftover = dshPids().filter((l) => !pidsBefore.has(l.split(' ')[0])).join('\n');
 console.log('\n汇总');
 for (const r of results) console.log(`${r.ok ? 'PASS' : 'FAIL'}\t${r.key}\t${r.title}`);
 console.log(leftover ? `\n⚠ 还有 DSH 进程没退:\n${clean(leftover)}` : '\n没有留下 DSH 进程');
