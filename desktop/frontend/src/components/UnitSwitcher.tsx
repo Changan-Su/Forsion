@@ -244,7 +244,7 @@ export function UnitSettings(): React.ReactElement {
   const vaultSide = usePageStore((s) => s.vaultSide)
   const initSide = usePageStore((s) => s.initVaultSide)
   const [units, setUnits] = useState<UnitInfo[] | null>(null)
-  const [host, setHost] = useState<{ running: boolean; connected: boolean; unitId: string | null; lanUrl: string | null } | null>(null)
+  const [host, setHost] = useState<{ running: boolean; connected: boolean; unitId: string | null; selfUnitId?: string | null; lanUrl: string | null } | null>(null)
   const [paired, setPaired] = useState<UnitPairedDevice[]>([])
   const [busy, setBusy] = useState(false)
   /** 页内提示:本页可能在浮窗里,浮窗没有通知宿主 —— 出错 / 离线说明就地显示(Codex 评审)。 */
@@ -370,7 +370,9 @@ export function UnitSettings(): React.ReactElement {
   const remotePermitted = remoteView?.permitted === true
 
   // 本页可能在浮窗里:远程面状态在主窗,这里不知道正在看哪台 —— 勾选态只跟 vaultSide(本机笔记库在哪一侧)。
-  const listed = units?.filter((u) => u.id !== host?.unitId && u.kind !== 'phone') ?? []
+  // 本机:互联开着认 unitId;关着时 unitId 为 null,退到 selfUnitId(这次运行里读到过配对才有,没有就不滤)
+  const selfId = host?.unitId ?? host?.selfUnitId ?? null
+  const listed = units?.filter((u) => u.id !== selfId && u.kind !== 'phone') ?? []
   const isOffline = (u: UnitInfo): boolean => !u.online && !lanOk[u.id]
   const onlineUnits = listed.filter((u) => !isOffline(u))
   const offlineUnits = listed.filter(isOffline)

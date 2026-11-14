@@ -115,7 +115,7 @@ import { COMPUTER_HISTORY_DESKTOP_CONFIG_FILE } from '../shared/computerHistory'
 // Amadeus Space:vendored 笔记后端(vault IPC + 资产协议)。renderImport 别名后保持 verbatim。
 import { registerIpc as registerAmadeusIpc } from './amadeus/ipc'
 import type { AmadeusSyncFactory } from './amadeus/cloudSeam'
-import { engineCapsState, pairingWriters, type UnitHubFactory, type UnitHubInstance } from './unitHubSeam' // 设备互联云端通道的接缝(Forsion Extend 0.6 起)
+import { engineCapsState, pairingWriters, selfUnitIdMemo, type UnitHubFactory, type UnitHubInstance } from './unitHubSeam' // 设备互联云端通道的接缝(Forsion Extend 0.6 起)
 import { makeCallerHeaders } from './unitCaller'
 import { newPairStore, startUnitWeb, type UnitWebHandle, type PairedDevice, startClipEntrance, CLIP_ENTRANCE_PORTS, type ClipEntranceHandle } from './unitWeb'
 import { createRemoteSessions, lookupRosterUnit, registerRemoteSessionsIpc, REMOTE_SESSIONS_FILE, withRemoteCap } from './remoteSessions' // P1-K4
@@ -1076,6 +1076,8 @@ let stopAmadeusSync: (() => Promise<void>) | null = null
 let amadeusSyncFactory: AmadeusSyncFactory | null = null
 let unitHostCloudUrl = DEFAULT_CLOUD_URL
 let unitHostPairing: { unitId: string; secret: string } | null = null
+/** 本机名册 id 的记忆(units:hostStatus.selfUnitId;互联关着时 unitHub.status().unitId 是 null)。 */
+const selfUnitId = selfUnitIdMemo()
 // P1-KF:主进程文案(mt)的界面语言 = 渲染层报来的生效语言(ui:locale),上次的值落 userData/ui-locale.json 供窗口载入前用。
 const uiLocale = createUiLocaleSync({ file: () => join(app.getPath('userData'), UI_LOCALE_FILE), log: (m) => console.log(m) })
 /** 渲染层报来的本机外观(主题色 / 背景色 / 明暗),给已配对的 Forsion Clip 跟随;语言另取 mainLocale()。 */
@@ -1345,6 +1347,7 @@ async function doRefreshUnitHost(): Promise<void> {
   // P1-K5:配对从 device-secrets.json 读,只在互联开着时读(读 = 可能解密 = macOS 可能弹钥匙串)。
   const pairing: deviceSecrets.PairingRead = stored.unitHostEnabled ? await deviceSecrets.unitPairing() : { state: 'ok', value: null }
   unitHostPairing = pairing.state === 'ok' ? pairing.value : null
+  selfUnitId.note(unitHostPairing)
   if (unitHub) { unitHub.stop(); unitHub = null } // stop() 也让 caps 上报器停报(onChannelDown)
   if (unitWeb) { const w = unitWeb; unitWeb = null; await w.close() } // 必须等旧服务真放掉端口,否则新起撞自己
   if (unitDoorbell) { const d = unitDoorbell; unitDoorbell = null; await d.close() }
@@ -1532,7 +1535,7 @@ async function doRefreshUnitHost(): Promise<void> {
     getPairing: () => unitHostPairing,
     // 入册回包到达时这个通道已被 refreshUnitHost 换掉(停用 / 换账号):旧那一轮的配对不许落盘(Codex 评审 P1)。
     // 残余窗口(检查通过后才换号)由通道 403/404 → clearPairing → 重新入册自愈。
-    ...pairingWriters(() => unitHub === hub, async (p) => { unitHostPairing = p; await deviceSecrets.setUnitPairing(p) }),
+    ...pairingWriters(() => unitHub === hub, async (p) => { unitHostPairing = p; selfUnitId.note(p); await deviceSecrets.setUnitPairing(p) }),
     // caps 上报器每次现算(通道 ready 之后报一次,backend.onStatus / 种子做完再报变化)
     engineCaps: () => engineCapsState({ agentBackend: PRODUCT.agentBackend, backend: backend.getStatus().state, seeded: unitSessionRootsSource().seeded() }),
     log: (m) => console.log(m),
@@ -3680,6 +3683,8 @@ app.whenReady().then(async () => {
   })
   ipcMain.handle('units:hostStatus', () => ({
     ...(unitHub ? unitHub.status() : { running: false, connected: false, unitId: null, lastError: null }),
+    // 新增字段,不改 unitId 的语义:互联关着也尽量认得出本机(这次运行里读到过配对才有;没有 = 不知道)
+    selfUnitId: unitHub?.status().unitId ?? selfUnitId.get(),
     webPort: unitWeb?.port ?? null,
     lanUrl: unitLanUrl(),
   }))

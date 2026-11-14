@@ -569,7 +569,8 @@ declare global {
       unitsOpenInBrowser?(unitId: string): Promise<void>
       unitsUpdate?(id: string, patch: { name?: string; icon?: string }): Promise<{ status: number; json: any }>
       unitsRemove?(id: string): Promise<{ status: number; json: any }>
-      unitHostStatus?(): Promise<{ running: boolean; connected: boolean; unitId: string | null; lastError: string | null; webPort: number | null; lanUrl: string | null }>
+      /** selfUnitId:本机在名册里的 id(互联关着时 unitId 为 null,它还可能认得;null / 缺 = 不知道,不滤)。 */
+      unitHostStatus?(): Promise<{ running: boolean; connected: boolean; unitId: string | null; selfUnitId?: string | null; lastError: string | null; webPort: number | null; lanUrl: string | null }>
       /** 本机已配对的来访设备(T1)与回收。 */
       unitsPairedList?(): Promise<UnitPairedDevice[]>
       unitsPairedRemove?(id: string): Promise<{ ok: boolean }>

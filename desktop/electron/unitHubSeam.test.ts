@@ -3,7 +3,7 @@
  * 映射是本机引擎的事,留在宿主。跑法:npx vitest run electron/unitHubSeam.test.ts
  */
 import { describe, it, expect } from 'vitest'
-import { engineCapsState, pairingWriters, type UnitPairing } from './unitHubSeam'
+import { engineCapsState, pairingWriters, selfUnitIdMemo, type UnitPairing } from './unitHubSeam'
 
 describe('engineCapsState', () => {
   it('maps the backend state, the seed gate and the product profile', () => {
@@ -31,5 +31,31 @@ describe('pairingWriters', () => {
     expect(stored).toEqual({ unitId: 'new', secret: 's1' })
     await newW.clearPairing()
     expect(stored).toBeNull()
+  })
+})
+
+describe('selfUnitIdMemo(units:hostStatus.selfUnitId)', () => {
+  it('没读到过配对 = 不知道(null);读到 / 登记后记住', () => {
+    const m = selfUnitIdMemo()
+    expect(m.get()).toBeNull()
+    m.note(null)
+    m.note(undefined)
+    expect(m.get()).toBeNull()
+    m.note({ unitId: 'u-me', secret: 's' })
+    expect(m.get()).toBe('u-me')
+  })
+  it('互联关掉 / 清配对(note(null))不抹掉;重新登记换成新 id', () => {
+    const m = selfUnitIdMemo()
+    m.note({ unitId: 'u-old', secret: 's' })
+    m.note(null)
+    expect(m.get()).toBe('u-old')
+    m.note({ unitId: 'u-new', secret: 's2' })
+    expect(m.get()).toBe('u-new')
+  })
+  it('坏值不认', () => {
+    const m = selfUnitIdMemo()
+    m.note({ unitId: '', secret: 's' })
+    m.note({ unitId: 42 as unknown as string, secret: 's' })
+    expect(m.get()).toBeNull()
   })
 })

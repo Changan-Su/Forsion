@@ -402,6 +402,20 @@ async function main() {
       await p2.close()
     }
 
+    // ── K2 本机不进自己的列表(互联关着:unitId null,selfUnitId 认得出)──
+    const ps = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1200, height: 720 } })
+    await ps.addInitScript(() => localStorage.clear())
+    await boot(ps, '&self')
+    await openPanel(ps)
+    await ps.click(`${UNITS} .ap-unit-fold`).catch(() => {})
+    const selfPanel = await ps.evaluate((s) => document.querySelector(s)?.textContent ?? '', UNITS)
+    await ps.evaluate((s) => { const b = Array.from(document.querySelectorAll(`${s} .ap-item`)).find((r) => r.textContent.includes('管理 Unit')); b.click() }, UNITS)
+    await ps.waitForSelector('.unitset-page', { timeout: 5000 }).catch(() => {})
+    await ps.waitForTimeout(400)
+    const selfSettings = await ps.evaluate(() => document.querySelector('.unitset-list')?.textContent ?? '')
+    check('K2 本机(selfUnitId)不出现在面板、也不出现在设置 › 设备', !selfPanel.includes('本机自己') && selfPanel.includes('MacBook Air') && !!selfSettings && !selfSettings.includes('本机自己'), JSON.stringify({ panel: selfPanel.slice(0, 80), settings: selfSettings.slice(0, 80) }))
+    await ps.close()
+
     // ── K web ──
     const pw = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1200, height: 720 } })
     await pw.addInitScript(() => localStorage.clear())

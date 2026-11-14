@@ -79,4 +79,16 @@ describe('useUnitRoster', () => {
     await useUnitRoster.getState().refresh()
     expect(useUnitRoster.getState().units).toEqual([])
   })
+
+  it('this computer: unitId while hosting, else selfUnitId; neither = unknown (no filter)', async () => {
+    window.tangu = { unitsList: vi.fn().mockResolvedValue({ status: 200, json: { units } }), unitHostStatus: vi.fn().mockResolvedValue({ unitId: null, selfUnitId: 'me' }) } as any
+    await useUnitRoster.getState().refresh()
+    expect(useUnitRoster.getState().hostUnitId).toBe('me')
+    ;(window.tangu as any).unitHostStatus = vi.fn().mockResolvedValue({ unitId: 'live', selfUnitId: 'me' })
+    await useUnitRoster.getState().refresh()
+    expect(useUnitRoster.getState().hostUnitId).toBe('live')
+    ;(window.tangu as any).unitHostStatus = vi.fn().mockResolvedValue({ unitId: null })
+    await useUnitRoster.getState().refresh()
+    expect(useUnitRoster.getState().hostUnitId).toBeNull()
+  })
 })

@@ -43,7 +43,7 @@ export const useUnitRoster = create<UnitRosterState>((set, get) => ({
     else if (list?.status === 200) units = list.json?.units ?? []
     else if (list?.status === 401) units = null
     // 其余(抛错 / 5xx / 网络):保留旧缓存
-    set({ units, ...(host ? { hostUnitId: host.unitId } : {}), ...(units === null ? { lanOk: {} } : {}) })
+    set({ units, ...(host ? { hostUnitId: host.unitId ?? host.selfUnitId ?? null } : {}), ...(units === null ? { lanOk: {} } : {}) })
     for (const u of units ?? []) {
       if (!u.lanUrl || !t?.unitsProbeLan) continue
       void t.unitsProbeLan(u.lanUrl)

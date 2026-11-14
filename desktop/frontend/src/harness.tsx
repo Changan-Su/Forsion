@@ -1032,6 +1032,12 @@ if (new URLSearchParams(location.search).has('dock')) {
         accountQuota: async () => ({ status: 200, json: { dailyPercent: 28, weeklyPercent: 28, dailyLimit: 100, weeklyLimit: 500, weeklyResetAt: '2026-11-16' } }),
         unitsUpdate: async (id: string, patch: unknown) => { calls.push([id, patch]); return { status: 200, json: { ok: true } } },
       })
+      // &self:名册里有本机自己(互联关着,unitId 为 null、selfUnitId 认得出)→ 面板和设置页都不许列它
+      if (panelQ.has('self')) {
+        units.push({ id: 'u-self', name: '本机自己', platform: 'darwin', icon: null, online: true, lanUrl: null })
+        const status = w.tangu!.unitHostStatus as () => Promise<Record<string, unknown>>
+        w.tangu!.unitHostStatus = (async () => ({ ...(await status()), unitId: null, selfUnitId: 'u-self' })) as never
+      }
       if (panelQ.has('web')) {
         delete w.tangu!.unitsList
         delete w.tangu!.unitHostStatus
