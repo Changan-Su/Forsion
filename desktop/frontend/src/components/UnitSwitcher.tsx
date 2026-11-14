@@ -171,6 +171,8 @@ type SurfaceFail = null | 'unreachable' | 'crashed' | 'pending' | 'waking' | 'wa
 /** 共享 Unit 正在唤醒:每隔多久重载一次、最多几次(约 1 分钟)。 */
 export const WAKE_RETRY_MS = 5000
 export const WAKE_RETRY_MAX = 12
+/** 唤醒中最长等多久(从第一次回 503 唤醒中算,按墙钟,不按次数:每次回包本身也要时间)。 */
+export const WAKE_DEADLINE_MS = 60_000
 
 /** 主框架那一次加载的 HTTP 结果 → 宿主画哪种状态(只用于共享过来的 Unit)。bodyCode = 回包 JSON 里的 code(读不到 = undefined)。
  *  2xx / 3xx / 非 HTTP(-1)= null(照常显示页面)。 */
@@ -227,8 +229,12 @@ export function UnitRemoteSurface(): React.ReactElement | null {
   const okUrl = useRef<string | null>(null)
   /** 保活在暗处时加载失败了:回落留到用户回到这台再做。 */
   const deferredFallback = useRef(false)
-  /** 共享 Unit 唤醒中已经自动重载了几次(换目标 / 手动重试清零)。 */
+  /** 共享 Unit 唤醒中:已经自动重载了几次、从什么时候开始等、下一次重载的定时器。
+   *  三样都绑在**这一张** webview 上(换 webview 才清):同一台再点一次只是换了 target 对象,webview 没换、也不会重新导航,
+   *  定时器要是跟着加载事件的 effect 一起清掉,「正在唤醒」就永远停在那儿。 */
   const wakeTries = useRef(0)
+  const wakeSince = useRef<number | null>(null)
+  const wakeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   // 中转设备页:主进程只给**绑定过的** webview、只给那台设备自己的路径补登录头(electron/unitAuthScope.ts)。
   // 先挂一张空白页,把它的 webContentsId 和设备 id 报给主进程(主进程自己核名册),绑上了才换成真地址;
   // 重试 / 回落中转 / 换目标都是新的一张 webview,各自重新绑。局域网 / P2P / 手输地址不经这里。
@@ -240,6 +246,9 @@ export function UnitRemoteSurface(): React.ReactElement | null {
   const instance = useRef({ key: '', seq: 0 })
   if (instance.current.key !== webKey) instance.current = { key: webKey, seq: instance.current.seq + 1 }
   const instanceKey = `${instance.current.seq}:${webKey}`
+  /** 此刻挂着的那张 webview 的记号(异步回来的判断先核它:换了 webview 的迟到结果一律丢)。 */
+  const liveInstance = useRef(instanceKey)
+  liveInstance.current = instanceKey
   const [bound, setBound] = useState<{ key: string; url?: string } | null>(null)
   // 共享过来的 Unit 没有绑定桥就进不去(地址只由主进程给)
   const ready = isShared ? !!window.tangu?.unitsBindFrame && bound?.key === instanceKey && !!bound.url : !needsBind || bound?.key === instanceKey
@@ -305,7 +314,14 @@ export function UnitRemoteSurface(): React.ReactElement | null {
     useUnitRemote.setState({ target: null, active: false })
     useUnitRoster.getState().clear()
   }), [])
-  useEffect(() => { okUrl.current = null; deferredFallback.current = false; wakeTries.current = 0 }, [target?.url, nonce])
+  useEffect(() => { okUrl.current = null; deferredFallback.current = false }, [target?.url, nonce])
+  // 换了一张 webview(换目标 / 重试 / 卸掉):唤醒的计数、起点、定时器跟着清
+  useEffect(() => () => {
+    if (wakeTimer.current) clearTimeout(wakeTimer.current)
+    wakeTimer.current = null
+    wakeTries.current = 0
+    wakeSince.current = null
+  }, [instanceKey])
   // 切进来把键盘直接交给对方页面(不点一下打不了字)。
   useEffect(() => { if (active) webRef.current?.focus() }, [active, target?.url, nonce])
   // 旧形态:点了本机 ribbon 的视图槽(视图图标 / Space)= 用户要回本机 —— Space 切换语义,自动退场。
@@ -344,7 +360,6 @@ export function UnitRemoteSurface(): React.ReactElement | null {
     let failed = false
     /** 共享 Unit 主框架这一次加载回的是错误状态码(did-frame-navigate 先于 did-finish-load 到)。 */
     let httpErr = false
-    let wakeTimer: ReturnType<typeof setTimeout> | null = null
     // 绑定之前那张空白页的加载事件不算(见上:中转设备页先挂空白页)
     const onStart = (): void => { if (readyRef.current) failed = false }
     // 共享过来的 Unit:主框架回 503 唤醒中 / 403 / 404 / 其它错误码时宿主自己画状态,服务端回的 JSON 不露出来
@@ -354,16 +369,24 @@ export function UnitRemoteSurface(): React.ReactElement | null {
       if (!ev.isMainFrame || ev.url === 'about:blank') return
       const status = typeof ev.httpResponseCode === 'number' ? ev.httpResponseCode : -1
       httpErr = status >= 400
-      if (!httpErr) { wakeTries.current = 0; return }
+      if (!httpErr) { wakeTries.current = 0; wakeSince.current = null; return }
       setFail('pending')
+      const mine = liveInstance.current
       const decide = (code?: string): void => {
+        if (liveInstance.current !== mine) return // 读回包期间换了 webview(去了别的设备):这次的结果不归现在这张管
         const st = sharedLoadState(status, code)
         if (st !== 'waking') { setFail(st ?? 'unreachable'); return }
-        if (wakeTries.current >= WAKE_RETRY_MAX) { setFail('wakeFailed'); return }
+        const now = Date.now()
+        wakeSince.current ??= now
+        if (wakeTries.current >= WAKE_RETRY_MAX || now - wakeSince.current >= WAKE_DEADLINE_MS) { setFail('wakeFailed'); return }
         wakeTries.current += 1
         setFail('waking')
-        if (wakeTimer) clearTimeout(wakeTimer)
-        wakeTimer = setTimeout(() => { wakeTimer = null; try { el.reload?.() } catch { /* 已卸下 */ } }, WAKE_RETRY_MS)
+        if (wakeTimer.current) clearTimeout(wakeTimer.current)
+        wakeTimer.current = setTimeout(() => {
+          wakeTimer.current = null
+          if (liveInstance.current !== mine) return
+          try { webRef.current?.reload?.() } catch { /* 已卸下 */ }
+        }, WAKE_RETRY_MS)
       }
       // 状态码在事件里;唤醒中要看回包的 code:只在 503 时读一次页面上的纯文本(错误回包是云端给的 JSON,不是那台的页面)
       if (status !== 503) { decide(); return }
@@ -396,7 +419,7 @@ export function UnitRemoteSurface(): React.ReactElement | null {
     const onGone = (): void => setFail('crashed')
     const on: Array<[string, (e: Event) => void]> = [['did-start-loading', onStart], ['did-frame-navigate', onFrameNav], ['did-fail-load', onFail], ['did-finish-load', onFinish], ['dom-ready', onReady], ['render-process-gone', onGone], ['crashed', onGone]]
     for (const [n, f] of on) el.addEventListener(n, f)
-    return () => { if (wakeTimer) clearTimeout(wakeTimer); for (const [n, f] of on) el.removeEventListener(n, f) }
+    return () => { for (const [n, f] of on) el.removeEventListener(n, f) }
   }, [target, nonce, whole])
   // 暗处失败过的那台,用户回来了:现在才回落中转(能回落就换目标、失败态随地址变化自己收;不能就留着失败态)。
   useEffect(() => {

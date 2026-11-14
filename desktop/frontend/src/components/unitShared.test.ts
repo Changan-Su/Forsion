@@ -6,7 +6,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { resolvePluginSpace, sharedTargetKey, unitPanelModel } from './unitPanelModel'
 import { onSharedRoster, sharedStillEnterable, useUnitRoster } from './unitRoster'
-import { bodyErrorCode, sharedLoadState, WAKE_RETRY_MAX, WAKE_RETRY_MS } from './UnitSwitcher'
+import { bodyErrorCode, sharedLoadState, WAKE_DEADLINE_MS, WAKE_RETRY_MAX, WAKE_RETRY_MS } from './UnitSwitcher'
 import type { SharedUnit } from '../../../shared/sharedUnits'
 import type { UnitInfo } from '../types'
 
@@ -167,5 +167,6 @@ describe('进去之后宿主画哪种状态', () => {
   it('唤醒:每 5 秒一次、最多约 1 分钟', () => {
     expect(WAKE_RETRY_MS).toBe(5000)
     expect(WAKE_RETRY_MS * WAKE_RETRY_MAX).toBe(60_000)
+    expect(WAKE_DEADLINE_MS).toBe(60_000) // 按墙钟封顶(每次回包本身也要时间,只数次数会拖过一分钟)
   })
 })

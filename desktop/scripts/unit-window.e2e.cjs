@@ -776,9 +776,15 @@ async function main() {
       const waking = await until(async () => { const r = await remote(); return r.fail === 'waking' ? r : undefined }, 15000)
       R.check('SH6 503 UNIT_WAKING →「正在唤醒…」(盖着,服务端那段 JSON 不露),没有重试按钮', !!waking && /正在唤醒/.test(waking.failText) && !waking.failText.includes('UNIT_WAKING') && !waking.retry, waking)
       await shot('waking')
+      // 唤醒中先回到这台电脑、再点同一行回来(同一张 webview、不重新导航):自动重试不能就此停掉
+      await win.evaluate(() => document.querySelector('.unitfr-back')?.click())
+      await sleep(400)
+      const leftWhileWaking = !(await remote()).active
+      await clickShared(UID_SH)
+      await sleep(300)
       const woke = await until(async () => { const r = await remote(); return !r.fail && r.active ? r : undefined }, 25000)
       const wakeDocs = sub.state.reqs.slice(wakeMark).filter((r) => r.host === UID_SH && r.path === `/api/units/${UID_SH}/proxy/web/`)
-      R.check('SH6 按间隔自动重试到成功(3 次文档请求:503、503、200),页面露出', !!woke && wakeDocs.length === 3 && !!(await pageLoaded()), { woke, docs: wakeDocs.length })
+      R.check('SH6 按间隔自动重试到成功(3 次文档请求:503、503、200),页面露出;中途回本机再点回来也不停', leftWhileWaking && !!woke && wakeDocs.length === 3 && !!(await pageLoaded()), { leftWhileWaking, woke, docs: wakeDocs.length })
       // 403
       sub.state.mode = 'forbidden'
       await reenter()
