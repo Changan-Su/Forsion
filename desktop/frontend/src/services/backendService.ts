@@ -17,6 +17,7 @@ import { readInboxChannel, type InboxChannel } from './inboxChannel'
 import { localInbox, localizeInboxMessage } from './localInbox' // Web/mobile 的云端来信走客户端收件箱
 import { registerMessages, translate } from '../i18n'
 import { LOCAL_ONLY_CODE, localOnlyMessage, remoteRefusalMessage } from './localOnly'
+import { noteApprovalCap } from './delegatedAdmin'
 import { saveResponseAs } from './nativeDownload'
 import type { MuseCardInfo, RelinkInfo, RelinkResult } from '../../../../tangu-agent/src/contracts/clientTypes'
 import { countTelemetry } from '../telemetrySend'
@@ -143,7 +144,7 @@ export async function realtimeSocket(t: EngineTarget): Promise<{ url: string; pr
   const u = new URL(`${t.base}/agent/realtime`, location.href)
   u.protocol = u.protocol === 'https:' ? 'wss:' : 'ws:'
   if (t.via === 'cloud') return { url: u.href, protocols: [REALTIME_BEARER_PROTOCOL, token] }
-  u.searchParams.set('token', token)
+  if (token) u.searchParams.set('token', token) // 设备页没有本页令牌时不带(凭据走壳注入 / Cookie)
   return { url: u.href }
 }
 
@@ -863,7 +864,7 @@ export const setChannelConnectedSession = (t: EngineTarget, kind: ChannelKind, s
 
 // ── Normal Agent（本地自定义人格;仅本地后端可用,云端返回 404 → 调用方降级空列表）──
 export const listAgents = (t: EngineTarget) =>
-  request<{ agents: NormalAgentDef[] }>(t, '/agent/agents').then((r) => r.agents).catch(() => [] as NormalAgentDef[])
+  request<{ agents: NormalAgentDef[]; approvalCap?: string }>(t, '/agent/agents').then((r) => { noteApprovalCap(r.approvalCap); return r.agents }).catch(() => [] as NormalAgentDef[])
 
 /** 分身清单(本机引擎;旧引擎 / 云端 → 空)。不带 slug = 全部。 */
 export const listStandIns = (t: EngineTarget, slug?: string) =>

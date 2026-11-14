@@ -543,6 +543,9 @@ declare global {
       /** 设备页以**远端身份**驱动对方的引擎(unitShim 注入;便携 Unit 的工作区主人 projection=local 不算):
        *  引擎按远程钳制 —— 审批改参数被拒(REMOTE_ARGS_OVERRIDE_FORBIDDEN)、「总允许」降成单次,界面据此收起这两样。 */
       remoteCaller?: boolean
+      /** 委托管理员角色(unitShim 按 unit/whoami 的 role 注入,只在 Unit 网页的这一种来路出现):壳只做 Agent 管理,
+       *  白名单外的请求不发、入口收起。判断一律走 services/delegatedAdmin.ts 的 isDelegatedAdmin()。 */
+      delegatedAdmin?: { name: string }
       /** A local engine sharing the active vault filesystem. Cloud/virtual vaults never qualify. */
       executionCapabilities?: { host: boolean }
       /** Explicit host filesystem availability; published cloud Units set false. */
@@ -564,12 +567,21 @@ declare global {
       onBackendStatus?(cb: (st: BackendStatusInfo) => void): () => void
       onConfigChanged?(cb: () => void): () => void
       // ── 设备互联(Forsion Unit):名册 + 本机 host 状态(token 留主进程,渲染层只拿结果)──
-      unitsList?(): Promise<{ status: number; json: { units?: UnitInfo[] } | null }>
+      /** shared = 连同别人共享给当前账号的 Unit 一起要(旧版 Extend 忽略这个参数,回包里就没有 `shared`)。 */
+      unitsList?(opts?: { shared?: boolean }): Promise<{ status: number; json: { units?: UnitInfo[]; shared?: unknown } | null }>
       /** 系统浏览器开中转引导页:main 代拼 `#token=` 登录态递交(forsion_token 不下发渲染层)。 */
       unitsOpenInBrowser?(unitId: string): Promise<void>
       unitsUpdate?(id: string, patch: { name?: string; icon?: string }): Promise<{ status: number; json: any }>
       unitsRemove?(id: string): Promise<{ status: number; json: any }>
-      unitHostStatus?(): Promise<{ running: boolean; connected: boolean; unitId: string | null; lastError: string | null; webPort: number | null; lanUrl: string | null }>
+      /** selfUnitId:本机在名册里的 id(互联关着时 unitId 为 null,它还可能认得;null / 缺 = 不知道,不滤)。 */
+      unitHostStatus?(): Promise<{ running: boolean; connected: boolean; unitId: string | null; selfUnitId?: string | null; lastError: string | null; webPort: number | null; lanUrl: string | null }>
+      unitsOpenWindow?(id: string): Promise<{ ok: boolean }>
+      /** 设备页 webview 绑定到一台设备(主进程核名册;之后只给这张 webview、只给这台自己的路径补登录头)。 */
+      unitsBindFrame?(input: { webContentsId: number; unitId: string }): Promise<{ ok: true; url?: string } | { ok: false; code: string }>
+      /** 这扇窗口重新拿到焦点(主进程 browser-window-focus;webview 占着焦点时渲染层自己的 focus 事件不可靠)。 */
+      onWindowFocused?(cb: () => void): () => void
+      unitsShowMain?(): void
+      unitsAddToDesktop?(input: { id: string; fallbackName?: string; iconPng?: string }): Promise<{ ok: true; path: string } | { ok: false; code: string; detail?: string }>
       /** 本机已配对的来访设备(T1)与回收。 */
       unitsPairedList?(): Promise<UnitPairedDevice[]>
       unitsPairedRemove?(id: string): Promise<{ ok: boolean }>

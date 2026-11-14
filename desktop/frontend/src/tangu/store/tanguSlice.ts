@@ -10,6 +10,7 @@ import { useChildChat } from '../../stores/childChatStore'
 import { createRunEventBatch } from './runEventBatch'
 import type { ProjectSettings, AgentConfig, AgentRunEvent, Attachment, CtxInfo, ModelsResponse, NormalAgentDef, MsgSeg, SessionRecord, SketchItem, SubChat, TanguDesktopConfig, ToolEvent, UiMessage, WorkspaceDescriptor, StoredDesktopConfig, TeamDef, ThinkingLevel } from '../../../../../tangu-agent/src/contracts/clientTypes'
 import { clearDeviceSticky, noteDeviceRefusal } from '../../services/deviceMarks' // P1-K7a
+import { tanguDelegatedAdmin } from '../delegatedRole'
 import { DEFAULT_CLOUD_PROJECT, DEFAULT_LOCAL_WORKSPACE_KEY, ROOTLESS_WORKSPACE_KEY, cloudProjectKey, isHomeSession, isIndependentOrbitConfig, isTeamImageAvatar, sessionWorkspaceKey, SHOW_SYSTEM_PROMPT_KEY, THINKING_LEVELS } from '../../../../../tangu-agent/src/contracts/clientTypes'
 import * as api from '../../services/backendService'
 import { bindSession, focusRef, focusTarget, forgetSession, homeTarget, inheritBinding, inheritChildRows, refForSession, sameRef, setFocusTarget, targetForRef, targetForSession, targetKeyOf, withLocation, yieldToHomeListing, HOME_REF, type EngineTarget, type TargetKey, type TargetRef } from '../../services/engine/targets'
@@ -31,7 +32,7 @@ import { AGENT_WRITE_TOOLS, DESK_EDIT_TOOLS, DESK_PERSIST_KEY, agentWriteChecks,
 import { deskAcceptsFiles } from '../../amadeus/plugins/deskCompanion'
 import { usePageStore } from '../../amadeus/store/pageStore'
 import { registerMessages, translate, translationValues } from '../../i18n'
-import { publishAccountQuota } from '../../services/accountQuota'
+import { pointsReadToken, publishAccountQuota, reconcilePointsRead } from '../../services/accountQuota'
 import { sanitizeAnswerBy, sanitizeApprovalPreviewI18n, sanitizeApprovalReason, sanitizeApprovalRemote } from '../../approvalReason'
 import { normalizeSessionEmoji } from '../../../../../tangu-agent/src/contracts/sessionEmoji'
 import { TURN_RESUME_MARKER, isContinuationRow } from '../../../../../tangu-agent/src/contracts/turnResume'
@@ -361,9 +362,11 @@ function checkQuotaExhausted(toast: (m: string, err?: boolean) => void, tr: (k: 
   if (quotaCheckBusy) return
   quotaCheckBusy = true
   const generation = host.authGen()
+  const pointsToken = pointsReadToken()
   void window.tangu.accountQuota().then((r) => {
     if (generation !== host.authGen()) return
-    const j = r?.status === 200 ? r.json : null
+    // 发出之后「用积分继续」被写过:这份是旧读取,开关以已确认的值为准(别把开着的显示回关)
+    const j = reconcilePointsRead(r?.status === 200 ? r.json : null, pointsToken)
     if (!j) return
     // Chat View 的内联额度提示与 run 收尾共用这份刚拉到的真值，避免结束瞬间再打一遍额度请求。
     publishAccountQuota(j)
@@ -371,7 +374,10 @@ function checkQuotaExhausted(toast: (m: string, err?: boolean) => void, tr: (k: 
     const daily = j.dailyLimit >= 0 && Number(j.dailyRemaining) <= 0
     const state = weekly ? 'weekly' : daily ? 'daily' : ''
     if (state && state !== lastQuotaExhaustState) {
-      toast(tr(state === 'weekly' ? 'quota.exhausted.weekly' : 'quota.exhausted.daily'), true)
+      // 开着「用积分继续」且还有积分:额度虽尽,下一轮照样能跑 —— 只是告知,不是错误(积分为 0 / 读不到照旧报已用尽)
+      const pointsOn = j.pointsAutoDeduct === true && typeof j.pointsBalance === 'number' && j.pointsBalance > 0
+      if (pointsOn) toast(tr('quota.exhausted.pointsOn'))
+      else toast(tr(state === 'weekly' ? 'quota.exhausted.weekly' : 'quota.exhausted.daily'), true)
     }
     lastQuotaExhaustState = state
   }).catch(() => {}).finally(() => { if (generation === host.authGen()) quotaCheckBusy = false })
@@ -2054,6 +2060,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
 
   refreshSessions: async (c) => {
     void c // 请求走 homeTarget()(活目标现读 store.cfg);c 只是历史签名
+    if (tanguDelegatedAdmin()) return [] // 委托管理员:会话与消息不归它管,那台设备也不放(删 Agent 后的刷新等调用点一并不发)
     const generation = host.authGen()
     // P1-K6 S4(INTEGRATION R-17):列表**只拉本端**,并保留已注入的 unit 记录(在那台电脑上建的 / K7 打开的那一条)。
     // 不把整台电脑的会话列表并进 appStore.sessions —— 22 个读者(workspaces() 等)会把 Mac 的路径当成本机项目;设备分组归 K7。
@@ -2506,6 +2513,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
   },
 
   refreshCloudProjects: async (c) => {
+    if (tanguDelegatedAdmin()) return // 项目列表在委托管理员的白名单外
     const generation = host.catalogToken()
     try {
       const names = await api.listProjects(focusTarget())
@@ -3501,6 +3509,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
   teams: [],
   teamAvatars: {},
   refreshTeams: async () => {
+    if (tanguDelegatedAdmin()) return // 团队在委托管理员的白名单外
     const c = focusTarget() // S2:团队目录随焦点
     const generation = host.catalogToken()
     const listed = await api.listTeams(c)

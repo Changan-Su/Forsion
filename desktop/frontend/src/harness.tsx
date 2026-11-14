@@ -948,7 +948,8 @@ if (new URLSearchParams(location.search).has('dock')) {
       // 父开关变了:真主进程经 refreshUnitHost → remoteSessions.notifyChanged 广播,桩在这里补同一拍(P1-K4)
       setConfig: async (patch: Record<string, unknown>) => { const next = Object.assign(cfg, patch); (window as unknown as { __rsPush?: () => unknown }).__rsPush?.(); return next },
       openExternal: async (url: string) => { opened.push(url) }, // openBrowser 在无浏览器视图时的回落口
-      unitsList: async () => ({ status: 200, json: { units } }),
+      // 每次新数组(同真 IPC):名册刷新才看得出变化。&shared:带 { shared: true } 时多回一组「别人共享给当前账号的 Unit」(window.__sharedUnits 可改)
+      unitsList: async (opts?: { shared?: boolean }) => ({ status: 200, json: { units: [...units], ...(opts?.shared === true && (window as unknown as { __sharedUnits?: unknown[] }).__sharedUnits ? { shared: [...(window as unknown as { __sharedUnits: unknown[] }).__sharedUnits] } : {}) } }),
       unitsUpdate: async () => ({ status: 200, json: { ok: true } }),
       unitsRemove: async () => ({ status: 200, json: { ok: true } }),
       unitHostStatus: async () => ({ running: cfg.unitHostEnabled as boolean, connected: false, unitId: null, lastError: null, webPort: 8791, lanUrl: 'http://192.168.1.5:8791' }),
@@ -1012,18 +1013,100 @@ if (new URLSearchParams(location.search).has('dock')) {
       })(),
     }
     w.amadeusSync = { get: async () => ({ state: 'idle', side: 'local' }), onStatus: () => () => {} }
-    void Promise.all([import('./components/UnitSwitcher'), import('./stores/appStore')]).then(([{ UnitSwitcher, UnitRemoteSurface, UnitSettings }, { useApp }]) => {
+    // &unitpanel:再挂账号卡(头像面板上半的 Unit 段,AccountUnitSection;scripts/unit-panel.check.cjs)。
+    // 账号是假的(authStatus 桩,不碰真登录);&many 多塞 18 台在线设备(考「只滚 Unit 段」);
+    // &web = 网页主入口的桥(没有 unitsList / unitHostStatus,带 unitPublicEntry)→ 面板里不许出现 Unit 段;
+    // &dark / &skin=<配色> / &lang=en 拍截图。
+    const panelQ = new URLSearchParams(location.search)
+    const unitPanel = panelQ.has('unitpanel')
+    // &surface=part:远程面按旧形态(盖 .shell-work、Ribbon 留着)跑,验 UNIT_SURFACE_WHOLE=false 那一支(check:unitswitcher 用)
+    if (panelQ.get('surface') === 'part') (window as unknown as { __forsionUnitSurfacePart?: boolean }).__forsionUnitSurfacePart = true
+    if (unitPanel) {
+      if (panelQ.has('many')) {
+        for (let i = 1; i <= 18; i++) units.push({ id: `u-extra-${i}`, name: `Studio ${i}`, platform: i % 2 ? 'linux' : 'darwin', icon: null, online: true, lanUrl: null })
+      }
+      const calls: Array<[string, unknown]> = []
+      ;(window as unknown as { __unitUpdates: typeof calls }).__unitUpdates = calls
+      Object.assign(w.tangu!, {
+        authStatus: async () => ({ loggedIn: true, tokenValid: true, cloudUrl: 'https://cloud.test', tokenSource: 'tangu-login', username: 'Lin', nickname: '林一' }),
+        authAccounts: async () => [{ id: 'lin', cloudUrl: 'https://cloud.test', username: 'Lin', active: true }],
+        forsionLogin: async () => { throw new Error('harness') },
+        forsionLogout: async () => ({ ok: true }),
+        accountQuota: async () => ({ status: 200, json: { dailyPercent: 28, weeklyPercent: 28, dailyLimit: 100, weeklyLimit: 500, weeklyResetAt: '2026-11-16' } }),
+        unitsUpdate: async (id: string, patch: unknown) => { calls.push([id, patch]); return { status: 200, json: { ok: true } } },
+        // 第二包:「在新窗口打开」「添加到桌面」只记下调用(主进程那半由 e2e:unitwindow 真跑)
+        unitsOpenWindow: async (id: string) => { winCalls.push(['window', id]); return { ok: true } },
+        unitsAddToDesktop: async (input: { id: string; fallbackName?: string; iconPng?: string }) => {
+          winCalls.push(['desktop', input.id, Object.keys(input).sort().join(','), typeof input.iconPng === 'string' && input.iconPng.startsWith('data:image/png') ? 'png' : 'no-icon'])
+          return { ok: false, code: 'unpackaged' }
+        },
+      })
+      const winCalls: unknown[][] = []
+      ;(window as unknown as { __unitWinCalls: typeof winCalls }).__unitWinCalls = winCalls
+      // &shared:别人共享给当前账号的 Unit(一组三行:能进且睡着、不能进但要开的插件没装、不能进也没给 open;另一组一行只有英文标题)
+      if (panelQ.has('shared')) {
+        const g = { id: 'group-1', title: { zh: '星河工作室', en: 'Galaxy Studio' } }
+        const role = { zh: '管理员', en: 'Admin' }
+        ;(window as unknown as { __sharedUnits: unknown[] }).__sharedUnits = [
+          { id: 's-studio-0001', name: '工作室 Unit', platform: 'linux', icon: null, online: true, sleeping: true, shared: { group: g, roleLabel: role, enter: 'frame' }, webUrl: 'https://s-studio-0001.units.cloud.test/api/units/s-studio-0001/proxy/web/' },
+          { id: 's-biz-00002', name: '插件那台', platform: 'linux', icon: null, online: true, shared: { group: g, roleLabel: role, enter: 'none', open: { kind: 'space', plugin: 'not-installed' } } },
+          { id: 's-plain-0003', name: '只读那台', platform: 'linux', icon: null, online: false, shared: { group: g, roleLabel: { zh: '成员', en: 'Member' }, enter: 'none' } },
+          { id: 's-other-0004', name: 'Lab box', platform: 'linux', icon: null, online: true, shared: { group: { id: 'group-2', title: { en: 'Lab' } }, roleLabel: { en: 'Admin' }, enter: 'frame' }, webUrl: 'https://s-other-0004.units.cloud.test/api/units/s-other-0004/proxy/web/' },
+          { id: 'bad', name: 'broken row', shared: { enter: 'frame' } }, // 坏行:丢
+        ]
+      }
+      // &self:名册里有本机自己(互联关着,unitId 为 null、selfUnitId 认得出)→ 面板和设置页都不许列它
+      if (panelQ.has('self')) {
+        units.push({ id: 'u-self', name: '本机自己', platform: 'darwin', icon: null, online: true, lanUrl: null })
+        const status = w.tangu!.unitHostStatus as () => Promise<Record<string, unknown>>
+        w.tangu!.unitHostStatus = (async () => ({ ...(await status()), unitId: null, selfUnitId: 'u-self' })) as never
+      }
+      if (panelQ.has('web')) {
+        delete w.tangu!.unitsList
+        delete w.tangu!.unitHostStatus
+        w.tangu!.unitPublicEntry = true
+      }
+      applyRealTheme(resolveInitialLang(), panelQ.get('skin') || resolveInitialSkin(), panelQ.get('skin') || resolveInitialBg(), panelQ.has('dark') ? 'dark' : 'light')
+      if (panelQ.get('lang') === 'en') setLocaleGlobal('en')
+    }
+    // &unitbind:中转设备页的绑定桩(真主进程那半由 e2e:unitwindow 跑)。裸 Chromium 的 <webview> 是未知元素:
+    // 给它补一个按元素递增的 getWebContentsId;unitsBindFrame 记下调用那一刻那张 webview 的 src,晚一点回 ok。
+    if (panelQ.has('unitbind')) {
+      const ids = new WeakMap<Element, number>()
+      let next = 100
+      Object.defineProperty(HTMLElement.prototype, 'getWebContentsId', {
+        configurable: true,
+        value(this: HTMLElement) { if (this.tagName !== 'WEBVIEW') throw new Error('not a webview'); if (!ids.has(this)) ids.set(this, next++); return ids.get(this) },
+      })
+      const binds: Array<{ webContentsId: number; unitId: string; srcAtCall: string | null }> = []
+      ;(window as unknown as { __unitBinds: typeof binds }).__unitBinds = binds
+      w.tangu!.unitsBindFrame = (async (input: { webContentsId: number; unitId: string }) => {
+        const el = Array.from(document.querySelectorAll('webview')).find((x) => ids.get(x) === input.webContentsId)
+        binds.push({ ...input, srcAtCall: el?.getAttribute('src') ?? null })
+        await new Promise((r) => setTimeout(r, 150))
+        return { ok: true }
+      }) as never
+    }
+    void Promise.all([import('./components/UnitSwitcher'), import('./stores/appStore'), import('./components/AccountCard'), import('./components/unitRoster'), import('./stores/popupQueue')]).then(([{ UnitSwitcher, UnitRemoteSurface, UnitSettings, useUnitRemote, runUnitRoute }, { useApp }, { AccountCard }, { useUnitRoster }, { usePopupQueue }]) => {
       useApp.setState({ desktopConfig: { ...cfg } as never })
+      if (panelQ.has('unitbind')) Object.assign(window as unknown as Record<string, unknown>, { __unitRemote: useUnitRemote })
       addRibbonIcon({ id: 'rb-unit', side: 'bottom', component: UnitSwitcher })
+      if (unitPanel) {
+        const toasts: string[] = []
+        Object.assign(window as unknown as Record<string, unknown>, { __unitRemote: useUnitRemote, __runUnitRoute: runUnitRoute, __roster: useUnitRoster, __units: units, __toasts: toasts, __popupQueue: usePopupQueue })
+        addRibbonIcon({ id: 'rb-account', side: 'bottom', pinned: true, component: ({ expanded }: { expanded: boolean }) => <AccountCard compact={!expanded} onToast={(text) => { toasts.push(text) }} /> })
+      }
       // 远程面(设备行「整个主区切过去」)也挂上:裸 harness 无 .shell-work → 组件原地渲染,CSS 退化 fixed 覆盖
       const rsHost = document.createElement('div')
+      // 同产品的 Shell 封箱(.shell-host { isolation: isolate }):远程面 z 400 关在箱里,body 一层的账号面板稳压其上
+      rsHost.style.isolation = 'isolate'
       document.body.appendChild(rsHost)
       // 设置 › 设备:胶囊点开走 openSettings('units')(harness 无浮窗 = 窗内设置),这里只挂那一页(真 SettingsModal 太重)。
       const UnitSettingsHost = (): React.ReactElement | null => {
         const open = useApp((s) => s.settingsOpen && s.settingsTab === 'units')
         return open ? <div className="unitset-harness" style={{ position: 'fixed', left: 260, top: 24, width: 560, maxHeight: 'calc(100vh - 48px)', overflow: 'auto', zIndex: 500 }}><UnitSettings /></div> : null
       }
-      createRoot(rsHost).render(<><UnitRemoteSurface /><UnitSettingsHost /></>)
+      createRoot(rsHost).render(<><UnitRemoteSurface /><UnitSettingsHost />{unitPanel && <AskStringHost />}</>)
     })
   }
   installHotkeys() // 裸挂 Ribbon 没有 Shell,热键分发得自己装
@@ -1047,8 +1130,25 @@ if (new URLSearchParams(location.search).has('dock')) {
     { label: 'zhipu', options: [{ id: 'glm-4.7', name: 'GLM-4.7' }, { id: 'glm-4.6', name: 'GLM-4.6' }, { id: 'glm-air', name: 'GLM-4.5-Air' }] },
     { label: 'deepseek', options: [{ id: 'ds-v32', name: 'DeepSeek-V3.2-Exp' }, { id: 'ds-r1', name: 'DeepSeek-R1' }] },
   ]
+  // ?tierlock[=<上限>]:Forsion 云端组带倍率,额度视图下发 modelMultiplierCap(缺省 2.5)→ 倍率更高的变淡带锁;
+  // ?tierlock&current 起步就选着一个用不了的(老会话 / 换了档位),看药丸上的锁
+  const tierLock = modelPillParams.has('tierlock')
+  if (tierLock) {
+    const cap = Number(modelPillParams.get('tierlock') || 2.5)
+    GROUPS.unshift({ label: 'Forsion', source: 'forsion', options: [
+      { id: 'f-luna', name: 'GPT-6 Luna', source: 'forsion', multiplier: 1 },
+      { id: 'f-sol', name: 'GPT-6 Sol', source: 'forsion', multiplier: 2.5 },
+      { id: 'f-opus', name: 'Claude Opus', source: 'forsion', multiplier: 5 },
+      { id: 'f-ultra', name: 'Gemini Ultra', source: 'forsion', multiplier: 8 },
+    ] } as never)
+    window.tangu = {
+      ...(window.tangu || {}),
+      accountQuota: async () => ({ status: 200, json: { dailyLimit: 100, weeklyLimit: 100, modelMultiplierCap: cap } }),
+      openPayCenter: async () => { (window as unknown as { __payOpened?: number }).__payOpened = ((window as unknown as { __payOpened?: number }).__payOpened || 0) + 1; return { ok: true } },
+    } as never
+  }
   const PillHarness = (): React.ReactElement => {
-    const [id, setId] = useState('glm-4.7')
+    const [id, setId] = useState(tierLock && modelPillParams.has('current') ? 'f-opus' : 'glm-4.7')
     const [lv, setLv] = useState<'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'>(modelPillParams.has('max') || modelPillParams.has('ultra') ? 'max' : 'high')
     // ?ultra 起步就在 Ultra 档;?allowultra 起步在「深」但滑杆带 Ultra 格(拍切进 Ultra 那一下的冲击波)
     const allowUltra = modelPillParams.has('ultra') || modelPillParams.has('allowultra')

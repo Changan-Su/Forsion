@@ -65,6 +65,7 @@ registerMessages({
   'app.wsTrashFail': { zh: '会话已删除，但 .tangu 文件夹没能移到废纸篓：{e}', en: 'The sessions were deleted, but the .tangu folder could not be moved to the Trash: {e}' },
   'quota.exhausted.daily': { zh: '今日 AI 额度已用尽（本次运行已预支跑完；可在「Forsion 云端 → 额度与积分」用额度重置卡立即恢复）', en: 'Today\'s AI quota is used up (this run finished on overdraft; use a quota reset card under Forsion Cloud → Quota & points to restore it now)' },
   'quota.exhausted.weekly': { zh: '本周 AI 额度已用尽（本次运行已预支跑完；可在「Forsion 云端 → 额度与积分」用额度重置卡立即恢复）', en: 'This week\'s AI quota is used up (this run finished on overdraft; use a quota reset card under Forsion Cloud → Quota & points to restore it now)' },
+  'quota.exhausted.pointsOn': { zh: 'AI 额度已用完，接下来用积分继续', en: 'Your AI quota is used up; continuing with points from here' },
   'sidebar.channel.setAsConnected': { zh: '设为正在连接', en: 'Set as connected' },
   'chat.systemPrompt': { zh: '系统提示词', en: 'System prompt' },
   'desk.title': { zh: 'Agent Desk', en: 'Agent Desk' },

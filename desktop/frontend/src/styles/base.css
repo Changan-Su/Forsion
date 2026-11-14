@@ -4779,6 +4779,59 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-wrap { top: calc(var(-
 .account-pop .ap-dim { color: var(--text-muted); font-size: var(--ui-font-caption, 11px); }
 /* 菜单里的分组小标题(「切换账号」):灰色小字,不带分隔线,别长得像可点的行(W-01) */
 .account-pop .ap-sec { padding: 6px 9px 2px; color: var(--text-faint); font-size: var(--ui-font-caption, 11px); }
+/* 账号面板上半的 Unit 段(AccountUnitSection,只在真桌面主窗):面板加宽到 320;整张限高 = --ap-max
+   (头像上沿往上到窗口顶留 8px,已按 body zoom 折成局部 px,AccountCard 写在浮层上),
+   多出来的只滚 Unit 列表,账号项不动。行从 .ap-item 派生,不另起一套。 */
+.account-pop.account-pop--units { width: 320px; }
+.account-pop--units > .ap-body {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  max-height: calc(var(--ap-max, 100vh) - 2 * var(--menu-shell-padding) - 2 * var(--border-width));
+  overflow-y: auto; /* 最后一道:连 Unit 列表压到 0 都放不下时整张滚,不出窗口 */
+}
+.account-pop--units > .ap-body > * { flex: none; }
+.account-pop--units > .ap-body > .ap-units {
+  flex: 0 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding-bottom: 4px;
+  margin-bottom: 4px;
+  border-bottom: var(--border-width) solid var(--border);
+}
+.account-pop .ap-units > * { flex: none; }
+.account-pop .ap-units > .ap-units-list { flex: 0 1 auto; min-height: 0; overflow-y: auto; }
+.account-pop .ap-unit-ic { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 14px; color: var(--text-muted); }
+.account-pop .ap-unit-ic .unitsw-emoji { font-size: 13px; }
+.account-pop .ap-unit-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.account-pop .ap-unit-state { flex: none; white-space: nowrap; }
+.account-pop .ap-unit.ap-unit--off { color: var(--text-muted); }
+.account-pop .ap-unit.ap-unit--off .ap-unit-ic { opacity: 0.6; }
+/* 共享过来的、点不动的那一行(不能进、也没有能打开的 Space):不是按钮,悬停不变色 */
+.account-pop .ap-item.ap-unit--inert { cursor: default; color: var(--text-muted); }
+.account-pop .ap-item.ap-unit--inert:hover { background: none; }
+.account-pop .ap-item.ap-unit--inert .ap-unit-ic { opacity: 0.6; }
+.account-pop .ap-unit-check { color: var(--accent-ink); }
+.account-pop .ap-item svg.ap-unit-check { opacity: 1; }
+.account-pop .ap-unit-fold .ap-unit-name { color: var(--text-muted); }
+.account-pop .ap-unit-note { padding: 2px 9px 4px 31px; color: var(--text-muted); font-size: var(--ui-font-caption, 11px); }
+/* 在线行行尾的「在新窗口打开」:只在悬停 / 键盘聚焦这一行时出现,盖住那一行的灰字(不常驻) */
+.account-pop .ap-unit-wrap { position: relative; }
+.account-pop .ap-unit-newwin {
+  position: absolute; top: 50%; right: 4px; transform: translateY(-50%);
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px; padding: 0; border: 0; border-radius: var(--radius-sm);
+  background: transparent; color: var(--text-muted); cursor: pointer;
+  opacity: 0; pointer-events: none;
+}
+.account-pop .ap-unit-wrap:hover .ap-unit-newwin,
+.account-pop .ap-unit-wrap:focus-within .ap-unit-newwin { opacity: 1; pointer-events: auto; }
+.account-pop .ap-unit-wrap:hover .ap-unit-state,
+.account-pop .ap-unit-wrap:hover .ap-unit-check,
+.account-pop .ap-unit-wrap:focus-within .ap-unit-state,
+.account-pop .ap-unit-wrap:focus-within .ap-unit-check { visibility: hidden; }
+.account-pop .ap-unit-newwin:hover { background: color-mix(in srgb, var(--text) 8%, transparent); color: var(--text); }
 
 /* ── 文件区:选中 / 拖入目标 / OS 文件悬停 ── */
 .file-row.selected { background: var(--accent-light); }
@@ -5517,8 +5570,8 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-wrap { top: calc(var(-
 .mb-shell[data-native-chrome][data-wide] .mb-view[data-view='amadeus-drawing'] .amx-boardhost[data-cap-row='gap'] .excalidraw:not(.excalidraw--mobile) .App-menu_top::after { flex: 1 1 max(0px, (12 + var(--nc-capr-w, 0)) * 1px - var(--editor-container-padding)); min-width: 0; }
 
 /* chat / work 模式位:会话创建后只读(disabled),悬浮 title 解释「换模式请新建会话」。 */
-.composer-menu .menu-item:disabled { opacity: 0.55; cursor: default; }
-.composer-menu .menu-item:disabled:hover { background: none; }
+.composer-menu .menu-item:disabled, .composer-menu .menu-item.is-locked { opacity: 0.55; cursor: default; }
+.composer-menu .menu-item:disabled:hover, .composer-menu .menu-item.is-locked:hover { background: none; }
 
 /* 市场自己的提示条(安装 / 卸载结果):市场住在浮窗或全屏覆盖层里,全局通知在那儿看不见(09-21 实报
    「点安装只转圈没反馈」)。夹在标题区与滚动区之间(flex 列里不收缩),正文怎么滚都在视野内。

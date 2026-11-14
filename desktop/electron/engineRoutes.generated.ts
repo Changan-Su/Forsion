@@ -3,20 +3,21 @@
  * Every route the standalone engine mounts, classified for remote reach through unitWeb /engine/*.
  * Change a classification in the generator's CLASSIFICATION map, then re-run the script.
  * Routes not listed here (e.g. contributed by engine plugins at runtime) are denied to remote callers.
+ * delegatedAdmin: true = reachable in the delegated admin tier (generator DELEGATED_ADMIN set); that tier denies every other row.
  */
 export type EngineRouteAccess = 'allow' | 'deny-remote' | 'unclassified'
-export interface EngineRoute { method: string; path: string; access: EngineRouteAccess; src: string; why: string }
+export interface EngineRoute { method: string; path: string; access: EngineRouteAccess; delegatedAdmin?: true; src: string; why: string }
 
 export const ENGINE_ROUTES: readonly EngineRoute[] = [
-  { method: 'GET', path: '/agent/agents', access: 'allow', src: 'routes/agents.ts', why: 'Agent roster; remote callers get no persona / developer instructions and the approval mode clamped to the remote cap (P1-M1A projection)' },
-  { method: 'POST', path: '/agent/agents', access: 'deny-remote', src: 'routes/agents.ts', why: 'create Agent (design appendix C)' },
-  { method: 'GET', path: '/agent/agents-meta', access: 'allow', src: 'routes/agents.ts', why: 'Agent roster meta' },
+  { method: 'GET', path: '/agent/agents', access: 'allow', delegatedAdmin: true, src: 'routes/agents.ts', why: 'Agent roster; remote callers get no persona / developer instructions and the approval mode clamped to the remote cap (P1-M1A projection)' },
+  { method: 'POST', path: '/agent/agents', access: 'deny-remote', delegatedAdmin: true, src: 'routes/agents.ts', why: 'create Agent (design appendix C)' },
+  { method: 'GET', path: '/agent/agents-meta', access: 'allow', delegatedAdmin: true, src: 'routes/agents.ts', why: 'Agent roster meta' },
   { method: 'PUT', path: '/agent/agents-meta', access: 'deny-remote', src: 'routes/agents.ts', why: 'Agent roster meta write' },
-  { method: 'DELETE', path: '/agent/agents/:slug', access: 'deny-remote', src: 'routes/agents.ts', why: 'delete Agent' },
-  { method: 'PATCH', path: '/agent/agents/:slug', access: 'deny-remote', src: 'routes/agents.ts', why: 'update Agent (design appendix C)' },
-  { method: 'DELETE', path: '/agent/agents/:slug/avatar', access: 'deny-remote', src: 'routes/agents.ts', why: 'update Agent avatar' },
-  { method: 'GET', path: '/agent/agents/:slug/avatar', access: 'allow', src: 'routes/agents.ts', why: 'Agent avatar' },
-  { method: 'POST', path: '/agent/agents/:slug/avatar', access: 'deny-remote', src: 'routes/agents.ts', why: 'update Agent avatar' },
+  { method: 'DELETE', path: '/agent/agents/:slug', access: 'deny-remote', delegatedAdmin: true, src: 'routes/agents.ts', why: 'delete Agent' },
+  { method: 'PATCH', path: '/agent/agents/:slug', access: 'deny-remote', delegatedAdmin: true, src: 'routes/agents.ts', why: 'update Agent (design appendix C)' },
+  { method: 'DELETE', path: '/agent/agents/:slug/avatar', access: 'deny-remote', delegatedAdmin: true, src: 'routes/agents.ts', why: 'update Agent avatar' },
+  { method: 'GET', path: '/agent/agents/:slug/avatar', access: 'allow', delegatedAdmin: true, src: 'routes/agents.ts', why: 'Agent avatar' },
+  { method: 'POST', path: '/agent/agents/:slug/avatar', access: 'deny-remote', delegatedAdmin: true, src: 'routes/agents.ts', why: 'update Agent avatar' },
   { method: 'GET', path: '/agent/agents/:slug/harness', access: 'allow', src: 'routes/agents.ts', why: 'read HARNESS' },
   { method: 'POST', path: '/agent/agents/:slug/harness/candidate', access: 'deny-remote', src: 'routes/agents.ts', why: 'adopt / dismiss one harness candidate (writes HARNESS.md as the user; the route itself also refuses remote origin)' },
   { method: 'POST', path: '/agent/agents/:slug/harness/rollback', access: 'deny-remote', src: 'routes/agents.ts', why: 'harness rollback (design appendix C)' },
@@ -36,7 +37,7 @@ export const ENGINE_ROUTES: readonly EngineRoute[] = [
   { method: 'GET', path: '/agent/agents/:slug/stand-ins', access: 'deny-remote', src: 'routes/agents.ts', why: 'stand-ins are local-only; lists channel and contact identifiers' },
   { method: 'GET', path: '/agent/agents/:slug/uninstall-preview', access: 'deny-remote', src: 'routes/agents.ts', why: 'uninstall preview (only feeds a local delete)' },
   { method: 'GET', path: '/agent/stand-ins', access: 'deny-remote', src: 'routes/agents.ts', why: 'stand-ins are local-only; lists channel and contact identifiers' },
-  { method: 'GET', path: '/agent/tool-catalog', access: 'allow', src: 'routes/agents.ts', why: 'tool catalog' },
+  { method: 'GET', path: '/agent/tool-catalog', access: 'allow', delegatedAdmin: true, src: 'routes/agents.ts', why: 'tool catalog' },
   { method: 'GET', path: '/agent/user-profile', access: 'allow', src: 'routes/agents.ts', why: 'read user profile' },
   { method: 'PUT', path: '/agent/user-profile', access: 'deny-remote', src: 'routes/agents.ts', why: 'user profile write (design appendix C)' },
   { method: 'GET', path: '/agent/approval-rules', access: 'deny-remote', src: 'routes/approvals.ts', why: 'approval rules are local policy' },
@@ -50,14 +51,14 @@ export const ENGINE_ROUTES: readonly EngineRoute[] = [
   { method: 'POST', path: '/agent/mcp/:name/login', access: 'deny-remote', src: 'routes/assets.ts', why: 'MCP OAuth sign-in: loopback callback and tokens are local to this computer' },
   { method: 'POST', path: '/agent/mcp/:name/logout', access: 'deny-remote', src: 'routes/assets.ts', why: 'MCP OAuth sign-out deletes a local token' },
   { method: 'POST', path: '/agent/mcp/probe', access: 'deny-remote', src: 'routes/assets.ts', why: 'MCP connection test: starts the given stdio command or contacts the URL from this computer' },
-  { method: 'GET', path: '/agent/skills', access: 'allow', src: 'routes/assets.ts', why: 'skills list' },
-  { method: 'GET', path: '/agent/skills/catalog', access: 'allow', src: 'routes/assets.ts', why: 'skill catalog' },
+  { method: 'GET', path: '/agent/skills', access: 'allow', delegatedAdmin: true, src: 'routes/assets.ts', why: 'skills list' },
+  { method: 'GET', path: '/agent/skills/catalog', access: 'allow', delegatedAdmin: true, src: 'routes/assets.ts', why: 'skill catalog' },
   { method: 'POST', path: '/agent/skills/catalog', access: 'deny-remote', src: 'routes/assets.ts', why: 'create skill' },
   { method: 'DELETE', path: '/agent/skills/catalog/:key', access: 'deny-remote', src: 'routes/assets.ts', why: 'delete skill' },
   { method: 'GET', path: '/agent/skills/catalog/:key', access: 'allow', src: 'routes/assets.ts', why: 'skill detail' },
   { method: 'PATCH', path: '/agent/skills/catalog/:key', access: 'deny-remote', src: 'routes/assets.ts', why: 'edit skill' },
   { method: 'POST', path: '/agent/skills/catalog/:key/copy', access: 'deny-remote', src: 'routes/assets.ts', why: 'copy skill between Agents' },
-  { method: 'PUT', path: '/agent/skills/catalog/:key/disabled', access: 'deny-remote', src: 'routes/assets.ts', why: 'skill enablement config' },
+  { method: 'PUT', path: '/agent/skills/catalog/:key/disabled', access: 'deny-remote', delegatedAdmin: true, src: 'routes/assets.ts', why: 'skill enablement config' },
   { method: 'GET', path: '/agent/skills/catalog/:key/uninstall-preview', access: 'deny-remote', src: 'routes/assets.ts', why: 'uninstall preview (only feeds a local delete)' },
   { method: 'POST', path: '/agent/skills/catalog/import', access: 'deny-remote', src: 'routes/assets.ts', why: 'skill import (design appendix C)' },
   { method: 'POST', path: '/agent/skills/upload', access: 'deny-remote', src: 'routes/assets.ts', why: 'skill upload (design appendix C)' },
@@ -146,7 +147,7 @@ export const ENGINE_ROUTES: readonly EngineRoute[] = [
   { method: 'GET', path: '/agent/agents/:slug/memory/dream', access: 'allow', src: 'routes/memoryMaintenance.ts', why: 'read memory maintenance state' },
   { method: 'POST', path: '/agent/agents/:slug/memory/dream', access: 'deny-remote', src: 'routes/memoryMaintenance.ts', why: 'starts a memory rewrite' },
   { method: 'PUT', path: '/agent/agents/:slug/memory/dream', access: 'deny-remote', src: 'routes/memoryMaintenance.ts', why: 'memory maintenance config' },
-  { method: 'GET', path: '/agent/models', access: 'allow', src: 'routes/models.ts', why: 'model list' },
+  { method: 'GET', path: '/agent/models', access: 'allow', delegatedAdmin: true, src: 'routes/models.ts', why: 'model list' },
   { method: 'PUT', path: '/agent/models/overrides', access: 'deny-remote', src: 'routes/models.ts', why: 'model overrides config' },
   { method: 'GET', path: '/agent/models/quota', access: 'allow', src: 'routes/models.ts', why: 'provider quota (read-only)' },
   { method: 'GET', path: '/agent/plugins', access: 'deny-remote', src: 'routes/plugins.ts', why: 'engine plugins are local-only' },
@@ -300,9 +301,9 @@ export const ENGINE_ROUTES: readonly EngineRoute[] = [
   { method: 'POST', path: '/agent/special/muse/triggers', access: 'deny-remote', src: 'routes/special.ts', why: 'creates persistent follow-up execution (design appendix C)' },
   { method: 'DELETE', path: '/agent/special/muse/triggers/:id', access: 'deny-remote', src: 'routes/special.ts', why: 'Muse trigger config' },
   { method: 'POST', path: '/agent/special/muse/wake', access: 'deny-remote', src: 'routes/special.ts', why: 'starts a Muse round now (spends the background budget); the engine refuses remote origins too' },
-  { method: 'GET', path: '/agent/special/schedule', access: 'allow', src: 'routes/special.ts', why: 'Agent schedules' },
+  { method: 'GET', path: '/agent/special/schedule', access: 'allow', delegatedAdmin: true, src: 'routes/special.ts', why: 'Agent schedules' },
   { method: 'POST', path: '/agent/special/schedule/:slug/entries', access: 'deny-remote', src: 'routes/special.ts', why: 'creates persistent follow-up execution (design appendix C)' },
-  { method: 'DELETE', path: '/agent/special/schedule/:slug/entries/:id', access: 'deny-remote', src: 'routes/special.ts', why: 'schedule write' },
+  { method: 'DELETE', path: '/agent/special/schedule/:slug/entries/:id', access: 'deny-remote', delegatedAdmin: true, src: 'routes/special.ts', why: 'schedule write' },
   { method: 'GET', path: '/agent/teams', access: 'allow', src: 'routes/teams.ts', why: 'team list' },
   { method: 'POST', path: '/agent/teams', access: 'deny-remote', src: 'routes/teams.ts', why: 'create team' },
   { method: 'GET', path: '/agent/teams-meta', access: 'allow', src: 'routes/teams.ts', why: 'team meta' },
@@ -346,5 +347,5 @@ export const ENGINE_ROUTES: readonly EngineRoute[] = [
   { method: 'GET', path: '/agent/workspace/list', access: 'allow', src: 'routes/workspace.ts', why: 'session workspace listing' },
   { method: 'GET', path: '/agent/workspace/read', access: 'allow', src: 'routes/workspace.ts', why: 'session workspace read' },
   { method: 'POST', path: '/agent/workspace/upload', access: 'allow', src: 'routes/workspace.ts', why: 'attachments from the remote device (design §6.6)' },
-  { method: 'GET', path: '/health', access: 'allow', src: 'standalone/main.ts', why: 'unauthenticated liveness probe' },
+  { method: 'GET', path: '/health', access: 'allow', delegatedAdmin: true, src: 'standalone/main.ts', why: 'unauthenticated liveness probe' },
 ]

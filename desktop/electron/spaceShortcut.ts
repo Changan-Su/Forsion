@@ -22,7 +22,7 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import type { ShortcutResult } from '../shared/products'
 import { SPACE_ID_RE } from '../shared/spaceAppearance'
-import { desktopValue, detailOf, execArg, safeShortcutName, taken, xml } from './productShortcut'
+import { desktopValue, detailOf, execArg, safeShortcutName, serialShortcutWrite, taken, xml } from './productShortcut'
 
 /** 链接上标「开成独立窗」的参数。 */
 export const SPACE_WINDOW_PARAM = 'window'
@@ -31,41 +31,74 @@ const MAX_SUFFIX = 99
 
 export const isSpaceId = (id: unknown): id is string => typeof id === 'string' && SPACE_ID_RE.test(id)
 
-/** 快捷方式里的那条链接。id 之外没有可变部分 —— Space 名字只决定文件名,永远不进链接。 */
-export function spaceWindowLink(id: string): string {
-  if (!isSpaceId(id)) throw new Error(`Invalid space id: ${String(id)}`)
-  return `forsion://space/${id}?${SPACE_WINDOW_PARAM}=${SPACE_WINDOW_VALUE}`
+/**
+ * 「开成独立窗」的快捷方式有几种(Space / Unit,见 unitShortcut.ts),差别只在这张表里:链接的主机段、id 白名单、
+ * 系统标识的前缀、plist 里记 id 的键。落盘、图标、同名加序号、Windows .lnk 都是同一套。
+ * ⚠️ 两种的图标 / 名字记录各放各的目录(调用方传 iconDir):文件名只按 id 算,Space id 和设备 id 可能长得一样。
+ */
+export interface WindowShortcutKind {
+  /** forsion://<host>/<id>?window=standalone */
+  host: string
+  isId: (id: unknown) => id is string
+  /** Windows AppUserModelID 前缀(只许字母数字和点)。 */
+  aumid: string
+  /** macOS 小 .app 的 CFBundleIdentifier 前缀。 */
+  bundle: string
+  /** Info.plist 里记 id 的键。 */
+  plistKey: string
+  /** launch 脚本里的一行注释(固定文案,不含任何名字)。 */
+  scriptComment: string
 }
 
-/** 这条 forsion:// 是不是「把某个 Space 开成独立窗」;是 → Space id,否则 null(交回普通 deep link 流程)。 */
-export function spaceWindowIdFromUrl(raw: unknown): string | null {
+export const SPACE_SHORTCUT: WindowShortcutKind = {
+  host: 'space',
+  isId: isSpaceId,
+  aumid: 'Forsion.Space',
+  bundle: 'net.forsion.space-shortcut',
+  plistKey: 'ForsionSpaceId',
+  scriptComment: '# Forsion Space shortcut: opens this Space in its own Forsion window.',
+}
+
+/** 快捷方式里的那条链接。id 之外没有可变部分 —— 名字只决定文件名,永远不进链接。 */
+export function windowShortcutLink(kind: WindowShortcutKind, id: string): string {
+  if (!kind.isId(id)) throw new Error(`Invalid ${kind.host} id: ${String(id)}`)
+  return `forsion://${kind.host}/${id}?${SPACE_WINDOW_PARAM}=${SPACE_WINDOW_VALUE}`
+}
+
+/** 这条 forsion:// 是不是「把某个 <kind> 开成独立窗」;是 → id,否则 null(交回普通 deep link 流程)。 */
+export function windowShortcutIdFromUrl(kind: WindowShortcutKind, raw: unknown): string | null {
   if (typeof raw !== 'string' || raw.length > 4096) return null
   let u: URL
   try { u = new URL(raw.trim()) } catch { return null }
-  if (u.protocol !== 'forsion:' || u.hostname.toLowerCase() !== 'space') return null
+  if (u.protocol !== 'forsion:' || u.hostname.toLowerCase() !== kind.host) return null
   if (u.searchParams.get(SPACE_WINDOW_PARAM) !== SPACE_WINDOW_VALUE) return null
   let id: string
   try { id = decodeURIComponent(u.pathname.replace(/^\//, '')) } catch { return null }
-  return isSpaceId(id) ? id : null
+  return kind.isId(id) ? id : null
 }
 
 /** 太长的 id 换成哈希,保证系统标识的长度上限(Windows AUMID ≤128)。 */
 const shortId = (id: string, max: number): string =>
   id.length <= max ? id : createHash('sha256').update(id).digest('hex').slice(0, 32)
 
-/** Windows:Space 窗与它的 .lnk 共用的 AppUserModelID(任务栏单独成组)。只用字母数字和点。 */
-export function spaceAppUserModelId(id: string): string {
-  return `Forsion.Space.${shortId(id, 100).replace(/[^A-Za-z0-9.]/g, '-')}`
+/** Windows:独立窗与它的 .lnk 共用的 AppUserModelID(任务栏单独成组)。只用字母数字和点。 */
+export function windowShortcutAppUserModelId(kind: WindowShortcutKind, id: string): string {
+  return `${kind.aumid}.${shortId(id, 100).replace(/[^A-Za-z0-9.]/g, '-')}`
 }
 
 /** macOS:小 .app 的 CFBundleIdentifier(只许字母数字、连字符、点)。 */
-export function spaceBundleId(id: string): string {
-  return `net.forsion.space-shortcut.${shortId(id, 100).replace(/[^A-Za-z0-9.-]/g, '-')}`
+export function windowShortcutBundleId(kind: WindowShortcutKind, id: string): string {
+  return `${kind.bundle}.${shortId(id, 100).replace(/[^A-Za-z0-9.-]/g, '-')}`
 }
 
+export const spaceWindowLink = (id: string): string => windowShortcutLink(SPACE_SHORTCUT, id)
+export const spaceWindowIdFromUrl = (raw: unknown): string | null => windowShortcutIdFromUrl(SPACE_SHORTCUT, raw)
+export const spaceAppUserModelId = (id: string): string => windowShortcutAppUserModelId(SPACE_SHORTCUT, id)
+export const spaceBundleId = (id: string): string => windowShortcutBundleId(SPACE_SHORTCUT, id)
+
 /** 图标文件在 userData 下的位置(Windows .ico / Linux .png;mac 的图标装在 .app 里,不落这里)。 */
-export function spaceIconFile(iconDir: string, id: string, platform: NodeJS.Platform): string | null {
-  if (!isSpaceId(id)) return null
+export function spaceIconFile(iconDir: string, id: string, platform: NodeJS.Platform, kind: WindowShortcutKind = SPACE_SHORTCUT): string | null {
+  if (!kind.isId(id)) return null
   const ext = platform === 'win32' ? '.ico' : platform === 'linux' ? '.png' : null
   if (!ext) return null
   return path.join(iconDir, `${shortId(id, 100)}${ext}`)
@@ -132,6 +165,17 @@ export function buildIco(images: SizedPng[]): Buffer {
   return Buffer.concat([header, dir, ...list.map((i) => i.png)])
 }
 
+/** 渲染层交来的图标(PNG data URL)→ PNG 字节。不是 PNG、或宽高超过 2048 → null。
+ *  解码前先读 PNG 头里的宽高:压缩后 1 MB 的图可以解出上 GB 的像素,主进程会被拖死(Codex 评审)。渲染层只画 1024。 */
+export function iconPngFromDataUrl(raw: unknown, maxChars = 8 * 1024 * 1024): Buffer | null {
+  const head = 'data:image/png;base64,'
+  if (typeof raw !== 'string' || raw.length > maxChars || !raw.startsWith(head)) return null
+  const buf = Buffer.from(raw.slice(head.length), 'base64')
+  const sane = buf.length > 24 && buf.readUInt32BE(0) === 0x89504e47 && buf.toString('ascii', 12, 16) === 'IHDR'
+    && buf.readUInt32BE(16) <= 2048 && buf.readUInt32BE(20) <= 2048
+  return sane ? buf : null
+}
+
 // ── 规划:算出该平台要落什么(纯函数)──────────────────────────────────────────────
 
 export type SpaceShortcutPlan =
@@ -156,7 +200,11 @@ export interface SpaceShortcutOpts {
 
 /** 返回 null = 平台不支持。名字(stem)不含扩展名,写盘时再拼后缀与 ` (n)`。 */
 export function spaceShortcutPlan(platform: NodeJS.Platform, opts: SpaceShortcutOpts): SpaceShortcutPlan | null {
-  const link = spaceWindowLink(opts.id)
+  return windowShortcutPlan(SPACE_SHORTCUT, platform, opts)
+}
+
+export function windowShortcutPlan(kind: WindowShortcutKind, platform: NodeJS.Platform, opts: SpaceShortcutOpts): SpaceShortcutPlan | null {
+  const link = windowShortcutLink(kind, opts.id)
   const stem = safeShortcutName(opts.name, opts.fallbackName)
   if (platform === 'darwin') {
     const plist = [
@@ -165,7 +213,7 @@ export function spaceShortcutPlan(platform: NodeJS.Platform, opts: SpaceShortcut
       '<plist version="1.0">',
       '<dict>',
       '\t<key>CFBundleExecutable</key>\t<string>launch</string>',
-      `\t<key>CFBundleIdentifier</key>\t<string>${xml(spaceBundleId(opts.id))}</string>`,
+      `\t<key>CFBundleIdentifier</key>\t<string>${xml(windowShortcutBundleId(kind, opts.id))}</string>`,
       `\t<key>CFBundleName</key>\t<string>${xml(stem)}</string>`,
       `\t<key>CFBundleDisplayName</key>\t<string>${xml(stem)}</string>`,
       '\t<key>CFBundlePackageType</key>\t<string>APPL</string>',
@@ -174,14 +222,14 @@ export function spaceShortcutPlan(platform: NodeJS.Platform, opts: SpaceShortcut
       ...(opts.icns ? ['\t<key>CFBundleIconFile</key>\t<string>AppIcon</string>'] : []),
       '\t<key>LSUIElement</key>\t<true/>',
       '\t<key>NSHighResolutionCapable</key>\t<true/>',
-      `\t<key>ForsionSpaceId</key>\t<string>${xml(opts.id)}</string>`,
+      `\t<key>${kind.plistKey}</key>\t<string>${xml(opts.id)}</string>`,
       '</dict>',
       '</plist>',
     ].join('\n') + '\n'
-    // id 已过 SPACE_ID_RE(只有字母数字 . _ -),放进双引号里没有可展开的字符;名字绝不进脚本。
+    // id 已过该种类的白名单(只有字母数字 . _ -),放进双引号里没有可展开的字符;名字绝不进脚本。
     const script = [
       '#!/bin/sh',
-      '# Forsion Space shortcut: opens this Space in its own Forsion window.',
+      kind.scriptComment,
       `exec /usr/bin/open "${link}"`,
     ].join('\n') + '\n'
     const files: Array<{ rel: string; content: string | Buffer; mode?: number }> = [
@@ -193,7 +241,7 @@ export function spaceShortcutPlan(platform: NodeJS.Platform, opts: SpaceShortcut
     return { kind: 'bundle', name: stem, files }
   }
   if (platform === 'win32') {
-    return { kind: 'lnk', name: stem, args: `"${link}"`, description: stem, appUserModelId: spaceAppUserModelId(opts.id) }
+    return { kind: 'lnk', name: stem, args: `"${link}"`, description: stem, appUserModelId: windowShortcutAppUserModelId(kind, opts.id) }
   }
   if (platform === 'linux') {
     const lines = [
@@ -224,6 +272,8 @@ export interface CreateSpaceShortcutDeps {
   /** 渲染层画好的源图,按尺寸给出 PNG(宿主用 nativeImage 缩放);没有图标就不传。 */
   iconPng?: (size: number) => Buffer | undefined
   writeShortcutLink?: (path: string, options: { target: string; args: string; description?: string; icon?: string; iconIndex?: number; appUserModelId?: string }) => boolean
+  /** 排到队头、动盘之前再核一次请求还作不作数(设备快捷方式:发起时的账号没换);false = 什么都不写。 */
+  stillCurrent?: () => boolean
 }
 
 const pngs = (sizes: number[], iconPng: CreateSpaceShortcutDeps['iconPng']): SizedPng[] => {
@@ -255,18 +305,27 @@ async function writeIconFile(file: string | null, data: Buffer | undefined): Pro
  * 在系统桌面创建 Space 快捷方式。同名绝不覆盖,改用 `名字 (1)`、`(2)`……
  * dev 下恒拒:未打包时 execPath 是裸 electron,forsion:// 也只在安装版注册。
  */
-/** 一次只建一个:Windows 那条是「先查名字没占、再写 .lnk」(writeShortcutLink 会覆盖),两个同名 Space 并发会写到同一个文件上(Codex 评审)。 */
-let queue: Promise<unknown> = Promise.resolve()
+/** 一次只建一个:Windows 那条是「先查名字没占、再写 .lnk」(writeShortcutLink 会覆盖),两个同名并发会写到同一个文件上(Codex 评审)。
+ *  造物 / Space / 设备三种快捷方式排同一条队列(productShortcut.serialShortcutWrite)。 */
 export function createSpaceShortcut(space: { id: string; name: string }, deps: CreateSpaceShortcutDeps): Promise<ShortcutResult> {
-  const run = queue.then(() => createSpaceShortcutNow(space, deps))
-  queue = run.catch(() => {})
-  return run
+  return createWindowShortcut(SPACE_SHORTCUT, space, deps) as Promise<ShortcutResult>
 }
 
-async function createSpaceShortcutNow(space: { id: string; name: string }, deps: CreateSpaceShortcutDeps): Promise<ShortcutResult> {
+/** 排到队头真正开始写之前,stillCurrent() 说「请求已经不作数了」(比如发起时的账号已经换掉)→ 什么都不写。 */
+export type WindowShortcutResult = ShortcutResult | { ok: false; code: 'account_changed' }
+
+/** 同上,任一种类。 */
+export function createWindowShortcut(kind: WindowShortcutKind, space: { id: string; name: string }, deps: CreateSpaceShortcutDeps): Promise<WindowShortcutResult> {
+  return serialShortcutWrite(() => createWindowShortcutNow(kind, space, deps))
+}
+
+async function createWindowShortcutNow(kind: WindowShortcutKind, space: { id: string; name: string }, deps: CreateSpaceShortcutDeps): Promise<WindowShortcutResult> {
+  /** 请求还作不作数:队头核一次,之后每个平台**第一次往桌面动盘的紧前面**再核一次(中间隔着 stat / taken 这些异步等待)。 */
+  const stale = (): boolean => !!deps.stillCurrent && !deps.stillCurrent()
+  if (stale()) return { ok: false, code: 'account_changed' }
   if (!deps.isPackaged) return { ok: false, code: 'unpackaged' }
   const platform = deps.platform ?? process.platform
-  if (!isSpaceId(space.id)) return { ok: false, code: 'not_found' }
+  if (!kind.isId(space.id)) return { ok: false, code: 'not_found' }
   let plan: SpaceShortcutPlan | null
   let iconPath: string | undefined
   try {
@@ -276,11 +335,11 @@ async function createSpaceShortcutNow(space: { id: string; name: string }, deps:
       icns = list.length ? buildIcns(list) : undefined
     } else if (platform === 'win32') {
       const list = pngs(WIN_ICON_SIZES, deps.iconPng)
-      iconPath = await writeIconFile(spaceIconFile(deps.iconDir, space.id, platform), list.length ? buildIco(list) : undefined)
+      iconPath = await writeIconFile(spaceIconFile(deps.iconDir, space.id, platform, kind), list.length ? buildIco(list) : undefined)
     } else if (platform === 'linux') {
-      iconPath = await writeIconFile(spaceIconFile(deps.iconDir, space.id, platform), deps.iconPng?.(LINUX_ICON_SIZE))
+      iconPath = await writeIconFile(spaceIconFile(deps.iconDir, space.id, platform, kind), deps.iconPng?.(LINUX_ICON_SIZE))
     }
-    plan = spaceShortcutPlan(platform, {
+    plan = windowShortcutPlan(kind, platform, {
       id: space.id, name: space.name, fallbackName: deps.fallbackName,
       execPath: deps.execPath, appImage: deps.appImage, icns, iconPath,
     })
@@ -298,6 +357,7 @@ async function createSpaceShortcutNow(space: { id: string; name: string }, deps:
         // writeShortcutLink 的 create 会覆盖:先查再写(同造物那条,竞态接受)。
         if (await taken(target)) continue
         if (!deps.writeShortcutLink) return { ok: false, code: 'error', detail: 'Shortcut writer is unavailable' }
+        if (stale()) return { ok: false, code: 'account_changed' }
         const options = {
           target: deps.execPath, args: plan.args, description: plan.description, appUserModelId: plan.appUserModelId,
           ...(iconPath ? { icon: iconPath, iconIndex: 0 } : {}),
@@ -308,6 +368,7 @@ async function createSpaceShortcutNow(space: { id: string; name: string }, deps:
         return { ok: true, path: target }
       }
       if (plan.kind === 'file') {
+        if (stale()) return { ok: false, code: 'account_changed' }
         const fh = await fs.open(target, 'wx', plan.mode ?? 0o644).catch((e: NodeJS.ErrnoException) => {
           if (e.code === 'EEXIST') return null
           throw e
@@ -320,6 +381,7 @@ async function createSpaceShortcutNow(space: { id: string; name: string }, deps:
         return { ok: true, path: target }
       }
       // .app 是目录:mkdir 不带 recursive,已存在(文件 / 目录 / 软链)一律 EEXIST → 换下一个名字。
+      if (stale()) return { ok: false, code: 'account_changed' }
       try { await fs.mkdir(target) } catch (e) {
         if ((e as NodeJS.ErrnoException).code === 'EEXIST') continue
         throw e

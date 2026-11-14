@@ -23,6 +23,7 @@ import { imageStudioAvailable, imageStudioSpace } from './builtins/imageStudio'
 import { artificialAvailable, artificialSpace } from './builtins/artificial'
 import { homeSlotChoice, homeSlotSpaceId, installHomeSlot } from './homeSlot'
 import { windowKind } from './windowKind'
+import { isDelegatedAdmin } from './services/delegatedAdmin'
 
 const ws = () => useWorkspace.getState()
 const app = () => useApp.getState()
@@ -50,6 +51,8 @@ export const launchRestored = (): boolean => (window as { __forsionRestored?: bo
  *  第二处(用户 Space 异步装载完的补定位)漏了的话,主位/指定档指向一个 L0 用户 Space 时,
  *  冷启动回落产品默认、补定位又认不出 → 永远进不去那个 Space,而且不报错。 */
 export function resolveStartupTarget(lastExit: string): string {
+  // 委托管理员只有 Agent 管理这一个 Space:上次停在哪、主位槽指着谁都不算(那些 Space 在这个角色下不注册)。
+  if (isDelegatedAdmin()) return agentsSpace.id
   // 手机系统还原(后台被杀 / 渲染进程被收后回来,原生 AppActivity 注入的标记):人是「回来」不是「新开」,回到上次那个 Space。
   if (launchRestored()) return lastExit
   const pref = startupSpacePref()
@@ -65,6 +68,7 @@ export function resolveStartupTarget(lastExit: string): string {
  *   · 补定位不算完(settleAsyncStartupSpace)—— 点名的那个一注册就把人带过去。
  *  「上次退出」档不在此列:目标没注册时 resolveStartupTarget 原样返回那个 id,两个消费点本来就在等它。 */
 export function awaitedStartupSpace(): string | null {
+  if (isDelegatedAdmin()) return null
   const pref = startupSpacePref()
   if (pref === LAST_EXIT_SPACE) return null
   const named = pref === HOME_SLOT_SPACE ? homeSlotChoice() : pref
@@ -280,7 +284,8 @@ const publicSpace: SpaceDefinition = {
  * 没有安装清单的旧桌面/Web 档案保留原有能力判断。 */
 export const AMADEUS_ENABLED = PRODUCT.nativeFeatures === undefined || hasNativeFeature('amadeus')
 // 产品档案过滤 × 运行时能力门控 叠加:档案没点名的 Space 直接不注册(单品变体);点名的仍受能力闸约束。
-const SPACES: SpaceDefinition[] = [
+// 委托管理员:只注册 Agent 管理(别的 Space 的数据面全在那台设备的白名单外)。
+const SPACES: SpaceDefinition[] = isDelegatedAdmin() ? (hasNativeFeature('tangu') ? [agentsSpace] : []) : [
   // 主页也是**内置插件**(builtins/homepage:Space + homepage 视图随插件启停)。排第一 = ribbon 顶格,
   // 与旧 Forsion Desktop 的「先看到桌面首页」一致;插件页关掉后下次启动即整条不出现。
   ...(homepageAvailable() && builtinEnabled('home') ? [homepageSpace] : []),
@@ -317,7 +322,8 @@ export function registerSpaces(): void {
   }
   // 主位槽:把它指着的那个 Space 的图标从上区搬到中间的 home 槽(改 side,不动持久顺序)。
   // 必须在上面那轮 addRibbonIcon 之后 —— 它靠 upsert 覆盖刚注册的那一份。
-  installHomeSlot()
+  // 委托管理员只有一个 Space、Ribbon 只读:不装主位槽(它的右键菜单会改主位指向)
+  if (!isDelegatedAdmin()) installHomeSlot()
   // 活动 Space 不在本产品档案里 → 回落档案默认(单品变体首启:localStorage 可能存着全家桶的 'tangu')。
   // ⚠️ 只改内存,**不写 localStorage**:此刻不在表里的 id 多半是异步注册的用户 / 插件 Space,盘上那个值是「上次退出在哪」
   // 的唯一记录(下次启动的 BOOT_ACTIVE_SPACE_ID)。写回由真正定了位的人做 —— bootstrapEngine 的 setActiveSpaceCold、

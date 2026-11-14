@@ -1,4 +1,5 @@
 import { amadeusAvailable, sessionsAvailable } from './features/runtime'
+import { isDelegatedAdmin } from './services/delegatedAdmin'
 /** 全局快速查找(Notion quick-find 式,居中悬浮):按名称模糊搜 笔记 / 文件 / chat 会话,回车打开。
  *  另按正文搜会话:「对话内容」一段 + 右边预览最后 3 轮,⌘↵ 跳到命中那条(10-24 借鉴 Comma §2.8)。
  *  空态显示最近(localStorage 记录,回退最近更新的会话)。ribbon 搜索图标 / ⌘P 唤起;挂在 Root。
@@ -149,6 +150,7 @@ export const useQuickFind = create<QFState>((set, get) => ({
   open: false,
   pick: null,
   openPalette: () => {
+    if (isDelegatedAdmin()) return // 委托管理员:搜的是会话 / 笔记 / 文件,全在那台设备的白名单外
     if (!get().open) { searchPicked = false; countTelemetry('searchOpen') }
     set({ open: true, pick: null })
   },

@@ -3,6 +3,7 @@ import { mkdtemp, mkdir, writeFile, rm, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { startBasicUnit, loadPackages } from '../../unit/host'
+import { signProxyCaller } from './unitCaller'
 
 describe('Basic Unit public projection', () => {
   it('rejects unsigned code claiming the official Extend identity before publication', async () => {
@@ -109,5 +110,36 @@ describe('Basic Unit public projection', () => {
       await symlink(join(root, 'private.js'), join(root, 'plugin/linked.js'))
       await expect(loadPackages([join(root, 'plugin')])).rejects.toThrow('escapes')
     } finally { await rm(root, { recursive: true, force: true }) }
+  })
+})
+
+describe('Basic Unit delegated admin switch (unit.json cloud.delegatedAdmin)', () => {
+  const start = async (cloud?: { delegatedAdmin?: boolean }) => {
+    const root = await mkdtemp(join(tmpdir(), 'unit-delegated-switch-'))
+    await mkdir(join(root, 'web'), { recursive: true })
+    await writeFile(join(root, 'web/index.html'), '<html><head></head><body></body></html>')
+    const handle = await startBasicUnit({ instanceId: 'delegated-unit', name: 'Unit', version: '3.0.0', dataDir: join(root, 'data'), port: 0,
+      basePath: '/web/', plugins: [], webDist: join(root, 'web'), workspace: { mode: 'local', path: join(root, 'ws') }, ...(cloud ? { cloud } : {}) })
+    const base = `http://127.0.0.1:${handle.port}`
+    let n = 0
+    const asAdmin = (path: string) => fetch(base + path, { headers: { 'x-unit-internal': handle.internalSecret,
+      'x-unit-caller': signProxyCaller(handle.proxyCallerKey, { dispatchId: `d-${++n}`, method: 'GET', target: path, operator: { uid: 'u-1', role: 'admin', name: 'Admin' } }) } })
+    return { asAdmin, close: async () => { await handle.close(); await rm(root, { recursive: true, force: true }) } }
+  }
+  it('on: an admin operator claim gets the deny-by-default tier (session reads refused before the engine)', async () => {
+    const u = await start({ delegatedAdmin: true })
+    try {
+      const r = await u.asAdmin('/web/engine/agent/sessions')
+      expect(r.status).toBe(403)
+      expect((await r.json()).code).toBe('LOCAL_ONLY')
+      expect(await (await u.asAdmin('/web/')).text()).toContain('<base href="./">')
+    } finally { await u.close() }
+  })
+  it('off by default: the same claim is ignored and the request goes the ordinary relay way', async () => {
+    const u = await start()
+    try {
+      const r = await u.asAdmin('/web/engine/agent/sessions')
+      expect(r.status).toBe(503) // no engine in this Unit: it got past the allow list, as any relayed read does today
+    } finally { await u.close() }
   })
 })

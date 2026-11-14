@@ -93,6 +93,7 @@ import { phoneGuide } from './onboarding/phoneGuide'
 import { ComputerHistorySettings, computerHistoryApi } from './ComputerHistorySettings'
 import { TrashSettings } from './TrashSettings'
 import { RemoteSessionsSettings, remoteSessionsApi } from './RemoteSessionsSettings' // P1-K4
+import { DELEGATED_SETTINGS_TABS, isDelegatedAdmin } from '../services/delegatedAdmin'
 import { UnitSettings } from './UnitSwitcher'
 import { debugFireToast } from '../achievements/store'
 import { useTheme } from '../stores/themeStore'
@@ -570,7 +571,9 @@ export const SettingsModal: React.FC<{
   // 引擎插件清单(异步到);「电脑操作」的一级页跟着它在不在。
   const [plugins, setPlugins] = useState<PluginInfo[] | null>(null)
   const computerUse = (plugins || []).find((pl) => pl.id === COMPUTER_USE_PLUGIN && pl.enabled && pl.settings)
-  const tabItems = [
+  // 委托管理员只管 Agent:设置里只留 Agent 与技能两页(别的页的数据面全在那台设备的白名单外;见 services/delegatedAdmin.ts)。
+  const delegatedTabs = DELEGATED_SETTINGS_TABS.map((id) => [id, t(`settings.tab.${id}`)] as [Tab, string])
+  const tabItems = isDelegatedAdmin() ? delegatedTabs : [
     // = 连接 + Forsion 合并。⚠️ 云端 Web / 移动端(webShim、mobileShim 都是 cloudWeb:true 且不给
     // backendStatus)下这一页**每个块都是 false**——连接项全是桌面/自建后端专属——列出来点进去是白板,
     // 而它还是默认落点。整页无正文就别列。
@@ -1229,7 +1232,7 @@ export const SettingsModal: React.FC<{
     notifications: 'settings.page.notificationsDescription',
     statusbar: 'settings.page.statusbarDescription',
     model: 'settings.page.modelDescription',
-    agents: 'settings.page.agentsDescription',
+    agents: isDelegatedAdmin() ? 'delegatedAdmin.agentsDescription' : 'settings.page.agentsDescription',
     skills: 'globalSkills.intro',
     connectors: 'connectors.pageHint',
     mcp: 'settings.page.mcpDescription',
@@ -1283,7 +1286,8 @@ export const SettingsModal: React.FC<{
     ],
     // 主题**刻意不设中分类**(用户拍板):设计语言/配色/明暗/界面大小/阴影/玻璃/光标 各自一张小卡就够,
     // 硬分成三栏反而把「换个主题顺手调下明暗」拆成两次点击。别再加回来。
-    agents: [
+    // 委托管理员:后台 Agent(special/config)与本机 Agent CLI(engines)都在那台设备的白名单外,只留名册
+    agents: isDelegatedAdmin() ? [['ag-roster', t('agentSettings.rosterTitle')]] : [
       ['ag-roster', t('agentSettings.rosterTitle')],
       ['ag-special', t('settings.sub.specialAgents')],
       ['ag-clis', t('settings.tab.agentClis')],

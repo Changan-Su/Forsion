@@ -161,7 +161,9 @@ describe('能力面生命周期', () => {
     service.testConnection.mockResolvedValue({ ok: false, message: 'offline' })
     const authListeners = new Set<() => void>()
     const cfg = { mode, backendUrl: 'http://127.0.0.1:1', token: 'tok', modelId: '', backendState: { state: 'ready' } }
-    vi.stubGlobal('window', { tangu: {
+    // resetAccountQuotaScope / publishAccountQuota 在切号时发窗口事件:桩得是个真 EventTarget
+    const events = new EventTarget()
+    vi.stubGlobal('window', { addEventListener: events.addEventListener.bind(events), removeEventListener: events.removeEventListener.bind(events), dispatchEvent: events.dispatchEvent.bind(events), tangu: {
       getConfig: () => Promise.resolve({ ...cfg }),
       onBackendStatus: () => () => {},
       onAuthChanged: (cb: () => void) => { authListeners.add(cb); return () => authListeners.delete(cb) },

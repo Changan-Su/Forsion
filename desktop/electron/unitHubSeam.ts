@@ -12,8 +12,9 @@ export interface UnitPairing { unitId: string; secret: string }
 /** 名册 caps.engine(手机据此分「在线但引擎没起」与「可以用」)。 */
 export type EngineCapsState = 'ready' | 'starting' | 'external' | 'stopped'
 export interface UnitHubStatus { running: boolean; connected: boolean; unitId: string | null; lastError: string | null }
-/** target = **实际发出**的本机 unitWeb 请求 URL(已规整);proxyCaller 是信封原样(不信形状)。 */
-export interface UnitCallerInput { dispatchId: string; method: string; target: URL; proxyCaller: unknown }
+/** target = **实际发出**的本机 unitWeb 请求 URL(已规整);proxyCaller / proxyOperator 是信封原样(不信形状)。
+ *  proxyOperator:hub 写的操作者声明(新版 Extend 每个信封都带这个键,没有时为 undefined;旧版 Extend 不带)。 */
+export interface UnitCallerInput { dispatchId: string; method: string; target: URL; proxyCaller: unknown; proxyOperator?: unknown }
 
 export interface UnitHubHostDeps {
   /** 云端地址(不含 /api)+ 当前 forsion_token,每次现读(续期自然生效)。 */
@@ -30,6 +31,9 @@ export interface UnitHubHostDeps {
   clearPairing(): Promise<void>
   /** 此刻的引擎态(caps 上报器每次现算,见 engineCapsState)。 */
   engineCaps(): EngineCapsState
+  /** 可选:此刻的能力声明(caps 上报的 features,每次现算)。给了就恒带(空数组用来收回声明);不给 = 上报体与旧版逐字节一致。
+   *  值变了调 UnitHubInstance.capsChanged(旧版 Extend 没有那个方法)。 */
+  capsFeatures?(): readonly string[]
   log(message: string): void
 }
 export interface UnitHubInstance {
@@ -40,6 +44,8 @@ export interface UnitHubInstance {
   status(): UnitHubStatus
   /** 引擎态可能变了(起停 / 崩溃 / 项目根种子做完):去抖后变了才报。 */
   engineChanged(): void
+  /** 能力声明可能变了(同 engineChanged 一条路)。旧版 Extend 没有:调前判 typeof === 'function'。 */
+  capsChanged?(): void
 }
 export type UnitHubFactory = (deps: UnitHubHostDeps) => UnitHubInstance
 
@@ -49,6 +55,18 @@ export function pairingWriters(isCurrent: () => boolean, write: (p: UnitPairing 
   return {
     savePairing: async (p) => { if (isCurrent()) await write(p) },
     clearPairing: async () => { if (isCurrent()) await write(null) },
+  }
+}
+
+/** 本机在名册里的 id(units:hostStatus 的 selfUnitId;渲染层拿它把本机从「我的设备」里滤掉)。
+ *  配对存在 device-secrets.json 里,和 secret 加密在同一条:互联关着时**不去解密**(读 = 可能弹钥匙串,见 refreshUnitHost),
+ *  所以只记这次运行里读到 / 登记到的那份。没读到过 = 不知道(null),渲染层照「不知道」处理、不滤;
+ *  清配对(重新登记)时留着旧值:旧 id 若还在名册里,它也确实是本机留下的。 */
+export function selfUnitIdMemo(): { note(p: UnitPairing | null | undefined): void; get(): string | null } {
+  let id: string | null = null
+  return {
+    note: (p) => { if (p && typeof p.unitId === 'string' && p.unitId) id = p.unitId },
+    get: () => id,
   }
 }
 
