@@ -655,6 +655,8 @@ declare global {
       termsStatus?(): Promise<{ status: number; json?: any }>
       /** 网页版:公开会员方案列表(会员徽章的配色与中英文名);桌面 / Android 走 cloudFetch */
       membershipPlans?(): Promise<{ status: number; json?: any }>
+      /** 网页版:公开的可购买方案(含各方案 perks.modelMultiplierCap,模型选择器据此写「X 起可用」);桌面 / Android 走 cloudFetch('/payment/offerings') */
+      membershipOfferings?(): Promise<{ status: number; json?: any }>
       termsAgree?(version: string): Promise<{ status: number; json?: any }>
       /** Forsion Extend 渲染半身调它自己主进程半身注册的通道;宿主通道一律拒。没装载 Extend 就没有这个键。 */
       cloudInvoke?(channel: string, ...args: unknown[]): Promise<unknown>

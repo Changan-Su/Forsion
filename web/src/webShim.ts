@@ -197,6 +197,8 @@ export async function installWebShim(): Promise<boolean> {
     termsAgree: (version: string) => cloudJson('POST', '/auth/terms/agree', { version }),
     // 会员徽章(components/tierBadgeStyles):配色与中英文方案名
     membershipPlans: () => cloudJson('GET', '/membership/plans'),
+    // 模型选择器锁住的模型写「X 起可用」(services/upgradeTier):公开方案里的各档倍率上限
+    membershipOfferings: () => cloudJson('GET', '/payment/offerings'),
   }
 
   // The same transport guard serves regular Web and Unit visitors, using the

@@ -1144,6 +1144,13 @@ if (new URLSearchParams(location.search).has('dock')) {
     window.tangu = {
       ...(window.tangu || {}),
       accountQuota: async () => ({ status: 200, json: { dailyLimit: 100, weeklyLimit: 100, modelMultiplierCap: cap } }),
+      // 公开方案的各档上限(同生产形状):锁住的模型写「X 起可用」;?tierlock&nooffer 扮旧服务端 / 拿不到,回落「升级后可用」
+      ...(modelPillParams.has('nooffer') ? {} : { membershipOfferings: async () => ({ status: 200, json: { packages: [], membershipPlans: [
+        { tier: 'plus', name: 'Plus', perks: { modelMultiplierCap: 2.5 } },
+        { tier: 'pro', name: 'Pro', perks: { modelMultiplierCap: 5 } },
+        { tier: 'max', name: 'Max', perks: { modelMultiplierCap: -1 } },
+        { tier: 'ultra', name: 'Ultra', perks: { modelMultiplierCap: -1 } },
+      ] } }) }),
       openPayCenter: async () => { (window as unknown as { __payOpened?: number }).__payOpened = ((window as unknown as { __payOpened?: number }).__payOpened || 0) + 1; return { ok: true } },
     } as never
   }
