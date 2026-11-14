@@ -7,7 +7,7 @@
  *   · allowed routes answer fixtures; everything else answers 403 LOCAL_ONLY and is recorded as an "outside hit".
  *
  * Asserts: lands on Agent management; walk list → edit description + save → disable a skill → add a schedule entry →
- * create an Agent; zero outside hits; no local-only notice on the page; no notes / chat / calendar in the ribbon;
+ * create an Agent → upload its avatar → delete it (no undo offered); idle past the poll window; owner layout untouched; zero outside hits; no local-only notice on the page; no notes / chat / calendar in the ribbon;
  * no Hooks / MCP in settings; no full-page reload.
  *
  * Run: cd desktop && npx tsx scripts/unit-delegated-admin.e2e.ts
@@ -22,6 +22,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { chromium, type Page, type Route } from 'playwright-core'
 import { delegatedEngineAllowed, delegatedNonEngineAllowed } from '../electron/unitWeb'
+import { validateEntryInput } from '../../tangu-agent/src/services/agentSchedule'
 
 const WEB = path.resolve(import.meta.dirname, '../../web')
 const SHOT_DIR = process.env.SHOT_DIR || ''
@@ -84,6 +85,7 @@ const catalog = [
   { key: 'user:summarize', id: 'local:summarize', slug: 'summarize', name: 'Summarize', description: 'Summarize long text', scope: 'user', provenance: 'user', availability: 'available', disabled: false, disabledForAgent: false, path: '/x/skills/summarize' },
   { key: 'user:translate', id: 'local:translate', slug: 'translate', name: 'Translate', description: 'Translate text', scope: 'user', provenance: 'user', availability: 'available', disabled: false, disabledForAgent: false, path: '/x/skills/translate' },
 ]
+const scheduleRejects: string[] = []
 const schedules: Record<string, Array<Record<string, unknown>>> = { xyra: [], writer: [] }
 
 function fixture(method: string, p: string, body: unknown): { status?: number; json?: unknown; text?: string; contentType?: string } {
@@ -108,7 +110,11 @@ function fixture(method: string, p: string, body: unknown): { status?: number; j
     Object.assign(a, body as object)
     return { json: { agent: a } }
   }
-  if (m && method === 'DELETE') return { json: { ok: true } }
+  if (m && method === 'DELETE') {
+    const i = agents.findIndex((x) => x.slug === m![1])
+    if (i >= 0) agents.splice(i, 1)
+    return { json: { ok: true, trashId: 'trash-1' } }
+  }
   if (/^\/agent\/agents\/[^/]+\/avatar$/.test(e)) return method === 'GET' ? { status: 404, json: { detail: 'no avatar' } } : { json: { ok: true, avatar: 'avatar.png' } }
   if (e === '/agent/agents-meta') return { json: { defaultSlug: 'xyra', order: [] } }
   if (e === '/agent/tool-catalog') return { json: { tools: [{ name: 'read_file', description: 'Read a file' }, { name: 'web_search', description: 'Search the web' }] } }
@@ -125,6 +131,9 @@ function fixture(method: string, p: string, body: unknown): { status?: number; j
   m = e.match(/^\/agent\/special\/schedule\/([^/]+)\/entries$/)
   if (m && method === 'POST') {
     const b = body as Record<string, unknown>
+    // Same validation the engine runs on this route, so a malformed form body fails here too.
+    const v = validateEntryInput(b as Parameters<typeof validateEntryInput>[0], { slug: m[1] })
+    if (!v.ok) { scheduleRejects.push(v.error); return { status: 400, json: { detail: v.error } } }
     const entry = { id: `e${Date.now()}`, name: '', date: '', repeat: '', auto: false, prompt: '', description: '', todo: false, lastRun: '', ...b }
     ;(schedules[m[1]] ||= []).push(entry)
     return { json: { entry, created: true } }
@@ -192,7 +201,12 @@ async function main(): Promise<void> {
       try {
         localStorage.setItem('tangu_locale', 'zh')
         // A stale layout from an earlier owner session must not pull the shell into notes.
-        if (!sessionStorage.getItem('e2e-seeded')) { localStorage.setItem('forsion_tangu_active_space', 'amadeus'); sessionStorage.setItem('e2e-seeded', '1') }
+        // The owner's saved layout (same browser) must be neither restored into this role nor overwritten by it.
+        if (!sessionStorage.getItem('e2e-seeded')) {
+          localStorage.setItem('forsion_tangu_active_space', 'amadeus')
+          localStorage.setItem('tangu2_layout_v4', 'OWNER-LAYOUT')
+          sessionStorage.setItem('e2e-seeded', '1')
+        }
       } catch { /* ignore */ }
     })
     // Pathname prefix only: vite serves modules from paths like /@fs/…/services/engine/targets.ts.
@@ -305,6 +319,7 @@ async function main(): Promise<void> {
     await page.locator('[data-schedule-form] input[name="name"]').fill('周五写周报')
     await page.locator('[data-schedule-form] input[name="date"]').fill('2026-11-20T09:00')
     await page.locator('[data-schedule-form] textarea[name="prompt"]').fill('写本周周报')
+    await shot(page, 'admin-schedule-form-light')
     await page.locator('[data-schedule-form] button[type="submit"]').click()
     await page.waitForSelector('[data-schedule-entry]', { timeout: 10_000 })
     check('schedule entry created', (schedules.writer || []).some((x) => x.name === '周五写周报'))
@@ -317,6 +332,33 @@ async function main(): Promise<void> {
     await page.locator('.agent-create-form button[type="submit"]').click()
     await page.waitForSelector('[data-agent-profile="researcher"]', { timeout: 10_000 })
     check('new Agent created', agents.some((a) => a.slug === 'researcher'))
+    check('schedule body passes the engine validator', scheduleRejects.length === 0, scheduleRejects.join(' ; '))
+
+    // Avatar upload on the new Agent
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', 'base64')
+    await page.locator('[data-agent-profile="researcher"] .agent-portrait-edit input[type="file"]').setInputFiles({ name: 'a.png', mimeType: 'image/png', buffer: png })
+    await page.waitForTimeout(1200)
+    check('avatar uploaded', writes.some((w) => w.method === 'POST' && w.path === '/engine/agent/agents/researcher/avatar'))
+
+    // Delete the new Agent: roster menu → confirm; the done notice offers no undo (restore is not reachable remotely)
+    await page.locator('.agents-roster-row', { hasText: '研究员' }).first().locator('.agents-roster-more').click()
+    await page.getByRole('menuitem', { name: '删除' }).click()
+    await page.locator('.un-dlg button[data-danger]').click()
+    await page.waitForTimeout(1200)
+    check('Agent deleted', !agents.some((a) => a.slug === 'researcher') && writes.some((w) => w.method === 'DELETE' && w.path === '/engine/agent/agents/researcher'))
+    check('delete notice offers no undo', (await page.getByRole('button', { name: '撤销' }).count()) === 0)
+
+    // Pollers: tab hidden → visible + focus, then idle past the 15s poll window; nothing outside may go out.
+    // (string form: tsx's keepNames wraps inline getters in __name, which the page doesn't have)
+    await page.evaluate(`(() => {
+      Object.defineProperty(document, 'visibilityState', { configurable: true, get() { return 'hidden' } })
+      document.dispatchEvent(new Event('visibilitychange'))
+      Object.defineProperty(document, 'visibilityState', { configurable: true, get() { return 'visible' } })
+      document.dispatchEvent(new Event('visibilitychange'))
+      window.dispatchEvent(new Event('focus'))
+    })()`)
+    await page.waitForTimeout(16_000)
+    check('visibility / focus / 16s idle: outside-whitelist hits = 0', outside.length === 0, outside.map((h) => `${h.method} ${h.path}`).join(' ; '))
 
     // Settings: only Agent / skills pages
     await page.locator('.rb').getByRole('button', { name: '设置' }).first().click()
@@ -347,6 +389,8 @@ async function main(): Promise<void> {
     await page.waitForTimeout(2500)
     await shot(page, 'admin-home-dark')
 
+    const layouts = await page.evaluate(() => ({ owner: localStorage.getItem('tangu2_layout_v4'), scoped: Object.keys(localStorage).filter((k) => k.startsWith('tangu2_layout_v4:account:')) }))
+    check('owner layout untouched; this role keeps its own', layouts.owner === 'OWNER-LAYOUT' && layouts.scoped.length > 0, JSON.stringify(layouts))
     const body = await page.locator('body').innerText()
     check('no local-only notice on the page', !body.includes(LOCAL_ONLY_ZH))
     check('outside-whitelist hits = 0', outside.length === 0, outside.map((h) => `${h.method} ${h.path}`).join(' ; '))

@@ -5,6 +5,7 @@
  */
 
 import type { UnitCloudCapabilities } from './unitCloudTransport'
+import { setContentStorageScope } from '@lcl/engine/contentStorageScope'
 
 interface UnitMeta { instanceId: string; name: string; version: string; projection?: 'public' | 'local'; inheritWebAccount?: boolean; localCapabilities?: { vault: boolean; engine: boolean; host: boolean }; browserStorage?: boolean; account?: { apiBase: string; loginPath: string }; capabilities?: UnitCloudCapabilities }
 
@@ -138,6 +139,9 @@ export async function installUnitShim(): Promise<boolean> {
     capabilities: meta.capabilities!, accountApiBase: meta.account!.apiBase, projectionBase: base().href,
     visitor: visitor!, pluginData: pluginData!,
   }) : null
+  // 委托管理员的布局另存一处(同一浏览器里设备主人存下的会话 / 笔记标签不会被还原进来,管理员摆的也不会盖掉主人的)。
+  // 必须先于 workspace 模块加载(它们在求值时定下布局键),loadApp 在本函数返回之后。
+  if (delegated) setContentStorageScope(`delegated-admin:${meta.instanceId}`)
   if (cloud?.amadeus) window.amadeus = cloud.amadeus
   else if (delegated) {
     // 笔记库整个在白名单外(vault/*、asset-token、events 都 403):不挂文件桥,笔记 / 日历 / 插件这些面也就不长出来。

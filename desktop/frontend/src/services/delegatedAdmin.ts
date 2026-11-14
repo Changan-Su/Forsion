@@ -17,6 +17,7 @@ registerMessages({
     zh: '远程管理时审批最高到「{mode}」，更宽的档只能在那台设备上设置',
     en: 'Remote admins can set approval up to “{mode}”. Wider modes can only be set on that device',
   },
+  'delegatedAdmin.agentsDescription': { zh: '管理这台设备上的 Agent 名册。', en: 'Manage the agent roster on this device.' },
   'delegatedAdmin.skillsReadOnly': {
     zh: '远程管理时这里只能查看。要给某个 Agent 启用或停用技能，请到该 Agent 的「技能」页',
     en: 'Remote admins can only view this list. To turn a skill on or off for an agent, use that agent’s Skills tab',

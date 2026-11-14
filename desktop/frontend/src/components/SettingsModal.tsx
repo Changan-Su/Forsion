@@ -1232,7 +1232,7 @@ export const SettingsModal: React.FC<{
     notifications: 'settings.page.notificationsDescription',
     statusbar: 'settings.page.statusbarDescription',
     model: 'settings.page.modelDescription',
-    agents: 'settings.page.agentsDescription',
+    agents: isDelegatedAdmin() ? 'delegatedAdmin.agentsDescription' : 'settings.page.agentsDescription',
     skills: 'globalSkills.intro',
     connectors: 'connectors.pageHint',
     mcp: 'settings.page.mcpDescription',

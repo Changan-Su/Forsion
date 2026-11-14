@@ -198,7 +198,8 @@ export function installEngine(activateTangu: (host: TanguHost) => void): void {
     // 点名的 Space(固定档 / 主位槽里的插件 Space)还没注册 → target 只是回落值:只改内存、不落盘(口径同 registerSpaces 的归一)。
     // 落了盘,补定位没赶上的那一程(下面)盘上就留着「上次退出 = 回落 Space」。人先停在回落 Space 上等它(parkOnStartupFallback)。
     const parked = awaitedStartupSpace() !== null
-    setActiveSpaceCold(target, !parked)
+    // 委托管理员恒落 Agent 管理:不把它写成「上次退出在哪」(那把键是设备主人的)
+    setActiveSpaceCold(target, !parked && !isDelegatedAdmin())
     adoptSpaceLayoutCold(lastExit, target)
     if (parked) parkOnStartupFallback()
   }

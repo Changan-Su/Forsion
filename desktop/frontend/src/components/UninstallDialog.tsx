@@ -254,7 +254,8 @@ export function AgentUninstallDialog({ slug, name: fallbackName, onDone, onClose
     onConfirm={(checks) => {
       const app = useApp.getState()
       void app.removeAgent(slug, { deleteChats: !!checks.deleteChats })
-        .then((r) => { notifyUninstalled(t('uninstall.agent.done', { name }), name, r.trashId ? { id: r.trashId, kind: 'agent', restorer: 'engine' } : null); onDone?.() })
+        // 委托管理员:回收站恢复在那台设备的白名单外 —— 不给「撤销」(删了要恢复,在那台设备本机的回收站里)
+        .then((r) => { notifyUninstalled(t('uninstall.agent.done', { name }), name, r.trashId && !isDelegatedAdmin() ? { id: r.trashId, kind: 'agent', restorer: 'engine' } : null); onDone?.() })
         .catch((e: any) => panelToast(/run_active/.test(String(e?.message || e)) ? t('uninstall.agent.teamBusy') : String(e?.message || e), true))
     }}
     onClose={onClose}
