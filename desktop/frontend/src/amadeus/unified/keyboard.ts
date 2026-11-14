@@ -38,6 +38,9 @@ import { toggleTaskTr } from '../blocks/markdown/taskList'
 import { buildBlockString } from '../blocks/markdown/mathLivePreview'
 import { removeEmptyColumnTr } from './columns'
 import { calloutKey, calloutOf } from '../blocks/markdown/callout'
+import { enterMode, enterOn } from '../blocks/markdown/enterMode'
+import { lineTriggerSplit } from '../blocks/markdown/blockTriggers'
+import { liftTarget } from '@milkdown/kit/prose/transform'
 
 /** 光标所在「顶层块」的深度:doc 或分栏 cell 的直接子节点(与 blockLayer / insertMd 同一判定)。 */
 export function topDepth($from: ResolvedPos): number {
@@ -132,8 +135,99 @@ const enterHeadingToParagraph: Command = (state, dispatch) => {
     return true
   }
   const tr = state.tr.split($from.pos, 1, [{ type: paragraph }])
+  // 探针(./enterMode):标题末尾回车 = 文件里只多一个换行 —— 标题记 amxTight(紧接下一块),新段接过标题原来与后文的关系。
+  if (enterOn() && 'amxTight' in $from.parent.attrs) {
+    const hPos = $from.before($from.depth)
+    const was = $from.parent.attrs.amxTight === true
+    tr.setNodeMarkup(hPos, undefined, { ...tr.doc.nodeAt(hPos)!.attrs, amxTight: true })
+    const pPos = tr.selection.$from.before()
+    const p = tr.doc.nodeAt(pPos)
+    if (p?.type.name === 'paragraph') tr.setNodeMarkup(pPos, undefined, { ...p.attrs, amxTight: was })
+  }
   dispatch?.(tr.scrollIntoView())
   return true
+}
+
+// ── 探针:回车一次 = 一个换行(./enterMode)─────────────────────────────────────
+
+const inTable = ($p: ResolvedPos): boolean => {
+  for (let d = $p.depth; d > 0; d--) if (/^table/.test($p.node(d).type.name)) return true
+  return false
+}
+
+/** 路线一:普通段落(含引用里)回车 = 插软换行;光标所在这一行是空的(紧跟在软换行后面)= 去掉这个换行、从这里分段;
+ *  分出来的空段落是引用的最后一段 → 跳出引用(Obsidian 空的 `> ` 行回车即脱出)。空段落、行首回车交回原路(新起空段)。 */
+const enterSoftLine: Command = (state, dispatch) => {
+  if (enterMode() !== 'inline') return false
+  const { $from, empty } = state.selection
+  if (!empty || $from.parent.type.name !== 'paragraph' || $from.parent.content.size === 0) return false
+  if (listItemDepth($from) != null || inTable($from)) return false
+  const br = state.schema.nodes.hardbreak
+  const paragraph = state.schema.nodes.paragraph
+  if (!br || !paragraph) return false
+  const isBr = (n: ProseNode | null | undefined): boolean => n?.type === br
+  const before = $from.nodeBefore
+  const after = $from.nodeAfter
+  if (isBr(before) && (!after || isBr(after))) {
+    const brPos = $from.pos - 1
+    const tr = state.tr.delete(brPos, after ? $from.pos + 1 : $from.pos)
+    tr.split(brPos)
+    if (after) tr.split(brPos) // 空行在段中间:上半段 | 空段(光标)| 下半段
+    tr.setSelection(TextSelection.create(tr.doc, brPos + 2))
+    const $n = tr.selection.$from
+    if ($n.parent.content.size === 0 && $n.depth >= 2 && $n.node(-1).type.name === 'blockquote' && $n.index(-1) === $n.node(-1).childCount - 1) {
+      const range = $n.blockRange()
+      const target = range && liftTarget(range)
+      if (range && target != null) tr.lift(range, target)
+    }
+    dispatch?.(tr.scrollIntoView())
+    return true
+  }
+  if ($from.parentOffset === 0) return false
+  dispatch?.(state.tr.replaceSelectionWith(br.create({ isInline: true }), false).scrollIntoView())
+  return true
+}
+
+/** Shift+回车(探针开着):路线一 = 软换行(列表项里也是);路线二 = 在这一段里拆出新的一行(列表项里不新起项)。 */
+const shiftEnterLine: Command = (state, dispatch) => {
+  if (!enterOn()) return false
+  const { $from, empty } = state.selection
+  if (!empty || $from.parent.type.name !== 'paragraph' || inTable($from)) return false
+  if (enterMode() === 'inline') {
+    const br = state.schema.nodes.hardbreak
+    if (!br) return false
+    dispatch?.(state.tr.replaceSelectionWith(br.create({ isInline: true }), false).scrollIntoView())
+    return true
+  }
+  dispatch?.(state.tr.split($from.pos).scrollIntoView())
+  return true
+}
+
+/** 行首退格(探针开着):上一块是有字的段落(路线一)→ 两段并成一段、中间留一个软换行(= 文件里删掉两个换行中的一个);
+ *  上一块是标题且后面隔着空行 → 只把空行去掉(标题记 amxTight),不并进标题。其余交回原路。 */
+const bsLineJoin: Command = (state, dispatch) => {
+  if (!enterOn()) return false
+  const { $from, empty } = state.selection
+  if (!empty || $from.parentOffset !== 0 || $from.parent.type.name !== 'paragraph') return false
+  if (listItemDepth($from) != null || blockquoteDepth($from) != null || $from.depth < 1) return false
+  const idx = $from.index(-1)
+  if (idx === 0) return false
+  const prev = $from.node(-1).child(idx - 1)
+  const at = $from.before()
+  if (enterMode() === 'inline' && prev.type.name === 'paragraph' && prev.content.size > 0) {
+    const br = state.schema.nodes.hardbreak
+    if (!br) return false
+    const tr = state.tr.join(at)
+    tr.insert(at - 1, br.create({ isInline: true }))
+    tr.setSelection(TextSelection.create(tr.doc, at))
+    dispatch?.(tr.scrollIntoView())
+    return true
+  }
+  if (prev.type.name === 'heading' && 'amxTight' in prev.attrs && prev.attrs.amxTight !== true && prev.content.size > 0) {
+    dispatch?.(state.tr.setNodeMarkup(at - prev.nodeSize, undefined, { ...prev.attrs, amxTight: true }))
+    return true
+  }
+  return false
 }
 
 /** 块选中态回车:有文字的块 → 光标进块末开始编辑;无文字的块 → 走原路(base 在其后新建空段)。
@@ -152,8 +246,10 @@ const enterOnBlockSelection: Command = (state, dispatch) => {
 const enterRunsTrigger: Command = (state, dispatch, view) => {
   const { $from, empty } = state.selection
   if (!empty || !view || !dispatch) return false
-  const trig = triggerAtCursor($from)
-  if (!trig || !canAutoTriggerFromBlock($from.parent.type.name, trig)) return false
+  // 探针路线一:第二行起的行首触发符先拆段(见 blockTriggers.lineTriggerSplit)。
+  const $at = lineTriggerSplit(view) ? view.state.selection.$from : $from
+  const trig = triggerAtCursor($at)
+  if (!trig || !canAutoTriggerFromBlock($at.parent.type.name, trig)) return false
   return applyTypedTrigger(view, trig) // 撤销一下回到字面触发符(K-21)
 }
 
@@ -340,6 +436,7 @@ const enterCmd: Command = chain(
   enterOnBlockSelection,
   enterInDisplayMath,
   enterRunsTrigger, // `# `+回车仍要能变标题,故缩进继承排在它之后
+  enterSoftLine, // 探针路线一(开关关着恒 false)
   enterEmptyListItem,
   enterFoldedListItem,
   enterSplitIntoChild,
@@ -497,7 +594,7 @@ const deleteEmptyColumn = (dir: -1 | 1): Command => (state, dispatch) => {
   return true
 }
 
-const backspaceCmd: Command = chain(deleteEmptyColumn(-1), bsHeadingToParagraph, bsCallout, bsListToParagraph, bsOutdentParagraph, bsSelectPrevAtom)
+const backspaceCmd: Command = chain(deleteEmptyColumn(-1), bsHeadingToParagraph, bsCallout, bsListToParagraph, bsOutdentParagraph, bsSelectPrevAtom, bsLineJoin)
 
 /** Mod+Backspace:光标在块首时一路反缩进到顶层。逐级经 view.dispatch 发 —— PM history 会把
  *  同一次按键内的相邻事务并进同一组,撤销仍是一下;整文替换那种写法会连带毁掉分栏派生与装饰,勿用。
@@ -877,7 +974,7 @@ export const keyboardPlugins: MilkdownPlugin[] = [
       // 标题里的 Shift+Enter 同回车(K-19):ATX 标题容不下换行,放行硬换行 = H3 及以下落盘成 `### 甲 乙`、所见非所存。
       // 不在标题里返回 false,照旧交给 preset 的硬换行(段内换行);表格格内的 Shift+Enter 由排在前面的 tableKeyPlugins 先接。
       // 代码块里 = 代码内换行(R-27);块公式 `$$…$$` 里 = 公式内软换行(R-17);其余仍交回 preset 的硬换行。
-      'Shift-Enter': chain(enterHeadingToParagraph, codeShiftEnter, enterInDisplayMath),
+      'Shift-Enter': chain(enterHeadingToParagraph, codeShiftEnter, enterInDisplayMath, shiftEnterLine),
       'Mod-Enter': modEnterCmd,
       Backspace: backspaceCmd,
       'Mod-Backspace': modBackspaceCmd,

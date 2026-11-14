@@ -22,6 +22,8 @@ registerMessages({
   'blocklabel.quote': { zh: '引用', en: 'Quote' },
 })
 
+import { enterMode } from './enterMode'
+
 export type TriggerKind = 'text' | 'heading' | 'bullet' | 'ordered' | 'task' | 'quote' | 'fold' | 'code' | 'math'
 
 /**
@@ -95,6 +97,29 @@ export function matchTrigger(before: string): Trigger | null {
   if ((m = /^```([A-Za-z0-9+#._-]*)$/.exec(b))) return { kind: 'code', lang: m[1] }
   if (b === '$$') return { kind: 'math' }
   return null
+}
+
+/**
+ * 探针路线一(./enterMode = inline):段落第二行起的行首触发符。软换行之后那一行的文字恰是触发符 →
+ * 先把段落从这个换行处拆开(上半段记 amxTight:落盘仍紧挨着,见 ./lineGap),调用方再按新光标照常触发。
+ * 返回 true = 已拆(选区已变,调用方要重读 view.state)。
+ */
+export function lineTriggerSplit(view: EditorView): boolean {
+  if (enterMode() !== 'inline') return false
+  const { $from, empty } = view.state.selection
+  if (!empty || $from.parent.type.name !== 'paragraph') return false
+  let brOff = -1
+  $from.parent.forEach((c, off) => { if (off < $from.parentOffset && c.type.name === 'hardbreak') brOff = off })
+  if (brOff < 0) return false
+  const line = $from.parent.textBetween(brOff + 1, $from.parentOffset, undefined, '\ufffc')
+  if (!matchTrigger(line)) return false
+  const at = $from.before()
+  const brPos = $from.start() + brOff
+  const tr = view.state.tr.delete(brPos, brPos + 1).split(brPos)
+  const first = tr.doc.nodeAt(at)
+  if (first?.type.name === 'paragraph' && 'amxTight' in first.attrs) tr.setNodeMarkup(at, undefined, { ...first.attrs, amxTight: true })
+  view.dispatch(tr)
+  return true
 }
 
 /**

@@ -8,6 +8,8 @@
 //  · 像 markdown 的(列表 / 标题 / 引用 / 围栏 / 表格(含无首尾 `|` 的)/ 分割线 / 缩进代码 / `%%` 注释,或带行内标记)照旧走 CommonMark:
 //    紧凑列表 `- a\n- b` 若被加倍换行,会变成 loose list、落盘多出空行 —— 那是格式变更,不是显示变更。
 //  · 代码块内粘贴不经过这里(调用方判)。
+import { enterOn } from './enterMode'
+
 // ⚠️ 不做「严格换行」显示开关:连续行显示为一行是 v4 的设计立场(评审附录 A D-10)。
 
 /** 行首块级语法:标题、列表(含待办)、引用、围栏、表格行、分割线、脚注定义。缩进 ≤3 格(同 CommonMark)。 */
@@ -41,7 +43,7 @@ export function droppedTextMarkdown(text: string, plain: boolean): string | null
   const t = text.trim()
   if (plain || !t) return null
   if (!/\s/.test(t) && /^https?:\/\//i.test(t)) return null
-  return isPlainMultiline(text) ? plainLinesToParagraphs(text) : text
+  return isPlainMultiline(text) && !enterOn() ? plainLinesToParagraphs(text) : text // 探针开关:单个 `\n` 就是换一行
 }
 
 /** 该不该按「一行一段」处理这次粘贴:含**单个** `\n`(已是一行一段的不再处理 —— 调用方转换后重入就停在这)、且不像 markdown。 */
