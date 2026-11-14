@@ -4812,6 +4812,22 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-wrap { top: calc(var(-
 .account-pop .ap-item svg.ap-unit-check { opacity: 1; }
 .account-pop .ap-unit-fold .ap-unit-name { color: var(--text-muted); }
 .account-pop .ap-unit-note { padding: 2px 9px 4px 31px; color: var(--text-muted); font-size: var(--ui-font-caption, 11px); }
+/* 在线行行尾的「在新窗口打开」:只在悬停 / 键盘聚焦这一行时出现,盖住那一行的灰字(不常驻) */
+.account-pop .ap-unit-wrap { position: relative; }
+.account-pop .ap-unit-newwin {
+  position: absolute; top: 50%; right: 4px; transform: translateY(-50%);
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px; padding: 0; border: 0; border-radius: var(--radius-sm);
+  background: transparent; color: var(--text-muted); cursor: pointer;
+  opacity: 0; pointer-events: none;
+}
+.account-pop .ap-unit-wrap:hover .ap-unit-newwin,
+.account-pop .ap-unit-wrap:focus-within .ap-unit-newwin { opacity: 1; pointer-events: auto; }
+.account-pop .ap-unit-wrap:hover .ap-unit-state,
+.account-pop .ap-unit-wrap:hover .ap-unit-check,
+.account-pop .ap-unit-wrap:focus-within .ap-unit-state,
+.account-pop .ap-unit-wrap:focus-within .ap-unit-check { visibility: hidden; }
+.account-pop .ap-unit-newwin:hover { background: color-mix(in srgb, var(--text) 8%, transparent); color: var(--text); }
 
 /* ── 文件区:选中 / 拖入目标 / OS 文件悬停 ── */
 .file-row.selected { background: var(--accent-light); }

@@ -251,3 +251,7 @@
 .unitset-paired { padding: 2px 8px 8px; }
 .unitset-paired .unitsw-paired-row { padding: 4px 9px; }
 .unitset-page .is-locked .settings-row-control { opacity: .48; }
+
+/* ── Unit 窗(UnitWindowRoot):整扇窗就是设备页的框;账号卡只当头像数据源,不显示 ── */
+.unitwin-account { display: none; }
+.unitwin .unitfr-fail-title.unitwin-dim { color: var(--text-muted); font-weight: inherit; }

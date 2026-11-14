@@ -15,8 +15,9 @@ import './i18n.generated' // 注册全量翻译字典(渲染前)
 import { installEngine } from './bootstrapEngine'
 import { loadTanguEntry } from './coreTangu/load'
 import { readTanguChatViews } from './amadeus/plugins/tanguSeam'
-import { windowKind } from './windowKind'
+import { unitWindowId, windowKind } from './windowKind'
 import { DetachedRoot } from './DetachedRoot'
+import { UnitWindowRoot } from './UnitWindowRoot'
 import { MiniRoot } from './MiniRoot'
 import { FloatingRoot } from './FloatingRoot'
 import { installMultiWindow } from './multiWindow'
@@ -115,7 +116,7 @@ function boot(activateTangu: Parameters<typeof installEngine>[0]): void {
     <LocaleProvider>
       <HostMotionConfig>
         <ErrorBoundary>
-          {isPreview ? <PreviewChat /> : kind === 'mini' ? <MiniRoot /> : kind === 'floating' ? <FloatingRoot /> : kind === 'detached' ? <DetachedRoot /> : <Root />}
+          {isPreview ? <PreviewChat /> : kind === 'mini' ? <MiniRoot /> : kind === 'floating' ? <FloatingRoot /> : kind === 'detached' ? (unitWindowId() ? <UnitWindowRoot /> : <DetachedRoot />) : <Root />}
         </ErrorBoundary>
       </HostMotionConfig>
     </LocaleProvider>,

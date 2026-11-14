@@ -6,7 +6,7 @@
  */
 import React, { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Check, ChevronDown, ChevronRight, Globe, Laptop, Settings2 } from 'lucide-react'
+import { AppWindow, Check, ChevronDown, ChevronRight, Globe, Laptop, Settings2 } from 'lucide-react'
 import { OverlayAt, UI_MODE, nativeSheetPresenter } from '@lcl/engine'
 import { registerMessages, useI18n, translate } from '../i18n'
 import { windowKind } from '../windowKind'
@@ -16,6 +16,7 @@ import { deviceIcon, leaveUnitRemote, runUnitRoute, sayUnit, useUnitRemote } fro
 import { readRememberedVia, unitPanelModel, type UnitPanelRow } from './unitPanelModel'
 import { useUnitRoster } from './unitRoster'
 import type { UnitInfo } from '../types'
+import { addUnitToDesktop } from '../unitShortcut'
 
 registerMessages({
   'unit.panel.thisComputer': { zh: '这台电脑', en: 'This computer' },
@@ -29,6 +30,8 @@ registerMessages({
   'unit.panel.changeIcon': { zh: '改图标', en: 'Change icon' },
   'unit.panel.renameAsk': { zh: '设备名字', en: 'Device name' },
   'unit.panel.editFailed': { zh: '没改成：{error}', en: "Couldn't save: {error}" },
+  'unit.panel.openWindow': { zh: '在新窗口打开', en: 'Open in new window' },
+  'unit.panel.addToDesktop': { zh: '添加到桌面', en: 'Add to desktop' },
 })
 
 /** 账号面板里出不出 Unit 段。判别式照 bootstrapEngine 注册 rb-unit 那套(有设备桥、不是单列壳),
@@ -100,6 +103,13 @@ export function AccountUnitSection({ onClose, onToast }: {
     runUnitRoute({ kind: 'unit', id: u.id, name: u.name, icon: u.icon, platform: u.platform, via: row.via, lanUrl: u.lanUrl })
     onClose()
   }
+  /** 在新窗口打开(一台设备一扇,主进程去重);离线的也开,窗里自己画「不在线」。 */
+  const canWindow = !!window.tangu?.unitsOpenWindow
+  const canDesktop = !!window.tangu?.unitsAddToDesktop
+  const openWindow = (u: UnitInfo): void => {
+    onClose()
+    void window.tangu?.unitsOpenWindow?.(u.id).catch(() => {})
+  }
   /** 改名字 / 改图标各弹各的输入框,只带改了的那一个字段。 */
   const editUnit = async (u: UnitInfo, field: 'name' | 'icon'): Promise<void> => {
     onClose()
@@ -138,9 +148,8 @@ export function AccountUnitSection({ onClose, onToast }: {
     }
     const u = row.unit
     const off = !row.via && !row.current
-    return (
+    const btn = (
       <button
-        key={row.key}
         className={`ap-item ap-unit${off ? ' ap-unit--off' : ''}${row.current ? ' ap-unit--current' : ''}`}
         data-unit-id={u.id}
         aria-current={row.current || undefined}
@@ -154,6 +163,22 @@ export function AccountUnitSection({ onClose, onToast }: {
           ? <Check size={14} className="ap-unit-check" />
           : <span className="ap-dim ap-unit-state">{row.via ? t('unit.panel.online', { via: t(VIA_KEY[row.via]) }) : t('unit.offline')}</span>}
       </button>
+    )
+    // 在线行:悬停 / 键盘聚焦时行尾冒出「在新窗口打开」(不常驻;按钮不能套在行按钮里,两者是兄弟)
+    if (!row.via || !canWindow) return <React.Fragment key={row.key}>{btn}</React.Fragment>
+    return (
+      <div key={row.key} className="ap-unit-wrap">
+        {btn}
+        <button
+          type="button"
+          className="ap-unit-newwin"
+          title={t('unit.panel.openWindow')}
+          aria-label={`${t('unit.panel.openWindow')} · ${u.name}`}
+          onClick={(e) => { e.stopPropagation(); openWindow(u) }}
+        >
+          <AppWindow size={13} />
+        </button>
+      </div>
     )
   }
 
@@ -188,6 +213,8 @@ export function AccountUnitSection({ onClose, onToast }: {
       {ctx && createPortal(
         <OverlayAt className="ctx-menu ap-unit-ctx" role="menu" x={ctx.x} y={ctx.y} onPointerDown={(e) => e.stopPropagation()}>
           <button role="menuitem" onClick={() => { const row = ctx.row; setCtx(null); openRow(row) }}>{t('unit.panel.switchTo')}</button>
+          {canWindow && <button role="menuitem" data-unit-act="window" onClick={() => { const u = ctx.row.unit; setCtx(null); openWindow(u) }}>{t('unit.panel.openWindow')}</button>}
+          {canDesktop && <button role="menuitem" data-unit-act="desktop" onClick={() => { const u = ctx.row.unit; setCtx(null); onClose(); void addUnitToDesktop(u) }}>{t('unit.panel.addToDesktop')}</button>}
           <button role="menuitem" onClick={() => { const u = ctx.row.unit; setCtx(null); void editUnit(u, 'name') }}>{t('unit.panel.rename')}</button>
           <button role="menuitem" onClick={() => { const u = ctx.row.unit; setCtx(null); void editUnit(u, 'icon') }}>{t('unit.panel.changeIcon')}</button>
         </OverlayAt>,

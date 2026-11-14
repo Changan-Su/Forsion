@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { pickUnitRoute, readRememberedVia, rememberVia, remoteUnitId, unitPanelModel } from './unitPanelModel'
+import { pickUnitRoute, readRememberedVia, rememberVia, remoteUnitId, unitPanelModel, unitWindowRosterState } from './unitPanelModel'
 import type { UnitInfo } from '../types'
 
 const u = (id: string, online: boolean, extra: Partial<UnitInfo> = {}): UnitInfo =>
@@ -115,5 +115,28 @@ describe('unitPanelModel', () => {
   it('no roster (signed out / not loaded) → no device rows at all', () => {
     expect(unitPanelModel({ ...base, units: null })).toMatchObject({ rows: [], offline: [] })
     expect(unitPanelModel({ ...base, units: undefined })).toMatchObject({ rows: [], offline: [] })
+  })
+})
+
+describe('unitWindowRosterState (Unit window)', () => {
+  const den = u('den-12345', true)
+  it('found / missing from a real roster', () => {
+    expect(unitWindowRosterState({ status: 200, json: { units: [den] } }, 'den-12345')).toEqual({ state: 'found', unit: den, units: [den] })
+    expect(unitWindowRosterState({ status: 200, json: { units: [den] } }, 'gone-12345')).toEqual({ state: 'missing' })
+    expect(unitWindowRosterState({ status: 200, json: { units: [] } }, 'den-12345')).toEqual({ state: 'missing' })
+  })
+  it('signed out is its own state', () => {
+    expect(unitWindowRosterState({ status: 401, json: null }, 'den-12345')).toEqual({ state: 'signedOut' })
+  })
+  it('a failed read is "unknown", never "missing"', () => {
+    expect(unitWindowRosterState({ status: 502, json: null }, 'den-12345')).toEqual({ state: 'unknown' })
+    expect(unitWindowRosterState({ status: 200, json: null }, 'den-12345')).toEqual({ state: 'unknown' })
+    expect(unitWindowRosterState({ status: 200, json: {} }, 'den-12345')).toEqual({ state: 'unknown' })
+  })
+  it('no roster bridge is not "missing" either', () => {
+    expect(unitWindowRosterState(undefined, 'den-12345')).toEqual({ state: 'noBridge' })
+  })
+  it('a remembered P2P route goes over the relay in the Unit window (no hole punching there)', () => {
+    expect(pickUnitRoute(den, { lanOk: false, p2p: false, remembered: 'p2p' })).toEqual({ via: 'tunnel' })
   })
 })
