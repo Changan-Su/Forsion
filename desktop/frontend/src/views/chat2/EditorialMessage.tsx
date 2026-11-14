@@ -20,6 +20,7 @@ import { turnHasOutput } from './continueTurn'
 import { isModelTierLocked, isTierLockedError, tierLockedText } from '../../services/accountQuota'
 import { useQuotaMultiplierCap } from '../../tangu/quotaCap'
 import { TURN_RESUME_OPEN } from '../../../../../tangu-agent/src/contracts/turnResume'
+import { isEngineModelNoApiKey, parseEngineModelNoApiKey } from '../../../../../tangu-agent/src/contracts/engineModelError'
 import { useNoteInsertState } from './insertToNote'
 import * as api from '../../services/backendService'
 import type { UiMessage, TanguDesktopConfig, AgentConfig, StoredDesktopConfig, ToolEvent, InquiryRequest, SketchItem, LiveWait } from '../../../../../tangu-agent/src/contracts/clientTypes'
@@ -221,6 +222,7 @@ const ERR_RULES: Array<[RegExp, string]> = [
 export function humanizeRunError(raw: string | undefined, t: (k: string, v?: Record<string, unknown>) => string, modelName = ''): string {
   if (!raw) return t('chat.error')
   raw = stripQuotaAsk(raw)
+  if (isEngineModelNoApiKey(raw)) return engineModelNoApiKeyText(raw, t)
   const hit = ERR_RULES.find(([re, key]) => re.test(raw) && (key !== 'chat.err.quotaUsed' || isQuotaText(raw)))
   // 这一句自己就说清了,不再把机器码 / JSON 回包挂在括号里(「复制错误」照样拿得到原文)
   if (hit?.[1] === 'chat.err.tierLocked') return tierLockedText(raw, t, modelName)
@@ -229,6 +231,16 @@ export function humanizeRunError(raw: string | undefined, t: (k: string, v?: Rec
     return `${t(time ? 'chat.err.quotaUsedAt' : 'chat.err.quotaUsed', { time })}(${raw})`
   }
   return hit ? `${t(hit[1])}(${raw})` : raw
+}
+
+/** 外部引擎的当前模型要 API key 而没有配(引擎拼的那一句见 tangu-agent/src/contracts/engineModelError.ts;实测来源:
+ *  DSH 只用账号登录时,新会话的缺省模型走的是要 key 的那条线,不选模型每一句都失败)。点名当前模型和能换成哪些;
+ *  引擎的原话留在括号里。句式拆不开(被截断 / 改写过)就给不点名的说法,整句留在括号里。 */
+function engineModelNoApiKeyText(raw: string, t: (k: string, v?: Record<string, unknown>) => string): string {
+  const info = parseEngineModelNoApiKey(raw)
+  if (!info?.model) return `${t('chat.err.engineModelNoKey')}(${raw})`
+  const vars = { engine: info.engine, model: info.model, others: info.others.join(t('chat.err.listSep')) }
+  return `${t(info.others.length ? 'chat.err.engineModelNoKeyPick' : 'chat.err.engineModelNoKeyOnly', vars)}(${info.raw})`
 }
 
 registerMessages({

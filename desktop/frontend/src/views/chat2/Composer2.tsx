@@ -2385,7 +2385,11 @@ export const Composer2: React.FC<{
                   onUnavailable: () => setHubFailed(true),
                 } : undefined}
                 open={openMenu === 'model'}
-                onOpenChange={(next) => setOpenMenu(next ? 'model' : null)}
+                onOpenChange={(next) => {
+                  setOpenMenu(next ? 'model' : null)
+                  // 外部引擎的清单可能过时了(当前模型缺 API key 失败过):打开菜单时重新取,用户照提示登录后的新模型才看得到
+                  if (next && isEngine) useApp.getState().ensureEngineCaps(engineId)
+                }}
                 disabled={disabled}
                 modelId={isEngine ? engineModelId : modelId}
                 groups={modelPillGroups}

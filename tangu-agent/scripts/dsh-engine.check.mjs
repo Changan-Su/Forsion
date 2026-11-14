@@ -7,7 +7,7 @@
  * 用法:
  *   npm run build
  *   node scripts/dsh-engine.check.mjs --node <Node ≥ 24 的可执行文件> --dsh <@deepseek-ai/dsh 的 lib/bin.js> --root <全新目录>
- *     [--only twoturn,model,…]   只跑某几项(见下面 SCENARIOS 的 key)
+ *     [--only twoturn,model,…]   只跑某几项(见下面 SCENARIOS 的 key;nokey = 当前模型缺 API key 时的失败原因)
  *     [--engine-entry <别处的 dist/standalone/main.js>]   负对照:拿没有这次改动的旧构建跑同一套,twoturn 应当红
  *     [--live --key-file <一行 key 的文件> | --live --dsh-home <已登录的 DSH 目录>]   真模型:看模型自己的回答(caps / twoturn /
  *                                    model / edit / stop / stopedit / approval);key 只进子进程环境,不落盘、不打印
@@ -131,10 +131,13 @@ const dshEnvOnDisk = (extra = {}) => ({
   DSH_TELEMETRY_DISABLED: '1', ...(LIVE ? {} : modelEnv), ...extra,
 });
 const dshEnv = (extra = {}) => ({ ...dshEnvOnDisk(extra), ...modelEnv });
-// 引擎清单:按 id 覆盖内置的 dsh(内置那条跑的是 PATH 上的 `dsh`,这里指到 --dsh 给的那份);dsh-ro = 只读模式,给审批那一项用
+// 引擎清单:按 id 覆盖内置的 dsh(内置那条跑的是 PATH 上的 `dsh`,这里指到 --dsh 给的那份);dsh-ro = 只读模式,给审批那一项用;
+// dsh-nokey = 一份什么凭据都没有的 DSH(自己的空目录,环境里不带 key、也不指到假模型),给 nokey 那一项用
+const noKeyEnv = () => { const { DEEPSEEK_API_KEY: _key, DEEPSEEK_BASE_URL: _url, ...rest } = dshEnvOnDisk({ DSH_HOME: D('dsh-nokey') }); return rest; };
 writeFileSync(join(TANGU_HOME, 'engines.json'), JSON.stringify({ engines: [
   { id: 'dsh', name: 'DeepSeek Harness', command: NODE, args: [BIN, '--profile', 'acp'], env: dshEnvOnDisk() },
   { id: 'dsh-ro', name: 'DeepSeek Harness (read-only)', command: NODE, args: [BIN, '--profile', 'acp'], env: dshEnvOnDisk({ DSH_PERMISSION_MODE: 'read-only' }) },
+  { id: 'dsh-nokey', name: 'DeepSeek Harness (no key)', command: NODE, args: [BIN, '--profile', 'acp'], env: noKeyEnv() },
 ] }, null, 2));
 
 // ── 直接和 DSH 说 ACP(只用来看它那边的会话清单、扮「另一个开着这场会话的进程」)
@@ -447,6 +450,29 @@ const SCENARIOS = {
       ['探测过后有 1 个', one === 1, String(one)],
       ['重启引擎再探,还是 1 个', two === 1 && three === 1, `${two} / ${three}`],
       ['重启后探到的清单照旧', (caps.models || []).length > 0],
+    ]);
+  },
+  // 当前模型那条线要 API key 而没有配:失败原因要换成点名当前模型、说得出下一步的那句话,不是只有 DSH 的原话。
+  // 实际遇到的是「只用账号登录的 DSH」:新会话的缺省模型走要 key 的那条线,不选模型每一句都失败(2026-11-14 真模型实跑)。
+  // 账号登录在这里造不出来,用一份什么凭据都没有的 DSH 出同一个错 —— 这时清单里没有别的模型,提示走「去 DSH 里登录或填 key」
+  // 那一支;「清单里有另一组的模型」那一支在单测里(src/engines/acpEngine.credential.test.ts,照这里实测到的样子写的假 agent)。
+  nokey: async () => {
+    const caps = await api('/agent/engines/dsh-nokey/capabilities');
+    const names = (caps.models || []).map((m) => m.name);
+    const sid = await newSession('nokey');
+    const a = await run(sid, 'Say OK.', { engineId: 'dsh-nokey' });
+    const again = await run(sid, 'Say OK.', { engineId: 'dsh-nokey' });
+    const ps = await pointers(sid);
+    const err = a.error || '';
+    record('nokey', '当前模型缺 API key 时,失败原因说得出下一步', [
+      // 提示分两支靠的是这一条:DSH 只列凭据探得到的模型,当前模型单独塞进清单。它哪天改成不管有没有凭据都列,这里先红。
+      ['没有凭据时,清单里只有当前模型自己', names.length === 1 && (caps.models || [])[0]?.id === caps.currentModelId, names.join(' / ')],
+      ['这一轮失败了(没有 key,到不了模型)', !a.done && !!a.error && !a.aborted, err],
+      ['失败原因以固定的码开头', err.startsWith('engine_model_no_api_key {')],
+      ['点名了引擎和当前模型', err.includes(`DeepSeek Harness (no key) needs an API key for its current model (${JSON.stringify(names[0] ?? '')}) and none is set up.`)],
+      ['没有别的模型可换:说的是去 DSH 里登录或填 key,不叫人换模型', err.includes('It offers no other model: sign in or add an API key in DeepSeek Harness (no key) itself, then send again.') && !err.includes('Pick another model')],
+      ['DSH 的原话留在最后的方括号里', /\[Internal error: turn failed: .*no API key for provider route "deepseek-official".*\]$/.test(err)],
+      ['再发一句还是同一个原因、接的是同一个 DSH 会话(没有悄悄新开)', again.error === a.error && ps.length === 2 && !!ps[0].ext && ps[0].ext === ps[1].ext, ps.map((p) => p.ext?.slice(0, 8)).join(' → ')],
     ]);
   },
 };

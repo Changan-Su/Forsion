@@ -86,8 +86,8 @@ export interface EngineManager {
   /** 给 GET /agent/engines 与 UI 选择器(含 available/defaultModel)。 */
   list(): EngineListItem[];
   has(id: string): boolean;
-  /** 懒探测引擎能力(spawn 一次拿 models/commands)并缓存。 */
-  capabilities(id: string): Promise<EngineCapabilities>;
+  /** 懒探测引擎能力(spawn 一次拿 models/commands)并缓存。fresh = 不用缓存、重新探测(引擎那边的模型清单变了:登录了、填了 key)。 */
+  capabilities(id: string, opts?: { fresh?: boolean }): Promise<EngineCapabilities>;
   /** 设某引擎默认模型(持久化到 ~/.tangu/engine-prefs.json;空串=清除)。 */
   setDefaultModel(id: string, modelId: string): void;
   run(ctx: EngineRunCtx): Promise<EngineResult>;
@@ -102,7 +102,11 @@ export function createEngineManager(configFile?: string): EngineManager {
   const capsCache = new Map<string, { caps: EngineCapabilities; at: number }>();
   // 同一个引擎正在跑的那次探测:缓存没命中时两处同时来问(两个窗口各开一次模型下拉)要合成一次。分开跑的话第二个
   // 续不上探测会话(被第一个占着),会另建一个并顶掉记着的那个 —— 每撞一次就在引擎的历史里多留一个空会话。
-  const probing = new Map<string, Promise<EngineCapabilities>>();
+  // 每个引擎的探测要附上它开始时的「代」:缓存作废一次(fresh 探测、或当前模型缺 API key 的失败)代就加一。旧代的探测
+  // 可能是在用户登录之前开始的,它的结果不进缓存,也不拿来回答新来的问 —— 不然作废之后马上又被旧清单填回去。
+  const probing = new Map<string, { gen: number; task: Promise<EngineCapabilities> }>();
+  const gen = new Map<string, number>();
+  const invalidate = (id: string): void => { gen.set(id, (gen.get(id) ?? 0) + 1); capsCache.delete(id); };
   let prefs = loadEnginePrefs();
   return {
     list: () => engines.map((e) => {
@@ -110,7 +114,7 @@ export function createEngineManager(configFile?: string): EngineManager {
       return { id: e.id, name: e.name, available: status === 'available', status, defaultModel: prefs[e.id]?.defaultModel, setup: e.setup };
     }),
     has: (id) => byId.has(id),
-    capabilities: async (id) => {
+    capabilities: async (id, opts) => {
       if (isHostSandboxRestricted()) throw new Error('External engine probing is unavailable while the local sandbox is enabled');
       const def = byId.get(id);
       if (!def) throw new Error(`unknown engine: ${id}`);
@@ -118,11 +122,16 @@ export function createEngineManager(configFile?: string): EngineManager {
       if (def.models || def.commands) {
         return { models: def.models ?? [], commands: def.commands ?? [], currentModelId: undefined };
       }
+      if (opts?.fresh) invalidate(id);
+      const myGen = gen.get(id) ?? 0;
       const hit = capsCache.get(id);
       if (hit && Date.now() - hit.at < CAPS_TTL_MS) return hit.caps;
       const running = probing.get(id);
-      if (running) return running;
-      const task = (async () => {
+      if (running && running.gen === myGen) return running.task;
+      // 正在跑的是旧代的:等它跑完再探(两个探测同时跑会抢同一个探测会话,见上面 probing 的说明),它的结果不要
+      const before = running?.task.catch(() => undefined);
+      const task: Promise<EngineCapabilities> = (async () => {
+        await before;
         // 探测会话的固定工作目录(只有复用探测会话的引擎用得上,见 probeAcpEngine):本引擎自己的目录,不落在用户的项目里。
         const probeDir = path.join(tanguHome(), 'engines', id, 'probe');
         try { mkdirSync(probeDir, { recursive: true }); } catch { /* 建不出来就让引擎自己报错 */ }
@@ -131,10 +140,10 @@ export function createEngineManager(configFile?: string): EngineManager {
           saveEngineProbeSession(id, probeSessionId);
           prefs = loadEnginePrefs();
         }
-        capsCache.set(id, { caps, at: Date.now() });
+        if ((gen.get(id) ?? 0) === myGen) capsCache.set(id, { caps, at: Date.now() });
         return caps;
-      })().finally(() => probing.delete(id));
-      probing.set(id, task);
+      })().finally(() => { if (probing.get(id)?.task === task) probing.delete(id); });
+      probing.set(id, { gen: myGen, task });
       return task;
     },
     setDefaultModel: (id, modelId) => {
@@ -148,7 +157,14 @@ export function createEngineManager(configFile?: string): EngineManager {
       if (!def) throw new Error(`unknown engine: ${ctx.engineId}`);
       // 用户未在本会话选模型 → 回退该引擎的默认模型偏好(设置页「Agent CLIs」配置)。
       const engineModelId = ctx.engineModelId || prefs[ctx.engineId]?.defaultModel;
-      return runAcpEngine(def, { ...ctx, engineModelId });
+      try {
+        return await runAcpEngine(def, { ...ctx, engineModelId });
+      } catch (e: any) {
+        // 「当前模型缺 API key」的提示叫用户去模型下拉里换一个:缓存着的清单这时作废,下次问能力清单重新探测 ——
+        // 用户照提示去引擎那边登录 / 填了 key 之后,新出现的模型才选得到(不然要等缓存过期)。
+        if (e?.engineModelNoApiKey) invalidate(ctx.engineId);
+        throw e;
+      }
     },
     dispose: async () => {
       /* 一 run 一进程，无全局资源 */
