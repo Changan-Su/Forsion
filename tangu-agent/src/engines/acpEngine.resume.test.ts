@@ -85,13 +85,13 @@ describe('runAcpEngine × 只会 resume 的引擎', () => {
     const first = await runAcpEngine(def(), c1);
     expect(first.content).toBe('turns=1 model=["p","a"]');
     expect(first.externalSessionId).toBe('sess-1');
-    expect(c1.seen).toEqual([{ id: 'sess-1', resumable: true, resumed: false, via: 'resume', verifiedForChat: true }]);
+    expect(c1.seen).toEqual([{ id: 'sess-1', resumable: true, resumed: false, via: 'resume', verifiedForChat: true, agent: 'fake-resume-agent' }]);
 
     const c2 = ctx({ resumeSessionId: 'sess-1' });
     const second = await runAcpEngine(def(), c2);
     expect(second.content).toBe('turns=2 model=["p","a"]'); // 引擎那边记着上一轮
     expect(second.externalSessionId).toBe('sess-1');
-    expect(c2.seen).toEqual([{ id: 'sess-1', resumable: true, resumed: true, via: 'resume', verifiedForChat: true }]);
+    expect(c2.seen).toEqual([{ id: 'sess-1', resumable: true, resumed: true, via: 'resume', verifiedForChat: true, agent: 'fake-resume-agent' }]);
     expect(lines().filter((l) => l === 'session/new')).toHaveLength(1);
     expect(lines().filter((l) => l === 'session/resume')).toHaveLength(1);
     expect(lines()).not.toContain('session/load');

@@ -23,11 +23,16 @@ export interface EngineRunCtx {
   engineModelId?: string;
   resumeSessionId?: string;
   /** 上一行:要续接的引擎会话。续不上一律失败(不悄悄新开);那个会话在引擎那边已经没有了时,抛出的错误带 externalSessionGone。 */
+  /** 普通对话的续接才传:那个引擎会话是哪家适配器记下的(握手里报的名字;null = 老指针没记)。握手之后核对 ——
+   *  名字对不上(同一个引擎 id 在 engines.json 里被改指到了别的命令),或者当前这家的普通对话续接没核过,就不拿旧会话 id 去问它,
+   *  直接新开一个会话(等于引擎换了)。插件任务不传(undefined),照旧按 resumeSessionId 续接。 */
+  resumeFromAgent?: string | null;
   /** 引擎会话一建立(新建或续上)就回调,在 prompt 之前。resumable = 这个引擎下一轮接得上它;
    *  via = 下一轮会怎么接:'load'(session/load,回放历史)/ 'resume'(session/resume,不回放)。
    *  verifiedForChat = 普通对话里下一轮可以接着用它:走 resume 的都算,走 load 的只算用真引擎核过的适配器
-   *  (名单见 acpEngine.ts 的 LOAD_RESUME_VERIFIED)。插件任务不看这一项,照旧按 resumable 续接。 */
-  onSession?: (info: { id: string; resumable: boolean; resumed: boolean; via?: 'load' | 'resume'; verifiedForChat?: boolean }) => void | Promise<void>;
+   *  (名单见 acpEngine.ts 的 LOAD_RESUME_VERIFIED)。插件任务不看这一项,照旧按 resumable 续接。
+   *  agent = 握手里报的适配器名(普通对话把它和指针记在一起,见 resumeFromAgent)。 */
+  onSession?: (info: { id: string; resumable: boolean; resumed: boolean; via?: 'load' | 'resume'; verifiedForChat?: boolean; agent?: string }) => void | Promise<void>;
   readOnly?: boolean;
   mcpServers?: import('@agentclientprotocol/sdk').McpServer[];
   message: string;

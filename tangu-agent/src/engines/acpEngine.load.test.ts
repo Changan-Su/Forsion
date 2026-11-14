@@ -19,6 +19,7 @@ const send = (o) => process.stdout.write(JSON.stringify(o) + '\n');
 const note = (sessionId, update) => send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId, update } });
 const text = (t) => ({ type: 'text', text: t });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+let trailing = Promise.resolve(); // session/load 回包之后补发的那几条发完了没有
 let buf = '';
 process.stdin.on('data', (d) => { buf += d; let i; while ((i = buf.indexOf('\n')) >= 0) { const line = buf.slice(0, i); buf = buf.slice(i + 1); if (line.trim()) void handle(JSON.parse(line)); } });
 process.stdin.on('end', () => process.exit(0));
@@ -47,16 +48,18 @@ async function handle(m) {
     if (process.env.FAKE_LOAD_SILENT_MS) await sleep(Number(process.env.FAKE_LOAD_SILENT_MS)); // 重放完了(或根本没有)却迟迟不回包
     ok({});
     // 真 Codex 适配器的样子:回包之后紧跟着补发一条当正文发的警告和上一轮的用量,过几十毫秒再来一条
-    if (process.env.FAKE_TRAILING) {
+    if (process.env.FAKE_TRAILING) trailing = (async () => {
       note(p.sessionId, { sessionUpdate: 'agent_message_chunk', content: text('Warning: stray right after load\n\n') });
       note(p.sessionId, { sessionUpdate: 'usage_update', used: 990, size: 200000 });
       await sleep(Number(process.env.FAKE_TRAILING));
       note(p.sessionId, { sessionUpdate: 'agent_message_chunk', content: text('Warning: stray a moment later\n\n') });
-    }
+    })();
     return;
   }
   if (m.method === 'session/resume') return err(-32603, 'the engine should have used session/load');
   if (m.method === 'session/prompt') {
+    // 补发的那几条一定先于这一轮的回答发出去:prompt 来早了(引擎没等)它们就落在这一轮里,测试必红,不看运气
+    await trailing;
     const s = st.sessions[p.sessionId]; const q = (p.prompt && p.prompt[0] && p.prompt[0].text) || ''; const n = s.turns.length + 1;
     const a = 'answer ' + n + ' (history: ' + s.turns.map((t) => t.q).join(' | ') + ')';
     s.turns.push({ n, q, a }); save(st);
@@ -67,12 +70,13 @@ async function handle(m) {
 }
 `;
 
+const CODEX = '@agentclientprotocol/codex-acp';
 let dir = '';
 let store = '';
 let agentFile = '';
 const def = (env: Record<string, string> = {}): EngineDef => ({ id: 'fake', name: 'Fake Loader', command: process.execPath, args: [agentFile], env: { FAKE_STORE: store, ...env } });
 const lines = (): string[] => (existsSync(`${store}.log`) ? readFileSync(`${store}.log`, 'utf8').split('\n').filter(Boolean) : []);
-type Seen = { id: string; resumable: boolean; resumed: boolean; via?: string; verifiedForChat?: boolean };
+type Seen = { id: string; resumable: boolean; resumed: boolean; via?: string; verifiedForChat?: boolean; agent?: string };
 
 function ctx(over: Partial<EngineRunCtx> = {}): EngineRunCtx & { seen: Seen[]; events: Array<[string, any]> } {
   const seen: Seen[] = [];
@@ -111,8 +115,8 @@ describe('runAcpEngine × 走 session/load 的引擎', () => {
     expect(second.toolCalls).toEqual([]);
     expect(second.toolResults).toEqual([]);
     expect(c2.events).toEqual([['token', { delta: 'answer 2 (history: first question)' }]]); // 重放里的用量也没有当成这一轮的发出去
-    expect(c2.seen).toEqual([{ id: 'sess-1', resumable: true, resumed: true, via: 'load', verifiedForChat: false }]);
-    // 两样都报的引擎走 session/load,不走 session/resume
+    expect(c2.seen).toEqual([{ id: 'sess-1', resumable: true, resumed: true, via: 'load', verifiedForChat: false, agent: 'fake-load-agent' }]);
+    // 两样都报的引擎走 session/load,不走 session/resume。这一轮没传 resumeFromAgent = 插件任务那条路:不核适配器,照旧续接
     expect(lines().filter((l) => l === 'session/new')).toHaveLength(1);
     expect(lines().filter((l) => l === 'session/load')).toHaveLength(1);
     expect(lines()).not.toContain('session/resume');
@@ -142,11 +146,42 @@ describe('runAcpEngine × 走 session/load 的引擎', () => {
 
   it('普通对话续接的放行按握手里的适配器名:Codex 的适配器算核过,别的不算', async () => {
     const codex = ctx();
-    await runAcpEngine(def({ FAKE_NAME: '@agentclientprotocol/codex-acp' }), codex);
-    expect(codex.seen).toEqual([{ id: 'sess-1', resumable: true, resumed: false, via: 'load', verifiedForChat: true }]);
+    await runAcpEngine(def({ FAKE_NAME: CODEX }), codex);
+    expect(codex.seen).toEqual([{ id: 'sess-1', resumable: true, resumed: false, via: 'load', verifiedForChat: true, agent: CODEX }]);
     const claude = ctx();
     await runAcpEngine(def({ FAKE_NAME: '@zed-industries/claude-code-acp' }), claude);
     expect(claude.seen[0]).toMatchObject({ via: 'load', verifiedForChat: false });
+  }, 20_000);
+
+  // 普通对话的续接指针和记它的那家适配器绑在一起(ctx.resumeFromAgent)。同一个引擎 id 在 engines.json 里被改指到别的命令之后,
+  // 旧会话 id 对新的那家没有意义:拿去问,它多半回一个认不出是「没有了」的错,而失败的那一轮不留记号 → 这场对话从此每一句都失败。
+  it('普通对话的指针是另一家适配器记下的 → 不拿旧会话 id 去问,新开一个', async () => {
+    await runAcpEngine(def({ FAKE_NAME: CODEX }), ctx());
+    const c2 = ctx({ resumeSessionId: 'sess-1', resumeFromAgent: 'some-other-acp' });
+    const second = await runAcpEngine(def({ FAKE_NAME: CODEX }), c2);
+    expect(second.content).toBe('answer 1 (history: )'); // 新会话的第一轮
+    expect(c2.seen).toEqual([{ id: 'sess-2', resumable: true, resumed: false, via: 'load', verifiedForChat: true, agent: CODEX }]);
+    expect(lines()).not.toContain('session/load');
+    expect(lines().filter((l) => l === 'session/new')).toHaveLength(2);
+  }, 20_000);
+
+  it('普通对话的指针是这一家记下的,但这一家的普通对话续接没核过(名单变了 / 被改指)→ 一样新开', async () => {
+    await runAcpEngine(def(), ctx());
+    const c2 = ctx({ resumeSessionId: 'sess-1', resumeFromAgent: 'fake-load-agent' });
+    await runAcpEngine(def(), c2);
+    expect(c2.seen[0]).toMatchObject({ id: 'sess-2', resumed: false, verifiedForChat: false });
+    expect(lines()).not.toContain('session/load');
+  }, 20_000);
+
+  it('普通对话的指针对得上、也核过 → 续接;老指针没记是哪一家(null)时只看核没核过', async () => {
+    await runAcpEngine(def({ FAKE_NAME: CODEX }), ctx());
+    const same = ctx({ resumeSessionId: 'sess-1', resumeFromAgent: CODEX });
+    await runAcpEngine(def({ FAKE_NAME: CODEX }), same);
+    expect(same.seen[0]).toMatchObject({ id: 'sess-1', resumed: true });
+    const old = ctx({ resumeSessionId: 'sess-1', resumeFromAgent: null });
+    await runAcpEngine(def({ FAKE_NAME: CODEX }), old);
+    expect(old.seen[0]).toMatchObject({ id: 'sess-1', resumed: true });
+    expect(lines().filter((l) => l === 'session/load')).toHaveLength(2);
   }, 20_000);
 
   it('要续接的会话在引擎那边没有了 → 失败并标 externalSessionGone,不悄悄新开', async () => {

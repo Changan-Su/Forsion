@@ -19,24 +19,25 @@ import type { EngineManager, EngineRunCtx } from '../engines/manager.js';
 
 type Behavior = { hang?: boolean; gone?: boolean; busy?: boolean };
 let home: string;
-let calls: Array<{ engineId: string; resume?: string; message: string }>;
+let calls: Array<{ engineId: string; resume?: string; from?: string | null; message: string }>;
 let next: Behavior[];
 let seq: number;
 let started: () => void;
 let runs: string[];
 let via: 'load' | 'resume';
 let verified: boolean; // 引擎层按握手里的适配器名给的:普通对话里这个引擎会话下一轮能不能接着用
+let agent: string | undefined; // 握手里报的适配器名
 
 const engines: EngineManager = {
   list: () => [], has: (id) => id === 'dsh' || id === 'codex',
   capabilities: async () => ({ models: [], commands: [] }), setDefaultModel: () => {}, dispose: async () => {},
   run: async (ctx: EngineRunCtx) => {
     const b = next.shift() || {};
-    calls.push({ engineId: ctx.engineId, resume: ctx.resumeSessionId, message: ctx.message });
+    calls.push({ engineId: ctx.engineId, resume: ctx.resumeSessionId, from: ctx.resumeFromAgent, message: ctx.message });
     if (b.busy) throw new Error('Fake Harness has this conversation open in another window or process, so it cannot be continued here.');
     if (b.gone) throw Object.assign(new Error('Fake Harness no longer has the earlier session of this conversation (not resumable).'), { externalSessionGone: true });
     const id = ctx.resumeSessionId || `ext-${++seq}`;
-    await ctx.onSession?.({ id, resumable: true, resumed: !!ctx.resumeSessionId, via, verifiedForChat: verified });
+    await ctx.onSession?.({ id, resumable: true, resumed: !!ctx.resumeSessionId, via, verifiedForChat: verified, ...(agent ? { agent } : {}) });
     started();
     if (b.hang) await new Promise((_, reject) => ctx.signal.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })), { once: true }));
     return { content: `answer to ${ctx.message}`, externalSessionId: id };
@@ -46,7 +47,7 @@ const engines: EngineManager = {
 beforeEach(async () => {
   home = mkdtempSync(join(tmpdir(), 'tangu-engine-resume-'));
   process.env.TANGU_HOME = home;
-  calls = []; next = []; seq = 0; runs = []; started = () => {}; via = 'resume'; verified = true;
+  calls = []; next = []; seq = 0; runs = []; started = () => {}; via = 'resume'; verified = true; agent = 'fake-harness';
   const { host, db } = createSqliteHost({ dataDir: 'memory', localToken: 'x', userId: 'u1' });
   db.exec(toSqliteDDL(STANDALONE_SCHEMA));
   configureTangu({ host, engines, profile: createTanguProfile({ sandboxMode: 'none', toolBuiltins: ['read_file'] }),
@@ -95,8 +96,10 @@ describe('普通引擎对话的续接', () => {
     expect((await turn(2)).done).toBe(true);
     expect((await turn(3)).done).toBe(true);
     expect(resumes()).toEqual([null, 'ext-1', 'ext-1']);
-    expect((await resultOf(1)).result.externalSession).toEqual({ id: 'ext-1', engineId: 'dsh', cwd: home, after: null, rev: 0, epoch: historyEpoch });
-    expect((await resultOf(2)).result.externalSession).toEqual({ id: 'ext-1', engineId: 'dsh', cwd: home, after: 'a1', rev: 0, epoch: historyEpoch });
+    expect((await resultOf(1)).result.externalSession).toEqual({ id: 'ext-1', engineId: 'dsh', cwd: home, after: null, rev: 0, epoch: historyEpoch, agent: 'fake-harness' });
+    expect((await resultOf(2)).result.externalSession).toEqual({ id: 'ext-1', engineId: 'dsh', cwd: home, after: 'a1', rev: 0, epoch: historyEpoch, agent: 'fake-harness' });
+    // 续接时把「是哪家适配器记下的」一起交给引擎层核对;第一轮没有可续接的,不传
+    expect(calls.map((c) => c.from)).toEqual([undefined, 'fake-harness', 'fake-harness']);
     // 会话配置里不留指针(那一份客户端能整份改写、分支会照抄)
     const [{ agent_config }] = await query<any[]>(`SELECT agent_config FROM chat_sessions WHERE id = 'S'`);
     expect(JSON.stringify(agent_config ?? '')).not.toContain('ext-1');
@@ -242,6 +245,14 @@ describe('走 session/load 的引擎', () => {
     expect((await resultOf(2)).result.externalSession).toBeUndefined();
   }, 20_000);
 
+  it('老指针没记是哪家适配器 → 照样续接,交给引擎层的是 null(只看核没核过)', async () => {
+    agent = undefined;
+    await turn(1); await turn(2);
+    expect(resumes()).toEqual([null, 'ext-1']);
+    expect((await resultOf(1)).result.externalSession.agent).toBeUndefined();
+    expect(calls.map((c) => c.from)).toEqual([undefined, null]);
+  }, 20_000);
+
   it('引擎层没说核过(老的引擎管理器不带这一项)→ 当成没核过', async () => {
     via = 'resume'; verified = undefined as unknown as boolean;
     await turn(1); await turn(2);
@@ -250,11 +261,12 @@ describe('走 session/load 的引擎', () => {
 });
 
 describe('插件任务照旧按插件点名的会话续接', () => {
-  it('用会话配置里的 externalSession,不看 run 上的指针', async () => {
+  it('用会话配置里的 externalSession,不看 run 上的指针,也不让引擎层核适配器', async () => {
     await query(`INSERT INTO chat_sessions (id, user_id, app_id, title, model_id, kind, agent_config) VALUES ('T', 'u1', 'tangu', 'task', 'm1', 'task', ?)`,
       [JSON.stringify({ pluginOwner: 'p', execMode: 'host', cwd: home, preset: null, externalSession: { id: 'plug-7', engineId: 'dsh', cwd: home } })]);
     expect((await turn(1, {}, { session: 'T' })).done).toBe(true);
     expect(resumes()).toEqual(['plug-7']);
+    expect(calls[0].from).toBeUndefined();
     expect((await resultOf(1)).result.externalSession).toBeUndefined();
     const [{ agent_config }] = await query<any[]>(`SELECT agent_config FROM chat_sessions WHERE id = 'T'`);
     expect((typeof agent_config === 'string' ? JSON.parse(agent_config) : agent_config).externalSession).toEqual({ id: 'plug-7', engineId: 'dsh', cwd: home });

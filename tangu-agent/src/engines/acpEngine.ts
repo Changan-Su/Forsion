@@ -507,28 +507,40 @@ export async function runAcpEngine(def: EngineDef, ctx: EngineRunCtx): Promise<E
     // session/resume,它不回放。两样都不报 = 这个引擎每轮都是新会话。
     const canLoad = !!initialized.agentCapabilities?.loadSession;
     const canResume = !!(initialized.agentCapabilities as any)?.sessionCapabilities?.resume;
+    const via = canLoad ? 'load' as const : canResume ? 'resume' as const : undefined;
+    const agentName = typeof initialized.agentInfo?.name === 'string' ? initialized.agentInfo.name : undefined;
+    const verifiedForChat = chatResumeVerified(via, agentName);
+    // 普通对话的续接指针是和记它的那家适配器绑在一起的(ctx.resumeFromAgent)。握手报的不是那一家(同一个引擎 id 被改指到了
+    // 别的命令),或者这一家的普通对话续接没核过 → 那个会话 id 对它没有意义:不拿去问,新开一个,和「换了引擎」同样处理。
+    // 拿去问的话,它多半回一个认不出是「没有了」的错,而失败的那一轮不留记号,这场对话从此每一句都失败。
+    let resumeSessionId = ctx.resumeSessionId;
+    if (resumeSessionId && ctx.resumeFromAgent !== undefined && !(verifiedForChat && (ctx.resumeFromAgent === null || ctx.resumeFromAgent === agentName))) {
+      const why = verifiedForChat ? `it was recorded by ${ctx.resumeFromAgent}, this is ${agentName}` : `continuing an ordinary chat is not verified for ${agentName ?? 'this agent'}`;
+      console.log(`[engine:${def.id}] not continuing session ${resumeSessionId}: ${why}; starting a new session`);
+      resumeSessionId = undefined;
+    }
     let s: any;
-    if (ctx.resumeSessionId) {
-      await exitingSessions.get(ctx.resumeSessionId); // 上一轮的进程还在收尾 → 等它退了再续接(见 exitingSessions)
+    if (resumeSessionId) {
+      await exitingSessions.get(resumeSessionId); // 上一轮的进程还在收尾 → 等它退了再续接(见 exitingSessions)
       ctx.signal.throwIfAborted();
       try {
         if (canLoad) {
           replaying = true; // 到发 prompt 之前才放开,见上面 replaying 的说明
           const loadStarted = Date.now();
-          try { s = await guard(conn.loadSession({ cwd, mcpServers, _meta:meta, sessionId: ctx.resumeSessionId }), 'loadSession'); }
+          try { s = await guard(conn.loadSession({ cwd, mcpServers, _meta:meta, sessionId: resumeSessionId }), 'loadSession'); }
           catch (e) {
-            console.log(`[engine:${def.id}] session/load ${ctx.resumeSessionId} failed after ${Date.now() - loadStarted}ms, dropped ${dropped.replayed} replayed updates`);
+            console.log(`[engine:${def.id}] session/load ${resumeSessionId} failed after ${Date.now() - loadStarted}ms, dropped ${dropped.replayed} replayed updates`);
             throw e;
           }
           loadAnswered = true;
           loadMs = Date.now() - loadStarted;
           dropped.lastAt = Date.now();
         } else if (canResume) {
-          s = await guard(conn.unstable_resumeSession({ cwd, mcpServers, _meta:meta, sessionId: ctx.resumeSessionId }), 'resumeSession');
+          s = await guard(conn.unstable_resumeSession({ cwd, mcpServers, _meta:meta, sessionId: resumeSessionId }), 'resumeSession');
         } else {
           throw Object.assign(new Error('This external engine cannot resume an existing session'), { resumeUnsupported: true });
         }
-        sessionId = ctx.resumeSessionId;
+        sessionId = resumeSessionId;
       } catch (e: any) {
         if (ctx.signal.aborted) throw e;
         // 续接失败一律照实失败:不悄悄换一个新会话丢掉上文,也不回落到别的引擎。「没有了」单独标出来(externalSessionGone),
@@ -544,8 +556,7 @@ export async function runAcpEngine(def: EngineDef, ctx: EngineRunCtx): Promise<E
     }
     resumable = canLoad || canResume;
     // 会话一建立就告诉调用方(在 prompt 之前):这一轮中途被停掉 / 崩了,下一轮也接得上。记不下来不拦这一轮。
-    const via = canLoad ? 'load' as const : canResume ? 'resume' as const : undefined;
-    try { await ctx.onSession?.({ id: sessionId, resumable, resumed: !!ctx.resumeSessionId, via, verifiedForChat: chatResumeVerified(via, initialized.agentInfo?.name) }); }
+    try { await ctx.onSession?.({ id: sessionId, resumable, resumed: !!resumeSessionId, via, verifiedForChat, ...(agentName ? { agent: agentName } : {}) }); }
     catch (e: any) { console.warn(`[engine] onSession failed: ${e?.message || e}`); }
     if (ctx.readOnly) {
       const mode = s.modes?.availableModes?.find((m: any) => (claudeReadOnly ? m.id==='plan' : m.id==='read-only'));
