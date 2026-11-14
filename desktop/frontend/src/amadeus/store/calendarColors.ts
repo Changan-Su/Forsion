@@ -11,7 +11,7 @@
  *  只开着待办 / 主页日程卡(不拉 Agent 日程、不拉另一侧)时不播种 —— 等用户打开日历或日历插件订阅上来。
  *  播种之后的新来源不等叠加源:成员到齐就定,取这一列里用得最少的色。 */
 import { useEffect } from 'react'
-import { colorsSeeded, useCalendarConfig } from './calendarConfigStore'
+import { calendarSettingsSync, colorsSeeded, useCalendarConfig } from './calendarConfigStore'
 import { resolveCalendarMembers, withHumanCal } from './calendarMembers'
 import { getAggDb, watchAllDatabases, type AggDb } from './dbAggregateStore'
 import { useDbStore } from './dbStore'
@@ -83,6 +83,8 @@ function start(): () => void {
     if (wait > 0 && timer === undefined) timer = setTimeout(() => { timer = undefined; run() }, wait + 20)
   }
   const offs = [
+    // 随账号走的库:有人在看日历期间,共享那份聚焦 + 定时重读(留本机的库那边直接返回)
+    calendarSettingsSync.acquire(() => usePageStore.getState().vaultRoot),
     watchAllDatabases((d, r) => { dbs = d; ready = r; run() }), // 换库 / 文件清单 / 每张表(含默认日历)的读取状态都从这里来
     useCalendarConfig.subscribe(run), // 成员增删
     useAgentSchedules.subscribe(run),
