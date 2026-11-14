@@ -360,11 +360,15 @@ async function main() {
     await openVia(UID_OFF)
     const lp = await unitPage(app, UID_OFF)
     await lp.waitForSelector('[data-unit-window="loading"]', { timeout: 10_000 }).catch(() => {})
-    const unloadSeen = { unit: null, main: null }
-    const watch = Promise.all([
-      ap.waitForFunction(() => !document.querySelector('.unitrs-web'), null, { timeout: 15_000 }).then(() => { unloadSeen.unit = Date.now() }).catch(() => {}),
-      win.waitForFunction(() => !document.querySelector('.unitrs-web'), null, { timeout: 15_000 }).then(() => { unloadSeen.main = Date.now() }).catch(() => {}),
-    ])
+    // 每个窗口自己记:webview 什么时候没了、「切换完成」的广播(auth:changed)什么时候到 —— 前者必须早于后者(握手阶段)
+    const arm = (p) => p.evaluate(() => {
+      const w = window
+      w.__unloadAt = 0; w.__authAt = 0
+      w.tangu.onAuthChanged(() => { if (!w.__authAt) w.__authAt = performance.now() })
+      new MutationObserver(() => { if (!w.__unloadAt && !document.querySelector('.unitrs-web')) w.__unloadAt = performance.now() }).observe(document.body, { childList: true, subtree: true })
+    })
+    await arm(ap); await arm(win)
+    const watch = Promise.all([ap, win].map((p) => p.waitForFunction(() => !!window.__authAt, null, { timeout: 15_000 }).catch(() => {})))
     cloud.state.mode = 'unauth' // 之后再读名册就是 401;在途那份(请求时设备还在)照旧按 200 迟到
     const t0 = Date.now()
     const out = await win.evaluate(async () => { try { await window.tangu.forsionLogout(); return 'ok' } catch (e) { return String(e) } })
@@ -378,7 +382,9 @@ async function main() {
     R.check('A 登出前两边都开着那台的页面', pre.unit === 1 && pre.main === 1, pre)
     R.check('A 登出:Unit 窗的 webview 被卸掉,显示「先在 Forsion 里登录」', after1.web === 0 && after1.state === 'signedOut', { out, after1 })
     R.check('A 登出:主窗设备页的 webview 也被卸掉', mainAfterOut.web === 0 && !mainAfterOut.active, mainAfterOut)
-    R.check('A 卸掉发生在握手阶段(不晚于登出调用返回)', !!unloadSeen.unit && !!unloadSeen.main && unloadSeen.unit <= tDone + 50 && unloadSeen.main <= tDone + 50, { t0, tDone, unloadSeen })
+    const order = { unit: await ap.evaluate(() => ({ unload: window.__unloadAt, auth: window.__authAt })), main: await win.evaluate(() => ({ unload: window.__unloadAt, auth: window.__authAt })) }
+    const early = (o) => !!o.unload && !!o.auth && o.unload < o.auth
+    R.check('A 卸掉发生在握手阶段:两边 webview 都在「切换完成」广播到达之前就没了', early(order.unit) && early(order.main), { t0, tDone, order })
     R.check('A 迟到的旧名册(设备还在)不把页面挂回来:那扇等名册的窗停在「没登录」、没有 webview', after2.web === 0 && after2.state === 'signedOut', after2)
     await closeUnitWindows(app); await sleep(800)
     await L.close(); L = null
