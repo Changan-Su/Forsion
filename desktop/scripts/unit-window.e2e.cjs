@@ -35,7 +35,7 @@
  *      SH6 503 UNIT_WAKING →「正在唤醒…」并按 5 秒自动重试到成功;403 →「你现在不能进入这台 Unit」,没有重试
  *      SH7 名册里这一行改成 enter = none,窗口重新拿到焦点 → 退回这台电脑并说一句
  *      SH8 enter = none 的行点了 → 切到假插件(商店身份 market-<UUID>,manifest id 对上)的 Space;点不动的行点了什么都不发生
- *      UW_SHARED_ONLY=1 只跑这一段;UW_NEG=cloudprefix / UW_NEG=enter 是两条负对照的说明(改码后跑,对应断言应红)。
+ *      UW_SHARED_ONLY=1 只跑这一段。
  * 截图(SHOT_DIR,缺省系统临时目录):主窗 + Unit 窗并排、四种状态、悬停按钮、右键菜单、深色、110%;共享:面板(亮 / 暗)、整窗、唤醒中、不能进入。
  *
  * 跑:node <仓根>/.claude/hooks/devlock.cjs run --vehicle=e2e -- npm run e2e:unitwindow(量的是 out/,先 npm run build)
@@ -799,11 +799,18 @@ async function main() {
       const inBefore = await remote()
       shRows.frameEnter = 'none'
       const rq = cloud.state.rosterQueries.length
+      // 先只走主进程那条(browser-window-focus → window:focused);等不来再补一次宿主页自己的 focus 事件,并如实记下是哪条起的作用
       await app.evaluate(({ BrowserWindow }, id) => { const w = BrowserWindow.fromId(id); w.blur(); w.focus() }, mainId)
-      await win.evaluate(() => window.dispatchEvent(new Event('focus'))) // 台架窗口不一定拿得到系统焦点:两条路都给
-      const out = await until(async () => { const r = await remote(); return !r.active ? r : undefined }, 10000)
+      let via = 'main'
+      let out = await until(async () => { const r = await remote(); return !r.active ? r : undefined }, 5000)
+      if (!out) {
+        via = 'dom-focus'
+        await win.evaluate(() => window.dispatchEvent(new Event('focus')))
+        out = await until(async () => { const r = await remote(); return !r.active ? r : undefined }, 8000)
+      }
+      R.note(`SH7 起作用的复核时机:${via === 'main' ? '主进程转告的窗口重新拿到焦点' : '宿主页自己的 focus 事件(主进程那条在台架里没触发)'}`)
       const toast = await until(() => win.evaluate(() => document.body.innerText.includes('你已不能进入「工作室 Unit」') || undefined), 5000)
-      R.check('SH7 名册里那台变成不能进 → 退回这台电脑、页面卸掉、说一句', inBefore.active && !!out && out.web === null && !!toast, { inBefore: inBefore.active, out, toast: !!toast, rosterReads: cloud.state.rosterQueries.length - rq })
+      R.check('SH7 名册里那台变成不能进 → 退回这台电脑、页面卸掉、说一句', inBefore.active && !!out && out.web === null && !!toast, { via, inBefore: inBefore.active, out, toast: !!toast, rosterReads: cloud.state.rosterQueries.length - rq })
       shRows.frameEnter = 'frame'
 
       // SH8 enter = none 的行 → 切到假插件的 Space(商店身份 market-<UUID>,按 manifest id 对上)
