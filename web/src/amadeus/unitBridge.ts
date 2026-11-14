@@ -25,6 +25,7 @@ import type { AmadeusApi } from '@amadeus-shared/ipc'
 import { setAssetUrlBuilder } from '@amadeus-shared/assets'
 import { LOCAL_ONLY_CODE, localOnlyMessage } from '@/services/localOnly'
 import { translate } from '@/i18n'
+import { unitAuthHeader } from '@/services/unitToken'
 import '@/amadeus/lib/bridgeMessages' // amxbridge.* 文案(G2-14)
 
 export interface UnitBridgeCfg {
@@ -33,6 +34,7 @@ export interface UnitBridgeCfg {
   /** Published websites keep each visitor's plugin state in their own browser tab. */
   browserStorage?: string
   pluginData?: { read(id: string): Promise<string | null>; write(id: string, data: string): Promise<void> }
+  /** 本页令牌;占位值 / 空串不会被当令牌发出(services/unitToken)。 */
   getToken(): string
   /** 401(配对被回收):由 unitShim 清掉本地令牌并重进配对流。 */
   onAuthError(): void
@@ -86,7 +88,7 @@ export async function createUnitAmadeusBridge(cfg: UnitBridgeCfg): Promise<Amade
       // body 原样过 —— 走头的话隧道页事件 origin 恒 null,自己的回声全被当外部改动回灌。
       res = await fetch(new URL('vault/rpc', cfg.base), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cfg.getToken()}` },
+        headers: { 'Content-Type': 'application/json', ...unitAuthHeader(cfg.getToken()) },
         body: JSON.stringify({ ch, args: args.map(enc), client: clientId }),
         signal: ctrl.signal,
       })
@@ -122,7 +124,7 @@ export async function createUnitAmadeusBridge(cfg: UnitBridgeCfg): Promise<Amade
     try {
       const r = await fetch(new URL('vault/asset-token', cfg.base), {
         method: 'POST',
-        headers: { Authorization: `Bearer ${cfg.getToken()}` },
+        headers: { ...unitAuthHeader(cfg.getToken()) },
         signal: ctrl.signal,
       })
       const j = (await r.json()) as { token?: string; ttlSec?: number }

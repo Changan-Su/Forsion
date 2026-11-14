@@ -5,6 +5,8 @@
  */
 
 import type { UnitCloudCapabilities } from './unitCloudTransport'
+import { UNIT_TOKEN_PLACEHOLDER, unitAuthHeader } from '@/services/unitToken'
+import { createUnitAuthErrorHandler } from './unitAuthReload'
 
 interface UnitMeta { instanceId: string; name: string; version: string; projection?: 'public' | 'local'; inheritWebAccount?: boolean; localCapabilities?: { vault: boolean; engine: boolean; host: boolean }; browserStorage?: boolean; account?: { apiBase: string; loginPath: string }; capabilities?: UnitCloudCapabilities }
 
@@ -88,7 +90,7 @@ export async function installUnitShim(): Promise<boolean> {
 
   // 探针:隧道来的(桌面壳分区注入,unitHost 加内部密钥)直接 200;局域网未配对 → 401 → 配对流。
   const probe = await fetch(new URL('unit/whoami', base()), {
-    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    headers: unitAuthHeader(token),
   }).catch(() => null)
   if (published && !probe?.ok) throw new Error('Unit projection is unavailable')
   if (!published && (!probe || probe.status === 401)) {
@@ -99,9 +101,9 @@ export async function installUnitShim(): Promise<boolean> {
   }
   if (local && token) { try { tokenStorage?.setItem(tokenKey, token) } catch { /* Keep the validated key in memory. */ } }
   // T2 隧道:whoami 靠壳注入的 Authorization + 内部密钥豁免过闸,本页无配对令牌 ——
-  // 但 appStore.boot 只在 token 非空时才 connect(空 token = 未配置形态),给一枚非机密哨兵;
-  // 隧道请求的 Authorization 反正会被桌面壳在分区层整个换成 forsion token(unitWeb 不看它)。
-  if (!token) token = 'tunnel'
+  // 但 appStore.boot 只在 token 非空时才 connect(空 token = 未配置形态),给一枚非机密占位值。
+  // 占位值绝不当令牌发(见 services/unitToken):普通浏览器里靠设备子域的 Cookie,自带 Authorization 会让 Cookie 失效。
+  if (!token) token = UNIT_TOKEN_PLACEHOLDER
   ;(window as unknown as { __FORSION_UNIT_TOKEN__?: string }).__FORSION_UNIT_TOKEN__ = token
 
   // 桥必须先于 '@/main' 挂载:amadeus/api.ts 与 dbStore 在模块求值时捕获它。
@@ -134,11 +136,14 @@ export async function installUnitShim(): Promise<boolean> {
       browserStorage: published || (local && !meta.localCapabilities?.vault) ? visitor?.scope || meta.instanceId : undefined,
       pluginData,
       getToken: () => fixedToken,
-      onAuthError: () => {
+      onAuthError: createUnitAuthErrorHandler({
+        token: fixedToken,
         // Paired-device tokens and visitor accounts stay separate.
-        try { tokenStorage?.removeItem(tokenKey) } catch { /* private mode */ }
-        location.reload()
-      },
+        clearToken: () => { try { tokenStorage?.removeItem(tokenKey) } catch { /* private mode */ } },
+        reload: () => location.reload(),
+        storage: (() => { try { return sessionStorage } catch { return undefined } })(),
+        storageKey: `unit_auth_reload_${meta.instanceId}`,
+      }),
     })
   }
 
@@ -146,8 +151,7 @@ export async function installUnitShim(): Promise<boolean> {
   // 连接键恒为本页值(对方的 mode/backendUrl/token 绝不进来 —— 服务端白名单也不会下发它们)。
   // cloudApiBase 显式置空(P1-K6 S1):局域网直连的设备页没有云端 API;连接键压在对方偏好之后,对方也写不进来。
   const cfg = cloud?.config ?? { mode: 'external' as const, backendUrl: engineBase, token: published ? '' : token, cloudUrl: '', cloudApiBase: '', sandbox: 'none' as const }
-  const authHeaders = (): Record<string, string> | undefined =>
-    fixedToken && fixedToken !== 'tunnel' ? { Authorization: `Bearer ${fixedToken}` } : undefined
+  const authHeaders = (): Record<string, string> | undefined => unitAuthHeader(fixedToken)
   /** 对方设备的 UI 偏好(unit/config 白名单子集):Agent Desk/朗读/笔记偏好等按 desktopConfig
    *  门控的功能靠它长出来 —— 体验跟随对方设置(2026-08-24 拍板);写回走同一张白名单。 */
   let remotePrefs: Record<string, unknown> = {}
@@ -276,7 +280,7 @@ export async function installUnitShim(): Promise<boolean> {
     // Ribbon 上一个插件图标都没有(2026-08-24 实测)。spacesSave/Delete 刻意不给:设备页不写对方布局。
     spacesList: async () => {
       const r = await fetch(new URL('unit/spaces', base()), {
-        headers: fixedToken && fixedToken !== 'tunnel' ? { Authorization: `Bearer ${fixedToken}` } : undefined,
+        headers: authHeaders(),
       })
       if (!r.ok) throw new Error(`unit spaces HTTP ${r.status}`)
       return ((await r.json()) as { spaces?: unknown[] }).spaces || []

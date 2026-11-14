@@ -150,6 +150,7 @@ import { openWebFloatingPanel } from '../../pluginPanelSeam'
 import { connectionTarget, homeTarget } from '../../services/engine/targets'
 import { sendTelemetry } from '../../telemetrySend'
 import { telemetryPluginRef } from '../../telemetryPluginId'
+import { unitAuthHeader } from '../../services/unitToken'
 
 // 宿主自己产出的用户可见文案(插件贡献的文案由插件自己带双语,见 display.ts 的语言解析单点)。
 // 命名空间 `pluginhost.*` 是本文件专属,别处不要复用。
@@ -177,13 +178,11 @@ const RULES_OWED_KEY = 'amadeus.plugins.rulesOwed'
  *  `unit/plugins` 面拉(相对 base:局域网直连与 server 隧道子路径同一写法);其余环境走
  *  window.amadeus.listPlugins(desktop IPC / web 云桥)。设备页的壳构建与设备端 App 可能不同版本,
  *  按**壳自己的**版本再过一遍门禁 —— 被闸的照常列出(blocked 徽章),绝不静默消失。 */
-async function resolveExternalSources(): Promise<ExternalPluginSource[]> {
+export async function resolveExternalSources(): Promise<ExternalPluginSource[]> {
   const unitPage = (window as unknown as { __FORSION_UNIT_PAGE__?: unknown }).__FORSION_UNIT_PAGE__
   if (unitPage) {
-    const token = (window as unknown as { __FORSION_UNIT_TOKEN__?: string }).__FORSION_UNIT_TOKEN__ || ''
-    const r = await fetch(new URL('unit/plugins', document.baseURI), {
-      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-    })
+    const token = (window as unknown as { __FORSION_UNIT_TOKEN__?: string }).__FORSION_UNIT_TOKEN__
+    const r = await fetch(new URL('unit/plugins', document.baseURI), { headers: unitAuthHeader(token) })
     if (!r.ok) throw new Error(`unit plugins HTTP ${r.status}`)
     const j = (await r.json()) as { plugins?: ExternalPluginSource[] }
     const { APP_VERSION } = await import('../../changelog')
