@@ -152,9 +152,10 @@ import { SPACE_SHORTCUT, createSpaceShortcut, createWindowShortcut, iconPngFromD
 import { UNIT_SHORTCUT, handleUnitAddToDesktop, isUnitId, parseRosterResponse, parseUnitWindowState, unitWindowIdFromUrl, type RosterRead, type UnitShortcutResult, type UnitWindowEntry } from './unitShortcut'
 import { isMachineOwner, setHostRole } from './hostRole'
 import { LOCAL_UNIT_QUIT_ARG } from '../shared/localUnits'
-import { LOCAL_UNIT_SHORTCUT, clearLocalUnitRunRecord, defaultUserDataDir, dropStaleLocalUnitRunRecord, localUnitAppUserModelId, localUnitChannel, localUnitRegistryFile, localUnitSpawnArgs, localUnitSpawnEnv, localUnitsDefaultParent, macAppBundleOf, parseLocalUnitArgs, resolveLocalUnitLaunch, writeLocalUnitRunRecord } from './localUnits'
+import { LOCAL_UNIT_SHORTCUT, clearLocalUnitRunRecord, defaultUserDataDir, dropStaleLocalUnitRunRecord, localUnitAppUserModelId, localUnitChannel, localUnitGuard, localUnitRegistryFile, localUnitSpawnArgs, localUnitSpawnEnv, localUnitsDefaultParent, macAppBundleOf, parseLocalUnitArgs, readLocalUnitRegistry, resolveLocalUnitLaunch, writeLocalUnitRunRecord, type LocalUnitLaunchRefusal } from './localUnits'
 import { createLocalUnitsHost, showInstallBlocked, type LocalUnitsHost } from './localUnitsHost'
-import { clearDataPaths } from './clearDataPaths'
+import { clearDataPaths, recheckClearTarget, type ClearDataInput } from './clearDataPaths'
+import { dirIdentity } from './dirIdentity'
 
 /** ~/.tangu(与包内 core/tanguHome.ts 同约定;TANGU_HOME 可整体重定向)。 */
 setDevMode(!app.isPackaged) // dev 数据目录 ~/.forsion-dev,与正式版隔离(模块装载即定,先于一切路径解析)
@@ -173,22 +174,27 @@ const LOCAL_UNIT_ARGS = parseLocalUnitArgs(process.argv.slice(1))
 /** 这个 --user-data-dir(若启动时带着)定的是「哪一台是默认那台」:拉起同一家的别的实例时原样转交(台架靠它隔离;安装版平时没有)。 */
 const USER_DATA_DIR_SWITCH = app.commandLine.getSwitchValue('user-data-dir') || null
 if (!SANDBOX && LOCAL_UNIT_ARGS.quit && !LOCAL_UNIT_ARGS.present) process.exit(0) // 只有退出请求、没说哪一台:什么也不做
+/** 文件夹 Unit 的文件夹不许和默认那台的数据沾边(加入 / 新建 / 打开 / 启动 / 清数据都核):按启动时的环境算,先于下面改 userData / home。 */
+const LOCAL_UNIT_GUARD = localUnitGuard({ home: homedir(), startupUserData: app.getPath('userData'), envTanguHome: process.env.TANGU_HOME, envWorkspace: process.env.FORSION_WORKSPACE_DIR })
+/** 文件夹 Unit 起不来:一句中英文说明后退出(这时还没定界面语言 —— 主进程的语言源只在 whenReady 里注入一次)。 */
+function refuseLocalUnitLaunch(reason: LocalUnitLaunchRefusal): never {
+  const both = (key: string): string => `${mtFor('zh', key)}\n\n${mtFor('en', key)}`
+  const title = `${mtFor('zh', 'main.localUnits.refuseTitle')} / ${mtFor('en', 'main.localUnits.refuseTitle')}`
+  const msg = both(`main.localUnits.refuse.${reason}`)
+  // 台架(TANGU_HARNESS_QUIET=1)里没人点模态框:写 stderr,退出码 3
+  if (process.env.TANGU_HARNESS_QUIET === '1') { console.error(`[local-units] refused (${reason}): ${msg}`); process.exit(3) }
+  dialog.showErrorBox(title, msg)
+  process.exit(1)
+}
 const LOCAL_UNIT = (() => {
   if (SANDBOX || !LOCAL_UNIT_ARGS.present) return null
-  const r = resolveLocalUnitLaunch({ id: LOCAL_UNIT_ARGS.id, registryFile: LOCAL_UNIT_REGISTRY_FILE, channel: LOCAL_UNIT_CHANNEL })
+  const r = resolveLocalUnitLaunch({ id: LOCAL_UNIT_ARGS.id, registryFile: LOCAL_UNIT_REGISTRY_FILE, channel: LOCAL_UNIT_CHANNEL, guard: LOCAL_UNIT_GUARD })
   if (r.ok) return r
-  if (!LOCAL_UNIT_ARGS.quit) { // 退出请求对不上就安静退出(装更新前的那一轮不弹框)
-    // 这时还没定界面语言(主进程的语言源只在 whenReady 里注入一次):中英两段都写上
-    const both = (key: string): string => `${mtFor('zh', key)}\n\n${mtFor('en', key)}`
-    const title = `${mtFor('zh', 'main.localUnits.refuseTitle')} / ${mtFor('en', 'main.localUnits.refuseTitle')}`
-    const msg = both(`main.localUnits.refuse.${r.reason}`)
-    // 台架(TANGU_HARNESS_QUIET=1)里没人点模态框:写 stderr,退出码 3
-    if (process.env.TANGU_HARNESS_QUIET === '1') { console.error(`[local-units] refused (${r.reason}): ${msg}`); process.exit(3) }
-    dialog.showErrorBox(title, msg)
-    process.exit(1)
-  }
+  if (!LOCAL_UNIT_ARGS.quit) refuseLocalUnitLaunch(r.reason) // 退出请求对不上就安静退出(装更新前的那一轮不弹框)
   process.exit(0)
 })()
+/** 启动时这个文件夹的身份:清数据时核它没被换掉。 */
+const LOCAL_UNIT_DIR_ID = LOCAL_UNIT ? dirIdentity(LOCAL_UNIT.paths.dir) : null
 setHostRole({ pluginSandbox: !!SANDBOX, folderUnitId: LOCAL_UNIT?.id ?? null })
 /** 这台电脑的主人(默认那台):只有它碰整机共享的东西(hostRole.ts)。插件沙箱与文件夹 Unit 都不是。 */
 const MACHINE_OWNER = isMachineOwner()
@@ -241,7 +247,12 @@ else if (LOCAL_UNIT) {
   // 锁在手里 = 它没在跑:顺手删掉崩溃留下的运行记录(pid 被复用时判活会误判成在跑,挡住装更新);先删再放锁
   if (LOCAL_UNIT_ARGS.quit) { dropStaleLocalUnitRunRecord(LOCAL_UNIT.paths.appData); app.releaseSingleInstanceLock(); process.exit(0) }
   const appData = LOCAL_UNIT.paths.appData
-  try { writeLocalUnitRunRecord(appData, process.pid) } catch (e) { console.error('[local-units] run record not written:', e) }
+  // 写不进运行记录就不往下跑:别的实例(装更新、从列表移除)靠它判「这台开着」,没有记录会被当成没开
+  try { writeLocalUnitRunRecord(appData, process.pid) } catch (e) {
+    console.error('[local-units] run record not written:', e)
+    app.releaseSingleInstanceLock()
+    refuseLocalUnitLaunch('unwritable')
+  }
   process.on('exit', () => clearLocalUnitRunRecord(appData, process.pid))
 }
 app.on('second-instance', (_e, argv, cwd) => {
@@ -4291,6 +4302,7 @@ app.whenReady().then(async () => {
     registryFile: LOCAL_UNIT_REGISTRY_FILE,
     channel: LOCAL_UNIT_CHANNEL,
     self: LOCAL_UNIT ? { id: LOCAL_UNIT.id, dir: LOCAL_UNIT.paths.dir } : null,
+    guard: LOCAL_UNIT_GUARD,
     defaultParent: localUnitsDefaultParent(app.isPackaged, homedir()),
     home: homedir(),
     isMainSender: (e) => isTrustedSender(e) && !!mainWindow && !mainWindow.isDestroyed() && e.sender === mainWindow.webContents,
@@ -4874,6 +4886,29 @@ app.whenReady().then(async () => {
   //   tangu:  ~/.forsion(账号/设置/Agent 数据/会话/state.db)+ ~/Forsion 工作区 + ~/.tangu、~/Tangu 兼容软链
   //   desktop:userData 里的壳层配置(窗口/Amadeus)
   ipcMain.handle('app:clearData', async (_e, opts: { desktop?: boolean; tangu?: boolean }) => {
+    // 删哪些路径由 clearDataPaths 按身份算(单测钉住,按真实路径核):显式 TANGU_HOME=…/tangu 时只删它本身、不删推导出的父目录;
+    // 插件沙箱不碰整机的 ~/.tangu、~/Tangu 兼容软链;文件夹 Unit 只删本文件夹下的 home/ 与 Forsion/,绝不碰默认那台的数据目录;
+    // 默认那台:名册里有 Unit 落在要删的路径里(或名册读不出)→ 整个不删。有一条不行就一条都不删、什么都不停,告诉用户。
+    const clearInput = (): ClearDataInput => {
+      const reg = SANDBOX ? null : readLocalUnitRegistry(LOCAL_UNIT_REGISTRY_FILE)
+      const unitDirs = SANDBOX ? [] : reg?.state === 'ok' ? reg.registry.units.filter((u) => u.id !== LOCAL_UNIT?.id).map((u) => u.path) : null
+      return {
+        role: LOCAL_UNIT ? 'folder' : SANDBOX ? 'sandbox' : 'owner', tangu: !!opts?.tangu, desktop: !!opts?.desktop,
+        envTanguHome: process.env.TANGU_HOME, forsionHome: forsionHomeDir(), workspace: forsionWorkspaceDir(),
+        userData: app.getPath('userData'), home: homedir(), folderDir: LOCAL_UNIT?.paths.dir, folderIdentity: LOCAL_UNIT_DIR_ID,
+        unitDirs, protectedRoots: LOCAL_UNIT_GUARD.strict,
+        desktopFiles: ['tangu-desktop-config.json', 'amadeus-config.json', REMOTE_SESSIONS_FILE], // P1-K4:remote-sessions.json(重置远程会话开关与信任)
+      }
+    }
+    const refuse = async (plan: ReturnType<typeof clearDataPaths>): Promise<void> => {
+      console.warn('[clear-data] refused:', JSON.stringify(plan.refused))
+      const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null
+      const detail = plan.refused.map((r) => `${r.path}${r.with ? ` ↔ ${r.with}` : ''}`).join('\n')
+      const box = { type: 'warning' as const, title: mt('main.localUnits.clearRefusedTitle'), message: mt('main.localUnits.clearRefused'), detail, buttons: [mt('main.localUnits.ok')], defaultId: 0, noLink: true }
+      if (process.env.TANGU_HARNESS_QUIET !== '1') await (win ? dialog.showMessageBox(win, box) : dialog.showMessageBox(box))
+    }
+    const pre = clearDataPaths(clearInput())
+    if (pre.refused.length) { await refuse(pre); return { ok: false } }
     isQuitting = true // 先封住排队中的拉起(ensureBackend 核对它):删库期间不能又被拉起来占住 state.db
     // 电脑历史先停:断订阅、丢缓冲、store 关门、等在途那笔写落定(封顶 10s)(app.exit 不发 before-quit;不停的话 1s 批量落盘
     // 会在删目录途中把 computer-history/events 建回来)。超时没落定的,删完目录后由 afterWipe 等它落定再删一次(见下)。
@@ -4881,24 +4916,25 @@ app.whenReady().then(async () => {
     await backend.stop() // 释放 state.db 句柄,否则占用删不掉
     await ensureChain // 在途那次收尾(它可能正要重建默认工作区目录)再删
     // 与配置写入同排一队:在途的写先落完再删;删完同一拍就退出,排在后面的写来不及把 config.json(含 apiKey)写回来
+    let refusedLate: ReturnType<typeof clearDataPaths> | null = null
     await configQueue(async () => {
-      // 删哪些路径由 clearDataPaths 按身份算(单测钉住):显式 TANGU_HOME=…/tangu 时只删它本身、不删推导出的父目录;
-      // 插件沙箱不碰整机的 ~/.tangu、~/Tangu 兼容软链;文件夹 Unit 只删本文件夹下的 home/ 与 Forsion/,绝不碰默认那台的数据目录。
       // ⚠️ P1-K2 / G11:remote-lock.json **不在**桌面那半的清理列表 —— 清数据 = 不经系统认证解锁(远端锁定只能本机认证后解)
       // ponytail: 显式 TANGU_HOME 形态下父目录里的共享域文件(auth/config.json 等)会留下;要连带清就得逐项列共享域条目。
-      const plan = clearDataPaths({
-        role: LOCAL_UNIT ? 'folder' : SANDBOX ? 'sandbox' : 'owner', tangu: !!opts?.tangu, desktop: !!opts?.desktop,
-        envTanguHome: process.env.TANGU_HOME, forsionHome: forsionHomeDir(), workspace: forsionWorkspaceDir(),
-        userData: app.getPath('userData'), home: homedir(), folderDir: LOCAL_UNIT?.paths.dir,
-        desktopFiles: ['tangu-desktop-config.json', 'amadeus-config.json', REMOTE_SESSIONS_FILE], // P1-K4:remote-sessions.json(重置远程会话开关与信任)
-      })
-      if (plan.refused.length) console.warn('[clear-data] refused to delete:', plan.refused.join(', '))
-      for (const p of plan.remove) await rm(p, { recursive: true, force: true }).catch(() => {})
+      // 停完引擎再算一遍(这期间文件夹可能被换掉、名册可能变了),每条真删前再核一次
+      const input = clearInput()
+      const plan = clearDataPaths(input)
+      if (plan.refused.length) { refusedLate = plan; return }
+      for (const p of plan.remove) {
+        if (!recheckClearTarget(p, input)) { console.warn('[clear-data] skipped, changed since checked:', p); continue }
+        await rm(p, { recursive: true, force: true }).catch(() => {})
+      }
       // 电脑历史根目录单独再删(显式 TANGU_HOME 时它不在上面删的目录里);在途写超时没落定的,等它落定后再删一次。
       // 就在配置队列里做:删完同一拍退出的约束不破。
       if (opts?.tangu) await chWipe?.afterWipe()
       if (opts?.desktop) await deviceSecrets.wipe().catch(() => {}) // P1-K5:device-secrets.json(配对 / external token)
     })
+    const late = refusedLate as ReturnType<typeof clearDataPaths> | null // 在队列回调里赋的值,TS 的收窄看不到
+    if (late) await refuse(late) // 一条没删;引擎已停,照常重启回到原样
     app.relaunch()
     app.exit(0)
     return { ok: true }

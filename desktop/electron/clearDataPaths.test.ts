@@ -1,45 +1,121 @@
-import { describe, expect, it } from 'vitest'
-import { clearDataPaths } from './clearDataPaths'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, symlinkSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { clearDataPaths, recheckClearTarget, type ClearDataInput } from './clearDataPaths'
+import { dirIdentity } from './dirIdentity'
 
-const H = '/Users/x'
 const files = ['tangu-desktop-config.json', 'amadeus-config.json', 'remote-sessions.json']
-const base = { home: H, desktopFiles: files, tangu: true, desktop: true }
+
+let T = ''
+let H = ''
+beforeEach(() => {
+  T = realpathSync(mkdtempSync(join(tmpdir(), 'forsion-cleardata-')))
+  H = join(T, 'home')
+  mkdirSync(H)
+})
+afterEach(() => { rmSync(T, { recursive: true, force: true }) })
+
+const mkUnit = (dir: string): string => { for (const s of ['home', 'app-data', 'Forsion']) mkdirSync(join(dir, s), { recursive: true }); return dir }
+const folder = (dir: string, extra: Partial<ClearDataInput> = {}): ClearDataInput => ({
+  role: 'folder', tangu: true, desktop: true, home: H, desktopFiles: files, folderDir: dir, folderIdentity: dirIdentity(dir),
+  envTanguHome: join(H, '.forsion'), forsionHome: join(H, '.forsion'), workspace: join(H, 'Forsion'), userData: join(dir, 'app-data'),
+  unitDirs: [], protectedRoots: [join(T, 'Application Support', 'Forsion')], ...extra,
+})
 
 describe('app:clearData 要删的路径', () => {
   it('默认那台:引擎 home + 工作区 + ~/.tangu、~/Tangu 软链 + 三份壳层文件', () => {
-    expect(clearDataPaths({ ...base, role: 'owner', forsionHome: `${H}/.forsion`, workspace: `${H}/Forsion`, userData: '/ud' })).toEqual({
+    expect(clearDataPaths({ home: H, desktopFiles: files, tangu: true, desktop: true, role: 'owner', forsionHome: `${H}/.forsion`, workspace: `${H}/Forsion`, userData: '/ud', unitDirs: [] })).toEqual({
       remove: [`${H}/.forsion`, `${H}/Forsion`, `${H}/.tangu`, `${H}/Tangu`, '/ud/tangu-desktop-config.json', '/ud/amadeus-config.json', '/ud/remote-sessions.json'],
       refused: [],
     })
     // 显式 TANGU_HOME=…/tangu:只删它本身,不删推导出的父目录
-    expect(clearDataPaths({ ...base, desktop: false, role: 'owner', envTanguHome: '/data/tangu', forsionHome: '/data', workspace: `${H}/Forsion`, userData: '/ud' }).remove[0]).toBe('/data/tangu')
+    expect(clearDataPaths({ home: H, desktopFiles: files, tangu: true, role: 'owner', envTanguHome: '/data/tangu', forsionHome: '/data', workspace: `${H}/Forsion`, userData: '/ud', unitDirs: [] }).remove[0]).toBe('/data/tangu')
+  })
+
+  it('默认那台:名册里的 Unit 在要删的路径里(旧的开发版位置 ~/.forsion-dev/units)→ 一条都不删;名册读不出 → 也不删', () => {
+    const legacy = mkUnit(join(H, '.forsion-dev', 'units', 'Old'))
+    const owner: ClearDataInput = { home: H, desktopFiles: files, tangu: true, desktop: true, role: 'owner', forsionHome: join(H, '.forsion-dev'), workspace: join(H, 'Forsion-Dev'), userData: '/ud', unitDirs: [legacy] }
+    const r = clearDataPaths(owner)
+    expect(r.remove).toEqual([]) // 连桌面那半也不删
+    expect(r.refused).toEqual([{ path: join(H, '.forsion-dev'), reason: 'unit_inside', with: legacy }])
+    // 软链别名:Unit 文件夹登记的是软链,真身在要删的工作区里
+    const elsewhere = mkUnit(join(H, 'Forsion-Dev', 'Hidden'))
+    symlinkSync(elsewhere, join(T, 'alias'))
+    expect(clearDataPaths({ ...owner, unitDirs: [join(T, 'alias')] }).refused[0]).toMatchObject({ path: join(H, 'Forsion-Dev'), reason: 'unit_inside' })
+    expect(clearDataPaths({ ...owner, unitDirs: null })).toEqual({ remove: [], refused: [{ path: join(H, '.forsion-dev'), reason: 'registry_unreadable' }] })
+    // 新的缺省位置 ~/.forsion-dev-units 不在里面:照常删
+    const fresh = mkUnit(join(H, '.forsion-dev-units', 'New'))
+    expect(clearDataPaths({ ...owner, unitDirs: [fresh] }).refused).toEqual([])
   })
 
   it('插件沙箱:只删自己的 home 与工作区,不碰整机的兼容软链', () => {
-    const r = clearDataPaths({ ...base, desktop: false, role: 'sandbox', envTanguHome: '/sbx/home', forsionHome: '/sbx/home', workspace: '/sbx/workspace', userData: '/sbx/ud' })
+    const r = clearDataPaths({ home: H, desktopFiles: files, tangu: true, role: 'sandbox', envTanguHome: '/sbx/home', forsionHome: '/sbx/home', workspace: '/sbx/workspace', userData: '/sbx/ud' })
     expect(r.remove).toEqual(['/sbx/home', '/sbx/workspace'])
   })
 
   it('文件夹 Unit:只删本文件夹下的 home/ 与 Forsion/(不看环境变量),桌面那半删本文件夹 app-data 里的壳层文件', () => {
-    const dir = `${H}/Forsion Units/A`
-    const r = clearDataPaths({ ...base, role: 'folder', folderDir: dir, envTanguHome: `${H}/.forsion`, forsionHome: `${H}/.forsion`, workspace: `${H}/Forsion`, userData: `${dir}/app-data` })
+    const dir = mkUnit(join(H, 'Forsion Units', 'A'))
+    const r = clearDataPaths(folder(dir))
     expect(r).toEqual({
       remove: [`${dir}/home`, `${dir}/Forsion`, `${dir}/app-data/tangu-desktop-config.json`, `${dir}/app-data/amadeus-config.json`, `${dir}/app-data/remote-sessions.json`],
       refused: [],
     })
-    for (const p of r.remove) for (const bad of ['.forsion', '.forsion-dev', 'Forsion/', '.tangu', 'Tangu']) expect(p.startsWith(`${H}/${bad}`)).toBe(false)
+    expect(recheckClearTarget(`${dir}/home`, folder(dir))).toBe(true)
   })
 
-  it('文件夹放在默认那台的数据目录里 / 盖住家目录 → 不删,记进 refused', () => {
-    const inside = clearDataPaths({ ...base, desktop: false, role: 'folder', folderDir: `${H}/.forsion/units/A`, forsionHome: '', workspace: '', userData: '' })
-    expect(inside.remove).toEqual([])
-    expect(inside.refused).toEqual([`${H}/.forsion/units/A/home`, `${H}/.forsion/units/A/Forsion`])
-    // 文件夹 = 家目录的父目录(home/ 子目录正好就是家目录):那一条绝不删
-    expect(clearDataPaths({ ...base, desktop: false, role: 'folder', folderDir: '/', forsionHome: '', workspace: '', userData: '', home: '/home' }).refused).toContain('/home')
-    expect(clearDataPaths({ ...base, desktop: false, role: 'folder', forsionHome: '', workspace: '', userData: '' }).remove).toEqual([])
+  it('软链别名:~/Forsion 指进 Unit 文件夹里,清这台 Unit 不能顺手删掉默认那台的工作区', () => {
+    const dir = mkUnit(join(T, 'data', 'U'))
+    symlinkSync(join(dir, 'Forsion'), join(H, 'Forsion')) // 默认工作区就是这台 Unit 的 Forsion/
+    const r = clearDataPaths(folder(dir))
+    expect(r.remove).toEqual([])
+    expect(r.refused).toEqual([{ path: join(dir, 'Forsion'), reason: 'overlap', with: join(H, 'Forsion') }])
+  })
+
+  it('子目录是软链 / 文件夹被换掉(换成软链或另一个目录)→ 不删', () => {
+    const dir = mkUnit(join(H, 'Forsion Units', 'B'))
+    const input = folder(dir)
+    rmSync(join(dir, 'home'), { recursive: true })
+    mkdirSync(join(H, '.forsion'))
+    symlinkSync(join(H, '.forsion'), join(dir, 'home'))
+    expect(clearDataPaths(input).refused).toEqual([{ path: join(dir, 'home'), reason: 'link' }])
+    // 核对之后文件夹被挪走、原地换成指向别处的软链:删之前再核一次就拦下
+    const dir2 = mkUnit(join(H, 'Forsion Units', 'C'))
+    const in2 = folder(dir2)
+    expect(recheckClearTarget(join(dir2, 'Forsion'), in2)).toBe(true)
+    renameSync(dir2, join(T, 'C-moved'))
+    symlinkSync(mkUnit(join(T, 'victim')), dir2)
+    expect(recheckClearTarget(join(dir2, 'Forsion'), in2)).toBe(false)
+    expect(clearDataPaths(in2).refused[0]).toMatchObject({ path: dir2, reason: 'link' })
+    // 换成另一个真目录(身份不对)
+    rmSync(dir2)
+    mkUnit(dir2)
+    expect(clearDataPaths(in2).refused[0]).toMatchObject({ path: dir2, reason: 'moved' })
+  })
+
+  it('文件夹在默认那台的数据目录里 / 就是家目录的上级 / 碰到别的 Unit / 名册读不出 → 一条都不删', () => {
+    const inside = mkUnit(join(H, '.forsion', 'units', 'A'))
+    expect(clearDataPaths(folder(inside)).refused.map((r) => r.reason)).toEqual(['overlap', 'overlap'])
+    // 文件夹 = 家目录的父目录(home/ 子目录正好就是家目录)
+    mkdirSync(join(T, 'Forsion'))
+    mkdirSync(join(T, 'app-data'))
+    const top = clearDataPaths(folder(T))
+    expect(top.remove).toEqual([])
+    expect(top.refused).toContainEqual(expect.objectContaining({ path: H, reason: 'overlap' }))
+    // 别的 Unit 的文件夹在本 Unit 的 Forsion/ 里
+    const host = mkUnit(join(H, 'Forsion Units', 'Host'))
+    const nested = mkUnit(join(host, 'Forsion', 'Nested'))
+    expect(clearDataPaths(folder(host, { unitDirs: [nested] })).refused).toEqual([{ path: join(host, 'Forsion'), reason: 'overlap', with: nested }])
+    expect(clearDataPaths(folder(host, { unitDirs: null })).refused[0].reason).toBe('registry_unreadable')
+    expect(clearDataPaths({ ...folder(host), folderDir: undefined }).remove).toEqual([])
+  })
+
+  it('旧的开发版位置 ~/.forsion-dev/units 里的老 Unit:照样能清自己的数据', () => {
+    const legacy = mkUnit(join(H, '.forsion-dev', 'units', 'Old'))
+    expect(clearDataPaths(folder(legacy)).refused).toEqual([])
   })
 
   it('什么都不勾 = 什么都不删', () => {
-    expect(clearDataPaths({ ...base, tangu: false, desktop: false, role: 'owner', forsionHome: '/a', workspace: '/b', userData: '/c' })).toEqual({ remove: [], refused: [] })
+    expect(clearDataPaths({ home: H, desktopFiles: files, tangu: false, desktop: false, role: 'owner', forsionHome: '/a', workspace: '/b', userData: '/c', unitDirs: [] })).toEqual({ remove: [], refused: [] })
   })
 })

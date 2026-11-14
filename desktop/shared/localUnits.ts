@@ -83,7 +83,7 @@ export interface LocalUnitsSnapshot {
   units: LocalUnitRow[]
   /** 名册读不出来 ≠ 空:unreadable 时 units 为空数组,界面要说「读不出」,写操作一律被拒。 */
   registry: 'ok' | 'unreadable'
-  /** 「新建」对话框里缺省的父目录(安装版 ~/Forsion Units,开发版 ~/.forsion-dev/units)。 */
+  /** 「新建」对话框里缺省的父目录(安装版 ~/Forsion Units,开发版 ~/.forsion-dev-units)。 */
   defaultParent: string
   /** 同上,给人看的写法。 */
   defaultParentDisplay: string

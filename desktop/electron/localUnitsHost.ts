@@ -18,6 +18,7 @@ import {
   LOCAL_UNIT_RUN_FILE, addExistingLocalUnit, createLocalUnit, isLocalUnitId, listLocalUnits, localUnitDisplayPath, localUnitPaths,
   lookupLocalUnit, quitLocalUnitsForInstall, readLocalUnitRegistry, removeLocalUnit, renameLocalUnit, type LocalUnitsContext,
 } from './localUnits'
+import type { PathGuard } from './pathOverlap'
 import type { WindowShortcutResult } from './spaceShortcut'
 
 export const LOCAL_UNITS_MESSAGES = defineMainMessages({
@@ -29,6 +30,13 @@ export const LOCAL_UNITS_MESSAGES = defineMainMessages({
   'main.localUnits.refuse.mismatch': { zh: '这台 Unit 的文件夹对不上。', en: "This Unit's folder doesn't match its registration." },
   'main.localUnits.refuse.channel_mismatch': { zh: '这台 Unit 属于另一个版本的 Forsion(安装版 / 开发版)。', en: 'This Unit belongs to another edition of Forsion (installed or development).' },
   'main.localUnits.refuse.unsafe': { zh: '这台 Unit 的文件夹里有指向别处的链接。为了不和别的 Unit 共用数据,暂时不能打开。', en: "This Unit's folder contains links to other places. To avoid sharing data with another Unit, it can't be opened." },
+  'main.localUnits.refuse.overlap': { zh: '这台 Unit 的文件夹和这台电脑自己的 Forsion 数据(或你的用户文件夹)重叠,打开它会共用数据,所以不能打开。', en: "This Unit's folder overlaps this computer's own Forsion data (or your home folder). Opening it would share data, so it can't be opened." },
+  'main.localUnits.refuse.unwritable': { zh: '无法写入这台 Unit 的文件夹,所以不能打开它。请检查这个文件夹的权限和磁盘空间。', en: "Can't write to this Unit's folder, so it can't be opened. Check the folder's permissions and free disk space." },
+  'main.localUnits.removeRunning': { zh: '这台 Unit 正开着(或无法确认它已关掉)。请先关掉它,再从列表移除。', en: 'This Unit is open (or Forsion can\'t confirm it\'s closed). Close it before removing it from the list.' },
+  'main.localUnits.overlapsDefault': { zh: '这个文件夹和这台电脑自己的 Forsion 数据(或你的用户文件夹)重叠,不能用作 Unit。', en: "This folder overlaps this computer's own Forsion data or your home folder, so it can't be used as a Unit." },
+  'main.localUnits.originalMarkerUnreadable': { zh: '这台 Unit 登记的原文件夹现在读不出来,无法判断这是不是一份拷贝。什么都没改。', en: "The folder this Unit is registered at can't be read right now, so Forsion can't tell whether this is a copy. Nothing was changed." },
+  'main.localUnits.clearRefusedTitle': { zh: '没有清空数据', en: "Data wasn't cleared" },
+  'main.localUnits.clearRefused': { zh: '要删除的位置和另一台 Unit 的文件夹或这台电脑自己的 Forsion 数据重叠(或无法确认不重叠),所以什么都没删。请先把那台 Unit 移到别处,或从列表移除。', en: "The data to delete overlaps another Unit's folder or this computer's own Forsion data (or Forsion can't confirm it doesn't), so nothing was deleted. Move that Unit somewhere else or remove it from the list first." },
   'main.localUnits.chooseParent': { zh: '选择新 Unit 放在哪里', en: 'Choose where to put the new Unit' },
   'main.localUnits.chooseExisting': { zh: '选择一个 Unit 文件夹', en: 'Choose a Unit folder' },
   'main.localUnits.installBlockedTitle': { zh: '还不能安装更新', en: "Can't install the update yet" },
@@ -42,6 +50,8 @@ export interface LocalUnitsHostDeps {
   channel: LocalUnitChannel
   /** 当前进程是文件夹 Unit → 它的 id 与文件夹;默认那台 = null。 */
   self: { id: string; dir: string } | null
+  /** 文件夹不许和默认那台的数据沾边(localUnitGuard,main.ts 启动时算好)。 */
+  guard: PathGuard
   defaultParent: string
   home: string
   /** 发起方是主窗(且可信)。 */
@@ -63,7 +73,7 @@ export interface LocalUnitsHost {
 const deny = { ok: false as const, code: 'io' as const, message: 'only the main window can do this' }
 
 export function createLocalUnitsHost(d: LocalUnitsHostDeps): LocalUnitsHost {
-  const ctx: LocalUnitsContext = { registryFile: d.registryFile, channel: d.channel, self: d.self, home: d.home }
+  const ctx: LocalUnitsContext = { registryFile: d.registryFile, channel: d.channel, self: d.self, home: d.home, guard: d.guard, text: (k) => mt(`main.localUnits.${k}`) }
   const snapshot = (): LocalUnitsSnapshot => listLocalUnits({ ...ctx, defaultParent: d.defaultParent })
 
   // ── 变化广播 ──

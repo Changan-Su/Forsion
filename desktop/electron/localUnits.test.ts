@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { LOCAL_UNIT_MARKER } from '../shared/localUnits'
@@ -8,6 +8,7 @@ import {
   localUnitPaths, localUnitRunningPid, localUnitSpawnArgs, localUnitSpawnEnv, localUnitsDefaultParent, lookupLocalUnit,
   mutateLocalUnitRegistry, parseLocalUnitArgs, readLocalUnitMarker, readLocalUnitRegistry, removeLocalUnit, renameLocalUnit,
   resolveLocalUnitLaunch, writeLocalUnitMarker, writeLocalUnitRunRecord, type LocalUnitsContext,
+  localUnitGuard, localUnitRunState, withRegistryLock,
   LOCAL_UNIT_SHORTCUT, localUnitAppUserModelId, macAppBundleOf, quitLocalUnitsForInstall,
 } from './localUnits'
 import { createWindowShortcut, windowShortcutPlan } from './spaceShortcut'
@@ -49,7 +50,7 @@ describe('启动参数', () => {
     expect(defaultUserDataDir('/a/forsion-desktop', false)).toBe('/a/forsion-desktop-dev')
     expect(defaultUserDataDir('/a/Forsion', true)).toBe('/a/Forsion')
     expect(localUnitsDefaultParent(true, '/Users/x')).toBe('/Users/x/Forsion Units')
-    expect(localUnitsDefaultParent(false, '/Users/x')).toBe('/Users/x/.forsion-dev/units')
+    expect(localUnitsDefaultParent(false, '/Users/x')).toBe('/Users/x/.forsion-dev-units') // 不在开发版 home(~/.forsion-dev)里面
     expect(localUnitDisplayPath('/Users/x/Forsion Units/A', '/Users/x')).toBe('~/Forsion Units/A')
     expect(localUnitDisplayPath('/Users/xy/A', '/Users/x')).toBe('/Users/xy/A')
   })
@@ -118,14 +119,58 @@ describe('新建', () => {
     expect(registryIds()?.sort()).toEqual([ID(1), ID(2)])
   })
 
-  it('陈旧的锁(10 秒没动)被挪开,写照常进行', async () => {
+  it('陈旧的锁:持锁进程死了 → 立刻回收;内容不是 <pid>-<uuid>(还没写进 token)→ 10 秒没动才回收', async () => {
     mkdirSync(join(root, 'default-ud'), { recursive: true })
     const lock = `${registryFile}.lock`
-    writeFileSync(lock, 'dead-process')
-    const old = (Date.now() - 20_000) / 1000
-    utimesSync(lock, old, old)
+    writeFileSync(lock, `99999999-${ID(9)}`) // 死进程,mtime 是新的
     expect((await create()).ok).toBe(true)
     expect(existsSync(lock)).toBe(false)
+    writeFileSync(lock, 'garbage')
+    const old = (Date.now() - 20_000) / 1000
+    utimesSync(lock, old, old)
+    expect((await create('Bench B')).ok).toBe(true)
+    expect(existsSync(lock)).toBe(false)
+  })
+
+  it('持锁进程还活着:锁再旧也不回收(等到期限报 io,名册不动)', async () => {
+    mkdirSync(join(root, 'default-ud'), { recursive: true })
+    const lock = `${registryFile}.lock`
+    const live = `${process.pid}-${ID(8)}`
+    writeFileSync(lock, live)
+    const old = (Date.now() - 60_000) / 1000
+    utimesSync(lock, old, old)
+    const r = await create('Waits', { lockOptions: { waitMs: 300 } })
+    expect(r).toMatchObject({ ok: false, code: 'io' })
+    expect(readFileSync(lock, 'utf8')).toBe(live)
+    expect(existsSync(join(parent, 'Waits'))).toBe(false) // 登记失败,刚建的文件夹收掉
+  })
+
+  it('回收的交错:B 判了陈旧、还没挪,A 先回收并拿到新锁 → B 挪走的不是那一份,原样放回;A 的锁一直在,两次提交都在', async () => {
+    mkdirSync(join(root, 'default-ud'), { recursive: true })
+    writeFileSync(registryFile, JSON.stringify({ schema: 1, units: [] }))
+    const lock = `${registryFile}.lock`
+    const dead = `99999999-${ID(9)}`
+    writeFileSync(lock, dead)
+    const tokenA = `${process.pid}-${ID(7)}`
+    const seen: string[] = []
+    let fired = false
+    const b = mutateLocalUnitRegistry(registryFile, (reg) => ({ next: { schema: 1, units: [...reg.units, { id: ID(2), path: '/b', addedAt: 2 }] }, result: 'b' }), {
+      waitMs: 3000,
+      beforeReclaim: (l, stale) => {
+        if (fired) return
+        fired = true
+        expect(stale).toBe(dead)
+        // A 在这一刻回收了死锁、拿到新锁,并在锁内提交了自己的一条
+        rmSync(l)
+        writeFileSync(l, tokenA)
+        writeFileSync(registryFile, JSON.stringify({ schema: 1, units: [{ id: ID(1), path: '/a', addedAt: 1 }] }))
+        setTimeout(() => { seen.push(readFileSync(l, 'utf8')); rmSync(l) }, 100) // A 过一会儿放锁
+      },
+    })
+    expect(await b).toEqual({ ok: true, result: 'b' })
+    expect(seen).toEqual([tokenA]) // B 没把 A 的锁挪走(挪了也放回来了)
+    expect(registryIds()).toEqual([ID(1), ID(2)]) // 两次提交都在,没有互相盖掉
+    expect(readdirSync(join(root, 'default-ud')).filter((f) => f !== 'local-units.json')).toEqual([])
   })
 })
 
@@ -160,6 +205,57 @@ describe('加入已有的文件夹:四种情形', () => {
     cpSync(dir, copy, { recursive: true })
     writeLocalUnitMarker(dir, { ...readLocalUnitMarker(dir)!, id: ID(99) })
     expect(r.ok && await addExistingLocalUnit({ ...ctx, dir: copy })).toMatchObject({ ok: true, unit: { path: copy } })
+  })
+
+  it('原文件夹的标记读不出(坏 JSON / 没权限)→ io,名册路径不改;选的文件夹自己的标记读不出 → not_a_unit', async () => {
+    await create()
+    const dir = join(parent, 'Bench A')
+    const copy = join(root, 'copy')
+    cpSync(dir, copy, { recursive: true })
+    writeFileSync(join(dir, LOCAL_UNIT_MARKER), '{"schema":1,') // 原处写坏了
+    expect(await addExistingLocalUnit({ ...ctx, dir: copy, text: (k) => `t:${k}` })).toEqual({ ok: false, code: 'io', message: 't:originalMarkerUnreadable' })
+    expect(readLocalUnitRegistry(registryFile)).toMatchObject({ registry: { units: [{ id: ID(1), path: dir }] } })
+    cpSync(join(copy, LOCAL_UNIT_MARKER), join(dir, LOCAL_UNIT_MARKER))
+    chmodSync(join(dir, LOCAL_UNIT_MARKER), 0o000) // 没权限
+    try {
+      expect(await addExistingLocalUnit({ ...ctx, dir: copy })).toMatchObject({ ok: false, code: 'io' })
+      expect(readLocalUnitRegistry(registryFile)).toMatchObject({ registry: { units: [{ id: ID(1), path: dir }] } })
+      expect(await addExistingLocalUnit({ ...ctx, dir })).toMatchObject({ ok: false, code: 'not_a_unit' })
+      expect(resolveLocalUnitLaunch({ id: ID(1), registryFile, channel: 'dev' })).toEqual({ ok: false, reason: 'mismatch' })
+    } finally { chmodSync(join(dir, LOCAL_UNIT_MARKER), 0o644) }
+  })
+
+  it('文件夹和默认那台的数据沾边:加入 / 新建 / 打开 / 启动都拒;旧的开发版位置 ~/.forsion-dev/units 里的老 Unit 照样能开', async () => {
+    const home = join(root, 'h')
+    mkdirSync(home)
+    const guard = localUnitGuard({ home, startupUserData: join(root, 'App Support', 'forsion-desktop'), envWorkspace: join(root, 'ws') })
+    const g = { ...ctx, guard, text: (k: string) => `t:${k}` }
+    // 家目录本身放了标记 → 加入被拒(工作区会变成 ~/Forsion)
+    const other = { ...ctx, registryFile: join(root, 'other-ud', 'local-units.json') }
+    await createLocalUnit({ ...other, name: 'H', icon: '', parentDir: home, newId })
+    cpSync(join(home, 'H', LOCAL_UNIT_MARKER), join(home, LOCAL_UNIT_MARKER))
+    expect(await addExistingLocalUnit({ ...g, dir: home })).toEqual({ ok: false, code: 'not_a_unit', message: 't:overlapsDefault' })
+    // 在默认那台的 home / userData / 启动时重定向的工作区里
+    for (const bad of [join(home, '.forsion'), join(root, 'App Support', 'forsion-desktop-dev'), join(root, 'ws')]) {
+      mkdirSync(bad, { recursive: true })
+      expect(await createLocalUnit({ ...g, name: 'Bad', icon: '', parentDir: bad, newId })).toEqual({ ok: false, code: 'parent_invalid', message: 't:overlapsDefault' })
+      expect(existsSync(join(bad, 'Bad'))).toBe(false)
+    }
+    // 名册里已有的一条后来沾边了(软链把 ~/Forsion 指进它里面)→ 打开、启动都拒
+    const ok = await createLocalUnit({ ...g, name: 'Fine', icon: '', parentDir: parent, newId })
+    expect(ok.ok).toBe(true)
+    const id = ok.ok ? ok.unit.id : ''
+    expect(resolveLocalUnitLaunch({ id, registryFile, channel: 'dev', guard })).toMatchObject({ ok: true })
+    symlinkSync(join(parent, 'Fine', 'Forsion'), join(home, 'Forsion'))
+    expect(resolveLocalUnitLaunch({ id, registryFile, channel: 'dev', guard })).toEqual({ ok: false, reason: 'overlap' })
+    expect(lookupLocalUnit(g, id)).toEqual({ ok: false, code: 'not_a_unit', message: 't:overlapsDefault' })
+    // 旧的开发版缺省位置:在开发版 home 里面,但只在 units/ 下 → 照样能开
+    const legacyParent = join(home, '.forsion-dev', 'units')
+    mkdirSync(legacyParent, { recursive: true })
+    const legacy = await createLocalUnit({ ...ctx, name: 'Old', icon: '', parentDir: legacyParent, newId })
+    expect(legacy.ok && resolveLocalUnitLaunch({ id: legacy.unit.id, registryFile, channel: 'dev', guard })).toMatchObject({ ok: true })
+    // 但 ~/.forsion-dev 里别的地方不行
+    expect(await createLocalUnit({ ...g, name: 'Nope', icon: '', parentDir: join(home, '.forsion-dev'), newId })).toMatchObject({ ok: false, code: 'parent_invalid' })
   })
 
   it('没标记 → not_a_unit;别的通道 → channel_mismatch;子目录是软链 → not_a_unit', async () => {
@@ -197,6 +293,19 @@ describe('改名 / 移除 / 列表', () => {
     expect(await removeLocalUnit({ ...ctx, id: ID(1) })).toEqual({ ok: false, code: 'not_found' })
   })
 
+  it('移除:它正开着 / 运行记录读不出(说不准)→ io + 说明,名册不动;关了才能移除', async () => {
+    await create()
+    const ad = localUnitPaths(join(parent, 'Bench A')).appData
+    writeLocalUnitRunRecord(ad, 4242)
+    const t = { ...ctx, text: (k: string) => `t:${k}` }
+    expect(await removeLocalUnit({ ...t, id: ID(1), alive: (p) => p === 4242 })).toEqual({ ok: false, code: 'io', message: 't:removeRunning' })
+    writeFileSync(join(ad, 'local-unit-run.json'), '{"pid":')
+    expect(await removeLocalUnit({ ...t, id: ID(1) })).toEqual({ ok: false, code: 'io', message: 't:removeRunning' })
+    expect(registryIds()).toEqual([ID(1)])
+    rmSync(join(ad, 'local-unit-run.json'))
+    expect(await removeLocalUnit({ ...t, id: ID(1) })).toEqual({ ok: true })
+  })
+
   it('状态:running / stopped / missing / mismatch,current 标自己', async () => {
     for (const n of ['R', 'S', 'M', 'X']) await create(n)
     const dirOf = (n: string) => join(parent, n)
@@ -230,6 +339,21 @@ describe('运行记录', () => {
     writeFileSync(join(ad, 'local-unit-run.json'), '')
     expect(localUnitRunningPid(ad)).toBeNull()
   })
+  it('运行状态:没记录 = stopped;活的 pid = running;死的 = stopped;读不出 / 写坏 / 没 pid = unknown', () => {
+    const ad = join(root, 'rs')
+    expect(localUnitRunState(ad)).toEqual({ state: 'stopped' })
+    writeLocalUnitRunRecord(ad, 77)
+    expect(localUnitRunState(ad, (p) => p === 77)).toEqual({ state: 'running', pid: 77 })
+    expect(localUnitRunState(ad, () => false)).toEqual({ state: 'stopped' })
+    for (const bad of ['', '{"pid":', '{"startedAt":1}', '{"pid":"7"}']) {
+      writeFileSync(join(ad, 'local-unit-run.json'), bad)
+      expect(localUnitRunState(ad).state).toBe('unknown')
+    }
+    rmSync(join(ad, 'local-unit-run.json'))
+    mkdirSync(join(ad, 'local-unit-run.json')) // 读的时候报 EISDIR:不是「没有」
+    expect(localUnitRunState(ad).state).toBe('unknown')
+  })
+
   it('拿到锁的退出请求删掉崩溃留下的记录,哪怕记的 pid 被别的活进程复用了', () => {
     const ad = join(root, 'stale')
     writeLocalUnitRunRecord(ad, process.pid) // 复用:记录里的 pid 恰好是个活进程
@@ -286,6 +410,29 @@ describe('装更新前关掉文件夹 Unit', () => {
     expect(left).toBe(1)
     expect(c.now()).toBeGreaterThanOrEqual(15_000)
   })
+  it('运行记录读不出 = 说不准:照样发退出请求,到期还说不准就算没关(挡住安装)', async () => {
+    await create('U')
+    const ad = localUnitPaths(join(parent, 'U')).appData
+    writeFileSync(join(ad, 'local-unit-run.json'), '{"pid":')
+    const asked: string[] = []
+    expect(await quitLocalUnitsForInstall({ registryFile, requestQuit: (id) => asked.push(id), alive: () => false, ...clock() })).toBe(1)
+    expect(asked).toEqual([ID(1)])
+    // 退出请求拿到了那台的锁(它根本没在跑)→ 删掉坏记录 → 下一轮就判成没在跑,不等满
+    const c = clock()
+    expect(await quitLocalUnitsForInstall({ registryFile, requestQuit: () => rmSync(join(ad, 'local-unit-run.json')), alive: () => false, ...c })).toBe(0)
+    expect(c.now()).toBeLessThan(1000)
+  })
+
+  it('记录里的 pid 被别的活进程复用:退出请求删掉陈旧记录后立刻从等待里拿掉(不盯着那个 pid 等 15 秒)', async () => {
+    await create('Crashed')
+    const ad = localUnitPaths(join(parent, 'Crashed')).appData
+    writeLocalUnitRunRecord(ad, 555)
+    const c = clock()
+    const left = await quitLocalUnitsForInstall({ registryFile, requestQuit: () => rmSync(join(ad, 'local-unit-run.json')), alive: (p) => p === 555, ...c })
+    expect(left).toBe(0)
+    expect(c.now()).toBeLessThan(1000)
+  })
+
   it('名册读不出 → -1(不知道,不当成没有在跑的)', async () => {
     mkdirSync(join(root, 'default-ud'), { recursive: true })
     writeFileSync(registryFile, '')
@@ -299,8 +446,12 @@ describe('拉起别的实例', () => {
       PATH: '/bin', HOME: '/h', TANGU_HARNESS_QUIET: '1', TANGU_HOME: '/x', FORSION_WORKSPACE_DIR: '/w', FORSION_SANDBOX: '1', FORSION_SANDBOX_SOCK: 's',
       PI_CU_SOCKET_PATH: '/s', TANGU_BACKEND_URL: 'http://x', TANGU_BROWSER_EXTENSION: '0', TANGU_BROWSER_EXTENSION_PORT: '1', FORSION_UNIT_AUTO_PAIR: '1',
       ELECTRON_RUN_AS_NODE: '1', FORSION_CLIP_ENTRANCE: '0',
+      TANGU_TOKEN_FILE: '/x/token', FORSION_DEFAULT_CALENDAR: '/x/Calendar.db', TANGU_TOKEN: 't', TANGU_LOCAL_TOKEN: 'l', TANGU_REMOTE_MARK_SECRET: 's',
+      TANGU_DATA_DIR: '/x/db', TANGU_DEFAULT_WORKSPACE: '/w', FORSION_AMADEUS_VAULT: '/v', FORSION_AMADEUS_CONFIG: '/c', FORSION_DESKTOP_CONFIG: '/d',
+      FORSION_REMOTE_LOCK_FILE: '/r', TANGU_PORT: '1', TANGU_HOST: '0.0.0.0', TANGU_USER_ID: 'u', TANGU_SANDBOX: 'none', FORSION_HOST_STDIN: '1',
+      TANGU_CLOUD_URL: 'https://cloud', TANGU_NODE_BIN: '/node', TANGU_BROWSER_EXTENSION_DIR: '/ext',
     })
-    expect(env).toEqual({ PATH: '/bin', HOME: '/h', TANGU_HARNESS_QUIET: '1', FORSION_CLIP_ENTRANCE: '0' })
+    expect(env).toEqual({ PATH: '/bin', HOME: '/h', TANGU_HARNESS_QUIET: '1', FORSION_CLIP_ENTRANCE: '0', TANGU_CLOUD_URL: 'https://cloud', TANGU_NODE_BIN: '/node', TANGU_BROWSER_EXTENSION_DIR: '/ext' })
   })
 
   it('参数:appPath + 转交的 --user-data-dir + id / 退出 / 转交的链接', () => {
