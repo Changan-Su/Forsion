@@ -15,8 +15,10 @@ import { ChangeReceipt } from './ChangeReceipt'
 import { Fragment, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type Ref } from 'react'
 import { useStreamReveal } from './streamReveal'
 import { Copy, RotateCcw, GitBranch, MessageCircleQuestion, CornerUpLeft, Pencil, Volume2, Square, Loader2, LogIn, Zap, History as HistoryIcon, FileCode2, MessageSquare, ShieldQuestion, CircleCheck, CircleX, CircleHelp, Clock, Undo2 } from 'lucide-react'
-import { FileInput, StepForward } from 'lucide-react'
+import { ArrowUpRight, FileInput, StepForward } from 'lucide-react'
 import { turnHasOutput } from './continueTurn'
+import { isModelTierLocked, isTierLockedError, tierLockedText } from '../../services/accountQuota'
+import { useQuotaMultiplierCap } from '../../tangu/quotaCap'
 import { TURN_RESUME_OPEN } from '../../../../../tangu-agent/src/contracts/turnResume'
 import { useNoteInsertState } from './insertToNote'
 import * as api from '../../services/backendService'
@@ -200,6 +202,7 @@ const ERR_RULES: Array<[RegExp, string]> = [
   // 引擎自家错误码(agentLoop publish 的 error 字段是裸码):精确规则放前面
   [SUB_EXPIRED_RE, 'chat.err.subExpired'], // 比下面通用的 401 更具体,必须排在它前面
   [/token_quota_exceeded/i, 'chat.err.quota'],
+  [/model_tier_locked/i, 'chat.err.tierLocked'], // 会员档位用不了这个模型(服务端 403);必须排在通用 401/403 前面
   [/masking_failed/, 'chat.err.maskFailed'], // 引擎 llm/outboundMask.ts:开着却跑不了 → 这一轮不发
   [/masking_blocked/, 'chat.err.maskBlocked'],
   [QUOTA_RE, 'chat.err.quotaUsed'], // 订阅额度 / 账单配额用完:几小时才重置,不是限流(必须排在 429 前面)
@@ -215,10 +218,12 @@ const ERR_RULES: Array<[RegExp, string]> = [
   [/(^|\D)429(\D|$)|rate[ _-]?limit|per ?minute|allocated quota exceeded/i, 'chat.err.rate'],
   [/(^|\D)5\d\d(\D|$)|bad gateway|overloaded/i, 'chat.err.server'],
 ]
-export function humanizeRunError(raw: string | undefined, t: (k: string, v?: Record<string, unknown>) => string): string {
+export function humanizeRunError(raw: string | undefined, t: (k: string, v?: Record<string, unknown>) => string, modelName = ''): string {
   if (!raw) return t('chat.error')
   raw = stripQuotaAsk(raw)
   const hit = ERR_RULES.find(([re, key]) => re.test(raw) && (key !== 'chat.err.quotaUsed' || isQuotaText(raw)))
+  // 这一句自己就说清了,不再把机器码 / JSON 回包挂在括号里(「复制错误」照样拿得到原文)
+  if (hit?.[1] === 'chat.err.tierLocked') return tierLockedText(raw, t, modelName)
   if (hit?.[1] === 'chat.err.quotaUsed') {
     const time = quotaResetFromError(raw)
     return `${t(time ? 'chat.err.quotaUsedAt' : 'chat.err.quotaUsed', { time })}(${raw})`
@@ -271,6 +276,17 @@ export function ReloginChip({ error, modelId }: { error?: string; modelId?: stri
   return (
     <button className="t2-relogin" onClick={() => useApp.getState().openSettings('model/m-providers')}>
       <LogIn size={12} /> {t('chat.err.relogin', { provider: SUB_PROVIDER_LABELS[id] })}
+    </button>
+  )
+}
+
+/** 额度用尽 / 会员档位用不了这个模型那两条错误后面的「升级会员」:打开支付中心。宿主没有支付中心(没装云账号扩展)就不给。 */
+export function UpgradeChip({ error }: { error?: string }) {
+  const { t } = useI18n()
+  if (!error || !(isTierLockedError(error) || /token_quota_exceeded/i.test(error)) || !window.tangu?.openPayCenter) return null
+  return (
+    <button type="button" className="t2-relogin" data-testid="msg-upgrade" onClick={() => void window.tangu?.openPayCenter?.()}>
+      <ArrowUpRight size={12} /> {t('chat.err.upgrade')}
     </button>
   )
 }
@@ -328,11 +344,17 @@ function RunErrorRow({ msg, sessionId, modelId, handlers }: { msg: UiMessage; se
   const canRetry = useApp((s) => !!handlers?.onRetry && !!sessionId && !s.runningBySession[sessionId] && s.messagesBySession[sessionId]?.at(-1)?.id === msg.id)
   // 这一轮已有产出(正文 / 工具调用):「重试」会把它们删掉重来 —— 拆成「继续生成」(主)与「重新生成」两条路
   const canContinue = useApp((s) => canRetry && !!handlers?.onContinue && turnHasOutput(s.messagesBySession[sessionId!]))
+  // 模型被会员档位拦下:modelId 是会话「现在」选着的模型,不一定是当时那个 —— 只有它确实还锁着才点名,否则说「这个模型」
+  const tierLocked = isTierLockedError(msg.error)
+  const multiplierCap = useQuotaMultiplierCap(tierLocked)
+  const sessionModel = useApp((s) => (tierLocked && modelId ? s.modelsResp?.models.find((m) => m.id === modelId) : undefined))
+  const modelName = sessionModel && isModelTierLocked(sessionModel, multiplierCap) ? sessionModel.name : ''
   return (
     <>
       <div className="t2-tool err">
-        <span className="t2-status-err">✕ {humanizeRunError(msg.error, t)}</span>
+        <span className="t2-status-err">✕ {humanizeRunError(msg.error, t, modelName)}</span>
         <ReloginChip error={msg.error} modelId={modelId} />
+        <UpgradeChip error={msg.error} />
         <QuotaRemindChip error={msg.error} sessionId={sessionId} modelId={modelId} />
         <QuotaChips error={msg.error} messageId={msg.id} sessionId={sessionId} modelId={modelId} />
       </div>
