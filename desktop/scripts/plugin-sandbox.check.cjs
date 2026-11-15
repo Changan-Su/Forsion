@@ -346,6 +346,9 @@ async function main() {
       res && res.ok === true && res.nonce === 'nonce-1' && st?.state === 'running' && st.views.includes('fixture-view')
       && st.logs.some((l) => l.text.includes('SBX_MARK_ONE')) && /^data:image\/jpeg;base64,/.test(res.image || ''),
       JSON.stringify({ ok: res && res.ok, state: st?.state, views: st?.views, logs: st?.logs?.slice(-3), image: (res?.image || '').slice(0, 30), error: res?.error }))
+    // 11-15:新功能(settings / window / allowPending)只在桌面声明 v2 时引擎才发 —— 声明要真随 run 发出去,不然引擎永远当它是老桌面
+    const caps = stub.seen.runs[0]?.clientCapabilities || []
+    check('1d 起 run 时声明了 plugin.sandbox 与 plugin.sandbox-v2', caps.includes('plugin.sandbox') && caps.includes('plugin.sandbox-v2'), JSON.stringify(caps))
     check('1c 外观跟着用户那份:沙箱首屏的主题色 = 用户这份的(coral)', !!st?.logs.some((l) => l.text === 'SBX_SKIN coral'), JSON.stringify(st?.logs?.filter((l) => l.text.startsWith('SBX_SKIN'))))
     saveShot('sandbox-window.jpg', res?.image)
     if (st) stub.finish('r1', [{ type: 'tool_result', payload: { id: 'ts1', name: 'plugin_sandbox', result: embedded(st), elapsedMs: 5000 } }, { type: 'done', payload: {} }])
