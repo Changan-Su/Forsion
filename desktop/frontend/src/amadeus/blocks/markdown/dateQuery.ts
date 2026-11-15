@@ -13,6 +13,8 @@ import { registerMessages, translate } from '../../../i18n'
 
 registerMessages({
   'dateq.schedule': { zh: '日程', en: 'Schedule' },
+  'dateq.noDate': { zh: '不设日期', en: 'No date' },
+  'dateq.noDateHint': { zh: '只进待办清单', en: 'Task list only' },
   'dateq.remind': { zh: '提醒', en: 'Remind me' },
   'dateq.today': { zh: '今天', en: 'Today' },
   'dateq.tomorrow': { zh: '明天', en: 'Tomorrow' },
@@ -139,13 +141,19 @@ const KEYWORDS: Array<{ key: string; words: string[]; days: number }> = [
   { key: 'dateq.tomorrow', words: ['tomorrow', '明天'], days: 1 },
 ]
 const REMIND_WORDS = ['remind', '提醒']
+const NO_DATE_WORDS = ['todo', 'no date', 'nodate', '不设日期', '无日期', '待办', 'daiban']
 
 /** `@` 面板顶部的日期候选。三档,先命中先返回:
  *  1. `remind:` 打头 = 用户已写明要提醒,只给提醒那一条(没写时刻 → 明天 09:00);
  *  2. 关键词前缀(`@t`/`@明` → 今天/明天,`@r`/`@提` → 提醒);空查询三条全给;
  *  3. 数字 / 日期写法(`@9` / `@2200` / `@9/10` / `@9月10日`)→「日程 + 提醒」两行。 */
-export function dateCandidates(query: string, now = new Date()): DateCand[] {
+export function dateCandidates(query: string, now = new Date(), opts: { undatedTask?: boolean } = {}): DateCand[] {
   const q = query.trim()
+  // 任务行上的 `@`:最前面多一条「不设日期」= 写 `@todo`(没日期也进待办清单,方案 2026-11-15 ⑤)。
+  const noDate: DateCand[] = opts.undatedTask && (!q || NO_DATE_WORDS.some((w) => w.startsWith(q.toLowerCase())))
+    ? [{ insert: '@todo', label: translate('dateq.noDate'), hint: translate('dateq.noDateHint') }]
+    : []
+  if (noDate.length) return [...noDate, ...dateCandidates(query, now)]
   const hint = (v: string): string => fmtCalDateL(parseCalDate(v))
   // 全天日期配提醒:午夜响没意义,按 09:00 给(Notion 的 "Tomorrow 9am" 同款)。
   const remindOf = (side: string): DateCand => {

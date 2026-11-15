@@ -33,6 +33,7 @@ import { putAgentsMeta } from '../services/backendService'
 import { homeTarget } from '../services/engine/targets'
 import type { AgentConfig } from '../types'
 import { agentName, agentNames } from '../agentName'
+import { agentEngineLabel, agentEngineOf, agentEngineState, isRosterEngine } from '../tangu/agentEngine'
 
 registerMessages({
   'agentSelect.title': { zh: '选择 Agent', en: 'Pick agents' },
@@ -68,7 +69,8 @@ const TEAM_MIN = 2
 
 type Candidate =
   // session = 名册里没有、只活在本会话的(临时成员 / 已删的):排在顶上带「本会话」标,能取消
-  | { id: string; kind: 'agent'; slug: string; name: string; names: string[]; description?: string; system?: boolean; session?: boolean }
+  // engine = 跑在外部引擎上(定义里的 engine,如 'dsh'):行尾带引擎小标,只能单选(团队 / @ 还没接)
+  | { id: string; kind: 'agent'; slug: string; name: string; names: string[]; description?: string; system?: boolean; session?: boolean; engine?: string }
   | { id: string; kind: 'engine'; engineId: string; name: string }
 
 const agentId = (slug: string): string => `agent:${slug}` // §9 前缀隔离:slug 与 engineId 可能同名(codex)
@@ -119,6 +121,7 @@ export function AgentSelectStrip({ sessionId, cfg }: { sessionId: string | null;
     // Keep disabled agents visible when the current session still uses them.
     const roster: Candidate[] = s.agentDefs.filter((a) => !a.disabled || a.slug === cfg.agentSlug || !!cfg.groupAgents?.includes(a.slug)).map((a) => ({
       id: agentId(a.slug), kind: 'agent', slug: a.slug, name: agentName(a), names: agentNames(a), description: a.description, system: a.createdBy === 'system',
+      ...(agentEngineOf(a) ? { engine: agentEngineOf(a) } : {}),
     }))
     const known = (slug: string): boolean => roster.some((i) => i.id === agentId(slug))
     const extras: Candidate[] = []
@@ -137,7 +140,8 @@ export function AgentSelectStrip({ sessionId, cfg }: { sessionId: string | null;
     // 外部引擎只在 host 会话里当候选(§11 ⑦:CLI 视作特殊的独立 Agent);
     // 已经选中的那一枚无论如何都要在场,否则用户退不掉它。
     if (cfg.execMode === 'host') {
-      for (const e of s.engines) if (e.available) list.push({ id: engineKey(e.id), kind: 'engine', engineId: e.id, name: e.name })
+      // 名册里有 Agent 形态的引擎(DSH)不再单列:它在上面的 Agent 里(老的引擎会话选着它时,下面那条照样补回来)
+      for (const e of s.engines) if (e.available && !isRosterEngine(e.id)) list.push({ id: engineKey(e.id), kind: 'engine', engineId: e.id, name: e.name })
     }
     if (engineId && !list.some((i) => i.id === engineKey(engineId))) {
       list.push({ id: engineKey(engineId), kind: 'engine', engineId, name: s.engines.find((e) => e.id === engineId)?.name || engineId })
@@ -160,7 +164,8 @@ export function AgentSelectStrip({ sessionId, cfg }: { sessionId: string | null;
     const dropEngine = !!engineId
     // 一次操作只发**一笔**整包 PUT(几笔并发整体替换,「最后调用」不保证最后落库);临时 Agent 随成员集合一起清理,免得下次打开浮层复活。
     const temps = (cfg.groupTempAgents || []).filter((a) => next.includes(a.slug))
-    const engineOff = dropEngine ? { engineId: undefined, engineModelId: undefined } : {}
+    // 换人时会话里另选的引擎模型一并清掉:那是上一位(DSH 上的 Agent 或引擎)的模型,新的人按自己的缺省来
+    const engineOff = dropEngine ? { engineId: undefined, engineModelId: undefined } : cfg.engineModelId ? { engineModelId: undefined } : {}
     if (next.length >= TEAM_MIN) {
       const patch = { groupChat: true, groupAgents: next, groupTempAgents: temps.length ? temps : undefined, ...engineOff }
       if (sessionId) st.patchSessionConfig(patch, sessionId)
@@ -193,9 +198,13 @@ export function AgentSelectStrip({ sessionId, cfg }: { sessionId: string | null;
     }
   }
 
+  const engineAgent = (slug: string): boolean => { const i = byId.get(agentId(slug)); return i?.kind === 'agent' && !!i.engine }
   const toggle = (item: Candidate): void => {
     if (item.kind === 'engine') { applyEngine(item.engineId === engineId ? '' : item.engineId); return }
-    const next = pickedSlugs.includes(item.slug) ? pickedSlugs.filter((x) => x !== item.slug) : [...pickedSlugs, item.slug]
+    // 跑在外部引擎上的 Agent 只能单独选(团队模式还不认它):选它 = 只剩它;已选着它时再点别人 = 换成别人
+    if (item.engine) { applyAgents(pickedSlugs.includes(item.slug) ? [] : [item.slug]); return }
+    const kept = pickedSlugs.filter((x) => !engineAgent(x))
+    const next = kept.includes(item.slug) ? kept.filter((x) => x !== item.slug) : [...kept, item.slug]
     applyAgents(next)
   }
 
@@ -277,8 +286,18 @@ export function AgentSelectStrip({ sessionId, cfg }: { sessionId: string | null;
   const badgeOf = (i: Candidate): React.ReactNode => {
     if (i.kind !== 'agent') return undefined
     if (i.session) return tag(t('agentSelect.sessionTag'))
-    const tags = [i.slug === s.defaultAgentSlug && tag(t('agentSelect.defaultTag')), i.system && tag(t('agent.badge.system'))].filter(Boolean)
+    const tags = [i.slug === s.defaultAgentSlug && tag(t('agentSelect.defaultTag')), i.system && tag(t('agent.badge.system')),
+      // 跑在别的 harness 上的行尾小标(Tangu 上的不标);这台设备跑不了的再写一句为什么
+      i.engine && tag(agentEngineLabel(i.engine)), i.engine && engineState(i) === 'not-installed' && tag(t('agentEngine.notInstalled'))].filter(Boolean)
     return tags.length ? tags : undefined
+  }
+  // 这台设备上跑不了的(没装 / 手机网页上 / 不认识的引擎):灰掉,简介位置写原因;已选着的不灰,好让人退掉它
+  const engineState = (i: Extract<Candidate, { kind: 'agent' }>) => agentEngineState(i.engine || '', s.engines)
+  const blockedHint = (i: Candidate): string | undefined => {
+    if (i.kind !== 'agent' || !i.engine) return undefined
+    const st = engineState(i)
+    const name = agentEngineLabel(i.engine)
+    return st === 'not-installed' ? t('agentEngine.notInstalledHint', { name }) : st === 'elsewhere' ? t('agentEngine.elsewhereHint', { name }) : st === 'unsupported' ? t('agentEngine.unsupportedHint', { name }) : undefined
   }
   // 行:头像 + 名字 + 默认 / 后台 / 本会话标 + 勾或序号;简介进说明区。点行 = toggle,浮层不收。
   const pickItems: ChatPickItem[] = [
@@ -286,12 +305,12 @@ export function AgentSelectStrip({ sessionId, cfg }: { sessionId: string | null;
     ...items.map((i): ChatPickItem => ({
       id: i.id,
       name: i.name,
-      description: i.kind === 'agent' ? i.description : undefined,
+      description: i.kind === 'agent' ? blockedHint(i) || i.description : undefined,
       keywords: i.kind === 'agent' ? [i.slug, ...i.names] : [i.engineId],
       icon: pillIcon(i),
       mark: markOf(i.id),
       badge: badgeOf(i),
-      disabled: !!warming && i.id !== engineKey(warming),
+      disabled: (!!warming && i.id !== engineKey(warming)) || (!!blockedHint(i) && markOf(i.id) === undefined),
       section: i.kind === 'engine' ? t('chatPicker.engines') : undefined,
       direct: true,
     })),
@@ -303,7 +322,8 @@ export function AgentSelectStrip({ sessionId, cfg }: { sessionId: string | null;
     nativeAbort.current?.abort()
     const ctrl = new AbortController()
     nativeAbort.current = ctrl
-    const agents = items.filter((i): i is Extract<Candidate, { kind: 'agent' }> => i.kind === 'agent')
+    // 跑在外部引擎上的 Agent 不进原生勾选清单:清单是多选(会选出团队),而且手机上本来就跑不了它
+    const agents = items.filter((i): i is Extract<Candidate, { kind: 'agent' }> => i.kind === 'agent' && !i.engine)
     void presentNativeChecklist({
       title: t('agentSelect.title'),
       items: agents.map((a) => ({ id: a.id, label: a.name, icon: initialFor(a.name, siblingNames) })),

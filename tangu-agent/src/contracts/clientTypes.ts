@@ -326,6 +326,11 @@ export interface NormalAgentDef {
   standInLibrary?: string[]
   /** 本体这边:分身能不能读 human/AGENT.md(缺省不能)。 */
   standInAgentMd?: boolean
+  /** 由谁来跑(11-14):缺席 = Tangu;'dsh' = 交给本机的 DeepSeek Harness 跑,身份仍在 Forsion。只有本机设置页能改。
+   *  可能是本版本不认识的值(新版本写的):界面照样标「不是 Tangu」,发消息会明确失败。 */
+  engine?: string
+  /** 跑在外部引擎上时缺省用它的哪个模型(引擎自己的模型 id,原样存);会话里在输入框另选的优先。 */
+  engineModel?: string
 }
 
 /** GET /agent/stand-ins、/agent/agents/:slug/stand-ins 的一行。 */
@@ -492,6 +497,17 @@ export interface MessageRecord {
   is_error: boolean
   /** Muse 主动发进私聊的消息:proactive / proactive:todo / proactive:approval / proactive:card;其余为空。 */
   origin?: string | null
+}
+
+/** 消息接口一并带出的失败轮(services/failedRuns.ts):用户那一句还在、run 以 failed 收尾的那几轮。老引擎不带这一项。 */
+export interface FailedRunRecord {
+  /** 这一轮回答的行 id(与在线时的气泡同一个);可能有半截回答落了库,也可能没有。 */
+  assistant_message_id: string
+  user_message_id: string
+  /** agent_runs.error 原样(与在线 error 事件同一串,界面照旧翻译)。 */
+  error: string
+  /** 没有回答行时这一行的排序时间:用户那一句的时间 + 1。 */
+  timestamp: number
 }
 
 export interface ModelInfo {

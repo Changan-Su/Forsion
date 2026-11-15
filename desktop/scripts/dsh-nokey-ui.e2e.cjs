@@ -11,7 +11,8 @@
  *   ② 假 agent:失败 → 「登录」→ 打开模型菜单时重新探测(请求带 fresh=1),菜单里出现新模型;
  *   ③ 再发一句:失败原因点名可换的模型和设置路径;设置里真有 Agent → 本机 Agent CLI 这一项;
  *   ④ 失败后切到别的对话再切回来:也重新探测;
- *   ⑤ 选了账号那一组的模型再发:通了。
+ *   ⑤ 选了账号那一组的模型再发:通了;
+ *   ⑥ 整窗重载后重开这两场对话:用户自己的话、每一轮的失败原因都还在(引擎会话的提问落库,失败行从 run 上带出)。
  * 不点验(只有单测):先发的请求晚回、空清单不盖已有结果(appStore.engineCaps.test.ts)。
  *
  * 用法:先 npm run build(桌面)+ tangu-agent 的 npm run build;
@@ -268,10 +269,24 @@ async function main() {
     check('⑤ 选了账号那一组的模型:这一句通了', !!ok5)
     check('⑤ 引擎那边换上的是账号那一组的模型', fs.readFileSync(`${FAKE_STORE}.log`, 'utf8').includes('set model=["deepseek-account","deepseek-flash"]'))
 
-    // ⑥ 英文(引擎会话的失败行重载后不留 —— 引擎会话的提问本来就不落库,和本改动无关 —— 所以切成英文后重新发)
+    // ⑥ 切英文、整窗重载。重开的是库里的对话:用户自己的话要在(引擎会话的提问落库),失败那一轮的原因要在
+    //    (从 run 上带出来,按当前语言重新翻译)。点验完再发一句看英文的新失败行。
     await win.evaluate(() => { localStorage.setItem('tangu_locale', 'en') })
     await win.reload(); await win.waitForSelector('.dv-groupview', { timeout: 40_000 }); await sleep(2500)
     await enterSpace(win, 'tangu'); await sleep(1000)
+    await sidebarRow(win, 'Say OK.').click(); await sleep(2500)
+    const userTexts = () => win.evaluate(() => [...document.querySelectorAll('.t2-user')].map((e) => e.textContent.trim()))
+    const u6 = await userTexts()
+    const r6 = await errText(win)
+    await shot(win, '08a-dsh-after-reload')
+    check('⑥ 重载后真 DSH 那场对话:用户那一句还在', u6.some((x) => x.includes('Say OK.')), u6.join(' | '))
+    check('⑥ 重载后失败那一轮的原因还在(英文重新翻译、DSH 原话在括号里)', (await errCount(win)) === 1 && r6.includes("DeepSeek Harness's current model deepseek-v4-flash needs an API key") && r6.includes('no API key for provider route'), r6)
+    await sidebarRow(win, 'Fake one: say OK.').click(); await sleep(2500)
+    const uf = await userTexts()
+    check('⑥ 重载后假 agent 那场:三句都在、两次失败都在、通了的那句回答也在',
+      ['Fake one: say OK.', 'Fake two: say OK.', 'Fake three: say OK.'].every((t) => uf.some((x) => x.includes(t))) && (await errCount(win)) === 2
+        && await win.evaluate(() => document.body.innerText.includes('Reply from the account model')), `${uf.join(' | ')} | 失败行 ${await errCount(win)}`)
+    await shot(win, '08b-fake-after-reload')
     await sidebarRow(win, 'Say OK.').click(); await sleep(1500)
     n = await errCount(win)
     await send(win, 'Say OK again.')

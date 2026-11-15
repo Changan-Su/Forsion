@@ -21,6 +21,10 @@ export interface IcsEvent {
   end?: string
   allDay: boolean
   location?: string
+  /** DESCRIPTION(纯文本,已还原转义)。2026-11-15 起读。 */
+  description?: string
+  /** URL 属性原样;是不是 http(s) 由显示层判。2026-11-15 起读。 */
+  url?: string
 }
 
 const WD = ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA']
@@ -235,6 +239,8 @@ export function parseIcs(text: string, opts: ParseIcsOptions = {}): IcsEvent[] {
     uid: string
     summary: string
     location?: string
+    description?: string
+    url?: string
     start?: IcsDate
     end?: IcsDate
     duration?: number
@@ -258,6 +264,8 @@ export function parseIcs(text: string, opts: ParseIcsOptions = {}): IcsEvent[] {
       case 'UID': cur.uid = p.value.trim(); break
       case 'SUMMARY': cur.summary = untext(p.value).trim(); break
       case 'LOCATION': cur.location = untext(p.value).trim() || undefined; break
+      case 'DESCRIPTION': cur.description = untext(p.value).trim() || undefined; break
+      case 'URL': cur.url = p.value.trim() || undefined; break
       case 'DTSTART': cur.start = icsDate(p.value, p.params) ?? undefined; break
       case 'DTEND': cur.end = icsDate(p.value, p.params) ?? undefined; break
       case 'DURATION': cur.duration = durationMs(p.value) ?? undefined; break
@@ -313,6 +321,8 @@ export function parseIcs(text: string, opts: ParseIcsOptions = {}): IcsEvent[] {
         uid: starts.length > 1 ? `${r.uid}@${+s}` : r.uid || `${+s}`,
         summary: r.summary,
         location: r.location,
+        ...(r.description ? { description: r.description } : {}),
+        ...(r.url ? { url: r.url } : {}),
         allDay,
         start: fmtStamp(s, allDay),
         end: endDate ? fmtStamp(endDate, allDay) : undefined,

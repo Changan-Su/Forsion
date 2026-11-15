@@ -15,6 +15,7 @@
  *
  * 去向(前两条互斥,提醒叠加在任意一条之上):
  *   `- [ ] 交周报 @2026-09-01`   → 待办列表(TodoListView)
+ *   `- [ ] 买菜 @todo`           → 待办列表「未排期」(2026-11-15:没日期也要进清单的显式写法;只认任务行,`due` 为 `''`)
  *   `周会 @2026-09-01T14:30`     → 日历日程(mdCalDbs 合成只读源)
  *   任一行带 `@remind:…`          → 到点弹通知(notificationWiring)
  *
@@ -94,12 +95,34 @@ const MARK_RE = new RegExp(
   'g',
 )
 
+/** `@todo`:没日期、但这条任务要进待办清单(方案 2026-11-15 ⑤)。前后闸与日期标记同口径;只在任务行上生效。 */
+const TODO_RE = new RegExp(String.raw`(?<!${AT_BLOCKED_BEFORE.source})@todo(?=$|[\s,;.。，、；)）\]】!?！？])`, 'gi')
+export const TODO_MARK = '@todo'
+/** 一行里**算数**的 `@todo`:行内代码(`` `…` ``)里的不算 —— 解析与回写共用,
+ *  否则排期会把代码里的示例改成日期、真正的行尾记号反而原样留着(Codex 评审 P1)。 */
+function todoHits(s: string): Array<{ index: number; len: number }> {
+  const code: Array<[number, number]> = []
+  for (const c of s.matchAll(/(`+)[^`]*?\1/g)) code.push([c.index!, c.index! + c[0].length])
+  const out: Array<{ index: number; len: number }> = []
+  TODO_RE.lastIndex = 0
+  let m: RegExpExecArray | null
+  while ((m = TODO_RE.exec(s))) {
+    const i = m.index
+    if (!code.some(([a, b]) => i >= a && i < b)) out.push({ index: i, len: m[0].length })
+  }
+  return out
+}
+/** 标注框 / 折叠块标题行开头的 `[!type]` / `[!type]-` / `[!type]+` 记号:只是容器语法,不是标题文字。 */
+const CALLOUT_RE = /^\[![\w-]+\][+-]?\s*/
+
 /** 文本去掉 HTML 标签与空白后还剩东西吗 —— `* [ ] <br /> @2026-09-01` 这种占位行不算。 */
 const hasContent = (s: string): boolean => s.replace(/<[^>]*>/g, '').trim().length > 0
 
 interface Marks {
   due: string
   remind?: string
+  /** 写了 `@todo`(没日期也进清单)。只有它、没有日期时 due = ''。 */
+  todo?: boolean
   /** 摘掉全部标记后的剩余文本(未剥行首块标记) */
   rest: string
 }
@@ -120,7 +143,14 @@ function* marksIn(s: string): Generator<{ index: number; whole: string; remind: 
 export function withDue(raw: string, next: string): string | null {
   const all = [...marksIn(raw)]
   const hit = all.find((x) => !x.remind) ?? all[0]
-  if (!hit) return null
+  // 没日期的 `@todo` 任务设上日期:`@todo` 就地换成 `@日期`(2026-11-15 ⑤)
+  if (!hit) {
+    if (!next) return null
+    const t = todoHits(raw).at(-1) // 记号写在行尾;多个时改最后一个
+    return t ? raw.slice(0, t.index) + `@${next}` + raw.slice(t.index + t.len) : null
+  }
+  // 清掉日期(撤销「给 @todo 设日期」)= 换回 `@todo`;只清提醒那条不做(提醒兼作日期,清了就不是标记行了)
+  if (!next) return hit.remind ? null : raw.slice(0, hit.index) + `${hit.whole.startsWith('@') ? '' : hit.whole[0]}${TODO_MARK}` + raw.slice(hit.index + hit.whole.length)
   const token = `${hit.whole.startsWith('@') ? '' : hit.whole[0]}@${hit.remind ? 'remind:' : ''}${next}`
   return raw.slice(0, hit.index) + token + raw.slice(hit.index + hit.whole.length)
 }
@@ -191,8 +221,19 @@ export function extractMarks(s: string): Marks | null {
     at = mk.index + mk.whole.length
   }
   rest += s.slice(at)
-  if (!due && !remind) return null
-  return { due: due || remind, remind: remind || undefined, rest: rest.replace(/\s+/g, ' ').trim() }
+  const hits = todoHits(rest)
+  const todo = hits.length > 0
+  for (const h of [...hits].reverse()) rest = rest.slice(0, h.index) + ' ' + rest.slice(h.index + h.len)
+  if (!due && !remind && !todo) return null
+  return { due: due || remind, remind: remind || undefined, ...(todo ? { todo: true } : {}), rest: rest.replace(/\s+/g, ' ').trim() }
+}
+
+/** 只有 `@todo`、没有日期的不算标记行(`@todo` 只对任务行有意义)。 */
+const dated = (m: Marks | null): Marks | null => (m && m.due ? m : null)
+/** 普通行的展示文字:剥掉行首块标记,再剥标注框 / 折叠块的 `[!type]±` 记号(它后面还可能跟 `##`)。 */
+const plainText = (rest: string): string => {
+  const a = rest.replace(LEAD_RE, '').trim()
+  return CALLOUT_RE.test(a) ? a.replace(CALLOUT_RE, '').replace(LEAD_RE, '').trim() : a
 }
 
 /**
@@ -237,7 +278,7 @@ export function parseMdMarks(text: string, path: string, title: string): MdMark[
     const h = HEADING_RE.exec(body)
     if (h) {
       chain = []
-      const m = extractMarks(h[2])
+      const m = dated(extractMarks(h[2]))
       // 标题自己带标记时,它归属的仍是**上一级**标题上下文;换 heading 在这之后。
       if (m) push(m, m.rest, false, false, i + 1, raw, occ)
       heading = m ? m.rest : h[2]
@@ -257,8 +298,8 @@ export function parseMdMarks(text: string, path: string, title: string): MdMark[
       continue
     }
     if (body.trim() && chain.length && indentOf(body) <= chain[0].indent) chain = []
-    const m = extractMarks(body)
-    if (m) push(m, m.rest.replace(LEAD_RE, '').trim(), false, false, i + 1, raw, occ)
+    const m = dated(extractMarks(body))
+    if (m) push(m, plainText(m.rest), false, false, i + 1, raw, occ)
   }
   return out
 }

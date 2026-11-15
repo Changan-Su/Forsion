@@ -17,6 +17,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { authMiddleware, AuthRequest } from '../core/http.js';
 import { query } from '../core/db.js';
 import { liveRunStatus } from '../services/runStatus.js';
+import { failedRunsFor } from '../services/failedRuns.js';
 import { normalizeSessionEmoji } from '../core/sessionEmoji.js';
 import { resolveProfile } from '../seams/appProfile.js';
 import { compactSession, getLatestSummary, rowCoverage, type Checkpoint } from '../services/compaction.js';
@@ -458,6 +459,7 @@ router.get('/agent/sessions/:id/messages', authMiddleware, async (req: AuthReque
     );
     rows.reverse(); // 时间正序
     res.json({
+      failed_runs: await failedRunsFor(req.params.id, rows),
       messages: rows.map((r) => ({
         ...r,
         tool_calls: parseMaybeJson(r.tool_calls),
