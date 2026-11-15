@@ -131,3 +131,21 @@ describe('会员档位用不了这个模型(model_tier_locked)', () => {
     expect(humanizeRunError('model_tier_locked', (k, v) => translateFor('en', k, v), 'GPT-6 Sol')).toBe("Your current plan can't use GPT-6 Sol. Upgrade your membership or pick another model.")
   })
 })
+
+describe('Forsion 额度用完(token_quota_exceeded):服务端补的积分提示不进括号,开着积分也用完了换一句', () => {
+  // 原文照服务端 quotaExceededMessage 拼(server src/services/tokenQuotaService.ts)
+  const enable = 'token_quota_exceeded · 可在账户中心 account.forsion.net 开启「用积分继续」 / Turn on "Continue with points" in your account at account.forsion.net'
+  const topup = 'token_quota_exceeded · 积分也用完了，可充值积分或升级会员 / Your points have run out as well; top up points or upgrade your plan'
+  it('裸码(旧服务端)→ 通用那句', () => {
+    expect(humanizeRunError('token_quota_exceeded', t)).toBe('chat.err.quota(token_quota_exceeded)')
+  })
+  it('开关没开 → 通用那句(提到用积分继续),括号里只留机器码', () => {
+    expect(humanizeRunError(enable, t)).toBe('chat.err.quota(token_quota_exceeded)')
+  })
+  it('开着积分也用完了 → 换成积分也用完那句', () => {
+    expect(humanizeRunError(topup, t)).toBe('chat.err.quotaPointsOut(token_quota_exceeded)')
+  })
+  it('引擎包过一层(LlmError 带状态码)也一样', () => {
+    expect(humanizeRunError(`402 ${topup}`, t)).toBe('chat.err.quotaPointsOut(token_quota_exceeded)')
+  })
+})
