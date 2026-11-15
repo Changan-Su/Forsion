@@ -160,6 +160,19 @@ async function guestType(app, text) {
     return true
   }, text)
 }
+// 按文字找网页里最里层的那个元素,用真实的鼠标事件点它的中心(DSH 侧栏不吃 element.click())
+async function guestClickText(app, pattern) {
+  const pt = (await guestEval(app, `(() => { const re = ${pattern}; const hit = [...document.querySelectorAll('body *')].filter((e) => re.test((e.textContent || '').trim()) && e.getClientRects().length).pop(); if (!hit) return null; const b = hit.getBoundingClientRect(); return { x: Math.round(b.x + b.width / 2), y: Math.round(b.y + b.height / 2), tag: hit.tagName } })()`)).value
+  if (!pt) return null
+  await app.evaluate(({ webContents }, p) => {
+    const wc = webContents.getAllWebContents().find((w) => w.getType() === 'webview' && /^http:\/\/127\.0\.0\.1:\d+\//.test(w.getURL()))
+    if (!wc) return
+    wc.sendInputEvent({ type: 'mouseMove', x: p.x, y: p.y })
+    wc.sendInputEvent({ type: 'mouseDown', x: p.x, y: p.y, button: 'left', clickCount: 1 })
+    wc.sendInputEvent({ type: 'mouseUp', x: p.x, y: p.y, button: 'left', clickCount: 1 })
+  }, pt)
+  return pt
+}
 
 const AGENT = '浣溪沙'
 const GENUI = 'dsh-genui@0.3.3'
@@ -267,11 +280,11 @@ async function main() {
     const installed = await until(async () => { const r = await guestEval(app, 'window.__d2fInstall || null'); return r.value }, 120_000, 1000)
     check('④ 点「装」后装上了', installed?.result?.ok === true, JSON.stringify(installed?.result?.error || '').slice(0, 200))
     // 工作台里 DSH 自己的插件页(只截图,和第三轮方案图 round3-3 对照):装上的 genui 在列表里
-    const toPlugins = await guestEval(app, `(() => { const hit = [...document.querySelectorAll('*')].find((e) => /^(插件|Plugins)$/.test((e.textContent || '').trim()) && e.getClientRects().length && !e.closest('[data-d2f]')); const el = hit?.closest('button, a, [role="button"], [role="menuitem"], [role="treeitem"], li') || hit; el?.click(); return el ? el.tagName + ' ' + (el.getAttribute('role') || '') : '' })()`)
+    const toPlugins = await guestClickText(app, '/^(插件|Plugins)$/')
     await sleep(2500)
     await shot(win, '26b-dsh-plugin-page')
     const pluginPage = (await guestEval(app, 'document.body.innerText')).value || ''
-    check('④ 工作台里 DSH 自己的插件页列着刚装的 genui', /genui/i.test(pluginPage), toPlugins.value || '没找到「插件」入口')
+    check('④ 工作台里 DSH 自己的插件页列着刚装的 genui', /genui/i.test(pluginPage), toPlugins ? `点在 ${toPlugins.tag} (${toPlugins.x},${toPlugins.y})` : '没找到「插件」入口')
     // Harness 卡「DSH 插件」变 1 个
     await openAgents(win); await rosterRow(win, AGENT).click(); await sleep(1500)
     const count = await until(async () => { const t = await pluginRow(win, 'dsh-plugins').innerText().catch(() => ''); return /1 个/.test(t) ? t : null }, 20_000, 800)
