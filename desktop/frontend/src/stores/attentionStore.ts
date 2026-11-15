@@ -227,6 +227,7 @@ function notifyNewWaits(prev: Record<string, DmAttention>, next: Record<string, 
     if (!x || !soloOf(st.configBySession[id] ?? x.agent_config)) continue
     notifyApp({
       event: newWait ? 'dm.waiting' : 'dm.message', level: 'info', dedupeKey: `dm:${id}:${sig[id] || 'waiting'}`,
+      urgent: newWait || undefined, // 它停着在等人:手机上不受节流
       title: x.title || '', text: st.tr(newWait ? 'ntf.dmWaiting' : 'ntf.dmMessage'),
       action: { label: st.tr('ntf.view'), run: () => { setActiveSpace('tangu'); void import('../sessionNav').then((m) => m.openSession(id)) } },
     })

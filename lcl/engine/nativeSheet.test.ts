@@ -242,5 +242,16 @@ describe('theme', () => {
     expect(light.dark).toBe(false)
     expect(light.background).toBe('#FF123456')
     expect(light.warning).toBe('#FF806000')
+    // the phone's notification banner: no --surface-float / --accent-ink declared → the card surface and the accent
+    expect(light.float).toBe(light.surface)
+    expect(light.accentInk).toBe(light.accent)
+    // declared: the floating surface (a translucent one composited over the page, so the native fill is opaque) and the ink
+    document.documentElement.style.setProperty('--surface-float', 'rgba(255, 255, 255, 0.5)')
+    document.documentElement.style.setProperty('--accent-ink', '#1F5E6B')
+    const banner = m.readNativeTheme()
+    expect(banner.float).toBe('#FF899AAB') // 50% white over #123456
+    expect(banner.accentInk).toBe('#FF1F5E6B')
+    document.documentElement.style.removeProperty('--surface-float')
+    document.documentElement.style.removeProperty('--accent-ink')
   })
 })

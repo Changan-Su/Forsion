@@ -9,6 +9,7 @@ import { accountChip, subscribeAccountChip } from '@/services/accountChip'
 import { useApp } from '@/stores/appStore'
 import { attentionIndex, mergeAttention, useAttention } from '@/stores/attentionStore'
 import { useInbox } from '@/stores/inboxStore'
+import { onNativeBannerEvent, setNativeBannerPresenter, type NativeBannerPayload } from '@/stores/notificationBanner'
 import { installKeyboardRise, keyboardRise, type ImeRise } from './keyboardRise'
 import { reducedMotion } from '@lcl/engine/spring'
 
@@ -26,6 +27,11 @@ import { reducedMotion } from '@lcl/engine/spring'
  *  the bottom, the page running under both. Kotlin then reports where everything is (`layout`); `applyChromeLayout`
  *  turns that into the room the shell keeps clear (`--nc-*` on <body>, see lcl/engine/singleColumn.css) and into the
  *  frosted plates behind the capsules — the blur is the page's to draw: a native view cannot blur the WebView.
+ *  Notifications on a phone (2026-11-15): a one-line banner under the status bar, over the capsule row / the detail level's
+ *  solid top bar — the page cannot draw over either. `setBanner` hands Kotlin the one on screen (store: notificationStore's
+ *  banner mode owns dwell, queue and throttle; NotificationHost picks it through notificationBanner.ts), Kotlin draws it and
+ *  reports `banner` events (tap = the card's action, swipe up / × = dismissed by the user). A rejected `setBanner` takes the
+ *  presenter away: the page then draws the banner itself, below the capsules.
  *  If the plugin ever rejects, the host uninstalls itself so the shell falls back to its web top bar. */
 interface ChromeIcons { left?: NativeIcon; right?: NativeIcon; more?: NativeIcon; back?: NativeIcon; close?: NativeIcon; all?: NativeIcon; search?: NativeIcon; titleMore?: NativeIcon }
 /** `png` = the picture as base64, cropped square and downscaled here (Kotlin only decodes and clips it to a circle);
@@ -55,10 +61,13 @@ interface NativeChromePlugin {
     floating?: boolean; frosted?: boolean
   }): Promise<void>
   haptic(options: { kind: NativeHaptic }): Promise<void>
+  /** The notification banner on screen (null = none). */
+  setBanner(options: { banner: (NativeBannerPayload & { theme: NativeSheetTheme }) | null }): Promise<void>
   clear(): Promise<void>
   addListener(event: 'action', cb: (e: { action: string; id?: string }) => void): Promise<PluginListenerHandle>
   addListener(event: 'layout', cb: (e: ChromeLayout) => void): Promise<PluginListenerHandle>
   addListener(event: 'ime', cb: (e: ImeRise) => void): Promise<PluginListenerHandle>
+  addListener(event: 'banner', cb: (e: { id?: string; kind?: string }) => void): Promise<PluginListenerHandle>
 }
 const ACTIONS: readonly NativeChromeAction[] = ['left', 'right', 'tabs', 'more', 'back', 'close', 'search', 'title', 'spacesAll']
 const MAX_SPACES = 64 // = ChromeState.MAX_SPACES (Kotlin)
@@ -275,6 +284,26 @@ export function installNativeChrome(): void {
   let chain: Promise<void> = Promise.resolve()
   let uninstall: (() => void) | null = null
 
+  // Notification banner (see the header). Kept so a theme change repaints it; sent in order, a stale call never lands last.
+  let banner: NativeBannerPayload | null = null
+  let bannerChain: Promise<void> = Promise.resolve()
+  let bannerOff: (() => void) | null = null
+  const sendBanner = (): void => {
+    const current = banner
+    bannerChain = bannerChain.then(async () => {
+      if (!bannerOff) return
+      try {
+        await plugin.setBanner({ banner: current ? { ...current, theme: readNativeTheme() } : null })
+      } catch (e) {
+        // Never a notification the user cannot see: the page draws the banner itself from here on.
+        console.error('[tangu-mobile] native banner failed, the page draws notifications:', e)
+        bannerOff?.(); bannerOff = null
+      }
+    })
+  }
+  bannerOff = setNativeBannerPresenter((next) => { banner = next; sendBanner() })
+  void plugin.addListener('banner', (e) => onNativeBannerEvent(e?.id, e?.kind)).catch(() => {})
+
   const send = (): void => {
     chain = chain.then(async () => {
       if (!state || !uninstall) return
@@ -300,6 +329,7 @@ export function installNativeChrome(): void {
         // Broken native side: never leave the user without a top bar.
         console.error('[tangu-mobile] native chrome failed, falling back to web top bar:', e)
         uninstall?.(); uninstall = null
+        bannerOff?.(); bannerOff = null // clear() below takes the native banner down too: the page draws it
         applyChromeLayout(null) // the web bar's shell must not keep room for capsules that are not there
         void plugin.clear().catch(() => {})
       }
@@ -321,7 +351,7 @@ export function installNativeChrome(): void {
   void plugin.addListener('ime', keyboardRise).catch(() => {})
   // Skin / mode / custom colour changes repaint the bar (same attributes the model picker watches + inline vars);
   // switching glass off makes the capsules solid.
-  new MutationObserver(send).observe(document.documentElement, { attributes: true, attributeFilter: ['data-mode', 'data-skin', 'data-bg', 'data-theme', 'data-glass', 'data-motion-theme', 'data-motion-fade', 'style', 'class'] })
+  new MutationObserver(() => { send(); if (banner) sendBanner() }).observe(document.documentElement, { attributes: true, attributeFilter: ['data-mode', 'data-skin', 'data-bg', 'data-theme', 'data-glass', 'data-motion-theme', 'data-motion-fade', 'style', 'class'] })
   subscribeAccountChip(send) // sign-in / sign-out / a new picture repaints the avatar
   // Badges: the stores change far more often than the answer does (every streamed token touches useApp) → re-send only
   // when the set of dots changed.

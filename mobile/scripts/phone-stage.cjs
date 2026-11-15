@@ -838,7 +838,7 @@ const SCENES = {
     ]
   },
   'call-bar': async (page) => {
-    await stage.space(page, 'tangu'); await chip(page, 'all')
+    await stage.space(page, 'tangu')
     await callBar(page, true)
     const rows = []
     const look = async (name, what) => {
@@ -904,33 +904,41 @@ const SCENES = {
       ['lifting the finger closes it and does not open the link', after === null && stayed, JSON.stringify({ after, stayed })],
     ]
   },
-  // The notification stack is mounted outside the shell (MobileRoot's last child): none of the shell's room-keeping
-  // reaches it. The capsules and the dock are native — drawn over the page — so a card under one of them is cut off.
+  // Notifications on a phone (2026-11-15): one banner at a time. In the app the native layer draws it over the capsule
+  // row; this stage has the native chrome's stand-in but no native banner, which is the page's fallback (a broken bridge):
+  // the page draws the same banner right below the capsules — it cannot cover them — and below the call bar during a call.
+  // The calendar used to keep its cards at the bottom (the dock on a phone): the banner is at the top there too.
   'notify-card': async (page) => {
     if ((await stage.nav(page)) === 'detail') await stage.action(page, 'left')
+    // first: the fallback banner sits on the page's first row (here the list's chips) while it is up
+    await stage.space(page, 'tangu'); await chip(page, 'all')
     await page.evaluate(async (url) => {
       const { useNotifications } = await import(/* @vite-ignore */ url)
       useNotifications.getState().dismissAll()
       useNotifications.getState().notify({ force: true, sticky: true, title: 'Forsion', text: '2.13.3 已经可以更新了', action: { label: '查看', run() {} } })
+      useNotifications.getState().notify({ force: true, sticky: true, text: 'a newer sticky one' }) // a sticky card makes way for the next one
     }, moduleUrl('../desktop/frontend/src/stores/notificationStore.ts'))
     const plates = LAYOUT.plates.map((p) => ({ ...p, right: p.x + p.w, bottom: p.y + p.h }))
     const clear = (c) => !!c && c.x >= 0 && c.right <= SCREEN.width && plates.every((p) => c.bottom <= p.y || c.y >= p.bottom || c.right <= p.x || c.x >= p.right)
-    const card = async () => { await page.waitForTimeout(700); const c = await rect(page, '.ntf-wrap .ntf'); return c && Object.fromEntries(Object.entries(c).map(([k, v]) => [k, Math.round(v * 10) / 10])) }
+    const card = async () => { await page.waitForTimeout(700); const c = await rect(page, '.ntf-banner-wrap .ntf-banner'); return c && Object.fromEntries(Object.entries(c).map(([k, v]) => [k, Math.round(v * 10) / 10])) }
+    const zoom = await page.evaluate(() => Number(getComputedStyle(document.body).zoom) || 1)
     const rows = []
-    // the calendar keeps its cards at the bottom on a desktop — on the phone that is where the dock is
     await stage.space(page, 'calendar')
     const cal = await card()
-    rows.push(['the calendar: the card is at the top here too, clear of the capsules and of the dock', clear(cal) && cal.bottom < SCREEN.height / 2, JSON.stringify(cal)])
+    rows.push(['the calendar: the banner is at the top here too, clear of the capsules and of the dock', clear(cal) && cal.bottom < SCREEN.height / 2, JSON.stringify(cal)])
     await page.screenshot({ path: path.join(OUT, `notify-calendar${DARK ? '-dark' : ''}.png`) })
-    await stage.space(page, 'tangu'); await chip(page, 'all')
+    await stage.space(page, 'tangu')
     await callBar(page, true)
     const bar = await rect(page, '.vc-bar')
     const during = await card()
-    rows.push(['during a call: the card is below the call bar (its hang-up key stays in reach)', !!bar && !!during && during.y >= bar.bottom, JSON.stringify({ card: during, barBottom: bar && Math.round(bar.bottom) })])
+    rows.push(['during a call: the banner is below the call bar (its hang-up key stays in reach)', !!bar && !!during && during.y >= bar.bottom, JSON.stringify({ card: during, barBottom: bar && Math.round(bar.bottom) })])
     await callBar(page, false)
-    const zoom = await page.evaluate(() => Number(getComputedStyle(document.body).zoom) || 1)
     const c = await card()
-    rows.push(['a notification: the card starts right below the capsule row, inside the screen', clear(c) && near(c.y, LAYOUT.top + 6 * zoom, 2), JSON.stringify({ card: c, capsulesEnd: LAYOUT.top })])
+    rows.push(['the banner: right below the capsule row, 10 from each side, 54 high (zoomed with the page)',
+      clear(c) && near(c.y, LAYOUT.top + 4 * zoom, 2) && near(c.x, 10 * zoom, 1.5) && near(SCREEN.width - c.right, 10 * zoom, 1.5) && near(c.h, 54 * zoom, 1.5), JSON.stringify({ card: c, capsulesEnd: LAYOUT.top, zoom })])
+    const shown = await page.evaluate(() => ({ cards: document.querySelectorAll('.ntf-banner').length, more: !!document.querySelector('.ntf-more'), stack: !!document.querySelector('.ntf-wrap') }))
+    rows.push(['one at a time: the second waits, no "+N", no desktop stack', shown.cards === 1 && !shown.more && !shown.stack, JSON.stringify(shown)])
+    await page.screenshot({ path: path.join(OUT, `notify-banner${DARK ? '-dark' : ''}.png`) })
     return rows
   },
   // The agent picker of a new chat: the recipient chip in the composer's toolbar (same chip as the desktop, 11-02 plan A).

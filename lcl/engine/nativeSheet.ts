@@ -28,6 +28,11 @@ export interface NativeSheetTheme {
   motionTheme?: string
   /** "Fade only" (<html data-motion-fade="on">): the native dock moves nothing. */
   motionFade?: boolean
+  /** The floating-surface tier (`--surface-float`, DESIGN §3: menus, toasts), opaque: the phone's native notification banner
+   *  is painted with it. Absent (older pages) = `surface`. */
+  float?: string
+  /** The theme colour for text (`--accent-ink`, readable on the surfaces): the banner's button. Absent = `accent`. */
+  accentInk?: string
 }
 
 export interface NativeMenuTrailing<I = NativeIconSource> { id: string; label: string; icon?: I }
@@ -190,7 +195,7 @@ const clipSearch = (s: NativeMenuSearch): NativeMenuSearch => ({ placeholder: cl
 // ── theme ──────────────────────────────────────────────────────────────────────
 
 type Rgba = [number, number, number, number]
-const LIGHT: Record<keyof Omit<NativeSheetTheme, 'dark' | 'motionTheme' | 'motionFade'>, Rgba> = {
+const LIGHT: Record<keyof Omit<NativeSheetTheme, 'dark' | 'motionTheme' | 'motionFade' | 'float' | 'accentInk'>, Rgba> = {
   background: [248, 247, 246, 1], surface: [255, 255, 255, 1], text: [32, 33, 36, 1], muted: [110, 112, 118, 1],
   border: [0, 0, 0, 0.1], accent: [77, 135, 148, 1], onAccent: [255, 255, 255, 1], danger: [208, 64, 64, 1],
   warning: [128, 96, 0, 1],
@@ -200,9 +205,10 @@ const DARK: typeof LIGHT = {
   border: [255, 255, 255, 0.12], accent: [95, 163, 178, 1], onAccent: [255, 255, 255, 1], danger: [232, 96, 96, 1],
   warning: [224, 184, 91, 1],
 }
-const TOKENS: Record<keyof typeof LIGHT, string> = {
+const TOKENS: Record<keyof typeof LIGHT | 'float' | 'accentInk', string> = {
   background: '--bg', surface: '--bg-card', text: '--text', muted: '--text-muted',
   border: '--border', accent: '--accent', onAccent: '--on-accent', danger: '--danger', warning: '--warning',
+  float: '--surface-float', accentInk: '--accent-ink',
 }
 
 let canvasCtx: CanvasRenderingContext2D | null | undefined
@@ -257,7 +263,7 @@ export function readNativeTheme(): NativeSheetTheme {
   let dark = false
   try { dark = document.documentElement.dataset.mode === 'dark' } catch { /* no DOM */ }
   const base = dark ? DARK : LIGHT
-  const read: Partial<Record<keyof typeof LIGHT, Rgba>> = {}
+  const read: Partial<Record<keyof typeof TOKENS, Rgba>> = {}
   if (typeof document !== 'undefined' && document.body) {
     const probe = document.createElement('span')
     probe.setAttribute('aria-hidden', 'true')
@@ -269,7 +275,7 @@ export function readNativeTheme(): NativeSheetTheme {
     document.documentElement.appendChild(probe)
     try {
       const declared = getComputedStyle(document.documentElement)
-      for (const key of Object.keys(TOKENS) as Array<keyof typeof LIGHT>) {
+      for (const key of Object.keys(TOKENS) as Array<keyof typeof TOKENS>) {
         // An undeclared token would make the probe inherit the text colour silently → keep the fallback.
         if (!declared.getPropertyValue(TOKENS[key]).trim()) continue
         probe.style.color = ''
@@ -284,6 +290,8 @@ export function readNativeTheme(): NativeSheetTheme {
   const ground: Rgba = dark ? [0, 0, 0, 1] : [255, 255, 255, 1]
   const background = over(pick('background'), ground)
   const surface = over(pick('surface'), background)
+  // Not declared (an older theme): the card surface and the accent itself, as before these two existed.
+  const float = read.float ? over(read.float, background) : surface
   return {
     dark,
     background: toArgbHex(background),
@@ -295,6 +303,8 @@ export function readNativeTheme(): NativeSheetTheme {
     onAccent: toArgbHex(pick('onAccent')),
     danger: toArgbHex(pick('danger')),
     warning: toArgbHex(over(pick('warning'), background)),
+    float: toArgbHex(float),
+    accentInk: toArgbHex(over(read.accentInk ?? pick('accent'), float)),
     ...motionFields(),
   }
 }

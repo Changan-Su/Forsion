@@ -1932,6 +1932,8 @@ export const usePluginStore = create<PluginState>((set, get) => {
     // 停用后残留的定时器不许再弹(10-02 补的活性闸,与 ctx.app 的副作用口同一条纪律)。
     // action(10-17,日历的「撤销」):一个按钮,停留 8 秒(同宿主日历的 U-06);插件停用后点了也不调。
     // key:同 key 的后一张顶掉前一张(replace:计数不累加、标题 / 文案 / 按钮 / 停留都换成新的),前缀由宿主拼,碰不到别家的 / 宿主的去重键。
+    // undo / urgent(手机横幅):undo = 撤销回执,手机上停 8 秒(不带是 5 秒);urgent = 有人 / Agent 停着在等用户,手机上不受节流。
+    // 只认布尔 true;旧宿主不挑这两个字段,等于没带。
     notify: (message, opts) => {
       if (!ctxAlive()) return
       const a = opts?.action
@@ -1949,6 +1951,8 @@ export const usePluginStore = create<PluginState>((set, get) => {
         event: `plugin:${pluginId}`,
         sourceLabel: plugin ? pluginDisplayName(plugin, currentLocale()) : pluginId,
         ...(action ? { action, durationMs: 8000 } : {}),
+        ...(opts?.undo === true ? { undo: true } : {}),
+        ...(opts?.urgent === true ? { urgent: true } : {}),
         // 带 key 时 action 一律显式给(可能是 undefined):同 key 合并时 store 才会清掉上一条的按钮,否则「已删除 B」上挂着撤 A 的按钮
         ...(typeof opts?.key === 'string' && opts.key ? { dedupeKey: `plugin:${pluginId}:${opts.key.slice(0, 100)}`, action, replace: true } : {}),
       })
