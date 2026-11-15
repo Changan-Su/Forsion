@@ -1118,6 +1118,10 @@ export interface UiMessage {
   work?: TeamWork
   status?: 'streaming' | 'done' | 'error' | 'stopped'
   error?: string
+  /** 收尾那一发写到了输出上限、停在半句(done 的 truncated):画「停在了半句」+「继续生成」。只在本次运行里有,重载即无。 */
+  truncated?: boolean
+  /** 这一轮引擎自动接着写过一次(done 的 lengthResumed):回答下面一行灰字说明。只在本次运行里有。 */
+  lengthResumed?: boolean
   timestamp: number
   /** 群聊模式:本条发言的发言人(Normal Agent slug;__host__=主持人)。缺省=普通单 agent 消息。 */
   agentId?: string
