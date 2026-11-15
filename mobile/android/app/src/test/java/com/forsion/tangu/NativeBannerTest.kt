@@ -5,10 +5,12 @@ import android.content.ComponentName
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.width
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
@@ -18,11 +20,13 @@ import androidx.compose.ui.test.assertHeightIsEqualTo
 import androidx.compose.ui.test.assertLeftPositionInRootIsEqualTo
 import androidx.compose.ui.test.assertTopPositionInRootIsEqualTo
 import androidx.compose.ui.test.assertWidthIsEqualTo
+import androidx.compose.ui.test.getBoundsInRoot
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeUp
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.test.core.app.ApplicationProvider
 import org.json.JSONObject
@@ -155,6 +159,46 @@ class NativeBannerTest {
         assertEquals(listOf("Open workbench", "Dismiss"), actions.map { it.label })
         compose.runOnUiThread { actions.forEach { it.action() } }
         assertEquals(listOf("action", "dismiss"), said)
+    }
+
+    @Test fun onceJsTookItOffItTakesNoMoreTapsWhileItLeaves() {
+        // 2026-11-15 on a device: a tap 50ms either side of the 5s mark was reported as the action after the page had already
+        // let the card go, and nothing ran. Now: from the moment JS takes it off, the leaving card answers nothing.
+        var spec by mutableStateOf(BannerSpec.parse(banner()))
+        val said = mutableListOf<String>()
+        compose.setContent { Box(Modifier.width(412.dp)) { NativeBanner(spec, 0, { said += "action:$it" }, { said += "dismiss:$it" }) } }
+        compose.mainClock.advanceTimeBy(400)
+        compose.mainClock.autoAdvance = false
+        spec = null // time is up: JS sends null, the card starts its 160ms exit
+        compose.mainClock.advanceTimeByFrame()
+        compose.onNodeWithTag("nativeBanner.card").assertExists().performClick()
+        compose.onNodeWithTag("nativeBanner.action", useUnmergedTree = true).performClick()
+        compose.onNodeWithTag("nativeBanner.close").performClick()
+        compose.mainClock.advanceTimeByFrame()
+        assertTrue("a leaving card reported $said", said.isEmpty())
+        val actions = compose.onNodeWithTag("nativeBanner.card").fetchSemanticsNode().config.getOrNull(SemanticsActions.CustomActions).orEmpty()
+        assertTrue("a leaving card still offers ${actions.map { it.label }} to a screen reader", actions.isEmpty())
+        compose.mainClock.autoAdvance = true
+        compose.mainClock.advanceTimeBy(400)
+        compose.onNodeWithTag("nativeBanner.card").assertDoesNotExist()
+    }
+
+    @Test fun withTheSystemFontTurnedUpItGrowsInsteadOfCuttingTheSecondLine() {
+        val spec = BannerSpec.parse(banner())
+        compose.setContent {
+            val d = LocalDensity.current
+            CompositionLocalProvider(LocalDensity provides Density(d.density, fontScale = 2f)) {
+                Box(Modifier.width(412.dp)) { NativeBanner(spec, 0, {}, {}) }
+            }
+        }
+        compose.mainClock.advanceTimeBy(400)
+        val card = compose.onNodeWithTag("nativeBanner.card").getBoundsInRoot()
+        val source = compose.onNodeWithTag("nativeBanner.source", useUnmergedTree = true).getBoundsInRoot()
+        val text = compose.onNodeWithTag("nativeBanner.text", useUnmergedTree = true).getBoundsInRoot()
+        assertTrue("card ${card.bottom - card.top} high at 2× text", card.bottom - card.top > 54.dp)
+        assertTrue("source line $source cut by the card $card", source.top >= card.top)
+        assertTrue("text line $text cut by the card $card", text.bottom <= card.bottom)
+        assertTrue("the two lines overlap: $source / $text", source.bottom <= text.top)
     }
 
     @Test fun theSameCardWithNewWordsIsUpdatedInPlaceANewOneReplacesIt() {

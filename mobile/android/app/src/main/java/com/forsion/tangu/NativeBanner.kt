@@ -13,7 +13,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -106,10 +106,13 @@ internal data class BannerSpec(
     }
 }
 
-/** 4dp under the status bar, 10dp from each side, 54dp high: the capsule row's height. */
+/** 4dp under the status bar, 10dp from each side, 54dp high (the capsule row's height) — at least: with the system's
+ *  font size turned up the two lines need more, and the card grows downwards rather than cutting the second one off. */
 internal val BANNER_TOP_GAP = 4.dp
 internal val BANNER_SIDE = 10.dp
 internal val BANNER_HEIGHT = 54.dp
+private val BANNER_PAD_V = 6.dp
+private val BANNER_BUTTON_HEIGHT = 30.dp
 /** Transparent room under the card for its shadow (takes no touches). */
 private val BANNER_SHADOW_ROOM = 12.dp
 /** Swipe up this far (dp) or flick up this fast (dp/s) and the banner goes; less and it springs back. Same numbers as the page's banner (notificationBanner.ts). */
@@ -185,6 +188,12 @@ internal fun NativeBanner(spec: BannerSpec?, topInsetPx: Int, onAction: (String)
             leaving = scope.launch { leave(); drawn = null; leaving = null }
         }
     }
+    // On its way out — JS took it off (time is up: `spec` is null or another card) or the user sent it away — it takes no
+    // more taps, swipes or accessibility actions: JS has already let it go, and a tap reported now would find nothing to
+    // run (2026-11-15: a tap 50ms either side of the 5s mark was reported and did nothing). Taps already on their way
+    // back get a short grace on the page (notificationStore PHONE.lateTap).
+    val exiting = spec?.id != id || leaving != null
+    val live = rememberUpdatedState(!exiting)
     val theme = card.theme
     val text = Color(theme.text)
     val muted = Color(theme.muted)
@@ -211,7 +220,7 @@ internal fun NativeBanner(spec: BannerSpec?, topInsetPx: Int, onAction: (String)
             .semantics { testTagsAsResourceId = true },
     ) {
         Row(
-            Modifier.fillMaxWidth().height(BANNER_HEIGHT)
+            Modifier.fillMaxWidth().heightIn(min = BANNER_HEIGHT)
                 // the finger's frame: outside the moving layer, so the card following it does not change what it measures
                 .pointerInput(id) {
                     val tracker = VelocityTracker()
@@ -220,10 +229,11 @@ internal fun NativeBanner(spec: BannerSpec?, topInsetPx: Int, onAction: (String)
                         onDragStart = { tracker.resetTracking() },
                         onDragEnd = {
                             val v = tracker.calculateVelocity().y / density // px/s → dp/s
-                            if (bannerFlungAway(shift.value, v)) dismissNow() else back()
+                            if (live.value && bannerFlungAway(shift.value, v)) dismissNow() else if (live.value) back()
                         },
-                        onDragCancel = { back() },
+                        onDragCancel = { if (live.value) back() },
                     ) { change, dy ->
+                        if (!live.value) return@detectVerticalDragGestures // leaving: its exit owns the motion
                         tracker.addPosition(change.uptimeMillis, change.position)
                         change.consume()
                         // up only: nothing pulls down (no expanding)
@@ -234,17 +244,17 @@ internal fun NativeBanner(spec: BannerSpec?, topInsetPx: Int, onAction: (String)
                 // light: a soft shadow; dark: the surface's own step from the page, no heavier shadow (DESIGN §3)
                 .then(if (theme.dark) Modifier else Modifier.shadow(8.dp, shape, ambientColor = Color.Black.copy(alpha = 0.10f), spotColor = Color.Black.copy(alpha = 0.16f)))
                 .clip(shape).background(Color(theme.float)).border(1.dp, edge, shape)
-                .clickable(enabled = hasAction, role = Role.Button, onClickLabel = card.action.ifBlank { null }) { act.value(id) }
+                .clickable(enabled = hasAction && !exiting, role = Role.Button, onClickLabel = card.action.ifBlank { null }) { act.value(id) }
                 .semantics(mergeDescendants = true) {
                     liveRegion = LiveRegionMode.Polite
                     contentDescription = card.spoken
-                    customActions = buildList {
+                    customActions = if (exiting) emptyList() else buildList {
                         if (hasAction) add(CustomAccessibilityAction(card.action) { act.value(id); true })
                         add(CustomAccessibilityAction(card.dismiss) { dismissNow(); true })
                     }
                 }
                 .testTag("nativeBanner.card")
-                .padding(start = 12.dp, end = 2.dp),
+                .padding(start = 12.dp, end = 2.dp, top = BANNER_PAD_V, bottom = BANNER_PAD_V),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(Modifier.clearAndSetSemantics {}) { NativeIconView(glyph, tint, 16.dp) }
@@ -263,15 +273,15 @@ internal fun NativeBanner(spec: BannerSpec?, topInsetPx: Int, onAction: (String)
                 Spacer(Modifier.width(8.dp))
                 // never squeezed by the words (they are cut first); a runaway label is capped
                 Box(
-                    Modifier.widthIn(max = 160.dp).height(30.dp).clip(RoundedCornerShape(8.dp)).border(1.dp, edge, RoundedCornerShape(8.dp))
-                        .clickable(role = Role.Button) { act.value(id) }.testTag("nativeBanner.action").padding(horizontal = 10.dp),
+                    Modifier.widthIn(max = 160.dp).heightIn(min = BANNER_BUTTON_HEIGHT).clip(RoundedCornerShape(8.dp)).border(1.dp, edge, RoundedCornerShape(8.dp))
+                        .clickable(enabled = !exiting, role = Role.Button) { act.value(id) }.testTag("nativeBanner.action").padding(horizontal = 10.dp),
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(card.action, color = Color(theme.accentInk), fontSize = 12.sp, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
                 }
             }
             Box(
-                Modifier.size(40.dp).clip(CircleShape).clickable(role = Role.Button) { dismissNow() }
+                Modifier.size(40.dp).clip(CircleShape).clickable(enabled = !exiting, role = Role.Button) { dismissNow() }
                     .semantics { contentDescription = card.dismiss }.testTag("nativeBanner.close"),
                 contentAlignment = Alignment.Center,
             ) { NativeIconView(BuiltinIcons.close, muted, 14.dp) }
