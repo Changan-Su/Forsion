@@ -1931,7 +1931,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
     // 右上角通知(2026-07-23 起):来源自动标插件名;事件 plugin:<id>,用户可在设置里按插件静音。
     // 停用后残留的定时器不许再弹(10-02 补的活性闸,与 ctx.app 的副作用口同一条纪律)。
     // action(10-17,日历的「撤销」):一个按钮,停留 8 秒(同宿主日历的 U-06);插件停用后点了也不调。
-    // key:同 key 的后一张顶掉前一张,前缀由宿主拼,碰不到别家的 / 宿主的去重键。
+    // key:同 key 的后一张顶掉前一张(replace:计数不累加、标题 / 文案 / 按钮 / 停留都换成新的),前缀由宿主拼,碰不到别家的 / 宿主的去重键。
     notify: (message, opts) => {
       if (!ctxAlive()) return
       const a = opts?.action
@@ -1950,7 +1950,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
         sourceLabel: plugin ? pluginDisplayName(plugin, currentLocale()) : pluginId,
         ...(action ? { action, durationMs: 8000 } : {}),
         // 带 key 时 action 一律显式给(可能是 undefined):同 key 合并时 store 才会清掉上一条的按钮,否则「已删除 B」上挂着撤 A 的按钮
-        ...(typeof opts?.key === 'string' && opts.key ? { dedupeKey: `plugin:${pluginId}:${opts.key.slice(0, 100)}`, action } : {}),
+        ...(typeof opts?.key === 'string' && opts.key ? { dedupeKey: `plugin:${pluginId}:${opts.key.slice(0, 100)}`, action, replace: true } : {}),
       })
     },
     registerView: (view) => set((s) => ({ views: [...s.views, { pluginId, item: view }] })),

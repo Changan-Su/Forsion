@@ -39,6 +39,11 @@ export interface NotifyInput {
   /** 收尾:把同 dedupeKey 的那条原地换成操作的结果(如日历撤销后的「已撤销」)—— 不算重复(计数回 1),
    *  到点淡出而不是滑走。动作钮要拿掉就同时显式给 `action: undefined`。 */
   settle?: boolean
+  /** 顶替:同 dedupeKey 的后一条整条顶掉前一条 —— 计数回 1(不出 ×N),标题、文案、按钮、级别、常驻与停留都换成这一条的,
+   *  不沿用前一条;停留从这一刻重新算。插件 `ctx.notify` 带 key 时用它(插件手册承诺「同 key 的后一张顶掉前一张」:
+   *  插件自己数件数,比如「(3) 张三：…」,宿主再叠 ×3 就重了;key 也可能管着内容不同的卡,比如手机上合成的那一张)。
+   *  宿主自己的去重(防轰炸计数)不带它,照旧累计。 */
+  replace?: boolean
 }
 
 export interface AppNotification {
@@ -180,16 +185,21 @@ export const useNotifications = create<NtfState>((set, get) => {
       const text = plainNetworkError(String(input.text ?? '')).slice(0, 500) // 防插件超长字符串撑爆卡片
       const title = input.title ? String(input.title).slice(0, 120) : undefined
 
-      // 去重合并:同 dedupeKey 更新原条(计数 + 文案 + 重置停留),可见或排队中皆然。
+      // 去重合并:同 dedupeKey 更新原条(计数 + 文案 + 重置停留),可见或排队中皆然。replace:整条换成这一条,计数回 1。
       if (input.dedupeKey) {
         const found = st.items.find((n) => n.dedupeKey === input.dedupeKey) || st.queue.find((n) => n.dedupeKey === input.dedupeKey)
         if (found) {
           const visible = st.items.some((n) => n.id === found.id)
-          const upd: AppNotification = {
-            ...found, text, title: title ?? found.title, level, count: input.settle ? 1 : found.count + 1, settle: input.settle,
-            createdAt: Date.now(), sticky: input.sticky ?? (input.settle || level !== found.level ? sticky : found.sticky), action: 'action' in input ? input.action : found.action, // 显式给了(含 undefined)就换,没给才沿用
-            durationMs: durationMs ?? found.durationMs, onClose: input.onClose ?? found.onClose,
-          }
+          const upd: AppNotification = input.replace
+            ? {
+                ...found, text, title, level, sourceLabel: input.sourceLabel ?? found.sourceLabel, count: 1, settle: input.settle,
+                createdAt: Date.now(), sticky, action: input.action, durationMs, onClose: input.onClose ?? found.onClose,
+              }
+            : {
+                ...found, text, title: title ?? found.title, level, count: input.settle ? 1 : found.count + 1, settle: input.settle,
+                createdAt: Date.now(), sticky: input.sticky ?? (input.settle || level !== found.level ? sticky : found.sticky), action: 'action' in input ? input.action : found.action, // 显式给了(含 undefined)就换,没给才沿用
+                durationMs: durationMs ?? found.durationMs, onClose: input.onClose ?? found.onClose,
+              }
           set((s) => ({
             items: s.items.map((n) => (n.id === found.id ? upd : n)),
             queue: s.queue.map((n) => (n.id === found.id ? upd : n)),

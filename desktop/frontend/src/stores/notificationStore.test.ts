@@ -94,6 +94,30 @@ describe('notificationStore', () => {
     expect(items[0].count).toBe(2)
   })
 
+  it('replace:同 key 的后一条整条顶掉前一条 —— 不出 ×N,标题 / 按钮 / 停留 / 常驻都换成新的,停留从顶替那一刻重算', () => {
+    const run = (): void => {}
+    const a = notifyApp({ text: '乙组：第一条', title: '乙组', dedupeKey: 'p', replace: true, action: { label: '打开', run }, durationMs: 8000 })
+    vi.advanceTimersByTime(3000)
+    const b = notifyApp({ text: '丙组：第二条', title: '丙组', dedupeKey: 'p', replace: true, action: undefined, sticky: false })
+    expect(b).toBe(a) // 原地换:同一张卡,不先滑走再滑进
+    const [n] = useNotifications.getState().items
+    expect(n).toMatchObject({ text: '丙组：第二条', title: '丙组', count: 1, sticky: false })
+    expect(n.action).toBeUndefined()
+    expect(n.durationMs).toBeUndefined() // 前一条的 8 秒不沿用:这一条没按钮,按 info 缺省 5 秒
+    vi.advanceTimersByTime(4900)
+    expect(useNotifications.getState().items).toHaveLength(1)
+    vi.advanceTimersByTime(200)
+    expect(useNotifications.getState().items).toHaveLength(0)
+    // 没给标题的那一条不沿用前一条的标题
+    notifyApp({ text: 'x', title: '旧标题', dedupeKey: 'q', replace: true })
+    notifyApp({ text: 'y', dedupeKey: 'q', replace: true })
+    expect(useNotifications.getState().items[0]).toMatchObject({ text: 'y', title: undefined, count: 1 })
+    // 前一条常驻、这一条不常驻:跟这一条
+    notifyApp({ text: 's1', dedupeKey: 's', replace: true, sticky: true })
+    notifyApp({ text: 's2', dedupeKey: 's', replace: true })
+    expect(useNotifications.getState().items.find((i) => i.dedupeKey === 's')).toMatchObject({ text: 's2', sticky: false, count: 1 })
+  })
+
   it('settle:原地换成结果,计数回 1、拿掉动作钮', () => {
     const run = (): void => {}
     const a = notifyApp({ text: '已删除', dedupeKey: 'u', action: { label: '撤销', run } })
