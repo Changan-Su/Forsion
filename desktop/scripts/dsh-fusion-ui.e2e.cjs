@@ -201,7 +201,9 @@ async function main() {
     win.on('pageerror', (e) => pageErrors.push(e.message))
     // 观测:工作台网页的每次导航(整页 / 同页)和控制台,宿主页里插件的提示;失败的那一步把它们带出来(地址里的令牌抹掉)
     const hostLogs = []
-    const holds = [] // 每次右键 hold 回来的 DSH 会话 id(按先后,不去重);④ / ④b 各取自己那次
+    // 每次右键 hold 回来的 DSH 会话 id(按先后,不去重);④ / ④b 各取自己那次。
+    // ⚠️来源是 DSH2Forsion 渲染半身的开发日志「[dsh2forsion] hold ok <id>」:插件删了这行,④b / ⑤ 会因为拿不到 id 假红
+    const holds = []
     win.on('console', (m) => {
       if (!/dsh2forsion|d2f/i.test(m.text())) return
       hostLogs.push(`host ${m.type()}: ${m.text()}`.slice(0, 300))
@@ -242,7 +244,7 @@ async function main() {
     await pluginRow(win, 'runtime').scrollIntoViewIfNeeded().catch(() => {})
     await sleep(400)
     await shot(win, '20-harness-rows')
-    check('① Harness 卡「运行在」下面有插件给的三行:运行时 / 更新通道 / DSH 插件', rowsUp && (await pluginRow(win, 'channel').count()) && (await pluginRow(win, 'dsh-plugins').count()), runtimeText)
+    check('① Harness 卡「运行在」下面有插件给的三行:运行时 / 更新通道 / DSH 插件', rowsUp && (await pluginRow(win, 'channel').count()) && (await pluginRow(win, 'dsh-plugins').count()), runtimeText || hostLogs.filter((l) => /harness rows/.test(l)).join(' | ') || '没有行,宿主也没报错')
     check('① 运行时一行写着版本、在运行,带「打开工作台」「重启 DSH」', /0\.2\.2-rc\.3/.test(runtimeText) && /打开工作台/.test(runtimeText) && /重启 DSH/.test(runtimeText), runtimeText)
 
     // ② 和它聊一句:连的是常驻那个
@@ -332,6 +334,11 @@ async function main() {
     check('④ 工作台里点安装后,Forsion 先体检(安装被停住)', !!checking)
     const report = await until(async () => { const t = await card.innerText().catch(() => ''); return /要装 dsh-genui/.test(t) ? t : null }, 240_000, 1000)
     await shot(win, '26-review-report')
+    // 观测(不判):报告卡出来后截图里 DSH 网页右边被裁过(DOM 量出来宽度是对的)。把鼠标挪到网页上让它重画一次再截一张,
+    // 裁切消失 = 截到的是客体网页没重画的旧帧
+    { const b = await win.locator('[data-d2f="workbench"] webview').boundingBox().catch(() => null)
+      if (b) { await win.mouse.move(b.x + b.width / 2, b.y + b.height / 3); await sleep(400); await win.mouse.move(b.x + b.width / 2 + 40, b.y + b.height / 3 + 20); await sleep(800) }
+      await shot(win, '26-review-report-after-hover') }
     // 观感:体检卡浮在工作台上,不能把里面的 DSH 网页撑宽(第 2 轮截图里报告出来后网页右边被裁掉)
     const geo = await win.evaluate(() => {
       const r = (q) => { const e = document.querySelector(q); if (!e) return null; const b = e.getBoundingClientRect(); return { w: Math.round(b.width), x: Math.round(b.x) } }
