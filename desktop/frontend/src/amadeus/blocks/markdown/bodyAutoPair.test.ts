@@ -137,7 +137,7 @@ describe('正文括号成对(K11 / K12d / K12e / K12h)', () => {
     v.state.doc.descendants((n) => { if (n.type.name === 'image') images++ })
     expect(images).toBe(1)
   })
-  it('闭合符和光标处样式不同时只挪光标、不动它', async () => {
+  it('跨过时落下的闭合符沿用原来那个的样式(⌘B 后打的字后面仍是普通的 `)`)', async () => {
     const v = await boot('ab')
     caretAt(v, 'ab')
     type(v, ' (')
@@ -147,6 +147,13 @@ describe('正文括号成对(K11 / K12d / K12e / K12h)', () => {
     type(v, ')')
     expect(snap(v)).toEqual(['ab (x)', 6])
     expect(b!.md()).toBe('ab (**x**)\n')
+  })
+  it.each(['"', "'"])('空的一对引号里再敲 %s = 跨过,不再补出一对', async (q) => {
+    const v = await boot('ab')
+    caretAt(v, 'ab')
+    type(v, ' ' + q)
+    type(v, q)
+    expect(snap(v)).toEqual([`ab ${q}${q}`, 5])
   })
   it('用户转义过的闭合符(`\\)`)跨过时原样保留', async () => {
     const v = await boot('a \\)')
@@ -260,6 +267,14 @@ describe('选中后敲 Markdown 符号(K13 / K13b / K13c)', () => {
     select(v, 'hello')
     type(v, '(')
     expect(snap(v)[0]).toBe('(hello) *')
+  })
+  it('组字刚提交上来的字替换选区时不包', async () => {
+    const v = await boot('hello world')
+    select(v, 'world')
+    v.dom.dispatchEvent(new CompositionEvent('compositionend', { data: '*' }))
+    const { from, to } = v.state.selection
+    expect(v.someProp('handleTextInput', (f) => f(v, from, to, '*', () => v.state.tr))).toBeFalsy()
+    expect(v.someProp('handleTextInput', (f) => f(v, from, to, '(', () => v.state.tr))).toBeFalsy()
   })
   it('组字中不包', async () => {
     const v = await boot('hello world')

@@ -175,6 +175,12 @@ async function main() {
       await caseMd(browser, 'A10 代码块里仍由代码块配对(开关共用)', '```js\nlet x\n```', async (p) => { await caretTo(p, { after: 'let x' }); await type(p, ' = f(') }, '```js\nlet x = f()\n```\n')
       await caseMd(browser, 'A11 全角括号不配', 'ab', async (p) => { await caretTo(p, { end: true }); await p.keyboard.insertText('（'); await sleep(80) }, 'ab（\n')
       await caseMd(browser, 'A12 紧贴在字前面不配', 'ab cd', async (p) => { await caretTo(p, { before: 'cd' }); await type(p, '(') }, 'ab (cd\n')
+      await caseMd(browser, 'A13 空的一对引号里再敲引号 = 跨过,不再补一对', 'ab', async (p) => {
+        await caretTo(p, { end: true }); await type(p, ' ""')
+        const ci = await caretInfo(p)
+        check('A13 光标在两个引号之后', ci.off === 5, JSON.stringify(ci))
+        await type(p, " ''")
+      }, 'ab "" \'\'\n')
     }
 
     // ── B 透明:开着配对打、关掉配对打同一串键,两边落盘必须相同(输入规则照常成形)──
@@ -199,6 +205,14 @@ async function main() {
       check('B6 单元格里是 c (e) "f" [g]', r.md != null && r.md.includes('c (e) "f" [g]'), JSON.stringify(r.md))
       r = await transparent('B7 跨过已有的方括号', 'start\n\nq', async (p) => { await blank(p); await type(p, 'a [b] c') }, null)
       check('B7 落盘 a [b] c', r.md === 'start\n\na [b] c\n', JSON.stringify(r.md))
+      r = await transparent('B9 空引用里敲 [!note] 标题', 'start\n\nq', async (p) => { await blank(p); await type(p, '| '); await type(p, '[!note] T') }, null)
+      check('B9 callout 令牌完整', r.md != null && r.md.includes('[!note] T') && !r.md.includes(']ote'), JSON.stringify(r.md))
+      r = await transparent('B10 [ 之后按 ⌘B 再打 ^a]:脚注照常成形', 'start\n\nq', async (p) => {
+        await blank(p); await type(p, 'a [')
+        await p.keyboard.press('Meta+b'); await sleep(60)
+        await type(p, '^a]')
+      }, null)
+      check('B10 脚注成形(不是字面 [^a])', r.md != null && r.md.includes('[^a]:'), JSON.stringify(r.md))
       // 单元格里配对过程本身:敲 ( 之后就是一对
       await caseMd(browser, 'B8 表格单元格里敲 ( 补上 )', '| a | b |\n| --- | --- |\n| c | d |', async (p) => {
         await caretTo(p, { after: 'c' }); await type(p, ' (')
@@ -264,6 +278,12 @@ async function main() {
       await caseMd(browser, 'D6 组字中途的字含 (、最后提交成别的:不残留括号', 'ab', async (p) => {
         await caretTo(p, { end: true }); await ime(p, ['(', '(n'], '你')
       }, 'ab你\n')
+      await caseMd(browser, 'D9 选中文字后组字提交 *:替换选区(不包、不吞)', 'hello world', async (p) => {
+        await select(p, 'world'); await ime(p, ['*'], '*')
+      }, 'hello \\*\n')
+      await caseMd(browser, 'D10 选中文字后组字提交 (:替换选区(不包、不吞)', 'hello world', async (p) => {
+        await select(p, 'world'); await ime(p, ['('], '(')
+      }, 'hello (\n')
       await caseMd(browser, 'D7 输入法直接上屏的 (( 不经组字)= 普通打字,照常配', 'ab', async (p) => {
         await caretTo(p, { end: true }); await p.keyboard.insertText('('); await sleep(100); await type(p, 'x')
       }, 'ab(x)\n')

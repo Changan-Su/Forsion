@@ -398,7 +398,7 @@
    "snap:全角方括号": {"status":"same"}
   },
   "S09": {
-   "snap:弹出联想": {"status":"pending","diff":"content"},
+   "snap:弹出联想": {"status":"same"},
    "snap:回车选中": {"status":"pending","diff":"content"}
   },
   "S10": {

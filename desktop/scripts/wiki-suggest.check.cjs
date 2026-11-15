@@ -244,8 +244,14 @@ async function main() {
     await page.waitForTimeout(300)
     check('L-04a 失焦后 Enter 不再往正文插链接', !(await bodyText(page)).includes('[[Alpha]]'), JSON.stringify(await bodyText(page)))
     // 回到编辑器接着写:面板照常回来(闸只管失焦,不把补全一起废掉)
-    // 正文括号成对(bodyAutoPair)之后 `[[Al` 已是 `[[Al]]`,点行尾落在 `]]` 后面;光标放回 `]]` 之前再接着打。
-    await clickEnd(page, `${PM} > p`)
+    // 正文括号成对(bodyAutoPair)之后 `[[Al` 已是 `[[Al]]`:失焦时行尾渲染成链接,点行尾点中的是链接而不是正文。
+    // 改点行首的字拿回焦点,再把光标放回 `]]` 之前接着打。
+    const c0 = await page.evaluate((s) => {
+      const r = document.createRange(); r.selectNodeContents(document.querySelector(s)); const b = r.getBoundingClientRect()
+      return { x: b.left + 2, y: b.top + b.height / 2 }
+    }, `${PM} > p`)
+    await page.mouse.click(c0.x, c0.y)
+    await page.waitForTimeout(150)
     await page.evaluate(() => {
       const v = window.__upage.probe.view(), st = v.state
       let at = -1

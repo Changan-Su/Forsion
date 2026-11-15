@@ -14,13 +14,12 @@
  *  所以跨过那一半(bodyPairEarlyPlugin)必须排在 callout 等处理器之前;补闭合那一半(bodyPairOpenPlugin)排在最后,
  *  先让 callout 的隐藏前缀改落点、公式 / 代码块自己的配对和第三方扩展说话。 */
 import { Plugin, TextSelection } from '@milkdown/kit/prose/state'
-import { Mark } from '@milkdown/kit/prose/model'
+import type { Node as PMNode } from '@milkdown/kit/prose/model'
 import type { EditorView } from '@milkdown/kit/prose/view'
 import { $prose } from '@milkdown/kit/utils'
 import { bracketAutoPairEnabled } from './autoPairPrefs'
 import { buildBlockString } from './mathLivePreview'
 import { caretInMath } from './mathTyping'
-import { ESCAPE_MARK } from './literalEscape'
 import { hiddenPrefixStart } from './callout'
 
 const PAIRS: Record<string, string> = { '(': ')', '[': ']', '{': '}', '"': '"', "'": "'" }
@@ -66,23 +65,23 @@ function bodyCaret(view: EditorView, from: number, to: number): Caret | null {
   return { text: parent.textBetween(0, parent.content.size, undefined, LEAF), off }
 }
 
-/** handleTextInput(排在最前):光标后紧跟同一个闭合符时跨过去。
- *  常规做法是删掉那个闭合符、返回 false 让这一键照常落字(后面的输入规则照常看到闭合符);
- *  那个闭合符和光标处的样式不同(加粗里打的字后面跟着普通的 `)`)或是用户转义过的字面 —— 只挪光标,不动它。 */
+/** 刚被跨过的那一键:跨过之后这一键还要走完后面的 handleTextInput(含补闭合那一半)。引号的开、闭是同一个字 ——
+ *  不拦的话 `"|"` 再敲 `"` 会先删掉闭合、又被当成开引号补出一对(`""|"`)。记的是删完之后的文档,同一键里不变。 */
+const steppedDoc = new WeakMap<EditorView, PMNode>()
+
+/** handleTextInput(排在最前):光标后紧跟同一个闭合符时跨过去 = 删掉那个闭合符,返回 false 让这一键照常落字。
+ *  落下的字沿用被删那个闭合符的样式(storedMarks):`(` 后按了 ⌘B 再打字,补的 `)` 仍是普通字;用户转义过的字面
+ *  (`\)`)仍带转义记号。这样后面的输入规则(脚注 `[^a]` 等)照常看到打出来的闭合符,样式也不变。 */
 export function bodyStepOver(view: EditorView, from: number, to: number, input: string): boolean {
   if (input.length !== 1 || !CLOSERS.has(input)) return false
   const c = bodyCaret(view, from, to)
   if (!c || c.text.charAt(c.off) !== input) return false
   const { state } = view
-  const $f = state.doc.resolve(from)
-  const after = $f.nodeAfter
+  const after = state.doc.resolve(from).nodeAfter
   if (!after?.isText) return false
-  const caretMarks = state.storedMarks ?? $f.marks()
-  if (!Mark.sameSet(after.marks, caretMarks) || after.marks.some((m) => m.type.name === ESCAPE_MARK)) {
-    view.dispatch(state.tr.setSelection(TextSelection.create(state.doc, from + 1)).scrollIntoView())
-    return true
-  }
-  view.dispatch(state.tr.delete(from, from + 1))
+  const tr = state.tr.delete(from, from + 1).setStoredMarks(after.marks)
+  view.dispatch(tr)
+  steppedDoc.set(view, view.state.doc)
   return false
 }
 
@@ -91,6 +90,7 @@ export function bodyPairOpen(view: EditorView, from: number, to: number, input: 
   if (input.length !== 1) return false
   const close = PAIRS[input]
   if (!close) return false
+  if (steppedDoc.get(view) === view.state.doc) return false // 这一键刚跨过一个闭合符
   const c = bodyCaret(view, from, to)
   if (!c) return false
   const next = c.text.charAt(c.off)
@@ -98,6 +98,11 @@ export function bodyPairOpen(view: EditorView, from: number, to: number, input: 
   if (QUOTES.has(input)) {
     if (next === input || WORD.test(next) || WORD.test(prev)) return false
   } else if (next && !BRACKET_BEFORE.test(next)) return false
+  // 引用首段行首的 `[`:那里的 `[!type]` 是 callout 令牌,自动补的 `]` 会让 `[!n]` 半截就被认成 callout
+  if (input === '[' && c.off === 0) {
+    const $f = view.state.doc.resolve(from)
+    if ($f.depth >= 2 && $f.node(-1).type.name === 'blockquote' && $f.index(-1) === 0) return false
+  }
   const tr = view.state.tr.insertText(input + close, from, to)
   view.dispatch(tr.setSelection(TextSelection.create(tr.doc, from + 1)).scrollIntoView())
   return true

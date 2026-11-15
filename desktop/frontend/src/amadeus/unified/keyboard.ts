@@ -37,7 +37,7 @@ import { toggleInlineCodeCommand } from '@milkdown/kit/preset/commonmark'
 import { toggleTaskTr } from '../blocks/markdown/taskList'
 import { buildBlockString } from '../blocks/markdown/mathLivePreview'
 import { markdownAutoPairEnabled } from '../blocks/markdown/autoPairPrefs'
-import { bodyPairOpenPlugin } from '../blocks/markdown/bodyAutoPair'
+import { bodyPairOpenPlugin, composingNow } from '../blocks/markdown/bodyAutoPair'
 import { removeEmptyColumnTr } from './columns'
 import { calloutKey, calloutOf } from '../blocks/markdown/callout'
 
@@ -840,7 +840,8 @@ export const wrapSelectionPlugin = $prose(
         handleTextInput: (view, from, to, text) => {
           const md = MD_WRAP.has(text)
           const close = PAIRS[text]
-          if ((!close && !md) || from === to || view.composing) return false
+          // 组字中、组字刚提交(提交上来的字替换选区)都不包,同正文配对的 composingNow
+          if ((!close && !md) || from === to || composingNow(view)) return false
           const sel = view.state.selection
           if (!(sel instanceof TextSelection) || sel.empty) return false
           if (!sel.$from.sameParent(sel.$to)) return false // 跨块选区不包(会拆坏结构)
