@@ -146,6 +146,18 @@ describe('plugin default hotkeys', () => {
     expect(engine('amadeus:tpl:a')[0].hotkey).toBe('mod+shift+y')
   })
 
+  it('a key the user bound to a command that the plugin then removes is free again for another default', async () => {
+    const ctx = await load()
+    const offA = ctx.registerCommand({ id: 'a', title: 'A', run: run('a') })
+    useShortcuts.getState().setOverride('amadeus:tpl:a', 'mod+shift+y')
+    ctx.registerCommand({ id: 'b', title: 'B', hotkey: 'mod+shift+y', run: run('b') })
+    expect(usePluginHotkeys.getState().states['amadeus:tpl:b']).toMatchObject({ active: false, conflict: { id: 'amadeus:tpl:a' } })
+    offA() // 模板关掉,它那条命令撤了
+    expect(engine('amadeus:tpl:a')).toHaveLength(0)
+    expect(engine('amadeus:tpl:b')[0].hotkey).toBe('mod+shift+y')
+    expect(usePluginHotkeys.getState().states['amadeus:tpl:b']).toEqual({ hotkey: 'mod+shift+y', active: true })
+  })
+
   it("the user's own binding for the plugin command wins over its default", async () => {
     const ctx = await load()
     ctx.registerCommand({ id: 'a', title: 'A', hotkey: 'mod+shift+y', run: run('a') })

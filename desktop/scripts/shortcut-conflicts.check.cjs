@@ -12,6 +12,7 @@ const check = (name, ok, info) => { console.log(`${ok ? 'PASS' : 'FAIL'} ${name}
 const PROBE_MAIN = `
 ctx.registerCommand({ id: 'free', title: 'Probe free', hotkey: 'Mod+Shift+Alt+J', run: () => { window.__probeFree = (window.__probeFree || 0) + 1 } })
 ctx.registerCommand({ id: 'clash', title: 'Probe clash', hotkey: 'Mod+N', run: () => { window.__probeClash = true } })
+window.__probeCtx = ctx
 `
 
 async function main() {
@@ -19,7 +20,7 @@ async function main() {
   const probe = path.join(home, 'plugins', 'shortcut-probe')
   fs.mkdirSync(probe, { recursive: true })
   fs.writeFileSync(path.join(probe, 'main.js'), PROBE_MAIN)
-  fs.writeFileSync(path.join(probe, 'manifest.json'), JSON.stringify({ id: 'shortcut-probe', name: 'Shortcut probe', version: '1.0.0', minAppVersion: '0.0.1', description: 'e2e probe, not a product plugin' }))
+  fs.writeFileSync(path.join(probe, 'manifest.json'), JSON.stringify({ id: 'shortcut-probe', name: 'Shortcut probe', version: '1.0.0', minAppVersion: '0.0.1', description: 'e2e probe, not a product plugin', network: ['probe.localhost'] }))
   const app = await electron.launch({
     args: [`--user-data-dir=${path.join(home, 'userdata')}`, '--lang=zh-CN', DESK], cwd: DESK,
     env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: 'http://127.0.0.1:1', TANGU_HARNESS_QUIET: '1' },
@@ -148,6 +149,26 @@ async function main() {
     const rows = await page.locator('.shortcut-row .shortcut-name').allInnerTexts()
     check('⑦ 点计数只剩冲突的两行', rows.length === 2 && rows.some((r) => r.includes('命令面板')) && rows.some((r) => r.includes('快速查找')), rows)
     await shot('7-static-conflict-light')
+
+    // ⑨ ctx.net 在真应用里接通(2026-11-16):主窗插件拿得到 ctx.net;没声明的域名被主进程按磁盘上的 manifest 拒;
+    //    声明了的 probe.localhost 过了白名单(本机名 → 被地址闸拦下或解析失败,不出网)。详情页列出「会访问」。
+    const netRes = await win.evaluate(async () => {
+      const c = window.__probeCtx
+      if (!c || !c.net || typeof c.net.request !== 'function') return { has: false }
+      const code = async (u) => { try { await c.net.request(u, { timeoutMs: 3000 }); return 'ok' } catch (e) { return (e && e.code) || String(e) } }
+      return { has: true, undeclared: await code('https://undeclared.localhost/'), declared: await code('https://probe.localhost/') }
+    })
+    check('⑨ 桌面主窗的插件拿得到 ctx.net', netRes.has === true, netRes)
+    check('⑨ 没声明的域名 → net_domain_not_declared', netRes.undeclared === 'net_domain_not_declared', netRes)
+    check('⑨ 声明了的域名过了白名单,本机地址照样不放', netRes.declared === 'net_blocked_address' || netRes.declared === 'net_failed', netRes)
+    await win.evaluate(() => window.dispatchEvent(new CustomEvent('forsion:open-settings', { detail: 'amadeus-plugins' })))
+    await page.locator('.settings-nav-subitem', { hasText: /^(已安装插件|Installed plugins)$/ }).first().click({ timeout: 5000 }).catch(() => {})
+    const card = page.locator('[data-plugin-id="shortcut-probe"]').first()
+    await card.waitFor({ timeout: 10_000 }).catch(() => {})
+    await card.click().catch(() => {})
+    const access = await page.locator('[data-plugin-network]').first().innerText({ timeout: 5000 }).catch(() => '')
+    check('⑨ 插件详情页列出「会访问：probe.localhost」', access.includes('会访问') && access.includes('probe.localhost'), access)
+    await shot('9-plugin-network-light')
   } finally { await app.close() }
   console.log(failed ? `\n${failed} 项失败;截图 ${OUT}` : `\n全部通过;截图 ${OUT}`)
   process.exit(failed ? 1 : 0)

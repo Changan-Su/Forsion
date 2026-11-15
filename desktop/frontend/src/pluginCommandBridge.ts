@@ -38,7 +38,8 @@ export function installPluginCommandBridge(): () => void {
     try {
       const { plugins, commands } = usePluginStore.getState()
       const want = new Map(commands.map((o) => [engineId(o.pluginId, o.item.id), o] as const))
-      const mine = new Set(want.keys())
+      // 刚被插件撤掉、还没从命令表摘下的那几条也是「自己的」:不排除的话,它们(连同用户给它们设的键)会被当成别人占着键
+      const mine = new Set([...want.keys(), ...bridged.keys()])
       const others = otherRows(mine)
       othersSig = sigOf(others)
       const states = resolvePluginHotkeys(
@@ -85,7 +86,7 @@ export function installPluginCommandBridge(): () => void {
   // 别的命令来来去去(懒注册的内置命令、别处 addCommand)→ 只在非插件命令的生效键集合真变了时重判
   const offCommands = useCommandStore.subscribe((s, p) => {
     if (syncing || s.commands === p.commands) return
-    if (sigOf(otherRows(pluginIds())) !== othersSig) sync()
+    if (sigOf(otherRows(new Set([...pluginIds(), ...bridged.keys()]))) !== othersSig) sync()
   })
   return () => {
     offPlugins(); offShortcuts(); offCommands()
