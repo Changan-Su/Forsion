@@ -2,7 +2,7 @@
 // Page-level check of literal bold (hidden switch): real keys, CDP IME, synthetic clipboard events, on the production page.
 // 覆盖:光标走进 / 离开时定界符露出 / 藏起;加粗后退格删一个 `*`;后面接着打字不加粗;手打 `**字**`;⌘B 有 / 无选区;
 // 工具条 B;选中敲 `*` 递进(斜体 → 字面加粗);复制(网页格式 <strong>、纯文本星号)/ 粘贴 <b>;源码模式往返;外部回灌;
-// 加粗左 / 中 / 右紧挨着组字(组字中两个定界符同显同隐,不露半边)。每条比对 serializeNow 逐字,能重开的再重开取一次不变。
+// 加粗左 / 中 / 右紧挨着组字(组字中两个定界符同显同隐,不露半边);打开不编辑零写盘、不编辑时回灌零副本。每条比对 serializeNow 逐字,能重开的再重开取一次不变。
 // ⚠️ 自己在网址上加 `litbold=1`,并断言编辑器根上真有 data-literal-bold(没有 = 测到了别的服务 / 旧代码,直接红)。
 // 实现:frontend/src/amadeus/blocks/markdown/literalBold.ts、literalBoldFlag.ts、textSafe.ts;unified/keyboard.ts。
 // 用法:npm run check:litbold(由 e2e-editor 自起 / 复用 Vite;worktree 里设 HARNESS_URL 指到自己的端口)。`--only=A,D` 只跑这几组。
@@ -123,6 +123,25 @@ const SEED = 'plain **bold** tail\n\nnext __two__ end\n'
 async function main() {
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })
   try {
+    if (want('G')) {
+      // G:打开不编辑 = 不算改动、不写盘;不编辑的回灌 = 采用、零副本(unifiedcas / unified-sync 的口径,这里用带加粗的文)
+      const md = 'plain **bold** tail\n\n__u__ x\n\n5 * 3 snake_case a_b_c\n\n- **item** *it*\n'
+      const p = await open(browser, md)
+      try {
+        await sleep(1500) // 越过 800ms 防抖
+        const w = await p.evaluate(() => window.__upage.writes.length)
+        check('G1 打开不编辑:零写盘、serializeNow 逐字', w === 0 && (await serialize(p)) === md, JSON.stringify({ writes: w }))
+        await caretTo(p, 'tail'); await sleep(1300)
+        const w2 = await p.evaluate(() => window.__upage.writes.length)
+        check('G2 光标进出加粗(露出 / 藏起)不算改动:零写盘', w2 === 0, JSON.stringify({ writes: w2 }))
+        const ext = md.replace('__u__ x', '__u__ x 外部')
+        await p.evaluate((t) => window.__upage.fire('Unified.md', t), ext); await sleep(1800)
+        const c = await p.evaluate(() => [...window.__upage.vault.keys()].filter((k) => /conflict/.test(k)))
+        const disk = await p.evaluate(() => window.__upage.vault.get('Unified.md'))
+        check('G3 不编辑时外部改动:采用、零冲突副本、盘上 = 外部内容', c.length === 0 && disk === ext && (await serialize(p)) === ext, JSON.stringify({ c, disk }))
+      } finally { await p.close() }
+    }
+
     if (want('A')) {
       // A:光标走进 / 离开
       const p = await open(browser, SEED)
