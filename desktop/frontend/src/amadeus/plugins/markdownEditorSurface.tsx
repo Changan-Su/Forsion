@@ -19,10 +19,12 @@ function EditorSurface({
   options,
   revision,
   alive,
+  flushRef,
 }: {
   options: PluginMarkdownEditorOptions
   revision: number
   alive(): boolean
+  flushRef: { current: (() => void) | null }
 }) {
   const { t, locale } = useI18n()
   const [value, setValue] = useState(options.value)
@@ -77,6 +79,7 @@ function EditorSurface({
           readOnly={options.readOnly}
           immediate
           vault={options.vault}
+          flushRef={flushRef}
         />
       )}
       {mode === 'source' && (
@@ -121,12 +124,19 @@ export function mountPluginMarkdownEditor(
   const options = { ...initial }
   let alive = true,
     revision = 0
+  // The visual editor holds edits made during IME composition; reads and disposal take them first,
+  // while this handle is still alive (a handle superseded by a later mount still never calls back).
+  const flushRef: { current: (() => void) | null } = { current: null }
+  const flush = (): void => {
+    if (alive) flushRef.current?.()
+  }
   const tree = () => (
     <HostLocaleProvider>
       <EditorSurface
         options={options}
         revision={revision++}
         alive={() => alive}
+        flushRef={flushRef}
       />
     </HostLocaleProvider>
   )
@@ -137,6 +147,7 @@ export function mountPluginMarkdownEditor(
   const render = (): void => mounted.render(tree())
   return {
     getValue() {
+      flush()
       return options.value
     },
     update(patch) {
@@ -147,6 +158,7 @@ export function mountPluginMarkdownEditor(
     },
     insertMarkdown(markdown) {
       if (alive && !options.readOnly) {
+        flush()
         options.value += '\n\n' + markdown
         options.onChange?.(options.value)
         render()
@@ -163,6 +175,9 @@ export function mountPluginMarkdownEditor(
       }
       tryFocus()
     },
-    dispose: mounted.dispose,
+    dispose() {
+      flush()
+      mounted.dispose()
+    },
   }
 }

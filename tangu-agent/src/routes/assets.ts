@@ -69,6 +69,8 @@ router.put('/agent/skills/catalog/:key/disabled', authMiddleware, async (req: Au
   if (!localSkillsOnly(res)) return;
   try {
     if (typeof req.body?.disabled !== 'boolean') return res.status(400).json({ detail: 'disabled must be a boolean' });
+    // 远端只能按 Agent 启停:不带 agentSlug = 改全局停用表(影响每个继承它的 Agent),只给本机。
+    if (parseRemoteOrigin(req.headers) && !agentSlugArg(req)) return res.status(400).json({ detail: 'agentSlug is required for a remote change' });
     await setCatalogSkillDisabled(req.params.key, req.body.disabled, agentSlugArg(req));
     res.json({ ok: true });
   } catch (e) { catalogError(res, e); }

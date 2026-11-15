@@ -9,6 +9,7 @@ import { ChevronRight } from 'lucide-react'
 import { useI18n } from '../i18n'
 import { listAgentLibrary, listStandIns, type AgentLibraryFile } from '../services/backendService'
 import { homeTarget } from '../services/engine/targets'
+import { tanguDelegatedAdmin as isDelegatedAdmin } from '../tangu/delegatedRole'
 import { useApp } from '../stores/appStore'
 import { AgentMemoryModal } from '../components/AgentMemoryModal'
 import { agentName } from '../agentName'
@@ -41,7 +42,8 @@ export function useStandInsByBody(): Map<string, StandInInfo[]> {
   const roster = useApp((a) => a.agentDefs)
   useEffect(() => {
     let alive = true
-    const load = (): void => { void listStandIns(homeTarget()).then((r) => { if (alive) setRows(r) }) }
+    // 分身是本机通道的事(委托管理员的白名单外,引擎也不收远端写分身字段):这个角色下不读
+    const load = (): void => { if (isDelegatedAdmin()) return; void listStandIns(homeTarget()).then((r) => { if (alive) setRows(r) }) }
     load()
     window.addEventListener('forsion:agents-changed', load)
     return () => { alive = false; window.removeEventListener('forsion:agents-changed', load) }

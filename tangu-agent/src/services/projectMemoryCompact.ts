@@ -34,6 +34,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { deps } from '../seams/runtime.js';
+import { thinkingHeadroom } from '../llm/openaiCompat.js';
 import { query } from '../core/db.js';
 import { redactSecrets } from '../core/redact.js';
 import { autoAdoptable } from '../agents/harnessStore.js';
@@ -52,8 +53,10 @@ export const COMPACT_ACCEPT_CHARS = Math.floor(PROJECT_MEMORY_CHAR_BUDGET * 0.7)
 /** 单条上限,与 remember 的形状闸同口径(tools/builtin/memoryLog.ts 的 REMEMBER_FACT_MAX_CHARS)。 */
 const FACT_MAX_CHARS = 300;
 const DEADLINE_MS = 60_000;
-/** 思考的 token 也算在这个上限里(方案本身几百 token);给少了思考把它吃光,交回来的就是截断的正文。 */
+/** 正文上限(方案本身几百 token)。思考的 token 也算在 max_tokens 里,另由 thinkingHeadroom 留;给少了思考把它吃光,
+ *  交回来的就是截断的正文,托管 Claude 5 上是一句正文都没有的 422(11-15 反馈)。 */
 const MAX_OUTPUT_TOKENS = 12_288;
+const THINKING = 'medium';
 /** 没压成(没有可用模型 / 模型交的东西不合格 / 压不动)之后,这个项目隔多久再试。写满的项目每一句新记忆都会走到这里,不能每次都叫模型。
  *  ponytail: 只记在进程里,引擎重启就清零;真有项目反复压不成再落盘。 */
 const RETRY_AFTER_MS = 30 * 60_000;
@@ -198,7 +201,7 @@ async function run(userId: string, ref: ProjectMemoryRef, fallbackModelId?: stri
   const payload = await llm.buildProviderPayload({
     model: model.model, apiModelId: model.apiModelId,
     messages: [{ role: 'system', content: COMPACT }, { role: 'user', content: input }],
-    projectSource: '', usageSource: 'tangu', temperature: 0, maxTokens: MAX_OUTPUT_TOKENS, thinkingLevel: 'medium', stream: true, signal,
+    projectSource: '', usageSource: 'tangu', temperature: 0, maxTokens: MAX_OUTPUT_TOKENS + thinkingHeadroom(model, THINKING), thinkingLevel: THINKING, stream: true, signal,
   });
   const result = await llm.streamProviderCompletion({ ...model, payload, provider: (model.model as any)?.provider, signal });
   signal.throwIfAborted();

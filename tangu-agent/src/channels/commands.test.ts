@@ -271,6 +271,24 @@ describe('/status /approval /loop /agent /compact /cost /stop', () => {
     expect(calls.patch).toEqual([]);
   });
 
+  it('/approval /status 报下一次 run 真会用的档:按当前 Agent 自己的档收紧(approvalModeFor);算不出来报通道档', async () => {
+    const seen: string[] = [];
+    const { rt } = fake({ approvalMode: 'full-auto', approvalModeFor: async (slug) => { seen.push(slug); return 'readonly'; } });
+    expect(await run(new ChannelCommandCenter(), rt, '/approval')).toContain(APPROVAL_MODE_META.readonly.zh);
+    expect(await run(new ChannelCommandCenter(), rt, '/status')).toContain(APPROVAL_MODE_META.readonly.zh);
+    expect(seen).toEqual(['xyra', 'xyra']);
+    const { rt: broken } = fake({ approvalMode: 'auto-edit', approvalModeFor: async () => { throw new Error('x'); } });
+    expect(await run(new ChannelCommandCenter(), broken, '/approval')).toContain(APPROVAL_MODE_META['auto-edit'].zh);
+  });
+
+  it('/approval:读不到当前会话 → 只报通道 × 绑定的基础档,不套通道默认 Agent 的档', async () => {
+    const seen: string[] = [];
+    const { rt } = fake({ approvalMode: 'full-auto', readSession: async () => { throw new Error('db'); }, channelDefaults: () => ({ agentSlug: 'coder', modelId: '' }), approvalModeFor: async (slug) => { seen.push(slug); return 'readonly'; } });
+    const out = await run(new ChannelCommandCenter(), rt, '/approval');
+    expect(out).toContain(APPROVAL_MODE_META['full-auto'].zh);
+    expect(seen).toEqual([]);
+  });
+
   it('/loop 显示来源 / 设置 / 恢复默认 / 越界', async () => {
     const c = new ChannelCommandCenter();
     const { rt, calls } = fake({}, { agentConfig: { agentSlug: 'coder' } });

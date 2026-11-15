@@ -23,6 +23,7 @@ import { openDailyNote } from '../amadeusTemplates'
 import { ensureAmadeusReady } from '../amadeusPlugins'
 import { openNewChat, openSession } from '../sessionNav'
 import { useQuickFind } from '../quickFind'
+import { isDelegatedAdmin } from '../services/delegatedAdmin'
 import { useI18n, registerMessages } from '../i18n'
 import { launcherTiles } from './newTabModel'
 import type { ViewProps } from '@lcl/engine/types'
@@ -309,18 +310,20 @@ export function NewTabView({ leaf }: ViewProps) {
       {body}
     </div>
   )
-  const recent = shown(recentItems), create = shown(createItems), spaceTiles = shown(spaceItems), freeTiles = shown(freeItems), side = shown(sideItems)
+  // 委托管理员:最近使用 / 新会话 / 全局搜索通向的面(会话、笔记、文件)都在那台设备的白名单外,启动器只留 Space 与侧栏面板。
+  const delegated = isDelegatedAdmin()
+  const recent = delegated ? [] : shown(recentItems), create = delegated ? [] : shown(createItems), spaceTiles = shown(spaceItems), freeTiles = shown(freeItems), side = shown(sideItems)
   // 手机上没有键盘,不标快捷键;桌面读用户改过的那一份。
   const hotkey = window.tangu?.mobile ? '' : formatHotkey(effectiveHotkey({ id: 'quick-find', hotkey: 'mod+p' }), isMacPlatform())
 
   return (
     <div className="newtab">
       <div className="newtab-inner nt">
-        <button className="nt-search" onClick={() => useQuickFind.getState().openPalette()}>
+        {!delegated && <button className="nt-search" onClick={() => useQuickFind.getState().openPalette()}>
           <Search size={16} />
           <span>{t('quickfind.placeholder')}</span>
           {hotkey && <kbd className="nt-kbd">{hotkey}</kbd>}
-        </button>
+        </button>}
         {recent.length > 0 && section(t('newtab.recentSection'), <div className="nt-rows">{recent.map((it) => card(it, 'nt-row'))}</div>)}
         {create.length > 0 && section(t('newtab.createSection'), <div className="nt-chips">{create.map((it) => card(it, 'nt-chip'))}</div>)}
         {spaceTiles.length + freeTiles.length > 0 && section(t('newtab.openSection'), (

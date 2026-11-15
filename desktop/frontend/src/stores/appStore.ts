@@ -31,9 +31,12 @@ import { needsFullGuide } from '../components/onboardingFlow'
 import { phoneGuide, phoneGuidePlan, readPhoneGuideKeys } from '../components/onboarding/phoneGuide'
 import { act } from '../activity/log'
 import { notifyApp } from './notificationStore'
+import { isDelegatedAdmin, useDelegatedApprovalCap } from '../services/delegatedAdmin'
+import { localOnlyMessage } from '../services/localOnly'
 import { agentWriteKnown, noteAgentWriteEnd, noteAgentWriteLive, noteAgentWriteStart } from './agentWriteLedger'
 import { translate } from '../i18n'
 import type { TanguSliceDeps, TanguState, createTanguSlice } from '@tangu/ui/tangu/store/tanguSlice'
+import { resetAccountQuotaScope } from '../services/accountQuota'
 
 
 export type { SettingsTab }
@@ -161,6 +164,9 @@ export interface HostState {
   homeDir: string | undefined
   defaultWsDir: string
   modelsResp: ModelsResponse | null
+  /** 委托管理员:那台设备给远端定的审批档上限(引擎在 Agent 名册回包里带;镜像自 services/delegatedAdmin 的记录)。
+   *  放进 app store 是给 Tangu 界面读的(它不直接引宿主模块);别的来路恒为 undefined。 */
+  delegatedApprovalCap?: 'readonly' | 'auto-edit' | 'full-auto' | null
   skillsList: SkillInfo[] | null
   authInfo: AuthStatusInfo | null
   engines: Array<{ id: string; name: string; available?: boolean; status?: 'available' | 'needs-signin' | 'not-installed'; defaultModel?: string }>
@@ -193,7 +199,9 @@ export interface HostState {
   patchConfig(patch: Partial<TanguDesktopConfig>): void
   /** Chat View「高级」的默认辅助 / 生图 / 识图模型；先乐观更新，再写入 config.json。 */
   setDefaultModel(slot: DefaultModelSlot, modelId: string): void
-  ensureEngineCaps(engineId: string | undefined): void
+  /** 取某引擎的能力清单(模型下拉用),取过就不再取。mark = 'stale':只记下「这份可能过时了」(当前模型缺 API key 的失败后),
+   *  不当场取 —— 用户这时多半还没照提示去登录;下一次调用(打开模型菜单、切到这场对话)再让引擎重新探测。 */
+  ensureEngineCaps(engineId: string | undefined, mark?: 'stale'): void
   openSettings(tab?: SettingsTab, skillKey?: string): void
   closeSettings(): void
   /** 检测到 Forsion 登录过期(401/凭证失效):清登录态 + 提示 + 引导重登录。幂等;standalone/未登录不触发。
@@ -349,6 +357,10 @@ export function installTanguSlice(mod: TanguSliceModule): void {
 /** openFeedback 等账号查询时的请求号:新的一次打开 / 关闭都会让在途的那次作废。 */
 let feedbackAsk = 0
 
+/** 能力清单可能过时了的引擎(见 ensureEngineCaps 的 mark);每个引擎最近一次去取的序号(晚回来的旧请求不盖新的)。 */
+const staleEngineCaps = new Set<string>()
+const engineCapsReq = new Map<string, number>()
+
 export const useApp = create<AppState>((set, get) => ({
   tr: (k) => k,
   // 云 web/mobile:boot() 异步回填前的早期请求(布局恢复后的轮询等)会拿默认 cfg 打
@@ -388,6 +400,13 @@ export const useApp = create<AppState>((set, get) => ({
 
   // 垫片:旧 toast(text, error) → 通知系统(error 走 error 级=常驻手动关,其余 info 自动消失)。
   toast: (text, error = false) => {
+    // 委托管理员:同一种提示只留一条(计数叠加)。白名单外的请求本不该发,漏网的「只能在本机进行」不管从哪条请求来都并成一条。
+    if (isDelegatedAdmin()) {
+      const localOnly = localOnlyMessage()
+      const merged = text.includes(localOnly) ? localOnly : text
+      notifyApp({ text: merged, level: error ? 'error' : 'info', dedupeKey: `delegated:${merged}` })
+      return
+    }
     notifyApp({ text, level: error ? 'error' : 'info' })
   },
 
@@ -432,6 +451,15 @@ export const useApp = create<AppState>((set, get) => ({
       return
     }
     lastOkConnectKey = connectKey(c)
+    // 委托管理员只管 Agent:会话 / 项目 / 外部引擎 / 后台 Agent 配置 / 团队都在那台设备的白名单外 —— 不发,只拉 Agent 管理要的三份目录。
+    if (isDelegatedAdmin()) {
+      connectedOnce = true
+      const key = focusKey()
+      void api.listModels(target).then((m) => { if (latest()) { set({ modelsResp: m }); rememberCatalog(key, { models: m }) } }).catch(() => { if (latest()) set({ modelsResp: null }) })
+      void api.listSkills(target).then((s) => { if (latest()) { set({ skillsList: s }); rememberCatalog(key, { skills: s }) } }).catch(() => { if (latest()) set({ skillsList: null }) })
+      get().refreshAgents()
+      return
+    }
     try {
       const act = await get().refreshSessions(c)
       if (!latest()) return
@@ -461,6 +489,8 @@ export const useApp = create<AppState>((set, get) => ({
 
   refreshSpecialEnabled: async (c) => {
     void c
+    // 后台 Agent 配置在委托管理员的白名单外(关设置等调用点一并不发)
+    if (isDelegatedAdmin()) { set({ specialEnabled: { historian: false, muse: false } }); return }
     const generation = catalogToken()
     try {
       const r = await api.getSpecialConfig(focusTarget())
@@ -603,6 +633,7 @@ export const useApp = create<AppState>((set, get) => ({
       connectInflight = null
       lastOkConnectKey = ''
       tangu?.resetAuthScope()
+      resetAccountQuotaScope() // 额度相关的模块级状态(积分开关已确认值 / 在途 / 不确定、倍率上限)按账号清空
       Object.values(get().agentAvatars).forEach((url) => { try { URL.revokeObjectURL(url) } catch { /* ignore */ } })
       const managed = get().desktopMode === 'managed'
       if (!managed) useChildChat.setState({ selected: {}, sessions: {} })
@@ -690,9 +721,20 @@ export const useApp = create<AppState>((set, get) => ({
     void window.tangu?.setConfig?.({ [slot]: modelId }).catch(() => {})
   },
 
-  ensureEngineCaps: (engineId) => {
-    if (!engineId || get().engineCaps[engineId]) return
-    void api.getEngineCapabilities(homeTarget(), engineId).then((caps) => set((s) => ({ engineCaps: { ...s.engineCaps, [engineId]: caps } })))
+  ensureEngineCaps: (engineId, mark) => {
+    if (!engineId) return
+    if (mark === 'stale') { staleEngineCaps.add(engineId); return }
+    const stale = staleEngineCaps.has(engineId)
+    if (!stale && get().engineCaps[engineId]) return
+    staleEngineCaps.delete(engineId)
+    const req = (engineCapsReq.get(engineId) ?? 0) + 1
+    engineCapsReq.set(engineId, req)
+    void api.getEngineCapabilities(homeTarget(), engineId, stale).then((caps) => {
+      if (engineCapsReq.get(engineId) !== req) return // 后面又发了一次:以那次为准,先发的晚回来也不盖
+      // 取不到时 getEngineCapabilities 回的是空清单:那是「不知道」,不拿它盖掉已经有的那份(过时的记号也留着,下次再取)
+      if (!caps.models.length && get().engineCaps[engineId]) { if (stale) staleEngineCaps.add(engineId); return }
+      set((s) => ({ engineCaps: { ...s.engineCaps, [engineId]: caps } }))
+    })
   },
 
   openSettings: (tab, skillKey) => {
@@ -1043,3 +1085,6 @@ if (import.meta.env.DEV && typeof window !== 'undefined') {
     downloadWorkspaceFile: (sessionId: string, path: string) => api.downloadWorkspaceFile(targetForSession(sessionId), sessionId, path),
   }
 }
+
+// 委托管理员的审批档上限 → app store(Tangu 界面从这里读)
+useDelegatedApprovalCap.subscribe((s) => { if (useApp.getState().delegatedApprovalCap !== s.cap) useApp.setState({ delegatedApprovalCap: s.cap }) })

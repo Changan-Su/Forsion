@@ -15,9 +15,12 @@ import { ChangeReceipt } from './ChangeReceipt'
 import { Fragment, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type Ref } from 'react'
 import { useStreamReveal } from './streamReveal'
 import { Copy, RotateCcw, GitBranch, MessageCircleQuestion, CornerUpLeft, Pencil, Volume2, Square, Loader2, LogIn, Zap, History as HistoryIcon, FileCode2, MessageSquare, ShieldQuestion, CircleCheck, CircleX, CircleHelp, Clock, Undo2 } from 'lucide-react'
-import { FileInput, StepForward } from 'lucide-react'
+import { ArrowUpRight, FileInput, Gauge, StepForward } from 'lucide-react'
 import { turnHasOutput } from './continueTurn'
+import { isModelTierLocked, isTierLockedError, recentlyEndedTrial, tierLockedText, trialEndedAtOf } from '../../services/accountQuota'
+import { useQuotaTierLock } from '../../tangu/quotaCap'
 import { TURN_RESUME_OPEN } from '../../../../../tangu-agent/src/contracts/turnResume'
+import { isEngineModelNoApiKey, parseEngineModelNoApiKey } from '../../../../../tangu-agent/src/contracts/engineModelError'
 import { useNoteInsertState } from './insertToNote'
 import * as api from '../../services/backendService'
 import type { UiMessage, TanguDesktopConfig, AgentConfig, StoredDesktopConfig, ToolEvent, InquiryRequest, SketchItem, LiveWait } from '../../../../../tangu-agent/src/contracts/clientTypes'
@@ -70,6 +73,7 @@ import { playSendFlight } from './sendFlight'
 import { InquiryCard, PlanCard, TodoList } from '../../components/InquiryCard'
 import { registerMessages, useI18n } from '../../i18n'
 import { useApp } from '../../stores/appStore'
+import { usePluginStore } from '../../amadeus/plugins/pluginStore'
 import { agentName, agentNames } from '../../agentName'
 import { isHtmlCardTool } from '../../tangu/store/tanguSlice'
 import { runResultText, type RunResult } from '../../builtins/runCommand'
@@ -78,7 +82,7 @@ import { UI_MODE, nativeSheetPresenter, runNativeCtxMenu, runNativeSheetMenu, us
 import { splitSuggestions, type FenceKind, type SuggestState, type TaskCard } from './suggest'
 import { replyText } from './replyText'
 import { CreationCards } from './CreationCards'
-import { formatDateTime, formatMessageTime } from '../../format/time'
+import { formatDate, formatDateTime, formatMessageTime } from '../../format/time'
 
 import { TaskCards, TaskTraces, type TaskLanding } from './TaskCards'
 import { MuseApprovalLine, MuseTodoCards, MuseTodoTraces, ProactiveMark, isProactive } from './MuseDm'
@@ -92,6 +96,7 @@ import { refForSession, targetForSession, useSessionHostName } from '../../servi
 import { AttachmentTile } from '../../components/AttachmentTile'
 import { ImageStack, stackable } from '../../components/ImageStack'
 import { UserFold } from './UserFold'
+import { agentEngineErrorText } from '../../tangu/agentEngine'
 export type { TaskLanding }
 import './chat2.css'
 import '../../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
@@ -200,6 +205,7 @@ const ERR_RULES: Array<[RegExp, string]> = [
   // 引擎自家错误码(agentLoop publish 的 error 字段是裸码):精确规则放前面
   [SUB_EXPIRED_RE, 'chat.err.subExpired'], // 比下面通用的 401 更具体,必须排在它前面
   [/token_quota_exceeded/i, 'chat.err.quota'],
+  [/model_tier_locked/i, 'chat.err.tierLocked'], // 会员档位用不了这个模型(服务端 403);必须排在通用 401/403 前面
   [/masking_failed/, 'chat.err.maskFailed'], // 引擎 llm/outboundMask.ts:开着却跑不了 → 这一轮不发
   [/masking_blocked/, 'chat.err.maskBlocked'],
   [QUOTA_RE, 'chat.err.quotaUsed'], // 订阅额度 / 账单配额用完:几小时才重置,不是限流(必须排在 429 前面)
@@ -215,15 +221,41 @@ const ERR_RULES: Array<[RegExp, string]> = [
   [/(^|\D)429(\D|$)|rate[ _-]?limit|per ?minute|allocated quota exceeded/i, 'chat.err.rate'],
   [/(^|\D)5\d\d(\D|$)|bad gateway|overloaded/i, 'chat.err.server'],
 ]
-export function humanizeRunError(raw: string | undefined, t: (k: string, v?: Record<string, unknown>) => string): string {
+/** 服务端 quotaExceededMessage 的两句提示,只认英文半句(中文那半措辞可以改):
+ *  enable =「开关没开,开了就能用积分接着用」;topup =「开着,积分也用完了」 */
+const QUOTA_POINTS_ENABLE_RE = /Turn on "Continue with points"/i
+const QUOTA_POINTS_OUT_RE = /points have run out/i
+export function humanizeRunError(raw: string | undefined, t: (k: string, v?: Record<string, unknown>) => string, modelName = '', trialEndedDate = ''): string {
+  const engineAgent = agentEngineErrorText(raw, t) // 跑在 DSH 上的 Agent 没跑起来(引擎发的 agent_engine_* 码,带引擎名)
+  if (engineAgent) return `${engineAgent}(${raw})`
   if (!raw) return t('chat.error')
   raw = stripQuotaAsk(raw)
+  if (isEngineModelNoApiKey(raw)) return engineModelNoApiKeyText(raw, t)
   const hit = ERR_RULES.find(([re, key]) => re.test(raw) && (key !== 'chat.err.quotaUsed' || isQuotaText(raw)))
+  // 这一句自己就说清了,不再把机器码 / JSON 回包挂在括号里(「复制错误」照样拿得到原文)
+  if (hit?.[1] === 'chat.err.tierLocked') return tierLockedText(raw, t, modelName, trialEndedDate)
+  // Forsion 额度用完:服务端在机器码后面补了一句积分提示(给不认识积分的旧客户端看,见 server quotaExceededMessage),
+  // 只在积分帮得上时才补。这里按它选自己的说法,括号里只留机器码;裸码 = 积分帮不上(后台任务、组织账号、已到预支硬顶)
+  // 或老服务端,就不提积分(Codex 11-15)
+  if (hit?.[1] === 'chat.err.quota') {
+    const key = QUOTA_POINTS_OUT_RE.test(raw) ? 'chat.err.quotaPointsOut' : QUOTA_POINTS_ENABLE_RE.test(raw) ? 'chat.err.quotaPoints' : 'chat.err.quota'
+    return `${t(key)}(token_quota_exceeded)`
+  }
   if (hit?.[1] === 'chat.err.quotaUsed') {
     const time = quotaResetFromError(raw)
     return `${t(time ? 'chat.err.quotaUsedAt' : 'chat.err.quotaUsed', { time })}(${raw})`
   }
   return hit ? `${t(hit[1])}(${raw})` : raw
+}
+
+/** 外部引擎的当前模型要 API key 而没有配(引擎拼的那一句见 tangu-agent/src/contracts/engineModelError.ts;实测来源:
+ *  DSH 只用账号登录时,新会话的缺省模型走的是要 key 的那条线,不选模型每一句都失败)。点名当前模型和能换成哪些;
+ *  引擎的原话留在括号里。句式拆不开(被截断 / 改写过)就给不点名的说法,整句留在括号里。 */
+function engineModelNoApiKeyText(raw: string, t: (k: string, v?: Record<string, unknown>) => string): string {
+  const info = parseEngineModelNoApiKey(raw)
+  if (!info?.model) return `${t('chat.err.engineModelNoKey')}(${raw})`
+  const vars = { engine: info.engine, model: info.model, others: info.others.join(t('chat.err.listSep')) }
+  return `${t(info.others.length ? 'chat.err.engineModelNoKeyPick' : 'chat.err.engineModelNoKeyOnly', vars)}(${info.raw})`
 }
 
 registerMessages({
@@ -232,6 +264,15 @@ registerMessages({
     en: 'Your direct-connection sign-in has expired — please sign in again',
   },
   'chat.err.relogin': { zh: '重新登录 {provider}', en: 'Sign in to {provider} again' },
+  'chat.err.quotaPage': { zh: '额度与积分', en: 'Quota & points' },
+  'chat.err.quotaPoints': {
+    zh: 'AI 额度已用尽：可以在「额度与积分」里开启「用积分继续」，用积分接着用；也可以使用重置卡立即恢复，或升级会员提高上限',
+    en: 'AI quota used up — turn on "Continue with points" in Quota & points to keep going with your points, use a reset card to restore it now, or upgrade your plan',
+  },
+  'chat.err.quotaPointsOut': {
+    zh: 'AI 额度用完了，积分也用完了：可以充值积分、使用重置卡立即恢复，或升级会员提高上限',
+    en: 'Your AI quota and points are both used up — top up points, use a reset card to restore it now, or upgrade your plan',
+  },
   'chat.retry': { zh: '重试', en: 'Retry' },
   'chat.continue': { zh: '继续生成', en: 'Continue' },
   'chat.continueTip': { zh: '保留已生成的内容，从断开处接着写', en: 'Keep what was generated and pick up where it stopped' },
@@ -271,6 +312,32 @@ export function ReloginChip({ error, modelId }: { error?: string; modelId?: stri
   return (
     <button className="t2-relogin" onClick={() => useApp.getState().openSettings('model/m-providers')}>
       <LogIn size={12} /> {t('chat.err.relogin', { provider: SUB_PROVIDER_LABELS[id] })}
+    </button>
+  )
+}
+
+/** 额度用尽 / 会员档位用不了这个模型那两条错误后面的「升级会员」:打开支付中心。宿主没有支付中心(没装云账号扩展)就不给。 */
+export function UpgradeChip({ error }: { error?: string }) {
+  const { t } = useI18n()
+  if (!error || !(isTierLockedError(error) || /token_quota_exceeded/i.test(error)) || !window.tangu?.openPayCenter) return null
+  return (
+    <button type="button" className="t2-relogin" data-testid="msg-upgrade" onClick={() => void window.tangu?.openPayCenter?.()}>
+      <ArrowUpRight size={12} /> {t('chat.err.upgrade')}
+    </button>
+  )
+}
+
+/** 额度用尽那条错误后面的「额度与积分」:打开云账号扩展画的那一页(「用积分继续」开关、重置卡、积分余额都在那)。
+ *  扩展没注册这一页(没装 / 旧宿主 / 没登录云账号)就不给。 */
+export function QuotaPageChip({ error }: { error?: string }) {
+  const { t } = useI18n()
+  const hasPage = usePluginStore((s) => s.activeIds.includes('forsion-extend') &&
+    s.settingsViews.some((v) => v.pluginId === 'forsion-extend' && v.item.id === 'quota' && v.item.category === 'forsion'))
+  if (!error || !/token_quota_exceeded/i.test(error) || !hasPage) return null
+  return (
+    <button type="button" className="t2-relogin" data-testid="msg-quota-page"
+      onClick={() => useApp.getState().openSettings('forsion/fx:forsion-extend:quota' as Parameters<ReturnType<typeof useApp.getState>['openSettings']>[0])}>
+      <Gauge size={12} /> {t('chat.err.quotaPage')}
     </button>
   )
 }
@@ -324,15 +391,27 @@ export interface MessageHandlers {
 
 /** 失败那一行 + 下面「重试 · 复制错误」(走查续六 6.3)。只在会话最后一条、且没在跑时给重试:重试后新一轮接上,按钮自然消失。 */
 function RunErrorRow({ msg, sessionId, modelId, handlers }: { msg: UiMessage; sessionId?: string; modelId?: string; handlers?: MessageHandlers }) {
-  const { t } = useI18n()
+  const { t, locale } = useI18n()
   const canRetry = useApp((s) => !!handlers?.onRetry && !!sessionId && !s.runningBySession[sessionId] && s.messagesBySession[sessionId]?.at(-1)?.id === msg.id)
   // 这一轮已有产出(正文 / 工具调用):「重试」会把它们删掉重来 —— 拆成「继续生成」(主)与「重新生成」两条路
   const canContinue = useApp((s) => canRetry && !!handlers?.onContinue && turnHasOutput(s.messagesBySession[sessionId!]))
+  // 模型被会员档位拦下:modelId 是会话「现在」选着的模型,不一定是当时那个 —— 只有它确实还锁着才点名,否则说「这个模型」
+  const tierLocked = isTierLockedError(msg.error)
+  const { cap: multiplierCap, trials } = useQuotaTierLock(tierLocked)
+  const sessionModel = useApp((s) => (tierLocked && modelId ? s.modelsResp?.models.find((m) => m.id === modelId) : undefined))
+  const stillLocked = !!sessionModel && isModelTierLocked(sessionModel, multiplierCap, trials)
+  const modelName = stillLocked ? sessionModel!.name : ''
+  // 限时开放刚结束(7 天内)被拦:说「限时体验已于 {date} 结束」,不说倍率
+  // 服务端回包里的结束时刻优先(后台提前结束时,本机记着的到期还在以后);没有再看本机见过的
+  const trialEnded = stillLocked ? (trialEndedAtOf(msg.error) ?? recentlyEndedTrial(sessionModel!.id)) : null
+  const trialEndedDate = trialEnded != null ? formatDate(trialEnded, { locale }) : ''
   return (
     <>
       <div className="t2-tool err">
-        <span className="t2-status-err">✕ {humanizeRunError(msg.error, t)}</span>
+        <span className="t2-status-err">✕ {humanizeRunError(msg.error, t, modelName, trialEndedDate)}</span>
         <ReloginChip error={msg.error} modelId={modelId} />
+        <QuotaPageChip error={msg.error} />
+        <UpgradeChip error={msg.error} />
         <QuotaRemindChip error={msg.error} sessionId={sessionId} modelId={modelId} />
         <QuotaChips error={msg.error} messageId={msg.id} sessionId={sessionId} modelId={modelId} />
       </div>

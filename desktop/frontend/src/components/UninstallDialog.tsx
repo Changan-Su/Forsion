@@ -13,6 +13,7 @@ import { useApp } from '../stores/appStore'
 import { panelToast } from './PanelNotice'
 import { ipcErrorText } from '../ipcError'
 import { homeTarget } from '../services/engine/targets'
+import { isDelegatedAdmin } from '../services/delegatedAdmin'
 import {
   agentUninstallPreview, deleteSkillCatalogEntry, restoreTrashEntry, skillUninstallPreview,
   type AgentUninstallPreview, type SkillUninstallPreview, type TrashEntry,
@@ -36,6 +37,7 @@ registerMessages({
   // Agent
   'uninstall.agent.title': { zh: '删除 Agent「{name}」？', en: 'Delete agent “{name}”?' },
   'uninstall.agent.msg': { zh: '它会从名册和侧栏消失。它留下的东西各自去哪：', en: 'It leaves the roster and the sidebar. Here is where everything it leaves behind goes:' },
+  'uninstall.agent.remoteNoUndo': { zh: '远程管理时删除后在这里撤销不了；要恢复，请到那台设备本机的回收站。', en: 'Remote admins can’t undo this here. To restore it, use the trash on that device.' },
   'uninstall.agent.msgCloud': { zh: '会从 Agent 名册移除，历史会话保留（只读）。', en: 'It is removed from the agent roster; past sessions are kept (read-only).' },
   'uninstall.agent.default': { zh: '这是默认 Agent，不能删除。先在名册里把别的 Agent 设为默认。', en: 'This is the default agent, so it cannot be deleted. Make another agent the default in the roster first.' },
   'uninstall.agent.muse': { zh: 'Muse 正在启用，先在「设置 › 后台 Agent」关闭 Muse 再删除。', en: 'Muse is on. Turn it off in Settings › Background agents before deleting it.' },
@@ -228,6 +230,8 @@ export function AgentUninstallDialog({ slug, name: fallbackName, onDone, onClose
   useEffect(() => {
     let live = true
     // 预览只在本机引擎有(云端 Agent 没有本机文件 / 回收站):拿不到就按云端那句说,照旧能删。
+    // 委托管理员:预览在白名单外,远端删又不连带删私聊 —— 直接按「移出名册、历史会话保留」那句说。
+    if (isDelegatedAdmin()) { setPv('cloud'); return }
     agentUninstallPreview(homeTarget(), slug).then((r) => { if (live) setPv(r) }, () => { if (live) setPv('cloud') })
     return () => { live = false }
   }, [slug])
@@ -247,11 +251,12 @@ export function AgentUninstallDialog({ slug, name: fallbackName, onDone, onClose
     title={t('uninstall.agent.title', { name })}
     message={pv === 'cloud' ? t('uninstall.agent.msgCloud') : blocked === 'default' ? t('uninstall.agent.default') : blocked === 'muse' ? t('uninstall.agent.muse') : t('uninstall.agent.msg')}
     rows={rows} loading={!pv} blocked={!!blocked}
-    confirmLabel={t('uninstall.delete')} note={pv === 'cloud' ? undefined : t('uninstall.note')}
+    confirmLabel={t('uninstall.delete')} note={isDelegatedAdmin() ? t('uninstall.agent.remoteNoUndo') : pv === 'cloud' ? undefined : t('uninstall.note')}
     onConfirm={(checks) => {
       const app = useApp.getState()
       void app.removeAgent(slug, { deleteChats: !!checks.deleteChats })
-        .then((r) => { notifyUninstalled(t('uninstall.agent.done', { name }), name, r.trashId ? { id: r.trashId, kind: 'agent', restorer: 'engine' } : null); onDone?.() })
+        // 委托管理员:回收站恢复在那台设备的白名单外 —— 不给「撤销」(删了要恢复,在那台设备本机的回收站里)
+        .then((r) => { notifyUninstalled(t('uninstall.agent.done', { name }), name, r.trashId && !isDelegatedAdmin() ? { id: r.trashId, kind: 'agent', restorer: 'engine' } : null); onDone?.() })
         .catch((e: any) => panelToast(/run_active/.test(String(e?.message || e)) ? t('uninstall.agent.teamBusy') : String(e?.message || e), true))
     }}
     onClose={onClose}

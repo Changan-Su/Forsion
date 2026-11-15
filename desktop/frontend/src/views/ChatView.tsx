@@ -7,6 +7,7 @@ import type { FailedSend } from '../tangu/store/failedSend'
 import { trackChatReadReceipt } from './chat2/chatReadReceipt'
 import { Composer2 } from './chat2/Composer2'
 import { chatReadingKey, readChatPosition, trackChatReading, type ChatReadingController } from './chat2/chatReadingPosition'
+import { agentEngineOf, agentEnginePlaceholder, agentEngineState } from '../tangu/agentEngine'
 import { AgentSelectStrip } from '../components/AgentSelectStrip'
 import { displaySessionTitle, soloSessionTitle } from '../sessionTitle'
 import { ProjectSelector } from '../components/ProjectSelector'
@@ -437,6 +438,14 @@ export function ChatView({ leaf, params }: ViewProps) {
   const voiceOn = chatAgentSlug ? !!s.voiceOnByAgent[chatAgentSlug] : false
 
   useEffect(() => { useApp.getState().ensureEngineCaps(curEngineId || undefined) }, [curEngineId])
+  // 跑在外部引擎上的 Agent(定义里的 engine,11-14):身份照旧是这个 Agent(名字、头像、记忆),输入框按引擎那一套(引擎的模型、
+  // 没有思考档 / Ultra / 语音)。没选人 = 发送时补的缺省 Agent,同一个口径。团队 / 群聊 / 显式选了引擎的会话不算。
+  const runAgentSlug = mvCfg.soloAgentSlug || mvCfg.agentSlug || (mvCfg.engineId || mvCfg.soloEngineId || mvCfg.groupChat || mvCfg.teamSlug || mvCfg.teamMember ? '' : s.defaultAgentSlug)
+  const runAgentDef = runAgentSlug && !mvCfg.engineId && !mvCfg.soloEngineId && !mvCfg.groupChat && !mvCfg.teamMember ? s.agentDefs.find((a) => a.slug === runAgentSlug) : undefined
+  const agentEngine = agentEngineOf(runAgentDef)
+  const agentEngineHere = agentEngineState(agentEngine, s.engines)
+  const composerEngine = mvCfg.engineId || agentEngine || undefined
+  useEffect(() => { if (agentEngine && agentEngineHere === 'ready') useApp.getState().ensureEngineCaps(agentEngine) }, [agentEngine, agentEngineHere])
   useEffect(() => { if (chatAgentSlug) void useApp.getState().refreshVoiceMode(chatAgentSlug) }, [chatAgentSlug])
 
   // DOM 登记在 workspace 层,右栏(目录)跟随最近聚焦的 Chat leaf。
@@ -1053,8 +1062,8 @@ export function ChatView({ leaf, params }: ViewProps) {
           // 实时语音:只有跟随侧栏的主区聊天接得住(固定会话的分屏/隐藏标签不许抢交接);发往的就是本视图的会话
           liveOwner={followActive && leaf.loc === 'main'}
           liveSessionKey={activeId}
-          disabled={!!params.readOnly || !composerTargetReady || (studioChat && !studioRoot)}
-          disabledPlaceholder={studioChat && !studioRoot ? t('studio.chooseProject') : targetPlaceholder}
+          disabled={!!params.readOnly || !composerTargetReady || (studioChat && !studioRoot) || agentEngineHere !== 'ready'}
+          disabledPlaceholder={studioChat && !studioRoot ? t('studio.chooseProject') : agentEnginePlaceholder(agentEngine, agentEngineHere, t) || targetPlaceholder}
           running={running}
           execConfig={teamCfg ? { ...mvCfg, approvalMode: teamCfg.approvalMode || mvCfg.approvalMode } : mvCfg}
           teamApproval={!!teamCfg}
@@ -1063,11 +1072,11 @@ export function ChatView({ leaf, params }: ViewProps) {
           modelId={mvModelId}
           onModelChange={(id) => { tanguCount('modelSwitchUser'); s.setSessionModel(id, activeId, !params.childSurface) }}
           engines={s.engines}
-          engineId={mvCfg.engineId}
-          engineModels={mvCfg.engineId ? (s.engineCaps[mvCfg.engineId]?.models ?? []) : undefined}
-          engineModelId={mvCfg.engineModelId}
+          engineId={composerEngine}
+          engineModels={composerEngine ? (s.engineCaps[composerEngine]?.models ?? []) : undefined}
+          engineModelId={mvCfg.engineModelId || (agentEngine ? runAgentDef?.engineModel : undefined)}
           onEngineModelChange={activeId ? (id) => s.setSessionEngineModel(id, activeId) : (id) => s.setNewChatCfg((c) => ({ ...c, engineModelId: id || undefined }))}
-          engineCommands={mvCfg.engineId ? (s.engineCaps[mvCfg.engineId]?.commands ?? []) : undefined}
+          engineCommands={composerEngine ? (s.engineCaps[composerEngine]?.commands ?? []) : undefined}
           thinkingLevel={mvCfg.thinkingLevel}
           ultra={mvCfg.ultra}
           onThinkingChange={(lv, ultra) => s.setSessionThinking(lv, activeId, !params.childSurface, ultra)}

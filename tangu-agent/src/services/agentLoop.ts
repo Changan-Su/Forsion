@@ -21,7 +21,7 @@ import { maskSpans, maskSettings, MASKING_SECTION, staysOnMachine } from '../llm
 import { LlmError, type ThinkingLevel, type ChatMessage, type ToolCall } from '../core/types.js';
 import { clampThinkingLevel, resolveModelCapability } from '../llm/modelCapabilities.js';
 import { PROTOCOL_MARK, DIRECT_MARK, ACCOUNT_MARK } from '../llm/openaiCompat.js';
-import { realpathSync } from 'node:fs';
+import { existsSync, mkdirSync, realpathSync } from 'node:fs';
 import { publish, drain, cleanup } from './eventBus.js';
 import { makeUiSettingsUpdater } from './uiAck.js';
 import { gateToolCall, requestApproval, normalizeApprovalMode, USER_REJECT_REASON, setApprovalTray, setRunApprovalCap, type ApprovalDecision, type ApprovalMode } from './approvals.js';
@@ -31,7 +31,8 @@ import { makeClientActionRequester } from './clientAck.js';
 import { runHooks, type HookRunContext, type HookVerdict } from '../hooks/index.js';
 import { enterRunContext, currentDisplayAgentSlug, currentRunId, setRunClientTag, setRunCwd, setRunSessionContext, setRunStandIn } from '../seams/runContext.js';
 import { getAgentForRun } from '../agents/standIn.js';
-import { resolveRunStandIn, standInSection } from './standInRun.js';
+import { channelSourceOf, resolveRunStandIn, standInSection } from './standInRun.js';
+import { tightenChannelApprovalForAgent } from '../channels/runApproval.js';
 import { isStandInSlugShape } from '../contracts/agentSyncRules.js';
 import { standInSearchDenied } from './accessDomain.js';
 import path from 'node:path';
@@ -69,7 +70,7 @@ import {
 import { compactionSettingsFor, type CompactionSettings } from './compactionSettings.js';
 import { releaseRunCompaction, runCompactionOperation, type CompactionCommitResult } from './runCompaction.js';
 import { isContextOverflowError, learnFromUpstreamError } from './contextWindowStore.js';
-import { getAgent, isValidSlug, libDirOf, MUSE_AGENT_SLUG, type NormalAgentDef } from '../agents/agentRegistry.js';
+import { agentEngineHereError, agentEngineLabel as engineLabel, agentEngineOf, getAgent, isKnownAgentEngine, isValidSlug, libDirOf, MUSE_AGENT_SLUG, probeAgentApprovalMode, resolveMemorySlug, type NormalAgentDef } from '../agents/agentRegistry.js';
 import { loadHarness, shelvedOf, renderHarnessSection, isRefineInvocation, REFINE_DIRECTIVE, consumeHarnessCandidates, renderPendingHarnessCandidates } from '../agents/harnessStore.js';
 import { loadSchedule, entriesOf, upcomingScheduleLines } from './agentSchedule.js';
 import { agentIdentitySection, applyAgentActivation } from './agentActivation.js';
@@ -104,6 +105,7 @@ import { listPluginMetas } from '../plugins/registry.js';
 import { isPluginEnabledSync } from '../plugins/settingsStore.js';
 import { prepareAgentFilesForRun, scheduleAgentFilesSync } from './agentFileSync.js';
 import { buildAgentMemoryContext } from './memoryRecall.js';
+import { mergeBridgeCalls, prepareEngineAgentHandoff } from './engineHandoff.js';
 import { agentRoleOf } from './telemetryLedger.js';
 import { filterTaggedEntries, filterTaggedText, foldNote } from '../contracts/deviceTags.js';
 import { runTagContext, textForThisDevice } from './deviceTagContext.js';
@@ -537,6 +539,54 @@ async function dispatchRun(runId: string, ac: AbortController): Promise<void> {
         return await externalEngineLoop(runId, ac, run, facts.soloEngineId);
       }
       const engineId: string | undefined = facts.soloAgentSlug || facts.teamSlug ? undefined : input?.agentConfig?.engineId;
+      // 跑在外部引擎上的 Agent(定义里的 engine,11-14 DSH 融合第 2 步):和私聊引擎一样是**强制**分支 —— 用不了就明确失败,
+      // 绝不回落 Tangu 自己的循环(那等于用它的名字和人设悄悄换了 harness)。会话里显式选了引擎(Claude Code / Codex)的,照旧按选的走。
+      // 团队会话不在这一步(成员 run 走 runLoop,激活之后那道闸会拒)。不是本机形态的(云端 worker)也落到那道闸。
+      if (!engineId && !facts.teamSlug && profile.capabilities.hostExec) {
+        const slug = facts.soloAgentSlug || input?.agentConfig?.agentSlug;
+        const def = typeof slug === 'string' && isValidSlug(slug) ? await getAgent(slug).catch(() => null) : null;
+        const agentEngine = agentEngineOf(def);
+        if (def && agentEngine) {
+          const refuse = async (error: string, detail: string): Promise<void> => {
+            // 先把用户这一句落库(和两条 loop 同口径、幂等):在这里就被拒的一轮也不能让人重开对话时丢了自己打的字(Codex 评审 11-14)
+            const said = String(input?.message || '');
+            const atts = Array.isArray(input?.attachments) ? input.attachments : [];
+            if (typeof input?.userMessageId === 'string' && input.userMessageId && (said || atts.length)) {
+              await deps().state.insertUserMessage({ id: input.userMessageId, sessionId: run.session_id, content: said, modelId: run.model_id || '', attachments: atts.length ? atts : null }).catch(() => {});
+            }
+            await publish(runId, 'error', { error, detail }).catch(() => {});
+            await drain(runId).catch(() => {});
+            await updateRunStatus(runId, 'failed', { error }).catch(() => {});
+            releaseRefusedRun(runId, run.session_id);
+          };
+          if (remoteOf(input)) {
+            return await refuse(`agent_engine_remote:${agentEngine}`, `This agent runs on ${engineLabel(agentEngine)} and can only be used on the computer where it is installed. Continue this chat there.`);
+          }
+          // 只接用户在输入框里发的这一句(普通对话 / 私聊)。团队成员、群聊、插件任务 / 通知这些派生的 run 这一步不接:
+          // 落到 runLoop,激活之后那道闸明确拒(团队 / @ / 定时排在多 Agent 那一步)。成员会话里直接追问也算团队那条路(存值里有 teamMember)。
+          const storedRaw: any = await deps().state.getAgentConfig(run.session_id).catch(() => null);
+          const stored = plainObject(typeof storedRaw === 'string' ? safeParse(storedRaw) : storedRaw);
+          const ac0 = plainObject(input?.agentConfig);
+          // 插件任务的会话:存值里记着 pluginOwner,之后客户端追问的 run 本身不带这个标记,也照插件任务算(Codex 评审 11-14)
+          // 分身(standInOf)不交给引擎:它的权限域(工具白名单、读写根、不给 MCP)在 runLoop 里才建,引擎自带的读写文件 / 跑命令
+          // 和交接的桥都不受它约束。落到 runLoop,建好权限域后由那道闸拒(Codex 评审 11-15)。
+          const interactive = input?.origin === 'client' && !input?.pluginOwner && !input?.pluginNotification
+            && !stored.pluginOwner && !stored.pluginNotification
+            && !ac0.teamMember && !stored.teamMember && !ac0.groupChat && !def.standInOf;
+          if (interactive) {
+            if (!isKnownAgentEngine(agentEngine) || !engines?.has(agentEngine)) {
+              return await refuse(`agent_engine_unsupported:${agentEngine}`, `This agent is set to run on "${agentEngine}", which this version of Forsion cannot run.`);
+            }
+            if (engines.list().find((e) => e.id === agentEngine)?.status === 'not-installed') {
+              return await refuse(`agent_engine_not_installed:${agentEngine}`, `This agent runs on ${engineLabel(agentEngine)}, which is not installed on this computer.`);
+            }
+            if (await chatPresetLocked(run.session_id, input?.agentConfig)) {
+              return await refuse(`agent_engine_chat_preset:${agentEngine}`, `This agent runs on ${engineLabel(agentEngine)}, which is not available in chat-only conversations.`);
+            }
+            return await externalEngineLoop(runId, ac, run, agentEngine, { slug, def, solo: !!facts.soloAgentSlug });
+          }
+        }
+      }
       // 红线:未声明 hostExec 的 profile(云端形态)→ engines 不注入/为空 → 一律回落 runLoop。
       if (engineId && profile.capabilities.hostExec && engines?.has(engineId) && !(await chatPresetLocked(run.session_id, input?.agentConfig))) {
         return await externalEngineLoop(runId, ac, run, engineId);
@@ -573,7 +623,7 @@ function parseRunResult(v: unknown): any {
  *    (新会话没有 run)都落在这里。引擎会话里记着界面上已经没有的东西,不能接着用。
  *  - 只看最近那一次,不往更早找:更早的指针指的是同一个引擎会话的旧状态,对得上也已经被后面的轮次写过了。
  *  - 引擎或工作目录换了、上一次续接时引擎说那个会话没有了(externalSessionReset),也不续接。
- *  - 「最新的回答」那一条认不出一种情况:那一轮没跑完(被停 / 中途出错),什么都没落库,用户随后把那一句**改成了别的话**
+ *  - 「最新的回答」那一条认不出一种情况:那一轮没跑完(被停 / 中途出错),没有回答落库,用户随后把那一句**改成了别的话**
  *    重发 —— 库里看起来和没改过一样,引擎会话里却还记着被弃掉的那一句。所以没跑完的那一支多看两样:对话自那以后被改写过
  *    (截断重发 / 回退都走删消息入口,历史版本号加一),并且这次发的不是那一轮的原话 → 不续接。
  *    原样重试(客户端的「重试」也走截断重发)照旧续接:同一句话再说一遍,没有被弃掉的东西,新开反而是不声不响丢上文。
@@ -622,7 +672,11 @@ export async function resumableExternalSession(
  * 镜像 runLoop 的 finalize/catch/finally(见本文件末);不做 flush(外部 agent 直接在 host cwd 操作,
  * 非 Tangu 会话沙箱)、不接 steer(ACP 无对应语义)。
  */
-async function externalEngineLoop(runId: string, ac: AbortController, run: any, engineId: string): Promise<void> {
+/** agent:这一轮是名册里一个跑在外部引擎上的 Agent 的对话(定义里的 engine)。身份按它算:回答记在它名下、Historian 写它的记忆和日志、
+ *  私聊的工作区是它的 Library;会话里另选的引擎模型优先,其次它定义里的 engineModel。没有 agent = 普通引擎对话 / 引擎私聊 / 插件任务,照旧。 */
+interface EngineAgent { slug: string; def: NormalAgentDef; solo: boolean }
+
+async function externalEngineLoop(runId: string, ac: AbortController, run: any, engineId: string, engineAgent?: EngineAgent): Promise<void> {
   const sessionId = run.session_id;
   takePendingStop(sessionId); // 外部引擎这一轮不带信号复盘:上一轮按停留下的那条就此作废,别留给之后的自有 loop 轮错配
   const userId = run.user_id;
@@ -636,10 +690,24 @@ async function externalEngineLoop(runId: string, ac: AbortController, run: any, 
   let displayAgentSlug: string | undefined;
   let finalContent = '';
   let toolServer: Awaited<ReturnType<typeof import('../engines/toolServer.js').createRunToolServer>> | undefined;
+  // 交接(底层第 3 步):跑在引擎上的 Agent 的桥画的卡片在正文里的位置 = 这一刻已经上屏的正文长度;展示的文件(出图等)随回答落库。
+  let streamedText = '';
+  const handoffFiles: DisplayFileItem[] = [];
   // 普通引擎对话(不是插件任务)才用 run 上的续接指针;pointer = 本轮确立的那个。
   let chatResume = false;
   let pointer: ExternalSessionPointer | undefined;
   try {
+    // 用户这一句落库,与 runLoop 同口径(run 真正开始时才写,排队的 run 排在上一轮回答之后;幂等;纯附件也写)。
+    // 放在最前面:下面任何一步失败,重开对话时这一句都还在,失败原因由消息接口按它从 agent_runs 带出(routes/sessions.ts)。
+    // 正文是交给引擎的原话(引擎这边不拼工作区上传引用,也不取走待用的上传)。续接规则只看 model 行,不受它影响。
+    const userText = String(input.message || '');
+    const userAttachments = Array.isArray(input.attachments) ? input.attachments : [];
+    if (input.userMessageId && (userText || userAttachments.length)) {
+      await deps().state.insertUserMessage({
+        id: input.userMessageId, sessionId, content: userText, modelId,
+        attachments: userAttachments.length ? userAttachments : null,
+      });
+    }
     // 在外部 loop 自己的终态处理内拒绝,不能从 dispatchRun 抛出后被 catch 静默回落自有 loop。
     // ACP 引擎的任意工具/进程不受本地 OS 沙箱约束,请求里的 agentConfig 也不能放宽可信策略。
     if (resolveHostSandboxPolicy().mode !== 'off') {
@@ -649,22 +717,47 @@ async function externalEngineLoop(runId: string, ac: AbortController, run: any, 
     ac.signal.throwIfAborted();
     const storedAgentConfig = typeof rawAgentConfig === 'string' ? JSON.parse(rawAgentConfig) : rawAgentConfig;
     if (storedAgentConfig != null && (typeof storedAgentConfig !== 'object' || Array.isArray(storedAgentConfig))) throw new Error('Invalid stored session Agent configuration');
-    const selectedSlug = storedAgentConfig?.agentSlug ?? agentConfig.agentSlug ?? DEFAULT_AGENT_SLUG;
+    const selectedSlug = engineAgent ? engineAgent.slug : storedAgentConfig?.agentSlug ?? agentConfig.agentSlug ?? DEFAULT_AGENT_SLUG;
     if (typeof selectedSlug !== 'string' || !isValidSlug(selectedSlug)) throw new Error('Invalid session Agent identity for external engine.');
     displayAgentSlug = selectedSlug;
-    enterRunContext(userId, runId);
+    // Agent 的对话:回答记在它名下(finalizeAssistantMessage 读 displayAgentSlug)、记忆作用域按它折叠;普通引擎对话照旧不带身份。
+    if (engineAgent) enterRunContext(userId, runId, resolveMemorySlug(engineAgent.def), engineAgent.slug);
+    else enterRunContext(userId, runId);
     if (input.approvalTray === true) setApprovalTray(runId, true);
     await updateRunStatus(runId, 'running');
     await publish(runId, 'status', { state: 'running' });
-    const engineCwd = engineSolo ? engineLibDir(engineSolo) : (typeof agentConfig.cwd === 'string' && agentConfig.cwd ? agentConfig.cwd : undefined);
+    // 工作区:引擎私聊由引擎身份派生;Agent 私聊由 Agent 身份派生(它的 Library,不信 run 值,同 bindSessionFacts);其余取 run 的 cwd,
+    // 由 Agent 来跑、对话又没给目录时落在这个 Agent 的 Library(不落在本进程的当前目录)。
+    const runCwd = typeof agentConfig.cwd === 'string' && agentConfig.cwd ? agentConfig.cwd : undefined;
+    const agentLib = engineAgent ? (engineAgent.def.libraryDir || libDirOf(engineAgent.slug)) : undefined;
+    const engineCwd = engineSolo ? engineLibDir(engineSolo)
+      : engineAgent?.solo ? agentLib
+      : (runCwd ?? agentLib);
+    // 老 Agent(云端拉下来的 / 早期建的)可能没有 Library:Agent 目录还在才补建,不把被删的 Agent 建回来。
+    if (agentLib && engineCwd === agentLib && !existsSync(agentLib) && existsSync(path.dirname(agentLib))) mkdirSync(agentLib, { recursive: true });
     const taskPolicy = storedAgentConfig?.pluginOwner ? storedAgentConfig : {};
     const bridgeTools=Array.isArray(taskPolicy.pluginToolNames)?taskPolicy.pluginToolNames:[];
     const allowedBridge=bridgeTools.length?bridgeTools:taskPolicy.pluginReadOnly?['read_file','list_dir','list_files','glob_files','search_files','view_image','calculator','get_datetime']:[];
+    let agentsHome: string | undefined;
     if (allowedBridge.length) {
       const { createRunToolServer } = await import('../engines/toolServer.js');
       toolServer = await createRunToolServer({ userId, sessionId, runId, appId:deps().profile.appId, modelId,
         execMode:'host',cwd:engineCwd,approvalMode:normalizeApprovalMode(storedAgentConfig?.approvalMode),signal:ac.signal,
         toolsStrict:true,toolsList:allowedBridge },allowedBridge);
+    } else if (engineAgent && !storedAgentConfig?.pluginOwner) {
+      // 交接:这个 Agent 在 Tangu 上能用的工具(按它的工具设置)经桥交给引擎,人设 / 协作说明 / 记忆 / 技能写进指令目录。
+      // 工作目录先挂进这一轮的上下文:项目级技能(和同 id 的项目覆盖)按它找,enterRunContext 会把它清掉。
+      if (engineCwd) setRunCwd(engineCwd);
+      const handoff = await prepareEngineAgentHandoff({
+        runId, sessionId, userId, modelId, engineId, cwd: engineCwd, input, storedAgentConfig, agent: engineAgent, signal: ac.signal,
+        publish: (type, payload) => { if (!ac.signal.aborted) void publish(runId, type, payload); },
+        contentOffset: () => streamedText.length,
+        displayFiles: handoffFiles,
+        persistMessage: (files) => finalizeAssistantMessage(assistantId, sessionId, modelId, streamedText, '', toolServer?.calls() ?? [], toolServer?.results() ?? [], files),
+        engineEnv: engines.agentsHomeEnv?.(engineId) ?? null,
+      });
+      toolServer = handoff.toolServer;
+      agentsHome = handoff.agentsHome;
     }
     const previous = taskPolicy.externalSession;
     // 续接哪个引擎会话:插件任务用插件点名的那个(照旧);普通引擎对话用上一轮记在 run 上的指针,且对话自那以后没被改写。
@@ -679,9 +772,12 @@ async function externalEngineLoop(runId: string, ac: AbortController, run: any, 
       sessionId,
       userId,
       modelId,
-      engineModelId: agentConfig.engineModelId,
+      engineModelId: (typeof agentConfig.engineModelId === 'string' && agentConfig.engineModelId) || engineAgent?.def.engineModel || undefined,
       readOnly: taskPolicy.pluginReadOnly === true,
       mcpServers: toolServer ? [toolServer.server] : undefined,
+      // 交接:指令目录交给引擎(引擎定义里有 agentsHomeEnv 才用);桥里的调用由桥自己画卡,引擎那边同一次调用不上屏。
+      agentsHome,
+      hideToolPrefix: engineAgent && toolServer ? toolServer.toolPrefix : undefined,
       resumeSessionId: chatResume ? chain?.resumeId : (previous?.engineId === engineId && previous?.cwd === engineCwd ? previous.id : undefined),
       // 普通对话的指针连同记它的那家适配器一起交给引擎层核对(null = 老指针没记);插件任务不传。
       resumeFromAgent: chatResume && chain?.resumeId ? chain.resumeAgent ?? null : undefined,
@@ -697,16 +793,19 @@ async function externalEngineLoop(runId: string, ac: AbortController, run: any, 
       } : undefined,
       message: String(input.message || ''),
       attachments: input.attachments || [],
-      // 引擎私聊的工作区由身份派生(engines/<id>/Library),不信 run 值;普通引擎会话照旧取 run 的 cwd。
+      // 引擎私聊 / Agent 私聊的工作区由身份派生,不信 run 值;普通引擎会话照旧取 run 的 cwd。
       cwd: engineCwd,
       signal: ac.signal,
       publish: (type: string, payload: any) => {
         if (ac.signal.aborted) return;
+        if (type === 'token') streamedText += String(payload?.delta || '');
         void publish(runId, type, payload);
       },
       requestApproval: (preview: string, toolCall: ToolCall): Promise<ApprovalDecision> =>
         requestApproval(runId, toolCall, preview, ac.signal),
     });
+    // 引擎这一轮答完了:桥里还没取走的编号(等审批 / 还在跑的)这时撤掉、停下,终态卡片发完再落库。
+    if (engineAgent) await toolServer?.close().catch(() => {});
     ac.signal.throwIfAborted();
     finalContent = result.content || '';
     if (taskPolicy.pluginOwner && result.externalSessionId) {
@@ -714,15 +813,18 @@ async function externalEngineLoop(runId: string, ac: AbortController, run: any, 
       const fresh = typeof freshRaw === 'string' ? JSON.parse(freshRaw) : freshRaw;
       await deps().state.setAgentConfig(sessionId,JSON.stringify({...fresh,externalSession:{id:result.externalSessionId,engineId,cwd:engineCwd}}));
     }
+    const { calls: allCalls, results: allResults } = mergeBridgeCalls(result.toolCalls || [], result.toolResults || [], toolServer);
     await finalizeAssistantMessage(
-      assistantId, sessionId, modelId, finalContent, result.reasoning || '', result.toolCalls || [], result.toolResults || [],
+      assistantId, sessionId, modelId, finalContent, result.reasoning || '', allCalls, allResults, handoffFiles.length ? handoffFiles : undefined,
     );
     await drain(runId);
-    await publish(runId, 'done', { content: finalContent });
+    await publish(runId, 'done', { content: finalContent, ...(toolServer && engineAgent ? { toolOffsets: allCalls.map((c: any) => ({ id: c.id, offset: c.ui_content_offset })) } : {}) });
     await updateRunStatus(runId, 'done', { tokensTotal: result.tokensTotal, result: { content: finalContent, externalSessionId: result.externalSessionId, ...(pointer ? { externalSession: pointer } : {}) } });
     // Historian 从会话解析记忆域；文件同步使用已捕获的展示身份，不能拿共享记忆桶替代。
     // 引擎私聊没有 Tangu 记忆:不跑 Historian(它找不到会话 Agent 会回落默认 Agent,把 Codex/PI 的对话写进 Xyra 的 LOG/MEMORY),也不同步 Agent 文件。
-    if (!engineSolo) void onUserRunDone(sessionId, userId, undefined, undefined, !!(remoteOf(run.input) || effectiveRemote({ runId }))).finally(() => scheduleAgentFilesSync(userId, displayAgentSlug));
+    // 跑在引擎上的 Agent:记忆域显式按它算(会话存的 agentSlug 不进锁集,不能靠它兜底),写进它自己的 MEMORY / LOG。
+    const memScope = engineAgent ? resolveMemorySlug(engineAgent.def) : undefined;
+    if (!engineSolo) void onUserRunDone(sessionId, userId, memScope, undefined, !!(remoteOf(run.input) || effectiveRemote({ runId }))).finally(() => scheduleAgentFilesSync(userId, displayAgentSlug));
   } catch (err: any) {
     const aborted = err?.name === 'AbortError' || ac.signal.aborted;
     const status = aborted ? 'aborted' : 'failed';
@@ -733,8 +835,14 @@ async function externalEngineLoop(runId: string, ac: AbortController, run: any, 
       : sessionGone ? `${err.message} Send your message again to continue in a new session. It will not include the earlier context.`
       : err?.message || String(err);
     console.error(`[agent-core] external engine run ${runId} ${status}:`, msg);
-    if (finalContent.trim()) {
-      await finalizeAssistantMessage(assistantId, sessionId, modelId, finalContent, '', [], []).catch(() => {});
+    // 桥里已经执行过的调用(卡片)也落库:停掉 / 出错的那一轮,做过的事要看得见。
+    if (engineAgent) await toolServer?.close().catch(() => {});
+    // 有桥里的卡片 / 展示的文件时,连同已经上屏的那段正文一起落(卡片的位置按它算);没有就照旧只落已收尾的正文。
+    const bridged = !!(engineAgent && toolServer && (toolServer.calls().length || handoffFiles.length));
+    const text = bridged && !finalContent.trim() ? streamedText : finalContent;
+    if (text.trim() || bridged) {
+      const merged = mergeBridgeCalls([], [], engineAgent ? toolServer : undefined);
+      await finalizeAssistantMessage(assistantId, sessionId, modelId, text, '', merged.calls, merged.results, handoffFiles.length ? handoffFiles : undefined).catch(() => {});
     }
     await publish(runId, 'error', { error: msg, aborted, content: finalContent, ...(aborted ? reasonOf(runId) : {}) }).catch(() => {});
     await drain(runId).catch(() => {});
@@ -1246,7 +1354,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     else delete agentConfig.maxIterations;
   }
   const sessionMaxIterations: number | null = agentConfig.maxIterations ?? null;
-  const { activeAgentSlug, memScopeSlug, profile: agentProfile } = await applyAgentActivation(
+  const { activeAgentSlug, memScopeSlug, profile: agentProfile, agentApprovalMode, agentReadFailed, engine: agentEngine } = await applyAgentActivation(
     agentConfig,
     userId,
     inlineMemberDef ? async (slug: string) => (slug === inlineMemberDef.slug ? inlineMemberDef : getAgent(slug)) : getAgentForRun, // 分身:人设白名单从本体现读
@@ -1260,6 +1368,26 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   ac.signal.throwIfAborted();
   if (agentConfig.agentSlug && activeAgentSlug !== agentConfig.agentSlug) {
     throw new Error('The selected Agent could not be activated. The run was not started with another Agent.');
+  }
+  // 跑在外部引擎上的 Agent(定义里的 engine):这里是 Tangu 自己的循环,替它答就是用它的名字和人设悄悄换了 harness。
+  // 本机普通对话 / 私聊在 dispatchRun 就交给了引擎;走到这里的是还没接的路(团队成员、讨论、自动化、通道、云端 worker)。
+  if (agentEngine) throw new Error(agentEngineHereError(agentEngine));
+  // 通道 run:通道层定的档(设置 × 绑定)再按 Agent 自己设的档收紧(只收紧;没设 = 原样)。身份到这里才定(会话钉 slug、分身),
+  // 下游的快照、工具 ctx、delegate 子代理都读这一个值(通道 run 不现读会话存档;会话互通工具对通道 run 不开)。
+  // start_discussion 起的讨论 run 不继承本 run 的档(成员各按自己的定义 / 缺省),与通道设置那层同样,这里没管。
+  // 分身(缺省开着)自己的定义不带档:再加本体的档,读不到按只读 —— 面对别人的分身不该比本体松。
+  if (channelSourceOf(plainObject(input.source))) {
+    // 档从磁盘现探(probeAgentApprovalMode):注册表的读取会把 EIO / 解析不了吞成「没设」,这里分清 不在 / 读到了 / 读不出来(按只读)。
+    // 只在本机形态(hostExec:定义就在本机磁盘上);别的形态通道不跑,保底用激活读到的值。
+    const probe = async (slug: string): Promise<{ known: boolean; mode?: unknown }> => {
+      const p = await probeAgentApprovalMode(slug).catch(() => ({ state: 'unreadable' as const }));
+      return p.state === 'ok' ? { known: true, mode: p.mode } : p.state === 'absent' ? { known: false } : { known: true, mode: 'readonly' };
+    };
+    const local = profile.capabilities.hostExec && typeof agentConfig.agentSlug === 'string' && agentConfig.agentSlug;
+    const own = agentReadFailed ? { known: true, mode: 'readonly' } : local ? await probe(String(agentConfig.agentSlug)) : { known: false };
+    const agentModes: unknown[] = [own.known ? own.mode : agentApprovalMode]; // 读定义抛错 / 文件读不出 = 不知道它设了什么,按只读,不当成没设
+    if (standIn) { const b = await probe(standIn.bodySlug); agentModes.push(b.known ? b.mode : 'readonly'); } // 本体不在也按只读
+    agentConfig.approvalMode = tightenChannelApprovalForAgent(agentConfig.approvalMode, agentModes);
   }
   // 压缩旋钮:run 级(会话 / Agent config.toml 的 [compaction],已由 applyAgentActivation 并入)> config.json > 缺省。
   const compactionCfg = compactionSettingsFor(agentConfig.compaction);

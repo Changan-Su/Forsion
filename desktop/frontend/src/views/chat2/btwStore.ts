@@ -25,6 +25,7 @@ import { useChildChat } from '../../stores/childChatStore'
 import { deleteAside, listAsides, type SavedAside } from '../../services/backendService'
 import { mimeForExt, previewKindFor } from '../../services/fileKinds'
 import { windowKind } from '../../windowKind'
+import { isTierLockedError, tierLockedText } from '../../services/accountQuota'
 
 registerMessages({
   'btw.title': { zh: '顺便问', en: 'By the way' },
@@ -384,7 +385,7 @@ export const useBtw = create<BtwState>((set, get) => ({
 }))
 
 /** 引擎的机器码 → 人话:额度用尽与主聊天同一句(chat.err.quota)。 */
-const readableError = (raw: string): string => (/token_quota_exceeded/i.test(raw) ? translate('chat.err.quota') : raw)
+const readableError = (raw: string): string => (/token_quota_exceeded/i.test(raw) ? translate('chat.err.quota') : isTierLockedError(raw) ? tierLockedText(raw, translate) : raw)
 
 type AsideEvent =
   | { type: 'delta'; text?: string }

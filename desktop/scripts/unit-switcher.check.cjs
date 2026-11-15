@@ -337,6 +337,36 @@ async function main() {
     const backed = await pw.evaluate(() => ({ hidden: getComputedStyle(document.querySelector('.unitrs')).visibility === 'hidden', alive: !!document.querySelector('.unitrs-web'), pill: document.querySelector('.unitsw-pill .unitsw-name')?.textContent?.trim() }))
     check('整窗形态:点「回到这台电脑」→ 回本机,webview 保活,胶囊回「本地」', backed.hidden && backed.alive && backed.pill === '本地', JSON.stringify(backed))
     await pw.close()
+
+    // ── 中转设备页的绑定顺序(&unitbind:绑定桩记下调用时那张 webview 的 src)──
+    // A 中转 → 局域网 → 回 A 中转:第二张中转 webview 也必须先挂空白页、绑上之后才换真实地址(旧 bug:跳过空白页直接加载 = 401)
+    const pb = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1100, height: 720 } })
+    pb.on('pageerror', (e) => console.log('[pageerror]', e.message))
+    await pb.addInitScript(() => localStorage.clear())
+    await pb.goto(`${BASE}?ribbon&unit&unitbind`, { waitUntil: 'domcontentloaded' })
+    await pb.waitForFunction(() => !!window.__unitRemote, null, { timeout: 20000 })
+    const tunnel = { key: 'u-mba:tunnel', name: 'MacBook Air', unitId: 'u-mba', via: 'tunnel', url: 'https://cloud.test/api/units/u-mba/proxy/' }
+    const lan = { key: 'u-mba:lan', name: 'MacBook Air', unitId: 'u-mba', via: 'lan', url: 'http://192.168.1.20:8791/' }
+    const srcNow = () => pb.evaluate(() => document.querySelector('.unitrs-web')?.getAttribute('src') ?? null)
+    const openT = async (t) => { await pb.evaluate((t) => window.__unitRemote.getState().open(t), t); await pb.waitForTimeout(30) }
+    await openT(tunnel)
+    const first = { early: await srcNow() }
+    await pb.waitForTimeout(500)
+    first.late = await srcNow()
+    await openT(lan)
+    const lanSrc = await srcNow()
+    await pb.waitForTimeout(300)
+    await openT(tunnel)
+    const second = { early: await srcNow() }
+    await pb.waitForTimeout(500)
+    second.late = await srcNow()
+    const binds = await pb.evaluate(() => window.__unitBinds)
+    check('中转设备页:先挂空白页,绑定桩回 ok 后才换中转地址', first.early === 'about:blank' && first.late === tunnel.url && binds[0]?.srcAtCall === 'about:blank', JSON.stringify({ first, b0: binds[0] }))
+    check('切到局域网通路:不走绑定、直接加载', lanSrc === lan.url && binds.length === 2, JSON.stringify({ lanSrc, n: binds.length }))
+    check('中转 → 局域网 → 回中转:第二张中转 webview 仍先挂空白页、按新的 webContentsId 重新绑定,绑上后才换地址',
+      second.early === 'about:blank' && second.late === tunnel.url && binds.length === 2 && binds[1].srcAtCall === 'about:blank' && binds[1].webContentsId !== binds[0].webContentsId,
+      JSON.stringify({ second, binds }))
+    await pb.close()
   } finally {
     await browser.close()
     if (vite) vite.kill()

@@ -14,6 +14,14 @@ export interface AccountQuotaView {
   weeklyPercent?: number
   weeklyResetAt?: string
   resetCards?: number
+  /** 额度用完后用积分继续(用户手动开,缺省关;2026-11-13 起服务端真按它扣积分,之前恒 false)。 */
+  pointsAutoDeduct?: boolean
+  /** 积分余额(2026-11-13 起随额度视图下发;旧服务端没有 = 不知道,别当 0)。 */
+  pointsBalance?: number
+  /** 这个账号能用的模型倍率上限,-1 = 不限(2026-11-13 起;旧服务端没有 = 不知道,不标任何模型)。 */
+  modelMultiplierCap?: number
+  /** 限时开放中、开放给的档位含这个账号的模型(2026-11-15 起;旧服务端没有 = 没有开放)。 */
+  modelTrials?: ModelTrialView[]
   /** 后台额度(Muse / 自动化;2026-09-24 起服务端才下发,旧服务端无此字段)。 */
   background?: BackgroundQuotaView
 }
@@ -45,6 +53,24 @@ export type QuotaAdvisory = {
   threshold: 0 | 5 | 10 | 15
   exhausted: boolean
   critical: boolean
+}
+
+/**
+ * 写操作(用卡 / 转入 / 开关)的回包只带部分额度视图:auto-deduct 不含 resetCards / pointsBalance,用卡另给 resetCards。
+ * 回包里没有的字段留旧值,有的覆盖 —— 各处都照这个合并,别再「展开回包 + 手补一个字段」把别的新字段丢掉。
+ */
+export function mergeQuotaView(prev: AccountQuotaView | null | undefined, patch: Partial<AccountQuotaView> | null | undefined, extra: Partial<AccountQuotaView> = {}): AccountQuotaView {
+  const out: Record<string, unknown> = { ...(prev || {}) }
+  for (const source of [patch || {}, extra]) {
+    for (const [key, value] of Object.entries(source)) if (value !== undefined) out[key] = value
+  }
+  return out as unknown as AccountQuotaView
+}
+
+/** 积分余额:不是有限数 = 不知道(旧服务端 / 读失败),返回 null,调用方别把它当 0 去提示充值。 */
+export function pointsBalanceOf(quota: AccountQuotaView | null | undefined): number | null {
+  const n = quota?.pointsBalance
+  return typeof n === 'number' && Number.isFinite(n) ? Math.max(0, n) : null
 }
 
 export const ACCOUNT_QUOTA_EVENT = 'tangu:account-quota'
@@ -137,4 +163,168 @@ export function pickQuotaAdvisory(
 ): { advisory: QuotaAdvisory; bucket: 'main' | 'background' } | null {
   if (main && (!background || main.remainingPercent <= background.remainingPercent)) return { advisory: main, bucket: 'main' }
   return background ? { advisory: background, bucket: 'background' } : null
+}
+
+// ── 「用积分继续」开关的读写代数(2026-11-13)──────────────────────────────────────────────
+/**
+ * 旧读取晚到不能盖掉已确认的开关状态(界面绝不能显示「关」而服务端其实开着)。
+ * 每次写开关都推进代数;读额度视图的人在发请求前取一枚 pointsReadToken(),回来后经 reconcilePointsRead 合并:
+ * 读取发出之后有过写,就用本地已确认的值(确认不了时留读到的值,由提醒条的「待定」态兜底)。
+ * 放在这里(而不是写开关的模块里):账号菜单(宿主)与提醒条 / run 收尾(Tangu 界面)都要用,这是两边共用的额度接缝。
+ */
+let pointsWriteGen = 0
+let pointsConfirmed: boolean | undefined
+export function pointsReadToken(): number { return pointsWriteGen }
+export function reconcilePointsRead<T extends AccountQuotaView | null | undefined>(view: T, token: number): T {
+  if (!view || token === pointsWriteGen || pointsConfirmed === undefined) return view
+  return { ...view, pointsAutoDeduct: pointsConfirmed }
+}
+/** 一次在所有写之后发出的读取拿到了服务端的真值:记为已确认。 */
+export function notePointsConfirmed(view: AccountQuotaView | null | undefined, token: number): void {
+  if (view && token === pointsWriteGen && typeof view.pointsAutoDeduct === 'boolean') pointsConfirmed = view.pointsAutoDeduct
+}
+/** 写开关开始:之前发出的读取都算旧的,已确认值作废。 */
+export function beginPointsWrite(): void { pointsWriteGen++; pointsConfirmed = undefined }
+/** 写开关得到服务端回包:记下它说的值;写期间发出的读取也算旧的。 */
+export function confirmPointsWrite(value: boolean): void { pointsConfirmed = value; pointsWriteGen++ }
+/** 仅测试用(换号时由 resetAccountQuotaScope 一并清)。 */
+export function resetPointsWriteState(): void { pointsWriteGen = 0; pointsConfirmed = undefined }
+
+// ── 账号作用域(换号 / 登出)─────────────────────────────────────────────────────────────────
+/**
+ * 额度相关的模块级状态都按账号算:开关已确认值、读写代数、倍率上限、写入在途 / 不确定。
+ * 换号信号沿用宿主现成的 onAuthChanged(appStore 那条处理里调 resetAccountQuotaScope),这里只负责推进账号代数、
+ * 清掉开关状态、广播 null(= 不知道),并通知订阅者(上限读法、写开关模块)按新账号重来。
+ * 发请求前记下 accountQuotaEpoch(),回来时变了就整个丢弃 —— A 的晚到回包别落到 B 头上。
+ */
+export const ACCOUNT_QUOTA_SCOPE_EVENT = 'tangu:account-quota-scope'
+let accountEpoch = 0
+export function accountQuotaEpoch(): number { return accountEpoch }
+export function resetAccountQuotaScope(): void {
+  accountEpoch++
+  resetPointsWriteState()
+  seenTrials = {}
+  if (typeof window === 'undefined') return
+  window.dispatchEvent(new CustomEvent(ACCOUNT_QUOTA_SCOPE_EVENT))
+  publishAccountQuota(null)
+}
+export function subscribeAccountQuotaScope(listener: () => void): () => void {
+  if (typeof window === 'undefined') return () => {}
+  window.addEventListener(ACCOUNT_QUOTA_SCOPE_EVENT, listener)
+  return () => window.removeEventListener(ACCOUNT_QUOTA_SCOPE_EVENT, listener)
+}
+
+// ── 模型倍率门槛(2026-11-13)───────────────────────────────────────────────────────────────
+/**
+ * 每档会员只能用倍率不高于上限的 Forsion 云端模型,严格大于才用不了。上限 = 额度视图的 modelMultiplierCap(-1 = 不限)。
+ * 拿不到(没登录 / 老扩展 / 旧服务端 / 读失败)= 不知道,一个都不标 —— 读失败不能把整张模型表锁死。
+ * 用户自己接的模型没有 multiplier,天然不受影响。
+ */
+export function modelMultiplierCapOf(quota: AccountQuotaView | null | undefined): number | null {
+  const cap = quota?.modelMultiplierCap
+  return typeof cap === 'number' && Number.isFinite(cap) && cap >= 0 ? cap : null
+}
+
+/**
+ * 限时开放(2026-11-15):后台把倍率超上限的模型临时开给某档及以上,服务端在额度视图里列出「对这个账号正开放着的」。
+ * 模型 id → 到期时间(毫秒)。没下发 / 读失败 = 没有开放,照常按上限锁(收紧那侧)。到点由界面自己翻回锁住(见 useModelTrialClock)。
+ */
+export interface ModelTrialView { modelId: string; endsAt: string }
+export type ModelTrials = Readonly<Record<string, number>>
+const NO_TRIALS: ModelTrials = Object.freeze({})
+/** 见过的开放(模型 id → 到期毫秒):开放刚结束时报错卡要说「限时体验已于 … 结束」,那时额度视图里已经没有它了。换号清空。 */
+let seenTrials: Record<string, number> = {}
+export function modelTrialsOf(quota: AccountQuotaView | null | undefined): ModelTrials {
+  const list = quota?.modelTrials
+  if (!Array.isArray(list) || !list.length) return NO_TRIALS
+  const out: Record<string, number> = {}
+  for (const x of list) {
+    const at = typeof x?.endsAt === 'string' ? Date.parse(x.endsAt) : NaN
+    if (typeof x?.modelId === 'string' && x.modelId && Number.isFinite(at)) { out[x.modelId] = at; seenTrials[x.modelId] = at }
+  }
+  return out
+}
+/** 这个模型的限时开放结束了几天以内(默认 7 天)就给结束时间,否则 null。只认这台机器这次登录里见过的开放。 */
+export function recentlyEndedTrial(modelId: string | null | undefined, now = Date.now(), withinMs = 7 * 86_400_000): number | null {
+  const at = modelId ? seenTrials[modelId] : undefined
+  return typeof at === 'number' && at <= now && now - at <= withinMs ? at : null
+}
+
+/** 倍率超过上限、而且没有正开放着的限时体验 = 用不了。服务端同一口径(modelTierGate:严格大于、开放中放行)。 */
+export function isModelTierLocked(
+  model: { id?: string; multiplier?: number | null; source?: string } | null | undefined,
+  cap: number | null | undefined,
+  trials: ModelTrials = NO_TRIALS,
+  now = Date.now(),
+): boolean {
+  if (!model || typeof cap !== 'number' || !Number.isFinite(cap) || cap < 0) return false
+  if (model.source && model.source !== 'forsion') return false
+  if (!(typeof model.multiplier === 'number' && Number.isFinite(model.multiplier) && model.multiplier > cap)) return false
+  return trialEndsAt(model, cap, trials, now) == null
+}
+
+/** 限时开放真把这个模型解锁了(倍率 > 上限、正开放着)→ 到期毫秒;否则 null。选择器据它在第二行标「[限时] 至 …」。 */
+export function trialEndsAt(
+  model: { id?: string; multiplier?: number | null; source?: string } | null | undefined,
+  cap: number | null | undefined,
+  trials: ModelTrials = NO_TRIALS,
+  now = Date.now(),
+): number | null {
+  if (!model?.id || typeof cap !== 'number' || !Number.isFinite(cap) || cap < 0) return null
+  if (model.source && model.source !== 'forsion') return null
+  if (!(typeof model.multiplier === 'number' && Number.isFinite(model.multiplier) && model.multiplier > cap)) return null
+  const at = trials[model.id]
+  return typeof at === 'number' && now < at ? at : null
+}
+
+/** 旧版客户端看的「限时 Trial」标签(服务端补在 /brain/models 的 tags 里,kind: 'trial'):新版自己在第二行画,不显示它。 */
+export function visibleModelTags<T extends { text: string }>(tags: readonly T[] | null | undefined): T[] {
+  return (tags || []).filter((tag) => (tag as { kind?: unknown }).kind !== 'trial')
+}
+
+/**
+ * 服务端拦下用不了的模型:主链路 SSE `{ t:'error', status:403, message:'model_tier_locked', detail }`,引擎把它变成 run 错误串
+ * `model_tier_locked`;HTTP 403 那条路(非流式 / 补全)到这里是整段 JSON 回包。两种都不锚定地认这个码。
+ * 文案键 chat.err.tierLocked / tierLockedBare 在 i18n.tsx 的主字典里(宿主与 Tangu 界面包都要用)。
+ */
+export const TIER_LOCKED_RE = /model_tier_locked/i
+
+export function isTierLockedError(raw: string | null | undefined): boolean {
+  return !!raw && TIER_LOCKED_RE.test(raw)
+}
+
+/** 回包里带了 modelName 就用它(HTTP 403 的 JSON);只有裸码时返回 ''。 */
+export function tierLockedModelName(raw: string): string {
+  const start = raw.indexOf('{')
+  if (start < 0) return ''
+  try {
+    const body = JSON.parse(raw.slice(start))
+    const name = body?.modelName ?? body?.detail?.modelName
+    return typeof name === 'string' ? name.trim() : ''
+  } catch { return '' }
+}
+
+/** 服务端那句「限时体验已结束」(SSE 的人话,中英两半都认):提前结束时客户端记着的到期还在以后,只能靠它认出来 */
+const TRIAL_ENDED_RE = /限时体验已结束|free trial of .+ has ended/i
+
+/** HTTP 403 的 JSON 回包里服务端给的开放结束时刻(毫秒);没有 = null。比本机见过的到期准(后台可能提前结束了) */
+export function trialEndedAtOf(raw: string | null | undefined): number | null {
+  const start = raw ? raw.indexOf('{') : -1
+  if (start < 0) return null
+  try {
+    const body = JSON.parse(raw!.slice(start))
+    const at = Date.parse(body?.trialEndedAt ?? body?.detail?.trialEndedAt)
+    return Number.isFinite(at) ? at : null
+  } catch { return null }
+}
+
+/**
+ * 人话:有模型名说名字,没有就说「这个模型」。fallbackName = 调用方确认过「确实还锁着」的那个模型的显示名。
+ * trialEndedDate = 这个模型的限时开放刚结束(recentlyEndedTrial, 日期走 format/time 的 formatDate):有名字时改说「限时体验已于 {date} 结束」。
+ */
+export function tierLockedText(raw: string, t: (key: string, vars?: Record<string, string>) => string, fallbackName = '', trialEndedDate = ''): string {
+  const model = tierLockedModelName(raw) || fallbackName
+  if (model && trialEndedDate) return t('chat.err.trialEnded', { model, date: trialEndedDate })
+  if (model && TRIAL_ENDED_RE.test(raw)) return t('chat.err.trialEndedBare', { model }) // 服务端说结束了,但不知道哪天
+  return model ? t('chat.err.tierLocked', { model }) : t('chat.err.tierLockedBare')
 }

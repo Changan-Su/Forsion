@@ -4,6 +4,8 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { LocaleProvider } from '../i18n'
 import { QuotaAdvisoryBanner } from './QuotaAdvisoryBanner'
+import { pointsWritePhase, recoverPointsState, resetAccountQuotaScope, resetPointsAutoDeductBridge, setPointsAutoDeduct } from '../tangu/pointsAutoDeduct'
+import { pointsReadToken, reconcilePointsRead } from '../services/accountQuota'
 
 let host: HTMLDivElement
 let root: Root
@@ -13,6 +15,7 @@ const tick = () => act(async () => { await new Promise((resolve) => setTimeout(r
 beforeEach(() => {
   ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
   onToast.mockReset()
+  resetPointsAutoDeductBridge()
   window.tangu = {
     accountQuota: vi.fn().mockResolvedValue({
       status: 200,
@@ -141,3 +144,239 @@ describe('background quota (Muse / automations)', () => {
     expect(host.querySelector('.t2-quota-advisory')).toBeNull()
   })
 })
+
+describe('额度用完:用重置卡 / 用积分继续两条路', () => {
+  const exhausted = (over: Record<string, unknown> = {}) => ({
+    status: 200,
+    json: { dailyLimit: 100, dailyRemaining: 40, weeklyLimit: 100, weeklyRemaining: 0, resetCards: 2, pointsAutoDeduct: false, pointsBalance: 500, modelMultiplierCap: 2.5, ...over },
+  })
+  const has = (text: string) => [...host.querySelectorAll('button')].some((el) => el.textContent?.includes(text))
+  const banner = () => host.querySelector<HTMLElement>('.t2-quota-advisory')
+
+  it('开关没开、有卡有积分:两条路都给;用积分要再点一次确认,成功后变成普通提示带余额', async () => {
+    window.tangu!.accountQuota = vi.fn().mockResolvedValue(exhausted()) as any
+    const cloudInvoke = vi.fn().mockResolvedValue({ status: 200, json: { success: true, pointsAutoDeduct: true, quota: exhausted({ pointsAutoDeduct: true, resetCards: undefined, pointsBalance: undefined }).json } })
+    ;(window.tangu as any).cloudInvoke = cloudInvoke
+    await mount()
+    expect(host.textContent).toContain('本周 AI 额度已用尽')
+    expect(has('使用额度重置卡（2）')).toBe(true)
+    await act(async () => button('用积分继续').click())
+    expect(cloudInvoke).not.toHaveBeenCalled()
+    expect(has('确认用积分继续')).toBe(true)
+    await act(async () => button('确认用积分继续').click())
+    await tick()
+    expect(cloudInvoke).toHaveBeenCalledWith('account:pointsAutoDeduct', true)
+    expect(host.textContent).toContain('本周 AI 额度已用完，正在用积分继续')
+    expect(host.textContent).toContain('积分余额 500') // 回包不含余额,沿用读到的那份
+    expect(banner()?.dataset.level).toBe('info')
+    expect(has('用积分继续')).toBe(false)
+    expect(has('使用额度重置卡（2）')).toBe(true) // 卡张数也没被回包冲掉
+  })
+
+  it('没卡、积分为 0:不挂灰色的重置卡按钮,积分那条换成「充值积分」打开支付中心', async () => {
+    window.tangu!.accountQuota = vi.fn().mockResolvedValue(exhausted({ resetCards: 0, pointsBalance: 0 })) as any
+    ;(window.tangu as any).cloudInvoke = vi.fn()
+    await mount()
+    expect(has('重置卡')).toBe(false)
+    expect(has('用积分继续')).toBe(false)
+    await act(async () => button('充值积分').click())
+    expect(window.tangu!.openPayCenter).toHaveBeenCalledOnce()
+  })
+
+  it('开关开着但积分也用完了:提示充值积分 / 升级会员', async () => {
+    window.tangu!.accountQuota = vi.fn().mockResolvedValue(exhausted({ pointsAutoDeduct: true, pointsBalance: 0, resetCards: 0 })) as any
+    await mount()
+    expect(host.textContent).toContain('本周 AI 额度已用完，积分也用完了')
+    expect(banner()?.dataset.level).toBe('critical')
+    expect(has('充值积分')).toBe(true)
+    expect(has('升级会员')).toBe(true)
+  })
+
+  it('没有扩展通道(网页 / 手机 / 没装扩展):不给「用积分继续」,只留用卡与升级', async () => {
+    window.tangu!.accountQuota = vi.fn().mockResolvedValue(exhausted()) as any
+    await mount()
+    expect(has('用积分继续')).toBe(false)
+    expect(has('使用额度重置卡（2）')).toBe(true)
+    expect(has('升级会员')).toBe(true)
+  })
+
+  it('旧服务端(额度视图没有 pointsBalance / modelMultiplierCap):不给积分那条路,也不当余额 0 去提示充值', async () => {
+    window.tangu!.accountQuota = vi.fn().mockResolvedValue(exhausted({ pointsBalance: undefined, modelMultiplierCap: undefined })) as any
+    ;(window.tangu as any).cloudInvoke = vi.fn()
+    await mount()
+    expect(has('用积分继续')).toBe(false)
+    expect(has('充值积分')).toBe(false)
+  })
+
+  it('宿主比扩展新(通道不存在 → No handler):按钮消失并说一句', async () => {
+    window.tangu!.accountQuota = vi.fn().mockResolvedValue(exhausted()) as any
+    ;(window.tangu as any).cloudInvoke = vi.fn().mockRejectedValue(new Error("Error invoking remote method 'account:pointsAutoDeduct': Error: No handler registered for 'account:pointsAutoDeduct'"))
+    await mount()
+    await act(async () => button('用积分继续').click())
+    await act(async () => button('确认用积分继续').click())
+    await tick()
+    expect(has('用积分继续')).toBe(false)
+    expect(onToast).toHaveBeenCalledWith('积分继续暂时开不了，请稍后再试', true)
+  })
+
+  it('503 / 老服务端 410:提示稍后再试;status 0 没收到结果:重读额度视图以服务端为准', async () => {
+    window.tangu!.accountQuota = vi.fn().mockResolvedValue(exhausted()) as any
+    const cloudInvoke = vi.fn().mockResolvedValueOnce({ status: 503, json: { error: 'points_fallback_unavailable' } })
+    ;(window.tangu as any).cloudInvoke = cloudInvoke
+    await mount()
+    await act(async () => button('用积分继续').click())
+    await act(async () => button('确认用积分继续').click())
+    await tick()
+    expect(onToast).toHaveBeenCalledWith('积分继续暂时开不了，请稍后再试', true)
+    onToast.mockReset()
+    cloudInvoke.mockResolvedValueOnce({ status: 0, error: 'network' })
+    window.tangu!.accountQuota = vi.fn().mockResolvedValue(exhausted({ pointsAutoDeduct: true })) as any
+    await act(async () => button('用积分继续').click())
+    await act(async () => button('确认用积分继续').click())
+    await tick()
+    expect(onToast).not.toHaveBeenCalled()
+    expect(window.tangu!.accountQuota).toHaveBeenCalled()
+    expect(host.textContent).toContain('正在用积分继续')
+  })
+
+  const deferred = <T,>() => { let resolve!: (v: T) => void; const promise = new Promise<T>((r) => { resolve = r }); return { promise, resolve } }
+  const confirmPoints = async () => {
+    await act(async () => button('用积分继续').click())
+    await act(async () => button('确认用积分继续').click())
+  }
+
+  it('不乐观翻转:在途时保持原样、禁用、忙碌;回包说没开就照回包显示没开', async () => {
+    window.tangu!.accountQuota = vi.fn().mockResolvedValue(exhausted()) as any
+    const d = deferred<any>()
+    ;(window.tangu as any).cloudInvoke = vi.fn().mockReturnValue(d.promise)
+    await mount()
+    await confirmPoints()
+    expect(host.textContent).toContain('本周 AI 额度已用尽')
+    expect(host.textContent).not.toContain('正在用积分继续')
+    const busy = [...host.querySelectorAll<HTMLButtonElement>('button.points')][0]
+    expect(busy.disabled).toBe(true)
+    expect(busy.querySelector('svg')?.classList.contains('spin')).toBe(true)
+    await act(async () => { d.resolve({ status: 200, json: { success: true, pointsAutoDeduct: false, quota: exhausted({ pointsAutoDeduct: false }).json } }) })
+    await tick()
+    expect(host.textContent).not.toContain('正在用积分继续')
+    expect(banner()?.dataset.points).toBe('off')
+  })
+
+  it('确定不了(5xx 非明确 503):不当没开,重读以服务端为准;重读也失败 → 状态未知 + 重试,不显示成关', async () => {
+    const quotaRead = vi.fn().mockResolvedValueOnce(exhausted()).mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce(exhausted({ pointsAutoDeduct: true }))
+    window.tangu!.accountQuota = quotaRead as any
+    ;(window.tangu as any).cloudInvoke = vi.fn().mockResolvedValue({ status: 502, json: null })
+    await mount()
+    await confirmPoints()
+    await tick()
+    expect(quotaRead).toHaveBeenCalledTimes(2)
+    expect(banner()?.dataset.points).toBe('unknown')
+    expect(host.textContent).toContain('暂时确认不了「用积分继续」开没开')
+    expect(has('用积分继续')).toBe(false) // 不给一颗「看起来没开」的按钮
+    expect(onToast).not.toHaveBeenCalled()
+    await act(async () => button('重试').click())
+    await tick()
+    expect(host.textContent).toContain('正在用积分继续')
+  })
+
+  it('503 没带 points_fallback_unavailable 也算确定不了:重读', async () => {
+    const quotaRead = vi.fn().mockResolvedValueOnce(exhausted()).mockResolvedValueOnce(exhausted({ pointsAutoDeduct: true }))
+    window.tangu!.accountQuota = quotaRead as any
+    ;(window.tangu as any).cloudInvoke = vi.fn().mockResolvedValue({ status: 503, json: { error: 'bad_gateway' } })
+    await mount()
+    await confirmPoints()
+    await tick()
+    expect(host.textContent).toContain('正在用积分继续')
+    expect(onToast).not.toHaveBeenCalled()
+  })
+
+  it('开关请求之前发出的读取晚到:丢掉它的开关值,不把已确认的「开」盖回「关」', async () => {
+    const stale = deferred<any>()
+    const quotaRead = vi.fn().mockResolvedValueOnce(exhausted()).mockReturnValueOnce(stale.promise)
+    window.tangu!.accountQuota = quotaRead as any
+    ;(window.tangu as any).cloudInvoke = vi.fn().mockResolvedValue({ status: 200, json: { success: true, pointsAutoDeduct: true, quota: exhausted({ pointsAutoDeduct: true }).json } })
+    await mount()
+    await act(async () => { window.dispatchEvent(new Event('focus')) }) // 一次读取在途(读到的是开关之前的状态)
+    await confirmPoints()
+    await tick()
+    expect(host.textContent).toContain('正在用积分继续')
+    await act(async () => { stale.resolve(exhausted({ pointsAutoDeduct: false })) })
+    await tick()
+    expect(host.textContent).toContain('正在用积分继续')
+  })
+})
+
+describe('评审第三轮:开关绝不显示「关」而服务端其实开着', () => {
+  const view = (over: Record<string, unknown> = {}) => ({ dailyLimit: 100, dailyRemaining: 40, weeklyLimit: 100, weeklyRemaining: 0, resetCards: 2, pointsAutoDeduct: false, pointsBalance: 500, modelMultiplierCap: 2.5, ...over })
+  const deferred = <T,>() => { let resolve!: (v: T) => void; const promise = new Promise<T>((r) => { resolve = r }); return { promise, resolve } }
+  const has = (text: string) => [...host.querySelectorAll('button')].some((el) => el.textContent?.includes(text))
+
+  it('1 结果不确定 → 恢复读到「开」:写期间发出的旧读取(读到「关」)晚到也被对齐成「开」', async () => {
+    const write = deferred<any>()
+    ;(window.tangu as any).cloudInvoke = vi.fn().mockReturnValue(write.promise)
+    window.tangu!.accountQuota = vi.fn().mockResolvedValue({ status: 200, json: view({ pointsAutoDeduct: true }) }) as any
+    const pending = setPointsAutoDeduct(true, null)
+    const duringWrite = pointsReadToken() // run 结束后查额度,在写的途中发出
+    write.resolve({ status: 0, error: 'network' })
+    expect(await pending).toMatchObject({ ok: false, reason: 'unknown' })
+    expect(await recoverPointsState()).toMatchObject({ ok: true })
+    expect(reconcilePointsRead(view({ pointsAutoDeduct: false }), duringWrite)?.pointsAutoDeduct).toBe(true)
+    expect(pointsWritePhase()).toBe('idle')
+  })
+
+  it('2 开积分在途时用卡被拦下,积分的结果不会被用卡那一下丢掉', async () => {
+    const write = deferred<any>()
+    window.tangu!.accountQuota = vi.fn().mockResolvedValue({ status: 200, json: view() }) as any
+    ;(window.tangu as any).cloudInvoke = vi.fn().mockReturnValue(write.promise)
+    window.tangu!.accountUseResetCard = vi.fn().mockResolvedValue({ status: 500, json: { detail: 'boom' } }) as any
+    await mount()
+    await act(async () => button('用积分继续').click())
+    await act(async () => button('确认用积分继续').click())
+    const reset = [...host.querySelectorAll<HTMLButtonElement>('button.reset')][0]
+    expect(reset.disabled).toBe(true)
+    await act(async () => { reset.click(); reset.click() })
+    expect(window.tangu!.accountUseResetCard).not.toHaveBeenCalled()
+    await act(async () => { write.resolve({ status: 200, json: { success: true, pointsAutoDeduct: true, quota: view({ pointsAutoDeduct: true }) } }) })
+    await tick()
+    expect(host.textContent).toContain('正在用积分继续')
+  })
+
+  it('3 分栏两条提醒条共享在途 / 不确定:一条在途另一条也禁用;不确定时两条都显示「状态未知」', async () => {
+    const write = deferred<any>()
+    window.tangu!.accountQuota = vi.fn().mockResolvedValueOnce({ status: 200, json: view() }).mockResolvedValueOnce({ status: 200, json: view() })
+      .mockRejectedValue(new Error('offline')) as any
+    ;(window.tangu as any).cloudInvoke = vi.fn().mockReturnValue(write.promise)
+    await mount()
+    const host2 = document.createElement('div'); document.body.append(host2); const root2 = createRoot(host2)
+    await act(async () => root2.render(React.createElement(LocaleProvider, { children: React.createElement(QuotaAdvisoryBanner, { loggedIn: true, onToast }) })))
+    await tick()
+    try {
+      await act(async () => button('用积分继续').click())
+      await act(async () => button('确认用积分继续').click())
+      const other = host2.querySelector<HTMLButtonElement>('button.points')
+      expect(other?.disabled).toBe(true)
+      await act(async () => { write.resolve({ status: 0, error: 'network' }) })
+      await tick()
+      for (const el of [host, host2]) {
+        expect(el.textContent).toContain('暂时确认不了「用积分继续」开没开')
+        expect([...el.querySelectorAll('button')].some((b) => b.textContent?.includes('用积分继续'))).toBe(false)
+      }
+    } finally {
+      await act(async () => root2.unmount()); host2.remove()
+    }
+  })
+
+  it('4 账号 A 的写在途时换到 B:A 的晚到成功整个丢弃,不把 B 的读取对齐成 A 的「开」', async () => {
+    const write = deferred<any>()
+    ;(window.tangu as any).cloudInvoke = vi.fn().mockReturnValue(write.promise)
+    const pending = setPointsAutoDeduct(true, null)
+    resetAccountQuotaScope() // 换号
+    expect(pointsWritePhase()).toBe('idle')
+    const bRead = pointsReadToken()
+    write.resolve({ status: 200, json: { success: true, pointsAutoDeduct: true, quota: view({ pointsAutoDeduct: true }) } })
+    expect(await pending).toMatchObject({ ok: false, reason: 'stale' })
+    expect(reconcilePointsRead(view({ pointsAutoDeduct: false }), bRead)?.pointsAutoDeduct).toBe(false)
+    expect(has('正在用积分继续')).toBe(false)
+  })
+})
+

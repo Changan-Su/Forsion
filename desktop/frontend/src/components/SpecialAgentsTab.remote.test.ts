@@ -14,7 +14,7 @@ import type { SpecialAgentsConfig } from '../types'
 
 vi.mock('../i18n', () => ({ registerMessages: () => {}, useI18n: () => ({ t: (key: string) => key }) }))
 vi.mock('../stores/appStore', () => ({ useApp: { getState: () => ({ refreshSpecialEnabled: vi.fn() }) } }))
-vi.mock('../services/accountQuota', () => ({ publishAccountQuota: vi.fn(), subscribeAccountQuota: vi.fn(() => () => {}) }))
+vi.mock('../services/accountQuota', () => ({ publishAccountQuota: vi.fn(), subscribeAccountQuota: vi.fn(() => () => {}), accountQuotaEpoch: () => 0, subscribeAccountQuotaScope: vi.fn(() => () => {}) }))
 vi.mock('../services/backendService', () => ({
   getSpecialConfig: vi.fn(), saveSpecialConfig: vi.fn(), listModels: vi.fn(async () => ({ models: [] })), listAgents: vi.fn(async () => []),
 }))

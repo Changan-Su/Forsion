@@ -948,7 +948,8 @@ if (new URLSearchParams(location.search).has('dock')) {
       // 父开关变了:真主进程经 refreshUnitHost → remoteSessions.notifyChanged 广播,桩在这里补同一拍(P1-K4)
       setConfig: async (patch: Record<string, unknown>) => { const next = Object.assign(cfg, patch); (window as unknown as { __rsPush?: () => unknown }).__rsPush?.(); return next },
       openExternal: async (url: string) => { opened.push(url) }, // openBrowser 在无浏览器视图时的回落口
-      unitsList: async () => ({ status: 200, json: { units: [...units] } }), // 每次新数组(同真 IPC):名册刷新才看得出变化
+      // 每次新数组(同真 IPC):名册刷新才看得出变化。&shared:带 { shared: true } 时多回一组「别人共享给当前账号的 Unit」(window.__sharedUnits 可改)
+      unitsList: async (opts?: { shared?: boolean }) => ({ status: 200, json: { units: [...units], ...(opts?.shared === true && (window as unknown as { __sharedUnits?: unknown[] }).__sharedUnits ? { shared: [...(window as unknown as { __sharedUnits: unknown[] }).__sharedUnits] } : {}) } }),
       unitsUpdate: async () => ({ status: 200, json: { ok: true } }),
       unitsRemove: async () => ({ status: 200, json: { ok: true } }),
       unitHostStatus: async () => ({ running: cfg.unitHostEnabled as boolean, connected: false, unitId: null, lastError: null, webPort: 8791, lanUrl: 'http://192.168.1.5:8791' }),
@@ -1042,6 +1043,18 @@ if (new URLSearchParams(location.search).has('dock')) {
       })
       const winCalls: unknown[][] = []
       ;(window as unknown as { __unitWinCalls: typeof winCalls }).__unitWinCalls = winCalls
+      // &shared:别人共享给当前账号的 Unit(一组三行:能进且睡着、不能进但要开的插件没装、不能进也没给 open;另一组一行只有英文标题)
+      if (panelQ.has('shared')) {
+        const g = { id: 'group-1', title: { zh: '星河工作室', en: 'Galaxy Studio' } }
+        const role = { zh: '管理员', en: 'Admin' }
+        ;(window as unknown as { __sharedUnits: unknown[] }).__sharedUnits = [
+          { id: 's-studio-0001', name: '工作室 Unit', platform: 'linux', icon: null, online: true, sleeping: true, shared: { group: g, roleLabel: role, enter: 'frame' }, webUrl: 'https://s-studio-0001.units.cloud.test/api/units/s-studio-0001/proxy/web/' },
+          { id: 's-biz-00002', name: '插件那台', platform: 'linux', icon: null, online: true, shared: { group: g, roleLabel: role, enter: 'none', open: { kind: 'space', plugin: 'not-installed' } } },
+          { id: 's-plain-0003', name: '只读那台', platform: 'linux', icon: null, online: false, shared: { group: g, roleLabel: { zh: '成员', en: 'Member' }, enter: 'none' } },
+          { id: 's-other-0004', name: 'Lab box', platform: 'linux', icon: null, online: true, shared: { group: { id: 'group-2', title: { en: 'Lab' } }, roleLabel: { en: 'Admin' }, enter: 'frame' }, webUrl: 'https://s-other-0004.units.cloud.test/api/units/s-other-0004/proxy/web/' },
+          { id: 'bad', name: 'broken row', shared: { enter: 'frame' } }, // 坏行:丢
+        ]
+      }
       // &self:名册里有本机自己(互联关着,unitId 为 null、selfUnitId 认得出)→ 面板和设置页都不许列它
       if (panelQ.has('self')) {
         units.push({ id: 'u-self', name: '本机自己', platform: 'darwin', icon: null, online: true, lanUrl: null })
@@ -1056,8 +1069,27 @@ if (new URLSearchParams(location.search).has('dock')) {
       applyRealTheme(resolveInitialLang(), panelQ.get('skin') || resolveInitialSkin(), panelQ.get('skin') || resolveInitialBg(), panelQ.has('dark') ? 'dark' : 'light')
       if (panelQ.get('lang') === 'en') setLocaleGlobal('en')
     }
+    // &unitbind:中转设备页的绑定桩(真主进程那半由 e2e:unitwindow 跑)。裸 Chromium 的 <webview> 是未知元素:
+    // 给它补一个按元素递增的 getWebContentsId;unitsBindFrame 记下调用那一刻那张 webview 的 src,晚一点回 ok。
+    if (panelQ.has('unitbind')) {
+      const ids = new WeakMap<Element, number>()
+      let next = 100
+      Object.defineProperty(HTMLElement.prototype, 'getWebContentsId', {
+        configurable: true,
+        value(this: HTMLElement) { if (this.tagName !== 'WEBVIEW') throw new Error('not a webview'); if (!ids.has(this)) ids.set(this, next++); return ids.get(this) },
+      })
+      const binds: Array<{ webContentsId: number; unitId: string; srcAtCall: string | null }> = []
+      ;(window as unknown as { __unitBinds: typeof binds }).__unitBinds = binds
+      w.tangu!.unitsBindFrame = (async (input: { webContentsId: number; unitId: string }) => {
+        const el = Array.from(document.querySelectorAll('webview')).find((x) => ids.get(x) === input.webContentsId)
+        binds.push({ ...input, srcAtCall: el?.getAttribute('src') ?? null })
+        await new Promise((r) => setTimeout(r, 150))
+        return { ok: true }
+      }) as never
+    }
     void Promise.all([import('./components/UnitSwitcher'), import('./stores/appStore'), import('./components/AccountCard'), import('./components/unitRoster'), import('./stores/popupQueue')]).then(([{ UnitSwitcher, UnitRemoteSurface, UnitSettings, useUnitRemote, runUnitRoute }, { useApp }, { AccountCard }, { useUnitRoster }, { usePopupQueue }]) => {
       useApp.setState({ desktopConfig: { ...cfg } as never })
+      if (panelQ.has('unitbind')) Object.assign(window as unknown as Record<string, unknown>, { __unitRemote: useUnitRemote })
       addRibbonIcon({ id: 'rb-unit', side: 'bottom', component: UnitSwitcher })
       if (unitPanel) {
         const toasts: string[] = []
@@ -1098,8 +1130,36 @@ if (new URLSearchParams(location.search).has('dock')) {
     { label: 'zhipu', options: [{ id: 'glm-4.7', name: 'GLM-4.7' }, { id: 'glm-4.6', name: 'GLM-4.6' }, { id: 'glm-air', name: 'GLM-4.5-Air' }] },
     { label: 'deepseek', options: [{ id: 'ds-v32', name: 'DeepSeek-V3.2-Exp' }, { id: 'ds-r1', name: 'DeepSeek-R1' }] },
   ]
+  // ?tierlock[=<上限>]:Forsion 云端组带倍率,额度视图下发 modelMultiplierCap(缺省 2.5)→ 倍率更高的变淡带锁;
+  // ?tierlock&current 起步就选着一个用不了的(老会话 / 换了档位),看药丸上的锁
+  const tierLock = modelPillParams.has('tierlock')
+  if (tierLock) {
+    const cap = Number(modelPillParams.get('tierlock') || 2.5)
+    GROUPS.unshift({ label: 'Forsion', source: 'forsion', options: [
+      { id: 'f-luna', name: 'GPT-6 Luna', source: 'forsion', multiplier: 1 },
+      { id: 'f-sol', name: 'GPT-6 Sol', source: 'forsion', multiplier: 2.5 },
+      { id: 'f-opus', name: 'Claude Opus', source: 'forsion', multiplier: 5, ...(modelPillParams.has('trial') ? { tags: [{ text: '限时 Trial', color: 'amber', kind: 'trial' }, { text: 'new', color: 'green' }] } : {}) },
+      { id: 'f-ultra', name: 'Gemini Ultra', source: 'forsion', multiplier: 8 },
+    ] } as never)
+    // ?tierlock&trial[=<剩几小时>]:Claude Opus 限时开放中(缺省还剩 15 天;=3 看最后 24 小时的「今天 HH:mm」),
+    // 带着服务端给旧版补的「限时 Trial」标签(新版不显示它)
+    const trialHours = Number(modelPillParams.get('trial') || 15 * 24)
+    const modelTrials = modelPillParams.has('trial') ? [{ modelId: 'f-opus', endsAt: new Date(Date.now() + trialHours * 3_600_000).toISOString() }] : undefined
+    window.tangu = {
+      ...(window.tangu || {}),
+      accountQuota: async () => ({ status: 200, json: { dailyLimit: 100, weeklyLimit: 100, modelMultiplierCap: cap, ...(modelTrials ? { modelTrials } : {}) } }),
+      // 公开方案的各档上限(同生产形状):锁住的模型写「X 起可用」;?tierlock&nooffer 扮旧服务端 / 拿不到,回落「升级后可用」
+      ...(modelPillParams.has('nooffer') ? {} : { membershipOfferings: async () => ({ status: 200, json: { packages: [], membershipPlans: [
+        { tier: 'plus', name: 'Plus', perks: { modelMultiplierCap: 2.5 } },
+        { tier: 'pro', name: 'Pro', perks: { modelMultiplierCap: 5 } },
+        { tier: 'max', name: 'Max', perks: { modelMultiplierCap: -1 } },
+        { tier: 'ultra', name: 'Ultra', perks: { modelMultiplierCap: -1 } },
+      ] } }) }),
+      openPayCenter: async () => { (window as unknown as { __payOpened?: number }).__payOpened = ((window as unknown as { __payOpened?: number }).__payOpened || 0) + 1; return { ok: true } },
+    } as never
+  }
   const PillHarness = (): React.ReactElement => {
-    const [id, setId] = useState('glm-4.7')
+    const [id, setId] = useState(tierLock && modelPillParams.has('current') ? 'f-opus' : 'glm-4.7')
     const [lv, setLv] = useState<'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'>(modelPillParams.has('max') || modelPillParams.has('ultra') ? 'max' : 'high')
     // ?ultra 起步就在 Ultra 档;?allowultra 起步在「深」但滑杆带 Ultra 格(拍切进 Ultra 那一下的冲击波)
     const allowUltra = modelPillParams.has('ultra') || modelPillParams.has('allowultra')
@@ -1145,7 +1205,9 @@ if (new URLSearchParams(location.search).has('dock')) {
       </div>
     )
   }
-  createRoot(document.getElementById('root')!).render(<PillHarness />)
+  // &lang=en:挂真 LocaleProvider 拍英文(不挂时 useI18n 恒回中文,其余用法照旧)
+  if (modelPillParams.get('lang') === 'en') setLocaleGlobal('en')
+  createRoot(document.getElementById('root')!).render(modelPillParams.get('lang') === 'en' ? <LocaleProvider><PillHarness /></LocaleProvider> : <PillHarness />)
 } else if (new URLSearchParams(location.search).has('dashinteractive')) {
   const iso = new Date().toISOString()
   registerView({

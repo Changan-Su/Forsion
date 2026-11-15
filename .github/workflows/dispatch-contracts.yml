@@ -5,6 +5,7 @@ on:
     paths: &paths
       - 'tangu-agent/src/plugins/**'
       - 'tangu-agent/src/engines/**'
+      - 'tangu-agent/src/contracts/engineModelError*'
       - 'tangu-agent/src/tools/registry*'
       - 'tangu-agent/src/tools/toolRegistry*'
       - 'tangu-agent/src/services/taskProjectQueue.ts'
@@ -36,4 +37,4 @@ jobs:
           cache-dependency-path: tangu-agent/package-lock.json
       - run: npm ci --ignore-scripts
       - run: npm run typecheck
-      - run: npx vitest run src/plugins/automation.test.ts src/plugins/externalTools.test.ts src/plugins/workspaces.test.ts src/tools/registryStrict.test.ts test/acpEngine.test.ts test/acpEngineSpawn.test.ts src/engines/acpEngine.startup.test.ts src/engines/acpEngine.config.test.ts src/engines/acpEngine.resume.test.ts src/engines/acpEngine.load.test.ts test/engineDetect.test.ts test/engineSandboxBoundary.test.ts
+      - run: npx vitest run src/plugins/automation.test.ts src/plugins/externalTools.test.ts src/plugins/workspaces.test.ts src/tools/registryStrict.test.ts test/acpEngine.test.ts test/acpEngineSpawn.test.ts src/engines/acpEngine.startup.test.ts src/engines/acpEngine.config.test.ts src/engines/acpEngine.resume.test.ts src/engines/acpEngine.load.test.ts src/engines/acpEngine.credential.test.ts src/contracts/engineModelError.test.ts test/engineDetect.test.ts test/engineSandboxBoundary.test.ts

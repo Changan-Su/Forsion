@@ -10,7 +10,7 @@ import { authFetch } from './http'
 import { httpErrorMessage } from './localOnly'
 import { buildCommandCatalog, readUiSettings } from '../agentCommands'
 import { fetchOpts, targetLabel, type EngineTarget } from './engine/targets'
-import { AUTH_PROBE_PATH as PROBE_PATH, classify, classifyError, noteReachable, noteVerdict, refusalOf, waitReady, type Verdict } from './engine/health'
+import { AUTH_PROBE_PATH as PROBE_PATH, authProbePath, classify, classifyError, noteReachable, noteVerdict, refusalOf, waitReady, type Verdict } from './engine/health'
 import { remoteRefusalMessage } from './localOnly'
 import './engine/messages'
 import { currentPlatform } from './platform'
@@ -82,7 +82,7 @@ export async function testConnection(t: EngineTarget): Promise<{ ok: boolean; me
     // /health 不鉴权(standalone/main.ts 直接 res.json)—— 令牌漂了它照样 200,connState 假绿,随后每个真请求
     // 各自 401(真机一轮 9 次)。再追一次带鉴权的 GET:**只认 401**(凭证被拒);403 / 404 / 5xx / 网络错是别的
     // 问题(云端面没有这条路由、配额、后端半启动),不把连接判死。authFetch 的 401 拦截器照常触发重登录自愈。
-    const probe = await engineRequest(t, AUTH_PROBE_PATH, {}, { timeoutMs: 15000 }).catch(() => null)
+    const probe = await engineRequest(t, authProbePath(), {}, { timeoutMs: 15000 }).catch(() => null)
     if (probe && probe.status === 401) return { ok: false, message: translate('agentrun.authFailed'), authRejected: true }
     if (t.via === 'unit') {
       // 带鉴权的那条被执行设备 / hub 按调用方拒了(身份、远程会话开关、急停)= 这台连不上,不是「已连接」

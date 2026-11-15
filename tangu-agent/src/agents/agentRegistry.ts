@@ -25,6 +25,7 @@ import { credentialReadTarget } from '../sandbox/hostSandboxProtection.js';
 import { isStandInSlugShape } from '../contracts/agentSyncRules.js';
 import { isLibraryMemoryRel } from '../contracts/memoryLayers.js';
 import { builtinAgentAvatar } from './builtinAvatars.js';
+import { agentEngineLabel, isKnownAgentEngine } from '../contracts/agentEngine.js';
 import { LEGACY_PERSONAS, LEGACY_MUSE_PROMPTS, LEGACY_MUSE_DESCRIPTION } from './legacyPersonas.js';
 import { ARIOSO_SYSTEM_PROMPT, ARIOSO_SOUL, ARIA_SYSTEM_PROMPT, ARIA_SOUL, RECITA_SYSTEM_PROMPT, RECITA_SOUL } from './personaPrompts.js';
 import { CODING_AGENT_VERSION, CODING_SYSTEM_PROMPT, CODING_SOUL } from './codingPrompt.js';
@@ -122,6 +123,29 @@ export interface NormalAgentDef {
   standInLibrary?: string[];
   /** 本体这边:分身读不读 human/AGENT.md(stand_in_agent_md,缺省不读)。human/ 里别的一律不给。 */
   standInAgentMd?: boolean;
+  /** 由谁来跑(config.toml `engine`,11-14 DSH 融合底层第 2 步):缺席 = Tangu 自己的循环;'dsh' = 这个 Agent 的对话交给
+   *  本机的外部引擎跑,身份(名字、人设、记忆、日志、技能)仍在 Forsion。只有 AGENT_ENGINE_IDS 里的能经保存写进来;
+   *  磁盘上别的值(新版本写的、手改的)原样保留,运行时按「不认识」明确失败,绝不当成 Tangu 来跑。 */
+  engine?: string;
+  /** 跑在外部引擎上时缺省用它的哪个模型(config.toml `engine_model`;值是引擎自己的模型 id,原样存)。和 model(Tangu 的模型)分开放:
+   *  换回 Tangu 时 model 还是原来那个。会话里在输入框另选的(engineModelId)优先。 */
+  engineModel?: string;
+}
+
+/** 名册里能「由谁来跑」的外部引擎与给人看的名字,和桌面共用一份(contracts/agentEngine)。 */
+export { AGENT_ENGINE_IDS, isKnownAgentEngine, agentEngineLabel } from '../contracts/agentEngine.js';
+/** 自带的那个跑在 DSH 上的 Agent。 */
+export const DSH_AGENT_SLUG = 'dsh';
+
+/** 这个 Agent 由谁来跑:'' = Tangu;否则是引擎 id(可能是本版本不认识的,调用方按 isKnownAgentEngine 判)。 */
+export function agentEngineOf(def: Pick<NormalAgentDef, 'engine'> | null | undefined): string {
+  return typeof def?.engine === 'string' ? def.engine.trim() : '';
+}
+/** 跑在外部引擎上的 Agent 走进了 Tangu 自己的循环(团队成员、讨论、自动化、通道、委派、云端 worker 这些还没接的路)时的报错。
+ *  开头是错误码(界面据此出中英文),后面是给模型 / 日志看的英文原话。 */
+export function agentEngineHereError(engine: string): string {
+  const name = agentEngineLabel(engine);
+  return `agent_engine_elsewhere:${engine} This agent runs on ${name}. For now it only answers in its own conversations on the computer where ${name} is installed; team chats, discussions, delegation, automations and channels cannot use it yet.`;
 }
 
 /** 记忆/日志作用域 slug:共用默认 → DEFAULT_AGENT_SLUG;否则该 agent 自己。 */
@@ -316,6 +340,9 @@ export function parseAgentConfig(slug: string, tomlRaw: string, soul: string): N
     // Library/memory/ 底下是本体的记忆详情(11-09 分层):勾过也不认(读根那边按真实路径再拒一次)
     ...(Array.isArray(meta.stand_in_library) ? { standInLibrary: meta.stand_in_library.filter((t: any) => typeof t === 'string' && t.trim() && !isLibraryMemoryRel(t)).slice(0, 200) } : {}),
     ...(meta.stand_in_agent_md === true ? { standInAgentMd: true } : {}),
+    // 由谁来跑:非空就原样留(不认识的值也留,运行时明确失败);'tangu' 与空串都等于缺席
+    ...(str(meta.engine).trim() && str(meta.engine).trim() !== 'tangu' ? { engine: str(meta.engine).trim() } : {}),
+    ...(str(meta.engine_model).trim() ? { engineModel: str(meta.engine_model).trim() } : {}),
     ...(meta.compaction && typeof meta.compaction === 'object' && Object.keys(normalizeCompactionLayer(meta.compaction)).length
       ? { compaction: normalizeCompactionLayer(meta.compaction) as Record<string, unknown> }
       : {}),
@@ -327,6 +354,30 @@ export async function parseAgentFolder(slug: string, dir: string): Promise<Norma
   const tomlRaw = await fs.readFile(path.join(dir, 'config.toml'), 'utf-8').catch(() => '');
   const soul = await fs.readFile(path.join(dir, 'SOUL.md'), 'utf-8').catch(() => '');
   return parseAgentConfig(slug, tomlRaw, soul);
+}
+
+/**
+ * 只读小探针:这个 Agent 自己设的审批档,分清三种情况(通道 run 按 Agent 档收紧时用,见 agentLoop / channels/runApproval.ts):
+ *   absent     —— 没有这个 Agent(文件夹 / config.toml 不在)→ 不参与;
+ *   ok         —— 读到并解析了 config.toml,mode 是它设的档('' = 没设,不参与);
+ *   unreadable —— 文件在但读不出来(EIO / EACCES …)或整份解析不了 → 不知道它设了什么,调用方按只读。
+ * 和 getAgent / parseAgentFolder 不同:那两条把读失败吞成「没设」/ null(对它们的调用方是对的),这里不吞。只读,不迁移、不建任何东西。
+ * 遗留扁平 .md(还没迁成文件夹)按 unreadable:正常情况下激活那一步的 getAgent 已经迁过了,迁不动才会走到这里。
+ */
+export async function probeAgentApprovalMode(slug: string): Promise<{ state: 'absent' } | { state: 'ok'; mode: ApprovalMode } | { state: 'unreadable' }> {
+  if (!slug || !isValidSlug(slug)) return { state: 'absent' };
+  const adir = path.join(agentsDir(), slug);
+  const missing = async (p: string): Promise<boolean | 'error'> => fs.stat(p).then(() => false, (e: any) => (e?.code === 'ENOENT' || e?.code === 'ENOTDIR' ? true : 'error'));
+  const cfg = await missing(path.join(adir, 'config.toml'));
+  if (cfg === 'error') return { state: 'unreadable' };
+  if (cfg) {
+    const flat = await missing(path.join(agentsDir(), `${slug}.md`));
+    return flat === true ? { state: 'absent' } : { state: 'unreadable' };
+  }
+  let raw: string;
+  try { raw = await fs.readFile(path.join(adir, 'config.toml'), 'utf-8'); } catch { return { state: 'unreadable' }; }
+  try { parseToml(raw); } catch { return { state: 'unreadable' }; }
+  return { state: 'ok', mode: parseAgentConfig(slug, raw, '').approvalMode };
 }
 
 /** 序列化 def 为 config.toml 内容(SOUL/MEMORY/LOG/Library 不在此,各自单独落盘)。 */
@@ -357,6 +408,8 @@ export function serializeAgentConfig(def: NormalAgentDef): string {
   if (def.standInOff) obj.stand_in_off = def.standInOff; // 空数组也落盘:「都开着」和「从没设过」一样,但写过就是写过
   if (def.standInLibrary && def.standInLibrary.length) obj.stand_in_library = def.standInLibrary;
   if (def.standInAgentMd) obj.stand_in_agent_md = true;
+  if (def.engine) obj.engine = def.engine;
+  if (def.engineModel) obj.engine_model = def.engineModel;
   if (def.toolsStrict) obj.tools_strict = true;
   if (def.toolsMode && def.toolsList) { // allow+空数组=全禁,合法;缺 mode 不落盘
     obj.tools_mode = def.toolsMode;
@@ -471,6 +524,18 @@ export const DEFAULT_AGENTS: BuiltinAgentPreset[] = [
   MUSE_AGENT_PRESET,
 ];
 
+/** 自带的 DSH(11-14,DSH 融合底层第 2 步):跑在用户自己装的 DeepSeek Harness 上,和别的 Agent 一样能改名、改人设、删掉。
+ *  不进 DEFAULT_AGENTS:那一份还给云端名册合成虚拟条目(每个账号都会凭空多一个),DSH 只在装了它的电脑上有意义 ——
+ *  这里只在本机播种一次(独立标记 .seeded-dsh-v1),之后删了不再回来。没装 DSH 时它照样在名册里,界面显示「未安装」。
+ *  工作指令这一步还不交给 DSH(第 3 步交接才交),先只放一句身份。 */
+export const DSH_AGENT_PRESET: BuiltinAgentPreset = {
+  slug: DSH_AGENT_SLUG, name: 'DSH', nameZh: 'DSH', nameEn: 'DSH',
+  description: 'Runs on DeepSeek Harness installed on this computer',
+  engine: 'dsh',
+  systemPrompt: "You are DSH, an agent in Forsion that runs on DeepSeek Harness on the user's computer.",
+  soul: '',
+};
+
 /** 只有 name 的旧定义 → 两个名字(解析时现算,所以云端读路径、老版本存过一次的文件都走这里;本地另由 migrateAgentNamesOnce 落盘一次)。
  *  内置:名字没改过 = 预设的两个名字;改过 = 用户起的进中文名,英文名用缺省。「改过」没有标记,只能比值,与 upgradeAriosoPersona 同口径。
  *  自己建的:原名进中文名,英文名留空。 */
@@ -504,6 +569,7 @@ async function writeAgentScaffold(a: (typeof DEFAULT_AGENTS)[number]): Promise<v
       tools: a.tools || [], thinkingLevel: a.thinkingLevel || '', maxIterations: a.maxIterations ?? null,
       approvalMode: a.approvalMode || '', createdBy: a.createdBy || 'user', createdAt: new Date().toISOString(),
       systemPrompt: a.systemPrompt, soul: a.soul || '', libraryOrder: [],
+      ...(a.engine ? { engine: a.engine } : {}),
     };
     await fs.writeFile(path.join(adir, 'config.toml'), serializeAgentConfig(def), 'utf-8');
   }
@@ -596,7 +662,8 @@ export function isRetiredBuiltin(def: Pick<NormalAgentDef, 'slug'>): boolean {
 
 /** 用户排序优先;缺省按内置名册顺序,其后为用户创建的 agent。 */
 export function sortAgentDefs(defs: NormalAgentDef[], order: string[]): NormalAgentDef[] {
-  const defaults = DEFAULT_AGENTS.map((a) => a.slug);
+  // 自带的 DSH 排在内置几位之后、Muse 之前(它不在 DEFAULT_AGENTS 里,见 DSH_AGENT_PRESET)
+  const defaults = DEFAULT_AGENTS.map((a) => a.slug).flatMap((s) => (s === MUSE_AGENT_SLUG ? [DSH_AGENT_SLUG, s] : [s]));
   const rank = (slug: string): number => {
     const explicit = order.indexOf(slug);
     if (explicit >= 0) return explicit;
@@ -682,11 +749,25 @@ async function seedDefaultAgentsOnce(): Promise<void> {
     }
     await fs.writeFile(marker, new Date().toISOString(), 'utf-8');
   }
+  await seedDshAgentOnce();
   await migrateDefaultEffortOnce();
   await migrateAgentNamesOnce();
   for (const slug of [DEFAULT_AGENT_SLUG, 'aria', 'recita']) await ensureBuiltinAvatar(slug);
   const oldMarker = path.join(agentsDir(), '.seeded');
   if (!existsSync(oldMarker)) await fs.writeFile(oldMarker, new Date().toISOString(), 'utf-8');
+}
+
+/** 自带的 DSH:只在本机形态(hostExec)播种一次。已有同名文件夹(用户自己建过叫 dsh 的)不覆盖;标记写下之后,删了不再回来。 */
+export async function seedDshAgentOnce(): Promise<void> {
+  const marker = path.join(agentsDir(), '.seeded-dsh-v1');
+  if (existsSync(marker)) return;
+  try {
+    const { deps } = await import('../seams/runtime.js');
+    if (!deps().profile.capabilities.hostExec) return;
+  } catch { return; } // 运行时还没装配:不播种,下次进程再看
+  await writeAgentScaffold(DSH_AGENT_PRESET);
+  await fs.writeFile(marker, new Date().toISOString(), 'utf-8');
+  cache = null;
 }
 
 /** 旧扁平 <slug>.md → <slug>/(config.toml + 空 SOUL.md);原文件留 .bak。幂等、非破坏。 */
@@ -949,6 +1030,10 @@ export interface SaveAgentInput {
   toolsMode?: 'allow' | 'deny' | null;
   /** 内置工具名单;null=清除,缺省保留已有。 */
   toolsList?: string[] | null;
+  /** 由谁来跑:'' / 'tangu' = Tangu,否则必须在 AGENT_ENGINE_IDS 里;缺省保留已有。只有本机设置页能提交(路由层把远端 / 云端 / manage_agent 的剥掉)。 */
+  engine?: string;
+  /** 跑在外部引擎上时的缺省模型;'' = 清除,缺省保留已有。 */
+  engineModel?: string;
   /** true = 该 slug 在保存那一刻(锁内现读)必须已存在,否则抛错不落盘 —— 调用方先读到了它、按「改已有的」
    *  请求的批准;这期间被删了就别悄悄新建一个(新建的审批档是空 = 跟随会话,比它原来的档宽)。 */
   mustExist?: boolean;
@@ -1016,6 +1101,14 @@ function resolveAgentNames(existing: NormalAgentDef | null, input: SaveAgentInpu
   return { name, nameZh, nameEn, namePref };
 }
 
+/** 保存时的「由谁来跑」:空 / 'tangu' = Tangu(落盘省略);别的只收 AGENT_ENGINE_IDS,其余报错不落盘。 */
+function normalizeAgentEngineInput(v: unknown): string | undefined {
+  const e = String(v ?? '').trim();
+  if (!e || e === 'tangu') return undefined;
+  if (!isKnownAgentEngine(e)) throw new Error(`unsupported engine: ${e}`);
+  return e;
+}
+
 export function buildAgentDef(slug: string, existing: NormalAgentDef | null, input: SaveAgentInput): NormalAgentDef {
   if (!isValidSlug(slug)) throw new Error('invalid slug');
   // systemPrompt 仅**新建**必填;更新已有 agent(含上传头像 saveAgentAvatar 走的就是这条)允许空/省略 → 保留原值。
@@ -1059,6 +1152,8 @@ export function buildAgentDef(slug: string, existing: NormalAgentDef | null, inp
       ? [...new Set((Array.isArray(input.standInLibrary) ? input.standInLibrary : []).filter((t) => typeof t === 'string' && t.trim() && !t.includes('..') && !t.startsWith('/') && !t.includes('\\') && !isLibraryMemoryRel(t)))].slice(0, 200)
       : existing?.standInLibrary,
     standInAgentMd: (input.standInAgentMd !== undefined ? input.standInAgentMd : existing?.standInAgentMd) || undefined,
+    engine: input.engine !== undefined ? normalizeAgentEngineInput(input.engine) : existing?.engine,
+    engineModel: input.engineModel !== undefined ? (String(input.engineModel || '').trim().slice(0, 500) || undefined) : existing?.engineModel,
     toolsStrict: existing?.toolsStrict,
     toolsMode: input.toolsMode !== undefined
       ? (input.toolsMode === 'allow' || input.toolsMode === 'deny' ? input.toolsMode : undefined)

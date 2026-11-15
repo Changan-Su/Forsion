@@ -72,3 +72,104 @@ describe('额度用完 ≠ 限流', () => {
     expect(humanizeRunError('usage_limit_reached [quota_fallback_ask:forsion/auto]', tv)).not.toContain('quota_fallback_ask')
   })
 })
+
+describe('外部引擎的当前模型缺 API key(DSH 只用账号登录、不选模型时每一句都这样失败)', () => {
+  // DSH 0.2.2-rc.3 的原话,和引擎换成的那一句 —— 与 tangu-agent/src/engines/acpEngine.credential.test.ts 里断言的是同一句,两边一起改。
+  const DSH_RAW = 'Internal error: turn failed: llm-deepseek: no API key for provider route "deepseek-official"; store DEEPSEEK_API_KEY through the credentials service (the web Models page writes it), or export DEEPSEEK_API_KEY in the launching environment'
+  const WITH_OTHERS = 'engine_model_no_api_key {"engine":"Fake Harness","model":"deepseek-v4-flash","others":["DeepSeek-V4.1-Flash","DeepSeek-V4-Pro"]}: Fake Harness needs an API key for its current model ("deepseek-v4-flash") and none is set up. '
+    + 'Pick another model in the model menu and send again. Other models it offers include: "DeepSeek-V4.1-Flash", "DeepSeek-V4-Pro". '
+    + `[${DSH_RAW}]`
+  const NO_OTHERS = 'engine_model_no_api_key {"engine":"Fake Harness","model":"deepseek-v4-flash","others":[]}: Fake Harness needs an API key for its current model ("deepseek-v4-flash") and none is set up. '
+    + 'It offers no other model: sign in or add an API key in Fake Harness itself, then send again. '
+    + `[${DSH_RAW}]`
+  // 把传进来的变量也印出来:看得到引擎名、当前模型、可以换的模型有没有进到译文里
+  const tv = (k: string, v?: Record<string, unknown>) => (k === 'chat.err.listSep' ? ' | ' : v ? `${k}${JSON.stringify(v)}` : k)
+
+  it('有别的模型可换:点名引擎、当前模型和能换成哪些;括号里只留引擎的原话', () => {
+    expect(humanizeRunError(WITH_OTHERS, tv)).toBe(
+      `chat.err.engineModelNoKeyPick${JSON.stringify({ engine: 'Fake Harness', model: 'deepseek-v4-flash', others: 'DeepSeek-V4.1-Flash | DeepSeek-V4-Pro' })}(${DSH_RAW})`,
+    )
+  })
+
+  it('没有别的模型:说去引擎那边登录或填 key,不叫人换模型', () => {
+    const out = humanizeRunError(NO_OTHERS, tv)
+    expect(out.startsWith('chat.err.engineModelNoKeyOnly{')).toBe(true)
+    expect(out).toContain('"engine":"Fake Harness"')
+    expect(out.endsWith(`(${DSH_RAW})`)).toBe(true)
+  })
+
+  it('句式被截断拆不开:给不点名的说法,整句留在括号里;不落到别的规则上', () => {
+    const cut = WITH_OTHERS.slice(0, 140)
+    expect(humanizeRunError(cut, t)).toBe(`chat.err.engineModelNoKey(${cut})`)
+  })
+
+  it('DSH 的原话没经引擎换过(老引擎):原样透出,不冒认', () => {
+    expect(humanizeRunError(DSH_RAW, t)).toBe(DSH_RAW)
+  })
+})
+
+describe('缺 API key 的码只认整句开头', () => {
+  it('别的报错里引到这几个字,照原来的规则走', () => {
+    const raw = 'Internal error: failed to read configuration field "engine_model_no_api_key:"'
+    expect(humanizeRunError(raw, t)).toBe(raw)
+  })
+})
+
+describe('会员档位用不了这个模型(model_tier_locked)', () => {
+  const tv = (k: string, v?: Record<string, unknown>) => (v?.model ? `${k}:${v.model}` : k)
+  it('裸码 → 用会话模型名说人话,不再挂机器码;不会被通用 403 规则抢走', () => {
+    expect(humanizeRunError('model_tier_locked', tv, 'GPT-6 Sol')).toBe('chat.err.tierLocked:GPT-6 Sol')
+    expect(humanizeRunError('model_tier_locked', tv)).toBe('chat.err.tierLockedBare')
+  })
+  it('HTTP 403 的 JSON 回包里带 modelName 时优先用它', () => {
+    const raw = JSON.stringify({ detail: 'model_tier_locked', code: 'model_tier_locked', modelId: 'x', modelName: 'Claude Z', multiplier: 5, cap: 2.5 })
+    expect(humanizeRunError(raw, tv, 'Other')).toBe('chat.err.tierLocked:Claude Z')
+  })
+  it('真实中英文案', async () => {
+    const { translateFor } = await import('../../i18n')
+    expect(humanizeRunError('model_tier_locked', (k, v) => translateFor('zh', k, v), 'GPT-6 Sol')).toBe('当前会员档位不能使用 GPT-6 Sol。升级会员或换一个模型。')
+    expect(humanizeRunError('model_tier_locked', (k, v) => translateFor('en', k, v), 'GPT-6 Sol')).toBe("Your current plan can't use GPT-6 Sol. Upgrade your membership or pick another model.")
+  })
+  it('限时开放刚结束:有模型名时说「限时体验已于 {date} 结束」;没名字回到普通的那句', async () => {
+    const { translateFor } = await import('../../i18n')
+    // 服务端 SSE 那句人话(旧版看的)原样进来,也按码认、换成自己的文案
+    const raw = 'Claude Fable 5.2 的限时体验已结束，当前会员档位不能再用它。 / The free trial of Claude Fable 5.2 has ended. (model_tier_locked)'
+    expect(humanizeRunError(raw, (k, v) => translateFor('zh', k, v), 'Claude Fable 5.2', '11月30日')).toBe('Claude Fable 5.2 的限时体验已于 11月30日 结束。升级会员或换一个模型。')
+    expect(humanizeRunError(raw, (k, v) => translateFor('en', k, v), 'Claude Fable 5.2', 'Nov 30')).toBe('The free trial of Claude Fable 5.2 ended on Nov 30. Upgrade your membership or pick another model.')
+    expect(humanizeRunError(raw, tv, '', 'Nov 30')).toBe('chat.err.tierLockedBare')
+  })
+  it('后台提前结束(本机记着的到期还在以后):SSE 那句认得出就说「已结束」不带日期;403 JSON 带 trialEndedAt 就用它的日期', async () => {
+    const { translateFor } = await import('../../i18n')
+    const { trialEndedAtOf } = await import('../../services/accountQuota')
+    // 服务端 modelTierLockedMessage(trialEndedAt, updateHint)的原句(server src/services/modelTierGate.ts),两边一起改;引擎 httpBrain 把 SSE 的 message 原样抛成 run 错误
+    const sse = 'Claude Fable 5.2 的限时体验已结束，当前会员档位不能再用它。请换一个模型或升级会员。旧版客户端不会提前标出这些模型，建议更新到最新版 Forsion。'
+      + " / The free trial of Claude Fable 5.2 has ended and your plan can't use it anymore. Pick another model or upgrade your membership."
+      + " Older app versions don't mark these models in advance, so please update to the latest version of Forsion. (model_tier_locked)"
+    expect(humanizeRunError(sse, (k, v) => translateFor('zh', k, v), 'Claude Fable 5.2')).toBe('Claude Fable 5.2 的限时体验已结束。升级会员或换一个模型。')
+    expect(humanizeRunError(sse, (k, v) => translateFor('en', k, v), 'Claude Fable 5.2')).toBe('The free trial of Claude Fable 5.2 has ended. Upgrade your membership or pick another model.')
+    const json = JSON.stringify({ detail: 'model_tier_locked', code: 'model_tier_locked', modelId: 'fable', modelName: 'Claude Fable 5.2', multiplier: 5, cap: 2.5, trialEndedAt: '2026-11-20T03:00:00.000Z' })
+    expect(trialEndedAtOf(json)).toBe(Date.parse('2026-11-20T03:00:00.000Z'))
+    expect(trialEndedAtOf('model_tier_locked')).toBeNull()
+    expect(trialEndedAtOf(undefined)).toBeNull()
+    // 普通的档位锁(没开放过)照旧
+    expect(humanizeRunError('model_tier_locked', (k, v) => translateFor('zh', k, v), 'GPT-6 Sol')).toBe('当前会员档位不能使用 GPT-6 Sol。升级会员或换一个模型。')
+  })
+})
+
+describe('Forsion 额度用完(token_quota_exceeded):服务端补的积分提示不进括号,开着积分也用完了换一句', () => {
+  // 原文照服务端 quotaExceededMessage 拼(server src/services/tokenQuotaService.ts)
+  const enable = 'token_quota_exceeded · 可在账户中心 account.forsion.net 开启「用积分继续」，用积分接着用 / Turn on "Continue with points" at account.forsion.net to keep going with your points'
+  const topup = 'token_quota_exceeded · 积分也用完了，可充值积分或升级会员 / Your points have run out as well; top up points or upgrade your plan'
+  it('裸码(积分帮不上:后台任务 / 组织账号 / 已到预支硬顶,或老服务端)→ 不提积分的那句', () => {
+    expect(humanizeRunError('token_quota_exceeded', t)).toBe('chat.err.quota(token_quota_exceeded)')
+  })
+  it('开关没开 → 提「用积分继续」那句,括号里只留机器码', () => {
+    expect(humanizeRunError(enable, t)).toBe('chat.err.quotaPoints(token_quota_exceeded)')
+  })
+  it('开着积分也用完了 → 换成积分也用完那句', () => {
+    expect(humanizeRunError(topup, t)).toBe('chat.err.quotaPointsOut(token_quota_exceeded)')
+  })
+  it('引擎包过一层(LlmError 带状态码)也一样', () => {
+    expect(humanizeRunError(`402 ${topup}`, t)).toBe('chat.err.quotaPointsOut(token_quota_exceeded)')
+  })
+})

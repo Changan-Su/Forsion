@@ -35,6 +35,7 @@ import { create } from 'zustand'
 import { forsionAccountId } from '../../../../shared/forsionAccount'
 import { authFetch } from '../http'
 import { currentPlatform } from '../platform'
+import { isRealUnitToken } from '../unitToken'
 import { cloudApiBaseOf } from './cloudBase'
 import { translate } from './messages'
 import { assertTargetRef, HOME_REF, isEngineTarget, isTargetKey, mintTarget, sameRef, targetKeyOf, type EngineTarget, type TargetKey, type TargetRef, type TargetVia } from './target'
@@ -91,8 +92,10 @@ export function homeKind(): 'local' | 'cloud' | 'external' {
   return !!api && !!host && host.cfg().backendUrl.replace(/\/+$/, '') === api ? 'cloud' : 'external'
 }
 
-/** 与改造前的 `headers(cfg.token)` 逐字同形(键序也一样)。 */
+/** 与改造前的 `headers(cfg.token)` 逐字同形(键序也一样)。
+ *  设备页例外:本页没有真令牌(占位值 / 空)时不带 Authorization,让桌面壳注入或设备子域的 Cookie 生效。 */
 function bearerHeaders(token: string, json: boolean): Record<string, string> {
+  if (homeVia() === 'unitPage' && !isRealUnitToken(token)) return json ? { 'Content-Type': 'application/json' } : {}
   return json
     ? { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }
     : { Authorization: `Bearer ${token}` }

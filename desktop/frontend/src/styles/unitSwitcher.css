@@ -201,6 +201,7 @@
   color: var(--text);
 }
 .unitfr-fail-title { font-size: var(--ui-font-heading, 14px); font-weight: 600; }
+.unitfr-fail-hint { margin-top: -8px; color: var(--text-muted); font-size: var(--ui-font-caption, 11px); }
 .unitfr-fail-actions { display: flex; gap: 8px; }
 /* 左下角:Ribbon 折叠态账号槽的几何(宽 --rb-w、底内距 --rb-pad-y,头像本身是 .ribbon-account),盖在远端账号卡的位置上 */
 .unitfr-rail {

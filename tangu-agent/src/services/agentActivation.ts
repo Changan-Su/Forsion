@@ -6,7 +6,7 @@
  * agentConfig(就地修改,会话值优先),返回记忆/日志作用域 slug。无 agentSlug / 两路都未命中 / 出错 → 默认。
  */
 import { DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
-import { agentCapOf, builtinAgentDef, resolveActiveSlug, resolveMemorySlug, upgradeAriosoPersona, type NormalAgentDef } from '../agents/agentRegistry.js';
+import { agentCapOf, agentEngineOf, builtinAgentDef, resolveActiveSlug, resolveMemorySlug, upgradeAriosoPersona, type NormalAgentDef } from '../agents/agentRegistry.js';
 import { clampApprovalMode, type CapMode } from './remoteOrigin.js';
 
 export interface AgentActivation {
@@ -16,6 +16,13 @@ export interface AgentActivation {
   memScopeSlug: string;
   /** 当前显示名 / 简介(用户随时可改;无激活 agent → undefined)。经 agentIdentitySection 进系统提示词。 */
   profile?: AgentProfile;
+  /** 激活到的 Agent 定义里自己设的审批档(原值;'' / 缺席 = 没设)。通道 run 拿它收紧通道档(channels/runApproval.ts)。 */
+  agentApprovalMode?: string;
+  /** 读 Agent 定义时抛错了(区别于「没有这个 Agent」/「没设档」):不知道它设了什么档。通道 run 据此按只读收紧,不当成没设。 */
+  agentReadFailed?: true;
+  /** 这个 Agent 由别的程序来跑(定义里的 engine,如 'dsh')。Tangu 自己的循环拿到它必须明确失败,不能用它的名字和人设替它答
+   *  (见 agentLoop 激活之后那道闸)。正常情况下 dispatchRun 已经把这类 run 交给了外部引擎,走到这里的是团队成员、委派之类还没接的路。 */
+  engine?: string;
 }
 
 export interface AgentProfile extends Pick<NormalAgentDef, 'name' | 'nameZh' | 'nameEn' | 'namePref'> { description: string }
@@ -59,9 +66,11 @@ export async function applyAgentActivation(
   let activeAgentSlug = DEFAULT_AGENT_SLUG;
   let memScopeSlug = DEFAULT_AGENT_SLUG;
   let profile: AgentProfile | undefined;
+  let agentApprovalMode: string | undefined;
+  let agentReadFailed = false;
   if (!agentConfig || !agentConfig.agentSlug) return { activeAgentSlug, memScopeSlug };
   try {
-    let def = await localGet(String(agentConfig.agentSlug));
+    let def = await localGet(String(agentConfig.agentSlug)).catch((e) => { agentReadFailed = true; throw e; });
     // 云端运行水合:worker 的 ~/.tangu/agents 是空的 → 从云端读人格。软失败 → null,回落默认行为。
     if (!def && agentsBrain) {
       def = await agentsBrain.getAgent(userId, String(agentConfig.agentSlug)).catch(() => null);
@@ -71,6 +80,9 @@ export async function applyAgentActivation(
       if (!def) def = builtinAgentDef(String(agentConfig.agentSlug));
     }
     if (def) {
+      agentApprovalMode = def.approvalMode || undefined; // 先记下:后面任何一步抛了也不丢(通道收紧靠它)
+      const engine = agentEngineOf(def);
+      if (engine) return { activeAgentSlug: resolveActiveSlug(agentConfig.agentSlug), memScopeSlug: resolveMemorySlug(def), engine, ...(agentApprovalMode ? { agentApprovalMode } : {}) };
       // 云端 Brain 直接读存储,绕过 cloudAgentStore;原装人格升级必须与列表展示同源。
       def = upgradeAriosoPersona(def);
       activeAgentSlug = resolveActiveSlug(agentConfig.agentSlug);
@@ -115,5 +127,5 @@ export async function applyAgentActivation(
   } catch {
     /* 加载失败不阻断 run */
   }
-  return { activeAgentSlug, memScopeSlug, profile };
+  return { activeAgentSlug, memScopeSlug, profile, ...(agentApprovalMode ? { agentApprovalMode } : {}), ...(agentReadFailed ? { agentReadFailed: true as const } : {}) };
 }

@@ -3,7 +3,7 @@
  * 统一 Bearer + JSON 错误,错误信息抛 Error(detail)。
  */
 import type {
-  AgentConfig, AgentScheduleEntry, AgentScheduleEntryUpsert, AgentScheduleInfo, AgentsMeta, AutomationActionCatalogItem, AutomationExecutionInfo, AutomationRunInfo, AutomationSessionInfo, ChannelKind, HistorianActivityItem, MessageRecord, ModelsResponse, ProviderQuota, MuseLibraryEntry, MuseStarter, MuseRoundInfo, MuseSpaceView, MusePlacementOp, MuseStatusInfo, MuseTodo, MuseTriggerInfo, MuseTriggerUpsert, PendingApprovalInfo, TriggerSourceInfo,
+  AgentConfig, AgentScheduleEntry, AgentScheduleEntryUpsert, AgentScheduleInfo, AgentsMeta, AutomationActionCatalogItem, AutomationExecutionInfo, AutomationRunInfo, AutomationSessionInfo, ChannelKind, FailedRunRecord, HistorianActivityItem, MessageRecord, ModelsResponse, ProviderQuota, MuseLibraryEntry, MuseStarter, MuseRoundInfo, MuseSpaceView, MusePlacementOp, MuseStatusInfo, MuseTodo, MuseTriggerInfo, MuseTriggerUpsert, PendingApprovalInfo, TriggerSourceInfo,
   GitIdentity, GitSettings, GitSummary, NormalAgentDef, ProjectContext, ProjectRepoInfo, ProjectMemoryView, ProjectMemoryOrganizeOutcome, ProjectSettings, ProjectSkillInfo, SessionRecord, SkillInfo, SkillCatalogEntry, SpecialAgentsConfig, StandInInfo,
   ToolsResponse, WorkspaceFileMeta, TeamDef } from '../types'
 import { authFetch } from './http'
@@ -17,6 +17,7 @@ import { readInboxChannel, type InboxChannel } from './inboxChannel'
 import { localInbox, localizeInboxMessage } from './localInbox' // Web/mobile 的云端来信走客户端收件箱
 import { registerMessages, translate } from '../i18n'
 import { LOCAL_ONLY_CODE, localOnlyMessage, remoteRefusalMessage } from './localOnly'
+import { noteApprovalCap } from './delegatedAdmin'
 import { saveResponseAs } from './nativeDownload'
 import type { MuseCardInfo, RelinkInfo, RelinkResult } from '../../../../tangu-agent/src/contracts/clientTypes'
 import { countTelemetry } from '../telemetrySend'
@@ -143,7 +144,7 @@ export async function realtimeSocket(t: EngineTarget): Promise<{ url: string; pr
   const u = new URL(`${t.base}/agent/realtime`, location.href)
   u.protocol = u.protocol === 'https:' ? 'wss:' : 'ws:'
   if (t.via === 'cloud') return { url: u.href, protocols: [REALTIME_BEARER_PROTOCOL, token] }
-  u.searchParams.set('token', token)
+  if (token) u.searchParams.set('token', token) // 设备页没有本页令牌时不带(凭据走壳注入 / Cookie)
   return { url: u.href }
 }
 
@@ -279,9 +280,13 @@ export const startChildSession = (t: EngineTarget, parentId: string, body: { tit
   request<{ sessionId: string; runId: string; title: string }>(t, `/agent/sessions/${encodeURIComponent(parentId)}/children`, { method: 'POST', body: JSON.stringify(body) })
 
 export const listMessages = (t: EngineTarget, sessionId: string, limit = 200, before?: number) =>
-  request<{ messages: MessageRecord[] }>(
+  listHistory(t, sessionId, limit, before).then((r) => r.messages)
+
+/** 同一个接口,连同失败的那几轮一起(引擎 services/failedRuns.ts):重开对话时据此补回失败行。老引擎不带 = 空,不是「没有失败」以外的意思。 */
+export const listHistory = (t: EngineTarget, sessionId: string, limit = 200, before?: number) =>
+  request<{ messages: MessageRecord[]; failed_runs?: FailedRunRecord[] }>(
     t, `/agent/sessions/${encodeURIComponent(sessionId)}/messages?limit=${limit}${before ? `&before=${before}` : ''}`,
-  ).then((r) => r.messages)
+  ).then((r) => ({ messages: r.messages, failedRuns: Array.isArray(r.failed_runs) ? r.failed_runs : [] }))
 
 /**
  * 整段对话:接口单页硬限 500 且只回最近一页,必须用 before 游标向前翻页,否则早期内容静默丢失。
@@ -561,13 +566,13 @@ export const importEngineAsset = (t: EngineTarget, engineId: string, kind: 'skil
     body: JSON.stringify({ kind, name }),
   })
 
-/** 懒探测某引擎能力(模型 + slash 命令);首次会 spawn(慢),后端缓存。失败 → 空。 */
-export const getEngineCapabilities = (t: EngineTarget, engineId: string) =>
+/** 懒探测某引擎能力(模型 + slash 命令);首次会 spawn(慢),后端缓存。fresh = 让后端不用缓存、重新探测。失败 → 空。 */
+export const getEngineCapabilities = (t: EngineTarget, engineId: string, fresh = false) =>
   request<{
     models?: Array<{ id: string; name: string; description?: string }>
     currentModelId?: string
     commands?: Array<{ name: string; description: string; hint?: string }>
-  }>(t, `/agent/engines/${encodeURIComponent(engineId)}/capabilities`, undefined, { timeoutMs: 45000 })
+  }>(t, `/agent/engines/${encodeURIComponent(engineId)}/capabilities${fresh ? '?fresh=1' : ''}`, undefined, { timeoutMs: 45000 })
     .then((r) => ({ models: r.models || [], currentModelId: r.currentModelId, commands: r.commands || [] }))
     .catch(() => ({
       models: [] as Array<{ id: string; name: string; description?: string }>,
@@ -863,7 +868,7 @@ export const setChannelConnectedSession = (t: EngineTarget, kind: ChannelKind, s
 
 // ── Normal Agent（本地自定义人格;仅本地后端可用,云端返回 404 → 调用方降级空列表）──
 export const listAgents = (t: EngineTarget) =>
-  request<{ agents: NormalAgentDef[] }>(t, '/agent/agents').then((r) => r.agents).catch(() => [] as NormalAgentDef[])
+  request<{ agents: NormalAgentDef[]; approvalCap?: string }>(t, '/agent/agents').then((r) => { noteApprovalCap(r.approvalCap); return r.agents }).catch(() => [] as NormalAgentDef[])
 
 /** 分身清单(本机引擎;旧引擎 / 云端 → 空)。不带 slug = 全部。 */
 export const listStandIns = (t: EngineTarget, slug?: string) =>

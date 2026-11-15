@@ -151,6 +151,7 @@ import { openWebFloatingPanel } from '../../pluginPanelSeam'
 import { connectionTarget, homeTarget } from '../../services/engine/targets'
 import { sendTelemetry } from '../../telemetrySend'
 import { telemetryPluginRef } from '../../telemetryPluginId'
+import { unitAuthHeader } from '../../services/unitToken'
 
 // 宿主自己产出的用户可见文案(插件贡献的文案由插件自己带双语,见 display.ts 的语言解析单点)。
 // 命名空间 `pluginhost.*` 是本文件专属,别处不要复用。
@@ -178,13 +179,11 @@ const RULES_OWED_KEY = 'amadeus.plugins.rulesOwed'
  *  `unit/plugins` 面拉(相对 base:局域网直连与 server 隧道子路径同一写法);其余环境走
  *  window.amadeus.listPlugins(desktop IPC / web 云桥)。设备页的壳构建与设备端 App 可能不同版本,
  *  按**壳自己的**版本再过一遍门禁 —— 被闸的照常列出(blocked 徽章),绝不静默消失。 */
-async function resolveExternalSources(): Promise<ExternalPluginSource[]> {
+export async function resolveExternalSources(): Promise<ExternalPluginSource[]> {
   const unitPage = (window as unknown as { __FORSION_UNIT_PAGE__?: unknown }).__FORSION_UNIT_PAGE__
   if (unitPage) {
-    const token = (window as unknown as { __FORSION_UNIT_TOKEN__?: string }).__FORSION_UNIT_TOKEN__ || ''
-    const r = await fetch(new URL('unit/plugins', document.baseURI), {
-      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-    })
+    const token = (window as unknown as { __FORSION_UNIT_TOKEN__?: string }).__FORSION_UNIT_TOKEN__
+    const r = await fetch(new URL('unit/plugins', document.baseURI), { headers: unitAuthHeader(token) })
     if (!r.ok) throw new Error(`unit plugins HTTP ${r.status}`)
     const j = (await r.json()) as { plugins?: ExternalPluginSource[] }
     const { APP_VERSION } = await import('../../changelog')
@@ -1938,7 +1937,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
     // 右上角通知(2026-07-23 起):来源自动标插件名;事件 plugin:<id>,用户可在设置里按插件静音。
     // 停用后残留的定时器不许再弹(10-02 补的活性闸,与 ctx.app 的副作用口同一条纪律)。
     // action(10-17,日历的「撤销」):一个按钮,停留 8 秒(同宿主日历的 U-06);插件停用后点了也不调。
-    // key:同 key 的后一张顶掉前一张,前缀由宿主拼,碰不到别家的 / 宿主的去重键。
+    // key:同 key 的后一张顶掉前一张(replace:计数不累加、标题 / 文案 / 按钮 / 停留都换成新的),前缀由宿主拼,碰不到别家的 / 宿主的去重键。
     notify: (message, opts) => {
       if (!ctxAlive()) return
       const a = opts?.action
@@ -1957,7 +1956,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
         sourceLabel: plugin ? pluginDisplayName(plugin, currentLocale()) : pluginId,
         ...(action ? { action, durationMs: 8000 } : {}),
         // 带 key 时 action 一律显式给(可能是 undefined):同 key 合并时 store 才会清掉上一条的按钮,否则「已删除 B」上挂着撤 A 的按钮
-        ...(typeof opts?.key === 'string' && opts.key ? { dedupeKey: `plugin:${pluginId}:${opts.key.slice(0, 100)}`, action } : {}),
+        ...(typeof opts?.key === 'string' && opts.key ? { dedupeKey: `plugin:${pluginId}:${opts.key.slice(0, 100)}`, action, replace: true } : {}),
       })
     },
     registerView: (view) => set((s) => ({ views: [...s.views, { pluginId, item: view }] })),
@@ -2187,13 +2186,16 @@ export const usePluginStore = create<PluginState>((set, get) => {
         const onBack = (): void => {
           if (!ctxAlive()) return
           if (toList && listFirstNow()) useWorkspace.getState().toggleSidebar('left')
-          else opts.onBack()
+          else guard(() => opts.onBack())
         }
         const handle = claimNativeChrome({ mode: 'page', title: String(opts.title), back: String(opts.back), onBack })
         // 两级导航:这一页不占返回栈,返回链照常滑出列表层,边缘手势才跟手(占了栈系统返回就只能等松手);
         // 列表一出来(手势、返回键、页内横滑、顶栏箭头都走到这)插件才收尾。放弃手势不改 leftVisible,什么都不发生
+        // 插件的 onBack 跑在 workspace 的订阅里 —— 也就是宿主的开合(返回预览收尾的 flushSync)当中:经 guard,
+        // 它抛的错只记一行,不打断宿主那一下(2026-11-15 安卓真壳:插件视图已卸、声明没收,onBack 里 setParams 抛错,
+        // 返回预览的收尾被跳过、整屏卡住)
         const off = toList
-          ? useWorkspace.subscribe((s, prev) => { if (s.leftVisible && !prev.leftVisible && listFirstNow() && ctxAlive()) { off(); handle.release(); opts.onBack() } }) // 旋转成宽屏自动并排左栏不算返回
+          ? useWorkspace.subscribe((s, prev) => { if (s.leftVisible && !prev.leftVisible && listFirstNow() && ctxAlive()) { off(); handle.release(); guard(() => opts.onBack()) } }) // 旋转成宽屏自动并排左栏不算返回
           : pushMobileBack(onBack) // 系统返回和顶栏箭头同一件事
         return { dispose: scope.own('mount', () => { off(); handle.release() }, 'nativeHeader') }
       } } : {}),

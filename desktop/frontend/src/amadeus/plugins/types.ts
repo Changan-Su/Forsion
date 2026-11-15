@@ -524,7 +524,9 @@ export interface PluginNoteTask {
   isTask: boolean
   checked: boolean
   /** 日期,与多维表日期列同一种写法:`YYYY-MM-DD` / `YYYY-MM-DDTHH:mm` / 区间 `a/b`。
-   *  子任务(有 `parentId`)没写 `@` 时是 `''`。 */
+   *  子任务(有 `parentId`)没写 `@` 时是 `''`。2026-11-15+:没有 `parentId`、`due` 为 `''` 的任务 = 笔记里写的 `- [ ] … @todo`
+   *  (要进待办清单、还没排日期);`update(id, { due })` 设日期时宿主把 `@todo` 换成那个日期;
+   *  任务行传 `due: ''` = 清日期,日期换回 `@todo`(旧宿主拒空串、返回 false)。旧宿主不给这种任务。 */
   due: string
   remind?: string
   /** 2026-11-02+:这一行缩进在某条带 `@` 的任务下面(`- [ ]`,最多两层)→ 父任务的 `id`。没写 `@` 的子任务也在列表里,

@@ -46,7 +46,9 @@ function arm() {
     listProviders: () => Promise.resolve([]),
     envCheck: () => Promise.resolve({}),
   }
-  ;(globalThis as any).window = { tangu }
+  // resetAccountQuotaScope / publishAccountQuota 在切号时发窗口事件:桩得是个真 EventTarget
+  const events = new EventTarget()
+  ;(globalThis as any).window = { tangu, addEventListener: events.addEventListener.bind(events), removeEventListener: events.removeEventListener.bind(events), dispatchEvent: events.dispatchEvent.bind(events) }
   useApp.setState({ ...initial, tr: (k: string) => k, toast: () => {} }, true)
   return { cfg, broadcast: (st: St) => { status = st; listeners.forEach((cb) => cb(st)) }, broadcastAuth: () => authListeners.forEach((cb) => cb()) }
 }
