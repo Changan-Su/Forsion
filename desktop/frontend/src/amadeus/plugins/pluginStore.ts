@@ -705,6 +705,13 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
       if (!ok() || typeof submit !== 'function' || !usePluginStore.getState().plugins.find((p) => p.id === pluginId)?.locked) return false
       return provideFeedbackChannel(pluginId, submit)
     },
+    // Agent 起草反馈的附件(2026-11-15,Forsion Extend 的 feedback_draft 结果卡):同 provideFeedbackChannel 只给首方包。
+    // 按调用 id 找会话,复用反馈窗那份附件 + 「这次运行的报错」(services/agentFeedbackReport;动态 import 避开 appStore 的 import 环)。
+    buildFeedbackReport: async (opts) => {
+      if (!ok() || !opts || !usePluginStore.getState().plugins.find((p) => p.id === pluginId)?.locked) return null
+      const { buildAgentFeedbackReport } = await import('../../services/agentFeedbackReport')
+      return buildAgentFeedbackReport(opts)
+    },
     provideInboxChannel: (channel) => {
       if (channel === null) return provideInboxChannel(pluginId, null)
       if (!ok() || pluginId !== 'forsion-extend' || !usePluginStore.getState().plugins.find((p) => p.id === pluginId)?.locked) return false
