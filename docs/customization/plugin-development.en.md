@@ -618,6 +618,10 @@ operators and `%` comments keep the text color. Formulas the caret is not in, re
   and follow light/dark; give your own colors a light and a dark value too.
 - Selected characters drop their token classes (the native selection color wins); `math-source` stays, so the font does not jump.
 - `math-source-delimiter` is the older umbrella class (`$`, brackets, `_ ^`), kept for compatibility; the host no longer colors it.
+- **A selection inside a formula** (both ends between the `$` signs, such as a placeholder selected with Tab) keeps the preview (the
+  floating bubble above the line for inline formulas, with the caret mark at the selection end; below the source for display formulas)
+  and gets no formatting toolbar, so selection actions listed under "⋯ → Plugins" on that toolbar do not appear there. A selection that
+  crosses out of the formula, or takes the whole formula with its `$` signs, still gets the toolbar and no preview.
 
 ### Official cloud inbox channel
 

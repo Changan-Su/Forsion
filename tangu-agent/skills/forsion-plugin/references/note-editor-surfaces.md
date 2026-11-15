@@ -116,7 +116,8 @@ const off = ctx.app.watchFile?.('Snippets/latex.js', () => reload())
 - **公式源码的样式钩子(2026-11-15 起)**:光标所在公式露出源码时,宿主给整段源码(含 `$`)加 `math-source`(等宽、斜体、
   行内代码字号),各 token 再加 `math-source-dollar / -command / -script / -letter / -number / -bracket`。类**并在同一个 span 上**,
   选择器写 `.math-source.math-source-bracket`;宿主的 token 颜色包在 `:where()` 里、权重为 0,插件给括号 / `$` / 占位加的类一条
-  普通类选择器就能盖过,不用拼权重。颜色变量是 `--math-src-*`(分明暗)。详见插件手册「笔记里公式源码的样式钩子」。
+  普通类选择器就能盖过,不用拼权重。颜色变量是 `--math-src-*`(分明暗)。选区两头都在 `$` 之间时(Tab 选中占位)预览照常、
+  格式浮条不出(浮条上的插件选区动作也不出);跨出公式或连 `$` 整个选中照旧。详见插件手册「笔记里公式源码的样式钩子」。
 - **`props.*` 宿主包了 try/catch,`state.apply` 没包** —— 后者吞异常等于放任状态损坏。状态迁移自己写稳。
 - **设置类页面先用 `ctx.ui.mountSettingsPage`**(2026-10-17 起,见 references/host-ui-mounts.md):开关、按钮、输入、额度条都有宿主零件,手机排法由宿主管;
   只有清单外的内容才自己画(放进 `custom` 块)。
