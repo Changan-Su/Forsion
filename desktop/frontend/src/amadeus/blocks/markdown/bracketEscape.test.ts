@@ -46,7 +46,7 @@ describe('编辑器里打的字面方括号:落盘后重开仍是同一段字面
     try {
       const v = b.view
       v.dispatch(v.state.tr.insertText(text, 1, 5))
-      const md = b.md()
+      const md = b.saved()
       const again = b.parse(md)
       expect(again.textContent).toBe(text)
       // 没还原的转义重开后带 amadeusEscaped(D-11 的用户转义记号),不算;别的 mark(链接等)一个都不许有
@@ -55,7 +55,7 @@ describe('编辑器里打的字面方括号:落盘后重开仍是同一段字面
       expect(marks).toBe(0)
       // 再存一次不变
       const b2 = await bootEditor(md)
-      try { expect(b2.md()).toBe(md) } finally { await b2.destroy() }
+      try { expect(b2.saved()).toBe(md) } finally { await b2.destroy() }
     } finally {
       await b.destroy()
     }
@@ -88,6 +88,19 @@ describe('编辑器里打的字面方括号:落盘后重开仍是同一段字面
       v.dispatch(v.state.tr.setSelection(TextSelection.create(v.state.doc, at)))
       v.dispatch(v.state.tr.insertText(' [y] [x]'))
       expect(b.saved()).toBe('top\n\nhello [y] \\[x]\n')
+    } finally {
+      await b.destroy()
+    }
+  })
+})
+
+describe('只在 v4 整篇落盘还原:单块 / 剪贴板那条规范化照旧保留 `\\[`', () => {
+  it('md()(normalizeSerializedMd 缺省)保留,saved()(serializeUnified)还原', async () => {
+    const b = await bootEditor('seed')
+    try {
+      b.view.dispatch(b.view.state.tr.insertText('hello [there]', 1, 5))
+      expect(b.md()).toBe('hello \\[there]\n')
+      expect(b.saved()).toBe('hello [there]\n')
     } finally {
       await b.destroy()
     }

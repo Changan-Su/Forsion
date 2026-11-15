@@ -1,5 +1,5 @@
 /** 自动成对的两个本机偏好(设置 → 笔记),缺省都开;只把显式的 `0` 当关。
- *  · 括号和引号:正文(bodyAutoPair.ts)与代码块(codeAutoPair.ts)共用。沿用 R-27 代码块配对那个 key ——
+ *  · 括号和引号:正文(bodyAutoPair.ts)、代码块(codeAutoPair.ts)与公式里的括号(mathTyping.ts)共用。沿用 R-27 代码块配对那个 key ——
  *    以前关掉代码块配对的人,正文配对也是关的。
  *  · Markdown 符号:选中文字后敲 `* _ ~ = $ %` 包住选区(unified/keyboard.ts 的 wrapSelectionPlugin);关掉 = 照旧替换选区。
  *    `*` `_` 反引号的打字成对要等「行内标记进正文」那一步,到时也挂在这个开关上。 */
@@ -10,8 +10,8 @@ registerMessages({
   'settings.notes.autoPairBracketsLabel': { zh: '自动补全括号和引号', en: 'Auto-close brackets and quotes' },
   'settings.notes.autoPairBracketsHint': {
     // ⚠️ 文案里别写花括号:i18nCoverage 按括号配平静态抽取本片段。
-    zh: '在正文和代码块里输入左括号或引号时自动补上另一半；紧挨着再输入同一个闭合符号会直接跳过，在空的一对中间退格会把两个一起删掉。',
-    en: 'Typing an opening bracket or quote in the body or a code block inserts the closing half. Typing the same closing character next to it steps over it, and Backspace inside an empty pair removes both.',
+    zh: '在正文和代码块里输入左括号或引号、在公式里输入左括号时，自动补上另一半；紧挨着再输入同一个闭合符号会直接跳过，在空的一对中间退格会把两个一起删掉。',
+    en: 'Typing an opening bracket or quote in the body or a code block, or an opening bracket in a formula, inserts the closing half. Typing the same closing character next to it steps over it, and Backspace inside an empty pair removes both.',
   },
   'settings.notes.autoPairMarkdownLabel': { zh: '自动补全 Markdown 符号', en: 'Auto-pair Markdown symbols' },
   'settings.notes.autoPairMarkdownHint': {

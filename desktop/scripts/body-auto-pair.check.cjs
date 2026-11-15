@@ -298,6 +298,8 @@ async function main() {
       await caseMd(browser, 'E4 关:) 不跨,照常多一个', 'ab ()', async (p) => { await caretTo(p, { after: 'ab (' }); await type(p, ')') }, 'ab ())\n', off)
       await caseMd(browser, 'E5 关:空的一对里退格只删左半', 'ab ()', async (p) => { await caretTo(p, { after: 'ab (' }); await p.keyboard.press('Backspace'); await sleep(80) }, 'ab )\n', off)
       await caseMd(browser, 'E6 关:代码块也不补', '```js\nlet x\n```', async (p) => { await caretTo(p, { after: 'let x' }); await type(p, ' = f(') }, '```js\nlet x = f(\n```\n', off)
+      await caseMd(browser, 'E7 关:公式里的括号也不补', 'ab $f$', async (p) => { await caretTo(p, { after: 'f' }); await type(p, '(') }, 'ab $f($\n', off)
+      await caseMd(browser, 'E8 开:公式里的括号照常由公式配对补', 'ab $f$', async (p) => { await caretTo(p, { after: 'f' }); await type(p, '(x') }, 'ab $f(x)$\n')
     }
 
     // ── F 选中后敲 Markdown 符号(开关「自动补全 Markdown 符号」)──

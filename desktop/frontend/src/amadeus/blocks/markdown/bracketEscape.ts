@@ -13,6 +13,8 @@
  *  · 不在围栏 / 行内代码、链接地址、HTML、公式里(maskNonMath + scanMath,与 unescapeMathSource 同一口径);
  *  · 整篇里有链接定义(`[标签]: …`)时整篇不动 —— `[标签]` 会被读成引用链接。
  *    序列化串里看不到逐字回填的块(D-18 占位),所以 v4 落盘另在 serializeUnified 里按文档查定义(hasRefDefinition)。
+ *  · 只用于 v4 整篇落盘(normalizeSerializedMd 的 literalBrackets,serializeUnified 打开):单块 / 剪贴板 / 片段
+ *    只是文件的一部分,别处的定义看不见,照旧保留 `\[`。
  * 用户自己写的转义(D-11)此时是占位 + 字面字符,不是 `\[`,不受影响。
  * 仪器:bracketEscape.test.ts(往返逐字)、check:rtcorpus、check:obsfeel 的 K12h / K13b。
  */

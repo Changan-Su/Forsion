@@ -13,6 +13,8 @@ import type { Node as PMNode } from '@milkdown/kit/prose/model'
 import { TextSelection } from '@milkdown/kit/prose/state'
 import { bootEditor, type Booted } from './parseFidelity.testkit'
 import { adoptOrigins } from './verbatim'
+import { normalizeSerializedMd } from './MarkdownBlock'
+import { hasRefDefinition } from './bracketEscape'
 
 /** 在第一个含 needle 的文本后插一个字(= 用户在那里打字)。 */
 function typeAfter(b: Booted, needle: string, ch = 'Z'): void {
@@ -252,7 +254,9 @@ describe('fuzz:逐字拼接不改变写出去的语义', () => {
           }
         }
         b.view.dispatch(b.view.state.tr.setSelection(TextSelection.atStart(b.view.state.doc)))
-        const canonical = b.md()
+        // 规范 = 同一条 v4 落盘规范化、只是不逐字回填(literalBrackets 与 serializeUnified 同口径,见 ./bracketEscape)
+        const live0 = b.view.state.doc
+        const canonical = normalizeSerializedMd(b.serialize(live0), { literalBrackets: !hasRefDefinition(live0) })
         const saved = b.saved()
         const ctx = `iter=${iter} ops=${ops.join(',')}\n--- 原文 ---\n${JSON.stringify(md)}\n--- 规范 ---\n${JSON.stringify(canonical)}\n--- 逐字 ---\n${JSON.stringify(saved)}`
         const reparsed = b.parse(saved)

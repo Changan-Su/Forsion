@@ -1,6 +1,7 @@
 import { TextSelection } from '@milkdown/kit/prose/state'
 import type { EditorView } from '@milkdown/kit/prose/view'
 import { buildBlockString, scanMath } from './mathLivePreview'
+import { bracketAutoPairEnabled } from './autoPairPrefs'
 
 function context(view: EditorView, from: number, to: number) {
   if (!view.editable || view.composing || from !== to) return null
@@ -81,6 +82,8 @@ const BRACKET_CLOSERS = new Set(Object.values(BRACKET_PAIRS))
 /** Insert a harmless probe character to recognize empty paired math as well as
  * populated formulas. Closed delimiters keep ordinary prose out of this path. */
 function mathBracketContext(view: EditorView, from: number, to: number) {
+  // 公式里的括号成对与正文 / 代码块共用「自动补全括号和引号」开关(`$` 的配对是公式自己的,不受它管)。
+  if (!bracketAutoPairEnabled()) return null
   const c = context(view, from, to)
   if (!c || /(?:^|[^\\])(?:\\\\)*\\$/.test(c.left)) return null
   const probe = c.text.slice(0, c.offset) + 'x' + c.text.slice(c.offset)

@@ -94,7 +94,7 @@ describe('正文括号成对(K11 / K12d / K12e / K12h)', () => {
     expect(snap(v)[0]).toBe(opened)
     type(v, 'x')
     expect(snap(v)[0]).toBe(typed)
-    expect(b!.md()).toBe(md)
+    expect(b!.saved()).toBe(md)
   })
   it('双链打完 `]]` 跨过两个闭合,光标在链接后', async () => {
     const v = await boot('see x')
@@ -179,6 +179,13 @@ describe('不该配的地方', () => {
     type(v, '(')
     expect(snap(v)[0]).toBe("$f'()$")
   })
+  it('开关关掉时公式里的括号也不配(`$` 的配对不受影响)', async () => {
+    const v = await boot('$f$')
+    localStorage.setItem('amadeus.notes.codeAutoPair', '0')
+    caretAt(v, 'f')
+    type(v, '(')
+    expect(snap(v)[0]).toBe('$f($')
+  })
   it('代码块里正文配对不接手', async () => {
     const v = await boot('```\nx\n```')
     caretAt(v, 'x')
@@ -256,7 +263,8 @@ describe('选中后敲 Markdown 符号(K13 / K13b / K13c)', () => {
     type(v, '[')
     select(v, 'more')
     type(v, '%')
-    expect(b!.md()).toBe('=hello= $world$ [there] %more%\n')
+    expect(b!.saved()).toBe('=hello= $world$ [there] %more%\n') // `[词]` 不带反斜杠只在 v4 整篇落盘(bracketEscape)
+    expect(b!.md()).toBe('=hello= $world$ \\[there] %more%\n')
   })
   it('开关关掉:照旧替换选区;括号包裹不受这个开关管', async () => {
     const v = await boot('hello world')

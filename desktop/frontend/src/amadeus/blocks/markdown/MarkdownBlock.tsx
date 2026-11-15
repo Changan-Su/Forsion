@@ -255,11 +255,12 @@ export function stampedFileName(kind: string): string {
  *  行首 `==高亮==` 被转义成 `\==`(setext 防护过宽,I-17;同在 tagEscape.ts)。
  *  markdownUpdated 监听器与 UnifiedPage.serializeNow(flush 前同步快照)都必须走这里 ——
  *  Codex 终审 P0:serializeNow 曾绕过本链,快打字后立刻改名会把 \[\[ 持久化成死链。 */
-export function normalizeSerializedMd(markdown: string, opts: { keepBrackets?: boolean } = {}): string {
+export function normalizeSerializedMd(markdown: string, opts: { literalBrackets?: boolean } = {}): string {
   // restoreEscapeSentinels 必须在最后:用户写的转义(D-11)以占位穿过上面这串反转义,再换回 `\`(见 ./literalEscape)。
-  // unescapeLiteralBrackets:成对的字面 `[词]` 不带反斜杠落盘(K13b / K12h);文档里有链接定义时由调用方关掉(见 ./bracketEscape)。
+  // literalBrackets:成对的字面 `[词]` 不带反斜杠落盘(K13b / K12h,见 ./bracketEscape)。要看得见整篇有没有链接定义才安全,
+  // 所以只由 v4 整篇落盘(serializeUnified)打开;单块(v3)、剪贴板、片段这些只是文件的一部分,照旧保留 `\[`。
   const urls = normalizeUrlLiterals(unescapeWikiOutsideFences(markdown))
-  const brackets = opts.keepBrackets ? urls : unescapeLiteralBrackets(urls)
+  const brackets = opts.literalBrackets ? unescapeLiteralBrackets(urls) : urls
   return restoreEscapeSentinels(stripEmptyLineBr(unescapeCalloutToken(unescapeMathSource(unescapeTagAtLineStart(unescapeHighlightAtLineStart(brackets))))))
 }
 /** v4 整篇落盘(D-18):没被编辑的顶层块逐字写回原文,其余走序列化 + normalizeSerializedMd(见 ./verbatim)。
@@ -267,8 +268,8 @@ export function normalizeSerializedMd(markdown: string, opts: { keepBrackets?: b
  *  「只是规范化了一下」就会被判成用户改动,回灌时凭空出冲突副本。 */
 export function serializeUnified(ctx: Ctx, doc: ProseNode): string {
   // 逐字回填的块在序列化串里只是占位,串里看不到那里的链接定义 —— 按文档查,有就整篇保留 `\[`(见 ./bracketEscape)。
-  const keepBrackets = hasRefDefinition(doc)
-  return serializeForSave(ctx, doc, (md) => normalizeSerializedMd(md, { keepBrackets }))
+  const literalBrackets = !hasRefDefinition(doc)
+  return serializeForSave(ctx, doc, (md) => normalizeSerializedMd(md, { literalBrackets }))
 }
 /** 块内片段(切块切出的后半段 / 剪贴板结构化复制)的序列化结果 → markdown。
  *  stripEmptyLineBr:空段落别落成 `<br />`(切块切出的那半段常以空段落打头,否则新块开头凭空多一个);
