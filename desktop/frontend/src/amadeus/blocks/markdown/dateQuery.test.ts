@@ -136,3 +136,18 @@ describe('dateCandidates', () => {
     expect(parseMdMarks(`- [ ] 吃药 ${remind.insert}`, 'n.md', 'n')[0]).toMatchObject({ remind: '2026-09-01T22:00', isTask: true })
   })
 })
+
+describe('dateCandidates · 任务行上的「不设日期」(2026-11-15)', () => {
+  const now = new Date(2026, 10, 18, 10, 40)
+  it('任务行、空查询:最前面是「不设日期」= @todo,后面照旧今天 / 明天 / 提醒', () => {
+    const c = dateCandidates('', now, { undatedTask: true })
+    expect(c[0]).toMatchObject({ insert: '@todo' })
+    expect(c.slice(1).map((x) => x.insert)).toEqual(dateCandidates('', now).map((x) => x.insert))
+  })
+  it('打 to / 不设 才给;打日期写法不给;不是任务行永远不给', () => {
+    expect(dateCandidates('to', now, { undatedTask: true })[0].insert).toBe('@todo')
+    expect(dateCandidates('不设', now, { undatedTask: true })[0].insert).toBe('@todo')
+    expect(dateCandidates('9/10', now, { undatedTask: true }).some((x) => x.insert === '@todo')).toBe(false)
+    expect(dateCandidates('', now).some((x) => x.insert === '@todo')).toBe(false)
+  })
+})

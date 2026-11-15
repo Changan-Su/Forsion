@@ -267,3 +267,49 @@ describe('parseMdMarks · 子任务与标签(2026-11-02)', () => {
     expect(parse(`- [ ] A @${D}\n# H\n  - [ ] x`).filter((m) => m.parentId)).toEqual([])
   })
 })
+
+describe('parseMdMarks · @todo 与标注框标题(2026-11-15)', () => {
+  it('任务行上的 @todo = 没日期但进清单:顶层任务、due 为空、文字里不留 @todo', () => {
+    const [m] = parse('- [ ] 买菜 @todo')
+    expect(m).toMatchObject({ isTask: true, checked: false, due: '', text: '买菜' })
+    expect(m.parentId).toBeUndefined()
+  })
+  it('@todo 下面缩进的方框照样收成它的子任务', () => {
+    const ms = parse('- [ ] 买菜 @todo\n  - [ ] 鸡蛋')
+    expect(ms.map((m) => [m.text, !!m.parentId])).toEqual([['买菜', false], ['鸡蛋', true]])
+  })
+  it('普通行、标题行上的 @todo 不算;邮箱形态、代码里的不算', () => {
+    expect(parse('买菜 @todo')).toEqual([])
+    expect(parse('# 计划 @todo')).toEqual([])
+    expect(parse('- [ ] a foo@todo')).toEqual([])
+    expect(parse('- [ ] a `@todo`')).toEqual([])
+  })
+  it('日期和 @todo 同时写:日期为准,@todo 也从文字里剥掉', () => {
+    expect(parse(`- [ ] 买菜 @todo @${D}`)[0]).toMatchObject({ due: D, text: '买菜' })
+  })
+  it('标注框 / 折叠块标题带日期:文字里去掉 [!type]± 记号(以及其后的 ##)', () => {
+    const ms = parse(`> [!fold]- 周会 @${DT}\n> 正文\n\n> [!note]+ 读书会 @${D}\n\n> [!fold]+## 复盘 @${D}`)
+    expect(ms.map((m) => [m.text, m.isTask])).toEqual([['周会', false], ['读书会', false], ['复盘', false]])
+  })
+  it('折叠块里面写的待办照常算', () => {
+    expect(parse(`> [!fold]- 周会\n> - [ ] 准备材料 @${D}`)[0]).toMatchObject({ isTask: true, text: '准备材料', due: D })
+  })
+})
+
+describe('withDue · @todo(2026-11-15)', () => {
+  it('给 @todo 任务设日期:@todo 就地换成日期;设回空串:日期换回 @todo', () => {
+    expect(withDue('- [ ] 买菜 @todo', D)).toBe(`- [ ] 买菜 @${D}`)
+    expect(withDue(`- [ ] 买菜 @${D}`, '')).toBe('- [ ] 买菜 @todo')
+    expect(withDue('> - [ ] 买菜 @todo #家里', DT)).toBe(`> - [ ] 买菜 @${DT} #家里`)
+  })
+  it('既没日期也没 @todo:不改;只有提醒时不允许清空', () => {
+    expect(withDue('- [ ] 买菜', D)).toBeNull()
+    expect(withDue('- [ ] 买菜', '')).toBeNull()
+    expect(withDue(`- [ ] 买菜 @remind:${DT}`, '')).toBeNull()
+  })
+  it('改完的那一行重新解析:日期 / @todo 来回切,文字不变', () => {
+    const a = withDue('- [ ] 买菜 @todo', D)!
+    expect(parse(a)[0]).toMatchObject({ due: D, text: '买菜' })
+    expect(parse(withDue(a, '')!)[0]).toMatchObject({ due: '', text: '买菜' })
+  })
+})

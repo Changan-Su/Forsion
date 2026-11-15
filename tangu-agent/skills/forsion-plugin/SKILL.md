@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.112.0
+  version: 1.113.0
   author: Forsion
   category: Forsion
 ---
@@ -978,6 +978,8 @@ ctx.calendar?.removeMember?.(db.path)           // 只撤成员,不删表
 - **`myCalendar`(2026-11-10 起的宿主;老宿主没有这个字段)= 个人日历 `human://CALENDAR.db` 读得怎样**:`'ok'` 读到了(文件还没建也算,第一次写会建;有日期列就在 `members` 里);
   `'absent'` 宿主确认没有它(老引擎 / 老 server、设备页的远端访客)→ 按没有个人日历的老规矩走;`'unknown'` 没读到(引擎没起、网络、5xx、文件坏了)、`'loading'` 还在读 →
   **读失败 ≠ 没有**:别因为成员里没它就新建别的表顶替,提示稍后再试、留住用户的输入,读到后宿主会再推一份快照。不认识的值当 `'unknown'`;字段缺失(老宿主)才退回自己的历史证据。
+- **.ics 日历的地点 / 说明 / 链接(2026-11-15+)**:只读的 `ics://` 成员在这本日历里有事件带这一项时,多出 `location`(text)/ `description`(text)/
+  `url`(url)三列,列名已按界面语言翻好;某个事件没有这一项时那一格不存在。老宿主只有 `name` / `date` 两列。`url` 是 ICS 原样,打开前自己判 http(s)。
 - 详情页那一行会多一项「读取 Agent 日程、.ics 订阅和另一侧库里的日历，管理 .ics 订阅并改日历设置」。
 
 **.ics 订阅管理**(同一档,2026-10-17 起):和宿主日历设置里的「订阅」是同一份列表(存在本机,不进库),改了宿主那边立刻看到。
@@ -1125,6 +1127,10 @@ ctx.databases?.mutate?.(db.path, (d) => {
 - **子任务与标签(2026-11-02+)**:带 `@` 的笔记任务下面缩进的 `- [ ]` 也进 `tasks`,带 `parentId`(父任务的 id;孙任务指向子任务,最多两层),
   没写 `@` 的 `due` 为 `''` —— 它不是独立待办,宿主自己的待办 / 日历不收,画在父项里;勾选照样 `update(id, { checked })`。每条任务带 `tags`
   (行里的 `#标签`)。表格行没有父子:子任务就写在那一行的记录正文里(`readBody` / `setBody`),标签存一列多选。
+- **没日期的笔记待办 `@todo`(2026-11-15+)**:笔记里写 `- [ ] 买菜 @todo` 的任务也进 `tasks`:`isTask: true`、`due: ''`、**没有 `parentId`**
+  = 要进待办清单、但还没排日期(放「未排期」那组;有 `parentId` 且 `due` 为 `''` 的仍是子任务)。`update(id, { due })` 设日期时宿主把 `@todo`
+  换成那个日期;`text` 里不带 `@todo`。`@todo` 只认任务行,普通行上写了不算。标注框 / 折叠块的标题行(`> [!fold]- 周会 @…`)从这天起
+  `text` 不再带开头的 `[!fold]-` 记号。旧宿主不给这种任务。
 - **记录正文 `readBody` / `setBody`(2026-11-02+)**:与表格「打开记录」、`mountRecord({ body })` 同一份 Markdown。`setBody` 是整份替换,
   读-改-写一律带 `expected: { body }`(当前对不上 → false,落盘重放再比一次),别盖掉用户刚在编辑器里打的字;只写可写的经典表。
 - **加列 `addColumn(path, { name, type })`(2026-11-02+)**:经典表加一列基础类型(`text` / `number` / `checkbox` / `date` / `select` /

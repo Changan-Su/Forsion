@@ -100,7 +100,7 @@ import { takeMachineSlash } from './machineSlash'
 import { applyTrigger, applyTypedTrigger, canAutoTriggerFromBlock, matchTrigger, posAtTextAnchor, slashRange, splitTail, textBeforeCursor, triggerAtCursor, unwrapAtStart, type Trigger } from './blockTriggers'
 import { fullWidthWikiRule, mentionSuggestPlugin, selectionToolbarPlugin, slashSuggestPlugin, toolbarDismissKey, wikiSuggestPlugin, type SelRect, type WikiQuery } from './wikiAutocomplete'
 import { InlineToolbar, TURN_LABEL_KEYS, type ToolbarAction, type ToolbarAiItem } from './InlineToolbar'
-import { Sparkles, Bot, BookOpen, MessageSquare } from 'lucide-react'
+import { Sparkles, Bot, BookOpen, MessageSquare, ListTodo, CalendarDays } from 'lucide-react'
 import { defaultSlashCategory, moveSlash, moveSlashCategory, slashCategory, SLASH_CATEGORIES, type SlashCategory } from './slashNavigation'
 import './slashCategories.css'
 import { useCapsuleSlide } from '../../../components/capsuleTabs'
@@ -178,6 +178,8 @@ registerMessages({
   'mdblock.slash.ul': { zh: '无序列表', en: 'Bulleted list' },
   'mdblock.slash.ol': { zh: '有序列表', en: 'Numbered list' },
   'mdblock.slash.todo': { zh: '待办', en: 'To-do list' },
+  'mdblock.slash.taskList': { zh: '加入待办清单', en: 'Add to task list' },
+  'mdblock.slash.event': { zh: '日程', en: 'Event' },
   'mdblock.slash.card': { zh: '卡片', en: 'Card' },
   'mdblock.slash.quote': { zh: '引用', en: 'Quote' },
   'mdblock.slash.fold': { zh: '折叠', en: 'Toggle' },
@@ -286,6 +288,10 @@ const AI_SENTINEL = '\u0000__amadeus_ai__'
 const INSTRUCTIONS_SENTINEL = '\u0000__amadeus_instructions__'
 const AGENT_TASK_SENTINEL = '\u0000__amadeus_agent_task__'
 const PROMPT_SENTINEL = '\u0000__amadeus_prompt__'
+// 2026-11-15 方案 ⑤:「加入待办清单」= 转成方框行再弹 @ 面板(选日期写 @日期,选「不设日期」写 @todo);
+// 「日程」= 只插 @ 弹日期面板(这一行只进日历)。只在 v4 统一实例里落地(UnifiedPage.applySlash)。
+const TASK_LIST_SENTINEL = '\u0000__amadeus_task_list__'
+const EVENT_SENTINEL = '\u0000__amadeus_event__'
 
 const NOTEVIEW_SENTINEL = '\u0000__amadeus_noteview__'
 
@@ -1553,6 +1559,19 @@ export function MilkdownInner({
     setMention(null)
   }
 
+  /** 光标在不在任务行(`- [ ]` 的 list_item)里:是的话 @ 面板多一条「不设日期」(写 `@todo`)。 */
+  const mentionInTask = (): boolean => {
+    let inTask = false
+    getInstance()?.action((ctx) => {
+      const { $from } = ctx.get(editorViewCtx).state.selection
+      for (let d = $from.depth; d > 0; d--) {
+        const n = $from.node(d)
+        if (n.type.name === 'list_item') { inTask = n.attrs.checked != null; break }
+      }
+    })
+    return inTask
+  }
+
   /** 日期候选:插入的是字面 `@2026-09-01T14:30`(见 dateQuery / mdMarks),不包 `[[ ]]`。
    *  ⚠️ 必须补一个尾随空格 —— 不然新插进去的 `@…` 立刻又满足 mention 的触发条件,面板当场再弹一次。 */
   const pickMentionRaw = (text: string): void => {
@@ -1791,6 +1810,7 @@ export function MilkdownInner({
           getFiles={getFiles}
           onPick={pickMention}
           onPickRaw={pickMentionRaw}
+          undatedTask={mentionInTask()}
           agents={unified && readTangu()?.submitDocumentTask && readTangu()?.hostExecution?.() !== false ? readTangu()?.agents?.() : undefined}
           onPickAgent={unified && readTangu()?.submitDocumentTask && readTangu()?.hostExecution?.() !== false ? pickMentionAgent : undefined}
           editorFocused={editorFocused}
@@ -2426,6 +2446,8 @@ export const SLASH_SENTINELS = {
   instructions: INSTRUCTIONS_SENTINEL,
   agentTask: AGENT_TASK_SENTINEL,
   prompt: PROMPT_SENTINEL,
+  taskList: TASK_LIST_SENTINEL,
+  event: EVENT_SENTINEL,
 } as const
 
 // 前缀型 scaffold → 块转换(slash 选中时经 SlashOps.transform 在编辑器内单事务完成,绝不新建块)。
@@ -2462,7 +2484,9 @@ export const SLASH_ITEMS: SlashSeed[] = [
   { key: 'h6', labelKey: 'mdblock.slash.h6', hint: '######', icon: <Heading6Icon />, groupKey: 'mdblock.group.basic', scaffold: '###### ', kw: 'h6 heading 标题 biaoti 六级' },
   { key: 'ul', labelKey: 'mdblock.slash.ul', hint: '-', icon: <BulletedListIcon />, groupKey: 'mdblock.group.list', scaffold: '- ', kw: 'ul bullet list 无序 列表 liebiao' },
   { key: 'ol', labelKey: 'mdblock.slash.ol', hint: '1.', icon: <NumberedListIcon />, groupKey: 'mdblock.group.list', scaffold: '1. ', kw: 'ol number list 有序 列表 编号' },
+  { key: 'task-list', labelKey: 'mdblock.slash.taskList', hint: '[ ] @', icon: <ListTodo size="1em" strokeWidth={1.6} />, groupKey: 'mdblock.group.list', scaffold: TASK_LIST_SENTINEL, kw: 'todo task list 加入待办清单 待办清单 进清单 daiban qingdan 任务 renwu', unifiedOnly: true },
   { key: 'todo', labelKey: 'mdblock.slash.todo', hint: '[ ]', icon: <CheckBoxCheckLinearIcon />, groupKey: 'mdblock.group.list', scaffold: '- [ ] ', kw: 'todo task check 待办 任务 复选框 daiban renwu' },
+  { key: 'event', labelKey: 'mdblock.slash.event', hint: '@', icon: <CalendarDays size="1em" strokeWidth={1.6} />, groupKey: 'mdblock.group.list', scaffold: EVENT_SENTINEL, kw: 'event schedule calendar date 日程 richeng 日历 rili 日期 安排', unifiedOnly: true },
   { key: 'card', labelKey: 'mdblock.slash.card', hint: 'Canvas', icon: <PageIcon />, groupKey: 'mdblock.group.basic', scaffold: CARD_SENTINEL, kw: 'card 卡片 node 节点 canvas 画布', unifiedOnly: true },
   { key: 'quote', labelKey: 'mdblock.slash.quote', hint: '|', icon: <QuoteIcon />, groupKey: 'mdblock.group.advanced', scaffold: '| ', kw: 'quote 引用 yinyong blockquote' },
   { key: 'fold', labelKey: 'mdblock.slash.fold', hint: '>', icon: <FoldIcon />, groupKey: 'mdblock.group.advanced', scaffold: '> ', kw: 'fold toggle 折叠 zhedie collapse 展开 详情 details' },
