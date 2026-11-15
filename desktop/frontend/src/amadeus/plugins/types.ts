@@ -2104,7 +2104,9 @@ export interface PluginContext {
     popover?(anchor: HTMLElement, opts: PluginPopoverOptions): { update(): void; dispose(): void }
     /** A vocabulary icon as a fresh `<svg>` element (2026-10-26+) for your own buttons — no more copied lucide paths.
      *  Follows `currentColor`; `size` in px (default 16). An unknown name returns null and is reported once in the
-     *  console. Feature-detect: `ctx.ui?.icon`. */
+     *  console. The first call for a given name returns the element already sized but still empty; its paths are
+     *  filled in a microtask, before the next paint (2026-11-15+). Append it as it is, and call `icon` again for each
+     *  copy instead of cloning or serializing it in the same tick. Feature-detect: `ctx.ui?.icon`. */
     icon?(name: PluginIconName | (string & {}), opts?: { size?: number }): SVGSVGElement | null
     /** The host's empty state in your own view (2026-10-26+) — the same one the built-in views and your list source's
      *  `empty` use. See PluginEmptyState. Feature-detect: `ctx.ui?.mountEmptyState`. */
