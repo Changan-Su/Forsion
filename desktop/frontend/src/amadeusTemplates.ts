@@ -8,7 +8,10 @@
  *    unified/lifecycle 的 `insertMarkdown` 接缝插在光标处(空块由 UnifiedPage 的 insertMd
  *    原地替换,「首块填进空块」的语义在那边免费拿到)。 */
 import { amadeus } from '@amadeus/api'
-import { birthNoteFile, noteOf, usePageStore } from '@amadeus/store/pageStore'
+import { activePageScope, birthNoteFile, noteOf, usePageStore } from '@amadeus/store/pageStore'
+import { compile, parsePageSource } from '@amadeus-shared/compiler'
+import { hasTemplateProcessors, normTemplateFolder, runTemplateProcessors } from '@amadeus/plugins/templateHooks'
+import type { TemplateFlowKind } from '@amadeus/plugins/types'
 import { unifiedFmNow, unifiedInsertMarkdown, unifiedPatchFm } from '@amadeus/unified/lifecycle'
 import { BLOCK_MARKER_RE } from '@amadeus-shared/compiler/markers'
 import { parseFmObject } from '@amadeus-shared/db/pageFrontmatter'
@@ -20,8 +23,11 @@ import { currentLocale } from './i18n'
 
 const ps = () => usePageStore.getState()
 
-export function listTemplates(): string[] {
-  return ps().pages.filter((p) => /^templates\//i.test(p))
+/** 模板库:`templates/` 下的笔记,加上插件声明的模板文件夹(ctx.registerTemplateProcessor 的 folders(),2026-11-16+;
+ *  由选择器异步取来传进来)。库外 / 带 `..` 的文件夹不认;同一篇只列一次。 */
+export function listTemplates(extraFolders: readonly string[] = []): string[] {
+  const extra = extraFolders.map(normTemplateFolder).filter((f): f is string => !!f).map((f) => `${f.toLowerCase()}/`)
+  return ps().pages.filter((p) => /^templates\//i.test(p) || extra.some((f) => p.toLowerCase().startsWith(f)))
 }
 
 /** 读库里的 Obsidian 核心插件配置(`.obsidian/<name>.json`);读不到 / 读不懂 = 空(一律回落缺省)。 */
@@ -95,10 +101,46 @@ async function patchIntoUnified(path: string, tplFm: Record<string, unknown>, tr
   return false
 }
 
-/** 把模板插进目标笔记。ctx.v4Path 在场 = 统一实例路由;否则走 v3 的块坐标。 */
-export async function insertTemplate(templatePath: string, ctx: TemplateCtx): Promise<void> {
-  const [page, cfg] = await Promise.all([amadeus.readPage(templatePath), obsidianCfg<ObsidianTemplatesCfg>('templates')])
+type TemplatePage = Awaited<ReturnType<typeof amadeus.readPage>>
+
+/** 按布局顺序摊平的块原文(不替换变量)+ fm:判断两份解析是不是同一份内容。 */
+const pageShape = (page: TemplatePage): string => JSON.stringify([page.manifest.fmExtra ?? '', page.manifest.root.children.flatMap((row) => row.columns.flatMap((col) => col.children.map((ref) => page.blocks[ref.ref]?.content ?? '')))])
+
+/** 读模板。有插件的模板处理器(ctx.registerTemplateProcessor)时,先把**原文**交给它们(宿主替换变量之前);
+ *  谁都没改 = 照旧 readPage(一字不差的老路)。某个处理器抛错 = null:这次插入作废(已提示),什么都不写。 */
+async function readTemplatePage(templatePath: string, targetPath: string, kind: TemplateFlowKind): Promise<TemplatePage | null> {
+  // readPage 先读:它是正典(v1 侧车 / v2 目录这类老格式在这一步迁成 v3 落盘),也照旧负责「缺文件就抛」。
+  const page = await amadeus.readPage(templatePath)
+  if (!hasTemplateProcessors()) return page
+  // 交给插件的「原文」= 盘上那份 —— 前提是它解析出来就是 readPage 那份;对不上(老格式没迁成等)就用正典重新编出来的源码。
+  const raw = await amadeus.readTextFile?.(templatePath)
+  const now = new Date().toISOString()
+  let source = raw
+  if (raw == null || pageShape(parsePageSource(templatePath, raw, now)) !== pageShape(page)) {
+    try {
+      source = compile(page.manifest, Object.fromEntries(Object.entries(page.blocks).map(([id, b]) => [id, b.content])))
+    } catch {
+      if (raw == null) return page // 编不出来又读不到原文(未来格式等):不交给插件,照旧插
+    }
+  }
+  if (source == null) return page
+  const r = await runTemplateProcessors(source, { templatePath, targetPath, kind })
+  if (!r.ok) return null
+  if (!r.changed) return page
+  return parsePageSource(templatePath, r.text, now) // 与 readPage 同一个解析(纯函数,不碰盘)
+}
+
+/** 把模板插进目标笔记。ctx.v4Path 在场 = 统一实例路由;否则走 v3 的块坐标。kind 告诉模板处理器是哪条流程。 */
+export async function insertTemplate(templatePath: string, ctx: TemplateCtx, kind: TemplateFlowKind = 'insert'): Promise<void> {
   const target = ctx.v4Path ?? noteOf(ps()) ?? ''
+  const root = ps().vaultRoot
+  const scope = activePageScope()
+  const [page, cfg] = await Promise.all([readTemplatePage(templatePath, target, kind), obsidianCfg<ObsidianTemplatesCfg>('templates')])
+  if (!page) return
+  // 插件的模板处理器可能等很久(弹框问用户):等的途中换了库 = 不插(同路径的笔记已是另一个库的);v3 那条还按块坐标写,
+  // 换了面板 / 换了笔记 / 那一块没了 = 不插,别把模板写进别的笔记的同号块(Codex 复核 P1)。
+  if (ps().vaultRoot !== root) return
+  if (!ctx.v4Path && (activePageScope() !== scope || (noteOf(ps()) ?? '') !== target || (ctx.afterId && !ps().blocks[ctx.afterId]))) return
   const contents = templateBlocks(page, target, cfg)
   // 模板自带的 frontmatter(G4-09):此前整段丢弃。v4 经实例的 fm 写口(unifiedPatchFm,与属性面板同一条外科写)合并。
   // fm 值里的变量与正文同一套规则替换(G4-10 templateVars:`{{date:fmt}}`、大小写 / 空白容忍、templates.json 缺省格式)。
@@ -119,7 +161,7 @@ export async function insertTemplate(templatePath: string, ctx: TemplateCtx): Pr
   if (!contents.length) return
   const st = ps()
   let rest = contents
-  if (ctx.emptyBlock && ctx.afterId) {
+  if (ctx.emptyBlock && ctx.afterId && !st.blocks[ctx.afterId]?.content.trim()) { // 等的途中那一块被打了字:不覆盖,改插在它后面
     st.setBlockContent(ctx.afterId, contents[0])
     rest = contents.slice(1)
   }
@@ -141,15 +183,15 @@ export async function openDailyNote(): Promise<void> {
   // (amadeus_page + 块标记),而「打开即升」默认开 → 路由当场把它交给 UnifiedPage,模板往
   // 交出去的 v3 store 里写,写完即被冲掉:日记建出来但一个字都没有(2026-08-21 真机实测)。
   // 别处刚建了同名(宿主仅新建交回现文)= 已存在,照常打开、不套模板;没建成(已提示)→ 不打开一篇不存在的笔记。
-  const born = await birthNoteFile(path)
+  // 有日记模板 → 照旧出生后套模板(模板处理器按 'daily' 跑);没有 → 这是一篇空的新笔记,先问插件(registerNoteBirth)要初始内容。
+  const tpl = dailyTemplatePath(ps().pages, daily)
+  const born = await birthNoteFile(path, tpl ? undefined : { ask: true })
   if (born === 'failed') return
   const existed = born === 'exists'
   if (!existed) await ps().refreshStructure()
   // 内部等就绪:v3 等 activePage,v4 等 unified 实例登记。focus:'body' = 进来就能打字(G4-06;新日记没套模板时同样要)。
   await openNote(path, { focus: 'body' })
-  if (existed) return
-  const tpl = dailyTemplatePath(ps().pages, daily)
-  if (!tpl) return
+  if (existed || !tpl) return
   // 模板读取失败(被删等)不影响日记本体。
-  await insertTemplate(tpl, { v4Path: path }).catch(() => { /* ignore */ })
+  await insertTemplate(tpl, { v4Path: path }, 'daily').catch(() => { /* ignore */ })
 }

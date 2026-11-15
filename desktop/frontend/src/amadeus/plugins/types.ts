@@ -1144,6 +1144,50 @@ export interface FileCreatorContribution {
   run(parentFolder: string): void | Promise<void>
 }
 
+/** Which host template flow is running (TemplateProcessorContribution.process, 2026-11-16+).
+ *  - `'insert'`: the user picked a template in the host template picker; it goes in at the cursor of `targetPath`.
+ *  - `'daily'`: today's daily note was just created and gets the daily-note template.
+ *  - `'new-note'`: reserved for a "new note from template" flow; this host does not emit it yet. */
+export type TemplateFlowKind = 'insert' | 'daily' | 'new-note'
+
+/** Hook into the host's own templates (ctx.registerTemplateProcessor, 2026-11-16+) instead of shipping a second
+ *  template picker. Older hosts lack it: `ctx.registerTemplateProcessor?.(…)`. */
+export interface TemplateProcessorContribution {
+  /** Unique within the plugin. Registering the same id again replaces the earlier processor. */
+  id: string
+  /** Shown to the user, e.g. "Templater". */
+  name: string | (() => string)
+  /** Extra vault-relative template folders listed in the host template picker, next to `templates/`.
+   *  Duplicates are merged; absolute paths and paths that leave the vault (`..`) are ignored. Asked each time the
+   *  picker opens; a call that throws or takes longer than 2 seconds adds nothing. */
+  folders?(): string[] | Promise<string[]>
+  /** Runs before the host's own `{{date}}` / `{{time}}` / `{{title}}` substitution, on the template file's raw text
+   *  (frontmatter included). Processors run in registration order, each getting the previous one's output. Return the
+   *  processed text, or null to leave it unchanged. May prompt the user (no time limit). Throwing aborts that insert
+   *  with a host toast naming the plugin; nothing is written. */
+  process(source: string, info: { templatePath: string; targetPath: string; kind: TemplateFlowKind }): string | null | Promise<string | null>
+}
+
+/** Fill a brand-new empty note before it is written (ctx.registerNoteBirth, 2026-11-16+). Older hosts lack it:
+ *  `ctx.registerNoteBirth?.(…)`; there, fall back to `ctx.app.onVaultEvent` + `writeFile` and expect the open editor
+ *  not to see your write (its next save keeps the user's text and moves yours into a conflict copy). */
+export interface NoteBirthContribution {
+  /** Unique within the plugin. Registering the same id again replaces the earlier provider. */
+  id: string
+  /** Asked before the host writes a new empty note created by the user: "New note" (sidebar, command, ⌘N, new-tab
+   *  page), "New note" in a folder, a child note, creating a note from the quick switcher, confirming an unresolved
+   *  [[link]], and today's daily note when no daily-note template is set. Not asked for files written by plugins,
+   *  rows added to a notes database, or files arriving via sync.
+   *  Return the note's initial Markdown, or null to pass. Providers are asked one at a time in registration order;
+   *  the first non-null answer is written as the note's content in the same write that creates it, so the editor
+   *  opens on it. May prompt the user: after a moment the host shows "<plugin> is preparing this note…" with
+   *  Cancel. Cancel, or no answer within 10 minutes, creates the note empty as before; a provider that throws is
+   *  skipped (with a toast naming the plugin). `signal` aborts once the host stops waiting for you (Cancel, time-out,
+   *  or the note was created): close your prompt then; a late answer is ignored. The note itself is never lost or
+   *  blocked. While one ask is pending, another new note (including one your `initial` creates) is born empty. */
+  initial(info: { path: string; folder: string; signal?: AbortSignal }): string | null | Promise<string | null>
+}
+
 /** An inline renderer for a `![[target]]` transclusion whose target this plugin recognises (typically its
  *  own file type). Consulted before the built-in file-card fallback, so `![[x.mindmap.md]]` renders as a
  *  live preview instead of a generic "open file" card. */
@@ -1919,6 +1963,15 @@ export interface PluginContext {
   registerToolLabel?(def: ToolLabelContribution): void
   /** Contribute a "新建 …" entry into the file tree's right-click menu (root + folder). See FileCreatorContribution. */
   registerFileCreator(def: FileCreatorContribution): void
+  /** Hook into the host's template flows (2026-11-16+): run `process` on a template before the host's own variable
+   *  substitution (template picker insert, daily note), and list extra template folders in the host picker. Returns a
+   *  disposer; the host also removes it on disable / reload. Older hosts lack it: `ctx.registerTemplateProcessor?.(…)`.
+   *  See TemplateProcessorContribution. */
+  registerTemplateProcessor?(def: TemplateProcessorContribution): () => void
+  /** Give a brand-new empty note its initial content before the host writes it (2026-11-16+), e.g. folder templates.
+   *  Returns a disposer; the host also removes it on disable / reload. Older hosts lack it: `ctx.registerNoteBirth?.(…)`.
+   *  See NoteBirthContribution. */
+  registerNoteBirth?(def: NoteBirthContribution): () => void
   /** Open (or focus) one of this plugin's own registered views. Defaults to the main area;
    *  pass { location: 'left' | 'right' } to dock it into a sidebar (2026-08-25+, older hosts
    *  ignore the option and open in main), or 'bottom' for the native bottom panel (2026-10-02+).
