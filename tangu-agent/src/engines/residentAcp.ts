@@ -22,7 +22,7 @@ import {
   acpErrorText, applyEngineModel, chatResumeVerified, classifyResumeFailure, createAcpClient, HANDSHAKE_TIMEOUT_MS,
   mapAcpCommands, mapAcpConfigOptions, mapAcpModels, missingApiKeyRoute, modelNoApiKeyError, withTimeout, type AcpClientCtx, type AcpConfigSelection,
 } from './acpEngine.js';
-import { onResidentHostChange, residentHostFor, type ResidentConnection } from './residentHosts.js';
+import { notifyResidentHost, onResidentHostChange, residentHostFor, type ResidentConnection } from './residentHosts.js';
 import { createBridgeRelay, type BridgeRelay } from './bridgeRelay.js';
 
 /** 常驻进程上最多同时开着多少场 Forsion 的会话;超了关最久没用的(没在跑的)。 */
@@ -169,6 +169,7 @@ export class ResidentLink {
     }
     this.sessions.set(sessionId, { id: sessionId, cwd, key: state?.key ?? '', relay, route: null, sel: mapAcpConfigOptions(s?.configOptions), lastUsed: Date.now() });
     console.log(`[engine:${this.engineId}] resident session ${sessionId.slice(0, 8)}: held for the workbench${state ? '' : ' (no saved handoff)'}`);
+    notifyResidentHost(this.engineId, { type: 'held', engineSessionId: sessionId });
     void this.prune().catch(() => {});
     return 'resumed';
   }
@@ -296,6 +297,8 @@ export class ResidentLink {
           open = { id: resumeSessionId, cwd, key, relay, route: null, lastUsed: Date.now() };
           this.sessions.set(resumeSessionId, open);
           console.log(`[engine:${def.id}] resident session ${resumeSessionId.slice(0, 8)}: ${current ? 'reopened (handoff changed)' : 'resumed'}`);
+          // 工作台里开着这一场的页面:关掉重接之后它变成「会话不可用」,要重载才接得上(实测)。告诉插件
+          if (current) notifyResidentHost(this.engineId, { type: 'reopened', engineSessionId: resumeSessionId, sessionId: ctx.sessionId });
         }
         sessionId = resumeSessionId;
       } else {

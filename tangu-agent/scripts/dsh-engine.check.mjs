@@ -382,6 +382,7 @@ import { PassThrough } from 'node:stream';
 import { readFileSync } from 'node:fs';
 const cfg = JSON.parse(readFileSync(new URL('../resident.json', import.meta.url), 'utf8'));
 let cur = null, n = 0, started = 0;
+const events = [];
 function start() {
   const env = { ...cfg.env };
   if (!env.DEEPSEEK_API_KEY && process.env.DEEPSEEK_API_KEY) env.DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY;
@@ -404,8 +405,13 @@ for (const sig of ['SIGTERM', 'SIGINT']) process.once(sig, () => { if (cur) cur.
 export default {
   activate(ctx) {
     ctx.registerPlugin({ id: 'resident-dsh-check', name: 'Resident DSH (check)', description: 'check:dsh fixture', defaultEnabled: true });
-    ctx.registerResidentEngine({ engineId: 'dsh', connect: async () => { const c = cur || start(); return { id: c.id, input: c.child.stdin, output: c.output, closed: c.closed }; } });
-    ctx.registerScopedRoutes((r) => { r.get('/state', (_q, res) => res.json({ pid: cur ? cur.child.pid : null, started, dropped: cur ? cur.dropped : 0, web: !!(cur && cur.web) })); });
+    ctx.registerResidentEngine({ engineId: 'dsh', connect: async () => { const c = cur || start(); return { id: c.id, input: c.child.stdin, output: c.output, closed: c.closed }; },
+      onSession: (e) => { events.push(e.type); } });
+    ctx.registerScopedRoutes((r) => {
+      r.get('/state', (_q, res) => res.json({ pid: cur ? cur.child.pid : null, started, dropped: cur ? cur.dropped : 0, web: !!(cur && cur.web), events }));
+      // 扮「装了插件 / 崩了,后台 DSH 重启」:引擎不动,只杀进程;下一轮宿主该连上新起的那个、续上同一场
+      r.post('/restart', (_q, res) => { const c = cur; if (c) c.child.kill('SIGKILL'); res.json({ killed: !!c }); });
+    });
   },
   deactivate() { stop(); },
 };
@@ -850,10 +856,11 @@ const SCENARIOS = {
       L = engineLog().length; const n1 = stub.mark();
       stub.script([{ tool: 'mcp__forsion__forsion_skill', args: { name: 'res-probe' } }, { text: 'Read it.' }]);
       const b = await run(sid, 'Open the probe skill.', cfg, { modelId: JUDGE_MODEL });
-      const reqB = stub.since(n1); const pidsB = fusionPids(); const ps2 = await pointers(sid);
+      const reqB = stub.since(n1); const pidsB = fusionPids(); const ps2 = await pointers(sid); const stB = await pluginState();
       record('residentreopen', '常驻进程:交接内容变了(新记忆)才关掉重接,新说明带上新记忆;技能经 forsion_skill 读到;同一个进程、同一场会话', [
         ['这一轮跑完', b.done, b.error || ''],
         ['日志:因交接变了重接', /resident session [0-9a-f-]{8}: reopened \(handoff changed\)/.test(logSince(L))],
+        ['插件收到了「关掉重接」(工作台据此重载那一页)', (stB.events || []).includes('reopened'), JSON.stringify(stB.events)],
         ['新记忆在这一轮的系统提示里', sysText(reqB[0]).includes('RES-REM-71')],
         ['forsion_skill 回的是 SKILL.md 正文', !!reqB[1] && lastMsg(reqB[1]).includes(SKILL_BODY), clean(lastMsg(reqB[1])).slice(0, 160)],
         ['还是同一个进程', pidsB.length === 1 && pidsB[0] === pidsA[0], `${pidsA.join(',')} → ${pidsB.join(',')}`],
@@ -873,8 +880,24 @@ const SCENARIOS = {
         ['hold 回 open(本来就开着)', held.state === 'open', JSON.stringify(held)],
       ]);
 
+      // ③b 后台 DSH 自己重启了(装插件、崩了),引擎不动:下一轮连上新起的那个、续上同一场,说明照旧带上
+      const crashPid = fusionPids()[0];
+      await api(RESIDENT_ROUTE.replace(/state$/, 'restart'), { method: 'POST', body: '{}' });
+      await until(() => !fusionPids().includes(crashPid), 8000, 200);
+      L = engineLog().length; const n2b = stub.mark();
+      stub.script([{ text: 'New process.' }]);
+      const cb = await run(sid, 'Still there after DSH restarted?', cfg, { modelId: JUDGE_MODEL });
+      const reqCb = stub.since(n2b); const pidsCb = fusionPids(); const psCb = await pointers(sid); const stCb = await pluginState();
+      record('residentcrash', '常驻进程:后台 DSH 自己重启(引擎不动),下一轮连上新进程、续上同一场,人设照旧', [
+        ['这一轮跑完', cb.done, cb.error || ''],
+        ['旧进程没了、新进程一个', !pidsCb.includes(crashPid) && pidsCb.length === 1 && stCb.started === 2, `${crashPid} → ${pidsCb.join(',')},起过 ${stCb.started} 次`],
+        ['日志:续接(不是新建)', /resident session [0-9a-f-]{8}: resumed/.test(logSince(L)) && !/: new/.test(logSince(L))],
+        ['还是同一场', psCb.length === 4 && psCb.every((x) => x.ext === psCb[0].ext), psCb.map((x) => x.ext?.slice(0, 8)).join(' → ')],
+        ['人设和记忆在系统提示里', sysText(reqCb[0]).includes(PERSONA) && sysText(reqCb[0]).includes('RES-REM-71')],
+      ]);
+
       // ④ 引擎重启(Forsion 退出再开):插件起新进程;hold 照存下的那份接上;下一轮指纹对得上、不再重接
-      const oldPid = pidsA[0];
+      const oldPid = fusionPids()[0];
       await stopEngine(); await until(() => !fusionPids().includes(oldPid), 8000, 200);
       const oldGone = !fusionPids().includes(oldPid);
       await startEngine();
@@ -894,7 +917,8 @@ const SCENARIOS = {
         ['日志:会话一直开着(指纹对得上)', /resident session [0-9a-f-]{8}: kept open/.test(logSince(L))],
         ['人设和新记忆还在系统提示里', sysText(reqD[0]).includes(PERSONA) && sysText(reqD[0]).includes('RES-REM-71')],
         ['新进程只有一个', pidsD.length === 1 && pidsD[0] !== oldPid, pidsD.join(',')],
-        ['续的还是同一场', ps4.length === 4 && ps4.every((x) => x.ext === ps4[0].ext), ps4.map((x) => x.ext?.slice(0, 8)).join(' → ')],
+        ['续的还是同一场', ps4.length === 5 && ps4.every((x) => x.ext === ps4[0].ext), ps4.map((x) => x.ext?.slice(0, 8)).join(' → ')],
+        ['插件收到了「替工作台接上」', ((await pluginState()).events || []).includes('held')],
         ['hold 一场不存在的对话 → 404', /404/.test(wrongSid), wrongSid],
       ]);
 
@@ -909,7 +933,7 @@ const SCENARIOS = {
       record('residentfallback', '常驻进程:插件不在了照旧每轮起一个进程,续的还是同一场;人设改走指令目录', [
         ['这一轮跑完', e.done, e.error || ''],
         ['没有常驻进程', fusionPids().length === 0, fusionPids().join(',')],
-        ['续的还是同一场', ps5.length === 5 && ps5[4].ext === ps5[0].ext, ps5.map((x) => x.ext?.slice(0, 8)).join(' → ')],
+        ['续的还是同一场', ps5.length === 6 && ps5[5].ext === ps5[0].ext, ps5.map((x) => x.ext?.slice(0, 8)).join(' → ')],
         ['人设进了模型的上下文', JSON.stringify(reqE[0] || {}).includes(PERSONA)],
         ['写了指令目录', existsSync(homeDir)],
       ]);

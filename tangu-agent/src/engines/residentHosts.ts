@@ -22,11 +22,26 @@ export interface ResidentConnection {
   closed: Promise<void>;
 }
 
+/** 宿主对一场常驻会话做了什么(插件据此刷新工作台里开着的那一场)。 */
+export interface ResidentSessionEvent {
+  /** reopened = 交接内容变了,宿主关掉重接(网页界面里开着这一场的页面要重载才接得上);held = 替工作台接上了。 */
+  type: 'reopened' | 'held';
+  /** 引擎那边的会话 id。 */
+  engineSessionId: string;
+  /** Forsion 这边的对话 id(held 时没有)。 */
+  sessionId?: string;
+}
+
 export interface ResidentEngineHost {
   /** 替哪个引擎(引擎清单里的 id,如 'dsh')。 */
   engineId: string;
-  /** 拿到在跑的那个进程;起不来 / 现在不该用(插件对不上上游新版、被停用)→ null,这一轮照旧每轮起一个进程。 */
+  /**
+   * 拿到在跑的那个进程。回 null = 这一轮照旧每轮起一个进程,所以**只在进程确实没在跑时**回 null(插件对不上上游新版、被停用、
+   * 起不来):两个进程开在同一份引擎目录上会互相挡住同一场会话。
+   */
   connect(signal?: AbortSignal): Promise<ResidentConnection | null>;
+  /** 可选:宿主关掉重接 / 替工作台接上一场会话时告诉插件。抛错只告警。 */
+  onSession?(event: ResidentSessionEvent): void;
 }
 
 const hosts = new Map<string, { owner: string; host: ResidentEngineHost }>();
@@ -55,4 +70,11 @@ export function residentHostFor(engineId: string): { owner: string; host: Reside
 export function onResidentHostChange(cb: (engineId: string) => void): () => void {
   listeners.add(cb);
   return () => { listeners.delete(cb); };
+}
+
+/** 告诉登记这个引擎的插件(没有就算了)。 */
+export function notifyResidentHost(engineId: string, event: ResidentSessionEvent): void {
+  const reg = hosts.get(engineId);
+  if (!reg?.host.onSession) return;
+  try { reg.host.onSession(event); } catch (e: any) { console.warn(`[engine:${engineId}] resident host onSession threw: ${e?.message || e}`); }
 }

@@ -79,6 +79,8 @@ ctx.ui.mountControl(el, { type: 'segmented' | 'select', value, options, onChange
 ctx.ui.mountWebCard(el, { name, status, address, note, thumbnail, actions, menu })
 ```
 
+- When your plugin runs a local service with its own web UI (the DSH fusion plugin's workbench), `ctx.ui.mountWebSurface(el, { url })` (2026-11-15+, desktop only) puts that page in your view: a top-level page Forsion owns, so the service's own sign-in cookie works. It loads only loopback addresses, keeps cookies in your plugin's own partition, moves only within its own origin and gets no Forsion API.
+- For agents that run on an external engine, `ctx.registerEngineHarness?.({ engineId, rows, sessionActions })` (2026-11-15+, desktop) adds rows to the Harness card (runtime, update channel and so on) and items to those conversations' right-click menu; Forsion itself draws only "Runs on".
 - `ctx.ui.setViewHead(el, { title })` gives a view its head row (title on the left, buttons on the right) without needing view modes first.
 - Add stylesheets with `ctx.addStyle(css)`; the host removes them on disable and reload.
 - `ctx.i18n.define({ zh, en })` returns `t(key, vars)`, and list-source titles, action names, view titles, menus, dialogs, controls and empty states take `() => t('key')` or `{ zh, en }`, so what the host draws for you is recomputed when the user switches language (a plain string is still frozen when you register it).
