@@ -356,7 +356,10 @@ async function lineStart(browser) {
     { name: 'S10a 第二行行首敲 `## ` = 只有这一行成标题,后面的行成标题下的正文', seed: 'a\nb\nc\n', at: 'b', start: true, steps: ['t:## '], want: 'a\n## b\nc\n' },
     { name: 'S10b 第一行行首敲 `## `(后面还有行)= 只有第一行成标题', seed: 'b\nc\n', at: 'b', start: true, steps: ['t:## '], want: '## b\nc\n' },
   ]
+  // --case=S1,S3 只跑名字以这些开头的(负对照时用)
+  const pick = (n) => !arg('case') || arg('case').split(',').some((k) => n.startsWith(k))
   for (const c of cases) {
+    if (!pick(c.name)) continue
     const p = await open(browser, c.seed)
     await caretAt(p, c.at, !!c.start)
     await runSteps(p, c.steps)
@@ -374,7 +377,7 @@ async function lineStart(browser) {
     await p.closeAll()
   }
   // 7 第二行行首 #tag:照样渲染成标签、落盘不转义
-  {
+  if (pick('S7')) {
     const p = await open(browser, 'a\n#tag x\n')
     await caretAt(p, 'a')
     await sleep(150)
@@ -383,7 +386,7 @@ async function lineStart(browser) {
     record('S7a 盘上第二行行首 `#tag` = 标签(光标不在那一行时)', pills === 'tag' && md === 'a\n#tag x\n', JSON.stringify({ pills, md }))
     await p.closeAll()
   }
-  {
+  if (pick('S7')) {
     const p = await open(browser, 'a\n')
     await caretAt(p, 'a')
     await runSteps(p, ['k:Enter', 't:#tag x'])
@@ -395,7 +398,7 @@ async function lineStart(browser) {
     await p.closeAll()
   }
   // 8 结构前缀源码层:列表项里一段两行,第二行行首 ← 只是回到上一行行尾,不打开 `- ` 源码;第一行行首 ← 才打开(对照)
-  {
+  if (pick('S8')) {
     const p = await open(browser, '- a\n  b\n')
     await caretAt(p, 'b', true)
     await p.keyboard.press('ArrowLeft')
