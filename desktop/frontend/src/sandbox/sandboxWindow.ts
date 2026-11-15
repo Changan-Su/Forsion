@@ -332,7 +332,7 @@ async function command(pluginId: string, id: string, args: unknown, allowPending
     const have = usePluginStore.getState().commands.filter((c) => c.pluginId === pluginId).map((c) => c.item.id)
     return { ok: false, error: `no command "${id}"; this plugin registered: ${have.join(', ') || 'none'}` }
   }
-  const run = (async () => { await (cmd.item.run as (a?: unknown) => unknown)(args && typeof args === 'object' ? args : undefined) })()
+  const run: Promise<{ ok: boolean; error?: string }> = (async () => { await (cmd.item.run as (a?: unknown) => unknown)(args && typeof args === 'object' ? args : undefined) })()
     .then(() => ({ ok: true }), (e: unknown) => ({ ok: false, error: e instanceof Error ? e.message : String(e) }))
   if (!allowPending) return run
   const first = await Promise.race([run, sleep(COMMAND_SETTLE_MS).then(() => null)])
