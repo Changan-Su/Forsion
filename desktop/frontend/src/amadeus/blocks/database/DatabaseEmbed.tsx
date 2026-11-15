@@ -85,6 +85,8 @@ import { formFields } from './formLogic'
 import { CHART_AGGS, CHART_KINDS, chartAggOf, chartKindOf } from '@amadeus-shared/dashboardData'
 import { autoColumnWidths, type AutoWidthSample } from './autoColumnWidth'
 import { openAppRefInner } from '../../../components/appRefs'
+import { firstBodyImage } from './galleryCover'
+import { resolveFileLink } from '../../lib/vaultFiles'
 
 registerMessages({
   // 列类型 / 视图类型 / 聚合:模块级表只存**键**,文案在渲染时求值(写死字面量会冻在模块加载那一刻)
@@ -1000,13 +1002,22 @@ function DbTable({ dbRef, db: dbProp, pagePath, initialView, onViewChange, memor
   const dbFiles = useMemo(() => allFiles.filter((f) => /\.db$/i.test(f) && f !== dbPath), [allFiles, dbPath])
   /** 目标表列清单(lookup 配置用;目标库没加载完给空)。 */
   const targetColsOf = (refDb: string): DbColumn[] => useDbStore.getState().entries[refDb]?.data?.columns ?? []
-  /** 画廊封面:首个附件列里**第一张图片**(仅图片扩展名;URL 直用)。
+  /** 画廊封面:首个附件列里**第一张图片**(仅图片扩展名;URL 直用);附件列里没有图 → 取行正文里的第一张图
+   *  (`![[库内路径]]` 按双链文件口径解析,`![](url)` 同附件格:URL 直用、相对路径按 .db 所在目录)。
    *  ⚠️ 走 fileRefs 而不是 `typeof raw === 'string'`:多附件格是数组,老写法会让这类行的封面整个消失。 */
   const coverOf = (r: DbRow): ReactNode => {
     const fc = visCols.find((c) => c.type === 'file')
     const raw = fc ? fileRefs(r.cells[fc.id]).find((x) => IMG_EXT_RE.test(x.split('?')[0])) : undefined
-    if (!raw) return null
-    return <img className="amx-db-card-cover" src={fileSrc(dbPath, raw)} alt="" loading="lazy" />
+    const src = raw ? fileSrc(dbPath, raw) : bodyCoverSrc(r.body)
+    if (!src) return null
+    return <img className="amx-db-card-cover" src={src} alt="" loading="lazy" />
+  }
+  const bodyCoverSrc = (body: string | undefined): string | null => {
+    const img = firstBodyImage(body)
+    if (!img) return null
+    if (img.kind === 'md') return fileSrc(dbPath, img.src)
+    const hit = resolveFileLink(img.target, allFiles, dbPath)
+    return hit ? toAssetUrl(hit) : img.target.includes('/') ? toAssetUrl(img.target) : null // 文件清单还没载入时,带路径的照路径取
   }
   /** 弹层落点 = 按钮下沿(放不下时 OverlayAt 自会翻到 anchorTop=按钮上沿之上)。
    *  ⚠️别在这里按「估算高度」预夹 y:预夹过的 y 会被当成真锚点再翻一次面(codex#2)。 */
