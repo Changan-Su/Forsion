@@ -98,6 +98,20 @@ const MARK_RE = new RegExp(
 /** `@todo`:没日期、但这条任务要进待办清单(方案 2026-11-15 ⑤)。前后闸与日期标记同口径;只在任务行上生效。 */
 const TODO_RE = new RegExp(String.raw`(?<!${AT_BLOCKED_BEFORE.source})@todo(?=$|[\s,;.。，、；)）\]】!?！？])`, 'gi')
 export const TODO_MARK = '@todo'
+/** 一行里**算数**的 `@todo`:行内代码(`` `…` ``)里的不算 —— 解析与回写共用,
+ *  否则排期会把代码里的示例改成日期、真正的行尾记号反而原样留着(Codex 评审 P1)。 */
+function todoHits(s: string): Array<{ index: number; len: number }> {
+  const code: Array<[number, number]> = []
+  for (const c of s.matchAll(/(`+)[^`]*?\1/g)) code.push([c.index!, c.index! + c[0].length])
+  const out: Array<{ index: number; len: number }> = []
+  TODO_RE.lastIndex = 0
+  let m: RegExpExecArray | null
+  while ((m = TODO_RE.exec(s))) {
+    const i = m.index
+    if (!code.some(([a, b]) => i >= a && i < b)) out.push({ index: i, len: m[0].length })
+  }
+  return out
+}
 /** 标注框 / 折叠块标题行开头的 `[!type]` / `[!type]-` / `[!type]+` 记号:只是容器语法,不是标题文字。 */
 const CALLOUT_RE = /^\[![\w-]+\][+-]?\s*/
 
@@ -132,9 +146,8 @@ export function withDue(raw: string, next: string): string | null {
   // 没日期的 `@todo` 任务设上日期:`@todo` 就地换成 `@日期`(2026-11-15 ⑤)
   if (!hit) {
     if (!next) return null
-    TODO_RE.lastIndex = 0
-    const t = TODO_RE.exec(raw)
-    return t ? raw.slice(0, t.index) + `@${next}` + raw.slice(t.index + t[0].length) : null
+    const t = todoHits(raw).at(-1) // 记号写在行尾;多个时改最后一个
+    return t ? raw.slice(0, t.index) + `@${next}` + raw.slice(t.index + t.len) : null
   }
   // 清掉日期(撤销「给 @todo 设日期」)= 换回 `@todo`;只清提醒那条不做(提醒兼作日期,清了就不是标记行了)
   if (!next) return hit.remind ? null : raw.slice(0, hit.index) + `${hit.whole.startsWith('@') ? '' : hit.whole[0]}${TODO_MARK}` + raw.slice(hit.index + hit.whole.length)
@@ -208,9 +221,9 @@ export function extractMarks(s: string): Marks | null {
     at = mk.index + mk.whole.length
   }
   rest += s.slice(at)
-  TODO_RE.lastIndex = 0
-  const todo = TODO_RE.test(rest)
-  if (todo) rest = rest.replace(TODO_RE, ' ')
+  const hits = todoHits(rest)
+  const todo = hits.length > 0
+  for (const h of [...hits].reverse()) rest = rest.slice(0, h.index) + ' ' + rest.slice(h.index + h.len)
   if (!due && !remind && !todo) return null
   return { due: due || remind, remind: remind || undefined, ...(todo ? { todo: true } : {}), rest: rest.replace(/\s+/g, ' ').trim() }
 }

@@ -302,6 +302,10 @@ describe('withDue · @todo(2026-11-15)', () => {
     expect(withDue(`- [ ] 买菜 @${D}`, '')).toBe('- [ ] 买菜 @todo')
     expect(withDue('> - [ ] 买菜 @todo #家里', DT)).toBe(`> - [ ] 买菜 @${DT} #家里`)
   })
+  it('行内代码里的 @todo 不动,改的是真正的记号(Codex 评审 P1)', () => {
+    expect(withDue('- [ ] 说明 `@todo 示例` @todo', D)).toBe(`- [ ] 说明 \`@todo 示例\` @${D}`)
+    expect(withDue('- [ ] 说明 `@todo 示例`', D)).toBeNull()
+  })
   it('既没日期也没 @todo:不改;只有提醒时不允许清空', () => {
     expect(withDue('- [ ] 买菜', D)).toBeNull()
     expect(withDue('- [ ] 买菜', '')).toBeNull()

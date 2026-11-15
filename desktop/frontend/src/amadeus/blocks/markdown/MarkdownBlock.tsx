@@ -1566,7 +1566,8 @@ export function MilkdownInner({
       const { $from } = ctx.get(editorViewCtx).state.selection
       for (let d = $from.depth; d > 0; d--) {
         const n = $from.node(d)
-        if (n.type.name === 'list_item') { inTask = n.attrs.checked != null; break }
+        // 只认任务那一行(列表项的第一段);续段里的 `@todo` 解析器按普通行算,不进清单(Codex 评审 P2)
+        if (n.type.name === 'list_item') { inTask = n.attrs.checked != null && $from.index(d) === 0; break }
       }
     })
     return inTask
