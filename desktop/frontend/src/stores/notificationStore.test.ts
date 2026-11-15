@@ -94,6 +94,30 @@ describe('notificationStore', () => {
     expect(items[0].count).toBe(2)
   })
 
+  it('replace:同 key 的后一条整条顶掉前一条 —— 不出 ×N,标题 / 按钮 / 停留 / 常驻都换成新的,停留从顶替那一刻重算', () => {
+    const run = (): void => {}
+    const a = notifyApp({ text: '乙组：第一条', title: '乙组', dedupeKey: 'p', replace: true, action: { label: '打开', run }, durationMs: 8000 })
+    vi.advanceTimersByTime(3000)
+    const b = notifyApp({ text: '丙组：第二条', title: '丙组', dedupeKey: 'p', replace: true, action: undefined, sticky: false })
+    expect(b).toBe(a) // 原地换:同一张卡,不先滑走再滑进
+    const [n] = useNotifications.getState().items
+    expect(n).toMatchObject({ text: '丙组：第二条', title: '丙组', count: 1, sticky: false })
+    expect(n.action).toBeUndefined()
+    expect(n.durationMs).toBeUndefined() // 前一条的 8 秒不沿用:这一条没按钮,按 info 缺省 5 秒
+    vi.advanceTimersByTime(4900)
+    expect(useNotifications.getState().items).toHaveLength(1)
+    vi.advanceTimersByTime(200)
+    expect(useNotifications.getState().items).toHaveLength(0)
+    // 没给标题的那一条不沿用前一条的标题
+    notifyApp({ text: 'x', title: '旧标题', dedupeKey: 'q', replace: true })
+    notifyApp({ text: 'y', dedupeKey: 'q', replace: true })
+    expect(useNotifications.getState().items[0]).toMatchObject({ text: 'y', title: undefined, count: 1 })
+    // 前一条常驻、这一条不常驻:跟这一条
+    notifyApp({ text: 's1', dedupeKey: 's', replace: true, sticky: true })
+    notifyApp({ text: 's2', dedupeKey: 's', replace: true })
+    expect(useNotifications.getState().items.find((i) => i.dedupeKey === 's')).toMatchObject({ text: 's2', sticky: false, count: 1 })
+  })
+
   it('settle:原地换成结果,计数回 1、拿掉动作钮', () => {
     const run = (): void => {}
     const a = notifyApp({ text: '已删除', dedupeKey: 'u', action: { label: '撤销', run } })
@@ -154,6 +178,54 @@ describe('notificationStore', () => {
       notifyApp({ text: 'unseen', title: 'Inbox', event: 'inbox.message' })
       notifyApp({ text: 'untyped' })
       expect(osNotify.mock.calls).toEqual([['Inbox', 'unseen', { event: 'inbox.message' }], ['Forsion', 'untyped', { event: 'system.generic' }]])
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('replace 顶替也跟发系统通知(在后台时上一张还停着又来一件,照样有横幅;排队中的那张被顶替也算);宿主自己的合并不重发;门控一条不少', () => {
+    const os = vi.fn()
+    vi.stubGlobal('window', { tangu: { notify: os } })
+    vi.stubGlobal('document', { hasFocus: () => true, visibilityState: 'hidden' }) // 安卓退到后台:有焦点、看不见
+    try {
+      const key = 'plugin:biz:phone'
+      notifyApp({ text: '乙组：第一条', title: '乙组', event: 'plugin:biz', sourceLabel: '商业版', dedupeKey: key, replace: true })
+      notifyApp({ text: '丙组：第二条', event: 'plugin:biz', sourceLabel: '商业版', dedupeKey: key, replace: true })
+      expect(useNotifications.getState().items).toHaveLength(1)
+      expect(os.mock.calls).toEqual([['乙组', '乙组：第一条', { event: 'plugin:biz' }], ['商业版', '丙组：第二条', { event: 'plugin:biz' }]])
+      // 排队中的那张:先占满同屏 4 条,第 5 条进队列,再顶替它
+      for (const k of ['a', 'b', 'c']) notifyApp({ text: k, dedupeKey: `x:${k}` })
+      notifyApp({ text: '排队的', dedupeKey: 'plugin:biz:queued', replace: true })
+      expect(useNotifications.getState().queue.map((n) => n.text)).toEqual(['排队的'])
+      os.mockClear()
+      notifyApp({ text: '顶替排队的', title: 'Q', dedupeKey: 'plugin:biz:queued', replace: true })
+      expect(useNotifications.getState().queue.map((n) => n.text)).toEqual(['顶替排队的'])
+      expect(os.mock.calls).toEqual([['Q', '顶替排队的', { event: 'system.generic' }]])
+      // 宿主自己的去重合并(不带 replace):计数,不重发
+      useNotifications.getState().dismissAll()
+      os.mockClear()
+      notifyApp({ text: '同步失败', dedupeKey: 'sync.error:x' })
+      notifyApp({ text: '同步失败', dedupeKey: 'sync.error:x' })
+      expect(useNotifications.getState().items[0].count).toBe(2)
+      expect(os).toHaveBeenCalledTimes(1)
+      // 门控:前台(有焦点且看得见)不发 —— 日历「已完成 · 撤销」、行内补全的开关提示这类带 key 的前台即时反馈靠的就是这一条
+      os.mockClear()
+      vi.stubGlobal('document', { hasFocus: () => true, visibilityState: 'visible' })
+      notifyApp({ text: '已完成', event: 'plugin:cal', dedupeKey: 'plugin:cal:todo-completed', replace: true })
+      notifyApp({ text: '又完成一个', event: 'plugin:cal', dedupeKey: 'plugin:cal:todo-completed', replace: true })
+      expect(os).not.toHaveBeenCalled()
+      // inAppOnly / receipt / 系统通知开关关了:顶替时也不发
+      vi.stubGlobal('document', { hasFocus: () => false, visibilityState: 'visible' })
+      notifyApp({ text: 'i', dedupeKey: 'plugin:cal:todo-completed', replace: true, inAppOnly: true })
+      notifyApp({ text: 'r', dedupeKey: 'plugin:cal:todo-completed', replace: true, receipt: true })
+      useNotifications.getState().setOsEnabled(false)
+      notifyApp({ text: 'o', dedupeKey: 'plugin:cal:todo-completed', replace: true })
+      expect(os).not.toHaveBeenCalled()
+      // 事件开关关了:整条不弹,也就不顶替、不发
+      useNotifications.setState((s) => ({ prefs: { ...s.prefs, osEnabled: true, events: { 'plugin:cal': false } } }))
+      expect(notifyApp({ text: 'muted', event: 'plugin:cal', dedupeKey: 'plugin:cal:todo-completed', replace: true })).toBeNull()
+      expect(useNotifications.getState().items.find((n) => n.dedupeKey === 'plugin:cal:todo-completed')?.text).toBe('o')
+      expect(os).not.toHaveBeenCalled()
     } finally {
       vi.unstubAllGlobals()
     }

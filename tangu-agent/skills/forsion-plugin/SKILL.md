@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.114.0
+  version: 1.116.0
   author: Forsion
   category: Forsion
 ---
@@ -29,7 +29,7 @@ metadata:
 Read the matching `references/` file before using an API listed below or following a section's reference:
 
 - [references/host-ui-mounts.md](references/host-ui-mounts.md): 可复用 UI 组件：ctx.ui.mountChatBox; 原生 Markdown 编辑器 ctx.ui.mountMarkdownEditor(`vault: true` 接当前库双链); 只读 Markdown ctx.ui.mountMarkdown; 原生悬浮目录 ctx.ui.mountFloatingToc; View modes: ctx.ui.setViewModes; Tooltips and motion tokens: ctx.ui.attachTooltip; Selection bar: ctx.ui.mountSelectionBar and registerSelectionAction scopes; Tool island: ctx.ui.mountToolIsland; Floats: ctx.ui.float; Host parts (dialogs, toolbar controls, menus, popovers, empty states, icons, view head, i18n, bare elements, failed mount card): ctx.ui.confirm / openDialog / mountControl / contextMenu / popover / mountEmptyState / mountWebCard / icon / setViewHead / mount, ctx.addStyle, ctx.i18n.define; Settings parts: ctx.ui.mountSettingsPage / mountSettingsItem; 白板层 ctx.ui.mountBoard / ctx.ui.boardToSvg; 仪表盘 ctx.dashboard; 原生多维表 ctx.table.mount
-- [references/tangu-host-apis.md](references/tangu-host-apis.md): 当前模型与当前 Space:ctx.tangu; Agent 状态:agentStatus / subscribeAgentStatus; Agent 名册:agents; 开新对话:startChat; 把对话挂进自己的视图:mountChat; 新对话输入区:mountComposer; 正文 AI:ctx.tangu.complete 与 registerSelectionAction; 翻译:ctx.tangu.translate; 行内补全:ctx.tangu.fim; Agent Desk 伴随面:ctx.desk; 摘要栏插件卡:ctx.summary; 自动化规则播种:ctx.automation; agent 自建 Space 的数据:section `ctx.agent`(今天没有 agent 在用)
+- [references/tangu-host-apis.md](references/tangu-host-apis.md): 当前模型与当前 Space:ctx.tangu; Agent 状态:agentStatus / subscribeAgentStatus(含按 runId 跟状态与 stop); Agent 名册:agents; 开新对话:startChat; 把对话挂进自己的视图:mountChat; 新对话输入区:mountComposer; 正文 AI:ctx.tangu.complete 与 registerSelectionAction; 翻译:ctx.tangu.translate; 行内补全:ctx.tangu.fim; Agent Desk 伴随面:ctx.desk; 摘要栏插件卡:ctx.summary; 自动化规则播种:ctx.automation; agent 自建 Space 的数据:section `ctx.agent`(今天没有 agent 在用)
 - [references/agent-settings.md](references/agent-settings.md): UI and engine `ctx.registerAgentSettings`; explicit read-only fields, secret configured flags, lifecycle revocation and the `read_plugin_settings` tool.
 - [references/plugin-skill-providers.md](references/plugin-skill-providers.md): engine `ctx.registerSkillProvider` for live external skills.
 - [references/plugin-model-providers.md](references/plugin-model-providers.md): engine `ctx.registerModelProvider` for native single-inference sources.
@@ -353,6 +353,7 @@ Muse's Space no longer loads `main.js` (it stays on disk; do not edit it): the d
 | `registerFileCreator` | 文件树右键 + 新建标签页启动器 | 与文件类型配套;**四条新建路径都要注册**,少一条用户就会问「为什么这儿没有」 |
 | `registerEmbedRenderer` | `![[x]]` 嵌入的自绘渲染 | |
 | `registerToolResultRenderer` | 对话里**你自己引擎半身注册的工具**跑完后的结果卡片(可直接进 Agent Desk) | 2026-10-19 起;别家插件的、核心的工具认领不了(唯一例外:签名的 Forsion Extend 画 `publish_web_page` / `forsion_account`);2026-10-28 起可带 `match({ tool, args })` 按参数收窄;老宿主没有 → `ctx.registerToolResultRenderer?.(…)`。见下「Tool result cards」 |
+| `registerToolLabel` | 对话过程行里**你自己引擎半身的工具**每次调用那一行的整句(可带应用图标) | 2026-11-13 起;认领同 `registerToolResultRenderer`;`describe(call)` 同步且便宜,抛错 / 返回空 = 宿主照旧写法;老宿主没有 → `ctx.registerToolLabel?.(…)`。见下「Process-row sentences」 |
 | `registerSetting` | 详情页声明式表单(number/boolean/text) | 每键一个字符串,**没有原子性**;同 key 重注册即覆盖 |
 | `ctx.ui.mountMarkdownEditor` | 视图内原生 Amadeus Markdown 编辑器 | 正文归调用方(API 草稿等),缺省**不碰笔记库**,`vault: true`(2.13.8+)接上当前库的双链补全 / 跳转;保存前 `getValue()`;`modes: false` 不画「编辑 / 源码 / 预览」那一排;老宿主没有 → 可选链 |
 | `ctx.ui.mountMarkdown` | 只读 Markdown(聊天那套:公式、双链) | 2.13.8+;`update({ markdown })`;列表每行一个也行;有它就说明编辑器的 `vault` 有效 |
@@ -530,13 +531,13 @@ ctx.registerCommand({
 | `registerFont` | 设置 → 外观 → 字体 | 2026-08-28 起;**返回 disposer**(宿主在禁用/重载时也会自己撤销,返回值可以不接);旧宿主没有 → `ctx.registerFont?.(…)` |
 | `registerPanel` | 右侧栏面板 | ⚠️已弃用,收 **React 组件**(拿不到宿主的 React 实例,只有自带 React 的插件能用,mindmap 有先例);新代码一律 `registerView` |
 | `registerPropertyType` | 多维表自定义列类型 | ⚠️同上,`Cell` 是 React 组件;`baseType` 决定落盘形状 |
-| `ctx.notify(msg, {level, action, key})` | 右上角通知 | 自动标插件名,用户可按插件静音;`action: { label, run }` 在卡上放一个按钮(典型「撤销」,2026-10-17 起,旧宿主忽略)、`key` 同 key 的通知合并成一条 |
+| `ctx.notify(msg, {level, action, key})` | 右上角通知 | 自动标插件名,用户可按插件静音;`action: { label, run }` 在卡上放一个按钮(典型「撤销」,2026-10-17 起,旧宿主忽略)、`key` 同 key 的后一张顶掉前一张 |
 | `ctx.achievements` | 成就系列 + `track(event, n)`;2026-10-17 起 `count(event, { own? })` 读计数(缺省读官方事件,只读)、`subscribe(cb)`、自己系列的 `isClaimed(id)` / `claim(id)` | 宿主强制 `plugin:<id>:` 前缀,伪造不了官方成就;`count` 读不到别家插件的计数(恒 0);新成员旧宿主没有 → `?.` |
 | `ctx.activity.log(event, detail)` | 写进活动日志(Muse 读得到) | 同款前缀纪律 |
 | `ctx.loadData() / saveData()` | 每插件一份 JSON blob | 大块数据走这条(见下「编辑器」节) |
 | `ctx.dashboard` | 原生仪表盘(网格/卡片/排版台) | 2026-09-01 起;**两条路线**(视图内 `mount` 不依赖库 / `source` 生成 `.dashboard.md` 需要库)见下节;一律 `ctx.dashboard?.` |
 | `ctx.getLocale / subscribeLocale` | 跟随宿主中英切换 | 见下「双语」 |
-| `ctx.tangu` | 当前模型 / 模型目录 / 当前 Space / 会话用量 / **agent 此刻在干什么**(只读)+ `agents()` 用户的 Agent 名册 + `startChat` 用指定 Agent 开一个可见的新对话 + `mountChat` 把原生对话挂进自己的视图(2026-10-04 起)+ `mountComposer` 把「新对话」输入区整块挂进来、发送归宿主(2026-10-18 起)+ `complete` 一次性文本补全(2026-09-28 起) | ⚠️**非 Tangu 宿主上整个不存在** → 一律 `ctx.tangu?.`;`agentStatus` / `subscribeAgentStatus` / `startChat` 是 2026-09-19 起、`agents` 是 2026-09-20 起的可选方法 → `ctx.tangu?.startChat?.(…)`;见下「当前模型」「Agent 状态」「Agent 名册」「开新对话」 |
+| `ctx.tangu` | 当前模型 / 模型目录 / 当前 Space / 会话用量 / **agent 此刻在干什么**(只读)+ `agents()` 用户的 Agent 名册 + `startChat` 用指定 Agent 开一个可见的新对话 + `mountChat` 把原生对话挂进自己的视图(2026-10-04 起)+ `mountComposer` 把「新对话」输入区整块挂进来、发送归宿主(2026-10-18 起)+ `complete` 一次性文本补全(2026-09-28 起) | ⚠️**非 Tangu 宿主上整个不存在** → 一律 `ctx.tangu?.`;`agentStatus` / `subscribeAgentStatus` / `startChat` 是 2026-09-19 起、`agents` 是 2026-09-20 起的可选方法 → `ctx.tangu?.startChat?.(…)`;2026-11-13 起有 `stop(target?)` 停掉一轮,`agentStatus` / `subscribeAgentStatus` / `stop` 的会话参数可传 `{ runId }`;见下「当前模型」「Agent 状态」「Agent 名册」「开新对话」 |
 | `ctx.desk` | Tangu 聊天右侧 **Agent Desk** 里挂一块自绘区(`registerCompanion`,典型:跟着 agent 状态做反应的 3D 形象) | 2026-09-19 起;⚠️**只在桌面 Tangu 上存在**(web / 移动端 / 纯 Amadeus 壳整个没有)→ `ctx.desk?.`;两种模式 `idle` / `always`,见下「Agent Desk 伴随面」 |
 | `ctx.summary` | Tangu 聊天右侧**摘要栏**加一张卡(`registerCard`,和进度 / 后台 / 产物 / Agent Desk 同一个栈,用户可折叠、拖动排序) | 2026-10-25 起;⚠️**只在桌面 Tangu 上存在**(同 `ctx.desk`)→ `ctx.summary?.`;见下「摘要栏插件卡」 |
 | `ctx.widgets` | 主页小组件的数据(`provide(id, fn)` 喂行 / `invalidate(id?)` 请宿主重拿);卡声明在 manifest `widgets`,宿主画,只读 | 2026-11-07 起;**所有插件可用**,不用声明能力 → `ctx.widgets?.`;见下「主页小组件」 |
@@ -798,6 +799,49 @@ ctx.registerToolResultRenderer?.({
 - **Not this**: pages from external MCP servers (`ui://` in a sandboxed iframe) are a later, separate step; an
   Intelligent UI HTML card is drawn by the model's own built-in tool, not something you register.
 
+### Process-row sentences: ctx.registerToolLabel (2026-11-13+)
+
+The chat folds a reply's tool calls into one process row; expanded, every call is one line. By default a plugin
+tool's line reads `<plugin name> · <tool name> <first argument>`. Give your own engine tools a plain sentence instead:
+
+```js
+ctx.registerToolLabel?.({
+  tool: ['act_ui', 'observe_ui'],     // one name or several, exactly as your engine half registered them
+  describe(call) {
+    // call: { tool, args (parsed JSON), result?, phase: 'running' | 'done' | 'error', locale: 'zh' | 'en', earlier }
+    const app = appNameFrom(call.result) ?? lastAppName(call.earlier)
+    if (!app) return undefined        // nothing useful to say → the host's generic line
+    return {
+      text: call.locale === 'en'
+        ? `${call.phase === 'running' ? 'Clicking' : 'Clicked'} “Send” in ${app}`
+        : `${call.phase === 'running' ? '正在' : '已在'} ${app} 中点击「发送」`,
+      icon: { appBundleId: bundleIdFor(app) },  // optional; the usual tool icon shows where it cannot be resolved
+    }
+  },
+})
+```
+
+- **Cached, so keep it pure**: the host keeps each line and calls `describe` again only when the call, its phase, the
+  locale or the earlier calls change. If a line also depends on something outside `call` (an icon table you fill in
+  later), add `revision: () => counter` to the contribution and bump the counter when that something changes; the
+  host re-asks when it differs. Throwing from `revision` counts as none.
+- **Ownership**: same rule as tool result cards. Only tools one of your bundle's engine plugins has registered right
+  now are handed to you; until the host has the engine's tool list nothing is claimed.
+- **What shows**: `text` is the whole line (the host cuts it at 200 characters). The host adds no plugin name in front
+  and no argument text after it. While a call runs, the folded row rolls through each step's `running` sentence; once
+  every call finished, the folded row keeps the host's summary (`3 tool calls`) and the expanded list shows each
+  call's `done` sentence (`error` when it failed or was cut off). The current-step line in the Tangu summary panel
+  uses the same `running` sentence.
+- **`earlier`**: your own tools' earlier calls in the same reply, oldest first, at most the 40 closest, each
+  `{ tool, args, result? }`. Use it for names that only an earlier result carried (an observe call's app and element
+  names before an act call that only has references).
+- **Cheap and pure**: the host calls `describe` on every render that needs the line, again after a history reload and
+  on a language switch, so it must be synchronous, fast and free of side effects. Throwing, returning nothing or an
+  empty `text` keeps the generic line for that call. Registrations go away when your plugin is disabled or reloaded.
+- **Icon**: `appBundleId` is a macOS bundle id. Desktop on macOS draws that app's icon; web, phone and other systems
+  draw the usual tool icon.
+- **Not this**: the text the model sees (tool descriptions, results) does not change; this is display only.
+
 ### 前置条件:onboarding.requires(2026-09-21 起)
 
 1. **只为「不做就不工作」的东西写 `requires`**:没填的地址 / 令牌、没给的系统授权、服务端没配的依赖。
@@ -917,7 +961,7 @@ ctx.widgets?.invalidate('today') // 不给 id = 你的全部卡
 `ctx.tangu` (current model, agent status, agent roster, startChat, mountChat, mountComposer, complete, translate, fim), `ctx.desk`, `ctx.summary` and `ctx.automation` are documented in [references/tangu-host-apis.md](references/tangu-host-apis.md). None of them exist on non-Tangu hosts, so always use optional chaining. When the table above says 见下「…」 for one of them, read that section there:
 
 - 当前模型与当前 Space:ctx.tangu(2026-08-29 起)
-- Agent 状态:agentStatus / subscribeAgentStatus(2026-09-19 起)
+- Agent 状态:agentStatus / subscribeAgentStatus(2026-09-19 起;2026-11-13 起可传 `{ runId }`,另有 `stop`)
 - Agent 名册:agents(2026-09-20 起)
 - 开新对话:startChat(2026-09-19 起)
 - 把对话挂进自己的视图:mountChat(2026-10-04 起)
@@ -957,7 +1001,10 @@ ctx.calendar?.ensureMember(`${ctx.app.workFolder()}/任务表.db`, 'c-date' /* �
 - **用户仪表盘里的卡片**:插件视图**不能**嵌进用户的 `.dashboard.md`(嵌卡是宿主白名单,插件自声明不算数)。要在自己视图里放仪表盘用 `ctx.dashboard.mount`。
 - **提醒**:笔记里 `@remind:` 的到点通知由宿主发,和日历是哪个插件无关;宿主没有给插件排定时提醒的接口 —— 插件运行期间要提醒用 `ctx.notify`。
 - **带按钮的通知(撤销)**:`ctx.notify(msg, { action: { label, run }, key })` —— `label` 截到 40 字,有按钮时通知留 8 秒;插件停用后点按钮什么都不做;
-  `key` 让同一件事的通知合并成一条(宿主加 `plugin:<id>:` 前缀,和别的插件撞不上);合并时按钮跟新的这条走,新这条没带按钮就清掉旧的。
+  `key`:同 key 的后一张顶掉前一张(宿主加 `plugin:<id>:` 前缀,和别的插件撞不上)—— 标题、文案、按钮、停留都换成新这张的,新这张没带按钮就清掉旧的;
+  宿主不替你数「第几张」(不出 ×N),要显示件数自己写进文案。旧宿主同 key 时还会在卡上叠 ×N、新这张没给标题时沿用旧标题。
+  窗口在后台时,顶上来的这张和新弹的一样跟发系统通知(用户关了系统通知 / 关了这个插件的通知就不发;旧宿主同 key 时不发)——
+  它是新的一件事。只想悄悄刷新一个进度、不想每次都响,用 `registerStatusItem`,别反复 notify 同一个 key。
 - **事件浮卡里的那排字段**:`ctx.ui?.mountRecord?.(el, { path, rowId, dateCol?, readOnly? })` 把宿主的行编辑字段(标题、时间摘要 + 展开编辑、
   其余属性)画进你的容器,返回 `{ update(patch), dispose() }`;改动直接写那张表(同 `ctx.databases.setCell`,和打开着的表格同一份),
   行被删 / 换库就什么都不画;`path` 不是库里的表或没有 `rowId` 当场抛 `TypeError`。外框、关闭、「打开 / 删除」按钮、定位归插件。
@@ -1115,6 +1162,7 @@ ctx.openFloatingPanel?.('inspector', {
 - 桌面端是真 BrowserWindow：可拖、可缩放、可最小化/关闭，并保持在主窗口上方；相同插件 view id 复用窗口。
 - Web 是主界面上方固定居中的面板，**故意不可拖**；移动端不伪造桌面窗口，回退普通主视图。
 - `mount(el, view)` 收到 `view.surface === 'floating'`，没有 `extendView`；`getParams/setParams/onParamsChanged` 照常，`showInMainPanel?.()` 将当前参数交回主区。
+- `view.surface` 还有 `'pip'`(2026-11-13 起):宿主自己开的置顶悬浮小画面(只在桌面、用户点了才开,目前只挂 Computer Use 实时画面),画紧凑卡;不认识的 `surface` 值按 `'floating'` 处理。
 - 宿主自动命名空间，插件只写自己的相对 id；禁用插件或反注册 view 后，已开的原生窗口/Web 面板自动关闭。`mount` disposer 必须收订阅和计时器。
 - 详细契约见 `Forsion-Genesis/docs/customization/floating-panel-development.md`；桌面回归 `npm run build && npm run check:floatingpanel`。
 

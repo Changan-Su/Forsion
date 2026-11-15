@@ -14,7 +14,7 @@ import type { BuildPayloadOpts, StreamOpts, StreamResult } from '../seams/cloudB
 import { learnFromUpstreamError } from '../services/contextWindowStore.js';
 import { LlmError, type AgentModel, type ThinkingLevel, type ToolCall } from '../core/types.js';
 import { parseTextToolCalls } from './textToolCalls.js';
-import { applyThinking, clampThinkingLevel, normalizeThinkingLevel, resolveModelCapability } from './modelCapabilities.js';
+import { applyThinking, clampThinkingLevel, isClaudeAdaptiveModel, normalizeThinkingLevel, resolveModelCapability } from './modelCapabilities.js';
 import { buildGrokBuildHeaders } from './grokBuildCompat.js';
 import { buildOpenCodeHeaders, isOpenCodeHost } from './opencodeGo.js';
 import { withStreamIdle, type StreamIdleGuard } from './streamIdle.js';
@@ -219,14 +219,31 @@ export function tuneOpenAiDirectPayload(
 }
 
 /**
+ * Claude 自适应族的思考余量。不看端点格式、不看档位,原因三条:
+ * - 托管 Claude 行服务端是 reasoning_mode=prefix,请求里没有 thinking 字段;Claude 5 照样自己想,想多长模型自己定,
+ *   没有 budget_tokens 可夹。引擎侧拿不到 reasoning_mode,能力表还按 anthropic-effort 认它。
+ * - 实测吃光过:主循环 max 档一轮约 85 秒思考吃光 8192;项目记忆整理的 12,288 也被吃光(2026-11-15 反馈)。
+ *   之前的 4096 加上去也就 16k 出头,不够这个量级。
+ * - 上界:后台调用里最大的正文上限是 12,288(记忆整理 / 项目记忆压缩),加上 16,384 = 28,672,
+ *   不超过 CLAUDE_MAX_TOKENS_CEILING(32000,所有 Claude 型号都吃得下,服务端缺省同值、托管中转上已在用)。
+ * max_tokens 只是封顶,按实际产出计费,多留不多花钱;真关掉思考的直连型号(Opus 5 / Sonnet 5 传 off)多留也无害。
+ * 后台调用多数有截止时间(30–90 秒):思考真要那么长时,下一堵墙是截止时间,这里管不到。
+ */
+export const CLAUDE_THINKING_HEADROOM = 16_384;
+
+/**
  * 开了思考的后台调用,输出上限该在正文之外另留多少给推理(调用点:Dream、Historian 判官;见 docs/direct-model-calls.md)。
  * 原生思考的端点留 4096:多数供应方把推理 token 算在输出上限里,只按正文给,推理多的模型会把正文挤没。
  * 档位只是一句系统提示(prefix)、或模型自带思考不可调(none)的端点不留:它们的推理量没有因为给了档位而变,
  * 其中的老模型输出上限往往只有 4096,多给会被直接拒(原来能跑的调用变成 400)。
  * 查询口径同 agentLoop 的 thinkingEffective:托管模型的 baseUrl 是网关占位,真实端点在 model.defaultBaseUrl。
+ * Claude 自适应族(Claude 5 / Opus 4.7+)另算,见 CLAUDE_THINKING_HEADROOM。
+ * 没给档位、或原来只按正文给上限的小调用用 claudeThinkingHeadroom:只给 Claude 自适应族留,别的模型一字不变
+ * (OpenRouter 上的老款输出上限只有 4096,600 → 4696 就会被拒;Codex 评审 11-15)。
  * ponytail: 不认各模型的输出上限(能力表里没有);哪个原生思考的模型拒了这个上限,再按窗口 / 4 封顶(compaction 的做法)。
  */
 export function thinkingHeadroom(target: { model?: any; baseUrl?: string; apiModelId?: string }, level: ThinkingLevel): number {
+  if (claudeThinkingHeadroom(target)) return CLAUDE_THINKING_HEADROOM;
   const cap = resolveModelCapability({
     baseUrl: target.model?.defaultBaseUrl || target.baseUrl,
     provider: target.model?.provider,
@@ -234,6 +251,14 @@ export function thinkingHeadroom(target: { model?: any; baseUrl?: string; apiMod
     protocol: typeof target.model?.[PROTOCOL_MARK] === 'string' ? target.model[PROTOCOL_MARK] : undefined,
   });
   return cap.format === 'prefix' || cap.format === 'none' || clampThinkingLevel(cap, level) === 'off' ? 0 : 4096;
+}
+
+/**
+ * 只给 Claude 自适应族的那份思考余量,其余模型 0。给原来没留余量的小调用(标题、改写、判官、团队摘要、关着思考的旁问)用:
+ * 它们不发档位或只发 low,别的模型上本来就不怎么想,而 Claude 5 在托管 prefix 档下照样想,几百 token 的上限会被吃光。
+ */
+export function claudeThinkingHeadroom(target: { model?: any; apiModelId?: string }): number {
+  return isClaudeAdaptiveModel(target.apiModelId || target.model?.id) ? CLAUDE_THINKING_HEADROOM : 0;
 }
 
 /** 从 providerRegistry 命中结果构造的 AgentModel 带此标记,buildProviderPayload 据此走直连。 */

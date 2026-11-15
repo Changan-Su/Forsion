@@ -10,6 +10,7 @@
 import { scheduleAgentFilesSync } from './agentFileSync.js';
 import { join } from 'node:path';
 import { deps } from '../seams/runtime.js';
+import { thinkingHeadroom } from '../llm/openaiCompat.js';
 import { agentsDir, tanguHome } from '../core/tanguHome.js';
 import { currentRunUserId } from '../seams/runContext.js';
 import { loadSpecialAgentsConfig, resolveBackgroundModelId } from './specialAgentsConfig.js';
@@ -33,7 +34,9 @@ export interface OrganizeTopic { key: string; title: string; about: string; coun
 export interface OrganizePlan { moves: Array<{ id: string; topic: string }>; topics: Array<{ key: string; title: string; about: string }>; ignored: string[] }
 
 const DEADLINE_MS = 90_000;
+/** 正文上限。思考的 token 另由 thinkingHeadroom 留(托管 Claude 5 不发思考字段也会想,只给这个数会被吃光,11-15 反馈)。 */
 const MAX_OUTPUT_TOKENS = 12_288;
+const THINKING = 'medium';
 const RETRY_AFTER_MS = 30 * 60_000;
 const day = (t = Date.now()): string => { const d = new Date(t); const p = (n: number) => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; };
 
@@ -126,7 +129,7 @@ export async function proposeOrganize(userId: string, kind: OrganizeKind, input:
   const model = await llm.resolveModelAndKey(modelId);
   const payload = await llm.buildProviderPayload({ model: model.model, apiModelId: model.apiModelId,
     messages: [{ role: 'system', content: ORGANIZE(kind) }, { role: 'user', content: JSON.stringify(input) }],
-    projectSource: '', usageSource: 'tangu', temperature: 0, maxTokens: MAX_OUTPUT_TOKENS, thinkingLevel: 'medium', stream: true, signal });
+    projectSource: '', usageSource: 'tangu', temperature: 0, maxTokens: MAX_OUTPUT_TOKENS + thinkingHeadroom(model, THINKING), thinkingLevel: THINKING, stream: true, signal });
   const result = await llm.streamProviderCompletion({ ...model, payload, provider: (model.model as any)?.provider, signal });
   try {
     const cost = await deps().billing.calculateCost(modelId, result.usage?.prompt_tokens || 0, result.usage?.completion_tokens || 0);

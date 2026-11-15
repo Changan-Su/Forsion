@@ -599,6 +599,29 @@ describe('ctx.notify 的 action / key(10-17)', () => {
     item.action!.run()
     expect(run).toHaveBeenCalledTimes(1)
   })
+
+  // 负对照:pluginStore 不给 replace → 「×2」那条红(count 是 2、标题还是乙组)
+  it('同 key 的后一张顶掉前一张:不累计 ×N,标题 / 文案 / 按钮换成新的;宿主自己的去重照旧计数', async () => {
+    const { notifyApp, useNotifications } = await import('../../stores/notificationStore')
+    useNotifications.setState({ items: [], queue: [] })
+    const ctx = ctxOf('ntf-replace')
+    const toB = vi.fn()
+    ctx.notify?.('Bob：乙组消息', { title: '乙组', key: 'phone', sticky: false, action: { label: '打开', run: vi.fn() } })
+    ctx.notify?.('Bob：丙组消息', { title: '丙组', key: 'phone', sticky: false, action: { label: '打开', run: toB } })
+    const mine = useNotifications.getState().items.filter((i) => i.dedupeKey === 'plugin:ntf-replace:phone')
+    expect(mine).toHaveLength(1)
+    expect(mine[0]).toMatchObject({ text: 'Bob：丙组消息', title: '丙组', count: 1, durationMs: 8000 })
+    mine[0].action!.run()
+    expect(toB).toHaveBeenCalledTimes(1) // 按钮是丙组的
+    // 插件自己数件数的那种卡:宿主不再叠 ×3
+    for (const n of [1, 2, 3]) ctx.notify?.(`(${n}) 张三：第 ${n} 条`, { title: '张三', key: 'conv-1' })
+    expect(useNotifications.getState().items.find((i) => i.dedupeKey === 'plugin:ntf-replace:conv-1')).toMatchObject({ text: '(3) 张三：第 3 条', count: 1 })
+    // 不带 key 的各是各的;宿主自己的去重键照旧累计
+    notifyApp({ text: 'host', dedupeKey: 'host-k' })
+    notifyApp({ text: 'host again', dedupeKey: 'host-k' })
+    expect(useNotifications.getState().items.find((i) => i.dedupeKey === 'host-k')?.count).toBe(2)
+    useNotifications.setState({ items: [], queue: [] })
+  })
 })
 
 describe('ctx.automation.registerTrigger / emit', () => {
