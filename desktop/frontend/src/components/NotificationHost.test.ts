@@ -218,15 +218,27 @@ it('有原生外壳:不画 DOM,把屏上这一条交给原生层;原生报回的
     // 常驻的那张在 × 往回报的路上被新来的顶回队列:用户点的 × 照样算数,新来的走了它不再回来
     // (负对照:只认屏上这一条 → 这里红)
     resetNotificationThrottle()
-    await act(async () => { notifyApp({ text: 'pinned', sticky: true, event: 'plugin:pin' }); await new Promise((r) => setTimeout(r, 350)) })
+    const pinClosed = vi.fn()
+    await act(async () => { notifyApp({ text: 'pinned', sticky: true, event: 'plugin:pin', onClose: pinClosed }); await new Promise((r) => setTimeout(r, 350)) })
     const pinned = seen.at(-1)!
     expect(pinned.text).toBe('pinned')
     await act(async () => { notifyApp({ text: 'newcomer', event: 'plugin:new' }); await new Promise((r) => setTimeout(r, 350)) })
     expect(seen.at(-1)?.text, '常驻的该给新来的让位').toBe('newcomer')
-    await act(async () => onNativeBannerEvent(pinned.id, 'dismiss'))
-    expect(useNotifications.getState().queue.map((n) => n.text), '晚到的 × 没把让位的常驻收掉').toEqual([])
-    await act(async () => { useNotifications.getState().dismiss(seen.at(-1)!.id, 'timeout'); await new Promise((r) => setTimeout(r, 350)) })
+    const newcomer = seen.at(-1)!
+    await act(async () => { notifyApp({ text: 'third', event: 'plugin:third' }) })
+    expect(useNotifications.getState().queue.map((n) => n.text)).toEqual(['pinned', 'third'])
+    await act(async () => { onNativeBannerEvent(pinned.id, 'dismiss'); await new Promise((r) => setTimeout(r, 350)) })
+    const st = useNotifications.getState()
+    expect(st.queue.map((n) => n.text), '晚到的 × 没把让位的常驻收掉,或者收错了排在后面的').toEqual(['third'])
+    expect(st.items.map((n) => n.id), '屏上那条不该被动,也不该被顶掉').toEqual([newcomer.id])
+    expect(seen.at(-1)?.id, '原生层还该显示新来的那条').toBe(newcomer.id)
+    expect(pinClosed, '常驻那张的 onClose 只调一次').toHaveBeenCalledTimes(1)
+    expect(notifyApp({ text: 'pin again', event: 'plugin:pin' }), '常驻的(节流管不着)收起不开始冷却').not.toBeNull()
+    await act(async () => { useNotifications.getState().dismiss(newcomer.id); await new Promise((r) => setTimeout(r, 350)) })
+    expect(seen.at(-1)?.text, '新来的走了,轮到排在后面的,常驻的不再回来').toBe('third')
+    await act(async () => { useNotifications.getState().dismissAll() })
     expect(useNotifications.getState().items).toHaveLength(0)
+    expect(pinClosed).toHaveBeenCalledTimes(1)
   } finally { await act(async () => off()) }
   // presenter 撤了(桥坏了):改画 DOM
   await act(async () => { notifyApp({ text: 'fallback', event: 'plugin:z' }); await new Promise((r) => setTimeout(r, 350)) })
