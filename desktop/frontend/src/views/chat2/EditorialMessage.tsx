@@ -221,7 +221,9 @@ const ERR_RULES: Array<[RegExp, string]> = [
   [/(^|\D)429(\D|$)|rate[ _-]?limit|per ?minute|allocated quota exceeded/i, 'chat.err.rate'],
   [/(^|\D)5\d\d(\D|$)|bad gateway|overloaded/i, 'chat.err.server'],
 ]
-/** 服务端 quotaExceededMessage 的 topup 那句(「开着用积分继续、积分也用完了」);只认英文半句,中文那半措辞可以改 */
+/** 服务端 quotaExceededMessage 的两句提示,只认英文半句(中文那半措辞可以改):
+ *  enable =「开关没开,开了就能用积分接着用」;topup =「开着,积分也用完了」 */
+const QUOTA_POINTS_ENABLE_RE = /Turn on "Continue with points"/i
 const QUOTA_POINTS_OUT_RE = /points have run out/i
 export function humanizeRunError(raw: string | undefined, t: (k: string, v?: Record<string, unknown>) => string, modelName = ''): string {
   const engineAgent = agentEngineErrorText(raw, t) // 跑在 DSH 上的 Agent 没跑起来(引擎发的 agent_engine_* 码,带引擎名)
@@ -232,9 +234,13 @@ export function humanizeRunError(raw: string | undefined, t: (k: string, v?: Rec
   const hit = ERR_RULES.find(([re, key]) => re.test(raw) && (key !== 'chat.err.quotaUsed' || isQuotaText(raw)))
   // 这一句自己就说清了,不再把机器码 / JSON 回包挂在括号里(「复制错误」照样拿得到原文)
   if (hit?.[1] === 'chat.err.tierLocked') return tierLockedText(raw, t, modelName)
-  // Forsion 额度用完:服务端在机器码后面补了一句积分提示(给不认识积分的旧客户端看,见 server quotaExceededMessage)。
-  // 这里自己说得更清楚,括号里只留机器码;开着积分也用完了的换一句(服务端那句英文里写着 top up points)
-  if (hit?.[1] === 'chat.err.quota') return `${t(QUOTA_POINTS_OUT_RE.test(raw) ? 'chat.err.quotaPointsOut' : 'chat.err.quota')}(token_quota_exceeded)`
+  // Forsion 额度用完:服务端在机器码后面补了一句积分提示(给不认识积分的旧客户端看,见 server quotaExceededMessage),
+  // 只在积分帮得上时才补。这里按它选自己的说法,括号里只留机器码;裸码 = 积分帮不上(后台任务、组织账号、已到预支硬顶)
+  // 或老服务端,就不提积分(Codex 11-15)
+  if (hit?.[1] === 'chat.err.quota') {
+    const key = QUOTA_POINTS_OUT_RE.test(raw) ? 'chat.err.quotaPointsOut' : QUOTA_POINTS_ENABLE_RE.test(raw) ? 'chat.err.quotaPoints' : 'chat.err.quota'
+    return `${t(key)}(token_quota_exceeded)`
+  }
   if (hit?.[1] === 'chat.err.quotaUsed') {
     const time = quotaResetFromError(raw)
     return `${t(time ? 'chat.err.quotaUsedAt' : 'chat.err.quotaUsed', { time })}(${raw})`
@@ -259,6 +265,10 @@ registerMessages({
   },
   'chat.err.relogin': { zh: '重新登录 {provider}', en: 'Sign in to {provider} again' },
   'chat.err.quotaPage': { zh: '额度与积分', en: 'Quota & points' },
+  'chat.err.quotaPoints': {
+    zh: 'AI 额度已用尽：可以在「额度与积分」里开启「用积分继续」，用积分接着用；也可以使用重置卡立即恢复，或升级会员提高上限',
+    en: 'AI quota used up — turn on "Continue with points" in Quota & points to keep going with your points, use a reset card to restore it now, or upgrade your plan',
+  },
   'chat.err.quotaPointsOut': {
     zh: 'AI 额度用完了，积分也用完了：可以充值积分、使用重置卡立即恢复，或升级会员提高上限',
     en: 'Your AI quota and points are both used up — top up points, use a reset card to restore it now, or upgrade your plan',
