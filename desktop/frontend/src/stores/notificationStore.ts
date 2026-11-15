@@ -237,7 +237,9 @@ export const useNotifications = create<NtfState>((set, get) => {
 
   /** 手机横幅:一条上屏(记下上屏时刻,非常驻的开始计时)。 */
   const showBanner = (n: AppNotification, queue: AppNotification[]): void => {
-    const shown = { ...n, shownAt: Date.now(), ...(payOs(n) ? { osOwed: false } : {}) }
+    payOs(n)
+    // 上了屏就不再欠:用户在前台看到了,或者刚补发过。常驻那张让位后再回来、宽屏的卡收进队列,都不再发第二次
+    const shown = { ...n, shownAt: Date.now(), osOwed: undefined }
     set({ items: [shown], queue })
     if (!shown.sticky) startTimer(shown.id, dwellOf(shown))
   }
@@ -339,7 +341,7 @@ export const useNotifications = create<NtfState>((set, get) => {
           upd.free = throttleFree({ ...input, onClose: upd.onClose }, upd.sticky, upd.level, upd.event)
           if (st.banner) upd.count = 1 // 手机:同 key 直接换文案和按钮,不出 ×N
           // 顶替是新的一件事:跟发系统通知;在前台没发的记下,它若还排着队、等到后台才上屏 / 被丢下时补发
-          if (input.replace) upd.osOwed = (!sendOs(input, upd, event) && owesOs(input)) || undefined
+          if (input.replace) upd.osOwed = (!sendOs(input, upd, event) && owesOs(input) && !visible) || undefined
           set((s) => ({
             items: s.items.map((n) => (n.id === found.id ? upd : n)),
             queue: s.queue.map((n) => (n.id === found.id ? upd : n)),
@@ -475,7 +477,9 @@ export const useNotifications = create<NtfState>((set, get) => {
       if (on) {
         const [first, ...rest] = s.items
         for (const r of rest) clearTimer(r.id)
-        set({ banner: true, items: first ? [{ ...first, shownAt: first.shownAt ?? Date.now() }] : [], queue: [...rest, ...s.queue] })
+        // 宽屏时已经在屏上的那几张用户看过了:收回队列也不再欠系统通知
+        const seen = rest.map((r) => ({ ...r, osOwed: undefined }))
+        set({ banner: true, items: first ? [{ ...first, shownAt: first.shownAt ?? Date.now(), osOwed: undefined }] : [], queue: [...seen, ...s.queue] })
         if (!first && s.queue.length) scheduleGap()
         return
       }

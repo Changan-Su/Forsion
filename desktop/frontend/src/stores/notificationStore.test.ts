@@ -491,6 +491,33 @@ describe('手机横幅模式(banner)', () => {
     } finally { vi.unstubAllGlobals() }
   })
 
+  it('用户在前台看到过的卡不补发:常驻让位后在后台回屏、宽屏的卡收窄后在后台轮到,都不发系统通知', () => {
+    const os = vi.fn()
+    let hidden = false
+    vi.stubGlobal('window', { tangu: { notify: os } })
+    vi.stubGlobal('document', { hasFocus: () => !hidden, get visibilityState() { return hidden ? 'hidden' : 'visible' } })
+    try {
+      notifyApp({ text: 'reminder', sticky: true, event: 'note.reminder' })
+      notifyApp({ text: 'msg', event: 'plugin:biz' })
+      vi.advanceTimersByTime(300)
+      expect(shown()).toEqual(['msg'])
+      hidden = true
+      vi.advanceTimersByTime(5000 + 300)
+      expect(shown()).toEqual(['reminder'])
+      expect(os, '常驻那张用户看过了,回屏不该再发').not.toHaveBeenCalled()
+      st().dismissAll()
+      hidden = false
+      st().setBanner(false)
+      notifyApp({ text: 'w1', event: 'plugin:w1' })
+      notifyApp({ text: 'w2', event: 'plugin:w2' })
+      st().setBanner(true)
+      hidden = true
+      vi.advanceTimersByTime(5000 + 300)
+      expect(shown()).toEqual(['w2'])
+      expect(os, '宽屏时就在屏上的卡,收窄后轮到它不该再发').not.toHaveBeenCalled()
+    } finally { vi.unstubAllGlobals() }
+  })
+
   it('横幅 ↔ 堆叠:收窄时只留最早那条、其余回队首;放宽时队列补满 4 条', () => {
     st().setBanner(false)
     for (const t of ['a', 'b', 'c']) notifyApp({ text: t, level: 'error' })
