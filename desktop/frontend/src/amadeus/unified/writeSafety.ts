@@ -260,6 +260,45 @@ function parseDraft(raw: string | null, slot: string | null): UnsavedDraft | nul
   return typeof d.text === 'string' && typeof d.base === 'string' ? { text: d.text, base: d.base, at: Number(d.at) || 0, slot } : null
 }
 
+/** stashDraft 写的那一格此刻存着的正文:空格 = null;读不出 / 解析不了 = undefined(「不知道」,调用方别当空处理)。
+ *  只看这一格:stashDraft 从不写老版本 Windows 的 legacy 键,会被它盖掉的只有这一个。 */
+export function peekDraftText(vaultRoot: string | null | undefined, path: string, slot?: string | null): string | null | undefined {
+  try {
+    const raw = localStorage.getItem(draftKey(vaultRoot, path, slot))
+    if (raw == null) return null
+    return parseDraft(raw, slot ?? null)?.text
+  } catch {
+    return undefined
+  }
+}
+
+/** 「这份基线经编辑器规范化后是什么」的单格缓存(isPristine 用):编辑器的 canonical 要把基线整篇解析再序列化,
+ *  大笔记一次就是几百毫秒到数秒;连打期间每一跳草稿都要问一次,同一份基线只该算一次。
+ *  键 = 编辑器实例 + 基线原文,任一变了就重算;算出 null(编辑器还没就绪)不记,下次再算。 */
+export interface CanonicalMemo {
+  get: (api: { canonical: (stored: string) => string | null } | null | undefined, stored: string) => string | null
+  /** 实际调了几次 canonical(仪器用)。 */
+  calls: number
+}
+export function createCanonicalMemo(): CanonicalMemo {
+  let api: unknown = null
+  let stored = ''
+  let canon: string | null = null
+  const memo: CanonicalMemo = {
+    calls: 0,
+    get: (next, text) => {
+      if (!next) return null
+      if (next === api && text === stored && canon != null) return canon
+      memo.calls++
+      canon = next.canonical(text)
+      api = next
+      stored = text
+      return canon
+    },
+  }
+  return memo
+}
+
 /** 读这篇的草稿:先认自己槽位的;没有就退到**已失去归属**的槽位里最新的一份(那个标签已经关了 / 重启后换了 leaf ——
  *  草稿不能因为认不出主人就再也不提示)。不分槽的那格(slot = null)对不分槽的实例就是自己那格。
  *  `isLive(slot)`:那个槽位的主人还在不在(leaf 还开着 / 有活实例)。**活槽不给别人**(Codex 复核 P1):
