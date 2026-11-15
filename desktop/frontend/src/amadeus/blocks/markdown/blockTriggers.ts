@@ -210,6 +210,7 @@ export function undoIsolate(view: EditorView, split: Transaction): void {
  *  只在 isolateLine 真拆了的时候用(关着时调用方走原来的 applyTrigger)。 */
 export function applyTriggerOnLine(view: EditorView, trig: Trigger, consume: { from: number; to: number } | null): boolean {
   const keep = view.state.selection.$from.parent.attrs.amxTight === true
+  const restAt = view.state.selection.$from.after() // 这一行之后(切出去的后面几行从这里起)
   const extend = (tr: Transaction, pos: number): void => {
     const $p = tr.doc.resolve(pos)
     if ($p.depth < 1) return
@@ -223,6 +224,17 @@ export function applyTriggerOnLine(view: EditorView, trig: Trigger, consume: { f
     const nextAt = $p.after()
     const next = tr.doc.nodeAt(nextAt)
     if (next && 'amxTightBefore' in next.attrs && next.attrs.amxTightBefore !== true) tr.setNodeMarkup(nextAt, undefined, { ...next.attrs, amxTightBefore: true })
+    // 光标后面同一行的余文被切成了代码块之后的一段:它和后面切出去的几行原本是相邻的行,并回一段(中间一个软换行)
+    const restPos = tr.mapping.map(restAt, 1)
+    const rem = tr.doc.nodeAt(nextAt)
+    const rest = tr.doc.nodeAt(restPos)
+    const br = tr.doc.type.schema.nodes.hardbreak
+    if (br && rem?.type.name === 'paragraph' && rest?.type.name === 'paragraph' && nextAt + rem.nodeSize === restPos && rem.content.size > 0 && rest.content.size > 0) {
+      tr.join(restPos)
+      tr.insert(restPos - 1, br.create({ isInline: true }))
+      const merged = tr.doc.nodeAt(nextAt)
+      if (merged) tr.setNodeMarkup(nextAt, undefined, { ...merged.attrs, amxTight: rest.attrs.amxTight === true })
+    }
   }
   return withTightManaged(() => applyTrigger(view, trig, consume, extend))
 }

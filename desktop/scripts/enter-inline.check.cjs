@@ -345,6 +345,8 @@ async function lineStart(browser) {
     { name: 'S5 第二行 `$$` 回车 = 与关着时同样的两行(既有行为)', seed: 'a\n', at: 'a', steps: ['k:Enter', 't:$$', 'k:Enter', 't:x'], want: 'a\n$\nx$\n' },
     { name: 'S6a 第二行 ``` 回车 = 代码块', seed: 'a\n', at: 'a', steps: ['k:Enter', 't:```js', 'k:Enter', 't:x'], want: 'a\n```js\nx\n```\n' },
     { name: 'S6b 第二行 ``` 回车,后面还有行:后面的行留在代码块之后', seed: 'a\nb\n', at: 'a', steps: ['k:Enter', 't:```', 'k:Enter', 't:x'], want: 'a\n```\nx\n```\nb\n' },
+    // (评审)行中敲 ``` 回车:光标后面的余文与后面的行原本相邻,仍是一段两行
+    { name: 'S6c 第二行行首 ```+余文 回车:余文与下一行仍相邻', seed: 'a\nb\nc\n', at: 'b', start: true, steps: ['t:```', 'k:Enter', 't:x'], want: 'a\n```\nx\n```\nb\nc\n' },
     // 9 其它前缀
     { name: 'S9a 第二行 `- [ ] ` = 待办', seed: 'a\n', at: 'a', steps: ['k:Enter', 't:- [ ] X'], want: 'a\n* [ ] X\n' },
     { name: 'S9b 第二行 `1. ` = 编号', seed: 'a\n', at: 'a', steps: ['k:Enter', 't:1. X'], want: 'a\n1. X\n' },
