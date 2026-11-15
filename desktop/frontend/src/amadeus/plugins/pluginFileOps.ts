@@ -349,6 +349,7 @@ export function createPluginFileOps(deps: PluginFileOpsDeps): {
         (rel, e) => {
           if (e.folder && isFdDir(name)) throw new Error(`Invalid name: "${name}" (.fd folders hold a note's subnotes)`)
           const to = renameTarget(rel, e.folder, name, deps.fileTypeExt)
+          if (to === rel) return { to, run: async () => {} } // 名字没变:原路径,不拒也不问
           refuseFdAndDatabases(rel, e)
           const run = async (raw: string): Promise<unknown> => {
             if (e.folder) return st().renameFolder(raw, name)

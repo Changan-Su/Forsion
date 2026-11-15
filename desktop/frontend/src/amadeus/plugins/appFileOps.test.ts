@@ -257,6 +257,7 @@ describe('ctx.app.renamePath / movePath 的结果与拒绝', () => {
     const ctx = ctxOf('r-dbdir')
     vault({ folders: ['Plugins', 'Plugins/r-dbdir', 'Plugins/r-dbdir/P', 'D'], files: ['Plugins/r-dbdir/P/t.db'] })
     await expect(ctx.app.movePath!('Plugins/r-dbdir/P', 'D')).rejects.toThrow(/contain databases/)
+    await expect(ctx.app.renamePath!('Plugins/r-dbdir/P', 'P')).resolves.toBe('Plugins/r-dbdir/P') // 名字没变:不拒
     await expect(ctx.app.renamePath!('Plugins/r-dbdir/P', 'Q')).rejects.toThrow(/contain databases/)
   })
 

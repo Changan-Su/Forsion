@@ -334,8 +334,8 @@ export interface PluginAppApi extends BlockSurfaceApi {
   /** Create a folder (2026-11-16+): vault-relative, nested segments are created as needed; a folder that already exists
    *  resolves. Rejects with no vault open ('No vault is open'), a path escaping the vault (`..`, a drive letter), a
    *  segment starting with `.` or with surrounding spaces, or a file in the way. Paths take `/` (leading/trailing
-   *  slashes are dropped). Folders you create here count as yours for `renamePath` / `movePath` this session.
-   *  Older hosts lack it: `ctx.app.createFolder?.(…)`, and fall back to `writeFile` (which creates parent folders). */
+   *  slashes are dropped). Folders you create here count as yours for `renamePath` / `movePath` this session, except
+   *  your work folder and its parent folders (those are never recorded). Older hosts lack it: `ctx.app.createFolder?.(…)`, and fall back to `writeFile` (which creates parent folders). */
   createFolder?(path: string): Promise<void>
   /** Kind, size and times of a vault path (2026-11-16+). `mtime` = last modified, `ctime` = created (null when the file
    *  system doesn't record it), both ms since epoch; `size` is bytes (0 for folders). `''` = the vault root.
@@ -348,8 +348,10 @@ export interface PluginAppApi extends BlockSurfaceApi {
    *  a missing `.md` / `.db` / compound suffix (`.canvas.md`, `.excalidraw.md`) is added back, and the file kind can't
    *  change. Resolves with the new vault-relative path (unchanged name → the same path).
    *  ⚠️ Boundary: paths inside your `workFolder()` and paths your plugin created this session (`writeFile` / `writeBytes`
-   *  to a path that didn't exist, `createFolder`) are renamed directly. Anything else asks the user first; Cancel
-   *  rejects with `Error('user_declined')`. Call it from a user action, not in a loop over the vault.
+   *  to a path that didn't exist, `createFolder`) are renamed directly — a created folder, or a created note with
+   *  subnotes, only while every file inside is also yours. Anything else asks the user first (one dialog at a time,
+   *  Cancel focused); Cancel rejects with `Error('user_declined')`. Call it from a user action, not in a loop over the vault.
+   *  A note's subnote folder (`*.fd`) moves with its note and can't be renamed on its own; a folder can't be renamed to `*.fd`.
    *  Rejects: no vault open, missing path, target exists, invalid name (slashes, leading `.`, surrounding spaces),
    *  file kinds the tree can't rename (images, PDFs, …), a folder that contains `.db` files, plugin disabled. If the
    *  file was moved but the host couldn't finish updating (links, `.fd` subnotes), it rejects with a message naming
@@ -358,8 +360,9 @@ export interface PluginAppApi extends BlockSurfaceApi {
   /** Move a file or folder into another existing folder (2026-11-16+; `''` = vault root), the same way dragging it in the
    *  file tree does: links to moved notes are rewritten, a note's `.fd` subnotes move with it, open editors follow.
    *  Resolves with the new vault-relative path. Same boundary and rejections as `renamePath` (the dialog names the
-   *  destination); also rejects a missing destination folder, a folder into itself, and `.db` files or folders that
-   *  contain them (relation columns in other tables would lose them). Relative Markdown links to a moved attachment are not rewritten (wikilinks resolve
+   *  destination); also rejects a missing destination folder, a folder into itself or into a `*.fd` subnote folder
+   *  (a note may move into one: it becomes a subnote), a `*.fd` folder on its own, and `.db` files, folders that contain
+   *  them or notes whose subnotes do (relation columns in other tables would lose them). Relative Markdown links to a moved attachment are not rewritten (wikilinks resolve
    *  by name and keep working), as in the tree. Older hosts lack it: `ctx.app.movePath?.(…)`. */
   movePath?(path: string, destFolder: string): Promise<string>
   /** 当前库的**绝对路径**(没打开库时 null)。用途:把路径交给 Agent 的 host 模式工具(view_image /
