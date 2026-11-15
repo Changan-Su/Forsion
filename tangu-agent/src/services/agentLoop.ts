@@ -568,9 +568,11 @@ async function dispatchRun(runId: string, ac: AbortController): Promise<void> {
           const stored = plainObject(typeof storedRaw === 'string' ? safeParse(storedRaw) : storedRaw);
           const ac0 = plainObject(input?.agentConfig);
           // 插件任务的会话:存值里记着 pluginOwner,之后客户端追问的 run 本身不带这个标记,也照插件任务算(Codex 评审 11-14)
+          // 分身(standInOf)不交给引擎:它的权限域(工具白名单、读写根、不给 MCP)在 runLoop 里才建,引擎自带的读写文件 / 跑命令
+          // 和交接的桥都不受它约束。落到 runLoop,建好权限域后由那道闸拒(Codex 评审 11-15)。
           const interactive = input?.origin === 'client' && !input?.pluginOwner && !input?.pluginNotification
             && !stored.pluginOwner && !stored.pluginNotification
-            && !ac0.teamMember && !stored.teamMember && !ac0.groupChat;
+            && !ac0.teamMember && !stored.teamMember && !ac0.groupChat && !def.standInOf;
           if (interactive) {
             if (!isKnownAgentEngine(agentEngine) || !engines?.has(agentEngine)) {
               return await refuse(`agent_engine_unsupported:${agentEngine}`, `This agent is set to run on "${agentEngine}", which this version of Forsion cannot run.`);

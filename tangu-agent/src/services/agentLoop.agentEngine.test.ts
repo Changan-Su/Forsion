@@ -215,6 +215,13 @@ describe('跑在外部引擎上的 Agent', () => {
     expect(calls).toEqual([]); expect(llmCalls).toBe(0);
   }, 20_000);
 
+  it('分身设成 DSH:输入框发的也不交给引擎(权限域、不给 MCP 只在 Tangu 循环里),走到那道闸被拒', async () => {
+    writeAgent('plain-standin-x', 'stand_in_of = "plain"\nengine = "dsh"\n');
+    const out = await turn(1, { agentSlug: 'plain-standin-x' });
+    expect(out.error).toMatch(/^agent_engine_elsewhere:dsh /);
+    expect(calls).toEqual([]); expect(llmCalls).toBe(0);
+  }, 20_000);
+
   it('会话里显式选了别的引擎(Codex):照选的走', async () => {
     await turn(1, { engineId: 'codex' });
     expect(calls.map((c) => c.engineId)).toEqual(['codex']);

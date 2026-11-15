@@ -177,6 +177,8 @@ const MAX_HANDOFF_DISPLAY_FILES = 20;
 /** 这一轮交给引擎的东西:建好的桥(没有可交的工具时也建,取结果和卡片都走它)和指令目录。 */
 export async function prepareEngineAgentHandoff(p: EngineAgentHandoffInput) {
   const { def, slug } = p.agent;
+  // 分身的权限域不随交接过去(分流那里已挡在引擎外,这里兜底)
+  if (def.standInOf) throw new Error('A stand-in cannot run on an external engine.');
   const input = p.input && typeof p.input === 'object' ? p.input : {};
   const stored = p.storedAgentConfig && typeof p.storedAgentConfig === 'object' ? p.storedAgentConfig : {};
   // 审批档同 Tangu 自己的循环(agentActivation:这一轮带的档,缺了才用 Agent 定义的,再缺是自动编辑)作快照;
