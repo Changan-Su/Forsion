@@ -588,6 +588,25 @@ describe('手机横幅模式(banner)', () => {
     } finally { vi.unstubAllGlobals() }
   })
 
+  it('后台来的只有错误(错误缺省也常驻)时,回到前台常驻照样让:和在前台一样,错误先上,收了它常驻再回来', () => {
+    let hidden = false
+    vi.stubGlobal('document', { hasFocus: () => true, get visibilityState() { return hidden ? 'hidden' : 'visible' } })
+    try {
+      notifyApp({ text: 'reminder', sticky: true, event: 'note.reminder' })
+      hidden = true
+      st().visibilityChanged()
+      notifyApp({ text: 'sync failed', level: 'error' })
+      expect(shown()).toEqual(['reminder'])
+      hidden = false
+      st().visibilityChanged()
+      vi.advanceTimersByTime(300)
+      expect(shown(), '错误不排在常驻后面').toEqual(['sync failed'])
+      st().dismiss(st().items[0].id)
+      vi.advanceTimersByTime(300)
+      expect(shown()).toEqual(['reminder'])
+    } finally { vi.unstubAllGlobals() }
+  })
+
   it('屏上那张在 App 退到后台后到点走:不开冷却(负对照:照开 → 回来 30 秒内同来源不出)', () => {
     let hidden = false
     vi.stubGlobal('document', { hasFocus: () => true, get visibilityState() { return hidden ? 'hidden' : 'visible' } })
