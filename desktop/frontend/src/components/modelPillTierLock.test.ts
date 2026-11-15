@@ -4,9 +4,10 @@ import { act, createElement, type ComponentProps } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { installNativeSheetPresenter, type NativeSheetPayload } from '@lcl/engine'
-import { setLocaleGlobal } from '../i18n'
+import { LocaleProvider, setLocaleGlobal } from '../i18n'
 import { installModelPickerPresenter } from './modelPickerHost'
 import { resetAccountQuotaScope } from '../services/accountQuota'
+import { resetUpgradeTiersForTest } from '../services/upgradeTier'
 import { ModelPill, type ModelPillGroup } from './ModelPill'
 
 const GROUPS = [{ label: 'Forsion', source: 'forsion', options: [
@@ -23,6 +24,7 @@ const tick = () => act(async () => { await new Promise((r) => setTimeout(r, 0)) 
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   setLocaleGlobal('zh')
+  resetUpgradeTiersForTest()
   Object.defineProperty(Element.prototype, 'getAnimations', { configurable: true, value: () => [] })
   window.tangu = {
     accountQuota: vi.fn().mockResolvedValue({ status: 200, json: { dailyLimit: 100, weeklyLimit: 100, modelMultiplierCap: 2.5 } }),
@@ -173,3 +175,70 @@ describe('评审第三轮:换号与晚到的上限', () => {
   })
 })
 
+
+describe('写明最低够用的档位(公开方案的倍率上限)', () => {
+  // 同生产形状:plus 2.5、pro 两个方案都 5、max / ultra 不限;Free 不在 offerings 里
+  const offerings = { packages: [], membershipPlans: [
+    { tier: 'plus', name: 'Plus', perks: { modelMultiplierCap: 2.5 } },
+    { tier: 'pro', name: 'Pro', perks: { modelMultiplierCap: 5 } },
+    { tier: 'pro', name: 'Pro 年付', perks: { modelMultiplierCap: 5 } },
+    { tier: 'max', name: 'Max', perks: { modelMultiplierCap: -1 } },
+    { tier: 'ultra', name: 'Ultra', perks: { modelMultiplierCap: -1 } },
+  ] }
+  const withOfferings = (r: unknown) => { window.tangu!.cloudFetch = vi.fn().mockImplementation(async ({ path }: { path: string }) => path === '/payment/offerings' ? r : { status: 404 }) as any }
+
+  it('锁住的行、行下说明、药丸上的说明都写「X 起可用」', async () => {
+    withOfferings({ status: 200, json: offerings })
+    await mount({ modelId: 'pricey' })
+    expect(el.querySelector('.model-pill-btn')!.getAttribute('aria-label')).toContain('Pro 起可用')
+    await openModelPane()
+    expect(item('Pricey').querySelector('.model-lock-note')?.textContent).toBe('Pro 起可用')
+    await act(async () => { item('Pricey').click() })
+    expect(document.querySelector('.cm-lock-tip')?.textContent).toContain('当前会员档位不能使用 Pricey。升级到 Pro 或以上即可，也可以换一个模型。')
+    expect(window.tangu!.cloudFetch).toHaveBeenCalledOnce()
+  })
+
+  it('英文界面', async () => {
+    setLocaleGlobal('en')
+    withOfferings({ status: 200, json: offerings })
+    await act(async () => { root.render(createElement(LocaleProvider, null, createElement(ModelPill, { modelId: 'cheap', groups: GROUPS, onSelect: vi.fn() }))) })
+    await tick()
+    await openModelPane()
+    expect(item('Pricey').querySelector('.model-lock-note')?.textContent).toBe('Available from Pro')
+  })
+
+  it('手机原生合并菜单的模型说明也带档位', async () => {
+    withOfferings({ status: 200, json: offerings })
+    const seen: NativeSheetPayload[] = []
+    const off = installNativeSheetPresenter(async (payload) => { seen.push(payload); return null })
+    try {
+      await mount({ icon: null, onThinkingChange: vi.fn(), thinkingLevel: 'medium', hub: { title: 'Hub', back: 'Back', extra: () => [] } })
+      await act(async () => { el.querySelector<HTMLButtonElement>('.model-pill-btn')!.click() })
+      await tick()
+      const models = seen[0].kind === 'menu' ? seen[0].sections[0].items[0].children!.flatMap((s) => s.items) : []
+      expect(models[2].detail).toContain('Pro 起可用')
+    } finally { off() }
+  })
+
+  it('取不到方案 / 旧服务端没有 perks / 没有够用的档:回落「升级后可用」', async () => {
+    for (const r of [
+      { status: 500, json: null },
+      { status: 200, json: { packages: [], membershipPlans: [{ tier: 'pro', name: 'Pro' }] } },
+      { status: 200, json: { packages: [], membershipPlans: [{ tier: 'plus', perks: { modelMultiplierCap: 2.5 } }] } },
+    ]) {
+      resetUpgradeTiersForTest()
+      withOfferings(r)
+      await mount()
+      await openModelPane()
+      expect(item('Pricey').querySelector('.model-lock-note')?.textContent).toBe('升级后可用')
+      await act(async () => { el.querySelector<HTMLButtonElement>('.model-pill-btn')!.click() })
+    }
+  })
+
+  it('上限读不到(一个都不锁)时不去拉方案', async () => {
+    window.tangu!.accountQuota = vi.fn().mockRejectedValue(new Error('offline')) as any
+    withOfferings({ status: 200, json: offerings })
+    await mount()
+    expect(window.tangu!.cloudFetch).not.toHaveBeenCalled()
+  })
+})
