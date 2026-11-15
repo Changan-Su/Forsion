@@ -203,11 +203,16 @@ function buildDecorations(
         const owned = embedSourceKey.getState(state)?.decos.find(embedFrom, embedTo, (spec) => spec.embedSource === true)
           .find((d) => d.from <= embedFrom && d.to >= embedTo)
         if (owned) {
-          if ((owned.spec as { revealed?: boolean }).revealed && !parseAppRefInner(m[1])) {
+          const spec = owned.spec as { revealed?: boolean; attachment?: boolean }
+          if (spec.revealed && !parseAppRefInner(m[1])) {
             const fileLink = isPdfLinkInner(m[1]) || !!parseMediaLinkInner(m[1])
             const sp = fileLink ? null : splitLinkInner(m[1])
             const ok = sp?.subpath && !sp.target ? true : isResolved(linkTarget(m[1]))
-            decos.push(Decoration.inline(embedFrom, embedTo, { class: ok ? 'wikilink-src' : 'wikilink-src wikilink-unresolved', 'data-wiki-open': wikiOpenArg(m[1]), spellcheck: 'false' }))
+            // 右键菜单同嵌入体那份(embed / attachment):附件丢了不给「创建笔记」(否则 `![[data.zip]]` 会生出 data.zip.md)
+            decos.push(Decoration.inline(embedFrom, embedTo, {
+              class: ok ? 'wikilink-src' : 'wikilink-src wikilink-unresolved', 'data-wiki-open': wikiOpenArg(m[1]), spellcheck: 'false',
+              'data-wiki-embed': spec.attachment ? 'attachment' : 'note',
+            }))
           }
           continue
         }
@@ -574,7 +579,10 @@ export function wikilinkPlugin(
               const src = (e.target as HTMLElement | null)?.closest?.<HTMLElement>('.wikilink-src[data-wiki-open]')
               if (!src) return false
               e.stopPropagation()
-              const taken = !src.dispatchEvent(new CustomEvent('amadeus:wikilink-menu', { bubbles: true, cancelable: true, detail: { inner: src.dataset.wikiOpen, x: e.clientX, y: e.clientY } }))
+              const taken = !src.dispatchEvent(new CustomEvent('amadeus:wikilink-menu', { bubbles: true, cancelable: true, detail: {
+                inner: src.dataset.wikiOpen, x: e.clientX, y: e.clientY,
+                ...(src.dataset.wikiEmbed ? { embed: true, attachment: src.dataset.wikiEmbed === 'attachment' } : {}),
+              } }))
               if (taken) e.preventDefault()
               return taken
             },

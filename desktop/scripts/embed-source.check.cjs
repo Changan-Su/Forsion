@@ -209,7 +209,7 @@ async function main() {
     await p.close()
 
     // S14
-    p = await open(browser, '# T\n\n上一段。\n\n![[Embedded]]\n\n![[Missing note]]\n\n下一段。\n\n对照 [[Embedded]] 与 [[Missing note]]\n')
+    p = await open(browser, '# T\n\n上一段。\n\n![[Embedded]]\n\n![[Missing note]]\n\n![[gone.zip]]\n\n下一段。\n\n对照 [[Embedded]] 与 [[Missing note]]\n')
     const paint = (src) => p.evaluate((src) => {
       const v = window.__upage.probe.view()
       let pos = -1
@@ -225,11 +225,12 @@ async function main() {
       ref.remove()
       const r = el.getBoundingClientRect()
       let menu = null
-      const on = (e) => { menu = e.detail.inner; e.preventDefault() }
+      let attachment = null
+      const on = (e) => { menu = e.detail.inner; attachment = !!e.detail.attachment; e.preventDefault() }
       document.addEventListener('amadeus:wikilink-menu', on)
       el.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: r.left + 4, clientY: r.top + 4 }))
       document.removeEventListener('amadeus:wikilink-menu', on)
-      return { el: true, text: el.textContent, unresolved: el.classList.contains('wikilink-unresolved'), colored: getComputedStyle(el).color === want, menu, spell: el.getAttribute('spellcheck') }
+      return { el: true, text: el.textContent, unresolved: el.classList.contains('wikilink-unresolved'), colored: getComputedStyle(el).color === want, menu, attachment, spell: el.getAttribute('spellcheck') }
     }, src)
     // 夹具的页面表缺省是空的(什么都判成不存在):补上 Embedded,让主题色那支也被量到
     await p.evaluate(() => { const ps = window.__upage.pageStore; ps.setState({ pages: [...new Set([...(ps.getState().pages || []), 'Embedded.md'])] }) })
@@ -239,6 +240,8 @@ async function main() {
     const k2 = await paint('![[Embedded]]')
     await caret(p, '![[Missing note]]')
     const k3 = await paint('![[Missing note]]')
+    await caret(p, '![[gone.zip]]')
+    const k5 = await paint('![[gone.zip]]')
     await caret(p, '下一段。')
     const k4 = await p.evaluate(() => document.querySelectorAll('.unified-body .ProseMirror .wikilink-src').length)
     // 解析态口径 = 同一篇里不带 `!` 的双链(夹具的解析表认不认 Embedded 不归这里管,要的是两种写法一致)
@@ -247,8 +250,10 @@ async function main() {
     record('S14 露出的 `![[…]]` 着色、右键是文件菜单;解析态跟同名普通双链一致;光标走开不留着色',
       k1.el && k1.text === '![[Embedded]]' && k1.colored && !k1.unresolved && k1.menu === 'Embedded' && k1.spell === 'false' &&
       k2.el && k2.menu === 'Embedded' && k3.el && k3.menu === 'Missing note' && k3.unresolved && k4 === 0 &&
-      plain['Embedded'] === false && plain['Missing note'] === true,
-      JSON.stringify({ 行首: k1, 行尾: k2, 不存在: k3, 走开后着色段数: k4, 普通双链未解析: plain }))
+      plain['Embedded'] === false && plain['Missing note'] === true &&
+      // 附件丢了:右键带 attachment(宿主菜单据此不给「创建笔记」,同嵌入体那份;Codex 评审 P2),笔记嵌入不带
+      k1.attachment === false && k3.attachment === false && k5.el && k5.attachment === true,
+      JSON.stringify({ 行首: k1, 行尾: k2, 不存在: k3, 丢了的附件: k5, 走开后着色段数: k4, 普通双链未解析: plain }))
 
     if (process.argv.some((x) => x.startsWith('--shot'))) {
       const dir = (process.argv.find((x) => x.startsWith('--shot=')) || '').slice(7) || os.tmpdir()
