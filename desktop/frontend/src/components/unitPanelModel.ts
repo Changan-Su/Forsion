@@ -6,6 +6,7 @@
  */
 import type { UnitInfo } from '../types'
 import { sharedLabel, type SharedUnit } from '../../../shared/sharedUnits'
+import type { LocalUnitRow, LocalUnitsSnapshot } from '../../../shared/localUnits'
 import { pluginDependencyIndex } from '../../../../tangu-agent/src/contracts/pluginAliases'
 
 export type UnitVia = 'lan' | 'p2p' | 'tunnel'
@@ -81,9 +82,34 @@ export interface SharedPanelRow {
 /** 一组共享过来的 Unit(按 shared.group.id 分,组标题按界面语言)。 */
 export interface SharedPanelGroup { id: string; title: string; rows: SharedPanelRow[] }
 
+/**
+ * 「这台电脑」组里的一个文件夹 Unit(本机多 Unit,shared/localUnits.ts)。
+ * self = 这一行就是当前这个进程;checked = 打勾(是自己、且没在看别的设备);
+ * usable = 文件夹在、标记对得上(running / stopped):能打开、能改名、能放到桌面;missing / mismatch 只能「从列表移除」。
+ */
+export interface LocalFolderPanelRow {
+  kind: 'local'
+  key: string
+  unit: LocalUnitRow
+  self: boolean
+  checked: boolean
+  usable: boolean
+}
+
+/** 「这台电脑」组(默认那一行 + 文件夹 Unit)。没有本机多 Unit 的宿主:inFolder false、rows 空、unreadable false。 */
+export interface LocalPanelGroup {
+  /** 当前进程是文件夹 Unit:默认那一行不打勾,点它 = 叫出默认那台(open('default'))。 */
+  inFolder: boolean
+  rows: LocalFolderPanelRow[]
+  /** 名册读不出(或这次 list 失败):组里写一行「读不出」,不给「添加」以外的写操作。 */
+  unreadable: boolean
+}
+
 export interface UnitPanelModel {
-  /** 「这台电脑」打勾:没在看别的设备。 */
+  /** 「这台电脑」(默认那一行)打勾:没在看别的设备、且当前进程就是默认那台。 */
   localCurrent: boolean
+  /** 「这台电脑」组里默认那一行之后的文件夹 Unit。 */
+  local: LocalPanelGroup
   /** 「我的设备」外面那几行:能走通的 + 正在看的那台(掉线了也不折),名册顺序。 */
   rows: UnitPanelRow[]
   /** 折进「离线 N 台」的。 */
@@ -119,7 +145,36 @@ export function remoteUnitId(key: string | null | undefined): string | null {
   return at > 0 ? key.slice(0, at) : null
 }
 
+/**
+ * 「这台电脑」组的文件夹 Unit 行。snapshot null = 还没读到(或宿主没有本机多 Unit);failed = 这次 list 失败。
+ * - 读不出(registry unreadable 或 failed):不列名册行,但当前进程若是文件夹 Unit,仍画它自己那一行(读不出名册 ≠ 不知道自己在哪)。
+ * - 名册里认不出自己(registry ok 却没有 current 的行):按 self 补上自己那一行,免得面板里找不到「我在哪」。
+ * - 只在没在看别的设备时给自己那一行打勾。
+ */
+export function localPanelGroup(snapshot: LocalUnitsSnapshot | null | undefined, failed: boolean, viewing: boolean): LocalPanelGroup {
+  const self = snapshot?.self
+  const selfId = self?.kind === 'folder' ? self.id : null
+  const unreadable = failed || snapshot?.registry === 'unreadable'
+  const units = unreadable ? [] : snapshot?.units ?? []
+  const list: LocalUnitRow[] = [...units]
+  if (self?.kind === 'folder' && !list.some((u) => u.current || u.id === self.id)) {
+    list.unshift({ id: self.id, name: self.name, icon: self.icon, path: self.path, displayPath: self.displayPath, state: 'running', current: true })
+  }
+  const rows = list.map((u): LocalFolderPanelRow => {
+    const isSelf = u.current || u.id === selfId
+    return {
+      kind: 'local', key: `local:${u.id}`, unit: u, self: isSelf,
+      checked: isSelf && !viewing,
+      // 能不能用只看文件夹状态:自己那一行要是名册报找不到 / 对不上,照实画成不能用(self 只管打勾和不给移除)
+      usable: u.state === 'running' || u.state === 'stopped',
+    }
+  })
+  return { inFolder: selfId !== null, rows, unreadable }
+}
+
 export function unitPanelModel(input: {
+  /** 本机多 Unit 的快照(useLocalUnits);缺省 = 没有本机多 Unit。 */
+  local?: { snapshot: LocalUnitsSnapshot | null; failed?: boolean }
   units: UnitInfo[] | null | undefined
   hostUnitId: string | null
   lanOk: Record<string, boolean>
@@ -166,7 +221,8 @@ export function unitPanelModel(input: {
     if (!g) groups.set(s.group.id, (g = { id: s.group.id, title: sharedLabel(s.group.title, lang), rows: [] }))
     g.rows.push(row)
   }
-  return { localCurrent: !viewingKey, rows, offline, shared: [...groups.values()] }
+  const local = localPanelGroup(input.local?.snapshot, !!input.local?.failed, !!viewingKey)
+  return { localCurrent: !viewingKey && !local.inFolder, local, rows, offline, shared: [...groups.values()] }
 }
 
 /** Unit 窗:名册回包 → 这扇窗的状态。list: undefined = 没有名册桥;抛错由调用方折成 'unknown'。 */

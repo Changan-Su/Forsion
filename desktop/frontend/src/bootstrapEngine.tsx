@@ -27,7 +27,7 @@ import { installAmadeusPlugins } from './amadeusPlugins'
 import { resetGuide } from '@amadeus/plugins/guideTips'
 import { installTanguProbe } from './tanguProbe'
 import { installBuiltins } from './builtins'
-import { AccountCard } from './components/AccountCard'
+import { AccountCard, accountCardWanted } from './components/AccountCard'
 import { RestartUpdateButton } from './components/RestartUpdateButton'
 import { UnitSwitcher } from './components/UnitSwitcher'
 import { installTanguSlice, useApp } from './stores/appStore'
@@ -416,7 +416,8 @@ export function installEngine(activateTangu: (host: TanguHost) => void): void {
   // 账号卡随 Forsion Extend 出现:登录 / 登出 / 切号 / 状态那五个通道都住在 Extend(authStatus 是它们的桥键);
   // 没装 Extend(验签失败 / 缺包)连卡都不画,引擎重启入口仍在设置 → 连接。Unit 网页投射装了账号提供方时照旧(tangu.account)。
   // 委托管理员:这一页的「账号」是那台设备,不是来访的管理员(名册顶上已写明是谁在管)—— 不挂账号卡。
-  if ((window.tangu?.authStatus || window.tangu?.account) && !delegatedAdmin) addRibbonIcon({
+  // 本机多 Unit:没 Extend 的主窗也挂(头像面板是回到这台电脑、添加 Unit 的唯一入口)。判别式单源在 accountCardWanted。
+  if (accountCardWanted(delegatedAdmin)) addRibbonIcon({
     id: 'rb-account',
     side: 'bottom',
     pinned: true, // 账号卡钉死最底:不参与拖拽/收纳/溢出

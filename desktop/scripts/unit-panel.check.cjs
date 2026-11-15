@@ -18,6 +18,9 @@
  *   S 别人共享给当前账号的 Unit(&shared):按组分、组标题与灰字按语言(缺了回落)、休眠中字样、点不动的行不是按钮、
  *     右键只有「切换到这台」、没有悬停新窗口、点能进的行 → 共享目标 + 胶囊「名字 · 组标题」+ 面板选中;没有绑定桥 → 失败态
  *   L 不出视口、不压头像:1200×720 / 1200×520 × 缩放 1 / 1.1,Unit 多了只滚 Unit 段;名册刷新变高后重新夹位置
+ *   U 本机多 Unit(&local[=self|unreadable|failed]、&noext):「这台电脑」组的文件夹 Unit 行(灰字路径 / 找不到 / 对不上、↗ 常驻、长路径省略)、
+ *     右键五项与自己那一行、添加 Unit 对话框(名字 / 图标 / 位置 / 更改… / 创建并打开、打开已有的 duplicate_id)、移除确认、名册读不出、
+ *     文件夹 Unit 里头像角标与「这台电脑」= open('default')、没有 Extend 也开面板、矮窗 110% 几何;亮 / 暗 / 英文各拍面板、右键、对话框
  * 顺带拍截图(浅色 / 深色 / 青绿配色 / 英文 / 缩放 110%)到 UNITPANEL_SHOT_DIR。
  *
  * 跑:npm run check:unitpanel(HARNESS_URL 指向本检出起的 vite;没起就在 5173 自起,跑完自收)
@@ -706,6 +709,265 @@ async function main() {
       }
       if (extra.includes('dark')) shots.push(await shot(pq, 'shared-dark'))
       await pq.close()
+    }
+
+    // ── U 本机多 Unit(&local:window.tangu.localUnits 桩;主进程那半由 e2e:localunits 真跑)──
+    const readLocal = (pg) => pg.evaluate(() => {
+      const box = document.querySelector('[data-testid="account-units"]')
+      return Array.from(box.querySelectorAll('.ap-sec, .ap-item, .ap-unit-note')).map((n) => {
+        const go = n.querySelector('.ap-unit-go')
+        const path = n.querySelector('.ap-unit-path')
+        const name = n.querySelector('.ap-unit-name')
+        const cs = name ? getComputedStyle(name) : null
+        return {
+          sec: n.classList.contains('ap-sec'), id: n.getAttribute('data-local-unit') ?? (n.hasAttribute('data-unit-local') ? 'default' : null),
+          name: (name ?? n).textContent.trim(), tag: n.tagName, path: path?.textContent.trim() ?? '',
+          go: !!go && getComputedStyle(go).visibility === 'visible' && Number(getComputedStyle(go).opacity) > 0.3,
+          check: !!n.querySelector('.ap-unit-check'), current: n.getAttribute('aria-current') === 'true',
+          inert: n.classList.contains('ap-unit--inert'), nameColor: cs?.color ?? '',
+          rowFits: n.scrollWidth <= n.clientWidth + 1, nameFits: !name || name.scrollWidth <= name.clientWidth + 1,
+          pathCut: !!path && path.scrollWidth > path.clientWidth + 1, note: n.classList.contains('ap-unit-note'), add: n.hasAttribute('data-local-add'),
+        }
+      })
+    })
+    const menuOf = (pg) => pg.evaluate(() => Array.from(document.querySelectorAll('.ap-unit-ctx [role="menuitem"]')).map((b) => b.textContent.trim()))
+    const localCalls = (pg) => pg.evaluate(() => window.__localCalls.filter((c) => c[0] !== 'list'))
+    const mutedOf = (pg) => pg.evaluate(() => { const p = document.createElement('span'); p.style.color = 'var(--text-muted)'; document.querySelector('.account-pop').appendChild(p); const c = getComputedStyle(p).color; p.remove(); return c })
+    const dialogBox = (pg) => pg.evaluate(() => {
+      const d = document.querySelector('[data-lu-dialog]')
+      if (!d) return null
+      const r = d.getBoundingClientRect(), cs = getComputedStyle(d)
+      return { top: r.top, bottom: r.bottom, left: r.left, right: r.right, vw: innerWidth, vh: innerHeight, bg: cs.backgroundColor, radius: cs.borderTopLeftRadius, title: d.querySelector('.dialog-title')?.textContent.trim() ?? '', location: d.querySelector('[data-lu="location"]')?.value ?? null, err: d.querySelector('.lu-err')?.textContent.trim() ?? '' }
+    })
+    for (const [variant, extra] of [['light', '&local'], ['dark', '&local&dark'], ['en', '&local&lang=en']]) {
+      const pu = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1200, height: 720 } })
+      pu.on('pageerror', (e) => console.log('[pageerror]', e.message))
+      await pu.addInitScript(() => localStorage.clear())
+      await boot(pu, extra)
+      await openPanel(pu)
+      await pu.waitForFunction(() => document.querySelectorAll('[data-local-unit]').length >= 4, null, { timeout: 5000 }).catch(() => {})
+      const L = await readLocal(pu)
+      const en = variant === 'en'
+      const nm = en ? { lab: 'Experiments', demo: 'Client demo', old: 'Old backup', copy: 'Copied over', tc: 'This computer', md: 'My devices', add: 'Add Unit…', manage: 'Manage Units…' }
+        : { lab: '实验用', demo: '客户演示', old: '旧备份', copy: '拷来的', tc: '这台电脑', md: '我的设备', add: '添加 Unit…', manage: '管理 Unit…' }
+      const seq = L.map((r) => (r.sec ? `#${r.name}` : r.name))
+      const want = [`#${nm.tc}`, nm.tc, nm.lab, nm.demo, nm.old, nm.copy, `#${nm.md}`]
+      check(`U1 「这台电脑」组(${variant}):默认那一行 + 四个文件夹 Unit,之后才是「我的设备」;「添加 Unit…」紧挨在「管理 Unit…」上面`,
+        JSON.stringify(seq.slice(0, 7)) === JSON.stringify(want) && seq.at(-2) === nm.add && seq.at(-1) === nm.manage, JSON.stringify(seq))
+      const by = (id) => L.find((r) => r.id === id)
+      const muted = await mutedOf(pu)
+      check(`U2 行的构成(${variant}):灰字 = 路径 / 找不到 / 对不上;↗ 常驻在能开的行;找不到、对不上的整行变灰且不是按钮`,
+        by('lu-lab').path === `~/Forsion Units/${nm.lab}` && by('lu-lab').go && by('lu-demo').go && by('lu-lab').tag === 'BUTTON'
+          && by('lu-old').path === (en ? 'Folder not found' : '找不到这个文件夹') && by('lu-copy').path === (en ? "Folder doesn't match" : '文件夹对不上')
+          && !by('lu-old').go && !by('lu-copy').go && by('lu-old').tag === 'DIV' && by('lu-old').inert && by('lu-old').nameColor === muted && by('lu-lab').nameColor !== muted
+          && by('default').check && by('default').current,
+        JSON.stringify(['lu-lab', 'lu-demo', 'lu-old', 'lu-copy', 'default'].map(by)))
+      check(`U3 长路径从尾部省略、不撑出 320,名字完整(${variant})`, by('lu-demo').pathCut && L.every((r) => r.rowFits) && by('lu-demo').nameFits, JSON.stringify(by('lu-demo')))
+      shots.push(await shot(pu, `local-${variant}`))
+
+      // 右键:能开的五项;找不到的只有「从列表移除…」;Esc 只收菜单
+      await pu.click('[data-local-unit="lu-demo"]', { button: 'right' })
+      await pu.waitForTimeout(300)
+      const items = await menuOf(pu)
+      const want5 = en ? ['Open in own window', 'Add to desktop', 'Name and icon…', 'Show in Finder', 'Remove from list…']
+        : ['在自己的窗口打开', '添加到桌面', '改名字和图标…', '在访达中显示', '从列表移除…']
+      const menuGeo = await pu.evaluate(() => { const r = document.querySelector('.ap-unit-ctx').getBoundingClientRect(); return { inView: r.left >= 0 && r.top >= 0 && r.right <= innerWidth && r.bottom <= innerHeight, danger: document.querySelector('.ap-unit-ctx [data-unit-act="remove"]').classList.contains('danger'), icons: document.querySelectorAll('.ap-unit-ctx [role="menuitem"] > svg').length, oneLine: (() => { const hs = Array.from(document.querySelectorAll('.ap-unit-ctx [role="menuitem"]')).map((b) => b.getBoundingClientRect().height); return Math.max(...hs) - Math.min(...hs) < 2 })() } })
+      check(`U4 右键文件夹 Unit(${variant}):五项照方案、移除是危险色、每项都有图标、每项一行不折、菜单在视口里`, JSON.stringify(items) === JSON.stringify(want5) && menuGeo.inView && menuGeo.danger && menuGeo.icons === 5 && menuGeo.oneLine, JSON.stringify({ items, menuGeo }))
+      await pu.mouse.move(1150, 40)
+      shots.push(await shot(pu, `local-ctx-${variant}`))
+      await pu.keyboard.press('Escape'); await pu.waitForTimeout(200)
+      const escOk = await pu.evaluate(() => !document.querySelector('.ap-unit-ctx') && !!document.querySelector('.account-pop'))
+      await pu.click('[data-local-unit="lu-old"]', { button: 'right' })
+      await pu.waitForTimeout(250)
+      const oldItems = await menuOf(pu)
+      check(`U4 Esc 只收菜单;找不到的行右键只有「从列表移除…」(${variant})`, escOk && JSON.stringify(oldItems) === JSON.stringify([en ? 'Remove from list…' : '从列表移除…']), JSON.stringify({ escOk, oldItems }))
+      await pu.keyboard.press('Escape'); await pu.waitForTimeout(150)
+      if (variant === 'light') {
+        // 键盘:找不到的行 Tab 停得住;Enter 开菜单(只有移除)、焦点进菜单;Esc 收菜单、焦点回到那一行
+        await pu.focus('[data-local-unit="lu-old"]')
+        await pu.keyboard.press('Enter'); await pu.waitForTimeout(250)
+        const kb = await pu.evaluate(() => ({
+          items: Array.from(document.querySelectorAll('.ap-unit-ctx [role="menuitem"]')).map((b) => b.textContent.trim()),
+          focused: document.activeElement?.getAttribute('data-unit-act') ?? null,
+        }))
+        await pu.keyboard.press('Escape'); await pu.waitForTimeout(150)
+        const back = await pu.evaluate(() => ({ row: document.activeElement?.getAttribute('data-local-unit') ?? null, menu: !!document.querySelector('.ap-unit-ctx'), pop: !!document.querySelector('.account-pop') }))
+        check('U4k 找不到的行用键盘也到得了:Enter 开只有「从列表移除…」的菜单、焦点在它上面;Esc 收菜单、焦点回到那一行、面板还开着',
+          JSON.stringify(kb.items) === JSON.stringify(['从列表移除…']) && kb.focused === 'remove' && back.row === 'lu-old' && !back.menu && back.pop, JSON.stringify({ kb, back }))
+      }
+
+      // 添加 Unit 对话框(真对话框的壳)
+      await pu.click('[data-local-add]')
+      await pu.waitForSelector('[data-lu-dialog="add"]', { timeout: 3000 })
+      await pu.waitForTimeout(300)
+      const closedForDialog = !(await panelOpen(pu))
+      await pu.fill('[data-lu="name"]', en ? 'Lab 2' : '实验用 2')
+      const d0 = await dialogBox(pu)
+      check(`U5 「添加 Unit…」:面板收起、对话框有底色和圆角、在视口里,位置 = 缺省父目录/名字(${variant})`,
+        closedForDialog && !!d0 && d0.bg !== 'rgba(0, 0, 0, 0)' && parseFloat(d0.radius) > 0 && d0.top >= 0 && d0.bottom <= d0.vh && d0.title === (en ? 'Add a Unit' : '添加 Unit')
+          && d0.location === `~/Forsion Units/${en ? 'Lab 2' : '实验用 2'}`, JSON.stringify(d0))
+      await pu.mouse.move(1150, 40)
+      shots.push(await shot(pu, `local-add-${variant}`))
+      if (variant === 'light') {
+        // 图标:点开 emoji 选择,它盖在对话框之上、点得到;挑一个 → 图标钮换成它
+        await pu.click('[data-lu="icon"]')
+        await pu.waitForSelector('.amx-iconpick', { timeout: 3000 })
+        const pickTop = await pu.evaluate(() => { const b = document.querySelector('.amx-iconpick-item'); const r = b.getBoundingClientRect(); const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2); return { hit: !!hit && b.contains(hit), em: b.textContent } })
+        await pu.click('.amx-iconpick-item')
+        await pu.waitForTimeout(150)
+        const iconNow = await pu.evaluate(() => document.querySelector('[data-lu="icon"]').textContent.trim())
+        const stillOpen = await pu.evaluate(() => !!document.querySelector('[data-lu-dialog="add"]'))
+        check('U6 名字旁的图标钮 = emoji 选择,盖在对话框之上点得到;挑了就换上,对话框还在', pickTop.hit && iconNow === pickTop.em && stillOpen, JSON.stringify({ pickTop, iconNow, stillOpen }))
+        // 更改… → chooseParent;创建并打开 = create 再 open
+        await pu.click('[data-lu="change"]')
+        await pu.waitForTimeout(150)
+        const d1 = await dialogBox(pu)
+        await pu.click('[data-lu="create"]')
+        await pu.waitForTimeout(400)
+        const calls = await localCalls(pu)
+        const created = calls.find((c) => c[0] === 'create')
+        const opened = calls.find((c) => c[0] === 'open')
+        const gone = await pu.evaluate(() => !document.querySelector('[data-lu-dialog]'))
+        check('U7 「更改…」换父目录;「创建并打开」= create(名字、图标、父目录)再 open(新 id),对话框关掉',
+          d1.location === '~/Desktop/实验用 2' && created?.[1]?.name === '实验用 2' && created?.[1]?.icon === pickTop.em && created?.[1]?.parentDir === '/Users/lin/Desktop' && opened?.[1] === 'lu-new-1' && gone,
+          JSON.stringify({ d1: d1?.location, calls, gone }))
+        await openPanel(pu)
+        const after = await readLocal(pu)
+        check('U7 新建的那台出现在「这台电脑」组里(onChanged 推过来)', after.some((r) => r.id === 'lu-new-1' && r.path === '~/Desktop/实验用 2'), JSON.stringify(after.filter((r) => r.id)))
+        // 单击一行 = open(id),面板关
+        await pu.click('[data-local-unit="lu-lab"]')
+        const closedU8 = await closedSoon(pu)
+        const c8 = (await localCalls(pu)).filter((c) => c[0] === 'open').map((c) => c[1])
+        check('U8 单击文件夹 Unit = 在它自己的窗口打开(open(id)),面板关;这个窗口不切(远程面不动)', closedU8 && c8.at(-1) === 'lu-lab' && !(await remoteState(pu)).active, JSON.stringify(c8))
+        // 打开已有的:duplicate_id 说人话;cancelled 不说话
+        await openPanel(pu)
+        await pu.click('[data-local-add]')
+        await pu.waitForSelector('[data-lu-dialog="add"]')
+        await pu.click('[data-lu-mode="existing"]')
+        await pu.click('[data-lu="choose"]')
+        await pu.waitForTimeout(250)
+        const dup = await dialogBox(pu)
+        await pu.mouse.move(1150, 40)
+        shots.push(await shot(pu, 'local-existing-dup'))
+        await pu.evaluate(() => { window.__localExisting = 'cancelled' })
+        await pu.click('[data-lu="choose"]')
+        await pu.waitForTimeout(250)
+        const cancelled = await dialogBox(pu)
+        check('U9 打开已有的:拷贝来的(duplicate_id)说「像是从另一个 Unit 拷贝出来的…暂时不能加入」;取消了不说话、对话框留着',
+          dup?.err === '这个文件夹像是从另一个 Unit 拷贝出来的，两份会互相顶掉登录，暂时不能加入。' && cancelled && cancelled.err === '', JSON.stringify({ dup: dup?.err, cancelled: cancelled?.err }))
+        await pu.keyboard.press('Escape'); await pu.waitForTimeout(200)
+        // 添加到桌面:图标在渲染层画成 PNG 交过去(同 Space / 设备那套),还给兜底名
+        await openPanel(pu)
+        await pu.click('[data-local-unit="lu-demo"]', { button: 'right' })
+        await pu.click('.ap-unit-ctx [data-unit-act="desktop"]')
+        await pu.waitForTimeout(600)
+        const desk = (await localCalls(pu)).filter((c) => c[0] === 'addToDesktop')
+        check('U16 添加到桌面:addToDesktop(id, { iconPng: PNG, fallbackName }),面板收起', desk.length === 1 && desk[0][1] === 'lu-demo' && desk[0][2] === 'png' && desk[0][3] === 'Forsion 本机 Unit' && !(await panelOpen(pu)), JSON.stringify(desk))
+        // 从列表移除…:确认框写明文件夹还在;确认 → remove(id),行没了
+        await openPanel(pu)
+        await pu.click('[data-local-unit="lu-demo"]', { button: 'right' })
+        await pu.click('.ap-unit-ctx [data-unit-act="remove"]')
+        await pu.waitForSelector('[data-local-unit-dialog="remove"] .dialog', { timeout: 3000 })
+        const confirmText = await pu.evaluate(() => document.querySelector('[data-local-unit-dialog="remove"] .dialog').textContent)
+        await pu.mouse.move(1150, 40)
+        shots.push(await shot(pu, 'local-remove-confirm'))
+        await pu.click('[data-local-unit-dialog="remove"] .dialog-btn[data-primary]')
+        await pu.waitForTimeout(300)
+        await openPanel(pu)
+        const afterRm = await readLocal(pu)
+        const rmCalls = (await localCalls(pu)).filter((c) => c[0] === 'remove')
+        check('U10 从列表移除…:先确认(「只是从列表里拿掉,文件夹和里面的数据都还在」),确认后 remove(id)、行没了',
+          confirmText.includes('只是从列表里拿掉，文件夹和里面的数据都还在。') && rmCalls.length === 1 && rmCalls[0][1] === 'lu-demo' && !afterRm.some((r) => r.id === 'lu-demo'), JSON.stringify({ rmCalls }))
+      }
+      await pu.close()
+    }
+    // 名册读不出 / list 抛错:一行灰字,不列行,「添加 Unit…」还在
+    for (const mode of ['unreadable', 'failed']) {
+      const pr = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1200, height: 720 } })
+      await pr.addInitScript(() => localStorage.clear())
+      await boot(pr, `&local=${mode}`)
+      await openPanel(pr)
+      await pr.waitForTimeout(250)
+      const L = await readLocal(pr)
+      check(`U11 名册${mode === 'failed' ? ' list() 抛错' : '读不出'}:「这台电脑」组里一行「读不出本机 Unit 列表」,不列文件夹 Unit,「添加 Unit…」还在`,
+        L.some((r) => r.note && r.name === '读不出本机 Unit 列表') && !L.some((r) => r.id && r.id !== 'default') && L.some((r) => r.add), JSON.stringify(L.map((r) => r.name)))
+      if (mode === 'unreadable') shots.push(await shot(pr, 'local-unreadable'))
+      await pr.close()
+    }
+    // 在文件夹 Unit 里:默认那一行不勾、带 ↗、点它 = open('default');自己那一行打勾、右键没有「打开」「移除」;头像带角标
+    {
+      const ps = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1200, height: 720 } })
+      await ps.addInitScript(() => localStorage.clear())
+      await boot(ps, '&local=self')
+      await ps.waitForSelector('[data-local-badge] .unitfr-badge', { timeout: 5000 }).catch(() => {})
+      const badge = await ps.evaluate(() => { const b = document.querySelector('.account-card [data-local-badge] .unitfr-badge'); const a = document.querySelector('.account-card .account-avatar'); if (!b || !a) return null; const rb = b.getBoundingClientRect(), ra = a.getBoundingClientRect(); return { w: rb.width, right: rb.right - ra.right, bottom: rb.bottom - ra.bottom } })
+      await openPanel(ps)
+      await ps.waitForTimeout(200)
+      const L = await readLocal(ps)
+      const def = L.find((r) => r.id === 'default'), me = L.find((r) => r.id === 'lu-lab')
+      await ps.click('[data-local-unit="lu-lab"]', { button: 'right' })
+      await ps.waitForTimeout(250)
+      const items = await menuOf(ps)
+      await ps.mouse.move(1150, 40)
+      shots.push(await shot(ps, 'local-self'))
+      await ps.keyboard.press('Escape'); await ps.waitForTimeout(150)
+      await ps.click('[data-unit-local]')
+      await ps.waitForTimeout(250)
+      const opened = (await localCalls(ps)).filter((c) => c[0] === 'open').map((c) => c[1])
+      check('U12 在文件夹 Unit 里:默认那一行不勾、带 ↗,点它 = 叫出默认那台(open(\'default\'));自己那一行打勾',
+        def && !def.check && def.go && me?.check && me.current && opened.at(-1) === 'default', JSON.stringify({ def, me, opened }))
+      check('U12 自己那一行右键:没有「在自己的窗口打开」也没有「从列表移除…」', JSON.stringify(items) === JSON.stringify(['添加到桌面', '改名字和图标…', '在访达中显示']), JSON.stringify(items))
+      check('U13 文件夹 Unit 里头像右下角叠这台 Unit 的图标(同远端 Unit 的角标几何)', !!badge && badge.w > 10 && badge.right > 0 && badge.right < 6 && badge.bottom > 0 && badge.bottom < 6, JSON.stringify(badge))
+      await ps.close()
+    }
+    // 没有 Extend(没登录、没名册、没设备桥):点头像照样开面板,只有「这台电脑」组
+    {
+      const pn = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1200, height: 720 } })
+      await pn.addInitScript(() => localStorage.clear())
+      await boot(pn, '&local&noext').catch(() => {}) // 卡没挂上时 boot 等不到头像:别在这里抛,交给下面 U14a 判红
+      // 账号卡跟产品同一个判别式挂(accountCardWanted):没 Extend 时只靠本机多 Unit —— 判别式漏了这一支,卡就整张没了
+      const card = await pn.waitForSelector('.account-card, .ribbon-account', { timeout: 2000 }).then(() => pn.evaluate(() => {
+        const c = document.querySelector('.account-card, .ribbon-account')
+        return { cls: c.className, name: c.querySelector('.account-name')?.textContent.trim() ?? null, text: c.textContent, title: c.getAttribute('title') }
+      })).catch(() => null)
+      check('U14a 没有 Extend、没登录:头像卡照样挂上,写「未登录」,不写「登录 Forsion / 点击登录」(登录通道不在)',
+        !!card && (card.name === null || card.name === '未登录') && !card.text.includes('点击登录') && !card.text.includes('登录 Forsion') && card.title === '未登录', JSON.stringify(card))
+      shots.push(await shot(pn, 'local-noext-card'))
+      if (card) {
+        await openPanel(pn)
+        await pn.waitForTimeout(250)
+      }
+      const L = card ? await readLocal(pn) : []
+      const pop = await pn.evaluate(() => {
+        const p = document.querySelector('.account-pop')
+        if (!p) return null
+        return {
+          head: p.querySelector('.ap-name')?.textContent.trim() ?? '',
+          // 头部下面什么都没有时不留分隔线(孤零零一条线贴着面板底边)
+          headLine: (() => { const h = p.querySelector('.ap-head'); return h && !h.nextElementSibling ? getComputedStyle(h).borderBottomWidth : 'n/a' })(),
+          items: Array.from(p.querySelectorAll(':scope > .ap-item, :scope > button.ap-item')).map((b) => b.textContent.trim()),
+          text: p.textContent,
+          add: !!p.querySelector('[data-local-add]'),
+        }
+      })
+      check('U14 没有 Extend、没登录:点头像开面板(不直接去登录),只有「这台电脑」组 + 添加 Unit…;头部写「未登录」,没有点了没反应的登录行,也不留孤零零的分隔线',
+        !!pop && L.filter((r) => r.sec).map((r) => r.name).join('|') === '这台电脑' && L.filter((r) => r.id && r.id !== 'default').length === 4
+          && pop.add && pop.head === '未登录' && !pop.text.includes('登录 Forsion') && pop.headLine === '0px', JSON.stringify({ L: L.map((r) => r.name), pop }))
+      if (pop) shots.push(await shot(pn, 'local-noext'))
+      await pn.close()
+    }
+    // 几何:本机组 + 20 台设备,矮窗 × 110%,仍只滚 Unit 段
+    {
+      const pg = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1200, height: 520 } })
+      await pg.addInitScript(() => localStorage.clear())
+      await boot(pg, '&local&many')
+      await pg.evaluate(() => { document.body.style.zoom = '1.1'; window.dispatchEvent(new Event('forsion:uizoom')) })
+      await pg.waitForTimeout(150)
+      await openPanel(pg)
+      await pg.waitForTimeout(300)
+      const g = await geometry(pg)
+      check('U15 本机组 + 20 台设备(1200×520 · 缩放 1.1):不出视口、不压头像,只滚 Unit 段', inside(g) && g.listScrolls && !g.bodyScrolls && g.lastVisible, JSON.stringify(g))
+      await pg.close()
     }
 
     // ── K web ──
