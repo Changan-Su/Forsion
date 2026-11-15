@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.114.0
+  version: 1.115.0
   author: Forsion
   category: Forsion
 ---
@@ -527,7 +527,7 @@ ctx.registerCommand({
 | `registerFont` | 设置 → 外观 → 字体 | 2026-08-28 起;**返回 disposer**(宿主在禁用/重载时也会自己撤销,返回值可以不接);旧宿主没有 → `ctx.registerFont?.(…)` |
 | `registerPanel` | 右侧栏面板 | ⚠️已弃用,收 **React 组件**(拿不到宿主的 React 实例,只有自带 React 的插件能用,mindmap 有先例);新代码一律 `registerView` |
 | `registerPropertyType` | 多维表自定义列类型 | ⚠️同上,`Cell` 是 React 组件;`baseType` 决定落盘形状 |
-| `ctx.notify(msg, {level, action, key})` | 右上角通知 | 自动标插件名,用户可按插件静音;`action: { label, run }` 在卡上放一个按钮(典型「撤销」,2026-10-17 起,旧宿主忽略)、`key` 同 key 的后一张顶掉前一张 |
+| `ctx.notify(msg, {level, action, key, undo, urgent})` | 桌面右上角的卡;手机(窄于 640)是状态栏下的一条横幅 | 自动标插件名,用户可按插件静音;`action: { label, run }` 在卡上放一个按钮(典型「撤销」,2026-10-17 起,旧宿主忽略)、`key` 同 key 的后一张顶掉前一张;`undo` / `urgent`(2026-11-15 起)见下「带按钮的通知」 |
 | `ctx.achievements` | 成就系列 + `track(event, n)`;2026-10-17 起 `count(event, { own? })` 读计数(缺省读官方事件,只读)、`subscribe(cb)`、自己系列的 `isClaimed(id)` / `claim(id)` | 宿主强制 `plugin:<id>:` 前缀,伪造不了官方成就;`count` 读不到别家插件的计数(恒 0);新成员旧宿主没有 → `?.` |
 | `ctx.activity.log(event, detail)` | 写进活动日志(Muse 读得到) | 同款前缀纪律 |
 | `ctx.loadData() / saveData()` | 每插件一份 JSON blob | 大块数据走这条(见下「编辑器」节) |
@@ -958,6 +958,12 @@ ctx.calendar?.ensureMember(`${ctx.app.workFolder()}/任务表.db`, 'c-date' /* �
   宿主不替你数「第几张」(不出 ×N),要显示件数自己写进文案。旧宿主同 key 时还会在卡上叠 ×N、新这张没给标题时沿用旧标题。
   窗口在后台时,顶上来的这张和新弹的一样跟发系统通知(用户关了系统通知 / 关了这个插件的通知就不发;旧宿主同 key 时不发)——
   它是新的一件事。只想悄悄刷新一个进度、不想每次都响,用 `registerStatusItem`,别反复 notify 同一个 key。
+- **手机上的通知(2026-11-15 起)**:窄于 640 的手机上是状态栏下的一条横幅,一次一条、其余排队;停 5 秒(读屏开着 10 秒,`error` / `sticky` 一直留着),
+  点正文 = 点按钮,上滑 / 点 × 收起。同 key 在手机上原地换文案和按钮,停留从第一次出现算、不顺延。**节流**:你的插件一张卡收起后,
+  到点走的 30 秒、用户上滑 / 点 × 收的 2 分钟内宿主不出你的卡 —— `ctx.notify` 照常返回、不抛错,所以数字 / 状态要留在自己的界面里(列表、页签角标)。
+  App 在后台时的系统通知不受节流。两个可选布尔项,只认 `true`,旧宿主逐项挑字段、直接忽略,不用判宿主版本:
+  `undo: true` = 撤销回执(删了之后的「撤销」),手机上停 8 秒、不受节流;`urgent: true` = 有人 / Agent 正停着等用户(等批准),
+  手机上不受节流、排到不急的前面,但**不是常驻**。不受节流的卡给它自己的 key(如 `approval:<id>`),别和普通卡共用 key,否则会顶掉普通卡。
 - **事件浮卡里的那排字段**:`ctx.ui?.mountRecord?.(el, { path, rowId, dateCol?, readOnly? })` 把宿主的行编辑字段(标题、时间摘要 + 展开编辑、
   其余属性)画进你的容器,返回 `{ update(patch), dispose() }`;改动直接写那张表(同 `ctx.databases.setCell`,和打开着的表格同一份),
   行被删 / 换库就什么都不画;`path` 不是库里的表或没有 `rowId` 当场抛 `TypeError`。外框、关闭、「打开 / 删除」按钮、定位归插件。
