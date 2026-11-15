@@ -2302,7 +2302,12 @@ function openVaultWiki(name: string, o?: { newTab?: boolean }): void {
   else ps.openWikiLink(name, undefined, { newTab: o?.newTab, split: !o?.newTab })
 }
 
-export function PlainMarkdownEditor({ initial, onChange, readOnly = false, immediate = false, vault = false }: {
+/** Immediate editors hold emits during IME composition at most this long (a lost compositionend). */
+const COMPOSE_HOLD_MAX_MS = 30_000
+/** After compositionend, wait for ProseMirror to read the committed text (it force-flushes at 20ms). */
+const COMPOSE_SETTLE_MS = 40
+
+export function PlainMarkdownEditor({ initial, onChange, readOnly = false, immediate = false, vault = false, flushRef }: {
   initial: string
   onChange: (md: string) => void
   readOnly?: boolean
@@ -2310,6 +2315,9 @@ export function PlainMarkdownEditor({ initial, onChange, readOnly = false, immed
   vault?: boolean
   /** Record peeks may unmount immediately after typing. Persist transactions before listener's 200ms debounce. */
   immediate?: boolean
+  /** Immediate mode: set to a function that synchronously hands any held edit (IME composition) to onChange.
+   *  Hosts call it before reading their cached value or disposing. */
+  flushRef?: { current: (() => void) | null }
 }) {
   const onChangeRef = useRef(onChange)
   onChangeRef.current = onChange
@@ -2328,14 +2336,31 @@ export function PlainMarkdownEditor({ initial, onChange, readOnly = false, immed
   }
   const emitRef = useRef(emit)
   emitRef.current = emit
+  /** Sends an emit held back by IME composition, as the document stands now; the plugin view sets it. */
+  const flushHeld = useRef<(() => void) | null>(null)
   const immediatePlugins = useMemo(() => immediate ? [$prose((ctx) => new Plugin({
     view: (view) => {
+      // IME composition: the document holds the uncommitted romanization while composing. Hold the
+      // emit until the composition ends, so a pause mid-composition never stores or saves it.
+      let pending = false
+      let composeAt = 0
+      let capTimer: ReturnType<typeof setTimeout> | undefined
+      let endTimer: ReturnType<typeof setTimeout> | undefined
+      const send = (): void => { emitRef.current(ctx.get(serializerCtx)(view.state.doc)) }
       const sync = (): void => {
         if (view.isDestroyed || incoming.current === emitted.current) return
         const next = ctx.get(parserCtx)(tabsToEntities(incoming.current))
         // Local edits echoed through the parent must not dispatch a replacement:
         // keeping the same document also keeps its selection and input composition.
-        if (!next || next.eq(view.state.doc)) return
+        if (!next || next.eq(view.state.doc)) {
+          // The store already holds the held document: record it, so the post-composition flush is no echo.
+          if (next && pending) {
+            pending = false
+            receiving.current = true
+            try { send() } finally { receiving.current = false }
+          }
+          return
+        }
         receiving.current = true
         try {
           view.dispatch(view.state.tr.replaceWith(0, view.state.doc.content.size, next.content).setMeta('addToHistory', false))
@@ -2346,15 +2371,68 @@ export function PlainMarkdownEditor({ initial, onChange, readOnly = false, immed
       applyIncoming.current = sync
       // Milkdown initializes asynchronously; props may change before its view exists.
       queueMicrotask(() => { if (applyIncoming.current === sync) sync() })
+      const flush = (force: boolean): void => {
+        clearTimeout(endTimer); endTimer = undefined
+        if (!force && view.composing && Date.now() - composeAt < COMPOSE_HOLD_MAX_MS) return
+        clearTimeout(capTimer); capTimer = undefined
+        if (!pending) return
+        pending = false
+        send()
+      }
+      const onStart = (): void => {
+        composeAt = Date.now()
+        clearTimeout(capTimer)
+        // A lost compositionend must not hold the text back forever.
+        capTimer = setTimeout(() => flush(true), COMPOSE_HOLD_MAX_MS)
+      }
+      // ProseMirror reads the committed text after compositionend (microtask, then a 20ms forced flush),
+      // and the commit may leave the document unchanged. Re-send once that has settled.
+      const onEnd = (): void => { clearTimeout(endTimer); endTimer = setTimeout(() => flush(false), COMPOSE_SETTLE_MS) }
+      view.dom.addEventListener('compositionstart', onStart)
+      view.dom.addEventListener('compositionend', onEnd)
+      // Synchronous read by the host (getValue / dispose / unmount): hand over what is on screen, even
+      // mid-composition. Timers stay armed, so the post-composition send still happens if the editor lives on.
+      const flushNow = (): void => {
+        if (view.isDestroyed) return
+        // Commit text still in pending DOM mutations (just after compositionend) reaches the state first.
+        ;(view as unknown as { domObserver?: { flush?: () => void } }).domObserver?.flush?.()
+        if (!pending) return
+        pending = false
+        send()
+      }
+      flushHeld.current = flushNow
       return {
         update: (current, previous) => {
-          if (!current.state.doc.eq(previous.doc)) emitRef.current(ctx.get(serializerCtx)(current.state.doc))
+          if (current.state.doc.eq(previous.doc)) return
+          // External replacements only record their canonical form; keep them synchronous.
+          if (receiving.current || !current.composing || Date.now() - composeAt >= COMPOSE_HOLD_MAX_MS) {
+            pending = false
+            send()
+            return
+          }
+          pending = true
         },
-        destroy: () => { if (applyIncoming.current === sync) applyIncoming.current = null },
+        destroy: () => {
+          view.dom.removeEventListener('compositionstart', onStart)
+          view.dom.removeEventListener('compositionend', onEnd)
+          if (flushHeld.current === flushNow) flushHeld.current = null
+          // Normally already flushed by the unmount cleanup below; Milkdown tears down asynchronously.
+          try { flush(true) } catch { /* editor context already gone */ }
+          if (applyIncoming.current === sync) applyIncoming.current = null
+        },
       }
     },
   }))] : undefined, [immediate])
   useLayoutEffect(() => { if (immediate) applyIncoming.current?.() }, [initial, immediate])
+  // Closing mid-composition keeps what is on screen rather than dropping it. Runs before Milkdown's
+  // asynchronous destroy, while the view and serializer are still intact.
+  useLayoutEffect(() => () => flushHeld.current?.(), [])
+  useLayoutEffect(() => {
+    if (!flushRef) return
+    const flushNow = (): void => flushHeld.current?.()
+    flushRef.current = flushNow
+    return () => { if (flushRef.current === flushNow) flushRef.current = null }
+  }, [flushRef])
   const noop = (): void => {}
   const keys: BlockKeys = {
     insertAfter: noop, deleteEmpty: noop, mergePrev: noop, arrow: noop, moveDir: noop, selfFocus: noop,
