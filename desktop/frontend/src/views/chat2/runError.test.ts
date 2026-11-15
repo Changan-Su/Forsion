@@ -138,4 +138,17 @@ describe('会员档位用不了这个模型(model_tier_locked)', () => {
     expect(humanizeRunError(raw, (k, v) => translateFor('en', k, v), 'Claude Fable 5.2', 'Nov 30')).toBe('The free trial of Claude Fable 5.2 ended on Nov 30. Upgrade your membership or pick another model.')
     expect(humanizeRunError(raw, tv, '', 'Nov 30')).toBe('chat.err.tierLockedBare')
   })
+  it('后台提前结束(本机记着的到期还在以后):SSE 那句认得出就说「已结束」不带日期;403 JSON 带 trialEndedAt 就用它的日期', async () => {
+    const { translateFor } = await import('../../i18n')
+    const { trialEndedAtOf } = await import('../../services/accountQuota')
+    const sse = 'Claude Fable 5.2 的限时体验已结束，当前会员档位不能再用它。 / The free trial of Claude Fable 5.2 has ended. (model_tier_locked)'
+    expect(humanizeRunError(sse, (k, v) => translateFor('zh', k, v), 'Claude Fable 5.2')).toBe('Claude Fable 5.2 的限时体验已结束。升级会员或换一个模型。')
+    expect(humanizeRunError(sse, (k, v) => translateFor('en', k, v), 'Claude Fable 5.2')).toBe('The free trial of Claude Fable 5.2 has ended. Upgrade your membership or pick another model.')
+    const json = JSON.stringify({ detail: 'model_tier_locked', code: 'model_tier_locked', modelId: 'fable', modelName: 'Claude Fable 5.2', multiplier: 5, cap: 2.5, trialEndedAt: '2026-11-20T03:00:00.000Z' })
+    expect(trialEndedAtOf(json)).toBe(Date.parse('2026-11-20T03:00:00.000Z'))
+    expect(trialEndedAtOf('model_tier_locked')).toBeNull()
+    expect(trialEndedAtOf(undefined)).toBeNull()
+    // 普通的档位锁(没开放过)照旧
+    expect(humanizeRunError('model_tier_locked', (k, v) => translateFor('zh', k, v), 'GPT-6 Sol')).toBe('当前会员档位不能使用 GPT-6 Sol。升级会员或换一个模型。')
+  })
 })

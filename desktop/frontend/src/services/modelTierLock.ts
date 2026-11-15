@@ -5,7 +5,7 @@ import { useEffect, useState } from 'react'
 import { useAccountQuota } from './useAccountQuota'
 import { accountQuotaEpoch, modelMultiplierCapOf, modelTrialsOf, publishAccountQuota, type ModelTrials } from './accountQuota'
 
-export { isModelTierLocked, isTierLockedError, modelMultiplierCapOf, modelTrialsOf, recentlyEndedTrial, tierLockedModelName, tierLockedText, trialEndsAt, visibleModelTags, TIER_LOCKED_RE } from './accountQuota'
+export { isModelTierLocked, isTierLockedError, modelMultiplierCapOf, modelTrialsOf, recentlyEndedTrial, tierLockedModelName, tierLockedText, trialEndedAtOf, trialEndsAt, visibleModelTags, TIER_LOCKED_RE } from './accountQuota'
 export type { ModelTrials } from './accountQuota'
 
 /** 模型选择器读上限:订阅额度广播(用卡 / 登出 / 切号后别处刷新),没登录或读失败 = null。 */
@@ -28,7 +28,10 @@ export function useModelTrialClock(trials: ModelTrials): number {
   const [now, setNow] = useState(() => Date.now())
   const key = Object.entries(trials).map(([id, at]) => `${id}@${at}`).sort().join('|')
   useEffect(() => {
-    const next = Object.values(trials).filter((at) => at > Date.now()).sort((a, b) => a - b)[0]
+    const real = Date.now()
+    // 额度回包在路上时开放就到期了(或机器睡过一阵):now 还停在那之前,先拨到现在,锁当场翻回(拨过之后不再满足,不会来回触发)
+    if (Object.values(trials).some((at) => at > now && at <= real)) { setNow(real); return }
+    const next = Object.values(trials).filter((at) => at > real).sort((a, b) => a - b)[0]
     if (next == null) return
     const timer = setTimeout(() => {
       setNow(Date.now())

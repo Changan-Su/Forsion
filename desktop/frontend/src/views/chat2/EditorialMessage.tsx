@@ -17,7 +17,7 @@ import { useStreamReveal } from './streamReveal'
 import { Copy, RotateCcw, GitBranch, MessageCircleQuestion, CornerUpLeft, Pencil, Volume2, Square, Loader2, LogIn, Zap, History as HistoryIcon, FileCode2, MessageSquare, ShieldQuestion, CircleCheck, CircleX, CircleHelp, Clock, Undo2 } from 'lucide-react'
 import { ArrowUpRight, FileInput, StepForward } from 'lucide-react'
 import { turnHasOutput } from './continueTurn'
-import { isModelTierLocked, isTierLockedError, recentlyEndedTrial, tierLockedText } from '../../services/accountQuota'
+import { isModelTierLocked, isTierLockedError, recentlyEndedTrial, tierLockedText, trialEndedAtOf } from '../../services/accountQuota'
 import { useQuotaTierLock } from '../../tangu/quotaCap'
 import { TURN_RESUME_OPEN } from '../../../../../tangu-agent/src/contracts/turnResume'
 import { isEngineModelNoApiKey, parseEngineModelNoApiKey } from '../../../../../tangu-agent/src/contracts/engineModelError'
@@ -363,7 +363,8 @@ function RunErrorRow({ msg, sessionId, modelId, handlers }: { msg: UiMessage; se
   const stillLocked = !!sessionModel && isModelTierLocked(sessionModel, multiplierCap, trials)
   const modelName = stillLocked ? sessionModel!.name : ''
   // 限时开放刚结束(7 天内)被拦:说「限时体验已于 {date} 结束」,不说倍率
-  const trialEnded = stillLocked ? recentlyEndedTrial(sessionModel!.id) : null
+  // 服务端回包里的结束时刻优先(后台提前结束时,本机记着的到期还在以后);没有再看本机见过的
+  const trialEnded = stillLocked ? (trialEndedAtOf(msg.error) ?? recentlyEndedTrial(sessionModel!.id)) : null
   const trialEndedDate = trialEnded != null ? formatDate(trialEnded, { locale }) : ''
   return (
     <>

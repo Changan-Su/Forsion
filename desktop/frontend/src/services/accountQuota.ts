@@ -304,6 +304,20 @@ export function tierLockedModelName(raw: string): string {
   } catch { return '' }
 }
 
+/** 服务端那句「限时体验已结束」(SSE 的人话,中英两半都认):提前结束时客户端记着的到期还在以后,只能靠它认出来 */
+const TRIAL_ENDED_RE = /限时体验已结束|free trial of .+ has ended/i
+
+/** HTTP 403 的 JSON 回包里服务端给的开放结束时刻(毫秒);没有 = null。比本机见过的到期准(后台可能提前结束了) */
+export function trialEndedAtOf(raw: string | null | undefined): number | null {
+  const start = raw ? raw.indexOf('{') : -1
+  if (start < 0) return null
+  try {
+    const body = JSON.parse(raw!.slice(start))
+    const at = Date.parse(body?.trialEndedAt ?? body?.detail?.trialEndedAt)
+    return Number.isFinite(at) ? at : null
+  } catch { return null }
+}
+
 /**
  * 人话:有模型名说名字,没有就说「这个模型」。fallbackName = 调用方确认过「确实还锁着」的那个模型的显示名。
  * trialEndedDate = 这个模型的限时开放刚结束(recentlyEndedTrial, 日期走 format/time 的 formatDate):有名字时改说「限时体验已于 {date} 结束」。
@@ -311,5 +325,6 @@ export function tierLockedModelName(raw: string): string {
 export function tierLockedText(raw: string, t: (key: string, vars?: Record<string, string>) => string, fallbackName = '', trialEndedDate = ''): string {
   const model = tierLockedModelName(raw) || fallbackName
   if (model && trialEndedDate) return t('chat.err.trialEnded', { model, date: trialEndedDate })
+  if (model && TRIAL_ENDED_RE.test(raw)) return t('chat.err.trialEndedBare', { model }) // 服务端说结束了,但不知道哪天
   return model ? t('chat.err.tierLocked', { model }) : t('chat.err.tierLockedBare')
 }
