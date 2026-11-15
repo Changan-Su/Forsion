@@ -2168,13 +2168,16 @@ export const usePluginStore = create<PluginState>((set, get) => {
         const onBack = (): void => {
           if (!ctxAlive()) return
           if (toList && listFirstNow()) useWorkspace.getState().toggleSidebar('left')
-          else opts.onBack()
+          else guard(() => opts.onBack())
         }
         const handle = claimNativeChrome({ mode: 'page', title: String(opts.title), back: String(opts.back), onBack })
         // 两级导航:这一页不占返回栈,返回链照常滑出列表层,边缘手势才跟手(占了栈系统返回就只能等松手);
         // 列表一出来(手势、返回键、页内横滑、顶栏箭头都走到这)插件才收尾。放弃手势不改 leftVisible,什么都不发生
+        // 插件的 onBack 跑在 workspace 的订阅里 —— 也就是宿主的开合(返回预览收尾的 flushSync)当中:经 guard,
+        // 它抛的错只记一行,不打断宿主那一下(2026-11-15 安卓真壳:插件视图已卸、声明没收,onBack 里 setParams 抛错,
+        // 返回预览的收尾被跳过、整屏卡住)
         const off = toList
-          ? useWorkspace.subscribe((s, prev) => { if (s.leftVisible && !prev.leftVisible && listFirstNow() && ctxAlive()) { off(); handle.release(); opts.onBack() } }) // 旋转成宽屏自动并排左栏不算返回
+          ? useWorkspace.subscribe((s, prev) => { if (s.leftVisible && !prev.leftVisible && listFirstNow() && ctxAlive()) { off(); handle.release(); guard(() => opts.onBack()) } }) // 旋转成宽屏自动并排左栏不算返回
           : pushMobileBack(onBack) // 系统返回和顶栏箭头同一件事
         return { dispose: scope.own('mount', () => { off(); handle.release() }, 'nativeHeader') }
       } } : {}),
