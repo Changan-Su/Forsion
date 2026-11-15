@@ -54,6 +54,9 @@ const shape = (page) => page.evaluate(() => {
   walk(v.state.doc, 0)
   return out.join(' / ')
 })
+/** 页面上回车口径开关(blocks/markdown/enterMode)的实际状态:开着时回车一次 = 文件里一个换行,
+ *  少数几条期望本来就该跟着变(各自注明理由)。从页面读,不另设环境变量。 */
+const enterOn = (page) => page.evaluate(() => import('/src/amadeus/blocks/markdown/enterMode.ts').then((m) => m.enterInline()))
 const selInfo = (page) => page.evaluate(() => {
   const s = window.__upage.probe.view().state.selection
   return { json: s.toJSON().type, from: s.from, to: s.to, parent: s.$from.parent.type.name, node: s.node ? s.node.type.name : null }
@@ -749,21 +752,24 @@ async function main() {
         await page.waitForTimeout(1300)
         const s = (await shape(page)).replace(/ \/ +/g, ' / ')
         const w = await lastWrite(page)
-        check(`K13 ${name}`, s === `paragraph:"前段。" / blockquote / ${expect}` && w === `前段。\n\n${disk}`, `${s} | ${JSON.stringify(w)}`)
+        // 开关开着:回车只多一个换行,引用紧接上一行(引用能打断段落,重开仍是两块)
+        const gap = (await enterOn(page)) ? '\n' : '\n\n'
+        check(`K13 ${name}`, s === `paragraph:"前段。" / blockquote / ${expect}` && w === `前段。${gap}${disk}`, `${s} | ${JSON.stringify(w)}`)
         await page.close()
       }
     }
 
     // K-14:中文输入法直出的全角标点(逐字 insertText,不经组字)整行恰好是触发符时,空格 / 回车照样触发。
     if (want('K14')) {
-      for (const [chars, key, expect] of [
+      for (const [chars, key, expectOff, expectOn] of [
         [['【', '】'], ' ', /^paragraph:"前段。" \/ bullet_list \/ +list_item\[ \] \/ +paragraph:"X"$/],
         [['＃', '＃'], ' ', /^paragraph:"前段。" \/ heading2:"X"$/],
         [['1', '。'], ' ', /^paragraph:"前段。" \/ ordered_list \/ +list_item \/ +paragraph:"X"$/],
         [['·', '·', '·'], 'Enter', /^paragraph:"前段。" \/ code_block:"X"$/],
-        [['、'], ' ', /^paragraph:"前段。" \/ paragraph:"、 X"$/], // 顿号不映射(对照)
+        [['、'], ' ', /^paragraph:"前段。" \/ paragraph:"、 X"$/, /^paragraph:"前段。\\n、 X"$/], // 顿号不映射(对照);开关开着:不触发 = 仍是同一段的第二行
       ]) {
         const page = await open(browser, '前段。\n')
+        const expect = (expectOn && (await enterOn(page))) ? expectOn : expectOff
         const cdp = await page.context().newCDPSession(page)
         await caretAtText(page, '前段。')
         await page.keyboard.press('Enter')
@@ -848,10 +854,16 @@ async function main() {
         await page.keyboard.press('Meta+z')
         await page.waitForTimeout(150)
         const u1 = await last(page)
+        const f1 = await shape(page)
         await page.keyboard.press('Meta+z')
         await page.waitForTimeout(150)
         const u2 = await last(page)
-        check(`K21 快打 ${name} 后撤销:一下回到字面、两下回到空行`, !/^paragraph/.test(after) && u1 === lit && u2 === 'paragraph:""', `${after} → ${u1} → ${u2}`)
+        const f2 = await shape(page)
+        // 开关开着:回车起的是同一段的第二行 —— 字面触发符、空行都在「前段。」这一段里
+        const ok = (await enterOn(page))
+          ? f1 === `paragraph:${JSON.stringify('前段。\n' + typed)}` && f2 === 'paragraph:"前段。\\n"'
+          : u1 === lit && u2 === 'paragraph:""'
+        check(`K21 快打 ${name} 后撤销:一下回到字面、两下回到空行`, !/^paragraph/.test(after) && ok, `${after} → ${u1 || f1} → ${u2 || f2}`)
         await page.close()
       }
       {
@@ -866,7 +878,10 @@ async function main() {
         await page.keyboard.press('Meta+z')
         await page.waitForTimeout(150)
         const u1 = await last(page)
-        check('K21 回车入口 `#⏎` 后撤销一下 = 字面 `#`', after === 'heading1:""' && u1 === 'paragraph:"#"', `${after} → ${u1}`)
+        const f1 = await shape(page)
+        // 开关开着:字面 `#` 回到「前段。」这一段的第二行
+        const ok = (await enterOn(page)) ? f1 === 'paragraph:"前段。\\n#"' : u1 === 'paragraph:"#"'
+        check('K21 回车入口 `#⏎` 后撤销一下 = 字面 `#`', after === 'heading1:""' && ok, `${after} → ${u1 || f1}`)
         await page.close()
       }
       {
@@ -878,8 +893,10 @@ async function main() {
         await page.waitForTimeout(100)
         await page.keyboard.press('Meta+z')
         await page.waitForTimeout(200)
+        const on = await enterOn(page)
         const s = await reopenShape(page)
-        check('K21 撤回来的字面 `# ` 落盘重开仍是段落', s === 'paragraph:"前段。" / paragraph:"#"', s)
+        // 开关开着:字面 `#` 是「前段。」的第二行,重开仍是同一段两行
+        check('K21 撤回来的字面 `# ` 落盘重开仍是段落', s === (on ? 'paragraph:"前段。\\n#"' : 'paragraph:"前段。" / paragraph:"#"'), s)
         await page.close()
       }
     }
@@ -1208,7 +1225,9 @@ async function main() {
         await page.waitForTimeout(1300)
         const s = await shape(page)
         const w = await lastWrite(page)
-        check(`K19 H${level} 行中 Shift+Enter:切出正文,落盘不丢换行`, s === `heading${level}:"甲" / paragraph:"乙" / paragraph:"正文。"` && w === `${'#'.repeat(level)} 甲\n\n乙\n\n正文。\n`, `${s} | ${JSON.stringify(w)}`)
+        // 开关开着:标题里回车(Shift+Enter 同回车)只多一个换行,切出的正文紧跟标题(同按键检查 A3)
+        const gap = (await enterOn(page)) ? '\n' : '\n\n'
+        check(`K19 H${level} 行中 Shift+Enter:切出正文,落盘不丢换行`, s === `heading${level}:"甲" / paragraph:"乙" / paragraph:"正文。"` && w === `${'#'.repeat(level)} 甲${gap}乙\n\n正文。\n`, `${s} | ${JSON.stringify(w)}`)
         await page.close()
       }
       {

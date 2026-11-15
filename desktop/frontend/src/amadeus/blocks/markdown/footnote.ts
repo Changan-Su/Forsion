@@ -29,6 +29,7 @@ import { registerMessages, subscribeLocale, translate } from '../../../i18n'
 import { unfoldToReveal } from '../../unified/revealText'
 import { revealBlockAtTop } from '../../unified/revealScroll'
 import { inCode } from './wikiAutocomplete'
+import { enterInline } from './enterMode'
 
 registerMessages({
   'footnote.backToRef': { zh: '回到引用处', en: 'Back to reference' },
@@ -91,11 +92,20 @@ function insertRef(state: EditorState, from: number, to: number, label: string, 
 const refRule = new InputRule(new RegExp(`(?<![[!\\\\])\\[\\^(${LABEL})\\]$`, 'u'), (state, match, start, end) => {
   const $s = state.doc.resolve(start)
   if ($s.parentOffset === 0 && $s.parent.type.name === 'paragraph') return null // 段首交给 leadRule(②)
+  // 回车口径开关打开时,段内软换行之后的行首也算段首:同样交给 leadRule / defRule(定义由 ./lineStartRules 切出这一行再跑)。
+  if (enterInline() && $s.parent.type.name === 'paragraph' && $s.nodeBefore?.type.name === 'hardbreak') return null
   return insertRef(state, start, end, match[1])
 }, { inCodeMark: false })
 
 /** ② 段首的 `[^label]` 等下一个字:不是 `:`(也不是回车)才转引用,那个字照常落在引用后面。 */
-const leadRule = new InputRule(new RegExp(`^\\[\\^(${LABEL})\\]([^:\\n])$`, 'u'), (state, match, start, end) => {
+//    回车口径开关打开时,段内软换行之后的行首也算段首(输入规则拿到的文字里软换行是一个 U+FFFC 占位,占一格):
+//    引用仍留在这一段里,不切段(切段只给 ③ 这种整段变块的规则,见 ./lineStartRules)。
+const leadRule = new InputRule(new RegExp(`(?:^|\ufffc)\\[\\^(${LABEL})\\]([^:\\n])$`, 'u'), (state, match, start, end) => {
+  if (match[0].startsWith('\ufffc')) {
+    const $b = state.doc.resolve(start + 1)
+    if (!enterInline() || $b.parent.type.name !== 'paragraph' || $b.nodeBefore?.type.name !== 'hardbreak') return null
+    return insertRef(state, start + 1, end, match[1], match[2])
+  }
   const $s = state.doc.resolve(start)
   if ($s.parentOffset !== 0 || $s.parent.type.name !== 'paragraph') return null
   return insertRef(state, start, end, match[1], match[2])

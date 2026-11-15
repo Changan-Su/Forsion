@@ -5,7 +5,7 @@
 // 语义对齐 Notion/AFFiNE:标题是「设成 N 级」(Milkdown 内置规则是叠加,h1+## 会变 h3);
 // 同级重打幂等;已在列表项内时 -/1./[] 改父列表类型/勾选态,不再嵌套包一层。
 import type { Node as ProseNode, ResolvedPos } from '@milkdown/kit/prose/model'
-import { Selection, type Transaction } from '@milkdown/kit/prose/state'
+import { Selection, TextSelection, type EditorState, type Transaction } from '@milkdown/kit/prose/state'
 import { closeHistory } from '@milkdown/kit/prose/history'
 import { canJoin, findWrapping, liftTarget } from '@milkdown/kit/prose/transform'
 import type { EditorView } from '@milkdown/kit/prose/view'
@@ -126,21 +126,117 @@ export function lineTriggerAtCursor($from: ResolvedPos): { trig: Trigger; br: nu
   return trig ? { trig, br } : null
 }
 
-/** 从软换行 br 处把段落拆成两段:上半段记 amxTight(落盘仍紧挨着,见 ./lineGap),下半段接过原段与后文的关系。 */
-function splitAtBreak(view: EditorView, br: number): Transaction {
-  const { state } = view
-  const at = state.doc.resolve(br).before()
-  const tr = state.tr.delete(br, br + 1).split(br)
-  const first = tr.doc.nodeAt(at)
-  if (first && 'amxTight' in first.attrs) {
-    tr.setNodeMarkup(at, undefined, { ...first.attrs, amxTight: true })
-    const secondAt = at + first.nodeSize
-    const second = tr.doc.nodeAt(secondAt)
-    if (second && 'amxTightBefore' in second.attrs) tr.setNodeMarkup(secondAt, undefined, { ...second.attrs, amxTightBefore: false })
-  }
-  tr.setMeta(TIGHT_MANAGED, true)
-  view.dispatch(tr)
+/** 光标所在这一行在段落里的软换行边界:前一个(行首)与后一个(行尾)软换行的文档位置;没有 = null。
+ *  开关关着、不在普通段落里(列表项 / 表格里的段落不算)→ null(调用方照旧按整段处理)。 */
+export function lineBounds($from: ResolvedPos): { before: number | null; after: number | null } | null {
+  if (!enterInline() || $from.parent.type.name !== 'paragraph') return null
+  for (let d = $from.depth - 1; d > 0; d--) if (/^(list_item|table)/.test($from.node(d).type.name)) return null
+  let before: number | null = null
+  let after: number | null = null
+  $from.parent.forEach((c, off) => {
+    if (c.type.name !== 'hardbreak') return
+    if (off < $from.parentOffset) before = $from.start() + off
+    else if (after == null) after = $from.start() + off
+  })
+  return { before, after }
+}
+
+/** 这几种块容不下多行(标题只有一行;代码块 / 公式的余文本来就切到块后):触发时连行尾之后的行一起切出去。 */
+export const takesOnlyItsLine = (trig: Trigger): boolean => trig.kind === 'heading' || trig.kind === 'code' || trig.kind === 'math'
+
+/**
+ * 把光标所在的这一行从段落里单独切成一段(回车口径开关打开时的「行首规则」:行首 = 段首或段内软换行之后)。
+ *  · 上一行起的部分(行首软换行之前)成上一段,记 amxTight —— 落盘仍紧挨着(见 ./lineGap);
+ *  · rest = true 且这一行后面还有行:后面的行成下一段,这一行记 amxTight(紧挨着它),下一段接过原段与后文的关系。
+ * 一个事务派发(打 TIGHT_MANAGED);没什么可切 = 不派发,返回 null。返回值供调用方在转换失败时原样拼回。
+ */
+export function isolateLine(view: EditorView, opts: { rest: boolean }): Transaction | null {
+  const { $from, empty } = view.state.selection
+  if (!empty) return null
+  const tr = isolateTr(view.state, $from, opts.rest)
+  if (tr) view.dispatch(tr)
   return tr
+}
+
+/** isolateLine 的事务本体(不派发;$at = 这一行里的任一位置)。 */
+export function isolateTr(state: EditorState, $at: ResolvedPos, rest: boolean): Transaction | null {
+  const b = lineBounds($at)
+  if (!b) return null
+  const restAt = rest ? b.after : null
+  if (b.before == null && restAt == null) return null
+  const orig = $at.parent
+  const origTight = orig.attrs.amxTight === true
+  const at = $at.before()
+  const tr = state.tr
+  // 先切后面(位置大的),前面的位置不受影响
+  if (restAt != null) tr.delete(restAt, restAt + 1).split(restAt)
+  if (b.before != null) tr.delete(b.before, b.before + 1).split(b.before)
+  // 逐段写紧贴:split 会把原段的 attr 抄给每一段
+  const parts: PMNodeAt[] = []
+  let pos = at
+  const count = 1 + (restAt != null ? 1 : 0) + (b.before != null ? 1 : 0)
+  for (let i = 0; i < count; i++) {
+    const n = tr.doc.nodeAt(pos)
+    if (!n) break
+    parts.push({ pos, node: n })
+    pos += n.nodeSize
+  }
+  if ('amxTight' in orig.attrs) {
+    parts.forEach(({ pos: p, node }, i) => {
+      const last = i === parts.length - 1
+      tr.setNodeMarkup(p, undefined, { ...node.attrs, amxTight: last ? origTight : true, ...(i > 0 ? { amxTightBefore: false } : {}) })
+    })
+  }
+  // 光标在这一行里:按「行内第几格」放回切出来的那一段(位置映射在切口上有歧义:行尾光标会被映到下一段段首)
+  const head = state.selection.head
+  const lineStart = b.before == null ? $at.start() : b.before + 1
+  const lineEnd = b.after == null ? $at.end() : b.after
+  const mine = parts[b.before != null ? 1 : 0]
+  if (state.selection.empty && head >= lineStart && head <= lineEnd && mine) {
+    tr.setSelection(TextSelection.create(tr.doc, mine.pos + 1 + (head - lineStart)))
+  }
+  return tr.setMeta(TIGHT_MANAGED, true)
+}
+interface PMNodeAt { pos: number; node: ProseNode }
+
+/** 拆段之后转换没成:把 isolateLine 的事务原样倒回去(同一撤销组里,不留一个白拆的段)。 */
+export function undoIsolate(view: EditorView, split: Transaction): void {
+  const undoTr = view.state.tr
+  for (let i = split.steps.length - 1; i >= 0; i--) undoTr.step(split.steps[i].invert(split.docs[i]))
+  view.dispatch(undoTr.setMeta(TIGHT_MANAGED, true))
+}
+
+/** 拆出这一行之后再转换:applyTrigger 的包装。标题转换会丢掉段落的紧贴记号(setBlockType 只给 level),这里补回。
+ *  只在 isolateLine 真拆了的时候用(关着时调用方走原来的 applyTrigger)。 */
+export function applyTriggerOnLine(view: EditorView, trig: Trigger, consume: { from: number; to: number } | null): boolean {
+  const keep = view.state.selection.$from.parent.attrs.amxTight === true
+  const restAt = view.state.selection.$from.after() // 这一行之后(切出去的后面几行从这里起)
+  const extend = (tr: Transaction, pos: number): void => {
+    const $p = tr.doc.resolve(pos)
+    if ($p.depth < 1) return
+    const node = $p.parent
+    if ('amxTight' in node.attrs) {
+      if (node.attrs.amxTight !== keep) tr.setNodeMarkup($p.before(), undefined, { ...node.attrs, amxTight: keep })
+      return
+    }
+    // 代码块记不了紧贴:由紧跟着的下一段记 amxTightBefore(见 ./lineGap 的 safeBefore)
+    if (!keep) return
+    const nextAt = $p.after()
+    const next = tr.doc.nodeAt(nextAt)
+    if (next && 'amxTightBefore' in next.attrs && next.attrs.amxTightBefore !== true) tr.setNodeMarkup(nextAt, undefined, { ...next.attrs, amxTightBefore: true })
+    // 光标后面同一行的余文被切成了代码块之后的一段:它和后面切出去的几行原本是相邻的行,并回一段(中间一个软换行)
+    const restPos = tr.mapping.map(restAt, 1)
+    const rem = tr.doc.nodeAt(nextAt)
+    const rest = tr.doc.nodeAt(restPos)
+    const br = tr.doc.type.schema.nodes.hardbreak
+    if (br && rem?.type.name === 'paragraph' && rest?.type.name === 'paragraph' && nextAt + rem.nodeSize === restPos && rem.content.size > 0 && rest.content.size > 0) {
+      tr.join(restPos)
+      tr.insert(restPos - 1, br.create({ isInline: true }))
+      const merged = tr.doc.nodeAt(nextAt)
+      if (merged) tr.setNodeMarkup(nextAt, undefined, { ...merged.attrs, amxTight: rest.attrs.amxTight === true })
+    }
+  }
+  return withTightManaged(() => applyTrigger(view, trig, consume, extend))
 }
 
 /**
@@ -169,21 +265,14 @@ export function applyTypedTrigger(view: EditorView, trig: Trigger, typed?: strin
   let start = view.state.selection.$from.start()
   if (typed) view.dispatch(view.state.tr.insertText(typed))
   view.dispatch(closeHistory(view.state.tr))
-  // 第二行起的触发符(lineTriggerAtCursor 给了 br):拆段与转换落在同一个撤销组 —— 撤销一下回到「一段两行、
-  // 第二行是字面触发符」,而不是先撤转换、再撤拆段。拆完转换没成(schema 不容)→ 原样拼回,不留下一个白拆的段。
-  let split: Transaction | null = null
-  if (splitAt != null) {
-    split = splitAtBreak(view, splitAt) // 落的字在光标处、软换行之后,br 的位置不变
-    start = view.state.selection.$from.start()
-  }
+  // 回车口径开关打开时的 v4(调用方传了 splitAt,哪怕是 null):先把这一行切成单独一段再转换,拆段与转换落在同一个
+  // 撤销组 —— 撤销一下回到「一段多行、这一行是字面触发符」。标题 / 代码块还要把后面的行切出去(标题只拿自己那一行)。
+  // 拆完转换没成(schema 不容)→ 原样拼回。splitAt === undefined(v3、开关关着)= 原来的路径。
+  const split = splitAt !== undefined ? isolateLine(view, { rest: takesOnlyItsLine(trig) }) : null
+  if (split) start = view.state.selection.$from.start()
   const consume = { from: start, to: view.state.selection.from }
-  // 拆段时给上半段记的紧贴(落盘仍紧挨着转换出来的块)由这里负责,别让转换事务被当成「邻居变了」清掉。
-  const ok = split ? withTightManaged(() => applyTrigger(view, trig, consume)) : applyTrigger(view, trig, consume)
-  if (!ok && split) {
-    const undoTr = view.state.tr
-    for (let i = split.steps.length - 1; i >= 0; i--) undoTr.step(split.steps[i].invert(split.docs[i]))
-    view.dispatch(undoTr.setMeta(TIGHT_MANAGED, true))
-  }
+  const ok = split ? applyTriggerOnLine(view, trig, consume) : applyTrigger(view, trig, consume)
+  if (!ok && split) undoIsolate(view, split)
   view.dispatch(closeHistory(view.state.tr))
   return ok || !!typed
 }
@@ -355,7 +444,7 @@ export function liftOutOfWrappers(tr: Transaction, pos: number, names: string[])
  * 单事务应用块级转换:先删 consume 区间(触发符),再把光标所在文本块原地转成目标类型。
  * 成功 dispatch 返回 true;结构不允许(如列表项里设标题)返回 false 且不动文档。
  *
- * `extend`(仅 heading/text 分支):dispatch 前把后续改动并进**同一个事务**,pos = 被转换文本块里
+ * `extend`(heading/text/code 分支):dispatch 前把后续改动并进**同一个事务**,pos = 被转换文本块里
  * 映射后的位置。调用方要接着改这个块时必须走它,不能 dispatch 之后再读 selection —— 别的插件的
  * appendTransaction(如标题折叠的光标矫正)可能已把光标挪走(K-04),而且两笔事务要撤销两次。
  */
@@ -423,9 +512,15 @@ export function applyTrigger(
     // 待办/列表项/引用里 → 先脱离容器再转换(否则 list_item 的 `paragraph block*` 直接把标题挡在门外,
     // 而「转正文」在段落里是空操作 —— 两者就是「切不动行样式」的全部病因)。
     if (inAny($blk, ['list_item', 'blockquote'])) {
+      // 回车口径开关打开时:紧挨着上一行起的空引用 / 空列表脱成空段落 = 回到「上一行 + 一个空的第二行」,
+      // 上一行的紧贴记号留着(否则当成邻居变了被清掉,文件里凭空多一条空行)。有字的不管:段落接段落紧贴不了。
+      const prevTop = $blk.depth >= 2 ? tr.doc.resolve($blk.before(1)).nodeBefore : null
+      const keepTight = enterInline() && trig.kind === 'text' && $blk.parent.content.size === 0 && $blk.node(1).childCount === 1 &&
+        !!prevTop && (prevTop.type.name === 'paragraph' || prevTop.type.name === 'heading') && prevTop.attrs.amxTight === true
       pos = liftOutOfWrappers(tr, pos, ['list_item', 'blockquote'])
       $blk = tr.doc.resolve(pos)
       if (!$blk.parent.isTextblock) return false
+      if (keepTight) tr.setMeta(TIGHT_MANAGED, true)
     }
     const idx = $blk.index(-1)
     if (!$blk.node(-1).canReplaceWith(idx, idx + 1, target)) return false
@@ -468,6 +563,7 @@ export function applyTrigger(
       afterBlock = blkFrom + code.nodeSize
     }
     if (rest) tr.insert(afterBlock, paragraph.create(null, schema.text(rest)))
+    extend?.(tr, blkFrom + 1)
     view.dispatch(tr.scrollIntoView())
     return true
   }

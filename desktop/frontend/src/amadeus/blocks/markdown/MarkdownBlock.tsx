@@ -63,7 +63,7 @@ import { listener, listenerCtx } from '@milkdown/kit/plugin/listener'
 import { $prose } from '@milkdown/kit/utils'
 import type { Ctx, MilkdownPlugin } from '@milkdown/kit/ctx'
 import { DOMParser as PmDOMParser, DOMSerializer, Fragment, Slice, type MarkType, type Node as ProseNode } from '@milkdown/kit/prose/model'
-import { NodeSelection, Plugin, PluginKey, Selection, TextSelection } from '@milkdown/kit/prose/state'
+import { NodeSelection, Plugin, PluginKey, Selection, TextSelection, type Transaction } from '@milkdown/kit/prose/state'
 import { splitBlock } from '@milkdown/kit/prose/commands'
 import { keymap } from '@milkdown/kit/prose/keymap'
 import { Decoration, DecorationSet, type EditorView } from '@milkdown/kit/prose/view'
@@ -97,7 +97,7 @@ import { focusStructuralPrefix, structuralSourcePlugin } from './structuralSourc
 import { editContextOf, slashItemApplies, type EditContext } from './menuContext'
 import { blockPickerPlugin, closeBlockPicker } from './blockPicker'
 import { takeMachineSlash } from './machineSlash'
-import { applyTrigger, applyTypedTrigger, canAutoTriggerFromBlock, lineTriggerAtCursor, matchTrigger, posAtTextAnchor, slashRange, splitTail, textBeforeCursor, triggerAtCursor, unwrapAtStart, type Trigger } from './blockTriggers'
+import { applyTrigger, applyTriggerOnLine, applyTypedTrigger, canAutoTriggerFromBlock, isolateLine, lineTriggerAtCursor, matchTrigger, takesOnlyItsLine, undoIsolate, posAtTextAnchor, slashRange, splitTail, textBeforeCursor, triggerAtCursor, unwrapAtStart, type Trigger } from './blockTriggers'
 import { fullWidthWikiRule, mentionSuggestPlugin, selectionToolbarPlugin, slashSuggestPlugin, toolbarDismissKey, wikiSuggestPlugin, type SelRect, type WikiQuery } from './wikiAutocomplete'
 import { InlineToolbar, TURN_LABEL_KEYS, type ToolbarAction, type ToolbarAiItem } from './InlineToolbar'
 import { Sparkles, Bot, BookOpen, MessageSquare } from 'lucide-react'
@@ -129,6 +129,7 @@ import { hrefKind, linkInputRule, normalizeHref, noteLinkTarget } from './linkHr
 import { droppedTextMarkdown, isPlainMultiline, plainLinesToParagraphs, singleLinePasteMode } from './plainPaste'
 import { enterInline } from './enterMode'
 import { lineGapPlugins } from './lineGap'
+import { lineStartInputRule } from './lineStartRules'
 import { autolinkInputRule, autolinkSerializer } from './autolink'
 import { parseBlockSubpath, splitLinkInner, wikiSafeUrl } from '@amadeus-shared/pdfLink'
 import { useBlockSelection } from '../../store/blockSelection'
@@ -310,6 +311,9 @@ export interface SlashOps {
   consume(): boolean
   /** 删 '/' 并把当前块原地转换为前缀类型(光标原位、无重挂载)。false = 结构不允许,文档没动(调用方提示,B-18)。 */
   transform(trig: Trigger): boolean
+  /** 回车口径开关打开时(./enterMode):插整块之前把光标这一行从多行段落里切成单独一段(空行就成空段,原地换成那一块)。
+   *  关着 / 没有可切的 = 什么都不做。 */
+  isolate?(): void
 }
 
 /** 占位提示只在「聚焦中的空块」显示(Notion 同款;此前所有空块齐刷刷提示,实报扰视)。
@@ -1095,6 +1099,11 @@ export function MilkdownInner({
           ...prev,
           editable: () => !readOnly,
           handleKeyDown: readOnly ? undefined : handleKeyDown,
+          // 回车口径开关打开时的 v4:段内软换行之后的行首也跑块级输入规则(./lineStartRules)。关着不挂。
+          ...(!readOnly && unified && enterInline() ? {
+            handleTextInput: (v: EditorView, from: number, to: number, text: string, deflt: () => Transaction) =>
+              lineStartInputRule(v, from, to, text) || (prev.handleTextInput?.call(null as never, v, from, to, text, deflt) ?? false),
+          } : {}),
           handlePaste: readOnly ? undefined : handlePaste,
           handleDOMEvents: readOnly ? prev.handleDOMEvents : {
             ...prev.handleDOMEvents,
@@ -1331,11 +1340,18 @@ export function MilkdownInner({
         let ok = false
         getInstance()?.action((ctx) => {
           const view = ctx.get(editorViewCtx)
+          // 回车口径开关打开时:先把 '/query' 所在这一行切成单独一段,只转这一行(标题 / 代码块连后面的行一起切走)。
+          const split = unified ? isolateLine(view, { rest: takesOnlyItsLine(trig) }) : null
           const { $from, empty } = view.state.selection
-          ok = applyTrigger(view, trig, empty ? slashRange($from) : null)
+          ok = split ? applyTriggerOnLine(view, trig, empty ? slashRange($from) : null) : applyTrigger(view, trig, empty ? slashRange($from) : null)
+          if (!ok && split) undoIsolate(view, split)
           view.focus()
         })
         return ok
+      },
+      isolate: () => {
+        if (!unified) return
+        getInstance()?.action((ctx) => { isolateLine(ctx.get(editorViewCtx), { rest: true }) })
       },
     }
     return () => { if (slashOpsRef) slashOpsRef.current = null }
