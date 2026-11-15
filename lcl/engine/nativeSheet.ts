@@ -9,6 +9,7 @@
  *  or rejects is treated as "not handled" so the caller falls back to the web UI. */
 import type { ReactNode } from 'react'
 import { renderNativeIcons, type NativeIcon, type NativeIconSource } from './nativeIcon'
+import { markUserGesture } from './userGesture'
 
 /** Colours are `#AARRGGBB` (Android `Color.parseColor` order), read from the active skin at request time. */
 export interface NativeSheetTheme {
@@ -378,7 +379,11 @@ async function present<T>(build: () => Promise<NativeSheetPayload> | NativeSheet
     if (ctl.signal.aborted) return { handled: true, value: null }
     const raw = await host(payload, ctl.signal)
     if (ctl.signal.aborted) return { handled: true, value: null }
-    return { handled: true, value: raw == null ? null : validate(raw) }
+    const value = raw == null ? null : validate(raw)
+    // The user picked something on the native sheet: what the caller runs next (after the awaits, same task) is their
+    // own doing, like a tap on the page — e.g. a delete whose "Undo" must not be throttled (userGesture.ts).
+    if (value != null) markUserGesture()
+    return { handled: true, value }
   } catch {
     return ctl.signal.aborted ? { handled: true, value: null } : { handled: false }
   } finally {

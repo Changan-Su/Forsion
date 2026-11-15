@@ -244,3 +244,44 @@ it('有原生外壳:不画 DOM,把屏上这一条交给原生层;原生报回的
   await act(async () => { notifyApp({ text: 'fallback', event: 'plugin:z' }); await new Promise((r) => setTimeout(r, 350)) })
   expect(host.querySelector('.ntf-banner-text')?.textContent).toBe('fallback')
 })
+
+it('原生横幅:窗口放宽到 ≥640、宿主卸下时让原生层收起屏上那张(卡还在 store 里,只有卸下时的清理能发 null;负对照:删掉清理 → 这里红)', async () => {
+  narrow(true)
+  const seen: Array<NativeBannerPayload | null> = []
+  const off = setNativeBannerPresenter((b) => { seen.push(b) })
+  try {
+    notifyApp({ text: 'pinned', sticky: true, event: 'plugin:p' })
+    await phoneHost()
+    expect(seen.at(-1)?.text).toBe('pinned')
+    narrow(false) // 旋到横屏 / 分屏拉宽:回到右上角堆叠
+    await phoneHost()
+    expect(useNotifications.getState().items.map((n) => n.text), '卡还在(改由右上角堆叠画)').toEqual(['pinned'])
+    expect(host.querySelector('.ntf-wrap .ntf')).not.toBeNull()
+    expect(seen.at(-1), '放宽后原生层那张该收起,否则两边各画一张、原生那张永远不走').toBeNull()
+    narrow(true)
+    await phoneHost()
+    expect(seen.at(-1)?.text).toBe('pinned')
+    await act(async () => root.unmount())
+    root = createRoot(host)
+    expect(useNotifications.getState().items).toHaveLength(1)
+    expect(seen.at(-1), '宿主卸下(页面换掉这棵树)后原生层那张该收起').toBeNull()
+  } finally { await act(async () => off()) }
+})
+
+it('手机横幅:页面不可见时不交给原生层(不上屏、不计时),回到前台照队列出', async () => {
+  narrow(true)
+  const seen: Array<NativeBannerPayload | null> = []
+  const off = setNativeBannerPresenter((b) => { seen.push(b) })
+  let hidden = false
+  const vis = vi.spyOn(document, 'visibilityState', 'get').mockImplementation(() => (hidden ? 'hidden' : 'visible'))
+  try {
+    await phoneHost()
+    hidden = true
+    await act(async () => { document.dispatchEvent(new Event('visibilitychange')) })
+    await act(async () => { notifyApp({ text: 'while away', event: 'plugin:bg' }) })
+    expect(seen.filter(Boolean), '在后台不该交给原生层画').toEqual([])
+    hidden = false
+    await act(async () => { document.dispatchEvent(new Event('visibilitychange')); await new Promise((r) => setTimeout(r, 350)) })
+    expect(seen.at(-1)?.text, 'NotificationHost 没接上 visibilitychange:回到前台这张出不来').toBe('while away')
+  } finally { vis.mockRestore(); await act(async () => off()) }
+})

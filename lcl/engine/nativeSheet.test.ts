@@ -87,6 +87,20 @@ describe('presenter slot', () => {
     uninstall = m.installNativeSheetPresenter(async () => ({ id: 'injected' }))
     expect(await m.presentNativeMenu({ sections })).toEqual({ handled: true, value: null })
   })
+  it("a choice made on the sheet counts as the user's own doing for what the caller runs next; a cancel does not", async () => {
+    const g = await import('./userGesture')
+    await new Promise((r) => setTimeout(r, 0)) // nothing left over from an earlier mark
+    uninstall = m.installNativeSheetPresenter(async () => null)
+    let during = true
+    await m.runNativeCtxMenu([{ label: 'Delete', run: () => { during = g.inUserGesture() } }])
+    expect(g.inUserGesture(), 'a cancel is not a gesture').toBe(false)
+    uninstall()
+    uninstall = m.installNativeSheetPresenter(async () => ({ id: '0' }))
+    await m.runNativeCtxMenu([{ label: 'Delete', run: () => { during = g.inUserGesture() } }])
+    expect(during, 'the picked item ran outside the gesture: its Undo would be throttled on a phone').toBe(true)
+    await new Promise((r) => setTimeout(r, 0))
+    expect(g.inUserGesture(), 'the mark ends with the task').toBe(false)
+  })
   it('duplicate ids fall back to web instead of guessing', async () => {
     const spy = vi.fn(async () => ({ id: 'x' }))
     uninstall = m.installNativeSheetPresenter(spy)

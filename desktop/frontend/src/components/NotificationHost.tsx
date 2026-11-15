@@ -10,6 +10,7 @@ import { X, Check, Info, AlertTriangle, AlertCircle } from 'lucide-react'
 import { useNotifications, type AppNotification, type NotifyLevel } from '../stores/notificationStore'
 import { bannerFlungAway, bannerPayload, useNativeBannerPresenter, type NativeBannerPresenter } from '../stores/notificationBanner'
 import { useSpaceStore } from '@lcl/engine'
+import { installUserGestureTracking } from '@lcl/engine/userGesture'
 import { useI18n } from '../i18n'
 import { motion as motionTokens } from '../theme/motionTokens'
 
@@ -20,7 +21,7 @@ const LEVEL_ICON: Record<NotifyLevel, typeof Info> = { info: Info, success: Chec
 const ENTER_S = 0.18
 const EXIT_S = 0.16
 
-/** 和插件(商业版 phonePlan)同一个手机断点。 */
+/** 手机断点:和手机插件判「是不是手机」用的是同一条线(窄于 640)。 */
 const PHONE_QUERY = '(max-width: 639px)'
 function subscribeNarrow(fn: () => void): () => void {
   try {
@@ -39,6 +40,15 @@ export function NotificationHost({ phone = false }: { phone?: boolean }) {
   const presenter = useNativeBannerPresenter()
   const setBanner = useNotifications((s) => s.setBanner)
   useEffect(() => { setBanner(banner) }, [banner, setBanner])
+  useEffect(() => {
+    if (!banner) return
+    // 手机节流认「用户手势里弹出的带按钮的卡」(撤销一类)不受节流:盯着页面上的真实点按 / 按键(@lcl/engine/userGesture)
+    const untrack = installUserGestureTracking()
+    // 在后台不上横幅、不开冷却;回到前台接着出(store 的 visibilityChanged)
+    const onVisibility = (): void => useNotifications.getState().visibilityChanged()
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => { untrack(); document.removeEventListener('visibilitychange', onVisibility) }
+  }, [banner])
   if (banner && presenter) return <NativeBanner presenter={presenter} />
   if (banner) return <PhoneBanner />
   return <NotificationStack />

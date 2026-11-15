@@ -9,8 +9,10 @@
  * 文案和按钮、不出 ×N、停留从第一次出现起算不顺延;同一来源(event:一个插件 / 宿主的一类提示)一张卡收起后
  * 冷却一段时间不出卡(到点走的 30 秒,用户自己收的 2 分钟),插件照常调、不报错。见 PHONE 与 throttleFree。
  * 一切「不出卡」都不挡系统通知(App 在后台时的横幅):sendOs 先于节流。
+ * App 在后台(页面不可见)时不上横幅、不开冷却,来的卡排着;回到前台按队列出,系统通知已经替它响过、按停留算早该走了的丢掉。
  */
 import { create } from 'zustand'
+import { inUserGesture } from '@lcl/engine/userGesture'
 import { translate } from '../i18n'
 
 export type NotifyLevel = 'info' | 'success' | 'warning' | 'error'
@@ -81,6 +83,8 @@ export interface AppNotification {
   shownAt?: number
   /** 够格发系统通知、但来的时候 App 在前台没发:排着队等到 App 退到后台才上屏、或在后台被节流丢下时补发一次(见 payOs)。 */
   osOwed?: boolean
+  /** 系统通知真的发出去了(有桥、开着、App 在后台):手机横幅回到前台时,按停留算已经过了的,只有它可以丢(见 visibilityChanged)。 */
+  osSent?: boolean
 }
 
 /** 卡怎么离开的:到点 / 用户点 × 或上滑 / 用户点了卡上的动作。程序自己撤(调用方 dismiss(id))不带。 */
@@ -121,23 +125,33 @@ const customDuration = (ms: unknown): number | undefined => (typeof ms === 'numb
 const durationOf = (n: Pick<AppNotification, 'level' | 'durationMs'>): number => n.durationMs ?? DURATION[n.level]
 
 /** 手机横幅的几个数(方案定稿):停留 5 秒,撤销 8 秒,读屏开着 10 秒;前一条走后隔 300ms 出下一条;
- *  同一来源一张卡到点走后冷却 30 秒,用户自己收(上滑 / 点 ×)的冷却 2 分钟。 */
-export const PHONE = { dwell: 5000, undo: 8000, reader: 10_000, gap: 300, coolTimeout: 30_000, coolUser: 120_000 } as const
+ *  同一来源一张卡到点走后冷却 30 秒,用户自己收(上滑 / 点 ×)的冷却 2 分钟。
+ *  lateTap:到点收掉的那一刻,原生层可能正把一次点按往回报(一次桥往返);这么久之内报回来的动作照样执行(见 activate)。 */
+export const PHONE = { dwell: 5000, undo: 8000, reader: 10_000, gap: 300, coolTimeout: 30_000, coolUser: 120_000, lateTap: 500 } as const
 /** 同 key 换内容时停留不顺延,但剩下的不足这么多就补到这么多(刚换上的字至少露一下,和 resume 的下限同一个数)。 */
 const MIN_LEFT = 800
 
 /** 不受手机节流的卡:常驻、出错、有人在等(urgent),以及用户自己动作的回执(撤销、receipt、inAppOnly、带 onClose 的、
- *  测试通知 force)—— 节流管的是没人要、自己找上门的那些。`system.generic` 是宿主各处即时反馈的缺省类(「已复制」「保存失败」),
- *  不是「一类提示」,不按来源节流。这些卡收起也不开始冷却。 */
-function throttleFree(input: NotifyInput, sticky: boolean, level: NotifyLevel, event: string): boolean {
+ *  测试通知 force、用户手势里弹出的带按钮的卡)—— 节流管的是没人要、自己找上门的那些。`system.generic` 是宿主各处即时反馈的缺省类
+ *  (「已复制」「保存失败」),不是「一类提示」,不按来源节流。这些卡收起也不开始冷却。 */
+function throttleFree(input: NotifyInput, sticky: boolean, level: NotifyLevel, event: string, gestured: boolean): boolean {
   return sticky || level === 'error' || !!input.urgent || isUndo(input) || !!input.receipt || !!input.inAppOnly || !!input.force
-    || typeof input.onClose === 'function' || event === 'system.generic'
+    || typeof input.onClose === 'function' || event === 'system.generic' || gestured
 }
+/** 用户刚做的手势里(同一个任务内)同步弹出、带按钮的卡:那是这次操作的退路,当撤销回执对待 —— 手机上停 8 秒、同 key 重新计时、
+ *  不受节流也不开始冷却。给不带 `undo` 的旧插件兜底:比如手机随包的日历插件勾完待办的「撤销」,不带它的话,30 秒内勾第二件
+ *  那张卡就被同一来源的冷却吞掉、退路没了。为什么普通消息过不来,见 @lcl/engine/userGesture:消息、同步、Agent 的提示都从网络回调 /
+ *  定时器里弹,不在用户输入事件那个任务里。 */
+const gesturedCard = (input: NotifyInput): boolean => !!input.action && inUserGesture()
 const isUndo = (input: NotifyInput): boolean => input.undo === true || (input.receipt === true && !!input.action)
 
 /** 读屏(TalkBack 一类)开着:原生外壳把它写在 <html data-reader>(mobile/src/nativeChrome.ts applyChromeLayout)。 */
 function readerOn(): boolean {
   try { return typeof document !== 'undefined' && !!document.documentElement?.hasAttribute('data-reader') } catch { return false }
+}
+/** 页面看不见(App 在后台、网页版手机切走了标签):手机横幅不上屏、不开冷却。判不出就当看得见(照常出卡)。 */
+function pageHidden(): boolean {
+  try { return typeof document !== 'undefined' && document.visibilityState === 'hidden' } catch { return false }
 }
 
 const PREFS_KEY = 'forsion.ntf.prefs'
@@ -177,6 +191,9 @@ interface NtfState {
   setOsEnabled(on: boolean): void
   setEventOn(event: string, on: boolean): void
   setBanner(on: boolean): void
+  /** 手机横幅:页面可见性变了(NotificationHost 监听 visibilitychange)。退到后台:排着的卡补发欠着的系统通知;
+   *  回到前台:系统通知替它响过、按停留算早该走了的丢掉,其余按队列出。 */
+  visibilityChanged(): void
   pause(): void
   resume(): void
 }
@@ -203,10 +220,13 @@ const cooldown = new Map<string, number>()
 let gapTimer: ReturnType<typeof setTimeout> | null = null
 let gapUntil = 0
 const cooling = (event: string): boolean => (cooldown.get(event) ?? 0) > Date.now()
+/** 刚到点收掉、没有 onClose 的卡的动作:id → 动作与截止时刻(PHONE.lateTap)。见 activate。 */
+const lateTaps = new Map<string, { run: () => void; until: number }>()
 
 /** 测试用:清掉冷却与间隔(模块级簿记,store 的 setState 碰不到)。 */
 export function resetNotificationThrottle(): void {
   cooldown.clear()
+  lateTaps.clear()
   if (gapTimer) clearTimeout(gapTimer)
   gapTimer = null
   gapUntil = 0
@@ -249,7 +269,7 @@ export const useNotifications = create<NtfState>((set, get) => {
   const promoteBanner = (): void => {
     gapTimer = null
     const s = get()
-    if (!s.banner || s.items.length) return
+    if (!s.banner || s.items.length || pageHidden()) return // 在后台不上屏:回到前台由 visibilityChanged 接着出
     const dropped: AppNotification[] = []
     let next: AppNotification | undefined
     for (const nx of s.queue) {
@@ -280,23 +300,27 @@ export const useNotifications = create<NtfState>((set, get) => {
   // 上一张还停着时又来一件,不发的话 App 在后台时这一件就没有横幅)。宿主自己的去重合并(防轰炸计数)不重发。
   // 手机节流挡的只是应用内的卡:被节流的这一条照样走到这里(调用在节流判断之前)。
   const away = (): boolean => typeof document !== 'undefined' && (!document.hasFocus() || document.visibilityState === 'hidden')
-  const postOs = (n: Pick<AppNotification, 'title' | 'sourceLabel' | 'text'>, event: string): void => {
-    try { window.tangu?.notify?.(n.title || n.sourceLabel || 'Forsion', n.text, { event }) } catch { /* 无桥/web 忽略 */ }
+  /** 返回真的交给了系统(有桥、没抛错):网页版没有系统通知,那里「发了」不算数。 */
+  const postOs = (n: Pick<AppNotification, 'title' | 'sourceLabel' | 'text'>, event: string): boolean => {
+    try {
+      const fn = typeof window === 'undefined' ? undefined : window.tangu?.notify
+      if (typeof fn !== 'function') return false
+      fn(n.title || n.sourceLabel || 'Forsion', n.text, { event })
+      return true
+    } catch { return false }
   }
   /** 返回这次有没有发出去;够格(不是 inAppOnly / receipt)却因为 App 在前台没发的,由调用方记成 osOwed。 */
   const sendOs = (input: NotifyInput, n: Pick<AppNotification, 'title' | 'sourceLabel' | 'text'>, event: string): boolean => {
     if (input.inAppOnly || input.receipt || !get().prefs.osEnabled) return false
     if (!away()) return false
-    postOs(n, event)
-    return true
+    return postOs(n, event)
   }
   const owesOs = (input: NotifyInput): boolean => !input.inAppOnly && !input.receipt
   /** 手机横幅一次一条:排在队里的卡,来时 App 在前台(没发系统通知),等它上屏或被节流丢下时 App 已经在后台 ——
    *  用户两边都看不到它。这时补发一次(门控同 sendOs:系统通知开关 + 在后台)。返回补发了没有。 */
   const payOs = (n: AppNotification): boolean => {
     if (!n.osOwed || !get().prefs.osEnabled || !away()) return false
-    postOs(n, n.event)
-    return true
+    return postOs(n, n.event)
   }
 
   return {
@@ -318,7 +342,8 @@ export const useNotifications = create<NtfState>((set, get) => {
       const durationMs = customDuration(input.durationMs)
       const text = plainNetworkError(String(input.text ?? '')).slice(0, 500) // 防插件超长字符串撑爆卡片
       const title = input.title ? String(input.title).slice(0, 120) : undefined
-      const undo = isUndo(input) || undefined
+      const gestured = gesturedCard(input)
+      const undo = isUndo(input) || gestured || undefined
       const urgent = input.urgent === true || undefined
 
       // 去重合并:同 dedupeKey 更新原条(计数 + 文案 + 重置停留),可见或排队中皆然。replace:整条换成这一条,计数回 1。
@@ -338,10 +363,14 @@ export const useNotifications = create<NtfState>((set, get) => {
               }
           upd.undo = undo
           upd.urgent = urgent
-          upd.free = throttleFree({ ...input, onClose: upd.onClose }, upd.sticky, upd.level, upd.event)
+          upd.free = throttleFree({ ...input, onClose: upd.onClose }, upd.sticky, upd.level, upd.event, gestured)
           if (st.banner) upd.count = 1 // 手机:同 key 直接换文案和按钮,不出 ×N
           // 顶替是新的一件事:跟发系统通知;在前台没发的记下,它若还排着队、等到后台才上屏 / 被丢下时补发
-          if (input.replace) upd.osOwed = (!sendOs(input, upd, event) && owesOs(input) && !visible) || undefined
+          if (input.replace) {
+            const sent = sendOs(input, upd, event)
+            upd.osOwed = (!sent && owesOs(input) && !visible) || undefined
+            upd.osSent = sent || undefined
+          }
           set((s) => ({
             items: s.items.map((n) => (n.id === found.id ? upd : n)),
             queue: s.queue.map((n) => (n.id === found.id ? upd : n)),
@@ -365,16 +394,21 @@ export const useNotifications = create<NtfState>((set, get) => {
         id: `ntf-${++seq}-${Date.now()}`, text, title, level, event,
         sourceLabel: input.sourceLabel, createdAt: Date.now(), sticky, count: 1,
         dedupeKey: input.dedupeKey, action: input.action, durationMs, onClose: input.onClose, settle: input.settle,
-        undo, urgent, free: throttleFree(input, sticky, level, event),
+        undo, urgent, free: throttleFree(input, sticky, level, event, gestured),
       }
       // 系统通知(见 sendOs);非 replace 的去重合并上面已经 return,不重发。先于手机节流:后台的横幅不受它管
-      if (!sendOs(input, n, event) && owesOs(input)) n.osOwed = true
+      if (sendOs(input, n, event)) n.osSent = true
+      else if (owesOs(input)) n.osOwed = true
 
       if (st.banner) {
         // 手机节流:同一来源刚收起过一张,冷却期间不出卡(插件照常调,不报错;不该出的卡也就没有 onClose 可等:它们都 free)
         if (!n.free && cooling(event)) return null
         const vis = st.items[0]
-        if (vis?.sticky) {
+        if (pageHidden()) {
+          // 在后台:不上屏、不让位(上了屏用户也看不见,却开始计时、走了还开冷却),排着等回到前台(visibilityChanged)
+          const at = n.urgent ? st.queue.findIndex((q) => !q.urgent) : -1
+          set({ queue: at < 0 ? [...st.queue, n] : [...st.queue.slice(0, at), n, ...st.queue.slice(at)] })
+        } else if (vis?.sticky) {
           // 常驻的那张让一让:新来的先上,它排回新来的后面,等新来的走了再回来(不然一张常驻就把后面的全堵住)
           clearTimer(vis.id)
           set({ items: [], queue: [n, vis, ...st.queue] })
@@ -411,8 +445,16 @@ export const useNotifications = create<NtfState>((set, get) => {
         const wasShown = items.length !== s.items.length
         set({ items, queue })
         if (wasShown) {
-          // 同一来源冷却:到点 / 点了动作 30 秒,用户自己收的 2 分钟。程序自己撤的(没有 reason)与节流管不着的卡不算。
-          if (reason && gone && !gone.free) cooldown.set(gone.event, Date.now() + (reason === 'user' ? PHONE.coolUser : PHONE.coolTimeout))
+          // 同一来源冷却:到点 / 点了动作 30 秒,用户自己收的 2 分钟。程序自己撤的(没有 reason)与节流管不着的卡不算;
+          // App 在后台时到点走的也不算(用户没看见它,回来不该因为它 30 秒内什么都不出)。
+          if (reason && gone && !gone.free && !pageHidden()) cooldown.set(gone.event, Date.now() + (reason === 'user' ? PHONE.coolUser : PHONE.coolTimeout))
+          // 到点收掉的那一刻,原生层可能正把用户的一次点按往回报:动作留一次桥往返(见 activate)。带 onClose 的不留 ——
+          // onClose 刚在下面调过,撤销回执一类就此落定(真删了 / 真提交了),这时再跑「撤销」会撤一件已经落定的事。
+          if (reason === 'timeout' && gone?.action && !gone.onClose) {
+            const now = Date.now()
+            for (const [k, v] of lateTaps) if (v.until < now) lateTaps.delete(k)
+            lateTaps.set(id, { run: gone.action.run, until: now + PHONE.lateTap })
+          }
           scheduleGap()
         }
         closed(gone)
@@ -435,7 +477,14 @@ export const useNotifications = create<NtfState>((set, get) => {
       // 也找队列:手机上常驻的那张可能刚被新来的顶回队列(点按还在路上,或它的动作自己弹了一条新的)
       const find = (): AppNotification | undefined => get().items.find((x) => x.id === id) ?? get().queue.find((x) => x.id === id)
       const n = find()
-      if (!n?.action) return
+      if (!n) {
+        // 手机横幅刚到点收掉的那条(PHONE.lateTap 之内,只一次):用户在它退场前点的,点按晚到了一次桥往返,照样执行
+        const late = lateTaps.get(id)
+        lateTaps.delete(id)
+        if (late && late.until >= Date.now()) { try { late.run() } catch { /* 插件 action 抛错不砸宿主 */ } }
+        return
+      }
+      if (!n.action) return
       const before = n.action
       try { n.action.run() } catch { /* 插件 action 抛错不砸宿主 */ }
       // 动作自己把这条换成了结果(日历撤销 → 「已撤销」,settle):留着,到点淡出
@@ -444,6 +493,7 @@ export const useNotifications = create<NtfState>((set, get) => {
 
     dismissAll: () => {
       for (const id of [...timers.keys()]) clearTimer(id)
+      lateTaps.clear()
       if (gapTimer) clearTimeout(gapTimer)
       gapTimer = null
       gapUntil = 0
@@ -496,6 +546,24 @@ export const useNotifications = create<NtfState>((set, get) => {
       }
       set({ banner: false, items, queue })
       for (const nx of promoted) if (!nx.sticky) startTimer(nx.id, durationOf(nx))
+    },
+
+    visibilityChanged: () => {
+      const s = get()
+      if (!s.banner) return
+      if (pageHidden()) {
+        // 退到后台:排着的卡在后台不会上屏 —— 来时在前台没发系统通知的,现在补发(上屏那一刻补的那条路走不到了)
+        if (!s.queue.some((q) => q.osOwed)) return
+        set({ queue: s.queue.map((q) => (q.osOwed && payOs(q) ? { ...q, osOwed: undefined, osSent: true } : q)) })
+        return
+      }
+      // 回到前台:系统通知已经替它响过、按停留算早该走了的丢掉(不补一串);常驻 / 出错、没响过系统通知的(系统通知关着、
+      // 网页版、应用内回执)留着 —— 用户两边都还没看到它。其余按队列出。
+      const now = Date.now()
+      const expired = s.queue.filter((q) => q.osSent && !q.sticky && q.level !== 'error' && now - q.createdAt >= dwellOf(q))
+      if (expired.length) set({ queue: s.queue.filter((q) => !expired.includes(q)) })
+      for (const d of expired) closed(d)
+      if (!get().items.length && get().queue.length && !gapTimer) scheduleGap()
     },
 
     // 鼠标悬停暂停(NotificationHost 只在 pointerType === 'mouse' 时调;触屏点按不暂停):冻结全部在飞定时器记剩余;移出后续走剩余(下限 800ms,防恢复即消失)。
