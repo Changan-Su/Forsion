@@ -6,7 +6,7 @@
 //   ③ 落盘节拍:插完 ≤1.2s 内 getPage().text 跟上(v4 正文是「上次保存那一刻」的快照)。
 //   ④ insertMarkdownAt(2026-11-16):'caret' 插在行内光标处;cursorMarker 落光标、一步撤销、标记(和占位字)从不落盘;
 //      阅读模式 / 锁定页报 'read-only'、源码模式报 'no-editor',都一个字不进;旧令牌报 'stale-token';
-//      标记在标题 / 列表项里同样落光标(T9–T17)。
+//      标记在标题 / 列表项里同样落光标;标记顶在行首会改结构时不改结构(T9–T18)。
 // 探针插件走真 setup 路径(new Function('ctx', code)),与外置插件同一条 —— 把 ctx.app 挂到
 // window.__bs 上,后面全部断言都从插件视角发问。
 //
@@ -263,6 +263,17 @@ async function main() {
     r16h && r16h.ok === true && s16h.type === 'heading' && s16h.line === 'Title ' && s16h.off === 6 &&
     r16l && r16l.ok === true && /list/.test(s16l.outer) && s16l.line === 'item ' && s16l.off === 5 && !s16h.leak && !s16l.leak,
     JSON.stringify({ h: [r16h, s16h.type, s16h.line, s16h.off], l: [r16l, s16l.outer, s16l.line, s16l.off] }))
+
+  // T18:标记顶在行首(`{{c}}# 标题`)—— 换成占位字会把标题挤成段落、写盘成 `\# 标题`。必须按去掉标记的原文插:真标题、盘上没有转义。
+  await a.waitForTimeout(700)
+  await caretAt('two', 3)
+  const r18 = await a.evaluate(() => window.__bs.at('{{c}}# Lead heading', { where: 'caret', cursorMarker: '{{c}}' }))
+  const s18 = await pmState()
+  await a.waitForTimeout(1300)
+  const d18 = await disk()
+  check('T18 标记会改结构时按去掉标记的原文插:是标题、盘上没有 \\#、没有标记',
+    r18 && r18.ok === true && s18.type === 'heading' && d18.includes('# Lead heading') && !d18.includes('\\# Lead') && !s18.leak && !d18.includes('{{c}}') && !d18.includes('\uFDD0'),
+    JSON.stringify({ r18, line: s18.line, type: s18.type, disk: d18.slice(-80) }))
   await a.close()
 
   // T17:锁定页(只读实例)同样 read-only、零写盘。

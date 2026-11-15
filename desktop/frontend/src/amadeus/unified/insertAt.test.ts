@@ -3,7 +3,7 @@
 import { describe, it, expect } from 'vitest'
 import { Fragment, Schema, type Node as PMNode } from '@milkdown/kit/prose/model'
 import { EditorState, NodeSelection, TextSelection } from '@milkdown/kit/prose/state'
-import { CARET_MARK, caretMarkUsable, inlineAtCaret, landOnCaretMark, markCaret } from './insertAt'
+import { CARET_MARK, caretMarkUsable, inlineAtCaret, landOnCaretMark, markCaret, sameShape, withoutCaretMark } from './insertAt'
 
 const schema = new Schema({
   nodes: {
@@ -61,6 +61,23 @@ describe('caretMarkUsable', () => {
   it('一个都没有 / 不止一个 → 不可用', () => {
     expect(caretMarkUsable(doc(p('abc')))).toBe(false)
     expect(caretMarkUsable(doc(p(`a${CARET_MARK}`), p(`b${CARET_MARK}`)))).toBe(false)
+  })
+})
+
+describe('withoutCaretMark / sameShape(标记改没改结构)', () => {
+  it('删掉的就是那一个占位字,文字合回一段', () => {
+    const d = withoutCaretMark(doc(p('ab', bold(`c${CARET_MARK}d`))))
+    expect(d.textContent).toBe('abcd')
+    expect(d.firstChild!.childCount).toBe(2)
+  })
+  it('只差行尾空白 / 转义的行尾空格 / 行中连续空格 = 同一份', () => {
+    expect(sameShape('## Title \n\nbody', '## Title\n\nbody')).toBe(true)
+    expect(sameShape('## Title&#x20;\n', '## Title\n')).toBe(true)
+    expect(sameShape('Before  after', 'Before after')).toBe(true)
+  })
+  it('结构变了(行首的标记把标题挤成段落、缩进变了)= 不同', () => {
+    expect(sameShape('\\# Heading', '# Heading')).toBe(false)
+    expect(sameShape('- a\n  - b', '- a\n- b')).toBe(false)
   })
 })
 

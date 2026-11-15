@@ -73,7 +73,7 @@ import { blockKindOf, turnBlocksInto, turnCalloutInto, turnIntoCallout, turnRang
 import { columnRowOf, columnSplitApplies } from '../blocks/markdown/menuContext'
 import { NotePicker, blockLinkOf, canMove, copyLink, moveBlocksTo } from './blockLinks'
 import { withFoldedSections } from './foldCarry'
-import { caretMarkUsable, inlineAtCaret, landOnCaretMark, markCaret } from './insertAt'
+import { caretMarkUsable, inlineAtCaret, landOnCaretMark, markCaret, sameShape, withoutCaretMark } from './insertAt'
 import { hardBreakRemark } from '../blocks/markdown/softBreak'
 import { adoptOrigins } from '../blocks/markdown/verbatim'
 import { createBlockLayer } from './blockLayer'
@@ -673,10 +673,18 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
       const parse = (text: string): ProseNode | undefined => ctx.get(parserCtx)(toDisplayMarkdown(text, pageDir)) as ProseNode | undefined
       let marked = mk.marked
       let parsed = parse(mk.md)
-      // 占位字没落进正文文字(进了链接地址之类)→ 落不了光标:去掉标记重解析,光标照旧落在插入内容末尾。
-      if (marked && !(parsed && caretMarkUsable(parsed))) {
-        parsed = parse(mk.plain)
-        marked = false
+      // 占位字没落进正文文字(进了链接地址之类),或它改了结构(顶在行首把 `# 标题` 挤成段落 —— 与去掉标记的原文序列化对不上)
+      // → 落不了光标:改用去掉标记的原文,光标照旧落在插入内容末尾。
+      if (marked) {
+        const plain = parse(mk.plain)
+        let same = false
+        try {
+          same = !!parsed && !!plain && caretMarkUsable(parsed) && sameShape(serializeUnified(ctx, withoutCaretMark(parsed)), serializeUnified(ctx, plain))
+        } catch { /* 序列化不了 = 判不了,按不一样处理 */ }
+        if (!same) {
+          parsed = plain
+          marked = false
+        }
       }
       if (!parsed?.childCount) {
         empty = true

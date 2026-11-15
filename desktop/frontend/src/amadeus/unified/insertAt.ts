@@ -6,6 +6,7 @@
 // 模板标记常带 `%` `$` `{}` 这类 markdown 会吃掉的字(`$…$` 成公式、`<…>` 成 HTML),解析完就找不到了,而它的残骸照样写盘。
 import type { Fragment, Node as ProseNode } from '@milkdown/kit/prose/model'
 import { TextSelection, type EditorState, type Transaction } from '@milkdown/kit/prose/state'
+import { Transform } from '@milkdown/kit/prose/transform'
 
 /** 占位字:U+FDD0 是 Unicode 非字符(规范保证不出现在交换文本里),markdown 不拿它当语法,不会被解析吃掉或拆开。 */
 export const CARET_MARK = '﷐'
@@ -38,6 +39,34 @@ export function caretMarkUsable(doc: ProseNode): boolean {
     return true
   })
   return inText === 1 && !elsewhere
+}
+
+/** 解析结果去掉占位字之后的文档(删的就是那一个字;没有占位字 → 原样)。与 `sameShape` 一起判「标记有没有改结构」。 */
+export function withoutCaretMark(doc: ProseNode): ProseNode {
+  let at = -1
+  doc.descendants((n, pos) => {
+    if (at >= 0) return false
+    if (n.isText) {
+      const i = (n.text ?? '').indexOf(CARET_MARK)
+      if (i >= 0) at = pos + i
+    }
+    return at < 0
+  })
+  return at < 0 ? doc : new Transform(doc).delete(at, at + 1).doc
+}
+
+/** 两份序列化出来的 markdown 是不是同一份:只差行尾空白(含序列化器转义的 `&#x20;`)和行中连续空格算同一份。
+ *  标记顶在会改结构的地方时就不是 —— `{{c}}# 标题` 里占位字在行首,标题成了段落,删掉占位字后写盘是 `\# 标题`;
+ *  `'caret'` 档还会把 `# 标题` 当字面插进行内。调用方据此改用去掉标记的原文(结构对,光标照旧落在插入内容末尾)。 */
+export function sameShape(a: string, b: string): boolean {
+  const norm = (s: string): string =>
+    s
+      .replace(/&#(x20|32|x9|9);/gi, ' ')
+      .split('\n')
+      .map((l) => l.replace(/[ \t]+$/, '').replace(/(\S)[ \t]{2,}(?=\S)/g, '$1 '))
+      .join('\n')
+      .trim()
+  return norm(a) === norm(b)
 }
 
 /** 派发前的最后一步:在事务的文档里找占位字,删掉,光标落在那里。整篇只认**恰好一个**(就是刚插进来那个 ——
