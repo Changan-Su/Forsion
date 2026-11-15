@@ -1182,7 +1182,10 @@ async function groupT(browser) {
   const focus = [await a.evaluate(() => document.hasFocus()), await b.evaluate(() => document.hasFocus())]
   await b.evaluate(() => { window.__upage.casDelayMs = 60000 })
   await caretAfter(a, 0, '第一段。')
-  await a.keyboard.type('a'.repeat(55), { delay: 80 }) // ≈ 4.4s:A 自己存两跳(第二跳盖的是自己那份)
+  // A 连打到自己存够两跳为止(第二跳盖的是自己那份)。按结果等、不按时长:机器忙时一跳的耗时变长,节拍会自己放宽。
+  const aStart = Date.now()
+  do await a.keyboard.type('aaaaa', { delay: 80 })
+  while ((await draftLog(a)).filter((d) => d.op === 'set').length < 2 && Date.now() - aStart < 40000)
   await caretAfter(b, 0, '第一段。')
   await b.keyboard.type('BBB')
   await b.evaluate(() => window.dispatchEvent(new Event('blur')))
