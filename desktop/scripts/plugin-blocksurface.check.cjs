@@ -5,7 +5,8 @@
 //      整笔拒掉(卡片文档是 v4 的常态,不是边角料);
 //   ③ 落盘节拍:插完 ≤1.2s 内 getPage().text 跟上(v4 正文是「上次保存那一刻」的快照)。
 //   ④ insertMarkdownAt(2026-11-16):'caret' 插在行内光标处;cursorMarker 落光标、一步撤销、标记(和占位字)从不落盘;
-//      阅读模式 / 锁定页报 'read-only' 且一个字都不进;旧令牌报 'stale-token'(T9–T15)。
+//      阅读模式 / 锁定页报 'read-only'、源码模式报 'no-editor',都一个字不进;旧令牌报 'stale-token';
+//      标记在标题 / 列表项里同样落光标(T9–T17)。
 // 探针插件走真 setup 路径(new Function('ctx', code)),与外置插件同一条 —— 把 ctx.app 挂到
 // window.__bs 上,后面全部断言都从插件视角发问。
 //
@@ -168,7 +169,7 @@ async function main() {
     const v = window.__upage.probe.view()
     const { $from } = v.state.selection
     const all = v.state.doc.textContent
-    return { line: $from.parent.textContent, off: $from.parentOffset, paras: v.state.doc.childCount, all, leak: all.includes('{{c}}') || all.includes('\uFDD0') }
+    return { line: $from.parent.textContent, off: $from.parentOffset, type: $from.parent.type.name, outer: $from.depth > 1 ? $from.node(1).type.name : '', paras: v.state.doc.childCount, all, leak: all.includes('{{c}}') || all.includes('\uFDD0') }
   })
   const disk = () => a.evaluate(() => window.__upage.vault.get('Unified.md') || '')
 
@@ -236,18 +237,44 @@ async function main() {
   await a.waitForTimeout(120)
   const e14 = await a.evaluate(() => window.__bs.at('   \n\n  ', { where: 'end' }))
   check('T14 旧令牌 → stale-token;只有空白 → empty', r14 && r14.reason === 'stale-token' && e14 && e14.reason === 'empty', JSON.stringify({ r14, e14 }))
+
+  // T15:源码模式 —— 编辑器藏着、textarea 才是真源:写进隐藏的 doc 会被源码那份盖掉。必须报 no-editor、一个字不进、零写盘。
+  await a.evaluate(() => window.__upage.setEditorMode('source'))
+  await a.waitForSelector('textarea', { timeout: 5000 }).catch(() => {})
+  await a.waitForTimeout(300)
+  const w15 = await a.evaluate(() => window.__upage.writes.length)
+  const r15 = await a.evaluate(() => window.__bs.at('源码模式不该进来', { where: 'end' }))
+  await a.waitForTimeout(1200)
+  const s15 = await a.evaluate(() => ({ src: [...document.querySelectorAll('textarea')].map((t) => t.value).join('\n'), doc: window.__upage.probe.view()?.state.doc.textContent ?? '', writes: window.__upage.writes.length }))
+  check('T15 源码模式:报 no-editor,textarea 与文档里都没有、零写盘', s15.src.includes('Hello, dear world') && r15 && r15.ok === false && r15.reason === 'no-editor' && !s15.src.includes('源码模式') && !s15.doc.includes('源码模式') && s15.writes === w15,
+    JSON.stringify({ r15, writes: [w15, s15.writes], srcOn: s15.src.includes('Hello, dear world'), inSrc: s15.src.includes('源码模式'), inDoc: s15.doc.includes('源码模式') }))
+  await a.evaluate(() => window.__upage.setEditorMode('wysiwyg'))
+  await a.waitForTimeout(400)
+
+  // T16:标记在标题 / 列表项里(Templater 最常见的形状 `## 标题 <cursor>`)同样落光标。
+  await caretAt('next', 4)
+  const r16h = await a.evaluate(() => window.__bs.at('## Title {{c}}\n\nbody', { cursorMarker: '{{c}}' }))
+  const s16h = await pmState()
+  await a.waitForTimeout(700)
+  await caretAt('body', 4)
+  const r16l = await a.evaluate(() => window.__bs.at('- item {{c}}\n- two', { cursorMarker: '{{c}}' }))
+  const s16l = await pmState()
+  check('T16 标记在标题 / 列表项里:光标落在标记处',
+    r16h && r16h.ok === true && s16h.type === 'heading' && s16h.line === 'Title ' && s16h.off === 6 &&
+    r16l && r16l.ok === true && /list/.test(s16l.outer) && s16l.line === 'item ' && s16l.off === 5 && !s16h.leak && !s16l.leak,
+    JSON.stringify({ h: [r16h, s16h.type, s16h.line, s16h.off], l: [r16l, s16l.outer, s16l.line, s16l.off] }))
   await a.close()
 
-  // T15:锁定页(只读实例)同样 read-only、零写盘。
+  // T17:锁定页(只读实例)同样 read-only、零写盘。
   const l = await open(browser, '第一段。\n', '&ulock')
   await l.evaluate(() => window.__upage.setLocked(true))
   await l.waitForSelector('[data-lock="on"]', { timeout: 5000 }).catch(() => {})
   await l.waitForTimeout(300)
-  const w15 = await l.evaluate(() => window.__upage.writes.length)
-  const r15 = await l.evaluate(() => window.__bs.at('锁着也不该进来', { where: 'end' }))
+  const w17 = await l.evaluate(() => window.__upage.writes.length)
+  const r17 = await l.evaluate(() => window.__bs.at('锁着也不该进来', { where: 'end' }))
   await l.waitForTimeout(1200)
-  const s15 = await l.evaluate(() => ({ text: document.querySelector('.unified-body .ProseMirror')?.textContent ?? '', writes: window.__upage.writes.length }))
-  check('T15 锁定页:报 read-only,零写盘', r15 && r15.ok === false && r15.reason === 'read-only' && !s15.text.includes('锁着') && s15.writes === w15, JSON.stringify({ r15, s15, w15 }))
+  const s17 = await l.evaluate(() => ({ text: document.querySelector('.unified-body .ProseMirror')?.textContent ?? '', writes: window.__upage.writes.length }))
+  check('T17 锁定页:报 read-only,零写盘', r17 && r17.ok === false && r17.reason === 'read-only' && !s17.text.includes('锁着') && s17.writes === w17, JSON.stringify({ r17, s17, w17 }))
   await l.close()
 
   await browser.close()
