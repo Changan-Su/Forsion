@@ -129,9 +129,10 @@ describe('lanProbeMatches (who answered on the direct address)', () => {
     expect(lanProbeMatches(meta({ unitId: 'a' }), 'a')).toBe(true)
     expect(lanProbeMatches(meta({ unitId: 'a' }), 'old-1')).toBe(false)
   })
-  it('the responder is this computer itself → no row counts (even one with a matching id)', () => {
+  it('the responder is this computer itself and reports no id → no row counts; a reported id still decides', () => {
     expect(lanProbeMatches(meta({ self: true }), 'old-1')).toBe(false)
-    expect(lanProbeMatches(meta({ self: true, unitId: 'a' }), 'a')).toBe(false)
+    expect(lanProbeMatches(meta({ self: true, unitId: 'a' }), 'old-1')).toBe(false)
+    expect(lanProbeMatches(meta({ self: true, unitId: 'a' }), 'a')).toBe(true)
   })
   it('an older Forsion that does not report a roster id → unknown: reachable as before', () => {
     expect(lanProbeMatches(meta(), 'a')).toBe(true)
