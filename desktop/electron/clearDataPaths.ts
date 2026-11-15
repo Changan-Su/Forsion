@@ -11,7 +11,7 @@
  *   · 有一条不行 → 一条都不删(remove 为空,refused 列出原因),由调用方告诉用户。
  *   · 「桌面」那一半三种身份相同:只删自己 userData 下的几份壳层文件(整个 userData 被 Electron 占着,不整删;
  *     文件夹 Unit 的 userData 就是本文件夹的 app-data/)。
- * 真删前每条再调一次 recheckClearTarget(核对与删除之间文件夹被换成软链之类)。
+ * 计划只算一次;真删前每条只核它自己(verifyClearTarget):已经没了不算失败、软链只删链接、目录要还是原来那一个。
  */
 import { lstatSync } from 'node:fs'
 import { dirname, isAbsolute, join } from 'node:path'
@@ -43,7 +43,12 @@ export interface ClearDataInput {
 }
 
 export interface ClearRefusal { path: string; reason: 'not_absolute' | 'link' | 'moved' | 'overlap' | 'unit_inside' | 'registry_unreadable' | 'unverifiable'; with?: string }
-export interface ClearPlan { remove: string[]; refused: ClearRefusal[] }
+/**
+ * 要删的一条,连同算计划那一刻它在盘上是什么:dir(带 dev + ino)/ link(软链,只删链接本身,绝不跟进去)/ file / absent(那时还没有)。
+ * scope 决定真删前要不要再核沾边:folder = 文件夹 Unit 的 home / Forsion;owner = 默认那台的 home / 工作区;plain = 不核(沙箱、壳层文件)。
+ */
+export interface ClearTarget { path: string; kind: 'dir' | 'link' | 'file' | 'absent'; id?: { dev: number; ino: number }; scope: 'folder' | 'owner' | 'plain' }
+export interface ClearPlan { remove: string[]; targets: ClearTarget[]; refused: ClearRefusal[] }
 
 /** 默认那台的数据根:文件夹 Unit 的清理绝不碰到它们(含它们里面的任何东西)。 */
 export function machineDataRoots(home: string): string[] {
@@ -52,10 +57,15 @@ export function machineDataRoots(home: string): string[] {
 /** 旧的开发版缺省父目录(现在是 ~/.forsion-dev-units):已经登记在那里的老 Unit 照样能清自己的数据。 */
 export const legacyDevUnitsParent = (home: string): string => join(home, '.forsion-dev', 'units')
 
-const isLink = (p: string): boolean | null => {
-  try { return lstatSync(p).isSymbolicLink() } catch (e) { return (e as NodeJS.ErrnoException).code === 'ENOENT' ? false : null }
+const missing = (e: unknown): boolean => ['ENOENT', 'ENOTDIR'].includes((e as NodeJS.ErrnoException)?.code ?? '')
+/** 盘上此刻是什么(不跟软链);读不出(没权限之类)→ null。 */
+function snapshot(path: string, scope: ClearTarget['scope']): ClearTarget | null {
+  let st: ReturnType<typeof lstatSync>
+  try { st = lstatSync(path) } catch (e) { return missing(e) ? { path, kind: 'absent', scope } : null }
+  if (st.isSymbolicLink()) return { path, kind: 'link', scope }
+  if (st.isDirectory()) return { path, kind: 'dir', id: { dev: st.dev, ino: st.ino }, scope }
+  return { path, kind: 'file', scope }
 }
-const exists = (p: string): boolean => { try { lstatSync(p); return true } catch { return false } }
 
 function folderGuard(i: ClearDataInput): PathGuard {
   return {
@@ -65,55 +75,96 @@ function folderGuard(i: ClearDataInput): PathGuard {
   }
 }
 
-function folderTargets(i: ClearDataInput, refused: ClearRefusal[]): string[] {
+/** 文件夹本身:不是软链、身份还是启动时那个。对 → 它的身份;不对 → 拒绝原因。 */
+function folderSelf(i: ClearDataInput): DirIdentity | ClearRefusal {
   const dir = i.folderDir
-  if (!dir || !isAbsolute(dir)) { refused.push({ path: String(dir ?? ''), reason: 'not_absolute' }); return [] }
-  if (i.unitDirs === null) { refused.push({ path: dir, reason: 'registry_unreadable' }); return [] }
-  const dirLink = isLink(dir)
-  if (dirLink !== false) { refused.push({ path: dir, reason: dirLink ? 'link' : 'unverifiable' }); return [] }
+  if (!dir || !isAbsolute(dir)) return { path: String(dir ?? ''), reason: 'not_absolute' }
+  if (i.unitDirs === null) return { path: dir, reason: 'registry_unreadable' }
+  const t = snapshot(dir, 'folder')
+  if (!t || t.kind === 'link') return { path: dir, reason: t ? 'link' : 'unverifiable' }
   const id = dirIdentity(dir)
-  if (!id || (i.folderIdentity && !sameDevIno(id, i.folderIdentity))) { refused.push({ path: dir, reason: 'moved' }); return [] }
-  const guard = folderGuard(i)
-  const out: string[] = []
-  for (const p of [join(dir, LOCAL_UNIT_DIRS.home), join(dir, LOCAL_UNIT_DIRS.workspace)]) {
-    if (!exists(p)) continue // 本来就没有:不用删
-    const link = isLink(p)
-    if (link !== false) { refused.push({ path: p, reason: link ? 'link' : 'unverifiable' }); continue }
-    // 必须真的就在本文件夹里:真实路径的上一级就是这个文件夹(按身份比,不按字符串)
-    const real = realPathLoose(p)
-    const parentId = real ? dirIdentity(dirname(real)) : null
-    if (!parentId || !sameDevIno(parentId, id)) { refused.push({ path: p, reason: 'moved' }); continue }
-    const clash = guardConflict(p, guard)
-    if (clash) { refused.push({ path: p, reason: 'overlap', with: clash }); continue }
-    out.push(p)
+  if (!id || (i.folderIdentity && !sameDevIno(id, i.folderIdentity))) return { path: dir, reason: 'moved' }
+  return id
+}
+const isRefusal = (v: DirIdentity | ClearRefusal): v is ClearRefusal => 'reason' in v
+
+/** 文件夹 Unit 的一条目录:必须真的就在本文件夹里(真实路径的上一级按身份就是它),且不和要护住的路径沾边。 */
+function folderDirProblem(p: string, folderId: DirIdentity, i: ClearDataInput): ClearRefusal | null {
+  const real = realPathLoose(p)
+  const parentId = real ? dirIdentity(dirname(real)) : null
+  if (!parentId || !sameDevIno(parentId, folderId)) return { path: p, reason: 'moved' }
+  const clash = guardConflict(p, folderGuard(i))
+  return clash ? { path: p, reason: 'overlap', with: clash } : null
+}
+
+function folderTargets(i: ClearDataInput, refused: ClearRefusal[]): ClearTarget[] {
+  const self = folderSelf(i)
+  if (isRefusal(self)) { refused.push(self); return [] }
+  const out: ClearTarget[] = []
+  for (const p of [join(i.folderDir!, LOCAL_UNIT_DIRS.home), join(i.folderDir!, LOCAL_UNIT_DIRS.workspace)]) {
+    const t = snapshot(p, 'folder')
+    if (!t) { refused.push({ path: p, reason: 'unverifiable' }); continue }
+    if (t.kind === 'absent') continue // 本来就没有:不用删
+    if (t.kind === 'link') { refused.push({ path: p, reason: 'link' }); continue }
+    const problem = folderDirProblem(p, self, i)
+    if (problem) { refused.push(problem); continue }
+    out.push(t)
   }
   return out
 }
 
-function ownerTargets(i: ClearDataInput, refused: ClearRefusal[]): string[] {
-  const targets = [i.envTanguHome || i.forsionHome, i.workspace, ...(i.role === 'owner' ? [join(i.home, '.tangu'), join(i.home, 'Tangu')] : [])]
-  if (i.role !== 'owner') return targets
-  if (i.unitDirs === null) { refused.push({ path: targets[0], reason: 'registry_unreadable' }); return [] }
-  for (const t of targets) {
-    for (const u of i.unitDirs ?? []) {
-      const rel = pathRelation(u, t)
-      if (rel === 'none') continue
-      refused.push({ path: t, reason: rel === 'unknown' ? 'unverifiable' : 'unit_inside', with: u })
-    }
+/** 默认那台的一条:名册里的 Unit 不能和它沾边(软链例外 —— 只删链接本身,碰不到链接指向的东西)。 */
+function ownerProblems(t: ClearTarget, i: ClearDataInput): ClearRefusal[] {
+  if (t.kind === 'link') return []
+  const out: ClearRefusal[] = []
+  for (const u of i.unitDirs ?? []) {
+    const rel = pathRelation(u, t.path)
+    if (rel !== 'none') out.push({ path: t.path, reason: rel === 'unknown' ? 'unverifiable' : 'unit_inside', with: u })
   }
-  return targets
+  return out
+}
+
+function ownerTargets(i: ClearDataInput, refused: ClearRefusal[]): ClearTarget[] {
+  const owner = i.role === 'owner'
+  const paths = [i.envTanguHome || i.forsionHome, i.workspace, ...(owner ? [join(i.home, '.tangu'), join(i.home, 'Tangu')] : [])]
+  if (owner && i.unitDirs === null) { refused.push({ path: paths[0], reason: 'registry_unreadable' }); return [] }
+  const out: ClearTarget[] = []
+  for (const p of paths) {
+    const t = snapshot(p, owner ? 'owner' : 'plain')
+    if (!t) { refused.push({ path: p, reason: 'unverifiable' }); continue }
+    if (owner) refused.push(...ownerProblems(t, i))
+    out.push(t)
+  }
+  return out
 }
 
 export function clearDataPaths(i: ClearDataInput): ClearPlan {
   const refused: ClearRefusal[] = []
   const tangu = i.tangu ? (i.role === 'folder' ? folderTargets(i, refused) : ownerTargets(i, refused)) : []
-  if (refused.length) return { remove: [], refused } // 有一条不行就一条都不删
-  const desktop = i.desktop ? i.desktopFiles.map((f) => join(i.userData, f)) : []
-  return { remove: [...tangu, ...desktop], refused }
+  if (refused.length) return { remove: [], targets: [], refused } // 有一条不行就一条都不删
+  const desktop = i.desktop ? i.desktopFiles.map((f) => snapshot(join(i.userData, f), 'plain') ?? { path: join(i.userData, f), kind: 'file' as const, scope: 'plain' as const }) : []
+  const targets = [...tangu, ...desktop]
+  return { remove: targets.map((t) => t.path), targets, refused }
 }
 
-/** 真删某一条之前再核一次:按同样的输入重算,这条还在、且没有任何拒绝,才删。 */
-export function recheckClearTarget(p: string, i: ClearDataInput): boolean {
-  const fresh = clearDataPaths(i)
-  return fresh.refused.length === 0 && fresh.remove.includes(p)
+/**
+ * 真删某一条之前只核**这一条**(不重算整份计划 —— 前面删掉的东西会让后面的兼容软链悬空,那不是变故):
+ *  · gone:已经没了(含前面删目录时连带没的)—— 跳过,不算失败;
+ *  · unlink:软链或普通文件 —— 只删它本身,绝不跟进去;
+ *  · rmdir:目录,而且还是算计划时那一个(dev + ino),按身份再核一次沾边 —— 整个删;
+ *  · changed:算计划之后被换掉了(目录换成软链 / 另一个目录、文件夹被挪走、名册读不出……)—— 不删,算清理不完整。
+ * i 传删之前现读的输入(名册可能变了)。
+ */
+export function verifyClearTarget(t: ClearTarget, i: ClearDataInput): 'gone' | 'unlink' | 'rmdir' | 'changed' {
+  let st: ReturnType<typeof lstatSync>
+  try { st = lstatSync(t.path) } catch (e) { return missing(e) ? 'gone' : 'changed' }
+  if (st.isSymbolicLink() || !st.isDirectory()) return t.kind === 'dir' ? 'changed' : 'unlink'
+  if (t.kind === 'dir' ? !t.id || st.dev !== t.id.dev || st.ino !== t.id.ino : t.kind !== 'absent') return 'changed'
+  if (t.scope === 'folder') {
+    const self = folderSelf(i)
+    if (isRefusal(self) || folderDirProblem(t.path, self, i)) return 'changed'
+  } else if (t.scope === 'owner') {
+    if (i.unitDirs === null || ownerProblems({ ...t, kind: 'dir' }, i).length) return 'changed'
+  }
+  return 'rmdir'
 }

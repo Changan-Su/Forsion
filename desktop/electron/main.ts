@@ -152,9 +152,9 @@ import { SPACE_SHORTCUT, createSpaceShortcut, createWindowShortcut, iconPngFromD
 import { UNIT_SHORTCUT, handleUnitAddToDesktop, isUnitId, parseRosterResponse, parseUnitWindowState, unitWindowIdFromUrl, type RosterRead, type UnitShortcutResult, type UnitWindowEntry } from './unitShortcut'
 import { isMachineOwner, setHostRole } from './hostRole'
 import { LOCAL_UNIT_QUIT_ARG } from '../shared/localUnits'
-import { LOCAL_UNIT_SHORTCUT, clearLocalUnitRunRecord, defaultUserDataDir, dropStaleLocalUnitRunRecord, localUnitAppUserModelId, localUnitChannel, localUnitGuard, localUnitRegistryFile, localUnitSpawnArgs, localUnitSpawnEnv, localUnitsDefaultParent, macAppBundleOf, parseLocalUnitArgs, readLocalUnitRegistry, resolveLocalUnitLaunch, writeLocalUnitRunRecord, type LocalUnitLaunchRefusal } from './localUnits'
+import { LOCAL_UNIT_SHORTCUT, clearLocalUnitRunRecord, defaultUserDataDir, dropStaleLocalUnitRunRecord, localUnitAppUserModelId, localUnitChannel, localUnitEnvOutside, localUnitGuard, localUnitRegistryFile, localUnitSpawnArgs, localUnitSpawnEnv, localUnitsDefaultParent, macAppBundleOf, parseLocalUnitArgs, readLocalUnitRegistry, resolveLocalUnitLaunch, writeLocalUnitRunRecord, type LocalUnitLaunchRefusal } from './localUnits'
 import { createLocalUnitsHost, showInstallBlocked, type LocalUnitsHost } from './localUnitsHost'
-import { clearDataPaths, recheckClearTarget, type ClearDataInput } from './clearDataPaths'
+import { clearDataPaths, verifyClearTarget, type ClearDataInput } from './clearDataPaths'
 import { dirIdentity } from './dirIdentity'
 
 /** ~/.tangu(与包内 core/tanguHome.ts 同约定;TANGU_HOME 可整体重定向)。 */
@@ -177,8 +177,8 @@ if (!SANDBOX && LOCAL_UNIT_ARGS.quit && !LOCAL_UNIT_ARGS.present) process.exit(0
 /** 文件夹 Unit 的文件夹不许和默认那台的数据沾边(加入 / 新建 / 打开 / 启动 / 清数据都核):按启动时的环境算,先于下面改 userData / home。 */
 const LOCAL_UNIT_GUARD = localUnitGuard({ home: homedir(), startupUserData: app.getPath('userData'), envTanguHome: process.env.TANGU_HOME, envWorkspace: process.env.FORSION_WORKSPACE_DIR })
 /** 文件夹 Unit 起不来:一句中英文说明后退出(这时还没定界面语言 —— 主进程的语言源只在 whenReady 里注入一次)。 */
-function refuseLocalUnitLaunch(reason: LocalUnitLaunchRefusal): never {
-  const both = (key: string): string => `${mtFor('zh', key)}\n\n${mtFor('en', key)}`
+function refuseLocalUnitLaunch(reason: LocalUnitLaunchRefusal, vars?: Record<string, string>): never {
+  const both = (key: string): string => `${mtFor('zh', key, vars)}\n\n${mtFor('en', key, vars)}`
   const title = `${mtFor('zh', 'main.localUnits.refuseTitle')} / ${mtFor('en', 'main.localUnits.refuseTitle')}`
   const msg = both(`main.localUnits.refuse.${reason}`)
   // 台架(TANGU_HARNESS_QUIET=1)里没人点模态框:写 stderr,退出码 3
@@ -189,7 +189,12 @@ function refuseLocalUnitLaunch(reason: LocalUnitLaunchRefusal): never {
 const LOCAL_UNIT = (() => {
   if (SANDBOX || !LOCAL_UNIT_ARGS.present) return null
   const r = resolveLocalUnitLaunch({ id: LOCAL_UNIT_ARGS.id, registryFile: LOCAL_UNIT_REGISTRY_FILE, channel: LOCAL_UNIT_CHANNEL, guard: LOCAL_UNIT_GUARD })
-  if (r.ok) return r
+  if (r.ok) {
+    // 它自己的 .env 里有路径指出了文件夹:引擎启动后会自己读 .env、把宿主删掉的变量补回来 —— 不打开(退出请求照常放行)
+    const env = LOCAL_UNIT_ARGS.quit ? null : localUnitEnvOutside(r.paths)
+    if (env) refuseLocalUnitLaunch('env_outside', { key: env.key, file: env.file })
+    return r
+  }
   if (!LOCAL_UNIT_ARGS.quit) refuseLocalUnitLaunch(r.reason) // 退出请求对不上就安静退出(装更新前的那一轮不弹框)
   process.exit(0)
 })()
@@ -4916,28 +4921,32 @@ app.whenReady().then(async () => {
     await backend.stop() // 释放 state.db 句柄,否则占用删不掉
     await ensureChain // 在途那次收尾(它可能正要重建默认工作区目录)再删
     // 与配置写入同排一队:在途的写先落完再删;删完同一拍就退出,排在后面的写来不及把 config.json(含 apiKey)写回来
-    let refusedLate: ReturnType<typeof clearDataPaths> | null = null
+    const skipped: string[] = []
     await configQueue(async () => {
       // ⚠️ P1-K2 / G11:remote-lock.json **不在**桌面那半的清理列表 —— 清数据 = 不经系统认证解锁(远端锁定只能本机认证后解)
       // ponytail: 显式 TANGU_HOME 形态下父目录里的共享域文件(auth/config.json 等)会留下;要连带清就得逐项列共享域条目。
-      // 停完引擎再算一遍(这期间文件夹可能被换掉、名册可能变了),每条真删前再核一次
+      // 计划只算一次(上面 pre);每条真删前只核它自己:已经没了照常往下、软链只删链接、目录要还是原来那一个且不沾边(名册现读)
       const input = clearInput()
-      const plan = clearDataPaths(input)
-      if (plan.refused.length) { refusedLate = plan; return }
-      for (const p of plan.remove) {
-        if (!recheckClearTarget(p, input)) { console.warn('[clear-data] skipped, changed since checked:', p); continue }
-        await rm(p, { recursive: true, force: true }).catch(() => {})
+      for (const t of pre.targets) {
+        const v = verifyClearTarget(t, input)
+        if (v === 'gone') continue
+        if (v === 'changed') { console.warn('[clear-data] skipped, changed since checked:', t.path); skipped.push(t.path); continue }
+        await rm(t.path, { recursive: v === 'rmdir', force: true }).catch((e) => { console.warn('[clear-data] could not delete:', t.path, e); skipped.push(t.path) })
       }
       // 电脑历史根目录单独再删(显式 TANGU_HOME 时它不在上面删的目录里);在途写超时没落定的,等它落定后再删一次。
       // 就在配置队列里做:删完同一拍退出的约束不破。
       if (opts?.tangu) await chWipe?.afterWipe()
       if (opts?.desktop) await deviceSecrets.wipe().catch(() => {}) // P1-K5:device-secrets.json(配对 / external token)
     })
-    const late = refusedLate as ReturnType<typeof clearDataPaths> | null // 在队列回调里赋的值,TS 的收窄看不到
-    if (late) await refuse(late) // 一条没删;引擎已停,照常重启回到原样
+    if (skipped.length) { // 清理不完整:照实告诉用户(引擎已停,之后照常重启)
+      console.warn('[clear-data] incomplete:', skipped.join(', '))
+      const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null
+      const box = { type: 'warning' as const, title: mt('main.localUnits.clearIncompleteTitle'), message: mt('main.localUnits.clearIncomplete'), detail: skipped.join('\n'), buttons: [mt('main.localUnits.ok')], defaultId: 0, noLink: true }
+      if (process.env.TANGU_HARNESS_QUIET !== '1') await (win ? dialog.showMessageBox(win, box) : dialog.showMessageBox(box))
+    }
     app.relaunch()
     app.exit(0)
-    return { ok: true }
+    return { ok: skipped.length === 0 }
   })
 
   // ── Forsion Market ──

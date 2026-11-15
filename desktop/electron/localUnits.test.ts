@@ -8,7 +8,7 @@ import {
   localUnitPaths, localUnitRunningPid, localUnitSpawnArgs, localUnitSpawnEnv, localUnitsDefaultParent, lookupLocalUnit,
   mutateLocalUnitRegistry, parseLocalUnitArgs, readLocalUnitMarker, readLocalUnitRegistry, removeLocalUnit, renameLocalUnit,
   resolveLocalUnitLaunch, writeLocalUnitMarker, writeLocalUnitRunRecord, type LocalUnitsContext,
-  localUnitGuard, localUnitRunState, withRegistryLock,
+  localUnitGuard, localUnitRunState, withRegistryLock, localUnitEnvOutside, localUnitEnvFile, parseTanguEnvText,
   LOCAL_UNIT_SHORTCUT, localUnitAppUserModelId, macAppBundleOf, quitLocalUnitsForInstall,
 } from './localUnits'
 import { createWindowShortcut, windowShortcutPlan } from './spaceShortcut'
@@ -383,6 +383,30 @@ describe('启动核对:不对就拒,盘上不留东西', () => {
     expect(go(ID(5))).toEqual({ ok: false, reason: 'unsafe' })
     writeFileSync(registryFile, '{')
     expect(go(ID(1))).toEqual({ ok: false, reason: 'registry_unreadable' })
+  })
+})
+
+describe('启动前核文件夹 Unit 自己的 .env', () => {
+  it('读法和引擎一致:注释、空行、没有 = 的跳过,成对引号去掉', () => {
+    expect(parseTanguEnvText('# c\n\nA=1\n =x\nB = "two words" \nC=\'q\'\nD="half\nE=a=b\nnoeq')).toEqual([['A', '1'], ['B', 'two words'], ['C', 'q'], ['D', '"half'], ['E', 'a=b']])
+  })
+  it('指路径的变量指出了文件夹(或不是绝对路径)→ 回那一条;都在文件夹里 / 空值 / 别的变量 / 没有 .env → null', async () => {
+    await create()
+    const p = localUnitPaths(join(parent, 'Bench A'))
+    expect(localUnitEnvOutside(p)).toBeNull() // 没有 .env
+    const file = localUnitEnvFile(p)
+    expect(file).toBe(join(p.home, 'tangu', '.env'))
+    mkdirSync(join(p.home, 'tangu'), { recursive: true })
+    writeFileSync(file, `TANGU_CLOUD_URL=https://x\nFORSION_DEFAULT_CALENDAR=\nTANGU_DATA_DIR=${join(p.home, 'tangu', 'state.db')}\n`)
+    expect(localUnitEnvOutside(p)).toBeNull()
+    writeFileSync(file, `TANGU_DATA_DIR=${join(p.home, 'tangu', 'state.db')}\nTANGU_TOKEN_FILE="${join(root, 'default-home', 'token')}"\n`)
+    expect(localUnitEnvOutside(p)).toEqual({ key: 'TANGU_TOKEN_FILE', value: join(root, 'default-home', 'token'), file })
+    writeFileSync(file, 'FORSION_AMADEUS_VAULT=relative/vault\n')
+    expect(localUnitEnvOutside(p)?.key).toBe('FORSION_AMADEUS_VAULT')
+    // 软链别名:字面在文件夹里,真身在外面
+    symlinkSync(join(root, 'units'), join(p.dir, 'Forsion', 'escape'))
+    writeFileSync(file, `FORSION_DEFAULT_CALENDAR=${join(p.dir, 'Forsion', 'escape', 'Calendar.db')}\n`)
+    expect(localUnitEnvOutside(p)?.key).toBe('FORSION_DEFAULT_CALENDAR')
   })
 })
 

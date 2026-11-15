@@ -272,6 +272,16 @@ async function main() {
     const after = snapshotDir(T).filter(notDefaults)
     const added = after.filter((p) => !before.includes(p) && !p.startsWith(path.join(T, 'moved-B')) && !p.startsWith(PARENT + path.sep + 'Bench B'))
     check('三次拒绝之后临时目录里没有多出任何目录 / 文件,名册一字没改', added.length === 0 && fs.readFileSync(REGISTRY, 'utf8') === regBytes, added.slice(0, 10))
+    // 自己的 .env 里令牌文件指到文件夹外(引擎起来会自己读 .env 补回来)→ 不打开,说明里点名变量和文件
+    const envFile = path.join(A, 'home', 'tangu', '.env')
+    fs.mkdirSync(path.dirname(envFile), { recursive: true })
+    fs.writeFileSync(envFile, `TANGU_TOKEN_FILE=${path.join(T, 'default-home', 'token')}\n`)
+    const aBefore = snapshotDir(path.join(A, 'app-data'))
+    const envRun = launchDirect([`--forsion-unit=${idA}`], BASE)
+    ours.add(envRun.child.pid)
+    const er = await within(envRun.done, 20000)
+    check('.env 里的路径指出了文件夹:退出码 3、说明 env_outside 点名 TANGU_TOKEN_FILE 和那份 .env,app-data 没多东西', er.code === 3 && /refused \(env_outside\)/.test(er.stderr) && er.stderr.includes('TANGU_TOKEN_FILE') && er.stderr.includes(envFile) && JSON.stringify(snapshotDir(path.join(A, 'app-data'))) === JSON.stringify(aBefore), { code: er.code, stderr: er.stderr.slice(0, 300) })
+    fs.rmSync(envFile)
 
     // ── 8 加入已有:拷贝的 / 搬了家的 ──
     const copy = path.join(T, 'copies', 'Bench A copy')

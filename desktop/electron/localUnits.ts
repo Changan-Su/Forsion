@@ -26,7 +26,7 @@ import {
 } from '../shared/localUnits'
 import { legacyDevUnitsParent, machineDataRoots } from './clearDataPaths'
 import { dirIdentity, sameDevIno } from './dirIdentity'
-import { guardConflict, type PathGuard } from './pathOverlap'
+import { guardConflict, pathRelation, type PathGuard } from './pathOverlap'
 import type { WindowShortcutKind } from './spaceShortcut'
 
 /** 文件夹 Unit 跑起来以后在自己 app-data 里写的运行记录(退出删;判活看 pid)。 */
@@ -187,6 +187,9 @@ export interface RegistryLockOptions {
  * 回收是原子的:把锁 rename 到一边,再核挪走的正是刚才判陈旧的那一份;不是(别人已回收并拿到了新锁)→ 用 link 原样放回
  * (link 不覆盖:要是这期间又有人建了锁,放不回去,被挪走的那位持锁者在提交前核 mine() 时发现、放弃这次写)。
  */
+// 已知余量(不再加码):三个写者恰好交错时仍有一个极窄的窗口 —— B 判陈旧后挪走的已是 A 刚拿到的新锁、还没放回去之前,C 抢到锁
+// 并提交,而 A 此前已核过 mine(),随后的 rename 会盖掉 C 的那一次。最坏结果是名册里少一条(那台 Unit 的文件夹原样不动,
+// 再「加入已有的」一次即可),不会坏掉名册、也不会删任何文件夹。
 function reclaimIfStale(lock: string, o: RegistryLockOptions): void {
   let token: string
   let mtimeMs: number
@@ -381,8 +384,8 @@ export function localUnitRunningPid(appData: string, alive: (pid: number) => boo
 
 // ── 启动时的核对(只读,不建任何目录) ──────────────────────────────────────────────────
 
-/** 启动被拒的原因(各有中英文说明);overlap = 文件夹和默认那台的数据沾边;unwritable = 运行记录写不进去(见 main.ts)。 */
-export type LocalUnitLaunchRefusal = 'bad_arg' | 'registry_unreadable' | 'not_found' | 'missing' | 'mismatch' | 'channel_mismatch' | 'unsafe' | 'overlap' | 'unwritable'
+/** 启动被拒的原因(各有中英文说明);overlap = 文件夹和默认那台的数据沾边;unwritable = 运行记录写不进去;env_outside = 自己 .env 里的路径指出了文件夹(见 main.ts)。 */
+export type LocalUnitLaunchRefusal = 'bad_arg' | 'registry_unreadable' | 'not_found' | 'missing' | 'mismatch' | 'channel_mismatch' | 'unsafe' | 'overlap' | 'unwritable' | 'env_outside'
 export type LocalUnitLaunch =
   | { ok: true; id: string; marker: LocalUnitMarker; paths: LocalUnitPaths }
   | { ok: false; reason: LocalUnitLaunchRefusal }
@@ -677,6 +680,49 @@ export function localUnitSpawnEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const out: NodeJS.ProcessEnv = {}
   for (const [k, v] of Object.entries(env)) if (!SPAWN_ENV_STRIP.test(k)) out[k] = v
   return out
+}
+
+/**
+ * .env 的读法,和引擎(tanguHome.loadTanguEnv)、桌面(main.ts loadTanguEnvFile)逐字一致:一行一条 KEY=VALUE,空行与 # 开头的跳过,
+ * 没有 = 或 = 在行首的跳过,值两侧成对的单 / 双引号去掉。
+ */
+export function parseTanguEnvText(raw: string): Array<[string, string]> {
+  const out: Array<[string, string]> = []
+  for (const line of raw.split('\n')) {
+    const t = line.trim()
+    if (!t || t.startsWith('#')) continue
+    const i = t.indexOf('=')
+    if (i <= 0) continue
+    const k = t.slice(0, i).trim()
+    let v = t.slice(i + 1).trim()
+    if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) v = v.slice(1, -1)
+    if (k) out.push([k, v])
+  }
+  return out
+}
+
+/** 文件夹 Unit 的 .env:引擎 home = <文件夹>/home/tangu(桌面的 tanguDataDir),.env 就在它下面 —— 引擎和桌面读的都是这一份。 */
+export const localUnitEnvFile = (p: LocalUnitPaths): string => join(p.home, 'tangu', '.env')
+
+/**
+ * 文件夹 Unit 起来之前核它自己的 .env:下面这些指路径的变量(数据库、令牌文件、笔记库、日历、插件、工作区……)只要有一条指到
+ * 本文件夹以外(或不是绝对路径),就不打开 —— 引擎启动后会自己再读一遍 .env,宿主在拉起时删掉的变量会被它原样补回来,
+ * 那样就和别的 Unit 共用账号或数据了。空值(= 关)不算。.env 不存在或读不出:引擎和桌面也都当没有,这里同样放行。
+ */
+export const LOCAL_UNIT_ENV_PATH_KEYS: readonly string[] = [
+  'TANGU_HOME', 'TANGU_DATA_DIR', 'TANGU_TOKEN_FILE', 'TANGU_DEFAULT_WORKSPACE', 'FORSION_WORKSPACE_DIR', 'FORSION_AMADEUS_VAULT',
+  'FORSION_AMADEUS_CONFIG', 'FORSION_DESKTOP_CONFIG', 'FORSION_DEFAULT_CALENDAR', 'FORSION_REMOTE_LOCK_FILE', 'TANGU_PLUGINS_DIR',
+  'TANGU_PROVIDERS_FILE', 'TANGU_WECHAT_STATE_DIR', 'TANGU_BROWSER_SOCKET_DIR', 'TANGU_IMPORT_HOME',
+]
+export function localUnitEnvOutside(p: LocalUnitPaths): { key: string; value: string; file: string } | null {
+  const file = localUnitEnvFile(p)
+  let raw: string
+  try { raw = readFileSync(file, 'utf8') } catch { return null }
+  for (const [key, value] of parseTanguEnvText(raw)) {
+    if (!LOCAL_UNIT_ENV_PATH_KEYS.includes(key) || value === '') continue
+    if (!isAbsolute(value) || pathRelation(value, p.dir) !== 'inside') return { key, value, file }
+  }
+  return null
 }
 
 /**
