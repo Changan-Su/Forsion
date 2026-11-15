@@ -4,9 +4,9 @@
 // 以及行首 `==` 落盘不带反斜杠(setext 防护过宽)。渲染与光标露源码在台架:unified-page.check 的 P14e;
 // 往返语料:check:rtcorpus 的 i17 条(含 <kbd>/<sub>/<sup>)。
 import { describe, expect, it } from 'vitest'
-import { roundTrip } from './parseFidelity.testkit'
+import { bootEditor, roundTrip } from './parseFidelity.testkit'
 import { scanObsidian } from './obsidianInline'
-import { unescapeHighlightAtLineStart } from './tagEscape'
+import { unescapeHighlightInText } from './tagEscape'
 import { normalizeFragmentMd } from './MarkdownBlock'
 
 const spans = (s: string): string[] => scanObsidian(s).map((x) => `${x.kind}:${s.slice(x.from, x.to)}`)
@@ -39,12 +39,20 @@ describe('行首 ==高亮== 逐字往返(I-17)', () => {
   ])('%s', async (_n, md) => {
     expect(await roundTrip(md)).toBe(md)
   })
-  it('setext 下划线(整行只有 =)的转义保留', () => {
-    expect(unescapeHighlightAtLineStart('\\==\n')).toBe('\\==\n')
-    expect(unescapeHighlightAtLineStart('\\=== \n')).toBe('\\=== \n')
-    expect(unescapeHighlightAtLineStart('\\==x==\n')).toBe('==x==\n')
+  it('setext 下划线(整行只有 =)的转义保留(text handler 出口,纯函数)', () => {
+    expect(unescapeHighlightInText('\\==', '==', '\n')).toBe('\\==')
+    expect(unescapeHighlightInText('\\===', '===', ' ')).toBe('\\===')
+    expect(unescapeHighlightInText('\\==x==', '==x==', '\n')).toBe('==x==')
+    expect(unescapeHighlightInText('a\n\\==x==', 'a\n==x==', '\n')).toBe('a\n==x==')
+    expect(unescapeHighlightInText('\\==', '==', '*')).toBe('==') // 节点末尾看 info.after:`==**粗**`
+    expect(unescapeHighlightInText('\\==', '==', undefined)).toBe('\\==') // 不知道后面是什么就不动
   })
-  it('片段规范化(切块 / 结构化复制)同样还原', () => {
-    expect(normalizeFragmentMd('\\==重点== 片段\n')).toBe('==重点== 片段\n')
+  it('片段规范化(切块 / 结构化复制)同样还原', async () => {
+    const b = await bootEditor('==重点== 片段\n')
+    try {
+      expect(normalizeFragmentMd(b.serialize(b.view.state.doc))).toBe('==重点== 片段\n')
+    } finally {
+      await b.destroy()
+    }
   })
 })

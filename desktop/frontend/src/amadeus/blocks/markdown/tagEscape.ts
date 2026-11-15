@@ -31,15 +31,24 @@ export function unescapeTagAtLineStart(md: string): string {
  *
  * 同一张 unsafe 表还有 `{atBreak: true, character: '='}`(防读成 setext 标题下划线):段落 / 列表项 / 引用开头的
  * `==重点==` 一经编辑就落成 `\==重点==` —— Obsidian 按转义显示成字面 `=` 加半截高亮,高亮当场失效。
- * setext 下划线要求**整行只有 `=`**;`\==` 后面紧跟非空白、非 `=` 的字符,这一行就不可能是下划线,转义纯属多余。
- * 前缀口径同 TAG_AT_LINE_START(缩进 / 列表标记 / 任务框 / 引用,可叠加);围栏代码整块跳过。
- * 公式块里 LaTeX 的 `\=` 此时还是序列化器写出的 `\\=`,不匹配。
- * 单个 `=` 同理:选中文字敲 `=` 包成 `=词=`(Obsidian 的 autoPairMarkdown,见 unified/keyboard.ts)在行首时落成 `\=词=`,
- * 后面紧跟非空白、非 `=` 的字同样不可能是下划线,一并还原。
+ * setext 下划线要求**整行只有 `=`**;`\=` 后面(可再隔一个 `=`)紧跟非空白、非 `=` 的字符,这一行就不可能是下划线,
+ * 转义纯属多余。单个 `=` 同理:选中文字敲 `=` 包成 `=词=`(Obsidian 的 autoPairMarkdown,见 unified/keyboard.ts)在行首时
+ * 落成 `\=词=`,一并还原。
+ *
+ * ⚠️ 挂在序列化器的 **text handler** 上(textSafe.handleText 的出口),不在整串上做:只动这段正文文字**自己**被 safe
+ * 加的那个转义 —— 节点开头(node.value 本身以 `=` 开头,而 `=` 只有行首这一条 unsafe)或节点内换行之后。
+ * HTML 块 / 行内 HTML 里用户写的 `\=`、代码、用户转义(D-11)都不经过这里。二审(Codex)实测整串版把
+ * `<pre>\n\=keep\n</pre>` 落成 `=keep`(mapOutsideFences 只跳围栏,不跳 HTML)。
+ * 节点末尾的判据字符取 info.after(`==` 后紧跟 `**粗**` / `<kbd>` 也得认,rtcorpus i17)。
+ * 公式里 LaTeX 的 `\=` 在这里是序列化器翻倍后的 `\\=`,不匹配。
  */
-const HL_AT_LINE_START = /^((?:[ \t]*(?:[-*+]|\d{1,9}[.)])[ \t]+(?:\[[ xX]\][ \t]+)?|[ \t]*>[ \t]?)*[ \t]*)\\=(?==?[^\s=])/
+const HL_IN_TEXT = /(^|\n[ \t]*)\\=/g
 
-export function unescapeHighlightAtLineStart(md: string): string {
-  if (!md.includes('\\=')) return md
-  return mapOutsideFences(md, (line) => line.replace(HL_AT_LINE_START, '$1='))
+export function unescapeHighlightInText(out: string, value: string, after: string | undefined): string {
+  if (!out.includes('\\=')) return out
+  const s = out + (after ?? '')
+  return out.replace(HL_IN_TEXT, (all: string, lead: string, at: number) => {
+    if (at === 0 && !lead && !value.startsWith('=')) return all
+    return /^=?[^\s=]/.test(s.slice(at + all.length)) ? `${lead}=` : all
+  })
 }
