@@ -8,7 +8,7 @@ import type { DesktopPermissionId, DesktopPermissionRequestOptions, DesktopPermi
 import type { ComputerHistoryApi } from '../../shared/computerHistory'
 export type { DesktopPermissionId, DesktopPermissionRequestOptions, DesktopPermissionsSnapshot, DesktopPermissionState } from '../../shared/desktopPermissions'
 // 核心插件化第 2b 步:与 Tangu 共用的数据形状搬进了契约(tangu-agent/src/contracts/clientTypes.ts),这里原样转出,宿主的 import 方不动。
-export type { ThinkingLevel, DefaultModelSlot, VisionMode, TanguDesktopConfig, AgentRunEvent, SubChatSeg, SubChat, SessionRecord, PendingApprovalInfo, HistorianActivityItem, AutomationActionSpec, AutomationWhere, MuseTriggerInfo, AgentScheduleEntry, TeamDef, NormalAgentDef, StandInInfo, AgentConfig, ChannelKind, WorkspaceDescriptor, MessageRecord, ModelInfo, ModelsResponse, ProviderQuota, ProjectSettings, ProjectDocInfo, ProjectSkillInfo, ProjectPlanInfo, GitRemoteInfo, GitCommitInfo, GitChangeInfo, GitSummary, GitIdentity, ProjectContext, ProjectRepoInfo, ProjectMemoryView, ProjectMemoryOrganizeOutcome, SkillInfo, SkillCatalogEntry, ToolsResponse, WorkspaceFileMeta, Attachment, DisplayFile, CtxInfo, ToolEvent, MsgSeg, ApprovalRequest, AnswerBy, ApprovalRemote, ApprovalReason, ApprovalPreviewI18n, InquiryRequest, SketchItem, TodoItem, TeamWork, LiveWait, UiMessage, BackendStatusInfo, StoredDesktopConfig, UnitInfo } from '../../../tangu-agent/src/contracts/clientTypes'
+export type { ThinkingLevel, DefaultModelSlot, VisionMode, TanguDesktopConfig, AgentRunEvent, SubChatSeg, SubChat, SessionRecord, PendingApprovalInfo, HistorianActivityItem, AutomationActionSpec, AutomationWhere, MuseTriggerInfo, AgentScheduleEntry, TeamDef, NormalAgentDef, StandInInfo, AgentConfig, ChannelKind, WorkspaceDescriptor, MessageRecord, FailedRunRecord, ModelInfo, ModelsResponse, ProviderQuota, ProjectSettings, ProjectDocInfo, ProjectSkillInfo, ProjectPlanInfo, GitRemoteInfo, GitCommitInfo, GitChangeInfo, GitSummary, GitIdentity, ProjectContext, ProjectRepoInfo, ProjectMemoryView, ProjectMemoryOrganizeOutcome, SkillInfo, SkillCatalogEntry, ToolsResponse, WorkspaceFileMeta, Attachment, DisplayFile, CtxInfo, ToolEvent, MsgSeg, ApprovalRequest, AnswerBy, ApprovalRemote, ApprovalReason, ApprovalPreviewI18n, InquiryRequest, SketchItem, TodoItem, TeamWork, LiveWait, UiMessage, BackendStatusInfo, StoredDesktopConfig, UnitInfo } from '../../../tangu-agent/src/contracts/clientTypes'
 export { THINKING_LEVELS, isHomeSession, SHOW_SYSTEM_PROMPT_KEY, isTeamImageAvatar, isIndependentOrbitConfig, CLOUD_WORKSPACE_KEY, ROOTLESS_WORKSPACE_KEY, DEFAULT_LOCAL_WORKSPACE_KEY, DEFAULT_CLOUD_PROJECT, cloudProjectKey, sessionWorkspaceKey, isProjectIconFile } from '../../../tangu-agent/src/contracts/clientTypes'
 import type { AgentScheduleEntry, AutomationActionSpec, AutomationWhere, BackendStatusInfo, MuseTriggerInfo, StoredDesktopConfig, UnitInfo } from '../../../tangu-agent/src/contracts/clientTypes'
 
@@ -655,6 +655,8 @@ declare global {
       termsStatus?(): Promise<{ status: number; json?: any }>
       /** 网页版:公开会员方案列表(会员徽章的配色与中英文名);桌面 / Android 走 cloudFetch */
       membershipPlans?(): Promise<{ status: number; json?: any }>
+      /** 网页版:公开的可购买方案(含各方案 perks.modelMultiplierCap,模型选择器据此写「X 起可用」);桌面 / Android 走 cloudFetch('/payment/offerings') */
+      membershipOfferings?(): Promise<{ status: number; json?: any }>
       termsAgree?(version: string): Promise<{ status: number; json?: any }>
       /** Forsion Extend 渲染半身调它自己主进程半身注册的通道;宿主通道一律拒。没装载 Extend 就没有这个键。 */
       cloudInvoke?(channel: string, ...args: unknown[]): Promise<unknown>

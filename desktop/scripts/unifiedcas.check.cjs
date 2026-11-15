@@ -7,10 +7,16 @@
 //   G6 B 打一个字就关(卸载冲洗)→ 字落盘、A 回灌看得见、先前谁的字都没丢
 //   G7 停手后 3s 写盘次数不再增长(两个实例互相规范化 = 乒乓写)
 //  C 组(CAS,writeTextFile 带基线指纹):
-//   C1 盘上被别的窗口悄悄改了(回灌通知还在路上)→ 本地有改动的写被拒 → 盘上那版进冲突副本 + 本地版落盘
+//   C1 盘上被别的窗口悄悄改了(回灌通知还在路上)、改的正是本地在打的那一行 → 本地有改动的写被拒 → 盘上那版进冲突副本 + 本地版落盘
+//   C1m(2026-11-14)同上,但别处改的是**另一段** → 三方合并:两边的字都在盘上、编辑器里看得见别处那段,零副本零 error,
+//      只有一条不带级别的「已合并」提示
+//   C1s(Codex 复核 P0)合并落在编辑器监听器的 200ms 防抖窗里:合并前那一击排着的回调拿的是旧 doc,
+//      不许把合并进来的那段抹掉(之后写盘照样两边都在、零副本)
 //   C2 同上但本实例**没有用户改动**(只是编辑器规范化)→ 让位回灌,盘上那版原样保留、零副本
 //   C3 陈旧且没改动的 B 被关掉 → 不许拿旧全文盖掉盘上新版(卸载冲洗的 isPristine 闸)
-//  D 组(D-03 打字中外部改动):100ms / 600ms / 连续打字中 fire → 本地胜 + 冲突副本 = 外部那版 + error 提示带「打开副本」;
+//  D 组(D-03 打字中外部改动):外部改的正是本地在打的那一行,100ms / 600ms / 连续打字中 fire → 本地胜 + 冲突副本 = 外部那版
+//   + error 提示带「打开副本」;Dm1–Dm3(2026-11-14)外部改的是**另一段** → 三方合并:两边的字都在盘上、编辑器里看得见,
+//   零副本零 error,一条「已合并」提示;
 //   负对照:已落盘后 fire / 没改动时 fire → 照常回灌、零副本零提示
 //   假冲突(返修 B1,盘上没离开本实例基线):D6 打字中 fire 原样内容 · D7 标题回车改名后立刻打正文 ·
 //   D8 在途自写(盘先落 ack 晚回,`__upage.writeLagMs`)的回声 × 接着打字 → 一律零副本零提示、字照常落盘
@@ -39,6 +45,21 @@
 //  L 组(在途自写 × 撤回,返修 R1;`__upage.writeLagMs` 造「盘先落、ack 晚回」):写在路上时用户把字删回旧基线 ——
 //   L1 接着切走(卸载冲洗)→ 撤回落盘;两发写之间本机草稿一直在(前一发的 ack 不许删掉比它新的草稿)、零提示
 //   L2 停在原页(schedule)→ 撤回同样落盘
+//  T 组(连续打字期间崩溃不丢字,typingDraft.ts):字与字间隔 80ms(短于监听防抖)连打约 5 秒 ——
+//   T1 打字没停手时草稿照样一跳跳地存(不随按键重置),每一份都盖住了当时盘上没有的字;同一份基线的规范化只算一次
+//      (判定不看机器快慢:机器忙、中途卡顿超过约 1 秒时正常写盘照写,断言按每次存草稿那一刻的盘上内容算)
+//   T2 「崩溃」:只带着某一刻的本机草稿和那一刻的盘重开 → 出「恢复草稿」条,点了字就回来
+//   T3 停手后照常落盘,打字途中存的草稿随之删掉(没有过时草稿留下误弹恢复)
+//   T4 重开后「恢复草稿」条还没决定时接着连打 → 那份旧草稿不被连打节拍盖掉
+//   T5 输入法组字(CDP Input.imeSetComposition)跨过到点:组字中一份草稿都不存;提交(Input.insertText)后下一跳存的是提交后的字
+//   T7 组字中途停顿 3 秒以上(跨过正常防抖写):盘上与每一发写都没有半截拼音;提交后在防抖节奏内落盘,组字前打的字也在
+//   T8a 组字中途窗口失焦:当场存本机草稿(含组字前的字),盘上不写拼音;提交后照常落盘、草稿删掉
+//   T8b 组字中途页面隐藏:照旧马上写(之后进程随时可能没了,计时器未必再跑),组字前的字当场落盘;提交后改回提交的字
+//   T10 源码模式(textarea)组字中途停顿:盘上不写拼音,提交后落盘
+//   T11 组字刚好在防抖写到点前结束(提交后的正文还没报上来):到点不写拼音
+//   T9 组字结束而文档没变(提交的就是组字串):监听器不再报,推后的那发写自己补上
+//   T6 两个窗口(同源共享 localStorage,槽位号相同):B 失焦存下的更新的字在格子里时,A 的连打节拍不许盖掉它
+//  CPU_THROTTLE=4 跑:CDP 把页面 CPU 放慢 4 倍(负载下的稳定性自查)
 //
 // 用法:npm run check:unifiedcas(= node scripts/e2e-editor.cjs --check=unifiedcas;worktree 里设 HARNESS_URL)
 const fs = require('fs'), os = require('os'), path = require('path')
@@ -66,8 +87,9 @@ const record = (name, ok, detail) => {
 }
 const wait = (ms) => new Promise((r) => setTimeout(r, ms))
 
-async function open(browser, seed, flags = '') {
-  const p = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1200, height: 1100 } })
+async function open(browser, seed, flags = '', context = null) {
+  const p = await (context ?? browser).newPage(context ? undefined : { locale: 'zh-CN', viewport: { width: 1200, height: 1100 } })
+  if (Number(process.env.CPU_THROTTLE) > 1) await (await p.context().newCDPSession(p)).send('Emulation.setCPUThrottlingRate', { rate: Number(process.env.CPU_THROTTLE) })
   p.errs = []
   p.on('pageerror', (e) => { p.errs.push(e.message); console.log('[pageerror]', e.message) })
   // 从第一帧就收 toast(挂载补读、首次失败都可能很早)
@@ -112,6 +134,22 @@ const toasts = (p) => p.evaluate(() => window.__toasts.map(({ run, ...t }) => t)
 const domText = (p, idx) => p.evaluate(([s, idx]) => document.querySelectorAll(s)[idx]?.innerText ?? '', [PM, idx])
 const writeCount = (p) => p.evaluate(() => window.__upage.writes.length)
 const draftKeys = (p) => p.evaluate(() => Object.keys(localStorage).filter((k) => k.startsWith('amadeus.unsavedDraft:')))
+/** 记下本页每一次存 / 删草稿那一刻:正文、当时盘上那版、已落盘次数、时刻(Date.now,跨页可比)。 */
+const recordDrafts = (p) => p.evaluate(() => {
+  window.__drafts = []
+  const proto = Storage.prototype
+  const set = proto.setItem, rm = proto.removeItem
+  const mine = (k) => String(k).startsWith('amadeus.unsavedDraft:')
+  proto.setItem = function (k, v) {
+    if (mine(k)) window.__drafts.push({ op: 'set', at: Date.now(), key: k, raw: v, text: JSON.parse(v).text, disk: window.__upage.vault.get('Unified.md') ?? null, writes: window.__upage.writes.length })
+    return set.call(this, k, v)
+  }
+  proto.removeItem = function (k) {
+    if (mine(k)) window.__drafts.push({ op: 'rm', at: Date.now(), key: k, writes: window.__upage.writes.length })
+    return rm.call(this, k)
+  }
+})
+const draftLog = (p) => p.evaluate(() => window.__drafts)
 
 async function groupG(browser) {
   const p = await open(browser, '# 标题\n\n第一段。\n\n## 小节\n\n第二段。\n', '&udual')
@@ -181,10 +219,10 @@ async function groupG(browser) {
 }
 
 async function groupC(browser) {
-  // C1:本地有改动 + 盘上被悄悄改过(另一个窗口的写,externalChange 还在路上)
+  // C1:本地有改动 + 盘上被悄悄改过(另一个窗口的写,externalChange 还在路上),改的正是本地在打的那一行 → 合不拢
   {
     const p = await open(browser, '# T\n\n甲段。\n\n乙段。\n')
-    await p.evaluate(() => window.__upage.vault.set('Unified.md', '# T\n\n甲段。别处写的\n\n乙段。\n'))
+    await p.evaluate(() => window.__upage.vault.set('Unified.md', '# T\n\n甲段。\n\n乙段。别处写的\n'))
     await typeIn(p, 0, '乙段。', '本地')
     await wait(1800)
     const d = await disk(p)
@@ -194,6 +232,50 @@ async function groupC(browser) {
     record('C1 CAS 拒掉陈旧写 → 盘上那版进冲突副本 + error 提示,本地版随后落盘',
       rejects >= 1 && d.includes('乙段。本地') && c.length === 1 && c[0][1].includes('别处写的') && t.some((x) => x.level === 'error' && x.action?.label),
       JSON.stringify({ rejects, d, copies: c.map(([k, v]) => [k, v]), toasts: t.length }))
+    await p.close()
+  }
+  // C1m(2026-11-14):同上,但别处改的是另一段 → CAS 拒写后三方合并,两边的字都留下,不出副本
+  {
+    const p = await open(browser, '# T\n\n甲段。\n\n乙段。\n')
+    await p.evaluate(() => window.__upage.vault.set('Unified.md', '# T\n\n甲段。别处写的\n\n乙段。\n'))
+    await typeIn(p, 0, '乙段。', '本地')
+    await wait(1800)
+    const d = await disk(p)
+    const c = await copies(p)
+    const t = await toasts(p)
+    const rejects = await p.evaluate(() => window.__upage.casRejects.length)
+    const dom = await domText(p, 0)
+    record('C1m CAS 拒写、别处改的是另一段 → 三方合并:两边的字都在盘上与编辑器里,零副本零 error,一条「已合并」提示',
+      rejects >= 1 && d === '# T\n\n甲段。别处写的\n\n乙段。本地\n' && c.length === 0 && dom.includes('别处写的') && dom.includes('乙段。本地') &&
+        !t.some((x) => x.level === 'error') && t.filter((x) => !x.level && /合并/.test(x.text)).length === 1,
+      JSON.stringify({ rejects, d, copies: c.map(([k]) => k), toasts: t.map((x) => [x.level, x.text]) }))
+    await p.close()
+  }
+  // C1s(Codex 复核 P0):一击之后立刻冲洗 —— CAS 拒写、合并都发生在这一击的监听器回调(防抖 200ms)之前。
+  // Milkdown 的监听器跳过合并那个不进撤销栈的事务,随后回调报的是这一击时的 doc(有 Z、没有别处那段)。
+  {
+    const p = await open(browser, '# T\n\n甲段。\n\n乙段。\n')
+    await p.evaluate(() => window.__upage.vault.set('Unified.md', '# T\n\n甲段。别处写的\n\n乙段。\n'))
+    const ok = await p.evaluate(async () => {
+      const view = window.__upage.probe.view()
+      let at = -1
+      view.state.doc.descendants((node, pos) => {
+        if (at >= 0) return false
+        if (node.isText) { const i = node.text.indexOf('乙段。'); if (i >= 0) { at = pos + i + 3; return false } }
+        return true
+      })
+      if (at < 0) return false
+      view.dispatch(view.state.tr.insertText('Z', at)) // 一次普通的用户输入(进撤销栈 → 监听器排上回调)
+      await window.__upage.probe.flush()
+      return true
+    })
+    await wait(2500)
+    const d = await disk(p)
+    const c = await copies(p)
+    const dom = await domText(p, 0)
+    record('C1s 合并落在监听器防抖窗里:排着的旧 doc 回调不抹掉合并进来的那段,盘上两边都在、零副本',
+      ok && d === '# T\n\n甲段。别处写的\n\n乙段。Z\n' && c.length === 0 && dom.includes('别处写的'),
+      JSON.stringify({ ok, d, copies: c.map(([k]) => k) }))
     await p.close()
   }
   // C2:本实例没有用户改动(只是编辑器把 __粗__ 规范化成 **粗**)。
@@ -231,6 +313,8 @@ async function groupC(browser) {
 async function groupD(browser) {
   const MD = '# T\n\npara1 AAA\n\npara2 BBB\n\npara3 CCC\n'
   const EXT = '# T\n\npara1 AAA AGENT-WROTE-THIS\n\npara2 BBB\n\npara3 CCC\n'
+  // D1–D3 外部改的是本地正在打的那一行(para3):合不拢,本地胜 + 冲突副本。另一段的情形见下面 Dm1–Dm3。
+  const SAME = '# T\n\npara1 AAA\n\npara2 BBB\n\npara3 CCC AGENT-WROTE-THIS\n'
   const cases = [
     { label: 'D1 fire 于打字后 100ms', type: true, delay: 100 },
     { label: 'D2 fire 于打字后 600ms(防抖写之前)', type: true, delay: 600 },
@@ -240,15 +324,15 @@ async function groupD(browser) {
     const p = await open(browser, MD)
     await typeIn(p, 0, 'CCC', ' local')
     await wait(k.delay)
-    await p.evaluate((t) => window.__upage.fire('Unified.md', t), EXT)
+    await p.evaluate((t) => window.__upage.fire('Unified.md', t), SAME)
     if (k.continuous) for (let i = 0; i < 6; i++) { await p.keyboard.type('x'); await wait(250) }
     await wait(3000)
     const d = await disk(p)
     const c = await copies(p)
     const t = await toasts(p)
     const err = t.find((x) => x.level === 'error')
-    record(`${k.label}:本地胜 + 冲突副本 = 外部那版 + error 提示「打开副本」`,
-      d.includes('CCC local') && !d.includes('AGENT-WROTE-THIS') && c.length === 1 && c[0][1] === EXT && !!err && !!err.action?.label && err.text.includes(c[0][0].replace(/\.md$/, '')),
+    record(`${k.label}(同一行):本地胜 + 冲突副本 = 外部那版 + error 提示「打开副本」`,
+      d.includes('CCC local') && !d.includes('AGENT-WROTE-THIS') && c.length === 1 && c[0][1] === SAME && !!err && !!err.action?.label && err.text.includes(c[0][0].replace(/\.md$/, '')),
       JSON.stringify({ d, copies: c.map(([k2]) => k2), toast: err?.text }))
     if (k.label.startsWith('D1')) {
       // 「打开副本」= 导航门面事件(amadeusOverlays → openNote),路径正是副本
@@ -262,6 +346,25 @@ async function groupD(browser) {
       }))
       record('D1b 「打开副本」动作 = 导航到副本路径', nav === c[0]?.[0], JSON.stringify(nav))
     }
+    await p.close()
+  }
+  // Dm1–Dm3(2026-11-14):外部改的是另一段(para1),本地在 para3 打字 → 回灌等静默后三方合并,不出副本
+  for (const k of cases) {
+    const p = await open(browser, MD)
+    await typeIn(p, 0, 'CCC', ' local')
+    await wait(k.delay)
+    await p.evaluate((t) => window.__upage.fire('Unified.md', t), EXT)
+    if (k.continuous) for (let i = 0; i < 6; i++) { await p.keyboard.type('x'); await wait(250) }
+    await wait(3000)
+    const d = await disk(p)
+    const c = await copies(p)
+    const t = await toasts(p)
+    const dom = await domText(p, 0)
+    const mine = k.continuous ? 'para3 CCC localxxxxxx' : 'para3 CCC local'
+    record(`${k.label.replace(/^D/, 'Dm')}(另一段):三方合并,两边的字都在盘上与编辑器里,零副本零 error,一条「已合并」提示`,
+      d === EXT.replace('para3 CCC', mine) && c.length === 0 && dom.includes('AGENT-WROTE-THIS') && dom.includes(mine) &&
+        !t.some((x) => x.level === 'error') && t.filter((x) => !x.level && /合并/.test(x.text)).length === 1,
+      JSON.stringify({ d, copies: c.map(([k2]) => k2), toasts: t.map((x) => [x.level, x.text]) }))
     await p.close()
   }
   for (const k of [{ label: 'D4 负对照:已落盘后 fire', type: true, delay: 2500 }, { label: 'D5 负对照:没有本地改动时 fire', type: false, delay: 500 }]) {
@@ -881,10 +984,231 @@ async function groupW(browser) {
   await p.close()
 }
 
+async function groupT(browser) {
+  const seed = '# 标题\n\n第一段。\n'
+  const p = await open(browser, seed)
+  await p.evaluate(() => localStorage.clear())
+  await recordDrafts(p)
+  const before = await p.evaluate(() => ({ calls: window.__upage.probe.canonicalCalls(), writes: window.__upage.writes.length }))
+  await caretAfter(p, 0, '第一段。')
+  const burst = 'abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz' // 88 击 × 80ms ≈ 7s:至少三跳
+  await p.keyboard.type(burst, { delay: 80 })
+  const endAt = await p.evaluate(() => Date.now())
+  const after = await p.evaluate(() => ({ calls: window.__upage.probe.canonicalCalls(), writes: window.__upage.writes.length }))
+  const during = (await draftLog(p)).filter((d) => d.op === 'set' && d.at <= endAt)
+  const typedOf = (t) => ((t ?? '').match(/第一段。([0-9A-Za-z]*)/) || [, ''])[1]
+  const covers = during.every((d) => typedOf(d.text).length > 0 && burst.startsWith(typedOf(d.text)) && typedOf(d.text).length >= typedOf(d.disk).length)
+  const writesDuring = after.writes - before.writes
+  const calls = after.calls - before.calls
+  record('T1 连打没停手:草稿一跳跳地存(≥2 份)、每份都盖住当时盘上没有的字;基线规范化只随基线变才重算',
+    during.length >= 2 && covers && calls <= 1 + writesDuring,
+    JSON.stringify({ stashes: during.length, writesDuring, canonicalCalls: calls, typed: during.map((d) => typedOf(d.text).length + '/' + typedOf(d.disk).length) }))
+  // T2:「崩溃」—— 新页面(新的存储上下文)只带某一刻的草稿和那一刻的盘
+  const crash = during[during.length - 1]
+  if (crash) {
+    const q = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1200, height: 1100 } })
+    await q.addInitScript(([k, v]) => { if (!sessionStorage.getItem('__seeded')) { localStorage.setItem(k, v); sessionStorage.setItem('__seeded', '1') } }, [crash.key, crash.raw])
+    await q.goto(`${URL}?upage&useed=${encodeURIComponent(crash.disk ?? seed)}`, { waitUntil: 'domcontentloaded' })
+    await q.waitForSelector(PM, { timeout: 60000 })
+    await q.waitForTimeout(800)
+    const bar = await q.evaluate(() => !![...document.querySelectorAll('.unified-page [data-save="draft"] button')].find((b) => b.textContent === '恢复草稿'))
+    // T4:恢复条还开着时在这篇里接着连打 3 秒 → 那份还没决定的草稿不许被连打节拍盖掉
+    await caretAfter(q, 0, '第一段。')
+    await q.keyboard.type('zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz', { delay: 80 })
+    const kept = await q.evaluate((k) => localStorage.getItem(k), crash.key)
+    record('T4 恢复条未决时连打:原草稿原样留着', kept === crash.raw, JSON.stringify({ same: kept === crash.raw }))
+    await q.evaluate(() => { const v = window.__upage.probe.view(); v.dispatch(v.state.tr.delete(v.state.selection.from - 36, v.state.selection.from)) })
+    await q.evaluate(() => [...document.querySelectorAll('[data-save="draft"] button')].find((b) => b.textContent === '恢复草稿')?.click())
+    await q.waitForFunction((t) => window.__upage.vault.get('Unified.md') === t, crash.text, { timeout: 10000 }).catch(() => {})
+    const back = await q.evaluate(() => window.__upage.vault.get('Unified.md'))
+    record('T2 崩溃后重开:出「恢复草稿」条,点了打字途中的字回到盘上', bar && back === crash.text, JSON.stringify({ bar, back }))
+    await q.close()
+  } else record('T2 崩溃后重开', false, 'T1 没有草稿可恢复')
+  await p.waitForFunction((b) => (window.__upage.vault.get('Unified.md') ?? '').includes('第一段。' + b) && !Object.keys(localStorage).some((k) => k.startsWith('amadeus.unsavedDraft:')), burst, { timeout: 10000 }).catch(() => {})
+  const end = await p.evaluate(() => ({ disk: window.__upage.vault.get('Unified.md'), keys: Object.keys(localStorage).filter((k) => k.startsWith('amadeus.unsavedDraft:')) }))
+  record('T3 停手后照常落盘,打字途中存的草稿已删掉', end.disk.includes('第一段。' + burst) && end.keys.length === 0, JSON.stringify(end))
+  await p.close()
+
+  // T5:输入法组字。先打一个字让节拍起算,紧接着组字并保持 3 秒(跨过 2 秒到点)
+  const r = await open(browser, seed)
+  await r.evaluate(() => localStorage.clear())
+  await recordDrafts(r)
+  // 写一直在路上:停手后的正常写盘落不了盘,「这一刻没有待写」就遮不住组到一半时存不存草稿这件事
+  await r.evaluate(() => { window.__upage.casDelayMs = 30000 })
+  await caretAfter(r, 0, '第一段。')
+  const cdp = await r.context().newCDPSession(r)
+  await r.keyboard.type('q')
+  await cdp.send('Input.imeSetComposition', { text: 'zhong', selectionStart: 5, selectionEnd: 5 })
+  await wait(400)
+  await cdp.send('Input.imeSetComposition', { text: 'zhongwen', selectionStart: 8, selectionEnd: 8 })
+  await wait(2600)
+  const held = { dom: await domText(r, 0), composing: await r.evaluate(() => !!window.__upage.probe.view().composing), sets: (await draftLog(r)).filter((d) => d.op === 'set').map((d) => d.text), doc: await r.evaluate(() => window.__upage.probe.view().state.doc.textContent) }
+  await cdp.send('Input.insertText', { text: '中文' })
+  await r.waitForFunction(() => window.__drafts.some((d) => d.op === 'set'), null, { timeout: 5000 }).catch(() => {})
+  const firstSet = (await draftLog(r)).find((d) => d.op === 'set')
+  record('T5 输入法组字中到点不存草稿(没有组到一半的拼音),提交后下一跳存的是提交后的字',
+    held.composing && held.dom.includes('zhongwen') && held.sets.length === 0 && !!firstSet && firstSet.text.includes('第一段。q中文') && !firstSet.text.includes('zhong'),
+    JSON.stringify({ held, first: firstSet?.text ?? null }))
+  await r.close()
+
+  // T7:组字中途停顿(挑候选字)跨过正常防抖写:盘上 / 每一发写都不许出现半截拼音;提交后在防抖节奏内落盘,
+  //     组字之前打的那个字也在
+  {
+    const s = await open(browser, seed)
+    await caretAfter(s, 0, '第一段。')
+    const ime = await s.context().newCDPSession(s)
+    await s.keyboard.type('q') // 它自己的防抖写(200 + 800ms)落在组字期间
+    await ime.send('Input.imeSetComposition', { text: 'zhong', selectionStart: 5, selectionEnd: 5 })
+    await wait(400)
+    await ime.send('Input.imeSetComposition', { text: 'zhongwen', selectionStart: 8, selectionEnd: 8 })
+    const seen = []
+    for (let i = 0; i < 12; i++) { await wait(300); seen.push(await disk(s)) } // 3.6 秒
+    const composing = await s.evaluate(() => !!window.__upage.probe.view().composing)
+    await ime.send('Input.insertText', { text: '中文' })
+    const t0 = Date.now()
+    await s.waitForFunction(() => (window.__upage.vault.get('Unified.md') ?? '').includes('第一段。q中文'), null, { timeout: 4000 }).catch(() => {})
+    const settleMs = Date.now() - t0
+    const writes = await s.evaluate(() => window.__upage.writes.filter((w) => w.path === 'Unified.md').map((w) => w.text))
+    const end = await disk(s)
+    record('T7 组字中停顿 3 秒以上:盘上与每一发写都没有半截拼音;提交后在防抖节奏内落盘、组字前打的字也在',
+      composing && seen.every((d) => !/zhong/.test(d ?? '')) && writes.every((w) => !/zhong/.test(w)) && end.includes('第一段。q中文') && settleMs < 3500,
+      JSON.stringify({ composing, pinyinOnDisk: seen.filter((d) => /zhong/.test(d ?? '')).length, pinyinWrites: writes.filter((w) => /zhong/.test(w)).length, settleMs, end }))
+    await s.close()
+  }
+
+  // T8:组字中途离场(马上存的那几条路)。
+  //   T8a 窗口失焦(页面还活着,计时器一定到点):当场存本机草稿(含组字前的字),盘上不写拼音;提交后照常落盘、草稿删掉
+  //   T8b 页面隐藏(之后进程随时可能没了):照旧马上写 —— 组字前打的字当场落盘(此刻盘上暂时带着拼音),提交后改回提交的字
+  for (const kind of ['blur', 'hidden']) {
+    const s = await open(browser, seed)
+    await s.evaluate(() => localStorage.clear())
+    await recordDrafts(s)
+    await caretAfter(s, 0, '第一段。')
+    const ime = await s.context().newCDPSession(s)
+    await s.keyboard.type('q')
+    await ime.send('Input.imeSetComposition', { text: 'zhongwen', selectionStart: 8, selectionEnd: 8 })
+    await wait(300)
+    await s.evaluate((kind) => {
+      if (kind === 'blur') { window.dispatchEvent(new Event('blur')); return }
+      Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' })
+      Object.defineProperty(document, 'hidden', { configurable: true, get: () => true })
+      document.dispatchEvent(new Event('visibilitychange'))
+    }, kind)
+    await wait(150)
+    const right = await disk(s)
+    const seen = []
+    for (let i = 0; i < 8; i++) { await wait(300); seen.push(await disk(s)) } // 2.4 秒
+    const stashed = (await draftLog(s)).filter((d) => d.op === 'set').map((d) => d.text)
+    await s.evaluate(() => {
+      Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'visible' })
+      Object.defineProperty(document, 'hidden', { configurable: true, get: () => false })
+    })
+    await ime.send('Input.insertText', { text: '中文' })
+    await s.waitForFunction(() => (window.__upage.vault.get('Unified.md') ?? '').includes('第一段。q中文') && !Object.keys(localStorage).some((k) => k.startsWith('amadeus.unsavedDraft:')), null, { timeout: 4000 }).catch(() => {})
+    const writes = await s.evaluate(() => window.__upage.writes.filter((w) => w.path === 'Unified.md').map((w) => w.text))
+    const end = { disk: await disk(s), keys: await draftKeys(s) }
+    const detail = JSON.stringify({ right, stashed, pinyinOnDisk: seen.filter((d) => /zhong/.test(d ?? '')).length, pinyinWrites: writes.filter((w) => /zhong/.test(w)).length, end })
+    const settled = end.disk.includes('第一段。q中文') && !end.disk.includes('zhong') && end.keys.length === 0
+    if (kind === 'blur') record('T8a 组字中窗口失焦:当场存本机草稿(含组字前的字)、盘上不写拼音;提交后照常落盘,草稿删掉',
+      stashed.some((t) => t.includes('第一段。q')) && seen.every((d) => !/zhong/.test(d ?? '')) && writes.every((w) => !/zhong/.test(w)) && settled, detail)
+    else record('T8b 组字中页面隐藏:照旧马上写,组字前打的字当场落盘;提交后盘上改回提交的字,草稿删掉',
+      (right ?? '').includes('第一段。q') && stashed.some((t) => t.includes('第一段。q')) && settled, detail)
+    await s.close()
+  }
+
+  // T9:组字结束但文档没变(提交的就是组字串本身,例如回车上屏英文):监听器不会再报一次,推后的那发写必须自己补上
+  {
+    const s = await open(browser, seed)
+    await caretAfter(s, 0, '第一段。')
+    const ime = await s.context().newCDPSession(s)
+    await s.keyboard.type('q')
+    await ime.send('Input.imeSetComposition', { text: 'abc', selectionStart: 3, selectionEnd: 3 })
+    await wait(2000) // 跨过 q 的防抖写:被推后
+    const mid = await disk(s)
+    const n0 = await writeCount(s)
+    await ime.send('Input.insertText', { text: 'abc' })
+    await s.waitForFunction(() => (window.__upage.vault.get('Unified.md') ?? '').includes('第一段。qabc'), null, { timeout: 4000 }).catch(() => {})
+    const end = await disk(s)
+    record('T9 组字结束而文档没变:推后的写照样补上(组字前的字与提交的字都落盘)',
+      !(mid ?? '').includes('第一段。q') && end.includes('第一段。qabc'), JSON.stringify({ mid, end, writesAfter: (await writeCount(s)) - n0 }))
+    await s.close()
+  }
+
+  // T10:源码模式(textarea)组字中途停顿:同一道闸(document 上的组字状态),盘上不写拼音,提交后落盘
+  {
+    const s = await open(browser, seed)
+    await s.evaluate(() => window.__upage.setEditorMode('source'))
+    await s.waitForSelector('textarea.amx-source')
+    await s.evaluate(() => { const t = document.querySelector('textarea.amx-source'); t.focus(); const i = t.value.indexOf('第一段。') + 4; t.setSelectionRange(i, i) })
+    const ime = await s.context().newCDPSession(s)
+    await s.keyboard.type('q')
+    await ime.send('Input.imeSetComposition', { text: 'zhongwen', selectionStart: 8, selectionEnd: 8 })
+    const seen = []
+    for (let i = 0; i < 10; i++) { await wait(300); seen.push(await disk(s)) } // 3 秒
+    const ta = await s.evaluate(() => document.querySelector('textarea.amx-source').value)
+    await ime.send('Input.insertText', { text: '中文' })
+    await s.waitForFunction(() => (window.__upage.vault.get('Unified.md') ?? '').includes('第一段。q中文'), null, { timeout: 4000 }).catch(() => {})
+    const end = await disk(s)
+    record('T10 源码模式组字中停顿:盘上不写拼音,提交后落盘(组字前的字也在)',
+      ta.includes('qzhongwen') && seen.every((d) => !/zhong/.test(d ?? '')) && end.includes('第一段。q中文'),
+      JSON.stringify({ ta: ta.includes('qzhongwen'), pinyinOnDisk: seen.filter((d) => /zhong/.test(d ?? '')).length, end }))
+    await s.close()
+  }
+
+  // T11:组字在防抖写到点前一点结束(提交事务的监听器还没把正文报上来,pipe 里仍是拼音):到点不许照写那份拼音
+  {
+    const s = await open(browser, seed)
+    await caretAfter(s, 0, '第一段。')
+    const ime = await s.context().newCDPSession(s)
+    await ime.send('Input.imeSetComposition', { text: 'zhongwen', selectionStart: 8, selectionEnd: 8 }) // 监听器 +200ms 报拼音 → 计时 +1000ms
+    await wait(880) // 在 +800 ~ +1000 之间提交:提交后的监听器(+200ms)晚于计时到点
+    await ime.send('Input.insertText', { text: '中文' })
+    await s.waitForFunction(() => (window.__upage.vault.get('Unified.md') ?? '').includes('第一段。中文'), null, { timeout: 4000 }).catch(() => {})
+    await wait(300)
+    const writes = await s.evaluate(() => window.__upage.writes.filter((w) => w.path === 'Unified.md').map((w) => w.text))
+    const end = await disk(s)
+    record('T11 组字刚好在防抖到点前结束:到点不写组字中报上来的拼音,提交后的字照常落盘',
+      writes.every((w) => !/zhong/.test(w)) && end.includes('第一段。中文'), JSON.stringify({ writes, end }))
+    await s.close()
+  }
+
+  // T6:两个窗口同源(共享 localStorage)、同一篇、槽位号相同。B 的写一直在路上(它失焦存下的草稿就留在格子里)
+  const context = await browser.newContext({ locale: 'zh-CN', viewport: { width: 1200, height: 1100 } })
+  const a = await open(browser, seed, '', context)
+  const b = await open(browser, seed, '', context)
+  await a.evaluate(() => localStorage.clear())
+  await recordDrafts(a)
+  await recordDrafts(b)
+  const focus = [await a.evaluate(() => document.hasFocus()), await b.evaluate(() => document.hasFocus())]
+  await b.evaluate(() => { window.__upage.casDelayMs = 60000 })
+  await caretAfter(a, 0, '第一段。')
+  // A 连打到自己存够两跳为止(第二跳盖的是自己那份)。按结果等、不按时长:机器忙时一跳的耗时变长,节拍会自己放宽。
+  const aStart = Date.now()
+  do await a.keyboard.type('aaaaa', { delay: 80 })
+  while ((await draftLog(a)).filter((d) => d.op === 'set').length < 2 && Date.now() - aStart < 40000)
+  await caretAfter(b, 0, '第一段。')
+  await b.keyboard.type('BBB')
+  await b.evaluate(() => window.dispatchEvent(new Event('blur')))
+  const bDraft = (await draftLog(b)).find((d) => d.op === 'set' && d.text.includes('BBB'))
+  await caretAfter(a, 0, 'aaa')
+  await a.keyboard.type('c'.repeat(40), { delay: 80 }) // ≈ 3.2s:A 的节拍至少再到点一次
+  await wait(2500)
+  const aSets = (await draftLog(a)).filter((d) => d.op === 'set')
+  const cell = await a.evaluate(() => { const k = Object.keys(localStorage).find((x) => x.startsWith('amadeus.unsavedDraft:')); return k ? localStorage.getItem(k) : null })
+  const bAt = bDraft?.at ?? Infinity
+  const aBefore = aSets.filter((d) => d.at < bAt).length
+  const aAfter = aSets.filter((d) => d.at > bAt).length
+  const cellText = cell ? JSON.parse(cell).text : null // B 自己的节拍可能用同样的字再存一遍(时间戳不同),按正文比
+  record('T6 另一个窗口刚存下的更新的草稿在格子里:本窗连打节拍跳过、不盖掉它(格子空 / 是自己那份时照常存)',
+    focus.every(Boolean) && aBefore >= 2 && !!bDraft && aAfter === 0 && cellText === bDraft.text,
+    JSON.stringify({ focus, aBefore, aAfter, bStored: bDraft?.text ?? null, cell: cellText }))
+  await context.close()
+}
+
 async function main() {
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })
   try {
-    const groups = { G: groupG, H: async (b) => { await groupH(b); await groupH7(b) }, C: groupC, D: groupD, F: groupF, L: groupL, V: groupV, W: groupW }
+    const groups = { G: groupG, H: async (b) => { await groupH(b); await groupH7(b) }, C: groupC, D: groupD, F: groupF, L: groupL, V: groupV, W: groupW, T: groupT }
     for (const [k, fn] of Object.entries(groups)) if (!only.length || only.includes(k)) await fn(browser)
   } finally {
     await browser.close()

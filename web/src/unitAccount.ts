@@ -172,6 +172,7 @@ export async function installUnitAccount(meta: {
         headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type: 'both' }) })
     },
     membershipPlans: () => accountJson('/membership/plans'),
+    membershipOfferings: () => accountJson('/payment/offerings'),
   } : undefined
 
   async function accountJson(path: string, init?: RequestInit) {

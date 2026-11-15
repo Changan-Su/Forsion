@@ -100,7 +100,7 @@ import { takeMachineSlash } from './machineSlash'
 import { applyTrigger, applyTypedTrigger, canAutoTriggerFromBlock, matchTrigger, posAtTextAnchor, slashRange, splitTail, textBeforeCursor, triggerAtCursor, unwrapAtStart, type Trigger } from './blockTriggers'
 import { fullWidthWikiRule, mentionSuggestPlugin, selectionToolbarPlugin, slashSuggestPlugin, toolbarDismissKey, wikiSuggestPlugin, type SelRect, type WikiQuery } from './wikiAutocomplete'
 import { InlineToolbar, TURN_LABEL_KEYS, type ToolbarAction, type ToolbarAiItem } from './InlineToolbar'
-import { Sparkles, Bot, BookOpen, MessageSquare } from 'lucide-react'
+import { Sparkles, Bot, BookOpen, MessageSquare, ListTodo, CalendarDays } from 'lucide-react'
 import { defaultSlashCategory, moveSlash, moveSlashCategory, slashCategory, SLASH_CATEGORIES, type SlashCategory } from './slashNavigation'
 import './slashCategories.css'
 import { useCapsuleSlide } from '../../../components/capsuleTabs'
@@ -178,6 +178,8 @@ registerMessages({
   'mdblock.slash.ul': { zh: '无序列表', en: 'Bulleted list' },
   'mdblock.slash.ol': { zh: '有序列表', en: 'Numbered list' },
   'mdblock.slash.todo': { zh: '待办', en: 'To-do list' },
+  'mdblock.slash.taskList': { zh: '加入待办清单', en: 'Add to task list' },
+  'mdblock.slash.event': { zh: '日程', en: 'Event' },
   'mdblock.slash.card': { zh: '卡片', en: 'Card' },
   'mdblock.slash.quote': { zh: '引用', en: 'Quote' },
   'mdblock.slash.fold': { zh: '折叠', en: 'Toggle' },
@@ -286,6 +288,10 @@ const AI_SENTINEL = '\u0000__amadeus_ai__'
 const INSTRUCTIONS_SENTINEL = '\u0000__amadeus_instructions__'
 const AGENT_TASK_SENTINEL = '\u0000__amadeus_agent_task__'
 const PROMPT_SENTINEL = '\u0000__amadeus_prompt__'
+// 2026-11-15 方案 ⑤:「加入待办清单」= 转成方框行再弹 @ 面板(选日期写 @日期,选「不设日期」写 @todo);
+// 「日程」= 只插 @ 弹日期面板(这一行只进日历)。只在 v4 统一实例里落地(UnifiedPage.applySlash)。
+const TASK_LIST_SENTINEL = '\u0000__amadeus_task_list__'
+const EVENT_SENTINEL = '\u0000__amadeus_event__'
 
 const NOTEVIEW_SENTINEL = '\u0000__amadeus_noteview__'
 
@@ -1553,6 +1559,20 @@ export function MilkdownInner({
     setMention(null)
   }
 
+  /** 光标在不在任务行(`- [ ]` 的 list_item)里:是的话 @ 面板多一条「不设日期」(写 `@todo`)。 */
+  const mentionInTask = (): boolean => {
+    let inTask = false
+    getInstance()?.action((ctx) => {
+      const { $from } = ctx.get(editorViewCtx).state.selection
+      for (let d = $from.depth; d > 0; d--) {
+        const n = $from.node(d)
+        // 只认任务那一行(列表项的第一段);续段里的 `@todo` 解析器按普通行算,不进清单(Codex 评审 P2)
+        if (n.type.name === 'list_item') { inTask = n.attrs.checked != null && $from.index(d) === 0; break }
+      }
+    })
+    return inTask
+  }
+
   /** 日期候选:插入的是字面 `@2026-09-01T14:30`(见 dateQuery / mdMarks),不包 `[[ ]]`。
    *  ⚠️ 必须补一个尾随空格 —— 不然新插进去的 `@…` 立刻又满足 mention 的触发条件,面板当场再弹一次。 */
   const pickMentionRaw = (text: string): void => {
@@ -1791,6 +1811,7 @@ export function MilkdownInner({
           getFiles={getFiles}
           onPick={pickMention}
           onPickRaw={pickMentionRaw}
+          undatedTask={mentionInTask()}
           agents={unified && readTangu()?.submitDocumentTask && readTangu()?.hostExecution?.() !== false ? readTangu()?.agents?.() : undefined}
           onPickAgent={unified && readTangu()?.submitDocumentTask && readTangu()?.hostExecution?.() !== false ? pickMentionAgent : undefined}
           editorFocused={editorFocused}
@@ -2281,7 +2302,12 @@ function openVaultWiki(name: string, o?: { newTab?: boolean }): void {
   else ps.openWikiLink(name, undefined, { newTab: o?.newTab, split: !o?.newTab })
 }
 
-export function PlainMarkdownEditor({ initial, onChange, readOnly = false, immediate = false, vault = false }: {
+/** Immediate editors hold emits during IME composition at most this long (a lost compositionend). */
+const COMPOSE_HOLD_MAX_MS = 30_000
+/** After compositionend, wait for ProseMirror to read the committed text (it force-flushes at 20ms). */
+const COMPOSE_SETTLE_MS = 40
+
+export function PlainMarkdownEditor({ initial, onChange, readOnly = false, immediate = false, vault = false, flushRef }: {
   initial: string
   onChange: (md: string) => void
   readOnly?: boolean
@@ -2289,6 +2315,9 @@ export function PlainMarkdownEditor({ initial, onChange, readOnly = false, immed
   vault?: boolean
   /** Record peeks may unmount immediately after typing. Persist transactions before listener's 200ms debounce. */
   immediate?: boolean
+  /** Immediate mode: set to a function that synchronously hands any held edit (IME composition) to onChange.
+   *  Hosts call it before reading their cached value or disposing. */
+  flushRef?: { current: (() => void) | null }
 }) {
   const onChangeRef = useRef(onChange)
   onChangeRef.current = onChange
@@ -2307,14 +2336,31 @@ export function PlainMarkdownEditor({ initial, onChange, readOnly = false, immed
   }
   const emitRef = useRef(emit)
   emitRef.current = emit
+  /** Sends an emit held back by IME composition, as the document stands now; the plugin view sets it. */
+  const flushHeld = useRef<(() => void) | null>(null)
   const immediatePlugins = useMemo(() => immediate ? [$prose((ctx) => new Plugin({
     view: (view) => {
+      // IME composition: the document holds the uncommitted romanization while composing. Hold the
+      // emit until the composition ends, so a pause mid-composition never stores or saves it.
+      let pending = false
+      let composeAt = 0
+      let capTimer: ReturnType<typeof setTimeout> | undefined
+      let endTimer: ReturnType<typeof setTimeout> | undefined
+      const send = (): void => { emitRef.current(ctx.get(serializerCtx)(view.state.doc)) }
       const sync = (): void => {
         if (view.isDestroyed || incoming.current === emitted.current) return
         const next = ctx.get(parserCtx)(tabsToEntities(incoming.current))
         // Local edits echoed through the parent must not dispatch a replacement:
         // keeping the same document also keeps its selection and input composition.
-        if (!next || next.eq(view.state.doc)) return
+        if (!next || next.eq(view.state.doc)) {
+          // The store already holds the held document: record it, so the post-composition flush is no echo.
+          if (next && pending) {
+            pending = false
+            receiving.current = true
+            try { send() } finally { receiving.current = false }
+          }
+          return
+        }
         receiving.current = true
         try {
           view.dispatch(view.state.tr.replaceWith(0, view.state.doc.content.size, next.content).setMeta('addToHistory', false))
@@ -2325,15 +2371,68 @@ export function PlainMarkdownEditor({ initial, onChange, readOnly = false, immed
       applyIncoming.current = sync
       // Milkdown initializes asynchronously; props may change before its view exists.
       queueMicrotask(() => { if (applyIncoming.current === sync) sync() })
+      const flush = (force: boolean): void => {
+        clearTimeout(endTimer); endTimer = undefined
+        if (!force && view.composing && Date.now() - composeAt < COMPOSE_HOLD_MAX_MS) return
+        clearTimeout(capTimer); capTimer = undefined
+        if (!pending) return
+        pending = false
+        send()
+      }
+      const onStart = (): void => {
+        composeAt = Date.now()
+        clearTimeout(capTimer)
+        // A lost compositionend must not hold the text back forever.
+        capTimer = setTimeout(() => flush(true), COMPOSE_HOLD_MAX_MS)
+      }
+      // ProseMirror reads the committed text after compositionend (microtask, then a 20ms forced flush),
+      // and the commit may leave the document unchanged. Re-send once that has settled.
+      const onEnd = (): void => { clearTimeout(endTimer); endTimer = setTimeout(() => flush(false), COMPOSE_SETTLE_MS) }
+      view.dom.addEventListener('compositionstart', onStart)
+      view.dom.addEventListener('compositionend', onEnd)
+      // Synchronous read by the host (getValue / dispose / unmount): hand over what is on screen, even
+      // mid-composition. Timers stay armed, so the post-composition send still happens if the editor lives on.
+      const flushNow = (): void => {
+        if (view.isDestroyed) return
+        // Commit text still in pending DOM mutations (just after compositionend) reaches the state first.
+        ;(view as unknown as { domObserver?: { flush?: () => void } }).domObserver?.flush?.()
+        if (!pending) return
+        pending = false
+        send()
+      }
+      flushHeld.current = flushNow
       return {
         update: (current, previous) => {
-          if (!current.state.doc.eq(previous.doc)) emitRef.current(ctx.get(serializerCtx)(current.state.doc))
+          if (current.state.doc.eq(previous.doc)) return
+          // External replacements only record their canonical form; keep them synchronous.
+          if (receiving.current || !current.composing || Date.now() - composeAt >= COMPOSE_HOLD_MAX_MS) {
+            pending = false
+            send()
+            return
+          }
+          pending = true
         },
-        destroy: () => { if (applyIncoming.current === sync) applyIncoming.current = null },
+        destroy: () => {
+          view.dom.removeEventListener('compositionstart', onStart)
+          view.dom.removeEventListener('compositionend', onEnd)
+          if (flushHeld.current === flushNow) flushHeld.current = null
+          // Normally already flushed by the unmount cleanup below; Milkdown tears down asynchronously.
+          try { flush(true) } catch { /* editor context already gone */ }
+          if (applyIncoming.current === sync) applyIncoming.current = null
+        },
       }
     },
   }))] : undefined, [immediate])
   useLayoutEffect(() => { if (immediate) applyIncoming.current?.() }, [initial, immediate])
+  // Closing mid-composition keeps what is on screen rather than dropping it. Runs before Milkdown's
+  // asynchronous destroy, while the view and serializer are still intact.
+  useLayoutEffect(() => () => flushHeld.current?.(), [])
+  useLayoutEffect(() => {
+    if (!flushRef) return
+    const flushNow = (): void => flushHeld.current?.()
+    flushRef.current = flushNow
+    return () => { if (flushRef.current === flushNow) flushRef.current = null }
+  }, [flushRef])
   const noop = (): void => {}
   const keys: BlockKeys = {
     insertAfter: noop, deleteEmpty: noop, mergePrev: noop, arrow: noop, moveDir: noop, selfFocus: noop,
@@ -2426,6 +2525,8 @@ export const SLASH_SENTINELS = {
   instructions: INSTRUCTIONS_SENTINEL,
   agentTask: AGENT_TASK_SENTINEL,
   prompt: PROMPT_SENTINEL,
+  taskList: TASK_LIST_SENTINEL,
+  event: EVENT_SENTINEL,
 } as const
 
 // 前缀型 scaffold → 块转换(slash 选中时经 SlashOps.transform 在编辑器内单事务完成,绝不新建块)。
@@ -2462,7 +2563,9 @@ export const SLASH_ITEMS: SlashSeed[] = [
   { key: 'h6', labelKey: 'mdblock.slash.h6', hint: '######', icon: <Heading6Icon />, groupKey: 'mdblock.group.basic', scaffold: '###### ', kw: 'h6 heading 标题 biaoti 六级' },
   { key: 'ul', labelKey: 'mdblock.slash.ul', hint: '-', icon: <BulletedListIcon />, groupKey: 'mdblock.group.list', scaffold: '- ', kw: 'ul bullet list 无序 列表 liebiao' },
   { key: 'ol', labelKey: 'mdblock.slash.ol', hint: '1.', icon: <NumberedListIcon />, groupKey: 'mdblock.group.list', scaffold: '1. ', kw: 'ol number list 有序 列表 编号' },
+  { key: 'task-list', labelKey: 'mdblock.slash.taskList', hint: '[ ] @', icon: <ListTodo size="1em" strokeWidth={1.6} />, groupKey: 'mdblock.group.list', scaffold: TASK_LIST_SENTINEL, kw: 'todo task list 加入待办清单 待办清单 进清单 daiban qingdan 任务 renwu', unifiedOnly: true },
   { key: 'todo', labelKey: 'mdblock.slash.todo', hint: '[ ]', icon: <CheckBoxCheckLinearIcon />, groupKey: 'mdblock.group.list', scaffold: '- [ ] ', kw: 'todo task check 待办 任务 复选框 daiban renwu' },
+  { key: 'event', labelKey: 'mdblock.slash.event', hint: '@', icon: <CalendarDays size="1em" strokeWidth={1.6} />, groupKey: 'mdblock.group.list', scaffold: EVENT_SENTINEL, kw: 'event schedule calendar date 日程 richeng 日历 rili 日期 安排', unifiedOnly: true },
   { key: 'card', labelKey: 'mdblock.slash.card', hint: 'Canvas', icon: <PageIcon />, groupKey: 'mdblock.group.basic', scaffold: CARD_SENTINEL, kw: 'card 卡片 node 节点 canvas 画布', unifiedOnly: true },
   { key: 'quote', labelKey: 'mdblock.slash.quote', hint: '|', icon: <QuoteIcon />, groupKey: 'mdblock.group.advanced', scaffold: '| ', kw: 'quote 引用 yinyong blockquote' },
   { key: 'fold', labelKey: 'mdblock.slash.fold', hint: '>', icon: <FoldIcon />, groupKey: 'mdblock.group.advanced', scaffold: '> ', kw: 'fold toggle 折叠 zhedie collapse 展开 详情 details' },

@@ -165,6 +165,16 @@ describe('DSH 引擎定义与检测', () => {
     expect(loadEngines(path.join(tmp(), 'no-such-engines.json')).find((e) => e.id === 'dsh')?.command).toBe('dsh');
   });
 
+  it('按 id 覆盖内置的 dsh(换一份装在别处的):没写 agentsHomeEnv 就沿用内置的,写了以写的为准', () => {
+    const file = path.join(tmp(), 'engines.json');
+    writeFileSync(file, JSON.stringify({ engines: [{ id: 'dsh', name: 'DSH', command: '/opt/dsh/bin/dsh', args: ['--profile', 'acp'] }, { id: 'other', name: 'O', command: 'o' }] }));
+    const list = loadEngines(file);
+    expect(list.find((e) => e.id === 'dsh')).toMatchObject({ command: '/opt/dsh/bin/dsh', agentsHomeEnv: 'DSH_AGENTS_HOME' });
+    expect(list.find((e) => e.id === 'other')?.agentsHomeEnv).toBeUndefined();
+    writeFileSync(file, JSON.stringify({ engines: [{ id: 'dsh', name: 'DSH', command: 'dsh', agentsHomeEnv: null }] }));
+    expect(loadEngines(file).find((e) => e.id === 'dsh')?.agentsHomeEnv).toBeNull();
+  });
+
   // 用例只对「dsh 不在 PATH / 常见安装目录上」的机器有判别力;开发机装了 dsh 时第一条会跳过
   const fakeBin = (): string => {
     const bin = path.join(tmp(), 'bin'); mkdirSync(bin);

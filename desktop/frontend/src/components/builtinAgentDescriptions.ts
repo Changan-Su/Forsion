@@ -21,6 +21,11 @@ registerMessages({
     zh: '安静的后台观察者，发现值得推进的下一步',
     en: 'A quiet background observer that finds worthwhile next steps',
   },
+  // 自带的 DSH(11-14,DSH 融合第 2 步):en 与引擎 DSH_AGENT_PRESET.description 逐字一致
+  'agent.builtin.dsh': {
+    zh: '跑在这台电脑装的 DeepSeek Harness 上',
+    en: 'Runs on DeepSeek Harness installed on this computer',
+  },
 })
 
 const keys: Record<string, string> = {
@@ -32,7 +37,10 @@ const keys: Record<string, string> = {
 export const isStockAgent = (slug: string): boolean => Object.hasOwn(keys, slug)
 
 /** Translate only stock copy at render time; user-authored descriptions stay verbatim. */
+/** 只翻描述、不算「内置」的:自带的 DSH 和普通 Agent 一样能改 ID、能删。 */
+const descriptionKeys: Record<string, string> = { ...keys, dsh: 'agent.builtin.dsh' }
+
 export function agentDescription(agent: { slug: string; description: string }, t: (key: string) => string): string {
-  const key = keys[agent.slug]
+  const key = descriptionKeys[agent.slug]
   return key && translationValues(key).includes(agent.description) ? t(key) : agent.description
 }

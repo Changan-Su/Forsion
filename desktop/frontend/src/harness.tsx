@@ -1138,12 +1138,23 @@ if (new URLSearchParams(location.search).has('dock')) {
     GROUPS.unshift({ label: 'Forsion', source: 'forsion', options: [
       { id: 'f-luna', name: 'GPT-6 Luna', source: 'forsion', multiplier: 1 },
       { id: 'f-sol', name: 'GPT-6 Sol', source: 'forsion', multiplier: 2.5 },
-      { id: 'f-opus', name: 'Claude Opus', source: 'forsion', multiplier: 5 },
+      { id: 'f-opus', name: 'Claude Opus', source: 'forsion', multiplier: 5, ...(modelPillParams.has('trial') ? { tags: [{ text: '限时 Trial', color: 'amber', kind: 'trial' }, { text: 'new', color: 'green' }] } : {}) },
       { id: 'f-ultra', name: 'Gemini Ultra', source: 'forsion', multiplier: 8 },
     ] } as never)
+    // ?tierlock&trial[=<剩几小时>]:Claude Opus 限时开放中(缺省还剩 15 天;=3 看最后 24 小时的「今天 HH:mm」),
+    // 带着服务端给旧版补的「限时 Trial」标签(新版不显示它)
+    const trialHours = Number(modelPillParams.get('trial') || 15 * 24)
+    const modelTrials = modelPillParams.has('trial') ? [{ modelId: 'f-opus', endsAt: new Date(Date.now() + trialHours * 3_600_000).toISOString() }] : undefined
     window.tangu = {
       ...(window.tangu || {}),
-      accountQuota: async () => ({ status: 200, json: { dailyLimit: 100, weeklyLimit: 100, modelMultiplierCap: cap } }),
+      accountQuota: async () => ({ status: 200, json: { dailyLimit: 100, weeklyLimit: 100, modelMultiplierCap: cap, ...(modelTrials ? { modelTrials } : {}) } }),
+      // 公开方案的各档上限(同生产形状):锁住的模型写「X 起可用」;?tierlock&nooffer 扮旧服务端 / 拿不到,回落「升级后可用」
+      ...(modelPillParams.has('nooffer') ? {} : { membershipOfferings: async () => ({ status: 200, json: { packages: [], membershipPlans: [
+        { tier: 'plus', name: 'Plus', perks: { modelMultiplierCap: 2.5 } },
+        { tier: 'pro', name: 'Pro', perks: { modelMultiplierCap: 5 } },
+        { tier: 'max', name: 'Max', perks: { modelMultiplierCap: -1 } },
+        { tier: 'ultra', name: 'Ultra', perks: { modelMultiplierCap: -1 } },
+      ] } }) }),
       openPayCenter: async () => { (window as unknown as { __payOpened?: number }).__payOpened = ((window as unknown as { __payOpened?: number }).__payOpened || 0) + 1; return { ok: true } },
     } as never
   }
@@ -1194,7 +1205,9 @@ if (new URLSearchParams(location.search).has('dock')) {
       </div>
     )
   }
-  createRoot(document.getElementById('root')!).render(<PillHarness />)
+  // &lang=en:挂真 LocaleProvider 拍英文(不挂时 useI18n 恒回中文,其余用法照旧)
+  if (modelPillParams.get('lang') === 'en') setLocaleGlobal('en')
+  createRoot(document.getElementById('root')!).render(modelPillParams.get('lang') === 'en' ? <LocaleProvider><PillHarness /></LocaleProvider> : <PillHarness />)
 } else if (new URLSearchParams(location.search).has('dashinteractive')) {
   const iso = new Date().toISOString()
   registerView({

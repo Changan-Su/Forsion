@@ -4,9 +4,10 @@ import { act, createElement, type ComponentProps } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { installNativeSheetPresenter, type NativeSheetPayload } from '@lcl/engine'
-import { setLocaleGlobal } from '../i18n'
+import { LocaleProvider, setLocaleGlobal } from '../i18n'
 import { installModelPickerPresenter } from './modelPickerHost'
 import { resetAccountQuotaScope } from '../services/accountQuota'
+import { resetUpgradeTiersForTest } from '../services/upgradeTier'
 import { ModelPill, type ModelPillGroup } from './ModelPill'
 
 const GROUPS = [{ label: 'Forsion', source: 'forsion', options: [
@@ -23,6 +24,7 @@ const tick = () => act(async () => { await new Promise((r) => setTimeout(r, 0)) 
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   setLocaleGlobal('zh')
+  resetUpgradeTiersForTest()
   Object.defineProperty(Element.prototype, 'getAnimations', { configurable: true, value: () => [] })
   window.tangu = {
     accountQuota: vi.fn().mockResolvedValue({ status: 200, json: { dailyLimit: 100, weeklyLimit: 100, modelMultiplierCap: 2.5 } }),
@@ -173,3 +175,122 @@ describe('评审第三轮:换号与晚到的上限', () => {
   })
 })
 
+
+describe('写明最低够用的档位(公开方案的倍率上限)', () => {
+  // 同生产形状:plus 2.5、pro 两个方案都 5、max / ultra 不限;Free 不在 offerings 里
+  const offerings = { packages: [], membershipPlans: [
+    { tier: 'plus', name: 'Plus', perks: { modelMultiplierCap: 2.5 } },
+    { tier: 'pro', name: 'Pro', perks: { modelMultiplierCap: 5 } },
+    { tier: 'pro', name: 'Pro 年付', perks: { modelMultiplierCap: 5 } },
+    { tier: 'max', name: 'Max', perks: { modelMultiplierCap: -1 } },
+    { tier: 'ultra', name: 'Ultra', perks: { modelMultiplierCap: -1 } },
+  ] }
+  const withOfferings = (r: unknown) => { window.tangu!.cloudFetch = vi.fn().mockImplementation(async ({ path }: { path: string }) => path === '/payment/offerings' ? r : { status: 404 }) as any }
+
+  it('锁住的行、行下说明、药丸上的说明都写「X 起可用」', async () => {
+    withOfferings({ status: 200, json: offerings })
+    await mount({ modelId: 'pricey' })
+    expect(el.querySelector('.model-pill-btn')!.getAttribute('aria-label')).toContain('Pro 起可用')
+    await openModelPane()
+    expect(item('Pricey').querySelector('.model-lock-note')?.textContent).toBe('Pro 起可用')
+    await act(async () => { item('Pricey').click() })
+    expect(document.querySelector('.cm-lock-tip')?.textContent).toContain('当前会员档位不能使用 Pricey。升级到 Pro 或以上即可，也可以换一个模型。')
+    expect(window.tangu!.cloudFetch).toHaveBeenCalledOnce()
+  })
+
+  it('英文界面', async () => {
+    setLocaleGlobal('en')
+    withOfferings({ status: 200, json: offerings })
+    await act(async () => { root.render(createElement(LocaleProvider, null, createElement(ModelPill, { modelId: 'cheap', groups: GROUPS, onSelect: vi.fn() }))) })
+    await tick()
+    await openModelPane()
+    expect(item('Pricey').querySelector('.model-lock-note')?.textContent).toBe('Available from Pro')
+  })
+
+  it('手机原生合并菜单的模型说明也带档位', async () => {
+    withOfferings({ status: 200, json: offerings })
+    const seen: NativeSheetPayload[] = []
+    const off = installNativeSheetPresenter(async (payload) => { seen.push(payload); return null })
+    try {
+      await mount({ icon: null, onThinkingChange: vi.fn(), thinkingLevel: 'medium', hub: { title: 'Hub', back: 'Back', extra: () => [] } })
+      await act(async () => { el.querySelector<HTMLButtonElement>('.model-pill-btn')!.click() })
+      await tick()
+      const models = seen[0].kind === 'menu' ? seen[0].sections[0].items[0].children!.flatMap((s) => s.items) : []
+      expect(models[2].detail).toContain('Pro 起可用')
+    } finally { off() }
+  })
+
+  it('取不到方案 / 旧服务端没有 perks / 没有够用的档:回落「升级后可用」', async () => {
+    for (const r of [
+      { status: 500, json: null },
+      { status: 200, json: { packages: [], membershipPlans: [{ tier: 'pro', name: 'Pro' }] } },
+      { status: 200, json: { packages: [], membershipPlans: [{ tier: 'plus', perks: { modelMultiplierCap: 2.5 } }] } },
+    ]) {
+      resetUpgradeTiersForTest()
+      withOfferings(r)
+      await mount()
+      await openModelPane()
+      expect(item('Pricey').querySelector('.model-lock-note')?.textContent).toBe('升级后可用')
+      await act(async () => { el.querySelector<HTMLButtonElement>('.model-pill-btn')!.click() })
+    }
+  })
+
+  it('上限读不到(一个都不锁)时不去拉方案', async () => {
+    window.tangu!.accountQuota = vi.fn().mockRejectedValue(new Error('offline')) as any
+    withOfferings({ status: 200, json: offerings })
+    await mount()
+    expect(window.tangu!.cloudFetch).not.toHaveBeenCalled()
+  })
+})
+
+describe('限时开放(2026-11-15)', () => {
+  const trialQuota = (endsAt: number) => ({ status: 200, json: { dailyLimit: 100, weeklyLimit: 100, modelMultiplierCap: 2.5, modelTrials: [{ modelId: 'pricey', endsAt: new Date(endsAt).toISOString() }] } })
+  const TRIAL_GROUPS = [{ label: 'Forsion', source: 'forsion', options: [
+    { id: 'cheap', name: 'Cheap', source: 'forsion', multiplier: 1 },
+    { id: 'pricey', name: 'Pricey', source: 'forsion', multiplier: 5, tags: [{ text: '限时 Trial', color: 'amber', kind: 'trial' }, { text: 'new', color: 'green' }] },
+    { id: 'huge', name: 'Huge', source: 'forsion', multiplier: 8 },
+  ] }] as unknown as ModelPillGroup[]
+
+  it('开放中:不锁、能选,名字下面「限时 至 M/D」;旧版标签不显示;没开放的照锁', async () => {
+    const end = Date.now() + 10 * 86_400_000
+    ;(window.tangu as any).accountQuota = vi.fn().mockResolvedValue(trialQuota(end))
+    const onSelect = await mount({ groups: TRIAL_GROUPS })
+    await openModelPane()
+    const row = item('Pricey')
+    expect(row.classList.contains('is-locked')).toBe(false)
+    const d = new Date(end)
+    expect(row.querySelector('.model-trial-note')?.textContent).toBe(`限时至 ${d.getMonth() + 1}/${d.getDate()}`)
+    expect(row.getAttribute('title')).toMatch(/^限时体验：.+ 结束$/) // 没拿到方案上限:不说「之后 X 起可用」
+    expect([...row.querySelectorAll('.model-tags .model-tag')].map((x) => x.textContent)).toEqual(['new'])
+    expect(item('Huge').classList.contains('is-locked')).toBe(true)
+    await act(async () => { row.click() })
+    expect(onSelect).toHaveBeenCalledWith('pricey')
+  })
+
+  it('原生合并菜单:说明段打头「限时体验 · 至 …」,角标只剩倍率,选得上', async () => {
+    ;(window.tangu as any).accountQuota = vi.fn().mockResolvedValue(trialQuota(Date.now() + 10 * 86_400_000))
+    const seen: NativeSheetPayload[] = []
+    let answer: unknown = { id: 'model:0:1' }
+    const off = installNativeSheetPresenter(async (payload) => { seen.push(payload); const a = answer; answer = null; return a })
+    try {
+      const onSelect = await mount({ groups: TRIAL_GROUPS, icon: null, onThinkingChange: vi.fn(), thinkingLevel: 'medium', hub: { title: 'Hub', back: 'Back', extra: () => [] } })
+      await act(async () => { el.querySelector<HTMLButtonElement>('.model-pill-btn')!.click() })
+      await tick()
+      const models = seen[0].kind === 'menu' ? seen[0].sections[0].items[0].children!.flatMap((s) => s.items) : []
+      expect(models[1].detail).toMatch(/^限时体验 · 至 \d+月\d+日 · new · 5\.00x$/)
+      expect(models[2].detail).toContain('升级后可用')
+      expect(onSelect).toHaveBeenCalledWith('pricey')
+    } finally { off() }
+  })
+
+  it('到期那一刻翻回锁住,并重拉一次额度', async () => {
+    ;(window.tangu as any).accountQuota = vi.fn().mockResolvedValue(trialQuota(Date.now() + 300))
+    await mount({ groups: TRIAL_GROUPS })
+    await openModelPane()
+    expect(item('Pricey').classList.contains('is-locked')).toBe(false)
+    const calls = (window.tangu as any).accountQuota.mock.calls.length
+    await act(async () => { await new Promise((r) => setTimeout(r, 800)) })
+    expect(item('Pricey').classList.contains('is-locked')).toBe(true)
+    expect((window.tangu as any).accountQuota.mock.calls.length).toBeGreaterThan(calls)
+  })
+})

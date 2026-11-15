@@ -32,6 +32,7 @@ import { envWithFullPath, type EngineDef } from './config.js';
 import type { EngineRunCtx, EngineResult, EngineCapabilities } from './manager.js';
 import { toolSubprocessEnv } from '../sandbox/credentialEnv.js';
 import { killProcessTree } from '../utils/boundedProcess.js';
+import { formatEngineModelNoApiKey } from '../contracts/engineModelError.js';
 
 /** createAcpClient 需要的最小上下文（EngineRunCtx 结构上即满足）。 */
 export interface AcpClientCtx {
@@ -39,6 +40,11 @@ export interface AcpClientCtx {
   signal: AbortSignal;
   publish: (type: string, payload: any) => void;
   requestApproval: (preview: string, toolCall: ToolCall) => Promise<ApprovalDecision>;
+  /** 宿主工具桥的工具名前缀(`mcp__<服务名>__`,见 engines/toolServer.ts)。这些调用由桥按 Forsion 的原名自己画卡、自己落库,
+   *  引擎这边的 tool_call / tool_call_update 不再上屏、不进结果 —— 否则同一次调用两张卡。 */
+  hideToolPrefix?: string;
+  /** 有引擎活动但没上屏时续命(空闲看门狗只在上屏时重新起表;藏起来的桥调用在等审批时一来一回全是这种)。 */
+  touch?: () => void;
 }
 
 /** 引擎握手上限:spawn + initialize + newSession 若在此窗口内没完成(子进程卡死/Windows 上 .cmd shim spawn
@@ -51,13 +57,14 @@ const HANDSHAKE_TIMEOUT_MS = Number(process.env.TANGU_ENGINE_HANDSHAKE_TIMEOUT_M
  *  在终端敲命令),非远程注入面。windowsHide 避免弹控制台窗口。POSIX 上 shell=false、detached 组杀行为照旧。
  *  env:PATH 先补全(envWithFullPath)——GUI 启动的 Electron 只有 launchd 精简 PATH,`openclaw`/`pi` 这类全局 bin
  *  在终端跑得起、装成 App 就 ENOENT;检测端 binOnPath 早就扫这些目录了,spawn 端不补就是「检测说有、跑起来没有」。 */
-export function spawnEngine(def: EngineDef, opts?: { cwd?: string; detached?: boolean }) {
+export function spawnEngine(def: EngineDef, opts?: { cwd?: string; detached?: boolean; env?: Record<string, string> }) {
   return spawn(def.command, def.args ?? [], {
     cwd: opts?.cwd,
     stdio: ['pipe', 'pipe', 'pipe'] as ['pipe', 'pipe', 'pipe'], // 元组字面量 → 非空 stdin/stdout 流类型
     // 剥引擎凭据(C2):外部 CLI 跑模型驱动的命令,拿到 forsion_token / 本机令牌就能绕过本引擎直调云端与本机端点。
     // 在**合成之后**再剥:引擎清单的 def.env 也不许把这些键加回来。
-    env: toolSubprocessEnv({ ...envWithFullPath(process.env), ...(def.env ?? {}) }),
+    // opts.env:这一轮专用的(交接的指令目录,见 EngineRunCtx.env),叠在引擎清单的 def.env 之后。
+    env: toolSubprocessEnv({ ...envWithFullPath(process.env), ...(def.env ?? {}), ...(opts?.env ?? {}) }),
     shell: process.platform === 'win32',
     windowsHide: true,
     // DETACHED_PROCESS cancels windowsHide and loses grandchild stdout on Windows.
@@ -149,6 +156,8 @@ export function mapAcpModels(ms: any): { models: EngineCapabilities['models']; c
 export interface AcpConfigSelection {
   modelConfigId?: string;
   models: EngineCapabilities['models'];
+  /** 模型 id → 它所在分组的 id(引擎按组给选项时才有;DSH 的组就是供应商那条线,如 deepseek-official)。 */
+  modelGroups: Record<string, string>;
   currentModelId?: string;
   thoughtConfigId?: string;
   thoughtLevels: NonNullable<EngineCapabilities['thoughtLevels']>;
@@ -161,33 +170,38 @@ export interface AcpConfigSelection {
  * (DSH 按供应商分组);value 是不透明的串(DSH 的模型值是一段 JSON 文本),原样当 id,绝不解析。纯函数,供探测 + 单测。
  */
 export function mapAcpConfigOptions(configOptions: unknown): AcpConfigSelection {
-  const out: AcpConfigSelection = { models: [], thoughtLevels: [] };
+  const out: AcpConfigSelection = { models: [], modelGroups: {}, thoughtLevels: [] };
   if (!Array.isArray(configOptions)) return out;
-  const flat = (options: unknown): Array<{ id: string; name: string; description?: string }> => {
-    const items: Array<{ id: string; name: string; description?: string }> = [];
+  type Item = { id: string; name: string; description?: string; group?: string };
+  const flat = (options: unknown, group?: string): Item[] => {
+    const items: Item[] = [];
     for (const o of Array.isArray(options) ? (options as any[]) : []) {
       if (Array.isArray(o?.options)) {
-        // 一组:组名补进没有自带说明的选项,下拉里看得出是哪家的
-        for (const item of flat(o.options)) items.push({ ...item, description: item.description ?? (typeof o.name === 'string' && o.name ? o.name : undefined) });
+        // 一组:组名补进没有自带说明的选项,下拉里看得出是哪家的;组的 id 另记(见 modelGroups)
+        const inGroup = typeof o.group === 'string' && o.group ? o.group : group;
+        for (const item of flat(o.options, inGroup)) items.push({ ...item, description: item.description ?? (typeof o.name === 'string' && o.name ? o.name : undefined) });
       } else if (typeof o?.value === 'string' && o.value) {
-        items.push({ id: o.value, name: typeof o.name === 'string' && o.name ? o.name : o.value, description: typeof o.description === 'string' && o.description ? o.description : undefined });
+        items.push({ id: o.value, name: typeof o.name === 'string' && o.name ? o.name : o.value, description: typeof o.description === 'string' && o.description ? o.description : undefined, ...(group ? { group } : {}) });
       }
     }
     return items;
   };
+  const plain = (items: Item[]): Array<{ id: string; name: string; description?: string }> => items.map(({ id, name, description }) => ({ id, name, description }));
   const pick = (category: string, fallbackId: string): any =>
     (configOptions as any[]).find((o) => o?.type === 'select' && o?.category === category)
     ?? (configOptions as any[]).find((o) => o?.type === 'select' && o?.category == null && o?.id === fallbackId);
   const model = pick('model', 'model');
   if (model && typeof model.id === 'string') {
     out.modelConfigId = model.id;
-    out.models = flat(model.options);
+    const items = flat(model.options);
+    out.models = plain(items);
+    for (const item of items) if (item.group) out.modelGroups[item.id] = item.group;
     if (typeof model.currentValue === 'string') out.currentModelId = model.currentValue;
   }
   const thought = pick('thought_level', 'reasoning_effort');
   if (thought && typeof thought.id === 'string') {
     out.thoughtConfigId = thought.id;
-    out.thoughtLevels = flat(thought.options);
+    out.thoughtLevels = plain(flat(thought.options));
     if (typeof thought.currentValue === 'string') out.currentThoughtLevel = thought.currentValue;
   }
   return out;
@@ -222,6 +236,34 @@ export function classifyResumeFailure(e: any): 'gone' | 'busy' | 'other' {
   if (e?.code === -32002) return 'gone'; // 续接请求里能「不存在」的资源,除了文件 / 目录就是那个会话
   if (/session/i.test(text) && /does not exist|no longer exists|was deleted/i.test(text)) return 'gone';
   return 'other';
+}
+
+/**
+ * 这一轮失败是不是「当前模型那条线要 API key,而这台电脑上没有配」。是 → 那条线的名字;不是 → null。
+ * 句式钉死在实测到的那一句(DSH 0.2.2-rc.3,只有 message、没有 data、没有机器码):
+ *   -32603 `Internal error: turn failed: llm-deepseek: no API key for provider route "deepseek-official"; store DEEPSEEK_API_KEY …`
+ * 别放宽成泛泛的 /api key/:别的引擎报「key 不对」「key 过期」是另一回事,换模型解决不了。
+ */
+export function missingApiKeyRoute(e: any): string | null {
+  return /no API key for provider route "([^"]+)"/.exec(acpErrorText(e))?.[1] ?? null;
+}
+
+/**
+ * 把上面那种失败换成一句照着做得了的话:当前是哪个模型、清单里还有哪些可以换。
+ *
+ * 只说「引擎还列着这些模型」,不说它们一定能用,也不替用户换:公开协议里没有「哪条线有凭据」这一项。DSH 的清单
+ * 确实只列凭据探得到的那几条线的模型(当前模型不在清单里时被单独塞进它那一组),但那是它的实现,不是协议的承诺 ——
+ * 某条线的目录一时取不到,和「没有凭据」在清单里长得一样。自动换还会悄悄改掉用户走哪一种计费。
+ *
+ * 可以换的 = 不在失败那一组里的模型(同一组的走同一条线,换过去还是这个错)。失败的是哪一组:先看当前模型在哪一组,
+ * 没有就拿报错里那条线的名字去对组 id;引擎不分组、对不上时,除当前模型外都算。
+ */
+export function modelNoApiKeyError(engineName: string, sel: AcpConfigSelection, route: string, raw: string): Error {
+  const current = sel.models.find((m) => m.id === sel.currentModelId);
+  const failing = (sel.currentModelId && sel.modelGroups[sel.currentModelId]) || (Object.values(sel.modelGroups).includes(route) ? route : undefined);
+  const others = sel.models.filter((m) => m.id !== sel.currentModelId && (failing === undefined || sel.modelGroups[m.id] !== failing));
+  const message = formatEngineModelNoApiKey({ engine: engineName, model: current?.name, others: others.map((m) => m.name), raw });
+  return Object.assign(new Error(message), { engineModelNoApiKey: true });
 }
 
 /**
@@ -263,13 +305,14 @@ export function pickPermissionOption(options: PermissionOption[], action: Approv
 export function createAcpClient(
   engineName: string,
   ctx: AcpClientCtx,
-): { client: Client; result(): EngineResult } {
+): { client: Client; result(): EngineResult; contentLength(): number } {
   let content = '';
   let reasoning = '';
   let tokensTotal: number | undefined;
   const toolCalls: ToolCall[] = [];
   const toolResults: any[] = [];
   const toolNames = new Map<string, string>(); // toolCallId -> name（给 tool_result 补名）
+  const hidden = new Set<string>(); // 桥里的调用(hideToolPrefix):卡片和结果归桥
   // toolCallId -> 最新的 rawInput / 标题(审批请求只带 id 时拿来补,见 requestPermission)。**必须跟着 tool_call_update 更新**:
   // 引擎可以先发一条参数不全(或还是别的参数)的 tool_call,再用 update 改成真正要跑的;卡上要是还显示头一条,
   // 用户看到的是一条命令、批准的是另一条。
@@ -298,17 +341,24 @@ export function createAcpClient(
           break;
         }
         case 'tool_call': {
+          if (ctx.hideToolPrefix && typeof u.title === 'string' && u.title.startsWith(ctx.hideToolPrefix)) {
+            hidden.add(u.toolCallId);
+            ctx.touch?.();
+            break;
+          }
           const name = u.title || u.kind || 'tool';
           toolNames.set(u.toolCallId, name);
           if (u.rawInput != null) toolInputs.set(u.toolCallId, u.rawInput);
           if (typeof u.title === 'string' && u.title) toolTitles.set(u.toolCallId, u.title);
           const args = u.rawInput ? JSON.stringify(u.rawInput) : '{}';
-          toolCalls.push({ id: u.toolCallId, type: 'function', function: { name, arguments: args } });
+          // ui_content_offset:卡片在回答正文里的位置(同 runLoop),重开对话时据此把卡片排回原处。
+          toolCalls.push({ id: u.toolCallId, type: 'function', function: { name, arguments: args }, ui_content_offset: content.length } as ToolCall);
           // source(遥测契约 §7):外部引擎自己的工具名不归 Tangu,按 plugin 记 —— Extend 不外发 plugin 的工具名
           ctx.publish('tool_call', { id: u.toolCallId, name, arguments: args, startedAt: Date.now(), source: 'plugin' });
           break;
         }
         case 'tool_call_update': {
+          if (hidden.has(u.toolCallId)) { ctx.touch?.(); break; }
           // 规范:update 里出现的字段整个替换原值。只更新审批用的这两份;已经发给界面的 tool_call 事件和结果里的工具名不动。
           if (u.rawInput != null) toolInputs.set(u.toolCallId, u.rawInput);
           if (typeof u.title === 'string' && u.title) toolTitles.set(u.toolCallId, u.title);
@@ -316,7 +366,8 @@ export function createAcpClient(
             const name = toolNames.get(u.toolCallId) || '';
             const result = toolUpdateText(u.content);
             const isError = u.status === 'failed';
-            toolResults.push({ id: u.toolCallId, name, result, isError });
+            // 落库形状同 runLoop(tool_call_id / content):重开对话时前端按 tool_call_id 配对,换回 Tangu 时回放也认这个形状。
+            toolResults.push({ tool_call_id: u.toolCallId, name, content: result, isError });
             ctx.publish('tool_result', { id: u.toolCallId, name, result, isError, source: 'plugin' });
           }
           break;
@@ -366,6 +417,7 @@ export function createAcpClient(
   return {
     client,
     result: () => ({ content, reasoning, toolCalls, toolResults, tokensTotal }),
+    contentLength: () => content.length,
   };
 }
 
@@ -407,7 +459,8 @@ export async function runAcpEngine(def: EngineDef, ctx: EngineRunCtx): Promise<E
   // host 能力下运行：继承父 env（等价于用户自己在终端跑 claude），叠加 def.env。适配器据此读 ANTHROPIC_API_KEY/~/.claude。
   // detached:true → 子进程自成进程组(pgid=child.pid);kill 时杀「整组」，连带 npx 衍生的真子进程(claude-code-acp)，
   // 否则只杀外层 npx、孙进程残留成孤儿。范本 ../tools/hostExec.ts。
-  const child = spawnEngine(def, { cwd, detached: true });
+  const runEnv = { ...(ctx.env ?? {}), ...(def.agentsHomeEnv && ctx.agentsHome ? { [def.agentsHomeEnv]: ctx.agentsHome } : {}) };
+  const child = spawnEngine(def, { cwd, detached: true, env: runEnv });
   // 起不来必须让握手立刻失败(spawn 报错 / 握手前自退),否则 initialize 会一路 await 到 30s 超时。
   // 适配器的 stderr 只做诊断,不进协议流;watchEngineStartup 顺带留末尾几行进错误信息。
   const startup = watchEngineStartup(child, def.id);
@@ -464,6 +517,8 @@ export async function runAcpEngine(def: EngineDef, ctx: EngineRunCtx): Promise<E
     },
     signal: ctx.signal,
     publish: (type, payload) => { armEngineIdle(); ctx.publish(type, payload); },
+    hideToolPrefix: ctx.hideToolPrefix,
+    touch: armEngineIdle,
     requestApproval: async (preview, toolCall) => {
       // Read-only ACP modes remain host-enforced at permission boundaries.
       // The scoped MCP bridge gates its own tools independently.
@@ -567,17 +622,25 @@ export async function runAcpEngine(def: EngineDef, ctx: EngineRunCtx): Promise<E
     // 引擎给 `models` 的走 session/set_model;没有 `models`、模型在 configOptions 里的(DSH)走 session/set_config_option。
     // 续接的会话记着上次选的模型,所以每轮都对一下「当前值」而不是只在新建时设。
     // (DSH 实测:换模型会把思考档重置成那个模型的缺省值。这里不碰思考档。)
+    // sel = 这场会话此刻的模型清单和当前模型(下面换了模型就跟着换):这一轮因为缺 API key 失败时,拿它告诉用户能换成什么。
+    let sel = mapAcpConfigOptions((s as any)?.configOptions);
+    if (!sel.modelConfigId && (s as any)?.models) sel = { ...sel, ...mapAcpModels((s as any).models) }; // 模型走 `models` 的引擎:清单和当前模型在那边
     if (ctx.engineModelId) {
-      const sel = mapAcpConfigOptions((s as any)?.configOptions);
       try {
         if (!(s as any)?.models && sel.modelConfigId) {
           if (ctx.engineModelId !== sel.currentModelId) {
             // 存着的选择不在这次的清单里(引擎那边换了目录 / 下架)→ 不发,照引擎当前的跑
             if (!sel.models.some((m) => m.id === ctx.engineModelId)) console.warn(`[engine] model ${ctx.engineModelId} is not offered by ${def.id} any more; keeping ${sel.currentModelId ?? 'the engine default'}`);
-            else await guard(conn.setSessionConfigOption({ sessionId, configId: sel.modelConfigId, value: ctx.engineModelId }), 'setSessionConfigOption');
+            else {
+              const changed: any = await guard(conn.setSessionConfigOption({ sessionId, configId: sel.modelConfigId, value: ctx.engineModelId }), 'setSessionConfigOption');
+              // 回包里是换完之后的整份选项;没带(老实现)就只把当前模型记成刚选的那个
+              const after = mapAcpConfigOptions(changed?.configOptions);
+              sel = after.modelConfigId ? after : { ...sel, currentModelId: ctx.engineModelId };
+            }
           }
         } else if (ctx.engineModelId !== (s as any)?.models?.currentModelId) {
           await conn.unstable_setSessionModel({ sessionId, modelId: ctx.engineModelId });
+          sel = { ...sel, currentModelId: ctx.engineModelId };
         }
       } catch (e: any) {
         console.warn(`[engine] set model(${ctx.engineModelId}) failed: ${acpErrorText(e)}`);
@@ -593,10 +656,20 @@ export async function runAcpEngine(def: EngineDef, ctx: EngineRunCtx): Promise<E
     armEngineIdle(); // turn 开始起表
     // prompt 不设握手超时(一轮可以跑很久),但**子进程半路死掉要立刻知道** —— 否则只能等 5 分钟的
     // idle 看门狗,而 ACP 连接未必会因 stdio EOF 自己 reject(这正是本轮那个 bug 的形态)。
-    const res = await Promise.race([
-      conn.prompt({ sessionId, prompt: [{ type: 'text', text: ctx.message }] }),
-      spawnFailed,
-    ]);
+    let res: Awaited<ReturnType<typeof conn.prompt>>;
+    try {
+      res = await Promise.race([
+        conn.prompt({ sessionId, prompt: [{ type: 'text', text: ctx.message }] }),
+        spawnFailed,
+      ]);
+    } catch (e: any) {
+      // 当前模型那条线要 API key 而没有配(DSH 只用账号登录时,新会话的缺省模型就是这样):引擎的原话只说缺 key,
+      // 不说能怎么办,而且这场对话之后每一句都是同一个错 —— 换成一句点名「当前是哪个模型、还能换成哪些」的话。
+      // 被停掉的、别的原因失败的,原样抛。
+      const route = ctx.signal.aborted ? null : missingApiKeyRoute(e);
+      if (route === null) throw e;
+      throw modelNoApiKeyError(def.name, sel, route, acpErrorText(e));
+    }
     return { ...result(), stopReason: res.stopReason, externalSessionId: resumable ? sessionId : undefined };
   } finally {
     startup.disarm(); // 到此子进程的死活不再是「起不来」:下面 killNow() 是我们自己杀的

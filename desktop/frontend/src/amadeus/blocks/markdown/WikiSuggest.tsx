@@ -73,6 +73,8 @@ interface Props {
   dates?: boolean
   /** 日期候选的插入回调;调用方负责把它写进文档(见 MarkdownBlock.pickMentionRaw)。 */
   onPickRaw?: (text: string) => void
+  /** 光标所在是任务行(`- [ ]`):日期候选最前面多一条「不设日期」(写 `@todo`,方案 2026-11-15 ⑤)。 */
+  undatedTask?: boolean
   /** 宿主编辑器是否持焦。不持焦时一个键都不拦(L-04):失焦后标题框/聊天框里的 ↑↓/Enter 不许被吞。 */
   editorFocused?: () => boolean
   /** 光标后面是不是还有查询词的字(用户回到词中间改错字):是的话 ←/→ 不拿去切分类。不给 = 恒在词尾。 */
@@ -138,7 +140,7 @@ function dirOf(p: string): string {
 /** 重名判定 key:页面剥 .md 小写(pageKey),文件含扩展名小写 —— 两命名空间天然分立。 */
 const candKey = (c: Cand): string => (c.file ? c.base.toLowerCase() : pageKey(c.base))
 
-export function WikiSuggest({ query, left, top, anchorTop, getPageNames, getFiles, onPick, onPickRaw, onClose, editorFocused, caretMidWord, sourcePath, agents = [], onPickAgent, allowCreate = true, dates = false }: Props) {
+export function WikiSuggest({ query, left, top, anchorTop, getPageNames, getFiles, onPick, onPickRaw, onClose, editorFocused, caretMidWord, sourcePath, agents = [], onPickAgent, allowCreate = true, dates = false, undatedTask = false }: Props) {
   const [active, setActive] = useState(0)
   const [, refreshAgents] = useState(0)
   const agentMentions = !!onPickAgent
@@ -192,7 +194,7 @@ export function WikiSuggest({ query, left, top, anchorTop, getPageNames, getFile
     if (onPickAgent) for (const agent of roster.filter((a) => !q || fuzzyScore(q, a.name) !== null || fuzzyScore(q, a.slug) !== null).slice(0, 6)) {
       rows.push({ key: `agent:${agent.slug}`, name: <><Bot size="1em" aria-hidden="true" />{agent.name}</>, hint: t('wiki.agentTask'), section: 'agent', pick: () => onPickAgent(agent.slug) })
     }
-    const dateCands = dates ? dateCandidates(query) : []
+    const dateCands = dates ? dateCandidates(query, undefined, { undatedTask }) : []
     for (const d of dateCands) rows.push({ key: `d:${d.insert}`, name: d.label, hint: d.hint, section: 'date', pick: () => onPickRaw?.(d.insert) })
     // 排序 + 文件保底名额见 ./wikiRank(附件/数据库曾被页面整页挤掉,单测钉在 wikiRank.test.ts)。
     for (const c of pickWikiResults(cands, query)) {

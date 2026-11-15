@@ -186,3 +186,12 @@ describe('parseIcs 健壮性(Codex 评审)', () => {
     expect(looksLikeIcs('<!doctype html><html>Sign in</html>')).toBe(false)
   })
 })
+
+describe('parseIcs 说明与链接(2026-11-15)', () => {
+  it('DESCRIPTION 还原转义、URL 原样;没有就不带这两个字段', () => {
+    const r = parseIcs(wrap(ev('UID:x\r\nSUMMARY:评审\r\nLOCATION:3 楼\\, 小会议室\r\nDESCRIPTION:第一行\\n第二行\; 带分号\r\nURL:https://meet.example.com/r/1\r\nDTSTART:20260803T090000\r\nDTEND:20260803T100000')))
+    expect(r[0]).toMatchObject({ location: '3 楼, 小会议室', description: '第一行\n第二行; 带分号', url: 'https://meet.example.com/r/1' })
+    const plain = parseIcs(wrap(ev('UID:y\r\nSUMMARY:会\r\nDTSTART:20260803T090000')))[0]
+    expect('description' in plain || 'url' in plain).toBe(false)
+  })
+})
