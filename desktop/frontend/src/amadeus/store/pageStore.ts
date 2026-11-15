@@ -358,6 +358,9 @@ interface PageState {
   createFolder(parentFolder: string, name: string): Promise<void>
   /** Rename a folder; remaps the active page's path if it lived inside. */
   renameFolder(folderPath: string, newName: string): Promise<void>
+  /** Move a folder (with its subtree) into another folder ('' = vault root); same chain as renameFolder
+   *  (flush, hold open notes, rewrite links, remap panels). Failures land in `error`, like renameFolder. */
+  moveFolder(folderPath: string, destFolder: string): Promise<void>
   /** Delete a folder and its contents; if the active page was inside, open another (or clear). */
   deleteFolder(folderPath: string): Promise<void>
 
@@ -1340,6 +1343,24 @@ function makePageStore(opts: PageStoreOptions = {}) {
       const release = await holdNotePath(folderPath, 'prefix') // 同 movePage:IPC 在途时树下开着的笔记不写旧路径
       try {
         const newFolder = await amadeus.renameFolder(folderPath, newName)
+        await release(newFolder === folderPath ? null : newFolder)
+        remapScopePaths(folderPath, newFolder, 'prefix')
+      } catch (e) {
+        await release(null)
+        set({ error: String(e) })
+        return
+      }
+      await get().refreshStructure()
+    },
+
+    async moveFolder(folderPath, destFolder) {
+      // 与 renameFolder 同一条链(文件树不拖文件夹,目前只有插件 ctx.app.movePath 走这里):树下全部页面的引用重写 →
+      // 所有面板先落盘;IPC 在途时按住树下开着的笔记;回来后交接到新路径再改指。
+      const dst = destFolder.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
+      await flushAllScopes()
+      const release = await holdNotePath(folderPath, 'prefix')
+      try {
+        const newFolder = await amadeus.moveFolder(folderPath, dst)
         await release(newFolder === folderPath ? null : newFolder)
         remapScopePaths(folderPath, newFolder, 'prefix')
       } catch (e) {

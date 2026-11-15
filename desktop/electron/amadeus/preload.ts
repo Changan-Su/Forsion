@@ -29,6 +29,7 @@ const api: AmadeusApi = {
     ipcRenderer.invoke(IPC.saveAsset, pagePath, fileName, bytes),
   saveVaultBytes: (filePath, bytes) => ipcRenderer.invoke(IPC.saveVaultBytes, filePath, bytes),
   readVaultBytes: (filePath) => ipcRenderer.invoke(IPC.readVaultBytes, filePath),
+  statPath: (filePath) => ipcRenderer.invoke(IPC.statPath, filePath),
   exportExternalPdf: (p, name, bytes) => ipcRenderer.invoke(IPC.exportExternalPdf, p, name, bytes),
   readExternalPdf: (p, annotations) => ipcRenderer.invoke(IPC.readExternalPdf, p, annotations),
   writeExternalPdfAnnotations: (p, bytes, backup) => ipcRenderer.invoke(IPC.writeExternalPdfAnnotations, p, bytes, backup),

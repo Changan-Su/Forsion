@@ -24,6 +24,7 @@ export const IPC = {
   saveAsset: 'asset:save',
   saveVaultBytes: 'vault:save-bytes',
   readVaultBytes: 'vault:read-bytes',
+  statPath: 'vault:stat',
   readExternalPdf: 'pdf:external-read',
   exportExternalPdf: 'pdf:external-export',
   writeExternalPdfAnnotations: 'pdf:external-annotations',
@@ -731,6 +732,14 @@ export interface PageHistoryEntry {
 }
 
 /** 回收站条目:name = .trash 内扁平文件名;original = 删除前的 vault 相对路径。 */
+/** `statPath` result: `size` is 0 for folders; times are ms since epoch. */
+export interface VaultStat {
+  kind: 'file' | 'folder'
+  size: number
+  mtime: number
+  ctime: number | null
+}
+
 export interface TrashEntry {
   name: string
   original: string
@@ -850,6 +859,10 @@ export interface AmadeusApi {
   /** Read a vault file's raw bytes by vault-relative path (PDF 阅读器 getDocument({data}) 等;避免自定义
    *  scheme 的跨源 XHR 限制——dev 渲染器是 http://localhost 源,XHR 到 amadeus-asset:// 会被 Chromium 拦)。 */
   readVaultBytes(path: string): Promise<Uint8Array>
+  /** Kind, size and times of a vault-relative path (2026-11-16+, `ctx.app.stat`). null = missing (ENOENT / ENOTDIR) or
+   *  no vault; escaping the vault and other IO errors reject. `ctime` = creation time (birthtime), null when the file
+   *  system does not record it. Optional: hosts whose listing has no times (cloud / Unit RPC / share) leave it out. */
+  statPath?(path: string): Promise<VaultStat | null>
   /** Desktop file-view access; external PDFs are read-only, only their annotation sidecar is writable. */
   readExternalPdf?(path: string, annotations?: boolean): Promise<Uint8Array | null>
   exportExternalPdf?(path: string, name: string, bytes: Uint8Array): Promise<string | null>
