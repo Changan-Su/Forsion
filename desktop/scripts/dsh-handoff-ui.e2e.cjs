@@ -227,7 +227,7 @@ async function main() {
     // ④ 重载后工具卡还在
     await win.reload(); await win.waitForSelector('.dv-groupview', { timeout: 40_000 }); await sleep(2500)
     await enterSpace(win, 'tangu'); await sleep(1500)
-    const title = win.locator('aside, nav, [class*="sidebar"], [class*="side"]').getByText(/jasmine tea/i).first()
+    const title = win.locator('aside, nav, [class*="sidebar"], [class*="side"]').getByText(/^Please remember that I d/).first()
     if (await title.count()) { await title.click(); await sleep(1800) }
     const headsAfter = await toolHeads(win)
     await shot(win, '13-after-reload')
