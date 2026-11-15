@@ -230,52 +230,60 @@ describe('排除域返修:别把真公式当代码 / 地址,也别漏掉真地�
     const b = await bootEditor(md)
     try { return b.view.state.doc.textBetween(0, b.view.state.doc.content.size, '\n') } finally { await b.destroy() }
   }
-  // A:脚注定义 / 脚注续行 / `[标签]: 文字` 里的公式是正文公式,编辑器里的文字要带着反斜杠
-  it.each([
+  // A / D 钉「别把原来对的弄坏」(main 上是绿的,返修前的排除域把它们弄红);B / C 钉「代码 / 地址里的反斜杠不丢」(main 上红)。
+  // 掩码断言与编辑器 / 存盘断言分开写:负对照时端到端那一半要单独看得到红绿。
+  const caseA: Array<[string, string]> = [
     ['脚注定义', 'text[^1]\n\n[^1]: 其中 $\\{a\\}$ 与 $a \\\\ b$\n'],
     ['脚注续行段落(缩进 4 格不是代码)', 'text[^1]\n\n[^1]: first\n\n    second $\\{a\\}$ 与 $a \\\\ b$ para\n'],
     ['不是合法定义的 `[注]: 文字`', '[注]: 设 $\\{a\\}$ 与 $a \\\\ b$ 为集合\n'],
-  ])('A %s:编辑器里公式带反斜杠、mdMathSpans 认得出', async (_label, md) => {
-    expect(spansOf(md)).toEqual(['$\\{a\\}$', '$a \\\\ b$'])
+  ]
+  // A:脚注定义 / 脚注续行 / `[标签]: 文字` 里的公式是正文公式,编辑器里的文字要带着反斜杠
+  it.each(caseA)('A %s:编辑器里的文字公式带反斜杠', async (_label, md) => {
     expect(await editorText(md)).toContain('$\\{a\\}$ 与 $a \\\\ b$')
   })
-  it('A 引用定义只在整行剩余恰好是「地址 + 可选标题」、且不打断段落时才抹', () => {
+  it.each(caseA)('A %s:mdMathSpans 认得出', (_label, md) => {
+    expect(spansOf(md)).toEqual(['$\\{a\\}$', '$a \\\\ b$'])
+  })
+  it('引用定义口径:整行剩余恰好是「地址 + 可选标题」、且不打断段落时才抹', () => {
     expect(spansOf('[l]: /u$ "t$x$"\n\n$y$')).toEqual(['$y$'])                 // 合法定义:地址 / 标题不参与配对
     expect(spansOf('[l]: /u "t" x$y$\n')).toEqual(['$y$'])                      // 标题后还有字 = 普通段落
     expect(spansOf('P\n[l]: <$\\{a\\}$>\n')).toEqual(['$\\{a\\}$'])               // 定义打断不了段落 = 普通文字
   })
   // D:缩进 ≥4 的 ``` 属于上面的段落,不是开栏
-  it('D 段落里缩进 4 格的 ``` 不开围栏:后面的公式照认、编辑器里带反斜杠', async () => {
-    const md = 'P\n    ```\n$\\{x\\}$\n'
-    expect(spansOf(md)).toEqual(['$\\{x\\}$'])
-    expect(await editorText(md)).toContain('$\\{x\\}$')
+  const caseD = 'P\n    ```\n$\\{x\\}$\n'
+  it('D 段落里缩进 4 格的 ```:编辑器里的文字公式带反斜杠', async () => {
+    expect(await editorText(caseD)).toContain('$\\{x\\}$')
   })
-  it('D 列表项里:相对内容列缩进 ≤3 才是围栏;顶层缩进 ≤3', () => {
+  it('D 段落里缩进 4 格的 ```:不开围栏,mdMathSpans 认得出后面的公式', () => {
+    expect(spansOf(caseD)).toEqual(['$\\{x\\}$'])
+  })
+  it('围栏缩进口径:列表项里相对内容列 ≤3 才是围栏;顶层 ≤3', () => {
     expect(spansOf('- a\n\n     ```\n  $x$\n     ```\n$y$')).toEqual(['$y$'])  // 内容列 2 + 3 = 5:是围栏
     expect(spansOf('- a\n\n      ```\n  $x$\n')).toEqual(['$x$'])             // 内容列 2 + 4:缩进代码里的 ```,不开栏
     expect(spansOf('   ```\n$x$\n   ```\n$y$')).toEqual(['$y$'])
   })
-  // B:地址里的撇号不是标题(标题前必须有空白)
+  // B:地址里的撇号不是标题(标题前必须有空白)。
   // 地址里的 `\\_` 是字面反斜杠(`\_` 在地址里本来就只是 `_`):序列化照原样写回 `\\_`,地址没抹到就被当公式反转义成 `\_`,
   // 重开后链接地址少一个反斜杠。
-  it('B 链接地址里带撇号:地址照样抹;编辑同一块后存盘,地址里的反斜杠还在', async () => {
-    const md = "see [l](http://x/it's/$a\\\\_b$) end\n"
-    expect(maskNonMath(md)).toBe("see [l](" + ' '.repeat("http://x/it's/$a\\\\_b$".length) + ') end\n')
-    const b = await bootEditor(md)
+  const caseB = "see [l](http://x/it's/$a\\\\_b$) end\n"
+  it('B 链接地址里带撇号:编辑同一块后存盘,地址里的反斜杠还在', async () => {
+    const b = await bootEditor(caseB)
     try {
       b.view.dispatch(b.view.state.tr.insertText('Z', 1))
       expect(b.md()).toBe("Zsee [l](http://x/it's/$a\\\\_b$) end\n")
     } finally { await b.destroy() }
+  })
+  it('B 链接地址里带撇号:整段地址都抹掉', () => {
+    expect(maskNonMath(caseB)).toBe('see [l](' + ' '.repeat("http://x/it's/$a\\\\_b$".length) + ') end\n')
   })
   it('B 标题里转义的引号不算闭合;没闭合的标题 = 不是链接(同 CommonMark)', () => {
     expect(maskNonMath('[l](/u "a\\"$b$")')).toBe('[l](' + ' '.repeat('/u "a\\"$b$"'.length) + ')')
     expect(spansOf('[l](/u "$x$)')).toEqual(['$x$'])
   })
   // C:引用定义的标题在下一行
-  it('C 引用定义的标题在下一行:一并抹;改引用里别的段落后存盘,标题里的反斜杠还在', async () => {
-    const md = '> [l]: /url\n>   "$a\\_b$"\n>\n> edit\n'
-    expect(spansOf(md)).toEqual([])
-    const b = await bootEditor(md)
+  const caseC = '> [l]: /url\n>   "$a\\_b$"\n>\n> edit\n'
+  it('C 引用定义的标题在下一行:改引用里别的段落后存盘,标题里的反斜杠还在', async () => {
+    const b = await bootEditor(caseC)
     try {
       let at = -1
       b.view.state.doc.descendants((n, pos) => { if (n.isText && n.text === 'edit') at = pos })
@@ -284,16 +292,22 @@ describe('排除域返修:别把真公式当代码 / 地址,也别漏掉真地�
       expect(b.md()).toBe('> [l]: /url\n>   "$a\\_b$"\n>\n> Zedit\n')
     } finally { await b.destroy() }
   })
+  it('C 引用定义的标题在下一行:标题一并抹,不参与配对', () => {
+    expect(spansOf(caseC)).toEqual([])
+  })
   // E:线性 —— 原先每个 `](` 往回扫整段、没闭合的反引号串反复扫到段尾(平方级)
-  it('E 病态输入线性:成串的 `](`、成串不闭合的反引号', () => {
-    const time = (md: string): number => { const t = performance.now(); maskNonMath(md); return performance.now() - t }
+  it('E 病态输入线性:成串的 `](`、成串不闭合的反引号、成串的 `[` + `][]`', () => {
+    const time = (md: string): number => { const t = performance.now(); mdMathSpans(md); return performance.now() - t }
     const brackets = (n: number): string => ']('.repeat(n) + '$\\{x\\}$\n'
     const ticks = (n: number): string => Array.from({ length: n }, (_, i) => '`'.repeat(i + 1) + 'x').join(' ') + ' $\\{x\\}$\n'
+    const collapsed = (n: number): string => '[l]: /u\n\n' + '['.repeat(n) + 'x' + '][]'.repeat(n) + ' $\\{x\\}$\n'
     expect(spansOf(brackets(16000))).toEqual(['$\\{x\\}$'])
     expect(spansOf(ticks(600))).toEqual(['$\\{x\\}$'])
-    // 宽松的绝对上限(修前 16000 个 `](` 单跑 maskNonMath 要 2 秒以上;高负载机器也留足余量)
+    expect(spansOf(collapsed(16000))).toEqual(['$\\{x\\}$'])
+    // 宽松的绝对上限(修前 16000 个 `](` 单跑掩码要 2 秒以上;高负载机器也留足余量)
     expect(time(brackets(32000))).toBeLessThan(1000)
     expect(time(ticks(1200))).toBeLessThan(1000)
+    expect(time(collapsed(32000))).toBeLessThan(1000)
   })
 })
 

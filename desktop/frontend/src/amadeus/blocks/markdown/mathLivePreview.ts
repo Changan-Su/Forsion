@@ -625,13 +625,22 @@ function scanInline(md: string, idx: number[], a: string[], labels: Set<string>,
         const close = linkTailEnd(v, x + 2)
         if (close !== -1) { maskV(x + 2, close); end = close + 1 }
       }
-      if (end === -1) {
-        const text = v.slice(op.x + 1, x)
+      if (end === -1 && labels.size) {
+        // 链接文字当标签(collapsed `[t][]` / shortcut `[t]`):标签最长 999 字、不含未转义的方括号 —— 先按长度挡,
+        // 别对整段文字切片(成串的 `[` + `][]` 会变成平方级)
+        const textLabel = (): string | null => {
+          if (x - op.x - 1 > 999) return null
+          const text = v.slice(op.x + 1, x)
+          return /(^|[^\\\u0000])[[\]]/.test(text) ? null : text
+        }
         const lab = v[x + 1] === '[' ? /^\[((?:[^\\[\]\u0000]|[\\\u0000][\s\S]){0,999})\]/.exec(v.slice(x + 1, x + 1003)) : null
         if (lab) {
-          const key = lab[1].trim() ? lab[1] : text
-          if (labels.has(normLabel(key))) end = x + 1 + lab[0].length
-        } else if (text.length <= 999 && !/(^|[^\\\u0000])[[\]]/.test(text) && labels.has(normLabel(text))) end = x + 1
+          const key = lab[1].trim() ? lab[1] : textLabel()
+          if (key !== null && labels.has(normLabel(key))) end = x + 1 + lab[0].length
+        } else {
+          const key = textLabel()
+          if (key !== null && labels.has(normLabel(key))) end = x + 1
+        }
       }
       if (end === -1) { x++; continue }
       if (!op.image) inactiveBelow = stack.length
