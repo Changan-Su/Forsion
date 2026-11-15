@@ -333,7 +333,8 @@ export const drawerPreview = {
 }
 let previewImpl: { begin(side: 'left' | 'right'): boolean; move(t: number): void; end(commit: boolean): boolean } | null = null
 
-function useDrawerDrag(
+/** 导出只为单测(drawerPreview.test.ts 拿一个最小的 .mb-body 挂它);别处用 SingleColumnHost。 */
+export function useDrawerDrag(
   bodyRef: RefObject<HTMLDivElement | null>,
   wide: boolean,
   hasLeft: boolean,
@@ -500,9 +501,12 @@ function useDrawerDrag(
       const wantOpen = v > FLING ? true : v < -FLING ? false : p > 0.5
       const ws = useWorkspace.getState()
       const isOpen = cur.side === 'left' ? ws.leftVisible : ws.rightVisible
-      if (wantOpen !== isOpen) flushSync(() => ws.toggleSidebar(cur.side as 'left' | 'right'))
-      release(cur, v / cur.w)
-      clearNextFrame()
+      // finally:开合会同步跑 workspace 的订阅(插件的返回回调也在里面),哪个抛了错,这一下的收尾也得做完 ——
+      // 不然 data-drag 和内联位移留在 .mb-body 上,之后返回、切 Space 都挪不动它,只能重开 App(见 drawerPreview.end)
+      try { if (wantOpen !== isOpen) flushSync(() => ws.toggleSidebar(cur.side as 'left' | 'right')) } finally {
+        release(cur, v / cur.w)
+        clearNextFrame()
+      }
     }
 
     // 系统返回手势的预览(见上面 drawerPreview):同一个 paint / 同一个松手顺序,只是进度由宿主报。
@@ -537,9 +541,14 @@ function useDrawerDrag(
         // 预览期间这一侧被别的东西开 / 收过(现在已经是预览要去的样子)→ 不替它落定:再 toggle 一次就反了。
         // 交回调用方照现在的状态重新算这一下返回。
         const stale = (cur.side === 'left' ? ws.leftVisible : ws.rightVisible) === cur.opening
-        if (commit && !stale) flushSync(() => ws.toggleSidebar(cur.side as 'left' | 'right'))
-        release(cur, cur.vp)
-        clearNextFrame()
+        // ⚠️ 收尾放 finally(2026-11-15 安卓真壳实测):toggleSidebar 同步跑 workspace 的订阅,其中一个抛错(当时是插件
+        // claimHeader 的 toList 回调里 view.setParams 抛「View has been disposed」)会把下面两行跳过 —— sys 已经清空,
+        // data-drag 和内联位移就永远留在 .mb-body 上:左栏停在屏外、主区停在 0,之后返回、切 Space 都回不来。
+        // 错照样往上抛(调用方 / Capacitor 记日志),这里只保证收尾。仪器:lcl 的 drawerPreview 单测「订阅抛错」那条。
+        try { if (commit && !stale) flushSync(() => ws.toggleSidebar(cur.side as 'left' | 'right')) } finally {
+          release(cur, cur.vp)
+          clearNextFrame()
+        }
         return !(commit && stale)
       },
     }
