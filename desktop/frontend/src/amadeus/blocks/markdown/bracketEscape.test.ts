@@ -43,6 +43,11 @@ describe('unescapeTextBrackets(一个 text 节点的序列化结果)', () => {
     for (const after of [' ', '\n', '*', '<', '`']) expect(unescapeTextBrackets('x \\[a]', '\n', after)).toBe('x [a]')
     for (const after of ['', '(', '[', ':', ']', '\\']) expect(unescapeTextBrackets('x \\[a]', '\n', after)).toBe('x \\[a]')
   })
+  it('容器给的前后文是一串时只看紧邻的那个字', () => {
+    expect(unescapeTextBrackets('\\[a] x', '# ', '\n')).toBe('[a] x')
+    expect(unescapeTextBrackets('\\[a]', '**', '**')).toBe('[a]')
+    expect(unescapeTextBrackets('\\[a]', '![', '](')).toBe('\\[a]')
+  })
 })
 
 describe('编辑器里打的字面方括号:落盘后重开仍是同一段字面', () => {
@@ -101,6 +106,28 @@ describe('编辑器里打的字面方括号:落盘后重开仍是同一段字面
       v.dispatch(v.state.tr.setSelection(TextSelection.create(v.state.doc, at)))
       v.dispatch(v.state.tr.insertText(' [y] [x]'))
       expect(b.saved()).toBe('top\n\nhello [y] \\[x]\n')
+    } finally {
+      await b.destroy()
+    }
+  })
+})
+
+describe('容器给的前后文不止一个字(标题 `# `、加粗 `**`):照样还原', () => {
+  it.each([
+    ['# seed\n', '[a] x', null, '# [a] x\n'],
+    ['seed\n', '[a]', 'strong', '**[a]**\n'],
+    ['seed\n', '[a]', 'emphasis', '*[a]*\n'],
+    ['seed\n', '[a]', 'strike_through', '~~[a]~~\n'],
+  ])('%j + %j(%s)', async (md, text, mark, want) => {
+    const b = await bootEditor(md)
+    try {
+      const v = b.view
+      const { schema } = v.state
+      const block = v.state.doc.firstChild!
+      const marks = mark ? [schema.marks[mark].create()] : []
+      v.dispatch(v.state.tr.replaceWith(1, 1 + block.content.size, schema.text(text, marks)))
+      expect(b.saved()).toBe(want)
+      expect(b.parse(want).textContent).toBe(text)
     } finally {
       await b.destroy()
     }

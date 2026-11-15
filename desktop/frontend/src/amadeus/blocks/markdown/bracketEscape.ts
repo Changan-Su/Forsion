@@ -49,10 +49,12 @@ const ESCAPED_PAIR = /(?<!\\)((?:\\\\)*)\\\[((?:[^\\[\]\n]|\\[^[\]\n])*)\]/g
 /** 节点开头的 `[`:前一个兄弟输出的末字(info.before)只认这些。 */
 const EDGE_BEFORE = /^[\s*_~`>]$/
 
-/** 一个 text 节点的序列化结果里,还原可还原的 `\[词]`。before / after = 节点外紧邻的字符(info.before / info.after,
- *  不知道就给空串 → 节点边上的一律保留)。 */
+/** 一个 text 节点的序列化结果里,还原可还原的 `\[词]`。before / after = 节点外的前后文(info.before / info.after,
+ *  容器给的可能不止一个字:标题 `# `、加粗 `**`;只看紧邻的那一个。不知道就给空串 → 节点边上的一律保留)。 */
 export function unescapeTextBrackets(out: string, before: string, after: string): string {
   if (!out.includes('\\[')) return out
+  const prevEdge = before.slice(-1)
+  const nextEdge = after.charAt(0)
   const masked = maskNonMath(out)
   const math = out.includes('$') ? scanMath(masked) : []
   return out.replace(ESCAPED_PAIR, (all: string, slashes: string, inner: string, at: number) => {
@@ -60,9 +62,9 @@ export function unescapeTextBrackets(out: string, before: string, after: string)
     const end = at + all.length // `]` 之后
     if (/^[ \txX]?$/.test(inner) || /^[\^!]/.test(inner)) return all
     if (slashes.length === 0) {
-      if (at === 0 ? !EDGE_BEFORE.test(before) : '!][\\'.includes(out[at - 1])) return all
+      if (at === 0 ? !EDGE_BEFORE.test(prevEdge) : '!][\\'.includes(out[at - 1])) return all
     }
-    const next = end < out.length ? out[end] : after
+    const next = end < out.length ? out[end] : nextEdge
     if (!next || '([:]'.includes(next)) return all
     if (next === '\\' && (end + 1 >= out.length || out[end + 1] === '[')) return all
     if (masked.slice(open, end) !== out.slice(open, end)) return all // 裸 URL 等
