@@ -26,7 +26,7 @@ import { getAttachmentPrefs } from '../lib/attachments'
 import { useMobileBackClose } from '../lib/mobileBack'
 import { touchScrollMarginPlugin } from './touchScroll'
 import { awaitTypingQuiet, installTypingGuard, isComposing } from '../store/typingGuard'
-import { createTypingDraftPacer, typingDraftPlugin, type TypingDraftPacer } from './typingDraft'
+import { COMPOSE_SAVE_POLL_MS, createTypingDraftPacer, saveTickAction, typingDraftPlugin, type TypingDraftPacer } from './typingDraft'
 import {
   DbLinkPicker, MilkdownInner, normalizeSerializedMd, serializeUnified, stampedFileName,
   PREFIX_TRIGGERS, SLASH_SENTINELS, slashTurnFailed, getFocusedBlockApply, setFocusedBlockApply, type SlashItem, type SlashOps,
@@ -2747,13 +2747,38 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
     // 有写盘在跑时 lastSaved 马上会变(见 Pipe.writing):撤回到旧基线的这一击照样排上,ack 后链上再判。
     if (!pipe.writing && composeFm(pipe.fm, pipe.body) === pipe.lastSaved) return
     pipe.pending = true
+    armSave()
+  }
+
+  /** 此刻在输入法组字中(正文编辑器或源码 textarea;后者靠 document 上的组字闸)。 */
+  const composingNow = (): boolean => isComposing() || !!layer.getView()?.composing
+  /** 防抖写因组字被推后的起点(null = 没在推后)。跨 schedule 保留:组字中每报一次正文都会重起计时,
+   *  起点不能跟着重置 —— 否则组字状态卡住时 30 秒上限永远到不了。 */
+  const composeHold = useRef<number | null>(null)
+  /** (重新)起防抖写的计时。组字中起的计时算「已推后」:组字若在到点前结束,编辑器监听器可能还没把提交后的正文
+   *  报上来(pipe.body 仍是拼音),到点时要再等一整个防抖窗,不能照写。组字结束后再起的计时(提交后的正文已报上来)
+   *  就不再推后 —— 写的正是提交后的内容,照原来的防抖节奏。 */
+  const armSave = (): void => {
     if (pipe.timer) clearTimeout(pipe.timer)
-    pipe.timer = setTimeout(() => {
-      pipe.timer = null
-      // 回灌进行中冻结保存(押后回灌×冻结 save 的互斥契约):回灌完成后统一补一发。
-      if (pipe.reconcileBusy) return
-      void writeNow()
-    }, SAVE_DEBOUNCE_MS)
+    composeHold.current = composingNow() ? (composeHold.current ?? Date.now()) : null
+    pipe.timer = setTimeout(saveTick, SAVE_DEBOUNCE_MS)
+  }
+  /** 防抖写到点。组字中不写(否则盘上 / 云同步 / 历史快照拿到半截拼音),推后到组字结束再等一整个防抖窗
+   *  (见 saveTickAction);计时器始终挂在 pipe.timer 上,卸载 / 立即冲洗照旧能清掉它。 */
+  const saveTick = (): void => {
+    pipe.timer = null
+    const now = Date.now()
+    const step = saveTickAction(composingNow(), composeHold.current, now)
+    if (step === 'poll') {
+      composeHold.current ??= now
+      pipe.timer = setTimeout(saveTick, COMPOSE_SAVE_POLL_MS)
+      return
+    }
+    composeHold.current = null
+    if (step === 'rearm') { armSave(); return }
+    // 回灌进行中冻结保存(押后回灌×冻结 save 的互斥契约):回灌完成后统一补一发。
+    if (pipe.reconcileBusy) return
+    void writeNow()
   }
 
   /** 编辑器监听器(Milkdown,防抖 200ms)报来的正文(stored md)。 */
@@ -3048,8 +3073,15 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
       stashDraft(vaultRoot, path, text, pipe.lastSaved, pipe.slot)
       return true
     }
-    const flushNow = (props: boolean): void => {
+    const flushNow = (props: boolean, holdWhileComposing = false): void => {
       if (!stashNow(props)) return
+      // 组字中窗口失焦:此刻的全文(含已上屏的字)上一行已同步存进本机草稿,盘上先不写半截拼音;留一发防抖写,
+      // 组字结束后照常落盘。只给失焦用 —— 页面还活着,计时器一定会到点。隐藏 / pagehide / freeze / pause 之后进程
+      // 随时可能没了、计时器未必再跑,那几条照旧马上写(宁可盘上暂时带着拼音,也不让已上屏的字只剩一份草稿)。
+      if (holdWhileComposing && composingNow()) {
+        if (!pipe.timer) armSave()
+        return
+      }
       if (pipe.timer) {
         clearTimeout(pipe.timer)
         pipe.timer = null
@@ -3097,11 +3129,11 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
       const wait = lastBlur + 1000 - Date.now()
       if (wait > 0) {
         stashNow(false)
-        if (!trail) trail = setTimeout(() => { trail = null; lastBlur = Date.now(); flushNow(false) }, wait)
+        if (!trail) trail = setTimeout(() => { trail = null; lastBlur = Date.now(); flushNow(false, true) }, wait)
         return
       }
       lastBlur = Date.now()
-      flushNow(false)
+      flushNow(false, true)
     }
     document.addEventListener('visibilitychange', onHidden)
     window.addEventListener('pagehide', onLeave)

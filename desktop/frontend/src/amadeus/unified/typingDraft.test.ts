@@ -10,10 +10,12 @@ import { composeFm, splitFm } from './fm'
 import { fromDisk } from './eol'
 import { clearDraft, createCanonicalMemo, peekDraftText, readDraft, stashDraft, type UnsavedDraft } from './writeSafety'
 import {
+  COMPOSE_SAVE_MAX_DEFER_MS,
   TYPING_DRAFT_COMPOSE_POLL_MS,
   TYPING_DRAFT_MAX_MS,
   TYPING_DRAFT_MS,
   createTypingDraftPacer,
+  saveTickAction,
 } from './typingDraft'
 
 beforeEach(() => {
@@ -110,6 +112,34 @@ describe('typing draft pacer (max-wait, not reset by later keystrokes)', () => {
     typeFor(3000, pacer.edit)
     expect(stash).toHaveBeenCalled()
     pacer.dispose()
+  })
+})
+
+describe('saveTickAction (debounced save vs. IME composition)', () => {
+  it('writes when nothing is being composed', () => {
+    expect(saveTickAction(false, null, 1000)).toBe('write')
+  })
+  it('defers (polls) while composing instead of writing half-typed pinyin', () => {
+    expect(saveTickAction(true, null, 1000)).toBe('poll')
+    expect(saveTickAction(true, 1000, 1000 + COMPOSE_SAVE_MAX_DEFER_MS - 1)).toBe('poll')
+  })
+  it('after a deferral, a finished composition re-arms a full debounce instead of writing in the same tick', () => {
+    expect(saveTickAction(false, 1000, 1200)).toBe('rearm')
+  })
+  it('a composition state that never ends cannot block saving forever', () => {
+    expect(saveTickAction(true, 1000, 1000 + COMPOSE_SAVE_MAX_DEFER_MS)).toBe('write')
+  })
+  it('the component routes the debounce timer and the leave-flush through the composition gate', () => {
+    const src = readFileSync(new URL('./UnifiedPage.tsx', import.meta.url), 'utf8')
+    const tick = src.slice(src.indexOf('  const saveTick = '), src.indexOf('  /** 编辑器监听器'))
+    expect(tick).toContain('saveTickAction(composingNow()')
+    const flush = src.slice(src.indexOf('    const flushNow = '), src.indexOf('    const typingStash = '))
+    expect(flush.indexOf('holdWhileComposing && composingNow()')).toBeGreaterThan(-1)
+    expect(flush.indexOf('composingNow()')).toBeLessThan(flush.indexOf('void writeNow()'))
+    // Only window blur holds; hidden / pagehide / freeze / pause keep writing at once (timers may never run again).
+    const blur = src.slice(src.indexOf('    const onBlur = '), src.indexOf("    document.addEventListener('visibilitychange', onHidden)"))
+    expect(blur.match(/flushNow\(false, true\)/g)?.length).toBe(2)
+    expect(src).toContain("const onHidden = (): void => { if (document.visibilityState === 'hidden') flushNow(true) }")
   })
 })
 
