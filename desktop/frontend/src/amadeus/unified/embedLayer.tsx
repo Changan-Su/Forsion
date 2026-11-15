@@ -560,7 +560,7 @@ export function createEmbedLayer(opts: {
         }
         const revealed = soft && revealPos === pos
         decos.push(Decoration.inline(pos + 1, pos + node.nodeSize - 1,
-          { class: revealed ? 'unified-embed-line-src' : 'wikilink-src-hidden' }, { embedSource: true }))
+          { class: revealed ? 'unified-embed-line-src' : 'wikilink-src-hidden' }, { embedSource: true, revealed }))
         // 本段已归块级嵌入 → 给段落打标,行内双链层渲出来的那条链接由 CSS 收掉(2026-08-22 实报:
         // 嵌入体底下多挂一条下划线的笔记名)。inline 装饰只藏得住**文本**,藏不住 wikilink.ts 的
         // widget —— 而那层不能一刀切跳过整段:嵌入体内的只读 MarkdownBlock 没装本层,那里的
