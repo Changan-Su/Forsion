@@ -19,7 +19,7 @@ import { runTagContext, textForThisDevice } from './deviceTagContext.js';
 import { agentIdentitySection } from './agentActivation.js';
 import { resolveMemorySlug, upgradeAriosoPersona, type NormalAgentDef } from '../agents/agentRegistry.js';
 import type { DisplayFileItem, ToolContext } from '../tools/toolTypes.js';
-import { resolveTools } from '../tools/toolRegistry.js';
+import { resolveTools, visibleMcpTools } from '../tools/toolRegistry.js';
 import { deps } from '../seams/runtime.js';
 import { normalizeApprovalMode } from './approvals.js';
 import { parsePreset } from '../core/presetTable.js';
@@ -179,10 +179,10 @@ export async function prepareEngineAgentHandoff(p: EngineAgentHandoffInput) {
   const { def, slug } = p.agent;
   const input = p.input && typeof p.input === 'object' ? p.input : {};
   const stored = p.storedAgentConfig && typeof p.storedAgentConfig === 'object' ? p.storedAgentConfig : {};
-  // 审批档同 Tangu 自己的循环:这一轮输入框带来的档是快照(缺了依次退到会话存档、这个 Agent 自己设的、自动编辑);
-  // 输入框发的轮,审批闸每次调用再按会话现档读一次(中途切档当场生效)。
+  // 审批档同 Tangu 自己的循环(agentActivation:这一轮带的档,缺了才用 Agent 定义的,再缺是自动编辑)作快照;
+  // 输入框发的轮,审批闸每次调用再按会话现档读一次(中途切档当场生效),会话存档在那里压过快照。
   const runCfg = input.agentConfig && typeof input.agentConfig === 'object' && !Array.isArray(input.agentConfig) ? input.agentConfig : {};
-  const approvalMode = normalizeApprovalMode(runCfg.approvalMode) || normalizeApprovalMode(stored.approvalMode) || normalizeApprovalMode(def.approvalMode) || 'auto-edit';
+  const approvalMode = normalizeApprovalMode(runCfg.approvalMode) || normalizeApprovalMode(def.approvalMode) || 'auto-edit';
   const uiCommands = Array.isArray(input.uiCommands) ? input.uiCommands : undefined;
   const uiSettings: ToolContext['uiSettings'] = input.uiSettings && typeof input.uiSettings === 'object' ? input.uiSettings : (uiCommands ? {} : undefined);
   const clientCapabilities: readonly string[] | undefined = Array.isArray(input.clientCapabilities)
@@ -225,7 +225,9 @@ export async function prepareEngineAgentHandoff(p: EngineAgentHandoffInput) {
     },
     presentDesk: (spec) => { if (spec && Array.isArray(spec.views) && spec.views.length) p.publish('desk_present', spec); },
   } as ToolContext & { runId: string };
-  const handed = handedToolNames(resolveTools(deps().profile, toolCtx));
+  const builtinTools = resolveTools(deps().profile, toolCtx);
+  // Agent 勾的 MCP 工具不在 resolveTools 里(单独一类):照 Tangu 的可见判定(外部工具闸、严格名单、撞名)一并交给桥
+  const handed = [...handedToolNames(builtinTools), ...visibleMcpTools(toolCtx, new Set(builtinTools.keys())).map((t) => t.name)];
   const toolServer = await createRunToolServer(toolCtx, handed, {
     name: HANDOFF_SERVER_NAME, memorySlug: resolveMemorySlug(def), agentSlug: slug,
     cards: { publish: p.publish, contentOffset: p.contentOffset }, budgetMs: BRIDGE_CALL_BUDGET_MS,

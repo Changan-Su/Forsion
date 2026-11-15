@@ -165,6 +165,20 @@ describe('交接的工具桥', () => {
     expect(events).toHaveLength(n);
   }, 10_000);
 
+  it('Agent 勾的 MCP 工具(不在 resolveTools 里)也列给引擎,过同一个审批闸、按 Tangu 的名字画卡', async () => {
+    const def = { type: 'function', function: { name: 'mcp__probe__echo', description: 'Echo.', parameters: { type: 'object', properties: {} } } };
+    const mcpTools = new Map([['mcp__probe__echo', { name: 'mcp__probe__echo', serverName: 'probe', definition: def }]]);
+    bridge = await createRunToolServer({ userId: 'u1', sessionId: 'S', runId: 'r1', cwd: '/w', approvalMode: 'auto-edit', signal: ac.signal, mcpTools } as any,
+      ['remember', 'mcp__probe__echo'], { name: 'forsion', budgetMs: 2_000, cards: { publish: (type, payload) => events.push({ type, payload }), contentOffset: () => 0 } });
+    const c = await connect(bridge);
+    expect((await c.listTools()).tools.map((t) => t.name)).toEqual(['remember', 'mcp__probe__echo', WAIT_TOOL]);
+    await c.callTool({ name: 'mcp__probe__echo', arguments: { x: 1 } });
+    expect(h.gate).toHaveBeenCalledWith('r1', expect.objectContaining({ function: expect.objectContaining({ name: 'mcp__probe__echo' }) }), expect.anything(), expect.anything());
+    expect(h.exec).toHaveBeenCalledTimes(1);
+    expect(events.map((e) => e.payload.name)).toEqual(['mcp__probe__echo', 'mcp__probe__echo']);
+    await c.close();
+  });
+
   it('没交的工具调不了', async () => {
     const c = await connect(await agentBridge(2_000));
     await expect(c.callTool({ name: 'not_handed', arguments: {} })).rejects.toThrow();

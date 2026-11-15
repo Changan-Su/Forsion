@@ -134,7 +134,8 @@ const stub = await (async () => {
       if (step.hang) { hanging.add(res); req.on('close', () => hanging.delete(res)); return; }
       const blocks = [];
       if (step.text || !step.tool) blocks.push({ type: 'text', text: step.text ?? 'ok' });
-      if (step.tool) blocks.push({ type: 'tool_use', id: `toolu_${randomUUID().slice(0, 8)}`, name: step.tool, input: step.args || {} });
+      // tool 可以是函数:按这次请求里交给模型的工具清单挑名字(DSH 会把超 64 字符的名字截断加哈希)
+      if (step.tool) blocks.push({ type: 'tool_use', id: `toolu_${randomUUID().slice(0, 8)}`, name: typeof step.tool === 'function' ? step.tool(body) : step.tool, input: step.args || {} });
       const stop = step.tool ? 'tool_use' : 'end_turn';
       const msg = { id: `msg_${requests.length}`, type: 'message', role: 'assistant', model: body?.model || 'stub', stop_reason: null, stop_sequence: null };
       if (!body?.stream) { res.writeHead(200, { 'content-type': 'application/json' }); return res.end(JSON.stringify({ ...msg, content: blocks, stop_reason: stop, usage: { input_tokens: 10, output_tokens: 5 } })); }
@@ -187,6 +188,28 @@ const CONFIG_FILE = join(dirname(TANGU_HOME), 'config.json');
 const readConfig = () => { try { return JSON.parse(readFileSync(CONFIG_FILE, 'utf8')) || {}; } catch { return {}; } };
 const writeConfigFile = (cur) => writeFileSync(CONFIG_FILE, JSON.stringify(cur, null, 2));
 { const cur = readConfig(); cur.providers = [{ providerId: 'stubjudge', baseUrl: `${stub.url}/v1`, apiKey: 'stub-not-a-real-key', modelIds: ['judge'] }]; writeConfigFile(cur); }
+// 一个最小的本机 MCP 服务(stdio,官方 SDK):一个短名工具、一个桥接后超 64 字符的长名工具(DSH 会截断加哈希)。
+// 每次被调用往 mcp-calls.txt 追加一行,用来数执行了几次。引擎启动时连上(handoffmcp 那一项用)。
+const MCP_CALLS = join(R, 'mcp-calls.txt');
+const MCP_LONG = 'record_a_very_long_named_observation_for_the_name_cap';
+{
+  const sdk = (p) => JSON.stringify(join(root, 'node_modules', '@modelcontextprotocol', 'sdk', 'dist', 'esm', p));
+  const srv = join(R, 'probe-mcp.mjs');
+  writeFileSync(srv, `import { Server } from ${sdk('server/index.js')};
+import { StdioServerTransport } from ${sdk('server/stdio.js')};
+import { CallToolRequestSchema, ListToolsRequestSchema } from ${sdk('types.js')};
+import { appendFileSync } from 'node:fs';
+const s = new Server({ name: 'probe', version: '0.0.0' }, { capabilities: { tools: {} } });
+const schema = { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] };
+s.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [
+  { name: 'echo_note', description: 'Probe only. Notes the text.', inputSchema: schema },
+  { name: ${JSON.stringify(MCP_LONG)}, description: 'Probe only. Notes the text (long name).', inputSchema: schema },
+] }));
+s.setRequestHandler(CallToolRequestSchema, async (r) => { appendFileSync(${JSON.stringify(MCP_CALLS)}, r.params.name + ' ' + String(r.params.arguments?.text) + '\\n'); return { content: [{ type: 'text', text: 'noted: ' + String(r.params.arguments?.text) }] }; });
+await s.connect(new StdioServerTransport());
+`);
+  const cur = readConfig(); cur.mcp = { mcpServers: { probe: { command: process.execPath, args: [srv] } } }; writeConfigFile(cur);
+}
 /** 打开 Historian(每轮都评、判官用假模型)跑 fn,跑完把原来那段放回去。 */
 async function withHistorian(fn) {
   const cur = readConfig(); const prev = cur.specialAgents?.historian;
@@ -658,6 +681,47 @@ const SCENARIOS = {
       ['卡片是 delegate、成功', d.results.some((r) => r.name === 'delegate' && !r.isError), d.results.map((r) => `${r.name}:${r.isError ? 'err' : 'ok'} ${r.result.slice(0, 80)}`).join(' | ')],
       ['子代理用的是 Forsion 这边的模型(假模型的 OpenAI 口被调过)', stub.judged.length > j3, `${stub.judged.length - j3} 次`],
       ['结论交回给了 DSH 的模型', !!reqD[1] && /OK/.test(lastMsg(reqD[1])) && !/Error:/.test(lastMsg(reqD[1])), clean(lastMsg(reqD[1])).slice(0, 200)],
+    ]);
+  },
+  // 交接 × Agent 勾的 MCP:走桥(不直接交给 DSH),审批和卡片照 Forsion 的来。名字桥接后是 mcp__forsion__mcp__probe__<工具>;
+  // 超 64 字符的那个 DSH 会截断加哈希 —— 前缀还在,DSH 那张卡照样藏得住。自动编辑档下 MCP 工具要问。
+  handoffmcp: async () => {
+    await api('/agent/agents', { method: 'POST', body: JSON.stringify({ slug: 'mcpmate', name: 'MCP mate', systemPrompt: 'You are a test agent.', engine: 'dsh' }) });
+    const sid = await newSession('handoff-mcp');
+    const n0 = stub.mark();
+    const longName = (body) => (body.tools || []).map((t) => t.name).find((n) => n.startsWith('mcp__forsion__mcp__probe__record_')) || 'not-listed';
+    stub.script([
+      { tool: 'mcp__forsion__mcp__probe__echo_note', args: { text: 'MCP-PING-61' } },
+      { tool: longName, args: { text: 'MCP-PING-62' } },
+      { text: 'Both noted.' },
+    ]);
+    const r = await run(sid, 'Note two things with the probe tools.', { engineId: undefined, agentSlug: 'mcpmate' }, { modelId: JUDGE_MODEL, onApproval: () => 'approve' });
+    const req = stub.since(n0); const names = (req[0]?.tools || []).map((t) => t.name);
+    const hashed = names.find((n) => n.startsWith('mcp__forsion__mcp__probe__record_')) || '';
+    const calls = existsSync(MCP_CALLS) ? readFileSync(MCP_CALLS, 'utf8').trim().split('\n').filter(Boolean) : [];
+    // Tangu 自己的桥接名也封顶 64 字符(长名在 Tangu 这边就被截了),所以长名按前缀认
+    const isTangu = (n) => n === 'mcp__probe__echo_note' || String(n).startsWith('mcp__probe__record_a_very_long');
+    record('handoffmcp', '交接:Agent 勾的 MCP 走桥,模型拿得到(长名被 DSH 截断加哈希也行),卡片按 Forsion 的名字只画一张,自动编辑档下来问', [
+      ['这一轮跑完', r.done, r.error || ''],
+      ['交给模型的工具里有这两个 MCP 工具', names.includes('mcp__forsion__mcp__probe__echo_note') && !!hashed, `长名在 DSH 那边叫 ${hashed || '(没有)'}(${hashed.length} 字符)`],
+      ['长名被 DSH 截断加了哈希,前缀还在', hashed.length === 64 && /_[0-9a-f]{12}$/.test(hashed)],
+      ['两次都来问了审批,卡上是 Forsion 的名字', r.approvals.length === 2 && r.approvals.every((a) => isTangu(a.name)), r.approvals.map((a) => a.name).join(' / ')],
+      ['卡片按 Forsion 的名字各一张,没有 mcp__forsion__ 那张', r.tools.length === 2 && r.tools.every((t) => isTangu(t.name)) && r.tools[0].name !== r.tools[1].name, r.tools.map((t) => t.name).join(' / ')],
+      ['两个都成功', r.results.length === 2 && r.results.every((x) => !x.isError && /noted: MCP-PING-6[12]/.test(x.result)), r.results.map((x) => `${x.name}:${x.isError ? 'err' : 'ok'}`).join(', ')],
+      ['MCP 服务各只执行了一次', calls.length === 2 && calls.some((l) => l.includes('MCP-PING-61')) && calls.some((l) => l.includes('MCP-PING-62')), calls.join(' | ')],
+    ]);
+
+    // 审批档取 Agent 自己设的:这一轮不带档、会话也没存档时,设成完全通行的 Agent 调同一个 MCP 工具不来问(同 Tangu 循环:缺了才用 Agent 定义的)
+    await api('/agent/agents', { method: 'POST', body: JSON.stringify({ slug: 'mcpauto', name: 'MCP auto', systemPrompt: 'You are a test agent.', engine: 'dsh', approvalMode: 'full-auto' }) });
+    const saved = ((((await api('/agent/agents')).agents) || []).find((a) => a.slug === 'mcpauto') || {}).approvalMode;
+    const sid2 = await newSession('handoff-mcp-auto');
+    stub.script([{ tool: 'mcp__forsion__mcp__probe__echo_note', args: { text: 'MCP-PING-63' } }, { text: 'Noted.' }]);
+    const a = await run(sid2, 'Note one thing with the probe tool.', { engineId: undefined, agentSlug: 'mcpauto' }, { modelId: JUDGE_MODEL, onApproval: () => 'approve' });
+    record('handoffmcpmode', '交接:审批档取 Agent 自己设的(这一轮不带档时);设成完全通行的 Agent 调 MCP 工具不来问', [
+      ['保存接口收下了完全通行', saved === 'full-auto', `approvalMode=${saved}`],
+      ['这一轮跑完', a.done, a.error || ''],
+      ['没来问审批', a.approvals.length === 0, `${a.approvals.length} 次`],
+      ['工具成功', a.results.some((x) => x.name === 'mcp__probe__echo_note' && !x.isError), a.results.map((x) => `${x.name}:${x.isError ? 'err' : 'ok'}`).join(', ')],
     ]);
   },
   probe: async () => {

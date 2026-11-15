@@ -20,7 +20,7 @@ import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
-import { resolveTools } from '../tools/toolRegistry.js';
+import { resolveTools, visibleMcpTools } from '../tools/toolRegistry.js';
 import { executeTool, toolSourceOf } from '../tools/registry.js';
 import { gateToolCall, type ApprovalDecision } from '../services/approvals.js';
 import type { ToolContext } from '../tools/toolTypes.js';
@@ -70,7 +70,14 @@ export async function createRunToolServer(ctx: ToolContext & { runId: string }, 
   if (ctx.signal?.aborted) life.abort(); else ctx.signal?.addEventListener('abort', onRunAbort, { once: true });
   const live = () => !life.signal.aborted;
   const toolCtx: ToolContext & { runId: string } = { ...ctx, signal: life.signal };
-  const allowed = () => new Map([...resolveTools(deps().profile, toolCtx)].filter(([n]) => names.includes(n)));
+  // 交出去的工具:内置 / 插件工具(resolveTools)+ 这一轮看得见的 MCP 工具(不在 resolveTools 里,单独一类,executeTool 兜底去调)
+  type Listed = { name: string; definition: { function: { description?: string; parameters?: any } } };
+  const allowed = (): Map<string, Listed> => {
+    const builtin = resolveTools(deps().profile, toolCtx);
+    const out = new Map<string, Listed>([...builtin].filter(([n]) => names.includes(n)));
+    for (const t of visibleMcpTools(toolCtx, new Set(builtin.keys()))) if (names.includes(t.name) && !out.has(t.name)) out.set(t.name, t);
+    return out;
+  };
   const open = new Set<Server>();
   const tickets = new Map<string, Ticket>();
   const active = new Set<Promise<Outcome>>();
@@ -114,7 +121,8 @@ export async function createRunToolServer(ctx: ToolContext & { runId: string }, 
       try {
         const decision: ApprovalDecision = await gateToolCall(ctx.runId, call, {
           sessionId: ctx.sessionId, userId: ctx.userId, execMode: 'host', cwd: ctx.cwd, approvalMode: ctx.approvalMode,
-          modeSessionId: ctx.approvalModeSessionId ?? ctx.sessionId, profile: ctx.profile, agentSlug: opts.agentSlug, projectPath: ctx.projectPath,
+          // 交接的桥照 Tangu 循环:只有输入框发的轮才按会话现档读(approvalModeSessionId);插件任务那条路照旧跟会话
+          modeSessionId: opts.cards ? ctx.approvalModeSessionId : ctx.sessionId, profile: ctx.profile, agentSlug: opts.agentSlug, projectPath: ctx.projectPath,
         }, life.signal);
         if (decision.action === 'reject') return finish(decision.rejectReason || 'The user denied this tool call.', true);
         life.signal.throwIfAborted();
