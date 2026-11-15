@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.115.0
+  version: 1.116.0
   author: Forsion
   category: Forsion
 ---
@@ -36,16 +36,19 @@ Read the matching `references/` file before using an API listed below or followi
 - [references/mini-panel.md](references/mini-panel.md): a Space's small floating window (`mini` in `space.json`)
 - [references/bundle-mcp-hooks.md](references/bundle-mcp-hooks.md): stdio MCP servers and observe-only hooks a bundle declares in its manifest
 - [references/note-reading-renderers.md](references/note-reading-renderers.md): `ctx.registerNoteRenderer`; staged read-only rendering, immutable snapshots, hot update rollback and host-owned persistence.
-- [references/note-editor-surfaces.md](references/note-editor-surfaces.md): 块表面 ctx.app.getPage / mountBlocks / insertMarkdown; ctx.registerEditorExtension / registerSettingsView / loadData / saveData / watchFile
+- [references/note-editor-surfaces.md](references/note-editor-surfaces.md): 块表面 ctx.app.getPage / mountBlocks / insertMarkdown / insertMarkdownAt (insert at the caret, cursor marker, refusal reasons); ctx.registerEditorExtension / registerSettingsView / loadData / saveData / watchFile
 - [references/store-sources.md](references/store-sources.md): 商店来源 `storeSources` 与 `forsion-store.json` 目录格式、四种包出处、Forsion Git 私有仓
 - [references/local-plugin-tasks.md](references/local-plugin-tasks.md): local plugin task APIs (Dispatch host branch) and recording model choices
 - [references/work-folder-migration.md](references/work-folder-migration.md): one-time upgrade of old plugin data into the working folder (Identity and destination; Request and result; Upgrade sequence; Acceptance cases; Ordinary writes after upgrade)
 - [references/calendar-overlays.md](references/calendar-overlays.md): ctx.calendar 的 `"calendar"` 档:订阅快照(成员、只读叠加源、颜色、隐藏、默认表、`myCalendar`、.ics 的地点 / 说明 / 链接列)、设置写口、.ics 订阅管理
+- [references/calendar-todo-entries.md](references/calendar-todo-entries.md): the other entry points calendar / to-do plugins use (heading jumps, notify with Undo, `ctx.ui.mountRecord`, `ctx.calendar.events`, filtered view params)
 - [references/agent-space.md](references/agent-space.md): an agent's own Space plugin (`agents/<slug>/Space/main.js`) and `ctx.agent`; unused since Muse moved to its brief layout
 - [references/list-sources.md](references/list-sources.md): `registerListSource` row and action details, phone layout, trees / drag / rename / group headers; Intelligent UI list cards
 - [references/tool-cards.md](references/tool-cards.md): `ctx.registerToolResultRenderer` (result cards) and `ctx.registerToolLabel` (process-row sentences) for your own engine tools
 - [references/databases-note-tasks.md](references/databases-note-tasks.md): `ctx.databases` / `ctx.noteTasks` (declared capabilities): snapshots, cell / row / body / column writes, `mutate`
 - [references/spaces-and-home.md](references/spaces-and-home.md): `ctx.spaces` (Space list, icons, Ribbon shelf) and `ctx.home` (core home plugin only)
+- [references/vault-files-and-templates.md](references/vault-files-and-templates.md): `ctx.app.createFolder` / `stat` / `renamePath` / `movePath` (who gets asked, rejections); extending the host's templates with `ctx.registerTemplateProcessor` and `ctx.registerNoteBirth`; older-host fallback
+- [references/plugin-sandbox.md](references/plugin-sandbox.md): `plugin_sandbox_inspect` in detail: element states, notifications in the way, commands that wait, the plugin's settings window
 
 ## Troubleshooting an installed plugin: Space missing, view blank, "stopped working after an update" (2026-10-10)
 
@@ -67,6 +70,8 @@ When `plugin_sandbox` is in your tool catalog (the desktop app, a work session o
 2. Fix what you see in the files. Saving reloads the sandbox by itself; look again with `plugin_sandbox_inspect` (`status`, `screenshot` with an optional `view` id, `logs`).
 3. Use it like a person would, with `plugin_sandbox_inspect` (2026-11-03+; never computer use on the sandbox window): `read` gives an outline of the screen with `[e12]` references; `click` / `type` / `press` take a `target` (a reference, `css:<selector>`, or a control's visible text), `type` replaces the field's text unless `append` is true, `press` takes keys such as `Enter`, `ArrowDown`, `Mod+K`; `scroll` (`amount` pixels, negative = up) and `space` (switch to one of the plugin's Spaces). Each returns a screenshot after the page settles, plus console lines and toasts that appeared meanwhile. Before clicking something that opens a file picker (`<input type="file">` included), call `files` with `paths` inside the plugin folder (put test fixtures there); a native picker cannot be seen or clicked. Commands still work too: `{"action":"command","command":"<command id>","args":{...},"screenshot":true}` runs one the plugin registered with `ctx.registerCommand`.
 4. Tell the user it is running in the sandbox. They can open the window from the sandbox card in the chat or the sandbox card in the right-hand summary panel, try it, report a problem back to this chat, and install it with **Install in my Forsion**, which asks them first.
+
+Before acting in the sandbox, read [references/plugin-sandbox.md](references/plugin-sandbox.md). Since 2026-11-15 (desktops declaring `plugin.sandbox-v2`): `read` marks toggles `(pressed)` / `(not pressed)` and fields that won't take typing `(read-only)`, so check a toggle's state before clicking it; a notification covering the target is closed first; a `command` still running after ~1.5 s returns `pending: true` (don't run it again: read the window and continue there); `settings` opens this plugin's settings page in a separate window (then `window: "settings"`, references `s12`).
 
 What the sandbox is: a separate Forsion with its own empty vault and data, signed out, **without the Tangu engine**, where only this plugin is loaded, plus the built-in plugins it lists in `requiresPlugins` (others, such as Forsion Extend or Calendar, are not there; declare what you depend on). The Ribbon shows only this plugin's Spaces. So a bundle's engine half (`plugins/`, `agents/`, `skills/`), anything that needs a signed-in account or cloud sync, and plugins that declare `fileExtensions` (blocked for dev copies) cannot be verified there; say so and test those after the user installs. Only one sandbox runs at a time; `reset` wipes its data and starts fresh; `stop` closes it.
 
@@ -344,7 +349,7 @@ Muse's Space no longer loads `main.js` (it stays on disk; do not edit it): the d
 
 | 贡献点 | 给用户的入口 | 备注 |
 |---|---|---|
-| `registerCommand` | 命令面板(+ 可选 agent 面) | `title` 可传 `() => string` 跟随界面语言(2026-10-02+,老宿主只认字符串);id 处于全局命名空间,裸名会互顶;默认只做导航,**动作性能力要么走引擎侧 agent/技能(通用纪律 5),要么给这条命令声明 `invoke`**(见下) |
+| `registerCommand` | 命令面板(+ 可选 agent 面) | `title` 可传 `() => string` 跟随界面语言(2026-10-02+,老宿主只认字符串);id 处于全局命名空间,裸名会互顶;默认只做导航,**动作性能力要么走引擎侧 agent/技能(通用纪律 5),要么给这条命令声明 `invoke`**(见下)。<!-- PENDING(plugin-commands-net): check against the final API --> 返回 disposer,同 id 再注册 = 替换;`hotkey` 给缺省键位(用户改过的优先;缺省键互相撞上的都不生效,列在 设置 → 快捷键) |
 | `registerSlashItem` | 笔记里的 `/` | 静态 `scaffold`,或动态 `run()`(先建文件再返回嵌入语法);`label` / `group` 传函数则跟随界面语言 |
 | `registerSelectionAction` | 选中文字后浮出的那一条(划线条)里「⋯ → 插件」 | `run(cx)` 返回要给人看的 markdown,**只进宿主的结果卡**:笔记里用户点「替换 / 插入下方」才写,别处只读;`scope` 决定出现在哪些视图(缺省只在笔记),见下「Selection bar」。桌面 2.13.3 及更早在「AI ▾ → 插件」、只有笔记里有 |
 | `registerView` | 独立标签页(`ctx.openView(id)` 打开) | `title` 2026-10-26 起收 PluginText;**DOM 挂载**(`mount(el, view?)` 返 disposer;可以是 async —— resolve 出的就是 disposer,reject 算挂载失败;`view.extendView` 可开临时扩展),外置插件的主力;加 `rightCompanions` 声明它到前台时右栏要的那组(见「右栏:主视图规则」);`workspaceSource` 只对没写 `mode` 的老配方的左栏生效。**样式不隔离**:选择器挂自家根类名,配色只用 `var(--bg)` / `--bg-card` / `--text` / `--text-muted` / `--border` / `--accent`(自造的变量名宿主没有,会落到你写死的兜底色) |
@@ -354,6 +359,8 @@ Muse's Space no longer loads `main.js` (it stays on disk; do not edit it): the d
 | `registerListSource` | **统一左栏**里的一条列表(收藏/任务/订阅…) | 宿主渲染,与会话/笔记行同一套 UI;⚠️`subscribe()` 里**必须重读一次数据**,见下。`title` / 动作 `label` 2026-10-26 起收 PluginText(`() => t('…')` 或 `{ zh, en }`,切语言即变;字符串在注册那一刻定格);`empty: { icon, title, line?, action? }` 让侧栏在你的 Space 里不写「暂无内容」、手机整屏列表画这份空态 |
 | `registerFileType` | 自定义 `.x.md` 文件类型;`override: true` 可接管内置的 `.pdf` | 撞内置后缀返回 **`false`** → 整体退让(判定写 `=== false`) |
 | `registerFileCreator` | 文件树右键 + 新建标签页启动器 | 与文件类型配套;**四条新建路径都要注册**,少一条用户就会问「为什么这儿没有」 |
+| `registerTemplateProcessor` | 宿主的模板选择器 / 日记模板 | 2026-11-16 起;`{ id, name, folders?(), process(source, { templatePath, targetPath, kind }) }`:在宿主替换 `{{date}}` / `{{title}}` **之前**处理模板原文,`null` = 不改,抛错 = 这次不插;`folders()` 给选择器加文件夹;返回 disposer。**模板类插件接这个,别另造选择器**;老宿主没有 → `?.`;见下「Templates and new notes」 |
+| `registerNoteBirth` | 所有「新建笔记」入口 | 2026-11-16 起;`{ id, initial({ path, folder, signal }) }`:空的新笔记写盘前问初始内容,第一个非 null 的进同一次写入;插件写的文件、数据库行、同步来的不问;返回 disposer;老宿主没有 → `?.`,别拿 `onVaultEvent` + `writeFile` 顶替(实测被挪进冲突副本);见下「Templates and new notes」 |
 | `registerEmbedRenderer` | `![[x]]` 嵌入的自绘渲染 | |
 | `registerToolResultRenderer` | 对话里**你自己引擎半身注册的工具**跑完后的结果卡片(可直接进 Agent Desk) | 2026-10-19 起;别家插件的、核心的工具认领不了(唯一例外:签名的 Forsion Extend 画 `publish_web_page` / `forsion_account`);2026-10-28 起可带 `match({ tool, args })` 按参数收窄;老宿主没有 → `ctx.registerToolResultRenderer?.(…)`。见下「Tool result cards」 |
 | `registerToolLabel` | 对话过程行里**你自己引擎半身的工具**每次调用那一行的整句(可带应用图标) | 2026-11-13 起;认领同 `registerToolResultRenderer`;`describe(call)` 同步且便宜,抛错 / 返回空 = 宿主照旧写法;老宿主没有 → `ctx.registerToolLabel?.(…)`。见下「Process-row sentences」 |
@@ -513,7 +520,7 @@ ctx.registerCommand({
 | `ctx.app.openSettings?(target)` | 打开设置到某一页 / 子页(2026-09-28 起) | 口径同宿主深链,如 `'model/m-providers'`;旧宿主没有,一律 `?.` 调 |
 | `ctx.app.motion?()` / `subscribeMotion?(cb)` | 动效偏好 `{ reduce, fadeOnly }`(2026-11-09 起) | `reduce` = 系统减少动态效果或设置里「只淡入淡出」任一开着:别做位移 / 缩放,只留淡入淡出;和宿主界面同一个判据。订阅返回退订,停用时宿主也会退;旧宿主没有 → 只看 `prefers-reduced-motion` |
 | `ctx.app.watchAccountName?(cb)` | 当前登录的名字(有昵称用昵称,2026-10-18 起) | 先回调一次当前值,换账号 / 登出再回调,没登录 = 空串;只给名字,不给令牌和账号 id;返回退订,停用时宿主也会退 |
-| `ctx.wallpaper.bing(locale?)` | 必应每日壁纸最近 8 张(2026-10-18 起) | `{ id, url, thumbnailUrl, title?, copyright?, startDate? }`;宿主代拉(桌面经主进程,插件直连必应会被 CSP 拦);拿不到 → reject;老宿主没有 → `ctx.wallpaper?.bing(…)` |
+| `ctx.wallpaper.bing(locale?)` | 必应每日壁纸最近 8 张(2026-10-18 起) | `{ id, url, thumbnailUrl, title?, copyright?, startDate? }`;宿主代拉(桌面经主进程;必应接口不回 CORS 头,插件直接 `fetch` 会被 CORS 拦,不是 CSP);拿不到 → reject;老宿主没有 → `ctx.wallpaper?.bing(…)` |
 | `ctx.app.openSpace?(id)` | 切到某个 Space(2026-10-17 起) | resolve 在新 Space 布局建好之后,接着 `ctx.openView(…, { location: 'right' })` 就落在新 Space 里;不认识的 id → `false`;旧宿主没有 → `?.`。2.13.8 起认 Space 窗口锁:锁在别的 Space 上的窗口里,开到那个 Space 自己的窗口、本窗口不切走(之后的 openView 仍落在本窗口);锁着又开不了新窗口 → `false` |
 | `ctx.app.openLink?(url)` | 在应用内打开一条 `forsion://` 链接(2026-10-17 起) | 口径同系统唤起的深链,只导航不执行;插件页 / 收件箱信 / 笔记正文里的 `<a href="forsion://…">` 宿主本来就在应用内接住,这条给按钮用 |
 | `ctx.app.setSpaceProgress?(spaceId, progress)` | 在 Ribbon 上自己 Space 的图标外画一圈进度环(2026-10-18 起) | 只认本插件随包带的 Space,别人的 / 内置的恒 `false`;`0–1`,`null` 收起;按整百分比画,每 0.5 秒报一次也不会重渲;那个 Space 有未读角标时让给角标;插件停用时宿主收掉;Space 收进 Ribbon 文件夹 / 「⋯」时看不到环;旧宿主没有 → `?.` |
@@ -525,7 +532,7 @@ ctx.registerCommand({
 | `ctx.app.sync?` | 读写这台电脑的三项云同步(2026-10-20 起,蓬洲云「同步」页) | **只对首方内置包生效**,别的插件整个成员缺席;手机 / 网页、没有本地库远程同步的宿主上也缺席。`get()` 给快照(智库 / Agents 与记忆 / 插件数据各自开没开、进度、第二台电脑待定的合并问题)、`subscribe(fn)`、`refresh()`、`set(kind, on)`(`notes` / `agents` / `plugins`)、`resolveNotes('merge' \| 'cloud' \| 'skip')`、`runNow()`;开关与引擎都在宿主,插件只画界面 |
 | `ctx.inbox` | 往收件箱发本机系统消息 + 信下挂自己画的卡(2026-10-17 起) | **只给首方内置包**,别的插件整个成员缺席;`post` / `archive` / `registerCard({ sender, mount })`,卡只认发件人 `plugin:<你的 id>` 的本机系统消息 |
 | `registerReadiness` | onboarding 检查卡上的一行 `check` | 2026-09-21 起;**必须 `ctx.registerReadiness?.(…)`**;拿不准回 `'unknown'`,见下「前置条件」 |
-| `registerEditorExtension` | 笔记编辑器的按键 / 装饰 | `'high'` 档不处理**必须 `return false`** |
+| `registerEditorExtension` | 笔记编辑器:按键、装饰,也能改文字和选区(递进来的是宿主那份 ProseMirror) | `'high'` 档不处理**必须 `return false`**;只是在光标处插一段模板、把光标放到标记处 → 先用 `ctx.app.insertMarkdownAt` |
 | `registerStatusItem` | 全局状态栏 | 返回 handle,可原位 `update({text,title})` |
 | `registerTheme` | 强调色主题 | 与磁盘主题包(`~/.forsion/themes/`)是两件事 |
 | `registerAppearance` | 设置 → 外观 → 开屏与图标 | 图像方案，由用户选择；可选链兼容旧宿主，返回 disposer；见下文 Startup appearance |
@@ -558,7 +565,7 @@ ctx.registerCommand({
 ### ⚠️「没有活动库」时的统一行为(2026-09-02 立规)
 
 上面三组里**凡走库内路径**的方法(`readFile / writeFile / readBytes / writeBytes / watchFile / openFile / loadPage /
-createPage / listPages / listFiles / searchVault / reveal / trash`)都要求一个**已打开**的笔记库。
+createPage / listPages / listFiles / searchVault / reveal / trash / createFolder / stat / renamePath / movePath`)都要求一个**已打开**的笔记库。
 没有活动库时它们**各自失败得不一样**,而且大半是静默的:
 
 | 方法 | 没有活动库时 |
@@ -569,6 +576,8 @@ createPage / listPages / listFiles / searchVault / reveal / trash`)都要求一�
 | `mutateDb(p, fn)`(2026-09-02+) | `{ ok:false, error }`,**不抛**;云端/移动端桥没有 CAS 写口时同样 `{ ok:false }`。⚠️**改活表(补列属性、加视图)一律走它**:比对交换 + 冲突重读重放,`fn` 返 `null` 不写;`readFile`+`writeFile` 整文件覆盖会盖掉读写之间自动化/用户刚写的行且零报错。旧宿主没有 → `ctx.app.mutateDb?.(…)` 再走自己的回落路 |
 | `listPages()` / `listFiles()` / `searchVault(q)` | 一律**给空数组、不 reject** |
 | `trash(p)`(2026-10-05+) | **reject**(宿主的清单里找不到这个路径)。没有回收站的端 / 旧宿主**方法整个不存在** |
+| `createFolder(p)` / `renamePath(p, name)` / `movePath(p, dest)`(2026-11-16+) | **reject**(`createFolder` 是 `'No vault is open'`)。旧宿主方法整个不存在 → `?.` |
+| `stat(p)`(2026-11-16+) | **静默返回 `null`**(与「不存在」同形,同 `readFile`)。网页宿主没有这个方法 |
 | `vaultRoot()` | `null` —— **唯一的可用性探针** |
 | `workFolder()` | **照常返值**(它只是一条设置项的值)—— ⚠️**不是可用性探针**,拿到字符串不代表写得进去 |
 
@@ -842,27 +851,7 @@ ctx.calendar?.ensureMember(`${ctx.app.workFolder()}/任务表.db`, 'c-date' /* �
 
 ### 日历 / 待办类插件的其余入口(2026-10-17 盘点)
 
-- **跳到笔记里的某个标题**:`ctx.app.openNote?.(task.path, { heading: task.heading })` —— 与 `[[笔记#标题]]`、聊天引用条同一套跳转;
-  找不到那个标题就只开笔记;跳标题会聚焦那篇笔记,所以带 `activate: false` 时只开不跳;旧宿主忽略 `heading`。**打开多维表视图**:`ctx.app.openFile(db.path)`(`.db` 路由到表格视图),不用另找方法。
-- **迷你窗**:Space 配方的 `mini`(见上「Mini Panel 适配」)或 `ctx.openMiniPanel`,宿主日历的迷你待办也是这条路。
-- **Intelligent UI**:给待办之类的列表源写 `intelligent`(见「Intelligent UI list cards」),宿主用原生列表画卡片,不画插件 DOM。
-- **用户仪表盘里的卡片**:插件视图**不能**嵌进用户的 `.dashboard.md`(嵌卡是宿主白名单,插件自声明不算数)。要在自己视图里放仪表盘用 `ctx.dashboard.mount`。
-- **提醒**:笔记里 `@remind:` 的到点通知由宿主发,和日历是哪个插件无关;宿主没有给插件排定时提醒的接口 —— 插件运行期间要提醒用 `ctx.notify`。
-- **带按钮的通知(撤销)**:`ctx.notify(msg, { action: { label, run }, key })` —— `label` 截到 40 字,有按钮时通知留 8 秒;插件停用后点按钮什么都不做;
-  `key`:同 key 的后一张顶掉前一张(宿主加 `plugin:<id>:` 前缀,和别的插件撞不上)—— 标题、文案、按钮、停留都换成新这张的,新这张没带按钮就清掉旧的;
-  宿主不替你数「第几张」(不出 ×N),要显示件数自己写进文案。旧宿主同 key 时还会在卡上叠 ×N、新这张没给标题时沿用旧标题。
-  窗口在后台时,顶上来的这张和新弹的一样跟发系统通知(用户关了系统通知 / 关了这个插件的通知就不发;旧宿主同 key 时不发)——
-  它是新的一件事。只想悄悄刷新一个进度、不想每次都响,用 `registerStatusItem`,别反复 notify 同一个 key。
-- **事件浮卡里的那排字段**:`ctx.ui?.mountRecord?.(el, { path, rowId, dateCol?, readOnly? })` 把宿主的行编辑字段(标题、时间摘要 + 展开编辑、
-  其余属性)画进你的容器,返回 `{ update(patch), dispose() }`;改动直接写那张表(同 `ctx.databases.setCell`,和打开着的表格同一份),
-  行被删 / 换库就什么都不画;`path` 不是库里的表或没有 `rowId` 当场抛 `TypeError`。外框、关闭、「打开 / 删除」按钮、定位归插件。
-  `dateCol` 那一列当时间行、不在属性里重复(必须是日期类列,别的列类型忽略、照常列在属性里);叠加源(只读表)或 `readOnly: true` 只显示值。**声明 `"databases"` 才有。**
-  2026-10-24+:`body: true` 在字段下面挂这条记录的 Markdown 正文编辑器(与表格「打开记录」同一份正文、同一条写口;只对可写经典表,笔记视图 / 叠加源 / `readOnly` 不画);
-  `hideColumns: [colId…]` 不列出这些属性列(例如你已经画了勾选框的完成列)。`ctx.databases` 快照的行多了 `hasBody?: true`(正文非空),画「有备注」标记用。旧宿主忽略这三项,照常只有字段。
-- **界面**:插件拿不到宿主的 React 实例,也拿不到宿主组件。要宿主零件就走 `ctx.ui.mount*` / `ctx.ui.mount(name, el, props)`(行编辑字段就是上面的 `mountRecord`;菜单、弹出层、对话框、下拉、分段、空态、图标见「Host parts」),只传数据;**不要把宿主的菜单 / 浮层 / 对话框 / 图标 / i18n 抄一份进包** —— 抄的是某一天的快照,宿主后来的退场动效、材质、夹边修复它都没有。自己的大块画面(日历网格这类)可以用自带的 React 画,边界是挂载点 DOM。
-
-- **事件操作**（2.13.7+）：`ctx.calendar?.events` 共用宿主的完整记录剪贴板和条件撤销历史。`copy(path,rowId,dateCol,before,cut?)`、`clone(path,rowId,dateCol,before,after?)`、`paste(path?,ISO时间?)` 保留记录正文／属性／关联，笔记视图保留完整笔记。`reschedule` / `rescheduleNote` 检查旧日期；`remove` 复用原删除语义；`undo` / `redo` 不覆盖后续编辑。`clipboard()` + `subscribe(cb)` 供界面画剪切态，`scope()` 区分智库，`clearClipboard()` 清空。只在声明 `calendar` 能力后提供；旧宿主需检测，不能手写有损复制来降级。
-- **从原生列表导航到筛选后的视图**（2.13.7+）：`ctx.openView('todo', { params: { view: 'today', db: 'Tasks.db' } })` 把参数交给这个视图的 leaf，挂载方通过 `view.getParams()` / `onParamsChanged(cb)` 读取，`view.setParams(patch)` 保存。仍只能打开本插件自己的视图。
+Jump to a heading (`ctx.app.openNote?.(path, { heading })`), open a table (`ctx.app.openFile(db.path)`), mini window, Intelligent UI, dashboards, reminders, notifications with an Undo button (`ctx.notify(msg, { action, key })`), the host record fields in your card (`ctx.ui?.mountRecord?.(el, { path, rowId, dateCol?, readOnly?, body?, hideColumns? })`, declared `"databases"` only), host parts instead of copied UI, `ctx.calendar?.events` (copy / paste / reschedule / undo) and filtered view params: read [references/calendar-todo-entries.md](references/calendar-todo-entries.md).
 
 ## Space 与 Ribbon 收纳架:ctx.spaces(2026-10-18 起)
 
@@ -966,7 +955,7 @@ const back = await ctx.app.readBytes?.(`${ctx.app.workFolder()}/models/${file.na
   用 `parse(buf, '')` + `manager.setURLModifier((u) => /^(blob:|data:|amadeus-asset:|https?:)/.test(u) ? u : ctx.app.assetUrl(join(dirOf(modelPath), decodeURI(u))))`,
   每端都对(web / unit 的资源 URL 是 `?ref=` 形,拼 base URL 那条路只在桌面成立)。
 
-CSP 是 `default-src 'self'`(没有 CDN),依赖一律 esbuild `bundle: true` 打进单文件。`main.js` **没有大小上限**。需要 disposer 时:
+**联网与第三方库(桌面)**:CSP 拦的是**外站脚本**(`script-src` 没有 CDN),所以依赖一律 esbuild `bundle: true` 打进单文件,`main.js` **没有大小上限**。**联网本身 CSP 不拦**:`connect-src` 放行 `https:` / `wss:`(和本机 localhost),对方接口回 CORS 头(`Access-Control-Allow-Origin`)就能在插件里直接 `fetch`。不回 CORS 头的接口报 `TypeError: Failed to fetch`,那是 CORS,不是 CSP:<!-- PENDING(plugin-commands-net): check against the final API --> 这类在 manifest `network` 里声明域名,用 `ctx.net?.request(url, init)` 由宿主代发(只在桌面;只放声明过的域名、只收 https、拒内网地址、不带 cookie,有大小 / 时长上限)。网页 / 手机的 CSP 另有差异,在那两端单独试。需要 disposer 时:
 
 ```js
 // build.mjs —— IIFE 的返回值会被丢掉,用 globalName + footer 把它 return 出去
@@ -981,6 +970,8 @@ Use Markdown for user-facing notes and hidden sidecars for machine data. Keep de
 
 Local hosts may expose `ctx.app.writeFileScoped?(path, text, expectedRoot, { create: true })`. Capture `expectedRoot = ctx.app.vaultRoot()` before starting an asynchronous task. The host validates it under the filesystem lock and rejects a stale-vault write; create-only writes return `false` when the destination exists, successful writes return `true`. Feature-detect: an older host's renderer-side scope checks across awaits do not provide the same main-process guarantee. Keep that weaker fallback explicit and never silently overwrite an export/log name after a create-only conflict.
 
+**Folders, file times, rename and move (2026-11-16+)**: `ctx.app.createFolder?(path)`; `stat?(path)` → `{ kind, size, mtime, ctime | null } | null` (absent on web); `renamePath?(path, newName)` / `movePath?(path, destFolder)` → the new path, done exactly like the file tree (`[[links]]` rewritten, open editors follow, `''` = vault root). No dialog for paths inside your work folder or that your plugin created this session (`writeFile` / `writeBytes` / `createFolder`); anything else asks the user, and Cancel rejects `Error('user_declined')`. Refused: `.db` moves, kind-changing renames, images / PDFs, a `*.fd` folder on its own, partial failures (the message names the new path). Read [references/vault-files-and-templates.md](references/vault-files-and-templates.md) before using them.
+
 For hosts without `workFolder`, either ask for an upgrade or preserve the plugin's established legacy path until a schema-aware recovery can run. Do not silently switch an existing installation to a hard-coded new ID path: that would hide its old data again. `workFolder()` is not a readiness probe; wait for `ctx.app.vaultRoot?.()` and catch write errors when no vault is open.
 
 ### Automatic upgrade of old data
@@ -991,10 +982,21 @@ The earlier root-level `<display name>` and `Plugins/<display name>` defaults ar
 
 Read [the migration contract and acceptance cases](references/work-folder-migration.md) before implementing or changing storage. It defines plan-relative paths, predecessor-journal recovery, interruption handling and media-link preservation. Reference consumers: Bluebird and Diting. Sessions continue using the separate vault `Sessions/` convention.
 
+## Templates and new notes: extend the host's templates (2026-11-16+)
+
+The host already has templates: the vault's `templates/` folder, `{{date}}` / `{{date:fmt}}` / `{{time}}` / `{{title}}`, `.obsidian/templates.json` and `.obsidian/daily-notes.json`, the daily note. A Templater-style or folder-template plugin plugs into them; it does not ship its own picker or fill notes after they open:
+
+- `ctx.registerTemplateProcessor?.({ id, name, folders?, process(source, { templatePath, targetPath, kind }) })` → disposer: runs on the template's raw text before the host's own variables, for the picker insert (`'insert'`) and the daily note (`'daily'`); `folders()` adds picker folders.
+- `ctx.registerNoteBirth?.({ id, initial({ path, folder, signal }) })` → disposer: a brand-new empty note gets its first content in the same write that creates it (every "New note" entry point, `[[link]]` and quick-switcher create, child notes, a daily note without a template).
+- Caret at a marker inside inserted text: `ctx.app.insertMarkdownAt` (next section).
+- ⚠️ Older hosts: do not fill new notes from `onVaultEvent` `create` + `writeFile`. Measured: the open editor never sees that write and its first save moves your template into a conflict copy.
+
+Contract, examples and limits: [references/vault-files-and-templates.md](references/vault-files-and-templates.md).
+
 ## 块表面 / 伸进编辑器 / 自绘设置面板:read references/note-editor-surfaces.md
 
-- **块表面**(当前这篇笔记的读写):`ctx.app.getPage / subscribePage / insertMarkdown / insertBlockAfter / deleteBlock / setFmExtra / undo / redo / requestFocus / mountBlocks / prompt`。⚠️ 先看 `page.model`:v4 笔记没有块 id,改内容只用 `insertMarkdown`,绝不「读全文 → 改 → 整篇写回」;改数据一律带 `page.token`。`registerFileType` 接管 `.pdf`(`override: true`)的规则也在这份里。
-- **伸进编辑器 + 自绘设置面板**:`ctx.registerEditorExtension((pm) => [...])`(运行时绝不 import prosemirror)、`ctx.registerSettingsView`、`ctx.loadData / saveData`(manifest `"syncData": true` 跟账号走)、`ctx.app.watchFile`。
+- **块表面**(当前这篇笔记的读写):`ctx.app.getPage / subscribePage / insertMarkdown / insertBlockAfter / deleteBlock / setFmExtra / undo / redo / requestFocus / mountBlocks / prompt`。⚠️ 先看 `page.model`:v4 笔记没有块 id,改内容只用 `insertMarkdown` / `insertMarkdownAt`(2026-11-16+:`where: 'caret'` 插进光标所在行、`cursorMarker` 把光标落到标记处、拒绝时回 `{ ok: false, reason }`,如 `'read-only'`),绝不「读全文 → 改 → 整篇写回」;改数据一律带 `page.token`。`registerFileType` 接管 `.pdf`(`override: true`)的规则也在这份里。
+- **伸进编辑器 + 自绘设置面板**:`ctx.registerEditorExtension((pm) => [...])`(运行时绝不 import prosemirror;能拦键、加装饰,也能改文字和选区;只是插模板、放光标先用 `insertMarkdownAt`)、`ctx.registerSettingsView`、`ctx.loadData / saveData`(manifest `"syncData": true` 跟账号走)、`ctx.app.watchFile`。
 
 ## 在 Coding Studio 里边写边看:Sandbox(2026-09-21 起)
 

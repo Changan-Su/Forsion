@@ -42,6 +42,7 @@ const dispose = ctx.app.mountBlocks(el, {
 | `getPage().model` | `'blocks'`(v3)/ `'text'`(v4)。**分叉判据**;老宿主没这字段 → 当 `'blocks'` | ✅ |
 | `subscribePage(cb)` | 正文/块/顺序/外来 frontmatter 变了才回调,返回退订函数 | ✅ |
 | `insertMarkdown(token, md, where?)` | 插一段 md,`where` = `'cursor'`(缺省)/`'start'`/`'end'` | ✅ |
+| `insertMarkdownAt?(token, md, opts?)`(2026-11-16+) | 同上一条,另能插在光标所在行内、把光标落到标记处,拒绝时说原因(见下) | ✅(v3 退成 `'end'`) |
 | `insertBlockAfter(token, afterId, content)` | 建块,返回新 id(`afterId=null` = 插到最前) | ❌ 返 `null` |
 | `deleteBlock(token, id)` | 删块(async) | ❌ |
 | `setFmExtra(token, text)` | 写**外来 frontmatter**——你的每页数据存这儿,进页面撤销栈 | ❌ 读可以,写还没开 |
@@ -52,6 +53,27 @@ const dispose = ctx.app.mountBlocks(el, {
 
 坑,按踩到的顺序:
 
+- **`insertMarkdownAt`:插在光标处、光标落到标记、说清为什么拒绝(2026-11-16+)**。`insertMarkdown` 的 `'cursor'` 是插在光标所在的**顶层块之后**(空行被替换),
+  从不插进行内,也放不了光标;拒绝时只回 `false`。新方法同一套解析、同一笔事务,老方法不变:
+
+  ```js
+  const pg = ctx.app.getPage()
+  const r = ctx.app.insertMarkdownAt?.(pg.token, `Hello {{cursor}}, see [[${name}]]`, { where: 'caret', cursorMarker: '{{cursor}}' })
+  if (r && !r.ok && r.reason === 'read-only') ctx.notify?.(t('note.readOnly'), { level: 'warning' })   // 告诉用户先切回编辑
+  if (!r) ctx.app.insertMarkdown?.(pg.token, md.replace('{{cursor}}', ''), 'cursor')   // older host
+  ```
+
+  - `where`:`'caret'`(新)= 解析出来恰好是**一段**时,行内内容就插在光标处、选区非空则像打字一样替换它(`Hello {{name}}` → `Hello Ada`);
+    多段、标题、列表,或光标处放不下(选中的是卡片、往代码块里插粗体)就和 `'cursor'` 一样。`'cursor'`(缺省)/ `'start'` / `'end'` 同 `insertMarkdown`。
+  - `cursorMarker`:你写进 `md` 里、要光标落下的那串字(Templater 的 `tp.file.cursor()`)。宿主删掉它、把光标放在那儿并聚焦笔记;后面再出现的同一串也删掉;
+    任何字都行(含 markdown 语法,如 `$…$`)。没找到、或落在光标去不了的地方(链接地址里)→ 只删掉,光标照没给标记时落。
+    ⚠️ 标记会改掉 markdown 结构时(行首的标记挡在 `#` / `-` 前面:`{{c}}# Heading` 会把标题变成段落),宿主改插**去掉标记的原文**、不放光标 —— 标记别放在行首的块语法前面。
+    `'start'` / `'end'` 里找到的标记同样移光标、聚焦。
+  - 恒为**单独一步撤销**(老方法不是);标记和占位符都不落盘。
+  - 结果 `{ ok: true }` 或 `{ ok: false, reason }`:`'stale-token'`(换了笔记,或你的插件被停用 / 重载)/ `'no-note'` / `'empty'`(只有空白或只有标记)/
+    `'read-only'`(阅读模式、锁定或只读视图;什么都没插)/ `'no-editor'`(还在加载、源码模式、刚关掉)。同一篇开在两处时先试最近用过的那个。
+  - v3 笔记(`model === 'blocks'`)没有光标:`'caret'` / `'cursor'` 退成 `'end'`(记一条日志),标记只删不放光标。
+  - 文件类型面的 `file.surface`(`PluginPageSurface`)上同样有这个方法。旧宿主没有 → 退回 `insertMarkdown`。
 - **`page.text` 只读,而且在 v4 上是「上次保存那一刻」的快照**(≤800ms 陈旧)。**绝不「读全文 → 改 → 整篇写回」**:那 800ms 里用户敲的字会被你抹掉。改内容只有 `insertMarkdown`;插进去的文本必须能原样 markdown 往返(连续空格被压 → 宿主重载整篇 → 你的插件状态全没)。
 - **不给 v4 合成块 id 是刻意的**:PM 顶层节点没有身份,按位置编号的 id 用户按一次回车就全体位移,而令牌只挡「换了一篇」挡不住「同一篇里 id 易主」。宁可空,不可假。
 - **只服务活动页**。Amadeus 是「单活页」模型(同一时刻只加载一处,笔记编辑器和文件类型视图共用),插件跟着走。令牌闸是宿主兜的底,你自己也别拿旧快照连环操作。
@@ -112,7 +134,10 @@ const off = ctx.app.watchFile?.('Snippets/latex.js', () => reload())
   DecorationSet Slice Fragment keymap InputRule inputRules`。`import type` 拿类型可以(会被擦掉),
   **运行时不许 import prosemirror** —— 打进包里就是第二份 PM,`instanceof` 与 PluginKey 全对不上。
 - **factory 每个编辑器实例调一次**:一篇 v3 笔记是很多个小编辑器,别把「每编辑器状态」挂在工厂外的共享对象上。
-- **零 schema / 零序列化**:只能产生纯文本改动 + 装饰 + 按键拦截。想改落盘格式的不走这条路。
+- **零 schema / 零序列化**:不能加节点类型、不能改落盘格式。能做的是按键拦截、装饰,以及**改文字和选区**:拿到的是宿主那份 ProseMirror,
+  在 `view.dispatch(view.state.tr…)` 里插字、删字、`TextSelection.create(…)` 移光标都行(latex-suite 就靠它在 tabstop 之间跳光标)。
+  但「把一段模板插到光标处、光标落到标记」先用 `ctx.app.insertMarkdownAt`(上一节):markdown 解析、单步撤销、只读判断宿主都管了,
+  自己拼 PM 事务这些都得重写一遍。
 - **`props.*` 宿主包了 try/catch,`state.apply` 没包** —— 后者吞异常等于放任状态损坏。状态迁移自己写稳。
 - **设置类页面先用 `ctx.ui.mountSettingsPage`**(2026-10-17 起,见 references/host-ui-mounts.md):开关、按钮、输入、额度条都有宿主零件,手机排法由宿主管;
   只有清单外的内容才自己画(放进 `custom` 块)。

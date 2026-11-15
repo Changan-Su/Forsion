@@ -127,7 +127,8 @@ export interface ThemeContribution {
 /**
  * ⚠️ 库依赖契约(2026-09-02 立规,起因:服务器总览误依赖笔记库,用户实报「太奇怪了」):
  * 下面**凡走库内路径**的方法都要求一个**已打开**的笔记库 —— `readFile / writeFile / watchFile /
- * openFile / loadPage / createPage / listPages / listFiles / searchVault / reveal / trash / workFolder(的落点)`。
+ * openFile / loadPage / createPage / listPages / listFiles / searchVault / reveal / trash / createFolder / stat / renamePath /
+ * movePath / workFolder(的落点)`。
  * 没有活动库时:写类方法 reject、只读查询给空数组、`vaultRoot()` 给 null(**用它探测**)。
  * 而且库是**惰性恢复**的:用户这一程没进过 Amadeus 之前 `vaultRoot()` 就是 null,哪怕他有库。插件视图挂载时宿主会
  * 唤醒它(2026-10-02 起),但恢复是异步的:视图刚挂上那一下仍可能是 null,读库前先等 `vaultRoot()` 有值。
@@ -2684,8 +2685,8 @@ export interface PluginContext {
       removeFolder(id: string): void
     }
   }
-  /** 必应每日壁纸(2026-10-18+):最近 8 张,`{ id, url, thumbnailUrl, title?, copyright?, startDate? }`。宿主代拉(桌面经主进程,
-   *  插件直连必应会被 CSP 拦)。拿不到 → reject;插件停用后给空数组。 */
+  /** 必应每日壁纸(2026-10-18+):最近 8 张,`{ id, url, thumbnailUrl, title?, copyright?, startDate? }`。宿主代拉(桌面经主进程;
+   *  必应接口不回 CORS 头,插件直接 fetch 会被 CORS 拦,不是 CSP)。拿不到 → reject;插件停用后给空数组。 */
   wallpaper?: {
     bing(locale?: 'zh' | 'en'): Promise<PluginBingWallpaper[]>
   }

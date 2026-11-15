@@ -52,6 +52,23 @@ describe('forsion-plugin 技能的 check-plugin.mjs', () => {
     expect(r.code).toBe(0);
   });
 
+  it('2026-11-16 起的插件接口(模板处理 / 新笔记 / 文件操作 / 光标插入 / 联网)在体检里照常加载,注册如实列出', () => {
+    const src = [VIEW,
+      "const off = ctx.registerTemplateProcessor?.({ id: 'tp', name: 'TP', folders: () => ['Templates'], process: (s) => s })",
+      "ctx.registerNoteBirth?.({ id: 'birth', initial: () => null })",
+      "if (typeof off !== 'function') throw new Error('registerTemplateProcessor must return a disposer')",
+      "const r = ctx.app.insertMarkdownAt?.('t', 'x', { where: 'caret', cursorMarker: '{{c}}' })",
+      "if (!r || r.ok !== false || typeof r.reason !== 'string') throw new Error('insertMarkdownAt must answer synchronously')",
+      "ctx.app.createFolder?.('Plugins/demo/a').then(() => ctx.app.stat?.('Plugins/demo/a')).then(() => ctx.app.movePath?.('x.md', '')).then(() => ctx.app.renamePath?.('x.md', 'y'))",
+      "Promise.resolve(ctx.net?.request?.('https://example.com/api', { method: 'GET' })).then((res) => res && res.json && res.json())",
+    ].join('\n')
+    const r = check(plugin(src))
+    expect(r.out).toContain('registerTemplateProcessor × 1: tp')
+    expect(r.out).toContain('registerNoteBirth × 1: birth')
+    expect(r.out).not.toMatch(/threw|error while loading/i)
+    expect(r.code).toBe(0)
+  });
+
   it('一个函数没收口、把注册包了进去(文件末尾补了个 } 凑平)→ 点名那个函数,并说明不是应用的问题', () => {
     const filler = Array.from({ length: 60 }, (_, i) => `  const x${i} = ${i}`).join('\n');
     const src = `const h = () => 1\nfunction render(el) {\n  el.textContent = ''\n  const draw = () => {\n    h()\n  }\n${filler}\n${VIEW}\nreturn () => {}\n}`;
