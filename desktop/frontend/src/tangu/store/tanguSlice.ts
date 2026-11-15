@@ -3876,6 +3876,8 @@ function endRun(set: (fn: (s: AppState) => Partial<AppState>) => void, get: () =
   // 排队项不看本轮怎么结束的(完成 / 出错 / 用户停止)都照跑:它们是用户显式排的、在等待区可见可删;
   // 停下当前 run 往往正是为了让排着的 /compact 早点跑。只在本次真的收了这条 run 时取:重复 / 迟到的终结
   // 不取,否则上一条排队消息的 startRun 还在途(running 未置),会再弹出一条并发起跑。
+  // 引擎说「在别处等你批准」的提示随这一轮收尾撤掉:停止 / 看门狗 / 断流这些路径不经 done / error
+  if (ended) clearEngineNotices(set, sessionId)
   if (ended) drainQueued(get, set, sessionId)
 }
 

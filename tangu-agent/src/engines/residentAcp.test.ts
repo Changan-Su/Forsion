@@ -126,15 +126,15 @@ describe('resident ACP link', () => {
 
   it('while DSH says the approval is waiting in the workbench, the idle watchdog does not cancel the turn; it runs again once cleared', async () => {
     const prev = process.env.TANGU_ENGINE_IDLE_TIMEOUT_MS;
-    process.env.TANGU_ENGINE_IDLE_TIMEOUT_MS = '80';
+    process.env.TANGU_ENGINE_IDLE_TIMEOUT_MS = '200';
     try {
       const notice = { id: 'dsh-approval-A1', text: { zh: 'DSH 在工作台里等你批准', en: 'DSH is waiting for your approval in the workbench' } };
-      // 用户在工作台里批了 250ms(远超 80ms 的空闲上限),之后提示撤掉、这一轮正常答完
+      // 用户在工作台里批了 500ms(远超 200ms 的空闲上限),撤掉提示后引擎马上答完(撤掉后看门狗重新起表,离到点还有 200ms)
       const fa = fakeAgent({
-        promptDelayMs: 300,
+        promptDelayMs: 520,
         onPrompt: (send, sessionId) => {
           send({ jsonrpc: '2.0', method: '_forsion/notice', params: { sessionId, ...notice } });
-          setTimeout(() => send({ jsonrpc: '2.0', method: '_forsion/notice', params: { sessionId, id: notice.id, clear: true } }), 250);
+          setTimeout(() => send({ jsonrpc: '2.0', method: '_forsion/notice', params: { sessionId, id: notice.id, clear: true } }), 500);
         },
       });
       const link = await mod.ResidentLink.open('e-notice-idle', fa.conn as any);
