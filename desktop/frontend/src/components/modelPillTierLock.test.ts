@@ -242,3 +242,55 @@ describe('写明最低够用的档位(公开方案的倍率上限)', () => {
     expect(window.tangu!.cloudFetch).not.toHaveBeenCalled()
   })
 })
+
+describe('限时开放(2026-11-15)', () => {
+  const trialQuota = (endsAt: number) => ({ status: 200, json: { dailyLimit: 100, weeklyLimit: 100, modelMultiplierCap: 2.5, modelTrials: [{ modelId: 'pricey', endsAt: new Date(endsAt).toISOString() }] } })
+  const TRIAL_GROUPS = [{ label: 'Forsion', source: 'forsion', options: [
+    { id: 'cheap', name: 'Cheap', source: 'forsion', multiplier: 1 },
+    { id: 'pricey', name: 'Pricey', source: 'forsion', multiplier: 5, tags: [{ text: '限时 Trial', color: 'amber', kind: 'trial' }, { text: 'new', color: 'green' }] },
+    { id: 'huge', name: 'Huge', source: 'forsion', multiplier: 8 },
+  ] }] as unknown as ModelPillGroup[]
+
+  it('开放中:不锁、能选,名字下面「限时 至 M/D」;旧版标签不显示;没开放的照锁', async () => {
+    const end = Date.now() + 10 * 86_400_000
+    ;(window.tangu as any).accountQuota = vi.fn().mockResolvedValue(trialQuota(end))
+    const onSelect = await mount({ groups: TRIAL_GROUPS })
+    await openModelPane()
+    const row = item('Pricey')
+    expect(row.classList.contains('is-locked')).toBe(false)
+    const d = new Date(end)
+    expect(row.querySelector('.model-trial-note')?.textContent).toBe(`限时至 ${d.getMonth() + 1}/${d.getDate()}`)
+    expect(row.getAttribute('title')).toMatch(/^限时体验：.+ 结束$/) // 没拿到方案上限:不说「之后 X 起可用」
+    expect([...row.querySelectorAll('.model-tags .model-tag')].map((x) => x.textContent)).toEqual(['new'])
+    expect(item('Huge').classList.contains('is-locked')).toBe(true)
+    await act(async () => { row.click() })
+    expect(onSelect).toHaveBeenCalledWith('pricey')
+  })
+
+  it('原生合并菜单:说明段打头「限时体验 · 至 …」,角标只剩倍率,选得上', async () => {
+    ;(window.tangu as any).accountQuota = vi.fn().mockResolvedValue(trialQuota(Date.now() + 10 * 86_400_000))
+    const seen: NativeSheetPayload[] = []
+    let answer: unknown = { id: 'model:0:1' }
+    const off = installNativeSheetPresenter(async (payload) => { seen.push(payload); const a = answer; answer = null; return a })
+    try {
+      const onSelect = await mount({ groups: TRIAL_GROUPS, icon: null, onThinkingChange: vi.fn(), thinkingLevel: 'medium', hub: { title: 'Hub', back: 'Back', extra: () => [] } })
+      await act(async () => { el.querySelector<HTMLButtonElement>('.model-pill-btn')!.click() })
+      await tick()
+      const models = seen[0].kind === 'menu' ? seen[0].sections[0].items[0].children!.flatMap((s) => s.items) : []
+      expect(models[1].detail).toMatch(/^限时体验 · 至 \d+月\d+日 · new · 5\.00x$/)
+      expect(models[2].detail).toContain('升级后可用')
+      expect(onSelect).toHaveBeenCalledWith('pricey')
+    } finally { off() }
+  })
+
+  it('到期那一刻翻回锁住,并重拉一次额度', async () => {
+    ;(window.tangu as any).accountQuota = vi.fn().mockResolvedValue(trialQuota(Date.now() + 300))
+    await mount({ groups: TRIAL_GROUPS })
+    await openModelPane()
+    expect(item('Pricey').classList.contains('is-locked')).toBe(false)
+    const calls = (window.tangu as any).accountQuota.mock.calls.length
+    await act(async () => { await new Promise((r) => setTimeout(r, 800)) })
+    expect(item('Pricey').classList.contains('is-locked')).toBe(true)
+    expect((window.tangu as any).accountQuota.mock.calls.length).toBeGreaterThan(calls)
+  })
+})

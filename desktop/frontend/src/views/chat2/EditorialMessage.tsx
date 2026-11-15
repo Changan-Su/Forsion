@@ -17,8 +17,8 @@ import { useStreamReveal } from './streamReveal'
 import { Copy, RotateCcw, GitBranch, MessageCircleQuestion, CornerUpLeft, Pencil, Volume2, Square, Loader2, LogIn, Zap, History as HistoryIcon, FileCode2, MessageSquare, ShieldQuestion, CircleCheck, CircleX, CircleHelp, Clock, Undo2 } from 'lucide-react'
 import { ArrowUpRight, FileInput, StepForward } from 'lucide-react'
 import { turnHasOutput } from './continueTurn'
-import { isModelTierLocked, isTierLockedError, tierLockedText } from '../../services/accountQuota'
-import { useQuotaMultiplierCap } from '../../tangu/quotaCap'
+import { isModelTierLocked, isTierLockedError, recentlyEndedTrial, tierLockedText } from '../../services/accountQuota'
+import { useQuotaTierLock } from '../../tangu/quotaCap'
 import { TURN_RESUME_OPEN } from '../../../../../tangu-agent/src/contracts/turnResume'
 import { isEngineModelNoApiKey, parseEngineModelNoApiKey } from '../../../../../tangu-agent/src/contracts/engineModelError'
 import { useNoteInsertState } from './insertToNote'
@@ -81,7 +81,7 @@ import { UI_MODE, nativeSheetPresenter, runNativeCtxMenu, runNativeSheetMenu, us
 import { splitSuggestions, type FenceKind, type SuggestState, type TaskCard } from './suggest'
 import { replyText } from './replyText'
 import { CreationCards } from './CreationCards'
-import { formatDateTime, formatMessageTime } from '../../format/time'
+import { formatDate, formatDateTime, formatMessageTime } from '../../format/time'
 
 import { TaskCards, TaskTraces, type TaskLanding } from './TaskCards'
 import { MuseApprovalLine, MuseTodoCards, MuseTodoTraces, ProactiveMark, isProactive } from './MuseDm'
@@ -219,13 +219,13 @@ const ERR_RULES: Array<[RegExp, string]> = [
   [/(^|\D)429(\D|$)|rate[ _-]?limit|per ?minute|allocated quota exceeded/i, 'chat.err.rate'],
   [/(^|\D)5\d\d(\D|$)|bad gateway|overloaded/i, 'chat.err.server'],
 ]
-export function humanizeRunError(raw: string | undefined, t: (k: string, v?: Record<string, unknown>) => string, modelName = ''): string {
+export function humanizeRunError(raw: string | undefined, t: (k: string, v?: Record<string, unknown>) => string, modelName = '', trialEndedDate = ''): string {
   if (!raw) return t('chat.error')
   raw = stripQuotaAsk(raw)
   if (isEngineModelNoApiKey(raw)) return engineModelNoApiKeyText(raw, t)
   const hit = ERR_RULES.find(([re, key]) => re.test(raw) && (key !== 'chat.err.quotaUsed' || isQuotaText(raw)))
   // 这一句自己就说清了,不再把机器码 / JSON 回包挂在括号里(「复制错误」照样拿得到原文)
-  if (hit?.[1] === 'chat.err.tierLocked') return tierLockedText(raw, t, modelName)
+  if (hit?.[1] === 'chat.err.tierLocked') return tierLockedText(raw, t, modelName, trialEndedDate)
   if (hit?.[1] === 'chat.err.quotaUsed') {
     const time = quotaResetFromError(raw)
     return `${t(time ? 'chat.err.quotaUsedAt' : 'chat.err.quotaUsed', { time })}(${raw})`
@@ -352,19 +352,23 @@ export interface MessageHandlers {
 
 /** 失败那一行 + 下面「重试 · 复制错误」(走查续六 6.3)。只在会话最后一条、且没在跑时给重试:重试后新一轮接上,按钮自然消失。 */
 function RunErrorRow({ msg, sessionId, modelId, handlers }: { msg: UiMessage; sessionId?: string; modelId?: string; handlers?: MessageHandlers }) {
-  const { t } = useI18n()
+  const { t, locale } = useI18n()
   const canRetry = useApp((s) => !!handlers?.onRetry && !!sessionId && !s.runningBySession[sessionId] && s.messagesBySession[sessionId]?.at(-1)?.id === msg.id)
   // 这一轮已有产出(正文 / 工具调用):「重试」会把它们删掉重来 —— 拆成「继续生成」(主)与「重新生成」两条路
   const canContinue = useApp((s) => canRetry && !!handlers?.onContinue && turnHasOutput(s.messagesBySession[sessionId!]))
   // 模型被会员档位拦下:modelId 是会话「现在」选着的模型,不一定是当时那个 —— 只有它确实还锁着才点名,否则说「这个模型」
   const tierLocked = isTierLockedError(msg.error)
-  const multiplierCap = useQuotaMultiplierCap(tierLocked)
+  const { cap: multiplierCap, trials } = useQuotaTierLock(tierLocked)
   const sessionModel = useApp((s) => (tierLocked && modelId ? s.modelsResp?.models.find((m) => m.id === modelId) : undefined))
-  const modelName = sessionModel && isModelTierLocked(sessionModel, multiplierCap) ? sessionModel.name : ''
+  const stillLocked = !!sessionModel && isModelTierLocked(sessionModel, multiplierCap, trials)
+  const modelName = stillLocked ? sessionModel!.name : ''
+  // 限时开放刚结束(7 天内)被拦:说「限时体验已于 {date} 结束」,不说倍率
+  const trialEnded = stillLocked ? recentlyEndedTrial(sessionModel!.id) : null
+  const trialEndedDate = trialEnded != null ? formatDate(trialEnded, { locale }) : ''
   return (
     <>
       <div className="t2-tool err">
-        <span className="t2-status-err">✕ {humanizeRunError(msg.error, t, modelName)}</span>
+        <span className="t2-status-err">✕ {humanizeRunError(msg.error, t, modelName, trialEndedDate)}</span>
         <ReloginChip error={msg.error} modelId={modelId} />
         <UpgradeChip error={msg.error} />
         <QuotaRemindChip error={msg.error} sessionId={sessionId} modelId={modelId} />

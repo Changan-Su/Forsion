@@ -15,7 +15,8 @@ import { nestedPanelPlacement, nestedPanelTop, UI_ZOOM_EVENT, zoomOf, useEdgeNud
 import { useKnobFlow } from '@lcl/engine/segFlow'
 import type { NestedPanelPlacement, SheetMenu, SheetMenuItem } from '@lcl/engine'
 import { registerMessages, useI18n } from '../i18n'
-import { isModelTierLocked, useModelMultiplierCap } from '../services/modelTierLock'
+import { isModelTierLocked, trialEndsAt, useModelTierGate, visibleModelTags } from '../services/modelTierLock'
+import { formatDate, formatDateTime, formatMonthDay, formatTime } from '../format/time'
 import { minTierForMultiplier, upgradeTierLabel, useUpgradeTiers } from '../services/upgradeTier'
 import { THINKING_LEVELS } from '../types'
 import { thinkingLabel } from './thinkingLabel'
@@ -68,6 +69,13 @@ registerMessages({
   // 算得出最低够用的档位时(services/upgradeTier,按服务端公开方案的倍率上限算)代替上面两条;算不出回落上面两条
   'pill.lockedTier': { zh: '{tier} 起可用', en: 'Available from {tier}' },
   'pill.lockTipTier': { zh: '当前会员档位不能使用 {name}。升级到 {tier} 或以上即可，也可以换一个模型。', en: "Your current plan can't use {name}. Upgrade to {tier} or higher, or pick another model." },
+  // 限时开放(2026-11-15):后台临时开给这一档的高倍率模型,名字下面一行「[限时] 至 11/30」,最后 24 小时「[限时] 今天 23:59」
+  'pill.trialChip': { zh: '限时', en: 'Trial' },
+  'pill.trialUntil': { zh: '至 {date}', en: 'to {date}' },
+  'pill.trialToday': { zh: '今天 {time}', en: 'today {time}' },
+  'pill.trialTip': { zh: '限时体验：{datetime} 结束，之后 {tier} 起可用', en: 'Free trial ends {datetime}. After that it needs {tier} or higher.' },
+  'pill.trialTipBare': { zh: '限时体验：{datetime} 结束', en: 'Free trial ends {datetime}.' },
+  'pill.trialDetail': { zh: '限时体验 · 至 {date}', en: 'Trial · until {date}' },
 })
 
 /** Fast 说明原文 → 当前语言:Codex 目录给速度(「2x speed, increased usage」),官方 API 给单价倍数(「2x price」);认不出的格式原样显示。 */
@@ -405,16 +413,23 @@ export const ModelPill: React.FC<{
   const hasModels = all.length > 0
   const current = all.find((m) => m.id === modelId) || modelsResponse?.models.find((m) => m.id === modelId)
   const readonly = !onThinkingChange && !hasModels && !!emptyLabel
-  // 倍率门槛:cap 读不到(没登录 / 老扩展 / 读失败)= null,一个都不锁
-  const multiplierCap = useModelMultiplierCap()
+  // 倍率门槛:cap 读不到(没登录 / 老扩展 / 读失败)= null,一个都不锁。限时开放中的(trials)不锁,到点 trialNow 往后跳、锁翻回来
+  const { cap: multiplierCap, trials, now: trialNow } = useModelTierGate()
   // 原生选择器 / 合并菜单答回时用的是打开那一刻的闭包:上限可能在那之后才读到,判定读 ref 里最新的值
   const multiplierCapRef = useRef(multiplierCap)
   multiplierCapRef.current = multiplierCap
+  const trialsRef = useRef(trials)
+  trialsRef.current = trials
   const lockedModel = (id?: string | null): boolean => {
     if (!id) return false
-    return isModelTierLocked(all.find((m) => m.id === id) || modelsResponse?.models.find((m) => m.id === id), multiplierCapRef.current)
+    return isModelTierLocked(all.find((m) => m.id === id) || modelsResponse?.models.find((m) => m.id === id), multiplierCapRef.current, trialsRef.current)
   }
-  const currentLocked = isModelTierLocked(current, multiplierCap)
+  const currentLocked = isModelTierLocked(current, multiplierCap, trials, trialNow)
+  /** 限时开放真解锁了这个模型 → 到期毫秒(选择器第二行、原生菜单说明段、悬停提示用) */
+  const trialOf = (m: { id?: string; multiplier?: number | null; source?: string } | null | undefined): number | null => trialEndsAt(m, multiplierCap, trials, trialNow)
+  const trialLine = (at: number): string => (at - trialNow < 86_400_000 && new Date(at).toDateString() === new Date(trialNow).toDateString()
+    ? t('pill.trialToday', { time: formatTime(at) })
+    : t('pill.trialUntil', { date: formatMonthDay(at) })) // 那一列只有 ~88px:数字短日期,中英同形
   // 锁住的模型要升到哪一档:有上限(可能有锁)才去拉方案;算不出回落「升级后可用」
   const upgradeTiers = useUpgradeTiers(multiplierCap != null)
   const minTier = (m: { multiplier?: number | null } | null | undefined) => {
@@ -428,6 +443,10 @@ export const ModelPill: React.FC<{
   const lockTipText = (m: { name: string; multiplier?: number | null }): string => {
     const tier = minTier(m)
     return tier ? t('pill.lockTipTier', { name: m.name, tier }) : t('pill.lockTip', { name: m.name })
+  }
+  const trialTipText = (m: { multiplier?: number | null }, at: number): string => {
+    const tier = minTier(m), datetime = formatDateTime(at, { locale })
+    return tier ? t('pill.trialTip', { datetime, tier }) : t('pill.trialTipBare', { datetime })
   }
   const label = current?.name || emptyLabel || t('input.selectModel')
   const [lockTip, setLockTip] = useState<string | null>(null)
@@ -542,8 +561,9 @@ export const ModelPill: React.FC<{
   /** 原生呈现的两种形态(模型选择器 / 合并菜单)共用的一份字段:目录、当前值、可选项。 */
   const pickerFields = (): PickerField[] => {
     const toGroups = (input: ModelPillGroup[]): PickerGroup[] => input.map(g => ({ label: g.label, options: g.options.map(m => ({
-      value: m.id, label: m.name, detail: m.tags?.map(tag => tag.text).join(' · ') || m.description,
-      ...(m.source === 'forsion' && m.multiplier != null ? { badge: `${m.multiplier.toFixed(2)}x${isModelTierLocked(m, multiplierCap) ? ` · ${lockedNote(m)}` : ''}` } : {}),
+      // 说明段:限时开放中的打头写「限时体验 · 至 11月30日」(原生菜单只有名字 / 说明 / 角标三段字,没地方画标签);旧版标签不显示
+      value: m.id, label: m.name, detail: [trialOf(m) != null ? t('pill.trialDetail', { date: formatDate(trialOf(m)!, { locale }) }) : '', visibleModelTags(m.tags).map(tag => tag.text).join(' · ')].filter(Boolean).join(' · ') || m.description,
+      ...(m.source === 'forsion' && m.multiplier != null ? { badge: `${m.multiplier.toFixed(2)}x${isModelTierLocked(m, multiplierCap, trials, trialNow) ? ` · ${lockedNote(m)}` : ''}` } : {}),
     })) }))
     const fields: PickerField[] = [{ id: 'model', label: t('pill.rowModel'), value: modelId || '', groups: toGroups(groups) }]
     if (onThinkingChange) fields.push({ id: 'thinking', label: t('pill.rowEffort'), value: isUltra ? 'ultra' : effLevel, groups: [{ label: '', options: [
@@ -901,12 +921,13 @@ export const ModelPill: React.FC<{
                       {g.source && paneGroups[index - 1]?.source !== g.source && <div className="menu-source">{t(g.source === 'forsion' ? 'model.group.forsion' : 'model.group.direct')}</div>}
                       {g.label && <div className="menu-section">{g.label}</div>}
                       {g.options.map((m) => {
-                        const locked = isModelTierLocked(m, multiplierCap)
+                        const locked = isModelTierLocked(m, multiplierCap, trials, trialNow)
+                        const trialAt = locked ? null : trialOf(m)
                         return (
                           <React.Fragment key={m.id}>
                             <button type="button"
                               className={`menu-item${m.id === paneValue ? ' active' : ''}${locked ? ' is-locked' : ''}`}
-                              title={m.description}
+                              title={trialAt != null ? trialTipText(m, trialAt) : m.description}
                               aria-disabled={locked || undefined}
                               aria-expanded={locked ? lockTip === m.id : undefined}
                               onClick={() => {
@@ -919,7 +940,9 @@ export const ModelPill: React.FC<{
                               {/* 名字是这一行的主信息:锁住的行把「升级后可用」放到名字下面,别把名字挤成「Claude…」 */}
                               {locked
                                 ? <span className="grow model-lock-name"><span>{m.name}</span><span className="model-lock-note"><Lock size={11} aria-hidden="true" />{lockedNote(m)}</span></span>
-                                : <span className="grow">{m.name}</span>}
+                                : trialAt != null
+                                  ? <span className="grow model-lock-name"><span>{m.name}</span><span className="model-lock-note model-trial-note"><span className="model-tag" data-color="amber">{t('pill.trialChip')}</span>{trialLine(trialAt)}</span></span>
+                                  : <span className="grow">{m.name}</span>}
                               {m.source && <ModelMetadata model={{ source: m.source, tags: m.tags, multiplier: m.multiplier }} />}
                               <span className="mi-check">{m.id === paneValue ? '✓' : ''}</span>
                             </button>

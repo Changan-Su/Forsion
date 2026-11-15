@@ -130,4 +130,12 @@ describe('会员档位用不了这个模型(model_tier_locked)', () => {
     expect(humanizeRunError('model_tier_locked', (k, v) => translateFor('zh', k, v), 'GPT-6 Sol')).toBe('当前会员档位不能使用 GPT-6 Sol。升级会员或换一个模型。')
     expect(humanizeRunError('model_tier_locked', (k, v) => translateFor('en', k, v), 'GPT-6 Sol')).toBe("Your current plan can't use GPT-6 Sol. Upgrade your membership or pick another model.")
   })
+  it('限时开放刚结束:有模型名时说「限时体验已于 {date} 结束」;没名字回到普通的那句', async () => {
+    const { translateFor } = await import('../../i18n')
+    // 服务端 SSE 那句人话(旧版看的)原样进来,也按码认、换成自己的文案
+    const raw = 'Claude Fable 5.2 的限时体验已结束，当前会员档位不能再用它。 / The free trial of Claude Fable 5.2 has ended. (model_tier_locked)'
+    expect(humanizeRunError(raw, (k, v) => translateFor('zh', k, v), 'Claude Fable 5.2', '11月30日')).toBe('Claude Fable 5.2 的限时体验已于 11月30日 结束。升级会员或换一个模型。')
+    expect(humanizeRunError(raw, (k, v) => translateFor('en', k, v), 'Claude Fable 5.2', 'Nov 30')).toBe('The free trial of Claude Fable 5.2 ended on Nov 30. Upgrade your membership or pick another model.')
+    expect(humanizeRunError(raw, tv, '', 'Nov 30')).toBe('chat.err.tierLockedBare')
+  })
 })
