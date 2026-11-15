@@ -4,7 +4,7 @@ import { query } from '../core/db.js';
 import { deps } from '../seams/runtime.js';
 import type { ChatMessage, ThinkingLevel } from '../core/types.js';
 import { compactSession, getLatestSummary } from './compaction.js';
-import { thinkingHeadroom } from '../llm/openaiCompat.js';
+import { claudeThinkingHeadroom, thinkingHeadroom } from '../llm/openaiCompat.js';
 
 export const HISTORIAN_CONTEXT_CHARS = 24_000;
 const queues = new Map<string, Promise<unknown>>();
@@ -80,8 +80,8 @@ async function completeTask(p: HistorianTask) {
       ...history, { role: 'user', content: input },
     ] as ChatMessage[],
     projectSource: '', usageSource: 'tangu', temperature: 0.3,
-    // 不给档位(团队摘要等)也要算:关不掉思考的端点和 Claude 自适应族照样会想(thinkingHeadroom 按 off 判)
-    maxTokens: p.maxTokens + thinkingHeadroom({ model, baseUrl, apiModelId }, p.thinkingLevel ?? 'off'),
+    // 不给档位(团队摘要等)时只给 Claude 自适应族留:托管 prefix 档下它关着也会想;别的模型照旧
+    maxTokens: p.maxTokens + (p.thinkingLevel ? thinkingHeadroom({ model, baseUrl, apiModelId }, p.thinkingLevel) : claudeThinkingHeadroom({ model, apiModelId })),
     stream: true, cacheKey: `${id}:historian`, signal,
     ...(p.thinkingLevel ? { thinkingLevel: p.thinkingLevel } : {}),
   });

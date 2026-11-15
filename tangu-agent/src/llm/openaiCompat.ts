@@ -238,11 +238,12 @@ export const CLAUDE_THINKING_HEADROOM = 16_384;
  * 其中的老模型输出上限往往只有 4096,多给会被直接拒(原来能跑的调用变成 400)。
  * 查询口径同 agentLoop 的 thinkingEffective:托管模型的 baseUrl 是网关占位,真实端点在 model.defaultBaseUrl。
  * Claude 自适应族(Claude 5 / Opus 4.7+)另算,见 CLAUDE_THINKING_HEADROOM。
- * 没给档位的调用(不传 = 关思考)传 'off':关得掉的端点照旧 0,关不掉的(夹到最弱档)和 Claude 自适应族照样留。
+ * 没给档位、或原来只按正文给上限的小调用用 claudeThinkingHeadroom:只给 Claude 自适应族留,别的模型一字不变
+ * (OpenRouter 上的老款输出上限只有 4096,600 → 4696 就会被拒;Codex 评审 11-15)。
  * ponytail: 不认各模型的输出上限(能力表里没有);哪个原生思考的模型拒了这个上限,再按窗口 / 4 封顶(compaction 的做法)。
  */
 export function thinkingHeadroom(target: { model?: any; baseUrl?: string; apiModelId?: string }, level: ThinkingLevel): number {
-  if (isClaudeAdaptiveModel(target.apiModelId || target.model?.id)) return CLAUDE_THINKING_HEADROOM;
+  if (claudeThinkingHeadroom(target)) return CLAUDE_THINKING_HEADROOM;
   const cap = resolveModelCapability({
     baseUrl: target.model?.defaultBaseUrl || target.baseUrl,
     provider: target.model?.provider,
@@ -250,6 +251,14 @@ export function thinkingHeadroom(target: { model?: any; baseUrl?: string; apiMod
     protocol: typeof target.model?.[PROTOCOL_MARK] === 'string' ? target.model[PROTOCOL_MARK] : undefined,
   });
   return cap.format === 'prefix' || cap.format === 'none' || clampThinkingLevel(cap, level) === 'off' ? 0 : 4096;
+}
+
+/**
+ * 只给 Claude 自适应族的那份思考余量,其余模型 0。给原来没留余量的小调用(标题、改写、判官、团队摘要、关着思考的旁问)用:
+ * 它们不发档位或只发 low,别的模型上本来就不怎么想,而 Claude 5 在托管 prefix 档下照样想,几百 token 的上限会被吃光。
+ */
+export function claudeThinkingHeadroom(target: { model?: any; apiModelId?: string }): number {
+  return isClaudeAdaptiveModel(target.apiModelId || target.model?.id) ? CLAUDE_THINKING_HEADROOM : 0;
 }
 
 /** 从 providerRegistry 命中结果构造的 AgentModel 带此标记,buildProviderPayload 据此走直连。 */

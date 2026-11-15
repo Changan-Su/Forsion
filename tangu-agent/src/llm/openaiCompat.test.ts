@@ -7,6 +7,7 @@ import {
   streamOpenAiCompat,
   thinkingHeadroom,
   CLAUDE_THINKING_HEADROOM,
+  claudeThinkingHeadroom,
   PROTOCOL_MARK,
   ACCOUNT_MARK,
   RUN_MARK,
@@ -174,6 +175,14 @@ describe('thinkingHeadroom(后台调用给推理另留的输出余量)', () => {
     expect(thinkingHeadroom({ model: { provider: 'anthropic' }, baseUrl: 'https://api.example.test', apiModelId: 'claude-sonnet-5' }, 'off')).toBe(CLAUDE_THINKING_HEADROOM);
     // 带日期的老款不算(族名后直接跟八位日期)
     expect(thinkingHeadroom({ model: { provider: 'external' }, baseUrl: 'https://relay.example.test/v1', apiModelId: 'claude-3-5-haiku-20241022' }, 'medium')).toBe(0);
+  });
+  it('claudeThinkingHeadroom 只给 Claude 自适应族:原来不留余量的小调用对别的模型一字不变', () => {
+    expect(claudeThinkingHeadroom({ model: { provider: 'anthropic' }, apiModelId: 'claude-opus-5-5' })).toBe(CLAUDE_THINKING_HEADROOM);
+    expect(claudeThinkingHeadroom({ model: { id: 'claude-sonnet-5-5', provider: 'external' } })).toBe(CLAUDE_THINKING_HEADROOM);
+    // 原生思考的非 Claude(thinkingHeadroom 会给 4096)在这里是 0:OpenRouter 上的老款输出上限只有 4096
+    expect(claudeThinkingHeadroom(codex)).toBe(0);
+    expect(claudeThinkingHeadroom({ model: { provider: 'openrouter' }, apiModelId: 'openai/gpt-4o-2024-05-13' })).toBe(0);
+    expect(claudeThinkingHeadroom({ model: { provider: 'anthropic' }, apiModelId: 'claude-sonnet-4-6' })).toBe(0);
   });
 });
 

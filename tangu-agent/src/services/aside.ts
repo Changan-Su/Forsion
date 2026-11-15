@@ -27,7 +27,7 @@ import { hydrateHistory } from './agentLoop.js';
 import { buildTranscript } from './compaction.js';
 import { estimateMessagesTokens, estimateTokensRough, modelContextWindow } from './contextBudget.js';
 import { looksLikeToolCallText } from '../llm/textToolCalls.js';
-import { thinkingHeadroom } from '../llm/openaiCompat.js';
+import { claudeThinkingHeadroom, thinkingHeadroom } from '../llm/openaiCompat.js';
 import { fitUserImages, normalizeImageAttachments, toImageParts, type NormalizedImage } from './imageAttachments.js';
 import { describeImages, resolveVisionModelId, shouldDescribeImages } from './visionService.js';
 import { docxText, pagesOf, renderPages } from '../tools/documentPages.js';
@@ -342,8 +342,12 @@ export async function answerAside(opts: {
   // 超了由 buildTranscript 从最旧处丢(摘要块永不截)。别拿 JSON.stringify(input) 估:附件的 base64 会把预算估成负数,主会话被整段丢掉。
   const windowTokens = modelContextWindow(opts.modelId, model);
   const thinkingLevel = opts.thinkingLevel && opts.thinkingLevel !== 'off' ? opts.thinkingLevel : undefined;
-  const maxTokens = Math.max(512, Math.min(ANSWER_MAX_TOKENS, Math.floor(windowTokens / 4)))
-    + thinkingHeadroom({ model, baseUrl, apiModelId }, thinkingLevel ?? 'off'); // 关着也算:Claude 自适应族照样会想
+  const answerTokens = Math.max(512, Math.min(ANSWER_MAX_TOKENS, Math.floor(windowTokens / 4)));
+  // 思考余量:开了档按端点算;关着只给 Claude 自适应族(托管 prefix 档下关着它也会想)。连回答一起不超过窗口一半,
+  // 小窗口时别把下面附件 / 转写的预算挤成负数(Codex 评审 11-15)。
+  const target = { model, baseUrl, apiModelId };
+  const headroom = thinkingLevel ? thinkingHeadroom(target, thinkingLevel) : claudeThinkingHeadroom(target);
+  const maxTokens = answerTokens + Math.min(headroom, Math.max(0, Math.floor(windowTokens / 2) - answerTokens));
   // 附件抽出的文字也得放得进窗口(小窗口模型 + 长文件):转写以外那几条最多占剩余窗口的一半,超了按比例截短每个文件并注明
   const fitted = fitFilesToWindow(opts.input, prepared, Math.floor((windowTokens - maxTokens - PROMPT_OVERHEAD_TOKENS) / 2));
   const budget = windowTokens - maxTokens - PROMPT_OVERHEAD_TOKENS - estimateMessagesTokens(buildAsideMessages('', opts.input, fitted));

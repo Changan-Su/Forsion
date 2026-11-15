@@ -11,7 +11,7 @@
  */
 import { query, getOlderThanSql } from '../core/db.js';
 import { deps } from '../seams/runtime.js';
-import { thinkingHeadroom } from '../llm/openaiCompat.js';
+import { claudeThinkingHeadroom } from '../llm/openaiCompat.js';
 import type { ChatMessage } from '../core/types.js';
 import { historianConfig } from './historianConfig.js';
 import { runWithUserAgentScope } from '../seams/runContext.js';
@@ -157,8 +157,8 @@ async function summarizeSession(sessionId: string, userId: string, modelId: stri
     model, apiModelId, messages,
     projectSource: '', // 不叠 ai-studio 项目层，保持 historian 指令干净
     temperature: 0.3,
-    // 不给档位 = 关思考;关不掉的端点和 Claude 自适应族照样会想,300 会被吃光
-    maxTokens: 300 + thinkingHeadroom({ model, baseUrl, apiModelId }, 'off'),
+    // 不给档位 = 关思考;Claude 自适应族在托管 prefix 档下照样会想,300 会被吃光(别的模型照旧)
+    maxTokens: 300 + claudeThinkingHeadroom({ model, apiModelId }),
     stream: true,
   });
   const res = await streamProviderCompletion({ apiKey, baseUrl, payload });
@@ -329,7 +329,7 @@ async function judgeAndWrite(
     model, apiModelId, messages,
     projectSource: '',
     temperature: 0.3,
-    maxTokens: 800 + thinkingHeadroom({ model, baseUrl, apiModelId }, 'low'),
+    maxTokens: 800 + claudeThinkingHeadroom({ model, apiModelId }), // Claude 自适应族另留思考余量,别的模型照旧
     stream: true,
     signal,
     thinkingLevel: 'low', // 不给 = 关思考。只给到 low:DeepSeek 类端点按 high 思考时,推理吃光过这 800 的上限、只剩空正文
