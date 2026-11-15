@@ -56,6 +56,7 @@
 //   T8a 组字中途窗口失焦:当场存本机草稿(含组字前的字),盘上不写拼音;提交后照常落盘、草稿删掉
 //   T8b 组字中途页面隐藏:照旧马上写(之后进程随时可能没了,计时器未必再跑),组字前的字当场落盘;提交后改回提交的字
 //   T10 源码模式(textarea)组字中途停顿:盘上不写拼音,提交后落盘
+//   T11 组字刚好在防抖写到点前结束(提交后的正文还没报上来):到点不写拼音
 //   T9 组字结束而文档没变(提交的就是组字串):监听器不再报,推后的那发写自己补上
 //   T6 两个窗口(同源共享 localStorage,槽位号相同):B 失焦存下的更新的字在格子里时,A 的连打节拍不许盖掉它
 //  CPU_THROTTLE=4 跑:CDP 把页面 CPU 放慢 4 倍(负载下的稳定性自查)
@@ -1151,6 +1152,23 @@ async function groupT(browser) {
     record('T10 源码模式组字中停顿:盘上不写拼音,提交后落盘(组字前的字也在)',
       ta.includes('qzhongwen') && seen.every((d) => !/zhong/.test(d ?? '')) && end.includes('第一段。q中文'),
       JSON.stringify({ ta: ta.includes('qzhongwen'), pinyinOnDisk: seen.filter((d) => /zhong/.test(d ?? '')).length, end }))
+    await s.close()
+  }
+
+  // T11:组字在防抖写到点前一点结束(提交事务的监听器还没把正文报上来,pipe 里仍是拼音):到点不许照写那份拼音
+  {
+    const s = await open(browser, seed)
+    await caretAfter(s, 0, '第一段。')
+    const ime = await s.context().newCDPSession(s)
+    await ime.send('Input.imeSetComposition', { text: 'zhongwen', selectionStart: 8, selectionEnd: 8 }) // 监听器 +200ms 报拼音 → 计时 +1000ms
+    await wait(880) // 在 +800 ~ +1000 之间提交:提交后的监听器(+200ms)晚于计时到点
+    await ime.send('Input.insertText', { text: '中文' })
+    await s.waitForFunction(() => (window.__upage.vault.get('Unified.md') ?? '').includes('第一段。中文'), null, { timeout: 4000 }).catch(() => {})
+    await wait(300)
+    const writes = await s.evaluate(() => window.__upage.writes.filter((w) => w.path === 'Unified.md').map((w) => w.text))
+    const end = await disk(s)
+    record('T11 组字刚好在防抖到点前结束:到点不写组字中报上来的拼音,提交后的字照常落盘',
+      writes.every((w) => !/zhong/.test(w)) && end.includes('第一段。中文'), JSON.stringify({ writes, end }))
     await s.close()
   }
 

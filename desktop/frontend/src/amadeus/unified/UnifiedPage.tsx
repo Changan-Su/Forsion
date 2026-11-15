@@ -2731,21 +2731,29 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
 
   /** 此刻在输入法组字中(正文编辑器或源码 textarea;后者靠 document 上的组字闸)。 */
   const composingNow = (): boolean => isComposing() || !!layer.getView()?.composing
-  /** (重新)起防抖写的计时。 */
+  /** 防抖写因组字被推后的起点(null = 没在推后)。跨 schedule 保留:组字中每报一次正文都会重起计时,
+   *  起点不能跟着重置 —— 否则组字状态卡住时 30 秒上限永远到不了。 */
+  const composeHold = useRef<number | null>(null)
+  /** (重新)起防抖写的计时。组字中起的计时算「已推后」:组字若在到点前结束,编辑器监听器可能还没把提交后的正文
+   *  报上来(pipe.body 仍是拼音),到点时要再等一整个防抖窗,不能照写。组字结束后再起的计时(提交后的正文已报上来)
+   *  就不再推后 —— 写的正是提交后的内容,照原来的防抖节奏。 */
   const armSave = (): void => {
     if (pipe.timer) clearTimeout(pipe.timer)
-    pipe.timer = setTimeout(() => saveTick(null), SAVE_DEBOUNCE_MS)
+    composeHold.current = composingNow() ? (composeHold.current ?? Date.now()) : null
+    pipe.timer = setTimeout(saveTick, SAVE_DEBOUNCE_MS)
   }
   /** 防抖写到点。组字中不写(否则盘上 / 云同步 / 历史快照拿到半截拼音),推后到组字结束再等一整个防抖窗
    *  (见 saveTickAction);计时器始终挂在 pipe.timer 上,卸载 / 立即冲洗照旧能清掉它。 */
-  const saveTick = (deferredSince: number | null): void => {
+  const saveTick = (): void => {
     pipe.timer = null
     const now = Date.now()
-    const step = saveTickAction(composingNow(), deferredSince, now)
+    const step = saveTickAction(composingNow(), composeHold.current, now)
     if (step === 'poll') {
-      pipe.timer = setTimeout(() => saveTick(deferredSince ?? now), COMPOSE_SAVE_POLL_MS)
+      composeHold.current ??= now
+      pipe.timer = setTimeout(saveTick, COMPOSE_SAVE_POLL_MS)
       return
     }
+    composeHold.current = null
     if (step === 'rearm') { armSave(); return }
     // 回灌进行中冻结保存(押后回灌×冻结 save 的互斥契约):回灌完成后统一补一发。
     if (pipe.reconcileBusy) return
