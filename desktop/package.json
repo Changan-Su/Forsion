@@ -219,6 +219,7 @@
     "check:editorperf": "node scripts/e2e-editor.cjs --check=editor-perf",
     "check:codelanguage": "node scripts/e2e-editor.cjs --check=code-language",
     "check:dbinteractions": "node scripts/e2e-editor.cjs --check=db-interactions",
+    "check:dbrecordime": "node scripts/e2e-editor.cjs --check=db-record-ime",
     "e2e:dbrecords": "node scripts/db-records.e2e.cjs",
     "e2e:dbvisual": "node scripts/db-records.e2e.cjs --visual",
     "check:colorder": "node scripts/e2e-editor.cjs --check=db-colorder",

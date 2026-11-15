@@ -141,6 +141,106 @@ describe('记录正文即时保存', () => {
   })
 })
 
+// 输入法组字中途停顿:组字期间文档里是还没上屏的拼音,不能交给 onChange(进存储 → 500ms 后落盘)。
+// 台架:scripts/db-record-ime.check.cjs(check:dbrecordime)。
+describe('记录正文 × 输入法组字', () => {
+  const compose = (editor: EditorView, type: 'compositionstart' | 'compositionend'): void => {
+    editor.dom.dispatchEvent(new CompositionEvent(type, { bubbles: true, data: '' }))
+  }
+  const end = (ms = 120): Promise<void> => act(async () => { await new Promise((resolve) => setTimeout(resolve, ms)) })
+  const bodies = (fn: ReturnType<typeof vi.fn>): string[] => fn.mock.calls.map((c) => c[0] as string)
+
+  it('组字中不发,结束后补发提交后的内容,组字前的字已经发出', async () => {
+    const changed = vi.fn()
+    const editor = await mount(changed)
+    changed.mockClear()
+    act(() => { editor.dispatch(editor.state.tr.insertText('前', editor.state.doc.content.size - 1)) })
+    expect(changed).toHaveBeenLastCalledWith('Start前\n')
+    act(() => {
+      compose(editor, 'compositionstart')
+      editor.dispatch(editor.state.tr.insertText('zhongwen', editor.state.doc.content.size - 1))
+    })
+    expect(editor.composing).toBe(true)
+    await end(300)
+    act(() => {
+      const at = editor.state.doc.content.size - 1
+      editor.dispatch(editor.state.tr.insertText('中文', at - 'zhongwen'.length, at))
+      compose(editor, 'compositionend')
+    })
+    await end()
+    expect(bodies(changed).some((b) => b.includes('zhong'))).toBe(false)
+    expect(changed).toHaveBeenLastCalledWith('Start前中文\n')
+  })
+
+  it('提交的字和组字串相同、结束时文档没变,也补发', async () => {
+    const changed = vi.fn()
+    const editor = await mount(changed)
+    changed.mockClear()
+    act(() => {
+      compose(editor, 'compositionstart')
+      editor.dispatch(editor.state.tr.insertText('ok', editor.state.doc.content.size - 1))
+    })
+    await end()
+    expect(changed).not.toHaveBeenCalled()
+    act(() => { compose(editor, 'compositionend') })
+    expect(changed).not.toHaveBeenCalled() // 不在 compositionend 里同步发:ProseMirror 之后才读提交的字
+    await end()
+    expect(changed).toHaveBeenCalledExactlyOnceWith('Startok\n')
+  })
+
+  it('组字中途卸载(关掉记录):照发当时的内容,不丢字', async () => {
+    const changed = vi.fn()
+    const editor = await mount(changed)
+    changed.mockClear()
+    act(() => {
+      editor.dispatch(editor.state.tr.insertText('后', editor.state.doc.content.size - 1))
+      compose(editor, 'compositionstart')
+      editor.dispatch(editor.state.tr.insertText('pin', editor.state.doc.content.size - 1))
+    })
+    expect(bodies(changed)).toEqual(['Start后\n'])
+    act(() => { root!.unmount(); root = null })
+    expect(changed).toHaveBeenLastCalledWith('Start后pin\n')
+  })
+
+  it('结束事件丢了:到上限照发,之后的组字事务也照发', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    try {
+      const changed = vi.fn()
+      const editor = await mount(changed)
+      changed.mockClear()
+      act(() => {
+        compose(editor, 'compositionstart')
+        editor.dispatch(editor.state.tr.insertText('stuck', editor.state.doc.content.size - 1))
+      })
+      act(() => { vi.advanceTimersByTime(29_000) })
+      expect(changed).not.toHaveBeenCalled()
+      act(() => { vi.advanceTimersByTime(1_500) })
+      expect(changed).toHaveBeenCalledExactlyOnceWith('Startstuck\n')
+      act(() => { editor.dispatch(editor.state.tr.insertText('!', editor.state.doc.content.size - 1)) })
+      expect(changed).toHaveBeenLastCalledWith('Startstuck!\n')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('组字中外部正文回灌:照旧替换,且不被当成本地改动回写', async () => {
+    const changed = vi.fn()
+    const editor = await mount(changed)
+    changed.mockClear()
+    act(() => {
+      compose(editor, 'compositionstart')
+      editor.dispatch(editor.state.tr.insertText('pin', editor.state.doc.content.size - 1))
+    })
+    await act(async () => {
+      root!.render(React.createElement(PlainMarkdownEditor, { initial: 'External', immediate: true, onChange: changed }))
+    })
+    expect(editor.state.doc.textContent).toBe('External')
+    act(() => { compose(editor, 'compositionend') })
+    await end()
+    expect(changed).not.toHaveBeenCalled()
+  })
+})
+
 // 独立编辑器没有邻块可切(2026-11-04 评审):Shift+Enter 曾把光标后的内容 splitTail 切走、交给 no-op 的 insertAfter —— 丢字还立刻存盘。
 // 负对照:去掉 MarkdownBlock 里 `if (standalone) return splitBlock(...)` 那行 → 本条红(剩 'Sta\n')。
 describe('独立编辑器的 Shift+Enter', () => {
