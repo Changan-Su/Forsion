@@ -241,6 +241,7 @@ describe('ctx.app.renamePath / movePath 的结果与拒绝', () => {
       await new Promise<void>((r) => { release = r })
       const s = usePageStore.getState()
       usePageStore.setState({ pages: s.pages.map((x) => (x === p ? `${dest}/slow.md` : x)) })
+      remapScopePaths(p, `${dest}/slow.md`, 'file') // 真链挪完都发路径广播
     })
     const first = ctx.app.movePath!('Plugins/r-swap/slow.md', 'D')
     const second = ctx.app.movePath!('mine.md', 'D')
@@ -257,6 +258,59 @@ describe('ctx.app.renamePath / movePath 的结果与拒绝', () => {
     vault({ folders: ['Plugins', 'Plugins/r-dbdir', 'Plugins/r-dbdir/P', 'D'], files: ['Plugins/r-dbdir/P/t.db'] })
     await expect(ctx.app.movePath!('Plugins/r-dbdir/P', 'D')).rejects.toThrow(/contain databases/)
     await expect(ctx.app.renamePath!('Plugins/r-dbdir/P', 'Q')).rejects.toThrow(/contain databases/)
+  })
+
+  it('评审 P1:账本里的文件夹 / 笔记,里面有用户放进去的东西 → 要问;全是自己的 → 不问', async () => {
+    const ctx = ctxOf('r-subtree')
+    vault({ folders: ['Box', 'Box/sub', 'D'], pages: ['Box/mine.md', 'Box/sub/user.md', 'N.md', 'N.fd/child.md'], files: [] })
+    for (const p of ['Box', 'Box/mine.md', 'N.md']) markPluginCreated('r-subtree', p)
+    confirm.answer = false
+    await expect(ctx.app.movePath!('Box', 'D')).rejects.toThrow('user_declined')
+    await expect(ctx.app.movePath!('N.md', 'D')).rejects.toThrow('user_declined') // .fd 里的子页是用户的
+    expect(confirm.calls.length).toBe(2)
+    markPluginCreated('r-subtree', 'Box/sub/user.md')
+    confirm.answer = true
+    await expect(ctx.app.movePath!('Box', 'D')).resolves.toBe('D/Box')
+    expect(confirm.calls.length).toBe(2)
+  })
+
+  it('评审 P1:建工作文件夹时顺带建出的上层(Plugins)与工作文件夹本身不记账', async () => {
+    const createFolder = vi.fn(async (parent: string, name: string) => {
+      const p = parent ? `${parent}/${name}` : name
+      usePageStore.setState({ folders: [...usePageStore.getState().folders, p] })
+      return p
+    })
+    bridge.current = { createFolder }
+    const ctx = ctxOf('r-wfroot')
+    vault({})
+    await ctx.app.createFolder!(`${ctx.app.workFolder()}/out`)
+    expect(isPluginCreated('r-wfroot', 'Plugins')).toBe(false)
+    expect(isPluginCreated('r-wfroot', 'Plugins/r-wfroot')).toBe(false)
+    expect(isPluginCreated('r-wfroot', 'Plugins/r-wfroot/out')).toBe(true)
+  })
+
+  it('评审 P2:.fd 文件夹不单独动;笔记的 .fd 里有 .db 也不挪;文件夹不挪进 .fd', async () => {
+    const ctx = ctxOf('r-fd')
+    vault({ folders: ['Plugins', 'Plugins/r-fd', 'Plugins/r-fd/N.fd', 'Plugins/r-fd/F', 'D', 'M.fd'], pages: ['Plugins/r-fd/N.md', 'M.md'], files: ['Plugins/r-fd/N.fd/t.db'] })
+    await expect(ctx.app.movePath!('Plugins/r-fd/N.fd', 'D')).rejects.toThrow(/Subnote folders/)
+    await expect(ctx.app.renamePath!('Plugins/r-fd/F', 'X.fd')).rejects.toThrow(/Invalid name/)
+    await expect(ctx.app.movePath!('Plugins/r-fd/N.md', 'D')).rejects.toThrow(/contain databases.*: Plugins\/r-fd\/N\.fd$/)
+    await expect(ctx.app.renamePath!('Plugins/r-fd/N.md', 'O')).rejects.toThrow(/contain databases/)
+    await expect(ctx.app.movePath!('Plugins/r-fd/F', 'M.fd')).rejects.toThrow(/subnote folder/)
+  })
+
+  it('评审 P2:半路失败按结果判 —— 别处同时报的错不冤枉成功的挪动;.fd 没跟过去要报', async () => {
+    const ctx = ctxOf('r-struct')
+    const v = vault({ folders: ['Plugins', 'Plugins/r-struct', 'Plugins/r-struct/n.fd', 'D'], pages: ['Plugins/r-struct/a.md', 'Plugins/r-struct/n.md', 'Plugins/r-struct/n.fd/c.md'] })
+    const real = v.movePage.getMockImplementation()!
+    v.movePage.mockImplementationOnce(async (p: string, d: string) => { await real(p, d); usePageStore.setState({ error: 'unrelated save failed' }) })
+    await expect(ctx.app.movePath!('Plugins/r-struct/a.md', 'D')).resolves.toBe('D/a.md')
+    v.movePage.mockImplementationOnce(async (p: string, d: string) => { // 笔记挪了、.fd 没跟上(同样的错字符串早就在 store 里)
+      const s = usePageStore.getState()
+      usePageStore.setState({ pages: s.pages.map((x) => (x === p ? `${d}/n.md` : x)) })
+      remapScopePaths(p, `${d}/n.md`, 'file')
+    })
+    await expect(ctx.app.movePath!('Plugins/r-struct/n.md', 'D')).rejects.toThrow(/is now D\/n.md, but the host could not finish/)
   })
 
   it('Codex P2:writeFileScoped 只认 create === true 为「仅新建」,别的真值照普通写判', async () => {
@@ -279,6 +333,7 @@ describe('ctx.app.renamePath / movePath 的结果与拒绝', () => {
       await new Promise((r) => setTimeout(r, 5))
       const to = `Plugins/r-db/${base.replace(/\.db$/i, '')}.db`
       usePageStore.setState({ files: usePageStore.getState().files.map((x) => (x === p ? to : x)) })
+      remapScopePaths(p, to, 'file')
       inFlight--
       return to
     })

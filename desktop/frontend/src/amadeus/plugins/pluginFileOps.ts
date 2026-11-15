@@ -17,6 +17,7 @@ import { onNotePathGone, remapScopePaths, usePageStore } from '../store/pageStor
 import { isDrawingPath } from '../../../../shared/amadeus/excalidraw/format'
 import { isDashboardPath } from '../../../../shared/amadeus/dashboard'
 import { normalizePluginRename } from './pluginExt'
+import { fdDirOf, isFdDir, isNoteMd } from '../lib/fd'
 import { followCreatedPath, isPluginCreated, markPluginCreated } from './pluginCreated'
 import type { PluginAppApi } from './types'
 
@@ -58,9 +59,20 @@ export function insideWorkFolder(path: string, workFolder: string): boolean {
   return !!wf && path.startsWith(`${wf}/`)
 }
 
-/** 边界:工作文件夹里面,或这一程这个插件建的。 */
+/** 边界:工作文件夹里面,或这一程这个插件建的。账本里的文件夹 / 带 .fd 子页的笔记还要看里面:改名挪动会把里面的
+ *  一切一起带走,里面每个文件也得归它(插件建的 / 在工作文件夹里),否则用户放进去的东西会被不问就搬走(评审 P1)。
+ *  只看文件:插件 writeFile 顺手建出来的中间文件夹没记账,看文件夹会让它自己的东西也次次要问。 */
 export function pluginOwnsPath(pluginId: string, path: string, workFolder: string): boolean {
-  return insideWorkFolder(path, workFolder) || isPluginCreated(pluginId, path)
+  if (insideWorkFolder(path, workFolder)) return true
+  if (!isPluginCreated(pluginId, path)) return false
+  const roots = [path, ...(isNoteMd(path) ? [fdDirOf(path)] : [])]
+  const s = st()
+  for (const raw of [...s.pages, ...s.files]) {
+    const x = toSlash(raw)
+    if (x === path || !roots.some((r) => x.startsWith(`${r}/`))) continue
+    if (!isPluginCreated(pluginId, x) && !insideWorkFolder(x, workFolder)) return false
+  }
+  return true
 }
 
 const dirOf = (p: string): string => (p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : '')
@@ -121,9 +133,12 @@ function lookup(rel: string): Entry | null {
 }
 const exists = (rel: string): boolean => rel === '' || lookup(rel) !== null
 /** 夹里有 .db 的文件夹不改名、不挪:别的表里指向它们的关联列(refDb 存库内路径)与日历设置只在 .db 本身改名时迁移,
- *  文件夹那两条链不管(同挪 .db 的拒绝,Codex 评审)。 */
-function refuseDatabasesInside(folder: string): void {
-  if (st().files.some((f) => /\.db$/i.test(f) && toSlash(f).startsWith(`${folder}/`))) {
+ *  文件夹那两条链不管(同挪 .db 的拒绝,Codex 评审)。笔记的 .fd 子页文件夹跟着笔记走,同样要看(评审 P2)。
+ *  .fd 文件夹本身不单独动:它属于那篇笔记,文件夹那两条链不同步父笔记的 children(树上也不给单独动)。 */
+function refuseFdAndDatabases(rel: string, e: Entry): void {
+  if (e.folder && isFdDir(rel)) throw new Error(`Subnote folders follow their note; rename or move the note instead: ${rel}`)
+  const folder = e.folder ? rel : isNoteMd(rel) && lookup(fdDirOf(rel))?.folder ? fdDirOf(rel) : null
+  if (folder && st().files.some((f) => /\.db$/i.test(f) && toSlash(f).startsWith(`${folder}/`))) {
     throw new Error(`Folders that contain databases can't be renamed or moved yet: ${folder}`)
   }
 }
@@ -172,18 +187,25 @@ export function createPluginFileOps(deps: PluginFileOpsDeps): {
     return root
   }
 
-  /** 宿主确认框(插件 ctx.ui.confirm 同一个原语;手机上走原生 sheet)。 */
-  const ask = async (title: () => string): Promise<boolean> => {
-    const ctl = new AbortController()
-    asking.add(ctl)
-    try {
-      const { confirmPlugin } = await import('./partsSurface')
-      if (!deps.alive()) return false
-      const guard = <T,>(fn: () => T): T | undefined => { try { return fn() } catch { return undefined } }
-      return (await confirmPlugin({ title, ok: () => translate('pluginfileops.allow') }, guard, ctl.signal)) && !ctl.signal.aborted
-    } finally {
-      asking.delete(ctl)
+  /** 宿主确认框(插件 ctx.ui.confirm 同一个原语;手机上走原生 sheet)。初始焦点落「取消」:框可能在用户打字时弹出,
+   *  回车不许替他点了允许。同一个插件一次只开一个框(循环调用不叠一摞模态框)。 */
+  let asks: Promise<unknown> = Promise.resolve()
+  const ask = (title: () => string): Promise<boolean> => {
+    const run = async (): Promise<boolean> => {
+      const ctl = new AbortController()
+      asking.add(ctl)
+      try {
+        const { confirmPlugin } = await import('./partsSurface')
+        if (!deps.alive()) return false
+        const guard = <T,>(fn: () => T): T | undefined => { try { return fn() } catch { return undefined } }
+        return (await confirmPlugin({ title, ok: () => translate('pluginfileops.allow') }, guard, ctl.signal, 'cancel')) && !ctl.signal.aborted
+      } finally {
+        asking.delete(ctl)
+      }
     }
+    const next = asks.then(run, run)
+    asks = next.catch(() => {})
+    return next
   }
 
   /** 改名 / 挪动的共同骨架:解析源 → 算目标 → 边界(需要就问)→ 排队重核 → 走链 → 按刷新后的清单核结果。 */
@@ -220,6 +242,7 @@ export function createPluginFileOps(deps: PluginFileOpsDeps): {
       if (!asked && !pluginOwnsPath(pluginId, rel, deps.workFolder())) throw new Error(`The file changed while waiting: ${rel}`)
       const errBefore = st().error
       const kind = e.folder ? 'prefix' as const : 'file' as const
+      const fdBefore = !e.folder && isNoteMd(rel) && lookup(fdDirOf(rel))?.folder ? fdDirOf(rel) : null
       let remapped = false
       const offGone = onNotePathGone((from) => { if (toSlash(from).replace(/^\/+|\/+$/g, '') === rel) remapped = true })
       let runErr: unknown = null
@@ -240,11 +263,19 @@ export function createPluginFileOps(deps: PluginFileOpsDeps): {
         throw new Error(storeErr || `Could not move ${rel} to ${to}`)
       }
       // 盘上已经挪过去、链却半路失败(索引 / .fd 级联 / 引用重写出错):那几条失败时不改指编辑器(按住的放手成 null),
-      // 开着它的标签还攥着旧路径、下一次保存会把它写回来 —— 这里补一次改指,再把失败如实报给插件
-      if (!remapped) remapScopePaths(e.raw, to, kind)
+      // 开着它的标签还攥着旧路径、下一次保存会把它写回来 —— 这里补一次改指,再把失败如实报给插件。
+      // 「半路失败」按结果判(链发没发路径广播、.fd 跟没跟过去),不按 store.error 的字符串变没变:同样的错再来一次
+      // 字符串不变,别处恰好同时报的错又会冤枉一次成功的挪动(评审 P2)。store.error 只用来写原因。
+      const problems: string[] = []
+      if (runErr) problems.push(runErr instanceof Error ? runErr.message : String(runErr))
+      if (!remapped) {
+        remapScopePaths(e.raw, to, kind)
+        problems.push('open editors and links may not have been updated')
+      }
+      const fdTo = fdBefore ? fdDirOf(to) : null
+      if (fdBefore && fdTo && (lookup(fdBefore) || !lookup(fdTo)?.folder)) problems.push(`its subnotes stayed in ${fdBefore}`)
       followCreatedPath(rel, kind, to, root) // 链里的路径广播已经改过一遍,这里幂等兜底
-      const partial = runErr ? (runErr instanceof Error ? runErr.message : String(runErr)) : storeErr
-      if (partial) throw new Error(`${rel} is now ${to}, but the host could not finish: ${partial}`)
+      if (problems.length) throw new Error(`${rel} is now ${to}, but the host could not finish: ${storeErr ?? problems.join('; ')}`)
       return to
     })
   }
@@ -294,7 +325,9 @@ export function createPluginFileOps(deps: PluginFileOpsDeps): {
             deps.dropListCache()
           }
           // 只记真建出来的那几层(用户原有的文件夹不因为插件「建」了一次就归它)
-          for (const m of made) markPluginCreated(pluginId, m, root)
+          // 工作文件夹本身与它的上层不记(建工作文件夹时顺带建出 `Plugins`,记了就能不问地把别的插件的工作文件夹一起挪走)
+          const wf = toSlash(deps.workFolder()).replace(/^\/+|\/+$/g, '')
+          for (const m of made) if (m !== wf && !wf.startsWith(`${m}/`)) markPluginCreated(pluginId, m, root)
         }
       })
     },
@@ -314,8 +347,9 @@ export function createPluginFileOps(deps: PluginFileOpsDeps): {
       return relocate(
         path,
         (rel, e) => {
+          if (e.folder && isFdDir(name)) throw new Error(`Invalid name: "${name}" (.fd folders hold a note's subnotes)`)
           const to = renameTarget(rel, e.folder, name, deps.fileTypeExt)
-          if (e.folder) refuseDatabasesInside(rel)
+          refuseFdAndDatabases(rel, e)
           const run = async (raw: string): Promise<unknown> => {
             if (e.folder) return st().renameFolder(raw, name)
             // 交给链的是**整个**新名字:桥只掐掉一次结尾的 .md / .db 再补回去。先掐一次再交出去 =
@@ -342,7 +376,9 @@ export function createPluginFileOps(deps: PluginFileOpsDeps): {
           if (to === rel) return { to, run: async () => {} }
           if (dest && !lookup(dest)?.folder) throw new Error(`No such folder in the vault: ${dest}`)
           if (e.folder && (dest === rel || dest.startsWith(`${rel}/`))) throw new Error(`Cannot move a folder into itself: ${rel}`)
-          if (e.folder) refuseDatabasesInside(rel)
+          // 文件挪进 .fd = 变成那篇的子页(movePage 两头同步 children,同树上拖放);文件夹那条链不同步,不许
+          if (e.folder && dest.split('/').some(isFdDir)) throw new Error(`Folders can't be moved into a note's subnote folder: ${dest}`)
+          refuseFdAndDatabases(rel, e)
           // .db 挪走后,别的表里指向它的关联列(refDb 存库内路径)与日历设置不会跟着改 —— 改名有这一步,挪动没有
           if (!e.folder && /\.db$/i.test(rel)) throw new Error(`Moving databases is not supported: ${rel}`)
           return { to, run: (raw: string) => (e.folder ? st().moveFolder(raw, dest) : st().movePage(raw, dest)) }
