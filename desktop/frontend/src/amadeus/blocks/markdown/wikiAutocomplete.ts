@@ -12,6 +12,7 @@ import { editContextAt, editContextOf, slashAvailable, toolbarShape, type EditCo
 import { registerMessages, translate } from '../../../i18n'
 import { AT_BLOCKED_BEFORE } from '@amadeus-shared/mdMarks'
 import { mountLineSelection } from '@lcl/engine/lineSelection'
+import { formulaAtSelection } from './mathLivePreview'
 
 registerMessages({
   'wikiac.multiBlocks': { zh: '多个块', en: 'Multiple blocks' },
@@ -368,6 +369,9 @@ export function selectionToolbarPlugin(report: (r: SelRect | null) => void) {
             // 选中的是一张图片(md 图片节点 / `![[pic.png|200]]` 整段源码)→ 让位:B/I/U 对图片
             // 没有意义,浮条还正好盖住上一段正文(2026-08-27 观感自查揪出来的)。
             if (isImageSelection(view.state)) return report(null)
+            // 选区整个落在一个公式的源码里(选中占位、改下标):公式里没有粗体斜体可言,浮条只会挡住公式和预览
+            // (同 Obsidian:公式里选字不出格式条)。选区跨出公式照旧弹。
+            if (formulaAtSelection(view.state)) return report(null)
             const { from, to } = selection
             const $from = doc.resolve(from)
             if (!$from.parent.isTextblock) return report(null) // 节点选区不服务行内格式化

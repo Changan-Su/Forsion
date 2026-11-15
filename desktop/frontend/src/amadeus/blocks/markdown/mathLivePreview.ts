@@ -170,6 +170,27 @@ export function markCaret(latex: string, at: number): string {
   return latex.slice(0, i) + CARET_MARK + latex.slice(i)
 }
 
+/** 选区落在这个公式里(start / end = 含两头 `$` 的源码范围)。空选区 = 光标在公式源码里(右边界不算,同「正在编辑」
+ *  的口径);非空选区要两头都在两头的 `$` 之间(同 LaTeX Suite 判「在公式里」的口径)。连 `$` 一起选中整个公式、或选区
+ *  跨出公式都不算 —— 那是对整个公式 / 正文动手,格式浮条照旧。 */
+function selectionInside(from: number, to: number, start: number, end: number, display: boolean): boolean {
+  if (from === to) return from >= start && from < end
+  const d = display ? 2 : 1
+  return from >= start + d && to <= end - d
+}
+
+/** 选区所在的那个公式(口径同 selectionInside):不在公式里 / 跨出公式 / 代码块里 → null。
+ *  格式浮条据此让位(公式源码里没有粗体斜体可言,同 Obsidian)。 */
+export function formulaAtSelection(state: EditorState): { from: number; to: number; latex: string; display: boolean } | null {
+  const { $from, $to, from, to } = state.selection
+  if (!$from.parent.isTextblock || $from.parent.type.spec.code || !$from.sameParent($to)) return null
+  const s = buildBlockString($from.parent)
+  if (s.indexOf('$') === -1) return null
+  const cs = $from.start()
+  const sp = scanMath(s).find((x) => selectionInside(from, to, cs + x.from, cs + x.to, x.display))
+  return sp ? { from: cs + sp.from, to: cs + sp.to, latex: sp.latex, display: sp.display } : null
+}
+
 /** 光标所在的行内公式(编辑中、空选区):给浮层预览用。不在行内公式里 / 有选区 / 没焦点 → null。 */
 function activeInlineFormula(state: EditorState): { from: number; to: number; latex: string; caretAt: number } | null {
   const { $from, from, to } = state.selection

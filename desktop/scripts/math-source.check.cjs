@@ -5,8 +5,9 @@
 //   C. token 颜色只读 --math-src-*(浅 / 深);宿主选择器权重为 0,插件一条普通类选择器(哪怕样式表排在宿主之前)就能盖过。
 //   D. 选区盖住公式时字体不跳;离开公式后钩子类全部收走。
 //   E. 行内公式编辑中的预览是浮在这一行上方的气泡(读浮层 token,▶ 标光标,放不下翻到下方,不推挤正文);块公式预览照旧在源码下方。
+//   F. 选区整个落在一个公式两头的 `$` 之间(真按键 Shift+→ 选中占位):不弹格式浮条;选区跨出公式、连 `$` 选中整个公式照旧弹。
 // 用法:npm run check:mathsource(自起 vite;HARNESS_URL=… 指到自己起的端口)。可选 LATEX_PLUGIN_DIR=<插件目录> 再验真插件的
-//      token 色叠在宿主上时插件赢。只跑几部分:--only=space,look,float。
+//      token 色叠在宿主上时插件赢。只跑几部分:--only=space,look,float,select。
 const fs = require('fs'), os = require('os'), path = require('path')
 const { chromium } = require('playwright-core')
 const URL = process.env.HARNESS_URL || 'http://localhost:5173/harness.html'
@@ -23,6 +24,7 @@ const settle = (p, ms = 160) => p.waitForTimeout(ms)
 const PM = '.unified-body .ProseMirror'
 const ONLY = (process.argv.find((a) => a.startsWith('--only=')) || '').slice('--only='.length).split(',').filter(Boolean)
 const want = (part) => !ONLY.length || ONLY.includes(part)
+const TOOLBAR = '[data-testid="inline-toolbar"]'
 
 // 缺省值 = Obsidian 1.15 实测(base.css 的 --math-src-*);换配色时两处一起改。
 const DEFAULTS = {
@@ -318,12 +320,52 @@ async function partFloat(browser, dark) {
   await p.close()
 }
 
+async function partSelect(browser) {
+  const p = await open(browser, '前一行。\n\n行内 $x^2 + \\sqrt{y}$ 结束。\n\n$$ \\sum_{i=1}^{N} $$\n\n下一段。\n')
+  const bar = () => p.locator(TOOLBAR).count()
+  const select = async (needle, at, n, key = 'Shift+ArrowRight') => {
+    await caret(p, needle, at)
+    await settle(p, 120)
+    for (let i = 0; i < n; i++) await p.keyboard.press(key)
+    await settle(p, 350)
+    return p.evaluate(() => { const s = window.__upage.probe.view().state.selection; return s.$from.sameParent(s.$to) ? s.$from.parent.textBetween(s.$from.parentOffset, s.$to.parentOffset) : '<跨段>' })
+  }
+  // 正对照:普通正文的选区照常弹浮条(台架里浮条根本不出的话,下面的「不弹」就没意义)
+  let got = await select('结束', 0, 2)
+  check('F0 正文里选中两个字照常弹格式浮条', got === '结束' && await bar() === 1, { got, bar: await bar() })
+  // F1:行内公式里选中 y
+  got = await select('sqrt{y', 5, 1)
+  const f1 = { got, bar: await bar(), float: await p.locator('.math-preview--float').count(),
+    ann: await p.evaluate(() => document.querySelector('.math-preview--float annotation')?.textContent ?? null) }
+  check('F1 行内公式源码里选中一个字不弹格式浮条', f1.got === 'y' && f1.bar === 0, f1)
+  // F2:块公式里选中 i
+  got = await select('sum_{i', 5, 1)
+  const f2 = { got, bar: await bar(), block: await p.locator('.math-preview--block').count(), float: await p.locator('.math-preview--float').count() }
+  check('F2 块公式源码里选中一个字不弹格式浮条', f2.got === 'i' && f2.bar === 0, f2)
+  // F3:选区从公式里往左跨到正文(一半在公式里)—— 现状不变
+  got = await select('x^2', 1, 5, 'Shift+ArrowLeft')
+  const f3 = { got, bar: await bar(), float: await p.locator('.math-preview--float').count(), block: await p.locator('.math-preview--block').count() }
+  check('F3 选区一半在公式里、一半在正文照旧弹格式浮条', f3.got === '行内 $x' && f3.bar === 1, f3)
+  // F5:连两头的 `$` 一起选中整个行内公式 = 对整个公式动手,现状不变
+  await caret(p, '$x^2', 0, 16)
+  await settle(p, 350)
+  const f5 = { got: await p.evaluate(() => { const s = window.__upage.probe.view().state.selection; return s.$from.parent.textBetween(s.$from.parentOffset, s.$to.parentOffset) }),
+    bar: await bar(), float: await p.locator('.math-preview--float').count() }
+  check('F5 连 $ 一起选中整个公式照旧弹格式浮条', f5.got === '$x^2 + \\sqrt{y}$' && f5.bar === 1, f5)
+  // F4:选区从公式里跨到公式外(块公式选到行尾之后的下一段)—— 照旧弹
+  got = await select('sum_{i', 5, 20)
+  const f4 = { got, bar: await bar(), block: await p.locator('.math-preview--block').count() }
+  check('F4 选区从块公式里跨出到下一段照旧弹浮条、不出预览', f4.bar === 1 && f4.block === 0, f4)
+  await p.close()
+}
+
 async function main() {
   const browser = await chromium.launch({ executablePath: exe, headless: true })
   try {
     if (want('space')) await partSpace(browser)
     if (want('look')) { await partLook(browser, false); await partLook(browser, true) }
     if (want('float')) { await partFloat(browser, false); await partFloat(browser, true) }
+    if (want('select')) await partSelect(browser)
   } finally {
     await browser.close()
   }
