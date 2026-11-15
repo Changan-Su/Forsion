@@ -42,6 +42,7 @@ registerMessages({
   'unit.local.removeMsg': { zh: '只是从列表里拿掉，文件夹和里面的数据都还在。', en: 'This only takes it off the list. The folder and everything in it stay where they are.' },
   'unit.local.removeConfirm': { zh: '移除', en: 'Remove' },
   'unit.local.removed': { zh: '已从列表移除「{name}」', en: 'Removed "{name}" from the list' },
+  'unit.local.removeFailed': { zh: '没能从列表移除「{name}」：{error}', en: 'Couldn\'t remove "{name}" from the list: {error}' },
 })
 
 export type LocalUnitDialogReq =
@@ -80,6 +81,23 @@ function NameIconRow({ name, icon, onName, onIcon, onEnter, err }: {
   const { t } = useI18n()
   const [pick, setPick] = useState<{ x: number; y: number } | null>(null)
   const errId = useId()
+  const iconBtn = useRef<HTMLButtonElement>(null)
+  // 选择器收起(选好了 / 点外面 / Esc):焦点回到图标钮,再按一次 Esc 才关对话框
+  const closePick = (): void => { setPick(null); iconBtn.current?.focus() }
+  const closePickRef = useRef(closePick)
+  closePickRef.current = closePick
+  // 选择器开着:Esc 只收它。捕获阶段截住,焦点在选择器的哪一处(搜索框、某个 emoji)都一样,也到不了对话框那条 Esc
+  useEffect(() => {
+    if (!pick) return
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key !== 'Escape' || e.isComposing) return
+      e.preventDefault()
+      e.stopPropagation()
+      closePickRef.current()
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [pick])
   return (
     <div className="lu-field">
       <span className="lu-label">{t('unit.local.nameIcon')}</span>
@@ -98,6 +116,7 @@ function NameIconRow({ name, icon, onName, onIcon, onEnter, err }: {
           onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); onEnter() } }}
         />
         <button
+          ref={iconBtn}
           type="button"
           className="dialog-btn lu-iconbtn"
           data-lu="icon"
@@ -112,7 +131,7 @@ function NameIconRow({ name, icon, onName, onIcon, onEnter, err }: {
       {pick && createPortal(
         // 盖在对话框(.dialog-overlay)之上:从弹窗里开出来的盖在它上面(DESIGN §3 浮层与层级)
         <div className="lu-iconlayer" data-lu-iconpick="">
-          <IconPicker x={pick.x} y={pick.y} current={icon || null} onPick={(em) => { onIcon(em ?? ''); setPick(null) }} onClose={() => setPick(null)} />
+          <IconPicker x={pick.x} y={pick.y} current={icon || null} onPick={(em) => { onIcon(em ?? ''); closePick() }} onClose={closePick} />
         </div>,
         document.body,
       )}
@@ -120,16 +139,13 @@ function NameIconRow({ name, icon, onName, onIcon, onEnter, err }: {
   )
 }
 
-/** Esc 关对话框;图标选择开着时 Esc 只收它(它自己的输入框里按的 Esc 由它自己收)。 */
+/** Esc 关对话框。图标选择开着时的 Esc 到不了这里(NameIconRow 在捕获阶段截住、只收选择器)。 */
 function useDialogEscape(onClose: () => void): void {
   const latest = useRef(onClose)
   latest.current = onClose
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key !== 'Escape') return
-      // 选择器自己的输入框里按的:它已经在 React 里把自己收了(DOM 可能已经摘掉),target 的祖先链还认得出来
-      const from = e.target instanceof Element ? e.target : null
-      if (from?.closest('[data-lu-iconpick], .amx-iconpick') || document.querySelector('[data-lu-iconpick]')) return
+      if (e.key !== 'Escape' || e.isComposing) return
       latest.current()
     }
     window.addEventListener('keydown', onKey)
@@ -307,8 +323,10 @@ export function LocalUnitDialogHost({ onToast }: { onToast?: Toast }): React.Rea
     const r = await localUnitCall((api) => api.remove(u.id))
     if (r.ok) toast(translate('unit.local.removed', { name: u.name }))
     else {
-      const text = localUnitErrorText(r.code)
-      if (text) toast(translate('unit.local.actionFailed', { error: text }), true)
+      // 正开着的 Unit 主进程不让移除,回 io 带一句按界面语言写好的说明 → 照它说;没带就按码说
+      const said = r.code === 'io' && typeof r.message === 'string' ? r.message.trim() : ''
+      const text = said || localUnitErrorText(r.code)
+      if (text) toast(translate('unit.local.removeFailed', { name: u.name, error: text }), true)
     }
   }
   return createPortal(

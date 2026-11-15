@@ -165,7 +165,8 @@ export function localPanelGroup(snapshot: LocalUnitsSnapshot | null | undefined,
     return {
       kind: 'local', key: `local:${u.id}`, unit: u, self: isSelf,
       checked: isSelf && !viewing,
-      usable: isSelf || u.state === 'running' || u.state === 'stopped',
+      // 能不能用只看文件夹状态:自己那一行要是名册报找不到 / 对不上,照实画成不能用(self 只管打勾和不给移除)
+      usable: u.state === 'running' || u.state === 'stopped',
     }
   })
   return { inFolder: selfId !== null, rows, unreadable }

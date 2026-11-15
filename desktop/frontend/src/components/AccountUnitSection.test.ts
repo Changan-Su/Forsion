@@ -225,7 +225,8 @@ describe('local Units in the panel', () => {
     expect(text(local('copy').querySelector('.ap-unit-path'))).toBe('文件夹对不上')
     for (const id of ['old', 'copy']) {
       expect(local(id).tagName).toBe('DIV')
-      expect(local(id).getAttribute('aria-disabled')).toBe('true')
+      expect(local(id).classList.contains('ap-unit--inert')).toBe(true)
+      expect(local(id).getAttribute('aria-haspopup')).toBe('menu') // 点不开,但是一枚菜单钮(只有「从列表移除…」)
       expect(local(id).querySelector('.ap-unit-go')).toBeNull()
     }
     expect(q('[data-local-add]')).toBeTruthy()
@@ -291,6 +292,123 @@ describe('local Units in the panel', () => {
     expect(onToast).toHaveBeenLastCalledWith('已从列表移除「demo」')
   })
 
+  it('remove refused because the Unit is open: the main process sentence is shown as is, not a generic failure', async () => {
+    const said = '这个 Unit 正开着（或者看不出它关没关）。先关掉它，再从列表移除。'
+    api.remove.mockResolvedValueOnce({ ok: false, code: 'io', message: said })
+    await mount()
+    await rightClick(local('lab'))
+    await click(q('[data-unit-act="remove"]'))
+    await click(Array.from(q('.dialog')!.querySelectorAll('button')).find((b) => text(b) === '移除')!)
+    expect(api.remove).toHaveBeenCalledWith('lab')
+    expect(onToast).toHaveBeenLastCalledWith(`没能从列表移除「lab」：${said}`, true)
+    // 没带说明的 io 照旧按码说
+    api.remove.mockResolvedValueOnce({ ok: false, code: 'io' })
+    await rightClick(local('demo'))
+    await click(q('[data-unit-act="remove"]'))
+    await click(Array.from(q('.dialog')!.querySelectorAll('button')).find((b) => text(b) === '移除')!)
+    expect(onToast).toHaveBeenLastCalledWith('没能从列表移除「demo」：读写文件时出了问题，稍后再试。', true)
+  })
+
+  it('raw main-process errors (EACCES and paths) never reach the user: rename / open / create say the plain line for the code', async () => {
+    const raw = "EACCES: permission denied, open '/Users/x/Forsion Units/demo/.forsion-unit.json'"
+    await mount()
+    api.rename.mockResolvedValueOnce({ ok: false, code: 'io', message: raw })
+    await rightClick(local('demo'))
+    await click(q('[data-unit-act="edit"]'))
+    await typeInto(q<HTMLInputElement>('[data-lu="name"]')!, 'Demo 2')
+    await click(q('[data-lu="save"]'))
+    expect(onToast).toHaveBeenLastCalledWith('没做成：读写文件时出了问题，稍后再试。', true)
+    api.open.mockResolvedValueOnce({ ok: false, code: 'not_a_unit', message: 'marker id does not match' })
+    await click(local('lab'))
+    expect(onToast.mock.lastCall?.[0]).not.toContain('marker')
+    api.create.mockResolvedValueOnce({ ok: false, code: 'io', message: raw })
+    await click(q('[data-local-add]'))
+    await typeInto(q<HTMLInputElement>('[data-lu="name"]')!, 'Lab 2')
+    await click(q('[data-lu="create"]'))
+    expect(text(q('[data-lu-dialog="add"]'))).not.toContain('EACCES')
+    expect(text(q('[data-lu-dialog="add"]'))).toContain('读写文件时出了问题')
+  })
+
+  it('an open menu follows the latest list: renamed rows act on the new name; a row that goes missing, disappears or a list that turns unreadable closes it', async () => {
+    const { act } = await React()
+    const emit = async () => { await act(async () => { changed?.() }); await tick() }
+    await mount()
+    // 改了名:菜单还开着,移除时用的是新名字
+    await rightClick(local('demo'))
+    rows[1].name = 'Demo 2'
+    await emit()
+    expect(menuItems()).toHaveLength(5)
+    await click(q('[data-unit-act="remove"]'))
+    expect(text(q('.dialog'))).toContain('从列表移除「Demo 2」？')
+    await act(async () => { window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })) })
+    await tick()
+    // 变得找不到了 → 收起(不再给「在自己的窗口打开 / 改名字」)
+    await rightClick(local('demo'))
+    expect(q('.ap-unit-ctx')).toBeTruthy()
+    rows[1].state = 'missing'
+    await emit()
+    expect(q('.ap-unit-ctx')).toBeNull()
+    // 那一行没了 → 收起
+    await rightClick(local('lab'))
+    rows = rows.filter((r) => r.id !== 'lab')
+    await emit()
+    expect(q('.ap-unit-ctx')).toBeNull()
+    // 名册读不出 → 收起
+    await rightClick(local('old'))
+    expect(menuItems()).toEqual(['从列表移除…'])
+    registry = 'unreadable'
+    await emit()
+    expect(q('.ap-unit-ctx')).toBeNull()
+  })
+
+  it('missing / mismatch rows are reachable by keyboard: Enter, Shift+F10 or the menu key opens a menu with only remove', async () => {
+    const { act } = await React()
+    const key = async (el: Element | null, init: KeyboardEventInit) => {
+      expect(el).toBeTruthy()
+      await act(async () => { el!.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...init })) })
+      await tick()
+    }
+    await mount()
+    for (const id of ['old', 'copy']) {
+      expect(local(id).tabIndex).toBe(0)
+      expect(local(id).getAttribute('aria-haspopup')).toBe('menu')
+    }
+    local('old').focus()
+    await key(local('old'), { key: 'Enter' })
+    expect(menuItems()).toEqual(['从列表移除…'])
+    expect(document.activeElement).toBe(q('[data-unit-act="remove"]')) // 焦点进菜单
+    await key(document.activeElement, { key: 'Escape' })
+    expect(q('.ap-unit-ctx')).toBeNull()
+    expect(document.activeElement).toBe(local('old')) // Esc 回到那一行
+    await key(local('copy'), { key: 'F10', shiftKey: true })
+    expect(menuItems()).toEqual(['从列表移除…'])
+    await key(document.activeElement, { key: 'Escape' })
+    await key(local('copy'), { key: 'ContextMenu' })
+    expect(menuItems()).toEqual(['从列表移除…'])
+    await key(document.activeElement, { key: 'Escape' })
+    // 能用的行:Enter 是打开(按钮本身的事),Shift+F10 开整份菜单,上下键在几项之间走
+    await key(local('demo'), { key: 'F10', shiftKey: true })
+    expect(menuItems()).toHaveLength(5)
+    expect(document.activeElement).toBe(q('[data-unit-act="open"]'))
+    await key(document.activeElement, { key: 'ArrowUp' })
+    expect(document.activeElement).toBe(q('[data-unit-act="remove"]'))
+    await key(document.activeElement, { key: 'ArrowDown' })
+    expect(document.activeElement).toBe(q('[data-unit-act="open"]'))
+  })
+
+  it('inside a folder Unit whose own row reads missing: still checked, but inert, and no menu (nothing it could do)', async () => {
+    self = { kind: 'folder', id: 'lab', name: 'lab', icon: '', path: '/Users/x/Forsion Units/lab', displayPath: '~/Forsion Units/lab' }
+    rows[0] = { ...mk('lab', 'missing'), current: true }
+    await mount()
+    const me = local('lab')
+    expect(me.tagName).toBe('DIV')
+    expect(me.getAttribute('aria-disabled')).toBe('true')
+    expect(me.querySelector('.ap-unit-check')).toBeTruthy()
+    expect(me.hasAttribute('tabindex')).toBe(false)
+    await rightClick(me)
+    expect(q('.ap-unit-ctx')).toBeNull()
+  })
+
   it('registry unreadable: one grey line, no rows, no write menus — "Add Unit…" stays', async () => {
     registry = 'unreadable'
     await mount()
@@ -350,6 +468,32 @@ describe('local Units in the panel', () => {
     expect(q<HTMLButtonElement>('[data-lu="create"]')!.disabled).toBe(true)
     expect(text(q('.lu-err'))).toBe('这个名字用不了：不能留空、不能太长，也不能只有符号。')
     expect(api.create).not.toHaveBeenCalled()
+  })
+
+  it('Esc inside the icon picker closes only the picker and puts focus back on the icon button; a second Esc closes the dialog', async () => {
+    const { act } = await React()
+    const esc = async (el: Element | null) => {
+      expect(el).toBeTruthy()
+      await act(async () => { el!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })) })
+      await tick()
+    }
+    await mount()
+    await click(q('[data-local-add]'))
+    await click(q('[data-lu="icon"]'))
+    const emoji = q('.amx-iconpick-item')!
+    emoji.focus()
+    await esc(emoji) // 焦点在某个 emoji 上(不在选择器的搜索框里)
+    expect(q('[data-lu-iconpick]')).toBeNull()
+    expect(q('[data-lu-dialog="add"]')).toBeTruthy()
+    expect(document.activeElement).toBe(q('[data-lu="icon"]'))
+    await esc(document.activeElement)
+    expect(q('[data-lu-dialog]')).toBeNull()
+    // 选择器的搜索框里按 Esc 也一样只收选择器
+    await click(q('[data-local-add]'))
+    await click(q('[data-lu="icon"]'))
+    await esc(q('[data-lu-iconpick] input'))
+    expect(q('[data-lu-iconpick]')).toBeNull()
+    expect(q('[data-lu-dialog="add"]')).toBeTruthy()
   })
 
   it('Name and icon…: only the changed field goes to rename(); an unchanged save makes no call', async () => {

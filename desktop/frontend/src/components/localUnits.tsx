@@ -57,7 +57,8 @@ const ERR_KEY: Record<Exclude<LocalUnitsErrorCode, 'cancelled'>, string> = {
   io: 'unit.local.err.io',
 }
 
-/** 错误码 → 一句人话;cancelled → null(不说话);认不出的码按 io 说。 */
+/** 错误码 → 一句人话;cancelled → null(不说话);认不出的码按 io 说。
+ *  不看主进程带的 message:那里多半是给开发者看的原始报错(英文、带路径),只有「从列表移除」被拒那一处是写给人看的整句,由移除那条路另取。 */
 export function localUnitErrorText(code: LocalUnitsErrorCode | string | undefined): string | null {
   if (code === 'cancelled') return null
   return translate((ERR_KEY as Record<string, string>)[code ?? ''] ?? ERR_KEY.io)

@@ -1168,14 +1168,15 @@ if (new URLSearchParams(location.search).has('dock')) {
         return { ok: true }
       }) as never
     }
-    void Promise.all([import('./components/UnitSwitcher'), import('./stores/appStore'), import('./components/AccountCard'), import('./components/unitRoster'), import('./stores/popupQueue')]).then(([{ UnitSwitcher, UnitRemoteSurface, UnitSettings, useUnitRemote, runUnitRoute }, { useApp }, { AccountCard }, { useUnitRoster }, { usePopupQueue }]) => {
+    void Promise.all([import('./components/UnitSwitcher'), import('./stores/appStore'), import('./components/AccountCard'), import('./components/unitRoster'), import('./stores/popupQueue')]).then(([{ UnitSwitcher, UnitRemoteSurface, UnitSettings, useUnitRemote, runUnitRoute }, { useApp }, { AccountCard, accountCardWanted }, { useUnitRoster }, { usePopupQueue }]) => {
       useApp.setState({ desktopConfig: { ...cfg } as never })
       if (panelQ.has('unitbind')) Object.assign(window as unknown as Record<string, unknown>, { __unitRemote: useUnitRemote })
       addRibbonIcon({ id: 'rb-unit', side: 'bottom', component: UnitSwitcher })
       if (unitPanel) {
         const toasts: string[] = []
         Object.assign(window as unknown as Record<string, unknown>, { __unitRemote: useUnitRemote, __runUnitRoute: runUnitRoute, __roster: useUnitRoster, __units: units, __toasts: toasts, __popupQueue: usePopupQueue })
-        addRibbonIcon({ id: 'rb-account', side: 'bottom', pinned: true, component: ({ expanded }: { expanded: boolean }) => <AccountCard compact={!expanded} onToast={(text) => { toasts.push(text) }} /> })
+        // 挂不挂账号卡跟产品同一个判别式(bootstrapEngine 用的 accountCardWanted):&noext 没 Extend 时只靠本机多 Unit 挂上
+        if (accountCardWanted(false)) addRibbonIcon({ id: 'rb-account', side: 'bottom', pinned: true, component: ({ expanded }: { expanded: boolean }) => <AccountCard compact={!expanded} onToast={(text) => { toasts.push(text) }} /> })
       }
       // 远程面(设备行「整个主区切过去」)也挂上:裸 harness 无 .shell-work → 组件原地渲染,CSS 退化 fixed 覆盖
       const rsHost = document.createElement('div')

@@ -724,7 +724,7 @@ async function main() {
           name: (name ?? n).textContent.trim(), tag: n.tagName, path: path?.textContent.trim() ?? '',
           go: !!go && getComputedStyle(go).visibility === 'visible' && Number(getComputedStyle(go).opacity) > 0.3,
           check: !!n.querySelector('.ap-unit-check'), current: n.getAttribute('aria-current') === 'true',
-          inert: n.getAttribute('aria-disabled') === 'true', nameColor: cs?.color ?? '',
+          inert: n.classList.contains('ap-unit--inert'), nameColor: cs?.color ?? '',
           rowFits: n.scrollWidth <= n.clientWidth + 1, nameFits: !name || name.scrollWidth <= name.clientWidth + 1,
           pathCut: !!path && path.scrollWidth > path.clientWidth + 1, note: n.classList.contains('ap-unit-note'), add: n.hasAttribute('data-local-add'),
         }
@@ -782,6 +782,19 @@ async function main() {
       const oldItems = await menuOf(pu)
       check(`U4 Esc 只收菜单;找不到的行右键只有「从列表移除…」(${variant})`, escOk && JSON.stringify(oldItems) === JSON.stringify([en ? 'Remove from list…' : '从列表移除…']), JSON.stringify({ escOk, oldItems }))
       await pu.keyboard.press('Escape'); await pu.waitForTimeout(150)
+      if (variant === 'light') {
+        // 键盘:找不到的行 Tab 停得住;Enter 开菜单(只有移除)、焦点进菜单;Esc 收菜单、焦点回到那一行
+        await pu.focus('[data-local-unit="lu-old"]')
+        await pu.keyboard.press('Enter'); await pu.waitForTimeout(250)
+        const kb = await pu.evaluate(() => ({
+          items: Array.from(document.querySelectorAll('.ap-unit-ctx [role="menuitem"]')).map((b) => b.textContent.trim()),
+          focused: document.activeElement?.getAttribute('data-unit-act') ?? null,
+        }))
+        await pu.keyboard.press('Escape'); await pu.waitForTimeout(150)
+        const back = await pu.evaluate(() => ({ row: document.activeElement?.getAttribute('data-local-unit') ?? null, menu: !!document.querySelector('.ap-unit-ctx'), pop: !!document.querySelector('.account-pop') }))
+        check('U4k 找不到的行用键盘也到得了:Enter 开只有「从列表移除…」的菜单、焦点在它上面;Esc 收菜单、焦点回到那一行、面板还开着',
+          JSON.stringify(kb.items) === JSON.stringify(['从列表移除…']) && kb.focused === 'remove' && back.row === 'lu-old' && !back.menu && back.pop, JSON.stringify({ kb, back }))
+      }
 
       // 添加 Unit 对话框(真对话框的壳)
       await pu.click('[data-local-add]')
@@ -911,14 +924,36 @@ async function main() {
     {
       const pn = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1200, height: 720 } })
       await pn.addInitScript(() => localStorage.clear())
-      await boot(pn, '&local&noext')
-      await openPanel(pn)
-      await pn.waitForTimeout(250)
-      const L = await readLocal(pn)
-      const text = await pn.evaluate(() => document.querySelector('.account-pop').textContent)
-      check('U14 没有 Extend、没登录:点头像开面板(不直接去登录),只有「这台电脑」组 + 添加 / 管理;登录是下面一行',
-        L.filter((r) => r.sec).map((r) => r.name).join('|') === '这台电脑' && L.filter((r) => r.id && r.id !== 'default').length === 4 && text.includes('登录'), JSON.stringify(L.map((r) => r.name)))
-      shots.push(await shot(pn, 'local-noext'))
+      await boot(pn, '&local&noext').catch(() => {}) // 卡没挂上时 boot 等不到头像:别在这里抛,交给下面 U14a 判红
+      // 账号卡跟产品同一个判别式挂(accountCardWanted):没 Extend 时只靠本机多 Unit —— 判别式漏了这一支,卡就整张没了
+      const card = await pn.waitForSelector('.account-card, .ribbon-account', { timeout: 2000 }).then(() => pn.evaluate(() => {
+        const c = document.querySelector('.account-card, .ribbon-account')
+        return { cls: c.className, name: c.querySelector('.account-name')?.textContent.trim() ?? null, text: c.textContent, title: c.getAttribute('title') }
+      })).catch(() => null)
+      check('U14a 没有 Extend、没登录:头像卡照样挂上,写「未登录」,不写「登录 Forsion / 点击登录」(登录通道不在)',
+        !!card && (card.name === null || card.name === '未登录') && !card.text.includes('点击登录') && !card.text.includes('登录 Forsion') && card.title === '未登录', JSON.stringify(card))
+      shots.push(await shot(pn, 'local-noext-card'))
+      if (card) {
+        await openPanel(pn)
+        await pn.waitForTimeout(250)
+      }
+      const L = card ? await readLocal(pn) : []
+      const pop = await pn.evaluate(() => {
+        const p = document.querySelector('.account-pop')
+        if (!p) return null
+        return {
+          head: p.querySelector('.ap-name')?.textContent.trim() ?? '',
+          // 头部下面什么都没有时不留分隔线(孤零零一条线贴着面板底边)
+          headLine: (() => { const h = p.querySelector('.ap-head'); return h && !h.nextElementSibling ? getComputedStyle(h).borderBottomWidth : 'n/a' })(),
+          items: Array.from(p.querySelectorAll(':scope > .ap-item, :scope > button.ap-item')).map((b) => b.textContent.trim()),
+          text: p.textContent,
+          add: !!p.querySelector('[data-local-add]'),
+        }
+      })
+      check('U14 没有 Extend、没登录:点头像开面板(不直接去登录),只有「这台电脑」组 + 添加 Unit…;头部写「未登录」,没有点了没反应的登录行,也不留孤零零的分隔线',
+        !!pop && L.filter((r) => r.sec).map((r) => r.name).join('|') === '这台电脑' && L.filter((r) => r.id && r.id !== 'default').length === 4
+          && pop.add && pop.head === '未登录' && !pop.text.includes('登录 Forsion') && pop.headLine === '0px', JSON.stringify({ L: L.map((r) => r.name), pop }))
+      if (pop) shots.push(await shot(pn, 'local-noext'))
       await pn.close()
     }
     // 几何:本机组 + 20 台设备,矮窗 × 110%,仍只滚 Unit 段

@@ -167,6 +167,14 @@ describe('local Units: the "This computer" group (localPanelGroup / unitPanelMod
     expect(g.rows.map((r) => r.unit.id)).toEqual(['lab'])
   })
 
+  it('its own row reported missing / mismatch stays unusable: self only decides the check mark and that it cannot be removed', () => {
+    const self = { kind: 'folder' as const, id: 'lab', name: 'Lab', icon: '', path: '/p/lab', displayPath: '~/p/lab' }
+    for (const state of ['missing', 'mismatch'] as const) {
+      const g = localPanelGroup(snap({ self, units: [row('lab', state, true), row('demo', 'stopped')] }), false, false)
+      expect(g.rows.map((r) => [r.unit.id, r.self, r.checked, r.usable])).toEqual([['lab', true, true, false], ['demo', false, false, true]])
+    }
+  })
+
   it('registry ok but without a row for itself: the folder Unit adds its own row first', () => {
     const self = { kind: 'folder' as const, id: 'me', name: 'Me', icon: '', path: '/p/me', displayPath: '~/p/me' }
     const g = localPanelGroup(snap({ self, units: [row('demo', 'stopped')] }), false, false)

@@ -22,7 +22,7 @@ import { formatRemaining, mergeQuotaView, pointsReadToken, reconcilePointsRead, 
 import { loadAccountRewards, emptyAccountRewards, ACCOUNT_REWARDS_CHANGED, type AccountRewards } from '../services/accountRewards'
 import { accountChip, publishAccountChip, type AccountChip } from '../services/accountChip'
 import { useApp } from '../stores/appStore'
-import { museAvailable } from '../features/runtime'
+import { accountBridgeAvailable, museAvailable } from '../features/runtime'
 import { presentResetCardCeremony } from './ResetCardCeremony'
 import { usePluginStore } from '../amadeus/plugins/pluginStore'
 import { AccountUnitSection, unitPanelAvailable, unitPanelForcesMenu } from './AccountUnitSection'
@@ -66,6 +66,15 @@ const shortDate = (d?: string): string => {
 /** 「Forsion 云端」里 Extend 画的子页(registerSettingsView category 'forsion')。没有 Extend 的设备页 / 旧宿主不给跳。 */
 const openCloudPage = (id: 'account' | 'quota' | 'backpack' | 'points#invite'): void =>
   useApp.getState().openSettings(`forsion/fx:forsion-extend:${id}` as Parameters<ReturnType<typeof useApp.getState>['openSettings']>[0])
+
+/** 账号卡(Ribbon 的 rb-account)挂不挂。bootstrapEngine 与界面台架共用这一份。
+ *  有账号能力(accountBridgeAvailable)就挂;没有 Extend 时,头像面板里有本机多 Unit 也挂(unitPanelForcesMenu:只在主窗、
+ *  不在设备页 / 网页主入口 / 手机)—— 新建的文件夹 Unit 没装 Extend、没登录,不挂卡就回不到这台电脑,也加不了 Unit。
+ *  委托管理员:这一页的「账号」是那台设备,不是来访的管理员 —— 恒不挂。 */
+export function accountCardWanted(delegatedAdmin: boolean): boolean {
+  if (delegatedAdmin) return false
+  return accountBridgeAvailable() || unitPanelForcesMenu()
+}
 
 export const AccountCard: React.FC<{
   onToast?: (text: string, error?: boolean) => void
@@ -315,6 +324,8 @@ export const AccountCard: React.FC<{
   }
 
   const loggedIn = !!auth?.loggedIn
+  // 登录通道住在 Extend:没装(本机多 Unit 的文件夹 Unit 常见)就不写「登录 Forsion / 点击登录」,也不放点了没反应的登录行,只说「未登录」。
+  const canLogin = !!window.tangu?.forsionLogin
   const hasQuota = !!window.tangu?.accountQuota
   // Extend registers pages in the official Web app without exposing desktop IPC.
   const desktopCloud = !!window.tangu?.cloudInvoke
@@ -349,7 +360,7 @@ export const AccountCard: React.FC<{
   const accountItems = (q: AccountQuotaView | null, failed: boolean, r = rewards): Record<'head' | 'login' | 'restart' | 'quota' | 'backpack' | 'invite' | 'upgrade' | 'logout', SheetMenuItem | null> => ({
     // 头部 = 进「Forsion 云端 → 账号」(资料、会员、安全都在那);没有那几页的宿主只是个标题
     head: loggedIn && hasAccountPage ? { id: 'account', label: display, detail: t('sidebar.account.menu.openAccount'), run: () => { setMenu(null); openCloudPage('account') } } : null,
-    login: !loggedIn && !engineDown ? { id: 'login', label: t('sidebar.account.login'), icon: <LogIn size={14} />, disabled: loggingIn, run: () => { setMenu(null); void login() } } : null,
+    login: !loggedIn && !engineDown && canLogin ? { id: 'login', label: t('sidebar.account.login'), icon: <LogIn size={14} />, disabled: loggingIn, run: () => { setMenu(null); void login() } } : null,
     restart: engineDown ? { id: 'engine-restart', label: t('sidebar.account.engineDown'), icon: <RotateCcw size={14} />, run: () => { setMenu(null); void window.tangu?.backendRestart?.().finally(refresh) } } : null,
     // 一行 AI 额度摘要(口径同全端:剩余向下取整、不足 1% 写 <1%)→「额度与积分」
     quota: loggedIn && hasQuota ? { id: 'quota', label: t('sidebar.account.menu.quota'), detail: quotaText(q, failed), icon: <Gauge size={14} />, disabled: !hasQuotaPage, run: () => { setMenu(null); openCloudPage('quota') } } : null,
@@ -419,10 +430,10 @@ export const AccountCard: React.FC<{
   const subText = engineDown ? t('sidebar.account.engineDown')
     : engineStarting ? t('sidebar.account.engineStarting')
     : expired ? t('sidebar.account.expired')
-    : loggedIn ? '' : t('sidebar.account.loginSub')
+    : loggedIn || !canLogin ? '' : t('sidebar.account.loginSub')
 
   // 头像的宿主接缝(services/accountChip.ts):Android 原生顶栏把账号入口画成头像,点它 = 点这张卡。
-  const stateLabel = engineDown ? t('sidebar.account.engineDown') : engineStarting ? t('sidebar.account.engineStarting') : expired ? t('sidebar.account.expired') : loggedIn ? display : t('sidebar.account.login')
+  const stateLabel = engineDown ? t('sidebar.account.engineDown') : engineStarting ? t('sidebar.account.engineStarting') : expired ? t('sidebar.account.expired') : loggedIn ? display : canLogin ? t('sidebar.account.login') : t('sidebar.account.notSignedIn')
   const picture = loggedIn && auth?.avatar && !imgError ? auth.avatar : undefined
   const anchorRef = useRef<HTMLElement | null>(null)
   const activateRef = useRef(toggleFrom)
@@ -473,7 +484,7 @@ export const AccountCard: React.FC<{
         {loggedIn && <TierBadge tier={auth?.membershipTier} />}
         {webItems.head && <ChevronRight size={13} className="ap-head-go" aria-hidden="true" />}
       </div>
-      {!loggedIn && !engineDown && <button className="ap-item" disabled={loggingIn} onClick={() => { setMenu(null); void login() }}>
+      {!loggedIn && !engineDown && canLogin && <button className="ap-item" disabled={loggingIn} onClick={() => { setMenu(null); void login() }}>
         <LogIn size={14} /><span>{t('sidebar.account.login')}</span>
       </button>}
       {engineDown && <button className="ap-item" onClick={() => { setMenu(null); void window.tangu?.backendRestart?.().finally(refresh) }}>
@@ -592,14 +603,14 @@ export const AccountCard: React.FC<{
         className={`account-card${stateClass}`}
         role="button"
         tabIndex={0}
-        title={engineDown ? t('sidebar.account.engineDown') : engineStarting ? t('sidebar.account.engineStarting') : expired ? t('sidebar.account.expired') : loggedIn ? display : t('sidebar.account.loginHint')}
+        title={engineDown ? t('sidebar.account.engineDown') : engineStarting ? t('sidebar.account.engineStarting') : expired ? t('sidebar.account.expired') : loggedIn ? display : canLogin ? t('sidebar.account.loginHint') : t('sidebar.account.notSignedIn')}
         onClick={activate}
         onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); activate(e) } }}
       >
         {badgedAvatarEl}
         <span className="account-meta">
           <span className="account-name-row">
-            <span className="account-name">{loggedIn ? display : (loggingIn ? t('sidebar.account.loggingIn') : t('sidebar.account.login'))}</span>
+            <span className="account-name">{loggedIn ? display : loggingIn ? t('sidebar.account.loggingIn') : canLogin ? t('sidebar.account.login') : t('sidebar.account.notSignedIn')}</span>
           </span>
           {/* 第二行(用户拍板 2026-08-13):正常登录态只放会员标识,不再写「用户中心」。
               引擎未运行 / 登录过期 / 未登录这几档是**状态提示**,卡上没别的地方说得了,照旧走 subText。

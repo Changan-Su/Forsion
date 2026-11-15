@@ -7,7 +7,7 @@
  * 找不到 / 对不上的整行变灰、只能从列表移除;名册读不出就写一行「读不出」。底部「添加 Unit…」开对话框(LocalUnitDialogs)。
  * 只在真桌面的主窗出现(unitPanelAvailable):网页、手机壳、Android 原生半屏、独立窗都不画。
  */
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { AppWindow, ArrowUpRight, Check, ChevronDown, ChevronRight, FolderSearch, Globe, Laptop, MonitorDown, Pencil, Plus, Settings2, SmilePlus, Trash2, Users } from 'lucide-react'
 import { OverlayAt, UI_MODE, nativeSheetPresenter, switchSpace, useSpaceStore } from '@lcl/engine'
@@ -62,6 +62,11 @@ export function unitPanelForcesMenu(): boolean {
 
 const VIA_KEY = { lan: 'unit.viaLan', p2p: 'unit.viaP2p', tunnel: 'unit.viaTunnel' } as const
 
+/** 右键菜单挂在哪种行上:设备行、共享过来的行、本机的文件夹 Unit 行。 */
+type CtxRow = Extract<UnitPanelRow, { kind: 'unit' }> | SharedPanelRow | LocalFolderPanelRow
+/** 本机行有没有菜单:能用的行都有;自己那一行要是找不到 / 对不上,既不能开也不能移除自己 → 没有可做的,不开菜单。 */
+const localMenuOpens = (row: LocalFolderPanelRow): boolean => row.usable || !row.self
+
 export function AccountUnitSection({ onClose, onToast }: {
   /** 关面板(切换成功、去设置、改名前)。 */
   onClose: () => void
@@ -82,7 +87,10 @@ export function AccountUnitSection({ onClose, onToast }: {
   const hasLocal = localUnitsAvailable()
   const [offlineOpen, setOfflineOpen] = useState(false)
   const [note, setNote] = useState<string | null>(null)
-  const [ctx, setCtx] = useState<{ row: Extract<UnitPanelRow, { kind: 'unit' }> | SharedPanelRow | LocalFolderPanelRow; x: number; y: number } | null>(null)
+  // 右键菜单只记是哪一行(kind + key;本机行再记打开那一刻能不能用),画的时候按最新的模型取那一行 —— 见下面 ctxRow
+  const [ctx, setCtx] = useState<{ kind: CtxRow['kind']; key: string; x: number; y: number; usable?: boolean } | null>(null)
+  const ctxReturn = useRef<HTMLElement | null>(null) // 键盘打开的:收起时焦点回到那一行
+  const ctxEl = useRef<HTMLDivElement | null>(null)
   const toast = (text: string, error?: boolean): void => { if (onToast) onToast(text, error); else useApp.getState().toast(text, error) }
 
   // 先画缓存,同时后台刷新(内容变高后 OverlayAt 的 ResizeObserver 会重新夹位置)
@@ -101,6 +109,7 @@ export function AccountUnitSection({ onClose, onToast }: {
       if (e.key !== 'Escape') return
       e.stopPropagation()
       setCtx(null)
+      ctxReturn.current?.focus()
     }
     window.addEventListener('pointerdown', onDown, true)
     window.addEventListener('keydown', onKey, true)
@@ -120,6 +129,60 @@ export function AccountUnitSection({ onClose, onToast }: {
     lang: locale === 'en' ? 'en' : 'zh',
     pluginSpace: (manifestId) => resolvePluginSpace(manifestId, plugins, spaces.map((x) => x.id), (sid) => pluginSpaceOwner.get(sid)),
   })
+
+  // 菜单开着时名册变了:那一行没了、本机行变得找不到 / 对不上(或反过来)、名册读不出、共享行不能进了 → 收起菜单,
+  // 不拿打开那一刻的旧行去改名 / 移除。
+  const ctxRow = ((): CtxRow | null => {
+    if (!ctx) return null
+    if (ctx.kind === 'local') {
+      if (model.local.unreadable) return null
+      const r = model.local.rows.find((x) => x.key === ctx.key)
+      return r && r.usable === ctx.usable && localMenuOpens(r) ? r : null
+    }
+    if (ctx.kind === 'shared') {
+      const r = model.shared.flatMap((g) => g.rows).find((x) => x.key === ctx.key)
+      return r?.action?.kind === 'frame' ? r : null
+    }
+    const r = [...model.rows, ...model.offline].find((x) => x.kind === 'unit' && x.key === ctx.key)
+    return r?.kind === 'unit' ? r : null
+  })()
+  const ctxStale = !!ctx && !ctxRow
+  useEffect(() => {
+    if (!ctxStale) return
+    setCtx(null)
+    if (ctxReturn.current?.isConnected) ctxReturn.current.focus() // 键盘开的:焦点别掉回页面最外层
+  }, [ctxStale])
+  const openCtx = (row: CtxRow, x: number, y: number, from?: HTMLElement): void => {
+    ctxReturn.current = from ?? null
+    setCtx({ kind: row.kind, key: row.key, x, y, ...(row.kind === 'local' ? { usable: row.usable } : {}) })
+  }
+  /** 键盘开菜单:Shift+F10 / 菜单键(行是不能点开的灰行时,Enter / 空格也开)。菜单贴在那一行下面,焦点进第一项。 */
+  const keyMenu = (e: React.KeyboardEvent<HTMLElement>, row: CtxRow, enterOpens: boolean): void => {
+    const hit = e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10') || (enterOpens && (e.key === 'Enter' || e.key === ' '))
+    if (!hit) return
+    e.preventDefault()
+    e.stopPropagation()
+    const r = e.currentTarget.getBoundingClientRect()
+    openCtx(row, r.left + 24, r.bottom, e.currentTarget)
+  }
+  const ctxOpenKey = ctx ? `${ctx.kind}:${ctx.key}` : null
+  useEffect(() => {
+    if (!ctxOpenKey || !ctxReturn.current) return
+    const first = (): void => { ctxEl.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus() }
+    first()
+    const raf = requestAnimationFrame(first) // OverlayAt 第一帧量位置时可能还没显示出来
+    return () => cancelAnimationFrame(raf)
+  }, [ctxOpenKey])
+  /** 菜单里上下键在几项之间走(到头绕回)。 */
+  const menuKeys = (e: React.KeyboardEvent<HTMLDivElement>): void => {
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return
+    e.preventDefault()
+    const items = Array.from(e.currentTarget.querySelectorAll<HTMLElement>('[role="menuitem"]'))
+    if (!items.length) return
+    const at = items.indexOf(document.activeElement as HTMLElement)
+    const next = e.key === 'ArrowDown' ? (at + 1) % items.length : (at <= 0 ? items.length - 1 : at - 1)
+    items[next].focus()
+  }
 
   const backHome = (): void => {
     leaveUnitRemote() // 只收远程面(并作废还没落地的切换),不动智库的「本地 / 云端」
@@ -225,12 +288,25 @@ export function AccountUnitSection({ onClose, onToast }: {
       </>
     )
     // 名册读不出时只画自己那一行、不给菜单(不出「添加」以外的写操作)
-    const menu = !model.local.unreadable
-      ? (e: React.MouseEvent) => { e.preventDefault(); e.stopPropagation(); setCtx({ row, x: e.clientX, y: e.clientY }) }
-      : (e: React.MouseEvent) => { e.preventDefault(); e.stopPropagation() }
+    const opensMenu = !model.local.unreadable && localMenuOpens(row)
+    const menu = (e: React.MouseEvent): void => { e.preventDefault(); e.stopPropagation(); if (opensMenu) openCtx(row, e.clientX, e.clientY) }
     if (!row.usable) {
-      // 找不到 / 对不上:整行变灰,不是按钮;右键只有「从列表移除…」
-      return <div key={row.key} className="ap-item ap-unit ap-unit--inert" data-local-unit={u.id} data-local-state={u.state} aria-disabled="true" onContextMenu={menu}>{inner}</div>
+      // 找不到 / 对不上:整行变灰、点不开;右键只有「从列表移除…」。键盘也到得了:Tab 停在这一行,Enter / 空格 / Shift+F10 / 菜单键开菜单
+      // —— 这时它就是一枚菜单钮(灰字已经写明找不到 / 对不上),不标 aria-disabled;没有菜单可开的(自己那一行)才标
+      return (
+        <div
+          key={row.key}
+          className="ap-item ap-unit ap-unit--inert"
+          data-local-unit={u.id}
+          data-local-state={u.state}
+          {...(opensMenu
+            ? { role: 'button', tabIndex: 0, 'aria-haspopup': 'menu' as const, onKeyDown: (e: React.KeyboardEvent<HTMLElement>) => keyMenu(e, row, true) }
+            : { 'aria-disabled': true })}
+          onContextMenu={menu}
+        >
+          {inner}
+        </div>
+      )
     }
     return (
       <button
@@ -242,6 +318,7 @@ export function AccountUnitSection({ onClose, onToast }: {
         title={row.self ? undefined : t('unit.local.openOwn')}
         onClick={() => clickLocal(row)}
         onContextMenu={menu}
+        onKeyDown={(e) => { if (opensMenu) keyMenu(e, row, false) }}
       >
         {inner}
       </button>
@@ -267,7 +344,8 @@ export function AccountUnitSection({ onClose, onToast }: {
         data-unit-id={u.id}
         aria-current={row.current || undefined}
         onClick={() => openRow(row)}
-        onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setCtx({ row, x: e.clientX, y: e.clientY }) }}
+        onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); openCtx(row, e.clientX, e.clientY) }}
+        onKeyDown={(e) => keyMenu(e, row, false)}
       >
         <span className="ap-unit-ic">{deviceIcon(u, 14)}</span>
         <span className="ap-unit-name">{u.name}</span>
@@ -321,7 +399,8 @@ export function AccountUnitSection({ onClose, onToast }: {
         aria-current={row.current || undefined}
         onClick={() => openShared(row)}
         // 右键只有「切换到这台」(能进的行);打开 Space 的行没有菜单
-        onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); if (row.action?.kind === 'frame') setCtx({ row, x: e.clientX, y: e.clientY }) }}
+        onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); if (row.action?.kind === 'frame') openCtx(row, e.clientX, e.clientY) }}
+        onKeyDown={(e) => { if (row.action?.kind === 'frame') keyMenu(e, row, false) }}
       >
         {inner}
       </button>
@@ -378,16 +457,16 @@ export function AccountUnitSection({ onClose, onToast }: {
         <span className="ap-unit-ic"><Settings2 size={14} /></span>
         <span>{t('unit.panel.manage')}</span>
       </button>
-      {ctx && createPortal(
-        <OverlayAt className="ctx-menu ap-unit-ctx" role="menu" x={ctx.x} y={ctx.y} onPointerDown={(e) => e.stopPropagation()}>
-          {ctx.row.kind === 'shared' ? (() => {
+      {ctx && ctxRow && createPortal(
+        <OverlayAt className="ctx-menu ap-unit-ctx" role="menu" x={ctx.x} y={ctx.y} innerRef={(el) => { ctxEl.current = el }} onPointerDown={(e) => e.stopPropagation()} onKeyDown={menuKeys}>
+          {ctxRow.kind === 'shared' ? (() => {
             // 共享过来的:只有「切换到这台」(没有新窗口 / 桌面 / 改名 / 改图标)
-            const row = ctx.row
+            const row = ctxRow
             return <button role="menuitem" data-unit-act="switch" onClick={() => { setCtx(null); openShared(row) }}><ArrowUpRight size={14} />{t('unit.panel.switchTo')}</button>
-          })() : ctx.row.kind === 'local' ? (() => {
+          })() : ctxRow.kind === 'local' ? (() => {
             // 本机的文件夹 Unit:在自己的窗口打开 / 添加到桌面 / 改名字和图标… / 在访达中显示 / 从列表移除…
             // 自己那一行:不开自己、不移除自己;找不到 / 对不上:只剩「从列表移除…」
-            const row = ctx.row
+            const row = ctxRow
             const u = row.unit
             const done = (): void => { setCtx(null); onClose() }
             return (
@@ -400,7 +479,7 @@ export function AccountUnitSection({ onClose, onToast }: {
               </>
             )
           })() : (() => {
-            const row = ctx.row
+            const row = ctxRow
             return (
               <>
                 <button role="menuitem" data-unit-act="switch" onClick={() => { setCtx(null); openRow(row) }}><ArrowUpRight size={14} />{t('unit.panel.switchTo')}</button>

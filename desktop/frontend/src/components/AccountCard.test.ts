@@ -392,6 +392,42 @@ it('local Units: signed out without Extend, the avatar opens the panel with the 
   expect(document.querySelector('[data-local-badge]')).toBeNull() // 默认那台:头像不带角标
 })
 
+const NO_EXTEND = ['authStatus', 'authAccounts', 'forsionLogin', 'forsionLogout', 'forsionSwitchAccount', 'accountQuota'] as const
+const localOnly = () => ({
+  list: vi.fn().mockResolvedValue({ self: { kind: 'folder', id: 'lab', name: 'Lab', icon: '', path: '/u/Lab', displayPath: '~/Lab' }, units: [], registry: 'ok', defaultParent: '/u/Forsion Units', defaultParentDisplay: '~/Forsion Units' }),
+  onChanged: vi.fn(() => () => {}),
+})
+
+it('local Units: the avatar card is registered without Extend when this computer has local Units (main window only, never for a delegated admin)', async () => {
+  const { accountCardWanted } = await import('./AccountCard')
+  for (const k of NO_EXTEND) delete (window.tangu as any)[k]
+  expect(accountCardWanted(false)).toBe(false) // 没 Extend、也没本机多 Unit:没什么可放
+  window.tangu!.localUnits = localOnly() as any
+  expect(accountCardWanted(false)).toBe(true)
+  expect(accountCardWanted(true)).toBe(false)
+  history.replaceState(null, '', '?window=floating')
+  try { expect(accountCardWanted(false)).toBe(false) } finally { history.replaceState(null, '', location.pathname) }
+})
+
+it('local Units: with no Extend at all the card says "Not signed in" and has no sign-in row that cannot work', async () => {
+  const { resetLocalUnitsForTest } = await import('./localUnits')
+  resetLocalUnitsForTest()
+  for (const k of NO_EXTEND) delete (window.tangu as any)[k]
+  window.tangu!.localUnits = localOnly() as any
+  await mount()
+  const card = host.querySelector<HTMLElement>('.account-card')!
+  expect(card.querySelector('.account-name')!.textContent).toBe('未登录')
+  expect(card.getAttribute('title')).toBe('未登录')
+  expect(card.textContent).not.toContain('点击登录')
+  await act(async () => { card.click() })
+  await tick()
+  const pop = document.querySelector('.account-pop')!
+  expect(pop.querySelector('.ap-name')!.textContent).toBe('未登录')
+  expect(pop.textContent).not.toContain('登录 Forsion')
+  expect(pop.querySelector('[data-local-add]')).toBeTruthy()
+  expect(pop.querySelector('[data-testid="account-units"]')).toBeTruthy()
+})
+
 it('local Units: inside a folder Unit the avatar carries that Unit\'s icon in its corner', async () => {
   const { resetLocalUnitsForTest } = await import('./localUnits')
   resetLocalUnitsForTest()

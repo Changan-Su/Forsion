@@ -4732,6 +4732,8 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-wrap { top: calc(var(-
   border-bottom: var(--border-width) solid var(--border);
   margin-bottom: 4px;
 }
+/* 头部下面什么都没有(没装 Extend、没登录、也没登录通道:只剩 Unit 段 + 「未登录」)→ 不留一条孤零零的分隔线 */
+.account-pop .ap-head:last-child { border-bottom: none; margin-bottom: 0; }
 .account-pop .ap-head .account-avatar { width: 26px; height: 26px; font-size: 12px; }
 /* 头部可点(→ 设置「Forsion 云端 → 账号」):与菜单项同一套悬停底色 */
 .account-pop .ap-head--link { cursor: pointer; border-radius: var(--radius-sm); }

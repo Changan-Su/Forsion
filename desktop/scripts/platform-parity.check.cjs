@@ -135,7 +135,7 @@ const KNOWN_GATES = {
   'window.tangu?.unitPublicEntry': '服务器 Unit 的公共网页入口以访客账号接入 Extend 云端收件箱;配对设备投影继续只用该设备引擎,手机浏览器装共享 mobile 壳也沿用此边界',
   'window.tangu?.restartForUpdate': '桌面宿主的待重启更新入口与本机任务退出保护；web / mobile 不替换 Electron 或本机核心插件，不提供该 IPC。',
   'window.tangu?.account': '共享账号能力：Unit 网页投射安装账号提供方时也显示原生 AccountCard；desktop/mobile 常规产品由 window.tangu?.authStatus 显示相同组件。',
-  'window.tangu?.authStatus': '账号卡 rb-account 随 Forsion Extend 出现(auth:* 五通道住在 Extend,authStatus 是桥键;缺包 / 验签失败就没有账号卡)。web / mobile 的 shim 都自带 authStatus,三端照常显示。',
+  'window.tangu?.authStatus': '账号卡 rb-account 随 Forsion Extend 出现(auth:* 五通道住在 Extend,authStatus 是桥键;缺包 / 验签失败就没有账号卡;桌面主窗有本机多 Unit 时没 Extend 也挂,见 AccountCard 的 accountCardWanted)。2026-11-14 判别式搬进 features/runtime.ts 的 accountBridgeAvailable。web / mobile 的 shim 都自带 authStatus,三端照常显示。',
   'window.amadeus': 'Amadeus Space 整体;desktop=IPC 桥 / web=云桥 / mobile=Capacitor 桥,三端都有',
   'window.tangu?.backendStatus': '桌面壳语义(含 external 模式);2026-09-15 起 Inbox/Muse 的判定单源在 features/runtime.ts(inboxAvailable/museAvailable),bootstrapEngine 不再直接写它',
   'window.tangu?.mobile': '移动端标志',
