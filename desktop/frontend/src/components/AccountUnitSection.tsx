@@ -247,7 +247,7 @@ export function AccountUnitSection({ onClose, onToast }: {
     onClose()
     const r = await localUnitCall((api) => api.open(id))
     if (!r.ok) {
-      const text = localUnitErrorText(r.code)
+      const text = localUnitErrorText(r.code, r.message)
       if (text) toast(translate('unit.local.openFailed', { name, error: text }), true)
     }
   }
@@ -262,12 +262,13 @@ export function AccountUnitSection({ onClose, onToast }: {
     if (!row.usable) return
     void openLocalUnit(row.unit.id, row.unit.name)
   }
-  /** 右键里那几样不开窗的动作(显示文件夹、添加到桌面):做不成说一句。开发版不生成桌面快捷方式(主进程回 io + unpackaged),照设备那条说。 */
+  /** 右键里那几样不开窗的动作(显示文件夹、添加到桌面):做不成说一句。开发版不生成桌面快捷方式(主进程回 io、detail = unpackaged),照设备那条说。
+   *  detail 只拿来认这一种情形,从不显示。 */
   const localAct = async (result: Promise<LocalUnitsResult>, ok?: string): Promise<void> => {
     const r = await result
     if (r.ok) { if (ok) toast(ok); return }
-    if (r.message === 'unpackaged') { toast(translate('unitShortcut.toast.unpackaged'), true); return }
-    const text = localUnitErrorText(r.code)
+    if (r.detail === 'unpackaged') { toast(translate('unitShortcut.toast.unpackaged'), true); return }
+    const text = localUnitErrorText(r.code, r.message)
     if (text) toast(translate('unit.local.actionFailed', { error: text }), true)
   }
   const openDialog = useLocalUnitDialog((s) => s.open)

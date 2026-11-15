@@ -272,7 +272,7 @@ describe('local Units in the panel', () => {
     expect(api.addToDesktop).toHaveBeenCalledWith('demo', { fallbackName: 'Forsion 本机 Unit' })
     expect(onToast.mock.lastCall?.[0]).toContain('已添加到桌面')
     expect(onToast.mock.lastCall?.[1]).toBeFalsy()
-    api.addToDesktop.mockResolvedValueOnce({ ok: false, code: 'io', message: 'unpackaged' })
+    api.addToDesktop.mockResolvedValueOnce({ ok: false, code: 'io', detail: 'unpackaged' })
     await rightClick(local('demo'))
     await click(q('[data-unit-act="desktop"]'))
     await tick()
@@ -309,24 +309,34 @@ describe('local Units in the panel', () => {
     expect(onToast).toHaveBeenLastCalledWith('没能从列表移除「demo」：读写文件时出了问题，稍后再试。', true)
   })
 
-  it('raw main-process errors (EACCES and paths) never reach the user: rename / open / create say the plain line for the code', async () => {
-    const raw = "EACCES: permission denied, open '/Users/x/Forsion Units/demo/.forsion-unit.json'"
+  it('a main-process message is said as is for any code; detail (raw internals) is never shown, the plain line for the code stands in', async () => {
+    const detail = "EACCES: permission denied, open '/Users/x/Forsion Units/demo/.forsion-unit.json'"
+    const overlap = '这个文件夹和这台电脑自己的 Forsion 数据重叠，不能当 Unit 用。'
     await mount()
-    api.rename.mockResolvedValueOnce({ ok: false, code: 'io', message: raw })
+    // 只有 detail:按码说,原文不出现
+    api.rename.mockResolvedValueOnce({ ok: false, code: 'io', detail })
     await rightClick(local('demo'))
     await click(q('[data-unit-act="edit"]'))
     await typeInto(q<HTMLInputElement>('[data-lu="name"]')!, 'Demo 2')
     await click(q('[data-lu="save"]'))
     expect(onToast).toHaveBeenLastCalledWith('没做成：读写文件时出了问题，稍后再试。', true)
-    api.open.mockResolvedValueOnce({ ok: false, code: 'not_a_unit', message: 'marker id does not match' })
+    // 打开:not_a_unit 带了 message → 照它说;detail 不出现
+    api.open.mockResolvedValueOnce({ ok: false, code: 'not_a_unit', message: overlap, detail: 'marker id does not match' })
     await click(local('lab'))
+    expect(onToast.mock.lastCall?.[0]).toContain(overlap)
     expect(onToast.mock.lastCall?.[0]).not.toContain('marker')
-    api.create.mockResolvedValueOnce({ ok: false, code: 'io', message: raw })
+    // 新建:parent_invalid 带了 message → 写在位置下面
+    api.create.mockResolvedValueOnce({ ok: false, code: 'parent_invalid', message: overlap, detail })
     await click(q('[data-local-add]'))
     await typeInto(q<HTMLInputElement>('[data-lu="name"]')!, 'Lab 2')
     await click(q('[data-lu="create"]'))
+    expect(text(q('[data-lu-dialog="add"]'))).toContain(overlap)
     expect(text(q('[data-lu-dialog="add"]'))).not.toContain('EACCES')
+    // 新建:只有 detail → 按码说
+    api.create.mockResolvedValueOnce({ ok: false, code: 'io', detail })
+    await click(q('[data-lu="create"]'))
     expect(text(q('[data-lu-dialog="add"]'))).toContain('读写文件时出了问题')
+    expect(text(q('[data-lu-dialog="add"]'))).not.toContain('EACCES')
   })
 
   it('an open menu follows the latest list: renamed rows act on the new name; a row that goes missing, disappears or a list that turns unreadable closes it', async () => {

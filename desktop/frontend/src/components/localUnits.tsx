@@ -58,9 +58,12 @@ const ERR_KEY: Record<Exclude<LocalUnitsErrorCode, 'cancelled'>, string> = {
 }
 
 /** 错误码 → 一句人话;cancelled → null(不说话);认不出的码按 io 说。
- *  不看主进程带的 message:那里多半是给开发者看的原始报错(英文、带路径),只有「从列表移除」被拒那一处是写给人看的整句,由移除那条路另取。 */
-export function localUnitErrorText(code: LocalUnitsErrorCode | string | undefined): string | null {
+ *  主进程带了 message 就照它说(只放给人看的整句,已按界面语言翻好:正开着不能移除、和这台电脑的数据重叠、原来的文件夹读不出……),
+ *  没带才按码说。detail 是给日志的原文,从不显示。 */
+export function localUnitErrorText(code: LocalUnitsErrorCode | string | undefined, message?: string): string | null {
   if (code === 'cancelled') return null
+  const said = typeof message === 'string' ? message.trim() : ''
+  if (said) return said
   return translate((ERR_KEY as Record<string, string>)[code ?? ''] ?? ERR_KEY.io)
 }
 

@@ -180,7 +180,7 @@ function AddUnitDialog({ onClose, toast }: { onClose: () => void; toast: Toast }
     const r = await localUnitCall((api) => api.create({ name: trimmed, icon, ...(parent ? { parentDir: parent.path } : {}) }))
     if (!r.ok) {
       setBusy(false)
-      const text = localUnitErrorText(r.code)
+      const text = localUnitErrorText(r.code, r.message)
       if (text) setErr({ at: errAt(r.code), text })
       return
     }
@@ -188,7 +188,7 @@ function AddUnitDialog({ onClose, toast }: { onClose: () => void; toast: Toast }
     onClose()
     const o = await localUnitCall((api) => api.open(r.unit.id))
     if (!o.ok) {
-      const text = localUnitErrorText(o.code)
+      const text = localUnitErrorText(o.code, o.message)
       if (text) toast(translate('unit.local.createdOpenFailed', { name: r.unit.name, error: text }), true)
     }
   }
@@ -212,7 +212,7 @@ function AddUnitDialog({ onClose, toast }: { onClose: () => void; toast: Toast }
       toast(translate('unit.local.added', { name: r.unit.name }))
       return
     }
-    const text = localUnitErrorText(r.code)
+    const text = localUnitErrorText(r.code, r.message)
     if (text) setErr({ at: 'general', text })
   }
   const byAddress = (): void => {
@@ -293,7 +293,7 @@ function EditUnitDialog({ unit, onClose, toast }: { unit: LocalUnitRow; onClose:
     const r = await localUnitCall((api) => api.rename(unit.id, patch))
     setBusy(false)
     if (r.ok) { onClose(); return }
-    const text = localUnitErrorText(r.code)
+    const text = localUnitErrorText(r.code, r.message)
     if (!text) return
     // 名字以外的错(被移除了 / 读不出名册 / 写不进标记)不落在输入框下面,关掉说一句
     if (errAt(r.code) === 'name') setErr({ at: 'name', text })
@@ -324,8 +324,7 @@ export function LocalUnitDialogHost({ onToast }: { onToast?: Toast }): React.Rea
     if (r.ok) toast(translate('unit.local.removed', { name: u.name }))
     else {
       // 正开着的 Unit 主进程不让移除,回 io 带一句按界面语言写好的说明 → 照它说;没带就按码说
-      const said = r.code === 'io' && typeof r.message === 'string' ? r.message.trim() : ''
-      const text = said || localUnitErrorText(r.code)
+      const text = localUnitErrorText(r.code, r.message)
       if (text) toast(translate('unit.local.removeFailed', { name: u.name, error: text }), true)
     }
   }
