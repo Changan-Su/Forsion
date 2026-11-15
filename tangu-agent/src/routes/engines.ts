@@ -14,12 +14,12 @@ router.get('/agent/engines', authMiddleware, (_req, res) => {
   res.json({ engines: deps().engines?.list() ?? [] });
 });
 
-// 懒探测某引擎能力(模型 + slash 命令);云端/无该引擎 → 空。首次会 spawn(慢),manager 内缓存。
+// 懒探测某引擎能力(模型 + slash 命令);云端/无该引擎 → 空。首次会 spawn(慢),manager 内缓存。?fresh=1 不用缓存、重新探测。
 router.get('/agent/engines/:id/capabilities', authMiddleware, async (req, res) => {
   try {
     const engines = deps().engines;
     if (!engines || !engines.has(req.params.id)) return res.json({ models: [], commands: [] });
-    res.json(await engines.capabilities(req.params.id));
+    res.json(await engines.capabilities(req.params.id, { fresh: req.query.fresh === '1' }));
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'probe failed' });
   }

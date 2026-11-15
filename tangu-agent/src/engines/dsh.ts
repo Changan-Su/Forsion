@@ -10,6 +10,11 @@
  *   - 模型和思考档在 `configOptions` 里,用 `session/set_config_option` 改,没有 `models` / `session/set_model`;
  *   - 审批请求(`session/request_permission`)只带 toolCallId,标题和参数在它前面那条 `tool_call` 更新里。
  *
+ * 只用 DeepSeek 账号登录(没有 API key)的 DSH,新会话的缺省模型走的是要 API key 的那条线:不选模型,每一句都失败
+ * (`no API key for provider route "deepseek-official"`);在模型下拉里选了账号那一组的模型就通。公开协议里没有
+ * 「哪条线有凭据」这一项,所以这里不替用户换模型,只把失败原因换成一句点名当前模型、说得出能换成哪些的话
+ * (acpEngine.modelNoApiKeyError;实测 scripts/dsh-engine.check.mjs 的 nokey)。
+ *
  * 历史:早先在 ~/.tangu/engines/dsh 里种一份 cordis 组合去跑 `@deepseek-ai/dsh-acp-demo`,那个包上游已删。
  * 那个目录不再读写(留着无害,用户可自行删除)。
  */

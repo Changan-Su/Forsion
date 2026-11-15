@@ -11,7 +11,8 @@
 //       取消 → 结果丢弃;那一行被删 → 不插并提示;一步 Cmd+Z 撤掉整段结果。
 //       D6(Codex 复核 inst P1-3)结果回来时在源码模式 → 不写进隐藏的编辑器、盘上 / textarea 都没有,提示;切回可视也没有。
 //   E = G3-05 Tangu 正在改这篇:写类工具参数流式生成 / 已发出未回结果时挂「正在修改」胶囊(不拦打字),结果回来即撤;
-//       打字中撞上 Tangu 的写入 → 本地胜 + Tangu 那版进冲突副本 + 提示点名 Tangu;别人的外部改动仍是「被别处改过」。
+//       打字中撞上 Tangu 改**同一行** → 本地胜 + Tangu 那版进冲突副本 + 提示点名 Tangu;别人的外部改动仍是「被别处改过」。
+//       E2m / E3m(2026-11-14):改的是**另一段** → 三方合并进来、零副本零 error;Tangu 的那几处标成它的改动、提示点名 Tangu。
 //   F = G3-08 助手回答插回笔记:台架里挂一条生产 EditorialMessage(侧栏对话的形态),点操作行「插入笔记」→
 //       正文没被聚焦过 → 文末;有过光标 → 光标所在块之后,连插两条按序排、各自一步 Cmd+Z;「问 Tangu」发起的对话 →
 //       插回被引用块之后(胜过光标);不抢焦点;代码块 / 公式原样落盘;回执点名笔记 + 撤销(之后又改过就不撤、说明);
@@ -772,7 +773,7 @@ async function groupE(browser) {
   {
     const page = await open(browser, md)
     await page.evaluate(() => { window.__t5 = []; window.addEventListener('amadeus:toast', (e) => window.__t5.push({ text: e.detail.text, level: e.detail.level, act: e.detail.action?.label })) })
-    const agentMd = '# 文档\n\n第一段 TANGU 改的。\n\n第二段原文。\n'
+    const agentMd = '# 文档\n\n第一段原文。\n\n第二段原文 TANGU 改的。\n' // 改的正是用户在打的那一行:合不拢
     await caretAfterText(page, '第二段原文。')
     await page.keyboard.type('用户在打')
     await ledger(page, (m, abs, full) => m.noteAgentWriteStart('w2', [{ path: abs, full }]), agentMd)
@@ -782,7 +783,7 @@ async function groupE(browser) {
     const d = await vault(page)
     const copies = await page.evaluate(() => [...window.__upage.vault.entries()].filter(([k]) => /\(conflict /.test(k)).map(([, v]) => v))
     const t = await page.evaluate(() => window.__t5.filter((x) => x.level === 'error'))
-    check('E2 打字中撞上 Tangu 的写入 → 本地胜、Tangu 那版进冲突副本,提示点名 Tangu 并带「打开副本」',
+    check('E2 打字中撞上 Tangu 改同一行 → 本地胜、Tangu 那版进冲突副本,提示点名 Tangu 并带「打开副本」',
       d.includes('第二段原文。用户在打') && !d.includes('TANGU') && copies.length === 1 && copies[0] === agentMd && t.length === 1 && t[0].text.includes('Tangu') && t[0].act === '打开副本',
       JSON.stringify({ d, copies, t }))
     await page.close()
@@ -792,11 +793,35 @@ async function groupE(browser) {
     await page.evaluate(() => { window.__t5 = []; window.addEventListener('amadeus:toast', (e) => window.__t5.push({ text: e.detail.text, level: e.detail.level })) })
     await caretAfterText(page, '第二段原文。')
     await page.keyboard.type('用户在打')
-    await page.evaluate(() => window.__upage.fire('Unified.md', '# 文档\n\n第一段 别处改的。\n\n第二段原文。\n'))
+    await page.evaluate(() => window.__upage.fire('Unified.md', '# 文档\n\n第一段原文。\n\n第二段原文 别处改的。\n'))
     await page.waitForTimeout(2500)
     const t = await page.evaluate(() => window.__t5.filter((x) => x.level === 'error'))
-    check('E3 对照:不是 Tangu 写的外部改动 → 仍是「被别处改过」,不点名 Tangu、不挂正在修改胶囊',
+    check('E3 对照:不是 Tangu 写的外部改动(同一行)→ 仍是「被别处改过」,不点名 Tangu、不挂正在修改胶囊',
       t.length === 1 && !t[0].text.includes('Tangu') && (await liveCap(page)) == null, JSON.stringify(t))
+    await page.close()
+  }
+  // E2m / E3m(2026-11-14):改的是另一段 → 三方合并,不出副本
+  for (const agent of [true, false]) {
+    const page = await open(browser, md)
+    await page.evaluate(() => { window.__t5 = []; window.addEventListener('amadeus:toast', (e) => window.__t5.push({ text: e.detail.text, level: e.detail.level })) })
+    const other = agent ? '# 文档\n\n第一段 TANGU 改的。\n\n第二段原文。\n' : '# 文档\n\n第一段 别处改的。\n\n第二段原文。\n'
+    await caretAfterText(page, '第二段原文。')
+    await page.keyboard.type('用户在打')
+    if (agent) await ledger(page, (m, abs, full) => m.noteAgentWriteStart('w3', [{ path: abs, full }]), other)
+    await page.evaluate((t) => window.__upage.fire('Unified.md', t), other)
+    if (agent) await ledger(page, (m) => m.noteAgentWriteEnd('w3', true))
+    await page.waitForTimeout(2500)
+    const d = await vault(page)
+    const copies = await page.evaluate(() => [...window.__upage.vault.keys()].filter((k) => /\(conflict /.test(k)))
+    const t = await page.evaluate(() => window.__t5)
+    const notice = t.filter((x) => !x.level && /合并/.test(x.text))
+    const m = await marks(page)
+    check(agent
+      ? 'E2m 打字中 Tangu 改的是另一段 → 合并进来、零副本零 error;那几处标成 Tangu 的改动,提示点名 Tangu'
+      : 'E3m 对照:别人改的另一段 → 合并进来、零副本零 error,提示不点名 Tangu、不标 Tangu 的改动',
+      d === other.replace('第二段原文。', '第二段原文。用户在打') && copies.length === 0 && !t.some((x) => x.level === 'error') && notice.length === 1 &&
+        notice[0].text.includes('Tangu') === agent && (agent ? m.includes('TANGU') : m === ''),
+      JSON.stringify({ d, copies, t, marks: m }))
     await page.close()
   }
 }

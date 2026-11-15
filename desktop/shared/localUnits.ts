@@ -129,7 +129,7 @@ export interface LocalUnitsApi {
   /** 只从名册拿掉,文件夹和里面的数据都不动。 */
   remove(id: string): Promise<LocalUnitsResult>
   /** 图标:渲染层画好的 1024px PNG data URL(同 Space 的「添加到桌面」);不给 = 系统的通用 App 图标。
-   *  fallbackName:名字洗空时的本地化缺省名。开发版一律 { ok: false, code: 'io', message: 'unpackaged' }。 */
+   *  fallbackName:名字洗空时的本地化缺省名。开发版一律 { ok: false, code: 'io', detail: 'unpackaged' }(渲染层据此换一句「只在安装版里可用」)。 */
   addToDesktop(id: string, opts?: { iconPng?: string; fallbackName?: string }): Promise<LocalUnitsResult>
   /** 名册、标记文件或运行状态变了(任一实例改的都算)。 */
   onChanged(cb: () => void): () => void
