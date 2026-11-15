@@ -326,6 +326,11 @@ export interface NormalAgentDef {
   standInLibrary?: string[]
   /** 本体这边:分身能不能读 human/AGENT.md(缺省不能)。 */
   standInAgentMd?: boolean
+  /** 由谁来跑(11-14):缺席 = Tangu;'dsh' = 交给本机的 DeepSeek Harness 跑,身份仍在 Forsion。只有本机设置页能改。
+   *  可能是本版本不认识的值(新版本写的):界面照样标「不是 Tangu」,发消息会明确失败。 */
+  engine?: string
+  /** 跑在外部引擎上时缺省用它的哪个模型(引擎自己的模型 id,原样存);会话里在输入框另选的优先。 */
+  engineModel?: string
 }
 
 /** GET /agent/stand-ins、/agent/agents/:slug/stand-ins 的一行。 */

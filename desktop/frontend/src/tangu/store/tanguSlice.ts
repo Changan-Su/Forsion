@@ -3648,13 +3648,15 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     // extraPatch 与 agentSlug 同一笔 PUT(选择条降回单人时要连团队字段一起写,拆成两笔会互相冲掉)。
     get().patchSessionConfig({ ...(extraPatch || {}), agentSlug: slug || undefined }, sid)
     // remember=false:这是 agent 预设强加的,不该把用户的「新会话默认模型/思考档」也一并改掉。
-    if (def?.model) get().setSessionModel(def.model, sid, false)
-    if (def?.thinkingLevel) get().setSessionThinking(def.thinkingLevel, sid, false)
+    // 跑在外部引擎上的 Agent(def.engine):它的 model / 思考档是换回 Tangu 时用的,这时不套(模型按它的 engineModel,见引擎 agentLoop)
+    if (def?.model && !def.engine) get().setSessionModel(def.model, sid, false)
+    if (def?.thinkingLevel && !def.engine) get().setSessionThinking(def.thinkingLevel, sid, false)
     get().pushNotice(def ? t('input.agentActive', { name: agentName(def) }) : t('input.agentCleared'))
   },
 
   selectNewChatAgent: (slug) => {
-    const def = slug ? get().agentDefs.find((a) => a.slug === slug) : null
+    const found = slug ? get().agentDefs.find((a) => a.slug === slug) : null
+    const def = found?.engine ? null : found // 跑在外部引擎上的 Agent 不套它的 Tangu 模型 / 思考档(同 selectSessionAgent)
     set((s) => ({ newChatCfg: { ...s.newChatCfg, agentSlug: slug || undefined, ...(def?.thinkingLevel ? { thinkingLevel: def.thinkingLevel, ...(def.thinkingLevel !== 'max' ? { ultra: false } : {}) } : {}) } }))
     if (def?.model) set({ newChatModel: def.model })
   },

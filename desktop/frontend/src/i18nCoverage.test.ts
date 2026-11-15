@@ -375,6 +375,7 @@ describe('i18n 覆盖', () => {
       'achievements.a.first-login.title': '成就标题,化用论文名的英文梗',
       'achievements.a.first-message.title': '成就标题,英文梗',
       'agentProfile.space': 'Space 名「Agents」(与 Spaces 同为专名)',
+      'agentEngine.harness': 'Agent 配置页的卡片名:DSH 融合方案 C2-1 定的「Harness」(由谁来跑这个 Agent,Tangu / DSH 并列),专名不译',
       'onboarding.guide.moreAgentsPath': '指向 Space 名「Agents」',
       'approvalRules.allowPh': '工具名示例(代码),不可译',
       'approvalRules.askPh': '工具名示例(代码),不可译',
