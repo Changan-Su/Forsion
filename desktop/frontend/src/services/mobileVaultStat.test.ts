@@ -25,7 +25,12 @@ vi.mock('../../../../mobile/src/amadeus/fsAdapter', () => ({
   },
 }))
 
-const { VaultManager } = await import('../../../../mobile/src/amadeus/vaultManager')
+// 经变量路径动态引:不把手机端源码(path-browserify 无类型声明)拉进桌面的 tsc 程序(同 mobileBridgeRenameLinks.test.ts)
+const MOBILE_VAULT = '../../../../mobile/src/amadeus/vaultManager'
+type StatResult = { kind: 'file' | 'folder'; size: number; mtime: number; ctime: number | null } | null
+const { VaultManager } = (await import(/* @vite-ignore */ MOBILE_VAULT)) as {
+  VaultManager: new () => { setRoot(p: string): void; statEntry(rel: string): Promise<StatResult> }
+}
 
 beforeEach(() => {
   entries.clear()

@@ -351,13 +351,15 @@ export interface PluginAppApi extends BlockSurfaceApi {
    *  to a path that didn't exist, `createFolder`) are renamed directly. Anything else asks the user first; Cancel
    *  rejects with `Error('user_declined')`. Call it from a user action, not in a loop over the vault.
    *  Rejects: no vault open, missing path, target exists, invalid name (slashes, leading `.`, surrounding spaces),
-   *  file kinds the tree can't rename (images, PDFs, …), plugin disabled. Older hosts lack it: `ctx.app.renamePath?.(…)`. */
+   *  file kinds the tree can't rename (images, PDFs, …), a folder that contains `.db` files, plugin disabled. If the
+   *  file was moved but the host couldn't finish updating (links, `.fd` subnotes), it rejects with a message naming
+   *  the new path. Calls are queued host-wide, one at a time. Older hosts lack it: `ctx.app.renamePath?.(…)`. */
   renamePath?(path: string, newName: string): Promise<string>
   /** Move a file or folder into another existing folder (2026-11-16+; `''` = vault root), the same way dragging it in the
    *  file tree does: links to moved notes are rewritten, a note's `.fd` subnotes move with it, open editors follow.
    *  Resolves with the new vault-relative path. Same boundary and rejections as `renamePath` (the dialog names the
-   *  destination); also rejects a missing destination folder, a folder into itself and `.db` files (relation columns
-   *  in other tables would lose it). Relative Markdown links to a moved attachment are not rewritten (wikilinks resolve
+   *  destination); also rejects a missing destination folder, a folder into itself, and `.db` files or folders that
+   *  contain them (relation columns in other tables would lose them). Relative Markdown links to a moved attachment are not rewritten (wikilinks resolve
    *  by name and keep working), as in the tree. Older hosts lack it: `ctx.app.movePath?.(…)`. */
   movePath?(path: string, destFolder: string): Promise<string>
   /** 当前库的**绝对路径**(没打开库时 null)。用途:把路径交给 Agent 的 host 模式工具(view_image /
