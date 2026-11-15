@@ -2502,7 +2502,8 @@ try {
     const mkS = async (slug, cwd, title) => (await api('/agent/sessions', { method: 'POST', body: JSON.stringify({ title, model_id: MODEL, project_path: cwd, agent_config: { agentSlug: slug, execMode: 'host', cwd } }) })).session.id;
     const memoryOf = async (sid) => (await api(`/agent/project-context?sessionId=${sid}`)).memory || { entries: [], chars: 0, limit: 0 };
     // 11-09:写满不再当场压缩,后台排一次整理(3 秒后起跑)。等它收场:organize.last 有了、没在跑;老引擎没有 organize → 立刻返回
-    const settle = async (sid, maxMs = 240_000) => {
+    // 上限盖住引擎整理一整次的截止(projectMemoryCompact 的 ORGANIZE_DEADLINE_MS 610 秒)+ 起跑前的 3 秒;轮询到收场就返回,正常不会等这么久
+    const settle = async (sid, maxMs = 630_000) => {
       const t0 = Date.now(); let mem = await memoryOf(sid);
       while (mem.organize && !(mem.organize.last && !mem.organize.running) && Date.now() - t0 < maxMs) { await sleep(3000); mem = await memoryOf(sid); }
       return mem;
