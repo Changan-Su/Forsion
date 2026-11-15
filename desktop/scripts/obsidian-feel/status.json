@@ -46,7 +46,7 @@
    "snap:退格3": {"status":"same"}
   },
   "K11": {
-   "snap:左括号": {"status":"pending","diff":"content"},
+   "snap:左括号": {"status":"same"},
    "snap:右括号": {"status":"same"},
    "snap:成对退格": {"status":"same"}
   },
@@ -63,12 +63,12 @@
    "snap:接着打字": {"status":"same"}
   },
   "K12d": {
-   "snap:敲下后": {"status":"pending","diff":"content"},
-   "snap:接着打字": {"status":"pending","diff":"content"}
+   "snap:敲下后": {"status":"same"},
+   "snap:接着打字": {"status":"same"}
   },
   "K12e": {
-   "snap:敲下后": {"status":"pending","diff":"content"},
-   "snap:接着打字": {"status":"pending","diff":"content"}
+   "snap:敲下后": {"status":"same"},
+   "snap:接着打字": {"status":"same"}
   },
   "K12f": {
    "snap:敲下后": {"status":"same"},
@@ -79,21 +79,21 @@
    "snap:接着打字": {"status":"pending","diff":"content"}
   },
   "K12h": {
-   "snap:敲下后": {"status":"pending","diff":"content"},
-   "snap:接着打字": {"status":"pending","diff":"content"}
+   "snap:敲下后": {"status":"same"},
+   "snap:接着打字": {"status":"same"}
   },
   "K13": {
-   "snap:星号包裹": {"status":"pending","diff":"content"}
+   "snap:星号包裹": {"status":"same"}
   },
   "K13b": {
    "snap:反引号包裹": {"status":"same"},
-   "snap:方括号包裹": {"status":"pending","diff":"content"},
-   "snap:美元包裹": {"status":"pending","diff":"content"}
+   "snap:方括号包裹": {"status":"same"},
+   "snap:美元包裹": {"status":"same"}
   },
   "K13c": {
    "snap:圆括号包裹": {"status":"same"},
    "snap:引号包裹": {"status":"same"},
-   "snap:等号包裹": {"status":"pending","diff":"content"}
+   "snap:等号包裹": {"status":"same"}
   },
   "K14": {
    "snap:井号空格": {"status":"pending","diff":"content"},

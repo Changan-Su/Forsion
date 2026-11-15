@@ -122,6 +122,8 @@ import { BLANK_BUTTON_BLOCK } from '../button/format'
 import { newDocAgentSpec, serializeDocAgentSpec } from '../documentAgent/format'
 import { emptyTaskRemark, taskCheckboxPlugin } from './taskList'
 import { calloutPlugin, calloutTitleRemark, handleFoldKeyDown, unescapeCalloutToken } from './callout'
+import { bodyPairEarlyPlugin } from './bodyAutoPair'
+import { hasRefDefinition, unescapeLiteralBrackets } from './bracketEscape'
 import { codeBlockPlugin } from './codeBlock'
 import { spellcheckPlugin } from './spellcheck'
 import { ASK_ALT, askString, askStringOrAlt } from '../../components/askString'
@@ -253,15 +255,20 @@ export function stampedFileName(kind: string): string {
  *  行首 `==高亮==` 被转义成 `\==`(setext 防护过宽,I-17;同在 tagEscape.ts)。
  *  markdownUpdated 监听器与 UnifiedPage.serializeNow(flush 前同步快照)都必须走这里 ——
  *  Codex 终审 P0:serializeNow 曾绕过本链,快打字后立刻改名会把 \[\[ 持久化成死链。 */
-export function normalizeSerializedMd(markdown: string): string {
+export function normalizeSerializedMd(markdown: string, opts: { keepBrackets?: boolean } = {}): string {
   // restoreEscapeSentinels 必须在最后:用户写的转义(D-11)以占位穿过上面这串反转义,再换回 `\`(见 ./literalEscape)。
-  return restoreEscapeSentinels(stripEmptyLineBr(unescapeCalloutToken(unescapeMathSource(unescapeTagAtLineStart(unescapeHighlightAtLineStart(normalizeUrlLiterals(unescapeWikiOutsideFences(markdown))))))))
+  // unescapeLiteralBrackets:成对的字面 `[词]` 不带反斜杠落盘(K13b / K12h);文档里有链接定义时由调用方关掉(见 ./bracketEscape)。
+  const urls = normalizeUrlLiterals(unescapeWikiOutsideFences(markdown))
+  const brackets = opts.keepBrackets ? urls : unescapeLiteralBrackets(urls)
+  return restoreEscapeSentinels(stripEmptyLineBr(unescapeCalloutToken(unescapeMathSource(unescapeTagAtLineStart(unescapeHighlightAtLineStart(brackets))))))
 }
 /** v4 整篇落盘(D-18):没被编辑的顶层块逐字写回原文,其余走序列化 + normalizeSerializedMd(见 ./verbatim)。
  *  监听器、UnifiedPage.serializeNow 与 canonical(isPristine 的规范形)**必须同用这一个** —— 口径一分叉,
  *  「只是规范化了一下」就会被判成用户改动,回灌时凭空出冲突副本。 */
 export function serializeUnified(ctx: Ctx, doc: ProseNode): string {
-  return serializeForSave(ctx, doc, normalizeSerializedMd)
+  // 逐字回填的块在序列化串里只是占位,串里看不到那里的链接定义 —— 按文档查,有就整篇保留 `\[`(见 ./bracketEscape)。
+  const keepBrackets = hasRefDefinition(doc)
+  return serializeForSave(ctx, doc, (md) => normalizeSerializedMd(md, { keepBrackets }))
 }
 /** 块内片段(切块切出的后半段 / 剪贴板结构化复制)的序列化结果 → markdown。
  *  stripEmptyLineBr:空段落别落成 `<br />`(切块切出的那半段常以空段落打头,否则新块开头凭空多一个);
@@ -1251,6 +1258,9 @@ export function MilkdownInner({
       // 在 editorViewOptionsCtx 上,ProseMirror 先问直接 props 再问插件,故仍然优先。
       .use(clipboard)
       .use(taskCheckboxPlugin())
+      // 正文括号成对的「跨过闭合符 / 成对退格」半边(v4):必须排在 callout 的 handleTextInput 之前,
+      // 先删掉自动补的闭合符,`> [!note]` / 链接 / 脚注照常看到打出来的那个闭合符(见 ./bodyAutoPair)。
+      .use(unified ? bodyPairEarlyPlugin : [])
       .use(calloutPlugin())
       .use(codeBlockPlugin()) // 语法高亮 + 语言/复制/折行工具条(lowlight,base.css .hljs-* 配色)
       .use(spellcheckPlugin) // 拼写检查开关 + 行内代码 / 公式不查(G4-07,见 ./spellcheck)
@@ -1494,9 +1504,12 @@ export function MilkdownInner({
         const { doc } = view.state
         if (w.closeAt !== undefined && doc.textBetween(w.closeAt, Math.min(w.closeAt + 2, doc.content.size)) === ']]') {
           // 在已闭合链接里改目标名(L-02):只替换 [from, closeAt),保留原 `#锚点`/`|别名` 与 `]]`,光标落到 `]]` 之后。
-          const inner = retargetWikiInner(doc.textBetween(w.to, w.closeAt, undefined, '￼'), name)
+          const rest = doc.textBetween(w.to, w.closeAt, undefined, '￼')
+          const inner = retargetWikiInner(rest, name)
           const tr = view.state.tr.insertText(inner, w.from, w.closeAt)
           view.dispatch(tr.setSelection(TextSelection.create(tr.doc, w.from + inner.length + 2)))
+          // 光标正挨着 `]]`(多半是正文括号成对刚补上的那对)= 新写的双链,照旧计数
+          if (!rest) track('note.wikilink')
         } else {
           view.dispatch(view.state.tr.insertText(`${name}]]`, w.from, w.to))
           track('note.wikilink') // 新写一条双链(改已有链接的目标名不算)

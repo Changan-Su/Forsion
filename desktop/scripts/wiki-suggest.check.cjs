@@ -244,7 +244,14 @@ async function main() {
     await page.waitForTimeout(300)
     check('L-04a 失焦后 Enter 不再往正文插链接', !(await bodyText(page)).includes('[[Alpha]]'), JSON.stringify(await bodyText(page)))
     // 回到编辑器接着写:面板照常回来(闸只管失焦,不把补全一起废掉)
+    // 正文括号成对(bodyAutoPair)之后 `[[Al` 已是 `[[Al]]`,点行尾落在 `]]` 后面;光标放回 `]]` 之前再接着打。
     await clickEnd(page, `${PM} > p`)
+    await page.evaluate(() => {
+      const v = window.__upage.probe.view(), st = v.state
+      let at = -1
+      st.doc.descendants((n, pos) => { if (at < 0 && n.isTextblock && n.textContent.includes(']]')) at = pos + 1 + n.textContent.lastIndexOf(']]'); return at < 0 })
+      v.dispatch(st.tr.setSelection(st.selection.constructor.create(st.doc, at)))
+    })
     await page.keyboard.type('p', { delay: 20 })
     await page.waitForTimeout(250)
     check('L-04a 回到编辑器接着打字 → 面板照常回来', (await items(page))[0] === '*Alpha', JSON.stringify(await items(page)))
@@ -326,7 +333,8 @@ async function main() {
     }
     let r = await imeRun(' [[Al')
     check('L-08a [[ 组字中 ↓ 不移动面板高亮', r.opened === 1 && r.afterDown.length > 0 && r.afterDown[0].startsWith('*'), `${JSON.stringify(r.composing)} → ${JSON.stringify(r.afterDown)}`)
-    check('L-08a [[ 组字中 Enter 不插入候选', !r.doc.includes(']]'), JSON.stringify(r.doc))
+    // `]]` 是正文括号成对自动补的(bodyAutoPair),不能再拿「有没有 `]]`」判;判没插进候选名。
+    check('L-08a [[ 组字中 Enter 不插入候选', !/\[\[Alp(ha|ine)/.test(r.doc), JSON.stringify(r.doc))
     r = await imeRun(' @Al')
     check('L-08b @ 组字中 Enter 不插入候选', r.opened === 1 && !r.doc.includes('[['), JSON.stringify(r.doc))
   })

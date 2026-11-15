@@ -34,10 +34,12 @@ export function unescapeTagAtLineStart(md: string): string {
  * setext 下划线要求**整行只有 `=`**;`\==` 后面紧跟非空白、非 `=` 的字符,这一行就不可能是下划线,转义纯属多余。
  * 前缀口径同 TAG_AT_LINE_START(缩进 / 列表标记 / 任务框 / 引用,可叠加);围栏代码整块跳过。
  * 公式块里 LaTeX 的 `\=` 此时还是序列化器写出的 `\\=`,不匹配。
+ * 单个 `=` 同理:选中文字敲 `=` 包成 `=词=`(Obsidian 的 autoPairMarkdown,见 unified/keyboard.ts)在行首时落成 `\=词=`,
+ * 后面紧跟非空白、非 `=` 的字同样不可能是下划线,一并还原。
  */
-const HL_AT_LINE_START = /^((?:[ \t]*(?:[-*+]|\d{1,9}[.)])[ \t]+(?:\[[ xX]\][ \t]+)?|[ \t]*>[ \t]?)*[ \t]*)\\==(?=[^\s=])/
+const HL_AT_LINE_START = /^((?:[ \t]*(?:[-*+]|\d{1,9}[.)])[ \t]+(?:\[[ xX]\][ \t]+)?|[ \t]*>[ \t]?)*[ \t]*)\\=(?==?[^\s=])/
 
 export function unescapeHighlightAtLineStart(md: string): string {
-  if (!md.includes('\\==')) return md
-  return mapOutsideFences(md, (line) => line.replace(HL_AT_LINE_START, '$1=='))
+  if (!md.includes('\\=')) return md
+  return mapOutsideFences(md, (line) => line.replace(HL_AT_LINE_START, '$1='))
 }
