@@ -12,9 +12,9 @@
  */
 import { useEffect, useMemo } from 'react'
 import { create } from 'zustand'
-import { usePluginStore } from './pluginStore'
+import { usePluginStore, type NormalizedToolLabel } from './pluginStore'
 import { readTangu } from './tanguSeam'
-import type { AmadeusPlugin, ToolResultRendererContribution } from './types'
+import type { AmadeusPlugin, ToolLabel, ToolLabelCall, ToolResultRendererContribution } from './types'
 import type { ToolEvent } from '../../types'
 import { listPlugins } from '../../services/backendService'
 import { homeTarget } from '../../services/engine/targets'
@@ -25,6 +25,17 @@ export interface ToolCardClaim { pluginId: string; item: ToolResultRendererContr
 /** 官方插件(桌面插件 id)→ 它可以画的核心工具。名单只在这里,插件加不了。 */
 export const CORE_TOOL_CARDS: Readonly<Record<string, readonly string[]>> = {
   'forsion-extend': ['publish_web_page', 'forsion_account'],
+}
+
+/** 插件 pluginId 的捆绑包里,有没有一个引擎插件此刻名下注册了 toolName(名单没拉到 = 空表 = 没有)。 */
+export function pluginOwnsTool(
+  plugins: readonly Pick<AmadeusPlugin, 'id' | 'bundle'>[],
+  engineTools: Readonly<Record<string, readonly string[]>>,
+  pluginId: string,
+  toolName: string,
+): boolean {
+  const engines = plugins.find((p) => p.id === pluginId)?.bundle?.enginePlugins ?? []
+  return engines.some((e) => engineTools[e]?.includes(toolName))
 }
 
 /** toolName 归哪个渲染器:渲染器所属插件的 bundle.enginePlugins 里,有一个引擎插件此刻名下注册了它;或者是 CORE_TOOL_CARDS
@@ -39,7 +50,7 @@ export function claimToolCard(
   return renderers.find((r) => {
     if (r.item.tool !== toolName) return false
     const engines = plugins.find((p) => p.id === r.pluginId)?.bundle?.enginePlugins ?? []
-    const owns = engines.some((e) => engineTools[e]?.includes(toolName))
+    const owns = pluginOwnsTool(plugins, engineTools, r.pluginId, toolName)
     const core = !owns && !!CORE_TOOL_CARDS[r.pluginId]?.includes(toolName) && engines.some((e) => o.official?.includes(e))
     if (!owns && !core) return false
     if (typeof r.item.match !== 'function') return true
@@ -95,23 +106,29 @@ function wire(): void {
   if (wired) return
   wired = true
   let timer: ReturnType<typeof setTimeout> | undefined
+  // 过程行句子(toolLabels)同一套名单、同一个刷新时机
+  const wants = (s: { toolResultRenderers: readonly unknown[]; toolLabels: readonly unknown[] }): boolean => s.toolResultRenderers.length > 0 || s.toolLabels.length > 0
   usePluginStore.subscribe((s, prev) => {
-    if (s.toolResultRenderers === prev.toolResultRenderers || !s.toolResultRenderers.length) return
+    if ((s.toolResultRenderers === prev.toolResultRenderers && s.toolLabels === prev.toolLabels) || !wants(s)) return
     clearTimeout(timer)
     timer = setTimeout(() => void refreshEngineTools(), 300)
   })
-  readTangu()?.subscribeReady?.(() => { if (usePluginStore.getState().toolResultRenderers.length) void refreshEngineTools() })
-  if (usePluginStore.getState().toolResultRenderers.length) void refreshEngineTools()
+  readTangu()?.subscribeReady?.(() => { if (wants(usePluginStore.getState())) void refreshEngineTools() })
+  if (wants(usePluginStore.getState())) void refreshEngineTools()
 }
 
 function cardOf(renderers: readonly OwnedRenderer[], plugins: readonly AmadeusPlugin[], byEngine: Record<string, string[]>, official: readonly string[], ev: ToolEvent): ToolCardClaim | undefined {
   if (!cardEligible(ev)) return undefined
   const hit = claimToolCard(renderers, plugins, byEngine, ev.name, { official, args: parseToolArgs(ev.arguments) })
-  if (!hit && renderers.some((r) => r.item.tool === ev.name) && Date.now() - lastStaleKick > STALE_GAP_MS) {
-    lastStaleKick = Date.now()
-    void refreshEngineTools()
-  }
+  if (!hit && renderers.some((r) => r.item.tool === ev.name)) kickStale()
   return hit
+}
+
+/** 有人想认领却没认上(引擎半身比桌面半身晚激活):按 STALE_GAP_MS 节流补拉名单。 */
+function kickStale(): void {
+  if (Date.now() - lastStaleKick <= STALE_GAP_MS) return
+  lastStaleKick = Date.now()
+  void refreshEngineTools()
 }
 
 /** 渲染期用:返回「这次调用画哪张插件卡片」的判定函数;渲染器、插件表、名单任一变了就换一个(调用方据此重渲)。 */
@@ -124,6 +141,143 @@ export function useToolCardOf(): (ev: ToolEvent) => ToolCardClaim | undefined {
   return useMemo(
     () => (renderers.length ? (ev: ToolEvent) => cardOf(renderers, plugins, byEngine, official, ev) : () => undefined),
     [renderers, plugins, byEngine, official],
+  )
+}
+
+// ── 过程行句子(ctx.registerToolLabel,2026-11-13+)──────────────────────────────────────
+// 渲染期现算:历史重载、切语言都自动重算,不落库。认领同结果卡片(只认本捆绑包引擎半身名下的工具,名单没拉到不认)。
+
+interface OwnedLabel { pluginId: string; item: NormalizedToolLabel }
+export type ToolLabelPhase = ToolLabelCall['phase']
+/** 宿主收下的句子:text 去空白、截 200 字;图标只收像 bundle id 的串。 */
+export interface HostToolLabel { text: string; appBundleId?: string }
+
+const LABEL_MAX = 200
+const EARLIER_MAX = 40
+const BUNDLE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$/
+const labelWarned = new Set<string>()
+
+/** toolName 归哪条句子贡献:注册序先到先得,且必须是本插件引擎半身名下的工具。 */
+export function claimToolLabel(
+  labels: readonly OwnedLabel[],
+  plugins: readonly Pick<AmadeusPlugin, 'id' | 'bundle'>[],
+  engineTools: Readonly<Record<string, readonly string[]>>,
+  toolName: string,
+): OwnedLabel | undefined {
+  return labels.find((l) => l.item.tools.includes(toolName) && pluginOwnsTool(plugins, engineTools, l.pluginId, toolName))
+}
+
+// 解析后的参数按事件对象缓存:earlier 每次渲染要给几十条,别每个 token 都 JSON.parse 一遍
+const argsCache = new WeakMap<ToolEvent, { raw: string | undefined; val: unknown }>()
+function argsOf(ev: ToolEvent): unknown {
+  const hit = argsCache.get(ev)
+  if (hit && hit.raw === ev.arguments) return hit.val
+  const val = parseToolArgs(ev.arguments)
+  argsCache.set(ev, { raw: ev.arguments, val })
+  return val
+}
+
+/** 调一次插件的 describe;抛错 / 没 text / 空串 → undefined(调用方照旧写法)。导出给单测。 */
+export function toolLabelOf(
+  labels: readonly OwnedLabel[],
+  plugins: readonly Pick<AmadeusPlugin, 'id' | 'bundle'>[],
+  engineTools: Readonly<Record<string, readonly string[]>>,
+  locale: 'zh' | 'en',
+  ev: ToolEvent,
+  phase: ToolLabelPhase,
+  context: readonly ToolEvent[] = [],
+): HostToolLabel | undefined {
+  const hit = claimToolLabel(labels, plugins, engineTools, ev.name)
+  if (!hit) {
+    if (labels.some((l) => l.item.tools.includes(ev.name))) kickStale()
+    return undefined
+  }
+  // earlier:从这次调用往前倒着取,取满 EARLIER_MAX 条本插件的调用就停(下标按上下文数组建一次索引,不每行从头找)
+  const at = indexIn(context, ev.id)
+  const prior: ToolEvent[] = []
+  for (let i = at - 1; i >= 0 && prior.length < EARLIER_MAX; i--) {
+    const e = context[i]
+    if (pluginOwnsTool(plugins, engineTools, hit.pluginId, e.name)) prior.push(e)
+  }
+  prior.reverse()
+  // 句子按「这次调用的事件对象 + phase + locale + 登记 / 插件表 / 名单 + earlier 那几条事件对象」缓存:store 里事件对象是
+  // 不可变更新的(改一处换一个新对象),键没变就不再调 describe —— 流式出字时整条回答的各步不跟着每个 token 重算。
+  // 句子还依赖 call 以外的东西时(Computer Use 的应用图标表是看到实时画面后才学到的),插件给 revision():它变了也重算。
+  const rev = revisionOf(hit)
+  const slots = labelCache.get(ev)
+  const cached = slots?.[phase]
+  if (cached && cached.labels === labels && cached.plugins === plugins && cached.engineTools === engineTools && cached.locale === locale && cached.rev === rev
+    && cached.earlier.length === prior.length && cached.earlier.every((e, i) => e === prior[i])) return cached.out
+  const out = describeOnce(hit, ev, phase, locale, prior)
+  labelCache.set(ev, { ...slots, [phase]: { labels, plugins, engineTools, locale, rev, earlier: prior, out } })
+  return out
+}
+
+/** 插件自报的「describe 读的外部数据变没变」:只收数字 / 字符串;没给、抛错、别的类型 = 没有(undefined),不连坐这一行。 */
+function revisionOf(hit: OwnedLabel): number | string | undefined {
+  if (typeof hit.item.revision !== 'function') return undefined
+  try {
+    const v = hit.item.revision()
+    return typeof v === 'string' ? v.slice(0, 64) : typeof v === 'number' && Number.isFinite(v) ? v : undefined
+  } catch { return undefined }
+}
+
+interface LabelCacheEntry {
+  labels: readonly OwnedLabel[]
+  plugins: readonly Pick<AmadeusPlugin, 'id' | 'bundle'>[]
+  engineTools: Readonly<Record<string, readonly string[]>>
+  locale: 'zh' | 'en'
+  rev: number | string | undefined
+  earlier: readonly ToolEvent[]
+  out: HostToolLabel | undefined
+}
+const labelCache = new WeakMap<ToolEvent, Partial<Record<ToolLabelPhase, LabelCacheEntry>>>()
+const indexCache = new WeakMap<readonly ToolEvent[], Map<string, number>>()
+function indexIn(context: readonly ToolEvent[], id: string): number {
+  let idx = indexCache.get(context)
+  if (!idx) {
+    idx = new Map()
+    for (let i = 0; i < context.length; i++) if (!idx.has(context[i].id)) idx.set(context[i].id, i)
+    indexCache.set(context, idx)
+  }
+  return idx.get(id) ?? -1
+}
+
+function describeOnce(hit: OwnedLabel, ev: ToolEvent, phase: ToolLabelPhase, locale: 'zh' | 'en', prior: readonly ToolEvent[]): HostToolLabel | undefined {
+  const earlier = prior.map((e) => Object.freeze(e.result !== undefined ? { tool: e.name, args: argsOf(e), result: e.result } : { tool: e.name, args: argsOf(e) }))
+  const call: ToolLabelCall = {
+    tool: ev.name,
+    args: argsOf(ev),
+    ...(ev.result !== undefined ? { result: ev.result } : {}),
+    phase,
+    locale,
+    earlier: Object.freeze(earlier),
+  }
+  let out: ToolLabel | null | undefined | void
+  try { out = hit.item.describe(call) } catch (e) {
+    // 键一变就会再调一次(换语言、earlier 变了…),同一个工具只报一次,别刷屏
+    const key = `${hit.pluginId}\u0000${ev.name}`
+    if (!labelWarned.has(key)) {
+      labelWarned.add(key)
+      console.warn(`[plugin:${hit.pluginId}] registerToolLabel describe threw (reported once per tool)`, e)
+    }
+    return undefined
+  }
+  const text = out && typeof out === 'object' && typeof out.text === 'string' ? out.text.replace(/\s+/g, ' ').trim().slice(0, LABEL_MAX) : ''
+  if (!text) return undefined
+  const bundle = out && typeof out.icon?.appBundleId === 'string' && BUNDLE_ID_RE.test(out.icon.appBundleId) ? out.icon.appBundleId : undefined
+  return bundle ? { text, appBundleId: bundle } : { text }
+}
+
+/** 渲染期用:返回「这次调用的句子」判定函数;贡献、插件表、名单、语言任一变了就换一个(调用方据此重渲)。 */
+export function useToolLabelOf(locale: 'zh' | 'en'): (ev: ToolEvent, phase: ToolLabelPhase, context?: readonly ToolEvent[]) => HostToolLabel | undefined {
+  const labels = usePluginStore((s) => s.toolLabels)
+  const plugins = usePluginStore((s) => s.plugins)
+  const byEngine = useEngineTools((s) => s.byEngine)
+  useEffect(wire, [])
+  return useMemo(
+    () => (labels.length ? (ev, phase, context) => toolLabelOf(labels, plugins, byEngine, locale, ev, phase, context) : () => undefined),
+    [labels, plugins, byEngine, locale],
   )
 }
 
@@ -169,6 +323,7 @@ export function toolCardTitle(item: ToolResultRendererContribution): string {
 /** 仅供单测复位。 */
 export const __resetToolCards = (): void => {
   cardStates.clear()
+  labelWarned.clear()
   lastStaleKick = 0
   ownerKick = 0
   useEngineTools.setState({ byEngine: {}, official: [], toolOwner: {}, loaded: false })

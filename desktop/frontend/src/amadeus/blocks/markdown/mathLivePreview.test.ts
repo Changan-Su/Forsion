@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { describe, it, expect } from 'vitest'
-import { mdMathSpans, scanMath, unescapeMathSource } from './mathLivePreview'
+import { maskNonMath, mdMathSpans, scanMath, unescapeMathSource } from './mathLivePreview'
 import { bootEditor, roundTrip } from './parseFidelity.testkit'
 import { normalizeFragmentMd } from './MarkdownBlock'
 
@@ -145,9 +145,169 @@ describe('mdMathSpans(读写两侧共用的公式跨度)', () => {
     const md = 'a $x$\n```\n$not$\n```\nb $$y$$'
     expect(mdMathSpans(md).map((sp) => md.slice(sp.from, sp.to))).toEqual(['$x$', '$$y$$'])
   })
-  it('与 unescapeMathSource 同一口径:行内代码里的 `$` 照旧参与配对(两侧一致比「认得准」要紧)', () => {
+  it('行内代码里的 `$` 不参与配对(与 Markdown 解析一致;读写两侧共用,口径照样一致)', () => {
     const md = '用`$`包裹公式,例如$\\{a\\}$'
-    expect(mdMathSpans(md).map((sp) => md.slice(sp.from, sp.to))).toEqual(['$`包裹公式,例如$'])
+    expect(mdMathSpans(md).map((sp) => md.slice(sp.from, sp.to))).toEqual(['$\\{a\\}$'])
+  })
+  const spansOf = (md: string): string[] => mdMathSpans(md).map((sp) => md.slice(sp.from, sp.to))
+  it('任意长度反引号的行内代码:闭合按同长度配对,转义的反引号不开代码', () => {
+    expect(spansOf('a ``x $b` c$ y`` $z$')).toEqual(['$z$'])
+    expect(spansOf('a \\`$x$` b')).toEqual(['$x$']) // `\`` 是字面反引号,后面的 `$x$` 是公式
+    expect(spansOf('a `$x$`` b')).toEqual(['$x$'])  // 长度对不上 → 没有代码,`$x$` 是公式
+  })
+  it('围栏:任意长度、` 或 ~,闭栏不短于开栏;未闭合的围栏到文末', () => {
+    expect(spansOf('````md\n```\n$a$\n```\n$b$\n````\n$c$')).toEqual(['$c$'])
+    expect(spansOf('~~~\n$a$\n~~~\n$b$')).toEqual(['$b$'])
+    expect(spansOf('  ```\n$a$\n  ```\n$b$')).toEqual(['$b$'])
+    expect(spansOf('```\n$a$\n')).toEqual([])
+  })
+  it('缩进代码块里的 `$` 不是公式;列表续行的缩进不当代码', () => {
+    expect(spansOf('para\n\n    $a$ x\n\n$b$')).toEqual(['$b$'])
+    expect(spansOf('- item\n\n    $a$\n')).toEqual(['$a$'])
+  })
+  it('链接 / 图片地址里的 `$` 不参与配对;链接文字里的公式照认', () => {
+    expect(spansOf('[文档](http://x/?$top=1)里$\\{a\\}$')).toEqual(['$\\{a\\}$'])
+    expect(spansOf('![i]($p.png "t$") $x$')).toEqual(['$x$'])
+    expect(spansOf('[$x$](http://y)')).toEqual(['$x$'])
+  })
+  it('行内代码不跨进下一块;引用里的围栏随引用结束', () => {
+    expect(spansOf('P `\n# $\\{x}$\n`')).toEqual(['$\\{x}$'])
+    expect(spansOf('> ```\n> x\n\n$\\{x}$')).toEqual(['$\\{x}$'])
+    expect(spansOf('> a `x\n> $y$` b')).toEqual([])
+  })
+})
+
+// F03/F04(Obsidian 手感对齐):代码 / 链接地址里的 `\_` `\{` 曾被写侧当公式反转义删掉,且第二轮保持损坏。
+describe('代码与链接地址里的反斜杠逐字(不被公式反转义误删)', () => {
+  it('写侧:代码 / 地址里的反斜杠不动', () => {
+    for (const md of [
+      'before `$a\\_b$ and $\\{x\\}$` after\n',
+      '````md\n```\n$a\\_b$ \\{x\\}\n```\n````\n',
+      '~~~\n$a\\_b$ \\{x\\}$\n~~~\n',
+      'para\n\n    $a\\_b$ \\{x\\}$\n',
+      '[l](http://x/$a\\_b$) 与 $x$\n',
+    ]) expect(unescapeMathSource(md)).toBe(md)
+  })
+  it('写侧:同一段里代码之外的真公式照旧反转义', () => {
+    expect(unescapeMathSource('`$a\\_b$` 与 $c\\_d$\n')).toBe('`$a\\_b$` 与 $c_d$\n')
+  })
+  it.each([
+    ['行内代码里的公式样文字(实测 F12)', 'before `$a\\_b$ and $\\{x\\}$` after\n'],
+    ['双反引号行内代码', 'x ``a $b\\_c$ ` d$`` 与 $\\{y\\}$\n'],
+    ['四反引号围栏里包三反引号', '````md\n```\n$a\\_b$ \\{x\\}\n```\n````\n'],
+    ['行内代码里的单个 `$` 挨着公式', '用`$`包裹公式,例如$\\{a,b\\}$\n'],
+    ['行内代码里的 $HOME 挨着公式', '先设置`$HOME`,再看集合$\\{a,b\\}$\n'],
+    ['链接地址里的 `$` 挨着公式', '[文档](http://x/?$top=1)里$\\{a\\}$\n'],
+    ['转义的反斜杠后面紧跟行内代码', 'P\n\n\\{$\\\\`x$`\n'],
+    ['公式里的尖括号自动链接(序列化器翻倍反斜杠,不许越存越多)', '$<ab:x\\{y\\}>$\n'],
+  ])('端到端逐字:%s', async (_label, md) => {
+    const once = await roundTrip(md)
+    expect(once).toBe(md)
+    expect(await roundTrip(once)).toBe(md)
+  })
+  // 块结构本身会规范化(补空行 / 补闭栏,既定行为),这里只钉公式里的 `\\` 不丢、此后逐字。
+  it.each([
+    ['反引号不跨进下一块的标题', 'P `\n# $\\\\{x}$\n`\n'],
+    ['引用里未闭合的围栏随引用结束', '> ```\n> x\n\n$\\\\{x}$\n'],
+  ])('块边界:%s', async (_label, md) => {
+    const seq = await saves(md)
+    for (const x of seq.slice(1)) expect(x).toContain('$\\\\{x}$')
+    expectStable(seq)
+  })
+  it('段首敲一个字:行内代码里的反斜杠不丢(实测 F12)', async () => {
+    const b = await bootEditor('before `$a\\_b$ and $\\{x\\}$` after\n')
+    try {
+      b.view.dispatch(b.view.state.tr.insertText('Z', 3))
+      expect(b.md()).toBe('beZfore `$a\\_b$ and $\\{x\\}$` after\n')
+    } finally { await b.destroy() }
+  })
+})
+
+// 排除域返修:抹多了 = 真公式读侧不补反斜杠(编辑器里 `$\{a\}$` 变 `${a}$`);抹少了 = 代码 / 地址里的 `\_` 存盘被删。
+describe('排除域返修:别把真公式当代码 / 地址,也别漏掉真地址', () => {
+  const spansOf = (md: string): string[] => mdMathSpans(md).map((sp) => md.slice(sp.from, sp.to))
+  const editorText = async (md: string): Promise<string> => {
+    const b = await bootEditor(md)
+    try { return b.view.state.doc.textBetween(0, b.view.state.doc.content.size, '\n') } finally { await b.destroy() }
+  }
+  // A / D 钉「别把原来对的弄坏」(main 上是绿的,返修前的排除域把它们弄红);B / C 钉「代码 / 地址里的反斜杠不丢」(main 上红)。
+  // 掩码断言与编辑器 / 存盘断言分开写:负对照时端到端那一半要单独看得到红绿。
+  const caseA: Array<[string, string]> = [
+    ['脚注定义', 'text[^1]\n\n[^1]: 其中 $\\{a\\}$ 与 $a \\\\ b$\n'],
+    ['脚注续行段落(缩进 4 格不是代码)', 'text[^1]\n\n[^1]: first\n\n    second $\\{a\\}$ 与 $a \\\\ b$ para\n'],
+    ['不是合法定义的 `[注]: 文字`', '[注]: 设 $\\{a\\}$ 与 $a \\\\ b$ 为集合\n'],
+  ]
+  // A:脚注定义 / 脚注续行 / `[标签]: 文字` 里的公式是正文公式,编辑器里的文字要带着反斜杠
+  it.each(caseA)('A %s:编辑器里的文字公式带反斜杠', async (_label, md) => {
+    expect(await editorText(md)).toContain('$\\{a\\}$ 与 $a \\\\ b$')
+  })
+  it.each(caseA)('A %s:mdMathSpans 认得出', (_label, md) => {
+    expect(spansOf(md)).toEqual(['$\\{a\\}$', '$a \\\\ b$'])
+  })
+  it('引用定义口径:整行剩余恰好是「地址 + 可选标题」、且不打断段落时才抹', () => {
+    expect(spansOf('[l]: /u$ "t$x$"\n\n$y$')).toEqual(['$y$'])                 // 合法定义:地址 / 标题不参与配对
+    expect(spansOf('[l]: /u "t" x$y$\n')).toEqual(['$y$'])                      // 标题后还有字 = 普通段落
+    expect(spansOf('P\n[l]: <$\\{a\\}$>\n')).toEqual(['$\\{a\\}$'])               // 定义打断不了段落 = 普通文字
+  })
+  // D:缩进 ≥4 的 ``` 属于上面的段落,不是开栏
+  const caseD = 'P\n    ```\n$\\{x\\}$\n'
+  it('D 段落里缩进 4 格的 ```:编辑器里的文字公式带反斜杠', async () => {
+    expect(await editorText(caseD)).toContain('$\\{x\\}$')
+  })
+  it('D 段落里缩进 4 格的 ```:不开围栏,mdMathSpans 认得出后面的公式', () => {
+    expect(spansOf(caseD)).toEqual(['$\\{x\\}$'])
+  })
+  it('围栏缩进口径:列表项里相对内容列 ≤3 才是围栏;顶层 ≤3', () => {
+    expect(spansOf('- a\n\n     ```\n  $x$\n     ```\n$y$')).toEqual(['$y$'])  // 内容列 2 + 3 = 5:是围栏
+    expect(spansOf('- a\n\n      ```\n  $x$\n')).toEqual(['$x$'])             // 内容列 2 + 4:缩进代码里的 ```,不开栏
+    expect(spansOf('   ```\n$x$\n   ```\n$y$')).toEqual(['$y$'])
+  })
+  // B:地址里的撇号不是标题(标题前必须有空白)。
+  // 地址里的 `\\_` 是字面反斜杠(`\_` 在地址里本来就只是 `_`):序列化照原样写回 `\\_`,地址没抹到就被当公式反转义成 `\_`,
+  // 重开后链接地址少一个反斜杠。
+  const caseB = "see [l](http://x/it's/$a\\\\_b$) end\n"
+  it('B 链接地址里带撇号:编辑同一块后存盘,地址里的反斜杠还在', async () => {
+    const b = await bootEditor(caseB)
+    try {
+      b.view.dispatch(b.view.state.tr.insertText('Z', 1))
+      expect(b.md()).toBe("Zsee [l](http://x/it's/$a\\\\_b$) end\n")
+    } finally { await b.destroy() }
+  })
+  it('B 链接地址里带撇号:整段地址都抹掉', () => {
+    expect(maskNonMath(caseB)).toBe('see [l](' + ' '.repeat("http://x/it's/$a\\\\_b$".length) + ') end\n')
+  })
+  it('B 标题里转义的引号不算闭合;没闭合的标题 = 不是链接(同 CommonMark)', () => {
+    expect(maskNonMath('[l](/u "a\\"$b$")')).toBe('[l](' + ' '.repeat('/u "a\\"$b$"'.length) + ')')
+    expect(spansOf('[l](/u "$x$)')).toEqual(['$x$'])
+  })
+  // C:引用定义的标题在下一行
+  const caseC = '> [l]: /url\n>   "$a\\_b$"\n>\n> edit\n'
+  it('C 引用定义的标题在下一行:改引用里别的段落后存盘,标题里的反斜杠还在', async () => {
+    const b = await bootEditor(caseC)
+    try {
+      let at = -1
+      b.view.state.doc.descendants((n, pos) => { if (n.isText && n.text === 'edit') at = pos })
+      expect(at).toBeGreaterThan(0)
+      b.view.dispatch(b.view.state.tr.insertText('Z', at))
+      expect(b.md()).toBe('> [l]: /url\n>   "$a\\_b$"\n>\n> Zedit\n')
+    } finally { await b.destroy() }
+  })
+  it('C 引用定义的标题在下一行:标题一并抹,不参与配对', () => {
+    expect(spansOf(caseC)).toEqual([])
+  })
+  // E:线性 —— 原先每个 `](` 往回扫整段、没闭合的反引号串反复扫到段尾(平方级)
+  it('E 病态输入线性:成串的 `](`、成串不闭合的反引号、成串的 `[` + `][]`', () => {
+    const time = (md: string): number => { const t = performance.now(); mdMathSpans(md); return performance.now() - t }
+    const brackets = (n: number): string => ']('.repeat(n) + '$\\{x\\}$\n'
+    const ticks = (n: number): string => Array.from({ length: n }, (_, i) => '`'.repeat(i + 1) + 'x').join(' ') + ' $\\{x\\}$\n'
+    const collapsed = (n: number): string => '[l]: /u\n\n' + '['.repeat(n) + 'x' + '][]'.repeat(n) + ' $\\{x\\}$\n'
+    expect(spansOf(brackets(16000))).toEqual(['$\\{x\\}$'])
+    expect(spansOf(ticks(600))).toEqual(['$\\{x\\}$'])
+    expect(spansOf(collapsed(16000))).toEqual(['$\\{x\\}$'])
+    // 宽松的绝对上限(修前 16000 个 `](` 单跑掩码要 2 秒以上;高负载机器也留足余量)
+    expect(time(brackets(32000))).toBeLessThan(1000)
+    expect(time(ticks(1200))).toBeLessThan(1000)
+    expect(time(collapsed(32000))).toBeLessThan(1000)
   })
 })
 
@@ -199,6 +359,183 @@ describe('公式反斜杠:重开再存不增长(R-01 返修)', () => {
     }
     expect(bad).toEqual([])
   }, 120_000)
+
+  // F03/F04:代码 / 围栏 / 链接地址的排除域进了 mdMathSpans 之后,两侧照样同一口径(片段表偏向反引号与地址)。
+  it('种子 fuzz(代码与地址):三轮存盘稳定、反斜杠不增', async () => {
+    let seed = 4242
+    const rnd = (n: number): number => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed % n }
+    const FRAG = ['$', '$', '$', '`', '``', '`$a\\_b$`', '``x`$``', '\\`', '\n```\n', '\n~~~~\n', '\n\n    ', '[t](http://a/$b)', '<http://q/$>', '](', '\\{', '\\_', '\\\\', '\\$', 'x', 'y', ' ', ' ', '\n', '\n\n', '中文']
+    const bad: string[][] = []
+    for (let t = 0; t < 300; t++) {
+      let src = 'P'
+      const k = 3 + rnd(12)
+      for (let i = 0; i < k; i++) src += FRAG[rnd(FRAG.length)]
+      const seq = await saves(src + '\n')
+      const rising = seq.slice(2).some((x, i) => backslashes(x) > backslashes(seq[i + 1]))
+      if (rising || seq[2] !== seq[1] || seq[3] !== seq[2]) bad.push(seq)
+    }
+    expect(bad).toEqual([])
+  }, 180_000)
+})
+
+// ── 对拍:手写的 maskNonMath vs 编辑器实际用的 remark 解析器 ─────────────────────────────────────────────
+// maskNonMath 是按 Markdown 口径手写的「哪些地方不算公式」。抹多了 = 真公式不补反斜杠(编辑器里公式渲染错,新回归);
+// 抹少了 = 代码 / 地址里的 `\_` 存盘时被删(老毛病)。这里拿同一套 remark(编辑器 remarkCtx,只解析、不跑 transformer ——
+// transformer 里 refDefinitions 会把 definition 改成字面段落)解析出 mdast,按节点位置算「真的非公式区域」:
+// code / inlineCode 整个节点;link / image 的地址 + 标题;definition 的地址 + 标题。
+// image 的 alt 不是子节点:从 `![` 起按未转义方括号配平找到 alt 的 `]`,其后才是地址部分。
+// 自动链接(`<…>` 与裸网址)的「地址部分」按此算法为空 —— 刻意不抹(序列化器会翻倍其中的反斜杠,见 mathLivePreview.ts「哪些地方不算公式」顶注)。
+type Region = { kind: string; from: number; to: number }
+let remarkProcessor: { parse(md: string): unknown } | null = null
+async function remarkParser(): Promise<{ parse(md: string): unknown }> {
+  if (remarkProcessor) return remarkProcessor
+  const { remarkCtx } = await import('@milkdown/kit/core')
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let captured: any = null
+  const b = await bootEditor('x\n', { extra: [((ctx: unknown) => () => { captured = ctx }) as never] })
+  remarkProcessor = captured.get(remarkCtx)
+  await b.destroy()
+  return remarkProcessor!
+}
+/* eslint-disable @typescript-eslint/no-explicit-any */
+function trueRegions(tree: any, md: string): Region[] {
+  const out: Region[] = []
+  const walk = (n: any): void => {
+    const s = n.position?.start?.offset, e = n.position?.end?.offset
+    if (typeof s === 'number' && typeof e === 'number') {
+      if (n.type === 'code' || n.type === 'inlineCode') out.push({ kind: n.type, from: s, to: e })
+      else if (n.type === 'link') {
+        const last = n.children?.[n.children.length - 1]?.position?.end?.offset
+        out.push({ kind: 'link', from: typeof last === 'number' ? last : s + 1, to: e })
+      } else if (n.type === 'image') {
+        let depth = 0, k = s + 2
+        for (; k < e; k++) {
+          if (md[k] === '\\') { k++; continue }
+          if (md[k] === '[') depth++
+          else if (md[k] === ']') { if (!depth) break; depth-- }
+        }
+        out.push({ kind: 'image', from: k, to: e })
+        // alt 是 image 节点的属性、不是编辑器里的文字:里面嵌的链接地址被解析器整个丢掉(alt 只留文字),
+        // 抹不抹都碰不到真公式 —— 记成 imageAlt,只用来免检「抹多了」,不计入抹少了。
+        out.push({ kind: 'imageAlt', from: s, to: k })
+      } else if (n.type === 'definition') {
+        let k = s
+        while (k < e && !(md[k] === ']' && md[k - 1] !== '\\')) k++
+        out.push({ kind: 'definition', from: k + 1, to: e })
+      }
+    }
+    for (const c of n.children ?? []) walk(c)
+  }
+  walk(tree)
+  return out
+}
+/* eslint-enable @typescript-eslint/no-explicit-any */
+/** 被抹的行首容器记号(`>`、列表符):代码行整行抹空时连带抹掉,mdast 的 code 节点从记号之后起算。
+ *  它们永远不是 `$` / `\`,也不贴着公式(同一行其余部分都在 code 节点里),不影响公式配对。 */
+const CONTAINER_PREFIX = /^[ \t>]*(?:(?:[-+*]|\d{1,9}[.)])[ \t]+)?(?:\[\^[^\]\s]+\]:[ \t]*)?/
+interface MaskDiff { over: Array<{ at: number; ch: string }>; under: Region[]; withDollar: Region[] }
+function diffMask(md: string, masked: string, regions: Region[]): MaskDiff {
+  const inTrue = new Uint8Array(md.length + 1)
+  for (const r of regions) for (let x = r.from; x < r.to; x++) inTrue[x] = 1
+  const prefixEnd = new Uint8Array(md.length + 1)
+  for (let ls = 0; ls <= md.length;) {
+    const le = md.indexOf('\n', ls) === -1 ? md.length : md.indexOf('\n', ls)
+    const p = CONTAINER_PREFIX.exec(md.slice(ls, le))![0].length
+    for (let x = ls; x < ls + p; x++) prefixEnd[x] = 1
+    ls = le + 1
+  }
+  const over: MaskDiff['over'] = []
+  for (let x = 0; x < md.length; x++) {
+    if (masked[x] === md[x] || /\s/.test(md[x]) || inTrue[x]) continue
+    if (prefixEnd[x] && masked.slice(md.lastIndexOf('\n', x) + 1, md.indexOf('\n', x) === -1 ? md.length : md.indexOf('\n', x)).trim() === '') continue
+    over.push({ at: x, ch: md[x] })
+  }
+  const withDollar = regions.filter((r) => r.kind !== 'imageAlt' && md.slice(r.from, r.to).includes('$'))
+  const under = withDollar.filter((r) => { for (let x = r.from; x < r.to; x++) if (md[x] === '$' && masked[x] === '$') return true; return false })
+  return { over, under, withDollar }
+}
+// 片段表:各种长度的反引号、围栏(缩进 0–5、列表 / 引用 / 脚注里)、缩进行、列表、引用、脚注定义及续行、`[标签]: 文字`、
+// 合法引用定义(含标题在下一行)、链接 / 图片(地址里带 `$`、撇号、括号、`<…>`、标题)、公式、转义、中文。
+const MASK_FRAG = [
+  '`', '``', '```', '`$a\\_b$`', '``x`$``', '\\`', '$', '$', '$', '$\\{a\\}$', '$a \\\\ b$', '\\{', '\\_', '\\\\', '\\$', '\\[', '\\]',
+  '[', ']', '](', '(', ')', '"', "'", '!', '<', '>',
+  "[l](http://x/it's/$a\\_b$)", "[l](http://x/it's/$a\\\\_b$)", '[l](</a b/$c$>)', '[l](/u "t $x$")', "[l](/u 't$')", '[l](/u (t$))', '[l](a(b)$c)', '[l]( /u$ )',
+  '![i]($p.png "t$")', '[$x$](http://y)', '[a [b](/c$) d](/e$)', '[t][l]', '[l]', '<http://q/$>', '<br>', '<span a="`$">',
+  '中文', 'x', 'y', ' ', ' ', ' ', '*e*', 'text[^1]',
+  '\n', '\n', '\n\n', '\n\n', '\n- ', '\n  - ', '\n1. ', '\n> ', '\n> > ', '\n>', '\n    ', '\n  ', '\n      ', '\n\t', '\n# ',
+  '\n---\n', '\n[^1]: ', '\n\n[^1]: a\n\n    b $\\{x\\}$', '\n[注]: 设 $\\{a\\}$', '\n[l]: /u$', '\n[l]: /u$ "t$x$"', '\n[l]: </a b$>',
+  '\n[l]: /u\n  "$a\\_b$"', '\n> [l]: /u\n>   "$a\\_b$"', '\n[l]: /u "t" x$', '\n[l]:\n/u$',
+  'FENCE', 'FENCE', 'FENCE', '\n- ```\n', '\n> ```\n', '\n~~~\n', '\n````\n',
+  '\n- > ', '\n> - ', '\n   ', '\n1) ', '\n2. ', '\n   - ', '\n***\n', '\n===\n', '\n<div>\n', '\n<!-- ', ' -->',
+  '\n| a | b |\n| - | - |\n', '|', '`x|$y$`',
+]
+function genMaskDoc(rnd: (n: number) => number): string[] {
+  const parts: string[] = ['P']
+  const k = 4 + rnd(18)
+  for (let i = 0; i < k; i++) {
+    const f = MASK_FRAG[rnd(MASK_FRAG.length)]
+    parts.push(f === 'FENCE' ? `\n${' '.repeat(rnd(6))}${rnd(4) ? '```' : '~~~'}\n` : f)
+  }
+  return parts
+}
+async function maskFuzz(seed0: number, cases: number): Promise<{ over: string[]; under: Map<string, string[]>; regionsWithDollar: number; underCount: number; underByKind: Record<string, [number, number]> }> {
+  const { maskNonMath } = await import('./mathLivePreview')
+  const proc = await remarkParser()
+  let seed = seed0
+  const rnd = (n: number): number => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed % n }
+  const check = (md: string): MaskDiff => diffMask(md, maskNonMath(md), trueRegions(proc.parse(md), md))
+  const over: string[] = []
+  const under = new Map<string, string[]>()
+  const underByKind: Record<string, [number, number]> = {}
+  let regionsWithDollar = 0, underCount = 0
+  for (let t = 0; t < cases; t++) {
+    const parts = genMaskDoc(rnd)
+    const md = parts.join('') + '\n'
+    const d = check(md)
+    regionsWithDollar += d.withDollar.length
+    underCount += d.under.length
+    for (const r of d.withDollar) (underByKind[r.kind] ||= [0, 0])[1]++
+    for (const r of d.under) {
+      underByKind[r.kind][0]++
+      const list = under.get(r.kind) ?? []
+      if (list.length < 3) list.push(md.slice(r.from, r.to) + (process.env.MASK_FUZZ_DEBUG ? `  ⟸ ${JSON.stringify(md)}` : ''))
+      under.set(r.kind, list)
+    }
+    if (d.over.length) {
+      // 缩小:逐个删片段,仍抹多就保留删除
+      let cur = parts.slice()
+      for (let i = cur.length - 1; i >= 0; i--) {
+        const tryParts = cur.slice(0, i).concat(cur.slice(i + 1))
+        if (check(tryParts.join('') + '\n').over.length) cur = tryParts
+      }
+      const small = cur.join('') + '\n'
+      over.push(JSON.stringify(small) + (process.env.MASK_FUZZ_DEBUG ? `  masked=${JSON.stringify(maskNonMath(small))} over=${JSON.stringify(check(small).over)}` : ''))
+    }
+  }
+  return { over, under, regionsWithDollar, underCount, underByKind }
+}
+
+describe('maskNonMath 对拍 remark 解析器(抹多了必须为 0)', () => {
+  it('解析器口径自检:gfm 脚注 / 删除线在、节点带偏移', async () => {
+    const proc = await remarkParser()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const tree: any = proc.parse('a[^1] ~~d~~\n\n[^1]: x\n')
+    const types: string[] = []
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const walk = (n: any): void => { types.push(n.type); expect(typeof n.position?.start?.offset).toBe('number'); for (const c of n.children ?? []) walk(c) }
+    walk(tree)
+    expect(types).toContain('footnoteDefinition')
+    expect(types).toContain('delete')
+  })
+  it('种子 fuzz:抹多了 = 0;抹少了报比例', async () => {
+    const N = Number(process.env.MASK_FUZZ_N ?? 500)
+    const seed = Number(process.env.MASK_FUZZ_SEED ?? 20261114)
+    const r = await maskFuzz(seed, N)
+    console.log(`[mask-fuzz] seed=${seed} cases=${N} over=${r.over.length} under=${r.underCount}/${r.regionsWithDollar} byKind=${JSON.stringify(r.underByKind)}`)
+    for (const [kind, shapes] of r.under) console.log(`[mask-fuzz] under ${kind}: ${shapes.map((x) => JSON.stringify(x)).join(' | ')}`)
+    for (const o of r.over.slice(0, 40)) console.log(`[mask-fuzz] over: ${o}`)
+    expect(r.over).toEqual([])
+  }, 180_000)
 })
 
 describe('切块 / 剪贴板结构化复制(normalizeFragmentMd)', () => {

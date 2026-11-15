@@ -69,7 +69,7 @@ The second argument of `ctx.registerView({id, title, mount(el, view)})` gains th
 
 | Member | Behaviour |
 | --- | --- |
-| `surface` | `mini`, `floating` or `main`; Mini/Floating don't provide `extendView` |
+| `surface` | `mini`, `floating`, `main`, or `pip` (2026-11-13+); Mini/Floating/pip don't provide `extendView`. `pip` is the host's own always-on-top picture-in-picture window (desktop only, opened only after an explicit user action, today only for the Computer Use live view): draw a compact card there; it has no `showInMainPanel`, and `close?.()` closes that window. Older hosts never report `pip`; treat values you don't know like `floating` |
 | `getParams()` | The current instance's entity or filter parameters |
 | `setParams(patch)` | Merges parameters and updates the main-panel target |
 | `onParamsChanged(fn)` | Notifies on parameter changes; returns an unsubscribe function and does not remount the DOM |

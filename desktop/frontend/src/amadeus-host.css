@@ -2396,8 +2396,7 @@ html.dark .amx-cal-chip-ev.selected, html.dark .amx-cal-event.selected { --amx-e
 /* 7.12:月视图跨天条在一周一行里只在头一段写标题(当周第一格例外),后面的段只画色块。 */
 .amx-cal-mcell:not(:first-child) > .amx-cal-chip-ev.continues-left:not(.amx-cal-draft) { color: transparent; }
 
-/* ── 日历提示色(方案 2026-11-15 ④):「现在」线、今天的日期用它。彩色主题 = 主题色;经典 / 墨色两套没有色相,
-   用一个柔红(和过期待办的红不是同一个,免得「现在」像报错)。日历插件在 .fc-root 上定义同名同值的一份。 */
-:root { --cal-signal: var(--accent-ink, var(--accent, #6c5ce7)); --cal-on-signal: var(--on-accent-ink, #fff); }
-:root[data-skin='cream'], :root[data-skin='ink'] { --cal-signal: #c8553d; --cal-on-signal: #fff; }
-:root.dark[data-skin='cream'], :root.dark[data-skin='ink'] { --cal-signal: #e07a62; --cal-on-signal: #fff; }
+/* ── 日历提示色(方案 2026-11-15 ④,同日改口):「现在」线、今天的日期 = 强调色 --signal(设置里自选的 > 配色自带的,
+ * 经典 / 墨色是柔蓝 > 主题色),不另配一支颜色、不按主题写死(先前经典 / 墨色写死柔红,用户否了:强调色要跟着主题走)。
+ * 实心今天格上的字用底色:浅色下强调色偏深、深色下偏浅,底色正好反过来。日历插件在 .fc-root 上定义同名同值的一份。 */
+:root { --cal-signal: var(--signal, var(--accent-ink, var(--accent, #6c5ce7))); --cal-on-signal: var(--bg, #fff); }

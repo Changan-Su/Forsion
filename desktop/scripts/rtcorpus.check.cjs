@@ -14,7 +14,7 @@
 //   whitelist 评审附录 A / 拍板表里认定的既定规范化,断言「恰好规范成这个样子」,第二轮必须逐字。红 = exit 1。
 //   stable    首轮允许偏离(修前就有的一次性丢失,另记在残余风险里),但**第二轮必须逐字**(相对首轮落盘)——
 //             专抓「越存越多」(R-01 返修:读写两侧认公式不一致,反斜杠每存翻一倍,首轮看不出)。红 = exit 1。
-//   pending   已知未修、归别的波次/包(波次 2 起暂空:D-11 / R-01 余项 / D-01 / D-05 均已挪进 verbatim)。按逐字断言但只记 XFAIL,
+//   pending   已知未修、归别的波次/包(D-11 / R-01 余项 / D-01 / D-05 均已挪进 verbatim;现只剩 r01.grow_strong_currency_edited,病在强调符不在公式)。按逐字断言但只记 XFAIL,
 //             不算红;**意外通过**打 XPASS —— 修的人把它挪进 verbatim 桶。
 //             ⚠️ D-18(0b)起**未编辑的顶层块逐字写回原文**:病在序列化器里的条目,EDITHERE 要和病灶放在**同一块**
 //             (`${M} …`),否则逐字回填直接绕过序列化、XPASS 却什么都没修。附录 A 的规范化同理(*_edited 条目)。
@@ -156,12 +156,22 @@ const CASES = [
   // 被转义的 `$` 不当定界符 —— 这条的旧病是 D-11(转义被剥,0b),但**绝不能**被本修复变成 `\\$x\\$`。
   { id: 'r01.escaped_dollars', bucket: V, why: 'D-11 已修:用户的转义逐字写回', md: `${M} not math: \\$x\\$ ok\n`, forbid: /\\\\\$/, visible: '$x$' },
   // R-01 返修(评审阻断 R-01-growth):行内代码 / 链接地址里的 `$`、粗体里的货币挨着公式 —— 返修前每存一次反斜杠翻一倍。
-  // 两侧现按同一份原文认公式:这些行里的公式可能认不出(首轮反斜杠一次性丢掉 = 修前行为),但第二轮必须逐字。
-  { id: 'r01.grow_code_dollar', bucket: S, md: `${M}\n\n用\`$\`包裹公式,例如$\\{a,b\\}$\n`, forbid: /\\\\\{/ },
-  { id: 'r01.grow_code_home', bucket: S, md: `${M}\n\n先设置\`$HOME\`,再看集合$\\{a,b\\}$\n`, forbid: /\\\\\{/ },
-  { id: 'r01.grow_link_url', bucket: S, md: `${M}\n\n[文档](http://x/?$top=1)里$\\{a\\}$\n`, forbid: /\\\\\{/ },
-  { id: 'r01.grow_strong_currency', bucket: S, md: `${M}\n\n价格**$5**,集合$\\{a\\}$\n`, forbid: /\\\\\{/ },
-  { id: 'r01.grow_escaped_dollar', bucket: S, md: `${M}\n\n$a \\$,x$\\{b\\}$\n`, forbid: /\\\\\{/ },
+  // 代码 / 链接地址按 Markdown 解析的口径排除出公式配对之后(mdMathSpans 的 maskNonMath),这些行里的公式认得准,逐字。
+  { id: 'r01.grow_code_dollar', bucket: V, md: `${M}\n\n用\`$\`包裹公式,例如$\\{a,b\\}$\n`, forbid: /\\\\\{/ },
+  { id: 'r01.grow_code_home', bucket: V, md: `${M}\n\n先设置\`$HOME\`,再看集合$\\{a,b\\}$\n`, forbid: /\\\\\{/ },
+  { id: 'r01.grow_link_url', bucket: V, md: `${M}\n\n[文档](http://x/?$top=1)里$\\{a\\}$\n`, forbid: /\\\\\{/ },
+  { id: 'r01.grow_strong_currency', bucket: V, md: `${M}\n\n价格**$5**,集合$\\{a\\}$\n`, forbid: /\\\\\{/ },
+  { id: 'r01.grow_escaped_dollar', bucket: V, md: `${M}\n\n$a \\$,x$\\{b\\}$\n`, forbid: /\\\\\{/ },
+  // 同一批放进被编辑的块(D-18 起未编辑的块逐字回填,上面那几条不经序列化):病灶和 EDITHERE 同块才真测到读写两侧。
+  { id: 'r01.grow_code_dollar_edited', bucket: V, md: `${M} 用\`$\`包裹公式,例如$\\{a,b\\}$\n`, forbid: /\\\\\{/ },
+  { id: 'r01.grow_code_home_edited', bucket: V, md: `${M} 先设置\`$HOME\`,再看集合$\\{a,b\\}$\n`, forbid: /\\\\\{/ },
+  { id: 'r01.grow_link_url_edited', bucket: V, md: `${M} [文档](http://x/?$top=1)里$\\{a\\}$\n`, forbid: /\\\\\{/ },
+  { id: 'r01.grow_strong_currency_edited', bucket: P, why: '另一病灶:粗体左邻的汉字在 `**$` 前被写成字符引用 `&#x683C;`(强调符左右侧判据,attentionFlanking),公式本身逐字', md: `${M} 价格**$5**,集合$\\{a\\}$\n`, forbid: /\\\\\{/ },
+  { id: 'r01.grow_escaped_dollar_edited', bucket: V, md: `${M} $a \\$,x$\\{b\\}$\n`, forbid: /\\\\\{/ },
+  // 行内代码 / 四反引号围栏里像公式的文字:代码里的 `\_` `\{` 曾被写侧当公式反转义删掉,且第二轮保持损坏。
+  { id: 'r01.code_span_math_like', bucket: V, why: '行内代码里的反斜杠不被公式反转义删掉', md: `${M} before \`$a\\_b$ and $\\{x\\}$\` after\n` },
+  { id: 'r01.code_span_double_tick', bucket: V, md: `${M} x \`\`a $b\\_c$ \` d$\`\` 与 $\\{y\\}$\n` },
+  { id: 'r01.fence4_inner_fence', bucket: V, why: '外层四反引号围栏里的反斜杠逐字', md: `\`\`\`\`md\n${M}\n\`\`\`\n$a\\_b$ \\{x\\}\n\`\`\`\n\`\`\`\`\n` }, // 标记放进围栏:被编辑的就是这一块
   { id: 'r01.code_path_verbatim', bucket: V, md: `${M}\n\nshell 里 \`echo $PATH\`之后$x\\_1$\n` },
 
   // ── D-12:链接定义行 / `[标签]: 值` / 引用式链接(verify-integrity-2/d12b.cjs、d11d12.cjs)──

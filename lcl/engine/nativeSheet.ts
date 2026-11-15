@@ -267,7 +267,14 @@ export function readNativeTheme(): NativeSheetTheme {
   if (typeof document !== 'undefined' && document.body) {
     const probe = document.createElement('span')
     probe.setAttribute('aria-hidden', 'true')
-    probe.style.cssText = 'position:absolute;width:0;height:0;overflow:hidden;visibility:hidden;pointer-events:none'
+    // No transition / animation on the probe, inline and !important. Under "reduce motion" — the system setting, or the app's
+    // own "fade only" — base.css's guard layer gives every element a colour transition (`*`, layered !important). The probe
+    // changes `color` once per token, so each change started a transition and getComputedStyle answered with its start: the
+    // previous token's colour, or the inherited black. Every token then read as the first one, and the native bar, sheets
+    // and banner drew text, borders and buttons in the page background (2026-11-15, Android with animations off).
+    // An inline !important declaration outranks any style-sheet one, layered or not (element-attached styles are
+    // compared before layers). `npm run check:nativetheme` in desktop reads it in Chromium under all three.
+    probe.style.cssText = 'position:absolute;width:0;height:0;overflow:hidden;visibility:hidden;pointer-events:none;transition:none!important;animation:none!important'
     // Under <html>, not <body>: an element added to (or taken from) <body> makes the browser restyle the whole page
     // — twice per read — and the phone's native bar asks for the theme at every step of a navigation (2026-10-11:
     // 196 ms of a Space switch on a long chat; under <html> the same read is 0.4 ms. `npm run emu:perf` in mobile).

@@ -29,6 +29,10 @@ export interface DesktopFloatOptions {
   margin?: number
   /** 读屏名 / 窗口标题(不显示)。 */
   title: string
+  /** 能不能拖着走(缺省 false:语音胶囊钉在锚点上)。Computer Use 悬浮小画面用 true,拖动区由页面用 app-region 画。 */
+  movable?: boolean
+  /** 首次摆位用哪块工作区(缺省 = 鼠标所在那块屏,见 currentWorkArea)。 */
+  workArea?: Rectangle
   webPreferences: Electron.WebPreferences
 }
 
@@ -51,7 +55,7 @@ export function createDesktopFloat(o: DesktopFloatOptions): BrowserWindow {
   const keep = o.focus === 'keep'
   const mac = process.platform === 'darwin'
   const win = new BrowserWindow({
-    ...desktopFloatBounds(currentWorkArea(), o, o.anchor, o.margin),
+    ...desktopFloatBounds(o.workArea ?? currentWorkArea(), o, o.anchor, o.margin),
     title: o.title,
     show: false,
     frame: false,
@@ -59,7 +63,7 @@ export function createDesktopFloat(o: DesktopFloatOptions): BrowserWindow {
     backgroundColor: '#00000000',
     hasShadow: false, // 阴影由页面里的卡面画(--card-shadow),透明窗的系统阴影会描出整个矩形
     resizable: false,
-    movable: false,
+    movable: o.movable === true,
     minimizable: false,
     maximizable: false,
     fullscreenable: false,

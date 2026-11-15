@@ -22,7 +22,7 @@
 import type { AppState } from './appStore'
 import type { UiMessage } from '../types'
 import { inRunWindow } from './runStats'
-import { idleAgentStatus, type TanguAgentStatus } from '../amadeus/plugins/tanguSeam'
+import { idleAgentStatus, type TanguAgentStatus, type TanguSessionTarget } from '../amadeus/plugins/tanguSeam'
 import { agentName } from '../agentName'
 
 /** 成功结束后保持 done 的时长,之后回落 idle。 */
@@ -69,6 +69,35 @@ function agentOf(s: AgentStatusSlice, sid: string | null): { agentSlug?: string;
   if (!slug) return {}
   const name = agentName(s.agentDefs.find((a) => a.slug === slug))
   return name ? { agentSlug: slug, agentName: name } : { agentSlug: slug }
+}
+
+/**
+ * 会话参数 → 具体会话(2026-11-13+,给 `{ runId }` 用)。
+ *  - 字符串 / null / undefined:原样(undefined 由调用方按活动会话解释);
+ *  - 对象里有 `runId` 键:找 runningBySession 里**正在跑这个 run** 的会话;找不到 / runId 为空 → `byRun` 且 sessionId null。
+ *    绝不回落到活动会话 —— 插件拿着上一轮的 runId 来停,停掉的必须是那一轮或什么都不停;
+ *  - 对象只有 `sessionId`:同字符串用法。
+ */
+export function resolveStatusTarget(
+  s: Pick<AgentStatusSlice, 'runningBySession'>,
+  target: TanguSessionTarget,
+): { sessionId: string | null | undefined; byRun: boolean } {
+  if (target === null || target === undefined || typeof target === 'string') return { sessionId: target, byRun: false }
+  if (typeof target !== 'object') return { sessionId: null, byRun: true }
+  if ('runId' in target) {
+    const runId = target.runId
+    if (typeof runId !== 'string' || !runId) return { sessionId: null, byRun: true }
+    for (const [sid, rid] of Object.entries(s.runningBySession)) if (rid === runId) return { sessionId: sid, byRun: true }
+    return { sessionId: null, byRun: true }
+  }
+  return { sessionId: typeof target.sessionId === 'string' || target.sessionId === null ? target.sessionId : undefined, byRun: false }
+}
+
+/** agentStatusOf 的会话参数放宽版:`{ runId }` 找不到在跑的会话 → 纯 idle(runId null、不带 Agent 归属)。 */
+export function agentStatusOfTarget(s: AgentStatusSlice, target: TanguSessionTarget, now: number): TanguAgentStatus {
+  const r = resolveStatusTarget(s, target)
+  if (r.byRun && !r.sessionId) return idleAgentStatus(null)
+  return agentStatusOf(s, r.sessionId, now)
 }
 
 /**
