@@ -6,7 +6,7 @@
  * 样式全在 sidebar2.css(t2s- 前缀,token 驱动);右键菜单复用 base.css 的 .ctx-menu。
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { Plus, MoreHorizontal, Pencil, Archive, ArchiveRestore, Trash2, ChevronRight, Folder, FolderOpen, Cloud, FolderPlus, SquarePen, Smartphone, Send, MessagesSquare, MessageSquare, Bot, GitBranch, Pin, PinOff, Info, NotebookPen, Smile, CircleAlert, Check, PanelTop } from 'lucide-react'
+import { AppWindow, Plus, MoreHorizontal, Pencil, Archive, ArchiveRestore, Trash2, ChevronRight, Folder, FolderOpen, Cloud, FolderPlus, SquarePen, Smartphone, Send, MessagesSquare, MessageSquare, Bot, GitBranch, Pin, PinOff, Info, NotebookPen, Smile, CircleAlert, Check, PanelTop } from 'lucide-react'
 import { SessionIcon, SessionIconPicker } from '../../components/SessionIcon'
 import { folderPadLeft, rowPadLeft } from '@amadeus/lib/treeIndent'
 import { SidebarRow } from '../../components/SidebarRow'
@@ -36,6 +36,10 @@ import { canTurnChatIntoNote, turnChatIntoNote } from './chatToNote'
 import { formatRowTime } from '../../format/time'
 import { ListSection, PullHint, SwipeRow, closeOtherSwipes, dayBucket, usePullToSearch, withSections, type SwipeAction } from '../../components/phoneList'
 import '../../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
+import { useApp } from '../../stores/appStore'
+import { agentEngineOf } from '../../tangu/agentEngine'
+import { engineSessionActions } from '../../amadeus/plugins/engineHarness'
+import { pluginText } from '../../amadeus/plugins/pluginText'
 
 const CHANNEL_ICONS: Partial<Record<ChannelKind, typeof Smartphone>> = { wechat: Smartphone, telegram: Send, qq: MessagesSquare }
 /** 插件通道没有专属图标,统一用 Bot。 */
@@ -465,6 +469,20 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
             .catch((e) => p.onToast?.(t('sidebar.wechat.setConnectedFail', { e: e?.message || e }), true))
         },
       })
+    }
+    // 跑在外部引擎上的对话:跑这个引擎的插件加的项(DSH 融合插件的「在工作台打开」,ctx.registerEngineHarness)
+    if (one && s) {
+      const slug = s.agent_config?.agentSlug
+      const engine = s.agent_config?.engineId || agentEngineOf(useApp.getState().agentDefs?.find((a) => a.slug === slug))
+      if (engine) for (const { owner, action } of engineSessionActions(engine)) {
+        items.push({
+          id: `plugin-${owner}-${action.id}`, label: pluginText(action.label, action.id), icon: <AppWindow size={13} />,
+          run: () => {
+            setMenu(null)
+            try { action.run({ sessionId: s.id, ...(slug ? { agentSlug: slug } : {}) }) } catch (e) { console.error(`[amadeus] plugin "${owner}" session action threw`, e) }
+          },
+        })
+      }
     }
     // 删除仍只给已归档的(旧规矩:先归档再删);多选时要求**整批都已归档**,免得一刀切进活跃会话。
     if (m.ids.every((id) => p.archivedSessions.some((x) => x.id === id))) {

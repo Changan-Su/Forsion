@@ -9,7 +9,7 @@
  *   node scripts/dsh-engine.check.mjs --node <Node ≥ 24 的可执行文件> --dsh <@deepseek-ai/dsh 的 lib/bin.js> --root <全新目录>
  *     [--only twoturn,model,…]   只跑某几项(见下面 SCENARIOS 的 key;nokey = 当前模型缺 API key 时的失败原因;
  *                                agent = 「由谁来跑」设成 DSH 的 Agent,底层第 2 步;
- *                                handoff = 交接,底层第 3 步)
+ *                                handoff = 交接,底层第 3 步;resident = 融合插件第 1 档的常驻进程)
  *     [--engine-entry <别处的 dist/standalone/main.js>]   负对照:拿没有这次改动的旧构建跑同一套,twoturn 应当红
  *     [--live --key-file <一行 key 的文件> | --live --dsh-home <已登录的 DSH 目录>]   真模型:看模型自己的回答(caps / twoturn /
  *                                    model / edit / stop / stopedit / approval / handoff);key 只进子进程环境,不落盘、不打印
@@ -240,13 +240,15 @@ const dshSessions = async () => { const d = rawDsh(); try { await d.init(); retu
 // ── 真 standalone 引擎
 const TOKEN = randomUUID();
 let engine = null, base = '';
+/** 某一项要给引擎多带的环境(resident 那项用它挂测试插件),跑完置回空。 */
+let engineExtraEnv = {};
 async function startEngine() {
   const port = await new Promise((r) => { const srv = createServer(); srv.listen(0, '127.0.0.1', () => { const p = srv.address().port; srv.close(() => r(p)); }); });
   base = `http://127.0.0.1:${port}`;
   engine = spawn(process.execPath, [ENTRY, '--port', String(port), '--host', '127.0.0.1', '--data-dir', join(TANGU_HOME, 'state.db'), '--sandbox', 'auto', '--cloud-url', 'http://127.0.0.1:9', '--token', TOKEN], {
     cwd: WS,
     env: { PATH: `${dirname(process.execPath)}:/usr/bin:/bin`, HOME, TMPDIR: TMP, TANGU_HOME, TANGU_DEFAULT_WORKSPACE: WS, TANGU_BROWSER_CDP: 'off', TANGU_BROWSER_EXTENSION: '0',
-      FORSION_DESKTOP_CONFIG: join(R, 'userData', 'tangu-desktop-config.json'), LANG: 'en_US.UTF-8', ...(LIVE ? modelEnv : {}) },
+      FORSION_DESKTOP_CONFIG: join(R, 'userData', 'tangu-desktop-config.json'), LANG: 'en_US.UTF-8', ...(LIVE ? modelEnv : {}), ...engineExtraEnv },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   const log = (d) => appendFileSync(LOG, LIVE_KEY ? String(d).split(LIVE_KEY).join('<key>') : d);
@@ -340,6 +342,78 @@ const record = (key, title, checks, note = '') => {
   for (const [name, pass, detail] of checks) console.log(`   ${pass ? '✓' : '✗'} ${name}${detail ? `:${clean(detail)}` : ''}`);
   if (note) console.log(`   · ${clean(note)}`);
 };
+
+// ── 常驻进程(融合插件第 1 档):一个测试插件替 dsh 登记常驻进程。它起的是官方包拼成的「网页界面 + 对话入口」同进程组合
+//    (DSH_HOME/profiles/fusion,同方案目录 instrument/fusion-profile/ 再打开 agent-instructions 等几行),stdout 里不是 JSON 的行
+//    (就绪行带网页界面的启动令牌)滤掉、只数条数,不落盘不打印。插件停用 / 引擎退出时把进程收掉。
+const RESIDENT_PLUGIN_ROOT = join(R, 'resident-plugins');
+const RESIDENT_ROUTE = '/extensions/resident-dsh-check/resident-dsh-check/state';
+const FUSION_PATCH = `# dsh-engine.check.mjs resident 那项写的:同一个进程里既开网页界面,又开对话入口(ACP)。
+- id: web-runtime
+  config:
+    openBrowser: false
+    printUrl: true
+    publicUrl: !!js ctx.webStartup.publicUrl
+    surfaceContext: true
+- id: webserver
+  config:
+    host: 127.0.0.1
+    port: 0
+    tls: !!js ctx.webStartup.tls
+    compression: gzip
+    compressionLevel: 1
+    compressionThresholdBytes: 1024
+# 网页界面那份接线把这些关了、改由「预设」按会话挂;对话入口建的会话不挂预设,所以在全局重新打开
+${['agent-instructions', 'tool-web', 'tool-todo', 'tool-workflow', 'workflow-ptc', 'command-goal', 'plan-mode', 'command-compact',
+  'tool-goal', 'compaction-basic', 'tool-result-pruner', 'skill-filesystem', 'tool-skill', 'tool-subagent-control', 'tool-subagent', 'tool-subagent-fork',
+  ...(TOOLS_OFF ? [] : ['tool-bash', 'tool-jobs', 'tool-fs', 'tool-fs-search'])].map((id) => `- id: ${id}\n  disabled: false\n`).join('')}${TOOLS_OFF ? TOOLS_OFF_PATCH.split('\n').slice(1).join('\n') : ''}`;
+function writeResidentFixture() {
+  const prof = join(DSH_HOME, 'profiles', 'fusion'); mkdirSync(prof, { recursive: true });
+  writeFileSync(join(prof, 'package.json'), JSON.stringify({ name: 'dsh-profile-fusion', private: true,
+    dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', '@deepseek-ai/dsh-acp-app'] } } }, null, 2));
+  writeFileSync(join(prof, 'cordis.patch.yml'), FUSION_PATCH);
+  const dir = join(RESIDENT_PLUGIN_ROOT, 'resident-dsh-check'); mkdirSync(join(dir, 'dist'), { recursive: true });
+  writeFileSync(join(dir, 'package.json'), '{"type":"module"}');
+  writeFileSync(join(dir, 'tangu-plugin.json'), JSON.stringify({ id: 'resident-dsh-check', name: 'Resident DSH (check)', version: '1.0.0', apiVersion: 1, entry: 'dist/index.js' }));
+  // 假模型模式下环境里只有假 key;真模型的 key(--key-file)不写进这份文件,插件从引擎自己的环境里拿
+  writeFileSync(join(dir, 'resident.json'), JSON.stringify({ node: NODE, bin: BIN, cwd: WS, env: dshEnvOnDisk() }));
+  writeFileSync(join(dir, 'dist', 'index.js'), `import { spawn } from 'node:child_process';
+import { PassThrough } from 'node:stream';
+import { readFileSync } from 'node:fs';
+const cfg = JSON.parse(readFileSync(new URL('../resident.json', import.meta.url), 'utf8'));
+let cur = null, n = 0, started = 0;
+function start() {
+  const env = { ...cfg.env };
+  if (!env.DEEPSEEK_API_KEY && process.env.DEEPSEEK_API_KEY) env.DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY;
+  const child = spawn(cfg.node, [cfg.bin, '--profile', 'fusion'], { env, cwd: cfg.cwd, stdio: ['pipe', 'pipe', 'pipe'] });
+  const output = new PassThrough();
+  const me = { child, id: child.pid + '-' + (++n), output, dropped: 0, web: false };
+  let buf = '';
+  child.stdout.on('data', (d) => { buf += d; let i; while ((i = buf.indexOf('\\n')) >= 0) { const line = buf.slice(0, i); buf = buf.slice(i + 1);
+    if (line.trimStart().startsWith('{')) output.write(line + '\\n');
+    else if (line.trim()) { me.dropped += 1; if (/https?:\\/\\/127\\.0\\.0\\.1:\\d+\\//.test(line)) me.web = true; } } });
+  child.stdout.on('end', () => output.end());
+  child.stderr.on('data', () => {});
+  child.stdin.on('error', () => {});
+  me.closed = new Promise((r) => child.once('exit', () => { if (cur === me) cur = null; r(); }));
+  started += 1; cur = me; return me;
+}
+const stop = () => { const c = cur; cur = null; if (c && c.child.exitCode === null) { c.child.kill('SIGTERM'); setTimeout(() => { if (c.child.exitCode === null) c.child.kill('SIGKILL'); }, 3000).unref(); } };
+process.once('exit', () => { if (cur) cur.child.kill('SIGKILL'); });
+for (const sig of ['SIGTERM', 'SIGINT']) process.once(sig, () => { if (cur) cur.child.kill('SIGKILL'); });
+export default {
+  activate(ctx) {
+    ctx.registerPlugin({ id: 'resident-dsh-check', name: 'Resident DSH (check)', description: 'check:dsh fixture', defaultEnabled: true });
+    ctx.registerResidentEngine({ engineId: 'dsh', connect: async () => { const c = cur || start(); return { id: c.id, input: c.child.stdin, output: c.output, closed: c.closed }; } });
+    ctx.registerScopedRoutes((r) => { r.get('/state', (_q, res) => res.json({ pid: cur ? cur.child.pid : null, started, dropped: cur ? cur.dropped : 0, web: !!(cur && cur.web) })); });
+  },
+  deactivate() { stop(); },
+};
+`);
+}
+const fusionPids = () => dshPids().filter((l) => l.includes('--profile fusion')).map((l) => l.split(' ')[0]);
+const sysText = (b) => (typeof b?.system === 'string' ? b.system : Array.isArray(b?.system) ? b.system.map((x) => x.text || '').join('\n') : '');
+const engineLog = () => { try { return readFileSync(LOG, 'utf8'); } catch { return ''; } };
 
 const SCENARIOS = {
   // 模型下拉:能力探测读出 DSH 的模型和思考档
@@ -723,6 +797,125 @@ const SCENARIOS = {
       ['没来问审批', a.approvals.length === 0, `${a.approvals.length} 次`],
       ['工具成功', a.results.some((x) => x.name === 'mcp__probe__echo_note' && !x.isError), a.results.map((x) => `${x.name}:${x.isError ? 'err' : 'ok'}`).join(', ')],
     ]);
+  },
+  // 常驻进程(融合插件第 1 档):测试插件替 dsh 登记一个「网页界面 + 对话入口」同进程的官方 DSH。Forsion 的对话连它、不每轮起进程;
+  // 人设 / 记忆 / 技能目录走每场会话那座桥的说明;一轮结束会话不关(工作台要接得上);交接内容变了才关掉重接;
+  // 工作台打开前先替它接上(hold);引擎重启后照存下的那份接上;插件不在了照旧每轮起一个进程、续的还是同一场。
+  resident: async () => {
+    writeResidentFixture();
+    const SLUG = 'resmate', PERSONA = 'RESIDENT-PERSONA-70', SKILL_DESC = 'RES-SKILL-72', SKILL_BODY = 'RES-SKILL-BODY-73', USER_SHARED = 'RES-USER-74';
+    mkdirSync(join(HOME, '.agents'), { recursive: true });
+    writeFileSync(join(HOME, '.agents', 'AGENTS.md'), `Shared note for every coding agent: ${USER_SHARED}.\n`);
+    const memText = () => { const f = join(agentDir(SLUG), 'MEMORY.md'); return existsSync(f) ? readFileSync(f, 'utf8') : ''; };
+    const lastMsg = (body) => JSON.stringify((body?.messages || []).slice(-1));
+    const logSince = (n) => engineLog().slice(n);
+    const pluginState = () => api(RESIDENT_ROUTE).catch((e) => ({ error: e.message }));
+    await stopEngine(); engineExtraEnv = { TANGU_PLUGINS: 'on', TANGU_PLUGINS_DIR: RESIDENT_PLUGIN_ROOT }; await startEngine();
+    try {
+      const list = (await api('/agent/engines')).engines || [];
+      await api('/agent/agents', { method: 'POST', body: JSON.stringify({ slug: SLUG, name: 'Resident mate', systemPrompt: `You are a test agent. ${PERSONA}.`, engine: 'dsh' }) });
+      mkdirSync(join(agentDir(SLUG), 'skills', 'res-probe'), { recursive: true });
+      writeFileSync(join(agentDir(SLUG), 'skills', 'res-probe', 'SKILL.md'), `---\nname: res-probe\ndescription: Probe skill ${SKILL_DESC}. Use only when asked about the probe.\n---\n${SKILL_BODY}: nothing to do.\n`);
+      const caps = await api('/agent/engines/dsh/capabilities?fresh=1');
+      const afterCaps = fusionPids();
+      const sid = await newSession('resident');
+      const cfg = { engineId: undefined, agentSlug: SLUG };
+
+      // ① 第一轮:新建会话,桥带说明;调桥里的 remember
+      let L = engineLog().length; const n0 = stub.mark();
+      stub.script([{ tool: 'mcp__forsion__remember', args: { action: 'add', fact: 'The user grows basil. RES-REM-71', scope: 'agent' } }, { text: 'Saved.' }]);
+      const a = await run(sid, 'Please remember that I grow basil.', cfg, { modelId: JUDGE_MODEL });
+      const reqA = stub.since(n0); const firstA = reqA[0] || {};
+      const pidsA = fusionPids(); const st = await pluginState();
+      const homeDir = join(TANGU_HOME, 'engines', 'dsh', 'agents', sid);
+      const ps1 = await pointers(sid);
+      record('resident', '常驻进程:对话连插件起的那个进程(网页界面 + 对话入口同进程),人设 / 技能目录走桥上的说明,工具经桥、卡片照 Forsion 画', [
+        ['引擎清单里 dsh 是可用的', list.some((e) => e.id === 'dsh' && e.available), JSON.stringify(list.find((e) => e.id === 'dsh') || {})],
+        ['模型清单在常驻进程上探出来了(没另起进程)', (caps.models || []).length > 0 && afterCaps.length === 1, `${(caps.models || []).length} 个模型,fusion 进程 ${afterCaps.length} 个`],
+        ['这一轮跑完', a.done, a.error || ''],
+        ['只有一个常驻 DSH 进程,网页界面也起来了', pidsA.length === 1 && st.web === true && st.started === 1, `进程 ${pidsA.length} 个,起过 ${st.started} 次,网页界面 ${st.web}`],
+        ['stdout 里不是 JSON 的行被插件滤掉了(就绪行)', st.dropped >= 1, `${st.dropped} 行`],
+        ['日志里没有启动令牌', !/token=[A-Za-z0-9]/.test(engineLog()), ''],
+        ['人设在系统提示里(桥的说明)', sysText(firstA).includes(PERSONA)],
+        ['技能目录在系统提示里(名字 + 描述)', sysText(firstA).includes('res-probe') && sysText(firstA).includes(SKILL_DESC)],
+        ['用户自己 ~/.agents 的 AGENTS.md 由 DSH 自己读进来了', JSON.stringify(firstA).includes(USER_SHARED)],
+        ['桥上有 remember 和 forsion_skill', (firstA.tools || []).some((t) => t.name === 'mcp__forsion__remember') && (firstA.tools || []).some((t) => t.name === 'mcp__forsion__forsion_skill')],
+        ['卡片按 Tangu 原名画(remember)、成功', a.tools.some((t) => t.name === 'remember') && a.results.some((r) => r.name === 'remember' && !r.isError), a.results.map((r) => `${r.name}:${r.isError ? 'err' : 'ok'}`).join(', ')],
+        ['记忆写在它名下', memText().includes('RES-REM-71')],
+        ['没写指令目录(常驻进程不用 DSH_AGENTS_HOME)', !existsSync(homeDir)],
+        ['新建了一场 DSH 会话', /resident session [0-9a-f-]{8}: new/.test(logSince(L)) && !!ps1[0]?.ext, ps1.map((x) => x.ext?.slice(0, 8)).join(',')],
+      ], `桥的说明 ${(/bridge-instructions=(\d+)B/.exec(logSince(L)) || [])[1] || '?'} 字节`);
+
+      // ② 记忆变了 → 交接内容变了 → 关掉重接(新说明带上新记忆);调 forsion_skill 读技能
+      L = engineLog().length; const n1 = stub.mark();
+      stub.script([{ tool: 'mcp__forsion__forsion_skill', args: { name: 'res-probe' } }, { text: 'Read it.' }]);
+      const b = await run(sid, 'Open the probe skill.', cfg, { modelId: JUDGE_MODEL });
+      const reqB = stub.since(n1); const pidsB = fusionPids(); const ps2 = await pointers(sid);
+      record('residentreopen', '常驻进程:交接内容变了(新记忆)才关掉重接,新说明带上新记忆;技能经 forsion_skill 读到;同一个进程、同一场会话', [
+        ['这一轮跑完', b.done, b.error || ''],
+        ['日志:因交接变了重接', /resident session [0-9a-f-]{8}: reopened \(handoff changed\)/.test(logSince(L))],
+        ['新记忆在这一轮的系统提示里', sysText(reqB[0]).includes('RES-REM-71')],
+        ['forsion_skill 回的是 SKILL.md 正文', !!reqB[1] && lastMsg(reqB[1]).includes(SKILL_BODY), clean(lastMsg(reqB[1])).slice(0, 160)],
+        ['还是同一个进程', pidsB.length === 1 && pidsB[0] === pidsA[0], `${pidsA.join(',')} → ${pidsB.join(',')}`],
+        ['还是同一场 DSH 会话', ps2.length === 2 && ps2[1].ext === ps2[0].ext, ps2.map((x) => x.ext?.slice(0, 8)).join(' → ')],
+      ]);
+
+      // ③ 什么都没变 → 会话一直开着,接着用;上文还在
+      L = engineLog().length; const n2 = stub.mark();
+      stub.script([{ text: 'Plain answer.' }]);
+      const c = await run(sid, 'What did I ask you first?', cfg, { modelId: JUDGE_MODEL });
+      const reqC = stub.since(n2);
+      const held = await api('/agent/engines/dsh/hold', { method: 'POST', body: JSON.stringify({ sessionId: sid }) }).catch((e) => ({ error: e.message }));
+      record('residentkeep', '常驻进程:交接没变就不重接(会话一直开着,工作台里开着的那一场不受影响);工作台打开前 hold 回「开着」', [
+        ['这一轮跑完', c.done, c.error || ''],
+        ['日志:会话一直开着', /resident session [0-9a-f-]{8}: kept open/.test(logSince(L)) && !/reopened|: resumed/.test(logSince(L))],
+        ['上文还在(第一句在请求里)', JSON.stringify(reqC[0] || {}).includes('grow basil')],
+        ['hold 回 open(本来就开着)', held.state === 'open', JSON.stringify(held)],
+      ]);
+
+      // ④ 引擎重启(Forsion 退出再开):插件起新进程;hold 照存下的那份接上;下一轮指纹对得上、不再重接
+      const oldPid = pidsA[0];
+      await stopEngine(); await until(() => !fusionPids().includes(oldPid), 8000, 200);
+      const oldGone = !fusionPids().includes(oldPid);
+      await startEngine();
+      L = engineLog().length;
+      const held2 = await api('/agent/engines/dsh/hold', { method: 'POST', body: JSON.stringify({ sessionId: sid }) }).catch((e) => ({ error: e.message }));
+      const holdLog = logSince(L);
+      L = engineLog().length; const n3 = stub.mark();
+      stub.script([{ text: 'Back again.' }]);
+      const d = await run(sid, 'Are you there after the restart?', cfg, { modelId: JUDGE_MODEL });
+      const reqD = stub.since(n3); const pidsD = fusionPids(); const ps4 = await pointers(sid);
+      const wrongSid = await api('/agent/engines/dsh/hold', { method: 'POST', body: JSON.stringify({ sessionId: 'no-such-session' }) }).then(() => 'ok', (e) => e.message);
+      record('residentrestart', '常驻进程:Forsion 退出时进程跟着退;再开后 hold 照存下的说明接上,下一轮不再重接、人设还在', [
+        ['旧进程退了', oldGone],
+        ['hold 回 resumed', held2.state === 'resumed', JSON.stringify(held2)],
+        ['hold 用的是存下的说明', /held for the workbench/.test(holdLog) && !/no saved handoff/.test(holdLog)],
+        ['这一轮跑完', d.done, d.error || ''],
+        ['日志:会话一直开着(指纹对得上)', /resident session [0-9a-f-]{8}: kept open/.test(logSince(L))],
+        ['人设和新记忆还在系统提示里', sysText(reqD[0]).includes(PERSONA) && sysText(reqD[0]).includes('RES-REM-71')],
+        ['新进程只有一个', pidsD.length === 1 && pidsD[0] !== oldPid, pidsD.join(',')],
+        ['续的还是同一场', ps4.length === 4 && ps4.every((x) => x.ext === ps4[0].ext), ps4.map((x) => x.ext?.slice(0, 8)).join(' → ')],
+        ['hold 一场不存在的对话 → 404', /404/.test(wrongSid), wrongSid],
+      ]);
+
+      // ⑤ 插件不在了:照旧每轮起一个进程,续的还是同一场;人设改走指令目录
+      const pidE = pidsD[0];
+      await stopEngine(); await until(() => !fusionPids().includes(pidE), 8000, 200);
+      engineExtraEnv = {}; await startEngine();
+      const n4 = stub.mark();
+      stub.script([{ text: 'Per-turn again.' }]);
+      const e = await run(sid, 'And now without the plugin?', cfg, { modelId: JUDGE_MODEL });
+      const reqE = stub.since(n4); const ps5 = await pointers(sid);
+      record('residentfallback', '常驻进程:插件不在了照旧每轮起一个进程,续的还是同一场;人设改走指令目录', [
+        ['这一轮跑完', e.done, e.error || ''],
+        ['没有常驻进程', fusionPids().length === 0, fusionPids().join(',')],
+        ['续的还是同一场', ps5.length === 5 && ps5[4].ext === ps5[0].ext, ps5.map((x) => x.ext?.slice(0, 8)).join(' → ')],
+        ['人设进了模型的上下文', JSON.stringify(reqE[0] || {}).includes(PERSONA)],
+        ['写了指令目录', existsSync(homeDir)],
+      ]);
+    } finally {
+      if (Object.keys(engineExtraEnv).length) { engineExtraEnv = {}; await stopEngine(); await startEngine(); }
+    }
   },
   probe: async () => {
     const probeDir = join(TANGU_HOME, 'engines', 'dsh', 'probe');

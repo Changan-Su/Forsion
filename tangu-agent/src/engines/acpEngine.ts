@@ -49,7 +49,7 @@ export interface AcpClientCtx {
 
 /** 引擎握手上限:spawn + initialize + newSession 若在此窗口内没完成(子进程卡死/Windows 上 .cmd shim spawn
  *  失败永不吐 stdout)就放弃,避免切换引擎时 UI 无限转圈。冷启 `npx -y` 首次下载较慢 → 给足 30s,可经 env 调。 */
-const HANDSHAKE_TIMEOUT_MS = Number(process.env.TANGU_ENGINE_HANDSHAKE_TIMEOUT_MS) || 30_000;
+export const HANDSHAKE_TIMEOUT_MS = Number(process.env.TANGU_ENGINE_HANDSHAKE_TIMEOUT_MS) || 30_000;
 
 /** 跨平台起引擎子进程。Windows 上 npx/claude/codex 等是 .cmd 批处理 shim,spawn 不带 shell 无法执行
  *  (Node CVE-2024-27980 后更是硬拒 .cmd)→ win32 必须 shell:true 交 cmd.exe 解析,这正是「切换外部 CLI 在
@@ -421,6 +421,43 @@ export function createAcpClient(
   };
 }
 
+/**
+ * 把用户为这个引擎选的模型应用到这场会话上(与当前不同才换);失败不阻断,用引擎当前的继续。返回这场会话此刻的模型清单和当前模型
+ * (这一轮因为缺 API key 失败时,拿它告诉用户能换成什么)。
+ * 引擎给 `models` 的走 session/set_model;没有 `models`、模型在 configOptions 里的(DSH)走 session/set_config_option。
+ * 续接的会话记着上次选的模型,所以每轮都对一下「当前值」而不是只在新建时设。(DSH 实测:换模型会把思考档重置成那个模型的缺省值。这里不碰思考档。)
+ * s = 这一轮 session/new / resume / load 的回包;常驻进程上会话本来就开着、这一轮没有回包时传 null,并给 known(上次记下的那份)。
+ */
+export async function applyEngineModel(
+  conn: Pick<ClientSideConnection, 'setSessionConfigOption' | 'unstable_setSessionModel'>,
+  sessionId: string, s: any, engineModelId: string | undefined, engineId: string,
+  guard: <T>(p: Promise<T>, label: string) => Promise<T>, known?: AcpConfigSelection,
+): Promise<AcpConfigSelection> {
+  let sel = s ? mapAcpConfigOptions(s?.configOptions) : (known ?? mapAcpConfigOptions(undefined));
+  if (s && !sel.modelConfigId && s?.models) sel = { ...sel, ...mapAcpModels(s.models) }; // 模型走 `models` 的引擎:清单和当前模型在那边
+  if (!engineModelId) return sel;
+  try {
+    if (!s?.models && sel.modelConfigId) {
+      if (engineModelId !== sel.currentModelId) {
+        // 存着的选择不在这次的清单里(引擎那边换了目录 / 下架)→ 不发,照引擎当前的跑
+        if (!sel.models.some((m) => m.id === engineModelId)) console.warn(`[engine] model ${engineModelId} is not offered by ${engineId} any more; keeping ${sel.currentModelId ?? 'the engine default'}`);
+        else {
+          const changed: any = await guard(conn.setSessionConfigOption({ sessionId, configId: sel.modelConfigId, value: engineModelId }), 'setSessionConfigOption');
+          // 回包里是换完之后的整份选项;没带(老实现)就只把当前模型记成刚选的那个
+          const after = mapAcpConfigOptions(changed?.configOptions);
+          sel = after.modelConfigId ? after : { ...sel, currentModelId: engineModelId };
+        }
+      }
+    } else if (s && engineModelId !== s?.models?.currentModelId) { // 同改动前:有回包、模型不在 configOptions 里就走 set_model
+      await conn.unstable_setSessionModel({ sessionId, modelId: engineModelId });
+      sel = { ...sel, currentModelId: engineModelId };
+    }
+  } catch (e: any) {
+    console.warn(`[engine] set model(${engineModelId}) failed: ${acpErrorText(e)}`);
+  }
+  return sel;
+}
+
 /** 引擎会话 id → 上一轮那个进程「真的退了」的 promise。一 run 一进程:下一轮要在新进程里续接同一个会话,而上一轮的进程
  *  被杀之后要过一会儿才放开会话(DSH 的会话写入权按进程持有;SIGTERM 后它先收尾)。紧跟着发的下一句(排队的消息)
  *  赶在它退之前去续接,会被当成「另一个进程占着」拒掉 —— 所以续接前先等它。 */
@@ -623,29 +660,7 @@ export async function runAcpEngine(def: EngineDef, ctx: EngineRunCtx): Promise<E
     // 续接的会话记着上次选的模型,所以每轮都对一下「当前值」而不是只在新建时设。
     // (DSH 实测:换模型会把思考档重置成那个模型的缺省值。这里不碰思考档。)
     // sel = 这场会话此刻的模型清单和当前模型(下面换了模型就跟着换):这一轮因为缺 API key 失败时,拿它告诉用户能换成什么。
-    let sel = mapAcpConfigOptions((s as any)?.configOptions);
-    if (!sel.modelConfigId && (s as any)?.models) sel = { ...sel, ...mapAcpModels((s as any).models) }; // 模型走 `models` 的引擎:清单和当前模型在那边
-    if (ctx.engineModelId) {
-      try {
-        if (!(s as any)?.models && sel.modelConfigId) {
-          if (ctx.engineModelId !== sel.currentModelId) {
-            // 存着的选择不在这次的清单里(引擎那边换了目录 / 下架)→ 不发,照引擎当前的跑
-            if (!sel.models.some((m) => m.id === ctx.engineModelId)) console.warn(`[engine] model ${ctx.engineModelId} is not offered by ${def.id} any more; keeping ${sel.currentModelId ?? 'the engine default'}`);
-            else {
-              const changed: any = await guard(conn.setSessionConfigOption({ sessionId, configId: sel.modelConfigId, value: ctx.engineModelId }), 'setSessionConfigOption');
-              // 回包里是换完之后的整份选项;没带(老实现)就只把当前模型记成刚选的那个
-              const after = mapAcpConfigOptions(changed?.configOptions);
-              sel = after.modelConfigId ? after : { ...sel, currentModelId: ctx.engineModelId };
-            }
-          }
-        } else if (ctx.engineModelId !== (s as any)?.models?.currentModelId) {
-          await conn.unstable_setSessionModel({ sessionId, modelId: ctx.engineModelId });
-          sel = { ...sel, currentModelId: ctx.engineModelId };
-        }
-      } catch (e: any) {
-        console.warn(`[engine] set model(${ctx.engineModelId}) failed: ${acpErrorText(e)}`);
-      }
-    }
+    const sel = await applyEngineModel(conn, sessionId, s, ctx.engineModelId, def.id, guard);
     if (replaying) {
       await settleAfterLoad(() => dropped.lastAt, ctx.signal);
       ctx.signal.throwIfAborted();
