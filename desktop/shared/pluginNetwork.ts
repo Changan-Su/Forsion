@@ -27,7 +27,9 @@ export function normalizeNetworkPattern(raw: unknown): string | null {
   if (!p || p.length > 255) return null
   if (p.startsWith('*.')) {
     const base = p.slice(2)
-    // `*.com` 只剩一级:等于放行整个顶级域,不收
+    // `*.com` 只剩一级:等于放行整个顶级域,不收;`*.co.uk` / `*.com.cn` 这类国家域名下的公共二级后缀同理
+    // (没有带全份公共后缀表,只挡最常见的形状:二级是 co / com / net / org / gov / edu / ac …,顶级是两个字母)
+    if (/^(co|com|net|org|gov|edu|ac|or|ne|go|gob|mil|nic|sch)\.[a-z]{2}$/.test(base)) return null
     return validHostname(base) ? `*.${base}` : null
   }
   return validHostname(p) ? p : null

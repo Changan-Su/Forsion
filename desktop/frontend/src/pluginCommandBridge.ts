@@ -2,9 +2,9 @@
  * 插件 commands → engine 命令面板(**全局可见**,2026-07-18 放开——插件视图可装进任意 Space,「打开视图」类命令必须随处可用)。
  * id 前缀 amadeus:<插件 id>:<命令 id> 保持稳定,快捷键绑定不破。
  *
- * 2026-11-16 起按差量同步(以前是整批撤了重加):插件可以在运行中加 / 换 / 撤单条命令(registerCommand 回 disposer、
- * 同 id 原位替换),而插件默认键(CommandContribution.hotkey)的生效与否取决于别的命令和用户覆盖 —— 那两样一变就得重判,
- * 整批重加会让「重判 → 改命令表 → 又触发重判」转个不停。这里只动真变了的那几条,自己写进命令表的那几条不算外部变化。
+ * 2026-11-16 起:插件可以在运行中加 / 换 / 撤单条命令(registerCommand 回 disposer、同 id 原位替换),而插件默认键
+ * (CommandContribution.hotkey)的生效与否取决于别的命令和用户覆盖 —— 那两样一变就得重判。重判的结果没变就不碰命令表;
+ * 变了才整块按插件表顺序重加。监听别的命令时把插件这一块排除在外,桥自己写命令表不会再触发重判(不会转个不停)。
  */
 import { addCommand, effectiveHotkey, isMacPlatform, removeCommand, useCommandStore, useShortcuts } from '@lcl/engine'
 import type { Command } from '@lcl/engine'
@@ -38,7 +38,6 @@ export function installPluginCommandBridge(): () => void {
     try {
       const { plugins, commands } = usePluginStore.getState()
       const want = new Map(commands.map((o) => [engineId(o.pluginId, o.item.id), o] as const))
-      for (const id of [...bridged.keys()]) if (!want.has(id)) { removeCommand(id); bridged.delete(id) }
       const mine = new Set(want.keys())
       const others = otherRows(mine)
       othersSig = sigOf(others)
@@ -48,12 +47,20 @@ export function installPluginCommandBridge(): () => void {
       )
       const nextStates: Record<string, PluginHotkeyState> = Object.fromEntries(states)
       if (JSON.stringify(nextStates) !== JSON.stringify(usePluginHotkeys.getState().states)) usePluginHotkeys.setState({ states: nextStates })
-      for (const [id, o] of want) {
-        const owner = plugins.find((p) => p.id === o.pluginId)
+      const next = [...want].map(([id, o]) => {
         const st = states.get(id)
-        const hotkey = st?.active ? st.hotkey : ''
-        const prev = bridged.get(id)
-        if (prev && prev.item === o.item && prev.owner === owner && prev.hotkey === hotkey) continue
+        return { id, o, owner: plugins.find((p) => p.id === o.pluginId), hotkey: st?.active ? st.hotkey : '' }
+      })
+      // 没变就不碰命令表;变了就整块按插件表的顺序撤了重加(engine 的 addCommand 是「删掉再追加」,只重加变了的那条
+      // 会把它挪到最后 —— 同 id 原位替换、默认键开关一下,命令面板和手机「⋯」里的顺序就跟着漂,独立评审指出)。
+      const same = next.length === bridged.size && next.every((n, i) => {
+        const prev = bridged.get(n.id)
+        return !!prev && [...bridged.keys()][i] === n.id && prev.item === n.o.item && prev.owner === n.owner && prev.hotkey === n.hotkey
+      })
+      if (same) return
+      for (const id of bridged.keys()) removeCommand(id)
+      bridged.clear()
+      for (const { id, o, owner, hotkey } of next) {
         // 外置插件没有 ribbon 图标、手机上也没有命令区可钉 → 声明 moreGroup,手机「⋯」按插件分节直接列出
         // (节标题 = 插件展示名,渲染期按当前语言求值)。内置插件(callout / 字数)的命令各有入口,不进「⋯」。
         const moreGroup = owner && !owner.builtin

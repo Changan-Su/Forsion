@@ -99,8 +99,16 @@ export function pluginDefaultHotkey(raw: unknown): string {
   const hk = normalizeHotkey(raw)
   const parts = hk.split('+')
   const keys = parts.filter((p) => !(MODS as readonly string[]).includes(p))
-  if (keys.length !== 1 || keys[0].length > 20 || !parts.includes('mod')) return ''
-  return hk
+  if (keys.length !== 1 || !parts.includes('mod')) return ''
+  return canFire(keys[0], parts.includes('shift')) ? hk : ''
+}
+
+/** 热键分发按 e.key 认主键:带 Shift 时数字 / 标点给的是上档字符(⇧1 是 '!'),`space` 对不上 e.key 的 ' ' ——
+ *  这些写进默认键永远按不出来,设置页却显示「已生效」,干脆不收。字母、具名键、[ ](分发里有别名)不受 Shift 影响。 */
+const NAMED_KEYS = /^(arrow(up|down|left|right)|f([1-9]|1[0-9]|2[0-4])|enter|escape|tab|backspace|delete|insert|home|end|pageup|pagedown)$/
+function canFire(key: string, shift: boolean): boolean {
+  if (/^[a-z]$/.test(key) || NAMED_KEYS.test(key) || key === '[' || key === ']') return true
+  return !shift && /^([0-9]|[-=\\;',./`])$/.test(key)
 }
 
 /** 插件默认键为什么没生效:撞上某条命令(id;命令面板伪命令是 'command-palette'),或撞上系统 / 编辑器那两层(i18n key)。 */

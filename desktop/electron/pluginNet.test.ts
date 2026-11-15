@@ -199,6 +199,24 @@ describe('④ caps and request shape', () => {
     expect(await req('https://api.example.com/', { method: 'POST', body: new Uint8Array(NET_MAX_BYTES + 1) })).toMatchObject({ ok: false, code: 'net_too_large' })
   })
 
+  it('returns bytes that own their memory (no shared Buffer pool slab reaches the renderer)', async () => {
+    const r = await req('https://api.example.com/', undefined, deps(fake(() => ok('tiny')).transport))
+    expect(r.ok && [r.bytes.byteLength, r.bytes.buffer.byteLength, r.bytes.byteOffset]).toEqual([4, 4, 0])
+  })
+
+  it('caps concurrent requests per plugin', async () => {
+    const releases: Array<() => void> = []
+    const hang = fake(() => new Promise<Reply>((res) => releases.push(() => res(ok()))))
+    const d = deps(hang.transport)
+    const pending = Array.from({ length: 8 }, () => req('https://api.example.com/', undefined, d))
+    await vi.waitFor(() => expect(releases).toHaveLength(8))
+    expect(await req('https://api.example.com/', undefined, d)).toMatchObject({ ok: false, code: 'net_failed' })
+    expect(await pluginNetRequest('other-plugin', 'https://api.example.com/', undefined, deps(fake(() => ok()).transport))).toMatchObject({ ok: true })
+    for (const r of releases) r()
+    expect((await Promise.all(pending)).every((r) => r.ok)).toBe(true)
+    expect(await req('https://api.example.com/', undefined, deps(fake(() => ok()).transport))).toMatchObject({ ok: true }) // 名额还回来了
+  })
+
   it('does not apply the Content-Length cap to HEAD', async () => {
     const f = fake(() => ({ status: 200, headers: { 'content-length': String(NET_MAX_BYTES * 3) }, body: [] }))
     expect(await req('https://api.example.com/', { method: 'HEAD' }, deps(f.transport))).toMatchObject({ ok: true, status: 200 })
@@ -246,6 +264,10 @@ describe('⑤ production transport', () => {
         rs.writeHead(200, { 'content-encoding': 'gzip, br' }); rs.end(zlib.brotliCompressSync(zlib.gzipSync(raw))); return
       }
       if (rq.url === '/compress') { rs.writeHead(200, { 'content-encoding': 'compress' }); rs.end('xx'); return }
+      // 空正文 + gzip(分块,不带 Content-Length):浏览器给空正文,不报错
+      if (rq.url === '/empty-gzip') { rs.writeHead(200, { 'content-encoding': 'gzip', 'transfer-encoding': 'chunked' }); rs.end(); return }
+      // 重定向上带个认不出的编码:正文反正丢掉,不该让整次请求失败
+      if (rq.url === '/redir-weird') { rs.writeHead(302, { location: '/json', 'content-encoding': 'UTF-8' }); rs.end('x'); return }
       rs.writeHead(200, { 'content-encoding': 'gzip', 'content-type': 'application/json' })
       rs.end(zlib.gzipSync(Buffer.from(JSON.stringify({ ok: true }))))
     })
@@ -275,6 +297,14 @@ describe('⑤ production transport', () => {
     const r = await pluginNetRequest('my-plugin', 'https://api.example.com/stacked', undefined, local())
     expect(r.ok && JSON.parse(Buffer.from(r.bytes).toString())).toEqual({ stacked: true })
     expect(await pluginNetRequest('my-plugin', 'https://api.example.com/compress', undefined, local())).toMatchObject({ ok: false, code: 'net_failed' })
+  })
+
+  it.skipIf(!hasOpenssl)('an empty gzip body is an empty body; a redirect body is never decoded', async () => {
+    const empty = await pluginNetRequest('my-plugin', 'https://api.example.com/empty-gzip', undefined, local())
+    expect(empty).toMatchObject({ ok: true, status: 200 })
+    expect(empty.ok && empty.bytes.byteLength).toBe(0)
+    const r = await pluginNetRequest('my-plugin', 'https://api.example.com/redir-weird', undefined, local())
+    expect(r.ok && JSON.parse(Buffer.from(r.bytes).toString())).toEqual({ ok: true })
   })
 
   it.skipIf(!hasOpenssl)('bodiless responses with Content-Encoding (HEAD, 304) neither crash nor hang', async () => {

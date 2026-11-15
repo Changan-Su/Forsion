@@ -38,7 +38,11 @@ describe('plugin default hotkeys (2026-11-16)', () => {
     expect(pluginDefaultHotkey('Mod+Shift+T')).toBe('mod+shift+t')
     expect(pluginDefaultHotkey('alt+mod+1')).toBe('mod+alt+1')
     expect(pluginDefaultHotkey('Mod+Shift+[')).toBe('mod+shift+[')
-    for (const bad of ['t', 'Shift+T', 'Alt+E', 'Mod+Shift', 'mod+mod', 'Mod+A+B', '', 42, null, 'Mod+' + 'x'.repeat(30)]) {
+    expect(pluginDefaultHotkey('Mod+1')).toBe('mod+1')
+    expect(pluginDefaultHotkey('Mod+Shift+ArrowUp')).toBe('mod+shift+arrowup')
+    expect(pluginDefaultHotkey('Mod+/')).toBe('mod+/')
+    // 按不出来的:Shift + 数字 / 标点(e.key 是上档字符)、Space(e.key 是 ' ')
+    for (const bad of ['t', 'Shift+T', 'Alt+E', 'Mod+Shift', 'mod+mod', 'Mod+A+B', '', 42, null, 'Mod+' + 'x'.repeat(30), 'Mod+Shift+1', 'Mod+Shift+/', 'Mod+Space']) {
       expect(pluginDefaultHotkey(bad), String(bad)).toBe('')
     }
   })

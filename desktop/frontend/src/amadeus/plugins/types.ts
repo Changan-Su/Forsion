@@ -69,8 +69,11 @@ export interface CommandContribution {
   keywords?: string
   /**
    * Default key binding (2026-11-16+; older hosts ignore it). Modifiers and one key joined with `+`, where `Mod` is
-   * ⌘ on macOS and Ctrl elsewhere — `'Mod+Shift+T'`, `'Mod+Alt+1'`, `'Mod+Shift+['`. It must include `Mod` (a bare or
-   * Alt-only key would fire while the user types); anything else is ignored with a console warning.
+   * ⌘ on macOS and Ctrl elsewhere — e.g. `'Mod+Shift+Y'`, `'Mod+Alt+K'`, `'Mod+Shift+ArrowUp'`. It must include `Mod`
+   * (a bare or Alt-only key would fire while the user types). With `Shift`, use a letter, `[`, `]` or a named key
+   * (ArrowUp, F5, Enter …): Shift + digit / punctuation produces another character and never matches; `Space` is not
+   * supported. Anything else is ignored with a console warning. Many keys are already taken (Settings → Shortcuts
+   * lists them), so expect a common choice to stay inactive.
    *
    * It is only a suggestion. A binding the user sets for this command always wins. The default takes effect only
    * while nothing else uses the key — a built-in command, a system or note-editor shortcut, the user's binding for

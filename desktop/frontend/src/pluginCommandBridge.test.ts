@@ -4,7 +4,7 @@
  * 插件默认键(hotkey)只在没人用这个键时进命令表,撞上内置命令 / 用户的键就不进,键空出来自己生效;
  * ctx.net 只在宿主桥有 pluginNetRequest 时注入,失败还原成带 code 的 Error,停用后在途请求作废。
  * 负对照(实跑过):桥里把 hotkey 无条件透传 → 「撞上内置命令不进命令表」与分发那条红;
- * disposer 改成按 id 撤 → 「旧 disposer 碰不到替换后的那条」红。
+ * disposer 改成按 id 撤 → 「旧 disposer 碰不到替换后的那条」红;只重加变了的那条 → 「顺序不漂」红。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ExternalPluginSource, PluginNetIpcResult } from '@amadeus-shared/ipc'
@@ -70,6 +70,21 @@ describe('registerCommand: disposer and same-id replace', () => {
     expect(engine('amadeus:tpl:a')).toHaveLength(0)
     off2() // 幂等
     expect(engine('amadeus:tpl:b')).toHaveLength(1)
+  })
+
+  it('keeps engine order stable across a replace and a hotkey switching on', async () => {
+    const ctx = await load()
+    ctx.registerCommand({ id: 'a', title: 'A', run: run('a') })
+    ctx.registerCommand({ id: 'b', title: 'B', hotkey: 'mod+shift+y', run: run('b') })
+    ctx.registerCommand({ id: 'c', title: 'C', run: run('c') })
+    addCommand({ id: 'holder', title: 'Holder', hotkey: 'mod+shift+y', run: run('holder') })
+    const order = () => useCommandStore.getState().commands.filter((c) => c.id.startsWith('amadeus:tpl:')).map((c) => c.id)
+    expect(order()).toEqual(['amadeus:tpl:a', 'amadeus:tpl:b', 'amadeus:tpl:c'])
+    ctx.registerCommand({ id: 'a', title: 'A2', run: run('a2') })
+    expect(order()).toEqual(['amadeus:tpl:a', 'amadeus:tpl:b', 'amadeus:tpl:c'])
+    removeCommand('holder') // b 的默认键生效
+    expect(engine('amadeus:tpl:b')[0].hotkey).toBe('mod+shift+y')
+    expect(order()).toEqual(['amadeus:tpl:a', 'amadeus:tpl:b', 'amadeus:tpl:c'])
   })
 
   it('disposers and registrations after the plugin is disabled do nothing', async () => {

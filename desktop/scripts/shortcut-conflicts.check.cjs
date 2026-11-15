@@ -64,6 +64,7 @@ async function main() {
     const noteText = await note.innerText().catch(() => '')
     // ⌘N 内置有两条(新会话 / 新建笔记),说明里点名的是先注册的那条
     check('⑧ 行下说明撞上了内置的 ⌘N', noteText.includes('插件默认键') && noteText.includes('⌘N') && /新会话|新建笔记/.test(noteText) && noteText.includes('未生效'), noteText)
+    await note.scrollIntoViewIfNeeded().catch(() => {})
     await shot('8-plugin-default-light')
     await win.bringToFront().catch(() => {})
     await win.locator('body').click({ position: { x: 5, y: 5 } }).catch(() => {})

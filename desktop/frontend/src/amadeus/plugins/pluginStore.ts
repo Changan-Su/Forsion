@@ -1915,7 +1915,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
         return () => {}
       }
       if (command.hotkey != null && !pluginDefaultHotkey(command.hotkey)) {
-        console.warn(`[amadeus] 插件 ${pluginId} 的命令「${command.id}」hotkey 无效(要带 Mod,形如 'Mod+Shift+T'),已当作没写`)
+        console.warn(`[amadeus] 插件 ${pluginId} 的命令「${command.id}」hotkey 无效(要带 Mod、按得出来,形如 'Mod+Shift+Y'),已当作没写`)
       }
       const entry: Owned<CommandContribution> = { pluginId, item: command }
       set((s) => {

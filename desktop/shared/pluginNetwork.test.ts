@@ -7,6 +7,8 @@ describe('manifest network patterns', () => {
     expect(normalizeNetworkPattern(' api.example.com. ')).toBe('api.example.com')
     expect(normalizeNetworkPattern('*.example.com')).toBe('*.example.com')
     expect(normalizeNetworkPattern('*.cdn.example.co.uk')).toBe('*.cdn.example.co.uk')
+    expect(normalizeNetworkPattern('*.example.co.uk')).toBe('*.example.co.uk')
+    expect(normalizeNetworkPattern('*.example.cn')).toBe('*.example.cn')
     expect(normalizeNetworkPattern('xn--fiqs8s.example')).toBe('xn--fiqs8s.example')
   })
 
@@ -16,6 +18,8 @@ describe('manifest network patterns', () => {
     ['api.example.com/v1', 'path'],
     ['*', 'bare wildcard'],
     ['*.com', 'wildcard over a whole TLD'],
+    ['*.co.uk', 'wildcard over a public second-level suffix'],
+    ['*.com.cn', 'wildcard over a public second-level suffix'],
     ['api.*.com', 'wildcard in the middle'],
     ['*example.com', 'wildcard without a dot'],
     ['localhost', 'single label'],

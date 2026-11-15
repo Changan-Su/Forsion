@@ -143,7 +143,8 @@ export function createHttpsTransport(tls: { ca?: string; rejectUnauthorized?: bo
       res.on('error', () => {}) // 读完 / 丢弃之后才到的连接错误不许变成主进程的未捕获异常;迭代那头照样拿得到错误
       // 没有正文的响应(HEAD / 1xx / 204 / 304):不建解压器 —— 空正文配 Content-Encoding: gzip 会让解压器报
       // 「unexpected end of file」,没人读它就成了主进程的未捕获异常(Codex 评审实测)。直接放掉,连接照常关。
-      if (hop.method === 'HEAD' || status < 200 || status === 204 || status === 304) {
+      // 重定向的正文反正丢掉:不解,也就不因为它带了个认不出的 Content-Encoding 让整次请求失败
+      if (hop.method === 'HEAD' || status < 200 || status === 204 || status === 304 || out['content-length'] === '0' || (REDIRECTS.has(status) && !!out.location)) {
         res.resume()
         resolve({ status, headers: out, body: (async function* () {})(), discard: () => { res.destroy() } })
         return
@@ -157,7 +158,10 @@ export function createHttpsTransport(tls: { ca?: string; rejectUnauthorized?: bo
         return
       }
       const decoders = codings.reverse().map((c) => {
-        const d = c === 'br' ? zlib.createBrotliDecompress() : c === 'deflate' ? zlib.createInflate() : zlib.createGunzip()
+        // 收尾宽容(同浏览器 / undici):空正文、少了尾部校验的压缩流照常交出已解开的部分,不当成网络错误
+        const d = c === 'br' ? zlib.createBrotliDecompress({ finishFlush: zlib.constants.BROTLI_OPERATION_FLUSH })
+          : c === 'deflate' ? zlib.createInflate({ finishFlush: zlib.constants.Z_SYNC_FLUSH })
+          : zlib.createGunzip({ finishFlush: zlib.constants.Z_SYNC_FLUSH })
         d.on('error', () => {}) // 同上:错误经 pipeline 传给读的那一头,这里只防「没人读」时炸主进程
         return d
       })
@@ -234,10 +238,31 @@ function parseInit(raw: unknown): ParsedInit {
   return { method, headers, body, timeoutMs }
 }
 
+/** 同时在飞的请求上限:每个最多攒 10 MB 在主进程内存里,不设上限的话一个插件并发打自己声明的域名就能把主进程撑爆。 */
+export const NET_MAX_IN_FLIGHT_PER_PLUGIN = 8
+export const NET_MAX_IN_FLIGHT = 24
+const inFlight = new Map<string, number>()
+let inFlightTotal = 0
+
 /** 一次 ctx.net.request。pluginId / url / init 全按不可信输入收(它们直接来自渲染层)。 */
 export async function pluginNetRequest(pluginId: unknown, rawUrl: unknown, rawInit: unknown, deps: PluginNetDeps): Promise<PluginNetResult> {
+  if (typeof pluginId !== 'string' || !PLUGIN_ID.test(pluginId)) return { ok: false, code: 'net_bad_request', message: 'invalid plugin id' }
+  if ((inFlight.get(pluginId) ?? 0) >= NET_MAX_IN_FLIGHT_PER_PLUGIN || inFlightTotal >= NET_MAX_IN_FLIGHT) {
+    return { ok: false, code: 'net_failed', message: `too many concurrent requests (at most ${NET_MAX_IN_FLIGHT_PER_PLUGIN} per plugin)` }
+  }
+  inFlight.set(pluginId, (inFlight.get(pluginId) ?? 0) + 1)
+  inFlightTotal++
+  try {
+    return await requestOnce(pluginId, rawUrl, rawInit, deps)
+  } finally {
+    const n = (inFlight.get(pluginId) ?? 1) - 1
+    if (n > 0) inFlight.set(pluginId, n); else inFlight.delete(pluginId)
+    inFlightTotal--
+  }
+}
+
+async function requestOnce(pluginId: string, rawUrl: unknown, rawInit: unknown, deps: PluginNetDeps): Promise<PluginNetResult> {
   const fail = (code: PluginNetErrorCode, message: string): PluginNetResult => ({ ok: false, code, message })
-  if (typeof pluginId !== 'string' || !PLUGIN_ID.test(pluginId)) return fail('net_bad_request', 'invalid plugin id')
   if (typeof rawUrl !== 'string' || rawUrl.length > 8192) return fail('net_bad_url', 'url must be a string')
   let init: ParsedInit
   try { init = parseInit(rawInit) } catch (e) { return e instanceof NetError ? fail(e.code, e.message) : fail('net_bad_request', 'invalid init') }
@@ -292,8 +317,12 @@ export async function pluginNetRequest(pluginId: unknown, rawUrl: unknown, rawIn
       }
       if (timedOut) throw new NetError('net_timeout', `request timed out after ${init.timeoutMs} ms`)
       current = null
-      const buf = Buffer.concat(chunks, total)
-      return { ok: true, status: res.status, headers: res.headers, bytes: new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength), url: url.toString() }
+      // 拷进一块自己独占的内存:Buffer.concat 的小结果(<4 KB)切自 Node 的共享 8 KB 池,而 IPC 会把整块底层
+      // ArrayBuffer 发给渲染层 —— 插件经 bytes.buffer 就能读到池里相邻的数据(别的插件的响应、密钥……,独立评审实测)
+      const bytes = new Uint8Array(total)
+      let at = 0
+      for (const c of chunks) { bytes.set(c, at); at += c.byteLength }
+      return { ok: true, status: res.status, headers: res.headers, bytes, url: url.toString() }
     }
   } catch (e) {
     current?.discard()

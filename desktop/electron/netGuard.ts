@@ -20,7 +20,8 @@ export function isPrivateIp(ip: string): boolean {
     if (a === 192 && b === 168) return true // 私网 C
     if (a === 192 && b === 0) return true // 192.0.0.0/24 IETF 保留 + 192.0.2.0/24 文档段
     if (a === 100 && b >= 64 && b <= 127) return true // CGNAT 100.64.0.0/10
-    if (a === 198 && (b === 18 || b === 19)) return true // 198.18.0.0/15 基准测试网段(实验室 / 内网路由常用)
+    // 198.18.0.0/15(基准测试段)刻意不拦:Clash / Surge / Mihomo 的 TUN + fake-IP 把所有域名解析到这一段,
+    // 拦了开发机上所有抓取(书签预览、日历订阅、ctx.net)都会断(10-26 upstream-watch D12 / 11-14 日志已定)。
     if (a === 198 && b === 51 && p[2] === 100) return true // 198.51.100.0/24 TEST-NET-2
     if (a === 203 && b === 0 && p[2] === 113) return true // 203.0.113.0/24 TEST-NET-3
     if (a === 192 && b === 88 && p[2] === 99) return true // 192.88.99.0/24 6to4 中继任播(已废弃)
