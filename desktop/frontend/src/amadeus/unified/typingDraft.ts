@@ -95,3 +95,20 @@ export function typingDraftPlugin(onEdit: () => void) {
     }),
   }))
 }
+
+/** 防抖写到点时正在组字:每隔这么久复查一次。 */
+export const COMPOSE_SAVE_POLL_MS = 150
+/** 组字状态卡住(compositionend 丢了)时最多推后这么久,之后照常写 —— 宁可写进半截拼音,也不能永远不写。 */
+export const COMPOSE_SAVE_MAX_DEFER_MS = 30_000
+
+/**
+ * 防抖写盘到点时的下一步。
+ * - 正在组字:不写(半截拼音不是用户要的字),短轮询复查(`poll`);`deferredSince` = 第一次被推后的时刻。
+ * - 推后过、组字已结束:重新等一整个防抖窗再写(`rearm`)—— 不在组字结束的那一刻写:ProseMirror 要在
+ *   compositionend 之后才提交组字事务,编辑器监听器还要再过一个防抖才把提交后的正文报上来。
+ * - 其余(没推后过 / 推后已到上限):照常写(`write`)。
+ */
+export function saveTickAction(composing: boolean, deferredSince: number | null, now: number): 'write' | 'poll' | 'rearm' {
+  if (composing) return deferredSince != null && now - deferredSince >= COMPOSE_SAVE_MAX_DEFER_MS ? 'write' : 'poll'
+  return deferredSince != null ? 'rearm' : 'write'
+}

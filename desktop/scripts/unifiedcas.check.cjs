@@ -52,6 +52,10 @@
 //   T3 停手后照常落盘,打字途中存的草稿随之删掉(没有过时草稿留下误弹恢复)
 //   T4 重开后「恢复草稿」条还没决定时接着连打 → 那份旧草稿不被连打节拍盖掉
 //   T5 输入法组字(CDP Input.imeSetComposition)跨过到点:组字中一份草稿都不存;提交(Input.insertText)后下一跳存的是提交后的字
+//   T7 组字中途停顿 3 秒以上(跨过正常防抖写):盘上与每一发写都没有半截拼音;提交后在防抖节奏内落盘,组字前打的字也在
+//   T8a 组字中途窗口失焦:当场存本机草稿(含组字前的字),盘上不写拼音;提交后照常落盘、草稿删掉
+//   T8b 组字中途页面隐藏:照旧马上写(之后进程随时可能没了,计时器未必再跑),组字前的字当场落盘;提交后改回提交的字
+//   T9 组字结束而文档没变(提交的就是组字串):监听器不再报,推后的那发写自己补上
 //   T6 两个窗口(同源共享 localStorage,槽位号相同):B 失焦存下的更新的字在格子里时,A 的连打节拍不许盖掉它
 //  CPU_THROTTLE=4 跑:CDP 把页面 CPU 放慢 4 倍(负载下的稳定性自查)
 //
@@ -1044,6 +1048,89 @@ async function groupT(browser) {
     held.composing && held.dom.includes('zhongwen') && held.sets.length === 0 && !!firstSet && firstSet.text.includes('第一段。q中文') && !firstSet.text.includes('zhong'),
     JSON.stringify({ held, first: firstSet?.text ?? null }))
   await r.close()
+
+  // T7:组字中途停顿(挑候选字)跨过正常防抖写:盘上 / 每一发写都不许出现半截拼音;提交后在防抖节奏内落盘,
+  //     组字之前打的那个字也在
+  {
+    const s = await open(browser, seed)
+    await caretAfter(s, 0, '第一段。')
+    const ime = await s.context().newCDPSession(s)
+    await s.keyboard.type('q') // 它自己的防抖写(200 + 800ms)落在组字期间
+    await ime.send('Input.imeSetComposition', { text: 'zhong', selectionStart: 5, selectionEnd: 5 })
+    await wait(400)
+    await ime.send('Input.imeSetComposition', { text: 'zhongwen', selectionStart: 8, selectionEnd: 8 })
+    const seen = []
+    for (let i = 0; i < 12; i++) { await wait(300); seen.push(await disk(s)) } // 3.6 秒
+    const composing = await s.evaluate(() => !!window.__upage.probe.view().composing)
+    await ime.send('Input.insertText', { text: '中文' })
+    const t0 = Date.now()
+    await s.waitForFunction(() => (window.__upage.vault.get('Unified.md') ?? '').includes('第一段。q中文'), null, { timeout: 4000 }).catch(() => {})
+    const settleMs = Date.now() - t0
+    const writes = await s.evaluate(() => window.__upage.writes.filter((w) => w.path === 'Unified.md').map((w) => w.text))
+    const end = await disk(s)
+    record('T7 组字中停顿 3 秒以上:盘上与每一发写都没有半截拼音;提交后在防抖节奏内落盘、组字前打的字也在',
+      composing && seen.every((d) => !/zhong/.test(d ?? '')) && writes.every((w) => !/zhong/.test(w)) && end.includes('第一段。q中文') && settleMs < 3500,
+      JSON.stringify({ composing, pinyinOnDisk: seen.filter((d) => /zhong/.test(d ?? '')).length, pinyinWrites: writes.filter((w) => /zhong/.test(w)).length, settleMs, end }))
+    await s.close()
+  }
+
+  // T8:组字中途离场(马上存的那几条路)。
+  //   T8a 窗口失焦(页面还活着,计时器一定到点):当场存本机草稿(含组字前的字),盘上不写拼音;提交后照常落盘、草稿删掉
+  //   T8b 页面隐藏(之后进程随时可能没了):照旧马上写 —— 组字前打的字当场落盘(此刻盘上暂时带着拼音),提交后改回提交的字
+  for (const kind of ['blur', 'hidden']) {
+    const s = await open(browser, seed)
+    await s.evaluate(() => localStorage.clear())
+    await recordDrafts(s)
+    await caretAfter(s, 0, '第一段。')
+    const ime = await s.context().newCDPSession(s)
+    await s.keyboard.type('q')
+    await ime.send('Input.imeSetComposition', { text: 'zhongwen', selectionStart: 8, selectionEnd: 8 })
+    await wait(300)
+    await s.evaluate((kind) => {
+      if (kind === 'blur') { window.dispatchEvent(new Event('blur')); return }
+      Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' })
+      Object.defineProperty(document, 'hidden', { configurable: true, get: () => true })
+      document.dispatchEvent(new Event('visibilitychange'))
+    }, kind)
+    await wait(150)
+    const right = await disk(s)
+    const seen = []
+    for (let i = 0; i < 8; i++) { await wait(300); seen.push(await disk(s)) } // 2.4 秒
+    const stashed = (await draftLog(s)).filter((d) => d.op === 'set').map((d) => d.text)
+    await s.evaluate(() => {
+      Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'visible' })
+      Object.defineProperty(document, 'hidden', { configurable: true, get: () => false })
+    })
+    await ime.send('Input.insertText', { text: '中文' })
+    await s.waitForFunction(() => (window.__upage.vault.get('Unified.md') ?? '').includes('第一段。q中文') && !Object.keys(localStorage).some((k) => k.startsWith('amadeus.unsavedDraft:')), null, { timeout: 4000 }).catch(() => {})
+    const writes = await s.evaluate(() => window.__upage.writes.filter((w) => w.path === 'Unified.md').map((w) => w.text))
+    const end = { disk: await disk(s), keys: await draftKeys(s) }
+    const detail = JSON.stringify({ right, stashed, pinyinOnDisk: seen.filter((d) => /zhong/.test(d ?? '')).length, pinyinWrites: writes.filter((w) => /zhong/.test(w)).length, end })
+    const settled = end.disk.includes('第一段。q中文') && !end.disk.includes('zhong') && end.keys.length === 0
+    if (kind === 'blur') record('T8a 组字中窗口失焦:当场存本机草稿(含组字前的字)、盘上不写拼音;提交后照常落盘,草稿删掉',
+      stashed.some((t) => t.includes('第一段。q')) && seen.every((d) => !/zhong/.test(d ?? '')) && writes.every((w) => !/zhong/.test(w)) && settled, detail)
+    else record('T8b 组字中页面隐藏:照旧马上写,组字前打的字当场落盘;提交后盘上改回提交的字,草稿删掉',
+      (right ?? '').includes('第一段。q') && stashed.some((t) => t.includes('第一段。q')) && settled, detail)
+    await s.close()
+  }
+
+  // T9:组字结束但文档没变(提交的就是组字串本身,例如回车上屏英文):监听器不会再报一次,推后的那发写必须自己补上
+  {
+    const s = await open(browser, seed)
+    await caretAfter(s, 0, '第一段。')
+    const ime = await s.context().newCDPSession(s)
+    await s.keyboard.type('q')
+    await ime.send('Input.imeSetComposition', { text: 'abc', selectionStart: 3, selectionEnd: 3 })
+    await wait(2000) // 跨过 q 的防抖写:被推后
+    const mid = await disk(s)
+    const n0 = await writeCount(s)
+    await ime.send('Input.insertText', { text: 'abc' })
+    await s.waitForFunction(() => (window.__upage.vault.get('Unified.md') ?? '').includes('第一段。qabc'), null, { timeout: 4000 }).catch(() => {})
+    const end = await disk(s)
+    record('T9 组字结束而文档没变:推后的写照样补上(组字前的字与提交的字都落盘)',
+      !(mid ?? '').includes('第一段。q') && end.includes('第一段。qabc'), JSON.stringify({ mid, end, writesAfter: (await writeCount(s)) - n0 }))
+    await s.close()
+  }
 
   // T6:两个窗口同源(共享 localStorage)、同一篇、槽位号相同。B 的写一直在路上(它失焦存下的草稿就留在格子里)
   const context = await browser.newContext({ locale: 'zh-CN', viewport: { width: 1200, height: 1100 } })
