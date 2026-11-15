@@ -36,12 +36,13 @@ export function plainLinesToParagraphs(text: string): string {
  *  粘贴成结构、拖入却被转义成字面 `\-` `\*\*`)。null = 保持 PM 默认的字面插入:
  *  · plain(「粘贴为纯文本」那条 pasteText)→ 字面;
  *  · 单条裸 URL → 字面(拖到空段 = 裸 URL = 书签卡;按 markdown 解析会被 gfm autolink 包成链接,落地形态就变了);
- *  · 不像 markdown 的多行 → 一行一段(D-10 同一条);其余原样交给 markdown 解析。 */
-export function droppedTextMarkdown(text: string, plain: boolean): string | null {
+ *  · 不像 markdown 的多行 → 一行一段(D-10 同一条);其余原样交给 markdown 解析。
+ *  keepLines = 回车口径开关打开的 v4(./enterMode):单个 `\n` 本来就是段内换一行,不升成分段。 */
+export function droppedTextMarkdown(text: string, plain: boolean, keepLines = false): string | null {
   const t = text.trim()
   if (plain || !t) return null
   if (!/\s/.test(t) && /^https?:\/\//i.test(t)) return null
-  return isPlainMultiline(text) ? plainLinesToParagraphs(text) : text
+  return isPlainMultiline(text) && !keepLines ? plainLinesToParagraphs(text) : text
 }
 
 /** 该不该按「一行一段」处理这次粘贴:含**单个** `\n`(已是一行一段的不再处理 —— 调用方转换后重入就停在这)、且不像 markdown。 */

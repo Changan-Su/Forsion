@@ -29,7 +29,7 @@ import type { MilkdownPlugin } from '@milkdown/kit/ctx'
 import { classifyEmbed, isSoftSourceEmbed } from './embedLayer'
 import { foldedSectionAfter, headingFoldKey, isHiddenAt } from './headingFold'
 import { isListFolded, listHiddenRanges } from './listFold'
-import { applyTypedTrigger, canAutoTriggerFromBlock, triggerAtCursor, unwrapAtStart } from '../blocks/markdown/blockTriggers'
+import { applyTypedTrigger, canAutoTriggerFromBlock, lineTriggerAtCursor, unwrapAtStart } from '../blocks/markdown/blockTriggers'
 import { paragraphIndentAt } from '../blocks/markdown/paragraphIndent'
 import { tableKeyPlugins } from './tableKeys'
 import { commandsCtx } from '@milkdown/kit/core'
@@ -38,6 +38,9 @@ import { toggleTaskTr } from '../blocks/markdown/taskList'
 import { buildBlockString } from '../blocks/markdown/mathLivePreview'
 import { removeEmptyColumnTr } from './columns'
 import { calloutKey, calloutOf } from '../blocks/markdown/callout'
+import { enterInline } from '../blocks/markdown/enterMode'
+import { TIGHT_MANAGED } from '../blocks/markdown/lineGap'
+import { liftTarget } from '@milkdown/kit/prose/transform'
 
 /** 光标所在「顶层块」的深度:doc 或分栏 cell 的直接子节点(与 blockLayer / insertMd 同一判定)。 */
 export function topDepth($from: ResolvedPos): number {
@@ -132,8 +135,115 @@ const enterHeadingToParagraph: Command = (state, dispatch) => {
     return true
   }
   const tr = state.tr.split($from.pos, 1, [{ type: paragraph }])
+  // 回车口径开关(blocks/markdown/enterMode):标题末尾回车 = 文件里只多一个换行 —— 标题记 amxTight(紧接下一块),
+  // 新段接过标题原来与后文的关系。
+  if (enterInline() && 'amxTight' in $from.parent.attrs) {
+    const hPos = $from.before($from.depth)
+    const was = $from.parent.attrs.amxTight === true
+    tr.setNodeMarkup(hPos, undefined, { ...tr.doc.nodeAt(hPos)!.attrs, amxTight: true })
+    const pPos = tr.selection.$from.before()
+    const p = tr.doc.nodeAt(pPos)
+    if (p?.type.name === 'paragraph') tr.setNodeMarkup(pPos, undefined, { ...p.attrs, amxTight: was, amxTightBefore: false })
+    tr.setMeta(TIGHT_MANAGED, true)
+  }
   dispatch?.(tr.scrollIntoView())
   return true
+}
+
+// ── 回车口径开关:回车一次 = 文件里一个换行(blocks/markdown/enterMode;关着时下面三条恒返回 false)────────
+
+const inTable = ($p: ResolvedPos): boolean => {
+  for (let d = $p.depth; d > 0; d--) if (/^table/.test($p.node(d).type.name)) return true
+  return false
+}
+
+/** 普通段落(含引用里)回车 = 插软换行;光标所在这一行是空的(紧跟在软换行后面)= 去掉这个换行、从这里分段;
+ *  分出来的空段落是引用的最后一段 → 跳出引用(空的 `> ` 行回车即脱出)。空段落、行首回车交回原路(新起空段)。
+ *  拆出来的前半段与后面新起的段之间是标准空行(清掉紧贴记号);最后一段接过原段与后文的关系(紧贴记号留在它身上)。 */
+const enterSoftLine: Command = (state, dispatch) => {
+  if (!enterInline()) return false
+  const { $from, empty } = state.selection
+  if (!empty || $from.parent.type.name !== 'paragraph' || $from.parent.content.size === 0) return false
+  if (listItemDepth($from) != null || inTable($from)) return false
+  const br = state.schema.nodes.hardbreak
+  const paragraph = state.schema.nodes.paragraph
+  if (!br || !paragraph) return false
+  const isBr = (n: ProseNode | null | undefined): boolean => n?.type === br
+  const before = $from.nodeBefore
+  const after = $from.nodeAfter
+  if (isBr(before) && (!after || isBr(after))) {
+    const brPos = $from.pos - 1
+    const at = $from.before()
+    const tr = state.tr.delete(brPos, after ? $from.pos + 1 : $from.pos)
+    tr.split(brPos)
+    if (after) tr.split(brPos) // 空行在段中间:上半段 | 空段(光标)| 下半段
+    // 除最后一段外都不紧贴(split 会把原段的 attr 抄给每一段)
+    const parts = after ? 2 : 1
+    let pos = at
+    for (let i = 0; i < parts; i++) {
+      const n = tr.doc.nodeAt(pos)
+      if (!n) break
+      if ('amxTight' in n.attrs) tr.setNodeMarkup(pos, undefined, { ...n.attrs, amxTight: false, ...(i > 0 ? { amxTightBefore: false } : {}) })
+      pos += n.nodeSize
+    }
+    const last = tr.doc.nodeAt(pos)
+    if (last && 'amxTightBefore' in last.attrs && last.attrs.amxTightBefore) tr.setNodeMarkup(pos, undefined, { ...last.attrs, amxTightBefore: false })
+    tr.setSelection(TextSelection.create(tr.doc, brPos + 2))
+    const $n = tr.selection.$from
+    if ($n.parent.content.size === 0 && $n.depth >= 2 && $n.node(-1).type.name === 'blockquote' && $n.index(-1) === $n.node(-1).childCount - 1) {
+      const range = $n.blockRange()
+      const target = range && liftTarget(range)
+      if (range && target != null) tr.lift(range, target)
+    }
+    dispatch?.(tr.setMeta(TIGHT_MANAGED, true).scrollIntoView())
+    return true
+  }
+  if ($from.parentOffset === 0) return false
+  dispatch?.(state.tr.replaceSelectionWith(br.create({ isInline: true }), false).scrollIntoView())
+  return true
+}
+
+/** Shift+回车(开关开着):段落里插软换行(列表项里也是,不新起项)。 */
+const shiftEnterLine: Command = (state, dispatch) => {
+  if (!enterInline()) return false
+  const { $from, empty } = state.selection
+  if (!empty || $from.parent.type.name !== 'paragraph' || inTable($from)) return false
+  const br = state.schema.nodes.hardbreak
+  if (!br) return false
+  dispatch?.(state.tr.replaceSelectionWith(br.create({ isInline: true }), false).scrollIntoView())
+  return true
+}
+
+/** 行首退格(开关开着):上一块是有字的段落 → 两段并成一段、中间留一个软换行(= 文件里删掉两个换行中的一个),
+ *  并成的段接过下半段与后文的关系;上一块是标题且后面隔着空行 → 只把空行去掉(标题记 amxTight),不并进标题。
+ *  其余交回原路。 */
+const bsLineJoin: Command = (state, dispatch) => {
+  if (!enterInline()) return false
+  const { $from, empty } = state.selection
+  if (!empty || $from.parentOffset !== 0 || $from.parent.type.name !== 'paragraph') return false
+  if (listItemDepth($from) != null || blockquoteDepth($from) != null || $from.depth < 1) return false
+  const idx = $from.index(-1)
+  if (idx === 0) return false
+  const prev = $from.node(-1).child(idx - 1)
+  const at = $from.before()
+  if (prev.type.name === 'paragraph' && prev.content.size > 0) {
+    const br = state.schema.nodes.hardbreak
+    if (!br) return false
+    const cur = $from.parent
+    const prevAt = at - prev.nodeSize
+    const tr = state.tr.join(at)
+    tr.insert(at - 1, br.create({ isInline: true }))
+    const joined = tr.doc.nodeAt(prevAt)
+    if (joined && 'amxTight' in joined.attrs) tr.setNodeMarkup(prevAt, undefined, { ...joined.attrs, amxTight: cur.attrs.amxTight === true })
+    tr.setSelection(TextSelection.create(tr.doc, at))
+    dispatch?.(tr.setMeta(TIGHT_MANAGED, true).scrollIntoView())
+    return true
+  }
+  if (prev.type.name === 'heading' && 'amxTight' in prev.attrs && prev.attrs.amxTight !== true && prev.content.size > 0) {
+    dispatch?.(state.tr.setNodeMarkup(at - prev.nodeSize, undefined, { ...prev.attrs, amxTight: true }).setMeta(TIGHT_MANAGED, true))
+    return true
+  }
+  return false
 }
 
 /** 块选中态回车:有文字的块 → 光标进块末开始编辑;无文字的块 → 走原路(base 在其后新建空段)。
@@ -152,9 +262,10 @@ const enterOnBlockSelection: Command = (state, dispatch) => {
 const enterRunsTrigger: Command = (state, dispatch, view) => {
   const { $from, empty } = state.selection
   if (!empty || !view || !dispatch) return false
-  const trig = triggerAtCursor($from)
-  if (!trig || !canAutoTriggerFromBlock($from.parent.type.name, trig)) return false
-  return applyTypedTrigger(view, trig) // 撤销一下回到字面触发符(K-21)
+  // 回车口径开关打开时,第二行起的行首触发符先从软换行处拆段再触发(拆段与转换同一撤销组,见 applyTypedTrigger)。
+  const hit = lineTriggerAtCursor($from)
+  if (!hit || !canAutoTriggerFromBlock($from.parent.type.name, hit.trig)) return false
+  return applyTypedTrigger(view, hit.trig, undefined, hit.br) // 撤销一下回到字面触发符(K-21)
 }
 
 // 故意不接管「引用内回车 = 软换行」:AFFiNE 那样落到 md 是 `> a\\\n> b`(反斜杠续行),
@@ -340,6 +451,7 @@ const enterCmd: Command = chain(
   enterOnBlockSelection,
   enterInDisplayMath,
   enterRunsTrigger, // `# `+回车仍要能变标题,故缩进继承排在它之后
+  enterSoftLine, // 回车口径开关(关着恒 false)
   enterEmptyListItem,
   enterFoldedListItem,
   enterSplitIntoChild,
@@ -497,7 +609,7 @@ const deleteEmptyColumn = (dir: -1 | 1): Command => (state, dispatch) => {
   return true
 }
 
-const backspaceCmd: Command = chain(deleteEmptyColumn(-1), bsHeadingToParagraph, bsCallout, bsListToParagraph, bsOutdentParagraph, bsSelectPrevAtom)
+const backspaceCmd: Command = chain(deleteEmptyColumn(-1), bsHeadingToParagraph, bsCallout, bsListToParagraph, bsOutdentParagraph, bsSelectPrevAtom, bsLineJoin)
 
 /** Mod+Backspace:光标在块首时一路反缩进到顶层。逐级经 view.dispatch 发 —— PM history 会把
  *  同一次按键内的相邻事务并进同一组,撤销仍是一下;整文替换那种写法会连带毁掉分栏派生与装饰,勿用。
@@ -877,7 +989,7 @@ export const keyboardPlugins: MilkdownPlugin[] = [
       // 标题里的 Shift+Enter 同回车(K-19):ATX 标题容不下换行,放行硬换行 = H3 及以下落盘成 `### 甲 乙`、所见非所存。
       // 不在标题里返回 false,照旧交给 preset 的硬换行(段内换行);表格格内的 Shift+Enter 由排在前面的 tableKeyPlugins 先接。
       // 代码块里 = 代码内换行(R-27);块公式 `$$…$$` 里 = 公式内软换行(R-17);其余仍交回 preset 的硬换行。
-      'Shift-Enter': chain(enterHeadingToParagraph, codeShiftEnter, enterInDisplayMath),
+      'Shift-Enter': chain(enterHeadingToParagraph, codeShiftEnter, enterInDisplayMath, shiftEnterLine),
       'Mod-Enter': modEnterCmd,
       Backspace: backspaceCmd,
       'Mod-Backspace': modBackspaceCmd,

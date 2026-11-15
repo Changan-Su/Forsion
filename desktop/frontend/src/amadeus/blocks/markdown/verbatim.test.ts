@@ -8,11 +8,12 @@
 //  · 安全(fuzz):任何编辑序列之后,逐字输出重解析 ≡ 今天的规范输出重解析(忽略标题 id / 链接 ref 这两个
 //    解析副产物)—— 拼接只改「怎么写」,绝不改「写的是什么」。反例都来自各条闸(引用定义、EOF 未闭合围栏、
 //    相邻同类列表、列表后缩进代码、首行 `---`)。
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import type { Node as PMNode } from '@milkdown/kit/prose/model'
 import { TextSelection } from '@milkdown/kit/prose/state'
 import { bootEditor, type Booted } from './parseFidelity.testkit'
 import { adoptOrigins } from './verbatim'
+import { setEnterInlineForTest } from './enterMode'
 
 /** 在第一个含 needle 的文本后插一个字(= 用户在那里打字)。 */
 function typeAfter(b: Booted, needle: string, ch = 'Z'): void {
@@ -206,10 +207,15 @@ function shape(doc: PMNode, live = false): string {
   return JSON.stringify(strip(doc.toJSON()))
 }
 
-describe('fuzz:逐字拼接不改变写出去的语义', () => {
+// 开关(./enterMode)关 / 开各跑一遍同一批样本。样本全部跑完再报失败总数(不停在第一个失败上),失败时列出前几个。
+describe.each([['off', false], ['inline', true]] as const)('fuzz:逐字拼接不改变写出去的语义(回车口径开关 %s)', (_label, on) => {
+  afterEach(() => setEnterInlineForTest(false))
   // 判据:逐字输出重解析 ≡ 今天规范输出的重解析(没变差),或 ≡ 编辑器里的现文档(比今天更忠实 —— 规范输出自己
   // 有已知的往返病,例如结构缩进标记与空行还原互咬,逐字写回原文反而绕开了它)。两边都不等 = 拼接改了语义。
   it('随机文档 × 随机编辑:parse(逐字) ≡ parse(规范) 或 ≡ 现文档', async () => {
+    setEnterInlineForTest(on)
+    const failures: string[] = []
+    let total = 0
     // 复现 / 加压:VERBATIM_SEED=<n> VERBATIM_ITERS=<n> npx vitest run …/verbatim.test.ts
     const r = rng(Number(process.env.VERBATIM_SEED ?? 20260928))
     const pick = <T,>(xs: T[]): T => xs[Math.floor(r() * xs.length)]
@@ -220,6 +226,7 @@ describe('fuzz:逐字拼接不改变写出去的语义', () => {
       // `<br>`、块型当场变掉(规范输出自己的老毛病,与逐字无关;逐字只会让没编辑的这种块原样保住)。
       let md = (r() < 0.2 ? '\n\n' : '') + blocks.map((x, i) => (i ? (blocks[i - 1] === '<br>' ? '\n\n' : pick(GAPS)) : '') + x).join('') + pick(['\n', '', '\n\n\n'])
       const b = await bootEditor(md)
+      total++
       const ops: string[] = []
       try {
         const steps = 1 + Math.floor(r() * 3)
@@ -268,10 +275,12 @@ describe('fuzz:逐字拼接不改变写出去的语义', () => {
         const same = shape(reparsed) === shape(recanon) || shape(reparsed, true) === shape(live, true)
           || (rs.length === lv.length && rs.every((x, i) => shape(x, true) === shape(lv[i], true) || canonSet.has(shape(x))))
           || (rs.length === rc.length && rs.every((x, i) => shape(x) === shape(rc[i]) || liveSet.has(shape(x, true))))
-        expect(same, `${ctx}\n--- 逐字重解析 ---\n${shape(reparsed, true)}\n--- 现文档 ---\n${shape(live, true)}`).toBe(true)
+        if (!same) failures.push(`${ctx}\n--- 逐字重解析 ---\n${shape(reparsed, true)}\n--- 现文档 ---\n${shape(live, true)}`)
       } finally {
         await b.destroy()
       }
     }
-  }, 120_000)
+    if (failures.length) console.log(`[verbatim fuzz ${_label}] ${failures.length}/${total} 个样本失败`)
+    expect(failures.length, `${failures.length}/${total} 个样本失败,前 3 个:\n\n${failures.slice(0, 3).join('\n\n')}`).toBe(0)
+  }, 240_000)
 })

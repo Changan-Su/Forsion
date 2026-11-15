@@ -13,6 +13,8 @@ import { cjkFriendlyRemark } from './cjkFriendly'
 import { attentionSerializer } from './attentionFlanking'
 import { autolinkSerializer } from './autolink'
 import { blankLineRemark, softBreakRemark } from './softBreak'
+import { enterInline } from './enterMode'
+import { lineGapPlugins } from './lineGap'
 import { calloutTitleRemark } from './callout'
 import { normalizeSerializedMd, serializeUnified } from './MarkdownBlock'
 
@@ -58,7 +60,7 @@ export async function bootEditor(initial: string, opts: { v3?: boolean; extra?: 
       .use(cjkFriendlyRemark)
       .use(attentionSerializer)
       .use(autolinkSerializer)
-      .use(opts.v3 ? softBreakRemark : blankLineRemark)
+      .use(opts.v3 ? softBreakRemark : enterInline() ? lineGapPlugins : blankLineRemark) // 同生产(回车口径开关见 ./enterMode)
       .use(calloutTitleRemark)
       .use(opts.extra ?? [])
       .create()

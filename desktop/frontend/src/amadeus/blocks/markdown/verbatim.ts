@@ -32,6 +32,8 @@ import type { Ctx } from '@milkdown/kit/ctx'
 import { Mark, type Node as PMNode } from '@milkdown/kit/prose/model'
 import { $node, $remark } from '@milkdown/kit/utils'
 import { pristineRaw } from './refDefinitions'
+import { enterInline } from './enterMode'
+import { pmKind } from './lineGap'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type MdNode = any
@@ -349,17 +351,36 @@ const token = (plan: Plan, i: number): string => `${plan.nonce}:${i}`
 function serializeRoot(state: MdNode, node: PMNode): void {
   state.openNode('root')
   const plan = active && active.doc === node ? active : null
+  // 回车口径开关打开时(./enterMode):给每个顶层 mdast 节点记上 PM 侧的块类型,lineGap 的连接规则要看(见 ./lineGap)。
+  const tag = enterInline()
+  const mark = (data: Record<string, unknown>): void => {
+    const kids = state.top()?.children
+    const last = kids?.[kids.length - 1]
+    if (last) last.data = { ...last.data, ...data }
+  }
   if (!plan) {
-    state.next(node.content)
+    if (!tag) {
+      state.next(node.content)
+      return
+    }
+    node.forEach((c) => { state.next(c); mark({ amxKind: pmKind(c) }) })
     return
   }
   for (let j = 0; j < node.childCount; j++) {
     const r = plan.startAt.get(j)
     if (r == null) {
       state.next(node.child(j))
+      if (tag) mark({ amxKind: pmKind(node.child(j)) })
       continue
     }
     state.addNode('amadeusVerbatim', undefined, token(plan, r))
+    // 逐字抄回的块占着自己的原文:原文是 `<br>` 之类的「空段落」也不当空行算(当空行会贴着它写下一块,
+    // `<br>` 这种 HTML 块会把下一块吞进去)。
+    if (tag) {
+      const run = plan.runs[r]
+      const lead = run.src.text.slice(run.from).replace(/^(?:[ \t]*\r?\n)+/, '').split(/\r?\n/, 1)[0]
+      mark({ amxFirst: { ...pmKind(node.child(j)), empty: false, lead }, amxLast: { ...pmKind(node.child(run.b)), empty: false } })
+    }
     j = plan.runs[r].b
   }
 }
