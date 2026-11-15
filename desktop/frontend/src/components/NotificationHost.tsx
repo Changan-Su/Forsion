@@ -44,13 +44,14 @@ export function NotificationHost() {
   }, [paused, items.length, resume])
   return (
     // 只有鼠标悬停才暂停:触屏 / 手写笔点一下卡片,浏览器会在抬手后补发兼容的 mouseover/mouseenter,却没有配对的离开
-    // (安卓真壳实测:点过一张卡片后,几张卡片一直挂在屏上盖住页面)。离开不分指针类型一律恢复,恢复本身是幂等的。
+    // (安卓真壳实测:点过一张卡片后,几张卡片一直挂在屏上盖住页面)。离开也只认鼠标:触屏笔记本上鼠标停在卡片上时
+    // 用手指点一下,手指抬起的 pointerleave 不该解除鼠标的暂停。暂停只由鼠标挂上,鼠标的离开 + 上面的兜底足够解除。
     <div
       ref={wrapRef}
       className={`ntf-wrap${inCalendar ? ' ntf-wrap-calendar' : ''}`}
       aria-live="polite"
       onPointerEnter={(e) => { if (e.pointerType === 'mouse') pause() }}
-      onPointerLeave={resume}
+      onPointerLeave={(e) => { if (e.pointerType === 'mouse') resume() }}
     >
       {/* popLayout:退场卡片立即让出布局位,下方卡片经 layout 补位。走查续八 8.2 / 8.5 A:进 180ms 从右沿 6px 滑进 + 淡入,
           出 160ms 淡出 + 右移 16px(同 base.css --toast-enter / exit-duration 那一套);layout 只补位置不补尺寸 ——

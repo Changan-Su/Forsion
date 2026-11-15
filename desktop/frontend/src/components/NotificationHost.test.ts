@@ -45,9 +45,10 @@ it.each(['touch', 'pen'])('%s 点一下卡片不暂停计时,卡片照常到点�
 
 it('鼠标悬停照旧暂停,移出后续走剩余时间', async () => {
   vi.useFakeTimers()
-  notifyApp({ text: 'hovered', level: 'info' })
+  notifyApp({ text: 'hovered', level: 'info' }) // 5000ms
   await act(async () => root.render(React.createElement(NotificationHost)))
   const card = host.querySelector('.ntf-text')!
+  await act(async () => { vi.advanceTimersByTime(2000) })
   // 真实鼠标:指针事件与鼠标事件成对出现
   await fire(card, [ptr('pointerover', 'mouse'), mouse('mouseover')])
   expect(useNotifications.getState().paused).toBe(true)
@@ -55,8 +56,22 @@ it('鼠标悬停照旧暂停,移出后续走剩余时间', async () => {
   expect(useNotifications.getState().items, '鼠标停在卡片上,卡片不该到点消失').toHaveLength(1)
   await fire(card, [ptr('pointerout', 'mouse'), mouse('mouseout')])
   expect(useNotifications.getState().paused).toBe(false)
-  await act(async () => { vi.advanceTimersByTime(5000) })
+  await act(async () => { vi.advanceTimersByTime(2999) })
+  expect(useNotifications.getState().items, '移出后应续走剩余的 3000ms,而不是重新计满').toHaveLength(1)
+  await act(async () => { vi.advanceTimersByTime(1) })
   expect(useNotifications.getState().items).toHaveLength(0)
+})
+
+it('鼠标停在卡片上时再用手指点一下(触屏笔记本):触屏的离开不解除鼠标的暂停', async () => {
+  vi.useFakeTimers()
+  notifyApp({ text: 'hybrid', level: 'info' })
+  await act(async () => root.render(React.createElement(NotificationHost)))
+  const card = host.querySelector('.ntf-text')!
+  await fire(card, [ptr('pointerover', 'mouse'), mouse('mouseover')])
+  await fire(card, tapSequence('touch'))
+  expect(useNotifications.getState().paused, '手指抬起的 pointerout 把鼠标悬停的暂停解除了').toBe(true)
+  await act(async () => { vi.advanceTimersByTime(20_000) })
+  expect(useNotifications.getState().items).toHaveLength(1)
 })
 
 it('leaving the window and unmounting the host cannot leave notification timers paused', async () => {
