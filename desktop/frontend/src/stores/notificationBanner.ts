@@ -71,11 +71,11 @@ export function bannerPayload(n: AppNotification, labels: { dismiss: string; hin
   }
 }
 
-/** 原生层报回来的手势。只认屏上这一条的 id:晚到的(那条已经走了)不作数。 */
+/** 原生层报回来的手势,按 id 找那一条:已经走了的不作数(activate / dismiss 找不到就什么都不做)。
+ *  收起不要求它还在屏上:常驻的那张在 × 往回报的路上被新来的顶回队列,用户点的 × 照样算数,不让它过会儿又回来。 */
 export function onNativeBannerEvent(id: unknown, kind: unknown): void {
+  if (typeof id !== 'string' || !id) return
   const st = useNotifications.getState()
-  const shown = st.items[0]
-  if (!shown || typeof id !== 'string' || shown.id !== id) return
   if (kind === 'action') st.activate(id)
   else if (kind === 'dismiss') st.dismiss(id, 'user')
 }

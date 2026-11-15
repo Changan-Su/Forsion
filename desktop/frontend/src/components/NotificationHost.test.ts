@@ -193,7 +193,7 @@ it('DOM 横幅:往上滑过 24px 收起(算用户自己收的),不够就弹回;�
   expect(useNotifications.getState().items, '往上一甩没收起').toHaveLength(0)
 })
 
-it('有原生外壳:不画 DOM,把屏上这一条交给原生层;原生报回的手势只认屏上这一条', async () => {
+it('有原生外壳:不画 DOM,把屏上这一条交给原生层;原生报回的手势按 id 找,走了的不作数', async () => {
   narrow(true)
   const seen: Array<NativeBannerPayload | null> = []
   const off = setNativeBannerPresenter((b) => { seen.push(b) })
@@ -215,6 +215,18 @@ it('有原生外壳:不画 DOM,把屏上这一条交给原生层;原生报回的
     await act(async () => onNativeBannerEvent(next.id, 'dismiss'))
     expect(useNotifications.getState().items).toHaveLength(0)
     expect(notifyApp({ text: 'cooling', event: 'plugin:other' }), '原生层上滑 / 点 × 也算用户自己收的').toBeNull()
+    // 常驻的那张在 × 往回报的路上被新来的顶回队列:用户点的 × 照样算数,新来的走了它不再回来
+    // (负对照:只认屏上这一条 → 这里红)
+    resetNotificationThrottle()
+    await act(async () => { notifyApp({ text: 'pinned', sticky: true, event: 'plugin:pin' }); await new Promise((r) => setTimeout(r, 350)) })
+    const pinned = seen.at(-1)!
+    expect(pinned.text).toBe('pinned')
+    await act(async () => { notifyApp({ text: 'newcomer', event: 'plugin:new' }); await new Promise((r) => setTimeout(r, 350)) })
+    expect(seen.at(-1)?.text, '常驻的该给新来的让位').toBe('newcomer')
+    await act(async () => onNativeBannerEvent(pinned.id, 'dismiss'))
+    expect(useNotifications.getState().queue.map((n) => n.text), '晚到的 × 没把让位的常驻收掉').toEqual([])
+    await act(async () => { useNotifications.getState().dismiss(seen.at(-1)!.id, 'timeout'); await new Promise((r) => setTimeout(r, 350)) })
+    expect(useNotifications.getState().items).toHaveLength(0)
   } finally { await act(async () => off()) }
   // presenter 撤了(桥坏了):改画 DOM
   await act(async () => { notifyApp({ text: 'fallback', event: 'plugin:z' }); await new Promise((r) => setTimeout(r, 350)) })
