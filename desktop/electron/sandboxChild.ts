@@ -101,16 +101,61 @@ const withTimeout = <T>(p: Promise<T>, ms: number, fallback: T): Promise<T> =>
 /** 改过的文件不算数的:依赖、版本库、编辑器的临时文件。 */
 const IGNORE = /(^|[\\/])(node_modules|\.git|\.forsion)([\\/]|$)|(~|\.swp|\.tmp)$/
 
-export function startSandboxChild(self: SandboxSelf, opts: { getWindow(): BrowserWindow | null; quit(): void; log(m: string): void }): void {
+/** 一次钩子调用的结果。没做成的分四种,报给 agent 的话各不相同(11-15 反馈:以前一律报「还在启动」,
+ *  其实是命令在等自己弹的对话框):窗口没开 / 钩子还没装上(渲染层在启动)/ 等超时(页面忙或卡住)/ 调用本身抛了。 */
+export type HookCall = { ok: true; value: unknown } | { ok: false; miss: 'closed' | 'starting' | 'timeout' | 'failed'; ms?: number }
+/** 没做成 → 给 agent 的一句话。纯函数,单测钉。 */
+export function hookMissText(r: Extract<HookCall, { ok: false }>, where: 'main' | 'settings' = 'main'): string {
+  const w = where === 'settings' ? 'the sandbox settings window' : 'the sandbox window'
+  switch (r.miss) {
+    case 'closed': return `${w} is not open`
+    case 'starting': return where === 'settings' ? `${w} is still loading` : STARTING
+    case 'timeout': return `${w} did not answer within ${Math.round((r.ms ?? 10_000) / 1000)}s: its page is busy or stuck (the plugin may be in a long loop or blocking it); take a screenshot or check status`
+    default: return `${w} could not run the request (its page may have reloaded meanwhile); try again`
+  }
+}
+const TIMED_OUT = Symbol('timeout')
+const FAILED = Symbol('failed')
+/** 窗口要等一会儿才出现 / 才就绪:每 200ms 问一次,到点了还不行回 null。 */
+async function waitFor<T>(probe: () => T | null | Promise<T | null>, ms: number): Promise<T | null> {
+  const end = Date.now() + ms
+  for (;;) {
+    const v = await probe()
+    if (v) return v
+    if (Date.now() >= end) return null
+    await new Promise((r) => setTimeout(r, 200))
+  }
+}
+
+export function startSandboxChild(self: SandboxSelf, opts: {
+  getWindow(): BrowserWindow | null
+  /** 设置窗口(独立的浮动面板,11-15 起 agent 能经 settings 动作打开它、按 window 选它动手);老接线不给 = 没有。 */
+  getSettingsWindow?(): BrowserWindow | null
+  quit(): void
+  log(m: string): void
+}): void {
   const win = (): BrowserWindow | null => {
     const w = opts.getWindow()
     return w && !w.isDestroyed() ? w : null
   }
-  /** 调渲染层的沙箱钩子;钩子还没装上(渲染层在启动)= null。插件把渲染层卡死时等不回来:超时也回 null。 */
-  const hook = async (call: string, ms = 10_000): Promise<unknown> => {
-    const w = win()
-    if (!w) return null
-    return withTimeout(w.webContents.executeJavaScript(`(window.__forsionSandbox ? window.__forsionSandbox.${call} : null)`, true).catch(() => null), ms, null)
+  const settingsWin = (): BrowserWindow | null => {
+    const w = opts.getSettingsWindow?.() ?? null
+    return w && !w.isDestroyed() ? w : null
+  }
+  /** 调渲染层的沙箱钩子(缺省主窗)。钩子还没装上 = starting;插件把渲染层卡死时等不回来 = timeout。 */
+  const call = async (expr: string, ms = 10_000, w: BrowserWindow | null = win()): Promise<HookCall> => {
+    if (!w || w.isDestroyed()) return { ok: false, miss: 'closed' }
+    const js = `(async () => { const h = window.__forsionSandbox; if (!h) return { missing: true }; return { v: await h.${expr} } })()`
+    const r = await withTimeout<unknown>(w.webContents.executeJavaScript(js, true).catch(() => FAILED), ms, TIMED_OUT)
+    if (r === TIMED_OUT) return { ok: false, miss: 'timeout', ms }
+    if (r === FAILED || !r || typeof r !== 'object') return { ok: false, miss: 'failed' }
+    if ((r as { missing?: unknown }).missing === true) return { ok: false, miss: 'starting' }
+    return { ok: true, value: (r as { v?: unknown }).v }
+  }
+  /** 只要值、不管为什么没拿到的地方(等落定 / 截图前等帧 / 收尾):没拿到 = null。 */
+  const hook = async (expr: string, ms = 10_000, w: BrowserWindow | null = win()): Promise<unknown> => {
+    const r = await call(expr, ms, w)
+    return r.ok ? r.value : null
   }
 
   // 原生文件对话框:agent 先用 files 备好答案,插件弹框时直接拿到,不弹(弹出来的框截图里看不见,agent 也点不了);
@@ -147,17 +192,18 @@ export function startSandboxChild(self: SandboxSelf, opts: { getWindow(): Browse
     if (!st || typeof st !== 'object') {
       return { v: 1, state: 'starting', pluginId: self.pluginId, name: self.name, version: self.version, dir: self.dir, views: [], spaces: [], hiddenSpaces: [], setupError: null, blocked: null, mountErrors: [], logs: [], warnCount: 0, errorCount: 0, loads: 0, windowVisible: false, ...host }
     }
-    // 「用户正在用沙箱窗口」= 它在前台。静默模式下窗口压在普通窗口之下,isVisible 恒真,拿它判闲置就永远不停
-    return { ...(st as object), windowVisible: !!w && w.isFocused(), ...host }
+    // 「用户正在用沙箱窗口」= 它(或它的设置窗口)在前台。静默模式下窗口压在普通窗口之下,isVisible 恒真,拿它判闲置就永远不停
+    return { ...(st as object), windowVisible: (!!w && w.isFocused()) || !!settingsWin()?.isFocused(), ...host }
   }
-  const screenshot = async (view?: string, settleFirst = false): Promise<string | null> => {
-    if (view) await hook(`openView(${JSON.stringify(view)})`)
-    if (view || settleFirst) await hook('settle()')
-    const w = win()
+  /** 截一扇窗(缺省主窗);view 只对主窗有意义(先开插件的那个视图)。 */
+  const screenshot = async (view?: string, settleFirst = false, w: BrowserWindow | null = win()): Promise<string | null> => {
     if (!w) return null
+    if (view) await hook(`openView(${JSON.stringify(view)})`, 10_000, w)
+    if (view || settleFirst) await hook('settle()', 10_000, w)
+    if (w.isDestroyed()) return null
     // 先要一帧新的再截:不然截到的可能是上一次画好的那一帧(窗口在后台时尤其)
     w.webContents.invalidate()
-    await hook('frames(2)', 1500)
+    await hook('frames(2)', 1500, w)
     const img = await w.webContents.capturePage().catch(() => null)
     if (!img || img.isEmpty()) return null
     const { width } = img.getSize()
@@ -165,7 +211,20 @@ export function startSandboxChild(self: SandboxSelf, opts: { getWindow(): Browse
     return `data:image/jpeg;base64,${out.toJPEG(80).toString('base64')}`
   }
 
-  type Loc = { x: number; y: number; label: string; covered?: string } | { error: string }
+  /** 动手的那扇窗:window "settings",或没写 window 而 target 是设置窗口给的引用(s12)。 */
+  type Pick = { w: BrowserWindow; where: 'main' | 'settings' } | { error: string }
+  const pick = (args: Record<string, unknown>): Pick => {
+    const ref = typeof args.target === 'string' && /^s\d+$/.test(args.target.trim())
+    if (args.window === 'settings' || (args.window == null && ref)) {
+      const s = settingsWin()
+      return s ? { w: s, where: 'settings' } : { error: 'the settings window is not open; open it with action "settings" first' }
+    }
+    const w = win()
+    return w ? { w, where: 'main' } : { error: 'the sandbox window is not open' }
+  }
+  const inWhere = (where: 'main' | 'settings'): string => (where === 'settings' ? ' in the settings window' : '')
+
+  type Loc = { x: number; y: number; label: string; covered?: string; dismissed?: string[] } | { error: string }
   /** 在元素中心点一下(真鼠标事件:按下 / 抬起都走,菜单、拖拽库认得出来)。 */
   const clickAt = (wc: WebContents, loc: { x: number; y: number }): void => {
     const z = wc.getZoomFactor()
@@ -176,30 +235,43 @@ export function startSandboxChild(self: SandboxSelf, opts: { getWindow(): Browse
   }
   /** click / type / press / scroll / space:做完等界面落定,截一张,带上这期间插件新写的 console 与弹出的提示。 */
   async function act(op: string, args: Record<string, unknown>): Promise<Record<string, unknown>> {
-    const w = win()
-    if (!w) return { error: 'the sandbox window is not open' }
+    const p = pick(args)
+    if ('error' in p) return p
+    const { w, where } = p
+    if (op === 'space' && where === 'settings') return { error: 'Spaces live in the main window; leave out window (or pass "main")' }
     if (openDialog) return { error: `a native ${openDialog.kind} dialog is open in the sandbox ("${openDialog.title}") and blocks the window; ask the user to close it, and next time arm it first with action "files"` }
     const wc = w.webContents
     const target = typeof args.target === 'string' ? args.target.slice(0, 300) : ''
-    if (!(await hook('begin()'))) return { error: STARTING }
+    const began = await call('begin()', 10_000, w)
+    if (!began.ok) return { error: hookMissText(began, where) }
     let did = ''
     let label = ''
     const focus = async (): Promise<string | null> => {
-      const loc = await hook(`locate(${JSON.stringify(target)})`) as Loc | null
-      if (!loc) return STARTING
+      const r = await call(`locate(${JSON.stringify(target)})`, 10_000, w)
+      if (!r.ok) return hookMissText(r, where)
+      const loc = r.value as Loc
+      if (!loc || typeof loc !== 'object') return hookMissText({ ok: false, miss: 'failed' }, where)
       if ('error' in loc) return loc.error
       clickAt(wc, loc)
-      // 元素名是插件的字:只进 target(引擎圈进数据区),did 只放宿主自己的话(Codex 评审:covered 曾拼进 did,漏出围栏)
-      label = loc.covered ? `${loc.label}; another element was on top of it: ${loc.covered}` : loc.label
-      if (loc.covered) did += ' (something else was on top of it, see target)'
+      // 元素名、通知的字是插件的:只进 target(引擎圈进数据区),did 只放宿主自己的话(Codex 评审:covered 曾拼进 did,漏出围栏)
+      label = loc.label
+      if (loc.dismissed) {
+        label += `; notification(s) dismissed first: ${loc.dismissed.join(' | ') || '(no text)'}`
+        did += ' (a notification was covering it, so it was dismissed first)'
+      }
+      if (loc.covered) {
+        label += `; another element was on top of it: ${loc.covered}`
+        did += ' (something else was on top of it, see target)'
+      }
       return null
     }
     if (op === 'space' || op === 'scroll') {
-      const r = await hook(op === 'space' ? `space(${JSON.stringify(String(args.space ?? ''))})` : `scroll(${JSON.stringify(target)}, ${Number(args.amount) || 600})`) as { label?: string; did?: string; error?: string } | null
-      if (!r) return { error: STARTING }
-      if (r.error) return { error: r.error }
-      did = r.did ?? op
-      label = r.label ?? ''
+      const r = await call(op === 'space' ? `space(${JSON.stringify(String(args.space ?? ''))})` : `scroll(${JSON.stringify(target)}, ${Number(args.amount) || 600})`, 10_000, w)
+      if (!r.ok) return { error: hookMissText(r, where) }
+      const v = (r.value ?? {}) as { label?: string; did?: string; error?: string }
+      if (v.error) return { error: v.error }
+      did = v.did ?? op
+      label = v.label ?? ''
     } else if (op === 'click') {
       if (!target) return { error: 'target is required for "click"' }
       const e = await focus()
@@ -211,10 +283,10 @@ export function startSandboxChild(self: SandboxSelf, opts: { getWindow(): Browse
       if (target) {
         const e = await focus()
         if (e) return { error: e }
-        await hook('frames(1)', 500)
+        await hook('frames(1)', 500, w)
       }
       // 缺省替换框里原有的字(选中后再插入);append 才接在后面
-      if (args.append !== true && !(await hook('selectFocused()'))) return { error: 'nothing is focused to type into; pass target (the input to type in)' }
+      if (args.append !== true && !(await hook('selectFocused()', 10_000, w))) return { error: 'nothing is focused to type into; pass target (the input to type in)' }
       wc.insertText(text)
       did = `typed ${text.length} character(s)${did}`
     } else if (op === 'press') {
@@ -226,16 +298,62 @@ export function startSandboxChild(self: SandboxSelf, opts: { getWindow(): Browse
       for (const list of events) for (const ev of list!) wc.sendInputEvent(ev as unknown as Electron.KeyboardInputEvent)
       did = `pressed ${keys.join(' ')}${did}`
     }
-    await hook('settle()')
-    const end = (await hook('end()')) as { newLogs?: unknown; newNotices?: unknown } | null
-    return { action: { did, target: label, outline: '', newLogs: end?.newLogs ?? [], newNotices: end?.newNotices ?? [] }, image: await screenshot() }
+    await hook('settle()', 10_000, w)
+    const end = (await hook('end()', 10_000, w)) as { newLogs?: unknown; newNotices?: unknown } | null
+    return { action: { did: `${did}${inWhere(where)}`, target: label, outline: '', newLogs: end?.newLogs ?? [], newNotices: end?.newNotices ?? [] }, image: await screenshot(undefined, false, w) }
+  }
+
+  // ── 设置窗口(11-15):设置是独立的浮动窗口,不是主窗的子窗;agent 开的那次压到普通窗口之下,和主窗一样不盖住用户正在用的 App ──
+  const quiet = process.env.TANGU_HARNESS_QUIET === '1' && process.platform === 'darwin'
+  const sunk = new WeakSet<BrowserWindow>()
+  const sink = (w: BrowserWindow): void => {
+    // 用户正在用沙箱(哪扇窗在前台)就不压:那是用户自己要看
+    if (!quiet || sunk.has(w) || BrowserWindow.getFocusedWindow()) return
+    w.setAlwaysOnTop(true, 'normal', -1)
+    sunk.add(w)
+  }
+  /** 用户进了沙箱(点了某扇窗 / 卡片上的「打开沙箱窗口」):放回普通层级,不然它压在主窗底下、从齿轮再打开也看不见。 */
+  const unsink = (): void => {
+    for (const w of BrowserWindow.getAllWindows()) if (sunk.has(w)) { sunk.delete(w); if (!w.isDestroyed()) w.setAlwaysOnTop(false) }
+  }
+
+  /** settings:开「设置 → 插件 → 本插件」(close: true = 关掉),回设置窗口的大纲(s12 引用)和一张截图。 */
+  async function settings(args: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const report = (did: string, more: Record<string, unknown> = {}): Record<string, unknown> => ({ action: { did, target: '', outline: '', newLogs: [], newNotices: [], ...more } })
+    if (args.close === true) {
+      const s = settingsWin()
+      if (!s) return report('the settings window was not open')
+      s.close()
+      return report('closed the settings window')
+    }
+    if (openDialog) return { error: `a native ${openDialog.kind} dialog is open in the sandbox ("${openDialog.title}") and blocks the window; ask the user to close it` }
+    if (!opts.getSettingsWindow) return { error: 'this Forsion cannot reach the settings window from the sandbox tools' }
+    const opened = await call('openSettings()')
+    if (!opened.ok) return { error: hookMissText(opened) }
+    const v = (opened.value ?? {}) as { error?: string }
+    if (v.error) return { error: v.error }
+    const s = await waitFor(() => { const x = settingsWin(); if (x) sink(x); return x }, 8_000)
+    if (!s) return { error: 'the settings window did not open' }
+    // 设置窗口是一份新渲染层:等钩子装上、插件在它那份插件仓里装上(详情页靠它),再等落定
+    const ready = await waitFor(async () => { const r = await call('pluginReady()', 2_000, s); return r.ok && r.value === true }, 15_000)
+    if (!ready) return { error: 'the settings window opened, but the plugin did not load in it in time; take a screenshot with window "settings"' }
+    if (armed) await fileInputs(true) // files 备着的时候开的:这扇窗的 <input type=file> 也要拦
+    await hook('settle()', 10_000, s)
+    const r = await call('read("")', 10_000, s)
+    const out = r.ok ? (r.value ?? {}) as { outline?: string; count?: number; error?: string } : null
+    return {
+      ...report(`opened Settings > Plugins > this plugin in the settings window and read ${out?.count ?? 0} element(s)`, { outline: out?.outline ?? '' }),
+      image: await screenshot(undefined, false, s),
+    }
   }
 
   // <input type="file"> 弹的选择框不走 dialog 模块:备了答案时经 CDP 拦下它,把路径直接填进那个 input(Playwright 同款做法)。
   // 只在备着的时候拦;没备就是普通的系统选择框
+  // 主窗与设置窗口各拦各的(插件的设置面板里也可能有 <input type=file>)
   const fileInputs = async (on: boolean): Promise<void> => {
-    const wc = win()?.webContents
-    if (!wc) return
+    for (const w of [win(), settingsWin()]) if (w) await fileInputsOf(w.webContents, on)
+  }
+  const fileInputsOf = async (wc: WebContents, on: boolean): Promise<void> => {
     try {
       if (on && !wc.debugger.isAttached()) {
         wc.debugger.attach('1.3')
@@ -282,26 +400,43 @@ export function startSandboxChild(self: SandboxSelf, opts: { getWindow(): Browse
   const send = (msg: Record<string, unknown>): void => { try { if (authed) sock?.write(JSON.stringify(msg) + '\n'); else queued.push(msg) } catch { /* 通道断了:父进程会当子进程没了 */ } }
   forward = (kind, value) => send({ event: 'forward', kind, value })
   const pushState = async (): Promise<void> => send({ event: 'state', status: await status() })
+  /** 重载插件:主窗整套(reload:重扫 Space、落脚);设置窗口开着就让它那份插件实例也换成新代码(每扇窗各有一份)。 */
+  const reloadAll = async (): Promise<void> => {
+    await hook('reload()', 30_000)
+    const s = settingsWin()
+    if (s) await hook('reloadPlugin()', 30_000, s)
+  }
 
   async function handle(msg: Record<string, unknown>): Promise<Record<string, unknown>> {
     const args = (msg.args && typeof msg.args === 'object' ? msg.args : {}) as Record<string, unknown>
     switch (msg.op) {
       case 'status': return { status: await status() }
-      case 'screenshot': return { image: await screenshot(typeof args.view === 'string' ? args.view : undefined, args.settle === true) }
+      case 'screenshot': {
+        const p = pick(args)
+        if ('error' in p) return { image: null, error: p.error }
+        return { image: await screenshot(p.where === 'main' && typeof args.view === 'string' ? args.view : undefined, args.settle === true, p.w) }
+      }
       case 'command': {
-        const r = await hook(`command(${JSON.stringify(String(args.command ?? ''))}, ${JSON.stringify(args.args ?? {})})`) as { error?: string } | null
-        return r ?? { error: 'the sandbox window is still starting' }
+        // 渲染层 1.5s 内没跑完就回 pending(多半在等自己弹的框);这里的 10s 只兜「页面卡死」
+        const r = await call(`command(${JSON.stringify(String(args.command ?? ''))}, ${JSON.stringify(args.args ?? {})})`)
+        if (!r.ok) return { error: hookMissText(r) }
+        return (r.value && typeof r.value === 'object' ? r.value : { error: hookMissText({ ok: false, miss: 'failed' }) }) as Record<string, unknown>
       }
       case 'read': {
-        const r = await hook(`read(${JSON.stringify(typeof args.target === 'string' ? args.target.slice(0, 300) : '')})`) as { outline?: string; count?: number; error?: string } | null
-        if (!r) return { error: STARTING }
-        if (r.error) return { error: r.error }
-        return { action: { did: `read ${r.count ?? 0} element(s)`, target: '', outline: r.outline ?? '', newLogs: [], newNotices: [] } }
+        const p = pick(args)
+        if ('error' in p) return p
+        const r = await call(`read(${JSON.stringify(typeof args.target === 'string' ? args.target.slice(0, 300) : '')})`, 10_000, p.w)
+        if (!r.ok) return { error: hookMissText(r, p.where) }
+        const v = (r.value ?? {}) as { outline?: string; count?: number; error?: string }
+        if (v.error) return { error: v.error }
+        return { action: { did: `read ${v.count ?? 0} element(s)${inWhere(p.where)}`, target: '', outline: v.outline ?? '', newLogs: [], newNotices: [] } }
       }
       case 'click': case 'type': case 'press': case 'scroll': case 'space': return act(String(msg.op), args)
       case 'files': return arm(args)
-      case 'reload': await hook('reload()', 30_000); return {}
+      case 'settings': return settings(args)
+      case 'reload': await reloadAll(); return {}
       case 'show': {
+        unsink()
         const w = win()
         if (w) {
           if (process.platform === 'win32') {
@@ -353,7 +488,7 @@ export function startSandboxChild(self: SandboxSelf, opts: { getWindow(): Browse
     watcher = watch(self.dir, { recursive: true }, (_ev, file) => {
       if (file && IGNORE.test(String(file))) return
       if (debounce) clearTimeout(debounce)
-      debounce = setTimeout(() => { void hook('reload()').then(() => setTimeout(() => void pushState(), 600)) }, 400)
+      debounce = setTimeout(() => { void reloadAll().then(() => setTimeout(() => void pushState(), 600)) }, 400)
     })
   } catch (e) {
     opts.log(`[sandbox] cannot watch ${self.dir}: ${e instanceof Error ? e.message : String(e)}`)
@@ -369,6 +504,6 @@ export function startSandboxChild(self: SandboxSelf, opts: { getWindow(): Browse
   })
   // 渲染层装载落定 / 重载完会报一次,父进程那边的卡片跟着变;用户切进 / 切出沙箱窗口也报(父进程据此算闲置)
   ipcMain.on('pluginSandbox:changed', () => { void pushState() })
-  app.on('browser-window-focus', () => { void pushState() })
+  app.on('browser-window-focus', () => { unsink(); void pushState() })
   app.on('browser-window-blur', () => { void pushState() })
 }

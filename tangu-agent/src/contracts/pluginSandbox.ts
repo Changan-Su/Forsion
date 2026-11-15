@@ -13,8 +13,10 @@ export const PLUGIN_SANDBOX_NS = 'plugin'
 
 /** plugin_sandbox(起停,要审批)的动作。 */
 export const SANDBOX_CONTROL_OPS = ['start', 'stop', 'reset'] as const
-/** plugin_sandbox_inspect(只看 / 在沙箱里点,不审批)的动作。read 之后的几个(11-03 起)老桌面不认,回 unknown。 */
-export const SANDBOX_INSPECT_OPS = ['status', 'screenshot', 'logs', 'command', 'read', 'click', 'type', 'press', 'scroll', 'space', 'files'] as const
+/** plugin_sandbox_inspect(只看 / 在沙箱里点,不审批)的动作。read 之后的几个(11-03 起)、settings(11-15 起)老桌面不认,回 unknown。 */
+export const SANDBOX_INSPECT_OPS = ['status', 'screenshot', 'logs', 'command', 'read', 'click', 'type', 'press', 'scroll', 'space', 'files', 'settings'] as const
+/** read / click / type / press / scroll / screenshot 的 `window`:缺省主窗;settings = settings 动作打开的设置窗口(11-15 起)。 */
+export const SANDBOX_WINDOWS = ['main', 'settings'] as const
 /** 会动沙箱界面的那几个:做完等界面落定、截一张,带上这期间插件新写的 console 与弹出的提示。 */
 export const SANDBOX_INPUT_OPS = ['click', 'type', 'press', 'scroll', 'space'] as const
 export type SandboxOp = (typeof SANDBOX_CONTROL_OPS)[number] | (typeof SANDBOX_INSPECT_OPS)[number]
@@ -63,7 +65,8 @@ export interface SandboxStatus {
   filesArmed: 'paths' | 'cancel' | null
 }
 
-/** 动作做完的回执(read / click / type / press / scroll / space / files),挂在桌面回来的 text 的 `action` 键上。 */
+/** 动作做完的回执(read / click / type / press / scroll / space / files / settings),挂在桌面回来的 text 的 `action` 键上。
+ *  command 另有一个键:`command: { pending: true }` = 命令开始了、一两秒内没跑完(多半在等它自己弹的框;11-15 起)。 */
 export interface SandboxActionReport {
   /** 宿主的话(英文):做了什么。 */
   did: string

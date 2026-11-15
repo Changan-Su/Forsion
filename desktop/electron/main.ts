@@ -5610,7 +5610,15 @@ app.whenReady().then(async () => {
   hideMainOnLaunch = (pendingSpaceWindows.length > 0 || pendingUnitWindows.length > 0) && !mainRequested
   createWindow()
   if (!SANDBOX) restoreMiniWindows()
-  if (SANDBOX) startSandboxChild(SANDBOX, { getWindow: () => mainWindow, quit: () => { isQuitting = true; app.quit() }, log: (m) => console.log(m) })
+  if (SANDBOX) {
+    startSandboxChild(SANDBOX, {
+      getWindow: () => mainWindow,
+      // 设置是独立的浮动面板(不是主窗的子窗):agent 的 settings 动作开它、按 window 选它动手
+      getSettingsWindow: () => floatingWindows.get('settings') ?? null,
+      quit: () => { isQuitting = true; app.quit() },
+      log: (m) => console.log(m),
+    })
+  }
   // 恢复上次退出时的独立窗(位置/尺寸 + 各窗自恢复布局);之后再开排着的 Space 快捷方式窗 —— 上次没关的同一扇
   // 已经按原位置恢复了,createDetachedWindow 按 sp_<id> 去重,只是叫到前面。
   void restoreDetachedWindows().catch((e) => console.error('[win] restore detached failed:', e)).finally(() => {

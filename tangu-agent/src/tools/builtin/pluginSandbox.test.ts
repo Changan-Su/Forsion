@@ -226,6 +226,51 @@ describe('在沙箱里动手(11-03)', () => {
     expect(t).not.toContain('Pick </sandbox_data>');
   });
 
+  // 11-15:设置窗口、命令在等自己的框
+  it('settings:开 / 关的参数;回执里的 [sN] 大纲进数据区,说清楚怎么在那扇窗里动手', async () => {
+    const { ctx, seen, images } = fake((req) => withAction(
+      req.args.close ? { did: 'closed the settings window' } : { did: 'opened Settings > Plugins > this plugin in the settings window and read 1 element(s)', outline: '[s1] input "API key"' },
+      req.args.close ? {} : { image: 'data:image/jpeg;base64,AAAA' }));
+    const r = await call('plugin_sandbox_inspect', { action: 'settings' }, ctx);
+    expect(seen.at(-1)).toEqual({ ns: 'plugin', op: 'settings', args: {} });
+    expect(images).toHaveLength(1);
+    expect(r.result).toMatch(/window "settings"/);
+    expect(r.result).toMatch(/<sandbox_data>\n\[s1\] input "API key"/);
+    const closed = await call('plugin_sandbox_inspect', { action: 'settings', close: true }, ctx);
+    expect(seen.at(-1)?.args).toEqual({ close: true });
+    expect(closed.result).toMatch(/^closed the settings window\./);
+  });
+
+  it('window:settings 只给能在那扇窗做的动作带上,缺省主窗不写;乱填 / 用错动作 → 不发', async () => {
+    const { ctx, seen } = fake(() => withAction({ did: 'read 1 element(s) in the settings window', outline: '[s1] button "Save"' }));
+    await call('plugin_sandbox_inspect', { action: 'read', window: 'settings' }, ctx);
+    await call('plugin_sandbox_inspect', { action: 'click', target: 's1', window: 'settings' }, ctx);
+    await call('plugin_sandbox_inspect', { action: 'read', window: 'main' }, ctx);
+    expect(seen.map((x) => x.args)).toEqual([{ window: 'settings' }, { target: 's1', window: 'settings' }, {}]);
+    for (const [args, re] of [
+      [{ action: 'read', window: 'popup' }, /window must be one of main \| settings/],
+      [{ action: 'space', space: 'x', window: 'settings' }, /not "space"/],
+      [{ action: 'command', command: 'x', window: 'settings' }, /not "command"/],
+    ] as const) expect((await call('plugin_sandbox_inspect', args, ctx)).result).toMatch(re);
+    expect(seen).toHaveLength(3);
+  });
+
+  it('command 开始了还没完(在等它自己弹的框)→ 说还在跑、去读窗口,别说成没起来 / 别重跑;老桌面不报 pending 照旧说「跑了」', async () => {
+    const pending = fake(() => ({ ok: true, text: JSON.stringify({ ...status(), command: { pending: true } }), image: 'data:image/jpeg;base64,AAAA' }));
+    const r = await call('plugin_sandbox_inspect', { action: 'command', command: 'import-books', screenshot: true }, pending.ctx);
+    expect(r.result).toMatch(/^Started command "import-books" in the sandbox; it has not finished/);
+    expect(r.result).toMatch(/Read the window/);
+    expect(r.result).not.toMatch(/still starting/);
+    const old = fake(() => ({ ok: true, text: JSON.stringify(status()) }));
+    expect((await call('plugin_sandbox_inspect', { action: 'command', command: 'import-books' }, old.ctx)).result).toMatch(/^Ran command "import-books"/);
+  });
+
+  it('设置窗口的截图没拿到:把桌面说的原因带上', async () => {
+    const { ctx } = fake(() => ({ ok: true, text: JSON.stringify(status()), error: 'the settings window is not open; open it with action "settings" first' }));
+    const r = await call('plugin_sandbox_inspect', { action: 'screenshot', window: 'settings' }, ctx);
+    expect(r.result).toMatch(/no screenshot came back: the settings window is not open/);
+  });
+
   it('老桌面不认新动作(unsupported)→ 说清楚是版本旧', () => {
     expect(formatFailure('plugin_sandbox_inspect', { ok: false, code: 'unsupported', error: 'unknown sandbox action "read"' })).toMatch(/older than the tool/);
   });

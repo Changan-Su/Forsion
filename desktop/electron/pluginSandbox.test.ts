@@ -26,6 +26,7 @@ const status = (over: Record<string, unknown> = {}) => ({
 function fakeSpawn(opts: { token?: (real: string) => string; states?: string[] } = {}) {
   const seen: Array<{ args: string[]; env: NodeJS.ProcessEnv }> = []
   const ops: string[] = []
+  const reqs: Array<{ op: string; args: Record<string, unknown> }> = []
   const spawn = (args: string[], env: NodeJS.ProcessEnv): ChildProcess => {
     seen.push({ args, env })
     const proc = new EventEmitter() as ChildProcess & EventEmitter
@@ -43,9 +44,12 @@ function fakeSpawn(opts: { token?: (real: string) => string; states?: string[] }
       while ((i = buf.indexOf('\n')) >= 0) {
         const msg = JSON.parse(buf.slice(0, i)); buf = buf.slice(i + 1)
         ops.push(msg.op)
+        reqs.push({ op: msg.op, args: msg.args ?? {} })
         if (msg.op === 'quit') { sock.end(); exit(); continue }
         const reply = msg.op === 'status' ? { status: status({ state: states.length > 1 ? states.shift() : states[0] }) }
-          : msg.op === 'screenshot' ? { image: 'data:image/jpeg;base64,AAAA' }
+          : msg.op === 'screenshot' ? (msg.args?.window === 'settings' ? { image: null, error: 'the settings window is not open; open it with action "settings" first' } : { image: 'data:image/jpeg;base64,AAAA' })
+            : msg.op === 'command' ? (msg.args?.command === 'pick' ? { ok: true, pending: true } : { ok: true })
+            : msg.op === 'settings' ? { action: { did: 'opened Settings > Plugins > this plugin in the settings window and read 1 element(s)', target: '', outline: '[s1] input "API key"', newLogs: [], newNotices: [] }, image: 'data:image/jpeg;base64,CCCC' }
             : msg.op === 'click' ? { action: { did: 'clicked', target: 'button "Add"', outline: '', newLogs: [], newNotices: [] }, image: 'data:image/jpeg;base64,BBBB' }
               : msg.op === 'read' ? { action: { did: 'read 1 element(s)', target: '', outline: 'x'.repeat(60_000), newLogs: [], newNotices: [] } }
                 : {}
@@ -56,7 +60,7 @@ function fakeSpawn(opts: { token?: (real: string) => string; states?: string[] }
     sock.on('error', () => {})
     return proc
   }
-  return { spawn, seen, ops }
+  return { spawn, seen, ops, reqs }
 }
 
 function sandbox(home: string, f: ReturnType<typeof fakeSpawn>) {
@@ -180,6 +184,28 @@ describe('控制通道', () => {
     expect(sbx.state().lastOp?.op).toBe('read') // 看状态不算一步
     await sbx.stop()
     expect(sbx.state()).toMatchObject({ running: false, last: { pluginId: 'reading-log', reason: 'stopped', sessionId: 's1' } })
+  })
+
+  // 11-15:命令在等它自己弹的框 → pending 挂在 text 的 command 键上;设置窗口:settings 转给子进程,screenshot 带 window,没开着的话说清楚
+  it('command 还在跑 → text 带 command.pending;settings 原样转给子进程;screenshot 的 window 带过去,失败原因回给引擎', async () => {
+    const f = fakeSpawn({ states: ['running'] })
+    const sbx = sandbox(tmp(), f)
+    await sbx.exec('start', { dir: pluginDir() }, { sessionId: 's1' })
+    const pending = await sbx.exec('command', { command: 'pick' })
+    expect(JSON.parse(pending.text!)).toMatchObject({ state: 'running', command: { pending: true } })
+    const done = await sbx.exec('command', { command: 'ping' })
+    expect(JSON.parse(done.text!).command).toBeUndefined()
+    const opened = await sbx.exec('settings', {})
+    expect(JSON.parse(opened.text!).action).toMatchObject({ outline: '[s1] input "API key"' })
+    expect(opened.image).toBe('data:image/jpeg;base64,CCCC')
+    const shot = await sbx.exec('screenshot', { window: 'settings' })
+    const lastShot = () => f.reqs.filter((x) => x.op === 'screenshot').at(-1)
+    expect(lastShot()).toEqual({ op: 'screenshot', args: { window: 'settings' } })
+    expect(shot).toMatchObject({ ok: true, error: expect.stringMatching(/settings window is not open/) })
+    expect(shot.image).toBeUndefined()
+    await sbx.exec('screenshot', {})
+    expect(lastShot()).toEqual({ op: 'screenshot', args: {} })
+    await sbx.stop()
   })
 
   it('沙箱只播种被测插件点名的内置包:requiresPlugins 两种写法都认;清单坏 / 没有 = 一个也不要', async () => {

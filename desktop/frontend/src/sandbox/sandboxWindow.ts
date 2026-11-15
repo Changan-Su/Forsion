@@ -6,6 +6,8 @@
  *    以及 agent 动手用的 read(页面大纲 + 引用)/ locate(找元素给坐标,主进程发真鼠标事件)/ scroll / space / settle;
  *  · 插件第一次装好时落到它带的第一个 Space(没带 Space 就开它的第一个视图),之后每次装载落定都报一次给主进程(父进程那边的卡片跟着变);
  *  · Ribbon 上只放这个插件自己的 Space(pureRibbon),内置 Space 照旧注册、只是不上条。
+ *  · 11-15 起设置窗口(独立的浮动面板)里也装这个钩子:agent 经 settings 动作打开「设置 → 插件 → 本插件」,再按 window 选窗口动手。
+ *    主窗的引用叫 e12,设置窗口的叫 s12:引用只在给出它的那扇窗里有效,前缀不对就报错,不去点另一扇窗里同号的元素。
  *
  * 普通实例里 window.tangu.sandbox 不存在,这里的函数全是 no-op。
  */
@@ -14,8 +16,10 @@ import { useNotifications } from '../stores/notificationStore'
 import { useUiStore } from '../amadeus/store/uiStore'
 import { usePluginStore } from '../amadeus/plugins/pluginStore'
 import { getDevPluginState, reloadDevPlugin } from '../amadeus/plugins/devSandbox'
+import { recordDevLog } from '../amadeus/plugins/devRecords'
 import { hiddenSpaceForAgent, hiddenSpacesOf } from '../pluginSpaceHealth'
 import { pluginSpaceOwner } from '../stores/spaceProgress'
+import { windowKind } from '../windowKind'
 import { SANDBOX_OUTLINE_BUDGET, type SandboxStatus } from '../../../../tangu-agent/src/contracts/pluginSandbox'
 
 export const sandboxSelf = () => window.tangu?.sandbox?.self ?? null
@@ -87,7 +91,11 @@ const INTERACTIVE = 'button,a[href],input:not([type=hidden]),textarea,select,sum
   + '[role=switch],[role=option],[role=combobox],[role=textbox],[role=slider],[tabindex]:not([tabindex="-1"])'
 /** 沙箱条(报告问题 / 安装 / 重置)不给 agent 点:那几颗是给人的。 */
 const CHROME = '.sbx-chrome'
+/** 宿主右上角的通知栈(插件 ctx.notify 也弹在这里):卡片压在目标上时先关掉再点(底部吐司 .amx-toast 不接指针,不挡)。 */
+const TOASTS = '.ntf-wrap'
 const refs = new Map<string, WeakRef<Element>>()
+/** 引用前缀:主窗 e、设置窗口(浮动面板)s。 */
+const REF = windowKind() === 'main' ? 'e' : 's'
 
 const clip = (t: string, n = 80): string => { const x = t.replace(/\s+/g, ' ').trim(); return x.length > n ? `${x.slice(0, n - 1)}…` : x }
 function shown(el: Element): boolean {
@@ -101,12 +109,21 @@ function labelOf(el: Element): string {
   return clip(own || (typeof h.value === 'string' ? h.value : ''))
 }
 const roleOf = (el: Element): string => el.getAttribute('role') || ((el as HTMLElement).isContentEditable ? 'editor' : el.tagName.toLowerCase())
+/** 收字的控件(只读只对它们有意义;编辑器里 contenteditable=false 的节点包装不算)。 */
+const TEXT_ROLES = new Set(['textbox', 'searchbox', 'combobox', 'spinbutton'])
+const textEntry = (el: Element): boolean => el.tagName === 'TEXTAREA' || TEXT_ROLES.has(el.getAttribute('role') || '')
+  || (el.tagName === 'INPUT' && !/^(button|submit|reset|checkbox|radio|file|image|range|color|hidden)$/i.test((el as HTMLInputElement).type))
 function stateOf(el: Element): string {
   const h = el as HTMLInputElement
   const f: string[] = []
   if (h.disabled || el.getAttribute('aria-disabled') === 'true') f.push('disabled')
   if (h.checked === true || el.getAttribute('aria-checked') === 'true') f.push('checked')
   if (el.getAttribute('aria-selected') === 'true') f.push('selected')
+  // 开关按钮:名字是「它管什么」,状态看这里(11-15 反馈:只看名字的 agent 点了「阅读」都不知道笔记已经进了阅读模式)
+  const pr = el.getAttribute('aria-pressed')
+  if (pr) f.push(pr === 'true' ? 'pressed' : pr === 'mixed' ? 'partly pressed' : 'not pressed')
+  // 打不进字的框(阅读模式 / 锁定的笔记正文、readonly 输入框):不说的话 agent 一路 type,次次被拒还不知道为什么
+  if (el.getAttribute('aria-readonly') === 'true' || (textEntry(el) && (h.readOnly === true || el.getAttribute('contenteditable') === 'false'))) f.push('read-only')
   const ex = el.getAttribute('aria-expanded')
   if (ex) f.push(ex === 'true' ? 'expanded' : 'collapsed')
   if (document.activeElement === el) f.push('focused')
@@ -114,10 +131,11 @@ function stateOf(el: Element): string {
   return f.length ? ` (${f.join(', ')})` : ''
 }
 
-/** target:`e12` = read 给的引用;`css:<选择器>`;其余按看得见的字找(先按控件的名字精确,再包含,最后任意元素的字)。 */
+/** target:`e12` / `s12` = read 给的引用;`css:<选择器>`;其余按看得见的字找(先按控件的名字精确,再包含,最后任意元素的字)。 */
 function find(target: string): Element | string {
   const t = target.trim()
-  if (/^e\d+$/.test(t)) {
+  if (/^[es]\d+$/.test(t)) {
+    if (t[0] !== REF) return `the reference ${t} comes from the ${t[0] === 's' ? 'settings' : 'main'} window; act on that window (window "${t[0] === 's' ? 'settings' : 'main'}")`
     const el = refs.get(t)?.deref()
     return el?.isConnected ? el : `the reference ${t} is gone (the page changed); read again`
   }
@@ -139,15 +157,47 @@ function find(target: string): Element | string {
   return any ?? `nothing visible says "${clip(t, 80)}"; read the page to get exact names and references`
 }
 
-function locate(target: string): { x: number; y: number; label: string; covered?: string } | { error: string } {
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
+
+/** 目标中心点上压着宿主的通知卡:全关掉(文字 watchNotices 早记下了,状态里照样看得到),等卡片退场让开(退场动画期间还接指针)。
+ *  回关掉的那几条;没压着 = null。一秒内还让不开(新的一直在弹)= 'stuck'。
+ *  ⚠️ 不先点再说:点下去落在卡片上,碰到的可能是它的「撤销」按钮(11-15 反馈:两次点「编辑」都点在插件的通知上)。 */
+async function clearToasts(x: number, y: number): Promise<string[] | 'stuck' | null> {
+  const hit = (): boolean => !!document.elementFromPoint(x, y)?.closest(TOASTS)
+  if (!hit()) return null
+  const st = useNotifications.getState()
+  const texts = st.items.map((n) => (n.title ? `${n.title}: ${n.text}` : n.text).slice(0, 200))
+  st.dismissAll()
+  const end = Date.now() + 1000
+  while (hit() && Date.now() < end) await sleep(40)
+  return hit() ? 'stuck' : texts
+}
+
+type Located = { x: number; y: number; label: string; covered?: string; dismissed?: string[] }
+async function locate(target: string): Promise<Located | { error: string }> {
   const el = find(target)
   if (typeof el === 'string') return { error: el }
-  let r = el.getBoundingClientRect()
-  if (r.top < 0 || r.left < 0 || r.bottom > innerHeight || r.right > innerWidth) { el.scrollIntoView({ block: 'center', inline: 'center' }); r = el.getBoundingClientRect() }
-  const x = r.left + Math.min(r.width / 2, Math.max(1, r.width - 2)), y = r.top + r.height / 2
-  const top = document.elementFromPoint(x, y)
+  const point = (): { x: number; y: number } => {
+    let r = el.getBoundingClientRect()
+    if (r.top < 0 || r.left < 0 || r.bottom > innerHeight || r.right > innerWidth) { el.scrollIntoView({ block: 'center', inline: 'center' }); r = el.getBoundingClientRect() }
+    return { x: r.left + Math.min(r.width / 2, Math.max(1, r.width - 2)), y: r.top + r.height / 2 }
+  }
+  let { x, y } = point()
   const label = `${roleOf(el)} "${labelOf(el)}"`
-  return top && top !== el && !el.contains(top) && !top.contains(el) ? { x, y, label, covered: `${roleOf(top)} "${labelOf(top)}"` } : { x, y, label }
+  const over = (top: Element | null): boolean => !!top && top !== el && !el.contains(top) && !top.contains(el)
+  let dismissed: string[] | undefined
+  // 目标本身就在通知卡里(点通知上的按钮)不算被压着
+  if (!el.closest(TOASTS) && over(document.elementFromPoint(x, y))) {
+    const cleared = await clearToasts(x, y)
+    if (cleared === 'stuck') return { error: `${label} is covered by notifications that keep appearing; wait a moment and try again` }
+    if (cleared) {
+      if (!el.isConnected) return { error: 'the page changed while a notification was being dismissed; read again' }
+      dismissed = cleared
+      ;({ x, y } = point())
+    }
+  }
+  const top = document.elementFromPoint(x, y)
+  return { x, y, label, ...(over(top) ? { covered: `${roleOf(top!)} "${labelOf(top!)}"` } : {}), ...(dismissed ? { dismissed } : {}) }
 }
 
 /** 页面大纲:看得见的控件带引用([e3] button "Save"),标题与成段的字只列出来;target 收窄到一块。 */
@@ -165,7 +215,7 @@ function read(target: string): { outline: string; count: number } | { error: str
     let line = ''
     if (el.matches(INTERACTIVE)) {
       if (!shown(el)) continue
-      const ref = `e${++n}`
+      const ref = `${REF}${++n}`
       refs.set(ref, new WeakRef(el))
       line = `[${ref}] ${roleOf(el)} "${labelOf(el)}"${stateOf(el)}`
     } else if (/^H[1-6]$/.test(el.tagName) || el.getAttribute('role') === 'heading') {
@@ -269,19 +319,32 @@ function openView(pluginId: string, view?: string): boolean {
   return true
 }
 
+/** 命令跑了这么久还没完,先回「开始了、还在跑」:多半是它弹了自己的选择框 / 对话框在等人点(11-15 反馈:等满主进程的
+ *  10 秒被报成「沙箱窗口还在启动」,agent 以为窗口坏了)。 */
+const COMMAND_SETTLE_MS = 1500
+
 /** 插件命令 = ctx.registerCommand 注册的那些;按命令 id(不带插件前缀)找。 */
-async function command(pluginId: string, id: string, args: unknown): Promise<{ ok: boolean; error?: string }> {
+async function command(pluginId: string, id: string, args: unknown): Promise<{ ok: boolean; error?: string; pending?: boolean }> {
   const cmd = usePluginStore.getState().commands.find((c) => c.pluginId === pluginId && (c.item.id === id || `amadeus:${pluginId}:${c.item.id}` === id))
   if (!cmd) {
     const have = usePluginStore.getState().commands.filter((c) => c.pluginId === pluginId).map((c) => c.item.id)
     return { ok: false, error: `no command "${id}"; this plugin registered: ${have.join(', ') || 'none'}` }
   }
-  try {
-    await (cmd.item.run as (a?: unknown) => unknown)(args && typeof args === 'object' ? args : undefined)
-    return { ok: true }
-  } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : String(e) }
-  }
+  const run = (async () => { await (cmd.item.run as (a?: unknown) => unknown)(args && typeof args === 'object' ? args : undefined) })()
+    .then(() => ({ ok: true }), (e: unknown) => ({ ok: false, error: e instanceof Error ? e.message : String(e) }))
+  const first = await Promise.race([run, sleep(COMMAND_SETTLE_MS).then(() => null)])
+  if (first) return first
+  // 回执已经发出去了:之后才抛的错记进插件的 console,agent 看 logs / 下一个动作的回执就知道
+  void run.then((r) => { if (!r.ok) recordDevLog(pluginId, 'error', [`[sandbox] command "${cmd.item.id}" failed after it had started: ${r.error}`]) })
+  return { ok: true, pending: true }
+}
+
+/** settings 动作(主窗):开「设置 → 插件 → 本插件」的详情页(registerSettingsView / registerSetting 都画在那里)。设置是独立的浮动窗口。 */
+async function openSettings(pluginId: string): Promise<{ ok: true } | { error: string }> {
+  if (!usePluginStore.getState().plugins.some((p) => p.id === pluginId)) return { error: 'the plugin is not loaded in the sandbox, so it has no settings page; check status' }
+  const { useApp } = await import('../stores/appStore')
+  useApp.getState().openSettings(`fplugin:${pluginId}`)
+  return { ok: true }
 }
 
 const ownSpaces = (pluginId: string): string[] => [...pluginSpaceOwner].filter(([, owner]) => owner === pluginId).map(([id]) => id)
@@ -336,18 +399,26 @@ export function installSandboxHook(): void {
   const self = sandboxSelf()
   if (!self) return
   const pid = self.pluginId
+  const main = windowKind() === 'main'
   watchNotices()
-  pureRibbon(pid)
-  // 条目随 Space 注册 / 插件 Space 装卸而变,每变一次对一遍;pureRibbon 自己的增删会再触发一次,那一次什么也不改
-  useRibbonStore.subscribe((st, prev) => { if (st.items !== prev.items) pureRibbon(pid) })
+  if (main) {
+    pureRibbon(pid)
+    // 条目随 Space 注册 / 插件 Space 装卸而变,每变一次对一遍;pureRibbon 自己的增删会再触发一次,那一次什么也不改
+    useRibbonStore.subscribe((st, prev) => { if (st.items !== prev.items) pureRibbon(pid) })
+  }
   ;(window as unknown as { __forsionSandbox: unknown }).__forsionSandbox = {
     status: () => status(pid),
     command: (id: string, args: unknown) => command(pid, id, args),
     openView: (view?: string) => openView(pid, view),
+    openSettings: () => openSettings(pid),
+    /** 设置窗口:插件在这扇窗的插件仓里装上了没有(详情页要等它)。 */
+    pluginReady: () => usePluginStore.getState().plugins.some((p) => p.id === pid),
+    /** 设置窗口跟着主窗重载:每扇窗各有一份插件实例,主窗那次重载管不到这里。 */
+    reloadPlugin: () => reloadDevPlugin(pid).catch((e) => console.warn('[sandbox] reload failed', e)),
     read: (target: string) => read(target),
     locate: (target: string) => locate(target),
     scroll: (target: string, amount: number) => scroll(target, amount),
-    space: (want: string) => space(pid, want),
+    space: (want: string) => (main ? space(pid, want) : { error: 'Spaces live in the main window' }),
     selectFocused,
     frames,
     settle,
