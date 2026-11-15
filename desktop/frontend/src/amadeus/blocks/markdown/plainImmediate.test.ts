@@ -239,6 +239,23 @@ describe('记录正文 × 输入法组字', () => {
     await end()
     expect(changed).not.toHaveBeenCalled()
   })
+
+  // 评审 P2:外部进来的正文恰好等于组字中的文档 → 不替换;结束后的补发不能把它当本地改动回写。
+  it('组字中外部正文恰好等于当前文档:结束后不回写', async () => {
+    const changed = vi.fn()
+    const editor = await mount(changed)
+    changed.mockClear()
+    act(() => {
+      compose(editor, 'compositionstart')
+      editor.dispatch(editor.state.tr.insertText('한', editor.state.doc.content.size - 1))
+    })
+    await act(async () => {
+      root!.render(React.createElement(PlainMarkdownEditor, { initial: 'Start한\n', immediate: true, onChange: changed }))
+    })
+    act(() => { compose(editor, 'compositionend') })
+    await end()
+    expect(changed).not.toHaveBeenCalled()
+  })
 })
 
 // 独立编辑器没有邻块可切(2026-11-04 评审):Shift+Enter 曾把光标后的内容 splitTail 切走、交给 no-op 的 insertAfter —— 丢字还立刻存盘。

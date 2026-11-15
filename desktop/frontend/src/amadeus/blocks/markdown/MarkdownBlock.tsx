@@ -2337,12 +2337,27 @@ export function PlainMarkdownEditor({ initial, onChange, readOnly = false, immed
   const flushHeld = useRef<(() => void) | null>(null)
   const immediatePlugins = useMemo(() => immediate ? [$prose((ctx) => new Plugin({
     view: (view) => {
+      // IME composition: the document holds the uncommitted romanization while composing. Hold the
+      // emit until the composition ends, so a pause mid-composition never stores or saves it.
+      let pending = false
+      let composeAt = 0
+      let capTimer: ReturnType<typeof setTimeout> | undefined
+      let endTimer: ReturnType<typeof setTimeout> | undefined
+      const send = (): void => { emitRef.current(ctx.get(serializerCtx)(view.state.doc)) }
       const sync = (): void => {
         if (view.isDestroyed || incoming.current === emitted.current) return
         const next = ctx.get(parserCtx)(tabsToEntities(incoming.current))
         // Local edits echoed through the parent must not dispatch a replacement:
         // keeping the same document also keeps its selection and input composition.
-        if (!next || next.eq(view.state.doc)) return
+        if (!next || next.eq(view.state.doc)) {
+          // The store already holds the held document: record it, so the post-composition flush is no echo.
+          if (next && pending) {
+            pending = false
+            receiving.current = true
+            try { send() } finally { receiving.current = false }
+          }
+          return
+        }
         receiving.current = true
         try {
           view.dispatch(view.state.tr.replaceWith(0, view.state.doc.content.size, next.content).setMeta('addToHistory', false))
@@ -2353,13 +2368,6 @@ export function PlainMarkdownEditor({ initial, onChange, readOnly = false, immed
       applyIncoming.current = sync
       // Milkdown initializes asynchronously; props may change before its view exists.
       queueMicrotask(() => { if (applyIncoming.current === sync) sync() })
-      // IME composition: the document holds the uncommitted romanization while composing. Hold the
-      // emit until the composition ends, so a pause mid-composition never stores or saves it.
-      let pending = false
-      let composeAt = 0
-      let capTimer: ReturnType<typeof setTimeout> | undefined
-      let endTimer: ReturnType<typeof setTimeout> | undefined
-      const send = (): void => { emitRef.current(ctx.get(serializerCtx)(view.state.doc)) }
       const flush = (force: boolean): void => {
         clearTimeout(endTimer); endTimer = undefined
         if (!force && view.composing && Date.now() - composeAt < COMPOSE_HOLD_MAX_MS) return
