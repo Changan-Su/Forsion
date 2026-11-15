@@ -130,6 +130,30 @@ describe('会员档位用不了这个模型(model_tier_locked)', () => {
     expect(humanizeRunError('model_tier_locked', (k, v) => translateFor('zh', k, v), 'GPT-6 Sol')).toBe('当前会员档位不能使用 GPT-6 Sol。升级会员或换一个模型。')
     expect(humanizeRunError('model_tier_locked', (k, v) => translateFor('en', k, v), 'GPT-6 Sol')).toBe("Your current plan can't use GPT-6 Sol. Upgrade your membership or pick another model.")
   })
+  it('限时开放刚结束:有模型名时说「限时体验已于 {date} 结束」;没名字回到普通的那句', async () => {
+    const { translateFor } = await import('../../i18n')
+    // 服务端 SSE 那句人话(旧版看的)原样进来,也按码认、换成自己的文案
+    const raw = 'Claude Fable 5.2 的限时体验已结束，当前会员档位不能再用它。 / The free trial of Claude Fable 5.2 has ended. (model_tier_locked)'
+    expect(humanizeRunError(raw, (k, v) => translateFor('zh', k, v), 'Claude Fable 5.2', '11月30日')).toBe('Claude Fable 5.2 的限时体验已于 11月30日 结束。升级会员或换一个模型。')
+    expect(humanizeRunError(raw, (k, v) => translateFor('en', k, v), 'Claude Fable 5.2', 'Nov 30')).toBe('The free trial of Claude Fable 5.2 ended on Nov 30. Upgrade your membership or pick another model.')
+    expect(humanizeRunError(raw, tv, '', 'Nov 30')).toBe('chat.err.tierLockedBare')
+  })
+  it('后台提前结束(本机记着的到期还在以后):SSE 那句认得出就说「已结束」不带日期;403 JSON 带 trialEndedAt 就用它的日期', async () => {
+    const { translateFor } = await import('../../i18n')
+    const { trialEndedAtOf } = await import('../../services/accountQuota')
+    // 服务端 modelTierLockedMessage(trialEndedAt, updateHint)的原句(server src/services/modelTierGate.ts),两边一起改;引擎 httpBrain 把 SSE 的 message 原样抛成 run 错误
+    const sse = 'Claude Fable 5.2 的限时体验已结束，当前会员档位不能再用它。请换一个模型或升级会员。旧版客户端不会提前标出这些模型，建议更新到最新版 Forsion。'
+      + " / The free trial of Claude Fable 5.2 has ended and your plan can't use it anymore. Pick another model or upgrade your membership."
+      + " Older app versions don't mark these models in advance, so please update to the latest version of Forsion. (model_tier_locked)"
+    expect(humanizeRunError(sse, (k, v) => translateFor('zh', k, v), 'Claude Fable 5.2')).toBe('Claude Fable 5.2 的限时体验已结束。升级会员或换一个模型。')
+    expect(humanizeRunError(sse, (k, v) => translateFor('en', k, v), 'Claude Fable 5.2')).toBe('The free trial of Claude Fable 5.2 has ended. Upgrade your membership or pick another model.')
+    const json = JSON.stringify({ detail: 'model_tier_locked', code: 'model_tier_locked', modelId: 'fable', modelName: 'Claude Fable 5.2', multiplier: 5, cap: 2.5, trialEndedAt: '2026-11-20T03:00:00.000Z' })
+    expect(trialEndedAtOf(json)).toBe(Date.parse('2026-11-20T03:00:00.000Z'))
+    expect(trialEndedAtOf('model_tier_locked')).toBeNull()
+    expect(trialEndedAtOf(undefined)).toBeNull()
+    // 普通的档位锁(没开放过)照旧
+    expect(humanizeRunError('model_tier_locked', (k, v) => translateFor('zh', k, v), 'GPT-6 Sol')).toBe('当前会员档位不能使用 GPT-6 Sol。升级会员或换一个模型。')
+  })
 })
 
 describe('Forsion 额度用完(token_quota_exceeded):服务端补的积分提示不进括号,开着积分也用完了换一句', () => {

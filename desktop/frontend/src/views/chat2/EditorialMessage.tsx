@@ -17,8 +17,8 @@ import { useStreamReveal } from './streamReveal'
 import { Copy, RotateCcw, GitBranch, MessageCircleQuestion, CornerUpLeft, Pencil, Volume2, Square, Loader2, LogIn, Zap, History as HistoryIcon, FileCode2, MessageSquare, ShieldQuestion, CircleCheck, CircleX, CircleHelp, Clock, Undo2 } from 'lucide-react'
 import { ArrowUpRight, FileInput, Gauge, StepForward } from 'lucide-react'
 import { turnHasOutput } from './continueTurn'
-import { isModelTierLocked, isTierLockedError, tierLockedText } from '../../services/accountQuota'
-import { useQuotaMultiplierCap } from '../../tangu/quotaCap'
+import { isModelTierLocked, isTierLockedError, recentlyEndedTrial, tierLockedText, trialEndedAtOf } from '../../services/accountQuota'
+import { useQuotaTierLock } from '../../tangu/quotaCap'
 import { TURN_RESUME_OPEN } from '../../../../../tangu-agent/src/contracts/turnResume'
 import { isEngineModelNoApiKey, parseEngineModelNoApiKey } from '../../../../../tangu-agent/src/contracts/engineModelError'
 import { useNoteInsertState } from './insertToNote'
@@ -82,7 +82,7 @@ import { UI_MODE, nativeSheetPresenter, runNativeCtxMenu, runNativeSheetMenu, us
 import { splitSuggestions, type FenceKind, type SuggestState, type TaskCard } from './suggest'
 import { replyText } from './replyText'
 import { CreationCards } from './CreationCards'
-import { formatDateTime, formatMessageTime } from '../../format/time'
+import { formatDate, formatDateTime, formatMessageTime } from '../../format/time'
 
 import { TaskCards, TaskTraces, type TaskLanding } from './TaskCards'
 import { MuseApprovalLine, MuseTodoCards, MuseTodoTraces, ProactiveMark, isProactive } from './MuseDm'
@@ -225,7 +225,7 @@ const ERR_RULES: Array<[RegExp, string]> = [
  *  enable =「开关没开,开了就能用积分接着用」;topup =「开着,积分也用完了」 */
 const QUOTA_POINTS_ENABLE_RE = /Turn on "Continue with points"/i
 const QUOTA_POINTS_OUT_RE = /points have run out/i
-export function humanizeRunError(raw: string | undefined, t: (k: string, v?: Record<string, unknown>) => string, modelName = ''): string {
+export function humanizeRunError(raw: string | undefined, t: (k: string, v?: Record<string, unknown>) => string, modelName = '', trialEndedDate = ''): string {
   const engineAgent = agentEngineErrorText(raw, t) // 跑在 DSH 上的 Agent 没跑起来(引擎发的 agent_engine_* 码,带引擎名)
   if (engineAgent) return `${engineAgent}(${raw})`
   if (!raw) return t('chat.error')
@@ -233,7 +233,7 @@ export function humanizeRunError(raw: string | undefined, t: (k: string, v?: Rec
   if (isEngineModelNoApiKey(raw)) return engineModelNoApiKeyText(raw, t)
   const hit = ERR_RULES.find(([re, key]) => re.test(raw) && (key !== 'chat.err.quotaUsed' || isQuotaText(raw)))
   // 这一句自己就说清了,不再把机器码 / JSON 回包挂在括号里(「复制错误」照样拿得到原文)
-  if (hit?.[1] === 'chat.err.tierLocked') return tierLockedText(raw, t, modelName)
+  if (hit?.[1] === 'chat.err.tierLocked') return tierLockedText(raw, t, modelName, trialEndedDate)
   // Forsion 额度用完:服务端在机器码后面补了一句积分提示(给不认识积分的旧客户端看,见 server quotaExceededMessage),
   // 只在积分帮得上时才补。这里按它选自己的说法,括号里只留机器码;裸码 = 积分帮不上(后台任务、组织账号、已到预支硬顶)
   // 或老服务端,就不提积分(Codex 11-15)
@@ -391,19 +391,24 @@ export interface MessageHandlers {
 
 /** 失败那一行 + 下面「重试 · 复制错误」(走查续六 6.3)。只在会话最后一条、且没在跑时给重试:重试后新一轮接上,按钮自然消失。 */
 function RunErrorRow({ msg, sessionId, modelId, handlers }: { msg: UiMessage; sessionId?: string; modelId?: string; handlers?: MessageHandlers }) {
-  const { t } = useI18n()
+  const { t, locale } = useI18n()
   const canRetry = useApp((s) => !!handlers?.onRetry && !!sessionId && !s.runningBySession[sessionId] && s.messagesBySession[sessionId]?.at(-1)?.id === msg.id)
   // 这一轮已有产出(正文 / 工具调用):「重试」会把它们删掉重来 —— 拆成「继续生成」(主)与「重新生成」两条路
   const canContinue = useApp((s) => canRetry && !!handlers?.onContinue && turnHasOutput(s.messagesBySession[sessionId!]))
   // 模型被会员档位拦下:modelId 是会话「现在」选着的模型,不一定是当时那个 —— 只有它确实还锁着才点名,否则说「这个模型」
   const tierLocked = isTierLockedError(msg.error)
-  const multiplierCap = useQuotaMultiplierCap(tierLocked)
+  const { cap: multiplierCap, trials } = useQuotaTierLock(tierLocked)
   const sessionModel = useApp((s) => (tierLocked && modelId ? s.modelsResp?.models.find((m) => m.id === modelId) : undefined))
-  const modelName = sessionModel && isModelTierLocked(sessionModel, multiplierCap) ? sessionModel.name : ''
+  const stillLocked = !!sessionModel && isModelTierLocked(sessionModel, multiplierCap, trials)
+  const modelName = stillLocked ? sessionModel!.name : ''
+  // 限时开放刚结束(7 天内)被拦:说「限时体验已于 {date} 结束」,不说倍率
+  // 服务端回包里的结束时刻优先(后台提前结束时,本机记着的到期还在以后);没有再看本机见过的
+  const trialEnded = stillLocked ? (trialEndedAtOf(msg.error) ?? recentlyEndedTrial(sessionModel!.id)) : null
+  const trialEndedDate = trialEnded != null ? formatDate(trialEnded, { locale }) : ''
   return (
     <>
       <div className="t2-tool err">
-        <span className="t2-status-err">✕ {humanizeRunError(msg.error, t, modelName)}</span>
+        <span className="t2-status-err">✕ {humanizeRunError(msg.error, t, modelName, trialEndedDate)}</span>
         <ReloginChip error={msg.error} modelId={modelId} />
         <QuotaPageChip error={msg.error} />
         <UpgradeChip error={msg.error} />
