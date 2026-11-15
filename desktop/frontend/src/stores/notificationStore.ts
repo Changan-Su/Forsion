@@ -553,6 +553,14 @@ export const useNotifications = create<NtfState>((set, get) => {
       // 回到前台:排着的照队列出,节流照常(同一来源出过一张、走了就冷却,后面同来源的丢下 —— 一串补不出来)。
       // 不按「系统通知替它响过、早该走了」丢:系统通知可能根本没出(没给通知权限、关了渠道,桥照样回成功;手机上
       // agent.done 不走系统通知),回到前台时手机外壳还会把这类系统通知清掉;撤销卡更不能丢 —— 系统通知上没有撤销。
+      // 屏上是常驻的那张:在后台没让位,现在让(同 notify 里的让位:它排到不常驻的后面,promoteBanner 先出别的)
+      const vis = s.items[0]
+      if (vis?.sticky && s.queue.some((q) => !q.sticky)) {
+        clearTimer(vis.id)
+        set({ items: [], queue: [...s.queue, vis] })
+        scheduleGap()
+        return
+      }
       if (!s.items.length && s.queue.length && !gapTimer) scheduleGap()
     },
 

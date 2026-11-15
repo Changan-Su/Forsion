@@ -565,6 +565,29 @@ describe('手机横幅模式(banner)', () => {
     } finally { vi.unstubAllGlobals() }
   })
 
+  it('屏上是常驻卡时退到后台,后台来的卡回到前台照样让常驻让位(否则排在常驻后面,用户收掉它之前都出不来)', () => {
+    let hidden = false
+    vi.stubGlobal('document', { hasFocus: () => true, get visibilityState() { return hidden ? 'hidden' : 'visible' } })
+    try {
+      notifyApp({ text: 'reminder', sticky: true, event: 'note.reminder' })
+      expect(shown()).toEqual(['reminder'])
+      hidden = true
+      st().visibilityChanged()
+      notifyApp({ text: 'plain', event: 'plugin:a' })
+      notifyApp({ text: 'approve', event: 'plugin:b', urgent: true })
+      expect(shown(), '在后台不让位').toEqual(['reminder'])
+      hidden = false
+      st().visibilityChanged()
+      vi.advanceTimersByTime(300)
+      expect(shown(), '回到前台:有人在等的先上').toEqual(['approve'])
+      expect(st().queue.map((n) => n.text), '常驻排到后台来的那些后面').toEqual(['plain', 'reminder'])
+      vi.advanceTimersByTime(5000 + 300)
+      expect(shown()).toEqual(['plain'])
+      vi.advanceTimersByTime(5000 + 300)
+      expect(shown(), '都走完了常驻再回来').toEqual(['reminder'])
+    } finally { vi.unstubAllGlobals() }
+  })
+
   it('屏上那张在 App 退到后台后到点走:不开冷却(负对照:照开 → 回来 30 秒内同来源不出)', () => {
     let hidden = false
     vi.stubGlobal('document', { hasFocus: () => true, get visibilityState() { return hidden ? 'hidden' : 'visible' } })
