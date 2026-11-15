@@ -316,6 +316,15 @@ const DEFAULT_CAP: Omit<ModelCapability, 'rule'> = {
 const CLAUDE_ADAPTIVE = /(sonnet|opus|haiku|fable|mythos)-([5-9]|\d\d)(?!\d)|opus-4[-.]([7-9]|\d\d)|mythos-preview/i;
 
 /**
+ * 模型 id 属于 Claude 自适应思考族(上面那条正则):思考多长由模型自己定,没有预算可夹。
+ * 只看 id、不看端点:托管行的思考字段由服务端按 reasoning_mode 决定,中转也可能把它换成任意 provider 名,
+ * 引擎侧唯一靠得住的是发给厂商的模型 id。调用方:openaiCompat 的 thinkingHeadroom。
+ */
+export function isClaudeAdaptiveModel(modelId: string | undefined): boolean {
+  return !!modelId && CLAUDE_ADAPTIVE.test(modelId);
+}
+
+/**
  * 其中思考关不掉的那几支:`thinking:{type:'disabled'}` 返回 400(官方 thinking 页的逐模型表)。
  * Opus 5.5 起在此列(Opus 5 还能关);Sonnet 5.5 也在 —— 它的最低档是 `between_tools`(只关开头那段思考),
  * 这里不发那个形态,关一律夹到最弱档(Sonnet 5 还能关)。`(?!\d)` 防 Opus 5 / Sonnet 5 的日期快照
@@ -910,8 +919,11 @@ export function clampThinkingLevel(cap: ModelCapability, level: ThinkingLevel): 
 
 /** Claude 预算思考:留给正文的最小输出额度。 */
 const MIN_OUTPUT_TOKENS = 1024;
-/** 未指定 max_tokens 时,为预算 / 自适应思考补的上限(取所有 Claude 型号都吃得下的保守值)。 */
-const CLAUDE_MAX_TOKENS_CEILING = 32000;
+/**
+ * 未指定 max_tokens 时,为预算 / 自适应思考补的上限(取所有 Claude 型号都吃得下的保守值)。
+ * 服务端 anthropicStream 的 DEFAULT_MAX_TOKENS 同值;openaiCompat 的 CLAUDE_THINKING_HEADROOM 加上后台调用的正文上限也不超过它。
+ */
+export const CLAUDE_MAX_TOKENS_CEILING = 32000;
 
 /** prefix 兜底的系统提示(英文——模型提示一律英文)。 */
 const PREFIX_INSTRUCTIONS: Record<Exclude<ThinkingLevel, 'off'>, string> = {
