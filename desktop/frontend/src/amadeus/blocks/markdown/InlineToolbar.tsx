@@ -5,7 +5,7 @@
 // (问 Tangu、翻译、⋯ 里的插件动作)。动作区的按钮是 @lcl/components 的 SelectionBarActions,和聊天、插件视图里那一条
 // 同一份;谁在前由设置 → 外观的「划线菜单」定(缺省工具在前)。
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
-import { AlignCenter, AlignLeft, AlignRight, Languages, MessageSquareQuote } from 'lucide-react'
+import { AlignCenter, AlignLeft, AlignRight, Languages, MessageCircle } from 'lucide-react'
 import { SelectionBarActions, type SelectionBarAction } from '@lcl/components'
 import { ColorPalettePopover } from './ColorPalette'
 import { rectAnchor } from '@lcl/engine'
@@ -263,7 +263,7 @@ export function InlineToolbar({
 
   // 动作区(每个视图都一样的那几枚):问 Tangu 把选区交给侧栏对话、翻译进预览卡,笔记一个字不动;⋯ 是插件动作。
   const shared: SelectionBarAction[] = [
-    ...(onAsk ? [{ id: 'ask', label: t('itb.askTangu'), title: t('itb.askTanguTitle'), icon: <MessageSquareQuote size={14} />, lead: true, onRun: onAsk }] : []),
+    ...(onAsk ? [{ id: 'ask', label: t('itb.askTangu'), title: t('itb.askTanguTitle'), icon: <MessageCircle size={14} />, lead: true, onRun: onAsk }] : []),
     ...(ai?.translate ? [{ id: 'translate', label: t('itb.translate'), title: t('itb.translateTitle'), icon: <Languages size={14} />, onRun: () => ai.onPick('translate') }] : []),
   ]
   const more = ai?.more?.length ? ai.more : null
