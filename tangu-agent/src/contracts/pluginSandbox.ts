@@ -9,6 +9,9 @@
  */
 
 export const PLUGIN_SANDBOX_CAPABILITY = 'plugin.sandbox'
+/** 11-15 起的桌面多声明这一个:认得 settings 动作、`window` 参数和 command 的 `allowPending`。老桌面不认 window,
+ *  会把「设置窗口里的点击」静默做在主窗上 —— 引擎没看到它就不发这几样(settings 直接说桌面太旧)。 */
+export const PLUGIN_SANDBOX_V2_CAPABILITY = 'plugin.sandbox-v2'
 export const PLUGIN_SANDBOX_NS = 'plugin'
 
 /** plugin_sandbox(起停,要审批)的动作。 */

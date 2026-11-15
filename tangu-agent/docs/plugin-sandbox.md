@@ -86,6 +86,9 @@ agent 不该用 computer use 去点沙箱窗口(它故意压在用户的窗口�
 
 ### 3.2 设置窗口与等对话框的命令(11-15)
 
+- **能力协商**:11-15 起的桌面多声明 `plugin.sandbox-v2`。老桌面不认 `window`,会把「设置窗口里的点击」静默做在主窗上,
+  所以引擎没看到 v2 时:`settings` 和 `window: 'settings'` 不发、直接说桌面比工具旧;`window: 'main'` 不带;command 不带 `allowPending`。
+
 - **设置窗口**:设置是独立的顶层浮动窗口(不是主窗的子窗),插件的 `registerSetting` 行与 `registerSettingsView` 面板画在
   「设置 → 插件 → 本插件」的详情页里。`settings` 动作经主窗的 `openSettings('fplugin:<id>')` 打开它(与用户点齿轮同一条路),
   等这扇窗的渲染层装上钩子、插件在它那份插件仓里装上,落定后回这扇窗的大纲和截图;`close: true` 关掉。
@@ -94,9 +97,10 @@ agent 不该用 computer use 去点沙箱窗口(它故意压在用户的窗口�
   space 只在主窗。设置窗口没开着时带 `window: 'settings'` → 报「没开,先 settings」。
   每扇窗各有一份插件实例:保存即重载 / reload 时设置窗口跟着 `reloadPlugin()`。`files` 的 `<input type=file>` 拦截两扇窗都挂。
   静默模式(macOS)下 agent 开的设置窗口压到普通窗口之下(同主窗);用户进了沙箱(任一扇窗获焦 / 卡片上「打开沙箱窗口」)就放回普通层级。
-- **等对话框的命令**:渲染层的 `command` 跑 1.5 秒还没完(多半弹了自己的选择框在等人点),先回 `{ok, pending: true}`,
+- **等对话框的命令**:引擎带 `allowPending: true`(v2)时,渲染层的 `command` 跑 1.5 秒还没完(多半弹了自己的选择框在等人点),先回 `{ok, pending: true}`,
   父进程挂在结果 text 的 `command: {pending: true}` 上(老引擎不看它,照旧说「跑了」),工具说「开始了、还在跑,去读窗口接着做,别重跑」。
   之后才抛的错记进插件的 console(`[sandbox] command "x" failed after it had started: …`)。
+  不带 `allowPending`(老引擎)照旧等它跑完:老引擎把回执当「跑完了」,早回会让它以为写完了;等满 10 秒还没完,说「命令没跑完、可能在等它弹的框」。
 - **钩子没拿到值分四种说法**:窗口没开 / 渲染层还没装上钩子(「还在启动」)/ 等超时(「页面忙或卡住」,带秒数)/ 调用本身失败(「页面可能刚重载,再试」)。
   以前一律报「还在启动」(`sandboxChild.ts` 的 `hookMissText`)。
 

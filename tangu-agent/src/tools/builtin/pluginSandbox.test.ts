@@ -144,12 +144,13 @@ describe('插件说的话圈成数据区', () => {
 });
 
 describe('在沙箱里动手(11-03)', () => {
-  const fake = (respond: (req: ClientActionRequest) => ClientActionResult) => {
+  const fake = (respond: (req: ClientActionRequest) => ClientActionResult, caps = host.clientCapabilities) => {
     const seen: ClientActionRequest[] = [];
     const images: string[] = [];
-    const ctx: ToolContext = { ...host, requestClientAction: async (req) => { seen.push(req); return respond(req); }, collectImage: (img) => { images.push(img.url); } };
+    const ctx: ToolContext = { ...host, clientCapabilities: caps, requestClientAction: async (req) => { seen.push(req); return respond(req); }, collectImage: (img) => { images.push(img.url); } };
     return { ctx, seen, images };
   };
+  const V2 = ['plugin.sandbox', 'plugin.sandbox-v2'];
   const withAction = (action: Record<string, unknown>, over: Partial<ClientActionResult> = {}): ClientActionResult =>
     ({ ok: true, text: JSON.stringify({ ...status(), action }), ...over });
 
@@ -230,7 +231,7 @@ describe('在沙箱里动手(11-03)', () => {
   it('settings:开 / 关的参数;回执里的 [sN] 大纲进数据区,说清楚怎么在那扇窗里动手', async () => {
     const { ctx, seen, images } = fake((req) => withAction(
       req.args.close ? { did: 'closed the settings window' } : { did: 'opened Settings > Plugins > this plugin in the settings window and read 1 element(s)', outline: '[s1] input "API key"' },
-      req.args.close ? {} : { image: 'data:image/jpeg;base64,AAAA' }));
+      req.args.close ? {} : { image: 'data:image/jpeg;base64,AAAA' }), V2);
     const r = await call('plugin_sandbox_inspect', { action: 'settings' }, ctx);
     expect(seen.at(-1)).toEqual({ ns: 'plugin', op: 'settings', args: {} });
     expect(images).toHaveLength(1);
@@ -241,22 +242,37 @@ describe('在沙箱里动手(11-03)', () => {
     expect(closed.result).toMatch(/^closed the settings window\./);
   });
 
-  it('window:settings 只给能在那扇窗做的动作带上,缺省主窗不写;乱填 / 用错动作 → 不发', async () => {
-    const { ctx, seen } = fake(() => withAction({ did: 'read 1 element(s) in the settings window', outline: '[s1] button "Save"' }));
+  it('window:写了就照写带上(main 也带,免得 sN 被自动送去设置窗口),没写不带;乱填 / 用错动作 → 不发', async () => {
+    const { ctx, seen } = fake(() => withAction({ did: 'read 1 element(s) in the settings window', outline: '[s1] button "Save"' }), V2);
     await call('plugin_sandbox_inspect', { action: 'read', window: 'settings' }, ctx);
     await call('plugin_sandbox_inspect', { action: 'click', target: 's1', window: 'settings' }, ctx);
-    await call('plugin_sandbox_inspect', { action: 'read', window: 'main' }, ctx);
-    expect(seen.map((x) => x.args)).toEqual([{ window: 'settings' }, { target: 's1', window: 'settings' }, {}]);
+    await call('plugin_sandbox_inspect', { action: 'type', target: 's1', text: 'x', window: 'main' }, ctx);
+    await call('plugin_sandbox_inspect', { action: 'read' }, ctx);
+    expect(seen.map((x) => x.args)).toEqual([{ window: 'settings' }, { target: 's1', window: 'settings' }, { target: 's1', text: 'x', window: 'main' }, {}]);
     for (const [args, re] of [
       [{ action: 'read', window: 'popup' }, /window must be one of main \| settings/],
       [{ action: 'space', space: 'x', window: 'settings' }, /not "space"/],
       [{ action: 'command', command: 'x', window: 'settings' }, /not "command"/],
     ] as const) expect((await call('plugin_sandbox_inspect', args, ctx)).result).toMatch(re);
-    expect(seen).toHaveLength(3);
+    expect(seen).toHaveLength(4);
+  });
+
+  it('Codex 评审:桌面没声明 v2(老桌面不认 window,会静默做在主窗上)→ settings / window "settings" 不发,说桌面太旧;window "main" 不带;command 不带 allowPending', async () => {
+    const { ctx, seen } = fake(() => withAction({ did: 'x' }));
+    for (const args of [{ action: 'settings' }, { action: 'click', target: 'Save', window: 'settings' }]) {
+      expect((await call('plugin_sandbox_inspect', args, ctx)).result).toMatch(/older than the tool[\s\S]*nothing was done/);
+    }
+    expect(seen).toHaveLength(0);
+    await call('plugin_sandbox_inspect', { action: 'read', window: 'main' }, ctx);
+    await call('plugin_sandbox_inspect', { action: 'command', command: 'x' }, ctx);
+    expect(seen.map((x) => x.args)).toEqual([{}, { command: 'x' }]);
+    const neu = fake(() => ({ ok: true, text: JSON.stringify(status()) }), V2);
+    await call('plugin_sandbox_inspect', { action: 'command', command: 'x' }, neu.ctx);
+    expect(neu.seen.at(-1)?.args).toEqual({ command: 'x', allowPending: true });
   });
 
   it('command 开始了还没完(在等它自己弹的框)→ 说还在跑、去读窗口,别说成没起来 / 别重跑;老桌面不报 pending 照旧说「跑了」', async () => {
-    const pending = fake(() => ({ ok: true, text: JSON.stringify({ ...status(), command: { pending: true } }), image: 'data:image/jpeg;base64,AAAA' }));
+    const pending = fake(() => ({ ok: true, text: JSON.stringify({ ...status(), command: { pending: true } }), image: 'data:image/jpeg;base64,AAAA' }), V2);
     const r = await call('plugin_sandbox_inspect', { action: 'command', command: 'import-books', screenshot: true }, pending.ctx);
     expect(r.result).toMatch(/^Started command "import-books" in the sandbox; it has not finished/);
     expect(r.result).toMatch(/Read the window/);
@@ -266,7 +282,7 @@ describe('在沙箱里动手(11-03)', () => {
   });
 
   it('设置窗口的截图没拿到:把桌面说的原因带上', async () => {
-    const { ctx } = fake(() => ({ ok: true, text: JSON.stringify(status()), error: 'the settings window is not open; open it with action "settings" first' }));
+    const { ctx } = fake(() => ({ ok: true, text: JSON.stringify(status()), error: 'the settings window is not open; open it with action "settings" first' }), V2);
     const r = await call('plugin_sandbox_inspect', { action: 'screenshot', window: 'settings' }, ctx);
     expect(r.result).toMatch(/no screenshot came back: the settings window is not open/);
   });

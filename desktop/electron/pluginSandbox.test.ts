@@ -191,9 +191,11 @@ describe('控制通道', () => {
     const f = fakeSpawn({ states: ['running'] })
     const sbx = sandbox(tmp(), f)
     await sbx.exec('start', { dir: pluginDir() }, { sessionId: 's1' })
-    const pending = await sbx.exec('command', { command: 'pick' })
+    const pending = await sbx.exec('command', { command: 'pick', allowPending: true })
+    expect(f.reqs.find((x) => x.op === 'command')?.args).toEqual({ command: 'pick', args: {}, allowPending: true })
     expect(JSON.parse(pending.text!)).toMatchObject({ state: 'running', command: { pending: true } })
     const done = await sbx.exec('command', { command: 'ping' })
+    expect(f.reqs.filter((x) => x.op === 'command').at(-1)?.args).toEqual({ command: 'ping', args: {} }) // 老引擎不带就不加
     expect(JSON.parse(done.text!).command).toBeUndefined()
     const opened = await sbx.exec('settings', {})
     expect(JSON.parse(opened.text!).action).toMatchObject({ outline: '[s1] input "API key"' })

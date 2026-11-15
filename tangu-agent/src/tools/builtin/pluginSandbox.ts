@@ -19,7 +19,7 @@ import type { ToolContext, ClientActionResult } from '../toolTypes.js';
 import { fitImageUrlForModel } from '../../services/imageShrink.js';
 import { builtinSkillsDir } from '../../skills/localSkills.js';
 import {
-  PLUGIN_SANDBOX_CAPABILITY, PLUGIN_SANDBOX_NS, SANDBOX_CONTROL_OPS, SANDBOX_INSPECT_OPS, SANDBOX_INPUT_OPS, SANDBOX_WINDOWS,
+  PLUGIN_SANDBOX_CAPABILITY, PLUGIN_SANDBOX_NS, PLUGIN_SANDBOX_V2_CAPABILITY, SANDBOX_CONTROL_OPS, SANDBOX_INSPECT_OPS, SANDBOX_INPUT_OPS, SANDBOX_WINDOWS,
   embedSandboxStatus, parseSandboxAction, parseSandboxStatus, type SandboxActionReport, type SandboxStatus,
 } from '../../contracts/pluginSandbox.js';
 
@@ -296,12 +296,18 @@ const inspectTool: ToolDef = {
     const action = String(args.action ?? '');
     if (!(SANDBOX_INSPECT_OPS as readonly string[]).includes(action)) return `Error: plugin_sandbox_inspect: action must be one of ${SANDBOX_INSPECT_OPS.join(' | ')}.`;
     const opArgs: Record<string, unknown> = {};
+    // 11-15 起的桌面声明 v2:认得 settings、window、allowPending。老桌面不认 window,会把设置窗口里的动作静默做在主窗上 → 不发
+    const v2 = !!ctx.clientCapabilities?.includes(PLUGIN_SANDBOX_V2_CAPABILITY);
+    const tooOld = 'Error: plugin_sandbox_inspect: this Forsion desktop is older than the tool and cannot reach the plugin\'s settings window from the sandbox; '
+      + 'nothing was done. Ask the user to update Forsion, or to check the plugin settings in the sandbox window by hand.';
     if (args.window != null && !(SANDBOX_WINDOWS as readonly string[]).includes(String(args.window))) return `Error: plugin_sandbox_inspect: window must be one of ${SANDBOX_WINDOWS.join(' | ')}.`;
-    // 只在要设置窗口时带上:缺省主窗不写,老桌面看到的参数和以前一样
+    if (action === 'settings' && !v2) return tooOld;
     if (args.window === 'settings') {
       if (!['read', 'click', 'type', 'press', 'scroll', 'screenshot'].includes(action)) return `Error: plugin_sandbox_inspect: window "settings" works with read / click / type / press / scroll / screenshot, not "${action}".`;
-      opArgs.window = 'settings';
+      if (!v2) return tooOld;
     }
+    // 写了就照写的带上(main 也带:不带的话 sN 引用会被桌面自动送去设置窗口);没写不带,老桌面看到的参数和以前一样
+    if (v2 && (args.window === 'settings' || args.window === 'main') && ['read', 'click', 'type', 'press', 'scroll', 'screenshot'].includes(action)) opArgs.window = args.window;
     if (action === 'settings' && args.close === true) opArgs.close = true;
     if (action === 'screenshot' && args.view != null) {
       const view = str(args.view, 120);
@@ -317,6 +323,8 @@ const inspectTool: ToolDef = {
         opArgs.args = args.args;
       }
       if (args.screenshot === true) opArgs.shot = true;
+      // 认得「还在跑」才让桌面一两秒就先回(老引擎把早回的回执当成跑完了)
+      if (v2) opArgs.allowPending = true;
     }
     if (['read', 'click', 'type', 'press', 'scroll'].includes(action) && args.target != null) opArgs.target = str(args.target, 300);
     if (action === 'click' && !opArgs.target) return 'Error: plugin_sandbox_inspect: target is required for "click" (read first to get references).';

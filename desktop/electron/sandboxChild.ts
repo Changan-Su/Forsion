@@ -169,7 +169,7 @@ export function startSandboxChild(self: SandboxSelf, opts: {
     void pushState()
     return real().finally(() => { openDialog = null; void pushState() })
   }
-  const take = (): { paths: string[] } | { cancel: true } | null => { const a = armed; armed = null; if (a) { void pushState(); void fileInputs(false) } return a }
+  const take = (): { paths: string[] } | { cancel: true } | null => { const a = armed; armed = null; if (a) { void pushState(); void fileInputs(false).catch(() => {}) } return a }
   const realOpen = dialog.showOpenDialog.bind(dialog) as (...a: unknown[]) => Promise<Electron.OpenDialogReturnValue>
   const realSave = dialog.showSaveDialog.bind(dialog) as (...a: unknown[]) => Promise<Electron.SaveDialogReturnValue>
   const realMsg = dialog.showMessageBox.bind(dialog) as (...a: unknown[]) => Promise<Electron.MessageBoxReturnValue>
@@ -349,11 +349,21 @@ export function startSandboxChild(self: SandboxSelf, opts: {
 
   // <input type="file"> 弹的选择框不走 dialog 模块:备了答案时经 CDP 拦下它,把路径直接填进那个 input(Playwright 同款做法)。
   // 只在备着的时候拦;没备就是普通的系统选择框
-  // 主窗与设置窗口各拦各的(插件的设置面板里也可能有 <input type=file>)
-  const fileInputs = async (on: boolean): Promise<void> => {
-    for (const w of [win(), settingsWin()]) if (w) await fileInputsOf(w.webContents, on)
+  // 主窗与设置窗口各拦各的(插件的设置面板里也可能有 <input type=file>)。开 / 关排成一队:设置窗口那份的初始化
+  // 还在 await 时答案被主窗用掉、关闭先跑完,晚到的初始化再把拦截打开,下一个选择框就被当成取消(Codex 评审)
+  let fileQueue: Promise<void> = Promise.resolve()
+  const fileInputs = (on: boolean): Promise<void> => {
+    fileQueue = fileQueue.then(async () => {
+      for (const get of [win, settingsWin]) {
+        const w = get() // 每扇窗现取:上一扇等着的时候这扇可能关了
+        if (!w) continue
+        try { await fileInputsOf(w.webContents, on) } catch (e) { opts.log(`[sandbox] file input interception skipped: ${e instanceof Error ? e.message : String(e)}`) }
+      }
+    })
+    return fileQueue
   }
   const fileInputsOf = async (wc: WebContents, on: boolean): Promise<void> => {
+    if (wc.isDestroyed()) return
     try {
       if (on && !wc.debugger.isAttached()) {
         wc.debugger.attach('1.3')
@@ -367,7 +377,8 @@ export function startSandboxChild(self: SandboxSelf, opts: {
         })
         await wc.debugger.sendCommand('Page.enable')
       }
-      if (wc.debugger.isAttached()) await wc.debugger.sendCommand('Page.setInterceptFileChooserDialog', { enabled: on })
+      // 开的那一下按现状:排队等着的工夫答案可能已经被用掉了
+      if (!wc.isDestroyed() && wc.debugger.isAttached()) await wc.debugger.sendCommand('Page.setInterceptFileChooserDialog', { enabled: on && armed !== null })
     } catch (e) {
       opts.log(`[sandbox] file input interception ${on ? 'on' : 'off'} failed: ${e instanceof Error ? e.message : String(e)}`)
     }
@@ -417,8 +428,10 @@ export function startSandboxChild(self: SandboxSelf, opts: {
         return { image: await screenshot(p.where === 'main' && typeof args.view === 'string' ? args.view : undefined, args.settle === true, p.w) }
       }
       case 'command': {
-        // 渲染层 1.5s 内没跑完就回 pending(多半在等自己弹的框);这里的 10s 只兜「页面卡死」
-        const r = await call(`command(${JSON.stringify(String(args.command ?? ''))}, ${JSON.stringify(args.args ?? {})})`)
+        // allowPending(新引擎才带):渲染层 1.5s 内没跑完就回 pending(多半在等自己弹的框),这里的 10s 只兜「页面卡死」;
+        // 老引擎照旧等它跑完,等不完时说清楚是命令没跑完,不说成窗口还在启动
+        const r = await call(`command(${JSON.stringify(String(args.command ?? ''))}, ${JSON.stringify(args.args ?? {})}, ${args.allowPending === true})`)
+        if (!r.ok && r.miss === 'timeout') return { error: `the command did not finish within ${Math.round((r.ms ?? 10_000) / 1000)}s: it may be waiting on a dialog or picker it opened (read or screenshot the window), or its page is stuck` }
         if (!r.ok) return { error: hookMissText(r) }
         return (r.value && typeof r.value === 'object' ? r.value : { error: hookMissText({ ok: false, miss: 'failed' }) }) as Record<string, unknown>
       }

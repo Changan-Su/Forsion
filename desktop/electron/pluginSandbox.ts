@@ -454,7 +454,7 @@ export function createPluginSandbox(deps: SandboxDeps) {
         return note(c, op, ok(await readStatus(c), shot.image, shot.image ? undefined : shot.error || 'no screenshot'))
       }
       if (op === 'command') {
-        const r = await request(c, 'command', { command: args.command, args: args.args ?? {} }, 20_000)
+        const r = await request(c, 'command', { command: args.command, args: args.args ?? {}, ...(args.allowPending === true ? { allowPending: true } : {}) }, 20_000)
         // shot:做完顺手截一张(命令多半改了界面,agent 不必再要一次;还在等它自己弹的框时截到的正是那个框)
         const image = args.shot === true ? await shoot(c, undefined, true) : undefined
         const res = ok(await readStatus(c), image, typeof r.error === 'string' ? r.error.slice(0, 300) : undefined)

@@ -452,13 +452,19 @@ async function main() {
     await act('click', { target: 'Compact view' })
     const toggled = (await act('read', {})).a?.outline || ''
     check('14b 点了开关之后再读 → (pressed)', /button "Compact view" \(pressed[,)]/.test(toggled), toggled.slice(0, 800))
+    // 老引擎不带 allowPending:照旧等它跑完;等不完说「命令没跑完」,不说「窗口还在启动」
+    const old = await exec('command', { command: 'fixture-pick' })
+    const oldPicked = await act('click', { target: 'Pick Dune' })
+    check('14c 老引擎(不带 allowPending)→ 照旧等满再报,说的是命令没跑完、可能在等框;框里点完照样跑完',
+      /the command did not finish within 10s: it may be waiting on a dialog/.test(old.error || '') && !/still starting/.test(old.error || '') && oldPicked.a?.newLogs?.some((l) => l.text === 'PICKED_FROM_DIALOG'),
+      JSON.stringify({ error: old.error, picked: oldPicked.r.error || oldPicked.a?.newLogs }))
     const t0 = Date.now()
-    const waiting = await exec('command', { command: 'fixture-pick' })
+    const waiting = await exec('command', { command: 'fixture-pick', allowPending: true })
     const waitMs = Date.now() - t0
-    check('14c 命令在等自己弹的框:几秒内回「开始了、还在跑」(command.pending),不报还在启动',
+    check('14d 新引擎(allowPending)→ 几秒内回「开始了、还在跑」(command.pending),不报错',
       waiting.ok && !waiting.error && JSON.parse(waiting.text).command?.pending === true && waitMs < 6000, JSON.stringify({ ms: waitMs, error: waiting.error, command: waiting.text && JSON.parse(waiting.text).command }))
     const picked2 = await act('click', { target: 'Pick Dune' })
-    check('14d 接着在它弹的框里点 → 命令跑完', picked2.a?.newLogs?.some((l) => l.text === 'PICKED_FROM_DIALOG'), JSON.stringify(picked2.r.error || picked2.a))
+    check('14d2 接着在它弹的框里点 → 命令跑完', picked2.a?.newLogs?.some((l) => l.text === 'PICKED_FROM_DIALOG'), JSON.stringify(picked2.r.error || picked2.a))
     await exec('command', { command: 'fixture-toast' })
     await until(async () => (await status())?.notices?.some((n) => n.text.includes('Covering toast')), 5000)
     const underToast = await act('click', { target: 'Under toast' })

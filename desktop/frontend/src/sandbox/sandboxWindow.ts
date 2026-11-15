@@ -14,7 +14,7 @@
 import { useRibbonStore, useSpaceStore, useWorkspace, activeMainPanel, addRibbonIcon, removeRibbonIcon, setActiveSpace, label as spaceLabel, type RibbonItem } from '@lcl/engine'
 import { useNotifications } from '../stores/notificationStore'
 import { useUiStore } from '../amadeus/store/uiStore'
-import { usePluginStore } from '../amadeus/plugins/pluginStore'
+import { pluginSetupSettled, usePluginStore } from '../amadeus/plugins/pluginStore'
 import { getDevPluginState, reloadDevPlugin } from '../amadeus/plugins/devSandbox'
 import { recordDevLog } from '../amadeus/plugins/devRecords'
 import { hiddenSpaceForAgent, hiddenSpacesOf } from '../pluginSpaceHealth'
@@ -189,7 +189,8 @@ async function locate(target: string): Promise<Located | { error: string }> {
   // 目标本身就在通知卡里(点通知上的按钮)不算被压着
   if (!el.closest(TOASTS) && over(document.elementFromPoint(x, y))) {
     const cleared = await clearToasts(x, y)
-    if (cleared === 'stuck') return { error: `${label} is covered by notifications that keep appearing; wait a moment and try again` }
+    // 不带元素名:报错在数据区外面,名字是插件的字(Codex 评审)
+    if (cleared === 'stuck') return { error: 'the target is covered by notifications that keep appearing; wait a moment and try again' }
     if (cleared) {
       if (!el.isConnected) return { error: 'the page changed while a notification was being dismissed; read again' }
       dismissed = cleared
@@ -323,8 +324,9 @@ function openView(pluginId: string, view?: string): boolean {
  *  10 秒被报成「沙箱窗口还在启动」,agent 以为窗口坏了)。 */
 const COMMAND_SETTLE_MS = 1500
 
-/** 插件命令 = ctx.registerCommand 注册的那些;按命令 id(不带插件前缀)找。 */
-async function command(pluginId: string, id: string, args: unknown): Promise<{ ok: boolean; error?: string; pending?: boolean }> {
+/** 插件命令 = ctx.registerCommand 注册的那些;按命令 id(不带插件前缀)找。
+ *  allowPending = 引擎认得「还在跑」(11-15 起的引擎才带):不带就照旧等它跑完(老引擎把回执当「跑完了」,早回会让它以为写完了)。 */
+async function command(pluginId: string, id: string, args: unknown, allowPending = false): Promise<{ ok: boolean; error?: string; pending?: boolean }> {
   const cmd = usePluginStore.getState().commands.find((c) => c.pluginId === pluginId && (c.item.id === id || `amadeus:${pluginId}:${c.item.id}` === id))
   if (!cmd) {
     const have = usePluginStore.getState().commands.filter((c) => c.pluginId === pluginId).map((c) => c.item.id)
@@ -332,6 +334,7 @@ async function command(pluginId: string, id: string, args: unknown): Promise<{ o
   }
   const run = (async () => { await (cmd.item.run as (a?: unknown) => unknown)(args && typeof args === 'object' ? args : undefined) })()
     .then(() => ({ ok: true }), (e: unknown) => ({ ok: false, error: e instanceof Error ? e.message : String(e) }))
+  if (!allowPending) return run
   const first = await Promise.race([run, sleep(COMMAND_SETTLE_MS).then(() => null)])
   if (first) return first
   // 回执已经发出去了:之后才抛的错记进插件的 console,agent 看 logs / 下一个动作的回执就知道
@@ -408,11 +411,16 @@ export function installSandboxHook(): void {
   }
   ;(window as unknown as { __forsionSandbox: unknown }).__forsionSandbox = {
     status: () => status(pid),
-    command: (id: string, args: unknown) => command(pid, id, args),
+    command: (id: string, args: unknown, allowPending?: boolean) => command(pid, id, args, allowPending === true),
     openView: (view?: string) => openView(pid, view),
     openSettings: () => openSettings(pid),
-    /** 设置窗口:插件在这扇窗的插件仓里装上了没有(详情页要等它)。 */
-    pluginReady: () => usePluginStore.getState().plugins.some((p) => p.id === pid),
+    /** 设置窗口:插件在这扇窗里落定了没有(详情页要等它)。setup 还在 await 时不算(设置面板可能还没注册);
+     *  抛了错 / 没激活(停用、被拒载)也算落定:详情页照样画得出来,画的是它为什么没跑。 */
+    pluginReady: () => {
+      const s = usePluginStore.getState()
+      if (!s.plugins.some((p) => p.id === pid)) return false
+      return pluginSetupSettled(pid) || !!s.lastSetupError[pid] || !s.activeIds.includes(pid)
+    },
     /** 设置窗口跟着主窗重载:每扇窗各有一份插件实例,主窗那次重载管不到这里。 */
     reloadPlugin: () => reloadDevPlugin(pid).catch((e) => console.warn('[sandbox] reload failed', e)),
     read: (target: string) => read(target),

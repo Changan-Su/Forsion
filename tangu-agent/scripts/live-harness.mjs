@@ -8396,7 +8396,7 @@ Then reply with only the command output.`,
         return { ok: true, text: JSON.stringify({ ...status(), action: { did, target: a.target ? `target ${a.target}` : '', outline: op === 'settings' || (op === 'read' && inSettings(a)) ? SETTINGS : op === 'read' ? MAIN : '', newLogs: saved ? [{ level: 'log', text: 'default shelf saved: Sci-fi' }] : [], newNotices: [] } }), ...(op === 'settings' ? { image: 'data:image/jpeg;base64,AAAA' } : {}) };
       };
       const ev = await run(`live-sbx-settings-${Date.now()}`, 'reading-log 插件已经在沙箱里跑着了。它的设置里有「Default shelf」一栏。帮我在沙箱里打开这个插件的设置,把 Default shelf 填成「Sci-fi」再保存,看看控制台说了什么。先别改代码。', 240_000, {}, 'desktop/live-harness', undefined, undefined, undefined, {
-        clientCapabilities: ['plugin.sandbox'],
+        clientCapabilities: ['plugin.sandbox', 'plugin.sandbox-v2'],
         phone: { ns: 'plugin', respond: (b) => (['read', 'type', 'click', 'press', 'scroll', 'space', 'files', 'settings'].includes(b.op) ? act(b.op, b.args || {}) : b.op === 'stop' ? { ok: true, text: '{"stopped":true}' } : { ok: true, text: JSON.stringify(status()) }) },
       });
       const claimed = ev.clientCmds.filter((c) => c.claimed);
@@ -8417,7 +8417,7 @@ Then reply with only the command output.`,
         return { ok: true, text: JSON.stringify({ ...status(), action: { did: op === 'read' ? 'read 4 element(s)' : op === 'click' ? 'clicked' : op, target: a.target ? `target ${a.target}` : '', outline: op === 'read' ? OUTLINE : '', newLogs: picked ? [{ level: 'log', text: 'imported 12 books from Goodreads' }] : [], newNotices: [] } }) };
       };
       const ev = await run(`live-sbx-pending-${Date.now()}`, 'reading-log 插件已经在沙箱里跑着了。在沙箱里跑一下它的 import-books 命令,它会弹一个选来源的框,选 Goodreads,然后告诉我导入了多少本。先别改代码。', 240_000, {}, 'desktop/live-harness', undefined, undefined, undefined, {
-        clientCapabilities: ['plugin.sandbox'],
+        clientCapabilities: ['plugin.sandbox', 'plugin.sandbox-v2'],
         phone: { ns: 'plugin', respond: (b) => (b.op === 'command' ? { ok: true, text: JSON.stringify({ ...status(), command: { pending: true } }) } : ['read', 'type', 'click', 'press', 'scroll', 'space', 'files', 'settings'].includes(b.op) ? act(b.op, b.args || {}) : b.op === 'stop' ? { ok: true, text: '{"stopped":true}' } : { ok: true, text: JSON.stringify(status()) }) },
       });
       const claimed = ev.clientCmds.filter((c) => c.claimed);
