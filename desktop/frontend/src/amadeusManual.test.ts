@@ -62,7 +62,8 @@ describe('Amadeus 使用手册', () => {
     for (const [name, md] of [['zh', ZH], ['en', EN]] as const) {
       expect(md.length, `${name} 手册过短`).toBeGreaterThan(8000)
       // ⚠️ 别把 'placeholder' 一词列进来:那是英文界面里真实存在的名词(输入框占位符),手册要讲它。
-      expect(/\bTODO\b|\bFIXME\b|\bTBD\b|待补|^# placeholder$/im.test(md), `${name} 手册里还留着占位标记`).toBe(false)
+      // `@todo` 是笔记里的标记写法(2026-11-15,没日期也进待办清单),不是占位 —— 前面紧贴 `@` 的不算。
+      expect(/(?<!@)\bTODO\b|\bFIXME\b|\bTBD\b|待补|^# placeholder$/im.test(md), `${name} 手册里还留着占位标记`).toBe(false)
     }
   })
 

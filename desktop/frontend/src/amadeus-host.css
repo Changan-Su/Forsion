@@ -1611,7 +1611,7 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 .amx-cal-mweek { display: grid; grid-template-columns: repeat(7, 1fr); }
 .amx-cal-mcell { border-right: 1px solid var(--amx-cal-line, var(--border)); border-bottom: 1px solid var(--amx-cal-line, var(--border)); padding: 4px; display: flex; flex-direction: column; gap: 2px; min-width: 0; overflow: hidden; }
 .amx-cal-mnum { font-size: var(--ui-font-meta, 12px); color: var(--text-muted); align-self: flex-start; padding: 1px 5px; }
-.amx-cal-mcell.today .amx-cal-mnum { background: var(--action-fill, var(--accent-ink, #6c5ce7)); color: var(--on-action, var(--on-accent-ink, #fff)); border-radius: var(--radius-pill, 999px); }
+.amx-cal-mcell.today .amx-cal-mnum { background: var(--cal-signal); color: var(--cal-on-signal); border-radius: var(--radius-pill, 999px); }
 /* 事件块与芯片(2026-10-16 方向 1「浅色块」,Notion Calendar 那种):不描边、不加阴影;底 = 事件色 15%(暗 24%)混卡片底,
  * 左边 3px 色条上下各缩 3px(画在背景层上 —— ::before/::after 是拉伸时长的热区),字 = 事件色 48%(暗 40%)混正文色。
  * 选中 = 实心事件色 + 白字 + 同色投影 —— 这里与 DESIGN「选中用 1.5px 主色带」不同,是用户选定的例外(DESIGN §6 有记)。
@@ -1658,7 +1658,8 @@ html.dark .amx-cal-chip-ev, html.dark .amx-cal-event {
 /* 悬停时「点下去会建在哪」(默认 1 小时)与按住拖出时的预览块:命令式定位,默认隐藏,不挡指针。 */
 .amx-cal-making { position: absolute; display: none; z-index: 6; box-sizing: border-box; border-radius: var(--radius-sm, 6px); background: var(--amx-event-color); color: #fff; box-shadow: 0 2px 8px color-mix(in srgb, var(--amx-event-color) 35%, transparent); padding: 3px 8px; font-size: var(--ui-font-caption, 11px); line-height: 1.3; font-weight: 600; font-variant-numeric: tabular-nums; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; pointer-events: none; }
 .amx-cal-thead2 { position: sticky; top: 0; z-index: 8; background: var(--bg); border-left: 1px solid var(--amx-cal-line, var(--border)); border-bottom: 1px solid var(--amx-cal-line, var(--border)); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; }
-.amx-cal-thead2.today .amx-cal-tdate { color: var(--accent-ink, var(--accent, #6c5ce7)); }
+.amx-cal-thead2.today { background: color-mix(in srgb, var(--cal-signal) 8%, transparent); }
+.amx-cal-thead2.today .amx-cal-tdate { color: var(--cal-signal); font-weight: 700; }
 .amx-cal-tdow { font-size: var(--ui-font-caption, 11px); color: var(--text-muted); }
 .amx-cal-tdate { font-size: var(--ui-font-body, 13px); font-weight: 600; }
 .amx-cal-allday2 { position: sticky; top: 40px; z-index: 7; background: var(--bg); border-left: 1px solid var(--amx-cal-line, var(--border)); border-bottom: 1px solid var(--amx-cal-line, var(--border)); padding: 2px 3px; display: flex; flex-direction: column; gap: 2px; }
@@ -1871,13 +1872,15 @@ textarea.amx-cal-card-title { display: block; resize: none; field-sizing: conten
 .amx-mini-day.band-start { border-radius: 99px 0 0 99px; }
 .amx-mini-day.band-end { border-radius: 0 99px 99px 0; }
 .amx-mini-day.band-start.band-end { border-radius: 99px; }
-.amx-mini-day.today, .amx-mini-day.today:hover { --amx-mini-dot: var(--action-fill, var(--accent-ink, #6c5ce7)); color: var(--on-action, var(--on-accent-ink, #fff)); font-weight: 600; }
+.amx-mini-day.today, .amx-mini-day.today:hover { --amx-mini-dot: var(--cal-signal); color: var(--cal-on-signal); font-weight: 600; }
 
 /* Calendar 当前时间线(任务2):主题色横线在每个 daycol(已 position:relative)各画一段,
  * 相邻列拼成横跨整个日历的一条线;圆点只在「今天」列。时刻标签钉在左栏时间轴 gutter(sticky,横滚不走)。 */
-.amx-cal-nowline { position: absolute; left: 0; right: 0; height: 0; border-top: 2px solid var(--accent-ink, var(--accent, #6c5ce7)); z-index: 2; pointer-events: none; }
-.amx-cal-nowline.today::before { content: ''; position: absolute; left: -4px; top: -4px; width: 7px; height: 7px; border-radius: 50%; background: var(--accent, #6c5ce7); }
-.amx-cal-nowlabel { position: absolute; right: 4px; transform: translateY(-50%); font-size: var(--ui-font-caption, 11px); font-weight: 600; color: var(--accent-ink, var(--accent, #6c5ce7)); background: var(--bg); padding: 0 3px; border-radius: 3px; white-space: nowrap; pointer-events: none; }
+.amx-cal-nowline { position: absolute; left: 0; right: 0; height: 0; border-top: 2px solid var(--cal-signal); z-index: 2; pointer-events: none; }
+/* 只有今天那一格的线是实的,其它天淡:一眼看出哪天是今天(方案 2026-11-15 ④) */
+.amx-cal-nowline:not(.today) { opacity: 0.35; }
+.amx-cal-nowline.today::before { content: ''; position: absolute; left: -4px; top: -4px; width: 7px; height: 7px; border-radius: 50%; background: var(--cal-signal); }
+.amx-cal-nowlabel { position: absolute; right: 4px; transform: translateY(-50%); font-size: var(--ui-font-caption, 11px); font-weight: 600; color: var(--cal-signal); background: var(--bg); padding: 0 3px; border-radius: 3px; white-space: nowrap; pointer-events: none; }
 
 /* ── ToDo List View ── */
 /* 待办清单(左栏)。行几何三条纪律,别退回去:
@@ -2392,3 +2395,9 @@ textarea.amx-cal-card-title { display: block; resize: none; field-sizing: conten
 html.dark .amx-cal-chip-ev.selected, html.dark .amx-cal-event.selected { --amx-ev-fill: var(--amx-event-color); color: #fff; }
 /* 7.12:月视图跨天条在一周一行里只在头一段写标题(当周第一格例外),后面的段只画色块。 */
 .amx-cal-mcell:not(:first-child) > .amx-cal-chip-ev.continues-left:not(.amx-cal-draft) { color: transparent; }
+
+/* ── 日历提示色(方案 2026-11-15 ④):「现在」线、今天的日期用它。彩色主题 = 主题色;经典 / 墨色两套没有色相,
+   用一个柔红(和过期待办的红不是同一个,免得「现在」像报错)。日历插件在 .fc-root 上定义同名同值的一份。 */
+:root { --cal-signal: var(--accent-ink, var(--accent, #6c5ce7)); --cal-on-signal: var(--on-accent-ink, #fff); }
+:root[data-skin='cream'], :root[data-skin='ink'] { --cal-signal: #c8553d; --cal-on-signal: #fff; }
+:root.dark[data-skin='cream'], :root.dark[data-skin='ink'] { --cal-signal: #e07a62; --cal-on-signal: #fff; }

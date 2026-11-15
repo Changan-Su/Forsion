@@ -809,8 +809,29 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
       if (!ops.transform(prefix)) slashTurnFailed(item.label)
       return
     }
-    ops.consume() // 返回值是「整篇是否空」,统一实例用不着:空块判定在 insertMd 里按当前顶层块算
     const S = SLASH_SENTINELS
+    // 方案 2026-11-15 ⑤:写一个 `@`,让编辑器自己的 @ 面板接着弹(日期 / 「不设日期」= @todo)。前面紧贴着字就先补个空格,
+    // 否则 `字@` 不满足 @ 的触发条件(AT_BLOCKED_BEFORE),面板不出、标记也不认。
+    const typeAt = (): void => {
+      getInstance()?.action((ctx) => {
+        const view = ctx.get(editorViewCtx)
+        const { $from } = view.state.selection
+        const before = $from.parent.textBetween(0, $from.parentOffset, undefined, '\ufffc')
+        view.dispatch(view.state.tr.insertText(before && !/\s$/.test(before) ? ' @' : '@').scrollIntoView())
+        view.focus()
+      })
+    }
+    if (item.scaffold === S.taskList) {
+      // 先转成方框行(单事务,和「待办」同一条路),再写 @
+      if (!ops.transform(PREFIX_TRIGGERS['- [ ] '])) { slashTurnFailed(item.label); return }
+      typeAt()
+      return
+    }
+    ops.consume() // 返回值是「整篇是否空」,统一实例用不着:空块判定在 insertMd 里按当前顶层块算
+    if (item.scaffold === S.event) {
+      typeAt()
+      return
+    }
     if (item.scaffold === S.template) {
       // 模板库住在宿主壳里(vault 的 templates/),编辑器不认识它 —— 照 v3 的老规矩发事件,
       // 由 amadeusOverlays 的 TemplatePicker 接。**必须带上本篇 path**:v4 没有块 id,选择器

@@ -1986,7 +1986,7 @@ Everything about time in Amadeus — the to-do list, the calendar, reminders —
 The time views do not scan your vault looking for tasks; they honour this one explicit mark. Write an `@` time mark on any line of a note and that line joins the time views, and the line itself decides where it goes:
 
 - A line with a Markdown checkbox (`- [ ] …`) → the "To-do list".
-- A line without a checkbox → the calendar, as an event.
+- A line without a checkbox → the calendar, as an event (calendar only, not the to-do list).
 - Any line carrying `@remind:` → a notification at that moment; it stacks on top of either of the above.
 
 Four forms; what lands in your text is always this canonical shape:
@@ -1997,9 +1997,11 @@ Four forms; what lands in your text is always this canonical shape:
 | `@2026-09-01T14:30` | A point in time |
 | `@2026-09-01T09:00/2026-09-01T10:30` | A range |
 | `@remind:2026-09-01T14:30` | Remind me then |
+| `@todo` | No date; to-do list only, under "Unscheduled" (checkbox lines only) |
 
 ```markdown
 - [ ] Submit the weekly report @2026-09-01
+- [ ] Buy groceries @todo
 Team meeting @2026-09-01T14:30
 Health check @2026-05-06 @remind:2026-05-06T08:00
 ```
@@ -2013,7 +2015,8 @@ The rest of the rules:
 - Anything inside a fenced code block is never a mark.
 - Impossible dates (`@2026-02-29`) are rejected.
 - A line that is nothing but the mark is skipped; a heading line may carry a mark itself.
-- What the time views show is the line with the `@` mark and any leading symbols (`-`, `>`, `#`) stripped off.
+- What the time views show is the line with the `@` mark and any leading symbols (`-`, `>`, `#`) stripped off; callout and fold titles also lose the leading marker such as `[!fold]-`.
+- Give an `@todo` task a date (in its task card, or by dragging it to a day) and `@todo` is replaced by that date.
 - Every entry remembers which note it came from and the nearest heading above it; one click takes you back there.
 - Marks in note text are read by the desktop app — on web and mobile there are no note-driven to-dos, events or reminders.
 
@@ -2022,6 +2025,8 @@ If you are unsure whether a line was picked up, look where it should have gone: 
 ### Type @ to write a date: the suggestion panel
 
 You do not have to type a full date. Type `@` in a note and the mention panel opens; as soon as what you type after it parses as a date or time, two extra rows appear above the page candidates — "Schedule" and "Reminder" — with the date they resolved to in grey on the right. Press Enter on one and the canonical form is inserted.
+
+On a checkbox line, typing `@` also offers "No date" at the top; pick it to write `@todo`. The slash menu has two shortcuts: "Add to task list" turns the line into a checkbox and then opens this panel; "Event" only inserts `@` and opens the dates, so the line goes to the calendar only. The plain "To-do list" item still inserts just a checkbox, which stays out of the list.
 
 | You type | Date inserted |
 |---|---|
@@ -3425,7 +3430,7 @@ The time views (Calendar and To-Do List) take exactly two kinds of thing: rows o
 
 | Symptom | Why | What to do |
 |---|---|---|
-| You wrote `- [ ]` in a note and it is not in the To-Do List | A checkbox with no `@` time mark appears in no view — that is a deliberate gate, not an omission | Write `- [ ] Send the weekly report @2026-09-01`; typing `@` offers suggestions |
+| You wrote `- [ ]` in a note and it is not in the To-Do List | A checkbox with no `@` time mark appears in no view — that is a deliberate gate, not an omission | Write `- [ ] Send the weekly report @2026-09-01`, or `- [ ] Send the weekly report @todo` to leave it undated; typing `@` offers suggestions, and "Add to task list" in the slash menu does it in one step |
 | You added `@` and it still does not appear | `@` must be at the start of a line or after a space, the date must be fully written out (`@2026-09-01`, `@2026-09-01T14:30`), and marks inside code blocks never count | Insert it from the "Schedule" row of the `@` suggestion panel — the format is then always right |
 | The line reached the calendar but not the To-Do List | An `@` line with no checkbox is a calendar event, not a to-do | Add `- [ ] ` at the start of the line |
 | A to-do dated far ahead is nowhere to be seen | "Later" and "Completed" start collapsed | Click the section header to expand it |
