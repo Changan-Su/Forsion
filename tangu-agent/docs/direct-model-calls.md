@@ -33,6 +33,8 @@
 
 下表「+ 余量」= 正文上限 + `thinkingHeadroom`；「+ Claude 余量」= 只有 Claude 自适应族另加 16384。
 
+本来就接了 `thinkingHeadroom` 的几处（输入建议、Historian 独立判官、Dream、外部导入、画像搬移）在 Claude 自适应族上也从 +4096 变成 +16384。按实际产出计费，上限大了不多花钱；只是思考真那么长时，这些调用会多等一会儿才出结果，而不是截断后报错。
+
 落到这两处：
 
 - **Historian 独立判官**：正文上限 1600；原生思考的模型发出去是 5696。
@@ -66,7 +68,7 @@ GPT 6 Luna 中档实测：判官一次调用的输出（含推理）最多 344 t
 | 子代理 | `services/subAgent.ts` | agent 定义的档 → 父 run 的档 → medium | 不设 | 同上 |
 | 自我脑暴的分身 | `services/selfBrainstorm.ts` | 跟父 run 同档（缺省 medium）。档位不同前缀缓存就对不上。缓存路由键也照主循环给（`cacheKey` 会话 + `agentId` 本 run 的 agent），见表后「接在主循环上下文后面的调用」 | 固定值 | 只是给主循环的参考意见 |
 | Historian 分身判官（`fork` 模式） | `services/localHistorian.ts` `forkJudge` | 跟父 run 同档（缺省 medium），理由同上；缓存路由键同上（`agentId` 由主循环收尾时放进快照） | 1600 + Claude 余量（上限不在前缀里，不影响缓存） | 同下一行；失败时回落到独立判官 |
-| 输入建议（客户端开了才调；一轮最多一次） | `services/promptSuggestion.ts` `suggestNextPrompt` ← `POST /agent/sessions/:id/suggest` | 跟父 run 同档（缺省 medium），理由同上：这功能的成本只有「多读一次缓存」，前提就是前缀对得上 | 120，原生思考的模型另加 4096 | 输入框里一句灰字，用户看得见、不按 Tab 就不生效；不合规（多行 / 太长 / 被截断 / `NONE`）一律当没有 |
+| 输入建议（客户端开了才调；一轮最多一次） | `services/promptSuggestion.ts` `suggestNextPrompt` ← `POST /agent/sessions/:id/suggest` | 跟父 run 同档（缺省 medium），理由同上：这功能的成本只有「多读一次缓存」，前提就是前缀对得上 | 120 + 余量（Claude 自适应族上是 16504） | 输入框里一句灰字，用户看得见、不按 Tab 就不生效；不合规（多行 / 太长 / 被截断 / `NONE`）一律当没有 |
 | **Historian 独立判官**（缺省模式；辅助模式下也由它出标题 / 摘要 / 进化记录提名） | `services/historianSession.ts` ← `localHistorian.ts` `runHistorianForSession` | **medium**（2026-10-06 起；此前没传 = 关） | 1600 + 余量 | 记忆候选进收件箱（Dream 还要对来源）；**项目级候选和进化记录提名里不带风险字眼的直接写进长期内容**；日志、摘要、标题 |
 | 团队讨论的收尾总结 | 同一个函数，`task: 'team-summary'` ← `services/groupChat.ts` | 关（没传） | 1200 + Claude 余量 | 只是给用户看的一段总结，失败不影响团队那一轮 |
 | 首帧标题（及标题 / 摘要不是对话语言时的改写） | `localHistorian.ts` `onUserRunStart` / `inConversationLanguage` | low | 600 + Claude 余量 | 标题不贴切 |
