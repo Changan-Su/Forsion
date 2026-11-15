@@ -28,9 +28,9 @@
    "snap:退格3": {"status":"same"}
   },
   "K07": {
-   "snap:续行": {"status":"pending","diff":"content"},
-   "snap:空行": {"status":"pending","diff":"content"},
-   "snap:空行再回车": {"status":"pending","diff":"content"}
+   "snap:续行": {"status":"keep","diff":"content","reason":"引用里回车照 Notion 起新段,存盘段与段之间多一行「>」(跟回车规则一起,2026-11-15 定)。"},
+   "snap:空行": {"status":"keep","diff":"content","reason":"引用里回车照 Notion 起新段,存盘段与段之间多一行「>」(跟回车规则一起,2026-11-15 定)。"},
+   "snap:空行再回车": {"status":"keep","diff":"content","reason":"引用里回车照 Notion 起新段,存盘段与段之间多一行「>」(跟回车规则一起,2026-11-15 定)。"}
   },
   "K08": {
    "snap:Tab后": {"status":"same"},
@@ -165,17 +165,17 @@
    "snap:Tab后": {"status":"pending","diff":"content"}
   },
   "K25": {
-   "snap:回车一次": {"status":"pending","diff":"content"},
-   "snap:回车两次": {"status":"pending","diff":"content"},
-   "snap:退格七次后": {"status":"pending","diff":"content"},
-   "trace:9:Backspace×7": {"status":"pending","diff":"content"}
+   "snap:回车一次": {"status":"keep","diff":"content","reason":"回车照 Notion:回车新起一块,存盘两块之间空一行(2026-11-15 定);Obsidian 只写一个换行。Markdown 里两块只能靠空行分开,两者只能选一个。退格的逐键记录跟着这条不同。"},
+   "snap:回车两次": {"status":"keep","diff":"content","reason":"回车照 Notion:回车新起一块,存盘两块之间空一行(2026-11-15 定);Obsidian 只写一个换行。Markdown 里两块只能靠空行分开,两者只能选一个。退格的逐键记录跟着这条不同。"},
+   "snap:退格七次后": {"status":"keep","diff":"content","reason":"回车照 Notion:回车新起一块,存盘两块之间空一行(2026-11-15 定);Obsidian 只写一个换行。Markdown 里两块只能靠空行分开,两者只能选一个。退格的逐键记录跟着这条不同。"},
+   "trace:9:Backspace×7": {"status":"keep","diff":"content","reason":"回车照 Notion:回车新起一块,存盘两块之间空一行(2026-11-15 定);Obsidian 只写一个换行。Markdown 里两块只能靠空行分开,两者只能选一个。退格的逐键记录跟着这条不同。"}
   },
   "K26": {
    "snap:退格七次后": {"status":"pending","diff":"eol"},
    "trace:2:Backspace×7": {"status":"keep","diff":"content","reason":"空待办项按一次退格就整个清空(连同 - [ ] 标记),不一个字符一个字符删。"}
   },
   "K27": {
-   "snap:标题末回车": {"status":"pending","diff":"content"}
+   "snap:标题末回车": {"status":"keep","diff":"content","reason":"标题末回车照 Notion 新起一块,存盘标题和正文之间空一行(跟回车规则一起,2026-11-15 定)。"}
   },
   "K28": {
    "snap:缩进后": {"status":"pending","diff":"content"},
@@ -320,7 +320,7 @@
    "snap:粘贴后": {"status":"pending","diff":"content"}
   },
   "C11": {
-   "snap:粘贴后": {"status":"pending","diff":"content"}
+   "snap:粘贴后": {"status":"keep","diff":"content","reason":"粘贴多行纯文字照 Notion 每行一块,存盘行与行之间空一行(跟回车规则一起,2026-11-15 定)。"}
   },
   "C12": {
    "snap:双击": {"status":"same"},
