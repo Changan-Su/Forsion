@@ -352,9 +352,10 @@ async function main() {
     check('④ 点「装」后装上了', installed?.result?.ok === true, JSON.stringify(installed?.result?.error || '').slice(0, 200))
     // 工作台里 DSH 自己的插件页(只截图,和第三轮方案图 round3-3 对照):装上的 genui 在列表里
     const toPlugins = await guestClickText(app, '/^(插件|Plugins)$/')
-    await sleep(2500)
+    // DSH 的插件页先画骨架再取列表(第 20 轮 2.5 秒时还是骨架):等列表出来
+    const pluginPage = (await until(async () => { const t = (await guestEval(app, 'document.body.innerText')).value || ''; return /genui/i.test(t) ? t : null }, 20_000, 500)) || ((await guestEval(app, 'document.body.innerText')).value || '')
+    await sleep(500)
     await shot(win, '26b-dsh-plugin-page')
-    const pluginPage = (await guestEval(app, 'document.body.innerText')).value || ''
     check('④ 工作台里 DSH 自己的插件页列着刚装的 genui', /genui/i.test(pluginPage), toPlugins ? `点在 ${toPlugins.tag} (${toPlugins.x},${toPlugins.y})` : '没找到「插件」入口')
     // Harness 卡「DSH 插件」变 1 个
     await openAgents(win); await rosterRow(win, AGENT).click(); await sleep(1500)
