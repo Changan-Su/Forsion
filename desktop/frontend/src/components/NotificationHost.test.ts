@@ -20,9 +20,44 @@ beforeEach(() => {
   useNotifications.setState({ prefs: { enabled: true, osEnabled: false, events: {} }, paused: false })
   host = document.createElement('div'); document.body.append(host); root = createRoot(host)
 })
-afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals() })
+afterEach(async () => { vi.useRealTimers(); await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals() })
 
 const move = (target: EventTarget) => act(async () => { target.dispatchEvent(new PointerEvent('pointermove', { bubbles: true })) })
+// React 的 onPointerEnter / onMouseEnter 由冒泡的 pointerover / mouseover 合成,直接派 *enter 不触发。
+const fire = (target: EventTarget, events: Event[]) => act(async () => { for (const e of events) target.dispatchEvent(e) })
+const ptr = (type: string, pointerType: string) => new PointerEvent(type, { bubbles: true, pointerType, isPrimary: true })
+const mouse = (type: string) => new MouseEvent(type, { bubbles: true })
+/** 触屏 / 手写笔点一下卡片正文:先是指针事件,抬手后浏览器补发兼容鼠标事件(mouseover → mouseenter …),之后没有配对的离开。 */
+const tapSequence = (pointerType: string): Event[] => [
+  ptr('pointerover', pointerType), ptr('pointerdown', pointerType), ptr('pointerup', pointerType), ptr('pointerout', pointerType),
+  mouse('mouseover'), mouse('mousemove'), mouse('mousedown'), mouse('mouseup'), mouse('click'),
+]
+
+it.each(['touch', 'pen'])('%s 点一下卡片不暂停计时,卡片照常到点消失(安卓真壳:点过之后卡片一直不走)', async (pointerType) => {
+  vi.useFakeTimers()
+  notifyApp({ text: 'tapped but ignored', level: 'info' }) // info 停留 5000ms
+  await act(async () => root.render(React.createElement(NotificationHost)))
+  await fire(host.querySelector('.ntf-text')!, tapSequence(pointerType))
+  expect(useNotifications.getState().paused, `${pointerType} 点按后挂上了暂停,且不会有离开事件来解除`).toBe(false)
+  await act(async () => { vi.advanceTimersByTime(5000) })
+  expect(useNotifications.getState().items, '点过的卡片没按时消失').toHaveLength(0)
+})
+
+it('鼠标悬停照旧暂停,移出后续走剩余时间', async () => {
+  vi.useFakeTimers()
+  notifyApp({ text: 'hovered', level: 'info' })
+  await act(async () => root.render(React.createElement(NotificationHost)))
+  const card = host.querySelector('.ntf-text')!
+  // 真实鼠标:指针事件与鼠标事件成对出现
+  await fire(card, [ptr('pointerover', 'mouse'), mouse('mouseover')])
+  expect(useNotifications.getState().paused).toBe(true)
+  await act(async () => { vi.advanceTimersByTime(20_000) })
+  expect(useNotifications.getState().items, '鼠标停在卡片上,卡片不该到点消失').toHaveLength(1)
+  await fire(card, [ptr('pointerout', 'mouse'), mouse('mouseout')])
+  expect(useNotifications.getState().paused).toBe(false)
+  await act(async () => { vi.advanceTimersByTime(5000) })
+  expect(useNotifications.getState().items).toHaveLength(0)
+})
 
 it('leaving the window and unmounting the host cannot leave notification timers paused', async () => {
   notifyApp({ text: 'first' })

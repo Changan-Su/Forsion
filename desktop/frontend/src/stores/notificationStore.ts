@@ -1,5 +1,5 @@
 /**
- * 右上角通知系统(升级自旧 appStore.toast):小卡片从右侧滑入、按序向下堆叠、hover 暂停、
+ * 右上角通知系统(升级自旧 appStore.toast):小卡片从右侧滑入、按序向下堆叠、鼠标悬停暂停、
  * error 常驻手动关;事件级开关 + 插件来源开关在设置「通知与状态栏」里管理(localStorage)。
  * 纯逻辑 store(无 DOM/i18n 依赖):文案由调用方(wiring / appStore.tr / 插件)传入;
  * 渲染在 components/NotificationHost(仅主窗 Root 挂载,与旧 toast-wrap 同决策)。
@@ -271,7 +271,7 @@ export const useNotifications = create<NtfState>((set, get) => {
       writePrefs(prefs)
     },
 
-    // hover 暂停:冻结全部在飞定时器记剩余;移出后续走剩余(下限 800ms,防恢复即消失)。
+    // 鼠标悬停暂停(NotificationHost 只在 pointerType === 'mouse' 时调;触屏点按不暂停):冻结全部在飞定时器记剩余;移出后续走剩余(下限 800ms,防恢复即消失)。
     pause: () => {
       if (get().paused) return
       set({ paused: true })

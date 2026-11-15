@@ -1,5 +1,5 @@
 /** 右上角通知堆叠宿主(升级自旧 .toast-wrap):framer-motion 右侧滑入/滑出 + layout 补位动画,
- *  hover 暂停计时,error 常驻手动关。位置钉在右栏图标条(36px dockview 标签条)之下;
+ *  鼠标悬停暂停计时(触屏 / 手写笔不暂停),error 常驻手动关。位置钉在右栏图标条(36px dockview 标签条)之下;
  *  仅主窗 Root 挂载(DetachedRoot/MiniRoot 沿旧决策不挂 app 级浮层)。 */
 import { useEffect, useRef } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
@@ -43,7 +43,15 @@ export function NotificationHost() {
     return () => document.removeEventListener('pointermove', onMove, true)
   }, [paused, items.length, resume])
   return (
-    <div ref={wrapRef} className={`ntf-wrap${inCalendar ? ' ntf-wrap-calendar' : ''}`} aria-live="polite" onMouseEnter={pause} onMouseLeave={resume}>
+    // 只有鼠标悬停才暂停:触屏 / 手写笔点一下卡片,浏览器会在抬手后补发兼容的 mouseover/mouseenter,却没有配对的离开
+    // (安卓真壳实测:点过一张卡片后,几张卡片一直挂在屏上盖住页面)。离开不分指针类型一律恢复,恢复本身是幂等的。
+    <div
+      ref={wrapRef}
+      className={`ntf-wrap${inCalendar ? ' ntf-wrap-calendar' : ''}`}
+      aria-live="polite"
+      onPointerEnter={(e) => { if (e.pointerType === 'mouse') pause() }}
+      onPointerLeave={resume}
+    >
       {/* popLayout:退场卡片立即让出布局位,下方卡片经 layout 补位。走查续八 8.2 / 8.5 A:进 180ms 从右沿 6px 滑进 + 淡入,
           出 160ms 淡出 + 右移 16px(同 base.css --toast-enter / exit-duration 那一套);layout 只补位置不补尺寸 ——
           以前补尺寸,退场卡被弹出流后宽度塌成内容最小宽,看到的是一边滑一边被横向压扁。anchorX="right":弹出流后贴着
