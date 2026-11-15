@@ -15,7 +15,7 @@
  *  11 (11-03)插件带的 Space 列得出来、启动就落在它上面;Ribbon 上没有内置 Space;沙箱 home 里没播种内置插件
  *  12 (11-03)在沙箱里动手:read 给出带引用的大纲 → type 填输入框 → click 按钮 → 回执里有插件新写的 console、
  *     弹出的提示和一张新截图(和上一张不同 = 不是旧帧);press Enter;files 备好路径后点 <input type=file> 直接拿到文件
- *  13 (11-15)read 报开关的 pressed / 只读框的 read-only;命令等自己弹的框 → 几秒内回 pending,在框里点完它跑完;
+ *  14 (11-15)read 报开关的 pressed / 只读框的 read-only;命令等自己弹的框 → 几秒内回 pending,在框里点完它跑完;
  *     目标被通知盖住 → 先关通知再点;settings 打开设置窗口(s 引用、插件自绘面板),window "settings" 在里面动手、截图、关掉
  *  10 (`--focus`,仅 macOS,会真把窗口叫到前面几秒)「打开沙箱窗口」第一次、以及被别的窗口盖住之后再点一次,
  *     沙箱窗口都排在屏幕最前(读系统窗口列表的前后顺序)
@@ -444,31 +444,31 @@ async function main() {
     const sw = await act('space', { space: 'Fixture shelf 2' })
     check('12f 改了 space.json → 重载后还在这个插件 Space 上;按显示名字也切得过去', !!back && sw.r.ok && !sw.r.error, JSON.stringify({ active: (await status())?.activeSpace, space: sw.r.error || sw.a?.target }))
 
-    // ── 13 (11-15)看得出状态、被通知盖住先关掉、命令等自己的框不算没起来、设置窗口够得着 ──
+    // ── 14 (11-15)看得出状态、被通知盖住先关掉、命令等自己的框不算没起来、设置窗口够得着 ──
     const states = await act('read', {})
     const stateText = states.a?.outline || ''
-    check('13a read:开关按钮报按没按下,只读的框报 read-only',
+    check('14a read:开关按钮报按没按下,只读的框报 read-only',
       /\[e\d+\] button "Compact view" \(not pressed[,)]/.test(stateText) && /\[e\d+\] input "Locked field" \(read-only/.test(stateText), stateText.slice(0, 800))
     await act('click', { target: 'Compact view' })
     const toggled = (await act('read', {})).a?.outline || ''
-    check('13b 点了开关之后再读 → (pressed)', /button "Compact view" \(pressed[,)]/.test(toggled), toggled.slice(0, 800))
+    check('14b 点了开关之后再读 → (pressed)', /button "Compact view" \(pressed[,)]/.test(toggled), toggled.slice(0, 800))
     const t0 = Date.now()
     const waiting = await exec('command', { command: 'fixture-pick' })
     const waitMs = Date.now() - t0
-    check('13c 命令在等自己弹的框:几秒内回「开始了、还在跑」(command.pending),不报还在启动',
+    check('14c 命令在等自己弹的框:几秒内回「开始了、还在跑」(command.pending),不报还在启动',
       waiting.ok && !waiting.error && JSON.parse(waiting.text).command?.pending === true && waitMs < 6000, JSON.stringify({ ms: waitMs, error: waiting.error, command: waiting.text && JSON.parse(waiting.text).command }))
     const picked2 = await act('click', { target: 'Pick Dune' })
-    check('13d 接着在它弹的框里点 → 命令跑完', picked2.a?.newLogs?.some((l) => l.text === 'PICKED_FROM_DIALOG'), JSON.stringify(picked2.r.error || picked2.a))
+    check('14d 接着在它弹的框里点 → 命令跑完', picked2.a?.newLogs?.some((l) => l.text === 'PICKED_FROM_DIALOG'), JSON.stringify(picked2.r.error || picked2.a))
     await exec('command', { command: 'fixture-toast' })
     await until(async () => (await status())?.notices?.some((n) => n.text.includes('Covering toast')), 5000)
     const underToast = await act('click', { target: 'Under toast' })
-    check('13e 目标被通知盖住 → 先关掉通知再点,点到的是目标,回执说了关过通知',
+    check('14e 目标被通知盖住 → 先关掉通知再点,点到的是目标,回执说了关过通知',
       underToast.a?.newLogs?.some((l) => l.text === 'UNDER_TOAST_CLICKED') && /notification was covering it/.test(underToast.a?.did || '') && /Covering toast/.test(underToast.a?.target || ''),
       JSON.stringify(underToast.r.error || underToast.a))
     const noSettings = await act('read', { window: 'settings' })
     const opened = await act('settings', {})
     const settingsText = opened.a?.outline || ''
-    check('13f settings:设置窗口没开时按 window 读 → 说没开;settings 打开插件详情页,大纲里是 s 引用、看得到插件自绘面板,带截图',
+    check('14f settings:设置窗口没开时按 window 读 → 说没开;settings 打开插件详情页,大纲里是 s 引用、看得到插件自绘面板,带截图',
       /settings window is not open/.test(noSettings.r.error || '') && opened.r.ok && !opened.r.error && /\[s\d+\] input "Fixture API key"/.test(settingsText) && /^data:image\/jpeg/.test(opened.r.image || ''),
       JSON.stringify({ no: noSettings.r.error, err: opened.r.error, did: opened.a?.did, outline: settingsText.slice(0, 600) }))
     saveShot('sandbox-settings.jpg', opened.r.image)
@@ -476,13 +476,13 @@ async function main() {
     const typedKey = await act('type', { target: keyRef || 'Fixture API key', text: 'abc123' })
     const savedKey = await act('click', { target: 'Save key', window: 'settings' })
     const wrongWin = await act('click', { target: keyRef || 's1', window: 'main' })
-    check('13g 在设置窗口里动手:s 引用自己找到那扇窗,window "settings" 按字找;插件 console 回来了;s 引用拿到主窗去点 → 报错不乱点',
+    check('14g 在设置窗口里动手:s 引用自己找到那扇窗,window "settings" 按字找;插件 console 回来了;s 引用拿到主窗去点 → 报错不乱点',
       typedKey.r.ok && !typedKey.r.error && /settings window/.test(typedKey.a?.did || '') && savedKey.a?.newLogs?.some((l) => l.text === 'SETTINGS_SAVED abc123') && /comes from the settings window/.test(wrongWin.r.error || ''),
       JSON.stringify({ typed: typedKey.r.error || typedKey.a?.did, saved: savedKey.r.error || savedKey.a, wrong: wrongWin.r.error }))
     const shotSettings = await exec('screenshot', { window: 'settings' })
     const closedSettings = await act('settings', { close: true })
     const afterClose = await act('read', { window: 'settings' })
-    check('13h 设置窗口截图;close 关掉之后再按 window 读 → 说没开', /^data:image\/jpeg/.test(shotSettings.image || '') && /closed the settings window/.test(closedSettings.a?.did || '') && /not open/.test(afterClose.r.error || ''),
+    check('14h 设置窗口截图;close 关掉之后再按 window 读 → 说没开', /^data:image\/jpeg/.test(shotSettings.image || '') && /closed the settings window/.test(closedSettings.a?.did || '') && /not open/.test(afterClose.r.error || ''),
       JSON.stringify({ shot: (shotSettings.image || '').slice(0, 30), shotErr: shotSettings.error, closed: closedSettings.r.error || closedSettings.a?.did, after: afterClose.r.error }))
 
     // ── 6 对话卡 ──
