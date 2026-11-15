@@ -461,6 +461,7 @@
     "e2e:humancal": "node scripts/human-calendar.e2e.cjs",
     "check:astryxscope": "node scripts/astryx-scope.check.cjs",
     "check:astryxhas": "node scripts/astryx-has.check.cjs",
+    "check:nativetheme": "node scripts/native-theme-motion.check.cjs",
     "check:restylescope": "node scripts/restyle-scope.check.cjs",
     "check:todo": "node scripts/todo-view.check.cjs",
     "check:homeglyph": "node scripts/home-glyph.check.cjs",
