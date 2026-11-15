@@ -14,6 +14,12 @@
  *   ⑤ 整页重新载入时带着落点(重开工作台、DSH 重启都走这条),在两场之间来回切 8 次,每次都落在要的那场(DSH 自己恢复上次那场
  *      不能把落点盖回去)。
  *
+ *   ⑥(--approvals,审批 B)DSH 自己的审批:先在工作台装 @michengai/dsh-skills-manager@1.4.6(要重启 DSH);
+ *      Forsion 发的轮里提权写文件、create_skill 都弹 Forsion 的审批卡,批准 / 拒绝都管用;工作台发的轮审批留在工作台,Forsion 的托盘
+ *      里什么都没有;两边同时有待批的,各回各的。
+ *   ⑦(--approvals-fallback)故意让桥的自检对不上(DSH2FORSION_APPROVAL_EVENT 改事件名):Forsion 的轮不接管,托盘里是
+ *      「DSH 在工作台里等你批准」+「打开工作台」,点了落到那场、在工作台里批,Forsion 那一轮接着跑完、提示撤掉。
+ *
  * 假模型:常驻 DSH 由插件起、环境走白名单(不带 provider key),所以地址和 key 写进隔离 DSH 目录的 .env —— 和用户自己配 DSH 是同一层。
  *
  * 用法:先 npm run build(桌面)+ tangu-agent 的 npm run build + DSH2Forsion 的 npm run build;
@@ -34,6 +40,8 @@ const ROOT = path.resolve(__dirname, '..')
 const argv = process.argv.slice(2)
 const opt = (name) => { const i = argv.indexOf(`--${name}`); return i >= 0 ? argv[i + 1] : '' }
 const PLUGIN = opt('plugin'), RUNTIME = opt('runtime'), ROOT_ARG = opt('root'), HOLD = argv.includes('--hold')
+const MODE = argv.includes('--approvals-fallback') ? 'fallback' : argv.includes('--approvals') ? 'approvals' : 'full'
+const RENAMED_EVENT = 'approval/request-renamed-by-e2e'
 if (!PLUGIN || !RUNTIME || !ROOT_ARG) { console.error('用法见文件头'); process.exit(2) }
 for (const f of ['out/main/main.js', '../tangu-agent/dist/standalone/main.js']) if (!fs.existsSync(path.join(ROOT, f))) { console.error(`缺 ${f} —— 先 build`); process.exit(2) }
 if (!fs.existsSync(path.join(PLUGIN, 'tangu-plugins/dsh2forsion/dist/index.js'))) { console.error('--plugin 要指向 DSH2Forsion 构建好的 plugin/'); process.exit(2) }
@@ -55,14 +63,37 @@ const VERSION = fs.readdirSync(path.join(RUNTIME, 'runtime')).find((v) => fs.exi
 const NODE = path.join(RUNTIME, 'node', fs.readdirSync(path.join(RUNTIME, 'node'))[0], 'bin', 'node')
 const BIN = path.join(RUNTIME, 'runtime', VERSION, 'node_modules/@deepseek-ai/dsh/lib/bin.js')
 const MARK = `WB-${1000 + Math.floor(Math.random() * 9000)}`
-const stub = { calls: 0, systems: [] }
+const stub = { calls: 0, systems: [], tools: new Map(), seq: 0 }
+// ⑥ / ⑦ 的剧本:「WRITE <名>」往工作区外写(沙箱拒)→ 带提权再写(DSH 要问审批)→ 按结果回 WROTE / NOT-WRITTEN;
+// 「SKILL <名>」→ create_skill(skills-manager 在 tools/pre-execute 里要问审批)→ 回 SKILL-DONE / SKILL-REFUSED
+const OUTSIDE = D('outside')
+const toolStep = (name, input, meta) => { const id = `toolu_e2e_${++stub.seq}`; stub.tools.set(id, meta); return { tool: { id, name, input } } }
+function approvalBrain(last, said) {
+  const results = Array.isArray(last.content) ? last.content.filter((b) => b.type === 'tool_result') : []
+  // 被取消的上一轮的工具结果会和新的一句并在同一条 user 消息里:新口令优先
+  if (results.length && !/(WRITE|SKILL) \S+/.test(said)) {
+    const r = results[results.length - 1]
+    const meta = stub.tools.get(r.tool_use_id)
+    if (!meta) return null
+    const out = (Array.isArray(r.content) ? r.content.map((x) => x.text || '').join(' ') : String(r.content || '')).slice(0, 100)
+    if (meta.kind === 'write' && meta.step === 1) return toolStep('write', { file_path: path.join(OUTSIDE, meta.name), content: meta.name, sandbox_permissions: 'danger-full-access', justification: 'e2e: retry the exact write the sandbox denied' }, { kind: 'write', name: meta.name, step: 2 })
+    if (meta.kind === 'write') return { text: `${r.is_error ? 'NOT-WRITTEN' : 'WROTE'} ${meta.name}: ${out}` }
+    if (meta.kind === 'skill') return { text: `${r.is_error ? 'SKILL-REFUSED' : 'SKILL-DONE'} ${meta.name}: ${out}` }
+  }
+  let m
+  if ((m = said.match(/WRITE (\S+)/))) return toolStep('write', { file_path: path.join(OUTSIDE, m[1]), content: m[1] }, { kind: 'write', name: m[1], step: 1 })
+  if ((m = said.match(/SKILL (\S+)/))) return toolStep('create_skill', { name: m[1], description: `E2E skill ${m[1]}`, body: `# ${m[1]}\nAn e2e skill.` }, { kind: 'skill', name: m[1] })
+  return null
+}
 // 假模型给 DSH 的脑子:工作台里说的那句回带记号的话,其余回 OK;记下每次的系统提示(看 genui 那一节进没进来)
 function dshBrain(body) {
   const sys = typeof body?.system === 'string' ? body.system : Array.isArray(body?.system) ? body.system.map((x) => x.text || '').join('\n') : ''
   stub.systems.push(sys)
   const msgs = body?.messages || []
   const last = msgs[msgs.length - 1] || {}
-  const said = (typeof last.content === 'string' ? last.content : (last.content || []).map((b) => b.text || '').join(' '))
+  const said = (typeof last.content === 'string' ? last.content : (last.content || []).filter((b) => b.type === 'text' || b.text).map((b) => b.text || '').join(' '))
+  const scripted = approvalBrain(last, said)
+  if (scripted) return scripted
   if (/from the workbench/i.test(said)) return { text: `Workbench heard you. ${MARK}` }
   if (/back in forsion/i.test(said)) { stub.sawWorkbenchLine = JSON.stringify(msgs).includes('One more line from the workbench'); return { text: `Back in Forsion. ${MARK}` } }
   if (/from the card/i.test(said)) return { text: `Card path heard you. ${MARK}` }
@@ -92,12 +123,15 @@ const server = http.createServer((req, res) => {
     if (withTools) stub.calls++
     const step = withTools ? dshBrain(body) : { text: 'check session' }
     const msg = { id: `msg_${stub.calls}`, type: 'message', role: 'assistant', model: body?.model || 'stub', stop_reason: null, stop_sequence: null }
-    if (!body?.stream) return json({ ...msg, content: [{ type: 'text', text: step.text }], stop_reason: 'end_turn', usage: { input_tokens: 10, output_tokens: 5 } })
+    const stop = step.tool ? 'tool_use' : 'end_turn'
+    if (!body?.stream) return json({ ...msg, content: step.tool ? [{ type: 'tool_use', ...step.tool }] : [{ type: 'text', text: step.text }], stop_reason: stop, usage: { input_tokens: 10, output_tokens: 5 } })
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' })
     const ev = (type, data) => res.write(`event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`)
     ev('message_start', { message: { ...msg, content: [], usage: { input_tokens: 10, output_tokens: 0 } } })
-    ev('content_block_start', { index: 0, content_block: { type: 'text', text: '' } }); ev('content_block_delta', { index: 0, delta: { type: 'text_delta', text: step.text } }); ev('content_block_stop', { index: 0 })
-    ev('message_delta', { delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 5 } })
+    if (step.tool) { ev('content_block_start', { index: 0, content_block: { type: 'tool_use', id: step.tool.id, name: step.tool.name, input: {} } }); ev('content_block_delta', { index: 0, delta: { type: 'input_json_delta', partial_json: JSON.stringify(step.tool.input) } }) }
+    else { ev('content_block_start', { index: 0, content_block: { type: 'text', text: '' } }); ev('content_block_delta', { index: 0, delta: { type: 'text_delta', text: step.text } }) }
+    ev('content_block_stop', { index: 0 })
+    ev('message_delta', { delta: { stop_reason: stop, stop_sequence: null }, usage: { output_tokens: 5 } })
     ev('message_stop', {}); res.end()
   })
 })
@@ -185,6 +219,166 @@ async function guestClickText(app, pattern) {
 const AGENT = '浣溪沙'
 const GENUI = 'dsh-genui@0.3.3'
 
+// ⑥ / ⑦ 的小工具:Forsion 对话里的审批托盘、工作台(客体网页)里 DSH 自己的审批卡
+const SKILLS_MANAGER = '@michengai/dsh-skills-manager@1.4.6'
+const sidebarTitle = (win, re) => win.locator('aside, nav, [class*="sidebar"], [class*="side"]').getByText(re).first()
+const trayState = (win) => win.evaluate(() => {
+  const b = document.querySelector('.t2c-apv')
+  if (!b) return { n: 0, kind: '', text: '', notice: '', action: '' }
+  return { n: Number(b.getAttribute('data-approval-tray')) || 0, kind: b.querySelector('.t2c-apv-body')?.getAttribute('data-tray-kind') || '', text: b.innerText.replace(/\s+/g, ' ').trim(),
+    notice: b.querySelector('[data-engine-notice]')?.innerText.replace(/\s+/g, ' ').trim() || '', action: b.querySelector('[data-engine-notice-action]')?.getAttribute('data-engine-notice-action') || '' }
+})
+const streamText = (win) => win.evaluate(() => document.querySelector('.t2-stream')?.innerText || '')
+// 上一轮刚答完时输入框可能还没放开:发出去后流里没出现这句就再发一次
+async function sendSure(win, text) {
+  const count = async () => (await streamText(win)).split(text).length - 1
+  const before = await count()
+  await sleep(1500)
+  await send(win, text)
+  if (await until(async () => (await count()) > before, 6_000, 300)) return true
+  await sleep(2000); await send(win, text)
+  return !!(await until(async () => (await count()) > before, 6_000, 300))
+}
+async function decideInTray(win, action) {
+  const btn = win.locator(`.t2c-apv .t2c-apv-body[data-tray-kind="approval"] .btn.${action === 'approve' ? 'primary' : 'danger'}`).first()
+  await btn.waitFor({ timeout: 30_000 })
+  await sleep(700) // 托盘按钮出现后 350ms 才接收点击(防误点)
+  await btn.click()
+}
+const guestPending = async (app) => (await guestEval(app, `document.querySelectorAll('[data-approval-key]').length`)).value || 0
+const guestText = async (app) => (await guestEval(app, 'document.body.innerText')).value || ''
+async function openInWorkbench(app, win, titleRe, landedText) {
+  await sidebarTitle(win, titleRe).click({ button: 'right' }); await sleep(600)
+  await win.getByText('在 DSH 工作台里打开', { exact: true }).first().click()
+  await until(async () => (await win.locator('[data-d2f="workbench"] webview').count()) > 0, 30_000, 500)
+  const notice = await until(async () => (await guestEval(app, `(() => { const b = [...document.querySelectorAll('button')].find((e) => /^(继续|Continue)$/.test((e.textContent || '').trim())); b?.click(); return !!b })()`)).value, 4_000, 500)
+  if (notice) await sleep(800)
+  return !!(await until(async () => (await guestText(app)).includes(landedText), 30_000, 700))
+}
+async function typeInWorkbench(app, text) {
+  await guestEval(app, `(() => { const ta = document.querySelector('textarea, [contenteditable="true"]'); ta?.focus(); return !!ta })()`)
+  return guestType(app, text)
+}
+// 像用户那样点页签(元素的 .click() 不切页签;客体网页藏着也收得到输入事件,所以要另核工作台真的在前面)
+async function toWorkbenchTab(win) {
+  await win.locator('.wb-tab', { has: win.locator('.wb-tab-name', { hasText: 'DSH 工作台' }) }).first().click()
+  return !!(await until(async () => (await win.locator('[data-d2f="workbench"] webview').first().isVisible().catch(() => false)), 5_000, 250))
+}
+const outside = (name) => fs.existsSync(path.join(OUTSIDE, name))
+const skillAt = (name) => fs.existsSync(path.join(R, 'dsh', 'skills', name))
+
+// ⑥ / ⑦:审批 B。进来时已在 Tangu 里新开了和「浣溪沙」(由 DSH 跑)的对话。
+async function approvalsWalk(app, win, guestLogs) {
+  const failLogs = async () => (await guestLogs()).slice(-12).join(' | ')
+  // A 那场:先聊一句,标题固定下来
+  check(`${MODE === 'fallback' ? '⑦' : '⑥'} 前置:和 DSH 聊一句`, await sendSure(win, 'Hello DSH, please say hello.') && !!(await until(async () => (await lastAsst(win)).includes(MARK), 90_000)), await lastAsst(win))
+
+  if (MODE === 'fallback') {
+    // ⑦ 自检对不上(事件名被改):Forsion 的轮不接管,托盘里是「DSH 在工作台里等你批准」+「打开工作台」
+    await sendSure(win, 'WRITE e2e-fallback.txt')
+    const noticed = await until(async () => { const t = await trayState(win); return t.notice ? t : null }, 60_000, 400)
+    await shot(win, '40-fallback-notice')
+    check('⑦ 自检对不上时 Forsion 的轮不接管:托盘里是「DSH 在工作台里等你批准」', !!noticed && /DSH 在工作台里等你批准/.test(noticed.notice) && noticed.kind === 'notice', JSON.stringify(noticed) + ' ' + await failLogs())
+    check('⑦ 提示带「打开工作台」按钮(插件登记的对话菜单项)', noticed?.action === 'open-in-workbench' && /打开工作台/.test(noticed.notice), JSON.stringify(noticed))
+    await sleep(700)
+    await win.locator('.t2c-apv [data-engine-notice-action]').first().click()
+    await until(async () => (await win.locator('[data-d2f="workbench"] webview').count()) > 0, 30_000, 500)
+    const notice = await until(async () => (await guestEval(app, `(() => { const b = [...document.querySelectorAll('button')].find((e) => /^(继续|Continue)$/.test((e.textContent || '').trim())); b?.click(); return !!b })()`)).value, 6_000, 500)
+    if (notice) await sleep(800)
+    const waiting = await until(async () => (await guestPending(app)) > 0, 30_000, 700)
+    await shot(win, '41-fallback-workbench')
+    check('⑦ 点「打开工作台」:落到这场,DSH 自己的审批卡在工作台里等着', !!waiting && (await guestText(app)).includes('WRITE e2e-fallback.txt'), await failLogs())
+    const clicked = await guestClickText(app, '/^允许一次$/')
+    const wrote = await until(async () => (await guestText(app)).includes('WROTE e2e-fallback.txt'), 60_000, 700)
+    check('⑦ 在工作台里批准:文件写上了', !!clicked && !!wrote && outside('e2e-fallback.txt'), clicked ? '' : '没找到「允许一次」')
+    await sidebarTitle(win, /^Hello DSH, please/).click(); await sleep(1500)
+    const finished = await until(async () => /WROTE e2e-fallback\.txt/.test(await lastAsst(win)), 30_000, 500)
+    const after = await trayState(win)
+    await shot(win, '42-fallback-done')
+    check('⑦ Forsion 那一轮接着跑完(没有无声停住),提示撤掉了', !!finished && !after.notice, `${await lastAsst(win)} | 托盘 ${JSON.stringify(after)}`)
+    return
+  }
+
+  // ⑥-0 在工作台里装 skills-manager(插件页走的远程方法 → 体检 → 放行),它要重启 DSH 才加载
+  check('⑥ 前置:工作台落在 A 那场', await openInWorkbench(app, win, /^Hello DSH, please/, MARK), await failLogs())
+  // skills-manager 1.4.6 带 koffi 的构建脚本;DSH 0.2.2 的 pnpm 11 对没批的构建脚本直接报错。和 test:approvals 一样先在组合里写明不跑它的构建
+  fs.writeFileSync(path.join(R, 'dsh/profiles/forsion/pnpm-workspace.yaml'), 'allowBuilds:\n  koffi: false\n')
+  const reqId = `ui-${Date.now()}`
+  void guestEval(app, `fetch('/api/pluginManager/installBundle', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ type: 'client-request', rpcId: '${reqId}', method: 'pluginManager/installBundle', payload: { args: { spec: '${SKILLS_MANAGER}', options: { enabled: true, requestId: '${reqId}' } } } }) }).then((r) => r.json()).then((j) => { window.__d2fInstall = j; return true })`)
+  const card = win.locator('[data-d2f="review"]').first()
+  const report = await until(async () => { const t = await card.innerText().catch(() => ''); return /要装 /.test(t) ? t : null }, 300_000, 1000)
+  await shot(win, '30-skm-review')
+  check('⑥ 前置:工作台里装 skills-manager,Forsion 先给体检报告', !!report, report)
+  if (report) await card.locator('[data-act="review-allow"]').click()
+  const installed = await until(async () => (await guestEval(app, 'window.__d2fInstall || null')).value, 180_000, 1000)
+  const application = installed?.result?.value?.application ?? installed?.result?.application
+  check('⑥ 前置:skills-manager 装上了', installed?.result?.ok === true && application !== 'failed', JSON.stringify(installed?.result ?? installed).slice(0, 300))
+  // 重启 DSH:Harness 卡上的「重启 DSH」
+  const pidOf = () => dshProcs().filter((l) => l.includes('--profile forsion')).map((l) => l.split(' ')[0]).join(',')
+  const oldPid = pidOf()
+  await openAgents(win); await rosterRow(win, AGENT).click(); await sleep(1500)
+  await pluginRow(win, 'runtime').locator('button', { hasText: '重启 DSH' }).first().click()
+  const restarted = await until(async () => { const p = pidOf(); return p && p !== oldPid && !p.includes(',') && /在运行/.test(await pluginRow(win, 'runtime').innerText().catch(() => '')) ? p : null }, 90_000, 1000)
+  check('⑥ 前置:Harness 卡「重启 DSH」后是新的一个常驻进程', !!restarted, `${oldPid} → ${pidOf()}`)
+  await sleep(4000) // 桥的自检在 DSH 起来 3 秒后跑一次(接管时还会再判)
+
+  // ⑥-1 B 那场:Forsion 发的轮里提权写文件 / create_skill,弹 Forsion 的审批卡,批准 / 拒绝都管用
+  await enterSpace(win, 'tangu'); await sleep(1000)
+  await win.getByText('新会话', { exact: true }).first().click(); await sleep(1000)
+  await (await pickAgent(win, AGENT)).click(); await sleep(800)
+  if (await win.locator('.ui-popover-backdrop').count()) { await win.keyboard.press('Escape'); await sleep(500) }
+  check('⑥ 前置:B 那场聊一句', await sendSure(win, 'Hello DSH, this is the approvals chat.') && !!(await until(async () => (await lastAsst(win)).includes(MARK), 90_000)), await lastAsst(win))
+  const turns = [
+    ['WRITE e2e-allow.txt', 'approve', /WROTE e2e-allow\.txt/, () => outside('e2e-allow.txt'), '提权写文件,批准:写上了'],
+    ['WRITE e2e-reject.txt', 'reject', /NOT-WRITTEN e2e-reject\.txt/, () => !outside('e2e-reject.txt'), '提权写文件,拒绝:没写'],
+    ['SKILL e2e-skill-allow', 'approve', /SKILL-DONE e2e-skill-allow/, () => skillAt('e2e-skill-allow'), 'skills-manager 的 create_skill(插件审批),批准:技能建好了'],
+    ['SKILL e2e-skill-reject', 'reject', /SKILL-REFUSED e2e-skill-reject/, () => !skillAt('e2e-skill-reject'), 'create_skill,拒绝:没建'],
+  ]
+  let n = 0
+  for (const [say, decision, answerRe, effect, label] of turns) {
+    n++
+    const sent = await sendSure(win, say)
+    const asked = await until(async () => { const t = await trayState(win); return t.kind === 'approval' ? t : null }, 60_000, 400)
+    if (n === 1 || n === 3) await shot(win, `3${n}-forsion-card`)
+    if (asked) await decideInTray(win, decision)
+    const answered = await until(async () => answerRe.test(await lastAsst(win)), 60_000, 500)
+    check(`⑥ Forsion 的轮,${label}(审批卡弹在 Forsion)`, sent && !!asked && !!answered && effect(), `${asked ? asked.text.slice(0, 120) : '托盘里没有审批卡'} | ${await lastAsst(win)} | ${asked ? '' : await failLogs()}`)
+  }
+
+  // ⑥-2 工作台发的轮(在 B 这场,Forsion 正 hold 着):审批留在工作台,Forsion 的托盘里什么都没有
+  check('⑥ 前置:工作台落在 B 那场', await openInWorkbench(app, win, /^Hello DSH, this is the/, 'this is the approvals chat'), await failLogs())
+  await typeInWorkbench(app, 'WRITE e2e-workbench.txt')
+  const wbWaiting = await until(async () => (await guestPending(app)) > 0, 60_000, 700)
+  await shot(win, '35-workbench-own-approval')
+  await sidebarTitle(win, /^Hello DSH, this is the/).click(); await sleep(2000)
+  const forsionTray = await trayState(win)
+  await shot(win, '36-forsion-tray-empty')
+  check('⑥ 工作台发的轮:DSH 的审批卡在工作台里,Forsion 的托盘里没有', !!wbWaiting && forsionTray.n === 0 && !forsionTray.kind, `工作台待批 ${await guestPending(app)};托盘 ${JSON.stringify(forsionTray)}`)
+  const wbFront = await toWorkbenchTab(win); await sleep(1200)
+  await shot(win, '35b-workbench-approve')
+  const clickedWb = await guestClickText(app, '/^允许一次$/')
+  const wroteWb = await until(async () => (await guestText(app)).includes('WROTE e2e-workbench.txt'), 60_000, 700)
+  check('⑥ 切到工作台页签(在前面)批准它:写上了', wbFront && !!clickedWb && !!wroteWb && outside('e2e-workbench.txt'), `${wbFront ? '' : '工作台没到前面;'}${clickedWb ? '' : '没找到「允许一次」'}`)
+
+  // ⑥-3 两边同时有待批的:工作台在 A 那场等着,Forsion 在 B 那场问;各回各的
+  check('⑥ 前置:工作台落在 A 那场', await openInWorkbench(app, win, /^Hello DSH, please/, MARK), await failLogs())
+  await typeInWorkbench(app, 'WRITE e2e-wb-both.txt')
+  const wbBoth = await until(async () => (await guestPending(app)) > 0, 60_000, 700)
+  await sidebarTitle(win, /^Hello DSH, this is the/).click(); await sleep(1500)
+  await sendSure(win, 'WRITE e2e-forsion-both.txt')
+  const bothAsked = await until(async () => { const t = await trayState(win); return t.kind === 'approval' ? t : null }, 60_000, 400)
+  await shot(win, '37-both-pending-forsion')
+  check('⑥ 两边同时待批:Forsion 的托盘里只有自己这一件,工作台那件还在工作台', !!wbBoth && !!bothAsked && bothAsked.n === 1 && (await guestPending(app)) > 0, `托盘 ${JSON.stringify(bothAsked)};工作台待批 ${await guestPending(app)}`)
+  if (bothAsked) await decideInTray(win, 'approve')
+  const forsionDone = await until(async () => /WROTE e2e-forsion-both\.txt/.test(await lastAsst(win)), 60_000, 500)
+  check('⑥ Forsion 这件在 Forsion 批完:写上了,工作台那件还等着', !!forsionDone && outside('e2e-forsion-both.txt') && !outside('e2e-wb-both.txt') && (await guestPending(app)) > 0, await lastAsst(win))
+  const wbFront2 = await toWorkbenchTab(win); await sleep(1200)
+  await shot(win, '38-both-pending-workbench')
+  const clickedBoth = await guestClickText(app, '/^允许一次$/')
+  const wroteBoth = await until(async () => (await guestText(app)).includes('WROTE e2e-wb-both.txt'), 60_000, 700)
+  check('⑥ 工作台那件切到工作台批完:写上了', wbFront2 && !!clickedBoth && !!wroteBoth && outside('e2e-wb-both.txt'), `${wbFront2 ? '' : '工作台没到前面;'}${clickedBoth ? '' : '没找到「允许一次」'}`)
+}
+
 async function main() {
   await new Promise((r) => server.listen(0, '127.0.0.1', r))
   STUB = `http://127.0.0.1:${server.address().port}`
@@ -193,7 +387,8 @@ async function main() {
     args: [`--user-data-dir=${path.join(HOME, 'userdata')}`, '--lang=zh-CN', ...(HOLD ? ['--remote-debugging-port=9334'] : []), ROOT],
     cwd: ROOT,
     env: { ...process.env, ...dshEnv, TANGU_HOME: HOME, FORSION_WORKSPACE_DIR: WS, TANGU_BROWSER_CDP: 'off', TANGU_HARNESS_QUIET: '1',
-      TANGU_PROVIDER_ID: 'stubjudge', TANGU_PROVIDER_BASE_URL: `${STUB}/v1`, TANGU_PROVIDER_API_KEY: 'stub-not-a-real-key', TANGU_PROVIDER_MODELS: 'judge' },
+      TANGU_PROVIDER_ID: 'stubjudge', TANGU_PROVIDER_BASE_URL: `${STUB}/v1`, TANGU_PROVIDER_API_KEY: 'stub-not-a-real-key', TANGU_PROVIDER_MODELS: 'judge',
+      ...(MODE === 'fallback' ? { DSH2FORSION_APPROVAL_EVENT: RENAMED_EVENT } : {}) },
   })
   const pageErrors = []
   try {
@@ -253,6 +448,8 @@ async function main() {
     await win.getByText('新会话', { exact: true }).first().click(); await sleep(1200)
     await (await pickAgent(win, AGENT)).click(); await sleep(900)
     if (await win.locator('.ui-popover-backdrop').count()) { await win.keyboard.press('Escape'); await sleep(500) }
+    if (MODE !== 'full') await approvalsWalk(app, win, guestLogs)
+    else {
     const perTurnBefore = dshProcs().filter((l) => l.includes('--profile acp')).length
     let perTurnSeen = 0
     const watch = setInterval(() => { perTurnSeen = Math.max(perTurnSeen, dshProcs().filter((l) => l.includes('--profile acp')).length) }, 300)
@@ -435,6 +632,7 @@ async function main() {
       for (const m of misses) console.log(`   ⑤ ${m}`)
       check('⑤ 整页重新载入时带落点:8 次都落在要的那场', landed === 8, `${landed}/8`)
     } else check('⑤ 整页重新载入时带落点:8 次都落在要的那场', false, `没拿到两场的 id:A ${idA} / B ${idB}`)
+    } // MODE === 'full'
     check('前置:工作台页签关不关都不影响,DSH 一直是同一个进程', dshProcs().filter((l) => l.includes('--profile forsion')).length === 1)
 
     if (HOLD) {
@@ -451,9 +649,12 @@ main().then(({ pageErrors }) => {
   check('没有页面异常', pageErrors.length === 0, pageErrors.slice(0, 3).join(' / '))
 }).catch((e) => { console.error(e); check('台架跑完', false, e.message) }).finally(async () => {
   server.close()
-  await sleep(4000)
+  // 等最多 12 秒:宿主退出时 3 秒就 SIGKILL 引擎,插件自己停 DSH 的 4 秒上限赶不上,DSH 是自己收尾退出的;
+  // 装了 skills-manager 并重启过之后实测要 ~8 秒(审批走查,没装时 1 秒内)。秒数照实打出来
+  const t0 = Date.now()
+  const gone = await until(async () => dshProcs().length === 0, 12_000, 500)
   const left = dshProcs()
-  check('Forsion 退出后没有留下 DSH 进程', !left.length, left.join(' / '))
+  check('Forsion 退出后没有留下 DSH 进程(最多等 12 秒)', !!gone && !left.length, gone ? `${((Date.now() - t0) / 1000).toFixed(1)} 秒后没了` : left.join(' / '))
   check('真实的 ~/.dsh 与 ~/.agents 没被这次运行写过', ['.dsh', '.agents'].every((d) => { try { return fs.statSync(path.join(os.homedir(), d)).mtimeMs < START } catch { return true } }))
   const bad = results.filter((r) => !r.ok)
   console.log(`\n${results.length - bad.length}/${results.length} 通过`)

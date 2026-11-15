@@ -22,7 +22,7 @@ const until = async (f: () => boolean, ms = 3000): Promise<void> => {
   while (!f()) { if (Date.now() - t0 > ms) throw new Error('timed out'); await new Promise((r) => setTimeout(r, 10)); }
 };
 
-function fakeAgent(opts: { newSessionDelayMs?: number; promptNeverEnds?: boolean } = {}) {
+function fakeAgent(opts: { newSessionDelayMs?: number; promptNeverEnds?: boolean; promptDelayMs?: number; onPrompt?: (send: (o: unknown) => void, sessionId: string) => void } = {}) {
   const toAgent = new PassThrough();
   const fromAgent = new PassThrough();
   const calls: string[] = [];
@@ -35,7 +35,11 @@ function fakeAgent(opts: { newSessionDelayMs?: number; promptNeverEnds?: boolean
     const ok = (result: unknown): void => send({ jsonrpc: '2.0', id: m.id, result });
     if (m.method === 'initialize') return ok({ protocolVersion: 1, agentInfo: { name: 'fake-resident', version: '0' }, agentCapabilities: { sessionCapabilities: { resume: {}, close: {} } } });
     if (m.method === 'session/new') { setTimeout(() => ok({ sessionId: `s${++n}` }), opts.newSessionDelayMs ?? 0); return; }
-    if (m.method === 'session/prompt') { if (!opts.promptNeverEnds) ok({ stopReason: 'end_turn' }); return; }
+    if (m.method === 'session/prompt') {
+      opts.onPrompt?.(send, m.params.sessionId);
+      if (!opts.promptNeverEnds) setTimeout(() => ok({ stopReason: 'end_turn' }), opts.promptDelayMs ?? (opts.onPrompt ? 30 : 0));
+      return;
+    }
     if (m.id !== undefined) ok({}); // session/close 等;session/cancel 是通知,不回
   };
   toAgent.on('data', (d) => {
@@ -97,5 +101,55 @@ describe('resident ACP link', () => {
       expect(a).toBe(b);
       expect(connects).toBe(2);
     } finally { off(); }
+  });
+
+  it('the engine\'s "waiting in the workbench" notice reaches the turn Forsion is running on that session; malformed or unrouted ones do not', async () => {
+    const notice = { id: 'dsh-approval-A1', kind: 'approval-elsewhere', text: { zh: 'DSH 在工作台里等你批准', en: 'DSH is waiting for your approval in the workbench' }, action: { id: 'open-in-workbench', label: { zh: '打开工作台', en: 'Open the workbench' } } };
+    const fa = fakeAgent({
+      onPrompt: (send, sessionId) => {
+        send({ jsonrpc: '2.0', method: '_forsion/notice', params: { sessionId: 'not-open', ...notice } }); // 没人在等的会话:丢
+        send({ jsonrpc: '2.0', method: '_forsion/notice', params: { sessionId, id: 'bad id with spaces', text: { zh: 'x' } } }); // 形状不对:丢
+        send({ jsonrpc: '2.0', method: '_forsion/notice', params: { sessionId, ...notice } });
+        send({ jsonrpc: '2.0', method: '_forsion/notice', params: { sessionId, id: notice.id, clear: true } });
+      },
+    });
+    const link = await mod.ResidentLink.open('e-notice', fa.conn as any);
+    const published: Array<[string, any]> = [];
+    const ctx = { ...runCtx(new AbortController().signal), publish: (t: string, p: any) => published.push([t, p]) };
+    await link.run(def, ctx);
+    const notices = published.filter(([t, p]) => t === 'status' && p.phase === 'engine_notice').map(([, p]) => p.notice);
+    expect(notices).toEqual([
+      { id: notice.id, text: notice.text, action: notice.action },
+      { id: notice.id, clear: true },
+    ]);
+  });
+
+  it('while DSH says the approval is waiting in the workbench, the idle watchdog does not cancel the turn; it runs again once cleared', async () => {
+    const prev = process.env.TANGU_ENGINE_IDLE_TIMEOUT_MS;
+    process.env.TANGU_ENGINE_IDLE_TIMEOUT_MS = '80';
+    try {
+      const notice = { id: 'dsh-approval-A1', text: { zh: 'DSH 在工作台里等你批准', en: 'DSH is waiting for your approval in the workbench' } };
+      // 用户在工作台里批了 250ms(远超 80ms 的空闲上限),之后提示撤掉、这一轮正常答完
+      const fa = fakeAgent({
+        promptDelayMs: 300,
+        onPrompt: (send, sessionId) => {
+          send({ jsonrpc: '2.0', method: '_forsion/notice', params: { sessionId, ...notice } });
+          setTimeout(() => send({ jsonrpc: '2.0', method: '_forsion/notice', params: { sessionId, id: notice.id, clear: true } }), 250);
+        },
+      });
+      const link = await mod.ResidentLink.open('e-notice-idle', fa.conn as any);
+      await expect(link.run(def, runCtx(new AbortController().signal))).resolves.toBeTruthy();
+      expect(fa.calls).not.toContain('session/cancel');
+      // 撤掉之后看门狗照旧:引擎再不出声就取消
+      const quiet = fakeAgent({ promptNeverEnds: true, onPrompt: (send, sessionId) => {
+        send({ jsonrpc: '2.0', method: '_forsion/notice', params: { sessionId, ...notice } });
+        send({ jsonrpc: '2.0', method: '_forsion/notice', params: { sessionId, id: notice.id, clear: true } });
+      } });
+      const link2 = await mod.ResidentLink.open('e-notice-idle-2', quiet.conn as any);
+      void link2.run(def, runCtx(new AbortController().signal)).catch(() => {});
+      await until(() => quiet.calls.includes('session/cancel'), 2000);
+    } finally {
+      if (prev === undefined) delete process.env.TANGU_ENGINE_IDLE_TIMEOUT_MS; else process.env.TANGU_ENGINE_IDLE_TIMEOUT_MS = prev;
+    }
   });
 });

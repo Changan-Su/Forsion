@@ -2,7 +2,9 @@
  * 连一个常驻的外部引擎进程(融合插件第 1 档;接缝见 residentHosts.ts)跑一轮。和 acpEngine.runAcpEngine 的区别:
  *
  *  - 一个进程一条 ACP 连接(它的 stdio 只有一份),多场对话共用:引擎发来的通知按 sessionId 分给正在跑那一轮的客户端;
- *    没有 Forsion 的轮在跑的(工作台里发的那一轮)不上屏,它来问审批一律回「取消」。
+ *    没有 Forsion 的轮在跑的(工作台里发的那一轮)不上屏。审批(审批 B):插件那边只把 Forsion 发的轮的审批交到这条连接上,
+ *    照常进这一轮的审批卡;万一没有 Forsion 的轮在等还来问,回「取消」并记日志(工作台的审批不该到这里)。
+ *    引擎的扩展通知 `_forsion/notice`(「DSH 在工作台里等你批准」)也按 sessionId 交给那一轮,没人在等就不上屏。
  *  - 一轮结束**不关会话、不杀进程**:会话一直开着,工作台(DSH 自己的网页界面,同一个进程)才能接上同一个活的会话;
  *    对话入口一关,工作台那边就变成「会话不可用」,而工作台自己点开的会话它一直占着、Forsion 再也接不上(实测,
  *    方案目录 instrument/evidence/resident-handoff.txt)。
@@ -111,7 +113,12 @@ export class ResidentLink {
       requestPermission: async (params) => {
         const r = route(params.sessionId);
         if (r) return r.requestPermission(params);
+        console.warn(`[engine:${engineId}] resident session ${String(params.sessionId).slice(0, 8)}: approval asked with no Forsion turn running; answered cancel`);
         return { outcome: { outcome: 'cancelled' } };
+      },
+      extNotification: async (method, params) => {
+        const r = route(typeof params?.sessionId === 'string' ? params.sessionId : '');
+        if (r?.extNotification) return r.extNotification(method, params);
       },
     };
     const stream = ndJsonStream(
@@ -261,8 +268,9 @@ export class ResidentLink {
     const ENGINE_IDLE_MS = Number(process.env.TANGU_ENGINE_IDLE_TIMEOUT_MS) || 300_000;
     let engineIdle: ReturnType<typeof setTimeout> | null = null;
     let idleFired = false;
+    let idlePaused = false; // DSH 说审批在工作台里等着(_forsion/notice)期间停表:用户去工作台批,不能五分钟后被取消
     const armEngineIdle = (): void => {
-      if (ctx.signal.aborted) return;
+      if (ctx.signal.aborted || idlePaused) return;
       if (engineIdle) clearTimeout(engineIdle);
       engineIdle = setTimeout(() => { idleFired = true; onAbort(); }, ENGINE_IDLE_MS);
     };
@@ -271,6 +279,10 @@ export class ResidentLink {
       publish: (type, payload) => { armEngineIdle(); ctx.publish(type, payload); },
       hideToolPrefix: ctx.hideToolPrefix,
       touch: armEngineIdle,
+      waitingElsewhere: (waiting) => {
+        idlePaused = waiting;
+        if (waiting) { if (engineIdle) { clearTimeout(engineIdle); engineIdle = null; } } else armEngineIdle();
+      },
       requestApproval: async (preview, toolCall) => {
         if (engineIdle) { clearTimeout(engineIdle); engineIdle = null; }
         try { return await ctx.requestApproval(preview, toolCall); }

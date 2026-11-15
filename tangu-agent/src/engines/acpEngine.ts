@@ -45,6 +45,8 @@ export interface AcpClientCtx {
   hideToolPrefix?: string;
   /** 有引擎活动但没上屏时续命(空闲看门狗只在上屏时重新起表;藏起来的桥调用在等审批时一来一回全是这种)。 */
   touch?: () => void;
+  /** 引擎说「在别处等你批准」(`_forsion/notice`)还没撤掉期间为 true:这一轮在等用户去别处批,空闲看门狗停表(否则等满五分钟就把它取消掉)。 */
+  waitingElsewhere?: (waiting: boolean) => void;
 }
 
 /** 引擎握手上限:spawn + initialize + newSession 若在此窗口内没完成(子进程卡死/Windows 上 .cmd shim spawn
@@ -301,6 +303,27 @@ export function pickPermissionOption(options: PermissionOption[], action: Approv
   return (same ?? options[0]).optionId;
 }
 
+/**
+ * 常驻引擎给正在跑的这一轮的提示(ACP 扩展通知,融合插件第 1 档 · 审批 B 的退回 A):
+ * `{ sessionId, id, text: { zh, en }, action?: { id, label: { zh, en } } }` 显示,`{ sessionId, id, clear: true }` 撤掉。
+ * DSH 的审批进了工作台(自检没过、或这一问是子代理 / 工作台那一轮的)时,DSH2Forsion 的桥发「DSH 在工作台里等你批准」+「打开工作台」;
+ * action.id 只能指插件给这个引擎登记的对话菜单项(ctx.registerEngineHarness 的 sessionActions),别的一律不认。
+ */
+export const ENGINE_NOTICE_METHOD = '_forsion/notice';
+export interface EngineNotice { id: string; clear?: true; text?: { zh?: string; en?: string }; action?: { id: string; label: { zh?: string; en?: string } } }
+const noticeText = (v: unknown, max: number): string | undefined => (typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : undefined);
+/** 清洗(事件会持久化回放,同 approval_request 的纪律):形状不对的整条丢掉。 */
+export function sanitizeEngineNotice(p: any): EngineNotice | null {
+  if (!p || typeof p !== 'object' || typeof p.id !== 'string' || !/^[A-Za-z0-9._:-]{1,128}$/.test(p.id)) return null;
+  if (p.clear === true) return { id: p.id, clear: true };
+  const text = { zh: noticeText(p.text?.zh, 160), en: noticeText(p.text?.en, 160) };
+  if (!text.zh && !text.en) return null;
+  const a = p.action;
+  const action = a && typeof a === 'object' && typeof a.id === 'string' && /^[A-Za-z0-9._-]{1,64}$/.test(a.id)
+    ? { id: a.id, label: { zh: noticeText(a.label?.zh, 40), en: noticeText(a.label?.en, 40) } } : undefined;
+  return { id: p.id, text, ...(action ? { action } : {}) };
+}
+
 /** 纯翻译器：返回实现了 ACP Client 的对象 + 取累积结果。无进程、无 SDK 连接，可单测。 */
 export function createAcpClient(
   engineName: string,
@@ -313,6 +336,7 @@ export function createAcpClient(
   const toolResults: any[] = [];
   const toolNames = new Map<string, string>(); // toolCallId -> name（给 tool_result 补名）
   const hidden = new Set<string>(); // 桥里的调用(hideToolPrefix):卡片和结果归桥
+  const waitingElsewhere = new Set<string>(); // 还没撤掉的「在别处等你批准」提示 id(_forsion/notice)
   // toolCallId -> 最新的 rawInput / 标题(审批请求只带 id 时拿来补,见 requestPermission)。**必须跟着 tool_call_update 更新**:
   // 引擎可以先发一条参数不全(或还是别的参数)的 tool_call,再用 update 改成真正要跑的;卡上要是还显示头一条,
   // 用户看到的是一条命令、批准的是另一条。
@@ -387,6 +411,16 @@ export function createAcpClient(
         default:
           break; // plan / available_commands_update / mode 等：spike 忽略
       }
+    },
+    async extNotification(method: string, params: Record<string, unknown>): Promise<void> {
+      if (method !== ENGINE_NOTICE_METHOD || ctx.replaying?.()) return;
+      const notice = sanitizeEngineNotice(params);
+      if (!notice) return;
+      // 先改看门狗再发(发会续表):有没撤掉的提示时停表,最后一件撤掉时重新起表
+      const before = waitingElsewhere.size > 0;
+      if (notice.clear) waitingElsewhere.delete(notice.id); else waitingElsewhere.add(notice.id);
+      if (before !== waitingElsewhere.size > 0) ctx.waitingElsewhere?.(waitingElsewhere.size > 0);
+      ctx.publish('status', { phase: 'engine_notice', notice });
     },
     async requestPermission(params: RequestPermissionRequest): Promise<RequestPermissionResponse> {
       if (ctx.signal.aborted) return { outcome: { outcome: 'cancelled' } };
@@ -531,8 +565,9 @@ export async function runAcpEngine(def: EngineDef, ctx: EngineRunCtx): Promise<E
   // 阈值比直连流(120s)宽:外部 agent(Claude Code/Codex)可能长时间静默思考。审批期间停表(等用户不能误杀)。
   const ENGINE_IDLE_MS = Number(process.env.TANGU_ENGINE_IDLE_TIMEOUT_MS) || 300_000;
   let engineIdle: ReturnType<typeof setTimeout> | null = null;
+  let idlePaused = false; // 引擎说在别处等用户批准(engine notice)期间停表
   const armEngineIdle = (): void => {
-    if (ctx.signal.aborted) return;
+    if (ctx.signal.aborted || idlePaused) return;
     if (engineIdle) clearTimeout(engineIdle);
     engineIdle = setTimeout(() => { try { onAbort(); } catch { /* ignore */ } }, ENGINE_IDLE_MS);
   };
@@ -556,6 +591,10 @@ export async function runAcpEngine(def: EngineDef, ctx: EngineRunCtx): Promise<E
     publish: (type, payload) => { armEngineIdle(); ctx.publish(type, payload); },
     hideToolPrefix: ctx.hideToolPrefix,
     touch: armEngineIdle,
+    waitingElsewhere: (waiting) => {
+      idlePaused = waiting;
+      if (waiting) { if (engineIdle) { clearTimeout(engineIdle); engineIdle = null; } } else armEngineIdle();
+    },
     requestApproval: async (preview, toolCall) => {
       // Read-only ACP modes remain host-enforced at permission boundaries.
       // The scoped MCP bridge gates its own tools independently.

@@ -449,7 +449,11 @@ export type ResidentHoldResult =
   | { ok: true; engineSessionId: string; state: 'open' | 'resumed' }
   | { ok: false; status: number; detail: string; code?: 'no_engine_session' | 'not_running' | 'busy' | 'gone' | 'failed' };
 
-/** ctx.registerResidentEngine 的连接:进程的 stdin、只剩 JSON 行的 stdout(不是 JSON 的行插件自己滤掉)、进程没了就 resolve。 */
+/** ctx.registerResidentEngine 的连接:进程的 stdin、只剩 JSON 行的 stdout(不是 JSON 的行插件自己滤掉)、进程没了就 resolve。
+ *  引擎可以在 stdout 上发 ACP 扩展通知 `_forsion/notice`,给 Forsion 正在这场会话上跑的那一轮一条提示(进审批托盘,这一轮结束就清掉;
+ *  没有 Forsion 的轮在等这一场就不上屏):`{ sessionId, id, text: { zh, en }, action?: { id, label: { zh, en } } }` 显示,
+ *  `{ sessionId, id, clear: true }` 撤掉。`action.id` 只认插件用 ctx.registerEngineHarness 给这个引擎登记的对话菜单项
+ *  (sessionActions,按钮就是跑它);认不到(网页 / 手机、插件停用)只显示那句话。DSH 融合插件用它报「DSH 在工作台里等你批准」。 */
 export interface ResidentConnection {
   /** 这个进程这一次启动的标识;变了 = 重启过。 */
   id: string;

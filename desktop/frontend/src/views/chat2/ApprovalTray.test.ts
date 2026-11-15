@@ -135,3 +135,24 @@ it('⑥ 入场只给刚换上来的那张:托盘出现时卡体不单独入场,�
   expect(body().dataset.trayMsg).toBe('m2')
   expect(body().dataset.motion).toBe('enter')
 })
+
+it('④ engine notice (DSH waiting in the workbench): the sentence in the UI language, and the plugin\'s menu item as its button', async () => {
+  const { registerEngineHarness } = await import('../../amadeus/plugins/engineHarness')
+  const run = vi.fn()
+  const reg = registerEngineHarness('dsh2forsion', { engineId: 'dsh', sessionActions: [{ id: 'open-in-workbench', label: { zh: '在 DSH 工作台里打开', en: 'Open in the DSH workbench' }, run }] }, () => true)
+  try {
+    const notice = { id: 'dsh-approval-A1', text: { zh: 'DSH 在工作台里等你批准', en: 'DSH is waiting for your approval in the workbench' }, action: { id: 'open-in-workbench', label: { zh: '打开工作台', en: 'Open the workbench' } } }
+    const item = { kind: 'notice' as const, id: 'notice:dsh-approval-A1', messageId: '', notice, engineId: 'dsh', agentSlug: 'dsh-agent' }
+    await act(async () => root.render(React.createElement(ApprovalTray, { items: [item], sessionId: 's1', onAnswer: vi.fn(), onDecide: vi.fn() })))
+    expect(host.querySelector('.t2c-apv-title')?.textContent).toBe('等你批准 · 1')
+    expect(host.querySelector('[data-engine-notice]')?.textContent).toContain('DSH 在工作台里等你批准')
+    const btn = host.querySelector<HTMLButtonElement>('[data-engine-notice-action="open-in-workbench"]')!
+    expect(btn.textContent).toBe('打开工作台')
+    await act(async () => btn.click())
+    expect(run).toHaveBeenCalledWith({ sessionId: 's1', agentSlug: 'dsh-agent' })
+    // 插件没登记这一项(网页 / 手机、插件停用):只有那句话
+    await act(async () => root.render(React.createElement(ApprovalTray, { items: [{ ...item, engineId: 'other' }], sessionId: 's1', onAnswer: vi.fn(), onDecide: vi.fn() })))
+    expect(host.querySelector('[data-engine-notice-action]')).toBeNull()
+    expect(host.querySelector('[data-engine-notice]')?.textContent).toContain('DSH 在工作台里等你批准')
+  } finally { reg.dispose() }
+})
