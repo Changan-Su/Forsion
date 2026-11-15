@@ -70,19 +70,21 @@ async function main() {
     await p.locator('.math-rendered').first().click()
     await pause(p)
     check('only active formula previews', await p.locator('.math-preview--inline').count() === 1 && await p.locator('.math-rendered').count() === 2)
+    // 行内公式的预览是浮在这一行上方的气泡(或放不下时翻到下方):不压这一行的源码,也不占文档流。
     const geom = await p.evaluate(() => {
       const preview = document.querySelector('.math-preview--inline').getBoundingClientRect()
-      const para = document.querySelector('.math-preview--inline').parentElement
+      const para = document.querySelector('.unified-body .ProseMirror .math-source').closest('p')
       const walker = document.createTreeWalker(para, NodeFilter.SHOW_TEXT)
-      let bottom = 0
+      let top = Infinity, bottom = 0
       for (let n = walker.nextNode(); n; n = walker.nextNode()) {
-        if (n.parentElement.closest('.math-preview')) continue
+        if (n.parentElement.closest('.math-preview, .math-rendered')) continue
         const r = document.createRange(); r.selectNodeContents(n)
-        for (const rect of r.getClientRects()) if (rect.width) bottom = Math.max(bottom, rect.bottom)
+        for (const rect of r.getClientRects()) if (rect.width) { top = Math.min(top, rect.top); bottom = Math.max(bottom, rect.bottom) }
       }
-      return { previewTop: preview.top, sourceBottom: bottom }
+      return { previewTop: preview.top, previewBottom: preview.bottom, sourceTop: top, sourceBottom: bottom,
+        position: getComputedStyle(document.querySelector('.math-preview--inline')).position }
     })
-    check('preview does not cover text', geom.previewTop >= geom.sourceBottom, geom)
+    check('preview does not cover text', geom.position === 'absolute' && (geom.previewBottom <= geom.sourceTop + 0.5 || geom.previewTop >= geom.sourceBottom - 0.5), geom)
     fs.mkdirSync('out/amadeus-editing', { recursive: true })
     await p.screenshot({ path: 'out/amadeus-editing/math-preview.png' })
     await p.close()

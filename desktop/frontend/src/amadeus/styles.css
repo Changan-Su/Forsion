@@ -2988,14 +2988,28 @@ body.amx-marquee-active * {
    ponytail: 要文档内连续编号得自己数(每块独立渲染),等有人要再做。 */
 .am-app .katex .eqn-num { display: none; }
 
-/* Current inline formula preview has its own row after the source paragraph. */
-.math-preview--inline { display: block; max-width: 100%; margin-top: 8px; pointer-events: none; }
-.math-preview--inline .math-preview-inner {
-  display: inline-block; max-width: 100%; overflow-x: auto; vertical-align: top;
-  padding: 4px 10px; border-radius: var(--radius-sm, 6px); white-space: nowrap; pointer-events: none;
-  background: var(--bg-card, var(--bg)); border: var(--border-width, 1px) solid var(--border);
-  box-shadow: var(--card-shadow, 0 6px 22px rgba(0, 0, 0, 0.12));
+/* 行内公式编辑中的预览:浮在这一行上方的小气泡(照 Obsidian LaTeX Suite;放不下翻到下方)。由 mathLivePreview.ts 的
+   InlineMathFloat 挂在编辑器 DOM 外面、现量现摆,不进正文、不推挤正文;表面读浮层 token(DESIGN §3「浮层表面」),不抄 Obsidian 的色值。 */
+.am-app .math-preview--float {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: var(--z-view-float);
+  width: max-content;
+  box-sizing: border-box;
+  padding: 4px 6px;
+  overflow: hidden;
+  white-space: nowrap;
+  color: var(--text);
+  background: var(--surface-float, var(--bg-card));
+  backdrop-filter: var(--surface-blur, none);
+  border: var(--border-width) solid var(--surface-edge, var(--border));
+  border-radius: var(--radius-sm);
+  box-shadow: var(--card-shadow);
+  pointer-events: none;
+  user-select: none;
 }
+.am-app .math-preview--float .math-preview-inner { display: block; }
 .math-preview--block { display: block; }
 .math-preview--block .math-preview-inner { display: block; text-align: center; margin: 4px 0 2px; opacity: 0.9; }
 .math-preview--block .katex-display { margin: 0; text-align: center; }

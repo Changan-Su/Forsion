@@ -4,6 +4,7 @@
 //   B. 整段源码(含 `$`)每个 span 都带 .math-source:等宽、斜体、行内代码字号(0.88em)、不加字距;预览 / 渲染结果不受影响。
 //   C. token 颜色只读 --math-src-*(浅 / 深);宿主选择器权重为 0,插件一条普通类选择器(哪怕样式表排在宿主之前)就能盖过。
 //   D. 选区盖住公式时字体不跳;离开公式后钩子类全部收走。
+//   E. 行内公式编辑中的预览是浮在这一行上方的气泡(读浮层 token,▶ 标光标,放不下翻到下方,不推挤正文);块公式预览照旧在源码下方。
 // 用法:npm run check:mathsource(自起 vite;HARNESS_URL=… 指到自己起的端口)。可选 LATEX_PLUGIN_DIR=<插件目录> 再验真插件的括号色盖过宿主。
 const fs = require('fs'), os = require('os'), path = require('path')
 const { chromium } = require('playwright-core')
@@ -210,12 +211,84 @@ async function partLook(browser, dark) {
   await p.close()
 }
 
+async function partFloat(browser, dark) {
+  const tag = dark ? 'dark' : 'light'
+  const seed = '前一行写得长一点,好让气泡压在它上面也看得出来。\n\n行内 $x^2 + \\sqrt{y}$ 结束,后面还有字。\n\n$$ \\frac{a}{b} $$\n\n下一段。\n' + '\n填充一行。\n'.repeat(40)
+  const p = await open(browser, seed, { dark })
+  const paraBox = () => p.evaluate((sel) => { const el = [...document.querySelectorAll(`${sel} p`)].find((x) => x.textContent.includes('结束')); const r = el.getBoundingClientRect(); return { top: r.top, height: r.height } }, PM)
+  await caret(p, '结束', 0)
+  await settle(p)
+  const restH = (await paraBox()).height
+  await caret(p, 'sqrt{', 5)
+  await settle(p)
+  const g = await p.evaluate((sel) => {
+    const f = document.querySelectorAll('.math-preview--float')
+    const el = f[0]
+    if (!el) return { count: 0 }
+    const para = [...document.querySelectorAll(`${sel} p`)].find((x) => x.textContent.includes('结束'))
+    const dollar = [...para.querySelectorAll('.math-source-dollar')][0].getBoundingClientRect()
+    const r = el.getBoundingClientRect(), inner = el.querySelector('.math-preview-inner').getBoundingClientRect()
+    const cs = getComputedStyle(el)
+    const probe = document.createElement('div')
+    probe.style.cssText = 'background: var(--surface-float, var(--bg-card)); border: 1px solid var(--surface-edge, var(--border)); position: absolute'
+    para.appendChild(probe)
+    const pc = getComputedStyle(probe)
+    const want = { bg: pc.backgroundColor, edge: pc.borderTopColor }
+    probe.remove()
+    return {
+      count: f.length, below: el.classList.contains('is-below'), bottom: r.bottom, top: r.top, left: r.left, innerLeft: inner.left,
+      lineTop: dollar.top, lineBottom: dollar.bottom, dollarLeft: dollar.left, position: cs.position,
+      bg: cs.backgroundColor, edge: cs.borderTopColor, shadow: cs.boxShadow, radius: cs.borderTopLeftRadius, want,
+      annotation: el.querySelector('annotation')?.textContent ?? null,
+    }
+  }, PM)
+  check(`E1 ${tag}: 光标在行内公式里,只出一个浮层预览`, g.count === 1, g)
+  check(`E2 ${tag}: 浮层在这一行上方、不压源码`, !g.below && g.bottom <= g.lineTop + 0.5 && g.position === 'absolute', g)
+  check(`E3 ${tag}: 浮层左缘对齐公式开头(预览字与 $ 对齐)`, Math.abs(g.innerLeft - g.dollarLeft) < 3, g)
+  check(`E4 ${tag}: 不推挤正文 —— 出预览前后段落高度不变`, Math.abs((await paraBox()).height - restH) < 0.5, { restH, now: (await paraBox()).height })
+  check(`E5 ${tag}: 表面读浮层 token(底、边),有阴影`, g.bg === g.want.bg && g.edge === g.want.edge && g.shadow !== 'none', g)
+  check(`E6 ${tag}: ▶ 标在光标处(\\sqrt{ 与 y 之间)`, g.annotation === 'x^2 + \\sqrt{{\\blacktriangleright}y}', g.annotation)
+  await caret(p, 'sqrt{', 3)
+  await settle(p)
+  const inCmd = await p.evaluate(() => document.querySelector('.math-preview--float annotation')?.textContent)
+  check(`E7 ${tag}: 光标在命令名中间时 ▶ 挪到命令前,不拆坏命令`, inCmd === 'x^2 + {\\blacktriangleright}\\sqrt{y}', inCmd)
+  await caret(p, 'sqrt{', 1, 5)
+  await settle(p)
+  check(`E8 ${tag}: 有选区时不出预览(现有规则)`, await p.locator('.math-preview--float').count() === 0)
+  // 放不下就翻到下方:把公式那一行滚到可视区顶上
+  await caret(p, 'sqrt{', 5)
+  await p.evaluate((sel) => { const el = [...document.querySelectorAll(`${sel} p`)].find((x) => x.textContent.includes('结束')); el.scrollIntoView({ block: 'start' }) }, PM)
+  await settle(p, 300)
+  const flip = await p.evaluate((sel) => {
+    const el = document.querySelector('.math-preview--float'); if (!el) return null
+    const para = [...document.querySelectorAll(`${sel} p`)].find((x) => x.textContent.includes('结束'))
+    const d = para.querySelector('.math-source-dollar').getBoundingClientRect(), r = el.getBoundingClientRect()
+    return { below: el.classList.contains('is-below'), top: r.top, lineBottom: d.bottom }
+  }, PM)
+  check(`E9 ${tag}: 顶上放不下时翻到这一行下方`, !!flip && flip.below && flip.top >= flip.lineBottom - 0.5, flip)
+  // 块公式的预览仍在源码下方
+  await caret(p, '\\frac{a', 6)
+  await settle(p)
+  const blk = await p.evaluate((sel) => {
+    const el = document.querySelector('.math-preview--block'); if (!el) return null
+    const para = [...document.querySelectorAll(`${sel} p`)].find((x) => x.textContent.includes('\\frac'))
+    return { float: document.querySelectorAll('.math-preview--float').length, top: el.getBoundingClientRect().top, srcBottom: para.querySelector('.math-source-dollar').getBoundingClientRect().bottom }
+  }, PM)
+  check(`E10 ${tag}: 块公式的预览照旧在源码下方、不是浮层`, !!blk && blk.float === 0 && blk.top >= blk.srcBottom, blk)
+  await caret(p, '下一段', 1)
+  await settle(p)
+  check(`E11 ${tag}: 离开公式浮层收走`, await p.locator('.math-preview--float').count() === 0)
+  await p.close()
+}
+
 async function main() {
   const browser = await chromium.launch({ executablePath: exe, headless: true })
   try {
     await partSpace(browser)
     await partLook(browser, false)
     await partLook(browser, true)
+    await partFloat(browser, false)
+    await partFloat(browser, true)
   } finally {
     await browser.close()
   }

@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { TextSelection } from '@milkdown/kit/prose/state'
 import { mathSourceHighlights } from './mathSourceHighlight'
 import { bootEditor } from './parseFidelity.testkit'
-import { mathLivePreviewPlugin } from './mathLivePreview'
+import { markCaret, mathLivePreviewPlugin } from './mathLivePreview'
 import { editorFocusKey, editorFocusPlugin } from './editorFocus'
 
 const KINDS = ['dollar', 'command', 'script', 'letter', 'number', 'bracket'] as const
@@ -143,5 +143,23 @@ describe('math source decorations in the editor', () => {
       expect(v.dom.querySelectorAll('.math-source-token')).toHaveLength(0)
       expect(b.md()).toBe(before)
     } finally { await b.destroy() }
+  })
+})
+
+describe('caret mark in the inline preview', () => {
+  const M = '{\\blacktriangleright}'
+  it('marks the caret position inside the formula body', () => {
+    expect(markCaret('x^2 + \\sqrt{y}', 12)).toBe(`x^2 + \\sqrt{${M}y}`)
+    expect(markCaret('ab', 0)).toBe(`${M}ab`)
+    expect(markCaret('ab', 9)).toBe(`ab${M}`)
+  })
+  it('moves the mark before a command the caret is on, without splitting it', () => {
+    expect(markCaret('a\\frac{1}{2}', 4)).toBe(`a${M}\\frac{1}{2}`) // \fr|ac
+    expect(markCaret('a\\sqrt{y}', 6)).toBe(`a${M}\\sqrt{y}`) // \sqrt|
+    expect(markCaret('a\\{x', 3)).toBe(`a${M}\\{x`) // \{|
+    expect(markCaret('a\\', 2)).toBe(`a${M}\\`) // \|
+  })
+  it('does not treat letters after a \\\\ line break as a command', () => {
+    expect(markCaret('a\\\\bc', 4)).toBe(`a\\\\b${M}c`)
   })
 })
