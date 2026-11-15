@@ -4,6 +4,8 @@
 //   ② insertMarkdown('start') 在**首块是画布卡**的文档上照样落在卡之前,且不被 canvasIntegrityGuard
 //      整笔拒掉(卡片文档是 v4 的常态,不是边角料);
 //   ③ 落盘节拍:插完 ≤1.2s 内 getPage().text 跟上(v4 正文是「上次保存那一刻」的快照)。
+//   ④ insertMarkdownAt(2026-11-16):'caret' 插在行内光标处;cursorMarker 落光标、一步撤销、标记(和占位字)从不落盘;
+//      阅读模式 / 锁定页报 'read-only' 且一个字都不进;旧令牌报 'stale-token'(T9–T15)。
 // 探针插件走真 setup 路径(new Function('ctx', code)),与外置插件同一条 —— 把 ctx.app 挂到
 // window.__bs 上,后面全部断言都从插件视角发问。
 //
@@ -58,6 +60,8 @@ const PROBE = `
     insert: (md, where) => ctx.app.insertMarkdown(ctx.app.getPage().token, md, where),
     insertStale: (tok, md) => ctx.app.insertMarkdown(tok, md, 'start'),
     block: () => ctx.app.insertBlockAfter(ctx.app.getPage().token, null, '块口'),
+    at: (md, opts) => ctx.app.insertMarkdownAt(ctx.app.getPage().token, md, opts),
+    atStale: (tok, md) => ctx.app.insertMarkdownAt(tok, md, { where: 'end' }),
     text: () => ctx.app.getActivePageText(),
     path: () => ctx.app.getActivePage(),
     seen: [],
@@ -65,10 +69,10 @@ const PROBE = `
   }
 `
 
-async function open(browser, seed) {
+async function open(browser, seed, extra = '') {
   const p = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1280, height: 900 } })
   p.on('pageerror', (e) => console.log('[pageerror]', e.message))
-  await p.goto(`${URL}?upage&upane&useed=${encodeURIComponent(seed)}`, { waitUntil: 'domcontentloaded' })
+  await p.goto(`${URL}?upage&upane${extra}&useed=${encodeURIComponent(seed)}`, { waitUntil: 'domcontentloaded' })
   await p.waitForSelector(PM, { timeout: 20000 })
   await p.waitForTimeout(500)
   await p.evaluate((code) => window.__ep.loadPlugin(code, { id: 'bsprobe' }), PROBE)
@@ -139,6 +143,112 @@ async function main() {
   const iTail = tail.disk.indexOf('尾巴段落')
   check('T8 end 档落在文末,且没把光标从用户手里夺走', iTail > tail.disk.indexOf('尾段') && tail.anchorNow === tail.anchorBefore, JSON.stringify({ at: iTail, caretKept: tail.anchorNow === tail.anchorBefore }))
   await c.close()
+
+  // ── T9–T15:insertMarkdownAt(行内光标处 / 落光标 / 一步撤销 / 拒绝原因) ────────────────────
+  const a = await open(browser, '# 标题\n\nHello world\n\n另一段。\n')
+  /** 把光标放在含 `text` 的那个文字节点的第 `offset` 个字处(走 DOM 选区,与用户点进去同一条路),等 PM 认下。 */
+  const caretAt = async (text, offset) => {
+    await a.evaluate(({ text, offset }) => {
+      const pm = document.querySelector('.unified-body .ProseMirror')
+      const w = document.createTreeWalker(pm, NodeFilter.SHOW_TEXT)
+      let n
+      while ((n = w.nextNode()) && !n.textContent.includes(text));
+      const r = document.createRange()
+      r.setStart(n, n.textContent.indexOf(text) + offset)
+      r.collapse(true)
+      pm.focus()
+      const sel = getSelection()
+      sel.removeAllRanges()
+      sel.addRange(r)
+    }, { text, offset })
+    await a.waitForTimeout(150)
+  }
+  /** PM 的光标:所在文本块的文字 + 块内偏移;另报整篇有几个段落、有没有标记 / 占位字残留。 */
+  const pmState = () => a.evaluate(() => {
+    const v = window.__upage.probe.view()
+    const { $from } = v.state.selection
+    const all = v.state.doc.textContent
+    return { line: $from.parent.textContent, off: $from.parentOffset, paras: v.state.doc.childCount, all, leak: all.includes('{{c}}') || all.includes('\uFDD0') }
+  })
+  const disk = () => a.evaluate(() => window.__upage.vault.get('Unified.md') || '')
+
+  await caretAt('Hello world', 5) // Hello|  world
+  const before9 = await pmState()
+  const r9 = await a.evaluate(() => window.__bs.at(', dear', { where: 'caret' }))
+  const s9 = await pmState()
+  check('T9 caret 档:单个段落插在行内光标处(不另起一段),光标落在插入内容末尾',
+    r9 && r9.ok === true && s9.line === 'Hello, dear world' && s9.paras === before9.paras && s9.off === 'Hello, dear'.length,
+    JSON.stringify({ r9, line: s9.line, off: s9.off, paras: [before9.paras, s9.paras] }))
+
+  // T10:cursorMarker —— 标记里带 markdown 会吃掉的字也照样认(`$` 成公式、`{}`);落光标后接着打字就打在标记处。
+  await a.waitForTimeout(700) // 与上一笔隔开撤销分组
+  await caretAt('另一段。', 4)
+  const r10 = await a.evaluate(() => window.__bs.at('Before $C$ after\n\nnext', { cursorMarker: '$C$' }))
+  const s10 = await pmState()
+  await a.keyboard.type('X')
+  const s10b = await pmState()
+  check('T10 cursorMarker:标记删掉、光标落在标记处,接着打字落在那里;文档里没有标记 / 占位字',
+    r10 && r10.ok === true && s10.line === 'Before  after' && s10.off === 'Before '.length && s10b.line === 'Before X after' && !s10.leak,
+    JSON.stringify({ r10, line: s10.line, off: s10.off, typed: s10b.line, leak: s10.leak }))
+
+  // T11:一步撤销 —— 插入 + 删标记是同一事务:撤一次回到插入前,而不是停在「标记还在」的中间态。
+  await a.waitForTimeout(700)
+  await caretAt('Before X after', 14)
+  const before11 = await pmState()
+  const r11 = await a.evaluate(() => window.__bs.at('Mid {{c}} tail', { where: 'caret', cursorMarker: '{{c}}' }))
+  const s11 = await pmState()
+  await a.keyboard.press('Meta+z')
+  await a.waitForTimeout(150)
+  const s11b = await pmState()
+  check('T11 cursorMarker + caret:光标落在标记处;撤销一次 = 回到插入前(没有标记残留的中间态)',
+    r11 && r11.ok === true && s11.line === 'Before X afterMid  tail' && s11.off === 'Before X afterMid '.length && s11b.all === before11.all && !s11.leak && !s11b.leak,
+    JSON.stringify({ r11, line: s11.line, off: s11.off, undone: s11b.all === before11.all }))
+  await a.keyboard.press('Meta+Shift+z')
+  await a.waitForTimeout(1300) // 防抖写盘
+  const d11 = await disk()
+  check('T12 落盘的正文里从来没有标记 / 占位字(重做后照样)', d11.includes('Before X afterMid  tail') && !d11.includes('{{c}}') && !d11.includes('$C$') && !d11.includes('\uFDD0'),
+    JSON.stringify({ disk: d11.slice(0, 160) }))
+
+  // T13:阅读模式 → read-only,一个字都不进(观察到的拒绝就发生在这里;旧接口仍只是 false)。
+  await a.evaluate(() => window.__upage.probe.setReading(true))
+  await a.waitForSelector('[data-reading-surface]', { timeout: 8000 }).catch(() => {})
+  const w13 = await a.evaluate(() => window.__upage.writes.length)
+  const r13 = await a.evaluate(() => ({
+    at: window.__bs.at('不该进来', { where: 'end' }),
+    caret: window.__bs.at('也不该进来', { where: 'caret', cursorMarker: '{{c}}' }),
+    old: window.__bs.insert('旧接口也不该进来', 'end'),
+  }))
+  await a.waitForTimeout(1200)
+  const s13 = await pmState()
+  const w13b = await a.evaluate(() => window.__upage.writes.length)
+  check('T13 阅读模式:报 read-only,内容一个字都没进、零写盘;旧 insertMarkdown 仍返回 false',
+    r13.at && r13.at.ok === false && r13.at.reason === 'read-only' && r13.caret && r13.caret.reason === 'read-only' && r13.old === false && !s13.all.includes('进来') && w13b === w13,
+    JSON.stringify({ r13, writes: [w13, w13b] }))
+  await a.evaluate(() => window.__upage.probe.setReading(false))
+  await a.waitForTimeout(300)
+
+  // T14:旧令牌 → stale-token;解析成空 → empty。
+  const tok14 = await a.evaluate(() => window.__bs.page().token)
+  await a.evaluate(() => window.__pageStore.getState().setActiveNotePath('别的.md'))
+  await a.waitForTimeout(120)
+  const r14 = await a.evaluate((t) => window.__bs.atStale(t, '不该进来'), tok14)
+  await a.evaluate(() => window.__pageStore.getState().setActiveNotePath('Unified.md'))
+  await a.waitForTimeout(120)
+  const e14 = await a.evaluate(() => window.__bs.at('   \n\n  ', { where: 'end' }))
+  check('T14 旧令牌 → stale-token;只有空白 → empty', r14 && r14.reason === 'stale-token' && e14 && e14.reason === 'empty', JSON.stringify({ r14, e14 }))
+  await a.close()
+
+  // T15:锁定页(只读实例)同样 read-only、零写盘。
+  const l = await open(browser, '第一段。\n', '&ulock')
+  await l.evaluate(() => window.__upage.setLocked(true))
+  await l.waitForSelector('[data-lock="on"]', { timeout: 5000 }).catch(() => {})
+  await l.waitForTimeout(300)
+  const w15 = await l.evaluate(() => window.__upage.writes.length)
+  const r15 = await l.evaluate(() => window.__bs.at('锁着也不该进来', { where: 'end' }))
+  await l.waitForTimeout(1200)
+  const s15 = await l.evaluate(() => ({ text: document.querySelector('.unified-body .ProseMirror')?.textContent ?? '', writes: window.__upage.writes.length }))
+  check('T15 锁定页:报 read-only,零写盘', r15 && r15.ok === false && r15.reason === 'read-only' && !s15.text.includes('锁着') && s15.writes === w15, JSON.stringify({ r15, s15, w15 }))
+  await l.close()
 
   await browser.close()
   const failed = results.filter((r) => !r.ok).length

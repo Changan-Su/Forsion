@@ -585,6 +585,16 @@ export interface MountBlockOptions {
   onInsertAfter?(blockId: string, content: string): void
 }
 
+/** Result of `insertMarkdownAt` (2026-11-16+). A refusal says why, so a plugin can tell the user something useful:
+ *  - `'stale-token'` — the token is not the current note's (the user switched notes), or your plugin was disabled / reloaded.
+ *  - `'no-note'` — no note is open.
+ *  - `'empty'` — the markdown parses to nothing.
+ *  - `'read-only'` — the note is open but cannot be edited: reading mode, or a locked / read-only view. Nothing is inserted.
+ *  - `'no-editor'` — the note has no live editor that can take it right now: still loading, source mode, or just closed. */
+export type PluginInsertResult =
+  | { ok: true }
+  | { ok: false; reason: 'stale-token' | 'no-note' | 'empty' | 'read-only' | 'no-editor' }
+
 /** The block surface: real Amadeus blocks, rendered by the host into DOM the plugin owns.
  *  Exists so an external plugin can build a "nodes are real blocks" UI (the mindmap) without the host
  *  having to ship it — built-in and external plugins get the same capabilities, the only difference
@@ -611,6 +621,21 @@ export interface BlockSurfaceApi {
    *  Returns false when refused (stale token / no note / nothing to insert / no live editor).
    *  Older hosts lack it: `ctx.app.insertMarkdown?.(…)`. */
   insertMarkdown(token: string, md: string, where?: 'cursor' | 'start' | 'end'): boolean
+  /** `insertMarkdown` with two more abilities and a reason when it refuses (2026-11-16+). Same parse and same single
+   *  transaction; the old method keeps its boolean result and behaviour.
+   *  `opts.where`: `'cursor'` (default), `'start'` and `'end'` mean exactly what they mean for `insertMarkdown`. New
+   *  `'caret'`: when the markdown is a single paragraph, its inline content goes in AT the caret, inside the current line,
+   *  replacing a non-empty selection like typing would (`Hello {{name}}` → `Hello Ada`). Anything else (several
+   *  paragraphs, a heading, a list), or a caret where that content can't go (a selected card, bold text into a code
+   *  block), behaves exactly like `'cursor'`.
+   *  `opts.cursorMarker`: a string you put in `md` where the caret should land (Templater's `tp.file.cursor()`). The host
+   *  removes it and puts the caret there, focusing the note — the insert is one undo step and the marker is never saved.
+   *  Later copies of the same marker are removed too. Any text works, markdown syntax included. If `md` doesn't contain it,
+   *  or it ends up somewhere the caret can't go (inside a link address), it is removed and the caret lands as without it.
+   *  ⚠️ v3 notes (`model === 'blocks'`) have no caret: `'caret'` and `'cursor'` degrade to `'end'` (logged), and
+   *  `cursorMarker` is only removed.
+   *  Older hosts lack it: `ctx.app.insertMarkdownAt?.(…)`, else fall back to `insertMarkdown`. */
+  insertMarkdownAt?(token: string, md: string, opts?: { where?: 'caret' | 'cursor' | 'start' | 'end'; cursorMarker?: string }): PluginInsertResult
   /** v3 only — refused (and logged) on a v4 note. */
   deleteBlock(token: string, id: string): Promise<void>
   /** v3 only — refused (and logged) on a v4 note. */
