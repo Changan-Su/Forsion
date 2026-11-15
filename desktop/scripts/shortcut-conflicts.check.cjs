@@ -10,7 +10,7 @@ const check = (name, ok, info) => { console.log(`${ok ? 'PASS' : 'FAIL'} ${name}
 
 // 插件默认键(2026-11-16):一个空着的默认键生效并能触发,一个撞上「新会话」⌘N 的不生效、行下说明撞上了谁。
 const PROBE_MAIN = `
-ctx.registerCommand({ id: 'free', title: 'Probe free', hotkey: 'Mod+Shift+Alt+9', run: () => { window.__probeFree = (window.__probeFree || 0) + 1 } })
+ctx.registerCommand({ id: 'free', title: 'Probe free', hotkey: 'Mod+Shift+Alt+J', run: () => { window.__probeFree = (window.__probeFree || 0) + 1 } })
 ctx.registerCommand({ id: 'clash', title: 'Probe clash', hotkey: 'Mod+N', run: () => { window.__probeClash = true } })
 `
 
@@ -58,7 +58,7 @@ async function main() {
 
     // ⑧ 插件默认键:空着的生效、撞上的不生效(行上「未设置」+ 行下说明),主窗里真按得出来
     await row('Probe free').waitFor({ timeout: 15_000 })
-    check('⑧ 空着的默认键生效 ⌥⇧⌘9', (await keyText('Probe free')).includes('⌥⇧⌘9'), await keyText('Probe free'))
+    check('⑧ 空着的默认键生效 ⌥⇧⌘J', (await keyText('Probe free')).includes('⌥⇧⌘J'), await keyText('Probe free'))
     check('⑧ 撞上 ⌘N 的默认键显示未设置', (await keyText('Probe clash')).includes('未设置'), await keyText('Probe clash'))
     const note = page.locator('[data-plugin-hotkey-inactive="amadeus:shortcut-probe:clash"]')
     const noteText = await note.innerText().catch(() => '')
@@ -68,8 +68,8 @@ async function main() {
     await shot('8-plugin-default-light')
     await win.bringToFront().catch(() => {})
     await win.locator('body').click({ position: { x: 5, y: 5 } }).catch(() => {})
-    await win.keyboard.press('Meta+Shift+Alt+9'); await win.waitForTimeout(300)
-    check('⑧ 主窗里按 ⌥⇧⌘9 触发插件命令', (await win.evaluate(() => window.__probeFree || 0)) >= 1, null)
+    await win.keyboard.press('Meta+Shift+Alt+J'); await win.waitForTimeout(300)
+    check('⑧ 主窗里按 ⌥⇧⌘J 触发插件命令', (await win.evaluate(() => window.__probeFree || 0)) >= 1, null)
     await win.keyboard.press('Meta+N'); await win.waitForTimeout(300)
     check('⑧ ⌘N 仍归「新会话」,插件那条没被触发', (await win.evaluate(() => !!window.__probeClash)) === false, null)
     await page.bringToFront().catch(() => {})
