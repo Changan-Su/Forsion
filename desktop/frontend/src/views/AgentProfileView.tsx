@@ -578,7 +578,8 @@ function AgentProfile({ agent, compact = false, sessionId, rewriteSessionId, evo
     {draftEngine && engineHere === 'not-installed' && !delegated && <button type="button" className="agent-profile-link" data-act="engine-install" onClick={() => useApp.getState().openSettings('agents/ag-clis')}>{t('agentEngine.howToInstall')}<ExternalLink size={13} /></button>}
     {draftEngine && engineHere === 'elsewhere' && <p className="agent-profile-muted" data-engine-elsewhere>{t('agentEngine.elsewhereHint', { name: agentEngineLabel(draftEngine) })}</p>}
     {draftEngine && engineHere === 'unsupported' && <p className="agent-profile-muted">{t('agentEngine.unsupportedHint', { name: draftEngine })}</p>}
-    {draftEngine && <p className="agent-profile-muted" data-engine-handoff>{t('agentEngine.handoffPending', { name: agentEngineLabel(draftEngine) })}</p>}
+    {draftEngine && <p className="agent-profile-muted" data-engine-handoff>{t('agentEngine.handoff', { name: agentEngineLabel(draftEngine) })}</p>}
+    {draftEngine && <p className="agent-profile-muted" data-engine-handoff-limits>{t('agentEngine.handoffLimits')}</p>}
   </ProfileGroup> : null
   // 跑在外部引擎上时:模型一格列引擎自己的模型(存进 engineModel,不动 Tangu 的 model,换回来还在);思考档引擎这边只读不改,先不出。
   const engineModels = draftEngine ? (s.engineCaps[draftEngine]?.models ?? []) : []

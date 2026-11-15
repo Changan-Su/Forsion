@@ -39,5 +39,8 @@ export function dshEngineDef(): EngineDef {
     args: ['--profile', 'acp'],
     detect: { bin: 'dsh', requireBin: true, dirs: [dshHomeHint()], env: ['DEEPSEEK_API_KEY'] },
     setup: 'npm i -g @deepseek-ai/dsh',
+    // 共用指令目录:DSH 读 $DSH_HOME/AGENTS.md,再读 $DSH_AGENTS_HOME(缺省 ~/.agents)下的 AGENTS.md 和 skills/
+    // (dsh-agent-instructions / dsh-skill-filesystem;方案目录 evidence/persona-skill.txt 实测)。
+    agentsHomeEnv: 'DSH_AGENTS_HOME',
   };
 }

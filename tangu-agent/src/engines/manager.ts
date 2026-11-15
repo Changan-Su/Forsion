@@ -35,6 +35,12 @@ export interface EngineRunCtx {
   onSession?: (info: { id: string; resumable: boolean; resumed: boolean; via?: 'load' | 'resume'; verifiedForChat?: boolean; agent?: string }) => void | Promise<void>;
   readOnly?: boolean;
   mcpServers?: import('@agentclientprotocol/sdk').McpServer[];
+  /** 这一轮引擎进程专用的环境变量(叠在引擎清单的 env 之后)。交接用它把指令目录交给引擎(DSH 的 DSH_AGENTS_HOME)。 */
+  env?: Record<string, string>;
+  /** Forsion 给这一轮备的共用指令目录(AGENTS.md + skills/)。引擎定义里有 agentsHomeEnv 才交过去,没有就不用。 */
+  agentsHome?: string;
+  /** 宿主工具桥的工具名前缀(`mcp__<服务名>__`)。桥自己画卡、自己落库,引擎这边的同一次调用不再上屏(见 AcpClientCtx)。 */
+  hideToolPrefix?: string;
   message: string;
   attachments?: any[];
   cwd?: string;
@@ -86,6 +92,9 @@ export interface EngineManager {
   /** 给 GET /agent/engines 与 UI 选择器(含 available/defaultModel)。 */
   list(): EngineListItem[];
   has(id: string): boolean;
+  /** 这个引擎收不收 Forsion 备的共用指令目录(定义里的 agentsHomeEnv):收的话回它起进程时看到的环境(本进程的叠上
+   *  引擎清单的 def.env),交接据此找用户自己的 DSH_HOME / DSH_AGENTS_HOME;不收回 null。 */
+  agentsHomeEnv?(id: string): NodeJS.ProcessEnv | null;
   /** 懒探测引擎能力(spawn 一次拿 models/commands)并缓存。fresh = 不用缓存、重新探测(引擎那边的模型清单变了:登录了、填了 key)。 */
   capabilities(id: string, opts?: { fresh?: boolean }): Promise<EngineCapabilities>;
   /** 设某引擎默认模型(持久化到 ~/.tangu/engine-prefs.json;空串=清除)。 */
@@ -114,6 +123,10 @@ export function createEngineManager(configFile?: string): EngineManager {
       return { id: e.id, name: e.name, available: status === 'available', status, defaultModel: prefs[e.id]?.defaultModel, setup: e.setup };
     }),
     has: (id) => byId.has(id),
+    agentsHomeEnv: (id) => {
+      const def = byId.get(id);
+      return def?.agentsHomeEnv ? { ...process.env, ...(def.env ?? {}) } : null;
+    },
     capabilities: async (id, opts) => {
       if (isHostSandboxRestricted()) throw new Error('External engine probing is unavailable while the local sandbox is enabled');
       const def = byId.get(id);

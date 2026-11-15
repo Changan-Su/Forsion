@@ -105,6 +105,7 @@ import { listPluginMetas } from '../plugins/registry.js';
 import { isPluginEnabledSync } from '../plugins/settingsStore.js';
 import { prepareAgentFilesForRun, scheduleAgentFilesSync } from './agentFileSync.js';
 import { buildAgentMemoryContext } from './memoryRecall.js';
+import { mergeBridgeCalls, prepareEngineAgentHandoff } from './engineHandoff.js';
 import { agentRoleOf } from './telemetryLedger.js';
 import { filterTaggedEntries, filterTaggedText, foldNote } from '../contracts/deviceTags.js';
 import { runTagContext, textForThisDevice } from './deviceTagContext.js';
@@ -567,9 +568,11 @@ async function dispatchRun(runId: string, ac: AbortController): Promise<void> {
           const stored = plainObject(typeof storedRaw === 'string' ? safeParse(storedRaw) : storedRaw);
           const ac0 = plainObject(input?.agentConfig);
           // 插件任务的会话:存值里记着 pluginOwner,之后客户端追问的 run 本身不带这个标记,也照插件任务算(Codex 评审 11-14)
+          // 分身(standInOf)不交给引擎:它的权限域(工具白名单、读写根、不给 MCP)在 runLoop 里才建,引擎自带的读写文件 / 跑命令
+          // 和交接的桥都不受它约束。落到 runLoop,建好权限域后由那道闸拒(Codex 评审 11-15)。
           const interactive = input?.origin === 'client' && !input?.pluginOwner && !input?.pluginNotification
             && !stored.pluginOwner && !stored.pluginNotification
-            && !ac0.teamMember && !stored.teamMember && !ac0.groupChat;
+            && !ac0.teamMember && !stored.teamMember && !ac0.groupChat && !def.standInOf;
           if (interactive) {
             if (!isKnownAgentEngine(agentEngine) || !engines?.has(agentEngine)) {
               return await refuse(`agent_engine_unsupported:${agentEngine}`, `This agent is set to run on "${agentEngine}", which this version of Forsion cannot run.`);
@@ -687,6 +690,9 @@ async function externalEngineLoop(runId: string, ac: AbortController, run: any, 
   let displayAgentSlug: string | undefined;
   let finalContent = '';
   let toolServer: Awaited<ReturnType<typeof import('../engines/toolServer.js').createRunToolServer>> | undefined;
+  // 交接(底层第 3 步):跑在引擎上的 Agent 的桥画的卡片在正文里的位置 = 这一刻已经上屏的正文长度;展示的文件(出图等)随回答落库。
+  let streamedText = '';
+  const handoffFiles: DisplayFileItem[] = [];
   // 普通引擎对话(不是插件任务)才用 run 上的续接指针;pointer = 本轮确立的那个。
   let chatResume = false;
   let pointer: ExternalSessionPointer | undefined;
@@ -732,11 +738,26 @@ async function externalEngineLoop(runId: string, ac: AbortController, run: any, 
     const taskPolicy = storedAgentConfig?.pluginOwner ? storedAgentConfig : {};
     const bridgeTools=Array.isArray(taskPolicy.pluginToolNames)?taskPolicy.pluginToolNames:[];
     const allowedBridge=bridgeTools.length?bridgeTools:taskPolicy.pluginReadOnly?['read_file','list_dir','list_files','glob_files','search_files','view_image','calculator','get_datetime']:[];
+    let agentsHome: string | undefined;
     if (allowedBridge.length) {
       const { createRunToolServer } = await import('../engines/toolServer.js');
       toolServer = await createRunToolServer({ userId, sessionId, runId, appId:deps().profile.appId, modelId,
         execMode:'host',cwd:engineCwd,approvalMode:normalizeApprovalMode(storedAgentConfig?.approvalMode),signal:ac.signal,
         toolsStrict:true,toolsList:allowedBridge },allowedBridge);
+    } else if (engineAgent && !storedAgentConfig?.pluginOwner) {
+      // 交接:这个 Agent 在 Tangu 上能用的工具(按它的工具设置)经桥交给引擎,人设 / 协作说明 / 记忆 / 技能写进指令目录。
+      // 工作目录先挂进这一轮的上下文:项目级技能(和同 id 的项目覆盖)按它找,enterRunContext 会把它清掉。
+      if (engineCwd) setRunCwd(engineCwd);
+      const handoff = await prepareEngineAgentHandoff({
+        runId, sessionId, userId, modelId, engineId, cwd: engineCwd, input, storedAgentConfig, agent: engineAgent, signal: ac.signal,
+        publish: (type, payload) => { if (!ac.signal.aborted) void publish(runId, type, payload); },
+        contentOffset: () => streamedText.length,
+        displayFiles: handoffFiles,
+        persistMessage: (files) => finalizeAssistantMessage(assistantId, sessionId, modelId, streamedText, '', toolServer?.calls() ?? [], toolServer?.results() ?? [], files),
+        engineEnv: engines.agentsHomeEnv?.(engineId) ?? null,
+      });
+      toolServer = handoff.toolServer;
+      agentsHome = handoff.agentsHome;
     }
     const previous = taskPolicy.externalSession;
     // 续接哪个引擎会话:插件任务用插件点名的那个(照旧);普通引擎对话用上一轮记在 run 上的指针,且对话自那以后没被改写。
@@ -754,6 +775,9 @@ async function externalEngineLoop(runId: string, ac: AbortController, run: any, 
       engineModelId: (typeof agentConfig.engineModelId === 'string' && agentConfig.engineModelId) || engineAgent?.def.engineModel || undefined,
       readOnly: taskPolicy.pluginReadOnly === true,
       mcpServers: toolServer ? [toolServer.server] : undefined,
+      // 交接:指令目录交给引擎(引擎定义里有 agentsHomeEnv 才用);桥里的调用由桥自己画卡,引擎那边同一次调用不上屏。
+      agentsHome,
+      hideToolPrefix: engineAgent && toolServer ? toolServer.toolPrefix : undefined,
       resumeSessionId: chatResume ? chain?.resumeId : (previous?.engineId === engineId && previous?.cwd === engineCwd ? previous.id : undefined),
       // 普通对话的指针连同记它的那家适配器一起交给引擎层核对(null = 老指针没记);插件任务不传。
       resumeFromAgent: chatResume && chain?.resumeId ? chain.resumeAgent ?? null : undefined,
@@ -774,11 +798,14 @@ async function externalEngineLoop(runId: string, ac: AbortController, run: any, 
       signal: ac.signal,
       publish: (type: string, payload: any) => {
         if (ac.signal.aborted) return;
+        if (type === 'token') streamedText += String(payload?.delta || '');
         void publish(runId, type, payload);
       },
       requestApproval: (preview: string, toolCall: ToolCall): Promise<ApprovalDecision> =>
         requestApproval(runId, toolCall, preview, ac.signal),
     });
+    // 引擎这一轮答完了:桥里还没取走的编号(等审批 / 还在跑的)这时撤掉、停下,终态卡片发完再落库。
+    if (engineAgent) await toolServer?.close().catch(() => {});
     ac.signal.throwIfAborted();
     finalContent = result.content || '';
     if (taskPolicy.pluginOwner && result.externalSessionId) {
@@ -786,11 +813,12 @@ async function externalEngineLoop(runId: string, ac: AbortController, run: any, 
       const fresh = typeof freshRaw === 'string' ? JSON.parse(freshRaw) : freshRaw;
       await deps().state.setAgentConfig(sessionId,JSON.stringify({...fresh,externalSession:{id:result.externalSessionId,engineId,cwd:engineCwd}}));
     }
+    const { calls: allCalls, results: allResults } = mergeBridgeCalls(result.toolCalls || [], result.toolResults || [], toolServer);
     await finalizeAssistantMessage(
-      assistantId, sessionId, modelId, finalContent, result.reasoning || '', result.toolCalls || [], result.toolResults || [],
+      assistantId, sessionId, modelId, finalContent, result.reasoning || '', allCalls, allResults, handoffFiles.length ? handoffFiles : undefined,
     );
     await drain(runId);
-    await publish(runId, 'done', { content: finalContent });
+    await publish(runId, 'done', { content: finalContent, ...(toolServer && engineAgent ? { toolOffsets: allCalls.map((c: any) => ({ id: c.id, offset: c.ui_content_offset })) } : {}) });
     await updateRunStatus(runId, 'done', { tokensTotal: result.tokensTotal, result: { content: finalContent, externalSessionId: result.externalSessionId, ...(pointer ? { externalSession: pointer } : {}) } });
     // Historian 从会话解析记忆域；文件同步使用已捕获的展示身份，不能拿共享记忆桶替代。
     // 引擎私聊没有 Tangu 记忆:不跑 Historian(它找不到会话 Agent 会回落默认 Agent,把 Codex/PI 的对话写进 Xyra 的 LOG/MEMORY),也不同步 Agent 文件。
@@ -807,8 +835,14 @@ async function externalEngineLoop(runId: string, ac: AbortController, run: any, 
       : sessionGone ? `${err.message} Send your message again to continue in a new session. It will not include the earlier context.`
       : err?.message || String(err);
     console.error(`[agent-core] external engine run ${runId} ${status}:`, msg);
-    if (finalContent.trim()) {
-      await finalizeAssistantMessage(assistantId, sessionId, modelId, finalContent, '', [], []).catch(() => {});
+    // 桥里已经执行过的调用(卡片)也落库:停掉 / 出错的那一轮,做过的事要看得见。
+    if (engineAgent) await toolServer?.close().catch(() => {});
+    // 有桥里的卡片 / 展示的文件时,连同已经上屏的那段正文一起落(卡片的位置按它算);没有就照旧只落已收尾的正文。
+    const bridged = !!(engineAgent && toolServer && (toolServer.calls().length || handoffFiles.length));
+    const text = bridged && !finalContent.trim() ? streamedText : finalContent;
+    if (text.trim() || bridged) {
+      const merged = mergeBridgeCalls([], [], engineAgent ? toolServer : undefined);
+      await finalizeAssistantMessage(assistantId, sessionId, modelId, text, '', merged.calls, merged.results, handoffFiles.length ? handoffFiles : undefined).catch(() => {});
     }
     await publish(runId, 'error', { error: msg, aborted, content: finalContent, ...(aborted ? reasonOf(runId) : {}) }).catch(() => {});
     await drain(runId).catch(() => {});
