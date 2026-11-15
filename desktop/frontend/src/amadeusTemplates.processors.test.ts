@@ -197,4 +197,19 @@ describe('openDailyNote', () => {
     expect(inserted).toHaveLength(1)
     void hooks
   })
+
+  it('出生前清单落后、刷新后才看到日记模板:问过插件且插件给了内容 → 不再叠模板;插件没给 → 照旧套模板', async () => {
+    for (const filled of [true, false]) {
+      reset()
+      const { tpl } = await load()
+      files.set('templates/daily.md', 'Daily {{title}}\n')
+      birthNoteFile.mockImplementation(async (...a: unknown[]) => { if (filled) files.set(String(a[0]), '# from plugin\n'); return 'created' })
+      state.refreshStructure.mockImplementation(async () => { state.pages = ['templates/daily.md'] })
+      await tpl.openDailyNote()
+      expect(birthNoteFile.mock.calls[0][1]).toEqual({ ask: true })
+      expect(inserted).toHaveLength(filled ? 0 : 1)
+    }
+    birthNoteFile.mockImplementation(async () => 'created')
+    state.refreshStructure.mockImplementation(async () => {})
+  })
 })

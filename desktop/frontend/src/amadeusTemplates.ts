@@ -135,6 +135,7 @@ export async function insertTemplate(templatePath: string, ctx: TemplateCtx, kin
   const target = ctx.v4Path ?? noteOf(ps()) ?? ''
   const root = ps().vaultRoot
   const scope = activePageScope()
+  const viaPlugins = hasTemplateProcessors() // 有处理器 = 这次插入可能等很久(见下面的复核)
   const [page, cfg] = await Promise.all([readTemplatePage(templatePath, target, kind), obsidianCfg<ObsidianTemplatesCfg>('templates')])
   if (!page) return
   // 插件的模板处理器可能等很久(弹框问用户):等的途中换了库 = 不插(同路径的笔记已是另一个库的);v3 那条还按块坐标写,
@@ -161,7 +162,8 @@ export async function insertTemplate(templatePath: string, ctx: TemplateCtx, kin
   if (!contents.length) return
   const st = ps()
   let rest = contents
-  if (ctx.emptyBlock && ctx.afterId && !st.blocks[ctx.afterId]?.content.trim()) { // 等的途中那一块被打了字:不覆盖,改插在它后面
+  // 等处理器的途中那一块被打了字:不覆盖,改插在它后面。没有处理器时照旧信编辑器开选择器那一刻的判断。
+  if (ctx.emptyBlock && ctx.afterId && !(viaPlugins && st.blocks[ctx.afterId]?.content.trim())) {
     st.setBlockContent(ctx.afterId, contents[0])
     rest = contents.slice(1)
   }
@@ -184,14 +186,18 @@ export async function openDailyNote(): Promise<void> {
   // 交出去的 v3 store 里写,写完即被冲掉:日记建出来但一个字都没有(2026-08-21 真机实测)。
   // 别处刚建了同名(宿主仅新建交回现文)= 已存在,照常打开、不套模板;没建成(已提示)→ 不打开一篇不存在的笔记。
   // 有日记模板 → 照旧出生后套模板(模板处理器按 'daily' 跑);没有 → 这是一篇空的新笔记,先问插件(registerNoteBirth)要初始内容。
-  const tpl = dailyTemplatePath(ps().pages, daily)
-  const born = await birthNoteFile(path, tpl ? undefined : { ask: true })
+  const tplBefore = dailyTemplatePath(ps().pages, daily)
+  const born = await birthNoteFile(path, tplBefore ? undefined : { ask: true })
   if (born === 'failed') return
   const existed = born === 'exists'
   if (!existed) await ps().refreshStructure()
   // 内部等就绪:v3 等 activePage,v4 等 unified 实例登记。focus:'body' = 进来就能打字(G4-06;新日记没套模板时同样要)。
   await openNote(path, { focus: 'body' })
-  if (existed || !tpl) return
+  if (existed) return
+  const tpl = dailyTemplatePath(ps().pages, daily) // 照旧按刷新后的清单找(出生前那份可能落后)
+  if (!tpl) return
+  // 出生前没看到模板 → 问过插件;插件已经给了内容就别再叠一份日记模板上去。
+  if (!tplBefore && ((await amadeus.readTextFile?.(path)?.catch(() => null)) ?? '') !== '') return
   // 模板读取失败(被删等)不影响日记本体。
   await insertTemplate(tpl, { v4Path: path }, 'daily').catch(() => { /* ignore */ })
 }
