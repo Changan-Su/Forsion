@@ -4549,7 +4549,7 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-wrap { top: calc(var(-
 }
 .ntf-close:hover { color: var(--text); }
 /* 手机横幅(NotificationHost 的 PhoneBanner:窄屏手机壳、没有原生横幅时 —— 网页版手机):状态栏下 4px、左右各 10px、
-   高 54,盖住网页画的顶栏 / 胶囊那一条(.bmc-chrome 35 / 55 之上),不碰页面内容。来源 · 标题一行小字、正文一行,
+   高 54(字放大时往下长),盖住网页画的顶栏 / 胶囊那一条(.bmc-chrome 35 / 55 之上),不碰页面内容。来源 · 标题一行小字、正文一行,
    放不下句尾省略;按钮和 × 同一行靠右,按钮不缩。卡面同 .ntf(浮层表面、按钮字 --accent-ink)。
    有原生外壳时由原生层画(Android NativeBanner.kt,同一套尺寸);原生外壳在却没有原生横幅(桥坏了、phone-stage 台架替身)
    时网页盖不到原生胶囊,落在胶囊那一条下面,通话中再让到通话条下面(同上面 .ntf-wrap 两条)。 */
@@ -4569,9 +4569,9 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-banner-wrap { top: cal
   display: flex;
   align-items: center;
   gap: 10px;
-  height: 54px;
+  min-height: 54px; /* 字放大时长高,不裁掉第二行 */
   box-sizing: border-box;
-  padding: 0 6px 0 12px;
+  padding: 6px 6px 6px 12px;
   font-size: var(--ui-font-meta, 12px);
   line-height: 1.4;
   background: var(--surface-float, var(--bg-card, var(--bg))); backdrop-filter: var(--surface-blur, none);
@@ -4586,7 +4586,8 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-banner-wrap { top: cal
 .ntf-banner-body { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .ntf-banner-source { font-size: var(--ui-font-caption, 11px); color: var(--text-muted); }
 .ntf-banner-source, .ntf-banner-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.ntf-banner .ntf-banner-action { flex-shrink: 0; align-self: center; margin-top: 0; white-space: nowrap; }
+/* 按钮不缩,但最宽 160(同原生 NativeBanner.kt):插件给的长按钮名不该把正文挤没,放不下句尾省略 */
+.ntf-banner .ntf-banner-action { flex-shrink: 0; align-self: center; margin-top: 0; white-space: nowrap; max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
 .ntf-banner .ntf-banner-close { align-self: center; margin: 0; padding: 6px; }
 .ntf-more {
   pointer-events: auto;

@@ -6,6 +6,7 @@
  * 共用代码,不 import capacitor 也不 import mobile/src。
  */
 import { useSyncExternalStore } from 'react'
+import { markUserGesture } from '@lcl/engine/userGesture'
 import type { AppNotification, NotifyLevel } from './notificationStore'
 import { useNotifications } from './notificationStore'
 
@@ -76,6 +77,44 @@ export function bannerPayload(n: AppNotification, labels: { dismiss: string; hin
 export function onNativeBannerEvent(id: unknown, kind: unknown): void {
   if (typeof id !== 'string' || !id) return
   const st = useNotifications.getState()
-  if (kind === 'action') st.activate(id)
-  else if (kind === 'dismiss') st.dismiss(id, 'user')
+  if (kind === 'action') {
+    markUserGesture() // 用户点的:动作同步弹出的卡和点页面上的按钮一样算用户自己做的(userGesture.ts)
+    st.activate(id)
+  } else if (kind === 'dismiss') st.dismiss(id, 'user')
+}
+
+/** 原生外壳那一半(Capacitor 插件 NativeChrome 的 setBanner / `banner` 事件),放在这里好和其余部分一起测。 */
+export interface NativeBannerBridge<Theme> {
+  setBanner(options: { banner: (NativeBannerPayload & { theme: Theme }) | null }): Promise<void>
+  addListener(event: 'banner', cb: (e: { id?: string; kind?: string }) => void): Promise<unknown>
+}
+
+/** 接上原生横幅(mobile/src/nativeChrome.ts 在原生顶栏装好时调)。
+ *  - 先注册 `banner` 事件,**成功后**才登记 presenter:页面收不到 × 的话,原生画的卡(常驻那张的 onClose)就悬着;注册失败 → 一直由页面画。
+ *  - `setBanner` 被拒 → 撤掉 presenter(页面接着画),并尽量让原生层收起它可能还画着的那张,免得两张叠着。
+ *  - 依次发、一次一个:晚到的旧调用不会盖掉新的。
+ *  `live()` = 原生顶栏还在(没回落到网页顶栏)。返回 `repaint`(换主题时重发屏上那条)与 `off`(回落网页顶栏时调,页面接着画)。 */
+export function connectNativeBanner<Theme>(bridge: NativeBannerBridge<Theme>, opts: { theme: () => Theme; live: () => boolean }): { repaint(): void; off(): void } {
+  let banner: NativeBannerPayload | null = null
+  let chain: Promise<void> = Promise.resolve()
+  let withdraw: (() => void) | null = null
+  const off = (): void => { withdraw?.(); withdraw = null }
+  const send = (): void => {
+    const current = banner
+    chain = chain.then(async () => {
+      if (!withdraw) return
+      try {
+        await bridge.setBanner({ banner: current ? { ...current, theme: opts.theme() } : null })
+      } catch (e) {
+        // 用户看不见的提示一张都不能有:从这里起由页面画
+        console.error('[notify] native banner failed, the page draws notifications:', e)
+        off()
+        if (current) void bridge.setBanner({ banner: null }).catch(() => {})
+      }
+    })
+  }
+  void bridge.addListener('banner', (e) => onNativeBannerEvent(e?.id, e?.kind)).then(() => {
+    if (opts.live() && !withdraw) withdraw = setNativeBannerPresenter((next) => { banner = next; send() })
+  }, (e) => { console.error('[notify] native banner events unavailable, the page draws notifications:', e) })
+  return { repaint: () => { if (banner) send() }, off }
 }

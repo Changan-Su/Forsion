@@ -9,7 +9,7 @@ import { accountChip, subscribeAccountChip } from '@/services/accountChip'
 import { useApp } from '@/stores/appStore'
 import { attentionIndex, mergeAttention, useAttention } from '@/stores/attentionStore'
 import { useInbox } from '@/stores/inboxStore'
-import { onNativeBannerEvent, setNativeBannerPresenter, type NativeBannerPayload } from '@/stores/notificationBanner'
+import { connectNativeBanner, type NativeBannerPayload } from '@/stores/notificationBanner'
 import { installKeyboardRise, keyboardRise, type ImeRise } from './keyboardRise'
 import { reducedMotion } from '@lcl/engine/spring'
 
@@ -284,28 +284,9 @@ export function installNativeChrome(): void {
   let chain: Promise<void> = Promise.resolve()
   let uninstall: (() => void) | null = null
 
-  // Notification banner (see the header). Kept so a theme change repaints it; sent in order, a stale call never lands last.
-  let banner: NativeBannerPayload | null = null
-  let bannerChain: Promise<void> = Promise.resolve()
-  let bannerOff: (() => void) | null = null
-  const sendBanner = (): void => {
-    const current = banner
-    bannerChain = bannerChain.then(async () => {
-      if (!bannerOff) return
-      try {
-        await plugin.setBanner({ banner: current ? { ...current, theme: readNativeTheme() } : null })
-      } catch (e) {
-        // Never a notification the user cannot see: the page draws the banner itself from here on.
-        console.error('[tangu-mobile] native banner failed, the page draws notifications:', e)
-        bannerOff?.(); bannerOff = null
-      }
-    })
-  }
-  // Only once the page can hear the banner's taps: a banner whose × never reaches the page would leave its card
-  // (and a sticky one's onClose) hanging. Until then, and if the listener cannot be added, the page draws it.
-  void plugin.addListener('banner', (e) => onNativeBannerEvent(e?.id, e?.kind)).then(() => {
-    if (uninstall && !bannerOff) bannerOff = setNativeBannerPresenter((next) => { banner = next; sendBanner() })
-  }, (e) => { console.error('[tangu-mobile] native banner events unavailable, the page draws notifications:', e) })
+  // Notification banner (see the header; the glue — listener first, a rejected call hands the banner back to the page —
+  // lives in notificationBanner.ts with its tests).
+  const banner = connectNativeBanner(plugin, { theme: readNativeTheme, live: () => !!uninstall })
 
   const send = (): void => {
     chain = chain.then(async () => {
@@ -332,7 +313,7 @@ export function installNativeChrome(): void {
         // Broken native side: never leave the user without a top bar.
         console.error('[tangu-mobile] native chrome failed, falling back to web top bar:', e)
         uninstall?.(); uninstall = null
-        bannerOff?.(); bannerOff = null // clear() below takes the native banner down too: the page draws it
+        banner.off() // clear() below takes the native banner down too: the page draws it
         applyChromeLayout(null) // the web bar's shell must not keep room for capsules that are not there
         void plugin.clear().catch(() => {})
       }
@@ -354,7 +335,7 @@ export function installNativeChrome(): void {
   void plugin.addListener('ime', keyboardRise).catch(() => {})
   // Skin / mode / custom colour changes repaint the bar (same attributes the model picker watches + inline vars);
   // switching glass off makes the capsules solid.
-  new MutationObserver(() => { send(); if (banner) sendBanner() }).observe(document.documentElement, { attributes: true, attributeFilter: ['data-mode', 'data-skin', 'data-bg', 'data-theme', 'data-glass', 'data-motion-theme', 'data-motion-fade', 'style', 'class'] })
+  new MutationObserver(() => { send(); banner.repaint() }).observe(document.documentElement, { attributes: true, attributeFilter: ['data-mode', 'data-skin', 'data-bg', 'data-theme', 'data-glass', 'data-motion-theme', 'data-motion-fade', 'style', 'class'] })
   subscribeAccountChip(send) // sign-in / sign-out / a new picture repaints the avatar
   // Badges: the stores change far more often than the answer does (every streamed token touches useApp) → re-send only
   // when the set of dots changed.
