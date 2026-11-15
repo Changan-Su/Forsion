@@ -546,6 +546,91 @@ describe('subscribeAgentStatus(Desk 伴随面 / ctx.tangu.subscribeAgentStatus �
     off()
   })})
 
+// ctx.tangu.stop / 按 runId 取状态(2026-11-13):停止走 appStore.stop(输入框停止按钮那条),会话先钉死。
+// 负对照(已实跑红):resolveStatusTarget 在 `{ runId }` 找不到时回落 activeId → 「不命中不停别的会话」「run 结束响一次 idle」红。
+describe('ctx.tangu.stop 与 { runId } 参数', () => {
+  const T0 = 6_000_000
+  const user = (id: string): UiMessage => ({ id, role: 'user', content: 'hi', status: 'done', timestamp: T0 })
+  const asst = (id: string): UiMessage => ({ id, role: 'assistant', content: '', status: 'streaming', timestamp: T0 + 1 })
+  const stopSpy = vi.fn(async (_sid?: string | null) => true)
+  let realStop: unknown
+  beforeEach(() => {
+    installTanguProbe()
+    realStop = useApp.getState().stop
+    stopSpy.mockClear()
+    useApp.setState({
+      stop: stopSpy,
+      activeId: 's2',
+      messagesBySession: { s1: [user('u1'), asst('a1')], s2: [user('u2'), asst('a2')] },
+      runningBySession: { s1: 'r1', s2: 'r2' },
+      stoppingBySession: {},
+      runStatsBySession: {},
+      llmRetryBySession: {},
+      groupVoting: {},
+    } as never)
+  })
+  afterEach(() => { useApp.setState({ stop: realStop } as never) })
+
+  it('{ runId } 命中:停的是跑这个 run 的会话,不是活动会话', async () => {
+    const p = readTangu()!
+    expect(typeof p.stop).toBe('function')
+    await expect(p.stop!({ runId: 'r1' })).resolves.toBe(true)
+    expect(stopSpy).toHaveBeenCalledTimes(1)
+    expect(stopSpy).toHaveBeenCalledWith('s1')
+  })
+
+  it('{ runId } 不命中 / runId 缺省:回 false,谁也不停', async () => {
+    const p = readTangu()!
+    await expect(p.stop!({ runId: 'gone' })).resolves.toBe(false)
+    await expect(p.stop!({ runId: undefined })).resolves.toBe(false)
+    await expect(p.stop!({ runId: null })).resolves.toBe(false)
+    expect(stopSpy).not.toHaveBeenCalled()
+  })
+
+  it('切了活动会话之后仍停对那一轮', async () => {
+    const p = readTangu()!
+    useApp.setState({ activeId: 's1' } as never)
+    useApp.setState({ activeId: 's2' } as never)
+    await p.stop!({ runId: 'r1' })
+    expect(stopSpy).toHaveBeenLastCalledWith('s1')
+    useApp.setState({ activeId: null } as never)
+    await p.stop!({ runId: 'r2' })
+    expect(stopSpy).toHaveBeenLastCalledWith('s2')
+  })
+
+  it('字符串 / 不传:同 agentStatus 的会话口径;没在跑 → false', async () => {
+    const p = readTangu()!
+    await expect(p.stop!()).resolves.toBe(true)
+    expect(stopSpy).toHaveBeenLastCalledWith('s2')
+    await expect(p.stop!('s1')).resolves.toBe(true)
+    expect(stopSpy).toHaveBeenLastCalledWith('s1')
+    stopSpy.mockClear()
+    await expect(p.stop!('idle-session')).resolves.toBe(false)
+    await expect(p.stop!(null)).resolves.toBe(false)
+    expect(stopSpy).not.toHaveBeenCalled()
+  })
+
+  it('appStore.stop 失败(引擎没确认)→ false', async () => {
+    stopSpy.mockResolvedValueOnce(false)
+    await expect(readTangu()!.stop!({ runId: 'r1' })).resolves.toBe(false)
+  })
+
+  it('按 runId 取状态 / 订阅:跟着跑它的会话;run 结束响一次 idle(runId null)', () => {
+    const p = readTangu()!
+    expect(p.agentStatus!({ runId: 'r1' })).toMatchObject({ sessionId: 's1', runId: 'r1' })
+    expect(p.agentStatus!({ runId: 'r9' })).toMatchObject({ phase: 'idle', sessionId: null, runId: null })
+    const seen: Array<string | null> = []
+    const off = p.subscribeAgentStatus!((st) => seen.push(`${st.phase}:${st.runId}`), { runId: 'r3' })
+    useApp.setState({ runningBySession: { s1: 'r1', s2: 'r2', s3: 'r3' }, messagesBySession: { ...useApp.getState().messagesBySession, s3: [user('u3'), asst('a3')] } } as never)
+    expect(seen).toEqual(['thinking:r3'])
+    useApp.setState({ activeId: 's1' } as never) // 切活动会话不影响
+    expect(seen).toEqual(['thinking:r3'])
+    useApp.setState({ runningBySession: { s1: 'r1', s2: 'r2' } } as never)
+    expect(seen).toEqual(['thinking:r3', 'idle:null'])
+    off()
+  })
+})
+
 // 语音通话跑在 Mini 窗:模型的话不经 run,store 里那段时间是 idle —— 「模型在出声」由 services/callVoice 跨窗报过来,
 // 探针把它叠在正在通话的那个会话上(Live3D 按 speechLevel 做口型)。这里直接喂 ingestCallVoice(= storage 事件的 newValue)。
 // 负对照(已实跑红):statusRefs 去掉 callPhaseRef → 「开口 / 收声各响一次」红(fire 在引用全等处早退);

@@ -135,7 +135,8 @@ export const PluginViewHost: React.FC<ViewProps & { def: ViewContribution; plugi
       const mounted = def.mount(el, {
         getLayout: () => { check(); return geometry.getSnapshot() },
         onLayout: (listener) => { check(); const off = geometry.subscribe(value => { if (alive) listener(value) }); layoutSubscriptions.add(off); return () => { off(); layoutSubscriptions.delete(off) } },
-        extendView, surface: isMini ? 'mini' : isFloating ? 'floating' : 'main',
+        // pip(Computer Use 悬浮小画面)排第一:那扇窗也算卫星窗,但视图要画紧凑卡
+        extendView, surface: kind === 'pip' ? 'pip' : isMini ? 'mini' : isFloating ? 'floating' : 'main',
         getParams: () => { check(); return { ...(useWorkspace.getState().leafById(current.current.leaf.id)?.params ?? current.current.params) } },
         setParams: (patch) => { check(); current.current.leaf.setParams({ ...(useWorkspace.getState().leafById(current.current.leaf.id)?.params ?? current.current.params), ...patch }) },
         setCompanionsVisible: (visible) => { check(); if (kind === 'main' && !isFloating && !isMini) setPluginCompanions(pluginId, current.current.leaf.id, def, visible) },
