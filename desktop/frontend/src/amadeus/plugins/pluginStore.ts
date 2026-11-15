@@ -107,6 +107,7 @@ import { getAggDb } from '../store/dbAggregateStore'
 import { kickAutomation } from '../store/automationKick'
 import { triggerToUpsert } from '../../views/automation/lib'
 import { memberOf, useCalendarConfig } from '../store/calendarConfigStore'
+import { pluginDefaultHotkey } from '../../shortcutUsage'
 import type {
   AmadeusPlugin,
   CommandContribution,
@@ -117,6 +118,7 @@ import type {
   PluginAppApi,
   PlatformAccountStatus,
   PluginContext,
+  PluginNetApi,
   PropertyTypeContribution,
   SettingContribution,
   SettingsViewContribution,
@@ -914,6 +916,7 @@ function pluginMeta(src: ExternalPluginSource): Omit<AmadeusPlugin, 'setup'> {
     requiresPlugins: src.requiresPlugins,
     entitlement: src.entitlement,
     capabilities: src.capabilities,
+    network: src.network,
     readme: src.readme,
     changelog: src.changelog,
     onboarding: src.onboarding,
@@ -1862,9 +1865,31 @@ export const usePluginStore = create<PluginState>((set, get) => {
         if (ctxAlive()) listener(status)
       }), 'account') : () => {},
     } : undefined
+    // ctx.net(2026-11-16+):只有本机桌面的主进程能代请求(web / 手机 / Unit 设备页的 amadeus 桥没有这一项 → 不注入)。
+    // 白名单不在这里判:主进程按 pluginId 读磁盘上的 manifest(这一侧递什么都不算数)。停用后在途的请求一律作废。
+    const netBridge = amadeus?.pluginNetRequest
+    const net: PluginNetApi | undefined = netBridge ? {
+      request: async (url, init) => {
+        const dead = (): Error => Object.assign(new Error('plugin disabled'), { code: 'net_failed' as const })
+        if (!ctxAlive()) throw dead()
+        const r = await netBridge(pluginId, String(url), init == null ? undefined : {
+          ...(init.method != null ? { method: init.method } : {}),
+          ...(init.headers != null ? { headers: init.headers } : {}),
+          ...(init.body != null ? { body: init.body } : {}),
+          ...(init.timeoutMs != null ? { timeoutMs: init.timeoutMs } : {}),
+        })
+        if (!ctxAlive()) throw dead()
+        if (!r.ok) throw Object.assign(new Error(r.message || r.code), { name: 'PluginNetError', code: r.code })
+        const bytes = r.bytes instanceof Uint8Array ? r.bytes : new Uint8Array(r.bytes as ArrayLike<number>)
+        let text: string | null = null
+        const readText = (): string => (text ??= new TextDecoder().decode(bytes))
+        return { status: r.status, headers: { ...r.headers }, bytes, url: r.url, text: readText, json: <T,>() => JSON.parse(readText()) as T }
+      },
+    } : undefined
     const ctx: PluginContext = {
     app: appApi,
     account: scopedAccount,
+    ...(net ? { net } : {}),
     registerSlashItem: (item) => set((s) => ({ slashItems: [...s.slashItems, { pluginId, item }] })),
     registerSelectionAction: (action) => {
       if (!ctxAlive()) return
@@ -1881,8 +1906,27 @@ export const usePluginStore = create<PluginState>((set, get) => {
       if (output != null && output !== 'preview' && output !== 'none') console.warn(`[amadeus] 插件 ${pluginId} 的划线动作「${action.id}」output 只认 'preview' | 'none',已当作 'preview'`)
       set((s) => ({ selectionActions: [...s.selectionActions.filter((o) => !(o.pluginId === pluginId && o.item.id === action.id)), { pluginId, item: action }] }))
     },
-    registerCommand: (command) =>
-      set((s) => ({ commands: [...s.commands, { pluginId, item: command }] })),
+    // 2026-11-16+:回一个只撤这一次登记的 disposer;同插件同 id 再登记 = 原位替换(命令面板一行,不是两行)。
+    // 撤按条目身份认:被替换掉的那次登记的 disposer、停用后旧实例的 disposer 都是空操作,碰不到新的那条。
+    registerCommand: (command) => {
+      if (!ctxAlive()) return () => {}
+      if (!command || typeof command.id !== 'string' || !command.id || typeof command.run !== 'function') {
+        console.warn(`[amadeus] 插件 ${pluginId} 的 registerCommand 缺 id / run,已忽略`)
+        return () => {}
+      }
+      if (command.hotkey != null && !pluginDefaultHotkey(command.hotkey)) {
+        console.warn(`[amadeus] 插件 ${pluginId} 的命令「${command.id}」hotkey 无效(要带 Mod,形如 'Mod+Shift+T'),已当作没写`)
+      }
+      const entry: Owned<CommandContribution> = { pluginId, item: command }
+      set((s) => {
+        const i = s.commands.findIndex((o) => o.pluginId === pluginId && o.item.id === command.id)
+        if (i < 0) return { commands: [...s.commands, entry] }
+        const commands = s.commands.slice()
+        commands[i] = entry
+        return { commands }
+      })
+      return () => set((s) => (s.commands.includes(entry) ? { commands: s.commands.filter((o) => o !== entry) } : s))
+    },
     registerTheme: (theme) => {
       injectThemeStyle(theme.id, theme.css)
       scope.own('theme', () => removeThemeStyle(theme.id), theme.id) // <style> 在 store 外:只删切片会留孤儿

@@ -35,6 +35,8 @@ import type { AmadeusSyncFactory } from './cloudSeam'
 import { readPluginIconDataUrl } from '../pluginIcon'
 import { mt } from '../mainI18n'
 import { moveToDesktopTrash, restoreDesktopTrash } from '../trashWriter'
+import { createManifestPatternLookup, pluginNetRequest } from '../pluginNet'
+import { networkOf } from '@amadeus-shared/pluginSource'
 import '../mainMessages' // P1-K5:main.dialog.openVault 在这里登记(main.ts 也 import,重复登记同值无害)
 
 const runFile = promisify(execFile)
@@ -695,6 +697,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
       id?: unknown; name?: unknown; nameEn?: unknown; version?: unknown; description?: unknown; descriptionEn?: unknown
       main?: unknown; apiVersion?: unknown; minAppVersion?: unknown; requiresApp?: unknown; requiresPlugins?: unknown
       capabilities?: unknown; onboarding?: unknown; guide?: unknown; events?: unknown; fileExtensions?: unknown; widgets?: unknown; storeSources?: unknown
+      network?: unknown
     }
     for (const product of products) {
       const pdir = product.root
@@ -766,6 +769,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
         onboarding: sanitizeOnboarding(m?.onboarding),
         guide: sanitizeGuide(m?.guide),
         storeSources: declaredSourcesOf(id, m?.storeSources).length ? declaredSourcesOf(id, m?.storeSources) : undefined,
+        network: networkOf(m?.network),
         widgets,
         events: sanitizeEvents(m?.events),
         // fileExtensions 刻意不透出:声明了就已经 blocked,再把它传下去只会让下游误以为这套后缀受保护。
@@ -1035,6 +1039,24 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
     } catch {
       return false
     }
+  })
+
+  // ctx.net(2026-11-16+,electron/pluginNet.ts):主进程代插件请求它在 manifest `network` 里声明过的 https 域名。
+  // 白名单只从磁盘读(插件代码跑在渲染层主世界,能直接调这条通道,渲染层递来的清单一个字都不信);定位口径同 readExternalPlugins。
+  // 直接挂 ipcMain:不走 handle() —— 那条带「库换了就拒」的闸,还会进 Unit 设备页的派发表,联网跟库无关、也不给远端。
+  const pluginNetworkPatterns = createManifestPatternLookup({
+    devSources: async () => (await readDevPlugins(new Set())).flatMap((s) => (s.devRoot ? [{ id: s.id, dir: s.devRoot }] : [])),
+    pluginsDir: globalPluginsDir,
+    idOf: (dirName, manifestId) => pluginIdOf(dirName, manifestId),
+    warn: (m) => console.warn(m),
+  })
+  ipcMain.handle(IPC.pluginNetRequest, (e, pluginId: unknown, url: unknown, init: unknown) => {
+    // 只认我们自己窗口的顶层页面(同 main.ts isTrustedSender):webview 访客页 / 子 frame 拿不到这条代理
+    const wc = e.sender
+    if (!wc || wc.isDestroyed() || wc.getType() === 'webview' || !BrowserWindow.fromWebContents(wc) || (e.senderFrame && e.senderFrame !== wc.mainFrame)) {
+      return { ok: false, code: 'net_failed', message: 'untrusted sender' }
+    }
+    return pluginNetRequest(pluginId, url, init, { patternsFor: pluginNetworkPatterns, userAgent: `Forsion/${app.getVersion()}` })
   })
 
   // 启动即同步预扫插件扩展名 → 早于渲染端 restoreVault→listPages,关掉「.mindmap.md 被当页面加载」的启动竞态(Codex #2)。

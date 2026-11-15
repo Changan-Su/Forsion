@@ -68,6 +68,18 @@ export interface CommandContribution {
   run(args?: Record<string, unknown>): void | Promise<void>
   keywords?: string
   /**
+   * Default key binding (2026-11-16+; older hosts ignore it). Modifiers and one key joined with `+`, where `Mod` is
+   * ⌘ on macOS and Ctrl elsewhere — `'Mod+Shift+T'`, `'Mod+Alt+1'`, `'Mod+Shift+['`. It must include `Mod` (a bare or
+   * Alt-only key would fire while the user types); anything else is ignored with a console warning.
+   *
+   * It is only a suggestion. A binding the user sets for this command always wins. The default takes effect only
+   * while nothing else uses the key — a built-in command, a system or note-editor shortcut, the user's binding for
+   * any other command, or another plugin's default for the same key (then neither plugin gets it). A conflicting
+   * default stays inactive: Settings → Shortcuts lists the command as unbound with a note naming the conflict, and
+   * the default switches on by itself once the key is free. The user can always bind a key there manually.
+   */
+  hotkey?: string
+  /**
    * Toggle state, for on/off commands only. When declared, a copy of this command pinned to the
    * Ribbon command zone renders as a toggle (`aria-pressed` + highlighted while on). Evaluated at
    * render time — keep it cheap and side-effect free; the Ribbon re-reads it after a click and on
@@ -1618,6 +1630,67 @@ export interface PluginAccountStatus {
   workspaceId?: string
 }
 
+/** Error codes `ctx.net.request` rejects with (on `err.code`). */
+export type PluginNetErrorCode =
+  /** The URL's host is not covered by the manifest `network` list (also: the plugin declares none). */
+  | 'net_domain_not_declared'
+  /** The host is an IP address, or resolves (at connect time, every redirect hop included) to a loopback,
+   *  private, link-local, CGNAT, multicast or reserved address. */
+  | 'net_blocked_address'
+  /** The whole request — every redirect hop and the response body — took longer than `timeoutMs`. */
+  | 'net_timeout'
+  /** The response body (after decompression) or the request body is larger than 10 MB. */
+  | 'net_too_large'
+  /** Not an absolute `https:` URL on the default port, or it carries user:password@. */
+  | 'net_bad_url'
+  /** Bad `init`: unsupported method, a body on GET/HEAD, a header the host sets itself (Host, Content-Length,
+   *  Connection, Transfer-Encoding, Proxy-*, Sec-* …), or a malformed header. */
+  | 'net_bad_request'
+  /** Anything else: DNS failure, TLS error, connection reset, more than 5 redirects. `err.message` says which. */
+  | 'net_failed'
+
+/** What `ctx.net.request` resolves with — any HTTP status, including 4xx / 5xx (only transport problems reject). */
+export interface PluginNetResponse {
+  status: number
+  /** Lower-case header names; repeated headers joined with ', '. */
+  headers: Record<string, string>
+  /** The body, already decompressed. */
+  bytes: Uint8Array
+  /** The final URL after redirects. */
+  url: string
+  /** `bytes` decoded as UTF-8. */
+  text(): string
+  /** `text()` parsed as JSON; throws on invalid JSON. */
+  json<T = unknown>(): T
+}
+
+/**
+ * Network requests made by the host on the plugin's behalf (2026-11-16+, desktop only; absent on web and mobile,
+ * and older hosts lack it — check `if (ctx.net)`). Use it for third-party APIs that send no CORS headers, where a
+ * plain `fetch` from plugin code fails.
+ *
+ * Only hosts listed in the manifest's `network` array are reachable, and the user sees that list on the plugin's
+ * page ("Accesses: …"). Entries are host names only — `"api.example.com"` exactly, or `"*.example.com"` for any
+ * subdomain at any depth (not `example.com` itself; list both if you need both). No scheme, port or path.
+ *
+ * The rules, enforced by the host for every redirect hop: `https:` on the default port only; IP-address hosts and
+ * names that resolve to local/private addresses are refused; at most 5 redirects, each re-checked against your list
+ * (Authorization and Cookie are dropped when a redirect changes host); no app cookies, proxy credentials or client
+ * certificates are ever attached — send your own `Authorization` header if the API needs one; response body ≤ 10 MB;
+ * `timeoutMs` defaults to 30 000 and is capped at 60 000. Failures reject with an `Error` whose `code` is a
+ * {@link PluginNetErrorCode}. Requests still in flight when the plugin is disabled reject.
+ */
+export interface PluginNetApi {
+  request(url: string, init?: {
+    /** GET (default), HEAD, POST, PUT, PATCH, DELETE or OPTIONS. */
+    method?: string
+    headers?: Record<string, string>
+    /** A string is sent as UTF-8 (Content-Type defaults to text/plain). Not allowed on GET / HEAD. */
+    body?: string | Uint8Array
+    timeoutMs?: number
+  }): Promise<PluginNetResponse>
+}
+
 /** Host-owned account; credentials never form part of this plugin API. */
 export interface PluginAccount {
   status(): Promise<PluginAccountStatus>
@@ -1879,12 +1952,21 @@ export interface PluginContext {
    * The latest active registration wins; disable removes it. Schema/serializer updates are not supported. */
   registerNoteRenderer?(def: import('./noteRenderers').NoteRendererContribution): { dispose(): void }
   account?: PluginAccount
+  /** Host-made HTTPS requests to the domains in manifest `network` (2026-11-16+, desktop only; see {@link PluginNetApi}).
+   *  Absent on web, mobile and older hosts. */
+  net?: PluginNetApi
   app: PluginAppApi
   registerSlashItem(item: SlashContribution): void
   /** Add an action to the selection bar's "⋯" menu (see SelectionActionContribution). The result goes
    *  through the host's preview + confirm, never straight into the note. Revoked on disable / reload. */
   registerSelectionAction(action: SelectionActionContribution): void
-  registerCommand(command: CommandContribution): void
+  /** Add a command to the command palette and Settings → Shortcuts (and, with `invoke`, the agent's catalog).
+   *  Returns a disposer that removes exactly this registration (2026-11-16+). Registering the same `id` again from
+   *  the same plugin replaces the earlier entry in place — one row, updated title / run / hotkey — so a plugin can
+   *  add and remove commands at runtime (one per enabled template, say) without being reloaded. All of them still
+   *  go away when the plugin is disabled. Older hosts return `undefined` and append a duplicate on re-registration:
+   *  call the result as `off?.()` and register each id once there. */
+  registerCommand(command: CommandContribution): () => void
   registerTheme(theme: ThemeContribution): void
   /** Adds an image-only preset to Appearance settings; never changes the user's selection. */
   registerAppearance?(preset: import('../../../../shared/startupAppearance').AppearancePreset): () => void
@@ -2957,6 +3039,8 @@ export interface AmadeusPlugin {
   entitlement?: string
   /** 声明要用的宿主敏感能力(manifest `capabilities`,主进程已按白名单过滤)。没声明的能力宿主不注入。 */
   capabilities?: import('@amadeus-shared/ipc').PluginCapability[]
+  /** ctx.net 能访问的主机名模式(manifest `network`,2026-11-16+):只给详情页 / 商店展示;主进程每次请求都从磁盘重读。 */
+  network?: string[]
   /** README.md content for the detail page (external plugins only). */
   readme?: string
   /** CHANGELOG.md content — rendered as the "更新日志" section on the detail page (external plugins only). */
