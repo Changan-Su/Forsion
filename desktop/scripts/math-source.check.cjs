@@ -6,6 +6,7 @@
 //   D. 选区盖住公式时字体不跳;离开公式后钩子类全部收走。
 //   E. 行内公式编辑中的预览是浮在这一行上方的气泡(读浮层 token,▶ 标光标,放不下翻到下方,不推挤正文);块公式预览照旧在源码下方。
 //   F. 选区整个落在一个公式两头的 `$` 之间(真按键 Shift+→ 选中占位):不弹格式浮条;选区跨出公式、连 `$` 选中整个公式照旧弹。
+//   G. 同上的选区:预览照常(行内浮层 ▶ 标在选区末端 —— 同 LaTeX Suite;块公式在源码下方);选区跨出公式照旧不出预览。
 // 用法:npm run check:mathsource(自起 vite;HARNESS_URL=… 指到自己起的端口)。可选 LATEX_PLUGIN_DIR=<插件目录> 再验真插件的
 //      token 色叠在宿主上时插件赢。只跑几部分:--only=space,look,float,select。
 const fs = require('fs'), os = require('os'), path = require('path')
@@ -291,9 +292,9 @@ async function partFloat(browser, dark) {
   await settle(p)
   const inCmd = await p.evaluate(() => document.querySelector('.math-preview--float annotation')?.textContent)
   check(`E7 ${tag}: 光标在命令名中间时 ▶ 挪到命令前,不拆坏命令`, inCmd === 'x^2 + {\\blacktriangleright}\\sqrt{y}', inCmd)
-  await caret(p, 'sqrt{', 1, 5)
+  await caret(p, '行内 $', 0, 5)
   await settle(p)
-  check(`E8 ${tag}: 有选区时不出预览(现有规则)`, await p.locator('.math-preview--float').count() === 0)
+  check(`E8 ${tag}: 选区跨出公式时不出预览(现有规则)`, await p.locator('.math-preview--float').count() === 0)
   // 放不下就翻到下方:把公式那一行滚到可视区顶上
   await caret(p, 'sqrt{', 5)
   await p.evaluate((sel) => { const el = [...document.querySelectorAll(`${sel} p`)].find((x) => x.textContent.includes('结束')); el.scrollIntoView({ block: 'start' }) }, PM)
@@ -333,25 +334,29 @@ async function partSelect(browser) {
   // 正对照:普通正文的选区照常弹浮条(台架里浮条根本不出的话,下面的「不弹」就没意义)
   let got = await select('结束', 0, 2)
   check('F0 正文里选中两个字照常弹格式浮条', got === '结束' && await bar() === 1, { got, bar: await bar() })
-  // F1:行内公式里选中 y
+  // F1 / G1:行内公式里选中 y
   got = await select('sqrt{y', 5, 1)
   const f1 = { got, bar: await bar(), float: await p.locator('.math-preview--float').count(),
     ann: await p.evaluate(() => document.querySelector('.math-preview--float annotation')?.textContent ?? null) }
   check('F1 行内公式源码里选中一个字不弹格式浮条', f1.got === 'y' && f1.bar === 0, f1)
-  // F2:块公式里选中 i
+  check('G1 同上:行内预览照常出,▶ 标在选区末端', f1.float === 1 && f1.ann === 'x^2 + \\sqrt{y{\\blacktriangleright}}', f1)
+  // F2 / G2:块公式里选中 i
   got = await select('sum_{i', 5, 1)
   const f2 = { got, bar: await bar(), block: await p.locator('.math-preview--block').count(), float: await p.locator('.math-preview--float').count() }
   check('F2 块公式源码里选中一个字不弹格式浮条', f2.got === 'i' && f2.bar === 0, f2)
-  // F3:选区从公式里往左跨到正文(一半在公式里)—— 现状不变
+  check('G2 同上:块公式的预览照常在源码下方', f2.block === 1 && f2.float === 0, f2)
+  // F3 / G3:选区从公式里往左跨到正文(一半在公式里)—— 现状不变
   got = await select('x^2', 1, 5, 'Shift+ArrowLeft')
   const f3 = { got, bar: await bar(), float: await p.locator('.math-preview--float').count(), block: await p.locator('.math-preview--block').count() }
   check('F3 选区一半在公式里、一半在正文照旧弹格式浮条', f3.got === '行内 $x' && f3.bar === 1, f3)
-  // F5:连两头的 `$` 一起选中整个行内公式 = 对整个公式动手,现状不变
+  check('G3 同上:跨出公式的选区照旧不出预览', f3.float === 0 && f3.block === 0, f3)
+  // F5 / G5:连两头的 `$` 一起选中整个行内公式 = 对整个公式动手,现状不变
   await caret(p, '$x^2', 0, 16)
   await settle(p, 350)
   const f5 = { got: await p.evaluate(() => { const s = window.__upage.probe.view().state.selection; return s.$from.parent.textBetween(s.$from.parentOffset, s.$to.parentOffset) }),
     bar: await bar(), float: await p.locator('.math-preview--float').count() }
   check('F5 连 $ 一起选中整个公式照旧弹格式浮条', f5.got === '$x^2 + \\sqrt{y}$' && f5.bar === 1, f5)
+  check('G5 同上:不出预览(现状)', f5.float === 0, f5)
   // F4:选区从公式里跨到公式外(块公式选到行尾之后的下一段)—— 照旧弹
   got = await select('sum_{i', 5, 20)
   const f4 = { got, bar: await bar(), block: await p.locator('.math-preview--block').count() }

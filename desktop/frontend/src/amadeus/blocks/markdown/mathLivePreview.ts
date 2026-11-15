@@ -191,16 +191,14 @@ export function formulaAtSelection(state: EditorState): { from: number; to: numb
   return sp ? { from: cs + sp.from, to: cs + sp.to, latex: sp.latex, display: sp.display } : null
 }
 
-/** 光标所在的行内公式(编辑中、空选区):给浮层预览用。不在行内公式里 / 有选区 / 没焦点 → null。 */
+/** 正在编辑的行内公式(光标或选区在它里面,口径同 selectionInside):给浮层预览用。没焦点 / 不在行内公式里 /
+ *  选区跨出公式 → null。▶ 标在选区末端(空选区就是光标),同 LaTeX Suite —— 选中占位时也看得出在哪。 */
 function activeInlineFormula(state: EditorState): { from: number; to: number; latex: string; caretAt: number } | null {
-  const { $from, from, to } = state.selection
-  if (from !== to || !editorFocused(state) || !$from.parent.isTextblock || $from.parent.type.spec.code) return null
-  const s = buildBlockString($from.parent)
-  if (s.indexOf('$') === -1) return null
-  const cs = $from.start()
-  const sp = scanMath(s).find((x) => from >= cs + x.from && from < cs + x.to)
-  if (!sp || sp.display) return null
-  return { from: cs + sp.from, to: cs + sp.to, latex: sp.latex, caretAt: Math.min(Math.max(from - (cs + sp.from + 1), 0), sp.latex.length) }
+  if (!editorFocused(state)) return null
+  const hit = formulaAtSelection(state)
+  if (!hit || hit.display) return null
+  const { to } = state.selection
+  return { from: hit.from, to: hit.to, latex: hit.latex, caretAt: Math.min(Math.max(to - (hit.from + 1), 0), hit.latex.length) }
 }
 
 const FLOAT_GAP = 4 // 气泡与这一行之间的空隙(视觉 px)
@@ -1007,9 +1005,8 @@ function buildDecorations(state: EditorState): DecorationSet {
     const spans = scanMath(s)
     if (!spans.length) return false
     for (const sp of spans) {
-      const editing = focus && (selFrom === selTo
-        ? selFrom >= cs + sp.from && selFrom < cs + sp.to
-        : selFrom < cs + sp.to && selTo > cs + sp.from)
+      const inside = selectionInside(selFrom, selTo, cs + sp.from, cs + sp.to, sp.display)
+      const editing = focus && (inside || (selFrom !== selTo && selFrom < cs + sp.to && selTo > cs + sp.from))
       if (editing) {
         // Whole source, `$` included: the public styling hook (monospace, italic, code size). PM merges it
         // into every text span of the formula, so selectors are `.math-source.math-source-x`, not descendants.
@@ -1018,10 +1015,9 @@ function buildDecorations(state: EditorState): DecorationSet {
         for (const token of mathSourceHighlights(s.slice(sp.from, sp.to), cs + sp.from, { from: selFrom, to: selTo })) {
           decos.push(Decoration.inline(token.from, token.to, { class: token.className }))
         }
-        // Only the formula containing the caret gets a preview. Inline previews
-        // occupy a row after the paragraph, so neither source nor adjacent text is covered.
+        // 只有光标 / 选区整个落在里面的那个公式出预览(选中占位时照常出,同 Obsidian);选区跨出公式不出。
         // 块公式的预览在源码下方;行内公式的预览是插件视图自己摆的浮层(InlineMathFloat),不走装饰。
-        if (selFrom !== selTo || !sp.display) continue
+        if (!inside || !sp.display) continue
         decos.push(Decoration.widget(cs + sp.to, (v, getPos) => renderMath(v, sp.latex, true, getPos, true), {
           side: 1,
           ignoreSelection: true,
