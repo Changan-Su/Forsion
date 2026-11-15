@@ -12,12 +12,31 @@ export type UnitVia = 'lan' | 'p2p' | 'tunnel'
 
 /** 选路要看的本端条件。 */
 export interface UnitRouteEnv {
-  /** 这台设备的直连地址此刻探得通(LAN 探针;只说明端口通,分不出配没配对)。 */
+  /** 这台设备的直连地址此刻探得通,且应答的就是这一行(lanProbeMatches;分不出配没配对)。 */
   lanOk: boolean
   /** 本端有 P2P 打洞的桥。 */
   p2p: boolean
   /** 用户上一次在 设置 › 设备 里给这台明确选过、并且加载成功的通路(readRememberedVia);没选过 / 读坏 = null。 */
   remembered?: UnitVia | null
+}
+
+/** LAN 探针回包(window.tangu.unitsProbeLan;null = 没探通 / 不是 Unit)。 */
+export interface LanProbeMeta { instanceId: string; name: string; unitId?: string | null; self?: boolean }
+
+/**
+ * 直连地址上应答的,是不是名册里的这一行(rowId)。设备直连地址 = 局域网 IP + 固定端口,同一台电脑以前登记过的旧记录
+ * 地址全都一样:只看「通不通」,本机正在跑的那份一应答,每条旧记录都会被画成「在线 · 直连」,点下去连到的也是正在跑的那台。
+ * - 没探通 → false。
+ * - 应答的是本机自己(self)→ false:直连自己没有意义,名册里哪一行都不是它要找的那台。
+ * - 对方报了名册 id → 等于这一行的 id 才算。
+ * - 没报(旧版本 Forsion 的 /unit/meta 没有这个字段;新版此刻不知道自己是哪一行也不报)→ 不知道:保持旧行为,探通就算。
+ *   代价:指向旧版本那份 Forsion 的旧记录,在它升级之前仍会显示可直连。
+ */
+export function lanProbeMatches(meta: LanProbeMeta | null | undefined, rowId: string): boolean {
+  if (!meta) return false
+  if (meta.self) return false
+  if (typeof meta.unitId === 'string' && meta.unitId) return meta.unitId === rowId
+  return true
 }
 
 /** 选路结果;downgraded = 记住的是直连,这次探针不通,改走中转(调用方出声说一句)。 */

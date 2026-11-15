@@ -21,7 +21,7 @@ import { useI18n, registerMessages } from './i18n'
 import { unitWindowId } from './windowKind'
 import { AccountCard } from './components/AccountCard'
 import { UnitFrame, UnitRemoteSurface, leaveUnitRemote, runUnitRoute, useUnitRemote } from './components/UnitSwitcher'
-import { pickUnitRoute, readRememberedVia, unitWindowRosterState } from './components/unitPanelModel'
+import { lanProbeMatches, pickUnitRoute, readRememberedVia, unitWindowRosterState } from './components/unitPanelModel'
 import { useUnitRoster } from './components/unitRoster'
 import { onAccountWillChange } from './services/accountTransition'
 import type { UnitInfo } from './types'
@@ -93,7 +93,7 @@ export function UnitWindowRoot(): React.ReactElement {
     const cur = useUnitRemote.getState().target
     if (opts.quiet && cur?.unitId === id) { setState('ready'); return }
     let lanOk = false
-    if (u.lanUrl && tg?.unitsProbeLan) lanOk = !!(await tg.unitsProbeLan(u.lanUrl).catch(() => null))
+    if (u.lanUrl && tg?.unitsProbeLan) lanOk = lanProbeMatches(await tg.unitsProbeLan(u.lanUrl).catch(() => null), u.id) // 应答的得是这一台(旧登记直连地址相同)
     if (my !== epoch.current) return
     const pick = pickUnitRoute(u, { lanOk, p2p: false, remembered: readRememberedVia(id) })
     if (!pick) return settle('offline')

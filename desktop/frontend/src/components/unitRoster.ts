@@ -3,6 +3,7 @@
  * - 读失败 ≠ 空:unitsList 抛错或非 200/401 时保留旧名册(自己名下的和共享过来的都留);401 = 没登录 → null。
  * - 换账号 / 登出(onAuthChanged)立刻清空,免得画出上一个账号的设备。
  * - LAN 探针结果同样缓存;刷新时不先清空(否则行会在「在线 / 离线」两组之间跳),每台探完逐个覆盖。
+ *   探通还要核身份(lanProbeMatches):同一台电脑的旧登记直连地址都一样,应答的不是这一行就不算。
  * - 共享过来的 Unit(别人共享给当前账号的):名册带 `{ shared: true }` 要;回包没有 `shared`(旧版云端 / Extend)= 没有这一组,
  *   `shared` 形状不对 = 不知道(沿用旧的)。正看着的那台从共享列表里没了、或不能进了 → 退回这台电脑并说一句(onSharedRevoked)。
  * 设置 › 设备在独立浮窗里(另一份 store),它自己拉,不走这里。
@@ -10,6 +11,7 @@
 import { create } from 'zustand'
 import type { UnitInfo } from '../types'
 import { parseSharedUnits, type SharedUnit } from '../../../shared/sharedUnits'
+import { lanProbeMatches } from './unitPanelModel'
 
 export interface UnitRosterState {
   /** undefined = 还没拉过;null = 没登录(看不到名册);[] = 名下没有别的设备 / 没有名册桥。 */
@@ -72,7 +74,7 @@ export const useUnitRoster = create<UnitRosterState>((set, get) => ({
     for (const u of units ?? []) {
       if (!u.lanUrl || !t?.unitsProbeLan) continue
       void t.unitsProbeLan(u.lanUrl)
-        .then((meta) => !!meta, () => false)
+        .then((meta) => lanProbeMatches(meta, u.id), () => false)
         .then((ok) => { if (my === seq && get().lanOk[u.id] !== ok) set((s) => ({ lanOk: { ...s.lanOk, [u.id]: ok } })) })
     }
   },

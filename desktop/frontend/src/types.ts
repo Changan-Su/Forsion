@@ -596,8 +596,9 @@ declare global {
       /** 本机已配对的来访设备(T1)与回收。 */
       unitsPairedList?(): Promise<UnitPairedDevice[]>
       unitsPairedRemove?(id: string): Promise<{ ok: boolean }>
-      /** LAN 直连探针(主进程发,免 CORS):是台 unitWeb 就回 meta,否则 null。 */
-      unitsProbeLan?(lanUrl: string): Promise<{ instanceId: string; name: string } | null>
+      /** LAN 直连探针(主进程发,免 CORS):是台 unitWeb 就回 meta,否则 null。unitId = 对方报的名册 id(旧版不报);
+       *  self = 应答的就是本机。判「是不是名册里那一行」用 unitPanelModel.lanProbeMatches,别只看非 null。 */
+      unitsProbeLan?(lanUrl: string): Promise<{ instanceId: string; name: string; unitId?: string; self?: true } | null>
       /** P2P 直连打开设备:成了回本机代理地址;失败 reject(UI 回落中转)。 */
       unitsP2pOpen?(id: string): Promise<{ url: string }>
       /** 桌面作为调用方(新会话建到账号下另一台电脑上):主进程本机中转口的地址 + 本次启动的口令(electron/unitRelay.ts)。
