@@ -28,6 +28,9 @@
 // 用法:npm run check:rtcorpus(自带起停 vite;worktree 里设 HARNESS_URL 指到自己的端口)
 //      node scripts/e2e-editor.cjs --check=rtcorpus --only=d06   只跑 id 含 d06 的
 //      --dump   把每条的落盘原文打出来(给新语料定黄金输出用)
+// 加粗字面化开关(隐藏,`litbold=1`):HARNESS_URL 带上它就按开着跑 —— 写成 `…/harness.html?litbold=1&upage&z=`
+//      (脚本自己在后面拼 `?upage…`)。每页都断言编辑器根上的 data-literal-bold 与网址一致(不一致 = 测到了别的服务)。
+//      两种开关下期望不同的条目带 goldenLit(开着时的黄金输出),如 `__strong__` 开着原样保留。
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
@@ -49,6 +52,7 @@ const PM = '.unified-body .ProseMirror'
 const M = 'EDITHERE'
 const ONLY = (process.argv.find((a) => a.startsWith('--only=')) || '').slice('--only='.length)
 const DUMP = process.argv.includes('--dump')
+const LITBOLD = /[?&]litbold=1(?:&|$)/.test(BASE)
 
 const V = 'verbatim', W = 'whitelist', S = 'stable', P = 'pending'
 /** golden:whitelist 桶第一轮的期望落盘(含首段的 Z)。forbid:任何桶都不许出现的形态;require:落盘必须含的形态。
@@ -77,7 +81,7 @@ const CASES = [
   { id: 'd18.bom', bucket: V, why: 'D-01(0a 已修:BOM 归 fm 侧逐字)', md: `\uFEFF${M}\n\npara\n` },
   { id: 'd18.task_upper_X', bucket: V, md: `${M}\n\n- [X] Done\n` },
   // 附录 A 认定的规范化对**被编辑的块**照旧适用(未编辑的块见上面逐字的同名条目)。
-  { id: 'd18.emph_underscore_edited', bucket: W, why: '附录 A I-16:`_it_`→`*it*`(09-18 拍板);强调符统一 `*`(attentionFlanking.ts)', md: `_emph_ and __strong__ ${M}\n`, golden: `*emph* and **strong** ${M}Z\n` }, // 标记放句尾:紧跟光标的空格会被 I-06 换成 NBSP(另一包)
+  { id: 'd18.emph_underscore_edited', bucket: W, why: '附录 A I-16:`_it_`→`*it*`(09-18 拍板);强调符统一 `*`(attentionFlanking.ts);加粗字面化开着时 `__strong__` 是文字,原样保留', md: `_emph_ and __strong__ ${M}\n`, golden: `*emph* and **strong** ${M}Z\n`, goldenLit: `*emph* and __strong__ ${M}Z\n` }, // 标记放句尾:紧跟光标的空格会被 I-06 换成 NBSP(另一包)
   // I-13 起句中「文字 === 地址」的链接裸写后重解析等价就落裸 URL(autolink.ts),原先的 `<url>` 取舍作废 —— 挪进 verbatim。
   { id: 'd18.bare_url_edited', bucket: V, md: `${M} see https://x.com/a_b ok\n` },
   { id: 'i13.url_period_edited', bucket: V, md: `${M} see https://x.com/a. Next\n` },
@@ -264,9 +268,13 @@ async function open(browser, md, errs) {
   page.on('pageerror', (e) => errs.push(e.message))
   await page.goto(`${BASE}?upage&useed=${encodeURIComponent(md)}`, { waitUntil: 'domcontentloaded', timeout: 120000 })
   await page.waitForSelector(PM, { timeout: 120000 })
+  const lit = await page.evaluate((s) => document.querySelector(s)?.getAttribute('data-literal-bold') === '1', PM)
+  if (lit !== LITBOLD) errs.push(`加粗字面化开关:网址 ${LITBOLD ? '开' : '关'},页面 ${lit ? '开' : '关'}(测到了别的服务?)`)
   await page.waitForTimeout(1300) // 越过 800ms 防抖:只读打开不许有任何写
   return page
 }
+/** 开关开着且条目给了 goldenLit 就用它。 */
+const goldenOf = (c) => (LITBOLD && c.goldenLit != null ? c.goldenLit : c.golden)
 
 /** 光标落到 needle 之后(直接设 PM 选区:鼠标/方向键在 headless 下落点不稳)。 */
 const caretAfter = (page, needle) => page.evaluate((text) => {
@@ -310,7 +318,7 @@ async function runCase(browser, c) {
   }
   const one = await typeAndSave(page, M, 'Z')
   await page.close()
-  const want1 = c.bucket === W ? c.golden : c.bucket === S ? null : c.md.replace(M, M + 'Z') // stable 首轮不比
+  const want1 = c.bucket === W ? goldenOf(c) : c.bucket === S ? null : c.md.replace(M, M + 'Z') // stable 首轮不比
   r.rounds.push({ out: one.out, want: want1, note: one.note })
   // 第二轮:用第一轮的落盘重开再编辑(pending 桶第一轮就不逐字,第二轮不跑)。
   if (c.bucket !== P && one.out != null) {
@@ -384,7 +392,7 @@ async function runEdit(browser, e) {
   await page.waitForTimeout(400)
   const out = deleted ? await lastWrite(page) : null
   await page.close()
-  r.rounds.push({ out, want: e.golden, note: deleted ? undefined : `找不到含 ${e.del} 的段落` })
+  r.rounds.push({ out, want: goldenOf(e), note: deleted ? undefined : `找不到含 ${e.del} 的段落` })
   if (out != null) {
     page = await open(browser, out, errs)
     r.openWrites.push(await writeCount(page))
@@ -419,7 +427,7 @@ async function runType(browser, c) {
   await page.waitForTimeout(1200) // 防抖 800ms:最后几击落定
   const out = await lastWrite(page)
   await page.close()
-  r.rounds.push({ out, want: c.golden })
+  r.rounds.push({ out, want: goldenOf(c) })
   if (out != null) {
     page = await open(browser, out, errs)
     r.openWrites.push(await writeCount(page))
@@ -479,7 +487,8 @@ async function main() {
       }
     }
   }
-  console.log(`\n${tally.PASS} PASS · ${tally.FAIL} FAIL · ${tally.XFAIL} XFAIL(已知,归 0b/别的包) · ${tally.XPASS} XPASS(意外通过:挪进 verbatim 桶)`)
+  console.log(`\n加粗字面化开关:${LITBOLD ? '开' : '关'}`)
+  console.log(`${tally.PASS} PASS · ${tally.FAIL} FAIL · ${tally.XFAIL} XFAIL(已知,归 0b/别的包) · ${tally.XPASS} XPASS(意外通过:挪进 verbatim 桶)`)
   process.exit(red ? 1 : 0)
 }
 
