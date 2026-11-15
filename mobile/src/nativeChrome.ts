@@ -301,8 +301,11 @@ export function installNativeChrome(): void {
       }
     })
   }
-  bannerOff = setNativeBannerPresenter((next) => { banner = next; sendBanner() })
-  void plugin.addListener('banner', (e) => onNativeBannerEvent(e?.id, e?.kind)).catch(() => {})
+  // Only once the page can hear the banner's taps: a banner whose × never reaches the page would leave its card
+  // (and a sticky one's onClose) hanging. Until then, and if the listener cannot be added, the page draws it.
+  void plugin.addListener('banner', (e) => onNativeBannerEvent(e?.id, e?.kind)).then(() => {
+    if (uninstall && !bannerOff) bannerOff = setNativeBannerPresenter((next) => { banner = next; sendBanner() })
+  }, (e) => { console.error('[tangu-mobile] native banner events unavailable, the page draws notifications:', e) })
 
   const send = (): void => {
     chain = chain.then(async () => {

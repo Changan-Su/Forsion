@@ -79,6 +79,8 @@ export interface AppNotification {
   free?: boolean
   /** 手机横幅:这张卡上屏的时刻。同 key 换内容时停留从它算起,不顺延。 */
   shownAt?: number
+  /** 够格发系统通知、但来的时候 App 在前台没发:排着队等到 App 退到后台才上屏、或在后台被节流丢下时补发一次(见 payOs)。 */
+  osOwed?: boolean
 }
 
 /** 卡怎么离开的:到点 / 用户点 × 或上滑 / 用户点了卡上的动作。程序自己撤(调用方 dismiss(id))不带。 */
@@ -235,28 +237,29 @@ export const useNotifications = create<NtfState>((set, get) => {
 
   /** 手机横幅:一条上屏(记下上屏时刻,非常驻的开始计时)。 */
   const showBanner = (n: AppNotification, queue: AppNotification[]): void => {
-    const shown = { ...n, shownAt: Date.now() }
+    const shown = { ...n, shownAt: Date.now(), ...(payOs(n) ? { osOwed: false } : {}) }
     set({ items: [shown], queue })
     if (!shown.sticky) startTimer(shown.id, dwellOf(shown))
   }
 
-  /** 手机横幅:屏上空着、间隔已过 → 队首上屏;冷却中的(节流管得着的)直接丢掉(onClose 照调)。 */
+  /** 手机横幅:屏上空着、间隔已过 → 下一条上屏;冷却中的(节流管得着的)直接丢掉(onClose 照调,在后台就补发系统通知)。
+   *  常驻的排在所有不常驻的后面:让过位的常驻一回来就不走了,它后面排着的会永远出不来。 */
   const promoteBanner = (): void => {
     gapTimer = null
     const s = get()
     if (!s.banner || s.items.length) return
-    let queue = s.queue
     const dropped: AppNotification[] = []
     let next: AppNotification | undefined
-    while (queue.length && !next) {
-      const nx = queue[0]
-      queue = queue.slice(1)
+    for (const nx of s.queue) {
+      if (nx.sticky) continue
       if (!nx.free && cooling(nx.event)) dropped.push(nx)
-      else next = nx
+      else { next = nx; break }
     }
+    next ??= s.queue.find((nx) => nx.sticky)
+    const queue = s.queue.filter((nx) => nx !== next && !dropped.includes(nx))
     if (next) showBanner(next, queue)
-    else if (queue !== s.queue) set({ queue })
-    for (const d of dropped) closed(d)
+    else if (queue.length !== s.queue.length) set({ queue })
+    for (const d of dropped) { payOs(d); closed(d) }
   }
 
   /** 前一条刚走:隔 PHONE.gap 再出下一条(原生横幅的退场 160ms 走完,两张不叠)。 */
@@ -274,11 +277,24 @@ export const useNotifications = create<NtfState>((set, get) => {
   // 谁调:新弹的一条;以及 replace 顶掉同 key 的前一条(那是新的一件事,只是借同一张卡显示 —— 比如手机上插件把几件合成一张、
   // 上一张还停着时又来一件,不发的话 App 在后台时这一件就没有横幅)。宿主自己的去重合并(防轰炸计数)不重发。
   // 手机节流挡的只是应用内的卡:被节流的这一条照样走到这里(调用在节流判断之前)。
-  const sendOs = (input: NotifyInput, n: Pick<AppNotification, 'title' | 'sourceLabel' | 'text'>, event: string): void => {
-    if (input.inAppOnly || input.receipt || !get().prefs.osEnabled) return
-    const away = typeof document !== 'undefined' && (!document.hasFocus() || document.visibilityState === 'hidden')
-    if (!away) return
+  const away = (): boolean => typeof document !== 'undefined' && (!document.hasFocus() || document.visibilityState === 'hidden')
+  const postOs = (n: Pick<AppNotification, 'title' | 'sourceLabel' | 'text'>, event: string): void => {
     try { window.tangu?.notify?.(n.title || n.sourceLabel || 'Forsion', n.text, { event }) } catch { /* 无桥/web 忽略 */ }
+  }
+  /** 返回这次有没有发出去;够格(不是 inAppOnly / receipt)却因为 App 在前台没发的,由调用方记成 osOwed。 */
+  const sendOs = (input: NotifyInput, n: Pick<AppNotification, 'title' | 'sourceLabel' | 'text'>, event: string): boolean => {
+    if (input.inAppOnly || input.receipt || !get().prefs.osEnabled) return false
+    if (!away()) return false
+    postOs(n, event)
+    return true
+  }
+  const owesOs = (input: NotifyInput): boolean => !input.inAppOnly && !input.receipt
+  /** 手机横幅一次一条:排在队里的卡,来时 App 在前台(没发系统通知),等它上屏或被节流丢下时 App 已经在后台 ——
+   *  用户两边都看不到它。这时补发一次(门控同 sendOs:系统通知开关 + 在后台)。返回补发了没有。 */
+  const payOs = (n: AppNotification): boolean => {
+    if (!n.osOwed || !get().prefs.osEnabled || !away()) return false
+    postOs(n, n.event)
+    return true
   }
 
   return {
@@ -322,6 +338,8 @@ export const useNotifications = create<NtfState>((set, get) => {
           upd.urgent = urgent
           upd.free = throttleFree({ ...input, onClose: upd.onClose }, upd.sticky, upd.level, upd.event)
           if (st.banner) upd.count = 1 // 手机:同 key 直接换文案和按钮,不出 ×N
+          // 顶替是新的一件事:跟发系统通知;在前台没发的记下,它若还排着队、等到后台才上屏 / 被丢下时补发
+          if (input.replace) upd.osOwed = (!sendOs(input, upd, event) && owesOs(input)) || undefined
           set((s) => ({
             items: s.items.map((n) => (n.id === found.id ? upd : n)),
             queue: s.queue.map((n) => (n.id === found.id ? upd : n)),
@@ -337,7 +355,6 @@ export const useNotifications = create<NtfState>((set, get) => {
               startTimer(found.id, dwellOf(upd))
             } else startTimer(found.id, Math.max(MIN_LEFT, found.shownAt + dwellOf(upd) - Date.now()))
           }
-          if (input.replace) sendOs(input, upd, event)
           return found.id
         }
       }
@@ -348,7 +365,8 @@ export const useNotifications = create<NtfState>((set, get) => {
         dedupeKey: input.dedupeKey, action: input.action, durationMs, onClose: input.onClose, settle: input.settle,
         undo, urgent, free: throttleFree(input, sticky, level, event),
       }
-      sendOs(input, n, event) // 系统通知(见 sendOs);非 replace 的去重合并上面已经 return,不重发。先于手机节流:后台的横幅不受它管
+      // 系统通知(见 sendOs);非 replace 的去重合并上面已经 return,不重发。先于手机节流:后台的横幅不受它管
+      if (!sendOs(input, n, event) && owesOs(input)) n.osOwed = true
 
       if (st.banner) {
         // 手机节流:同一来源刚收起过一张,冷却期间不出卡(插件照常调,不报错;不该出的卡也就没有 onClose 可等:它们都 free)
@@ -412,12 +430,14 @@ export const useNotifications = create<NtfState>((set, get) => {
     },
 
     activate: (id) => {
-      const n = get().items.find((x) => x.id === id)
+      // 也找队列:手机上常驻的那张可能刚被新来的顶回队列(点按还在路上,或它的动作自己弹了一条新的)
+      const find = (): AppNotification | undefined => get().items.find((x) => x.id === id) ?? get().queue.find((x) => x.id === id)
+      const n = find()
       if (!n?.action) return
       const before = n.action
       try { n.action.run() } catch { /* 插件 action 抛错不砸宿主 */ }
       // 动作自己把这条换成了结果(日历撤销 → 「已撤销」,settle):留着,到点淡出
-      if (get().items.find((x) => x.id === id)?.action === before) get().dismiss(id, 'action')
+      if (find()?.action === before) get().dismiss(id, 'action')
     },
 
     dismissAll: () => {

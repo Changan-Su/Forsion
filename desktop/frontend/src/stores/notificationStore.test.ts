@@ -441,6 +441,56 @@ describe('手机横幅模式(banner)', () => {
     expect(shown()).toEqual(['reminder'])
   })
 
+  it('常驻让位的间隔里又来一条:新来的都走完了常驻才回来(负对照:按先来后到 → 第三条永远出不来)', () => {
+    notifyApp({ text: 'reminder', sticky: true, event: 'note.reminder' })
+    notifyApp({ text: 'msg', event: 'plugin:biz' })
+    notifyApp({ text: 'later', event: 'plugin:cal' }) // 300ms 间隔里到的
+    vi.advanceTimersByTime(300)
+    expect(shown()).toEqual(['msg'])
+    vi.advanceTimersByTime(5000 + 300)
+    expect(shown()).toEqual(['later'])
+    vi.advanceTimersByTime(5000 + 300)
+    expect(shown()).toEqual(['reminder'])
+    expect(st().queue).toHaveLength(0)
+  })
+
+  it('常驻卡的动作自己弹了一条(重试 → 进度):常驻那张照样收掉、onClose 一次,不在新的走后又回来', () => {
+    const closed = vi.fn()
+    const id = notifyApp({ text: 'failed', level: 'error', event: 'plugin:sync', onClose: closed,
+      action: { label: 'retry', run: () => { notifyApp({ text: 'retrying', event: 'plugin:sync2' }) } } })!
+    st().activate(id)
+    expect(closed).toHaveBeenCalledTimes(1)
+    vi.advanceTimersByTime(300)
+    expect(shown()).toEqual(['retrying'])
+    vi.advanceTimersByTime(5000 + 300)
+    expect(shown()).toEqual([])
+    expect(st().queue).toHaveLength(0)
+  })
+
+  it('排着队时 App 退到后台:轮到它上屏或被节流丢下时补发系统通知(来时在前台没发),不重发', () => {
+    const os = vi.fn()
+    let hidden = false
+    vi.stubGlobal('window', { tangu: { notify: os } })
+    vi.stubGlobal('document', { hasFocus: () => !hidden, get visibilityState() { return hidden ? 'hidden' : 'visible' } })
+    try {
+      notifyApp({ text: 'a', event: 'plugin:biz' })
+      notifyApp({ text: 'b same source', event: 'plugin:biz' })
+      notifyApp({ text: 'c other', event: 'plugin:cal' })
+      notifyApp({ text: 'quiet', event: 'plugin:x', inAppOnly: true })
+      expect(os).not.toHaveBeenCalled() // 在前台:卡片就是提醒
+      hidden = true
+      vi.advanceTimersByTime(5000 + 300) // a 到点 → plugin:biz 冷却,b 被丢下;c 在后台上屏
+      expect(shown()).toEqual(['c other'])
+      expect(os.mock.calls.map((c) => c[1])).toEqual(['c other', 'b same source'])
+      vi.advanceTimersByTime(5000 + 300) // quiet 上屏:inAppOnly 不发
+      expect(shown()).toEqual(['quiet'])
+      expect(os).toHaveBeenCalledTimes(2)
+      hidden = false
+      notifyApp({ text: 'd', event: 'plugin:d' }) // 回到前台再来的:不发
+      expect(os).toHaveBeenCalledTimes(2)
+    } finally { vi.unstubAllGlobals() }
+  })
+
   it('横幅 ↔ 堆叠:收窄时只留最早那条、其余回队首;放宽时队列补满 4 条', () => {
     st().setBanner(false)
     for (const t of ['a', 'b', 'c']) notifyApp({ text: t, level: 'error' })
