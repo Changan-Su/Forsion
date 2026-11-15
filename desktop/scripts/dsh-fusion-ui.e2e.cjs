@@ -10,7 +10,9 @@
  *      DSH 那边是同一场(上文里有工作台那一句);关掉工作台页签,从 Harness 卡「打开工作台」进,看得到这场并接着说;
  *   ④ 在工作台里装 dsh-genui@0.3.3(DSH 插件页走的那个远程方法):Forsion 先弹体检报告 → 点「装」→ 装上,Harness 卡「DSH 插件」变 1 个;
  *      再在 Forsion 里和 DSH 聊一句,DSH 给模型的系统提示里带上了 genui 那一节(插件对 Forsion 的对话生效);要一张卡,
- *      右键这场在工作台里看,DSH 自己把它画成了卡片。
+ *      右键这场在工作台里看,DSH 自己把它画成了卡片;工作台页签在前面时右键另一场,同一个页面里落到那场。
+ *   ⑤ 整页重新载入时带着落点(重开工作台、DSH 重启都走这条),在两场之间来回切 8 次,每次都落在要的那场(DSH 自己恢复上次那场
+ *      不能把落点盖回去)。
  *
  * 假模型:常驻 DSH 由插件起、环境走白名单(不带 provider key),所以地址和 key 写进隔离 DSH 目录的 .env —— 和用户自己配 DSH 是同一层。
  *
@@ -197,6 +199,26 @@ async function main() {
   try {
     const win = await app.firstWindow({ timeout: 60_000 })
     win.on('pageerror', (e) => pageErrors.push(e.message))
+    // 观测:工作台网页的每次导航(整页 / 同页)和控制台,宿主页里插件的提示;失败的那一步把它们带出来(地址里的令牌抹掉)
+    const hostLogs = []
+    const holds = [] // 每次右键 hold 回来的 DSH 会话 id(按先后,不去重);④ / ④b 各取自己那次
+    win.on('console', (m) => {
+      if (!/dsh2forsion|d2f/i.test(m.text())) return
+      hostLogs.push(`host ${m.type()}: ${m.text()}`.slice(0, 300))
+      const id = m.text().match(/hold ok (\S+)/)?.[1]
+      if (id) holds.push(id)
+    })
+    await app.evaluate(({ app: eapp }) => {
+      globalThis.__d2fGuestLogs = []
+      const push = (line) => { globalThis.__d2fGuestLogs.push(`${new Date().toISOString().slice(11, 19)} ${String(line).replace(/token=[^&#\s]+/g, 'token=<redacted>')}`.slice(0, 300)) }
+      eapp.on('web-contents-created', (_e, wc) => {
+        if (wc.getType() !== 'webview') return
+        wc.on('did-navigate', (_ev, url) => push(`navigate ${url}`))
+        wc.on('did-navigate-in-page', (_ev, url, main) => { if (main) push(`in-page ${url}`) })
+        wc.on('console-message', (ev, level, message) => { const text = typeof ev?.message === 'string' ? ev.message : message; if (/dsh2forsion|d2f/i.test(String(text))) push(`console ${text}`) })
+      })
+    })
+    const guestLogs = async () => (await app.evaluate(() => globalThis.__d2fGuestLogs.splice(0))).concat(hostLogs.splice(0))
     // 不用 setViewportSize:它在宿主页上做设备尺寸模拟,内嵌网页容器的缩放比会对不上(画成左上角四分之一),那是台架造成的
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1440, 900))
     await win.waitForSelector('#root', { timeout: 40_000 })
@@ -284,8 +306,8 @@ async function main() {
     check('③ 回到 Forsion 同一场接着发:答得出,DSH 那边是同一场(上文里有工作台那一句)', !!back && stub.sawWorkbenchLine === true, await lastAsst(win))
 
     // ③d 关掉工作台页签,从 Harness 卡的「打开工作台」进:看得到这场对话(连同刚才 Forsion 那一轮),并接着说
-    await win.locator('.dv-tab').filter({ hasText: 'DSH 工作台' }).locator('.wb-tab-close').first().click().catch(() => {})
-    await sleep(800)
+    await win.evaluate(() => [...document.querySelectorAll('.wb-tab')].find((t) => /DSH 工作台/.test(t.querySelector('.wb-tab-name')?.textContent || ''))?.querySelector('.wb-tab-close')?.click())
+    await until(async () => (await win.locator('[data-d2f="workbench"] webview').count()) === 0, 5_000, 300)
     const closedTab = (await win.locator('[data-d2f="workbench"] webview').count()) === 0
     await openAgents(win); await rosterRow(win, AGENT).click(); await sleep(1500)
     await pluginRow(win, 'runtime').locator('button', { hasText: '打开工作台' }).first().click()
@@ -343,18 +365,68 @@ async function main() {
     const sys = stub.systems.slice(before).join('\n')
     check('④ 装上后 Forsion 里和 DSH 的对话用上了它(系统提示里有 genui 那一节)', /genui/i.test(sys), `${sys.length} 字`)
     // genui 卡:在 Forsion 里要一张卡,再右键这场在工作台里看 —— DSH 自己把它画成卡片(和第三轮方案图第二张对照)
+    // 上一轮刚答完时输入框可能还没放开,发出去的那句会被吞掉:等它放开,没答出来就照实记失败
+    await sleep(2000)
     await send(win, 'Please show me a card.')
-    await until(async () => /GENUI_PROBE_CARD/.test(await lastAsst(win)), 60_000)
+    let cardAnswer = await until(async () => /GENUI_PROBE_CARD/.test(await lastAsst(win)), 30_000)
+    if (!cardAnswer) { await sleep(2000); await send(win, 'Please show me a card.'); cardAnswer = await until(async () => /GENUI_PROBE_CARD/.test(await lastAsst(win)), 30_000) }
+    check('④ 在 Forsion 里要一张卡:DSH 答出来了(下面到工作台里看它画成什么)', !!cardAnswer, await lastAsst(win))
+    const nHold4 = holds.length
     const title2 = win.locator('aside, nav, [class*="sidebar"], [class*="side"]').getByText(/^Hello DSH again/).first()
     await title2.click({ button: 'right' }); await sleep(600)
+    await guestLogs() // 只留右键之后的
     await win.getByText('在 DSH 工作台里打开', { exact: true }).first().click()
+    await sleep(1200)
+    const toast = ((await win.evaluate(() => document.body.innerText)) || '').match(/这场对话[^\n]*|没能把这场对话[^\n]*/)?.[0] || ''
     const genuiCard = await until(async () => {
       const r = (await guestEval(app, `({ text: document.body.innerText, cards: document.querySelectorAll('dsh-genui-card, [data-dsh-genui-card]').length })`)).value
       return r && r.text.includes('GENUI_PROBE_CARD') && !r.text.includes('componentName') ? r : null
     }, 30_000, 800)
     await sleep(800)
     await shot(win, '28-genui-card')
-    check('④ 工作台里 DSH 把 genui 卡画成了卡片(不是代码块)', !!genuiCard, genuiCard ? `卡片元素 ${genuiCard.cards} 个` : '')
+    const log4 = await guestLogs()
+    const idB = holds[nHold4]
+    console.log(`   ④ 右键另一场之后的记录:提示「${toast}」\n     ${log4.join('\n     ')}`)
+    check('④ 工作台里 DSH 把 genui 卡画成了卡片(不是代码块)', !!genuiCard, genuiCard ? `卡片元素 ${genuiCard.cards} 个` : '没落到这场,记录见上')
+
+    // ④b 工作台页签就在前面时,从左栏右键另一场:宿主只换 # 那段,同一个页面里落到那场(页面里的标记还在)
+    await win.evaluate(() => [...document.querySelectorAll('.wb-tab')].find((t) => /DSH 工作台/.test(t.querySelector('.wb-tab-name')?.textContent || ''))?.click())
+    await sleep(1200)
+    await guestEval(app, `window.__d2fKeep4 = 'keep'`)
+    await guestLogs()
+    const nHold4b = holds.length
+    const titleA = win.locator('aside, nav, [class*="sidebar"], [class*="side"]').getByText(/^Hello DSH, please say hello/).first()
+    await titleA.click({ button: 'right' }); await sleep(600)
+    await win.getByText('在 DSH 工作台里打开', { exact: true }).first().click()
+    const landedA = await until(async () => ((await guestEval(app, 'document.body.innerText')).value || '').includes('Card path heard you'), 15_000, 500)
+    const kept4 = (await guestEval(app, 'window.__d2fKeep4 || null')).value
+    const log4b = await guestLogs()
+    const idA = holds[nHold4b]
+    console.log(`   ④b 记录:\n     ${log4b.join('\n     ')}`)
+    await shot(win, '28b-land-in-page')
+    check('④ 工作台开着时右键另一场:落到那场,页面没重载(只换 # 那段)', !!landedA && kept4 === 'keep', `落上 ${!!landedA};标记 ${kept4 ?? '没了(页面重载过)'}`)
+
+    // ⑤ 快速复现:整页重新载入时带着落点(重开工作台、DSH 重启后都是这条路),来回切 8 次,看每次是否落在要的那场
+    // A = ③ 那场(只有它有「Card path heard you」),B = ④ 那场(只有它有 genui 卡)
+    if (idA && idB && idA !== idB) {
+      let landed = 0
+      const misses = []
+      for (let i = 0; i < 8; i++) {
+        const want = i % 2 === 0 ? idA : idB
+        const mark = want === idA ? 'Card path heard you' : 'GENUI_PROBE_CARD'
+        await guestLogs()
+        await guestEval(app, `(() => { history.replaceState(null, '', location.pathname + '#d2f-session=' + encodeURIComponent(${JSON.stringify(want)}) + '&n=${200 + i}'); setTimeout(() => location.reload(), 50); return true })()`).catch(() => null)
+        await sleep(1500)
+        const ok = await until(async () => ((await guestEval(app, 'document.body.innerText')).value || '').includes(mark), 8_000, 400)
+        // 落上之后再等一会儿:DSH 自己的恢复要是晚到,会把它改回去
+        await sleep(2500)
+        const still = ((await guestEval(app, 'document.body.innerText')).value || '').includes(mark)
+        if (ok && still) landed++
+        else misses.push(`#${i} ${want === idA ? 'A' : 'B'} ${ok ? '落上后又被改回' : '没落上'}:${(await guestLogs()).join(' | ')}`)
+      }
+      for (const m of misses) console.log(`   ⑤ ${m}`)
+      check('⑤ 整页重新载入时带落点:8 次都落在要的那场', landed === 8, `${landed}/8`)
+    } else check('⑤ 整页重新载入时带落点:8 次都落在要的那场', false, `没拿到两场的 id:A ${idA} / B ${idB}`)
     check('前置:工作台页签关不关都不影响,DSH 一直是同一个进程', dshProcs().filter((l) => l.includes('--profile forsion')).length === 1)
 
     if (HOLD) {
