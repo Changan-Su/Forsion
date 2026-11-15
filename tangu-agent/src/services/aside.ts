@@ -343,7 +343,7 @@ export async function answerAside(opts: {
   const windowTokens = modelContextWindow(opts.modelId, model);
   const thinkingLevel = opts.thinkingLevel && opts.thinkingLevel !== 'off' ? opts.thinkingLevel : undefined;
   const maxTokens = Math.max(512, Math.min(ANSWER_MAX_TOKENS, Math.floor(windowTokens / 4)))
-    + (thinkingLevel ? thinkingHeadroom({ model, baseUrl, apiModelId }, thinkingLevel) : 0);
+    + thinkingHeadroom({ model, baseUrl, apiModelId }, thinkingLevel ?? 'off'); // 关着也算:Claude 自适应族照样会想
   // 附件抽出的文字也得放得进窗口(小窗口模型 + 长文件):转写以外那几条最多占剩余窗口的一半,超了按比例截短每个文件并注明
   const fitted = fitFilesToWindow(opts.input, prepared, Math.floor((windowTokens - maxTokens - PROMPT_OVERHEAD_TOKENS) / 2));
   const budget = windowTokens - maxTokens - PROMPT_OVERHEAD_TOKENS - estimateMessagesTokens(buildAsideMessages('', opts.input, fitted));

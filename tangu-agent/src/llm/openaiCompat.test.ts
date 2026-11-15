@@ -6,6 +6,7 @@ import {
   resolveCacheKey,
   streamOpenAiCompat,
   thinkingHeadroom,
+  CLAUDE_THINKING_HEADROOM,
   PROTOCOL_MARK,
   ACCOUNT_MARK,
   RUN_MARK,
@@ -160,6 +161,19 @@ describe('thinkingHeadroom(后台调用给推理另留的输出余量)', () => {
   it('托管模型按 model.defaultBaseUrl 认端点(resolve 给的 baseUrl 是网关占位)', () => {
     expect(thinkingHeadroom({ model: { provider: 'deepseek', defaultBaseUrl: 'https://api.deepseek.com' }, baseUrl: 'http://127.0.0.1:9', apiModelId: 'deepseek-v4-flash' }, 'medium')).toBe(4096);
     expect(thinkingHeadroom({ model: { provider: 'deepseek' }, baseUrl: 'http://127.0.0.1:9', apiModelId: 'deepseek-v4-flash' }, 'medium')).toBe(0);
+  });
+  // 11-15 反馈:托管 Claude 行服务端是 reasoning_mode=prefix,不发 thinking 字段;Claude 5 照样自己想,4096 / 0 都会被吃光。
+  it('Claude 自适应族不看端点格式和档位,一律留 Claude 余量', () => {
+    const hosted = { model: { provider: 'anthropic', defaultBaseUrl: null }, baseUrl: 'https://api.example.test', apiModelId: 'claude-opus-5-5' };
+    expect(thinkingHeadroom(hosted, 'medium')).toBe(CLAUDE_THINKING_HEADROOM);
+    expect(CLAUDE_THINKING_HEADROOM).toBeGreaterThan(12_288); // 12,288 的整理上限都被吃光过
+    // 中转:provider / 端点都认不出(能力表落到 prefix),只有模型 id 看得出
+    expect(thinkingHeadroom({ model: { provider: 'external' }, baseUrl: 'https://relay.example.test/v1', apiModelId: 'claude-sonnet-5-5' }, 'medium')).toBe(CLAUDE_THINKING_HEADROOM);
+    expect(thinkingHeadroom({ model: { provider: 'external' }, baseUrl: 'https://relay.example.test/v1', apiModelId: 'anthropic/claude-fable-5-2' }, 'low')).toBe(CLAUDE_THINKING_HEADROOM);
+    // 关得掉的型号传 off:托管 prefix 档不发 disabled,模型照样想
+    expect(thinkingHeadroom({ model: { provider: 'anthropic' }, baseUrl: 'https://api.example.test', apiModelId: 'claude-sonnet-5' }, 'off')).toBe(CLAUDE_THINKING_HEADROOM);
+    // 带日期的老款不算(族名后直接跟八位日期)
+    expect(thinkingHeadroom({ model: { provider: 'external' }, baseUrl: 'https://relay.example.test/v1', apiModelId: 'claude-3-5-haiku-20241022' }, 'medium')).toBe(0);
   });
 });
 

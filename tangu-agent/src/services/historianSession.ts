@@ -80,7 +80,8 @@ async function completeTask(p: HistorianTask) {
       ...history, { role: 'user', content: input },
     ] as ChatMessage[],
     projectSource: '', usageSource: 'tangu', temperature: 0.3,
-    maxTokens: p.maxTokens + (p.thinkingLevel ? thinkingHeadroom({ model, baseUrl, apiModelId }, p.thinkingLevel) : 0),
+    // 不给档位(团队摘要等)也要算:关不掉思考的端点和 Claude 自适应族照样会想(thinkingHeadroom 按 off 判)
+    maxTokens: p.maxTokens + thinkingHeadroom({ model, baseUrl, apiModelId }, p.thinkingLevel ?? 'off'),
     stream: true, cacheKey: `${id}:historian`, signal,
     ...(p.thinkingLevel ? { thinkingLevel: p.thinkingLevel } : {}),
   });

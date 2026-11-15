@@ -22,6 +22,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { query } from '../core/db.js';
 import { displayText } from '../core/displayText.js';
 import { deps } from '../seams/runtime.js';
+import { thinkingHeadroom } from '../llm/openaiCompat.js';
 import type { ToolCall, ChatMessage } from '../core/types.js';
 import type { ToolContext } from '../tools/toolTypes.js';
 import type { ApprovalDecision, ApprovalReason } from './approvals.js';
@@ -450,8 +451,9 @@ export async function judgeApproval(input: {
       model, apiModelId,
       messages: [{ role: 'system', content: system }, { role: 'user', content: user }] as ChatMessage[],
       projectSource: '', usageSource: 'tangu', client: backgroundClientTag('muse'),
-      temperature: 0, maxTokens: 300, stream: true, provider: (model as any)?.provider,
+      temperature: 0, maxTokens: 300 + thinkingHeadroom({ model, baseUrl, apiModelId }, 'low'), stream: true, provider: (model as any)?.provider,
       // D3:判官只做一次 JSON 二选一,不需要多少思考预算(不给 = 关思考;DeepSeek 这类端点按 high 思考时推理会吃光输出上限)。
+      // 正文只要 300,思考另留(托管 Claude 5 不发思考字段也会想,只给 300 就是一句正文都没有的 422)。
       thinkingLevel: 'low',
     } as any);
     const res = await llm.streamProviderCompletion({ apiKey, baseUrl, payload, provider: (model as any)?.provider });

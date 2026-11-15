@@ -11,6 +11,7 @@
  */
 import { query, getOlderThanSql } from '../core/db.js';
 import { deps } from '../seams/runtime.js';
+import { thinkingHeadroom } from '../llm/openaiCompat.js';
 import type { ChatMessage } from '../core/types.js';
 import { historianConfig } from './historianConfig.js';
 import { runWithUserAgentScope } from '../seams/runContext.js';
@@ -156,7 +157,8 @@ async function summarizeSession(sessionId: string, userId: string, modelId: stri
     model, apiModelId, messages,
     projectSource: '', // 不叠 ai-studio 项目层，保持 historian 指令干净
     temperature: 0.3,
-    maxTokens: 300,
+    // 不给档位 = 关思考;关不掉的端点和 Claude 自适应族照样会想,300 会被吃光
+    maxTokens: 300 + thinkingHeadroom({ model, baseUrl, apiModelId }, 'off'),
     stream: true,
   });
   const res = await streamProviderCompletion({ apiKey, baseUrl, payload });
@@ -327,7 +329,7 @@ async function judgeAndWrite(
     model, apiModelId, messages,
     projectSource: '',
     temperature: 0.3,
-    maxTokens: 800,
+    maxTokens: 800 + thinkingHeadroom({ model, baseUrl, apiModelId }, 'low'),
     stream: true,
     signal,
     thinkingLevel: 'low', // 不给 = 关思考。只给到 low:DeepSeek 类端点按 high 思考时,推理吃光过这 800 的上限、只剩空正文

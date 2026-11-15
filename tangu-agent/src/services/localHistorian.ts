@@ -32,6 +32,8 @@ import { completeHistorianTask } from './historianSession.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { query } from '../core/db.js';
 import { deps } from '../seams/runtime.js';
+import { thinkingHeadroom } from '../llm/openaiCompat.js';
+import { normalizeThinkingLevel } from '../llm/modelCapabilities.js';
 import type { ChatMessage, ThinkingLevel } from '../core/types.js';
 import { loadSpecialAgentsConfig, DEFAULT_HISTORIAN_PROMPT, resolveBackgroundModelId, type HistorianConfig } from './specialAgentsConfig.js';
 import { enterRunContext, currentAgentSlug } from '../seams/runContext.js';
@@ -315,7 +317,7 @@ async function inConversationLanguage(userId: string, modelId: string, text: str
         { role: 'system', content: 'Rewrite the text so it is in the same language as the user\'s own words. Keep its meaning, length and form. Output the rewritten text only.' },
         { role: 'user', content: `[User's own words]\n${userText.slice(-400)}\n\n[Text]\n${text}` },
       ] as ChatMessage[],
-      projectSource: '', usageSource: 'tangu', temperature: 0.2, maxTokens: 600, stream: true, signal,
+      projectSource: '', usageSource: 'tangu', temperature: 0.2, maxTokens: 600 + thinkingHeadroom({ model, baseUrl, apiModelId }, 'low'), stream: true, signal,
       thinkingLevel: 'low', // 改写的小活,同首帧标题
     } as any);
     const res = await deps().brain.llm.streamProviderCompletion({ apiKey, baseUrl, payload, provider: (model as any)?.provider, signal });
@@ -393,7 +395,8 @@ async function forkJudge(
       toolChoice: 'auto',
       attachments: [],
       stream: true,
-      maxTokens: FORK_JUDGE_MAX_TOKENS,
+      // 正文上限之外给思考留余量(max_tokens 不在前缀里,不影响缓存命中)
+      maxTokens: FORK_JUDGE_MAX_TOKENS + thinkingHeadroom({ model, baseUrl, apiModelId }, normalizeThinkingLevel(seed.thinkingLevel, 'medium')),
       signal: historianSignal.getStore(),
       // 缓存路由键要和主循环算出同一个(同前缀必须同键;delegate 的 per-subId 分键方向相反)。它缺省按「agent + 模型」取
       // (openaiCompat resolveCacheKey),所以 cacheKey 与 agentId 两个都照主循环给 —— 只给会话键落在另一个桶里:
@@ -484,7 +487,7 @@ export function onUserRunStart(sessionId: string, userId: string, message: strin
           { role: 'system', content: TITLE_SYSTEM },
           { role: 'user', content: `[Current title]\n${current}\n\n[Conversation]\n${transcript}` },
         ] as ChatMessage[],
-        projectSource: '', usageSource: 'tangu', temperature: 0.3, maxTokens: 600, stream: true, signal,
+        projectSource: '', usageSource: 'tangu', temperature: 0.3, maxTokens: 600 + thinkingHeadroom({ model, baseUrl, apiModelId }, 'low'), stream: true, signal,
         thinkingLevel: 'low', // 抢首帧的小活:不给 = 关思考,给 low 也只是稍微想一下(同代批判官)
       } as any);
       const res = await deps().brain.llm.streamProviderCompletion({ apiKey, baseUrl, payload, provider: (model as any)?.provider, signal });
