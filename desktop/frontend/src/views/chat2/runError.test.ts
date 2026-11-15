@@ -141,7 +141,10 @@ describe('会员档位用不了这个模型(model_tier_locked)', () => {
   it('后台提前结束(本机记着的到期还在以后):SSE 那句认得出就说「已结束」不带日期;403 JSON 带 trialEndedAt 就用它的日期', async () => {
     const { translateFor } = await import('../../i18n')
     const { trialEndedAtOf } = await import('../../services/accountQuota')
-    const sse = 'Claude Fable 5.2 的限时体验已结束，当前会员档位不能再用它。 / The free trial of Claude Fable 5.2 has ended. (model_tier_locked)'
+    // 服务端 modelTierLockedMessage(trialEndedAt, updateHint)的原句(server src/services/modelTierGate.ts),两边一起改;引擎 httpBrain 把 SSE 的 message 原样抛成 run 错误
+    const sse = 'Claude Fable 5.2 的限时体验已结束，当前会员档位不能再用它。请换一个模型或升级会员。旧版客户端不会提前标出这些模型，建议更新到最新版 Forsion。'
+      + " / The free trial of Claude Fable 5.2 has ended and your plan can't use it anymore. Pick another model or upgrade your membership."
+      + " Older app versions don't mark these models in advance, so please update to the latest version of Forsion. (model_tier_locked)"
     expect(humanizeRunError(sse, (k, v) => translateFor('zh', k, v), 'Claude Fable 5.2')).toBe('Claude Fable 5.2 的限时体验已结束。升级会员或换一个模型。')
     expect(humanizeRunError(sse, (k, v) => translateFor('en', k, v), 'Claude Fable 5.2')).toBe('The free trial of Claude Fable 5.2 has ended. Upgrade your membership or pick another model.')
     const json = JSON.stringify({ detail: 'model_tier_locked', code: 'model_tier_locked', modelId: 'fable', modelName: 'Claude Fable 5.2', multiplier: 5, cap: 2.5, trialEndedAt: '2026-11-20T03:00:00.000Z' })
