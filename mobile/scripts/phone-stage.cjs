@@ -941,6 +941,39 @@ const SCENES = {
     await page.screenshot({ path: path.join(OUT, `notify-banner${DARK ? '-dark' : ''}.png`) })
     return rows
   },
+  // A card with a button raised inside the user's own tap — an older plugin's "Undo" without `undo: true` (the bundled
+  // calendar's to-do completion) — is not throttled on a phone; the same card raised from a timer after the tap is
+  // (2026-11-15). Judged on real touches here: only a browser makes trusted events, a unit test cannot.
+  'notify-gesture': async (page) => {
+    const url = moduleUrl('../desktop/frontend/src/stores/notificationStore.ts')
+    await page.evaluate(async (url) => {
+      const m = await import(/* @vite-ignore */ url)
+      m.useNotifications.getState().dismissAll(); m.resetNotificationThrottle()
+      // what pluginStore turns an old plugin's ctx.notify(text, { key, action }) into
+      const card = (text) => m.notifyApp({ text, event: 'plugin:probe', sourceLabel: 'Probe', dedupeKey: 'plugin:probe:undo', replace: true, durationMs: 8000, action: { label: '撤销', run() {} } })
+      const first = card('timed out'); m.useNotifications.getState().dismiss(first, 'timeout') // the source now cools down
+      const mk = (id, top, fn) => { const b = document.createElement('button'); b.id = id; b.textContent = id; b.style.cssText = `position:fixed;left:20px;top:${top}px;width:200px;height:56px;z-index:99999`; b.onclick = fn; document.body.append(b) }
+      window.__ng = []
+      mk('ng-later', 480, () => { setTimeout(() => window.__ng.push(['later', card('from a timer')]), 30) })
+      mk('ng-sync', 560, () => { window.__ng.push(['sync', card('deleted A')]) })
+    }, url)
+    await page.locator('#ng-later').tap()
+    await page.waitForTimeout(300)
+    await page.locator('#ng-sync').tap()
+    await page.waitForTimeout(600)
+    const r = await page.evaluate(() => ({ calls: window.__ng, banner: document.querySelector('.ntf-banner-wrap .ntf-banner-text')?.textContent ?? null }))
+    await page.screenshot({ path: path.join(OUT, `notify-gesture${DARK ? '-dark' : ''}.png`) })
+    await page.evaluate(async (url) => {
+      for (const id of ['ng-later', 'ng-sync']) document.getElementById(id)?.remove()
+      const m = await import(/* @vite-ignore */ url)
+      m.useNotifications.getState().dismissAll(); m.resetNotificationThrottle()
+    }, url)
+    const got = (k) => r.calls.find((c) => c[0] === k)
+    return [
+      ['a card with a button raised in a real tap is not throttled (an older plugin\'s Undo)', !!got('sync') && got('sync')[1] !== null && r.banner === 'deleted A', JSON.stringify(r)],
+      ['the same card raised from a timer after the tap is throttled', !!got('later') && got('later')[1] === null, JSON.stringify(r)],
+    ]
+  },
   // The agent picker of a new chat: the recipient chip in the composer's toolbar (same chip as the desktop, 11-02 plan A).
   // Without a native host the chip opens a web bottom sheet (names only, ticks, team order); with one, the Android
   // checklist — ticked in order, applied when it closes (docs/ToBeImproved/窄栏Agent选择器方案_2026-10-23, chosen 10-24).
