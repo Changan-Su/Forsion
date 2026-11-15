@@ -257,6 +257,34 @@ describe('ctx.tangu.agents(Agent 名册,2026-09-20)', () => {
   })
 })
 
+describe('ctx.tangu.askInChat(原生侧栏对话的引用,2026-11-15)', () => {
+  it('主窗口:交给探针的 askInChat,回 true', () => {
+    const ask = vi.fn()
+    const ctx = ctxOf('p-ask')
+    setTanguProbe(baseProbe({ askInChat: ask }))
+    expect(ctx.tangu!.askInChat!('quoted text')).toBe(true)
+    expect(ask).toHaveBeenCalledWith('quoted text')
+  })
+
+  it('探针没有对话能力 / 空引文 → false,不调用', () => {
+    const ctx = ctxOf('p-ask')
+    expect(ctx.tangu!.askInChat!('x')).toBe(false)
+    const ask = vi.fn()
+    setTanguProbe(baseProbe({ askInChat: ask }))
+    expect(ctx.tangu!.askInChat!('   ')).toBe(false)
+    expect(ask).not.toHaveBeenCalled()
+  })
+
+  it('独立窗(没有侧栏对话)→ false,插件走自己的退路', () => {
+    const ask = vi.fn()
+    const ctx = ctxOf('p-ask')
+    setTanguProbe(baseProbe({ askInChat: ask }))
+    vi.stubGlobal('location', { search: '?window=detached&id=x' })
+    expect(ctx.tangu!.askInChat!('x')).toBe(false)
+    expect(ask).not.toHaveBeenCalled()
+  })
+})
+
 describe('ctx.app.writeBytes / readBytes', () => {
   it('桥没有 saveVaultBytes / readVaultBytes → 方法整个不存在', () => {
     bridge.current = {}

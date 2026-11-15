@@ -2316,6 +2316,11 @@ export interface PluginContext {
     /** True when startChat accepts explicit modelId / thinkingLevel from the native Chat Box. */
     chatSelection?: true
     startChat?(o: { agent?: string; prompt: string; send?: boolean; folder?: string; modelId?: string; thinkingLevel?: import('../../../../shared/chatBox').ChatBoxSelection['thinkingLevel'] }): Promise<import('./tanguSeam').TanguStartChatResult>
+    /** 把一段引用交给**原生侧栏对话**(2026-11-15+):和笔记划线「问 Tangu」同一个面板 —— 挂成输入框上方的引用卡,
+     *  揭开右侧栏的对话,不发送、不动草稿。`text` 是引文本身,出处自己拼在末尾(库里的文件写成 `[[路径]]`,可带 `#page=N`)。
+     *  回 `true` = 已送达;回 `false` = 这里没有侧栏对话(独立窗 / Mini / 浮窗、没有对话能力的宿主),插件自己退回
+     *  `file.extendView` + `mountChat` 或复制到剪贴板。旧宿主没有:`ctx.tangu?.askInChat?.(text)`。 */
+    askInChat?(text: string): boolean
     /** 把**原生对话**挂进你自己的视图(2026-10-04+):同一个输入框、消息流、审批与工具展示,固定在一条会话上
      *  (不跟随主区)。典型用法:注册一个开在右栏的 `chat` 视图,它的 `mount(el)` 里调本方法。
      *  - 会话:一个(插件, `folder`)一条,宿主记在本机;下次挂载接回同一条(历史照常在),用户把它删了 / 归档了就新开。

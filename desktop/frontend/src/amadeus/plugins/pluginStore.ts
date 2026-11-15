@@ -2768,6 +2768,15 @@ export const usePluginStore = create<PluginState>((set, get) => {
                 await readTangu()?.openSession?.(sessionId, ctxAlive)
               },
             } : {}),
+            // 把一段引用交给原生侧栏对话(同笔记「问 Tangu」):只在主窗口送达 —— 独立窗 / Mini / 浮窗没有侧栏对话,
+            // 回 false 让插件走自己的退路。调用时才读探针(没有 Tangu 对话能力的宿主同样回 false)。
+            askInChat: (text: string): boolean => {
+              if (!ctxAlive() || typeof text !== 'string' || !text.trim() || windowKind() !== 'main') return false
+              const ask = readTangu()?.askInChat
+              if (!ask) return false
+              ask(text.slice(0, 20_000))
+              return true
+            },
             activeModel: () => readTangu()?.activeModel() ?? null,
             models: () => readTangu()?.models() ?? [],
             ...(readTangu()?.modelCatalog ? { modelCatalog: async (kind: import('../../../../shared/pluginModelPicker').PluginModelKind) => { if (!ctxAlive()) throw new Error('plugin disabled'); const catalog = await readTangu()!.modelCatalog!(kind); if (!ctxAlive()) throw new Error('plugin disabled'); return catalog } } : {}),
