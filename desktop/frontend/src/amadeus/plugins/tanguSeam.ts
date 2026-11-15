@@ -617,3 +617,8 @@ export function subscribeComposerPrefill(l: () => void): () => void {
 export function claimComposerPrefill(t: ComposerPrefillTarget): ComposerPrefill[] {
   return [...prefillSources].flatMap((src) => src.claim(t) ?? [])
 }
+
+// 外部引擎的 Harness 行与对话右键菜单项(ctx.registerEngineHarness,2026-11-15,DSH 融合插件第 1 档):登记表留在宿主,
+// Tangu 界面(Agent 配置页、对话侧栏)经这条缝读 —— 它在 check:tanguboundary 的基线里,不另开新的宿主依赖。
+export { collectHarnessRows, engineSessionActions, useEngineHarnessVersion, type HostEngineHarness } from './engineHarness'
+export { pluginText } from './pluginText'

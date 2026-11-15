@@ -38,8 +38,7 @@ import { ListSection, PullHint, SwipeRow, closeOtherSwipes, dayBucket, usePullTo
 import '../../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
 import { useApp } from '../../stores/appStore'
 import { agentEngineOf } from '../../tangu/agentEngine'
-import { engineSessionActions } from '../../amadeus/plugins/engineHarness'
-import { pluginText } from '../../amadeus/plugins/pluginText'
+import { engineSessionActions, pluginText } from '../../amadeus/plugins/tanguSeam'
 
 const CHANNEL_ICONS: Partial<Record<ChannelKind, typeof Smartphone>> = { wechat: Smartphone, telegram: Send, qq: MessagesSquare }
 /** 插件通道没有专属图标,统一用 Bot。 */

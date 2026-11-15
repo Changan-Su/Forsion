@@ -4,10 +4,10 @@
  */
 import { useEffect, useState } from 'react'
 import { useI18n } from '../i18n'
-import { collectHarnessRows, useEngineHarnessVersion, type HostEngineHarness } from '../amadeus/plugins/engineHarness'
-import { pluginText } from '../amadeus/plugins/pluginText'
+// 登记表在宿主(插件经 ctx 登记);Tangu 界面只经 tanguSeam 这条缝读,不直引宿主的插件模块(check:tanguboundary)
+import { collectHarnessRows, pluginText, useEngineHarnessVersion, type HostEngineHarness } from '../amadeus/plugins/tanguSeam'
 import type { PluginHarnessRow } from '../amadeus/plugins/types'
-import { SelectField } from './SelectField'
+import { SelectField } from '../components/SelectField'
 
 const call = (owner: string, fn: () => void): void => {
   try { fn() } catch (e) { console.error(`[amadeus] plugin "${owner}" harness callback threw`, e) }
