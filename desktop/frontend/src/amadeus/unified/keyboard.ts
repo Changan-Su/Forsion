@@ -38,6 +38,8 @@ import { toggleTaskTr } from '../blocks/markdown/taskList'
 import { buildBlockString } from '../blocks/markdown/mathLivePreview'
 import { markdownAutoPairEnabled } from '../blocks/markdown/autoPairPrefs'
 import { bodyPairOpenPlugin, composingNow } from '../blocks/markdown/bodyAutoPair'
+import { literalBoldEnabled } from '../blocks/markdown/literalBoldFlag'
+import { literalBoldAt, wrapLiteral } from '../blocks/markdown/literalBold'
 import { removeEmptyColumnTr } from './columns'
 import { calloutKey, calloutOf } from '../blocks/markdown/callout'
 
@@ -805,6 +807,20 @@ function wrapMarkdown(view: EditorView, sel: TextSelection, ch: string): boolean
     if (n.isText && n.marks.some((m) => m.type.spec.code)) inCode = true
     return true
   })
+  if ((ch === '*' || ch === '_') && !inCode && marks.emphasis && literalBoldEnabled()) {
+    // 加粗字面化开关开着:斜体仍是属性,加粗是正文里的 `**` / `__`(./literalBold)。无 → 斜体 → 字面加粗 → 粗斜体。
+    // Literal-bold switch on: italic is still a mark, bold is literal `**` / `__` text. none -> italic -> bold -> both.
+    const em = coveredBy(state, from, to, marks.emphasis)
+    const lit = literalBoldAt(state, from, to)
+    const wrapped = !!lit && lit.cs + lit.sp.from + 2 === from && lit.cs + lit.sp.to - 2 === to
+    if (!em) {
+      const tr = state.tr.addMark(from, to, marks.emphasis.create())
+      view.dispatch(tr.setSelection(TextSelection.create(tr.doc, from, to)).scrollIntoView())
+    } else if (!wrapped) {
+      view.dispatch(wrapLiteral(state.tr.removeMark(from, to, marks.emphasis), from, to, ch === '_' ? '__' : '**').scrollIntoView())
+    }
+    return true
+  }
   if ((ch === '*' || ch === '_') && !inCode && marks.emphasis && marks.strong) {
     const em = coveredBy(state, from, to, marks.emphasis)
     const strong = coveredBy(state, from, to, marks.strong)
