@@ -55,6 +55,7 @@
 //   T7 组字中途停顿 3 秒以上(跨过正常防抖写):盘上与每一发写都没有半截拼音;提交后在防抖节奏内落盘,组字前打的字也在
 //   T8a 组字中途窗口失焦:当场存本机草稿(含组字前的字),盘上不写拼音;提交后照常落盘、草稿删掉
 //   T8b 组字中途页面隐藏:照旧马上写(之后进程随时可能没了,计时器未必再跑),组字前的字当场落盘;提交后改回提交的字
+//   T10 源码模式(textarea)组字中途停顿:盘上不写拼音,提交后落盘
 //   T9 组字结束而文档没变(提交的就是组字串):监听器不再报,推后的那发写自己补上
 //   T6 两个窗口(同源共享 localStorage,槽位号相同):B 失焦存下的更新的字在格子里时,A 的连打节拍不许盖掉它
 //  CPU_THROTTLE=4 跑:CDP 把页面 CPU 放慢 4 倍(负载下的稳定性自查)
@@ -1129,6 +1130,27 @@ async function groupT(browser) {
     const end = await disk(s)
     record('T9 组字结束而文档没变:推后的写照样补上(组字前的字与提交的字都落盘)',
       !(mid ?? '').includes('第一段。q') && end.includes('第一段。qabc'), JSON.stringify({ mid, end, writesAfter: (await writeCount(s)) - n0 }))
+    await s.close()
+  }
+
+  // T10:源码模式(textarea)组字中途停顿:同一道闸(document 上的组字状态),盘上不写拼音,提交后落盘
+  {
+    const s = await open(browser, seed)
+    await s.evaluate(() => window.__upage.setEditorMode('source'))
+    await s.waitForSelector('textarea.amx-source')
+    await s.evaluate(() => { const t = document.querySelector('textarea.amx-source'); t.focus(); const i = t.value.indexOf('第一段。') + 4; t.setSelectionRange(i, i) })
+    const ime = await s.context().newCDPSession(s)
+    await s.keyboard.type('q')
+    await ime.send('Input.imeSetComposition', { text: 'zhongwen', selectionStart: 8, selectionEnd: 8 })
+    const seen = []
+    for (let i = 0; i < 10; i++) { await wait(300); seen.push(await disk(s)) } // 3 秒
+    const ta = await s.evaluate(() => document.querySelector('textarea.amx-source').value)
+    await ime.send('Input.insertText', { text: '中文' })
+    await s.waitForFunction(() => (window.__upage.vault.get('Unified.md') ?? '').includes('第一段。q中文'), null, { timeout: 4000 }).catch(() => {})
+    const end = await disk(s)
+    record('T10 源码模式组字中停顿:盘上不写拼音,提交后落盘(组字前的字也在)',
+      ta.includes('qzhongwen') && seen.every((d) => !/zhong/.test(d ?? '')) && end.includes('第一段。q中文'),
+      JSON.stringify({ ta: ta.includes('qzhongwen'), pinyinOnDisk: seen.filter((d) => /zhong/.test(d ?? '')).length, end }))
     await s.close()
   }
 
