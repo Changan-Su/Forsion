@@ -32,6 +32,7 @@ import { envWithFullPath, type EngineDef } from './config.js';
 import type { EngineRunCtx, EngineResult, EngineCapabilities } from './manager.js';
 import { toolSubprocessEnv } from '../sandbox/credentialEnv.js';
 import { killProcessTree } from '../utils/boundedProcess.js';
+import { formatEngineModelNoApiKey } from '../contracts/engineModelError.js';
 
 /** createAcpClient 需要的最小上下文（EngineRunCtx 结构上即满足）。 */
 export interface AcpClientCtx {
@@ -149,6 +150,8 @@ export function mapAcpModels(ms: any): { models: EngineCapabilities['models']; c
 export interface AcpConfigSelection {
   modelConfigId?: string;
   models: EngineCapabilities['models'];
+  /** 模型 id → 它所在分组的 id(引擎按组给选项时才有;DSH 的组就是供应商那条线,如 deepseek-official)。 */
+  modelGroups: Record<string, string>;
   currentModelId?: string;
   thoughtConfigId?: string;
   thoughtLevels: NonNullable<EngineCapabilities['thoughtLevels']>;
@@ -161,33 +164,38 @@ export interface AcpConfigSelection {
  * (DSH 按供应商分组);value 是不透明的串(DSH 的模型值是一段 JSON 文本),原样当 id,绝不解析。纯函数,供探测 + 单测。
  */
 export function mapAcpConfigOptions(configOptions: unknown): AcpConfigSelection {
-  const out: AcpConfigSelection = { models: [], thoughtLevels: [] };
+  const out: AcpConfigSelection = { models: [], modelGroups: {}, thoughtLevels: [] };
   if (!Array.isArray(configOptions)) return out;
-  const flat = (options: unknown): Array<{ id: string; name: string; description?: string }> => {
-    const items: Array<{ id: string; name: string; description?: string }> = [];
+  type Item = { id: string; name: string; description?: string; group?: string };
+  const flat = (options: unknown, group?: string): Item[] => {
+    const items: Item[] = [];
     for (const o of Array.isArray(options) ? (options as any[]) : []) {
       if (Array.isArray(o?.options)) {
-        // 一组:组名补进没有自带说明的选项,下拉里看得出是哪家的
-        for (const item of flat(o.options)) items.push({ ...item, description: item.description ?? (typeof o.name === 'string' && o.name ? o.name : undefined) });
+        // 一组:组名补进没有自带说明的选项,下拉里看得出是哪家的;组的 id 另记(见 modelGroups)
+        const inGroup = typeof o.group === 'string' && o.group ? o.group : group;
+        for (const item of flat(o.options, inGroup)) items.push({ ...item, description: item.description ?? (typeof o.name === 'string' && o.name ? o.name : undefined) });
       } else if (typeof o?.value === 'string' && o.value) {
-        items.push({ id: o.value, name: typeof o.name === 'string' && o.name ? o.name : o.value, description: typeof o.description === 'string' && o.description ? o.description : undefined });
+        items.push({ id: o.value, name: typeof o.name === 'string' && o.name ? o.name : o.value, description: typeof o.description === 'string' && o.description ? o.description : undefined, ...(group ? { group } : {}) });
       }
     }
     return items;
   };
+  const plain = (items: Item[]): Array<{ id: string; name: string; description?: string }> => items.map(({ id, name, description }) => ({ id, name, description }));
   const pick = (category: string, fallbackId: string): any =>
     (configOptions as any[]).find((o) => o?.type === 'select' && o?.category === category)
     ?? (configOptions as any[]).find((o) => o?.type === 'select' && o?.category == null && o?.id === fallbackId);
   const model = pick('model', 'model');
   if (model && typeof model.id === 'string') {
     out.modelConfigId = model.id;
-    out.models = flat(model.options);
+    const items = flat(model.options);
+    out.models = plain(items);
+    for (const item of items) if (item.group) out.modelGroups[item.id] = item.group;
     if (typeof model.currentValue === 'string') out.currentModelId = model.currentValue;
   }
   const thought = pick('thought_level', 'reasoning_effort');
   if (thought && typeof thought.id === 'string') {
     out.thoughtConfigId = thought.id;
-    out.thoughtLevels = flat(thought.options);
+    out.thoughtLevels = plain(flat(thought.options));
     if (typeof thought.currentValue === 'string') out.currentThoughtLevel = thought.currentValue;
   }
   return out;
@@ -222,6 +230,34 @@ export function classifyResumeFailure(e: any): 'gone' | 'busy' | 'other' {
   if (e?.code === -32002) return 'gone'; // 续接请求里能「不存在」的资源,除了文件 / 目录就是那个会话
   if (/session/i.test(text) && /does not exist|no longer exists|was deleted/i.test(text)) return 'gone';
   return 'other';
+}
+
+/**
+ * 这一轮失败是不是「当前模型那条线要 API key,而这台电脑上没有配」。是 → 那条线的名字;不是 → null。
+ * 句式钉死在实测到的那一句(DSH 0.2.2-rc.3,只有 message、没有 data、没有机器码):
+ *   -32603 `Internal error: turn failed: llm-deepseek: no API key for provider route "deepseek-official"; store DEEPSEEK_API_KEY …`
+ * 别放宽成泛泛的 /api key/:别的引擎报「key 不对」「key 过期」是另一回事,换模型解决不了。
+ */
+export function missingApiKeyRoute(e: any): string | null {
+  return /no API key for provider route "([^"]+)"/.exec(acpErrorText(e))?.[1] ?? null;
+}
+
+/**
+ * 把上面那种失败换成一句照着做得了的话:当前是哪个模型、清单里还有哪些可以换。
+ *
+ * 只说「引擎还列着这些模型」,不说它们一定能用,也不替用户换:公开协议里没有「哪条线有凭据」这一项。DSH 的清单
+ * 确实只列凭据探得到的那几条线的模型(当前模型不在清单里时被单独塞进它那一组),但那是它的实现,不是协议的承诺 ——
+ * 某条线的目录一时取不到,和「没有凭据」在清单里长得一样。自动换还会悄悄改掉用户走哪一种计费。
+ *
+ * 可以换的 = 不在失败那一组里的模型(同一组的走同一条线,换过去还是这个错)。失败的是哪一组:先看当前模型在哪一组,
+ * 没有就拿报错里那条线的名字去对组 id;引擎不分组、对不上时,除当前模型外都算。
+ */
+export function modelNoApiKeyError(engineName: string, sel: AcpConfigSelection, route: string, raw: string): Error {
+  const current = sel.models.find((m) => m.id === sel.currentModelId);
+  const failing = (sel.currentModelId && sel.modelGroups[sel.currentModelId]) || (Object.values(sel.modelGroups).includes(route) ? route : undefined);
+  const others = sel.models.filter((m) => m.id !== sel.currentModelId && (failing === undefined || sel.modelGroups[m.id] !== failing));
+  const message = formatEngineModelNoApiKey({ engine: engineName, model: current?.name, others: others.map((m) => m.name), raw });
+  return Object.assign(new Error(message), { engineModelNoApiKey: true });
 }
 
 /**
@@ -567,17 +603,25 @@ export async function runAcpEngine(def: EngineDef, ctx: EngineRunCtx): Promise<E
     // 引擎给 `models` 的走 session/set_model;没有 `models`、模型在 configOptions 里的(DSH)走 session/set_config_option。
     // 续接的会话记着上次选的模型,所以每轮都对一下「当前值」而不是只在新建时设。
     // (DSH 实测:换模型会把思考档重置成那个模型的缺省值。这里不碰思考档。)
+    // sel = 这场会话此刻的模型清单和当前模型(下面换了模型就跟着换):这一轮因为缺 API key 失败时,拿它告诉用户能换成什么。
+    let sel = mapAcpConfigOptions((s as any)?.configOptions);
+    if (!sel.modelConfigId && (s as any)?.models) sel = { ...sel, ...mapAcpModels((s as any).models) }; // 模型走 `models` 的引擎:清单和当前模型在那边
     if (ctx.engineModelId) {
-      const sel = mapAcpConfigOptions((s as any)?.configOptions);
       try {
         if (!(s as any)?.models && sel.modelConfigId) {
           if (ctx.engineModelId !== sel.currentModelId) {
             // 存着的选择不在这次的清单里(引擎那边换了目录 / 下架)→ 不发,照引擎当前的跑
             if (!sel.models.some((m) => m.id === ctx.engineModelId)) console.warn(`[engine] model ${ctx.engineModelId} is not offered by ${def.id} any more; keeping ${sel.currentModelId ?? 'the engine default'}`);
-            else await guard(conn.setSessionConfigOption({ sessionId, configId: sel.modelConfigId, value: ctx.engineModelId }), 'setSessionConfigOption');
+            else {
+              const changed: any = await guard(conn.setSessionConfigOption({ sessionId, configId: sel.modelConfigId, value: ctx.engineModelId }), 'setSessionConfigOption');
+              // 回包里是换完之后的整份选项;没带(老实现)就只把当前模型记成刚选的那个
+              const after = mapAcpConfigOptions(changed?.configOptions);
+              sel = after.modelConfigId ? after : { ...sel, currentModelId: ctx.engineModelId };
+            }
           }
         } else if (ctx.engineModelId !== (s as any)?.models?.currentModelId) {
           await conn.unstable_setSessionModel({ sessionId, modelId: ctx.engineModelId });
+          sel = { ...sel, currentModelId: ctx.engineModelId };
         }
       } catch (e: any) {
         console.warn(`[engine] set model(${ctx.engineModelId}) failed: ${acpErrorText(e)}`);
@@ -593,10 +637,20 @@ export async function runAcpEngine(def: EngineDef, ctx: EngineRunCtx): Promise<E
     armEngineIdle(); // turn 开始起表
     // prompt 不设握手超时(一轮可以跑很久),但**子进程半路死掉要立刻知道** —— 否则只能等 5 分钟的
     // idle 看门狗,而 ACP 连接未必会因 stdio EOF 自己 reject(这正是本轮那个 bug 的形态)。
-    const res = await Promise.race([
-      conn.prompt({ sessionId, prompt: [{ type: 'text', text: ctx.message }] }),
-      spawnFailed,
-    ]);
+    let res: Awaited<ReturnType<typeof conn.prompt>>;
+    try {
+      res = await Promise.race([
+        conn.prompt({ sessionId, prompt: [{ type: 'text', text: ctx.message }] }),
+        spawnFailed,
+      ]);
+    } catch (e: any) {
+      // 当前模型那条线要 API key 而没有配(DSH 只用账号登录时,新会话的缺省模型就是这样):引擎的原话只说缺 key,
+      // 不说能怎么办,而且这场对话之后每一句都是同一个错 —— 换成一句点名「当前是哪个模型、还能换成哪些」的话。
+      // 被停掉的、别的原因失败的,原样抛。
+      const route = ctx.signal.aborted ? null : missingApiKeyRoute(e);
+      if (route === null) throw e;
+      throw modelNoApiKeyError(def.name, sel, route, acpErrorText(e));
+    }
     return { ...result(), stopReason: res.stopReason, externalSessionId: resumable ? sessionId : undefined };
   } finally {
     startup.disarm(); // 到此子进程的死活不再是「起不来」:下面 killNow() 是我们自己杀的

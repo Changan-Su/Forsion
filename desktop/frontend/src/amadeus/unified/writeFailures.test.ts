@@ -29,6 +29,8 @@ function harness() {
     settleUnsaved: vi.fn<() => void>(),
     isPristine: vi.fn<() => boolean>(() => false),
     reconcileNow: vi.fn<() => void>(),
+    // CAS 拒写时的三方合并(2026-11-14)住在 writeNow 前面;这里缺省「合不拢」,只验本地胜那条。合并本身见 conflictMerge.test。
+    mergeIntoEditor: vi.fn<(theirs: string, raw: string, canDefer: boolean) => 'merged' | 'later' | null>(() => null),
   }
   const flushPropDrafts = vi.fn<() => void>() // 属性面板草稿冲洗(C-02)
   const script = writer + '\n({ writeNow, handle: { path, ' + flushProperty + ' retire() {} } })'
