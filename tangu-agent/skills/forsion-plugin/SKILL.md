@@ -349,7 +349,7 @@ Muse's Space no longer loads `main.js` (it stays on disk; do not edit it): the d
 
 | 贡献点 | 给用户的入口 | 备注 |
 |---|---|---|
-| `registerCommand` | 命令面板(+ 可选 agent 面) | `title` 可传 `() => string` 跟随界面语言(2026-10-02+,老宿主只认字符串);id 处于全局命名空间,裸名会互顶;默认只做导航,**动作性能力要么走引擎侧 agent/技能(通用纪律 5),要么给这条命令声明 `invoke`**(见下)。<!-- PENDING(plugin-commands-net): check against the final API --> 返回 disposer,同 id 再注册 = 替换;`hotkey` 给缺省键位(用户改过的优先;缺省键互相撞上的都不生效,列在 设置 → 快捷键) |
+| `registerCommand` | 命令面板(+ 可选 agent 面) | `title` 可传 `() => string` 跟随界面语言(2026-10-02+,老宿主只认字符串);id 处于全局命名空间,裸名会互顶;默认只做导航,**动作性能力要么走引擎侧 agent/技能(通用纪律 5),要么给这条命令声明 `invoke`**(见下)。2026-11-16 起返回 disposer(只撤这一次注册;被替换掉的旧 disposer 什么都不做),同 id 再注册 = 原地替换(运行时增删命令不用重载插件);老宿主返回 `undefined`、重注册会多出一条 → `off?.()`、每个 id 只注册一次。`hotkey: 'Mod+Shift+Y'` 缺省键位:必须带 `Mod`;带 `Shift` 时只能配字母、`[` `]` 或具名键(ArrowUp、F5、Enter…),不支持 `Space`,写错的忽略并在控制台警告;只在没有任何别的绑定占着时生效(内置命令、系统 / 编辑器快捷键、用户给别的命令设的键、别的插件的同一缺省键 —— 两个插件撞同一个键,谁都拿不到);用户给这条命令设的键永远优先;没生效的列在 设置 → 快捷键,写「插件默认键 {key} 与「{other}」冲突，未生效」,键空出来后自动生效。老宿主忽略 `hotkey` |
 | `registerSlashItem` | 笔记里的 `/` | 静态 `scaffold`,或动态 `run()`(先建文件再返回嵌入语法);`label` / `group` 传函数则跟随界面语言 |
 | `registerSelectionAction` | 选中文字后浮出的那一条(划线条)里「⋯ → 插件」 | `run(cx)` 返回要给人看的 markdown,**只进宿主的结果卡**:笔记里用户点「替换 / 插入下方」才写,别处只读;`scope` 决定出现在哪些视图(缺省只在笔记),见下「Selection bar」。桌面 2.13.3 及更早在「AI ▾ → 插件」、只有笔记里有 |
 | `registerView` | 独立标签页(`ctx.openView(id)` 打开) | `title` 2026-10-26 起收 PluginText;**DOM 挂载**(`mount(el, view?)` 返 disposer;可以是 async —— resolve 出的就是 disposer,reject 算挂载失败;`view.extendView` 可开临时扩展),外置插件的主力;加 `rightCompanions` 声明它到前台时右栏要的那组(见「右栏:主视图规则」);`workspaceSource` 只对没写 `mode` 的老配方的左栏生效。**样式不隔离**:选择器挂自家根类名,配色只用 `var(--bg)` / `--bg-card` / `--text` / `--text-muted` / `--border` / `--accent`(自造的变量名宿主没有,会落到你写死的兜底色) |
@@ -955,12 +955,24 @@ const back = await ctx.app.readBytes?.(`${ctx.app.workFolder()}/models/${file.na
   用 `parse(buf, '')` + `manager.setURLModifier((u) => /^(blob:|data:|amadeus-asset:|https?:)/.test(u) ? u : ctx.app.assetUrl(join(dirOf(modelPath), decodeURI(u))))`,
   每端都对(web / unit 的资源 URL 是 `?ref=` 形,拼 base URL 那条路只在桌面成立)。
 
-**联网与第三方库(桌面)**:CSP 拦的是**外站脚本**(`script-src` 没有 CDN),所以依赖一律 esbuild `bundle: true` 打进单文件,`main.js` **没有大小上限**。**联网本身 CSP 不拦**:`connect-src` 放行 `https:` / `wss:`(和本机 localhost),对方接口回 CORS 头(`Access-Control-Allow-Origin`)就能在插件里直接 `fetch`。不回 CORS 头的接口报 `TypeError: Failed to fetch`,那是 CORS,不是 CSP:<!-- PENDING(plugin-commands-net): check against the final API --> 这类在 manifest `network` 里声明域名,用 `ctx.net?.request(url, init)` 由宿主代发(只在桌面;只放声明过的域名、只收 https、拒内网地址、不带 cookie,有大小 / 时长上限)。网页 / 手机的 CSP 另有差异,在那两端单独试。需要 disposer 时:
+**联网与第三方库(桌面)**:CSP 拦的是**外站脚本**(`script-src` 没有 CDN),所以依赖一律 esbuild `bundle: true` 打进单文件,`main.js` **没有大小上限**。**联网本身 CSP 不拦**:`connect-src` 放行 `https:` / `wss:`(和本机 localhost),对方接口回 CORS 头(`Access-Control-Allow-Origin`)就能在插件里直接 `fetch`。不回 CORS 头的接口报 `TypeError: Failed to fetch`,那是 CORS,不是 CSP:改用下面的 `ctx.net`。网页 / 手机的 CSP 另有差异,在那两端单独试。
+
+需要 disposer 时:
 
 ```js
 // build.mjs —— IIFE 的返回值会被丢掉,用 globalName + footer 把它 return 出去
 globalName: 'myPlugin', footer: { js: 'return myPlugin.dispose;' }
 ```
+
+**`ctx.net`(`PluginNetApi`,2026-11-16 起,只在桌面;网页 / 手机 / 老宿主上整个成员缺席 → `if (ctx.net)`)**:替不回 CORS 头的接口由主进程代发。manifest 写 `"network": ["api.example.com", "*.cdn.example.com"]`(只写主机名,不带协议 / 端口 / 路径;`*.example.com` 管任意层子域、不含 `example.com` 本身,要两个就都写;主进程每次请求从磁盘上的 manifest 重读;用户在插件详情页看到「会访问:…」,商店装之前暂时还看不到)。
+
+```js
+const res = await ctx.net.request('https://api.example.com/v1/items', { method: 'POST', headers: { Authorization: `Bearer ${key}` }, body: JSON.stringify(q), timeoutMs: 20_000 })
+if (res.status !== 200) throw new Error(`HTTP ${res.status}`)   // 4xx / 5xx 照常 resolve,只有传输问题 reject
+const data = res.json()                                          // 另有 res.text() / res.bytes / res.headers(小写)/ res.url(重定向后的)
+```
+
+规矩由宿主逐跳执行:只走 https、默认端口 443;IP 字面量和连接时解析到内网 / 回环 / 保留地址的一律拒;重定向最多 5 次、每跳重核名单(换主机时丢掉 Authorization / Cookie);从不带应用的 cookie、代理凭据、客户端证书(要鉴权自己带 `Authorization`);响应解压后 ≤ 10 MB;`timeoutMs` 缺省 30 s、上限 60 s;每个插件同时最多 8 个请求;插件停用时在途请求 reject。失败 reject 一个带 `err.code` 的 `Error`:`net_domain_not_declared` / `net_blocked_address` / `net_timeout` / `net_too_large` / `net_bad_url` / `net_bad_request`(方法不支持、GET 带 body、写了宿主自己管的头)/ `net_failed`(DNS、TLS、超过 5 次重定向、并发超限,看 `err.message`)。回 CORS 头的 https 接口照旧可以直接 `fetch`。
 
 ## Vault files and the working folder (updated 2026-10-21)
 
