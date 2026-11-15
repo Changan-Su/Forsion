@@ -358,19 +358,31 @@ function serializeRoot(state: MdNode, node: PMNode): void {
     const last = kids?.[kids.length - 1]
     if (last) last.data = { ...last.data, ...data }
   }
+  /** 照常写一块并记类型。带 Tab 缩进档的块先写一个 `<!-- amadeus-indent:N -->` 标记(./structuralIndent):
+   *  标记也记上这一块的类型(只作右侧),它前面的空行按这一块算;标记与块之间仍是原来的一条空行。 */
+  const nextMarked = (c: PMNode): void => {
+    const kids = state.top()?.children
+    const n0 = kids?.length ?? 0
+    state.next(c)
+    const kind = pmKind(c)
+    mark({ amxKind: kind })
+    const added = (state.top()?.children?.length ?? 0) - n0
+    const marker = added === 2 ? state.top()?.children?.[n0] : null
+    if (marker?.type === 'html') marker.data = { ...marker.data, amxFirst: kind }
+  }
   if (!plan) {
     if (!tag) {
       state.next(node.content)
       return
     }
-    node.forEach((c) => { state.next(c); mark({ amxKind: pmKind(c) }) })
+    node.forEach((c) => nextMarked(c))
     return
   }
   for (let j = 0; j < node.childCount; j++) {
     const r = plan.startAt.get(j)
     if (r == null) {
-      state.next(node.child(j))
-      if (tag) mark({ amxKind: pmKind(node.child(j)) })
+      if (tag) nextMarked(node.child(j))
+      else state.next(node.child(j))
       continue
     }
     state.addNode('amadeusVerbatim', undefined, token(plan, r))

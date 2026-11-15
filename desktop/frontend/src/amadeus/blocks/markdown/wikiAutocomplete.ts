@@ -4,6 +4,7 @@
 // pass through and only intercepts navigation keys.
 
 import { $inputRule, $prose } from '@milkdown/kit/utils'
+import { enterInline } from './enterMode'
 import { InputRule } from '@milkdown/kit/prose/inputrules'
 import { Plugin, PluginKey, NodeSelection, type EditorState } from '@milkdown/kit/prose/state'
 import type { EditorView } from '@milkdown/kit/prose/view'
@@ -145,7 +146,8 @@ export function slashSuggestPlugin(report: SuggestReport) {
             if ($head.parent.type.name === 'code_block') return report(null) // 代码块内 '/' 恒字面(路径/正则/注释)
             const ctx = editContextAt($head)
             if (!slashAvailable(ctx)) return report(null) // 单元格里一项都做不成(B-18),'/' 恒字面
-            const before = $head.parent.textBetween(0, $head.parentOffset, undefined, '￼')
+            // 回车口径开关打开时,段内软换行(isInline)= 换行,'/' 紧跟其后就是行首,和段首一样能触发。关着照旧当占位。
+            const before = $head.parent.textBetween(0, $head.parentOffset, undefined, (n) => (n.type.name === 'hardbreak' && n.attrs.isInline === true && enterInline() ? '\n' : '￼'))
             const slash = before.lastIndexOf('/')
             if (slash < 0) return report(null)
             if (inCode(view.state, $head.start() + slash, selection.head)) return report(null) // 行内代码同理

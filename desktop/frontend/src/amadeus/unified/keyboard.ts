@@ -226,6 +226,15 @@ const bsLineJoin: Command = (state, dispatch) => {
   if (idx === 0) return false
   const prev = $from.node(-1).child(idx - 1)
   const at = $from.before()
+  if (prev.type.name === 'paragraph' && prev.content.size > 0 && $from.parent.content.size === 0) {
+    // 这一行是空的(上一行之后的一个空行):删掉它 = 删掉一个换行,不在上一段末尾留一个悬空的软换行(看上去什么都没删)
+    const prevAt = at - prev.nodeSize
+    const tr = state.tr.delete(at, at + $from.parent.nodeSize)
+    if ('amxTight' in prev.attrs) tr.setNodeMarkup(prevAt, undefined, { ...prev.attrs, amxTight: $from.parent.attrs.amxTight === true })
+    tr.setSelection(TextSelection.create(tr.doc, at - 1))
+    dispatch?.(tr.setMeta(TIGHT_MANAGED, true).scrollIntoView())
+    return true
+  }
   if (prev.type.name === 'paragraph' && prev.content.size > 0) {
     const br = state.schema.nodes.hardbreak
     if (!br) return false

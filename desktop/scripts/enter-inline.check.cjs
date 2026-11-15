@@ -289,6 +289,130 @@ async function undoGroups(browser) {
   }
 }
 
+// ── S 行首规则:开关开着时第二行(段内软换行之后)的行首也算「段首」────────────────────────
+// 每条:第一行之后回车(= 软换行)再在第二行敲块级语法 → 存盘逐字、重开存盘不变。
+// steps:'k:键' 按键 / 't:字' 打字 / 'w:毫秒' 等 / 'z' 撤销一下
+async function runSteps(p, steps) {
+  for (const s of steps) {
+    if (s === 'z') await p.keyboard.press(`${MOD}+z`)
+    else if (s.startsWith('k:')) await p.keyboard.press(s.slice(2))
+    else if (s.startsWith('t:')) await p.keyboard.type(s.slice(2), { delay: 20 })
+    else if (s.startsWith('w:')) await sleep(Number(s.slice(2)))
+    await sleep(50)
+  }
+  await sleep(200)
+}
+/** 重开后:渲染成 callout 了吗,引用里各文本块(软换行记成 ⏎)。 */
+async function p2Callout(browser, md) {
+  const p = await open(browser, md)
+  const r = await p.evaluate(() => {
+    const doc = window.__upage.probe.view().state.doc, kids = []
+    doc.descendants((n) => {
+      if (n.type.name !== 'blockquote') return true
+      n.descendants((c) => { if (!c.isTextblock) return true; let t = ''; c.forEach((x) => { t += x.isText ? x.text : '⏎' }); kids.push(t); return false })
+      return false
+    })
+    return { callout: !!document.querySelector('.unified-body .ProseMirror .callout'), kids }
+  })
+  await p.closeAll()
+  return r
+}
+const tagPills = (p) => p.evaluate(() => [...document.querySelectorAll('.unified-body .ProseMirror .amx-tag-pill')].map((e) => e.getAttribute('data-tag')).join(','))
+async function lineStart(browser) {
+  const SLASH = ['w:500', 'k:Enter', 'w:300']
+  const cases = [
+    // 1 分割线
+    { name: 'S1a 第二行 `---` = 分割线', seed: 'a\n', at: 'a', steps: ['k:Enter', 't:---', 't:X'], want: 'a\n\n***\n\nX\n', shape: 'paragraph:a | hr: | paragraph:X' },
+    { name: 'S1b 第二行 `*** ` = 分割线', seed: 'a\n', at: 'a', steps: ['k:Enter', 't:*** ', 't:X'], want: 'a\n\n***\n\nX\n' },
+    { name: 'S1c 第二行 `___ ` = 分割线', seed: 'a\n', at: 'a', steps: ['k:Enter', 't:___ ', 't:X'], want: 'a\n\n***\n\nX\n' },
+    { name: 'S1d 第二行 `---` 后面还有行:分割线只占这一行,后面的行紧跟在它下面', seed: 'a\nb\n', at: 'a', steps: ['k:Enter', 't:---'], want: 'a\n\n***\nb\n', shape: 'paragraph:a | hr: | paragraph+tb:b' },
+    // 撤销一下撤掉「切段 + 分割线」,回到一段两行;第三个 `-` 跟着转换一起撤(关着时同一下连前两个 `-` 一起撤 = 空段)
+    { name: 'S1e 第二行 `---` 转成分割线后撤销一下 = 一段两行(第二行留着字面 `--`)', seed: 'a\n', at: 'a', steps: ['k:Enter', 'w:600', 't:---', 'w:100', 'z'], want: 'a\n\\--\n', shape: 'paragraph:a⏎--' },
+    // 2 斜杠菜单
+    { name: 'S2a 第二行 `/code` = 代码块(后面的行留在代码块之后)', seed: 'a\nb\n', at: 'a', steps: ['k:Enter', 't:/code', ...SLASH, 't:X'], want: 'a\n\n```\nX\n```\n\nb\n' }, // 斜杠插整块走 insertMd:前后各隔一条空行(同关着时)
+    { name: 'S2b 第二行 `/math` = 公式', seed: 'a\nb\n', at: 'a', steps: ['k:Enter', 't:/math', ...SLASH, 't:X'], want: 'a\n\n$$ X $$\n\nb\n', shape: 'paragraph:a | paragraph:$$ X $$ | paragraph:b' },
+    { name: 'S2c 第二行 `/表格` = 表格', seed: 'a\nb\n', at: 'a', steps: ['k:Enter', 't:/表格', ...SLASH, 't:X'], want: 'a\n\n| 列 1 | 列 2 |\n| --- | --- |\n|     | X   |\n\nb\n' },
+    { name: 'S2d 第二行 `/h2` = 只有这一行成标题,后面的行跟在标题下', seed: 'a\nc\n', at: 'a', steps: ['k:Enter', 't:/h2', ...SLASH, 't:T'], want: 'a\n## T\nc\n' },
+    { name: 'S2e 行尾 ` /h2`(不在行首)= 这一行成标题,下一行不动', seed: 'a\nb\nc\n', at: 'b', steps: ['t: /h2', ...SLASH], want: 'a\n## b\nc\n' },
+    // 3 脚注
+    { name: 'S3a 第二行行首 `[^1]x` = 引用,仍在同一段', seed: 'a\n', at: 'a', steps: ['k:Enter', 't:[^1]x'], want: 'a\n[^1]x\n\n[^1]: <br />\n', shape: 'paragraph:a⏎x | footnote_definition:' },
+    { name: 'S3b 第二行 `[^1]: ` = 脚注定义', seed: 'a\n', at: 'a', steps: ['k:Enter', 't:[^1]: note'], want: 'a\n\n[^1]: note\n' },
+    { name: 'S3c 第二行手写定义吃掉自动建的空定义', seed: 'x\n\na\n', at: 'x', steps: ['t:[^c]', 'w:100'], then: { at: 'a', steps: ['k:Enter', 't:[^c]: 手写'] }, want: 'x[^c]\n\na\n\n[^c]: 手写\n' },
+    // 4 callout
+    { name: 'S4 第二行 `> [!note] 标题` 回车 正文 → callout 标题与正文各就各位', seed: 'a\n', at: 'a', steps: ['k:Enter', 't:> [!note] T', 'k:Enter', 't:body'], want: 'a\n> [!note] T\n> body\n', callout: ['[!note] T', 'body'] }, // 重开:标题 T、正文 body 各一段(盘上同 Obsidian 的写法)
+    // 5 / 6 公式与代码围栏
+    // `$$` 回车:关着时一样落成 `$` / `x$` 两段(自动配对的既有行为,块公式走 /math 或盘上的多行 `$$`,见 unified-keys R17);开着 = 同样两行
+    { name: 'S5 第二行 `$$` 回车 = 与关着时同样的两行(既有行为)', seed: 'a\n', at: 'a', steps: ['k:Enter', 't:$$', 'k:Enter', 't:x'], want: 'a\n$\nx$\n' },
+    { name: 'S6a 第二行 ``` 回车 = 代码块', seed: 'a\n', at: 'a', steps: ['k:Enter', 't:```js', 'k:Enter', 't:x'], want: 'a\n```js\nx\n```\n' },
+    { name: 'S6b 第二行 ``` 回车,后面还有行:后面的行留在代码块之后', seed: 'a\nb\n', at: 'a', steps: ['k:Enter', 't:```', 'k:Enter', 't:x'], want: 'a\n```\nx\n```\nb\n' },
+    // 9 其它前缀
+    { name: 'S9a 第二行 `- [ ] ` = 待办', seed: 'a\n', at: 'a', steps: ['k:Enter', 't:- [ ] X'], want: 'a\n* [ ] X\n' },
+    { name: 'S9b 第二行 `1. ` = 编号', seed: 'a\n', at: 'a', steps: ['k:Enter', 't:1. X'], want: 'a\n1. X\n' },
+    // 不从 1 起的编号打断不了段落:隔一条空行(否则重开就并回上一段)
+    { name: 'S9c 第二行 `2. ` = 编号(落盘隔一条空行)', seed: 'a\n', at: 'a', steps: ['k:Enter', 't:2. X'], want: 'a\n\n2. X\n' },
+    { name: 'S9d 第二行 `1) ` 仍是字面(关着也是)', seed: 'a\n', at: 'a', steps: ['k:Enter', 't:1) X'], want: 'a\n1\\) X\n', shape: 'paragraph:a⏎1) X' },
+    { name: 'S9e 第二行 `> ` = 引用', seed: 'a\n', at: 'a', steps: ['k:Enter', 't:> X'], want: 'a\n> [!fold]-X\n' },
+    // 10 标题只拿自己那一行
+    { name: 'S10a 第二行行首敲 `## ` = 只有这一行成标题,后面的行成标题下的正文', seed: 'a\nb\nc\n', at: 'b', start: true, steps: ['t:## '], want: 'a\n## b\nc\n' },
+    { name: 'S10b 第一行行首敲 `## `(后面还有行)= 只有第一行成标题', seed: 'b\nc\n', at: 'b', start: true, steps: ['t:## '], want: '## b\nc\n' },
+  ]
+  for (const c of cases) {
+    const p = await open(browser, c.seed)
+    await caretAt(p, c.at, !!c.start)
+    await runSteps(p, c.steps)
+    if (c.then) { await caretAt(p, c.then.at); await runSteps(p, c.then.steps) }
+    const sh = await shape(p)
+    const md = await saved(p)
+    const p2 = await open(browser, md)
+    const md2 = await saved(p2)
+    const sh2 = await shape(p2)
+    await p2.closeAll()
+    let extra = true
+    if (c.callout) { const r = await p2Callout(browser, md); extra = r.callout && JSON.stringify(r.kids) === JSON.stringify(c.callout); c.got = r }
+    const ok = (c.want == null || md === c.want) && (c.shape == null || sh === c.shape) && md2 === md && extra && !p.errs.length
+    record(c.name, ok, JSON.stringify({ seed: c.seed, saved: md, want: c.want, shape: sh, reopenedShape: sh2, reopenSame: md2 === md, ...(c.got ? { callout: c.got } : {}), errs: p.errs }))
+    await p.closeAll()
+  }
+  // 7 第二行行首 #tag:照样渲染成标签、落盘不转义
+  {
+    const p = await open(browser, 'a\n#tag x\n')
+    await caretAt(p, 'a')
+    await sleep(150)
+    const pills = await tagPills(p)
+    const md = await saved(p)
+    record('S7a 盘上第二行行首 `#tag` = 标签(光标不在那一行时)', pills === 'tag' && md === 'a\n#tag x\n', JSON.stringify({ pills, md }))
+    await p.closeAll()
+  }
+  {
+    const p = await open(browser, 'a\n')
+    await caretAt(p, 'a')
+    await runSteps(p, ['k:Enter', 't:#tag x'])
+    await caretAt(p, 'a')
+    await sleep(150)
+    const pills = await tagPills(p)
+    const md = await saved(p)
+    record('S7b 第二行敲 `#tag x` = 标签,落盘 `a` / `#tag x` 两行', pills === 'tag' && md === 'a\n#tag x\n', JSON.stringify({ pills, md }))
+    await p.closeAll()
+  }
+  // 8 结构前缀源码层:列表项里一段两行,第二行行首 ← 只是回到上一行行尾,不打开 `- ` 源码;第一行行首 ← 才打开(对照)
+  {
+    const p = await open(browser, '- a\n  b\n')
+    await caretAt(p, 'b', true)
+    await p.keyboard.press('ArrowLeft')
+    await sleep(120)
+    const second = await p.evaluate(() => ({ prefix: !!document.activeElement?.classList.contains('amx-struct-prefix'), off: window.__upage.probe.view().state.selection.$from.parentOffset }))
+    await caretAt(p, 'a', true)
+    await p.keyboard.press('ArrowLeft')
+    await sleep(120)
+    const first = await p.evaluate(() => !!document.activeElement?.classList.contains('amx-struct-prefix'))
+    await p.keyboard.press('Escape')
+    await sleep(100)
+    const md = await saved(p)
+    record('S8 列表项一段两行:第二行行首 ← 回上一行行尾、不开源码;第一行行首 ← 开源码(对照);落盘不变', !second.prefix && second.off === 1 && first && md === '- a\n  b\n', JSON.stringify({ second, first, md }))
+    await p.closeAll()
+  }
+}
+
 // ── P 复用同一个编辑器的地方 ─────────────────────────────────────────────────────
 /** 插件卡片 / 记录页的小编辑器(PlainMarkdownEditor,v3 那条装配)。挂在台架页里,按同样的键序操作,返回 onChange 最后一次的值。 */
 async function plainRun(browser, on, seed, steps) {
@@ -410,16 +534,19 @@ async function reuse(browser) {
       await b.closeAll()
       const c = await open(browser, 'x\n', { query: '' })
       const plain = await switchOn(c)
+      // dev 服务器带 VITE_AMX_ENTER=inline 起的时候「都不设」= 开(Vite 把它内联进模块源码)
+      const envOn = await c.evaluate(() => fetch('/src/amadeus/blocks/markdown/enterMode.ts').then((r) => r.text()).then((t) => /"VITE_AMX_ENTER":\s*"inline"/.test(t)))
       await c.closeAll()
-      record('L1 localStorage amadeus.enterMode=inline 打开开关;amxEnter=off 压过它;都不设 = 关', viaStorage === true && forcedOff === false && plain === false, JSON.stringify({ viaStorage, forcedOff, plain }))
+      record(`L1 localStorage amadeus.enterMode=inline 打开开关;amxEnter=off 压过它;都不设 = ${envOn ? '开(VITE_AMX_ENTER=inline)' : '关'}`, viaStorage === true && forcedOff === false && plain === envOn, JSON.stringify({ viaStorage, forcedOff, plain, envOn }))
     }
-    const only = (arg('only') || 'keys,reopen,moves,external,undo,reuse').split(',')
+    const only = (arg('only') || 'keys,reopen,moves,external,undo,reuse,line').split(',')
     if (only.includes('keys')) await keys(browser)
     if (only.includes('reopen')) await reopen(browser)
     if (only.includes('moves')) await moves(browser)
     if (only.includes('external')) await external(browser)
     if (only.includes('undo')) await undoGroups(browser)
     if (only.includes('reuse')) await reuse(browser)
+    if (only.includes('line')) await lineStart(browser)
   } finally { await browser.close() }
   console.log(`\n${pass} 过 / ${fail} 没过`)
   const o = arg('out'); if (o) fs.writeFileSync(o, out.join('\n') + `\n${pass} 过 / ${fail} 没过\n`)

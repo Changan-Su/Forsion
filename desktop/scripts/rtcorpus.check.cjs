@@ -229,7 +229,8 @@ const TYPES = [
   { id: 'fn.type_existing_def', md: `${M}\n\n[^n]: 已有\n`, steps: [{ at: M, type: ' 见[^N]后' }], // 已有定义(大小写不敏感):只插引用,光标原地
     golden: `${M} 见[^N]后\n\n[^n]: 已有\n`, nodes: { footnote_reference: 1, footnote_definition: 1 } },
   { id: 'fn.type_lead_ref', md: `${M}\n\n段尾\n`, steps: [{ at: '段尾', enter: true, type: '[^b]。' }, { type: '注' }], // 段首:等下一个字不是 `:` 才转
-    golden: `${M}\n\n段尾\n\n[^b]。\n\n[^b]: 注\n`, nodes: { footnote_reference: 1, footnote_definition: 1 } },
+    golden: `${M}\n\n段尾\n\n[^b]。\n\n[^b]: 注\n`, nodes: { footnote_reference: 1, footnote_definition: 1 },
+    goldenOn: `${M}\n\n段尾\n[^b]。\n\n[^b]: 注\n` }, // 开关开着:回车是段内换行,第二行行首的引用仍在「段尾」这一段里
   { id: 'fn.type_def_dedupe', md: `${M}\n\n段尾\n`, steps: [{ at: M, type: '[^c]' }, { at: '段尾', enter: true, type: '[^c]: 手写' }], // 手写定义吃掉自动建的空定义
     golden: `${M}[^c]\n\n段尾\n\n[^c]: 手写\n`, nodes: { footnote_reference: 1, footnote_definition: 1 } },
 ]
@@ -313,9 +314,12 @@ async function runCase(browser, c) {
   return r
 }
 
+/** 页面上回车口径开关(blocks/markdown/enterMode)的实际状态;开着时少数几条期望本来就该变(goldenOn,各自注明理由)。 */
+const enterOn = (page) => page.evaluate(() => import('/src/amadeus/blocks/markdown/enterMode.ts').then((m) => m.enterInline()))
+
 async function runEntry(browser, e) {
   const errs = []
-  const want = `${M}Z\n\n${ENTRY_BODY}`
+  let want = `${M}Z\n\n${ENTRY_BODY}`
   let out = null
   let page
   let quiet = -1 // 入口动作之后、敲字之前的写盘次数:回灌 / 切换 / 打开都不许回声写
@@ -344,6 +348,8 @@ async function runEntry(browser, e) {
     }, ENTRY_BODY)
     await page.waitForTimeout(300)
     out = (await typeAndSave(page, M, 'Z')).out
+    // 开关开着:首段末回车只是段内换行,粘进来的正文从第二行起(和别的编辑器在行中粘贴一样逐字落盘)
+    if (await enterOn(page)) want = `${M}Z\n${ENTRY_BODY}`
   }
   await page.close()
   return { id: e.id, bucket: V, rounds: [{ out, want }], openWrites: [quiet], errs }
@@ -408,8 +414,9 @@ async function runType(browser, c) {
   for (let t = 0; t < 60 && (await writeCount(page)) === w0; t++) await page.waitForTimeout(100)
   await page.waitForTimeout(1200) // 防抖 800ms:最后几击落定
   const out = await lastWrite(page)
+  const on = await enterOn(page)
   await page.close()
-  r.rounds.push({ out, want: c.golden })
+  r.rounds.push({ out, want: on && c.goldenOn ? c.goldenOn : c.golden })
   if (out != null) {
     page = await open(browser, out, errs)
     r.openWrites.push(await writeCount(page))

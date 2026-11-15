@@ -972,6 +972,7 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
     }
     // 整块型(代码/表格/分隔线/公式/[[/按钮):scaffold 本身就是要插的 markdown。
     // 公式骨架 `$$  $$`:光标落在两对 `$$` 之间(R-17),而不是行尾 —— 否则插完还得往回挪三格才能开写。
+    ops.isolate?.() // 回车口径开关打开时:多行段落里只占这一行(空行原地换成这一块),关着什么都不做
     insertMd(item.scaffold, 'cursor', item.key === 'math' ? { caretBack: 3 } : undefined)
   }
   applySlashRef.current = applySlash // 交出去的是恒等身份 stableApply,真身逐渲染刷新
