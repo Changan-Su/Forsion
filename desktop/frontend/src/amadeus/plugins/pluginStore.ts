@@ -1732,6 +1732,11 @@ export const usePluginStore = create<PluginState>((set, get) => {
       return {
         navigate(url) {
           if (!ctxAlive()) return
+          // '#…' 只换页面当前地址的 # 那段:同一个页面里跳、不重载。照页面此刻的地址算(登录后页面自己去掉了查询串也对得上)
+          if (typeof url === 'string' && url.startsWith('#')) {
+            const cur = (ready ? view.getURL() : '') || view.getAttribute('src') || o.url
+            url = cur.split('#')[0] + url
+          }
           if (!isLoopbackHttpUrl(url)) throw new TypeError('mountWebSurface only loads loopback http(s) addresses')
           if (view.getAttribute('src') === url && ready) view.reload()
           else view.setAttribute('src', url)

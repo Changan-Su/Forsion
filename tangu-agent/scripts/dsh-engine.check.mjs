@@ -12,7 +12,8 @@
  *                                handoff = 交接,底层第 3 步;resident = 融合插件第 1 档的常驻进程)
  *     [--engine-entry <别处的 dist/standalone/main.js>]   负对照:拿没有这次改动的旧构建跑同一套,twoturn 应当红
  *     [--live --key-file <一行 key 的文件> | --live --dsh-home <已登录的 DSH 目录>]   真模型:看模型自己的回答(caps / twoturn /
- *                                    model / edit / stop / stopedit / approval / handoff);key 只进子进程环境,不落盘、不打印
+ *                                    model / edit / stop / stopedit / approval / handoff / resident);key 只进子进程环境,不落盘、不打印。
+ *                                    resident 要同时带 --dsh-tools-off,会在那份 DSH 目录里临时建 profiles/fusion、跑完拿走
  *     [--live-dry]                   不要凭据,用假模型里的自动脑把真模型那套走一遍,只证台架没写错
  *     [--dsh-tools-off]              开跑前在那份 DSH 目录的对话入口组合(profiles/acp/cordis.patch.yml)里关掉 DSH 自带的
  *                                    跑命令、读写文件、搜文件、后台任务(tool-bash / tool-pwsh / tool-fs / tool-fs-search / tool-jobs),
@@ -27,7 +28,7 @@
  */
 import { spawn, execFileSync } from 'node:child_process';
 import { createServer } from 'node:http';
-import { mkdirSync, writeFileSync, existsSync, realpathSync, readFileSync, appendFileSync, readdirSync } from 'node:fs';
+import { mkdirSync, writeFileSync, existsSync, realpathSync, readFileSync, appendFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -846,6 +847,11 @@ const SCENARIOS = {
         ['技能目录在系统提示里(名字 + 描述)', sysText(firstA).includes('res-probe') && sysText(firstA).includes(SKILL_DESC)],
         ['用户自己 ~/.agents 的 AGENTS.md 由 DSH 自己读进来了', JSON.stringify(firstA).includes(USER_SHARED)],
         ['桥上有 remember 和 forsion_skill', (firstA.tools || []).some((t) => t.name === 'mcp__forsion__remember') && (firstA.tools || []).some((t) => t.name === 'mcp__forsion__forsion_skill')],
+        // 融合组合为了对话入口把读写 / 命令这几行重新打开了;--dsh-tools-off 要管得到常驻进程(真模型跑常驻场景靠它)。两个方向都核:
+        // 不带时它们在(开关是真的),带了就一个都不在
+        TOOLS_OFF
+          ? ['--dsh-tools-off:常驻进程交给模型的工具里没有 DSH 自带的读写文件 / 搜文件 / 跑命令 / 后台任务', !(firstA.tools || []).some((t) => NATIVE_DISK_TOOLS.includes(t.name)), (firstA.tools || []).map((t) => t.name).filter((x) => NATIVE_DISK_TOOLS.includes(x)).join(', ')]
+          : ['不带 --dsh-tools-off 时,融合组合给了 DSH 自带的读写文件和跑命令(上面那个开关关的是真东西)', ['read', 'write', 'bash'].every((x) => (firstA.tools || []).some((t) => t.name === x)), (firstA.tools || []).map((t) => t.name).filter((x) => !x.startsWith('mcp__')).join(', ')],
         ['卡片按 Tangu 原名画(remember)、成功', a.tools.some((t) => t.name === 'remember') && a.results.some((r) => r.name === 'remember' && !r.isError), a.results.map((r) => `${r.name}:${r.isError ? 'err' : 'ok'}`).join(', ')],
         ['记忆写在它名下', memText().includes('RES-REM-71')],
         ['没写指令目录(常驻进程不用 DSH_AGENTS_HOME)', !existsSync(homeDir)],
@@ -1010,6 +1016,36 @@ const LIVE_SCENARIOS = {
       if (!liveModel) throw new Error(`--model ${LIVE_MODEL}: no such model`);
     }
     return caps;
+  },
+  // 常驻进程(融合插件第 1 档)× 真模型:两轮暗号走的是插件起的那个进程。--live --dsh-home 用的是一份登录过的 DSH 目录:
+  // 这一项会在里面建 profiles/fusion(带一个记号文件),跑完拿走;那里已经有一份不是本台架建的 fusion 组合就不跑。
+  resident: async () => {
+    const fusionDir = join(DSH_HOME, 'profiles', 'fusion');
+    const mark = join(fusionDir, '.dsh-engine-check');
+    const existed = existsSync(fusionDir);
+    if (existed && !existsSync(mark)) return record('resident', '常驻进程 × 真模型', [['DSH 目录里没有别人的 fusion 组合', false, `${clean(fusionDir)} 已存在,不是本台架建的;不动它`]]);
+    if (!TOOLS_OFF && !LIVE_DRY) return record('resident', '常驻进程 × 真模型', [['带了 --dsh-tools-off(融合组合会把读写 / 命令重新打开,真模型跑常驻场景必须关掉)', false]]);
+    writeResidentFixture(); writeFileSync(mark, 'written by dsh-engine.check.mjs; removed after the run\n');
+    await stopEngine(); engineExtraEnv = { TANGU_PLUGINS: 'on', TANGU_PLUGINS_DIR: RESIDENT_PLUGIN_ROOT }; await startEngine();
+    try {
+      const L = engineLog().length;
+      const word = codeWord('OTTER'); const sid = await newSession('live-resident');
+      const a = await liveRun(sid, REMEMBER(word));
+      const b = await liveRun(sid, ASK);
+      const ps = await pointers(sid);
+      const pids = fusionPids(); const st = await api(RESIDENT_ROUTE).catch((e) => ({ error: e.message }));
+      record('resident', '常驻进程 × 真模型:第二句记得第一句,两轮连的都是插件起的那个进程', [
+        ['两轮都跑完', a.done && b.done, a.error || b.error || ''],
+        ['第二句的回答里有第一句给的暗号', b.text.includes(word), said(b)],
+        ['第一句没有动用工具', a.tools.length === 0, a.tools.map((t) => t.name).join(' / ')],
+        noTools(b),
+        ['两轮用的是同一个 DSH 会话', ps.length === 2 && !!ps[0].ext && ps[0].ext === ps[1].ext, ps.map((p) => p.ext?.slice(0, 8)).join(' → ')],
+        ['连的是常驻进程(日志里有常驻会话、只有一个 fusion 进程、只起过一次)', /resident session [0-9a-f-]{8}: new/.test(engineLog().slice(L)) && pids.length === 1 && st.started === 1, `进程 ${pids.length} 个,起过 ${st.started} 次`],
+      ]);
+    } finally {
+      engineExtraEnv = {}; await stopEngine(); await startEngine();
+      if (!existed) rmSync(fusionDir, { recursive: true, force: true });
+    }
   },
   twoturn: async () => {
     const word = codeWord('QUOKKA'); const sid = await newSession('live-twoturn');

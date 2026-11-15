@@ -27,6 +27,9 @@ import { createBridgeRelay, type BridgeRelay } from './bridgeRelay.js';
 
 /** 常驻进程上最多同时开着多少场 Forsion 的会话;超了关最久没用的(没在跑的)。 */
 const MAX_OPEN_SESSIONS = Number(process.env.TANGU_RESIDENT_MAX_SESSIONS) || 24;
+/** 停掉 / 看门狗到点发了 cancel 之后,等引擎收住这一轮的上限;到点还没收住就关掉这场会话(下一句重开),这一轮按停止收尾。 */
+const CANCEL_GRACE_MS = Number(process.env.TANGU_RESIDENT_CANCEL_GRACE_MS) || 15_000;
+const stoppedError = (msg = 'Stopped'): Error => Object.assign(new Error(msg), { name: 'AbortError' });
 
 interface OpenSession {
   id: string;
@@ -98,7 +101,12 @@ export class ResidentLink {
       sessionUpdate: async (params) => {
         const r = route(params.sessionId);
         if (r) return r.sessionUpdate(params);
-        if (link) { link.outOfTurn += 1; for (const sink of link.probeSinks) sink(params); }
+        if (link) {
+          link.outOfTurn += 1;
+          const open = link.sessions.get(params.sessionId);
+          if (open) open.lastUsed = Date.now(); // 工作台里正在用的这一场:别被「最久没用」关掉
+          for (const sink of link.probeSinks) sink(params);
+        }
       },
       requestPermission: async (params) => {
         const r = route(params.sessionId);
@@ -140,10 +148,18 @@ export class ResidentLink {
     await s.relay?.close().catch(() => {});
   }
 
-  /** 开着的太多:关最久没用、又没在跑的。 */
+  private pruning = false;
+  /** 开着的太多:关最久没用、又没在跑的。一次只一个在修剪;每关一个都重新挑(等关的时候可能有一轮刚开始跑)。 */
   private async prune(): Promise<void> {
-    const idle = [...this.sessions.values()].filter((s) => !s.route).sort((a, b) => a.lastUsed - b.lastUsed);
-    while (this.sessions.size > MAX_OPEN_SESSIONS && idle.length) await this.closeSession(idle.shift()!);
+    if (this.pruning) return;
+    this.pruning = true;
+    try {
+      while (!this.closed && this.sessions.size > MAX_OPEN_SESSIONS) {
+        const victim = [...this.sessions.values()].filter((s) => !s.route).sort((a, b) => a.lastUsed - b.lastUsed)[0];
+        if (!victim) break;
+        await this.closeSession(victim);
+      }
+    } finally { this.pruning = false; }
   }
 
   /**
@@ -225,7 +241,21 @@ export class ResidentLink {
     if (this.closed) throw new Error(`${def.name}'s background process stopped. Send again.`);
     const cwd = ctx.cwd || process.cwd();
     let sessionId = '';
-    const onAbort = (): void => { if (sessionId) void this.conn.cancel({ sessionId }).catch(() => {}); };
+    // 停掉只发 cancel(进程是大家的,不杀),但要有时限:引擎迟迟收不住这一轮,就按停止收尾、把这场会话关掉,别让对话一直挂着
+    let stuck = false;
+    let stopTimer: ReturnType<typeof setTimeout> | null = null;
+    let rejectStop: (e: Error) => void = () => {};
+    const stopBound = new Promise<never>((_, reject) => { rejectStop = reject; });
+    stopBound.catch(() => {});
+    const onAbort = (): void => {
+      if (sessionId) void this.conn.cancel({ sessionId }).catch(() => {});
+      if (stopTimer) return;
+      stopTimer = setTimeout(() => {
+        stuck = true;
+        const msg = `${def.name} did not stop this turn in time; the conversation will reopen on the next message.`;
+        rejectStop(ctx.signal.aborted ? stoppedError(msg) : new Error(msg)); // 看门狗到点(不是用户按的停止)按失败收尾
+      }, CANCEL_GRACE_MS);
+    };
 
     // 不活动看门狗同 runAcpEngine:到点只发 cancel(进程是大家的,不杀)。审批期间停表。
     const ENGINE_IDLE_MS = Number(process.env.TANGU_ENGINE_IDLE_TIMEOUT_MS) || 300_000;
@@ -315,14 +345,19 @@ export class ResidentLink {
         console.log(`[engine:${def.id}] resident session ${sessionId.slice(0, 8)}: new`);
       }
       open.route = client;
+      // 准备会话的这段时间里被停掉了:那时还没有会话可 cancel,这里不再往下发提问
+      if (ctx.signal.aborted) throw stoppedError();
       try { await ctx.onSession?.({ id: sessionId, resumable: true, resumed: !!resumeSessionId, via, verifiedForChat, ...(agentName ? { agent: agentName } : {}) }); }
       catch (e: any) { console.warn(`[engine] onSession failed: ${e?.message || e}`); }
-      const sel = await applyEngineModel(this.conn, sessionId, s, ctx.engineModelId, def.id, guard, open.sel);
+      // 会话一直开着(这一轮没有回包)时,缓存里的「当前模型」可能已经被工作台里换掉了:有指定模型就照样再设一次
+      const known = s || !open.sel ? open.sel : { ...open.sel, currentModelId: undefined };
+      const sel = await applyEngineModel(this.conn, sessionId, s, ctx.engineModelId, def.id, guard, known);
       open.sel = sel;
+      if (ctx.signal.aborted) throw stoppedError();
       armEngineIdle();
       let res: Awaited<ReturnType<ClientSideConnection['prompt']>>;
       try {
-        res = await Promise.race([this.conn.prompt({ sessionId, prompt: [{ type: 'text', text: ctx.message }] }), this.closedSignal]);
+        res = await Promise.race([this.conn.prompt({ sessionId, prompt: [{ type: 'text', text: ctx.message }] }), this.closedSignal, stopBound]);
       } catch (e: any) {
         const route = ctx.signal.aborted ? null : missingApiKeyRoute(e);
         if (route === null) throw e;
@@ -332,7 +367,14 @@ export class ResidentLink {
       return { ...result(), stopReason: res.stopReason, externalSessionId: sessionId };
     } finally {
       if (engineIdle) clearTimeout(engineIdle);
+      if (stopTimer) clearTimeout(stopTimer);
       ctx.signal.removeEventListener('abort', onAbort);
+      if (open && stuck) {
+        open.route = null;
+        console.warn(`[engine:${def.id}] resident session ${open.id.slice(0, 8)}: did not stop in time, closing it`);
+        await this.closeSession(open).catch(() => {});
+        open = undefined;
+      }
       if (open) {
         open.route = null; open.relay?.setTarget(null); open.lastUsed = Date.now();
         if (open.relay && handoff && open.key === handoff.key) writeBridgeState(this.engineId, open.id, { key: open.key, instructions: handoff.instructions, serverName: handoff.serverName, tools: open.relay.lastTools() });
@@ -356,11 +398,16 @@ onResidentHostChange((engineId) => {
 export async function acquireResident(engineId: string, signal?: AbortSignal): Promise<ResidentLink | null> {
   const reg = residentHostFor(engineId);
   if (!reg) return null;
-  const cur = links.get(engineId);
-  if (cur) {
+  // 进程重启后,同时来的两轮(对话 + 工作台的 hold)都看到旧连接关了:只许一个去连,另一个等它的结果 ——
+  // 同一份 stdio 上挂两个 ACP 客户端,回包就分错了
+  for (;;) {
+    const cur = links.get(engineId);
+    if (!cur) break;
     const l = await cur.catch(() => null);
     if (l && !l.closed) return l;
-    if (links.get(engineId) === cur) links.delete(engineId);
+    if (links.get(engineId) !== cur) continue; // 等的时候别人已经换上了新的:看新的
+    links.delete(engineId);
+    break;
   }
   const task = (async () => {
     const rc = await reg.host.connect(signal);

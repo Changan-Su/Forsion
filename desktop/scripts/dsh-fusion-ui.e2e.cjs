@@ -6,9 +6,11 @@
  *   ① 把「浣溪沙」改成由 DSH 来跑:Harness 卡「运行在」下面多出插件给的三行(运行时 / 更新通道 / DSH 插件);
  *   ② 和它聊一句:这一轮连的是插件常驻的那个 DSH(没有另起每轮一个的 `--profile acp` 进程),回答出来;
  *   ③ 对话右键「在 DSH 工作台里打开」→ 主区开出「DSH 工作台」页签,里面是 DSH 自己的界面,直接落在这场对话上(问和答都在);
- *      在工作台里打字接着说,DSH 回答出来;关掉页签 DSH 还在;
+ *      在工作台里打字接着说,DSH 回答出来;工作台开着时再右键,页面不重载(只换 # 那段);回到 Forsion 同一场再发一句,
+ *      DSH 那边是同一场(上文里有工作台那一句);关掉工作台页签,从 Harness 卡「打开工作台」进,看得到这场并接着说;
  *   ④ 在工作台里装 dsh-genui@0.3.3(DSH 插件页走的那个远程方法):Forsion 先弹体检报告 → 点「装」→ 装上,Harness 卡「DSH 插件」变 1 个;
- *      再在 Forsion 里和 DSH 聊一句,DSH 给模型的系统提示里带上了 genui 那一节(插件对 Forsion 的对话生效)。
+ *      再在 Forsion 里和 DSH 聊一句,DSH 给模型的系统提示里带上了 genui 那一节(插件对 Forsion 的对话生效);要一张卡,
+ *      右键这场在工作台里看,DSH 自己把它画成了卡片。
  *
  * 假模型:常驻 DSH 由插件起、环境走白名单(不带 provider key),所以地址和 key 写进隔离 DSH 目录的 .env —— 和用户自己配 DSH 是同一层。
  *
@@ -60,6 +62,10 @@ function dshBrain(body) {
   const last = msgs[msgs.length - 1] || {}
   const said = (typeof last.content === 'string' ? last.content : (last.content || []).map((b) => b.text || '').join(' '))
   if (/from the workbench/i.test(said)) return { text: `Workbench heard you. ${MARK}` }
+  if (/back in forsion/i.test(said)) { stub.sawWorkbenchLine = JSON.stringify(msgs).includes('One more line from the workbench'); return { text: `Back in Forsion. ${MARK}` } }
+  if (/from the card/i.test(said)) return { text: `Card path heard you. ${MARK}` }
+  // genui 装上后:回一张 genui 卡(和第三轮方案实测同一个格式),工作台里 DSH 自己把它画成卡片
+  if (/show me a card/i.test(said)) return { text: '这是一张卡片：\n```schemaJson\n' + JSON.stringify({ componentName: 'Page', state: {}, children: [{ componentName: 'h3', children: 'GENUI_PROBE_CARD' }, { componentName: 'p', children: 'rendered by dsh-genui' }] }) + '\n```' }
   if (/hello dsh/i.test(said)) return { text: `Hello from the resident DSH. ${MARK}` }
   return { text: 'OK' }
 }
@@ -259,6 +265,42 @@ async function main() {
     await shot(win, '24-workbench-typed')
     check('③ 在工作台里打字接着说,DSH 回答出来(这场对话就是 Forsion 那场)', !!heard, typed ? '' : '没找到输入框')
 
+    // ③b 工作台已经开着时再右键一次:只换地址 # 那段、页面不重载(页面里的标记还在),仍是这场
+    await guestEval(app, `window.__d2fKeep = 'keep'`)
+    await title.click({ button: 'right' }); await sleep(600)
+    await win.getByText('在 DSH 工作台里打开', { exact: true }).first().click()
+    await sleep(2500)
+    const kept = (await guestEval(app, 'window.__d2fKeep || null')).value
+    const still = ((await guestEval(app, 'document.body.innerText')).value || '').includes('One more line from the workbench.')
+    const where = (await guestEval(app, `(location.search.includes('token=') ? '?token=…' : location.search || '/') + location.hash`)).value
+    check('③ 工作台开着时再右键:页面没重载(只换 # 那段),仍是这场', kept === 'keep' && still, `标记 ${kept};地址 ${where}`)
+
+    // ③c 回到 Forsion 这场对话接着发:DSH 那边是同一场(交给模型的上文里有工作台那一句)
+    await title.click(); await sleep(1500)
+    stub.sawWorkbenchLine = false
+    await send(win, 'Back in Forsion, are you there?')
+    const back = await until(async () => (await lastAsst(win)).includes(`Back in Forsion. ${MARK}`), 90_000)
+    await shot(win, '24b-back-in-forsion')
+    check('③ 回到 Forsion 同一场接着发:答得出,DSH 那边是同一场(上文里有工作台那一句)', !!back && stub.sawWorkbenchLine === true, await lastAsst(win))
+
+    // ③d 关掉工作台页签,从 Harness 卡的「打开工作台」进:看得到这场对话(连同刚才 Forsion 那一轮),并接着说
+    await win.locator('.dv-tab').filter({ hasText: 'DSH 工作台' }).locator('.wb-tab-close').first().click().catch(() => {})
+    await sleep(800)
+    const closedTab = (await win.locator('[data-d2f="workbench"] webview').count()) === 0
+    await openAgents(win); await rosterRow(win, AGENT).click(); await sleep(1500)
+    await pluginRow(win, 'runtime').locator('button', { hasText: '打开工作台' }).first().click()
+    await until(async () => (await win.locator('[data-d2f="workbench"] webview').count()) > 0, 30_000, 500)
+    let seen = await until(async () => { const t = (await guestEval(app, 'document.body.innerText')).value || ''; return t.includes('Back in Forsion') ? 'shown' : null }, 8_000, 600)
+    if (!seen) { // DSH 没自己回到上次那场:像用户一样在它的会话列表里点这场
+      await guestClickText(app, '/^Hello DSH, please say hello\\.$/')
+      seen = await until(async () => { const t = (await guestEval(app, 'document.body.innerText')).value || ''; return t.includes('Back in Forsion') ? 'clicked in the list' : null }, 15_000, 600)
+    }
+    await guestEval(app, `(() => { const ta = document.querySelector('textarea, [contenteditable="true"]'); ta?.focus(); return !!ta })()`)
+    const typed2 = await guestType(app, 'Hello from the card path.')
+    const heard2 = typed2 && await until(async () => ((await guestEval(app, 'document.body.innerText')).value || '').includes(`Card path heard you. ${MARK}`), 60_000, 800)
+    await shot(win, '24c-card-path')
+    check('③ 从 Harness 卡打开工作台:看得到这场(含 Forsion 刚才那一轮)并接着说', closedTab && !!seen && !!heard2, `页签关掉了 ${closedTab};${seen || '没看到这场'}`)
+
     // ④ 在工作台里装 dsh-genui:Forsion 先给体检报告
     const reqId = `ui-${Date.now()}`
     void guestEval(app, `fetch('/api/pluginManager/installBundle', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ type: 'client-request', rpcId: '${reqId}', method: 'pluginManager/installBundle', payload: { args: { spec: '${GENUI}', options: { enabled: true, requestId: '${reqId}' } } } }) }).then((r) => r.json()).then((j) => { window.__d2fInstall = j; return true })`)
@@ -300,6 +342,19 @@ async function main() {
     await until(async () => stub.systems.length > before && (await lastAsst(win)).includes(MARK), 90_000)
     const sys = stub.systems.slice(before).join('\n')
     check('④ 装上后 Forsion 里和 DSH 的对话用上了它(系统提示里有 genui 那一节)', /genui/i.test(sys), `${sys.length} 字`)
+    // genui 卡:在 Forsion 里要一张卡,再右键这场在工作台里看 —— DSH 自己把它画成卡片(和第三轮方案图第二张对照)
+    await send(win, 'Please show me a card.')
+    await until(async () => /GENUI_PROBE_CARD/.test(await lastAsst(win)), 60_000)
+    const title2 = win.locator('aside, nav, [class*="sidebar"], [class*="side"]').getByText(/^Hello DSH again/).first()
+    await title2.click({ button: 'right' }); await sleep(600)
+    await win.getByText('在 DSH 工作台里打开', { exact: true }).first().click()
+    const genuiCard = await until(async () => {
+      const r = (await guestEval(app, `({ text: document.body.innerText, cards: document.querySelectorAll('dsh-genui-card, [data-dsh-genui-card]').length })`)).value
+      return r && r.text.includes('GENUI_PROBE_CARD') && !r.text.includes('componentName') ? r : null
+    }, 30_000, 800)
+    await sleep(800)
+    await shot(win, '28-genui-card')
+    check('④ 工作台里 DSH 把 genui 卡画成了卡片(不是代码块)', !!genuiCard, genuiCard ? `卡片元素 ${genuiCard.cards} 个` : '')
     check('前置:工作台页签关不关都不影响,DSH 一直是同一个进程', dshProcs().filter((l) => l.includes('--profile forsion')).length === 1)
 
     if (HOLD) {

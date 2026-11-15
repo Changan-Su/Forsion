@@ -1829,7 +1829,8 @@ export interface PluginWebSurfaceOptions {
   onLoadFail?(info: { url: string; code: number; description: string }): void
 }
 export interface PluginWebSurfaceHandle {
-  /** Load another loopback http(s) address in the same surface. Throws for any other address. */
+  /** Load another loopback http(s) address in the same surface. Throws for any other address.
+   *  A bare `#fragment` only changes the fragment of the page's current address (same page, no reload). */
   navigate(url: string): void
   reload(): void
   focus(): void

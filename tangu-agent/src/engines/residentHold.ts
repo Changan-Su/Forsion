@@ -4,7 +4,7 @@
  * (ctx.sdk.engines.hold)共用这一份。
  */
 import { deps } from '../seams/runtime.js';
-import { query } from '../core/db.js';
+import { getDbType, query } from '../core/db.js';
 
 export type HoldResult =
   | { ok: true; engineSessionId: string; state: 'open' | 'resumed' }
@@ -13,7 +13,9 @@ export type HoldResult =
 /** 这场 Forsion 对话最近一次在这个引擎上跑时记下的引擎会话(id + 工作目录)。 */
 async function enginePointer(engineId: string, sessionId: string): Promise<{ id: string; cwd: string } | null> {
   const runs = await query<any[]>(
-    `SELECT result FROM agent_runs WHERE session_id = ? AND CAST(result AS TEXT) LIKE '%"externalSession":%' ORDER BY created_at DESC LIMIT 8`, [sessionId]);
+    // created_at 只到秒:同一秒里的两轮要靠 rowid / updated_at 排出先后(同 agentLoop 找可续接会话那一处)
+    `SELECT result FROM agent_runs WHERE session_id = ? AND CAST(result AS TEXT) LIKE '%"externalSession":%'
+     ORDER BY created_at DESC${getDbType() === 'sqlite' ? ', rowid DESC' : ', updated_at DESC'} LIMIT 8`, [sessionId]);
   for (const r of runs) {
     let v: any = r.result;
     if (typeof v === 'string') { try { v = JSON.parse(v); } catch { v = null; } }
