@@ -6,6 +6,7 @@
  *   ④ 断在行尾(「…\n」)时换行原样补回,不粘成「。3.」(11-15 live 复跑抓到)。
  *   ⑤ 续写那一发没写出正文 → 照样 truncated;⑥ 续写那一发转去调(截断的)工具 → 之后的正文另起一段,不粘到断处;
  *   ⑦ 轮数紧(maxIterations 2)不自动接,直接 truncated(⑤–⑦ = Codex 评审 11-15 #2–#4)。
+ *   ⑧ 一个字都没写出来就撞上限(推理吃光额度):不接、不标 truncated,照旧走空终稿兜底。
  * 真内存 SQLite + 真 agentLoop + 脚本化 fake llm(套路同 agentLoop.inflightPersist.test.ts)。
  * 负对照:删掉 agentLoop 里 `res.finishReason === 'length' && !res.toolCalls?.length` 那段自动续写 → ① ② 都红。
  */
@@ -171,6 +172,14 @@ describe('plain-text answers cut off by the output limit', () => {
     const r = await runToEnd({ maxIterations: 2 });
     expect(streamCalls, '续写那一发会是收尾轮:不接').toBe(1);
     expect(r.done?.truncated).toBe(true);
+    expect(r.done?.lengthResumed).toBeUndefined();
+  });
+
+  it('does not continue or flag an answer that hit the limit before writing anything', async () => {
+    script = [say('', 'length')];
+    const r = await runToEnd();
+    expect(streamCalls, '没有半句可接').toBe(1);
+    expect(r.done?.truncated).toBeUndefined();
     expect(r.done?.lengthResumed).toBeUndefined();
   });
 

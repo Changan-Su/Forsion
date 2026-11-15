@@ -3874,13 +3874,14 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         // 只接一次:再撞上限就照常收尾、done 带 truncated,界面给「继续生成」。整条被模型写成工具标记的不接(那条走纠错网)。
         // iteration < maxIterations - 2:续写那一发不能是收尾轮,否则它收尾时验证命令等闸门全被跳过(Codex 评审 11-15 #3);
         // 轮数紧的就不自动接,照常收尾、给「继续生成」。
+        // 一个字都没写出来(推理吃光了输出额度)的不接:那不是「停在半句」,照旧走空终稿的兜底提示。
+        const cutRaw = String(res.content || '');
         if (
-          res.finishReason === 'length' && !res.toolCalls?.length && !lastIter && iteration < maxIterations - 2 && !leakedText &&
+          res.finishReason === 'length' && !res.toolCalls?.length && !!cutRaw.trim() && !lastIter && iteration < maxIterations - 2 && !leakedText &&
           !lengthResumed && !(consumed && consumed.ok === false)
         ) {
           lengthResumed = true;
-          const cutRaw = String(res.content || '');
-          pendingGlue = cutRaw.trim() ? cutRaw.slice(cutRaw.trimEnd().length) : null;
+          pendingGlue = cutRaw.slice(cutRaw.trimEnd().length);
           workingMessages.push(assistantTurnOf(res, res.content || ''));
           workingMessages.push({ role: 'user', content: LENGTH_RESUME_CHECK } as ChatMessage); // 不落库不上屏:harness 脚手架
           void publish(runId, 'status', { phase: 'length_resume', iteration });
@@ -4009,7 +4010,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         // Historian fork 快照在配额/截断等异常出口重复追加同一段(Codex 评审 08-03 Major)。
         finalTurnText = leakedText ? '' : String(res.content || '');
         finalTurnNoTools = lastIter;
-        finalTruncated = (res.finishReason === 'length' && !res.toolCalls?.length && !leakedText) || resumeLeftCut;
+        finalTruncated = (res.finishReason === 'length' && !res.toolCalls?.length && !leakedText && !!String(res.content || '').trim()) || resumeLeftCut;
         if (leakedText || droppedCalls) {
           const stop = '(模型把工具调用写成了正文、未被执行,该段已丢弃。发送「继续」可让我接着操作。)';
           finalContent = finalContent.trim() ? `${finalContent.trimEnd()}\n\n${stop}` : stop;
