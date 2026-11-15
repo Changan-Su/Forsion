@@ -37,12 +37,14 @@ const out = []
 const record = (name, ok, detail) => { ok ? pass++ : fail++; const l = `${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? '  | ' + detail : ''}`; out.push(l); console.log(l) }
 const note = (name, detail) => { const l = `INFO  ${name}${detail ? '  | ' + detail : ''}`; out.push(l); console.log(l) }
 
-async function open(browser, md, { on = true, ua } = {}) {
-  const ctx = ua ? await browser.newContext({ locale: 'zh-CN', viewport: { width: 1180, height: 860 }, userAgent: ua }) : null
+async function open(browser, md, { on = true, ua, query, storage } = {}) {
+  const ctx = ua || storage ? await browser.newContext({ locale: 'zh-CN', viewport: { width: 1180, height: 860 }, ...(ua ? { userAgent: ua } : {}) }) : null
+  if (storage) await ctx.addInitScript((kv) => { try { localStorage.setItem(kv[0], kv[1]) } catch { /* 没有存储 */ } }, storage)
   const p = ctx ? await ctx.newPage() : await browser.newPage({ locale: 'zh-CN', viewport: { width: 1180, height: 860 } })
   p.errs = []
   p.on('pageerror', (e) => p.errs.push(e.message))
-  await p.goto(`${URL}?upage${on ? '&amxEnter=inline' : ''}&useed=${encodeURIComponent(md)}`, { waitUntil: 'domcontentloaded', timeout: 180000 })
+  const q = query ?? (on ? '&amxEnter=inline' : '')
+  await p.goto(`${URL}?upage${q}&useed=${encodeURIComponent(md)}`, { waitUntil: 'domcontentloaded', timeout: 180000 })
   await p.waitForSelector(PM, { timeout: 180000 })
   await sleep(400)
   p.closeAll = async () => { await p.close(); if (ctx) await ctx.close() }
@@ -225,6 +227,20 @@ async function external(browser) {
     record('X2 未存的字 + 外部改另一段 → 两边都不丢', md.includes('twoX') && d === md && (md.includes('three EXT') || conflict.some((t) => t.includes('three EXT'))), JSON.stringify({ md, disk: d, conflict }))
     await p.closeAll()
   }
+  // X4 / X5 外部改了紧贴标题附近(回灌只换改了的块):编辑器跟上、不回写盘(紧贴记号不被当成过期清掉)
+  for (const [name, seed, ext] of [
+    ['X4 外部只改了紧贴标题下面的正文', '## T\nbody\n\nnext\n', '## T\nbody EXT\n\nnext\n'],
+    ['X5 外部把标题后的空行去掉、改成紧贴', '## T\n\nbody\n\nnext\n', '## T\nbody\n\nnext\n'],
+  ]) {
+    const p = await open(browser, seed)
+    const w0 = await p.evaluate(() => window.__upage.writes.length)
+    await fire(p, ext)
+    await sleep(1500)
+    const md = await saved(p), d = await disk(p)
+    const w1 = await p.evaluate(() => window.__upage.writes.length)
+    record(`${name} → 编辑器存出来 = 盘上新内容,没有回写`, md === ext && d === ext && w1 === w0, JSON.stringify({ md, disk: d, writes: w1 - w0 }))
+    await p.closeAll()
+  }
   {
     const p = await open(browser, 'one\ntwo\n\nthree\n')
     await caretAt(p, 'two')
@@ -384,6 +400,19 @@ async function reuse(browser) {
     await probe.closeAll()
     record('开关确实开着(amxEnter=inline)', on === true)
     if (on !== true) throw new Error('开关没开,后面的检查没有意义')
+    // 真应用里的入口:localStorage 键;地址参数 amxEnter=off 压过它
+    {
+      const a = await open(browser, 'x\n', { query: '', storage: ['amadeus.enterMode', 'inline'] })
+      const viaStorage = await switchOn(a)
+      await a.closeAll()
+      const b = await open(browser, 'x\n', { query: '&amxEnter=off', storage: ['amadeus.enterMode', 'inline'] })
+      const forcedOff = await switchOn(b)
+      await b.closeAll()
+      const c = await open(browser, 'x\n', { query: '' })
+      const plain = await switchOn(c)
+      await c.closeAll()
+      record('L1 localStorage amadeus.enterMode=inline 打开开关;amxEnter=off 压过它;都不设 = 关', viaStorage === true && forcedOff === false && plain === false, JSON.stringify({ viaStorage, forcedOff, plain }))
+    }
     const only = (arg('only') || 'keys,reopen,moves,external,undo,reuse').split(',')
     if (only.includes('keys')) await keys(browser)
     if (only.includes('reopen')) await reopen(browser)

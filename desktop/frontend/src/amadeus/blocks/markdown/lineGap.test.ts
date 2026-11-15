@@ -10,6 +10,7 @@ import { bootEditor, type Booted } from './parseFidelity.testkit'
 import { setEnterInlineForTest } from './enterMode'
 import { TIGHT_MANAGED, withTightManaged } from './lineGap'
 import { applyTypedTrigger, lineTriggerAtCursor } from './blockTriggers'
+import { reconcileTr } from '../../unified/reconcileDiff'
 
 afterEach(() => setEnterInlineForTest(false))
 
@@ -218,6 +219,23 @@ describe('开关 inline:紧贴记号随邻居变化', () => {
       b.view.dispatch(b.view.state.tr.setNodeMarkup(0, undefined, { ...b.view.state.doc.child(0).attrs, align: 'left' }))
       expect(shape(b.view.state.doc)).toBe('heading+t:T | paragraph:bodyZ | paragraph:next')
       expect(b.saved()).toBe('## T\nbodyZ\n\nnext\n')
+    } finally { await b.destroy() }
+  })
+
+  it.each([
+    ['只改了紧贴标题下面的正文', '## T\nbody\n\nnext\n', '## T\nbody EXT\n\nnext\n'],
+    ['只改了紧贴的标题', '## T\nbody\n\nnext\n', '## T2\nbody\n\nnext\n'],
+    ['外部把紧贴改成隔一条空行', '## T\nbody\n\nnext\n', '## T\n\nbody\n\nnext\n'],
+    ['外部把空行去掉、改成紧贴', '## T\n\nbody\n\nnext\n', '## T\nbody\n\nnext\n'],
+  ])('外部回灌(最小差异事务)%s → 编辑器与盘上一致,再存逐字等于盘上', async (_n, before, after) => {
+    const b = await boot(before)
+    try {
+      const next = b.parse(after)
+      const tr = reconcileTr(b.view.state, next)
+      expect(tr).not.toBeNull()
+      b.view.dispatch(tr!)
+      expect(shape(b.view.state.doc)).toBe(shape(next))
+      expect(b.md()).toBe(after)
     } finally { await b.destroy() }
   })
 
