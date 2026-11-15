@@ -604,6 +604,21 @@ Cloud settings pages can accept optional `mount(el, { anchor })` context. A `for
 
 Use `ctx.registerNoteRenderer` to replace the read-only note surface while the host retains document and persistence ownership. See [Note reading renderers](./note-renderers.en.md) for the contract, failure fallback and lifecycle.
 
+### Styling hooks for formula source in notes (since 2026-11-15)
+
+While the caret is inside a formula (inline `$…$` or display `$$…$$`, single or multi-line), its source is shown and the host adds the
+`math-source` class to the whole source, `$` included. It looks like Obsidian: monospace, italic, inline-code size. Each token also gets
+a kind class: `math-source-dollar` (`$` / `$$`), `math-source-command` (commands such as `\frac` and escaped symbols such as `\{`),
+`math-source-script` (`_ ^ &`), `math-source-letter`, `math-source-number` and `math-source-bracket` (`( ) [ ] { }`). Spaces,
+operators and `%` comments keep the text color. Formulas the caret is not in, rendered output and the preview never carry these classes.
+
+- **The classes sit on the same span**, not on a wrapper: write `.math-source.math-source-bracket`, not `.math-source .math-source-bracket`.
+- **The host's token colors have zero specificity** (the selectors are wrapped in `:where()`), so a plain class selector on the class your
+  plugin adds to a bracket, `$` or placeholder wins, whatever the stylesheet order. Host colors come from the `--math-src-*` variables
+  and follow light/dark; give your own colors a light and a dark value too.
+- Selected characters drop their token classes (the native selection color wins); `math-source` stays, so the font does not jump.
+- `math-source-delimiter` is the older umbrella class (`$`, brackets, `_ ^`), kept for compatibility; the host no longer colors it.
+
 ### Official cloud inbox channel
 
 The locked first-party `forsion-extend` package can provide the account inbox through `ctx.app.provideInboxChannel?.(channel)`.

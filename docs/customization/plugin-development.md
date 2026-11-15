@@ -604,6 +604,19 @@ LCL 统一保留并排的 View。空间不足时滚动工作区内容，Ribbon�
 
 通过 `ctx.registerNoteRenderer` 热替换只读阅读表面，宿主继续持有文档与保存流程。完整契约、失败回退与生命周期见[笔记阅读渲染器](./note-renderers.md)。
 
+### 笔记里公式源码的样式钩子（2026-11-15 起）
+
+光标所在的那个公式（行内 `$…$` 与块公式 `$$…$$`，单行多行都算）露出源码时，宿主给整段源码（含 `$`）加上 `math-source` 类，
+观感照 Obsidian：等宽、斜体、行内代码字号。源码再按种类加 token 类：`math-source-dollar`（`$` / `$$`）、`math-source-command`
+（`\frac` 这类命令和 `\{` 这类转义符号）、`math-source-script`（`_ ^ &`）、`math-source-letter`、`math-source-number`、
+`math-source-bracket`（`( ) [ ] { }`）；空格、运算符和 `%` 注释保持正文色。光标不在公式里、渲染结果和预览都不带这些类。
+
+- **类是并在同一个 span 上的**，不是外层容器：选择器写 `.math-source.math-source-bracket`，别写 `.math-source .math-source-bracket`。
+- **宿主的 token 颜色权重为 0**（选择器包在 `:where()` 里），插件给括号、`$`、占位加的类用一条普通类选择器就能盖过，不用拼权重、
+  也不用管样式表先后。颜色取自宿主的 `--math-src-*` 变量，跟着明暗走；插件自己的颜色也请按明暗各给一份。
+- 选区盖住的字不带 token 类（原生选区色优先），`math-source` 照样在，字体不会跳。
+- `math-source-delimiter` 是旧总类（`$`、括号、`_ ^`），保留兼容，宿主不再用它上色。
+
 ### 官方云端收件箱通道
 
 首方锁定的 `forsion-extend` 可通过 `ctx.app.provideInboxChannel?.(channel)` 接入账号收件箱。

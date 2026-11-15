@@ -109,6 +109,9 @@ export function matchTrigger(before: string): Trigger | null {
 export function triggerAtCursor($from: ResolvedPos): Trigger | null {
   const trig = matchTrigger(textBeforeCursor($from))
   if (trig?.kind === 'fold' && $from.parentOffset < $from.parent.content.size) return { kind: 'quote', rejoin: true }
+  // 行首 `$$` 后面这一段里还有 `$$` = 光标在一个现成的块公式里(空骨架 `$$|$$` 就是第三个 `$` 自动成对出来的):
+  // 这一键只是往公式里打空格 / 回车,不是新起骨架 —— 否则闭合的 `$$` 被切进新段落,公式断成两半。
+  if (trig?.kind === 'math' && $from.parent.textBetween($from.parentOffset, $from.parent.content.size, undefined, '￼').includes('$$')) return null
   return trig
 }
 

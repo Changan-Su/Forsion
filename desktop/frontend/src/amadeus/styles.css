@@ -4612,5 +4612,19 @@ body.amx-marquee-active * {
 @media (max-width: 600px) {
   .am-app .slash-menu--picker { left: 12px !important; right: 12px; top: auto !important; bottom: max(12px, env(safe-area-inset-bottom)); width: auto; min-height: 0 !important; max-height: 70dvh; }
 }
-.am-app .math-source-command { color: var(--accent-ink); }
-.am-app .math-source-delimiter { color: var(--text-muted); }
+/* 正在编辑的公式源码(blocks/markdown/mathLivePreview.ts + mathSourceHighlight.ts)。
+   .math-source = 整段源码(含 $)的样式钩子,插件可依赖;PM 把它并进每一个 span,插件写 `.math-source.xxx`。
+   观感照 Obsidian:等宽、斜体、行内代码字号(同上面 .ProseMirror code 的 0.88em),不加字距、不加内边距。
+   token 颜色只读 base.css 的 --math-src-*;选择器整个包进 :where()(权重 0),插件给括号 / $ / 占位
+   加的类一条普通类选择器就能盖过。.math-source-delimiter 是旧总类,不再上色(同 span 上零权重会按源码顺序打架)。 */
+.am-app .ProseMirror .math-source {
+  font-family: var(--font-mono);
+  font-style: italic;
+  font-size: 0.88em;
+  letter-spacing: normal;
+}
+:where(.am-app .math-source-dollar) { color: var(--math-src-dollar); }
+:where(.am-app .math-source-command, .am-app .math-source-script) { color: var(--math-src-command); }
+:where(.am-app .math-source-letter) { color: var(--math-src-letter); }
+:where(.am-app .math-source-number) { color: var(--math-src-number); }
+:where(.am-app .math-source-bracket) { color: var(--math-src-bracket); }

@@ -823,6 +823,10 @@ function buildDecorations(state: EditorState): DecorationSet {
         ? selFrom >= cs + sp.from && selFrom < cs + sp.to
         : selFrom < cs + sp.to && selTo > cs + sp.from)
       if (editing) {
+        // Whole source, `$` included: the public styling hook (monospace, italic, code size). PM merges it
+        // into every text span of the formula, so selectors are `.math-source.math-source-x`, not descendants.
+        // Never cut around the selection: the font must not jump while dragging a selection.
+        decos.push(Decoration.inline(cs + sp.from, cs + sp.to, { class: 'math-source' }))
         for (const token of mathSourceHighlights(s.slice(sp.from, sp.to), cs + sp.from, { from: selFrom, to: selTo })) {
           decos.push(Decoration.inline(token.from, token.to, { class: token.className }))
         }
