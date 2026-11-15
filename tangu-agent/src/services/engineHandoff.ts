@@ -31,7 +31,7 @@ import { BRIDGE_CALL_BUDGET_MS, createRunToolServer } from '../engines/toolServe
 import { agentsDir } from '../core/tanguHome.js';
 import { getLocalSkill, listLocalSkills } from '../skills/localSkills.js';
 import {
-  agentsHomeDir, bridgeGuidance, dshHomeInstructionsBytes, handedToolNames, HANDOFF_SERVER_NAME, instructionsBudget, renderAgentInstructions,
+  agentsHomeDir, bridgeGuidance, dshHomeInstructionsBytes, handedToolNames, HANDOFF_SERVER_NAME, INSTRUCTIONS_CHAIN_BYTES, INSTRUCTIONS_MIN_BYTES, instructionsBudget, renderAgentInstructions,
   skillLinkName, userAgentsHome, userSkillDirs, writeAgentsHome, type InstructionSection, type SkillLink,
 } from '../engines/agentHandoff.js';
 
@@ -125,7 +125,11 @@ export async function prepareEngineAgentsHome(p: EngineAgentsHomeInput): Promise
     + 'This folder belongs to you; the working directory and the user\'s notes and calendars belong to the user.' });
 
   const header = `Forsion wrote this file for the agent "${name || p.slug}" and rewrites it before each turn. To change it, edit the agent in Forsion, not this file.`;
-  const rendered = renderAgentInstructions(header, sections, instructionsBudget(dshHomeInstructionsBytes(p.env)));
+  const userBytes = dshHomeInstructionsBytes(p.env);
+  const budget = instructionsBudget(userBytes);
+  // 用户自己的 $DSH_HOME/AGENTS.md 快占满整条链(64 KiB):再塞就会把它挤掉(DSH 先丢范围更大的那份),不塞人设又等于换了个人 —— 明确失败
+  if (budget < INSTRUCTIONS_MIN_BYTES) throw new Error(`the DSH instructions file in DSH_HOME (${userBytes} bytes) leaves only ${Math.max(0, budget)} bytes of DSH's ${INSTRUCTIONS_CHAIN_BYTES}-byte instruction budget; shorten it to hand this agent over`);
+  const rendered = renderAgentInstructions(header, sections, budget);
   if (rendered.truncated.length || rendered.omitted.length) console.warn(`[engine-handoff] instructions over budget for ${p.slug}: truncated=${rendered.truncated.join(',')} omitted=${rendered.omitted.join(',')}`);
 
   // 技能:这个 Agent 的在前(同名时它的为准),用户共用根里的接在后面。

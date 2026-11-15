@@ -52,9 +52,11 @@ type Outcome = { text: string; isError: boolean };
 interface Ticket { id: string; tool: string; phase: 'approval' | 'running'; job: Promise<Outcome>; settled?: Outcome; attempt: number }
 
 const sleep = (ms: number, signal: AbortSignal): Promise<void> => new Promise((resolve) => {
-  const t = setTimeout(resolve, ms); t.unref?.();
-  signal.addEventListener('abort', () => { clearTimeout(t); resolve(); }, { once: true });
+  const onAbort = () => { clearTimeout(t); resolve(); };
+  const t = setTimeout(() => { signal.removeEventListener('abort', onAbort); resolve(); }, ms); t.unref?.();
+  signal.addEventListener('abort', onAbort, { once: true });
 });
+const STOPPED_TEXT = 'Stopped: this turn ended before the tool call finished.';
 
 /** 对外发、落库都按线上的名字(HTML 卡叫 sketch,同 runLoop 的 wireToolName)。 */
 const wireName = (name: string): string => (isHtmlCardTool(name) ? LEGACY_HTML_CARD_TOOL : name);
@@ -71,9 +73,18 @@ export async function createRunToolServer(ctx: ToolContext & { runId: string }, 
   const allowed = () => new Map([...resolveTools(deps().profile, toolCtx)].filter(([n]) => names.includes(n)));
   const open = new Set<Server>();
   const tickets = new Map<string, Ticket>();
+  const active = new Set<Promise<Outcome>>();
   let ticketSeq = 0;
   const calls: any[] = [];
   const results: any[] = [];
+  /** 已经有终态卡片的调用(id → 开始时刻的表里删掉):每次调用恰好一条结果,收尾补的和迟到的不会重复。 */
+  const unsettled = new Map<string, { name: string; startedAt: number; source: string }>();
+  const settleCard = (id: string, name: string, startedAt: number, source: string, text: string, isError: boolean, extra: { metadata?: any; artifactPath?: string } = {}): void => {
+    if (!opts.cards || !unsettled.delete(id)) return;
+    const elapsedMs = Date.now() - startedAt;
+    results.push({ tool_call_id: id, name, content: text, isError, startedAt, elapsedMs, outputChars: text.length, ...(extra.artifactPath ? { artifactPath: extra.artifactPath } : {}) });
+    opts.cards.publish('tool_result', { id, name, result: text, isError, startedAt, elapsedMs, outputChars: text.length, source, ...extra });
+  };
   const budget = opts.budgetMs && opts.budgetMs > 0 ? opts.budgetMs : undefined;
 
   const enter = () => {
@@ -89,18 +100,16 @@ export async function createRunToolServer(ctx: ToolContext & { runId: string }, 
     const source = (() => { try { return toolSourceOf(name, toolCtx); } catch { return 'plugin' as const; } })();
     if (opts.cards) {
       calls.push({ ...call, function: { ...call.function, name: wireName(name) }, ui_content_offset: opts.cards.contentOffset() });
+      unsettled.set(id, { name: wireName(name), startedAt, source });
       opts.cards.publish('tool_call', { id, name: wireName(name), arguments: call.function.arguments, startedAt, source });
     }
     const finish = (text: string, isError: boolean, extra: { metadata?: any; artifactPath?: string } = {}): Outcome => {
-      const capped = text.length > MAX_TEXT_CHARS ? `${text.slice(0, MAX_TEXT_CHARS)}\n\n[Output truncated: ${text.length} characters in total.]` : text;
-      if (opts.cards) {
-        const elapsedMs = Date.now() - startedAt;
-        results.push({ tool_call_id: id, name: wireName(name), content: capped, isError, startedAt, elapsedMs, outputChars: capped.length, ...(extra.artifactPath ? { artifactPath: extra.artifactPath } : {}) });
-        opts.cards.publish('tool_result', { id, name: wireName(name), result: capped, isError, startedAt, elapsedMs, outputChars: capped.length, source, ...extra });
-      }
+      // 截断只给交接的桥(卡片 + 落库);插件任务那条路原样回,别把它原来能拿到的长输出截掉
+      const capped = opts.cards && text.length > MAX_TEXT_CHARS ? `${text.slice(0, MAX_TEXT_CHARS)}\n\n[Output truncated: ${text.length} characters in total.]` : text;
+      settleCard(id, wireName(name), startedAt, source, capped, isError, extra);
       return { text: capped, isError };
     };
-    return (async (): Promise<Outcome> => {
+    const job = (async (): Promise<Outcome> => {
       enter();
       try {
         const decision: ApprovalDecision = await gateToolCall(ctx.runId, call, {
@@ -116,17 +125,26 @@ export async function createRunToolServer(ctx: ToolContext & { runId: string }, 
         return finish(String(result.result), !!result.isError, { metadata: result.metadata, artifactPath: result.artifactPath });
       } catch (e: any) {
         const stopped = life.signal.aborted;
-        return finish(stopped ? 'Stopped: this turn ended before the tool call finished.' : `Error: ${e?.message || e}`, true);
+        return finish(stopped ? STOPPED_TEXT : `Error: ${e?.message || e}`, true);
       }
     })();
+    // 每个在跑的调用都记着(不管领没领编号):收尾要等它们发完终态
+    active.add(job); void job.finally(() => active.delete(job));
+    return job;
   };
 
   /** 限时等一个结果;没等到就把它挂成编号(或更新编号),回一段告诉模型怎么取的话。 */
   const awaitOrTicket = async (job: Promise<Outcome>, ticket: Ticket | null, make: () => Ticket): Promise<{ text: string; isError: boolean }> => {
     if (!budget) return job;
-    const done = await Promise.race([job.then((o) => ({ o })), sleep(budget, life.signal).then(() => null)]);
+    // 这次等待自己的计时:任一边先到就撤掉另一边的计时器和监听,别一轮攒一堆
+    const wait = new AbortController();
+    const onLife = () => wait.abort();
+    life.signal.addEventListener('abort', onLife, { once: true });
+    let done: { o: Outcome } | null;
+    try { done = await Promise.race([job.then((o) => ({ o })), sleep(budget, wait.signal).then(() => null)]); }
+    finally { wait.abort(); life.signal.removeEventListener('abort', onLife); }
     if (done) { if (ticket) tickets.delete(ticket.id); return done.o; }
-    if (!live()) return { text: 'Stopped: this turn ended before the tool call finished.', isError: true };
+    if (!live()) return { text: STOPPED_TEXT, isError: true };
     const t = ticket ?? make();
     t.attempt += 1;
     const waiting = t.phase === 'approval' ? 'is waiting for the user to approve it in Forsion' : 'is still running';
@@ -197,7 +215,10 @@ export async function createRunToolServer(ctx: ToolContext & { runId: string }, 
       life.abort();
       ctx.signal?.removeEventListener('abort', onRunAbort);
       // 挂着的审批随 life 撤回、在跑的工具随 life 中止;等它们把终态卡片发完再关(最多 3 秒,别吊住收尾)。
-      await Promise.race([Promise.allSettled([...tickets.values()].map((t) => t.job)), new Promise((r) => { const x = setTimeout(r, 3000); x.unref?.(); })]);
+      await Promise.race([Promise.allSettled([...active]), new Promise((r) => { const x = setTimeout(r, 3000); x.unref?.(); })]);
+      // 不听中止、3 秒内还没停下的:当场记成「这一轮结束了」,落库的消息里每个调用都配得上结果(换回 Tangu 读这段历史时
+      // 调用没有结果会被模型方拒);它迟到的结果不再记、不再发。
+      for (const [id, u] of [...unsettled]) settleCard(id, u.name, u.startedAt, u.source, STOPPED_TEXT, true);
       await Promise.allSettled([...open].map(s => s.close())); http.closeAllConnections(); await new Promise<void>(r => http.close(() => r()));
     },
   };

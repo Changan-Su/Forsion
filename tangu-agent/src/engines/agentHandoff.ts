@@ -127,14 +127,19 @@ export function dshHomeInstructionsBytes(env: NodeJS.ProcessEnv = process.env): 
   try { return statSync(path.join(home, 'AGENTS.md')).size; } catch { return 0; }
 }
 
-/** 自己这份 AGENTS.md 能用多少字节:整条链的预算减去用户那份,再留余量;封顶 INSTRUCTIONS_MAX_BYTES。 */
+/** 指令文件至少要有这么多字节才交得过去(放得下开头说明、人设和桥的用法);再少就明确失败。 */
+export const INSTRUCTIONS_MIN_BYTES = 4_096;
+
+/** 自己这份 AGENTS.md 能用多少字节:整条链的预算减去用户那份,再留余量;封顶 INSTRUCTIONS_MAX_BYTES。
+ *  不设下限:超了整条链,DSH 会先丢范围更大的那份 —— 也就是用户自己的 $DSH_HOME/AGENTS.md。不够 INSTRUCTIONS_MIN_BYTES 由调用方报错。 */
 export function instructionsBudget(userDshHomeBytes: number): number {
-  return Math.max(4_096, Math.min(INSTRUCTIONS_MAX_BYTES, INSTRUCTIONS_CHAIN_BYTES - userDshHomeBytes - CHAIN_MARGIN_BYTES));
+  return Math.min(INSTRUCTIONS_MAX_BYTES, INSTRUCTIONS_CHAIN_BYTES - userDshHomeBytes - CHAIN_MARGIN_BYTES);
 }
 
-/** 每场对话一个指令目录(固定路径,续接时 DSH 对账用)。会话 id 里不该有的字符一律换掉。 */
+/** 每场对话一个指令目录(固定路径,续接时 DSH 对账用)。id 是普通的字母数字串(会话 id 是 UUID)就原样用,
+ *  否则用整串的哈希 —— 换字符会让不同的 id 撞到同一个目录,`.` / `..` 还会指到上级。 */
 export function agentsHomeDir(engineId: string, sessionId: string): string {
-  const safe = (s: string): string => s.replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 96) || createHash('sha256').update(s).digest('hex').slice(0, 16);
+  const safe = (s: string): string => (/^[A-Za-z0-9][A-Za-z0-9_-]{0,95}$/.test(s) ? s : `h-${createHash('sha256').update(s).digest('hex').slice(0, 32)}`);
   return path.join(tanguHome(), 'engines', safe(engineId), 'agents', safe(sessionId));
 }
 
@@ -164,8 +169,11 @@ export function userSkillDirs(root: string): SkillLink[] {
   return out;
 }
 
+/** 记着 Forsion 自己建过哪些链接(名字 → 目标):只增删记在这里、且仍指向记下目标的,别人放进来的链接不动。 */
+const LINKS_FILE = '.forsion-links.json';
+
 /**
- * 写指令目录:AGENTS.md(内容变了才重写,原子替换)+ skills/ 软链接(只增删自己的)。返回目录路径。
+ * 写指令目录:AGENTS.md(内容变了才重写,原子替换)+ skills/ 软链接(只增删自己建的)。返回目录路径。
  * 软链接在 Windows 上用 junction(不要管理员权限)。
  */
 export function writeAgentsHome(dir: string, instructions: string, skills: SkillLink[]): { dir: string; wrote: boolean } {
@@ -182,19 +190,31 @@ export function writeAgentsHome(dir: string, instructions: string, skills: Skill
   }
   const want = new Map(skills.map((s) => [s.name, path.resolve(s.target)]));
   const skillsDir = path.join(dir, 'skills');
+  const ledgerFile = path.join(dir, LINKS_FILE);
+  // 读不出(坏了)≠ 没建过:那就一个都不删,只补缺的(宁可留一条多余的链接,不删别人的)
+  let ledger: Record<string, string> = {}; let ledgerOk = true;
+  try { const raw = JSON.parse(readFileSync(ledgerFile, 'utf8')); if (raw && typeof raw === 'object' && !Array.isArray(raw)) ledger = raw; else ledgerOk = false; }
+  catch (e: any) { if (e?.code !== 'ENOENT') ledgerOk = false; }
+  const owned: Record<string, string> = {};
   for (const name of readdirSync(skillsDir)) {
     const p = path.join(skillsDir, name);
     let link = false;
     try { link = lstatSync(p).isSymbolicLink(); } catch { continue; }
-    if (!link) { want.delete(name); continue; } // 真实的文件 / 目录不是我们建的:不动,也不拿同名链接盖它
     let target = '';
-    try { target = path.resolve(skillsDir, readlinkSync(p)); } catch { /* 读不出当作要换 */ }
-    if (want.get(name) === target) { want.delete(name); continue; }
+    if (link) { try { target = path.resolve(skillsDir, readlinkSync(p)); } catch { /* 读不出:不是我们认得的 */ } }
+    const ours = link && ledgerOk && typeof ledger[name] === 'string' && path.resolve(ledger[name]) === target;
+    if (!ours) { want.delete(name); continue; } // 真文件 / 真目录 / 别人放的链接:不动,也不拿同名链接盖它
+    if (want.get(name) === target) { want.delete(name); owned[name] = target; continue; }
     rmSync(p, { force: true });
   }
   for (const [name, target] of want) {
-    try { symlinkSync(target, path.join(skillsDir, name), process.platform === 'win32' ? 'junction' : 'dir'); }
+    try { symlinkSync(target, path.join(skillsDir, name), process.platform === 'win32' ? 'junction' : 'dir'); owned[name] = target; }
     catch (e: any) { console.warn(`[engine-handoff] skill link ${name} → ${target} failed:`, e?.message || e); }
+  }
+  if (ledgerOk) {
+    const next = JSON.stringify(owned, null, 2);
+    let prev = ''; try { prev = readFileSync(ledgerFile, 'utf8'); } catch { /* 第一次 */ }
+    if (prev !== next) { const tmp = `${ledgerFile}.${process.pid}.${Date.now()}.tmp`; writeFileSync(tmp, next, 'utf8'); renameSync(tmp, ledgerFile); }
   }
   return { dir, wrote };
 }

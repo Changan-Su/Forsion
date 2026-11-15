@@ -1,10 +1,10 @@
 /** 交接(底层第 3 步)的纯逻辑:交哪些工具、指令文件的预算和稳定性、指令目录里的软链接。 */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
-  agentsHomeDir, dshHomeInstructionsBytes, handedToolNames, instructionsBudget, INSTRUCTIONS_CHAIN_BYTES, INSTRUCTIONS_MAX_BYTES,
+  agentsHomeDir, dshHomeInstructionsBytes, handedToolNames, instructionsBudget, INSTRUCTIONS_CHAIN_BYTES, INSTRUCTIONS_MAX_BYTES, INSTRUCTIONS_MIN_BYTES,
   notHandedReason, renderAgentInstructions, skillLinkName, userAgentsHome, userSkillDirs, writeAgentsHome,
 } from './agentHandoff.js';
 import { COMPUTER_USE_CONCURRENCY_KEY } from '../tools/toolRegistry.js';
@@ -57,10 +57,11 @@ describe('指令文件', () => {
     expect(r.text).not.toContain('�');
   });
 
-  it('预算 = 整条链减去用户写给 DSH 的那份(不挤掉用户自己的全局指令),有上限和下限', () => {
+  it('预算 = 整条链减去用户写给 DSH 的那份(不挤掉用户自己的全局指令),有上限;没有下限(不够由调用方明确失败)', () => {
     expect(instructionsBudget(0)).toBe(INSTRUCTIONS_MAX_BYTES);
     expect(instructionsBudget(30_000)).toBe(INSTRUCTIONS_CHAIN_BYTES - 30_000 - 2_048);
-    expect(instructionsBudget(1_000_000)).toBe(4_096);
+    expect(instructionsBudget(63_000)).toBeLessThan(INSTRUCTIONS_MIN_BYTES);
+    expect(instructionsBudget(63_000) + 63_000).toBeLessThanOrEqual(INSTRUCTIONS_CHAIN_BYTES);
     writeFileSync(path.join(root, 'AGENTS.md'), 'x'.repeat(1234));
     expect(dshHomeInstructionsBytes({ DSH_HOME: root } as any)).toBe(1234);
     expect(dshHomeInstructionsBytes({ DSH_HOME: path.join(root, 'nope') } as any)).toBe(0);
@@ -73,11 +74,14 @@ describe('指令文件', () => {
 });
 
 describe('指令目录', () => {
-  it('每场对话一个固定目录,会话 id 里的怪字符换掉', () => {
+  it('每场对话一个固定目录:普通 id 原样用;带怪字符的用整串的哈希(不撞车、跳不出 agents/)', () => {
     process.env.TANGU_HOME = root;
     try {
-      expect(agentsHomeDir('dsh', 'a/b..c')).toBe(path.join(root, 'engines', 'dsh', 'agents', 'a_b..c'));
+      const base = path.join(root, 'engines', 'dsh', 'agents');
+      expect(agentsHomeDir('dsh', '3f2a-uuid-like_1')).toBe(path.join(base, '3f2a-uuid-like_1'));
       expect(agentsHomeDir('dsh', 'S1')).toBe(agentsHomeDir('dsh', 'S1'));
+      expect(agentsHomeDir('dsh', 'a/b')).not.toBe(agentsHomeDir('dsh', 'a_b'));
+      for (const odd of ['..', '.', 'a/b', '../x', '']) expect(path.dirname(agentsHomeDir('dsh', odd))).toBe(base);
     } finally { delete process.env.TANGU_HOME; }
   });
 
@@ -99,6 +103,26 @@ describe('指令目录', () => {
     expect(lstatSync(path.join(dir, 'skills', 'c')).isSymbolicLink()).toBe(false);
     expect(writeAgentsHome(dir, 'two\n', []).wrote).toBe(true);
     expect(readFileSync(path.join(dir, 'AGENTS.md'), 'utf8')).toBe('two\n');
+  });
+
+  it('别人放进 skills/ 的链接不动(只删记在账上、且仍指向记下目标的);账读不出就一个都不删', () => {
+    const dir = path.join(root, 'home2');
+    const skillA = path.join(root, 'src2', 'a'), skillB = path.join(root, 'src2', 'b'), other = path.join(root, 'src2', 'other');
+    for (const d of [skillA, skillB, other]) { mkdirSync(d, { recursive: true }); writeFileSync(path.join(d, 'SKILL.md'), 'x'); }
+    writeAgentsHome(dir, 'x\n', [{ name: 'a', target: skillA }, { name: 'b', target: skillB }]);
+    symlinkSync(other, path.join(dir, 'skills', 'users-own'), 'dir');
+    writeAgentsHome(dir, 'x\n', [{ name: 'a', target: skillA }]);
+    expect(readlinkSync(path.join(dir, 'skills', 'users-own'))).toBe(other);
+    expect(existsSync(path.join(dir, 'skills', 'b'))).toBe(false);
+    // 我们建的 a 被人改指别处:算别人的了,不删也不改回
+    rmSync(path.join(dir, 'skills', 'a')); symlinkSync(other, path.join(dir, 'skills', 'a'), 'dir');
+    writeAgentsHome(dir, 'x\n', []);
+    expect(readlinkSync(path.join(dir, 'skills', 'a'))).toBe(other);
+    // 账坏了:不删
+    writeAgentsHome(dir, 'x\n', [{ name: 'c', target: skillB }]);
+    writeFileSync(path.join(dir, '.forsion-links.json'), '{not json');
+    writeAgentsHome(dir, 'x\n', []);
+    expect(readlinkSync(path.join(dir, 'skills', 'c'))).toBe(skillB);
   });
 
   it('用户共用根里的技能:只认带 SKILL.md 的文件夹;链接名去掉怪字符、重名加序号', () => {

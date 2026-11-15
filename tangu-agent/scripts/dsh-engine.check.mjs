@@ -14,6 +14,9 @@
  *     [--live --key-file <一行 key 的文件> | --live --dsh-home <已登录的 DSH 目录>]   真模型:看模型自己的回答(caps / twoturn /
  *                                    model / edit / stop / stopedit / approval / handoff);key 只进子进程环境,不落盘、不打印
  *     [--live-dry]                   不要凭据,用假模型里的自动脑把真模型那套走一遍,只证台架没写错
+ *     [--dsh-tools-off]              开跑前在那份 DSH 目录的对话入口组合(profiles/acp/cordis.patch.yml)里关掉 DSH 自带的
+ *                                    跑命令、读写文件、搜文件、后台任务(tool-bash / tool-pwsh / tool-fs / tool-fs-search / tool-jobs),
+ *                                    模型手里只剩桥里的 Forsion 工具;跑完把那份补丁原样还原。真模型跑交接时用它
  *
  * 准备 DSH(只装官方包,不装任何社区插件;和你自己的 DSH 无关):
  *   mkdir rt && cd rt && npm init -y && npm install --ignore-scripts @deepseek-ai/dsh
@@ -40,6 +43,21 @@ const ONLY = new Set((opt('only', '') || '').split(',').filter(Boolean));
 // 不落盘、不打印)或 --dsh-home(一份已经登录过的 DSH 目录,原样用它)。--live-dry:不要凭据,用假模型里一个「记得住暗号」的
 // 自动脑把真模型那套场景走一遍,只证台架自己没写错。
 const LIVE = argv.includes('--live'), LIVE_DRY = argv.includes('--live-dry');
+const TOOLS_OFF = argv.includes('--dsh-tools-off');
+// DSH 自带的这几样被关掉后不该再出现在交给模型的工具里(0.2.2-rc.3 的工具名:tool-fs / tool-fs-search / tool-bash / tool-jobs 各自注册的)
+const NATIVE_DISK_TOOLS = ['read', 'read_image', 'write', 'edit', 'apply_patch', 'glob', 'grep', 'bash', 'pwsh', 'job_kill', 'job_list', 'job_output'];
+const TOOLS_OFF_PATCH = `# dsh-engine.check.mjs --dsh-tools-off 临时写的:关掉 DSH 自带的跑命令、读写文件、搜文件、后台任务,跑完还原。
+- id: tool-bash
+  disabled: true
+- id: tool-pwsh
+  disabled: true
+- id: tool-jobs
+  disabled: true
+- id: tool-fs
+  disabled: true
+- id: tool-fs-search
+  disabled: true
+`;
 const KEY_FILE = opt('key-file', ''), DSH_HOME_ARG = opt('dsh-home', '');
 // --model <片段>:真模型那套每一轮都用清单里 id 或名字含这段文字的那个模型。用账号登录(不是 API key)的 DSH,新会话的缺省模型
 // 走的是要 key 的那条线(deepseek-official),不指定的话每一句都是「no API key for provider route」。
@@ -563,6 +581,7 @@ const SCENARIOS = {
     const a = await run(sid, 'Please remember that I drink jasmine tea.', cfg, { modelId: JUDGE_MODEL });
     const reqA = stub.since(n0); const firstA = reqA[0] || {};
     const toolNames = (firstA.tools || []).map((t) => t.name);
+    const native = toolNames.filter((n) => !n.startsWith('mcp__'));
     const bridged = (firstA.tools || []).filter((t) => t.name.startsWith('mcp__forsion__'));
     const bridgedBytes = Buffer.byteLength(JSON.stringify(bridged));
     const allToolBytes = Buffer.byteLength(JSON.stringify(firstA.tools || []));
@@ -578,12 +597,13 @@ const SCENARIOS = {
       ['记忆写在它名下(执行了一次)、缺省 Agent 那边没多', count(memText(SLUG), 'HANDOFF-REM-51') === 1 && memText('xyra') === xyraBefore, `它名下 ${count(memText(SLUG), 'HANDOFF-REM-51')} 处`],
       ['交给模型的工具里有桥的 remember 与 forsion_wait', toolNames.includes('mcp__forsion__remember') && toolNames.includes('mcp__forsion__forsion_wait'), `桥 ${bridged.length} 个 / 全部 ${toolNames.length} 个`],
       ['和 DSH 自带重复的、截图类、循环内的没交', dup.length === 0, dup.join(', ')],
+      ...(TOOLS_OFF ? [['--dsh-tools-off:DSH 自带的读写文件 / 搜文件 / 跑命令 / 后台任务一个都不在交给模型的工具里', !native.some((n) => NATIVE_DISK_TOOLS.includes(n)), native.filter((n) => NATIVE_DISK_TOOLS.includes(n)).join(', ')]] : []),
       ['人设进了模型的上下文', JSON.stringify(firstA).includes(PERSONA)],
       ['它的技能和用户共用根里的技能都进了模型的上下文', JSON.stringify(firstA).includes(SKILL) && JSON.stringify(firstA).includes(USER_SKILL)],
       ['用户自己 ~/.agents 的 AGENTS.md 并进来了', JSON.stringify(firstA).includes(USER_SHARED)],
       ['指令目录里技能是链接(它的 + 用户的)', skillLinks.includes('handoff-probe') && skillLinks.includes('user-probe'), skillLinks.join(', ')],
       ['落库的回答带着这次工具调用(重开对话卡片还在)', JSON.stringify(modelA).includes('HANDOFF-REM-51') && JSON.stringify(modelA).includes('remember'), Object.keys(modelA).join(',')],
-    ], `桥的工具描述 ${bridgedBytes} 字节,全部工具 ${allToolBytes} 字节;AGENTS.md ${Buffer.byteLength(agentsMd)} 字节;桥的工具:${bridged.map((t) => t.name.slice('mcp__forsion__'.length)).join(' ')}`);
+    ], `桥的工具描述 ${bridgedBytes} 字节,全部工具 ${allToolBytes} 字节;AGENTS.md ${Buffer.byteLength(agentsMd)} 字节;桥的工具:${bridged.map((t) => t.name.slice('mcp__forsion__'.length)).join(' ')};DSH 自带的:${native.join(' ')}`);
 
     // ② 审批过了时限:规则要求 remember 先问,用户 50 秒后才批
     const prevCfg = readConfig(); const prevApproval = prevCfg.approval;
@@ -905,6 +925,16 @@ const LIVE_SCENARIOS = {
 const dshPids = () => { try { return execFileSync('pgrep', ['-fl', BIN], { encoding: 'utf8' }).trim().split('\n').filter(Boolean); } catch { return []; } };
 const pidsBefore = new Set(dshPids().map((l) => l.split(' ')[0]));
 let exitCode = 0;
+// --dsh-tools-off:对话入口组合的补丁层(DSH 第一次以 acp 启动时才建出这个目录,没有就先起一次让它建好)
+const toolsOffFile = join(DSH_HOME, 'profiles', 'acp', 'cordis.patch.yml');
+let toolsOffBackup = null;
+if (TOOLS_OFF) {
+  if (!existsSync(toolsOffFile)) { const d = rawDsh(); try { await d.init(); } finally { await d.kill(); } }
+  if (!existsSync(toolsOffFile)) { console.error(`--dsh-tools-off:DSH 没有建出 ${clean(toolsOffFile)},不跑`); process.exit(2); }
+  toolsOffBackup = readFileSync(toolsOffFile, 'utf8');
+  writeFileSync(toolsOffFile, TOOLS_OFF_PATCH);
+  console.log(`已在 ${clean(toolsOffFile)} 关掉 DSH 自带的 ${NATIVE_DISK_TOOLS.join(' / ')}(跑完还原)`);
+}
 try {
   await startEngine();
   let caps = null;
@@ -916,6 +946,7 @@ try {
   }
 } catch (e) { console.error(`\n台架出错:${clean(e.stack || e)}`); exitCode = 1; } finally {
   await stopEngine(); await stub.close();
+  if (toolsOffBackup !== null) { await sleep(2500); writeFileSync(toolsOffFile, toolsOffBackup); console.log(`\n已还原 ${clean(toolsOffFile)}`); }
 }
 await sleep(2500); // 引擎杀 DSH 是 SIGTERM → 2 秒 → SIGKILL
 const leftover = dshPids().filter((l) => !pidsBefore.has(l.split(' ')[0])).join('\n');

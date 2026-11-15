@@ -744,6 +744,8 @@ async function externalEngineLoop(runId: string, ac: AbortController, run: any, 
         toolsStrict:true,toolsList:allowedBridge },allowedBridge);
     } else if (engineAgent && !storedAgentConfig?.pluginOwner) {
       // 交接:这个 Agent 在 Tangu 上能用的工具(按它的工具设置)经桥交给引擎,人设 / 协作说明 / 记忆 / 技能写进指令目录。
+      // 工作目录先挂进这一轮的上下文:项目级技能(和同 id 的项目覆盖)按它找,enterRunContext 会把它清掉。
+      if (engineCwd) setRunCwd(engineCwd);
       const handoff = await prepareEngineAgentHandoff({
         runId, sessionId, userId, modelId, engineId, cwd: engineCwd, input, storedAgentConfig, agent: engineAgent, signal: ac.signal,
         publish: (type, payload) => { if (!ac.signal.aborted) void publish(runId, type, payload); },

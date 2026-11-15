@@ -147,7 +147,9 @@ async function send(win, text) {
   await ta.click(); await ta.fill(text); await ta.press('Enter')
 }
 const lastAsst = (win) => win.evaluate(() => [...document.querySelectorAll('.t2-asst')].map((e) => e.innerText.trim()).pop() || '')
-const toolHeads = (win) => win.evaluate(() => [...document.querySelectorAll('.tool-group .tool-row-head')].map((e) => e.innerText.replace(/\s+/g, ' ').trim()))
+// Forsion 画的工具卡:普通工具在 .tool-group 里;remember 画成「记住了 N 件事」的记忆回执([data-self-receipt])
+const toolHeads = (win) => win.evaluate(() => [...document.querySelectorAll('.tool-group .tool-row-head, [data-self-receipt]')].map((e) => e.innerText.replace(/\s+/g, ' ').trim()))
+const asstHasMcpName = (win) => win.evaluate(() => [...document.querySelectorAll('.t2-asst')].some((e) => /mcp__/.test(e.innerText)))
 
 const AGENT = '浣溪沙' // 自带的 Aria(中文界面里的名字)
 
@@ -193,6 +195,11 @@ async function main() {
     await sleep(1200)
     await win.getByText('新会话', { exact: true }).first().click(); await sleep(1200)
     await (await pickAgent(win, AGENT)).click(); await sleep(900)
+    // 选完浮层偶尔还开着(描述区盖住输入框):按 Esc 收起,再核一次选中的是它
+    if (await win.locator('.ui-popover-backdrop').count()) { await win.keyboard.press('Escape'); await sleep(500) }
+    const picked = await win.locator('.agent-select-strip .compact-chat-picker').first().innerText().catch(() => '')
+    await shot(win, '10b-picked')
+    check('前置:选中的是它', picked.includes(AGENT), picked)
     const pill = await win.locator('.mode-pill-btn .t2c-pill-label').first().innerText().catch(() => '')
     check('前置:这场对话起步是自定义审批档(上次用的档)', /自定义/.test(pill), pill)
     await send(win, 'Please remember that I drink jasmine tea.')
@@ -213,7 +220,7 @@ async function main() {
     const heads = await toolHeads(win)
     await shot(win, '12-after-approve')
     check('③ 批了之后拿到结果,回答出来', !!answered, await lastAsst(win))
-    check('③ 工具卡由 Forsion 画(没有 mcp__ 那张)', heads.length >= 1 && !heads.some((h) => /mcp__/.test(h)), heads.join(' | '))
+    check('③ 工具卡由 Forsion 画(记忆回执;没有 mcp__ 那张)', heads.some((h) => /记住了/.test(h)) && !(await asstHasMcpName(win)), heads.join(' | '))
     const mem = memoryOf('aria')
     check('③ 记忆只写了一次,写在它名下', mem.split(MARK).length - 1 === 1, `aria 名下 ${mem.split(MARK).length - 1} 处;xyra 名下 ${memoryOf('xyra').split(MARK).length - 1} 处`)
 
@@ -224,7 +231,7 @@ async function main() {
     if (await title.count()) { await title.click(); await sleep(1800) }
     const headsAfter = await toolHeads(win)
     await shot(win, '13-after-reload')
-    check('④ 重载后这张工具卡还在', headsAfter.length >= heads.length && headsAfter.length >= 1, headsAfter.join(' | '))
+    check('④ 重载后这张工具卡还在', headsAfter.some((h) => /记住了/.test(h)) && !(await asstHasMcpName(win)), headsAfter.join(' | '))
   } finally {
     await app.close().catch(() => {})
   }

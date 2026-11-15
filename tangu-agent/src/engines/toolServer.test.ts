@@ -151,6 +151,20 @@ describe('交接的工具桥', () => {
     expect(events[events.length - 1]).toMatchObject({ type: 'tool_result', payload: { isError: true } });
   });
 
+  it('一轮结束时工具不听中止、还在跑:当场记成「这一轮结束了」,迟到的结果不再记、不再发(落库的调用都配得上结果)', async () => {
+    let finish!: () => void;
+    h.exec.mockImplementation(async (call: any) => { await new Promise<void>((r) => { finish = r; }); return { toolCallId: call.id, name: 'remember', result: 'late', isError: false }; });
+    const c = await connect(await agentBridge(100));
+    expect(textOf(await c.callTool({ name: 'remember', arguments: {} }))).toContain('is still running');
+    await c.close();
+    await bridge!.close();
+    expect(bridge!.results()).toEqual([expect.objectContaining({ tool_call_id: bridge!.calls()[0].id, isError: true, content: expect.stringContaining('Stopped') })]);
+    const n = events.length;
+    finish(); await new Promise((r) => setTimeout(r, 20));
+    expect(bridge!.results()).toHaveLength(1);
+    expect(events).toHaveLength(n);
+  }, 10_000);
+
   it('没交的工具调不了', async () => {
     const c = await connect(await agentBridge(2_000));
     await expect(c.callTool({ name: 'not_handed', arguments: {} })).rejects.toThrow();
