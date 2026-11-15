@@ -472,7 +472,7 @@
    "snap:打一个Z后": {"status":"same"}
   },
   "F12": {
-   "snap:打一个Z后": {"status":"pending","diff":"content"}
+   "snap:打一个Z后": {"status":"same"}
   },
   "F13": {
    "snap:打一个Z后": {"status":"same"}
