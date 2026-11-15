@@ -956,6 +956,8 @@ ctx.calendar?.ensureMember(`${ctx.app.workFolder()}/任务表.db`, 'c-date' /* �
 - **带按钮的通知(撤销)**:`ctx.notify(msg, { action: { label, run }, key })` —— `label` 截到 40 字,有按钮时通知留 8 秒;插件停用后点按钮什么都不做;
   `key`:同 key 的后一张顶掉前一张(宿主加 `plugin:<id>:` 前缀,和别的插件撞不上)—— 标题、文案、按钮、停留都换成新这张的,新这张没带按钮就清掉旧的;
   宿主不替你数「第几张」(不出 ×N),要显示件数自己写进文案。旧宿主同 key 时还会在卡上叠 ×N、新这张没给标题时沿用旧标题。
+  窗口在后台时,顶上来的这张和新弹的一样跟发系统通知(用户关了系统通知 / 关了这个插件的通知就不发;旧宿主同 key 时不发)——
+  它是新的一件事。只想悄悄刷新一个进度、不想每次都响,用 `registerStatusItem`,别反复 notify 同一个 key。
 - **事件浮卡里的那排字段**:`ctx.ui?.mountRecord?.(el, { path, rowId, dateCol?, readOnly? })` 把宿主的行编辑字段(标题、时间摘要 + 展开编辑、
   其余属性)画进你的容器,返回 `{ update(patch), dispose() }`;改动直接写那张表(同 `ctx.databases.setCell`,和打开着的表格同一份),
   行被删 / 换库就什么都不画;`path` 不是库里的表或没有 `rowId` 当场抛 `TypeError`。外框、关闭、「打开 / 删除」按钮、定位归插件。

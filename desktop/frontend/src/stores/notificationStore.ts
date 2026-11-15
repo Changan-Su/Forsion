@@ -42,7 +42,7 @@ export interface NotifyInput {
   /** 顶替:同 dedupeKey 的后一条整条顶掉前一条 —— 计数回 1(不出 ×N),标题、文案、按钮、级别、常驻与停留都换成这一条的,
    *  不沿用前一条;停留从这一刻重新算。插件 `ctx.notify` 带 key 时用它(插件手册承诺「同 key 的后一张顶掉前一张」:
    *  插件自己数件数,比如「(3) 张三：…」,宿主再叠 ×3 就重了;key 也可能管着内容不同的卡,比如手机上合成的那一张)。
-   *  宿主自己的去重(防轰炸计数)不带它,照旧累计。 */
+   *  顶替的是新的一件事,窗口在后台时照常跟发系统通知(门控同新弹的一条)。宿主自己的去重(防轰炸计数)不带它,照旧累计、不重发。 */
   replace?: boolean
 }
 
@@ -166,6 +166,20 @@ export const useNotifications = create<NtfState>((set, get) => {
     try { n?.onClose?.() } catch { /* 回调抛错不砸通知栈 */ }
   }
 
+  // 系统通知:与应用内通知同步发(所有事件,不止收件箱);仅窗口在后台时(前台已有卡片,免重复横幅);
+  // osEnabled 门控。web 无 window.tangu.notify → 可选链忽略(安卓有:mobile/src/liveIsland.ts)。
+  // inAppOnly / receipt:调用方声明这是应用内即时反馈(见 NotifyInput.inAppOnly),不跟发。
+  // 「在后台」:桌面 = 窗口失焦。安卓 WebView 退到后台后 hasFocus() 仍是 true(模拟器实测),那里只有可见性说真话;
+  // 桌面上看不见的窗口本来就没有焦点,多看这一项不改变它的行为。
+  // 谁调:新弹的一条;以及 replace 顶掉同 key 的前一条(那是新的一件事,只是借同一张卡显示 —— 比如手机上插件把几件合成一张、
+  // 上一张还停着时又来一件,不发的话 App 在后台时这一件就没有横幅)。宿主自己的去重合并(防轰炸计数)不重发。
+  const sendOs = (input: NotifyInput, n: Pick<AppNotification, 'title' | 'sourceLabel' | 'text'>, event: string): void => {
+    if (input.inAppOnly || input.receipt || !get().prefs.osEnabled) return
+    const away = typeof document !== 'undefined' && (!document.hasFocus() || document.visibilityState === 'hidden')
+    if (!away) return
+    try { window.tangu?.notify?.(n.title || n.sourceLabel || 'Forsion', n.text, { event }) } catch { /* 无桥/web 忽略 */ }
+  }
+
   return {
     items: [],
     queue: [],
@@ -208,6 +222,7 @@ export const useNotifications = create<NtfState>((set, get) => {
             if (upd.sticky) clearTimer(found.id)
             else startTimer(found.id, durationOf(upd))
           }
+          if (input.replace) sendOs(input, upd, event)
           return found.id
         }
       }
@@ -217,16 +232,7 @@ export const useNotifications = create<NtfState>((set, get) => {
         sourceLabel: input.sourceLabel, createdAt: Date.now(), sticky, count: 1,
         dedupeKey: input.dedupeKey, action: input.action, durationMs, onClose: input.onClose, settle: input.settle,
       }
-      // 系统通知:与应用内通知同步发(所有事件,不止收件箱);仅窗口在后台时(前台已有卡片,免重复横幅);
-      // osEnabled 门控。web 无 window.tangu.notify → 可选链忽略(安卓有:mobile/src/liveIsland.ts)。dedupe 合并不重发(上面已 return)。
-      // inAppOnly:调用方声明这是应用内即时反馈(见 NotifyInput.inAppOnly),不跟发。
-      // 「在后台」:桌面 = 窗口失焦。安卓 WebView 退到后台后 hasFocus() 仍是 true(模拟器实测),那里只有可见性说真话;
-      // 桌面上看不见的窗口本来就没有焦点,多看这一项不改变它的行为。
-      const away = typeof document !== 'undefined' && (!document.hasFocus() || document.visibilityState === 'hidden')
-      if (!input.inAppOnly && !input.receipt && st.prefs.osEnabled && away) {
-        const osTitle = title || input.sourceLabel || 'Forsion'
-        try { window.tangu?.notify?.(osTitle, text, { event }) } catch { /* 无桥/web 忽略 */ }
-      }
+      sendOs(input, n, event) // 系统通知(见 sendOs);非 replace 的去重合并上面已经 return,不重发
       if (st.items.length < MAX_VISIBLE) {
         set((s) => ({ items: [...s.items, n] }))
         if (!sticky) startTimer(n.id, durationOf(n))
