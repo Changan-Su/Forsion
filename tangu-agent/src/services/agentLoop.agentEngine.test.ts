@@ -5,7 +5,7 @@
  *   · 会话里显式选了引擎(Claude Code / Codex)的照旧按选的走;
  *   · 换 harness:换到 DSH 从新的引擎会话开始,换回来再换过去也不接旧的。 */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -30,7 +30,8 @@ import type { EngineManager, EngineRunCtx } from '../engines/manager.js';
 type EngineStatus = 'available' | 'needs-signin' | 'not-installed';
 
 let home: string;
-let calls: Array<{ engineId: string; resume?: string; cwd?: string; engineModelId?: string; message: string }>;
+let calls: Array<{ engineId: string; resume?: string; cwd?: string; engineModelId?: string; message: string; mcp?: string[]; agentsHome?: string; hidePrefix?: string; bridgeTools?: string[] }>;
+let probeBridge = false;
 let llmCalls: number;
 let seq: number;
 let runs: string[];
@@ -40,9 +41,22 @@ let tanguReplay: any[] = [];
 const engines: EngineManager = {
   list: () => [{ id: 'dsh', name: 'DeepSeek Harness', available: status === 'available', status }, { id: 'codex', name: 'Codex', available: true, status: 'available' }],
   has: (id) => id === 'dsh' || id === 'codex',
+  agentsHomeEnv: (id) => (id === 'dsh' ? process.env : null),
   capabilities: async () => ({ models: [], commands: [] }), setDefaultModel: () => {}, dispose: async () => {},
   run: async (ctx: EngineRunCtx) => {
-    calls.push({ engineId: ctx.engineId, resume: ctx.resumeSessionId, cwd: ctx.cwd, engineModelId: ctx.engineModelId, message: ctx.message });
+    const entry = { engineId: ctx.engineId, resume: ctx.resumeSessionId, cwd: ctx.cwd, engineModelId: ctx.engineModelId, message: ctx.message,
+      mcp: (ctx.mcpServers || []).map((m: any) => m.name), agentsHome: ctx.agentsHome, hidePrefix: ctx.hideToolPrefix } as (typeof calls)[number];
+    calls.push(entry);
+    // 像引擎一样连上桥列工具(桥在这一轮里活着、带着取结果的那个工具)
+    if (probeBridge && ctx.mcpServers?.[0]) {
+      const m: any = ctx.mcpServers[0];
+      const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+      const { StreamableHTTPClientTransport } = await import('@modelcontextprotocol/sdk/client/streamableHttp.js');
+      const c = new Client({ name: 'fake-engine', version: '0' });
+      await c.connect(new StreamableHTTPClientTransport(new URL(m.url), { requestInit: { headers: Object.fromEntries(m.headers.map((x: any) => [x.name, x.value])) } }));
+      entry.bridgeTools = (await c.listTools()).tools.map((t) => t.name);
+      await c.close();
+    }
     const id = ctx.resumeSessionId || `ext-${++seq}`;
     await ctx.onSession?.({ id, resumable: true, resumed: !!ctx.resumeSessionId, via: 'resume', verifiedForChat: true, agent: 'fake-harness' });
     return { content: `answer to ${ctx.message}`, externalSessionId: id };
@@ -57,6 +71,10 @@ function writeAgent(slug: string, extra = ''): void {
 beforeEach(async () => {
   home = mkdtempSync(join(tmpdir(), 'tangu-agent-engine-loop-'));
   process.env.TANGU_HOME = home;
+  // 交接会读用户自己的共用指令根和 DSH 目录:测试里一律指到临时目录,不碰这台机器上真实的 ~/.agents、~/.dsh
+  process.env.DSH_AGENTS_HOME = join(home, 'user-agents');
+  process.env.DSH_HOME = join(home, 'user-dsh');
+  probeBridge = false;
   calls = []; llmCalls = 0; seq = 0; runs = []; status = 'available'; historian.calls = [];
   const { host, db } = createSqliteHost({ dataDir: 'memory', localToken: 'x', userId: 'u1' });
   db.exec(toSqliteDDL(STANDALONE_SCHEMA));
@@ -78,7 +96,7 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   for (const id of runs) { abortRun(id); await waitForRunSettlement(id, 2000); }
-  delete process.env.TANGU_HOME; rmSync(home, { recursive: true, force: true });
+  delete process.env.TANGU_HOME; delete process.env.DSH_AGENTS_HOME; delete process.env.DSH_HOME; rmSync(home, { recursive: true, force: true });
 });
 
 /** 发一句,等这一轮结束。input 里的 origin 缺省是 'client'(输入框发的);传 null 去掉。 */
@@ -112,6 +130,28 @@ describe('跑在外部引擎上的 Agent', () => {
     await vi.waitFor(() => expect(historian.calls.length).toBe(2));
     expect(historian.calls.every((c) => c.sessionId === 'S' && c.memScopeSlug === 'ds')).toBe(true);
   }, 30_000);
+
+  it('交接:工具桥 + 指令目录(人设、工具说明、用户自己的共用指令和技能)交给 DSH;桥里的调用不由引擎上屏;每场对话一个固定目录', async () => {
+    mkdirSync(join(home, 'user-agents', 'skills', 'own-skill'), { recursive: true });
+    writeFileSync(join(home, 'user-agents', 'AGENTS.md'), 'USER-SHARED-MARK');
+    writeFileSync(join(home, 'user-agents', 'skills', 'own-skill', 'SKILL.md'), '---\nname: own-skill\ndescription: d\n---\nbody');
+    probeBridge = true;
+    expect((await turn(1)).done).toBe(true);
+    expect((await turn(2)).done).toBe(true);
+    const dir = join(home, 'engines', 'dsh', 'agents', 'S');
+    expect(calls.map((c) => [c.mcp, c.agentsHome, c.hidePrefix])).toEqual([[['forsion'], dir, 'mcp__forsion__'], [['forsion'], dir, 'mcp__forsion__']]);
+    expect(calls[0].bridgeTools).toContain('forsion_wait');
+    const text = readFileSync(join(dir, 'AGENTS.md'), 'utf8');
+    expect(text).toContain('persona of ds');
+    expect(text).toContain('## Forsion tools');
+    expect(text).toContain('USER-SHARED-MARK');
+    expect(existsSync(join(dir, 'skills', 'own-skill', 'SKILL.md'))).toBe(true);
+  }, 30_000);
+
+  it('普通引擎对话(没选 Agent、会话里选了 Codex)不交接:没有桥、没有指令目录', async () => {
+    await turn(1, { engineId: 'codex', agentSlug: undefined });
+    expect(calls.map((c) => [c.engineId, c.mcp, c.agentsHome ?? null, c.hidePrefix ?? null])).toEqual([['codex', [], null, null]]);
+  }, 20_000);
 
   it('会话里另选的引擎模型优先于 Agent 定义里的', async () => {
     await turn(1, { engineModelId: 'picked-in-composer' });

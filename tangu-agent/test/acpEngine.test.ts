@@ -174,3 +174,28 @@ describe('probe mappers — newSession.models / available_commands', () => {
     expect(mapAcpCommands(undefined)).toEqual([]);
   });
 });
+
+describe('createAcpClient — 交接的工具桥(hideToolPrefix)', () => {
+  it('桥里的调用不上屏、不进结果(卡片归桥),但给看门狗续命;引擎自己的照旧,落库形状同 runLoop 并带正文位置', async () => {
+    const { ctx, events } = mkCtx();
+    let touched = 0;
+    const { client, result, contentLength } = createAcpClient('DSH', { ...ctx, hideToolPrefix: 'mcp__forsion__', touch: () => { touched++; } });
+    await client.sessionUpdate({ update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Hi.' } } } as any);
+    await client.sessionUpdate({ update: { sessionUpdate: 'tool_call', toolCallId: 'b1', title: 'mcp__forsion__remember', rawInput: { content: 'x' } } } as any);
+    await client.sessionUpdate({ update: { sessionUpdate: 'tool_call_update', toolCallId: 'b1', status: 'completed', content: [{ type: 'content', content: { type: 'text', text: 'ok' } }] } } as any);
+    await client.sessionUpdate({ update: { sessionUpdate: 'tool_call', toolCallId: 'n1', title: 'bash', rawInput: { command: 'ls' } } } as any);
+    await client.sessionUpdate({ update: { sessionUpdate: 'tool_call_update', toolCallId: 'n1', status: 'completed', content: [{ type: 'content', content: { type: 'text', text: 'a.txt' } }] } } as any);
+    expect(touched).toBe(2);
+    expect(events.filter((e) => e.type === 'tool_call' || e.type === 'tool_result').map((e) => e.payload.id)).toEqual(['n1', 'n1']);
+    expect(result().toolCalls).toEqual([expect.objectContaining({ id: 'n1', ui_content_offset: 3 })]);
+    expect(result().toolResults).toEqual([{ tool_call_id: 'n1', name: 'bash', content: 'a.txt', isError: false }]);
+    expect(contentLength()).toBe(3);
+  });
+
+  it('没给前缀时,mcp__ 开头的照旧上屏(插件任务那条路)', async () => {
+    const { ctx, events } = mkCtx();
+    const { client } = createAcpClient('DSH', ctx);
+    await client.sessionUpdate({ update: { sessionUpdate: 'tool_call', toolCallId: 'p1', title: 'mcp__forsion_task__read_file', rawInput: {} } } as any);
+    expect(events.filter((e) => e.type === 'tool_call')).toHaveLength(1);
+  });
+});

@@ -40,6 +40,11 @@ export interface AcpClientCtx {
   signal: AbortSignal;
   publish: (type: string, payload: any) => void;
   requestApproval: (preview: string, toolCall: ToolCall) => Promise<ApprovalDecision>;
+  /** 宿主工具桥的工具名前缀(`mcp__<服务名>__`,见 engines/toolServer.ts)。这些调用由桥按 Forsion 的原名自己画卡、自己落库,
+   *  引擎这边的 tool_call / tool_call_update 不再上屏、不进结果 —— 否则同一次调用两张卡。 */
+  hideToolPrefix?: string;
+  /** 有引擎活动但没上屏时续命(空闲看门狗只在上屏时重新起表;藏起来的桥调用在等审批时一来一回全是这种)。 */
+  touch?: () => void;
 }
 
 /** 引擎握手上限:spawn + initialize + newSession 若在此窗口内没完成(子进程卡死/Windows 上 .cmd shim spawn
@@ -52,13 +57,14 @@ const HANDSHAKE_TIMEOUT_MS = Number(process.env.TANGU_ENGINE_HANDSHAKE_TIMEOUT_M
  *  在终端敲命令),非远程注入面。windowsHide 避免弹控制台窗口。POSIX 上 shell=false、detached 组杀行为照旧。
  *  env:PATH 先补全(envWithFullPath)——GUI 启动的 Electron 只有 launchd 精简 PATH,`openclaw`/`pi` 这类全局 bin
  *  在终端跑得起、装成 App 就 ENOENT;检测端 binOnPath 早就扫这些目录了,spawn 端不补就是「检测说有、跑起来没有」。 */
-export function spawnEngine(def: EngineDef, opts?: { cwd?: string; detached?: boolean }) {
+export function spawnEngine(def: EngineDef, opts?: { cwd?: string; detached?: boolean; env?: Record<string, string> }) {
   return spawn(def.command, def.args ?? [], {
     cwd: opts?.cwd,
     stdio: ['pipe', 'pipe', 'pipe'] as ['pipe', 'pipe', 'pipe'], // 元组字面量 → 非空 stdin/stdout 流类型
     // 剥引擎凭据(C2):外部 CLI 跑模型驱动的命令,拿到 forsion_token / 本机令牌就能绕过本引擎直调云端与本机端点。
     // 在**合成之后**再剥:引擎清单的 def.env 也不许把这些键加回来。
-    env: toolSubprocessEnv({ ...envWithFullPath(process.env), ...(def.env ?? {}) }),
+    // opts.env:这一轮专用的(交接的指令目录,见 EngineRunCtx.env),叠在引擎清单的 def.env 之后。
+    env: toolSubprocessEnv({ ...envWithFullPath(process.env), ...(def.env ?? {}), ...(opts?.env ?? {}) }),
     shell: process.platform === 'win32',
     windowsHide: true,
     // DETACHED_PROCESS cancels windowsHide and loses grandchild stdout on Windows.
@@ -299,13 +305,14 @@ export function pickPermissionOption(options: PermissionOption[], action: Approv
 export function createAcpClient(
   engineName: string,
   ctx: AcpClientCtx,
-): { client: Client; result(): EngineResult } {
+): { client: Client; result(): EngineResult; contentLength(): number } {
   let content = '';
   let reasoning = '';
   let tokensTotal: number | undefined;
   const toolCalls: ToolCall[] = [];
   const toolResults: any[] = [];
   const toolNames = new Map<string, string>(); // toolCallId -> name（给 tool_result 补名）
+  const hidden = new Set<string>(); // 桥里的调用(hideToolPrefix):卡片和结果归桥
   // toolCallId -> 最新的 rawInput / 标题(审批请求只带 id 时拿来补,见 requestPermission)。**必须跟着 tool_call_update 更新**:
   // 引擎可以先发一条参数不全(或还是别的参数)的 tool_call,再用 update 改成真正要跑的;卡上要是还显示头一条,
   // 用户看到的是一条命令、批准的是另一条。
@@ -334,17 +341,24 @@ export function createAcpClient(
           break;
         }
         case 'tool_call': {
+          if (ctx.hideToolPrefix && typeof u.title === 'string' && u.title.startsWith(ctx.hideToolPrefix)) {
+            hidden.add(u.toolCallId);
+            ctx.touch?.();
+            break;
+          }
           const name = u.title || u.kind || 'tool';
           toolNames.set(u.toolCallId, name);
           if (u.rawInput != null) toolInputs.set(u.toolCallId, u.rawInput);
           if (typeof u.title === 'string' && u.title) toolTitles.set(u.toolCallId, u.title);
           const args = u.rawInput ? JSON.stringify(u.rawInput) : '{}';
-          toolCalls.push({ id: u.toolCallId, type: 'function', function: { name, arguments: args } });
+          // ui_content_offset:卡片在回答正文里的位置(同 runLoop),重开对话时据此把卡片排回原处。
+          toolCalls.push({ id: u.toolCallId, type: 'function', function: { name, arguments: args }, ui_content_offset: content.length } as ToolCall);
           // source(遥测契约 §7):外部引擎自己的工具名不归 Tangu,按 plugin 记 —— Extend 不外发 plugin 的工具名
           ctx.publish('tool_call', { id: u.toolCallId, name, arguments: args, startedAt: Date.now(), source: 'plugin' });
           break;
         }
         case 'tool_call_update': {
+          if (hidden.has(u.toolCallId)) { ctx.touch?.(); break; }
           // 规范:update 里出现的字段整个替换原值。只更新审批用的这两份;已经发给界面的 tool_call 事件和结果里的工具名不动。
           if (u.rawInput != null) toolInputs.set(u.toolCallId, u.rawInput);
           if (typeof u.title === 'string' && u.title) toolTitles.set(u.toolCallId, u.title);
@@ -352,7 +366,8 @@ export function createAcpClient(
             const name = toolNames.get(u.toolCallId) || '';
             const result = toolUpdateText(u.content);
             const isError = u.status === 'failed';
-            toolResults.push({ id: u.toolCallId, name, result, isError });
+            // 落库形状同 runLoop(tool_call_id / content):重开对话时前端按 tool_call_id 配对,换回 Tangu 时回放也认这个形状。
+            toolResults.push({ tool_call_id: u.toolCallId, name, content: result, isError });
             ctx.publish('tool_result', { id: u.toolCallId, name, result, isError, source: 'plugin' });
           }
           break;
@@ -402,6 +417,7 @@ export function createAcpClient(
   return {
     client,
     result: () => ({ content, reasoning, toolCalls, toolResults, tokensTotal }),
+    contentLength: () => content.length,
   };
 }
 
@@ -443,7 +459,8 @@ export async function runAcpEngine(def: EngineDef, ctx: EngineRunCtx): Promise<E
   // host 能力下运行：继承父 env（等价于用户自己在终端跑 claude），叠加 def.env。适配器据此读 ANTHROPIC_API_KEY/~/.claude。
   // detached:true → 子进程自成进程组(pgid=child.pid);kill 时杀「整组」，连带 npx 衍生的真子进程(claude-code-acp)，
   // 否则只杀外层 npx、孙进程残留成孤儿。范本 ../tools/hostExec.ts。
-  const child = spawnEngine(def, { cwd, detached: true });
+  const runEnv = { ...(ctx.env ?? {}), ...(def.agentsHomeEnv && ctx.agentsHome ? { [def.agentsHomeEnv]: ctx.agentsHome } : {}) };
+  const child = spawnEngine(def, { cwd, detached: true, env: runEnv });
   // 起不来必须让握手立刻失败(spawn 报错 / 握手前自退),否则 initialize 会一路 await 到 30s 超时。
   // 适配器的 stderr 只做诊断,不进协议流;watchEngineStartup 顺带留末尾几行进错误信息。
   const startup = watchEngineStartup(child, def.id);
@@ -500,6 +517,8 @@ export async function runAcpEngine(def: EngineDef, ctx: EngineRunCtx): Promise<E
     },
     signal: ctx.signal,
     publish: (type, payload) => { armEngineIdle(); ctx.publish(type, payload); },
+    hideToolPrefix: ctx.hideToolPrefix,
+    touch: armEngineIdle,
     requestApproval: async (preview, toolCall) => {
       // Read-only ACP modes remain host-enforced at permission boundaries.
       // The scoped MCP bridge gates its own tools independently.

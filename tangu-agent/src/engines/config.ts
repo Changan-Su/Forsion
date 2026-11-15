@@ -29,6 +29,9 @@ export interface EngineDef {
   detect?: { dirs?: string[]; env?: string[]; bin?: string; requireBin?: boolean };
   /** 未检测到时给用户看的一行安装命令(设置页「Agent CLIs」显示)。语言中立,不进 i18n。 */
   setup?: string;
+  /** 交接(底层第 3 步):引擎从哪个环境变量读「共用指令目录」(AGENTS.md + skills/)。设了,跑在这个引擎上的 Agent
+   *  每轮把人设、协作说明、记忆、技能写进 Forsion 备的目录,经这个变量交给引擎(DSH = DSH_AGENTS_HOME)。 */
+  agentsHomeEnv?: string;
 }
 
 // 内置：Claude Code 经官方 ACP 适配器。需用户已装/已登录 Claude Code（适配器读 ANTHROPIC_API_KEY 或 ~/.claude）。
@@ -94,7 +97,13 @@ export function loadEngines(configFile?: string): EngineDef[] {
   const byId = new Map<string, EngineDef>();
   // dsh 的检测目录随 $DSH_HOME,故按调用时求值,不进模块级 BUILTIN 常量。
   for (const e of [...BUILTIN, dshEngineDef()]) byId.set(e.id, e);
-  for (const e of custom) if (e?.id && e?.command) byId.set(e.id, e); // 校验 id+command 才纳入
+  for (const e of custom) {
+    if (!e?.id || !e?.command) continue; // 校验 id+command 才纳入
+    // 按 id 覆盖内置条目(多半是换一份装在别处的同一个程序):没写 agentsHomeEnv 就沿用内置的 —— 不然交接的指令目录
+    // 悄悄交不过去,DSH 照常跑,只是人设、记忆、技能都没了(11-15 台架踩过)。
+    const prev = byId.get(e.id);
+    byId.set(e.id, prev?.agentsHomeEnv && !('agentsHomeEnv' in e) ? { ...e, agentsHomeEnv: prev.agentsHomeEnv } : e);
+  }
   return [...byId.values()];
 }
 

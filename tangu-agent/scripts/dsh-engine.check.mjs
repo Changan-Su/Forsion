@@ -8,10 +8,11 @@
  *   npm run build
  *   node scripts/dsh-engine.check.mjs --node <Node ≥ 24 的可执行文件> --dsh <@deepseek-ai/dsh 的 lib/bin.js> --root <全新目录>
  *     [--only twoturn,model,…]   只跑某几项(见下面 SCENARIOS 的 key;nokey = 当前模型缺 API key 时的失败原因;
- *                                agent = 「由谁来跑」设成 DSH 的 Agent,底层第 2 步)
+ *                                agent = 「由谁来跑」设成 DSH 的 Agent,底层第 2 步;
+ *                                handoff = 交接,底层第 3 步)
  *     [--engine-entry <别处的 dist/standalone/main.js>]   负对照:拿没有这次改动的旧构建跑同一套,twoturn 应当红
  *     [--live --key-file <一行 key 的文件> | --live --dsh-home <已登录的 DSH 目录>]   真模型:看模型自己的回答(caps / twoturn /
- *                                    model / edit / stop / stopedit / approval);key 只进子进程环境,不落盘、不打印
+ *                                    model / edit / stop / stopedit / approval / handoff);key 只进子进程环境,不落盘、不打印
  *     [--live-dry]                   不要凭据,用假模型里的自动脑把真模型那套走一遍,只证台架没写错
  *
  * 准备 DSH(只装官方包,不装任何社区插件;和你自己的 DSH 无关):
@@ -535,6 +536,110 @@ const SCENARIOS = {
       ]);
     });
   },
+  // 交接(底层第 3 步):设成 DSH 来跑的 Agent 在普通对话里,Forsion 的工具经桥交给 DSH,人设 / 记忆 / 技能写进指令目录。
+  // 同一场对话三轮:① 桥里直接调 remember(卡片由 Forsion 按原名画、记忆记在它名下);② 审批规则要求 remember 先问,
+  // 用户过了 50 秒才批 —— 桥在 45 秒回编号,模型用 forsion_wait 取到结果,工具只执行一次,DSH 的 60 秒时限一次没撞;
+  // ③ 用户拒了 —— 模型拿到拒绝原因,记忆没写。另核:交给模型的工具里有桥的、没有和 DSH 自带重复的(读写文件 / 跑命令),
+  // 指令目录里有人设、记忆、用户自己 ~/.agents 的 AGENTS.md,技能目录里链着它的技能和用户的技能。
+  handoff: async () => {
+    const SLUG = 'handmate', PERSONA = 'HANDOFF-PERSONA-41', SKILL = 'HANDOFF-SKILL-42', USER_SHARED = 'HANDOFF-USER-43', USER_SKILL = 'HANDOFF-USER-SKILL-44';
+    const userRoot = join(HOME, '.agents');
+    mkdirSync(join(userRoot, 'skills', 'user-probe'), { recursive: true });
+    writeFileSync(join(userRoot, 'AGENTS.md'), `Shared note for every coding agent: ${USER_SHARED}.\n`);
+    writeFileSync(join(userRoot, 'skills', 'user-probe', 'SKILL.md'), `---\nname: user-probe\ndescription: User probe skill ${USER_SKILL}. Use only when asked about the user probe.\n---\nNothing to do.\n`);
+    await api('/agent/agents', { method: 'POST', body: JSON.stringify({ slug: SLUG, name: 'Hand mate', systemPrompt: `You are a test agent. ${PERSONA}.`, engine: 'dsh' }) });
+    mkdirSync(join(agentDir(SLUG), 'skills', 'handoff-probe'), { recursive: true });
+    writeFileSync(join(agentDir(SLUG), 'skills', 'handoff-probe', 'SKILL.md'), `---\nname: handoff-probe\ndescription: Probe skill ${SKILL}. Use only when asked about the probe.\n---\nNothing to do.\n`);
+    const memText = (slug) => { const f = join(agentDir(slug), 'MEMORY.md'); return existsSync(f) ? readFileSync(f, 'utf8') : ''; };
+    const count = (hay, needle) => hay.split(needle).length - 1;
+    const lastMsg = (body) => JSON.stringify((body?.messages || []).slice(-1));
+    const xyraBefore = memText('xyra');
+    const sid = await newSession('handoff');
+    const cfg = { engineId: undefined, agentSlug: SLUG };
+
+    // ① 直接调
+    const n0 = stub.mark();
+    stub.script([{ tool: 'mcp__forsion__remember', args: { action: 'add', fact: 'The user drinks jasmine tea. HANDOFF-REM-51', scope: 'agent' } }, { text: 'Saved it.' }]);
+    const a = await run(sid, 'Please remember that I drink jasmine tea.', cfg, { modelId: JUDGE_MODEL });
+    const reqA = stub.since(n0); const firstA = reqA[0] || {};
+    const toolNames = (firstA.tools || []).map((t) => t.name);
+    const bridged = (firstA.tools || []).filter((t) => t.name.startsWith('mcp__forsion__'));
+    const bridgedBytes = Buffer.byteLength(JSON.stringify(bridged));
+    const allToolBytes = Buffer.byteLength(JSON.stringify(firstA.tools || []));
+    const dup = bridged.map((t) => t.name.slice('mcp__forsion__'.length)).filter((n) => ['read_file', 'write_file', 'edit_file', 'run_bash', 'list_dir', 'grep', 'glob', 'apply_patch', 'git_commit', 'kill_process', 'browser_task', 'computer_use', 'desk_screenshot', 'manage_automation', 'use_skill', 'load_tools'].includes(n));
+    const homeDir = join(TANGU_HOME, 'engines', 'dsh', 'agents', sid);
+    const agentsMd = existsSync(join(homeDir, 'AGENTS.md')) ? readFileSync(join(homeDir, 'AGENTS.md'), 'utf8') : '';
+    const skillLinks = existsSync(join(homeDir, 'skills')) ? readdirSync(join(homeDir, 'skills')) : [];
+    const msgsA = await messages(sid); const modelA = msgsA.filter((m) => m.role === 'model' || m.role === 'assistant').slice(-1)[0] || {};
+    record('handoff', '交接:Forsion 的工具经桥直接调,卡片由 Forsion 画,记忆记在它名下;人设、技能、用户共用指令都交过去了', [
+      ['这一轮跑完', a.done, a.error || ''],
+      ['卡片按 Tangu 原名画(remember),不出现 mcp__forsion__ 那张', a.tools.some((t) => t.name === 'remember') && !a.tools.some((t) => String(t.name).startsWith('mcp__')), a.tools.map((t) => t.name).join(', ')],
+      ['工具结果成功', a.results.some((r) => r.name === 'remember' && !r.isError), a.results.map((r) => `${r.name}:${r.isError ? 'err' : 'ok'}`).join(', ')],
+      ['记忆写在它名下(执行了一次)、缺省 Agent 那边没多', count(memText(SLUG), 'HANDOFF-REM-51') === 1 && memText('xyra') === xyraBefore, `它名下 ${count(memText(SLUG), 'HANDOFF-REM-51')} 处`],
+      ['交给模型的工具里有桥的 remember 与 forsion_wait', toolNames.includes('mcp__forsion__remember') && toolNames.includes('mcp__forsion__forsion_wait'), `桥 ${bridged.length} 个 / 全部 ${toolNames.length} 个`],
+      ['和 DSH 自带重复的、截图类、循环内的没交', dup.length === 0, dup.join(', ')],
+      ['人设进了模型的上下文', JSON.stringify(firstA).includes(PERSONA)],
+      ['它的技能和用户共用根里的技能都进了模型的上下文', JSON.stringify(firstA).includes(SKILL) && JSON.stringify(firstA).includes(USER_SKILL)],
+      ['用户自己 ~/.agents 的 AGENTS.md 并进来了', JSON.stringify(firstA).includes(USER_SHARED)],
+      ['指令目录里技能是链接(它的 + 用户的)', skillLinks.includes('handoff-probe') && skillLinks.includes('user-probe'), skillLinks.join(', ')],
+      ['落库的回答带着这次工具调用(重开对话卡片还在)', JSON.stringify(modelA).includes('HANDOFF-REM-51') && JSON.stringify(modelA).includes('remember'), Object.keys(modelA).join(',')],
+    ], `桥的工具描述 ${bridgedBytes} 字节,全部工具 ${allToolBytes} 字节;AGENTS.md ${Buffer.byteLength(agentsMd)} 字节;桥的工具:${bridged.map((t) => t.name.slice('mcp__forsion__'.length)).join(' ')}`);
+
+    // ② 审批过了时限:规则要求 remember 先问,用户 50 秒后才批
+    const prevCfg = readConfig(); const prevApproval = prevCfg.approval;
+    writeConfigFile({ ...prevCfg, approval: { base: 'auto-edit', ask: ['remember'] } });
+    try {
+      const n1 = stub.mark(); const t1 = Date.now();
+      stub.script([
+        { tool: 'mcp__forsion__remember', args: { action: 'add', fact: 'The user keeps a cat named Miso. HANDOFF-REM-52', scope: 'agent' } },
+        { tool: 'mcp__forsion__forsion_wait', args: { ticket: 'T1', attempt: 1 } },
+        { text: 'Saved after you approved.' },
+      ]);
+      const b = await run(sid, 'Please remember my cat Miso.', { ...cfg, approvalMode: 'custom' }, { modelId: JUDGE_MODEL, timeoutMs: 180_000, onApproval: async () => { await sleep(50_000); return 'approve'; } });
+      const secs = (Date.now() - t1) / 1000; const reqB = stub.since(n1);
+      const all = JSON.stringify(reqB);
+      record('handoffwait', '交接:审批等过了 45 秒,桥先回编号,模型用 forsion_wait 取到结果;只执行一次,DSH 的 60 秒时限没撞', [
+        ['这一轮跑完', b.done, b.error || ''],
+        ['来问了一次审批,卡上是 remember', b.approvals.length === 1 && b.approvals[0].name === 'remember', b.approvals.map((x) => x.name).join(', ')],
+        ['第一次调用回的是编号', /ticket T1/.test(lastMsg(reqB[1])) && /waiting for the user to approve/.test(lastMsg(reqB[1])), clean(lastMsg(reqB[1])).slice(0, 200)],
+        ['forsion_wait 取到了结果(不是又一个编号)', !!reqB[2] && !/Pending:|ticket T1/.test(lastMsg(reqB[2])), clean(lastMsg(reqB[2])).slice(0, 200)],
+        ['工具只执行了一次', count(memText(SLUG), 'HANDOFF-REM-52') === 1, `${count(memText(SLUG), 'HANDOFF-REM-52')} 处`],
+        ['模型一次也没收到超时', !/timed out/i.test(all)],
+        ['等了 50 秒以上(真的过了时限)', secs >= 50, `${secs.toFixed(1)} 秒`],
+      ]);
+
+      // ③ 拒绝
+      const n2 = stub.mark();
+      stub.script([{ tool: 'mcp__forsion__remember', args: { action: 'add', fact: 'The user dislikes coffee. HANDOFF-REM-53', scope: 'agent' } }, { text: 'Understood, not saved.' }]);
+      const c = await run(sid, 'Remember that I dislike coffee.', { ...cfg, approvalMode: 'custom' }, { modelId: JUDGE_MODEL, onApproval: () => 'reject' });
+      const reqC = stub.since(n2);
+      const ps = await pointers(sid);
+      record('handoffreject', '交接:用户拒了桥里的工具,模型拿到拒绝原因,记忆没写;三轮是同一个 DSH 会话', [
+        ['这一轮跑完', c.done, c.error || ''],
+        ['来问了一次审批', c.approvals.length === 1],
+        ['模型拿到的是拒绝', /denied|reject/i.test(lastMsg(reqC[1])), clean(lastMsg(reqC[1])).slice(0, 200)],
+        ['记忆没写', count(memText(SLUG), 'HANDOFF-REM-53') === 0],
+        ['卡片记成出错', c.results.some((r) => r.name === 'remember' && r.isError)],
+        ['三轮续的是同一个 DSH 会话', ps.length === 3 && !!ps[0].ext && ps.every((x) => x.ext === ps[0].ext), ps.map((x) => x.ext?.slice(0, 8)).join(' → ')],
+        ['指令目录在第二轮前按新记忆重写了', existsSync(join(homeDir, 'AGENTS.md')) && readFileSync(join(homeDir, 'AGENTS.md'), 'utf8').includes('HANDOFF-REM-51')],
+      ]);
+    } finally {
+      const back = readConfig(); if (prevApproval === undefined) delete back.approval; else back.approval = prevApproval; writeConfigFile(back);
+    }
+
+    // ④ 委派:桥里调 delegate,起的是 Tangu 自己的子代理(用这一轮 Forsion 这边的模型),结论回到 DSH
+    const sid2 = await newSession('handoff-delegate');
+    const n3 = stub.mark(), j3 = stub.judged.length;
+    stub.script([{ tool: 'mcp__forsion__delegate', args: { task: 'Reply with the single word OK.' } }, { text: 'Delegated.' }]);
+    const d = await run(sid2, 'Delegate a tiny task.', cfg, { modelId: JUDGE_MODEL, timeoutMs: 180_000 });
+    const reqD = stub.since(n3);
+    record('handoffdelegate', '交接:桥里调 delegate,Tangu 的子代理跑完,结论回到 DSH', [
+      ['这一轮跑完', d.done, d.error || ''],
+      ['卡片是 delegate、成功', d.results.some((r) => r.name === 'delegate' && !r.isError), d.results.map((r) => `${r.name}:${r.isError ? 'err' : 'ok'} ${r.result.slice(0, 80)}`).join(' | ')],
+      ['子代理用的是 Forsion 这边的模型(假模型的 OpenAI 口被调过)', stub.judged.length > j3, `${stub.judged.length - j3} 次`],
+      ['结论交回给了 DSH 的模型', !!reqD[1] && /OK/.test(lastMsg(reqD[1])) && !/Error:/.test(lastMsg(reqD[1])), clean(lastMsg(reqD[1])).slice(0, 200)],
+    ]);
+  },
   probe: async () => {
     const probeDir = join(TANGU_HOME, 'engines', 'dsh', 'probe');
     const count = async () => (await dshSessions()).filter((s) => real(s.cwd) === real(probeDir)).length;
@@ -706,6 +811,74 @@ const LIVE_SCENARIOS = {
         ['缺省 Agent(xyra)那边什么都没多', after.logs === before.logs && after.raw === before.raw],
       ]);
     });
+  },
+  // 交接(底层第 3 步):真模型自己会不会用桥里的 Forsion 工具、会不会照编号去取结果。每一问都写明不许读文件、不许跑命令;
+  // 桥之外的工具(DSH 自带的读文件、跑命令…)一出现就当场按停,并记进判据(读到的东西会发给模型方)。
+  handoff: async () => {
+    if (LIVE_DRY) { console.log('\n(--live-dry 不演 handoff:自动脑不调工具;工具剧本在普通模式里测)'); return; }
+    const SLUG = 'livehand', SIG = codeWord('SIG'), PHRASE = codeWord('LANTERN');
+    await api('/agent/agents', { method: 'POST', body: JSON.stringify({ slug: SLUG, name: 'Hand mate', systemPrompt: `You are a test agent. End every reply with the exact signature ${SIG} on its own line.`, engine: 'dsh' }) });
+    mkdirSync(join(agentDir(SLUG), 'skills', 'tea-probe'), { recursive: true });
+    writeFileSync(join(agentDir(SLUG), 'skills', 'tea-probe', 'SKILL.md'), `---\nname: tea-probe\ndescription: Test skill. Its secret phrase is ${PHRASE}. Never load it.\n---\nNothing to do.\n`);
+    const mem = () => { const f = join(agentDir(SLUG), 'MEMORY.md'); return existsSync(f) ? readFileSync(f, 'utf8') : ''; };
+    const count = (hay, needle) => hay.split(needle).length - 1;
+    const onlyBridge = (allowed) => (ev) => ev.tools.some((t) => !allowed.includes(t.name));
+    const strays = (r, allowed) => ['没有动用桥之外的工具(DSH 自带的读文件 / 跑命令等)', r.tools.every((t) => allowed.includes(t.name)), r.tools.filter((t) => !allowed.includes(t.name)).map((t) => t.name).join(' / ')];
+    const sid = await newSession('live-handoff');
+    const cfg = { engineId: undefined, agentSlug: SLUG };
+    const NOFILES = 'Do not read files, list directories or run commands.';
+
+    // 人设和技能:只凭交过去的指令回答
+    const d = await liveRun(sid, `${NO_TOOLS} Among the skills available to you there is one named tea-probe. What secret phrase does its description give? Reply with just the phrase.`, cfg, { modelId: JUDGE_MODEL, stopOn: onlyBridge([]) });
+    record('handoff', '交接(真模型):人设和技能交过去了,模型只凭指令答得出', [
+      ['这一轮跑完', d.done, d.error || ''],
+      ['回答里有技能描述里的那句', d.text.includes(PHRASE), said(d)],
+      ['回答带着人设要求的署名', d.text.includes(SIG), said(d)],
+      noTools(d),
+    ]);
+
+    // 直接调
+    const TEA = codeWord('TEA');
+    const a = await liveRun(sid, `Please remember this about me using your Forsion remember tool: I drink jasmine tea (tag ${TEA}). ${NOFILES} When it is saved, reply with just: SAVED`, cfg, { modelId: JUDGE_MODEL, stopOn: onlyBridge(['remember']) });
+    record('handoffcall', '交接(真模型):模型用桥里的 remember 记下一件事,卡片由 Forsion 画,记在它名下', [
+      ['这一轮跑完', a.done, a.error || ''],
+      ['调了 remember,卡片按 Tangu 原名画、成功', a.results.some((r) => r.name === 'remember' && !r.isError), a.results.map((r) => `${r.name}:${r.isError ? 'err' : 'ok'}`).join(', ') || '(没调)'],
+      ['记忆写在它名下,只写了一次', count(mem(), TEA) === 1, `${count(mem(), TEA)} 处`],
+      ['回答 SAVED 并带署名', /SAVED/.test(a.text) && a.text.includes(SIG), said(a)],
+      strays(a, ['remember']),
+    ]);
+
+    const prevCfg = readConfig(); const prevApproval = prevCfg.approval;
+    writeConfigFile({ ...prevCfg, approval: { base: 'auto-edit', ask: ['remember'] } });
+    try {
+      // 审批过了时限:模型拿到编号后会不会照着去取
+      const CAT = codeWord('CAT'); const t0 = Date.now();
+      const b = await liveRun(sid, `Please remember this about me using your Forsion remember tool: I have a cat named Miso (tag ${CAT}). ${NOFILES} When it is saved, reply with just: SAVED`,
+        { ...cfg, approvalMode: 'custom' }, { modelId: JUDGE_MODEL, timeoutMs: 300_000, stopOn: onlyBridge(['remember']), onApproval: async () => { await sleep(50_000); return 'approve'; } });
+      record('handoffwait', '交接(真模型):审批过了 45 秒,模型照编号用 forsion_wait 取到结果,工具只执行一次', [
+        ['这一轮跑完', b.done, b.error || ''],
+        ['只来问了一次审批(没有把 remember 重调一遍)', b.approvals.length === 1, `${b.approvals.length} 次`],
+        ['批了之后拿到结果(卡片成功)', b.results.some((r) => r.name === 'remember' && !r.isError), b.results.map((r) => `${r.name}:${r.isError ? 'err' : 'ok'} ${r.result.slice(0, 60)}`).join(' | ')],
+        ['记忆只写了一次', count(mem(), CAT) === 1, `${count(mem(), CAT)} 处`],
+        ['等审批的时间真的过了时限', (Date.now() - t0) / 1000 >= 50, `${((Date.now() - t0) / 1000).toFixed(1)} 秒`],
+        ['回答 SAVED', /SAVED/.test(b.text), said(b)],
+        strays(b, ['remember']),
+      ]);
+
+      // 拒绝:模型不该绕开去写
+      const COFFEE = codeWord('COFFEE');
+      const c = await liveRun(sid, `Please remember this about me using your Forsion remember tool: I dislike coffee (tag ${COFFEE}). ${NOFILES} If it is not saved, reply with just: NOT SAVED`,
+        { ...cfg, approvalMode: 'custom' }, { modelId: JUDGE_MODEL, stopOn: onlyBridge(['remember']), onApproval: () => 'reject' });
+      record('handoffreject', '交接(真模型):用户拒了,模型照实说没存,记忆没写', [
+        ['这一轮跑完', c.done, c.error || ''],
+        ['来问了审批', c.approvals.length >= 1, `${c.approvals.length} 次`],
+        ['记忆没写', count(mem(), COFFEE) === 0],
+        ['回答说没存', /NOT SAVED/i.test(c.text), said(c)],
+        strays(c, ['remember']),
+      ]);
+    } finally {
+      const back = readConfig(); if (prevApproval === undefined) delete back.approval; else back.approval = prevApproval; writeConfigFile(back);
+    }
   },
   // 审批:真模型自己得走到「被沙箱拒了 → 带放宽权限重试」那一步,DSH 才会来问。这一项测的就是它走不走得到。
   approval: async () => {
