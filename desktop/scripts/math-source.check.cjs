@@ -5,7 +5,8 @@
 //   C. token 颜色只读 --math-src-*(浅 / 深);宿主选择器权重为 0,插件一条普通类选择器(哪怕样式表排在宿主之前)就能盖过。
 //   D. 选区盖住公式时字体不跳;离开公式后钩子类全部收走。
 //   E. 行内公式编辑中的预览是浮在这一行上方的气泡(读浮层 token,▶ 标光标,放不下翻到下方,不推挤正文);块公式预览照旧在源码下方。
-// 用法:npm run check:mathsource(自起 vite;HARNESS_URL=… 指到自己起的端口)。可选 LATEX_PLUGIN_DIR=<插件目录> 再验真插件的括号色盖过宿主。
+// 用法:npm run check:mathsource(自起 vite;HARNESS_URL=… 指到自己起的端口)。可选 LATEX_PLUGIN_DIR=<插件目录> 再验真插件的
+//      token 色叠在宿主上时插件赢。只跑几部分:--only=space,look,float。
 const fs = require('fs'), os = require('os'), path = require('path')
 const { chromium } = require('playwright-core')
 const URL = process.env.HARNESS_URL || 'http://localhost:5173/harness.html'
@@ -20,6 +21,8 @@ const check = (name, ok, detail) => {
 }
 const settle = (p, ms = 160) => p.waitForTimeout(ms)
 const PM = '.unified-body .ProseMirror'
+const ONLY = (process.argv.find((a) => a.startsWith('--only=')) || '').slice('--only='.length).split(',').filter(Boolean)
+const want = (part) => !ONLY.length || ONLY.includes(part)
 
 // 缺省值 = Obsidian 1.15 实测(base.css 的 --math-src-*);换配色时两处一起改。
 const DEFAULTS = {
@@ -124,21 +127,38 @@ async function partSpace(browser) {
   const a4 = await paragraphs(p)
   check('A4 后面的 $$ 在行内代码里时空格照样出骨架', a4[1] === '$$  $$' && a4.length === 4, a4)
   await p.close()
-  // A5:余文原样搬进新段:粗体 / 行内代码不被剥成纯文本
-  p = await open(browser, '前文。\n\n$$**粗**`码`\n\n后文。\n')
+  // A5:余文原样搬进新段:粗体 / 行内代码 / 图片 / 硬换行逐个节点留着,不被压成纯文本
+  p = await open(browser, '前文。\n\n$$**粗**`码`![图](a.png)\\\n续\n\n后文。\n')
+  const inlineSig = (from) => p.evaluate(([from]) => {
+    const v = window.__upage.probe.view()
+    let blk = null
+    v.state.doc.forEach((n) => { if (!blk && n.textContent.startsWith('$$')) blk = n })
+    if (!blk) return null
+    const out = []
+    blk.content.cut(from).forEach((c) => out.push([c.type.name, c.isText ? c.text : '', c.marks.map((m) => m.type.name).sort().join('+')]))
+    return out
+  }, [from])
+  const before5 = await inlineSig(2)
   await caret(p, '$$', 2)
   await p.keyboard.press('Space')
   await settle(p)
-  const a5 = await p.evaluate((sel) => [...document.querySelectorAll(`${sel} > p`)].map((x) => x.innerHTML.replace(/<br[^>]*>/g, '')), PM)
-  check('A5 出骨架时光标后的粗体与行内代码原样留在下一段', /\$\$/.test(a5[1]) && /<strong>粗<\/strong>/.test(a5[2] || '') && /<code[^>]*>(<span[^>]*>)?码/.test(a5[2] || ''), a5)
+  const a5 = await p.evaluate(() => {
+    const v = window.__upage.probe.view(), out = []
+    v.state.doc.forEach((n) => { const c = []; n.content.forEach((x) => c.push([x.type.name, x.isText ? x.text : '', x.marks.map((m) => m.type.name).sort().join('+')])); out.push({ type: n.type.name, text: n.textContent, c }) })
+    return out
+  })
+  const kinds5 = (before5 || []).map((x) => x[0])
+  check('A5 出骨架时光标后的粗体 / 行内代码 / 图片 / 硬换行原样留在下一段',
+    !!before5 && kinds5.some((k) => /image/i.test(k)) && kinds5.some((k) => /break/i.test(k)) && a5[1]?.text === '$$  $$'
+      && JSON.stringify(a5[2]?.c) === JSON.stringify(before5), { before5, a5 })
   await p.close()
-  // A6:行内代码里的 `$$`(光标在代码里)不当公式触发符
-  p = await open(browser, '前文。\n\n`$$x$$` 尾。\n\n后文。\n')
-  await caret(p, '$$x$$', 2)
+  // A6:行内代码里的 `$$`(光标在代码里,后面没有别的 `$$`)不当公式触发符
+  p = await open(browser, '前文。\n\n`$$x` 尾。\n\n后文。\n')
+  await caret(p, '$$x', 2)
   await p.keyboard.press('Space')
   await settle(p)
   const a6 = await paragraphs(p)
-  check('A6 行内代码开头的 $$ 后按空格只插空格', JSON.stringify(a6) === JSON.stringify(['前文。', '$$ x$$ 尾。', '后文。']), a6)
+  check('A6 行内代码开头的 $$ 后按空格只插空格', JSON.stringify(a6) === JSON.stringify(['前文。', '$$ x 尾。', '后文。']), a6)
   await p.close()
 }
 
@@ -199,14 +219,31 @@ async function partLook(browser, dark) {
   check(`D3 ${tag}: 离开公式后钩子类与 token 类全部收走`, await p.locator(`${PM} .math-source, ${PM} .math-source-token`).count() === 0)
 
   if (process.env.LATEX_PLUGIN_DIR) {
+    // 真插件叠在宿主上:插件 token 里每个字的实际颜色 = 只带插件类的探针在同一主题下的颜色(插件规则说了算)。
     const code = fs.readFileSync(path.join(process.env.LATEX_PLUGIN_DIR, 'main.js'), 'utf8')
     await p.evaluate((c) => window.__ep.loadPlugin(c, { id: 'latex-suite', name: 'LaTeX Suite' }), code)
-    await p.waitForFunction(() => window.__upage.probe.view().state.plugins.some((x) => String(x.key).startsWith('LATEX_SUITE_KEYS')), null, { timeout: 15000 })
     await settle(p, 900)
     await caret(p, 'n_{j}', 3)
+    await p.waitForFunction((sel) => document.querySelectorAll(`${sel} .latex-suite-math-token`).length > 0, PM, { timeout: 15000 }).catch(() => {})
     await settle(p)
-    const plug = await p.evaluate((sel) => [...document.querySelectorAll(`${sel} [class*="ls-bracket-"]`)].map((s) => ({ t: s.textContent, c: getComputedStyle(s).color, cls: s.className })), PM)
-    check(`C2 ${tag}: 真插件的括号深度色盖过宿主括号色`, plug.length > 0 && plug.every((x) => x.c !== want.bracket), plug)
+    const plug = await p.evaluate((sel) => {
+      const host = document.querySelector(sel)
+      const box = document.createElement('div'); box.className = 'ProseMirror'; box.style.cssText = 'position:absolute;left:-9999px'
+      host.closest('.am-app').appendChild(box)
+      const rows = []
+      for (const t of host.querySelectorAll('.latex-suite-math-token')) {
+        const own = [...t.classList].filter((c) => !c.startsWith('math-source'))
+        const probe = document.createElement('span'); probe.className = own.join(' '); probe.textContent = 'x'
+        box.appendChild(probe)
+        const want = getComputedStyle(probe).color
+        const tw = document.createTreeWalker(t, NodeFilter.SHOW_TEXT)
+        for (let n = tw.nextNode(); n; n = tw.nextNode()) rows.push({ t: n.data, cls: n.parentElement.className, got: getComputedStyle(n.parentElement).color, want })
+      }
+      box.remove()
+      return rows
+    }, PM)
+    const hostColored = plug.filter((r) => /math-source-(dollar|command|script|letter|number|bracket)/.test(r.cls))
+    check(`C2 ${tag}: 真插件的 token 色叠在宿主 token 上时插件赢`, hostColored.length > 0 && plug.every((r) => r.got === r.want), plug)
   }
   await p.close()
 }
@@ -284,11 +321,9 @@ async function partFloat(browser, dark) {
 async function main() {
   const browser = await chromium.launch({ executablePath: exe, headless: true })
   try {
-    await partSpace(browser)
-    await partLook(browser, false)
-    await partLook(browser, true)
-    await partFloat(browser, false)
-    await partFloat(browser, true)
+    if (want('space')) await partSpace(browser)
+    if (want('look')) { await partLook(browser, false); await partLook(browser, true) }
+    if (want('float')) { await partFloat(browser, false); await partFloat(browser, true) }
   } finally {
     await browser.close()
   }
