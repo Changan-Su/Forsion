@@ -258,8 +258,11 @@ export function readLocalUnitRegistry(file: string): LocalUnitRegistryRead {
   return registry ? { state: 'ok', registry } : { state: 'unreadable', error: 'unexpected registry shape' }
 }
 
-type Fail = { ok: false; code: LocalUnitsErrorCode; message?: string }
-const fail = (code: LocalUnitsErrorCode, message?: string): Fail => (message ? { ok: false, code, message } : { ok: false, code })
+type Fail = { ok: false; code: LocalUnitsErrorCode; message?: string; detail?: string }
+/** 失败:detail = 只进日志的原文(errno、内部原因,英文,不给人看)。 */
+const fail = (code: LocalUnitsErrorCode, detail?: string): Fail => (detail ? { ok: false, code, detail } : { ok: false, code })
+/** 失败并带一句给人看的话:message 必须已按界面语言翻好(ctx.text → 主进程 mt),渲染层原样显示。 */
+const failSay = (code: LocalUnitsErrorCode, message: string, detail?: string): Fail => ({ ok: false, code, message, ...(detail ? { detail } : {}) })
 
 /** 锁内现读名册交给 fn;fn 回 next 就原子写回。名册读不出 → registry_unreadable,fn 不跑、什么都不写。 */
 export async function mutateLocalUnitRegistry<R>(
@@ -481,7 +484,7 @@ export function lookupLocalUnit(ctx: LocalUnitsContext, id: unknown):
   if (marker.channel !== ctx.channel) return fail('channel_mismatch')
   if (marker.id !== id) return fail('not_a_unit', 'marker id does not match')
   if (!localUnitFolderSafe(entry.path)) return fail('not_a_unit', 'a sub-folder is a link or a file')
-  if (localUnitOverlap(entry.path, ctx.guard)) return fail('not_a_unit', textOf(ctx, 'overlapsDefault'))
+  if (localUnitOverlap(entry.path, ctx.guard)) return failSay('not_a_unit', textOf(ctx, 'overlapsDefault'))
   return { ok: true, entry, marker, row: rowFor(entry, ctx) }
 }
 
@@ -511,7 +514,7 @@ export async function createLocalUnit(ctx: LocalUnitsContext & {
   if (!parent) return fail('parent_invalid')
   const target = join(parent, folder)
   if (dirname(target) !== parent || basename(target) !== folder) return fail('name_invalid')
-  if (localUnitOverlap(target, ctx.guard)) return fail('parent_invalid', textOf(ctx, 'overlapsDefault')) // 比如父目录选在 ~/.forsion 里
+  if (localUnitOverlap(target, ctx.guard)) return failSay('parent_invalid', textOf(ctx, 'overlapsDefault')) // 比如父目录选在 ~/.forsion 里
   try { mkdirSync(target) } catch (e) {
     return (e as NodeJS.ErrnoException).code === 'EEXIST' ? fail('path_exists') : fail('io', (e as Error).message)
   }
@@ -550,7 +553,7 @@ export async function addExistingLocalUnit(ctx: LocalUnitsContext & { dir: unkno
   const marker = m.marker
   if (marker.channel !== ctx.channel) return fail('channel_mismatch')
   if (!localUnitFolderSafe(dir)) return fail('not_a_unit', 'a sub-folder is a link or a file')
-  if (localUnitOverlap(dir, ctx.guard)) return fail('not_a_unit', textOf(ctx, 'overlapsDefault'))
+  if (localUnitOverlap(dir, ctx.guard)) return failSay('not_a_unit', textOf(ctx, 'overlapsDefault'))
   const now = ctx.now ?? Date.now()
   const r = await mutateLocalUnitRegistry(ctx.registryFile, (reg) => {
     const existing = reg.units.find((u) => u.id === marker.id)
@@ -563,7 +566,7 @@ export async function addExistingLocalUnit(ctx: LocalUnitsContext & { dir: unkno
   }, ctx.lockOptions)
   if (!r.ok) return r
   if (r.result === 'duplicate') return fail('duplicate_id')
-  if (r.result === 'unknown') return fail('io', textOf(ctx, 'originalMarkerUnreadable'))
+  if (r.result === 'unknown') return failSay('io', textOf(ctx, 'originalMarkerUnreadable'))
   return { ok: true, unit: rowFor({ id: marker.id, path: dir }, ctx) }
 }
 
@@ -608,7 +611,7 @@ export async function removeLocalUnit(ctx: LocalUnitsContext & { id: unknown }):
     return { next: { schema: 1, units: reg.units.filter((u) => u.id !== id) }, result: 'removed' }
   }, ctx.lockOptions)
   if (!r.ok) return r
-  if (r.result === 'running') return fail('io', textOf(ctx, 'removeRunning'))
+  if (r.result === 'running') return failSay('io', textOf(ctx, 'removeRunning'))
   return r.result === 'removed' ? { ok: true } : fail('not_found')
 }
 

@@ -70,7 +70,7 @@ describe('名册读取:读不出 ≠ 空', () => {
     const a = await create()
     expect(a.ok).toBe(true)
     writeFileSync(registryFile, '') // 断电后的零字节
-    expect(await create('Bench B')).toEqual({ ok: false, code: 'registry_unreadable', message: expect.any(String) })
+    expect(await create('Bench B')).toEqual({ ok: false, code: 'registry_unreadable', detail: expect.any(String) }) // 解析错误是原文:只进 detail,不当成给人看的 message
     expect(existsSync(join(parent, 'Bench B'))).toBe(false)
     const id = a.ok ? a.unit.id : ''
     expect((await addExistingLocalUnit({ ...ctx, dir: join(parent, 'Bench A') })).ok).toBe(false)
@@ -280,6 +280,9 @@ describe('改名 / 移除 / 列表', () => {
     expect(existsSync(dir)).toBe(true) // 文件夹名不跟着改
     expect(await renameLocalUnit({ ...ctx, id: ID(1), patch: { name: '' } })).toEqual({ ok: false, code: 'name_invalid' })
     expect(await renameLocalUnit({ ...ctx, id: ID(7), patch: { icon: 'x' } })).toEqual({ ok: false, code: 'not_found' })
+    writeLocalUnitMarker(dir, { ...readLocalUnitMarker(dir)!, id: ID(5) })
+    expect(await renameLocalUnit({ ...ctx, id: ID(1), patch: { icon: 'y' } })).toEqual({ ok: false, code: 'not_a_unit', detail: 'marker id does not match' }) // 内部原因只在 detail
+    writeLocalUnitMarker(dir, { ...readLocalUnitMarker(dir)!, id: ID(1) })
     expect(await renameLocalUnit({ ...ctx, id: ID(1), patch: { icon: 'folder' } })).toMatchObject({ ok: true, unit: { name: 'New name', icon: 'folder' } })
   })
 
