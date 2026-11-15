@@ -115,6 +115,30 @@ async function partSpace(browser) {
     check(`A3 行首只有 ${label} 时空格照样出公式骨架`, s[1] === '$$  $$' && await caretOffset(p) === 3 && s.length === 3, { s, at: await caretOffset(p) })
     await p.close()
   }
+  // A4:光标后面的 `$$` 在行内代码里 —— 不算闭合,照旧出骨架(余文挪到下一段)
+  p = await open(browser, '前文。\n\n$$ `$$`\n\n后文。\n')
+  await caret(p, '$$', 2)
+  await p.keyboard.press('Space')
+  await settle(p)
+  const a4 = await paragraphs(p)
+  check('A4 后面的 $$ 在行内代码里时空格照样出骨架', a4[1] === '$$  $$' && a4.length === 4, a4)
+  await p.close()
+  // A5:余文原样搬进新段:粗体 / 行内代码不被剥成纯文本
+  p = await open(browser, '前文。\n\n$$**粗**`码`\n\n后文。\n')
+  await caret(p, '$$', 2)
+  await p.keyboard.press('Space')
+  await settle(p)
+  const a5 = await p.evaluate((sel) => [...document.querySelectorAll(`${sel} > p`)].map((x) => x.innerHTML.replace(/<br[^>]*>/g, '')), PM)
+  check('A5 出骨架时光标后的粗体与行内代码原样留在下一段', /\$\$/.test(a5[1]) && /<strong>粗<\/strong>/.test(a5[2] || '') && /<code[^>]*>(<span[^>]*>)?码/.test(a5[2] || ''), a5)
+  await p.close()
+  // A6:行内代码里的 `$$`(光标在代码里)不当公式触发符
+  p = await open(browser, '前文。\n\n`$$x$$` 尾。\n\n后文。\n')
+  await caret(p, '$$x$$', 2)
+  await p.keyboard.press('Space')
+  await settle(p)
+  const a6 = await paragraphs(p)
+  check('A6 行内代码开头的 $$ 后按空格只插空格', JSON.stringify(a6) === JSON.stringify(['前文。', '$$ x$$ 尾。', '后文。']), a6)
+  await p.close()
 }
 
 async function partLook(browser, dark) {

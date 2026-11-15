@@ -10,6 +10,7 @@ import { closeHistory } from '@milkdown/kit/prose/history'
 import { canJoin, findWrapping, liftTarget } from '@milkdown/kit/prose/transform'
 import type { EditorView } from '@milkdown/kit/prose/view'
 import { registerMessages, translate } from '../../../i18n'
+import { buildBlockString } from './mathLivePreview'
 
 // 选区工具栏「转换为」按钮上的当前块类型名(I-19:此前写死中文,英文界面照样显示「标题 2」)。
 registerMessages({
@@ -111,7 +112,12 @@ export function triggerAtCursor($from: ResolvedPos): Trigger | null {
   if (trig?.kind === 'fold' && $from.parentOffset < $from.parent.content.size) return { kind: 'quote', rejoin: true }
   // 行首 `$$` 后面这一段里还有 `$$` = 光标在一个现成的块公式里(空骨架 `$$|$$` 就是第三个 `$` 自动成对出来的):
   // 这一键只是往公式里打空格 / 回车,不是新起骨架 —— 否则闭合的 `$$` 被切进新段落,公式断成两半。
-  if (trig?.kind === 'math' && $from.parent.textBetween($from.parentOffset, $from.parent.content.size, undefined, '￼').includes('$$')) return null
+  // 按公式扫描的口径认(行内代码、转义过的 `$` 抹掉):光标前那两个 `$` 本身在代码里 / 被转义 = 字面,不出骨架;
+  // 后面的 `$$` 在代码里不算闭合。全角 `￥￥` 还不是公式开头,照旧出骨架。
+  if (trig?.kind === 'math' && textBeforeCursor($from) === '$$') {
+    const masked = buildBlockString($from.parent)
+    if (masked.slice(0, $from.parentOffset) !== '$$' || masked.slice($from.parentOffset).includes('$$')) return null
+  }
   return trig
 }
 
@@ -392,9 +398,10 @@ export function applyTrigger(
       $b = tr.doc.resolve(pos)
     }
     if (!$b.parent.isTextblock) return false
-    // 行尾余文:光标之后剩下的字要切成**这个块之后**的一个新段落(AFFiNE 同),不能被吞掉。
-    const rest = tr.doc.textBetween($b.pos, $b.end(), '\n', '\n')
-    if (rest) tr.delete($b.pos, $b.end())
+    // 行尾余文:光标之后剩下的内容要切成**这个块之后**的一个新段落(AFFiNE 同),不能被吞掉。
+    // 搬原样的行内节点(粗体 / 行内代码 / 图片 / 换行都留着),不是只搬纯文本 —— 那样图片会丢、标记会剥掉。
+    const rest = $b.parent.content.cut($b.parentOffset)
+    if (rest.size) tr.delete($b.pos, $b.end())
     $b = tr.doc.resolve(tr.mapping.map(pos))
     const blkFrom = $b.before()
     const blkTo = $b.after()
@@ -410,7 +417,7 @@ export function applyTrigger(
       tr.setSelection(Selection.near(tr.doc.resolve(blkFrom + 1)))
       afterBlock = blkFrom + code.nodeSize
     }
-    if (rest) tr.insert(afterBlock, paragraph.create(null, schema.text(rest)))
+    if (rest.size) tr.insert(afterBlock, paragraph.create(null, rest))
     view.dispatch(tr.scrollIntoView())
     return true
   }
