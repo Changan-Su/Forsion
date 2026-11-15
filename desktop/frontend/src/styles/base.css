@@ -4342,13 +4342,14 @@ html.dark .brand-logo--dark { display: inline-block; }
   border-radius: var(--radius-sm); border: var(--border-width) solid var(--border); background: var(--overlay-light);
   font-family: var(--font-mono); font-size: var(--ui-font-meta, 12px); color: var(--text);
 }
-/* 行下展开的提示行(冲突 / 系统保留 / 编辑器提示) */
-.shortcut-pending {
+/* 行下展开的提示行(冲突 / 系统保留 / 编辑器提示);.shortcut-note = 同一个样子的常驻说明(插件默认键没生效),不是待处理的提示 */
+.shortcut-pending, .shortcut-note {
   display: flex; align-items: center; gap: 10px; padding: 8px 15px; border-bottom: var(--border-width) solid var(--border);
   font-size: var(--ui-font-meta, 12px); color: var(--text-muted);
 }
-.shortcut-pending > svg { flex-shrink: 0; }
-.shortcut-pending > span:first-of-type { flex: 1; min-width: 0; }
+.shortcut-pending > svg, .shortcut-note > svg { flex-shrink: 0; }
+.shortcut-pending > span:first-of-type, .shortcut-note > span:first-of-type { flex: 1; min-width: 0; }
+.shortcut-note > svg { color: var(--text-faint); }
 .shortcut-pending--conflict { background: var(--warning-light); }
 .shortcut-pending--conflict > svg { color: var(--warning); }
 .shortcut-pending--system { background: var(--danger-light); }

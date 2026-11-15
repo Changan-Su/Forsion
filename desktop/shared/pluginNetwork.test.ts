@@ -35,6 +35,9 @@ describe('manifest network patterns', () => {
     expect(sanitizeNetworkPatterns(['api.example.com', 'API.example.com', '*.cdn.example.com', 'http://x.com', 42]))
       .toEqual({ patterns: ['api.example.com', '*.cdn.example.com'], invalid: ['http://x.com', '42'] })
     expect(sanitizeNetworkPatterns(undefined)).toEqual({ patterns: [], invalid: [] })
+    // 对象条目不经 String():`{"toString":null}` 不许把整个插件列表拖垮
+    expect(sanitizeNetworkPatterns([{ toString: null }, ['x'], null, 'api.example.com'])).toEqual({ patterns: ['api.example.com'], invalid: ['[object]', '[array]', 'null'] })
+    expect(sanitizeNetworkPatterns({ toString: null }).invalid).toEqual(['[object]'])
     expect(sanitizeNetworkPatterns('api.example.com').patterns).toEqual([])
     const many = Array.from({ length: MAX_NETWORK_PATTERNS + 3 }, (_, i) => `h${i}.example.com`)
     const r = sanitizeNetworkPatterns(many)

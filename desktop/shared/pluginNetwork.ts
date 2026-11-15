@@ -33,14 +33,20 @@ export function normalizeNetworkPattern(raw: unknown): string | null {
   return validHostname(p) ? p : null
 }
 
-/** manifest `network` → { patterns: 去重后的规范形, invalid: 丢掉的原样条目 }。不是数组 → 空。 */
+/** 报错用的条目描述。不对对象调 String():第三方 manifest 里的 `{"toString":null}` 会让它抛错,一条坏条目连累整个插件列表。 */
+const describeEntry = (v: unknown): string =>
+  typeof v === 'string' ? v.slice(0, 80)
+    : typeof v === 'number' || typeof v === 'boolean' ? String(v)
+      : v === null ? 'null' : Array.isArray(v) ? '[array]' : `[${typeof v}]`
+
+/** manifest `network` → { patterns: 去重后的规范形, invalid: 丢掉的原样条目 }。不是数组 → 空。从不抛错。 */
 export function sanitizeNetworkPatterns(raw: unknown): { patterns: string[]; invalid: string[] } {
   const patterns: string[] = []
   const invalid: string[] = []
-  if (!Array.isArray(raw)) return { patterns, invalid: raw == null ? [] : [String(raw).slice(0, 80)] }
+  if (!Array.isArray(raw)) return { patterns, invalid: raw == null ? [] : [describeEntry(raw)] }
   for (const item of raw) {
     const p = normalizeNetworkPattern(item)
-    if (!p) { invalid.push(typeof item === 'string' ? item.slice(0, 80) : String(item).slice(0, 80)); continue }
+    if (!p) { invalid.push(describeEntry(item)); continue }
     if (patterns.length >= MAX_NETWORK_PATTERNS) { invalid.push(p); continue }
     if (!patterns.includes(p)) patterns.push(p)
   }

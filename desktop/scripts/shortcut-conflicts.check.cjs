@@ -107,7 +107,7 @@ async function main() {
     await page.getByRole('button', { name: '换一个' }).click()
     check('③ 「换一个」回到录制', (await page.locator('input.shortcut-capture').count()) === 1, null)
     await page.keyboard.press('Meta+Shift+Y')
-    check('③ 换成不冲突的键直接存', (await keyText('打开终端')).includes('⌘⇧Y'), await keyText('打开终端'))
+    check('③ 换成不冲突的键直接存', (await keyText('打开终端')).includes('⇧⌘Y'), await keyText('打开终端')) // mac 按系统菜单顺序排修饰键(formatHotkey 的 MAC_ORDER)
 
     // ④ ⌫ 解绑
     await row('打开终端').locator('.shortcut-key').click()

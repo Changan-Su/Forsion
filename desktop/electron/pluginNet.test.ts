@@ -5,7 +5,7 @@
  *  ③ 重定向逐跳重判、上限 5 跳、换主机摘凭据、303 / POST 降级;
  *  ④ 正文 10 MB 上限(边读边数 + content-length 预判)、超时覆盖等首包与读正文;
  *  ⑤ 生产传输真把 lookup 挂在建连那一步(解析到 127.0.0.1 时根本不连),真 TLS 服务上解压后的字节也算进上限;
- *  ⑥ 按插件 id 从磁盘定位 manifest:开发副本遮住安装版、manifest 每次重读、id 对不上 / 坏清单 → 拒。
+ *  ⑥ 按插件 id 从磁盘读 manifest(目录 = 装载器选中的那份,见 ipc.devplugins.test.ts):每次重读、id 对不上 / 坏清单 → 拒。
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { execFileSync } from 'node:child_process'
@@ -44,7 +44,8 @@ function fake(route: (hop: NetHop, i: number) => Reply | Promise<Reply>): { tran
       hop.lookup(hop.url.hostname, { all: true }, (err) => (err ? reject(err) : resolve()))
     })
     const r = await route(hop, hops.length - 1)
-    const body = typeof r.body === 'function' ? r.body(hop) : (async function* () { for (const c of r.body ?? []) yield c })()
+    const src = r.body
+    const body = typeof src === 'function' ? src(hop) : (async function* () { for (const c of src ?? []) yield c })()
     return { status: r.status, headers: r.headers ?? {}, body, discard: () => {} }
   }
   return { transport, hops }
@@ -198,6 +199,11 @@ describe('④ caps and request shape', () => {
     expect(await req('https://api.example.com/', { method: 'POST', body: new Uint8Array(NET_MAX_BYTES + 1) })).toMatchObject({ ok: false, code: 'net_too_large' })
   })
 
+  it('does not apply the Content-Length cap to HEAD', async () => {
+    const f = fake(() => ({ status: 200, headers: { 'content-length': String(NET_MAX_BYTES * 3) }, body: [] }))
+    expect(await req('https://api.example.com/', { method: 'HEAD' }, deps(f.transport))).toMatchObject({ ok: true, status: 200 })
+  })
+
   it('lets the host own Accept-Encoding and defaults a string body to text/plain', async () => {
     const f = fake(() => ok())
     await req('https://api.example.com/', { method: 'POST', body: '{}', headers: { 'Accept-Encoding': 'evil' } }, deps(f.transport))
@@ -232,6 +238,14 @@ describe('⑤ production transport', () => {
     server = https.createServer({ key, cert }, (rq, rs) => {
       seenHeaders.push({ ...rq.headers })
       if (rq.url === '/bomb') { rs.writeHead(200, { 'content-encoding': 'gzip' }); rs.end(zlib.gzipSync(Buffer.alloc(NET_MAX_BYTES + 1024))); return }
+      // HEAD / 304 带 Content-Encoding 但没有正文:解压器若建了又没人读,会把主进程炸掉(Codex 评审实测)
+      if (rq.url === '/head-gzip' || rq.url === '/not-modified') { rs.writeHead(rq.url === '/head-gzip' ? 200 : 304, { 'content-encoding': 'gzip', 'content-length': '20' }); rs.end(); return }
+      // 叠起来的编码:先 gzip 再 br,声明成 `gzip, br`
+      if (rq.url === '/stacked-bomb' || rq.url === '/stacked') {
+        const raw = rq.url === '/stacked' ? Buffer.from('{"stacked":true}') : Buffer.alloc(NET_MAX_BYTES + 1024)
+        rs.writeHead(200, { 'content-encoding': 'gzip, br' }); rs.end(zlib.brotliCompressSync(zlib.gzipSync(raw))); return
+      }
+      if (rq.url === '/compress') { rs.writeHead(200, { 'content-encoding': 'compress' }); rs.end('xx'); return }
       rs.writeHead(200, { 'content-encoding': 'gzip', 'content-type': 'application/json' })
       rs.end(zlib.gzipSync(Buffer.from(JSON.stringify({ ok: true }))))
     })
@@ -255,8 +269,20 @@ describe('⑤ production transport', () => {
     expect(wrongCa).toMatchObject({ ok: false, code: 'net_failed' })
   })
 
-  it.skipIf(!hasOpenssl)('counts decompressed bytes against the 10 MB cap (gzip bomb)', async () => {
+  it.skipIf(!hasOpenssl)('counts decompressed bytes against the 10 MB cap (gzip bomb), stacked encodings included', async () => {
     expect(await pluginNetRequest('my-plugin', 'https://api.example.com/bomb', undefined, local())).toMatchObject({ ok: false, code: 'net_too_large' })
+    expect(await pluginNetRequest('my-plugin', 'https://api.example.com/stacked-bomb', undefined, local())).toMatchObject({ ok: false, code: 'net_too_large' })
+    const r = await pluginNetRequest('my-plugin', 'https://api.example.com/stacked', undefined, local())
+    expect(r.ok && JSON.parse(Buffer.from(r.bytes).toString())).toEqual({ stacked: true })
+    expect(await pluginNetRequest('my-plugin', 'https://api.example.com/compress', undefined, local())).toMatchObject({ ok: false, code: 'net_failed' })
+  })
+
+  it.skipIf(!hasOpenssl)('bodiless responses with Content-Encoding (HEAD, 304) neither crash nor hang', async () => {
+    const head = await pluginNetRequest('my-plugin', 'https://api.example.com/head-gzip', { method: 'HEAD' }, local())
+    expect(head).toMatchObject({ ok: true, status: 200 })
+    expect(head.ok && head.bytes.byteLength).toBe(0)
+    expect(await pluginNetRequest('my-plugin', 'https://api.example.com/not-modified', undefined, local())).toMatchObject({ ok: true, status: 304 })
+    await new Promise((r) => setTimeout(r, 50)) // 让迟到的流错误(若有)在测试结束前冒出来
   })
 })
 
@@ -268,27 +294,24 @@ describe('⑥ manifest read from disk by plugin id', () => {
   beforeAll(() => { root = mkdtempSync(path.join(os.tmpdir(), 'plugin-net-manifest-')) })
   afterAll(() => rmSync(root, { recursive: true, force: true }))
 
-  it('resolves by manifest id, lets a dev copy shadow the installed one, re-reads the manifest every time', async () => {
-    const plugins = path.join(root, 'plugins')
-    write(path.join(plugins, 'Weather Folder'), { id: 'weather', network: ['api.weather.example', 'bad url'] })
-    write(path.join(plugins, 'shadowed'), { id: 'shadowed', network: ['installed.example.com'] })
-    write(path.join(plugins, 'broken'), '{ nope')
-    write(path.join(root, 'dev', 'shadowed'), { id: 'shadowed', network: ['dev.example.com'] })
+  it('reads the selected copy, re-reads the manifest every time, refuses id mismatches and broken manifests', async () => {
+    const dirs: Record<string, string> = { weather: path.join(root, 'Weather Folder'), broken: path.join(root, 'broken'), throws: path.join(root, 'x') }
+    write(dirs.weather, { id: 'weather', network: ['api.weather.example', 'bad url', { toString: null }] })
+    write(dirs.broken, '{ nope')
     const warn = vi.fn()
     const lookup = createManifestPatternLookup({
-      devSources: async () => [{ id: 'shadowed', dir: path.join(root, 'dev', 'shadowed') }],
-      pluginsDir: () => plugins, idOf, ttlMs: 60_000, warn,
+      sourceDir: async (id) => { if (id === 'throws') throw new Error('boom'); return dirs[id] ?? null },
+      idOf, warn,
     })
     expect(await lookup('weather')).toEqual(['api.weather.example'])
     expect(await lookup('weather')).toEqual(['api.weather.example'])
     expect(warn).toHaveBeenCalledTimes(1) // 坏条目只报一次
-    expect(await lookup('shadowed')).toEqual(['dev.example.com'])
     expect(await lookup('broken')).toBeNull()
     expect(await lookup('nobody')).toBeNull()
-    // 目录映射还在缓存里,manifest 改了立刻生效;换成别的 id → 不认
-    write(path.join(plugins, 'Weather Folder'), { id: 'weather', network: [] })
+    expect(await lookup('throws')).toBeNull()
+    write(dirs.weather, { id: 'weather', network: [] }) // 改了立刻生效
     expect(await lookup('weather')).toEqual([])
-    write(path.join(plugins, 'Weather Folder'), { id: 'impostor', network: ['api.weather.example'] })
+    write(dirs.weather, { id: 'impostor', network: ['api.weather.example'] }) // 换成别的 id → 不认
     expect(await lookup('weather')).toBeNull()
   })
 })

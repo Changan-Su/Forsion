@@ -786,6 +786,10 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
     return out
   }
 
+  /** ctx.net 的白名单从哪个目录读 = 装载器最近一次(桌面 IPC 那条,带开发态来源)实际选中、且没拒载的那一份:
+   *  插件 id → 目录。渲染层每次重载插件都会经 listPlugins 重算它;agent 自建 Space 不在其中(没有「用户点安装」这一步授权)。 */
+  let netSourceDirs: Map<string, string> | null = null
+
   /** 外置插件全量读取(manifest 门禁 + bundle 收集 + 代码/文档)。IPC listPlugins 与
    *  unitHost 的 /__unit/plugins 自服面共用 —— 设备互联把同一份插件面分发给远端渲染器。
    *  opts.agents:附带 agent 自建 Space 插件;opts.dev:附带开发态来源(**只有桌面 IPC 传 true**)。 */
@@ -866,6 +870,11 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
     // 主进程 listPages 排除的扩展名 → 用独立的 manifest 预扫(不依赖各插件 main.js 是否可读,Codex #3),
     // 而非从 out 派生。按 manifest 声明豁免(与启用态无关):禁用/坏掉的插件也不能让其文件掉回笔记被 compiler 改写=毁档。
     vault.setPluginFileExtensions(collectPluginExts())
+    if (opts.dev) {
+      netSourceDirs = new Map(out.flatMap((s): Array<[string, string]> => (s.blocked ? []
+        : s.dev ? (s.devRoot ? [[s.id, s.devRoot]] : [])
+          : s.dir ? [[s.id, path.join(globalPluginsDir(), s.dir)]] : [])))
+    }
     if (opts.agents) out.push(...(await readAgentSpacePlugins(seen))) // 主根之后:同 id 主根先赢
     return out
   }
@@ -1042,11 +1051,13 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
   })
 
   // ctx.net(2026-11-16+,electron/pluginNet.ts):主进程代插件请求它在 manifest `network` 里声明过的 https 域名。
-  // 白名单只从磁盘读(插件代码跑在渲染层主世界,能直接调这条通道,渲染层递来的清单一个字都不信);定位口径同 readExternalPlugins。
+  // 白名单只从磁盘读(插件代码跑在渲染层主世界,能直接调这条通道,渲染层递来的清单一个字都不信);目录 = 装载器选中的那份(netSourceDirs)。
   // 直接挂 ipcMain:不走 handle() —— 那条带「库换了就拒」的闸,还会进 Unit 设备页的派发表,联网跟库无关、也不给远端。
   const pluginNetworkPatterns = createManifestPatternLookup({
-    devSources: async () => (await readDevPlugins(new Set())).flatMap((s) => (s.devRoot ? [{ id: s.id, dir: s.devRoot }] : [])),
-    pluginsDir: globalPluginsDir,
+    sourceDir: async (id) => {
+      if (!netSourceDirs) await readExternalPlugins({ dev: true }) // 渲染层拿代码之前必经 listPlugins,这里只是兜底
+      return netSourceDirs?.get(id) ?? null
+    },
     idOf: (dirName, manifestId) => pluginIdOf(dirName, manifestId),
     warn: (m) => console.warn(m),
   })

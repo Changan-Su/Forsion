@@ -155,7 +155,7 @@ export const ShortcutsTab: React.FC = () => {
       ? t(st.conflict.key)
       : rows.find((o) => o.id === (st.conflict as { id: string }).id)?.title ?? st.conflict.id
     return (
-      <div className="shortcut-pending shortcut-pending--info" data-plugin-hotkey-inactive={r.id}>
+      <div className="shortcut-note" data-plugin-hotkey-inactive={r.id}>
         <Info size={14} />
         <span>{t('settings.shortcuts.pluginDefaultInactive', { key: fmt(st.hotkey), other })}</span>
       </div>

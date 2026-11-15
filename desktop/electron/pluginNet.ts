@@ -139,20 +139,36 @@ export function createHttpsTransport(tls: { ca?: string; rejectUnauthorized?: bo
       ...(tls.rejectUnauthorized === false ? { rejectUnauthorized: false } : {}),
     }, (res) => {
       const out = flattenHeaders(res.headers)
-      const enc = (out['content-encoding'] ?? '').trim().toLowerCase()
-      const decoder = enc === 'gzip' || enc === 'x-gzip' ? zlib.createGunzip()
-        : enc === 'deflate' ? zlib.createInflate()
-        : enc === 'br' ? zlib.createBrotliDecompress()
-        : null
+      const status = res.statusCode ?? 0
       res.on('error', () => {}) // 读完 / 丢弃之后才到的连接错误不许变成主进程的未捕获异常;迭代那头照样拿得到错误
+      // 没有正文的响应(HEAD / 1xx / 204 / 304):不建解压器 —— 空正文配 Content-Encoding: gzip 会让解压器报
+      // 「unexpected end of file」,没人读它就成了主进程的未捕获异常(Codex 评审实测)。直接放掉,连接照常关。
+      if (hop.method === 'HEAD' || status < 200 || status === 204 || status === 304) {
+        res.resume()
+        resolve({ status, headers: out, body: (async function* () {})(), discard: () => { res.destroy() } })
+        return
+      }
+      // Content-Encoding 可以叠(`gzip, br`):按声明的逆序逐层解。认不出的编码直接拒,不把压缩字节当正文交给插件
+      // (那样既绕过解压后的 10 MB 上限,text()/json() 也读到乱码)。
+      const codings = (out['content-encoding'] ?? '').split(',').map((c) => c.trim().toLowerCase()).filter((c) => c && c !== 'identity')
+      if (codings.length > 3 || codings.some((c) => !['gzip', 'x-gzip', 'deflate', 'br'].includes(c))) {
+        res.destroy()
+        reject(new NetError('net_failed', `unsupported content-encoding: ${out['content-encoding']?.slice(0, 60)}`))
+        return
+      }
+      const decoders = codings.reverse().map((c) => {
+        const d = c === 'br' ? zlib.createBrotliDecompress() : c === 'deflate' ? zlib.createInflate() : zlib.createGunzip()
+        d.on('error', () => {}) // 同上:错误经 pipeline 传给读的那一头,这里只防「没人读」时炸主进程
+        return d
+      })
       let body: Readable = res
-      if (decoder) {
-        // pipeline 把两头的错误 / 销毁互相传:读到一半断网,迭代那头会 reject 而不是挂住
-        body = pipeline(res, decoder, () => {}) as unknown as Readable
+      if (decoders.length) {
+        // pipeline 把各段的错误 / 销毁互相传:读到一半断网,迭代那头会 reject 而不是挂住
+        body = (pipeline as (...streams: unknown[]) => Readable)(res, ...decoders, () => {})
         delete out['content-encoding']
         delete out['content-length']
       }
-      resolve({ status: res.statusCode ?? 0, headers: out, body, discard: () => { body.destroy(); res.destroy() } })
+      resolve({ status, headers: out, body, discard: () => { body.destroy(); for (const d of decoders) d.destroy(); res.destroy() } })
     })
     req.on('error', reject)
     req.end(hop.body ? Buffer.from(hop.body.buffer, hop.body.byteOffset, hop.body.byteLength) : undefined)
@@ -263,7 +279,8 @@ export async function pluginNetRequest(pluginId: unknown, rawUrl: unknown, rawIn
         continue
       }
       const declared = Number(res.headers['content-length'])
-      if (Number.isFinite(declared) && declared > NET_MAX_BYTES) throw new NetError('net_too_large', 'response is larger than 10 MB')
+      // HEAD 的 Content-Length 说的是资源多大,不是这次要读多少
+      if (method !== 'HEAD' && Number.isFinite(declared) && declared > NET_MAX_BYTES) throw new NetError('net_too_large', 'response is larger than 10 MB')
       const chunks: Uint8Array[] = []
       let total = 0
       if (method !== 'HEAD') {
@@ -291,45 +308,23 @@ export async function pluginNetRequest(pluginId: unknown, rawUrl: unknown, rawIn
 }
 
 export interface ManifestLookupDeps {
-  /** 开发 / 沙箱副本(id → 项目根),按装载器的顺序;它们遮住同 id 的安装版(= readExternalPlugins 的 devSources 先扫)。 */
-  devSources(): Promise<Array<{ id: string; dir: string }>>
-  /** 全局插件目录(~/.forsion/plugins)。 */
-  pluginsDir(): string
+  /** 这个插件**此刻被装载的那一份**在哪个目录(没有 / 拒载 / agent 自建 Space → null)。由调用方按装载器的实际选择给出:
+   *  开发 / 沙箱副本遮住安装版、入口读不到被跳过的安装目录不算、同 id 先到先得 —— 不另写一套选法(2026-11-16 Codex 评审)。 */
+  sourceDir(pluginId: string): Promise<string | null>
   /** 目录名 + manifest id → 生效插件 id(与装载器同一条规则 effectivePluginId)。 */
   idOf(dirName: string, manifestId: unknown): string | null
-  /** id → 目录映射的缓存时长;manifest 本身每次都重读。 */
-  ttlMs?: number
   warn?(msg: string): void
 }
 
 /**
- * 按插件 id 从磁盘读它的 `network` 白名单(ctx.net 唯一信的来源)。定位口径与渲染层装载的那一份一致:
- * 开发 / 沙箱副本先、安装版后、同 id 先到先得;agent 自建 Space 不在其中(它没有「用户点安装」这一步授权)。
- * 只缓存「id → 目录」(每次请求都扫插件目录太重),manifest 每次重读:插件升级删掉一个域名,下一次请求就不再放行;
- * 目录里的 manifest 换成了别的 id → 不认。读不到 / 解析不了 → null(拒),不当空清单往下走以外的任何东西。
+ * 按插件 id 从磁盘读它的 `network` 白名单(ctx.net 唯一信的来源)。目录由 sourceDir 给(= 装载器选中的那份),
+ * manifest 每次请求都重读:插件升级删掉一个域名,下一次请求就不再放行;目录里的 manifest 换成了别的 id → 不认。
+ * 读不到 / 解析不了 → null(拒)。
  */
 export function createManifestPatternLookup(deps: ManifestLookupDeps): (pluginId: string) => Promise<string[] | null> {
-  let cache: { at: number; dirs: Map<string, string> } | null = null
   const warned = new Set<string>()
-  const dirs = async (): Promise<Map<string, string>> => {
-    if (cache && Date.now() - cache.at < (deps.ttlMs ?? 5000)) return cache.dirs
-    const out = new Map<string, string>()
-    for (const s of await deps.devSources().catch(() => [])) if (!out.has(s.id)) out.set(s.id, s.dir)
-    const root = deps.pluginsDir()
-    const entries = await fs.readdir(root, { withFileTypes: true }).catch(() => [])
-    for (const e of entries) {
-      if (!e.isDirectory() || e.name.startsWith('.')) continue
-      try {
-        const m = JSON.parse(await fs.readFile(path.join(root, e.name, 'manifest.json'), 'utf8')) as { id?: unknown }
-        const id = deps.idOf(e.name, m?.id)
-        if (id && !out.has(id)) out.set(id, path.join(root, e.name))
-      } catch { /* 坏 / 缺 manifest:装载器同样不列 */ }
-    }
-    cache = { at: Date.now(), dirs: out }
-    return out
-  }
   return async (pluginId) => {
-    const dir = (await dirs()).get(pluginId)
+    const dir = await deps.sourceDir(pluginId).catch(() => null)
     if (!dir) return null
     let m: { id?: unknown; network?: unknown }
     try { m = JSON.parse(await fs.readFile(path.join(dir, 'manifest.json'), 'utf8')) } catch { return null }
