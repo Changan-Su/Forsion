@@ -1015,7 +1015,12 @@ function DbTable({ dbRef, db: dbProp, pagePath, initialView, onViewChange, memor
   const bodyCoverSrc = (body: string | undefined): string | null => {
     const img = firstBodyImage(body)
     if (!img) return null
-    if (img.kind === 'md') return fileSrc(dbPath, img.src)
+    if (img.kind === 'md') { // Markdown 目标是 URL 编码的(`My%20Photo.png`),附件格存的是字面文件名:本地路径先解码再按附件格的规则取
+      if (/^https?:\/\//i.test(img.src)) return img.src
+      let raw = img.src
+      try { raw = decodeURI(img.src) } catch { /* 编码坏了就照原样 */ }
+      return fileSrc(dbPath, raw)
+    }
     const hit = resolveFileLink(img.target, allFiles, dbPath)
     return hit ? toAssetUrl(hit) : img.target.includes('/') ? toAssetUrl(img.target) : null // 文件清单还没载入时,带路径的照路径取
   }

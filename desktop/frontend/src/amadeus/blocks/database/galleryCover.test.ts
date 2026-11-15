@@ -31,4 +31,13 @@ describe('firstBodyImage', () => {
     expect(firstBodyImage('```md\n![[in-fence.png]]\n```\n`![[inline.png]]`\n\n![[real.png]]')).toEqual({ kind: 'wiki', target: 'real.png' })
     expect(firstBodyImage('~~~\n![[unclosed.png]]')).toBeNull()
   })
+
+  it('stays fast on hostile bodies (many unclosed `![`)', () => {
+    for (const body of ['!['.repeat(32_000), '![['.repeat(30_000), '![x]('.repeat(20_000), `${'x'.repeat(100_000)}![[late.png]]`]) {
+      const t = performance.now()
+      firstBodyImage(body)
+      expect(performance.now() - t).toBeLessThan(500)
+    }
+    expect(firstBodyImage(`${'x'.repeat(30_000)}![[late.png]]`)).toBeNull() // only the start of the body is searched
+  })
 })

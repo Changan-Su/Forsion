@@ -31,12 +31,15 @@ function stripCode(body: string): string {
   return out.join('\n')
 }
 
-const IMAGE_RE = /!\[\[([^\]\n]+)\]\]|!\[[^\]\n]*\]\(\s*<?([^)\s>]+)>?(?:\s+"[^"\n]*")?\s*\)/g
+// Every repeat is bounded so a hostile body (thousands of unclosed `![`) stays linear-ish instead of rescanning to the end at each start.
+const IMAGE_RE = /!\[\[([^\]\n]{1,500})\]\]|!\[[^\]\n]{0,300}\]\([ \t]{0,20}<?([^)\s>]{1,2000})>?(?:[ \t]{1,20}"[^"\n]{0,300}")?[ \t]{0,20}\)/g
+/** Only the start of the body is searched: a cover image sits near the top, and this caps the work per card. */
+const SCAN_MAX = 20_000
 
 /** First image in a row body, or null. */
 export function firstBodyImage(body: string | undefined | null): BodyImage | null {
   if (!body || !body.includes('![')) return null
-  for (const m of stripCode(body).matchAll(IMAGE_RE)) {
+  for (const m of stripCode(body.slice(0, SCAN_MAX)).matchAll(IMAGE_RE)) {
     if (m[1] != null) {
       const target = m[1].split('|')[0].split('#')[0].trim()
       if (target && IMG_EXT_RE.test(target)) return { kind: 'wiki', target }
