@@ -22,7 +22,7 @@ vi.mock('../lib/dbFileOps', () => ({ renameDb: (...a: unknown[]) => renameDb(...
 
 const { usePluginStore } = await import('./pluginStore')
 const { usePageStore, remapScopePaths } = await import('../store/pageStore')
-const { resetPluginCreatedForTests, isPluginCreated, markPluginCreated, followCreatedPath } = await import('./pluginCreated')
+const { resetPluginCreatedForTests, isPluginCreated, markPluginCreated, followCreatedPath, pruneAbsent } = await import('./pluginCreated')
 const { renameTarget, cleanVaultPath } = await import('./pluginFileOps')
 type Ctx = import('./types').PluginContext
 
@@ -48,8 +48,9 @@ function vault(lists: { pages?: string[]; folders?: string[]; files?: string[] }
   const renameFolder = vi.fn(async (p: string, name: string) => { if (!fail()) move(p, join(dir(p), name), true) })
   const moveFolder = vi.fn(async (p: string, dest: string) => { if (!fail()) move(p, join(dest, p.split('/').pop()!), true) })
   const refreshStructure = vi.fn(async () => {})
-  renameNoteFile.mockReset().mockImplementation(async (p: string, base: string) => { const to = join(dir(p), `${base}.md`); move(p, to, false); return to })
-  renameDb.mockReset().mockImplementation(async (p: string, base: string) => { const to = join(dir(p), `${base}.db`); move(p, to, false); return to })
+  // 同真桥:只掐一次结尾的 .md / .db 再补回去
+  renameNoteFile.mockReset().mockImplementation(async (p: string, name: string) => { const to = join(dir(p), `${name.replace(/\.md$/i, '')}.md`); move(p, to, false); return to })
+  renameDb.mockReset().mockImplementation(async (p: string, name: string) => { const to = join(dir(p), `${name.replace(/\.db$/i, '')}.db`); move(p, to, false); return to })
   usePageStore.setState({
     vaultRoot: '/vault', filesPendingFor: null, error: null,
     pages: lists.pages ?? [], folders: lists.folders ?? [], files: lists.files ?? [],
@@ -139,7 +140,7 @@ describe('ctx.app.renamePath / movePath 的边界', () => {
     expect(renameNoteFile).toHaveBeenCalledTimes(1)
     confirm.answer = true
     await expect(ctx.app.renamePath!('Inbox/user.md', 'Taken')).resolves.toBe('Inbox/Taken.md')
-    expect(renameNoteFile).toHaveBeenLastCalledWith('Inbox/user.md', 'Taken')
+    expect(renameNoteFile).toHaveBeenLastCalledWith('Inbox/user.md', 'Taken.md') // 整个新名字交给链,桥只掐一次 .md
   })
 
   it('工作文件夹里面直接做,工作文件夹本身与别的插件建的照样要问', async () => {
@@ -209,6 +210,66 @@ describe('ctx.app.renamePath / movePath 的结果与拒绝', () => {
     expect(renameNoteFile).not.toHaveBeenCalled()
   })
 
+  it('Codex P1:`B.excalidraw.md.md` 不会被掐两次 .md 落成白板', async () => {
+    const ctx = ctxOf('r-suffix')
+    vault({ pages: ['a.md'] })
+    await expect(ctx.app.renamePath!('a.md', 'B.excalidraw.md.md')).resolves.toBe('B.excalidraw.md.md')
+    expect(usePageStore.getState().pages).toEqual(['B.excalidraw.md.md'])
+  })
+
+  it('盘上挪过去了、链却半路失败(没改指编辑器):补一次路径广播,再 reject 说清已经在新位置', async () => {
+    const ctx = ctxOf('r-partial')
+    const v = vault({ folders: ['Plugins', 'Plugins/r-partial', 'Plugins/r-partial/F', 'D'] })
+    v.moveFolder.mockImplementationOnce(async (p: string) => {
+      const s = usePageStore.getState()
+      usePageStore.setState({ folders: s.folders.map((x) => (x === p ? 'D/F' : x)), error: 'index rebuild failed' })
+    })
+    const gone: string[] = []
+    const { onNotePathGone } = await import('../store/pageStore')
+    const off = onNotePathGone((from, kind, to) => gone.push(`${from}|${kind}|${to}`))
+    await expect(ctx.app.movePath!('Plugins/r-partial/F', 'D')).rejects.toThrow(/is now D\/F, but the host could not finish: index rebuild failed/)
+    off()
+    expect(gone).toEqual(['Plugins/r-partial/F|prefix|D/F'])
+  })
+
+  it('Codex P2:排队期间「归它」的源被删、原位换成用户的文件 → 不许照旧不问就动', async () => {
+    const ctx = ctxOf('r-swap')
+    const v = vault({ folders: ['Plugins', 'Plugins/r-swap', 'D'], pages: ['Plugins/r-swap/slow.md', 'mine.md'] })
+    markPluginCreated('r-swap', 'mine.md')
+    let release = (): void => {}
+    v.movePage.mockImplementationOnce(async (p: string, dest: string) => {
+      await new Promise<void>((r) => { release = r })
+      const s = usePageStore.getState()
+      usePageStore.setState({ pages: s.pages.map((x) => (x === p ? `${dest}/slow.md` : x)) })
+    })
+    const first = ctx.app.movePath!('Plugins/r-swap/slow.md', 'D')
+    const second = ctx.app.movePath!('mine.md', 'D')
+    await new Promise((r) => setTimeout(r, 10))
+    followCreatedPath('mine.md', 'file', null) // 用户删了它(之后原位又有一份同名的)
+    release()
+    await expect(first).resolves.toBe('D/slow.md')
+    await expect(second).rejects.toThrow(/changed while waiting/)
+    expect(confirm.calls).toEqual([])
+  })
+
+  it('Codex P2:夹里有 .db 的文件夹不改名、不挪(关联列与日历设置不跟着迁)', async () => {
+    const ctx = ctxOf('r-dbdir')
+    vault({ folders: ['Plugins', 'Plugins/r-dbdir', 'Plugins/r-dbdir/P', 'D'], files: ['Plugins/r-dbdir/P/t.db'] })
+    await expect(ctx.app.movePath!('Plugins/r-dbdir/P', 'D')).rejects.toThrow(/contain databases/)
+    await expect(ctx.app.renamePath!('Plugins/r-dbdir/P', 'Q')).rejects.toThrow(/contain databases/)
+  })
+
+  it('Codex P2:writeFileScoped 只认 create === true 为「仅新建」,别的真值照普通写判', async () => {
+    const statPath = vi.fn(async () => ({ kind: 'file', size: 1, mtime: 1, ctime: null }))
+    bridge.current = { scopedTextWrites: true, statPath, writeTextFile: vi.fn(async () => ({ ok: true })) }
+    const ctx = ctxOf('r-create')
+    vault({ pages: [] })
+    await ctx.app.writeFileScoped!('user.md', 'x', '/vault', { create: 1 as never })
+    expect(isPluginCreated('r-create', 'user.md')).toBe(false)
+    await ctx.app.writeFileScoped!('new.md', 'x', '/vault', { create: true })
+    expect(isPluginCreated('r-create', 'new.md')).toBe(true)
+  })
+
   it('.db 走 renameDb;并发调用排队一项一项做', async () => {
     const ctx = ctxOf('r-db')
     vault({ folders: ['Plugins', 'Plugins/r-db'], files: ['Plugins/r-db/a.db', 'Plugins/r-db/b.db'] })
@@ -216,7 +277,7 @@ describe('ctx.app.renamePath / movePath 的结果与拒绝', () => {
     renameDb.mockImplementation(async (p: string, base: string) => {
       inFlight++; peak = Math.max(peak, inFlight)
       await new Promise((r) => setTimeout(r, 5))
-      const to = `Plugins/r-db/${base}.db`
+      const to = `Plugins/r-db/${base.replace(/\.db$/i, '')}.db`
       usePageStore.setState({ files: usePageStore.getState().files.map((x) => (x === p ? to : x)) })
       inFlight--
       return to
@@ -262,6 +323,19 @@ describe('renameTarget(纯函数)', () => {
 })
 
 describe('pluginCreated 账本', () => {
+  it('清单刷新后不在里面的条目摘掉(外部删除的文件 / 文件夹);宽限期内的不动', () => {
+    usePageStore.setState({ vaultRoot: '/v3' } as never)
+    markPluginCreated('p', 'Gone')
+    markPluginCreated('p', 'Kept/x.md')
+    const later = Date.now() + 60_000
+    pruneAbsent('/v3', ['Kept/x.md', 'Kept'], Date.now()) // 宽限期内:都不动
+    expect(isPluginCreated('p', 'Gone')).toBe(true)
+    pruneAbsent('/v3', ['Kept/x.md', 'Kept'], later)
+    expect(isPluginCreated('p', 'Gone')).toBe(false)
+    expect(isPluginCreated('p', 'Kept/x.md')).toBe(true)
+    usePageStore.setState({ vaultRoot: null } as never)
+  })
+
   it('按库分账;改名改指、删除摘掉;精确匹配', () => {
     usePageStore.setState({ vaultRoot: '/v1' } as never)
     markPluginCreated('p', 'A/x.md')

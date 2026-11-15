@@ -510,7 +510,7 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
     ...(amadeus?.scopedTextWrites ? {
       writeFileScoped: async (p: string, text: string, expectedRoot: string, options?: { create?: boolean }): Promise<boolean> => {
         if (!ok() || usePageStore.getState().vaultRoot !== expectedRoot) throw new Error('Vault changed before plugin save')
-        const fresh = options?.create ? Promise.resolve(true) : probeAbsent(p)
+        const fresh = options?.create === true ? Promise.resolve(true) : probeAbsent(p) // 同主进程:只认 create === true 为仅新建
         const result = await amadeus.writeTextFile(p, text, { ...options, expectedRoot }).finally(dropListCache)
         if (result?.ok !== false) await noteCreated(p, fresh, expectedRoot)
         return result?.ok !== false

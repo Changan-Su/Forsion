@@ -13,7 +13,7 @@
  */
 import { registerMessages, translate } from '../../i18n'
 import { amadeus } from '../api'
-import { usePageStore } from '../store/pageStore'
+import { onNotePathGone, remapScopePaths, usePageStore } from '../store/pageStore'
 import { isDrawingPath } from '../../../../shared/amadeus/excalidraw/format'
 import { isDashboardPath } from '../../../../shared/amadeus/dashboard'
 import { normalizePluginRename } from './pluginExt'
@@ -120,9 +120,17 @@ function lookup(rel: string): Entry | null {
   return file !== undefined ? { folder: false, raw: file } : null
 }
 const exists = (rel: string): boolean => rel === '' || lookup(rel) !== null
+/** 夹里有 .db 的文件夹不改名、不挪:别的表里指向它们的关联列(refDb 存库内路径)与日历设置只在 .db 本身改名时迁移,
+ *  文件夹那两条链不管(同挪 .db 的拒绝,Codex 评审)。 */
+function refuseDatabasesInside(folder: string): void {
+  if (st().files.some((f) => /\.db$/i.test(f) && toSlash(f).startsWith(`${folder}/`))) {
+    throw new Error(`Folders that contain databases can't be renamed or moved yet: ${folder}`)
+  }
+}
 
 /**
  * 写之前判「原本不存在」:清单里有 = 存在(不走 IPC);清单里没有 → 一次 statPath 核实。
+ * 没有 statPath 的宿主(网页)只按清单判(用户定的「便宜判法」之一;残余:清单还没刷到的别处新文件会被算成插件建的)。
  * 清单正在装 / 没有 stat 时清单认不出的点路径 / 核实出错 → 当「不知道」(false),不记账。
  * **同步发出** stat:它比随后那次写先进主进程;万一写先落地,stat 看到文件 = 不记账,错也只错在多问一次。
  */
@@ -195,9 +203,8 @@ export function createPluginFileOps(deps: PluginFileOpsDeps): {
     const { to } = plan(rel, first)
     if (to === rel) return rel
     if (exists(to)) throw new Error(`Target already exists: ${to}`)
-    if (!pluginOwnsPath(pluginId, rel, deps.workFolder())) {
-      if (!(await ask(question(rel, to)))) throw new Error(deps.alive() ? 'user_declined' : 'plugin disabled')
-    }
+    const asked = !pluginOwnsPath(pluginId, rel, deps.workFolder())
+    if (asked && !(await ask(question(rel, to)))) throw new Error(deps.alive() ? 'user_declined' : 'plugin disabled')
     return serial(async () => {
       if (!deps.alive()) throw gone()
       await st().refreshStructure()
@@ -209,20 +216,35 @@ export function createPluginFileOps(deps: PluginFileOpsDeps): {
       const again = plan(rel, e)
       if (again.to !== to) throw new Error(`The file changed while waiting: ${rel}`)
       if (exists(to)) throw new Error(`Target already exists: ${to}`)
+      // 没问过用户的那次是凭「归它」放行的:排队期间源被删了、原位换成了用户的文件,账本已经摘掉 —— 不许照旧不问就动
+      if (!asked && !pluginOwnsPath(pluginId, rel, deps.workFolder())) throw new Error(`The file changed while waiting: ${rel}`)
       const errBefore = st().error
+      const kind = e.folder ? 'prefix' as const : 'file' as const
+      let remapped = false
+      const offGone = onNotePathGone((from) => { if (toSlash(from).replace(/^\/+|\/+$/g, '') === rel) remapped = true })
+      let runErr: unknown = null
       try {
         await again.run(e.raw)
+      } catch (err) {
+        runErr = err
       } finally {
+        offGone()
         await st().refreshStructure().catch(() => {})
         deps.dropListCache()
       }
       if (st().vaultRoot !== root) throw new Error('The active vault changed')
+      const storeErr = st().error && st().error !== errBefore ? st().error : null
       const landed = lookup(to)
       if (!landed || landed.folder !== e.folder || lookup(rel)) {
-        const err = st().error
-        throw new Error(err && err !== errBefore ? err : `Could not move ${rel} to ${to}`)
+        if (runErr) throw runErr
+        throw new Error(storeErr || `Could not move ${rel} to ${to}`)
       }
-      followCreatedPath(rel, e.folder ? 'prefix' : 'file', to, root) // 链里的路径广播已经改过一遍,这里幂等兜底
+      // 盘上已经挪过去、链却半路失败(索引 / .fd 级联 / 引用重写出错):那几条失败时不改指编辑器(按住的放手成 null),
+      // 开着它的标签还攥着旧路径、下一次保存会把它写回来 —— 这里补一次改指,再把失败如实报给插件
+      if (!remapped) remapScopePaths(e.raw, to, kind)
+      followCreatedPath(rel, kind, to, root) // 链里的路径广播已经改过一遍,这里幂等兜底
+      const partial = runErr ? (runErr instanceof Error ? runErr.message : String(runErr)) : storeErr
+      if (partial) throw new Error(`${rel} is now ${to}, but the host could not finish: ${partial}`)
       return to
     })
   }
@@ -293,14 +315,17 @@ export function createPluginFileOps(deps: PluginFileOpsDeps): {
         path,
         (rel, e) => {
           const to = renameTarget(rel, e.folder, name, deps.fileTypeExt)
+          if (e.folder) refuseDatabasesInside(rel)
           const run = async (raw: string): Promise<unknown> => {
             if (e.folder) return st().renameFolder(raw, name)
+            // 交给链的是**整个**新名字:桥只掐掉一次结尾的 .md / .db 再补回去。先掐一次再交出去 =
+            // 掐两次:`a.md` → `B.excalidraw.md.md` 会落成 `B.excalidraw.md`(笔记变白板,Codex 评审 P1)
             if (/\.db$/i.test(rel)) {
               const { renameDb } = await import('../lib/dbFileOps')
-              return renameDb(raw, nameOf(to).replace(/\.db$/i, ''))
+              return renameDb(raw, nameOf(to))
             }
             const { renameNoteFile } = await import('../lib/noteRename')
-            return renameNoteFile(raw, nameOf(to).replace(/\.md$/i, ''))
+            return renameNoteFile(raw, nameOf(to))
           }
           return { to, run }
         },
@@ -317,6 +342,7 @@ export function createPluginFileOps(deps: PluginFileOpsDeps): {
           if (to === rel) return { to, run: async () => {} }
           if (dest && !lookup(dest)?.folder) throw new Error(`No such folder in the vault: ${dest}`)
           if (e.folder && (dest === rel || dest.startsWith(`${rel}/`))) throw new Error(`Cannot move a folder into itself: ${rel}`)
+          if (e.folder) refuseDatabasesInside(rel)
           // .db 挪走后,别的表里指向它的关联列(refDb 存库内路径)与日历设置不会跟着改 —— 改名有这一步,挪动没有
           if (!e.folder && /\.db$/i.test(rel)) throw new Error(`Moving databases is not supported: ${rel}`)
           return { to, run: (raw: string) => (e.folder ? st().moveFolder(raw, dest) : st().movePage(raw, dest)) }
