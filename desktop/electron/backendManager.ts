@@ -29,6 +29,8 @@ import { COMPUTER_HISTORY_DESKTOP_CONFIG_ENV, COMPUTER_HISTORY_DESKTOP_CONFIG_FI
 import { REMOTE_LOCK_FILE, REMOTE_LOCK_FILE_ENV } from '../shared/remoteSafety' // P1-K2
 import { composeEnginePath, pathKeyOf, withBundledGit } from './envPath'
 import { isFolderUnit } from './hostRole'
+import { FOLDER_UNIT_PATH_ENV } from './localUnits'
+import { pathRelation } from './pathOverlap'
 
 export type BackendState = 'stopped' | 'starting' | 'ready' | 'crashed'
 
@@ -154,9 +156,19 @@ export function defaultCalendarFor(o: { home: string; workspace: string; machine
   return ownHome === ownWorkspace ? join(o.workspace, 'Amadeus', 'Calendar.db') : null
 }
 
-/** 按这一份的身份补的引擎环境变量:文件夹 Unit 不开 Forsion Clip / 浏览器扩展桥(47654 / 47655 是默认那台的)。 */
-export function engineRoleEnv(env: NodeJS.ProcessEnv, folderUnit: boolean): void {
-  if (folderUnit) env.TANGU_BROWSER_EXTENSION = '0'
+/**
+ * 按这一份的身份补的引擎环境变量(folderDir = 文件夹 Unit 的文件夹;默认那台 / 插件沙箱 = null):
+ *  · 文件夹 Unit 不开 Forsion Clip / 浏览器扩展桥(47654 / 47655 是默认那台的);
+ *  · 指向文件的几个变量(日历镜像、令牌文件、数据库、笔记库……)必须落在本文件夹里,不在就丢掉(空串 = 关,照留),
+ *    日历随后由宿主按这一份重新算。
+ */
+export function engineRoleEnv(env: NodeJS.ProcessEnv, folderDir: string | null): void {
+  if (folderDir === null) return
+  env.TANGU_BROWSER_EXTENSION = '0'
+  for (const k of FOLDER_UNIT_PATH_ENV) {
+    const v = env[k]
+    if (v && pathRelation(v, folderDir) !== 'inside') delete env[k]
+  }
 }
 
 export function injectEngineLang(env: NodeJS.ProcessEnv, appLocale: string): void {
@@ -437,7 +449,7 @@ export class BackendManager {
       env.TANGU_BROWSER_EXTENSION_PORT = app.isPackaged ? '47654' : (process.env.TANGU_BROWSER_EXTENSION_PORT || '47655')
       // 扩展本体是 Forsion Clip(npm @forsion/clip):安装包里在 tangu-server/browser-extension(引擎自己找得到),dev 指到依赖里那份
       if (!app.isPackaged) env.TANGU_BROWSER_EXTENSION_DIR = clipSourceDir()
-      engineRoleEnv(env, isFolderUnit())
+      engineRoleEnv(env, isFolderUnit() ? dirname(forsionHomeDir()) : null) // 文件夹 Unit 的 home = <文件夹>/home
       // 通道(微信/Telegram/QQ)配置改由引擎直接读 config.json channels/wechat 段,不再经 env 注入
       //(旧 TANGU_WECHAT_* env 会压过 config,新设置页写 /agent/channels 后热生效,无需重启后端)。
       // 让后端的微信远程会话落到桌面默认工作区(host 执行 cwd);兜底 ~/Tangu。

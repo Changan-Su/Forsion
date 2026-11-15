@@ -127,7 +127,7 @@ async function main() {
     await page.evaluate(() => { window.__luChanged = 0; window.tangu.localUnits.onChanged(() => { window.__luChanged++ }) })
 
     const snap0 = await lu('list')
-    check('list:默认那台、空名册、开发版缺省父目录在(临时)家目录的 .forsion-dev/units 下', snap0.self.kind === 'default' && snap0.registry === 'ok' && snap0.units.length === 0 && snap0.defaultParent === path.join(FAKE_HOME, '.forsion-dev', 'units'), snap0)
+    check('list:默认那台、空名册、开发版缺省父目录在(临时)家目录的 .forsion-dev-units(不在开发版 home 里面)', snap0.self.kind === 'default' && snap0.registry === 'ok' && snap0.units.length === 0 && snap0.defaultParent === path.join(FAKE_HOME, '.forsion-dev-units'), snap0)
 
     // ── 1 新建 ──
     const made = await lu('create', { name: 'Bench A', icon: '🧪', parentDir: PARENT })
@@ -161,6 +161,8 @@ async function main() {
     check('默认那台面板收到 localUnits:changed(A 起来了)', await until(async () => (await page.evaluate(() => window.__luChanged)) > changedBefore, 10000), await page.evaluate(() => window.__luChanged))
     const rowA = (await lu('list')).units.find((u) => u.id === idA)
     check('list:A 是 running', rowA?.state === 'running', rowA)
+    const rmRunning = await lu('remove', idA)
+    check('A 开着时从列表移除 → io + 说明,名册里还在(装更新前要靠名册关它)', rmRunning.ok === false && rmRunning.code === 'io' && !!rmRunning.message && JSON.parse(fs.readFileSync(REGISTRY, 'utf8')).units.some((u) => u.id === idA), rmRunning)
 
     // ── 4 再开一次 ──
     const again = await lu('open', idA)
@@ -270,6 +272,16 @@ async function main() {
     const after = snapshotDir(T).filter(notDefaults)
     const added = after.filter((p) => !before.includes(p) && !p.startsWith(path.join(T, 'moved-B')) && !p.startsWith(PARENT + path.sep + 'Bench B'))
     check('三次拒绝之后临时目录里没有多出任何目录 / 文件,名册一字没改', added.length === 0 && fs.readFileSync(REGISTRY, 'utf8') === regBytes, added.slice(0, 10))
+    // 自己的 .env 里令牌文件指到文件夹外(引擎起来会自己读 .env 补回来)→ 不打开,说明里点名变量和文件
+    const envFile = path.join(A, 'home', 'tangu', '.env')
+    fs.mkdirSync(path.dirname(envFile), { recursive: true })
+    fs.writeFileSync(envFile, `TANGU_TOKEN_FILE=${path.join(T, 'default-home', 'token')}\n`)
+    const aBefore = snapshotDir(path.join(A, 'app-data'))
+    const envRun = launchDirect([`--forsion-unit=${idA}`], BASE)
+    ours.add(envRun.child.pid)
+    const er = await within(envRun.done, 20000)
+    check('.env 里的路径指出了文件夹:退出码 3、说明 env_outside 点名 TANGU_TOKEN_FILE 和那份 .env,app-data 没多东西', er.code === 3 && /refused \(env_outside\)/.test(er.stderr) && er.stderr.includes('TANGU_TOKEN_FILE') && er.stderr.includes(envFile) && JSON.stringify(snapshotDir(path.join(A, 'app-data'))) === JSON.stringify(aBefore), { code: er.code, stderr: er.stderr.slice(0, 300) })
+    fs.rmSync(envFile)
 
     // ── 8 加入已有:拷贝的 / 搬了家的 ──
     const copy = path.join(T, 'copies', 'Bench A copy')

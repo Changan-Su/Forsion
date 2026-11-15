@@ -18,22 +18,34 @@ import {
   LOCAL_UNIT_RUN_FILE, addExistingLocalUnit, createLocalUnit, isLocalUnitId, listLocalUnits, localUnitDisplayPath, localUnitPaths,
   lookupLocalUnit, quitLocalUnitsForInstall, readLocalUnitRegistry, removeLocalUnit, renameLocalUnit, type LocalUnitsContext,
 } from './localUnits'
+import type { PathGuard } from './pathOverlap'
 import type { WindowShortcutResult } from './spaceShortcut'
 
 export const LOCAL_UNITS_MESSAGES = defineMainMessages({
   'main.localUnits.refuseTitle': { zh: '无法打开这台 Unit', en: "Can't open this Unit" },
   'main.localUnits.refuse.bad_arg': { zh: '启动参数不对。', en: 'The launch arguments are invalid.' },
   'main.localUnits.refuse.registry_unreadable': { zh: '读不出这台电脑上的 Unit 列表。', en: "Couldn't read the list of Units on this computer." },
-  'main.localUnits.refuse.not_found': { zh: '这台电脑上没有登记这台 Unit,它可能已从列表移除。', en: "This Unit isn't registered on this computer. It may have been removed from the list." },
-  'main.localUnits.refuse.missing': { zh: '找不到这台 Unit 的文件夹。它可能被移动、删除,或在没有连接的磁盘上。', en: "Can't find this Unit's folder. It may have been moved or deleted, or it's on a disk that isn't connected." },
+  'main.localUnits.refuse.not_found': { zh: '这台电脑上没有登记这台 Unit，它可能已从列表移除。', en: "This Unit isn't registered on this computer. It may have been removed from the list." },
+  'main.localUnits.refuse.missing': { zh: '找不到这台 Unit 的文件夹。它可能被移动、删除，或在没有连接的磁盘上。', en: "Can't find this Unit's folder. It may have been moved or deleted, or it's on a disk that isn't connected." },
   'main.localUnits.refuse.mismatch': { zh: '这台 Unit 的文件夹对不上。', en: "This Unit's folder doesn't match its registration." },
-  'main.localUnits.refuse.channel_mismatch': { zh: '这台 Unit 属于另一个版本的 Forsion(安装版 / 开发版)。', en: 'This Unit belongs to another edition of Forsion (installed or development).' },
-  'main.localUnits.refuse.unsafe': { zh: '这台 Unit 的文件夹里有指向别处的链接。为了不和别的 Unit 共用数据,暂时不能打开。', en: "This Unit's folder contains links to other places. To avoid sharing data with another Unit, it can't be opened." },
+  'main.localUnits.refuse.channel_mismatch': { zh: '这台 Unit 属于另一个版本的 Forsion（安装版 / 开发版）。', en: 'This Unit belongs to another edition of Forsion (installed or development).' },
+  'main.localUnits.refuse.unsafe': { zh: '这台 Unit 的文件夹里有指向别处的链接。为了不和别的 Unit 共用数据，暂时不能打开。', en: "This Unit's folder contains links to other places. To avoid sharing data with another Unit, it can't be opened." },
+  'main.localUnits.refuse.overlap': { zh: '这台 Unit 的文件夹和这台电脑自己的 Forsion 数据（或你的用户文件夹）重叠，打开它会共用数据，所以不能打开。', en: "This Unit's folder overlaps this computer's own Forsion data (or your home folder). Opening it would share data, so it can't be opened." },
+  'main.localUnits.refuse.unwritable': { zh: '无法写入这台 Unit 的文件夹，所以不能打开它。请检查这个文件夹的权限，以及磁盘是否已满。', en: "Can't write to this Unit's folder, so it can't be opened. Check the folder's permissions and free disk space." },
+  'main.localUnits.refuse.env_outside': { zh: '这台 Unit 的设置文件 {file} 里，{key} 指向这台 Unit 文件夹以外的位置。为了不和别的 Unit 共用账号或数据，暂时不能打开。把这一行改成文件夹里的路径或删掉后再打开。', en: "In this Unit's settings file {file}, {key} points outside this Unit's folder. To avoid sharing an account or data with another Unit, it can't be opened. Change that line to a path inside the folder, or delete it, then open the Unit again." },
+  'main.localUnits.removeRunning': { zh: '这台 Unit 正开着（或无法确认它已关掉）。请先关掉它，再从列表移除。', en: 'This Unit is open (or Forsion can\'t confirm it\'s closed). Close it before removing it from the list.' },
+  'main.localUnits.overlapsDefault': { zh: '这个文件夹和这台电脑自己的 Forsion 数据（或你的用户文件夹）重叠，不能用作 Unit。', en: "This folder overlaps this computer's own Forsion data or your home folder, so it can't be used as a Unit." },
+  'main.localUnits.originalMarkerUnreadable': { zh: '这台 Unit 登记的原文件夹现在读不出来，无法判断这是不是一份拷贝。什么都没改。', en: "The folder this Unit is registered at can't be read right now, so Forsion can't tell whether this is a copy. Nothing was changed." },
+  'main.localUnits.clearRefusedTitle': { zh: '没有清空数据', en: "Data wasn't cleared" },
+  'main.localUnits.clearRefused': { zh: '要删除的位置和另一台 Unit 的文件夹或这台电脑自己的 Forsion 数据重叠（或无法确认不重叠），所以什么都没删。请先把那台 Unit 移到别处，或从列表移除。', en: "The data to delete overlaps another Unit's folder or this computer's own Forsion data (or Forsion can't confirm it doesn't), so nothing was deleted. Move that Unit somewhere else or remove it from the list first." },
+  'main.localUnits.clearIncompleteTitle': { zh: '清理不完整', en: 'Clearing was incomplete' },
+  'main.localUnits.clearIncomplete': { zh: '下面这些位置在核对之后有了变化（或删不掉），为了安全没有删除。Forsion 会照常重启。', en: "These locations changed after they were checked (or couldn't be deleted), so they were left in place to be safe. Forsion will restart as usual." },
+  'main.localUnits.startFailed': { zh: '没能启动 Forsion。', en: "Couldn't start Forsion." },
   'main.localUnits.chooseParent': { zh: '选择新 Unit 放在哪里', en: 'Choose where to put the new Unit' },
   'main.localUnits.chooseExisting': { zh: '选择一个 Unit 文件夹', en: 'Choose a Unit folder' },
   'main.localUnits.installBlockedTitle': { zh: '还不能安装更新', en: "Can't install the update yet" },
-  'main.localUnits.installBlocked': { zh: '还有 {count} 台 Unit 没关掉。请先关掉它们,再安装更新。', en: 'Units still open: {count}. Close them, then install the update.' },
-  'main.localUnits.installUnknown': { zh: '读不出这台电脑上的 Unit 列表,无法确认它们都已关掉,先不安装更新。', en: "Couldn't read the list of Units on this computer, so Forsion can't confirm they're closed. The update wasn't installed." },
+  'main.localUnits.installBlocked': { zh: '还有 {count} 台 Unit 没关掉。请先关掉它们，再安装更新。', en: 'Units still open: {count}. Close them, then install the update.' },
+  'main.localUnits.installUnknown': { zh: '读不出这台电脑上的 Unit 列表，无法确认它们都已关掉，先不安装更新。', en: "Couldn't read the list of Units on this computer, so Forsion can't confirm they're closed. The update wasn't installed." },
   'main.localUnits.ok': { zh: '好', en: 'OK' },
 })
 
@@ -42,6 +54,8 @@ export interface LocalUnitsHostDeps {
   channel: LocalUnitChannel
   /** 当前进程是文件夹 Unit → 它的 id 与文件夹;默认那台 = null。 */
   self: { id: string; dir: string } | null
+  /** 文件夹不许和默认那台的数据沾边(localUnitGuard,main.ts 启动时算好)。 */
+  guard: PathGuard
   defaultParent: string
   home: string
   /** 发起方是主窗(且可信)。 */
@@ -60,10 +74,10 @@ export interface LocalUnitsHost {
   dispose(): void
 }
 
-const deny = { ok: false as const, code: 'io' as const, message: 'only the main window can do this' }
+const deny = { ok: false as const, code: 'io' as const, detail: 'only the main window can do this' }
 
 export function createLocalUnitsHost(d: LocalUnitsHostDeps): LocalUnitsHost {
-  const ctx: LocalUnitsContext = { registryFile: d.registryFile, channel: d.channel, self: d.self, home: d.home }
+  const ctx: LocalUnitsContext = { registryFile: d.registryFile, channel: d.channel, self: d.self, home: d.home, guard: d.guard, text: (k) => mt(`main.localUnits.${k}`) }
   const snapshot = (): LocalUnitsSnapshot => listLocalUnits({ ...ctx, defaultParent: d.defaultParent })
 
   // ── 变化广播 ──
@@ -142,7 +156,7 @@ export function createLocalUnitsHost(d: LocalUnitsHostDeps): LocalUnitsHost {
     if (!d.isMainSender(e)) return deny
     if (id === 'default') {
       if (!d.self) { d.showMainWindow(); return { ok: true } } // 本来就是默认那台
-      return d.spawnInstance({}) ? { ok: true } : { ok: false, code: 'io', message: 'could not start Forsion' }
+      return d.spawnInstance({}) ? { ok: true } : { ok: false, code: 'io', message: mt('main.localUnits.startFailed'), detail: 'spawn failed' }
     }
     const hit = lookupLocalUnit(ctx, id)
     if (!hit.ok) return hit
@@ -150,7 +164,7 @@ export function createLocalUnitsHost(d: LocalUnitsHostDeps): LocalUnitsHost {
     // 在跑也照样拉起:新进程拿不到那台的单实例锁,会把参数交给它(叫到前面)再退出
     const ok = d.spawnInstance({ unitId: hit.entry.id })
     soon()
-    return ok ? { ok: true } : { ok: false, code: 'io', message: 'could not start Forsion' }
+    return ok ? { ok: true } : { ok: false, code: 'io', message: mt('main.localUnits.startFailed'), detail: 'spawn failed' }
   })
   ipcMain.handle('localUnits:rename', async (e, id: unknown, patch: unknown) => {
     if (!d.isMainSender(e)) return deny
@@ -163,7 +177,7 @@ export function createLocalUnitsHost(d: LocalUnitsHostDeps): LocalUnitsHost {
     if (read.state !== 'ok') return { ok: false, code: 'registry_unreadable' }
     const entry = read.registry.units.find((u) => u.id === id)
     if (!entry) return { ok: false, code: 'not_found' }
-    if (!existsSync(entry.path)) return { ok: false, code: 'not_a_unit', message: 'folder is missing' }
+    if (!existsSync(entry.path)) return { ok: false, code: 'not_a_unit', detail: 'folder is missing' }
     shell.showItemInFolder(entry.path)
     return { ok: true }
   })
@@ -178,7 +192,7 @@ export function createLocalUnitsHost(d: LocalUnitsHostDeps): LocalUnitsHost {
     const opts = (raw && typeof raw === 'object' ? raw : {}) as { iconPng?: unknown; fallbackName?: unknown }
     const r = await d.addToDesktop({ id: hit.entry.id, name: hit.marker.name }, opts)
     if (r.ok) return { ok: true }
-    return { ok: false, code: 'io', message: 'detail' in r && r.detail ? `${r.code}: ${r.detail}` : r.code }
+    return { ok: false, code: 'io', detail: 'detail' in r && r.detail ? `${r.code}: ${r.detail}` : r.code }
   })
 
   return {

@@ -83,7 +83,7 @@ export interface LocalUnitsSnapshot {
   units: LocalUnitRow[]
   /** 名册读不出来 ≠ 空:unreadable 时 units 为空数组,界面要说「读不出」,写操作一律被拒。 */
   registry: 'ok' | 'unreadable'
-  /** 「新建」对话框里缺省的父目录(安装版 ~/Forsion Units,开发版 ~/.forsion-dev/units)。 */
+  /** 「新建」对话框里缺省的父目录(安装版 ~/Forsion Units,开发版 ~/.forsion-dev-units)。 */
   defaultParent: string
   /** 同上,给人看的写法。 */
   defaultParentDisplay: string
@@ -102,7 +102,15 @@ export type LocalUnitsErrorCode =
   | 'cancelled'          // 用户在系统对话框里取消
   | 'io'
 
-export type LocalUnitsResult<T extends object = object> = ({ ok: true } & T) | { ok: false; code: LocalUnitsErrorCode; message?: string }
+/**
+ * 失败时:
+ *  · code —— 渲染层按它给出说明(主依据);
+ *  · message —— **只**放一句给用户看的话,主进程已按当前界面语言(和主进程对话框同一个语言源)翻好,有就原样显示;
+ *    目前会带它的:not_a_unit(文件夹和这台电脑自己的数据重叠)、parent_invalid(同上)、
+ *    io(开着的 Unit 不能从列表移除 / 原文件夹读不出没法判断是不是拷贝 / 没能启动 Forsion);
+ *  · detail —— 给日志的原文(errno、名册解析错误、内部原因,英文),**绝不**显示给用户。
+ */
+export type LocalUnitsResult<T extends object = object> = ({ ok: true } & T) | { ok: false; code: LocalUnitsErrorCode; message?: string; detail?: string }
 
 /** 渲染层看到的接口(window.tangu.localUnits);只在主窗、有本机引擎的产品形态、且不是插件沙箱时存在。 */
 export interface LocalUnitsApi {
