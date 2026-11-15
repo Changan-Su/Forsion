@@ -321,6 +321,9 @@ const tagPills = (p) => p.evaluate(() => [...document.querySelectorAll('.unified
 async function lineStart(browser) {
   const SLASH = ['w:500', 'k:Enter', 'w:300']
   const cases = [
+    // 0 空行上的退格一次只删一个换行(上一段后面隔着空行 / 紧挨着两种都走一遍)
+    { name: 'S0a 隔空行的空行上退格 = 只删那条空行', seed: 'one\n', at: 'one', steps: ['k:Enter', 't:two', 'k:Enter', 'k:Enter', 't:three', ...Array(7).fill('k:Backspace')], want: 'one\ntwo\n' },
+    { name: 'S0b 紧挨着的空行上退格 = 删掉这一行', seed: 'one\n', at: 'one', steps: ['k:Enter', 't:## ', 'k:Backspace', 'k:Backspace', 't:x'], want: 'onex\n' },
     // 1 分割线
     { name: 'S1a 第二行 `---` = 分割线', seed: 'a\n', at: 'a', steps: ['k:Enter', 't:---', 't:X'], want: 'a\n\n***\n\nX\n', shape: 'paragraph:a | hr: | paragraph:X' },
     { name: 'S1b 第二行 `*** ` = 分割线', seed: 'a\n', at: 'a', steps: ['k:Enter', 't:*** ', 't:X'], want: 'a\n\n***\n\nX\n' },

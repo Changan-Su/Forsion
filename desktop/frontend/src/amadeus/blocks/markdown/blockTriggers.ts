@@ -512,9 +512,15 @@ export function applyTrigger(
     // 待办/列表项/引用里 → 先脱离容器再转换(否则 list_item 的 `paragraph block*` 直接把标题挡在门外,
     // 而「转正文」在段落里是空操作 —— 两者就是「切不动行样式」的全部病因)。
     if (inAny($blk, ['list_item', 'blockquote'])) {
+      // 回车口径开关打开时:紧挨着上一行起的空引用 / 空列表脱成空段落 = 回到「上一行 + 一个空的第二行」,
+      // 上一行的紧贴记号留着(否则当成邻居变了被清掉,文件里凭空多一条空行)。有字的不管:段落接段落紧贴不了。
+      const prevTop = $blk.depth >= 2 ? tr.doc.resolve($blk.before(1)).nodeBefore : null
+      const keepTight = enterInline() && trig.kind === 'text' && $blk.parent.content.size === 0 && $blk.node(1).childCount === 1 &&
+        !!prevTop && (prevTop.type.name === 'paragraph' || prevTop.type.name === 'heading') && prevTop.attrs.amxTight === true
       pos = liftOutOfWrappers(tr, pos, ['list_item', 'blockquote'])
       $blk = tr.doc.resolve(pos)
       if (!$blk.parent.isTextblock) return false
+      if (keepTight) tr.setMeta(TIGHT_MANAGED, true)
     }
     const idx = $blk.index(-1)
     if (!$blk.node(-1).canReplaceWith(idx, idx + 1, target)) return false
