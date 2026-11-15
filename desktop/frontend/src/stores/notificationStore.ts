@@ -1,5 +1,5 @@
 /**
- * 右上角通知系统(升级自旧 appStore.toast):小卡片从右侧滑入、按序向下堆叠、hover 暂停、
+ * 右上角通知系统(升级自旧 appStore.toast):小卡片从右侧滑入、按序向下堆叠、鼠标悬停暂停、
  * error 常驻手动关;事件级开关 + 插件来源开关在设置「通知与状态栏」里管理(localStorage)。
  * 纯逻辑 store(无 DOM/i18n 依赖):文案由调用方(wiring / appStore.tr / 插件)传入;
  * 渲染在 components/NotificationHost(仅主窗 Root 挂载,与旧 toast-wrap 同决策)。
@@ -39,6 +39,11 @@ export interface NotifyInput {
   /** 收尾:把同 dedupeKey 的那条原地换成操作的结果(如日历撤销后的「已撤销」)—— 不算重复(计数回 1),
    *  到点淡出而不是滑走。动作钮要拿掉就同时显式给 `action: undefined`。 */
   settle?: boolean
+  /** 顶替:同 dedupeKey 的后一条整条顶掉前一条 —— 计数回 1(不出 ×N),标题、文案、按钮、级别、常驻与停留都换成这一条的,
+   *  不沿用前一条;停留从这一刻重新算。插件 `ctx.notify` 带 key 时用它(插件手册承诺「同 key 的后一张顶掉前一张」:
+   *  插件自己数件数,比如「(3) 张三：…」,宿主再叠 ×3 就重了;key 也可能管着内容不同的卡,比如手机上合成的那一张)。
+   *  顶替的是新的一件事,窗口在后台时照常跟发系统通知(门控同新弹的一条)。宿主自己的去重(防轰炸计数)不带它,照旧累计、不重发。 */
+  replace?: boolean
 }
 
 export interface AppNotification {
@@ -161,6 +166,20 @@ export const useNotifications = create<NtfState>((set, get) => {
     try { n?.onClose?.() } catch { /* 回调抛错不砸通知栈 */ }
   }
 
+  // 系统通知:与应用内通知同步发(所有事件,不止收件箱);仅窗口在后台时(前台已有卡片,免重复横幅);
+  // osEnabled 门控。web 无 window.tangu.notify → 可选链忽略(安卓有:mobile/src/liveIsland.ts)。
+  // inAppOnly / receipt:调用方声明这是应用内即时反馈(见 NotifyInput.inAppOnly),不跟发。
+  // 「在后台」:桌面 = 窗口失焦。安卓 WebView 退到后台后 hasFocus() 仍是 true(模拟器实测),那里只有可见性说真话;
+  // 桌面上看不见的窗口本来就没有焦点,多看这一项不改变它的行为。
+  // 谁调:新弹的一条;以及 replace 顶掉同 key 的前一条(那是新的一件事,只是借同一张卡显示 —— 比如手机上插件把几件合成一张、
+  // 上一张还停着时又来一件,不发的话 App 在后台时这一件就没有横幅)。宿主自己的去重合并(防轰炸计数)不重发。
+  const sendOs = (input: NotifyInput, n: Pick<AppNotification, 'title' | 'sourceLabel' | 'text'>, event: string): void => {
+    if (input.inAppOnly || input.receipt || !get().prefs.osEnabled) return
+    const away = typeof document !== 'undefined' && (!document.hasFocus() || document.visibilityState === 'hidden')
+    if (!away) return
+    try { window.tangu?.notify?.(n.title || n.sourceLabel || 'Forsion', n.text, { event }) } catch { /* 无桥/web 忽略 */ }
+  }
+
   return {
     items: [],
     queue: [],
@@ -180,16 +199,21 @@ export const useNotifications = create<NtfState>((set, get) => {
       const text = plainNetworkError(String(input.text ?? '')).slice(0, 500) // 防插件超长字符串撑爆卡片
       const title = input.title ? String(input.title).slice(0, 120) : undefined
 
-      // 去重合并:同 dedupeKey 更新原条(计数 + 文案 + 重置停留),可见或排队中皆然。
+      // 去重合并:同 dedupeKey 更新原条(计数 + 文案 + 重置停留),可见或排队中皆然。replace:整条换成这一条,计数回 1。
       if (input.dedupeKey) {
         const found = st.items.find((n) => n.dedupeKey === input.dedupeKey) || st.queue.find((n) => n.dedupeKey === input.dedupeKey)
         if (found) {
           const visible = st.items.some((n) => n.id === found.id)
-          const upd: AppNotification = {
-            ...found, text, title: title ?? found.title, level, count: input.settle ? 1 : found.count + 1, settle: input.settle,
-            createdAt: Date.now(), sticky: input.sticky ?? (input.settle || level !== found.level ? sticky : found.sticky), action: 'action' in input ? input.action : found.action, // 显式给了(含 undefined)就换,没给才沿用
-            durationMs: durationMs ?? found.durationMs, onClose: input.onClose ?? found.onClose,
-          }
+          const upd: AppNotification = input.replace
+            ? {
+                ...found, text, title, level, sourceLabel: input.sourceLabel ?? found.sourceLabel, count: 1, settle: input.settle,
+                createdAt: Date.now(), sticky, action: input.action, durationMs, onClose: input.onClose ?? found.onClose,
+              }
+            : {
+                ...found, text, title: title ?? found.title, level, count: input.settle ? 1 : found.count + 1, settle: input.settle,
+                createdAt: Date.now(), sticky: input.sticky ?? (input.settle || level !== found.level ? sticky : found.sticky), action: 'action' in input ? input.action : found.action, // 显式给了(含 undefined)就换,没给才沿用
+                durationMs: durationMs ?? found.durationMs, onClose: input.onClose ?? found.onClose,
+              }
           set((s) => ({
             items: s.items.map((n) => (n.id === found.id ? upd : n)),
             queue: s.queue.map((n) => (n.id === found.id ? upd : n)),
@@ -198,6 +222,7 @@ export const useNotifications = create<NtfState>((set, get) => {
             if (upd.sticky) clearTimer(found.id)
             else startTimer(found.id, durationOf(upd))
           }
+          if (input.replace) sendOs(input, upd, event)
           return found.id
         }
       }
@@ -207,16 +232,7 @@ export const useNotifications = create<NtfState>((set, get) => {
         sourceLabel: input.sourceLabel, createdAt: Date.now(), sticky, count: 1,
         dedupeKey: input.dedupeKey, action: input.action, durationMs, onClose: input.onClose, settle: input.settle,
       }
-      // 系统通知:与应用内通知同步发(所有事件,不止收件箱);仅窗口在后台时(前台已有卡片,免重复横幅);
-      // osEnabled 门控。web 无 window.tangu.notify → 可选链忽略(安卓有:mobile/src/liveIsland.ts)。dedupe 合并不重发(上面已 return)。
-      // inAppOnly:调用方声明这是应用内即时反馈(见 NotifyInput.inAppOnly),不跟发。
-      // 「在后台」:桌面 = 窗口失焦。安卓 WebView 退到后台后 hasFocus() 仍是 true(模拟器实测),那里只有可见性说真话;
-      // 桌面上看不见的窗口本来就没有焦点,多看这一项不改变它的行为。
-      const away = typeof document !== 'undefined' && (!document.hasFocus() || document.visibilityState === 'hidden')
-      if (!input.inAppOnly && !input.receipt && st.prefs.osEnabled && away) {
-        const osTitle = title || input.sourceLabel || 'Forsion'
-        try { window.tangu?.notify?.(osTitle, text, { event }) } catch { /* 无桥/web 忽略 */ }
-      }
+      sendOs(input, n, event) // 系统通知(见 sendOs);非 replace 的去重合并上面已经 return,不重发
       if (st.items.length < MAX_VISIBLE) {
         set((s) => ({ items: [...s.items, n] }))
         if (!sticky) startTimer(n.id, durationOf(n))
@@ -271,7 +287,7 @@ export const useNotifications = create<NtfState>((set, get) => {
       writePrefs(prefs)
     },
 
-    // hover 暂停:冻结全部在飞定时器记剩余;移出后续走剩余(下限 800ms,防恢复即消失)。
+    // 鼠标悬停暂停(NotificationHost 只在 pointerType === 'mouse' 时调;触屏点按不暂停):冻结全部在飞定时器记剩余;移出后续走剩余(下限 800ms,防恢复即消失)。
     pause: () => {
       if (get().paused) return
       set({ paused: true })
