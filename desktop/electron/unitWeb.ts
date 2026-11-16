@@ -246,6 +246,10 @@ export interface UnitWebDeps {
   readHostStat: (p: string) => Promise<{ isDir: boolean; mtimeMs: number; birthtimeMs: number | null; files?: number; folders?: number } | null>
   /** build:安装版 / 开发版 —— 同一台电脑上两份 Forsion 同名同版本,Forsion Clip 靠它分开写(旧版不报)。 */
   meta: { instanceId: string; name: string; version: string; build?: 'packaged' | 'dev' }
+  /** 这台在账号设备名册里的 id(现取:登记 / 重新登记发生在服务起来之后)。只进配对面的 /unit/meta,
+   *  供别的设备核对「这个直连地址上应答的,是不是名册里的那一行」—— 同一台电脑以前登记过的旧记录直连地址都一样。
+   *  名册 id 不是凭据(凭据另存在 device-secrets)。取不到 = 回包不带这个键(对方按「不知道」处理);缺省 = 不报(独立 Unit)。 */
+  rosterUnitId?: () => string | null
   /** 这台 Forsion 当前的外观(渲染层上报的主题色 / 背景色 / 明暗 / 语言),给已配对的 Forsion Clip 跟随。缺省 / 还没上报 = 404。 */
   appearance?: () => UnitAppearance | null
   /** Explicit web publishing only exposes code/layout. Host data keeps the pairing boundary. */
@@ -716,7 +720,8 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
 
     // ── 公开面(无鉴权):元数据 / 配对流 / 静态壳(壳只是代码,数据面全在鉴权后) ──
     if (path === '/unit/meta' && req.method === 'GET') {
-      json(res, 200, { ...deps.meta, pair: !deps.projection, ...(deps.projection?.mode === 'local' ? { projection: 'local', localCapabilities: deps.projection.localCapabilities?.() } : {}) })
+      const unitId = deps.projection ? null : deps.rosterUnitId?.() // 投影面(工作区 / 网站)不是名册里的设备,不报
+      json(res, 200, { ...deps.meta, ...(unitId ? { unitId } : {}), pair: !deps.projection, ...(deps.projection?.mode === 'local' ? { projection: 'local', localCapabilities: deps.projection.localCapabilities?.() } : {}) })
       return
     }
     if (deps.projection?.mode === 'local' && path.startsWith('/unit/pair/')) { json(res, 403, { detail: 'Use the workspace owner access key' }); return }

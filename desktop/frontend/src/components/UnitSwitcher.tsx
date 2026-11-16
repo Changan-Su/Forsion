@@ -37,7 +37,7 @@ import { SECRET_STORE_INSECURE, type RemoteSessionsView } from '../../../shared/
 import './remoteSessionsCopy' // P1-K4
 import type { UnitInfo, UnitPairedDevice } from '../types'
 import { accountChip, subscribeAccountChip } from '../services/accountChip'
-import { rememberVia, sharedTargetKey, type UnitVia } from './unitPanelModel'
+import { lanProbeMatches, rememberVia, sharedTargetKey, type UnitVia } from './unitPanelModel'
 import { onSharedRoster, sharedStillEnterable, useUnitRoster } from './unitRoster'
 import { sharedLabel, type SharedUnit, type UnitSharedLabel } from '../../../shared/sharedUnits'
 import { setPopupsBlocked } from '../stores/popupQueue'
@@ -690,11 +690,12 @@ export function UnitSettings(): React.ReactElement {
     setPaired(pd || [])
     // LAN 优先(方案 §11.2):对报了直连地址的设备逐台探(1.2s 封顶,渐进点亮)。
     // 不看 online:B 未登录时隧道离线但局域网照样可达 —— 探通了行就能点。
+    // 探通还要核身份(lanProbeMatches):同一台电脑的旧登记直连地址都一样,应答的不是这一行就不点亮。
     setLanOk({})
     for (const u of us ?? []) {
       if (!u.lanUrl) continue
       void window.tangu?.unitsProbeLan?.(u.lanUrl)
-        .then((meta) => { if (meta) setLanOk((m) => ({ ...m, [u.id]: true })) })
+        .then((meta) => { if (lanProbeMatches(meta, u.id)) setLanOk((m) => ({ ...m, [u.id]: true })) })
         .catch(() => {})
     }
   }

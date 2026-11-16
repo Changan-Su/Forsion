@@ -120,6 +120,7 @@ import type { AmadeusSyncFactory } from './amadeus/cloudSeam'
 import { adoptFromOpenGrant, createUnitFrameScope, createUnitOpenGrants, handleUnitFrameBind, normalizeCloudBase, replaceAuthorization, shouldInjectUnitAuth, type UnitFrameRosterRead } from './unitAuthScope' // 设备页补登录头的范围
 import { parseSharedUnits } from '../shared/sharedUnits'
 import { engineCapsState, pairingWriters, selfUnitIdMemo, type UnitHubFactory, type UnitHubInstance } from './unitHubSeam' // 设备互联云端通道的接缝(Forsion Extend 0.6 起)
+import { probeUnitLan } from './unitLanProbe'
 import { makeCallerHeaders } from './unitCaller'
 import { newPairStore, startUnitWeb, type UnitWebHandle, type PairedDevice, startClipEntrance, CLIP_ENTRANCE_PORTS, type ClipEntranceHandle } from './unitWeb'
 import { createRemoteSessions, lookupRosterUnit, registerRemoteSessionsIpc, REMOTE_SESSIONS_FILE, withRemoteCap } from './remoteSessions' // P1-K4
@@ -1092,6 +1093,10 @@ let unitHostCloudUrl = DEFAULT_CLOUD_URL
 let unitHostPairing: { unitId: string; secret: string } | null = null
 /** 本机名册 id 的记忆(units:hostStatus.selfUnitId;互联关着时 unitHub.status().unitId 是 null)。 */
 const selfUnitId = selfUnitIdMemo()
+/** 本机在名册里的 id:units:hostStatus.selfUnitId 与 /unit/meta 的 unitId 同用这一个(渲染层拿前者认本机、拿后者核对直连应答)。 */
+const selfRosterUnitId = (): string | null => unitHub?.status().unitId ?? selfUnitId.get()
+/** 本机安装实例 id(/unit/meta 的 instanceId);LAN 探针据此认出「应答的就是本机自己」。互联与门铃都没开过 = 存的值或 null。 */
+let unitSelfInstanceId: string | null = null
 // P1-KF:主进程文案(mt)的界面语言 = 渲染层报来的生效语言(ui:locale),上次的值落 userData/ui-locale.json 供窗口载入前用。
 const uiLocale = createUiLocaleSync({ file: () => join(app.getPath('userData'), UI_LOCALE_FILE), log: (m) => console.log(m) })
 /** 渲染层报来的本机外观(主题色 / 背景色 / 明暗),给已配对的 Forsion Clip 跟随;语言另取 mainLocale()。 */
@@ -1383,6 +1388,7 @@ async function doRefreshUnitHost(): Promise<void> {
   // 门铃开在 Clip 的固定口上:安装版 8791 / 8793、开发版 8792 / 8794,两份同开互不挤占(以前 dev 门铃占 8791 把安装版挤到了随机口)。
   // 台架起的隔离实例缺省关(launch-electron 设 FORSION_CLIP_ENTRANCE=0),别让用户真浏览器里的 Clip 找到它们。
   const doorbell = !stored.unitHostEnabled && clipEntranceOn()
+  unitSelfInstanceId = stored.unitInstanceId || null
   if (!stored.unitHostEnabled && !doorbell) return
   // 实例 id:首次开启生成并回写(/unit/meta 自证身份,防 DHCP 换主誊错设备)。
   let instanceId = stored.unitInstanceId
@@ -1390,6 +1396,7 @@ async function doRefreshUnitHost(): Promise<void> {
     instanceId = randomUUID()
     await saveConfig({ unitInstanceId: instanceId })
   }
+  unitSelfInstanceId = instanceId
   // 端口保持稳定(便于手输 IP 直连;Clip 也只找这个口):首选已存端口/8791
   const want = stored.unitWebPort || clipEntrancePorts()[0]
   // 本机项目根种子没做完之前,远端的 /engine 一律 503(seedGatedEngine):远端没有窗口抢在种子之前改 project_path。
@@ -1499,6 +1506,7 @@ async function doRefreshUnitHost(): Promise<void> {
       return sdp
     },
     meta: { instanceId, name: hostname(), version: app.getVersion(), build: (app.isPackaged ? 'packaged' : 'dev') as 'packaged' | 'dev' },
+    rosterUnitId: selfRosterUnitId,
     appearance: () => (uiAppearance ? { ...uiAppearance, locale: mainLocale() } : null),
     webDistDir: (): string | null => {
       const env = process.env.TANGU_UNIT_WEB_DIST
@@ -3901,30 +3909,13 @@ app.whenReady().then(async () => {
   ipcMain.handle('units:hostStatus', () => ({
     ...(unitHub ? unitHub.status() : { running: false, connected: false, unitId: null, lastError: null }),
     // 新增字段,不改 unitId 的语义:互联关着也尽量认得出本机(这次运行里读到过配对才有;没有 = 不知道)
-    selfUnitId: unitHub?.status().unitId ?? selfUnitId.get(),
+    selfUnitId: selfRosterUnitId(),
     webPort: unitWeb?.port ?? null,
     lanUrl: unitLanUrl(),
   }))
-  // LAN 直连探针(v2.1 自动择路):主进程发(渲染层跨源 fetch 会被 CORS 拦),1.2s 封顶。
-  // 只判「是台 unitWeb 且响应 meta」,身份最终由配对流的 6 位码人工比对把关(防 DHCP 换主)。
-  ipcMain.handle('units:probeLan', async (_e, lanUrl: string) => {
-    try {
-      const u = new URL(String(lanUrl))
-      if (u.protocol !== 'http:' && u.protocol !== 'https:') return null
-      const ctrl = new AbortController()
-      const timer = setTimeout(() => ctrl.abort(), 1200)
-      try {
-        const r = await fetch(new URL('/unit/meta', u), { signal: ctrl.signal })
-        if (!r.ok) return null
-        const meta = (await r.json()) as { instanceId?: unknown; name?: unknown }
-        return typeof meta?.instanceId === 'string' ? { instanceId: meta.instanceId, name: String(meta.name || '') } : null
-      } finally {
-        clearTimeout(timer)
-      }
-    } catch {
-      return null
-    }
-  })
+  // LAN 直连探针(v2.1 自动择路;本体在 unitLanProbe.ts):回包带对方报的名册 id 与「是不是本机自己」,
+  // 渲染层据此判「应答的是不是名册里那一行」(unitPanelModel.lanProbeMatches)—— 同一台电脑的旧登记直连地址都一样。
+  ipcMain.handle('units:probeLan', (_e, lanUrl: string) => probeUnitLan(lanUrl, { selfInstanceId: unitSelfInstanceId }))
   // T1 配对设备的回收面(B 侧自己的 UI;无回收的配对不许上线——方案 §11.3)。
   ipcMain.handle('units:pairedList', async () => (await loadConfig()).unitPairedDevices || [])
   ipcMain.handle('units:pairedRemove', async (_e, id: string) => {

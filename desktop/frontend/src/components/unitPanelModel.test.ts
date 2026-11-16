@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { pickUnitRoute, readRememberedVia, rememberVia, remoteUnitId, unitPanelModel, unitWindowRosterState } from './unitPanelModel'
+import { lanProbeMatches, pickUnitRoute, readRememberedVia, rememberVia, remoteUnitId, unitPanelModel, unitWindowRosterState } from './unitPanelModel'
 import type { UnitInfo } from '../types'
 
 const u = (id: string, online: boolean, extra: Partial<UnitInfo> = {}): UnitInfo =>
@@ -115,6 +115,54 @@ describe('unitPanelModel', () => {
   it('no roster (signed out / not loaded) → no device rows at all', () => {
     expect(unitPanelModel({ ...base, units: null })).toMatchObject({ rows: [], offline: [] })
     expect(unitPanelModel({ ...base, units: undefined })).toMatchObject({ rows: [], offline: [] })
+  })
+})
+
+describe('lanProbeMatches (who answered on the direct address)', () => {
+  const meta = (extra: Record<string, unknown> = {}) => ({ instanceId: 'inst', name: 'MacBook-Pro.local', ...extra })
+
+  it('no answer → not reachable', () => {
+    expect(lanProbeMatches(null, 'a')).toBe(false)
+    expect(lanProbeMatches(undefined, 'a')).toBe(false)
+  })
+  it('the responder reports a roster id → only the row with that id counts', () => {
+    expect(lanProbeMatches(meta({ unitId: 'a' }), 'a')).toBe(true)
+    expect(lanProbeMatches(meta({ unitId: 'a' }), 'old-1')).toBe(false)
+  })
+  it('the responder is this computer itself and reports no id → no row counts; a reported id still decides', () => {
+    expect(lanProbeMatches(meta({ self: true }), 'old-1')).toBe(false)
+    expect(lanProbeMatches(meta({ self: true, unitId: 'a' }), 'old-1')).toBe(false)
+    expect(lanProbeMatches(meta({ self: true, unitId: 'a' }), 'a')).toBe(true)
+  })
+  it('an older Forsion that does not report a roster id → unknown: reachable as before', () => {
+    expect(lanProbeMatches(meta(), 'a')).toBe(true)
+    expect(lanProbeMatches(meta({ unitId: null }), 'a')).toBe(true)
+    expect(lanProbeMatches(meta({ unitId: '' }), 'a')).toBe(true)
+  })
+})
+
+describe('the same computer registered several times (old rows share one direct address)', () => {
+  const lan = 'http://192.168.1.8:8792'
+  const roster = ['old-1', 'old-2', 'live', 'old-3'].map((id) => u(id, false, { name: 'MacBook-Pro.local', lanUrl: lan }))
+  const panel = (answer: Parameters<typeof lanProbeMatches>[0]) => {
+    const lanOk = Object.fromEntries(roster.map((r) => [r.id, lanProbeMatches(answer, r.id)]))
+    return unitPanelModel({ units: roster, hostUnitId: 'me', lanOk, p2p: false, remote: { active: false, key: null } })
+  }
+
+  it('only the row the responder vouches for is direct; the old rows fold into offline', () => {
+    const m = panel({ instanceId: 'inst', name: 'MacBook-Pro.local', unitId: 'live' })
+    expect(m.rows.map((r) => [r.key, r.kind === 'unit' && r.via])).toEqual([['live', 'lan']])
+    expect(m.offline.map((r) => r.key)).toEqual(['old-1', 'old-2', 'old-3'])
+  })
+  it('when the responder is this computer itself, every row folds into offline', () => {
+    const m = panel({ instanceId: 'inst', name: 'MacBook-Pro.local', unitId: 'me', self: true })
+    expect(m.rows).toEqual([])
+    expect(m.offline).toHaveLength(4)
+  })
+  it('when the responder reports this computer\'s roster id, none of the other rows counts', () => {
+    const m = panel({ instanceId: 'inst', name: 'MacBook-Pro.local', unitId: 'me' })
+    expect(m.rows).toEqual([])
+    expect(m.offline).toHaveLength(4)
   })
 })
 
