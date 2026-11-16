@@ -46,7 +46,7 @@ model → plugin_sandbox / plugin_sandbox_inspect(tangu-agent builtin,deferred)�
 - **桌面在 JS 里回执**(与手机不同):动作在主进程,渲染层与主进程同属被信任的宿主。引擎 pending 表照样是唯一权威。
 - **控制通道**:父进程开 unix socket / Windows 命名管道(tmpdir,路径带 pid 与随机段),子进程用环境里的一次性令牌连回来,
   第一行 `{hello: token}`,不对就断。之后按行 JSON:父 → 子 `{id, op, args}`(`status / screenshot / command / reload / show / quit`,
-  11-03 起加 `read / click / type / press / scroll / space / files`,子进程回 `{action, image?, error?}`),
+  11-03 起加 `read / click / type / press / scroll / space / files`,11-15 起加 `settings`,子进程回 `{action, image?, error?}`),
   子 → 父 `{id, ...}` 应答或事件 `{event: 'state' | 'report' | 'install' | 'reset' | 'forward'}`。不开远程调试端口。
   控制通道一断(父进程退出 / 崩溃),沙箱跟着退。
 
@@ -57,14 +57,21 @@ model → plugin_sandbox / plugin_sandbox_inspect(tangu-agent builtin,deferred)�
 | `plugin_sandbox` | `start {path}` / `stop` / `reset` | `approval: 'command'`(与 run_bash 同档) | start 的相对路径按会话工作目录解析;同一个插件再 start = 就地重载,另一个插件 = 先停前一个。reset = 清空沙箱目录后重起 |
 | `plugin_sandbox_inspect` | `status` / `screenshot {view?}` / `logs` / `command {command, args?, screenshot?}` | 无 | 只读状态,或在沙箱里跑插件自己注册的命令(参数原样交给 `run(args)`;`screenshot:true` 落定后截一张) |
 | 同上(11-03) | `read {target?}` / `click {target}` / `type {target?, text, append?}` / `press {key, target?}` / `scroll {target?, amount?}` / `space {space}` / `files {paths?, mode?}` | 无 | 在沙箱里动手,见 §3.1 |
+| 同上(11-15) | `settings {close?}`;read / click / type / press / scroll / screenshot 多一个 `window: 'main' \| 'settings'` | 无 | 插件的设置页在独立的设置窗口里,见 §3.2 |
 
 ### 3.1 在沙箱里动手(11-03)
 
 agent 不该用 computer use 去点沙箱窗口(它故意压在用户的窗口底下,截图里看不到原生对话框)。改由这几个动作:
 
 - `read`:页面大纲。看得见的控件一行一个、带引用(`[e12] button "Add book" (disabled)`),标题与成段的字只列出来;`target` 收窄到一块。
+  名字后面的括号是状态:`disabled` `checked` `selected` `pressed / not pressed`(aria-pressed,开关按钮)`read-only`(aria-readonly,
+  或收字的控件 readonly / contenteditable=false)`expanded / collapsed` `focused` `value "…"`。开关按钮的名字说它管什么、状态看 pressed
+  (笔记的阅读 / 编辑切换:名字固定「阅读模式」,按下 = 正在阅读;以前名字跟着变,读到的是「编辑,已按下」,意思正好反了)。
   大纲 ≤ 16k(`SANDBOX_OUTLINE_BUDGET`);引用每次 read 重编,页面变了旧引用作废(会说「read again」)。沙箱条(报告问题 / 安装 / 重置)不给 agent 点。
 - `target` 三种写法:read 给的 `eN`;`css:<选择器>`;控件看得见的字(先按名字精确、再包含,最后任意元素的字,取面积最小的)。
+- 目标中心点上压着宿主的通知卡(`.ntf-wrap`,插件 `ctx.notify` 也弹在这里):先把通知全关掉、等它退场让开,再点;回执的 did 说
+  「a notification was covering it」,通知的字进 target(数据区)。一秒内让不开(新的一直在弹)就不点,报错。不先点再说:点下去落在
+  通知上,碰到的可能是它的「撤销」。底部吐司 `.amx-toast` 不接指针,不挡。
 - `click` / `type` / `press` 是**真输入**:渲染层只负责找元素、滚进视野、给坐标(还报「上面压着别的元素」),主进程发
   `sendInputEvent`(鼠标按下 / 抬起、键盘)与 `insertText`。`type` 缺省先选中框里原有的字再插入(替换),`append:true` 接在后面;
   `press` 认 `Enter` `Escape` `Tab` `Backspace` `ArrowDown` `a` `Mod+K`(Mod 在 mac 是 Meta)等,空格分隔可连按。
@@ -76,6 +83,26 @@ agent 不该用 computer use 去点沙箱窗口(它故意压在用户的窗口�
   两条路都拦:主进程的 `dialog.showOpenDialog / showSaveDialog`(包一层);`<input type="file">` 弹的选择框不走 dialog 模块,
   备着的时候经 CDP `Page.setInterceptFileChooserDialog` 拦下、`DOM.setFileInputFiles` 填进去(没备就是普通系统框)。
   没备时插件弹出原生框:状态里 `dialog` 报出来,动作一律拒绝(「先 files 再点」)。
+
+### 3.2 设置窗口与等对话框的命令(11-15)
+
+- **能力协商**:11-15 起的桌面多声明 `plugin.sandbox-v2`。老桌面不认 `window`,会把「设置窗口里的点击」静默做在主窗上,
+  所以引擎没看到 v2 时:`settings` 和 `window: 'settings'` 不发、直接说桌面比工具旧;`window: 'main'` 不带;command 不带 `allowPending`。
+
+- **设置窗口**:设置是独立的顶层浮动窗口(不是主窗的子窗),插件的 `registerSetting` 行与 `registerSettingsView` 面板画在
+  「设置 → 插件 → 本插件」的详情页里。`settings` 动作经主窗的 `openSettings('fplugin:<id>')` 打开它(与用户点齿轮同一条路),
+  等这扇窗的渲染层装上钩子、插件在它那份插件仓里装上,落定后回这扇窗的大纲和截图;`close: true` 关掉。
+  之后 read / click / type / press / scroll / screenshot 带 `window: 'settings'` 在这扇窗里做;不写 window = 主窗。
+  引用按窗口分:主窗 `e12`、设置窗口 `s12`;没写 window 而 target 是 `sN` 的自动去设置窗口,拿 `sN` 去主窗点 → 报错,不点同号的别的元素。
+  space 只在主窗。设置窗口没开着时带 `window: 'settings'` → 报「没开,先 settings」。
+  每扇窗各有一份插件实例:保存即重载 / reload 时设置窗口跟着 `reloadPlugin()`。`files` 的 `<input type=file>` 拦截两扇窗都挂。
+  静默模式(macOS)下 agent 开的设置窗口压到普通窗口之下(同主窗);用户进了沙箱(任一扇窗获焦 / 卡片上「打开沙箱窗口」)就放回普通层级。
+- **等对话框的命令**:引擎带 `allowPending: true`(v2)时,渲染层的 `command` 跑 1.5 秒还没完(多半弹了自己的选择框在等人点),先回 `{ok, pending: true}`,
+  父进程挂在结果 text 的 `command: {pending: true}` 上(老引擎不看它,照旧说「跑了」),工具说「开始了、还在跑,去读窗口接着做,别重跑」。
+  之后才抛的错记进插件的 console(`[sandbox] command "x" failed after it had started: …`)。
+  不带 `allowPending`(老引擎)照旧等它跑完:老引擎把回执当「跑完了」,早回会让它以为写完了;等满 10 秒还没完,说「命令没跑完、可能在等它弹的框」。
+- **钩子没拿到值分四种说法**:窗口没开 / 渲染层还没装上钩子(「还在启动」)/ 等超时(「页面忙或卡住」,带秒数)/ 调用本身失败(「页面可能刚重载,再试」)。
+  以前一律报「还在启动」(`sandboxChild.ts` 的 `hookMissText`)。
 
 回执挂在桌面回来的 text 的 `action` 键上(`{...SandboxStatus, action: SandboxActionReport}`),`parseSandboxStatus` 不看它,
 `parseSandboxAction` 单独解析;状态 + 大纲超 46k 时先削大纲。老桌面不认这些动作:回 `unsupported`,工具说「Forsion 比工具旧」。
@@ -133,4 +160,5 @@ console 与最后的挂载报错 —— client_cmd 结果 text 与工具结果�
   对话卡、setup 抛错、安装、停止与不留孤儿、负对照;11-03 起加:插件 Space 列出来并落在上面、Ribbon 没有内置 Space、没播种内置插件、
   read → type → click → press 拿到插件的 console 与提示且截图是新的、files + `<input type=file>`、沙箱外路径负对照、右栏卡运行 / 停止两态);
   `SHOT_DIR=<目录>` 落沙箱窗口、点完之后、对话卡、右栏卡截图;
-- 真模型:live 台架 `--only pluginsandbox`(台架扮桌面应答 `plugin.*`,含无能力 / 手机端两个负对照;⑤ 在沙箱里 read → type → click 并转述点完冒出的报错)。
+- 真模型:live 台架 `--only pluginsandbox`(台架扮桌面应答 `plugin.*`,含无能力 / 手机端两个负对照;⑤ 在沙箱里 read → type → click 并转述点完冒出的报错;
+  ⑥ settings 打开设置窗口、在那扇窗里填字点保存;⑦ 命令回 pending 时不重跑、读窗口在框里选)。

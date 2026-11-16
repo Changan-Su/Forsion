@@ -5,6 +5,7 @@
  * TANGU_REMOTE_MARK_SECRET(验 unitWeb 的远程盖章);模型驱动的子进程(run_bash / 后台进程 / verifyCommand /
  * rg / 浏览器 / 外部 ACP 引擎)一个都不该拿到 —— 拿到 forsion_token = 能直接调云端批准别的设备上的审批。
  * 只剥「本进程的凭据」,不动 PATH / HOME / 用户自己的工具 key(OPENAI_API_KEY 之类是用户给工具链的,不归引擎管)。
+ * 外部 ACP 引擎更严:先走白名单(engines/engineEnv.ts,只给系统变量和那个引擎自己的),最后仍经这里剥一遍。
  * ⚠️ 不改 process.env:config.ts 解析时读一次,其余读取方(浏览器 key 等)是懒读的。
  */
 

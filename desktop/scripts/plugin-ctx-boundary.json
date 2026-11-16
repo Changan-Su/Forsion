@@ -38,6 +38,7 @@
     "desktop/frontend/src/amadeus/plugins/externalPdfSurface.ts",
     "desktop/frontend/src/amadeus/plugins/viewSurface.tsx",
     "desktop/frontend/src/amadeus/plugins/listTree.ts",
+    "desktop/frontend/src/amadeus/plugins/pluginCreated.ts",
     "desktop/shared/chatBox.ts"
   ],
   "writesUserData": [
@@ -45,7 +46,8 @@
     "desktop/frontend/src/amadeus/plugins/pluginDb.ts",
     "desktop/frontend/src/amadeus/plugins/pluginCalendar.ts",
     "desktop/frontend/src/amadeus/plugins/pluginCalendarEvents.ts",
-    "desktop/frontend/src/amadeus/plugins/pluginDataSync.ts"
+    "desktop/frontend/src/amadeus/plugins/pluginDataSync.ts",
+    "desktop/frontend/src/amadeus/plugins/pluginFileOps.ts"
   ],
   "types": [
     "desktop/frontend/src/amadeus/plugins/types.ts"

@@ -68,6 +68,21 @@ export interface CommandContribution {
   run(args?: Record<string, unknown>): void | Promise<void>
   keywords?: string
   /**
+   * Default key binding (2026-11-16+; older hosts ignore it). Modifiers and one key joined with `+`, where `Mod` is
+   * ⌘ on macOS and Ctrl elsewhere — e.g. `'Mod+Shift+Y'`, `'Mod+Alt+K'`, `'Mod+Shift+ArrowUp'`. It must include `Mod`
+   * (a bare or Alt-only key would fire while the user types). With `Shift`, use a letter, `[`, `]` or a named key
+   * (ArrowUp, F5, Enter …): Shift + digit / punctuation produces another character and never matches; `Space` is not
+   * supported. Anything else is ignored with a console warning. Many keys are already taken (Settings → Shortcuts
+   * lists them), so expect a common choice to stay inactive.
+   *
+   * It is only a suggestion. A binding the user sets for this command always wins. The default takes effect only
+   * while nothing else uses the key — a built-in command, a system or note-editor shortcut, the user's binding for
+   * any other command, or another plugin's default for the same key (then neither plugin gets it). A conflicting
+   * default stays inactive: Settings → Shortcuts lists the command as unbound with a note naming the conflict, and
+   * the default switches on by itself once the key is free. The user can always bind a key there manually.
+   */
+  hotkey?: string
+  /**
    * Toggle state, for on/off commands only. When declared, a copy of this command pinned to the
    * Ribbon command zone renders as a toggle (`aria-pressed` + highlighted while on). Evaluated at
    * render time — keep it cheap and side-effect free; the Ribbon re-reads it after a click and on
@@ -127,7 +142,8 @@ export interface ThemeContribution {
 /**
  * ⚠️ 库依赖契约(2026-09-02 立规,起因:服务器总览误依赖笔记库,用户实报「太奇怪了」):
  * 下面**凡走库内路径**的方法都要求一个**已打开**的笔记库 —— `readFile / writeFile / watchFile /
- * openFile / loadPage / createPage / listPages / listFiles / searchVault / reveal / trash / workFolder(的落点)`。
+ * openFile / loadPage / createPage / listPages / listFiles / searchVault / reveal / trash / createFolder / stat / renamePath /
+ * movePath / workFolder(的落点)`。
  * 没有活动库时:写类方法 reject、只读查询给空数组、`vaultRoot()` 给 null(**用它探测**)。
  * 而且库是**惰性恢复**的:用户这一程没进过 Amadeus 之前 `vaultRoot()` 就是 null,哪怕他有库。插件视图挂载时宿主会
  * 唤醒它(2026-10-02 起),但恢复是异步的:视图刚挂上那一下仍可能是 null,读库前先等 `vaultRoot()` 有值。
@@ -331,6 +347,40 @@ export interface PluginAppApi extends BlockSurfaceApi {
    *  只在有回收站的宿主上存在(本机桌面)。web / 移动端 / 旧宿主**方法整个不存在**:`ctx.app.trash` 没有就别画
    *  删除按钮 —— 没有回收站的端删除不可恢复,宿主不替插件做这件事。 */
   trash?(path: string): Promise<void>
+  /** Create a folder (2026-11-16+): vault-relative, nested segments are created as needed; a folder that already exists
+   *  resolves. Rejects with no vault open ('No vault is open'), a path escaping the vault (`..`, a drive letter), a
+   *  segment starting with `.` or with surrounding spaces, or a file in the way. Paths take `/` (leading/trailing
+   *  slashes are dropped). Folders you create here count as yours for `renamePath` / `movePath` this session, except
+   *  your work folder and its parent folders (those are never recorded). Older hosts lack it: `ctx.app.createFolder?.(…)`, and fall back to `writeFile` (which creates parent folders). */
+  createFolder?(path: string): Promise<void>
+  /** Kind, size and times of a vault path (2026-11-16+). `mtime` = last modified, `ctime` = created (null when the file
+   *  system doesn't record it), both ms since epoch; `size` is bytes (0 for folders). `''` = the vault root.
+   *  Missing path or no vault open → null (same shape as `readFile`); a path escaping the vault and real IO errors reject.
+   *  Desktop and mobile only: web hosts list files without times, so the method is absent there. Older hosts lack it:
+   *  `ctx.app.stat?.(…)`. */
+  stat?(path: string): Promise<{ kind: 'file' | 'folder'; size: number; mtime: number; ctime: number | null } | null>
+  /** Rename a note, `.db`, folder or plugin file type in place (2026-11-16+), the same way the file tree does it: links to
+   *  it across the vault are rewritten and editors that have it open follow. `newName` is the new name without a folder;
+   *  a missing `.md` / `.db` / compound suffix (`.canvas.md`, `.excalidraw.md`) is added back, and the file kind can't
+   *  change. Resolves with the new vault-relative path (unchanged name → the same path).
+   *  ⚠️ Boundary: paths inside your `workFolder()` and paths your plugin created this session (`writeFile` / `writeBytes`
+   *  to a path that didn't exist, `createFolder`) are renamed directly — a created folder, or a created note with
+   *  subnotes, only while every file inside is also yours. Anything else asks the user first (one dialog at a time,
+   *  Cancel focused); Cancel rejects with `Error('user_declined')`. Call it from a user action, not in a loop over the vault.
+   *  A note's subnote folder (`*.fd`) moves with its note and can't be renamed on its own; a folder can't be renamed to `*.fd`.
+   *  Rejects: no vault open, missing path, target exists, invalid name (slashes, leading `.`, surrounding spaces),
+   *  file kinds the tree can't rename (images, PDFs, …), a folder that contains `.db` files, plugin disabled. If the
+   *  file was moved but the host couldn't finish updating (links, `.fd` subnotes), it rejects with a message naming
+   *  the new path. Calls are queued host-wide, one at a time. Older hosts lack it: `ctx.app.renamePath?.(…)`. */
+  renamePath?(path: string, newName: string): Promise<string>
+  /** Move a file or folder into another existing folder (2026-11-16+; `''` = vault root), the same way dragging it in the
+   *  file tree does: links to moved notes are rewritten, a note's `.fd` subnotes move with it, open editors follow.
+   *  Resolves with the new vault-relative path. Same boundary and rejections as `renamePath` (the dialog names the
+   *  destination); also rejects a missing destination folder, a folder into itself or into a `*.fd` subnote folder
+   *  (a note may move into one: it becomes a subnote), a `*.fd` folder on its own, and `.db` files, folders that contain
+   *  them or notes whose subnotes do (relation columns in other tables would lose them). Relative Markdown links to a moved attachment are not rewritten (wikilinks resolve
+   *  by name and keep working), as in the tree. Older hosts lack it: `ctx.app.movePath?.(…)`. */
+  movePath?(path: string, destFolder: string): Promise<string>
   /** 当前库的**绝对路径**(没打开库时 null)。用途:把路径交给 Agent 的 host 模式工具(view_image /
    *  run_bash)—— 它们跑在真实文件系统上,只有 vault 相对路径喂不进去。读的是渲染进程已有的
    *  pageStore 状态,**不会重开库、无副作用**。
@@ -585,6 +635,16 @@ export interface MountBlockOptions {
   onInsertAfter?(blockId: string, content: string): void
 }
 
+/** Result of `insertMarkdownAt` (2026-11-16+). A refusal says why, so a plugin can tell the user something useful:
+ *  - `'stale-token'` — the token is not the current note's (the user switched notes), or your plugin was disabled / reloaded.
+ *  - `'no-note'` — no note is open.
+ *  - `'empty'` — the markdown parses to nothing.
+ *  - `'read-only'` — the note is open but cannot be edited: reading mode, or a locked / read-only view. Nothing is inserted.
+ *  - `'no-editor'` — the note has no live editor that can take it right now: still loading, source mode, or just closed. */
+export type PluginInsertResult =
+  | { ok: true }
+  | { ok: false; reason: 'stale-token' | 'no-note' | 'empty' | 'read-only' | 'no-editor' }
+
 /** The block surface: real Amadeus blocks, rendered by the host into DOM the plugin owns.
  *  Exists so an external plugin can build a "nodes are real blocks" UI (the mindmap) without the host
  *  having to ship it — built-in and external plugins get the same capabilities, the only difference
@@ -611,6 +671,21 @@ export interface BlockSurfaceApi {
    *  Returns false when refused (stale token / no note / nothing to insert / no live editor).
    *  Older hosts lack it: `ctx.app.insertMarkdown?.(…)`. */
   insertMarkdown(token: string, md: string, where?: 'cursor' | 'start' | 'end'): boolean
+  /** `insertMarkdown` with two more abilities and a reason when it refuses (2026-11-16+). Same parse and same single
+   *  transaction; the old method keeps its boolean result and behaviour.
+   *  `opts.where`: `'cursor'` (default), `'start'` and `'end'` mean exactly what they mean for `insertMarkdown`. New
+   *  `'caret'`: when the markdown is a single paragraph, its inline content goes in AT the caret, inside the current line,
+   *  replacing a non-empty selection like typing would (`Hello {{name}}` → `Hello Ada`). Anything else (several
+   *  paragraphs, a heading, a list), or a caret where that content can't go (a selected card, bold text into a code
+   *  block), behaves exactly like `'cursor'`.
+   *  `opts.cursorMarker`: a string you put in `md` where the caret should land (Templater's `tp.file.cursor()`). The host
+   *  removes it and puts the caret there, focusing the note — the insert is one undo step and the marker is never saved.
+   *  Later copies of the same marker are removed too. Any text works, markdown syntax included. If `md` doesn't contain it,
+   *  or it ends up somewhere the caret can't go (inside a link address), it is removed and the caret lands as without it.
+   *  ⚠️ v3 notes (`model === 'blocks'`) have no caret: `'caret'` and `'cursor'` degrade to `'end'` (logged), and
+   *  `cursorMarker` is only removed.
+   *  Older hosts lack it: `ctx.app.insertMarkdownAt?.(…)`, else fall back to `insertMarkdown`. */
+  insertMarkdownAt?(token: string, md: string, opts?: { where?: 'caret' | 'cursor' | 'start' | 'end'; cursorMarker?: string }): PluginInsertResult
   /** v3 only — refused (and logged) on a v4 note. */
   deleteBlock(token: string, id: string): Promise<void>
   /** v3 only — refused (and logged) on a v4 note. */
@@ -1144,6 +1219,56 @@ export interface FileCreatorContribution {
   run(parentFolder: string): void | Promise<void>
 }
 
+/** Which host template flow is running (TemplateProcessorContribution.process, 2026-11-16+).
+ *  - `'insert'`: the user picked a template in the host template picker; it goes in at the cursor of `targetPath`.
+ *  - `'daily'`: today's daily note was just created and gets the daily-note template.
+ *  - `'new-note'`: reserved for a "new note from template" flow; this host does not emit it yet. */
+export type TemplateFlowKind = 'insert' | 'daily' | 'new-note'
+
+/** Hook into the host's own templates (ctx.registerTemplateProcessor, 2026-11-16+) instead of shipping a second
+ *  template picker. Older hosts lack it: `ctx.registerTemplateProcessor?.(…)`. */
+export interface TemplateProcessorContribution {
+  /** Unique within the plugin. Registering the same id again replaces the earlier processor. */
+  id: string
+  /** Shown to the user, e.g. "Templater". */
+  name: string | (() => string)
+  /** Extra vault-relative template folders listed in the host template picker, next to `templates/`.
+   *  Duplicates are merged; absolute paths and paths that leave the vault (`..`) are ignored. Asked each time the
+   *  picker opens; a call that throws or takes longer than 2 seconds adds nothing. */
+  folders?(): string[] | Promise<string[]>
+  /** Runs before the host's own `{{date}}` / `{{time}}` / `{{title}}` substitution, on the template file's raw text
+   *  (frontmatter included). Processors run in registration order, each getting the previous one's output. Return the
+   *  processed text, or null to leave it unchanged. May prompt the user (no time limit). Throwing aborts that insert
+   *  with a host toast naming the plugin; nothing is written. If your plugin is disabled or reloaded while this is
+   *  pending, the host stops waiting and treats it as unchanged. If the library, pane or note changed meanwhile, nothing
+   *  is inserted. */
+  process(source: string, info: { templatePath: string; targetPath: string; kind: TemplateFlowKind }): string | null | Promise<string | null>
+}
+
+/** Fill a brand-new empty note before it is written (ctx.registerNoteBirth, 2026-11-16+). Older hosts lack it:
+ *  `ctx.registerNoteBirth?.(…)`; there, fall back to `ctx.app.onVaultEvent` + `writeFile` and expect the open editor
+ *  not to see your write (its next save keeps the user's text and moves yours into a conflict copy). */
+export interface NoteBirthContribution {
+  /** Unique within the plugin. Registering the same id again replaces the earlier provider. */
+  id: string
+  /** Asked before the host writes a new empty note created by the user: "New note" (sidebar, command, ⌘N, new-tab
+   *  page), "New note" in a folder, a child note, creating a note from the quick switcher, confirming an unresolved
+   *  [[link]], and today's daily note when no daily-note template is set. `ctx.app.createPage()` is the same "New note"
+   *  command, so it is asked too (including your own provider). Not asked for files plugins write themselves
+   *  (`writeFile`, `writeBytes`, file creators), rows added to a notes database, or files arriving via sync.
+   *  Return the note's initial Markdown, or null to pass. Providers are asked one at a time in registration order;
+   *  the first non-null answer is written as the note's content in the same write that creates it, so the editor
+   *  opens on it. May prompt the user: after a moment the host shows "<plugin> is preparing this note…" with
+   *  Cancel. Cancel, or no answer within 10 minutes, creates the note empty as before; a provider that throws is
+   *  skipped (with a toast naming the plugin). Switching library while waiting stops the ask and the note is not
+   *  created (with a toast). `signal` aborts once the host stops waiting for you (Cancel, time-out, library switch, your
+   *  plugin disabled, or the note was created): close your prompt then; a late answer is ignored. The note itself is
+   *  never lost or blocked. While one ask is pending, another new note (including one your `initial` creates) is born
+   *  empty. If the person moved to another pane or note while waiting, the note is created but not opened (for "New
+   *  note" a notice offers Open; a child note's link is still inserted). */
+  initial(info: { path: string; folder: string; signal?: AbortSignal }): string | null | Promise<string | null>
+}
+
 /** An inline renderer for a `![[target]]` transclusion whose target this plugin recognises (typically its
  *  own file type). Consulted before the built-in file-card fallback, so `![[x.mindmap.md]]` renders as a
  *  live preview instead of a generic "open file" card. */
@@ -1618,6 +1743,67 @@ export interface PluginAccountStatus {
   workspaceId?: string
 }
 
+/** Error codes `ctx.net.request` rejects with (on `err.code`). */
+export type PluginNetErrorCode =
+  /** The URL's host is not covered by the manifest `network` list (also: the plugin declares none). */
+  | 'net_domain_not_declared'
+  /** The host is an IP address, or resolves (at connect time, every redirect hop included) to a loopback,
+   *  private, link-local, CGNAT, multicast or reserved address. */
+  | 'net_blocked_address'
+  /** The whole request — every redirect hop and the response body — took longer than `timeoutMs`. */
+  | 'net_timeout'
+  /** The response body (after decompression) or the request body is larger than 10 MB. */
+  | 'net_too_large'
+  /** Not an absolute `https:` URL on the default port, or it carries user:password@. */
+  | 'net_bad_url'
+  /** Bad `init`: unsupported method, a body on GET/HEAD, a header the host sets itself (Host, Content-Length,
+   *  Connection, Transfer-Encoding, Proxy-*, Sec-* …), or a malformed header. */
+  | 'net_bad_request'
+  /** Anything else: DNS failure, TLS error, connection reset, more than 5 redirects. `err.message` says which. */
+  | 'net_failed'
+
+/** What `ctx.net.request` resolves with — any HTTP status, including 4xx / 5xx (only transport problems reject). */
+export interface PluginNetResponse {
+  status: number
+  /** Lower-case header names; repeated headers joined with ', '. */
+  headers: Record<string, string>
+  /** The body, already decompressed. */
+  bytes: Uint8Array
+  /** The final URL after redirects. */
+  url: string
+  /** `bytes` decoded as UTF-8. */
+  text(): string
+  /** `text()` parsed as JSON; throws on invalid JSON. */
+  json<T = unknown>(): T
+}
+
+/**
+ * Network requests made by the host on the plugin's behalf (2026-11-16+, desktop only; absent on web and mobile,
+ * and older hosts lack it — check `if (ctx.net)`). Use it for third-party APIs that send no CORS headers, where a
+ * plain `fetch` from plugin code fails.
+ *
+ * Only hosts listed in the manifest's `network` array are reachable, and the user sees that list on the plugin's
+ * page ("Accesses: …"). Entries are host names only — `"api.example.com"` exactly, or `"*.example.com"` for any
+ * subdomain at any depth (not `example.com` itself; list both if you need both). No scheme, port or path.
+ *
+ * The rules, enforced by the host for every redirect hop: `https:` on the default port only; IP-address hosts and
+ * names that resolve to local/private addresses are refused; at most 5 redirects, each re-checked against your list
+ * (Authorization and Cookie are dropped when a redirect changes host); no app cookies, proxy credentials or client
+ * certificates are ever attached — send your own `Authorization` header if the API needs one; response body ≤ 10 MB;
+ * `timeoutMs` defaults to 30 000 and is capped at 60 000. Failures reject with an `Error` whose `code` is a
+ * {@link PluginNetErrorCode}. Requests still in flight when the plugin is disabled reject.
+ */
+export interface PluginNetApi {
+  request(url: string, init?: {
+    /** GET (default), HEAD, POST, PUT, PATCH, DELETE or OPTIONS. */
+    method?: string
+    headers?: Record<string, string>
+    /** A string is sent as UTF-8 (Content-Type defaults to text/plain). Not allowed on GET / HEAD. */
+    body?: string | Uint8Array
+    timeoutMs?: number
+  }): Promise<PluginNetResponse>
+}
+
 /** Host-owned account; credentials never form part of this plugin API. */
 export interface PluginAccount {
   status(): Promise<PluginAccountStatus>
@@ -1930,12 +2116,21 @@ export interface PluginContext {
    * The latest active registration wins; disable removes it. Schema/serializer updates are not supported. */
   registerNoteRenderer?(def: import('./noteRenderers').NoteRendererContribution): { dispose(): void }
   account?: PluginAccount
+  /** Host-made HTTPS requests to the domains in manifest `network` (2026-11-16+, desktop only; see {@link PluginNetApi}).
+   *  Absent on web, mobile and older hosts. */
+  net?: PluginNetApi
   app: PluginAppApi
   registerSlashItem(item: SlashContribution): void
   /** Add an action to the selection bar's "⋯" menu (see SelectionActionContribution). The result goes
    *  through the host's preview + confirm, never straight into the note. Revoked on disable / reload. */
   registerSelectionAction(action: SelectionActionContribution): void
-  registerCommand(command: CommandContribution): void
+  /** Add a command to the command palette and Settings → Shortcuts (and, with `invoke`, the agent's catalog).
+   *  Returns a disposer that removes exactly this registration (2026-11-16+). Registering the same `id` again from
+   *  the same plugin replaces the earlier entry in place — one row, updated title / run / hotkey — so a plugin can
+   *  add and remove commands at runtime (one per enabled template, say) without being reloaded. All of them still
+   *  go away when the plugin is disabled. Older hosts return `undefined` and append a duplicate on re-registration:
+   *  call the result as `off?.()` and register each id once there. */
+  registerCommand(command: CommandContribution): () => void
   registerTheme(theme: ThemeContribution): void
   /** Adds an image-only preset to Appearance settings; never changes the user's selection. */
   registerAppearance?(preset: import('../../../../shared/startupAppearance').AppearancePreset): () => void
@@ -1970,6 +2165,15 @@ export interface PluginContext {
   registerToolLabel?(def: ToolLabelContribution): void
   /** Contribute a "新建 …" entry into the file tree's right-click menu (root + folder). See FileCreatorContribution. */
   registerFileCreator(def: FileCreatorContribution): void
+  /** Hook into the host's template flows (2026-11-16+): run `process` on a template before the host's own variable
+   *  substitution (template picker insert, daily note), and list extra template folders in the host picker. Returns a
+   *  disposer; the host also removes it on disable / reload. Older hosts lack it: `ctx.registerTemplateProcessor?.(…)`.
+   *  See TemplateProcessorContribution. */
+  registerTemplateProcessor?(def: TemplateProcessorContribution): () => void
+  /** Give a brand-new empty note its initial content before the host writes it (2026-11-16+), e.g. folder templates.
+   *  Returns a disposer; the host also removes it on disable / reload. Older hosts lack it: `ctx.registerNoteBirth?.(…)`.
+   *  See NoteBirthContribution. */
+  registerNoteBirth?(def: NoteBirthContribution): () => void
   /** Open (or focus) one of this plugin's own registered views. Defaults to the main area;
    *  pass { location: 'left' | 'right' } to dock it into a sidebar (2026-08-25+, older hosts
    *  ignore the option and open in main), or 'bottom' for the native bottom panel (2026-10-02+).
@@ -2748,8 +2952,8 @@ export interface PluginContext {
       removeFolder(id: string): void
     }
   }
-  /** 必应每日壁纸(2026-10-18+):最近 8 张,`{ id, url, thumbnailUrl, title?, copyright?, startDate? }`。宿主代拉(桌面经主进程,
-   *  插件直连必应会被 CSP 拦)。拿不到 → reject;插件停用后给空数组。 */
+  /** 必应每日壁纸(2026-10-18+):最近 8 张,`{ id, url, thumbnailUrl, title?, copyright?, startDate? }`。宿主代拉(桌面经主进程;
+   *  必应接口不回 CORS 头,插件直接 fetch 会被 CORS 拦,不是 CSP)。拿不到 → reject;插件停用后给空数组。 */
   wallpaper?: {
     bing(locale?: 'zh' | 'en'): Promise<PluginBingWallpaper[]>
   }
@@ -3021,6 +3225,8 @@ export interface AmadeusPlugin {
   entitlement?: string
   /** 声明要用的宿主敏感能力(manifest `capabilities`,主进程已按白名单过滤)。没声明的能力宿主不注入。 */
   capabilities?: import('@amadeus-shared/ipc').PluginCapability[]
+  /** ctx.net 能访问的主机名模式(manifest `network`,2026-11-16+):只给详情页 / 商店展示;主进程每次请求都从磁盘重读。 */
+  network?: string[]
   /** README.md content for the detail page (external plugins only). */
   readme?: string
   /** CHANGELOG.md content — rendered as the "更新日志" section on the detail page (external plugins only). */

@@ -48,6 +48,8 @@ const hostTangu = (): typeof window.tangu => (typeof window !== 'undefined' ? wi
 const automationHost = (): boolean => !!readTangu()?.waitBackend && hostTangu()?.executionCapabilities?.host !== false
 import { noteOf, usePageStore } from '../store/pageStore'
 import { subscribeVaultEvents } from './vaultEvents'
+import { createPluginFileOps, probeAbsent } from './pluginFileOps'
+import { markPluginCreated } from './pluginCreated'
 import { useUiStore } from '../store/uiStore'
 import { setTheme as applyAccent, toggleMode } from '../theme/ThemeManager'
 import { amadeus } from '../api'
@@ -58,6 +60,7 @@ import { isHostPath } from '@amadeus-shared/pdfLink'
 import { claimHostMount, createBlockSurface, mountHostReact } from './blockSurface'
 import { addEditorExtension, clearEditorExtensions } from './editorExtensions'
 import { registerNoteRenderer, beginNoteRendererReload, settleNoteRendererReload, clearNoteRendererReload } from './noteRenderers'
+import { registerNoteBirth, registerTemplateProcessor } from './templateHooks'
 import { uiAgentSettings } from './agentSettings'
 import { registerPluginSeries, track, unregisterPluginAchievements, useAchievements } from '../../achievements/store'
 import { setInboxCard, type PluginInboxCard } from './inboxCards'
@@ -107,6 +110,7 @@ import { getAggDb } from '../store/dbAggregateStore'
 import { kickAutomation } from '../store/automationKick'
 import { triggerToUpsert } from '../../views/automation/lib'
 import { memberOf, useCalendarConfig } from '../store/calendarConfigStore'
+import { pluginDefaultHotkey } from '../../shortcutUsage'
 import type {
   AmadeusPlugin,
   CommandContribution,
@@ -117,6 +121,7 @@ import type {
   PluginAppApi,
   PlatformAccountStatus,
   PluginContext,
+  PluginNetApi,
   PropertyTypeContribution,
   SettingContribution,
   SettingsViewContribution,
@@ -462,6 +467,16 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
   // 否则被禁用的插件还在被外部改动唤醒(它的回调里往往就是一次 readFile + 重建内部状态)。
   const fileUnsubs = new Set<() => void>()
   const ribbonActions = new Set<() => void>()
+  // createFolder / stat / renamePath / movePath(2026-11-16,pluginFileOps.ts):改名挪动走文件树的链,源不归这个插件时先问用户。
+  const fileOps = createPluginFileOps({
+    pluginId, getName, alive: () => alive, workFolder: () => api.workFolder(), dropListCache,
+    fileTypeExt: (p) => { const n = p.toLowerCase(); return matchFileType(p)?.extensions.find((e) => n.endsWith(e.toLowerCase())) ?? null },
+  })
+  // 写落到原本不存在的路径 = 这个插件这一程建的(pluginCreated 账本,renamePath / movePath 的边界)。
+  // 探测先于写同步发出,写完才记账;探测本身从不 reject,也不挡写。
+  const noteCreated = async (p: string, fresh: Promise<boolean>, root: string | null): Promise<void> => {
+    if ((await fresh) && root && usePageStore.getState().vaultRoot === root) markPluginCreated(pluginId, p, root)
+  }
   const api: PluginAppApi = {
     // 两条路由通用(v4 不设 activePage;正文也不进 store —— 一律取块表面那份统一派生,别再各写各的)。
     getActivePage: () => noteOf(usePageStore.getState()),
@@ -493,11 +508,17 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
     assetUrl: (p) => toAssetUrl(p),
     hostPath: (p) => pluginHostPath(usePageStore.getState().vaultRoot, p, { executionCapabilities: { host: readTangu()?.hostExecution?.() ?? hostTangu()?.executionCapabilities?.host ?? false } }),
     // 插件契约是 Promise<void>:不带 base 的写宿主本就只回 void,这里显式抹平(CAS 结果类型不外泄给插件)。
-    writeFile: (p, text) => (ok() ? amadeus.writeTextFile(p, text).then(() => {}).finally(dropListCache) : Promise.resolve()),
+    writeFile: (p, text) => {
+      if (!ok()) return Promise.resolve()
+      const fresh = probeAbsent(p), root = usePageStore.getState().vaultRoot
+      return amadeus.writeTextFile(p, text).then(() => noteCreated(p, fresh, root)).finally(dropListCache)
+    },
     ...(amadeus?.scopedTextWrites ? {
       writeFileScoped: async (p: string, text: string, expectedRoot: string, options?: { create?: boolean }): Promise<boolean> => {
         if (!ok() || usePageStore.getState().vaultRoot !== expectedRoot) throw new Error('Vault changed before plugin save')
+        const fresh = options?.create === true ? Promise.resolve(true) : probeAbsent(p) // 同主进程:只认 create === true 为仅新建
         const result = await amadeus.writeTextFile(p, text, { ...options, expectedRoot }).finally(dropListCache)
+        if (result?.ok !== false) await noteCreated(p, fresh, expectedRoot)
         return result?.ok !== false
       },
     } : {}),
@@ -524,7 +545,9 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
               : b instanceof ArrayBuffer ? new Uint8Array(b) : null
             if (!view) return Promise.reject(new TypeError('writeBytes expects a Uint8Array or ArrayBuffer'))
             // 子视图(subarray)过 IPC 会把**整块**底层 buffer 结构化克隆过去 → 只拷自己那一段。
-            return amadeus.saveVaultBytes(p, view.byteLength === view.buffer.byteLength ? view : view.slice()).finally(dropListCache)
+            const fresh = probeAbsent(p), root = usePageStore.getState().vaultRoot
+            return amadeus.saveVaultBytes(p, view.byteLength === view.buffer.byteLength ? view : view.slice())
+              .then(() => noteCreated(p, fresh, root)).finally(dropListCache)
           },
         }
       : {}),
@@ -770,6 +793,7 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
           },
         }
       : {}),
+    ...fileOps.api,
   }
   return {
     api,
@@ -779,6 +803,7 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
       provideFeedbackChannel(pluginId, null)
       provideInboxChannel(pluginId, null)
       alive = false
+      fileOps.revoke()
       surface.revoke()
       for (const u of Array.from(fileUnsubs)) {
         try { u() } catch (e) { console.error(`[amadeus] plugin "${pluginId}" watchFile unsubscribe failed`, e) }
@@ -917,6 +942,7 @@ function pluginMeta(src: ExternalPluginSource): Omit<AmadeusPlugin, 'setup'> {
     requiresPlugins: src.requiresPlugins,
     entitlement: src.entitlement,
     capabilities: src.capabilities,
+    network: src.network,
     readme: src.readme,
     changelog: src.changelog,
     onboarding: src.onboarding,
@@ -1496,6 +1522,8 @@ export const usePluginStore = create<PluginState>((set, get) => {
     // registerCompanion 不再挂新伴随面、旧 handle 变哑。语言 / 模型 / 账号订阅、仪表盘 / 原生表 / 宿主 UI 挂载、
     // 字体、伴随面……插件自己能撤,但**最终责任人是宿主**:全记在 scope 上,关账统一撤(codex 评审 2026-08-14 起的纪律)。
     const ctxAlive = (): boolean => scope.alive()
+    /** 模板钩子提示里点名用的插件显示名(当前语言)。 */
+    const hookPluginName = (): string => { const p = get().plugins.find((x) => x.id === pluginId); return p ? pluginDisplayName(p, currentLocale()) : pluginId }
     // workspace.open 的插件这一半(第三期):只开自己的视图(类型名宿主拼命名空间)、层级白名单在 pluginLayer。
     const ownView = (viewId: string): ViewContribution | undefined => get().views.find((item) => item.pluginId === pluginId && item.item.id === viewId)?.item
     const openOwn = (viewId: string, params: Record<string, unknown> | undefined, opts: OpenOptions): Promise<OpenResult> =>
@@ -1905,9 +1933,31 @@ export const usePluginStore = create<PluginState>((set, get) => {
         if (ctxAlive()) listener(status)
       }), 'account') : () => {},
     } : undefined
+    // ctx.net(2026-11-16+):只有本机桌面的主进程能代请求(web / 手机 / Unit 设备页的 amadeus 桥没有这一项 → 不注入)。
+    // 白名单不在这里判:主进程按 pluginId 读磁盘上的 manifest(这一侧递什么都不算数)。停用后在途的请求一律作废。
+    const netBridge = amadeus?.pluginNetRequest
+    const net: PluginNetApi | undefined = netBridge ? {
+      request: async (url, init) => {
+        const dead = (): Error => Object.assign(new Error('plugin disabled'), { code: 'net_failed' as const })
+        if (!ctxAlive()) throw dead()
+        const r = await netBridge(pluginId, String(url), init == null ? undefined : {
+          ...(init.method != null ? { method: init.method } : {}),
+          ...(init.headers != null ? { headers: init.headers } : {}),
+          ...(init.body != null ? { body: init.body } : {}),
+          ...(init.timeoutMs != null ? { timeoutMs: init.timeoutMs } : {}),
+        })
+        if (!ctxAlive()) throw dead()
+        if (!r.ok) throw Object.assign(new Error(r.message || r.code), { name: 'PluginNetError', code: r.code })
+        const bytes = r.bytes instanceof Uint8Array ? r.bytes : new Uint8Array(r.bytes as ArrayLike<number>)
+        let text: string | null = null
+        const readText = (): string => (text ??= new TextDecoder().decode(bytes))
+        return { status: r.status, headers: { ...r.headers }, bytes, url: r.url, text: readText, json: <T,>() => JSON.parse(readText()) as T }
+      },
+    } : undefined
     const ctx: PluginContext = {
     app: appApi,
     account: scopedAccount,
+    ...(net ? { net } : {}),
     registerSlashItem: (item) => set((s) => ({ slashItems: [...s.slashItems, { pluginId, item }] })),
     registerSelectionAction: (action) => {
       if (!ctxAlive()) return
@@ -1924,8 +1974,27 @@ export const usePluginStore = create<PluginState>((set, get) => {
       if (output != null && output !== 'preview' && output !== 'none') console.warn(`[amadeus] 插件 ${pluginId} 的划线动作「${action.id}」output 只认 'preview' | 'none',已当作 'preview'`)
       set((s) => ({ selectionActions: [...s.selectionActions.filter((o) => !(o.pluginId === pluginId && o.item.id === action.id)), { pluginId, item: action }] }))
     },
-    registerCommand: (command) =>
-      set((s) => ({ commands: [...s.commands, { pluginId, item: command }] })),
+    // 2026-11-16+:回一个只撤这一次登记的 disposer;同插件同 id 再登记 = 原位替换(命令面板一行,不是两行)。
+    // 撤按条目身份认:被替换掉的那次登记的 disposer、停用后旧实例的 disposer 都是空操作,碰不到新的那条。
+    registerCommand: (command) => {
+      if (!ctxAlive()) return () => {}
+      if (!command || typeof command.id !== 'string' || !command.id || typeof command.run !== 'function') {
+        console.warn(`[amadeus] 插件 ${pluginId} 的 registerCommand 缺 id / run,已忽略`)
+        return () => {}
+      }
+      if (command.hotkey != null && !pluginDefaultHotkey(command.hotkey)) {
+        console.warn(`[amadeus] 插件 ${pluginId} 的命令「${command.id}」hotkey 无效(要带 Mod、按得出来,形如 'Mod+Shift+Y'),已当作没写`)
+      }
+      const entry: Owned<CommandContribution> = { pluginId, item: command }
+      set((s) => {
+        const i = s.commands.findIndex((o) => o.pluginId === pluginId && o.item.id === command.id)
+        if (i < 0) return { commands: [...s.commands, entry] }
+        const commands = s.commands.slice()
+        commands[i] = entry
+        return { commands }
+      })
+      return () => set((s) => (s.commands.includes(entry) ? { commands: s.commands.filter((o) => o !== entry) } : s))
+    },
     registerTheme: (theme) => {
       injectThemeStyle(theme.id, theme.css)
       scope.own('theme', () => removeThemeStyle(theme.id), theme.id) // <style> 在 store 外:只删切片会留孤儿
@@ -2058,6 +2127,15 @@ export const usePluginStore = create<PluginState>((set, get) => {
     },
     registerFileCreator: (def) =>
       set((s) => ({ fileCreators: [...s.fileCreators, { pluginId, item: def }] })),
+    // 接进宿主模板流程(2026-11-16+,见 templateHooks.ts):登记进模块级表,停用 / 重载经 scope 摘掉。
+    registerTemplateProcessor: (def) => {
+      if (!ctxAlive()) return () => {}
+      return scope.own('templateProcessor', registerTemplateProcessor(pluginId, hookPluginName, def), def.id)
+    },
+    registerNoteBirth: (def) => {
+      if (!ctxAlive()) return () => {}
+      return scope.own('noteBirth', registerNoteBirth(pluginId, hookPluginName, def), def.id)
+    },
     // 只收形状对的;认不认领(工具是不是本插件引擎半身注册的)在画的时候按引擎报的名下工具现判(toolResultCards.claimToolCard)。
     registerToolResultRenderer: (def) => {
       if (!ctxAlive()) return

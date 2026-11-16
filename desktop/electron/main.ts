@@ -21,7 +21,7 @@ import { protectWindowsAudioClock } from './windowsAudioClock'
 import { startMiniAutoPanel } from './miniAutoPanel'
 import { createDesktopFloat } from './desktopFloat'
 import { createComputerUsePip, createPipAgentRelay, PIP_AGENT_CHANNELS, PIP_MARGIN, PIP_WIDTH, type PipAgentHost } from './computerUsePip'
-import { createPluginSandbox, sandboxRequiredPlugins, type PluginSandboxUiSeed } from './pluginSandbox'
+import { createPluginSandbox, readSandboxManifest, sandboxRequiredPlugins, type PluginSandboxUiSeed } from './pluginSandbox'
 import { sandboxSelf, startSandboxChild, sandboxForward, SANDBOX_SWITCHES } from './sandboxChild'
 import { MINI_WINDOW_LIMIT, VOICE_CALL_VIEW, miniEntityKey, normalizeMiniOpenOptions, normalizeMiniSessionContext, type MiniSessionContext, type MiniOpenOptions, type MiniOpenResult, type MainPanelTarget } from '../shared/miniPanel'
 import { miniSessionState, type MiniSessionEntry } from './miniSessionState'
@@ -5634,7 +5634,15 @@ app.whenReady().then(async () => {
   hideMainOnLaunch = (pendingSpaceWindows.length > 0 || pendingUnitWindows.length > 0) && !mainRequested
   createWindow()
   if (!SANDBOX) restoreMiniWindows()
-  if (SANDBOX) startSandboxChild(SANDBOX, { getWindow: () => mainWindow, quit: () => { isQuitting = true; app.quit() }, log: (m) => console.log(m) })
+  if (SANDBOX) {
+    startSandboxChild(SANDBOX, {
+      getWindow: () => mainWindow,
+      // 设置是独立的浮动面板(不是主窗的子窗):agent 的 settings 动作开它、按 window 选它动手
+      getSettingsWindow: () => floatingWindows.get('settings') ?? null,
+      quit: () => { isQuitting = true; app.quit() },
+      log: (m) => console.log(m),
+    })
+  }
   // 恢复上次退出时的独立窗(位置/尺寸 + 各窗自恢复布局);之后再开排着的 Space 快捷方式窗 —— 上次没关的同一扇
   // 已经按原位置恢复了,createDetachedWindow 按 sp_<id> 去重,只是叫到前面。
   void restoreDetachedWindows().catch((e) => console.error('[win] restore detached failed:', e)).finally(() => {
@@ -5736,10 +5744,13 @@ async function installFromSandbox(): Promise<{ ok: boolean; pluginId?: string; e
   // ⚠️ 必须挂父窗(同 confirmPair):无父的 showMessageBox 在 mac 上冻住主循环;拿不到窗就不装
   const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null
   if (!win) return { ok: false, cancelled: true }
+  // 装好后 ctx.net 能连哪些域名:确认框里如实列出(读的是将要拷走的那份 manifest)
+  const network = st.dir ? (await readSandboxManifest(st.dir).catch(() => null))?.network : undefined
   const { response } = await dialog.showMessageBox(win, {
     type: 'question', title: mt('main.pluginSandbox.installTitle'),
     message: mt('main.pluginSandbox.installMessage', { name: st.name ?? '', version: st.version ?? '' }),
-    detail: mt('main.pluginSandbox.installDetail', { dir: st.dir ?? '' }),
+    detail: mt('main.pluginSandbox.installDetail', { dir: st.dir ?? '' })
+      + (network?.length ? `\n\n${mt('main.pluginSandbox.installNetwork', { domains: network.join(', ') })}` : ''),
     buttons: [mt('main.pluginSandbox.install'), mt('main.pluginSandbox.cancel')], defaultId: 0, cancelId: 1, noLink: true,
   })
   if (response !== 0) return { ok: false, cancelled: true }

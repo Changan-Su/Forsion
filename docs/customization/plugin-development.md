@@ -44,6 +44,8 @@ ctx.listCapabilities?.includes('tree' | 'items' | 'rename')
 
 沙箱里还有这些(2026-11-03 起):只装这个插件,内置插件也只装它在 `requiresPlugins` 里点名的那几个(比如依赖 Forsion Extend 就写上它),左侧功能条上只有这个插件自己的 Space,一开就停在它的第一个 Space 上;窗口标题写着「Forsion 沙箱 · 插件名」。Agent 能在沙箱里像人一样用插件:读出界面上有哪些按钮和输入框,点击、输入、按键、滚动、切 Space,每一步做完都看一眼截图和这期间的控制台、弹出的提示;要选文件时它先把插件目录里的测试文件备好,点「选择文件」不弹系统框。发起沙箱的那个对话,右侧摘要栏多一张沙箱卡:缩略图是 Agent 最近截的那一张(点它打开沙箱窗口),下面是视图数、Space、控制台错误数和最近一步;沙箱停了卡片变灰,点「重新启动」就再开起来。
 
+沙箱的新变化(2026-11-15 起,需要同期的新版桌面):Agent 读界面时能看到开关是不是按下、输入框和笔记是不是只读(比如笔记处在阅读模式),点开关之前会先看清状态;通知卡挡住要点的地方时,先把通知关掉再点;插件命令弹出自己的对话框、一时没跑完时,Agent 不会重跑,而是读窗口、接着在对话框里操作;Agent 还能打开这个插件在「设置 → 插件」里的详情页(沙箱里另开的一扇设置窗口),在那里填设置、点保存。
+
 引擎插件的工具用 `capabilities.approval` 声明动手前要不要问用户。不写 = 只读,不问;`'command'` = 与跑命令同一档,「询问我批准」时每次问,用户点过「总允许」或开了完全通行就不再问;`'always'` = 每次调用都由用户本人在卡上确认 —— 完全通行、「总允许」、用户写的放行规则都跳不过,聊天会话与云端会话照样弹卡,自动化、Muse 后台和远程会话里直接被拒。花掉用户的东西、替用户对外发出内容这类动作用 `'always'`;读和写拆成两个工具名,只给写的那个声明。卡上显示的是这次调用的参数,所以一次调用只做一件事。
 
 只给官方插件的三样(2026-10-27 起):`ctx.cloud`(以用户的 Forsion 账号请求云端,只放商店「我的条目」与提交更新两个接口)、工具的 `capabilities.approvalPreview`(插件自己写审批卡上的文案)、以及进聊天(Chat)会话的工具面。官方 = 插件在 Forsion 签名的捆绑包里(包根 `SIGNATURE` 用引擎内置的公钥验过,插件的清单和入口都签在里面)。第三方插件拿到的 `ctx.cloud` 是 `undefined`,写了 `approvalPreview` 也被忽略(卡上照旧是这次调用的参数),工具也不进聊天会话。
@@ -284,6 +286,107 @@ ctx.ui?.mountSelectionBar?.(root, { tools, source, ask, watch })
 插件可以随包带上自己的 MCP server(只限在本机跑的那种),装好、启用之后 Tangu 就多了这些工具,停用插件就一起停掉。设置 → MCP 里会列出它们,写着来自哪个插件;要关掉,在插件设置里停用这个插件。这些工具和用户自己接的 MCP 一样缺省按需加载:每次请求只带一行目录(工具名 + 描述第一行),AI 要用时先装上再调,所以描述第一行要能单独说清这个工具做什么;每轮都要用的 server 在声明里写 `"deferLoading": false` 就一直带着。插件也可以带 hook,在会话开始、工具跑完、一次回答结束时收到通知,用来做审计、归档这类事;这种 hook 只能看,拦不住任何操作,也不能往对话里加内容。设置 → Hooks 里同样列出它们,标着「只观察」。
 
 插件还能收到笔记库里的文件事件:新建、删除、在 Forsion 里改名或移动、被别的程序或 Tangu 改动,以及换库。反链、自动整理这类插件靠它跟上库里的变化,不用一遍遍重新扫描。接口细节见插件开发技能的「插件自带的 MCP server 与 hooks」和「库级文件事件」两节;插件命令给 Tangu 交回查询结果的写法在「`invoke`:把一条命令开给 agent」一节。
+
+## 库里的文件夹、文件时间、改名与移动（2026-11-16 起）
+
+插件可以建文件夹、读文件的大小和时间、改名和移动库里的文件，做法和你在文件树里操作一样：改名或移动笔记时，库里指向它的 `[[链接]]` 跟着改，开着它的编辑器跟着走，笔记的子笔记一起挪。这几个方法都要有打开的库；旧宿主没有，用可选链判断。
+
+```js
+await ctx.app.createFolder?.('Plugins/my-plugin/Archive')
+const info = await ctx.app.stat?.('Notes/Idea.md')        // { kind, size, mtime, ctime } 或 null
+const moved = await ctx.app.movePath?.('Notes/Idea.md', 'Plugins/my-plugin/Archive')
+const renamed = await ctx.app.renamePath?.(moved, 'Idea (done)')
+```
+
+- `stat` 给出是文件还是文件夹、字节数、修改时间和创建时间（毫秒；文件系统不记创建时间时为 `null`），路径不存在或没开库时给 `null`。网页版拿不到文件时间，那里没有这个方法。
+- `renamePath` 的新名字不带文件夹，漏写的 `.md`、`.db` 这类后缀会补回去，改名改不了文件类型；`movePath` 的目标文件夹必须已经存在，空串表示库根。两者都返回新的路径。
+- 插件自己的东西直接改：工作文件夹里的文件，以及这个插件本次运行里自己建出来的文件和文件夹（用 `writeFile`、`writeBytes` 写出的新文件，`createFolder` 建的文件夹）。改别的文件之前，Forsion 会先问你一次（「允许」/「取消」，焦点在「取消」上）；你点了取消，插件收到 `user_declined` 错误，什么都不会改。
+- 不做的：移动多维表（`.db`）或含多维表的文件夹、改名改掉文件类型、给图片和 PDF 改名、单独挪笔记的子笔记文件夹（`.fd`）、移到不存在的文件夹。文件已经挪过去、链接却没改完时，报错里写明文件现在的位置。
+
+## 模板与新笔记（2026-11-16 起）
+
+Forsion 自己就有模板：库里 `templates/` 文件夹里的笔记，插入时替换 `{{date}}`、`{{date:格式}}`、`{{time}}`、`{{title}}`（格式读 `.obsidian/templates.json`）；日记的文件夹、命名和模板读设置或 `.obsidian/daily-notes.json`。做 Templater 一类插件、或者「某个文件夹里的新笔记套某个模板」的插件，接进这一套，不要另做一个模板选择器。
+
+模板处理器在宿主替换变量之前拿到模板原文，按注册顺序一个接一个处理；返回 `null` 表示不改，抛错则这次不插、提示里写着插件名；处理到一半插件被停用或重载，就当这一个没改，后面的处理器照常接着跑。等处理器的时候换了库、换了窗格或笔记，这次就不插。`folders()` 往模板选择器里加文件夹。它管两处：在模板选择器里选模板插入（`kind` 为 `'insert'`），以及新建日记（`'daily'`）。
+
+```js
+const off = ctx.registerTemplateProcessor?.({
+  id: 'tp',
+  name: 'Templater',
+  folders: () => ['Templates'],
+  process: async (source, { templatePath, targetPath, kind }) => render(source, targetPath),
+})
+```
+
+新笔记的初始内容：用户新建一篇空笔记时，Forsion 在写盘之前先问插件要内容，第一个给出非 `null` 内容的插件，内容和这次新建一起写进去，编辑器一打开就是它。会问的地方：所有「新建笔记」入口（包括插件调用 `ctx.app.createPage()`，调用的那个插件自己的提供方也会被问）、在文件夹里新建、子笔记、在快速切换器里新建、点开还不存在的 `[[链接]]`，以及没设日记模板时的新日记；不问的只有：插件自己用 `writeFile`、`writeBytes` 或文件创建器写的文件，多维表里加的行，同步下来的文件。插件可以弹框问用户，等得久了 Forsion 会显示「「插件名」正在准备这篇笔记…」并带「取消」；取消或 10 分钟没有回答，就和以前一样建一篇空笔记。
+
+- `signal` 在 Forsion 不再等这个插件时中止：点了取消、到了 10 分钟、换了库、插件被停用或重载、笔记已经建好。它一中止，插件就该关掉自己的弹框；之后才来的回答会被忽略。
+- 等的时候换了库：这篇笔记不建，并弹提示说明原因。
+- 等的时候你去了别的窗格或别的笔记：笔记照样建好，但不会把你拉回去打开它 —— 「新建笔记」会弹一条「已新建「…」」并带「打开」按钮；子笔记的链接照样插进父笔记。
+
+```js
+ctx.registerNoteBirth?.({
+  id: 'folder-templates',
+  initial: async ({ path, folder, signal }) => (folder.startsWith('Journal') ? render(journalTemplate, path) : null),
+})
+```
+
+两个方法都返回撤销函数，插件停用时也会自动撤掉。旧宿主没有这两个方法。别用「收到新建文件事件再 `writeFile` 写进去」来代替：实测打开着的编辑器看不到这次写入，用户一打字保存，模板就被挪进一份「冲突」副本。
+
+## 往笔记里插内容（2026-11-16 起）
+
+`ctx.app.insertMarkdownAt` 往当前笔记里插一段 Markdown，比原来的 `insertMarkdown` 多三样：`where: 'caret'` 插在光标所在的那一行里（内容只有一段时；选中了文字就像打字一样替换它）；`cursorMarker` 是你写在内容里的一串标记，插完 Forsion 把它删掉、光标落在那里；插不进去时告诉你原因。每次插入单独算一步撤销。
+
+```js
+const page = ctx.app.getPage()
+const r = ctx.app.insertMarkdownAt?.(page.token, 'Hello {{cursor}}', { where: 'caret', cursorMarker: '{{cursor}}' })
+// r = { ok: true } 或 { ok: false, reason: 'stale-token' | 'no-note' | 'empty' | 'read-only' | 'no-editor' }
+```
+
+- `read-only`：笔记在阅读模式或被锁定，什么也没插，可以提示用户切回编辑。`no-editor`：编辑器还没准备好，或者在源码模式。`stale-token`：用户已经换了一篇笔记，或插件被停用、重载了。
+- 标记放在行首的 `#`、`-` 这类语法前面会改变 Markdown 结构，这时宿主照原文插入、不放光标。
+- 旧版块笔记没有光标，`'caret'` 退成插到末尾。旧宿主没有这个方法时退回 `insertMarkdown`。
+
+编辑器扩展（`ctx.registerEditorExtension`）拿到的是 Forsion 编辑器自己的 ProseMirror，除了拦按键、加装饰，也能改文字和移光标（LaTeX Suite 插件在占位之间跳光标就是这么做的）。但如果只是「把一段模板插到光标处、光标放到标记上」，先用上面的 `insertMarkdownAt`：解析、撤销、只读判断都由宿主处理。
+
+## 联网与第三方库
+
+桌面版的内容安全策略（CSP）拦的是从别的网站加载**脚本**，所以第三方库要打包进插件自己的 `main.js`（大小不限）。**联网请求不受 CSP 限制**：它允许 `https:` 和 `wss:`，对方接口返回了跨域许可头（`Access-Control-Allow-Origin`）时，插件可以直接用 `fetch`。接口不返回这个头时请求会失败（`TypeError: Failed to fetch`），原因是浏览器的跨域限制（CORS），不是 CSP。
+
+这类接口改用 `ctx.net.request`，由 Forsion 的主进程代为请求（2026-11-16 起，只在桌面版；网页版、手机版和旧宿主上没有 `ctx.net`，先判断再用）。插件要先在 manifest 的 `network` 里写明会访问哪些主机：
+
+```json
+{ "network": ["api.example.com", "*.cdn.example.com"] }
+```
+
+```js
+const res = await ctx.net.request('https://api.example.com/v1/items', { method: 'POST', headers: { Authorization: `Bearer ${key}` }, body: JSON.stringify(query) })
+if (res.status === 200) render(res.json())
+```
+
+- 只写主机名，不带协议、端口和路径；`*.example.com` 包括任意层的子域名，但不包括 `example.com` 本身，两个都要就两个都写。每次请求时主进程都从磁盘上的 manifest 重新读这份名单。插件详情页、已装插件的商店信息和沙箱的安装确认里会列出「会访问：…」；从商店安装之前暂时还看不到。
+- 只走 https 的默认端口（443）。主机写成 IP 地址，或者连接时解析到本机、内网、保留地址的，一律拒绝；重定向最多 5 次，每一跳都重新核对名单。Forsion 的 cookie 和登录信息从来不会带上，接口要鉴权就自己写 `Authorization` 头。
+- 响应解压后不超过 10 MB；`timeoutMs` 缺省 30 秒、最多 60 秒；每个插件同时最多 8 个请求；插件被停用时，还没回来的请求会失败。
+- 返回的 `res` 带 `status`、`headers`（小写的头名）、`bytes`、`url`（重定向后的地址）以及 `text()`、`json()`。4xx、5xx 照常返回，只有连不上之类的问题才失败；失败时错误的 `code` 是 `net_domain_not_declared`（名单里没有）、`net_blocked_address`、`net_timeout`、`net_too_large`、`net_bad_url`、`net_bad_request` 或 `net_failed`。
+- 返回了跨域许可头的 https 接口，照旧可以直接 `fetch`。
+
+网页版和手机版的 CSP 不一样，要在那两端单独试。
+
+## 命令的撤销与缺省快捷键
+
+`ctx.registerCommand` 返回一个撤销函数，只撤掉这一次注册（2026-11-16 起）；同一个插件用同一个 `id` 再注册，会原地替换原来那条（标题、动作、快捷键都换成新的），被替换掉的那次注册的撤销函数不再起作用。所以插件可以在运行中增删命令（比如每个启用的模板一条），不用重载。插件停用时它的命令照旧全部撤掉。旧宿主返回 `undefined`，同 `id` 再注册会多出一条，所以写成 `off?.()`，并且在旧宿主上每个 `id` 只注册一次。
+
+```js
+const off = ctx.registerCommand({ id: 'my-plugin-insert-daily', title: 'Insert daily template', hotkey: 'Mod+Shift+Y', run: insertDaily })
+off?.()
+```
+
+`hotkey` 是这条命令的缺省快捷键，只是建议：
+
+- 必须带 `Mod`（macOS 上是 ⌘，其他系统是 Ctrl）；带 `Shift` 时只能配字母、`[`、`]` 或 `ArrowUp`、`F5`、`Enter` 这类具名键（Shift 加数字或标点打出来的是别的字符，永远对不上）；不支持 `Space`。写错的会被忽略，并在控制台提示一次。
+- 只有这个键没被占用时才生效：Forsion 自己的命令、系统和编辑器的快捷键、你给别的命令设的键，以及别的插件用了同一个缺省键（这时两个插件都拿不到）。你给这条命令自己设的键永远优先。
+- 没生效的缺省键会在 设置 → 快捷键 里标出来，写着「插件默认键 {key} 与「{other}」冲突，未生效」；那个键空出来以后，它会自动生效。你随时可以在那里手动给命令设键。
+- 旧宿主忽略 `hotkey`。
 
 ## IM 通道
 

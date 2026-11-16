@@ -28,9 +28,9 @@ import {
 } from '@agentclientprotocol/sdk';
 import type { ToolCall } from '../core/types.js';
 import type { ApprovalDecision } from '../services/approvals.js';
-import { envWithFullPath, type EngineDef } from './config.js';
+import type { EngineDef } from './config.js';
 import type { EngineRunCtx, EngineResult, EngineCapabilities } from './manager.js';
-import { toolSubprocessEnv } from '../sandbox/credentialEnv.js';
+import { engineSubprocessEnv } from './engineEnv.js';
 import { killProcessTree } from '../utils/boundedProcess.js';
 import { formatEngineModelNoApiKey } from '../contracts/engineModelError.js';
 
@@ -57,16 +57,17 @@ export const HANDSHAKE_TIMEOUT_MS = Number(process.env.TANGU_ENGINE_HANDSHAKE_TI
  *  (Node CVE-2024-27980 后更是硬拒 .cmd)→ win32 必须 shell:true 交 cmd.exe 解析,这正是「切换外部 CLI 在
  *  Windows 卡死」的根因。args:内置引擎为常量;自定义引擎取自用户本机 engines.json(host-only,等价用户自己
  *  在终端敲命令),非远程注入面。windowsHide 避免弹控制台窗口。POSIX 上 shell=false、detached 组杀行为照旧。
- *  env:PATH 先补全(envWithFullPath)——GUI 启动的 Electron 只有 launchd 精简 PATH,`openclaw`/`pi` 这类全局 bin
- *  在终端跑得起、装成 App 就 ENOENT;检测端 binOnPath 早就扫这些目录了,spawn 端不补就是「检测说有、跑起来没有」。 */
+ *  env:走白名单(engineSubprocessEnv,见 engineEnv.ts);PATH 先补全(envWithFullPath)——GUI 启动的 Electron 只有
+ *  launchd 精简 PATH,`openclaw`/`pi` 这类全局 bin 在终端跑得起、装成 App 就 ENOENT;检测端 binOnPath 早就扫这些目录了,
+ *  spawn 端不补就是「检测说有、跑起来没有」。 */
 export function spawnEngine(def: EngineDef, opts?: { cwd?: string; detached?: boolean; env?: Record<string, string> }) {
   return spawn(def.command, def.args ?? [], {
     cwd: opts?.cwd,
     stdio: ['pipe', 'pipe', 'pipe'] as ['pipe', 'pipe', 'pipe'], // 元组字面量 → 非空 stdin/stdout 流类型
-    // 剥引擎凭据(C2):外部 CLI 跑模型驱动的命令,拿到 forsion_token / 本机令牌就能绕过本引擎直调云端与本机端点。
-    // 在**合成之后**再剥:引擎清单的 def.env 也不许把这些键加回来。
-    // opts.env:这一轮专用的(交接的指令目录,见 EngineRunCtx.env),叠在引擎清单的 def.env 之后。
-    env: toolSubprocessEnv({ ...envWithFullPath(process.env), ...(def.env ?? {}), ...(opts?.env ?? {}) }),
+    // 环境走白名单(engineEnv.ts):外部 CLI 跑模型驱动的命令,本进程环境里只给系统运转要的和这个引擎自己的变量,
+    // FORSION_* / TANGU_* 和别家的 key 一律不给。def.env、opts.env(这一轮专用的,如交接的指令目录)叠在过滤之后;
+    // 合成之后再剥 C2 凭据 —— 清单也不许把 forsion_token / 本机令牌加回来。
+    env: engineSubprocessEnv(def, opts?.env ?? {}),
     shell: process.platform === 'win32',
     windowsHide: true,
     // DETACHED_PROCESS cancels windowsHide and loses grandchild stdout on Windows.
@@ -527,7 +528,7 @@ async function settleAfterLoad(lastAt: () => number, signal: AbortSignal): Promi
 
 export async function runAcpEngine(def: EngineDef, ctx: EngineRunCtx): Promise<EngineResult> {
   const cwd = ctx.cwd || process.cwd();
-  // host 能力下运行：继承父 env（等价于用户自己在终端跑 claude），叠加 def.env。适配器据此读 ANTHROPIC_API_KEY/~/.claude。
+  // host 能力下运行:环境走白名单(系统变量 + 这个引擎自己的,见 engineEnv.ts),叠加 def.env。适配器据此读 ANTHROPIC_API_KEY/~/.claude。
   // detached:true → 子进程自成进程组(pgid=child.pid);kill 时杀「整组」，连带 npx 衍生的真子进程(claude-code-acp)，
   // 否则只杀外层 npx、孙进程残留成孤儿。范本 ../tools/hostExec.ts。
   const runEnv = { ...(ctx.env ?? {}), ...(def.agentsHomeEnv && ctx.agentsHome ? { [def.agentsHomeEnv]: ctx.agentsHome } : {}) };

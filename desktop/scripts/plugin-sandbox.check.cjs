@@ -15,6 +15,8 @@
  *  11 (11-03)插件带的 Space 列得出来、启动就落在它上面;Ribbon 上没有内置 Space;沙箱 home 里没播种内置插件
  *  12 (11-03)在沙箱里动手:read 给出带引用的大纲 → type 填输入框 → click 按钮 → 回执里有插件新写的 console、
  *     弹出的提示和一张新截图(和上一张不同 = 不是旧帧);press Enter;files 备好路径后点 <input type=file> 直接拿到文件
+ *  14 (11-15)read 报开关的 pressed / 只读框的 read-only;命令等自己弹的框 → 几秒内回 pending,在框里点完它跑完;
+ *     目标被通知盖住 → 先关通知再点;settings 打开设置窗口(s 引用、插件自绘面板),window "settings" 在里面动手、截图、关掉
  *  10 (`--focus`,仅 macOS,会真把窗口叫到前面几秒)「打开沙箱窗口」第一次、以及被别的窗口盖住之后再点一次,
  *     沙箱窗口都排在屏幕最前(读系统窗口列表的前后顺序)
  *
@@ -55,8 +57,30 @@ ctx.registerView({ id: 'fixture-view', title: 'Sandbox fixture', mount(el) {
   add.onclick = put
   input.onkeydown = (e) => { if (e.key === 'Enter') put() }
   pick.onchange = () => console.log('PICKED ' + [...pick.files].map((f) => f.name).join(','))
-  el.append(b, input, add, list, pick)
-  return () => { b.remove(); input.remove(); add.remove(); list.remove(); pick.remove() }
+  const tog = document.createElement('button'); tog.textContent = 'Compact view'; tog.setAttribute('aria-pressed', 'false')
+  tog.onclick = () => tog.setAttribute('aria-pressed', String(tog.getAttribute('aria-pressed') !== 'true'))
+  const ro = document.createElement('input'); ro.readOnly = true; ro.value = 'locked'; ro.setAttribute('aria-label', 'Locked field')
+  el.append(b, input, add, list, pick, tog, ro)
+  return () => { b.remove(); input.remove(); add.remove(); list.remove(); pick.remove(); tog.remove(); ro.remove() }
+} })
+ctx.registerSettingsView && ctx.registerSettingsView({ id: 'fixture-settings', mount(el) {
+  const key = document.createElement('input'); key.setAttribute('aria-label', 'Fixture API key')
+  const save = document.createElement('button'); save.textContent = 'Save key'; save.onclick = () => console.log('SETTINGS_SAVED ' + key.value)
+  el.append(key, save)
+  return () => { key.remove(); save.remove() }
+} })
+// 等自己弹的框:点了「Pick Dune」才跑完(11-15:以前等满 10 秒被报成「沙箱窗口还在启动」)
+ctx.registerCommand({ id: 'fixture-pick', title: 'Fixture pick', async run() {
+  const box = document.createElement('div'); box.setAttribute('role', 'dialog'); box.style.cssText = 'position:fixed;left:40%;top:40%;z-index:60;padding:12px;background:#fff'
+  const btn = document.createElement('button'); btn.textContent = 'Pick Dune'; box.append(btn); document.body.append(box)
+  await new Promise((resolve) => { btn.onclick = resolve })
+  box.remove(); console.log('PICKED_FROM_DIALOG')
+} })
+// 一个按钮正好压在右上角通知栈底下,再弹一条常驻的通知盖住它
+ctx.registerCommand({ id: 'fixture-toast', title: 'Fixture toast', run() {
+  const under = document.createElement('button'); under.textContent = 'Under toast'; under.style.cssText = 'position:fixed;top:50px;right:20px;width:120px;height:30px;z-index:50'
+  under.onclick = () => console.log('UNDER_TOAST_CLICKED'); document.body.append(under)
+  ctx.notify('Covering toast', { level: 'error', sticky: true })
 } })
 ctx.registerCommand({ id: 'fixture-ping', title: 'Fixture ping', run(a) { console.log('FIXTURE_PING ' + JSON.stringify(a || {})) } })
 ctx.registerCommand({ id: 'fixture-report', title: 'Fixture report', run() { window.tangu.sandbox.action('report', 'FIXTURE_NOTE_FROM_SANDBOX') } })
@@ -322,6 +346,9 @@ async function main() {
       res && res.ok === true && res.nonce === 'nonce-1' && st?.state === 'running' && st.views.includes('fixture-view')
       && st.logs.some((l) => l.text.includes('SBX_MARK_ONE')) && /^data:image\/jpeg;base64,/.test(res.image || ''),
       JSON.stringify({ ok: res && res.ok, state: st?.state, views: st?.views, logs: st?.logs?.slice(-3), image: (res?.image || '').slice(0, 30), error: res?.error }))
+    // 11-15:新功能(settings / window / allowPending)只在桌面声明 v2 时引擎才发 —— 声明要真随 run 发出去,不然引擎永远当它是老桌面
+    const caps = stub.seen.runs[0]?.clientCapabilities || []
+    check('1d 起 run 时声明了 plugin.sandbox 与 plugin.sandbox-v2', caps.includes('plugin.sandbox') && caps.includes('plugin.sandbox-v2'), JSON.stringify(caps))
     check('1c 外观跟着用户那份:沙箱首屏的主题色 = 用户这份的(coral)', !!st?.logs.some((l) => l.text === 'SBX_SKIN coral'), JSON.stringify(st?.logs?.filter((l) => l.text.startsWith('SBX_SKIN'))))
     saveShot('sandbox-window.jpg', res?.image)
     if (st) stub.finish('r1', [{ type: 'tool_result', payload: { id: 'ts1', name: 'plugin_sandbox', result: embedded(st), elapsedMs: 5000 } }, { type: 'done', payload: {} }])
@@ -419,6 +446,53 @@ async function main() {
     const back = await until(async () => { const s = await status(); const o = await exec('read', {}); return s?.activeSpace === 'fixture-shelf' && o.ok && /Fixture shelf 2/.test(JSON.parse(o.text).action?.outline || '') && s }, 20_000)
     const sw = await act('space', { space: 'Fixture shelf 2' })
     check('12f 改了 space.json → 重载后还在这个插件 Space 上;按显示名字也切得过去', !!back && sw.r.ok && !sw.r.error, JSON.stringify({ active: (await status())?.activeSpace, space: sw.r.error || sw.a?.target }))
+
+    // ── 14 (11-15)看得出状态、被通知盖住先关掉、命令等自己的框不算没起来、设置窗口够得着 ──
+    const states = await act('read', {})
+    const stateText = states.a?.outline || ''
+    check('14a read:开关按钮报按没按下,只读的框报 read-only',
+      /\[e\d+\] button "Compact view" \(not pressed[,)]/.test(stateText) && /\[e\d+\] input "Locked field" \(read-only/.test(stateText), stateText.slice(0, 800))
+    await act('click', { target: 'Compact view' })
+    const toggled = (await act('read', {})).a?.outline || ''
+    check('14b 点了开关之后再读 → (pressed)', /button "Compact view" \(pressed[,)]/.test(toggled), toggled.slice(0, 800))
+    // 老引擎不带 allowPending:照旧等它跑完;等不完说「命令没跑完」,不说「窗口还在启动」
+    const old = await exec('command', { command: 'fixture-pick' })
+    const oldPicked = await act('click', { target: 'Pick Dune' })
+    check('14c 老引擎(不带 allowPending)→ 照旧等满再报,说的是命令没跑完、可能在等框;框里点完照样跑完',
+      /the command did not finish within 10s: it may be waiting on a dialog/.test(old.error || '') && !/still starting/.test(old.error || '') && oldPicked.a?.newLogs?.some((l) => l.text === 'PICKED_FROM_DIALOG'),
+      JSON.stringify({ error: old.error, picked: oldPicked.r.error || oldPicked.a?.newLogs }))
+    const t0 = Date.now()
+    const waiting = await exec('command', { command: 'fixture-pick', allowPending: true })
+    const waitMs = Date.now() - t0
+    check('14d 新引擎(allowPending)→ 几秒内回「开始了、还在跑」(command.pending),不报错',
+      waiting.ok && !waiting.error && JSON.parse(waiting.text).command?.pending === true && waitMs < 6000, JSON.stringify({ ms: waitMs, error: waiting.error, command: waiting.text && JSON.parse(waiting.text).command }))
+    const picked2 = await act('click', { target: 'Pick Dune' })
+    check('14d2 接着在它弹的框里点 → 命令跑完', picked2.a?.newLogs?.some((l) => l.text === 'PICKED_FROM_DIALOG'), JSON.stringify(picked2.r.error || picked2.a))
+    await exec('command', { command: 'fixture-toast' })
+    await until(async () => (await status())?.notices?.some((n) => n.text.includes('Covering toast')), 5000)
+    const underToast = await act('click', { target: 'Under toast' })
+    check('14e 目标被通知盖住 → 先关掉通知再点,点到的是目标,回执说了关过通知',
+      underToast.a?.newLogs?.some((l) => l.text === 'UNDER_TOAST_CLICKED') && /notification was covering it/.test(underToast.a?.did || '') && /Covering toast/.test(underToast.a?.target || ''),
+      JSON.stringify(underToast.r.error || underToast.a))
+    const noSettings = await act('read', { window: 'settings' })
+    const opened = await act('settings', {})
+    const settingsText = opened.a?.outline || ''
+    check('14f settings:设置窗口没开时按 window 读 → 说没开;settings 打开插件详情页,大纲里是 s 引用、看得到插件自绘面板,带截图',
+      /settings window is not open/.test(noSettings.r.error || '') && opened.r.ok && !opened.r.error && /\[s\d+\] input "Fixture API key"/.test(settingsText) && /^data:image\/jpeg/.test(opened.r.image || ''),
+      JSON.stringify({ no: noSettings.r.error, err: opened.r.error, did: opened.a?.did, outline: settingsText.slice(0, 600) }))
+    saveShot('sandbox-settings.jpg', opened.r.image)
+    const keyRef = (settingsText.match(/\[(s\d+)\] input "Fixture API key"/) || [])[1]
+    const typedKey = await act('type', { target: keyRef || 'Fixture API key', text: 'abc123' })
+    const savedKey = await act('click', { target: 'Save key', window: 'settings' })
+    const wrongWin = await act('click', { target: keyRef || 's1', window: 'main' })
+    check('14g 在设置窗口里动手:s 引用自己找到那扇窗,window "settings" 按字找;插件 console 回来了;s 引用拿到主窗去点 → 报错不乱点',
+      typedKey.r.ok && !typedKey.r.error && /settings window/.test(typedKey.a?.did || '') && savedKey.a?.newLogs?.some((l) => l.text === 'SETTINGS_SAVED abc123') && /comes from the settings window/.test(wrongWin.r.error || ''),
+      JSON.stringify({ typed: typedKey.r.error || typedKey.a?.did, saved: savedKey.r.error || savedKey.a, wrong: wrongWin.r.error }))
+    const shotSettings = await exec('screenshot', { window: 'settings' })
+    const closedSettings = await act('settings', { close: true })
+    const afterClose = await act('read', { window: 'settings' })
+    check('14h 设置窗口截图;close 关掉之后再按 window 读 → 说没开', /^data:image\/jpeg/.test(shotSettings.image || '') && /closed the settings window/.test(closedSettings.a?.did || '') && /not open/.test(afterClose.r.error || ''),
+      JSON.stringify({ shot: (shotSettings.image || '').slice(0, 30), shotErr: shotSettings.error, closed: closedSettings.r.error || closedSettings.a?.did, after: afterClose.r.error }))
 
     // ── 6 对话卡 ──
     const card = await until(() => win.locator('[data-sandbox-card]').first().isVisible().catch(() => false), 30_000)

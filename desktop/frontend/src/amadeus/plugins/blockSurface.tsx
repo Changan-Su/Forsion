@@ -41,10 +41,10 @@ export { mountHostReact, claimHostMount } from '@lcl/components'
 import { DndContext, useSensors } from '@dnd-kit/core'
 import { SortableContext } from '@dnd-kit/sortable'
 import { usePageStore, PageScopeCtx, noteOf, v4PathOf, type PageStoreApi } from '../store/pageStore'
-import { hasUnifiedInstance, subscribeUnified, unifiedBody, unifiedFm, unifiedInsertMarkdown } from '../unified/lifecycle'
+import { hasUnifiedInstance, subscribeUnified, unifiedBody, unifiedFm, unifiedInsertMarkdown, unifiedInsertMarkdownAt } from '../unified/lifecycle'
 import { BlockHost, BlockSurfaceContext, type BlockSurface } from '../components/BlockHost'
 import { askString } from '../components/askString'
-import type { BlockSurfaceApi, PageSnapshot, MountBlockOptions } from './types'
+import type { BlockSurfaceApi, PageSnapshot, MountBlockOptions, PluginInsertResult } from './types'
 
 /** surface 的数据源:不绑定 = 活动面板门面(facade),绑定 = 指定 scope 的 store。
  *  两者的 getState/subscribe 形状一致,门面会动态解析到当前活动面板。 */
@@ -276,6 +276,28 @@ export function createBlockSurface(pluginId: string, bind?: SurfaceBind): { api:
       const order = st.flatOrder()
       const afterId = w === 'start' ? null : (order[order.length - 1] ?? null)
       return !!st.insertBlockAfter(afterId, undefined, text)
+    },
+
+    // insertMarkdown 的带原因版(2026-11-16):'caret' 档 + cursorMarker,拒绝时说清为什么(此前一律 false,插件只能猜「大概是阅读模式」)。
+    insertMarkdownAt(token, md, opts) {
+      const no = (reason: Extract<PluginInsertResult, { ok: false }>['reason']): PluginInsertResult => ({ ok: false, reason })
+      if (!guard(token)) return no('stale-token') // 已停用的插件也算:它手里的令牌作废了
+      const o = (opts && typeof opts === 'object' ? opts : {}) as { where?: unknown; cursorMarker?: unknown }
+      const where = o.where === 'caret' || o.where === 'start' || o.where === 'end' ? o.where : 'cursor'
+      const marker = typeof o.cursorMarker === 'string' && o.cursorMarker ? o.cursorMarker : undefined
+      let text = String(md ?? '')
+      const v4 = rt.v4Now()
+      // 只有空白 = 空(编辑器会把它解析成一个空段落插进去 —— 旧 insertMarkdown 照旧如此,新口不这样)
+      if (v4) return text.trim() ? unifiedInsertMarkdownAt(v4, text, where, marker) : no('empty')
+      const st = rt.src.getState()
+      if (!st.activePage) return no('no-note')
+      // v3 没有光标位:'caret' / 'cursor' 同 insertMarkdown 退化为 'end';标记只删不落(块内容会原样写盘)。
+      if (marker) text = text.split(marker).join('')
+      if (!text.trim()) return no('empty')
+      if (o.where === 'caret' || o.where === 'cursor' || marker) console.warn(`[amadeus] 插件 ${pluginId}:v3 笔记没有光标位,insertMarkdownAt 按 'end' 插入、不落光标`)
+      const order = st.flatOrder()
+      const afterId = where === 'start' ? null : (order[order.length - 1] ?? null)
+      return st.insertBlockAfter(afterId, undefined, text) ? { ok: true } : no('no-editor') // store 没装载完 = ''
     },
 
     async deleteBlock(token, id) {
