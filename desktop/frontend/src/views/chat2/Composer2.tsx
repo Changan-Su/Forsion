@@ -41,6 +41,7 @@ import { addDraftFile, isInWorkspace, previewOf, release, removeDraftFile, uploa
 import { commandsFor } from '../../commandCatalog'
 import { getCustomCommands, expandCustomCommand, getModelQuota, listAllMessages, type CustomCommandInfo } from '../../services/backendService'
 import { ComposerMenuSurface, ComposerMenuHeader, useComposerLayout } from '../../components/ComposerMenuSurface'
+import { useCapsuleDroplet, useVoiceBarFlow } from './useCapsuleDroplet'
 import { AddContentMenu, type AddContentReference } from './AddContentMenu'
 import { NormalModeItem, normalModeItems } from './NormalModeItem'
 import { mainReferenceKey } from './mainReference'
@@ -727,6 +728,8 @@ export const Composer2: React.FC<{
     })
   }, draftKey)
   const voiceActive = voice.recording || voice.busy
+  // 麦克风 → 录音条:从麦克风那颗圆钮拉开,录完倒放缩回(11-16 Chat Box 水滴方案 3.3)
+  const voiceFlow = useVoiceBarFlow(voiceActive, cardRef)
   const pendingVoice = voice.preview?.pending || ''
   const shownDraft = joinVoiceText(draft, (voice.preview?.text || '') + pendingVoice)
 
@@ -851,13 +854,25 @@ export const Composer2: React.FC<{
   // 上下文占比的详情浮层:同款 absolute + 固定宽,窄屏也会捅出边缘。
   // 右边缘贴输入卡右边缘,不越出输入卡(走查 5.13):边界 = 输入卡、边距 0。
   const ctxPopFix = useEdgeNudge(openMenu === 'ctx' && !layout.compact, { boundary: '.t2c-card', margin: 0 })
+  // 底排按钮的菜单从按钮里流出来(11-16 Chat Box 水滴方案 A):再点 / 点空白 / Esc = 倒放,点了一行照旧直接收
+  const modelPanelRef = useRef<HTMLDivElement | null>(null)
+  const addPanelRef = useRef<HTMLDivElement | null>(null)
+  const capsule = useCapsuleDroplet<NonNullable<OpenMenu>>(openMenu, setOpenMenu, (k) => {
+    if (k === 'ctx') {
+      const wrap = (layout.tight ? addAnchorRef : ctxAnchorRef).current
+      return { wrap, pill: wrap?.querySelector<HTMLElement>('button') ?? null, panel: ctxPopFix.ref.current }
+    }
+    const wrap = k === 'mode' ? modeAnchorRef.current : k === 'add' ? addAnchorRef.current : cardRef.current?.querySelector<HTMLElement>('.t2c-row .model-pill-wrap') ?? null
+    const panel = k === 'mode' ? modeFix.ref.current : k === 'add' ? addPanelRef.current : modelPanelRef.current
+    return { wrap, pill: wrap?.querySelector<HTMLElement>(':scope > button') ?? null, panel, grow: k === 'model' ? 'right' : 'left' }
+  })
 
   useEffect(() => {
     if (!openMenu) return
     const onDown = (e: MouseEvent) => {
       // data-keep-menus:从菜单里弹出的确认框(如开 Ultra)—— 点它、在它里面按 Esc 都不算离开菜单
       if ((e.target as HTMLElement)?.closest?.('[data-cmenu], [data-keep-menus]')) return
-      setOpenMenu(null)
+      capsule.dismiss()
     }
     // 确认框开着时 Esc 只关确认框(焦点被 Tab 到背景也一样),不连带关菜单
     const onKey = (e: KeyboardEvent) => {
@@ -865,7 +880,7 @@ export const Composer2: React.FC<{
       const surface = openMenu === 'mode' ? modeFix.ref.current : openMenu === 'ctx' ? ctxPopFix.ref.current : null
       if (!cardRef.current?.contains(document.activeElement) && !surface?.contains(document.activeElement)) return
       const trigger = openMenu === 'ctx' && layout.tight ? addAnchorRef.current?.querySelector('button') : cardRef.current?.querySelector<HTMLElement>('.t2c-row button[aria-expanded="true"]')
-      setOpenMenu(null); trigger?.focus({ preventScroll: true })
+      capsule.dismiss(); trigger?.focus({ preventScroll: true })
     }
     document.addEventListener('mousedown', onDown)
     document.addEventListener('keydown', onKey)
@@ -1597,7 +1612,7 @@ export const Composer2: React.FC<{
     if (disabled || uploadGate) return // 发送键灰着(附件在读 / 传)时不出菜单,同点击
     const r = el.getBoundingClientRect()
     setSendMenu({
-      x: r.right, y: r.bottom + 6, anchorTop: r.top - 6, prefer: 'above', alignEnd: true, className: 't2c-send-menu',
+      x: r.right, y: r.bottom + 6, anchorTop: r.top - 6, prefer: 'above', alignEnd: true, className: 't2c-send-menu', source: el,
       items: [
         { label: t('input.sendMenu.steer'), detail: t('input.sendMenu.steerDesc'), icon: <CornerDownRight size={14} />, shortcut: '↵', run: () => sendLatest.current.send() },
         { label: t('input.sendMenu.newTopic'), detail: t('input.sendMenu.newTopicDesc'), icon: <Split size={14} />, shortcut: isMacPlatform() ? '⌘↵' : 'Ctrl+↵', run: () => sendLatest.current.sendNewTopic() },
@@ -2256,6 +2271,7 @@ export const Composer2: React.FC<{
                   onClick={() => { setOpenMenu(null); void voice.toggle() }}><Mic size={14} /><span className="grow">{t('input.micStart')}</span></button>
               </> : undefined}
               open={openMenu === 'add'}
+              capsule={{ expanded: capsule.expanded('add'), retracting: capsule.closing === 'add', toggle: () => capsule.toggle('add'), dismiss: capsule.dismiss, panelRef: addPanelRef }}
               disabled={disabled}
               activeSessionId={activeSessionId}
               canUsePathPicker={localFs}
@@ -2266,20 +2282,20 @@ export const Composer2: React.FC<{
               onPickFiles={pickMixedFiles}
               onAddReference={addContentReference}
             />
-            {voiceActive ? (
-              <VoiceRecordingBar analyser={voice.analyser} recording={voice.recording} busy={voice.busy} onStop={voice.toggle} stopTitle={voice.preview ? t('input.micStopRecording') : undefined} t={t} />
+            {voiceFlow.shown ? (
+              <VoiceRecordingBar analyser={voice.analyser} recording={voice.recording} busy={voice.busy} onStop={() => { if (voiceActive) voice.toggle() }} stopTitle={voice.preview ? t('input.micStopRecording') : undefined} t={t} />
             ) : (<>
             {showModeChip && !modeMerged && (
-              <span ref={modeAnchorRef} className={`mode-pill-wrap t2c-capsule-peer${openMenu === 'mode' ? ' is-open' : ''}`} data-cmenu>
+              <span ref={modeAnchorRef} className={`mode-pill-wrap t2c-capsule-peer${capsule.expanded('mode') ? ' is-open' : ''}${openMenu === 'mode' ? ' t2c-capsule-held' : ''}`} data-cmenu>
                 <button
-                  className={`t2c-pill mode-pill-btn${openMenu === 'mode' ? ' is-open' : ''}${planMode && !isChat ? ' active' : ''}`}
+                  className={`t2c-pill mode-pill-btn${capsule.expanded('mode') ? ' is-open' : ''}${capsule.closing === 'mode' ? ' is-retracting' : ''}${planMode && !isChat ? ' active' : ''}`}
                   data-danger={dangerPill || undefined}
                   title={dangerPill ? t('input.approval.fullAutoDesc') : t('input.modeChipTitle')}
-                  aria-expanded={openMenu === 'mode'}
+                  aria-expanded={capsule.expanded('mode')}
                   onClick={() => {
                     // Android:原生半屏;没有原生宿主(桌面 / 网页)照旧展开 Web 菜单,宿主呈现失败也回落 Web。
                     if (openMenu !== 'mode' && openNativeSheetMenu(modeSheet, { onFallback: () => setOpenMenu('mode') })) { setOpenMenu(null); return }
-                    setOpenMenu((m) => (m === 'mode' ? null : 'mode'))
+                    capsule.toggle('mode')
                   }}
                 >
                   <ModeIcon size={13} />
@@ -2287,8 +2303,8 @@ export const Composer2: React.FC<{
                   <ChevronDown size={10} />
                 </button>
                 {openMenu === 'mode' && (
-                  <ComposerMenuSurface portal={layout.compact} anchorRef={modeAnchorRef} innerRef={el => { modeFix.ref.current = el }} className="composer-menu composer-menu--mode" style={modeFix.style}>
-                    {layout.compact && <ComposerMenuHeader title={t('input.modeSheetTitle')} onClose={() => { setOpenMenu(null); modeAnchorRef.current?.querySelector('button')?.focus() }} />}
+                  <ComposerMenuSurface portal={layout.compact} anchorRef={modeAnchorRef} innerRef={el => { modeFix.ref.current = el }} className="composer-menu composer-menu--mode t2c-pour" style={modeFix.style}>
+                    {layout.compact && <ComposerMenuHeader title={t('input.modeSheetTitle')} onClose={() => { capsule.dismiss(); modeAnchorRef.current?.querySelector('button')?.focus() }} />}
                     {onNormalWork && !isChat && <NormalModeItem {...normalProps} inline={layout.compact} />}
                     {[planSection, groupSection].map((sec) => sec && (
                       <React.Fragment key={sec.items[0].id}>
@@ -2354,12 +2370,12 @@ export const Composer2: React.FC<{
                   <button
                     type="button"
                     className="t2c-ctxring-btn"
-                    aria-expanded={openMenu === 'ctx'}
+                    aria-expanded={capsule.expanded('ctx')}
                     aria-label={`${t('input.ctxLabel')} ${pct}%`}
                     // 空心环保持原样(09-25 用户拍板),只补悬停说明免得被当成加载转圈(U-24);
                     // 详情浮层仍是点击触发(ctxring.check 钉着),浮层开着时不再叠一层提示。
                     {...tipProps(() => (openMenu === 'ctx' ? null : [`${t('input.ctxLabel')} ${pct}%`]))}
-                    onClick={() => { disarmTip(); setOpenMenu((m) => (m === 'ctx' ? null : 'ctx')) }}
+                    onClick={() => { disarmTip(); capsule.toggle('ctx') }}
                   >
                     <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
                       <circle className="t2c-ctxring-track" cx="12" cy="12" r={R} />
@@ -2385,6 +2401,11 @@ export const Composer2: React.FC<{
                   onUnavailable: () => setHubFailed(true),
                 } : undefined}
                 open={openMenu === 'model'}
+                capsule={{
+                  expanded: capsule.expanded('model'), retracting: capsule.closing === 'model', dismiss: capsule.dismiss, panelRef: modelPanelRef,
+                  // 同 onOpenChange:打开时重取外部引擎的模型清单
+                  toggle: () => { if (openMenu !== 'model' && isEngine) useApp.getState().ensureEngineCaps(engineId); capsule.toggle('model') },
+                }}
                 onOpenChange={(next) => {
                   setOpenMenu(next ? 'model' : null)
                   // 外部引擎的清单可能过时了(当前模型缺 API key 失败过):打开菜单时重新取,用户照提示登录后的新模型才看得到
@@ -2420,7 +2441,7 @@ export const Composer2: React.FC<{
               className={`t2c-iconbtn t2c-mic-control t2c-collapse-on-capsule-open${voice.recording ? ' recording' : ''}`}
               title={voice.busy ? t('input.micBusy') : voice.recording ? t('input.micStop') : voice.error || t('input.micStart')}
               disabled={disabled || voice.busy || !voice.supported}
-              onClick={voice.toggle}
+              onClick={(e) => { voiceFlow.fromMic(e.currentTarget); voice.toggle() }}
             >
               {voice.busy ? <Loader2 size={14} className="spin" /> : <Mic size={14} />}
             </button>}
@@ -2428,8 +2449,8 @@ export const Composer2: React.FC<{
             </>)}
           </ChatBoxToolbar>
           {layout.compact && openMenu === 'ctx' && showContext && <ComposerMenuSurface portal
-            anchorRef={layout.tight ? addAnchorRef : ctxAnchorRef} innerRef={el => { ctxPopFix.ref.current = el }} className="t2c-ctxring-pop">
-            <ComposerMenuHeader title={t('input.ctxLabel')} onClose={() => { setOpenMenu(null); (layout.tight ? addAnchorRef : ctxAnchorRef).current?.querySelector('button')?.focus() }} />
+            anchorRef={layout.tight ? addAnchorRef : ctxAnchorRef} innerRef={el => { ctxPopFix.ref.current = el }} className="t2c-ctxring-pop t2c-pour">
+            <ComposerMenuHeader title={t('input.ctxLabel')} onClose={() => { capsule.dismiss(); (layout.tight ? addAnchorRef : ctxAnchorRef).current?.querySelector('button')?.focus() }} />
             {contextUsage}
           </ComposerMenuSurface>}
           {voice.error && !voice.recording && !voice.busy && (

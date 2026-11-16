@@ -2098,15 +2098,18 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   min-width: 0;
   interpolate-size: allow-keywords;
   width: fit-content;
-  transition: background var(--duration-fast), width var(--menu-exit-duration) var(--ease-exit);
+  --pill-size-motion: var(--menu-exit-duration) var(--ease-exit);
+  transition: background var(--duration-fast), width var(--pill-size-motion);
 }
 .composer-chip.model-pill-btn.is-open {
   display: grid;
   grid-template-columns: 16px minmax(0, 1fr) 16px;
   width: var(--menu-select-width);
   background: var(--overlay-medium, rgba(127, 127, 127, 0.18));
-  transition: background var(--duration-fast), width var(--menu-enter-duration) var(--menu-enter-ease);
+  --pill-size-motion: var(--cap-open, var(--menu-enter-duration) var(--menu-enter-ease));
 }
+/* 倒放收起(Chat Box 水滴开合,views/chat2/useCapsuleDroplet):跟液体一起缩回去 */
+.composer-chip.model-pill-btn.is-retracting { --pill-size-motion: var(--cap-close, var(--menu-exit-duration) var(--ease-exit)); }
 .composer-chip.model-pill-btn.is-max {
   color: color-mix(in srgb, #a77bff 78%, var(--text));
   background: color-mix(in srgb, #8b5cf6 12%, var(--overlay-light, rgba(127, 127, 127, 0.1)));
@@ -5679,6 +5682,11 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-banner-wrap { top: cal
   --menu-exit-duration: 80ms; /* 菜单、二级面板、命令面板退场 */
   --palette-enter-duration: 120ms; /* 命令面板、⌘P 进场 */
   --droplet-duration: 420ms; /* 液滴展开(lcl/engine/droplet.ts):浮层从发起它的按钮里流出来;收起 0.7 倍倒放(10-30 用户定) */
+  --droplet-retract-ease: cubic-bezier(0.65, 0, 0.35, 1);
+  /* Chat Box 胶囊撑开 / 倒放收起跟菜单的展开方式同一只表(11-16 Chat Box 水滴方案):缺省(Genesis / 水滴)= 液滴;
+     拉伸、平移、只淡入淡出在下面按 <html data-motion-theme / data-motion-fade> 换。点了一行 / 换胶囊不走这里(菜单退场那一对)。 */
+  --cap-open: var(--droplet-duration) var(--ease-surface);
+  --cap-close: calc(var(--droplet-duration) * 0.7) var(--droplet-retract-ease); /* 液滴收起那段的曲线:两头缓、中间快(11-16 Chat Box 水滴方案,展开曲线直接倒放「抽搐」) */
   --collapse-duration: var(--duration-base); /* 折叠展开 / 收起同长度(不算浮层退场,不缩短),箭头同一份 */
   --collapse-ease: var(--ease-drawer);
   --tip-delay: 300ms; /* 提示框首次出现 */
@@ -5716,6 +5724,15 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-banner-wrap { top: cal
  *   流的时候它藏着,自己 150ms 早就走完(悬停时前沿探 2px 也还要这条过渡)。
  * 面板(openPanel)在 JS 里按同一个属性分派。菜单 / 提示 / 吐司 / 折叠不跟动效主题。 */
 :root[data-motion-theme='glide'] { --seg-edge-lag: 0ms; --switch-edge-lag: 0ms; }
+/* Chat Box 胶囊的撑开 / 倒放跟着 openPanel 分派到的那种展开走(注释见 :root 的 --cap-open):
+   拉伸 = 它自己的时长、收起是展开曲线倒放;平移 = 菜单进退场那一对;只淡入淡出 / 系统减少动态效果 = 直接到位。 */
+:root[data-motion-theme='stretch'] {
+  --cap-open: var(--stretch-open-duration) var(--ease-surface);
+  --cap-close: calc(var(--stretch-open-duration) * 0.7) cubic-bezier(0.64, 0, 0.78, 0);
+}
+:root[data-motion-theme='glide'] { --cap-open: var(--menu-enter-duration) var(--menu-enter-ease); --cap-close: var(--menu-exit-duration) var(--ease-exit); }
+:root[data-motion-fade='on'] { --cap-open: 0s linear; --cap-close: 0s linear; }
+@media (prefers-reduced-motion: reduce) { :root { --cap-open: 0s linear; --cap-close: 0s linear; } }
 :root[data-motion-theme='droplet'] :is(.t2s-vaultseg-thumb, .lcl-vmode-thumb) { transition: none; }
 @keyframes ui-menu-enter {
   from { opacity: 0; scale: 0.985; }
@@ -5735,6 +5752,9 @@ html:root :is(.ctx-menu, .ui-popover, .amx-db-pop, .slash-menu, .wiki-suggest, .
   transform-origin: top left;
 }
 html:root :is(.project-menu, .composer-menu, .t2c-menu) { transform-origin: bottom left; }
+/* Chat Box 底排按钮的菜单从按钮里流出来(11-16 Chat Box 水滴方案,views/chat2/useCapsuleDroplet):进场由 openPanel 自己放
+   (液滴 / 拉伸 / 平移,跟动效主题),这里的淡入微缩撤掉,否则两种进场叠在一起。点了一行的退场替身照旧走下面的退场名单。 */
+html:root .t2c-pour:not([data-lcl-exit]) { animation: none; }
 @media (prefers-reduced-motion: reduce) {
   html:root :is(.ctx-menu, .ui-popover, .amx-db-pop, .slash-menu, .wiki-suggest, .paste-as-menu,
     .project-menu, .composer-menu, .cm-sub, .add-menu-sub, .unitsw-menu,

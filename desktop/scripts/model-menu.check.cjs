@@ -3,8 +3,10 @@
  *
  *  A 打开时药丸撑到与菜单同宽、右缘对齐(用户要的「展开对齐」)。
  *  B 开合补宽度,跟菜单同一只表(11-02 撤回走查续八 8.4 的「直接到位」,用户报「胶囊展开关闭动画全都没了」):
- *    ＋ / 模式 / 模型三颗胶囊,开 / 收各采样一遍宽度轨迹:必须有中间帧(在补),且展开在菜单进场 180ms、
- *    收起在菜单退场 80ms 前后走完(各留一帧多余量)—— 8.4 当时的毛病是药丸还在收、菜单早没了。
+ *    ＋ / 模式 / 模型三颗胶囊,开 / 收各采样一遍宽度轨迹:必须有中间帧(在补),且跟菜单的展开方式一起走完
+ *    (各留一帧多余量)—— 8.4 当时的毛病是药丸还在收、菜单早没了。11-16 Chat Box 水滴方案起菜单按动效主题展开:
+ *    缺省(Genesis / 水滴)= 液滴,开 --droplet-duration、倒放(.is-retracting)0.7 倍;平移 = 菜单进场 180 / 退场 80;
+ *    点了一行(不带 .is-retracting)= 菜单退场 80。
  *  C 子面板不被菜单裁掉:.composer-menu 通用规则带 overflow-y:auto,变体必须改回 visible,
  *    否则子面板整块被裁 → 表现为「点了行没反应」。用 elementFromPoint 打命中,裁切会漏出来。
  *  D 主面板固定为「高级 → 模型 → Effort」且 Effort 是可拖动 range；Max 有独立渐变 / 星点层。
@@ -107,36 +109,49 @@ const box = (sel) => {
   await p.setContent(PAGE)
 
   // ── B:三颗胶囊开 / 收**各采样一遍宽度轨迹**:要有中间帧,且在菜单那只表上走完(撤回走查续八 8.4)。 ──
-  const trace = (pill, openIt) => p.evaluate(([sel, on]) => new Promise((res) => {
+  const trace = (pill, openIt, retract = false) => p.evaluate(([sel, on, retract]) => new Promise((res) => {
     const el = document.querySelector(`.${sel}-btn`)
     document.querySelector(`.${sel}-wrap`).classList.toggle('is-open', on)
     el.classList.toggle('is-open', on)
+    el.classList.toggle('is-retracting', !on && retract)
     const out = []
     const t0 = performance.now()
     const tick = () => {
       out.push([performance.now() - t0, el.getBoundingClientRect().width])
-      if (performance.now() - t0 < 320) requestAnimationFrame(tick)
-      else res(out)
+      if (performance.now() - t0 < 560) requestAnimationFrame(tick)
+      else { el.classList.remove('is-retracting'); res(out) }
     }
     requestAnimationFrame(tick)
-  }), [pill, openIt])
+  }), [pill, openIt, retract])
   const midOf = (tr, lo, hi) => tr.filter(([, w]) => w > lo + 2 && w < hi - 2)
   // 量「第一个中间帧 → 最后一个中间帧」的跨度,不量离切类名多久:页面刚起时第一次过渡会晚一两帧起步。
   const lastMid = (tr, lo, hi) => { const ts = midOf(tr, lo, hi).map(([t]) => t); return ts.length ? Math.max(...ts) - Math.min(...ts) : 0 }
   const closedW = (await p.evaluate(box, '.model-pill-btn')).w
-  for (const pill of ['add-pill', 'mode-pill', 'model-pill']) {
-    const w0 = (await p.evaluate(box, `.${pill}-btn`)).w
-    const opening = await trace(pill, true)
-    const openW = opening[opening.length - 1][1]
-    check(`${pill} 展开补宽度,菜单进场 180ms 内走完`,
-      openW > w0 + 8 && midOf(opening, w0, openW).length >= 3 && lastMid(opening, w0, openW) <= 180 + 34,
-      `${w0.toFixed(1)} → ${openW.toFixed(1)},中间帧 ${midOf(opening, w0, openW).length},补间跨度 ${lastMid(opening, w0, openW).toFixed(0)}ms`)
-    const closing = await trace(pill, false)
-    const endW = closing[closing.length - 1][1]
-    check(`${pill} 收起补宽度,菜单退场 80ms 前后走完`,
-      Math.abs(endW - w0) < 1 && midOf(closing, w0, openW).length >= 1 && lastMid(closing, w0, openW) <= 80 + 34,
-      `${openW.toFixed(1)} → ${endW.toFixed(1)},中间帧 ${midOf(closing, w0, openW).length},补间跨度 ${lastMid(closing, w0, openW).toFixed(0)}ms`)
+  const D = await p.evaluate(() => parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--droplet-duration')) || 420)
+  // [主题, 展开时长, 倒放时长];点了一行一律菜单退场 80
+  for (const [theme, openMs, backMs] of [['genesis', D, D * 0.7], ['glide', 180, 80]]) {
+    await p.evaluate((th) => { if (th === 'genesis') delete document.documentElement.dataset.motionTheme; else document.documentElement.dataset.motionTheme = th }, theme)
+    for (const pill of ['add-pill', 'mode-pill', 'model-pill']) {
+      const w0 = (await p.evaluate(box, `.${pill}-btn`)).w
+      const span = (tr, hi) => lastMid(tr, w0, hi)
+      const opening = await trace(pill, true)
+      const openW = opening[opening.length - 1][1]
+      check(`${theme} ${pill} 展开补宽度,跟菜单 ${Math.round(openMs)}ms 一起走完`,
+        openW > w0 + 8 && midOf(opening, w0, openW).length >= 3 && span(opening, openW) <= openMs + 34 && span(opening, openW) >= openMs * 0.4,
+        `${w0.toFixed(1)} → ${openW.toFixed(1)},中间帧 ${midOf(opening, w0, openW).length},补间跨度 ${span(opening, openW).toFixed(0)}ms`)
+      const closing = await trace(pill, false, true)
+      const endW = closing[closing.length - 1][1]
+      check(`${theme} ${pill} 倒放收起补宽度,跟菜单 ${Math.round(backMs)}ms 一起走完`,
+        Math.abs(endW - w0) < 1 && midOf(closing, w0, openW).length >= 1 && span(closing, openW) <= backMs + 34,
+        `${openW.toFixed(1)} → ${endW.toFixed(1)},中间帧 ${midOf(closing, w0, openW).length},补间跨度 ${span(closing, openW).toFixed(0)}ms`)
+      await trace(pill, true)
+      const picked = await trace(pill, false)
+      check(`${theme} ${pill} 点了一行收起,菜单退场 80ms 前后走完`,
+        Math.abs(picked[picked.length - 1][1] - w0) < 1 && span(picked, openW) <= 80 + 34,
+        `补间跨度 ${span(picked, openW).toFixed(0)}ms`)
+    }
   }
+  await p.evaluate(() => { delete document.documentElement.dataset.motionTheme })
 
   // 复位到打开态,继续量几何
   await p.evaluate(() => {
