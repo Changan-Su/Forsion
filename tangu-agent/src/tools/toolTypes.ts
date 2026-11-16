@@ -7,6 +7,7 @@ import type { LoadedCustomTool } from './customTools.js';
 import type { LoadedMcpTool } from '../mcp/toolBridge.js';
 import type { AppProfile } from '../seams/appProfile.js';
 import type { Preset } from '../core/presetTable.js';
+import type { WebSource } from '../contracts/clientTypes.js';
 
 export interface ToolContext {
   /** Internal read-only PTC bridge; policy checks remain in the agent loop. */
@@ -210,6 +211,9 @@ export interface ToolContext {
    *    手机那边却可能在稍后照样执行(模型以为失败、实际做了)。
    */
   requestClientAction?: (req: ClientActionRequest, opts?: ClientActionOptions) => Promise<ClientActionResult>;
+  /** 只在执行 web_search / web_fetch 时由 executeTool 挂上(每次调用一份,并行搜索互不串):工具把结构化来源交给它,
+   *  落进 ToolResult.metadata.sources → tool_result 事件与 chat_messages.tool_results,**不进模型那份文字**。 */
+  noteWebSources?: (sources: WebSource[]) => void;
   /**
    * 当前 run 的在存工作消息数组冻结快照(self_brainstorm 用):返回主 loop workingMessages 的浅拷贝。
    * 分身补全的共享前缀**必须**取自这里而非 DB 重建——脚手架消息不落库、运行内折叠、pin 锚定都会让

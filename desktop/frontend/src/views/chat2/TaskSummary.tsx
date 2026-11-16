@@ -13,7 +13,7 @@
  * 顺序照旧全局记住(右键卡头有「移到最上 / 最下 / 恢复默认」)。
  * 出现/收起仍是纯 CSS(容器查询 + 过渡,见 chat2.css `.t2-tsum`);窄了整栈收掉,后台进程退到输入框上方那一行。
  */
-import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { AlertTriangle, ArrowDownToLine, ArrowUpToLine, CheckCircle2, ChevronRight, CircleStop, FileText, FolderOpen, Globe, GripVertical, LayoutGrid, MinusCircle, Pencil, Plus, RotateCcw, Search, StepForward, X, XCircle } from 'lucide-react'
 import { createDropIndicator, land, landWhenMoved } from '@lcl/engine'
 import { describeTool, toolVerb, usePluginToolName } from '../../components/ToolGroup'
@@ -23,7 +23,8 @@ import { humanizeRunError, ReloginChip } from './EditorialMessage'
 import { registerMessages, useI18n } from '../../i18n'
 import type { DisplayFile, UiMessage } from '../../../../../tangu-agent/src/contracts/clientTypes'
 import { findLiveEdit } from '../../stores/deskPlan'
-import { hasFacts, summarizeTask } from './taskFacts'
+import { hasFacts, summarizeTask, type TaskSourceResult } from './taskFacts'
+import { enterCite, leaveCite, useCiteHover } from '../../components/citeHover'
 import { ChatWebLink } from '../../components/ChatWikiLink'
 import { fullOrder, moveCard, orderCards, setCardOrder, useSummaryElevation, useSummaryPrefs } from './summaryPrefs'
 import { fitCards, setUserOpen, stepOpen, syncOpen, useSummaryOpen, type CardSig, type FitCard } from './summaryOpen'
@@ -65,6 +66,7 @@ registerMessages({
   'tsum.bg.cap': { zh: '后台进程已满 {n} 个，新的会被拒绝', en: '{n} of {n} background processes running; new ones will be refused' },
   'tsum.openFile': { zh: '打开', en: 'Open' },
   'tsum.openWeb': { zh: '在浏览器中打开', en: 'Open in browser' },
+  'tsum.read': { zh: '读过', en: 'Read' },
   'tsum.editing': { zh: '正在编辑', en: 'Editing' },
   'tsum.editingTip': { zh: '在 Agent Desk 中查看', en: 'Show in Agent Desk' },
   'tsum.card.drag': { zh: '拖动调整顺序', en: 'Drag to reorder' },
@@ -82,6 +84,29 @@ const RAIL_WIDGETS_MAX = 3
 
 /** 来源图标按类别分:文件 / 目录 / 网页 / 搜索。 */
 const SRC_ICON = { file: FileText, dir: FolderOpen, web: Globe, search: Search } as const
+
+/** 「来源」卡里一条可点的网页行,带悬停联动:悬停这行 → 正文里出自它的链接垫底色;悬停正文编号 → 这行垫底色。 */
+function CiteRailLink({ hoverKey, href, title, sub, children }: { hoverKey: string; href: string; title: string; sub?: boolean; children: React.ReactNode }) {
+  const hot = useCiteHover((s) => s.key === hoverKey)
+  return (
+    <ChatWebLink className={`t2-tsum-row act${sub ? ' t2-tsum-sub' : ''}`} href={href} quote="" title={title}
+      data-cite-hot={hot || undefined} onMouseEnter={() => enterCite(hoverKey, 'rail')} onMouseLeave={() => leaveCite(hoverKey)}>
+      {children}
+    </ChatWebLink>
+  )
+}
+
+/** 搜索词下面的一条结果:编号(正文引用过才有)· 站点 · 标题,后来又读过的标「读过」。 */
+function SourceResultRow({ r }: { r: TaskSourceResult }) {
+  const { t } = useI18n()
+  return (
+    <CiteRailLink hoverKey={r.hoverKey} href={r.url} title={`${t('tsum.openWeb')}:${r.url}`} sub>
+      {r.n != null ? <span className="t2-tsum-n">{r.n}</span> : <Globe size={14} />}
+      <span className="t2-tsum-row-tx">{r.label}</span>
+      {r.read && <span className="t2-tsum-hits">{t('tsum.read')}</span>}
+    </CiteRailLink>
+  )
+}
 
 /** 栈里的卡片(含 Desk)向栈要的两样:拖动块按下、卡头右键菜单。 */
 interface RailApi { grip(id: string, e: React.PointerEvent): void; menu(id: string, e: React.MouseEvent): void }
@@ -387,7 +412,9 @@ export function TaskSummary({ sessionId, desk, messages, running, cwd, hostCwd, 
   if (sessionId && procs.length) sigs.push({ id: 'bg', count: procs.length, live: runningProcs > 0, dflt: runningProcs > 0 })
   if (sessionId && changes.show) sigs.push({ id: 'changes', count: changes.files.length, dflt: true })
   if (f.outputs.length > 0) sigs.push({ id: 'outputs', count: f.outputs.length, dflt: true })
-  if (f.sources.length > 0) sigs.push({ id: 'sources', count: f.sources.length, dflt: false })
+  // 卡上的数字把搜索词下面挂的结果也算进去(搜索来源编号)
+  const sourceRows = f.sources.reduce((n, sc) => n + 1 + (sc.results?.length ?? 0), 0)
+  if (f.sources.length > 0) sigs.push({ id: 'sources', count: sourceRows, dflt: false })
   // 只数用户自己加的:笔记库根是系统并进来的(异步加载完才到),不算「来了新东西」
   if (cwd) sigs.push({ id: 'scope', count: 1 + extraRoots.filter((r) => !lockedRoots.includes(r)).length, dflt: false })
   if (sessionId) for (const p of plugins) if (!pluginState[p.key]?.hidden) sigs.push({ id: p.key, count: pluginState[p.key]?.count ?? 0, dflt: !p.defaultCollapsed })
@@ -494,26 +521,35 @@ export function TaskSummary({ sessionId, desk, messages, running, cwd, hostCwd, 
 
   if (f.sources.length > 0) {
     cards.sources = (
-      <SummaryCard key="sources" id="sources" bodyCap={fit.cap.sources} squeezed={fit.squeezed.includes('sources')} open={isOpen('sources', false)} onToggle={toggle('sources')} head={<span>{t('tsum.sources')}</span>} count={f.sources.length}>
+      <SummaryCard key="sources" id="sources" bodyCap={fit.cap.sources} squeezed={fit.squeezed.includes('sources')} open={isOpen('sources', false)} onToggle={toggle('sources')} head={<span>{t('tsum.sources')}</span>} count={sourceRows}>
         {f.sources.map((sc) => {
           const Icon = SRC_ICON[sc.kind]
           const key = `${sc.kind}:${sc.id}`
           const body = (
             <>
-              <Icon size={14} /><span className="t2-tsum-row-tx">{sc.label}</span>
+              {sc.n != null ? <span className="t2-tsum-n">{sc.n}</span> : <Icon size={14} />}<span className="t2-tsum-row-tx">{sc.label}</span>
               {sc.hits > 1 && <span className="t2-tsum-hits">×{sc.hits}</span>}
             </>
           )
+          // 搜索词下面挂这次搜到的结果,编号与正文一致(citeSources);读过的那页并在结果这一行
+          if (sc.kind === 'search' && sc.results?.length) {
+            return (
+              <Fragment key={key}>
+                <div className="t2-tsum-row" title={sc.id}>{body}</div>
+                {sc.results.map((r) => <SourceResultRow key={r.key} r={r} />)}
+              </Fragment>
+            )
+          }
           // 网页来源与聊天正文里的网页引用**同一条路**:「应用内链接」开关勾着且 Desk 能显示就在 Desk 里开,
           // 否则退回原出口(主区标签 / 系统浏览器,按同一个开关;缺省交给系统浏览器)。
           // ⚠️ 早先这里是 `<a target="_blank">` 直接交给主进程转外链 —— 于是同一张卡里文件来源进
           //    Desk、网页来源开新标签,用户实报「有时候 Desk 有时候新标签」。别改回去。
           // quote 给空串:来源行的标签是**主机名 + ×N 命中数**,拿它当引语搜索纯属噪音。
           if (sc.kind === 'web') {
-            return (
-              <ChatWebLink key={key} className="t2-tsum-row act" href={sc.id} quote=""
+            return sc.hoverKey
+              ? <CiteRailLink key={key} hoverKey={sc.hoverKey} href={sc.id} title={`${t('tsum.openWeb')}:${sc.id}`}>{body}</CiteRailLink>
+              : <ChatWebLink key={key} className="t2-tsum-row act" href={sc.id} quote=""
                 title={`${t('tsum.openWeb')}:${sc.id}`}>{body}</ChatWebLink>
-            )
           }
           // 目录/搜索没有「打开」的对应物,保持纯展示。
           if (sc.kind !== 'file' || !onOpenFile) return <div key={key} className="t2-tsum-row" title={sc.id}>{body}</div>

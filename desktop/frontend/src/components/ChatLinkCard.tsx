@@ -6,6 +6,9 @@
  *   缓存着。渲染层不另存一份按地址的缓存:换了账号它不知道,会把上一个人私有仓的卡给下一个人看(Codex 评审 P1)。
  * - 素卡:其余链接,以及富卡问不到的(没绑定且限流、私有仓、老引擎、远端设备不放行):图标 + 链接文字 + 站名 · 路径。
  *   只看 URL,不联网,不报错。
+ * - 来源卡(借鉴 DeepSeek chat-demo 方案 ②A):链接指向这一轮搜索 / 读过的网页(citeSources)时,链接后面的 ↗ 换成编号,
+ *   卡写站点 · 日期 / 标题 / 摘要(被引那句垫底色)/「来源 n · 点开滚到这句」。老会话没有结构化来源 → 编号照出,卡退回素卡。
+ *   卡是 LCL 悬停卡(pointer-events: none),本身不能点;点链接照旧滚到那句。
  */
 import { useEffect, useState, type ReactNode } from 'react'
 import { FileText, Globe } from 'lucide-react'
@@ -14,6 +17,8 @@ import { registerMessages, useI18n } from '../i18n'
 import { getLinkPreview, type LinkPreview } from '../services/backendService'
 import { homeTarget } from '../services/engine/targets'
 import { ChatWebLink, textOf } from './ChatWikiLink'
+import { cardExcerpt, type CiteEntry } from './citeSources'
+import { citeHoverKey, enterCite, leaveCite, useCiteHover } from './citeHover'
 import './chatLinkCard.css'
 
 registerMessages({
@@ -25,6 +30,7 @@ registerMessages({
   'chatLink.files': { zh: '{n} 个文件', en: '{n} files' },
   'chatLink.comment': { zh: '{n} 条评论', en: '{n} comment' },
   'chatLink.comments': { zh: '{n} 条评论', en: '{n} comments' },
+  'chatLink.sourceFoot': { zh: '来源 {n} · 点开滚到这句', en: 'Source {n} · opens at this sentence' },
 })
 
 /** 站点认得的才写站名;别的只写主机 + 路径。 */
@@ -58,8 +64,29 @@ function day(iso: string | undefined): string | null {
   return d.getFullYear() === new Date().getFullYear() ? md : `${d.getFullYear()}-${md}`
 }
 
-function LinkCard({ href, label, preview }: { href: string; label: string; preview: LinkPreview | null }) {
+/** 来源卡:站点 · 日期 / 标题(三行)/ 摘要(三行,被引那句垫底色)/ 来源 n。全是文本节点,来源数据不当 HTML。 */
+function SourceCard({ entry, label }: { entry: CiteEntry; label: string }) {
   const { t } = useI18n()
+  const src = entry.src
+  const site = src?.site || linkPlace(entry.url).host
+  const ex = cardExcerpt(entry, label)
+  return (
+    <div className="chat-link-card-rich chat-link-card-src">
+      <div className="chat-link-card-top">
+        <span className="chat-link-card-site" aria-hidden>{([...site][0] ?? '·').toUpperCase()}</span>
+        <b className="chat-link-card-repo">{site}</b>
+        {src?.date && <span className="chat-link-card-day">{src.date}</span>}
+      </div>
+      <b className="chat-link-card-title">{src?.title || label || entry.url}</b>
+      {ex && <p className="chat-link-card-snip">{ex.before}{ex.hit && <mark>{ex.hit}</mark>}{ex.after}</p>}
+      {entry.n != null && <small className="chat-link-card-foot">{t('chatLink.sourceFoot', { n: entry.n })}</small>}
+    </div>
+  )
+}
+
+function LinkCard({ href, label, preview, cite }: { href: string; label: string; preview: LinkPreview | null; cite?: CiteEntry }) {
+  const { t } = useI18n()
+  if (cite?.src) return <SourceCard entry={cite} label={label} />
   if (preview) {
     const n = (key: string, v: number): string => t(v === 1 ? `chatLink.${key}` : `chatLink.${key}s`, { n: v })
     const facts = [
@@ -96,12 +123,13 @@ function LinkCard({ href, label, preview }: { href: string; label: string; previ
   )
 }
 
-/** 带预览卡的 ChatWebLink(点击行为不变)。只在聊天回答里用(Markdown 的 linkCards 开关);市场 README、收件箱这些第三方文本不出卡。 */
-export function ChatLinkWithCard({ href, children, ...rest }: { href: string; children?: ReactNode } & Record<string, unknown>) {
+/** 带预览卡的 ChatWebLink(点击行为不变)。只在聊天回答里用(Markdown 的 linkCards 开关);市场 README、收件箱这些第三方文本不出卡。
+ *  cite = 这条链接指向这一轮的来源:↗ 换成编号(data-cite-n,样式表用 ::after 画,复制与引语都碰不到),悬停与右栏那行联动。 */
+export function ChatLinkWithCard({ href, children, cite, ...rest }: { href: string; children?: ReactNode; cite?: { msgId: string; entry: CiteEntry } } & Record<string, unknown>) {
   // 拿到的数据带着它的地址:流式输出时同一个位置的链接会变(#1 → #15),旧数据不能顶着新地址出现
   const [got, setGot] = useState<{ href: string; preview: LinkPreview } | null>(null)
   const preview = got?.href === href ? got.preview : null
-  const card = useHoverCard(<LinkCard href={href} label={textOf(children).trim()} preview={preview} />, {
+  const card = useHoverCard(<LinkCard href={href} label={textOf(children).trim()} preview={preview} cite={cite?.entry} />, {
     className: 'chat-link-card',
     side: 'bottom',
     rect: (el) => el.getClientRects()[0] ?? el.getBoundingClientRect(), // 折行的链接贴第一行
@@ -114,9 +142,17 @@ export function ChatLinkWithCard({ href, children, ...rest }: { href: string; ch
     void getLinkPreview(homeTarget(), href).then((v) => { if (live && v) setGot({ href, preview: v }) })
     return () => { live = false }
   }, [open, preview, href])
+  const hk = cite ? citeHoverKey(cite.msgId, cite.entry.key) : null
+  // 右栏悬停那行 → 正文链接垫底色(rail);自己被悬停 → 只亮编号(body)
+  const hot = useCiteHover((s) => (hk != null && s.key === hk ? s.from : null))
+  const trig = card.triggerProps
+  const triggerProps = hk
+    ? { ...trig, onMouseEnter: (e: { currentTarget: HTMLElement }) => { trig.onMouseEnter(e); enterCite(hk, 'body') }, onMouseLeave: (e: { currentTarget: HTMLElement }) => { trig.onMouseLeave(e); leaveCite(hk) } }
+    : trig
+  const n = cite?.entry.n
   return (
     <>
-      <ChatWebLink href={href} {...rest} {...card.triggerProps}>{children}</ChatWebLink>
+      <ChatWebLink href={href} {...rest} {...triggerProps} {...(n != null ? { 'data-cite-n': n } : {})} {...(hot ? { 'data-cite-hot': hot } : {})}>{children}</ChatWebLink>
       {card.portal}
     </>
   )
