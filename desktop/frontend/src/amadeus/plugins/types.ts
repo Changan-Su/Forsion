@@ -2619,6 +2619,16 @@ export interface PluginContext {
      *  it has none yet; a model chosen in the channel's settings stays. Returns `{ ok: false, error }` instead of throwing. */
     connectChannel?(kind: string, fields: Partial<Record<'appId' | 'appSecret' | 'botToken', string>>, options?: { modelId?: string }): Promise<
       { ok: true; accountId: string; label: string; sessionId: string } | { ok: false; error: string }>
+    /** Create an agent on this device's engine (2026-11-16+). Declared `"agentImport"` only; desktop writes to the local
+     *  engine, phone and web to the cloud — nothing crosses devices. A Chinese-only `name` needs `slug` or `nameEn`.
+     *  A clashing derived id gets a suffix; an existing agent is never overwritten. Returns `{ ok: false, error }`, never throws. */
+    createAgent?(input: import('./tanguSeam').TanguCreateAgentInput): Promise<import('./tanguSeam').TanguCreateAgentResult>
+    /** Write chats from elsewhere (an export file) as sessions the person can open and continue, under `agent`
+     *  (2026-11-16+). Declared `"agentImport"` only; same device rule as `createAgent`. Append-only: the same `source` +
+     *  conversation `id` again comes back `exists` and the session is left as it is. Original times are kept (no jump to
+     *  the top, no unread dot), titles stay as given, and no background job (titles, memory) runs on them. Batches
+     *  itself; `onProgress` fires per batch. Times are milliseconds. */
+    importSessions?(input: import('./tanguSeam').TanguImportSessionsInput): Promise<import('./tanguSeam').TanguImportSessionsResult>
     /** Open an existing session in a native chat tab. Does not start a run. */
     openSession?(sessionId: string): Promise<void> | void
     activeModel(): import('./tanguSeam').TanguModelInfo | null

@@ -43,6 +43,7 @@ import { hasNativeFeature } from './features/runtime'
 import { completeInline, fimInline, FIM_UNAVAILABLE } from './services/inlineAi'
 import { submitDocumentTask } from './services/documentTasks'
 import { openSession } from './sessionNav'
+import { createAgentForPlugin, importSessionsForPlugin, type AgentImportDeps } from './services/pluginAgentImport'
 import { connectionTarget } from './services/engine/targets'
 import { CATALOG_TTL_MS, catalogFor, ensureCatalog, ensureCatalogModels } from './services/engine/catalog'
 import { getCallVoice, subscribeCallVoice } from './services/callVoice'
@@ -524,6 +525,13 @@ function museSelf(): TanguAgentSelf {
   }
 }
 
+const agentImportDeps: AgentImportDeps = {
+  waitBackend: () => waitBackend(15_000),
+  activeModelId: () => readActiveModel()?.id ?? null,
+  refreshAgents: () => { useApp.getState().refreshAgents?.() },
+  refreshSessions: () => { const s = useApp.getState(); if (s.cfg) void s.refreshSessions?.(s.cfg)?.catch?.(() => {}) },
+}
+
 export function installTanguProbe(fromTangu: Pick<TanguProbe, 'askInChat'> = {}): void {
   // Computer Use 悬浮小画面(?window=pip)里:这一轮跑在别的窗口,停止 / 状态经主进程转过去(computerUsePipAgent.ts)
   const pip = pipAgentClient()
@@ -550,6 +558,11 @@ export function installTanguProbe(fromTangu: Pick<TanguProbe, 'askInChat'> = {})
     // 停止(2026-11-13+):store 的 stop 在 Tangu 的 store 半身里,没有对话能力的档案不给
     ...(hasNativeFeature('tangu') ? { stop: pip ? pip.stop : stopAgentRun } : {}),
     startChat,
+    // 建 Agent / 导入会话(2026-11-16,ctx.tangu.createAgent / importSessions):写进本端引擎(桌面本机、手机 / 网页云端)。
+    ...(hasNativeFeature('tangu') ? {
+      createAgent: (input: Parameters<typeof createAgentForPlugin>[0], alive: () => boolean) => createAgentForPlugin(input, alive, agentImportDeps),
+      importSessions: (input: Parameters<typeof importSessionsForPlugin>[0], alive: () => boolean) => importSessionsForPlugin(input, alive, agentImportDeps),
+    } : {}),
     ...(hasNativeFeature('tangu') ? { openSession: async (id: string, alive: () => boolean = () => true) => {
       const cfg = await waitBackend(15_000);
       if (!cfg) throw new Error('Local engine is unavailable');

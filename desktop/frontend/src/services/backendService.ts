@@ -181,6 +181,24 @@ export const createSession = (
     body: JSON.stringify({ app_id: AGENT_APP_ID, ...(init || {}) }),
   }).then((r) => r.session)
 
+/** 批量导入外部聊天记录成会话(2026-11-16,引擎 POST /agent/sessions/import):追加不覆盖,同一条再导回 exists。 */
+export interface SessionImportBody {
+  source: string
+  agent_config: AgentConfig
+  model_id?: string
+  conversations: Array<{
+    external_id: string; title?: string; created_at?: number; updated_at?: number
+    messages: Array<{ role: 'user' | 'assistant'; content: string; reasoning?: string; timestamp?: number; model_id?: string }>
+  }>
+}
+export type SessionImportRow = { external_id: string; status: 'created' | 'exists' | 'error'; session_id?: string; messages?: number; error?: string }
+export const importSessions = (t: EngineTarget, body: SessionImportBody, signal?: AbortSignal) =>
+  request<{ results: SessionImportRow[] }>(t, '/agent/sessions/import', {
+    method: 'POST',
+    body: JSON.stringify({ app_id: AGENT_APP_ID, projectless: true, ...body }),
+    ...(signal ? { signal } : {}),
+  }, { timeoutMs: 120_000 }).then((r) => r.results)
+
 /** 私聊(Agent 轨道):该 Agent / 外部引擎的活动私聊会话,没有就建(引擎侧单点,多窗口同击只得一条)。host-only:云端 404。 */
 export const soloOpen = (t: EngineTarget, kind: 'agent' | 'engine', id: string) =>
   request<{ session: SessionRecord; created: boolean }>(t, `/agent/solo/${kind}/${encodeURIComponent(id)}/open`, { method: 'POST', body: '{}' })

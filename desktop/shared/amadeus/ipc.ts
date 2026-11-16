@@ -454,8 +454,9 @@ export interface PluginBundleInfo {
 }
 
 /** 需要插件在 manifest 里显式声明才注入的宿主敏感能力(default-deny 白名单)。 */
-export type PluginCapability = 'activeWindow' | 'databases' | 'noteTasks' | 'calendar' | 'spaces'
-export const PLUGIN_CAPABILITIES: readonly PluginCapability[] = ['activeWindow', 'databases', 'noteTasks', 'calendar', 'spaces']
+/** agentImport(2026-11-16+):ctx.tangu.createAgent / importSessions —— 新建 Agent、把外部聊天记录写成会话。 */
+export type PluginCapability = 'activeWindow' | 'databases' | 'noteTasks' | 'calendar' | 'spaces' | 'agentImport'
+export const PLUGIN_CAPABILITIES: readonly PluginCapability[] = ['activeWindow', 'databases', 'noteTasks', 'calendar', 'spaces', 'agentImport']
 
 /** ctx.net.request 的 init 过 IPC 的样子(主进程再按不可信输入校验一遍)。 */
 export interface PluginNetRequestInit { method?: string; headers?: Record<string, string>; body?: string | Uint8Array; timeoutMs?: number }

@@ -84,6 +84,7 @@ registerMessages({
     en: 'read Agent schedules, .ics subscriptions and calendars in your other vault, manage .ics subscriptions and change calendar settings',
   },
   'settings.amadeusPlugins.capActiveWindow': { zh: '读取前台窗口', en: 'see which window is in front' },
+  'settings.amadeusPlugins.capAgentImport': { zh: '新建 Agent、导入聊天记录', en: 'create agents and import chats' },
   'settings.amadeusPlugins.devShadows': {
     zh: '正遮蔽同名的已安装插件；撤下开发副本后，安装版会回来。',
     en: 'Shadowing the installed plugin with the same id; unload this dev copy and the installed one comes back.',
@@ -633,6 +634,7 @@ const CAP_LABELS: Array<[PluginCapability, string]> = [
   ['noteTasks', 'settings.amadeusPlugins.capNoteTasks'],
   ['calendar', 'settings.amadeusPlugins.capCalendar'],
   ['spaces', 'settings.amadeusPlugins.capSpaces'],
+  ['agentImport', 'settings.amadeusPlugins.capAgentImport'],
   ['activeWindow', 'settings.amadeusPlugins.capActiveWindow'],
 ]
 

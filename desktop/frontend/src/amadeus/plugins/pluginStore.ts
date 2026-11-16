@@ -2916,6 +2916,22 @@ export const usePluginStore = create<PluginState>((set, get) => {
                 } catch (e) { return { ok: false as const, error: String((e as Error)?.message || e) } }
               },
             } : {}),
+            // 建 Agent / 导入会话(2026-11-16+):声明 "agentImport" 且探针给得出才注入。写进本端引擎(桌面本机、手机 / 网页云端),
+            // 会话追加不覆盖;活性由探针在每一批之间复查,停用后不再往下写。
+            ...(readTangu()?.importSessions && get().plugins.find((p) => p.id === pluginId)?.capabilities?.includes('agentImport') ? {
+              createAgent: async (input: import('./tanguSeam').TanguCreateAgentInput): Promise<import('./tanguSeam').TanguCreateAgentResult> => {
+                if (!ctxAlive()) return { ok: false, error: 'plugin disabled' }
+                const probe = readTangu()
+                if (!probe?.createAgent) return { ok: false, error: 'createAgent is not available on this host' }
+                return probe.createAgent(input, ctxAlive)
+              },
+              importSessions: async (input: import('./tanguSeam').TanguImportSessionsInput): Promise<import('./tanguSeam').TanguImportSessionsResult> => {
+                if (!ctxAlive()) return { ok: false, error: 'plugin disabled', results: [] }
+                const probe = readTangu()
+                if (!probe?.importSessions) return { ok: false, error: 'importSessions is not available on this host', results: [] }
+                return probe.importSessions(input, ctxAlive)
+              },
+            } : {}),
             ...(readTangu()?.openSession ? {
               openSession: async (sessionId: string): Promise<void> => {
                 if (!ctxAlive()) return
