@@ -79,6 +79,7 @@ export const ENGINE_ROUTES: readonly EngineRoute[] = [
   { method: 'PUT', path: '/agent/engines/:id', access: 'deny-remote', src: 'routes/engines.ts', why: 'external engine config' },
   { method: 'GET', path: '/agent/engines/:id/assets', access: 'deny-remote', src: 'routes/engines.ts', why: 'reads host assets of an external engine' },
   { method: 'GET', path: '/agent/engines/:id/capabilities', access: 'deny-remote', src: 'routes/engines.ts', why: 'external engines are local-only' },
+  { method: 'POST', path: '/agent/engines/:id/hold', access: 'deny-remote', src: 'routes/engines.ts', why: 'hands a conversation to the resident engine process for the plugin workbench (local only)' },
   { method: 'POST', path: '/agent/engines/:id/import', access: 'deny-remote', src: 'routes/engines.ts', why: 'imports external engine assets' },
   { method: 'POST', path: '/agent/import/apply', access: 'deny-remote', src: 'routes/externalImport.ts', why: 'writes ticked items into the portrait, AGENT.md, project memory and skills (the route itself also refuses remote origin)' },
   { method: 'POST', path: '/agent/import/ignore', access: 'deny-remote', src: 'routes/externalImport.ts', why: 'marks what was found as seen (the route itself also refuses remote origin)' },
