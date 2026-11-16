@@ -28,6 +28,8 @@ const COVERED_TOOLS = new Set([
   'session_status',
   // 只经 brain 请求 Forsion 云端的几条固定接口(账号额度 / 积分 / 反馈);不收路径、不碰本机文件。
   'forsion_account', 'forsion_account_action',
+  // 只返回编进引擎的一段固定文字(Forsion 自家产品速查);不收路径、不碰本机文件、不联网。
+  'forsion_guide',
   'load_tools', 'ask_user', 'exit_plan_mode', 'todo_read', 'todo_write', 'get_datetime',
 ]);
 

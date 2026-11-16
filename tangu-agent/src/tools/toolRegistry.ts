@@ -326,6 +326,7 @@ const PLAN_MODE_TOOLS = new Set([
   'read_session', 'search_sessions', // 只读回看过去会话;规划「继续上次讨论」类任务离不开
   'session_status', // 只读:上下文占用 / 已花 token / 步数;规划长任务前估预算
   'forsion_account', // 只读:账号额度 / 积分 / 套餐(动作那件不进计划模式)
+  'forsion_guide', // 只读:Forsion 自家产品速查(固定文字)
 
   'list_processes', 'read_process_output',
   'delegate', 'ask_user', 'exit_plan_mode',

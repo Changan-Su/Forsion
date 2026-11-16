@@ -129,6 +129,8 @@ import { startImageRecoveryCloud, imageRecoveryLive } from './lib/image-recovery
  *   npm run live:harness -- --only coding                    # 改 agents/codingPrompt.ts / skills/forsion-plugin 后跑:Coding 人格面对插件项目须指向 Sandbox 面板、且不自己动手 git init/commit(版本由宿主管)
  *   npm run live:harness -- --only storeview                 # 商店左栏的插件页(10-05):ctx.registerStoreView 只给首方内置包。第三方作者问「怎么往商店左栏加一页」→ 须装载手册、
  *                                                           #   说清这条路不对普通插件开放,不许教他照着注册(注册了也不显示)。改 skills/forsion-plugin 那一行后跑。
+ *   npm run live:harness -- --only forsionproducts           # 自家产品速查(11-16 用户反馈「Tangu 不知道 Forsion Git 是什么」):桌面 Work / 轻聊天 / 云端项目各问一次 Forsion Git、轻聊天问蓬洲云
+ *                                                           #   → 须调 forsion_guide、按会话形态答对入口(沙盒里不许许诺推送)。负对照 = 去掉 registry 里注册它的那一行(须红)
  *   npm run live:harness -- --only creation                  # 进造物(09-27):要做「拿来用的东西」→ 回复带 forsion-creation 作品卡;只问概念 / 一次性脚本 → 不出卡。改 skills/forsion-creations 后跑
  *   npm run live:harness -- --only gitpublish                # 发布到 Forsion Git(11-08 用户反馈):中文名项目、有提交没远端,「帮我上传Forsion Git」→ 模型自己起英文名调 git_publish,不要地址;审批卡拒掉,不真发
  *   npm run live:harness -- --only multirepo                 # 多仓 Git(11-07):项目文件夹不是仓、里面两个仓;不点名工具,看状况后只提交 alpha —— 判据看磁盘与 git_commit 的 repo 参数(改 tools/builtin/git.ts / services/gitRepos.ts 后跑)
@@ -395,6 +397,7 @@ OPT_IN.add('plugindiag'); // 一个 run(几分钟);要 --plugin-src 给一份待
 OPT_IN.add('notebook'); // 两个 run;要 --plugin-src 给构建好的 Jupyter 笔记本插件、--python-bin 给解释器,只在动那个插件的工具说明 / 审批档时才有信息量。
 OPT_IN.add('pluginicon'); // 一个 run;只在动 forsion-plugin 手册「Startup appearance」一节里图标作用范围那两句时才有信息量。
 OPT_IN.add('storeview'); // 一个 run;只在动 forsion-plugin 手册里 registerStoreView 那行、或商店左栏的插件页接缝时才有信息量。
+KEYS.push('forsionproducts'); OPT_IN.add('forsionproducts'); // 五个 run;改 knowledge/forsionProducts.ts / tools/builtin/forsionGuide.ts 后跑
 OPT_IN.add('skillcreate'); // 四个 run;只在动 manage_skill / use_skill / 随包的 skill-creator 技能时才有信息量。
 OPT_IN.add('account'); // --only account:五个 run;引擎的云端地址指向台架里的假 Forsion 云端 —— 只在显式跑它时才指,别的场景照旧连不上云端。
 OPT_IN.add('caltodo').add('cloudtodo'); // --only caltodo / cloudtodo(11-07):用户的待办 = 带勾选列的日历表里的行,可以没有日期;加两条无日期待办 → 列出 → 勾掉,本机 / 云端各一份。判据与负对照见 lib/caltodo-live.mjs。
@@ -4736,6 +4739,82 @@ Then reply with only the command output.`,
     const used = ev.toolResults.some((r) => r.name === 'use_skill' && !r.isError && r.fullLength > 1000);
     const scoped = /首方|第一方|内置包|官方|Forsion Extend|first[- ]party|不对.{0,12}(开放|生效)|只对.{0,24}生效|不(会)?显示|用不到|不支持|没有.{0,10}(接口|办法|开放)/i.test(ev.content);
     return { ok: !ev.error && used && scoped, detail: ev.error || `手册${used ? '已装载' : '未装载'};${scoped ? '说明了只给首方包 / 普通插件用不了' : '没说明限制'};提到 registerStoreView:${/registerStoreView/.test(ev.content) ? '是' : '否'};工具 ${ev.toolCalls.join(',') || '无'}`, output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
+  });
+
+  // 自家产品速查(11-16,用户反馈「我的 Tangu 不知道 Forsion Git 是什么」):产品知识在按需工具 forsion_guide 里(正文 knowledge/forsionProducts.ts)。
+  // 先做成技能(#716 初版)到不了 chat 预设和沙盒会话,改成工具;所以三条腿各问一次 Forsion Git,外加轻聊天里问一次蓬洲云:
+  //   ① 桌面 Work(host,不在项目里)② 轻聊天(preset chat + sandbox)③ 云端项目 Work(sandbox)。
+  // 判据:调了 forsion_guide 且取回的正文是这份(MARKER);说对是什么(私有);host 腿给出「项目详情 › 发布到 Forsion Git」、不教手动 git remote add;
+  // 沙盒两条腿取回的是沙盒版说法(SANDBOX)、指去桌面版、不许许诺替用户推送;都不许说不知道。
+  // 负对照 = 去掉 registry 里注册 forsion_guide 的那一行(须红)。网页 / 手机的 Worker 形态台架起不来,发 Worker 后真机问一次。
+  await scenario('forsionproducts', 'forsionproducts 桌面 Work / 轻聊天 / 云端项目里问 Forsion Git,轻聊天问蓬洲云 → forsion_guide 按形态答对', async () => {
+    const MARKER = "Forsion's own Git hosting";
+    const SANDBOX = 'runs in a cloud sandbox';
+    const guide = (ev) => ev.toolResults.filter((r) => r.name === 'forsion_guide' && !r.isError).map((r) => String(r.full || r.result || '')).join('\n');
+    // 只认「对这个产品本身」说不知道(「不清楚你的项目有没有提交」这类正常的不确定不算);入口路径先去掉 Markdown 再比
+    const DUNNO = /(不知道|不清楚|不了解|没有.{0,4}信息).{0,12}(Forsion Git|蓬洲云|Penzor|这个产品|是什么)|(Forsion Git|蓬洲云|Penzor Cloud).{0,12}(不知道|不清楚|不了解)|(don't|do not) know (what|about) (Forsion|Penzor|this product|it is|that is)|not familiar with (Forsion|Penzor|it|this)|no information (on|about) (Forsion|Penzor|it|this)/i;
+    // 许诺「我替你推」才算;「我来讲讲怎么发布」「I can't push from here」不算(Codex 评审给的反例都进了下面的自检)
+    const PROMISE = /(我|咱)(可以|能|来|这就|现在就?|会)(直接)?(帮你|替你)(把.{0,12})?(推送|发布|上传|推上去)|\bI(?:'ll| will| can| could)(?: now)? (?:push|publish|upload)\b/i;
+    const selfCheck = [
+      [DUNNO, '我不知道 Forsion Git 是什么', true], [DUNNO, "I don't know what Penzor Cloud is", true],
+      [DUNNO, '不清楚你的项目是否已有提交', false], [DUNNO, "I don't know what commits your project has yet", false],
+      [PROMISE, '我可以帮你上传', true], [PROMISE, 'I can push your project for you from here', true], [PROMISE, '我来帮你把项目推送上去', true],
+      [PROMISE, '我来讲讲怎么发布', false], [PROMISE, "I can't push from this chat, but you can", false],
+    ].filter(([re, t, want]) => re.test(t) !== want).map(([, t]) => t);
+    if (selfCheck.length) return { ok: false, detail: `判据自检没过:${selfCheck.join(' / ')}`, output: '', toolCalls: [] };
+    const plain = (t) => String(t || '').replace(/[*_`]/g, '');
+    const ask = (tag, msg, cfg) => run(`live-forsionproducts-${tag}-${Date.now()}`, msg, 240_000, cfg);
+    const Q = 'Forsion Git 是什么?我想把自己电脑上的一个项目放上去,该怎么做?简单说说就行。';
+    // 每条腿显式钉形态(不吃全局 --exec-mode);云端那条带上云端项目名,和桌面「云端项目」建会话时一样
+    const host = await ask('host', Q, { execMode: 'host' });
+    const chat = await ask('chat', Q, { preset: 'chat', execMode: 'sandbox' });
+    const cloud = await ask('cloud', 'What is Forsion Git? Can you put my project on it for me? Keep it short.', { execMode: 'sandbox', workspaceProject: 'Live Forsion Guide' });
+    // 真实的桌面 Work 会话总带项目路径(没选文件夹就落到缺省工作目录),git_* 工具在 → 模型读到的是「有 git 工具」那版。
+    // 项目文件夹放一个和所问无关的空目录:问「把电脑上的一个项目放上去」时不许对着它 git init / 提交 / 发布(顾问 11-16)。
+    const projDir = join(workspace, `forsionguide-${Date.now()}`, 'default-workspace');
+    mkdirSync(projDir, { recursive: true });
+    const { session: projSession } = await api('/agent/sessions', { method: 'POST', body: JSON.stringify({ title: 'forsionguide-project', model_id: MODEL, project_path: projDir }) });
+    const project = await run(projSession.id, Q, 240_000, { cwd: projDir, execMode: 'host', approvalMode: 'auto-edit' }, undefined, () => 'reject');
+    const penzor = await ask('penzor', 'What is Penzor Cloud in Forsion, and where do I turn on syncing for my notes? Keep it short.', { preset: 'chat', execMode: 'sandbox' });
+    const legs = [];
+    const leg = (name, ev, checks) => {
+      const t = plain(ev.content);
+      const g = guide(ev);
+      const fails = [];
+      if (ev.error) fails.push(ev.error);
+      if (!g.includes(MARKER) && name !== '蓬洲云') fails.push('没取到速查正文');
+      if (name === '蓬洲云' && !/Penzor Cloud/.test(g)) fails.push('没取到速查正文');
+      if (DUNNO.test(t)) fails.push('说了不知道');
+      for (const [ok, why] of checks(t, g)) if (!ok) fails.push(why);
+      legs.push(`${name}:${fails.length ? fails.join('、') : '对'}(工具 ${ev.toolCalls.join(',') || '无'})`);
+      return !fails.length;
+    };
+    const okHost = leg('桌面 Work', host, (t, g) => [
+      [!g.includes(SANDBOX), '取回的是沙盒版说法(这条腿没跑成 host)'],
+      [/添加远端|Add remote|新建并推送|Create and push|发布到 Forsion Git|Publish to Forsion Git/i.test(t) && /项目详情|Project details/i.test(t), '没给出项目详情 › Git 里的发布入口'],
+      [/私有|private/i.test(t), '没说私有'], [!/git remote add/.test(t), '教了手动加远端'],
+    ]);
+    const GIT_ACT = new Set(['git_commit', 'git_push', 'git_publish']);
+    const okProject = leg('桌面 Work(带项目)', project, (t, g) => [
+      [g.includes('Call `git_status` first'), '取回的不是「有 git 工具」那版(这条腿没跑成项目会话)'],
+      [/添加远端|Add remote|新建并推送|Create and push|发布到 Forsion Git|Publish to Forsion Git|git_publish/i.test(t) || /项目详情|Project details/i.test(t), '没给出发布入口'],
+      [/私有|private/i.test(t), '没说私有'],
+      [!project.toolCalls.some((n) => GIT_ACT.has(n)), `对着不相干的文件夹动了 git(${project.toolCalls.filter((n) => GIT_ACT.has(n)).join(',')})`],
+      [!project.toolArgs.some((a) => a.name === 'run_bash' && /\bgit\s+(init|add|commit|push|remote)\b/.test(a.args)), '在 run_bash 里跑了 git'],
+    ]);
+    const sandboxChecks = (t, g) => [
+      [g.includes(SANDBOX), '取回的不是沙盒版说法'], [/私有|private/i.test(t), '没说私有'],
+      [/桌面|desktop/i.test(t), '没指去桌面版'], [!PROMISE.test(t), '许诺替用户推送'],
+    ];
+    const okChat = leg('轻聊天', chat, sandboxChecks);
+    const okCloud = leg('云端项目', cloud, sandboxChecks);
+    const okPenzor = leg('蓬洲云', penzor, (t) => [
+      [/(Penzor Cloud|蓬洲云)[^\n]{0,24}?(›|>|→)[^\n]{0,4}?(Sync|同步)/i.test(t), '同步入口不对'],
+      [/(cloud drive|云盘|网盘|sync)/i.test(t), '没说是什么'],
+    ]);
+    return { ok: okHost && okProject && okChat && okCloud && okPenzor, detail: legs.join(';'),
+      output: [['桌面 Work', host], ['桌面 Work(带项目)', project], ['轻聊天', chat], ['云端项目', cloud], ['蓬洲云(轻聊天)', penzor]].map(([k, ev]) => `--- ${k} ---\n${ev.content}`).join('\n\n'),
+      ttftMs: ttft(host), tokens: tokensOf(host), toolCalls: host.toolCalls };
   });
 
   // 插件贡献的应用图标管到哪(10-09):桌面安装版把图标写进系统,退出后仍保留;安卓桌面图标只跟内置图标,插件图标只在 App 内。
