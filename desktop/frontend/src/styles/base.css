@@ -5556,6 +5556,14 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-wrap { top: calc(var(-
       而是壁纸铺到屏幕底、内容留在 Dock 之上。 */
 .mb-shell[data-native-chrome] .mb-main > .mb-view[data-view='homepage'] { padding-bottom: 0; }
 .mb-shell[data-native-chrome] .mb-view[data-view='homepage'] .hp-root { --hp-chrome-bottom: var(--mb-bottom); }
+/* 前进后退那一行(.lcl-viewnav-fallback,lcl/engine/SingleColumnHost 的 LeafHost 插在每个主区视图顶上,40px 高):
+   主页退订了顶部让位(①),这一行就落在 y=0;原生外壳把 WebView 铺到屏幕顶,而状态栏那层遮罩又唯独在主页关掉
+   (singleColumn.css),于是箭头压在时钟上(2026-11-16 安卓真壳)。这里让它浮到胶囊那一行下面、不占流内位置:
+   壁纸照样铺到屏幕顶,它原来占的 40px 记进主页内容的顶部留白,内容的位置一点不变。原生布局还没报上来时
+   --mb-top 为 0,那时 WebView 本来就摆在状态栏下面。只管原生外壳:网页 / 桌面窄窗没有这个属性,逐像素不变。
+   仪器:mobile `npm run emu:nativeshell` 的「floating chrome (first level)」里主页那几条(hp-root 顶到屏幕顶、这一行在胶囊之下)。 */
+.mb-shell[data-native-chrome] .mb-main > .mb-view[data-view='homepage'] > .lcl-viewnav-fallback { position: absolute; top: var(--mb-top); left: 0; z-index: 2; height: 40px; }
+.mb-shell[data-native-chrome] .mb-view[data-view='homepage'] .hp-root { --hp-chrome-top: calc(var(--mb-top) + 40px); }
 
 /* ⑦ 白板在 Android 宽屏(左侧竖条 + 并排左栏,2026-10-20 方案 A2):画布铺满整屏高,引擎顶上那一排(菜单钮 → 工具岛)
       挪进两颗原生胶囊所在的那一行 —— 菜单钮排在标题胶囊右边 8dp,工具岛在主区正中,右边给右胶囊留够位置。

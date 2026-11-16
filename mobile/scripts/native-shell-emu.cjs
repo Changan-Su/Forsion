@@ -967,6 +967,11 @@ const tabCountText = (list) => {
     const nativeDock = h.byId(list, 'nativeChrome.dock')
     assert.ok(root && root.top <= 1 && near(root.bottom, screen.h, 2), `the homepage does not span the screen (${root && fmt(root)})`)
     assert.ok(lowest && lowest.bottom <= nativeDock.rect.top + 1, `homepage content under the dock (${lowest && lowest.bottom} > ${nativeDock.rect.top})`)
+    // the back / forward row (LeafHost's .lcl-viewnav-fallback): Home has no scrim, so it must sit under the capsules' row,
+    // never on the clock (2026-11-16: it sat at y=0, arrows over the status bar)
+    const navRow = await elRect("document.querySelector('.mb-main > .mb-view[data-view=\"homepage\"] > .lcl-viewnav-fallback')")
+    const homeCapL = h.byId(list, 'nativeChrome.capLeft')
+    assert.ok(navRow && homeCapL && navRow.top >= homeCapL.rect.bottom - 2, `homepage view navigation over the status bar / capsules (${navRow && fmt(navRow)}, capsule ${homeCapL && fmt(homeCapL.rect)})`)
     shot('03c-floating-home')
   })
 
