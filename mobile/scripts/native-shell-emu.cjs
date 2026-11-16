@@ -924,6 +924,11 @@ const tabCountText = (list) => {
     const first = await elRect("document.querySelector('.mb-main .t2-stream > *')")
     assert.ok(stream && stream.top <= 1, `the stream does not reach the top (${stream && fmt(stream)})`)
     assert.ok(first && first.top >= capL.rect.bottom - 2, `the first message starts under a capsule (${first && first.top} < ${capL.rect.bottom})`)
+    // the back / forward row floats under the capsules (2026-11-16: in flow at y=0, hidden under the scrim, it pushed the
+    // stream 40px down) and the first message clears it
+    const navRow = await elRect("document.querySelector('.mb-main > .mb-view[data-view=\"chat\"] > .lcl-viewnav-fallback')")
+    assert.ok(navRow && navRow.top >= capL.rect.bottom - 2, `chat view navigation over the status bar / capsules (${navRow && fmt(navRow)}, capsule ${fmt(capL.rect)})`)
+    assert.ok(first.top >= navRow.bottom - 2, `the first message starts under the back / forward row (${first.top} < ${navRow.bottom})`)
     shot('03-floating-detail')
   })
 
@@ -967,6 +972,11 @@ const tabCountText = (list) => {
     const nativeDock = h.byId(list, 'nativeChrome.dock')
     assert.ok(root && root.top <= 1 && near(root.bottom, screen.h, 2), `the homepage does not span the screen (${root && fmt(root)})`)
     assert.ok(lowest && lowest.bottom <= nativeDock.rect.top + 1, `homepage content under the dock (${lowest && lowest.bottom} > ${nativeDock.rect.top})`)
+    // the back / forward row (LeafHost's .lcl-viewnav-fallback): Home has no scrim, so it must sit under the capsules' row,
+    // never on the clock (2026-11-16: it sat at y=0, arrows over the status bar)
+    const navRow = await elRect("document.querySelector('.mb-main > .mb-view[data-view=\"homepage\"] > .lcl-viewnav-fallback')")
+    const homeCapL = h.byId(list, 'nativeChrome.capLeft')
+    assert.ok(navRow && homeCapL && navRow.top >= homeCapL.rect.bottom - 2, `homepage view navigation over the status bar / capsules (${navRow && fmt(navRow)}, capsule ${homeCapL && fmt(homeCapL.rect)})`)
     shot('03c-floating-home')
   })
 
