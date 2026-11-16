@@ -1,0 +1,186 @@
+/**
+ * 会话导入(2026-11-16):把别处的聊天记录(DeepSeek 网页导出等)写成本引擎里**能接着聊**的普通会话。
+ *
+ * 路由 `POST /agent/sessions/import`(routes/sessions.ts)与插件宿主 `ctx.tangu.importSessions` 共用这一份。
+ * SQLite(本机引擎)/ Postgres(server 挂的同一个包 = 手机 / 网页的云端)都走 core/db 的 query,
+ * 所以「各端各导各的」不用写两套。
+ *
+ * 不变量:
+ *   - **追加不覆盖**:会话 id 由 (用户, app, 来源, 外部 id) 定死;同一条再导一次 → `exists`,原会话一字不动
+ *     (用户在里面接着聊过的内容不会被旧记录盖掉)。
+ *   - 原时间照留:会话 created_at / updated_at、每条消息的 timestamp 都用原记录的,列表里按原时间排,不冒到最上面。
+ *   - 不触发后台:导入不建 run,Historian 起标题 / 记忆候选 / Dream 都只认跑过的轮次,所以一条也不会被它们扫到;
+ *     proactive_at 留空 → 没有未读点;标题记为手动(title_manual),之后接着聊也不会被 Historian 改名。
+ *   - 一条会话要么整条写进去,要么一条不留:消息写到一半失败就把这条会话连同已写的消息删掉,回 `error`。
+ *   - 消息 origin = 'import',来源记在会话 agent_config.imported = { source, id }(界面和以后的撤销靠它认)。
+ */
+import { createHash } from 'node:crypto';
+import { v4 as uuidv4 } from 'uuid';
+import { query, getDbType } from '../core/db.js';
+
+export const IMPORT_MAX_CONVERSATIONS = 50;
+export const IMPORT_MAX_MESSAGES = 5000;
+/** 一次请求里所有正文 + 思考的字符总数上限(server 的 JSON 上限 50 MB、本机 25 MB,留足余量)。 */
+export const IMPORT_MAX_CHARS = 8_000_000;
+const SOURCE_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
+const INSERT_CHUNK = 100;
+
+export interface ImportMessageInput {
+  role: 'user' | 'assistant';
+  content: string;
+  reasoning?: string | null;
+  /** 毫秒;缺省按会话时间往后排 */
+  timestamp?: number | null;
+  model_id?: string | null;
+}
+
+export interface ImportConversationInput {
+  external_id: string;
+  title?: string | null;
+  /** 毫秒 */
+  created_at?: number | null;
+  updated_at?: number | null;
+  messages: ImportMessageInput[];
+}
+
+export interface ImportRequest {
+  userId: string;
+  appId: string;
+  source: string;
+  /** 建会话时的初始配置(已由路由按 POST /agent/sessions 的口径校验过);导入方再盖上 imported 标记 */
+  agentConfig: Record<string, unknown> | null;
+  modelId: string | null;
+  projectless: boolean;
+  conversations: ImportConversationInput[];
+}
+
+export type ImportResult =
+  | { external_id: string; status: 'created'; session_id: string; messages: number }
+  | { external_id: string; status: 'exists'; session_id: string }
+  | { external_id: string; status: 'error'; error: string };
+
+/** 校验请求体;不合法返回错误串(路由回 400)。 */
+export function validateImportBody(source: unknown, conversations: unknown): string | null {
+  if (typeof source !== 'string' || !SOURCE_RE.test(source)) return 'source must match ^[a-z0-9][a-z0-9-]{0,31}$';
+  if (!Array.isArray(conversations) || conversations.length === 0) return 'conversations must be a non-empty array';
+  if (conversations.length > IMPORT_MAX_CONVERSATIONS) return `at most ${IMPORT_MAX_CONVERSATIONS} conversations per request`;
+  let chars = 0;
+  const seen = new Set<string>();
+  for (const c of conversations as any[]) {
+    if (!c || typeof c !== 'object') return 'conversation must be an object';
+    if (typeof c.external_id !== 'string' || !c.external_id || c.external_id.length > 200) return 'external_id must be a 1-200 character string';
+    if (seen.has(c.external_id)) return `duplicate external_id: ${c.external_id}`;
+    seen.add(c.external_id);
+    if (c.title != null && typeof c.title !== 'string') return 'title must be a string';
+    for (const k of ['created_at', 'updated_at'] as const) {
+      if (c[k] != null && !validMs(c[k])) return `${k} must be a millisecond timestamp`;
+    }
+    if (!Array.isArray(c.messages) || c.messages.length === 0) return 'each conversation needs at least one message';
+    if (c.messages.length > IMPORT_MAX_MESSAGES) return `at most ${IMPORT_MAX_MESSAGES} messages per conversation`;
+    for (const m of c.messages) {
+      if (!m || (m.role !== 'user' && m.role !== 'assistant')) return 'message role must be user or assistant';
+      if (typeof m.content !== 'string') return 'message content must be a string';
+      if (m.reasoning != null && typeof m.reasoning !== 'string') return 'message reasoning must be a string';
+      if (m.timestamp != null && !validMs(m.timestamp)) return 'message timestamp must be a millisecond timestamp';
+      if (m.model_id != null && (typeof m.model_id !== 'string' || m.model_id.length > 128)) return 'message model_id must be a string of at most 128 characters';
+      chars += m.content.length + (m.reasoning?.length ?? 0);
+    }
+  }
+  if (chars > IMPORT_MAX_CHARS) return `request too large: split it into smaller batches (at most ${IMPORT_MAX_CHARS} characters)`;
+  return null;
+}
+
+function validMs(v: unknown): boolean {
+  // 2000-01-01 之后、当前时间 + 1 天之前:秒级时间戳(10 位)会落在 1970 年附近,在这里就拦下,别默默写成 1970。
+  return typeof v === 'number' && Number.isSafeInteger(v) && v >= 946_684_800_000 && v <= Date.now() + 86_400_000;
+}
+
+/** 导入会话的 id:同一用户、同一来源的同一条外部记录永远是同一个 id(v4 形状的 sha256 截取,VARCHAR(36) 装得下)。 */
+export function importedSessionId(userId: string, appId: string, source: string, externalId: string): string {
+  const h = createHash('sha256').update(`forsion-import\0${userId}\0${appId}\0${source}\0${externalId}`).digest('hex');
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-${((parseInt(h[16], 16) & 0x3) | 0x8).toString(16)}${h.slice(17, 20)}-${h.slice(20, 32)}`;
+}
+
+/** TIMESTAMP 列的写法:与 CURRENT_TIMESTAMP 落库的样子一致(UTC、空格分隔、到秒),SQLite 里按字符串排序也对得上。 */
+function sqlTime(ms: number): string {
+  return new Date(ms).toISOString().slice(0, 19).replace('T', ' ');
+}
+
+/** 消息时间:有原时间用原时间;缺的接在前一条后面 1 秒,保证同一会话里严格递增(压缩 / 分支都按 timestamp 切)。 */
+export function settleTimestamps(c: ImportConversationInput, now = Date.now()): number[] {
+  const start = c.created_at ?? c.messages.find((m) => m.timestamp != null)?.timestamp ?? c.updated_at ?? now;
+  const out: number[] = [];
+  let prev = start - 1;
+  for (const m of c.messages) {
+    let t = m.timestamp ?? (out.length === 0 ? start : prev + 1000);
+    if (t <= prev) t = prev + 1;
+    out.push(t);
+    prev = t;
+  }
+  return out;
+}
+
+export async function importConversations(req: ImportRequest): Promise<ImportResult[]> {
+  const results: ImportResult[] = [];
+  for (const c of req.conversations) {
+    const sessionId = importedSessionId(req.userId, req.appId, req.source, c.external_id);
+    try {
+      const existing = await query<any[]>(`SELECT user_id FROM chat_sessions WHERE id = ? LIMIT 1`, [sessionId]);
+      if (existing[0]) {
+        results.push(existing[0].user_id === req.userId
+          ? { external_id: c.external_id, status: 'exists', session_id: sessionId }
+          : { external_id: c.external_id, status: 'error', error: 'id collision' });
+        continue;
+      }
+      const stamps = settleTimestamps(c);
+      const createdAt = Math.min(c.created_at ?? stamps[0], stamps[0]);
+      const updatedAt = Math.max(c.updated_at ?? 0, stamps[stamps.length - 1]);
+      const title = (c.title && c.title.trim() ? c.title.trim() : firstLine(c.messages) || 'Imported chat').slice(0, 200);
+      const cfg = { ...(req.agentConfig || {}), imported: { source: req.source, id: c.external_id } };
+      await query(
+        `INSERT INTO chat_sessions (id, user_id, app_id, title, title_manual, model_id, agent_config, projectless, kind, last_read_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'user', ?, ?, ?)`,
+        [sessionId, req.userId, req.appId, title, true, req.modelId, JSON.stringify(cfg), req.projectless,
+         updatedAt, sqlTime(createdAt), sqlTime(updatedAt)],
+      );
+      try {
+        await insertMessages(sessionId, c.messages, stamps);
+      } catch (e) {
+        await query(`DELETE FROM chat_messages WHERE session_id = ?`, [sessionId]).catch(() => {});
+        await query(`DELETE FROM chat_sessions WHERE id = ?`, [sessionId]).catch(() => {});
+        throw e;
+      }
+      results.push({ external_id: c.external_id, status: 'created', session_id: sessionId, messages: c.messages.length });
+    } catch (e: any) {
+      results.push({ external_id: c.external_id, status: 'error', error: String(e?.message || e).slice(0, 300) });
+    }
+  }
+  return results;
+}
+
+async function insertMessages(sessionId: string, messages: ImportMessageInput[], stamps: number[]): Promise<void> {
+  const pg = getDbType() !== 'sqlite';
+  for (let i = 0; i < messages.length; i += INSERT_CHUNK) {
+    const slice = messages.slice(i, i + INSERT_CHUNK);
+    const params: unknown[] = [];
+    const rows = slice.map((m, j) => {
+      params.push(uuidv4(), sessionId, m.role, stripNul(m.content, pg), stamps[i + j],
+        m.model_id || null, m.reasoning ? stripNul(m.reasoning, pg) : null, 'import');
+      return '(?, ?, ?, ?, ?, ?, ?, ?)';
+    });
+    await query(
+      `INSERT INTO chat_messages (id, session_id, role, content, timestamp, model_id, reasoning, origin) VALUES ${rows.join(', ')}`,
+      params,
+    );
+  }
+}
+
+/** Postgres 的 TEXT 不收 \u0000(整条 INSERT 会失败);导出文件里偶尔带。SQLite 原样收,照留。 */
+function stripNul(s: string, pg: boolean): string {
+  return pg && s.includes('\u0000') ? s.replace(/\u0000/g, '') : s;
+}
+
+function firstLine(messages: ImportMessageInput[]): string {
+  const u = messages.find((m) => m.role === 'user' && m.content.trim());
+  return u ? u.content.trim().split('\n')[0].slice(0, 60) : '';
+}
