@@ -485,7 +485,11 @@ export const useNotifications = create<NtfState>((set, get) => {
           // 换上去的内容哪儿都没出现过,同样记下。欠着的若还排着队、等到后台才上屏 / 被丢下时补发,回到前台时也不丢(见 replayQueue)
           const onScreen = visible && !offscreen
           if (input.replace) upd.osOwed = (!sendOs(input, upd, event) && owesOs(input) && !onScreen) || undefined
-          else if (!onScreen && owesOs(input) && !upd.inApp) upd.osOwed = true
+          else if (!onScreen && owesOs(input) && !upd.inApp) {
+            upd.osOwed = true
+            // 前一份内容的那一发若还在路上,它晚到的「投了」说的是旧内容,不能清掉这份的账
+            osInflight.delete(found.id)
+          }
           if (offscreen) {
             // 换了内容就是新来的。屏上那张不在后台 / 半屏底下原地换字、到点走掉(回来哪都看不到:系统通知回前台时被外壳清掉),
             // 撤下来当新来的排着,回到前台 / 半屏收起再出、停留从那时重新算;在后台时排着的那张同理记成后台来的

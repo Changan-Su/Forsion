@@ -1130,6 +1130,10 @@ describe('手机横幅:遮挡与系统通知投递(第五轮 Codex 评审)', () 
       expect(shown()).toEqual(['plain'])
       vi.advanceTimersByTime(4999)
       expect(shown(), '给满 5 秒').toEqual(['plain'])
+      // 取舍(节流规则不变):撤下的那张回来停满、到点走,同来源开始冷却 —— 后台来的 newer 不受节流管、已经发过系统通知,这时被冷却丢下
+      vi.advanceTimersByTime(1 + 300)
+      expect(shown()).toEqual([])
+      expect(queued()).toEqual([])
     } finally { vi.unstubAllGlobals() }
   })
 
@@ -1210,6 +1214,30 @@ describe('手机横幅:遮挡与系统通知投递(第五轮 Codex 评审)', () 
       hidden = false
       st().visibilityChanged()
       expect(queued()).toEqual(['E done', 'F'])
+    } finally { vi.unstubAllGlobals() }
+  })
+
+  it('普通合并落在系统通知回话之前(安卓的桥都是异步的):前一发晚到的「投了」不清合并后内容的账(负对照:合并时不作废在路上的那一发 → 这里红)', async () => {
+    let hidden = true
+    const answers: Array<(v: unknown) => void> = []
+    const os = vi.fn(() => new Promise((resolve) => { answers.push(resolve) }))
+    vi.stubGlobal('window', { tangu: { notify: os } })
+    vi.stubGlobal('document', { hasFocus: () => true, get visibilityState() { return hidden ? 'hidden' : 'visible' } })
+    try {
+      st().visibilityChanged()
+      vi.advanceTimersByTime(10)
+      notifyApp({ text: 'C v1', event: 'plugin:demo', dedupeKey: 'demo:c' })
+      vi.advanceTimersByTime(10)
+      notifyApp({ text: 'C v2', event: 'plugin:demo', dedupeKey: 'demo:c' }) // 宿主自己的合并:不重发
+      vi.advanceTimersByTime(10)
+      notifyApp({ text: 'D', event: 'plugin:demo', dedupeKey: 'demo:d' })
+      expect(os.mock.calls.map((c) => (c as unknown[])[1])).toEqual(['C v1', 'D'])
+      for (const answer of answers) answer({ posted: true }) // C v1 那一发晚到:投了(投的是旧内容)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(st().queue.filter((n) => n.osOwed).map((n) => n.text), '合并后的内容没发过系统通知:还欠着').toEqual(['C v2'])
+      hidden = false
+      st().visibilityChanged()
+      expect(queued()).toEqual(['C v2', 'D'])
     } finally { vi.unstubAllGlobals() }
   })
 })
