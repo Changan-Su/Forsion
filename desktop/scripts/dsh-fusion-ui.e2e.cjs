@@ -530,7 +530,7 @@ async function railWalk(app, win) {
   if (await win.locator('.ui-popover-backdrop').count()) { await win.keyboard.press('Escape'); await sleep(400) }
   await until(async () => (railTab(await rightTabs(win)) ? true : null), 8_000, 400)
   await clickRightTab(win, RAIL_TYPE)
-  const noted = await until(async () => { const t = await win.locator('[data-d2f="rail"] .d2f-rail-note:not([hidden])').innerText().catch(() => ''); return /发一句之后/.test(t) ? t : null }, 10_000, 400)
+  const noted = await until(async () => { const t = await win.locator('[data-d2f="rail"] .d2f-rail-note:not([hidden])').innerText().catch(() => ''); return /发一句之后/.test(t) && !/null|undefined/.test(t) ? t : null }, 10_000, 400)
   await sleep(400); await shot(win, '35-rail-not-started')
   check('⑧ 选了 DSH Agent、还没发的新对话:右栏写「发一句之后,这里显示 DSH 的页面」', !!noted, noted || await win.locator('[data-d2f="rail"]').innerText().catch(() => '(没有右栏页)'))
   await dshTitle.click(); await sleep(1500)
