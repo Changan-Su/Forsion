@@ -22,6 +22,7 @@ import { linkWithRefSchema, literalRawFromDom, pristineRaw, refDefinitionsRemark
 import { commonmarkMarkRuleReplacements } from './anchoredMarkRules'
 import { listFormatPlugins } from './listFormat'
 import { verbatimDocSchema, verbatimPlugins } from './verbatim'
+import { enterInline } from './enterMode'
 import { literalEscapePlugins, literalEscapeRemark } from './literalEscape'
 
 export const clampIndent = (n: number): number => Math.max(0, Math.min(MAX_INDENT, Math.floor(n) || 0))
@@ -47,12 +48,22 @@ const takeAlignMarker = (children: MdNode[] | undefined): { align: TextAlignment
   return { align: 'left', children }
 }
 
+/** 回车口径开关(./enterMode):块后紧跟下一块、中间没有空行(见 ./lineGap)。开关关着时 schema 不加这个 attr。 */
+const TIGHT_ATTR = (): Record<string, { default: boolean }> => (enterInline() ? { amxTight: { default: false }, amxTightBefore: { default: false } } : {})
+const tightAttrs = (node: MdNode): Record<string, boolean> => {
+  const data = (node as { data?: Record<string, unknown> } | undefined)?.data
+  return !enterInline() ? {} : {
+    ...(data?.amxTight === true ? { amxTight: true } : {}),
+    ...(data?.amxTightBefore === true ? { amxTightBefore: true } : {}),
+  }
+}
+
 const paragraphIndentSchema = paragraphSchema.extendSchema((prev) => (ctx) => {
   const base = prev(ctx)
   return {
     ...base,
     // raw:D-12 的「定义行字面段落」原文(见 ./refDefinitions);没被动过就原样写回。
-    attrs: { ...(base.attrs ?? {}), indent: { default: 0 }, align: { default: 'left' }, raw: { default: null } },
+    attrs: { ...(base.attrs ?? {}), indent: { default: 0 }, align: { default: 'left' }, raw: { default: null }, ...TIGHT_ATTR() },
     parseDOM: [{
       tag: 'p',
       getAttrs: (dom) => ({
@@ -93,7 +104,8 @@ const paragraphIndentSchema = paragraphSchema.extendSchema((prev) => (ctx) => {
         // 列表项 / 引用里的段落不归缩进档管(见 indentable):旧版「先 Tab 再转列表」存下的 `* &#9;字` 打开即归零,下次存盘自愈。
         if (['list_item', 'blockquote'].includes((state as unknown as { top(): { type: { name: string } } | undefined }).top()?.type.name ?? '')) indent = 0
         const raw = (node as MdNode).data?.amadeusRaw ?? null
-        state.openNode(type, indent || align !== 'left' || raw != null ? { indent, align, raw } : undefined)
+        const tight = tightAttrs(node as MdNode)
+        state.openNode(type, indent || align !== 'left' || raw != null || Object.keys(tight).length ? { indent, align, raw, ...tight } : undefined)
         if (children?.length) state.next(children as never)
         else if (!children) state.addText(((node as MdNode).value || '') as string)
         state.closeNode()
@@ -121,7 +133,8 @@ const paragraphIndentSchema = paragraphSchema.extendSchema((prev) => (ctx) => {
         const indent = clampIndent(node.attrs.indent as number)
         const align = normalizeTextAlignment(node.attrs.align)
         // 末尾是带原文的 `<br>`(D-06,见 ./inlineBr):不走 preset 的 serializeText,它会把尾随 hardbreak 掐掉。
-        const keepBr = keepsTrailingBr(node)
+        // 回车口径开关(./enterMode):末尾的软换行 = 光标停在新起的空行上,也照写(文件里就是那个换行)。
+        const keepBr = keepsTrailingBr(node) || (enterInline() && node.lastChild?.type.name === 'hardbreak' && node.lastChild.attrs.isInline === true)
         if (((!indent && align === 'left') || node.content.size === 0 && align === 'left') && !keepBr) return void base.toMarkdown.runner(state, node)
         state.openNode('paragraph')
         if (align !== 'left') state.addNode('html', undefined, alignMarker(align))
@@ -141,7 +154,7 @@ const headingAlignmentSchema = headingSchema.extendSchema((prev) => (ctx) => {
   const getId = ctx.get(headingIdGenerator.key)
   return {
     ...base,
-    attrs: { ...(base.attrs ?? {}), align: { default: 'left' }, indent: { default: 0 } },
+    attrs: { ...(base.attrs ?? {}), align: { default: 'left' }, indent: { default: 0 }, ...TIGHT_ATTR() },
     parseDOM: [1, 2, 3, 4, 5, 6].map((level) => ({
       tag: `h${level}`,
       getAttrs: (dom: Node | string) => {
@@ -161,7 +174,7 @@ const headingAlignmentSchema = headingSchema.extendSchema((prev) => (ctx) => {
       match: base.parseMarkdown.match,
       runner: (state, node, type) => {
         const marked = takeAlignMarker(node.children as MdNode[] | undefined)
-        state.openNode(type, { level: node.depth as number, ...(marked.align !== 'left' ? { align: marked.align } : {}), indent: markdownBlockIndent(node as MdNode) })
+        state.openNode(type, { level: node.depth as number, ...(marked.align !== 'left' ? { align: marked.align } : {}), indent: markdownBlockIndent(node as MdNode), ...tightAttrs(node as MdNode) })
         if (marked.children?.length) state.next(marked.children as never)
         state.closeNode()
       },

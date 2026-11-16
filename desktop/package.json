@@ -202,6 +202,7 @@
     "check:focuscost": "node scripts/e2e-editor.cjs --check=focus-cost",
     "check:table": "node scripts/e2e-editor.cjs --check=unified-table",
     "check:unifiedsync": "node scripts/e2e-editor.cjs --check=unified-sync",
+    "check:enterinline": "node scripts/e2e-editor.cjs --check=enter-inline",
     "check:editorai": "node scripts/e2e-editor.cjs --check=editor-ai",
     "check:menus": "node scripts/e2e-editor.cjs --check=editor-menus",
     "check:cloudgap": "node scripts/cloud-gap.check.cjs",

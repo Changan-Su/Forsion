@@ -97,7 +97,7 @@ import { focusStructuralPrefix, structuralSourcePlugin } from './structuralSourc
 import { editContextOf, slashItemApplies, type EditContext } from './menuContext'
 import { blockPickerPlugin, closeBlockPicker } from './blockPicker'
 import { takeMachineSlash } from './machineSlash'
-import { applyTrigger, applyTypedTrigger, canAutoTriggerFromBlock, matchTrigger, posAtTextAnchor, slashRange, splitTail, textBeforeCursor, triggerAtCursor, unwrapAtStart, type Trigger } from './blockTriggers'
+import { applyTrigger, applyTypedTrigger, canAutoTriggerFromBlock, lineTriggerAtCursor, matchTrigger, posAtTextAnchor, slashRange, splitTail, textBeforeCursor, triggerAtCursor, unwrapAtStart, type Trigger } from './blockTriggers'
 import { fullWidthWikiRule, mentionSuggestPlugin, selectionToolbarPlugin, slashSuggestPlugin, toolbarDismissKey, wikiSuggestPlugin, type SelRect, type WikiQuery } from './wikiAutocomplete'
 import { InlineToolbar, TURN_LABEL_KEYS, type ToolbarAction, type ToolbarAiItem } from './InlineToolbar'
 import { Sparkles, Bot, BookOpen, MessageSquare, ListTodo, CalendarDays } from 'lucide-react'
@@ -127,6 +127,8 @@ import { spellcheckPlugin } from './spellcheck'
 import { ASK_ALT, askString, askStringOrAlt } from '../../components/askString'
 import { hrefKind, linkInputRule, normalizeHref, noteLinkTarget } from './linkHref'
 import { droppedTextMarkdown, isPlainMultiline, plainLinesToParagraphs, singleLinePasteMode } from './plainPaste'
+import { enterInline } from './enterMode'
+import { lineGapPlugins } from './lineGap'
 import { autolinkInputRule, autolinkSerializer } from './autolink'
 import { parseBlockSubpath, splitLinkInner, wikiSafeUrl } from '@amadeus-shared/pdfLink'
 import { useBlockSelection } from '../../store/blockSelection'
@@ -675,8 +677,10 @@ export function MilkdownInner({
       // 统一 Notion 语义:# 设级别(同级幂等)、标题上 -/> 先降段落再转、[] 直接成待办。
       // 唯一例外:标题正文允许以 `1. ` 开头；这里保留字面文字，不自动降成有序列表。
       if (event.key === ' ' && sel.empty && !event.metaKey && !event.ctrlKey && !event.altKey) {
-        const trig = triggerAtCursor(sel.$from)
-        if (trig && canAutoTriggerFromBlock(sel.$from.parent.type.name, trig) && applyTypedTrigger(view, trig, ' ')) {
+        // 回车口径开关打开时,段落第二行起的行首触发符先从软换行处拆段再触发(./blockTriggers lineTriggerAtCursor;v4 才有)。
+        const hit = unified ? lineTriggerAtCursor(sel.$from) : null
+        const trig = unified ? hit?.trig ?? null : triggerAtCursor(sel.$from)
+        if (trig && canAutoTriggerFromBlock(sel.$from.parent.type.name, trig) && applyTypedTrigger(view, trig, ' ', hit?.br)) {
           event.preventDefault()
           return true
         }
@@ -1002,7 +1006,8 @@ export function MilkdownInner({
       // 纯文本多行(D-10,拍板 #12):只有 text/plain、不像 markdown → 一行一段,再交回同一条 markdown 粘贴管线
       // (Milkdown clipboard 从 clipboardData 取 text/plain → parserCtx)。转换后已无单个 `\n`,重入本函数不会再进这一支。
       // 代码块内不动(那里 `\n` 就是代码的换行)。见 ./plainPaste。
-      if (unified && plain && !html && !inCode && isPlainMultiline(plain)) {
+      // 回车口径开关(./enterMode)打开时单个 `\n` 本来就是「换一行」,不再升成段落分隔。
+      if (unified && !enterInline() && plain && !html && !inCode && isPlainMultiline(plain)) {
         const dt = new DataTransfer()
         dt.setData('text/plain', plainLinesToParagraphs(plain))
         event.preventDefault()
@@ -1105,7 +1110,7 @@ export function MilkdownInner({
           clipboardTextParser: readOnly ? undefined : (text, _ctx, plain, view) => {
             if (!textDropping) return null as unknown as Slice // 粘贴 / pasteText:PM 默认(见 onDropMark 注释)
             textDropping = false
-            const md = droppedTextMarkdown(text, plain)
+            const md = droppedTextMarkdown(text, plain, unified && enterInline())
             if (md == null) return null as unknown as Slice
             const parsed = ctx.get(parserCtx)(md) as ProseNode | string | undefined
             if (!parsed || typeof parsed === 'string') return null as unknown as Slice
@@ -1164,7 +1169,8 @@ export function MilkdownInner({
       // 折叠先跑完,跨行的 <u>…</u> 才不会被拆段撕成开合分家的两半(见 softBreak.ts 注释)。
       // unified(v4)不挂 softBreakRemark:标准 md 分段落盘,软换行由 Milkdown 原生 break 节点原样往返。
       // 换 blankLineRemark —— 只补读侧的「空行 → 空段落」还原(写侧本来就落成空行,见 softBreak.ts 顶注)。
-      .use(unified ? blankLineRemark : softBreakRemark)
+      // 回车口径开关(./enterMode)打开时换成 lineGapPlugins(空行逐条往返 + 过期紧贴记号清理)。
+      .use(unified ? (enterInline() ? lineGapPlugins : blankLineRemark) : softBreakRemark)
       .use(calloutTitleRemark)
       .use(underlineSchema)
       .use(colorSchema)

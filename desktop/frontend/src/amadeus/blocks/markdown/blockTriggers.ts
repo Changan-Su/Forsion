@@ -22,6 +22,9 @@ registerMessages({
   'blocklabel.quote': { zh: '引用', en: 'Quote' },
 })
 
+import { enterInline } from './enterMode'
+import { TIGHT_MANAGED, withTightManaged } from './lineGap'
+
 export type TriggerKind = 'text' | 'heading' | 'bullet' | 'ordered' | 'task' | 'quote' | 'fold' | 'code' | 'math'
 
 /**
@@ -98,6 +101,49 @@ export function matchTrigger(before: string): Trigger | null {
 }
 
 /**
+ * 回车口径开关打开时(./enterMode):段落第二行起的行首触发符。返回光标前最后一个软换行的文档位置 —— 这一行
+ * (软换行之后到光标)的文字恰是行首触发符时,调用方要先从这里拆段再触发(见 applyTypedTrigger 的 split)。
+ * 开关关着、不在普通段落里(列表项 / 表格里的段落不拆)、光标前没有软换行 → null(照旧按整段判定)。纯判定,不改文档。
+ */
+export function lineTriggerBreak($from: ResolvedPos): number | null {
+  if (!enterInline() || $from.parent.type.name !== 'paragraph') return null
+  for (let d = $from.depth - 1; d > 0; d--) if (/^(list_item|table)/.test($from.node(d).type.name)) return null
+  let brOff = -1
+  $from.parent.forEach((c, off) => { if (off < $from.parentOffset && c.type.name === 'hardbreak') brOff = off })
+  return brOff < 0 ? null : $from.start() + brOff
+}
+
+/** 键盘入口的触发判定,带上第二行起的拆段位置:br = null 时与 triggerAtCursor 完全相同。 */
+export function lineTriggerAtCursor($from: ResolvedPos): { trig: Trigger; br: number | null } | null {
+  const br = lineTriggerBreak($from)
+  if (br == null) {
+    const trig = triggerAtCursor($from)
+    return trig ? { trig, br: null } : null
+  }
+  const line = $from.parent.textBetween(br - $from.start() + 1, $from.parentOffset, undefined, '\ufffc')
+  let trig = matchTrigger(line)
+  if (trig?.kind === 'fold' && $from.parentOffset < $from.parent.content.size) trig = { kind: 'quote', rejoin: true }
+  return trig ? { trig, br } : null
+}
+
+/** 从软换行 br 处把段落拆成两段:上半段记 amxTight(落盘仍紧挨着,见 ./lineGap),下半段接过原段与后文的关系。 */
+function splitAtBreak(view: EditorView, br: number): Transaction {
+  const { state } = view
+  const at = state.doc.resolve(br).before()
+  const tr = state.tr.delete(br, br + 1).split(br)
+  const first = tr.doc.nodeAt(at)
+  if (first && 'amxTight' in first.attrs) {
+    tr.setNodeMarkup(at, undefined, { ...first.attrs, amxTight: true })
+    const secondAt = at + first.nodeSize
+    const second = tr.doc.nodeAt(secondAt)
+    if (second && 'amxTightBefore' in second.attrs) tr.setNodeMarkup(secondAt, undefined, { ...second.attrs, amxTightBefore: false })
+  }
+  tr.setMeta(TIGHT_MANAGED, true)
+  view.dispatch(tr)
+  return tr
+}
+
+/**
  * 键盘入口(行首触发符 + 空格 / 回车)用的判定:matchTrigger 之外再看**光标之后**有没有内容。
  *
  * `>` = 折叠是给**空行起新块**定的键位(07-29)。光标后面已经有字 = 这是在给现成的一行补 `>`,最常见的
@@ -119,11 +165,25 @@ export function triggerAtCursor($from: ResolvedPos): Trigger | null {
  * 转换之后也断开一次,紧接着打的正文自成一组,撤销时先撤字、再撤格式。
  * 返回值 = 这一键是否已被处理:空格已经插进去了就算转换失败也是 true(等同浏览器默认插空格)。
  */
-export function applyTypedTrigger(view: EditorView, trig: Trigger, typed?: string): boolean {
-  const start = view.state.selection.$from.start()
+export function applyTypedTrigger(view: EditorView, trig: Trigger, typed?: string, splitAt?: number | null): boolean {
+  let start = view.state.selection.$from.start()
   if (typed) view.dispatch(view.state.tr.insertText(typed))
   view.dispatch(closeHistory(view.state.tr))
-  const ok = applyTrigger(view, trig, { from: start, to: view.state.selection.from })
+  // 第二行起的触发符(lineTriggerAtCursor 给了 br):拆段与转换落在同一个撤销组 —— 撤销一下回到「一段两行、
+  // 第二行是字面触发符」,而不是先撤转换、再撤拆段。拆完转换没成(schema 不容)→ 原样拼回,不留下一个白拆的段。
+  let split: Transaction | null = null
+  if (splitAt != null) {
+    split = splitAtBreak(view, splitAt) // 落的字在光标处、软换行之后,br 的位置不变
+    start = view.state.selection.$from.start()
+  }
+  const consume = { from: start, to: view.state.selection.from }
+  // 拆段时给上半段记的紧贴(落盘仍紧挨着转换出来的块)由这里负责,别让转换事务被当成「邻居变了」清掉。
+  const ok = split ? withTightManaged(() => applyTrigger(view, trig, consume)) : applyTrigger(view, trig, consume)
+  if (!ok && split) {
+    const undoTr = view.state.tr
+    for (let i = split.steps.length - 1; i >= 0; i--) undoTr.step(split.steps[i].invert(split.docs[i]))
+    view.dispatch(undoTr.setMeta(TIGHT_MANAGED, true))
+  }
   view.dispatch(closeHistory(view.state.tr))
   return ok || !!typed
 }

@@ -15,6 +15,7 @@
  */
 import type { Slice, Node as ProseNode, Fragment } from '@milkdown/kit/prose/model'
 import { TextSelection, type EditorState, type Transaction } from '@milkdown/kit/prose/state'
+import { TIGHT_MANAGED } from '../blocks/markdown/lineGap'
 
 /** 解析时恒为缺省、由插件在活文档里回填的属性:比对时视为相等(否则「没改过的标题」也永远判成变了)。 */
 const DERIVED_ATTRS: Record<string, readonly string[]> = { heading: ['id'] }
@@ -206,5 +207,7 @@ export function reconcileTr(state: EditorState, next: ProseNode, changes?: Recon
       } catch { /* 夹不进合法文字位就交给 PM 的映射结果 */ }
     }
   }
-  return tr.setMeta('addToHistory', false)
+  // 回灌后的文档就是盘上那份的解析结果(紧贴记号也随新解析的块来):别让过期紧贴记号的清理把它当成「邻居变了」
+  // 改掉 —— 改掉了下次存盘就把盘上去掉的空行又写回去(回车口径开关打开时才有这层清理,见 blocks/markdown/lineGap)。
+  return tr.setMeta('addToHistory', false).setMeta(TIGHT_MANAGED, true)
 }
