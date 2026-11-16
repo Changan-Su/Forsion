@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const h = vi.hoisted(() => ({ db: null as any, failMessages: false }));
+const h = vi.hoisted(() => ({ db: null as any, failAfterChunks: -1, chunks: 0 }));
 vi.mock('../core/db.js', async () => {
   const { default: Database } = await import('better-sqlite3');
   const { STANDALONE_SCHEMA } = await import('../db/schemaStandalone.js');
@@ -10,7 +10,7 @@ vi.mock('../core/db.js', async () => {
     getDbType: () => 'sqlite',
     // 同宿主的 sqlite 适配:布尔按 0/1 绑定
     query: async (sql: string, params: any[] = []) => {
-      if (h.failMessages && /INSERT INTO chat_messages/.test(sql)) throw new Error('disk full');
+      if (/INSERT INTO chat_messages/.test(sql) && h.failAfterChunks >= 0 && h.chunks++ >= h.failAfterChunks) throw new Error('disk full');
       const s = h.db.prepare(sql);
       const p = params.map((v) => (typeof v === 'boolean' ? (v ? 1 : 0) : v));
       return s.reader ? s.all(...p) : (s.run(...p), []);
@@ -38,7 +38,8 @@ const req = (conversations: any[]): ImportRequest => ({
 });
 
 beforeEach(() => {
-  h.failMessages = false;
+  h.failAfterChunks = -1;
+  h.chunks = 0;
   h.db.exec('DELETE FROM chat_sessions; DELETE FROM chat_messages');
 });
 
@@ -79,12 +80,25 @@ describe('importConversations', () => {
     expect(importedSessionId('u1', 'tangu', 'chatgpt', 'c1')).not.toBe(a);
   });
 
-  it('a failed message write leaves no half session behind', async () => {
-    h.failMessages = true;
-    const [r] = await importConversations(req([conv('c1')]));
-    expect(r).toMatchObject({ status: 'error', error: 'disk full' });
-    expect(h.db.prepare('SELECT COUNT(*) AS n FROM chat_sessions').get().n).toBe(0);
-  });
+  it('a write that dies halfway leaves no visible session, and importing again completes it without duplicates', async () => {
+    const messages = Array.from({ length: 150 }, (_, i) => ({ role: (i % 2 ? 'assistant' : 'user') as 'user' | 'assistant', content: `m${i}` }));
+    h.failAfterChunks = 1 // 第一块(100 条)写进去,第二块失败
+    const [r] = await importConversations(req([{ external_id: 'half', messages }]))
+    expect(r).toMatchObject({ status: 'error', error: 'disk full' })
+    expect(h.db.prepare('SELECT COUNT(*) AS n FROM chat_sessions').get().n).toBe(0)
+    h.failAfterChunks = -1
+    const [again] = await importConversations(req([{ external_id: 'half', messages }]))
+    expect(again).toMatchObject({ status: 'created', messages: 150 })
+    expect(h.db.prepare('SELECT COUNT(*) AS n FROM chat_messages').get().n).toBe(150)
+  })
+
+  it('never deletes messages on failure (a concurrent writer could own them)', async () => {
+    const sid = importedSessionId('u1', 'tangu', 'deepseek', 'c1')
+    h.db.prepare("INSERT INTO chat_messages (id, session_id, role, content, timestamp) VALUES ('someone-else', ?, 'user', 'x', 1)").run(sid)
+    h.failAfterChunks = 0
+    await importConversations(req([conv('c1')]))
+    expect(h.db.prepare("SELECT COUNT(*) AS n FROM chat_messages WHERE id = 'someone-else'").get().n).toBe(1)
+  })
 
   it('long chats are inserted in chunks', async () => {
     const messages = Array.from({ length: 250 }, (_, i) => ({ role: i % 2 ? 'assistant' : 'user', content: `m${i}` }));
@@ -103,6 +117,12 @@ describe('settleTimestamps', () => {
       { role: 'user', content: 'a' }, { role: 'assistant', content: 'b', timestamp: T0 - 10 }, { role: 'user', content: 'c', timestamp: T0 + 9000 },
     ] });
     expect(out).toEqual([T0, T0 + 1, T0 + 9000]);
+  });
+  it('a chat with no times at all ends no later than now (never in the future)', () => {
+    const now = Date.now();
+    const out = settleTimestamps({ external_id: 'x', messages: Array.from({ length: 101 }, () => ({ role: 'user' as const, content: 'a' })) }, now);
+    expect(out[out.length - 1]).toBeLessThanOrEqual(now);
+    expect(out.every((t, i) => i === 0 || t > out[i - 1])).toBe(true);
   });
 });
 

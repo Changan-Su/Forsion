@@ -11,15 +11,16 @@
  *   - 原时间照留:会话 created_at / updated_at、每条消息的 timestamp 都用原记录的,列表里按原时间排,不冒到最上面。
  *   - 不触发后台:导入不建 run,Historian 起标题 / 记忆候选 / Dream 都只认跑过的轮次,所以一条也不会被它们扫到;
  *     proactive_at 留空 → 没有未读点;标题记为手动(title_manual),之后接着聊也不会被 Historian 改名。
- *   - 一条会话要么整条写进去,要么一条不留:消息写到一半失败就把这条会话连同已写的消息删掉,回 `error`。
+ *   - **先写消息、最后才建会话行**:会话行出现之前,列表里看不到、也没人能往里续聊。消息 id 由 (会话 id, 序号) 定死、
+ *     `ON CONFLICT (id) DO NOTHING` —— 写到一半断了(失败 / 进程退出)留下的只是没有会话行的消息,谁也看不见;
+ *     再导一次会补齐剩下的、再建会话行。**不做补偿删除**:按 session_id 删会连别人此刻写进去的消息一起删(Codex 11-16)。
  *   - 消息 origin = 'import',来源记在会话 agent_config.imported = { source, id }(界面和以后的撤销靠它认)。
  */
 import { createHash } from 'node:crypto';
-import { v4 as uuidv4 } from 'uuid';
 import { query, getDbType } from '../core/db.js';
 
 export const IMPORT_MAX_CONVERSATIONS = 50;
-export const IMPORT_MAX_MESSAGES = 5000;
+export const IMPORT_MAX_MESSAGES = 20000;
 /** 一次请求里所有正文 + 思考的字符总数上限(server 的 JSON 上限 50 MB、本机 25 MB,留足余量)。 */
 export const IMPORT_MAX_CHARS = 8_000_000;
 const SOURCE_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
@@ -97,7 +98,15 @@ function validMs(v: unknown): boolean {
 
 /** 导入会话的 id:同一用户、同一来源的同一条外部记录永远是同一个 id(v4 形状的 sha256 截取,VARCHAR(36) 装得下)。 */
 export function importedSessionId(userId: string, appId: string, source: string, externalId: string): string {
-  const h = createHash('sha256').update(`forsion-import\0${userId}\0${appId}\0${source}\0${externalId}`).digest('hex');
+  return asUuid(createHash('sha256').update(`forsion-import\0${userId}\0${appId}\0${source}\0${externalId}`).digest('hex'));
+}
+
+/** 导入消息的 id:由会话 id 与序号定死,断了重导时同一条落回同一行(ON CONFLICT DO NOTHING)。 */
+export function importedMessageId(sessionId: string, index: number): string {
+  return asUuid(createHash('sha256').update(`forsion-import-msg\0${sessionId}\0${index}`).digest('hex'));
+}
+
+function asUuid(h: string): string {
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-${((parseInt(h[16], 16) & 0x3) | 0x8).toString(16)}${h.slice(17, 20)}-${h.slice(20, 32)}`;
 }
 
@@ -106,9 +115,11 @@ function sqlTime(ms: number): string {
   return new Date(ms).toISOString().slice(0, 19).replace('T', ' ');
 }
 
-/** 消息时间:有原时间用原时间;缺的接在前一条后面 1 秒,保证同一会话里严格递增(压缩 / 分支都按 timestamp 切)。 */
+/** 消息时间:有原时间用原时间;缺的接在前一条后面 1 秒,保证同一会话里严格递增(压缩 / 分支都按 timestamp 切)。
+ *  一个时间都没有的对话从「现在往前 n 秒」排起,最后一条不晚于现在 —— 排到未来的话,之后接着聊的新消息会插进旧历史中间(Codex 11-16)。 */
 export function settleTimestamps(c: ImportConversationInput, now = Date.now()): number[] {
-  const start = c.created_at ?? c.messages.find((m) => m.timestamp != null)?.timestamp ?? c.updated_at ?? now;
+  const anchor = c.created_at ?? c.messages.find((m) => m.timestamp != null)?.timestamp ?? c.updated_at;
+  const start = anchor ?? now - c.messages.length * 1000;
   const out: number[] = [];
   let prev = start - 1;
   for (const m of c.messages) {
@@ -137,19 +148,13 @@ export async function importConversations(req: ImportRequest): Promise<ImportRes
       const updatedAt = Math.max(c.updated_at ?? 0, stamps[stamps.length - 1]);
       const title = (c.title && c.title.trim() ? c.title.trim() : firstLine(c.messages) || 'Imported chat').slice(0, 200);
       const cfg = { ...(req.agentConfig || {}), imported: { source: req.source, id: c.external_id } };
+      await insertMessages(sessionId, c.messages, stamps, agentSlugOf(req.agentConfig));
       await query(
         `INSERT INTO chat_sessions (id, user_id, app_id, title, title_manual, model_id, agent_config, projectless, kind, last_read_at, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'user', ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'user', ?, ?, ?) ON CONFLICT (id) DO NOTHING`,
         [sessionId, req.userId, req.appId, title, true, req.modelId, JSON.stringify(cfg), req.projectless,
          updatedAt, sqlTime(createdAt), sqlTime(updatedAt)],
       );
-      try {
-        await insertMessages(sessionId, c.messages, stamps, agentSlugOf(req.agentConfig));
-      } catch (e) {
-        await query(`DELETE FROM chat_messages WHERE session_id = ?`, [sessionId]).catch(() => {});
-        await query(`DELETE FROM chat_sessions WHERE id = ?`, [sessionId]).catch(() => {});
-        throw e;
-      }
       results.push({ external_id: c.external_id, status: 'created', session_id: sessionId, messages: c.messages.length });
     } catch (e: any) {
       results.push({ external_id: c.external_id, status: 'error', error: String(e?.message || e).slice(0, 300) });
@@ -170,12 +175,12 @@ async function insertMessages(sessionId: string, messages: ImportMessageInput[],
     const slice = messages.slice(i, i + INSERT_CHUNK);
     const params: unknown[] = [];
     const rows = slice.map((m, j) => {
-      params.push(uuidv4(), sessionId, m.role, stripNul(m.content, pg), stamps[i + j],
+      params.push(importedMessageId(sessionId, i + j), sessionId, m.role, stripNul(m.content, pg), stamps[i + j],
         m.model_id || null, m.reasoning ? stripNul(m.reasoning, pg) : null, m.role === 'assistant' ? agentSlug : null, 'import');
       return '(?, ?, ?, ?, ?, ?, ?, ?, ?)';
     });
     await query(
-      `INSERT INTO chat_messages (id, session_id, role, content, timestamp, model_id, reasoning, agent_slug, origin) VALUES ${rows.join(', ')}`,
+      `INSERT INTO chat_messages (id, session_id, role, content, timestamp, model_id, reasoning, agent_slug, origin) VALUES ${rows.join(', ')} ON CONFLICT (id) DO NOTHING`,
       params,
     );
   }
