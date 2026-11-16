@@ -3173,9 +3173,10 @@ async function downloadMarketPackage(id: string, report: (phase: 'resolve' | 'do
   const effType = await detectMarketType(buf, info.type)
   await checkMarketPackage(buf, effType, app.getVersion(), marketPlatform(), builtinPluginIds())
   // 第二级内部接口(internals-raw)要这一版过了商店审核才装:手动装和自动更新都经这里(marketInternals.ts)。
+  // 装指定的旧版本时问那一版的详情(服务端按版本快照回 rawApprovedVersion),不拿最新版的放行比。
   if (effType === 'amadeus-plugin') {
     await assertInternalsRawApproved(await packageManifest(buf, effType), async () => {
-      const r = await fetch(`${base}/api/market/items/${encodeURIComponent(id)}`, { headers: { 'User-Agent': MARKET_UA }, signal: AbortSignal.timeout(30_000) })
+      const r = await fetch(`${base}/api/market/items/${encodeURIComponent(id)}${version ? `?version=${encodeURIComponent(version)}` : ''}`, { headers: { 'User-Agent': MARKET_UA }, signal: AbortSignal.timeout(30_000) })
       return r.ok ? ((await r.json()) as { rawApprovedVersion?: string | null }).rawApprovedVersion : null
     })
   }
