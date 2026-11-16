@@ -1,7 +1,7 @@
 /** 「由谁来跑」在界面上的判断:这台设备能不能跑、输入框写什么、引擎的错误码翻成哪句话。 */
 import { describe, expect, it } from 'vitest'
 import { translateFor } from '../i18n'
-import { agentEngineErrorText, agentEngineOf, agentEnginePlaceholder, agentEngineState, isRosterEngine } from './agentEngine'
+import { agentEngineErrorText, agentEngineOf, agentEnginePlaceholder, agentEngineState, chatEngineOf, isRosterEngine } from './agentEngine'
 
 const zh = (k: string, v?: Record<string, unknown>) => translateFor('zh', k, v)
 const en = (k: string, v?: Record<string, unknown>) => translateFor('en', k, v)
@@ -58,5 +58,22 @@ describe('小工具', () => {
   it('名册里有 Agent 形态的引擎只有 DSH', () => {
     expect(isRosterEngine('dsh')).toBe(true)
     expect(isRosterEngine('codex')).toBe(false)
+  })
+})
+
+describe('chatEngineOf:这场对话由哪个引擎跑(输入框和右栏补页同一个口径)', () => {
+  const defs = [{ slug: 'ds', engine: 'dsh' }, { slug: 'tg' }]
+  it('显式选了引擎的按引擎;否则看跑这一轮的 Agent;没选人按缺省 Agent', () => {
+    expect(chatEngineOf({ engineId: 'claude-code' }, defs, 'tg')).toBe('claude-code')
+    expect(chatEngineOf({ agentSlug: 'ds' }, defs, 'tg')).toBe('dsh')
+    expect(chatEngineOf({ soloAgentSlug: 'ds' }, defs, 'tg')).toBe('dsh')
+    expect(chatEngineOf({}, defs, 'ds')).toBe('dsh')
+    expect(chatEngineOf(undefined, defs, 'tg')).toBe('')
+    expect(chatEngineOf({ agentSlug: 'gone' }, defs, 'ds')).toBe('')
+  })
+  it('群聊、团队成员不按 Agent 的引擎算', () => {
+    expect(chatEngineOf({ agentSlug: 'ds', groupChat: true }, defs, 'tg')).toBe('')
+    expect(chatEngineOf({ agentSlug: 'ds', teamMember: { teamSessionId: 't' } }, defs, 'tg')).toBe('')
+    expect(chatEngineOf({ teamSlug: 'x' }, defs, 'ds')).toBe('')
   })
 })

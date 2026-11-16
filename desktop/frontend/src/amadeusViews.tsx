@@ -19,7 +19,7 @@ import {
 } from 'lucide-react'
 import { useApp } from './stores/appStore'
 import { useVisualTheme as useTheme } from './stores/themeStore'
-import { activePageScope, cascadeFdAfterRename, claimTitleFocus, disposePageScope, flushAllScopes, MAIN_SCOPE, onNotePathGone, pageStoreFor, PageScopeCtx, remapScopePaths, setActivePageScope, useActivePageScope, usePageScope, usePageStore, useScopedPageStore } from '@amadeus/store/pageStore'
+import { activePageScope, birthNavGuard, claimTitleFocus, disposePageScope, MAIN_SCOPE, onNotePathGone, pageStoreFor, PageScopeCtx, setActivePageScope, useActivePageScope, usePageScope, usePageStore, useScopedPageStore } from '@amadeus/store/pageStore'
 import { retireUnifiedPath, insertFilesForPath, pathHit, unifiedInsertMarkdown } from '@amadeus/unified/lifecycle'
 import { treeRefBlocks } from '@amadeus/unified/treeRefDrop'
 import { ReadingModeButton, type ReadingModeControl } from '@amadeus/unified/ReadingSurface'
@@ -64,6 +64,7 @@ import { newTabOf, useItemSelect } from './views/itemSelect'
 import { useSearchSeed } from './amadeusPanels'
 import { askString } from '@amadeus/components/askString'
 import { renameDb } from '@amadeus/lib/dbFileOps'
+import { renameNoteFile, retargetEditorLeaves } from '@amadeus/lib/noteRename'
 import { emptyDb, serializeDb } from '@amadeus-shared/db/schema'
 import { useRecentViews } from './recentViews'
 import { buildTree, mergeFdNotes, type TreeNode } from '@amadeus/lib/pageTree'
@@ -266,36 +267,10 @@ const prefixesOf = (p: string): string[] => {
   return out
 }
 
-/** 把某页改名:纯路径链(flush → renamePageFile 物理移动+全库引用重写 → 各面板跟队 → .fd 级联)。
- *  ⚠️ 不许走「loadPage + renamePage」老路(Codex P0):loadPage 会把 v4/外来 md 灌进 v3 编译管线,
- *  renamePage 落盘时就把它改写成 v3 格式(注 amadeus_page+块标记)= 毁档;纯移动对 v3 同样正确
- *  (noteViewStore.renameNote 就是这条链)。 */
-/** 改名后重定向所有开着旧路径的编辑器 leaf(Codex 终审 P1):unified 实例已被退休,
- *  不换 leaf 参数的话那个标签就永远卡在不存在的旧路径上、输入不再保存。
- *  移动端单列壳 api 恒 null → 跳过(单 leaf 场景由 onRenamed/自身导航兜)。 */
-function retargetEditorLeaves(oldPath: string, newPath: string): void {
-  const w = useWorkspace.getState()
-  for (const p of w.api?.panels ?? []) {
-    const params = (p.params ?? {}) as { __type?: string; notePath?: string }
-    if (params.__type === 'amadeus-editor' && params.notePath === oldPath) {
-      w.navigateLeaf(p.id, 'amadeus-editor', { ...params, notePath: newPath })
-    }
-  }
-}
-
+/** 树上行内改名:编排在 amadeus/lib/noteRename(插件 ctx.app.renamePath 共用),这里只管提示与刷新目录。 */
 async function renameAt(path: string, newName: string): Promise<void> {
   try {
-    await flushAllScopes()
-    const newPath = await amadeus.renamePageFile(path, newName)
-    if (newPath !== path) {
-      retireUnifiedPath(path, 'file', newPath) // 开着这页的 unified 实例停写旧路径(防幽灵文件);带新路径 = 未落盘的字存成新路径草稿(G2-03)
-      remapScopePaths(path, newPath, 'file')
-      await cascadeFdAfterRename(path, newPath)
-      retargetEditorLeaves(path, newPath)
-      // 某个面板正开着这页(v3):remap 换了 activePage 但 manifest.title 还是旧名 → 重载对齐。
-      const st = ps()
-      if (st.activePage === newPath) void st.loadPage(newPath)
-    }
+    await renameNoteFile(path, newName)
   } catch (e) {
     window.alert(translate('amxv.renameFailed', { e: e instanceof Error ? e.message : String(e) }))
   }
@@ -1475,9 +1450,10 @@ export function AmadeusPagesView() {
 
   /** 在笔记的 .fd 里建子笔记并打开 —— 行内「+」与右键菜单「新建子笔记」的同一落点。 */
   const newChild = (p: string): void => {
+    const stay = birthNavGuard() // 出生可能先问插件、等很久:等完用户已去了别处就不跳
     void ps().createChildNote(p, translate('amadeus.default.note')).then((np) => {
       setExpanded((prev) => new Set([...prev, ...prefixesOf(fdDirOf(p))]))
-      void openNote(np) // 勿直调 loadPage:那装的是活动 scope,站在主页/聊天上建子笔记同样不跳(见 createPageInFolder 注)
+      if (stay()) void openNote(np) // 勿直调 loadPage:那装的是活动 scope,站在主页/聊天上建子笔记同样不跳(见 createPageInFolder 注)
     }, () => { /* 没建成:birthNoteFile 已提示 */ })
   }
 

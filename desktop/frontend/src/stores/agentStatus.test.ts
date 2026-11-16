@@ -14,7 +14,7 @@
  * statusKey 加进 agentName → 「只改展示名不进键」红;statusKey 去掉 agentSlug → 「换 Agent 进键」红。
  */
 import { describe, expect, it } from 'vitest'
-import { agentStatusOf, statusKey, DONE_HOLD_MS, ERROR_HOLD_MS, type AgentStatusSlice } from './agentStatus'
+import { agentStatusOf, agentStatusOfTarget, resolveStatusTarget, statusKey, DONE_HOLD_MS, ERROR_HOLD_MS, type AgentStatusSlice } from './agentStatus'
 import type { NormalAgentDef, UiMessage } from '../types'
 import type { RunStats } from './runStats'
 
@@ -218,5 +218,42 @@ describe('statusKey', () => {
     const base = at({})
     expect(at({ configBySession: { s1: { agentSlug: 'muse' } } })).not.toBe(base)
     expect(at({ agentDefs: [adef('xyra', 'Xyra 2.0')] })).toBe(base)
+  })
+})
+
+/** 会话参数放宽成 { sessionId?, runId? }(2026-11-13,ctx.tangu.stop / 按 runId 取状态)。
+ *  负对照(已实跑红):resolveStatusTarget 的 runId 分支找不到时回 { sessionId: undefined } → 「找不到不回落活动会话」红。 */
+describe('resolveStatusTarget / agentStatusOfTarget', () => {
+  const two = (): AgentStatusSlice => ({
+    ...slice(),
+    activeId: 's2',
+    messagesBySession: { s1: [user(), asst()], s2: [user({ id: 'u2' }), asst({ id: 'a2' })] },
+    runningBySession: { s1: 'r1', s2: 'r2' },
+  })
+
+  it('字符串 / null / 不传:原样(老用法不变)', () => {
+    expect(resolveStatusTarget(two(), 's1')).toEqual({ sessionId: 's1', byRun: false })
+    expect(resolveStatusTarget(two(), null)).toEqual({ sessionId: null, byRun: false })
+    expect(resolveStatusTarget(two(), undefined)).toEqual({ sessionId: undefined, byRun: false })
+    expect(resolveStatusTarget(two(), { sessionId: 's1' })).toEqual({ sessionId: 's1', byRun: false })
+  })
+
+  it('{ runId } 命中:正在跑它的那个会话,不管活动会话是谁', () => {
+    expect(resolveStatusTarget(two(), { runId: 'r1' })).toEqual({ sessionId: 's1', byRun: true })
+    expect(agentStatusOfTarget(two(), { runId: 'r1' }, NOW)).toMatchObject({ sessionId: 's1', runId: 'r1', phase: 'thinking' })
+  })
+
+  it('{ runId } 不命中 / 空 / undefined:不回落活动会话,状态是纯 idle', () => {
+    for (const t of [{ runId: 'gone' }, { runId: '' }, { runId: null }, { runId: undefined }, { sessionId: 's2', runId: 'gone' }]) {
+      expect(resolveStatusTarget(two(), t)).toEqual({ sessionId: null, byRun: true })
+      expect(agentStatusOfTarget(two(), t, NOW)).toEqual({ phase: 'idle', sessionId: null, runId: null, since: 0, textChars: 0, reasoningChars: 0 })
+    }
+  })
+
+  it('run 结束(running 清掉)后按 runId 取 = idle,不报 done 余韵', () => {
+    const fin = NOW - 100
+    const s = slice({ running: false, stats: rs({ finishedAt: fin }), msgs: [user(), asst({ status: 'done', content: 'ok' })] })
+    expect(agentStatusOf(s, 's1', NOW).phase).toBe('done')
+    expect(agentStatusOfTarget(s, { runId: 'r1' }, NOW)).toMatchObject({ phase: 'idle', runId: null, sessionId: null })
   })
 })

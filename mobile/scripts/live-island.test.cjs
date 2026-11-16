@@ -13,7 +13,7 @@ const src = buildSync({
 }).outputFiles[0].text
 const mod = { exports: {} }
 new Function('module', 'exports', src)(mod, mod.exports)
-const { deriveIsland, shadeAnswer } = mod.exports
+const { deriveIsland, shadeAnswer, noticeRequest, postNotice } = mod.exports
 
 const tr = (k, v) => (v ? `${k}${JSON.stringify(v)}` : k)
 const since = (t) => (sid) => t[sid] ?? 0
@@ -168,5 +168,33 @@ check('17 提问不是审批:拿提问的 id 来「允许」不认', () => {
   assert.equal(shadeAnswer({ messageId: 'm7', approvalId: 'p', action: 'reject' }, [m]), null)
 })
 
-if (fails.length) { console.log(`\n${fails.length} failed`); process.exit(1) }
-console.log('\nall passed')
+check('18 系统通知交给原生:tag = 来源,有 dedupeKey 才带 key(原生按「来源 + key」分条);「跑完了」不发', () => {
+  assert.deepEqual(noticeRequest('审批', 'rm -rf', { event: 'plugin:biz', key: 'demo:approval:7' }, 'ch'),
+    { title: '审批', text: 'rm -rf', tag: 'plugin:biz', key: 'demo:approval:7', channelName: 'ch' })
+  assert.deepEqual(noticeRequest('t', 'x', { event: 'inbox.message' }, 'ch'), { title: 't', text: 'x', tag: 'inbox.message', channelName: 'ch' })
+  for (const key of ['', undefined, 3]) assert.equal('key' in noticeRequest('t', 'x', { event: 'e', key }, 'ch'), false, String(key))
+  assert.equal(noticeRequest('t', 'x', undefined, 'ch').tag, 'app')
+  assert.equal(noticeRequest('t', 'x', { event: 'agent.done', key: 'k' }, 'ch'), null)
+})
+
+const pending = []
+const checkAsync = (name, fn) => pending.push(fn().then(() => console.log(`PASS  ${name}`), (e) => { console.log(`FAIL  ${name}\n      ${e.message.split('\n')[0]}`); fails.push(name) }))
+
+checkAsync('19 系统通知的投递结果原样交回页面:原生 { posted } 照交;原生拒绝不吞(页面当没投递);老外壳回 undefined → undefined(页面照旧当投了);「跑完了」不发', async () => {
+  const seen = []
+  const native = (answer) => (req) => { seen.push(req); return answer === 'reject' ? Promise.reject(new Error('no channel')) : Promise.resolve(answer) }
+  assert.deepEqual(await postNotice(native({ posted: false }), 't', 'x', { event: 'plugin:a' }, 'ch'), { posted: false })
+  assert.deepEqual(await postNotice(native({ posted: true }), 't', 'x', { event: 'plugin:a' }, 'ch'), { posted: true })
+  assert.equal(await postNotice(native(undefined), 't', 'x', { event: 'plugin:a' }, 'ch'), undefined)
+  assert.equal(await postNotice(native({}), 't', 'x', { event: 'plugin:a' }, 'ch'), undefined)
+  await assert.rejects(postNotice(native('reject'), 't', 'x', { event: 'plugin:a' }, 'ch'), /no channel/)
+  assert.equal(seen.length, 5)
+  assert.deepEqual(seen[0], { title: 't', text: 'x', tag: 'plugin:a', channelName: 'ch' })
+  assert.equal(await postNotice(native({ posted: false }), 't', 'x', { event: 'agent.done' }, 'ch'), undefined)
+  assert.equal(seen.length, 5, '「跑完了」不交给原生')
+})
+
+Promise.all(pending).then(() => {
+  if (fails.length) { console.log(`\n${fails.length} failed`); process.exit(1) }
+  console.log('\nall passed')
+})

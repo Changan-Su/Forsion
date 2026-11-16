@@ -1,0 +1,120 @@
+/**
+ * 手机横幅的原生接缝:有原生外壳的手机(Android NativeChrome)由原生层把当前这一条画在状态栏下面、盖住胶囊 / 顶栏那一条
+ * (网页里的卡盖不到原生层画的胶囊和第二层的实心顶栏)。外壳装好后在这里登记一个 presenter(mobile/src/nativeChrome.ts);
+ * NotificationHost 在手机横幅模式下有 presenter 就把 store 的当前条交给它,自己不画 DOM;没有(网页版手机、桥坏了)就画 DOM 横幅。
+ * 停留、排队、同 key、节流都在 notificationStore,原生层只画、只报手势(点正文 = 动作,上滑 / 点 × = 收起)。
+ * 共用代码,不 import capacitor 也不 import mobile/src。
+ */
+import { useSyncExternalStore } from 'react'
+import { markUserGesture } from '@lcl/engine/userGesture'
+import type { AppNotification, NotifyLevel } from './notificationStore'
+import { useNotifications } from './notificationStore'
+
+/** 交给原生层的一条(文案已按当前语言取好、长度已截好)。 */
+export interface NativeBannerPayload {
+  id: string
+  /** 「来源 · 标题」,一行小字;可能为空。 */
+  source: string
+  text: string
+  /** 按钮文字;空 = 没有按钮(点正文也什么都不做)。 */
+  action: string
+  level: NotifyLevel
+  /** × 与读屏「收起」操作的文字。 */
+  dismiss: string
+  /** 读屏用的说明(上滑或点 × 收起)。 */
+  hint: string
+}
+
+export type NativeBannerPresenter = (banner: NativeBannerPayload | null) => void
+
+let presenter: NativeBannerPresenter | null = null
+const subs = new Set<() => void>()
+const emit = (): void => { for (const fn of [...subs]) fn() }
+
+/** 原生外壳登记自己;返回撤销(桥坏了 / 回落网页顶栏时调,NotificationHost 随即改画 DOM 横幅)。 */
+export function setNativeBannerPresenter(p: NativeBannerPresenter): () => void {
+  presenter = p
+  emit()
+  return () => {
+    if (presenter !== p) return
+    presenter = null
+    emit()
+  }
+}
+
+export function nativeBannerPresenter(): NativeBannerPresenter | null { return presenter }
+
+export function useNativeBannerPresenter(): NativeBannerPresenter | null {
+  return useSyncExternalStore((fn) => { subs.add(fn); return () => { subs.delete(fn) } }, () => presenter, () => null)
+}
+
+/** 往上滑收起的门槛:滑过 24(dp / 网页 px)或往上一甩(px/ms)。原生那半同一组数(NativeBanner.kt BANNER_SWIPE / BANNER_FLING)。 */
+export const BANNER_SWIPE = 24
+export const BANNER_FLING = 0.6
+/** 松手时收不收:[dy] 往上为负,[v] 松手前那一下的速度(往上为负)。 */
+export function bannerFlungAway(dy: number, v: number): boolean {
+  return dy <= -BANNER_SWIPE || (dy < 0 && v <= -BANNER_FLING)
+}
+
+const MAX_ID = 64, MAX_SOURCE = 200, MAX_TEXT = 500, MAX_ACTION = 60, MAX_LABEL = 80
+const clip = (s: string, n: number): string => (s.length > n ? s.slice(0, n) : s)
+
+/** store 的一条 → 交给原生层的一条。 */
+export function bannerPayload(n: AppNotification, labels: { dismiss: string; hint: string }): NativeBannerPayload {
+  return {
+    id: clip(n.id, MAX_ID),
+    source: clip([n.sourceLabel, n.title].filter(Boolean).join(' · '), MAX_SOURCE),
+    text: clip(n.text, MAX_TEXT),
+    action: clip(n.action?.label ?? '', MAX_ACTION),
+    level: n.level,
+    dismiss: clip(labels.dismiss, MAX_LABEL),
+    hint: clip(labels.hint, MAX_LABEL),
+  }
+}
+
+/** 原生层报回来的手势,按 id 找那一条:已经走了的不作数(activate / dismiss 找不到就什么都不做)。
+ *  收起不要求它还在屏上:常驻的那张在 × 往回报的路上被新来的顶回队列,用户点的 × 照样算数,不让它过会儿又回来。 */
+export function onNativeBannerEvent(id: unknown, kind: unknown): void {
+  if (typeof id !== 'string' || !id) return
+  const st = useNotifications.getState()
+  if (kind === 'action') {
+    markUserGesture() // 用户点的:动作同步弹出的卡和点页面上的按钮一样算用户自己做的(userGesture.ts)
+    st.activate(id)
+  } else if (kind === 'dismiss') st.dismiss(id, 'user')
+}
+
+/** 原生外壳那一半(Capacitor 插件 NativeChrome 的 setBanner / `banner` 事件),放在这里好和其余部分一起测。 */
+export interface NativeBannerBridge<Theme> {
+  setBanner(options: { banner: (NativeBannerPayload & { theme: Theme }) | null }): Promise<void>
+  addListener(event: 'banner', cb: (e: { id?: string; kind?: string }) => void): Promise<unknown>
+}
+
+/** 接上原生横幅(mobile/src/nativeChrome.ts 在原生顶栏装好时调)。
+ *  - 先注册 `banner` 事件,**成功后**才登记 presenter:页面收不到 × 的话,原生画的卡(常驻那张的 onClose)就悬着;注册失败 → 一直由页面画。
+ *  - `setBanner` 被拒 → 撤掉 presenter(页面接着画),并尽量让原生层收起它可能还画着的那张,免得两张叠着。
+ *  - 依次发、一次一个:晚到的旧调用不会盖掉新的。
+ *  `live()` = 原生顶栏还在(没回落到网页顶栏)。返回 `repaint`(换主题时重发屏上那条)与 `off`(回落网页顶栏时调,页面接着画)。 */
+export function connectNativeBanner<Theme>(bridge: NativeBannerBridge<Theme>, opts: { theme: () => Theme; live: () => boolean }): { repaint(): void; off(): void } {
+  let banner: NativeBannerPayload | null = null
+  let chain: Promise<void> = Promise.resolve()
+  let withdraw: (() => void) | null = null
+  const off = (): void => { withdraw?.(); withdraw = null }
+  const send = (): void => {
+    const current = banner
+    chain = chain.then(async () => {
+      if (!withdraw) return
+      try {
+        await bridge.setBanner({ banner: current ? { ...current, theme: opts.theme() } : null })
+      } catch (e) {
+        // 用户看不见的提示一张都不能有:从这里起由页面画
+        console.error('[notify] native banner failed, the page draws notifications:', e)
+        off()
+        if (current) void bridge.setBanner({ banner: null }).catch(() => {})
+      }
+    })
+  }
+  void bridge.addListener('banner', (e) => onNativeBannerEvent(e?.id, e?.kind)).then(() => {
+    if (opts.live() && !withdraw) withdraw = setNativeBannerPresenter((next) => { banner = next; send() })
+  }, (e) => { console.error('[notify] native banner events unavailable, the page draws notifications:', e) })
+  return { repaint: () => { if (banner) send() }, off }
+}

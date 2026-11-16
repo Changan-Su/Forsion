@@ -33,6 +33,17 @@ export interface CuLiveFrame {
   unchanged?: boolean
   ageMs?: number
   error?: string
+  // ── helper 协议 20 起(旧 helper / 整屏旧路径不给)──
+  /** Agent 光标位置,相对这一帧的比例 0..1,原点左上。 */
+  cursor?: { x: number; y: number }
+  /** 最近一次动作;kind 如 click / doubleClick / scroll / type …,seq 单调递增,label 最长 80 字。 */
+  lastAction?: { kind: string; seq: number; ageMs: number; x?: number; y?: number; label?: string }
+  /** helper 启动以来的动作总数,单调递增。 */
+  actionCount?: number
+  /** 最近一次 act 带来的 runId。 */
+  runId?: string
+  /** 这一轮是否还在进行中。 */
+  turnActive?: boolean
 }
 
 export interface StartRunResult {
@@ -585,8 +596,9 @@ declare global {
       /** 本机已配对的来访设备(T1)与回收。 */
       unitsPairedList?(): Promise<UnitPairedDevice[]>
       unitsPairedRemove?(id: string): Promise<{ ok: boolean }>
-      /** LAN 直连探针(主进程发,免 CORS):是台 unitWeb 就回 meta,否则 null。 */
-      unitsProbeLan?(lanUrl: string): Promise<{ instanceId: string; name: string } | null>
+      /** LAN 直连探针(主进程发,免 CORS):是台 unitWeb 就回 meta,否则 null。unitId = 对方报的名册 id(旧版不报);
+       *  self = 应答的就是本机。判「是不是名册里那一行」用 unitPanelModel.lanProbeMatches,别只看非 null。 */
+      unitsProbeLan?(lanUrl: string): Promise<{ instanceId: string; name: string; unitId?: string; self?: true } | null>
       /** P2P 直连打开设备:成了回本机代理地址;失败 reject(UI 回落中转)。 */
       unitsP2pOpen?(id: string): Promise<{ url: string }>
       /** 桌面作为调用方(新会话建到账号下另一台电脑上):主进程本机中转口的地址 + 本次启动的口令(electron/unitRelay.ts)。
@@ -892,6 +904,26 @@ declare global {
       /** Computer Use:最近被操控窗口的一帧画面。只读——helper 没跑就 active:false,绝不因此拉起它。
        *  仅 macOS(Windows helper 是 stdio 子进程,桌面够不着);拿不到图会带 error 而不是伪造画面。 */
       computerUseLiveView?(opts?: { maxDimension?: number; quality?: number; activeWithinMs?: number; image?: boolean; sinceFrame?: string }): Promise<CuLiveFrame>
+      /** Computer Use 悬浮小画面(宿主私有桥,不是公开插件 API;只有 Electron 桌面有)。
+       *  open() 只在用户点「移到悬浮窗」时调:已开着就叫到原处回 true,插件没装 / 没启用回 false 且不开窗。 */
+      computerUsePip?: { open(): Promise<boolean>; close(): Promise<void>; isOpen(): Promise<boolean> }
+      /** pip 窗自己用:视图挂上了(带内容高)/ 插件不在;之后内容高变了再报。 */
+      pipReady?(ok: boolean, height?: number): void
+      pipResize?(height: number): void
+      /** pip 窗里的停止 / 状态经主进程转给跑着这一轮的窗口(computerUsePipAgent.ts)。 */
+      pipAgent?: {
+        stop(target: unknown): Promise<boolean>
+        watch(key: string, target: unknown): void
+        unwatch(key: string): void
+        onStatus(cb: (key: string, status: unknown) => void): () => void
+      }
+      /** 非 pip 窗口的应答方(computerUsePipHost.ts)。 */
+      pipAgentHost?: {
+        ready(): void
+        onRequest(cb: (req: { id?: number; op: string; key?: string; target?: unknown }) => void): () => void
+        reply(id: number, value: unknown): void
+        status(key: string, status: unknown): void
+      }
       /** 侧边拼接(App Dock,仅 macOS):对话面板贴在别的 App 窗口旁边。open 任何窗口可调(打开面板,先挑窗口);
        *  其余只在面板窗口自己里调得通,别处调回空结果。 */
       appDockOpen?(): Promise<{ ok: boolean; error?: string }>
@@ -981,9 +1013,13 @@ declare global {
       spacesDelete?(slug: string): Promise<{ ok: boolean }>
       /** 收件箱:系统通知(点击回跳 Inbox Space)/ dock 角标(仅 mac 生效)/ 通知点击订阅。 */
       notifyInbox?(title: string, body: string): Promise<void>
-      /** 通用系统通知(所有应用内通知同步发);web 下 undefined。meta.event = 哪类通知(NOTIFY_EVENTS 的 id):
-       *  桌面不看;安卓(mobile/src/liveIsland.ts)据此给每类只留一条,并略过由灵动岛报的「跑完了」。 */
-      notify?(title: string, body: string, meta?: { event?: string }): Promise<void>
+      /** 通用系统通知(所有应用内通知同步发);web 下 undefined。meta.event = 哪类通知(NOTIFY_EVENTS 的 id / plugin:<id>),
+       *  meta.key = 这条的 dedupeKey(只有有人在等的 urgent 卡才带,见 notificationStore 的 postOs):桌面都不看;
+       *  安卓(mobile/src/liveIsland.ts)带 key 的按「来源 + key」、
+       *  不带的按来源各只留一条,并略过由 Agent 运行状态通知报的「跑完了」。
+       *  回话:安卓回 `{ posted }`(这一条真贴出去了没有:没通知权限、渠道被关、App 在前台 → false),拒绝也算没投;
+       *  桌面和老安卓壳回 undefined,按投了算(notificationStore 的 osDelivered)。 */
+      notify?(title: string, body: string, meta?: { event?: string; key?: string }): Promise<void | { posted: boolean }>
       setInboxBadge?(count: number): Promise<void>
       onInboxOpen?(cb: () => void): () => void
       // P1-K3
@@ -1298,6 +1334,8 @@ export interface MarketCard {
   updatedAt?: string | null
   /** 来自商店来源(第三方目录)的条目:哪个来源。Forsion 商店的条目没有这一项。 */
   origin?: { sourceId: string; sourceTitle: string }
+  /** 包的 manifest `network`(ctx.net 能访问的域名,2026-11-16+)—— 目录给了才有;装好之后以本机 manifest 为准。 */
+  network?: string[] | null
 }
 
 /** market:installProgress:resolve=向服务端要下载地址;download=在试第 attempt/attempts 个地址、已收 received 字节

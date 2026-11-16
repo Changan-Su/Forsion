@@ -42,6 +42,9 @@ import { streamingArgString } from '../streamingWrite'
 import { SystemPromptBlock } from '../../components/SystemPromptBlock'
 import './chatAvatars' // 「聊天头像」开关落 <html data-chat-avatars>,见该文件
 
+import { citeIndexOf } from '../../../../../tangu-agent/src/contracts/citeSources'
+import { CITE_HOVER } from './citeHover'
+
 registerMessages({
   'chat.team.working': { zh: '工作中 · {activity}', en: 'Working · {activity}' },
   'chat.team.workingIdle': { zh: '工作中', en: 'Working' },
@@ -588,6 +591,9 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
   // 会话在别的电脑上(桌面作为调用方):代码块的「运行」是这台电脑的终端、内联嵌入读的是这台电脑的盘 —— 都不是那台的,关掉。
   const elsewhere = !!runSid && refForSession(runSid).kind === 'unit'
   const embeds = useMemo(() => (runSid && !elsewhere && UI_MODE !== 'mobile' && window.tangu?.readHostFile ? { execMode: embedExec } : undefined), [runSid, embedExec, elsewhere])
+  // 搜索来源编号:正文里指向这一轮搜索 / 读过的网页的链接补编号(没有搜索 / 读网页的回答是 null)
+  const citeIndex = useMemo(() => citeIndexOf(msg), [msg.id, msg.content, msg.toolEvents])
+  const cites = useMemo(() => (citeIndex ? { index: citeIndex, ...CITE_HOVER } : null), [citeIndex])
   const { t } = useI18n()
   // 插件结果卡片的认领(订阅渲染器 / 名单:插件晚加载或被停用时这条消息跟着重渲)
   const cardOf = useToolCardOf()
@@ -911,7 +917,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
                 fenceState = parsed.state
                 const segBody = parsed.text
                 return segBody
-                  ? <div key={i} className="t2-content" data-streaming-tail={streaming && i === lastTextIdx || undefined}><Markdown content={segBody} anchorPrefix={`toc-${msg.id}`} run={runCtx} allowRun={!elsewhere} embeds={embeds} linkCards codeHead streaming={streaming} /></div>
+                  ? <div key={i} className="t2-content" data-streaming-tail={streaming && i === lastTextIdx || undefined}><Markdown content={segBody} anchorPrefix={`toc-${msg.id}`} run={runCtx} allowRun={!elsewhere} embeds={embeds} linkCards cites={cites} codeHead streaming={streaming} /></div>
                   : null
               }
               const skip = i === firstIdx && headEvents ? 1 : 0
@@ -919,7 +925,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
               return parts.length ? (
                 <Fragment key={i}>
                   {parts.map((part, k) => part.t === 'tools'
-                    ? <ToolGroup key={`tools-${part.events.map((ev) => ev.id).join('-')}-${k + skip}`} events={part.events} running={msg.status === 'streaming'} approvals={msg.approvals} awaitingAnswer={awaitingAnswer} sessionId={runSid} />
+                    ? <ToolGroup key={`tools-${part.events.map((ev) => ev.id).join('-')}-${k + skip}`} events={part.events} running={msg.status === 'streaming'} approvals={msg.approvals} awaitingAnswer={awaitingAnswer} sessionId={runSid} context={msg.toolEvents} />
                     : part.t === 'marketplace'
                       ? <MarketPluginCards key={`market-${part.event.id}`} event={part.event} />
                     : part.t === 'pluginSettings'
@@ -931,18 +937,18 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
                     : part.t === 'git'
                       ? (gitStatusSuperseded(part.events, msg.toolEvents) ? null : <GitToolCard key={`git-${part.events[0].id}`} events={part.events} sessionId={runSid} />)
                     : part.t === 'pluginCard'
-                      ? <PluginToolCard key={`ptc-${part.event.id}`} event={part.event} claim={part.claim} onQuote={handlers?.onQuote} fallback={<ToolGroup events={[part.event]} />} />
+                      ? <PluginToolCard key={`ptc-${part.event.id}`} event={part.event} claim={part.claim} onQuote={handlers?.onQuote} fallback={<ToolGroup events={[part.event]} context={msg.toolEvents} />} />
                     : part.t === 'intelligent'
                       ? <RunContext.Provider key={`intelligent-${part.event.id}`} value={{ cwd: runCtx?.cwd, allowRun: false }}><ChatIntelligentUi event={part.event} live={streaming} stateScope={runSid ? `${runSid}:${msg.id}` : undefined} onAsk={handlers?.onSuggest} sessionId={runSid} /></RunContext.Provider>
                     : <SketchCards key={`sketch-${part.item.callId}`} items={[part.item]} actions={sketchActions} stateScope={runSid ? `${runSid}:${msg.id}` : undefined} onAsk={handlers?.onSuggest} />)}
                 </Fragment>
               ) : null
             })
-            const head = (!!msg.reasoning || !!headEvents) && <ToolGroup key="proc-head" events={headEvents || []} running={streaming} approvals={msg.approvals} awaitingAnswer={awaitingAnswer} sessionId={runSid} {...think(nodes.every((n) => n == null))} />
+            const head = (!!msg.reasoning || !!headEvents) && <ToolGroup key="proc-head" events={headEvents || []} running={streaming} approvals={msg.approvals} awaitingAnswer={awaitingAnswer} sessionId={runSid} context={msg.toolEvents} {...think(nodes.every((n) => n == null))} />
             return <>{head}{handoff}{nodes}</>
           }
           // 老序:插件卡片挪到尾部(trailingCards),不在这一行里再列一遍
-          const head = (!!msg.reasoning || !!msg.toolEvents?.length) && <ToolGroup key="proc-head" events={(msg.toolEvents || []).filter((ev) => !cardOf(ev) && !pluginSettingsReport(ev))} running={streaming} approvals={msg.approvals} awaitingAnswer={awaitingAnswer} sessionId={runSid} {...think(!body)} />
+          const head = (!!msg.reasoning || !!msg.toolEvents?.length) && <ToolGroup key="proc-head" events={(msg.toolEvents || []).filter((ev) => !cardOf(ev) && !pluginSettingsReport(ev))} running={streaming} approvals={msg.approvals} awaitingAnswer={awaitingAnswer} sessionId={runSid} context={msg.toolEvents} {...think(!body)} />
           return (
             <>
               {head}
@@ -950,7 +956,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
               {body && (
                 voiceMode
                   ? <VoiceBubble text={body} stored={voice!.stored} anchorPrefix={`toc-${msg.id}`} />
-                  : <div className="t2-content" data-streaming-tail={streaming || undefined}><Markdown content={body} anchorPrefix={`toc-${msg.id}`} run={runCtx} allowRun={!elsewhere} embeds={embeds} linkCards codeHead streaming={streaming} /></div>
+                  : <div className="t2-content" data-streaming-tail={streaming || undefined}><Markdown content={body} anchorPrefix={`toc-${msg.id}`} run={runCtx} allowRun={!elsewhere} embeds={embeds} linkCards cites={cites} codeHead streaming={streaming} /></div>
               )}
             </>
           )
@@ -1043,7 +1049,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
         {trailingIntelligent.map(ev => <RunContext.Provider key={ev.id} value={{ cwd: runCtx?.cwd, allowRun: false }}><ChatIntelligentUi event={ev} live={streaming} stateScope={runSid ? `${runSid}:${msg.id}` : undefined} onAsk={handlers?.onSuggest} sessionId={runSid} /></RunContext.Provider>)}
         {!!trailingSketches.length && <SketchCards items={trailingSketches} actions={sketchActions} stateScope={runSid ? `${runSid}:${msg.id}` : undefined} onAsk={handlers?.onSuggest} />}
         {(msg.toolEvents || []).filter(ev => pluginSettingsReport(ev) && !inlineToolIds.has(ev.id)).map(ev => <PluginSettingsCard key={`ps-${ev.id}`} event={ev} sessionId={runSid} />)}
-        {trailingCards.map(({ ev, claim }) => <PluginToolCard key={`ptc-${ev.id}`} event={ev} claim={claim} onQuote={handlers?.onQuote} fallback={<ToolGroup events={[ev]} />} />)}
+        {trailingCards.map(({ ev, claim }) => <PluginToolCard key={`ptc-${ev.id}`} event={ev} claim={claim} onQuote={handlers?.onQuote} fallback={<ToolGroup events={[ev]} context={msg.toolEvents} />} />)}
         {/* 审批卡在托盘里批(ApprovalTray);托盘在输入框上方的视图(预览 / 画布)流里留一行指路,对话末尾有卡片堆的不留(卡就在下面)。已兑现的不留痕 —— 结局看工具卡。
             团队成员的占位气泡已有「等待你的审批」那行,不重复。 */}
         {!msg.work && !handlers?.onJumpDeck && pendingApv.length > 0 && (

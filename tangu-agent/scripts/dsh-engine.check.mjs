@@ -9,14 +9,19 @@
  *   node scripts/dsh-engine.check.mjs --node <Node ≥ 24 的可执行文件> --dsh <@deepseek-ai/dsh 的 lib/bin.js> --root <全新目录>
  *     [--only twoturn,model,…]   只跑某几项(见下面 SCENARIOS 的 key;nokey = 当前模型缺 API key 时的失败原因;
  *                                agent = 「由谁来跑」设成 DSH 的 Agent,底层第 2 步;
- *                                handoff = 交接,底层第 3 步)
+ *                                handoff = 交接,底层第 3 步;resident = 融合插件第 1 档的常驻进程)
  *     [--engine-entry <别处的 dist/standalone/main.js>]   负对照:拿没有这次改动的旧构建跑同一套,twoturn 应当红
  *     [--live --key-file <一行 key 的文件> | --live --dsh-home <已登录的 DSH 目录>]   真模型:看模型自己的回答(caps / twoturn /
- *                                    model / edit / stop / stopedit / approval / handoff);key 只进子进程环境,不落盘、不打印
+ *                                    model / edit / stop / stopedit / approval / handoff / resident);key 只进子进程环境,不落盘、不打印。
+ *                                    resident 要同时带 --dsh-tools-off,会在那份 DSH 目录里临时建 profiles/fusion、跑完拿走
  *     [--live-dry]                   不要凭据,用假模型里的自动脑把真模型那套走一遍,只证台架没写错
  *     [--dsh-tools-off]              开跑前在那份 DSH 目录的对话入口组合(profiles/acp/cordis.patch.yml)里关掉 DSH 自带的
  *                                    跑命令、读写文件、搜文件、后台任务(tool-bash / tool-pwsh / tool-fs / tool-fs-search / tool-jobs),
  *                                    模型手里只剩桥里的 Forsion 工具;跑完把那份补丁原样还原。真模型跑交接时用它
+ *     [--dump-requests <文件>]       假模型模式:跑完把假模型收到的带工具请求原样写进这个文件(比两版交给模型的东西用)
+ *
+ * 交接那几项真模型红了、想分清是交过去的东西变了还是模型变了:先用 --dump-requests 比两版请求,再用
+ * scripts/dsh-instructions.probe.mjs 拿同一份指令目录对真模型多问几次。
  *
  * 准备 DSH(只装官方包,不装任何社区插件;和你自己的 DSH 无关):
  *   mkdir rt && cd rt && npm init -y && npm install --ignore-scripts @deepseek-ai/dsh
@@ -27,7 +32,7 @@
  */
 import { spawn, execFileSync } from 'node:child_process';
 import { createServer } from 'node:http';
-import { mkdirSync, writeFileSync, existsSync, realpathSync, readFileSync, appendFileSync, readdirSync } from 'node:fs';
+import { mkdirSync, writeFileSync, existsSync, realpathSync, readFileSync, appendFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -59,6 +64,8 @@ const TOOLS_OFF_PATCH = `# dsh-engine.check.mjs --dsh-tools-off 临时写的:关
   disabled: true
 `;
 const KEY_FILE = opt('key-file', ''), DSH_HOME_ARG = opt('dsh-home', '');
+// --dump-requests <文件>:跑完把假模型收到的带工具请求(system / tools / messages 原样)写进这个文件,比两版交给模型的东西用
+const DUMP_REQUESTS = opt('dump-requests', '') ? resolve(opt('dump-requests', '')) : '';
 // --model <片段>:真模型那套每一轮都用清单里 id 或名字含这段文字的那个模型。用账号登录(不是 API key)的 DSH,新会话的缺省模型
 // 走的是要 key 的那条线(deepseek-official),不指定的话每一句都是「no API key for provider route」。
 const LIVE_MODEL = opt('model', '');
@@ -80,6 +87,9 @@ const until = async (fn, ms, every = 300) => { const end = Date.now() + ms; for 
 const D = (name) => { const p = join(R, name); mkdirSync(p, { recursive: true }); return p; };
 const HOME = D('home'), DSH_HOME = LIVE && DSH_HOME_ARG ? resolve(DSH_HOME_ARG) : D('dsh'), WS = D('ws'), OUTSIDE = D('outside'), TMP = D('tmp');
 const TANGU_HOME = D(join('forsion', 'tangu'));
+// DSH 以 .git 定项目根,把根到工作目录一路上的 AGENTS.md / CLAUDE.md 都发给模型(dsh-agent-instructions)。--root 常在
+// 某个仓里面:不立这个标记,那个仓自己的说明会整份进每一次请求(真模型时还会发给模型方),判据跟着它的规矩漂(2026-11-16 实测)。
+mkdirSync(join(WS, '.git'), { recursive: true });
 const LOG = join(R, 'engine.log');
 const clean = (s) => (LIVE_KEY ? String(s).split(LIVE_KEY).join('<key>') : String(s)).split(R).join('<root>').replace(/\/Users\/[^/\s"'\\]+/g, '/Users/<user>');
 
@@ -240,13 +250,15 @@ const dshSessions = async () => { const d = rawDsh(); try { await d.init(); retu
 // ── 真 standalone 引擎
 const TOKEN = randomUUID();
 let engine = null, base = '';
+/** 某一项要给引擎多带的环境(resident 那项用它挂测试插件),跑完置回空。 */
+let engineExtraEnv = {};
 async function startEngine() {
   const port = await new Promise((r) => { const srv = createServer(); srv.listen(0, '127.0.0.1', () => { const p = srv.address().port; srv.close(() => r(p)); }); });
   base = `http://127.0.0.1:${port}`;
   engine = spawn(process.execPath, [ENTRY, '--port', String(port), '--host', '127.0.0.1', '--data-dir', join(TANGU_HOME, 'state.db'), '--sandbox', 'auto', '--cloud-url', 'http://127.0.0.1:9', '--token', TOKEN], {
     cwd: WS,
     env: { PATH: `${dirname(process.execPath)}:/usr/bin:/bin`, HOME, TMPDIR: TMP, TANGU_HOME, TANGU_DEFAULT_WORKSPACE: WS, TANGU_BROWSER_CDP: 'off', TANGU_BROWSER_EXTENSION: '0',
-      FORSION_DESKTOP_CONFIG: join(R, 'userData', 'tangu-desktop-config.json'), LANG: 'en_US.UTF-8', ...(LIVE ? modelEnv : {}) },
+      FORSION_DESKTOP_CONFIG: join(R, 'userData', 'tangu-desktop-config.json'), LANG: 'en_US.UTF-8', ...(LIVE ? modelEnv : {}), ...engineExtraEnv },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   const log = (d) => appendFileSync(LOG, LIVE_KEY ? String(d).split(LIVE_KEY).join('<key>') : d);
@@ -340,6 +352,84 @@ const record = (key, title, checks, note = '') => {
   for (const [name, pass, detail] of checks) console.log(`   ${pass ? '✓' : '✗'} ${name}${detail ? `:${clean(detail)}` : ''}`);
   if (note) console.log(`   · ${clean(note)}`);
 };
+
+// ── 常驻进程(融合插件第 1 档):一个测试插件替 dsh 登记常驻进程。它起的是官方包拼成的「网页界面 + 对话入口」同进程组合
+//    (DSH_HOME/profiles/fusion,同方案目录 instrument/fusion-profile/ 再打开 agent-instructions 等几行),stdout 里不是 JSON 的行
+//    (就绪行带网页界面的启动令牌)滤掉、只数条数,不落盘不打印。插件停用 / 引擎退出时把进程收掉。
+const RESIDENT_PLUGIN_ROOT = join(R, 'resident-plugins');
+const RESIDENT_ROUTE = '/extensions/resident-dsh-check/resident-dsh-check/state';
+const FUSION_PATCH = `# dsh-engine.check.mjs resident 那项写的:同一个进程里既开网页界面,又开对话入口(ACP)。
+- id: web-runtime
+  config:
+    openBrowser: false
+    printUrl: true
+    publicUrl: !!js ctx.webStartup.publicUrl
+    surfaceContext: true
+- id: webserver
+  config:
+    host: 127.0.0.1
+    port: 0
+    tls: !!js ctx.webStartup.tls
+    compression: gzip
+    compressionLevel: 1
+    compressionThresholdBytes: 1024
+# 网页界面那份接线把这些关了、改由「预设」按会话挂;对话入口建的会话不挂预设,所以在全局重新打开
+${['agent-instructions', 'tool-web', 'tool-todo', 'tool-workflow', 'workflow-ptc', 'command-goal', 'plan-mode', 'command-compact',
+  'tool-goal', 'compaction-basic', 'tool-result-pruner', 'skill-filesystem', 'tool-skill', 'tool-subagent-control', 'tool-subagent', 'tool-subagent-fork',
+  ...(TOOLS_OFF ? [] : ['tool-bash', 'tool-jobs', 'tool-fs', 'tool-fs-search'])].map((id) => `- id: ${id}\n  disabled: false\n`).join('')}${TOOLS_OFF ? TOOLS_OFF_PATCH.split('\n').slice(1).join('\n') : ''}`;
+function writeResidentFixture() {
+  const prof = join(DSH_HOME, 'profiles', 'fusion'); mkdirSync(prof, { recursive: true });
+  writeFileSync(join(prof, 'package.json'), JSON.stringify({ name: 'dsh-profile-fusion', private: true,
+    dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', '@deepseek-ai/dsh-acp-app'] } } }, null, 2));
+  writeFileSync(join(prof, 'cordis.patch.yml'), FUSION_PATCH);
+  const dir = join(RESIDENT_PLUGIN_ROOT, 'resident-dsh-check'); mkdirSync(join(dir, 'dist'), { recursive: true });
+  writeFileSync(join(dir, 'package.json'), '{"type":"module"}');
+  writeFileSync(join(dir, 'tangu-plugin.json'), JSON.stringify({ id: 'resident-dsh-check', name: 'Resident DSH (check)', version: '1.0.0', apiVersion: 1, entry: 'dist/index.js' }));
+  // 假模型模式下环境里只有假 key;真模型的 key(--key-file)不写进这份文件,插件从引擎自己的环境里拿
+  writeFileSync(join(dir, 'resident.json'), JSON.stringify({ node: NODE, bin: BIN, cwd: WS, env: dshEnvOnDisk() }));
+  writeFileSync(join(dir, 'dist', 'index.js'), `import { spawn } from 'node:child_process';
+import { PassThrough } from 'node:stream';
+import { readFileSync } from 'node:fs';
+const cfg = JSON.parse(readFileSync(new URL('../resident.json', import.meta.url), 'utf8'));
+let cur = null, n = 0, started = 0;
+const events = [];
+function start() {
+  const env = { ...cfg.env };
+  if (!env.DEEPSEEK_API_KEY && process.env.DEEPSEEK_API_KEY) env.DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY;
+  const child = spawn(cfg.node, [cfg.bin, '--profile', 'fusion'], { env, cwd: cfg.cwd, stdio: ['pipe', 'pipe', 'pipe'] });
+  const output = new PassThrough();
+  const me = { child, id: child.pid + '-' + (++n), output, dropped: 0, web: false };
+  let buf = '';
+  child.stdout.on('data', (d) => { buf += d; let i; while ((i = buf.indexOf('\\n')) >= 0) { const line = buf.slice(0, i); buf = buf.slice(i + 1);
+    if (line.trimStart().startsWith('{')) output.write(line + '\\n');
+    else if (line.trim()) { me.dropped += 1; if (/https?:\\/\\/127\\.0\\.0\\.1:\\d+\\//.test(line)) me.web = true; } } });
+  child.stdout.on('end', () => output.end());
+  child.stderr.on('data', () => {});
+  child.stdin.on('error', () => {});
+  me.closed = new Promise((r) => child.once('exit', () => { if (cur === me) cur = null; r(); }));
+  started += 1; cur = me; return me;
+}
+const stop = () => { const c = cur; cur = null; if (c && c.child.exitCode === null) { c.child.kill('SIGTERM'); setTimeout(() => { if (c.child.exitCode === null) c.child.kill('SIGKILL'); }, 3000).unref(); } };
+process.once('exit', () => { if (cur) cur.child.kill('SIGKILL'); });
+for (const sig of ['SIGTERM', 'SIGINT']) process.once(sig, () => { if (cur) cur.child.kill('SIGKILL'); });
+export default {
+  activate(ctx) {
+    ctx.registerPlugin({ id: 'resident-dsh-check', name: 'Resident DSH (check)', description: 'check:dsh fixture', defaultEnabled: true });
+    ctx.registerResidentEngine({ engineId: 'dsh', connect: async () => { const c = cur || start(); return { id: c.id, input: c.child.stdin, output: c.output, closed: c.closed }; },
+      onSession: (e) => { events.push(e.type); } });
+    ctx.registerScopedRoutes((r) => {
+      r.get('/state', (_q, res) => res.json({ pid: cur ? cur.child.pid : null, started, dropped: cur ? cur.dropped : 0, web: !!(cur && cur.web), events }));
+      // 扮「装了插件 / 崩了,后台 DSH 重启」:引擎不动,只杀进程;下一轮宿主该连上新起的那个、续上同一场
+      r.post('/restart', (_q, res) => { const c = cur; if (c) c.child.kill('SIGKILL'); res.json({ killed: !!c }); });
+    });
+  },
+  deactivate() { stop(); },
+};
+`);
+}
+const fusionPids = () => dshPids().filter((l) => l.includes('--profile fusion')).map((l) => l.split(' ')[0]);
+const sysText = (b) => (typeof b?.system === 'string' ? b.system : Array.isArray(b?.system) ? b.system.map((x) => x.text || '').join('\n') : '');
+const engineLog = () => { try { return readFileSync(LOG, 'utf8'); } catch { return ''; } };
 
 const SCENARIOS = {
   // 模型下拉:能力探测读出 DSH 的模型和思考档
@@ -724,6 +814,148 @@ const SCENARIOS = {
       ['工具成功', a.results.some((x) => x.name === 'mcp__probe__echo_note' && !x.isError), a.results.map((x) => `${x.name}:${x.isError ? 'err' : 'ok'}`).join(', ')],
     ]);
   },
+  // 常驻进程(融合插件第 1 档):测试插件替 dsh 登记一个「网页界面 + 对话入口」同进程的官方 DSH。Forsion 的对话连它、不每轮起进程;
+  // 人设 / 记忆 / 技能目录走每场会话那座桥的说明;一轮结束会话不关(工作台要接得上);交接内容变了才关掉重接;
+  // 工作台打开前先替它接上(hold);引擎重启后照存下的那份接上;插件不在了照旧每轮起一个进程、续的还是同一场。
+  resident: async () => {
+    writeResidentFixture();
+    const SLUG = 'resmate', PERSONA = 'RESIDENT-PERSONA-70', SKILL_DESC = 'RES-SKILL-72', SKILL_BODY = 'RES-SKILL-BODY-73', USER_SHARED = 'RES-USER-74';
+    mkdirSync(join(HOME, '.agents'), { recursive: true });
+    writeFileSync(join(HOME, '.agents', 'AGENTS.md'), `Shared note for every coding agent: ${USER_SHARED}.\n`);
+    const memText = () => { const f = join(agentDir(SLUG), 'MEMORY.md'); return existsSync(f) ? readFileSync(f, 'utf8') : ''; };
+    const lastMsg = (body) => JSON.stringify((body?.messages || []).slice(-1));
+    const logSince = (n) => engineLog().slice(n);
+    const pluginState = () => api(RESIDENT_ROUTE).catch((e) => ({ error: e.message }));
+    await stopEngine(); engineExtraEnv = { TANGU_PLUGINS: 'on', TANGU_PLUGINS_DIR: RESIDENT_PLUGIN_ROOT }; await startEngine();
+    try {
+      const list = (await api('/agent/engines')).engines || [];
+      await api('/agent/agents', { method: 'POST', body: JSON.stringify({ slug: SLUG, name: 'Resident mate', systemPrompt: `You are a test agent. ${PERSONA}.`, engine: 'dsh' }) });
+      mkdirSync(join(agentDir(SLUG), 'skills', 'res-probe'), { recursive: true });
+      writeFileSync(join(agentDir(SLUG), 'skills', 'res-probe', 'SKILL.md'), `---\nname: res-probe\ndescription: Probe skill ${SKILL_DESC}. Use only when asked about the probe.\n---\n${SKILL_BODY}: nothing to do.\n`);
+      const caps = await api('/agent/engines/dsh/capabilities?fresh=1');
+      const afterCaps = fusionPids();
+      const sid = await newSession('resident');
+      const cfg = { engineId: undefined, agentSlug: SLUG };
+
+      // ① 第一轮:新建会话,桥带说明;调桥里的 remember
+      let L = engineLog().length; const n0 = stub.mark();
+      stub.script([{ tool: 'mcp__forsion__remember', args: { action: 'add', fact: 'The user grows basil. RES-REM-71', scope: 'agent' } }, { text: 'Saved.' }]);
+      const a = await run(sid, 'Please remember that I grow basil.', cfg, { modelId: JUDGE_MODEL });
+      const reqA = stub.since(n0); const firstA = reqA[0] || {};
+      const pidsA = fusionPids(); const st = await pluginState();
+      const homeDir = join(TANGU_HOME, 'engines', 'dsh', 'agents', sid);
+      const ps1 = await pointers(sid);
+      record('resident', '常驻进程:对话连插件起的那个进程(网页界面 + 对话入口同进程),人设 / 技能目录走桥上的说明,工具经桥、卡片照 Forsion 画', [
+        ['引擎清单里 dsh 是可用的', list.some((e) => e.id === 'dsh' && e.available), JSON.stringify(list.find((e) => e.id === 'dsh') || {})],
+        ['模型清单在常驻进程上探出来了(没另起进程)', (caps.models || []).length > 0 && afterCaps.length === 1, `${(caps.models || []).length} 个模型,fusion 进程 ${afterCaps.length} 个`],
+        ['这一轮跑完', a.done, a.error || ''],
+        ['只有一个常驻 DSH 进程,网页界面也起来了', pidsA.length === 1 && st.web === true && st.started === 1, `进程 ${pidsA.length} 个,起过 ${st.started} 次,网页界面 ${st.web}`],
+        ['stdout 里不是 JSON 的行被插件滤掉了(就绪行)', st.dropped >= 1, `${st.dropped} 行`],
+        ['日志里没有启动令牌', !/token=[A-Za-z0-9]/.test(engineLog()), ''],
+        ['人设在系统提示里(桥的说明)', sysText(firstA).includes(PERSONA)],
+        ['技能目录在系统提示里(名字 + 描述)', sysText(firstA).includes('res-probe') && sysText(firstA).includes(SKILL_DESC)],
+        ['用户自己 ~/.agents 的 AGENTS.md 由 DSH 自己读进来了', JSON.stringify(firstA).includes(USER_SHARED)],
+        ['桥上有 remember 和 forsion_skill', (firstA.tools || []).some((t) => t.name === 'mcp__forsion__remember') && (firstA.tools || []).some((t) => t.name === 'mcp__forsion__forsion_skill')],
+        // 融合组合为了对话入口把读写 / 命令这几行重新打开了;--dsh-tools-off 要管得到常驻进程(真模型跑常驻场景靠它)。两个方向都核:
+        // 不带时它们在(开关是真的),带了就一个都不在
+        TOOLS_OFF
+          ? ['--dsh-tools-off:常驻进程交给模型的工具里没有 DSH 自带的读写文件 / 搜文件 / 跑命令 / 后台任务', !(firstA.tools || []).some((t) => NATIVE_DISK_TOOLS.includes(t.name)), (firstA.tools || []).map((t) => t.name).filter((x) => NATIVE_DISK_TOOLS.includes(x)).join(', ')]
+          : ['不带 --dsh-tools-off 时,融合组合给了 DSH 自带的读写文件和跑命令(上面那个开关关的是真东西)', ['read', 'write', 'bash'].every((x) => (firstA.tools || []).some((t) => t.name === x)), (firstA.tools || []).map((t) => t.name).filter((x) => !x.startsWith('mcp__')).join(', ')],
+        ['卡片按 Tangu 原名画(remember)、成功', a.tools.some((t) => t.name === 'remember') && a.results.some((r) => r.name === 'remember' && !r.isError), a.results.map((r) => `${r.name}:${r.isError ? 'err' : 'ok'}`).join(', ')],
+        ['记忆写在它名下', memText().includes('RES-REM-71')],
+        ['没写指令目录(常驻进程不用 DSH_AGENTS_HOME)', !existsSync(homeDir)],
+        ['新建了一场 DSH 会话', /resident session [0-9a-f-]{8}: new/.test(logSince(L)) && !!ps1[0]?.ext, ps1.map((x) => x.ext?.slice(0, 8)).join(',')],
+      ], `桥的说明 ${(/bridge-instructions=(\d+)B/.exec(logSince(L)) || [])[1] || '?'} 字节`);
+
+      // ② 记忆变了 → 交接内容变了 → 关掉重接(新说明带上新记忆);调 forsion_skill 读技能
+      L = engineLog().length; const n1 = stub.mark();
+      stub.script([{ tool: 'mcp__forsion__forsion_skill', args: { name: 'res-probe' } }, { text: 'Read it.' }]);
+      const b = await run(sid, 'Open the probe skill.', cfg, { modelId: JUDGE_MODEL });
+      const reqB = stub.since(n1); const pidsB = fusionPids(); const ps2 = await pointers(sid); const stB = await pluginState();
+      record('residentreopen', '常驻进程:交接内容变了(新记忆)才关掉重接,新说明带上新记忆;技能经 forsion_skill 读到;同一个进程、同一场会话', [
+        ['这一轮跑完', b.done, b.error || ''],
+        ['日志:因交接变了重接', /resident session [0-9a-f-]{8}: reopened \(handoff changed\)/.test(logSince(L))],
+        ['插件收到了「关掉重接」(工作台据此重载那一页)', (stB.events || []).includes('reopened'), JSON.stringify(stB.events)],
+        ['新记忆在这一轮的系统提示里', sysText(reqB[0]).includes('RES-REM-71')],
+        ['forsion_skill 回的是 SKILL.md 正文', !!reqB[1] && lastMsg(reqB[1]).includes(SKILL_BODY), clean(lastMsg(reqB[1])).slice(0, 160)],
+        ['还是同一个进程', pidsB.length === 1 && pidsB[0] === pidsA[0], `${pidsA.join(',')} → ${pidsB.join(',')}`],
+        ['还是同一场 DSH 会话', ps2.length === 2 && ps2[1].ext === ps2[0].ext, ps2.map((x) => x.ext?.slice(0, 8)).join(' → ')],
+      ]);
+
+      // ③ 什么都没变 → 会话一直开着,接着用;上文还在
+      L = engineLog().length; const n2 = stub.mark();
+      stub.script([{ text: 'Plain answer.' }]);
+      const c = await run(sid, 'What did I ask you first?', cfg, { modelId: JUDGE_MODEL });
+      const reqC = stub.since(n2);
+      const held = await api('/agent/engines/dsh/hold', { method: 'POST', body: JSON.stringify({ sessionId: sid }) }).catch((e) => ({ error: e.message }));
+      record('residentkeep', '常驻进程:交接没变就不重接(会话一直开着,工作台里开着的那一场不受影响);工作台打开前 hold 回「开着」', [
+        ['这一轮跑完', c.done, c.error || ''],
+        ['日志:会话一直开着', /resident session [0-9a-f-]{8}: kept open/.test(logSince(L)) && !/reopened|: resumed/.test(logSince(L))],
+        ['上文还在(第一句在请求里)', JSON.stringify(reqC[0] || {}).includes('grow basil')],
+        ['hold 回 open(本来就开着)', held.state === 'open', JSON.stringify(held)],
+      ]);
+
+      // ③b 后台 DSH 自己重启了(装插件、崩了),引擎不动:下一轮连上新起的那个、续上同一场,说明照旧带上
+      const crashPid = fusionPids()[0];
+      await api(RESIDENT_ROUTE.replace(/state$/, 'restart'), { method: 'POST', body: '{}' });
+      await until(() => !fusionPids().includes(crashPid), 8000, 200);
+      L = engineLog().length; const n2b = stub.mark();
+      stub.script([{ text: 'New process.' }]);
+      const cb = await run(sid, 'Still there after DSH restarted?', cfg, { modelId: JUDGE_MODEL });
+      const reqCb = stub.since(n2b); const pidsCb = fusionPids(); const psCb = await pointers(sid); const stCb = await pluginState();
+      record('residentcrash', '常驻进程:后台 DSH 自己重启(引擎不动),下一轮连上新进程、续上同一场,人设照旧', [
+        ['这一轮跑完', cb.done, cb.error || ''],
+        ['旧进程没了、新进程一个', !pidsCb.includes(crashPid) && pidsCb.length === 1 && stCb.started === 2, `${crashPid} → ${pidsCb.join(',')},起过 ${stCb.started} 次`],
+        ['日志:续接(不是新建)', /resident session [0-9a-f-]{8}: resumed/.test(logSince(L)) && !/: new/.test(logSince(L))],
+        ['还是同一场', psCb.length === 4 && psCb.every((x) => x.ext === psCb[0].ext), psCb.map((x) => x.ext?.slice(0, 8)).join(' → ')],
+        ['人设和记忆在系统提示里', sysText(reqCb[0]).includes(PERSONA) && sysText(reqCb[0]).includes('RES-REM-71')],
+      ]);
+
+      // ④ 引擎重启(Forsion 退出再开):插件起新进程;hold 照存下的那份接上;下一轮指纹对得上、不再重接
+      const oldPid = fusionPids()[0];
+      await stopEngine(); await until(() => !fusionPids().includes(oldPid), 8000, 200);
+      const oldGone = !fusionPids().includes(oldPid);
+      await startEngine();
+      L = engineLog().length;
+      const held2 = await api('/agent/engines/dsh/hold', { method: 'POST', body: JSON.stringify({ sessionId: sid }) }).catch((e) => ({ error: e.message }));
+      const holdLog = logSince(L);
+      L = engineLog().length; const n3 = stub.mark();
+      stub.script([{ text: 'Back again.' }]);
+      const d = await run(sid, 'Are you there after the restart?', cfg, { modelId: JUDGE_MODEL });
+      const reqD = stub.since(n3); const pidsD = fusionPids(); const ps4 = await pointers(sid);
+      const wrongSid = await api('/agent/engines/dsh/hold', { method: 'POST', body: JSON.stringify({ sessionId: 'no-such-session' }) }).then(() => 'ok', (e) => e.message);
+      record('residentrestart', '常驻进程:Forsion 退出时进程跟着退;再开后 hold 照存下的说明接上,下一轮不再重接、人设还在', [
+        ['旧进程退了', oldGone],
+        ['hold 回 resumed', held2.state === 'resumed', JSON.stringify(held2)],
+        ['hold 用的是存下的说明', /held for the workbench/.test(holdLog) && !/no saved handoff/.test(holdLog)],
+        ['这一轮跑完', d.done, d.error || ''],
+        ['日志:会话一直开着(指纹对得上)', /resident session [0-9a-f-]{8}: kept open/.test(logSince(L))],
+        ['人设和新记忆还在系统提示里', sysText(reqD[0]).includes(PERSONA) && sysText(reqD[0]).includes('RES-REM-71')],
+        ['新进程只有一个', pidsD.length === 1 && pidsD[0] !== oldPid, pidsD.join(',')],
+        ['续的还是同一场', ps4.length === 5 && ps4.every((x) => x.ext === ps4[0].ext), ps4.map((x) => x.ext?.slice(0, 8)).join(' → ')],
+        ['插件收到了「替工作台接上」', ((await pluginState()).events || []).includes('held')],
+        ['hold 一场不存在的对话 → 404', /404/.test(wrongSid), wrongSid],
+      ]);
+
+      // ⑤ 插件不在了:照旧每轮起一个进程,续的还是同一场;人设改走指令目录
+      const pidE = pidsD[0];
+      await stopEngine(); await until(() => !fusionPids().includes(pidE), 8000, 200);
+      engineExtraEnv = {}; await startEngine();
+      const n4 = stub.mark();
+      stub.script([{ text: 'Per-turn again.' }]);
+      const e = await run(sid, 'And now without the plugin?', cfg, { modelId: JUDGE_MODEL });
+      const reqE = stub.since(n4); const ps5 = await pointers(sid);
+      record('residentfallback', '常驻进程:插件不在了照旧每轮起一个进程,续的还是同一场;人设改走指令目录', [
+        ['这一轮跑完', e.done, e.error || ''],
+        ['没有常驻进程', fusionPids().length === 0, fusionPids().join(',')],
+        ['续的还是同一场', ps5.length === 6 && ps5[5].ext === ps5[0].ext, ps5.map((x) => x.ext?.slice(0, 8)).join(' → ')],
+        ['人设进了模型的上下文', JSON.stringify(reqE[0] || {}).includes(PERSONA)],
+        ['写了指令目录', existsSync(homeDir)],
+      ]);
+    } finally {
+      if (Object.keys(engineExtraEnv).length) { engineExtraEnv = {}; await stopEngine(); await startEngine(); }
+    }
+  },
   probe: async () => {
     const probeDir = join(TANGU_HOME, 'engines', 'dsh', 'probe');
     const count = async () => (await dshSessions()).filter((s) => real(s.cwd) === real(probeDir)).length;
@@ -793,6 +1025,36 @@ const LIVE_SCENARIOS = {
       if (!liveModel) throw new Error(`--model ${LIVE_MODEL}: no such model`);
     }
     return caps;
+  },
+  // 常驻进程(融合插件第 1 档)× 真模型:两轮暗号走的是插件起的那个进程。--live --dsh-home 用的是一份登录过的 DSH 目录:
+  // 这一项会在里面建 profiles/fusion(带一个记号文件),跑完拿走;那里已经有一份不是本台架建的 fusion 组合就不跑。
+  resident: async () => {
+    const fusionDir = join(DSH_HOME, 'profiles', 'fusion');
+    const mark = join(fusionDir, '.dsh-engine-check');
+    const existed = existsSync(fusionDir);
+    if (existed && !existsSync(mark)) return record('resident', '常驻进程 × 真模型', [['DSH 目录里没有别人的 fusion 组合', false, `${clean(fusionDir)} 已存在,不是本台架建的;不动它`]]);
+    if (!TOOLS_OFF && !LIVE_DRY) return record('resident', '常驻进程 × 真模型', [['带了 --dsh-tools-off(融合组合会把读写 / 命令重新打开,真模型跑常驻场景必须关掉)', false]]);
+    writeResidentFixture(); writeFileSync(mark, 'written by dsh-engine.check.mjs; removed after the run\n');
+    await stopEngine(); engineExtraEnv = { TANGU_PLUGINS: 'on', TANGU_PLUGINS_DIR: RESIDENT_PLUGIN_ROOT }; await startEngine();
+    try {
+      const L = engineLog().length;
+      const word = codeWord('OTTER'); const sid = await newSession('live-resident');
+      const a = await liveRun(sid, REMEMBER(word));
+      const b = await liveRun(sid, ASK);
+      const ps = await pointers(sid);
+      const pids = fusionPids(); const st = await api(RESIDENT_ROUTE).catch((e) => ({ error: e.message }));
+      record('resident', '常驻进程 × 真模型:第二句记得第一句,两轮连的都是插件起的那个进程', [
+        ['两轮都跑完', a.done && b.done, a.error || b.error || ''],
+        ['第二句的回答里有第一句给的暗号', b.text.includes(word), said(b)],
+        ['第一句没有动用工具', a.tools.length === 0, a.tools.map((t) => t.name).join(' / ')],
+        noTools(b),
+        ['两轮用的是同一个 DSH 会话', ps.length === 2 && !!ps[0].ext && ps[0].ext === ps[1].ext, ps.map((p) => p.ext?.slice(0, 8)).join(' → ')],
+        ['连的是常驻进程(日志里有常驻会话、只有一个 fusion 进程、只起过一次)', /resident session [0-9a-f-]{8}: new/.test(engineLog().slice(L)) && pids.length === 1 && st.started === 1, `进程 ${pids.length} 个,起过 ${st.started} 次`],
+      ]);
+    } finally {
+      engineExtraEnv = {}; await stopEngine(); await startEngine();
+      if (!existed) rmSync(fusionDir, { recursive: true, force: true });
+    }
   },
   twoturn: async () => {
     const word = codeWord('QUOKKA'); const sid = await newSession('live-twoturn');
@@ -912,8 +1174,10 @@ const LIVE_SCENARIOS = {
     const cfg = { engineId: undefined, agentSlug: SLUG };
     const NOFILES = 'Do not read files, list directories or run commands.';
 
-    // 人设和技能:只凭交过去的指令回答
-    const d = await liveRun(sid, `${NO_TOOLS} Among the skills available to you there is one named tea-probe. What secret phrase does its description give? Reply with just the phrase.`, cfg, { modelId: JUDGE_MODEL, stopOn: onlyBridge([]) });
+    // 人设和技能:只凭交过去的指令回答。交接这几问不写「Reply with just …」:DSH 把指令目录当「工作区说明,不压过用户的
+    // 直接指示」包进请求,「只回那一句」和人设的「每条回复都署名」正面冲突,模型听谁说不准(11-16 几小时内从 0/12 摆到
+    // 约一半;同一份 AGENTS.md 带 just 5/8、不带 8/8),这一项就成了掷硬币。要证的是人设交没交到,不是两条指示谁优先。
+    const d = await liveRun(sid, `${NO_TOOLS} Among the skills available to you there is one named tea-probe. What secret phrase does its description give?`, cfg, { modelId: JUDGE_MODEL, stopOn: onlyBridge([]) });
     record('handoff', '交接(真模型):人设和技能交过去了,模型只凭指令答得出', [
       ['这一轮跑完', d.done, d.error || ''],
       ['回答里有技能描述里的那句', d.text.includes(PHRASE), said(d)],
@@ -923,7 +1187,7 @@ const LIVE_SCENARIOS = {
 
     // 直接调
     const TEA = codeWord('TEA');
-    const a = await liveRun(sid, `Please remember this about me using your Forsion remember tool: I drink jasmine tea (tag ${TEA}). ${NOFILES} When it is saved, reply with just: SAVED`, cfg, { modelId: JUDGE_MODEL, stopOn: onlyBridge(['remember']) });
+    const a = await liveRun(sid, `Please remember this about me using your Forsion remember tool: I drink jasmine tea (tag ${TEA}). ${NOFILES} When it is saved, reply with SAVED.`, cfg, { modelId: JUDGE_MODEL, stopOn: onlyBridge(['remember']) });
     record('handoffcall', '交接(真模型):模型用桥里的 remember 记下一件事,卡片由 Forsion 画,记在它名下', [
       ['这一轮跑完', a.done, a.error || ''],
       ['调了 remember,卡片按 Tangu 原名画、成功', a.results.some((r) => r.name === 'remember' && !r.isError), a.results.map((r) => `${r.name}:${r.isError ? 'err' : 'ok'}`).join(', ') || '(没调)'],
@@ -937,7 +1201,7 @@ const LIVE_SCENARIOS = {
     try {
       // 审批过了时限:模型拿到编号后会不会照着去取
       const CAT = codeWord('CAT'); const t0 = Date.now();
-      const b = await liveRun(sid, `Please remember this about me using your Forsion remember tool: I have a cat named Miso (tag ${CAT}). ${NOFILES} When it is saved, reply with just: SAVED`,
+      const b = await liveRun(sid, `Please remember this about me using your Forsion remember tool: I have a cat named Miso (tag ${CAT}). ${NOFILES} When it is saved, reply with SAVED.`,
         { ...cfg, approvalMode: 'custom' }, { modelId: JUDGE_MODEL, timeoutMs: 300_000, stopOn: onlyBridge(['remember']), onApproval: async () => { await sleep(50_000); return 'approve'; } });
       record('handoffwait', '交接(真模型):审批过了 45 秒,模型照编号用 forsion_wait 取到结果,工具只执行一次', [
         ['这一轮跑完', b.done, b.error || ''],
@@ -951,7 +1215,7 @@ const LIVE_SCENARIOS = {
 
       // 拒绝:模型不该绕开去写
       const COFFEE = codeWord('COFFEE');
-      const c = await liveRun(sid, `Please remember this about me using your Forsion remember tool: I dislike coffee (tag ${COFFEE}). ${NOFILES} If it is not saved, reply with just: NOT SAVED`,
+      const c = await liveRun(sid, `Please remember this about me using your Forsion remember tool: I dislike coffee (tag ${COFFEE}). ${NOFILES} If it is not saved, reply with NOT SAVED.`,
         { ...cfg, approvalMode: 'custom' }, { modelId: JUDGE_MODEL, stopOn: onlyBridge(['remember']), onApproval: () => 'reject' });
       record('handoffreject', '交接(真模型):用户拒了,模型照实说没存,记忆没写', [
         ['这一轮跑完', c.done, c.error || ''],
@@ -1010,6 +1274,9 @@ try {
   }
 } catch (e) { console.error(`\n台架出错:${clean(e.stack || e)}`); exitCode = 1; } finally {
   await stopEngine(); await stub.close();
+  // 写不出来也不能挡住下面还原补丁层
+  if (DUMP_REQUESTS) try { mkdirSync(dirname(DUMP_REQUESTS), { recursive: true }); writeFileSync(DUMP_REQUESTS, JSON.stringify(stub.requests, null, 1)); console.log(`\n假模型收到的带工具请求(${stub.requests.length} 次)已写到 ${clean(DUMP_REQUESTS)}`); }
+  catch (e) { console.error(`\n--dump-requests 没写成:${clean(e.message || e)}`); exitCode = 1; }
   if (toolsOffBackup !== null) { await sleep(2500); writeFileSync(toolsOffFile, toolsOffBackup); console.log(`\n已还原 ${clean(toolsOffFile)}`); }
 }
 await sleep(2500); // 引擎杀 DSH 是 SIGTERM → 2 秒 → SIGKILL

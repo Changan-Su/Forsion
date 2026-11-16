@@ -18,6 +18,7 @@ import { AgentMemoryModal } from '../components/AgentMemoryModal'
 import { HumanCollaborationPanel } from '../components/HumanCollaborationPanel'
 import { humanRewritable, type HumanJump } from '../services/humanCollaboration'
 import { AgentHarnessPanel } from '../components/AgentHarnessPanel'
+import { EngineHarnessRows } from './EngineHarnessRows'
 import { AgentSchedulePanel } from '../components/AgentSchedulePanel'
 import type { AgentConfig, NormalAgentDef, SessionRecord, SkillInfo, ToolsResponse } from '../../../../tangu-agent/src/contracts/clientTypes'
 import { ProfileGroup, ProfileModelField, ProfileSelectField, ProfileTextEditor, approvalOptions, thinkingOptions, useSectionNavSlide } from './profileControls'
@@ -568,18 +569,21 @@ function AgentProfile({ agent, compact = false, sessionId, rewriteSessionId, evo
       <button className="agent-profile-link" onClick={() => useApp.getState().openSettings(kind === 'skills' ? 'skills' : 'mcp')}>{t(kind === 'skills' ? 'agentProfile.manageSkills' : 'agentProfile.manageMcp')}<ExternalLink size={13} /></button>
     </>
   }
-  // Harness 卡(11-14,第二轮 C2-1):底层只有「运行在」一行;运行时 / 更新通道 / DSH 插件三行归融合插件,这里不画。
+  // Harness 卡(11-14,第二轮 C2-1):底层只有「运行在」一行;运行时 / 更新通道 / DSH 插件三行归融合插件(11-15 起经
+  // ctx.registerEngineHarness 由插件给数据、EngineHarnessRows 画),插件没装就没有。
   const engineName = (id: string): string => s.engines.find((e) => e.id === id)?.name || agentEngineLabel(id)
   const engineOptions = [{ value: '', label: 'Tangu' }, ...[...new Set([...engineChoices, ...(draftEngine ? [draftEngine] : [])])].map((id) => ({ value: id, label: engineName(id) }))]
   const harnessGroup = showHarness ? <ProfileGroup title={t('agentEngine.harness')} hint={t('agentEngine.harnessHint', { name: agentEngineLabel(draftEngine || savedEngine || engineChoices[0] || 'dsh') })}>
     {/* 手机 / 网页 / 委托管理员:引擎不收远端改这一项(它决定之后每一轮交给哪个本机程序),这里只读 */}
     <ProfileSelectField field="engine" label={t('agentEngine.runsOn')} value={draftEngine} options={engineOptions} disabled={delegated || (!!savedEngine && engineHere === 'elsewhere')} onChange={(engine) => patch({ engine })} />
+    {/* 运行时 / 更新通道 / DSH 插件 / 打开工作台:跑这个引擎的插件给(ctx.registerEngineHarness),没装就没有。只在存下的引擎上画 */}
+    {savedEngine && savedEngine === draftEngine && engineHere === 'ready' && !delegated && <EngineHarnessRows engineId={savedEngine} agentSlug={agent.slug} />}
     {draftEngine && engineHere === 'not-installed' && <p className="agent-profile-muted" data-engine-missing>{t('agentEngine.notInstalledHint', { name: agentEngineLabel(draftEngine) })}</p>}
     {draftEngine && engineHere === 'not-installed' && !delegated && <button type="button" className="agent-profile-link" data-act="engine-install" onClick={() => useApp.getState().openSettings('agents/ag-clis')}>{t('agentEngine.howToInstall')}<ExternalLink size={13} /></button>}
     {draftEngine && engineHere === 'elsewhere' && <p className="agent-profile-muted" data-engine-elsewhere>{t('agentEngine.elsewhereHint', { name: agentEngineLabel(draftEngine) })}</p>}
     {draftEngine && engineHere === 'unsupported' && <p className="agent-profile-muted">{t('agentEngine.unsupportedHint', { name: draftEngine })}</p>}
     {draftEngine && <p className="agent-profile-muted" data-engine-handoff>{t('agentEngine.handoff', { name: agentEngineLabel(draftEngine) })}</p>}
-    {draftEngine && <p className="agent-profile-muted" data-engine-handoff-limits>{t('agentEngine.handoffLimits')}</p>}
+    {draftEngine && <p className="agent-profile-muted" data-engine-handoff-limits>{t('agentEngine.handoffLimits', { name: agentEngineLabel(draftEngine) })}</p>}
   </ProfileGroup> : null
   // 跑在外部引擎上时:模型一格列引擎自己的模型(存进 engineModel,不动 Tangu 的 model,换回来还在);思考档引擎这边只读不改,先不出。
   const engineModels = draftEngine ? (s.engineCaps[draftEngine]?.models ?? []) : []

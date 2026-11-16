@@ -18,6 +18,7 @@ Computer Use 占用外部应用前台时，宿主可临时打开 Tangu Mini 观�
 
 - `view` 与 `mainView` 都是 `{type, params?}`；必须使用**不同的已注册视图类型**。缺少适配或视图未注册时不显示在 Mini 中，完整 Space 仍可用。不要把可选 Mini 类型放进 `requires.views`，否则旧宿主会拒绝整个配方。
 - 在 `mount(el, view)` 中用 `view.surface === 'mini'` 识别容器；老宿主这些字段可缺省。Mini 不提供 `extendView`。
+- `view.surface === 'pip'`(2026-11-13 起):宿主自己的置顶悬浮小画面,只在桌面、只在用户主动点了以后由宿主打开,目前只给 Computer Use 的实时画面。在那里画紧凑卡,没有 `extendView` / `showInMainPanel`,`view.close?.()` 关掉那扇窗。`surface` 的取值会继续增加:不认识的值按 `'floating'` 处理。
 - `view.getParams()` 读当前实体/筛选参数，`view.setParams(patch)` 合并更新，`view.onParamsChanged(fn)` 订阅后返回取消函数。参数更新不重挂 DOM；自己更新需要变化的内容，避免丢失正在输入的草稿。
 - `view.showInMainPanel?.()` 打开 `mini.mainView`，同一份当前参数覆盖 `mainView.params`。两边使用相同实体键（如 `itemId`/`notePath`），不要另建一份业务数据。宿主顶部已有按钮，不必重复绘制。
 - `mount` 返回清理函数，停止订阅/计时器并保存必要内容。旧实例的 context 在关闭、切换 Space 或禁用后失效，异步回调不得继续调用。

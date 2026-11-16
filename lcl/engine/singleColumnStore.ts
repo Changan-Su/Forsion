@@ -22,7 +22,7 @@ import { useNav } from './navStore'
 import type { PersistedPanel } from './layoutPersist'
 import { contentStorageKey } from './contentStorageScope'
 import { isLastPinned, isPinned, missingPinned, type PinnedViews } from './pinnedViews'
-import { arrangeRight, planRight, rightGroupFor, type RightRef } from './rightRules'
+import { arrangeRight, baseKeyOf, planRight, rightExtrasFrom, rightGroupFor, type RightRef } from './rightRules'
 
 /** 主区 leaf 快照(供顶栏/读者)。字段与桌面同名以兼容读者 —— ⚠️ 桌面 dockviewStore 那份加字段时
  *  这里必须同步:移动构建把整个 workspaceStore 换成本文件,漏一个字段就是静默少功能(typecheck 也不红,
@@ -170,7 +170,7 @@ let rightQueued = false
 const usableRight = (type: string): boolean => { const def = getView(type); return !!def && def.kind !== 'entity' }
 function rightGroupNow(s: { mainLeaves: LeafRec[]; activeMainId: string | null; sidebarDefaults: Record<'left' | 'right', PersistedPanel[]> }): ReturnType<typeof rightGroupFor> {
   const main = s.mainLeaves.find((r) => r.id === s.activeMainId)
-  return rightGroupFor(main?.type, main ? getView(main.type)?.rightCompanions : undefined, s.sidebarDefaults.right, usableRight)
+  return rightGroupFor(main?.type, main ? getView(main.type)?.rightCompanions : undefined, s.sidebarDefaults.right, usableRight, rightExtrasFrom(main ? getView(main.type)?.rightExtras : undefined, main?.params))
 }
 let restoredOwner: string | null | undefined
 /** 壳还没还原(发令枪没响)、店里也还是空的:这一程的现场只在在用的键里。挂载之前有人切 Space / 补定位时据此
@@ -486,7 +486,7 @@ export const useWorkspace = create<WS>((set, get) => {
       const s = get()
       const g = rightGroupNow(s)
       if (!g || g.key === rightKey) return
-      const changed = rightKey !== null
+      const changed = rightKey !== null && baseKeyOf(rightKey) !== g.base // 同桌面版:只是补项变了不算换组
       rightKey = g.key
       const defaults = s.sidebarDefaults.right
       const extras = s.rightLeaves.filter((r) => r.type === '__extend') // 抽屉里的临时 View 跟它的主人走,不归规则

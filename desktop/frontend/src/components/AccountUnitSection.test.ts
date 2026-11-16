@@ -90,6 +90,22 @@ describe('useUnitRoster', () => {
     expect(useUnitRoster.getState().units).toEqual(units)
   })
 
+  it('direct probe: only the row whose roster id the responder reports lights up (old rows share the address)', async () => {
+    const lan = 'http://192.168.1.8:8791'
+    const same = ['old-1', 'live', 'old-2'].map((id) => ({ id, name: 'MacBook-Pro.local', platform: 'darwin', icon: null, online: false, lanUrl: lan }))
+    const probe = vi.fn().mockResolvedValue({ instanceId: 'i', name: 'MacBook-Pro.local', unitId: 'live' })
+    window.tangu = { unitsList: vi.fn().mockResolvedValue({ status: 200, json: { units: same } }), unitHostStatus: vi.fn().mockResolvedValue({ unitId: 'me' }), unitsProbeLan: probe } as any
+    await useUnitRoster.getState().refresh()
+    await new Promise((r) => setTimeout(r, 0))
+    expect(probe).toHaveBeenCalledTimes(3)
+    expect(useUnitRoster.getState().lanOk).toEqual({ 'old-1': false, live: true, 'old-2': false })
+    // 应答的是本机自己:哪一行都不算
+    probe.mockResolvedValue({ instanceId: 'i', name: 'MacBook-Pro.local', unitId: 'me', self: true })
+    await useUnitRoster.getState().refresh()
+    await new Promise((r) => setTimeout(r, 0))
+    expect(useUnitRoster.getState().lanOk).toEqual({ 'old-1': false, live: false, 'old-2': false })
+  })
+
   it('401 → signed out (null); no roster bridge → only this computer ([])', async () => {
     window.tangu = { unitsList: vi.fn().mockResolvedValue({ status: 401, json: null }) } as any
     await useUnitRoster.getState().refresh()

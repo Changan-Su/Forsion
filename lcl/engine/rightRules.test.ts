@@ -5,7 +5,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { useWorkspace } from './dockviewStore'
 import { useWorkspace as useSingle } from './singleColumnStore'
-import { planRight, rightGroupFor, MAX_COMPANIONS, RULE_TAG } from './rightRules'
+import { baseKeyOf, planRight, rightGroupFor, MAX_COMPANIONS, RULE_TAG } from './rightRules'
 import { registerView, unregisterView } from './viewRegistry'
 import type { ViewDefinition } from './types'
 import type { DockviewApi } from 'dockview-react'
@@ -74,8 +74,11 @@ const flush = async (): Promise<void> => { useWorkspace.getState().refreshTabs()
 // Tangu 形态:Space 右栏缺省 = 详情 / 文件 / 大纲;对话声明同一组,笔记 / PDF 各自声明自己的
 const DEFAULTS = [{ type: 'det', params: {} }, { type: 'files', params: { mode: 'files' } }, { type: 'outline', params: {} }]
 const V = (type: string, extra: Partial<ViewDefinition> = {}): ViewDefinition => ({ type, displayName: type, factory: () => null, ...extra })
+/** 对话按参数补的尾项(ViewDef.rightExtras,跑在外部引擎上的对话多一页):测试里按这个开关给 */
+let engineChat = false
 const VIEWS: ViewDefinition[] = [
-  V('chatv', { kind: 'entity', rightCompanions: DEFAULTS }),
+  V('chatv', { kind: 'entity', rightCompanions: DEFAULTS, rightExtras: (params) => (engineChat || params.engine ? [{ type: 'eng', params: { via: 'extras' } }] : []) }),
+  V('eng', { kind: 'page', singleton: true }),
   V('notev', { kind: 'entity', rightCompanions: [{ type: 'side', params: { followActive: true } }, { type: 'outline', params: {} }, { type: 'back', params: {} }] }),
   V('pdfv', { kind: 'entity', rightCompanions: [{ type: 'side', params: { followActive: true } }] }),
   V('plainv', { kind: 'page' }),
@@ -93,6 +96,7 @@ beforeEach(() => {
     clear: () => store.clear(),
   })
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] })
+  engineChat = false
   for (const v of VIEWS) registerView(v)
 })
 afterEach(() => {
@@ -109,6 +113,19 @@ describe('rightRules:判定(纯函数)', () => {
     for (const t of ['launcher', 'home', 'sidebar-empty', null]) expect(rightGroupFor(t, undefined, DEFAULTS, usable)).toBeNull()
     const many = ['a', 'a', 'gone', 'b', 'c', 'd', 'e'].map((type) => ({ type, params: {} }))
     expect(rightGroupFor('x', many, [], usable)?.group.map((p) => p.type)).toEqual(['a', 'b', 'c', 'd'].slice(0, MAX_COMPANIONS))
+  })
+
+  it('补项(rightExtras)排在组后面:基本组键不变、整键带上补项;组里已有的不重复;总数不过上限', () => {
+    const eng = [{ type: 'eng', params: {} }]
+    const g = rightGroupFor('chatv', DEFAULTS, [], usable, eng)!
+    expect(g.group.map((p) => p.type)).toEqual(['det', 'files', 'outline', 'eng'])
+    expect(g.base).toBe('det|files|outline')
+    expect(g.key).not.toBe(g.base)
+    expect(baseKeyOf(g.key)).toBe(g.base)
+    expect(rightGroupFor('chatv', DEFAULTS, [], usable)!.key).toBe('det|files|outline') // 没补项:键和以前一样(老布局存的键照认)
+    expect(rightGroupFor('chatv', DEFAULTS, [], usable, [{ type: 'files', params: {} }, { type: 'gone', params: {} }])!.key).toBe('det|files|outline')
+    const four = ['a', 'b', 'c', 'd'].map((type) => ({ type, params: {} }))
+    expect(rightGroupFor('x', four, [], usable, eng)!.group).toHaveLength(MAX_COMPANIONS)
   })
 
   it('规则管的 = 打了标的 + Space 缺省里那几种;用户自带与 pinned 不关;新组排在最前', () => {
@@ -184,6 +201,31 @@ describe('右栏主视图规则:桌面 store', () => {
     await flush()
     expect(right(panels)).toEqual({ tabs: ['det', 'files', 'outline'], front: 'det' })
     expect(api.activePanel?.params).toMatchObject({ __type: 'chatv' })
+  })
+
+  it('补项:换到跑在引擎上的对话右栏多一页、前台不动;换走就关;它在前台时关掉顶回组的第一项', async () => {
+    const { panels, api } = await boot()
+    panels.find((p) => p.params.__type === 'files')!.api.setActive() // 用户在看「文件」
+    useWorkspace.getState().activateLeaf(mainId(panels, 'chatv'))
+    await flush()
+    expect(right(panels)).toEqual({ tabs: ['det', 'files', 'outline'], front: 'files' })
+
+    engineChat = true // 当前对话换成了跑在引擎上的那场(同一个对话视图,只是内容变了)
+    await flush()
+    expect(right(panels)).toEqual({ tabs: ['det', 'files', 'outline', 'eng'], front: 'files' })
+    expect(panels.find((p) => p.params.__type === 'eng')!.params).toMatchObject({ via: 'extras', __by: RULE_TAG })
+    expect(api.activePanel?.params).toMatchObject({ __type: 'chatv' })
+
+    panels.find((p) => p.params.__type === 'eng')!.api.setActive()
+    useWorkspace.getState().activateLeaf(mainId(panels, 'chatv'))
+    engineChat = false
+    await flush()
+    expect(right(panels)).toEqual({ tabs: ['det', 'files', 'outline'], front: 'det' })
+
+    // 引擎对话的参数里带着也算(对话视图钉了会话时按参数判)
+    useWorkspace.getState().openView('chatv', { engine: true }, 'main')
+    await flush()
+    expect(right(panels).tabs).toEqual(['det', 'files', 'outline', 'eng'])
   })
 
   // 3a:主视图成了占位(插件没就位 / 已关掉),按缺省组对账会把它的伴随视图(打了规则标)关掉并存盘,参数一丢就回不来了
@@ -325,6 +367,21 @@ describe('右栏主视图规则:单列 store(手机右抽屉)', () => {
     expect(useSingle.getState().rightLeaves[0].params).toEqual({ followActive: true }) // 标记不进 params
     useSingle.getState().openView('chatv', {}, 'main')
     await flush()
+    expect(drawer()).toEqual({ tabs: ['det', 'files', 'outline'], front: 'det' })
+  })
+
+  it('补项同桌面:多一页、前台不动;换走就关', async () => {
+    await boot()
+    useSingle.getState().openView('notev', { notePath: 'a.md' }, 'main')
+    await flush()
+    useSingle.getState().openView('chatv', {}, 'main')
+    await flush()
+    expect(drawer()).toEqual({ tabs: ['det', 'files', 'outline'], front: 'det' })
+    engineChat = true
+    useSingle.getState().refreshTabs(); await flush()
+    expect(drawer()).toEqual({ tabs: ['det', 'files', 'outline', 'eng'], front: 'det' })
+    engineChat = false
+    useSingle.getState().refreshTabs(); await flush()
     expect(drawer()).toEqual({ tabs: ['det', 'files', 'outline'], front: 'det' })
   })
 })

@@ -168,6 +168,24 @@ describe('unitWeb', () => {
     } finally { b.close() }
   })
 
+  it('公开面 meta:报本机名册 id(现取);取不到不带这个键;投影面不报', async () => {
+    let id: string | null = 'unit-1'
+    const b = await boot(null, undefined, undefined, { rosterUnitId: () => id })
+    try {
+      expect(((await (await fetch(`${b.base}/unit/meta`)).json()) as any).unitId).toBe('unit-1')
+      id = 'unit-2' // 重新登记之后:不用重启服务就报新的
+      expect(((await (await fetch(`${b.base}/unit/meta`)).json()) as any).unitId).toBe('unit-2')
+      id = null
+      expect(await (await fetch(`${b.base}/unit/meta`)).json()).not.toHaveProperty('unitId')
+    } finally { b.close() }
+    for (const mode of ['public', 'local'] as const) {
+      const p = await boot(null, undefined, undefined, { rosterUnitId: () => 'unit-1', projection: { mode, basePath: '/', product: PRODUCT } })
+      try {
+        expect(await (await fetch(`${p.base}/unit/meta`)).json()).not.toHaveProperty('unitId')
+      } finally { p.close() }
+    }
+  })
+
   it('配对流:6 位码、同 IP 限速、批准发令牌(一次性)、whoami 过闸;拒绝路径', async () => {
     const b = await boot()
     try {

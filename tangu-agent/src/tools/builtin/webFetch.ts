@@ -14,6 +14,7 @@ import { formatToolOutput } from '../outputPersist.js';
 import { resolveTools, isDeferredIn, type ToolProvider } from '../toolRegistry.js';
 import type { ToolContext } from '../toolTypes.js';
 import { deps } from '../../seams/runtime.js';
+import { toWebSource } from '../webSources.js';
 
 const FETCH_TIMEOUT_MS = 20_000;
 const MAX_BODY_BYTES = 2 * 1024 * 1024;
@@ -231,6 +232,69 @@ export function convertHtml(html: string): HtmlConvert {
   };
 }
 
+/** 一个标签体里的属性(线性单遍:名字 [= 值],值可带引号)。名字小写。 */
+function tagAttrs(tag: string): Map<string, string> {
+  const out = new Map<string, string>();
+  const n = tag.length;
+  let i = 0;
+  const ws = (c: string): boolean => c === ' ' || c === '\n' || c === '\t' || c === '\r' || c === '\f' || c === '/';
+  while (i < n) {
+    while (i < n && ws(tag[i])) i++;
+    const ns = i;
+    while (i < n && !ws(tag[i]) && tag[i] !== '=') i++;
+    const name = tag.slice(ns, i).toLowerCase();
+    while (i < n && ws(tag[i])) i++;
+    if (tag[i] !== '=') { if (i === ns) i++; continue; }
+    i++;
+    while (i < n && ws(tag[i])) i++;
+    let value: string;
+    if (tag[i] === '"' || tag[i] === "'") {
+      const q = tag[i];
+      const close = tag.indexOf(q, i + 1);
+      value = tag.slice(i + 1, close === -1 ? n : close);
+      i = close === -1 ? n : close + 1;
+    } else {
+      const vs = i;
+      while (i < n && !ws(tag[i])) i++;
+      value = tag.slice(vs, i);
+    }
+    if (name && !out.has(name)) out.set(name, value);
+  }
+  return out;
+}
+
+/** 网页自己报的标题 / 摘要 / 发布日期(只看 <head>,给界面的来源卡用,不进模型那份文字)。
+ *  线性:indexOf 推进找 <meta / <title,找不到 `>` 就停(后面也不会有);不用回溯正则扫不可信 HTML。 */
+export function pageMeta(html: string): { title?: string; description?: string; date?: string } {
+  const headEnd = html.search(/<\/head\s*>/i);
+  const head = html.slice(0, Math.min(headEnd === -1 ? html.length : headEnd, 256 * 1024));
+  const metas = new Map<string, string>();
+  for (let i = indexOfCI(head, '<meta', 0), seen = 0; i !== -1 && seen < 200; i = indexOfCI(head, '<meta', i + 5), seen++) {
+    const gt = head.indexOf('>', i);
+    if (gt === -1) break;
+    if (gt - i > 4000) { i = gt - 5; continue; }
+    const attrs = tagAttrs(head.slice(i + 5, gt));
+    const key = (attrs.get('property') || attrs.get('name') || attrs.get('itemprop') || '').toLowerCase();
+    const content = attrs.get('content');
+    if (key && content && !metas.has(key)) metas.set(key, decodeEntities(content).replace(/\s+/g, ' ').trim());
+    i = gt - 5;
+  }
+  let titleTag: string | undefined;
+  const t0 = indexOfCI(head, '<title', 0);
+  const tgt = t0 === -1 ? -1 : head.indexOf('>', t0);
+  if (tgt !== -1) {
+    const t1 = indexOfCI(head, '</title', tgt + 1);
+    const raw = head.slice(tgt + 1, t1 === -1 ? tgt + 1 : Math.min(t1, tgt + 1 + 1000));
+    titleTag = raw.trim() ? raw : undefined;
+  }
+  const pick = (...keys: string[]): string | undefined => keys.map((k) => metas.get(k)).find((v) => !!v);
+  return {
+    title: pick('og:title', 'twitter:title') || (titleTag ? decodeEntities(titleTag).replace(/\s+/g, ' ').trim() : undefined) || undefined,
+    description: pick('description', 'og:description', 'twitter:description'),
+    date: pick('article:published_time', 'og:published_time', 'datepublished', 'date', 'pubdate', 'publishdate', 'dc.date', 'dc.date.issued'),
+  };
+}
+
 /** 轻量 HTML→文本(convertHtml 的正文位)。 */
 export function htmlToText(html: string): string {
   return convertHtml(html).text;
@@ -341,6 +405,10 @@ export const webFetchProvider: ToolProvider = {
             + `Cite for the user: [<a short phrase copied verbatim from the text below>](${finalUrl.href}) — the link text is the exact sentence the reader gets scrolled to.\n`;
           let clipped = text.length > maxChars ? text.slice(0, maxChars) + `\n…[truncated at ${maxChars} chars,需更多内容可调大 max_chars 或分段抓取]` : text;
           if (conv && isLikelyJsShell(conv)) clipped += `\n\n${jsShellNote(browserReach(ctx))}`;
+          // 读到的这一页另存一份给界面(正文链接编号、来源卡):走 metadata,给模型的文字一字不动。
+          const meta = isHtml ? pageMeta(body) : {};
+          const src = toWebSource({ url: finalUrl.href, title: meta.title, snippet: meta.description, date: meta.date });
+          if (src) ctx.noteWebSources?.([src]);
           // 大输出落盘工作区(模型拿摘要 + 文件路径),小输出原样返回
           const label = `web_fetch-${finalUrl.hostname.replace(/[^a-zA-Z0-9.-]/g, '_')}`;
           return await formatToolOutput(ctx, label, header + clipped);

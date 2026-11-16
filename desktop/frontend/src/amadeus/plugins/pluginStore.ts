@@ -48,6 +48,8 @@ const hostTangu = (): typeof window.tangu => (typeof window !== 'undefined' ? wi
 const automationHost = (): boolean => !!readTangu()?.waitBackend && hostTangu()?.executionCapabilities?.host !== false
 import { noteOf, usePageStore } from '../store/pageStore'
 import { subscribeVaultEvents } from './vaultEvents'
+import { createPluginFileOps, probeAbsent } from './pluginFileOps'
+import { markPluginCreated } from './pluginCreated'
 import { useUiStore } from '../store/uiStore'
 import { setTheme as applyAccent, toggleMode } from '../theme/ThemeManager'
 import { amadeus } from '../api'
@@ -58,6 +60,7 @@ import { isHostPath } from '@amadeus-shared/pdfLink'
 import { claimHostMount, createBlockSurface, mountHostReact } from './blockSurface'
 import { addEditorExtension, clearEditorExtensions } from './editorExtensions'
 import { registerNoteRenderer, beginNoteRendererReload, settleNoteRendererReload, clearNoteRendererReload } from './noteRenderers'
+import { registerNoteBirth, registerTemplateProcessor } from './templateHooks'
 import { uiAgentSettings } from './agentSettings'
 import { registerPluginSeries, track, unregisterPluginAchievements, useAchievements } from '../../achievements/store'
 import { setInboxCard, type PluginInboxCard } from './inboxCards'
@@ -65,7 +68,7 @@ import { act } from '../../activity/log'
 import { notifyApp } from '../../stores/notificationStore'
 import { panelToast } from '../../components/PanelNotice'
 import { currentLocale, registerMessages, subscribeLocale, translate } from '../../i18n'
-import { idleAgentStatus, readTangu, type TanguAgentStatus, type TanguCompleteRequest, type TanguStartChatResult } from './tanguSeam'
+import { idleAgentStatus, readTangu, type TanguAgentStatus, type TanguSessionTarget, type TanguCompleteRequest, type TanguStartChatResult } from './tanguSeam'
 import { registerDeskCompanion, revokeDeskCompanions, type DeskCompanionContribution, type DeskCompanionHandle } from './deskCompanion'
 import { registerSummaryCard, revokeSummaryCards, type SummaryCardContribution, type SummaryCardHandle } from './summaryCards'
 // ctx.desk 的宿主闸:端判定单源(currentPlatform)+ UI 模式(叶子模块,不经 @lcl/engine barrel)。
@@ -107,6 +110,7 @@ import { getAggDb } from '../store/dbAggregateStore'
 import { kickAutomation } from '../store/automationKick'
 import { triggerToUpsert } from '../../views/automation/lib'
 import { memberOf, useCalendarConfig } from '../store/calendarConfigStore'
+import { pluginDefaultHotkey } from '../../shortcutUsage'
 import type {
   AmadeusPlugin,
   CommandContribution,
@@ -117,6 +121,7 @@ import type {
   PluginAppApi,
   PlatformAccountStatus,
   PluginContext,
+  PluginNetApi,
   PropertyTypeContribution,
   SettingContribution,
   SettingsViewContribution,
@@ -127,6 +132,7 @@ import type {
   StatusItemContribution,
   ThemeContribution,
   ToolResultRendererContribution,
+  ToolLabelContribution,
   ViewContribution,
   ListSourceContribution,
   PluginAutomationRule,
@@ -141,6 +147,9 @@ import { createEffectScope, type EffectHandle, type EffectRecord, type EffectSco
 import { dependentsOf, topoOrder, unmetDependencies, type UnmetDependency } from './pluginDeps'
 import { LIST_CAPABILITIES } from './listTree'
 import { CHAT_BOX_CAPABILITIES } from '../../../../shared/chatBox'
+import { isLoopbackHttpUrl, pluginSurfacePartitionFor } from '../../../../shared/pluginSurface'
+import { registerEngineHarness } from './engineHarness'
+import { isElectronHost } from '../unified/writeSafety'
 import { windowKind } from '../../windowKind'
 import { addRibbonAction } from './ribbonAction'
 import { provideFeedbackChannel } from '../../feedbackChannel'
@@ -197,6 +206,9 @@ export async function resolveExternalSources(): Promise<ExternalPluginSource[]> 
   return amadeus.listPlugins()
 }
 
+/** registerToolLabel 收进来的样子:工具名统一成去重后的名单。 */
+export interface NormalizedToolLabel { tools: string[]; describe: ToolLabelContribution['describe']; revision?: ToolLabelContribution['revision'] }
+
 interface Owned<T> {
   pluginId: string
   item: T
@@ -231,6 +243,8 @@ interface PluginState {
   embedRenderers: Owned<EmbedRendererContribution>[]
   /** 插件给自己引擎半身的工具挂的原生结果卡片(ctx.registerToolResultRenderer);认领校验在 toolResultCards.ts。 */
   toolResultRenderers: Owned<ToolResultRendererContribution>[]
+  /** 插件给自己引擎半身的工具写的过程行句子(ctx.registerToolLabel,2026-11-13+);认领同 toolResultRenderers。 */
+  toolLabels: Owned<NormalizedToolLabel>[]
   fileCreators: Owned<FileCreatorContribution>[]
   /** 宿主注入的视图打开器(桌面壳=workspace.openView);无工作台的宿主保持 null,ctx.openView 即 no-op。 */
   viewOpener: ((type: string, loc?: PluginViewLocation, params?: Record<string, unknown>) => void) | null
@@ -453,6 +467,16 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
   // 否则被禁用的插件还在被外部改动唤醒(它的回调里往往就是一次 readFile + 重建内部状态)。
   const fileUnsubs = new Set<() => void>()
   const ribbonActions = new Set<() => void>()
+  // createFolder / stat / renamePath / movePath(2026-11-16,pluginFileOps.ts):改名挪动走文件树的链,源不归这个插件时先问用户。
+  const fileOps = createPluginFileOps({
+    pluginId, getName, alive: () => alive, workFolder: () => api.workFolder(), dropListCache,
+    fileTypeExt: (p) => { const n = p.toLowerCase(); return matchFileType(p)?.extensions.find((e) => n.endsWith(e.toLowerCase())) ?? null },
+  })
+  // 写落到原本不存在的路径 = 这个插件这一程建的(pluginCreated 账本,renamePath / movePath 的边界)。
+  // 探测先于写同步发出,写完才记账;探测本身从不 reject,也不挡写。
+  const noteCreated = async (p: string, fresh: Promise<boolean>, root: string | null): Promise<void> => {
+    if ((await fresh) && root && usePageStore.getState().vaultRoot === root) markPluginCreated(pluginId, p, root)
+  }
   const api: PluginAppApi = {
     // 两条路由通用(v4 不设 activePage;正文也不进 store —— 一律取块表面那份统一派生,别再各写各的)。
     getActivePage: () => noteOf(usePageStore.getState()),
@@ -484,11 +508,17 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
     assetUrl: (p) => toAssetUrl(p),
     hostPath: (p) => pluginHostPath(usePageStore.getState().vaultRoot, p, { executionCapabilities: { host: readTangu()?.hostExecution?.() ?? hostTangu()?.executionCapabilities?.host ?? false } }),
     // 插件契约是 Promise<void>:不带 base 的写宿主本就只回 void,这里显式抹平(CAS 结果类型不外泄给插件)。
-    writeFile: (p, text) => (ok() ? amadeus.writeTextFile(p, text).then(() => {}).finally(dropListCache) : Promise.resolve()),
+    writeFile: (p, text) => {
+      if (!ok()) return Promise.resolve()
+      const fresh = probeAbsent(p), root = usePageStore.getState().vaultRoot
+      return amadeus.writeTextFile(p, text).then(() => noteCreated(p, fresh, root)).finally(dropListCache)
+    },
     ...(amadeus?.scopedTextWrites ? {
       writeFileScoped: async (p: string, text: string, expectedRoot: string, options?: { create?: boolean }): Promise<boolean> => {
         if (!ok() || usePageStore.getState().vaultRoot !== expectedRoot) throw new Error('Vault changed before plugin save')
+        const fresh = options?.create === true ? Promise.resolve(true) : probeAbsent(p) // 同主进程:只认 create === true 为仅新建
         const result = await amadeus.writeTextFile(p, text, { ...options, expectedRoot }).finally(dropListCache)
+        if (result?.ok !== false) await noteCreated(p, fresh, expectedRoot)
         return result?.ok !== false
       },
     } : {}),
@@ -515,7 +545,9 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
               : b instanceof ArrayBuffer ? new Uint8Array(b) : null
             if (!view) return Promise.reject(new TypeError('writeBytes expects a Uint8Array or ArrayBuffer'))
             // 子视图(subarray)过 IPC 会把**整块**底层 buffer 结构化克隆过去 → 只拷自己那一段。
-            return amadeus.saveVaultBytes(p, view.byteLength === view.buffer.byteLength ? view : view.slice()).finally(dropListCache)
+            const fresh = probeAbsent(p), root = usePageStore.getState().vaultRoot
+            return amadeus.saveVaultBytes(p, view.byteLength === view.buffer.byteLength ? view : view.slice())
+              .then(() => noteCreated(p, fresh, root)).finally(dropListCache)
           },
         }
       : {}),
@@ -761,6 +793,7 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
           },
         }
       : {}),
+    ...fileOps.api,
   }
   return {
     api,
@@ -770,6 +803,7 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
       provideFeedbackChannel(pluginId, null)
       provideInboxChannel(pluginId, null)
       alive = false
+      fileOps.revoke()
       surface.revoke()
       for (const u of Array.from(fileUnsubs)) {
         try { u() } catch (e) { console.error(`[amadeus] plugin "${pluginId}" watchFile unsubscribe failed`, e) }
@@ -908,6 +942,7 @@ function pluginMeta(src: ExternalPluginSource): Omit<AmadeusPlugin, 'setup'> {
     requiresPlugins: src.requiresPlugins,
     entitlement: src.entitlement,
     capabilities: src.capabilities,
+    network: src.network,
     readme: src.readme,
     changelog: src.changelog,
     onboarding: src.onboarding,
@@ -1339,7 +1374,7 @@ function afterReconcile(): void {
 type OwnedKey = { [K in keyof PluginState]: PluginState[K] extends Owned<unknown>[] ? K : never }[keyof PluginState]
 const SLICE_KEYS = Object.keys({
   slashItems: 1, selectionActions: 1, commands: 1, themes: 1, panels: 1, statusItems: 1, propertyTypes: 1, settings: 1,
-  settingsViews: 1, storeViews: 1, readiness: 1, views: 1, listSources: 1, fileTypes: 1, embedRenderers: 1, toolResultRenderers: 1, fileCreators: 1,
+  settingsViews: 1, storeViews: 1, readiness: 1, views: 1, listSources: 1, fileTypes: 1, embedRenderers: 1, toolResultRenderers: 1, toolLabels: 1, fileCreators: 1,
 } satisfies Record<OwnedKey, 1>) as OwnedKey[]
 
 /** 摘掉 id 的全部切片贡献;没有它的切片保持原数组身份(订阅者不白白重渲)。 */
@@ -1487,6 +1522,8 @@ export const usePluginStore = create<PluginState>((set, get) => {
     // registerCompanion 不再挂新伴随面、旧 handle 变哑。语言 / 模型 / 账号订阅、仪表盘 / 原生表 / 宿主 UI 挂载、
     // 字体、伴随面……插件自己能撤,但**最终责任人是宿主**:全记在 scope 上,关账统一撤(codex 评审 2026-08-14 起的纪律)。
     const ctxAlive = (): boolean => scope.alive()
+    /** 模板钩子提示里点名用的插件显示名(当前语言)。 */
+    const hookPluginName = (): string => { const p = get().plugins.find((x) => x.id === pluginId); return p ? pluginDisplayName(p, currentLocale()) : pluginId }
     // workspace.open 的插件这一半(第三期):只开自己的视图(类型名宿主拼命名空间)、层级白名单在 pluginLayer。
     const ownView = (viewId: string): ViewContribution | undefined => get().views.find((item) => item.pluginId === pluginId && item.item.id === viewId)?.item
     const openOwn = (viewId: string, params: Record<string, unknown> | undefined, opts: OpenOptions): Promise<OpenResult> =>
@@ -1697,6 +1734,46 @@ export const usePluginStore = create<PluginState>((set, get) => {
       const h = mountPart('webCard', el, tidyWebCard(o as never, true) as import('./partsSurface').HostWebCard, (m, v) => m.mountPluginWebCard(el, v, guard))
       return { update: (patch) => { if (patch && typeof patch === 'object') h.update(tidyWebCard(patch as never, false)) }, dispose: h.dispose }
     }
+    // 插件网页表面(2026-11-15,shared/pluginSurface.ts):一个 <webview>,分区由宿主按插件 id 起;主进程见分区名对、地址是本机
+    // 才给这个分区,否则钉回内置浏览器那个。同步挂(不用认领 el:没有动态 import 要等)。
+    const uiMountWebSurface = (el: HTMLElement, o: import('./types').PluginWebSurfaceOptions): import('./types').PluginWebSurfaceHandle => {
+      const dead = { navigate() {}, reload() {}, focus() {}, dispose() {} }
+      if (!ctxAlive()) return dead
+      if (!(el instanceof HTMLElement)) throw new TypeError('mountWebSurface needs an HTMLElement')
+      if (!o || !isLoopbackHttpUrl(o.url)) throw new TypeError('mountWebSurface needs a loopback http(s) url (127.0.0.1, localhost or [::1])')
+      type Guest = HTMLElement & { reload(): void; getURL(): string }
+      const view = document.createElement('webview') as Guest
+      view.setAttribute('partition', pluginSurfacePartitionFor(pluginId, o.partition))
+      view.setAttribute('src', o.url)
+      view.className = 'plugin-web-surface'
+      view.style.cssText = 'display:flex;flex:1 1 auto;width:100%;height:100%;min-height:0;border:0'
+      let ready = false
+      view.addEventListener('dom-ready', () => { ready = true }, { once: true })
+      const onFail = (ev: Event): void => {
+        const e = ev as Event & { errorCode: number; errorDescription: string; validatedURL: string; isMainFrame: boolean }
+        if (!e.isMainFrame || e.errorCode === -3) return // -3 = 被下一次跳转顶掉
+        if (typeof o.onLoadFail === 'function') guard(() => o.onLoadFail!({ url: e.validatedURL, code: e.errorCode, description: e.errorDescription }))
+      }
+      view.addEventListener('did-fail-load', onFail)
+      el.append(view)
+      const dispose = scope.own('mount', () => { view.removeEventListener('did-fail-load', onFail); view.remove() }, 'webSurface')
+      return {
+        navigate(url) {
+          if (!ctxAlive()) return
+          // '#…' 只换页面当前地址的 # 那段:同一个页面里跳、不重载。照页面此刻的地址算(登录后页面自己去掉了查询串也对得上)
+          if (typeof url === 'string' && url.startsWith('#')) {
+            const cur = (ready ? view.getURL() : '') || view.getAttribute('src') || o.url
+            url = cur.split('#')[0] + url
+          }
+          if (!isLoopbackHttpUrl(url)) throw new TypeError('mountWebSurface only loads loopback http(s) addresses')
+          if (view.getAttribute('src') === url && ready) view.reload()
+          else view.setAttribute('src', url)
+        },
+        reload() { if (ctxAlive() && ready) view.reload() },
+        focus() { if (ctxAlive()) view.focus() },
+        dispose,
+      }
+    }
     const uiMountControl = (el: HTMLElement, c: import('./types').PluginToolbarControl): import('./types').PluginControlHandle => {
       if (!ctxAlive()) return { update() {}, dispose() {} }
       if (!(el instanceof HTMLElement)) throw new TypeError('mountControl needs an HTMLElement')
@@ -1856,9 +1933,31 @@ export const usePluginStore = create<PluginState>((set, get) => {
         if (ctxAlive()) listener(status)
       }), 'account') : () => {},
     } : undefined
+    // ctx.net(2026-11-16+):只有本机桌面的主进程能代请求(web / 手机 / Unit 设备页的 amadeus 桥没有这一项 → 不注入)。
+    // 白名单不在这里判:主进程按 pluginId 读磁盘上的 manifest(这一侧递什么都不算数)。停用后在途的请求一律作废。
+    const netBridge = amadeus?.pluginNetRequest
+    const net: PluginNetApi | undefined = netBridge ? {
+      request: async (url, init) => {
+        const dead = (): Error => Object.assign(new Error('plugin disabled'), { code: 'net_failed' as const })
+        if (!ctxAlive()) throw dead()
+        const r = await netBridge(pluginId, String(url), init == null ? undefined : {
+          ...(init.method != null ? { method: init.method } : {}),
+          ...(init.headers != null ? { headers: init.headers } : {}),
+          ...(init.body != null ? { body: init.body } : {}),
+          ...(init.timeoutMs != null ? { timeoutMs: init.timeoutMs } : {}),
+        })
+        if (!ctxAlive()) throw dead()
+        if (!r.ok) throw Object.assign(new Error(r.message || r.code), { name: 'PluginNetError', code: r.code })
+        const bytes = r.bytes instanceof Uint8Array ? r.bytes : new Uint8Array(r.bytes as ArrayLike<number>)
+        let text: string | null = null
+        const readText = (): string => (text ??= new TextDecoder().decode(bytes))
+        return { status: r.status, headers: { ...r.headers }, bytes, url: r.url, text: readText, json: <T,>() => JSON.parse(readText()) as T }
+      },
+    } : undefined
     const ctx: PluginContext = {
     app: appApi,
     account: scopedAccount,
+    ...(net ? { net } : {}),
     registerSlashItem: (item) => set((s) => ({ slashItems: [...s.slashItems, { pluginId, item }] })),
     registerSelectionAction: (action) => {
       if (!ctxAlive()) return
@@ -1875,8 +1974,27 @@ export const usePluginStore = create<PluginState>((set, get) => {
       if (output != null && output !== 'preview' && output !== 'none') console.warn(`[amadeus] 插件 ${pluginId} 的划线动作「${action.id}」output 只认 'preview' | 'none',已当作 'preview'`)
       set((s) => ({ selectionActions: [...s.selectionActions.filter((o) => !(o.pluginId === pluginId && o.item.id === action.id)), { pluginId, item: action }] }))
     },
-    registerCommand: (command) =>
-      set((s) => ({ commands: [...s.commands, { pluginId, item: command }] })),
+    // 2026-11-16+:回一个只撤这一次登记的 disposer;同插件同 id 再登记 = 原位替换(命令面板一行,不是两行)。
+    // 撤按条目身份认:被替换掉的那次登记的 disposer、停用后旧实例的 disposer 都是空操作,碰不到新的那条。
+    registerCommand: (command) => {
+      if (!ctxAlive()) return () => {}
+      if (!command || typeof command.id !== 'string' || !command.id || typeof command.run !== 'function') {
+        console.warn(`[amadeus] 插件 ${pluginId} 的 registerCommand 缺 id / run,已忽略`)
+        return () => {}
+      }
+      if (command.hotkey != null && !pluginDefaultHotkey(command.hotkey)) {
+        console.warn(`[amadeus] 插件 ${pluginId} 的命令「${command.id}」hotkey 无效(要带 Mod、按得出来,形如 'Mod+Shift+Y'),已当作没写`)
+      }
+      const entry: Owned<CommandContribution> = { pluginId, item: command }
+      set((s) => {
+        const i = s.commands.findIndex((o) => o.pluginId === pluginId && o.item.id === command.id)
+        if (i < 0) return { commands: [...s.commands, entry] }
+        const commands = s.commands.slice()
+        commands[i] = entry
+        return { commands }
+      })
+      return () => set((s) => (s.commands.includes(entry) ? { commands: s.commands.filter((o) => o !== entry) } : s))
+    },
     registerTheme: (theme) => {
       injectThemeStyle(theme.id, theme.css)
       scope.own('theme', () => removeThemeStyle(theme.id), theme.id) // <style> 在 store 外:只删切片会留孤儿
@@ -1931,7 +2049,9 @@ export const usePluginStore = create<PluginState>((set, get) => {
     // 右上角通知(2026-07-23 起):来源自动标插件名;事件 plugin:<id>,用户可在设置里按插件静音。
     // 停用后残留的定时器不许再弹(10-02 补的活性闸,与 ctx.app 的副作用口同一条纪律)。
     // action(10-17,日历的「撤销」):一个按钮,停留 8 秒(同宿主日历的 U-06);插件停用后点了也不调。
-    // key:同 key 的后一张顶掉前一张,前缀由宿主拼,碰不到别家的 / 宿主的去重键。
+    // key:同 key 的后一张顶掉前一张(replace:计数不累加、标题 / 文案 / 按钮 / 停留都换成新的),前缀由宿主拼,碰不到别家的 / 宿主的去重键。
+    // undo / urgent(手机横幅):undo = 撤销回执,手机上停 8 秒(不带是 5 秒);urgent = 有人 / Agent 停着在等用户,手机上不受节流。
+    // 只认布尔 true;旧宿主不挑这两个字段,等于没带。
     notify: (message, opts) => {
       if (!ctxAlive()) return
       const a = opts?.action
@@ -1949,8 +2069,10 @@ export const usePluginStore = create<PluginState>((set, get) => {
         event: `plugin:${pluginId}`,
         sourceLabel: plugin ? pluginDisplayName(plugin, currentLocale()) : pluginId,
         ...(action ? { action, durationMs: 8000 } : {}),
+        ...(opts?.undo === true ? { undo: true } : {}),
+        ...(opts?.urgent === true ? { urgent: true } : {}),
         // 带 key 时 action 一律显式给(可能是 undefined):同 key 合并时 store 才会清掉上一条的按钮,否则「已删除 B」上挂着撤 A 的按钮
-        ...(typeof opts?.key === 'string' && opts.key ? { dedupeKey: `plugin:${pluginId}:${opts.key.slice(0, 100)}`, action } : {}),
+        ...(typeof opts?.key === 'string' && opts.key ? { dedupeKey: `plugin:${pluginId}:${opts.key.slice(0, 100)}`, action, replace: true } : {}),
       })
     },
     registerView: (view) => set((s) => ({ views: [...s.views, { pluginId, item: view }] })),
@@ -2009,6 +2131,15 @@ export const usePluginStore = create<PluginState>((set, get) => {
     },
     registerFileCreator: (def) =>
       set((s) => ({ fileCreators: [...s.fileCreators, { pluginId, item: def }] })),
+    // 接进宿主模板流程(2026-11-16+,见 templateHooks.ts):登记进模块级表,停用 / 重载经 scope 摘掉。
+    registerTemplateProcessor: (def) => {
+      if (!ctxAlive()) return () => {}
+      return scope.own('templateProcessor', registerTemplateProcessor(pluginId, hookPluginName, def), def.id)
+    },
+    registerNoteBirth: (def) => {
+      if (!ctxAlive()) return () => {}
+      return scope.own('noteBirth', registerNoteBirth(pluginId, hookPluginName, def), def.id)
+    },
     // 只收形状对的;认不认领(工具是不是本插件引擎半身注册的)在画的时候按引擎报的名下工具现判(toolResultCards.claimToolCard)。
     registerToolResultRenderer: (def) => {
       if (!ctxAlive()) return
@@ -2019,6 +2150,18 @@ export const usePluginStore = create<PluginState>((set, get) => {
       }
       const item: ToolResultRendererContribution = { ...def, tool, surface: def.surface === 'desk' ? 'desk' : 'inline' }
       set((s) => ({ toolResultRenderers: [...s.toolResultRenderers, { pluginId, item }] }))
+    },
+    // 过程行句子(2026-11-13+):同上,只收形状;认领在画的时候按引擎名下工具现判(toolResultCards.claimToolLabel)。
+    registerToolLabel: (def) => {
+      if (!ctxAlive()) return
+      const raw = Array.isArray(def?.tool) ? def.tool : [def?.tool]
+      const tools = [...new Set(raw.map((t) => (typeof t === 'string' ? t.trim() : '')).filter(Boolean))]
+      if (!tools.length || typeof def?.describe !== 'function') {
+        console.warn(`[plugin:${pluginId}] registerToolLabel 被拒:要有 tool(引擎工具名或名单)和 describe`)
+        return
+      }
+      const item: NormalizedToolLabel = { tools, describe: def.describe, ...(typeof def.revision === 'function' ? { revision: def.revision } : {}) }
+      set((s) => ({ toolLabels: [...s.toolLabels, { pluginId, item }] }))
     },
     // 打开自己的视图:类型名由宿主统一命名空间(plugin:<id>:<viewId>),防跨插件顶替。
     // 2.13.8 起(LCL 表面规范第三期)一律经 workspace.open(lcl/engine/workspaceOpen.ts):openMiniPanel / openFloatingPanel
@@ -2125,6 +2268,13 @@ export const usePluginStore = create<PluginState>((set, get) => {
         readiness: [...s.readiness.filter((o) => !(o.pluginId === pluginId && o.item.id === def.id)), { pluginId, item: def }],
       }))
     },
+    // Harness 卡的行 + 对话右键菜单(2026-11-15,engineHarness.ts):停用 / 重载经 scope 撤
+    registerEngineHarness: (def) => {
+      if (!ctxAlive()) return { refresh() {}, dispose() {} }
+      const h = registerEngineHarness(pluginId, def, ctxAlive)
+      const dispose = scope.own('mount', h.dispose, 'engineHarness')
+      return { refresh: h.refresh, dispose }
+    },
     // 编辑器扩展:注册表在 editorExtensions.ts(叶子模块,破 store↔MarkdownBlock 的 import 环)。
     // 名字给扩展隔离的提示用(评审 G1-07:哪个插件的扩展坏了要点名)。
     // 撤是按插件整体撤(clearEditorExtensions 让全部编辑器原地重配一次),所以 N 份扩展只记一条。
@@ -2168,13 +2318,16 @@ export const usePluginStore = create<PluginState>((set, get) => {
         const onBack = (): void => {
           if (!ctxAlive()) return
           if (toList && listFirstNow()) useWorkspace.getState().toggleSidebar('left')
-          else opts.onBack()
+          else guard(() => opts.onBack())
         }
         const handle = claimNativeChrome({ mode: 'page', title: String(opts.title), back: String(opts.back), onBack })
         // 两级导航:这一页不占返回栈,返回链照常滑出列表层,边缘手势才跟手(占了栈系统返回就只能等松手);
         // 列表一出来(手势、返回键、页内横滑、顶栏箭头都走到这)插件才收尾。放弃手势不改 leftVisible,什么都不发生
+        // 插件的 onBack 跑在 workspace 的订阅里 —— 也就是宿主的开合(返回预览收尾的 flushSync)当中:经 guard,
+        // 它抛的错只记一行,不打断宿主那一下(2026-11-15 安卓真壳:插件视图已卸、声明没收,onBack 里 setParams 抛错,
+        // 返回预览的收尾被跳过、整屏卡住)
         const off = toList
-          ? useWorkspace.subscribe((s, prev) => { if (s.leftVisible && !prev.leftVisible && listFirstNow() && ctxAlive()) { off(); handle.release(); opts.onBack() } }) // 旋转成宽屏自动并排左栏不算返回
+          ? useWorkspace.subscribe((s, prev) => { if (s.leftVisible && !prev.leftVisible && listFirstNow() && ctxAlive()) { off(); handle.release(); guard(() => opts.onBack()) } }) // 旋转成宽屏自动并排左栏不算返回
           : pushMobileBack(onBack) // 系统返回和顶栏箭头同一件事
         return { dispose: scope.own('mount', () => { off(); handle.release() }, 'nativeHeader') }
       } } : {}),
@@ -2296,6 +2449,8 @@ export const usePluginStore = create<PluginState>((set, get) => {
       icon: uiIcon,
       mountEmptyState: uiMountEmptyState,
       mountWebCard: uiMountWebCard,
+      // 只有桌面壳有 <webview>(web / 移动端没有):那两端不给这个口,插件按「没有」处理
+      ...(isElectronHost() ? { mountWebSurface: uiMountWebSurface } : {}),
       setViewHead: uiSetViewHead,
       mount: uiMount as NonNullable<PluginContext['ui']>['mount'],
       chatBoxCapabilities: CHAT_BOX_CAPABILITIES,
@@ -2779,11 +2934,19 @@ export const usePluginStore = create<PluginState>((set, get) => {
             subscribe: (cb: () => void) => scope.own('subscription', readTangu()?.subscribe(cb) ?? (() => {}), 'tangu'),
             // Agent 状态(2026-09-19):调用时才读探针(台架可以事后换探针)。探针缺这条(旧台架)→ 恒 idle,
             // 与契约「缺席按 idle 处理」同口径;省略 sessionId 时此处拿不到 activeId(appStore 有 import 环),报 null。
-            agentStatus: (sid?: string | null): TanguAgentStatus => readTangu()?.agentStatus?.(sid) ?? idleAgentStatus(sid ?? null),
-            subscribeAgentStatus: (cb: (s: TanguAgentStatus) => void, sid?: string | null): (() => void) => {
+            // 2026-11-13 起会话参数也收 { sessionId?, runId? }(按 runId 找正在跑它的会话,见 stores/agentStatus.ts)
+            agentStatus: (sid?: TanguSessionTarget): TanguAgentStatus => readTangu()?.agentStatus?.(sid) ?? idleAgentStatus(typeof sid === 'string' ? sid : null),
+            subscribeAgentStatus: (cb: (s: TanguAgentStatus) => void, sid?: TanguSessionTarget): (() => void) => {
               if (!ctxAlive()) return () => {}
               return scope.own('subscription', readTangu()?.subscribeAgentStatus?.(cb, sid) ?? (() => {}), 'agentStatus')
             },
+            // 停止(2026-11-13+):探针给得出才注入。停用后的插件停不了任何 run。
+            ...(readTangu()?.stop ? {
+              stop: async (target?: TanguSessionTarget): Promise<boolean> => {
+                if (!ctxAlive()) return false
+                return (await readTangu()?.stop?.(target)) === true
+              },
+            } : {}),
             // 开一个可见的新对话:探针给得出才注入(同 automation 的闸)。放行规则都在这一层:
             //  ① send:true 只对**本插件捆绑包播种的** Agent 生效(清单有 + 播种标记是本插件),别家 Agent /
             //     撞名没播成的 slug 降级为预填、由用户按回车 —— 插件不能替用户花别人的 token、开别家 Agent 的 host 工具;
@@ -3244,6 +3407,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
     fileTypes: [],
     embedRenderers: [],
     toolResultRenderers: [],
+    toolLabels: [],
     fileCreators: [],
     viewOpener: null,
     viewLocations: null,

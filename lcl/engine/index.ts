@@ -122,12 +122,14 @@ export type { LineSelectionOptions, LineSelectionHandle } from './lineSelection'
 export { switchSpace, setSpaceBarOrder, spaceSwitchDirection, type SpaceSwitchMotion } from './spaceTransition'
 export { SPRING_PAGE, SPRING_ROW, reducedMotion, springAt, springEasing, springMotion, type Spring } from './spring'
 export { openPanel, stretchOpen, fadeScaleOpen, motionTheme, MOTION_THEME_IDS, type MotionThemeId } from './panelMotion'
+export { useSubPanelFlow } from './subPanelFlow'
 export { flowThumb, useSegFlow, useKnobFlow } from './segFlow'
 
 /** Optional native presentation hosts (Android Compose). Absent host ⇒ callers keep their web UI. */
 export {
   installNativeSheetPresenter, nativeSheetPresenter, presentNativeMenu, presentNativeChecklist, presentNativePrompt, presentNativeConfirm,
   pickNativeCtxItem, runNativeCtxMenu, readNativeTheme, menuResult, checklistResult, promptResult, confirmResult, clipNativeText, NATIVE_MENU_MAX_ITEMS,
+  nativeSheetUp, holdNativeSheetUp, whileNativeSheetUp, bindNativeSheetMark, watchNativeSheet,
 } from './nativeSheet'
 export type {
   NativeSheetTheme, NativeSheetRequest, NativeSheetPayload, NativeSheetPresenter, NativeSheetOutcome,

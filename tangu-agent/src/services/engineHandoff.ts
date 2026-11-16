@@ -27,7 +27,9 @@ import { normalizeUIAppCards } from '../shared/intelligentCards.js';
 import { makeUiSettingsUpdater } from './uiAck.js';
 import { makeClientActionRequester } from './clientAck.js';
 import { resolveProjectMemory } from './projectMemory.js';
-import { BRIDGE_CALL_BUDGET_MS, createRunToolServer } from '../engines/toolServer.js';
+import { BRIDGE_CALL_BUDGET_MS, createRunToolServer, SKILL_TOOL } from '../engines/toolServer.js';
+import { RELAY_INSTRUCTIONS_MAX_BYTES } from '../engines/bridgeRelay.js';
+import { createHash } from 'node:crypto';
 import { agentsDir } from '../core/tanguHome.js';
 import { getLocalSkill, listLocalSkills } from '../skills/localSkills.js';
 import {
@@ -65,14 +67,16 @@ async function agentSkillLinks(def: NormalAgentDef): Promise<Array<{ id: string;
   return out;
 }
 
-export async function prepareEngineAgentsHome(p: EngineAgentsHomeInput): Promise<EngineAgentsHome> {
+/** 交给引擎的那几段(人设、身份、工具说明、协作说明、常驻记忆、关于你、个人文件夹)。两种交法共用:
+ *  指令目录(每轮起进程,DSH_AGENTS_HOME)和常驻进程桥上的说明(bridge)。 */
+async function buildHandoffSections(p: EngineAgentsHomeInput, opts: { userShared: boolean; skillsVia: 'folder' | 'tool'; skills?: ReadonlyArray<{ name: string; description: string }> }): Promise<{ sections: InstructionSection[]; name: string }> {
   const def = upgradeAriosoPersona(p.def);
   const tagCtx = runTagContext(true);
   const sections: InstructionSection[] = [];
 
-  // 用户自己放在共用根里的 AGENTS.md(换了指令目录它就不在了,并进来)。
+  // 用户自己放在共用根里的 AGENTS.md(换了指令目录它就不在了,并进来)。常驻进程不换指令目录,DSH 自己读它,不并。
   const sharedRoot = userAgentsHome(p.env);
-  try {
+  if (opts.userShared) try {
     const own = readFileSync(path.join(sharedRoot, 'AGENTS.md'), 'utf8').trim();
     if (own) {
       const capped = Buffer.byteLength(own) > USER_SHARED_MAX_BYTES ? `${Buffer.from(own).subarray(0, USER_SHARED_MAX_BYTES).toString('utf8').replace(/�+$/, '')}\n[Truncated by Forsion.]` : own;
@@ -84,7 +88,12 @@ export async function prepareEngineAgentsHome(p: EngineAgentsHomeInput): Promise
   if (def.soul?.trim()) sections.push({ key: 'persona', text: '## Persona\nThe following is your persona; act according to its tone and values, but do not recite it verbatim.\n\n' + textForThisDevice(def.soul.trim(), tagCtx) });
   const name = String(def.name || '').trim();
   if (name) sections.push({ key: 'identity', text: agentIdentitySection({ name, nameZh: def.nameZh, nameEn: def.nameEn, namePref: def.namePref, description: String(def.description || '').trim() }) });
-  sections.push({ key: 'tools', text: bridgeGuidance(p.serverName, p.budgetSeconds, p.handed) });
+  sections.push({ key: 'tools', text: bridgeGuidance(p.serverName, p.budgetSeconds, p.handed, opts.skillsVia) });
+  if (opts.skillsVia === 'tool' && opts.skills?.length) {
+    sections.push({ key: 'skills', text: '## Your skills\n'
+      + `Before you follow one of these skills, load it with \`mcp__${p.serverName}__${SKILL_TOOL}\` (pass the name exactly as listed).\n`
+      + opts.skills.map((k) => `- ${k.name}${k.description ? `: ${k.description.replace(/\s+/g, ' ').slice(0, 300)}` : ''}`).join('\n') });
+  }
 
   // 协作说明:和这个人的 → 这个 Agent 的 → 这个项目的(三份并排,同 runLoop)。读不出来的那份跳过、留痕。
   const collab: string[] = [HUMAN_GUIDANCE.trim()];
@@ -123,7 +132,13 @@ export async function prepareEngineAgentsHome(p: EngineAgentsHomeInput): Promise
     + '- `SOUL.md` — your persona.\n'
     + `- \`Library/\` (\`${libDir}\`) — your reference library. Store long-term reference material there with your own file tools and read it back when needed.\n`
     + 'This folder belongs to you; the working directory and the user\'s notes and calendars belong to the user.' });
+  return { sections, name };
+}
 
+export async function prepareEngineAgentsHome(p: EngineAgentsHomeInput): Promise<EngineAgentsHome> {
+  const def = upgradeAriosoPersona(p.def);
+  const sharedRoot = userAgentsHome(p.env);
+  const { sections, name } = await buildHandoffSections(p, { userShared: true, skillsVia: 'folder' });
   const header = `Forsion wrote this file for the agent "${name || p.slug}" and rewrites it before each turn. To change it, edit the agent in Forsion, not this file.`;
   const userBytes = dshHomeInstructionsBytes(p.env);
   const budget = instructionsBudget(userBytes);
@@ -152,6 +167,40 @@ export async function prepareEngineAgentsHome(p: EngineAgentsHomeInput): Promise
   return { dir, wrote, bytes: Buffer.byteLength(rendered.text), skills: links.length, truncated: rendered.truncated, omitted: rendered.omitted };
 }
 
+/** 技能的一句话说明(SKILL.md 头部的 description)。读不出来就空着。 */
+function skillDescription(dir: string): string {
+  try {
+    const head = readFileSync(path.join(dir, 'SKILL.md'), 'utf8').slice(0, 4096);
+    const fm = /^---\r?\n([\s\S]*?)\r?\n---/.exec(head)?.[1] ?? '';
+    const m = /^description:\s*(.+)$/m.exec(fm);
+    return m ? m[1].trim().replace(/^["']|["']$/g, '') : '';
+  } catch { return ''; }
+}
+
+/** 交给常驻进程的技能:这个 Agent 的(名字 = 技能 id 的最后一段,重名加序号,同指令目录里的链接名)。
+ *  用户自己 ~/.agents/skills 里的不在这里:常驻进程用用户自己的共用根,DSH 自己就读得到。 */
+export async function bridgeSkills(def: NormalAgentDef): Promise<Array<{ name: string; dir: string; description: string }>> {
+  const taken = new Set<string>(); const seen = new Set<string>();
+  const out: Array<{ name: string; dir: string; description: string }> = [];
+  for (const s of await agentSkillLinks(upgradeAriosoPersona(def))) {
+    const dir = path.resolve(s.dir);
+    if (seen.has(dir)) continue;
+    seen.add(dir);
+    out.push({ name: skillLinkName(s.id, taken), dir, description: skillDescription(dir) });
+  }
+  return out;
+}
+
+/** 常驻进程桥上的说明(融合插件第 1 档,见 engines/residentAcp.ts):同指令目录那份,只是不并用户自己的 AGENTS.md、
+ *  技能改成列清单 + 按需读的工具,预算按 DSH 收一座 MCP 服务说明的上限。 */
+export async function prepareBridgeInstructions(p: EngineAgentsHomeInput, skills: ReadonlyArray<{ name: string; description: string }>): Promise<{ text: string; bytes: number; truncated: string[]; omitted: string[] }> {
+  const { sections, name } = await buildHandoffSections(p, { userShared: false, skillsVia: 'tool', skills });
+  const header = `Forsion gives these instructions to the agent "${name || p.slug}" through its tool server, and refreshes them when they change. To change them, edit the agent in Forsion.`;
+  const rendered = renderAgentInstructions(header, sections, RELAY_INSTRUCTIONS_MAX_BYTES - 1024);
+  if (rendered.truncated.length || rendered.omitted.length) console.warn(`[engine-handoff] bridge instructions over budget for ${p.slug}: truncated=${rendered.truncated.join(',')} omitted=${rendered.omitted.join(',')}`);
+  return { text: rendered.text, bytes: Buffer.byteLength(rendered.text), truncated: rendered.truncated, omitted: rendered.omitted };
+}
+
 // ── 一轮的交接:工具上下文 + 桥 + 指令目录 ─────────────────────────────────────
 
 export interface EngineAgentHandoffInput {
@@ -170,6 +219,10 @@ export interface EngineAgentHandoffInput {
   persistMessage: (files: DisplayFileItem[]) => Promise<void>;
   /** 引擎收指令目录时它起进程看到的环境(EngineManager.agentsHomeEnv);null = 不收。 */
   engineEnv: NodeJS.ProcessEnv | null;
+  /** 这一轮连插件常驻的那个进程(融合插件):人设 / 记忆 / 技能走桥上的说明,不写指令目录。 */
+  resident?: boolean;
+  /** 引擎此刻用的模型收不收图(交过去的 Computer Use 每次调用前问;不知道 = 不能)。 */
+  seesImages?: () => Promise<boolean | undefined>;
 }
 
 const MAX_HANDOFF_DISPLAY_FILES = 20;
@@ -230,10 +283,28 @@ export async function prepareEngineAgentHandoff(p: EngineAgentHandoffInput) {
   const builtinTools = resolveTools(deps().profile, toolCtx);
   // Agent 勾的 MCP 工具不在 resolveTools 里(单独一类):照 Tangu 的可见判定(外部工具闸、严格名单、撞名)一并交给桥
   const handed = [...handedToolNames(builtinTools), ...visibleMcpTools(toolCtx, new Set(builtinTools.keys())).map((t) => t.name)];
+  const skills = p.resident ? await bridgeSkills(def) : undefined;
   const toolServer = await createRunToolServer(toolCtx, handed, {
     name: HANDOFF_SERVER_NAME, memorySlug: resolveMemorySlug(def), agentSlug: slug,
-    cards: { publish: p.publish, contentOffset: p.contentOffset }, budgetMs: BRIDGE_CALL_BUDGET_MS,
+    cards: { publish: p.publish, contentOffset: p.contentOffset }, budgetMs: BRIDGE_CALL_BUDGET_MS, images: true,
+    ...(p.seesImages ? { seesImages: p.seesImages } : {}),
+    ...(skills ? { skills } : {}),
   });
+  if (p.resident) {
+    try {
+      const b = await prepareBridgeInstructions({
+        userId: p.userId, appId: deps().profile.appId, sessionId: p.sessionId, engineId: p.engineId, slug, def,
+        serverName: HANDOFF_SERVER_NAME, budgetSeconds: Math.round(BRIDGE_CALL_BUDGET_MS / 1000), handed, env: p.engineEnv ?? undefined,
+      }, skills!);
+      // 指纹:说明 + 交过去的工具 + 技能。变了才关掉会话重接(说明只在连上时读一次);没变就接着用开着的那场。
+      const key = createHash('sha256').update(b.text).update('\n').update(handed.join(',')).update('\n').update(skills!.map((k) => `${k.name}=${k.dir}`).join(',')).digest('hex');
+      console.log(`[engine-handoff] run=${p.runId} agent=${slug} tools=${handed.length} bridge-instructions=${b.bytes}B skills=${skills!.length} (resident)`);
+      return { toolServer, agentsHome: undefined, handed, bridge: { instructions: b.text, key, serverName: HANDOFF_SERVER_NAME } };
+    } catch (e) {
+      await toolServer.close().catch(() => {});
+      throw new Error(`Could not prepare this agent's instructions for ${def.engine || p.engineId}: ${e instanceof Error ? e.message : e}`);
+    }
+  }
   let agentsHome: string | undefined;
   if (p.engineEnv) {
     try {
@@ -249,7 +320,7 @@ export async function prepareEngineAgentHandoff(p: EngineAgentHandoffInput) {
       throw new Error(`Could not prepare this agent's instructions for ${def.engine || p.engineId}: ${e instanceof Error ? e.message : e}`);
     }
   }
-  return { toolServer, agentsHome, handed };
+  return { toolServer, agentsHome, handed, bridge: undefined as undefined | { instructions: string; key: string; serverName: string } };
 }
 
 type BridgeLike = { calls(): any[]; results(): any[] } | undefined;

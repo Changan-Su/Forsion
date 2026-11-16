@@ -1,5 +1,5 @@
 import { MessageCircle, MessageCircleQuestion, BookOpen, FolderOpen, Bot, Users, Terminal, GitCompareArrows } from 'lucide-react'
-import { addCommand, registerView, useWorkspace } from '@lcl/engine'
+import { activeMainPanel, addCommand, registerView, useWorkspace } from '@lcl/engine'
 import { activeChatModelId, useApp } from '../stores/appStore'
 import { TANGU_SLICE } from '../tangu/store/tanguSlice'
 import { translate } from '../i18n'
@@ -18,7 +18,8 @@ import { AgentsSpaceView, AgentsRosterView, TanguDetailsView } from '../views/Ag
 import { hasNativeFeature, tanguProbeAvailable } from './runtime'
 import { quoteInChatPanel } from '../views/chat2/chatPanelQuote'
 import { SessionTabIcon } from '../components/SessionIcon'
-import { setTanguChatOutline, setTanguChatViews, setTanguDrafts, setTanguInboxTasks, setTanguIntelligentUi, setTanguMuseStarters, setTanguNewChat, setTanguPrefs, setTanguShell, setTanguSidebarModes, type TanguHost } from '../amadeus/plugins/tanguSeam'
+import { chatEngineOf } from '../tangu/agentEngine'
+import { engineRailViewType, subscribeEngineHarness, setTanguChatOutline, setTanguChatViews, setTanguDrafts, setTanguInboxTasks, setTanguIntelligentUi, setTanguMuseStarters, setTanguNewChat, setTanguPrefs, setTanguShell, setTanguSidebarModes, type TanguHost } from '../amadeus/plugins/tanguSeam'
 import { IntelligentUi, NativeDocument } from '../components/IntelligentUi'
 import { inboxTasks } from '../views/chat2/inboxTasks'
 import { dismissStarter, refreshMuseStarters, useMuseStarters } from '../views/chat2/museStarterStore'
@@ -38,6 +39,43 @@ const CHAT_RIGHT = [{ type: 'tangu-details', params: {} }, { type: 'workspace', 
 
 const app = () => useApp.getState()
 const ws = () => useWorkspace.getState()
+
+/** 主区对话跑在外部引擎上、跑它的插件登记了右栏页(registerEngineHarness 的 railView)时,右栏在组后面补上那页
+ *  (lcl ViewDef.rightExtras:不抢前台,换到别处的对话就关)。那页跟的是全局当前会话(插件用不带参数的
+ *  ctx.tangu.agentStatus());主区钉住的是另一场时不补,免得右栏挂着别的对话的页。新对话看 newChatCfg。 */
+function chatRailExtras(params: Record<string, unknown>): Array<{ type: string; params: Record<string, unknown> }> {
+  const s = app()
+  if (params.followActive === false && typeof params.sessionId === 'string' && params.sessionId !== s.activeId) return []
+  const sid = s.activeId
+  const cfg = sid ? (s.configBySession[sid] || [...s.sessions, ...s.archivedSessions].find((x) => x.id === sid)?.agent_config) : s.newChatCfg
+  const engine = chatEngineOf(cfg, s.agentDefs, s.defaultAgentSlug)
+  const type = engine ? engineRailViewType(engine) : null
+  return type ? [{ type, params: {} }] : []
+}
+/** 补页的输入变了(换会话 / 换 Agent / Agent 改了引擎 / 插件登记或撤掉)→ 右栏重新对账。按主区那一格的参数算
+ *  (钉住的格子和跟随的格子结果不同);流式回答时这几样的引用不变,直接跳过。主区换格子由 lcl 自己对账。 */
+let watchingRail = false
+function watchChatRail(): void {
+  if (watchingRail) return
+  watchingRail = true
+  let inputs: unknown[] = []
+  let last = ''
+  const poke = (): void => {
+    const api = ws().api
+    const main = api ? activeMainPanel(api) : null
+    const now = chatRailExtras((main?.params as Record<string, unknown> | undefined) ?? {}).map((p) => p.type).join('|')
+    if (now === last) return
+    last = now
+    ws().refreshTabs()
+  }
+  useApp.subscribe((s) => {
+    const next = [s.activeId, s.configBySession, s.newChatCfg, s.agentDefs, s.defaultAgentSlug, s.sessions]
+    if (next.length === inputs.length && next.every((v, i) => v === inputs[i])) return
+    inputs = next
+    poke()
+  })
+  subscribeEngineHarness(poke)
+}
 
 const blankNewChat = (): void => {
   const s = app()
@@ -163,7 +201,8 @@ export function registerTanguViews(): void {
   // workspaceSource: 'orbits' = 自动档翻转的**声明位**(方案 §3.7-7):主区是 chat 时左栏自动落新版会话侧栏,
   // 不动 workspaceMode.ts 的硬规则;右栏恒 files 不受它管。
   // 右栏主视图规则(lcl rightRules.ts):对话做主区前台时右栏 = Tangu 详情 / 文件 / 大纲(大纲对对话是会话目录),不分 Space。
-  registerView({ type: 'chat', kind: 'entity', rightCompanions: CHAT_RIGHT, idParam: 'sessionId', displayName: () => app().tr('workbench.chat'), icon: MessageCircle, TabIcon: SessionTabIcon, factory: (props) => <ChatView {...props} />, singleton: true, workspaceSource: 'orbits', copyParams: pinChatCopy })
+  registerView({ type: 'chat', kind: 'entity', rightCompanions: CHAT_RIGHT, rightExtras: chatRailExtras, idParam: 'sessionId', displayName: () => app().tr('workbench.chat'), icon: MessageCircle, TabIcon: SessionTabIcon, factory: (props) => <ChatView {...props} />, singleton: true, workspaceSource: 'orbits', copyParams: pinChatCopy })
+  watchChatRail()
   // 侧栏对话只是 ChatView 的另一个停靠身份:绕开 `chat` singleton 与主区实例冲突,但仍跟随同一
   // activeId / messagesBySession / runningBySession,不创建所谓「Side Chat」会话或第二套 runtime。
   registerView({ type: 'chat-panel', kind: 'aux', displayName: () => translate('tangu.view.chatPanel'), icon: MessageCircle, TabIcon: SessionTabIcon, factory: (props) => <ChatView {...props} />, singleton: true })

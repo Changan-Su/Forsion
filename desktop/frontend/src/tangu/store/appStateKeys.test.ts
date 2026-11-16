@@ -14,7 +14,7 @@ const EXPECTED = [
   'configBySession', 'connMessage', 'connState', 'connect', 'connectOnce', 'continueRun', 'createInWorkspace', 'ctxInfoBySession',
   'decideApproval', 'defaultAgentSlug', 'defaultWorkspace', 'defaultWsDir', 'deleteSession', 'deskAutoShow',
   'deskBySession', 'deskLiveClear', 'deskLiveSync', 'deskPresent', 'deskShowFile', 'desktopConfig', 'desktopMode',
-  'detailWsKey', 'discardFailed', 'dismissUpdate', 'draftRefs', 'editUserMessage', 'engineCaps', 'engines', 'ensureEngineCaps',
+  'detailWsKey', 'discardFailed', 'dismissUpdate', 'draftRefs', 'editUserMessage', 'engineCaps', 'engineNoticesBySession', 'engines', 'ensureEngineCaps',
   'ensureProjectSettings', 'ensureSoloSession', 'ensureTeamSession', 'failedBySession', 'feedbackDraft', 'feedbackOpen', 'filePreview',
   'focusDirs', 'focusModelId', 'groupVoting', 'handleAuthExpired', 'historyLoading', 'homeDir', 'hydrateTeamWork',
   'jumpTarget', 'llmRetryBySession', 'loadProjectIcon', 'loadSessionHistory', 'marketOpen', 'marketTarget',

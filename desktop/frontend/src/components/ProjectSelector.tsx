@@ -3,6 +3,7 @@
  * 决定这条新对话落进哪个工作区:本地目录(host)或 Cloud 云沙箱。
  */
 import React, { useEffect, useRef, useState } from 'react'
+import { useCapsuleDroplet } from '../views/chat2/useCapsuleDroplet'
 import { Folder, Cloud, ChevronDown, Check, Search, FolderGit2, FolderPlus, FolderX } from 'lucide-react'
 import type { WorkspaceDescriptor } from '../types'
 import { useI18n } from '../i18n'
@@ -37,16 +38,17 @@ export const ProjectSelector: React.FC<{
   // 下拉是 absolute-in-relative + 标准选择面宽度、左对齐，窄屏用视口夹取兜底。
   const menuFix = useEdgeNudge(open)
 
+  // 下拉从芯片里流出来(11-16 Chat Box 水滴方案):点空白 / Esc / 再点芯片 = 倒放,点了一行照旧直接收
+  const flow = useCapsuleDroplet<'menu'>(open ? 'menu' : null, (k) => { if (k) setOpen(true); else { setOpen(false); setQ(''); setNaming(false); setDraft('') } },
+    () => ({ wrap: ref.current, pill: ref.current?.querySelector<HTMLElement>(':scope > .project-pill') ?? null, panel: menuRef.current }))
   useEffect(() => {
     if (!open) return
     const close = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) {
-        setOpen(false); setQ(''); setNaming(false); setDraft('')
-      }
+      if (ref.current && !ref.current.contains(e.target as Node)) flow.dismiss()
     }
     const escape = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return
-      setOpen(false); setQ(''); setNaming(false); setDraft('')
+      flow.dismiss()
       ref.current?.querySelector<HTMLButtonElement>('.project-pill')?.focus()
     }
     window.addEventListener('mousedown', close)
@@ -141,7 +143,7 @@ export const ProjectSelector: React.FC<{
       <button
         className={`composer-chip project-pill${open ? ' is-open' : ''}`}
         onClick={() => {
-          if (open) { closeMenu(); return }
+          if (open) { flow.toggle('menu'); return }
           // Android:原生半屏;没有原生宿主(桌面 / 网页)照旧展开 Web 下拉,宿主呈现失败也回落 Web。
           if (openNativeSheetMenu(nativeMenu, { onFallback: () => setOpen(true) })) return
           setOpen(true)
@@ -157,7 +159,7 @@ export const ProjectSelector: React.FC<{
       {open && (
         <div
           ref={(el) => { menuRef.current = el; menuFix.ref.current = el }}
-          className="composer-menu project-menu"
+          className="composer-menu project-menu t2c-pour"
           style={menuFix.style}
           role="menu"
           aria-label={t('input.project.label')}

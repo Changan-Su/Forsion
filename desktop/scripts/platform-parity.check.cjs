@@ -95,6 +95,8 @@ const SKIP = {
   unitWindowId: '同上:判这扇独立窗是不是 Unit 窗(?unit=)',
   MiniRoot: '同上:悬浮 mini 卡片',
   FloatingRoot: '第六种 Panel 的 Electron 原生子窗口根;移动端按产品约定继续使用全屏二级页面,不模拟桌面窗口',
+  PipRoot: 'Computer Use 悬浮小画面(?window=pip)的根:一扇置顶的 Electron 系统小窗,只有桌面主进程开得出来;手机没有 window.tangu.computerUsePip,插件就不画「移到悬浮窗」',
+  installComputerUsePipHost: '同上:非 pip 窗口替 pip 回答停止 / 状态的应答方,靠主进程的 pipAgent 转发桥;手机只有一个 WebView、没有这座桥,实现本身缺 window.tangu.pipAgentHost 即 no-op',
   readTanguChatViews: '#preview 设计预览页(样例对话,截图评审用;核心插件化 2e-7 起经 tanguSeam 从 Tangu 取 ChatPreview)',
   resolveInitialEffectiveMode: '移动端用 resolveInitialMode(无「跟随系统」的 electron 通道)',
   // —— 根组件 ——

@@ -40,7 +40,8 @@ export function rightGroupFor(
   declared: readonly PersistedPanel[] | undefined,
   spaceDefaults: readonly PersistedPanel[],
   usable: (type: string) => boolean,
-): { key: string; group: PersistedPanel[] } | null {
+  extras: readonly PersistedPanel[] = [],
+): { key: string; base: string; group: PersistedPanel[] } | null {
   if (!mainType || TRANSIENT_MAIN.has(mainType)) return null
   const pick = (src: readonly PersistedPanel[]): PersistedPanel[] => {
     const seen = new Set<string>()
@@ -52,7 +53,26 @@ export function rightGroupFor(
   }
   const own = pick(declared ?? []).slice(0, MAX_COMPANIONS)
   const group = own.length ? own : pick(spaceDefaults) // Space 缺省是宿主 / 配方自己定的,不截
-  return { key: group.map((p) => p.type).join('|'), group }
+  const base = group.map((p) => p.type).join('|')
+  // 主视图按参数补的尾项(ViewDef.rightExtras):排在组后面,组里已有的类型不重复,总数不过上限
+  const tail = pick(extras).filter((p) => !group.some((g) => g.type === p.type)).slice(0, Math.max(0, MAX_COMPANIONS - group.length))
+  if (!tail.length) return { key: base, base, group }
+  return { key: `${base}${EXTRA_SEP}${tail.map((p) => p.type).join('|')}`, base, group: [...group, ...tail] }
+}
+
+/** 组键里基本组和补项之间的分隔(视图类型里没有空格)。存进布局的 rule 键 = 基本组 + 补项。 */
+export const EXTRA_SEP = ' + '
+/** 组键的基本组那段:只有它变了才算「换组」(新组第一项顶到前台);补项变了只开 / 关那一项。 */
+export const baseKeyOf = (key: string): string => key.split(EXTRA_SEP)[0]
+
+/** 调主视图的 rightExtras(两个 store 共用):给它的是去掉引擎私有键(__ 开头)的参数;不是数组的项、抛错 = 不补。 */
+export function rightExtrasFrom(fn: ((params: Record<string, unknown>) => PersistedPanel[]) | undefined, params: unknown): PersistedPanel[] {
+  if (!fn) return []
+  try {
+    const user = Object.fromEntries(Object.entries((params ?? {}) as Record<string, unknown>).filter(([k]) => !k.startsWith('__')))
+    const out = fn(user)
+    return Array.isArray(out) ? out.filter((p) => !!p && typeof p.type === 'string' && !!p.type) : []
+  } catch (e) { console.error('[lcl] rightExtras', e); return [] }
 }
 
 export interface RightPlan {

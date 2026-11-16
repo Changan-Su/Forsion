@@ -57,7 +57,8 @@ const BOOT = String.raw`(function () {
       },
     });
   };
-  var app = new Proxy({}, { get: function (_, k) { return /^(watch|subscribe|on[A-Z])/.test(text(k)) ? function () { return noop; } : function () { return Promise.resolve(null); }; } });
+  // insertMarkdownAt answers synchronously like the host does with no note open; every other app method resolves null.
+  var app = new Proxy({}, { get: function (_, k) { k = text(k); return k === 'insertMarkdownAt' ? function () { return { ok: false, reason: 'no-note' }; } : /^(watch|subscribe|on[A-Z])/.test(k) ? function () { return noop; } : function () { return Promise.resolve(null); }; } });
   var ctx = new Proxy({}, { get: function (_, k) {
     if (typeof k !== 'string') return undefined;
     if (k === 'app') return app;
@@ -342,7 +343,7 @@ for (const slug of slugs) {
 // ── 4. registration code that exists but did not run ───────────────────────────────────────────────────────────────
 // Reported only when it explains something: a Space is missing one of this plugin's views, or nothing was registered at
 // all. A registration that is skipped on purpose (platform check, optional host API) is normal and stays unmentioned.
-const HOST_REGISTER = /\.\s*(register(?:View|Command|Setting|SettingsView|StatusItem|SlashItem|Panel|Theme|FileType|EmbedRenderer|FileCreator|ListSource|PropertyType|SelectionAction|Readiness|StoreView|Appearance|Font|EditorExtension|Companion|Series))\s*(?:\?\.)?\s*\(/g;
+const HOST_REGISTER = /\.\s*(register(?:View|Command|Setting|SettingsView|StatusItem|SlashItem|Panel|Theme|FileType|EmbedRenderer|FileCreator|ListSource|PropertyType|SelectionAction|Readiness|StoreView|Appearance|Font|EditorExtension|Companion|Series|TemplateProcessor|NoteBirth))\s*(?:\?\.)?\s*\(/g;
 const sites = [...src.matchAll(HOST_REGISTER)].map((m) => ({ kind: m[1], offset: m.index, line: lineOf(m.index), after: src.slice(m.index, m.index + 400), dead: deadRegionAt(m.index) }));
 const total = src.split('\n').length;
 const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

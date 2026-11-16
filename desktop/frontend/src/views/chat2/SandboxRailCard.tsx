@@ -32,9 +32,10 @@ registerMessages({
   'sandbox.rail.op.scroll': { zh: '滚动', en: 'scroll' },
   'sandbox.rail.op.space': { zh: '切换 Space', en: 'switch Space' },
   'sandbox.rail.op.files': { zh: '备好文件', en: 'prepare files' },
+  'sandbox.rail.op.settings': { zh: '打开插件设置', en: 'open plugin settings' },
 })
 
-const OPS = new Set(['start', 'reset', 'screenshot', 'command', 'read', 'click', 'type', 'press', 'scroll', 'space', 'files'])
+const OPS = new Set(['start', 'reset', 'screenshot', 'command', 'read', 'click', 'type', 'press', 'scroll', 'space', 'files', 'settings'])
 
 /** 这个对话的沙箱(在跑的,或上一个由它发起、已经停了的);别的对话 / 没有沙箱控制面 = null。 */
 export function useSandboxRail(sessionId: string | null | undefined): PluginSandboxState | null {

@@ -34,3 +34,24 @@ export function parseAgentEngineError(raw: string | undefined): { code: AgentEng
   const m = /agent_engine_(remote|not_installed|unsupported|chat_preset|elsewhere):([a-z0-9][a-z0-9._-]{0,63})/i.exec(raw || '')
   return m ? { code: m[1].toLowerCase() as AgentEngineErrorCode, engine: m[2] } : null
 }
+
+/**
+ * 交给外部引擎的 Computer Use 没跑(这一轮的模型看不见图,或说不清看不看得见,2026-11-16):回给模型的英文原话。
+ * 工具桥(engines/toolServer.ts)写它、卡片(ToolGroup)认它 —— 那一行按界面语言写原因,模型收到的照旧是这句英文。
+ * 改措辞只改这里,两边跟着变;落库的也是这句,重开对话照样认得。
+ */
+export function computerUseUnavailableText(why: 'no-image-input' | 'unknown'): string {
+  const cause = why === 'no-image-input'
+    ? 'because the model you are running on has no image input'
+    : 'because Forsion could not confirm that the model you are running on can see images'
+  return `${CU_UNAVAILABLE_HEAD} ${cause}, so this call was not run. `
+    + 'This is not a missing plugin or permission, and enabling anything will not help. '
+    + 'When the user asks for it, do not just report that the tool failed: tell them plainly that computer control needs a model that can see images, and that they can pick one for this agent.'
+}
+const CU_UNAVAILABLE_HEAD = 'Computer control (looking at the screen, clicking and typing in desktop apps) is unavailable'
+/** 从一条工具结果里认出上面那句;不是就回 null。 */
+export function parseComputerUseUnavailable(raw: string | undefined): 'no-image-input' | 'unknown' | null {
+  const text = raw || ''
+  if (!text.startsWith(CU_UNAVAILABLE_HEAD)) return null
+  return text.startsWith(`${CU_UNAVAILABLE_HEAD} because the model you are running on has no image input`) ? 'no-image-input' : 'unknown'
+}

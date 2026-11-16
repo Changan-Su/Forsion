@@ -39,7 +39,7 @@ import { askString } from '../components/askString'
 import { resolvePageName } from '@amadeus-shared/links'
 import { resolveFileLink } from '../lib/vaultFiles'
 import { wikiFilesEnabled } from '../lib/wikiFiles'
-import { usePageStore, useScopedPageStore, flushAllScopes, remapScopePaths, cascadeFdAfterRename, claimTitleFocus, PageScopeCtx, useActivePageScope, hasPageScope, activePageScope } from '../store/pageStore'
+import { usePageStore, useScopedPageStore, flushAllScopes, remapScopePaths, cascadeFdAfterRename, claimTitleFocus, PageScopeCtx, useActivePageScope, hasPageScope, activePageScope, birthNavGuard } from '../store/pageStore'
 // 模式胶囊复用 `.t2s-vaultseg`(见渲染处):样式真源是侧栏那张表。App 里 amadeusViews 已显式引过,
 // 这里再引是给**独立挂载**兜底(harness / 只挂 UnifiedPage 的场景,不引就是一排裸按钮)。
 import '../../styles/sidebar2.css'
@@ -73,6 +73,7 @@ import { blockKindOf, turnBlocksInto, turnCalloutInto, turnIntoCallout, turnRang
 import { columnRowOf, columnSplitApplies } from '../blocks/markdown/menuContext'
 import { NotePicker, blockLinkOf, canMove, copyLink, moveBlocksTo } from './blockLinks'
 import { withFoldedSections } from './foldCarry'
+import { caretMarkUsable, inlineAtCaret, landOnCaretMark, markCaret, sameShape, withoutCaretMark } from './insertAt'
 import { hardBreakRemark } from '../blocks/markdown/softBreak'
 import { adoptOrigins } from '../blocks/markdown/verbatim'
 import { createBlockLayer } from './blockLayer'
@@ -364,7 +365,12 @@ interface InsertMdOpts {
   quiet?: boolean
   after?: ReplyAnchor | null
   caretless?: boolean
+  /** 插件 insertMarkdownAt 的 cursorMarker:光标落在标记处、标记不落盘(见 insertAt.ts)。 */
+  marker?: string
+  /** 单独一步撤销(closeHistory):插件 insertMarkdownAt 的插入不和此前的打字并成一步。 */
+  ownStep?: boolean
 }
+type InsertMdWhere = 'caret' | 'cursor' | 'start' | 'end'
 
 interface HostApi {
   /** 外部回灌正文(stored md)→ 同实例最小差异事务;编辑器未挂载返回 false。
@@ -381,6 +387,8 @@ interface HostApi {
   insertFiles: (files: File[]) => void
   /** 插一段 markdown(插件块表面的 v4 写口;经 lifecycle.unifiedInsertMarkdown 递入)。编辑器未挂载 = false。 */
   insertMarkdown: (md: string, where: 'cursor' | 'start' | 'end', opts?: InsertMdOpts) => boolean
+  /** 同一条插入,外加 'caret' 档与 cursorMarker,并说出没插进去的原因(插件 insertMarkdownAt;经 lifecycle.unifiedInsertMarkdownAt 递入)。 */
+  insertMarkdownAt: (md: string, where: InsertMdWhere, marker?: string) => 'ok' | 'empty' | 'no-editor'
   /** markdown → 块内容(画布粘贴/拖入用)。解析不出东西 = null。 */
   parseMd: (md: string) => Fragment | null
   /** 块内容 → markdown(parseMd 的反向;画布跨实例复制卡用)。编辑器未挂载 = null。
@@ -486,6 +494,7 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
         void saveFiles(files)
       },
       insertMarkdown: (md, where, opts) => insertMd(md, where, opts),
+      insertMarkdownAt: (md, where, marker) => insertMdAt(md, where, { marker, ownStep: true }),
       parseMd: (md) => {
         let out: Fragment | null = null
         getInstance()?.action((ctx) => {
@@ -649,22 +658,70 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
    *    插件按钮/浮层,用户此刻的光标可能正在别处,PM 会把选区随事务映射过去。
    *  卡片文档也安全:插的是普通顶层节点,`canvasIntegrityGuard` 那道 filterTransaction 只拒
    *  「卡不在 doc 顶层」,不拒卡前后的正文(闭合锚 2026-08-19 之后卡外顶层正文完全合法)。
-   *  v3 走的是 store 的 onChange/onInsertAfter(块世界);统一实例没有块 id,一切都是本 doc 的事务。 */
-  const insertMd = (md: string, where: 'cursor' | 'start' | 'end' = 'cursor', opts?: InsertMdOpts): boolean => {
+   *  v3 走的是 store 的 onChange/onInsertAfter(块世界);统一实例没有块 id,一切都是本 doc 的事务。
+   *  插件 insertMarkdownAt 另加两样(insertAt.ts):`'caret'` = 解析成单个段落时把行内内容插在光标处(否则同 'cursor');
+   *  opts.marker = 光标落在标记处,标记与占位字在同一事务里删掉(一步撤销、不落盘)。返回 'ok' / 'empty'(解析成空)/ 'no-editor'。 */
+  const insertMdAt = (md: string, where: InsertMdWhere = 'cursor', opts?: InsertMdOpts): 'ok' | 'empty' | 'no-editor' => {
     let done = false
+    let empty = false as boolean
+    let retry = null as string | null
+    const asked = where
+    const mk = markCaret(md, opts?.marker)
+    if (mk.marked && !mk.plain.trim()) return 'empty' // 只有一个标记:没东西可插
     getInstance()?.action((ctx) => {
       const view = ctx.get(editorViewCtx)
-      const parsed = ctx.get(parserCtx)(toDisplayMarkdown(md, pageDir)) as ProseNode | undefined
-      if (!parsed?.childCount) return
+      const parse = (text: string): ProseNode | undefined => ctx.get(parserCtx)(toDisplayMarkdown(text, pageDir)) as ProseNode | undefined
+      let marked = mk.marked
+      let parsed = parse(mk.md)
+      // 占位字没落进正文文字(进了链接地址之类),或它改了结构(顶在行首把 `# 标题` 挤成段落 —— 与去掉标记的原文序列化对不上)
+      // → 落不了光标:改用去掉标记的原文,光标照旧落在插入内容末尾。
+      if (marked) {
+        const plain = parse(mk.plain)
+        let same = false
+        try {
+          same = !!parsed && !!plain && caretMarkUsable(parsed) && sameShape(serializeUnified(ctx, withoutCaretMark(parsed)), serializeUnified(ctx, plain))
+        } catch { /* 序列化不了 = 判不了,按不一样处理 */ }
+        if (!same) {
+          parsed = plain
+          marked = false
+        }
+      }
+      if (!parsed?.childCount) {
+        empty = true
+        return
+      }
       const content = parsed.content
       const quiet = !!opts?.quiet
+      const own = (tr: Transaction): Transaction => (opts?.ownStep ? closeHistory(tr) : tr)
+      /** 派发前收尾(cursorMarker):删占位字、光标落那里。落不了 → 整笔不派发,改插去掉标记的原文(占位字绝不写盘)。 */
+      const settle = (tr: Transaction): boolean => {
+        if (!marked || landOnCaretMark(tr)) return true
+        retry = mk.plain
+        return false
+      }
+      if (where === 'caret') {
+        const inl = quiet ? null : inlineAtCaret(view.state, content)
+        if (inl) {
+          if (!settle(inl.tr)) return
+          view.dispatch(own(inl.tr).scrollIntoView())
+          view.focus()
+          done = true
+          return
+        }
+        where = 'cursor' // 不是单个段落 / 光标处放不下:同 'cursor'
+      }
       const anchorAt = quiet ? replyAnchorPos(view.state.doc, opts?.after) : null
       if (quiet && anchorAt == null && opts?.caretless) where = 'end'
       if (where !== 'cursor' || anchorAt != null) {
         const at = anchorAt ?? (where === 'start' ? 0 : view.state.doc.content.size)
         const tr = view.state.tr.insert(at, content)
+        if (!settle(tr)) return
         if (quiet) dispatchQuiet(view, tr, at)
-        else view.dispatch(tr)
+        else if (marked) {
+          // 插件点名了光标位:落过去并聚焦(不带标记的 start / end 照旧不动选区、不抢焦点)
+          view.dispatch(own(tr).scrollIntoView())
+          view.focus()
+        } else view.dispatch(own(tr))
         done = true
         return
       }
@@ -704,9 +761,10 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
           tr.replaceWith(from, $p.after(), content)
           unfoldCalloutsForInsert(tr, from, from + content.size)
           land(tr, from + content.size)
+          if (!settle(tr)) return
           if (quiet) dispatchQuiet(view, tr, from)
           else {
-            view.dispatch(tr.scrollIntoView())
+            view.dispatch(own(tr).scrollIntoView())
             view.focus()
           }
           done = true
@@ -720,15 +778,18 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
       unfoldCalloutsForInsert(tr, blank ? from : to, (blank ? from : to) + content.size)
       // quiet 也挪选区(不聚焦):连着插几条回答时一条接一条往下排,而不是每条都插回同一块之后、倒着排。
       land(tr, (blank ? from : to) + content.size)
+      if (!settle(tr)) return
       if (quiet) dispatchQuiet(view, tr, blank ? from : to)
       else {
-        view.dispatch(tr.scrollIntoView())
+        view.dispatch(own(tr).scrollIntoView())
         view.focus()
       }
       done = true
     })
-    return done
+    if (retry != null) return insertMdAt(retry, asked, { ...opts, marker: undefined })
+    return done ? 'ok' : empty ? 'empty' : 'no-editor'
   }
+  const insertMd = (md: string, where: 'cursor' | 'start' | 'end' = 'cursor', opts?: InsertMdOpts): boolean => insertMdAt(md, where, opts) === 'ok'
   /** quiet 插入(G3-08)的落定:独立一步撤销、不聚焦;落点藏在会话折叠里先展开,不在视野里才滚,闪一下。 */
   const dispatchQuiet = (view: EditorView, tr: Transaction, at: number): void => {
     view.dispatch(closeHistory(tr))
@@ -919,9 +980,10 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
       void (async () => {
         try {
           const st = store.getState()
+          const stay = birthNavGuard() // 出生可能先问插件、等很久:等完用户已去了别处就不跳(链接照插)
           const newPath = await st.createChildNote(path, translate('amadeus.default.note'))
           insertAsync(`[[${newPath.split('/').pop()!.replace(/\.md$/i, '')}]]`, a)
-          void st.loadPage(newPath) // 本实例随之退休,onFinalFlush 把刚插的链接一并落盘
+          if (stay()) void st.loadPage(newPath) // 本实例随之退休,onFinalFlush 把刚插的链接一并落盘
         } catch {
           dropPending(a) // 创建失败静默跳过
         }
@@ -3225,6 +3287,14 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
       // ── 插件块表面的接缝(读 fm / 插 markdown):v4 没有块模型,插件对「当前这篇」的读写走这里。 ──
       fmNow: () => foreignFmText(pipe.fm),
       insertMarkdown: (md, where) => (readingRef.current || pipe.retired || pipe.readOnly ? false : (hostApi.current?.insertMarkdown(md, where) ?? false)),
+      // 插件 insertMarkdownAt:同一道闸,但说出原因。阅读模式(含切过去的途中)与只读 / 锁定实例 = read-only,绝不往里插;
+      // 已退休 / 源码模式(编辑器不在,hostApi 为 null)= no-editor。
+      insertMarkdownAt: (md, where, marker) => {
+        if (pipe.retired || pipe.dead) return { ok: false, reason: 'no-editor' }
+        if (readingRef.current || pipe.readOnly) return { ok: false, reason: 'read-only' }
+        const r = hostApi.current?.insertMarkdownAt(md, where, marker) ?? 'no-editor'
+        return r === 'ok' ? { ok: true } : { ok: false, reason: r }
+      },
       // 助手回答插回(评审 G3-08):只读 / 锁定实例不登记(聊天那边据此判「没有可插的笔记」);源码模式下 hostApi 为 null → 不接。
       // 撤销只在「插入这一笔仍是撤销栈顶」时做:文档仍是插入后那一版,**且**统一撤销时间线(画布舞台的形状 / 连线 / Frame
       // 颜色这类只在 frontmatter 的操作也记在这里)自插入起没动过 —— 否则撤的会是别人的改动(Codex 复核 P1:插入后改了形状

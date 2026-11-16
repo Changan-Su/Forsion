@@ -739,6 +739,12 @@ async function externalEngineLoop(runId: string, ac: AbortController, run: any, 
     const bridgeTools=Array.isArray(taskPolicy.pluginToolNames)?taskPolicy.pluginToolNames:[];
     const allowedBridge=bridgeTools.length?bridgeTools:taskPolicy.pluginReadOnly?['read_file','list_dir','list_files','glob_files','search_files','view_image','calculator','get_datetime']:[];
     let agentsHome: string | undefined;
+    // 融合插件替这个引擎常驻了一个进程(DSH 工作台和对话同一个进程):普通对话改连它;插件任务照旧每轮起一个进程。
+    // 插件说现在不该用(对不上上游新版 / 没起来)→ null,这一轮照旧走底层那条路。
+    const residentLink = !storedAgentConfig?.pluginOwner && !allowedBridge.length ? await engines.resident?.(engineId, ac.signal).catch(() => null) ?? null : null;
+    let residentHandoff: { instructions: string; key: string; serverName: string } | undefined;
+    // 引擎会话此刻的模型(engines.run 的 onModel 报;交接的桥据此问「收不收图」)
+    const engineModelNow: { known: boolean; id?: string } = { known: false };
     if (allowedBridge.length) {
       const { createRunToolServer } = await import('../engines/toolServer.js');
       toolServer = await createRunToolServer({ userId, sessionId, runId, appId:deps().profile.appId, modelId,
@@ -748,6 +754,7 @@ async function externalEngineLoop(runId: string, ac: AbortController, run: any, 
       // 交接:这个 Agent 在 Tangu 上能用的工具(按它的工具设置)经桥交给引擎,人设 / 协作说明 / 记忆 / 技能写进指令目录。
       // 工作目录先挂进这一轮的上下文:项目级技能(和同 id 的项目覆盖)按它找,enterRunContext 会把它清掉。
       if (engineCwd) setRunCwd(engineCwd);
+      const { residentModelSeesImages } = await import('../engines/residentHosts.js');
       const handoff = await prepareEngineAgentHandoff({
         runId, sessionId, userId, modelId, engineId, cwd: engineCwd, input, storedAgentConfig, agent: engineAgent, signal: ac.signal,
         publish: (type, payload) => { if (!ac.signal.aborted) void publish(runId, type, payload); },
@@ -755,9 +762,13 @@ async function externalEngineLoop(runId: string, ac: AbortController, run: any, 
         displayFiles: handoffFiles,
         persistMessage: (files) => finalizeAssistantMessage(assistantId, sessionId, modelId, streamedText, '', toolServer?.calls() ?? [], toolServer?.results() ?? [], files),
         engineEnv: engines.agentsHomeEnv?.(engineId) ?? null,
+        resident: !!residentLink,
+        // 会话的模型对好之前问 = 不知道(Computer Use 不跑);onModel 记下之后问融合插件
+        seesImages: () => (engineModelNow.known ? residentModelSeesImages(engineId, engineModelNow.id, ac.signal) : Promise.resolve(undefined)),
       });
       toolServer = handoff.toolServer;
       agentsHome = handoff.agentsHome;
+      residentHandoff = handoff.bridge;
     }
     const previous = taskPolicy.externalSession;
     // 续接哪个引擎会话:插件任务用插件点名的那个(照旧);普通引擎对话用上一轮记在 run 上的指针,且对话自那以后没被改写。
@@ -774,9 +785,12 @@ async function externalEngineLoop(runId: string, ac: AbortController, run: any, 
       modelId,
       engineModelId: (typeof agentConfig.engineModelId === 'string' && agentConfig.engineModelId) || engineAgent?.def.engineModel || undefined,
       readOnly: taskPolicy.pluginReadOnly === true,
+      onModel: (id) => { engineModelNow.known = true; engineModelNow.id = id; },
       mcpServers: toolServer ? [toolServer.server] : undefined,
       // 交接:指令目录交给引擎(引擎定义里有 agentsHomeEnv 才用);桥里的调用由桥自己画卡,引擎那边同一次调用不上屏。
       agentsHome,
+      // 常驻进程:连它跑,人设 / 记忆 / 技能走桥上的说明(residentAcp.ts)
+      ...(residentLink ? { resident: { link: residentLink, handoff: residentHandoff } } : {}),
       hideToolPrefix: engineAgent && toolServer ? toolServer.toolPrefix : undefined,
       resumeSessionId: chatResume ? chain?.resumeId : (previous?.engineId === engineId && previous?.cwd === engineCwd ? previous.id : undefined),
       // 普通对话的指针连同记它的那家适配器一起交给引擎层核对(null = 老指针没记);插件任务不传。

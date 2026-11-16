@@ -11,7 +11,7 @@ import { modelPickerPresenter, pickerChanges, type ModelPickerRequest, type Mode
  */
 import React, { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { ArrowUpRight, ChevronDown, ChevronRight, Bot, Lock, Search } from 'lucide-react'
-import { nestedPanelPlacement, nestedPanelTop, UI_ZOOM_EVENT, zoomOf, useEdgeNudge, NATIVE_MENU_MAX_ITEMS, nativeSheetPresenter, runNativeSheetMenu } from '@lcl/engine'
+import { nestedPanelPlacement, nestedPanelTop, UI_ZOOM_EVENT, zoomOf, useEdgeNudge, NATIVE_MENU_MAX_ITEMS, nativeSheetPresenter, runNativeSheetMenu, useSubPanelFlow } from '@lcl/engine'
 import { useKnobFlow } from '@lcl/engine/segFlow'
 import type { NestedPanelPlacement, SheetMenu, SheetMenuItem } from '@lcl/engine'
 import { registerMessages, useI18n } from '../i18n'
@@ -21,6 +21,7 @@ import { minTierForMultiplier, upgradeTierLabel, useUpgradeTiers } from '../serv
 import { THINKING_LEVELS } from '../types'
 import { thinkingLabel } from './thinkingLabel'
 import { ComposerMenuSurface, ComposerMenuHeader, composerMenuHasFocus, useComposerLayout } from './ComposerMenuSurface'
+import type { CapsuleControl } from '@tangu/ui/views/chat2/useCapsuleDroplet'
 import type { AgentConfig, CtxInfo, DefaultModelSlot, ModelInfo, ModelsResponse } from '../types'
 
 registerMessages({
@@ -270,6 +271,8 @@ export const ModelPill: React.FC<{
   /** Composer2 传入时由三颗胶囊共用一个排他开关；harness / 独立用法仍可不受控。 */
   open?: boolean
   onOpenChange?: (open: boolean) => void
+  /** Chat Box 底排的水滴开合(views/chat2/useCapsuleDroplet):胶囊撑宽 / 倒放 / 再点同一颗。不传 = 开着就撑宽、关就直接收。 */
+  capsule?: CapsuleControl
   disabled?: boolean
   modelId?: string
   groups: ModelPillGroup[]
@@ -310,7 +313,7 @@ export const ModelPill: React.FC<{
    *  `onUnavailable`,并照旧走模型选择器。不传 = 模型选择器(插件的输入框等)。 */
   hub?: { title: string; back: string; extra: () => SheetMenuItem[]; onUnavailable?: () => void }
 }> = ({
-  className, scopeKey, onSelectionChange, menuPortal = false, open: controlledOpen, onOpenChange,
+  className, scopeKey, onSelectionChange, menuPortal = false, open: controlledOpen, onOpenChange, capsule,
   disabled, modelId, groups, onSelect, thinkingLevel, onThinkingChange, allowUltra = false, ultra, running = false, supportedThinking, effectiveThinking,
   fast, fastTier, ultrafastTier, onFastChange, modelsResponse, defaultModelIds, onDefaultModelChange, onContextWindowChange, emptyLabel, footnote, title, icon, hub,
 }) => {
@@ -323,6 +326,12 @@ export const ModelPill: React.FC<{
     if (!next && menuRef.current?.contains(document.activeElement)) wrapRef.current?.querySelector('button')?.focus({ preventScroll: true })
     if (controlledOpen === undefined) setInternalOpen(next)
     onOpenChange?.(next)
+  }
+  /** 点空白 / Esc / 标题栏 × / 再点胶囊:有水滴开合就倒放,否则直接收。 */
+  const dismissPill = (): void => {
+    if (!capsule) { setPillOpen(false); return }
+    if (menuRef.current?.contains(document.activeElement)) wrapRef.current?.querySelector('button')?.focus({ preventScroll: true })
+    capsule.dismiss()
   }
   const [advanced, setAdvanced] = useState(false)
   const [pane, setPane] = useState<Pane | null>(null)
@@ -340,6 +349,7 @@ export const ModelPill: React.FC<{
   }, [pane])
   const nativeCall = useRef<AbortController | null>(null)
   const [nativeOpen, setNativeOpen] = useState(false)
+  const expanded = open && !nativeOpen && (capsule ? capsule.expanded : true)
   const catalogKey = groups.flatMap(g => g.options.map(m => m.id)).join('\n')
   useEffect(() => () => { nativeCall.current?.abort(); nativeCall.current = null }, [])
   useLayoutEffect(() => {
@@ -356,13 +366,13 @@ export const ModelPill: React.FC<{
     if (!open) { cancelHover(); setPane(null); setAdvanced(false); setQuery(''); return }
     // data-keep-menus:从本菜单弹出的确认框(开 Ultra)—— 点它、在它里面按 Esc 都不算离开菜单
     const keep = (t: EventTarget | null): boolean => !!(t as HTMLElement | null)?.closest?.('[data-keep-menus]')
-    const onDown = (e: MouseEvent) => { if (!keep(e.target) && !wrapRef.current?.contains(e.target as Node) && !menuRef.current?.contains(e.target as Node)) setPillOpen(false) }
+    const onDown = (e: MouseEvent) => { if (!keep(e.target) && !wrapRef.current?.contains(e.target as Node) && !menuRef.current?.contains(e.target as Node)) dismissPill() }
     // 确认框开着时 Esc 只关确认框(焦点被 Tab 到背景也一样),不连带关菜单
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape' || document.querySelector('[data-keep-menus]')) return
       if (compact && !composerMenuHasFocus(menuRef.current, wrapRef.current)) return
       if (compact && pane) { e.preventDefault(); e.stopImmediatePropagation(); backToMain() }
-      else setPillOpen(false)
+      else dismissPill()
     }
     document.addEventListener('mousedown', onDown)
     document.addEventListener('keydown', onKey, true)
@@ -408,6 +418,9 @@ export const ModelPill: React.FC<{
       ro.disconnect()
     }
   }, [pane, compact])
+  // 子面板从那一行渗出来(Chat Box 水滴开合时;放在定位之后,拿到改过的左右 / 高度)
+  useSubPanelFlow(!!capsule && expanded && !compact, pane, `${placement}:${Math.round(subTop)}`,
+    () => menuRef.current?.querySelector<HTMLElement>(`[data-pane-trigger="${pane}"]`) ?? null, subRef, menuRef)
 
   const all = groups.flatMap((g) => g.options)
   const hasModels = all.length > 0
@@ -653,7 +666,7 @@ export const ModelPill: React.FC<{
       hub.onUnavailable?.()
     }
     const present = modelPickerPresenter()
-    if (!present || open) { setPillOpen(!open); return }
+    if (!present || open) { if (capsule) capsule.toggle(); else setPillOpen(!open); return }
     const fields = pickerFields()
     const request: ModelPickerRequest = { title: t('input.selectModel'), fields, footnote,
       labels: { done: t('pill.nativeDone'), search: t('pill.nativeSearch'), empty: t('pill.noModels'), back: t('pill.nativeBack'), advanced: t('pill.rowAdvanced') },
@@ -683,14 +696,14 @@ export const ModelPill: React.FC<{
   }
 
   return (
-    <span ref={wrapRef} className={`model-pill-wrap${open && !nativeOpen ? ' is-open' : ''}${className ? ` ${className}` : ''}`} data-compact={compact || undefined} data-cmenu>
+    <span ref={wrapRef} className={`model-pill-wrap${expanded ? ' is-open' : ''}${open && !nativeOpen && capsule ? ' t2c-capsule-held' : ''}${className ? ` ${className}` : ''}`} data-compact={compact || undefined} data-cmenu>
       <button type="button"
-        className={`composer-chip model-pill-btn${open && !nativeOpen ? ' is-open' : ''}${effortCls}${modelPickerPresenter() ? ' model-pill-btn--native' : ''}`}
+        className={`composer-chip model-pill-btn${expanded ? ' is-open' : ''}${capsule?.retracting ? ' is-retracting' : ''}${effortCls}${modelPickerPresenter() ? ' model-pill-btn--native' : ''}`}
         title={`${title || t('input.modelChipTitle')}: ${label}${effort}${currentLocked ? ` · ${lockedNote(current)}` : ''}`}
         aria-label={`${label}${effort}${currentLocked ? ` · ${lockedNote(current)}` : ''}`}
         data-tier-locked={currentLocked || undefined}
         disabled={disabled}
-        aria-expanded={open}
+        aria-expanded={expanded}
         onClick={() => { void openPicker() }}
       >
         {isUltra && <span ref={streaksRef} className="pill-ultra-streaks" aria-hidden="true">{[0, 1, 2, 3].map((i) => <i key={i} />)}</span>}
@@ -708,12 +721,12 @@ export const ModelPill: React.FC<{
       {open && !nativeOpen && (
         <ComposerMenuSurface
           portal={menuPortal || compact} compact={compact}
-          className={`composer-menu composer-menu--model${compact && pane ? ' has-inline-pane' : ''}`}
+          className={`composer-menu composer-menu--model${compact && pane ? ' has-inline-pane' : ''}${capsule ? ' t2c-pour' : ''}`}
           anchorRef={wrapRef}
-          innerRef={(el) => { menuRef.current = el; menuFix.ref.current = el }}
+          innerRef={(el) => { menuRef.current = el; menuFix.ref.current = el; if (capsule) capsule.panelRef.current = el }}
           style={menuFix.style}
         >
-          {compact && <ComposerMenuHeader title={pane === 'model' ? t('pill.rowModel') : pane === 'context' ? t('pill.rowContext') : slot ? slotRows.find(row => row.slot === slot)!.label : t('pill.compactTitle')} onBack={pane ? backToMain : undefined} onClose={() => setPillOpen(false)} />}
+          {compact && <ComposerMenuHeader title={pane === 'model' ? t('pill.rowModel') : pane === 'context' ? t('pill.rowContext') : slot ? slotRows.find(row => row.slot === slot)!.label : t('pill.compactTitle')} onBack={pane ? backToMain : undefined} onClose={dismissPill} />}
           <div className="cm-main" hidden={compact && !!pane}>
           {onThinkingChange && (
             <>
@@ -876,7 +889,7 @@ export const ModelPill: React.FC<{
           {pane && (pane !== 'context' || ctx) && (
             <div
               ref={(el) => { subRef.current = el; subFix.ref.current = el }}
-              className={`cm-sub ${compact ? 'cm-sub--inline' : placement}`}
+              className={`cm-sub ${compact ? 'cm-sub--inline' : placement}${capsule && !compact ? ' t2c-pour' : ''}`}
               data-pane={pane}
               style={{ ...subFix.style, '--cm-sub-top': `${subTop}px` } as React.CSSProperties}
             >

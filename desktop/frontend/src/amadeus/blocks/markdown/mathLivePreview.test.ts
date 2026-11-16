@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { describe, it, expect } from 'vitest'
-import { maskNonMath, mdMathSpans, scanMath, unescapeMathSource } from './mathLivePreview'
+import { formulaAtSelection, maskNonMath, mdMathSpans, scanMath, unescapeMathSource } from './mathLivePreview'
+import { TextSelection } from '@milkdown/kit/prose/state'
 import { bootEditor, roundTrip } from './parseFidelity.testkit'
 import { normalizeFragmentMd } from './MarkdownBlock'
 
@@ -592,6 +593,31 @@ describe('块公式复制键', () => {
       const btns = [...block.querySelectorAll(':scope > .amx-src-btn')]
       expect(btns.length).toBe(1)
       expect(btns[0].classList.contains('amx-src-btn--solo')).toBe(true)
+    } finally { await b.destroy() }
+  })
+})
+
+// 格式浮条 / 预览共用的「选区在不在公式里」:光标按源码范围(含开头的 `$`),非空选区要落在两头的 `$` 之间。
+describe('formulaAtSelection', () => {
+  it('caret and selections inside the body hit the formula; whole-formula and crossing selections do not', async () => {
+    const b = await bootEditor('Lead $x + \\beta$ and $y$\n\n$$ t(\\{n_{j}\\}) $$\n\n```tex\n$\\alpha$\n```\n')
+    try {
+      const v = b.view
+      const at = (from: number, to = from) => {
+        v.dispatch(v.state.tr.setSelection(TextSelection.create(v.state.doc, from, to)))
+        return formulaAtSelection(v.state)
+      }
+      // `Lead $x + \beta$`: `$` at 6, body 7..16, closing `$` ends at 17
+      expect(at(9)).toMatchObject({ from: 6, to: 17, latex: 'x + \\beta', display: false })
+      expect(at(7, 16)?.latex).toBe('x + \\beta')
+      expect(at(6, 17)).toBeNull() // the whole formula, `$` included
+      expect(at(3, 9)).toBeNull() // half in the text
+      const start = v.state.doc.child(0).nodeSize + 1
+      const size = v.state.doc.child(1).content.size
+      expect(at(start + 3, start + size - 3)).toMatchObject({ display: true })
+      expect(at(start + 1, start + size)).toBeNull() // starts on the opening `$$`
+      const code = v.state.doc.child(0).nodeSize + v.state.doc.child(1).nodeSize + 1
+      expect(at(code + 2, code + 4)).toBeNull()
     } finally { await b.destroy() }
   })
 })

@@ -2,7 +2,7 @@
 // 走「磁盘 md → 解析 → PM 文档 → 序列化 → normalizeSerializedMd」这条与落盘同源的链。
 // 为什么不测纯函数:D-06 / R-01 / D-12 的病灶都在 preset 的 remark 链里(插件顺序、schema 的 parse/serialize 两侧),
 // 纸面看不见;装配顺序抄生产,顺序一错这里就会红。
-import { Editor, defaultValueCtx, editorViewCtx, parserCtx, rootCtx, serializerCtx } from '@milkdown/kit/core'
+import { Editor, defaultValueCtx, editorViewCtx, parserCtx, remarkCtx, rootCtx, serializerCtx } from '@milkdown/kit/core'
 import type { MilkdownPlugin } from '@milkdown/kit/ctx'
 import type { Node as PMNode } from '@milkdown/kit/prose/model'
 import type { EditorView } from '@milkdown/kit/prose/view'
@@ -26,6 +26,8 @@ export interface Booted {
   parse(md: string): PMNode
   /** 宿主 serializerCtx 的**原始**输出(不经 normalizeSerializedMd):切块 / 剪贴板那条路径自己再规范化。 */
   serialize(node: PMNode): string
+  /** 编辑器那套 remark(解析 + 读侧 transformer),给对拍测试拿 mdast。 */
+  remark(): { parse(md: string): unknown; runSync(tree: unknown, file?: string): unknown }
   destroy(): Promise<void>
 }
 
@@ -72,6 +74,7 @@ export async function bootEditor(initial: string, opts: { v3?: boolean; extra?: 
     saved: () => ed.action((ctx) => serializeUnified(ctx, ctx.get(editorViewCtx).state.doc)),
     parse: (md) => ed.action((ctx) => ctx.get(parserCtx)(md)) as PMNode,
     serialize: (node) => ed.action((ctx) => ctx.get(serializerCtx)(node)),
+    remark: () => ed.action((ctx) => ctx.get(remarkCtx)) as unknown as ReturnType<Booted['remark']>,
     destroy: async () => { await ed.destroy(); for (const t of timers) realClearTimeout(t as number); root.remove() },
   }
 }

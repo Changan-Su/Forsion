@@ -3,18 +3,33 @@ import { describe, expect, it } from 'vitest'
 import { TextSelection } from '@milkdown/kit/prose/state'
 import { mathSourceHighlights } from './mathSourceHighlight'
 import { bootEditor } from './parseFidelity.testkit'
-import { mathLivePreviewPlugin } from './mathLivePreview'
+import { markCaret, mathLivePreviewPlugin } from './mathLivePreview'
 import { editorFocusKey, editorFocusPlugin } from './editorFocus'
 
-const tokens = (source: string) => mathSourceHighlights(source).map((r) => [
-  source.slice(r.from, r.to), r.className.includes('command') ? 'command' : 'delimiter',
-])
+const KINDS = ['dollar', 'command', 'script', 'letter', 'number', 'bracket'] as const
+const kindOf = (className: string) => KINDS.find((k) => className.split(' ').includes(`math-source-${k}`)) ?? '?'
+const tokens = (source: string) => mathSourceHighlights(source).map((r) => [source.slice(r.from, r.to), kindOf(r.className)])
 
 describe('lightweight math source tokens', () => {
-  it('colors commands and syntax while leaving variables, numbers and operators unchanged', () => {
+  it('splits dollars, commands, scripts, letters, numbers and brackets; operators and spaces stay plain', () => {
     expect(tokens('$U = N \\sum_{i} P_i + 2^n$')).toEqual([
-      ['$', 'delimiter'], ['\\sum', 'command'], ['_{', 'delimiter'], ['}', 'delimiter'],
-      ['_', 'delimiter'], ['^', 'delimiter'], ['$', 'delimiter'],
+      ['$', 'dollar'], ['U', 'letter'], ['N', 'letter'], ['\\sum', 'command'], ['_', 'script'], ['{', 'bracket'],
+      ['i', 'letter'], ['}', 'bracket'], ['P', 'letter'], ['_', 'script'], ['i', 'letter'], ['2', 'number'],
+      ['^', 'script'], ['n', 'letter'], ['$', 'dollar'],
+    ])
+  })
+
+  it("matches the user's formula token by token", () => {
+    expect(tokens('$$ t(\\{n_{j}\\})$$')).toEqual([
+      ['$$', 'dollar'], ['t', 'letter'], ['(', 'bracket'], ['\\{', 'command'], ['n', 'letter'], ['_', 'script'],
+      ['{', 'bracket'], ['j', 'letter'], ['}', 'bracket'], ['\\}', 'command'], [')', 'bracket'], ['$$', 'dollar'],
+    ])
+  })
+
+  it('groups decimals, alignment marks and bracket runs the way the source reads', () => {
+    expect(tokens('$$x^{2} & 3.14 + .5 )[$$')).toEqual([
+      ['$$', 'dollar'], ['x', 'letter'], ['^', 'script'], ['{', 'bracket'], ['2', 'number'], ['}', 'bracket'],
+      ['&', 'script'], ['3.14', 'number'], ['.5', 'number'], [')[', 'bracket'], ['$$', 'dollar'],
     ])
   })
 
@@ -25,20 +40,22 @@ describe('lightweight math source tokens', () => {
     expect(command.from).toBe(19 + source.indexOf('\\Psi'))
     expect(source.slice(command.from - 19, command.to - 19)).toBe('\\Psi')
     expect(tokens(source).filter(([, kind]) => kind === 'command').map(([text]) => text)).toEqual(['\\Psi', '\\\\', '\\frac'])
+    // Non-ASCII letters keep the document color.
+    expect(tokens(source).some(([text]) => text.includes('𝛹'))).toBe(false)
   })
 
-  it('keeps escaped brackets together and does not reinterpret escaped control symbols', () => {
+  it('keeps escaped symbols together as commands and does not reinterpret them', () => {
     expect(tokens('$\\{x\\} + \\_ + \\% + (y)$')).toEqual([
-      ['$', 'delimiter'], ['\\{', 'delimiter'], ['\\}', 'delimiter'], ['\\_', 'command'],
-      ['\\%', 'command'], ['(', 'delimiter'], [')$', 'delimiter'],
+      ['$', 'dollar'], ['\\{', 'command'], ['x', 'letter'], ['\\}', 'command'], ['\\_', 'command'],
+      ['\\%', 'command'], ['(', 'bracket'], ['y', 'letter'], [')', 'bracket'], ['$', 'dollar'],
     ])
   })
 
-  it('does not color command-like text inside a TeX comment', () => {
+  it('does not color anything inside a TeX comment', () => {
     expect(tokens('$$x % \\alpha {ignored}\n\\beta$$')).toEqual([
-      ['$$', 'delimiter'], ['\\beta', 'command'], ['$$', 'delimiter'],
+      ['$$', 'dollar'], ['x', 'letter'], ['\\beta', 'command'], ['$$', 'dollar'],
     ])
-    expect(tokens('$x % \\alpha {ignored}$')).toEqual([['$', 'delimiter'], ['$', 'delimiter']])
+    expect(tokens('$x % \\alpha {ignored}$')).toEqual([['$', 'dollar'], ['x', 'letter'], ['$', 'dollar']])
   })
 
   it('removes syntax color only over selected characters, without moving offsets', () => {
@@ -52,8 +69,13 @@ describe('lightweight math source tokens', () => {
   it('tolerates invalid commands and unmatched brackets without changing the source', () => {
     const source = '$\\doesnotexist{x$'
     expect(tokens(source)).toEqual([
-      ['$', 'delimiter'], ['\\doesnotexist', 'command'], ['{', 'delimiter'], ['$', 'delimiter'],
+      ['$', 'dollar'], ['\\doesnotexist', 'command'], ['{', 'bracket'], ['x', 'letter'], ['$', 'dollar'],
     ])
+  })
+
+  it('keeps the older umbrella class on punctuation tokens only', () => {
+    const umbrella = mathSourceHighlights('$a_{1}\\b$').filter((r) => r.className.split(' ').includes('math-source-delimiter'))
+    expect(umbrella.map((r) => '$a_{1}\\b$'.slice(r.from, r.to))).toEqual(['$', '_', '{', '}', '$'])
   })
 })
 
@@ -94,6 +116,25 @@ describe('math source decorations in the editor', () => {
     } finally { await b.destroy() }
   })
 
+  it('wraps the whole active source, dollars and spaces included, in one hook class that survives a selection', async () => {
+    const b = await bootEditor('Lead $x + \\beta$ and $y$\n\n$$ t(\\{n_{j}\\}) $$\n', { extra: extra() })
+    try {
+      const v = b.view, before = b.md()
+      const hooked = () => [...v.dom.querySelectorAll('.math-source')].map((n) => n.textContent).join('')
+      expect(hooked()).toBe('')
+      v.dispatch(v.state.tr.setSelection(TextSelection.create(v.state.doc, 9)).setMeta(editorFocusKey, true))
+      expect(hooked()).toBe('$x + \\beta$')
+      expect([...v.dom.querySelectorAll('.math-source-token')].every((n) => n.classList.contains('math-source'))).toBe(true)
+      expect(v.dom.querySelector('.math-preview .math-source, .math-rendered .math-source')).toBeNull()
+      const second = v.state.doc.child(1)
+      const start = v.state.doc.child(0).nodeSize + 1
+      v.dispatch(v.state.tr.setSelection(TextSelection.create(v.state.doc, start + 3, start + second.content.size - 3)))
+      expect(hooked()).toBe('$$ t(\\{n_{j}\\}) $$')
+      expect(v.dom.querySelectorAll('.math-source-letter')).toHaveLength(0)
+      expect(b.md()).toBe(before)
+    } finally { await b.destroy() }
+  })
+
   it.each(['`$\\alpha$`\n', '```tex\n$\\alpha$\n```\n'])('does not highlight code content: %s', async (source) => {
     const b = await bootEditor(source, { extra: extra() })
     try {
@@ -102,5 +143,23 @@ describe('math source decorations in the editor', () => {
       expect(v.dom.querySelectorAll('.math-source-token')).toHaveLength(0)
       expect(b.md()).toBe(before)
     } finally { await b.destroy() }
+  })
+})
+
+describe('caret mark in the inline preview', () => {
+  const M = '{\\blacktriangleright}'
+  it('marks the caret position inside the formula body', () => {
+    expect(markCaret('x^2 + \\sqrt{y}', 12)).toBe(`x^2 + \\sqrt{${M}y}`)
+    expect(markCaret('ab', 0)).toBe(`${M}ab`)
+    expect(markCaret('ab', 9)).toBe(`ab${M}`)
+  })
+  it('moves the mark before a command the caret is on, without splitting it', () => {
+    expect(markCaret('a\\frac{1}{2}', 4)).toBe(`a${M}\\frac{1}{2}`) // \fr|ac
+    expect(markCaret('a\\sqrt{y}', 6)).toBe(`a${M}\\sqrt{y}`) // \sqrt|
+    expect(markCaret('a\\{x', 3)).toBe(`a${M}\\{x`) // \{|
+    expect(markCaret('a\\', 2)).toBe(`a${M}\\`) // \|
+  })
+  it('does not treat letters after a \\\\ line break as a command', () => {
+    expect(markCaret('a\\\\bc', 4)).toBe(`a\\\\b${M}c`)
   })
 })

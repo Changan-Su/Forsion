@@ -160,14 +160,17 @@ function upright(src: Uint8Array, w: number, h: number, o: number): { data: Uint
   return { data: dst, width: W, height: H };
 }
 
-/** 缩不了 / 不值得缩 → null(调用方原样用原图)。同一份输入恒出同一份字节(前缀缓存靠它)。 */
-export function fitImageForModel(buf: Buffer): FittedImage | null {
+/**
+ * 缩不了 / 不值得缩 → null(调用方原样用原图)。同一份输入恒出同一份字节(前缀缓存靠它)。
+ * keepSize:不缩尺寸、只把 PNG 重编码成 JPEG(像素坐标照旧对得上,给按截图像素下指令的工具用)。
+ */
+export function fitImageForModel(buf: Buffer, opts: { keepSize?: boolean } = {}): FittedImage | null {
   if (buf.length <= KEEP_BYTES) return null;
   const head = readHeader(buf);
   if (!head) return null;
   const { width: w, height: h } = head;
   if (!(w > 0 && h > 0) || w * h > MAX_DECODE_PIXELS) return null;
-  const scale = Math.min(1, MAX_EDGE / Math.max(w, h), Math.sqrt(MAX_PIXELS / (w * h)));
+  const scale = opts.keepSize ? 1 : Math.min(1, MAX_EDGE / Math.max(w, h), Math.sqrt(MAX_PIXELS / (w * h)));
   if (scale === 1 && head.kind === 'jpeg') return null;
   try {
     let px: Uint8Array;

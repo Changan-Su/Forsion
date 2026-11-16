@@ -40,7 +40,8 @@ export interface LocalWebSearchConfig {
 
 export type LastTest = { ok: boolean; latencyMs: number; resultCount?: number; error?: string; at: number };
 
-export type SearchHit = { title: string; url?: string; snippet?: string };
+/** date:服务给了发布日期才带(只进结构化来源,formatHits 不印它,给模型的文字不变)。 */
+export type SearchHit = { title: string; url?: string; snippet?: string; date?: string };
 export type SearchOk = { provider: string; text: string; results: SearchHit[] };
 
 const SEARCH_TIMEOUT_MS = 8_000;
@@ -124,7 +125,7 @@ async function searchBocha(query: string, maxResults: number, apiKey: string): P
   if (!r.ok) throw new Error(`Bocha HTTP ${r.status} — ${(await r.text().catch(() => '')).slice(0, 200)}`);
   const j: any = await r.json();
   const results: SearchHit[] = (j?.data?.webPages?.value || []).slice(0, maxResults).map((p: any) => ({
-    title: p.name || p.title || '', url: p.url, snippet: p.summary || p.snippet,
+    title: p.name || p.title || '', url: p.url, snippet: p.summary || p.snippet, date: p.datePublished || undefined,
   }));
   return { provider: 'bocha', text: formatHits('Bocha', results), results };
 }
@@ -139,7 +140,7 @@ async function searchTavily(query: string, maxResults: number, apiKey: string): 
   if (!r.ok) throw new Error(`Tavily HTTP ${r.status} — ${(await r.text().catch(() => '')).slice(0, 200)}`);
   const j: any = await r.json();
   const results: SearchHit[] = (j?.results || []).slice(0, maxResults).map((p: any) => ({
-    title: p.title, url: p.url, snippet: p.content,
+    title: p.title, url: p.url, snippet: p.content, date: p.published_date || undefined,
   }));
   const parts: string[] = [];
   if (typeof j?.answer === 'string' && j.answer.trim()) parts.push(`Answer: ${j.answer}`);
@@ -158,7 +159,7 @@ async function searchZhipu(query: string, maxResults: number, apiKey: string, en
   const j: any = await r.json();
   const items = j?.search_result || j?.data?.search_result || [];
   const results: SearchHit[] = items.slice(0, maxResults).map((p: any) => ({
-    title: p.title, url: p.link || p.url, snippet: p.content || p.snippet,
+    title: p.title, url: p.link || p.url, snippet: p.content || p.snippet, date: p.publish_date || undefined,
   }));
   return { provider: 'zhipu', text: formatHits('Zhipu', results), results };
 }

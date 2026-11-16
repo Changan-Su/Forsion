@@ -23,7 +23,7 @@ import { computeSideWidth, computeBottomHeight, computeTransientSideWidth } from
 import { shouldRecordSideWidth } from './sideCapture'
 import { locOf, type DropTarget } from './dropModel'
 import { isLastPinned, isPinned, missingPinned, type PanelRef, type PinnedViews } from './pinnedViews'
-import { arrangeRight, planRight, rightGroupFor, RULE_PARAM, RULE_TAG, type RightRef } from './rightRules'
+import { arrangeRight, baseKeyOf, planRight, rightExtrasFrom, rightGroupFor, RULE_PARAM, RULE_TAG, type RightRef } from './rightRules'
 import { IS_MAIN_WINDOW, IS_MINI_PANEL, IS_VIEW_WINDOW, WINDOW_SPACE_ID } from './uiMode'
 import { mainOpensBeside, noteBesideTarget } from './openBeside'
 import { useNav } from './navStore'
@@ -528,7 +528,7 @@ function rightGroupNow(api: DockviewApi, defaults: readonly Stashed[]): ReturnTy
   // 主视图还是占位(它的插件没就位 / 已关掉):不对账。按缺省组对的话,会把它带 __by:'rule' 的伴随视图当成
   // 「不属于本组」关掉、随即存盘 —— 参数一丢,插件回来也复原不了(Codex 3a 评审)。注册上来后下一次 refreshTabs 再对。
   if (type && !getView(type)) return null
-  return rightGroupFor(type, type ? getView(type)?.rightCompanions : undefined, defaults, usableRight)
+  return rightGroupFor(type, type ? getView(type)?.rightCompanions : undefined, defaults, usableRight, rightExtrasFrom(type ? getView(type)?.rightExtras : undefined, main?.params))
 }
 /** refreshTabs 里发现组变了:推一拍再对账 —— 它本身就在开 / 关 / 激活的半路上,当场再开关面板会重入。 */
 function queueRightRules(): void {
@@ -663,6 +663,7 @@ function envelope(api: DockviewApi, state: Pick<WorkspaceState, 'leftVisible' | 
  *  settleUntil = 重置自身的布局沉降窗口(这段里的回调只刷新 metrics 基线,不判作废),dismiss = 收回那条「撤销」提示。 */
 let layoutUndo: {
   env: LayoutEnvelopeV4; api: DockviewApi; profile: string | null; owner: typeof restoredOwner; stashActive: WorkspaceState['stashActive']
+  sideWidths: WorkspaceState['sideWidths']
   shape: string; metrics: LayoutMetrics; settleUntil: number; dismiss?: () => void
 } | null = null
 /** 重置后多久内的布局回调算「重置自己在沉降」(默认布局建完后 Dockview 异步派发的那批 + 双 raf 钉侧栏宽)。 */
@@ -984,7 +985,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     const defaults = get().sidebarDefaults.right
     const g = rightGroupNow(api, defaults)
     if (!g || g.key === rightKey) return
-    const changed = rightKey !== null
+    // 只有基本组变了才算换组(新组第一项顶到前台);只是补项变了(换到 / 换走跑在引擎上的对话)只开 / 关那一项,前台不动
+    const changed = rightKey !== null && baseKeyOf(rightKey) !== g.base
     rightKey = g.key
     const pinned = get().pinned.right ?? []
     // 单例开在了别的区(用户把侧栏对话拖进主区):不在右栏再开一份。非单例(工作区:左栏会话、右栏文件)两边各一份是常态,不算。
@@ -1348,7 +1350,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     // 只有用户亲手重置才拍;拍不下来就不给撤销,重置照做。自动重置同时作废旧快照。
     let snap: Omit<NonNullable<typeof layoutUndo>, 'shape' | 'metrics' | 'settleUntil' | 'dismiss'> | null = null
     if (opts?.undoable) {
-      try { snap = { env: envelope(api, get()), api, profile: get().sideProfileKey, owner: restoredOwner, stashActive: { ...get().stashActive } } } catch { snap = null }
+      try { snap = { env: envelope(api, get()), api, profile: get().sideProfileKey, owner: restoredOwner, stashActive: { ...get().stashActive }, sideWidths: { ...get().sideWidths } } } catch { snap = null }
     }
     dropLayoutUndo() // 旧快照(连同它的提示)先作废:自动重置不给撤销,手动重置换一份新的
     // 用户亲手「恢复默认布局」:这个 Space 浮着的卡也是布局的一部分,一起收(快照里记着,撤销会开回来)。自动重置不碰卡
@@ -1356,6 +1358,13 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     dismissExtensions()
     try { api.clear() } catch { /* ignore */ }
     clearLayout()
+    // A person's explicit reset includes the remembered sidebar widths / bottom height.
+    // Automatic rebuilds preserve preferences; clearing before the builder also covers setSideProfile reloads.
+    if (opts?.undoable) {
+      const profile = get().sideProfileKey
+      if (profile) { try { localStorage.removeItem(`lcl.sideWidth2.${profile}`) } catch { /* private mode */ } }
+      set({ sideWidths: { left: null, right: null, bottom: null } })
+    }
     if (floatOwner) { try { floatPersistence()?.clear(floatOwner) } catch (e) { console.error('[lcl] clear floats failed', e) } }
     restoredOwner = undefined // 默认布局是按当前画像的 Space 建的,不再是启动时还原出来的那份
     useNav.getState().reset() // 布局重建,旧 leaf id 全失效
@@ -1390,12 +1399,21 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     // 快照只对拍它的那份 api、那个 Space 有效:切过 Space 再点通知里的「撤销」= 静默作废,不把别的 Space 的布局灌进来。
     // 重置后布局结构 / 分屏尺寸已被用户改过(布局回调还没来得及作废它时)同样作废;只拖侧栏宽不算(Codex 第三轮 H1-3)。
     if (!u || !api || u.profile !== get().sideProfileKey || !undoStillMatches(u, api)) return false
+    const currentWidths = get().sideWidths
+    set({ sideWidths: { ...u.sideWidths } }) // Restore targets before applyLayout asks the coordinator to size the groups.
     const ok = get().applyLayout(u.env)
     if (ok) {
+      if (u.profile) {
+        try {
+          const { left, right, bottom } = u.sideWidths
+          if (left == null && right == null && bottom == null) localStorage.removeItem(`lcl.sideWidth2.${u.profile}`)
+          else localStorage.setItem(`lcl.sideWidth2.${u.profile}`, JSON.stringify({ left, right, bottomH: bottom }))
+        } catch { /* private mode */ }
+      }
       restoredOwner = u.owner // 撤回来的是重置前那份:归属也回到拍快照那一刻的(画像没变过,上面刚核过)
       set({ stashActive: u.stashActive }) // 信封不带它:不还原的话,展开收起的侧栏会落到第一个视图而不是原来选中的那个
       scheduleWorkspaceSave()
-    }
+    } else set({ sideWidths: currentWidths })
     return ok
   },
 

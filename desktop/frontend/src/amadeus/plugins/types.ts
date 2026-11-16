@@ -68,6 +68,21 @@ export interface CommandContribution {
   run(args?: Record<string, unknown>): void | Promise<void>
   keywords?: string
   /**
+   * Default key binding (2026-11-16+; older hosts ignore it). Modifiers and one key joined with `+`, where `Mod` is
+   * ⌘ on macOS and Ctrl elsewhere — e.g. `'Mod+Shift+Y'`, `'Mod+Alt+K'`, `'Mod+Shift+ArrowUp'`. It must include `Mod`
+   * (a bare or Alt-only key would fire while the user types). With `Shift`, use a letter, `[`, `]` or a named key
+   * (ArrowUp, F5, Enter …): Shift + digit / punctuation produces another character and never matches; `Space` is not
+   * supported. Anything else is ignored with a console warning. Many keys are already taken (Settings → Shortcuts
+   * lists them), so expect a common choice to stay inactive.
+   *
+   * It is only a suggestion. A binding the user sets for this command always wins. The default takes effect only
+   * while nothing else uses the key — a built-in command, a system or note-editor shortcut, the user's binding for
+   * any other command, or another plugin's default for the same key (then neither plugin gets it). A conflicting
+   * default stays inactive: Settings → Shortcuts lists the command as unbound with a note naming the conflict, and
+   * the default switches on by itself once the key is free. The user can always bind a key there manually.
+   */
+  hotkey?: string
+  /**
    * Toggle state, for on/off commands only. When declared, a copy of this command pinned to the
    * Ribbon command zone renders as a toggle (`aria-pressed` + highlighted while on). Evaluated at
    * render time — keep it cheap and side-effect free; the Ribbon re-reads it after a click and on
@@ -127,7 +142,8 @@ export interface ThemeContribution {
 /**
  * ⚠️ 库依赖契约(2026-09-02 立规,起因:服务器总览误依赖笔记库,用户实报「太奇怪了」):
  * 下面**凡走库内路径**的方法都要求一个**已打开**的笔记库 —— `readFile / writeFile / watchFile /
- * openFile / loadPage / createPage / listPages / listFiles / searchVault / reveal / trash / workFolder(的落点)`。
+ * openFile / loadPage / createPage / listPages / listFiles / searchVault / reveal / trash / createFolder / stat / renamePath /
+ * movePath / workFolder(的落点)`。
  * 没有活动库时:写类方法 reject、只读查询给空数组、`vaultRoot()` 给 null(**用它探测**)。
  * 而且库是**惰性恢复**的:用户这一程没进过 Amadeus 之前 `vaultRoot()` 就是 null,哪怕他有库。插件视图挂载时宿主会
  * 唤醒它(2026-10-02 起),但恢复是异步的:视图刚挂上那一下仍可能是 null,读库前先等 `vaultRoot()` 有值。
@@ -331,6 +347,40 @@ export interface PluginAppApi extends BlockSurfaceApi {
    *  只在有回收站的宿主上存在(本机桌面)。web / 移动端 / 旧宿主**方法整个不存在**:`ctx.app.trash` 没有就别画
    *  删除按钮 —— 没有回收站的端删除不可恢复,宿主不替插件做这件事。 */
   trash?(path: string): Promise<void>
+  /** Create a folder (2026-11-16+): vault-relative, nested segments are created as needed; a folder that already exists
+   *  resolves. Rejects with no vault open ('No vault is open'), a path escaping the vault (`..`, a drive letter), a
+   *  segment starting with `.` or with surrounding spaces, or a file in the way. Paths take `/` (leading/trailing
+   *  slashes are dropped). Folders you create here count as yours for `renamePath` / `movePath` this session, except
+   *  your work folder and its parent folders (those are never recorded). Older hosts lack it: `ctx.app.createFolder?.(…)`, and fall back to `writeFile` (which creates parent folders). */
+  createFolder?(path: string): Promise<void>
+  /** Kind, size and times of a vault path (2026-11-16+). `mtime` = last modified, `ctime` = created (null when the file
+   *  system doesn't record it), both ms since epoch; `size` is bytes (0 for folders). `''` = the vault root.
+   *  Missing path or no vault open → null (same shape as `readFile`); a path escaping the vault and real IO errors reject.
+   *  Desktop and mobile only: web hosts list files without times, so the method is absent there. Older hosts lack it:
+   *  `ctx.app.stat?.(…)`. */
+  stat?(path: string): Promise<{ kind: 'file' | 'folder'; size: number; mtime: number; ctime: number | null } | null>
+  /** Rename a note, `.db`, folder or plugin file type in place (2026-11-16+), the same way the file tree does it: links to
+   *  it across the vault are rewritten and editors that have it open follow. `newName` is the new name without a folder;
+   *  a missing `.md` / `.db` / compound suffix (`.canvas.md`, `.excalidraw.md`) is added back, and the file kind can't
+   *  change. Resolves with the new vault-relative path (unchanged name → the same path).
+   *  ⚠️ Boundary: paths inside your `workFolder()` and paths your plugin created this session (`writeFile` / `writeBytes`
+   *  to a path that didn't exist, `createFolder`) are renamed directly — a created folder, or a created note with
+   *  subnotes, only while every file inside is also yours. Anything else asks the user first (one dialog at a time,
+   *  Cancel focused); Cancel rejects with `Error('user_declined')`. Call it from a user action, not in a loop over the vault.
+   *  A note's subnote folder (`*.fd`) moves with its note and can't be renamed on its own; a folder can't be renamed to `*.fd`.
+   *  Rejects: no vault open, missing path, target exists, invalid name (slashes, leading `.`, surrounding spaces),
+   *  file kinds the tree can't rename (images, PDFs, …), a folder that contains `.db` files, plugin disabled. If the
+   *  file was moved but the host couldn't finish updating (links, `.fd` subnotes), it rejects with a message naming
+   *  the new path. Calls are queued host-wide, one at a time. Older hosts lack it: `ctx.app.renamePath?.(…)`. */
+  renamePath?(path: string, newName: string): Promise<string>
+  /** Move a file or folder into another existing folder (2026-11-16+; `''` = vault root), the same way dragging it in the
+   *  file tree does: links to moved notes are rewritten, a note's `.fd` subnotes move with it, open editors follow.
+   *  Resolves with the new vault-relative path. Same boundary and rejections as `renamePath` (the dialog names the
+   *  destination); also rejects a missing destination folder, a folder into itself or into a `*.fd` subnote folder
+   *  (a note may move into one: it becomes a subnote), a `*.fd` folder on its own, and `.db` files, folders that contain
+   *  them or notes whose subnotes do (relation columns in other tables would lose them). Relative Markdown links to a moved attachment are not rewritten (wikilinks resolve
+   *  by name and keep working), as in the tree. Older hosts lack it: `ctx.app.movePath?.(…)`. */
+  movePath?(path: string, destFolder: string): Promise<string>
   /** 当前库的**绝对路径**(没打开库时 null)。用途:把路径交给 Agent 的 host 模式工具(view_image /
    *  run_bash)—— 它们跑在真实文件系统上,只有 vault 相对路径喂不进去。读的是渲染进程已有的
    *  pageStore 状态,**不会重开库、无副作用**。
@@ -585,6 +635,16 @@ export interface MountBlockOptions {
   onInsertAfter?(blockId: string, content: string): void
 }
 
+/** Result of `insertMarkdownAt` (2026-11-16+). A refusal says why, so a plugin can tell the user something useful:
+ *  - `'stale-token'` — the token is not the current note's (the user switched notes), or your plugin was disabled / reloaded.
+ *  - `'no-note'` — no note is open.
+ *  - `'empty'` — the markdown parses to nothing.
+ *  - `'read-only'` — the note is open but cannot be edited: reading mode, or a locked / read-only view. Nothing is inserted.
+ *  - `'no-editor'` — the note has no live editor that can take it right now: still loading, source mode, or just closed. */
+export type PluginInsertResult =
+  | { ok: true }
+  | { ok: false; reason: 'stale-token' | 'no-note' | 'empty' | 'read-only' | 'no-editor' }
+
 /** The block surface: real Amadeus blocks, rendered by the host into DOM the plugin owns.
  *  Exists so an external plugin can build a "nodes are real blocks" UI (the mindmap) without the host
  *  having to ship it — built-in and external plugins get the same capabilities, the only difference
@@ -611,6 +671,21 @@ export interface BlockSurfaceApi {
    *  Returns false when refused (stale token / no note / nothing to insert / no live editor).
    *  Older hosts lack it: `ctx.app.insertMarkdown?.(…)`. */
   insertMarkdown(token: string, md: string, where?: 'cursor' | 'start' | 'end'): boolean
+  /** `insertMarkdown` with two more abilities and a reason when it refuses (2026-11-16+). Same parse and same single
+   *  transaction; the old method keeps its boolean result and behaviour.
+   *  `opts.where`: `'cursor'` (default), `'start'` and `'end'` mean exactly what they mean for `insertMarkdown`. New
+   *  `'caret'`: when the markdown is a single paragraph, its inline content goes in AT the caret, inside the current line,
+   *  replacing a non-empty selection like typing would (`Hello {{name}}` → `Hello Ada`). Anything else (several
+   *  paragraphs, a heading, a list), or a caret where that content can't go (a selected card, bold text into a code
+   *  block), behaves exactly like `'cursor'`.
+   *  `opts.cursorMarker`: a string you put in `md` where the caret should land (Templater's `tp.file.cursor()`). The host
+   *  removes it and puts the caret there, focusing the note — the insert is one undo step and the marker is never saved.
+   *  Later copies of the same marker are removed too. Any text works, markdown syntax included. If `md` doesn't contain it,
+   *  or it ends up somewhere the caret can't go (inside a link address), it is removed and the caret lands as without it.
+   *  ⚠️ v3 notes (`model === 'blocks'`) have no caret: `'caret'` and `'cursor'` degrade to `'end'` (logged), and
+   *  `cursorMarker` is only removed.
+   *  Older hosts lack it: `ctx.app.insertMarkdownAt?.(…)`, else fall back to `insertMarkdown`. */
+  insertMarkdownAt?(token: string, md: string, opts?: { where?: 'caret' | 'cursor' | 'start' | 'end'; cursorMarker?: string }): PluginInsertResult
   /** v3 only — refused (and logged) on a v4 note. */
   deleteBlock(token: string, id: string): Promise<void>
   /** v3 only — refused (and logged) on a v4 note. */
@@ -738,8 +813,12 @@ export interface PluginViewContext {
   /** Immediate snapshot, then geometry/visibility/phase changes. Unsubscribe on cleanup. */
   onLayout?(listener: (layout: Readonly<PluginViewLayout>) => void): () => void
   /** Mount location. Mini/Floating receive no extendView/full workspace chrome. Feature-detect on older hosts.
-   *  A view that `ctx.workspace.open` floats inside the window (2.13.8+) reports 'mini' for the Mini look and 'floating' otherwise. */
-  surface?: 'main' | 'mini' | 'floating'
+   *  A view that `ctx.workspace.open` floats inside the window (2.13.8+) reports 'mini' for the Mini look and 'floating' otherwise.
+   *  'pip' (2026-11-13+): the host's small always-on-top picture-in-picture window (desktop only). Only the host opens
+   *  it, only on an explicit user action, and only for views it knows (today: the Computer Use live view); draw a
+   *  compact card there (no workspace chrome, no extendView, no showInMainPanel; `close?.()` closes the window).
+   *  Older hosts never report it, and a plugin must not assume the value set is closed: treat unknown values like 'floating'. */
+  surface?: 'main' | 'mini' | 'floating' | 'pip'
   /** Current entity/filter params, live for this mount. Keep entity keys identical in mini/main views. */
   getParams?(): Readonly<Record<string, unknown>>
   /** Merge entity/filter changes into this leaf; also updates the host's main-panel target. */
@@ -1140,6 +1219,56 @@ export interface FileCreatorContribution {
   run(parentFolder: string): void | Promise<void>
 }
 
+/** Which host template flow is running (TemplateProcessorContribution.process, 2026-11-16+).
+ *  - `'insert'`: the user picked a template in the host template picker; it goes in at the cursor of `targetPath`.
+ *  - `'daily'`: today's daily note was just created and gets the daily-note template.
+ *  - `'new-note'`: reserved for a "new note from template" flow; this host does not emit it yet. */
+export type TemplateFlowKind = 'insert' | 'daily' | 'new-note'
+
+/** Hook into the host's own templates (ctx.registerTemplateProcessor, 2026-11-16+) instead of shipping a second
+ *  template picker. Older hosts lack it: `ctx.registerTemplateProcessor?.(…)`. */
+export interface TemplateProcessorContribution {
+  /** Unique within the plugin. Registering the same id again replaces the earlier processor. */
+  id: string
+  /** Shown to the user, e.g. "Templater". */
+  name: string | (() => string)
+  /** Extra vault-relative template folders listed in the host template picker, next to `templates/`.
+   *  Duplicates are merged; absolute paths and paths that leave the vault (`..`) are ignored. Asked each time the
+   *  picker opens; a call that throws or takes longer than 2 seconds adds nothing. */
+  folders?(): string[] | Promise<string[]>
+  /** Runs before the host's own `{{date}}` / `{{time}}` / `{{title}}` substitution, on the template file's raw text
+   *  (frontmatter included). Processors run in registration order, each getting the previous one's output. Return the
+   *  processed text, or null to leave it unchanged. May prompt the user (no time limit). Throwing aborts that insert
+   *  with a host toast naming the plugin; nothing is written. If your plugin is disabled or reloaded while this is
+   *  pending, the host stops waiting and treats it as unchanged. If the library, pane or note changed meanwhile, nothing
+   *  is inserted. */
+  process(source: string, info: { templatePath: string; targetPath: string; kind: TemplateFlowKind }): string | null | Promise<string | null>
+}
+
+/** Fill a brand-new empty note before it is written (ctx.registerNoteBirth, 2026-11-16+). Older hosts lack it:
+ *  `ctx.registerNoteBirth?.(…)`; there, fall back to `ctx.app.onVaultEvent` + `writeFile` and expect the open editor
+ *  not to see your write (its next save keeps the user's text and moves yours into a conflict copy). */
+export interface NoteBirthContribution {
+  /** Unique within the plugin. Registering the same id again replaces the earlier provider. */
+  id: string
+  /** Asked before the host writes a new empty note created by the user: "New note" (sidebar, command, ⌘N, new-tab
+   *  page), "New note" in a folder, a child note, creating a note from the quick switcher, confirming an unresolved
+   *  [[link]], and today's daily note when no daily-note template is set. `ctx.app.createPage()` is the same "New note"
+   *  command, so it is asked too (including your own provider). Not asked for files plugins write themselves
+   *  (`writeFile`, `writeBytes`, file creators), rows added to a notes database, or files arriving via sync.
+   *  Return the note's initial Markdown, or null to pass. Providers are asked one at a time in registration order;
+   *  the first non-null answer is written as the note's content in the same write that creates it, so the editor
+   *  opens on it. May prompt the user: after a moment the host shows "<plugin> is preparing this note…" with
+   *  Cancel. Cancel, or no answer within 10 minutes, creates the note empty as before; a provider that throws is
+   *  skipped (with a toast naming the plugin). Switching library while waiting stops the ask and the note is not
+   *  created (with a toast). `signal` aborts once the host stops waiting for you (Cancel, time-out, library switch, your
+   *  plugin disabled, or the note was created): close your prompt then; a late answer is ignored. The note itself is
+   *  never lost or blocked. While one ask is pending, another new note (including one your `initial` creates) is born
+   *  empty. If the person moved to another pane or note while waiting, the note is created but not opened (for "New
+   *  note" a notice offers Open; a child note's link is still inserted). */
+  initial(info: { path: string; folder: string; signal?: AbortSignal }): string | null | Promise<string | null>
+}
+
 /** An inline renderer for a `![[target]]` transclusion whose target this plugin recognises (typically its
  *  own file type). Consulted before the built-in file-card fallback, so `![[x.mindmap.md]]` renders as a
  *  live preview instead of a generic "open file" card. */
@@ -1206,6 +1335,55 @@ export interface ToolResultRendererContribution {
   /** Render into the host element (themed, no frame of its own needed); return a cleanup. Called again on every move
    *  (the old mount is cleaned up first) — restore view state from `call.state`. */
   mount(el: HTMLElement, call: ToolResultCall): (() => void) | void
+}
+
+/** One call handed to ToolLabelContribution.describe (2026-11-13+). */
+export interface ToolLabelCall {
+  /** The engine tool name. */
+  tool: string
+  /** Parsed JSON arguments (the raw string when they are not valid JSON). */
+  args: unknown
+  /** The tool result text, when there is one. */
+  result?: string
+  /** `running` while the call runs, `done` once it finished, `error` when it failed or was cut off. */
+  phase: 'running' | 'done' | 'error'
+  /** The interface language right now. The host calls `describe` again when it changes. */
+  locale: 'zh' | 'en'
+  /** Earlier calls of **your own** tools in the same reply, oldest first, at most the 40 closest ones. Use them to
+   *  recover names that only an earlier result carried (an app name, a control name). */
+  earlier: ReadonlyArray<{ tool: string; args: unknown; result?: string }>
+}
+
+/** What a ToolLabelContribution returns for one call. */
+export interface ToolLabel {
+  /** The whole line, as a sentence in `call.locale` (for example "Clicking “Send” in Chatter"). The host shows it as is:
+   *  no plugin name in front, no argument text after it. Keep it short; the host cuts it at 200 characters. */
+  text: string
+  /** `appBundleId`: show that app's icon in front of the line where the host can resolve it (desktop on macOS);
+   *  elsewhere, and while it loads, the usual tool icon shows. */
+  icon?: { appBundleId?: string }
+}
+
+/** Plain-language lines for your engine half's tools in the chat's process rows (ctx.registerToolLabel, 2026-11-13+).
+ *  Claiming works like ToolResultRendererContribution: only tools your bundle's engine plugins registered are handed to
+ *  you, and nothing is claimed until the host has the engine's tool list. While a call runs, the folded process row
+ *  rolls through each step's `running` sentence; once everything finished the folded row keeps the host's summary and
+ *  the expanded list shows each call's `done` (or `error`) sentence. The host works a line out when it first needs
+ *  it and again after a reload of the history or a language switch, and keeps the answer in between: `describe` is
+ *  called again only when the call itself, its phase, the locale or the earlier calls change. Treat it as a pure
+ *  function of `call` — synchronous, cheap, no side effects. If a line also depends on something outside `call`
+ *  (a table you fill in later, say), provide `revision`.
+ *  Throwing, or returning nothing / an empty `text`, keeps the host's generic line for that call. Contributions are
+ *  removed when your plugin is disabled or reloaded. Older hosts do not have it: call `ctx.registerToolLabel?.(…)`. */
+export interface ToolLabelContribution {
+  /** One engine tool name, or several, exactly as your engine half registered them. */
+  tool: string | string[]
+  describe(call: ToolLabelCall): ToolLabel | null | undefined | void
+  /** Optional. Return a number or string that changes whenever something `describe` reads **outside** `call` changes
+   *  (for example a table of app icons you learn later). The host compares it each time it draws a line and calls
+   *  `describe` again when it differs; lines already on screen pick the change up on their next render. Keep it
+   *  trivial (read a counter). Throwing, or returning anything else, counts as "no revision". */
+  revision?(): number | string
 }
 
 /** A user-tunable setting a plugin declares. The host renders the form on the plugin's detail
@@ -1565,6 +1743,67 @@ export interface PluginAccountStatus {
   workspaceId?: string
 }
 
+/** Error codes `ctx.net.request` rejects with (on `err.code`). */
+export type PluginNetErrorCode =
+  /** The URL's host is not covered by the manifest `network` list (also: the plugin declares none). */
+  | 'net_domain_not_declared'
+  /** The host is an IP address, or resolves (at connect time, every redirect hop included) to a loopback,
+   *  private, link-local, CGNAT, multicast or reserved address. */
+  | 'net_blocked_address'
+  /** The whole request — every redirect hop and the response body — took longer than `timeoutMs`. */
+  | 'net_timeout'
+  /** The response body (after decompression) or the request body is larger than 10 MB. */
+  | 'net_too_large'
+  /** Not an absolute `https:` URL on the default port, or it carries user:password@. */
+  | 'net_bad_url'
+  /** Bad `init`: unsupported method, a body on GET/HEAD, a header the host sets itself (Host, Content-Length,
+   *  Connection, Transfer-Encoding, Proxy-*, Sec-* …), or a malformed header. */
+  | 'net_bad_request'
+  /** Anything else: DNS failure, TLS error, connection reset, more than 5 redirects. `err.message` says which. */
+  | 'net_failed'
+
+/** What `ctx.net.request` resolves with — any HTTP status, including 4xx / 5xx (only transport problems reject). */
+export interface PluginNetResponse {
+  status: number
+  /** Lower-case header names; repeated headers joined with ', '. */
+  headers: Record<string, string>
+  /** The body, already decompressed. */
+  bytes: Uint8Array
+  /** The final URL after redirects. */
+  url: string
+  /** `bytes` decoded as UTF-8. */
+  text(): string
+  /** `text()` parsed as JSON; throws on invalid JSON. */
+  json<T = unknown>(): T
+}
+
+/**
+ * Network requests made by the host on the plugin's behalf (2026-11-16+, desktop only; absent on web and mobile,
+ * and older hosts lack it — check `if (ctx.net)`). Use it for third-party APIs that send no CORS headers, where a
+ * plain `fetch` from plugin code fails.
+ *
+ * Only hosts listed in the manifest's `network` array are reachable, and the user sees that list on the plugin's
+ * page ("Accesses: …"). Entries are host names only — `"api.example.com"` exactly, or `"*.example.com"` for any
+ * subdomain at any depth (not `example.com` itself; list both if you need both). No scheme, port or path.
+ *
+ * The rules, enforced by the host for every redirect hop: `https:` on the default port only; IP-address hosts and
+ * names that resolve to local/private addresses are refused; at most 5 redirects, each re-checked against your list
+ * (Authorization and Cookie are dropped when a redirect changes host); no app cookies, proxy credentials or client
+ * certificates are ever attached — send your own `Authorization` header if the API needs one; response body ≤ 10 MB;
+ * `timeoutMs` defaults to 30 000 and is capped at 60 000. Failures reject with an `Error` whose `code` is a
+ * {@link PluginNetErrorCode}. Requests still in flight when the plugin is disabled reject.
+ */
+export interface PluginNetApi {
+  request(url: string, init?: {
+    /** GET (default), HEAD, POST, PUT, PATCH, DELETE or OPTIONS. */
+    method?: string
+    headers?: Record<string, string>
+    /** A string is sent as UTF-8 (Content-Type defaults to text/plain). Not allowed on GET / HEAD. */
+    body?: string | Uint8Array
+    timeoutMs?: number
+  }): Promise<PluginNetResponse>
+}
+
 /** Host-owned account; credentials never form part of this plugin API. */
 export interface PluginAccount {
   status(): Promise<PluginAccountStatus>
@@ -1733,6 +1972,63 @@ export type PluginToolbarControl = {
 }
 export interface PluginControlHandle { update(patch: Partial<Omit<PluginToolbarControl, 'type'>>): void; dispose(): void }
 
+/** One row your plugin adds to the Harness card (`ctx.registerEngineHarness`, 2026-11-15+). Give `text`, or `select`;
+ *  `actions` are small buttons after the text. Texts take PluginText. */
+export interface PluginHarnessRow {
+  /** Stable within your plugin (the host keys and tests by it). */
+  id: string
+  label: PluginText
+  text?: PluginText
+  /** `danger` = red text (the runtime no longer matches your plugin, a check failed). */
+  tone?: 'neutral' | 'ok' | 'danger'
+  select?: { value: string; options: Array<{ value: string; label: PluginText }>; disabled?: boolean; onChange(value: string): void }
+  /** A muted line under the row. */
+  hint?: PluginText
+  /** Up to three. `primary` = the filled button (one per row at most). */
+  actions?: Array<{ id: string; label: PluginText; run(): void; primary?: boolean; disabled?: boolean }>
+}
+/** An item in the right-click menu of a conversation that runs on your engine. */
+export interface PluginEngineSessionAction {
+  id: string
+  label: PluginText
+  icon?: PluginIconName | (string & {})
+  run(target: { sessionId: string; agentSlug?: string }): void
+}
+/** `ctx.registerEngineHarness` (2026-11-15+, desktop). */
+export interface PluginEngineHarness {
+  /** The engine id as the engine list names it (`'dsh'`). */
+  engineId: string
+  /** Rows under "Runs on" on the Harness card of an agent that runs on this engine. Called when the card draws and
+   *  after `refresh()`; up to 8 rows, 5 s at most. */
+  rows?(target: { agentSlug: string }): PluginHarnessRow[] | Promise<PluginHarnessRow[]>
+  /** Items in the right-click menu of conversations that run on this engine (up to 4). */
+  sessionActions?: PluginEngineSessionAction[]
+  /** 2026-11-16+: the id of a view your plugin registers (`ctx.registerView`). While the conversation in front runs on
+   *  this engine, the host adds this view to the right sidebar after its own pages (Details, Files, Outline); it does not
+   *  take the front tab, and it closes when the user moves to a conversation that runs elsewhere. Your view follows the
+   *  active conversation itself (`ctx.tangu.subscribeAgentStatus`), so a main tab pinned to another conversation does not
+   *  get it. Desktop only; older hosts ignore it. */
+  railView?: string
+}
+
+/** `ctx.ui.mountWebSurface` (2026-11-15+). */
+export interface PluginWebSurfaceOptions {
+  /** http(s) on 127.0.0.1, localhost or [::1] — the page of a service your plugin runs on this computer. */
+  url: string
+  /** Names the storage partition inside your plugin's own space (the host prefixes your plugin id). Optional. */
+  partition?: string
+  /** The page failed to load (the service stopped, its port changed). Not called when you navigate away mid-load. */
+  onLoadFail?(info: { url: string; code: number; description: string }): void
+}
+export interface PluginWebSurfaceHandle {
+  /** Load another loopback http(s) address in the same surface. Throws for any other address.
+   *  A bare `#fragment` only changes the fragment of the page's current address (same page, no reload). */
+  navigate(url: string): void
+  reload(): void
+  focus(): void
+  dispose(): void
+}
+
 /** A button on `ctx.ui.mountWebCard`. */
 export interface PluginWebCardAction {
   label: PluginText
@@ -1826,12 +2122,21 @@ export interface PluginContext {
    * The latest active registration wins; disable removes it. Schema/serializer updates are not supported. */
   registerNoteRenderer?(def: import('./noteRenderers').NoteRendererContribution): { dispose(): void }
   account?: PluginAccount
+  /** Host-made HTTPS requests to the domains in manifest `network` (2026-11-16+, desktop only; see {@link PluginNetApi}).
+   *  Absent on web, mobile and older hosts. */
+  net?: PluginNetApi
   app: PluginAppApi
   registerSlashItem(item: SlashContribution): void
   /** Add an action to the selection bar's "⋯" menu (see SelectionActionContribution). The result goes
    *  through the host's preview + confirm, never straight into the note. Revoked on disable / reload. */
   registerSelectionAction(action: SelectionActionContribution): void
-  registerCommand(command: CommandContribution): void
+  /** Add a command to the command palette and Settings → Shortcuts (and, with `invoke`, the agent's catalog).
+   *  Returns a disposer that removes exactly this registration (2026-11-16+). Registering the same `id` again from
+   *  the same plugin replaces the earlier entry in place — one row, updated title / run / hotkey — so a plugin can
+   *  add and remove commands at runtime (one per enabled template, say) without being reloaded. All of them still
+   *  go away when the plugin is disabled. Older hosts return `undefined` and append a duplicate on re-registration:
+   *  call the result as `off?.()` and register each id once there. */
+  registerCommand(command: CommandContribution): () => void
   registerTheme(theme: ThemeContribution): void
   /** Adds an image-only preset to Appearance settings; never changes the user's selection. */
   registerAppearance?(preset: import('../../../../shared/startupAppearance').AppearancePreset): () => void
@@ -1861,8 +2166,20 @@ export interface PluginContext {
   /** Contribute a native result card for one of your engine half's tools (2026-10-19+). Absent on older hosts: call as
    *  `ctx.registerToolResultRenderer?.(…)`. See ToolResultRendererContribution. */
   registerToolResultRenderer?(def: ToolResultRendererContribution): void
+  /** Describe your engine half's tool calls in plain language in the chat's process rows (2026-11-13+). Absent on older
+   *  hosts: call as `ctx.registerToolLabel?.(…)`. See ToolLabelContribution. */
+  registerToolLabel?(def: ToolLabelContribution): void
   /** Contribute a "新建 …" entry into the file tree's right-click menu (root + folder). See FileCreatorContribution. */
   registerFileCreator(def: FileCreatorContribution): void
+  /** Hook into the host's template flows (2026-11-16+): run `process` on a template before the host's own variable
+   *  substitution (template picker insert, daily note), and list extra template folders in the host picker. Returns a
+   *  disposer; the host also removes it on disable / reload. Older hosts lack it: `ctx.registerTemplateProcessor?.(…)`.
+   *  See TemplateProcessorContribution. */
+  registerTemplateProcessor?(def: TemplateProcessorContribution): () => void
+  /** Give a brand-new empty note its initial content before the host writes it (2026-11-16+), e.g. folder templates.
+   *  Returns a disposer; the host also removes it on disable / reload. Older hosts lack it: `ctx.registerNoteBirth?.(…)`.
+   *  See NoteBirthContribution. */
+  registerNoteBirth?(def: NoteBirthContribution): () => void
   /** Open (or focus) one of this plugin's own registered views. Defaults to the main area;
    *  pass { location: 'left' | 'right' } to dock it into a sidebar (2026-08-25+, older hosts
    *  ignore the option and open in main), or 'bottom' for the native bottom panel (2026-10-02+).
@@ -1921,8 +2238,14 @@ export interface PluginContext {
    *  always call as `ctx.notify?.(…)`. For persistent state prefer registerStatusItem.
    *  `action` (2026-10-17+): one button on the card, e.g. Undo after a delete — the card then stays about 8 seconds;
    *  `run` is not called once the plugin is disabled. `key` (2026-10-17+): a later card with the same key replaces the
-   *  earlier one instead of stacking (keys are per plugin). Older hosts ignore both: keep the action reachable elsewhere. */
-  notify?(message: string, opts?: { level?: 'info' | 'success' | 'warning' | 'error'; title?: string; sticky?: boolean; action?: { label: string; run(): void }; key?: string }): void
+   *  earlier one instead of stacking (keys are per plugin). Older hosts ignore both: keep the action reachable elsewhere.
+   *  On a phone (narrow window) the card is a one-line banner under the status bar, one at a time, for 5 seconds; a later
+   *  card with the same key swaps the words and button in place without restarting that time, and after a card from your
+   *  plugin leaves, new ones are held back for a while (30 s, 2 min if the person swiped it away) — the call still succeeds.
+   *  `undo: true` (2026-11-15+): this card is the way back from something the person just did (Undo after a delete): it
+   *  stays 8 seconds on a phone and is never held back. `urgent: true` (2026-11-15+): someone (a person or an agent) is
+   *  stopped and waiting for the person; never held back on a phone, but not sticky either. Older hosts ignore both. */
+  notify?(message: string, opts?: { level?: 'info' | 'success' | 'warning' | 'error'; title?: string; sticky?: boolean; action?: { label: string; run(): void }; key?: string; undo?: boolean; urgent?: boolean }): void
   /** The host UI's current language (2026-08-14+). Plugins ship bilingual strings and pick with this.
    *  Optional in the type only because API v1 hosts predate it — every current host injects it, so
    *  always call as `ctx.getLocale?.() ?? 'zh'` (Chinese is the canonical fallback). */
@@ -1951,6 +2274,11 @@ export interface PluginContext {
   /** 就绪检查(2026-09-21+),对应 manifest `onboarding.requires` 的 `{ kind: 'check', id }`。见 ReadinessContribution。
    *  旧宿主没有:`ctx.registerReadiness?.(…)`。 */
   registerReadiness?(def: ReadinessContribution): void
+  /** Rows on the Harness card and items in the conversation menu for agents that run on an external engine
+   *  (2026-11-15+, desktop; the DSH fusion plugin uses it). Forsion itself draws only "Runs on"; the rest belongs to the
+   *  plugin that runs that engine and goes away when it is disabled. Call `refresh()` when your rows change.
+   *  Feature-detect: `ctx.registerEngineHarness?.(…)`. */
+  registerEngineHarness?(def: PluginEngineHarness): { refresh(): void; dispose(): void }
   /** 往笔记编辑器里注 ProseMirror 插件(2026-08-15+)。片段展开、按键拦截、行内装饰这类
    *  「必须住在编辑器里」的能力靠它 —— v3 块编辑器与 v4 统一编辑器共用同一个编辑器工厂,注一次两端到位。
    *
@@ -2115,6 +2443,14 @@ export interface PluginContext {
      *  buttons — the card the host itself draws for HTML files and running dev servers in chat, so a page you draw
      *  reads as the same family. Use it inside a tool result card, a view or a list. Feature-detect on older hosts. */
     mountWebCard?(el: HTMLElement, card: PluginWebCard): { update(patch: Partial<PluginWebCard>): void; dispose(): void }
+    /** The web page of a service your plugin runs on this computer, filling `el` (2026-11-15+; desktop only, `undefined`
+     *  on web and mobile). It is a top-level page in a guest Forsion owns rather than an iframe, so the service's own
+     *  cookies work (SameSite=Strict too). `url` must be http(s) on 127.0.0.1, localhost or [::1]. Cookies and storage
+     *  live in a partition of your plugin's own, never the built-in browser's. The page moves only within its own
+     *  origin; other links open the way chat links do. It gets no Forsion API and no microphone, camera, location or
+     *  notifications — only clipboard writes. Keyboard focus inside it stays with the page (as in the built-in browser).
+     *  The host removes it on disable / reload. */
+    mountWebSurface?(el: HTMLElement, opts: PluginWebSurfaceOptions): PluginWebSurfaceHandle
     /** Your view's head row (2026-10-26+): the same 32px row `setViewModes` draws, without needing view modes — a title
      *  at the left and your buttons at the right (`handle.actions`). Works together with `setViewModes`: the switch comes
      *  first, then the title, then the buttons of both. `el` = the element `mount()` received. Calling it again on the
@@ -2302,12 +2638,30 @@ export interface PluginContext {
      *  sessionId 省略 = 主区活动会话;null = 新对话草稿(恒 idle)。拉取式;要口型包络就按帧拉 textChars。
      *  2026-09-20 起还带 `agentSlug` / `agentName`(这会话归哪个 Agent;外部引擎会话没有)。
      *  2026-10-04 起会话在语音通话时带 `speechLevel`(模型出声的真实电平):有它就按它做口型,别用 textChars。
-     *  旧宿主没有 → `ctx.tangu?.agentStatus?.()`,缺席按 idle 处理。 */
-    agentStatus?(sessionId?: string | null): import('./tanguSeam').TanguAgentStatus
+     *  旧宿主没有 → `ctx.tangu?.agentStatus?.()`,缺席按 idle 处理。
+     *
+     *  Since 2026-11-13 the argument may also be `{ sessionId?, runId? }`. With a `runId` key the host
+     *  reports the session that is **currently running that run**; when no session is running it, the result
+     *  is idle with `runId: null` (the host never falls back to the active session). Older hosts only accept
+     *  a string / null, so feature-detect before relying on the object form. */
+    agentStatus?(sessionId?: import('./tanguSeam').TanguSessionTarget): import('./tanguSeam').TanguAgentStatus
     /** 变更过滤订阅:只在 phase / tool / toolStage / waitingFor / sessionId / agentSlug 变了时回调
      *  (每个 token 不回调,改 Agent 展示名也不回调),done/error 余韵到期时再回调一次(回 idle)。
-     *  返回退订;禁用/重载时宿主统一收掉。 */
-    subscribeAgentStatus?(cb: (s: import('./tanguSeam').TanguAgentStatus) => void, sessionId?: string | null): () => void
+     *  返回退订;禁用/重载时宿主统一收掉。
+     *
+     *  Since 2026-11-13 the session argument accepts `{ sessionId?, runId? }` like `agentStatus`. With a
+     *  `runId`, the subscription follows whichever session runs it and fires once more (idle, `runId: null`)
+     *  when that run ends. */
+    subscribeAgentStatus?(cb: (s: import('./tanguSeam').TanguAgentStatus) => void, sessionId?: import('./tanguSeam').TanguSessionTarget): () => void
+    /** Stop a running agent run (2026-11-13+). Same path as the stop button in the chat input.
+     *  - string / `null` / omitted: a session id, same meaning as `agentStatus(sessionId?)` (omitted = the
+     *    active session in the main area).
+     *  - `{ runId }`: stop the session that is **currently running that run id**. If none is, nothing is
+     *    stopped and the promise resolves to `false`; another session is never stopped instead.
+     *  Resolves `true` only when a running run was actually asked to stop and the engine confirmed it.
+     *  Older hosts and profiles without chat do not have it: call `ctx.tangu?.stop?.({ runId })` and hide
+     *  your stop button when it is missing. */
+    stop?(target?: import('./tanguSeam').TanguSessionTarget): Promise<boolean>
     /** 用指定 Agent 开一个**可见的**新对话(2026-09-19+):离开主页 Space → 新对话 → 选 Agent → 预填或送出。
      *  - `send:true` **只对本插件捆绑包真正播种出来的 Agent 生效**(`agents/<slug>/` 且引擎播种时写下了本插件的
      *    `.bundle-origin` 来源标记;同名 slug 早已存在 = 不是你播的,一样降级);别家 Agent 一律降级为预填,
@@ -2612,8 +2966,8 @@ export interface PluginContext {
       removeFolder(id: string): void
     }
   }
-  /** 必应每日壁纸(2026-10-18+):最近 8 张,`{ id, url, thumbnailUrl, title?, copyright?, startDate? }`。宿主代拉(桌面经主进程,
-   *  插件直连必应会被 CSP 拦)。拿不到 → reject;插件停用后给空数组。 */
+  /** 必应每日壁纸(2026-10-18+):最近 8 张,`{ id, url, thumbnailUrl, title?, copyright?, startDate? }`。宿主代拉(桌面经主进程;
+   *  必应接口不回 CORS 头,插件直接 fetch 会被 CORS 拦,不是 CSP)。拿不到 → reject;插件停用后给空数组。 */
   wallpaper?: {
     bing(locale?: 'zh' | 'en'): Promise<PluginBingWallpaper[]>
   }
@@ -2885,6 +3239,8 @@ export interface AmadeusPlugin {
   entitlement?: string
   /** 声明要用的宿主敏感能力(manifest `capabilities`,主进程已按白名单过滤)。没声明的能力宿主不注入。 */
   capabilities?: import('@amadeus-shared/ipc').PluginCapability[]
+  /** ctx.net 能访问的主机名模式(manifest `network`,2026-11-16+):只给详情页 / 商店展示;主进程每次请求都从磁盘重读。 */
+  network?: string[]
   /** README.md content for the detail page (external plugins only). */
   readme?: string
   /** CHANGELOG.md content — rendered as the "更新日志" section on the detail page (external plugins only). */

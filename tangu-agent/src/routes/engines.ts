@@ -7,6 +7,7 @@ import { Router } from 'express';
 import { authMiddleware } from '../core/http.js';
 import { deps } from '../seams/runtime.js';
 import { listEngineAssets, importEngineSkill, importEngineMcp } from '../engines/assets.js';
+import { holdEngineConversation } from '../engines/residentHold.js';
 
 const router = Router();
 
@@ -55,6 +56,18 @@ router.post('/agent/engines/:id/import', authMiddleware, (req, res) => {
         : { ok: false, error: 'bad kind' };
   if (!r.ok) return res.status(400).json({ detail: r.error || 'import failed' });
   res.json({ ok: true });
+});
+
+// 工作台(融合插件)要打开 Forsion 的某场对话之前,先让常驻进程把那场引擎会话接上:网页界面自己点开一场没人开着的会话
+// 会一直占着它,Forsion 之后就接不上(实测,residentAcp.hold)。body { sessionId }(Forsion 的会话 id)。
+// → { engineSessionId, state: 'open' | 'resumed' };这场对话还没在这个引擎上跑过 → 404;常驻进程没在跑 → 409。只给本机。
+router.post('/agent/engines/:id/hold', authMiddleware, async (req: any, res) => {
+  if (req.headers['x-forsion-remote']) return res.status(403).json({ detail: 'Local only' });
+  const sessionId = typeof req.body?.sessionId === 'string' ? req.body.sessionId : '';
+  if (!sessionId) return res.status(400).json({ detail: 'sessionId required' });
+  const r = await holdEngineConversation(req.params.id, sessionId, req.user.userId);
+  if (r.ok) return res.json({ engineSessionId: r.engineSessionId, state: r.state });
+  res.status(r.status).json({ detail: r.detail, ...(r.code ? { code: r.code } : {}) });
 });
 
 export default router;
