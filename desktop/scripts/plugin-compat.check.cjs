@@ -19,7 +19,8 @@ const ts = require('typescript')
 const TYPES = 'desktop/frontend/src/amadeus/plugins/types.ts'
 const ROOT = path.resolve(__dirname, '../..')
 
-/** Member paths of `interface PluginContext`, following inline type literals and same-file interfaces (depth 4). */
+/** Member paths of `interface PluginContext`, following inline type literals, same-file interfaces and their `extends`
+ *  clauses (depth 4) — `PluginAppApi extends BlockSurfaceApi` is where `app.insertMarkdown*` live. */
 function memberPaths(source) {
   const sf = ts.createSourceFile('types.ts', source, ts.ScriptTarget.Latest, true)
   const decls = new Map()
@@ -27,7 +28,11 @@ function memberPaths(source) {
   const out = new Set()
   const membersOf = (node) => {
     if (!node) return []
-    if (ts.isInterfaceDeclaration(node) || ts.isTypeLiteralNode(node)) return node.members
+    if (ts.isInterfaceDeclaration(node)) {
+      const inherited = (node.heritageClauses ?? []).flatMap((h) => h.types.flatMap((t) => (ts.isIdentifier(t.expression) ? membersOf(decls.get(t.expression.text)) : [])))
+      return [...node.members, ...inherited]
+    }
+    if (ts.isTypeLiteralNode(node)) return node.members
     if (ts.isTypeAliasDeclaration(node)) return membersOf(node.type)
     if (ts.isTypeReferenceNode(node) && ts.isIdentifier(node.typeName)) return membersOf(decls.get(node.typeName.text))
     if (ts.isParenthesizedTypeNode(node)) return membersOf(node.type)
@@ -89,15 +94,16 @@ function pluginFiles(dir) {
 
 function selfTest() {
   const assert = require('assert')
-  const types = `interface PluginAppApi { readFile(p: string): string; listTags?(): string[] }
+  const types = `interface Surface { insertAt?(t: string): void }
+    interface PluginAppApi extends Surface { readFile(p: string): string; listTags?(): string[] }
     export interface PluginContext { app: PluginAppApi; ui?: { mountChatBox?(el: unknown): void; readonly chatBoxCapabilities?: readonly string[] }
       databases?: { setCell(): boolean; setBody?(): boolean } }`
   const now = memberPaths(types)
-  for (const p of ['app.listTags', 'ui.chatBoxCapabilities', 'databases.setBody']) assert(now.has(p), p)
-  const then = memberPaths(types.replace('setBody?(): boolean', '').replace('; listTags?(): string[]', ''))
-  const code = "const ok = !!ctx().ui?.mountChatBox && !!ctx().databases?.setBody\nctx.app.listTags?.()\nc.databases.setBody(x)\nfoo.ctx.databases.setBody\nctx().databases!.setBody!(p)"
+  for (const p of ['app.listTags', 'app.insertAt', 'ui.chatBoxCapabilities', 'databases.setBody']) assert(now.has(p), p)
+  const then = memberPaths(types.replace('setBody?(): boolean', '').replace('; listTags?(): string[]', '').replace('insertAt?(t: string): void', ''))
+  const code = "const ok = !!ctx().ui?.mountChatBox && !!ctx().databases?.setBody\nctx.app.listTags?.()\nc.databases.setBody(x)\nfoo.ctx.databases.setBody\nctx().databases!.setBody!(p)\nctx.app.insertAt?.(t)"
   const got = findings([['a.ts', code]], now, then, ['c'])
-  assert.deepStrictEqual([...got.keys()].sort(), ['app.listTags', 'databases.setBody'])
+  assert.deepStrictEqual([...got.keys()].sort(), ['app.insertAt', 'app.listTags', 'databases.setBody'])
   assert.deepStrictEqual(got.get('databases.setBody'), ['a.ts:1', 'a.ts:3', 'a.ts:5']) // `foo.ctx` is not the plugin ctx; `!` doesn't end a chain
   console.log('plugin-compat self-test ok')
 }

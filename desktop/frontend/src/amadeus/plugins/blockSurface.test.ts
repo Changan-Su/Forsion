@@ -170,3 +170,75 @@ describe('subscribePage 的 v4 节拍', () => {
     expect(n).toBe(0)
   })
 })
+
+describe('insertMarkdownAt:拒绝要说出原因(2026-11-16)', () => {
+  it('旧令牌 → stale-token;插件停用后同样 stale-token', () => {
+    const st = fakeStore({ activeNotePath: 'a.md' })
+    const { api, revoke } = createBlockSurface('t', { store: st.api, scope: 's9' })
+    const stale = api.getPage().token
+    st.set({ activeNotePath: 'b.md' })
+    expect(api.insertMarkdownAt!(stale, 'x')).toEqual({ ok: false, reason: 'stale-token' })
+    const tok = api.getPage().token
+    revoke()
+    expect(api.insertMarkdownAt!(tok, 'x')).toEqual({ ok: false, reason: 'stale-token' })
+  })
+
+  it('没开笔记 → no-note;空串 → empty;v4 没有实例 → no-editor', () => {
+    const none = fakeStore({})
+    const a = createBlockSurface('t', { store: none.api, scope: 's10' })
+    expect(a.api.insertMarkdownAt!(a.api.getPage().token, 'x')).toEqual({ ok: false, reason: 'no-note' })
+    a.revoke()
+    const st = fakeStore({ activeNotePath: 'v4.md' })
+    const { api, revoke } = createBlockSurface('t', { store: st.api, scope: 's11' })
+    expect(api.insertMarkdownAt!(api.getPage().token, '')).toEqual({ ok: false, reason: 'empty' })
+    expect(api.insertMarkdownAt!(api.getPage().token, ' \n\n ')).toEqual({ ok: false, reason: 'empty' })
+    expect(api.insertMarkdownAt!(api.getPage().token, 'x')).toEqual({ ok: false, reason: 'no-editor' })
+    revoke()
+  })
+
+  it('转给 unified 实例:档位与标记原样带过去,缺省 cursor,乱给的档位按 cursor', () => {
+    const st = fakeStore({ activeNotePath: 'v4.md' })
+    const { api, revoke } = createBlockSurface('t', { store: st.api, scope: 's12' })
+    const seen: unknown[] = []
+    const off = registerUnifiedPipe({
+      path: 'v4.md', flush: async () => {}, retire: () => {},
+      insertMarkdownAt: (md, where, marker) => { seen.push([md, where, marker]); return { ok: true } },
+    })
+    const tok = api.getPage().token
+    expect(api.insertMarkdownAt!(tok, 'a', { where: 'caret', cursorMarker: '{{c}}' })).toEqual({ ok: true })
+    expect(api.insertMarkdownAt!(tok, 'b')).toEqual({ ok: true })
+    expect(api.insertMarkdownAt!(tok, 'c', { where: 'nowhere' as never, cursorMarker: '' })).toEqual({ ok: true })
+    expect(seen).toEqual([['a', 'caret', '{{c}}'], ['b', 'cursor', undefined], ['c', 'cursor', undefined]])
+    off()
+    revoke()
+  })
+
+  it('同篇多开都不接:报最说明问题的原因(阅读模式那份胜过源码模式那份);有一个接了就是 ok', () => {
+    const st = fakeStore({ activeNotePath: 'v4.md' })
+    const { api, revoke } = createBlockSurface('t', { store: st.api, scope: 's13' })
+    const base = { path: 'v4.md', flush: async () => {}, retire: () => {} }
+    const offA = registerUnifiedPipe({ ...base, lastActive: () => 2, insertMarkdownAt: () => ({ ok: false, reason: 'no-editor' }) })
+    const offB = registerUnifiedPipe({ ...base, lastActive: () => 1, insertMarkdownAt: () => ({ ok: false, reason: 'read-only' }) })
+    expect(api.insertMarkdownAt!(api.getPage().token, 'x')).toEqual({ ok: false, reason: 'read-only' })
+    const offC = registerUnifiedPipe({ ...base, lastActive: () => 0, insertMarkdownAt: () => ({ ok: true }) })
+    expect(api.insertMarkdownAt!(api.getPage().token, 'x')).toEqual({ ok: true })
+    offA(); offB(); offC()
+    revoke()
+  })
+
+  it('v3:caret / 标记退化为 end,标记删掉才写进块(块内容原样落盘)', () => {
+    const inserted: Array<[string | null, string]> = []
+    const st = fakeStore({
+      activePage: 'x.md', status: 'ready', manifest: {},
+      flatOrder: () => ['b1', 'b2'],
+      insertBlockAfter: (after: string | null, _c: unknown, text: string) => { inserted.push([after, text]); return 'b3' },
+    })
+    const { api, revoke } = createBlockSurface('t', { store: st.api, scope: 's14' })
+    const tok = api.getPage().token
+    expect(api.insertMarkdownAt!(tok, 'Hi {{c}}there', { where: 'caret', cursorMarker: '{{c}}' })).toEqual({ ok: true })
+    expect(api.insertMarkdownAt!(tok, 'top', { where: 'start' })).toEqual({ ok: true })
+    expect(api.insertMarkdownAt!(tok, '{{c}}', { cursorMarker: '{{c}}' })).toEqual({ ok: false, reason: 'empty' })
+    expect(inserted).toEqual([['b2', 'Hi there'], [null, 'top']])
+    revoke()
+  })
+})
