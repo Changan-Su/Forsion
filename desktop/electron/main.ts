@@ -142,6 +142,7 @@ import { createSampler, nativeProbe } from './activeWindow'
 import { KNOWN_APPS } from '../shared/knownApps'
 import { bindRecipeToPlugin, effectivePluginId } from '../shared/products'
 import { BROWSER_PARTITION, GUEST_ALLOWED_PERMISSIONS } from '../shared/browser'
+import { acceptPluginSurface, PLUGIN_SURFACE_PERMISSIONS, surfaceNavigationAllowed } from '../shared/pluginSurface'
 import { registerPtyIpc } from './pty'
 import { registerAssetSchemes as registerAmadeusAssetSchemes, registerAssetProtocol as registerAmadeusAssetProtocol } from './amadeus/assetProtocol'
 import { registerIuiLibProtocol } from './iuiLibProtocol'
@@ -1809,8 +1810,22 @@ function hardenNav(wc: Electron.WebContents): void {
 //    属性也拿不到 window.tangu(否则等于把 PTY/文件读写送给任意站点);
 //  - did-attach-webview:站点里的 target=_blank 回投**宿主**渲染层(带 fromGuest)→ 开成新的内置浏览器标签,不产生游离窗。
 // guest 不套 hardenNav:本地 .html 预览要允许 file: 内的相对跳转。
+//  - 插件网页表面(ctx.ui.mountWebSurface,shared/pluginSurface.ts):分区名对、首个地址是本机时给它自己的分区(不和内置浏览器
+//    混 cookie),权限只给写剪贴板;页面自己只能在同源里跳,别的地址回投渲染层照普通链接开。其余加固和内置浏览器完全一样。
+const pluginSurfaceSessions = new WeakSet<Electron.Session>()
+function pluginSurfaceSession(partition: string): void {
+  const ses = session.fromPartition(partition)
+  if (pluginSurfaceSessions.has(ses)) return
+  pluginSurfaceSessions.add(ses)
+  const allow = (p: string): boolean => PLUGIN_SURFACE_PERMISSIONS.includes(p)
+  ses.setPermissionRequestHandler((_wc, permission, callback) => callback(allow(permission)))
+  ses.setPermissionCheckHandler((_wc, permission) => allow(permission))
+  ses.setDevicePermissionHandler(() => false)
+}
 app.on('web-contents-created', (_e, contents) => {
   contents.on('will-attach-webview', (_ev, webPreferences, params) => {
+    const surface = acceptPluginSurface(params.partition, params.src)
+    if (surface) pluginSurfaceSession(surface)
     // 全部写死,不是「删掉危险的」——渲染层能塞进来的键太多(sandbox/webSecurity/…),
     // 白名单式覆写才封得住;partition 也钉死,否则空 partition 会落回权限全放行的 defaultSession。
     delete webPreferences.preload
@@ -1824,8 +1839,8 @@ app.on('web-contents-created', (_e, contents) => {
     webPreferences.experimentalFeatures = false
     webPreferences.webviewTag = false
     ;(webPreferences as Record<string, unknown>).allowFileAccessFromFiles = false // 本地 .html 不许读同盘其它文件
-    webPreferences.partition = BROWSER_PARTITION
-    params.partition = BROWSER_PARTITION
+    webPreferences.partition = surface ?? BROWSER_PARTITION
+    params.partition = surface ?? BROWSER_PARTITION
     delete params.nodeintegration
     delete params.nodeintegrationinsubframes
     delete params.disablewebsecurity
@@ -1833,6 +1848,15 @@ app.on('web-contents-created', (_e, contents) => {
   })
   contents.on('did-attach-webview', (_ev, guest) => {
     const open = openUrlHandler(contents, true)
+    if (pluginSurfaceSessions.has(guest.session)) {
+      const keep = (e: Electron.Event, url: string, outside: boolean): void => {
+        if (surfaceNavigationAllowed(guest.getURL(), url)) return
+        e.preventDefault()
+        if (outside) open({ url })
+      }
+      guest.on('will-navigate', (e, url) => keep(e, url, true))
+      guest.on('will-redirect', (e, url) => keep(e, url, false))
+    }
     guest.setWindowOpenHandler((d) => {
       // 已绑定的设备页开**它自己**中转下的地址(撕出视图 / 同源 window.open):给回投后新开的那张页发一次性许可
       const b = unitFrames.get(guest.id)

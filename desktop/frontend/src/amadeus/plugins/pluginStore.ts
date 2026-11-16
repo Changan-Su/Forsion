@@ -147,6 +147,9 @@ import { createEffectScope, type EffectHandle, type EffectRecord, type EffectSco
 import { dependentsOf, topoOrder, unmetDependencies, type UnmetDependency } from './pluginDeps'
 import { LIST_CAPABILITIES } from './listTree'
 import { CHAT_BOX_CAPABILITIES } from '../../../../shared/chatBox'
+import { isLoopbackHttpUrl, pluginSurfacePartitionFor } from '../../../../shared/pluginSurface'
+import { registerEngineHarness } from './engineHarness'
+import { isElectronHost } from '../unified/writeSafety'
 import { windowKind } from '../../windowKind'
 import { addRibbonAction } from './ribbonAction'
 import { provideFeedbackChannel } from '../../feedbackChannel'
@@ -1731,6 +1734,46 @@ export const usePluginStore = create<PluginState>((set, get) => {
       const h = mountPart('webCard', el, tidyWebCard(o as never, true) as import('./partsSurface').HostWebCard, (m, v) => m.mountPluginWebCard(el, v, guard))
       return { update: (patch) => { if (patch && typeof patch === 'object') h.update(tidyWebCard(patch as never, false)) }, dispose: h.dispose }
     }
+    // 插件网页表面(2026-11-15,shared/pluginSurface.ts):一个 <webview>,分区由宿主按插件 id 起;主进程见分区名对、地址是本机
+    // 才给这个分区,否则钉回内置浏览器那个。同步挂(不用认领 el:没有动态 import 要等)。
+    const uiMountWebSurface = (el: HTMLElement, o: import('./types').PluginWebSurfaceOptions): import('./types').PluginWebSurfaceHandle => {
+      const dead = { navigate() {}, reload() {}, focus() {}, dispose() {} }
+      if (!ctxAlive()) return dead
+      if (!(el instanceof HTMLElement)) throw new TypeError('mountWebSurface needs an HTMLElement')
+      if (!o || !isLoopbackHttpUrl(o.url)) throw new TypeError('mountWebSurface needs a loopback http(s) url (127.0.0.1, localhost or [::1])')
+      type Guest = HTMLElement & { reload(): void; getURL(): string }
+      const view = document.createElement('webview') as Guest
+      view.setAttribute('partition', pluginSurfacePartitionFor(pluginId, o.partition))
+      view.setAttribute('src', o.url)
+      view.className = 'plugin-web-surface'
+      view.style.cssText = 'display:flex;flex:1 1 auto;width:100%;height:100%;min-height:0;border:0'
+      let ready = false
+      view.addEventListener('dom-ready', () => { ready = true }, { once: true })
+      const onFail = (ev: Event): void => {
+        const e = ev as Event & { errorCode: number; errorDescription: string; validatedURL: string; isMainFrame: boolean }
+        if (!e.isMainFrame || e.errorCode === -3) return // -3 = 被下一次跳转顶掉
+        if (typeof o.onLoadFail === 'function') guard(() => o.onLoadFail!({ url: e.validatedURL, code: e.errorCode, description: e.errorDescription }))
+      }
+      view.addEventListener('did-fail-load', onFail)
+      el.append(view)
+      const dispose = scope.own('mount', () => { view.removeEventListener('did-fail-load', onFail); view.remove() }, 'webSurface')
+      return {
+        navigate(url) {
+          if (!ctxAlive()) return
+          // '#…' 只换页面当前地址的 # 那段:同一个页面里跳、不重载。照页面此刻的地址算(登录后页面自己去掉了查询串也对得上)
+          if (typeof url === 'string' && url.startsWith('#')) {
+            const cur = (ready ? view.getURL() : '') || view.getAttribute('src') || o.url
+            url = cur.split('#')[0] + url
+          }
+          if (!isLoopbackHttpUrl(url)) throw new TypeError('mountWebSurface only loads loopback http(s) addresses')
+          if (view.getAttribute('src') === url && ready) view.reload()
+          else view.setAttribute('src', url)
+        },
+        reload() { if (ctxAlive() && ready) view.reload() },
+        focus() { if (ctxAlive()) view.focus() },
+        dispose,
+      }
+    }
     const uiMountControl = (el: HTMLElement, c: import('./types').PluginToolbarControl): import('./types').PluginControlHandle => {
       if (!ctxAlive()) return { update() {}, dispose() {} }
       if (!(el instanceof HTMLElement)) throw new TypeError('mountControl needs an HTMLElement')
@@ -2221,6 +2264,13 @@ export const usePluginStore = create<PluginState>((set, get) => {
         readiness: [...s.readiness.filter((o) => !(o.pluginId === pluginId && o.item.id === def.id)), { pluginId, item: def }],
       }))
     },
+    // Harness 卡的行 + 对话右键菜单(2026-11-15,engineHarness.ts):停用 / 重载经 scope 撤
+    registerEngineHarness: (def) => {
+      if (!ctxAlive()) return { refresh() {}, dispose() {} }
+      const h = registerEngineHarness(pluginId, def, ctxAlive)
+      const dispose = scope.own('mount', h.dispose, 'engineHarness')
+      return { refresh: h.refresh, dispose }
+    },
     // 编辑器扩展:注册表在 editorExtensions.ts(叶子模块,破 store↔MarkdownBlock 的 import 环)。
     // 名字给扩展隔离的提示用(评审 G1-07:哪个插件的扩展坏了要点名)。
     // 撤是按插件整体撤(clearEditorExtensions 让全部编辑器原地重配一次),所以 N 份扩展只记一条。
@@ -2395,6 +2445,8 @@ export const usePluginStore = create<PluginState>((set, get) => {
       icon: uiIcon,
       mountEmptyState: uiMountEmptyState,
       mountWebCard: uiMountWebCard,
+      // 只有桌面壳有 <webview>(web / 移动端没有):那两端不给这个口,插件按「没有」处理
+      ...(isElectronHost() ? { mountWebSurface: uiMountWebSurface } : {}),
       setViewHead: uiSetViewHead,
       mount: uiMount as NonNullable<PluginContext['ui']>['mount'],
       chatBoxCapabilities: CHAT_BOX_CAPABILITIES,

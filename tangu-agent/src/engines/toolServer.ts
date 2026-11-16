@@ -16,6 +16,8 @@
  * 所以取结果的参数里带一个递增的 attempt,每次回话直接给出下一次的确切参数。
  */
 import { createServer } from 'node:http';
+import { readFileSync, readdirSync } from 'node:fs';
+import path from 'node:path';
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
@@ -30,6 +32,10 @@ import { isHtmlCardTool, LEGACY_HTML_CARD_TOOL } from '../tools/builtin/sketch.j
 
 /** 取结果的那个工具(只在带 budgetMs 的桥上有)。 */
 export const WAIT_TOOL = 'forsion_wait';
+/** 读这个 Agent 的一个技能(只在带 skills 的桥上有:交给常驻引擎时技能没有按会话的目录可放,见 residentAcp.ts)。 */
+export const SKILL_TOOL = 'forsion_skill';
+/** 技能正文交给模型的上限。 */
+const MAX_SKILL_CHARS = 60_000;
 /** DSH 等一次外部工具的上限是 60 秒(dsh-mcp-client 的 toolCallTimeoutMs,ACP 入口改不了);留出网络和排队的余量。 */
 export const BRIDGE_CALL_BUDGET_MS = 45_000;
 /** 交给模型的文本上限:超长的工具输出照 runLoop 落盘那样太重,这里截断并说明。 */
@@ -46,6 +52,29 @@ export interface RunToolServerOptions {
   cards?: { publish: (type: string, payload: any) => void; contentOffset: () => number };
   /** 每次调用最多占用多久(毫秒);超了先回编号。不给 = 一直等(插件任务,照旧)。 */
   budgetMs?: number;
+  /** 这个 Agent 的技能(交给常驻引擎时):桥上多一个 SKILL_TOOL,按名字读 SKILL.md 和它旁边的文件清单。只读,不过审批。 */
+  skills?: ReadonlyArray<{ name: string; dir: string }>;
+}
+
+/** 读一个技能:SKILL.md 正文 + 同一文件夹里其余文件的绝对路径(模型用自己的读文件工具去读)。 */
+export function readSkillForBridge(dir: string, name: string): string {
+  const body = readFileSync(path.join(dir, 'SKILL.md'), 'utf8');
+  const files: string[] = [];
+  const walk = (d: string, depth: number): void => {
+    if (depth > 3 || files.length >= 200) return;
+    let entries: import('node:fs').Dirent[] = [];
+    try { entries = readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (e.name.startsWith('.') || files.length >= 200) continue;
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) walk(p, depth + 1);
+      else if (!(d === dir && e.name === 'SKILL.md')) files.push(p);
+    }
+  };
+  walk(dir, 0);
+  const text = body.length > MAX_SKILL_CHARS ? `${body.slice(0, MAX_SKILL_CHARS)}\n\n[Truncated: ${body.length} characters in total.]` : body;
+  return `Skill "${name}" (folder: ${dir})\n\n${text}`
+    + (files.length ? `\n\nOther files in this skill (read them with your own file tools when the skill tells you to):\n${files.map((f) => `- ${f}`).join('\n')}` : '');
 }
 
 type Outcome = { text: string; isError: boolean };
@@ -173,6 +202,11 @@ export async function createRunToolServer(ctx: ToolContext & { runId: string }, 
     server.setRequestHandler(ListToolsRequestSchema, async () => {
       enter();
       const tools = [...allowed().values()].map(t => ({ name: t.name, description: t.definition.function.description, inputSchema: t.definition.function.parameters }));
+      if (opts.skills?.length) tools.push({
+        name: SKILL_TOOL,
+        description: 'Load one of your Forsion skills by name (they are listed in your instructions under "Your skills"). Returns its SKILL.md and the paths of its other files.',
+        inputSchema: { type: 'object', properties: { name: { type: 'string', description: 'The skill name exactly as listed.' } }, required: ['name'] } as any,
+      });
       if (budget) tools.push({
         name: WAIT_TOOL,
         description: 'Wait for the result of a Forsion tool call that answered with a pending ticket (it is waiting for the user\'s approval or still running). '
@@ -190,6 +224,13 @@ export async function createRunToolServer(ctx: ToolContext & { runId: string }, 
         if (!t) return { isError: true, content: [{ type: 'text', text: `Unknown or already collected ticket: ${String(args.ticket ?? '')}.` }] };
         const out = await awaitOrTicket(t.job, t, () => t);
         return { isError: out.isError, content: [{ type: 'text', text: out.text }] };
+      }
+      if (opts.skills?.length && name === SKILL_TOOL) {
+        const want = String(args.name ?? '').trim();
+        const skill = opts.skills.find((k) => k.name === want) ?? opts.skills.find((k) => k.name.toLowerCase() === want.toLowerCase());
+        if (!skill) return { isError: true, content: [{ type: 'text', text: `No skill named "${want}". Available: ${opts.skills.map((k) => k.name).join(', ')}.` }] };
+        try { return { isError: false, content: [{ type: 'text', text: readSkillForBridge(skill.dir, skill.name) }] }; }
+        catch (e: any) { return { isError: true, content: [{ type: 'text', text: `Could not read skill "${skill.name}": ${e?.message || e}` }] }; }
       }
       if (!allowed().has(name)) throw new Error('Tool is unavailable');
       let phase: Ticket['phase'] = 'approval';

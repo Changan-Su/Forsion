@@ -739,6 +739,10 @@ async function externalEngineLoop(runId: string, ac: AbortController, run: any, 
     const bridgeTools=Array.isArray(taskPolicy.pluginToolNames)?taskPolicy.pluginToolNames:[];
     const allowedBridge=bridgeTools.length?bridgeTools:taskPolicy.pluginReadOnly?['read_file','list_dir','list_files','glob_files','search_files','view_image','calculator','get_datetime']:[];
     let agentsHome: string | undefined;
+    // 融合插件替这个引擎常驻了一个进程(DSH 工作台和对话同一个进程):普通对话改连它;插件任务照旧每轮起一个进程。
+    // 插件说现在不该用(对不上上游新版 / 没起来)→ null,这一轮照旧走底层那条路。
+    const residentLink = !storedAgentConfig?.pluginOwner && !allowedBridge.length ? await engines.resident?.(engineId, ac.signal).catch(() => null) ?? null : null;
+    let residentHandoff: { instructions: string; key: string; serverName: string } | undefined;
     if (allowedBridge.length) {
       const { createRunToolServer } = await import('../engines/toolServer.js');
       toolServer = await createRunToolServer({ userId, sessionId, runId, appId:deps().profile.appId, modelId,
@@ -755,9 +759,11 @@ async function externalEngineLoop(runId: string, ac: AbortController, run: any, 
         displayFiles: handoffFiles,
         persistMessage: (files) => finalizeAssistantMessage(assistantId, sessionId, modelId, streamedText, '', toolServer?.calls() ?? [], toolServer?.results() ?? [], files),
         engineEnv: engines.agentsHomeEnv?.(engineId) ?? null,
+        resident: !!residentLink,
       });
       toolServer = handoff.toolServer;
       agentsHome = handoff.agentsHome;
+      residentHandoff = handoff.bridge;
     }
     const previous = taskPolicy.externalSession;
     // 续接哪个引擎会话:插件任务用插件点名的那个(照旧);普通引擎对话用上一轮记在 run 上的指针,且对话自那以后没被改写。
@@ -777,6 +783,8 @@ async function externalEngineLoop(runId: string, ac: AbortController, run: any, 
       mcpServers: toolServer ? [toolServer.server] : undefined,
       // 交接:指令目录交给引擎(引擎定义里有 agentsHomeEnv 才用);桥里的调用由桥自己画卡,引擎那边同一次调用不上屏。
       agentsHome,
+      // 常驻进程:连它跑,人设 / 记忆 / 技能走桥上的说明(residentAcp.ts)
+      ...(residentLink ? { resident: { link: residentLink, handoff: residentHandoff } } : {}),
       hideToolPrefix: engineAgent && toolServer ? toolServer.toolPrefix : undefined,
       resumeSessionId: chatResume ? chain?.resumeId : (previous?.engineId === engineId && previous?.cwd === engineCwd ? previous.id : undefined),
       // 普通对话的指针连同记它的那家适配器一起交给引擎层核对(null = 老指针没记);插件任务不传。

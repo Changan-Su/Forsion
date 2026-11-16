@@ -1972,6 +1972,57 @@ export type PluginToolbarControl = {
 }
 export interface PluginControlHandle { update(patch: Partial<Omit<PluginToolbarControl, 'type'>>): void; dispose(): void }
 
+/** One row your plugin adds to the Harness card (`ctx.registerEngineHarness`, 2026-11-15+). Give `text`, or `select`;
+ *  `actions` are small buttons after the text. Texts take PluginText. */
+export interface PluginHarnessRow {
+  /** Stable within your plugin (the host keys and tests by it). */
+  id: string
+  label: PluginText
+  text?: PluginText
+  /** `danger` = red text (the runtime no longer matches your plugin, a check failed). */
+  tone?: 'neutral' | 'ok' | 'danger'
+  select?: { value: string; options: Array<{ value: string; label: PluginText }>; disabled?: boolean; onChange(value: string): void }
+  /** A muted line under the row. */
+  hint?: PluginText
+  /** Up to three. `primary` = the filled button (one per row at most). */
+  actions?: Array<{ id: string; label: PluginText; run(): void; primary?: boolean; disabled?: boolean }>
+}
+/** An item in the right-click menu of a conversation that runs on your engine. */
+export interface PluginEngineSessionAction {
+  id: string
+  label: PluginText
+  icon?: PluginIconName | (string & {})
+  run(target: { sessionId: string; agentSlug?: string }): void
+}
+/** `ctx.registerEngineHarness` (2026-11-15+, desktop). */
+export interface PluginEngineHarness {
+  /** The engine id as the engine list names it (`'dsh'`). */
+  engineId: string
+  /** Rows under "Runs on" on the Harness card of an agent that runs on this engine. Called when the card draws and
+   *  after `refresh()`; up to 8 rows, 5 s at most. */
+  rows?(target: { agentSlug: string }): PluginHarnessRow[] | Promise<PluginHarnessRow[]>
+  /** Items in the right-click menu of conversations that run on this engine (up to 4). */
+  sessionActions?: PluginEngineSessionAction[]
+}
+
+/** `ctx.ui.mountWebSurface` (2026-11-15+). */
+export interface PluginWebSurfaceOptions {
+  /** http(s) on 127.0.0.1, localhost or [::1] — the page of a service your plugin runs on this computer. */
+  url: string
+  /** Names the storage partition inside your plugin's own space (the host prefixes your plugin id). Optional. */
+  partition?: string
+  /** The page failed to load (the service stopped, its port changed). Not called when you navigate away mid-load. */
+  onLoadFail?(info: { url: string; code: number; description: string }): void
+}
+export interface PluginWebSurfaceHandle {
+  /** Load another loopback http(s) address in the same surface. Throws for any other address.
+   *  A bare `#fragment` only changes the fragment of the page's current address (same page, no reload). */
+  navigate(url: string): void
+  reload(): void
+  focus(): void
+  dispose(): void
+}
+
 /** A button on `ctx.ui.mountWebCard`. */
 export interface PluginWebCardAction {
   label: PluginText
@@ -2211,6 +2262,11 @@ export interface PluginContext {
   /** 就绪检查(2026-09-21+),对应 manifest `onboarding.requires` 的 `{ kind: 'check', id }`。见 ReadinessContribution。
    *  旧宿主没有:`ctx.registerReadiness?.(…)`。 */
   registerReadiness?(def: ReadinessContribution): void
+  /** Rows on the Harness card and items in the conversation menu for agents that run on an external engine
+   *  (2026-11-15+, desktop; the DSH fusion plugin uses it). Forsion itself draws only "Runs on"; the rest belongs to the
+   *  plugin that runs that engine and goes away when it is disabled. Call `refresh()` when your rows change.
+   *  Feature-detect: `ctx.registerEngineHarness?.(…)`. */
+  registerEngineHarness?(def: PluginEngineHarness): { refresh(): void; dispose(): void }
   /** 往笔记编辑器里注 ProseMirror 插件(2026-08-15+)。片段展开、按键拦截、行内装饰这类
    *  「必须住在编辑器里」的能力靠它 —— v3 块编辑器与 v4 统一编辑器共用同一个编辑器工厂,注一次两端到位。
    *
@@ -2373,6 +2429,14 @@ export interface PluginContext {
      *  buttons — the card the host itself draws for HTML files and running dev servers in chat, so a page you draw
      *  reads as the same family. Use it inside a tool result card, a view or a list. Feature-detect on older hosts. */
     mountWebCard?(el: HTMLElement, card: PluginWebCard): { update(patch: Partial<PluginWebCard>): void; dispose(): void }
+    /** The web page of a service your plugin runs on this computer, filling `el` (2026-11-15+; desktop only, `undefined`
+     *  on web and mobile). It is a top-level page in a guest Forsion owns rather than an iframe, so the service's own
+     *  cookies work (SameSite=Strict too). `url` must be http(s) on 127.0.0.1, localhost or [::1]. Cookies and storage
+     *  live in a partition of your plugin's own, never the built-in browser's. The page moves only within its own
+     *  origin; other links open the way chat links do. It gets no Forsion API and no microphone, camera, location or
+     *  notifications — only clipboard writes. Keyboard focus inside it stays with the page (as in the built-in browser).
+     *  The host removes it on disable / reload. */
+    mountWebSurface?(el: HTMLElement, opts: PluginWebSurfaceOptions): PluginWebSurfaceHandle
     /** Your view's head row (2026-10-26+): the same 32px row `setViewModes` draws, without needing view modes — a title
      *  at the left and your buttons at the right (`handle.actions`). Works together with `setViewModes`: the switch comes
      *  first, then the title, then the buttons of both. `el` = the element `mount()` received. Calling it again on the

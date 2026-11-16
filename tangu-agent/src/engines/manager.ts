@@ -10,6 +10,8 @@ import path from 'node:path';
 import { loadEngines, engineStatus, loadEnginePrefs, saveEngineDefaultModel, saveEngineProbeSession, type EngineDef, type EngineStatus } from './config.js';
 import { tanguHome } from '../core/tanguHome.js';
 import { runAcpEngine, probeAcpEngine } from './acpEngine.js';
+import { acquireResident, type ResidentLink, type ResidentHandoff } from './residentAcp.js';
+import { residentHostFor } from './residentHosts.js';
 import { isHostSandboxRestricted } from '../sandbox/hostSandboxPolicy.js';
 
 /** externalEngineLoop 传入：一次外部引擎 turn 所需的上下文 + 回灌接缝。 */
@@ -39,6 +41,9 @@ export interface EngineRunCtx {
   env?: Record<string, string>;
   /** Forsion 给这一轮备的共用指令目录(AGENTS.md + skills/)。引擎定义里有 agentsHomeEnv 才交过去,没有就不用。 */
   agentsHome?: string;
+  /** 连插件常驻的那个进程跑这一轮(融合插件,见 residentAcp.ts);不传 = 照旧每轮起一个进程。
+   *  handoff = 这个 Agent 的人设 / 记忆 / 技能目录,交给常驻进程时走桥上的说明(不走 agentsHome)。 */
+  resident?: { link: ResidentLink; handoff?: ResidentHandoff };
   /** 宿主工具桥的工具名前缀(`mcp__<服务名>__`)。桥自己画卡、自己落库,引擎这边的同一次调用不再上屏(见 AcpClientCtx)。 */
   hideToolPrefix?: string;
   message: string;
@@ -100,6 +105,8 @@ export interface EngineManager {
   /** 设某引擎默认模型(持久化到 ~/.tangu/engine-prefs.json;空串=清除)。 */
   setDefaultModel(id: string, modelId: string): void;
   run(ctx: EngineRunCtx): Promise<EngineResult>;
+  /** 插件替这个引擎常驻了一个进程(融合插件)且现在能用 → 那条连接;否则 null(照旧每轮起一个进程)。 */
+  resident?(id: string, signal?: AbortSignal): Promise<ResidentLink | null>;
   dispose(): Promise<void>;
 }
 
@@ -119,7 +126,8 @@ export function createEngineManager(configFile?: string): EngineManager {
   let prefs = loadEnginePrefs();
   return {
     list: () => engines.map((e) => {
-      const status = engineStatus(e);
+      // 插件替它常驻了一个进程(融合插件自己装好、管着 DSH):没在这台电脑上另装命令也能用
+      const status = residentHostFor(e.id) ? 'available' : engineStatus(e);
       return { id: e.id, name: e.name, available: status === 'available', status, defaultModel: prefs[e.id]?.defaultModel, setup: e.setup };
     }),
     has: (id) => byId.has(id),
@@ -148,7 +156,11 @@ export function createEngineManager(configFile?: string): EngineManager {
         // 探测会话的固定工作目录(只有复用探测会话的引擎用得上,见 probeAcpEngine):本引擎自己的目录,不落在用户的项目里。
         const probeDir = path.join(tanguHome(), 'engines', id, 'probe');
         try { mkdirSync(probeDir, { recursive: true }); } catch { /* 建不出来就让引擎自己报错 */ }
-        const { probeSessionId, ...caps } = await probeAcpEngine(def, { reuseSessionId: prefs[id]?.probeSessionId, reuseCwd: probeDir });
+        // 有常驻进程(融合插件)就在它上面探:另起一个开在同一份目录上会和它抢会话
+        const link = await acquireResident(id).catch(() => null);
+        const { probeSessionId, ...caps } = link
+          ? await link.probe({ reuseSessionId: prefs[id]?.probeSessionId, cwd: probeDir })
+          : await probeAcpEngine(def, { reuseSessionId: prefs[id]?.probeSessionId, reuseCwd: probeDir });
         if (probeSessionId && probeSessionId !== prefs[id]?.probeSessionId) {
           saveEngineProbeSession(id, probeSessionId);
           prefs = loadEnginePrefs();
@@ -171,6 +183,7 @@ export function createEngineManager(configFile?: string): EngineManager {
       // 用户未在本会话选模型 → 回退该引擎的默认模型偏好(设置页「Agent CLIs」配置)。
       const engineModelId = ctx.engineModelId || prefs[ctx.engineId]?.defaultModel;
       try {
+        if (ctx.resident) return await ctx.resident.link.run(def, { ...ctx, engineModelId }, ctx.resident.handoff);
         return await runAcpEngine(def, { ...ctx, engineModelId });
       } catch (e: any) {
         // 「当前模型缺 API key」的提示叫用户去模型下拉里换一个:缓存着的清单这时作废,下次问能力清单重新探测 ——
@@ -179,8 +192,9 @@ export function createEngineManager(configFile?: string): EngineManager {
         throw e;
       }
     },
+    resident: async (id, signal) => (byId.has(id) && !isHostSandboxRestricted() ? acquireResident(id, signal) : null),
     dispose: async () => {
-      /* 一 run 一进程，无全局资源 */
+      /* 一 run 一进程,无全局资源;常驻进程归插件管 */
     },
   };
 }

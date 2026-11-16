@@ -2911,6 +2911,9 @@ body.amx-marquee-active * {
 }
 .am-app .ProseMirror .amx-obs-delim,
 .am-app .ProseMirror .amx-obs-cmt { color: var(--text-muted); }
+/* 加粗字面化(隐藏开关,见 blocks/markdown/literalBold.ts):`**x**` 是正文文字,中间这段装饰成粗体。
+   与 <strong> 的浏览器缺省同一档(bolder),标题里的加粗照旧再重一档。 */
+.am-app .ProseMirror .amx-lit-bold { font-weight: bolder; }
 .am-app .ProseMirror .amx-obs-cmt-badge {
   display: inline-block;
   margin: 0 2px;

@@ -50,6 +50,8 @@ import {
   underlineSchema,
 } from './marks'
 import { obsidianInlinePlugin, toggleObsHighlight } from './obsidianInline'
+import { literalBoldPlugin, toggleLiteralBold } from './literalBold'
+import { literalBoldEnabled } from './literalBoldFlag'
 import { blankLineRemark, softBreakRemark, stripEmptyLineBr } from './softBreak'
 import { tabIndent, tabOutdent } from './tabIndent'
 import { commonmarkWithIndent, setTextAlignment, type TextAlignment } from './paragraphIndent'
@@ -122,6 +124,8 @@ import { BLANK_BUTTON_BLOCK } from '../button/format'
 import { newDocAgentSpec, serializeDocAgentSpec } from '../documentAgent/format'
 import { emptyTaskRemark, taskCheckboxPlugin } from './taskList'
 import { calloutPlugin, calloutTitleRemark, handleFoldKeyDown, unescapeCalloutToken } from './callout'
+import { bodyPairEarlyPlugin } from './bodyAutoPair'
+import { hasRefDefinition, withLiteralBrackets } from './bracketEscape'
 import { codeBlockPlugin } from './codeBlock'
 import { spellcheckPlugin } from './spellcheck'
 import { ASK_ALT, askString, askStringOrAlt } from '../../components/askString'
@@ -130,7 +134,7 @@ import { droppedTextMarkdown, isPlainMultiline, plainLinesToParagraphs, singleLi
 import { autolinkInputRule, autolinkSerializer } from './autolink'
 import { parseBlockSubpath, splitLinkInner, wikiSafeUrl } from '@amadeus-shared/pdfLink'
 import { useBlockSelection } from '../../store/blockSelection'
-import { unescapeHighlightAtLineStart, unescapeTagAtLineStart } from './tagEscape' // R-25:行首 #标签落盘不带反斜杠;I-17:行首 ==高亮== 同理
+import { unescapeTagAtLineStart } from './tagEscape' // R-25:行首 #标签落盘不带反斜杠(I-17 行首 ==高亮== 在 text handler 里,见 textSafe.ts)
 import { mathLivePreviewPlugin, unescapeMathSource } from './mathLivePreview' // LaTeX 实况预览:公式常驻纯文本,离行才渲染(见该文件）
 import { pluginEditorExtensions } from '../../plugins/editorExtensions'
 import { registerMessages, subscribeLocale, translate, useI18n } from '../../../i18n'
@@ -250,27 +254,32 @@ export function stampedFileName(kind: string): string {
  *  新打的 [[链接]] 在重解析成 wikilink 节点前仍是纯文本,remark 会转义成 \[\[(索引抽不到,双链失联);
  *  math 纯文本的 _ * { } 被转义(x_i→x\_i);`> [!note]-` 的 `[` 被转义 Obsidian 不认;空段落落成 <br />。
  *  行首 `#tag` 被转义成 `\#tag`(标签索引与 Obsidian 都不认,R-25;须在 unescapeMathSource 之前,见 tagEscape.ts)。
- *  行首 `==高亮==` 被转义成 `\==`(setext 防护过宽,I-17;同在 tagEscape.ts)。
+ *  (行首 `==高亮==` 的 `\==`(I-17)与成对字面 `[词]` 的 `\[`(K13b)不在这里:在序列化器的 text handler 里去,
+ *   只碰正文文字 —— 整串上分不清 HTML / 图片说明里用户写的反斜杠,见 textSafe.ts。)
  *  markdownUpdated 监听器与 UnifiedPage.serializeNow(flush 前同步快照)都必须走这里 ——
  *  Codex 终审 P0:serializeNow 曾绕过本链,快打字后立刻改名会把 \[\[ 持久化成死链。 */
 export function normalizeSerializedMd(markdown: string): string {
   // restoreEscapeSentinels 必须在最后:用户写的转义(D-11)以占位穿过上面这串反转义,再换回 `\`(见 ./literalEscape)。
-  return restoreEscapeSentinels(stripEmptyLineBr(unescapeCalloutToken(unescapeMathSource(unescapeTagAtLineStart(unescapeHighlightAtLineStart(normalizeUrlLiterals(unescapeWikiOutsideFences(markdown))))))))
+  const urls = normalizeUrlLiterals(unescapeWikiOutsideFences(markdown))
+  return restoreEscapeSentinels(stripEmptyLineBr(unescapeCalloutToken(unescapeMathSource(unescapeTagAtLineStart(urls)))))
 }
 /** v4 整篇落盘(D-18):没被编辑的顶层块逐字写回原文,其余走序列化 + normalizeSerializedMd(见 ./verbatim)。
  *  监听器、UnifiedPage.serializeNow 与 canonical(isPristine 的规范形)**必须同用这一个** —— 口径一分叉,
  *  「只是规范化了一下」就会被判成用户改动,回灌时凭空出冲突副本。 */
 export function serializeUnified(ctx: Ctx, doc: ProseNode): string {
-  return serializeForSave(ctx, doc, normalizeSerializedMd)
+  // 成对字面 `[词]` 不带反斜杠(K13b / K12h,见 ./bracketEscape):要看得见整篇有没有链接定义才安全,所以只在这里打开,
+  // 包住整个 serializeForSave(它的回退路径会再序列化);单块(v3)、剪贴板、片段只是文件的一部分,照旧保留 `\[`。
+  // 逐字回填的块在序列化时只是占位,看不到那里的链接定义 —— 按文档查,有就整篇保留。
+  return withLiteralBrackets(!hasRefDefinition(doc), () => serializeForSave(ctx, doc, normalizeSerializedMd))
 }
 /** 块内片段(切块切出的后半段 / 剪贴板结构化复制)的序列化结果 → markdown。
  *  stripEmptyLineBr:空段落别落成 `<br />`(切块切出的那半段常以空段落打头,否则新块开头凭空多一个);
  *  unescapeCalloutToken:切出来的那半段也可能带 callout 令牌;
- *  unescapeTagAtLineStart:片段行首的 `#tag` 同样别带反斜杠(R-25);
+ *  unescapeTagAtLineStart:片段行首的 `#tag` 同样别带反斜杠(R-25;行首 `==` 在 text handler 里,两条路径共用);
  *  unescapeMathSource:与落盘同一套公式反转义 —— 公式里读时补回的反斜杠(R-01)在 PM 里是字面,
  *  不反转义就成了 `\\{`,切块后的新块再解析一次又翻一倍、剪贴板给外部应用的也是错的。 */
 export function normalizeFragmentMd(markdown: string): string {
-  return restoreEscapeSentinels(stripEmptyLineBr(unescapeCalloutToken(unescapeMathSource(unescapeTagAtLineStart(unescapeHighlightAtLineStart(markdown))))))
+  return restoreEscapeSentinels(stripEmptyLineBr(unescapeCalloutToken(unescapeMathSource(unescapeTagAtLineStart(markdown)))))
 }
 // Sentinel slash scaffold: insert a cross-note embed cell from a copied `![[ ]]` ref.
 const EMBED_SENTINEL = '\u0000__amadeus_embed__'
@@ -1145,6 +1154,9 @@ export function MilkdownInner({
       // 只能在这儿(ProseMirror 按插件顺序问 handleKeyDown,排在后面永远够不着)。
       // 契约:high 桶的插件不该自己处理的必须返回 false,否则内置行为在它手里静默消失。
       .use(pluginEditorExtensions('high', { pagePath: () => pagePathRef.current }))
+      // 加粗字面化(隐藏开关,./literalBold):开关开着才装;⌘B 要排在 preset 的键位之前。
+      // Literal bold (hidden switch): installed only when on; Mod-b must come before the presets' keymaps.
+      .use(literalBoldEnabled() ? literalBoldPlugin() : [])
       .use(commonmarkWithIndent)
       .use(gfmWithAnchoredRules) // gfm 原位替换版:删除线输入规则带锚(I-01,见 ./anchoredMarkRules)
       .use(structuralIndentRemark)
@@ -1257,6 +1269,9 @@ export function MilkdownInner({
       // 在 editorViewOptionsCtx 上,ProseMirror 先问直接 props 再问插件,故仍然优先。
       .use(clipboard)
       .use(taskCheckboxPlugin())
+      // 正文括号成对的「跨过闭合符 / 成对退格」半边(v4):必须排在 callout 的 handleTextInput 之前,
+      // 先删掉自动补的闭合符,`> [!note]` / 链接 / 脚注照常看到打出来的那个闭合符(见 ./bodyAutoPair)。
+      .use(unified ? bodyPairEarlyPlugin : [])
       .use(calloutPlugin())
       .use(codeBlockPlugin()) // 语法高亮 + 语言/复制/折行工具条(lowlight,base.css .hljs-* 配色)
       .use(spellcheckPlugin) // 拼写检查开关 + 行内代码 / 公式不查(G4-07,见 ./spellcheck)
@@ -1500,9 +1515,12 @@ export function MilkdownInner({
         const { doc } = view.state
         if (w.closeAt !== undefined && doc.textBetween(w.closeAt, Math.min(w.closeAt + 2, doc.content.size)) === ']]') {
           // 在已闭合链接里改目标名(L-02):只替换 [from, closeAt),保留原 `#锚点`/`|别名` 与 `]]`,光标落到 `]]` 之后。
-          const inner = retargetWikiInner(doc.textBetween(w.to, w.closeAt, undefined, '￼'), name)
+          const rest = doc.textBetween(w.to, w.closeAt, undefined, '￼')
+          const inner = retargetWikiInner(rest, name)
           const tr = view.state.tr.insertText(inner, w.from, w.closeAt)
           view.dispatch(tr.setSelection(TextSelection.create(tr.doc, w.from + inner.length + 2)))
+          // 光标正挨着 `]]`(多半是正文括号成对刚补上的那对)= 新写的双链,照旧计数
+          if (!rest) track('note.wikilink')
         } else {
           view.dispatch(view.state.tr.insertText(`${name}]]`, w.from, w.to))
           track('note.wikilink') // 新写一条双链(改已有链接的目标名不算)
@@ -1768,7 +1786,15 @@ export function MilkdownInner({
       return
     }
     const map: Partial<Record<ToolbarAction, () => void>> = {
-      bold: () => runCmd(toggleStrongCommand.key),
+      // 加粗字面化开关开着时,工具条 B 与 ⌘B 同一条(两边加 / 去 `**`);the toolbar's B follows Mod-b when the switch is on
+      bold: () => {
+        if (!literalBoldEnabled()) return runCmd(toggleStrongCommand.key)
+        getInstance()?.action((ctx) => {
+          const v = ctx.get(editorViewCtx)
+          toggleLiteralBold(v.state, v.dispatch)
+          v.focus()
+        })
+      },
       italic: () => runCmd(toggleEmphasisCommand.key),
       underline: () => runCmd(toggleUnderlineCommand.key),
       strike: () => runCmd(toggleStrikethroughCommand.key),

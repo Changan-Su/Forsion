@@ -93,6 +93,14 @@ describe('confirmed stop and restart', () => {
     expect(useApp.getState().messagesBySession.s.find(m => m.compaction)?.compaction?.status).toBe('aborted')
   })
 
+  it('a stop confirmed without an SSE terminal also takes down the engine\'s "waiting elsewhere" notice', async () => {
+    event('status', { phase: 'engine_notice', notice: { id: 'dsh-approval-A1', text: { zh: 'DSH 在工作台里等你批准', en: 'DSH is waiting for your approval in the workbench' } } })
+    expect(useApp.getState().engineNoticesBySession.s).toHaveLength(1)
+    service.stop.mockResolvedValue('aborted')
+    expect(await useApp.getState().stop('s')).toBe(true)
+    expect(useApp.getState().engineNoticesBySession.s).toBeUndefined()
+  })
+
   it('retains the active run on failure, reports it, and permits another stop attempt', async () => {
     service.stop.mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce('aborted')
     expect(await useApp.getState().stop('s')).toBe(false)

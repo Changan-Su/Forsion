@@ -26,6 +26,8 @@ import { MuseTodoCards, museApprovalSettled, type MuseApprovalItem } from './Mus
 import { MuseDeckCard, type MuseCardItem } from './MuseCards'
 import '../../tangu/messages'
 import { useEnterMotion } from '../../components/AnimatedUI'
+import { engineSessionActions, pluginText } from '../../amadeus/plugins/tanguSeam'
+import type { EngineNoticeUi } from '../../tangu/store/tanguSlice'
 
 registerMessages({
   'approval.tray.title': { zh: '等你批准 · {n}', en: 'Waiting for your approval · {n}' },
@@ -44,11 +46,14 @@ registerMessages({
   'approval.pill': { zh: '{n} 件等你', en: '{n} waiting for you' },
 })
 
-/** 卡片堆里的一项:挡着 agent 的(审批 / 提问 / 计划,Muse 的后台审批)在前;不挡的(任务卡、协作请求、作品卡)垫底。 */
-export type DeckItem = TrayItem | MuseApprovalItem | PendingTask | PendingHuman | PendingCreation | MuseCardItem
+/** 外部引擎在别处等你批准(融合插件:DSH 的审批在工作台里等着):一句话 + 插件登记的对话菜单项当按钮(「打开工作台」)。 */
+export interface EngineNoticeItem { kind: 'notice'; id: string; messageId: string; notice: EngineNoticeUi; engineId?: string; agentSlug?: string }
 
-/** 头行计数:Muse 的后台审批算审批。 */
-const countKind = (i: DeckItem): 'approval' | 'inquiry' | 'plan' | 'task' | 'human' | 'creation' => (i.kind === 'muse-approval' ? 'approval' : i.kind === 'muse-card' ? 'task' : i.kind)
+/** 卡片堆里的一项:挡着 agent 的(审批 / 提问 / 计划,Muse 的后台审批)在前;不挡的(任务卡、协作请求、作品卡)垫底。 */
+export type DeckItem = TrayItem | MuseApprovalItem | PendingTask | PendingHuman | PendingCreation | MuseCardItem | EngineNoticeItem
+
+/** 头行计数:Muse 的后台审批、别处等着的审批都算审批。 */
+const countKind = (i: DeckItem): 'approval' | 'inquiry' | 'plan' | 'task' | 'human' | 'creation' => (i.kind === 'muse-approval' || i.kind === 'notice' ? 'approval' : i.kind === 'muse-card' ? 'task' : i.kind)
 /** 挡着 agent(或 Muse)往下走的:来了就顶到最上面、收着时展开一次。 */
 const blocks = (i: DeckItem): boolean => i.kind !== 'task' && i.kind !== 'human' && i.kind !== 'creation' && i.kind !== 'muse-card'
 
@@ -164,7 +169,9 @@ export function ApprovalTray({ items, onDecide, onAnswer, onTask, sessionId }: {
           data-tray-msg={cur.messageId}
         >
           {(cur.kind === 'approval' || cur.kind === 'inquiry' || cur.kind === 'plan') && cur.agentName && <div className="t2c-apv-from">{cur.agentName}</div>}
-          {cur.kind === 'muse-card' ? (
+          {cur.kind === 'notice' ? (
+            <EngineNoticeCard key={cur.id} item={cur} sessionId={sessionId} />
+          ) : cur.kind === 'muse-card' ? (
             <MuseDeckCard key={cur.id} card={cur.card} sessionId={sessionId} />
           ) : cur.kind === 'human' ? (
             // 「知道了」/ 撤销之后它离开卡片堆,流里那行收成「已知道 / 已撤销」
@@ -187,6 +194,27 @@ export function ApprovalTray({ items, onDecide, onAnswer, onTask, sessionId }: {
           ) : (
             <InquiryCard key={cur.id} req={cur.req} onAnswer={(a) => submit(cur.id, () => onAnswer(cur.messageId, cur.id, a))} />
           )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** 别处等你批准的那件(引擎给的话 + 插件登记的对话菜单项当按钮)。找不到那一项(插件停用了、网页 / 手机没有插件)就只写那句话。 */
+function EngineNoticeCard({ item, sessionId }: { item: EngineNoticeItem; sessionId?: string }) {
+  const { locale } = useI18n()
+  const { notice } = item
+  const say = (v: { zh?: string; en?: string }): string => (locale === 'en' ? v.en || v.zh : v.zh || v.en) || ''
+  const hit = notice.action && item.engineId ? engineSessionActions(item.engineId).find((x) => x.action.id === notice.action!.id) : undefined
+  return (
+    <div className="approval-card t2c-notice" data-engine-notice={notice.id}>
+      <div className="approval-title">{say(notice.text)}</div>
+      {hit && sessionId && (
+        <div className="approval-actions">
+          <button
+            type="button" className="btn primary sm" data-engine-notice-action={notice.action!.id}
+            onClick={() => { try { hit.action.run({ sessionId, ...(item.agentSlug ? { agentSlug: item.agentSlug } : {}) }) } catch (e) { console.error(`[amadeus] plugin "${hit.owner}" session action threw`, e) } }}
+          >{say(notice.action!.label) || pluginText(hit.action.label, hit.action.id)}</button>
         </div>
       )}
     </div>
