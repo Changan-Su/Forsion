@@ -8463,6 +8463,51 @@ Then reply with only the command output.`,
       return { ok: !ev.error && !!typed && !!clicked && !cu.length && relays && !edited,
         detail: ev.error || `${sum(ev)};${typed ? '填了 Dune' : '✗ 没 type Dune'};${clicked ? `点了 ${clicked.args.target}` : '✗ 没点 Add book'};${relays ? '转述了报错' : '✗ 没提报错'}${cu.length ? `;✗ 用了 computer use(${cu.join(',')})` : ''}${edited ? ';✗ 动了代码' : ''};动作序列 ${ops.join('→')}`, ...base(ev) };
     });
+    // ⑥(11-15):插件的设置页在独立的设置窗口里。判据:用 settings 打开,再在那扇窗里(window "settings" 或 [sN] 引用)填字、点保存。
+    await scenario('pluginsandbox', 'pluginsandbox ⑥ 插件设置页:settings 打开设置窗口,在那扇窗里填字、点保存', async () => {
+      const MAIN = '[e1] button "Reading log"\nheading "Shelf"\n[e2] input "Book title"\n[e3] button "Add book"';
+      const SETTINGS = 'heading "Reading log"\n[s1] input "Default shelf"\n[s2] button "Save"';
+      const inSettings = (a) => a.window === 'settings' || /^s\d+$/.test(String(a.target || ''));
+      const act = (op, a) => {
+        const where = inSettings(a) ? ' in the settings window' : '';
+        const saved = op === 'click' && inSettings(a) && /s2|Save/i.test(String(a.target || ''));
+        const did = op === 'settings' ? 'opened Settings > Plugins > this plugin in the settings window and read 2 element(s)' : op === 'read' ? `read 3 element(s)${where}` : op === 'type' ? `typed ${String(a.text || '').length} character(s)${where}` : `${op}${where}`;
+        return { ok: true, text: JSON.stringify({ ...status(), action: { did, target: a.target ? `target ${a.target}` : '', outline: op === 'settings' || (op === 'read' && inSettings(a)) ? SETTINGS : op === 'read' ? MAIN : '', newLogs: saved ? [{ level: 'log', text: 'default shelf saved: Sci-fi' }] : [], newNotices: [] } }), ...(op === 'settings' ? { image: 'data:image/jpeg;base64,AAAA' } : {}) };
+      };
+      const ev = await run(`live-sbx-settings-${Date.now()}`, 'reading-log 插件已经在沙箱里跑着了。它的设置里有「Default shelf」一栏。帮我在沙箱里打开这个插件的设置,把 Default shelf 填成「Sci-fi」再保存,看看控制台说了什么。先别改代码。', 240_000, {}, 'desktop/live-harness', undefined, undefined, undefined, {
+        clientCapabilities: ['plugin.sandbox', 'plugin.sandbox-v2'],
+        phone: { ns: 'plugin', respond: (b) => (['read', 'type', 'click', 'press', 'scroll', 'space', 'files', 'settings'].includes(b.op) ? act(b.op, b.args || {}) : b.op === 'stop' ? { ok: true, text: '{"stopped":true}' } : { ok: true, text: JSON.stringify(status()) }) },
+      });
+      const claimed = ev.clientCmds.filter((c) => c.claimed);
+      const opened = claimed.some((c) => c.op === 'settings' && !c.args?.close);
+      const typed = claimed.find((c) => c.op === 'type' && /Sci-fi/.test(String(c.args?.text || '')) && inSettings(c.args || {}));
+      const saved = claimed.find((c) => c.op === 'click' && inSettings(c.args || {}) && /s2|Save/i.test(String(c.args?.target || '')));
+      const cu = ev.toolCalls.filter((n) => /^computer|^mcp__computer|screenshot_app/.test(n));
+      const relays = /saved|Sci-fi|保存/i.test(ev.content);
+      const edited = ev.toolCalls.some((n) => /edit_file|write_file|apply_patch/.test(n));
+      return { ok: !ev.error && opened && !!typed && !!saved && !cu.length && relays && !edited,
+        detail: ev.error || `${sum(ev)};${opened ? '开了设置窗口' : '✗ 没用 settings'};${typed ? '在设置窗口填了 Sci-fi' : '✗ 没在设置窗口 type Sci-fi'};${saved ? `在设置窗口点了 ${saved.args.target}` : '✗ 没在设置窗口点保存'};${relays ? '转述了结果' : '✗ 没转述'}${cu.length ? `;✗ 用了 computer use(${cu.join(',')})` : ''}${edited ? ';✗ 动了代码' : ''}`, ...base(ev) };
+    });
+    // ⑦(11-15):命令弹了自己的选择框在等人点。判据:命令只发一次(不当成「没起来」去重跑),接着 read / 点「Goodreads」,转述导入结果。
+    await scenario('pluginsandbox', 'pluginsandbox ⑦ 命令在等自己弹的框:不重跑,读窗口、在框里选,转述结果', async () => {
+      const OUTLINE = 'heading "Shelf"\n[e2] input "Book title"\n[e3] button "Add book"\nheading "Import from"\n[e4] button "Goodreads"\n[e5] button "CSV file"';
+      const act = (op, a) => {
+        const picked = op === 'click' && /e4|Goodreads/i.test(String(a.target || ''));
+        return { ok: true, text: JSON.stringify({ ...status(), action: { did: op === 'read' ? 'read 4 element(s)' : op === 'click' ? 'clicked' : op, target: a.target ? `target ${a.target}` : '', outline: op === 'read' ? OUTLINE : '', newLogs: picked ? [{ level: 'log', text: 'imported 12 books from Goodreads' }] : [], newNotices: [] } }) };
+      };
+      const ev = await run(`live-sbx-pending-${Date.now()}`, 'reading-log 插件已经在沙箱里跑着了。在沙箱里跑一下它的 import-books 命令,它会弹一个选来源的框,选 Goodreads,然后告诉我导入了多少本。先别改代码。', 240_000, {}, 'desktop/live-harness', undefined, undefined, undefined, {
+        clientCapabilities: ['plugin.sandbox', 'plugin.sandbox-v2'],
+        phone: { ns: 'plugin', respond: (b) => (b.op === 'command' ? { ok: true, text: JSON.stringify({ ...status(), command: { pending: true } }) } : ['read', 'type', 'click', 'press', 'scroll', 'space', 'files', 'settings'].includes(b.op) ? act(b.op, b.args || {}) : b.op === 'stop' ? { ok: true, text: '{"stopped":true}' } : { ok: true, text: JSON.stringify(status()) }) },
+      });
+      const claimed = ev.clientCmds.filter((c) => c.claimed);
+      const runs = claimed.filter((c) => c.op === 'command' && /import-books/.test(String(c.args?.command || ''))).length;
+      const picked = claimed.find((c) => c.op === 'click' && /e4|Goodreads/i.test(String(c.args?.target || '')));
+      const cu = ev.toolCalls.filter((n) => /^computer|^mcp__computer|screenshot_app/.test(n));
+      const relays = /12/.test(ev.content);
+      const edited = ev.toolCalls.some((n) => /edit_file|write_file|apply_patch/.test(n));
+      return { ok: !ev.error && runs === 1 && !!picked && !cu.length && relays && !edited,
+        detail: ev.error || `${sum(ev)};命令发了 ${runs} 次${runs > 1 ? '(✗ 重跑了)' : ''};${picked ? `点了 ${picked.args.target}` : '✗ 没在框里选 Goodreads'};${relays ? '说了 12 本' : '✗ 没说导入了多少'}${cu.length ? `;✗ 用了 computer use(${cu.join(',')})` : ''}${edited ? ';✗ 动了代码' : ''}`, ...base(ev) };
+    });
     await scenario('pluginsandbox', 'pluginsandbox ③ 负对照:没声明能力 → 零 plugin_sandbox,不谎称在沙箱里跑过', async () => {
       const ev = await sbxRun(MSG, { caps: null });
       const calls = sbxCalls(ev);

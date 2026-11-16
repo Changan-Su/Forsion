@@ -164,8 +164,8 @@ export interface SandboxLast { pluginId: string; name: string; version: string; 
 
 /** 只看、不动沙箱界面的动作:不算「最近一步」。 */
 const QUIET_OPS = new Set(['status', 'logs'])
-/** 转给子进程原样做的动作(11-03 起);回来的 action 挂在 text 的 `action` 键上。 */
-const CHILD_OPS = new Set(['read', 'click', 'type', 'press', 'scroll', 'space', 'files'])
+/** 转给子进程原样做的动作(11-03 起;settings 11-15 起);回来的 action 挂在 text 的 `action` 键上。 */
+const CHILD_OPS = new Set(['read', 'click', 'type', 'press', 'scroll', 'space', 'files', 'settings'])
 
 export type SandboxChildEvent =
   | { event: 'report'; note: string; sessionId?: string; pluginId: string; name: string }
@@ -262,8 +262,12 @@ export function createPluginSandbox(deps: SandboxDeps) {
   }
 
   async function shoot(c: Child, view?: string, settleFirst = false): Promise<string | undefined> {
-    const r = await request(c, 'screenshot', { ...(view ? { view } : {}), ...(settleFirst ? { settle: true } : {}) }, 20_000).catch(() => null)
-    return typeof r?.image === 'string' ? r.image : undefined
+    return (await shootIn(c, { view, settle: settleFirst })).image
+  }
+  /** window = 'settings':截设置窗口(没开着 → error 说清楚)。 */
+  async function shootIn(c: Child, o: { view?: string; settle?: boolean; window?: string }): Promise<{ image?: string; error?: string }> {
+    const r = await request(c, 'screenshot', { ...(o.view ? { view: o.view } : {}), ...(o.settle ? { settle: true } : {}), ...(o.window === 'settings' ? { window: 'settings' } : {}) }, 20_000).catch(() => null)
+    return { ...(typeof r?.image === 'string' ? { image: r.image } : {}), ...(typeof r?.error === 'string' ? { error: r.error.slice(0, 300) } : {}) }
   }
 
   const ok = (st: SandboxStatus | null, image?: string, error?: string): SandboxResult =>
@@ -446,20 +450,24 @@ export function createPluginSandbox(deps: SandboxDeps) {
       if (op === 'status' || op === 'logs') return ok(await readStatus(c))
       if (op === 'screenshot') {
         const view = typeof args.view === 'string' ? args.view : undefined
-        const image = await shoot(c, view)
-        return note(c, op, ok(await readStatus(c), image, image ? undefined : 'no screenshot'))
+        const shot = await shootIn(c, { view, window: typeof args.window === 'string' ? args.window : undefined })
+        return note(c, op, ok(await readStatus(c), shot.image, shot.image ? undefined : shot.error || 'no screenshot'))
       }
       if (op === 'command') {
-        const r = await request(c, 'command', { command: args.command, args: args.args ?? {} }, 20_000)
-        // shot:做完顺手截一张(命令多半改了界面,agent 不必再要一次)
+        const r = await request(c, 'command', { command: args.command, args: args.args ?? {}, ...(args.allowPending === true ? { allowPending: true } : {}) }, 20_000)
+        // shot:做完顺手截一张(命令多半改了界面,agent 不必再要一次;还在等它自己弹的框时截到的正是那个框)
         const image = args.shot === true ? await shoot(c, undefined, true) : undefined
-        return note(c, op, ok(await readStatus(c), image, typeof r.error === 'string' ? r.error.slice(0, 300) : undefined), typeof args.command === 'string' ? args.command : undefined)
+        const res = ok(await readStatus(c), image, typeof r.error === 'string' ? r.error.slice(0, 300) : undefined)
+        // 命令开始了还没跑完(多半在等它自己弹的选择框):挂在 text 的 command 键上,老引擎不看它
+        if (r.pending === true && res.text) res.text = JSON.stringify({ ...JSON.parse(res.text), command: { pending: true } })
+        return note(c, op, res, typeof args.command === 'string' ? args.command : undefined)
       }
       if (CHILD_OPS.has(op)) {
         // 动手的动作排进同一队:两个对话同时 type 会先后把焦点抢走,字打进别的框、回执也串(Codex 评审)
         return await queued(async () => {
         if (child !== c || c.exited) return { ok: false, code: 'no_sandbox', error: 'the sandbox stopped meanwhile' }
-        const r = await request(c, op, args, 25_000)
+        // settings 要等一扇新窗口起来、插件在里面装上:给足时间
+        const r = await request(c, op, args, op === 'settings' ? 40_000 : 25_000)
         const st = await readStatus(c)
         const base = ok(st, typeof r.image === 'string' ? r.image : undefined, typeof r.error === 'string' ? r.error.slice(0, 500) : undefined)
         const action = r.action && typeof r.action === 'object' ? { ...(r.action as Record<string, unknown>) } : null

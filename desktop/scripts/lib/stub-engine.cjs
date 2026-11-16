@@ -98,6 +98,8 @@ async function startStubEngine(data = {}) {
       const id = `r${seen.runs.length + 1}`;
       seen.runs.push({
         runId: id, message: b.message, sessionId: b.session_id, agentConfig: b.agent_config,
+        // 客户端声明的能力(插件沙箱台架核 plugin.sandbox-v2 真的随 run 发出去了)
+        ...(Array.isArray(b.client_capabilities) ? { clientCapabilities: b.client_capabilities } : {}),
         // 插件经 secret_env 交给 run_bash 的秘密(青鸟的 B 站登录):台架反向断言它只在这里、不在 message 里
         ...(b.secret_env ? { secretEnv: b.secret_env } : {}),
         // 附件记摘要(data 头 64 字符够解出 PNG 宽高);2 MB 以下的连 data 一起留(台架要验截图内容),更大的不留,免得把台架进程撑大
