@@ -2,6 +2,17 @@
 
 <!-- English edition of CHANGELOG.md: same "## <version> (<date>)" headings, one bullet per Chinese bullet. Add both when releasing. -->
 
+## 2.14.2 (2026-11-16)
+
+This release includes everything in 2.14.2-beta.1 through beta.4; see the sections below. New since beta.4:
+
+- **Chat**: Sources from a web search are numbered in the reply, open as source cards, and the right sidebar lists every result of that search. Menus on the Chat Box bottom row now unfold from their buttons. The Agent picker no longer jumps on hover, and its descriptions follow the interface language. Tangu can answer questions about Forsion Git, Penzor Cloud, the Store and other Forsion products.
+- **DSH**: Conversations on the DSH engine get their own page in the right sidebar, and screenshot tools handed to DSH include the image.
+- **Note editing**: Brackets and quotes close automatically, and typing one with text selected wraps the selection. Math source uses monospace coloring with a preview above the line; fixed spaces after `$$` and formulas splitting a table. Exposed `![[…]]` embed source is colored like a link and right-click opens the file menu.
+- **Mobile**: Notices appear as a banner below the status bar. View back / forward on Home and Chat no longer sits under the status bar. Native colors are correct again with Reduce motion on.
+- **Other**: Sidebar widths can be reset to their defaults, with undo. Plugin whiteboards render the viewport in the same frame. Plugin icons no longer interrupt the host interface, which fixes system Back getting stuck on mobile. When the same computer is registered more than once, the LAN direct connection picks the right device. Project memory organizing and compaction get enough time to finish. External engine processes only receive allowlisted environment variables.
+- Bundles Tangu engine 2.14.5 and Calendar 0.1.13; the default desktop distribution includes Forsion Extend 0.10.5.
+
 ## 2.14.2-beta.4 (2026-11-15)
 
 Preview build: available to people who chose the preview channel.
