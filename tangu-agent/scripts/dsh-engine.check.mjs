@@ -18,6 +18,10 @@
  *     [--dsh-tools-off]              开跑前在那份 DSH 目录的对话入口组合(profiles/acp/cordis.patch.yml)里关掉 DSH 自带的
  *                                    跑命令、读写文件、搜文件、后台任务(tool-bash / tool-pwsh / tool-fs / tool-fs-search / tool-jobs),
  *                                    模型手里只剩桥里的 Forsion 工具;跑完把那份补丁原样还原。真模型跑交接时用它
+ *     [--dump-requests <文件>]       假模型模式:跑完把假模型收到的带工具请求原样写进这个文件(比两版交给模型的东西用)
+ *
+ * 交接那几项真模型红了、想分清是交过去的东西变了还是模型变了:先用 --dump-requests 比两版请求,再用
+ * scripts/dsh-instructions.probe.mjs 拿同一份指令目录对真模型多问几次。
  *
  * 准备 DSH(只装官方包,不装任何社区插件;和你自己的 DSH 无关):
  *   mkdir rt && cd rt && npm init -y && npm install --ignore-scripts @deepseek-ai/dsh
@@ -60,6 +64,8 @@ const TOOLS_OFF_PATCH = `# dsh-engine.check.mjs --dsh-tools-off 临时写的:关
   disabled: true
 `;
 const KEY_FILE = opt('key-file', ''), DSH_HOME_ARG = opt('dsh-home', '');
+// --dump-requests <文件>:跑完把假模型收到的带工具请求(system / tools / messages 原样)写进这个文件,比两版交给模型的东西用
+const DUMP_REQUESTS = opt('dump-requests', '') ? resolve(opt('dump-requests', '')) : '';
 // --model <片段>:真模型那套每一轮都用清单里 id 或名字含这段文字的那个模型。用账号登录(不是 API key)的 DSH,新会话的缺省模型
 // 走的是要 key 的那条线(deepseek-official),不指定的话每一句都是「no API key for provider route」。
 const LIVE_MODEL = opt('model', '');
@@ -81,6 +87,9 @@ const until = async (fn, ms, every = 300) => { const end = Date.now() + ms; for 
 const D = (name) => { const p = join(R, name); mkdirSync(p, { recursive: true }); return p; };
 const HOME = D('home'), DSH_HOME = LIVE && DSH_HOME_ARG ? resolve(DSH_HOME_ARG) : D('dsh'), WS = D('ws'), OUTSIDE = D('outside'), TMP = D('tmp');
 const TANGU_HOME = D(join('forsion', 'tangu'));
+// DSH 以 .git 定项目根,把根到工作目录一路上的 AGENTS.md / CLAUDE.md 都发给模型(dsh-agent-instructions)。--root 常在
+// 某个仓里面:不立这个标记,那个仓自己的说明会整份进每一次请求(真模型时还会发给模型方),判据跟着它的规矩漂(2026-11-16 实测)。
+mkdirSync(join(WS, '.git'), { recursive: true });
 const LOG = join(R, 'engine.log');
 const clean = (s) => (LIVE_KEY ? String(s).split(LIVE_KEY).join('<key>') : String(s)).split(R).join('<root>').replace(/\/Users\/[^/\s"'\\]+/g, '/Users/<user>');
 
@@ -1165,8 +1174,10 @@ const LIVE_SCENARIOS = {
     const cfg = { engineId: undefined, agentSlug: SLUG };
     const NOFILES = 'Do not read files, list directories or run commands.';
 
-    // 人设和技能:只凭交过去的指令回答
-    const d = await liveRun(sid, `${NO_TOOLS} Among the skills available to you there is one named tea-probe. What secret phrase does its description give? Reply with just the phrase.`, cfg, { modelId: JUDGE_MODEL, stopOn: onlyBridge([]) });
+    // 人设和技能:只凭交过去的指令回答。交接这几问不写「Reply with just …」:DSH 把指令目录当「工作区说明,不压过用户的
+    // 直接指示」包进请求,「只回那一句」和人设的「每条回复都署名」正面冲突,模型听谁说不准(11-16 几小时内从 0/12 摆到
+    // 约一半;同一份 AGENTS.md 带 just 5/8、不带 8/8),这一项就成了掷硬币。要证的是人设交没交到,不是两条指示谁优先。
+    const d = await liveRun(sid, `${NO_TOOLS} Among the skills available to you there is one named tea-probe. What secret phrase does its description give?`, cfg, { modelId: JUDGE_MODEL, stopOn: onlyBridge([]) });
     record('handoff', '交接(真模型):人设和技能交过去了,模型只凭指令答得出', [
       ['这一轮跑完', d.done, d.error || ''],
       ['回答里有技能描述里的那句', d.text.includes(PHRASE), said(d)],
@@ -1176,7 +1187,7 @@ const LIVE_SCENARIOS = {
 
     // 直接调
     const TEA = codeWord('TEA');
-    const a = await liveRun(sid, `Please remember this about me using your Forsion remember tool: I drink jasmine tea (tag ${TEA}). ${NOFILES} When it is saved, reply with just: SAVED`, cfg, { modelId: JUDGE_MODEL, stopOn: onlyBridge(['remember']) });
+    const a = await liveRun(sid, `Please remember this about me using your Forsion remember tool: I drink jasmine tea (tag ${TEA}). ${NOFILES} When it is saved, reply with SAVED.`, cfg, { modelId: JUDGE_MODEL, stopOn: onlyBridge(['remember']) });
     record('handoffcall', '交接(真模型):模型用桥里的 remember 记下一件事,卡片由 Forsion 画,记在它名下', [
       ['这一轮跑完', a.done, a.error || ''],
       ['调了 remember,卡片按 Tangu 原名画、成功', a.results.some((r) => r.name === 'remember' && !r.isError), a.results.map((r) => `${r.name}:${r.isError ? 'err' : 'ok'}`).join(', ') || '(没调)'],
@@ -1190,7 +1201,7 @@ const LIVE_SCENARIOS = {
     try {
       // 审批过了时限:模型拿到编号后会不会照着去取
       const CAT = codeWord('CAT'); const t0 = Date.now();
-      const b = await liveRun(sid, `Please remember this about me using your Forsion remember tool: I have a cat named Miso (tag ${CAT}). ${NOFILES} When it is saved, reply with just: SAVED`,
+      const b = await liveRun(sid, `Please remember this about me using your Forsion remember tool: I have a cat named Miso (tag ${CAT}). ${NOFILES} When it is saved, reply with SAVED.`,
         { ...cfg, approvalMode: 'custom' }, { modelId: JUDGE_MODEL, timeoutMs: 300_000, stopOn: onlyBridge(['remember']), onApproval: async () => { await sleep(50_000); return 'approve'; } });
       record('handoffwait', '交接(真模型):审批过了 45 秒,模型照编号用 forsion_wait 取到结果,工具只执行一次', [
         ['这一轮跑完', b.done, b.error || ''],
@@ -1204,7 +1215,7 @@ const LIVE_SCENARIOS = {
 
       // 拒绝:模型不该绕开去写
       const COFFEE = codeWord('COFFEE');
-      const c = await liveRun(sid, `Please remember this about me using your Forsion remember tool: I dislike coffee (tag ${COFFEE}). ${NOFILES} If it is not saved, reply with just: NOT SAVED`,
+      const c = await liveRun(sid, `Please remember this about me using your Forsion remember tool: I dislike coffee (tag ${COFFEE}). ${NOFILES} If it is not saved, reply with NOT SAVED.`,
         { ...cfg, approvalMode: 'custom' }, { modelId: JUDGE_MODEL, stopOn: onlyBridge(['remember']), onApproval: () => 'reject' });
       record('handoffreject', '交接(真模型):用户拒了,模型照实说没存,记忆没写', [
         ['这一轮跑完', c.done, c.error || ''],
@@ -1263,6 +1274,9 @@ try {
   }
 } catch (e) { console.error(`\n台架出错:${clean(e.stack || e)}`); exitCode = 1; } finally {
   await stopEngine(); await stub.close();
+  // 写不出来也不能挡住下面还原补丁层
+  if (DUMP_REQUESTS) try { mkdirSync(dirname(DUMP_REQUESTS), { recursive: true }); writeFileSync(DUMP_REQUESTS, JSON.stringify(stub.requests, null, 1)); console.log(`\n假模型收到的带工具请求(${stub.requests.length} 次)已写到 ${clean(DUMP_REQUESTS)}`); }
+  catch (e) { console.error(`\n--dump-requests 没写成:${clean(e.message || e)}`); exitCode = 1; }
   if (toolsOffBackup !== null) { await sleep(2500); writeFileSync(toolsOffFile, toolsOffBackup); console.log(`\n已还原 ${clean(toolsOffFile)}`); }
 }
 await sleep(2500); // 引擎杀 DSH 是 SIGTERM → 2 秒 → SIGKILL
