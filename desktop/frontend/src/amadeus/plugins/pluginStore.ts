@@ -1012,7 +1012,8 @@ function toPlugin(src: ExternalPluginSource): AmadeusPlugin {
         let code = src.code
         let url: string | null = null
         // 声明了 internals 的插件(2026-11-16+)同理打 sourceURL:没接住的错按栈认到它当前这一版头上,熔断用(pluginInternals.ts)。
-        // 其余已安装插件的求值路径仍与从前逐字相同。
+        // 其余已安装插件的求值路径仍与从前逐字相同。开发副本(下面 src.dev 那条)照样拿到 ctx.internals 但**有意不熔断**:
+        // 作者正对着它调,错进沙箱的控制台;调到一半被宿主停掉反而碍事(Codex 11-16 指出,定为有意,手册写明)。
         const internals = !src.agent && !!src.capabilities?.includes('internals') && internalsAvailable()
         if (src.agent) {
           const n = (agentLoads.get(src.id) ?? 0) + 1

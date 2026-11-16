@@ -414,7 +414,7 @@ const { usePageStore } = await ctx.internals.raw.import('host:desktop/frontend/s
 
 **How the plugin page and the store show it**: plugins that declare internal APIs carry a badge in Settings → Plugins (a stronger one for level two), and the detail page states the risk. Use `internalsVerified` to list the Forsion versions you checked (minor versions only, such as `"2.14"`). When the user's version isn't listed, the detail page says it wasn't checked on this version. That is a label, not a block.
 
-**When it fails**: errors that a plugin declaring internal APIs doesn't catch are counted against it. Three within a minute and Forsion turns it off and tells the user, who can turn it back on in the plugin page.
+**When it fails**: errors that a plugin declaring internal APIs doesn't catch are counted against it. Three within a minute and Forsion turns it off and tells the user, who can turn it back on in the plugin page. A copy loaded for development in the sandbox is never turned off this way; its errors go to the console as usual.
 
 **Store listing**: level one is reviewed as usual. Level two needs an application: in the submission's internal APIs reason field, say which modules you need and why the public APIs are not enough. Review is per version, so each new version is reviewed again before users get it. The desktop app won't install an unapproved version from the official store. Development loads, manual installs and third-party store sources aren't affected.
 

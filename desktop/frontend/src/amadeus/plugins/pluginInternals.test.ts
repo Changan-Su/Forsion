@@ -56,6 +56,43 @@ describe('snapshotOf:冻结的普通数据', () => {
     const c = m.snapshotOf(o) as Record<string, unknown>
     expect(c.self).toBe(c)
   })
+
+  // 以下四条与 sameData 环、同轮退订、只看栈帧三条是 Codex 11-16 评审的回归。负对照(都已实跑红):① Date 改回 o.getTime();
+  // ② 去掉 volatileSeen 那行 copies.delete;③ 数组改回 o[i] 直接读;④ 去掉 catch 里的 copies.delete;⑤ sameData 去掉成对去重;
+  // ⑥ 退订不置 stopped;⑦ faultOwner 改回整段 includes
+  it('Date 按原型的 getTime 取数:实例上覆盖的 getTime 交不出别的东西', () => {
+    const d = new Date(7)
+    const host = { secret: 1 }
+    Object.defineProperty(d, 'getTime', { value: () => host })
+    expect(m.snapshotOf({ d })).toEqual({ d: 7 })
+  })
+
+  it('子树里有 Map:原地改了之后再读是新的(含 Map 的祖先不留副本)', () => {
+    const map = new Map([['k', 1]])
+    const state = { nested: { map } }
+    expect(m.snapshotOf(state)).toEqual({ nested: { map: [['k', 1]] } })
+    map.set('k', 2)
+    expect(m.snapshotOf(state)).toEqual({ nested: { map: [['k', 2]] } })
+  })
+
+  it('数组下标上的 getter 不执行', () => {
+    let hits = 0
+    const arr: unknown[] = [1, 2]
+    Object.defineProperty(arr, 0, { get() { hits++; return { leak: true } }, enumerable: true })
+    expect(m.snapshotOf({ arr })).toEqual({ arr: [undefined, 2] })
+    expect(hits).toBe(0)
+  })
+
+  it('复制到一半抛错:半成品不留,下一次照样完整复制、冻住', () => {
+    let boom = true
+    const inner = new Proxy({ v: 1 }, { ownKeys(t) { if (boom) throw new Error('x'); return Reflect.ownKeys(t) } })
+    const outer = [inner]
+    expect(() => m.snapshotOf(outer)).toThrow('x')
+    boom = false
+    const c = m.snapshotOf(outer) as unknown[]
+    expect(c).toEqual([{ v: 1 }])
+    expect(Object.isFrozen(c)).toBe(true)
+  })
 })
 
 describe('sameData', () => {
@@ -64,6 +101,14 @@ describe('sameData', () => {
     expect(m.sameData({ a: [1] }, { a: [1, 2] })).toBe(false)
     expect(m.sameData({ a: 1 }, { a: 1, b: 2 })).toBe(false)
     expect(m.sameData([], {})).toBe(false)
+  })
+
+  it('内容一样的环形数据判等,不比到深度上限再判不等', () => {
+    const a: Record<string, unknown> = { n: 1 }; a.self = a
+    const b: Record<string, unknown> = { n: 1 }; b.self = b
+    const c: Record<string, unknown> = { n: 2 }; c.self = c
+    expect(m.sameData(a, b)).toBe(true)
+    expect(m.sameData(a, c)).toBe(false)
   })
 })
 
@@ -115,6 +160,16 @@ describe('read / subscribe', () => {
     const cb = vi.fn()
     api.subscribe('test', (s) => ({ c: (s as { count: number }).count }), cb)
     store.setState({ items: ['x'] })
+    await Promise.resolve()
+    expect(cb).not.toHaveBeenCalled()
+  })
+
+  it('同一轮里退订:已经排上的那一次也不回调(Codex 11-16)', async () => {
+    const { store, api } = harness()
+    const cb = vi.fn()
+    const off = api.subscribe('test', (s) => (s as { count: number }).count, cb)
+    store.getState().inc()
+    off()
     await Promise.resolve()
     expect(cb).not.toHaveBeenCalled()
   })
@@ -173,6 +228,18 @@ describe('出错归因与熔断', () => {
     expect(m.faultOwner({ stack: `Error: x\n    at f (${v2}:3:1)` })).toBe('p-fault')
     expect(m.faultOwner({ stack: `Error: x\n    at f (${v1}:3:1)` })).toBeNull()
     expect(m.faultOwner({ stack: 'Error: x\n    at host.js:1:1' })).toBeNull()
+  })
+
+  it('只看栈帧,不看消息;filename 要整段对上(Codex 11-16)', () => {
+    const url = m.nextInternalsSourceUrl('p-fault')
+    m.markInternalsLive('p-fault', url)
+    // 负对照(已实跑红):faultOwner 改回在整段 stack 里 includes → 这一条红
+    expect(m.faultOwner({ stack: `Error: Cannot fetch ${url}\n    at host.js:1:1` })).toBeNull()
+    expect(m.faultOwner({ stack: `Error: x\n    at ${url}:2:5` })).toBe('p-fault')
+    expect(m.faultOwner({ stack: `Error: x\n    at f (app://local/${url}:2:5)` })).toBe('p-fault')
+    expect(m.faultOwner({}, url)).toBe('p-fault')
+    expect(m.faultOwner({}, `${url}.map`)).toBeNull()
+    expect(m.faultOwner({}, `x${url}`)).toBeNull()
   })
 
   it('同一个错误对象只算一次(window.onerror 和宿主自己的归因可能报同一个)', () => {

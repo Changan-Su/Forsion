@@ -32,6 +32,8 @@ k.host.window / k.host.mainWindow            // 'main' | 'detached' | 'mini' | '
 
 - Copies: functions, accessors and class instances are dropped; `Date` → milliseconds, `Map` → `[key, value][]`, `Set` → array;
   deeper than 64 levels dropped. Unchanged subtrees reuse the previous copy, so repeated reads are cheap.
+  The host updates state immutably: an object it changes in place without a new reference reads as unchanged, as in the host's own UI
+  (subtrees holding a `Map` / `Set` are always re-read).
 - `page` is the active panel's store (it follows panel switches). Field names are the host's own; read the Genesis source.
 - `subscribe`: several host changes in one turn are computed once; the listener runs only when the selected data differs
   (deep comparison). Returns an unsubscribe; the host unsubscribes when the plugin is turned off.
@@ -60,6 +62,8 @@ const { useWorkspace } = await ctx.internals.raw.import('host:lcl/engine/index.t
 For a plugin declaring `internals`, the host tags the installed code with a sourceURL and counts errors it doesn't catch
 (and errors thrown from `subscribe` selectors / listeners) against the running version. Three within 60 seconds → the host
 turns the plugin off and notifies the user, who can turn it back on. Errors the plugin catches itself are not counted.
+A development copy loaded in the sandbox is never turned off this way (its errors go to the sandbox console).
+Only real stack frames count, not error messages that happen to mention the sourceURL.
 
 ## Store
 

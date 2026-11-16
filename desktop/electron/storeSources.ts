@@ -171,7 +171,9 @@ export async function packageManifest(buf: Buffer, type: string): Promise<Record
     if (seen.has(key)) throw new Error('install: duplicate path in archive')
     seen.add(key)
   }
-  const entry = plan.find((p) => p.rel === manifest)
+  // 按不分大小写找:mac / Windows 的盘不分大小写,包里叫 `Manifest.json` 装下去照样被当成 manifest.json 读(Codex 11-16)。
+  // 上面已拒了只差大小写的重名,所以最多一条。
+  const entry = plan.find((p) => p.rel.toLowerCase() === manifest.toLowerCase())
   const file = entry && zip.file(entry.name)
   if (!file) return null
   try {

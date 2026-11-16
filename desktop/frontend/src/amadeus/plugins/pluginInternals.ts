@@ -40,14 +40,28 @@ export function internalsAvailable(): boolean {
 // ── 只读数据副本 ──────────────────────────────────────────────────────────────
 
 /** 源对象 → 冻结副本。宿主的状态按不可变方式更新(宿主自己的界面也靠这个才刷新),没变的子树原样复用上一份副本,
- *  一次更新只复制变了的那几条路径。冻结的副本谁拿都一样,所以全局共用一张。Map / Set 常被原地改,不进这张表。 */
+ *  一次更新只复制变了的那几条路径。冻结的副本谁拿都一样,所以全局共用一张。
+ *  Map / Set 常被原地改:它们自己不进这张表,**含有它们的整条祖先链也不进**(否则 `{ nested: { map } }` 里 map.set 之后
+ *  父对象命中旧副本,读不到也不通知 —— Codex 11-16)。普通对象 / 数组原地改了却没换引用的,副本照旧当没变,宿主自己的界面同样不刷新。 */
 const copies = new WeakMap<object, unknown>()
 const MAX_DEPTH = 64
+/** 复制途中遇到过几个 Map / Set:一个对象复制完若这个数变了,说明子树里有会被原地改的东西,它的副本不留。 */
+let volatileSeen = 0
+/** 正在填的占位副本。环上回到它 = 子树引用了还没定稿的祖先,这样的子树也不留(祖先若因 Map 不留,留下的子树会指着旧祖先)。 */
+const building = new WeakSet<object>()
+const getTime = Date.prototype.getTime
 
 /** 把宿主状态复制成冻结的普通数据:数字 / 文字 / 布尔 / null 原样;数组、普通对象逐层复制;函数和访问器略去;
  *  Date → 毫秒数;Map → [键, 值] 对的数组;Set → 数组;别的类实例(编辑器、DOM 节点……)略去。超过 64 层略去。 */
 export function snapshotOf(value: unknown): unknown {
   return copy(value, 0)
+}
+
+/** 读一个自有数据属性:访问器(getter)不执行、函数不要。 */
+function ownData(o: object, key: string | number): { ok: boolean; value?: unknown } {
+  const d = Object.getOwnPropertyDescriptor(o, key)
+  if (!d || !('value' in d) || typeof d.value === 'function') return { ok: false }
+  return { ok: true, value: d.value }
 }
 
 function copy(v: unknown, depth: number): unknown {
@@ -57,45 +71,72 @@ function copy(v: unknown, depth: number): unknown {
   if (t !== 'object') return undefined // 函数、symbol
   const o = v as object
   const hit = copies.get(o)
-  if (hit !== undefined) return hit
-  if (depth > MAX_DEPTH) return undefined
-  if (Array.isArray(o)) {
-    const out: unknown[] = []
-    copies.set(o, out) // 先占位:环上回到自己时拿到的是同一份(填完再冻)
-    for (let i = 0; i < o.length; i++) out.push(copy(o[i], depth + 1))
-    return Object.freeze(out)
+  if (hit !== undefined) {
+    if (building.has(hit as object)) volatileSeen++
+    return hit
   }
-  if (o instanceof Date) return o.getTime()
+  if (depth > MAX_DEPTH) return undefined
+  // 用原型上的 getTime:实例上被覆盖的 getTime 可能交回任意对象(Codex 11-16)
+  if (o instanceof Date) return getTime.call(o)
   if (o instanceof Map) {
+    volatileSeen++
     const out: unknown[] = []
     for (const [k, val] of o) out.push(Object.freeze([copy(k, depth + 1), copy(val, depth + 1)]))
     return Object.freeze(out)
   }
   if (o instanceof Set) {
+    volatileSeen++
     const out: unknown[] = []
     for (const val of o) out.push(copy(val, depth + 1))
     return Object.freeze(out)
   }
-  const proto = Object.getPrototypeOf(o)
-  if (proto !== Object.prototype && proto !== null) return undefined
-  const out: Record<string, unknown> = {}
-  copies.set(o, out)
-  for (const key of Object.keys(o)) {
-    const d = Object.getOwnPropertyDescriptor(o, key)
-    if (!d || !('value' in d) || typeof d.value === 'function') continue
-    const c = copy(d.value, depth + 1)
-    if (c !== undefined || d.value === undefined) out[key] = c
+  const isArr = Array.isArray(o)
+  if (!isArr) {
+    const proto = Object.getPrototypeOf(o)
+    if (proto !== Object.prototype && proto !== null) return undefined
   }
+  const out: unknown[] | Record<string, unknown> = isArr ? [] : {}
+  const before = volatileSeen
+  copies.set(o, out) // 先占位:环上回到自己时拿到的是同一份(填完再冻)
+  building.add(out)
+  try {
+    if (isArr) {
+      const arr = out as unknown[]
+      const len = (o as unknown[]).length
+      // 下标也按属性描述符读:数组上的 getter 一样不执行(Codex 11-16)
+      for (let i = 0; i < len; i++) { const d = ownData(o, i); arr.push(d.ok ? copy(d.value, depth + 1) : undefined) }
+    } else {
+      const rec = out as Record<string, unknown>
+      for (const key of Object.keys(o)) {
+        const d = ownData(o, key)
+        if (!d.ok) continue
+        const c = copy(d.value, depth + 1)
+        if (c !== undefined || d.value === undefined) rec[key] = c
+      }
+    }
+  } catch (e) {
+    copies.delete(o) // 没填完的半成品不留给下一次(Codex 11-16)
+    building.delete(out)
+    throw e
+  }
+  building.delete(out)
+  if (volatileSeen !== before) copies.delete(o)
   return Object.freeze(out)
 }
 
-/** 两份副本是否同样的数据。共享的子树按引用直接判等,所以通常只走变了的那几条路径。 */
-export function sameData(a: unknown, b: unknown, depth = 0): boolean {
+/** 两份副本是否同样的数据。共享的子树按引用直接判等,所以通常只走变了的那几条路径。
+ *  有环的数据:同一对对象再碰到就当相等(它们是否相等由这一轮别处的比较决定),不会一路比到深度上限再判不等。 */
+export function sameData(a: unknown, b: unknown, depth = 0, seen?: WeakMap<object, WeakSet<object>>): boolean {
   if (Object.is(a, b)) return true
   if (depth > MAX_DEPTH || typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false
+  seen ??= new WeakMap()
+  let pairs = seen.get(a)
+  if (pairs?.has(b)) return true
+  if (!pairs) seen.set(a, (pairs = new WeakSet()))
+  pairs.add(b)
   if (Array.isArray(a)) {
     if (!Array.isArray(b) || a.length !== b.length) return false
-    for (let i = 0; i < a.length; i++) if (!sameData(a[i], b[i], depth + 1)) return false
+    for (let i = 0; i < a.length; i++) if (!sameData(a[i], b[i], depth + 1, seen)) return false
     return true
   }
   if (Array.isArray(b)) return false
@@ -104,7 +145,7 @@ export function sameData(a: unknown, b: unknown, depth = 0): boolean {
   if (ka.length !== kb.length) return false
   for (const k of ka) {
     if (!Object.prototype.hasOwnProperty.call(b, k)) return false
-    if (!sameData((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k], depth + 1)) return false
+    if (!sameData((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k], depth + 1, seen)) return false
   }
   return true
 }
@@ -180,13 +221,27 @@ export function setInternalsTrip(fn: ((pluginId: string) => void) | null): void 
   trip = fn
 }
 
-/** 栈里有某个插件当前这一版的帧 → 它的 id。 */
+/** 栈里有某个插件当前这一版的帧 → 它的 id。只看栈帧行(V8 的 `    at …`),不看错误消息:
+ *  消息里提到某个插件的 sourceURL(`Cannot fetch forsion-plugin/a/1/main.js`)不能把别人的错算到它头上(Codex 11-16)。 */
 export function faultOwner(err: unknown, filename?: string): string | null {
   const stack = String((err as { stack?: unknown } | null)?.stack ?? '')
+  const frames = stack.split('\n').filter((l) => /^\s+at\s/.test(l))
   for (const [id, url] of live) {
-    if (stack.includes(url) || (filename && filename.includes(url))) return id
+    if (filename && (filename === url || filename.endsWith(`/${url}`))) return id
+    if (frames.some((f) => frameAt(f, url))) return id
   }
   return null
+}
+
+/** 一行栈帧是否落在这个 sourceURL 上:`at f (URL:3:1)` / `at URL:3:1`(前面也可能被解析成带协议的绝对地址)。 */
+function frameAt(frame: string, url: string): boolean {
+  let i = frame.indexOf(url)
+  while (i >= 0) {
+    const pre = i === 0 ? ' ' : frame[i - 1]
+    if ((pre === ' ' || pre === '(' || pre === '/') && /^:\d+/.test(frame.slice(i + url.length))) return true
+    i = frame.indexOf(url, i + 1)
+  }
+  return false
 }
 
 /** 记一次明确算到这个插件头上的错。同一个错误对象只算一次;60 秒内满 3 次熔断。 */
@@ -256,13 +311,15 @@ export function createInternalsApi(deps: InternalsDeps): PluginInternals {
       if (!alive() || !store || typeof selector !== 'function' || typeof listener !== 'function') return () => {}
       let prev = select(store, selector) as T
       let queued = false
+      // 退订了:已经排进微任务的那一次也不再回调(Codex 11-16)
+      let stopped = false
       // 宿主一次操作常连着 set 好几次(打字时每个字都是一次):并到一个微任务里只算一遍
       const off = store.subscribe(() => {
         if (queued) return
         queued = true
         queueMicrotask(() => {
           queued = false
-          if (!alive()) return
+          if (stopped || !alive()) return
           let now: T
           try { now = select(store, selector) as T } catch (e) {
             console.error(`[amadeus] 插件 ${pluginId} 的 ctx.internals.subscribe 选择函数抛错`, e)
@@ -278,7 +335,7 @@ export function createInternalsApi(deps: InternalsDeps): PluginInternals {
           }
         })
       })
-      return deps.own('subscription', off, `internals.${name}`)
+      return deps.own('subscription', () => { stopped = true; off() }, `internals.${name}`)
     },
   }
   if (deps.raw) {
