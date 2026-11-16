@@ -82,7 +82,7 @@ ctx.ui.mountWebCard(el, { name, status, address, note, thumbnail, actions, menu 
 ```
 
 - 插件自己在本机起了带网页界面的服务(DSH 融合插件的工作台)时,用 `ctx.ui.mountWebSurface(el, { url })`(2026-11-15 起,只在桌面)把它整页放进视图:是 Forsion 管的顶层页面,服务自己的登录 cookie 能用;地址只收本机,cookie 存在插件自己的分区,页面只能在同源里跳,不给 Forsion 接口。返回的 `navigate('#…')` 只换页面当前地址的 # 那段(同一个页面里跳、不重载)。
-- 给跑在外部引擎上的 Agent 加 Harness 卡上的行(运行时、更新通道……)和对话右键菜单里的项,用 `ctx.registerEngineHarness?.({ engineId, rows, sessionActions })`(2026-11-15 起,桌面);Forsion 自己只画「运行在」那一行。这些菜单项也能当引擎提示的按钮:常驻引擎(`ctx.registerResidentEngine`)在 ACP 管道上发 `_forsion/notice` 扩展通知时,Forsion 把那句话放进对话的审批托盘,`action.id` 对上的那一项就是它的按钮(DSH 融合插件的「DSH 在工作台里等你批准」+「打开工作台」)。
+- 给跑在外部引擎上的 Agent 加 Harness 卡上的行(运行时、更新通道……)和对话右键菜单里的项,用 `ctx.registerEngineHarness?.({ engineId, rows, sessionActions })`(2026-11-15 起,桌面);Forsion 自己只画「运行在」那一行。这些菜单项也能当引擎提示的按钮:常驻引擎(`ctx.registerResidentEngine`)在 ACP 管道上发 `_forsion/notice` 扩展通知时,Forsion 把那句话放进对话的审批托盘,`action.id` 对上的那一项就是它的按钮(DSH 融合插件的「DSH 在工作台里等你批准」+「打开工作台」)。常驻引擎还可以给 `modelSeesImages(model)`(2026-11-16 起):回这场会话此刻的模型收不收图,交过去的电脑控制只有它回 `true` 才跑,别的情况 Forsion 告诉模型「这个模型看不见屏幕」。
 - 视图头行用 `ctx.ui.setViewHead(el, { title })`(左标题、右按钮,不必先有视图模式)。
 - 样式表用 `ctx.addStyle(css)`,停用、重载时宿主会摘掉。
 - 文案用 `ctx.i18n.define({ zh, en })` 拿到 `t(key, vars)`;列表源标题、动作名、视图标题、菜单、对话框、控件、空态都收 `() => t('key')` 或 `{ zh, en }`,用户切语言时宿主画的部分自己重算(字符串照旧在注册那一刻定格)。
