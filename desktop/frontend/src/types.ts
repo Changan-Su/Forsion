@@ -1015,8 +1015,10 @@ declare global {
       /** 通用系统通知(所有应用内通知同步发);web 下 undefined。meta.event = 哪类通知(NOTIFY_EVENTS 的 id / plugin:<id>),
        *  meta.key = 这条的 dedupeKey(只有有人在等的 urgent 卡才带,见 notificationStore 的 postOs):桌面都不看;
        *  安卓(mobile/src/liveIsland.ts)带 key 的按「来源 + key」、
-       *  不带的按来源各只留一条,并略过由 Agent 运行状态通知报的「跑完了」。 */
-      notify?(title: string, body: string, meta?: { event?: string; key?: string }): Promise<void>
+       *  不带的按来源各只留一条,并略过由 Agent 运行状态通知报的「跑完了」。
+       *  回话:安卓回 `{ posted }`(这一条真贴出去了没有:没通知权限、渠道被关、App 在前台 → false),拒绝也算没投;
+       *  桌面和老安卓壳回 undefined,按投了算(notificationStore 的 osDelivered)。 */
+      notify?(title: string, body: string, meta?: { event?: string; key?: string }): Promise<void | { posted: boolean }>
       setInboxBadge?(count: number): Promise<void>
       onInboxOpen?(cb: () => void): () => void
       // P1-K3

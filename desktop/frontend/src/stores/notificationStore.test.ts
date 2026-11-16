@@ -508,11 +508,12 @@ describe('手机横幅模式(banner)', () => {
       notifyApp({ text: 'quiet', event: 'plugin:x', inAppOnly: true, onClose: aClosed })
       expect(os).not.toHaveBeenCalled() // 在前台:卡片就是提醒
       hidden = true
-      st().visibilityChanged() // 退到后台:排着的 b、c 在后台不会上屏 → 现在补发;quiet 是应用内回执,不发
+      // 退到后台:屏上的 a 撤回队首、停表(第五轮;它在前台上过屏,不补发);排着的 b、c 在后台不会上屏 → 现在补发;quiet 是应用内回执,不发
+      st().visibilityChanged()
       expect(os.mock.calls.map((c) => c[1])).toEqual(['b same source', 'c other'])
-      vi.advanceTimersByTime(5000 + 300) // a 在后台到点走:不开冷却;后面的不在后台上屏
       expect(shown()).toEqual([])
-      expect(st().queue.map((n) => n.text)).toEqual(['b same source', 'c other', 'quiet'])
+      vi.advanceTimersByTime(5000 + 300) // 在后台:a 不到点走,后面的也不上屏
+      expect(st().queue.map((n) => n.text)).toEqual(['a', 'b same source', 'c other', 'quiet'])
       st().visibilityChanged() // 还在后台:不再补发
       expect(os).toHaveBeenCalledTimes(2)
       hidden = false
@@ -522,7 +523,11 @@ describe('手机横幅模式(banner)', () => {
       expect(bClosed).not.toHaveBeenCalled()
       expect(aClosed).not.toHaveBeenCalled()
       vi.advanceTimersByTime(300)
-      expect(shown(), '后台到点走的 a 不该开冷却:同来源的 b 照出').toEqual(['b same source'])
+      expect(shown(), '撤下的 a 先回来').toEqual(['a'])
+      vi.advanceTimersByTime(4999)
+      expect(shown(), 'a 重新停满 5 秒').toEqual(['a'])
+      vi.advanceTimersByTime(1 + 300)
+      expect(shown(), 'b 带 onClose、不受节流:a 走后照出').toEqual(['b same source'])
       notifyApp({ text: 'd', event: 'plugin:d' }) // 回到前台再来的:不发
       expect(os).toHaveBeenCalledTimes(2)
       expect(st().queue.map((n) => n.text)).toEqual(['c other', 'quiet', 'd'])
@@ -546,6 +551,8 @@ describe('手机横幅模式(banner)', () => {
       hidden = false
       st().visibilityChanged()
       vi.advanceTimersByTime(300)
+      expect(shown(), '退到后台时撤下的 msg 先回来(第五轮)').toEqual(['msg'])
+      vi.advanceTimersByTime(5000 + 300)
       expect(shown(), '常驻的不会「早该走了」,回到前台照出').toEqual(['reminder'])
       st().dismissAll()
       st().setBanner(false)
@@ -559,6 +566,8 @@ describe('手机横幅模式(banner)', () => {
       hidden = false
       st().visibilityChanged()
       vi.advanceTimersByTime(300)
+      expect(shown(), '退到后台时撤下的 w1 先回来(第五轮)').toEqual(['w1'])
+      vi.advanceTimersByTime(5000 + 300)
       expect(shown(), '没响过系统通知的回到前台照出').toEqual(['w2'])
     } finally { vi.unstubAllGlobals() }
   })
@@ -631,7 +640,7 @@ describe('手机横幅模式(banner)', () => {
     } finally { vi.unstubAllGlobals() }
   })
 
-  it('屏上那张在 App 退到后台后到点走:不开冷却(负对照:照开 → 回来 30 秒内同来源不出)', () => {
+  it('屏上那张在 App 退到后台时撤回、不在后台到点走、不开冷却;回来重新上屏停满,之后同来源照常节流(第五轮;负对照:照开冷却 → 回来同来源被吞)', () => {
     let hidden = false
     vi.stubGlobal('document', { hasFocus: () => true, get visibilityState() { return hidden ? 'hidden' : 'visible' } })
     try {
@@ -640,11 +649,17 @@ describe('手机横幅模式(banner)', () => {
       st().visibilityChanged()
       vi.advanceTimersByTime(5000 + 300)
       expect(shown()).toEqual([])
+      expect(st().queue.map((n) => n.text)).toEqual(['on screen'])
       hidden = false
       st().visibilityChanged()
-      expect(notifyApp({ text: 'back', event: 'plugin:biz' })).not.toBeNull()
+      expect(notifyApp({ text: 'back', event: 'plugin:biz' }), '它没在用户眼前走掉,同来源不在冷却里').not.toBeNull()
       vi.advanceTimersByTime(300)
-      expect(shown()).toEqual(['back'])
+      expect(shown()).toEqual(['on screen'])
+      vi.advanceTimersByTime(4999)
+      expect(shown()).toEqual(['on screen'])
+      vi.advanceTimersByTime(1 + 300)
+      expect(shown(), '回来后停满走掉:同来源照常进冷却(节流规则不变)').toEqual([])
+      expect(st().queue).toEqual([])
     } finally { vi.unstubAllGlobals() }
   })
 
@@ -961,17 +976,22 @@ describe('手机横幅模式(banner)', () => {
       } finally { release() }
     })
 
-    it('屏上那张在半屏底下到点走:不开冷却;屏上那张在半屏底下被同 key 换了内容:撤下来排着,收起后再出、停留重新算(负对照:照开冷却 / 原地换字 → 这里红)', () => {
+    it('屏上那张在半屏盖上时撤回、不在底下到点走、不开冷却;屏上那张在半屏底下被同 key 换了内容:排着,收起后再出、停留重新算(第五轮;负对照:照开冷却 / 原地换字 → 这里红)', () => {
       let release = (): void => {}
       try {
         notifyApp({ text: 'on screen', event: 'plugin:demo' })
         expect(shown()).toEqual(['on screen'])
         release = holdNativeSheetUp()
+        expect(shown(), '盖上那一刻撤回').toEqual([])
         vi.advanceTimersByTime(5000)
-        expect(shown(), '半屏底下照样到点走').toEqual([])
+        expect(st().queue.map((n) => n.text), '半屏底下不到点走').toEqual(['on screen'])
         release()
+        expect(notifyApp({ text: 'after sheet', event: 'plugin:other2' }), '收起后照常能弹').not.toBeNull()
         vi.advanceTimersByTime(300)
-        expect(notifyApp({ text: 'after sheet', event: 'plugin:demo' }), '用户没看见它走,收起后同来源不该被冷却吞掉').not.toBeNull()
+        expect(shown(), '撤回的那张先回来').toEqual(['on screen'])
+        vi.advanceTimersByTime(4999)
+        expect(shown(), '停留给满').toEqual(['on screen'])
+        vi.advanceTimersByTime(1 + 300)
         expect(shown()).toEqual(['after sheet'])
         vi.advanceTimersByTime(5000 + 300)
         // 同 key 换内容
@@ -1027,5 +1047,169 @@ describe('手机横幅模式(banner)', () => {
         expect(shown()).toEqual(['b'])
       } finally { release(); vi.unstubAllGlobals() }
     })
+  })
+})
+
+describe('手机横幅:遮挡与系统通知投递(第五轮 Codex 评审)', () => {
+  const st = () => useNotifications.getState()
+  const shown = () => st().items.map((n) => n.text)
+  const queued = () => st().queue.map((n) => n.text)
+  beforeEach(() => { st().setBanner(true) })
+
+  it('原生半屏盖上:屏上那张撤下、停表、不调 onClose、不开冷却;收起后重新上屏并给满停留(负对照:不撤 → 盖着 9 秒后已走、onClose 已调)', () => {
+    let release = (): void => {}
+    try {
+      const commit = vi.fn()
+      const id = notifyApp({ text: 'deleted', event: 'plugin:demo', undo: true, action: { label: 'Undo', run() {} }, onClose: commit })!
+      expect(shown()).toEqual(['deleted'])
+      vi.advanceTimersByTime(100)
+      release = holdNativeSheetUp()
+      expect(shown(), '盖上那一刻撤下').toEqual([])
+      vi.advanceTimersByTime(9000)
+      expect(commit, '盖着期间不到点落定').not.toHaveBeenCalled()
+      expect(st().queue.map((n) => n.id), '放回队首、内容还在').toEqual([id])
+      release()
+      vi.advanceTimersByTime(300)
+      expect(shown(), '收起后重新上屏').toEqual(['deleted'])
+      vi.advanceTimersByTime(7999)
+      expect(shown(), '撤销卡重新给满 8 秒').toEqual(['deleted'])
+      expect(commit).not.toHaveBeenCalled()
+      vi.advanceTimersByTime(1)
+      expect(shown()).toEqual([])
+      expect(commit).toHaveBeenCalledTimes(1)
+      // 普通卡:收起后同样给满 5 秒,也不因为它自己被盖住而开冷却
+      vi.advanceTimersByTime(300)
+      notifyApp({ text: 'plain', event: 'plugin:p' })
+      vi.advanceTimersByTime(4900)
+      release = holdNativeSheetUp()
+      vi.advanceTimersByTime(60_000)
+      release()
+      vi.advanceTimersByTime(300)
+      expect(shown()).toEqual(['plain'])
+      vi.advanceTimersByTime(4999)
+      expect(shown(), '普通卡重新给满 5 秒').toEqual(['plain'])
+      vi.advanceTimersByTime(1)
+      expect(shown()).toEqual([])
+    } finally { release() }
+  })
+
+  it('App 退到后台:屏上那张撤下、停表、不调 onClose;回到前台 replayQueue 留着它(同来源后来的卡顶不掉),重新给满停留(负对照:不撤 / 重放不留 → 这里红)', () => {
+    let hidden = false
+    vi.stubGlobal('window', { tangu: { notify: vi.fn() } })
+    vi.stubGlobal('document', { hasFocus: () => true, get visibilityState() { return hidden ? 'hidden' : 'visible' } })
+    try {
+      const commit = vi.fn()
+      notifyApp({ text: 'deleted', event: 'plugin:demo', undo: true, action: { label: 'Undo', run() {} }, onClose: commit })
+      vi.advanceTimersByTime(100)
+      hidden = true
+      st().visibilityChanged()
+      expect(shown()).toEqual([])
+      vi.advanceTimersByTime(9000)
+      expect(commit, '在后台不到点落定').not.toHaveBeenCalled()
+      hidden = false
+      st().visibilityChanged()
+      vi.advanceTimersByTime(300)
+      expect(shown()).toEqual(['deleted'])
+      vi.advanceTimersByTime(7999)
+      expect(shown(), '回来后给满 8 秒').toEqual(['deleted'])
+      vi.advanceTimersByTime(1)
+      expect(commit).toHaveBeenCalledTimes(1)
+      // 普通卡:上屏 100ms 就退到后台,后台又来了同来源更新的一张(系统通知发了);回来时它不被顶掉
+      vi.advanceTimersByTime(300)
+      notifyApp({ text: 'plain', event: 'plugin:demo2' })
+      vi.advanceTimersByTime(100)
+      hidden = true
+      st().visibilityChanged()
+      vi.advanceTimersByTime(10)
+      notifyApp({ text: 'newer', event: 'plugin:demo2' })
+      vi.advanceTimersByTime(60_000)
+      hidden = false
+      st().visibilityChanged()
+      expect(queued(), '撤下来的那张留着').toEqual(['plain', 'newer'])
+      vi.advanceTimersByTime(300)
+      expect(shown()).toEqual(['plain'])
+      vi.advanceTimersByTime(4999)
+      expect(shown(), '给满 5 秒').toEqual(['plain'])
+    } finally { vi.unstubAllGlobals() }
+  })
+
+  it('系统通知的投递结果:桥回 Promise 时没确认投了就一直欠着;{ posted: false } / 拒绝 = 没投递,回到前台不丢;{ posted: true } 与旧外壳的 undefined 算投了(负对照:交给桥就算投了 → 这里红)', async () => {
+    let hidden = true
+    const answer: Record<string, unknown> = { 'no perm': { posted: false }, rejected: 'reject', posted: { posted: true }, 'old shell': undefined }
+    const os = vi.fn((_t: string, text: string) => (answer[text] === 'reject' ? Promise.reject(new Error('bridge')) : Promise.resolve(answer[text])))
+    vi.stubGlobal('window', { tangu: { notify: os } })
+    vi.stubGlobal('document', { hasFocus: () => true, get visibilityState() { return hidden ? 'hidden' : 'visible' } })
+    try {
+      st().visibilityChanged()
+      const later = (input: Parameters<typeof notifyApp>[0]): void => { vi.advanceTimersByTime(10); notifyApp(input) }
+      later({ text: 'no perm', event: 'plugin:a' })
+      later({ text: 'rejected', event: 'plugin:b' })
+      later({ text: 'posted', event: 'plugin:c' })
+      later({ text: 'old shell', event: 'plugin:d' })
+      // 同来源后来的一张(投了):没投递的那张不能被它顶掉,投了的那张照旧被顶掉
+      for (const s of ['a', 'b', 'c']) later({ text: `${s} newer`, event: `plugin:${s}` })
+      expect(st().queue.filter((n) => n.osOwed).map((n) => n.text), '回话之前一律欠着').toEqual(queued())
+      // 回话之前又报了一次「看不见」:在路上的不重发(同一条会再响一次)
+      st().visibilityChanged()
+      expect(os).toHaveBeenCalledTimes(7)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(st().queue.filter((n) => n.osOwed).map((n) => n.text), '确认投了的清掉,没投的留着').toEqual(['no perm', 'rejected'])
+      // 在路上时被要求补发、回话又说没投:补一次(当时可能是在前台被原生挡掉的),只补一次
+      expect(os.mock.calls.slice(7).map((c) => c[1])).toEqual(['no perm', 'rejected'])
+      await vi.advanceTimersByTimeAsync(0)
+      expect(os).toHaveBeenCalledTimes(9)
+      hidden = false
+      st().visibilityChanged()
+      // 没投的两张一律留;其余每个来源留最新一张、最多 3 张(最早的 old shell 被封顶丢下)
+      expect(queued()).toEqual(['no perm', 'rejected', 'a newer', 'b newer', 'c newer'])
+    } finally { vi.unstubAllGlobals() }
+  })
+
+  it('看不见的卡被普通合并(不带 replace)换了内容:按实际投递重算欠账 —— 新内容没发过系统通知,回到前台不被同来源后来的卡顶掉(负对照:只在 replace 分支记 → 这里红)', () => {
+    let hidden = false
+    const os = vi.fn()
+    vi.stubGlobal('window', { tangu: { notify: os } })
+    vi.stubGlobal('document', { hasFocus: () => true, get visibilityState() { return hidden ? 'hidden' : 'visible' } })
+    try {
+      // Codex 原样:屏上的 A 在后台被同 key 普通合并,随后同来源、不同 key 的 B 到来
+      notifyApp({ text: 'A v1', event: 'plugin:demo', dedupeKey: 'demo:a' })
+      expect(shown()).toEqual(['A v1'])
+      hidden = true
+      st().visibilityChanged()
+      vi.advanceTimersByTime(10)
+      notifyApp({ text: 'A v2', event: 'plugin:demo', dedupeKey: 'demo:a' })
+      vi.advanceTimersByTime(10)
+      notifyApp({ text: 'B', event: 'plugin:demo', dedupeKey: 'demo:b' })
+      hidden = false
+      st().visibilityChanged()
+      expect(queued()).toEqual(['A v2', 'B'])
+      st().dismissAll()
+      // 排着的那张:来时在后台、发了系统通知(旧内容);在后台被普通合并换了内容,新内容哪儿都没出现过
+      hidden = true
+      st().visibilityChanged()
+      vi.advanceTimersByTime(10)
+      notifyApp({ text: 'C v1', event: 'plugin:demo', dedupeKey: 'demo:c' })
+      vi.advanceTimersByTime(10)
+      notifyApp({ text: 'C v2', event: 'plugin:demo', dedupeKey: 'demo:c' })
+      vi.advanceTimersByTime(10)
+      notifyApp({ text: 'D', event: 'plugin:demo', dedupeKey: 'demo:d' })
+      expect(os.mock.calls.map((c) => c[1]), '宿主自己的合并照旧不重发').toEqual(['B', 'C v1', 'D'])
+      hidden = false
+      st().visibilityChanged()
+      expect(queued()).toEqual(['C v2', 'D'])
+      st().dismissAll()
+      // 屏上的常驻卡在后台被普通合并成不常驻:撤回队列,同样欠着
+      notifyApp({ text: 'E pinned', event: 'plugin:demo', dedupeKey: 'demo:e', sticky: true })
+      expect(shown()).toEqual(['E pinned'])
+      hidden = true
+      st().visibilityChanged()
+      vi.advanceTimersByTime(10)
+      notifyApp({ text: 'E done', event: 'plugin:demo', dedupeKey: 'demo:e', sticky: false })
+      vi.advanceTimersByTime(10)
+      notifyApp({ text: 'F', event: 'plugin:demo', dedupeKey: 'demo:f' })
+      hidden = false
+      st().visibilityChanged()
+      expect(queued()).toEqual(['E done', 'F'])
+    } finally { vi.unstubAllGlobals() }
   })
 })
