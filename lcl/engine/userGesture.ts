@@ -5,11 +5,15 @@
  *  (the "Undo" after a delete or a completed to-do), not something that came looking for them. The phone's banner
  *  throttle (desktop stores/notificationStore.ts) lets those through.
  *
- *  Why it does not let ordinary notifications through: messages, sync results and agent events are raised from network
- *  callbacks and timers — tasks of their own, which never run inside the dispatch of the user's input event. The mark
- *  lives only until a zero-delay timer after it, so at most a task the browser happens to pick before that timer (a few
- *  milliseconds) could see it. `navigator.userActivation.isActive` is not used for this: it stays on for seconds after
- *  any tap or key press, typing in a chat included, which would wave through every message arriving meanwhile.
+ *  What else can see it: messages, sync results and agent events are raised from network callbacks and timers — tasks
+ *  of their own, outside the dispatch of the user's input event. The mark is cleared by a zero-delay timer queued at
+ *  the input, so only tasks that run before that timer see it. Usually that is no one, or a few milliseconds' worth;
+ *  but when the main thread was busy as the input arrived, every timer that came due during the busy stretch runs
+ *  before the clearing timer and sees the mark (measured in Chromium: a 300 ms block, a tap during it, a timer due
+ *  meanwhile → it read true). A card with a button raised by such a timer is then treated like an undo receipt: it pops
+ *  where it would have been throttled and stays 8 s. The error only ever goes that way — more shown, never fewer.
+ *  `navigator.userActivation.isActive` is not used for this: it stays on for seconds after any tap or key press, typing
+ *  in a chat included, which would wave through every message arriving meanwhile.
  *  Native bar taps (Dock, back) do not mark: they only navigate. */
 const INPUT = ['pointerdown', 'pointerup', 'touchend', 'click', 'dblclick', 'auxclick', 'contextmenu', 'keydown', 'keyup', 'drop', 'submit'] as const
 
