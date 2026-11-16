@@ -4755,11 +4755,17 @@ Then reply with only the command output.`,
     const DUNNO = /(不知道|不清楚|不了解|没有.{0,4}信息).{0,12}(Forsion Git|蓬洲云|Penzor|这个产品|是什么)|(Forsion Git|蓬洲云|Penzor Cloud).{0,12}(不知道|不清楚|不了解)|(don't|do not) know (what|about) (Forsion|Penzor|this product|it is|that is)|not familiar with (Forsion|Penzor|it|this)|no information (on|about) (Forsion|Penzor|it|this)/i;
     // 许诺「我替你推」才算;「我来讲讲怎么发布」「I can't push from here」不算(Codex 评审给的反例都进了下面的自检)
     const PROMISE = /(我|咱)(可以|能|来|这就|现在就?|会)(直接)?(帮你|替你)(把.{0,12})?(推送|发布|上传|推上去)|\bI(?:'ll| will| can| could)(?: now)? (?:push|publish|upload)\b/i;
+    const PENZOR_SYNC = /(Penzor Cloud|蓬洲云)[^\n.。]{0,40}?(›|>|→|,? then|(?:,|\band)\s*(?:go to|open|click|tap|select)|然后|进入|再(?:点|进|打开)?|里的|中的)[^\n.。]{0,12}?(\bSync\b|同步)/i;
     const selfCheck = [
       [DUNNO, '我不知道 Forsion Git 是什么', true], [DUNNO, "I don't know what Penzor Cloud is", true],
       [DUNNO, '不清楚你的项目是否已有提交', false], [DUNNO, "I don't know what commits your project has yet", false],
       [PROMISE, '我可以帮你上传', true], [PROMISE, 'I can push your project for you from here', true], [PROMISE, '我来帮你把项目推送上去', true],
       [PROMISE, '我来讲讲怎么发布', false], [PROMISE, "I can't push from this chat, but you can", false],
+      // 蓬洲云入口:面包屑和「侧栏里打开蓬洲云,再点同步」两种写法都算(11-16 deepseek 答的是后一种,内容对却判红);
+      // 跨句不算 —— 「蓬洲云是云盘。去设置 › Sync」不是蓬洲云里的入口
+      [PENZOR_SYNC, '蓬洲云 (Penzor Cloud) › 同步 (Sync)', true], [PENZOR_SYNC, 'open 蓬洲云 / Penzor Cloud in the sidebar, then 同步 / Sync', true],
+      [PENZOR_SYNC, '在侧栏打开蓬洲云,再点「同步」', true], [PENZOR_SYNC, 'Open Penzor Cloud and go to the Sync tab', true], [PENZOR_SYNC, 'open the 蓬洲云 / Penzor Cloud Space, go to 同步 / Sync', true],
+      [PENZOR_SYNC, "Penzor Cloud is Forsion's cloud drive. Go to Settings › Sync", false], [PENZOR_SYNC, 'Penzor Cloud keeps your notes in sync', false],
     ].filter(([re, t, want]) => re.test(t) !== want).map(([, t]) => t);
     if (selfCheck.length) return { ok: false, detail: `判据自检没过:${selfCheck.join(' / ')}`, output: '', toolCalls: [] };
     const plain = (t) => String(t || '').replace(/[*_`]/g, '');
@@ -4809,7 +4815,7 @@ Then reply with only the command output.`,
     const okChat = leg('轻聊天', chat, sandboxChecks);
     const okCloud = leg('云端项目', cloud, sandboxChecks);
     const okPenzor = leg('蓬洲云', penzor, (t) => [
-      [/(Penzor Cloud|蓬洲云)[^\n]{0,24}?(›|>|→)[^\n]{0,4}?(Sync|同步)/i.test(t), '同步入口不对'],
+      [PENZOR_SYNC.test(t), '同步入口不对'],
       [/(cloud drive|云盘|网盘|sync)/i.test(t), '没说是什么'],
     ]);
     return { ok: okHost && okProject && okChat && okCloud && okPenzor, detail: legs.join(';'),
