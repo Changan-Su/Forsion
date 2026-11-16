@@ -49,6 +49,7 @@ Read the matching `references/` file before using an API listed below or followi
 - [references/spaces-and-home.md](references/spaces-and-home.md): `ctx.spaces` (Space list, icons, Ribbon shelf) and `ctx.home` (core home plugin only)
 - [references/vault-files-and-templates.md](references/vault-files-and-templates.md): `ctx.app.createFolder` / `stat` / `renamePath` / `movePath` (who gets asked, rejections); extending the host's templates with `ctx.registerTemplateProcessor` and `ctx.registerNoteBirth`; older-host fallback
 - [references/plugin-sandbox.md](references/plugin-sandbox.md): `plugin_sandbox_inspect` in detail: element states, notifications in the way, commands that wait, the plugin's settings window
+- [references/network.md](references/network.md): `ctx.net` (`PluginNetApi`) and manifest `network`: host-side requests for APIs without CORS headers, rules and error codes
 
 ## Troubleshooting an installed plugin: Space missing, view blank, "stopped working after an update" (2026-10-10)
 
@@ -955,7 +956,7 @@ const back = await ctx.app.readBytes?.(`${ctx.app.workFolder()}/models/${file.na
   用 `parse(buf, '')` + `manager.setURLModifier((u) => /^(blob:|data:|amadeus-asset:|https?:)/.test(u) ? u : ctx.app.assetUrl(join(dirOf(modelPath), decodeURI(u))))`,
   每端都对(web / unit 的资源 URL 是 `?ref=` 形,拼 base URL 那条路只在桌面成立)。
 
-**联网与第三方库(桌面)**:CSP 拦的是**外站脚本**(`script-src` 没有 CDN),所以依赖一律 esbuild `bundle: true` 打进单文件,`main.js` **没有大小上限**。**联网本身 CSP 不拦**:`connect-src` 放行 `https:` / `wss:`(和本机 localhost),对方接口回 CORS 头(`Access-Control-Allow-Origin`)就能在插件里直接 `fetch`。不回 CORS 头的接口报 `TypeError: Failed to fetch`,那是 CORS,不是 CSP:改用下面的 `ctx.net`。网页 / 手机的 CSP 另有差异,在那两端单独试。
+**Network and third-party libraries (desktop)**: the CSP blocks **scripts from other sites** (`script-src` has no CDN), so bundle every dependency into one file with esbuild `bundle: true`; `main.js` has **no size limit**. **Requests are not blocked by the CSP**: `connect-src` allows `https:` / `wss:` (and local localhost), so an https API that sends CORS headers (`Access-Control-Allow-Origin`) works with a plain `fetch`. An API without CORS headers fails with `TypeError: Failed to fetch`: that is CORS, not CSP; use `ctx.net` below. Web and mobile have different CSPs; test there separately.
 
 需要 disposer 时:
 
@@ -964,15 +965,7 @@ const back = await ctx.app.readBytes?.(`${ctx.app.workFolder()}/models/${file.na
 globalName: 'myPlugin', footer: { js: 'return myPlugin.dispose;' }
 ```
 
-**`ctx.net`(`PluginNetApi`,2026-11-16 起,只在桌面;网页 / 手机 / 老宿主上整个成员缺席 → `if (ctx.net)`)**:替不回 CORS 头的接口由主进程代发。manifest 写 `"network": ["api.example.com", "*.cdn.example.com"]`(只写主机名,不带协议 / 端口 / 路径;`*.example.com` 管任意层子域、不含 `example.com` 本身,要两个就都写;主进程每次请求从磁盘上的 manifest 重读;用户在插件详情页看到「会访问:…」,商店装之前暂时还看不到)。
-
-```js
-const res = await ctx.net.request('https://api.example.com/v1/items', { method: 'POST', headers: { Authorization: `Bearer ${key}` }, body: JSON.stringify(q), timeoutMs: 20_000 })
-if (res.status !== 200) throw new Error(`HTTP ${res.status}`)   // 4xx / 5xx 照常 resolve,只有传输问题 reject
-const data = res.json()                                          // 另有 res.text() / res.bytes / res.headers(小写)/ res.url(重定向后的)
-```
-
-规矩由宿主逐跳执行:只走 https、默认端口 443;IP 字面量和连接时解析到内网 / 回环 / 保留地址的一律拒;重定向最多 5 次、每跳重核名单(换主机时丢掉 Authorization / Cookie);从不带应用的 cookie、代理凭据、客户端证书(要鉴权自己带 `Authorization`);响应解压后 ≤ 10 MB;`timeoutMs` 缺省 30 s、上限 60 s;每个插件同时最多 8 个请求;插件停用时在途请求 reject。失败 reject 一个带 `err.code` 的 `Error`:`net_domain_not_declared` / `net_blocked_address` / `net_timeout` / `net_too_large` / `net_bad_url` / `net_bad_request`(方法不支持、GET 带 body、写了宿主自己管的头)/ `net_failed`(DNS、TLS、超过 5 次重定向、并发超限,看 `err.message`)。回 CORS 头的 https 接口照旧可以直接 `fetch`。
+**`ctx.net?.request(url, init)` (`PluginNetApi`, 2026-11-16+, desktop only)**: the main process makes the request, only to hosts listed in manifest `"network": ["api.example.com", "*.cdn.example.com"]`; https on 443 only, private addresses refused, no app cookies, ≤ 10 MB, 30 s default timeout; resolves for any HTTP status, rejects with `err.code` (`net_domain_not_declared`, …). Read [references/network.md](references/network.md) before using it.
 
 ## Vault files and the working folder (updated 2026-10-21)
 
@@ -982,7 +975,7 @@ Use Markdown for user-facing notes and hidden sidecars for machine data. Keep de
 
 Local hosts may expose `ctx.app.writeFileScoped?(path, text, expectedRoot, { create: true })`. Capture `expectedRoot = ctx.app.vaultRoot()` before starting an asynchronous task. The host validates it under the filesystem lock and rejects a stale-vault write; create-only writes return `false` when the destination exists, successful writes return `true`. Feature-detect: an older host's renderer-side scope checks across awaits do not provide the same main-process guarantee. Keep that weaker fallback explicit and never silently overwrite an export/log name after a create-only conflict.
 
-**Folders, file times, rename and move (2026-11-16+)**: `ctx.app.createFolder?(path)`; `stat?(path)` → `{ kind, size, mtime, ctime | null } | null` (absent on web); `renamePath?(path, newName)` / `movePath?(path, destFolder)` → the new path, done exactly like the file tree (`[[links]]` rewritten, open editors follow, `''` = vault root). No dialog for paths inside your work folder or that your plugin created this session (`writeFile` / `writeBytes` / `createFolder`); anything else asks the user, and Cancel rejects `Error('user_declined')`. Refused: `.db` moves, kind-changing renames, images / PDFs, a `*.fd` folder on its own, partial failures (the message names the new path). Read [references/vault-files-and-templates.md](references/vault-files-and-templates.md) before using them.
+**Folders, file times, rename and move (2026-11-16+)**: `ctx.app.createFolder?(path)`; `stat?(path)` → `{ kind, size, mtime, ctime | null } | null` (absent on web); `renamePath?(path, newName)` / `movePath?(path, destFolder)` → the new path, done exactly like the file tree (`[[links]]` rewritten, open editors follow, `''` = vault root). No dialog for paths inside your work folder or that your plugin created this session (`writeFile` / `writeBytes` / `createFolder`); anything else asks the user, and Cancel rejects `Error('user_declined')`. Refused: moving `.db` files, renames that change the kind or touch images / PDFs, a `*.fd` folder on its own; a partial failure rejects with the new path in the message. Read [references/vault-files-and-templates.md](references/vault-files-and-templates.md) before using them.
 
 For hosts without `workFolder`, either ask for an upgrade or preserve the plugin's established legacy path until a schema-aware recovery can run. Do not silently switch an existing installation to a hard-coded new ID path: that would hide its old data again. `workFolder()` is not a readiness probe; wait for `ctx.app.vaultRoot?.()` and catch write errors when no vault is open.
 
@@ -999,7 +992,7 @@ Read [the migration contract and acceptance cases](references/work-folder-migrat
 The host already has templates: the vault's `templates/` folder, `{{date}}` / `{{date:fmt}}` / `{{time}}` / `{{title}}`, `.obsidian/templates.json` and `.obsidian/daily-notes.json`, the daily note. A Templater-style or folder-template plugin plugs into them; it does not ship its own picker or fill notes after they open:
 
 - `ctx.registerTemplateProcessor?.({ id, name, folders?, process(source, { templatePath, targetPath, kind }) })` → disposer: runs on the template's raw text before the host's own variables, for the picker insert (`'insert'`) and the daily note (`'daily'`); `folders()` adds picker folders.
-- `ctx.registerNoteBirth?.({ id, initial({ path, folder, signal }) })` → disposer: a brand-new empty note gets its first content in the same write that creates it (every "New note" entry point, `[[link]]` and quick-switcher create, child notes, a daily note without a template).
+- `ctx.registerNoteBirth?.({ id, initial({ path, folder, signal }) })` → disposer: a brand-new empty note gets its first content in the same write that creates it (every "New note" entry point including `ctx.app.createPage()`, `[[link]]` and quick-switcher create, child notes, a daily note without a template; not your `writeFile`).
 - Caret at a marker inside inserted text: `ctx.app.insertMarkdownAt` (next section).
 - ⚠️ Older hosts: do not fill new notes from `onVaultEvent` `create` + `writeFile`. Measured: the open editor never sees that write and its first save moves your template into a conflict copy.
 

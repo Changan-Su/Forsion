@@ -21,7 +21,7 @@ Read this before creating folders, reading file times, renaming or moving files,
 
 ### Rejections (rename and move)
 
-No vault; missing source; target already exists; invalid name (slashes, leading `.`, surrounding spaces); kinds the file tree can't rename (images, PDFs, …); `.db` files, folders that contain one, and notes whose `*.fd` holds one (relation columns in other tables would lose them); a `*.fd` subnote folder on its own; renaming a folder to `*.fd`; moving a folder into itself or into a `*.fd` (a note may move into one: it becomes a subnote); `movePath` to a destination folder that does not exist; plugin disabled.
+No vault; missing source; target already exists; invalid name (slashes, leading `.`, surrounding spaces); **renaming** kinds the file tree can't rename (images, PDFs, …; moving them is fine); **moving** `.db` files, and renaming or moving folders that contain one or notes whose `*.fd` holds one (relation columns in other tables would lose them); a `*.fd` subnote folder on its own; renaming a folder to `*.fd`; moving a folder into itself or into a `*.fd` (a note may move into one: it becomes a subnote); `movePath` to a destination folder that does not exist; plugin disabled.
 
 - Relative Markdown links to a moved attachment are not rewritten (wikilinks resolve by name and keep working), same as the tree.
 - If the file was moved but the host could not finish (links, `.fd` subnotes), the call rejects with a message naming the new path. `stat` both paths before retrying.
@@ -83,7 +83,7 @@ const off = ctx.registerNoteBirth?.({
 })
 ```
 
-- **Asked for**: "New note" from every entry point (sidebar, command, ⌘N, new-tab page), "New note" in a folder, child notes, creating a note from the quick switcher, confirming an unresolved `[[link]]`, and today's daily note when no daily-note template is set. **Not asked for**: rows added to a notes database, files written by plugins (yours included), files arriving via sync.
+- **Asked for**: "New note" from every entry point (sidebar, command, ⌘N, new-tab page, and `ctx.app.createPage()`, so your own provider is asked for it too), "New note" in a folder, child notes, creating a note from the quick switcher, confirming an unresolved `[[link]]`, and today's daily note when no daily-note template is set. **Not asked for**: rows added to a notes database, files plugins write themselves (`writeFile`, `writeBytes`, file creators; yours included), files arriving via sync.
 - Providers are asked one at a time in registration order; the **first non-null** answer becomes the note's content in the same write that creates it. A provider that throws is skipped (toast naming the plugin) and the next one is asked.
 - You may prompt the user. After about 400 ms the host shows "<plugin> is preparing this note…" with Cancel. Cancel, or no answer within 10 minutes, creates the note empty as before. `signal` aborts when the host stops waiting for you (Cancel, time-out, or the note was created): close your prompt then; a late answer is ignored.
 - The note is never lost or blocked: births of the same path queue; a vault switch while waiting creates nothing; while one ask is pending, other new notes (including one your `initial` creates) are born empty.
