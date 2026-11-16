@@ -3,6 +3,7 @@
  */
 import { deps } from '../../seams/runtime.js';
 import { formatToolOutput } from '../outputPersist.js';
+import { webSourcesOf } from '../webSources.js';
 import type { ToolProvider } from '../toolRegistry.js';
 
 const runSearch = (query: string, maxResults: number) => deps().brain.search.runSearch(query, maxResults);
@@ -41,6 +42,8 @@ export const webSearchProvider: ToolProvider = {
           // 只在 description 里教,模型转述搜索结果时基本不会带链接(用户实报「经常看不到引用」)。
           // 放**头部**:大输出会溢出落盘,makePreview 只保头尾切片,footer 会丢。
           const head = 'Cite for the user: [<a short phrase from the snippet>](<the result URL>) — the link text is the exact sentence the reader gets scrolled to.\n\n';
+          // 结构化结果另存一份给界面(正文链接编号、来源卡、右栏结果):走 metadata,给模型的文字一字不动。
+          if (r && typeof r === 'object' && Array.isArray(r.results)) ctx.noteWebSources?.(webSourcesOf(r.results));
           return formatToolOutput(ctx, 'web_search', head + String(text));
         } catch (e) {
           // 错误消息即提示词:降级链全败(或云不可达)时明示模型可用的退路,别反复重试同一工具。

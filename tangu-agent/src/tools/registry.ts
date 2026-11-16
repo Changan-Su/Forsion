@@ -84,6 +84,8 @@ import { WRITE_TOOLS, writeTargetsOf } from './writeTargets.js';
 import { withWriteLock } from './writeLock.js';
 import path from 'node:path';
 import type { ToolContext, ToolResult, ToolImpl, ToolCapabilities } from './toolTypes.js';
+import type { WebSource } from '../contracts/clientTypes.js';
+import { WEB_SOURCE_TOOLS } from './webSources.js';
 import { usableToolDefinition } from './toolDefinitionValidation.js';
 
 // 类型 re-export:保持既有 `from './registry.js'` 的 import 路径不变。
@@ -474,7 +476,10 @@ export async function executeTool(call: ToolCall, ctx: ToolContext): Promise<Too
     const cleanup = timed.cleanup;
     // 客户端原生动作按工具收窄:没声明 clientCapability 的工具拿不到 requestClientAction,声明了的只能发自己的 ns
     // (否则任何插件工具都能直调它绕过中央闸)。⚠️ 这一行被 clientCapabilityGate.test.ts 的执行侧用例覆盖。
-    const scopedCtx = bindClientActionToTool(timed.scopedCtx, impl);
+    // 结构化来源(web_search / web_fetch):收集器每次调用一份、只挂给这两个内置工具 —— 并行搜索互不串,别的工具(含插件)看不到它。
+    let webSources: WebSource[] | undefined;
+    const boundCtx = bindClientActionToTool(timed.scopedCtx, impl);
+    const scopedCtx: ToolContext = WEB_SOURCE_TOOLS.has(name) ? { ...boundCtx, noteWebSources: (s) => { webSources = s; } } : boundCtx;
     // ⚠️「拍 pre-image → 执行 → 取写后指纹 / 撤销」必须整段在**同一把写锁**里(codex 2026-08-17 P1)。
     // 原来快照在锁外拍:两个子代理/会话同时写同一个文件时,双方都会在任一方进锁之前拍完快照 ——
     // 后写的那个拍到的是**前写者改动之前**的字节,回退它就把前者的改动一起抹掉。
@@ -509,7 +514,9 @@ export async function executeTool(call: ToolCall, ctx: ToolContext): Promise<Too
       logAgentEdit(name, args, ctx, text);
       // 内置工具**用返回串表达失败**(不抛),此前一律标 isError:false —— 于是真失败在 SSE/hooks/
       // 持久化里都是「成功」。与下面自定义工具分支(早就按 'Error:' 判)口径统一。
-      return { toolCallId: call.id, name, result: text, isError: text.startsWith('Error:') };
+      const isError = text.startsWith('Error:');
+      // 来源只随成功结果走(metadata 落库、发事件,不进模型那份文字)
+      return { toolCallId: call.id, name, result: text, isError, ...(!isError && webSources?.length ? { metadata: { sources: webSources } } : {}) };
     } catch (e: any) {
       if (e instanceof DockerCleanupError) throw e;
       if (undoSnapshot) await (undoSnapshot as () => Promise<void>)();

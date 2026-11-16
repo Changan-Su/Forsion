@@ -1009,6 +1009,16 @@
 /* 同一来源访问多次:次数缀在行尾,不另起一行 */
 .t2-tsum-hits { flex-shrink: 0; font-size: var(--ui-font-caption, 11px); color: var(--text-faint, var(--text-muted)); }
 .t2-tsum-row-tx { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 搜索来源编号(借鉴 DeepSeek chat-demo 方案 ②A):搜索词下面挂的结果缩进一档;编号方块与正文同一画法(主题色 12% 底,联动 26%,不画框)。
+   悬停正文编号 → 这一行垫底色(data-cite-hot,同悬停色);悬停这一行 → 正文里出自它的链接垫底色(chatLinkCard.css)。 */
+.t2-tsum-row.t2-tsum-sub { padding-left: 22px; }
+.t2-tsum-row.act[data-cite-hot] { background: var(--overlay-light, rgba(127, 127, 127, 0.1)); }
+.t2-tsum-n {
+  flex-shrink: 0; display: inline-grid; place-items: center; box-sizing: border-box; min-width: 16px; height: 16px; padding: 0 3px;
+  border-radius: 4px; font-size: var(--ui-font-caption, 11px); font-weight: 600; line-height: 1; font-variant-numeric: tabular-nums;
+  color: var(--accent-ink); background: color-mix(in srgb, var(--accent-ink) 12%, transparent);
+}
+.t2-tsum-row[data-cite-hot] .t2-tsum-n { background: color-mix(in srgb, var(--accent-ink) 26%, transparent); }
 /* 工作范围:额外文件夹行的「移出」叉,悬停才露(常驻会把窄卡挤得很吵) */
 .t2-tsum-root .t2-tsum-x {
   flex-shrink: 0; margin-left: auto; display: inline-flex; align-items: center; justify-content: center;

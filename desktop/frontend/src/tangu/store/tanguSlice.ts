@@ -44,6 +44,8 @@ import { defaultModelOf, newChatModelId, rememberedModelId, reloadDesktopConfig,
 import '../messages' // Tangu 自己的文案片段(核心插件化 2c)
 import { failReason, landedAnyway, type FailedSend } from './failedSend'
 import { cancelQuotaReminder } from './quotaReminders'
+import { sourcesFromMetadata } from '../../../../../tangu-agent/src/contracts/citeSources'
+import type { WebSource } from '../../../../../tangu-agent/src/contracts/clientTypes'
 import { agentName, agentNames } from '../../agentName'
 
 
@@ -112,6 +114,12 @@ export function sketchFromToolEvent(ev: ToolEvent): SketchItem | undefined {
   } catch { return undefined }
 }
 
+/** 落库的工具结果上的结构化来源(搜索来源编号):只认 web_search / web_fetch,老消息没有。 */
+const sourcesOfResult = (name: string | undefined, res: any): { sources: WebSource[] } | undefined => {
+  const sources = sourcesFromMetadata(name, res?.metadata)
+  return sources ? { sources } : undefined
+}
+
 /** 历史行 → UI 消息(tool_calls/tool_results 配对成 toolEvents)。 */
 export function recordToUi(r: any, resolveGroup?: (name: string, slug?: string) => { slug?: string; name?: string; color: string }, resolveSlug?: (slug: string) => string | undefined): UiMessage {
   const role = r.role === 'model' || r.role === 'assistant' ? 'assistant' : 'user'
@@ -162,6 +170,7 @@ export function recordToUi(r: any, resolveGroup?: (name: string, slug?: string) 
         id: c.id, name: c.function?.name || c.name || 'tool', arguments: c.function?.arguments,
         result: res ? String(res.content ?? '') : undefined, isError: res?.isError || false,
         ...(Array.isArray(res?.masked) && res.masked.length ? { masked: res.masked } : {}),
+        ...(sourcesOfResult(c.function?.name || c.name, res) ?? {}),
         startedAt: res?.startedAt, elapsedMs: res?.elapsedMs, outputChars: res?.outputChars,
         parallelGroup: res?.parallelGroup, artifactPath: res?.artifactPath, done: true,
         ...(res?.parked === true ? { parked: true } : {}),
@@ -1361,6 +1370,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
               parallelGroup: pl.parallelGroup ?? evs[i].parallelGroup, artifactPath: pl.artifactPath,
               parked: pl.parked === true || undefined,
               masked: Array.isArray(pl.masked) && pl.masked.length ? pl.masked : undefined,
+              sources: sourcesFromMetadata(evs[i].name || pl.name, pl.metadata),
             }
             // sketch 完成即上卡(挂 tool_result 不挂 tool_call:引擎尺寸闸拒掉的不画;callId 去重防 SSE 重放双画)
             const sk = sketchFromToolEvent(evs[i])
