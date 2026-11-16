@@ -8,8 +8,19 @@ const OUT = path.join(os.tmpdir(), 'forsion-shortcut-conflicts'); fs.mkdirSync(O
 let failed = 0
 const check = (name, ok, info) => { console.log(`${ok ? 'PASS' : 'FAIL'} ${name}${ok ? '' : ' ' + JSON.stringify(info)}`); if (!ok) failed++ }
 
+// 插件默认键(2026-11-16):一个空着的默认键生效并能触发,一个撞上「新会话」⌘N 的不生效、行下说明撞上了谁。
+const PROBE_MAIN = `
+ctx.registerCommand({ id: 'free', title: 'Probe free', hotkey: 'Mod+Shift+Alt+J', run: () => { window.__probeFree = (window.__probeFree || 0) + 1 } })
+ctx.registerCommand({ id: 'clash', title: 'Probe clash', hotkey: 'Mod+N', run: () => { window.__probeClash = true } })
+window.__probeCtx = ctx
+`
+
 async function main() {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-shortcuts-'))
+  const probe = path.join(home, 'plugins', 'shortcut-probe')
+  fs.mkdirSync(probe, { recursive: true })
+  fs.writeFileSync(path.join(probe, 'main.js'), PROBE_MAIN)
+  fs.writeFileSync(path.join(probe, 'manifest.json'), JSON.stringify({ id: 'shortcut-probe', name: 'Shortcut probe', version: '1.0.0', minAppVersion: '0.0.1', description: 'e2e probe, not a product plugin', network: ['probe.localhost'] }))
   const app = await electron.launch({
     args: [`--user-data-dir=${path.join(home, 'userdata')}`, '--lang=zh-CN', DESK], cwd: DESK,
     env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: 'http://127.0.0.1:1', TANGU_HARNESS_QUIET: '1' },
@@ -46,6 +57,24 @@ async function main() {
       check('⓪ 退出按键查找后 ⌘⇧M 恢复', (await miniReg()) === true, null)
     } else console.log('SKIP ⓪ ⌘⇧M 本来就没注册上(被别的进程占着),挂起检查跳过')
 
+    // ⑧ 插件默认键:空着的生效、撞上的不生效(行上「未设置」+ 行下说明),主窗里真按得出来
+    await row('Probe free').waitFor({ timeout: 15_000 })
+    check('⑧ 空着的默认键生效 ⌥⇧⌘J', (await keyText('Probe free')).includes('⌥⇧⌘J'), await keyText('Probe free'))
+    check('⑧ 撞上 ⌘N 的默认键显示未设置', (await keyText('Probe clash')).includes('未设置'), await keyText('Probe clash'))
+    const note = page.locator('[data-plugin-hotkey-inactive="amadeus:shortcut-probe:clash"]')
+    const noteText = await note.innerText().catch(() => '')
+    // ⌘N 内置有两条(新会话 / 新建笔记),说明里点名的是先注册的那条
+    check('⑧ 行下说明撞上了内置的 ⌘N', noteText.includes('插件默认键') && noteText.includes('⌘N') && /新会话|新建笔记/.test(noteText) && noteText.includes('未生效'), noteText)
+    await note.scrollIntoViewIfNeeded().catch(() => {})
+    await shot('8-plugin-default-light')
+    await win.bringToFront().catch(() => {})
+    await win.locator('body').click({ position: { x: 5, y: 5 } }).catch(() => {})
+    await win.keyboard.press('Meta+Shift+Alt+J'); await win.waitForTimeout(300)
+    check('⑧ 主窗里按 ⌥⇧⌘J 触发插件命令', (await win.evaluate(() => window.__probeFree || 0)) >= 1, null)
+    await win.keyboard.press('Meta+N'); await win.waitForTimeout(300)
+    check('⑧ ⌘N 仍归「新会话」,插件那条没被触发', (await win.evaluate(() => !!window.__probeClash)) === false, null)
+    await page.bringToFront().catch(() => {})
+
     // ① 录制撞上已有命令:不存,行下出提示;点「改绑到这里」才解绑对方
     await row('打开浏览器').locator('.shortcut-key').click()
     await page.keyboard.press('Meta+N')
@@ -59,6 +88,10 @@ async function main() {
     await page.getByRole('button', { name: '改绑到这里' }).click()
     check('① 改绑后「打开浏览器」= ⌘N', (await keyText('打开浏览器')).includes('⌘N'), await keyText('打开浏览器'))
     check('① 改绑后「新会话」= 未设置', (await keyText('新会话')).includes('未设置'), await keyText('新会话'))
+    // ⑧b 用户的键压过插件默认键:⌘N 现在归「打开浏览器」,说明跟着改口
+    await page.waitForTimeout(200)
+    const note2 = await page.locator('[data-plugin-hotkey-inactive="amadeus:shortcut-probe:clash"]').innerText().catch(() => '')
+    check('⑧b 冲突对象跟着改口(不再是已解绑的「新会话」)', /打开浏览器|新建笔记/.test(note2) && !note2.includes('新会话'), note2)
 
     // ② 「换一个」/ Esc:不存
     await row('打开终端').locator('.shortcut-key').click()
@@ -76,7 +109,7 @@ async function main() {
     await page.getByRole('button', { name: '换一个' }).click()
     check('③ 「换一个」回到录制', (await page.locator('input.shortcut-capture').count()) === 1, null)
     await page.keyboard.press('Meta+Shift+Y')
-    check('③ 换成不冲突的键直接存', (await keyText('打开终端')).includes('⌘⇧Y'), await keyText('打开终端'))
+    check('③ 换成不冲突的键直接存', (await keyText('打开终端')).includes('⇧⌘Y'), await keyText('打开终端')) // mac 按系统菜单顺序排修饰键(formatHotkey 的 MAC_ORDER)
 
     // ④ ⌫ 解绑
     await row('打开终端').locator('.shortcut-key').click()
@@ -116,6 +149,26 @@ async function main() {
     const rows = await page.locator('.shortcut-row .shortcut-name').allInnerTexts()
     check('⑦ 点计数只剩冲突的两行', rows.length === 2 && rows.some((r) => r.includes('命令面板')) && rows.some((r) => r.includes('快速查找')), rows)
     await shot('7-static-conflict-light')
+
+    // ⑨ ctx.net 在真应用里接通(2026-11-16):主窗插件拿得到 ctx.net;没声明的域名被主进程按磁盘上的 manifest 拒;
+    //    声明了的 probe.localhost 过了白名单(本机名 → 被地址闸拦下或解析失败,不出网)。详情页列出「会访问」。
+    const netRes = await win.evaluate(async () => {
+      const c = window.__probeCtx
+      if (!c || !c.net || typeof c.net.request !== 'function') return { has: false }
+      const code = async (u) => { try { await c.net.request(u, { timeoutMs: 3000 }); return 'ok' } catch (e) { return (e && e.code) || String(e) } }
+      return { has: true, undeclared: await code('https://undeclared.localhost/'), declared: await code('https://probe.localhost/') }
+    })
+    check('⑨ 桌面主窗的插件拿得到 ctx.net', netRes.has === true, netRes)
+    check('⑨ 没声明的域名 → net_domain_not_declared', netRes.undeclared === 'net_domain_not_declared', netRes)
+    check('⑨ 声明了的域名过了白名单,本机地址照样不放', netRes.declared === 'net_blocked_address' || netRes.declared === 'net_failed', netRes)
+    await win.evaluate(() => window.dispatchEvent(new CustomEvent('forsion:open-settings', { detail: 'amadeus-plugins' })))
+    await page.locator('.settings-nav-subitem', { hasText: /^(已安装插件|Installed plugins)$/ }).first().click({ timeout: 5000 }).catch(() => {})
+    const card = page.locator('[data-plugin-id="shortcut-probe"]').first()
+    await card.waitFor({ timeout: 10_000 }).catch(() => {})
+    await card.click().catch(() => {})
+    const access = await page.locator('[data-plugin-network]').first().innerText({ timeout: 5000 }).catch(() => '')
+    check('⑨ 插件详情页列出「会访问：probe.localhost」', access.includes('会访问') && access.includes('probe.localhost'), access)
+    await shot('9-plugin-network-light')
   } finally { await app.close() }
   console.log(failed ? `\n${failed} 项失败;截图 ${OUT}` : `\n全部通过;截图 ${OUT}`)
   process.exit(failed ? 1 : 0)

@@ -228,6 +228,23 @@ export class VaultManager {
     return fs.readFile(this.resolveInVault(rel)) // 无 encoding = Uint8Array
   }
 
+  /** ctx.app.stat 的底座(desktop statEntry 同款):不存在 → null;越界与别的 IO 错照抛(读不到 ≠ 不存在)。
+   *  Capacitor 的错没有 code,按消息认「不存在」;认不出时看父目录:父目录读得到、里面没有它 = 不存在。 */
+  async statEntry(rel: string): Promise<{ kind: 'file' | 'folder'; size: number; mtime: number; ctime: number | null } | null> {
+    const abs = this.resolveInVault(rel) // 越界即抛
+    try {
+      const st = await fs.stat(abs)
+      const folder = st.isDirectory()
+      return { kind: folder ? 'folder' : 'file', size: folder ? 0 : st.size, mtime: st.mtimeMs, ctime: st.birthtimeMs ?? null }
+    } catch (e) {
+      if (/not exist|no such|not found/i.test(String((e as Error)?.message ?? e))) return null
+      let names: unknown[]
+      try { names = await fs.readdir(path.dirname(abs)) } catch { throw e }
+      if (!names.includes(path.basename(abs))) return null
+      throw e
+    }
+  }
+
   /** 库根在 WebView 里可直接加载的地址(图片 / 音视频的显示地址以它为前缀,见 localAssets.ts)。 */
   assetBase(): Promise<string> {
     return fs.webUrl(this.requireRoot())

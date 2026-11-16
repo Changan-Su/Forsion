@@ -609,6 +609,25 @@ function sessionModelOf(s: Pick<AppState, 'sessions' | 'archivedSessions'>, sid:
   return s.sessions.find((x) => x.id === sid)?.model_id || s.archivedSessions.find((x) => x.id === sid)?.model_id
     || useChildChat.getState().sessions[sid]?.model_id || ''
 }
+/** 外部引擎的提示(status/engine_notice):文案 zh/en 由引擎给,按钮只能指插件给这个引擎登记的对话菜单项(见 ApprovalTray)。 */
+export interface EngineNoticeUi { id: string; text: { zh?: string; en?: string }; action?: { id: string; label: { zh?: string; en?: string } } }
+const noticeStr = (v: unknown, max: number): string | undefined => (typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : undefined)
+function cleanEngineNotice(n: any): EngineNoticeUi | null {
+  if (!/^[A-Za-z0-9._:-]{1,128}$/.test(n.id)) return null
+  const text = { zh: noticeStr(n.text?.zh, 160), en: noticeStr(n.text?.en, 160) }
+  if (!text.zh && !text.en) return null
+  const a = n.action
+  const action = a && typeof a.id === 'string' && /^[A-Za-z0-9._-]{1,64}$/.test(a.id) ? { id: a.id, label: { zh: noticeStr(a.label?.zh, 40), en: noticeStr(a.label?.en, 40) } } : undefined
+  return { id: n.id, text, ...(action ? { action } : {}) }
+}
+function clearEngineNotices(set: (fn: (s: AppState) => Partial<AppState>) => void, sessionId: string): void {
+  set((s) => {
+    if (!s.engineNoticesBySession[sessionId]) return {}
+    const { [sessionId]: _done, ...rest } = s.engineNoticesBySession
+    return { engineNoticesBySession: rest }
+  })
+}
+
 /** 会话模型的**本地**改写:列表 / 归档 / 子聊天缓存 + 作废 ctx 环。不落库、不动全局默认 ——
  *  setSessionModel(用户在药丸上换)与 session_config_changed(agent 在引擎侧已写库)共用,两处别各写各的。 */
 function patchSessionModelLocal(sid: string, modelId: string): void {
@@ -946,6 +965,8 @@ export interface TanguState {
   usageBySession: Record<string, { ctx: number; base: number; live: number; runCost?: number; costLimit?: number }>
   /** 引擎 context_info 事件(每 run 一条):窗口值+来源、注入段分解、指令文件、历史规模。ctx 环弹层消费。 */
   ctxInfoBySession: Record<string, CtxInfo>
+  /** 外部引擎给正在跑的这一轮的提示(status/engine_notice,如「DSH 在工作台里等你批准」);进审批托盘,这一轮结束就清掉。 */
+  engineNoticesBySession: Record<string, EngineNoticeUi[]>
   /** Agent Desk:聊天右侧演出面板的 per-session 状态。 */
   deskBySession: Record<string, DeskState>
   /** 语音消息:按 agent 的生效开关(voice-message 插件启用 + 该 agent apply)。缓存,首次进会话惰性拉取。 */
@@ -1195,6 +1216,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
   runStatsBySession: {},
   usageBySession: {},
   ctxInfoBySession: {},
+  engineNoticesBySession: {},
   unread: loadUnread(),
   detailWsKey: null,
   activeSpecial: null,
@@ -1753,6 +1775,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
         break
       }
       case 'done':
+        clearEngineNotices(set, sessionId)
         set((s) => ({ messagesBySession: { ...s.messagesBySession, [sessionId]: (s.messagesBySession[sessionId] || []).map((m) =>
           m.compaction?.runId === runId && m.compaction.status === 'running'
             ? { ...m, content: get().tr('ctx.compaction.failed'), compaction: { ...m.compaction, status: 'failed' as const, skippable: false } } : m) } }))
@@ -1808,6 +1831,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
         else clearSuggestion(sessionId)
         break
       case 'error':
+        clearEngineNotices(set, sessionId)
         set((s) => ({ messagesBySession: { ...s.messagesBySession, [sessionId]: (s.messagesBySession[sessionId] || []).map((m) =>
           m.compaction?.runId === runId && m.compaction.status === 'running'
             ? { ...m, content: get().tr(pl.aborted ? 'ctx.compaction.aborted' : 'ctx.compaction.failed'), compaction: { ...m.compaction, status: pl.aborted ? 'aborted' as const : 'failed' as const, skippable: false } } : m) } }))
@@ -1878,6 +1902,18 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
         break
       }
       case 'status':
+        // 外部引擎的提示(融合插件:DSH 的审批在工作台里等着):进审批托盘;clear 撤掉。事件会回放,入口再洗一遍
+        if (pl.phase === 'engine_notice') {
+          const notice = pl.notice && typeof pl.notice.id === 'string' ? pl.notice : null
+          if (!notice) break
+          set((s) => {
+            const rest = (s.engineNoticesBySession[sessionId] || []).filter((x) => x.id !== notice.id)
+            const clean = notice.clear === true ? null : cleanEngineNotice(notice)
+            const next = clean ? [...rest, clean] : rest
+            return { engineNoticesBySession: { ...s.engineNoticesBySession, [sessionId]: next } }
+          })
+          break
+        }
         // context 视图数据(H5/H8/B2):整包存下,ctx 环弹层渲染
         if (pl.phase === 'context_info') {
           set((s) => ({ ctxInfoBySession: { ...s.ctxInfoBySession, [sessionId]: {
@@ -3840,6 +3876,8 @@ function endRun(set: (fn: (s: AppState) => Partial<AppState>) => void, get: () =
   // 排队项不看本轮怎么结束的(完成 / 出错 / 用户停止)都照跑:它们是用户显式排的、在等待区可见可删;
   // 停下当前 run 往往正是为了让排着的 /compact 早点跑。只在本次真的收了这条 run 时取:重复 / 迟到的终结
   // 不取,否则上一条排队消息的 startRun 还在途(running 未置),会再弹出一条并发起跑。
+  // 引擎说「在别处等你批准」的提示随这一轮收尾撤掉:停止 / 看门狗 / 断流这些路径不经 done / error
+  if (ended) clearEngineNotices(set, sessionId)
   if (ended) drainQueued(get, set, sessionId)
 }
 

@@ -7,8 +7,11 @@
 import { PLUGIN_CAPABILITIES, sanitizeEvents, sanitizeGuide, sanitizeOnboarding, sanitizeRequiresPlugins, type ExternalPluginSource } from './ipc'
 import { parseManifestRequires } from './manifestRequires'
 import { declaredSourcesOf } from '../storeSources'
+import { sanitizeNetworkPatterns } from '../pluginNetwork'
 
 const storeSourcesOf = (pluginId: string, raw: unknown) => { const list = declaredSourcesOf(pluginId, raw); return list.length ? list : undefined }
+/** 列表展示用;主进程每次代请求时另从磁盘重读,不信这份。 */
+export const networkOf = (raw: unknown): string[] | undefined => { const { patterns } = sanitizeNetworkPatterns(raw); return patterns.length ? patterns : undefined }
 
 /** manifest.json 里宿主会读的字段(全按 unknown 收:第三方写什么都可能)。 */
 export interface InstalledPluginManifest {
@@ -36,13 +39,15 @@ export interface InstalledPluginManifest {
   syncData?: unknown
   /** 商店来源(2026-11-08+):插件往商店左栏加的第三方目录,见 shared/storeSources.ts。 */
   storeSources?: unknown
+  /** ctx.net 能访问的主机名模式(2026-11-16+),见 shared/pluginNetwork.ts。 */
+  network?: unknown
 }
 
 /** manifest 推导出的展示 / 门禁字段(id、code、文档、图标、blocked 由调用方补)。
  *  ⚠️ name / version / description 沿用桌面原有的宽松取值(`m.name || 目录名`),别在这里顺手收紧 —— 两端同时变。 */
 export type InstalledPluginFields = Pick<ExternalPluginSource,
   'name' | 'version' | 'description' | 'nameEn' | 'descriptionEn' | 'apiVersion' | 'minAppVersion' | 'requiresApp' | 'packageId'
-  | 'requiresPlugins' | 'entitlement' | 'capabilities' | 'onboarding' | 'guide' | 'events' | 'fileExtensions' | 'isDesktopOnly' | 'syncData' | 'storeSources'>
+  | 'requiresPlugins' | 'entitlement' | 'capabilities' | 'onboarding' | 'guide' | 'events' | 'fileExtensions' | 'isDesktopOnly' | 'syncData' | 'storeSources' | 'network'>
 
 export function installedPluginFields(m: InstalledPluginManifest, dirName: string, id?: string): InstalledPluginFields {
   return {
@@ -72,5 +77,6 @@ export function installedPluginFields(m: InstalledPluginManifest, dirName: strin
     isDesktopOnly: m.isDesktopOnly === true ? true : undefined,
     syncData: m.syncData === true ? true : undefined,
     storeSources: storeSourcesOf(id ?? ((m as any).id as string | undefined) ?? dirName, m.storeSources),
+    network: networkOf(m.network),
   }
 }

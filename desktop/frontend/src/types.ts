@@ -1333,6 +1333,8 @@ export interface MarketCard {
   updatedAt?: string | null
   /** 来自商店来源(第三方目录)的条目:哪个来源。Forsion 商店的条目没有这一项。 */
   origin?: { sourceId: string; sourceTitle: string }
+  /** 包的 manifest `network`(ctx.net 能访问的域名,2026-11-16+)—— 目录给了才有;装好之后以本机 manifest 为准。 */
+  network?: string[] | null
 }
 
 /** market:installProgress:resolve=向服务端要下载地址;download=在试第 attempt/attempts 个地址、已收 received 字节

@@ -143,6 +143,12 @@ export interface TanguPluginContext {
   /** Publish live read-only skills under a host-owned namespace; revoked on disable/unload. */
   registerSkillProvider(provider: PluginSkillProvider): void;
   registerModelProvider(provider: PluginModelProvider): void;
+  /**
+   * 替一个外部引擎(引擎清单里的 id,如 'dsh')提供一个**已经在跑**的进程:Forsion 的普通对话改连它,不再每轮起一个(2026-11-15,
+   * 融合插件第 1 档)。connect() 回一条 ACP 连接(进程的 stdin / 只剩 JSON 行的 stdout),回 null = 这一轮照旧起一个进程。
+   * 进程由插件起停;同一场会话一轮结束后宿主不关它(工作台要接得上)。本机引擎才有;停用时撤销。见 engines/residentHosts.ts。
+   */
+  registerResidentEngine?(host: import('../engines/residentHosts.js').ResidentEngineHost): void;
   /** 登记进统一插件注册表（在「设置 → 插件」露出 + schema 面板;带 toolProvider 则顺带注册工具）。
    *  停用后 meta 仍列出(休眠:名称/图标/设置保留,toolProvider 与 promptSection 摘掉)。 */
   registerPlugin(meta: PluginMeta): void;

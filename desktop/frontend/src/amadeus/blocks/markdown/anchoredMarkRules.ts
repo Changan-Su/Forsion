@@ -23,6 +23,7 @@ import {
   strongInputRule, strongSchema,
 } from '@milkdown/kit/preset/commonmark'
 import { gfm, remarkGFMPlugin, strikethroughInputRule, strikethroughSchema } from '@milkdown/kit/preset/gfm'
+import { literalBoldEnabled } from './literalBoldFlag'
 
 type Handler = (state: EditorState, match: RegExpMatchArray, start: number, end: number) => Transaction | null
 
@@ -57,9 +58,17 @@ const inlineCode = $inputRule((ctx) => endsAtCursor(markRule(/(?:`)([^`]+)(?:`)$
  *  仍是**一条**规则、一个捕获组 —— markRule 取最后一个捕获组当正文,commonmark 的原位替换表也保持一换一。
  *  落盘两侧的开合由 attentionFlanking 的边界编码兜(check:cjk;`API**「注意」**后` 这类见 anchoredMarkRules.test)。 */
 export const STRONG_RE = /(?:(?<![:/])\*\*(?=[^*_]+?\*\*$)|(?<![\w:/])__(?=[^*_]+?__$))([^*_]+?)(?:\*\*|__)$/
-const strong = $inputRule((ctx) => endsAtCursor(markRule(STRONG_RE, strongSchema.type(ctx), {
+const strong = $inputRule((ctx) => unlessLiteralBold(endsAtCursor(markRule(STRONG_RE, strongSchema.type(ctx), {
   getAttr: (match) => ({ marker: match[0].startsWith('*') ? '*' : '_' }),
-})))
+}))))
+
+/** With the literal-bold switch on, a typed `**x**` stays text (the delimiters are characters, see ./literalBold).
+ *  加粗字面化开关开着时,手打的 `**x**` 保持文字,不变成加粗属性。 */
+function unlessLiteralBold(rule: InputRule): InputRule {
+  const r = rule as unknown as { match: RegExp; handler: Handler; undoable: boolean; inCode: boolean | 'only'; inCodeMark: boolean | 'only' }
+  return new InputRule(r.match, (state, match, start, end) => (literalBoldEnabled() ? null : r.handler(state, match, start, end)),
+    { undoable: r.undoable, inCode: r.inCode, inCodeMark: r.inCodeMark as boolean })
+}
 
 // ── gfm:删除线 ──
 /** 删除线:加 `$` 锚;开定界符前不是字母数字 / `:` `/` / `~`;内容首尾非空白、不含 `~`。

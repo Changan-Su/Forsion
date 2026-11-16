@@ -22,7 +22,7 @@ import { createHash } from 'node:crypto';
 import type { ToolDef } from '../tools/toolRegistry.js';
 import { isComputerUseTool } from '../tools/toolRegistry.js';
 import { tanguHome } from '../core/tanguHome.js';
-import { WAIT_TOOL } from './toolServer.js';
+import { SKILL_TOOL, WAIT_TOOL } from './toolServer.js';
 
 /** 交给引擎的工具桥叫什么(引擎里的工具名是 `mcp__forsion__<工具>`)。 */
 export const HANDOFF_SERVER_NAME = 'forsion';
@@ -52,7 +52,7 @@ export function notHandedReason(t: Pick<ToolDef, 'name'> & { capabilities?: Tool
   if (r) return r;
   if (t.name.startsWith('browser_') || t.name.startsWith('phone_') || isComputerUseTool(t)) return 'screenshot';
   // 和取结果那个工具同名的(插件 / MCP 工具恰好叫这个)交不过去:桥上这个名字归取结果用
-  if (t.name === WAIT_TOOL) return 'loop';
+  if (t.name === WAIT_TOOL || t.name === SKILL_TOOL) return 'loop';
   return undefined;
 }
 
@@ -220,7 +220,7 @@ export function writeAgentsHome(dir: string, instructions: string, skills: Skill
 }
 
 /** 交给引擎的工具说明段。引擎拿到的工具名是 `mcp__<桥名>__<工具>`;提示里按原名提到的 Forsion 工具都按这个对应。 */
-export function bridgeGuidance(serverName: string, budgetSeconds: number, handed: readonly string[]): string {
+export function bridgeGuidance(serverName: string, budgetSeconds: number, handed: readonly string[], skillsVia: 'folder' | 'tool' = 'folder'): string {
   const p = `mcp__${serverName}__`;
   return '## Forsion tools\n'
     + `Forsion, the app you are running in, gives you its own tools through an MCP server named "${serverName}". They appear to you as \`${p}<name>\`. `
@@ -229,6 +229,7 @@ export function bridgeGuidance(serverName: string, budgetSeconds: number, handed
     + '- Every Forsion tool call is checked against this agent\'s approval mode in Forsion; the user may have to approve it there.\n'
     + `- A call that takes longer than about ${budgetSeconds} seconds (waiting for the user's approval, or a long job such as delegating or making an image) answers with a pending ticket. `
     + `Then call \`${p}${WAIT_TOOL}\` with the exact arguments it gives, again until the result arrives. Never repeat the original call, and never end your turn while a ticket is pending.\n`
-    + '- Not available in this harness yet: browser, computer and phone control, scheduling and automations, and Tangu\'s own loop tools (its todo list, plan mode, load_tools, use_skill). Your skills are in your skills folder instead.'
+    + '- Not available in this harness yet: browser, computer and phone control, scheduling and automations, and Tangu\'s own loop tools (its todo list, plan mode, load_tools, use_skill). '
+    + (skillsVia === 'tool' ? `Load your skills with \`${p}${SKILL_TOOL}\` instead (they are listed under "Your skills").` : 'Your skills are in your skills folder instead.')
     + (handed.length ? '' : '\n- No Forsion tools are enabled for this agent right now.');
 }

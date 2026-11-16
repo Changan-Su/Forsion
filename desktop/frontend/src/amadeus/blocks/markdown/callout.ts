@@ -420,7 +420,7 @@ export function handleFoldKeyDown(view: EditorView, event: KeyboardEvent): boole
  *  Cmd+← 与点标题最左侧(类型图标一带)都会把光标落到这里 —— 拍板 #19 之后,无 +/- 的有色标注单击标题不再切折叠,
  *  而是照常放光标,这个位置于是成了常态落点。在这儿打字 / 回车 / Delete 改到的是看不见的令牌:`x[!warning] 标题`
  *  当场把标注打回普通引用。下面三处据此把编辑挪到可见标题起点(光标规则本身不变,C8c 钉着)。 */
-function hiddenPrefixStart(state: EditorState): number | null {
+export function hiddenPrefixStart(state: EditorState): number | null {
   const sel = state.selection
   if (!sel.empty) return null
   const c = calloutAt(sel.$from)

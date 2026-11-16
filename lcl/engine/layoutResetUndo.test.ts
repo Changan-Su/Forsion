@@ -39,6 +39,33 @@ function mkApi() {
 afterEach(() => { setRibbonActions({ notify: undefined }) })
 
 describe('resetLayout 的撤销', () => {
+  it('手动恢复默认清掉当前 Space 的尺寸，撤销还原；自动重建保留用户尺寸', () => {
+    const values = new Map<string, string>()
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => { values.set(key, value) },
+      removeItem: (key: string) => { values.delete(key) },
+    })
+    try {
+      mkApi()
+      const widths = { left: 606, right: 380, bottom: 260 }
+      const saved = JSON.stringify({ left: 606, right: 380, bottomH: 260 })
+      values.set('lcl.sideWidth2.home', saved)
+      values.set('lcl.sideWidth2.calendar', '{"left":450}')
+      useWorkspace.setState({ sideProfileKey: 'home', sideWidths: widths })
+      useWorkspace.getState().resetLayout()
+      expect(useWorkspace.getState().sideWidths).toEqual(widths)
+      expect(values.get('lcl.sideWidth2.home')).toBe(saved)
+      useWorkspace.getState().resetLayout({ undoable: true })
+      expect(useWorkspace.getState().sideWidths).toEqual({ left: null, right: null, bottom: null })
+      expect(values.has('lcl.sideWidth2.home')).toBe(false)
+      expect(values.get('lcl.sideWidth2.calendar')).toBe('{"left":450}')
+      expect(useWorkspace.getState().undoResetLayout()).toBe(true)
+      expect(useWorkspace.getState().sideWidths).toEqual(widths)
+      expect(values.get('lcl.sideWidth2.home')).toBe(saved)
+    } finally { vi.unstubAllGlobals() }
+  })
+
   it('① 拍快照 + 通知带「撤销」;撤销后布局与侧栏开合复原', () => {
     const notify = vi.fn()
     setRibbonActions({ notify })

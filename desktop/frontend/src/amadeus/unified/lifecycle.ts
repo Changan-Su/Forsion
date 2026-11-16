@@ -53,6 +53,9 @@ export interface UnifiedPipeHandle {
    *  'cursor' = 光标所在**顶层块**之后(该块为空则原地替换)、'start' = 文首、'end' = 文末。
    *  实例退休(改名/删除/移动之后)一律 false —— 往幽灵路径写字比不写更糟。 */
   insertMarkdown?: (md: string, where: 'cursor' | 'start' | 'end') => boolean
+  /** 插件 insertMarkdownAt 的 v4 后端:同一条插入,外加 'caret' 档(单个段落插在光标处)与 marker(光标落在标记处、标记不落盘),
+   *  不接时说出原因:read-only = 阅读模式 / 只读实例;empty = 解析成空;no-editor = 已退休 / 源码模式 / 编辑器没挂上。 */
+  insertMarkdownAt?: (md: string, where: UnifiedInsertWhere, marker?: string) => UnifiedInsertOutcome
   /** frontmatter 补丁的实例写口(评审 G1-05):笔记视图 / 日历 / 图标 / `.fd` children 这类「改一个 fm 键」的写,
    *  笔记开着时交给实例自己改 pipe.fm、走它的单写者写盘管线 —— 外科写会被实例下一次击键用旧 fm 整篇写回。
    *  返回这次写盘的 Promise = 已接手(fm 读不懂时 fail-closed 什么都不写也算接手,不许退回外科写绕过它);
@@ -77,6 +80,9 @@ export interface UnifiedPipeHandle {
    *  只读 / 锁定实例不登记它;已退休 / 源码模式 → null(不接)。返回的 undo 只在文档仍是插入后那一版时撤回。 */
   insertReply?: (md: string, anchor?: ReplyAnchor | null) => { undo: () => boolean } | null
 }
+
+export type UnifiedInsertWhere = 'caret' | 'cursor' | 'start' | 'end'
+export type UnifiedInsertOutcome = { ok: true } | { ok: false; reason: 'empty' | 'read-only' | 'no-editor' }
 
 /** 「问 Tangu」引用里带回来的出处(G3-08):标题锚 `[[路径#标题]]` 的标题 + 被引用的原文。 */
 export interface ReplyAnchor {
@@ -273,6 +279,21 @@ export function unifiedFm(path: string): string | null {
 export function unifiedInsertMarkdown(path: string, md: string, where: 'cursor' | 'start' | 'end'): boolean {
   for (const h of byRecency(path)) if (h.insertMarkdown?.(md, where)) return true
   return false
+}
+
+/** 同 unifiedInsertMarkdown,但不接时说出原因(插件 insertMarkdownAt)。同篇多开:最近用过的先问,谁接了就停;
+ *  都不接 → 报最说明问题的那个原因(empty > read-only > no-editor):阅读模式的那份比源码模式的那份更能告诉插件「为什么」。
+ *  一个实例都没有 = no-editor。 */
+export function unifiedInsertMarkdownAt(path: string, md: string, where: UnifiedInsertWhere, marker?: string): UnifiedInsertOutcome {
+  const rank = { 'no-editor': 0, 'read-only': 1, empty: 2 } as const
+  let worst: UnifiedInsertOutcome & { ok: false } = { ok: false, reason: 'no-editor' }
+  for (const h of byRecency(path)) {
+    const r = h.insertMarkdownAt?.(md, where, marker)
+    if (!r) continue
+    if (r.ok) return r
+    if (rank[r.reason] > rank[worst.reason]) worst = r
+  }
+  return worst
 }
 
 /** 此刻有没有任何 v4 实例开着(G3-08:聊天操作行「插入笔记」没有实例就不出现 —— Mini / 浮窗 / 手机上不挂一排灰按钮)。 */

@@ -745,14 +745,17 @@ export function ChatView({ leaf, params }: ViewProps) {
   // Muse 私聊:它后台排队的审批也进卡片堆(排在本会话的审批 / 提问之后、任务卡之前)
   const museApprovals = useMusePendingApprovals(mvCfg.soloAgentSlug === 'muse' && !params.childSurface)
   const museCards = useMusePendingCards(mvCfg.soloAgentSlug === 'muse' && !params.childSurface, activeId, `${activeMessages.length}:${running}`)
+  // 外部引擎在别处等你批准(融合插件:DSH 的审批在工作台里等着)——挡着这一轮,排最前
+  const engineNotices = useApp((st) => (activeId ? st.engineNoticesBySession[activeId] : undefined))
   const deckItems = useMemo<DeckItem[]>(() => [
+    ...(engineNotices ?? []).map((notice) => ({ kind: 'notice' as const, id: `notice:${notice.id}`, messageId: '', notice, engineId: composerEngine, agentSlug: runAgentSlug || undefined })),
     ...pendingApprovals,
     ...museApprovals.map((info) => ({ kind: 'muse-approval' as const, id: `muse:${info.id}`, messageId: '', info })),
     ...pendingTasks,
     ...pendingHuman.map((h) => (h.agentName || !chatAgentName ? h : { ...h, agentName: chatAgentName })), // 同流里那张的署名
     ...pendingCreations,
     ...museCards.map((card) => ({ kind: 'muse-card' as const, id: `muse-card:${card.id}`, messageId: '', card })),
-  ], [pendingApprovals, museApprovals, pendingTasks, pendingHuman, pendingCreations, museCards, chatAgentName])
+  ], [engineNotices, composerEngine, runAgentSlug, pendingApprovals, museApprovals, pendingTasks, pendingHuman, pendingCreations, museCards, chatAgentName])
   const deck = deckItems.length ? (
     <ApprovalTray
       // 每个会话一份托盘状态(收起 / 展开项 / 已送出锁),别从上一个会话带过来

@@ -24,6 +24,7 @@ export const IPC = {
   saveAsset: 'asset:save',
   saveVaultBytes: 'vault:save-bytes',
   readVaultBytes: 'vault:read-bytes',
+  statPath: 'vault:stat',
   readExternalPdf: 'pdf:external-read',
   exportExternalPdf: 'pdf:external-export',
   writeExternalPdfAnnotations: 'pdf:external-annotations',
@@ -71,6 +72,8 @@ export const IPC = {
   uninstallPlugin: 'plugins:uninstall-forsion',
   trashRestore: 'trash:restore-desktop',
   bundleAgentOwned: 'plugins:bundle-agent-owned',
+  /** ctx.net.request 的主进程代请求(2026-11-16+;electron/pluginNet.ts)。白名单由主进程按插件 id 读磁盘上的 manifest。 */
+  pluginNetRequest: 'plugins:net-request',
   revealInFileManager: 'shell:reveal',
   dbRead: 'db:read',
   dbWrite: 'db:write',
@@ -454,6 +457,13 @@ export interface PluginBundleInfo {
 export type PluginCapability = 'activeWindow' | 'databases' | 'noteTasks' | 'calendar' | 'spaces'
 export const PLUGIN_CAPABILITIES: readonly PluginCapability[] = ['activeWindow', 'databases', 'noteTasks', 'calendar', 'spaces']
 
+/** ctx.net.request 的 init 过 IPC 的样子(主进程再按不可信输入校验一遍)。 */
+export interface PluginNetRequestInit { method?: string; headers?: Record<string, string>; body?: string | Uint8Array; timeoutMs?: number }
+/** 主进程代请求的结果;code 见 electron/pluginNet.ts 的 PluginNetErrorCode。 */
+export type PluginNetIpcResult =
+  | { ok: true; status: number; headers: Record<string, string>; bytes: Uint8Array; url: string }
+  | { ok: false; code: string; message: string }
+
 /** A user (Forsion) plugin discovered under ~/.forsion/plugins/. */
 export interface ExternalPluginSource {
   id: string
@@ -497,6 +507,9 @@ export interface ExternalPluginSource {
   guide?: PluginGuideSpec
   /** Store sources this plugin adds to the store's left column (manifest `storeSources`, 2026-11-08+; `declaredSourcesOf`). */
   storeSources?: import('../storeSources').DeclaredStoreSource[]
+  /** Host patterns the plugin may reach through `ctx.net` (manifest `network`, 2026-11-16+; `sanitizeNetworkPatterns`).
+   *  Display only on this side: the main process re-reads the manifest on disk for every request. */
+  network?: string[]
   /** Home widgets (manifest `widgets`, 2026-11-07+): read from each widget folder by the main process (`pluginWidgetDirs` + `sanitizePluginWidget`). */
   widgets?: PluginWidgetSpec[]
   /** Activity events the plugin declares it emits (manifest `events`, sanitized) — automation builder catalog. */
@@ -731,6 +744,14 @@ export interface PageHistoryEntry {
 }
 
 /** 回收站条目:name = .trash 内扁平文件名;original = 删除前的 vault 相对路径。 */
+/** `statPath` result: `size` is 0 for folders; times are ms since epoch. */
+export interface VaultStat {
+  kind: 'file' | 'folder'
+  size: number
+  mtime: number
+  ctime: number | null
+}
+
 export interface TrashEntry {
   name: string
   original: string
@@ -850,6 +871,10 @@ export interface AmadeusApi {
   /** Read a vault file's raw bytes by vault-relative path (PDF 阅读器 getDocument({data}) 等;避免自定义
    *  scheme 的跨源 XHR 限制——dev 渲染器是 http://localhost 源,XHR 到 amadeus-asset:// 会被 Chromium 拦)。 */
   readVaultBytes(path: string): Promise<Uint8Array>
+  /** Kind, size and times of a vault-relative path (2026-11-16+, `ctx.app.stat`). null = missing (ENOENT / ENOTDIR) or
+   *  no vault; escaping the vault and other IO errors reject. `ctime` = creation time (birthtime), null when the file
+   *  system does not record it. Optional: hosts whose listing has no times (cloud / Unit RPC / share) leave it out. */
+  statPath?(path: string): Promise<VaultStat | null>
   /** Desktop file-view access; external PDFs are read-only, only their annotation sidecar is writable. */
   readExternalPdf?(path: string, annotations?: boolean): Promise<Uint8Array | null>
   exportExternalPdf?(path: string, name: string, bytes: Uint8Array): Promise<string | null>
@@ -979,6 +1004,9 @@ export interface AmadeusApi {
   /** 该 Agent 是不是**这个插件的捆绑包播种的**(引擎新播种时写 agents/<slug>/.bundle-origin = bundle 目录名)。
    *  ctx.tangu.startChat 的 send:true 只认它;可选:只有本机桌面实现,缺席(web / 移动 / Unit / 台架)= 一律降级为预填。 */
   bundleAgentOwned?(pluginId: string, slug: string): Promise<boolean>
+  /** ctx.net 的底座(2026-11-16+):主进程按 pluginId 读**磁盘上**那份 manifest 的 `network` 白名单,只代请求声明过的 https 域名。
+   *  失败不抛,回 `{ ok:false, code }`(invoke 抛出的错误会被包一层,码就丢了)。可选:只有本机桌面实现,缺席 = 插件拿不到 ctx.net。 */
+  pluginNetRequest?(pluginId: string, url: string, init?: PluginNetRequestInit): Promise<PluginNetIpcResult>
   /** Reveal a vault-relative file/folder in the OS file manager (Finder/Explorer), selecting it. */
   revealInFileManager(targetPath: string): Promise<void>
   /** 宿主做不了的 OS 动作(评审 G2-13):对应键**不渲染**(留一个点了没反应的按钮比没有更糟,见 platform-parity)。

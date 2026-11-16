@@ -20,7 +20,7 @@ import type { ExternalPluginSource } from '@amadeus-shared/ipc'
 const env = vi.hoisted(() => ({ root: '', handlers: new Map<string, (...args: any[]) => any>(), seq: 0 }))
 vi.mock('electron', () => ({
   app: { getPath: () => env.root, getVersion: () => '9.9.9', once: vi.fn(), removeListener: vi.fn() },
-  BrowserWindow: { getAllWindows: () => [] }, dialog: {}, shell: {},
+  BrowserWindow: { getAllWindows: () => [], fromWebContents: () => ({}) }, dialog: {}, shell: {},
   ipcMain: { handle: (channel: string, fn: (...args: any[]) => any) => env.handlers.set(channel, fn) },
 }))
 vi.mock('../forsionHome', () => ({
@@ -250,3 +250,33 @@ it('⚠️清单写坏期间沿用授权当时的插件 id:身份不漂到目录
   expect(sources.find((s) => s.id === 'demo')).toMatchObject({ dev: true, blocked: 'invalid', code: '' })
   expect(sources.some((s) => s.id === 'cool-project')).toBe(false)
 })
+
+// ctx.net(2026-11-16):白名单读的是装载器**实际选中**的那份 manifest(Codex 评审:另写一套选法会和界面上列的那份对不上)。
+// `*.localhost` 解析在本机就结束(要么回环 → net_blocked_address,要么解析失败 → net_failed),不碰外网;
+// 只要不是 net_domain_not_declared,就说明白名单放行了。
+const frame = {}
+const trusted = { sender: { id: 1, isDestroyed: () => false, getType: () => 'window', mainFrame: frame }, senderFrame: frame }
+const net = (id: string, url: string) => env.handlers.get('plugins:net-request')!(trusted, id, url, { timeoutMs: 3000 }) as Promise<{ ok: boolean; code?: string }>
+const allowed = async (id: string, host: string) => (await net(id, `https://${host}/`)).code !== 'net_domain_not_declared'
+
+it('ctx.net 白名单:开发副本遮住安装版;入口读不到的安装目录被跳过、后面同 id 的那份生效;拒载的一份都不给', async () => {
+  await installed('demo', { ...DEV_MANIFEST, network: ['installed.localhost'] })
+  await project('demo-dev', { devLoad: true, manifest: { ...DEV_MANIFEST, network: ['dev.localhost'] } })
+  const first = await installed('a-first', { id: 'twin', name: 'Twin A', version: '1.0.0', apiVersion: 1, main: 'missing.js', network: ['first.localhost'] })
+  await fs.rm(path.join(first, 'main.js'))
+  await installed('b-second', { id: 'twin', name: 'Twin B', version: '1.0.0', apiVersion: 1, main: 'main.js', network: ['second.localhost'] })
+  await installed('gated', { id: 'gated', name: 'Gated', version: '1.0.0', apiVersion: 99, main: 'main.js', network: ['gated.localhost'] })
+  await boot()
+  const sources = await list()
+  expect(sources.find((s) => s.id === 'demo')?.network).toEqual(['dev.localhost'])
+  expect(sources.find((s) => s.id === 'twin')?.network).toEqual(['second.localhost'])
+  expect(await allowed('demo', 'dev.localhost')).toBe(true)
+  expect(await allowed('demo', 'installed.localhost')).toBe(false)
+  expect(await allowed('twin', 'second.localhost')).toBe(true)
+  expect(await allowed('twin', 'first.localhost')).toBe(false)
+  expect(await allowed('gated', 'gated.localhost')).toBe(false)
+  expect(await allowed('nobody', 'dev.localhost')).toBe(false)
+  // 不是我们窗口顶层页面发来的(webview 访客页)→ 拒
+  const guest = { ...trusted, sender: { ...trusted.sender, getType: () => 'webview' } }
+  expect(await env.handlers.get('plugins:net-request')!(guest, 'demo', 'https://dev.localhost/')).toMatchObject({ ok: false, message: 'untrusted sender' })
+}, 30_000)

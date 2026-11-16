@@ -21,7 +21,7 @@ import { protectWindowsAudioClock } from './windowsAudioClock'
 import { startMiniAutoPanel } from './miniAutoPanel'
 import { createDesktopFloat } from './desktopFloat'
 import { createComputerUsePip, createPipAgentRelay, PIP_AGENT_CHANNELS, PIP_MARGIN, PIP_WIDTH, type PipAgentHost } from './computerUsePip'
-import { createPluginSandbox, sandboxRequiredPlugins, type PluginSandboxUiSeed } from './pluginSandbox'
+import { createPluginSandbox, readSandboxManifest, sandboxRequiredPlugins, type PluginSandboxUiSeed } from './pluginSandbox'
 import { sandboxSelf, startSandboxChild, sandboxForward, SANDBOX_SWITCHES } from './sandboxChild'
 import { MINI_WINDOW_LIMIT, VOICE_CALL_VIEW, miniEntityKey, normalizeMiniOpenOptions, normalizeMiniSessionContext, type MiniSessionContext, type MiniOpenOptions, type MiniOpenResult, type MainPanelTarget } from '../shared/miniPanel'
 import { miniSessionState, type MiniSessionEntry } from './miniSessionState'
@@ -142,6 +142,7 @@ import { createSampler, nativeProbe } from './activeWindow'
 import { KNOWN_APPS } from '../shared/knownApps'
 import { bindRecipeToPlugin, effectivePluginId } from '../shared/products'
 import { BROWSER_PARTITION, GUEST_ALLOWED_PERMISSIONS } from '../shared/browser'
+import { acceptPluginSurface, PLUGIN_SURFACE_PERMISSIONS, surfaceNavigationAllowed } from '../shared/pluginSurface'
 import { registerPtyIpc } from './pty'
 import { registerAssetSchemes as registerAmadeusAssetSchemes, registerAssetProtocol as registerAmadeusAssetProtocol } from './amadeus/assetProtocol'
 import { registerIuiLibProtocol } from './iuiLibProtocol'
@@ -1809,8 +1810,22 @@ function hardenNav(wc: Electron.WebContents): void {
 //    属性也拿不到 window.tangu(否则等于把 PTY/文件读写送给任意站点);
 //  - did-attach-webview:站点里的 target=_blank 回投**宿主**渲染层(带 fromGuest)→ 开成新的内置浏览器标签,不产生游离窗。
 // guest 不套 hardenNav:本地 .html 预览要允许 file: 内的相对跳转。
+//  - 插件网页表面(ctx.ui.mountWebSurface,shared/pluginSurface.ts):分区名对、首个地址是本机时给它自己的分区(不和内置浏览器
+//    混 cookie),权限只给写剪贴板;页面自己只能在同源里跳,别的地址回投渲染层照普通链接开。其余加固和内置浏览器完全一样。
+const pluginSurfaceSessions = new WeakSet<Electron.Session>()
+function pluginSurfaceSession(partition: string): void {
+  const ses = session.fromPartition(partition)
+  if (pluginSurfaceSessions.has(ses)) return
+  pluginSurfaceSessions.add(ses)
+  const allow = (p: string): boolean => PLUGIN_SURFACE_PERMISSIONS.includes(p)
+  ses.setPermissionRequestHandler((_wc, permission, callback) => callback(allow(permission)))
+  ses.setPermissionCheckHandler((_wc, permission) => allow(permission))
+  ses.setDevicePermissionHandler(() => false)
+}
 app.on('web-contents-created', (_e, contents) => {
   contents.on('will-attach-webview', (_ev, webPreferences, params) => {
+    const surface = acceptPluginSurface(params.partition, params.src)
+    if (surface) pluginSurfaceSession(surface)
     // 全部写死,不是「删掉危险的」——渲染层能塞进来的键太多(sandbox/webSecurity/…),
     // 白名单式覆写才封得住;partition 也钉死,否则空 partition 会落回权限全放行的 defaultSession。
     delete webPreferences.preload
@@ -1824,8 +1839,8 @@ app.on('web-contents-created', (_e, contents) => {
     webPreferences.experimentalFeatures = false
     webPreferences.webviewTag = false
     ;(webPreferences as Record<string, unknown>).allowFileAccessFromFiles = false // 本地 .html 不许读同盘其它文件
-    webPreferences.partition = BROWSER_PARTITION
-    params.partition = BROWSER_PARTITION
+    webPreferences.partition = surface ?? BROWSER_PARTITION
+    params.partition = surface ?? BROWSER_PARTITION
     delete params.nodeintegration
     delete params.nodeintegrationinsubframes
     delete params.disablewebsecurity
@@ -1833,6 +1848,15 @@ app.on('web-contents-created', (_e, contents) => {
   })
   contents.on('did-attach-webview', (_ev, guest) => {
     const open = openUrlHandler(contents, true)
+    if (pluginSurfaceSessions.has(guest.session)) {
+      const keep = (e: Electron.Event, url: string, outside: boolean): void => {
+        if (surfaceNavigationAllowed(guest.getURL(), url)) return
+        e.preventDefault()
+        if (outside) open({ url })
+      }
+      guest.on('will-navigate', (e, url) => keep(e, url, true))
+      guest.on('will-redirect', (e, url) => keep(e, url, false))
+    }
     guest.setWindowOpenHandler((d) => {
       // 已绑定的设备页开**它自己**中转下的地址(撕出视图 / 同源 window.open):给回投后新开的那张页发一次性许可
       const b = unitFrames.get(guest.id)
@@ -5610,7 +5634,15 @@ app.whenReady().then(async () => {
   hideMainOnLaunch = (pendingSpaceWindows.length > 0 || pendingUnitWindows.length > 0) && !mainRequested
   createWindow()
   if (!SANDBOX) restoreMiniWindows()
-  if (SANDBOX) startSandboxChild(SANDBOX, { getWindow: () => mainWindow, quit: () => { isQuitting = true; app.quit() }, log: (m) => console.log(m) })
+  if (SANDBOX) {
+    startSandboxChild(SANDBOX, {
+      getWindow: () => mainWindow,
+      // 设置是独立的浮动面板(不是主窗的子窗):agent 的 settings 动作开它、按 window 选它动手
+      getSettingsWindow: () => floatingWindows.get('settings') ?? null,
+      quit: () => { isQuitting = true; app.quit() },
+      log: (m) => console.log(m),
+    })
+  }
   // 恢复上次退出时的独立窗(位置/尺寸 + 各窗自恢复布局);之后再开排着的 Space 快捷方式窗 —— 上次没关的同一扇
   // 已经按原位置恢复了,createDetachedWindow 按 sp_<id> 去重,只是叫到前面。
   void restoreDetachedWindows().catch((e) => console.error('[win] restore detached failed:', e)).finally(() => {
@@ -5712,10 +5744,13 @@ async function installFromSandbox(): Promise<{ ok: boolean; pluginId?: string; e
   // ⚠️ 必须挂父窗(同 confirmPair):无父的 showMessageBox 在 mac 上冻住主循环;拿不到窗就不装
   const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null
   if (!win) return { ok: false, cancelled: true }
+  // 装好后 ctx.net 能连哪些域名:确认框里如实列出(读的是将要拷走的那份 manifest)
+  const network = st.dir ? (await readSandboxManifest(st.dir).catch(() => null))?.network : undefined
   const { response } = await dialog.showMessageBox(win, {
     type: 'question', title: mt('main.pluginSandbox.installTitle'),
     message: mt('main.pluginSandbox.installMessage', { name: st.name ?? '', version: st.version ?? '' }),
-    detail: mt('main.pluginSandbox.installDetail', { dir: st.dir ?? '' }),
+    detail: mt('main.pluginSandbox.installDetail', { dir: st.dir ?? '' })
+      + (network?.length ? `\n\n${mt('main.pluginSandbox.installNetwork', { domains: network.join(', ') })}` : ''),
     buttons: [mt('main.pluginSandbox.install'), mt('main.pluginSandbox.cancel')], defaultId: 0, cancelId: 1, noLink: true,
   })
   if (response !== 0) return { ok: false, cancelled: true }

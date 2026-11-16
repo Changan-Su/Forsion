@@ -48,6 +48,12 @@ async function setup(files: Record<string, string>) {
       await ipcLag()
       return nf
     },
+    moveFolder: async (f: string, dst: string) => {
+      const nf = `${dst ? `${dst}/` : ''}${f.split('/').pop()}`
+      for (const [k, v] of [...disk]) if (under(k, f)) { disk.delete(k); disk.set(nf + k.slice(f.length), v) }
+      await ipcLag()
+      return nf
+    },
     trashEntry: async (p: string) => {
       for (const [k, v] of [...disk]) if (under(k, p)) { trash.set(k, v); disk.delete(k) }
     },
@@ -146,6 +152,20 @@ describe('白板:防抖窗口里的笔画 × 树上改名文件夹 / 删除', ()
     await vi.advanceTimersByTimeAsync(2000)
     expect(m.disk.has('资料/板.excalidraw.md')).toBe(false)
     expect(sceneOf(m.disk.get('资料2/板.excalidraw.md'))).toBe(SCENE2)
+  })
+
+  it('moveFolder(插件 ctx.app.movePath 走这条):笔画先落盘再挪,旧文件夹不会被建回来;挪成功发前缀路径广播', async () => {
+    const m = await setup({ '1.md': '', '资料/板.excalidraw.md': BOARD, '归档/x.md': '' })
+    const gone: Array<[string, string, string | null]> = []
+    m.onNotePathGone((from, kind, to) => gone.push([from, kind, to]))
+    await m.useDrawStore.getState().load('资料/板.excalidraw.md', '资料/板.excalidraw.md')
+    m.useDrawStore.getState().save('资料/板.excalidraw.md', SCENE2)
+    await during(m.usePageStore.getState().moveFolder('资料', '归档'))
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(m.disk.has('资料/板.excalidraw.md')).toBe(false)
+    expect(sceneOf(m.disk.get('归档/资料/板.excalidraw.md'))).toBe(SCENE2)
+    expect(gone).toContainEqual(['资料', 'prefix', '归档/资料'])
+    expect(m.usePageStore.getState().folders).toContain('归档/资料')
   })
 
   it('改名之后画布还挂着旧引用、接着画:写到新位置', async () => {

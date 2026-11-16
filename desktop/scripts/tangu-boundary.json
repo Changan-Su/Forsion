@@ -64,6 +64,7 @@
       "desktop/frontend/src/stores/newChatWorkspaces.ts",
       "desktop/frontend/src/views/AgentProfileView.tsx",
       "desktop/frontend/src/views/AgentStandIns.tsx",
+      "desktop/frontend/src/views/EngineHarnessRows.tsx",
       "desktop/frontend/src/views/AgentSkillsPanel.tsx",
       "desktop/frontend/src/views/ChatView.tsx",
       "desktop/frontend/src/views/HumanProfile.tsx",
