@@ -35,12 +35,13 @@
 .chat-pick-section { padding: 6px 8px 4px; font-size: var(--ui-font-meta, 12px); font-weight: 500; color: var(--text-muted); }
 
 /* ─── 浮层:外壳是 .ctx-menu,这里只定宽度与本组件的几件 ─── */
-.ctx-menu.chat-pick-pop { width: 252px; max-width: calc(100vw - 16px); }
+.ctx-menu.chat-pick-pop { display: flex; flex-direction: column; width: 252px; max-width: calc(100vw - 16px); }
 .chat-pick-pop .chat-pick-row { gap: 9px; }
 /* 活动行(悬停 / ↑↓):焦点留在搜索框,行靠 data-active 画高亮,同 .ctx-menu button:hover */
 .chat-pick-pop .chat-pick-row[data-active] { background: var(--menu-hover); color: var(--text); }
 /* 最多显示 8 行,其余滚动(行高跟菜单 token 走,加上外部引擎的小节标题与分隔线留的余量) */
-.chat-pick-pop .ctx-menu-scroll { max-height: calc(8 * var(--menu-item-min-height, 32px) + 8px); }
+.chat-pick-pop .ctx-menu-scroll { min-height: 0; max-height: calc(8 * var(--menu-item-min-height, 32px) + 8px); }
+.chat-pick-pop > .chat-pick-search, .chat-pick-pop > .ctx-separator, .chat-pick-pop > .chat-pick-desc { flex: none; }
 .chat-pick-search {
   display: flex; align-items: center; gap: 7px; margin-bottom: 4px; padding: 6px 8px;
   border-radius: var(--radius-sm); background: var(--overlay-light); color: var(--text-muted); cursor: text;

@@ -23,6 +23,7 @@ const agents = [
   { slug: 'muse', name: 'Kaltsit', nameZh: '凯尔希', nameEn: 'Kaltsit', description: '后台执行官：持续观察你的活动，主动发现值得做的事（经 Muse TODO 提交）' },
   { slug: 'listener', name: 'Listener', nameZh: '谛听', nameEn: 'Listener', description: '' },
   { slug: 'long', name: 'Long description', nameZh: '长说明', nameEn: 'Long description', description: 'Long custom description. '.repeat(35) + 'x'.repeat(200) },
+  { slug: 'long-two', name: 'Another long description', description: 'A different long custom description. '.repeat(35) },
   ...Array.from({ length: 12 }, (_, i) => ({ slug: `extra-${i}`, name: `Extra ${i}`, description: `Extra description ${i}` })),
 ] as NormalAgentDef[]
 useApp.setState({ agentDefs: agents, defaultAgentSlug: 'xyra', engines: [], teams: [] })
