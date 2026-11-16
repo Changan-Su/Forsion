@@ -251,6 +251,25 @@
   --overlay-scrim: rgba(0, 0, 0, 0.55);
 }
 
+/* ─── 笔记里正在编辑的公式源码:token 颜色(amadeus/styles.css 的 .math-source-*) ───
+ * 只分明暗、不随主题色 / 背景色走,所以不进 skins.css 的 [data-skin] / [data-bg] 块(三轴两两不相交)。
+ * 缺省值 = Obsidian 1.15 实测(浅 / 深);括号是它不装插件时的弱化文字色。
+ * 换成 Forsion 自己的配色只改这两块(例:括号跟主题走 = --math-src-bracket: var(--text-muted))。 */
+:root {
+  --math-src-dollar: #8a5cf5;  /* $ 与 $$ */
+  --math-src-command: #e93147; /* \frac \alpha \{ 这类命令,以及 _ ^ & */
+  --math-src-letter: #00bfbc;  /* 字母 */
+  --math-src-number: #7852ee;  /* 数字 */
+  --math-src-bracket: #5c5c5c; /* ( ) [ ] { } */
+}
+:root.dark {
+  --math-src-dollar: #a68af9;
+  --math-src-command: #fb464c;
+  --math-src-letter: #53dfdd;
+  --math-src-number: #a882ff;
+  --math-src-bracket: #b3b3b3;
+}
+
 /* 支持 color-mix 就换成按 accent 调配的版本(见 :root 里 --sel-line 的长注释)。 */
 @supports (color: color-mix(in srgb, red 50%, transparent)) {
   :root {

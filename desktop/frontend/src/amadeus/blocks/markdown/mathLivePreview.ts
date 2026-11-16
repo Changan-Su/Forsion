@@ -16,6 +16,7 @@ import { registerMessages, translate } from '../../../i18n'
 import { mathDollarInput, mathPairBackspace, mathBracketInput, mathBracketBackspace } from './mathTyping'
 import { inlinePreviewCaret, inlinePreviewEdgeClick, inlinePreviewEdgeKeyDown } from './inlinePreviewCaret'
 import { mathSourceHighlights } from './mathSourceHighlight'
+import { UI_ZOOM_EVENT } from '../../lib/clampMenu'
 
 registerMessages({
   'mathlive.renderFailedTitle': { zh: 'LaTeX 无法渲染', en: 'LaTeX could not be rendered' },
@@ -145,6 +146,191 @@ function renderMath(view: EditorView, latex: string, display: boolean, srcFrom: 
     view.focus()
   })
   return el
+}
+
+/** 预览里光标的记号:同 Obsidian LaTeX Suite 的缺省 ▶。包一层 `{}`,后面紧跟字母也不会粘成别的命令。 */
+const CARET_MARK = '{\\blacktriangleright}'
+
+/** `latex[k]` 这个反斜杠是不是一条命令的开头(前面连着偶数个反斜杠;`\\` 换行的第二个不算)。 */
+function startsCommand(latex: string, k: number): boolean {
+  let n = 0
+  for (let i = k; i >= 0 && latex[i] === '\\'; i--) n++
+  return n % 2 === 1
+}
+
+/** 在公式正文的光标处插 ▶(at = 光标在 latex 里的偏移)。光标落在命令名上(`\fr|ac`、`\sqrt|`、`\{|`、`\|`)时挪到
+ *  反斜杠前 —— 同 LaTeX Suite:不把命令拆坏,▶ 也不会被当成命令的参数。导出供单测。 */
+export function markCaret(latex: string, at: number): string {
+  let i = Math.max(0, Math.min(at, latex.length))
+  let j = i
+  while (j > 0 && /[A-Za-z]/.test(latex[j - 1])) j--
+  if (j < i && j > 0 && latex[j - 1] === '\\' && startsCommand(latex, j - 1)) i = j - 1
+  else if (i > 0 && latex[i - 1] === '\\' && startsCommand(latex, i - 1)) i -= 1
+  else if (i > 1 && latex[i - 2] === '\\' && !/[A-Za-z]/.test(latex[i - 1]) && startsCommand(latex, i - 2)) i -= 2
+  return latex.slice(0, i) + CARET_MARK + latex.slice(i)
+}
+
+/** 选区落在这个公式里(start / end = 含两头 `$` 的源码范围)。空选区 = 光标在公式源码里(右边界不算,同「正在编辑」
+ *  的口径);非空选区要两头都在两头的 `$` 之间(同 LaTeX Suite 判「在公式里」的口径)。连 `$` 一起选中整个公式、或选区
+ *  跨出公式都不算 —— 那是对整个公式 / 正文动手,格式浮条照旧。 */
+function selectionInside(from: number, to: number, start: number, end: number, display: boolean): boolean {
+  if (from === to) return from >= start && from < end
+  const d = display ? 2 : 1
+  return from >= start + d && to <= end - d
+}
+
+/** 选区所在的那个公式(口径同 selectionInside):不在公式里 / 跨出公式 / 代码块里 → null。
+ *  格式浮条据此让位(公式源码里没有粗体斜体可言,同 Obsidian)。 */
+export function formulaAtSelection(state: EditorState): { from: number; to: number; latex: string; display: boolean } | null {
+  const { $from, $to, from, to } = state.selection
+  if (!$from.parent.isTextblock || $from.parent.type.spec.code || !$from.sameParent($to)) return null
+  const s = buildBlockString($from.parent)
+  if (s.indexOf('$') === -1) return null
+  const cs = $from.start()
+  const sp = scanMath(s).find((x) => selectionInside(from, to, cs + x.from, cs + x.to, x.display))
+  return sp ? { from: cs + sp.from, to: cs + sp.to, latex: sp.latex, display: sp.display } : null
+}
+
+/** 正在编辑的行内公式(光标或选区在它里面,口径同 selectionInside):给浮层预览用。没焦点 / 不在行内公式里 /
+ *  选区跨出公式 → null。▶ 标在选区末端(空选区就是光标),同 LaTeX Suite —— 选中占位时也看得出在哪。 */
+function activeInlineFormula(state: EditorState): { from: number; to: number; latex: string; caretAt: number } | null {
+  if (!editorFocused(state)) return null
+  const hit = formulaAtSelection(state)
+  if (!hit || hit.display) return null
+  const { to } = state.selection
+  return { from: hit.from, to: hit.to, latex: hit.latex, caretAt: Math.min(Math.max(to - (hit.from + 1), 0), hit.latex.length) }
+}
+
+const FLOAT_GAP = 4 // 气泡与这一行之间的空隙(视觉 px)
+
+/** 行内公式编辑中的预览:浮在这一行上方的小气泡(放不下翻到下方),▶ 标出光标位置;不占文档流、不推挤正文。
+ *  气泡由插件视图自己挂在编辑器 DOM 的**外面**(view.dom 的父节点里),不进 contentDOM:段尾不多任何节点,
+ *  coordsAtPos / 方向键 / 输入法量到的都还是正文本身。块公式的预览照旧是源码下方的装饰。 */
+class InlineMathFloat {
+  private el: HTMLElement | null = null
+  private key = ''
+  private raf = 0
+  private armed = false
+  private resize: ResizeObserver | null = null
+
+  constructor(private view: EditorView) {
+    this.update(view)
+  }
+
+  update(view: EditorView, prev?: EditorState): void {
+    this.view = view
+    // 纯 meta 事务(文档、选区、焦点都没变):位置与内容都不变,不量。
+    if (prev && this.el && prev.doc === view.state.doc && prev.selection.eq(view.state.selection) &&
+        editorFocused(prev) === editorFocused(view.state)) return
+    const hit = activeInlineFormula(view.state)
+    const host = view.dom.parentElement
+    if (!hit || !host) return this.hide()
+    if (!this.el) {
+      this.el = document.createElement('div')
+      this.el.className = 'math-preview math-preview--inline math-preview--float'
+      this.el.setAttribute('aria-hidden', 'true') // 纯视觉辅助,读屏读源码本身
+    }
+    if (this.el.parentElement !== host) host.appendChild(this.el)
+    const key = `${hit.caretAt}:${hit.latex}`
+    if (key !== this.key) {
+      this.key = key
+      const inner = document.createElement('span')
+      inner.className = 'math-preview-inner'
+      katexInto(inner, markCaret(hit.latex, hit.caretAt), false)
+      // 插了记号反而渲染不了(半截命令之类):退回不带记号的版本,预览照常有。
+      if (inner.querySelector('.math-error')) katexInto(inner, hit.latex, false)
+      this.el.replaceChildren(inner)
+    }
+    this.place(hit)
+    this.arm(true)
+  }
+
+  private later = (): void => {
+    if (this.raf) return
+    this.raf = requestAnimationFrame(() => {
+      this.raf = 0
+      const hit = this.el && activeInlineFormula(this.view.state)
+      if (hit) this.place(hit)
+    })
+  }
+
+  /** 只在气泡开着时监听:滚动(翻上 / 翻下)、窗口与界面缩放、编辑区改宽(分栏拖动会让公式换行)。 */
+  private arm(on: boolean): void {
+    if (on === this.armed) return
+    this.armed = on
+    if (on) {
+      window.addEventListener('scroll', this.later, true)
+      window.addEventListener('resize', this.later)
+      window.addEventListener(UI_ZOOM_EVENT, this.later)
+      if (typeof ResizeObserver !== 'undefined') {
+        this.resize = new ResizeObserver(this.later)
+        this.resize.observe(this.view.dom)
+      }
+    } else {
+      window.removeEventListener('scroll', this.later, true)
+      window.removeEventListener('resize', this.later)
+      window.removeEventListener(UI_ZOOM_EVENT, this.later)
+      this.resize?.disconnect()
+      this.resize = null
+    }
+  }
+
+  /** 左缘让预览里的字对齐源码的 `$`,底边落在这一行上方;上方被裁切的祖先 / 吸顶工具栏挡住就翻到下方;左右夹在编辑区里。
+   *  先归零再量、按「布局 px / 视觉 px」换算(computed width ÷ 量到的宽,带小数;界面缩放与画布缩放都算进去)。 */
+  private place(hit: { from: number; to: number }): void {
+    const el = this.el, view = this.view
+    if (!el) return
+    let start: { left: number; top: number }
+    let end: { bottom: number }
+    try {
+      start = view.coordsAtPos(hit.from, 1)
+      end = view.coordsAtPos(hit.to, -1)
+    } catch { return }
+    el.classList.remove('is-below')
+    el.style.left = '0px'
+    el.style.top = '0px'
+    el.style.maxWidth = ''
+    const area = view.dom.getBoundingClientRect()
+    let left = area.left, right = area.right, top = 0
+    for (let a = el.parentElement; a; a = a.parentElement) {
+      const st = getComputedStyle(a)
+      // display: contents 的壳(.amx-stage-off 这类)没有盒子,overflow 不生效,量出来是 0×0,别拿它裁。
+      if (st.display !== 'contents' && (st.overflowX !== 'visible' || st.overflowY !== 'visible')) {
+        const r = a.getBoundingClientRect()
+        left = Math.max(left, r.left); right = Math.min(right, r.right); top = Math.max(top, r.top)
+      }
+    }
+    const bar = view.dom.closest('.amx-pane')?.querySelector('.amx-toolbar')
+    if (bar) top = Math.max(top, bar.getBoundingClientRect().bottom)
+    right = Math.min(right, document.documentElement.clientWidth)
+    const r0 = el.getBoundingClientRect()
+    if (!r0.width) return // 视图藏起来了(换到后台的标签)
+    const k = parseFloat(getComputedStyle(el).width) / r0.width || 1
+    if (r0.width > right - left) el.style.maxWidth = `${Math.max(0, (right - left) * k)}px`
+    const r = el.getBoundingClientRect()
+    const inset = (el.firstElementChild?.getBoundingClientRect().left ?? r.left) - r.left
+    const x = Math.max(left, Math.min(start.left - inset, right - r.width))
+    let y = start.top - FLOAT_GAP - r.height
+    if (y < top) {
+      y = end.bottom + FLOAT_GAP
+      el.classList.add('is-below')
+    }
+    el.style.left = `${(x - r.left) * k}px`
+    el.style.top = `${(y - r.top) * k}px`
+  }
+
+  hide(): void {
+    this.arm(false)
+    cancelAnimationFrame(this.raf)
+    this.raf = 0
+    this.el?.remove()
+    this.key = ''
+  }
+
+  destroy(): void {
+    this.hide()
+    this.el = null
+  }
 }
 
 // ── 「哪些地方不算公式」:按 Markdown 解析的口径把代码 / 地址抹成空格 ──────────────────────────────────
@@ -819,21 +1005,23 @@ function buildDecorations(state: EditorState): DecorationSet {
     const spans = scanMath(s)
     if (!spans.length) return false
     for (const sp of spans) {
-      const editing = focus && (selFrom === selTo
-        ? selFrom >= cs + sp.from && selFrom < cs + sp.to
-        : selFrom < cs + sp.to && selTo > cs + sp.from)
+      const inside = selectionInside(selFrom, selTo, cs + sp.from, cs + sp.to, sp.display)
+      const editing = focus && (inside || (selFrom !== selTo && selFrom < cs + sp.to && selTo > cs + sp.from))
       if (editing) {
+        // Whole source, `$` included: the public styling hook (monospace, italic, code size). PM merges it
+        // into every text span of the formula, so selectors are `.math-source.math-source-x`, not descendants.
+        // Never cut around the selection: the font must not jump while dragging a selection.
+        decos.push(Decoration.inline(cs + sp.from, cs + sp.to, { class: 'math-source' }))
         for (const token of mathSourceHighlights(s.slice(sp.from, sp.to), cs + sp.from, { from: selFrom, to: selTo })) {
           decos.push(Decoration.inline(token.from, token.to, { class: token.className }))
         }
-        // Only the formula containing the caret gets a preview. Inline previews
-        // occupy a row after the paragraph, so neither source nor adjacent text is covered.
-        if (selFrom !== selTo) continue
-        const anchor = sp.display ? cs + sp.to : cs + node.content.size
-        decos.push(Decoration.widget(anchor, (v, getPos) => renderMath(v, sp.latex, sp.display, getPos, true), {
+        // 只有光标 / 选区整个落在里面的那个公式出预览(选中占位时照常出,同 Obsidian);选区跨出公式不出。
+        // 块公式的预览在源码下方;行内公式的预览是插件视图自己摆的浮层(InlineMathFloat),不走装饰。
+        if (!inside || !sp.display) continue
+        decos.push(Decoration.widget(cs + sp.to, (v, getPos) => renderMath(v, sp.latex, true, getPos, true), {
           side: 1,
           ignoreSelection: true,
-          key: `p:${sp.display ? 'b' : 'i'}:${sp.latex}`, // 不带位置(P-04):预览不读位置,内容相同即可复用
+          key: `p:b:${sp.latex}`, // 不带位置(P-04):预览不读位置,内容相同即可复用
         }))
         continue
       }
@@ -867,6 +1055,7 @@ export function mathLivePreviewPlugin() {
           // 失焦 → 全部渲染(每个 Amadeus 块独立编辑器:点别的块 = 本块失焦,公式即渲染)。焦点态读 editorFocus。
           decorations: (state) => buildDecorations(state),
         },
+        view: (view) => new InlineMathFloat(view),
       }),
   )
 }

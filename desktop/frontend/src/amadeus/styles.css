@@ -2991,14 +2991,30 @@ body.amx-marquee-active * {
    ponytail: 要文档内连续编号得自己数(每块独立渲染),等有人要再做。 */
 .am-app .katex .eqn-num { display: none; }
 
-/* Current inline formula preview has its own row after the source paragraph. */
-.math-preview--inline { display: block; max-width: 100%; margin-top: 8px; pointer-events: none; }
-.math-preview--inline .math-preview-inner {
-  display: inline-block; max-width: 100%; overflow-x: auto; vertical-align: top;
-  padding: 4px 10px; border-radius: var(--radius-sm, 6px); white-space: nowrap; pointer-events: none;
-  background: var(--bg-card, var(--bg)); border: var(--border-width, 1px) solid var(--border);
-  box-shadow: var(--card-shadow, 0 6px 22px rgba(0, 0, 0, 0.12));
+/* 行内公式编辑中的预览:浮在这一行上方的小气泡(照 Obsidian LaTeX Suite;放不下翻到下方)。由 mathLivePreview.ts 的
+   InlineMathFloat 挂在编辑器 DOM 外面、现量现摆,不进正文、不推挤正文;表面读浮层 token(DESIGN §3「浮层表面」),不抄 Obsidian 的色值。
+   ⚠️ 不加 .am-app 作用域:同一个编辑器也挂在没有 .am-app 祖先的宿主里(插件 mountRecord({ body: true }) 的正文),
+   加了那里的气泡就成了没样式、排在文档流里的一块。用到的 token 都在 :root(base.css)。 */
+.math-preview--float {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: var(--z-view-float);
+  width: max-content;
+  box-sizing: border-box;
+  padding: 4px 6px;
+  overflow: hidden;
+  white-space: nowrap;
+  color: var(--text);
+  background: var(--surface-float, var(--bg-card));
+  backdrop-filter: var(--surface-blur, none);
+  border: var(--border-width) solid var(--surface-edge, var(--border));
+  border-radius: var(--radius-sm);
+  box-shadow: var(--card-shadow);
+  pointer-events: none;
+  user-select: none;
 }
+.math-preview--float .math-preview-inner { display: block; }
 .math-preview--block { display: block; }
 .math-preview--block .math-preview-inner { display: block; text-align: center; margin: 4px 0 2px; opacity: 0.9; }
 .math-preview--block .katex-display { margin: 0; text-align: center; }
@@ -4615,5 +4631,20 @@ body.amx-marquee-active * {
 @media (max-width: 600px) {
   .am-app .slash-menu--picker { left: 12px !important; right: 12px; top: auto !important; bottom: max(12px, env(safe-area-inset-bottom)); width: auto; min-height: 0 !important; max-height: 70dvh; }
 }
-.am-app .math-source-command { color: var(--accent-ink); }
-.am-app .math-source-delimiter { color: var(--text-muted); }
+/* 正在编辑的公式源码(blocks/markdown/mathLivePreview.ts + mathSourceHighlight.ts)。
+   .math-source = 整段源码(含 $)的样式钩子,插件可依赖;PM 把它并进每一个 span,插件写 `.math-source.xxx`。
+   观感照 Obsidian:等宽、斜体、行内代码字号(同上面 .ProseMirror code 的 0.88em),不加字距、不加内边距。
+   token 颜色只读 base.css 的 --math-src-*;选择器整个包进 :where()(权重 0),插件给括号 / $ / 占位
+   加的类一条普通类选择器就能盖过。.math-source-delimiter 是旧总类,不再上色(同 span 上零权重会按源码顺序打架)。
+   不加 .am-app 作用域(理由同上面的 .math-preview--float):没有 .am-app 的宿主里公式源码也得是这个样子。 */
+.ProseMirror .math-source {
+  font-family: var(--font-mono);
+  font-style: italic;
+  font-size: 0.88em;
+  letter-spacing: normal;
+}
+:where(.math-source-dollar) { color: var(--math-src-dollar); }
+:where(.math-source-command, .math-source-script) { color: var(--math-src-command); }
+:where(.math-source-letter) { color: var(--math-src-letter); }
+:where(.math-source-number) { color: var(--math-src-number); }
+:where(.math-source-bracket) { color: var(--math-src-bracket); }
