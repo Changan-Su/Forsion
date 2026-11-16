@@ -162,7 +162,20 @@ function prepareHome() {
 }
 const dshProcs = () => { try { return execFileSync('pgrep', ['-fl', R], { encoding: 'utf8' }).split('\n').filter((l) => l.includes('dsh/lib/bin.js')) } catch { return [] } }
 
-async function shot(win, name) { await win.screenshot({ path: path.join(SHOTS, `${name}.png`) }).catch(() => {}) }
+// 截图走 Electron 原生 capturePage。Playwright 的 win.screenshot() 截图那几十毫秒会把工作台 <webview> 里网页的视口改成整窗大小
+// (1440×900)再改回来,赶上那一帧截到的就是「DSH 网页右边被裁掉」(11-16 量到:每次截图正好一对视口跳变,宿主盒子从没变过;
+// 第 2 / 14 / 16 轮和观测第 4 轮的裁切都是这么来的,用户那边没有)。拿不到原生窗口时才退回 Playwright
+let APP = null
+async function shot(win, name) {
+  const file = path.join(SHOTS, `${name}.png`)
+  try {
+    if (APP) {
+      const b64 = await (await APP.browserWindow(win)).evaluate(async (w) => (await w.capturePage()).toPNG().toString('base64'))
+      fs.writeFileSync(file, Buffer.from(b64, 'base64')); return
+    }
+  } catch { /* 退回 Playwright */ }
+  await win.screenshot({ path: file }).catch(() => {})
+}
 async function openAgents(win) {
   const btn = win.locator('[data-ribbon-id="space:agents"], [data-id="space:agents"] .rb-space, [data-id="space:agents"], button[title="Agents"]').first()
   if (await btn.count()) await btn.click()
@@ -301,14 +314,26 @@ async function approvalsWalk(app, win, guestLogs) {
 
   // ⑥-0 在工作台里装 skills-manager(插件页走的远程方法 → 体检 → 放行),它要重启 DSH 才加载
   check('⑥ 前置:工作台落在 A 那场', await openInWorkbench(app, win, /^Hello DSH, please/, MARK), await failLogs())
-  // skills-manager 1.4.6 带 koffi 的构建脚本;DSH 0.2.2 的 pnpm 11 对没批的构建脚本直接报错。和 test:approvals 一样先在组合里写明不跑它的构建
-  fs.writeFileSync(path.join(R, 'dsh/profiles/forsion/pnpm-workspace.yaml'), 'allowBuilds:\n  koffi: false\n')
-  const reqId = `ui-${Date.now()}`
-  void guestEval(app, `fetch('/api/pluginManager/installBundle', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ type: 'client-request', rpcId: '${reqId}', method: 'pluginManager/installBundle', payload: { args: { spec: '${SKILLS_MANAGER}', options: { enabled: true, requestId: '${reqId}' } } } }) }).then((r) => r.json()).then((j) => { window.__d2fInstall = j; return true })`)
   const card = win.locator('[data-d2f="review"]').first()
-  const report = await until(async () => { const t = await card.innerText().catch(() => ''); return /要装 /.test(t) ? t : null }, 300_000, 1000)
+  const installSkm = async () => {
+    const reqId = `ui-${Date.now()}`
+    await guestEval(app, 'window.__d2fInstall = null')
+    void guestEval(app, `fetch('/api/pluginManager/installBundle', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ type: 'client-request', rpcId: '${reqId}', method: 'pluginManager/installBundle', payload: { args: { spec: '${SKILLS_MANAGER}', options: { enabled: true, requestId: '${reqId}' } } } }) }).then((r) => r.json()).then((j) => { window.__d2fInstall = j; return true })`)
+  }
+  // skills-manager 1.4.6 带 koffi 的构建脚本,DSH 0.2.2 的 pnpm 11 不跑没允许过的构建脚本。产品不替用户允许:
+  // 体检卡写明要跑原生构建脚本、这次会装不上、去 DSH 插件页「允许这些脚本并重试」,装好后可能要「重启 DSH」。这里按「不装」
+  await installSkm()
+  const needs = await until(async () => { const t = await card.innerText().catch(() => ''); return /要装 /.test(t) ? t : null }, 300_000, 1000)
+  await shot(win, '30a-skm-review-needs-build')
+  check('⑥ 前置:体检卡写明要跑 koffi 的原生构建脚本、没允许这次装不上、去 DSH 插件页允许、装好可能要重启 DSH', !!needs && /要跑原生构建脚本: koffi@3\.1\.1/.test(needs) && /允许这些脚本并重试/.test(needs) && /重启 DSH/.test(needs), needs)
+  if (needs) await card.locator('[data-act="review-deny"]').click()
+  await until(async () => (await guestEval(app, 'window.__d2fInstall || null')).value, 30_000, 500)
+  // 和 test:approvals 一样由测试替用户选「不跑它的构建脚本」(koffi 自带预编译;只写在这个临时目录里,不是产品缺省),再装一次
+  fs.writeFileSync(path.join(R, 'dsh/profiles/forsion/pnpm-workspace.yaml'), 'allowBuilds:\n  koffi: false\n')
+  await installSkm()
+  const report = await until(async () => { const t = await card.innerText().catch(() => ''); return /要装 /.test(t) && /不跑这些构建脚本/.test(t) ? t : null }, 300_000, 1000)
   await shot(win, '30-skm-review')
-  check('⑥ 前置:工作台里装 skills-manager,Forsion 先给体检报告', !!report, report)
+  check('⑥ 前置:工作台里装 skills-manager,Forsion 先给体检报告(写明按组合设置不跑 koffi 的构建脚本)', !!report && /koffi@3\.1\.1/.test(report), report)
   if (report) await card.locator('[data-act="review-allow"]').click()
   const installed = await until(async () => (await guestEval(app, 'window.__d2fInstall || null')).value, 180_000, 1000)
   const application = installed?.result?.value?.application ?? installed?.result?.application
@@ -390,6 +415,7 @@ async function main() {
       TANGU_PROVIDER_ID: 'stubjudge', TANGU_PROVIDER_BASE_URL: `${STUB}/v1`, TANGU_PROVIDER_API_KEY: 'stub-not-a-real-key', TANGU_PROVIDER_MODELS: 'judge',
       ...(MODE === 'fallback' ? { DSH2FORSION_APPROVAL_EVENT: RENAMED_EVENT } : {}) },
   })
+  APP = app
   const pageErrors = []
   try {
     const win = await app.firstWindow({ timeout: 60_000 })
@@ -523,6 +549,14 @@ async function main() {
     check('③ 从 Harness 卡打开工作台:看得到这场(含 Forsion 刚才那一轮)并接着说', closedTab && !!seen && !!heard2, `页签关掉了 ${closedTab};${seen || '没看到这场'}`)
 
     // ④ 在工作台里装 dsh-genui:Forsion 先给体检报告
+    // 从这里起记下宿主 webview 盒子的每次变化、网页视口的每次 resize(下面断言体检前后都没变过)
+    await win.evaluate(() => {
+      const wv = document.querySelector('[data-d2f="workbench"] webview'); const log = (window.__d2fBox = [])
+      if (!wv) return
+      const t0 = performance.timeOrigin
+      new ResizeObserver(() => { const b = wv.getBoundingClientRect(); log.push({ t: Math.round(t0 + performance.now()), x: Math.round(b.x), y: Math.round(b.y), w: Math.round(b.width), h: Math.round(b.height), on: wv.isConnected }) }).observe(wv)
+    }).catch(() => {})
+    await guestEval(app, `(() => { const log = (window.__d2fVp = []); addEventListener('resize', () => log.push({ t: Date.now(), w: innerWidth, h: innerHeight })); return true })()`)
     const reqId = `ui-${Date.now()}`
     void guestEval(app, `fetch('/api/pluginManager/installBundle', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ type: 'client-request', rpcId: '${reqId}', method: 'pluginManager/installBundle', payload: { args: { spec: '${GENUI}', options: { enabled: true, requestId: '${reqId}' } } } }) }).then((r) => r.json()).then((j) => { window.__d2fInstall = j; return true })`)
     const card = win.locator('[data-d2f="review"]').first()
@@ -531,11 +565,11 @@ async function main() {
     check('④ 工作台里点安装后,Forsion 先体检(安装被停住)', !!checking)
     const report = await until(async () => { const t = await card.innerText().catch(() => ''); return /要装 dsh-genui/.test(t) ? t : null }, 240_000, 1000)
     await shot(win, '26-review-report')
-    // 观测(不判):报告卡出来后截图里 DSH 网页右边被裁过(DOM 量出来宽度是对的)。把鼠标挪到网页上让它重画一次再截一张,
-    // 裁切消失 = 截到的是客体网页没重画的旧帧
-    { const b = await win.locator('[data-d2f="workbench"] webview').boundingBox().catch(() => null)
-      if (b) { await win.mouse.move(b.x + b.width / 2, b.y + b.height / 3); await sleep(400); await win.mouse.move(b.x + b.width / 2 + 40, b.y + b.height / 3 + 20); await sleep(800) }
-      await shot(win, '26-review-report-after-hover') }
+    // 体检卡出来前后,宿主的 webview 盒子和里面网页的视口都没变过(截图也不能把它撑大:见 shot 的说明)
+    { const box = await win.evaluate(() => window.__d2fBox || null).catch(() => null)
+      const vp = (await guestEval(app, 'window.__d2fVp || null')).value
+      const same = Array.isArray(box) && box.length >= 1 && box.every((b) => b.w === box[0].w && b.h === box[0].h && b.x === box[0].x && b.on)
+      check('④ 体检卡出来前后工作台网页的尺寸没变过(截图不撑大网页)', same && Array.isArray(vp) && vp.length === 0, `宿主盒子 ${JSON.stringify(box)};网页视口变化 ${JSON.stringify(vp)}`) }
     // 观感:体检卡浮在工作台上,不能把里面的 DSH 网页撑宽(第 2 轮截图里报告出来后网页右边被裁掉)
     const geo = await win.evaluate(() => {
       const r = (q) => { const e = document.querySelector(q); if (!e) return null; const b = e.getBoundingClientRect(); return { w: Math.round(b.width), x: Math.round(b.x) } }
@@ -655,6 +689,27 @@ main().then(({ pageErrors }) => {
   const gone = await until(async () => dshProcs().length === 0, 12_000, 500)
   const left = dshProcs()
   check('Forsion 退出后没有留下 DSH 进程(最多等 12 秒)', !!gone && !left.length, gone ? `${((Date.now() - t0) / 1000).toFixed(1)} 秒后没了` : left.join(' / '))
+  // 退出那几秒 DSH 是自己收尾的,会话没丢:每场的会话文件(多帧 zstd,Node 只解得开第一帧,用 zstd 命令)整份解得开、
+  // 逐行是 JSON、开过几轮就收了几轮尾(turn/start 与 turn/end 一样多)。本机没有 zstd 命令就记未验
+  if (gone) {
+    const files = []
+    const walk = (d) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const p = path.join(d, e.name); if (e.isDirectory()) walk(p); else if (e.name.endsWith('.jsonl.zstd')) files.push(p) } }
+    try { walk(path.join(R, 'dsh', 'sessions')) } catch { /* 没有会话目录 = 下面判失败 */ }
+    let zstd = true
+    try { execFileSync('zstd', ['--version'], { stdio: 'ignore' }) } catch { zstd = false }
+    if (!zstd) console.log('未验  Forsion 退出后 DSH 的会话文件完整(本机没有 zstd 命令)')
+    else {
+      const seen = files.map((f) => {
+        const id = path.basename(path.dirname(f)).slice(0, 8)
+        try {
+          const rows = execFileSync('zstd', ['-dc', f], { encoding: 'utf8', maxBuffer: 64 << 20 }).split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l) } catch { return null } })
+          const n = (t) => rows.filter((r) => r?.type === t).length
+          return { id, lines: rows.length, bad: rows.filter((r) => !r).length, turns: n('turn/start'), ended: n('turn/end') }
+        } catch (e) { return { id, error: String(e.message).slice(0, 80) } }
+      })
+      check('Forsion 退出后 DSH 的会话文件完整(整份解得开、逐行是 JSON、每轮都收了尾)', files.length > 0 && seen.some((s) => s.turns > 0) && seen.every((s) => !s.error && s.bad === 0 && s.turns === s.ended), JSON.stringify(seen))
+    }
+  }
   check('真实的 ~/.dsh 与 ~/.agents 没被这次运行写过', ['.dsh', '.agents'].every((d) => { try { return fs.statSync(path.join(os.homedir(), d)).mtimeMs < START } catch { return true } }))
   const bad = results.filter((r) => !r.ok)
   console.log(`\n${results.length - bad.length}/${results.length} 通过`)
