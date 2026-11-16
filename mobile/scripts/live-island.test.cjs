@@ -13,7 +13,7 @@ const src = buildSync({
 }).outputFiles[0].text
 const mod = { exports: {} }
 new Function('module', 'exports', src)(mod, mod.exports)
-const { deriveIsland, shadeAnswer } = mod.exports
+const { deriveIsland, shadeAnswer, noticeRequest } = mod.exports
 
 const tr = (k, v) => (v ? `${k}${JSON.stringify(v)}` : k)
 const since = (t) => (sid) => t[sid] ?? 0
@@ -166,6 +166,15 @@ check('17 提问不是审批:拿提问的 id 来「允许」不认', () => {
   const m = asst({ id: 'm7', inquiries: [{ inquiryId: 'p', runId: 'r1', question: '?', options: [], status: 'pending' }] })
   assert.equal(shadeAnswer({ messageId: 'm7', approvalId: 'p', action: 'approve' }, [m]), null)
   assert.equal(shadeAnswer({ messageId: 'm7', approvalId: 'p', action: 'reject' }, [m]), null)
+})
+
+check('18 系统通知交给原生:tag = 来源,有 dedupeKey 才带 key(原生按「来源 + key」分条);「跑完了」不发', () => {
+  assert.deepEqual(noticeRequest('审批', 'rm -rf', { event: 'plugin:biz', key: 'business:approval:7' }, 'ch'),
+    { title: '审批', text: 'rm -rf', tag: 'plugin:biz', key: 'business:approval:7', channelName: 'ch' })
+  assert.deepEqual(noticeRequest('t', 'x', { event: 'inbox.message' }, 'ch'), { title: 't', text: 'x', tag: 'inbox.message', channelName: 'ch' })
+  for (const key of ['', undefined, 3]) assert.equal('key' in noticeRequest('t', 'x', { event: 'e', key }, 'ch'), false, String(key))
+  assert.equal(noticeRequest('t', 'x', undefined, 'ch').tag, 'app')
+  assert.equal(noticeRequest('t', 'x', { event: 'agent.done', key: 'k' }, 'ch'), null)
 })
 
 if (fails.length) { console.log(`\n${fails.length} failed`); process.exit(1) }

@@ -117,3 +117,14 @@ export function deriveIsland(
   const { attention: _attention, ask, ...top } = items[0]
   return { ...top, more: items.length - 1, ...(ask ? { ask } : {}) }
 }
+
+/** 应用内通知的系统通知(window.tangu.notify → 原生 notice)要交给原生的那份。「跑完了」(agent.done)不发:
+ *  手机上由 Agent 运行状态那条通知报(见 liveIsland.ts),再发一条就是重复 → null。tag = 来源(event);key = 这条的
+ *  dedupeKey(有才带),原生按「来源 + key」分条(NoticeTag.java:有人在等的审批各占一条,不被后来的普通通知顶掉),
+ *  旧的原生不认 key、照旧按来源一条。 */
+export function noticeRequest(title: string, text: string, meta: { event?: string; key?: string } | undefined, channelName: string):
+  { title: string; text: string; tag: string; key?: string; channelName: string } | null {
+  if (meta?.event === 'agent.done') return null
+  const key = typeof meta?.key === 'string' && meta.key ? meta.key : undefined
+  return { title, text, tag: meta?.event || 'app', ...(key ? { key } : {}), channelName }
+}

@@ -54,7 +54,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 public class LiveIslandPlugin extends Plugin {
     static final int ID = 7201;
     private static final String CHANNEL = "agent_live";
-    /** 普通系统通知(notice):每类事件一个 tag,共用这一个 id。 */
+    /** 普通系统通知(notice):每条一个 tag(来源,或来源 + key,见 NoticeTag),共用这一个 id。 */
     private static final int EVENT_ID = 7202;
     /** 「已完成 / 运行出错 / 已停止」那条:自己一个 id,不借常驻那条的(原因见 post 的收尾分支)。 */
     private static final int DONE_ID = 7203;
@@ -180,7 +180,8 @@ public class LiveIslandPlugin extends Plugin {
     }
 
     /**
-     * 应用内通知的系统通知出口(JS:window.tangu.notify)。入参:title、text、tag(哪类事件,同类只留最新一条)、channelName。
+     * 应用内通知的系统通知出口(JS:window.tangu.notify)。入参:title、text、tag(哪类事件)、key(那条通知的 dedupeKey,可无)、
+     * channelName。带 key 的按「来源 + key」、不带的按来源各只留最新一条(NoticeTag):有人在等的审批不被同一来源后来的普通通知顶掉。
      * 只在 App 不在前台时贴:页面那侧的「失焦」在原生半屏盖着时也成立,而那时用户正看着 App。点通知 = 回到 App。
      * ponytail: 通知权限只在第一次上岛(agent 开跑)时问,这里不问(后台问不了);没权限时系统自己丢掉。
      *   从不跑 agent 的用户因此收不到这类通知,真有人要,再在设置 → 通知里加一个去申请权限的入口。
@@ -191,7 +192,7 @@ public class LiveIslandPlugin extends Plugin {
         String channelName = call.getString("channelName", "Forsion");
         String title = call.getString("title", "");
         String text = call.getString("text", "");
-        String tag = call.getString("tag", "app");
+        String tag = NoticeTag.of(call.getString("tag", "app"), call.getString("key"));
         // 在主线程判前后台并贴:与 handleOnResume 的清理排在同一条线上,不会出现「刚判完在后台 → 回到前台清过了 → 这条才贴上」
         getActivity().runOnUiThread(() -> {
             if (getActivity().getLifecycle().getCurrentState().isAtLeast(Lifecycle.State.RESUMED)) return;
