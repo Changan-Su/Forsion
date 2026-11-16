@@ -79,9 +79,14 @@ export const fs = {
   async access(abs: string): Promise<void> {
     await Filesystem.stat({ path: cap(abs), directory: DIR })
   },
-  async stat(abs: string): Promise<{ isDirectory(): boolean; isFile(): boolean }> {
+  /** size / mtime / ctime 照 Capacitor FileInfo 原样(ms);ctime(创建时间)在部分系统上没有 → undefined。 */
+  async stat(abs: string): Promise<{ isDirectory(): boolean; isFile(): boolean; size: number; mtimeMs: number; birthtimeMs?: number }> {
     const st = await Filesystem.stat({ path: cap(abs), directory: DIR })
-    return { isDirectory: () => st.type === 'directory', isFile: () => st.type === 'file' }
+    return {
+      isDirectory: () => st.type === 'directory', isFile: () => st.type === 'file',
+      size: Number(st.size) || 0, mtimeMs: Number(st.mtime) || 0,
+      ...(typeof st.ctime === 'number' && st.ctime > 0 ? { birthtimeMs: st.ctime } : {}),
+    }
   },
   /** 虚拟绝对路径 → WebView 里能直接加载的地址(无尾斜杠)。安卓:getUri 给应用私有目录下的 file:// 地址,
    *  convertFileSrc 换成 `https://localhost/_capacitor_file_/…` —— Capacitor 自带的本地文件服务,与页面同源(原生层的实测行为见 npm run emu:localasset)。

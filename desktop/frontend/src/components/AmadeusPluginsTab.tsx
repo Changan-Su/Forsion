@@ -74,6 +74,8 @@ registerMessages({
   'settings.amadeusPlugins.devProject': { zh: '项目：{path}', en: 'Project: {path}' },
   // manifest capabilities:插件声明了要用的用户数据 / 敏感能力,详情页如实告诉用户(没声明的宿主不注入)
   'settings.amadeusPlugins.caps': { zh: '这个插件可以：{list}', en: 'This plugin can: {list}' },
+  // manifest network(2026-11-16+):ctx.net 只代请求这些域名;用户在启用前有权知道它会连到哪
+  'settings.amadeusPlugins.network': { zh: '会访问：{domains}', en: 'Accesses: {domains}' },
   'settings.amadeusPlugins.capDatabases': { zh: '读写你的多维表', en: 'read and edit your databases' },
   'settings.amadeusPlugins.capNoteTasks': { zh: '读写笔记里的 @ 任务', en: 'read and edit @ tasks in your notes' },
   'settings.amadeusPlugins.capSpaces': { zh: '打开 Space，调整 Ribbon 上 Space 的顺序和收纳夹', en: 'open Spaces and rearrange Spaces and folders on the Ribbon' },
@@ -749,6 +751,11 @@ const PluginDetail: React.FC<{
       {!!p.capabilities?.length && (
         <div data-plugin-caps style={{ fontSize: 'var(--ui-font-meta, 12px)', color: 'var(--text-light)' }}>
           {t('settings.amadeusPlugins.caps', { list: CAP_LABELS.filter(([c]) => p.capabilities!.includes(c)).map(([, k]) => t(k)).join(t('common.listSep')) })}
+        </div>
+      )}
+      {!!p.network?.length && (
+        <div data-plugin-network style={{ fontSize: 'var(--ui-font-meta, 12px)', color: 'var(--text-light)', overflowWrap: 'anywhere' }}>
+          {t('settings.amadeusPlugins.network', { domains: p.network.join(t('common.listSep')) })}
         </div>
       )}
       {/* 开发态说明:它**不是**隔离沙箱,用户有权在启用它之前知道这件事 */}

@@ -11,9 +11,17 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { Ban, Info, Keyboard, RotateCcw, Search, TriangleAlert, X } from 'lucide-react'
 import { useCommandStore, useShortcuts, eventToHotkey, formatHotkey, pairHotkeyOf } from '@lcl/engine'
-import { useI18n } from '../i18n'
-import { conflictGroups, editorUseOf, normalizeHotkey, systemReservedOf } from '../shortcutUsage'
+import { registerMessages, useI18n } from '../i18n'
+import { conflictGroups, editorUseOf, normalizeHotkey, systemReservedOf, type PluginHotkeyState } from '../shortcutUsage'
+import { usePluginHotkeys } from '../pluginHotkeyStore'
 import { SettingsPanel } from './SettingsPrimitives'
+
+registerMessages({
+  'settings.shortcuts.pluginDefaultInactive': {
+    zh: '插件默认键 {key} 与「{other}」冲突，未生效',
+    en: 'Plugin default {key} conflicts with “{other}” — not active',
+  },
+})
 
 /** 录制 / 按键查找期间请主进程挂起全局快捷键(Mini ⌘⇧M、急停):macOS 上它们先于窗口拿到按键。网页 / 旧 preload 没有这条 → 跳过。 */
 const pauseGlobal = (on: boolean): void => { try { void window.tangu?.shortcuts?.pauseGlobal(on).catch(() => {}) } catch { /* 旧 preload */ } }
@@ -31,6 +39,8 @@ export const ShortcutsTab: React.FC = () => {
   const { t } = useI18n()
   const commands = useCommandStore((s) => s.commands)
   const overrides = useShortcuts((s) => s.overrides)
+  // 插件命令声明的默认键:撞上别的就不进命令表(行上显示未设置),这里拿到它和撞上的是谁,行下说一句(规则见 shortcutUsage.resolvePluginHotkeys)
+  const pluginKeys = usePluginHotkeys((s) => s.states)
   const { setOverride, clearOverride, resetAll, setRecording } = useShortcuts.getState()
   const [recId, setRecId] = useState<string | null>(null)
   const [pending, setPending] = useState<Pending | null>(null)
@@ -137,6 +147,21 @@ export const ShortcutsTab: React.FC = () => {
     </div>
   )
 
+  /** 插件默认键没生效的那一行说明;用户给这条命令设过键(含解绑)时不说 —— 那时默认键本来就不算数。 */
+  const inactiveDefault = (r: Row): React.ReactNode => {
+    const st: PluginHotkeyState | undefined = pluginKeys[r.id]
+    if (!st || st.active || !st.conflict || Object.prototype.hasOwnProperty.call(overrides, r.id)) return null
+    const other = st.conflict.kind === 'layer'
+      ? t(st.conflict.key)
+      : rows.find((o) => o.id === (st.conflict as { id: string }).id)?.title ?? st.conflict.id
+    return (
+      <div className="shortcut-note" data-plugin-hotkey-inactive={r.id}>
+        <Info size={14} />
+        <span>{t('settings.shortcuts.pluginDefaultInactive', { key: fmt(st.hotkey), other })}</span>
+      </div>
+    )
+  }
+
   const renderRow = (r: Row): React.ReactNode => {
     const eff = effOf(r)
     const others = othersOf(r)
@@ -179,6 +204,7 @@ export const ShortcutsTab: React.FC = () => {
           </div>
         </div>
         {held && pendingRow(held)}
+        {!held && recId !== r.id && inactiveDefault(r)}
       </React.Fragment>
     )
   }

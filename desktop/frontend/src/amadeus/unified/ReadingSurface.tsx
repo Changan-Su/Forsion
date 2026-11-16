@@ -15,6 +15,8 @@ registerMessages({
 })
 
 export interface ReadingModeControl { on: boolean; busy: boolean; toggle(): void }
+/** 开关按钮:看得见的字是「点了会怎样」(阅读 / 编辑),无障碍名字固定为「阅读模式」、按下 = 正在阅读 ——
+ *  名字跟着状态变的话,读屏(和沙箱里的 agent)读到的是「编辑,已按下」,意思正好反了。 */
 export function ReadingModeButton({ control }: { control: ReadingModeControl }) {
   const { t } = useI18n()
   return <button
@@ -22,6 +24,7 @@ export function ReadingModeButton({ control }: { control: ReadingModeControl }) 
     className={`amx-mode-btn amx-reading-mode-btn${control.on ? ' amx-pin-on' : ''}`}
     data-reading-toggle
     title={t(control.busy ? 'reading.preparing' : 'reading.toggle')}
+    aria-label={t('reading.mode')}
     aria-pressed={control.on}
     disabled={control.busy}
     onClick={control.toggle}
