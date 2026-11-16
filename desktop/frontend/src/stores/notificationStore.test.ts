@@ -1254,3 +1254,207 @@ describe('手机横幅:遮挡与系统通知投递(第五轮 Codex 评审)', () 
     } finally { vi.unstubAllGlobals() }
   })
 })
+
+describe('手机横幅:系统通知回话的时效(第六轮 Codex 复审)', () => {
+  const st = () => useNotifications.getState()
+  const shown = () => st().items.map((n) => n.text)
+  const queued = () => st().queue.map((n) => n.text)
+  const owed = () => st().queue.filter((n) => n.osOwed).map((n) => n.text)
+  const posted = (os: ReturnType<typeof vi.fn>) => os.mock.calls.map((c) => (c as unknown[])[1])
+  beforeEach(() => { st().setBanner(true) })
+
+  it('同 key 顶替没发新的一发(App 在前台、卡还没上屏):前一份内容晚到的「投了」不清新内容的账 —— 再退到后台补发新内容,回来时同来源后来的卡顶不掉它(Codex 原样;负对照:顶替时不作废在路上的那一发 → 这里红)', async () => {
+    let hidden = true
+    const answers: Array<(v: unknown) => void> = []
+    const os = vi.fn(() => new Promise((resolve) => { answers.push(resolve) }))
+    vi.stubGlobal('window', { tangu: { notify: os } })
+    vi.stubGlobal('document', { hasFocus: () => true, get visibilityState() { return hidden ? 'hidden' : 'visible' } })
+    try {
+      st().visibilityChanged()
+      vi.advanceTimersByTime(10)
+      notifyApp({ text: 'A1', event: 'plugin:demo', dedupeKey: 'demo:a', replace: true }) // 后台:发了,回话还在路上
+      hidden = false
+      st().visibilityChanged() // 回到前台:A1 欠着、留着;间隔(PHONE.gap)还没过,没上屏
+      expect(shown()).toEqual([])
+      expect(queued()).toEqual(['A1'])
+      notifyApp({ text: 'A2', event: 'plugin:demo', dedupeKey: 'demo:a', replace: true }) // 前台顶替:不发系统通知
+      expect(posted(os)).toEqual(['A1'])
+      answers[0]({ posted: true }) // A1 那一发晚到:投了(投的是旧内容)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(owed(), 'A2 哪儿都没出现过:还欠着').toEqual(['A2'])
+      hidden = true
+      st().visibilityChanged() // 间隔没过就又退到后台:补发 A2
+      expect(posted(os)).toEqual(['A1', 'A2'])
+      vi.advanceTimersByTime(10)
+      notifyApp({ text: 'B', event: 'plugin:demo', dedupeKey: 'demo:b', replace: true })
+      answers[2]({ posted: true }) // B 投了;A2 补发的那一发还没回话
+      await vi.advanceTimersByTimeAsync(0)
+      hidden = false
+      st().visibilityChanged()
+      expect(queued(), 'A2 没确认投递:留着').toEqual(['A2', 'B'])
+      st().dismissAll()
+      // 在后台顶替、发了新的一发:前一发晚到的「投了」同样不清(说的是旧内容),新的一发投了才清
+      hidden = true
+      st().visibilityChanged()
+      vi.advanceTimersByTime(10)
+      notifyApp({ text: 'C1', event: 'plugin:demo', dedupeKey: 'demo:c', replace: true })
+      vi.advanceTimersByTime(10)
+      notifyApp({ text: 'C2', event: 'plugin:demo', dedupeKey: 'demo:c', replace: true })
+      expect(posted(os).slice(-2)).toEqual(['C1', 'C2'])
+      const [c1, c2] = answers.slice(-2)
+      c1({ posted: true })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(owed(), 'C1 的回话说的是旧内容').toEqual(['C2'])
+      c2({ posted: true })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(owed()).toEqual([])
+    } finally { vi.unstubAllGlobals() }
+  })
+
+  it('桥一直不回话:在路上的那一发过了 PHONE.osWait 算没确认,之后退到后台照样补发;同一份内容第一发之后最多补发 PHONE.osRetry 次;超时后才到的回话 —— 没投不动,投了照样清账(Codex 原样:五天五轮前后台;负对照:在路上的不超时 / 不封顶 → 这里红)', async () => {
+    let hidden = true
+    const answers: Array<(v: unknown) => void> = []
+    const os = vi.fn(() => new Promise((resolve) => { answers.push(resolve) }))
+    vi.stubGlobal('window', { tangu: { notify: os } })
+    vi.stubGlobal('document', { hasFocus: () => true, get visibilityState() { return hidden ? 'hidden' : 'visible' } })
+    // 回到前台待一小会儿(不到 PHONE.gap,卡还没上屏)又退到后台
+    const flip = (): void => { hidden = false; st().visibilityChanged(); vi.advanceTimersByTime(100); hidden = true; st().visibilityChanged() }
+    try {
+      st().visibilityChanged()
+      vi.advanceTimersByTime(10)
+      notifyApp({ text: 'A', event: 'plugin:demo', dedupeKey: 'demo:a', replace: true })
+      expect(os).toHaveBeenCalledTimes(1)
+      vi.advanceTimersByTime(5000)
+      flip()
+      expect(os, '等回话的时限之内:不重发(同一条会再响一次)').toHaveBeenCalledTimes(1)
+      const sent: number[] = []
+      for (let day = 1; day <= 5; day++) {
+        vi.advanceTimersByTime(24 * 3600_000)
+        flip()
+        sent.push(os.mock.calls.length)
+      }
+      expect(sent, '超时没确认:每次退到后台补发一次,补满 PHONE.osRetry 次为止').toEqual([2, 3, 4, 4, 4])
+      expect(PHONE.osRetry).toBe(3)
+      expect(owed(), '一直没确认:还欠着').toEqual(['A'])
+      // 超时后才到的回话:第一发说没投 —— 不动(不再补发、账还在)
+      answers[0]({ posted: false })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(os).toHaveBeenCalledTimes(4)
+      expect(owed()).toEqual(['A'])
+      // 回到前台:没确认的留着,同来源后来的卡顶不掉
+      vi.advanceTimersByTime(10)
+      notifyApp({ text: 'B', event: 'plugin:demo', dedupeKey: 'demo:b', replace: true })
+      answers[4]({ posted: true })
+      await vi.advanceTimersByTimeAsync(0)
+      hidden = false
+      st().visibilityChanged()
+      expect(queued()).toEqual(['A', 'B'])
+      // 第二发(早已超时、后面又补过)晚到说投了:内容没变,照样清账
+      answers[1]({ posted: true })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(queued()).toEqual(['A', 'B'])
+      expect(owed(), '这份内容有一发确认投了:不再欠').toEqual([])
+    } finally { vi.unstubAllGlobals() }
+  })
+
+  it('最近一发过了时限才回「没投」:不动 —— 在路上时有人要过补发也不当场补,账还在;下一次退到后台照常补发、算进 PHONE.osRetry(负对照:过了时限的「没投」照样当场补发 → 这里红)', async () => {
+    let hidden = true
+    const answers: Array<(v: unknown) => void> = []
+    const os = vi.fn(() => new Promise((resolve) => { answers.push(resolve) }))
+    vi.stubGlobal('window', { tangu: { notify: os } })
+    vi.stubGlobal('document', { hasFocus: () => true, get visibilityState() { return hidden ? 'hidden' : 'visible' } })
+    const flip = (): void => { hidden = false; st().visibilityChanged(); vi.advanceTimersByTime(100); hidden = true; st().visibilityChanged() }
+    try {
+      st().visibilityChanged()
+      vi.advanceTimersByTime(10)
+      notifyApp({ text: 'A', event: 'plugin:demo', dedupeKey: 'demo:a', replace: true })
+      vi.advanceTimersByTime(5000)
+      flip() // 在路上:记下有人要它补发
+      expect(os).toHaveBeenCalledTimes(1)
+      vi.advanceTimersByTime(PHONE.osWait)
+      answers[0]({ posted: false }) // 过了时限才回:没投
+      await vi.advanceTimersByTimeAsync(0)
+      expect(os, '过了时限才到的「没投」:不当场补发').toHaveBeenCalledTimes(1)
+      expect(owed()).toEqual(['A'])
+      flip()
+      expect(os, '下一次退到后台照常补发').toHaveBeenCalledTimes(2)
+      const sent: number[] = []
+      for (let day = 1; day <= 3; day++) {
+        vi.advanceTimersByTime(24 * 3600_000)
+        flip()
+        sent.push(os.mock.calls.length)
+      }
+      expect(sent, '那次补发算进了上限').toEqual([3, 4, 4])
+      expect(owed()).toEqual(['A'])
+    } finally { vi.unstubAllGlobals() }
+  })
+
+  it('桥每次都明确回「没投」(没通知权限、渠道关着):这类补发不算在 PHONE.osRetry 里 —— 每次退到后台照旧补一次,和第五轮一样;权限给了之后照样能发出去(负对照:明确没投也算进上限 → 这里红)', async () => {
+    let hidden = true
+    let allowed = false
+    const os = vi.fn(() => Promise.resolve({ posted: allowed }))
+    vi.stubGlobal('window', { tangu: { notify: os } })
+    vi.stubGlobal('document', { hasFocus: () => true, get visibilityState() { return hidden ? 'hidden' : 'visible' } })
+    const flip = async (): Promise<void> => {
+      hidden = false; st().visibilityChanged(); vi.advanceTimersByTime(100); hidden = true; st().visibilityChanged()
+      await vi.advanceTimersByTimeAsync(0)
+    }
+    try {
+      st().visibilityChanged()
+      vi.advanceTimersByTime(10)
+      notifyApp({ text: 'A', event: 'plugin:demo', dedupeKey: 'demo:a', replace: true })
+      await vi.advanceTimersByTimeAsync(0)
+      const sent: number[] = []
+      for (let day = 1; day <= 5; day++) {
+        vi.advanceTimersByTime(24 * 3600_000)
+        await flip()
+        sent.push(os.mock.calls.length)
+      }
+      expect(sent).toEqual([2, 3, 4, 5, 6])
+      expect(owed()).toEqual(['A'])
+      allowed = true // 用户给了通知权限
+      await flip()
+      expect(os).toHaveBeenCalledTimes(7)
+      expect(owed(), '这次投了:不再欠').toEqual([])
+    } finally { vi.unstubAllGlobals() }
+  })
+
+  it('两处相交:A1 没回话、超时后补发过;回到前台(没上屏)顶替成 A2 —— A1 补发的那一发晚到说投了,不清 A2 的账;A2 没回话的补发次数从零算(负对照:顶替时不作废 → 这里红)', async () => {
+    let hidden = true
+    const answers: Array<(v: unknown) => void> = []
+    const os = vi.fn(() => new Promise((resolve) => { answers.push(resolve) }))
+    vi.stubGlobal('window', { tangu: { notify: os } })
+    vi.stubGlobal('document', { hasFocus: () => true, get visibilityState() { return hidden ? 'hidden' : 'visible' } })
+    const flip = (): void => { hidden = false; st().visibilityChanged(); vi.advanceTimersByTime(100); hidden = true; st().visibilityChanged() }
+    try {
+      st().visibilityChanged()
+      vi.advanceTimersByTime(10)
+      notifyApp({ text: 'A1', event: 'plugin:demo', dedupeKey: 'demo:a', replace: true })
+      vi.advanceTimersByTime(PHONE.osWait + 1)
+      flip() // 超时没回话:补发一次
+      expect(posted(os)).toEqual(['A1', 'A1'])
+      hidden = false
+      st().visibilityChanged()
+      notifyApp({ text: 'A2', event: 'plugin:demo', dedupeKey: 'demo:a', replace: true }) // 前台顶替、卡没上屏:不发
+      expect(os).toHaveBeenCalledTimes(2)
+      answers[1]({ posted: true }) // A1 补发的那一发晚到:投了(投的是 A1)
+      answers[0]({ posted: true })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(owed(), 'A2 哪儿都没出现过:还欠着').toEqual(['A2'])
+      hidden = true
+      st().visibilityChanged()
+      expect(posted(os)).toEqual(['A1', 'A1', 'A2'])
+      const sent: number[] = []
+      for (let day = 1; day <= 4; day++) {
+        vi.advanceTimersByTime(24 * 3600_000)
+        flip()
+        sent.push(os.mock.calls.length)
+      }
+      expect(sent, 'A2 没回话的补发:从零算,补满 PHONE.osRetry 次').toEqual([4, 5, 6, 6])
+      hidden = false
+      st().visibilityChanged()
+      expect(queued()).toEqual(['A2'])
+      expect(owed()).toEqual(['A2'])
+    } finally { vi.unstubAllGlobals() }
+  })
+})

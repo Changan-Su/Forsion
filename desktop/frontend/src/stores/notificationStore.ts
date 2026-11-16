@@ -13,6 +13,7 @@
  * 回到前台按 replayQueue 收拾一遍再照队列出(节流照常)。原生半屏盖着页面时同样不上屏、不开冷却,排着等它收起(sheetChanged),
  * 只是不收拾。遮挡(退到后台 / 半屏盖上)那一刻屏上那张不常驻的卡撤回队首、停表(见 holdShown):用户看不见它,不能在底下到点走掉。
  * 系统通知:有人在等的(urgent)带 key 的按「来源 + key」各占一条,其余按来源一条(见 postOs);桥回话说没投递的一直欠着(osOwed)。
+ * 回话最多等 PHONE.osWait,过了算没确认、下次需要时补发(没回话的补发最多 PHONE.osRetry 次);卡换了内容,旧内容那一发的回话一律不算(见 recontent)。
  */
 import { create } from 'zustand'
 import { inUserGesture } from '@lcl/engine/userGesture'
@@ -139,8 +140,11 @@ const durationOf = (n: Pick<AppNotification, 'level' | 'durationMs'>): number =>
  *  同一来源一张卡到点走后冷却 30 秒,用户自己收(上滑 / 点 ×)的冷却 2 分钟。
  *  lateTap:到点收掉的那一刻,原生层可能正把一次点按往回报(一次桥往返);这么久之内报回来的动作照样执行(见 activate)。
  *  平常一次往返几十毫秒,但手机忙的时候(真壳在高负载下 23 次里有 1 次)超过 500ms,所以留 1.5 秒。
- *  replay:回到前台时,一律留着的那些(撤销、onClose、常驻、error、系统通知没发出去的、上着屏被遮挡撤下的)以外,排着的卡最多留几张(见 replayQueue)。 */
-export const PHONE = { dwell: 5000, undo: 8000, reader: 10_000, gap: 300, coolTimeout: 30_000, coolUser: 120_000, lateTap: 1500, replay: 3 } as const
+ *  replay:回到前台时,一律留着的那些(撤销、onClose、常驻、error、系统通知没发出去的、上着屏被遮挡撤下的)以外,排着的卡最多留几张(见 replayQueue)。
+ *  osWait:系统通知交给桥(安卓回 Promise)后等回话的时限;过了还没回话算没确认,下一次需要补发时(退到后台 / payOs)照样发。
+ *  osRetry:同一张卡同一份内容,因为没等到回话而补发的次数上限(那一发可能其实投了、只是没回话,再发会再响一次);
+ *  回话明确说没投(posted: false)的补发不算在内 —— 没出现过,再发不会重复。见 payOs。 */
+export const PHONE = { dwell: 5000, undo: 8000, reader: 10_000, gap: 300, coolTimeout: 30_000, coolUser: 120_000, lateTap: 1500, replay: 3, osWait: 15_000, osRetry: 3 } as const
 /** 同 key 换内容时停留不顺延,但剩下的不足这么多就补到这么多(刚换上的字至少露一下,和 resume 的下限同一个数)。 */
 const MIN_LEFT = 800
 
@@ -280,8 +284,12 @@ const cooling = (event: string): boolean => (cooldown.get(event) ?? 0) > Date.no
 const lateTaps = new Map<string, { run: () => void; until: number }>()
 /** 手机横幅模式下页面退到过后台、还没回来:回到前台那一下才收拾队列(replayQueue),多报一次「看得见」不动它。 */
 let wentHidden = false
-/** 系统通知在路上(桥回的是 Promise、还没回话)的卡:id → 这一发的序号,和在路上时有没有人要它补发(payOs)。见 postOs。 */
-const osInflight = new Map<string, { seq: number; again: boolean }>()
+/** 系统通知交给了桥(回的是 Promise)、还没确认投递的卡,按卡上**当前这份内容**记(换内容时整条作废,见 recontent):
+ *  first = 这份内容第一发的序号(更早的序号说的是旧内容,回什么都不理);seq = 最近一发的序号;
+ *  until = 最近一发等回话等到哪一刻(PHONE.osWait;回话说没投后为 0:不在路上了);again = 在路上时有没有人要它补发(payOs);
+ *  retries = 因为没等到回话而补发了几次(PHONE.osRetry 封顶)。投了就删。见 postOs / osSettled / payOs。 */
+interface OsPost { first: number; seq: number; until: number; again: boolean; retries: number }
+const osPosts = new Map<string, OsPost>()
 let osSeq = 0
 
 /** 系统通知桥的回话算不算投递了:`{ posted: false }` / `false` = 没投(安卓:没通知权限、渠道被关、App 在前台、原生出错);
@@ -296,7 +304,7 @@ export function osDelivered(r: unknown): boolean {
 export function resetNotificationThrottle(): void {
   cooldown.clear()
   lateTaps.clear()
-  osInflight.clear()
+  osPosts.clear()
   wentHidden = false
   if (gapTimer) clearTimeout(gapTimer)
   gapTimer = null
@@ -390,7 +398,7 @@ export const useNotifications = create<NtfState>((set, get) => {
   type OsCard = Pick<AppNotification, 'id' | 'title' | 'sourceLabel' | 'text' | 'dedupeKey' | 'urgent'>
   /** 返回这一刻能确定投递了:桥同步回来、回话算投了(旧外壳 / 桌面回 undefined,见 osDelivered)。网页版没有系统通知,那里「发了」不算数。
    *  桥回 Promise(安卓)的,这一刻还不知道:返回 false,调用方照「没发出去」记 osOwed;回话说投了再清掉那张卡(按 id + 这一发的序号,
-   *  同 key 顶替又发了一次的,前一发晚到的回话不清后一发的账),没投 / 拒绝就一直欠着(replayQueue 留它)。 */
+   *  见 osSettled),没投 / 拒绝就一直欠着(replayQueue 留它);一直不回话的,过了 PHONE.osWait 算没确认(见 payOs)。 */
   const postOs = (n: OsCard, event: string): boolean => {
     try {
       const fn = typeof window === 'undefined' ? undefined : window.tangu?.notify
@@ -398,24 +406,33 @@ export const useNotifications = create<NtfState>((set, get) => {
       const r: unknown = fn(n.title || n.sourceLabel || 'Forsion', n.text, n.urgent && n.dedupeKey ? { event, key: n.dedupeKey } : { event })
       if (!r || typeof (r as PromiseLike<unknown>).then !== 'function') return osDelivered(r)
       const seq = ++osSeq
-      osInflight.set(n.id, { seq, again: false })
+      const f = osPosts.get(n.id) // 同一份内容又发一次(payOs 补发):沿用这份内容的第一发与补发次数
+      // 簿记只留还在的卡(走了的卡回什么都不用管;桥一直不回话的话,不清就一直攒着)。正在发的这张不算:新卡还没进 store,丢下的卡刚出队
+      const s = get()
+      for (const id of osPosts.keys()) if (id !== n.id && !s.items.some((q) => q.id === id) && !s.queue.some((q) => q.id === id)) osPosts.delete(id)
+      osPosts.set(n.id, { first: f?.first ?? seq, seq, until: Date.now() + PHONE.osWait, again: false, retries: f?.retries ?? 0 })
       ;(r as PromiseLike<unknown>).then((v) => osSettled(n.id, seq, osDelivered(v)), () => osSettled(n.id, seq, false))
       return false
     } catch { return false }
   }
-  /** 一发系统通知回话了。投了:那张卡不再欠(还在的话)。没投、在路上时又有人要它补发(payOs:比如这一发是在前台被原生挡掉的,
-   *  回话前 App 退到了后台):补一次。 */
+  /** 一发系统通知回话了。卡换内容之前发的(没有记录,或序号早于这份内容的第一发):说的是旧内容,回什么都不理。
+   *  投了:这份内容的任何一发投了都算(包括早已过了时限、后面又补发过的),那张卡不再欠(还在的话)。
+   *  没投:只认最近一发、且还在时限内的 —— 不在路上了;在路上时又有人要它补发(payOs:比如这一发是在前台被原生挡掉的,
+   *  回话前 App 退到了后台)就补一次。过了时限才到的「没投」不动:超时那一刻起它已经按没确认算,下一次需要时照常补发。 */
   const osSettled = (id: string, seq: number, ok: boolean): void => {
-    const f = osInflight.get(id)
-    if (!f || f.seq !== seq) return
-    osInflight.delete(id)
+    const f = osPosts.get(id)
+    if (!f || seq < f.first) return
     if (ok) {
+      osPosts.delete(id)
       const paid = (q: AppNotification): AppNotification => (q.id === id && q.osOwed ? { ...q, osOwed: undefined } : q)
       const s = get()
       if (s.items.some((q) => q.id === id && q.osOwed) || s.queue.some((q) => q.id === id && q.osOwed)) set({ items: s.items.map(paid), queue: s.queue.map(paid) })
       return
     }
+    if (seq !== f.seq || !f.until || Date.now() > f.until) return
+    f.until = 0
     if (!f.again) return
+    f.again = false
     const n = get().queue.find((q) => q.id === id)
     if (n?.osOwed) payOs(n)
   }
@@ -430,10 +447,27 @@ export const useNotifications = create<NtfState>((set, get) => {
    *  用户两边都看不到它。这时补发一次(门控同 sendOs:系统通知开关 + 在后台)。返回补发了没有。 */
   const payOs = (n: AppNotification): boolean => {
     if (!n.osOwed || !get().prefs.osEnabled || !away()) return false
-    // 这张卡的一发还在路上:不再发(同一条会再响一次),记下;那一发回话说没投再补(osSettled)
-    const f = osInflight.get(n.id)
-    if (f) { f.again = true; return false }
+    const f = osPosts.get(n.id)
+    if (f?.until) {
+      // 这张卡的一发还在路上(时限内):不再发(同一条会再响一次),记下;那一发回话说没投再补(osSettled)。
+      // 那一发随后一直没回话的话,这次补发要等下一次需要时(退到后台 / 被丢下)才兑现 —— 有意的:不为它另起定时器
+      if (Date.now() <= f.until) { f.again = true; return false }
+      // 过了时限还没回话:算没确认,补发;这类补发封顶(那一发可能其实投了、只是没回话:再发会再响一次)。封顶后照旧欠着,回到前台留着(replayQueue)
+      if (f.retries >= PHONE.osRetry) return false
+      f.retries++
+    }
     return postOs(n, n.event)
+  }
+  /** 卡换了内容(同 key 顶替 / 合并,收尾 settle 也是):系统通知的账按换上去的这份内容重算,返回它欠不欠(新的 osOwed)。
+   *  先作废这张卡的旧记录 —— 那一发投的是旧内容:晚到的「投了」不能清新内容的账,「没投」也不替旧内容补发,没回话的补发次数从零算;
+   *  再看这次有没有新的一发(有的话 postOs 给新内容另起一份记录)。顺序不能反:先发再作废会把刚发的这一发也作废。
+   *  顶替是新的一件事:跟发系统通知,没确认投递、又不是在前台留在屏上(用户正看着它换字)的,欠着。
+   *  宿主自己的合并不重发:看不见的卡(排着的、在后台 / 半屏底下撤回队列的)换上去的内容哪儿都没出现过,欠着;其余沿用原来的。 */
+  const recontent = (id: string, upd: AppNotification, input: NotifyInput, event: string, onScreen: boolean): boolean | undefined => {
+    osPosts.delete(id)
+    if (input.replace) return (!sendOs(input, upd, event) && owesOs(input) && !onScreen) || undefined
+    if (!onScreen && owesOs(input) && !upd.inApp) return true
+    return upd.osOwed
   }
 
   return {
@@ -482,16 +516,10 @@ export const useNotifications = create<NtfState>((set, get) => {
           // 手机在后台,或原生半屏盖着:屏上那张换了内容用户也看不见(见下),不算「留在屏上」
           const hidden = st.banner && pageHidden()
           const offscreen = hidden || (st.banner && sheetUp())
-          // 欠账按换上去的这份内容实际投递了没有重算(在前台、留在屏上的那张除外:用户正看着它换字)。
-          // 顶替是新的一件事:跟发系统通知,没确认投递的记下。宿主自己的合并不重发:看不见的卡(排着的、在后台 / 半屏底下撤回队列的)
-          // 换上去的内容哪儿都没出现过,同样记下。欠着的若还排着队、等到后台才上屏 / 被丢下时补发,回到前台时也不丢(见 replayQueue)
+          // 欠账按换上去的这份内容实际投递了没有重算(见 recontent;在前台、留在屏上的那张除外:用户正看着它换字)。
+          // 欠着的若还排着队、等到后台才上屏 / 被丢下时补发,回到前台时也不丢(见 replayQueue)
           const onScreen = visible && !offscreen
-          if (input.replace) upd.osOwed = (!sendOs(input, upd, event) && owesOs(input) && !onScreen) || undefined
-          else if (!onScreen && owesOs(input) && !upd.inApp) {
-            upd.osOwed = true
-            // 前一份内容的那一发若还在路上,它晚到的「投了」说的是旧内容,不能清掉这份的账
-            osInflight.delete(found.id)
-          }
+          upd.osOwed = recontent(found.id, upd, input, event, onScreen)
           if (offscreen) {
             // 换了内容就是新来的。屏上那张不在后台 / 半屏底下原地换字、到点走掉(回来哪都看不到:系统通知回前台时被外壳清掉),
             // 撤下来当新来的排着,回到前台 / 半屏收起再出、停留从那时重新算;在后台时排着的那张同理记成后台来的
@@ -624,6 +652,7 @@ export const useNotifications = create<NtfState>((set, get) => {
     dismissAll: () => {
       for (const id of [...timers.keys()]) clearTimer(id)
       lateTaps.clear()
+      osPosts.clear()
       if (gapTimer) clearTimeout(gapTimer)
       gapTimer = null
       gapUntil = 0
