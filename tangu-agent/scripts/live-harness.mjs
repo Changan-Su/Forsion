@@ -129,6 +129,8 @@ import { startImageRecoveryCloud, imageRecoveryLive } from './lib/image-recovery
  *   npm run live:harness -- --only coding                    # 改 agents/codingPrompt.ts / skills/forsion-plugin 后跑:Coding 人格面对插件项目须指向 Sandbox 面板、且不自己动手 git init/commit(版本由宿主管)
  *   npm run live:harness -- --only storeview                 # 商店左栏的插件页(10-05):ctx.registerStoreView 只给首方内置包。第三方作者问「怎么往商店左栏加一页」→ 须装载手册、
  *                                                           #   说清这条路不对普通插件开放,不许教他照着注册(注册了也不显示)。改 skills/forsion-plugin 那一行后跑。
+ *   npm run live:harness -- --only forsionproducts           # 自家产品速查(11-16 用户反馈「Tangu 不知道 Forsion Git 是什么」):不在项目里的会话问 Forsion Git / 蓬洲云 → 须装载
+ *                                                           #   skills/forsion-products、说对是什么和入口原文,不许说不知道。负对照 = 删掉这份技能(须红)
  *   npm run live:harness -- --only creation                  # 进造物(09-27):要做「拿来用的东西」→ 回复带 forsion-creation 作品卡;只问概念 / 一次性脚本 → 不出卡。改 skills/forsion-creations 后跑
  *   npm run live:harness -- --only gitpublish                # 发布到 Forsion Git(11-08 用户反馈):中文名项目、有提交没远端,「帮我上传Forsion Git」→ 模型自己起英文名调 git_publish,不要地址;审批卡拒掉,不真发
  *   npm run live:harness -- --only multirepo                 # 多仓 Git(11-07):项目文件夹不是仓、里面两个仓;不点名工具,看状况后只提交 alpha —— 判据看磁盘与 git_commit 的 repo 参数(改 tools/builtin/git.ts / services/gitRepos.ts 后跑)
@@ -395,6 +397,7 @@ OPT_IN.add('plugindiag'); // 一个 run(几分钟);要 --plugin-src 给一份待
 OPT_IN.add('notebook'); // 两个 run;要 --plugin-src 给构建好的 Jupyter 笔记本插件、--python-bin 给解释器,只在动那个插件的工具说明 / 审批档时才有信息量。
 OPT_IN.add('pluginicon'); // 一个 run;只在动 forsion-plugin 手册「Startup appearance」一节里图标作用范围那两句时才有信息量。
 OPT_IN.add('storeview'); // 一个 run;只在动 forsion-plugin 手册里 registerStoreView 那行、或商店左栏的插件页接缝时才有信息量。
+KEYS.push('forsionproducts'); OPT_IN.add('forsionproducts'); // 两个 run;改 skills/forsion-products 后跑
 OPT_IN.add('skillcreate'); // 四个 run;只在动 manage_skill / use_skill / 随包的 skill-creator 技能时才有信息量。
 OPT_IN.add('account'); // --only account:五个 run;引擎的云端地址指向台架里的假 Forsion 云端 —— 只在显式跑它时才指,别的场景照旧连不上云端。
 OPT_IN.add('caltodo').add('cloudtodo'); // --only caltodo / cloudtodo(11-07):用户的待办 = 带勾选列的日历表里的行,可以没有日期;加两条无日期待办 → 列出 → 勾掉,本机 / 云端各一份。判据与负对照见 lib/caltodo-live.mjs。
@@ -4736,6 +4739,30 @@ Then reply with only the command output.`,
     const used = ev.toolResults.some((r) => r.name === 'use_skill' && !r.isError && r.fullLength > 1000);
     const scoped = /首方|第一方|内置包|官方|Forsion Extend|first[- ]party|不对.{0,12}(开放|生效)|只对.{0,24}生效|不(会)?显示|用不到|不支持|没有.{0,10}(接口|办法|开放)/i.test(ev.content);
     return { ok: !ev.error && used && scoped, detail: ev.error || `手册${used ? '已装载' : '未装载'};${scoped ? '说明了只给首方包 / 普通插件用不了' : '没说明限制'};提到 registerStoreView:${/registerStoreView/.test(ev.content) ? '是' : '否'};工具 ${ev.toolCalls.join(',') || '无'}`, output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
+  });
+
+  // 自家产品速查(11-16,用户反馈「我的 Tangu 不知道 Forsion Git 是什么」):git_* 工具只在会话属于本机项目时才挂,
+  // 普通对话里系统提示 / 技能都没提过 Forsion Git,模型只能答不知道。skills/forsion-products 的描述进技能目录,问起时 use_skill 取正文。
+  // 两问各开新会话、都不在项目里(系统提示里不该有 git_status,顺手核一下这个前提):中文问 Forsion Git 是什么、怎么把项目放上去;
+  // 英文问蓬洲云是什么、笔记同步在哪开。判据:取回的正文是这份技能(MARKER)、回答里有入口原文、没说不知道。
+  // 负对照 = 删掉 skills/forsion-products(取不到 MARKER → 红)。
+  await scenario('forsionproducts', 'forsionproducts 不在项目里问 Forsion Git / 蓬洲云 → 装载产品速查、说对是什么和入口', async () => {
+    const MARKER = "Forsion's own Git hosting";
+    const loaded = (ev) => ev.toolResults.some((r) => r.name === 'use_skill' && !r.isError && String(r.full || r.result || '').includes(MARKER));
+    // 只认「对这个产品本身」说不知道(「不清楚你的项目有没有提交」这类正常的不确定不算 —— Codex 评审);入口路径先去掉 Markdown 再比
+    const DUNNO = /(不知道|不清楚|不了解|没有.{0,4}信息).{0,12}(Forsion Git|蓬洲云|Penzor|这个产品|是什么)|(Forsion Git|蓬洲云|Penzor Cloud).{0,12}(不知道|不清楚|不了解)|(don't|do not) know (what|about)|not familiar with|no information (on|about)/i;
+    const plain = (t) => String(t || '').replace(/[*_`]/g, '');
+    const git = await run(`live-forsionproducts-git-${Date.now()}`, 'Forsion Git 是什么?我想把自己电脑上的一个项目放上去,该怎么做?简单说说就行。', 240_000, { debugSystemPrompt: true });
+    const penzor = await run(`live-forsionproducts-penzor-${Date.now()}`, 'What is Penzor Cloud in Forsion, and where do I turn on syncing for my notes? Keep it short.');
+    const noProject = !!git.systemPrompt && !git.systemPrompt.includes('git_status');
+    // 入口要落到 App 里的「项目详情 › Git › 发布到 Forsion Git…」;负对照(没技能)编的是「先在网页上建仓库、再 git remote add」
+    const gitText = plain(git.content);
+    const gitOk = loaded(git) && /发布到 Forsion Git|Publish to Forsion Git/.test(gitText) && /项目详情|Project details/i.test(gitText) && /私有|private/i.test(gitText) && !/git remote add/.test(gitText) && !DUNNO.test(gitText);
+    const penzorText = plain(penzor.content);
+    const penzorOk = loaded(penzor) && /(Penzor Cloud|蓬洲云)[^\n]{0,24}?(›|>|→)[^\n]{0,4}?(Sync|同步)/i.test(penzorText) && /(cloud drive|云盘|网盘|sync)/i.test(penzorText) && !DUNNO.test(penzorText);
+    return { ok: !git.error && !penzor.error && noProject && gitOk && penzorOk,
+      detail: git.error || penzor.error || `前提(不在项目里、没有 git 工具):${noProject ? '成立' : '不成立'};Forsion Git:技能${loaded(git) ? '已装载' : '没装载'}、入口原文${/发布到 Forsion Git|Publish to Forsion Git/.test(gitText) && /项目详情|Project details/i.test(gitText) ? '有' : '没有'}、私有${/私有|private/i.test(gitText) ? '说了' : '没说'}${/git remote add/.test(gitText) ? '、教了手动加远端' : ''}${DUNNO.test(gitText) ? '、说了不知道' : ''};蓬洲云:技能${loaded(penzor) ? '已装载' : '没装载'}、同步入口${penzorOk ? '对' : '不对'};工具 ${[...git.toolCalls, '|', ...penzor.toolCalls].join(',')}`,
+      output: `${git.content}\n\n--- 蓬洲云 ---\n${penzor.content}`, ttftMs: ttft(git), tokens: tokensOf(git), toolCalls: git.toolCalls };
   });
 
   // 插件贡献的应用图标管到哪(10-09):桌面安装版把图标写进系统,退出后仍保留;安卓桌面图标只跟内置图标,插件图标只在 App 内。
