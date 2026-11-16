@@ -174,6 +174,8 @@ export function CompactChatPicker({
   // 底部说明区:活动行有简介就讲它,否则是状态句(谁会接这条消息)
   const described = open === 'popover' ? items.find((i) => i.id === activeId && i.description) : undefined
   const footer = described ? <><b>{described.name}</b>{described.description}</> : status
+  // Reserve the same space even on rows without copy: an above-anchored menu must not move under a stationary pointer.
+  const hasFooter = !!status || items.some((i) => !!i.description)
 
   const rows = (list: ChatPickItem[], sheet: boolean): ReactNode => list.map((item, i) => {
     const head = item.section && item.section !== list[i - 1]?.section
@@ -288,7 +290,7 @@ export function CompactChatPicker({
               {rows(shown, false)}
               {!shown.length && <div className="chat-pick-empty">{t('addMenu.noMatches')}</div>}
             </div>
-            {footer && (
+            {hasFooter && (
               <>
                 <div className="ctx-separator" />
                 <div className="chat-pick-desc" aria-live="polite">{footer}</div>
