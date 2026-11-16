@@ -62,8 +62,8 @@ const off = ctx.registerTemplateProcessor?.({
 })
 ```
 
-- `process` gets the template file's **raw text** (frontmatter included) **before** the host's own `{{…}}` substitution. Processors run in registration order, each on the previous one's output. Throwing aborts that insert with a host toast naming your plugin; nothing is written.
-- After a slow `process`, the host re-checks the vault, the pane, the target note and the block before inserting; if the user moved on, the insert is dropped.
+- `process` gets the template file's **raw text** (frontmatter included) **before** the host's own `{{…}}` substitution. Processors run in registration order, each on the previous one's output. Throwing aborts that insert with a host toast naming your plugin; nothing is written. If your plugin is disabled or reloaded while `process` is pending, the host stops waiting, treats it as unchanged (`null`) and the chain continues.
+- After a slow `process`, the host re-checks the vault, the pane, the target note and the block before inserting; if the library, pane or note changed meanwhile, nothing is inserted.
 - `folders()` is asked each time the picker opens: vault-relative folders, duplicates merged, absolute paths and `..` ignored; a call that throws or takes longer than 2 s adds nothing.
 - Returns a disposer; the host also removes it on disable / reload. Same `id` again replaces the earlier processor.
 - To put the caret somewhere inside inserted text (Templater's cursor), insert yourself with `ctx.app.insertMarkdownAt?.(token, md, { where: 'caret', cursorMarker })` from a command; the picker path does not place the caret.
@@ -85,8 +85,11 @@ const off = ctx.registerNoteBirth?.({
 
 - **Asked for**: "New note" from every entry point (sidebar, command, ⌘N, new-tab page, and `ctx.app.createPage()`, so your own provider is asked for it too), "New note" in a folder, child notes, creating a note from the quick switcher, confirming an unresolved `[[link]]`, and today's daily note when no daily-note template is set. **Not asked for**: rows added to a notes database, files plugins write themselves (`writeFile`, `writeBytes`, file creators; yours included), files arriving via sync.
 - Providers are asked one at a time in registration order; the **first non-null** answer becomes the note's content in the same write that creates it. A provider that throws is skipped (toast naming the plugin) and the next one is asked.
-- You may prompt the user. After about 400 ms the host shows "<plugin> is preparing this note…" with Cancel. Cancel, or no answer within 10 minutes, creates the note empty as before. `signal` aborts when the host stops waiting for you (Cancel, time-out, or the note was created): close your prompt then; a late answer is ignored.
-- The note is never lost or blocked: births of the same path queue; a vault switch while waiting creates nothing; while one ask is pending, other new notes (including one your `initial` creates) are born empty.
+- You may prompt the user. After about 400 ms the host shows "<plugin> is preparing this note…" with Cancel. Cancel, or no answer within 10 minutes, creates the note empty as before.
+- `signal` aborts when the host stops waiting for you: Cancel, the 10-minute cap, a library (vault) switch, your plugin being disabled or reloaded, or the note having been created. Close your prompt when it fires; a late answer is ignored.
+- A library switch during the ask stops it: the note is **not created**, and a toast says why.
+- If the user moved to another pane or note while you were asked, the note is created but **not opened**: "New note" shows a "Created …" notice with an Open button; a child note's link is still inserted into the parent.
+- The note is never lost or blocked: births of the same path queue; while one ask is pending, other new notes (including one your `initial` creates) are born empty.
 - Returns a disposer; removed on disable / reload; same `id` replaces.
 
 ### Older hosts

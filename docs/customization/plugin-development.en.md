@@ -305,7 +305,7 @@ const renamed = await ctx.app.renamePath?.(moved, 'Idea (done)')
 
 Forsion has templates of its own: the notes in the vault's `templates/` folder, with `{{date}}`, `{{date:format}}`, `{{time}}` and `{{title}}` filled in on insert (formats from `.obsidian/templates.json`); the daily note's folder, name and template come from Settings or `.obsidian/daily-notes.json`. A Templater-style plugin, or one that gives new notes in a folder a template, should plug into these rather than ship a second template picker.
 
-A template processor gets the template's raw text before Forsion fills in its variables; processors run one after another in registration order. Returning `null` leaves the text unchanged; throwing cancels that insert, and the notice names the plugin. `folders()` adds folders to the template picker. It covers two flows: inserting a template picked in the template picker (`kind` is `'insert'`), and creating a daily note (`'daily'`).
+A template processor gets the template's raw text before Forsion fills in its variables; processors run one after another in registration order. Returning `null` leaves the text unchanged; throwing cancels that insert, and the notice names the plugin; if the plugin is disabled or reloaded halfway, that processor counts as unchanged and the next ones still run. If the library, the pane or the note changed while waiting, nothing is inserted. `folders()` adds folders to the template picker. It covers two flows: inserting a template picked in the template picker (`kind` is `'insert'`), and creating a daily note (`'daily'`).
 
 ```js
 const off = ctx.registerTemplateProcessor?.({
@@ -316,7 +316,11 @@ const off = ctx.registerTemplateProcessor?.({
 })
 ```
 
-A new note's first content: when someone creates an empty note, Forsion asks plugins for its content before writing it. The first plugin that answers with something other than `null` has its content written together with the new note, so the editor opens on it. It is asked for every "New note" entry point, a new note in a folder, child notes, creating a note from the quick switcher, opening a `[[link]]` to a note that doesn't exist yet, and a new daily note when no daily-note template is set. It is not asked for rows added to a table, files plugins write, or files that arrive through sync. A plugin may ask the user something; if it takes a while, Forsion shows "<plugin> is preparing this note…" with Cancel. On Cancel, or with no answer after 10 minutes, the note is created empty as before and `signal` aborts, so the plugin should close its prompt.
+A new note's first content: when someone creates an empty note, Forsion asks plugins for its content before writing it. The first plugin that answers with something other than `null` has its content written together with the new note, so the editor opens on it. It is asked for every "New note" entry point (including a plugin calling `ctx.app.createPage()`, whose own provider is asked too), a new note in a folder, child notes, creating a note from the quick switcher, opening a `[[link]]` to a note that doesn't exist yet, and a new daily note when no daily-note template is set. It is only not asked for files plugins write themselves with `writeFile`, `writeBytes` or a file creator, rows added to a table, and files that arrive through sync. A plugin may ask the user something; if it takes a while, Forsion shows "<plugin> is preparing this note…" with Cancel. On Cancel, or with no answer after 10 minutes, the note is created empty as before.
+
+- `signal` aborts when Forsion stops waiting for the plugin: Cancel, the 10-minute limit, a library switch, the plugin being disabled or reloaded, or the note having been created. When it fires, the plugin should close its prompt; an answer that arrives later is ignored.
+- A library switch while waiting: the note is not created, and a notice says why.
+- If you moved to another pane or note while waiting, the note is still created but you are not taken back to it: "New note" shows a "Created …" notice with an Open button, and a child note's link is still inserted into its parent.
 
 ```js
 ctx.registerNoteBirth?.({
