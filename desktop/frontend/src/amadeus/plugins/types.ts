@@ -2006,7 +2006,8 @@ export interface PluginEngineHarness {
   /** 2026-11-16+: the id of a view your plugin registers (`ctx.registerView`). While the conversation in front runs on
    *  this engine, the host adds this view to the right sidebar after its own pages (Details, Files, Outline); it does not
    *  take the front tab, and it closes when the user moves to a conversation that runs elsewhere. Your view follows the
-   *  active conversation itself (`ctx.tangu.subscribeAgentStatus`). Desktop only; older hosts ignore it. */
+   *  active conversation itself (`ctx.tangu.subscribeAgentStatus`), so a main tab pinned to another conversation does not
+   *  get it. Desktop only; older hosts ignore it. */
   railView?: string
 }
 
