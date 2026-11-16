@@ -53,6 +53,9 @@ async function main() {
       process.exit(1)
     }
   }
+  // 网址带 `litbold=1`(加粗字面化开关):先确认那个服务真认这个开关(编辑器根上有 data-literal-bold),
+  // 否则多半是复用了别人的 / 旧代码的服务,整轮测的都不是开关开着的样子。
+  if (/[?&]litbold=1(?:&|$)/.test(URL)) await litboldPreflight()
   // --check=<名> → <名>.check.cjs;--script=<文件名> → 直接跑同目录下那个脚本
   // (e2e 类脚本文件名是 *.e2e.cjs,套不进 --check 的命名约定)。
   const only = (process.argv.find((a) => a.startsWith('--check=')) || '').slice('--check='.length)
@@ -65,6 +68,39 @@ async function main() {
     if (vite) vite.kill()
     process.exit(code ?? 1)
   })
+}
+
+async function litboldPreflight() {
+  const { chromium } = require('playwright-core')
+  const fs = require('fs')
+  const os = require('os')
+  let exe = process.env.CHROMIUM_EXE
+  const root = path.join(os.homedir(), 'Library/Caches/ms-playwright')
+  if (!exe && fs.existsSync(root)) {
+    for (const d of fs.readdirSync(root).filter((x) => x.startsWith('chromium-')).sort().reverse()) {
+      for (const app of ['Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing', 'Chromium.app/Contents/MacOS/Chromium']) {
+        const p = path.join(root, d, 'chrome-mac-arm64', app)
+        if (!exe && fs.existsSync(p)) exe = p
+      }
+    }
+  }
+  const browser = await chromium.launch({ executablePath: exe, headless: true })
+  try {
+    const page = await browser.newPage()
+    await page.goto(`${URL}?upage&useed=${encodeURIComponent('a **b** c\n')}`, { waitUntil: 'domcontentloaded', timeout: 180000 })
+    await page.waitForSelector('.unified-body .ProseMirror', { timeout: 180000 })
+    const got = await page.evaluate(() => {
+      const pm = document.querySelector('.unified-body .ProseMirror')
+      return { on: pm.getAttribute('data-literal-bold'), text: pm.textContent }
+    })
+    if (got.on !== '1' || got.text !== 'a **b** c') {
+      console.error(`加粗字面化开关没开着(${URL}):${JSON.stringify(got)} —— 是不是复用了别的服务 / 旧代码?`)
+      process.exit(1)
+    }
+    console.log('加粗字面化开关:开着(编辑器根 data-literal-bold=1,文档里是 `**` 文字)')
+  } finally {
+    await browser.close()
+  }
 }
 
 main()

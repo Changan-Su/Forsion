@@ -50,6 +50,8 @@ import {
   underlineSchema,
 } from './marks'
 import { obsidianInlinePlugin, toggleObsHighlight } from './obsidianInline'
+import { literalBoldPlugin, toggleLiteralBold } from './literalBold'
+import { literalBoldEnabled } from './literalBoldFlag'
 import { blankLineRemark, softBreakRemark, stripEmptyLineBr } from './softBreak'
 import { tabIndent, tabOutdent } from './tabIndent'
 import { commonmarkWithIndent, setTextAlignment, type TextAlignment } from './paragraphIndent'
@@ -1152,6 +1154,9 @@ export function MilkdownInner({
       // 只能在这儿(ProseMirror 按插件顺序问 handleKeyDown,排在后面永远够不着)。
       // 契约:high 桶的插件不该自己处理的必须返回 false,否则内置行为在它手里静默消失。
       .use(pluginEditorExtensions('high', { pagePath: () => pagePathRef.current }))
+      // 加粗字面化(隐藏开关,./literalBold):开关开着才装;⌘B 要排在 preset 的键位之前。
+      // Literal bold (hidden switch): installed only when on; Mod-b must come before the presets' keymaps.
+      .use(literalBoldEnabled() ? literalBoldPlugin() : [])
       .use(commonmarkWithIndent)
       .use(gfmWithAnchoredRules) // gfm 原位替换版:删除线输入规则带锚(I-01,见 ./anchoredMarkRules)
       .use(structuralIndentRemark)
@@ -1781,7 +1786,15 @@ export function MilkdownInner({
       return
     }
     const map: Partial<Record<ToolbarAction, () => void>> = {
-      bold: () => runCmd(toggleStrongCommand.key),
+      // 加粗字面化开关开着时,工具条 B 与 ⌘B 同一条(两边加 / 去 `**`);the toolbar's B follows Mod-b when the switch is on
+      bold: () => {
+        if (!literalBoldEnabled()) return runCmd(toggleStrongCommand.key)
+        getInstance()?.action((ctx) => {
+          const v = ctx.get(editorViewCtx)
+          toggleLiteralBold(v.state, v.dispatch)
+          v.focus()
+        })
+      },
       italic: () => runCmd(toggleEmphasisCommand.key),
       underline: () => runCmd(toggleUnderlineCommand.key),
       strike: () => runCmd(toggleStrikethroughCommand.key),
