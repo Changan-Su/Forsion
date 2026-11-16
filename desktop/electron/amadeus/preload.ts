@@ -115,6 +115,7 @@ const api: AmadeusApi = {
   uninstallPlugin: (id, opts) => ipcRenderer.invoke(IPC.uninstallPlugin, id, opts),
   trashRestore: (id) => ipcRenderer.invoke(IPC.trashRestore, id),
   bundleAgentOwned: (pluginId, slug) => ipcRenderer.invoke(IPC.bundleAgentOwned, pluginId, slug),
+  pluginNetRequest: (pluginId, url, init) => ipcRenderer.invoke(IPC.pluginNetRequest, pluginId, url, init),
   revealInFileManager: (targetPath) => ipcRenderer.invoke(IPC.revealInFileManager, targetPath),
   readDatabase: (pagePath, ref) => ipcRenderer.invoke(IPC.dbRead, pagePath, ref),
   writeDatabase: (dbPath, data) => ipcRenderer.invoke(IPC.dbWrite, dbPath, data),

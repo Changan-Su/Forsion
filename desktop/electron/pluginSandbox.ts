@@ -21,6 +21,7 @@ import { basename, isAbsolute, join, normalize, relative, sep } from 'node:path'
 import type { ChildProcess } from 'node:child_process'
 import { effectivePluginId } from '../shared/products'
 import { sanitizeRequiresPlugins } from '../shared/amadeus/ipc'
+import { sanitizeNetworkPatterns } from '../shared/pluginNetwork'
 import { parseSandboxStatus, type SandboxStatus } from '../../tangu-agent/src/contracts/pluginSandbox'
 import { defineMainMessages } from './mainI18n'
 import { DEFAULT_APPEARANCE } from '../shared/startupAppearance'
@@ -33,6 +34,7 @@ export const PLUGIN_SANDBOX_MESSAGES = defineMainMessages({
     zh: '会从 {dir} 复制一份到你的插件文件夹。装好后它拿到 manifest.json 里声明的权限，能访问你的智库。',
     en: 'A copy of {dir} goes into your plugins folder. Once installed it gets the permissions declared in its manifest.json and can access your vault.',
   },
+  'main.pluginSandbox.installNetwork': { zh: '会访问：{domains}', en: 'Accesses: {domains}' },
   'main.pluginSandbox.install': { zh: '安装', en: 'Install' },
   'main.pluginSandbox.cancel': { zh: '取消', en: 'Cancel' },
   'main.pluginSandbox.windowTitle': { zh: 'Forsion 沙箱 · {name}', en: 'Forsion sandbox · {name}' },
@@ -41,7 +43,8 @@ export const PLUGIN_SANDBOX_MESSAGES = defineMainMessages({
 /** 带给沙箱首屏的界面状态:语言 + 父进程渲染层的主题那几把 localStorage 键(子进程只收 forsion_theme* / forsion_glass*)。 */
 export interface PluginSandboxUiSeed { locale: 'zh' | 'en'; storage: Record<string, string> }
 
-export interface SandboxManifest { pluginId: string; name: string; version: string }
+/** network:manifest `network` 里认得出的主机名模式(装好后 ctx.net 只许访问这些);没声明就没有这一项。 */
+export interface SandboxManifest { pluginId: string; name: string; version: string; network?: string[] }
 
 /** 给模型 / 卡片的失败:code 走 clientAck 的结果码字符集。 */
 export interface SandboxResult { ok: boolean; code?: string; error?: string; text?: string; image?: string }
@@ -64,7 +67,8 @@ export async function readSandboxManifest(dir: string): Promise<SandboxManifest>
   const pluginId = effectivePluginId(dir.split(sep).filter(Boolean).pop() || '', m?.id)
   if (!pluginId || pluginId.startsWith('market-')) throw new SandboxError('invalid_args', 'manifest.json needs an "id" in kebab-case (a-z, 0-9, -)')
   const str = (v: unknown, max: number): string => (typeof v === 'string' ? v.trim().slice(0, max) : '')
-  return { pluginId, name: str(m.name, 120) || pluginId, version: str(m.version, 40) }
+  const { patterns: network } = sanitizeNetworkPatterns(m.network)
+  return { pluginId, name: str(m.name, 120) || pluginId, version: str(m.version, 40), ...(network.length ? { network } : {}) }
 }
 
 export function sandboxPaths(forsionHome: string, pluginId: string) {
