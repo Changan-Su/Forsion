@@ -28,6 +28,9 @@ import { amadeusConfigPath } from './amadeus/settings'
 import { COMPUTER_HISTORY_DESKTOP_CONFIG_ENV, COMPUTER_HISTORY_DESKTOP_CONFIG_FILE } from '../shared/computerHistory'
 import { REMOTE_LOCK_FILE, REMOTE_LOCK_FILE_ENV } from '../shared/remoteSafety' // P1-K2
 import { composeEnginePath, pathKeyOf, withBundledGit } from './envPath'
+import { isFolderUnit } from './hostRole'
+import { FOLDER_UNIT_PATH_ENV } from './localUnits'
+import { pathRelation } from './pathOverlap'
 
 export type BackendState = 'stopped' | 'starting' | 'ready' | 'crashed'
 
@@ -143,6 +146,31 @@ export interface BackendStatus {
  * 空 / C / POSIX / C.* 视为未设置。只有四个都不可用才注入:TANGU_LANG 排在最前,用户 shell 里设了 LANG=en_US 而系统界面是中文时,
  * 注入的 zh 会把用户的英文盖掉(Codex 评审 09-25)。「可用」口径必须与引擎那两处一致。
  */
+/** 老版本种在默认笔记库根上的 Calendar.db 交给引擎镜像的条件:家目录和工作区**同进同退** —— 要么都是默认那台的、要么都被挪走了
+ *  (台架的临时目录、文件夹 Unit 的 <文件夹>/home + <文件夹>/Forsion)。一边真一边假就会把台架的日历合进真的 human/ 和账号云端,
+ *  或者反过来。比的是实际生效的目录,不看环境变量(安装版的工作区不认 FORSION_WORKSPACE_DIR,但文件夹 Unit 的认)。 */
+export function defaultCalendarFor(o: { home: string; workspace: string; machineHome: string; machineWorkspace: string; real?: (p: string) => string }): string | null {
+  const real = o.real ?? ((p: string): string => { try { return realpathSync(p) } catch { return p } })
+  const ownHome = real(o.home) === real(o.machineHome)
+  const ownWorkspace = real(o.workspace) === real(o.machineWorkspace)
+  return ownHome === ownWorkspace ? join(o.workspace, 'Amadeus', 'Calendar.db') : null
+}
+
+/**
+ * 按这一份的身份补的引擎环境变量(folderDir = 文件夹 Unit 的文件夹;默认那台 / 插件沙箱 = null):
+ *  · 文件夹 Unit 不开 Forsion Clip / 浏览器扩展桥(47654 / 47655 是默认那台的);
+ *  · 指向文件的几个变量(日历镜像、令牌文件、数据库、笔记库……)必须落在本文件夹里,不在就丢掉(空串 = 关,照留),
+ *    日历随后由宿主按这一份重新算。
+ */
+export function engineRoleEnv(env: NodeJS.ProcessEnv, folderDir: string | null): void {
+  if (folderDir === null) return
+  env.TANGU_BROWSER_EXTENSION = '0'
+  for (const k of FOLDER_UNIT_PATH_ENV) {
+    const v = env[k]
+    if (v && pathRelation(v, folderDir) !== 'inside') delete env[k]
+  }
+}
+
 export function injectEngineLang(env: NodeJS.ProcessEnv, appLocale: string): void {
   const usable = (v: string | undefined): boolean => {
     const s = (v || '').trim()
@@ -421,6 +449,7 @@ export class BackendManager {
       env.TANGU_BROWSER_EXTENSION_PORT = app.isPackaged ? '47654' : (process.env.TANGU_BROWSER_EXTENSION_PORT || '47655')
       // 扩展本体是 Forsion Clip(npm @forsion/clip):安装包里在 tangu-server/browser-extension(引擎自己找得到),dev 指到依赖里那份
       if (!app.isPackaged) env.TANGU_BROWSER_EXTENSION_DIR = clipSourceDir()
+      engineRoleEnv(env, isFolderUnit() ? dirname(forsionHomeDir()) : null) // 文件夹 Unit 的 home = <文件夹>/home
       // 通道(微信/Telegram/QQ)配置改由引擎直接读 config.json channels/wechat 段,不再经 env 注入
       //(旧 TANGU_WECHAT_* env 会压过 config,新设置页写 /agent/channels 后热生效,无需重启后端)。
       // 让后端的微信远程会话落到桌面默认工作区(host 执行 cwd);兜底 ~/Tangu。
@@ -431,11 +460,13 @@ export class BackendManager {
       // 老版本种在默认笔记库根上的 Calendar.db(和 amadeus/ipc.ts defaultVaultRoot 同一个路径),还在就由引擎和 human/CALENDAR.db 双向镜像。
       // 家目录和工作区要么都是默认的、要么都被台架重定向了才给:一边真一边假就会把台架的日历合进真的 human/ 和账号云端,
       // 或者把台架的 human/ 合进真库(打包版的 defaultWorkspaceDir 不认 FORSION_WORKSPACE_DIR)。外面已经给了(含空串 = 关)就照用。
-      const real = (p: string): string => { try { return realpathSync(p) } catch { return p } }
-      const ownHome = real(forsionHomeDir()) === real(join(homedir(), isDevMode() ? '.forsion-dev' : '.forsion'))
-      const ownWorkspace = app.isPackaged || !process.env.FORSION_WORKSPACE_DIR?.trim()
-      if (env.FORSION_DEFAULT_CALENDAR === undefined && ownHome === ownWorkspace)
-        env.FORSION_DEFAULT_CALENDAR = join(defaultWorkspaceDir(), 'Amadeus', 'Calendar.db')
+      if (env.FORSION_DEFAULT_CALENDAR === undefined) {
+        const cal = defaultCalendarFor({
+          home: forsionHomeDir(), workspace: defaultWorkspaceDir(),
+          machineHome: join(homedir(), isDevMode() ? '.forsion-dev' : '.forsion'), machineWorkspace: join(homedir(), isDevMode() ? 'Forsion-Dev' : 'Forsion'),
+        })
+        if (cal) env.FORSION_DEFAULT_CALENDAR = cal
+      }
       // 电脑历史的第二道闸:桌面壳配置(userData,随产品名 / dev 变,引擎猜不到)的绝对路径。引擎除了 state.json 还要求这份
       // 文件里 computerHistoryEnabled === true —— state.json 写不进也删不掉时,已落进这里的「关」照样让引擎按关(见 shared 契约)
       env[COMPUTER_HISTORY_DESKTOP_CONFIG_ENV] = join(app.getPath('userData'), COMPUTER_HISTORY_DESKTOP_CONFIG_FILE)

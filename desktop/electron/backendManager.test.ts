@@ -379,3 +379,30 @@ describe('BackendManager 引擎热更新起不来时退回', () => {
     expect(demote).not.toHaveBeenCalled()
   }, 15_000)
 })
+
+describe('按这一份的身份补的引擎环境', () => {
+  it('文件夹 Unit 关掉浏览器扩展桥;默认那台不动(交给引擎按配置)', async () => {
+    const { engineRoleEnv } = await import('./backendManager')
+    const a: NodeJS.ProcessEnv = {
+      FORSION_DEFAULT_CALENDAR: '/somewhere/else/Calendar.db', TANGU_TOKEN_FILE: '/u/.forsion/token', TANGU_DATA_DIR: '/units/A/home/tangu/state.db',
+      FORSION_AMADEUS_VAULT: '', TANGU_CLOUD_URL: 'https://x',
+    }
+    engineRoleEnv(a, '/units/A')
+    expect(a.TANGU_BROWSER_EXTENSION).toBe('0')
+    // 指向本文件夹外的文件丢掉(日历随后由宿主重算);本文件夹里的、空串(= 关)、整机通用的照留
+    expect(a).toEqual({ TANGU_BROWSER_EXTENSION: '0', TANGU_DATA_DIR: '/units/A/home/tangu/state.db', FORSION_AMADEUS_VAULT: '', TANGU_CLOUD_URL: 'https://x' })
+    const b: NodeJS.ProcessEnv = { TANGU_TOKEN_FILE: '/u/.forsion/token' }
+    engineRoleEnv(b, null)
+    expect(b).toEqual({ TANGU_TOKEN_FILE: '/u/.forsion/token' }) // 默认那台不动
+  })
+
+  it('默认日历:家目录与工作区同进同退才给(默认那台 / 台架 / 文件夹 Unit 都对;一真一假不给)', async () => {
+    const { defaultCalendarFor } = await import('./backendManager')
+    const id = (p: string) => p
+    const m = { machineHome: '/u/.forsion', machineWorkspace: '/u/Forsion', real: id }
+    expect(defaultCalendarFor({ ...m, home: '/u/.forsion', workspace: '/u/Forsion' })).toBe('/u/Forsion/Amadeus/Calendar.db')
+    expect(defaultCalendarFor({ ...m, home: '/U/A/home', workspace: '/U/A/Forsion' })).toBe('/U/A/Forsion/Amadeus/Calendar.db')
+    expect(defaultCalendarFor({ ...m, home: '/tmp/h', workspace: '/u/Forsion' })).toBeNull()
+    expect(defaultCalendarFor({ ...m, home: '/u/.forsion', workspace: '/tmp/w' })).toBeNull()
+  })
+})
