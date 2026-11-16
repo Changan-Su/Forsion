@@ -2976,6 +2976,43 @@ export interface PluginContext {
     archive(id: string): Promise<void>
     registerCard(card: { sender?: () => string; mount?(el: HTMLElement, msg: { id: string }): (() => void) | void }): void
   }
+  /** 明说不稳定的内部口子(2026-11-16+,`pluginInternals.ts`)。manifest `capabilities` 声明了 `internals` 才有,
+   *  而且只在本机桌面(网页、手机、设备页、旧宿主上是 undefined —— 先判断再用)。里面的东西跟着宿主内部走,
+   *  宿主更新时可能改名、改形状或消失,不算破坏性变更。 */
+  internals?: PluginInternals
+}
+
+/** `ctx.internals`(2026-11-16+)。 */
+export interface PluginInternals {
+  host: {
+    /** 宿主版本(安装包的);拿不到时 null。 */
+    version(): Promise<string | null>
+    /** 正在跑的 Tangu 界面包:随安装包的(bundled)还是热更新下来的(overlay),以及它的版本;还没装载时 null。 */
+    ui(): { source: 'overlay' | 'bundled'; version: string } | null
+    /** 这扇窗口是哪种:主窗 / 拖出的独立窗 / Mini / 浮动面板 / 画中画。每扇窗口各跑一份插件。 */
+    window: 'main' | 'detached' | 'mini' | 'floating' | 'pip'
+    /** 是不是主窗。插件自己发起的写库动作(定时同步之类)只在主窗做,否则每扇窗口各做一遍。 */
+    mainWindow: boolean
+  }
+  /** 能读的状态库短名(`page`、`app`、`workspace`、`spaces`、`commands`、`ui`……)。 */
+  stores(): string[]
+  /** 读一份冻结的数据副本:函数、类实例略去,Date → 毫秒数,Map → [键, 值] 对的数组,Set → 数组。
+   *  `selector` 拿到的也是副本,不是宿主的对象。库名不认识或插件已停用 → undefined。`page` 指向当前活动面板。 */
+  read<T = unknown>(store: string, selector?: (state: unknown) => T): T | undefined
+  /** 订阅:宿主的状态变了,重算 `selector`(同样拿副本),结果和上次不是同样的数据才调 `listener`。同一轮里的多次变化并成一次。
+   *  返回退订;插件停用时宿主替你退。 */
+  subscribe<T = unknown>(store: string, selector: (state: unknown) => T, listener: (now: T, prev: T) => void): () => void
+  /** 第二级:manifest 同时声明了 `internals` 和 `internals-raw` 才有。 */
+  raw?: PluginInternalsRaw
+}
+
+/** `ctx.internals.raw`(2026-11-16+):宿主共享模块表里的真模块对象。读写都行、不保证、停用后收不回。 */
+export interface PluginInternalsRaw {
+  /** 按共享表里的键取一个模块(比如 `'host:desktop/frontend/src/amadeus/store/pageStore.ts'`、`'react'`、`'zustand'`)。
+   *  导出是活的(`export let` 照旧跟着变)。不在表里 → reject。 */
+  import(id: string): Promise<Record<string, unknown>>
+  /** 共享表里有哪些键。 */
+  modules(): Promise<string[]>
 }
 
 /** 一张只读表的完整描述(**纯数据**,除注明外不放函数;任何位置都不许放 HTML 字符串)。 */
@@ -3239,6 +3276,8 @@ export interface AmadeusPlugin {
   entitlement?: string
   /** 声明要用的宿主敏感能力(manifest `capabilities`,主进程已按白名单过滤)。没声明的能力宿主不注入。 */
   capabilities?: import('@amadeus-shared/ipc').PluginCapability[]
+  /** 作者验过内部接口的 Forsion 次版本(manifest `internalsVerified`,2026-11-16+):只给插件页标注,不拦。 */
+  internalsVerified?: string[]
   /** ctx.net 能访问的主机名模式(manifest `network`,2026-11-16+):只给详情页 / 商店展示;主进程每次请求都从磁盘重读。 */
   network?: string[]
   /** README.md content for the detail page (external plugins only). */

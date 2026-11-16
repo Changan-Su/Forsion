@@ -372,6 +372,54 @@ if (res.status === 200) render(res.json())
 
 网页版和手机版的 CSP 不一样，要在那两端单独试。
 
+## 内部接口 `ctx.internals`（2026-11-16 起）
+
+正式接口缺东西、又不想等 Forsion 发版时，可以用内部接口直接读 Forsion 自己的状态，或者拿到它的内部模块。**它不稳定**：里面的东西跟着 Forsion 内部走，任何一版都可能改名、改形状或消失，不算破坏性变更，也不会提前通知。只在桌面版有；网页版、手机版和旧宿主上 `ctx.internals` 是 `undefined`，一定先判断再用。
+
+分两级，都要在 manifest 的 `capabilities` 里声明：
+
+```json
+{ "capabilities": ["internals"], "internalsVerified": ["2.14"] }
+```
+
+**第一级 `internals`**：只读。拿到的是冻结的数据副本，里面没有函数，改不了 Forsion。
+
+```js
+const k = ctx.internals
+if (!k) return
+k.stores()                                            // 能读哪些：page、app、workspace、spaces、commands、ui……
+const path = k.read('page', (s) => s.activePage)      // page 指向当前活动的那个面板
+const off = k.subscribe('page', (s) => s.activePage, (now, prev) => { /* … */ })
+k.host.mainWindow                                      // 每扇窗口各跑一份插件；自己发起的写库动作只在主窗做
+```
+
+- 副本里函数、类实例都去掉了；`Date` 变成毫秒数，`Map` 变成 `[键, 值]` 对的数组，`Set` 变成数组。`selector` 拿到的也是副本。
+- `subscribe` 在同一轮里的多次变化只算一次；选出来的数据没变就不通知。插件停用时宿主替你退订。
+- 要写，用正式接口：改名、移动、建文件夹、写文件见上面「库里的文件夹、文件时间、改名与移动」，动别人的文件时会先问用户。
+
+**第二级 `internals-raw`**：Forsion 内部模块的真对象，读写都行。要和 `internals` 一起声明。
+
+```json
+{ "capabilities": ["internals", "internals-raw"] }
+```
+
+```js
+const ids = await ctx.internals.raw.modules()          // 能取哪些模块
+const { usePageStore } = await ctx.internals.raw.import('host:desktop/frontend/src/amadeus/store/pageStore.ts')
+```
+
+- 只给得了 Forsion 共享模块表里登记的模块（页面状态、对话状态、布局引擎、React 等）；没登记的模块、函数内部的私有变量拿不到。
+- **风险自负**：写坏了不一定报错；停用以后你拿到的对象收不回，用户会被提示保存并重载窗口。改写 Forsion 自己的动作时，自己负责在停用时还原。
+- 要读写笔记文件，仍然优先用正式接口：Forsion 写文件有冲突检查、引用重写和同步记录，绕开会丢数据。
+
+**插件页和商店怎么显示**：声明了内部接口的插件在设置 → 插件里带标注（第二级更醒目），详情页写明风险。`internalsVerified` 写你在哪几版 Forsion 上验过（只比到小版本，比如 `"2.14"`）；和用户正在用的版本对不上时，详情页会说一句「没在这一版上验过」，不拦。
+
+**出错怎么办**：声明了内部接口的插件，没接住的错误会算到它头上；一分钟内连续 3 次，Forsion 会停用它并通知用户，用户可以在插件页重新启用。在沙箱里开发加载的副本不这样停用，错误照常进控制台。
+
+**上架**：第一级照常审核。第二级要申请：投稿时在「内部接口申请理由」里写明要哪些模块、为什么正式接口不够；审核按版本过，每个新版本都要重新过审才会推给用户。没过审的版本，桌面版不会从官方商店安装。开发加载、手动安装和第三方商店来源不受这条限制。
+
+检查：`node check-plugin.mjs <插件目录>` 会报出没声明就用、只声明第二级、直接摸 React 内部结构这几种问题，并列出第二级取用的模块。
+
 ## 命令的撤销与缺省快捷键
 
 `ctx.registerCommand` 返回一个撤销函数，只撤掉这一次注册（2026-11-16 起）；同一个插件用同一个 `id` 再注册，会原地替换原来那条（标题、动作、快捷键都换成新的），被替换掉的那次注册的撤销函数不再起作用。所以插件可以在运行中增删命令（比如每个启用的模板一条），不用重载。插件停用时它的命令照旧全部撤掉。旧宿主返回 `undefined`，同 `id` 再注册会多出一条，所以写成 `off?.()`，并且在旧宿主上每个 `id` 只注册一次。

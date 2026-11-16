@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, shell } from 'electron'
 import { declaredSourcesOf } from '../../shared/storeSources'
-import { IPC, gatePluginManifest, sanitizeGuide, sanitizeOnboarding, sanitizeEvents, sanitizeRequiresPlugins, PLUGIN_CAPABILITIES, type ExternalPluginSource, type PluginBundleInfo } from '@amadeus-shared/ipc'
+import { IPC, gatePluginManifest, sanitizeGuide, sanitizeOnboarding, sanitizeEvents, sanitizeRequiresPlugins, sanitizeInternalsVerified, PLUGIN_CAPABILITIES,type ExternalPluginSource, type PluginBundleInfo } from '@amadeus-shared/ipc'
 import { installedPluginFields, type InstalledPluginManifest } from '@amadeus-shared/pluginSource'
 import { readPluginWidgets } from './pluginWidgets'
 import { isSafePluginExt } from '@amadeus-shared/pluginFiles'
@@ -697,7 +697,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
       id?: unknown; name?: unknown; nameEn?: unknown; version?: unknown; description?: unknown; descriptionEn?: unknown
       main?: unknown; apiVersion?: unknown; minAppVersion?: unknown; requiresApp?: unknown; requiresPlugins?: unknown
       capabilities?: unknown; onboarding?: unknown; guide?: unknown; events?: unknown; fileExtensions?: unknown; widgets?: unknown; storeSources?: unknown
-      network?: unknown
+      network?: unknown; internalsVerified?: unknown
     }
     for (const product of products) {
       const pdir = product.root
@@ -764,6 +764,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
         capabilities: Array.isArray(m?.capabilities)
           ? PLUGIN_CAPABILITIES.filter((c) => (m.capabilities as unknown[]).includes(c))
           : undefined,
+        internalsVerified: sanitizeInternalsVerified(m?.internalsVerified),
         readme,
         changelog,
         onboarding: sanitizeOnboarding(m?.onboarding),

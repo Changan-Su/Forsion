@@ -85,8 +85,9 @@ import { migrateDiskSoft } from './themeMigrations'
 import { builtinBundleSources, builtinPluginIds, bundleOff, bundleRestartPending, initBundleSwitches, lockedPluginIds, seedBuiltinBundles, setBundleOff } from './builtinPlugins'
 import { createCorePluginUpdater, prefetchOnFirstBoot } from './corePluginUpdates'
 import { createMarketPluginUpdater, type MarketUpdateItem } from './marketPluginUpdates'
-import { createStoreSources, packageManifestId, type StoreSources } from './storeSources'
+import { createStoreSources, packageManifest, packageManifestId, type StoreSources } from './storeSources'
 import { isSourceCardId } from '../shared/storeSources'
+import { assertInternalsRawApproved } from './marketInternals'
 import { compareMarketVersions } from '../shared/marketPluginUpdates'
 import { BUILTIN_BUNDLES } from './builtinPlugins'
 import { checkBuiltinUpdates, NPM_OFFICIAL, registryOrder } from './builtinUpdates'
@@ -3169,7 +3170,16 @@ async function downloadMarketPackage(id: string, report: (phase: 'resolve' | 'do
   const archive = await downloadZip(candidates, (u, init) => github || u.startsWith(NPM_OFFICIAL) ? net.fetch(u, init) : fetch(u, init), (p) => report('download', p), npm ? GZIP_MAGIC : ZIP_MAGIC)
   const buf = npm ? await npmTarballToZip(archive, info, info.type) : archive
   assertMarketplaceRequirements(info, app.getVersion(), marketPlatform())
-  await checkMarketPackage(buf, await detectMarketType(buf, info.type), app.getVersion(), marketPlatform(), builtinPluginIds())
+  const effType = await detectMarketType(buf, info.type)
+  await checkMarketPackage(buf, effType, app.getVersion(), marketPlatform(), builtinPluginIds())
+  // 第二级内部接口(internals-raw)要这一版过了商店审核才装:手动装和自动更新都经这里(marketInternals.ts)。
+  // 装指定的旧版本时问那一版的详情(服务端按版本快照回 rawApprovedVersion),不拿最新版的放行比。
+  if (effType === 'amadeus-plugin') {
+    await assertInternalsRawApproved(await packageManifest(buf, effType), async () => {
+      const r = await fetch(`${base}/api/market/items/${encodeURIComponent(id)}${version ? `?version=${encodeURIComponent(version)}` : ''}`, { headers: { 'User-Agent': MARKET_UA }, signal: AbortSignal.timeout(30_000) })
+      return r.ok ? ((await r.json()) as { rawApprovedVersion?: string | null }).rawApprovedVersion : null
+    })
+  }
   return { info, buf }
 }
 
