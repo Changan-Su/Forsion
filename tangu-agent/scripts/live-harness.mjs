@@ -429,6 +429,7 @@ KEYS.push('orgchat'); OPT_IN.add('orgchat'); // --only orgchat --org-plugin <bun
 OPT_IN.add('standin'); KEYS.push('standin');
 OPT_IN.add('chanagentmode'); KEYS.push('chanagentmode'); // 通道 run 按 Agent 自己设的审批档收紧(11-14):同一个假通道,Agent 只读 / 分身按本体只读 → 要批不写;没设档 → 照通道完全放行;--kind neg 在没收紧的代码上跑应当红 // 分身(11-09):多联系人假通道 × 本体的私事;七个 run。动通道选 Agent / 分身权限域 / 文件读根 / 委派闸时跑;--kind neg 在旧代码上跑应当漏
 OPT_IN.add('appref'); // 四个 run;只在动 APP_REF_SECTION(应用 / 窗口引用那一段提示词)时才有信息量。
+OPT_IN.add('dsimport'); KEYS.push('dsimport'); // 导入的旧对话能接着聊(11-16,POST /agent/sessions/import):一个 run;只在动 sessionImport / 导入会话的回放时跑
 const NEEDS = { dream: ['historian'], recall: ['historian', 'dream'] }; // 记忆链三连有先后依赖;其余场景自包含
 KEYS.push('marketplace', 'marketplacechat');
 OPT_IN.add('musesettings'); KEYS.push('musesettings'); // 两个 run:私聊说一句改设置 → 出卡不写配置、点了才写,权限档不出卡;动 propose_muse_settings 时跑
@@ -2713,6 +2714,40 @@ try {
     return { ok: !ev.error && ev.content.length > 0, detail: ev.error || `${ev.content.length} 字`, output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
   });
   if (chat && !chat.ok) throw new Error(`基础对话失败,后续场景不跑:${chat.detail}`);
+
+  // 11-16 导入的旧对话(DeepSeek 网页导出)要能接着聊:前面埋一个只在旧对话里出现过的事实,中间垫 30 轮无关的,
+  // 再问「接着刚才的」—— 模型要接得上(说得出名字和颜色),新消息排在旧历史后面,原标题不被改。
+  await scenario('dsimport', 'dsimport 导入的旧对话接着聊', async () => {
+    const T = Date.UTC(2026, 9, 1, 8, 0, 0);
+    const cat = `墨${MARKER.slice(-4)}`;
+    const msgs = [
+      { role: 'user', content: `我在给我家的猫写一首小诗,它叫「${cat}」,是一只橘色的猫,最喜欢趴在窗台上晒太阳。先帮我写两句。`, timestamp: T },
+      { role: 'assistant', content: `窗台一抹橘,${cat}眯眼眠。\n日光铺满背,风过尾轻牵。`, reasoning: '用五言,突出橘色与窗台。', timestamp: T + 5_000 },
+    ];
+    for (let i = 0; i < 30; i++) {
+      msgs.push({ role: 'user', content: `顺便问个无关的:第 ${i + 1} 个常见的排序算法是什么?简单说说。`, timestamp: T + 10_000 + i * 20_000 });
+      msgs.push({ role: 'assistant', content: `第 ${i + 1} 个可以说是${['冒泡排序', '插入排序', '选择排序', '归并排序', '快速排序', '堆排序'][i % 6]}。`.padEnd(300, '。'), timestamp: T + 15_000 + i * 20_000 });
+    }
+    const imp = await api('/agent/sessions/import', { method: 'POST', body: JSON.stringify({
+      app_id: 'tangu', source: 'deepseek', agent_config: { preset: 'chat', execMode: 'sandbox' },
+      conversations: [{ external_id: `live-${MARKER}`, title: `给${cat}的诗`, created_at: T, updated_at: T + 620_000, messages: msgs }],
+    }) });
+    const row = imp.results?.[0];
+    if (!row || row.status !== 'created') throw new Error(`导入失败:${JSON.stringify(imp)}`);
+    const ev = await run(row.session_id, '回到最开始那首诗:再给它加两句收尾。另外提醒我一下,那只猫叫什么名字、什么颜色?');
+    const out = ev.content || '';
+    const all = (await api(`/agent/sessions/${row.session_id}/messages`)).messages || [];
+    const ts = all.map((m) => Number(m.timestamp));
+    const ordered = ts.every((t, i) => i === 0 || t >= ts[i - 1]) && all.length >= msgs.length + 2;
+    const sessions = (await api('/agent/sessions?app_id=tangu')).sessions || [];
+    const title = sessions.find((x) => x.id === row.session_id)?.title;
+    const remembers = out.includes(cat) && /橘/.test(out);
+    return {
+      ok: !ev.error && ev.done && remembers && ordered && title === `给${cat}的诗`,
+      detail: ev.error || `记得名字与颜色=${remembers};新消息在旧历史后=${ordered}(共 ${all.length} 条);标题=${title}`,
+      output: out, ttftMs: ttft(ev), tokens: tokensOf(ev),
+    };
+  });
 
   // 09-30 用户反馈:改名时 remember.update 漏 fact,相同参数失败 30 次。真模型须原地更新且能从参数错误恢复。
   await scenario('remember', 'remember 改名与参数纠正', async () => {
