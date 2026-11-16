@@ -131,6 +131,13 @@ let sheetsUp = 0
 const sheetWatchers = new Set<() => void>()
 const sheetChanged = (): void => { for (const fn of [...sheetWatchers]) { try { fn() } catch { /* one bad watcher does not stop the rest */ } } }
 export function nativeSheetUp(): boolean { return sheetsUp > 0 }
+/** Called after every change of `nativeSheetUp()` (a sheet goes up, or one goes away) until the returned unwatch. Used by the
+ *  phone notification banner (desktop notificationStore): it holds its cards while a sheet covers the page and shows the
+ *  next one once the last sheet is gone. */
+export function watchNativeSheet(fn: () => void): () => void {
+  sheetWatchers.add(fn)
+  return () => { sheetWatchers.delete(fn) }
+}
 /** Count one native sheet as up until the returned release is called (idempotent). */
 export function holdNativeSheetUp(): () => void {
   sheetsUp++

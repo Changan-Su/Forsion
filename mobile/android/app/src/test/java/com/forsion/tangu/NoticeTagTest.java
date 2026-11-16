@@ -11,9 +11,9 @@ public class NoticeTagTest {
     @Test
     public void keyedNoticesOfOneSourceAreSeparate() {
         // 有人在等的审批(自己的键)和同一来源后来的普通消息(合成那张的键)各占一条,后者顶不掉前者
-        assertNotEquals(NoticeTag.of("plugin:biz", "business:approval:7"), NoticeTag.of("plugin:biz", "business:phone"));
+        assertNotEquals(NoticeTag.of("plugin:biz", "demo:approval:7"), NoticeTag.of("plugin:biz", "demo:merged"));
         // 同一来源、同一个键:仍是一条(后一条顶掉前一条)
-        assertEquals(NoticeTag.of("plugin:biz", "business:phone"), NoticeTag.of("plugin:biz", "business:phone"));
+        assertEquals(NoticeTag.of("plugin:biz", "demo:merged"), NoticeTag.of("plugin:biz", "demo:merged"));
         // 同一个键、不同来源:不同条
         assertNotEquals(NoticeTag.of("plugin:a", "k"), NoticeTag.of("plugin:b", "k"));
     }
@@ -24,7 +24,7 @@ public class NoticeTagTest {
         assertEquals("inbox.message", NoticeTag.of("inbox.message", ""));
         assertEquals("app", NoticeTag.of(null, null));
         assertEquals("app", NoticeTag.of("", null));
-        assertNotEquals(NoticeTag.of("plugin:biz", null), NoticeTag.of("plugin:biz", "business:phone"));
+        assertNotEquals(NoticeTag.of("plugin:biz", null), NoticeTag.of("plugin:biz", "demo:merged"));
     }
 
     @Test

@@ -169,8 +169,8 @@ check('17 提问不是审批:拿提问的 id 来「允许」不认', () => {
 })
 
 check('18 系统通知交给原生:tag = 来源,有 dedupeKey 才带 key(原生按「来源 + key」分条);「跑完了」不发', () => {
-  assert.deepEqual(noticeRequest('审批', 'rm -rf', { event: 'plugin:biz', key: 'business:approval:7' }, 'ch'),
-    { title: '审批', text: 'rm -rf', tag: 'plugin:biz', key: 'business:approval:7', channelName: 'ch' })
+  assert.deepEqual(noticeRequest('审批', 'rm -rf', { event: 'plugin:biz', key: 'demo:approval:7' }, 'ch'),
+    { title: '审批', text: 'rm -rf', tag: 'plugin:biz', key: 'demo:approval:7', channelName: 'ch' })
   assert.deepEqual(noticeRequest('t', 'x', { event: 'inbox.message' }, 'ch'), { title: 't', text: 'x', tag: 'inbox.message', channelName: 'ch' })
   for (const key of ['', undefined, 3]) assert.equal('key' in noticeRequest('t', 'x', { event: 'e', key }, 'ch'), false, String(key))
   assert.equal(noticeRequest('t', 'x', undefined, 'ch').tag, 'app')

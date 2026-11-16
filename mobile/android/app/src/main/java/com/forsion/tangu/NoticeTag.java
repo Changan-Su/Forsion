@@ -2,8 +2,8 @@ package com.forsion.tangu;
 
 /**
  * 普通系统通知(LiveIslandPlugin.notice)的 tag:同一个 tag 只留最新一条。
- * 带 key(页面那条通知的 dedupeKey)的按「来源 + key」各占一条:有人在等的审批各有自己的键,不会被同一来源后来的普通通知顶掉;
- * 共用一个键的(手机上几件合成的那一张)仍是一条。不带 key 的按来源(event)一条,和以前一样。
+ * 带 key(页面那条通知的 dedupeKey)的按「来源 + key」各占一条:有人在等的审批各有自己的键,不会被同一来源后来的普通通知顶掉。
+ * 页面只给有人在等的(urgent)卡带 key(notificationStore 的 postOs),其余不带。不带 key 的按来源(event)一条,和以前一样。
  * key 是插件给的串,太长时换成长度 + 哈希,不让一条 tag 无限长。
  */
 final class NoticeTag {

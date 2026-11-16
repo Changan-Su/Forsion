@@ -1013,7 +1013,8 @@ declare global {
       /** 收件箱:系统通知(点击回跳 Inbox Space)/ dock 角标(仅 mac 生效)/ 通知点击订阅。 */
       notifyInbox?(title: string, body: string): Promise<void>
       /** 通用系统通知(所有应用内通知同步发);web 下 undefined。meta.event = 哪类通知(NOTIFY_EVENTS 的 id / plugin:<id>),
-       *  meta.key = 这条的 dedupeKey(有才带):桌面都不看;安卓(mobile/src/liveIsland.ts)带 key 的按「来源 + key」、
+       *  meta.key = 这条的 dedupeKey(只有有人在等的 urgent 卡才带,见 notificationStore 的 postOs):桌面都不看;
+       *  安卓(mobile/src/liveIsland.ts)带 key 的按「来源 + key」、
        *  不带的按来源各只留一条,并略过由 Agent 运行状态通知报的「跑完了」。 */
       notify?(title: string, body: string, meta?: { event?: string; key?: string }): Promise<void>
       setInboxBadge?(count: number): Promise<void>

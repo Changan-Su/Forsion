@@ -329,6 +329,17 @@ describe('native sheet up mark (.mb-shell[data-native-sheet])', () => {
     again()
   })
 
+  it('watchNativeSheet: told after each change (up, and down again), not after a repeated release; stops after unwatch', () => {
+    const seen: boolean[] = []
+    const unwatch = m.watchNativeSheet(() => { seen.push(m.nativeSheetUp()) })
+    const release = m.holdNativeSheetUp()
+    release()
+    release()
+    unwatch()
+    m.holdNativeSheetUp()()
+    expect(seen).toEqual([true, false])
+  })
+
   it('wiring: the Android presenters (menus / prompts / selects, model picker) hold it around the native call; the shell binds it', async () => {
     const { readFileSync } = await import('node:fs')
     const { resolve } = await import('node:path')
