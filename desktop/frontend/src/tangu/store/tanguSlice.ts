@@ -44,7 +44,7 @@ import { defaultModelOf, newChatModelId, rememberedModelId, reloadDesktopConfig,
 import '../messages' // Tangu 自己的文案片段(核心插件化 2c)
 import { failReason, landedAnyway, type FailedSend } from './failedSend'
 import { cancelQuotaReminder } from './quotaReminders'
-import { sourcesFromMetadata } from '../../components/citeSources'
+import { sourcesFromMetadata } from '../../../../../tangu-agent/src/contracts/citeSources'
 import type { WebSource } from '../../../../../tangu-agent/src/contracts/clientTypes'
 import { agentName, agentNames } from '../../agentName'
 

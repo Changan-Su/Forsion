@@ -5,8 +5,8 @@
  *   - web_fetch 要的网址与跳转后的网址认成同一页
  */
 import { describe, expect, it } from 'vitest'
-import type { ToolEvent, UiMessage, WebSource } from '../../../../tangu-agent/src/contracts/clientTypes'
-import { cardExcerpt, citeEntryOf, citeIndexOf, citeKey, excerptAround, linkUrlsInOrder, sourcesFromMetadata } from './citeSources'
+import type { ToolEvent, UiMessage, WebSource } from './clientTypes.js'
+import { cardExcerpt, citeEntryOf, citeIndexOf, citeKey, excerptAround, linkUrlsInOrder, sourcesFromMetadata } from './citeSources.js'
 
 const A = 'https://www.hokkaido-ski.jp/niseko/beginner'
 const B = 'https://www.rusutsu-resort.com/winter/lessons'

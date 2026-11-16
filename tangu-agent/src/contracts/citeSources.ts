@@ -5,9 +5,10 @@
  * - 结构化来源(站点 / 日期 / 标题 / 摘要)在工具结果的 metadata.sources 上(引擎 tools/webSources.ts),不进模型上下文。
  * - 老会话没有这份:网址从工具结果的文字里认(web_search 的结果列表、web_fetch 的参数与 `[最终网址]` 头),编号照出,悬停卡退回素卡。
  *   web_fetch 的正文**不扫**:网页正文里的每个链接都保留成 markdown,扫了就全成了来源。
- * - 正文与右栏「来源」卡同用 citeIndexOf,两边的号对得上;悬停联动按「消息 id + 网址」认(citeHover)。
+ * - 正文与右栏「来源」卡同用 citeIndexOf,两边的号对得上;悬停联动按「消息 id + 网址」认(citeHoverKey)。
+ * - 放在契约目录:引擎不用它,但 Tangu 界面(编号表、右栏)和宿主(Markdown 链接、悬停卡)都要用,纯 TS、零依赖。
  */
-import type { ToolEvent, UiMessage, WebSource } from '../../../../tangu-agent/src/contracts/clientTypes'
+import type { ToolEvent, UiMessage, WebSource } from './clientTypes.js'
 
 /** 只认这两个工具上的来源(别的工具结果里就算带了 metadata.sources 也不当来源)。 */
 export const CITE_TOOLS: ReadonlySet<string> = new Set(['web_search', 'web_fetch'])
@@ -197,6 +198,20 @@ export function citeIndexOf(msg: Pick<UiMessage, 'id' | 'content' | 'toolEvents'
   const index = buildIndex(msg.id, events, content)
   cache.set(events, { content, msgId: msg.id, index })
   return index
+}
+
+/** 正文编号 ↔ 右栏「来源」行的悬停联动键:消息 id + 网址键(同一网址在不同回答里各是各的号)。 */
+export const citeHoverKey = (msgId: string, key: string): string => `${msgId}\u0000${key}`
+
+/** 聊天回答交给 Markdown(宿主)的来源编号:编号表 + 悬停联动的读写口。悬停状态归 Tangu 界面(views/chat2/citeHover),
+ *  宿主只经这几个函数读写,不 import 它(tangu-boundary:Tangu → 宿主、宿主 → Tangu 都不加新依赖)。
+ *  from:悬停的是正文链接还是右栏那行 —— 右栏悬停时正文链接才垫底色,正文自己悬停只亮编号。 */
+export interface CiteBinding {
+  index: CiteIndex
+  subscribe(onChange: () => void): () => void
+  hotOf(key: string): 'body' | 'rail' | null
+  enter(key: string, from: 'body' | 'rail'): void
+  leave(key: string): void
 }
 
 /** 正文链接查来源。 */

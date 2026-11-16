@@ -18,7 +18,7 @@ import { normalizeMath } from '../services/mathNormalize'
 import { parseFileHref, remarkWiki, resolveAgainst } from './wikiChat'
 import { ChatWebLink, ChatWikiLink } from './ChatWikiLink'
 import { ChatLinkWithCard } from './ChatLinkCard'
-import { citeEntryOf, type CiteIndex } from './citeSources'
+import { citeEntryOf, type CiteBinding } from '../../../../tangu-agent/src/contracts/citeSources'
 import { ChatEmbed, type EmbedCtx } from './ChatEmbed'
 import { whenNear } from '../lib/nearViewport'
 import { installCopyTex } from './selectionBar/selectionMarkdown'
@@ -30,8 +30,8 @@ import { markdownSnapshot, remarkHeadingAnchors, type MarkdownSnapshot } from '.
 if (typeof document !== 'undefined') installCopyTex()
 
 const LinkCardContext = React.createContext(false)
-/** 这条回答的来源编号表(citeSources.citeIndexOf):指向这一轮搜索 / 读过的网页的链接补编号、出来源卡。只有聊天回答给。 */
-const CiteContext = React.createContext<CiteIndex | null>(null)
+/** 这条回答的来源编号(编号表 + 悬停联动口,契约 citeSources.CiteBinding):指向这一轮搜索 / 读过的网页的链接补编号、出来源卡。只有聊天回答给。 */
+const CiteContext = React.createContext<CiteBinding | null>(null)
 
 /** 代码块细表头(语言 + 复制,走查续六 6.2 A)。⚠️ 缺省关、只由聊天回答开:别处的代码块各有自己的底色,表头的样式只写在 .t2-content 里。 */
 const CodeHeadContext = React.createContext(false)
@@ -63,9 +63,9 @@ const WikiAnchor = ({ href, children, node: _node, ...rest }: any) => {
     try { return <ChatWikiLink inner={decodeURIComponent(href.slice(6))} /> } catch { return <span>{children}</span> }
   }
   if (typeof href === 'string' && /^https?:\/\//i.test(href)) {
-    const entry = cards ? citeEntryOf(cites, href) : undefined
+    const entry = cards ? citeEntryOf(cites?.index, href) : undefined
     return cards
-      ? <ChatLinkWithCard href={href} {...rest} cite={entry && cites ? { msgId: cites.msgId, entry } : undefined}>{children}</ChatLinkWithCard>
+      ? <ChatLinkWithCard href={href} {...rest} cite={entry && cites ? { entry, binding: cites } : undefined}>{children}</ChatLinkWithCard>
       : <ChatWebLink href={href} {...rest}>{children}</ChatWebLink>
   }
   // 指向文件的普通链接(`src/a.ts:42`)→ 走 [[路径#L行]] 那条文件引用:按会话工作目录拼绝对路径,点开跳到那一行(D25)。
@@ -283,8 +283,8 @@ type MarkdownProps = {
   /** Opt-in local embeds; never enabled for third-party README content. */
   embeds?: EmbedCtx
   linkCards?: boolean
-  /** 来源编号表(只在 linkCards 开着时生效):聊天回答传 citeIndexOf(msg)。 */
-  cites?: CiteIndex | null
+  /** 来源编号(只在 linkCards 开着时生效):聊天回答传编号表 + 悬停联动口。 */
+  cites?: CiteBinding | null
   codeHead?: boolean
   /** Preserve single line breaks (Amadeus notes). */
   breaks?: boolean

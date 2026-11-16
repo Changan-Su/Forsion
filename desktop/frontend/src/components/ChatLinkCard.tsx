@@ -10,15 +10,16 @@
  *   卡写站点 · 日期 / 标题 / 摘要(被引那句垫底色)/「来源 n · 点开滚到这句」。老会话没有结构化来源 → 编号照出,卡退回素卡。
  *   卡是 LCL 悬停卡(pointer-events: none),本身不能点;点链接照旧滚到那句。
  */
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { FileText, Globe } from 'lucide-react'
 import { useHoverCard } from '@lcl/components'
 import { registerMessages, useI18n } from '../i18n'
 import { getLinkPreview, type LinkPreview } from '../services/backendService'
 import { homeTarget } from '../services/engine/targets'
 import { ChatWebLink, textOf } from './ChatWikiLink'
-import { cardExcerpt, type CiteEntry } from './citeSources'
-import { citeHoverKey, enterCite, leaveCite, useCiteHover } from './citeHover'
+import { cardExcerpt, citeHoverKey, type CiteBinding, type CiteEntry } from '../../../../tangu-agent/src/contracts/citeSources'
+
+const noSubscribe = (): (() => void) => () => {}
 import './chatLinkCard.css'
 
 registerMessages({
@@ -125,7 +126,7 @@ function LinkCard({ href, label, preview, cite }: { href: string; label: string;
 
 /** 带预览卡的 ChatWebLink(点击行为不变)。只在聊天回答里用(Markdown 的 linkCards 开关);市场 README、收件箱这些第三方文本不出卡。
  *  cite = 这条链接指向这一轮的来源:↗ 换成编号(data-cite-n,样式表用 ::after 画,复制与引语都碰不到),悬停与右栏那行联动。 */
-export function ChatLinkWithCard({ href, children, cite, ...rest }: { href: string; children?: ReactNode; cite?: { msgId: string; entry: CiteEntry } } & Record<string, unknown>) {
+export function ChatLinkWithCard({ href, children, cite, ...rest }: { href: string; children?: ReactNode; cite?: { entry: CiteEntry; binding: CiteBinding } } & Record<string, unknown>) {
   // 拿到的数据带着它的地址:流式输出时同一个位置的链接会变(#1 → #15),旧数据不能顶着新地址出现
   const [got, setGot] = useState<{ href: string; preview: LinkPreview } | null>(null)
   const preview = got?.href === href ? got.preview : null
@@ -142,12 +143,13 @@ export function ChatLinkWithCard({ href, children, cite, ...rest }: { href: stri
     void getLinkPreview(homeTarget(), href).then((v) => { if (live && v) setGot({ href, preview: v }) })
     return () => { live = false }
   }, [open, preview, href])
-  const hk = cite ? citeHoverKey(cite.msgId, cite.entry.key) : null
-  // 右栏悬停那行 → 正文链接垫底色(rail);自己被悬停 → 只亮编号(body)
-  const hot = useCiteHover((s) => (hk != null && s.key === hk ? s.from : null))
+  const binding = cite?.binding
+  const hk = cite && binding ? citeHoverKey(binding.index.msgId, cite.entry.key) : null
+  // 右栏悬停那行 → 正文链接垫底色(rail);自己被悬停 → 只亮编号(body)。不管有没有来源都调同一个 hook(流式时一条链接可能后来才成来源)
+  const hot = useSyncExternalStore(binding?.subscribe ?? noSubscribe, () => (binding && hk ? binding.hotOf(hk) : null))
   const trig = card.triggerProps
-  const triggerProps = hk
-    ? { ...trig, onMouseEnter: (e: { currentTarget: HTMLElement }) => { trig.onMouseEnter(e); enterCite(hk, 'body') }, onMouseLeave: (e: { currentTarget: HTMLElement }) => { trig.onMouseLeave(e); leaveCite(hk) } }
+  const triggerProps = binding && hk
+    ? { ...trig, onMouseEnter: (e: { currentTarget: HTMLElement }) => { trig.onMouseEnter(e); binding.enter(hk, 'body') }, onMouseLeave: (e: { currentTarget: HTMLElement }) => { trig.onMouseLeave(e); binding.leave(hk) } }
     : trig
   const n = cite?.entry.n
   return (

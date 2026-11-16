@@ -5,8 +5,7 @@
  * 渲染在 TaskSummary.tsx。
  */
 import type { DisplayFile, TodoItem, ToolEvent, UiMessage } from '../../../../../tangu-agent/src/contracts/clientTypes'
-import { citeEntryOf, citeIndexOf, type CiteIndex } from '../../components/citeSources'
-import { citeHoverKey } from '../../components/citeHover'
+import { citeEntryOf, citeHoverKey, citeIndexOf, type CiteIndex } from '../../../../../tangu-agent/src/contracts/citeSources'
 
 /** 一条「用过的来源」:agent 实际读到/搜到/取到的东西。用户给的附件不算(§7.4 两者不能混)。 */
 export interface TaskSource {

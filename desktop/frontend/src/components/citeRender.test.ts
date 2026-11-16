@@ -7,9 +7,9 @@ import React, { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { describe, expect, it } from 'vitest'
 import { Markdown } from './Markdown'
-import { citeIndexOf } from './citeSources'
+import { citeIndexOf } from '../../../../tangu-agent/src/contracts/citeSources'
 import { selectionMarkdown } from './selectionBar/selectionMarkdown'
-import { useCiteHover } from './citeHover'
+import { CITE_HOVER, useCiteHover } from '../views/chat2/citeHover'
 import type { ToolEvent } from '../../../../tangu-agent/src/contracts/clientTypes'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -26,7 +26,8 @@ const content = `1. [山脚有一条缓坡](${A})\n2. [教练全季可约](${B})
 async function render(withCites: boolean) {
   const host = document.createElement('div'); host.className = 't2-content'; document.body.appendChild(host)
   const root = createRoot(host)
-  const cites = withCites ? citeIndexOf({ id: 'a1', content, toolEvents: events }) : null
+  const index = withCites ? citeIndexOf({ id: 'a1', content, toolEvents: events }) : null
+  const cites = index ? { index, ...CITE_HOVER } : null
   await act(async () => { root.render(React.createElement(Markdown, { content, linkCards: true, cites })) })
   return { host, root }
 }
