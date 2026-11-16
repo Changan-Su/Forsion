@@ -6,9 +6,10 @@
 //   D. 选区盖住公式时字体不跳;离开公式后钩子类全部收走。
 //   E. 行内公式编辑中的预览是浮在这一行上方的气泡(读浮层 token,▶ 标光标,放不下翻到下方,不推挤正文);块公式预览照旧在源码下方。
 //   F. 选区整个落在一个公式两头的 `$` 之间(真按键 Shift+→ 选中占位):不弹格式浮条;选区跨出公式、连 `$` 选中整个公式照旧弹。
+//   H. 没有 .am-app 祖先的宿主(插件 mountRecord({ body: true }) 的正文):浮层照样是浮层、有表面,源码照样等宽上色,不推挤卡片。
 //   G. 同上的选区:预览照常(行内浮层 ▶ 标在选区末端 —— 同 LaTeX Suite;块公式在源码下方);选区跨出公式照旧不出预览。
 // 用法:npm run check:mathsource(自起 vite;HARNESS_URL=… 指到自己起的端口)。可选 LATEX_PLUGIN_DIR=<插件目录> 再验真插件的
-//      token 色叠在宿主上时插件赢。只跑几部分:--only=space,look,float,select。
+//      token 色叠在宿主上时插件赢。MATH_SHOTS=<目录> 顺手存一张无 .am-app 宿主的截图。只跑几部分:--only=space,look,float,select,bare。
 const fs = require('fs'), os = require('os'), path = require('path')
 const { chromium } = require('playwright-core')
 const URL = process.env.HARNESS_URL || 'http://localhost:5173/harness.html'
@@ -321,6 +322,54 @@ async function partFloat(browser, dark) {
   await p.close()
 }
 
+/** H:没有 .am-app 祖先的宿主 —— 插件 ctx.ui.mountRecord({ body: true }) 的正文就是这样(同样的 DOM 形状:
+ *  data-host-mount > .plugin-record > section.plugin-record-body > PlainMarkdownEditor)。 */
+async function partBare(browser) {
+  const p = await open(browser, '占位。\n')
+  await p.evaluate(async () => {
+    const urls = performance.getEntriesByType('resource').map((e) => e.name)
+    const React = (await import(urls.find((u) => /\/deps\/react\.js/.test(u)))).default
+    const rdc = await import(urls.find((u) => /\/deps\/react-dom_client\.js/.test(u)))
+    const createRoot = rdc.createRoot || rdc.default.createRoot
+    const { PlainMarkdownEditor } = await import('/src/amadeus/blocks/markdown/MarkdownBlock.tsx')
+    await import('/src/amadeus/plugins/recordSurface.css')
+    const card = document.createElement('div')
+    card.id = 'bare-card'
+    card.style.cssText = 'position:fixed;left:40px;top:260px;width:420px;padding:8px;background:#fff;border:1px solid #888;z-index:9000'
+    card.innerHTML = '<div data-host-mount style="display:contents"><div class="plugin-record"><div>字段行</div><section class="plugin-record-body"></section></div></div><div class="foot">卡片底部</div>'
+    document.body.appendChild(card)
+    createRoot(card.querySelector('section')).render(React.createElement(PlainMarkdownEditor, { initial: '备注 $x^2+y$ 尾巴', onChange: () => {}, immediate: true }))
+  })
+  await p.waitForSelector('#bare-card .math-rendered', { timeout: 15000 })
+  await settle(p, 400)
+  const cardH = () => p.evaluate(() => document.getElementById('bare-card').getBoundingClientRect().height)
+  const before = await cardH()
+  check('H0 卡片不在 .am-app 下(台架形状对)', await p.evaluate(() => !document.getElementById('bare-card').closest('.am-app')))
+  const k = await p.locator('#bare-card .math-rendered').boundingBox()
+  await p.mouse.click(k.x + k.width / 2, k.y + k.height / 2)
+  await settle(p, 200)
+  await p.keyboard.press('ArrowRight')
+  await settle(p, 400)
+  const g = await p.evaluate(() => {
+    const card = document.getElementById('bare-card')
+    const el = card.querySelector('.math-preview--float'), pm = card.querySelector('.ProseMirror')
+    const dollar = card.querySelector('.math-source-dollar')
+    if (!el || !dollar) return { float: !!el, dollar: !!dollar }
+    const cs = getComputedStyle(el), r = el.getBoundingClientRect(), d = dollar.getBoundingClientRect(), ds = getComputedStyle(dollar)
+    return { float: true, inContent: pm.contains(el), position: cs.position, bg: cs.backgroundColor, border: parseFloat(cs.borderTopWidth),
+      top: r.top, bottom: r.bottom, lineTop: d.top, lineBottom: d.bottom, ff: ds.fontFamily, fst: ds.fontStyle, color: ds.color,
+      text: getComputedStyle(card.querySelector('.ProseMirror p')).color }
+  })
+  check('H1 没有 .am-app 也是浮层:绝对定位、不进正文', g.float && g.position === 'absolute' && !g.inContent, g)
+  check('H2 没有 .am-app 也有浮层表面(底色、描边)', g.float && g.bg !== 'rgba(0, 0, 0, 0)' && g.border >= 1, g)
+  check('H3 浮层不压这一行源码', g.float && (g.bottom <= g.lineTop + 0.5 || g.top >= g.lineBottom - 0.5), g)
+  const after = await cardH()
+  check('H4 不推挤卡片:出预览前后卡片高度不变', Math.abs(after - before) < 0.5, { before, after })
+  check('H5 没有 .am-app 源码照样等宽斜体、$ 上色', !!g.ff && /mono/i.test(g.ff) && g.fst === 'italic' && g.color !== g.text, g)
+  if (process.env.MATH_SHOTS) { fs.mkdirSync(process.env.MATH_SHOTS, { recursive: true }); await p.screenshot({ path: path.join(process.env.MATH_SHOTS, 'bare-host.png'), clip: { x: 20, y: 200, width: 480, height: 200 } }) }
+  await p.close()
+}
+
 async function partSelect(browser) {
   const p = await open(browser, '前一行。\n\n行内 $x^2 + \\sqrt{y}$ 结束。\n\n$$ \\sum_{i=1}^{N} $$\n\n下一段。\n')
   const bar = () => p.locator(TOOLBAR).count()
@@ -371,6 +420,7 @@ async function main() {
     if (want('look')) { await partLook(browser, false); await partLook(browser, true) }
     if (want('float')) { await partFloat(browser, false); await partFloat(browser, true) }
     if (want('select')) await partSelect(browser)
+    if (want('bare')) await partBare(browser)
   } finally {
     await browser.close()
   }

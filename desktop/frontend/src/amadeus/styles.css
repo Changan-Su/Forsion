@@ -2989,8 +2989,10 @@ body.amx-marquee-active * {
 .am-app .katex .eqn-num { display: none; }
 
 /* 行内公式编辑中的预览:浮在这一行上方的小气泡(照 Obsidian LaTeX Suite;放不下翻到下方)。由 mathLivePreview.ts 的
-   InlineMathFloat 挂在编辑器 DOM 外面、现量现摆,不进正文、不推挤正文;表面读浮层 token(DESIGN §3「浮层表面」),不抄 Obsidian 的色值。 */
-.am-app .math-preview--float {
+   InlineMathFloat 挂在编辑器 DOM 外面、现量现摆,不进正文、不推挤正文;表面读浮层 token(DESIGN §3「浮层表面」),不抄 Obsidian 的色值。
+   ⚠️ 不加 .am-app 作用域:同一个编辑器也挂在没有 .am-app 祖先的宿主里(插件 mountRecord({ body: true }) 的正文),
+   加了那里的气泡就成了没样式、排在文档流里的一块。用到的 token 都在 :root(base.css)。 */
+.math-preview--float {
   position: absolute;
   left: 0;
   top: 0;
@@ -3009,7 +3011,7 @@ body.amx-marquee-active * {
   pointer-events: none;
   user-select: none;
 }
-.am-app .math-preview--float .math-preview-inner { display: block; }
+.math-preview--float .math-preview-inner { display: block; }
 .math-preview--block { display: block; }
 .math-preview--block .math-preview-inner { display: block; text-align: center; margin: 4px 0 2px; opacity: 0.9; }
 .math-preview--block .katex-display { margin: 0; text-align: center; }
@@ -4630,15 +4632,16 @@ body.amx-marquee-active * {
    .math-source = 整段源码(含 $)的样式钩子,插件可依赖;PM 把它并进每一个 span,插件写 `.math-source.xxx`。
    观感照 Obsidian:等宽、斜体、行内代码字号(同上面 .ProseMirror code 的 0.88em),不加字距、不加内边距。
    token 颜色只读 base.css 的 --math-src-*;选择器整个包进 :where()(权重 0),插件给括号 / $ / 占位
-   加的类一条普通类选择器就能盖过。.math-source-delimiter 是旧总类,不再上色(同 span 上零权重会按源码顺序打架)。 */
-.am-app .ProseMirror .math-source {
+   加的类一条普通类选择器就能盖过。.math-source-delimiter 是旧总类,不再上色(同 span 上零权重会按源码顺序打架)。
+   不加 .am-app 作用域(理由同上面的 .math-preview--float):没有 .am-app 的宿主里公式源码也得是这个样子。 */
+.ProseMirror .math-source {
   font-family: var(--font-mono);
   font-style: italic;
   font-size: 0.88em;
   letter-spacing: normal;
 }
-:where(.am-app .math-source-dollar) { color: var(--math-src-dollar); }
-:where(.am-app .math-source-command, .am-app .math-source-script) { color: var(--math-src-command); }
-:where(.am-app .math-source-letter) { color: var(--math-src-letter); }
-:where(.am-app .math-source-number) { color: var(--math-src-number); }
-:where(.am-app .math-source-bracket) { color: var(--math-src-bracket); }
+:where(.math-source-dollar) { color: var(--math-src-dollar); }
+:where(.math-source-command, .math-source-script) { color: var(--math-src-command); }
+:where(.math-source-letter) { color: var(--math-src-letter); }
+:where(.math-source-number) { color: var(--math-src-number); }
+:where(.math-source-bracket) { color: var(--math-src-bracket); }
