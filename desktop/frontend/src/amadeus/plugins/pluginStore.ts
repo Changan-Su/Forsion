@@ -60,6 +60,7 @@ import { isHostPath } from '@amadeus-shared/pdfLink'
 import { claimHostMount, createBlockSurface, mountHostReact } from './blockSurface'
 import { addEditorExtension, clearEditorExtensions } from './editorExtensions'
 import { registerNoteRenderer, beginNoteRendererReload, settleNoteRendererReload, clearNoteRendererReload } from './noteRenderers'
+import { registerNoteBirth, registerTemplateProcessor } from './templateHooks'
 import { uiAgentSettings } from './agentSettings'
 import { registerPluginSeries, track, unregisterPluginAchievements, useAchievements } from '../../achievements/store'
 import { setInboxCard, type PluginInboxCard } from './inboxCards'
@@ -1515,6 +1516,8 @@ export const usePluginStore = create<PluginState>((set, get) => {
     // registerCompanion 不再挂新伴随面、旧 handle 变哑。语言 / 模型 / 账号订阅、仪表盘 / 原生表 / 宿主 UI 挂载、
     // 字体、伴随面……插件自己能撤,但**最终责任人是宿主**:全记在 scope 上,关账统一撤(codex 评审 2026-08-14 起的纪律)。
     const ctxAlive = (): boolean => scope.alive()
+    /** 模板钩子提示里点名用的插件显示名(当前语言)。 */
+    const hookPluginName = (): string => { const p = get().plugins.find((x) => x.id === pluginId); return p ? pluginDisplayName(p, currentLocale()) : pluginId }
     // workspace.open 的插件这一半(第三期):只开自己的视图(类型名宿主拼命名空间)、层级白名单在 pluginLayer。
     const ownView = (viewId: string): ViewContribution | undefined => get().views.find((item) => item.pluginId === pluginId && item.item.id === viewId)?.item
     const openOwn = (viewId: string, params: Record<string, unknown> | undefined, opts: OpenOptions): Promise<OpenResult> =>
@@ -2037,6 +2040,15 @@ export const usePluginStore = create<PluginState>((set, get) => {
     },
     registerFileCreator: (def) =>
       set((s) => ({ fileCreators: [...s.fileCreators, { pluginId, item: def }] })),
+    // 接进宿主模板流程(2026-11-16+,见 templateHooks.ts):登记进模块级表,停用 / 重载经 scope 摘掉。
+    registerTemplateProcessor: (def) => {
+      if (!ctxAlive()) return () => {}
+      return scope.own('templateProcessor', registerTemplateProcessor(pluginId, hookPluginName, def), def.id)
+    },
+    registerNoteBirth: (def) => {
+      if (!ctxAlive()) return () => {}
+      return scope.own('noteBirth', registerNoteBirth(pluginId, hookPluginName, def), def.id)
+    },
     // 只收形状对的;认不认领(工具是不是本插件引擎半身注册的)在画的时候按引擎报的名下工具现判(toolResultCards.claimToolCard)。
     registerToolResultRenderer: (def) => {
       if (!ctxAlive()) return

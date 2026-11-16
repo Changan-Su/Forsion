@@ -79,7 +79,7 @@ import { emptyDb, emptyNoteView, serializeDb } from '@amadeus-shared/db/schema'
 import { BLANK_SCENE_JSON, blankDrawing } from '@amadeus-shared/excalidraw/format'
 import { amadeus } from '../../api'
 import { getAttachmentPrefs } from '../../lib/attachments'
-import { usePageStore, useScopedPageStore } from '../../store/pageStore'
+import { birthNavGuard, usePageStore, useScopedPageStore } from '../../store/pageStore'
 import { registerBlockType, type BlockEditorProps, type FocusPlace } from '../registry'
 import { usePluginStore } from '../../plugins/pluginStore'
 import {
@@ -2115,11 +2115,12 @@ export function MarkdownBlock({
       void (async () => {
         try {
           const st = ps.getState()
+          const stay = birthNavGuard() // 出生可能先问插件、等很久:等完用户已去了别处就不跳(链接照插)
           const newPath = await st.createChildNote(pagePath, translate('mdblock.default.childNote'))
           const base = newPath.split('/').pop()!.replace(/\.md$/i, '')
           const md = `[[${base}]]`
           insertAsyncResult(md, emptyBlock) // 见其注释:await 期间可能已换页/删块/用户已输入
-          void st.loadPage(newPath) // loadPage 先 flushSave → 父笔记的 [[链接]]+children 一并落盘
+          if (stay()) void st.loadPage(newPath) // loadPage 先 flushSave → 父笔记的 [[链接]]+children 一并落盘
         } catch { /* 创建失败静默跳过 */ }
       })()
       return

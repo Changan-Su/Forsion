@@ -79,6 +79,7 @@
     "e2e:activewindow": "node scripts/active-window.e2e.cjs",
     "check:plugindata": "node scripts/plugin-data.e2e.cjs",
     "check:pluginfileops": "node scripts/plugin-fileops.e2e.cjs",
+    "check:pluginbirth": "node scripts/plugin-birth-race.check.cjs",
     "e2e:recall": "node scripts/recall-rewind.e2e.cjs",
     "e2e:chatevents": "node scripts/chat-events.e2e.cjs",
     "check:agentstream": "node scripts/agent-stream-performance.check.cjs",

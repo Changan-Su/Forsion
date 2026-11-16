@@ -19,7 +19,7 @@ import {
 } from 'lucide-react'
 import { useApp } from './stores/appStore'
 import { useVisualTheme as useTheme } from './stores/themeStore'
-import { activePageScope, claimTitleFocus, disposePageScope, MAIN_SCOPE, onNotePathGone, pageStoreFor, PageScopeCtx, setActivePageScope, useActivePageScope, usePageScope, usePageStore, useScopedPageStore } from '@amadeus/store/pageStore'
+import { activePageScope, birthNavGuard, claimTitleFocus, disposePageScope, MAIN_SCOPE, onNotePathGone, pageStoreFor, PageScopeCtx, setActivePageScope, useActivePageScope, usePageScope, usePageStore, useScopedPageStore } from '@amadeus/store/pageStore'
 import { retireUnifiedPath, insertFilesForPath, pathHit, unifiedInsertMarkdown } from '@amadeus/unified/lifecycle'
 import { treeRefBlocks } from '@amadeus/unified/treeRefDrop'
 import { ReadingModeButton, type ReadingModeControl } from '@amadeus/unified/ReadingSurface'
@@ -1450,9 +1450,10 @@ export function AmadeusPagesView() {
 
   /** 在笔记的 .fd 里建子笔记并打开 —— 行内「+」与右键菜单「新建子笔记」的同一落点。 */
   const newChild = (p: string): void => {
+    const stay = birthNavGuard() // 出生可能先问插件、等很久:等完用户已去了别处就不跳
     void ps().createChildNote(p, translate('amadeus.default.note')).then((np) => {
       setExpanded((prev) => new Set([...prev, ...prefixesOf(fdDirOf(p))]))
-      void openNote(np) // 勿直调 loadPage:那装的是活动 scope,站在主页/聊天上建子笔记同样不跳(见 createPageInFolder 注)
+      if (stay()) void openNote(np) // 勿直调 loadPage:那装的是活动 scope,站在主页/聊天上建子笔记同样不跳(见 createPageInFolder 注)
     }, () => { /* 没建成:birthNoteFile 已提示 */ })
   }
 
