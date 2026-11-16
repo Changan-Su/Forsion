@@ -330,19 +330,22 @@ export function emergeDroplet(source: HTMLElement, panel: HTMLElement, opts: Dro
     layer.style.display = 'none'
     if (edge) panel.animate([{ borderColor: 'transparent' }, {}], { duration: ms('--duration-fast', 150), easing: calm })
   }
-  /** 液体那段换曲线(倒放 ↔ 掉头):播放头按「长到几成」换算,源的鼓起改速率跟液体同时到头。 */
+  /** 液体那段换曲线(倒放 ↔ 掉头):播放头按「长到几成」换算(形状不跳)。源的鼓起是另一套关键帧,不跟着换算播放头
+   *  (直接对齐会让它从 0.5 一下鼓到 1.1,Codex 评审 P2):保留它自己的播放头,只改速率,让它和液体同一刻到头。 */
   const setEase = (next: string, rate: number): number => {
     const t = Math.min(D, Number(grow.currentTime ?? D))
-    if (next === ease) { swell.playbackRate = rate; return t }
-    const t2 = remapPlayhead(t, D, ease, next)
-    ease = next
-    const z = zoomOf(layer)
-    ;(grow.effect as KeyframeEffect).setKeyframes(frames(z))
-    grow.currentTime = t2
-    if (clip) { (clip.effect as KeyframeEffect).setKeyframes(frames(pz)); clip.currentTime = t2 }
-    // 倒放:鼓起按原时间轴走、和液体同一刻到头(t / t2 倍速);掉头:鼓起对齐液体的新播放头
-    if (rate < 0) swell.playbackRate = t2 > 0 ? rate * (t / t2) : rate
-    else { swell.currentTime = t2; swell.playbackRate = rate }
+    const t2 = next === ease ? t : remapPlayhead(t, D, ease, next)
+    if (next !== ease) {
+      ease = next
+      const z = zoomOf(layer)
+      ;(grow.effect as KeyframeEffect).setKeyframes(frames(z))
+      grow.currentTime = t2
+      if (clip) { (clip.effect as KeyframeEffect).setKeyframes(frames(pz)); clip.currentTime = t2 }
+    }
+    const ts = Math.min(D, Math.max(0, Number(swell.currentTime ?? t)))
+    // 液体还要走多久 = 剩下的路 / |rate|;鼓起按同样的时长走完自己剩下的路
+    const liquidLeft = rate < 0 ? t2 : D - t2, swellLeft = rate < 0 ? ts : D - ts
+    swell.playbackRate = liquidLeft > 1 && swellLeft > 0 ? rate * (swellLeft / liquidLeft) : rate
     return t2
   }
   /** 接手的计时器:液体走到 0.9D 那一刻接手;t = 此刻在时间轴上的位置(掉头时从中途接着计)。 */
@@ -427,7 +430,8 @@ export function emergeDroplet(source: HTMLElement, panel: HTMLElement, opts: Dro
       outs = []
       shows = kids().map((k, i) => k.animate([{ opacity: from[i] ?? 0 }, { opacity: 1 }], { delay: Math.max(0, D * 0.22 - t), duration: D * 0.3, easing: surface, fill: 'backwards' }))
       // 只改速率、不 play():刚调完 retract() 的同一帧里它们还停在终点,play() 遇到「正向 + 在终点」会倒回 0 重放(Codex 评审 P3)
-      for (const a of [swell, grow, clip]) { a.playbackRate = 1; if (a.playState === 'paused') a.play() }
+      for (const a of [grow, clip]) { a.playbackRate = 1; if (a.playState === 'paused') a.play() }
+      if (swell.playState === 'paused') swell.play() // 速率 setEase 已按剩下的路配好
       handoff = handoffAt(t)
       return true
     },

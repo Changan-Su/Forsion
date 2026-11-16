@@ -2283,7 +2283,7 @@ export const Composer2: React.FC<{
               onAddReference={addContentReference}
             />
             {voiceFlow.shown ? (
-              <VoiceRecordingBar analyser={voice.analyser} recording={voice.recording} busy={voice.busy} onStop={voice.toggle} stopTitle={voice.preview ? t('input.micStopRecording') : undefined} t={t} />
+              <VoiceRecordingBar analyser={voice.analyser} recording={voice.recording} busy={voice.busy} onStop={() => { if (voiceActive) voice.toggle() }} stopTitle={voice.preview ? t('input.micStopRecording') : undefined} t={t} />
             ) : (<>
             {showModeChip && !modeMerged && (
               <span ref={modeAnchorRef} className={`mode-pill-wrap t2c-capsule-peer${capsule.expanded('mode') ? ' is-open' : ''}${openMenu === 'mode' ? ' t2c-capsule-held' : ''}`} data-cmenu>

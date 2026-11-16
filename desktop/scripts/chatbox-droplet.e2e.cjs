@@ -6,14 +6,15 @@
  *   · 窄 Chat View(480–600):开着时 ＋ 原地淡出、位置留着,其余让位的按钮收完才回来;
  *   · 点了一行 = 直接收(80ms),倒放到一半又点同一颗 = 掉头停在打开;
  *   · 平移主题:胶囊照旧跟菜单进场那一对(180ms)。
- *  负对照:拿 main 的构建跑,「胶囊左缘不动」「让位的按钮收完才回来」「倒放」几条必须红。
+ *  负对照:CBD_ROOT=<main 检出的 desktop>(要有 out/ 构建)跑,「流出 / 倒放」「胶囊左缘不动」「让位的按钮收完才回来」几条必须红。
  *  宽度:900 = 宽排;640 = 窄 Chat View(底排 480–600,排他展开);420 = compact(菜单是带标题的浮层,胶囊不撑宽)。
  *  用法:npm run build && node scripts/chatbox-droplet.e2e.cjs [--only=mode,add,model,ctx] [--widths=900,640,420] [--shots=<目录>] */
 const fs = require('fs'), os = require('os'), path = require('path')
 const electron = require('./lib/launch-electron.cjs')
 const { startStubEngine } = require('./lib/stub-engine.cjs')
 const { skipOnboarding } = require('./lib/skip-onboarding.cjs')
-const ROOT = path.resolve(__dirname, '..')
+// CBD_ROOT = 被测检出的 desktop 目录(负对照:指向没有这次改动的构建)
+const ROOT = process.env.CBD_ROOT || path.resolve(__dirname, '..')
 const arg = (k, d) => { const a = process.argv.find((x) => x.startsWith(`--${k}=`)); return a ? a.slice(k.length + 3).split(',') : d }
 const ONLY = arg('only', ['mode', 'add', 'model', 'ctx'])
 const WIDTHS = arg('widths', ['900', '640', '420']).map(Number)
@@ -54,7 +55,8 @@ async function film(win, k, ms, act) {
     window.__film = (async () => { const out = [frame()]; while (performance.now() - t0 < ms) { await raf(); out.push(frame()) } return out })()
   }, { k, ms, TRIG, PANEL })
   const view = win.locator('.t2-chat-view').first()
-  if (act === 'click') await win.locator(TRIG[k]).first().click({ noWaitAfter: true })
+  // force:不等「元素停稳」—— 胶囊正在缩 / 撑时 Playwright 会一直等到动画结束才点,倒放中途再点就测成了收完再开
+  if (act === 'click') await win.locator(TRIG[k]).first().click({ noWaitAfter: true, force: true })
   else if (act === 'esc') await win.keyboard.press('Escape')
   else if (act === 'outside') { const b = await view.boundingBox(); await win.mouse.click(b.x + b.width / 2, b.y + 60) }
   else if (act === 'pick') {
@@ -75,7 +77,7 @@ async function film(win, k, ms, act) {
   }
   let app
   try {
-    app = await electron.launch({ args: [`--user-data-dir=${userdata}`, '--lang=zh-CN', ROOT], cwd: ROOT,
+    app = await electron.launch({ args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', `--user-data-dir=${userdata}`, '--lang=zh-CN', ROOT], cwd: ROOT,
       env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: stub.url, TANGU_HARNESS_QUIET: '1' } })
     const win = await app.firstWindow()
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1200, 900))
@@ -109,17 +111,20 @@ async function film(win, k, ms, act) {
           const ws = open.filter((f) => f.pill).map((f) => Math.round(f.pill.w))
           const full = open.findIndex((f) => f.pill && f.pill.w >= 223)
           // 长模型名的胶囊本来就有 200+px,到 224 只差十几 px,曲线尾巴很早就到 —— 只要求不是菜单进场那 180ms 的样子一下到位
-          check(`${tag} ${k}: 胶囊跟液体同一只表撑开(${open[full]?.t}ms 到 224)`, full > 0 && open[full].t >= D * 0.3, ws)
+          const small = 224 - ws[0] < 40 // 差得太少(长模型名),看不出是哪只表,只要求到位
+          check(`${tag} ${k}: 胶囊跟液体同一只表撑开(${open[full]?.t}ms 到 224${small ? ',差太少不卡时长' : ''})`, full > 0 && (small || open[full].t >= D * 0.3), ws)
           const edges = open.filter((f) => f.pill).map((f) => Math.round(f.pill[growEdge]))
           check(`${tag} ${k}: 开时胶囊${growEdge === 'l' ? '左' : '右'}缘不动`, Math.max(...edges) - Math.min(...edges) <= 1, edges)
         }
         if (SHOTS) await win.screenshot({ path: path.join(SHOTS, `${width}-${k}-open.png`) })
         // ② 再点同一颗 = 倒放
-        const close = await film(win, k, D, 'click')
+        // 采样窗留足:Playwright 的点击在高负载下要晚一百多毫秒才落下,时长都从倒放开始那一帧算
+        const close = await film(win, k, D + 300, 'click')
         const pour = close.filter((f) => f.pouring && f.layers === 1)
         check(`${tag} ${k}: 再点 = 倒放(液体重新出现)`, pour.length >= 3, close.map((f) => [f.t, f.pouring, f.layers]))
+        const t0 = close.find((f) => f.pouring)?.t ?? 0
         const gone = close.findIndex((f) => !f.mounted)
-        check(`${tag} ${k}: 倒放完才卸(${gone >= 0 ? close[gone].t : '-'}ms)`, gone > 0 && close[gone].t >= D * 0.6, close.map((f) => [f.t, f.mounted]))
+        check(`${tag} ${k}: 倒放完才卸(${gone >= 0 ? close[gone].t - t0 : '-'}ms)`, gone > 0 && close[gone].t - t0 >= D * 0.55, close.map((f) => [f.t, f.mounted]))
         if (widens) {
           const ws = close.filter((f) => f.pill).map((f) => f.pill.w)
           check(`${tag} ${k}: 收时胶囊只缩不胀`, ws.every((w, i) => i === 0 || w <= ws[i - 1] + 0.5), ws.map(Math.round))
@@ -145,16 +150,20 @@ async function film(win, k, ms, act) {
           }
         }
         await settle()
-        // ③ Esc 也是倒放
+        // ③ Esc 也是倒放(先再开一次:收完再开同一颗,胶囊照样撑宽 —— Codex 评审 P1,收完漏清 closing)
         await view.locator(TRIG[k]).click(); await settle()
-        const esc = await film(win, k, D, 'esc')
+        if (widens) {
+          const w = await view.locator(TRIG[k]).evaluate((e) => e.getBoundingClientRect().width)
+          check(`${tag} ${k}: 收完再开同一颗,胶囊照样撑宽`, w >= 223, w)
+        }
+        const esc = await film(win, k, D + 300, 'esc')
         check(`${tag} ${k}: Esc = 倒放`, esc.some((f) => f.pouring && f.layers === 1) && !esc.at(-1).mounted, esc.map((f) => [f.t, f.pouring, f.mounted]))
         await settle()
         // ④ 倒放到一半又点同一颗 = 掉头停在打开
         await view.locator(TRIG[k]).click(); await settle()
         await film(win, k, D * 0.7 * 0.4, 'click')
         const re = await film(win, k, D + 100, 'click')
-        check(`${tag} ${k}: 倒放到一半又点 = 掉头停在打开`, re.every((f) => f.mounted) && re.at(-1).panel && !re.at(-1).pouring, re.at(-1))
+        check(`${tag} ${k}: 倒放到一半又点 = 掉头停在打开`, re.every((f) => f.mounted) && re.at(-1).panel && !re.at(-1).pouring, re.map((f) => [f.t, f.pouring ? 'P' : '-', f.layers, f.pill && Math.round(f.pill.w)]))
         // ⑤ 点了一行 = 直接收(不倒放)
         if (k === 'mode') {
           const pick = await film(win, k, 300, 'pick')
@@ -173,13 +182,42 @@ async function film(win, k, ms, act) {
       const tag = `芯片 ${k}`
       const open = await film(win, k, D + 160, 'click')
       check(`${tag}: 开 = 液体流出(每帧至多一层)、0.9D 左右接手`, open.some((f) => f.layers === 1) && open.every((f) => f.layers <= 1) && open.at(-1).panel && !open.at(-1).pouring, open.map((f) => [f.t, f.layers, f.panel]))
-      const close = await film(win, k, D, 'click')
+      const close = await film(win, k, D + 300, 'click')
+      const t0 = close.find((f) => f.pouring)?.t ?? 0
       const gone = close.findIndex((f) => !f.mounted)
-      check(`${tag}: 再点 = 倒放、倒放完才卸`, close.some((f) => f.pouring && f.layers === 1) && gone > 0 && close[gone].t >= D * 0.6, close.map((f) => [f.t, f.pouring, f.mounted]))
+      check(`${tag}: 再点 = 倒放、倒放完才卸`, close.some((f) => f.pouring && f.layers === 1) && gone > 0 && close[gone].t - t0 >= D * 0.55, close.map((f) => [f.t, f.pouring, f.mounted]))
       await settle()
       await win.locator(TRIG[k]).first().click(); await settle()
-      const esc = await film(win, k, D, 'esc')
+      const esc = await film(win, k, D + 300, 'esc')
       check(`${tag}: Esc = 倒放`, esc.some((f) => f.pouring && f.layers === 1) && !esc.at(-1).mounted, esc.map((f) => [f.t, f.pouring, f.mounted]))
+      await settle()
+    }
+    // 麦克风 → 录音条(假麦克风):从麦克风那块地方按裁切长开;停了(转写完 / 失败)倒放缩回再卸
+    if (ONLY.includes('mode') && await view.locator('.t2c-mic-control:not(:disabled)').count()) {
+      const sampleBar = (ms) => win.evaluate((ms) => new Promise((res) => {
+        const out = [], t0 = performance.now()
+        const tick = () => {
+          const bar = document.querySelector('.t2-chat-view .t2c-row > .t2c-voicebar')
+          out.push({ t: Math.round(performance.now() - t0), bar: !!bar, clip: bar ? getComputedStyle(bar).clipPath : null,
+            mic: !!document.querySelector('.t2-chat-view .t2c-mic-control') })
+          if (performance.now() - t0 < ms && (out.length < 3 || bar || !out.at(-2).bar)) requestAnimationFrame(tick); else res(out)
+        }
+        requestAnimationFrame(tick)
+      }), ms)
+      const startP = sampleBar(D + 500)
+      await view.locator('.t2c-mic-control').click()
+      const start = await startP
+      const first = start.find((f) => f.bar)
+      const full = (c) => !c || c === 'none' || /^inset\(0px( round|\))/.test(c)
+      check('录音条: 从麦克风那块地方长开(第一帧是裁切)、停在整条', !!first && !full(first.clip) && full(start.at(-1).clip), start.filter((f) => f.bar).map((f) => f.clip).slice(0, 4).concat(start.at(-1).clip))
+      if (await win.locator('.t2c-voicestop').count()) {
+        const stopP = sampleBar(6000)
+        await win.locator('.t2c-voicestop').click()
+        const stop = await stopP
+        const lastBar = stop.findLastIndex((f) => f.bar)
+        const shrinking = stop.slice(Math.max(0, lastBar - 8), lastBar + 1).some((f) => !full(f.clip))
+        check('录音条: 停了 = 倒放缩回再卸、麦克风回来', lastBar >= 0 && lastBar < stop.length - 1 && shrinking && stop.at(-1).mic, { lastBar: stop[lastBar], end: stop.at(-1) })
+      } else check('录音条: 有停止键', false, 'busy?')
       await settle()
     }
     // 平移主题:胶囊跟菜单进场那一对(180ms 到位),不跟液滴的 420ms

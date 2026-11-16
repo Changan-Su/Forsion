@@ -59,7 +59,10 @@ const BASE = process.argv.includes('--base')
     await wait(D); d.cancel(); pan.style.visibility = ''; await wait(50)
     // ③ 开满、收到一半又开
     d = L.emergeDroplet(src, pan); await wait(D + 80); d.retract(); await wait(D * 0.7 * 0.45)
-    const b0 = area(); const ok = d.reopen(); await raf(); const b1 = area(); await raf(); const b2 = area()
+    // 源的鼓起(液体层第一个 i)的缩放:掉头那一帧不许跳(Codex 评审 P2:对齐液体播放头会从 0.5 一下鼓到 1.1)
+    const sw = () => { const i = document.querySelector('.lcl-droplet > i'); const m = i && /matrix\(([-\d.e]+)/.exec(getComputedStyle(i).transform); return m ? +m[1] : (i ? 1 : 0) }
+    const s0 = sw(), b0 = area(); const ok = d.reopen(); await raf(); const b1 = area(), s1 = sw(); await raf(); const b2 = area()
+    out.swell = { before: +s0.toFixed(3), after: +s1.toFixed(3) }
     out.reopen = { ok, before: +b0.toFixed(3), after: +b1.toFixed(3), next: +b2.toFixed(3), jump: b1 < b0 - 0.002 || (b1 - b0) > 1.6 * (b2 - b1) + 0.01 }
     await wait(D + 100); out.reopenEnd = { pouring: pan.classList.contains('lcl-droplet-pouring'), kids: [...pan.children].map((k) => +getComputedStyle(k).opacity) }
     d.cancel()
@@ -74,6 +77,7 @@ const BASE = process.argv.includes('--base')
     ['收完清场', !res.cleanup.layer && res.cleanup.vis === 'hidden'],
     ['开到 0.3D 就收:那一帧不跳(不先胀一下、步子和下一帧相当)', !res.midClose.jump],
     ['收到一半又开:掉头那一帧不跳(不先缩一下、步子和下一帧相当)', res.reopen.ok && !res.reopen.jump],
+    ['收到一半又开:源的鼓起不跳(≤ 0.15)', Math.abs(res.swell.after - res.swell.before) <= 0.15],
     ['掉头后停在打开', !res.reopenEnd.pouring && res.reopenEnd.kids.every((o) => o === 1)],
   ]
   for (const [k, v] of checks) console.log(v ? 'PASS' : 'FAIL', k)
