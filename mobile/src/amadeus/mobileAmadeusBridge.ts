@@ -306,6 +306,7 @@ export function createMobileAmadeusBridge(cfg?: { apiBase?: () => string; getTok
     // ---- 字节读写(PDF 阅读器 getDocument({data}) 等) ----
     saveVaultBytes: async (p, bytes) => { await ensureVault(); await vault.writeVaultBytes(p, bytes) },
     readVaultBytes: async (p) => { await ensureVault(); return vault.readVaultBytes(p) },
+    statPath: async (p) => { await ensureVault(); return vault.statEntry(p) },
 
     // ---- Excalidraw 画板(desktop ipc.ts drawingRead/drawingWrite 同款) ----
     readDrawing: async (pagePath, ref) => {

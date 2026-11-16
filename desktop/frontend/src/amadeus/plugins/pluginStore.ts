@@ -48,6 +48,8 @@ const hostTangu = (): typeof window.tangu => (typeof window !== 'undefined' ? wi
 const automationHost = (): boolean => !!readTangu()?.waitBackend && hostTangu()?.executionCapabilities?.host !== false
 import { noteOf, usePageStore } from '../store/pageStore'
 import { subscribeVaultEvents } from './vaultEvents'
+import { createPluginFileOps, probeAbsent } from './pluginFileOps'
+import { markPluginCreated } from './pluginCreated'
 import { useUiStore } from '../store/uiStore'
 import { setTheme as applyAccent, toggleMode } from '../theme/ThemeManager'
 import { amadeus } from '../api'
@@ -459,6 +461,16 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
   // 否则被禁用的插件还在被外部改动唤醒(它的回调里往往就是一次 readFile + 重建内部状态)。
   const fileUnsubs = new Set<() => void>()
   const ribbonActions = new Set<() => void>()
+  // createFolder / stat / renamePath / movePath(2026-11-16,pluginFileOps.ts):改名挪动走文件树的链,源不归这个插件时先问用户。
+  const fileOps = createPluginFileOps({
+    pluginId, getName, alive: () => alive, workFolder: () => api.workFolder(), dropListCache,
+    fileTypeExt: (p) => { const n = p.toLowerCase(); return matchFileType(p)?.extensions.find((e) => n.endsWith(e.toLowerCase())) ?? null },
+  })
+  // 写落到原本不存在的路径 = 这个插件这一程建的(pluginCreated 账本,renamePath / movePath 的边界)。
+  // 探测先于写同步发出,写完才记账;探测本身从不 reject,也不挡写。
+  const noteCreated = async (p: string, fresh: Promise<boolean>, root: string | null): Promise<void> => {
+    if ((await fresh) && root && usePageStore.getState().vaultRoot === root) markPluginCreated(pluginId, p, root)
+  }
   const api: PluginAppApi = {
     // 两条路由通用(v4 不设 activePage;正文也不进 store —— 一律取块表面那份统一派生,别再各写各的)。
     getActivePage: () => noteOf(usePageStore.getState()),
@@ -490,11 +502,17 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
     assetUrl: (p) => toAssetUrl(p),
     hostPath: (p) => pluginHostPath(usePageStore.getState().vaultRoot, p, { executionCapabilities: { host: readTangu()?.hostExecution?.() ?? hostTangu()?.executionCapabilities?.host ?? false } }),
     // 插件契约是 Promise<void>:不带 base 的写宿主本就只回 void,这里显式抹平(CAS 结果类型不外泄给插件)。
-    writeFile: (p, text) => (ok() ? amadeus.writeTextFile(p, text).then(() => {}).finally(dropListCache) : Promise.resolve()),
+    writeFile: (p, text) => {
+      if (!ok()) return Promise.resolve()
+      const fresh = probeAbsent(p), root = usePageStore.getState().vaultRoot
+      return amadeus.writeTextFile(p, text).then(() => noteCreated(p, fresh, root)).finally(dropListCache)
+    },
     ...(amadeus?.scopedTextWrites ? {
       writeFileScoped: async (p: string, text: string, expectedRoot: string, options?: { create?: boolean }): Promise<boolean> => {
         if (!ok() || usePageStore.getState().vaultRoot !== expectedRoot) throw new Error('Vault changed before plugin save')
+        const fresh = options?.create === true ? Promise.resolve(true) : probeAbsent(p) // 同主进程:只认 create === true 为仅新建
         const result = await amadeus.writeTextFile(p, text, { ...options, expectedRoot }).finally(dropListCache)
+        if (result?.ok !== false) await noteCreated(p, fresh, expectedRoot)
         return result?.ok !== false
       },
     } : {}),
@@ -521,7 +539,9 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
               : b instanceof ArrayBuffer ? new Uint8Array(b) : null
             if (!view) return Promise.reject(new TypeError('writeBytes expects a Uint8Array or ArrayBuffer'))
             // 子视图(subarray)过 IPC 会把**整块**底层 buffer 结构化克隆过去 → 只拷自己那一段。
-            return amadeus.saveVaultBytes(p, view.byteLength === view.buffer.byteLength ? view : view.slice()).finally(dropListCache)
+            const fresh = probeAbsent(p), root = usePageStore.getState().vaultRoot
+            return amadeus.saveVaultBytes(p, view.byteLength === view.buffer.byteLength ? view : view.slice())
+              .then(() => noteCreated(p, fresh, root)).finally(dropListCache)
           },
         }
       : {}),
@@ -767,6 +787,7 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
           },
         }
       : {}),
+    ...fileOps.api,
   }
   return {
     api,
@@ -776,6 +797,7 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
       provideFeedbackChannel(pluginId, null)
       provideInboxChannel(pluginId, null)
       alive = false
+      fileOps.revoke()
       surface.revoke()
       for (const u of Array.from(fileUnsubs)) {
         try { u() } catch (e) { console.error(`[amadeus] plugin "${pluginId}" watchFile unsubscribe failed`, e) }
