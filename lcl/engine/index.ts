@@ -128,6 +128,7 @@ export { flowThumb, useSegFlow, useKnobFlow } from './segFlow'
 export {
   installNativeSheetPresenter, nativeSheetPresenter, presentNativeMenu, presentNativeChecklist, presentNativePrompt, presentNativeConfirm,
   pickNativeCtxItem, runNativeCtxMenu, readNativeTheme, menuResult, checklistResult, promptResult, confirmResult, clipNativeText, NATIVE_MENU_MAX_ITEMS,
+  nativeSheetUp, holdNativeSheetUp, whileNativeSheetUp, bindNativeSheetMark, watchNativeSheet,
 } from './nativeSheet'
 export type {
   NativeSheetTheme, NativeSheetRequest, NativeSheetPayload, NativeSheetPresenter, NativeSheetOutcome,

@@ -91,6 +91,7 @@ export function offerCalendarUndo(text: string, run: () => boolean, redo?: () =>
     level: 'info',
     dedupeKey: UNDO_KEY,
     durationMs: 8000, // U-06:带撤销钮的提示留够反应时间
+    undo: true, // 手机横幅同样停 8 秒、不受节流
     action: { label: translate('calevtact.undo'), run: () => { once() } },
   })
 }

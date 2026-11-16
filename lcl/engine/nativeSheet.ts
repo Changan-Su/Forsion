@@ -9,6 +9,7 @@
  *  or rejects is treated as "not handled" so the caller falls back to the web UI. */
 import type { ReactNode } from 'react'
 import { renderNativeIcons, type NativeIcon, type NativeIconSource } from './nativeIcon'
+import { markUserGesture } from './userGesture'
 
 /** Colours are `#AARRGGBB` (Android `Color.parseColor` order), read from the active skin at request time. */
 export interface NativeSheetTheme {
@@ -28,6 +29,11 @@ export interface NativeSheetTheme {
   motionTheme?: string
   /** "Fade only" (<html data-motion-fade="on">): the native dock moves nothing. */
   motionFade?: boolean
+  /** The floating-surface tier (`--surface-float`, DESIGN §3: menus, toasts), opaque: the phone's native notification banner
+   *  is painted with it. Absent (older pages) = `surface`. */
+  float?: string
+  /** The theme colour for text (`--accent-ink`, readable on the surfaces): the banner's button. Absent = `accent`. */
+  accentInk?: string
 }
 
 export interface NativeMenuTrailing<I = NativeIconSource> { id: string; label: string; icon?: I }
@@ -112,6 +118,58 @@ export function installNativeSheetPresenter(next: NativeSheetPresenter): () => v
 }
 export function nativeSheetPresenter(): NativeSheetPresenter | undefined { return presenter }
 
+// ── "a native sheet is up" (host page attribute) ───────────────────────────────
+/** A native sheet (Compose, drawn above the WebView: this seam's sheets, the model picker) covers the page without
+ *  leaving any trace in the DOM — `elementFromPoint` under it still hits the list, and `document.hasFocus()` stays
+ *  true. While one is up the single-column shell carries `.mb-shell[data-native-sheet="open"]` (bindNativeSheetMark,
+ *  wired in SingleColumnHost). It is a host page attribute of the same kind as `data-nav`: code that decides "the
+ *  user is looking at this" (e.g. a plugin's own read / no-pop logic) treats the page as covered while it is there.
+ *  Not a plugin API and not a styling hook (no CSS hangs on it, so toggling it re-styles nothing).
+ *  Platform presenters wrap the native call in `whileNativeSheetUp`; the mark goes away when the call settles —
+ *  answered, cancelled, or rejected (the native side is unavailable and the caller falls back to its web UI). */
+let sheetsUp = 0
+const sheetWatchers = new Set<() => void>()
+const sheetChanged = (): void => { for (const fn of [...sheetWatchers]) { try { fn() } catch { /* one bad watcher does not stop the rest */ } } }
+export function nativeSheetUp(): boolean { return sheetsUp > 0 }
+/** Called after every change of `nativeSheetUp()` (a sheet goes up, or one goes away) until the returned unwatch. Used by the
+ *  phone notification banner (desktop notificationStore): it holds its cards while a sheet covers the page and shows the
+ *  next one once the last sheet is gone. */
+export function watchNativeSheet(fn: () => void): () => void {
+  sheetWatchers.add(fn)
+  return () => { sheetWatchers.delete(fn) }
+}
+/** Count one native sheet as up until the returned release is called (idempotent). */
+export function holdNativeSheetUp(): () => void {
+  sheetsUp++
+  sheetChanged()
+  let held = true
+  return () => {
+    if (!held) return
+    held = false
+    sheetsUp--
+    sheetChanged()
+  }
+}
+/** Run a platform presenter's native call with the sheet counted as up for exactly as long as the call is pending. */
+export async function whileNativeSheetUp<T>(show: () => Promise<T>): Promise<T> {
+  const release = holdNativeSheetUp()
+  try { return await show() } finally { release() }
+}
+/** Mirror the state onto `el` (the `.mb-shell`): applied at once — a shell mounted while a sheet is up gets it too —
+ *  and kept in step until the returned unbind, which also removes it (the shell unmounting must not leave it behind). */
+export function bindNativeSheetMark(el: Element): () => void {
+  const apply = (): void => {
+    if (sheetsUp > 0) el.setAttribute('data-native-sheet', 'open')
+    else el.removeAttribute('data-native-sheet')
+  }
+  apply()
+  sheetWatchers.add(apply)
+  return () => {
+    sheetWatchers.delete(apply)
+    el.removeAttribute('data-native-sheet')
+  }
+}
+
 // ── result validation ──────────────────────────────────────────────────────────
 
 const plainObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v)
@@ -190,7 +248,7 @@ const clipSearch = (s: NativeMenuSearch): NativeMenuSearch => ({ placeholder: cl
 // ── theme ──────────────────────────────────────────────────────────────────────
 
 type Rgba = [number, number, number, number]
-const LIGHT: Record<keyof Omit<NativeSheetTheme, 'dark' | 'motionTheme' | 'motionFade'>, Rgba> = {
+const LIGHT: Record<keyof Omit<NativeSheetTheme, 'dark' | 'motionTheme' | 'motionFade' | 'float' | 'accentInk'>, Rgba> = {
   background: [248, 247, 246, 1], surface: [255, 255, 255, 1], text: [32, 33, 36, 1], muted: [110, 112, 118, 1],
   border: [0, 0, 0, 0.1], accent: [77, 135, 148, 1], onAccent: [255, 255, 255, 1], danger: [208, 64, 64, 1],
   warning: [128, 96, 0, 1],
@@ -200,9 +258,10 @@ const DARK: typeof LIGHT = {
   border: [255, 255, 255, 0.12], accent: [95, 163, 178, 1], onAccent: [255, 255, 255, 1], danger: [232, 96, 96, 1],
   warning: [224, 184, 91, 1],
 }
-const TOKENS: Record<keyof typeof LIGHT, string> = {
+const TOKENS: Record<keyof typeof LIGHT | 'float' | 'accentInk', string> = {
   background: '--bg', surface: '--bg-card', text: '--text', muted: '--text-muted',
   border: '--border', accent: '--accent', onAccent: '--on-accent', danger: '--danger', warning: '--warning',
+  float: '--surface-float', accentInk: '--accent-ink',
 }
 
 let canvasCtx: CanvasRenderingContext2D | null | undefined
@@ -257,7 +316,7 @@ export function readNativeTheme(): NativeSheetTheme {
   let dark = false
   try { dark = document.documentElement.dataset.mode === 'dark' } catch { /* no DOM */ }
   const base = dark ? DARK : LIGHT
-  const read: Partial<Record<keyof typeof LIGHT, Rgba>> = {}
+  const read: Partial<Record<keyof typeof TOKENS, Rgba>> = {}
   if (typeof document !== 'undefined' && document.body) {
     const probe = document.createElement('span')
     probe.setAttribute('aria-hidden', 'true')
@@ -276,7 +335,7 @@ export function readNativeTheme(): NativeSheetTheme {
     document.documentElement.appendChild(probe)
     try {
       const declared = getComputedStyle(document.documentElement)
-      for (const key of Object.keys(TOKENS) as Array<keyof typeof LIGHT>) {
+      for (const key of Object.keys(TOKENS) as Array<keyof typeof TOKENS>) {
         // An undeclared token would make the probe inherit the text colour silently → keep the fallback.
         if (!declared.getPropertyValue(TOKENS[key]).trim()) continue
         probe.style.color = ''
@@ -291,6 +350,8 @@ export function readNativeTheme(): NativeSheetTheme {
   const ground: Rgba = dark ? [0, 0, 0, 1] : [255, 255, 255, 1]
   const background = over(pick('background'), ground)
   const surface = over(pick('surface'), background)
+  // Not declared (an older theme): the card surface and the accent itself, as before these two existed.
+  const float = read.float ? over(read.float, background) : surface
   return {
     dark,
     background: toArgbHex(background),
@@ -302,6 +363,8 @@ export function readNativeTheme(): NativeSheetTheme {
     onAccent: toArgbHex(pick('onAccent')),
     danger: toArgbHex(pick('danger')),
     warning: toArgbHex(over(pick('warning'), background)),
+    float: toArgbHex(float),
+    accentInk: toArgbHex(over(read.accentInk ?? pick('accent'), float)),
     ...motionFields(),
   }
 }
@@ -368,7 +431,11 @@ async function present<T>(build: () => Promise<NativeSheetPayload> | NativeSheet
     if (ctl.signal.aborted) return { handled: true, value: null }
     const raw = await host(payload, ctl.signal)
     if (ctl.signal.aborted) return { handled: true, value: null }
-    return { handled: true, value: raw == null ? null : validate(raw) }
+    const value = raw == null ? null : validate(raw)
+    // The user picked something on the native sheet: what the caller runs next (after the awaits, same task) is their
+    // own doing, like a tap on the page — e.g. a delete whose "Undo" must not be throttled (userGesture.ts).
+    if (value != null) markUserGesture()
+    return { handled: true, value }
   } catch {
     return ctl.signal.aborted ? { handled: true, value: null } : { handled: false }
   } finally {
