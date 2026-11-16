@@ -36,6 +36,8 @@ export interface EngineRunCtx {
    *  agent = 握手里报的适配器名(普通对话把它和指针记在一起,见 resumeFromAgent)。 */
   onSession?: (info: { id: string; resumable: boolean; resumed: boolean; via?: 'load' | 'resume'; verifiedForChat?: boolean; agent?: string }) => void | Promise<void>;
   readOnly?: boolean;
+  /** 引擎会话的模型对好之后(prompt 之前)告诉调用方这场会话此刻用的模型(ACP 模型选项的值;引擎没报 = undefined)。 */
+  onModel?: (modelId: string | undefined) => void;
   mcpServers?: import('@agentclientprotocol/sdk').McpServer[];
   /** 这一轮引擎进程专用的环境变量(叠在引擎清单的 env 之后)。交接用它把指令目录交给引擎(DSH 的 DSH_AGENTS_HOME)。 */
   env?: Record<string, string>;

@@ -28,11 +28,12 @@ import { SKILL_TOOL, WAIT_TOOL } from './toolServer.js';
 export const HANDOFF_SERVER_NAME = 'forsion';
 
 /** 不交的工具和原因。
- *  harness = 引擎自带的(读写文件、跑命令、看本机图片文件):交过去就是两套打架;loop = 只在 Tangu 自己的循环里有意义;
+ *  harness = 引擎自带的(读写文件、跑命令):交过去就是两套打架;loop = 只在 Tangu 自己的循环里有意义;
  *  phone = 手机控制:要手机那端在线配合,交接这条路没验过,先不交;later-run = 会在以后起一轮这个 Agent 自己的 run
  *  (定时、子会话、讨论)—— 那些 run 今天报 agent_engine_elsewhere,排在多 Agent 那一步。
- *  截图类(浏览器、电脑控制、desk_screenshot、view_video、browser_task)第 2 档起交:图经工具桥回成 MCP image 内容
- *  (toolServer 的 images),DSH 按它选的模型收不收图;跑得久的照旧回取结果的编号。 */
+ *  截图类(浏览器、电脑控制、desk_screenshot、view_image、view_video、browser_task)第 2 档起交:图经工具桥回成 MCP image 内容
+ *  (toolServer 的 images),DSH 按它选的模型收不收图;跑得久的照旧回取结果的编号。view_image 也交:browser_screenshot 存在
+ *  Forsion 自己的目录里(不在引擎的工作区),看它要靠 view_image 把图经桥带回。Computer Use 每次调用先问模型看不看得见。 */
 export type NotHandedReason = 'harness' | 'loop' | 'phone' | 'later-run';
 export const NOT_HANDED: Readonly<Record<string, NotHandedReason>> = {
   read_file: 'harness', write_file: 'harness', edit_file: 'harness', multi_edit: 'harness', list_dir: 'harness', list_files: 'harness',
@@ -43,7 +44,6 @@ export const NOT_HANDED: Readonly<Record<string, NotHandedReason>> = {
   load_tools: 'loop', use_skill: 'loop', todo_write: 'loop', todo_read: 'loop', exit_plan_mode: 'loop', ask_user: 'loop',
   self_brainstorm: 'loop', read_tool_output: 'loop', manage_harness: 'loop', review_loadout: 'loop', team_say: 'loop',
   session_status: 'loop', session_settings: 'loop', update_session_settings: 'loop',
-  view_image: 'harness',
   manage_automation: 'later-run', manage_schedule: 'later-run', set_next_wake: 'later-run', start_discussion: 'later-run',
   wait_discussion: 'later-run', start_project_session: 'later-run', start_session: 'later-run', hand_off_task: 'later-run',
   send_to_session: 'later-run',
@@ -233,7 +233,7 @@ export function bridgeGuidance(serverName: string, budgetSeconds: number, handed
     + `Then call \`${p}${WAIT_TOOL}\` with the exact arguments it gives, again until the result arrives. Never repeat the original call, and never end your turn while a ticket is pending.\n`
     + '- Some Forsion tools return screenshots or other images (browser and computer control, desk_screenshot, view_video). '
     + 'If such an image reaches you only as a note that it is unavailable, the model you are running on cannot see images: do not click or type based on a screen you cannot see; tell the user they need a model that can see images for this. '
-    + 'To look at an image file, read it with your own file tools.\n'
+    + 'To look at an image file (for example one browser_screenshot saved), use view_image.\n'
     + '- Not available in this harness yet: phone control, scheduling and automations, and Tangu\'s own loop tools (its todo list, plan mode, load_tools, use_skill). '
     + (skillsVia === 'tool' ? `Load your skills with \`${p}${SKILL_TOOL}\` instead (they are listed under "Your skills").` : 'Your skills are in your skills folder instead.')
     + (handed.length ? '' : '\n- No Forsion tools are enabled for this agent right now.');

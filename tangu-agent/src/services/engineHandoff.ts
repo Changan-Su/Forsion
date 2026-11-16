@@ -221,6 +221,8 @@ export interface EngineAgentHandoffInput {
   engineEnv: NodeJS.ProcessEnv | null;
   /** 这一轮连插件常驻的那个进程(融合插件):人设 / 记忆 / 技能走桥上的说明,不写指令目录。 */
   resident?: boolean;
+  /** 引擎此刻用的模型收不收图(交过去的 Computer Use 每次调用前问;不知道 = 不能)。 */
+  seesImages?: () => Promise<boolean | undefined>;
 }
 
 const MAX_HANDOFF_DISPLAY_FILES = 20;
@@ -285,6 +287,7 @@ export async function prepareEngineAgentHandoff(p: EngineAgentHandoffInput) {
   const toolServer = await createRunToolServer(toolCtx, handed, {
     name: HANDOFF_SERVER_NAME, memorySlug: resolveMemorySlug(def), agentSlug: slug,
     cards: { publish: p.publish, contentOffset: p.contentOffset }, budgetMs: BRIDGE_CALL_BUDGET_MS, images: true,
+    ...(p.seesImages ? { seesImages: p.seesImages } : {}),
     ...(skills ? { skills } : {}),
   });
   if (p.resident) {

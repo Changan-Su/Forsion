@@ -19,19 +19,23 @@ vi.mock('../tools/toolRegistry.js', async (orig) => ({
     ['remember', { name: 'remember', definition: { function: { name: 'remember', description: 'Remember a fact.', parameters: { type: 'object', properties: { content: { type: 'string' } } } } } }],
     ['intelligent_ui_html', { name: 'intelligent_ui_html', definition: { function: { name: 'intelligent_ui_html', description: 'Card.', parameters: { type: 'object', properties: {} } } } }],
     ['not_handed', { name: 'not_handed', definition: { function: { name: 'not_handed', description: 'x', parameters: { type: 'object', properties: {} } } } }],
+    ['cu_click', { name: 'cu_click', definition: { function: { name: 'cu_click', description: 'Click.', parameters: { type: 'object', properties: {} } } } }],
+    ['browser_click', { name: 'browser_click', definition: { function: { name: 'browser_click', description: 'Click.', parameters: { type: 'object', properties: {} } } } }],
   ]),
 }));
 vi.mock('../tools/registry.js', async (orig) => ({
   ...(await orig<typeof import('../tools/registry.js')>()),
   executeTool: h.exec,
   toolSourceOf: () => 'builtin',
+  getToolCapabilities: (n: string) => n === 'cu_click' ? { sideEffect: 'system', parallel: false, concurrencyKey: 'computer-use' }
+    : n === 'browser_click' ? { sideEffect: 'browser', parallel: false, concurrencyKey: 'browser' } : { sideEffect: 'none', parallel: true },
 }));
 vi.mock('../services/approvals.js', async (orig) => ({ ...(await orig<typeof import('../services/approvals.js')>()), gateToolCall: h.gate }));
 vi.mock('../seams/runtime.js', async (orig) => ({ ...(await orig<typeof import('../seams/runtime.js')>()), deps: () => ({ profile: {} }) }));
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { createRunToolServer, WAIT_TOOL } from './toolServer.js';
+import { bridgeContent, createRunToolServer, MAX_BRIDGE_IMAGE_BASE64, WAIT_TOOL } from './toolServer.js';
 import { currentAgentSlug, currentDisplayAgentSlug, currentRunCwd } from '../seams/runContext.js';
 
 type Bridge = Awaited<ReturnType<typeof createRunToolServer>>;
@@ -47,10 +51,10 @@ async function connect(b: Bridge): Promise<Client> {
 }
 const textOf = (r: any): string => String(r?.content?.[0]?.text ?? '');
 
-async function agentBridge(budgetMs = 150, images = false) {
+async function agentBridge(budgetMs = 150, images = false, seesImages?: () => Promise<boolean | undefined>) {
   bridge = await createRunToolServer({ userId: 'u1', sessionId: 'S', runId: 'r1', cwd: '/work/here', approvalMode: 'auto-edit', signal: ac.signal } as any,
-    ['remember', 'intelligent_ui_html'], {
-      name: 'forsion', memorySlug: 'ds-mem', agentSlug: 'ds', budgetMs, images,
+    ['remember', 'intelligent_ui_html', 'cu_click', 'browser_click'], {
+      name: 'forsion', memorySlug: 'ds-mem', agentSlug: 'ds', budgetMs, images, ...(seesImages ? { seesImages } : {}),
       cards: { publish: (type, payload) => events.push({ type, payload }), contentOffset: () => 7 },
     });
   return bridge;
@@ -73,7 +77,7 @@ describe('交接的工具桥', () => {
     expect(b.toolPrefix).toBe('mcp__forsion__');
     const c = await connect(b);
     const names = (await c.listTools()).tools.map((t) => t.name);
-    expect(names).toEqual(['remember', 'intelligent_ui_html', WAIT_TOOL]);
+    expect(names).toEqual(['remember', 'intelligent_ui_html', 'cu_click', 'browser_click', WAIT_TOOL]);
     const r = await c.callTool({ name: 'remember', arguments: { content: 'tea' } });
     expect(textOf(r)).toBe('did {"content":"tea"}');
     // 回调里是这个 Agent 的记忆域 / 身份 / 工作目录:不然 remember 会落到缺省 Agent
@@ -206,6 +210,12 @@ describe('交接的工具桥', () => {
     ]);
     // 一次最多 8 张(不能内联的那张也占一格)
     expect(r.content.filter((x: any) => x.type === 'image')).toHaveLength(7);
+    // 缩完仍太大的不交(DSH 收到一张不合格的会把整批都扔掉),说一句
+    expect(bridgeContent({ text: 't', images: [{ url: `data:image/gif;base64,${'A'.repeat(MAX_BRIDGE_IMAGE_BASE64 + 4)}` }, { url: `data:image/png;base64,${PNG}` }] })).toEqual([
+      { type: 'text', text: 't' },
+      { type: 'text', text: expect.stringContaining('too large') },
+      { type: 'image', data: PNG, mimeType: 'image/png' },
+    ]);
     // 卡片和落库只有文字
     expect(JSON.stringify(events)).not.toContain(PNG);
     expect(JSON.stringify(bridge!.calls())).not.toContain(PNG);
@@ -216,6 +226,50 @@ describe('交接的工具桥', () => {
     for (let i = 0; i < 10 && !got.content.some((x: any) => x.type === 'image'); i++) got = await c.callTool({ name: WAIT_TOOL, arguments: nextArgs(got) });
     expect(got.content[0]).toEqual({ type: 'text', text: 'shot' });
     expect(got.content.filter((x: any) => x.type === 'image').length).toBeGreaterThan(0);
+    await c.close();
+  });
+
+  it('Computer Use 先问模型看不看得见:看不见 / 不知道就不跑、不问用户,回原因;看得见才过审批去跑', async () => {
+    for (const [answer, says] of [[undefined, 'could not confirm'], [false, 'has no image input']] as const) {
+      h.gate.mockClear(); h.exec.mockClear();
+      const c = await connect(await agentBridge(2_000, true, async () => answer));
+      const r: any = await c.callTool({ name: 'cu_click', arguments: {} });
+      expect(r.isError).toBe(true);
+      expect(textOf(r)).toContain(says);
+      expect(textOf(r)).toContain('not a missing plugin');
+      expect(h.gate).not.toHaveBeenCalled();
+      expect(h.exec).not.toHaveBeenCalled();
+      // 别的工具不受影响
+      expect(textOf(await c.callTool({ name: 'remember', arguments: { content: 'k' } }))).toBe('did {"content":"k"}');
+      await c.close(); await bridge!.close(); bridge = undefined;
+    }
+    // 没给 seesImages 也当不知道
+    let c = await connect(await agentBridge(2_000, true));
+    expect(textOf(await c.callTool({ name: 'cu_click', arguments: {} }))).toContain('could not confirm');
+    await c.close(); await bridge!.close(); bridge = undefined;
+    h.exec.mockClear();
+    c = await connect(await agentBridge(2_000, true, async () => true));
+    expect(textOf(await c.callTool({ name: 'cu_click', arguments: {} }))).toBe('did {}');
+    expect(h.exec).toHaveBeenCalledTimes(1);
+    await c.close();
+  });
+
+  it('同一个并发键(浏览器 / 电脑)的调用一个接一个跑,别的照旧并行', async () => {
+    const spans: Array<{ name: string; start: number; end: number }> = [];
+    h.exec.mockImplementation(async (call: any) => {
+      const start = Date.now(); await new Promise((r) => setTimeout(r, 120));
+      spans.push({ name: call.function.name, start, end: Date.now() });
+      return { toolCallId: call.id, name: call.function.name, result: 'ok', isError: false };
+    });
+    const c = await connect(await agentBridge(5_000, true, async () => true));
+    await Promise.all([
+      c.callTool({ name: 'browser_click', arguments: { n: 1 } }), c.callTool({ name: 'browser_click', arguments: { n: 2 } }),
+      c.callTool({ name: 'remember', arguments: { content: 'a' } }), c.callTool({ name: 'remember', arguments: { content: 'b' } }),
+    ]);
+    const [b1, b2] = spans.filter((x) => x.name === 'browser_click').sort((x, y) => x.start - y.start);
+    expect(b2.start).toBeGreaterThanOrEqual(b1.end);
+    const [r1, r2] = spans.filter((x) => x.name === 'remember').sort((x, y) => x.start - y.start);
+    expect(r2.start).toBeLessThan(r1.end);
     await c.close();
   });
 

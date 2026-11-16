@@ -42,6 +42,29 @@ export interface ResidentEngineHost {
   connect(signal?: AbortSignal): Promise<ResidentConnection | null>;
   /** 可选:宿主关掉重接 / 替工作台接上一场会话时告诉插件。抛错只告警。 */
   onSession?(event: ResidentSessionEvent): void;
+  /**
+   * 可选(融合方案第 2 档):这个模型收不收图。model = 会话此刻的模型(ACP 模型选项的值,如 DSH 的 '["deepseek-official","deepseek-flash"]')。
+   * 宿主据此决定交过去的 Computer Use 能不能跑 —— 看不见屏幕的模型只能照文字猜坐标去点(同 Tangu 循环的 computerUseUnavailable)。
+   * 回 undefined / 抛错 / 超时 = 不知道,宿主按「不能」处理。
+   */
+  modelSeesImages?(model: string | undefined, signal?: AbortSignal): Promise<boolean | undefined>;
+}
+
+/** 问登记这个引擎的插件:这个模型收不收图。没登记、没实现、出错、3 秒没回 = undefined(不知道)。 */
+export async function residentModelSeesImages(engineId: string, model: string | undefined, signal?: AbortSignal): Promise<boolean | undefined> {
+  const ask = hosts.get(engineId)?.host.modelSeesImages;
+  if (typeof ask !== 'function') return undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const answer = await Promise.race([
+      Promise.resolve(ask.call(hosts.get(engineId)!.host, model, signal)),
+      new Promise<undefined>((resolve) => { timer = setTimeout(resolve, 3000, undefined); timer.unref?.(); }),
+    ]);
+    return typeof answer === 'boolean' ? answer : undefined;
+  } catch (e: any) {
+    console.warn(`[engine:${engineId}] modelSeesImages threw: ${e?.message || e}`);
+    return undefined;
+  } finally { if (timer) clearTimeout(timer); }
 }
 
 const hosts = new Map<string, { owner: string; host: ResidentEngineHost }>();

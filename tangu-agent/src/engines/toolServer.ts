@@ -28,13 +28,14 @@ import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
-import { resolveTools, visibleMcpTools } from '../tools/toolRegistry.js';
-import { executeTool, toolSourceOf } from '../tools/registry.js';
+import { isComputerUseTool, resolveTools, visibleMcpTools } from '../tools/toolRegistry.js';
+import { executeTool, getToolCapabilities, toolSourceOf } from '../tools/registry.js';
 import { gateToolCall, type ApprovalDecision } from '../services/approvals.js';
 import type { ToolContext } from '../tools/toolTypes.js';
 import { deps } from '../seams/runtime.js';
 import { enterRunContext, setRunCwd } from '../seams/runContext.js';
 import { isHtmlCardTool, LEGACY_HTML_CARD_TOOL } from '../tools/builtin/sketch.js';
+import { fitImageUrlForModel } from '../services/imageShrink.js';
 
 /** 取结果的那个工具(只在带 budgetMs 的桥上有)。 */
 export const WAIT_TOOL = 'forsion_wait';
@@ -62,20 +63,45 @@ export interface RunToolServerOptions {
   skills?: ReadonlyArray<{ name: string; dir: string }>;
   /** 收工具交回的图(ctx.collectImage),随结果回成 MCP image 内容。交接的桥开;插件任务那条照旧只回文字。 */
   images?: boolean;
+  /**
+   * 引擎此刻用的模型收不收图(开了 images 才问)。Computer Use 的调用先问它:不是 true(看不见 / 不知道)就不跑,
+   * 回一句为什么 —— 看不见屏幕的模型只能照文字猜坐标去点(同 Tangu 循环的 computerUseUnavailable,那边是整组不给)。
+   */
+  seesImages?: () => Promise<boolean | undefined>;
+}
+
+/** 交过去的 Computer Use 不能跑时回给模型的话(句式照 toolRegistry.computerUseUnavailableReason:不是插件没开、要把原因和出路告诉用户)。 */
+export function bridgeComputerUseUnavailable(why: 'no-image-input' | 'unknown'): string {
+  const cause = why === 'no-image-input'
+    ? 'because the model you are running on has no image input'
+    : 'because Forsion could not confirm that the model you are running on can see images';
+  return `Computer control (looking at the screen, clicking and typing in desktop apps) is unavailable ${cause}, so this call was not run. `
+    + 'This is not a missing plugin or permission, and enabling anything will not help. '
+    + 'When the user asks for it, do not just report that the tool failed: tell them plainly that computer control needs a model that can see images, and that they can pick one for this agent.';
 }
 
 /** 一次调用最多带回几张图(同 Tangu 循环每轮的上限 MAX_TOOL_IMAGES_PER_ROUND)。 */
 export const MAX_BRIDGE_IMAGES_PER_CALL = 8;
 type BridgeImage = { url: string; untrusted?: string };
 const IMAGE_DATA_URL = /^data:(image\/(?:png|jpe?g|webp|gif));base64,([A-Za-z0-9+/]+={0,2})$/i;
+/**
+ * 一张图的 base64 最多多长。DSH 0.2.2 收 MCP 图时用一条正则核 base64,约 4.9M 字符(原图约 3.5MB)起爆栈,
+ * 而且同一个结果里一张不合格整批都换成「image unavailable」(DSH2Forsion tests/check-images.mjs 实测)。
+ * 图先照 Tangu 循环缩到模型用的大小(fitImageUrlForModel:最长边 1568、约 115 万像素的 JPEG,一般几百 KB),
+ * 缩完还超过这条线的(缩不了的格式 / 超大图)不交,说一句。
+ */
+export const MAX_BRIDGE_IMAGE_BASE64 = 3_000_000;
 
-/** 一次调用的结果 → MCP 的 content:先是文字;每张图前面,不可信来源的前言换了才再写一次。不是内联 PNG / JPEG / WebP / GIF 的图说一句、不回。 */
+/** 一次调用的结果 → MCP 的 content:先是文字;每张图前面,不可信来源的前言换了才再写一次。不是内联 PNG / JPEG / WebP / GIF、缩完仍太大的图说一句、不回。 */
 export function bridgeContent(out: { text: string; images?: readonly BridgeImage[] }): Array<{ type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string }> {
   const content: Array<{ type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string }> = [{ type: 'text', text: out.text }];
   let preface: string | undefined;
   for (const img of out.images ?? []) {
-    const m = IMAGE_DATA_URL.exec(String(img?.url ?? ''));
+    let url = String(img?.url ?? '');
+    try { url = fitImageUrlForModel(url); } catch { /* 缩不了就用原图,下面照样核 */ }
+    const m = IMAGE_DATA_URL.exec(url);
     if (!m) { content.push({ type: 'text', text: '[An image from this tool could not be passed on: it is not an inline PNG, JPEG, WebP or GIF.]' }); continue; }
+    if (m[2].length > MAX_BRIDGE_IMAGE_BASE64) { content.push({ type: 'text', text: '[An image from this tool could not be passed on: it is too large even after shrinking.]' }); continue; }
     const p = typeof img.untrusted === 'string' && img.untrusted.trim() ? img.untrusted.trim() : undefined;
     if (p && p !== preface) content.push({ type: 'text', text: p });
     preface = p;
@@ -150,6 +176,16 @@ export async function createRunToolServer(ctx: ToolContext & { runId: string }, 
     opts.cards.publish('tool_result', { id, name, result: text, isError, startedAt, elapsedMs, outputChars: text.length, source, ...extra });
   };
   const budget = opts.budgetMs && opts.budgetMs > 0 ? opts.budgetMs : undefined;
+  // 同一个并发键(一次只驱动一个浏览器 / 一台电脑)的执行排队:引擎可能一次发几个调用,Tangu 循环里它们本来就一个接一个跑
+  const lanes = new Map<string, Promise<void>>();
+  const inLane = <T>(key: string | undefined, fn: () => Promise<T>): Promise<T> => {
+    if (!key) return fn();
+    const run = (lanes.get(key) ?? Promise.resolve()).then(fn);
+    const tail = run.then(() => {}, () => {});
+    lanes.set(key, tail);
+    void tail.then(() => { if (lanes.get(key) === tail) lanes.delete(key); });
+    return run;
+  };
 
   const enter = () => {
     enterRunContext(ctx.userId, ctx.runId, opts.memorySlug, opts.agentSlug);
@@ -182,9 +218,16 @@ export async function createRunToolServer(ctx: ToolContext & { runId: string }, 
       settleCard(id, wireName(name), startedAt, source, capped, isError, extra);
       return { text: capped, isError, ...(images.length ? { images: [...images] } : {}) };
     };
+    const caps = (() => { try { return getToolCapabilities(name, toolCtx); } catch { return undefined; } })();
+    const lane = caps?.concurrencyKey || (caps?.sideEffect === 'browser' ? 'browser' : undefined);
     const job = (async (): Promise<Outcome> => {
       enter();
       try {
+        // Computer Use 先问模型看不看得见(不问用户批一个跑不了的调用)
+        if (opts.images && caps && isComputerUseTool({ capabilities: caps })) {
+          const sees = await (opts.seesImages?.() ?? Promise.resolve(undefined)).catch(() => undefined);
+          if (sees !== true) return finish(bridgeComputerUseUnavailable(sees === false ? 'no-image-input' : 'unknown'), true);
+        }
         const decision: ApprovalDecision = await gateToolCall(ctx.runId, call, {
           sessionId: ctx.sessionId, userId: ctx.userId, execMode: 'host', cwd: ctx.cwd, approvalMode: ctx.approvalMode,
           // 交接的桥照 Tangu 循环:只有输入框发的轮才按会话现档读(approvalModeSessionId);插件任务那条路照旧跟会话
@@ -195,7 +238,10 @@ export async function createRunToolServer(ctx: ToolContext & { runId: string }, 
         if (!allowed().has(name)) return finish('Tool is no longer available.', true);
         onPhase('running');
         const approved = decision.argsOverride ? { ...call, function: { ...call.function, arguments: JSON.stringify(decision.argsOverride) } } : call;
-        const result = await executeTool(approved, { ...toolCtx, toolCallId: id, ...(collectImage ? { collectImage } : {}) });
+        const result = await inLane(lane, () => {
+          life.signal.throwIfAborted();
+          return executeTool(approved, { ...toolCtx, toolCallId: id, ...(collectImage ? { collectImage } : {}) });
+        });
         return finish(String(result.result), !!result.isError, { metadata: result.metadata, artifactPath: result.artifactPath });
       } catch (e: any) {
         const stopped = life.signal.aborted;

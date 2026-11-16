@@ -701,6 +701,7 @@ export async function runAcpEngine(def: EngineDef, ctx: EngineRunCtx): Promise<E
     // (DSH 实测:换模型会把思考档重置成那个模型的缺省值。这里不碰思考档。)
     // sel = 这场会话此刻的模型清单和当前模型(下面换了模型就跟着换):这一轮因为缺 API key 失败时,拿它告诉用户能换成什么。
     const sel = await applyEngineModel(conn, sessionId, s, ctx.engineModelId, def.id, guard);
+    try { ctx.onModel?.(sel.currentModelId); } catch { /* 只是告知 */ }
     if (replaying) {
       await settleAfterLoad(() => dropped.lastAt, ctx.signal);
       ctx.signal.throwIfAborted();
