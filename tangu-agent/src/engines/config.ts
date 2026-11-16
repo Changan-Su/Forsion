@@ -16,8 +16,11 @@ export interface EngineDef {
   /** 拉起命令（如 'npx' 或本机 'claude-code-acp' 绝对路径）。 */
   command: string;
   args?: string[];
-  /** 追加/覆盖子进程 env（默认继承父进程 env，详见 acpEngine）。 */
+  /** 追加/覆盖子进程 env:原样给到引擎(在白名单过滤之后叠上去,只剥本引擎的令牌),见 engineEnv.ts。 */
   env?: Record<string, string>;
+  /** 本进程环境里这个引擎还要的变量(白名单之外):精确名或 `FOO_*` 前缀,不分大小写;单独一个 `*` = 整份继承(只剥令牌)。
+   *  内置引擎写的是各自的配置目录变量和凭据变量;engines.json 按 id 覆盖内置条目时与内置的取并集。detect.env 自动算在内。 */
+  passEnv?: string[];
   /** 透传给 ACP newSession 的默认模型（可空，空则用适配器默认）。 */
   defaultModel?: string;
   /** 静态声明模型/命令(配了则跳过运行时探测——留旋钮;一般留空走懒探测)。 */
@@ -41,6 +44,8 @@ const BUILTIN: EngineDef[] = [
     name: 'Claude Code',
     command: 'npx',
     args: ['-y', '@zed-industries/claude-code-acp'],
+    // 适配器 + Claude Agent SDK 读的:ANTHROPIC_*(key / 中转地址 / token)、CLAUDE_*(CLAUDE_CONFIG_DIR、CLAUDE_CODE_USE_BEDROCK 等)
+    passEnv: ['ANTHROPIC_*', 'CLAUDE_*', 'MAX_THINKING_TOKENS'],
     detect: { dirs: ['~/.claude'], env: ['ANTHROPIC_API_KEY'], bin: 'claude' },
     setup: 'npm i -g @anthropic-ai/claude-code',
   },
@@ -50,6 +55,8 @@ const BUILTIN: EngineDef[] = [
     name: 'Codex',
     command: 'npx',
     args: ['-y', '@agentclientprotocol/codex-acp@latest'],
+    // CODEX_HOME / CODEX_API_KEY / OPENAI_API_KEY / OPENAI_BASE_URL;config.toml 里 env_key 点名的另由 engineEnv 读
+    passEnv: ['CODEX_*', 'OPENAI_*'],
     detect: { dirs: ['~/.codex'], env: ['OPENAI_API_KEY', 'CODEX_API_KEY'], bin: 'codex' },
     setup: 'npm i -g @openai/codex',
   },
@@ -60,6 +67,7 @@ const BUILTIN: EngineDef[] = [
     name: 'OpenClaw',
     command: 'openclaw',
     args: ['acp'],
+    passEnv: ['OPENCLAW_*'],
     detect: { dirs: ['~/.openclaw'], env: ['OPENCLAW_GATEWAY_TOKEN'], bin: 'openclaw' },
     setup: 'npm i -g openclaw && openclaw gateway start',
   },
@@ -70,6 +78,9 @@ const BUILTIN: EngineDef[] = [
     name: 'Pi',
     command: 'npx',
     args: ['-y', 'pi-acp@0.0.33'],
+    // pi-acp 读 PI_CODING_AGENT_DIR / PI_ACP_*。Pi 本身认几十家服务商的 *_API_KEY,不整片放行(那正是要挡的):
+    // 登录(/login)或 ~/.pi 里的 auth.json 照常用;非要用环境变量给 key,在 engines.json 给 pi 加 passEnv。
+    passEnv: ['PI_*'],
     detect: { dirs: ['~/.pi'], bin: 'pi' },
     setup: 'npm i -g @earendil-works/pi-coding-agent',
   },
@@ -101,8 +112,11 @@ export function loadEngines(configFile?: string): EngineDef[] {
     if (!e?.id || !e?.command) continue; // 校验 id+command 才纳入
     // 按 id 覆盖内置条目(多半是换一份装在别处的同一个程序):没写 agentsHomeEnv 就沿用内置的 —— 不然交接的指令目录
     // 悄悄交不过去,DSH 照常跑,只是人设、记忆、技能都没了(11-15 台架踩过)。
+    // passEnv 同理取并集:覆盖条目多半只是换了命令,引擎还是那个引擎,它自己的配置目录 / 凭据变量照样要放行。
     const prev = byId.get(e.id);
-    byId.set(e.id, prev?.agentsHomeEnv && !('agentsHomeEnv' in e) ? { ...e, agentsHomeEnv: prev.agentsHomeEnv } : e);
+    let merged = prev?.agentsHomeEnv && !('agentsHomeEnv' in e) ? { ...e, agentsHomeEnv: prev.agentsHomeEnv } : e;
+    if (prev?.passEnv?.length) merged = { ...merged, passEnv: [...new Set([...prev.passEnv, ...(Array.isArray(e.passEnv) ? e.passEnv : [])])] };
+    byId.set(e.id, merged);
   }
   return [...byId.values()];
 }
