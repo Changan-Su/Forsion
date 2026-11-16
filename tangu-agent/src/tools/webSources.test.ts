@@ -107,6 +107,15 @@ describe('web_fetch notes the page it read', () => {
       .toEqual({ title: 'A & B', description: 'x < y', date: undefined });
     expect(pageMeta('no head at all')).toEqual({ title: undefined, description: undefined, date: undefined });
   });
+
+  it('pageMeta stays linear on hostile heads (no backtracking regex over untrusted HTML)', () => {
+    for (const evil of ['<title'.repeat(43_680), '<meta '.repeat(43_680), `<meta ${'a'.repeat(250_000)}`, `<meta ${'a='.repeat(1999)}>`.repeat(60)]) {
+      const t = performance.now();
+      pageMeta(evil);
+      expect(performance.now() - t).toBeLessThan(250);
+    }
+    expect(pageMeta('<head><meta content="x" name=description ><META NAME="og:title" CONTENT=\'Y\'></head>')).toMatchObject({ title: 'Y', description: 'x' });
+  });
 });
 
 describe('webSourcesOf', () => {

@@ -5,7 +5,7 @@
  * 渲染在 TaskSummary.tsx。
  */
 import type { DisplayFile, TodoItem, ToolEvent, UiMessage } from '../../../../../tangu-agent/src/contracts/clientTypes'
-import { citeEntryOf, citeIndexOf, citeKey, type CiteIndex } from '../../components/citeSources'
+import { citeEntryOf, citeIndexOf, type CiteIndex } from '../../components/citeSources'
 import { citeHoverKey } from '../../components/citeHover'
 
 /** 一条「用过的来源」:agent 实际读到/搜到/取到的东西。用户给的附件不算(§7.4 两者不能混)。 */
@@ -42,6 +42,14 @@ const resultLabel = (url: string, title?: string, site?: string): string => {
   const host = site || hostOf(url)
   if (title) return `${host} · ${title}`
   try { const p = decodeURI(new URL(url).pathname).replace(/\/+$/, ''); return p ? `${host}${p}` : host } catch { return host }
+}
+
+/** 同一搜索词又搜了一次:新结果在前,旧结果里网址没重复的接在后面。 */
+function mergeResults(next: TaskSourceResult[] | undefined, prev: TaskSourceResult[] | undefined): TaskSourceResult[] | undefined {
+  if (!prev?.length) return next
+  if (!next?.length) return prev
+  const seen = new Set(next.map((r) => r.key))
+  return [...next, ...prev.filter((r) => !seen.has(r.key))]
 }
 
 /** 一次 web_search 调用搜到的结果:正文引用过的按编号排前,其余照搜索顺序。 */
@@ -178,7 +186,8 @@ export function summarizeTask(messages: UiMessage[], running: boolean, cwd?: str
       // 再次命中 = 又用了一次:先 delete 再 set,把它重新排到 Map 队尾(下面整体倒序 → 顶回最上面)。
       if (cur) {
         cur.hits++
-        if (src.kind === 'search') cur.results = src.results
+        // 同一搜索词再搜:这次的结果在前,之前那几轮的(别处已引用、编号照旧)接在后面,不丢
+        if (src.kind === 'search') cur.results = mergeResults(src.results, cur.results)
         if (src.kind === 'web') { cur.n = src.n; cur.hoverKey = src.hoverKey }
         sources.delete(key)
       }
@@ -190,16 +199,15 @@ export function summarizeTask(messages: UiMessage[], running: boolean, cwd?: str
     }
   }
 
-  // 搜索结果后来又被 web_fetch 读过:按网址并进结果那一行、标「读过」,读网页那行不再单出
+  // 搜索结果在同一条回答里又被 web_fetch 读过:并进结果那一行(已标「读过」),读网页那行不再单出。
+  // 按悬停键认 = 同一条回答 + 编号表里同一条(跳转前后的网址都已并好);别的回答里读的那页各有各的号,照旧单出一行
   const webRows = new Map<string, string>()
-  for (const [k, sc] of sources) if (sc.kind === 'web') { const ck = citeKey(sc.id); if (ck) webRows.set(ck, k) }
+  for (const [k, sc] of sources) if (sc.kind === 'web' && sc.hoverKey) webRows.set(sc.hoverKey, k)
   if (webRows.size) {
-    for (const sc of sources.values()) {
+    for (const sc of [...sources.values()]) {
       for (const r of sc.results || []) {
-        const row = webRows.get(r.key)
-        if (!row) continue
-        r.read = true
-        sources.delete(row)
+        const row = webRows.get(r.hoverKey)
+        if (row && sources.get(row)?.kind === 'web') { r.read = true; sources.delete(row) }
       }
     }
   }

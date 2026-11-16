@@ -45,6 +45,13 @@ describe('linkUrlsInOrder', () => {
   })
 })
 
+describe('linkUrlsInOrder × 引用式链接', () => {
+  it('按用的地方排,定义行不算;没用到的定义不占号', () => {
+    const md = `先 [第一处][a],再 [第二处](https://b.example/),[c][] 收尾。\n\n[a]: https://a.example/\n[c]: <https://c.example/>\n[unused]: https://u.example/`
+    expect(linkUrlsInOrder(md)).toEqual(['https://a.example/', 'https://b.example/', 'https://c.example/'])
+  })
+})
+
 describe('citeIndexOf', () => {
   const sources = [src(A, { title: '二世谷新手指南', snippet: '山脚有一条 1.2 公里的缓坡。', date: '2026-10-28' }), src(B), src(C)]
 
@@ -84,6 +91,16 @@ describe('citeIndexOf', () => {
     expect([A, B, C].map((u) => citeEntryOf(idx, u)?.n)).toEqual([1, 2, 3])
     expect(citeEntryOf(idx, A)?.src).toBeUndefined() // 悬停卡退回素卡
     expect(citeEntryOf(idx, 'https://elsewhere.example/p')).toBeUndefined()
+  })
+
+  it('web_fetch 要的网址和跳转后的网址各是一个搜索结果:并成一条,两处链接同一个号', () => {
+    const ev = fetchEv('f1', A, { result: `[${B}]\nCite…\n正文`, sources: [src(B)] })
+    const idx = citeIndexOf(msg(`[a](${A}) [b](${B}) [c](${C})`, [search('s1', sources), ev]))!
+    expect(citeEntryOf(idx, A)).toBe(citeEntryOf(idx, B))
+    expect([A, B, C].map((u) => citeEntryOf(idx, u)?.n)).toEqual([1, 1, 2])
+    expect(idx.entries).toHaveLength(2)
+    expect(citeEntryOf(idx, A)?.searchCalls).toEqual(['s1'])
+    expect(citeEntryOf(idx, B)?.fetchedText).toContain('正文')
   })
 
   it('一条回答里两次搜索都搜到同一页:一个条目、两个调用', () => {

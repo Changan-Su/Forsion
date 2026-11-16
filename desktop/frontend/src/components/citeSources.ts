@@ -55,19 +55,43 @@ const TRAIL_PUNCT = /[.,;:!?'"*_~。，；：！？、）】」』》]+$/
 const LINK_RE = /\]\(\s*<(https?:\/\/[^>\s]+)>|\]\(\s*(https?:\/\/[^\s()]*(?:\([^\s()]*\)[^\s()]*)*)|<(https?:\/\/[^>\s]+)>|(https?:\/\/[^\s<>()[\]]+)/gi
 const FENCE_RE = /^ {0,3}(`{3,}|~{3,})/
 
-/** markdown 里网页链接按出现顺序排出来(围栏代码块与行内代码里的不算)。只用来定编号顺序:漏认的链接照样能对上来源,只是排到后面。 */
+// 引用式链接:定义行 `[label]: url`、用法 `[文字][label]` / `[label][]` / `[label]`
+const REF_DEF_RE = /^ {0,3}\[([^\]]+)\]:\s*<?(https?:\/\/[^\s>]+)>?/i
+const REF_USE_RE = /\[([^\[\]]*)\]\[([^\[\]]*)\]|\[([^\[\]]+)\](?![(\[:])/g
+const refLabel = (s: string): string => s.replace(/\s+/g, ' ').trim().toLowerCase()
+
+/** markdown 里网页链接按**显示**顺序排出来(围栏代码块与行内代码里的不算;引用式链接按用的地方算,定义行不算)。
+ *  只用来定编号顺序:漏认的链接照样能对上来源,只是没有号。 */
 export function linkUrlsInOrder(md: string): string[] {
-  const out: string[] = []
+  const lines = md.split('\n')
+  const code: boolean[] = []
+  const defs = new Map<string, string>()
   let fence: string | null = null
-  for (const line of md.split('\n')) {
+  for (const [i, line] of lines.entries()) {
     const f = FENCE_RE.exec(line)
-    if (fence) { if (f && f[1][0] === fence[0] && f[1].length >= fence.length) fence = null; continue }
-    if (f) { fence = f[1]; continue }
+    if (fence) { code[i] = true; if (f && f[1][0] === fence[0] && f[1].length >= fence.length) fence = null; continue }
+    if (f) { code[i] = true; fence = f[1]; continue }
+    const d = REF_DEF_RE.exec(line)
+    if (d) { code[i] = true; const k = refLabel(d[1]); if (!defs.has(k)) defs.set(k, d[2]) }
+  }
+  const out: string[] = []
+  for (const [i, line] of lines.entries()) {
+    if (code[i]) continue
     const plain = line.replace(/(`+)[\s\S]*?\1/g, (m) => ' '.repeat(m.length))
+    const hits: Array<[number, string]> = []
     for (const m of plain.matchAll(LINK_RE)) {
       const url = m[1] ?? m[2] ?? m[3] ?? m[4]?.replace(TRAIL_PUNCT, '')
-      if (url) out.push(url)
+      if (url) hits.push([m.index ?? 0, url])
     }
+    if (defs.size) {
+      for (const m of plain.matchAll(REF_USE_RE)) {
+        const label = m[3] ?? (m[2] ? m[2] : m[1])
+        const url = label != null ? defs.get(refLabel(label)) : undefined
+        if (url) hits.push([m.index ?? 0, url])
+      }
+      hits.sort((a, b) => a[0] - b[0])
+    }
+    for (const [, url] of hits) out.push(url)
   }
   return out
 }
@@ -103,6 +127,16 @@ function argsUrl(ev: ToolEvent): string | undefined {
   try { const u = ev.arguments ? JSON.parse(ev.arguments)?.url : undefined; return typeof u === 'string' ? u : undefined } catch { return undefined }
 }
 
+/** 把 other 并进 into(同一页的两条):调用记录取并集,结构化来源 / 读到的文字缺哪补哪,other 的键都改指 into。 */
+function mergeEntry(into: CiteEntry, other: CiteEntry, byKey: Map<string, CiteEntry>, entries: CiteEntry[]): void {
+  for (const c of other.searchCalls) if (!into.searchCalls.includes(c)) into.searchCalls.push(c)
+  for (const c of other.fetchCalls) if (!into.fetchCalls.includes(c)) into.fetchCalls.push(c)
+  into.src ??= other.src
+  into.fetchedText ??= other.fetchedText
+  for (const [k, e] of byKey) if (e === other) byKey.set(k, into)
+  entries.splice(entries.indexOf(other), 1)
+}
+
 function buildIndex(msgId: string, events: ToolEvent[], content: string): CiteIndex | null {
   const byKey = new Map<string, CiteEntry>()
   const entries: CiteEntry[] = []
@@ -130,11 +164,12 @@ function buildIndex(msgId: string, events: ToolEvent[], content: string): CiteIn
       const header = HEADER_URL.exec(ev.result || '')?.[1]
       const urls = [src?.url, header, argsUrl(ev)].filter((u): u is string => !!u)
       const keys = urls.map(citeKey).filter((k): k is string => !!k)
-      // 已经搜到过(任何一个网址对得上)就并进那一条,否则按第一个网址新开一条
-      const known = keys.map((k) => byKey.get(k)).find((e): e is CiteEntry => !!e)
-      const first = known ?? (urls.length ? add(urls[0], urls[0] === src?.url ? src : undefined) : null)
+      // 已经有的(任何一个网址对得上)并成一条:要的网址和跳转后的网址各是一个搜索结果时也是同一页,否则按第一个网址新开一条
+      const known = [...new Set(keys.map((k) => byKey.get(k)).filter((e): e is CiteEntry => !!e))]
+      const first = known[0] ?? (urls.length ? add(urls[0], urls[0] === src?.url ? src : undefined) : null)
       if (!first) continue
-      for (const k of keys) if (!byKey.has(k)) byKey.set(k, first)
+      for (const other of known.slice(1)) mergeEntry(first, other, byKey, entries)
+      for (const k of keys) byKey.set(k, first)
       if (!first.fetchCalls.includes(ev.id)) first.fetchCalls.push(ev.id)
       if (!first.fetchedText && ev.result) first.fetchedText = ev.result
       if (src && !first.src) first.src = src

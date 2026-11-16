@@ -242,7 +242,26 @@ describe('来源 × 搜索来源编号', () => {
     ], false)
     expect(again.sources).toHaveLength(1)
     expect(again.sources[0]).toMatchObject({ hits: 2 })
-    expect(again.sources[0].results!.map((r) => r.url)).toEqual([A])
+    // 这次的结果在前,上一次搜到、这次没出现的接在后面(不丢)
+    expect(again.sources[0].results!.map((r) => [r.url, r.hoverKey.split('\u0000')[0]])).toEqual([[A, 'a2'], [B, 'a1'], [C, 'a1']])
+  })
+
+  it('别的回答里读的那页:各有各的号,单出一行,不并进上一轮的结果', () => {
+    const f = summarizeTask([
+      msg({ id: 'a1', content: `[c](${C}) [b](${B}) [a](${A})`, toolEvents: [search('s1', 'q')] }),
+      msg({ id: 'a2', content: `[a](${A})`, toolEvents: [fetchEv('f2', A)] }),
+    ], false)
+    expect(f.sources.map((s) => s.kind)).toEqual(['web', 'search'])
+    expect(f.sources[0]).toMatchObject({ n: 1, hoverKey: 'a2\u0000hokkaido-ski.jp/niseko/beginner' })
+    expect(f.sources[1].results!.find((r) => r.url === A)).toMatchObject({ n: 3, read: false })
+  })
+
+  it('读的网址跳转到搜到的那页:并进结果行,不重复', () => {
+    const final = B
+    const ev = { ...fetchEv('f1', 'https://short.example/b'), result: `[${final}]\n…` }
+    const f = summarizeTask([msg({ id: 'a1', content: `[b](${final})`, toolEvents: [search('s1', 'q'), ev] })], false)
+    expect(f.sources.map((s) => s.kind)).toEqual(['search'])
+    expect(f.sources[0].results!.find((r) => r.url === B)).toMatchObject({ n: 1, read: true })
   })
 
   it('老会话:没有结构化来源 → 结果从文字里认,标签是主机 + 路径', () => {

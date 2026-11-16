@@ -232,20 +232,61 @@ export function convertHtml(html: string): HtmlConvert {
   };
 }
 
+/** 一个标签体里的属性(线性单遍:名字 [= 值],值可带引号)。名字小写。 */
+function tagAttrs(tag: string): Map<string, string> {
+  const out = new Map<string, string>();
+  const n = tag.length;
+  let i = 0;
+  const ws = (c: string): boolean => c === ' ' || c === '\n' || c === '\t' || c === '\r' || c === '\f' || c === '/';
+  while (i < n) {
+    while (i < n && ws(tag[i])) i++;
+    const ns = i;
+    while (i < n && !ws(tag[i]) && tag[i] !== '=') i++;
+    const name = tag.slice(ns, i).toLowerCase();
+    while (i < n && ws(tag[i])) i++;
+    if (tag[i] !== '=') { if (i === ns) i++; continue; }
+    i++;
+    while (i < n && ws(tag[i])) i++;
+    let value: string;
+    if (tag[i] === '"' || tag[i] === "'") {
+      const q = tag[i];
+      const close = tag.indexOf(q, i + 1);
+      value = tag.slice(i + 1, close === -1 ? n : close);
+      i = close === -1 ? n : close + 1;
+    } else {
+      const vs = i;
+      while (i < n && !ws(tag[i])) i++;
+      value = tag.slice(vs, i);
+    }
+    if (name && !out.has(name)) out.set(name, value);
+  }
+  return out;
+}
+
 /** 网页自己报的标题 / 摘要 / 发布日期(只看 <head>,给界面的来源卡用,不进模型那份文字)。
- *  线性:<meta> 与属性都是有界字符类的正则,只扫 </head> 之前(最多 256KB)。 */
+ *  线性:indexOf 推进找 <meta / <title,找不到 `>` 就停(后面也不会有);不用回溯正则扫不可信 HTML。 */
 export function pageMeta(html: string): { title?: string; description?: string; date?: string } {
   const headEnd = html.search(/<\/head\s*>/i);
   const head = html.slice(0, Math.min(headEnd === -1 ? html.length : headEnd, 256 * 1024));
   const metas = new Map<string, string>();
-  for (const m of head.matchAll(/<meta\s[^>]{0,4000}>/gi)) {
-    const attrs = new Map<string, string>();
-    for (const a of m[0].matchAll(/([a-zA-Z_:.-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/g)) attrs.set(a[1].toLowerCase(), a[2] ?? a[3] ?? a[4] ?? '');
+  for (let i = indexOfCI(head, '<meta', 0), seen = 0; i !== -1 && seen < 200; i = indexOfCI(head, '<meta', i + 5), seen++) {
+    const gt = head.indexOf('>', i);
+    if (gt === -1) break;
+    if (gt - i > 4000) { i = gt - 5; continue; }
+    const attrs = tagAttrs(head.slice(i + 5, gt));
     const key = (attrs.get('property') || attrs.get('name') || attrs.get('itemprop') || '').toLowerCase();
     const content = attrs.get('content');
     if (key && content && !metas.has(key)) metas.set(key, decodeEntities(content).replace(/\s+/g, ' ').trim());
+    i = gt - 5;
   }
-  const titleTag = /<title[^>]*>([^<]{1,1000})<\/title>/i.exec(head)?.[1];
+  let titleTag: string | undefined;
+  const t0 = indexOfCI(head, '<title', 0);
+  const tgt = t0 === -1 ? -1 : head.indexOf('>', t0);
+  if (tgt !== -1) {
+    const t1 = indexOfCI(head, '</title', tgt + 1);
+    const raw = head.slice(tgt + 1, t1 === -1 ? tgt + 1 : Math.min(t1, tgt + 1 + 1000));
+    titleTag = raw.trim() ? raw : undefined;
+  }
   const pick = (...keys: string[]): string | undefined => keys.map((k) => metas.get(k)).find((v) => !!v);
   return {
     title: pick('og:title', 'twitter:title') || (titleTag ? decodeEntities(titleTag).replace(/\s+/g, ' ').trim() : undefined) || undefined,
