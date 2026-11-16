@@ -1,5 +1,5 @@
 import { MessageCircle, MessageCircleQuestion, BookOpen, FolderOpen, Bot, Users, Terminal, GitCompareArrows } from 'lucide-react'
-import { addCommand, registerView, useWorkspace } from '@lcl/engine'
+import { activeMainPanel, addCommand, registerView, useWorkspace } from '@lcl/engine'
 import { activeChatModelId, useApp } from '../stores/appStore'
 import { TANGU_SLICE } from '../tangu/store/tanguSlice'
 import { translate } from '../i18n'
@@ -41,16 +41,19 @@ const app = () => useApp.getState()
 const ws = () => useWorkspace.getState()
 
 /** 主区对话跑在外部引擎上、跑它的插件登记了右栏页(registerEngineHarness 的 railView)时,右栏在组后面补上那页
- *  (lcl ViewDef.rightExtras:不抢前台,换到别处的对话就关)。跟随型看当前会话,钉了会话的看自己那场;新对话看 newChatCfg。 */
+ *  (lcl ViewDef.rightExtras:不抢前台,换到别处的对话就关)。那页跟的是全局当前会话(插件用不带参数的
+ *  ctx.tangu.agentStatus());主区钉住的是另一场时不补,免得右栏挂着别的对话的页。新对话看 newChatCfg。 */
 function chatRailExtras(params: Record<string, unknown>): Array<{ type: string; params: Record<string, unknown> }> {
   const s = app()
-  const sid = params.followActive === false ? (typeof params.sessionId === 'string' ? params.sessionId : null) : s.activeId
+  if (params.followActive === false && typeof params.sessionId === 'string' && params.sessionId !== s.activeId) return []
+  const sid = s.activeId
   const cfg = sid ? (s.configBySession[sid] || [...s.sessions, ...s.archivedSessions].find((x) => x.id === sid)?.agent_config) : s.newChatCfg
   const engine = chatEngineOf(cfg, s.agentDefs, s.defaultAgentSlug)
   const type = engine ? engineRailViewType(engine) : null
   return type ? [{ type, params: {} }] : []
 }
-/** 补页的输入变了(换会话 / 换 Agent / Agent 改了引擎 / 插件登记或撤掉)→ 右栏重新对账。流式回答时这几样的引用不变,直接跳过。 */
+/** 补页的输入变了(换会话 / 换 Agent / Agent 改了引擎 / 插件登记或撤掉)→ 右栏重新对账。按主区那一格的参数算
+ *  (钉住的格子和跟随的格子结果不同);流式回答时这几样的引用不变,直接跳过。主区换格子由 lcl 自己对账。 */
 let watchingRail = false
 function watchChatRail(): void {
   if (watchingRail) return
@@ -58,7 +61,9 @@ function watchChatRail(): void {
   let inputs: unknown[] = []
   let last = ''
   const poke = (): void => {
-    const now = chatRailExtras({}).map((p) => p.type).join('|')
+    const api = ws().api
+    const main = api ? activeMainPanel(api) : null
+    const now = chatRailExtras((main?.params as Record<string, unknown> | undefined) ?? {}).map((p) => p.type).join('|')
     if (now === last) return
     last = now
     ws().refreshTabs()
