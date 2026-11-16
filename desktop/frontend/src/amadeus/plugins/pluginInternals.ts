@@ -50,12 +50,14 @@ export function internalsAvailable(): boolean {
  *  一次更新只复制变了的那几条路径。冻结的副本谁拿都一样,所以全局共用一张。
  *  Map / Set 常被原地改:它们自己不进这张表,**含有它们的整条祖先链也不进**(否则 `{ nested: { map } }` 里 map.set 之后
  *  父对象命中旧副本,读不到也不通知 —— Codex 11-16)。普通对象 / 数组原地改了却没换引用的,副本照旧当没变,宿主自己的界面同样不刷新。 */
-const copies = new WeakMap<object, unknown>()
+/** 写成别名:webhost.test 按字面扫嵌入元素标签,尖括号里直接写 object 会被它当成 object 元素。 */
+type Obj = object
+const copies = new WeakMap<Obj, unknown>()
 const MAX_DEPTH = 64
 /** 复制途中遇到过几个 Map / Set:一个对象复制完若这个数变了,说明子树里有会被原地改的东西,它的副本不留。 */
 let volatileSeen = 0
 /** 正在填的占位副本。环上回到它 = 子树引用了还没定稿的祖先,这样的子树也不留(祖先若因 Map 不留,留下的子树会指着旧祖先)。 */
-const building = new WeakSet<object>()
+const building = new WeakSet<Obj>()
 const getTime = Date.prototype.getTime
 
 /** 把宿主状态复制成冻结的普通数据:数字 / 文字 / 布尔 / null 原样;数组、普通对象逐层复制;函数和访问器略去;
@@ -133,7 +135,7 @@ function copy(v: unknown, depth: number): unknown {
 
 /** 两份副本是否同样的数据。共享的子树按引用直接判等,所以通常只走变了的那几条路径。
  *  有环的数据:同一对对象再碰到就当相等(它们是否相等由这一轮别处的比较决定),不会一路比到深度上限再判不等。 */
-export function sameData(a: unknown, b: unknown, depth = 0, seen?: WeakMap<object, WeakSet<object>>): boolean {
+export function sameData(a: unknown, b: unknown, depth = 0, seen?: WeakMap<Obj, WeakSet<Obj>>): boolean {
   if (Object.is(a, b)) return true
   if (depth > MAX_DEPTH || typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false
   seen ??= new WeakMap()
@@ -201,7 +203,7 @@ export const FAULT_LIMIT = 3
 const live = new Map<string, string>()
 const loads = new Map<string, number>()
 const strikes = new Map<string, number[]>()
-const counted = new WeakSet<object>()
+const counted = new WeakSet<Obj>()
 let trip: ((pluginId: string) => void) | null = null
 let watching = false
 
