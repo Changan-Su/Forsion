@@ -23,7 +23,7 @@ import { computeSideWidth, computeBottomHeight, computeTransientSideWidth } from
 import { shouldRecordSideWidth } from './sideCapture'
 import { locOf, type DropTarget } from './dropModel'
 import { isLastPinned, isPinned, missingPinned, type PanelRef, type PinnedViews } from './pinnedViews'
-import { arrangeRight, planRight, rightGroupFor, RULE_PARAM, RULE_TAG, type RightRef } from './rightRules'
+import { arrangeRight, baseKeyOf, planRight, rightExtrasFrom, rightGroupFor, RULE_PARAM, RULE_TAG, type RightRef } from './rightRules'
 import { IS_MAIN_WINDOW, IS_MINI_PANEL, IS_VIEW_WINDOW, WINDOW_SPACE_ID } from './uiMode'
 import { mainOpensBeside, noteBesideTarget } from './openBeside'
 import { useNav } from './navStore'
@@ -528,7 +528,7 @@ function rightGroupNow(api: DockviewApi, defaults: readonly Stashed[]): ReturnTy
   // 主视图还是占位(它的插件没就位 / 已关掉):不对账。按缺省组对的话,会把它带 __by:'rule' 的伴随视图当成
   // 「不属于本组」关掉、随即存盘 —— 参数一丢,插件回来也复原不了(Codex 3a 评审)。注册上来后下一次 refreshTabs 再对。
   if (type && !getView(type)) return null
-  return rightGroupFor(type, type ? getView(type)?.rightCompanions : undefined, defaults, usableRight)
+  return rightGroupFor(type, type ? getView(type)?.rightCompanions : undefined, defaults, usableRight, rightExtrasFrom(type ? getView(type)?.rightExtras : undefined, main?.params))
 }
 /** refreshTabs 里发现组变了:推一拍再对账 —— 它本身就在开 / 关 / 激活的半路上,当场再开关面板会重入。 */
 function queueRightRules(): void {
@@ -985,7 +985,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     const defaults = get().sidebarDefaults.right
     const g = rightGroupNow(api, defaults)
     if (!g || g.key === rightKey) return
-    const changed = rightKey !== null
+    // 只有基本组变了才算换组(新组第一项顶到前台);只是补项变了(换到 / 换走跑在引擎上的对话)只开 / 关那一项,前台不动
+    const changed = rightKey !== null && baseKeyOf(rightKey) !== g.base
     rightKey = g.key
     const pinned = get().pinned.right ?? []
     // 单例开在了别的区(用户把侧栏对话拖进主区):不在右栏再开一份。非单例(工作区:左栏会话、右栏文件)两边各一份是常态,不算。

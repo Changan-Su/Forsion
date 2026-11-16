@@ -92,6 +92,24 @@ describe('classifyResumeFailure', () => {
   });
 });
 
+describe('一轮中途换模型(config_option_update)', () => {
+  it('报了模型这一项 → 把当前模型告诉宿主;没写当前值 → undefined;只改思考档 / 回放中 → 不告诉', async () => {
+    const seen: Array<string | undefined> = [];
+    let replaying = false;
+    const { client } = createAcpClient('DeepSeek Harness', {
+      signal: new AbortController().signal, publish: () => {}, replaying: () => replaying,
+      requestApproval: async () => ({ action: 'approve' }), onModel: (id) => { seen.push(id); },
+    });
+    const send = (configOptions: unknown) => client.sessionUpdate({ sessionId: 's', update: { sessionUpdate: 'config_option_update', configOptions } as any });
+    const pro = '["deepseek-official","deepseek-v4-pro"]';
+    await send([{ ...DSH_OPTIONS[0], currentValue: pro }, DSH_OPTIONS[1]]);
+    await send([{ ...DSH_OPTIONS[0], currentValue: undefined }]);
+    await send([DSH_OPTIONS[1]]);
+    replaying = true; await send(DSH_OPTIONS);
+    expect(seen).toEqual([pro, undefined]);
+  });
+});
+
 describe('审批请求只带 toolCallId(DSH)', () => {
   const setup = () => {
     const asked: Array<{ preview: string; name: string; args: string }> = [];

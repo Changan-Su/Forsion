@@ -278,6 +278,7 @@ export class ResidentLink {
       signal: ctx.signal,
       publish: (type, payload) => { armEngineIdle(); ctx.publish(type, payload); },
       hideToolPrefix: ctx.hideToolPrefix,
+      onModel: ctx.onModel,
       touch: armEngineIdle,
       waitingElsewhere: (waiting) => {
         idlePaused = waiting;
@@ -365,6 +366,7 @@ export class ResidentLink {
       const known = s || !open.sel ? open.sel : { ...open.sel, currentModelId: undefined };
       const sel = await applyEngineModel(this.conn, sessionId, s, ctx.engineModelId, def.id, guard, known);
       open.sel = sel;
+      try { ctx.onModel?.(sel.currentModelId); } catch { /* 只是告知 */ }
       if (ctx.signal.aborted) throw stoppedError();
       armEngineIdle();
       let res: Awaited<ReturnType<ClientSideConnection['prompt']>>;

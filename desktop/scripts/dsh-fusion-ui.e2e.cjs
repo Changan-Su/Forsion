@@ -20,6 +20,10 @@
  *   ⑦(--approvals-fallback)故意让桥的自检对不上(DSH2FORSION_APPROVAL_EVENT 改事件名):Forsion 的轮不接管,托盘里是
  *      「DSH 在工作台里等你批准」+「打开工作台」,点了落到那场、在工作台里批,Forsion 那一轮接着跑完、提示撤掉。
  *
+ *   ⑧(--rail,第 2 档右栏页)装测试用的右栏页插件(DSH2Forsion tests/fixtures/rail-page,用 DSH 自己的 `plugin add`)、重启 DSH;
+ *      DSH 跑的对话右栏「详情 / 文件 / 大纲」后面多一页 DSH(前台不动)→ 点开是 DSH 的文件页 → 在它自己那排页签里开插件页
+ *      → 换到 Tangu 的新对话这页就关 → 回到 DSH 那场它回来、前台不抢,点开还是刚才那页插件页 → 选了 DSH Agent 还没发的新对话:说明。
+ *
  * 假模型:常驻 DSH 由插件起、环境走白名单(不带 provider key),所以地址和 key 写进隔离 DSH 目录的 .env —— 和用户自己配 DSH 是同一层。
  *
  * 用法:先 npm run build(桌面)+ tangu-agent 的 npm run build + DSH2Forsion 的 npm run build;
@@ -41,6 +45,9 @@ const argv = process.argv.slice(2)
 const opt = (name) => { const i = argv.indexOf(`--${name}`); return i >= 0 ? argv[i + 1] : '' }
 const PLUGIN = opt('plugin'), RUNTIME = opt('runtime'), ROOT_ARG = opt('root'), HOLD = argv.includes('--hold')
 const MODE = argv.includes('--approvals-fallback') ? 'fallback' : argv.includes('--approvals') ? 'approvals' : 'full'
+const RAIL = argv.includes('--rail')
+const RAIL_FIXTURE = opt('rail-fixture') || path.join(PLUGIN || '.', '..', 'tests', 'fixtures', 'rail-page')
+const RAIL_TYPE = 'plugin:dsh2forsion:rail'
 const RENAMED_EVENT = 'approval/request-renamed-by-e2e'
 if (!PLUGIN || !RUNTIME || !ROOT_ARG) { console.error('用法见文件头'); process.exit(2) }
 for (const f of ['out/main/main.js', '../tangu-agent/dist/standalone/main.js']) if (!fs.existsSync(path.join(ROOT, f))) { console.error(`缺 ${f} —— 先 build`); process.exit(2) }
@@ -149,6 +156,9 @@ function prepareHome() {
   // 常驻那个 DSH 由插件起,环境走白名单、不带 provider key:像用户那样,把模型地址和 key 写进 DSH 目录的 .env(DSH 自己认这一层)
   fs.writeFileSync(path.join(dshEnv.DSH_HOME, '.env'), `DEEPSEEK_BASE_URL=${STUB}\nDEEPSEEK_API_KEY=stub-not-a-real-key\n`)
   fs.writeFileSync(path.join(VAULT, 'welcome.md'), '# check\n')
+  // 右栏的文件页要有东西可看(⑧)
+  fs.writeFileSync(path.join(WS, 'README.md'), '# Release check\n')
+  fs.mkdirSync(path.join(WS, 'docs'), { recursive: true }); fs.writeFileSync(path.join(WS, 'docs', 'notes.md'), '# Notes\n')
   for (const dir of [D('app', 'userdata'), D('app', 'userdata-dev')]) {
     fs.writeFileSync(path.join(dir, 'amadeus-config.dev.json'), JSON.stringify({ lastVault: VAULT, localVault: VAULT }))
     fs.writeFileSync(path.join(dir, 'tangu-desktop-config.json'), JSON.stringify({ mode: 'managed', sandbox: 'none', browserEnabled: false, unitHostEnabled: false, defaultWorkspaceDir: WS, modelId: 'stubjudge/judge' }))
@@ -198,15 +208,15 @@ const lastAsst = (win) => win.evaluate(() => [...document.querySelectorAll('.t2-
 const pluginRow = (win, id) => win.locator(`[data-plugin-row="${id}"]`).first()
 // 工作台里的 DSH 页面:<webview> 的客体网页(主进程里拿它的 webContents)
 async function guestEval(app, code) {
-  return app.evaluate(async ({ webContents }, src) => {
-    const wc = webContents.getAllWebContents().find((w) => w.getType() === 'webview' && /^http:\/\/127\.0\.0\.1:\d+\//.test(w.getURL()))
+  return app.evaluate(async ({ webContents, session }, src) => {
+    const wc = webContents.getAllWebContents().find((w) => w.getType() === 'webview' && /^http:\/\/127\.0\.0\.1:\d+\//.test(w.getURL()) && w.session !== session.fromPartition('persist:plugin-surface-dsh2forsion-rail'))
     if (!wc) return { none: true }
     return { value: await wc.executeJavaScript(src, true) }
   }, code)
 }
 async function guestType(app, text) {
-  return app.evaluate(async ({ webContents }, t) => {
-    const wc = webContents.getAllWebContents().find((w) => w.getType() === 'webview' && /^http:\/\/127\.0\.0\.1:\d+\//.test(w.getURL()))
+  return app.evaluate(async ({ webContents, session }, t) => {
+    const wc = webContents.getAllWebContents().find((w) => w.getType() === 'webview' && /^http:\/\/127\.0\.0\.1:\d+\//.test(w.getURL()) && w.session !== session.fromPartition('persist:plugin-surface-dsh2forsion-rail'))
     if (!wc) return false
     wc.focus()
     wc.insertText(t)
@@ -219,8 +229,8 @@ async function guestType(app, text) {
 async function guestClickText(app, pattern) {
   const pt = (await guestEval(app, `(() => { const re = ${pattern}; const hit = [...document.querySelectorAll('body *')].filter((e) => re.test((e.textContent || '').trim()) && e.getClientRects().length).pop(); if (!hit) return null; const b = hit.getBoundingClientRect(); return { x: Math.round(b.x + b.width / 2), y: Math.round(b.y + b.height / 2), tag: hit.tagName } })()`)).value
   if (!pt) return null
-  await app.evaluate(({ webContents }, p) => {
-    const wc = webContents.getAllWebContents().find((w) => w.getType() === 'webview' && /^http:\/\/127\.0\.0\.1:\d+\//.test(w.getURL()))
+  await app.evaluate(({ webContents, session }, p) => {
+    const wc = webContents.getAllWebContents().find((w) => w.getType() === 'webview' && /^http:\/\/127\.0\.0\.1:\d+\//.test(w.getURL()) && w.session !== session.fromPartition('persist:plugin-surface-dsh2forsion-rail'))
     if (!wc) return
     wc.sendInputEvent({ type: 'mouseMove', x: p.x, y: p.y })
     wc.sendInputEvent({ type: 'mouseDown', x: p.x, y: p.y, button: 'left', clickCount: 1 })
@@ -228,6 +238,36 @@ async function guestClickText(app, pattern) {
   }, pt)
   return pt
 }
+
+// 右栏那页 DSH(第 2 档):同样是 <webview>,地址 # 里带 d2f-rail=
+async function railEval(app, code) {
+  return app.evaluate(async ({ webContents, session }, src) => {
+    const wc = webContents.getAllWebContents().find((w) => w.getType() === 'webview' && w.session === session.fromPartition('persist:plugin-surface-dsh2forsion-rail'))
+    if (!wc) return { none: true }
+    return { value: await wc.executeJavaScript(src, true) }
+  }, code)
+}
+async function railClick(app, selectorJs) {
+  const pt = (await railEval(app, `(() => { const e = (${selectorJs})(); if (!e) return null; const r = e.getBoundingClientRect(); return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) } })()`)).value
+  if (!pt) return null
+  await app.evaluate(({ webContents, session }, p) => {
+    const wc = webContents.getAllWebContents().find((w) => w.getType() === 'webview' && w.session === session.fromPartition('persist:plugin-surface-dsh2forsion-rail'))
+    if (!wc) return
+    wc.sendInputEvent({ type: 'mouseMove', x: p.x, y: p.y })
+    wc.sendInputEvent({ type: 'mouseDown', x: p.x, y: p.y, button: 'left', clickCount: 1 })
+    wc.sendInputEvent({ type: 'mouseUp', x: p.x, y: p.y, button: 'left', clickCount: 1 })
+  }, pt)
+  return pt
+}
+/** 右栏的页签(按顺序):类型 + 是不是前台。右栏在窗口右半边。 */
+const rightTabs = (win) => win.evaluate(() => [...document.querySelectorAll('.dv-tab')].filter((t) => t.getBoundingClientRect().x > innerWidth * 0.55 && t.getBoundingClientRect().width > 0)
+  .map((t) => ({ type: t.querySelector('.wb-tab')?.getAttribute('data-view-type') || '', active: t.classList.contains('dv-active-tab') })))
+async function clickRightTab(win, type) {
+  const pt = await win.evaluate((type) => { const t = [...document.querySelectorAll('.dv-tab')].find((x) => x.querySelector('.wb-tab')?.getAttribute('data-view-type') === type && x.getBoundingClientRect().x > innerWidth * 0.55); if (!t) return null; const b = t.getBoundingClientRect(); return { x: b.x + b.width / 2, y: b.y + b.height / 2 } }, type)
+  if (pt) await win.mouse.click(pt.x, pt.y)
+  return !!pt
+}
+const railText = async (app) => (await railEval(app, 'document.body.innerText')).value || ''
 
 const AGENT = '浣溪沙'
 const GENUI = 'dsh-genui@0.3.3'
@@ -404,6 +444,98 @@ async function approvalsWalk(app, win, guestLogs) {
   check('⑥ 工作台那件切到工作台批完:写上了', wbFront2 && !!clickedBoth && !!wroteBoth && outside('e2e-wb-both.txt'), `${wbFront2 ? '' : '工作台没到前面;'}${clickedBoth ? '' : '没找到「允许一次」'}`)
 }
 
+// ⑧ 第 2 档右栏页(--rail):在 DSH 跑的那场对话上走一遍(③c 之后,那场正在前台)
+async function widenRail(win) {
+  const sash = await win.evaluate(() => {
+    const v = [...document.querySelectorAll('.wb-view--right')].find((x) => x.getBoundingClientRect().width > 0)?.getBoundingClientRect()
+    if (!v || v.width >= 340) return null
+    const c = [...document.querySelectorAll('.dv-sash')].map((e) => e.getBoundingClientRect()).filter((b) => b.width > 0 && b.width < 12 && b.height > 300 && Math.abs(b.x + b.width / 2 - v.x) < 14)
+    return c[0] ? { x: c[0].x + c[0].width / 2, y: c[0].y + c[0].height / 2 } : null
+  })
+  if (!sash) return
+  await win.mouse.move(sash.x, sash.y); await win.mouse.down(); await win.mouse.move(sash.x - 60, sash.y, { steps: 6 }); await win.mouse.move(sash.x - 113, sash.y, { steps: 6 }); await win.mouse.up(); await sleep(900)
+}
+async function railWalk(app, win) {
+  const dshTitle = sidebarTitle(win, /^Hello DSH, please/)
+  const railTab = (t) => t.find((x) => x.type === RAIL_TYPE)
+  await dshTitle.click(); await sleep(1500)
+  // 右栏收着时(新窗口的缺省)先用右上角的开关打开,和用户一样
+  if ((await win.locator('.dv-edge-right').first().getAttribute('aria-pressed').catch(() => null)) !== 'true') { await win.locator('.dv-edge-right').first().click(); await sleep(1200) }
+  const tabs0 = await until(async () => { const t = await rightTabs(win); return railTab(t) ? t : null }, 15_000, 500)
+  await shot(win, '30-rail-tab')
+  check('⑧ DSH 跑的对话:右栏自带那几页后面多一页 DSH,前台不是它', !!tabs0 && tabs0[tabs0.length - 1].type === RAIL_TYPE && !railTab(tabs0).active, JSON.stringify(await rightTabs(win)))
+  // 缺省宽度下右栏的页签条放不下第四个:DSH 那页进 dockview 的「⌄N」溢出菜单。照用户那样从菜单里点它,得点得到、开得出来
+  const ov = await win.evaluate(() => {
+    const s = [...document.querySelectorAll('.dv-tabs-container')].find((x) => x.getBoundingClientRect().x > innerWidth * 0.55)
+    const o = s?.closest('.dv-tabs-and-actions-container')?.querySelector('.dv-tabs-overflow-dropdown-root')
+    const b = o?.getBoundingClientRect()
+    return { cw: s?.clientWidth ?? 0, sw: s?.scrollWidth ?? 0, at: b && b.width > 0 ? { x: b.x + b.width / 2, y: b.y + b.height / 2 } : null }
+  })
+  if (ov.at) {
+    await win.mouse.click(ov.at.x, ov.at.y); await sleep(600)
+    const item = await win.evaluate((type) => { const t = [...document.querySelectorAll('.dv-tab')].find((x) => x.querySelector(`[data-view-type="${type}"]`) && x.getBoundingClientRect().y > 10 && x.getBoundingClientRect().width > 0); if (!t) return null; const b = t.getBoundingClientRect(); return { x: b.x + b.width / 2, y: b.y + b.height / 2 } }, RAIL_TYPE)
+    if (item) await win.mouse.click(item.x, item.y)
+    const opened = !!item && await until(async () => ((await win.locator('[data-d2f="rail"]').first().evaluate((e) => e.getBoundingClientRect().width > 0).catch(() => false)) ? true : null), 10_000, 400)
+    await sleep(1500); await shot(win, '30b-rail-overflow')
+    check('⑧ 缺省宽度放不下第四个页签:DSH 收进右栏的「⌄」菜单,从菜单里点得到', !!opened, `页签条 ${ov.cw}/${ov.sw}px;菜单里${item ? '有' : '没有'} DSH`)
+  } else check('⑧ (缺省宽度下四个页签放得下,没有溢出菜单)', true, `页签条 ${ov.cw}/${ov.sw}px`)
+  // 往后按方案图的宽度走(右栏拉宽 113px,同方案目录 shoot4.cjs),再把前台换回「详情」
+  await widenRail(win)
+  await clickRightTab(win, 'tangu-details'); await sleep(600)
+  await clickRightTab(win, RAIL_TYPE)
+  const railUp = await until(async () => (await win.locator('[data-d2f="rail"] .d2f-rail-box:not([hidden]) webview').count()) > 0, 30_000, 500)
+  const filesShown = railUp && await until(async () => (/README\.md/.test(await railText(app)) ? true : null), 20_000, 700)
+  await sleep(800); await shot(win, '31-rail-files')
+  const railPartition = await win.locator('[data-d2f="rail"] webview').first().getAttribute('partition').catch(() => '')
+  check('⑧ 点开:是 DSH 右侧栏的文件页(这场对话的工作区),开在右栏自己的分区里', !!filesShown && /dsh2forsion-rail$/.test(railPartition || ''),
+    `${railPartition} | ${(await railText(app)).replace(/\s+/g, ' ').slice(0, 160)} | ${(await win.locator('[data-d2f="rail"]').innerText().catch(() => '')).slice(0, 120)}`)
+  // 插件页:像用户那样在 DSH 自己那排页签点「+」(DSH 0.2.2 的标签是「新标签页」),在引导页里点测试插件那一项(或在「更多工具」里)
+  const visible = 'b.getBoundingClientRect().width > 0'
+  const plus = await railClick(app, `() => [...document.querySelectorAll('button[aria-label]')].find((b) => /^(新标签页|New tab)$/.test(b.getAttribute('aria-label') || '') && ${visible})`)
+  await sleep(900)
+  const fixtureEntry = `() => [...document.querySelectorAll('button, [role=button], [role=menuitem], a')].find((b) => /Fixture page/.test(b.textContent || '') && ${visible})`
+  let entry = await railClick(app, fixtureEntry)
+  if (!entry) {
+    await railClick(app, `() => [...document.querySelectorAll('button, [role=button]')].find((b) => /更多工具|More tools/.test(b.textContent || '') && ${visible})`)
+    await sleep(700)
+    entry = await railClick(app, fixtureEntry)
+  }
+  const pluginShown = await until(async () => (/D2F-FIXTURE-PAGE/.test(await railText(app)) ? true : null), 15_000, 600)
+  await sleep(600); await shot(win, '32-rail-plugin-page')
+  check('⑧ 在 DSH 自己那排页签里开插件登记的页', !!pluginShown, `+ ${plus ? '点到' : '没找到'};入口 ${entry ? '点到' : '没找到'};${(await railText(app)).replace(/\s+/g, ' ').slice(0, 200)}`)
+  // 换到 Tangu 跑的新对话:这一页关掉
+  await win.getByText('新会话', { exact: true }).first().click(); await sleep(1200)
+  if (railTab(await rightTabs(win))) {
+    await win.locator('.agent-select-strip .compact-chat-picker').first().click(); await sleep(500)
+    const names = await win.locator('.chat-pick-row .chat-pick-name').allInnerTexts()
+    const other = names.find((n) => n.trim() === 'Tangu') ?? names.find((n) => n.trim() && n.trim() !== AGENT && !/DeepSeek|DSH/.test(n))
+    if (other) await win.locator('.chat-pick-row', { has: win.locator('.chat-pick-name', { hasText: other }) }).first().click()
+    await sleep(900)
+    if (await win.locator('.ui-popover-backdrop').count()) { await win.keyboard.press('Escape'); await sleep(400) }
+  }
+  const gone = await until(async () => (!railTab(await rightTabs(win)) ? true : null), 8_000, 400)
+  await shot(win, '33-tangu-no-rail')
+  check('⑧ 换到 Tangu 跑的对话:这一页关掉', !!gone, JSON.stringify(await rightTabs(win)))
+  // 回到 DSH 那场:它回来、前台不抢;点开还是刚才那页插件页(DSH 自己按会话记的)
+  await dshTitle.click(); await sleep(1500)
+  const tabs1 = await until(async () => { const t = await rightTabs(win); return railTab(t) ? t : null }, 10_000, 400)
+  check('⑧ 回到 DSH 那场:这一页回来,前台不是它', !!tabs1 && !railTab(tabs1).active, JSON.stringify(tabs1))
+  await clickRightTab(win, RAIL_TYPE)
+  const remembered = await until(async () => (/D2F-FIXTURE-PAGE/.test(await railText(app)) ? true : null), 20_000, 600)
+  await sleep(600); await shot(win, '34-rail-remembered')
+  check('⑧ 点开还是刚才那页插件页(不跳回文件)', !!remembered, (await railText(app)).replace(/\s+/g, ' ').slice(0, 160))
+  // 选了 DSH Agent、还没发的新对话:说明一句
+  await win.getByText('新会话', { exact: true }).first().click(); await sleep(1200)
+  await (await pickAgent(win, AGENT)).click(); await sleep(900)
+  if (await win.locator('.ui-popover-backdrop').count()) { await win.keyboard.press('Escape'); await sleep(400) }
+  await until(async () => (railTab(await rightTabs(win)) ? true : null), 8_000, 400)
+  await clickRightTab(win, RAIL_TYPE)
+  const noted = await until(async () => { const t = await win.locator('[data-d2f="rail"] .d2f-rail-note:not([hidden])').innerText().catch(() => ''); return /发一句之后/.test(t) && !/null|undefined/.test(t) ? t : null }, 10_000, 400)
+  await sleep(400); await shot(win, '35-rail-not-started')
+  check('⑧ 选了 DSH Agent、还没发的新对话:右栏写「发一句之后,这里显示 DSH 的页面」', !!noted, noted || await win.locator('[data-d2f="rail"]').innerText().catch(() => '(没有右栏页)'))
+  await dshTitle.click(); await sleep(1500)
+}
+
 async function main() {
   await new Promise((r) => server.listen(0, '127.0.0.1', r))
   STUB = `http://127.0.0.1:${server.address().port}`
@@ -452,6 +584,19 @@ async function main() {
     const fused = await until(async () => dshProcs().some((l) => l.includes('--profile forsion')), 90_000, 1000)
     check('前置:装了 DSH2Forsion,随 Forsion 起了常驻的融合 DSH(--profile forsion)', fused, dshProcs().map((l) => l.replace(/^\d+ /, '').slice(-60)).join(' / '))
     check('前置:融合组合建在 DSH 目录里,是插件建的', fs.existsSync(path.join(R, 'dsh/profiles/forsion/.dsh2forsion-fusion.json')))
+    if (RAIL) {
+      // ⑧ 的前置:像用户在 DSH 里装插件那样(dsh plugin add)把测试用的右栏页插件装进 forsion 组合,再重启常驻 DSH 让它加载
+      const binDir = path.join(path.dirname(BIN), '..', '..', '..', '.bin')
+      const add = require('child_process').spawnSync(NODE, [BIN, 'plugin', '--profile', 'forsion', 'add', '--ignore-scripts', `file:${RAIL_FIXTURE}`],
+        { env: { ...process.env, ...dshEnv, PATH: `${path.dirname(NODE)}:${binDir}:/usr/bin:/bin` }, encoding: 'utf8' })
+      const restarted = add.status === 0 ? await win.evaluate(async () => {
+        const c = await window.tangu.getConfig()
+        const r = await fetch(`${c.backendUrl}/extensions/dsh2forsion/dsh2forsion/sidecar/restart`, { method: 'POST', headers: { Authorization: `Bearer ${c.token}`, 'content-type': 'application/json' }, body: '{}' })
+        return { ok: r.ok, status: r.status, body: (await r.text()).slice(0, 200) }
+      }).catch((e) => ({ ok: false, status: 0, body: String(e?.message ?? e).slice(0, 200) })) : null
+      const back = restarted?.ok && await until(async () => dshProcs().some((l) => l.includes('--profile forsion')), 60_000, 1000)
+      check('前置(⑧):测试用的右栏页插件装进 DSH,常驻 DSH 重启好了', !!back, add.status !== 0 ? (add.stdout + add.stderr).slice(-300) : restarted?.ok ? (back ? '' : '重启后 60 秒内没见到 --profile forsion 进程') : `重启请求 ${restarted?.status}: ${restarted?.body}`)
+    }
 
     // ① Harness 卡
     await openAgents(win)
@@ -530,6 +675,8 @@ async function main() {
     await shot(win, '24b-back-in-forsion')
     check('③ 回到 Forsion 同一场接着发:答得出,DSH 那边是同一场(上文里有工作台那一句)', !!back && stub.sawWorkbenchLine === true, await lastAsst(win))
 
+    if (RAIL) await railWalk(app, win)
+
     // ③d 关掉工作台页签,从 Harness 卡的「打开工作台」进:看得到这场对话(连同刚才 Forsion 那一轮),并接着说
     await win.evaluate(() => [...document.querySelectorAll('.wb-tab')].find((t) => /DSH 工作台/.test(t.querySelector('.wb-tab-name')?.textContent || ''))?.querySelector('.wb-tab-close')?.click())
     await until(async () => (await win.locator('[data-d2f="workbench"] webview').count()) === 0, 5_000, 300)
@@ -590,9 +737,11 @@ async function main() {
     check('④ 工作台里 DSH 自己的插件页列着刚装的 genui', /genui/i.test(pluginPage), toPlugins ? `点在 ${toPlugins.tag} (${toPlugins.x},${toPlugins.y})` : '没找到「插件」入口')
     // Harness 卡「DSH 插件」变 1 个
     await openAgents(win); await rosterRow(win, AGENT).click(); await sleep(1500)
-    const count = await until(async () => { const t = await pluginRow(win, 'dsh-plugins').innerText().catch(() => ''); return /1 个/.test(t) ? t : null }, 20_000, 800)
+    // --rail 时 ⑧ 的前置先装了一个测试用的右栏页插件,genui 是第 2 个
+    const want = RAIL ? 2 : 1
+    const count = await until(async () => { const t = await pluginRow(win, 'dsh-plugins').innerText().catch(() => ''); return new RegExp(`${want} 个`).test(t) ? t : null }, 20_000, 800)
     await shot(win, '27-harness-after-install')
-    check('④ Harness 卡「DSH 插件」变成 1 个', !!count, count)
+    check(`④ Harness 卡「DSH 插件」变成 ${want} 个`, !!count, count || await pluginRow(win, 'dsh-plugins').innerText().catch(() => ''))
     // 在 Forsion 里再聊一句:DSH 给模型的系统提示里带上了 genui 那一节
     await enterSpace(win, 'tangu'); await sleep(1000)
     const before = stub.systems.length

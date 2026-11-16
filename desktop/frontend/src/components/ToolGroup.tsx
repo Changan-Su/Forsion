@@ -13,6 +13,7 @@ import { DiffView } from './DiffView'
 import { toolDiffText } from './toolDiff'
 import { registerMessages, useI18n } from '../i18n'
 import type { ApprovalRequest, ToolEvent } from '../../../../tangu-agent/src/contracts/clientTypes'
+import { parseComputerUseUnavailable } from '../../../../tangu-agent/src/contracts/agentEngine'
 import { ImageGenerationLoader } from '../views/chat2/ImageGenerationLoader'
 import { MaskTag, MaskedText, collectMasked, type MaskedValue } from './MaskedValues'
 import { isSelfWriteReceipt } from '../services/selfUpdates'
@@ -43,6 +44,15 @@ registerMessages({
   // hand_off_task(11-08「另起话题」):把手头没做完的活挪进一个新会话接着做。摘要就是这一句(一轮里只会挪一次,不报个数)
   'tool.verb.handoff': { zh: '挪到子会话', en: 'Moved to a new session' },
   'tool.sum.handoff': { zh: '把手头的活挪到了子会话', en: 'Moved the unfinished task to a new session' },
+  // 交给外部引擎的电脑控制没跑(模型看不见图 / 说不清):模型收到的是英文原话,这一行按界面语言写
+  'tool.cuUnavailable.noImage': {
+    zh: '没有执行：这个 Agent 现在用的模型看不见图，电脑控制要用能看图的模型。可以在输入框里换一个能看图的模型。',
+    en: 'Not run: the model this agent is using can’t see images, and computer control needs one that can. You can switch to a model that sees images in the chat box.',
+  },
+  'tool.cuUnavailable.unknown': {
+    zh: '没有执行：没能确认这个 Agent 现在用的模型能看图（比如引擎刚好没在跑），电脑控制只在确认能看图时才跑。',
+    en: 'Not run: Forsion couldn’t confirm that the model this agent is using can see images (the engine may not have been running), and computer control only runs when it can.',
+  },
   'tool.computerHistory.notSaved': {
     zh: '电脑历史摘录已交给模型，不会保存在对话记录里。',
     en: 'The computer history excerpt was passed to the model and isn’t saved in the conversation.',
@@ -54,8 +64,10 @@ registerMessages({
  * 那句英文不给人看 —— 成功结果一律换成本地化说明。认工具名不认占位原文(引擎可以改措辞);出错结果照原样显示(那是真原因)。
  */
 const COMPUTER_HISTORY_TOOL = 'read_computer_history'
-function toolResultText(ev: ToolEvent, t: (key: string) => string): string {
+export function toolResultText(ev: ToolEvent, t: (key: string) => string): string {
   if (ev.name === COMPUTER_HISTORY_TOOL && !ev.isError) return t('tool.computerHistory.notSaved')
+  const cu = ev.isError ? parseComputerUseUnavailable(ev.result) : null
+  if (cu) return t(cu === 'no-image-input' ? 'tool.cuUnavailable.noImage' : 'tool.cuUnavailable.unknown')
   return ev.result || t('tool.empty')
 }
 

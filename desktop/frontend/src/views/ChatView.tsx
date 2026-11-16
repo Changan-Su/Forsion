@@ -7,7 +7,7 @@ import type { FailedSend } from '../tangu/store/failedSend'
 import { trackChatReadReceipt } from './chat2/chatReadReceipt'
 import { Composer2 } from './chat2/Composer2'
 import { chatReadingKey, readChatPosition, trackChatReading, type ChatReadingController } from './chat2/chatReadingPosition'
-import { agentEngineOf, agentEnginePlaceholder, agentEngineState } from '../tangu/agentEngine'
+import { agentEngineOf, agentEnginePlaceholder, agentEngineState, chatEngineOf } from '../tangu/agentEngine'
 import { AgentSelectStrip } from '../components/AgentSelectStrip'
 import { displaySessionTitle, soloSessionTitle } from '../sessionTitle'
 import { ProjectSelector } from '../components/ProjectSelector'
@@ -444,7 +444,7 @@ export function ChatView({ leaf, params }: ViewProps) {
   const runAgentDef = runAgentSlug && !mvCfg.engineId && !mvCfg.soloEngineId && !mvCfg.groupChat && !mvCfg.teamMember ? s.agentDefs.find((a) => a.slug === runAgentSlug) : undefined
   const agentEngine = agentEngineOf(runAgentDef)
   const agentEngineHere = agentEngineState(agentEngine, s.engines)
-  const composerEngine = mvCfg.engineId || agentEngine || undefined
+  const composerEngine = chatEngineOf(mvCfg, s.agentDefs, s.defaultAgentSlug) || undefined // 同右栏补页(features/tangu.tsx)的口径
   useEffect(() => { if (agentEngine && agentEngineHere === 'ready') useApp.getState().ensureEngineCaps(agentEngine) }, [agentEngine, agentEngineHere])
   useEffect(() => { if (chatAgentSlug) void useApp.getState().refreshVoiceMode(chatAgentSlug) }, [chatAgentSlug])
 
