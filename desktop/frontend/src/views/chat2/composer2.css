@@ -285,7 +285,9 @@
   .t2c-row:not([data-compact]):has(> .t2c-capsule-held) > .t2c-collapse-on-capsule-open:not(.t2c-mic-control) {
     display: none;
   }
-  .t2c-row:not([data-compact]):has(> .t2c-capsule-held) > :is(.add-pill-wrap:not(.t2c-capsule-held), .t2c-mic-control) { opacity: 0; pointer-events: none; }
+  /* 拆成两条(cssHasGuard 认不出 :is 里套 :not 的结尾);麦克风那条叠写类名,保住原 :is 给的两级类特异性 */
+  .t2c-row:not([data-compact]):has(> .t2c-capsule-held) > .add-pill-wrap:not(.t2c-capsule-held),
+  .t2c-row:not([data-compact]):has(> .t2c-capsule-held) > .t2c-mic-control.t2c-mic-control { opacity: 0; pointer-events: none; }
 }
 .add-pill-wrap { transition: opacity var(--duration-fast, 0.15s) var(--ease-calm, ease); }
 .t2c-row > .t2c-mic-control { transition: background var(--duration-fast, 0.15s), color var(--duration-fast, 0.15s), opacity var(--duration-fast, 0.15s) var(--ease-calm, ease); }
