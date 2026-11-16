@@ -67,6 +67,7 @@ export function CompactChatPicker({
   const chipRef = useRef<HTMLButtonElement>(null)
   const surfaceRef = useRef<HTMLDivElement | null>(null)
   const searchRef = useRef<HTMLInputElement>(null)
+  const descriptionRef = useRef<HTMLDivElement>(null)
   const [open, setOpen] = useState<null | 'popover' | 'sheet'>(null)
   const [query, setQuery] = useState('')
   // 浮层的活动行(悬停 / ↑↓):焦点一直留在搜索框里,边打边筛,同 Composer2 的 @ 菜单
@@ -174,6 +175,11 @@ export function CompactChatPicker({
   // 底部说明区:活动行有简介就讲它,否则是状态句(谁会接这条消息)
   const described = open === 'popover' ? items.find((i) => i.id === activeId && i.description) : undefined
   const footer = described ? <><b>{described.name}</b>{described.description}</> : status
+  // Reserve the same space even on rows without copy: an above-anchored menu must not move under a stationary pointer.
+  const hasFooter = !!status || items.some((i) => !!i.description)
+  useLayoutEffect(() => {
+    if (descriptionRef.current) descriptionRef.current.scrollTop = 0
+  }, [described?.id, described?.name, described?.description, status])
 
   const rows = (list: ChatPickItem[], sheet: boolean): ReactNode => list.map((item, i) => {
     const head = item.section && item.section !== list[i - 1]?.section
@@ -257,6 +263,7 @@ export function CompactChatPicker({
         <div className="ui-popover-backdrop" style={{ pointerEvents: 'none' }} data-cmenu>
           <OverlayAt
             x={anchor.x} y={anchor.y} anchorTop={anchor.top} prefer="above"
+            boundary={document.documentElement}
             innerRef={(el) => { surfaceRef.current = el }}
             className="ctx-menu chat-pick-pop"
             style={{ pointerEvents: 'auto' }}
@@ -288,10 +295,10 @@ export function CompactChatPicker({
               {rows(shown, false)}
               {!shown.length && <div className="chat-pick-empty">{t('addMenu.noMatches')}</div>}
             </div>
-            {footer && (
+            {hasFooter && (
               <>
                 <div className="ctx-separator" />
-                <div className="chat-pick-desc" aria-live="polite">{footer}</div>
+                <div ref={descriptionRef} className="chat-pick-desc" aria-live="polite">{footer}</div>
               </>
             )}
           </OverlayAt>
