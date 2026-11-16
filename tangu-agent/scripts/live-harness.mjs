@@ -397,7 +397,7 @@ OPT_IN.add('plugindiag'); // 一个 run(几分钟);要 --plugin-src 给一份待
 OPT_IN.add('notebook'); // 两个 run;要 --plugin-src 给构建好的 Jupyter 笔记本插件、--python-bin 给解释器,只在动那个插件的工具说明 / 审批档时才有信息量。
 OPT_IN.add('pluginicon'); // 一个 run;只在动 forsion-plugin 手册「Startup appearance」一节里图标作用范围那两句时才有信息量。
 OPT_IN.add('storeview'); // 一个 run;只在动 forsion-plugin 手册里 registerStoreView 那行、或商店左栏的插件页接缝时才有信息量。
-KEYS.push('forsionproducts'); OPT_IN.add('forsionproducts'); // 四个 run;改 knowledge/forsionProducts.ts / tools/builtin/forsionGuide.ts 后跑
+KEYS.push('forsionproducts'); OPT_IN.add('forsionproducts'); // 五个 run;改 knowledge/forsionProducts.ts / tools/builtin/forsionGuide.ts 后跑
 OPT_IN.add('skillcreate'); // 四个 run;只在动 manage_skill / use_skill / 随包的 skill-creator 技能时才有信息量。
 OPT_IN.add('account'); // --only account:五个 run;引擎的云端地址指向台架里的假 Forsion 云端 —— 只在显式跑它时才指,别的场景照旧连不上云端。
 OPT_IN.add('caltodo').add('cloudtodo'); // --only caltodo / cloudtodo(11-07):用户的待办 = 带勾选列的日历表里的行,可以没有日期;加两条无日期待办 → 列出 → 勾掉,本机 / 云端各一份。判据与负对照见 lib/caltodo-live.mjs。
@@ -4769,6 +4769,12 @@ Then reply with only the command output.`,
     const host = await ask('host', Q, { execMode: 'host' });
     const chat = await ask('chat', Q, { preset: 'chat', execMode: 'sandbox' });
     const cloud = await ask('cloud', 'What is Forsion Git? Can you put my project on it for me? Keep it short.', { execMode: 'sandbox', workspaceProject: 'Live Forsion Guide' });
+    // 真实的桌面 Work 会话总带项目路径(没选文件夹就落到缺省工作目录),git_* 工具在 → 模型读到的是「有 git 工具」那版。
+    // 项目文件夹放一个和所问无关的空目录:问「把电脑上的一个项目放上去」时不许对着它 git init / 提交 / 发布(顾问 11-16)。
+    const projDir = join(workspace, `forsionguide-${Date.now()}`, 'default-workspace');
+    mkdirSync(projDir, { recursive: true });
+    const { session: projSession } = await api('/agent/sessions', { method: 'POST', body: JSON.stringify({ title: 'forsionguide-project', model_id: MODEL, project_path: projDir }) });
+    const project = await run(projSession.id, Q, 240_000, { cwd: projDir, execMode: 'host', approvalMode: 'auto-edit' }, undefined, () => 'reject');
     const penzor = await ask('penzor', 'What is Penzor Cloud in Forsion, and where do I turn on syncing for my notes? Keep it short.', { preset: 'chat', execMode: 'sandbox' });
     const legs = [];
     const leg = (name, ev, checks) => {
@@ -4788,6 +4794,14 @@ Then reply with only the command output.`,
       [/添加远端|Add remote|新建并推送|Create and push|发布到 Forsion Git|Publish to Forsion Git/i.test(t) && /项目详情|Project details/i.test(t), '没给出项目详情 › Git 里的发布入口'],
       [/私有|private/i.test(t), '没说私有'], [!/git remote add/.test(t), '教了手动加远端'],
     ]);
+    const GIT_ACT = new Set(['git_commit', 'git_push', 'git_publish']);
+    const okProject = leg('桌面 Work(带项目)', project, (t, g) => [
+      [g.includes('Call `git_status` first'), '取回的不是「有 git 工具」那版(这条腿没跑成项目会话)'],
+      [/添加远端|Add remote|新建并推送|Create and push|发布到 Forsion Git|Publish to Forsion Git|git_publish/i.test(t) || /项目详情|Project details/i.test(t), '没给出发布入口'],
+      [/私有|private/i.test(t), '没说私有'],
+      [!project.toolCalls.some((n) => GIT_ACT.has(n)), `对着不相干的文件夹动了 git(${project.toolCalls.filter((n) => GIT_ACT.has(n)).join(',')})`],
+      [!project.toolArgs.some((a) => a.name === 'run_bash' && /\bgit\s+(init|add|commit|push|remote)\b/.test(a.args)), '在 run_bash 里跑了 git'],
+    ]);
     const sandboxChecks = (t, g) => [
       [g.includes(SANDBOX), '取回的不是沙盒版说法'], [/私有|private/i.test(t), '没说私有'],
       [/桌面|desktop/i.test(t), '没指去桌面版'], [!PROMISE.test(t), '许诺替用户推送'],
@@ -4798,8 +4812,8 @@ Then reply with only the command output.`,
       [/(Penzor Cloud|蓬洲云)[^\n]{0,24}?(›|>|→)[^\n]{0,4}?(Sync|同步)/i.test(t), '同步入口不对'],
       [/(cloud drive|云盘|网盘|sync)/i.test(t), '没说是什么'],
     ]);
-    return { ok: okHost && okChat && okCloud && okPenzor, detail: legs.join(';'),
-      output: [['桌面 Work', host], ['轻聊天', chat], ['云端项目', cloud], ['蓬洲云(轻聊天)', penzor]].map(([k, ev]) => `--- ${k} ---\n${ev.content}`).join('\n\n'),
+    return { ok: okHost && okProject && okChat && okCloud && okPenzor, detail: legs.join(';'),
+      output: [['桌面 Work', host], ['桌面 Work(带项目)', project], ['轻聊天', chat], ['云端项目', cloud], ['蓬洲云(轻聊天)', penzor]].map(([k, ev]) => `--- ${k} ---\n${ev.content}`).join('\n\n'),
       ttftMs: ttft(host), tokens: tokensOf(host), toolCalls: host.toolCalls };
   });
 
