@@ -9,9 +9,9 @@ import {
   Camera, ChevronDown, ChevronRight, FileText, Image as ImageIcon, MessageSquarePlus, MessagesSquare,
   AppWindow, PanelsTopLeft, Paperclip, Plus, Search, UserPlus,
 } from 'lucide-react'
-import { allViews, getView, label, nestedPanelPlacement, openNativeSheetMenu, UI_ZOOM_EVENT, useEdgeNudge, useExitGhost, useWorkspace, zoomOf, type SheetMenu, type SheetMenuItem } from '@lcl/engine'
+import { allViews, getView, label, nestedPanelPlacement, openNativeSheetMenu, UI_ZOOM_EVENT, useEdgeNudge, useExitGhost, useSubPanelFlow, useWorkspace, zoomOf, type SheetMenu, type SheetMenuItem } from '@lcl/engine'
 import { ComposerMenuSurface, ComposerMenuHeader, composerMenuHasFocus, useComposerLayout } from '../../components/ComposerMenuSurface'
-import { useSubPanelFlow, type CapsuleControl } from './useCapsuleDroplet'
+import type { CapsuleControl } from './useCapsuleDroplet'
 import { registerMessages, useI18n } from '../../i18n'
 import { usePageStore } from '../../amadeus/store/pageStore'
 import { useRecentViews } from '../../recentViews'

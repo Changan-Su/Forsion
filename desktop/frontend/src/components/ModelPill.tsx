@@ -11,7 +11,7 @@ import { modelPickerPresenter, pickerChanges, type ModelPickerRequest, type Mode
  */
 import React, { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { ArrowUpRight, ChevronDown, ChevronRight, Bot, Lock, Search } from 'lucide-react'
-import { nestedPanelPlacement, nestedPanelTop, UI_ZOOM_EVENT, zoomOf, useEdgeNudge, NATIVE_MENU_MAX_ITEMS, nativeSheetPresenter, runNativeSheetMenu } from '@lcl/engine'
+import { nestedPanelPlacement, nestedPanelTop, UI_ZOOM_EVENT, zoomOf, useEdgeNudge, NATIVE_MENU_MAX_ITEMS, nativeSheetPresenter, runNativeSheetMenu, useSubPanelFlow } from '@lcl/engine'
 import { useKnobFlow } from '@lcl/engine/segFlow'
 import type { NestedPanelPlacement, SheetMenu, SheetMenuItem } from '@lcl/engine'
 import { registerMessages, useI18n } from '../i18n'
@@ -21,7 +21,7 @@ import { minTierForMultiplier, upgradeTierLabel, useUpgradeTiers } from '../serv
 import { THINKING_LEVELS } from '../types'
 import { thinkingLabel } from './thinkingLabel'
 import { ComposerMenuSurface, ComposerMenuHeader, composerMenuHasFocus, useComposerLayout } from './ComposerMenuSurface'
-import { useSubPanelFlow, type CapsuleControl } from '../views/chat2/useCapsuleDroplet'
+import type { CapsuleControl } from '@tangu/ui/views/chat2/useCapsuleDroplet'
 import type { AgentConfig, CtxInfo, DefaultModelSlot, ModelInfo, ModelsResponse } from '../types'
 
 registerMessages({
