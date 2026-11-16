@@ -110,6 +110,11 @@ registerMessages({
   'market.sources.err.source-item-changed': { zh: '这一项在来源里刚改过，没有安装。请重新打开再看一遍。', en: 'This item just changed in its source, so it wasn\'t installed. Open it again to review it.' },
   'market.sources.err.address-not-allowed': { zh: '目录里的下载地址指向本机或内网，没有下载。', en: 'The catalog\'s download address points at this computer or a private network, so nothing was downloaded.' },
   'market.sources.err.duplicate-path': { zh: '安装包里有两个文件落在同一个位置，没有安装。', en: 'Two files in the package land in the same place, so it wasn\'t installed.' },
+  // 官方商店(2026-11-16+,electron/marketInternals.ts):包声明了 internals-raw,但这一版没过第二级审核
+  'market.sources.err.internals-raw-unapproved': {
+    zh: '这一版插件要直接操作 Forsion 的内部对象，还没通过商店的这项审核，所以没有安装。',
+    en: 'This version of the plugin works on Forsion internals directly and hasn\'t passed the store\'s review for that yet, so it wasn\'t installed.',
+  },
   'market.sources.err.npm-version': { zh: 'npm 上找不到目录写的那个版本。', en: 'The version named in the catalog isn\'t on npm.' },
 })
 
@@ -118,6 +123,7 @@ const ERROR_CODES: Array<[RegExp, string]> = [
   [/resolve: (source-removed|source-item-removed|source-item-changed|address-not-allowed|version-unavailable|source-package-moved|forsion-git-(?:unsupported|signin|no-access|needs-setup|ref-missing))\b/, '$1'],
   [/install: duplicate path in archive/, 'duplicate-path'],
   [/install: plugin id taken/, 'plugin-id-taken'],
+  [/install: internals-raw-unapproved/, 'internals-raw-unapproved'],
   [/install: package checksum mismatch/, 'checksum'],
   [/install: package folder not found/, 'folder-missing'],
   [/resolve: npm version not found/, 'npm-version'],

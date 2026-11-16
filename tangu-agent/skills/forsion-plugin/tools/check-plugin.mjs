@@ -242,6 +242,36 @@ if (!existsSync(mainFile) && !bundleOnly) { problem(`"main" points at ${mainName
 const src = bundleOnly ? '' : readFileSync(mainFile, 'utf8');
 const lineOf = (offset) => src.slice(0, Math.max(0, offset)).split('\n').length;
 
+// ── 1b. internal APIs (ctx.internals, 2026-11-16+): declared before used; no reaching around the host ──────────
+// Static, on the source text: a mention in a comment or a string counts too.
+{
+  const caps = Array.isArray(manifest.capabilities) ? manifest.capabilities : [];
+  const reads = caps.includes('internals');
+  const raw = caps.includes('internals-raw');
+  const usesInternals = /\bctx\s*\??\.\s*internals\b|\binternals\s*[,}][^=]*=\s*ctx\b/.test(src);
+  const rawCalls = [...src.matchAll(/\braw\s*\??\.\s*import\s*\(\s*(?:(['"`])([^'"`$]+)\1\s*\))?/g)];
+  const fiber = /__reactFiber\$|__reactProps\$|__reactContainer\$|_reactRootContainer|__reactInternalInstance/.exec(src);
+  if (reads || raw || usesInternals || rawCalls.length || fiber) {
+    say();
+    say('internal APIs (ctx.internals)');
+    if (raw && !reads) problem('"capabilities" has "internals-raw" without "internals": the host gives the second level only together with the first, so ctx.internals stays undefined. Add "internals".');
+    if (usesInternals && !reads) problem(`${mainName} uses ctx.internals but "capabilities" does not declare "internals": the host only injects it when declared, so it is undefined here.`);
+    if (rawCalls.length && !raw) problem(`${mainName} calls ctx.internals.raw.import but "capabilities" does not declare "internals-raw": raw is undefined without it.`);
+    if (fiber && !raw) problem(`${mainName} reaches into the host's React internals (${fiber[0]}…) without declaring "internals-raw". Read host state through ctx.internals.read, or declare "internals-raw" and take the module with ctx.internals.raw.import. Plugins that reach around the host this way do not pass store review.`);
+    else if (fiber) say(`  ! ${mainName} reaches into the host's React internals (${fiber[0]}…). Even with "internals-raw" that is not supported: take host modules with ctx.internals.raw.import.`);
+    if (reads) ok(`declares "internals"${raw ? ' and "internals-raw"' : ''}: desktop only, and the plugin must check \`if (!ctx.internals)\` before use (web, phone and older hosts do not have it)`);
+    if (raw) {
+      const ids = [...new Set(rawCalls.map((m) => m[2]).filter(Boolean))].sort();
+      const computed = rawCalls.some((m) => !m[2]);
+      say(`  · second-level modules it asks for: ${ids.length ? ids.join(', ') : '(none written out)'}${computed ? '; also ids computed at run time' : ''}`);
+      say('    The store reviews "internals-raw" plugins per version: say in the submission which of these it needs and why the public APIs are not enough.');
+    }
+    if (reads && !(Array.isArray(manifest.internalsVerified) ? manifest.internalsVerified.length : typeof manifest.internalsVerified === 'string')) {
+      say('  · no "internalsVerified": Settings → Plugins will say it was not checked on the running Forsion version. List the versions you checked, e.g. "internalsVerified": ["2.14"].');
+    }
+  }
+}
+
 // ── 2. load main.js like the host does ─────────────────────────────────────────────────────────────────────────────
 say();
 let run = { loadError: null, returned: 'undefined', registered: [], late: [], timers: 0, dead: null };

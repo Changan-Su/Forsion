@@ -37,6 +37,7 @@ import { agentWriteKnown, noteAgentWriteEnd, noteAgentWriteLive, noteAgentWriteS
 import { translate } from '../i18n'
 import type { TanguSliceDeps, TanguState, createTanguSlice } from '@tangu/ui/tangu/store/tanguSlice'
 import { resetAccountQuotaScope } from '../services/accountQuota'
+import { provideInternalStore } from '../amadeus/plugins/internalsStores'
 
 
 export type { SettingsTab }
@@ -1088,3 +1089,6 @@ if (import.meta.env.DEV && typeof window !== 'undefined') {
 
 // 委托管理员的审批档上限 → app store(Tangu 界面从这里读)
 useDelegatedApprovalCap.subscribe((s) => { if (useApp.getState().delegatedApprovalCap !== s.cap) useApp.setState({ delegatedApprovalCap: s.cap }) })
+
+// 插件内部口子(ctx.internals.read('app'),2026-11-16+):登记表是叶子模块,不引插件宿主
+provideInternalStore('app', useApp)

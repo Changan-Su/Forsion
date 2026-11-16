@@ -151,6 +151,10 @@ import { isLoopbackHttpUrl, pluginSurfacePartitionFor } from '../../../../shared
 import { registerEngineHarness } from './engineHarness'
 import { isElectronHost } from '../unified/writeSafety'
 import { windowKind } from '../../windowKind'
+import { reloadWindow } from '../../reloadWindow'
+import {
+  FAULT_LIMIT, createInternalsApi, dropInternalsLive, internalsAvailable, markInternalsLive, nextInternalsSourceUrl, setInternalsTrip, takeRawUsage,
+} from './pluginInternals'
 import { addRibbonAction } from './ribbonAction'
 import { provideFeedbackChannel } from '../../feedbackChannel'
 import { provideInboxChannel } from '../../services/inboxChannel'
@@ -170,7 +174,17 @@ registerMessages({
     en: 'Folder inside the vault where this plugin reads and writes files (relative to the vault root; leave empty to fall back to Plugins/<plugin ID>)',
   },
   'pluginhost.setupFailed': { zh: '插件「{name}」加载失败', en: 'Plugin "{name}" failed to load' },
-  'pluginhost.sampleCreated': { zh: '已创建示例插件 hello-amadeus', en: 'Created the sample plugin hello-amadeus' },
+  'pluginhost.internalsFaulted.title': { zh: '已停用插件「{name}」', en: 'Turned off "{name}"' },
+  'pluginhost.internalsFaulted': {
+    zh: '它使用 Forsion 的内部接口，一分钟内连续出错 {count} 次，多半是和这一版 Forsion 不兼容。可以在设置 → 插件里重新启用。',
+    en: 'It uses Forsion internals and failed {count} times within a minute, likely because it does not work with this version of Forsion. You can turn it back on in Settings → Plugins.',
+  },
+  'pluginhost.internalsRawReload': {
+    zh: '插件「{name}」直接操作过 Forsion 的内部对象，停用后要重载窗口才完全生效。先保存手上的内容。',
+    en: '"{name}" worked on Forsion internals directly. Reload the window for turning it off to fully take effect. Save your work first.',
+  },
+  'pluginhost.internalsRawReload.action': { zh: '重载窗口', en: 'Reload window' },
+  'pluginhost.sampleCreated':{ zh: '已创建示例插件 hello-amadeus', en: 'Created the sample plugin hello-amadeus' },
 })
 
 const DISABLED_KEY = 'amadeus.plugins.disabled'
@@ -942,6 +956,7 @@ function pluginMeta(src: ExternalPluginSource): Omit<AmadeusPlugin, 'setup'> {
     requiresPlugins: src.requiresPlugins,
     entitlement: src.entitlement,
     capabilities: src.capabilities,
+    internalsVerified: src.internalsVerified,
     network: src.network,
     readme: src.readme,
     changelog: src.changelog,
@@ -996,16 +1011,25 @@ function toPlugin(src: ExternalPluginSource): AmadeusPlugin {
       if (!src.dev) {
         let code = src.code
         let url: string | null = null
+        // 声明了 internals 的插件(2026-11-16+)同理打 sourceURL:没接住的错按栈认到它当前这一版头上,熔断用(pluginInternals.ts)。
+        // 其余已安装插件的求值路径仍与从前逐字相同。
+        const internals = !src.agent && !!src.capabilities?.includes('internals') && internalsAvailable()
         if (src.agent) {
           const n = (agentLoads.get(src.id) ?? 0) + 1
           url = `forsion-agent-space/${src.id}/${n}/main.js`
           agentLoads.set(src.id, n)
           code = `${src.code}\n//# sourceURL=${url}`
+        } else if (internals) {
+          url = nextInternalsSourceUrl(src.id)
+          code = `${src.code}\n//# sourceURL=${url}`
         }
         const fn = new Function('ctx', code) as (c: PluginContext) => ReturnType<AmadeusPlugin['setup']>
         const d = fn(ctx)
         // 跑成功了才算「正在运行的那一版」:同步 setup 抛错 → 由加载失败那条回写负责,它残留的定时器不再另报(Codex 09-27 三轮)
-        if (url) agentLive.set(src.id, url)
+        if (url) {
+          if (internals) markInternalsLive(src.id, url)
+          else agentLive.set(src.id, url)
+        }
         return d
       }
       const fn = new Function('ctx', 'console', src.code) as (c: PluginContext, console: Console) => ReturnType<AmadeusPlugin['setup']>
@@ -3165,6 +3189,16 @@ export const usePluginStore = create<PluginState>((set, get) => {
     ...(get().plugins.find((p) => p.id === pluginId)?.capabilities?.includes('noteTasks')
       ? { noteTasks: createNoteTasksApi({ alive: ctxAlive, own: (off) => scope.own('subscription', off, 'noteTasks') }) }
       : {}),
+    // 内部口子(2026-11-16+,pluginInternals.ts):声明了 'internals' 才有,而且只在本机桌面;'internals-raw' 要和它一起声明。
+    // 不在下面的 register* 换皮范围里:它自己的每个成员都先问 alive()。
+    ...(get().plugins.find((p) => p.id === pluginId)?.capabilities?.includes('internals') && internalsAvailable()
+      ? { internals: createInternalsApi({
+          pluginId,
+          raw: !!get().plugins.find((p) => p.id === pluginId)?.capabilities?.includes('internals-raw'),
+          alive: ctxAlive,
+          own: (kind, off, label) => scope.own(kind, off, label),
+        }) }
+      : {}),
     // 前台窗口采样:**manifest 声明过才注入**(没声明的插件连 ctx.system 都看不到)。
     // 第二道闸在主进程:config.activeWindowEnabled 默认关,关着时下面这个调用恒回 null。
     ...(get().plugins.find((p) => p.id === pluginId)?.capabilities?.includes('activeWindow')
@@ -3203,6 +3237,20 @@ export const usePluginStore = create<PluginState>((set, get) => {
   const teardown = (id: string): void => {
     settledSetups.delete(id)
     agentLive.delete(id) // 拆掉了就不再是「正在运行的那一版」(agentSpaceSourceUrl)
+    dropInternalsLive(id) // 同理:旧版残留的错不再算到它头上
+    // 第二级交出去的真对象收不回:这扇窗口里它取用过模块,就提示保存后重载(每扇窗口各提示自己的)
+    const rawUsed = takeRawUsage(id)
+    if (rawUsed.length) {
+      const p = get().plugins.find((x) => x.id === id)
+      notifyApp({
+        text: translate('pluginhost.internalsRawReload', { name: p ? pluginDisplayName(p, currentLocale()) : id }),
+        level: 'warning',
+        sticky: true,
+        event: `plugin:${id}`,
+        dedupeKey: `internals-raw-reload:${id}`,
+        action: { label: translate('pluginhost.internalsRawReload.action'), run: () => reloadWindow() },
+      })
+    }
     try {
       get().disposers[id]?.()
     } catch (e) {
@@ -3386,6 +3434,24 @@ export const usePluginStore = create<PluginState>((set, get) => {
     reconcile()
     for (const p of replacing) if (!get().activeIds.includes(p.id)) settleNoteRendererReload(p.id, false)
   }
+
+  // 内部口子的熔断(方案第 4 件 b):声明了 internals 的插件,当前这一版 60 秒内明确算到它头上的错满 3 次 → 停用并通知。
+  // 停用走用户那条 disable(写进停用名单,别的窗口经 storage 事件跟上);用户可以在插件页重新启用。locked(核心)包只报不停。
+  setInternalsTrip((id) => {
+    const p = get().plugins.find((x) => x.id === id)
+    if (!p || !get().activeIds.includes(id)) return
+    const name = pluginDisplayName(p, currentLocale())
+    console.error(`[amadeus] 插件 ${id} 使用内部接口时一分钟内出错 ${FAULT_LIMIT} 次${p.locked ? '(核心包,不停用)' : ',已停用'}`)
+    if (p.locked) return
+    get().disable(id)
+    notifyApp({
+      title: translate('pluginhost.internalsFaulted.title', { name }),
+      text: translate('pluginhost.internalsFaulted', { count: FAULT_LIMIT }),
+      level: 'error',
+      event: `plugin:${id}`,
+      dedupeKey: `internals-fault:${id}`,
+    })
+  })
 
   return {
     plugins: [],

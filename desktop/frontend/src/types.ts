@@ -1336,6 +1336,10 @@ export interface MarketCard {
   origin?: { sourceId: string; sourceTitle: string }
   /** 包的 manifest `network`(ctx.net 能访问的域名,2026-11-16+)—— 目录给了才有;装好之后以本机 manifest 为准。 */
   network?: string[] | null
+  /** 包的 manifest `capabilities`(服务端审核时从包里读的,2026-11-16+);客户端只认白名单里的。 */
+  capabilities?: string[] | null
+  /** 过了第二级内部接口(internals-raw)审核的那一版;没过或没声明为 null。官方商店安装时客户端按它再核一次。 */
+  rawApprovedVersion?: string | null
 }
 
 /** market:installProgress:resolve=向服务端要下载地址;download=在试第 attempt/attempts 个地址、已收 received 字节
