@@ -2003,6 +2003,11 @@ export interface PluginEngineHarness {
   rows?(target: { agentSlug: string }): PluginHarnessRow[] | Promise<PluginHarnessRow[]>
   /** Items in the right-click menu of conversations that run on this engine (up to 4). */
   sessionActions?: PluginEngineSessionAction[]
+  /** 2026-11-16+: the id of a view your plugin registers (`ctx.registerView`). While the conversation in front runs on
+   *  this engine, the host adds this view to the right sidebar after its own pages (Details, Files, Outline); it does not
+   *  take the front tab, and it closes when the user moves to a conversation that runs elsewhere. Your view follows the
+   *  active conversation itself (`ctx.tangu.subscribeAgentStatus`). Desktop only; older hosts ignore it. */
+  railView?: string
 }
 
 /** `ctx.ui.mountWebSurface` (2026-11-15+). */

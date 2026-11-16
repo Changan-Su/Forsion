@@ -35,6 +35,7 @@ import type { ToolContext } from '../tools/toolTypes.js';
 import { deps } from '../seams/runtime.js';
 import { enterRunContext, setRunCwd } from '../seams/runContext.js';
 import { isHtmlCardTool, LEGACY_HTML_CARD_TOOL } from '../tools/builtin/sketch.js';
+import { computerUseUnavailableText } from '../contracts/agentEngine.js';
 import { fitImageForModel } from '../services/imageShrink.js';
 
 /** 取结果的那个工具(只在带 budgetMs 的桥上有)。 */
@@ -71,14 +72,7 @@ export interface RunToolServerOptions {
 }
 
 /** 交过去的 Computer Use 不能跑时回给模型的话(句式照 toolRegistry.computerUseUnavailableReason:不是插件没开、要把原因和出路告诉用户)。 */
-export function bridgeComputerUseUnavailable(why: 'no-image-input' | 'unknown'): string {
-  const cause = why === 'no-image-input'
-    ? 'because the model you are running on has no image input'
-    : 'because Forsion could not confirm that the model you are running on can see images';
-  return `Computer control (looking at the screen, clicking and typing in desktop apps) is unavailable ${cause}, so this call was not run. `
-    + 'This is not a missing plugin or permission, and enabling anything will not help. '
-    + 'When the user asks for it, do not just report that the tool failed: tell them plainly that computer control needs a model that can see images, and that they can pick one for this agent.';
-}
+export const bridgeComputerUseUnavailable = computerUseUnavailableText;
 
 /** 一次调用最多带回几张图(同 Tangu 循环每轮的上限 MAX_TOOL_IMAGES_PER_ROUND)。 */
 export const MAX_BRIDGE_IMAGES_PER_CALL = 8;
