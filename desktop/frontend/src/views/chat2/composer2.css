@@ -285,13 +285,16 @@
   .t2c-row:not([data-compact]):has(> .t2c-capsule-held) > .t2c-collapse-on-capsule-open:not(.t2c-mic-control) {
     display: none;
   }
-  .t2c-row:not([data-compact]):has(> .t2c-capsule-held) > :is(.add-pill-wrap:not(.t2c-capsule-held), .t2c-mic-control) { opacity: 0; pointer-events: none; }
+  /* 拆成两条(cssHasGuard 认不出 :is 里套 :not 的结尾);麦克风那条叠写类名,保住原 :is 给的两级类特异性 */
+  .t2c-row:not([data-compact]):has(> .t2c-capsule-held) > .add-pill-wrap:not(.t2c-capsule-held),
+  .t2c-row:not([data-compact]):has(> .t2c-capsule-held) > .t2c-mic-control.t2c-mic-control { opacity: 0; pointer-events: none; }
 }
 .add-pill-wrap { transition: opacity var(--duration-fast, 0.15s) var(--ease-calm, ease); }
 .t2c-row > .t2c-mic-control { transition: background var(--duration-fast, 0.15s), color var(--duration-fast, 0.15s), opacity var(--duration-fast, 0.15s) var(--ease-calm, ease); }
 /* 液滴的源:胶囊收起时的那块地方(useCapsuleDroplet 量好挂进来),不随胶囊变宽而变。只当几何用,不画、不吃指针 */
 .t2c-drop-src { position: absolute; pointer-events: none; }
 /* 菜单流出 / 倒放时,胶囊压在液体上面;胶囊底换成卡面上等价的不透明色(半透明底会透出底下的液体,一块亮斑) */
+/* 41 是组内叠放:液体层由 droplet.ts 按面板 z-1 现算,胶囊要压在它上面;不是全局层级,所以进了 zindex 基线 */
 .t2c-capsule-held > :is(.t2c-pill, .composer-chip) { position: relative; z-index: 41; }
 .t2c-capsule-held > :is(.t2c-pill, .composer-chip).is-open:not(.active):not([data-danger]):not(.is-max) {
   background: color-mix(in srgb, var(--text) 7%, var(--bg-card, var(--bg)));
