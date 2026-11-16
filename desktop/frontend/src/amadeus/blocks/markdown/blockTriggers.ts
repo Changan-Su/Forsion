@@ -11,6 +11,7 @@ import { canJoin, findWrapping, liftTarget } from '@milkdown/kit/prose/transform
 import type { EditorView } from '@milkdown/kit/prose/view'
 import { registerMessages, translate } from '../../../i18n'
 import { buildBlockString } from './mathLivePreview'
+import { editContextAt } from './menuContext'
 
 // 选区工具栏「转换为」按钮上的当前块类型名(I-19:此前写死中文,英文界面照样显示「标题 2」)。
 registerMessages({
@@ -109,6 +110,9 @@ export function matchTrigger(before: string): Trigger | null {
  */
 export function triggerAtCursor($from: ResolvedPos): Trigger | null {
   const trig = matchTrigger(textBeforeCursor($from))
+  // 表格单元格里只放得下一段:代码块 / 公式骨架会把光标后的字挤成第二段,表格被从这一格劈成两张(工具栏的
+  // turnIntoWrapped 早就挡了这种情况)。键盘这条路(空格 / 回车)在单元格里也不出骨架,空格就是一个空格。
+  if ((trig?.kind === 'code' || trig?.kind === 'math') && editContextAt($from).tableCell) return null
   if (trig?.kind === 'fold' && $from.parentOffset < $from.parent.content.size) return { kind: 'quote', rejoin: true }
   // 行首 `$$` 后面这一段里还有 `$$` = 光标在一个现成的块公式里(空骨架 `$$|$$` 就是第三个 `$` 自动成对出来的):
   // 这一键只是往公式里打空格 / 回车,不是新起骨架 —— 否则闭合的 `$$` 被切进新段落,公式断成两半。

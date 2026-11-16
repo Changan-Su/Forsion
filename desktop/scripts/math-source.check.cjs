@@ -1,5 +1,6 @@
 // 笔记里正在编辑的公式源码:观感契约 + `$$` 空格(真浏览器 + ?upage 生产编辑器,真按键)。
 //   A. `$$|$$` 里按空格只插一个空格,不把闭合的 `$$` 切进新段(第三个 `$` 自动成对出来的就是这个形态);
+//      表格单元格里 `$$` / ``` + 空格只插空格,不出骨架(单元格只放得下一段,出骨架会把表格劈成两张);
 //      反向护栏:行首只有 `$$` / `￥￥` 时空格照样出骨架。
 //   B. 整段源码(含 `$`)每个 span 都带 .math-source:等宽、斜体、行内代码字号(0.88em)、不加字距;预览 / 渲染结果不受影响。
 //   C. token 颜色只读 --math-src-*(浅 / 深);宿主选择器权重为 0,插件一条普通类选择器(哪怕样式表排在宿主之前)就能盖过。
@@ -164,6 +165,25 @@ async function partSpace(browser) {
   const a6 = await paragraphs(p)
   check('A6 行内代码开头的 $$ 后按空格只插空格', JSON.stringify(a6) === JSON.stringify(['前文。', '$$ x 尾。', '后文。']), a6)
   await p.close()
+  // A7–A10:表格单元格开头的 `$$` / ``` + 空格(光标后有字 / 没字):只插空格,还是同一张表
+  for (const [fence, rest] of [['$$', 'foo'], ['```', 'foo'], ['$$', ''], ['```', '']]) {
+    p = await open(browser, `| h1 | h2 |\n| --- | --- |\n| ${fence}${rest} | x |\n| r2 | y |\n`)
+    await caret(p, `${fence}${rest}`, fence.length)
+    await p.keyboard.press('Space')
+    await settle(p)
+    const t = await p.evaluate(() => {
+      const d = window.__upage.probe.view().state.doc, tables = []
+      d.descendants((n) => {
+        if (n.type.name !== 'table') return true
+        const rows = []; n.forEach((r) => { const c = []; r.forEach((x) => c.push(x.textContent)); rows.push(c) }); tables.push(rows)
+        return false
+      })
+      return tables
+    })
+    const want = [[['h1', 'h2'], [`${fence} ${rest}`, 'x'], ['r2', 'y']]]
+    check(`A${7 + ['$$foo', '```foo', '$$', '```'].indexOf(fence + rest)} 单元格里 ${fence}${rest ? '(后面有字)' : '(空格)'} + 空格只插空格、表格不拆`, JSON.stringify(t) === JSON.stringify(want), t)
+    await p.close()
+  }
 }
 
 async function partLook(browser, dark) {
