@@ -8,9 +8,9 @@
 //                         不活动时又真的还给宿主?装饰真的画出来、颜色真的没被宿主的公式源码配色盖住吗?
 //
 // 两段:
-//   一、默认壳(v3 块编辑器)冒烟:展开、自动分式、跳位、列表缩进、行内代码、设置面板。
+//   一、默认壳(v3 块编辑器)冒烟:展开、自动分式、跳位、列表缩进、设置面板。
 //   二、?upage&upane(v4 统一编辑器,生产组件):和 Obsidian 的 Latex Suite 逐键对过的 Tab 序列,
-//       以及括号 / 占位 / `$` 的计算样式,浅色、深色各量一遍。
+//       行内代码里不展开,以及括号 / 占位 / `$` 的计算样式,浅色、深色各量一遍。
 //
 // 用法:
 //   npm run e2e:latex          (自起 vite;5173 已有 harness 时直接复用)
@@ -225,12 +225,8 @@ async function v3Smoke(browser, code) {
   })
   check('无片段时 Tab 仍做列表缩进(没被 high 桶吞掉)', nested, nested)
 
-  // ── 6. 行内代码里不展开(用户在写字面量)。
-  await reset()
-  await page.keyboard.type('`$@a', { delay: 40 })
-  await page.waitForTimeout(200)
-  t = await lastText()
-  check('行内代码里 @a 不展开', !t.includes('\\alpha'), t)
+  // ── 6. 行内代码里不展开:移到下面 v4 那段,用种子造出真正的行内代码(code mark)再打字。
+  //       旧写法打的是 `` `$@a ``:只有一个反引号、$ 也没收口,根本没有 code mark,这条恒过、守不住任何东西。
 
   // ── 7. 设置面板能在真 DOM 里挂起来(内嵌 CodeMirror —— check.mjs 里拿假 DOM 喂它是无底洞,
   //       那条只验契约形状,真挂载归这里)。
@@ -455,6 +451,31 @@ async function v4Sequences(browser, code) {
     const l = await line(page)
     const ok = EOL_ONLY ? l.startsWith('$$ a') && l.includes('+ b $$') && !l.endsWith('$$|') : l === '$$ a + b $$|'
     check(`v4 T6${EOL_ONLY ? '' : '-EOLfalse'} 公式中间按 Tab:${EOL_ONLY ? '不跳出' : '直接跳出公式'}`, ready && ok && errors.length === 0, l)
+    await page.close()
+  }
+
+  // 行内代码里不展开(用户在写字面量)。种子里的反引号由宿主解析成真正的行内代码(code mark),
+  // 光标放进代码里再打 @a / mk:必须原样留下,而且还在代码里。
+  {
+    const { page, errors, ready } = await openUPage(browser, code, { seed: 'Para `$x$` and `codx` end.', caret: ['$x', 2] })
+    const codeText = () => page.evaluate(() => {
+      const v = window.__upage.probe.view()
+      const $f = v.state.selection.$from
+      let out = ''
+      $f.parent.forEach((n) => { if (n.isText && n.marks.some((m) => /code/i.test(m.type.name))) out += `[${n.text}]` })
+      return out
+    })
+    const before = await codeText()
+    await page.keyboard.type('@a', { delay: 40 })
+    await page.waitForTimeout(200)
+    await page.evaluate(() => window.__ls.caret('codx', 3)) // 放在代码中间:代码标记在边界上可能不向外延伸
+    await page.keyboard.type('e mk', { delay: 40 })
+    await page.waitForTimeout(250)
+    const after = await codeText()
+    const l = await line(page)
+    check('v4 行内代码里 @a、mk 都不展开(真 code mark)',
+      ready && before === '[$x$][codx]' && after === '[$x@a$][code mkx]' && !l.includes('\\alpha') && errors.length === 0,
+      { before, after, line: l })
     await page.close()
   }
 
