@@ -41,6 +41,7 @@ import { startImageRecoveryCloud, imageRecoveryLive } from './lib/image-recovery
  *                                                           #   app_settings 的返回文本后跑)。--settingsnav-no-voice = 负对照(落点清单里没有语音页,开不到 → 必须红)
  *   npm run live:harness -- --only pluginui                  # 改 skills/forsion-plugin 的「Desktop plugin UI」一节 / tools/ui-reinvent.mjs / plugin_sandbox 的界面体检后跑:写一个带 Space 的小插件,下拉 / 菜单 / 确认 / 空状态须用宿主零件
  *   npm run live:harness -- --only pluginlook                # 改 skills/forsion-plugin 的「外观开关:跟着宿主走」一节后跑:须经 use_skill 取回正文并答出那一节的三样
+ *   npm run live:harness -- --only plugininternals           # 改 skills/forsion-plugin 的 references/internals.md(ctx.internals)或正文指向它那行后跑:须读到那份参考并答出声明 / read·subscribe / 手机端没有
  *   npm run live:harness -- --only plugindiag --plugin-src <插件目录> [--plugin-data <plugins-data 里那份 json>] [--plugindiag-hint] [--plugindiag-host auto|"<宿主报的运行态>"]   # 装着的桌面插件 Space 不出现(10-10):
  *                                                           #   main.js 求值不抛错、但没走到 registerView 的那类;看真模型只凭插件目录和 shell 查不查得出。插件放进假家目录,开发机的 ~/.forsion 不碰
  *   npm run live:harness -- --only notebook --plugin-src <forsion-plugin-notebook 目录> --python-bin <内置 Python 的 python3> [--notebook-neg]   # Jupyter 笔记本插件给 Tangu 的三件工具(10-12):
@@ -393,6 +394,7 @@ OPT_IN.add('musereview'); // 开 Muse 并往隔离库里写用量行:单独跑,�
 OPT_IN.add('projmem'); // 四个 run、两个 agent 两个项目;只在动项目记忆(services/projectMemory.ts、remember 的 scope)时才有信息量。
 OPT_IN.add('pluginui'); // 一个长 run(写一整个插件,几分钟);只在动 forsion-plugin 的界面纪律、重造检测或沙箱状态里的界面体检时才有信息量。
 OPT_IN.add('pluginlook'); // 一个 run;只在动 skills/forsion-plugin 的「外观开关」一节或 use_skill 时才有信息量。
+KEYS.push('plugininternals'); OPT_IN.add('plugininternals'); // 一个 run;只在动 forsion-plugin 的 references/internals.md 或正文里指向它那行时才有信息量。
 OPT_IN.add('plugindiag'); // 一个 run(几分钟);要 --plugin-src 给一份待查的插件,只在量「插件 Space 不出现」的排查能力时才有信息量。
 OPT_IN.add('notebook'); // 两个 run;要 --plugin-src 给构建好的 Jupyter 笔记本插件、--python-bin 给解释器,只在动那个插件的工具说明 / 审批档时才有信息量。
 OPT_IN.add('pluginicon'); // 一个 run;只在动 forsion-plugin 手册「Startup appearance」一节里图标作用范围那两句时才有信息量。
@@ -4866,6 +4868,26 @@ Then reply with only the command output.`,
     const facts = { selected: /aria-selected|aria-current/.test(c), text: /--text(-muted|-light|-faint)?\b/.test(c), reading: /--reading-line-height/.test(c) };
     return { ok: !ev.error && ev.done && loaded && facts.selected && facts.text && facts.reading,
       detail: ev.error || `use_skill ${loaded ? '取回正文' : '未取回'};选中行标记 ${facts.selected ? '有' : '无'};文字 token ${facts.text ? '有' : '无'};阅读 token ${facts.reading ? '有' : '无'};工具 ${ev.toolCalls.join(',') || '无'}`,
+      output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
+  });
+
+  // 插件内部接口 ctx.internals(11-16):技能正文头部只有一行指路,细节在 references/internals.md —— 模型得照 use_skill 给的
+  // 技能文件夹再 read_file 那份参考才答得出。问句不点名 internals,只说公开接口里没有。判三件:参考真读到了(标记句在 read_file 结果里)、
+  // ①答出 manifest capabilities 声明 internals、②答出 read 与 subscribe、③答出手机端没有。
+  // 负对照 = 改前的技能(没有那行、没有那份参考):模型无从得知这个口子 → 「参考读到」与①红。
+  await scenario('plugininternals', 'plugininternals 插件技能:公开接口没有时指向 ctx.internals(声明、读与订阅、只在桌面)', async () => {
+    const MARKER = 'Unstable on purpose';
+    const ev = await run(`live-plugininternals-${Date.now()}`, '我在写一个 Forsion 桌面插件:要知道用户主区当前打开的是哪一页,并在用户切换时跟着变。公开的 ctx 里我没找到对应接口。先装载你的 Forsion 扩展开发技能把这件事查清楚(技能正文指到的参考文件也读),再回答,不要改任何文件。只回三行:①开头写 manifest 要怎么声明(写出确切的字段和值);②开头写读当前值和订阅变化分别调什么(写出确切的方法名);③开头写在 Forsion 手机端能不能用,并说一句该怎么兜底。', 300_000, { enabledSkillIds: ['local:forsion-plugin'], skillsConfigured: true });
+    const read = ev.toolResults.some((r) => r.name === 'read_file' && !r.isError && String(r.full || '').includes(MARKER));
+    const c = ev.content || '';
+    const line = (n) => (c.split('\n').find((l) => l.includes(n)) || '');
+    const facts = {
+      declare: /capabilities/.test(line('①')) && /["'`]internals["'`]/.test(line('①')),
+      api: /\bread\b/.test(line('②')) && /\bsubscribe\b/.test(line('②')),
+      mobile: /不能|不可|无法|不行|没有|undefined|只在.*桌面|仅.*桌面/.test(line('③')),
+    };
+    return { ok: !ev.error && ev.done && read && facts.declare && facts.api && facts.mobile,
+      detail: ev.error || `参考 internals.md ${read ? '读到' : '没读到'};①声明 internals ${facts.declare ? '有' : '无'};②read + subscribe ${facts.api ? '有' : '无'};③手机端没有 ${facts.mobile ? '答对' : '没答对'};工具 ${ev.toolCalls.join(',') || '无'}`,
       output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
   });
 
