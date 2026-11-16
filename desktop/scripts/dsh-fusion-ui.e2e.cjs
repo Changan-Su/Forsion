@@ -489,9 +489,9 @@ async function railWalk(app, win) {
   const railPartition = await win.locator('[data-d2f="rail"] webview').first().getAttribute('partition').catch(() => '')
   check('⑧ 点开:是 DSH 右侧栏的文件页(这场对话的工作区),开在右栏自己的分区里', !!filesShown && /dsh2forsion-rail$/.test(railPartition || ''),
     `${railPartition} | ${(await railText(app)).replace(/\s+/g, ' ').slice(0, 160)} | ${(await win.locator('[data-d2f="rail"]').innerText().catch(() => '')).slice(0, 120)}`)
-  // 插件页:像用户那样在 DSH 自己那排页签点「+」,在引导页里点测试插件那一项(或在「更多工具」里)
+  // 插件页:像用户那样在 DSH 自己那排页签点「+」(DSH 0.2.2 的标签是「新标签页」),在引导页里点测试插件那一项(或在「更多工具」里)
   const visible = 'b.getBoundingClientRect().width > 0'
-  const plus = await railClick(app, `() => [...document.querySelectorAll('button[aria-label]')].find((b) => /新建|添加|打开|new|add|open/i.test(b.getAttribute('aria-label') || '') && ${visible})`)
+  const plus = await railClick(app, `() => [...document.querySelectorAll('button[aria-label]')].find((b) => /^(新标签页|New tab)$/.test(b.getAttribute('aria-label') || '') && ${visible})`)
   await sleep(900)
   const fixtureEntry = `() => [...document.querySelectorAll('button, [role=button], [role=menuitem], a')].find((b) => /Fixture page/.test(b.textContent || '') && ${visible})`
   let entry = await railClick(app, fixtureEntry)
