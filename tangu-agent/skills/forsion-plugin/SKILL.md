@@ -543,7 +543,7 @@ ctx.registerCommand({
 | `registerFont` | 设置 → 外观 → 字体 | 2026-08-28 起;**返回 disposer**(宿主在禁用/重载时也会自己撤销,返回值可以不接);旧宿主没有 → `ctx.registerFont?.(…)` |
 | `registerPanel` | 右侧栏面板 | ⚠️已弃用,收 **React 组件**(拿不到宿主的 React 实例,只有自带 React 的插件能用,mindmap 有先例);新代码一律 `registerView` |
 | `registerPropertyType` | 多维表自定义列类型 | ⚠️同上,`Cell` 是 React 组件;`baseType` 决定落盘形状 |
-| `ctx.notify(msg, {level, action, key})` | 右上角通知 | 自动标插件名,用户可按插件静音;`action: { label, run }` 在卡上放一个按钮(典型「撤销」,2026-10-17 起,旧宿主忽略)、`key` 同 key 的后一张顶掉前一张 |
+| `ctx.notify(msg, {level, action, key, undo, urgent})` | 桌面右上角的卡;手机(窄于 640)是状态栏下的一条横幅 | 自动标插件名,用户可按插件静音;`action: { label, run }` 在卡上放一个按钮(典型「撤销」,2026-10-17 起,旧宿主忽略)、`key` 同 key 的后一张顶掉前一张;`undo` / `urgent`(2026-11-15 起)和手机上的横幅见 [references/calendar-todo-entries.md](references/calendar-todo-entries.md)「带按钮的通知」「手机上的通知」 |
 | `ctx.achievements` | 成就系列 + `track(event, n)`;2026-10-17 起 `count(event, { own? })` 读计数(缺省读官方事件,只读)、`subscribe(cb)`、自己系列的 `isClaimed(id)` / `claim(id)` | 宿主强制 `plugin:<id>:` 前缀,伪造不了官方成就;`count` 读不到别家插件的计数(恒 0);新成员旧宿主没有 → `?.` |
 | `ctx.activity.log(event, detail)` | 写进活动日志(Muse 读得到) | 同款前缀纪律 |
 | `ctx.loadData() / saveData()` | 每插件一份 JSON blob | 大块数据走这条(见下「编辑器」节) |
@@ -855,7 +855,7 @@ ctx.calendar?.ensureMember(`${ctx.app.workFolder()}/任务表.db`, 'c-date' /* �
 
 ### 日历 / 待办类插件的其余入口(2026-10-17 盘点)
 
-Jump to a heading (`ctx.app.openNote?.(path, { heading })`), open a table (`ctx.app.openFile(db.path)`), mini window, Intelligent UI, dashboards, reminders, notifications with an Undo button (`ctx.notify(msg, { action, key })`), the host record fields in your card (`ctx.ui?.mountRecord?.(el, { path, rowId, dateCol?, readOnly?, body?, hideColumns? })`, declared `"databases"` only), host parts instead of copied UI, `ctx.calendar?.events` (copy / paste / reschedule / undo) and filtered view params: read [references/calendar-todo-entries.md](references/calendar-todo-entries.md).
+Jump to a heading (`ctx.app.openNote?.(path, { heading })`), open a table (`ctx.app.openFile(db.path)`), mini window, Intelligent UI, dashboards, reminders, notifications with an Undo button (`ctx.notify(msg, { action, key })`) and how they show on phones (a banner under the status bar; `undo` / `urgent`), the host record fields in your card (`ctx.ui?.mountRecord?.(el, { path, rowId, dateCol?, readOnly?, body?, hideColumns? })`, declared `"databases"` only), host parts instead of copied UI, `ctx.calendar?.events` (copy / paste / reschedule / undo) and filtered view params: read [references/calendar-todo-entries.md](references/calendar-todo-entries.md).
 
 ## Space 与 Ribbon 收纳架:ctx.spaces(2026-10-18 起)
 

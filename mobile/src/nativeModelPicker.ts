@@ -1,4 +1,5 @@
 import { Capacitor, registerPlugin } from '@capacitor/core'
+import { whileNativeSheetUp } from '@lcl/engine'
 import { installModelPickerPresenter, type ModelPickerRequest, type ModelPickerValues } from '@/components/modelPickerHost'
 
 interface NativePicker {
@@ -24,7 +25,8 @@ export function installNativeModelPicker(): void {
     const cancel = (): void => { void plugin.dismiss({ requestId }).catch(() => {}) }
     signal.addEventListener('abort', cancel, { once: true })
     try {
-      const result = await plugin.present({ ...request, requestId })
+      // Compose sheet over the WebView: counted as a native sheet (data-native-sheet on the shell) while it is up
+      const result = await whileNativeSheetUp(() => plugin.present({ ...request, requestId }))
       return signal.aborted || result.cancelled ? null : result.values ?? null
     } finally { signal.removeEventListener('abort', cancel) }
   })

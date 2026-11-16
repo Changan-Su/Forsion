@@ -1,5 +1,5 @@
 import { Capacitor, registerPlugin } from '@capacitor/core'
-import { installNativeSelect, installNativeSheetPresenter, type NativeSheetPayload } from '@lcl/engine'
+import { installNativeSelect, installNativeSheetPresenter, whileNativeSheetUp, type NativeSheetPayload } from '@lcl/engine'
 
 /** Android-only presenter for the generic native sheet seam (lcl/engine/nativeSheet.ts).
  *  Kotlin: NativeSheetPlugin + NativeSheetUi (Compose ModalBottomSheet). Desktop / web keep their web UI. */
@@ -20,7 +20,8 @@ export function installNativeSheet(): void {
     signal.addEventListener('abort', cancel, { once: true })
     try {
       // A rejection (invalid / oversized request, plugin missing) propagates → the caller renders its web UI.
-      const out = await plugin.present({ ...payload, requestId })
+      // While the call is pending the shell carries data-native-sheet="open" (the page is covered; see lcl nativeSheet.ts).
+      const out = await whileNativeSheetUp(() => plugin.present({ ...payload, requestId }))
       return signal.aborted || out.cancelled ? null : out.result ?? null
     } finally {
       signal.removeEventListener('abort', cancel)

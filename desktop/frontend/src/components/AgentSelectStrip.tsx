@@ -33,6 +33,7 @@ import { putAgentsMeta } from '../services/backendService'
 import { homeTarget } from '../services/engine/targets'
 import type { AgentConfig } from '../types'
 import { agentName, agentNames } from '../agentName'
+import { agentDescription } from './builtinAgentDescriptions'
 import { agentEngineLabel, agentEngineOf, agentEngineState, isRosterEngine } from '../tangu/agentEngine'
 
 registerMessages({
@@ -120,7 +121,7 @@ export function AgentSelectStrip({ sessionId, cfg }: { sessionId: string | null;
   const items = useMemo<Candidate[]>(() => {
     // Keep disabled agents visible when the current session still uses them.
     const roster: Candidate[] = s.agentDefs.filter((a) => !a.disabled || a.slug === cfg.agentSlug || !!cfg.groupAgents?.includes(a.slug)).map((a) => ({
-      id: agentId(a.slug), kind: 'agent', slug: a.slug, name: agentName(a), names: agentNames(a), description: a.description, system: a.createdBy === 'system',
+      id: agentId(a.slug), kind: 'agent', slug: a.slug, name: agentName(a), names: agentNames(a), description: agentDescription(a, t), system: a.createdBy === 'system',
       ...(agentEngineOf(a) ? { engine: agentEngineOf(a) } : {}),
     }))
     const known = (slug: string): boolean => roster.some((i) => i.id === agentId(slug))
@@ -147,7 +148,7 @@ export function AgentSelectStrip({ sessionId, cfg }: { sessionId: string | null;
       list.push({ id: engineKey(engineId), kind: 'engine', engineId, name: s.engines.find((e) => e.id === engineId)?.name || engineId })
     }
     return list
-  }, [s.agentDefs, s.engines, engineId, cfg.execMode, cfg.groupAgents, cfg.groupTempAgents, cfg.agentSlug])
+  }, [s.agentDefs, s.engines, engineId, cfg.execMode, cfg.groupAgents, cfg.groupTempAgents, cfg.agentSlug, t])
 
   const byId = useMemo(() => new Map(items.map((i) => [i.id, i])), [items])
   const siblingNames = useMemo(() => items.filter((i) => i.kind === 'agent').map((i) => i.name), [items])

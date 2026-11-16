@@ -404,8 +404,9 @@ export function MobileRoot() {
 
       <AchievementToast onOpen={() => useApp.getState().openAchievements()} />
 
-      {/* 旧 .toast-wrap 已随 appStore.toasts 一起下线;通知统一走 notificationStore + NotificationHost。 */}
-      <NotificationHost />
+      {/* 旧 .toast-wrap 已随 appStore.toasts 一起下线;通知统一走 notificationStore + NotificationHost。
+          phone:窄于 640 时改成状态栏下的一条横幅(有原生外壳由原生层画),宽了照桌面放右上角。 */}
+      <NotificationHost phone />
       <WhatsNewHost />
       <TermsUpdateHost />
     </>

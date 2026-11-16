@@ -2238,8 +2238,14 @@ export interface PluginContext {
    *  always call as `ctx.notify?.(…)`. For persistent state prefer registerStatusItem.
    *  `action` (2026-10-17+): one button on the card, e.g. Undo after a delete — the card then stays about 8 seconds;
    *  `run` is not called once the plugin is disabled. `key` (2026-10-17+): a later card with the same key replaces the
-   *  earlier one instead of stacking (keys are per plugin). Older hosts ignore both: keep the action reachable elsewhere. */
-  notify?(message: string, opts?: { level?: 'info' | 'success' | 'warning' | 'error'; title?: string; sticky?: boolean; action?: { label: string; run(): void }; key?: string }): void
+   *  earlier one instead of stacking (keys are per plugin). Older hosts ignore both: keep the action reachable elsewhere.
+   *  On a phone (narrow window) the card is a one-line banner under the status bar, one at a time, for 5 seconds; a later
+   *  card with the same key swaps the words and button in place without restarting that time, and after a card from your
+   *  plugin leaves, new ones are held back for a while (30 s, 2 min if the person swiped it away) — the call still succeeds.
+   *  `undo: true` (2026-11-15+): this card is the way back from something the person just did (Undo after a delete): it
+   *  stays 8 seconds on a phone and is never held back. `urgent: true` (2026-11-15+): someone (a person or an agent) is
+   *  stopped and waiting for the person; never held back on a phone, but not sticky either. Older hosts ignore both. */
+  notify?(message: string, opts?: { level?: 'info' | 'success' | 'warning' | 'error'; title?: string; sticky?: boolean; action?: { label: string; run(): void }; key?: string; undo?: boolean; urgent?: boolean }): void
   /** The host UI's current language (2026-08-14+). Plugins ship bilingual strings and pick with this.
    *  Optional in the type only because API v1 hosts predate it — every current host injects it, so
    *  always call as `ctx.getLocale?.() ?? 'zh'` (Chinese is the canonical fallback). */

@@ -624,6 +624,51 @@ describe('ctx.notify 的 action / key(10-17)', () => {
   })
 })
 
+describe('ctx.notify 的 undo / urgent(手机横幅,11-15)', () => {
+  // 负对照:pluginStore 不把 undo / urgent 交给 store → 撤销那张在手机上只停 5 秒、被节流;等你批准那张被节流
+  it('undo:手机上停 8 秒、不受节流;urgent:不受节流;只认布尔 true;桌面停留不变', async () => {
+    const { useNotifications, resetNotificationThrottle } = await import('../../stores/notificationStore')
+    vi.useFakeTimers()
+    try {
+      useNotifications.getState().setBanner(true)
+      useNotifications.getState().dismissAll()
+      resetNotificationThrottle()
+      const ctx = ctxOf('ntf-phone')
+      ctx.notify?.('张三：在吗', { key: 'phone' })
+      useNotifications.getState().dismiss(useNotifications.getState().items[0].id, 'user') // 用户划走:这个插件冷却 2 分钟
+      vi.advanceTimersByTime(300)
+      ctx.notify?.('又一条', { key: 'phone' })
+      expect(useNotifications.getState().items, '冷却中的普通卡不该出').toHaveLength(0)
+      ctx.notify?.('Agent 等你批准', { key: 'approval:1', urgent: true })
+      expect(useNotifications.getState().items.map((n) => n.text)).toEqual(['Agent 等你批准'])
+      expect(useNotifications.getState().items[0]).toMatchObject({ urgent: true, dedupeKey: 'plugin:ntf-phone:approval:1' })
+      useNotifications.getState().dismissAll()
+      ctx.notify?.('已删除「周会」', { key: 'undo', undo: true, action: { label: '撤销', run: vi.fn() } })
+      expect(useNotifications.getState().items[0]).toMatchObject({ undo: true, text: '已删除「周会」' })
+      vi.advanceTimersByTime(7999)
+      expect(useNotifications.getState().items).toHaveLength(1)
+      vi.advanceTimersByTime(1)
+      expect(useNotifications.getState().items).toHaveLength(0)
+      // 只认 true:字符串、1 都不算
+      vi.advanceTimersByTime(120_000)
+      useNotifications.getState().dismissAll()
+      ctx.notify?.('x', { undo: 'yes' as unknown as boolean, urgent: 1 as unknown as boolean })
+      expect(useNotifications.getState().items[0]).toMatchObject({ undo: undefined, urgent: undefined })
+      // 桌面:带按钮照旧 8 秒,不看 undo
+      useNotifications.getState().setBanner(false)
+      useNotifications.getState().dismissAll()
+      ctx.notify?.('desk', { action: { label: 'Open', run: vi.fn() } })
+      vi.advanceTimersByTime(7999)
+      expect(useNotifications.getState().items).toHaveLength(1)
+    } finally {
+      useNotifications.getState().setBanner(false)
+      useNotifications.getState().dismissAll()
+      resetNotificationThrottle()
+      vi.useRealTimers()
+    }
+  })
+})
+
 describe('ctx.automation.registerTrigger / emit', () => {
   const trigger = { id: 'ping', name: { zh: '收到', en: 'Ping' } }
 

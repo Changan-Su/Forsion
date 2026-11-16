@@ -59,7 +59,6 @@
     "frontend/src/amadeus/unified/canvasStage.tsx": 9,
     "frontend/src/components/FloatingPanelFrame.tsx": 2,
     "frontend/src/components/ImageStack.tsx": 2,
-    "frontend/src/components/NotificationHost.tsx": 4,
     "frontend/src/components/OnboardingWizard.tsx": 1,
     "frontend/src/mini/dockMotion.ts": 2,
     "frontend/src/views/DashboardCanvasView.tsx": 1,
