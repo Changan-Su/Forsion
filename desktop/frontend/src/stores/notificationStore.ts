@@ -183,9 +183,10 @@ function enqueue(queue: readonly AppNotification[], n: AppNotification): AppNoti
  *  - 一律留着:撤销回执(`undo`,含手势里弹的带按钮卡;系统通知上没有「撤销」)、带 `onClose` 的(要等它收起才落定)、常驻的、
  *    error 级的,上着屏被遮挡撤下的(`held`:用户没看完,系统通知也没替它说过),以及系统通知没真发出去的 —— inAppOnly / receipt、
  *    来时在前台欠着又没补上的、桥回话说没投递或还没回话的(都记在 osOwed),系统通知开关关着时(`osOn` 为 false)全部。
- *  - 其余:有人在等的(urgent)按「来源 + key」各留最新一张(不同的审批各自留着;和系统通知的分条同一口径,见 postOs),不急的每个来源
- *    (event)留最新一张;这一类合起来最多 PHONE.replay 张,有人在等的先留,同档留新的、丢最早的。丢下的在后台都跟发过系统通知,
- *    页签角标也还在。
+ *  - 其余:有人在等的(urgent)按「来源 + key」各留最新一张(不同的审批各自留着;和系统通知的分条同一口径,见 postOs),**全留、不封顶**:
+ *    安卓外壳回到前台时(handleOnResume)会把通知栏里的插件通知一并收掉,封顶丢下的审批就哪儿都看不到了。
+ *    不急的每个来源(event)留最新一张,补满剩下的名额(PHONE.replay 减去有人在等的张数,不足为 0),留新的、丢最早的;
+ *    丢下的不急的卡在后台都跟发过系统通知,页签角标也还在。
  *  返回留下的(有人在等的在前,其余保持原来的先后)与丢下的。 */
 export function replayQueue(queue: readonly AppNotification[], osOn = true): { queue: AppNotification[]; dropped: AppNotification[] } {
   const keeps = (n: AppNotification): boolean =>
@@ -198,10 +199,11 @@ export function replayQueue(queue: readonly AppNotification[], osOn = true): { q
     if (!cur || n.createdAt >= cur.createdAt) pick.set(slot(n), n) // 取晚的(一样晚取排在后面的)
   }
   const picked = queue.filter((n) => !keeps(n) && pick.get(slot(n)) === n)
-  // 封顶:有人在等的先留;同档新的先留(一样新取排在后面的),丢的是最早的
-  const rank = [...picked.keys()].sort((a, b) =>
-    Number(!!picked[b].urgent) - Number(!!picked[a].urgent) || picked[b].createdAt - picked[a].createdAt || b - a)
-  const capped = new Set(rank.slice(0, PHONE.replay).map((i) => picked[i]))
+  // 封顶只管不急的:有人在等的全留;不急的补满剩下的名额,新的先留(一样新取排在后面的),丢的是最早的
+  const urgent = picked.filter((n) => n.urgent)
+  const plain = [...picked.keys()].filter((i) => !picked[i].urgent).sort((a, b) => picked[b].createdAt - picked[a].createdAt || b - a)
+  const room = Math.max(0, PHONE.replay - urgent.length)
+  const capped = new Set([...urgent, ...plain.slice(0, room).map((i) => picked[i])])
   const kept = queue.filter((n) => keeps(n) || capped.has(n))
   return { queue: [...kept.filter((n) => n.urgent), ...kept.filter((n) => !n.urgent)], dropped: queue.filter((n) => !kept.includes(n)) }
 }

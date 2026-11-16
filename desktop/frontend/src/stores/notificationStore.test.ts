@@ -663,7 +663,7 @@ describe('手机横幅模式(banner)', () => {
     } finally { vi.unstubAllGlobals() }
   })
 
-  it('回到前台的重放:有人在等的按「来源 + key」各留一张(两张审批都在),不急的每个来源留最新一张;合起来最多 3 张,有人在等的先留、同档丢最早的(负对照:按来源去重 / 封顶留早的 / 不收拾 → 这里红)', () => {
+  it('回到前台的重放:有人在等的按「来源 + key」各留一张(两张审批都在),不急的每个来源留最新一张;有人在等的全留、不急的补满 3 张里剩下的名额并丢最早的(负对照:按来源去重 / 封顶留早的 / 封顶丢有人在等的 / 不收拾 → 这里红)', () => {
     const os = vi.fn()
     let hidden = false
     vi.stubGlobal('window', { tangu: { notify: os } })
@@ -700,14 +700,27 @@ describe('手机横幅模式(banner)', () => {
       expect(committed).toHaveBeenCalledTimes(1)
       expect(kept).toHaveBeenCalledTimes(1)
       expect(st().queue).toHaveLength(0)
-      // 有人在等的超过 3 张:留最新的 3 张,丢最早的那张
+      // 有人在等的超过 3 张:全留(外壳回到前台会收掉通知栏里的插件通知,丢下的审批就哪儿都看不到了),
+      // 不急的没有名额了、丢下;同一个 key 的审批照旧只留最新一张
       hidden = true
       st().visibilityChanged()
       for (const i of [1, 2, 3, 4]) later({ text: `ask ${i}`, event: 'plugin:demo', dedupeKey: `demo:approval:${10 + i}`, replace: true, urgent: true })
+      later({ text: 'ask 4 again', event: 'plugin:demo', dedupeKey: 'demo:approval:14', replace: true, urgent: true })
       later({ text: 'plain', event: 'plugin:other' })
       hidden = false
       st().visibilityChanged()
-      expect(st().queue.map((n) => n.text)).toEqual(['ask 2', 'ask 3', 'ask 4'])
+      expect(st().queue.map((n) => n.text), '封顶不丢有人在等的').toEqual(['ask 1', 'ask 2', 'ask 3', 'ask 4 again'])
+      st().dismissAll()
+      // 有人在等的两张:不急的补满剩下的一个名额,留最新的那个来源
+      hidden = true
+      st().visibilityChanged()
+      later({ text: 'p old', event: 'plugin:p1' })
+      later({ text: 'ask 5', event: 'plugin:demo', dedupeKey: 'demo:approval:15', replace: true, urgent: true })
+      later({ text: 'p new', event: 'plugin:p2' })
+      later({ text: 'ask 6', event: 'plugin:demo', dedupeKey: 'demo:approval:16', replace: true, urgent: true })
+      hidden = false
+      st().visibilityChanged()
+      expect(st().queue.map((n) => n.text)).toEqual(['ask 5', 'ask 6', 'p new'])
       st().dismissAll()
       // 在前台排着的不收拾:多报一次「看得见」(没退到过后台)什么都不丢
       for (const i of [1, 2, 3, 4, 5]) notifyApp({ text: `fg ${i}`, event: `plugin:fg${i}` })
