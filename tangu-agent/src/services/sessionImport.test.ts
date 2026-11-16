@@ -135,6 +135,12 @@ describe('settleTimestamps', () => {
     const out = settleTimestamps({ external_id: 'x', updated_at: now, messages: Array.from({ length: 150 }, () => ({ role: 'user' as const, content: 'a' })) }, now);
     expect(out[out.length - 1]).toBe(now);
   });
+  it('a start close to now with many untimed messages is pulled back so nothing lands in the future', () => {
+    const now = Date.now();
+    const out = settleTimestamps({ external_id: 'x', created_at: now - 10_000, updated_at: now, messages: Array.from({ length: 150 }, () => ({ role: 'user' as const, content: 'a' })) }, now);
+    expect(out[out.length - 1]).toBeLessThanOrEqual(now);
+    expect(out.every((t, i) => i === 0 || t > out[i - 1])).toBe(true);
+  });
   it('a chat with no times at all ends no later than now (never in the future)', () => {
     const now = Date.now();
     const out = settleTimestamps({ external_id: 'x', messages: Array.from({ length: 101 }, () => ({ role: 'user' as const, content: 'a' })) }, now);

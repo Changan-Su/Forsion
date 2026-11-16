@@ -1109,13 +1109,16 @@ export async function checkpointImportedHistory(
   const chunkTokens = Math.min(IMPORT_CHECKPOINT_CHUNK_TOKENS, Math.floor((await summaryChunkBudget(modelId, settings, signal)) * 0.8));
   const bounds: number[] = [];
   let acc = 0;
+  let rows = 0;
   let lastTs = 0;
   for (const r of outside) {
     const ts = Number(r.timestamp) || 0;
     if (!ts || ts <= covered) continue;
     const cost = estimateTokensRough(String(r.content || '')) + 8;
-    if (acc > 0 && acc + cost > chunkTokens) { bounds.push(lastTs); acc = 0; }
+    // 一段至少两条:compactSession 对单条返回 nothing to compact(长消息在小窗口摘要模型上会一条一段)
+    if (rows >= 2 && acc + cost > chunkTokens) { bounds.push(lastTs); acc = 0; rows = 0; }
     acc += cost;
+    rows++;
     lastTs = ts;
   }
   if (lastTs) bounds.push(lastTs);
@@ -1123,7 +1126,9 @@ export async function checkpointImportedHistory(
     signal?.throwIfAborted();
     const r = await compactSession(sessionId, modelId, appId, signal, { throughTs, settings, runThinking });
     if (!r.ok) {
-      if (r.reason !== 'nothing to compact') console.warn(`[agent-core] session=${sessionId} 导入会话老行分段压缩未成: ${r.reason}`);
+      // 这一段没东西可压就并进下一段(下一段从上个检查点算起),别整个停掉
+      if (r.reason === 'nothing to compact') continue;
+      console.warn(`[agent-core] session=${sessionId} 导入会话老行分段压缩未成: ${r.reason}`);
       return;
     }
   }

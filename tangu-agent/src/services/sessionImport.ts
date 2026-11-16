@@ -137,6 +137,13 @@ export function settleTimestamps(c: ImportConversationInput, now = Date.now()): 
     out.push(t);
     prev = t;
   }
+  // 封顶到现在:补出来的(或时钟超前的)时间不能晚于此刻,否则立刻续聊的新消息会排进导入历史中间。
+  // 从尾往前压,保持严格递增(Codex 11-16 第三轮:created_at 离现在很近、消息又多时,1 秒一步会排出去)
+  let cap = now;
+  for (let i = out.length - 1; i >= 0; i--) {
+    if (out[i] > cap) out[i] = cap;
+    cap = out[i] - 1;
+  }
   return out;
 }
 

@@ -496,13 +496,14 @@ function withMaxTokens(target: SummaryTarget, maxTokens: number): SummaryTarget 
 
 /**
  * 分段补摘要时一段**新转写**最多放多少(估算 token):按摘要模型自己的窗口,取放宽重试那档(输出上限更大、输入预算
- * 更小)的输入预算,再给上一份摘要(增量检查点会带上它)留出一份输出上限的位置。导入会话首份摘要用(11-16)。
+ * 更小)的输入预算,再给上一份摘要(增量检查点会带上它)留出一份放宽后输出上限的位置。导入会话首份摘要用(11-16)。
  */
 export async function summaryChunkBudget(modelId: string, settings: CompactionSettings, signal?: AbortSignal): Promise<number> {
   const target = await resolveSummaryTarget({ modelId, appId: '', settings }, undefined, signal);
   const wider = Math.max(target.maxTokens, Math.min(SUMMARY_RETRY_MAX_TOKENS, Math.floor(target.windowTokens / 4)));
   const t = withMaxTokens(target, wider);
-  return Math.max(TRANSCRIPT_MIN_BUDGET, t.budgetTokens - target.maxTokens);
+  // 上一份摘要可能就是放宽重试那档写出来的,按放宽后的上限留位置(Codex 11-16 第三轮)
+  return Math.max(TRANSCRIPT_MIN_BUDGET, t.budgetTokens - wider);
 }
 
 /**

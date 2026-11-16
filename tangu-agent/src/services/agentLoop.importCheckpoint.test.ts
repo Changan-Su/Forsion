@@ -43,10 +43,10 @@ beforeEach(async () => {
 });
 
 const T0 = Date.UTC(2026, 0, 1);
-async function seed(n: number): Promise<string> {
+async function seed(n: number, size = 600): Promise<string> {
   const messages = Array.from({ length: n }, (_, i) => ({
     role: (i % 2 ? 'assistant' : 'user') as 'user' | 'assistant',
-    content: `${i === 0 ? 'UNIQUE-OPENING-FACT ' : ''}line ${i} ` + 'x'.repeat(600),
+    content: `${i === 0 ? 'UNIQUE-OPENING-FACT ' : ''}line ${i} ` + 'x'.repeat(size),
     timestamp: T0 + i * 1000,
   }));
   const [r] = await importConversations({ userId: 'u1', appId: 'tangu', source: 'deepseek', modelId: 'm1', projectless: true, agentConfig: { preset: 'chat' }, conversations: [{ external_id: 'big', messages }] });
@@ -68,6 +68,15 @@ describe('checkpointImportedHistory', () => {
     const before = inputs.length;
     await checkpointImportedHistory(sid, 'm1', 'tangu', { ...DEFAULT_COMPACTION_SETTINGS, enabled: true }, 'medium');
     expect(inputs.length).toBe(before);
+  });
+
+  it('long messages that would each fill a pass still get summarized (no single-row passes stopping the whole thing)', async () => {
+    const sid = await seed(120, 14_000);
+    await checkpointImportedHistory(sid, 'm1', 'tangu', { ...DEFAULT_COMPACTION_SETTINGS, enabled: true }, 'medium');
+    expect(inputs.length).toBeGreaterThan(1);
+    expect(inputs[0]).toContain('UNIQUE-OPENING-FACT');
+    // 窗口按 n+1 = 121 算:起点 80,窗口外最后一行是第 79 条
+    expect((await getLatestSummary(sid))?.throughTimestamp).toBe(T0 + 79 * 1000);
   });
 
   it('stops after the current pass once the run is stopped', async () => {
