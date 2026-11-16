@@ -69,6 +69,19 @@ describe('registerNoteBirth × 出生入口', () => {
     expect(dispatched).toContainEqual({ type: 'amadeus:navigate-note', path: 'Inbox/untitled.md' })
   })
 
+  it('插件填了内容的出生记进这个插件的新建记录(随后改名 / 挪动不问);插件不给(null)的不记', async () => {
+    const { usePageStore, hooks } = await fresh()
+    const { isPluginCreated } = await import('../plugins/pluginCreated')
+    hooks.registerNoteBirth('tpl', () => 'Tpl', { id: 'b', initial: (i) => (i.path.startsWith('Inbox/') ? '# From plugin\n' : null) })
+    await usePageStore.getState().createPageInFolder('Inbox')
+    expect(isPluginCreated('tpl', 'Inbox/untitled.md', '/v')).toBe(true)
+    expect(isPluginCreated('other', 'Inbox/untitled.md', '/v')).toBe(false)
+    expect(isPluginCreated('tpl', 'Inbox/untitled.md', '/elsewhere')).toBe(false)
+    await usePageStore.getState().createWikiPage('Plain')
+    expect(disk.get('Plain.md')).toBe('')
+    expect(isPluginCreated('tpl', 'Plain.md', '/v')).toBe(false)
+  })
+
   it('快切新建 / 未解析链接确认(路径限定与子笔记)/ 子笔记都问', async () => {
     const { usePageStore, hooks } = await fresh()
     const asked: string[] = []

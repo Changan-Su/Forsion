@@ -36,6 +36,7 @@ import { act } from '../../activity/log'
 import { registerMessages, translate } from '../../i18n'
 import { sharedEntryFor, useSharedVault } from '../../stores/sharedVaultStore'
 import { askNoteBirth, hasNoteBirthProviders } from '../plugins/templateHooks'
+import { markPluginCreated } from '../plugins/pluginCreated'
 
 registerMessages({
   'amadeus.share.notShared': { zh: '{name} 没有把这一页共享给你', en: "{name} hasn't shared this page with you" },
@@ -1888,11 +1889,11 @@ export function birthNoteFile(path: string, opts?: { ask?: boolean }): Promise<'
 }
 const birthChains = new Map<string, Promise<unknown>>()
 
-/** 插件建的路径记账(插件改名 / 挪动的授权口径)的接口点。
- *  TODO(feat/plugin-file-ops):那条分支合进来后,换成它的记账函数(markPluginCreated 一类),由协调方接线;此前空转。 */
-function notePluginCreated(pluginId: string, path: string): void {
-  void pluginId
-  void path
+/** 插件建的路径记账(插件改名 / 挪动的授权口径,plugins/pluginCreated.ts):出生钩子替插件填了内容的笔记算这个插件建的,
+ *  它随后 ctx.app.renamePath / movePath 这篇不再弹确认。记在出生那一刻的库根下(等插件期间换库的出生早已作废,不会走到这里)。 */
+function notePluginCreated(pluginId: string, path: string, root: string | null): void {
+  if (root) markPluginCreated(pluginId, path, root)
+  else markPluginCreated(pluginId, path)
 }
 
 async function birthNoteFileNow(path: string, root: string | null, opts?: { ask?: boolean }): Promise<'created' | 'exists' | 'failed'> {
@@ -1935,7 +1936,7 @@ async function birthNoteFileNow(path: string, root: string | null, opts?: { ask?
   }
   if (r && r.ok === false) return r.current != null ? 'exists' : failed(translate('pagestore.birth.unknown'))
   track('note.create'); act('note.create', { f: path })
-  if (filledBy && initial) notePluginCreated(filledBy, path) // 只记真由本次写出、带插件内容的;仅新建输给别人('exists')的不记
+  if (filledBy && initial) notePluginCreated(filledBy, path, root) // 只记真由本次写出、带插件内容的;仅新建输给别人('exists')的不记
   return 'created'
 }
 
