@@ -1271,6 +1271,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   let preset: Preset | undefined = parsePreset(agentConfig.preset);
   let pluginReadOnly = agentConfig.pluginReadOnly === true;
   let storedAgentSlug: string | undefined; // 分身:这次之前会话存的是谁(换身份的会话不接着用旧历史,见下)
+  let importedSession = false; // 外部聊天记录导入的会话(agent_config.imported):回放前要先给窗口外老行补摘要,见 hydrate 前
   try {
     const rawStored = await deps().state.getAgentConfig(sessionId);
     ac.signal.throwIfAborted();
@@ -1278,6 +1279,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     if (stored !== null && (typeof stored !== 'object' || Array.isArray(stored))) throw new Error('Invalid stored session Agent configuration');
     pluginReadOnly ||= stored?.pluginReadOnly === true;
     if (typeof stored?.agentSlug === 'string') storedAgentSlug = stored.agentSlug;
+    importedSession = !!(stored?.imported && typeof stored.imported === 'object');
     // 轨道身份先于 agentSlug 纠偏:私聊会话的 agentSlug 由 soloAgentSlug 钉死,下面的写穿会把存值也顺手纠回来。
     bindSessionFacts(agentConfig, pickSessionFacts(stored));
     if (stored?.delegatedFrom) {
@@ -1794,6 +1796,17 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         return null;
       }
     };
+    // 导入的旧对话(11-16,POST /agent/sessions/import):正常会话靠每轮收尾的惰性检查点给窗口外老行做摘要,
+    // 导入的会话一上来就几十上百条、一份摘要都没有 → 第一次接着聊时窗口(最近 HYDRATE_MAX 行)外的旧内容整段不进上下文
+    // (live dsimport 抓到:开头那首诗被切掉,模型说「查不到」)。所以在回放前同步补一份;已覆盖时这里只是几条查询。
+    // 有在飞的惰性检查点就交给 hydrate 去等,别并发压两份。用这一轮的模型与思考档,计费照常记在这一轮上。
+    if (importedSession && !lazyCheckpoints.get(sessionId)) {
+      const task: Promise<void> = checkpointRowsOutsideWindow(sessionId, callModelId, appId, compactionCfg, thinkingLevel)
+        .catch((e) => console.warn(`[agent-core] session=${sessionId} 导入会话窗口外老行压缩失败:`, e?.message || e))
+        .finally(() => { if (lazyCheckpoints.get(sessionId) === task) lazyCheckpoints.delete(sessionId); });
+      lazyCheckpoints.set(sessionId, task);
+      await task; // 不走 hydrate 那道 45 秒的等待上限:导入的历史可能很长,宁可第一句慢一点,也别缺一截上下文就开口
+    }
     const { messages: history, currentUserIndex, checkpointThrough, contextImages } = await hydrateHistory(
       sessionId, run.assistant_message_id || '', describeUserImages,
       typeof input.userMessageId === 'string' ? input.userMessageId : undefined,
