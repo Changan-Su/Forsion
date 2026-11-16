@@ -43,7 +43,7 @@ import { MemoryRepositoryError, filterForgottenMemory, normalizeMemoryFact, type
 import { openProjectMemory, projectEntryAuthor, projectLayers, recordProjectCompaction, PROJECT_MEMORY_CHAR_BUDGET, PROJECT_STORE, type CompactionSize, type ProjectMemoryRef } from './projectMemory.js';
 import { splitMark, stripMark, stripMarks } from '../contracts/entryMark.js';
 import { applyAgentOrganize, readAgentLayers, type AgentLayers } from './agentMemoryLayers.js';
-import { isOrganizeOutcome, organizeAvailable, proposeOrganize, type OrganizeItem } from './memoryOrganize.js';
+import { isOrganizeOutcome, organizeAvailable, proposeOrganize, ORGANIZE_CALL_DEADLINE_MS, type OrganizeItem } from './memoryOrganize.js';
 import { AGENT_USAGE_FILE, readMemoryUse } from './memoryUsage.js';
 
 /** 给模型的预算:压到上限的一半。 */
@@ -52,7 +52,9 @@ export const COMPACT_ASK_CHARS = Math.floor(PROJECT_MEMORY_CHAR_BUDGET * 0.5);
 export const COMPACT_ACCEPT_CHARS = Math.floor(PROJECT_MEMORY_CHAR_BUDGET * 0.7);
 /** 单条上限,与 remember 的形状闸同口径(tools/builtin/memoryLog.ts 的 REMEMBER_FACT_MAX_CHARS)。 */
 const FACT_MAX_CHARS = 300;
-const DEADLINE_MS = 60_000;
+/** 一次压缩调用的截止。同 memoryOrganize 的 ORGANIZE_CALL_DEADLINE_MS:输出上限 28,672(托管 Claude 5)按约 100 tok/s 要 290 秒左右,
+ *  原来的 60 秒连 12,288 都要 205 tok/s 才写得完。只在后台跑(写过线后排的整理第二段),前台 remember 不等它。 */
+export const COMPACT_DEADLINE_MS = 300_000;
 /** 正文上限(方案本身几百 token)。思考的 token 也算在 max_tokens 里,另由 thinkingHeadroom 留;给少了思考把它吃光,
  *  交回来的就是截断的正文,托管 Claude 5 上是一句正文都没有的 422(11-15 反馈)。 */
 const MAX_OUTPUT_TOKENS = 12_288;
@@ -169,7 +171,7 @@ const retryAt = new Map<string, number>();
 const sizeOf = (entries: readonly { content: string }[]): CompactionSize => ({ count: entries.length, chars: entries.reduce((n, e) => n + e.content.length, 0) + Math.max(0, entries.length - 1) });
 
 async function run(userId: string, ref: ProjectMemoryRef, fallbackModelId?: string, sessionId?: string): Promise<CompactionOutcome> {
-  const signal = AbortSignal.timeout(DEADLINE_MS);
+  const signal = AbortSignal.timeout(COMPACT_DEADLINE_MS);
   const repo = await openProjectMemory(ref);
   const snapshot = repo.snapshot();
   // 行尾记号(钉住、谁写的,11-09 分层)不给模型看;钉住的和人写的一样不改写
@@ -282,9 +284,9 @@ export function compactProjectMemory(userId: string, ref: ProjectMemoryRef, opts
   if (!job) {
     if ((retryAt.get(ref.dir) ?? 0) > Date.now()) return Promise.resolve({ status: 'skipped', reason: 'cooldown' });
     // run 里有打断不了的等待(解析模型、记账):整次再套一个定时器,免得一次挂住就把这个项目的单飞槽永远占着、之后每一句都等它。
-    // 超时之后那一次即使醒过来也提交不了 —— commit 带着同一个 60 秒的 signal(Codex 评审 10-05)。
+    // 超时之后那一次即使醒过来也提交不了 —— commit 带着同一个截止的 signal(Codex 评审 10-05)。
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const late = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('timed out')), DEADLINE_MS + 5_000); });
+    const late = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('timed out')), COMPACT_DEADLINE_MS + 5_000); });
     job = Promise.race([run(userId, ref, opts.fallbackModelId, opts.sessionId), late])
       .finally(() => clearTimeout(timer))
       .catch((e): CompactionOutcome => ({ status: 'skipped', reason: 'failed', detail: String(e?.message || e).slice(0, 200) }))
@@ -320,7 +322,8 @@ export type ProjectOrganizeOutcome =
   | { status: 'skipped'; reason: 'no_model' | 'under' | 'nothing' | 'busy' | 'cooldown' | 'rejected' | 'conflict' | 'failed'; detail?: string };
 /** 第一段的目标:挪到上限的六成(同 Agent 记忆);采用不卡这个数(挪动不丢东西),七成以上再走第二段。 */
 const MOVE_TARGET = Math.floor(PROJECT_MEMORY_CHAR_BUDGET * 0.6);
-const ORGANIZE_DEADLINE_MS = 90_000 + DEADLINE_MS + 10_000;
+/** 整理一整次 = 第一段分堆(一次整理调用)+ 第二段压缩(一次压缩调用)+ 余量。桌面手点「整理」的请求超时跟着它(desktop backendService 的 organizeProjectMemory)。 */
+export const ORGANIZE_DEADLINE_MS = ORGANIZE_CALL_DEADLINE_MS + COMPACT_DEADLINE_MS + 10_000;
 const day = (t = Date.now()): string => { const d = new Date(t); const p = (n: number) => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; };
 const residentSize = (l: AgentLayers): CompactionSize => ({ count: l.resident.filter((r) => !r.shadowed).length, chars: l.residentChars });
 

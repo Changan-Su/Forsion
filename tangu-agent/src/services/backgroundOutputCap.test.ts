@@ -27,8 +27,8 @@ vi.mock('./projectMemory.js', async (orig) => ({
 
 import { configureTangu } from '../seams/runtime.js';
 import { createTanguProfile } from '../profiles/index.js';
-import { proposeOrganize } from './memoryOrganize.js';
-import { compactProjectMemory, resetProjectMemoryCompactionForTests } from './projectMemoryCompact.js';
+import { proposeOrganize, ORGANIZE_CALL_DEADLINE_MS } from './memoryOrganize.js';
+import { compactProjectMemory, resetProjectMemoryCompactionForTests, ORGANIZE_DEADLINE_MS } from './projectMemoryCompact.js';
 import { CLAUDE_THINKING_HEADROOM } from '../llm/openaiCompat.js';
 import { PROTOCOL_MARK } from '../llm/openaiCompat.js';
 import { CLAUDE_MAX_TOKENS_CEILING } from '../llm/modelCapabilities.js';
@@ -94,5 +94,13 @@ describe('后台整理调用的输出上限含思考余量', () => {
 
   it('加上余量也不超过 Claude 都吃得下的 32000(服务端缺省同值)', () => {
     expect(BODY + CLAUDE_THINKING_HEADROOM).toBeLessThanOrEqual(CLAUDE_MAX_TOKENS_CEILING);
+  });
+
+  // 截止不能比输出上限先撞墙:托管 Claude 5 的上限按约 100 tok/s(每 token 10ms)写得完。原来 90 / 60 秒连 12,288 都要 137 / 205 tok/s。
+  it('一次整理调用的截止够把整份上限按 100 tok/s 写完', () => {
+    expect(ORGANIZE_CALL_DEADLINE_MS).toBeGreaterThanOrEqual((BODY + CLAUDE_THINKING_HEADROOM) * 10);
+  });
+  it('项目记忆整理一整次(分堆 + 压缩)的外层截止装得下两次满额调用', () => {
+    expect(ORGANIZE_DEADLINE_MS).toBeGreaterThanOrEqual(ORGANIZE_CALL_DEADLINE_MS + (BODY + CLAUDE_THINKING_HEADROOM) * 10);
   });
 });
