@@ -118,6 +118,51 @@ export function installNativeSheetPresenter(next: NativeSheetPresenter): () => v
 }
 export function nativeSheetPresenter(): NativeSheetPresenter | undefined { return presenter }
 
+// ── "a native sheet is up" (host page attribute) ───────────────────────────────
+/** A native sheet (Compose, drawn above the WebView: this seam's sheets, the model picker) covers the page without
+ *  leaving any trace in the DOM — `elementFromPoint` under it still hits the list, and `document.hasFocus()` stays
+ *  true. While one is up the single-column shell carries `.mb-shell[data-native-sheet="open"]` (bindNativeSheetMark,
+ *  wired in SingleColumnHost). It is a host page attribute of the same kind as `data-nav`: code that decides "the
+ *  user is looking at this" (e.g. a plugin's own read / no-pop logic) treats the page as covered while it is there.
+ *  Not a plugin API and not a styling hook (no CSS hangs on it, so toggling it re-styles nothing).
+ *  Platform presenters wrap the native call in `whileNativeSheetUp`; the mark goes away when the call settles —
+ *  answered, cancelled, or rejected (the native side is unavailable and the caller falls back to its web UI). */
+let sheetsUp = 0
+const sheetWatchers = new Set<() => void>()
+const sheetChanged = (): void => { for (const fn of [...sheetWatchers]) { try { fn() } catch { /* one bad watcher does not stop the rest */ } } }
+export function nativeSheetUp(): boolean { return sheetsUp > 0 }
+/** Count one native sheet as up until the returned release is called (idempotent). */
+export function holdNativeSheetUp(): () => void {
+  sheetsUp++
+  sheetChanged()
+  let held = true
+  return () => {
+    if (!held) return
+    held = false
+    sheetsUp--
+    sheetChanged()
+  }
+}
+/** Run a platform presenter's native call with the sheet counted as up for exactly as long as the call is pending. */
+export async function whileNativeSheetUp<T>(show: () => Promise<T>): Promise<T> {
+  const release = holdNativeSheetUp()
+  try { return await show() } finally { release() }
+}
+/** Mirror the state onto `el` (the `.mb-shell`): applied at once — a shell mounted while a sheet is up gets it too —
+ *  and kept in step until the returned unbind, which also removes it (the shell unmounting must not leave it behind). */
+export function bindNativeSheetMark(el: Element): () => void {
+  const apply = (): void => {
+    if (sheetsUp > 0) el.setAttribute('data-native-sheet', 'open')
+    else el.removeAttribute('data-native-sheet')
+  }
+  apply()
+  sheetWatchers.add(apply)
+  return () => {
+    sheetWatchers.delete(apply)
+    el.removeAttribute('data-native-sheet')
+  }
+}
+
 // ── result validation ──────────────────────────────────────────────────────────
 
 const plainObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v)

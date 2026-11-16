@@ -10,7 +10,7 @@
  *   带 `detail.probe` 的那一种只是问「你接不接」:preventDefault 作答,**不许动手**(新加监听方照这个写)。
  * mobile 构建直接渲染它(MobileRoot);desktop/web 由 Shell 在 UI_MODE==='mobile' 时套「手机框」渲染。
  */
-import { Suspense, createElement, startTransition, useEffect, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject } from 'react'
+import { Suspense, createElement, startTransition, useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject } from 'react'
 import { flushSync } from 'react-dom'
 import { PanelLeft, PanelRight, X, MoreHorizontal, Plus, Zap, SlidersHorizontal } from 'lucide-react'
 import { useSpaceStore, setActiveSpace, getActiveSpace, redirectOpenFromOnePage, landOnMainPage } from './spaceRegistry'
@@ -22,7 +22,7 @@ import { useCommandStore } from './commandRegistry'
 import { accountMenuItems, moreCommandGroups, moreCommandOn, moreCommandTitle, moreItems, moreRowLabel, presentedCommand } from './moreSheet'
 import { getView } from './viewRegistry'
 import { label, identitySig, type RibbonItem, type SpaceIcon } from './types'
-import { nativeSheetPresenter, presentNativeChecklist, presentNativeMenu, type NativeMenuItem } from './nativeSheet'
+import { bindNativeSheetMark, nativeSheetPresenter, presentNativeChecklist, presentNativeMenu, type NativeMenuItem } from './nativeSheet'
 import type { SheetMenuItem } from './nativeSheetMenu'
 import { setNativeChromeShell, useNativeChromeInstalled, useNativeChromeSpaces, nativeChromeDrawsSpaces, nativeChromeExtras, subscribeNativeChromeExtras, type NativeChromeShellLabels, type NativeChromeSpace } from './nativeChrome'
 import { DOCK_PICKS, dockSpaceIds, setDockPicks, subscribeDockPicks } from './spaceDock'
@@ -1135,6 +1135,12 @@ export const SingleColumnHost: React.FC<{ dark?: boolean; soft?: boolean; buildD
   }
   const bodyRef = useRef<HTMLDivElement | null>(null)
   useDrawerDrag(bodyRef, wide, hasLeft, hasRight)
+  // data-native-sheet 由 nativeSheet.ts 直接写在壳上(不经 React 状态:开合一次半屏不重画整个壳);挂上就照当前状态写,卸下时撤掉
+  const unbindSheetMark = useRef<(() => void) | null>(null)
+  const shellRef = useCallback((el: HTMLDivElement | null) => {
+    unbindSheetMark.current?.()
+    unbindSheetMark.current = el ? bindNativeSheetMark(el) : null
+  }, [])
   // 两级导航的列表层整屏盖住 main,没有「被推开的 main」可罩 —— 遮罩只跟右抽屉。
   const pushed = !wide && ((leftVisible && !listFirst) || rightVisible)
 
@@ -1173,7 +1179,10 @@ export const SingleColumnHost: React.FC<{ dark?: boolean; soft?: boolean; buildD
     //   data-nav 的值每次进出主区都在变,挂在它下面的规则(哪怕只写 [data-nav] 不看值)每次都要重新匹配 ——
     //   其中带 `> :first-child` / `> svg` / `> button` 这类结尾的会把整页样式重算一遍(2026-10-11 实测 28–47ms,
     //   手机上再乘几倍)。只有真要看层级的规则才写 [data-nav='list']。仪器:mobile `npm run emu:perf`。
-    <div className="mb-shell" data-chrome={chromeOff ? 'off' : undefined} data-native-chrome={nativeChrome ? '' : undefined} data-space={activeSpaceId} data-nav={listFirst ? (leftVisible ? 'list' : 'detail') : undefined} data-list-first={listFirst ? '' : undefined} data-wide={wide ? '' : undefined} style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
+    // data-native-sheet="open":原生半屏(Compose 画在 WebView 上面,DOM 里看不到)正盖着页面,收起即去掉(shellRef →
+    //   nativeSheet.ts bindNativeSheetMark)。和 data-nav 同一类宿主页面属性:判「用户正看着」的代码(插件自己的已读 / 不弹)
+    //   遇到它一律算盖着。不是插件 API,也别往它下面挂样式。
+    <div ref={shellRef} className="mb-shell" data-chrome={chromeOff ? 'off' : undefined} data-native-chrome={nativeChrome ? '' : undefined} data-space={activeSpaceId} data-nav={listFirst ? (leftVisible ? 'list' : 'detail') : undefined} data-list-first={listFirst ? '' : undefined} data-wide={wide ? '' : undefined} style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
       {/* push 连贯式:左右抽屉都是 .mb-body 内的绝对定位面板,开侧把 main **原尺寸**推向另一边
           (translate 同一宽度,main 不缩放);dim 层盖在被推开的 main 上,点击/反向横滑收回。
           宽屏:左栏 docked 并排(sidecol),右栏滑入但不推 main。 */}

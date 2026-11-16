@@ -281,3 +281,63 @@ describe('theme', () => {
     expect(style).toContain('animation:none!important')
   })
 })
+
+// 原生半屏盖着页面时,壳上的 data-native-sheet="open"(DOM 里看不到 Compose 画的那层,判「用户正看着」的代码靠它)。
+describe('native sheet up mark (.mb-shell[data-native-sheet])', () => {
+  const mark = (el: Element): string | null => el.getAttribute('data-native-sheet')
+
+  it('on while the native call is pending; off when it is answered, and off when it rejects (native unavailable, web UI falls back)', async () => {
+    const shell = document.createElement('div')
+    const unbind = m.bindNativeSheetMark(shell)
+    expect(mark(shell)).toBeNull()
+    let answer!: (v: unknown) => void
+    const shown = m.whileNativeSheetUp(() => new Promise((res) => { answer = res }))
+    expect(mark(shell), 'the sheet is up').toBe('open')
+    expect(m.nativeSheetUp()).toBe(true)
+    answer({ id: 'a' })
+    await shown
+    expect(mark(shell), 'answered: gone').toBeNull()
+    await expect(m.whileNativeSheetUp(() => Promise.reject(new Error('INVALID_REQUEST')))).rejects.toThrow()
+    expect(mark(shell), 'rejected: gone').toBeNull()
+    expect(m.nativeSheetUp()).toBe(false)
+    unbind()
+  })
+
+  it('two sheets up at once (a sheet opened from a sheet): off only after both are gone; a release runs once', () => {
+    const shell = document.createElement('div')
+    const unbind = m.bindNativeSheetMark(shell)
+    const a = m.holdNativeSheetUp()
+    const b = m.holdNativeSheetUp()
+    a()
+    a()
+    expect(mark(shell), 'the second one is still up (a double release must not count twice)').toBe('open')
+    b()
+    expect(mark(shell)).toBeNull()
+    unbind()
+  })
+
+  it('a shell mounted while a sheet is up gets the mark at once; unmounting the shell takes it off and stops following', () => {
+    const release = m.holdNativeSheetUp()
+    const shell = document.createElement('div')
+    const unbind = m.bindNativeSheetMark(shell)
+    expect(mark(shell), 'remounted shell under an open sheet').toBe('open')
+    unbind()
+    expect(mark(shell), 'unmounted: no stale mark').toBeNull()
+    release()
+    const again = m.holdNativeSheetUp()
+    expect(mark(shell), 'an unbound shell no longer follows').toBeNull()
+    again()
+  })
+
+  it('wiring: the Android presenters (menus / prompts / selects, model picker) hold it around the native call; the shell binds it', async () => {
+    const { readFileSync } = await import('node:fs')
+    const { resolve } = await import('node:path')
+    for (const f of ['nativeSheet.ts', 'nativeModelPicker.ts']) {
+      const src = readFileSync(resolve(__dirname, '../../mobile/src', f), 'utf8')
+      expect(src, f).toMatch(/whileNativeSheetUp\(\(\) => plugin\.present\(/)
+    }
+    const host = readFileSync(resolve(__dirname, 'SingleColumnHost.tsx'), 'utf8')
+    expect(host).toMatch(/<div ref=\{shellRef\} className="mb-shell"/)
+    expect(host).toMatch(/el \? bindNativeSheetMark\(el\) : null/)
+  })
+})
