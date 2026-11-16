@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.120.0
+  version: 1.121.0
   author: Forsion
   category: Forsion
 ---
@@ -384,7 +384,7 @@ Muse's Space no longer loads `main.js` (it stays on disk; do not edit it): the d
 | `ctx.ui.confirm(opts)` / `ctx.ui.openDialog(opts)` | 宿主的是 / 否确认框、带挂载区的对话框 | 2026-10-26 起;`confirm` → `Promise<boolean>`(`danger` 主按钮红、焦点落「取消」;Android 原生确认框);`openDialog({ title, body?, mount?(el), actions?, width? })` 420 / 560px 居中,Esc / 遮罩 / 焦点圈 / 进出场归宿主,`run` 返回 `false` 不关。别再用 `window.confirm` 或自己画 `<dialog>`。见下「Host parts」 |
 | `ctx.ui.mountControl(el, { type: 'segmented' \| 'select', … })` | 视图头 / 工具栏里的分段与下拉 | 2026-10-26 起;分段 = 看法胶囊那一份(2–5 项),下拉 = 28px 文字钮 + ▾、点开是菜单外壳的 listbox(6 项起带搜索,Android 原生抽屉)。**设置零件是 56px 的行,别放进工具栏** |
 | `ctx.ui.popover(anchor, { mount(el), side?, align? })` | 按钮下方的小面板(筛选、快捷设置) | 2026-10-26 起;宿主 `.ui-popover` 外壳(同菜单材质)、锚定 / 夹边 / 缩放 / Esc / 点外面关都归宿主;别自己算 `left/top` |
-| `ctx.ui.icon(name, { size })` | 自己的按钮里画词表图标 | 2026-10-26 起;返回新的 `<svg>`(currentColor);**一张词表**:Space(`space.json` 的 `icon`)、列表、菜单、设置、视图标签、控件、空态都认同一份名字(`PluginIconName`);词表外的名字回落并在控制台警告一次(带近似名)。别再手抄 lucide 路径 |
+| `ctx.ui.icon(name, { size })` | 自己的按钮里画词表图标 | 2026-10-26 起;返回新的 `<svg>`(currentColor);**一张词表**:Space(`space.json` 的 `icon`)、列表、菜单、设置、视图标签、控件、空态都认同一份名字(`PluginIconName`);词表外的名字回落并在控制台警告一次(带近似名);某个名字第一次用时先给尺寸已对的空壳、微任务里补字形(绘制前,11-15 起),照常 append,要多份就多调几次、别同一拍 clone。别再手抄 lucide 路径 |
 | `ctx.ui.mountEmptyState(el, { icon, title, line?, action?, secondary?, examples? })` | 主区的空态 | 2026-10-26 起;`examples`(2026-11-02 起,最多 3 条 `{ label, note?, run }`)是「可以这样写」的例句,`run` 一般把这句填进你的输入框、不替用户直接建,旧宿主忽略;与内置视图、列表源 `empty` 同一个 EmptyState;别借宿主的 `.empty-state` 类名(那份 CSS 只是碰巧被别处加载过) |
 | `ctx.ui.mountWebCard(el, { name, status?, address?, note?, thumbnail?, actions?, trailing?, menu?, layout? })` | 网页卡片卡身:缩略图、名字 + 状态、地址、说明、按钮 | 2026-10-28 起;和宿主自己在对话里给 HTML / 本地服务画的那张同一份;`thumbnail: { url, version }` 由宿主主进程截图(只收 http(s),换 `version` 才重拍),拿不到画占位图标;`layout: 'row'` = 列表里一行;`update` 带了键、值是 `undefined` / `[]` / `null` = 清掉 |
 | `ctx.ui.mountWebSurface(el, { url, partition?, onLoadFail? })` | 把插件自己在本机起的服务的网页界面整页放进视图(DSH 融合插件的工作台) | 2026-11-15 起,**只在桌面**(web / 手机上整个成员缺席,先判 `ctx.ui?.mountWebSurface`);是 Forsion 管的顶层页面不是 iframe,服务自己的 SameSite=Strict cookie 能用;`url` 只收 127.0.0.1 / localhost / [::1] 上的 http(s);cookie 存在本插件自己的分区(`partition` 只是分区名的后缀,宿主会加上插件 id),不和内置浏览器混;页面只能在同源里跳,别的链接照对话里的链接打开;不给 Forsion 接口、不给麦克风 / 摄像头 / 定位 / 通知,只给写剪贴板;返回 `{ navigate(url), reload(), focus(), dispose() }`(`navigate('#…')` 只换页面当前地址的 # 那段,同一个页面里跳、不重载),停用 / 重载宿主收掉 |

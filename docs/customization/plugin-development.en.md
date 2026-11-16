@@ -73,7 +73,7 @@ ctx.ui.mountControl(el, { type: 'segmented' | 'select', value, options, onChange
 
 - Rows of `ctx.ui.contextMenu` take an `icon` and a `shortcut`, the list takes `{ separator: true }` and `{ section: 'Heading' }`, the first argument can be `{ anchor: button, align: 'end' }`, and on Android the same entries open as the native bottom drawer; older hosts silently drop these fields.
 - For a small panel under a button use `ctx.ui.popover(button, { mount(el) })`.
-- Icons come from one vocabulary: `space.json`'s `icon`, lists, menus, settings, view tabs, controls and empty states all take the same names, and `ctx.ui.icon(name, { size })` gives your own buttons an `<svg>`; a wrong name is reported once in the console with the closest match.
+- Icons come from one vocabulary: `space.json`'s `icon`, lists, menus, settings, view tabs, controls and empty states all take the same names, and `ctx.ui.icon(name, { size })` gives your own buttons an `<svg>` (on a name's first use its paths arrive in a microtask, so call it again for each copy rather than cloning); a wrong name is reported once in the console with the closest match.
 - A list source can declare `empty: { icon, title, line, action }`: inside your own Space the sidebar then stops saying "Nothing here yet", and the full-screen phone list draws that empty state directly; draw the same one in the main area with `ctx.ui.mountEmptyState(el, …)`.
 - A card about a web page (a published link, a local file, a running service) uses `ctx.ui.mountWebCard` (2026-10-28+): the host takes the thumbnail, and the card is the same one the host draws for HTML files and local services.
 
