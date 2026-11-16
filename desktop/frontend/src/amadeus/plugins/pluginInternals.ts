@@ -22,11 +22,18 @@ import { isElectronHost } from '../unified/writeSafety'
 import { internalStore, internalStoreNames, provideInternalStore, type InternalStore } from './internalsStores'
 import type { PluginInternals } from './types'
 
-provideInternalStore('page', usePageStore as unknown as InternalStore)
-provideInternalStore('ui', useUiStore as unknown as InternalStore)
-provideInternalStore('workspace', useWorkspace as unknown as InternalStore)
-provideInternalStore('spaces', useSpaceStore as unknown as InternalStore)
-provideInternalStore('commands', useCommandStore as unknown as InternalStore)
+/** 宿主自己的几个状态库,第一次有插件拿 ctx.internals 时才登记:模块求值时不碰这些导出。
+ *  pluginStore 引着本文件,而不少测试只 mock 了 @lcl/engine 的一部分 —— 求值即读 useCommandStore 会让它们整文件红(CI 11-16)。 */
+let hostStoresProvided = false
+function provideHostStores(): void {
+  if (hostStoresProvided) return
+  hostStoresProvided = true
+  provideInternalStore('page', usePageStore as unknown as InternalStore)
+  provideInternalStore('ui', useUiStore as unknown as InternalStore)
+  provideInternalStore('workspace', useWorkspace as unknown as InternalStore)
+  provideInternalStore('spaces', useSpaceStore as unknown as InternalStore)
+  provideInternalStore('commands', useCommandStore as unknown as InternalStore)
+}
 
 /** 这扇窗口给不给内部口子:只有本机桌面。UA 判 Electron(网页 / 手机也装 window.tangu 垫片,不能拿它判),
  *  再排掉设备页(Unit 网页)。 */
@@ -285,6 +292,7 @@ export interface InternalsDeps {
 const dead = (): Error => new Error('plugin disabled')
 
 export function createInternalsApi(deps: InternalsDeps): PluginInternals {
+  provideHostStores()
   const { pluginId, alive } = deps
   const kind = windowKind()
   const select = <T,>(store: InternalStore, selector?: (state: unknown) => T): T | undefined => {
