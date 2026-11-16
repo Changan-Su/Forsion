@@ -186,6 +186,8 @@ export interface TanguCreateAgentInput {
   systemPrompt: string
   /** 人设(SOUL.md) */
   soul?: string
+  /** 这个 Agent 缺省用的模型 id(模型目录里的);不给 = 跟随会话 */
+  model?: string
 }
 export type TanguCreateAgentResult = { ok: true; slug: string } | { ok: false; error: string }
 

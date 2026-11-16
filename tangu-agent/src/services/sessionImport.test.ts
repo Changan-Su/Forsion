@@ -56,10 +56,10 @@ describe('importConversations', () => {
     expect(s.created_at).toBe('2026-01-02 03:04:05');
     expect(s.updated_at).toBe('2026-01-02 03:05:05');
     expect(JSON.parse(s.agent_config)).toEqual({ agentSlug: 'deepseek', preset: 'chat', execMode: 'sandbox', imported: { source: 'deepseek', id: 'c1' } });
-    const msgs = h.db.prepare('SELECT role, content, reasoning, timestamp, model_id, origin FROM chat_messages ORDER BY timestamp').all();
+    const msgs = h.db.prepare('SELECT role, content, reasoning, timestamp, model_id, agent_slug, origin FROM chat_messages ORDER BY timestamp').all();
     expect(msgs).toEqual([
-      { role: 'user', content: 'hello', reasoning: null, timestamp: T0, model_id: null, origin: 'import' },
-      { role: 'assistant', content: 'hi there', reasoning: 'greet back', timestamp: T0 + 5_000, model_id: 'deepseek-chat', origin: 'import' },
+      { role: 'user', content: 'hello', reasoning: null, timestamp: T0, model_id: null, agent_slug: null, origin: 'import' },
+      { role: 'assistant', content: 'hi there', reasoning: 'greet back', timestamp: T0 + 5_000, model_id: 'deepseek-chat', agent_slug: 'deepseek', origin: 'import' },
     ]);
   });
 

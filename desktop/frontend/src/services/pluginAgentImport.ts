@@ -39,6 +39,7 @@ export async function createAgentForPlugin(input: TanguCreateAgentInput, alive: 
       ...(input.description ? { description: String(input.description).slice(0, 500) } : {}),
       systemPrompt: input.systemPrompt,
       ...(input.soul ? { soul: String(input.soul) } : {}),
+      ...(typeof input.model === 'string' && input.model ? { model: input.model.slice(0, 128) } : {}),
     } as Parameters<typeof saveAgentDef>[1])
     deps.refreshAgents()
     return { ok: true, slug: agent.slug }

@@ -525,11 +525,24 @@ function museSelf(): TanguAgentSelf {
   }
 }
 
+/** 导入用的「后端在不在」:只等配置加载好。设置 / 商店浮窗不维护 connState(恒不是 ok),按 waitBackend 等会白等 15 秒再报没连上;
+ *  这里直接发请求,真连不上由请求本身报错。 */
+function waitConfigLoaded(timeoutMs: number): Promise<TanguDesktopConfig | null> {
+  const loaded = (): TanguDesktopConfig | null => { const s = useApp.getState(); return s.cfgLoaded && s.cfg ? s.cfg : null }
+  const now = loaded()
+  if (now) return Promise.resolve(now)
+  return new Promise((resolve) => {
+    const off = useApp.subscribe(() => { const c = loaded(); if (c) { off(); clearTimeout(timer); resolve(c) } })
+    const timer = setTimeout(() => { off(); resolve(null) }, Math.max(0, timeoutMs))
+  })
+}
+
 const agentImportDeps: AgentImportDeps = {
-  waitBackend: () => waitBackend(15_000),
+  waitBackend: () => waitConfigLoaded(15_000),
   activeModelId: () => readActiveModel()?.id ?? null,
-  refreshAgents: () => { useApp.getState().refreshAgents?.() },
-  refreshSessions: () => { const s = useApp.getState(); if (s.cfg) void s.refreshSessions?.(s.cfg)?.catch?.(() => {}) },
+  // 浮窗(设置里插件的详情页)各握一份 store:自己刷完再请主窗也刷(主窗才有会话列表与 Agent 名册)
+  refreshAgents: () => { useApp.getState().refreshAgents?.(); window.tangu?.requestMainAction?.('agents-changed') },
+  refreshSessions: () => { const s = useApp.getState(); if (s.cfg) void s.refreshSessions?.(s.cfg)?.catch?.(() => {}); window.tangu?.requestMainAction?.('sessions-changed') },
 }
 
 export function installTanguProbe(fromTangu: Pick<TanguProbe, 'askInChat'> = {}): void {

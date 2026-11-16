@@ -2936,6 +2936,11 @@ export const usePluginStore = create<PluginState>((set, get) => {
               openSession: async (sessionId: string): Promise<void> => {
                 if (!ctxAlive()) return
                 if (!/^[a-zA-Z0-9_-]{1,128}$/.test(sessionId)) throw new Error('Invalid session ID')
+                // 浮窗(设置 / 商店里插件的详情页)没有对话区:交给主窗开,与 ctx.app.openLink 同一条通道(2026-11-16)。
+                if (windowKind() !== 'main' && hostTangu()?.requestMainAction) {
+                  hostTangu()?.requestMainAction?.('open-link', `forsion://session/${sessionId}`)
+                  return
+                }
                 await readTangu()?.openSession?.(sessionId, ctxAlive)
               },
             } : {}),

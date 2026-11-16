@@ -144,7 +144,7 @@ export async function importConversations(req: ImportRequest): Promise<ImportRes
          updatedAt, sqlTime(createdAt), sqlTime(updatedAt)],
       );
       try {
-        await insertMessages(sessionId, c.messages, stamps);
+        await insertMessages(sessionId, c.messages, stamps, agentSlugOf(req.agentConfig));
       } catch (e) {
         await query(`DELETE FROM chat_messages WHERE session_id = ?`, [sessionId]).catch(() => {});
         await query(`DELETE FROM chat_sessions WHERE id = ?`, [sessionId]).catch(() => {});
@@ -158,18 +158,24 @@ export async function importConversations(req: ImportRequest): Promise<ImportRes
   return results;
 }
 
-async function insertMessages(sessionId: string, messages: ImportMessageInput[], stamps: number[]): Promise<void> {
+/** 会话挂在哪个 Agent 名下:回答记上它的 slug,界面上的说话人才是那个 Agent(与正常跑出来的回答同口径)。 */
+function agentSlugOf(cfg: Record<string, unknown> | null): string | null {
+  const v = cfg?.agentSlug;
+  return typeof v === 'string' && v && v.length <= 64 ? v : null;
+}
+
+async function insertMessages(sessionId: string, messages: ImportMessageInput[], stamps: number[], agentSlug: string | null): Promise<void> {
   const pg = getDbType() !== 'sqlite';
   for (let i = 0; i < messages.length; i += INSERT_CHUNK) {
     const slice = messages.slice(i, i + INSERT_CHUNK);
     const params: unknown[] = [];
     const rows = slice.map((m, j) => {
       params.push(uuidv4(), sessionId, m.role, stripNul(m.content, pg), stamps[i + j],
-        m.model_id || null, m.reasoning ? stripNul(m.reasoning, pg) : null, 'import');
-      return '(?, ?, ?, ?, ?, ?, ?, ?)';
+        m.model_id || null, m.reasoning ? stripNul(m.reasoning, pg) : null, m.role === 'assistant' ? agentSlug : null, 'import');
+      return '(?, ?, ?, ?, ?, ?, ?, ?, ?)';
     });
     await query(
-      `INSERT INTO chat_messages (id, session_id, role, content, timestamp, model_id, reasoning, origin) VALUES ${rows.join(', ')}`,
+      `INSERT INTO chat_messages (id, session_id, role, content, timestamp, model_id, reasoning, agent_slug, origin) VALUES ${rows.join(', ')}`,
       params,
     );
   }
