@@ -27,6 +27,7 @@ import { useExitGhost } from '@lcl/engine'
 import { openDb, openDrawing, openFile, openNote } from './amadeusNav'
 import { WikiLinkMenuHost } from './amadeusLinkMenu'
 import { insertTemplate, listTemplates } from './amadeusTemplates'
+import { templateFolders } from '@amadeus/plugins/templateHooks'
 import { openTagView } from './amadeusPanels'
 import { registerMessages, useI18n } from './i18n'
 import { useNotifications } from './stores/notificationStore'
@@ -241,8 +242,15 @@ function TemplatePicker({ ctx }: { ctx: TemplateCtx }) {
   const [query, setQuery] = useState('')
   const [active, setActive] = useState(0)
   void pages // 订阅 pages 让「创建模板文件夹」后列表随结构刷新
+  // 插件声明的模板文件夹(ctx.registerTemplateProcessor 的 folders(),异步):先列宿主自己的,取到再补上。
+  const [extraFolders, setExtraFolders] = useState<string[]>([])
+  useEffect(() => {
+    let live = true
+    void templateFolders().then((f) => { if (live && f.length) setExtraFolders(f) })
+    return () => { live = false }
+  }, [])
 
-  const templates = fuzzyRank(query, listTemplates(), (p) => pageKey(p))
+  const templates = fuzzyRank(query, listTemplates(extraFolders), (p) => pageKey(p))
   const choose = (i: number): void => {
     const tpl = templates[i] // ⚠️ 别叫 `t`:会遮住上面 useI18n 的翻译函数
     close()
