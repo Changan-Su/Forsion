@@ -1,7 +1,8 @@
 /**
  * 插件图标(走查续八 8.17):一张词表(components/icons 的 PLUGIN_ICONS),三种用法 ——
  *  - `vocabIcon(name)`:lucide 调用形(size / className)的组件,给 EmptyState、Space、看法胶囊这类收组件的地方;
- *  - `pluginIconElement(name, size)`:`ctx.ui.icon` 返回给插件的 `<svg>` 元素(每个名字只真渲染一次,之后克隆);
+ *  - `pluginIconElement(name, size)`:`ctx.ui.icon` 返回给插件的 `<svg>` 元素(每个名字只真渲染一次,之后克隆;
+ *    第一次先给空壳、微任务里补字形 —— 不在插件的调用栈里 flushSync,见 render);
  *  - `checkPluginIcon(pluginId, name, where)`:词表外的名字在控制台警告一次(插件 id + 名字一组),照样回落,不抛错。
  */
 import type { ComponentType, SVGProps } from 'react'
@@ -58,7 +59,9 @@ export function checkPluginIcon(pluginId: string, name: unknown, where = 'icon')
 
 const markup = new Map<string, string>()
 const SVG_NS = 'http://www.w3.org/2000/svg'
-/** 渲染一枚词表图标拿 svg 的 HTML。React 正在提交(插件的 mount 跑在宿主视图的 effect 里)时 flushSync 不落地 → 返回 ''。 */
+/** 渲染一枚词表图标拿 svg 的 HTML。只许从下面的 drain(微任务 / 定时器)里调:flushSync 会把**所有根**上挂着的同步更新
+ *  一起提交,放在插件的调用栈里,宿主排着的「换视图」就会在插件 draw() 的半中间把它卸掉(见 pluginIconReentry.test)。
+ *  React 正在提交时 flushSync 不落地 → 返回 ''(微任务里本不会遇到,留着兜底)。 */
 function render(name: string): string {
   const host = document.createElement('div')
   const root = createRoot(host)
@@ -78,26 +81,36 @@ function fill(svg: SVGSVGElement, html: string): void {
   for (const a of Array.from(src.attributes)) if (!['width', 'height', 'class', 'aria-hidden'].includes(a.name)) svg.setAttribute(a.name, a.value)
   svg.replaceChildren(...Array.from(src.childNodes))
 }
+/** 第一次用到、还没渲染过的名字 → 等着补字形的空壳。 */
 const later = new Map<string, SVGSVGElement[]>()
+let drainQueued = false
+/** 把等着的空壳补齐。头一趟在微任务里:调用方(插件的 draw 等)已经整段跑完,浏览器还没绘制,所以不重入也不闪;
+ *  万一渲染没落地(返回 ''),下一拍再试一次,还不行就留空壳(尺寸本来就对)。 */
+function drain(retry: boolean): void {
+  for (const [name, list] of Array.from(later)) {
+    const html = markup.get(name) ?? render(name)
+    if (!html && retry) continue
+    later.delete(name)
+    if (html) for (const el of list) fill(el, html)
+  }
+  if (later.size) window.setTimeout(() => drain(false), 0)
+}
 /** 词表图标 → 一枚新的 `<svg>`(跟 currentColor,width/height = size)。查不到 → null。
- *  第一次在 React 提交期间要某个名字时,先给一枚空壳,下一拍补上内容(元素身份不变,插件已经 append 的照样生效)。 */
+ *  某个名字第一次用时先给一枚尺寸已对的空壳,字形在本轮微任务里补上(元素身份不变,插件已经 append 的照样生效;
+ *  绘制前就补齐,不闪)。第二次起直接带字形。 */
 export function pluginIconElement(name: string, size = 16): SVGSVGElement | null {
   if (!hasPluginIcon(name)) return null
-  const html = markup.get(name) ?? render(name)
+  const html = markup.get(name)
   const svg = document.createElementNS(SVG_NS, 'svg') as SVGSVGElement
   svg.setAttribute('viewBox', '0 0 24 24')
   if (html) fill(svg, html)
   else {
     const q = later.get(name)
     if (q) q.push(svg)
-    else {
-      later.set(name, [svg])
-      window.setTimeout(() => {
-        const list = later.get(name) ?? []
-        later.delete(name)
-        const h = markup.get(name) ?? render(name)
-        if (h) for (const el of list) fill(el, h)
-      }, 0)
+    else later.set(name, [svg])
+    if (!drainQueued) {
+      drainQueued = true
+      queueMicrotask(() => { drainQueued = false; drain(true) })
     }
   }
   const px = Number.isFinite(size) && size > 0 ? Math.min(size, 128) : 16

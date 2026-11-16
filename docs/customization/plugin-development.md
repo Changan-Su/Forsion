@@ -73,7 +73,7 @@ ctx.ui.mountControl(el, { type: 'segmented' | 'select', value, options, onChange
 
 - `ctx.ui.contextMenu` 的行可以带 `icon` 和 `shortcut`,列表里可以放 `{ separator: true }` 和 `{ section: '小节' }`,第一个参数可以是 `{ anchor: 按钮, align: 'end' }`,安卓上同一份数据是原生底部抽屉;更早的宿主会静默丢掉这些字段。
 - 按钮下方的小面板用 `ctx.ui.popover(按钮, { mount(el) })`。
-- 图标只有一张词表:`space.json` 的 `icon`、列表、菜单、设置、视图标签、控件、空态都认同一份名字,自己的按钮用 `ctx.ui.icon(名字, { size })` 拿一枚 `<svg>`,写错名字会在控制台提示一次(带最接近的名字)。
+- 图标只有一张词表:`space.json` 的 `icon`、列表、菜单、设置、视图标签、控件、空态都认同一份名字,自己的按钮用 `ctx.ui.icon(名字, { size })` 拿一枚 `<svg>`(某个名字第一次用时字形在微任务里补上,要多份就多调几次,别克隆),写错名字会在控制台提示一次(带最接近的名字)。
 - 列表源加 `empty: { icon, title, line, action }`:在你自己的 Space 里侧栏不再写「暂无内容」,手机整屏列表直接画这份空态;主区用 `ctx.ui.mountEmptyState(el, …)` 画同一个。
 - 讲网页的卡片(发布出去的链接、本地文件、在跑的服务)用 `ctx.ui.mountWebCard`(2026-10-28 起):缩略图由宿主截,和宿主自己给 HTML、本地服务画的卡是同一张。
 
