@@ -80,6 +80,26 @@ describe('every exit round-trips unedited input byte for byte (switch on)', () =
     })
   }
 
+  it('splitting a block: both halves serialize as their own text (a back half that starts with `* ` gets the line-start escape)', async () => {
+    setLiteralBold(true)
+    const body = BODIES[BODIES.length - 1]
+    const md = doc(body)
+    await withEditor(md, (b) => {
+      const d = b.view.state.doc
+      const para = paraOf(d, 1)
+      // cut inside `**x**`, before `b __y__`, right before the `*` of `5 * 3` 切在 `**x**` 里、`b __y__` 前、`5 * 3` 的星号前
+      for (const k of [4, body.indexOf('b __y__'), body.indexOf('* 3')]) {
+        const front = body.slice(0, k)
+        const back = body.slice(k)
+        const backMd = normalizeFragmentMd(b.serialize(d.type.create(null, [para.cut(k)])))
+        const want = back.startsWith('* ') ? `\\${back}\n` : `${back}\n`
+        expect(backMd).toBe(want)
+        expect(b.parse(backMd).child(0).textContent).toBe(back)
+        expect(normalizeFragmentMd(b.serialize(d.type.create(null, [para.cut(0, k)])))).toBe(`${front}\n`) // the trailing space stays 尾空格照留
+      }
+    })
+  })
+
   it('the document holds the delimiters as text; no strong mark', async () => {
     setLiteralBold(true)
     await withEditor('a **bold** __u__ ***bi***\n', (b) => {
