@@ -8,7 +8,7 @@
  *    unified/lifecycle 的 `insertMarkdown` 接缝插在光标处(空块由 UnifiedPage 的 insertMd
  *    原地替换,「首块填进空块」的语义在那边免费拿到)。 */
 import { amadeus } from '@amadeus/api'
-import { activePageScope, birthNoteFile, noteOf, usePageStore } from '@amadeus/store/pageStore'
+import { activePageScope, birthNavGuard, birthNoteFile, noteOf, usePageStore } from '@amadeus/store/pageStore'
 import { compile, parsePageSource } from '@amadeus-shared/compiler'
 import { hasTemplateProcessors, normTemplateFolder, runTemplateProcessors } from '@amadeus/plugins/templateHooks'
 import type { TemplateFlowKind } from '@amadeus/plugins/types'
@@ -187,10 +187,14 @@ export async function openDailyNote(): Promise<void> {
   // 别处刚建了同名(宿主仅新建交回现文)= 已存在,照常打开、不套模板;没建成(已提示)→ 不打开一篇不存在的笔记。
   // 有日记模板 → 照旧出生后套模板(模板处理器按 'daily' 跑);没有 → 这是一篇空的新笔记,先问插件(registerNoteBirth)要初始内容。
   const tplBefore = dailyTemplatePath(ps().pages, daily)
+  // 没有日记模板时要先问插件、可能等很久:等完用户已去了别处就只建不开。有模板时不问插件,照旧打开并套模板
+  // (这里提前返回的话,空着出生的日记下次打开已是「存在」,模板就再也套不上了)。
+  const stay = tplBefore ? () => true : birthNavGuard()
   const born = await birthNoteFile(path, tplBefore ? undefined : { ask: true })
   if (born === 'failed') return
   const existed = born === 'exists'
   if (!existed) await ps().refreshStructure()
+  if (!stay()) return
   // 内部等就绪:v3 等 activePage,v4 等 unified 实例登记。focus:'body' = 进来就能打字(G4-06;新日记没套模板时同样要)。
   await openNote(path, { focus: 'body' })
   if (existed) return

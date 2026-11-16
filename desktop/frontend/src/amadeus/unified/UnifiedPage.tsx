@@ -39,7 +39,7 @@ import { askString } from '../components/askString'
 import { resolvePageName } from '@amadeus-shared/links'
 import { resolveFileLink } from '../lib/vaultFiles'
 import { wikiFilesEnabled } from '../lib/wikiFiles'
-import { usePageStore, useScopedPageStore, flushAllScopes, remapScopePaths, cascadeFdAfterRename, claimTitleFocus, PageScopeCtx, useActivePageScope, hasPageScope, activePageScope } from '../store/pageStore'
+import { usePageStore, useScopedPageStore, flushAllScopes, remapScopePaths, cascadeFdAfterRename, claimTitleFocus, PageScopeCtx, useActivePageScope, hasPageScope, activePageScope, birthNavGuard } from '../store/pageStore'
 // 模式胶囊复用 `.t2s-vaultseg`(见渲染处):样式真源是侧栏那张表。App 里 amadeusViews 已显式引过,
 // 这里再引是给**独立挂载**兜底(harness / 只挂 UnifiedPage 的场景,不引就是一排裸按钮)。
 import '../../styles/sidebar2.css'
@@ -919,9 +919,10 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
       void (async () => {
         try {
           const st = store.getState()
+          const stay = birthNavGuard() // 出生可能先问插件、等很久:等完用户已去了别处就不跳(链接照插)
           const newPath = await st.createChildNote(path, translate('amadeus.default.note'))
           insertAsync(`[[${newPath.split('/').pop()!.replace(/\.md$/i, '')}]]`, a)
-          void st.loadPage(newPath) // 本实例随之退休,onFinalFlush 把刚插的链接一并落盘
+          if (stay()) void st.loadPage(newPath) // 本实例随之退休,onFinalFlush 把刚插的链接一并落盘
         } catch {
           dropPending(a) // 创建失败静默跳过
         }

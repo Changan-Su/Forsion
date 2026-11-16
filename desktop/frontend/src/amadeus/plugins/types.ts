@@ -1164,7 +1164,9 @@ export interface TemplateProcessorContribution {
   /** Runs before the host's own `{{date}}` / `{{time}}` / `{{title}}` substitution, on the template file's raw text
    *  (frontmatter included). Processors run in registration order, each getting the previous one's output. Return the
    *  processed text, or null to leave it unchanged. May prompt the user (no time limit). Throwing aborts that insert
-   *  with a host toast naming the plugin; nothing is written. */
+   *  with a host toast naming the plugin; nothing is written. If your plugin is disabled or reloaded while this is
+   *  pending, the host stops waiting and treats it as unchanged. If the library, pane or note changed meanwhile, nothing
+   *  is inserted. */
   process(source: string, info: { templatePath: string; targetPath: string; kind: TemplateFlowKind }): string | null | Promise<string | null>
 }
 
@@ -1176,15 +1178,19 @@ export interface NoteBirthContribution {
   id: string
   /** Asked before the host writes a new empty note created by the user: "New note" (sidebar, command, ⌘N, new-tab
    *  page), "New note" in a folder, a child note, creating a note from the quick switcher, confirming an unresolved
-   *  [[link]], and today's daily note when no daily-note template is set. Not asked for files written by plugins,
-   *  rows added to a notes database, or files arriving via sync.
+   *  [[link]], and today's daily note when no daily-note template is set. `ctx.app.createPage()` is the same "New note"
+   *  command, so it is asked too (including your own provider). Not asked for files plugins write themselves
+   *  (`writeFile`, `writeBytes`, file creators), rows added to a notes database, or files arriving via sync.
    *  Return the note's initial Markdown, or null to pass. Providers are asked one at a time in registration order;
    *  the first non-null answer is written as the note's content in the same write that creates it, so the editor
    *  opens on it. May prompt the user: after a moment the host shows "<plugin> is preparing this note…" with
    *  Cancel. Cancel, or no answer within 10 minutes, creates the note empty as before; a provider that throws is
-   *  skipped (with a toast naming the plugin). `signal` aborts once the host stops waiting for you (Cancel, time-out,
-   *  or the note was created): close your prompt then; a late answer is ignored. The note itself is never lost or
-   *  blocked. While one ask is pending, another new note (including one your `initial` creates) is born empty. */
+   *  skipped (with a toast naming the plugin). Switching library while waiting stops the ask and the note is not
+   *  created (with a toast). `signal` aborts once the host stops waiting for you (Cancel, time-out, library switch, your
+   *  plugin disabled, or the note was created): close your prompt then; a late answer is ignored. The note itself is
+   *  never lost or blocked. While one ask is pending, another new note (including one your `initial` creates) is born
+   *  empty. If the person moved to another pane or note while waiting, the note is created but not opened (for "New
+   *  note" a notice offers Open; a child note's link is still inserted). */
   initial(info: { path: string; folder: string; signal?: AbortSignal }): string | null | Promise<string | null>
 }
 

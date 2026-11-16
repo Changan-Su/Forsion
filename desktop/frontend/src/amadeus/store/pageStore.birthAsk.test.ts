@@ -5,12 +5,14 @@ import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 const disk = new Map<string, string>()
 const writes: Array<{ path: string; text: string; opts?: { create?: boolean; base?: string; expectedRoot?: string } }> = []
 const dispatched: Array<{ type: string; path?: string }> = []
+const toasts: Array<{ text: string; level?: string; action?: { label: string; run(): void } }> = []
 
 async function fresh(bridge: Record<string, unknown> = {}) {
   vi.resetModules()
   disk.clear()
   writes.length = 0
   dispatched.length = 0
+  toasts.length = 0
   vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => {}, removeItem: () => {} })
   vi.stubGlobal('CustomEvent', class { type: string; detail: unknown; defaultPrevented = false
     constructor(type: string, init?: { detail?: unknown }) { this.type = type; this.detail = init?.detail }
@@ -37,7 +39,11 @@ async function fresh(bridge: Record<string, unknown> = {}) {
     },
     addEventListener: () => {},
     removeEventListener: () => {},
-    dispatchEvent: (e: { type: string; detail?: { path?: string } }) => { dispatched.push({ type: e.type, path: e.detail?.path }); return false }, // 宿主接管导航
+    dispatchEvent: (e: { type: string; detail?: { path?: string; text?: string } }) => {
+      if (e.type === 'amadeus:toast') toasts.push(e.detail as (typeof toasts)[number])
+      else dispatched.push({ type: e.type, path: e.detail?.path })
+      return false // 宿主接管导航
+    },
   })
   const ps = await import('./pageStore')
   const hooks = await import('../plugins/templateHooks')
@@ -101,16 +107,63 @@ describe('registerNoteBirth × 出生入口', () => {
     expect(disk.get('Exists.md')).toBe('# keep\n')
   })
 
-  it('等插件的途中换了库:不写、不导航(照原路径写就落进了另一个库)', async () => {
+  it('等插件的途中换了库:当场喊停(插件的 signal abort、放锁),不写、不导航、提示;新库里的新建照常问', async () => {
     const { usePageStore, birthNoteFile, hooks } = await fresh()
-    let answer: (v: string) => void = () => {}
-    hooks.registerNoteBirth('tpl', () => 'Tpl', { id: 'b', initial: () => new Promise<string>((r) => { answer = r }) })
+    const signals: AbortSignal[] = []
+    const initial = vi.fn((i: { signal?: AbortSignal }) => { signals.push(i.signal!); return new Promise<string>(() => {}) }) // 永不作答
+    hooks.registerNoteBirth('tpl', () => 'Tpl', { id: 'b', initial })
     const born = birthNoteFile('Note.md', { ask: true })
     await new Promise((r) => setTimeout(r, 0))
     usePageStore.setState({ vaultRoot: '/other' })
-    answer('# late')
-    expect(await born).toBe('failed')
+    expect(await born).toBe('failed') // 不等 10 分钟
+    expect(signals[0].aborted).toBe(true)
     expect(writes).toEqual([])
+    expect(toasts.map((t) => t.text).join()).toMatch(/Note/)
+    const again = birthNoteFile('New.md', { ask: true }) // 锁已放:新库里照常问
+    await new Promise((r) => setTimeout(r, 0))
+    expect(initial).toHaveBeenCalledTimes(2)
+    usePageStore.setState({ vaultRoot: '/third' })
+    expect(await again).toBe('failed')
+  })
+
+  it('birthNavGuard:没有出生提供者恒放行(老路不变);有则看活动面板与它那份店里的笔记(分栏里换笔记也算)', async () => {
+    const { usePageStore, birthNavGuard, hooks, pageStoreFor, setActivePageScope } = await fresh()
+    const plain = birthNavGuard()
+    usePageStore.setState({ activeNotePath: 'X.md' })
+    expect(plain()).toBe(true)
+    hooks.registerNoteBirth('tpl', () => 'Tpl', { id: 'b', initial: () => '' })
+    const split = pageStoreFor('split-1')
+    split.setState({ activeNotePath: 'A.md' })
+    setActivePageScope('split-1')
+    const g = birthNavGuard()
+    expect(g()).toBe(true)
+    pageStoreFor('main').setState({ activeNotePath: 'Y.md' }) // 主面板变了、活动面板没变:照跳
+    expect(g()).toBe(true)
+    split.setState({ activeNotePath: 'B.md' }) // 活动面板里换了笔记:不跳
+    expect(g()).toBe(false)
+    const g2 = birthNavGuard()
+    setActivePageScope('main') // 换了活动面板:不跳
+    expect(g2()).toBe(false)
+  })
+
+  it('等插件的途中用户去了别的笔记:建成但不导航,给一条带「打开」的提示;点了才打开', async () => {
+    const { usePageStore, hooks, claimTitleFocus } = await fresh()
+    let answer: (v: string) => void = () => {}
+    hooks.registerNoteBirth('tpl', () => 'Tpl', { id: 'b', initial: () => new Promise<string>((r) => { answer = r }) })
+    usePageStore.setState({ activeNotePath: 'Here.md' })
+    const run = usePageStore.getState().createWikiPage('Later')
+    await new Promise((r) => setTimeout(r, 0))
+    usePageStore.setState({ activeNotePath: 'Elsewhere.md' })
+    answer('# T')
+    await run
+    expect(disk.get('Later.md')).toBe('# T')
+    expect(dispatched.filter((d) => d.type === 'amadeus:navigate-note')).toEqual([])
+    expect(claimTitleFocus('Later.md')).toBe(false) // 没留过期的聚焦请求
+    const t = toasts.find((x) => x.action)
+    expect(t?.text).toContain('Later')
+    t!.action!.run()
+    expect(dispatched).toContainEqual({ type: 'amadeus:navigate-note', path: 'Later.md' })
+    expect(claimTitleFocus('Later.md')).toBe(true)
   })
 
   it('排在后面的同名出生:轮到它时库已换 → 不建(不落进新库)', async () => {
@@ -123,8 +176,9 @@ describe('registerNoteBirth × 出生入口', () => {
     usePageStore.setState({ vaultRoot: '/other' })
     answer('# late')
     expect(await first).toBe('failed')
-    expect(await second).toBe('failed')
+    expect(await second).toBe('failed') // 排在后面那单轮到时库已换:不建(也提示)
     expect(writes).toEqual([])
+    expect(toasts).toHaveLength(2)
     // 新库里自己发起的同名出生不受前一个库那条队的牵连
     expect(await birthNoteFile('Same.md')).toBe('created')
   })

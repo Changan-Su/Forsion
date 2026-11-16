@@ -81,6 +81,16 @@ describe('registerTemplateProcessor', () => {
     expect(h.hasTemplateProcessors()).toBe(false)
   })
 
+  it('插件弹着框被停用、永远不答:不再等它,按「不改」接着跑下一个(插入不会挂死)', async () => {
+    const h = await fresh()
+    const off = h.registerTemplateProcessor('hang', () => 'H', { id: 'p', name: 'H', process: () => new Promise<string>(() => {}) })
+    h.registerTemplateProcessor('next', () => 'N', { id: 'p', name: 'N', process: (s) => `${s}+next` })
+    const run = h.runTemplateProcessors('src', info)
+    await tick()
+    off()
+    expect(await run).toEqual({ ok: true, text: 'src+next', changed: true })
+  })
+
   it('同 id 再注册 = 原位顶替;形状不对直接抛 TypeError', async () => {
     const h = await fresh()
     h.registerTemplateProcessor('a', () => 'A', { id: 'p', name: 'A', process: (s) => `${s}1` })
@@ -184,6 +194,29 @@ describe('registerNoteBirth / askNoteBirth', () => {
     expect(n.isOpen()).toBe(false)
     answer('late') // 不抛、不影响下一次
     expect(await h.askNoteBirth('b.md', { notice: n.host, noticeDelayMs: 0, capMs: 20 })).toBeNull() // hang 还在:超时
+  })
+
+  it('调用方喊停(换了智库):立刻 null,插件 signal abort、提示收起、锁放开(下一问照常)', async () => {
+    const h = await fresh()
+    let s1: AbortSignal | undefined
+    const initial = vi.fn((i: { signal?: AbortSignal }) => { s1 ??= i.signal; return new Promise<string>(() => {}) })
+    h.registerNoteBirth('p', () => 'P', { id: 'b', initial })
+    const n = fakeNotice()
+    const stale = new AbortController()
+    const asked = h.askNoteBirth('a.md', { notice: n.host, noticeDelayMs: 0, signal: stale.signal })
+    await tick(10)
+    expect(n.isOpen()).toBe(true)
+    stale.abort()
+    expect(await asked).toBeNull()
+    expect(s1?.aborted).toBe(true)
+    expect(n.isOpen()).toBe(false)
+    expect(toasts).toEqual([]) // 提示由调用方(pageStore)给,这里不重复
+    expect(await h.askNoteBirth('b.md', { notice: n.host, capMs: 20 })).toBeNull() // 锁已放:又问了一次(这次超时)
+    expect(initial).toHaveBeenCalledTimes(2)
+    const pre = new AbortController()
+    pre.abort()
+    expect(await h.askNoteBirth('c.md', { notice: n.host, signal: pre.signal })).toBeNull()
+    expect(initial).toHaveBeenCalledTimes(2) // 一开始就喊停:不问
   })
 
   it('上限内没答 → null,提示点名插件;笔记照旧空白', async () => {

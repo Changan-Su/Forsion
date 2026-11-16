@@ -29,15 +29,43 @@ interface Entry<T> {
   /** 插件显示名(当前语言);提示里点名用。 */
   pluginName: () => string
   item: T
-}
-interface BirthEntry extends Entry<NoteBirthContribution> {
-  /** 插件停用 / 重载 / 同 id 被顶替时落定:正在等它的那一问立刻跳过它。 */
-  gone: Promise<void>
-  release: () => void
+  /** 正在等它的那几问(插件停用 / 重载 / 同 id 被顶替时逐个叫醒);null = 已退役。 */
+  waiters: Set<() => void> | null
 }
 
 const processors = new Map<string, Entry<TemplateProcessorContribution>>()
-const births = new Map<string, BirthEntry>()
+const births = new Map<string, Entry<NoteBirthContribution>>()
+
+/** 退役:叫醒所有正在等它的,之后再来等的立刻醒。 */
+function retire(entry: Entry<unknown>): void {
+  const waiters = entry.waiters
+  entry.waiters = null
+  if (waiters) for (const wake of waiters) wake()
+}
+
+/** 这一问期间盯着插件退役。off 必须在这一问落定时调:反应只挂在这一问上,不往长寿的登记项上累积。 */
+function watchGone(entry: Entry<unknown>): { gone: Promise<'gone'>; off: () => void } {
+  let off = (): void => {}
+  const gone = new Promise<'gone'>((resolve) => {
+    if (!entry.waiters) { resolve('gone'); return }
+    const wake = (): void => resolve('gone')
+    entry.waiters.add(wake)
+    off = () => { entry.waiters?.delete(wake) }
+  })
+  return { gone, off }
+}
+
+/** 同 key 登记(同 id 再注册 = 原位顶替,Map.set 保留原来的顺序位;被顶替的那个退役),返回撤销。 */
+function enroll<T>(map: Map<string, Entry<T>>, entry: Entry<T>): () => void {
+  const prev = map.get(entry.key)
+  map.set(entry.key, entry)
+  if (prev) retire(prev)
+  return () => {
+    if (map.get(entry.key) !== entry) return
+    map.delete(entry.key)
+    retire(entry)
+  }
+}
 
 const errText = (e: unknown): string => (e instanceof Error && e.message ? e.message : String(e))
 function toast(text: string, level: 'error' | 'warning' = 'error'): void {
@@ -53,10 +81,7 @@ export function registerTemplateProcessor(pluginId: string, pluginName: () => st
   if (!def || !validId(def.id) || typeof def.process !== 'function' || (def.folders != null && typeof def.folders !== 'function')) {
     throw new TypeError('registerTemplateProcessor requires id and process(source, info)')
   }
-  const key = `${pluginId}:${def.id}`
-  const entry: Entry<TemplateProcessorContribution> = { key, pluginId, pluginName, item: def }
-  processors.set(key, entry) // 同 key 再注册 = 原位顶替(Map.set 保留原来的顺序位)
-  return () => { if (processors.get(key) === entry) processors.delete(key) }
+  return enroll(processors, { key: `${pluginId}:${def.id}`, pluginId, pluginName, item: def, waiters: new Set() })
 }
 
 export const hasTemplateProcessors = (): boolean => processors.size > 0
@@ -64,19 +89,30 @@ export const hasTemplateProcessors = (): boolean => processors.size > 0
 export type TemplateProcessResult = { ok: true; text: string; changed: boolean } | { ok: false }
 
 /** 按注册顺序跑全部处理器;每个拿上一个的输出。返回 null = 不改。抛错 = 整次插入作废(提示点名插件),不写任何东西。
- *  跑的途中被停用的插件:它的结果不要(停用后它不该再改用户的笔记)。 */
+ *  跑的途中插件被停用 / 重载:不再等它(它弹着的框可能永远不答),按「不改」接着跑下一个 —— 停用后它不该再改用户的笔记。 */
 export async function runTemplateProcessors(source: string, info: { templatePath: string; targetPath: string; kind: TemplateFlowKind }): Promise<TemplateProcessResult> {
   let text = source
   let changed = false
   for (const entry of [...processors.values()]) {
     if (processors.get(entry.key) !== entry) continue
     let out: unknown
+    const watch = watchGone(entry)
     try {
-      out = await entry.item.process(text, { ...info })
+      const r = await Promise.race([
+        Promise.resolve().then(() => entry.item.process(text, { ...info })).then((v) => ({ v })),
+        watch.gone.then(() => null),
+      ])
+      if (!r) {
+        console.warn(`[amadeus] 插件 ${entry.pluginId} 在处理模板时被停用,按「不改」处理`)
+        continue
+      }
+      out = r.v
     } catch (e) {
       console.error(`[amadeus] 插件 ${entry.pluginId} 的模板处理器 ${entry.item.id} 抛错`, e)
       toast(translate('plugintpl.process.failed', { plugin: entry.pluginName(), error: errText(e) }))
       return { ok: false }
+    } finally {
+      watch.off()
     }
     if (processors.get(entry.key) !== entry) continue
     if (typeof out === 'string') {
@@ -126,17 +162,7 @@ export async function templateFolders(): Promise<string[]> {
 
 export function registerNoteBirth(pluginId: string, pluginName: () => string, def: NoteBirthContribution): () => void {
   if (!def || !validId(def.id) || typeof def.initial !== 'function') throw new TypeError('registerNoteBirth requires id and initial(info)')
-  const key = `${pluginId}:${def.id}`
-  let release = (): void => {}
-  const gone = new Promise<void>((r) => { release = r })
-  const entry: BirthEntry = { key, pluginId, pluginName, item: def, gone, release }
-  births.get(key)?.release() // 被同 id 顶替的那个:正在等它的立刻放手
-  births.set(key, entry)
-  return () => {
-    if (births.get(key) !== entry) return
-    births.delete(key)
-    release()
-  }
+  return enroll(births, { key: `${pluginId}:${def.id}`, pluginId, pluginName, item: def, waiters: new Set() })
 }
 
 export const hasNoteBirthProviders = (): boolean => births.size > 0
@@ -179,16 +205,21 @@ let asking = false
 
 export interface NoteBirthAnswer { text: string; pluginId: string }
 
-/** 问各插件这篇新笔记的初始内容。null = 没人给 / 取消 / 超时 / 都抛错 —— 调用方照旧写空白。 */
-export async function askNoteBirth(path: string, opts?: { capMs?: number; noticeDelayMs?: number; notice?: BirthNoticeHost }): Promise<NoteBirthAnswer | null> {
-  if (!births.size || asking) return null
+/** 问各插件这篇新笔记的初始内容。null = 没人给 / 取消 / 超时 / 都抛错 / 调用方喊停 —— 调用方照旧写空白(喊停时由它决定写不写)。
+ *  `opts.signal`:调用方喊停(换了智库:插件不随换库重载,不停的话它的框、等待提示和这把全局锁会挂满 10 分钟,
+ *  新库里的新建一律不问)。停了 = 立刻放锁、收提示、abort 正在问的那个插件的 signal。 */
+export async function askNoteBirth(path: string, opts?: { capMs?: number; noticeDelayMs?: number; notice?: BirthNoticeHost; signal?: AbortSignal }): Promise<NoteBirthAnswer | null> {
+  if (!births.size || asking || opts?.signal?.aborted) return null
   asking = true
   const ctrl = new AbortController()
-  let stop: (reason: 'cancel' | 'timeout') => void = () => {}
-  const stopped = new Promise<'cancel' | 'timeout'>((r) => { stop = (reason) => { if (!ctrl.signal.aborted) { ctrl.abort(); r(reason) } } })
+  type Stop = 'cancel' | 'timeout' | 'stale'
+  let stop: (reason: Stop) => void = () => {}
+  const stopped = new Promise<Stop>((r) => { stop = (reason) => { if (!ctrl.signal.aborted) { ctrl.abort(); r(reason) } } })
   const cap = setTimeout(() => stop('timeout'), opts?.capMs ?? NOTE_BIRTH_CAP_MS)
+  const onStale = (): void => stop('stale')
+  opts?.signal?.addEventListener('abort', onStale, { once: true })
   const host = opts?.notice ?? defaultNoticeHost
-  let current: BirthEntry | null = null
+  let current: Entry<NoteBirthContribution> | null = null
   let hide = null as (() => void) | null // 只在 showNotice 里赋值:写成 as,免得控制流把它收窄成恒为 null
   const showNotice = (): void => {
     if (!current || ctrl.signal.aborted) return
@@ -199,7 +230,7 @@ export async function askNoteBirth(path: string, opts?: { capMs?: number; notice
   let noticeTimer: ReturnType<typeof setTimeout> | null = setTimeout(() => { noticeTimer = null; showNotice() }, opts?.noticeDelayMs ?? NOTICE_DELAY_MS)
   const slash = path.lastIndexOf('/')
   const folder = slash > 0 ? path.slice(0, slash) : ''
-  // 每个插件一个自己的 signal:宿主不再等它(它答完 / 抛错 / 被停用或顶替 / 取消 / 超时)那一刻就 abort,
+  // 每个插件一个自己的 signal:宿主不再等它(它答完 / 抛错 / 被停用或顶替 / 取消 / 超时 / 喊停)那一刻就 abort,
   // 不让被跳过的那个插件的弹框跟下一个插件的同时开着(Codex 复核 P2)。
   let mine: AbortController | null = null
   try {
@@ -208,16 +239,19 @@ export async function askNoteBirth(path: string, opts?: { capMs?: number; notice
       if (births.get(entry.key) !== entry) continue
       current = entry
       if (hide) showNotice() // 提示已挂着:换成这一个插件的名字
-      mine = new AbortController()
-      const signal = mine.signal
+      const ac = new AbortController()
+      mine = ac
+      const signal = ac.signal
       const asked = Promise.resolve().then(() => entry.item.initial({ path, folder, signal })).then(
         (v) => ({ kind: 'value' as const, v }),
         (e: unknown) => ({ kind: 'error' as const, e }),
       )
-      const r = await Promise.race([asked, entry.gone.then(() => ({ kind: 'gone' as const })), stopped.then((reason) => (reason === 'cancel' ? { kind: 'cancel' as const } : { kind: 'timeout' as const }))])
-      mine.abort()
+      const watch = watchGone(entry)
+      // 三路都不会 reject(asked 已把抛错收成 error):落定就摘掉这一问挂的反应、abort 这个插件的 signal。
+      const r = await Promise.race([asked, watch.gone.then(() => ({ kind: 'gone' as const })), stopped.then((kind): { kind: 'cancel' } | { kind: 'timeout' } | { kind: 'stale' } => (kind === 'cancel' ? { kind } : kind === 'timeout' ? { kind } : { kind }))])
+        .finally(() => { watch.off(); ac.abort() })
       mine = null
-      if (r.kind === 'cancel') return null
+      if (r.kind === 'cancel' || r.kind === 'stale') return null
       if (r.kind === 'timeout') {
         console.warn(`[amadeus] 插件 ${entry.pluginId} 的 registerNoteBirth 超过上限没有回应,笔记按空白新建`)
         toast(translate('plugintpl.birth.timeout', { plugin: entry.pluginName() }), 'warning')
@@ -236,6 +270,7 @@ export async function askNoteBirth(path: string, opts?: { capMs?: number; notice
   } finally {
     asking = false
     clearTimeout(cap)
+    opts?.signal?.removeEventListener('abort', onStale)
     if (noticeTimer) clearTimeout(noticeTimer)
     hide?.()
     mine?.abort()

@@ -13,6 +13,7 @@ const state = {
   refreshStructure: vi.fn(async () => {}),
 }
 let scope = 'main'
+let moved = false // birthNavGuard 的判定:true = 等插件期间用户去了别处
 const birthNoteFile = vi.fn(async (..._a: unknown[]) => 'created' as const)
 const inserted: Array<{ path: string; md: string }> = []
 
@@ -20,6 +21,7 @@ vi.mock('@amadeus/store/pageStore', () => ({
   usePageStore: { getState: () => state },
   noteOf: (s: typeof state) => s.activePage,
   activePageScope: () => scope,
+  birthNavGuard: () => () => !moved,
   birthNoteFile: (...a: unknown[]) => birthNoteFile(...a),
 }))
 vi.mock('@amadeus/unified/lifecycle', () => ({
@@ -62,6 +64,7 @@ function reset() {
   inserted.length = 0
   readPageOverride = null
   scope = 'main'
+  moved = false
   Object.assign(state, { vaultRoot: '/v', activePage: 'Note.md', pages: [], blocks: {} })
   state.setBlockContent.mockClear()
   state.insertBlocksAfter.mockClear()
@@ -196,6 +199,24 @@ describe('openDailyNote', () => {
     expect(kinds).toEqual(['daily'])
     expect(inserted).toHaveLength(1)
     void hooks
+  })
+
+  it('等的途中去了别处:没有日记模板(问过插件)→ 只建不开、不插;有日记模板(不问插件)→ 照旧套模板', async () => {
+    reset()
+    const { tpl } = await load()
+    moved = true
+    await tpl.openDailyNote()
+    expect(birthNoteFile.mock.calls[0][1]).toEqual({ ask: true })
+    expect(inserted).toHaveLength(0)
+
+    reset()
+    const again = await load()
+    moved = true
+    state.pages = ['templates/daily.md']
+    files.set('templates/daily.md', 'Daily {{title}}\n')
+    await again.tpl.openDailyNote()
+    expect(birthNoteFile.mock.calls[0][1]).toBeUndefined()
+    expect(inserted).toHaveLength(1) // 不然空着出生的日记下次打开已「存在」,模板再也套不上
   })
 
   it('出生前清单落后、刷新后才看到日记模板:问过插件且插件给了内容 → 不再叠模板;插件没给 → 照旧套模板', async () => {
