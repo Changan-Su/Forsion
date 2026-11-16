@@ -4,6 +4,7 @@ import { Check, ChevronDown, MessageCircle, Search } from 'lucide-react'
 import { OverlayAt, UI_ZOOM_EVENT } from '@lcl/engine'
 import { registerMessages, useI18n } from '../i18n'
 import './compactChatPicker.css'
+import { useCapsuleDroplet } from '../views/chat2/useCapsuleDroplet'
 
 registerMessages({
   'chatPicker.engines': { zh: '外部引擎', en: 'External engines' },
@@ -81,8 +82,18 @@ export function CompactChatPicker({
     setOpen(null); setActive(null); setHeld(null); setQuery('')
     if (refocus) chipRef.current?.focus()
   }
+  // 浮层从芯片里流出来(11-16 Chat Box 水滴方案):点空白 / Esc / 再点芯片 = 倒放,选了一行照旧直接收;抽屉(触屏)不流
+  const flow = useCapsuleDroplet<'pop'>(open === 'popover' ? 'pop' : null, (k) => { if (!k) close() },
+    () => ({ wrap: chipRef.current?.parentElement ?? null, pill: chipRef.current, panel: surfaceRef.current }))
+  const dismiss = (refocus = false): void => {
+    if (open === 'popover') flow.dismiss(); else close()
+    if (refocus) chipRef.current?.focus()
+  }
+  const dismissRef = useRef(dismiss)
+  dismissRef.current = dismiss
   const toggleOpen = (): void => {
-    if (open) { close(true); return } // ⌘⇧A 再按一次收起:焦点回芯片,不掉到 body
+    if (open === 'popover') { flow.toggle('pop'); chipRef.current?.focus(); return } // ⌘⇧A 再按一次收起:焦点回芯片,不掉到 body
+    if (open) { close(true); return }
     if (onNative?.(openWeb)) return
     openWeb()
   }
@@ -118,10 +129,10 @@ export function CompactChatPicker({
     const rowMenu = (): Element | null => document.querySelector('.ctx-menu[role="menu"]')
     const onDown = (e: PointerEvent): void => {
       const t = e.target as Node
-      if (!chipRef.current?.contains(t) && !surfaceRef.current?.contains(t) && !rowMenu()?.contains(t)) close()
+      if (!chipRef.current?.contains(t) && !surfaceRef.current?.contains(t) && !rowMenu()?.contains(t)) dismissRef.current()
     }
     // 输入法选字时的 Esc 是取消选字,归输入法
-    const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape' && !e.isComposing && !rowMenu()) { e.stopPropagation(); close(true) } }
+    const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape' && !e.isComposing && !rowMenu()) { e.stopPropagation(); dismissRef.current(true) } }
     document.addEventListener('pointerdown', onDown, true)
     document.addEventListener('keydown', onKey, true)
     // 浮层:焦点进搜索框(⌘⇧A 打开即可打字);抽屉:落到已选的第一项(没有就第一项),键盘直接上下挑
@@ -258,7 +269,7 @@ export function CompactChatPicker({
           <OverlayAt
             x={anchor.x} y={anchor.y} anchorTop={anchor.top} prefer="above"
             innerRef={(el) => { surfaceRef.current = el }}
-            className="ctx-menu chat-pick-pop"
+            className="ctx-menu chat-pick-pop t2c-pour"
             style={{ pointerEvents: 'auto' }}
             onPointerLeave={() => setActive(null)}
           >

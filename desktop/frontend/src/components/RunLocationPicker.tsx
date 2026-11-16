@@ -12,6 +12,7 @@
  * 视觉语汇整段派生项目药丸(.composer-chip.project-pill,同一门「无轮廓中性 pill」)。
  */
 import React, { useEffect, useRef, useState } from 'react'
+import { useCapsuleDroplet } from '../views/chat2/useCapsuleDroplet'
 import { Check, ChevronDown, Cloud, Laptop, LogIn, Monitor, Server, Settings2 } from 'lucide-react'
 import { useEdgeNudge } from '@lcl/engine'
 import { registerMessages, useI18n } from '../i18n'
@@ -127,12 +128,15 @@ export function RunLocationPicker(): React.ReactElement | null {
   }
   const closeRef = useRef(closeMenu)
   closeRef.current = closeMenu
+  // 下拉从芯片里流出来(11-16 Chat Box 水滴方案):点空白 / Esc / 再点芯片 = 倒放,点了一行照旧直接收
+  const flow = useCapsuleDroplet<'menu'>(open ? 'menu' : null, (k) => { if (k) setOpen(true); else closeRef.current() },
+    () => ({ wrap: ref.current, pill: ref.current?.querySelector<HTMLElement>(':scope > .project-pill') ?? null, panel: menuRef.current }))
   useEffect(() => {
     if (!open) return
-    const away = (e: MouseEvent): void => { if (ref.current && !ref.current.contains(e.target as Node)) closeRef.current() }
+    const away = (e: MouseEvent): void => { if (ref.current && !ref.current.contains(e.target as Node)) flow.dismiss() }
     const escape = (e: KeyboardEvent): void => {
       if (e.key !== 'Escape') return
-      closeRef.current()
+      flow.dismiss()
       ref.current?.querySelector<HTMLButtonElement>('.project-pill')?.focus()
     }
     window.addEventListener('mousedown', away)
@@ -292,7 +296,7 @@ export function RunLocationPicker(): React.ReactElement | null {
         disabled={!canOpen}
         onClick={() => {
           if (!desktop) { chooser?.(); return }
-          if (open) { closeMenu(); return }
+          if (open) { flow.toggle('menu'); return }
           setOpen(true)
           if (canPickOthers) void useDeviceSessions.getState().refresh().catch(() => {}) // 点开 = 用户动作:终局态的那台也再试一次(R-32)
         }}
@@ -305,7 +309,7 @@ export function RunLocationPicker(): React.ReactElement | null {
       {open && (
         <div
           ref={(el) => { menuRef.current = el; menuFix.ref.current = el }}
-          className="composer-menu project-menu runloc-menu"
+          className="composer-menu project-menu runloc-menu t2c-pour"
           style={menuFix.style}
           role="menu"
           aria-label={t('runloc.label')}
