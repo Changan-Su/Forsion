@@ -243,4 +243,16 @@ describe('theme', () => {
     expect(light.background).toBe('#FF123456')
     expect(light.warning).toBe('#FF806000')
   })
+  it('reads through a probe that cannot transition (reduce motion gives every element a colour transition)', () => {
+    // happy-dom has no transitions, so this only pins the inline guard; Chromium proves it: desktop `npm run check:nativetheme`.
+    const added: Element[] = []
+    const spy = vi.spyOn(document.documentElement, 'appendChild').mockImplementation(function (this: Element, node) {
+      added.push(node as Element)
+      return Element.prototype.appendChild.call(this, node) as never
+    })
+    try { m.readNativeTheme() } finally { spy.mockRestore() }
+    const style = (added[0]?.getAttribute('style') ?? '').replace(/\s+/g, '')
+    expect(style).toContain('transition:none!important')
+    expect(style).toContain('animation:none!important')
+  })
 })
