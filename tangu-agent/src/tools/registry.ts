@@ -64,6 +64,7 @@ import { sessionStatusProvider } from './builtin/sessionStatus.js';
 import { forsionAccountProvider } from './builtin/forsionAccount.js';
 import { webPublishProvider } from './builtin/webPublish.js';
 import { gitToolsProvider } from './builtin/git.js';
+import { forsionGuideProvider } from './builtin/forsionGuide.js';
 import { intelligentUiProvider } from './builtin/intelligentUi.js';
 import { sketchProvider } from './builtin/sketch.js';
 import { manageWidgetProvider } from './builtin/manageWidget.js';
@@ -232,6 +233,7 @@ registerToolProvider(museMessageProvider); // 仅 Muse 周期(ctx.muse,子代理
 registerToolProvider(webPublishProvider); // both 前台 run、且 brain 有账号面(cloud)时:publish_web_page 把工作区的网页 / 静态文件夹发成 Forsion Connect 链接或下线(每次都问;deferred,append 末尾,快照不变)
 registerToolProvider(pluginSandboxProvider); // 桌面端限定(clientCapability 'plugin.sandbox' 中央闸,host-only):plugin_sandbox 起停 / 重置隔离的插件沙箱(审批同 run_bash)、plugin_sandbox_inspect 截图 / 控制台 / 状态 / 在沙箱里执行命令(全 deferred,append 末尾;无能力的 run 不可见,快照不变)
 registerToolProvider(gitToolsProvider); // host-only、会话属于本机项目时:git_status / git_commit / git_push / git_pull / git_publish 与项目详情 › Git 页同一套动作(都可带 repo 指项目碰得到的某个仓;commit 同写文件档,push / pull 同跑命令档,publish 每次都问;全 deferred 同组,append 末尾,快照不变)
+registerToolProvider(forsionGuideProvider); // both、只读:Forsion 自家产品速查(Forsion Git / 蓬洲云 / 商店…),正文按 host / 项目 / 沙盒改说法(knowledge/forsionProducts.ts;deferred,append 末尾,快照不变)
 // 插件(表情包/分段等)现为文件夹插件(plugins/),经 activateAllPlugins→ctx.registerPlugin 注册其工具,不在此处。
 
 /** ctx 自带 profile(loop 按 run.app_id 解析)优先;缺省回退本进程装配的 profile。 */
@@ -274,6 +276,12 @@ function logAgentEdit(name: string, args: Record<string, any>, ctx: ToolContext,
 // 本文件会成环:registry → loadTools → registry)。
 
 /** 返回喂给 LLM 的工具定义（OpenAI function 格式）：按模式/profile 过滤的内置 + 本 run 的自定义工具 + MCP 工具（按名去重，内置 > 自定义 > MCP）。 */
+/** 本会话里这个工具是否存在(过了 profile / 预设工具面 / 宿主沙箱 / 计划模式 / isEnabledFor 各道闸;不管是否 deferred、是否已解锁)。
+ *  forsion_guide 按它决定说「你能做」还是「去哪做」,别让说明许诺一件这里根本没有的工具。 */
+export function toolAvailable(name: string, ctx: ToolContext): boolean {
+  return resolveTools(currentProfile(ctx), ctx).has(name);
+}
+
 export function getToolDefinitions(ctx: ToolContext): Tool[] {
   const hasSkills = !!(ctx.enabledSkillIds && ctx.enabledSkillIds.length);
   const tools = resolveTools(currentProfile(ctx), ctx);
