@@ -18,7 +18,8 @@ export interface EngineDef {
   args?: string[];
   /** 追加/覆盖子进程 env:原样给到引擎(在白名单过滤之后叠上去,只剥本引擎的令牌),见 engineEnv.ts。 */
   env?: Record<string, string>;
-  /** 本进程环境里这个引擎还要的变量(白名单之外):精确名或 `FOO_*` 前缀,不分大小写;单独一个 `*` = 整份继承(只剥令牌)。
+  /** 本进程环境里这个引擎还要的变量(白名单之外):精确名或 `FOO_*` 前缀,不分大小写;单独一个 `*` = 整份继承
+   *  (FORSION_* / TANGU_* 和令牌仍不给)。
    *  内置引擎写的是各自的配置目录变量和凭据变量;engines.json 按 id 覆盖内置条目时与内置的取并集。detect.env 自动算在内。 */
   passEnv?: string[];
   /** 透传给 ACP newSession 的默认模型（可空，空则用适配器默认）。 */
@@ -44,7 +45,8 @@ const BUILTIN: EngineDef[] = [
     name: 'Claude Code',
     command: 'npx',
     args: ['-y', '@zed-industries/claude-code-acp'],
-    // 适配器 + Claude Agent SDK 读的:ANTHROPIC_*(key / 中转地址 / token)、CLAUDE_*(CLAUDE_CONFIG_DIR、CLAUDE_CODE_USE_BEDROCK 等)
+    // 适配器 + Claude Agent SDK 读的:ANTHROPIC_*(key / 中转地址 / token)、CLAUDE_*(CLAUDE_CONFIG_DIR、CLAUDE_CODE_USE_BEDROCK 等)。
+    // 开了 Bedrock / Vertex / Foundry 开关时那家云的凭据变量由 engineEnv 按开关另放。
     passEnv: ['ANTHROPIC_*', 'CLAUDE_*', 'MAX_THINKING_TOKENS'],
     detect: { dirs: ['~/.claude'], env: ['ANTHROPIC_API_KEY'], bin: 'claude' },
     setup: 'npm i -g @anthropic-ai/claude-code',
@@ -55,7 +57,7 @@ const BUILTIN: EngineDef[] = [
     name: 'Codex',
     command: 'npx',
     args: ['-y', '@agentclientprotocol/codex-acp@latest'],
-    // CODEX_HOME / CODEX_API_KEY / OPENAI_API_KEY / OPENAI_BASE_URL;config.toml 里 env_key 点名的另由 engineEnv 读
+    // CODEX_HOME / CODEX_API_KEY / OPENAI_API_KEY / OPENAI_BASE_URL;config.toml 里服务商点名的(env_key / env_http_headers)另由 engineEnv 读
     passEnv: ['CODEX_*', 'OPENAI_*'],
     detect: { dirs: ['~/.codex'], env: ['OPENAI_API_KEY', 'CODEX_API_KEY'], bin: 'codex' },
     setup: 'npm i -g @openai/codex',
@@ -107,15 +109,19 @@ export function loadEngines(configFile?: string): EngineDef[] {
   }
   const byId = new Map<string, EngineDef>();
   // dsh 的检测目录随 $DSH_HOME,故按调用时求值,不进模块级 BUILTIN 常量。
-  for (const e of [...BUILTIN, dshEngineDef()]) byId.set(e.id, e);
+  const builtins = [...BUILTIN, dshEngineDef()];
+  for (const e of builtins) byId.set(e.id, e);
+  const builtinById = new Map(builtins.map((e) => [e.id, e]));
   for (const e of custom) {
     if (!e?.id || !e?.command) continue; // 校验 id+command 才纳入
     // 按 id 覆盖内置条目(多半是换一份装在别处的同一个程序):没写 agentsHomeEnv 就沿用内置的 —— 不然交接的指令目录
     // 悄悄交不过去,DSH 照常跑,只是人设、记忆、技能都没了(11-15 台架踩过)。
-    // passEnv 同理取并集:覆盖条目多半只是换了命令,引擎还是那个引擎,它自己的配置目录 / 凭据变量照样要放行。
+    // passEnv 同理和**内置那条**取并集:覆盖条目多半只是换了命令,引擎还是那个引擎,它自己的配置目录 / 凭据变量照样要放行。
+    // 只并内置的,不并先前的自定义条目 —— 同一 id 写了两条时,前一条的 `*` 不能被后一条继承下来。
     const prev = byId.get(e.id);
     let merged = prev?.agentsHomeEnv && !('agentsHomeEnv' in e) ? { ...e, agentsHomeEnv: prev.agentsHomeEnv } : e;
-    if (prev?.passEnv?.length) merged = { ...merged, passEnv: [...new Set([...prev.passEnv, ...(Array.isArray(e.passEnv) ? e.passEnv : [])])] };
+    const base = builtinById.get(e.id)?.passEnv;
+    if (base?.length) merged = { ...merged, passEnv: [...new Set([...base, ...(Array.isArray(e.passEnv) ? e.passEnv : [])])] };
     byId.set(e.id, merged);
   }
   return [...byId.values()];

@@ -8,7 +8,7 @@ import path from 'node:path';
 import { spawnEngine } from './acpEngine.js';
 import { loadEngines, type EngineDef } from './config.js';
 import { dshEngineDef } from './dsh.js';
-import { codexConfigEnvKeys, engineSubprocessEnv, envNameMatcher } from './engineEnv.js';
+import { claudeCloudEnvRules, codexConfigEnvKeys, engineSubprocessEnv, envNameMatcher, layeredLookup } from './engineEnv.js';
 
 // 子进程把自己的环境写到 stdout。Windows 上 spawnEngine 用 shell:true,node 路径可能带空格,加引号;代码里不含 cmd 特殊字符。
 const DUMP = 'process.stdout.write(JSON.stringify(process.env))';
@@ -95,13 +95,24 @@ describe('engineSubprocessEnv(纯函数)', () => {
     expect(env.SECRET).toBeUndefined();
   });
 
-  it('passEnv:前缀 / 精确名;单独一个 * = 整份继承,令牌仍剥', () => {
-    const base = { PATH: '/bin', FOO_KEY: '1', FOOBAR: '2', BAR: '3', TANGU_TOKEN: 't' };
+  it('passEnv:前缀 / 精确名;单独一个 * = 整份继承,但 FORSION_* / TANGU_* 和令牌仍不给', () => {
+    const base = { PATH: '/bin', FOO_KEY: '1', FOOBAR: '2', BAR: '3', TANGU_TOKEN: 't', FORSION_X: 'f', tangu_lower: 'l' };
     expect(engineSubprocessEnv({ ...def, passEnv: ['FOO_*', 'bar'] }, {}, base)).toMatchObject({ FOO_KEY: '1', BAR: '3' });
     expect(engineSubprocessEnv({ ...def, passEnv: ['FOO_*'] }, {}, base).FOOBAR).toBeUndefined();
     const all = engineSubprocessEnv({ ...def, passEnv: ['*'] }, {}, base);
     expect(all).toMatchObject({ FOO_KEY: '1', FOOBAR: '2', BAR: '3' });
-    expect(all.TANGU_TOKEN).toBeUndefined();
+    for (const k of ['TANGU_TOKEN', 'FORSION_X', 'tangu_lower']) expect(all[k], k).toBeUndefined();
+    // 点名放 FORSION_* 也不行;要给只能经 def.env 明写
+    expect(engineSubprocessEnv({ ...def, passEnv: ['FORSION_*'] }, {}, base).FORSION_X).toBeUndefined();
+    expect(engineSubprocessEnv({ ...def, env: { FORSION_X: 'explicit' } }, {}, base).FORSION_X).toBe('explicit');
+  });
+
+  it('git / pip 的配置变量不放(VALUE 里可以是认证头),NODE_OPTIONS 不放', () => {
+    const env = engineSubprocessEnv(def, {}, {
+      PATH: '/bin', GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'http.https://example.com/.extraheader', GIT_CONFIG_VALUE_0: 'Authorization: Bearer secret',
+      PIP_INDEX_URL: 'https://user:token@pypi.example.com/simple', NODE_OPTIONS: '--require /tmp/x.js',
+    });
+    for (const k of ['GIT_CONFIG_COUNT', 'GIT_CONFIG_KEY_0', 'GIT_CONFIG_VALUE_0', 'PIP_INDEX_URL', 'NODE_OPTIONS']) expect(env[k], k).toBeUndefined();
   });
 
   it('detect.env 和 agentsHomeEnv 自动算这个引擎自己的', () => {
@@ -123,12 +134,13 @@ describe('engineSubprocessEnv(纯函数)', () => {
   });
 });
 
-describe('Codex:config.toml 里 env_key 点名的变量', () => {
+describe('Codex:config.toml 里服务商点名的变量', () => {
   let dir = '';
   beforeEach(() => { dir = mkdtempSync(path.join(tmpdir(), 'codex-home-')); });
   afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
+  const keysOf = (home: string) => codexConfigEnvKeys(layeredLookup([{ CODEX_HOME: home }])).sort();
 
-  it('自定义服务商的 key 放行,别的 *_API_KEY 不放', () => {
+  it('env_key / env_http_headers 放行(带引号的键名也认),别的 *_API_KEY 不放', () => {
     writeFileSync(path.join(dir, 'config.toml'), [
       'model_provider = "ds"',
       '[model_providers.ds]',
@@ -136,21 +148,66 @@ describe('Codex:config.toml 里 env_key 点名的变量', () => {
       'env_key = "DS_RELAY_KEY"',
       '[model_providers.az]',
       "name = 'Azure'",
-      "env_key='AZURE_OPENAI_API_KEY'",
+      'env_http_headers = { "api-key" = "AZURE_OPENAI_API_KEY" }',
+      '[model_providers.quoted]',
+      '"env_key" = "QUOTED_KEY"',
     ].join('\n'));
-    expect(codexConfigEnvKeys({ CODEX_HOME: dir }).sort()).toEqual(['AZURE_OPENAI_API_KEY', 'DS_RELAY_KEY']);
+    expect(keysOf(dir)).toEqual(['AZURE_OPENAI_API_KEY', 'DS_RELAY_KEY', 'QUOTED_KEY']);
     const env = engineSubprocessEnv(builtin('codex'), {}, { PATH: '/bin', CODEX_HOME: dir, DS_RELAY_KEY: 'k1', OPENAI_API_KEY: 'k2', GROQ_API_KEY: 'k3' });
     expect(env).toMatchObject({ DS_RELAY_KEY: 'k1', OPENAI_API_KEY: 'k2', CODEX_HOME: dir });
     expect(env.GROQ_API_KEY).toBeUndefined();
   });
 
-  it('CODEX_HOME 由清单指到别处时读那一份;没有 config.toml 就是空', () => {
+  it('注释里、服务商之外的 env_key 不算;点名 FORSION_* / TANGU_* 也放不进来', () => {
+    writeFileSync(path.join(dir, 'config.toml'), [
+      '# env_key = "COMMENTED_KEY"',
+      'env_key = "TOP_LEVEL_KEY"',
+      'notes = "env_key = \'IN_STRING_KEY\'"',
+      '[model_providers.bad]',
+      'env_key = "FORSION_ENV_SENTINEL"',
+    ].join('\n'));
+    expect(keysOf(dir)).toEqual(['FORSION_ENV_SENTINEL']); // 解析出来了,但下面继承时照样挡掉
+    const env = engineSubprocessEnv(builtin('codex'), {}, { PATH: '/bin', CODEX_HOME: dir, COMMENTED_KEY: 'c', TOP_LEVEL_KEY: 't', IN_STRING_KEY: 's', FORSION_ENV_SENTINEL: 'f' });
+    for (const k of ['COMMENTED_KEY', 'TOP_LEVEL_KEY', 'IN_STRING_KEY', 'FORSION_ENV_SENTINEL']) expect(env[k], k).toBeUndefined();
+  });
+
+  it('CODEX_HOME 由清单指到别处时读那一份;没有 / 坏掉的 config.toml 就是空', () => {
     const other = path.join(dir, 'other');
     mkdirSync(other);
-    writeFileSync(path.join(other, 'config.toml'), 'env_key = "OTHER_KEY"\n');
+    writeFileSync(path.join(other, 'config.toml'), '[model_providers.o]\nenv_key = "OTHER_KEY"\n');
     const env = engineSubprocessEnv({ ...builtin('codex'), env: { CODEX_HOME: other } }, {}, { PATH: '/bin', OTHER_KEY: 'o' });
     expect(env.OTHER_KEY).toBe('o');
-    expect(codexConfigEnvKeys({ CODEX_HOME: path.join(dir, 'missing') })).toEqual([]);
+    expect(keysOf(path.join(dir, 'missing'))).toEqual([]);
+    writeFileSync(path.join(dir, 'config.toml'), 'this is = = not toml [');
+    expect(keysOf(dir)).toEqual([]);
+  });
+});
+
+describe('Claude Code 走云厂商', () => {
+  it('开了 Bedrock 才放 AWS_*;没开不放', () => {
+    const base = { PATH: '/bin', AWS_BEARER_TOKEN_BEDROCK: 'b', AWS_REGION: 'us-east-1', GOOGLE_APPLICATION_CREDENTIALS: '/g.json' };
+    const off = engineSubprocessEnv(builtin('claude-code'), {}, base);
+    expect(off.AWS_BEARER_TOKEN_BEDROCK).toBeUndefined();
+    const on = engineSubprocessEnv(builtin('claude-code'), {}, { ...base, CLAUDE_CODE_USE_BEDROCK: '1' });
+    expect(on).toMatchObject({ AWS_BEARER_TOKEN_BEDROCK: 'b', AWS_REGION: 'us-east-1', CLAUDE_CODE_USE_BEDROCK: '1' });
+    expect(on.GOOGLE_APPLICATION_CREDENTIALS).toBeUndefined();
+  });
+
+  it('Vertex / Foundry 各放各的;开关写在清单 env 里也算', () => {
+    expect(claudeCloudEnvRules(layeredLookup([{ CLAUDE_CODE_USE_VERTEX: 'true' }]))).toContain('GOOGLE_APPLICATION_CREDENTIALS');
+    expect(claudeCloudEnvRules(layeredLookup([{ CLAUDE_CODE_USE_FOUNDRY: '1' }]))).toEqual(['AZURE_*']);
+    expect(claudeCloudEnvRules(layeredLookup([{ CLAUDE_CODE_USE_BEDROCK: '0' }]))).toEqual([]);
+    const env = engineSubprocessEnv({ ...builtin('claude-code'), env: { CLAUDE_CODE_USE_BEDROCK: '1' } }, {}, { PATH: '/bin', AWS_PROFILE: 'p' });
+    expect(env.AWS_PROFILE).toBe('p');
+  });
+});
+
+describe('layeredLookup', () => {
+  it('后层盖前层;Windows 上名字不分大小写,POSIX 上区分', () => {
+    const layers = [{ CODEX_HOME: '/a' }, { codex_home: '/b' }];
+    expect(layeredLookup(layers, 'win32')('CODEX_HOME')).toBe('/b');
+    expect(layeredLookup(layers, 'darwin')('CODEX_HOME')).toBe('/a');
+    expect(layeredLookup([{ X: '1' }, undefined, { Y: '2' }], 'linux')('X')).toBe('1');
   });
 });
 
@@ -168,5 +225,18 @@ describe('loadEngines:按 id 覆盖内置条目时 passEnv 取并集', () => {
     const byId = new Map(loadEngines(file).map((e) => [e.id, e]));
     expect(byId.get('dsh')?.passEnv).toEqual(expect.arrayContaining(['DSH_*', 'DEEPSEEK_*']));
     expect(byId.get('pi')?.passEnv).toEqual(expect.arrayContaining(['PI_*', 'GROQ_API_KEY']));
+  });
+
+  it('同一 id 写了两条:后一条只和内置的合,不继承前一条的 *', () => {
+    const file = path.join(dir, 'engines.json');
+    writeFileSync(file, JSON.stringify({ engines: [
+      { id: 'pi', name: 'Pi', command: 'npx', passEnv: ['*'] },
+      { id: 'pi', name: 'Pi', command: 'npx', passEnv: ['ACME_API_KEY'] },
+      { id: 'mine', name: 'Mine', command: 'a', passEnv: ['*'] },
+      { id: 'mine', name: 'Mine', command: 'b', passEnv: ['ACME_API_KEY'] },
+    ] }));
+    const byId = new Map(loadEngines(file).map((e) => [e.id, e]));
+    expect(byId.get('pi')?.passEnv?.sort()).toEqual(['ACME_API_KEY', 'PI_*']);
+    expect(byId.get('mine')?.passEnv).toEqual(['ACME_API_KEY']);
   });
 });
