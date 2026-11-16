@@ -1458,3 +1458,66 @@ describe('手机横幅:系统通知回话的时效(第六轮 Codex 复审)', () 
     } finally { vi.unstubAllGlobals() }
   })
 })
+
+describe('手机横幅:离开期间哪儿都没送到的卡回来逐张出(第五轮真壳复验)', () => {
+  const st = () => useNotifications.getState()
+  const shown = () => st().items.map((n) => n.text)
+  /** 每 100ms 看一眼屏上那张,记下先后出过哪些、各停多久 */
+  const watch = (ms: number): Array<[string, number]> => {
+    const seen: Array<[string, number]> = []
+    for (let t = 0; t < ms; t += 100) {
+      vi.advanceTimersByTime(100)
+      const cur = shown()[0]
+      const last = seen[seen.length - 1]
+      if (cur && (!last || last[0] !== cur)) seen.push([cur, 100])
+      else if (cur && last) last[1] += 100
+    }
+    return seen
+  }
+  beforeEach(() => { st().setBanner(true) })
+
+  const away = async (answer: unknown, osOn = true): Promise<{ seen: Array<[string, number]>; os: ReturnType<typeof vi.fn> }> => {
+    let hidden = true
+    const os = vi.fn(() => Promise.resolve(answer))
+    vi.stubGlobal('window', { tangu: { notify: os } })
+    vi.stubGlobal('document', { hasFocus: () => true, get visibilityState() { return hidden ? 'hidden' : 'visible' } })
+    if (!osOn) st().setOsEnabled(false)
+    st().visibilityChanged()
+    // 真壳那一轮的样子:同一个插件、不同的 key、不带 urgent,隔 1.2 秒来三张
+    for (const [i, text] of ['one', 'two', 'three'].entries()) {
+      vi.advanceTimersByTime(1200)
+      notifyApp({ text, event: 'plugin:demo', dedupeKey: `demo:k${i}`, replace: true })
+    }
+    await vi.advanceTimersByTimeAsync(0)
+    hidden = false
+    st().visibilityChanged()
+    return { seen: watch(30_000), os }
+  }
+
+  it('没给通知权限(桥回 posted: false):回来三张逐张出、各停满 5 秒,不被同来源冷却丢掉(负对照:上屏不认这个记号 → 只出 one)', async () => {
+    try {
+      const { seen, os } = await away({ posted: false })
+      expect(os).toHaveBeenCalledTimes(3)
+      expect(seen.map(([t]) => t), '离开期间哪儿都没送到:一张都不能丢').toEqual(['one', 'two', 'three'])
+      for (const [, ms] of seen) expect(ms).toBe(PHONE.dwell)
+      // 回来以后前台的节流照旧:刚走的这一来源在冷却里,前台再来一张同来源的普通卡照样丢
+      notifyApp({ text: 'fg', event: 'plugin:demo', dedupeKey: 'demo:fg', replace: true })
+      expect(shown(), '前台来的不带这个记号,照常吃冷却').toEqual([])
+    } finally { vi.unstubAllGlobals() }
+  })
+
+  it('系统通知开关关着:同样逐张出(负对照同上)', async () => {
+    try {
+      const { seen, os } = await away({ posted: true }, false)
+      expect(os).not.toHaveBeenCalled()
+      expect(seen.map(([t]) => t)).toEqual(['one', 'two', 'three'])
+    } finally { vi.unstubAllGlobals() }
+  })
+
+  it('对照:系统通知投了(posted: true),回来只出这个来源最新的一张(其余在通知栏里响过)', async () => {
+    try {
+      const { seen } = await away({ posted: true })
+      expect(seen.map(([t]) => t)).toEqual(['three'])
+    } finally { vi.unstubAllGlobals() }
+  })
+})

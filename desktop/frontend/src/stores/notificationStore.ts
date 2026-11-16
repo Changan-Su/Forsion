@@ -97,6 +97,10 @@ export interface AppNotification {
   /** 手机横幅:上着屏时被遮挡(App 退到后台 / 原生半屏盖上)撤回了队首(见 holdShown)。用户没看完它:回到前台时不能丢,
    *  也不吃同来源的冷却;重新上屏时清掉、停留给满。 */
   held?: boolean
+  /** 手机横幅:离开期间哪儿都没送到 —— 回到前台重放时系统通知还没确认投了(没给通知权限、渠道关了、桥没回话)或系统通知开关
+   *  关着。横幅是它唯一的机会:上屏不吃同来源的冷却(不然同来源的几张只出第一张,其余前台丢下时也不补系统通知,哪儿都看不到)。
+   *  只在回到前台那一下打(见 visibilityChanged),前台来的卡不打,前台节流照旧;上屏时清掉。 */
+  missed?: boolean
 }
 
 /** 卡怎么离开的:到点 / 用户点 × 或上滑 / 用户点了卡上的动作。程序自己撤(调用方 dismiss(id))不带。 */
@@ -339,7 +343,7 @@ export const useNotifications = create<NtfState>((set, get) => {
     payOs(n)
     // 上了屏就不再欠:用户在前台看到了,或者刚补发过。常驻那张让位后再回来、宽屏的卡收进队列,都不再发第二次。
     // 被遮挡撤下的那张重新上屏:停留从这一刻给满
-    const shown = { ...n, shownAt: Date.now(), osOwed: undefined, bg: undefined, held: undefined }
+    const shown = { ...n, shownAt: Date.now(), osOwed: undefined, bg: undefined, held: undefined, missed: undefined }
     set({ items: [shown], queue })
     if (!shown.sticky) startTimer(shown.id, dwellOf(shown))
   }
@@ -366,7 +370,7 @@ export const useNotifications = create<NtfState>((set, get) => {
     let next: AppNotification | undefined
     for (const nx of s.queue) {
       if (nx.sticky) continue
-      if (!nx.free && !nx.held && cooling(nx.event)) dropped.push(nx) // 被遮挡撤下的上过屏,不吃冷却
+      if (!nx.free && !nx.held && !nx.missed && cooling(nx.event)) dropped.push(nx) // 被遮挡撤下的、离开期间哪儿都没送到的,不吃冷却
       else { next = nx; break }
     }
     next ??= s.queue.find((nx) => nx.sticky)
@@ -733,7 +737,12 @@ export const useNotifications = create<NtfState>((set, get) => {
       // 老外壳照样回成功;手机上 agent.done 不走系统通知),回到前台时手机外壳还会把这类系统通知清掉;撤销卡更不能丢 —— 系统通知上没有撤销。
       const { queue: replay, dropped } = replayQueue(s.queue, s.prefs.osEnabled)
       const fresh = replay.some((q) => q.bg)
-      const queue = fresh ? replay.map((q) => (q.bg ? { ...q, bg: undefined } : q)) : replay
+      // 离开期间哪儿都没送到的(系统通知没确认投了,或开关关着):横幅是唯一的机会,打上 missed、上屏不吃冷却(见 promoteBanner)
+      const osOn = s.prefs.osEnabled
+      const missedOut = (q: AppNotification): boolean => !q.free && !q.held && !q.missed && (!osOn || !!q.osOwed)
+      const queue = fresh || replay.some(missedOut)
+        ? replay.map((q) => (q.bg || missedOut(q) ? { ...q, bg: undefined, ...(missedOut(q) ? { missed: true } : {}) } : q))
+        : replay
       // 屏上是常驻的那张:在后台没让位,后台真来了卡才让 —— 和 notify 里一样对谁都让,常驻的(错误缺省也是常驻)也让;它排到
       // 后台来的那些后面,promoteBanner 先出不常驻的,再按先来后到出常驻的。后台什么都没来就不动(不然两张常驻每次前后台来回都轮换)
       const vis = s.items[0]
