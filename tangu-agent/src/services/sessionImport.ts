@@ -102,8 +102,16 @@ export function importedSessionId(userId: string, appId: string, source: string,
 }
 
 /** 导入消息的 id:由会话 id 与序号定死,断了重导时同一条落回同一行(ON CONFLICT DO NOTHING)。 */
-export function importedMessageId(sessionId: string, index: number): string {
-  return asUuid(createHash('sha256').update(`forsion-import-msg\0${sessionId}\0${index}`).digest('hex'));
+export function importedMessageId(sessionId: string, index: number, fingerprint = ''): string {
+  return asUuid(createHash('sha256').update(`forsion-import-msg\0${sessionId}\0${fingerprint}\0${index}`).digest('hex'));
+}
+
+/** 这一份对话内容的指纹(角色 + 正文 + 思考 + 时间,逐条):同一份导出断了重导落回同一批 id;
+ *  换了一份内容不同的导出,id 也跟着变,不会把旧残留当成「已经写过」(Codex 11-16 第二轮 #4)。 */
+export function conversationFingerprint(messages: ImportMessageInput[], stamps: number[]): string {
+  const h = createHash('sha256');
+  messages.forEach((m, i) => h.update(`${m.role}\0${m.content}\0${m.reasoning ?? ''}\0${m.model_id ?? ''}\0${stamps[i]}\n`));
+  return h.digest('hex').slice(0, 16);
 }
 
 function asUuid(h: string): string {
@@ -118,8 +126,9 @@ function sqlTime(ms: number): string {
 /** 消息时间:有原时间用原时间;缺的接在前一条后面 1 秒,保证同一会话里严格递增(压缩 / 分支都按 timestamp 切)。
  *  一个时间都没有的对话从「现在往前 n 秒」排起,最后一条不晚于现在 —— 排到未来的话,之后接着聊的新消息会插进旧历史中间(Codex 11-16)。 */
 export function settleTimestamps(c: ImportConversationInput, now = Date.now()): number[] {
-  const anchor = c.created_at ?? c.messages.find((m) => m.timestamp != null)?.timestamp ?? c.updated_at;
-  const start = anchor ?? now - c.messages.length * 1000;
+  const first = c.created_at ?? c.messages.find((m) => m.timestamp != null)?.timestamp;
+  // 只有「最后更新」:让历史在那一刻收尾(往回排),别从它往后排到未来(Codex 11-16 第二轮)
+  const start = first ?? (c.updated_at != null ? Math.min(c.updated_at, now) : now) - (c.messages.length - 1) * 1000;
   const out: number[] = [];
   let prev = start - 1;
   for (const m of c.messages) {
@@ -148,7 +157,21 @@ export async function importConversations(req: ImportRequest): Promise<ImportRes
       const updatedAt = Math.max(c.updated_at ?? 0, stamps[stamps.length - 1]);
       const title = (c.title && c.title.trim() ? c.title.trim() : firstLine(c.messages) || 'Imported chat').slice(0, 200);
       const cfg = { ...(req.agentConfig || {}), imported: { source: req.source, id: c.external_id } };
-      await insertMessages(sessionId, c.messages, stamps, agentSlugOf(req.agentConfig));
+      const fp = conversationFingerprint(c.messages, stamps);
+      // 会话行还没建 = 只有之前断掉的导入留下的残留(谁也看不见、没人能往里写):换了内容的那批先清掉,别混进这一份。
+      // 同一份内容的残留 id 一样,不删,下面 DO NOTHING 直接复用。会话行一旦存在就绝不删(上面已按 exists 返回)。
+      // 残留按块从第 0 条写起:第 0 条的 id 对得上 = 同一份内容的残留(DO NOTHING 复用);对不上 = 换过内容,整批清掉。
+      const leftovers = await query<any[]>(`SELECT id FROM chat_messages WHERE session_id = ? LIMIT 1`, [sessionId]);
+      if (leftovers[0]) {
+        const same = await query<any[]>(`SELECT 1 FROM chat_messages WHERE id = ? LIMIT 1`, [importedMessageId(sessionId, 0, fp)]);
+        if (!same[0]) {
+          await query(
+            `DELETE FROM chat_messages WHERE session_id = ? AND origin = 'import' AND NOT EXISTS (SELECT 1 FROM chat_sessions WHERE id = ?)`,
+            [sessionId, sessionId],
+          );
+        }
+      }
+      await insertMessages(sessionId, c.messages, stamps, agentSlugOf(req.agentConfig), fp);
       await query(
         `INSERT INTO chat_sessions (id, user_id, app_id, title, title_manual, model_id, agent_config, projectless, kind, last_read_at, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'user', ?, ?, ?) ON CONFLICT (id) DO NOTHING`,
@@ -169,13 +192,13 @@ function agentSlugOf(cfg: Record<string, unknown> | null): string | null {
   return typeof v === 'string' && v && v.length <= 64 ? v : null;
 }
 
-async function insertMessages(sessionId: string, messages: ImportMessageInput[], stamps: number[], agentSlug: string | null): Promise<void> {
+async function insertMessages(sessionId: string, messages: ImportMessageInput[], stamps: number[], agentSlug: string | null, fingerprint: string): Promise<void> {
   const pg = getDbType() !== 'sqlite';
   for (let i = 0; i < messages.length; i += INSERT_CHUNK) {
     const slice = messages.slice(i, i + INSERT_CHUNK);
     const params: unknown[] = [];
     const rows = slice.map((m, j) => {
-      params.push(importedMessageId(sessionId, i + j), sessionId, m.role, stripNul(m.content, pg), stamps[i + j],
+      params.push(importedMessageId(sessionId, i + j, fingerprint), sessionId, m.role, stripNul(m.content, pg), stamps[i + j],
         m.model_id || null, m.reasoning ? stripNul(m.reasoning, pg) : null, m.role === 'assistant' ? agentSlug : null, 'import');
       return '(?, ?, ?, ?, ?, ?, ?, ?, ?)';
     });

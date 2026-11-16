@@ -100,6 +100,18 @@ describe('importConversations', () => {
     expect(h.db.prepare("SELECT COUNT(*) AS n FROM chat_messages WHERE id = 'someone-else'").get().n).toBe(1)
   })
 
+  it('a retry with different content replaces the leftovers instead of mixing them in', async () => {
+    const a = Array.from({ length: 150 }, (_, i) => ({ role: (i % 2 ? 'assistant' : 'user') as 'user' | 'assistant', content: `old${i}` }))
+    h.failAfterChunks = 1
+    await importConversations(req([{ external_id: 'v', created_at: T0, messages: a }]))
+    h.failAfterChunks = -1
+    const b = Array.from({ length: 80 }, (_, i) => ({ role: (i % 2 ? 'assistant' : 'user') as 'user' | 'assistant', content: `new${i}` }))
+    const [r] = await importConversations(req([{ external_id: 'v', created_at: T0, messages: b }]))
+    expect(r).toMatchObject({ status: 'created', messages: 80 })
+    const rows = h.db.prepare('SELECT content FROM chat_messages ORDER BY timestamp').all().map((x: any) => x.content)
+    expect(rows).toEqual(b.map((m) => m.content))
+  })
+
   it('long chats are inserted in chunks', async () => {
     const messages = Array.from({ length: 250 }, (_, i) => ({ role: i % 2 ? 'assistant' : 'user', content: `m${i}` }));
     const [r] = await importConversations(req([{ external_id: 'long', messages }]));
@@ -117,6 +129,11 @@ describe('settleTimestamps', () => {
       { role: 'user', content: 'a' }, { role: 'assistant', content: 'b', timestamp: T0 - 10 }, { role: 'user', content: 'c', timestamp: T0 + 9000 },
     ] });
     expect(out).toEqual([T0, T0 + 1, T0 + 9000]);
+  });
+  it('with only an update time, history ends at that time instead of running past it', () => {
+    const now = Date.now();
+    const out = settleTimestamps({ external_id: 'x', updated_at: now, messages: Array.from({ length: 150 }, () => ({ role: 'user' as const, content: 'a' })) }, now);
+    expect(out[out.length - 1]).toBe(now);
   });
   it('a chat with no times at all ends no later than now (never in the future)', () => {
     const now = Date.now();
