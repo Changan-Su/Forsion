@@ -35,7 +35,7 @@ import type { ToolContext } from '../tools/toolTypes.js';
 import { deps } from '../seams/runtime.js';
 import { enterRunContext, setRunCwd } from '../seams/runContext.js';
 import { isHtmlCardTool, LEGACY_HTML_CARD_TOOL } from '../tools/builtin/sketch.js';
-import { fitImageUrlForModel } from '../services/imageShrink.js';
+import { fitImageForModel } from '../services/imageShrink.js';
 
 /** 取结果的那个工具(只在带 budgetMs 的桥上有)。 */
 export const WAIT_TOOL = 'forsion_wait';
@@ -87,25 +87,47 @@ const IMAGE_DATA_URL = /^data:(image\/(?:png|jpe?g|webp|gif));base64,([A-Za-z0-9
 /**
  * 一张图的 base64 最多多长。DSH 0.2.2 收 MCP 图时用一条正则核 base64,约 4.9M 字符(原图约 3.5MB)起爆栈,
  * 而且同一个结果里一张不合格整批都换成「image unavailable」(DSH2Forsion tests/check-images.mjs 实测)。
- * 图先照 Tangu 循环缩到模型用的大小(fitImageUrlForModel:最长边 1568、约 115 万像素的 JPEG,一般几百 KB),
- * 缩完还超过这条线的(缩不了的格式 / 超大图)不交,说一句。
  */
 export const MAX_BRIDGE_IMAGE_BASE64 = 3_000_000;
 
-/** 一次调用的结果 → MCP 的 content:先是文字;每张图前面,不可信来源的前言换了才再写一次。不是内联 PNG / JPEG / WebP / GIF、缩完仍太大的图说一句、不回。 */
+/**
+ * 一张图怎么交:在线以内原样交(同 Tangu 循环:要缩的工具自己缩,Computer Use 的截图按自己的像素给坐标,缩了就点偏)。
+ * 超线的先只换编码(PNG → 同尺寸 JPEG,坐标不变);还超才缩小,并附一句原尺寸和倍数;仍超就不交。
+ */
+function fitBridgeImage(mime: string, b64: string): { mime: string; b64: string; note?: string } | null {
+  if (b64.length <= MAX_BRIDGE_IMAGE_BASE64) return { mime, b64 };
+  const buf = Buffer.from(b64, 'base64');
+  const same = fitImageForModel(buf, { keepSize: true });
+  if (same) { const out = same.buf.toString('base64'); if (out.length <= MAX_BRIDGE_IMAGE_BASE64) return { mime: same.mime, b64: out }; }
+  const small = fitImageForModel(buf);
+  if (!small) return null;
+  const out = small.buf.toString('base64');
+  if (out.length > MAX_BRIDGE_IMAGE_BASE64) return null;
+  if (small.width === small.fromWidth && small.height === small.fromHeight) return { mime: small.mime, b64: out };
+  const k = Math.round((small.fromWidth / small.width) * 1000) / 1000;
+  return {
+    mime: small.mime, b64: out,
+    note: `[The next image was scaled down from ${small.fromWidth}x${small.fromHeight} to ${small.width}x${small.height} px so it could be passed on. `
+      + `Where the tool's text gives pixel positions or sizes for it, they refer to the ${small.fromWidth}x${small.fromHeight} original: `
+      + `multiply any position you read off this image by ${k} before using it.]`,
+  };
+}
+
+/** 一次调用的结果 → MCP 的 content:先是文字;每张图前面,不可信来源的前言换了才再写一次。不是内联 PNG / JPEG / WebP / GIF、太大交不了的图说一句、不回。 */
 export function bridgeContent(out: { text: string; images?: readonly BridgeImage[] }): Array<{ type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string }> {
   const content: Array<{ type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string }> = [{ type: 'text', text: out.text }];
   let preface: string | undefined;
   for (const img of out.images ?? []) {
-    let url = String(img?.url ?? '');
-    try { url = fitImageUrlForModel(url); } catch { /* 缩不了就用原图,下面照样核 */ }
-    const m = IMAGE_DATA_URL.exec(url);
+    const m = IMAGE_DATA_URL.exec(String(img?.url ?? ''));
     if (!m) { content.push({ type: 'text', text: '[An image from this tool could not be passed on: it is not an inline PNG, JPEG, WebP or GIF.]' }); continue; }
-    if (m[2].length > MAX_BRIDGE_IMAGE_BASE64) { content.push({ type: 'text', text: '[An image from this tool could not be passed on: it is too large even after shrinking.]' }); continue; }
+    let fit: ReturnType<typeof fitBridgeImage> = null;
+    try { fit = fitBridgeImage(m[1].toLowerCase().replace('image/jpg', 'image/jpeg'), m[2]); } catch { fit = null; }
+    if (!fit) { content.push({ type: 'text', text: '[An image from this tool could not be passed on: it is too large even after shrinking.]' }); continue; }
     const p = typeof img.untrusted === 'string' && img.untrusted.trim() ? img.untrusted.trim() : undefined;
     if (p && p !== preface) content.push({ type: 'text', text: p });
     preface = p;
-    content.push({ type: 'image', data: m[2], mimeType: m[1].toLowerCase().replace('image/jpg', 'image/jpeg') });
+    if (fit.note) content.push({ type: 'text', text: fit.note });
+    content.push({ type: 'image', data: fit.b64, mimeType: fit.mime });
   }
   return content;
 }
@@ -177,10 +199,16 @@ export async function createRunToolServer(ctx: ToolContext & { runId: string }, 
   };
   const budget = opts.budgetMs && opts.budgetMs > 0 ? opts.budgetMs : undefined;
   // 同一个并发键(一次只驱动一个浏览器 / 一台电脑)的执行排队:引擎可能一次发几个调用,Tangu 循环里它们本来就一个接一个跑
+  // 排队的调用跟着桥的中止走:前一个不理中止、一直不结束,后面排着的也照样停(不然它们永远挂着)
+  const lifeEnded = new Promise<never>((_, reject) => {
+    const stop = () => reject(life.signal.reason ?? new Error('Stopped'));
+    if (life.signal.aborted) stop(); else life.signal.addEventListener('abort', stop, { once: true });
+  });
+  lifeEnded.catch(() => {});
   const lanes = new Map<string, Promise<void>>();
   const inLane = <T>(key: string | undefined, fn: () => Promise<T>): Promise<T> => {
     if (!key) return fn();
-    const run = (lanes.get(key) ?? Promise.resolve()).then(fn);
+    const run = Promise.race([lanes.get(key) ?? Promise.resolve(), lifeEnded]).then(fn);
     const tail = run.then(() => {}, () => {});
     lanes.set(key, tail);
     void tail.then(() => { if (lanes.get(key) === tail) lanes.delete(key); });
@@ -220,14 +248,18 @@ export async function createRunToolServer(ctx: ToolContext & { runId: string }, 
     };
     const caps = (() => { try { return getToolCapabilities(name, toolCtx); } catch { return undefined; } })();
     const lane = caps?.concurrencyKey || (caps?.sideEffect === 'browser' ? 'browser' : undefined);
+    // Computer Use 只在这一刻的模型看得见时跑:问不到 / 看不见 → 不跑,回一句给模型
+    const cuBlocked = async (): Promise<string | undefined> => {
+      if (!opts.images || !caps || !isComputerUseTool({ capabilities: caps })) return undefined;
+      const sees = await (opts.seesImages?.() ?? Promise.resolve(undefined)).catch(() => undefined);
+      return sees === true ? undefined : bridgeComputerUseUnavailable(sees === false ? 'no-image-input' : 'unknown');
+    };
     const job = (async (): Promise<Outcome> => {
       enter();
       try {
-        // Computer Use 先问模型看不看得见(不问用户批一个跑不了的调用)
-        if (opts.images && caps && isComputerUseTool({ capabilities: caps })) {
-          const sees = await (opts.seesImages?.() ?? Promise.resolve(undefined)).catch(() => undefined);
-          if (sees !== true) return finish(bridgeComputerUseUnavailable(sees === false ? 'no-image-input' : 'unknown'), true);
-        }
+        // 先问一次(不让用户批一个跑不了的调用);排完队、真要跑之前再问一次(等审批 / 排队期间可能换了模型)
+        const early = await cuBlocked();
+        if (early) return finish(early, true);
         const decision: ApprovalDecision = await gateToolCall(ctx.runId, call, {
           sessionId: ctx.sessionId, userId: ctx.userId, execMode: 'host', cwd: ctx.cwd, approvalMode: ctx.approvalMode,
           // 交接的桥照 Tangu 循环:只有输入框发的轮才按会话现档读(approvalModeSessionId);插件任务那条路照旧跟会话
@@ -238,10 +270,15 @@ export async function createRunToolServer(ctx: ToolContext & { runId: string }, 
         if (!allowed().has(name)) return finish('Tool is no longer available.', true);
         onPhase('running');
         const approved = decision.argsOverride ? { ...call, function: { ...call.function, arguments: JSON.stringify(decision.argsOverride) } } : call;
-        const result = await inLane(lane, () => {
+        const ran = await inLane(lane, async (): Promise<{ blocked: string } | { result: Awaited<ReturnType<typeof executeTool>> }> => {
           life.signal.throwIfAborted();
-          return executeTool(approved, { ...toolCtx, toolCallId: id, ...(collectImage ? { collectImage } : {}) });
+          const late = await cuBlocked();
+          if (late) return { blocked: late };
+          life.signal.throwIfAborted();
+          return { result: await executeTool(approved, { ...toolCtx, toolCallId: id, ...(collectImage ? { collectImage } : {}) }) };
         });
+        if ('blocked' in ran) return finish(ran.blocked, true);
+        const result = ran.result;
         return finish(String(result.result), !!result.isError, { metadata: result.metadata, artifactPath: result.artifactPath });
       } catch (e: any) {
         const stopped = life.signal.aborted;
@@ -263,7 +300,11 @@ export async function createRunToolServer(ctx: ToolContext & { runId: string }, 
     let done: { o: Outcome } | null;
     try { done = await Promise.race([job.then((o) => ({ o })), sleep(budget, wait.signal).then(() => null)]); }
     finally { wait.abort(); life.signal.removeEventListener('abort', onLife); }
-    if (done) { if (ticket) tickets.delete(ticket.id); return done.o; }
+    if (done) {
+      // 领编号要原子:同一编号并发 wait 时只有先删掉它的那次拿结果(图不重复交)
+      if (ticket && !tickets.delete(ticket.id)) return { isError: true, text: `Ticket ${ticket.id} was already collected by another ${WAIT_TOOL} call.` };
+      return done.o;
+    }
     if (!live()) return { text: STOPPED_TEXT, isError: true };
     const t = ticket ?? make();
     t.attempt += 1;

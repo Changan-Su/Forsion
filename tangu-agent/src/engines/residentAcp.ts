@@ -278,6 +278,7 @@ export class ResidentLink {
       signal: ctx.signal,
       publish: (type, payload) => { armEngineIdle(); ctx.publish(type, payload); },
       hideToolPrefix: ctx.hideToolPrefix,
+      onModel: ctx.onModel,
       touch: armEngineIdle,
       waitingElsewhere: (waiting) => {
         idlePaused = waiting;

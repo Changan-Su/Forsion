@@ -47,6 +47,8 @@ export interface AcpClientCtx {
   touch?: () => void;
   /** 引擎说「在别处等你批准」(`_forsion/notice`)还没撤掉期间为 true:这一轮在等用户去别处批,空闲看门狗停表(否则等满五分钟就把它取消掉)。 */
   waitingElsewhere?: (waiting: boolean) => void;
+  /** 引擎在一轮中途报了新的模型选项(`config_option_update`):把这时的当前模型告诉宿主;报了模型这一项却没写当前值 → undefined(当作不知道)。 */
+  onModel?: (modelId: string | undefined) => void;
 }
 
 /** 引擎握手上限:spawn + initialize + newSession 若在此窗口内没完成(子进程卡死/Windows 上 .cmd shim spawn
@@ -409,6 +411,12 @@ export function createAcpClient(
           });
           break;
         }
+        case 'config_option_update': {
+          // 一轮中途换了模型(引擎自己换,或别处改了这个会话的设置):宿主按新的当前模型判断能不能看图等
+          const sel = mapAcpConfigOptions(u.configOptions);
+          if (sel.modelConfigId) { try { ctx.onModel?.(sel.currentModelId); } catch { /* 只是告知 */ } }
+          break;
+        }
         default:
           break; // plan / available_commands_update / mode 等：spike 忽略
       }
@@ -590,6 +598,7 @@ export async function runAcpEngine(def: EngineDef, ctx: EngineRunCtx): Promise<E
     },
     signal: ctx.signal,
     publish: (type, payload) => { armEngineIdle(); ctx.publish(type, payload); },
+    onModel: ctx.onModel,
     hideToolPrefix: ctx.hideToolPrefix,
     touch: armEngineIdle,
     waitingElsewhere: (waiting) => {

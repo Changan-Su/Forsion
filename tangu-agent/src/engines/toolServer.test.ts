@@ -35,6 +35,8 @@ vi.mock('../seams/runtime.js', async (orig) => ({ ...(await orig<typeof import('
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { PNG } from 'pngjs';
+import jpeg from 'jpeg-js';
 import { bridgeContent, createRunToolServer, MAX_BRIDGE_IMAGE_BASE64, WAIT_TOOL } from './toolServer.js';
 import { currentAgentSlug, currentDisplayAgentSlug, currentRunCwd } from '../seams/runContext.js';
 
@@ -272,6 +274,81 @@ describe('交接的工具桥', () => {
     expect(r2.start).toBeLessThan(r1.end);
     await c.close();
   });
+
+  it('图按原尺寸交(Computer Use 按截图像素给坐标);超线的先换同尺寸 JPEG,还超才缩小并写明倍数', async () => {
+    const noise = (w: number, hgt: number): string => {
+      const p = new PNG({ width: w, height: hgt }); let x = 7;
+      for (let i = 0; i < p.data.length; i += 4) { x = (Math.imul(x, 1103515245) + 12345) >>> 0; p.data[i] = x >>> 24; p.data[i + 1] = (x >>> 16) & 255; p.data[i + 2] = (x >>> 8) & 255; p.data[i + 3] = 255; }
+      return PNG.sync.write(p).toString('base64');
+    };
+    const size = (b64: string) => { const d = jpeg.decode(Buffer.from(b64, 'base64'), { useTArray: true }); return [d.width, d.height]; };
+    // 线内:一个字节都不动
+    const small = noise(400, 300);
+    expect(bridgeContent({ text: 't', images: [{ url: `data:image/png;base64,${small}` }] })[1]).toEqual({ type: 'image', data: small, mimeType: 'image/png' });
+    // 超线:同尺寸 JPEG,坐标照旧
+    const mid = bridgeContent({ text: 't', images: [{ url: `data:image/png;base64,${noise(1400, 800)}` }] });
+    expect(mid).toHaveLength(2);
+    expect(mid[1]).toMatchObject({ type: 'image', mimeType: 'image/jpeg' });
+    expect(size((mid[1] as any).data)).toEqual([1400, 800]);
+    expect(((mid[1] as any).data as string).length).toBeLessThanOrEqual(MAX_BRIDGE_IMAGE_BASE64);
+    // 同尺寸也交不了:缩小,图前写明原尺寸和倍数
+    const big = bridgeContent({ text: 't', images: [{ url: `data:image/png;base64,${noise(1800, 1100)}` }] });
+    expect(big[1]).toEqual({ type: 'text', text: expect.stringContaining('scaled down from 1800x1100 to ') });
+    expect((big[1] as any).text).toMatch(/multiply any position you read off this image by 1\.3\d*/);
+    const [w, hh] = size((big[2] as any).data);
+    expect(w).toBeLessThan(1800); expect(Math.abs(w / hh - 1800 / 1100)).toBeLessThan(0.01);
+  }, 30_000);
+
+  it('Computer Use 等审批 / 排队期间换成看不见的模型:真要跑之前再问一次,不跑', async () => {
+    let n = 0;
+    const c = await connect(await agentBridge(2_000, true, async () => (++n === 1)));
+    const r: any = await c.callTool({ name: 'cu_click', arguments: {} });
+    expect(r.isError).toBe(true);
+    expect(textOf(r)).toContain('has no image input');
+    expect(h.gate).toHaveBeenCalledTimes(1);
+    expect(h.exec).not.toHaveBeenCalled();
+    await c.close();
+  });
+
+  it('排在前面的调用不理中止、一直不结束:中止后排着的也停下,不执行、记成「这一轮结束了」', async () => {
+    h.exec.mockImplementation(async (call: any) => {
+      if (JSON.parse(call.function.arguments).n === 1) await new Promise(() => {}); // 永不结束、不理中止
+      return { toolCallId: call.id, name: call.function.name, result: 'ran', isError: false };
+    });
+    const c = await connect(await agentBridge(5_000, true, async () => true));
+    const p1 = c.callTool({ name: 'browser_click', arguments: { n: 1 } });
+    await new Promise((r) => setTimeout(r, 60));
+    const p2 = c.callTool({ name: 'browser_click', arguments: { n: 2 } });
+    await new Promise((r) => setTimeout(r, 60));
+    ac.abort();
+    const [r1, r2]: any[] = await Promise.all([p1, p2]);
+    expect(textOf(r1)).toContain('Stopped'); expect(textOf(r2)).toContain('Stopped');
+    expect(h.exec).toHaveBeenCalledTimes(1);
+    // 排着的那次自己也结束了(不是只有回给模型的话):它的卡片已收尾
+    await new Promise((r) => setTimeout(r, 20));
+    const second = bridge!.calls()[1].id;
+    expect(bridge!.results().some((x: any) => x.tool_call_id === second && x.isError)).toBe(true);
+    await c.close();
+  }, 10_000);
+
+  it('并发 forsion_wait 同一个编号:只有一次拿到结果和图,另一次说已被取走', async () => {
+    let release!: () => void;
+    h.exec.mockImplementation(async (call: any, ctx: any) => {
+      await new Promise<void>((r) => { release = r; });
+      ctx.collectImage?.({ url: 'data:image/png;base64,iVBORw0KGgo=' });
+      return { toolCallId: call.id, name: call.function.name, result: 'shot', isError: false };
+    });
+    const c = await connect(await agentBridge(400, true));
+    expect(textOf(await c.callTool({ name: 'remember', arguments: {} }))).toContain('ticket T1');
+    const w1 = c.callTool({ name: WAIT_TOOL, arguments: { ticket: 'T1', attempt: 2 } });
+    const w2 = c.callTool({ name: WAIT_TOOL, arguments: { ticket: 'T1', attempt: 2 } });
+    await new Promise((r) => setTimeout(r, 60));
+    release();
+    const got: any[] = await Promise.all([w1, w2]);
+    expect(got.filter((r) => r.content.some((x: any) => x.type === 'image'))).toHaveLength(1);
+    expect(got.filter((r) => textOf(r).includes('already collected'))).toHaveLength(1);
+    await c.close();
+  }, 10_000);
 
   it('插件任务那条路照旧:不画卡、不列 forsion_wait、一直等到结果', async () => {
     bridge = await createRunToolServer({ userId: 'u1', sessionId: 'S', runId: 'r1', signal: ac.signal } as any, ['remember']);
