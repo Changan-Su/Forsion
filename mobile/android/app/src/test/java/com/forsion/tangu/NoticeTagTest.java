@@ -36,4 +36,34 @@ public class NoticeTagTest {
         assertNotEquals(ta, NoticeTag.of("plugin:biz", b));
         assertEquals(ta, NoticeTag.of("plugin:biz", a));
     }
+
+    @Test
+    public void longKeysWithEqualStringHashesStayApart() {
+        // Codex 第五轮:64 字符的插件 id + 两个 100 字符的 key,只差末尾 "Aa" / "BB"(String.hashCode 相同、长度相同)。
+        // 宿主拼成的 dedupeKey 是 plugin:<id>:<key>(172 字符,超过 MAX_KEY),旧写法「长度 + 32 位哈希」把两条审批拼成同一个 tag
+        String id = "p" + "x".repeat(63);
+        String source = "plugin:" + id;
+        String a = source + ":" + "x".repeat(98) + "Aa";
+        String b = source + ":" + "x".repeat(98) + "BB";
+        assertEquals(a.hashCode(), b.hashCode());
+        assertEquals(a.length(), b.length());
+        assertTrue(a.length() > NoticeTag.MAX_KEY);
+        assertNotEquals(NoticeTag.of(source, a), NoticeTag.of(source, b));
+        assertEquals(NoticeTag.of(source, a), NoticeTag.of(source, a));
+        assertTrue(NoticeTag.of(source, a).length() < 200);
+    }
+
+    @Test
+    public void sourceAndKeyNeverSpliceIntoTheSameTag() {
+        // 来源里带 '|':不能和「来源 + key」拼成同一串(P3)
+        assertNotEquals(NoticeTag.of("a|b", null), NoticeTag.of("a", "b"));
+        assertNotEquals(NoticeTag.of("a|kb", null), NoticeTag.of("a", "b"));
+        assertNotEquals(NoticeTag.of("a|b", "c"), NoticeTag.of("a", "b|c"));
+        assertNotEquals(NoticeTag.of("a\\", "b"), NoticeTag.of("a\\|kb", null));
+        // 短 key 恰好长得像长 key 的摘要那一段:也不撞
+        String longKey = "y".repeat(NoticeTag.MAX_KEY + 1);
+        String hashed = NoticeTag.of("s", longKey);
+        String tail = hashed.substring(hashed.indexOf('|') + 1);
+        assertNotEquals(hashed, NoticeTag.of("s", tail));
+    }
 }
