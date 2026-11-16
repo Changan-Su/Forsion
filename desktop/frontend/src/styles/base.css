@@ -5562,8 +5562,12 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-wrap { top: calc(var(-
    壁纸照样铺到屏幕顶,它原来占的 40px 记进主页内容的顶部留白,内容的位置一点不变。原生布局还没报上来时
    --mb-top 为 0,那时 WebView 本来就摆在状态栏下面。只管原生外壳:网页 / 桌面窄窗没有这个属性,逐像素不变。
    仪器:mobile `npm run emu:nativeshell` 的「floating chrome (first level)」里主页那几条(hp-root 顶到屏幕顶、这一行在胶囊之下)。 */
-.mb-shell[data-native-chrome] .mb-main > .mb-view[data-view='homepage'] > .lcl-viewnav-fallback { position: absolute; top: var(--mb-top); left: 0; z-index: 2; height: 40px; }
+.mb-shell[data-native-chrome] .mb-main > .mb-view:is([data-view='homepage'], [data-view='chat']) > .lcl-viewnav-fallback { position: absolute; top: var(--mb-top); left: 0; z-index: 2; height: 40px; }
 .mb-shell[data-native-chrome] .mb-view[data-view='homepage'] .hp-root { --hp-chrome-top: calc(var(--mb-top) + 40px); }
+/* 对话页同一个病,表现不同:那一行压在状态栏遮罩底下(看不见、点不着),却在流里占着 40px,把 .t2-stream 整个往下推,
+   正文没法从胶囊底下穿过去。同样浮到胶囊下面,40px 记进流自己的顶部内距(②那条的 --mb-top 之上),第一条消息位置不变。
+   仪器:emu:nativeshell 的「floating chrome (detail page)」(流顶到屏幕顶、这一行在胶囊之下)。 */
+.mb-shell[data-native-chrome] .mb-view[data-view='chat'] .t2-stream { padding-top: calc(var(--mb-top) + 40px); }
 
 /* ⑦ 白板在 Android 宽屏(左侧竖条 + 并排左栏,2026-10-20 方案 A2):画布铺满整屏高,引擎顶上那一排(菜单钮 → 工具岛)
       挪进两颗原生胶囊所在的那一行 —— 菜单钮排在标题胶囊右边 8dp,工具岛在主区正中,右边给右胶囊留够位置。
