@@ -595,7 +595,7 @@ async function main() {
         return { ok: r.ok, status: r.status, body: (await r.text()).slice(0, 200) }
       }).catch((e) => ({ ok: false, status: 0, body: String(e?.message ?? e).slice(0, 200) })) : null
       const back = restarted?.ok && await until(async () => dshProcs().some((l) => l.includes('--profile forsion')), 60_000, 1000)
-      check('前置(⑧):测试用的右栏页插件装进 DSH,常驻 DSH 重启好了', !!back, add.status !== 0 ? (add.stdout + add.stderr).slice(-300) : restarted?.ok ? '重启后 60 秒内没见到 --profile forsion 进程' : `重启请求 ${restarted?.status}: ${restarted?.body}`)
+      check('前置(⑧):测试用的右栏页插件装进 DSH,常驻 DSH 重启好了', !!back, add.status !== 0 ? (add.stdout + add.stderr).slice(-300) : restarted?.ok ? (back ? '' : '重启后 60 秒内没见到 --profile forsion 进程') : `重启请求 ${restarted?.status}: ${restarted?.body}`)
     }
 
     // ① Harness 卡
