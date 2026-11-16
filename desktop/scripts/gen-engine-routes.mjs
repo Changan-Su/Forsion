@@ -137,6 +137,7 @@ export const CLASSIFICATION = {
   'POST /agent/sessions': [A, 'create a session'],
   'GET /agent/sessions/search': [A, 'session search'],
   'POST /agent/sessions/:id/branch': [A, 'branch a session (remote taint propagates, C5)'],
+  'POST /agent/sessions/import': [D, 'plugin import of external chat history (route itself refuses remote origin)'],
   'GET /agent/sessions/:id/background': [A, 'background child sessions'],
   // processes.ts:摘要栏「后台」卡(2026-10-25)。归属按 chat_sessions.user_id 过滤;停止 = 用户点的、只会停(同 runs/:id/abort,基础档)
   'GET /agent/processes': [A, 'list own background processes (read; ownership-filtered)'],

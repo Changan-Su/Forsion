@@ -258,6 +258,7 @@ export const ENGINE_ROUTES: readonly EngineRoute[] = [
   { method: 'GET', path: '/agent/sessions/:id/timeline', access: 'allow', src: 'routes/sessions.ts', why: 'session timeline' },
   { method: 'GET', path: '/agent/sessions/:id/usage', access: 'allow', src: 'routes/sessions.ts', why: 'session usage' },
   { method: 'GET', path: '/agent/sessions/attention', access: 'allow', src: 'routes/sessions.ts', why: 'per-session unread / waiting flags for row status and the Tangu badge (ids and booleans only)' },
+  { method: 'POST', path: '/agent/sessions/import', access: 'deny-remote', src: 'routes/sessions.ts', why: 'plugin import of external chat history (route itself refuses remote origin)' },
   { method: 'GET', path: '/agent/sessions/search', access: 'allow', src: 'routes/sessions.ts', why: 'session search' },
   { method: 'POST', path: '/agent/solo/:kind/:id/open', access: 'allow', src: 'routes/solo.ts', why: 'open the Agent direct-chat session' },
   { method: 'POST', path: '/agent/solo/:kind/:id/rotate', access: 'allow', src: 'routes/solo.ts', why: 'start a fresh Agent direct-chat session' },

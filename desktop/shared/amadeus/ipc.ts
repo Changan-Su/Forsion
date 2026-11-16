@@ -453,10 +453,28 @@ export interface PluginBundleInfo {
   spaces: string[]
 }
 
-/** 需要插件在 manifest 里显式声明才注入的宿主敏感能力(default-deny 白名单)。 */
-/** agentImport(2026-11-16+):ctx.tangu.createAgent / importSessions —— 新建 Agent、把外部聊天记录写成会话。 */
-export type PluginCapability = 'activeWindow' | 'databases' | 'noteTasks' | 'calendar' | 'spaces' | 'agentImport'
-export const PLUGIN_CAPABILITIES: readonly PluginCapability[] = ['activeWindow', 'databases', 'noteTasks', 'calendar', 'spaces', 'agentImport']
+/** 需要插件在 manifest 里显式声明才注入的宿主敏感能力(default-deny 白名单)。
+ *  `internals` / `internals-raw`(2026-11-16+):明说不稳定的内部口子 `ctx.internals`(只读一级 / 真对象二级),只在本机桌面注入;
+ *  二级要和一级一起声明才生效。见 amadeus/plugins/pluginInternals.ts。
+ *  `agentImport`(2026-11-16+):ctx.tangu.createAgent / importSessions —— 新建 Agent、把外部聊天记录写成会话。 */
+export type PluginCapability = 'activeWindow' | 'databases' | 'noteTasks' | 'calendar' | 'spaces' | 'agentImport' | 'internals' | 'internals-raw'
+export const PLUGIN_CAPABILITIES: readonly PluginCapability[] = ['activeWindow', 'databases', 'noteTasks', 'calendar', 'spaces', 'agentImport', 'internals', 'internals-raw']
+
+/** manifest `internalsVerified`(2026-11-16+):作者在哪几版 Forsion 上验过内部接口,只用于插件页标注,不拦。
+ *  收字符串或字符串数组,每项是 `主.次` 或 `主.次.补丁`(只比到次版本),最多 8 项;不认识的静默丢。 */
+export function sanitizeInternalsVerified(raw: unknown): string[] | undefined {
+  const list = typeof raw === 'string' ? [raw] : Array.isArray(raw) ? raw : []
+  const out: string[] = []
+  for (const v of list) {
+    if (typeof v !== 'string') continue
+    const m = /^\s*(\d{1,4})\.(\d{1,4})(?:\.\d{1,6})?\s*$/.exec(v)
+    if (!m) continue
+    const minor = `${Number(m[1])}.${Number(m[2])}`
+    if (!out.includes(minor)) out.push(minor)
+    if (out.length >= 8) break
+  }
+  return out.length ? out : undefined
+}
 
 /** ctx.net.request 的 init 过 IPC 的样子(主进程再按不可信输入校验一遍)。 */
 export interface PluginNetRequestInit { method?: string; headers?: Record<string, string>; body?: string | Uint8Array; timeoutMs?: number }
@@ -497,6 +515,9 @@ export interface ExternalPluginSource {
   /** 插件声明要用的宿主敏感能力(manifest `capabilities`,白名单外的一律丢)。宿主只给声明过的
    *  插件注入对应的 ctx 接缝——没声明 = 拿不到,不是「拿到了但没用」。目前只有 'activeWindow'。 */
   capabilities?: PluginCapability[]
+  /** Forsion minor versions the author verified `ctx.internals` against (manifest `internalsVerified`, 2026-11-16+;
+   *  `sanitizeInternalsVerified`). Label only: a mismatch shows a hint on the detail page, it never blocks. */
+  internalsVerified?: string[]
   /** README.md content from the plugin folder (capped), for the settings detail page. */
   readme?: string
   /** CHANGELOG.md content from the plugin folder (capped), shown as the "更新日志" section on the detail page.

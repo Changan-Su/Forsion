@@ -384,6 +384,54 @@ if (res.status === 200) render(res.json())
 
 The web and mobile versions have different CSPs; test there separately.
 
+## Internal APIs: `ctx.internals` (2026-11-16+)
+
+When the public APIs are missing something and you don't want to wait for a Forsion release, internal APIs let you read Forsion's own state or take its internal modules directly. **They are not stable**: everything in them follows Forsion's internals and can be renamed, reshaped or removed in any version, without notice and without counting as a breaking change. Desktop only: on web, mobile and older hosts `ctx.internals` is `undefined`, so always check before use.
+
+There are two levels, both declared in the manifest's `capabilities`:
+
+```json
+{ "capabilities": ["internals"], "internalsVerified": ["2.14"] }
+```
+
+**Level one, `internals`**: read only. You get frozen copies of the data with no functions in them, so they can't change Forsion.
+
+```js
+const k = ctx.internals
+if (!k) return
+k.stores()                                            // what you can read: page, app, workspace, spaces, commands, ui…
+const path = k.read('page', (s) => s.activePage)      // page is the active panel
+const off = k.subscribe('page', (s) => s.activePage, (now, prev) => { /* … */ })
+k.host.mainWindow                                      // each window runs its own copy of the plugin; do your own vault writes in the main window only
+```
+
+- Copies drop functions and class instances; a `Date` becomes milliseconds, a `Map` an array of `[key, value]` pairs, a `Set` an array. The `selector` gets a copy too.
+- `subscribe` handles several changes in one turn once, and only calls you when the selected data changed. The host unsubscribes when the plugin is turned off.
+- To write, use the public APIs: renaming, moving, folders and file writes are in "Folders, file times, renaming and moving in the vault" above, which ask the user before touching files your plugin didn't create.
+
+**Level two, `internals-raw`**: the real objects of Forsion's internal modules, for reading and writing. Declare it together with `internals`.
+
+```json
+{ "capabilities": ["internals", "internals-raw"] }
+```
+
+```js
+const ids = await ctx.internals.raw.modules()          // which modules you can take
+const { usePageStore } = await ctx.internals.raw.import('host:desktop/frontend/src/amadeus/store/pageStore.ts')
+```
+
+- Only modules registered in Forsion's shared module table are available (page state, chat state, the layout engine, React and others); unregistered modules and variables private to a function are not.
+- **At your own risk**: writing something wrong may not throw; objects you took can't be taken back when the plugin is turned off, so the user is asked to save and reload the window. If you change one of Forsion's own actions, undo it yourself when the plugin is turned off.
+- For note files, still prefer the public APIs: Forsion's writes check for conflicts, rewrite links and record deletions for sync, and going around them loses data.
+
+**How the plugin page and the store show it**: plugins that declare internal APIs carry a badge in Settings → Plugins (a stronger one for level two), and the detail page states the risk. Use `internalsVerified` to list the Forsion versions you checked (minor versions only, such as `"2.14"`). When the user's version isn't listed, the detail page says it wasn't checked on this version. That is a label, not a block.
+
+**When it fails**: errors that a plugin declaring internal APIs doesn't catch are counted against it. Three within a minute and Forsion turns it off and tells the user, who can turn it back on in the plugin page. A copy loaded for development in the sandbox is never turned off this way; its errors go to the console as usual.
+
+**Store listing**: level one is reviewed as usual. Level two needs an application: in the submission's internal APIs reason field, say which modules you need and why the public APIs are not enough. Review is per version, so each new version is reviewed again before users get it. The desktop app won't install an unapproved version from the official store. Development loads, manual installs and third-party store sources aren't affected.
+
+Check it with `node check-plugin.mjs <plugin folder>`: it reports use without declaring, declaring level two alone and reaching into React's internals, and lists the level-two modules the plugin takes.
+
 ## Removing commands and default shortcuts
 
 `ctx.registerCommand` returns a function that removes exactly this registration (2026-11-16+). Registering the same `id` again from the same plugin replaces the earlier command in place (title, action and shortcut all updated), and the replaced registration's remover no longer does anything. So a plugin can add and remove commands while it runs (one per enabled template, say) without being reloaded. Disabling the plugin still removes all of its commands. Older hosts return `undefined` and add a duplicate when an `id` is registered again, so write `off?.()` and register each `id` only once there.
