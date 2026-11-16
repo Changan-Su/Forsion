@@ -24,7 +24,7 @@ import { liftListItem, splitListItem } from '@milkdown/kit/prose/schema-list'
 import { NodeSelection, Selection, TextSelection } from '@milkdown/kit/prose/state'
 import type { Command, EditorState, Transaction } from '@milkdown/kit/prose/state'
 import type { EditorView } from '@milkdown/kit/prose/view'
-import type { Node as ProseNode, ResolvedPos } from '@milkdown/kit/prose/model'
+import type { MarkType, Node as ProseNode, ResolvedPos } from '@milkdown/kit/prose/model'
 import type { MilkdownPlugin } from '@milkdown/kit/ctx'
 import { classifyEmbed, isSoftSourceEmbed } from './embedLayer'
 import { foldedSectionAfter, headingFoldKey, isHiddenAt } from './headingFold'
@@ -36,6 +36,8 @@ import { commandsCtx } from '@milkdown/kit/core'
 import { toggleInlineCodeCommand } from '@milkdown/kit/preset/commonmark'
 import { toggleTaskTr } from '../blocks/markdown/taskList'
 import { buildBlockString } from '../blocks/markdown/mathLivePreview'
+import { markdownAutoPairEnabled } from '../blocks/markdown/autoPairPrefs'
+import { bodyPairOpenPlugin, composingNow } from '../blocks/markdown/bodyAutoPair'
 import { removeEmptyColumnTr } from './columns'
 import { calloutKey, calloutOf } from '../blocks/markdown/callout'
 
@@ -773,17 +775,78 @@ const PAIRS: Record<string, string> = {
   '(': ')', '[': ']', '{': '}', '<': '>', '"': '"', "'": "'", '`': '`',
   '（': '）', '【': '】', '「': '」', '《': '》', '“': '”', '‘': '’',
 }
-const wrapSelectionPlugin = $prose(
+/** Markdown 符号的包裹(Obsidian 的 autoPairMarkdown;开关「自动补全 Markdown 符号」,见 autoPairPrefs)。关掉 = 照旧替换选区。 */
+const MD_WRAP = new Set(['*', '_', '~', '=', '$', '%'])
+
+/** [from, to) 里的文字是否全带 type 这个 mark(有字才算)。 */
+function coveredBy(state: EditorState, from: number, to: number, type: MarkType): boolean {
+  let any = false
+  let all = true
+  state.doc.nodesBetween(from, to, (n) => {
+    if (!n.isText) return true
+    any = true
+    if (!type.isInSet(n.marks)) all = false
+    return true
+  })
+  return any && all
+}
+
+/** 选中文字后敲 Markdown 符号。`*` / `_`:Forsion 的强调是 mark 不是字面星号(字面落盘成 \*x\*),所以照 Obsidian
+ *  「再包一层」的手感递进:无 → 斜体 → 粗体 → 粗斜体(再敲不变)。`~`:先字面包一层(单个 `~` 是字面,I-03),
+ *  选区两边已经各有一个字面 `~` 时再敲 = 去掉这两个、改成删除线(否则 `~~x~~` 字面落盘被转义)。
+ *  `= $ %`:字面包一层,再敲一次就是 `==高亮==` / `$$公式$$` / `%%注释%%`(这三种在 Forsion 里本来就是正文文字)。
+ *  行内代码里的选区一律字面包。包完保持选中。 */
+function wrapMarkdown(view: EditorView, sel: TextSelection, ch: string): boolean {
+  const { state } = view
+  const { from, to } = sel
+  const marks = state.schema.marks
+  let inCode = false
+  state.doc.nodesBetween(from, to, (n) => {
+    if (n.isText && n.marks.some((m) => m.type.spec.code)) inCode = true
+    return true
+  })
+  if ((ch === '*' || ch === '_') && !inCode && marks.emphasis && marks.strong) {
+    const em = coveredBy(state, from, to, marks.emphasis)
+    const strong = coveredBy(state, from, to, marks.strong)
+    const tr = state.tr
+    if (!em && !strong) tr.addMark(from, to, marks.emphasis.create())
+    else if (em && !strong) tr.removeMark(from, to, marks.emphasis).addMark(from, to, marks.strong.create())
+    else if (!em && strong) tr.addMark(from, to, marks.emphasis.create())
+    view.dispatch(tr.setSelection(TextSelection.create(tr.doc, from, to)).scrollIntoView())
+    return true
+  }
+  const strike = marks.strike_through
+  if (ch === '~' && !inCode && strike) {
+    const $f = sel.$from
+    const $t = sel.$to
+    const esc = marks.amadeusEscaped
+    const literalTilde = (a: number): boolean =>
+      state.doc.textBetween(a, a + 1) === '~' && !(esc && state.doc.rangeHasMark(a, a + 1, esc))
+    if ($f.parentOffset > 0 && $t.parentOffset < $t.parent.content.size && literalTilde(from - 1) && literalTilde(to)) {
+      const tr = state.tr.delete(to, to + 1).delete(from - 1, from).addMark(from - 1, to - 1, strike.create())
+      view.dispatch(tr.setSelection(TextSelection.create(tr.doc, from - 1, to - 1)).scrollIntoView())
+      return true
+    }
+  }
+  const tr = state.tr.insertText(ch, to).insertText(ch, from)
+  view.dispatch(tr.setSelection(TextSelection.create(tr.doc, from + 1, to + 1)).scrollIntoView())
+  return true
+}
+
+export const wrapSelectionPlugin = $prose(
   (ctx) =>
     new Plugin({
       props: {
         handleTextInput: (view, from, to, text) => {
+          const md = MD_WRAP.has(text)
           const close = PAIRS[text]
-          if (!close || from === to) return false
+          // 组字中、组字刚提交(提交上来的字替换选区)都不包,同正文配对的 composingNow
+          if ((!close && !md) || from === to || composingNow(view)) return false
           const sel = view.state.selection
           if (!(sel instanceof TextSelection) || sel.empty) return false
           if (!sel.$from.sameParent(sel.$to)) return false // 跨块选区不包(会拆坏结构)
           if (sel.$from.parent.type.name === 'code_block') return false // 代码块里符号就是符号
+          if (md) return markdownAutoPairEnabled() ? wrapMarkdown(view, sel, text) : false
           if (text === '`' && view.state.schema.marks.inlineCode) return ctx.get(commandsCtx).call(toggleInlineCodeCommand.key)
           const tr = view.state.tr.insertText(close, to).insertText(text, from)
           tr.setSelection(TextSelection.create(tr.doc, from + 1, to + 1))
@@ -871,6 +934,7 @@ export const keyboardPlugins: MilkdownPlugin[] = [
   tableKeyPlugins, // 表格回车族(K-10):必须排在下面的 Enter 链之前,见 tableKeys.ts
   blockSelectionTypingPlugin,
   wrapSelectionPlugin,
+  bodyPairOpenPlugin, // 正文补闭合(整条 handleTextInput 链最后;跨过 / 成对退格在 MarkdownBlock 里排在最前,见 bodyAutoPair.ts)
   $prose(() =>
     keymap({
       Enter: enterCmd,

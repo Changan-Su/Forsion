@@ -201,6 +201,7 @@
     "check:spellctx": "node scripts/e2e-editor.cjs --check=unified-spellctx",
     "check:unifiedkeys": "node scripts/e2e-editor.cjs --check=unified-keys",
     "check:obsfeel": "node scripts/e2e-editor.cjs --check=obsidian-feel",
+    "check:autopair": "node scripts/e2e-editor.cjs --check=body-auto-pair",
     "check:imagecopy": "node scripts/e2e-editor.cjs --check=unified-imagecopy",
     "check:taskbox": "node scripts/e2e-editor.cjs --check=taskbox",
     "check:focuscost": "node scripts/e2e-editor.cjs --check=focus-cost",
