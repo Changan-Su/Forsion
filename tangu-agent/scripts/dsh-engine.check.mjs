@@ -1175,8 +1175,8 @@ const LIVE_SCENARIOS = {
     const NOFILES = 'Do not read files, list directories or run commands.';
 
     // 人设和技能:只凭交过去的指令回答。交接这几问不写「Reply with just …」:DSH 把指令目录当「工作区说明,不压过用户的
-    // 直接指示」包进请求,「只回那一句」和人设的「每条回复都署名」正面冲突,模型听谁全看当天(11-16 同一份 AGENTS.md
-    // 带 just 5/8、不带 8/8),这一项就成了掷硬币。要证的是人设交没交到,不是两条指示谁优先。
+    // 直接指示」包进请求,「只回那一句」和人设的「每条回复都署名」正面冲突,模型听谁说不准(11-16 几小时内从 0/12 摆到
+    // 约一半;同一份 AGENTS.md 带 just 5/8、不带 8/8),这一项就成了掷硬币。要证的是人设交没交到,不是两条指示谁优先。
     const d = await liveRun(sid, `${NO_TOOLS} Among the skills available to you there is one named tea-probe. What secret phrase does its description give?`, cfg, { modelId: JUDGE_MODEL, stopOn: onlyBridge([]) });
     record('handoff', '交接(真模型):人设和技能交过去了,模型只凭指令答得出', [
       ['这一轮跑完', d.done, d.error || ''],
