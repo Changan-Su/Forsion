@@ -28,10 +28,12 @@ import { SKILL_TOOL, WAIT_TOOL } from './toolServer.js';
 export const HANDOFF_SERVER_NAME = 'forsion';
 
 /** 不交的工具和原因。
- *  harness = 引擎自带的(读写文件、跑命令):交过去就是两套打架;loop = 只在 Tangu 自己的循环里有意义;
- *  screenshot = 靠截图的(这一步不支持,第三轮划给融合插件第 2 档);later-run = 会在以后起一轮这个 Agent 自己的 run
- *  (定时、子会话、讨论)—— 那些 run 今天报 agent_engine_elsewhere,排在多 Agent 那一步。 */
-export type NotHandedReason = 'harness' | 'loop' | 'screenshot' | 'later-run';
+ *  harness = 引擎自带的(读写文件、跑命令、看本机图片文件):交过去就是两套打架;loop = 只在 Tangu 自己的循环里有意义;
+ *  phone = 手机控制:要手机那端在线配合,交接这条路没验过,先不交;later-run = 会在以后起一轮这个 Agent 自己的 run
+ *  (定时、子会话、讨论)—— 那些 run 今天报 agent_engine_elsewhere,排在多 Agent 那一步。
+ *  截图类(浏览器、电脑控制、desk_screenshot、view_video、browser_task)第 2 档起交:图经工具桥回成 MCP image 内容
+ *  (toolServer 的 images),DSH 按它选的模型收不收图;跑得久的照旧回取结果的编号。 */
+export type NotHandedReason = 'harness' | 'loop' | 'phone' | 'later-run';
 export const NOT_HANDED: Readonly<Record<string, NotHandedReason>> = {
   read_file: 'harness', write_file: 'harness', edit_file: 'harness', multi_edit: 'harness', list_dir: 'harness', list_files: 'harness',
   apply_patch: 'harness', move_path: 'harness', copy_path: 'harness', delete_path: 'harness', search_files: 'harness', glob_files: 'harness',
@@ -41,7 +43,7 @@ export const NOT_HANDED: Readonly<Record<string, NotHandedReason>> = {
   load_tools: 'loop', use_skill: 'loop', todo_write: 'loop', todo_read: 'loop', exit_plan_mode: 'loop', ask_user: 'loop',
   self_brainstorm: 'loop', read_tool_output: 'loop', manage_harness: 'loop', review_loadout: 'loop', team_say: 'loop',
   session_status: 'loop', session_settings: 'loop', update_session_settings: 'loop',
-  view_image: 'screenshot', view_video: 'screenshot', desk_screenshot: 'screenshot', browser_task: 'screenshot',
+  view_image: 'harness',
   manage_automation: 'later-run', manage_schedule: 'later-run', set_next_wake: 'later-run', start_discussion: 'later-run',
   wait_discussion: 'later-run', start_project_session: 'later-run', start_session: 'later-run', hand_off_task: 'later-run',
   send_to_session: 'later-run',
@@ -50,7 +52,7 @@ export const NOT_HANDED: Readonly<Record<string, NotHandedReason>> = {
 export function notHandedReason(t: Pick<ToolDef, 'name'> & { capabilities?: ToolDef['capabilities'] }): NotHandedReason | undefined {
   const r = NOT_HANDED[t.name];
   if (r) return r;
-  if (t.name.startsWith('browser_') || t.name.startsWith('phone_') || isComputerUseTool(t)) return 'screenshot';
+  if (t.name.startsWith('phone_')) return 'phone';
   // 和取结果那个工具同名的(插件 / MCP 工具恰好叫这个)交不过去:桥上这个名字归取结果用
   if (t.name === WAIT_TOOL || t.name === SKILL_TOOL) return 'loop';
   return undefined;
@@ -229,7 +231,10 @@ export function bridgeGuidance(serverName: string, budgetSeconds: number, handed
     + '- Every Forsion tool call is checked against this agent\'s approval mode in Forsion; the user may have to approve it there.\n'
     + `- A call that takes longer than about ${budgetSeconds} seconds (waiting for the user's approval, or a long job such as delegating or making an image) answers with a pending ticket. `
     + `Then call \`${p}${WAIT_TOOL}\` with the exact arguments it gives, again until the result arrives. Never repeat the original call, and never end your turn while a ticket is pending.\n`
-    + '- Not available in this harness yet: browser, computer and phone control, scheduling and automations, and Tangu\'s own loop tools (its todo list, plan mode, load_tools, use_skill). '
+    + '- Some Forsion tools return screenshots or other images (browser and computer control, desk_screenshot, view_video). '
+    + 'If such an image reaches you only as a note that it is unavailable, the model you are running on cannot see images: do not click or type based on a screen you cannot see; tell the user they need a model that can see images for this. '
+    + 'To look at an image file, read it with your own file tools.\n'
+    + '- Not available in this harness yet: phone control, scheduling and automations, and Tangu\'s own loop tools (its todo list, plan mode, load_tools, use_skill). '
     + (skillsVia === 'tool' ? `Load your skills with \`${p}${SKILL_TOOL}\` instead (they are listed under "Your skills").` : 'Your skills are in your skills folder instead.')
     + (handed.length ? '' : '\n- No Forsion tools are enabled for this agent right now.');
 }

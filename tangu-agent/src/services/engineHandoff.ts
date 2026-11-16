@@ -284,7 +284,7 @@ export async function prepareEngineAgentHandoff(p: EngineAgentHandoffInput) {
   const skills = p.resident ? await bridgeSkills(def) : undefined;
   const toolServer = await createRunToolServer(toolCtx, handed, {
     name: HANDOFF_SERVER_NAME, memorySlug: resolveMemorySlug(def), agentSlug: slug,
-    cards: { publish: p.publish, contentOffset: p.contentOffset }, budgetMs: BRIDGE_CALL_BUDGET_MS,
+    cards: { publish: p.publish, contentOffset: p.contentOffset }, budgetMs: BRIDGE_CALL_BUDGET_MS, images: true,
     ...(skills ? { skills } : {}),
   });
   if (p.resident) {

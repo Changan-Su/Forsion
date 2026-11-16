@@ -14,6 +14,12 @@
  *
  * DSH 对同名同参的连续调用在第 3、5、8 次提醒模型「换个办法或收尾」(dsh-repeat-tool-reminder),
  * 所以取结果的参数里带一个递增的 attempt,每次回话直接给出下一次的确切参数。
+ *
+ * 截图类工具(融合方案第 2 档,`images`):工具经 ctx.collectImage 交回的图,随这次调用的结果一起回成 MCP 的 image 内容
+ * (标准协议,不靠 DSH 的插件接口)。DSH 收不收看它此刻选的模型:声明了能看图的(0.2.2 自带目录里的 deepseek-flash)
+ * 存成附件、放进工具结果交给模型;看不了图的换成一行「image unavailable」—— 都是 DSH 自己做的
+ * (DSH2Forsion tests/check-images.mjs 实测)。别的 App 的屏幕这类不可信图,前言贴在图前面一起回(同 services/toolImages.ts)。
+ * 图只回给模型,不进卡片、不落库(落库的仍是文字)。
  */
 import { createServer } from 'node:http';
 import { readFileSync, readdirSync } from 'node:fs';
@@ -54,6 +60,28 @@ export interface RunToolServerOptions {
   budgetMs?: number;
   /** 这个 Agent 的技能(交给常驻引擎时):桥上多一个 SKILL_TOOL,按名字读 SKILL.md 和它旁边的文件清单。只读,不过审批。 */
   skills?: ReadonlyArray<{ name: string; dir: string }>;
+  /** 收工具交回的图(ctx.collectImage),随结果回成 MCP image 内容。交接的桥开;插件任务那条照旧只回文字。 */
+  images?: boolean;
+}
+
+/** 一次调用最多带回几张图(同 Tangu 循环每轮的上限 MAX_TOOL_IMAGES_PER_ROUND)。 */
+export const MAX_BRIDGE_IMAGES_PER_CALL = 8;
+type BridgeImage = { url: string; untrusted?: string };
+const IMAGE_DATA_URL = /^data:(image\/(?:png|jpe?g|webp|gif));base64,([A-Za-z0-9+/]+={0,2})$/i;
+
+/** 一次调用的结果 → MCP 的 content:先是文字;每张图前面,不可信来源的前言换了才再写一次。不是内联 PNG / JPEG / WebP / GIF 的图说一句、不回。 */
+export function bridgeContent(out: { text: string; images?: readonly BridgeImage[] }): Array<{ type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string }> {
+  const content: Array<{ type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string }> = [{ type: 'text', text: out.text }];
+  let preface: string | undefined;
+  for (const img of out.images ?? []) {
+    const m = IMAGE_DATA_URL.exec(String(img?.url ?? ''));
+    if (!m) { content.push({ type: 'text', text: '[An image from this tool could not be passed on: it is not an inline PNG, JPEG, WebP or GIF.]' }); continue; }
+    const p = typeof img.untrusted === 'string' && img.untrusted.trim() ? img.untrusted.trim() : undefined;
+    if (p && p !== preface) content.push({ type: 'text', text: p });
+    preface = p;
+    content.push({ type: 'image', data: m[2], mimeType: m[1].toLowerCase().replace('image/jpg', 'image/jpeg') });
+  }
+  return content;
 }
 
 /** 读一个技能:SKILL.md 正文 + 同一文件夹里其余文件的绝对路径(模型用自己的读文件工具去读)。 */
@@ -77,7 +105,7 @@ export function readSkillForBridge(dir: string, name: string): string {
     + (files.length ? `\n\nOther files in this skill (read them with your own file tools when the skill tells you to):\n${files.map((f) => `- ${f}`).join('\n')}` : '');
 }
 
-type Outcome = { text: string; isError: boolean };
+type Outcome = { text: string; isError: boolean; images?: BridgeImage[] };
 interface Ticket { id: string; tool: string; phase: 'approval' | 'running'; job: Promise<Outcome>; settled?: Outcome; attempt: number }
 
 const sleep = (ms: number, signal: AbortSignal): Promise<void> => new Promise((resolve) => {
@@ -139,11 +167,20 @@ export async function createRunToolServer(ctx: ToolContext & { runId: string }, 
       unsettled.set(id, { name: wireName(name), startedAt, source });
       opts.cards.publish('tool_call', { id, name: wireName(name), arguments: call.function.arguments, startedAt, source });
     }
+    // 这次调用交回的图(截图类工具;只在开了 images 的桥上收)
+    const images: BridgeImage[] = [];
+    const collectImage = opts.images
+      ? (img: { url: string; name?: string; untrusted?: string }) => {
+          if (img && typeof img.url === 'string' && img.url && images.length < MAX_BRIDGE_IMAGES_PER_CALL) {
+            images.push({ url: img.url, ...(typeof img.untrusted === 'string' && img.untrusted ? { untrusted: img.untrusted } : {}) });
+          }
+        }
+      : undefined;
     const finish = (text: string, isError: boolean, extra: { metadata?: any; artifactPath?: string } = {}): Outcome => {
       // 截断只给交接的桥(卡片 + 落库);插件任务那条路原样回,别把它原来能拿到的长输出截掉
       const capped = opts.cards && text.length > MAX_TEXT_CHARS ? `${text.slice(0, MAX_TEXT_CHARS)}\n\n[Output truncated: ${text.length} characters in total.]` : text;
       settleCard(id, wireName(name), startedAt, source, capped, isError, extra);
-      return { text: capped, isError };
+      return { text: capped, isError, ...(images.length ? { images: [...images] } : {}) };
     };
     const job = (async (): Promise<Outcome> => {
       enter();
@@ -158,7 +195,7 @@ export async function createRunToolServer(ctx: ToolContext & { runId: string }, 
         if (!allowed().has(name)) return finish('Tool is no longer available.', true);
         onPhase('running');
         const approved = decision.argsOverride ? { ...call, function: { ...call.function, arguments: JSON.stringify(decision.argsOverride) } } : call;
-        const result = await executeTool(approved, { ...toolCtx, toolCallId: id });
+        const result = await executeTool(approved, { ...toolCtx, toolCallId: id, ...(collectImage ? { collectImage } : {}) });
         return finish(String(result.result), !!result.isError, { metadata: result.metadata, artifactPath: result.artifactPath });
       } catch (e: any) {
         const stopped = life.signal.aborted;
@@ -171,7 +208,7 @@ export async function createRunToolServer(ctx: ToolContext & { runId: string }, 
   };
 
   /** 限时等一个结果;没等到就把它挂成编号(或更新编号),回一段告诉模型怎么取的话。 */
-  const awaitOrTicket = async (job: Promise<Outcome>, ticket: Ticket | null, make: () => Ticket): Promise<{ text: string; isError: boolean }> => {
+  const awaitOrTicket = async (job: Promise<Outcome>, ticket: Ticket | null, make: () => Ticket): Promise<Outcome> => {
     if (!budget) return job;
     // 这次等待自己的计时:任一边先到就撤掉另一边的计时器和监听,别一轮攒一堆
     const wait = new AbortController();
@@ -223,7 +260,7 @@ export async function createRunToolServer(ctx: ToolContext & { runId: string }, 
         const t = tickets.get(String(args.ticket ?? ''));
         if (!t) return { isError: true, content: [{ type: 'text', text: `Unknown or already collected ticket: ${String(args.ticket ?? '')}.` }] };
         const out = await awaitOrTicket(t.job, t, () => t);
-        return { isError: out.isError, content: [{ type: 'text', text: out.text }] };
+        return { isError: out.isError, content: bridgeContent(out) };
       }
       if (opts.skills?.length && name === SKILL_TOOL) {
         const want = String(args.name ?? '').trim();
@@ -241,7 +278,7 @@ export async function createRunToolServer(ctx: ToolContext & { runId: string }, 
         void job.then((o) => { t.settled = o; });
         tickets.set(t.id, t); ticketRef = t; return t;
       });
-      return { isError: out.isError, content: [{ type: 'text', text: out.text }] };
+      return { isError: out.isError, content: bridgeContent(out) };
     });
     try {
       let raw = ''; for await (const b of req) { raw += b; if (raw.length > 1024 * 1024) throw new Error('Request too large'); }

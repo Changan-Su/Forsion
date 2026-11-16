@@ -188,7 +188,7 @@ async function main() {
     await win.locator('[data-engine-handoff]').first().scrollIntoViewIfNeeded().catch(() => {})
     await shot(win, '10-profile-handoff')
     check('① Harness 卡写明交过去什么(人设 / 记忆 / 技能 / Forsion 的工具 / 审批)', ['人设', '记忆', '技能', 'Forsion 的工具', '审批'].every((w) => handoffText.includes(w)), handoffText)
-    check('① 也写明还交不过去的(浏览器 / 电脑 / 手机控制、定时和自动化、团队和 @)', ['浏览器', '定时', '团队'].every((w) => limitsText.includes(w)), limitsText)
+    check('① 写明截图类怎么交(浏览器 / 电脑控制、模型要能看图)和还交不过去的(手机控制、定时和自动化、团队和 @)', ['浏览器', '看图', '手机控制', '定时', '团队'].every((w) => limitsText.includes(w)), limitsText)
 
     // ② 新对话里选它,让它记住一件事
     check('前置:进 Tangu', await enterSpace(win, 'tangu'))

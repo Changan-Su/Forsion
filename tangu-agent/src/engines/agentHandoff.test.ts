@@ -23,10 +23,13 @@ describe('交哪些工具', () => {
       tool('cu_click', { capabilities: { concurrencyKey: COMPUTER_USE_CONCURRENCY_KEY } }), tool('generate_image'), tool('delegate'),
       tool('forsion_wait'),
     ]);
-    expect(handedToolNames(tools)).toEqual(['remember', 'amadeus_list_events', 'generate_image', 'delegate']);
+    // 第 2 档:浏览器、电脑控制交过去(图经工具桥回);看本机图片归引擎自己读;手机控制还不交
+    expect(handedToolNames(tools)).toEqual(['remember', 'amadeus_list_events', 'browser_navigate', 'cu_click', 'generate_image', 'delegate']);
     expect(notHandedReason({ name: 'read_file' })).toBe('harness');
+    expect(notHandedReason({ name: 'view_image' })).toBe('harness');
     expect(notHandedReason({ name: 'load_tools' })).toBe('loop');
-    expect(notHandedReason({ name: 'browser_tabs' })).toBe('screenshot');
+    expect(notHandedReason({ name: 'phone_open' })).toBe('phone');
+    for (const name of ['browser_tabs', 'browser_task', 'desk_screenshot', 'view_video']) expect(notHandedReason({ name })).toBeUndefined();
     expect(notHandedReason({ name: 'manage_automation' })).toBe('later-run');
   });
 });
