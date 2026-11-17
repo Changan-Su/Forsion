@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildProbe, formatCwdListing, hashOf } from './promptHead.js';
+import { buildProbe, currentDateSection, formatCwdListing, hashOf } from './promptHead.js';
 
 const head = (extra = '') => [
   { name: 'system:instructions', text: 'You are Tangu.' },
@@ -73,5 +73,31 @@ describe('cwd listing (B2)', () => {
     expect(out).not.toContain('f20.txt');
     expect(out).not.toMatch(/bytes/);
     expect(formatCwdListing(many, 60).split('\n')).toHaveLength(25); // 未超上限时不加尾行
+  });
+});
+
+describe('currentDateSection(借鉴 chat-demo ③)', () => {
+  const sat = new Date(2026, 10, 15, 9, 30); // 本地时钟 2026-11-15 周日
+
+  it('日期按天、带时区名与 UTC 偏移;同一天不同时刻字节一致(护前缀缓存)', () => {
+    const a = currentDateSection(sat, { timeZone: 'Asia/Shanghai' });
+    expect(a).toMatch(/^## Current Date\nToday is Sunday, 2026-11-15 \(time zone Asia\/Shanghai, UTC[+-]\d{2}:\d{2}\)\. For the precise current time, call get_datetime\.$/);
+    expect(currentDateSection(new Date(2026, 10, 15, 22, 5), { timeZone: 'Asia/Shanghai' })).toBe(a);
+    expect(a).not.toMatch(/09:30|9:30/);
+  });
+
+  it('没给时区名(非 host run / 取不到)时与旧措辞逐字一致', () => {
+    expect(currentDateSection(sat)).toBe('## Current Date\nToday is Sunday, 2026-11-15 (local timezone). For the precise current time, call get_datetime.');
+  });
+
+  it('界面语言只认 zh / en,没有快照或其它值不写这段', () => {
+    expect(currentDateSection(sat, { uiLocale: 'zh' })).toContain("## Interface Language\nThe user's app interface is set to Chinese.");
+    expect(currentDateSection(sat, { uiLocale: 'en' })).toContain('reply in English.');
+    expect(currentDateSection(sat, { uiLocale: 'fr' })).not.toContain('Interface Language');
+    expect(currentDateSection(sat, {})).not.toContain('Interface Language');
+  });
+
+  it('给模型看的这段是英文', () => {
+    expect(currentDateSection(sat, { timeZone: 'Asia/Shanghai', uiLocale: 'zh' })).not.toMatch(/[\u4e00-\u9fff]/);
   });
 });

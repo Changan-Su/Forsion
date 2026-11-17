@@ -113,7 +113,7 @@ import { buildProjectMemoryLayers, resolveProjectMemory } from './projectMemory.
 import { computerHistoryDigest, computerHistoryRecallHide } from './computerHistory.js';
 import { takeWorkspaceUploads, withUploadRefs } from './workspaceUploads.js';
 import './remoteTaint.js'; // 首次远程染色 → 落进 run 行(input.remoteTainted),会话级污点判据据此跨重启认得(P1 · M1A)
-import { buildProbe, formatCwdListing, type ProbeSegment } from './promptHead.js';
+import { buildProbe, currentDateSection, formatCwdListing, processTimeZone, type ProbeSegment } from './promptHead.js';
 import { channelHub } from '../channels/hub.js';
 import { markIfAsked, onRunSettled as onChildRunSettled, onRunStart as onChildRunStart } from './childSessions.js';
 
@@ -2264,12 +2264,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // 8a2) 当前日期(易变区):只到"天"粒度、刻意不含时刻——同一天内字节恒定,护前缀缓存
     //     (同 8c 日程段的纪律)。此前系统提示零日期,模型只能靠 get_datetime 现问,不问就用
     //     训练截止年份编造(2026-08-21 天气会话实测:首条搜索词带"2025-?")。精确时刻仍走 get_datetime。
-    {
-      const now = new Date();
-      const weekday = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][now.getDay()];
-      const ymd = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-      systemParts.push(`## Current Date\nToday is ${weekday}, ${ymd} (local timezone). For the precise current time, call get_datetime.`);
-    }
+    //     11-17(借鉴 chat-demo ③):host run 补时区名与 UTC 偏移(云端的钟不代表用户,照旧写 local timezone)、
+    //     界面语言(ui_settings.locale);位置不做,也不挪出系统提示。
+    systemParts.push(currentDateSection(new Date(), { timeZone: execMode === 'host' ? processTimeZone() : undefined, uiLocale: uiSettings?.locale?.value }));
 
     // 8b) host:注入工作区(cwd)顶层文件清单,让 agent 主动认知现有文件(修「工作区文件意识弱」)。
     //     ephemeral——随系统块每 run 重建,绝不落库。sandbox/云端不在此预拉(保留懒 hydrate),靠环境段提示按需 list_files。

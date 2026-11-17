@@ -52,3 +52,33 @@ export function formatCwdListing(listing: string, cap = 20): string {
     .sort((a, b) => { const x = listingNameOf(a); const y = listingNameOf(b); return x < y ? -1 : x > y ? 1 : 0; });
   return lines.slice(0, cap).join('\n') + (lines.length > cap ? `\n… (+${lines.length - cap} more)` : '');
 }
+
+const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const LOCALE_NAMES: Record<string, string> = { zh: 'Chinese', en: 'English' };
+
+/** 进程所在时区名(IANA);取不到时返回 undefined,调用方回落到「local timezone」。 */
+export function processTimeZone(): string | undefined {
+  try { return Intl.DateTimeFormat().resolvedOptions().timeZone || undefined; } catch { return undefined; }
+}
+
+/**
+ * 系统提示里的「当前日期 + 界面语言」两段(借鉴 chat-demo ③)。
+ * 只到「天」粒度、刻意不含时刻 —— 同一天内字节恒定,护前缀缓存;精确时刻仍走 get_datetime。
+ * 时区名 + UTC 偏移与日期、get_datetime 同一个口径(引擎进程的本地时钟);偏移只在夏令时切换那天变一次。
+ * 只有 host run(引擎和用户在同一台机器上)才传时区名;云端 / 沙箱的钟是服务器的(同 amadeus.ts pastStartNote 的口径)。
+ * 界面语言来自渲染端 ui_settings 快照的 locale(zh / en);渠道会话等没有快照的 run 不写这段。
+ */
+export function currentDateSection(now: Date, opts: { timeZone?: string; uiLocale?: string } = {}): string {
+  const weekday = WEEKDAYS[now.getDay()];
+  const ymd = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  const off = -now.getTimezoneOffset();
+  const utc = `UTC${off < 0 ? '-' : '+'}${String(Math.floor(Math.abs(off) / 60)).padStart(2, '0')}:${String(Math.abs(off) % 60).padStart(2, '0')}`;
+  // 没给时区名(非 host run:进程的钟是服务器的,不代表用户)→ 原样保留旧措辞,不把服务器时区当成用户的写进提示。
+  const zone = opts.timeZone ? `time zone ${opts.timeZone}, ${utc}` : 'local timezone';
+  let out = `## Current Date\nToday is ${weekday}, ${ymd} (${zone}). For the precise current time, call get_datetime.`;
+  const lang = opts.uiLocale ? LOCALE_NAMES[opts.uiLocale] : undefined;
+  if (lang) {
+    out += `\n\n## Interface Language\nThe user's app interface is set to ${lang}. Reply in the language the user writes in; when a message gives no clear signal (only a link, code, or a file), reply in ${lang}.`;
+  }
+  return out;
+}
