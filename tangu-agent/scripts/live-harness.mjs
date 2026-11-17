@@ -448,6 +448,10 @@ OPT_IN.add('marketplace'); OPT_IN.add('marketplacechat'); // marketplacechat:同
 //   --extend-plugin <npm pack 解出来的、已签名的 Extend 目录> + TANGU_LIVE_CLOUD_URL=<server scripts/marketplace-fixture.ts>
 //   + TANGU_LIVE_CLOUD_TOKEN=<payload {"userId":"owner"} 的假 JWT>。负对照:给一份改过一个字节的包 → 插件拿不到 ctx.cloud、工具不出现 → 红。
 KEYS.push('storeupdate', 'storeupdatechat'); OPT_IN.add('storeupdate'); OPT_IN.add('storeupdatechat');
+// agentfeedback(11-15):Agent 碰到 Forsion 自己的问题时起草反馈(Extend 引擎插件 agent-feedback 的 feedback_draft,chat 面要官方签名)。
+//   --extend-plugin <已签名、解包的 Extend 目录>。正例:用户说 Forsion 报错、请它反馈 → 起草一次、不说已发送;
+//   负对照两条:用户自己的代码报错、模型服务商限流 → 都不起草。负对照:给一份改过一个字节的包 → chat 面看不到工具 → 正例红。
+KEYS.push('agentfeedback'); OPT_IN.add('agentfeedback');
 const ONLY = new Set(opt('only', process.env.TANGU_LIVE_ONLY || KEYS.filter((k) => !OPT_IN.has(k)).join(',')).split(',').map((s) => s.trim()).filter(Boolean));
 const TTFT_ROUNDS = Number(opt('ttft-rounds', process.env.TANGU_LIVE_TTFT_ROUNDS || 5));
 const SELF_ROUNDS = Number(opt('rounds', 3)); // selfmodel:每轮一个新 agent,出通过率
@@ -1076,8 +1080,9 @@ if (BLUEBIRD_SRC) {
   cpSync(BLUEBIRD_SRC, join(shared, 'plugins/bluebird'), { recursive: true, filter: p => !p.split('/').some(x => ['.git','node_modules','outputs','__pycache__'].includes(x)) });
 }
 
-if (ONLY.has('storeupdate') || ONLY.has('storeupdatechat')) {
+if (ONLY.has('storeupdate') || ONLY.has('storeupdatechat') || ONLY.has('agentfeedback')) {
   const bundle = opt('extend-plugin', '');
+  if (ONLY.has('agentfeedback') && (!bundle || !existsSync(join(bundle, 'tangu-plugins/agent-feedback/tangu-plugin.json')))) throw new Error('--only agentfeedback needs --extend-plugin <signed Extend bundle with tangu-plugins/agent-feedback>');
   if (!bundle || !existsSync(join(bundle, 'tangu-plugins/store-update/tangu-plugin.json')) || !existsSync(join(bundle, 'SIGNATURE'))) throw new Error('--extend-plugin must point to a signed, packed Forsion Extend bundle with tangu-plugins/store-update');
   cpSync(bundle, join(shared, 'plugins/forsion-extend'), { recursive: true });
 }
@@ -2804,6 +2809,24 @@ try {
     const ok = !ev.error && ev.done && names.indexOf('store_check_update') >= 0 && names.indexOf('store_check_update') < names.indexOf('store_submit_update') && officialText && always && submitted && staged;
     writeFileSync(join(OUT, `${key}-evidence.json`), JSON.stringify({ ev, approval: ap, item: row }, null, 2));
     return { ok, detail: `calls=${names.join('>')}; approval always=${always} officialText=${officialText}; submitted=${submitted}; staged=${staged}`, output: `${ev.content}\n\n[approval preview]\n${ap?.preview || '(none)'}`, toolCalls: ev.toolCalls, ttftMs: ttft(ev), tokens: tokensOf(ev) };
+  });
+
+  await scenario('agentfeedback', 'agentfeedback Forsion 的问题起草反馈(chat 面),自己的代码报错 / 服务商限流不起草', async () => {
+    const chat = { preset: 'chat' };
+    const pos = await run(`live-agentfeedback-pos-${Date.now()}`, '我刚才在 Forsion 里让你建一个每天早上 8 点的定时任务，连着两次都失败了，报错是「schedule store write failed: SQLITE_BUSY: database is locked (schedules.db, waited 5000 ms)」，当时也没有别的任务在跑。这应该是 Forsion 自己的问题吧？帮我把它反馈给 Forsion 团队。', 300000, chat, 'desktop/2.14.2');
+    const drafts = pos.toolResults.filter((r) => r.name === 'feedback_draft');
+    let draft = null; try { draft = JSON.parse(drafts.find((r) => !r.isError)?.result || 'null'); } catch { /* not json */ }
+    const claimedSent = /已(经)?(发送|提交|发给|反馈给)|已经反馈|sent it|submitted/i.test(pos.content) && !/(还没|没有|尚未|并未|不会).{0,6}(发送|提交|发出)|点.{0,4}发送|发不发/.test(pos.content);
+    const posOk = !pos.error && pos.done && drafts.length === 1 && !!draft?.ok && draft.kind === 'bug' && /[\u4e00-\u9fff]/.test(draft.title || '') && !!draft.fingerprint && !claimedSent;
+    const negCode = await run(`live-agentfeedback-neg-code-${Date.now()}`, '我自己写的 Python 脚本一跑就报 KeyError: \'user_id\'，代码就两行：d = {} 和 print(d[\'user_id\'])。帮我看看怎么回事。', 240000, chat, 'desktop/2.14.2');
+    const negRate = await run(`live-agentfeedback-neg-rate-${Date.now()}`, '刚才对话中途弹了一个错误：「429 Too Many Requests: rate limit exceeded for model gpt-6-luna」。这是什么意思，我该怎么办？', 240000, chat, 'desktop/2.14.2');
+    const used = (ev) => ev.toolCalls.includes('feedback_draft');
+    const negOk = !negCode.error && negCode.done && !used(negCode) && !negRate.error && negRate.done && !used(negRate);
+    writeFileSync(join(OUT, 'agentfeedback-evidence.json'), JSON.stringify({ pos, negCode, negRate, draft }, null, 2));
+    return { ok: posOk && negOk,
+      detail: `正例:起草 ${drafts.length} 次${draft ? ` kind=${draft.kind} fp=${draft.fingerprint} 标题「${draft.title}」` : ''}${claimedSent ? ' ⚠说成已发送' : ''} | 负对照:自己的代码${used(negCode) ? ' ⚠起草了' : '没起草'}、限流${used(negRate) ? ' ⚠起草了' : '没起草'}`,
+      output: `【正例】\n${pos.content}\n\n【自己的代码】\n${negCode.content}\n\n【限流】\n${negRate.content}`,
+      toolCalls: [...pos.toolCalls, '|', ...negCode.toolCalls, '|', ...negRate.toolCalls], ttftMs: ttft(pos), tokens: tokensOf(pos) + tokensOf(negCode) + tokensOf(negRate) };
   });
 
   for (const [key, cfg] of [['marketplace', {}], ['marketplacechat', { preset: 'chat' }]]) await scenario(key, `Forsion marketplace native plugin cards${cfg.preset ? ' (chat preset)' : ''}`, async () => {

@@ -439,6 +439,10 @@ export interface PluginAppApi extends BlockSurfaceApi {
    *  插件停用时宿主也收。通道认不出账号时,带 `expectedAccountId` 的调用必须回 `account-changed`、不发。
    *  旧宿主没有:`ctx.app.provideFeedbackChannel?.(…)`。 */
   provideFeedbackChannel?(submit: ((input: { description: string; sessionLogJson?: string; sessionLogName?: string; expectedAccountId?: string }) => Promise<{ ok: boolean; id?: string | null; error?: string; attachmentSkipped?: boolean }>) | null): boolean
+  /** Agent 起草反馈的附件(2026-11-15+,Forsion Extend 的 feedback_draft 结果卡用):按那次工具调用的 id 找到所在会话,
+   *  打一份和反馈窗同口径的附件 JSON(已过凭据过滤);`result` = 那次调用的结果原文(调用 id 撞了时靠它认准;认不准回 null);`errors` = 带上同一条回复里失败的工具调用(参数与结果原文)。
+   *  只对首方内置包生效,别的插件拿到 null;找不到这次调用所在的会话也回 null。旧宿主没有:`ctx.app.buildFeedbackReport?.(…)`。 */
+  buildFeedbackReport?(opts: { callId: string; result?: string; diagnostics?: boolean; conversation?: boolean; errors?: boolean }): Promise<{ json: string; filename: string; bytes: number; missing: string[]; truncated: boolean; errorCount: number } | null>
   /** Official account inbox provider (first-party Forsion Extend only). Cloud IDs use
    * `cloud:`; read/archive/delete and rewards remain server-authoritative. Null revokes
    * this plugin's channel; the host also revokes it on disable/reload. Older hosts omit it. */

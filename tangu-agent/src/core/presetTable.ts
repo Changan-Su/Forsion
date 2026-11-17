@@ -98,12 +98,14 @@ export const CHAT_PRESET_DEFERRED: ReadonlySet<string> = new Set([
   // 商店投稿更新(官方 Forsion Extend 捆绑包里的引擎插件提供,见 CHAT_PRESET_OFFICIAL_PLUGIN):查 / 提交作者自己条目的新版本。
   // 提交那件每次由用户在卡上确认(approval:'always');定义与目录行文案(英文)在插件里。
   'store_check_update', 'store_submit_update',
+  // Agent 起草反馈(官方 Forsion Extend 捆绑包的引擎插件 agent-feedback):碰到 Forsion 自己的问题时起草一张反馈卡,发不发由用户在卡上定。
+  'feedback_draft',
   'manage_widget', // 小组件:可见性由 widget.v1 握手管(见 manageWidget.ts)
   'forsion_guide', // 只读:Forsion 自家产品速查(用户问「Forsion Git 是什么」多半就在聊天里;D23 关的是技能体系,首方只读工具照放)
 ]);
 
 /** chat 面里由官方插件(而不是核心)提供的工具。第三方插件注册同名工具照旧被 chat 面拒。 */
-export const CHAT_PRESET_OFFICIAL_PLUGIN: ReadonlySet<string> = new Set(['store_check_update', 'store_submit_update']);
+export const CHAT_PRESET_OFFICIAL_PLUGIN: ReadonlySet<string> = new Set(['store_check_update', 'store_submit_update', 'feedback_draft']);
 
 /** D11 形态:chat 落在 host execMode 时(桌面 standalone 的 rootless 会话仍是 sandbox,这里是纵深防御),
  *  search_files/glob_files 按 cwd 爬用户真实磁盘且由模型发起 → 一并拒;generate_image 是 mode:'both' 却在 host 下
