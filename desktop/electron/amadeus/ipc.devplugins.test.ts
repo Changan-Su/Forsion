@@ -292,3 +292,13 @@ it('⚠️同一个包的普通目录 + 商店安装(market-<uuid>):只列商店
   expect(sources.map((s) => s.id).sort()).toEqual([store, 'other'])
   expect(sources.find((s) => s.id === store)).toMatchObject({ packageId: 'demo-suite', version: '0.5.0', code: 'ctx.store = 1' })
 })
+
+it('开发副本的 id 等于商店安装的包 id:同样遮住商店那份(插件作者开发自己已上架的插件)', async () => {
+  const store = 'market-00000000-0000-4000-8000-00000000000b'
+  await installed(store, { ...DEV_MANIFEST, version: '0.5.0' }, 'ctx.store = 1')
+  await project('demo-dev', { devLoad: true, manifest: DEV_MANIFEST, code: 'ctx.fromDev = 1' })
+  await boot()
+  const sources = await list()
+  expect(sources.map((s) => s.id)).toEqual(['demo'])
+  expect(sources[0]).toMatchObject({ dev: true, code: 'ctx.fromDev = 1', shadowsInstalled: true })
+})

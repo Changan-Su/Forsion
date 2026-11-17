@@ -25,6 +25,7 @@ import { getProduct } from '../productsRegistry'
 import { externalCreations } from '../productTrust'
 import { effectivePluginId } from '../../shared/products'
 import { supersededPluginDirs } from '../supersededPlugins'
+import { MARKET_INSTALL_DIR } from '../../shared/pluginAliases'
 import { isDevLoaded, readDevLoads } from '../devLoadStore'
 import { builtinPluginIds, bundleOff, bundleRestartPending, lockedPluginIds } from '../builtinPlugins'
 import { logActivity, logNoteEdit } from '../activityLog'
@@ -825,7 +826,9 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
         }
         // 开发副本正顶着这个 id:告诉渲染层「你遮住了一份安装版」(Studio 要显示,卸载也要据此拒绝),
         // 必须赶在下面那句 seen 去重之前 —— 开发态 id 已经在 seen 里了,晚一行就永远标不上。
-        const shadowed = devById.get(id)
+        // 商店安装按 market-<UUID> 跑、包 id 记在 manifest 里:开发副本的 id 等于这个包 id 也算遮住它(插件作者开发自己已上架的插件),
+        // 否则两份同跑、随包 Space 同 id 先到先得 —— 和本地包 + 商店版并存是同一个病。
+        const shadowed = devById.get(id) ?? (MARKET_INSTALL_DIR.test(e.name) && typeof m.id === 'string' ? devById.get(m.id) : undefined)
         if (shadowed) { shadowed.shadowsInstalled = true; continue }
         if (seen.has(id)) continue
         // 门禁:apiVersion 不匹配 / 应用太旧 → 列出但不可加载(blocked 徽章),code 不读不发。

@@ -144,6 +144,7 @@ import { createSampler, nativeProbe } from './activeWindow'
 import { KNOWN_APPS } from '../shared/knownApps'
 import { bindRecipeToPlugin, effectivePluginId } from '../shared/products'
 import { supersededPluginDirs } from './supersededPlugins'
+import { MARKET_INSTALL_DIR } from '../shared/pluginAliases'
 import { BROWSER_PARTITION, GUEST_ALLOWED_PERMISSIONS } from '../shared/browser'
 import { acceptPluginSurface, PLUGIN_SURFACE_PERMISSIONS, surfaceNavigationAllowed } from '../shared/pluginSurface'
 import { registerPtyIpc } from './pty'
@@ -1228,7 +1229,8 @@ async function readSpacesList(opts: { dev?: boolean } = {}): Promise<Array<{ slu
         if (!cand) continue // manifest id 与目录名皆非法 → 与拒载口径一致
         pid = cand
       } catch { continue } // 无 manifest.json = 非插件目录,跳过
-      if (shadowed.has(pid)) continue
+      // 开发副本遮住同 id 的安装版;商店安装按包 id 认(插件列表同口径,见 amadeus/ipc.ts readExternalPlugins)
+      if (shadowed.has(pid) || (MARKET_INSTALL_DIR.test(p.name) && typeof manifestId === 'string' && shadowed.has(manifestId))) continue
       await bundled(pid, join(proot, p.name), manifestId)
     }
   } catch { /* plugins 目录不存在 = 无捆绑包 */ }
