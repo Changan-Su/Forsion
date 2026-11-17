@@ -6,6 +6,8 @@
 //   cuwebcovered:窗口被完全盖住,页面进 hidden。按压照样落地,但页面不再把无障碍变化送出来、也不重绘。helper 读之前先问页面一次
 //     (插件 0.7.2 起),不提窗口就读得到新状态:模型按一次就该看到结果,替身全程不到前台。
 // 判据只看页面自己收到的事件和采样到的前台,不信模型自述。
+// 按钮名用中性的 Save draft / Mark reviewed(11-17 定):Publish / Approve 这类会让模型先停下来问人(约三分之一的次数),
+// 那是对的行为,但这几个场景测的是按压送不送得到,不是确认习惯。
 // ⚠️cuwebdead 会真的动鼠标、把替身拿到前台。负对照 = --cu-plugin 指向没有这处改动的包,cuweb 须红(前台被抢);
 // cuwebcovered 的负对照 = 同一份包带 PI_COMPUTER_USE_WEB_FLUSH=0 跑,须红在「没提窗口」。
 import { execFile, spawn } from 'node:child_process';
@@ -22,24 +24,24 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 export const CU_WEB_KEYS = ['cuweb', 'cuwebdead', 'cuwebcovered'];
 
 const PROMPTS = {
-  cuweb: '电脑上开着一个叫 Draft Desk 的窗口。帮我点一下里面的 Publish draft 按钮,然后告诉我页面上的状态变成了什么。',
-  cuwebdead: '电脑上开着一个叫 Draft Desk 的窗口。帮我点一下里面的 Approve 按钮,要等页面上的状态变成 approved 才算完,然后告诉我结果。',
-  cuwebcovered: '电脑上开着一个叫 Draft Desk 的窗口,被别的窗口挡住了。帮我点一下里面的 Publish draft 按钮,然后告诉我页面上的状态变成了什么。',
+  cuweb: '电脑上开着一个叫 Draft Desk 的窗口。帮我点一下里面的 Save draft 按钮,然后告诉我页面上的状态变成了什么。',
+  cuwebdead: '电脑上开着一个叫 Draft Desk 的窗口。帮我点一下里面的 Mark reviewed 按钮,要等页面上的状态变成 reviewed 才算完,然后告诉我结果。',
+  cuwebcovered: '电脑上开着一个叫 Draft Desk 的窗口,被别的窗口挡住了。帮我点一下里面的 Save draft 按钮,然后告诉我页面上的状态变成了什么。',
 };
 
 const PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Draft Desk</title>
 <style>body{font:15px -apple-system,sans-serif;margin:16px}button{padding:8px 14px;margin:6px 6px 6px 0}</style></head><body>
-<h1>Draft Desk</h1><p>Weekly release notes</p>
-<button id="publish">Publish draft</button><button id="approve">Approve</button>
+<h1>Draft Desk</h1><p>Grocery list</p>
+<button id="save">Save draft</button><button id="review">Mark reviewed</button>
 <p id="status">Status: pending</p>
 <script>
 const post = (o) => fetch('/log', { method: 'POST', body: JSON.stringify(o), keepalive: true })
 const status = document.getElementById('status')
 let hovered = false
-const approve = document.getElementById('approve')
-approve.addEventListener('mouseenter', () => { hovered = true })
-document.getElementById('publish').addEventListener('click', (e) => { status.textContent = 'Status: published'; post({ type: 'click', id: 'publish', trusted: e.isTrusted, vis: document.visibilityState }) })
-approve.addEventListener('click', (e) => { if (hovered) status.textContent = 'Status: approved'; post({ type: 'click', id: 'approve', trusted: e.isTrusted, hovered }) })
+const review = document.getElementById('review')
+review.addEventListener('mouseenter', () => { hovered = true })
+document.getElementById('save').addEventListener('click', (e) => { status.textContent = 'Status: saved'; post({ type: 'click', id: 'save', trusted: e.isTrusted, vis: document.visibilityState }) })
+review.addEventListener('click', (e) => { if (hovered) status.textContent = 'Status: reviewed'; post({ type: 'click', id: 'review', trusted: e.isTrusted, hovered }) })
 addEventListener('load', () => post({ type: 'load' }))
 document.addEventListener('visibilitychange', () => post({ type: 'vis', vis: document.visibilityState }))
 </script></body></html>`;
@@ -143,23 +145,23 @@ export async function cuWebLive({ key, api, run, OUT, electron, timeoutMs, token
   const viaAct = calls.includes('act_ui'); // jev_ui 的结果不转述这些提示,这条路上只看页面收到了什么
   const checks = {};
   if (key === 'cuweb') {
-    checks['按钮只按了一次,页面收到一次点击'] = clicks('publish').length === 1;
+    checks['按钮只按了一次,页面收到一次点击'] = clicks('save').length === 1;
     checks['全程没抢前台(替身一次都没到前台)'] = samples >= 8 && tookFront === 0;
-    checks['模型照实说了 published'] = /published/i.test(ev.content);
+    checks['模型照实说了 saved'] = /saved/i.test(ev.content);
   } else if (key === 'cuwebcovered') {
     const pressResult = results.find((r) => /went through accessibility/.test(r));
-    checks['按下时页面是 hidden'] = clicks('publish')[0]?.vis === 'hidden';
-    checks['按钮只按了一次,页面收到一次点击'] = clicks('publish').length === 1;
+    checks['按下时页面是 hidden'] = clicks('save')[0]?.vis === 'hidden';
+    checks['按钮只按了一次,页面收到一次点击'] = clicks('save').length === 1;
     checks['没提窗口(替身一次都没到前台,页面最后还是 hidden)'] = samples >= 8 && tookFront === 0 && events.filter((e) => e.type === 'vis').at(-1)?.vis === 'hidden';
-    checks['模型照实说了 published'] = /published/i.test(ev.content);
-    if (viaAct) checks['按压那次的结果里直接读得到新状态,没标成没确认'] = !!pressResult && /Status: published/.test(pressResult) && !/Do not press again now/.test(pressResult);
+    checks['模型照实说了 saved'] = /saved/i.test(ev.content);
+    if (viaAct) checks['按压那次的结果里直接读得到新状态,没标成没确认'] = !!pressResult && /Status: saved/.test(pressResult) && !/Do not press again now/.test(pressResult);
   } else {
-    const approve = clicks('approve');
-    checks['第一下是 AXPress,页面收到了点击但没有悬停'] = approve[0]?.hovered === false;
-    checks['最后状态是 approved(真实点击带着悬停)'] = approve.at(-1)?.hovered === true;
-    checks['没有反复乱按(最多 3 次)'] = approve.length >= 2 && approve.length <= 3;
+    const review = clicks('review');
+    checks['第一下是 AXPress,页面收到了点击但没有悬停'] = review[0]?.hovered === false;
+    checks['最后状态是 reviewed(真实点击带着悬停)'] = review.at(-1)?.hovered === true;
+    checks['没有反复乱按(最多 3 次)'] = review.length >= 2 && review.length <= 3;
     checks['采样看得到前台变化(真实点击把替身拿到了前台)'] = tookFront > 0;
-    checks['模型照实说了 approved'] = /approved/i.test(ev.content);
+    checks['模型照实说了 reviewed'] = /reviewed/i.test(ev.content);
   }
   if (key !== 'cuwebcovered' || viaAct) checks['结果里给了 AXPress 那句提示'] = pressNote;
   checks['没绕去 shell / AppleScript'] = bypass.length === 0;
