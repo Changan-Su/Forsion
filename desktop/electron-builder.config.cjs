@@ -14,8 +14,14 @@ process.env.ELECTRON_BUILDER_7Z_FILTER = 'BCJ'
 const builtinBundles = require('./electron/builtinBundles.json')
 const { bundleExtend, artifactSuffix, updateChannel } = require('./build/distribution.cjs')
 const bundledDirName = (pkg) => pkg.replace(/^@[^/]+\//, '')
-// A Developer ID certificate was handed to electron-builder → sign + notarize the mac app (see `mac` below).
-const macDeveloperId = Boolean(process.env.CSC_LINK || process.env.CSC_NAME)
+// Developer ID certificate AND complete notarization credentials → sign + notarize the mac app (see `mac` below).
+// Either half missing keeps the ad-hoc path: a Developer ID signature without notarization is still blocked by
+// Gatekeeper, and a half-configured CI would otherwise fail late inside electron-builder.
+const macDeveloperId = Boolean(
+  (process.env.CSC_LINK || process.env.CSC_NAME) &&
+    ((process.env.APPLE_API_KEY && process.env.APPLE_API_KEY_ID && process.env.APPLE_API_ISSUER) ||
+      process.env.APPLE_KEYCHAIN_PROFILE),
+)
 
 const id = process.env.FORSION_PRODUCT || 'forsion'
 const product = JSON.parse(readFileSync(join(__dirname, 'products', `${id}.json`), 'utf8'))
@@ -156,9 +162,9 @@ module.exports = {
   mac: {
     target: 'dmg',
     icon: 'build/icon.icns',
-    // Developer ID signing + notarization only when a signing certificate is supplied (CI: CSC_LINK from the
-    // MAC_CSC_LINK secret; local: CSC_LINK or CSC_NAME). Without one, identity stays null and afterPack's ad-hoc
-    // signature is what ships, exactly as before. Notarization credentials: APPLE_API_KEY / _KEY_ID / _ISSUER.
+    // Developer ID signing + notarization only when macDeveloperId (certificate: CSC_LINK from the MAC_CSC_LINK
+    // secret, or CSC_NAME locally; notarization: APPLE_API_KEY / _KEY_ID / _ISSUER or APPLE_KEYCHAIN_PROFILE).
+    // Otherwise identity stays null and afterPack's ad-hoc signature is what ships, exactly as before.
     identity: macDeveloperId ? undefined : null,
     hardenedRuntime: true,
     entitlements: 'build/entitlements.mac.plist',
