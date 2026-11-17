@@ -625,7 +625,8 @@ html.rb-pointer-dragging, html.rb-pointer-dragging * { cursor: grabbing !importa
   left: 0; right: 0; top: 50%; height: 1px; transform: translateY(-50%);
 }
 .dockview-theme-lcl .dv-sash-container .dv-sash:hover::after,
-.dockview-theme-lcl .dv-sash-container .dv-sash:active::after {
+.dockview-theme-lcl .dv-sash-container .dv-sash:active::after,
+.dockview-theme-lcl .dv-sash-container .dv-sash[data-lcl-dragging]::after {
   background: color-mix(in srgb, var(--accent-ink) 55%, var(--border));
 }
 /* 邻侧为主区浮卡时线与热区贴到卡缘(±8px 与主区卡 padding 同步;data-lcl-shift 由 sashAffordance 校准,
@@ -644,6 +645,10 @@ html.rb-pointer-dragging, html.rb-pointer-dragging * { cursor: grabbing !importa
 .dockview-theme-lcl .dv-split-view-container.dv-vertical > .dv-sash-container > .dv-sash.dv-enabled {
   cursor: row-resize;
 }
+/* 侧栏 sash 由 LayoutCoordinator 自己拖(指针捕获):拖动中整页保持缩放光标、不选中文字,鼠标划过正文 / iframe 也不变 */
+html[data-lcl-sash-drag], html[data-lcl-sash-drag] * { user-select: none !important; -webkit-user-select: none !important; }
+html[data-lcl-sash-drag='col'], html[data-lcl-sash-drag='col'] * { cursor: col-resize !important; }
+html[data-lcl-sash-drag='row'], html[data-lcl-sash-drag='row'] * { cursor: row-resize !important; }
 /* tick 刻度:垂直于分界线的短把手,单例 fixed 定位跟随鼠标(JS 只改 left/top 与 show/h 类) */
 .lcl-sash-tick {
   position: fixed;

@@ -26,6 +26,14 @@ describe('workspace allocation', () => {
     expect(solveLayout(tree,{width:800,height:600},{},{left:300}).boxes.get('l')!.width).toBe(0)
     expect(layoutHints({minWidth:NaN,minHeight:-1})).toMatchObject({minWidth:320,minHeight:180})
   })
+  it('never writes a requested sidebar size back into the tree minimums', () => {
+    const tree = branch('width','root',[leaf('l','left',220),leaf('a'),leaf('b'),leaf('r','right',240),])
+    const before = JSON.stringify(tree)
+    // A remembered sidebar wider than its minimum is a request, not a new minimum (otherwise it can only grow).
+    solveLayout(tree,{width:1600,height:900},{},{left:360,right:376})
+    expect(JSON.stringify(tree)).toBe(before)
+    expect(minimum(tree)).toEqual({width:220+320+320+240,height:180})
+  })
   it('uses the drawer curve monotonically without overshoot', () => {
     const ease=bezier([0.32,0.72,0,1]);let previous=0
     for(let i=0;i<=100;i++){const value=ease(i/100);expect(value).toBeGreaterThanOrEqual(previous);expect(value).toBeLessThanOrEqual(1);previous=value}

@@ -51,10 +51,27 @@ async function run(){
   await page.evaluate(()=>probe.ws.getState().toggleSidebar('left'));await page.waitForTimeout(250)
   await page.evaluate(()=>probe.ws.getState().toggleSidebar('left'));await page.waitForTimeout(250)
   assert((await state()).groups.filter(g=>g.loc==='main').every((g,i)=>Math.abs(g.w-dragged[i])<2),'sidebar cycle restores the user-dragged main proportion')
+  // Sidebar sashes: both directions, live content every frame, no reflow on release (11-17: sides were grow-only and content waited for release).
+  const snap=()=>page.evaluate(()=>Object.fromEntries(probe.ws.getState().api.groups.filter(g=>g.api.isVisible).map(g=>{const o=document.querySelector(`.dv-render-overlay[data-lcl-visible="true"][data-lcl-group="${g.id}"]`)?.getBoundingClientRect(),c=g.element.querySelector('.dv-content-container').getBoundingClientRect();return[g.id,{loc:g.panels[0]?.params.__loc,w:g.api.width,h:g.api.height,off:o?Math.max(Math.abs(o.x-c.x),Math.abs(o.y-c.y),Math.abs(o.width-c.width),Math.abs(o.height-c.height)):99}]})))
+  const sashAt=loc=>page.evaluate(loc=>{const g=probe.ws.getState().api.groups.find(g=>g.panels[0]?.params.__loc===loc),r=g.element.getBoundingClientRect(),vert=loc==='bottom',edge=loc==='left'?r.right:loc==='right'?r.left:r.top;let best=null;for(const s of document.querySelectorAll('.dv-sash')){const b=s.getBoundingClientRect();if(vert?(b.width<100||b.height>20):(b.height<100||b.width>20))continue;const d=Math.abs((vert?b.top+b.height/2:b.left+b.width/2)-edge);if(!best||d<best.d)best={d,x:b.left+b.width/2,y:b.top+b.height/2,id:g.id}}return best},loc)
+  const dragSide=async(loc,dx,dy=0)=>{const s=await sashAt(loc),before=await snap(),frames=[];await page.mouse.move(s.x,s.y);await page.mouse.down();for(let i=1;i<=6;i++){await page.mouse.move(s.x+dx*i/6,s.y+dy*i/6);await page.evaluate(()=>new Promise(r=>requestAnimationFrame(r)));frames.push(await snap())}await page.mouse.up();await page.waitForTimeout(300);return{id:s.id,before,frames,after:await snap()}}
+  const axisOf=loc=>loc==='bottom'?'h':'w'
+  for(const [loc,dx,dy,grow] of [['left',110,0,true],['left',-80,0,false],['right',-100,0,true],['right',80,0,false],['bottom',0,-70,true],['bottom',0,50,false]]){
+   if(loc==='bottom'&&!(await state()).groups.some(g=>g.loc==='bottom'&&g.visible)){await page.evaluate(()=>probe.ws.getState().toggleSidebar('bottom'));await page.waitForTimeout(400)}
+   const r=await dragSide(loc,dx,dy),k=axisOf(loc),last=r.frames.at(-1)
+   assert(grow?r.after[r.id][k]>r.before[r.id][k]+20:r.after[r.id][k]<r.before[r.id][k]-20,`${loc} sidebar ${grow?'grows':'shrinks'} from its sash`,{before:r.before[r.id],after:r.after[r.id]})
+   assert(r.frames.every(f=>Object.values(f).every(v=>v.off<=1)),`${loc} drag keeps every View on its group each frame`,r.frames.map(f=>Object.values(f).map(v=>v.off)))
+   assert(r.frames.some(f=>Math.abs(f[r.id][k]-r.before[r.id][k])>5&&Math.abs(f[r.id][k]-r.after[r.id][k])>5),`${loc} drag resizes live, not only on release`,r.frames.map(f=>f[r.id][k]))
+   assert(Object.keys(r.after).every(id=>Math.abs(r.after[id].w-last[id].w)<=1&&Math.abs(r.after[id].h-last[id].h)<=1),`${loc} release keeps the dragged layout`,{last,after:r.after})
+  }
+  await page.evaluate(()=>{const ws=probe.ws.getState();ws.toggleSidebar('bottom');ws.api.groups.find(g=>g.panels[0]?.params.__loc==='main').api.setActive()});await page.waitForTimeout(400)
+  // Opening the bottom panel adds its own branch keys; the Main row that the person dragged keeps its proportion.
+  const preferred=await page.evaluate(()=>probe.coordinator().exportRatios())
+  assert(Object.keys(ratios).every(k=>JSON.stringify(preferred[k])===JSON.stringify(ratios[k])),'sidebar drags leave the Main proportion alone',{ratios,preferred})
   await page.setViewportSize({width:780,height:700});await page.waitForTimeout(350)
   const narrow=await state()
   assert(narrow.scrollWidth>narrow.viewport&&narrow.groups.filter(g=>g.loc==='main').every(g=>g.w>=320),'small window scrolls all splits side by side',narrow)
-  assert(JSON.stringify(await page.evaluate(()=>probe.coordinator().exportRatios()))===JSON.stringify(ratios),'constrained geometry preserves preferred ratios')
+  assert(JSON.stringify(await page.evaluate(()=>probe.coordinator().exportRatios()))===JSON.stringify(preferred),'constrained geometry preserves preferred ratios')
   await page.evaluate(()=>document.querySelector('.wb-workspace-viewport').scrollLeft=200)
   assert(await page.evaluate(()=>document.querySelector('.probe-ribbon').getBoundingClientRect().x===0),'Ribbon remains fixed while workspace scrolls')
   for(const zoom of [1.1,1.25]){

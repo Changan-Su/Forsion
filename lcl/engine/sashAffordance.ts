@@ -118,14 +118,15 @@ export function installSashAffordance(): () => void {
   scheduleCalibrate() // 挂载时 dockview 可能尚未 ready,首轮也走防抖
 
   document.addEventListener('pointermove', onMove, { passive: true })
-  document.addEventListener('pointerdown', onDown, { passive: true })
+  // Capture phase: LayoutCoordinator keeps sidebar sash presses from reaching Dockview (it drives that drag itself).
+  document.addEventListener('pointerdown', onDown, { passive: true, capture: true })
   document.addEventListener('pointerup', onUp, { passive: true })
   return () => {
     mo.disconnect()
     window.clearTimeout(calTimer)
     cancelAnimationFrame(raf)
     document.removeEventListener('pointermove', onMove)
-    document.removeEventListener('pointerdown', onDown)
+    document.removeEventListener('pointerdown', onDown, { capture: true })
     document.removeEventListener('pointerup', onUp)
     tick.remove()
   }
