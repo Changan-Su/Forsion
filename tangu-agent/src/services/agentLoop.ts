@@ -2652,6 +2652,10 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           id: m.id, sessionId, content: m.content, modelId,
           attachments: Array.isArray(m.attachments) && m.attachments.length ? m.attachments : null,
         });
+      }
+      // The batch has already left the steer queue. Save every message before a
+      // photo decoder can reject one, so later accepted messages remain recoverable.
+      for (const m of msgs) {
         const originals = normalizeImageAttachments(m.attachments);
         if (originals.length) { imageInputs = originals; imageInputsSentAt = undefined; } // 改图工具要原图,不缩
         const images = await fitUserImages(originals);
