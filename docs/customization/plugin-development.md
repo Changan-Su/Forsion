@@ -44,6 +44,8 @@ ctx.listCapabilities?.includes('tree' | 'items' | 'rename')
 
 沙箱里还有这些(2026-11-03 起):只装这个插件,内置插件也只装它在 `requiresPlugins` 里点名的那几个(比如依赖 Forsion Extend 就写上它),左侧功能条上只有这个插件自己的 Space,一开就停在它的第一个 Space 上;窗口标题写着「Forsion 沙箱 · 插件名」。Agent 能在沙箱里像人一样用插件:读出界面上有哪些按钮和输入框,点击、输入、按键、滚动、切 Space,每一步做完都看一眼截图和这期间的控制台、弹出的提示;要选文件时它先把插件目录里的测试文件备好,点「选择文件」不弹系统框。发起沙箱的那个对话,右侧摘要栏多一张沙箱卡:缩略图是 Agent 最近截的那一张(点它打开沙箱窗口),下面是视图数、Space、控制台错误数和最近一步;沙箱停了卡片变灰,点「重新启动」就再开起来。
 
+沙箱的新变化(2026-11-15 起,需要同期的新版桌面):Agent 读界面时能看到开关是不是按下、输入框和笔记是不是只读(比如笔记处在阅读模式),点开关之前会先看清状态;通知卡挡住要点的地方时,先把通知关掉再点;插件命令弹出自己的对话框、一时没跑完时,Agent 不会重跑,而是读窗口、接着在对话框里操作;Agent 还能打开这个插件在「设置 → 插件」里的详情页(沙箱里另开的一扇设置窗口),在那里填设置、点保存。
+
 引擎插件的工具用 `capabilities.approval` 声明动手前要不要问用户。不写 = 只读,不问;`'command'` = 与跑命令同一档,「询问我批准」时每次问,用户点过「总允许」或开了完全通行就不再问;`'always'` = 每次调用都由用户本人在卡上确认 —— 完全通行、「总允许」、用户写的放行规则都跳不过,聊天会话与云端会话照样弹卡,自动化、Muse 后台和远程会话里直接被拒。花掉用户的东西、替用户对外发出内容这类动作用 `'always'`;读和写拆成两个工具名,只给写的那个声明。卡上显示的是这次调用的参数,所以一次调用只做一件事。
 
 只给官方插件的三样(2026-10-27 起):`ctx.cloud`(以用户的 Forsion 账号请求云端,只放商店「我的条目」与提交更新两个接口)、工具的 `capabilities.approvalPreview`(插件自己写审批卡上的文案)、以及进聊天(Chat)会话的工具面。官方 = 插件在 Forsion 签名的捆绑包里(包根 `SIGNATURE` 用引擎内置的公钥验过,插件的清单和入口都签在里面)。第三方插件拿到的 `ctx.cloud` 是 `undefined`,写了 `approvalPreview` 也被忽略(卡上照旧是这次调用的参数),工具也不进聊天会话。
@@ -71,7 +73,7 @@ ctx.ui.mountControl(el, { type: 'segmented' | 'select', value, options, onChange
 
 - `ctx.ui.contextMenu` 的行可以带 `icon` 和 `shortcut`,列表里可以放 `{ separator: true }` 和 `{ section: '小节' }`,第一个参数可以是 `{ anchor: 按钮, align: 'end' }`,安卓上同一份数据是原生底部抽屉;更早的宿主会静默丢掉这些字段。
 - 按钮下方的小面板用 `ctx.ui.popover(按钮, { mount(el) })`。
-- 图标只有一张词表:`space.json` 的 `icon`、列表、菜单、设置、视图标签、控件、空态都认同一份名字,自己的按钮用 `ctx.ui.icon(名字, { size })` 拿一枚 `<svg>`,写错名字会在控制台提示一次(带最接近的名字)。
+- 图标只有一张词表:`space.json` 的 `icon`、列表、菜单、设置、视图标签、控件、空态都认同一份名字,自己的按钮用 `ctx.ui.icon(名字, { size })` 拿一枚 `<svg>`(某个名字第一次用时字形在微任务里补上,要多份就多调几次,别克隆),写错名字会在控制台提示一次(带最接近的名字)。
 - 列表源加 `empty: { icon, title, line, action }`:在你自己的 Space 里侧栏不再写「暂无内容」,手机整屏列表直接画这份空态;主区用 `ctx.ui.mountEmptyState(el, …)` 画同一个。
 - 讲网页的卡片(发布出去的链接、本地文件、在跑的服务)用 `ctx.ui.mountWebCard`(2026-10-28 起):缩略图由宿主截,和宿主自己给 HTML、本地服务画的卡是同一张。
 
@@ -79,6 +81,8 @@ ctx.ui.mountControl(el, { type: 'segmented' | 'select', value, options, onChange
 ctx.ui.mountWebCard(el, { name, status, address, note, thumbnail, actions, menu })
 ```
 
+- 插件自己在本机起了带网页界面的服务(DSH 融合插件的工作台)时,用 `ctx.ui.mountWebSurface(el, { url })`(2026-11-15 起,只在桌面)把它整页放进视图:是 Forsion 管的顶层页面,服务自己的登录 cookie 能用;地址只收本机,cookie 存在插件自己的分区,页面只能在同源里跳,不给 Forsion 接口。返回的 `navigate('#…')` 只换页面当前地址的 # 那段(同一个页面里跳、不重载)。
+- 给跑在外部引擎上的 Agent 加 Harness 卡上的行(运行时、更新通道……)和对话右键菜单里的项,用 `ctx.registerEngineHarness?.({ engineId, rows, sessionActions })`(2026-11-15 起,桌面);Forsion 自己只画「运行在」那一行。这些菜单项也能当引擎提示的按钮:常驻引擎(`ctx.registerResidentEngine`)在 ACP 管道上发 `_forsion/notice` 扩展通知时,Forsion 把那句话放进对话的审批托盘,`action.id` 对上的那一项就是它的按钮(DSH 融合插件的「DSH 在工作台里等你批准」+「打开工作台」)。常驻引擎还可以给 `modelSeesImages(model)`(2026-11-16 起):回这场会话此刻的模型收不收图,交过去的电脑控制只有它回 `true` 才跑,别的情况 Forsion 告诉模型「这个模型看不见屏幕」。`registerEngineHarness` 还可以带 `railView`(2026-11-16 起):你自己注册的 View 的 id;主区那场对话跑在这个引擎上时,Forsion 把它补在右栏「详情 / 文件 / 大纲」后面,不抢前台,换到别处跑的对话就关掉;View 里用 `ctx.tangu.subscribeAgentStatus` 跟着当前对话,所以主区钉住另一场的标签不补这一页(DSH 融合插件的右栏 DSH 页)。
 - 视图头行用 `ctx.ui.setViewHead(el, { title })`(左标题、右按钮,不必先有视图模式)。
 - 样式表用 `ctx.addStyle(css)`,停用、重载时宿主会摘掉。
 - 文案用 `ctx.i18n.define({ zh, en })` 拿到 `t(key, vars)`;列表源标题、动作名、视图标题、菜单、对话框、控件、空态都收 `() => t('key')` 或 `{ zh, en }`,用户切语言时宿主画的部分自己重算(字符串照旧在注册那一刻定格)。
@@ -277,11 +281,172 @@ ctx.ui?.mountSelectionBar?.(root, { tools, source, ask, watch })
 
 接管主页的那个核心插件另有一组主页专用接口（`ctx.home`：卡里的内容由宿主画进插件的格子、主页摆放的读写、「编辑主页」命令），普通插件拿不到，也申请不到。
 
+## 新建 Agent 与导入聊天记录（2026-11-16 起）
+
+「从别的 AI 搬家」一类插件可以替你新建一个 Agent，再把导出文件里的旧对话写成这个 Agent 名下的会话：点开就是原来的对话，可以接着聊。插件必须在说明文件里声明 `agentImport` 才拿得到（`ctx.tangu.createAgent` / `ctx.tangu.importSessions`），插件详情页那一行会多一项「新建 Agent、导入聊天记录」。
+
+- **写在哪台设备上**：桌面写进本机引擎，手机和网页写进云端，不跨设备同步。在桌面导入的对话不会出现在手机上，要在手机上用就在手机上再导一次。
+- **只追加，不覆盖**：同一来源、同一条对话再导一次会被认成「已有」，原会话一字不动；你在里面接着聊过的内容不会被旧记录盖掉。
+- **保留原样**：会话用原来的标题和时间，按原时间排在列表里，不冒到最上面，也没有未读点；导入不触发起标题、记忆整理这些后台任务。
+- **会话的形状**：和「新建 Chat」一样（不挂项目），归在指定的 Agent 名下，不进它的私聊。
+- 时间一律毫秒；一次可以交很多条，宿主自己分批写，每写完一批回调一次进度。出错不抛，返回 `{ ok: false, error, results }`，已经写进去的那几批列在 `results` 里。
+
+接口细节见插件开发技能的能力表（`ctx.tangu.createAgent` / `ctx.tangu.importSessions` 那一行）。
+
 ## 插件自带的 MCP、hooks 与文件事件
 
 插件可以随包带上自己的 MCP server(只限在本机跑的那种),装好、启用之后 Tangu 就多了这些工具,停用插件就一起停掉。设置 → MCP 里会列出它们,写着来自哪个插件;要关掉,在插件设置里停用这个插件。这些工具和用户自己接的 MCP 一样缺省按需加载:每次请求只带一行目录(工具名 + 描述第一行),AI 要用时先装上再调,所以描述第一行要能单独说清这个工具做什么;每轮都要用的 server 在声明里写 `"deferLoading": false` 就一直带着。插件也可以带 hook,在会话开始、工具跑完、一次回答结束时收到通知,用来做审计、归档这类事;这种 hook 只能看,拦不住任何操作,也不能往对话里加内容。设置 → Hooks 里同样列出它们,标着「只观察」。
 
 插件还能收到笔记库里的文件事件:新建、删除、在 Forsion 里改名或移动、被别的程序或 Tangu 改动,以及换库。反链、自动整理这类插件靠它跟上库里的变化,不用一遍遍重新扫描。接口细节见插件开发技能的「插件自带的 MCP server 与 hooks」和「库级文件事件」两节;插件命令给 Tangu 交回查询结果的写法在「`invoke`:把一条命令开给 agent」一节。
+
+## 库里的文件夹、文件时间、改名与移动（2026-11-16 起）
+
+插件可以建文件夹、读文件的大小和时间、改名和移动库里的文件，做法和你在文件树里操作一样：改名或移动笔记时，库里指向它的 `[[链接]]` 跟着改，开着它的编辑器跟着走，笔记的子笔记一起挪。这几个方法都要有打开的库；旧宿主没有，用可选链判断。
+
+```js
+await ctx.app.createFolder?.('Plugins/my-plugin/Archive')
+const info = await ctx.app.stat?.('Notes/Idea.md')        // { kind, size, mtime, ctime } 或 null
+const moved = await ctx.app.movePath?.('Notes/Idea.md', 'Plugins/my-plugin/Archive')
+const renamed = await ctx.app.renamePath?.(moved, 'Idea (done)')
+```
+
+- `stat` 给出是文件还是文件夹、字节数、修改时间和创建时间（毫秒；文件系统不记创建时间时为 `null`），路径不存在或没开库时给 `null`。网页版拿不到文件时间，那里没有这个方法。
+- `renamePath` 的新名字不带文件夹，漏写的 `.md`、`.db` 这类后缀会补回去，改名改不了文件类型；`movePath` 的目标文件夹必须已经存在，空串表示库根。两者都返回新的路径。
+- 插件自己的东西直接改：工作文件夹里的文件，以及这个插件本次运行里自己建出来的文件和文件夹（用 `writeFile`、`writeBytes` 写出的新文件，`createFolder` 建的文件夹）。改别的文件之前，Forsion 会先问你一次（「允许」/「取消」，焦点在「取消」上）；你点了取消，插件收到 `user_declined` 错误，什么都不会改。
+- 不做的：移动多维表（`.db`）或含多维表的文件夹、改名改掉文件类型、给图片和 PDF 改名、单独挪笔记的子笔记文件夹（`.fd`）、移到不存在的文件夹。文件已经挪过去、链接却没改完时，报错里写明文件现在的位置。
+
+## 模板与新笔记（2026-11-16 起）
+
+Forsion 自己就有模板：库里 `templates/` 文件夹里的笔记，插入时替换 `{{date}}`、`{{date:格式}}`、`{{time}}`、`{{title}}`（格式读 `.obsidian/templates.json`）；日记的文件夹、命名和模板读设置或 `.obsidian/daily-notes.json`。做 Templater 一类插件、或者「某个文件夹里的新笔记套某个模板」的插件，接进这一套，不要另做一个模板选择器。
+
+模板处理器在宿主替换变量之前拿到模板原文，按注册顺序一个接一个处理；返回 `null` 表示不改，抛错则这次不插、提示里写着插件名；处理到一半插件被停用或重载，就当这一个没改，后面的处理器照常接着跑。等处理器的时候换了库、换了窗格或笔记，这次就不插。`folders()` 往模板选择器里加文件夹。它管两处：在模板选择器里选模板插入（`kind` 为 `'insert'`），以及新建日记（`'daily'`）。
+
+```js
+const off = ctx.registerTemplateProcessor?.({
+  id: 'tp',
+  name: 'Templater',
+  folders: () => ['Templates'],
+  process: async (source, { templatePath, targetPath, kind }) => render(source, targetPath),
+})
+```
+
+新笔记的初始内容：用户新建一篇空笔记时，Forsion 在写盘之前先问插件要内容，第一个给出非 `null` 内容的插件，内容和这次新建一起写进去，编辑器一打开就是它。会问的地方：所有「新建笔记」入口（包括插件调用 `ctx.app.createPage()`，调用的那个插件自己的提供方也会被问）、在文件夹里新建、子笔记、在快速切换器里新建、点开还不存在的 `[[链接]]`，以及没设日记模板时的新日记；不问的只有：插件自己用 `writeFile`、`writeBytes` 或文件创建器写的文件，多维表里加的行，同步下来的文件。插件可以弹框问用户，等得久了 Forsion 会显示「「插件名」正在准备这篇笔记…」并带「取消」；取消或 10 分钟没有回答，就和以前一样建一篇空笔记。
+
+- `signal` 在 Forsion 不再等这个插件时中止：点了取消、到了 10 分钟、换了库、插件被停用或重载、笔记已经建好。它一中止，插件就该关掉自己的弹框；之后才来的回答会被忽略。
+- 等的时候换了库：这篇笔记不建，并弹提示说明原因。
+- 等的时候你去了别的窗格或别的笔记：笔记照样建好，但不会把你拉回去打开它 —— 「新建笔记」会弹一条「已新建「…」」并带「打开」按钮；子笔记的链接照样插进父笔记。
+
+```js
+ctx.registerNoteBirth?.({
+  id: 'folder-templates',
+  initial: async ({ path, folder, signal }) => (folder.startsWith('Journal') ? render(journalTemplate, path) : null),
+})
+```
+
+两个方法都返回撤销函数，插件停用时也会自动撤掉。旧宿主没有这两个方法。别用「收到新建文件事件再 `writeFile` 写进去」来代替：实测打开着的编辑器看不到这次写入，用户一打字保存，模板就被挪进一份「冲突」副本。
+
+## 往笔记里插内容（2026-11-16 起）
+
+`ctx.app.insertMarkdownAt` 往当前笔记里插一段 Markdown，比原来的 `insertMarkdown` 多三样：`where: 'caret'` 插在光标所在的那一行里（内容只有一段时；选中了文字就像打字一样替换它）；`cursorMarker` 是你写在内容里的一串标记，插完 Forsion 把它删掉、光标落在那里；插不进去时告诉你原因。每次插入单独算一步撤销。
+
+```js
+const page = ctx.app.getPage()
+const r = ctx.app.insertMarkdownAt?.(page.token, 'Hello {{cursor}}', { where: 'caret', cursorMarker: '{{cursor}}' })
+// r = { ok: true } 或 { ok: false, reason: 'stale-token' | 'no-note' | 'empty' | 'read-only' | 'no-editor' }
+```
+
+- `read-only`：笔记在阅读模式或被锁定，什么也没插，可以提示用户切回编辑。`no-editor`：编辑器还没准备好，或者在源码模式。`stale-token`：用户已经换了一篇笔记，或插件被停用、重载了。
+- 标记放在行首的 `#`、`-` 这类语法前面会改变 Markdown 结构，这时宿主照原文插入、不放光标。
+- 旧版块笔记没有光标，`'caret'` 退成插到末尾。旧宿主没有这个方法时退回 `insertMarkdown`。
+
+编辑器扩展（`ctx.registerEditorExtension`）拿到的是 Forsion 编辑器自己的 ProseMirror，除了拦按键、加装饰，也能改文字和移光标（LaTeX Suite 插件在占位之间跳光标就是这么做的）。但如果只是「把一段模板插到光标处、光标放到标记上」，先用上面的 `insertMarkdownAt`：解析、撤销、只读判断都由宿主处理。
+
+## 联网与第三方库
+
+桌面版的内容安全策略（CSP）拦的是从别的网站加载**脚本**，所以第三方库要打包进插件自己的 `main.js`（大小不限）。**联网请求不受 CSP 限制**：它允许 `https:` 和 `wss:`，对方接口返回了跨域许可头（`Access-Control-Allow-Origin`）时，插件可以直接用 `fetch`。接口不返回这个头时请求会失败（`TypeError: Failed to fetch`），原因是浏览器的跨域限制（CORS），不是 CSP。
+
+这类接口改用 `ctx.net.request`，由 Forsion 的主进程代为请求（2026-11-16 起，只在桌面版；网页版、手机版和旧宿主上没有 `ctx.net`，先判断再用）。插件要先在 manifest 的 `network` 里写明会访问哪些主机：
+
+```json
+{ "network": ["api.example.com", "*.cdn.example.com"] }
+```
+
+```js
+const res = await ctx.net.request('https://api.example.com/v1/items', { method: 'POST', headers: { Authorization: `Bearer ${key}` }, body: JSON.stringify(query) })
+if (res.status === 200) render(res.json())
+```
+
+- 只写主机名，不带协议、端口和路径；`*.example.com` 包括任意层的子域名，但不包括 `example.com` 本身，两个都要就两个都写。每次请求时主进程都从磁盘上的 manifest 重新读这份名单。插件详情页、已装插件的商店信息和沙箱的安装确认里会列出「会访问：…」；从商店安装之前暂时还看不到。
+- 只走 https 的默认端口（443）。主机写成 IP 地址，或者连接时解析到本机、内网、保留地址的，一律拒绝；重定向最多 5 次，每一跳都重新核对名单。Forsion 的 cookie 和登录信息从来不会带上，接口要鉴权就自己写 `Authorization` 头。
+- 响应解压后不超过 10 MB；`timeoutMs` 缺省 30 秒、最多 60 秒；每个插件同时最多 8 个请求；插件被停用时，还没回来的请求会失败。
+- 返回的 `res` 带 `status`、`headers`（小写的头名）、`bytes`、`url`（重定向后的地址）以及 `text()`、`json()`。4xx、5xx 照常返回，只有连不上之类的问题才失败；失败时错误的 `code` 是 `net_domain_not_declared`（名单里没有）、`net_blocked_address`、`net_timeout`、`net_too_large`、`net_bad_url`、`net_bad_request` 或 `net_failed`。
+- 返回了跨域许可头的 https 接口，照旧可以直接 `fetch`。
+
+网页版和手机版的 CSP 不一样，要在那两端单独试。
+
+## 内部接口 `ctx.internals`（2026-11-16 起）
+
+正式接口缺东西、又不想等 Forsion 发版时，可以用内部接口直接读 Forsion 自己的状态，或者拿到它的内部模块。**它不稳定**：里面的东西跟着 Forsion 内部走，任何一版都可能改名、改形状或消失，不算破坏性变更，也不会提前通知。只在桌面版有；网页版、手机版和旧宿主上 `ctx.internals` 是 `undefined`，一定先判断再用。
+
+分两级，都要在 manifest 的 `capabilities` 里声明：
+
+```json
+{ "capabilities": ["internals"], "internalsVerified": ["2.14"] }
+```
+
+**第一级 `internals`**：只读。拿到的是冻结的数据副本，里面没有函数，改不了 Forsion。
+
+```js
+const k = ctx.internals
+if (!k) return
+k.stores()                                            // 能读哪些：page、app、workspace、spaces、commands、ui……
+const path = k.read('page', (s) => s.activePage)      // page 指向当前活动的那个面板
+const off = k.subscribe('page', (s) => s.activePage, (now, prev) => { /* … */ })
+k.host.mainWindow                                      // 每扇窗口各跑一份插件；自己发起的写库动作只在主窗做
+```
+
+- 副本里函数、类实例都去掉了；`Date` 变成毫秒数，`Map` 变成 `[键, 值]` 对的数组，`Set` 变成数组。`selector` 拿到的也是副本。
+- `subscribe` 在同一轮里的多次变化只算一次；选出来的数据没变就不通知。插件停用时宿主替你退订。
+- 要写，用正式接口：改名、移动、建文件夹、写文件见上面「库里的文件夹、文件时间、改名与移动」，动别人的文件时会先问用户。
+
+**第二级 `internals-raw`**：Forsion 内部模块的真对象，读写都行。要和 `internals` 一起声明。
+
+```json
+{ "capabilities": ["internals", "internals-raw"] }
+```
+
+```js
+const ids = await ctx.internals.raw.modules()          // 能取哪些模块
+const { usePageStore } = await ctx.internals.raw.import('host:desktop/frontend/src/amadeus/store/pageStore.ts')
+```
+
+- 只给得了 Forsion 共享模块表里登记的模块（页面状态、对话状态、布局引擎、React 等）；没登记的模块、函数内部的私有变量拿不到。
+- **风险自负**：写坏了不一定报错；停用以后你拿到的对象收不回，用户会被提示保存并重载窗口。改写 Forsion 自己的动作时，自己负责在停用时还原。
+- 要读写笔记文件，仍然优先用正式接口：Forsion 写文件有冲突检查、引用重写和同步记录，绕开会丢数据。
+
+**插件页和商店怎么显示**：声明了内部接口的插件在设置 → 插件里带标注（第二级更醒目），详情页写明风险。`internalsVerified` 写你在哪几版 Forsion 上验过（只比到小版本，比如 `"2.14"`）；和用户正在用的版本对不上时，详情页会说一句「没在这一版上验过」，不拦。
+
+**出错怎么办**：声明了内部接口的插件，没接住的错误会算到它头上；一分钟内连续 3 次，Forsion 会停用它并通知用户，用户可以在插件页重新启用。在沙箱里开发加载的副本不这样停用，错误照常进控制台。
+
+**上架**：第一级照常审核。第二级要申请：投稿时在「内部接口申请理由」里写明要哪些模块、为什么正式接口不够；审核按版本过，每个新版本都要重新过审才会推给用户。没过审的版本，桌面版不会从官方商店安装。开发加载、手动安装和第三方商店来源不受这条限制。
+
+检查：`node check-plugin.mjs <插件目录>` 会报出没声明就用、只声明第二级、直接摸 React 内部结构这几种问题，并列出第二级取用的模块。
+
+## 命令的撤销与缺省快捷键
+
+`ctx.registerCommand` 返回一个撤销函数，只撤掉这一次注册（2026-11-16 起）；同一个插件用同一个 `id` 再注册，会原地替换原来那条（标题、动作、快捷键都换成新的），被替换掉的那次注册的撤销函数不再起作用。所以插件可以在运行中增删命令（比如每个启用的模板一条），不用重载。插件停用时它的命令照旧全部撤掉。旧宿主返回 `undefined`，同 `id` 再注册会多出一条，所以写成 `off?.()`，并且在旧宿主上每个 `id` 只注册一次。
+
+```js
+const off = ctx.registerCommand({ id: 'my-plugin-insert-daily', title: 'Insert daily template', hotkey: 'Mod+Shift+Y', run: insertDaily })
+off?.()
+```
+
+`hotkey` 是这条命令的缺省快捷键，只是建议：
+
+- 必须带 `Mod`（macOS 上是 ⌘，其他系统是 Ctrl）；带 `Shift` 时只能配字母、`[`、`]` 或 `ArrowUp`、`F5`、`Enter` 这类具名键（Shift 加数字或标点打出来的是别的字符，永远对不上）；不支持 `Space`。写错的会被忽略，并在控制台提示一次。
+- 只有这个键没被占用时才生效：Forsion 自己的命令、系统和编辑器的快捷键、你给别的命令设的键，以及别的插件用了同一个缺省键（这时两个插件都拿不到）。你给这条命令自己设的键永远优先。
+- 没生效的缺省键会在 设置 → 快捷键 里标出来，写着「插件默认键 {key} 与「{other}」冲突，未生效」；那个键空出来以后，它会自动生效。你随时可以在那里手动给命令设键。
+- 旧宿主忽略 `hotkey`。
 
 ## IM 通道
 
@@ -298,6 +463,21 @@ ctx.ui?.mountSelectionBar?.(root, { tools, source, ask, watch })
 插件可以给自动化加一种自己的「当…」:用 `ctx.automation.registerTrigger` 登记,事件发生时用 `ctx.automation.emit` 发一条。登记之后它出现在自动化画布触发节点的「外部 · 插件」组,规则由用户自己写,可以加时段、星期、冷却和每天次数;用户选「直接提醒」不花额度,选「叫醒 Muse」照常过额度。
 
 只能登记自己命名空间下的:`id` 只写 key,宿主拼成 `plugin:<插件 id>:<key>`。名字中英都要有。插件停用或卸载时触发源随之注销,相关规则不删,暂停并写明原因,装回来自动恢复。事件不落盘,引擎重启会丢掉还没被规则看到的。引擎插件用 `ctx.sdk.automation` 上的同名方法。写法见插件开发技能的 `references/tangu-host-apis.md`。
+
+## 通知（`ctx.notify`）
+
+`ctx.notify(message, { level, title, action, key, undo, urgent })` 在桌面上是右上角的一张卡，在手机上（窗口窄于 640）是状态栏下面的一条横幅：盖住顶上胶囊那一条，不压页面内容，一次只出一条，其余排队；来源和正文各一行，放不下在句尾省略，按钮和 × 在同一行靠右。手机上点正文等于点按钮，往上滑或点 × 收起。
+
+- 停留：桌面上带按钮的停 8 秒、其余按级别；手机上统一 5 秒，读屏开着 10 秒，`error` 和 `sticky: true` 一直留着。
+- `key`：同一个 key 的后一张顶掉前一张。手机上直接换文案和按钮，停留从第一次出现算起，不往后顺延。
+- 手机上的节流：你的插件有一张卡收起后，一段时间内（到点自己走的 30 秒，用户上滑或点 × 收的 2 分钟）宿主不再出你的卡。`ctx.notify` 照常返回、不报错，所以要让用户回头还看得到，就把数字或状态留在自己的界面里（列表上的数字、页签角标）。App 在后台时的系统通知不受节流。
+- `undo: true`（2026-11-15 起）：这张卡是用户刚做的事的退路（删除后的「撤销」）。手机上停 8 秒，不受节流。
+- 没带 `undo`、但在处理用户点按或按键时**同步**弹出的带按钮的卡（删完马上弹的「撤销」），手机上也按撤销对待：停 8 秒，不受节流。等过文件或网络、在回调里才弹的，宿主分不出那是用户刚做的事，要自己带 `undo: true`。
+- App 在后台时手机上不出横幅，只发系统通知；卡片排着，回到前台后一条条出（节流照常），但不补一整串。退到后台那一刻屏上正显示的那张（常驻的除外）也收回来，回到前台后第一个重新出（有人在等的 `urgent` 卡照样排在它前面）、从头停满，不会在后台到点消失。一律留着的：带 `undo` 的、常驻的、`error` 的、退到后台时正显示着的，以及没能发出系统通知的（比如用户关了系统通知、没给通知权限；这类卡回来后逐张出，不受同一来源的冷却）。其余的 `urgent` 卡按「插件 + key」各留最新一张、全部留着（不同的审批各自留着；回到前台时通知栏里的系统通知会被收掉，所以不丢）。不急的卡每个插件只留最新一张，补满 3 张里剩下的名额，留新的；`urgent` 已经有 3 张或更多时不急的一张不留。被省下的那些系统通知已经发过，数字留在你自己的界面里。
+- 手机上从底部弹出的原生面板（菜单、输入框、确认框）开着时也不出横幅：卡片排着、不计时，屏上正显示的那张（常驻的除外）也收回去，面板收起后再出、从头停满。
+- 系统通知：同一个插件只留最新一条；只有带 `urgent: true` 又带 `key` 的卡按「插件 + key」各占一条（同 key 的后一条顶掉前一条）。所以等批准这类卡给它 `urgent` 和自己的 key，就不会被你后来的普通卡顶掉。
+- `urgent: true`（2026-11-15 起）：有人或 Agent 正停着等用户（比如等批准）。手机上不受节流，排在不急的卡前面；它不是常驻，停留照常。
+- 两项都只认 `true`，旧宿主会忽略，所以可以直接写，不用先判断宿主版本。不受节流的卡请给它自己的 `key`（比如 `approval:<id>`），别和普通卡共用一个 key，否则会把普通卡顶掉。
 
 ## 插件数据跨设备同步
 
@@ -603,6 +783,21 @@ LCL 统一保留并排的 View。空间不足时滚动工作区内容，Ribbon�
 ### 笔记阅读渲染器
 
 通过 `ctx.registerNoteRenderer` 热替换只读阅读表面，宿主继续持有文档与保存流程。完整契约、失败回退与生命周期见[笔记阅读渲染器](./note-renderers.md)。
+
+### 笔记里公式源码的样式钩子（2026-11-15 起）
+
+光标所在的那个公式（行内 `$…$` 与块公式 `$$…$$`，单行多行都算）露出源码时，宿主给整段源码（含 `$`）加上 `math-source` 类，
+观感照 Obsidian：等宽、斜体、行内代码字号。源码再按种类加 token 类：`math-source-dollar`（`$` / `$$`）、`math-source-command`
+（`\frac` 这类命令和 `\{` 这类转义符号）、`math-source-script`（`_ ^ &`）、`math-source-letter`、`math-source-number`、
+`math-source-bracket`（`( ) [ ] { }`）；空格、运算符和 `%` 注释保持正文色。光标不在公式里、渲染结果和预览都不带这些类。
+
+- **类是并在同一个 span 上的**，不是外层容器：选择器写 `.math-source.math-source-bracket`，别写 `.math-source .math-source-bracket`。
+- **宿主的 token 颜色权重为 0**（选择器包在 `:where()` 里），插件给括号、`$`、占位加的类用一条普通类选择器就能盖过，不用拼权重、
+  也不用管样式表先后。颜色取自宿主的 `--math-src-*` 变量，跟着明暗走；插件自己的颜色也请按明暗各给一份。
+- 选区盖住的字不带 token 类（原生选区色优先），`math-source` 照样在，字体不会跳。
+- `math-source-delimiter` 是旧总类（`$`、括号、`_ ^`），保留兼容，宿主不再用它上色。
+- **选区落在公式里**（两头都在 `$` 之间，比如 Tab 选中一个占位）：预览照常（行内是行上方的浮层，▶ 标在选区末端；块公式在源码下方），
+  格式浮条不出，挂在浮条「⋯ → 插件」里的选区动作也就不在这里出现。选区跨出公式、或连 `$` 选中整个公式，照旧出浮条、不出预览。
 
 ### 官方云端收件箱通道
 

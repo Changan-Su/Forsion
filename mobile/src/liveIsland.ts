@@ -19,14 +19,15 @@ import { useApp } from '@/stores/appStore'
 import { registerMessages, translate } from '@/i18n'
 import { openSession } from '@/sessionNav'
 import { fmtElapsed } from '../../tangu-agent/src/contracts/sessionStatus'
-import { deriveIsland, lastAssistant, shadeAnswer, type IslandState } from './liveIslandDerive'
+import { deriveIsland, lastAssistant, postNotice, shadeAnswer, type IslandState, type NoticeResult } from './liveIslandDerive'
 
 /** 通知按钮送回来的一次作答(原生从按钮的意图里原样取出,全是不可信的串)。 */
 type ShadeAnswer = Partial<Record<'sessionId' | 'messageId' | 'approvalId' | 'action', string>>
 interface LiveIslandPlugin {
   show(o: IslandState & { channelName: string; sub?: string; done?: boolean; quiet?: boolean; allowLabel?: string; denyLabel?: string }): Promise<void>
-  /** 一条普通系统通知;App 在前台时原生不贴。同一个 tag 只留最新一条。 */
-  notice(o: { title: string; text: string; tag: string; channelName: string }): Promise<void>
+  /** 一条普通系统通知;App 在前台时原生不贴。tag = 来源,key = dedupeKey(可无):同一来源 + key 只留最新一条(见 noticeRequest)。
+   *  回这一条真贴出去了没有(没通知权限、渠道被关、App 在前台、原生出错 → posted: false);老外壳回空。 */
+  notice(o: { title: string; text: string; tag: string; key?: string; channelName: string }): Promise<Partial<NoticeResult> | undefined>
   reset(): Promise<void>
   addListener(event: 'openSession', fn: (e: { id: string }) => void): Promise<PluginListenerHandle>
   addListener(event: 'answer', fn: (e: ShadeAnswer) => void): Promise<PluginListenerHandle>
@@ -137,11 +138,9 @@ export function installLiveIsland(): void {
   void Native.addListener('answer', answer)
   // 应用内通知的系统通知出口(notificationStore 在页面失焦时调,同桌面的 window.tangu.notify)。
   // 「跑完了」不走这里:手机上由岛报(常驻那条撤掉、换成一条「已完成 · 用时」,正看着的会话在后台跑完也报),再发一条就是重复。
+  // 投递结果原样交回(postNotice):没投 / 原生拒绝,页面把那张卡记成还欠着,回到前台时不丢。不在这里吞拒绝。
   const host = window.tangu
   if (host) {
-    host.notify = async (title, body, meta) => {
-      if (meta?.event === 'agent.done') return
-      await Native.notice({ title, text: body, tag: meta?.event || 'app', channelName: translate('island.eventsChannel') }).catch(() => { /* 老系统 / 权限受限:静默 */ })
-    }
+    host.notify = (title, body, meta) => postNotice((req) => Native.notice(req), title, body, meta, translate('island.eventsChannel'))
   }
 }

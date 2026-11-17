@@ -8,6 +8,10 @@ fs.mkdirSync(output, { recursive: true })
 const results = [], errors = []
 function check(name, ok, detail) { results.push({ name, ok, detail }); if (!ok) console.log('FAIL ' + name + ' ' + JSON.stringify(detail)) }
 const settle = p => p.waitForTimeout(150)
+// 菜单从按钮里流出来(11-16 Chat Box 水滴方案):液体接手前面板还在按裁切露出,裁掉的角点不中 —— 等接手再量;
+// Esc 是倒放,等收完再点下一颗(倒放中点另一颗 = 直接换,也行,但量的就不是这一颗了)
+const landed = p => p.waitForFunction(() => !document.querySelector('.lcl-droplet-pouring'), null, { timeout: 2000 }).then(() => settle(p), () => settle(p))
+const closed = p => p.waitForFunction(() => !document.querySelector('.lcl-droplet, .composer-menu--compact:not([data-lcl-exit])'), null, { timeout: 2000 }).then(() => settle(p), () => settle(p))
 async function geometry(p, name) {
   const state = await p.evaluate(() => {
     const card = document.querySelector('.t2c-card'), r = card.getBoundingClientRect()
@@ -41,28 +45,28 @@ async function geometry(p, name) {
         for (const selector of ['.model-pill-btn', '.mode-pill-btn', '.add-pill-btn']) {
           const trigger = page.locator(selector).first()
           const before = await trigger.boundingBox(), sendBefore = await page.locator('.t2c-send,.t2c-stop').last().boundingBox()
-          await trigger.click(); await settle(page); await geometry(page, label + ' ' + selector)
+          await trigger.click(); await landed(page); await geometry(page, label + ' ' + selector)
           const after = await trigger.boundingBox(), sendAfter = await page.locator('.t2c-send,.t2c-stop').last().boundingBox()
           check(label + ' stable ' + selector, Math.abs(before.width - after.width) < 1 && Math.abs(sendBefore.x - sendAfter.x) < 1, { before, after, sendBefore, sendAfter })
-          await page.keyboard.press('Escape'); await settle(page)
+          await page.keyboard.press('Escape'); await closed(page)
         }
         if (width === 320 && !running && zoom === 1.1) {
-          await page.locator('.model-pill-btn').click(); await settle(page)
+          await page.locator('.model-pill-btn').click(); await landed(page)
           await page.screenshot({ path: path.join(output, `model-${lang}-110.png`) })
-          await page.keyboard.press('Escape')
+          await page.keyboard.press('Escape'); await closed(page)
         }
       }
     }
     await page.evaluate(() => window.__narrow.set({ width: 280, height: 380, running: false, model: 'gpt-6-luna' }))
     await page.locator('.t2c-ta').fill('')
-    await page.locator('.add-pill-btn').click(); await settle(page)
+    await page.locator('.add-pill-btn').click(); await landed(page)
     check('tight context and voice remain in Add', await page.locator('[data-composer-overflow="context"]').isVisible() && await page.locator('[data-composer-overflow="voice"]').isVisible())
-    await page.locator('[data-composer-overflow="context"]').click(); await settle(page)
+    await page.locator('[data-composer-overflow="context"]').click(); await landed(page)
     check('tight context opens actual usage panel', await page.locator('.t2c-ctxring-pop.composer-menu--compact').isVisible())
     await geometry(page, 'tight short context')
     await page.keyboard.press('Escape')
     check('context Escape restores Add focus', await page.locator('.add-pill-btn').evaluate(e => document.activeElement === e))
-    await page.locator('.model-pill-btn').click(); await page.locator('.cm-model-row').click(); await settle(page)
+    await page.locator('.model-pill-btn').click(); await landed(page); await page.locator('.cm-model-row').click(); await landed(page)
     check('model list replaces main menu', await page.locator('.cm-sub--inline').isVisible() && !(await page.locator('.cm-model-row').isVisible()))
     await geometry(page, 'short model list')
     await page.locator('.model-picker-search input').fill('deployment')
@@ -73,12 +77,12 @@ async function geometry(p, name) {
     await page.keyboard.press('Escape')
     check('second Escape restores model trigger focus', await page.locator('.model-pill-btn').evaluate(e => document.activeElement === e))
     await page.locator('.add-pill-btn').click()
-    await page.locator('[data-add-pane="view"]').click(); await settle(page)
+    await page.locator('[data-add-pane="view"]').click(); await landed(page)
     check('Add submenu replaces its parent', await page.locator('.add-menu-search input').isVisible() && !(await page.locator('[data-add-pane="view"]').isVisible()))
     await page.keyboard.press('Escape')
     check('Add Escape returns to parent row', await page.locator('[data-add-pane="view"]').isVisible())
     await page.keyboard.press('Escape')
-    await page.locator('.mode-pill-btn').click(); await page.locator('[data-agent-switch]').click(); await settle(page)
+    await page.locator('.mode-pill-btn').click(); await landed(page); await page.locator('[data-agent-switch]').click(); await landed(page)
     check('Agent selector stays inline', await page.locator('[data-pane="agents"].cm-sub--inline').isVisible())
     await geometry(page, 'inline Agent selector')
     await page.keyboard.press('Escape'); await page.keyboard.press('Escape')
@@ -90,12 +94,12 @@ async function geometry(p, name) {
     check('actual send callback', await page.evaluate(() => window.__narrow.sent.includes('hello compact composer')))
     for (const suffix of ['&light', '&skin=lavender']) {
       await page.goto(`${base}?lang=en&zoom=1.1${suffix}`, { waitUntil: 'domcontentloaded' })
-      await page.waitForSelector('.model-pill-compact:visible'); await page.locator('.model-pill-btn').click(); await settle(page)
+      await page.waitForSelector('.model-pill-compact:visible'); await page.locator('.model-pill-btn').click(); await landed(page)
       await geometry(page, 'appearance ' + suffix)
       await page.screenshot({ path: path.join(output, suffix.includes('light') ? 'light.png' : 'lavender.png') })
     }
     await page.goto(`${base}?prompt&lang=en&zoom=1.1`, { waitUntil: 'domcontentloaded' })
-    await page.waitForSelector('.model-pill-compact:visible'); await page.locator('.model-pill-btn').click(); await settle(page)
+    await page.waitForSelector('.model-pill-compact:visible'); await page.locator('.model-pill-btn').click(); await landed(page)
     check('shared prompt ModelPill uses compact menu', await page.locator('.composer-menu--compact').isVisible())
     await page.goto(`${base}?engine&lang=en`, { waitUntil: 'domcontentloaded' })
     await page.waitForSelector('.composer-chip--readonly')

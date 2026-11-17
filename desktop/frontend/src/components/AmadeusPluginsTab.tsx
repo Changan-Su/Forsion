@@ -10,11 +10,11 @@ import { NativeFeaturesSection } from '../features/NativeFeaturesSection'
  * 数据源是 vendored 的 usePluginStore(与 Amadeus Space 同一单例);样式照 PluginsTab 的 hint/btn 约定。
  */
 import React, { useEffect, useRef, useState } from 'react'
-import { ArrowLeft, Bot, CalendarDays, Cloud, NotebookText, type LucideIcon } from 'lucide-react'
+import { ArrowLeft, Bot, CalendarDays, Cloud, Info, NotebookText, type LucideIcon } from 'lucide-react'
 import { useSpaceStore } from '@lcl/engine'
 import { pluginFootprint, pluginVaultFolder, pluginWanted, runningDependents, unmetPluginDeps, usePluginStore } from '@amadeus/plugins/pluginStore'
-import { PluginUninstallDialog } from './UninstallDialog'
-import { uninstallForsionPlugin } from './pluginUninstall'
+import { PluginUninstallDialog, SupersededCleanupDialog } from './UninstallDialog'
+import { cleanupSupersededCopy, supersededVaultFolder, uninstallForsionPlugin } from './pluginUninstall'
 import { amadeus } from '@amadeus/api'
 import { installAmadeusPlugins, reloadPluginsAndAnnounce } from '../amadeusPlugins'
 import { usePluginOnboarding, needsOnboarding, promptIfPending, isGate } from '../stores/pluginOnboardingStore'
@@ -38,12 +38,14 @@ import { ipcErrorText } from '../ipcError'
 import { windowKind } from '../windowKind'
 import type { TanguDesktopConfig } from '../types'
 import type { AmadeusPlugin, SettingContribution, SettingsViewContribution } from '@amadeus/plugins/types'
-import type { PluginCapability, PluginDependency } from '@amadeus-shared/ipc'
+import type { PluginDependency } from '@amadeus-shared/ipc'
 import type { UnmetDependency } from '../amadeus/plugins/pluginDeps'
 import { PluginLogo } from './PluginLogo'
-import { canOpenPluginsFolder } from '../amadeus/lib/hostCaps'
+import { canOpenPluginsFolder, canRevealInFileManager } from '../amadeus/lib/hostCaps'
 import { FileOpenersPanel } from './FileOpenersPanel'
 import { homeTarget } from '../services/engine/targets'
+import { internalsAvailable } from '../amadeus/plugins/pluginInternals'
+import { capabilityLabels, internalsUnverified } from './pluginCapabilityLabels'
 
 registerMessages({
   // 带主进程半身的内置包(Forsion Extend):开关改的是下次开机装不装那一半
@@ -74,14 +76,23 @@ registerMessages({
   'settings.amadeusPlugins.devProject': { zh: '项目：{path}', en: 'Project: {path}' },
   // manifest capabilities:插件声明了要用的用户数据 / 敏感能力,详情页如实告诉用户(没声明的宿主不注入)
   'settings.amadeusPlugins.caps': { zh: '这个插件可以：{list}', en: 'This plugin can: {list}' },
-  'settings.amadeusPlugins.capDatabases': { zh: '读写你的多维表', en: 'read and edit your databases' },
-  'settings.amadeusPlugins.capNoteTasks': { zh: '读写笔记里的 @ 任务', en: 'read and edit @ tasks in your notes' },
-  'settings.amadeusPlugins.capSpaces': { zh: '打开 Space，调整 Ribbon 上 Space 的顺序和收纳夹', en: 'open Spaces and rearrange Spaces and folders on the Ribbon' },
-  'settings.amadeusPlugins.capCalendar': {
-    zh: '读取 Agent 日程、.ics 订阅和另一侧库里的日历，管理 .ics 订阅并改日历设置',
-    en: 'read Agent schedules, .ics subscriptions and calendars in your other vault, manage .ics subscriptions and change calendar settings',
+  // manifest network(2026-11-16+):ctx.net 只代请求这些域名;用户在启用前有权知道它会连到哪
+  'settings.amadeusPlugins.network': { zh: '会访问：{domains}', en: 'Accesses: {domains}' },
+  'settings.amadeusPlugins.internalsBadge': { zh: '使用内部接口', en: 'Uses internal APIs' },
+  'settings.amadeusPlugins.internalsRawBadge': { zh: '直接操作内部', en: 'Works on internals directly' },
+  'settings.amadeusPlugins.internalsHint': {
+    zh: '这个插件会读取 Forsion 的内部状态，Forsion 更新后它可能失效。',
+    en: 'This plugin reads Forsion internals and may stop working after an update.',
   },
-  'settings.amadeusPlugins.capActiveWindow': { zh: '读取前台窗口', en: 'see which window is in front' },
+  'settings.amadeusPlugins.internalsRawHint': {
+    zh: '这个插件直接操作 Forsion 的内部对象。Forsion 更新后它可能失效，出错时可能影响你的数据；停用后需要重载窗口。',
+    en: 'This plugin works directly on Forsion internals. It may break after an update and can affect your data if it fails. Reload the window after turning it off.',
+  },
+  'settings.amadeusPlugins.internalsDesktopOnly': { zh: '内部接口只在桌面端提供，这里不会给它。', en: 'Internal APIs are only provided on desktop, so it does not get them here.' },
+  'settings.amadeusPlugins.internalsUnverified': {
+    zh: '作者没有在 Forsion {version} 上验过它用到的内部接口。',
+    en: 'The author has not checked its use of internal APIs on Forsion {version}.',
+  },
   'settings.amadeusPlugins.devShadows': {
     zh: '正遮蔽同名的已安装插件；撤下开发副本后，安装版会回来。',
     en: 'Shadowing the installed plugin with the same id; unload this dev copy and the installed one comes back.',
@@ -148,6 +159,31 @@ registerMessages({
   'settings.amadeusPlugins.effect.request': { zh: '进行中的请求', en: 'Requests in flight' },
   'settings.amadeusPlugins.effect.deskCompanion': { zh: 'Agent Desk 伴随面', en: 'Agent Desk companions' },
   'settings.amadeusPlugins.effect.viewSurface': { zh: '视图文件通道', en: 'View file access' },
+  // 商店安装取代了同一个包的旧普通目录(方案 B,2026-11-17):列表卡一行注记 + 详情「旧的本地安装」一节
+  'settings.amadeusPlugins.superseded.note': { zh: '本机另有一份旧的本地安装 v{version}，已停用', en: 'An older local install (v{version}) is also on this device, turned off' },
+  'settings.amadeusPlugins.superseded.noteMobile': { zh: '这台手机上另有一份旧的安装 v{version}，已停用', en: 'An older install (v{version}) is also on this phone, turned off' },
+  'settings.amadeusPlugins.superseded.head': { zh: '旧的本地安装', en: 'Older local install' },
+  'settings.amadeusPlugins.superseded.headMobile': { zh: '旧的安装', en: 'Older install' },
+  'settings.amadeusPlugins.superseded.title': { zh: 'v{version} · 已停用', en: 'v{version} · Turned off' },
+  'settings.amadeusPlugins.superseded.sub': {
+    zh: '和商店安装的是同一个插件，现在只运行商店那份。它的设置和智库里 {folder} 的资料没有带过来，仍留在原处。',
+    en: "It's the same plugin as the store install, and only the store install runs now. Its settings and the files in {folder} in your vault were not carried over. They're still where they were.",
+  },
+  'settings.amadeusPlugins.superseded.subNoFolder': {
+    zh: '和商店安装的是同一个插件，现在只运行商店那份。它的设置没有带过来，仍留在原处。',
+    en: "It's the same plugin as the store install, and only the store install runs now. Its settings were not carried over. They're still where they were.",
+  },
+  'settings.amadeusPlugins.superseded.subMobile': {
+    zh: '和商店安装的是同一个插件，现在只运行商店那份。它的设置没有带过来，仍留在这台手机上。',
+    en: "It's the same plugin as the store install, and only the store install runs now. Its settings were not carried over. They're still on this phone.",
+  },
+  'settings.amadeusPlugins.superseded.reveal': { zh: '在访达中显示', en: 'Show in Finder' },
+  'settings.amadeusPlugins.superseded.revealWin': { zh: '在文件资源管理器中显示', en: 'Show in File Explorer' },
+  'settings.amadeusPlugins.superseded.trash': { zh: '移到回收站', en: 'Move to Trash' },
+  'settings.amadeusPlugins.superseded.delete': { zh: '删除旧副本', en: 'Delete old copy' },
+  'settings.amadeusPlugins.superseded.deleteConfirm': { zh: '删除后不能恢复，它的设置仍留在这台手机上。', en: "This can't be undone. Its settings stay on this phone." },
+  'settings.amadeusPlugins.superseded.done': { zh: '已把旧的本地安装「{name} v{version}」移到回收站', en: 'Moved the older local install of “{name}” (v{version}) to the Trash' },
+  'settings.amadeusPlugins.superseded.doneMobile': { zh: '已删除旧副本「{name} v{version}」', en: 'Deleted the old copy of “{name}” (v{version})' },
 })
 
 /** 启停后的捆绑包级联:内嵌 Space 显隐同步 + 刷新引擎插件列表。内嵌引擎插件的开关**不在这里写** —— 这里多半是设置浮窗,
@@ -464,6 +500,18 @@ const blockedLabel = (t: (k: string, v?: Record<string, string>) => string, p: A
           ? t('settings.amadeusPlugins.blockedDesktopOnly')
           : t('settings.amadeusPlugins.blockedMinApp', { v: p.minAppVersion || '?' })
 
+/** 内部接口徽章(2026-11-16+):声明了 internals 才有;要了第二级的颜色更重。卡片与详情页同款。
+ *  第二级要和第一级一起声明才生效,只声明了 internals-raw 的照「没声明」处理(宿主不注入)。 */
+export const InternalsBadge: React.FC<{ t: (k: string) => string; p: AmadeusPlugin }> = ({ t, p }) => {
+  if (!p.capabilities?.includes('internals')) return null
+  const raw = p.capabilities.includes('internals-raw')
+  return (
+    <span data-plugin-internals={raw ? 'raw' : 'read'} style={raw ? { ...badge, color: 'var(--warn, #b8860b)', borderColor: 'var(--warn, #b8860b)' } : badge}>
+      {t(raw ? 'settings.amadeusPlugins.internalsRawBadge' : 'settings.amadeusPlugins.internalsBadge')}
+    </span>
+  )
+}
+
 /** DEV 徽章:开发态加载的来源。卡片与详情页同款。 */
 const DevBadge: React.FC<{ t: (k: string) => string }> = ({ t }) => (
   <span style={{ ...badge, color: 'var(--accent-ink, var(--accent, var(--text-faint)))', borderColor: 'var(--accent-ink, var(--accent, var(--border)))' }}>
@@ -625,14 +673,87 @@ const RestartPending: React.FC<{ p: AmadeusPlugin }> = ({ p }) => {
  *  受控详情(左栏 `fplugin:<id>` 直达)不登记:它不是从列表进来的,返回照旧回设置首页。 */
 export const pluginListDetailBack: { current: (() => void) | null } = { current: null }
 
-/** 详情页「这个插件可以：…」那一行,按这个顺序列(用户数据在前,敏感的前台窗口在后)。 */
-const CAP_LABELS: Array<[PluginCapability, string]> = [
-  ['databases', 'settings.amadeusPlugins.capDatabases'],
-  ['noteTasks', 'settings.amadeusPlugins.capNoteTasks'],
-  ['calendar', 'settings.amadeusPlugins.capCalendar'],
-  ['spaces', 'settings.amadeusPlugins.capSpaces'],
-  ['activeWindow', 'settings.amadeusPlugins.capActiveWindow'],
-]
+
+/** 详情页「使用内部接口」那一段(2026-11-16+):两级的说明、桌面以外不给、作者没在这一版上验过。
+ *  不列运行时取用了哪些模块:设置是独立窗口,这里的插件实例和主窗那份不是同一份,列出来会误导;静态清单看 check-plugin。 */
+const InternalsDetail: React.FC<{ t: (k: string, vars?: Record<string, string | number>) => string; p: AmadeusPlugin }> = ({ t, p }) => {
+  const raw = !!p.capabilities?.includes('internals-raw')
+  return (
+    <div data-plugin-internals-detail style={{ fontSize: 'var(--ui-font-meta, 12px)', color: 'var(--text-light)' }}>
+      {t(raw ? 'settings.amadeusPlugins.internalsRawHint' : 'settings.amadeusPlugins.internalsHint')}
+      {!internalsAvailable() && <> {t('settings.amadeusPlugins.internalsDesktopOnly')}</>}
+      {internalsAvailable() && internalsUnverified(p, APP_VERSION) && <> {t('settings.amadeusPlugins.internalsUnverified', { version: APP_VERSION.replace(/^(\d+\.\d+).*$/, '$1') })}</>}
+    </div>
+  )
+}
+
+/** 列表卡上那行注记:这份商店安装取代了同一个包的旧普通目录(已停用)。灰字 + 信息图标,不是警告 —— 旧副本已经不跑了。 */
+const SupersededNote: React.FC<{ p: AmadeusPlugin; t: T }> = ({ p, t }) => {
+  if (!p.supersedes) return null
+  return (
+    <div className="plugin-card-note" data-plugin-superseded-note={p.supersedes.dir}>
+      <Info size={12} strokeWidth={2} aria-hidden />
+      <span>{t(window.tangu?.mobile ? 'settings.amadeusPlugins.superseded.noteMobile' : 'settings.amadeusPlugins.superseded.note', { version: p.supersedes.version })}</span>
+    </div>
+  )
+}
+
+const IS_MAC = typeof navigator !== 'undefined' && /Mac/.test(navigator.platform)
+
+/** 详情页「旧的本地安装」一节(方案 B):是哪一份、为什么停用、哪些数据没带过来,给「在访达中显示」和「移到回收站」。
+ *  样式同详情页其他「左说明、右按钮」的卡;设备页(Unit)只说明不给按钮,手机没有回收站 → 「删除旧副本」+ 系统确认。 */
+const SupersededSection: React.FC<{ p: AmadeusPlugin }> = ({ p }) => {
+  const { t, locale } = useI18n()
+  const [asking, setAsking] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const old = p.supersedes
+  if (!old) return null
+  const mobile = !!window.tangu?.mobile
+  const remote = !!window.tangu?.unitPage
+  const hasTrash = typeof amadeus?.trashRestore === 'function'
+  const folder = supersededVaultFolder(p) // 和商店那份同一个文件夹时不算它的(那是正在用的数据)
+  const name = pluginDisplayName(p, locale)
+  const canReveal = !remote && !mobile && canOpenPluginsFolder() && canRevealInFileManager()
+  const canRemove = !remote && !!amadeus?.uninstallPlugin
+  const run = (opts: { keepSettings: boolean; moveVault: boolean }): void => {
+    setBusy(true)
+    void cleanupSupersededCopy(p, name, opts).finally(() => setBusy(false))
+  }
+  const remove = (): void => {
+    if (hasTrash) { setAsking(true); return }
+    // 没有回收站(手机):删了就回不来,先问一句;它的设置(plugins-data)本来就不随卸载删
+    if (window.confirm(t('settings.amadeusPlugins.superseded.deleteConfirm'))) run({ keepSettings: true, moveVault: false })
+  }
+  return (
+    <>
+      <div className="hint">{t(mobile ? 'settings.amadeusPlugins.superseded.headMobile' : 'settings.amadeusPlugins.superseded.head')}</div>
+      <div className="plugin-card" data-plugin-superseded={old.dir} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <div style={{ flex: '1 1 220px', minWidth: 0 }}>
+            <div style={{ fontSize: 'var(--ui-font-meta, 12px)' }}>{t('settings.amadeusPlugins.superseded.title', { version: old.version })}</div>
+            <div style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)', marginTop: 2, lineHeight: 1.5 }}>
+              {mobile ? t('settings.amadeusPlugins.superseded.subMobile')
+                : folder ? t('settings.amadeusPlugins.superseded.sub', { folder })
+                  : t('settings.amadeusPlugins.superseded.subNoFolder')}
+            </div>
+          </div>
+          {canReveal && (
+            <button className="btn ghost sm" data-plugin-superseded-reveal onClick={() => void amadeus.openPluginsFolder(old.dir)}>
+              {t(IS_MAC ? 'settings.amadeusPlugins.superseded.reveal' : 'settings.amadeusPlugins.superseded.revealWin')}
+            </button>
+          )}
+          {canRemove && (
+            <button className="btn ghost sm" data-plugin-superseded-remove disabled={busy} onClick={remove}>
+              {t(hasTrash ? 'settings.amadeusPlugins.superseded.trash' : 'settings.amadeusPlugins.superseded.delete')}
+            </button>
+          )}
+        </div>
+      </div>
+      {asking && <SupersededCleanupDialog name={name} version={old.version} storeVersion={p.version} vaultFolder={folder}
+        onConfirm={run} onClose={() => setAsking(false)} />}
+    </>
+  )
+}
 
 const PluginDetail: React.FC<{
   plugin: AmadeusPlugin
@@ -658,7 +779,7 @@ const PluginDetail: React.FC<{
   // 卸载走统一确认框(components/UninstallDialog,10-28 手动卸载规范):插件文件与设置进回收站(可勾「保留设置」),
   // 库里的工作文件夹缺省留着(可勾「一并移到回收站」);删完 6 秒内可撤销。
   const [askUninstall, setAskUninstall] = useState(false)
-  const uninstall = (opts: { keepSettings: boolean; moveVault: boolean }): Promise<boolean> =>
+  const uninstall = (opts: { keepSettings: boolean; moveVault: boolean; keepOld: boolean }): Promise<boolean> =>
     uninstallForsionPlugin(p, pluginDisplayName(p, locale), opts, { engine: !!cfg, onGone: onBack, onEngineReload })
 
   /** 撤下开发副本:关掉产物的 devLoad 开关,再只重载这一个 id —— 有安装版的话它会在同一拍回来。
@@ -692,6 +813,7 @@ const PluginDetail: React.FC<{
             <span style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)' }}>v{p.version}</span>
             <span style={badge}>{isCorePlugin(p) ? t('plugins.core.title') : p.builtin || p.preinstalled ? t('settings.amadeusPlugins.builtin') : p.agent ? t('settings.amadeusPlugins.agentOwned', { agent: p.agent }) : t('settings.amadeusPlugins.external')}</span>
             {p.dev && <DevBadge t={t} />}
+            <InternalsBadge t={t} p={p} />
             {p.blocked && (
               <span style={{ ...badge, color: 'var(--warn, #b8860b)', borderColor: 'var(--warn, #b8860b)' }}>{blockedLabel(t, p)}</span>
             )}
@@ -729,6 +851,7 @@ const PluginDetail: React.FC<{
           cloudData={pluginDataSyncOn(p)}
           skills={p.bundle?.skills.length ?? 0}
           agents={p.bundle?.agents ?? []}
+          superseded={p.supersedes}
           onConfirm={(opts) => void uninstall(opts)}
           onClose={() => setAskUninstall(false)} />}
         {/* 带主进程半身的内置包(Forsion Extend):开关管下次开机装不装那一半;没有这座桥(设备页 / 旧壳)就不给开关 */}
@@ -748,7 +871,13 @@ const PluginDetail: React.FC<{
       )}
       {!!p.capabilities?.length && (
         <div data-plugin-caps style={{ fontSize: 'var(--ui-font-meta, 12px)', color: 'var(--text-light)' }}>
-          {t('settings.amadeusPlugins.caps', { list: CAP_LABELS.filter(([c]) => p.capabilities!.includes(c)).map(([, k]) => t(k)).join(t('common.listSep')) })}
+          {t('settings.amadeusPlugins.caps', { list: capabilityLabels(p.capabilities, t).join(t('common.listSep')) })}
+        </div>
+      )}
+      {p.capabilities?.includes('internals') && <InternalsDetail t={t} p={p} />}
+      {!!p.network?.length && (
+        <div data-plugin-network style={{ fontSize: 'var(--ui-font-meta, 12px)', color: 'var(--text-light)', overflowWrap: 'anywhere' }}>
+          {t('settings.amadeusPlugins.network', { domains: p.network.join(t('common.listSep')) })}
         </div>
       )}
       {/* 开发态说明:它**不是**隔离沙箱,用户有权在启用它之前知道这件事 */}
@@ -759,6 +888,7 @@ const PluginDetail: React.FC<{
           {p.shadowsInstalled && <div style={{ color: 'var(--warn, #b8860b)', fontSize: 'var(--ui-font-caption, 11px)' }}>{t('settings.amadeusPlugins.devShadows')}</div>}
         </div>
       )}
+      <SupersededSection p={p} />
       {p.bundle && (
         <>
           <div className="hint">{t('settings.amadeusPlugins.bundleTitle')}</div>
@@ -899,6 +1029,7 @@ export const AmadeusPluginsTab: React.FC<{
               <b style={{ fontSize: 'var(--ui-font-body, 13px)' }}>{isCorePlugin(p) && p.id === 'forsion-extend' ? 'Forsion Extend' : pluginDisplayName(p, locale)}</b>
               <span style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)' }}>v{p.version}</span>
               {p.dev && <DevBadge t={t} />}
+              <InternalsBadge t={t} p={p} />
               {p.blocked && (
                 <span style={{ ...badge, color: 'var(--warn, #b8860b)', borderColor: 'var(--warn, #b8860b)' }}>{blockedLabel(t, p)}</span>
               )}
@@ -909,6 +1040,7 @@ export const AmadeusPluginsTab: React.FC<{
               <BundleChips p={p} />
             </div>
             {pluginDisplayDescription(p, locale) && <div className="plugin-card-description">{isCorePlugin(p) ? t(CORE_DESCRIPTIONS[p.id] ?? 'plugins.core.computerUse') : pluginDisplayDescription(p, locale)}</div>}
+            <SupersededNote p={p} t={t} />
             {p.locked && <RestartPending p={p} />}
           </div>
           {/* 带主进程半身的内置包:同详情页,开关管下次开机装不装那一半 */}

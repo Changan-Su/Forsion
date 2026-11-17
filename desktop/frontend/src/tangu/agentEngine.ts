@@ -8,6 +8,7 @@
  *   - 清单里没有 → elsewhere:手机、网页、连着别的设备时清单是空的,外部引擎只在装了它的那台电脑上跑;
  *   - 定义里的引擎本版本不认识 → unsupported。
  */
+import type { AgentConfig } from '../../../../tangu-agent/src/contracts/clientTypes'
 import { registerMessages } from '../i18n'
 import { agentEngineLabel, isKnownAgentEngine, parseAgentEngineError, AGENT_ENGINE_IDS } from '../../../../tangu-agent/src/contracts/agentEngine'
 
@@ -18,7 +19,7 @@ registerMessages({
   'agentEngine.runsOn': { zh: '运行在', en: 'Runs on' },
   'agentEngine.harnessHint': { zh: '人设、记忆、技能都留在 Forsion，换来换去都在，旧对话照常能看。换到 {name} 后，新一轮从头开始，不带之前的上文；换回 Tangu，它会接着读这场对话。', en: 'Persona, memory and skills stay in Forsion whichever harness you pick, and earlier chats stay readable. After switching to {name}, the next turn starts fresh without the earlier context; Tangu reads the whole chat when you switch back.' },
   'agentEngine.handoff': { zh: '每一轮把这个 Agent 的人设、协作说明、记忆、技能、勾选的 MCP 和 Forsion 的工具交给 {name}，记忆和日志记在它名下。Forsion 的工具照它的审批档来问，卡片画在 Forsion 里；读写文件、跑命令用 {name} 自带的。', en: "Each turn, this agent's persona, collaboration notes, memory, skills, chosen MCP servers and Forsion tools are handed to {name}, and its memory and logs stay under this agent. Forsion tools follow its approval mode and show their cards in Forsion; {name} reads and writes files and runs commands with its own tools." },
-  'agentEngine.handoffLimits': { zh: '还交不过去的：浏览器、电脑和手机控制，定时和自动化，团队和 @。', en: 'Not handed over yet: browser, computer and phone control, schedules and automations, teams and @ mentions.' },
+  'agentEngine.handoffLimits': { zh: '浏览器和电脑控制也交过去：截图要 {name} 当前用的模型能看图才收得到，看不了图时它会告诉你；跑得久的先回一个编号，跑完再取。还交不过去的：手机控制，定时和自动化，团队和 @。', en: "Browser and computer control are handed over too. {name} only sees their screenshots if the model it is using can see images; if it can't, it tells you. Long-running calls return a ticket first and the result later. Not handed over yet: phone control, schedules and automations, teams and @ mentions." },
   'agentEngine.notInstalled': { zh: '未安装', en: 'Not installed' },
   'agentEngine.notInstalledHint': { zh: '这台电脑上没检测到 {name}。装好后就能用，安装命令在设置 › 本机 Agent CLI。', en: '{name} was not found on this computer. Install it to use this agent; the install command is in Settings › Local agent CLIs.' },
   'agentEngine.howToInstall': { zh: '怎么安装', en: 'How to install' },
@@ -46,6 +47,19 @@ type EngineRow = { id: string; status?: 'available' | 'needs-signin' | 'not-inst
 /** 这个 Agent 由谁来跑:'' = Tangu。 */
 export function agentEngineOf(def: { engine?: string } | null | undefined): string {
   return typeof def?.engine === 'string' ? def.engine.trim() : ''
+}
+
+/** 这场对话由哪个外部引擎跑:'' = Tangu。cfg = 会话配置(新对话 = newChatCfg)。口径同 ChatView 的输入框:显式选了引擎的按引擎;
+ *  否则看跑这一轮的 Agent(私聊身份 / 选的人 / 缺省 Agent;团队、群聊、显式引擎的会话不算)定义里的 engine。 */
+export function chatEngineOf(
+  cfg: Pick<AgentConfig, 'engineId' | 'soloEngineId' | 'soloAgentSlug' | 'agentSlug' | 'groupChat' | 'teamSlug' | 'teamMember'> | null | undefined,
+  agentDefs: ReadonlyArray<{ slug: string; engine?: string }> | null | undefined,
+  defaultAgentSlug: string,
+): string {
+  const c = cfg ?? {}
+  const runAgentSlug = c.soloAgentSlug || c.agentSlug || (c.engineId || c.soloEngineId || c.groupChat || c.teamSlug || c.teamMember ? '' : defaultAgentSlug)
+  const runAgentDef = runAgentSlug && !c.engineId && !c.soloEngineId && !c.groupChat && !c.teamMember ? agentDefs?.find((a) => a.slug === runAgentSlug) : undefined
+  return c.engineId || agentEngineOf(runAgentDef)
 }
 
 /** 名册里有 Agent 形态的引擎(今天只有 DSH):新对话选择器的「外部引擎」分组、左栏的引擎行不再单列它。 */

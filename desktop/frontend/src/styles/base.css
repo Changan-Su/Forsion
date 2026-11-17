@@ -251,6 +251,25 @@
   --overlay-scrim: rgba(0, 0, 0, 0.55);
 }
 
+/* ─── 笔记里正在编辑的公式源码:token 颜色(amadeus/styles.css 的 .math-source-*) ───
+ * 只分明暗、不随主题色 / 背景色走,所以不进 skins.css 的 [data-skin] / [data-bg] 块(三轴两两不相交)。
+ * 缺省值 = Obsidian 1.15 实测(浅 / 深);括号是它不装插件时的弱化文字色。
+ * 换成 Forsion 自己的配色只改这两块(例:括号跟主题走 = --math-src-bracket: var(--text-muted))。 */
+:root {
+  --math-src-dollar: #8a5cf5;  /* $ 与 $$ */
+  --math-src-command: #e93147; /* \frac \alpha \{ 这类命令,以及 _ ^ & */
+  --math-src-letter: #00bfbc;  /* 字母 */
+  --math-src-number: #7852ee;  /* 数字 */
+  --math-src-bracket: #5c5c5c; /* ( ) [ ] { } */
+}
+:root.dark {
+  --math-src-dollar: #a68af9;
+  --math-src-command: #fb464c;
+  --math-src-letter: #53dfdd;
+  --math-src-number: #a882ff;
+  --math-src-bracket: #b3b3b3;
+}
+
 /* 支持 color-mix 就换成按 accent 调配的版本(见 :root 里 --sel-line 的长注释)。 */
 @supports (color: color-mix(in srgb, red 50%, transparent)) {
   :root {
@@ -2079,15 +2098,18 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   min-width: 0;
   interpolate-size: allow-keywords;
   width: fit-content;
-  transition: background var(--duration-fast), width var(--menu-exit-duration) var(--ease-exit);
+  --pill-size-motion: var(--menu-exit-duration) var(--ease-exit);
+  transition: background var(--duration-fast), width var(--pill-size-motion);
 }
 .composer-chip.model-pill-btn.is-open {
   display: grid;
   grid-template-columns: 16px minmax(0, 1fr) 16px;
   width: var(--menu-select-width);
   background: var(--overlay-medium, rgba(127, 127, 127, 0.18));
-  transition: background var(--duration-fast), width var(--menu-enter-duration) var(--menu-enter-ease);
+  --pill-size-motion: var(--cap-open, var(--menu-enter-duration) var(--menu-enter-ease));
 }
+/* 倒放收起(Chat Box 水滴开合,views/chat2/useCapsuleDroplet):跟液体一起缩回去 */
+.composer-chip.model-pill-btn.is-retracting { --pill-size-motion: var(--cap-close, var(--menu-exit-duration) var(--ease-exit)); }
 .composer-chip.model-pill-btn.is-max {
   color: color-mix(in srgb, #a77bff 78%, var(--text));
   background: color-mix(in srgb, #8b5cf6 12%, var(--overlay-light, rgba(127, 127, 127, 0.1)));
@@ -4342,13 +4364,14 @@ html.dark .brand-logo--dark { display: inline-block; }
   border-radius: var(--radius-sm); border: var(--border-width) solid var(--border); background: var(--overlay-light);
   font-family: var(--font-mono); font-size: var(--ui-font-meta, 12px); color: var(--text);
 }
-/* 行下展开的提示行(冲突 / 系统保留 / 编辑器提示) */
-.shortcut-pending {
+/* 行下展开的提示行(冲突 / 系统保留 / 编辑器提示);.shortcut-note = 同一个样子的常驻说明(插件默认键没生效),不是待处理的提示 */
+.shortcut-pending, .shortcut-note {
   display: flex; align-items: center; gap: 10px; padding: 8px 15px; border-bottom: var(--border-width) solid var(--border);
   font-size: var(--ui-font-meta, 12px); color: var(--text-muted);
 }
-.shortcut-pending > svg { flex-shrink: 0; }
-.shortcut-pending > span:first-of-type { flex: 1; min-width: 0; }
+.shortcut-pending > svg, .shortcut-note > svg { flex-shrink: 0; }
+.shortcut-pending > span:first-of-type, .shortcut-note > span:first-of-type { flex: 1; min-width: 0; }
+.shortcut-note > svg { color: var(--text-faint); }
 .shortcut-pending--conflict { background: var(--warning-light); }
 .shortcut-pending--conflict > svg { color: var(--warning); }
 .shortcut-pending--system { background: var(--danger-light); }
@@ -4548,6 +4571,47 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-wrap { top: calc(var(-
   border-radius: 4px;
 }
 .ntf-close:hover { color: var(--text); }
+/* 手机横幅(NotificationHost 的 PhoneBanner:窄屏手机壳、没有原生横幅时 —— 网页版手机):状态栏下 4px、左右各 10px、
+   高 54(字放大时往下长),盖住网页画的顶栏 / 胶囊那一条(.bmc-chrome 35 / 55 之上),不碰页面内容。来源 · 标题一行小字、正文一行,
+   放不下句尾省略;按钮和 × 同一行靠右,按钮不缩。卡面同 .ntf(浮层表面、按钮字 --accent-ink)。
+   有原生外壳时由原生层画(Android NativeBanner.kt,同一套尺寸);原生外壳在却没有原生横幅(桥坏了、phone-stage 台架替身)
+   时网页盖不到原生胶囊,落在胶囊那一条下面,通话中再让到通话条下面(同上面 .ntf-wrap 两条)。 */
+.ntf-banner-wrap {
+  position: fixed;
+  top: calc(env(safe-area-inset-top, 0px) / var(--uiz, 1) + 4px);
+  left: 10px;
+  right: 10px;
+  z-index: var(--z-menu);
+  pointer-events: none;
+}
+body:has(.mb-shell[data-native-chrome]) .ntf-banner-wrap { top: calc(var(--nc-top, 0) * 1px / var(--uiz, 1) + 4px); }
+body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-banner-wrap { top: calc(var(--nc-top, 0) * 1px / var(--uiz, 1) + 70px); }
+.ntf-banner {
+  pointer-events: auto;
+  touch-action: none; /* 往上滑归横幅自己(跟手),不交给页面滚动 */
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 54px; /* 字放大时长高,不裁掉第二行 */
+  box-sizing: border-box;
+  padding: 6px 6px 6px 12px;
+  font-size: var(--ui-font-meta, 12px);
+  line-height: 1.4;
+  background: var(--surface-float, var(--bg-card, var(--bg))); backdrop-filter: var(--surface-blur, none);
+  border: var(--border-width) solid var(--surface-edge, var(--border));
+  border-radius: var(--radius-md);
+  box-shadow: var(--card-shadow, 0 8px 24px var(--shadow));
+  color: var(--text);
+  cursor: default;
+  user-select: none;
+}
+.ntf-banner .ntf-icon { margin-top: 0; }
+.ntf-banner-body { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.ntf-banner-source { font-size: var(--ui-font-caption, 11px); color: var(--text-muted); }
+.ntf-banner-source, .ntf-banner-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 按钮不缩,但最宽 160(同原生 NativeBanner.kt):插件给的长按钮名不该把正文挤没,放不下句尾省略 */
+.ntf-banner .ntf-banner-action { flex-shrink: 0; align-self: center; margin-top: 0; white-space: nowrap; max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
+.ntf-banner .ntf-banner-close { align-self: center; margin: 0; padding: 6px; }
 .ntf-more {
   pointer-events: auto;
   font-size: var(--ui-font-caption, 11px);
@@ -5536,6 +5600,18 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-wrap { top: calc(var(-
       而是壁纸铺到屏幕底、内容留在 Dock 之上。 */
 .mb-shell[data-native-chrome] .mb-main > .mb-view[data-view='homepage'] { padding-bottom: 0; }
 .mb-shell[data-native-chrome] .mb-view[data-view='homepage'] .hp-root { --hp-chrome-bottom: var(--mb-bottom); }
+/* 前进后退那一行(.lcl-viewnav-fallback,lcl/engine/SingleColumnHost 的 LeafHost 插在每个主区视图顶上,40px 高):
+   主页退订了顶部让位(①),这一行就落在 y=0;原生外壳把 WebView 铺到屏幕顶,而状态栏那层遮罩又唯独在主页关掉
+   (singleColumn.css),于是箭头压在时钟上(2026-11-16 安卓真壳)。这里让它浮到胶囊那一行下面、不占流内位置:
+   壁纸照样铺到屏幕顶,它原来占的 40px 记进主页内容的顶部留白,内容的位置一点不变。原生布局还没报上来时
+   --mb-top 为 0,那时 WebView 本来就摆在状态栏下面。只管原生外壳:网页 / 桌面窄窗没有这个属性,逐像素不变。
+   仪器:mobile `npm run emu:nativeshell` 的「floating chrome (first level)」里主页那几条(hp-root 顶到屏幕顶、这一行在胶囊之下)。 */
+.mb-shell[data-native-chrome] .mb-main > .mb-view:is([data-view='homepage'], [data-view='chat']) > .lcl-viewnav-fallback { position: absolute; top: var(--mb-top); left: 0; z-index: 2; height: 40px; }
+.mb-shell[data-native-chrome] .mb-view[data-view='homepage'] .hp-root { --hp-chrome-top: calc(var(--mb-top) + 40px); }
+/* 对话页同一个病,表现不同:那一行压在状态栏遮罩底下(看不见、点不着),却在流里占着 40px,把 .t2-stream 整个往下推,
+   正文没法从胶囊底下穿过去。同样浮到胶囊下面,40px 记进流自己的顶部内距(②那条的 --mb-top 之上),第一条消息位置不变。
+   仪器:emu:nativeshell 的「floating chrome (detail page)」(流顶到屏幕顶、这一行在胶囊之下)。 */
+.mb-shell[data-native-chrome] .mb-view[data-view='chat'] .t2-stream { padding-top: calc(var(--mb-top) + 40px); }
 
 /* ⑦ 白板在 Android 宽屏(左侧竖条 + 并排左栏,2026-10-20 方案 A2):画布铺满整屏高,引擎顶上那一排(菜单钮 → 工具岛)
       挪进两颗原生胶囊所在的那一行 —— 菜单钮排在标题胶囊右边 8dp,工具岛在主区正中,右边给右胶囊留够位置。
@@ -5606,6 +5682,11 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-wrap { top: calc(var(-
   --menu-exit-duration: 80ms; /* 菜单、二级面板、命令面板退场 */
   --palette-enter-duration: 120ms; /* 命令面板、⌘P 进场 */
   --droplet-duration: 420ms; /* 液滴展开(lcl/engine/droplet.ts):浮层从发起它的按钮里流出来;收起 0.7 倍倒放(10-30 用户定) */
+  --droplet-retract-ease: cubic-bezier(0.65, 0, 0.35, 1);
+  /* Chat Box 胶囊撑开 / 倒放收起跟菜单的展开方式同一只表(11-16 Chat Box 水滴方案):缺省(Genesis / 水滴)= 液滴;
+     拉伸、平移、只淡入淡出在下面按 <html data-motion-theme / data-motion-fade> 换。点了一行 / 换胶囊不走这里(菜单退场那一对)。 */
+  --cap-open: var(--droplet-duration) var(--ease-surface);
+  --cap-close: calc(var(--droplet-duration) * 0.7) var(--droplet-retract-ease); /* 液滴收起那段的曲线:两头缓、中间快(11-16 Chat Box 水滴方案,展开曲线直接倒放「抽搐」) */
   --collapse-duration: var(--duration-base); /* 折叠展开 / 收起同长度(不算浮层退场,不缩短),箭头同一份 */
   --collapse-ease: var(--ease-drawer);
   --tip-delay: 300ms; /* 提示框首次出现 */
@@ -5643,6 +5724,15 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-wrap { top: calc(var(-
  *   流的时候它藏着,自己 150ms 早就走完(悬停时前沿探 2px 也还要这条过渡)。
  * 面板(openPanel)在 JS 里按同一个属性分派。菜单 / 提示 / 吐司 / 折叠不跟动效主题。 */
 :root[data-motion-theme='glide'] { --seg-edge-lag: 0ms; --switch-edge-lag: 0ms; }
+/* Chat Box 胶囊的撑开 / 倒放跟着 openPanel 分派到的那种展开走(注释见 :root 的 --cap-open):
+   拉伸 = 它自己的时长、收起是展开曲线倒放;平移 = 菜单进退场那一对;只淡入淡出 / 系统减少动态效果 = 直接到位。 */
+:root[data-motion-theme='stretch'] {
+  --cap-open: var(--stretch-open-duration) var(--ease-surface);
+  --cap-close: calc(var(--stretch-open-duration) * 0.7) cubic-bezier(0.64, 0, 0.78, 0);
+}
+:root[data-motion-theme='glide'] { --cap-open: var(--menu-enter-duration) var(--menu-enter-ease); --cap-close: var(--menu-exit-duration) var(--ease-exit); }
+:root[data-motion-fade='on'] { --cap-open: 0s linear; --cap-close: 0s linear; }
+@media (prefers-reduced-motion: reduce) { :root { --cap-open: 0s linear; --cap-close: 0s linear; } }
 :root[data-motion-theme='droplet'] :is(.t2s-vaultseg-thumb, .lcl-vmode-thumb) { transition: none; }
 @keyframes ui-menu-enter {
   from { opacity: 0; scale: 0.985; }
@@ -5662,6 +5752,9 @@ html:root :is(.ctx-menu, .ui-popover, .amx-db-pop, .slash-menu, .wiki-suggest, .
   transform-origin: top left;
 }
 html:root :is(.project-menu, .composer-menu, .t2c-menu) { transform-origin: bottom left; }
+/* Chat Box 底排按钮的菜单从按钮里流出来(11-16 Chat Box 水滴方案,views/chat2/useCapsuleDroplet):进场由 openPanel 自己放
+   (液滴 / 拉伸 / 平移,跟动效主题),这里的淡入微缩撤掉,否则两种进场叠在一起。点了一行的退场替身照旧走下面的退场名单。 */
+html:root .t2c-pour:not([data-lcl-exit]) { animation: none; }
 @media (prefers-reduced-motion: reduce) {
   html:root :is(.ctx-menu, .ui-popover, .amx-db-pop, .slash-menu, .wiki-suggest, .paste-as-menu,
     .project-menu, .composer-menu, .cm-sub, .add-menu-sub, .unitsw-menu,

@@ -130,6 +130,21 @@ describe('内嵌引擎插件', () => {
     expect(found.find((d) => d.manifest.id === 'embedded-tool')?.iconUrl).toMatch(/^data:image\/png;base64,/);
   });
 
+  it('同一个包的普通目录与商店安装并存:只装商店那份的引擎插件、技能与 agent', () => {
+    // 普通目录按名排在 market-<uuid> 前:以前两份内嵌的同 id 引擎插件先到先得,跑的是旧的那份
+    const store = 'market-00000000-0000-4000-8000-00000000000a';
+    const plain = makeBundle('demo-suite');
+    const market = path.join(shared, 'plugins', store);
+    writeJson(path.join(market, 'manifest.json'), { id: 'demo-suite', name: 'demo-suite', version: '2.0.0' });
+    for (const b of [plain, market]) {
+      writeJson(path.join(b, 'tangu-plugins', 'demo-channel', 'tangu-plugin.json'), engineManifest('demo-channel'));
+      mkdirSync(path.join(b, 'skills'), { recursive: true });
+    }
+    expect(bundleDirs()).toEqual([market]);
+    expect(bundleSkillRoots()).toEqual([path.join(market, 'skills')]);
+    expect(discoverPlugins().filter((d) => d.manifest.id === 'demo-channel').map((d) => d.dir)).toEqual([path.join(market, 'tangu-plugins', 'demo-channel')]);
+  });
+
   it('顶不掉用户目录里同 id 的插件(先扫者胜)', () => {
     const bundle = makeBundle('my-bundle');
     writeJson(path.join(bundle, 'tangu-plugins', 'dup-tool', 'tangu-plugin.json'), engineManifest('dup-tool'));

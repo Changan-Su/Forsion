@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, toNamespacedPath } from 'node:path'
 
 vi.mock('electron', () => ({ app: {}, BrowserWindow: class {}, dialog: {}, ipcMain: {} }))
-const { keyEvents, sandboxFilePath } = await import('./sandboxChild')
+const { hookMissText, keyEvents, sandboxFilePath } = await import('./sandboxChild')
 
 describe('press 的键', () => {
   it('普通键带字符事件(真打进输入框);带 Meta / Ctrl 的是快捷键,不打字;Mod 跟平台走', () => {
@@ -60,5 +60,17 @@ describe('files 的路径', () => {
     symlinkSync(b.outside, junction, 'junction')
     expect(sandboxFilePath(toNamespacedPath(join(junction, 'key.txt')), b, true)).toBeNull()
     expect(sandboxFilePath(toNamespacedPath(join(junction, 'new.txt')), b, false)).toBeNull()
+  })
+})
+
+// 11-15:钩子没拿到值的四种原因各说各的(以前一律「还在启动」,命令只是在等自己弹的框)
+describe('钩子没做成时的说法', () => {
+  it('没开 / 还在启动 / 超时 / 调用失败各不相同;超时带秒数;设置窗口说成设置窗口', () => {
+    const texts = (['closed', 'starting', 'timeout', 'failed'] as const).map((miss) => hookMissText({ ok: false, miss, ms: 10_000 }))
+    expect(new Set(texts).size).toBe(4)
+    expect(texts[1]).toBe('the sandbox window is still starting')
+    expect(texts[2]).toMatch(/did not answer within 10s/)
+    expect(texts[2]).not.toMatch(/starting/)
+    expect(hookMissText({ ok: false, miss: 'closed' }, 'settings')).toMatch(/settings window is not open/)
   })
 })

@@ -114,21 +114,24 @@
 /* 模式胶囊与 ModelPill 共用同一展开契约:224px、三列居中、菜单右缘对齐。
    模式胶囊在底栏左侧:打开时外层先占住最终宽度,菜单锚点不动。
    开合补宽度、跟菜单同一只表(11-02 撤回走查续八 8.4 的「直接到位」,注释见 base.css .model-pill-btn):
-   收起 = 菜单退场时长 / 曲线(写在基础规则),展开 = 菜单进场(写在 .is-open)。 */
+   展开 = --cap-open(跟菜单的展开方式走:液滴 420ms,见 base.css),倒放收起 = --cap-close(.is-retracting),
+   点了一行 / 换胶囊 = 菜单退场那一对(写在基础规则)。 */
 .mode-pill-wrap { position: relative; display: inline-flex; }
 .t2c-pill.mode-pill-btn {
   min-width: 0;
   interpolate-size: allow-keywords;
   width: fit-content;
-  transition: background var(--duration-fast, 0.15s), width var(--menu-exit-duration) var(--ease-exit);
+  --pill-size-motion: var(--menu-exit-duration) var(--ease-exit);
+  transition: background var(--duration-fast, 0.15s), width var(--pill-size-motion);
 }
 .t2c-pill.mode-pill-btn.is-open {
   display: grid;
   grid-template-columns: 16px minmax(0, 1fr) 16px;
   width: 224px;
   background: var(--overlay-medium, rgba(127, 127, 127, 0.18));
-  transition: background var(--duration-fast, 0.15s), width var(--menu-enter-duration) var(--menu-enter-ease);
+  --pill-size-motion: var(--cap-open, var(--menu-enter-duration) var(--menu-enter-ease));
 }
+.t2c-pill.mode-pill-btn.is-retracting { --pill-size-motion: var(--cap-close, var(--menu-exit-duration) var(--ease-exit)); }
 .mode-pill-wrap.is-open { width: 224px; flex-shrink: 0; }
 .mode-pill-btn.is-open > svg { justify-self: center; }
 .mode-pill-btn.is-open .t2c-pill-label { width: 100%; max-width: none; text-align: center; }
@@ -160,8 +163,9 @@
   padding: 4px 9px;
   color: var(--text);
   background: var(--overlay-medium, rgba(127, 127, 127, 0.18));
-  --pill-size-motion: var(--menu-enter-duration) var(--menu-enter-ease);
+  --pill-size-motion: var(--cap-open, var(--menu-enter-duration) var(--menu-enter-ease));
 }
+.t2c-pill.add-pill-btn.is-retracting { --pill-size-motion: var(--cap-close, var(--menu-exit-duration) var(--ease-exit)); }
 .add-pill-plus { justify-self: center; transition: transform 0.2s var(--ease-spring); }
 .add-pill-btn.is-open .add-pill-plus { transform: rotate(45deg); }
 .add-pill-label {
@@ -270,19 +274,34 @@
 .t2c-row .composer-chip.model-pill-btn--native .pill-ultra-tag { display: inline; }
 
 /* 窄 Chat View 的排他展开：当前胶囊完整保留，其他胶囊 / 次要控制直接退出布局。
-   发送（以及运行时停止）永远保留，避免为了观感牺牲核心动作。 */
+   发送（以及运行时停止）永远保留，避免为了观感牺牲核心动作。
+   11-16 Chat Box 水滴方案(第三轮,用户:「模式胶囊最后那一下收起和加号不连贯」):
+   · 认的是 .t2c-capsule-held(菜单挂着,含倒放那段),不是 .is-open —— 胶囊一开始缩,让位的按钮不能就挤回来;
+   · ＋ 和麦克风不退出布局,只原地淡出、位置留着(各占 34px):它们紧挨着会动的胶囊 —— ＋ 在模式胶囊左边、麦克风在
+     模型胶囊右边(模型胶囊右缘不动、向左长)。退出布局会让胶囊开时跳 34px、收完再跳回来;
+   · 其余让位的按钮收完才回来,由 useCapsuleDroplet 给它们淡入。 */
 @container (max-width: 600px) {
-  .t2c-row:not([data-compact]):has(> .add-pill-wrap.is-open) > .t2c-capsule-peer:not(.add-pill-wrap),
-  .t2c-row:not([data-compact]):has(> .mode-pill-wrap.is-open) > .t2c-capsule-peer:not(.mode-pill-wrap),
-  .t2c-row:not([data-compact]):has(> .model-pill-wrap.is-open) > .t2c-capsule-peer:not(.model-pill-wrap),
-  .t2c-row:not([data-compact]):has(> .add-pill-wrap.is-open) > .t2c-collapse-on-capsule-open,
-  .t2c-row:not([data-compact]):has(> .mode-pill-wrap.is-open) > .t2c-collapse-on-capsule-open,
-  .t2c-row:not([data-compact]):has(> .model-pill-wrap.is-open) > .t2c-collapse-on-capsule-open {
+  .t2c-row:not([data-compact]):has(> .t2c-capsule-held) > .t2c-capsule-peer:not(.t2c-capsule-held):not(.add-pill-wrap),
+  .t2c-row:not([data-compact]):has(> .t2c-capsule-held) > .t2c-collapse-on-capsule-open:not(.t2c-mic-control) {
     display: none;
   }
+  /* 拆成两条(cssHasGuard 认不出 :is 里套 :not 的结尾);麦克风那条叠写类名,保住原 :is 给的两级类特异性 */
+  .t2c-row:not([data-compact]):has(> .t2c-capsule-held) > .add-pill-wrap:not(.t2c-capsule-held),
+  .t2c-row:not([data-compact]):has(> .t2c-capsule-held) > .t2c-mic-control.t2c-mic-control { opacity: 0; pointer-events: none; }
+}
+.add-pill-wrap { transition: opacity var(--duration-fast, 0.15s) var(--ease-calm, ease); }
+.t2c-row > .t2c-mic-control { transition: background var(--duration-fast, 0.15s), color var(--duration-fast, 0.15s), opacity var(--duration-fast, 0.15s) var(--ease-calm, ease); }
+/* 液滴的源:胶囊收起时的那块地方(useCapsuleDroplet 量好挂进来),不随胶囊变宽而变。只当几何用,不画、不吃指针 */
+.t2c-drop-src { position: absolute; pointer-events: none; }
+/* 菜单流出 / 倒放时,胶囊压在液体上面;胶囊底换成卡面上等价的不透明色(半透明底会透出底下的液体,一块亮斑) */
+/* 41 是组内叠放:液体层由 droplet.ts 按面板 z-1 现算,胶囊要压在它上面;不是全局层级,所以进了 zindex 基线 */
+.t2c-capsule-held > :is(.t2c-pill, .composer-chip) { position: relative; z-index: 41; }
+.t2c-capsule-held > :is(.t2c-pill, .composer-chip).is-open:not(.active):not([data-danger]):not(.is-max) {
+  background: color-mix(in srgb, var(--text) 7%, var(--bg-card, var(--bg)));
 }
 @media (prefers-reduced-motion: reduce) {
-  .t2c-pill.mode-pill-btn, .t2c-pill.add-pill-btn { transition: background var(--duration-fast, 0.15s); }
+  .t2c-pill.mode-pill-btn, .t2c-pill.add-pill-btn,
+  .t2c-pill.mode-pill-btn:is(.is-open, .is-retracting), .t2c-pill.add-pill-btn:is(.is-open, .is-retracting) { transition: background var(--duration-fast, 0.15s); }
   .add-pill-plus, .add-pill-label, .add-pill-chevron { transition: none; }
   .add-menu-sub { animation: none; }
 }
@@ -363,6 +382,9 @@
 
 /* 录音内联条:就地替换底排(+ 号保留),波形 flex 撑满 + 时长 + ■ 停止 + ↑ 发送;进入淡入+右滑。 */
 .t2c-voicebar { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; animation: t2c-voicebar-in 0.22s var(--ease-out, ease); }
+/* 底排里的录音条 = 麦克风拉成的那条胶囊(11-16 Chat Box 水滴方案 3.3,useVoiceBarFlow 按裁切长开 / 缩回):多一块浅底,
+   不加就没有东西可以拉;进场由脚本放,原来的右滑淡入撤掉。 */
+.t2c-row > .t2c-voicebar { align-self: stretch; padding: 0 2px 0 12px; border-radius: 999px; background: var(--overlay-light, rgba(127, 127, 127, 0.08)); animation: none; }
 @keyframes t2c-voicebar-in { from { opacity: 0; transform: translateX(8px); } to { opacity: 1; transform: none; } }
 .t2c-voicewave { flex: 1; min-width: 0; height: 30px; display: block; }
 .t2c-voicelabel { flex-shrink: 0; font-size: var(--ui-font-meta, 12px); color: var(--text-muted); font-family: var(--font-ui); }

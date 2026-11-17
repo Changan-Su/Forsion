@@ -42,6 +42,7 @@ const dispose = ctx.app.mountBlocks(el, {
 | `getPage().model` | `'blocks'`(v3)/ `'text'`(v4)。**分叉判据**;老宿主没这字段 → 当 `'blocks'` | ✅ |
 | `subscribePage(cb)` | 正文/块/顺序/外来 frontmatter 变了才回调,返回退订函数 | ✅ |
 | `insertMarkdown(token, md, where?)` | 插一段 md,`where` = `'cursor'`(缺省)/`'start'`/`'end'` | ✅ |
+| `insertMarkdownAt?(token, md, opts?)`(2026-11-16+) | 同上一条,另能插在光标所在行内、把光标落到标记处,拒绝时说原因(见下) | ✅(v3 退成 `'end'`) |
 | `insertBlockAfter(token, afterId, content)` | 建块,返回新 id(`afterId=null` = 插到最前) | ❌ 返 `null` |
 | `deleteBlock(token, id)` | 删块(async) | ❌ |
 | `setFmExtra(token, text)` | 写**外来 frontmatter**——你的每页数据存这儿,进页面撤销栈 | ❌ 读可以,写还没开 |
@@ -52,6 +53,22 @@ const dispose = ctx.app.mountBlocks(el, {
 
 坑,按踩到的顺序:
 
+- **`insertMarkdownAt`: insert at the caret, land the caret on a marker, say why an insert was refused (2026-11-16+)**. `insertMarkdown`'s `'cursor'` inserts **after the top-level block holding the caret** (an empty line is replaced), never inside the line, can't place the caret, and only returns `false` when refused. The new method uses the same parse and one transaction; the old one is unchanged:
+
+  ```js
+  const pg = ctx.app.getPage()
+  const r = ctx.app.insertMarkdownAt?.(pg.token, `Hello {{cursor}}, see [[${name}]]`, { where: 'caret', cursorMarker: '{{cursor}}' })
+  if (r && !r.ok && r.reason === 'read-only') ctx.notify?.(t('note.readOnly'), { level: 'warning' })   // ask the user to switch to editing
+  if (!r) ctx.app.insertMarkdown?.(pg.token, md.replace('{{cursor}}', ''), 'cursor')   // older host
+  ```
+
+  - `where`: `'caret'` (new): when the markdown parses to a **single paragraph**, its inline content goes in at the caret, replacing a non-empty selection like typing would (`Hello {{name}}` → `Hello Ada`). Several paragraphs, a heading, a list, or a caret where that content can't go (a selected card, bold into a code block) → same as `'cursor'`. `'cursor'` (default) / `'start'` / `'end'` mean what they mean for `insertMarkdown`.
+  - `cursorMarker`: a string you put in `md` where the caret should land (Templater's `tp.file.cursor()`). The host removes it, puts the caret there and focuses the note; later copies are removed too; any text works, markdown syntax included (`$…$`). Not found, or it ends up where a caret can't go (inside a link address) → only removed, the caret lands as without it.
+    ⚠️ A marker that would change the markdown structure (at line start in front of `#` / `-`: `{{c}}# Heading` would turn the heading into a paragraph) makes the host insert the **marker-stripped text** and skip the caret: don't put the marker in front of block syntax at the start of a line. With `'start'` / `'end'` a found marker also moves the caret and focuses.
+  - Always **its own undo step** (the old method is not); neither the marker nor the host's placeholder ever reaches disk.
+  - Result `{ ok: true }` or `{ ok: false, reason }`: `'stale-token'` (another note, or your plugin was disabled / reloaded) / `'no-note'` / `'empty'` (whitespace or only the marker) / `'read-only'` (reading mode, locked or read-only view; nothing inserted) / `'no-editor'` (still loading, source mode, just closed). With the same note open twice, the most recently used one is tried first.
+  - v3 notes (`model === 'blocks'`) have no caret: `'caret'` / `'cursor'` degrade to `'end'` (logged) and the marker is only removed.
+  - File-type surfaces' `file.surface` (`PluginPageSurface`) has it too. Older hosts lack it → fall back to `insertMarkdown`.
 - **`page.text` 只读,而且在 v4 上是「上次保存那一刻」的快照**(≤800ms 陈旧)。**绝不「读全文 → 改 → 整篇写回」**:那 800ms 里用户敲的字会被你抹掉。改内容只有 `insertMarkdown`;插进去的文本必须能原样 markdown 往返(连续空格被压 → 宿主重载整篇 → 你的插件状态全没)。
 - **不给 v4 合成块 id 是刻意的**:PM 顶层节点没有身份,按位置编号的 id 用户按一次回车就全体位移,而令牌只挡「换了一篇」挡不住「同一篇里 id 易主」。宁可空,不可假。
 - **只服务活动页**。Amadeus 是「单活页」模型(同一时刻只加载一处,笔记编辑器和文件类型视图共用),插件跟着走。令牌闸是宿主兜的底,你自己也别拿旧快照连环操作。
@@ -112,7 +129,8 @@ const off = ctx.app.watchFile?.('Snippets/latex.js', () => reload())
   DecorationSet Slice Fragment keymap InputRule inputRules`。`import type` 拿类型可以(会被擦掉),
   **运行时不许 import prosemirror** —— 打进包里就是第二份 PM,`instanceof` 与 PluginKey 全对不上。
 - **factory 每个编辑器实例调一次**:一篇 v3 笔记是很多个小编辑器,别把「每编辑器状态」挂在工厂外的共享对象上。
-- **零 schema / 零序列化**:只能产生纯文本改动 + 装饰 + 按键拦截。想改落盘格式的不走这条路。
+- **No schema, no serialization**: you can't add node types or change what is saved. You can intercept keys, add decorations, and **change text and the selection**: `pm` is the host's own ProseMirror, so inserting or deleting text in `view.dispatch(view.state.tr…)` and moving the caret with `TextSelection.create(…)` work (latex-suite jumps the caret between tabstops this way). But for "insert a template at the caret and land the caret on a marker", use `ctx.app.insertMarkdownAt` first (previous section): markdown parsing, a single undo step and the read-only check are already handled there.
+- **Style hooks for math source (since 2026-11-15)**: when the caret is inside a formula and its source shows, the host adds `math-source` to the whole source (including `$`: monospace, italic, inline-code size), and each token also gets `math-source-dollar / -command / -script / -letter / -number / -bracket`. The classes sit **on the same span**, so write `.math-source.math-source-bracket`. The host's token colors are wrapped in `:where()` (zero specificity), so one plain class selector from your plugin on a bracket, `$` or placeholder wins without specificity games. Color variables are `--math-src-*` (light and dark). When both ends of the selection are between the `$` (Tab selecting a placeholder), the preview stays and the format bar does not open (nor do plugin selection actions on it); selections that leave the formula or select it with its `$` behave as before. See the plugin manual section on math source style hooks.
 - **`props.*` 宿主包了 try/catch,`state.apply` 没包** —— 后者吞异常等于放任状态损坏。状态迁移自己写稳。
 - **设置类页面先用 `ctx.ui.mountSettingsPage`**(2026-10-17 起,见 references/host-ui-mounts.md):开关、按钮、输入、额度条都有宿主零件,手机排法由宿主管;
   只有清单外的内容才自己画(放进 `custom` 块)。

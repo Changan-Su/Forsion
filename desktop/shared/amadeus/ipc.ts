@@ -1,4 +1,5 @@
 // The IPC contract shared by main (handlers), preload (bridge), and renderer (consumer).
+import { cmpVersion } from '../../../tangu-agent/src/contracts/lenientVersion'
 import type { LoadedPage, PageManifest } from './compiler/types'
 import type { DbFile } from './db/schema'
 import type { MdMark } from './mdMarks'
@@ -24,6 +25,7 @@ export const IPC = {
   saveAsset: 'asset:save',
   saveVaultBytes: 'vault:save-bytes',
   readVaultBytes: 'vault:read-bytes',
+  statPath: 'vault:stat',
   readExternalPdf: 'pdf:external-read',
   exportExternalPdf: 'pdf:external-export',
   writeExternalPdfAnnotations: 'pdf:external-annotations',
@@ -71,6 +73,8 @@ export const IPC = {
   uninstallPlugin: 'plugins:uninstall-forsion',
   trashRestore: 'trash:restore-desktop',
   bundleAgentOwned: 'plugins:bundle-agent-owned',
+  /** ctx.net.request 的主进程代请求(2026-11-16+;electron/pluginNet.ts)。白名单由主进程按插件 id 读磁盘上的 manifest。 */
+  pluginNetRequest: 'plugins:net-request',
   revealInFileManager: 'shell:reveal',
   dbRead: 'db:read',
   dbWrite: 'db:write',
@@ -421,7 +425,8 @@ export function sanitizeRequiresPlugins(raw: unknown, selfId?: string): PluginDe
     seen.add(id)
     const dep: PluginDependency = { id }
     const minVersion = str(o?.minVersion, 32)
-    if (minVersion && /^v?\d+(\.\d+){0,3}$/.test(minVersion)) dep.minVersion = minVersion
+    // 可带预发布号与 +build.N(2.13.8-beta.3 / 2.13.8+build.1;比较用 cmpVersion,引擎 loader 同口径)。以前只认点分数字,带后缀的最低版本被悄悄丢掉
+    if (minVersion && /^v?\d+(\.\d+){0,3}(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$/.test(minVersion)) dep.minVersion = minVersion
     const market = str(o?.market, 64)
     if (market && /^[a-z0-9][a-z0-9-]*$/.test(market)) dep.market = market
     const name = str(o?.name, 80)
@@ -450,9 +455,35 @@ export interface PluginBundleInfo {
   spaces: string[]
 }
 
-/** 需要插件在 manifest 里显式声明才注入的宿主敏感能力(default-deny 白名单)。 */
-export type PluginCapability = 'activeWindow' | 'databases' | 'noteTasks' | 'calendar' | 'spaces'
-export const PLUGIN_CAPABILITIES: readonly PluginCapability[] = ['activeWindow', 'databases', 'noteTasks', 'calendar', 'spaces']
+/** 需要插件在 manifest 里显式声明才注入的宿主敏感能力(default-deny 白名单)。
+ *  `internals` / `internals-raw`(2026-11-16+):明说不稳定的内部口子 `ctx.internals`(只读一级 / 真对象二级),只在本机桌面注入;
+ *  二级要和一级一起声明才生效。见 amadeus/plugins/pluginInternals.ts。
+ *  `agentImport`(2026-11-16+):ctx.tangu.createAgent / importSessions —— 新建 Agent、把外部聊天记录写成会话。 */
+export type PluginCapability = 'activeWindow' | 'databases' | 'noteTasks' | 'calendar' | 'spaces' | 'agentImport' | 'internals' | 'internals-raw'
+export const PLUGIN_CAPABILITIES: readonly PluginCapability[] = ['activeWindow', 'databases', 'noteTasks', 'calendar', 'spaces', 'agentImport', 'internals', 'internals-raw']
+
+/** manifest `internalsVerified`(2026-11-16+):作者在哪几版 Forsion 上验过内部接口,只用于插件页标注,不拦。
+ *  收字符串或字符串数组,每项是 `主.次` 或 `主.次.补丁`(只比到次版本),最多 8 项;不认识的静默丢。 */
+export function sanitizeInternalsVerified(raw: unknown): string[] | undefined {
+  const list = typeof raw === 'string' ? [raw] : Array.isArray(raw) ? raw : []
+  const out: string[] = []
+  for (const v of list) {
+    if (typeof v !== 'string') continue
+    const m = /^\s*(\d{1,4})\.(\d{1,4})(?:\.\d{1,6})?\s*$/.exec(v)
+    if (!m) continue
+    const minor = `${Number(m[1])}.${Number(m[2])}`
+    if (!out.includes(minor)) out.push(minor)
+    if (out.length >= 8) break
+  }
+  return out.length ? out : undefined
+}
+
+/** ctx.net.request 的 init 过 IPC 的样子(主进程再按不可信输入校验一遍)。 */
+export interface PluginNetRequestInit { method?: string; headers?: Record<string, string>; body?: string | Uint8Array; timeoutMs?: number }
+/** 主进程代请求的结果;code 见 electron/pluginNet.ts 的 PluginNetErrorCode。 */
+export type PluginNetIpcResult =
+  | { ok: true; status: number; headers: Record<string, string>; bytes: Uint8Array; url: string }
+  | { ok: false; code: string; message: string }
 
 /** A user (Forsion) plugin discovered under ~/.forsion/plugins/. */
 export interface ExternalPluginSource {
@@ -486,6 +517,9 @@ export interface ExternalPluginSource {
   /** 插件声明要用的宿主敏感能力(manifest `capabilities`,白名单外的一律丢)。宿主只给声明过的
    *  插件注入对应的 ctx 接缝——没声明 = 拿不到,不是「拿到了但没用」。目前只有 'activeWindow'。 */
   capabilities?: PluginCapability[]
+  /** Forsion minor versions the author verified `ctx.internals` against (manifest `internalsVerified`, 2026-11-16+;
+   *  `sanitizeInternalsVerified`). Label only: a mismatch shows a hint on the detail page, it never blocks. */
+  internalsVerified?: string[]
   /** README.md content from the plugin folder (capped), for the settings detail page. */
   readme?: string
   /** CHANGELOG.md content from the plugin folder (capped), shown as the "更新日志" section on the detail page.
@@ -497,6 +531,9 @@ export interface ExternalPluginSource {
   guide?: PluginGuideSpec
   /** Store sources this plugin adds to the store's left column (manifest `storeSources`, 2026-11-08+; `declaredSourcesOf`). */
   storeSources?: import('../storeSources').DeclaredStoreSource[]
+  /** Host patterns the plugin may reach through `ctx.net` (manifest `network`, 2026-11-16+; `sanitizeNetworkPatterns`).
+   *  Display only on this side: the main process re-reads the manifest on disk for every request. */
+  network?: string[]
   /** Home widgets (manifest `widgets`, 2026-11-07+): read from each widget folder by the main process (`pluginWidgetDirs` + `sanitizePluginWidget`). */
   widgets?: PluginWidgetSpec[]
   /** Activity events the plugin declares it emits (manifest `events`, sanitized) — automation builder catalog. */
@@ -543,44 +580,22 @@ export interface ExternalPluginSource {
   devProductId?: string
   /** dev 来源正遮蔽全局 plugins 目录里的同 id 安装版(撤下开发副本后安装版会回来)。 */
   shadowsInstalled?: boolean
+  /** 只在商店安装(market-<uuid>)上:同一个包另有一份普通目录的旧安装,被这份取代、已停用(supersededPlainInstalls)。
+   *  设置页据此给一行注记 + 「旧的本地安装」一节;卸载商店版时对话框带上它(uninstallPlugin 的 withSuperseded)。 */
+  supersedes?: SupersededInstall
 }
 
-/** Release-version order of docs/reference/release-versions.md (contracts/releaseVersion.mjs), but lenient: numeric core
- *  (missing parts = 0, leading v ignored), a prerelease sorts below its release, +build.N breaks ties, other metadata ignored:
- *  2.13.8-beta.1 < 2.13.8-beta.2 < 2.13.8 < 2.13.8+build.1. Copied from lcl/spaces/userSpaces.core.ts (main process has no @lcl alias); change both. */
-export function cmpVersion(a: string, b: string): number {
-  // 数字段按字符串比长度再比字典序:合法 semver 的数字段可以超出 Number 精度
-  const numCmp = (x: string, y: string) => {
-    const [u, w] = [x.replace(/^0+(?=\d)/, ''), y.replace(/^0+(?=\d)/, '')]
-    return u === w ? 0 : u.length !== w.length ? (u.length < w.length ? -1 : 1) : u < w ? -1 : 1
-  }
-  const parse = (v: string) => {
-    const [main, meta = ''] = String(v).trim().replace(/^v/i, '').split(/\+(.*)/s)
-    const [core, pre] = main.split(/-(.*)/s)
-    // 元数据里只有 +build.N 有序(安装包修订号),其余不参与比较
-    const rev = /^build\.(\d+)$/.exec(meta)?.[1] ?? '0'
-    return { core: core.split('.').map((x) => parseInt(x, 10) || 0), pre: pre ? pre.split('.') : [], rev }
-  }
-  const pa = parse(a)
-  const pb = parse(b)
-  for (let i = 0; i < Math.max(pa.core.length, pb.core.length); i++) {
-    const d = (pa.core[i] || 0) - (pb.core[i] || 0)
-    if (d) return d < 0 ? -1 : 1
-  }
-  // 同号:带预发布的排在正式版之前(旧版只认数字段,把 2.13.8-beta.1 当成 2.13.8.1、排到 2.13.8 之上)
-  if (!pa.pre.length !== !pb.pre.length) return pa.pre.length ? -1 : 1
-  for (let i = 0; i < Math.max(pa.pre.length, pb.pre.length); i++) {
-    const x = pa.pre[i]
-    const y = pb.pre[i]
-    if (x === undefined || y === undefined) return x === undefined ? -1 : 1 // 前缀相同,段少的在前
-    const nx = /^\d+$/.test(x)
-    const ny = /^\d+$/.test(y)
-    if (nx && ny) { if (numCmp(x, y)) return numCmp(x, y); continue }
-    if (nx !== ny) return nx ? -1 : 1 // 纯数字段排在字母段之前
-    if (x !== y) return x < y ? -1 : 1
-  }
-  return numCmp(pa.rev, pb.rev) // 2.13.7 < 2.13.7+build.1 < 2.13.7+build.10
+/** 被商店安装取代的那份普通目录(旧的本地安装)。id = 它的生效 id(= manifest id),按它卸载只会动普通目录。 */
+export interface SupersededInstall {
+  id: string
+  dir: string
+  version: string
+  name: string
+  nameEn?: string
 }
+
+/** 宽松的版本序(预发布排在正式版之前、+build.N 有序):本体在引擎契约 contracts/lenientVersion.ts,引擎的插件依赖检查用同一份。 */
+export { cmpVersion }
 
 /** Gate a plugin manifest: apiVersion mismatch → 'api'; app older than minAppVersion → 'minApp'; ok → null. */
 export function gatePluginManifest(
@@ -731,6 +746,14 @@ export interface PageHistoryEntry {
 }
 
 /** 回收站条目:name = .trash 内扁平文件名;original = 删除前的 vault 相对路径。 */
+/** `statPath` result: `size` is 0 for folders; times are ms since epoch. */
+export interface VaultStat {
+  kind: 'file' | 'folder'
+  size: number
+  mtime: number
+  ctime: number | null
+}
+
 export interface TrashEntry {
   name: string
   original: string
@@ -850,6 +873,10 @@ export interface AmadeusApi {
   /** Read a vault file's raw bytes by vault-relative path (PDF 阅读器 getDocument({data}) 等;避免自定义
    *  scheme 的跨源 XHR 限制——dev 渲染器是 http://localhost 源,XHR 到 amadeus-asset:// 会被 Chromium 拦)。 */
   readVaultBytes(path: string): Promise<Uint8Array>
+  /** Kind, size and times of a vault-relative path (2026-11-16+, `ctx.app.stat`). null = missing (ENOENT / ENOTDIR) or
+   *  no vault; escaping the vault and other IO errors reject. `ctime` = creation time (birthtime), null when the file
+   *  system does not record it. Optional: hosts whose listing has no times (cloud / Unit RPC / share) leave it out. */
+  statPath?(path: string): Promise<VaultStat | null>
   /** Desktop file-view access; external PDFs are read-only, only their annotation sidecar is writable. */
   readExternalPdf?(path: string, annotations?: boolean): Promise<Uint8Array | null>
   exportExternalPdf?(path: string, name: string, bytes: Uint8Array): Promise<string | null>
@@ -966,19 +993,26 @@ export interface AmadeusApi {
   writePluginData?(pluginId: string, text: string): Promise<void>
   /** Discover user plugins under the vault's .amadeus/plugins/ folder. */
   listPlugins(): Promise<ExternalPluginSource[]>
-  /** Open the vault's plugins folder in the OS file manager (creating it if needed). */
-  openPluginsFolder(): Promise<void>
+  /** Open the plugins folder in the OS file manager (creating it if needed). dir = one plugin's directory name:
+   *  select that folder instead (ignored unless it is a plain child directory of the plugins folder). */
+  openPluginsFolder(dir?: string): Promise<void>
   /** Write a runnable sample plugin into the plugins folder. */
   scaffoldSamplePlugin(): Promise<void>
   /** 卸载 ~/.forsion/plugins 下的一个 Forsion 插件(按 manifest id 定位目录),挪进回收站(30 天可恢复;可选:桌面实现)。
    *  keepSettings:插件设置原地留着;vaultFolder:库里的工作文件夹(相对库根)一起进回收站;prefs:渲染层摘下的 localStorage 偏好,
-   *  恢复时原样交回。旧调用只传 id = 文件 + 设置进回收站。 */
-  uninstallPlugin?(id: string, opts?: { keepSettings?: boolean; vaultFolder?: string; prefs?: Record<string, string>; engineTrash?: string[] }): Promise<{ trashId?: string; dirName?: string } | void>
+   *  恢复时原样交回。旧调用只传 id = 文件 + 设置进回收站。
+   *  withSuperseded:目标是商店安装时,被它取代的旧普通目录(主进程自己判定,渲染层不递目录名)一起进同一条回收站条目,
+   *  否则卸掉商店版后旧副本立刻重新运行。旧副本的设置跟着 keepSettings 走。
+   *  dir:同一个 id 有多份目录时指名卸哪一份(清理旧副本按界面显示的那份);生效 id 对不上就是没找到。 */
+  uninstallPlugin?(id: string, opts?: { keepSettings?: boolean; vaultFolder?: string; prefs?: Record<string, string>; engineTrash?: string[]; withSuperseded?: boolean; dir?: string }): Promise<{ trashId?: string; dirName?: string; superseded?: string[] } | void>
   /** 恢复主进程写的回收站条目(Forsion 插件);extra.prefs 由渲染层写回 localStorage。 */
   trashRestore?(id: string): Promise<{ kind: string; ref: string; extra?: Record<string, unknown> }>
   /** 该 Agent 是不是**这个插件的捆绑包播种的**(引擎新播种时写 agents/<slug>/.bundle-origin = bundle 目录名)。
    *  ctx.tangu.startChat 的 send:true 只认它;可选:只有本机桌面实现,缺席(web / 移动 / Unit / 台架)= 一律降级为预填。 */
   bundleAgentOwned?(pluginId: string, slug: string): Promise<boolean>
+  /** ctx.net 的底座(2026-11-16+):主进程按 pluginId 读**磁盘上**那份 manifest 的 `network` 白名单,只代请求声明过的 https 域名。
+   *  失败不抛,回 `{ ok:false, code }`(invoke 抛出的错误会被包一层,码就丢了)。可选:只有本机桌面实现,缺席 = 插件拿不到 ctx.net。 */
+  pluginNetRequest?(pluginId: string, url: string, init?: PluginNetRequestInit): Promise<PluginNetIpcResult>
   /** Reveal a vault-relative file/folder in the OS file manager (Finder/Explorer), selecting it. */
   revealInFileManager(targetPath: string): Promise<void>
   /** 宿主做不了的 OS 动作(评审 G2-13):对应键**不渲染**(留一个点了没反应的按钮比没有更糟,见 platform-parity)。

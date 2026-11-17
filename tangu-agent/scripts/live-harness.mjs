@@ -41,6 +41,7 @@ import { startImageRecoveryCloud, imageRecoveryLive } from './lib/image-recovery
  *                                                           #   app_settings 的返回文本后跑)。--settingsnav-no-voice = 负对照(落点清单里没有语音页,开不到 → 必须红)
  *   npm run live:harness -- --only pluginui                  # 改 skills/forsion-plugin 的「Desktop plugin UI」一节 / tools/ui-reinvent.mjs / plugin_sandbox 的界面体检后跑:写一个带 Space 的小插件,下拉 / 菜单 / 确认 / 空状态须用宿主零件
  *   npm run live:harness -- --only pluginlook                # 改 skills/forsion-plugin 的「外观开关:跟着宿主走」一节后跑:须经 use_skill 取回正文并答出那一节的三样
+ *   npm run live:harness -- --only plugininternals           # 改 skills/forsion-plugin 的 references/internals.md(ctx.internals)或正文指向它那行后跑:须读到那份参考并答出声明 / read·subscribe / 手机端没有
  *   npm run live:harness -- --only plugindiag --plugin-src <插件目录> [--plugin-data <plugins-data 里那份 json>] [--plugindiag-hint] [--plugindiag-host auto|"<宿主报的运行态>"]   # 装着的桌面插件 Space 不出现(10-10):
  *                                                           #   main.js 求值不抛错、但没走到 registerView 的那类;看真模型只凭插件目录和 shell 查不查得出。插件放进假家目录,开发机的 ~/.forsion 不碰
  *   npm run live:harness -- --only notebook --plugin-src <forsion-plugin-notebook 目录> --python-bin <内置 Python 的 python3> [--notebook-neg]   # Jupyter 笔记本插件给 Tangu 的三件工具(10-12):
@@ -129,6 +130,8 @@ import { startImageRecoveryCloud, imageRecoveryLive } from './lib/image-recovery
  *   npm run live:harness -- --only coding                    # 改 agents/codingPrompt.ts / skills/forsion-plugin 后跑:Coding 人格面对插件项目须指向 Sandbox 面板、且不自己动手 git init/commit(版本由宿主管)
  *   npm run live:harness -- --only storeview                 # 商店左栏的插件页(10-05):ctx.registerStoreView 只给首方内置包。第三方作者问「怎么往商店左栏加一页」→ 须装载手册、
  *                                                           #   说清这条路不对普通插件开放,不许教他照着注册(注册了也不显示)。改 skills/forsion-plugin 那一行后跑。
+ *   npm run live:harness -- --only forsionproducts           # 自家产品速查(11-16 用户反馈「Tangu 不知道 Forsion Git 是什么」):桌面 Work / 轻聊天 / 云端项目各问一次 Forsion Git、轻聊天问蓬洲云
+ *                                                           #   → 须调 forsion_guide、按会话形态答对入口(沙盒里不许许诺推送)。负对照 = 去掉 registry 里注册它的那一行(须红)
  *   npm run live:harness -- --only creation                  # 进造物(09-27):要做「拿来用的东西」→ 回复带 forsion-creation 作品卡;只问概念 / 一次性脚本 → 不出卡。改 skills/forsion-creations 后跑
  *   npm run live:harness -- --only gitpublish                # 发布到 Forsion Git(11-08 用户反馈):中文名项目、有提交没远端,「帮我上传Forsion Git」→ 模型自己起英文名调 git_publish,不要地址;审批卡拒掉,不真发
  *   npm run live:harness -- --only multirepo                 # 多仓 Git(11-07):项目文件夹不是仓、里面两个仓;不点名工具,看状况后只提交 alpha —— 判据看磁盘与 git_commit 的 repo 参数(改 tools/builtin/git.ts / services/gitRepos.ts 后跑)
@@ -391,10 +394,12 @@ OPT_IN.add('musereview'); // 开 Muse 并往隔离库里写用量行:单独跑,�
 OPT_IN.add('projmem'); // 四个 run、两个 agent 两个项目;只在动项目记忆(services/projectMemory.ts、remember 的 scope)时才有信息量。
 OPT_IN.add('pluginui'); // 一个长 run(写一整个插件,几分钟);只在动 forsion-plugin 的界面纪律、重造检测或沙箱状态里的界面体检时才有信息量。
 OPT_IN.add('pluginlook'); // 一个 run;只在动 skills/forsion-plugin 的「外观开关」一节或 use_skill 时才有信息量。
+KEYS.push('plugininternals'); OPT_IN.add('plugininternals'); // 一个 run;只在动 forsion-plugin 的 references/internals.md 或正文里指向它那行时才有信息量。
 OPT_IN.add('plugindiag'); // 一个 run(几分钟);要 --plugin-src 给一份待查的插件,只在量「插件 Space 不出现」的排查能力时才有信息量。
 OPT_IN.add('notebook'); // 两个 run;要 --plugin-src 给构建好的 Jupyter 笔记本插件、--python-bin 给解释器,只在动那个插件的工具说明 / 审批档时才有信息量。
 OPT_IN.add('pluginicon'); // 一个 run;只在动 forsion-plugin 手册「Startup appearance」一节里图标作用范围那两句时才有信息量。
 OPT_IN.add('storeview'); // 一个 run;只在动 forsion-plugin 手册里 registerStoreView 那行、或商店左栏的插件页接缝时才有信息量。
+KEYS.push('forsionproducts'); OPT_IN.add('forsionproducts'); // 五个 run;改 knowledge/forsionProducts.ts / tools/builtin/forsionGuide.ts 后跑
 OPT_IN.add('skillcreate'); // 四个 run;只在动 manage_skill / use_skill / 随包的 skill-creator 技能时才有信息量。
 OPT_IN.add('account'); // --only account:五个 run;引擎的云端地址指向台架里的假 Forsion 云端 —— 只在显式跑它时才指,别的场景照旧连不上云端。
 OPT_IN.add('caltodo').add('cloudtodo'); // --only caltodo / cloudtodo(11-07):用户的待办 = 带勾选列的日历表里的行,可以没有日期;加两条无日期待办 → 列出 → 勾掉,本机 / 云端各一份。判据与负对照见 lib/caltodo-live.mjs。
@@ -426,6 +431,7 @@ KEYS.push('orgchat'); OPT_IN.add('orgchat'); // --only orgchat --org-plugin <bun
 OPT_IN.add('standin'); KEYS.push('standin');
 OPT_IN.add('chanagentmode'); KEYS.push('chanagentmode'); // 通道 run 按 Agent 自己设的审批档收紧(11-14):同一个假通道,Agent 只读 / 分身按本体只读 → 要批不写;没设档 → 照通道完全放行;--kind neg 在没收紧的代码上跑应当红 // 分身(11-09):多联系人假通道 × 本体的私事;七个 run。动通道选 Agent / 分身权限域 / 文件读根 / 委派闸时跑;--kind neg 在旧代码上跑应当漏
 OPT_IN.add('appref'); // 四个 run;只在动 APP_REF_SECTION(应用 / 窗口引用那一段提示词)时才有信息量。
+OPT_IN.add('dsimport'); KEYS.push('dsimport'); // 导入的旧对话能接着聊(11-16,POST /agent/sessions/import):一个 run;只在动 sessionImport / 导入会话的回放时跑
 const NEEDS = { dream: ['historian'], recall: ['historian', 'dream'] }; // 记忆链三连有先后依赖;其余场景自包含
 KEYS.push('marketplace', 'marketplacechat');
 OPT_IN.add('musesettings'); KEYS.push('musesettings'); // 两个 run:私聊说一句改设置 → 出卡不写配置、点了才写,权限档不出卡;动 propose_muse_settings 时跑
@@ -2507,7 +2513,8 @@ try {
     const mkS = async (slug, cwd, title) => (await api('/agent/sessions', { method: 'POST', body: JSON.stringify({ title, model_id: MODEL, project_path: cwd, agent_config: { agentSlug: slug, execMode: 'host', cwd } }) })).session.id;
     const memoryOf = async (sid) => (await api(`/agent/project-context?sessionId=${sid}`)).memory || { entries: [], chars: 0, limit: 0 };
     // 11-09:写满不再当场压缩,后台排一次整理(3 秒后起跑)。等它收场:organize.last 有了、没在跑;老引擎没有 organize → 立刻返回
-    const settle = async (sid, maxMs = 240_000) => {
+    // 上限盖住引擎整理一整次的截止(projectMemoryCompact 的 ORGANIZE_DEADLINE_MS 610 秒)+ 起跑前的 3 秒;轮询到收场就返回,正常不会等这么久
+    const settle = async (sid, maxMs = 630_000) => {
       const t0 = Date.now(); let mem = await memoryOf(sid);
       while (mem.organize && !(mem.organize.last && !mem.organize.running) && Date.now() - t0 < maxMs) { await sleep(3000); mem = await memoryOf(sid); }
       return mem;
@@ -2714,6 +2721,40 @@ try {
     return { ok: !ev.error && ev.content.length > 0, detail: ev.error || `${ev.content.length} 字`, output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
   });
   if (chat && !chat.ok) throw new Error(`基础对话失败,后续场景不跑:${chat.detail}`);
+
+  // 11-16 导入的旧对话(DeepSeek 网页导出)要能接着聊:前面埋一个只在旧对话里出现过的事实,中间垫 30 轮无关的,
+  // 再问「接着刚才的」—— 模型要接得上(说得出名字和颜色),新消息排在旧历史后面,原标题不被改。
+  await scenario('dsimport', 'dsimport 导入的旧对话接着聊', async () => {
+    const T = Date.UTC(2026, 9, 1, 8, 0, 0);
+    const cat = `墨${MARKER.slice(-4)}`;
+    const msgs = [
+      { role: 'user', content: `我在给我家的猫写一首小诗,它叫「${cat}」,是一只橘色的猫,最喜欢趴在窗台上晒太阳。先帮我写两句。`, timestamp: T },
+      { role: 'assistant', content: `窗台一抹橘,${cat}眯眼眠。\n日光铺满背,风过尾轻牵。`, reasoning: '用五言,突出橘色与窗台。', timestamp: T + 5_000 },
+    ];
+    for (let i = 0; i < 30; i++) {
+      msgs.push({ role: 'user', content: `顺便问个无关的:第 ${i + 1} 个常见的排序算法是什么?简单说说。`, timestamp: T + 10_000 + i * 20_000 });
+      msgs.push({ role: 'assistant', content: `第 ${i + 1} 个可以说是${['冒泡排序', '插入排序', '选择排序', '归并排序', '快速排序', '堆排序'][i % 6]}。`.padEnd(300, '。'), timestamp: T + 15_000 + i * 20_000 });
+    }
+    const imp = await api('/agent/sessions/import', { method: 'POST', body: JSON.stringify({
+      app_id: 'tangu', source: 'deepseek', agent_config: { preset: 'chat', execMode: 'sandbox' },
+      conversations: [{ external_id: `live-${MARKER}`, title: `给${cat}的诗`, created_at: T, updated_at: T + 620_000, messages: msgs }],
+    }) });
+    const row = imp.results?.[0];
+    if (!row || row.status !== 'created') throw new Error(`导入失败:${JSON.stringify(imp)}`);
+    const ev = await run(row.session_id, '回到最开始那首诗:再给它加两句收尾。另外提醒我一下,那只猫叫什么名字、什么颜色?');
+    const out = ev.content || '';
+    const all = (await api(`/agent/sessions/${row.session_id}/messages`)).messages || [];
+    const ts = all.map((m) => Number(m.timestamp));
+    const ordered = ts.every((t, i) => i === 0 || t >= ts[i - 1]) && all.length >= msgs.length + 2;
+    const sessions = (await api('/agent/sessions?app_id=tangu')).sessions || [];
+    const title = sessions.find((x) => x.id === row.session_id)?.title;
+    const remembers = out.includes(cat) && /橘/.test(out);
+    return {
+      ok: !ev.error && ev.done && remembers && ordered && title === `给${cat}的诗`,
+      detail: ev.error || `记得名字与颜色=${remembers};新消息在旧历史后=${ordered}(共 ${all.length} 条);标题=${title}`,
+      output: out, ttftMs: ttft(ev), tokens: tokensOf(ev),
+    };
+  });
 
   // 09-30 用户反馈:改名时 remember.update 漏 fact,相同参数失败 30 次。真模型须原地更新且能从参数错误恢复。
   await scenario('remember', 'remember 改名与参数纠正', async () => {
@@ -4761,6 +4802,88 @@ Then reply with only the command output.`,
     return { ok: !ev.error && used && scoped, detail: ev.error || `手册${used ? '已装载' : '未装载'};${scoped ? '说明了只给首方包 / 普通插件用不了' : '没说明限制'};提到 registerStoreView:${/registerStoreView/.test(ev.content) ? '是' : '否'};工具 ${ev.toolCalls.join(',') || '无'}`, output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
   });
 
+  // 自家产品速查(11-16,用户反馈「我的 Tangu 不知道 Forsion Git 是什么」):产品知识在按需工具 forsion_guide 里(正文 knowledge/forsionProducts.ts)。
+  // 先做成技能(#716 初版)到不了 chat 预设和沙盒会话,改成工具;所以三条腿各问一次 Forsion Git,外加轻聊天里问一次蓬洲云:
+  //   ① 桌面 Work(host,不在项目里)② 轻聊天(preset chat + sandbox)③ 云端项目 Work(sandbox)。
+  // 判据:调了 forsion_guide 且取回的正文是这份(MARKER);说对是什么(私有);host 腿给出「项目详情 › 发布到 Forsion Git」、不教手动 git remote add;
+  // 沙盒两条腿取回的是沙盒版说法(SANDBOX)、指去桌面版、不许许诺替用户推送;都不许说不知道。
+  // 负对照 = 去掉 registry 里注册 forsion_guide 的那一行(须红)。网页 / 手机的 Worker 形态台架起不来,发 Worker 后真机问一次。
+  await scenario('forsionproducts', 'forsionproducts 桌面 Work / 轻聊天 / 云端项目里问 Forsion Git,轻聊天问蓬洲云 → forsion_guide 按形态答对', async () => {
+    const MARKER = "Forsion's own Git hosting";
+    const SANDBOX = 'runs in a cloud sandbox';
+    const guide = (ev) => ev.toolResults.filter((r) => r.name === 'forsion_guide' && !r.isError).map((r) => String(r.full || r.result || '')).join('\n');
+    // 只认「对这个产品本身」说不知道(「不清楚你的项目有没有提交」这类正常的不确定不算);入口路径先去掉 Markdown 再比
+    const DUNNO = /(不知道|不清楚|不了解|没有.{0,4}信息).{0,12}(Forsion Git|蓬洲云|Penzor|这个产品|是什么)|(Forsion Git|蓬洲云|Penzor Cloud).{0,12}(不知道|不清楚|不了解)|(don't|do not) know (what|about) (Forsion|Penzor|this product|it is|that is)|not familiar with (Forsion|Penzor|it|this)|no information (on|about) (Forsion|Penzor|it|this)/i;
+    // 许诺「我替你推」才算;「我来讲讲怎么发布」「I can't push from here」不算(Codex 评审给的反例都进了下面的自检)
+    const PROMISE = /(我|咱)(可以|能|来|这就|现在就?|会)(直接)?(帮你|替你)(把.{0,12})?(推送|发布|上传|推上去)|\bI(?:'ll| will| can| could)(?: now)? (?:push|publish|upload)\b/i;
+    const PENZOR_SYNC = /(Penzor Cloud|蓬洲云)[^\n.。]{0,40}?(›|>|→|,? then|(?:,|\band)\s*(?:go to|open|click|tap|select)|然后|进入|再(?:点|进|打开)?|里的|中的)[^\n.。]{0,12}?(\bSync\b|同步)/i;
+    const selfCheck = [
+      [DUNNO, '我不知道 Forsion Git 是什么', true], [DUNNO, "I don't know what Penzor Cloud is", true],
+      [DUNNO, '不清楚你的项目是否已有提交', false], [DUNNO, "I don't know what commits your project has yet", false],
+      [PROMISE, '我可以帮你上传', true], [PROMISE, 'I can push your project for you from here', true], [PROMISE, '我来帮你把项目推送上去', true],
+      [PROMISE, '我来讲讲怎么发布', false], [PROMISE, "I can't push from this chat, but you can", false],
+      // 蓬洲云入口:面包屑和「侧栏里打开蓬洲云,再点同步」两种写法都算(11-16 deepseek 答的是后一种,内容对却判红);
+      // 跨句不算 —— 「蓬洲云是云盘。去设置 › Sync」不是蓬洲云里的入口
+      [PENZOR_SYNC, '蓬洲云 (Penzor Cloud) › 同步 (Sync)', true], [PENZOR_SYNC, 'open 蓬洲云 / Penzor Cloud in the sidebar, then 同步 / Sync', true],
+      [PENZOR_SYNC, '在侧栏打开蓬洲云,再点「同步」', true], [PENZOR_SYNC, 'Open Penzor Cloud and go to the Sync tab', true], [PENZOR_SYNC, 'open the 蓬洲云 / Penzor Cloud Space, go to 同步 / Sync', true],
+      [PENZOR_SYNC, "Penzor Cloud is Forsion's cloud drive. Go to Settings › Sync", false], [PENZOR_SYNC, 'Penzor Cloud keeps your notes in sync', false],
+    ].filter(([re, t, want]) => re.test(t) !== want).map(([, t]) => t);
+    if (selfCheck.length) return { ok: false, detail: `判据自检没过:${selfCheck.join(' / ')}`, output: '', toolCalls: [] };
+    const plain = (t) => String(t || '').replace(/[*_`]/g, '');
+    const ask = (tag, msg, cfg) => run(`live-forsionproducts-${tag}-${Date.now()}`, msg, 240_000, cfg);
+    const Q = 'Forsion Git 是什么?我想把自己电脑上的一个项目放上去,该怎么做?简单说说就行。';
+    // 每条腿显式钉形态(不吃全局 --exec-mode);云端那条带上云端项目名,和桌面「云端项目」建会话时一样
+    const host = await ask('host', Q, { execMode: 'host' });
+    const chat = await ask('chat', Q, { preset: 'chat', execMode: 'sandbox' });
+    const cloud = await ask('cloud', 'What is Forsion Git? Can you put my project on it for me? Keep it short.', { execMode: 'sandbox', workspaceProject: 'Live Forsion Guide' });
+    // 真实的桌面 Work 会话总带项目路径(没选文件夹就落到缺省工作目录),git_* 工具在 → 模型读到的是「有 git 工具」那版。
+    // 项目文件夹放一个和所问无关的空目录:问「把电脑上的一个项目放上去」时不许对着它 git init / 提交 / 发布(顾问 11-16)。
+    const projDir = join(workspace, `forsionguide-${Date.now()}`, 'default-workspace');
+    mkdirSync(projDir, { recursive: true });
+    const { session: projSession } = await api('/agent/sessions', { method: 'POST', body: JSON.stringify({ title: 'forsionguide-project', model_id: MODEL, project_path: projDir }) });
+    const project = await run(projSession.id, Q, 240_000, { cwd: projDir, execMode: 'host', approvalMode: 'auto-edit' }, undefined, () => 'reject');
+    const penzor = await ask('penzor', 'What is Penzor Cloud in Forsion, and where do I turn on syncing for my notes? Keep it short.', { preset: 'chat', execMode: 'sandbox' });
+    const legs = [];
+    const leg = (name, ev, checks) => {
+      const t = plain(ev.content);
+      const g = guide(ev);
+      const fails = [];
+      if (ev.error) fails.push(ev.error);
+      if (!g.includes(MARKER) && name !== '蓬洲云') fails.push('没取到速查正文');
+      if (name === '蓬洲云' && !/Penzor Cloud/.test(g)) fails.push('没取到速查正文');
+      if (DUNNO.test(t)) fails.push('说了不知道');
+      for (const [ok, why] of checks(t, g)) if (!ok) fails.push(why);
+      legs.push(`${name}:${fails.length ? fails.join('、') : '对'}(工具 ${ev.toolCalls.join(',') || '无'})`);
+      return !fails.length;
+    };
+    const okHost = leg('桌面 Work', host, (t, g) => [
+      [!g.includes(SANDBOX), '取回的是沙盒版说法(这条腿没跑成 host)'],
+      [/添加远端|Add remote|新建并推送|Create and push|发布到 Forsion Git|Publish to Forsion Git/i.test(t) && /项目详情|Project details/i.test(t), '没给出项目详情 › Git 里的发布入口'],
+      [/私有|private/i.test(t), '没说私有'], [!/git remote add/.test(t), '教了手动加远端'],
+    ]);
+    const GIT_ACT = new Set(['git_commit', 'git_push', 'git_publish']);
+    const okProject = leg('桌面 Work(带项目)', project, (t, g) => [
+      [g.includes('Call `git_status` first'), '取回的不是「有 git 工具」那版(这条腿没跑成项目会话)'],
+      [/添加远端|Add remote|新建并推送|Create and push|发布到 Forsion Git|Publish to Forsion Git|git_publish/i.test(t) || /项目详情|Project details/i.test(t), '没给出发布入口'],
+      [/私有|private/i.test(t), '没说私有'],
+      [!project.toolCalls.some((n) => GIT_ACT.has(n)), `对着不相干的文件夹动了 git(${project.toolCalls.filter((n) => GIT_ACT.has(n)).join(',')})`],
+      [!project.toolArgs.some((a) => a.name === 'run_bash' && /\bgit\s+(init|add|commit|push|remote)\b/.test(a.args)), '在 run_bash 里跑了 git'],
+    ]);
+    const sandboxChecks = (t, g) => [
+      [g.includes(SANDBOX), '取回的不是沙盒版说法'], [/私有|private/i.test(t), '没说私有'],
+      [/桌面|desktop/i.test(t), '没指去桌面版'], [!PROMISE.test(t), '许诺替用户推送'],
+    ];
+    const okChat = leg('轻聊天', chat, sandboxChecks);
+    const okCloud = leg('云端项目', cloud, sandboxChecks);
+    const okPenzor = leg('蓬洲云', penzor, (t) => [
+      [PENZOR_SYNC.test(t), '同步入口不对'],
+      [/(cloud drive|云盘|网盘|sync)/i.test(t), '没说是什么'],
+    ]);
+    return { ok: okHost && okProject && okChat && okCloud && okPenzor, detail: legs.join(';'),
+      output: [['桌面 Work', host], ['桌面 Work(带项目)', project], ['轻聊天', chat], ['云端项目', cloud], ['蓬洲云(轻聊天)', penzor]].map(([k, ev]) => `--- ${k} ---\n${ev.content}`).join('\n\n'),
+      ttftMs: ttft(host), tokens: tokensOf(host), toolCalls: host.toolCalls };
+  });
+
   // 插件贡献的应用图标管到哪(10-09):桌面安装版把图标写进系统,退出后仍保留;安卓桌面图标只跟内置图标,插件图标只在 App 内。
   // 手册「Startup appearance」一节那两句写明了。问法不点名技能;MARKER 是新句里才有的原话,且须落在模型看得到的那部分
   // (工具结果 48k 硬帽只留头 34k + 尾 12k,这一节在尾部)。答案按「①是 / ②否」定格式,免得从散文里猜肯定否定。
@@ -4803,6 +4926,26 @@ Then reply with only the command output.`,
     const facts = { selected: /aria-selected|aria-current/.test(c), text: /--text(-muted|-light|-faint)?\b/.test(c), reading: /--reading-line-height/.test(c) };
     return { ok: !ev.error && ev.done && loaded && facts.selected && facts.text && facts.reading,
       detail: ev.error || `use_skill ${loaded ? '取回正文' : '未取回'};选中行标记 ${facts.selected ? '有' : '无'};文字 token ${facts.text ? '有' : '无'};阅读 token ${facts.reading ? '有' : '无'};工具 ${ev.toolCalls.join(',') || '无'}`,
+      output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
+  });
+
+  // 插件内部接口 ctx.internals(11-16):技能正文头部只有一行指路,细节在 references/internals.md —— 模型得照 use_skill 给的
+  // 技能文件夹再 read_file 那份参考才答得出。问句不点名 internals,只说公开接口里没有。判三件:参考真读到了(标记句在 read_file 结果里)、
+  // ①答出 manifest capabilities 声明 internals、②答出 read 与 subscribe、③答出手机端没有。
+  // 负对照 = 改前的技能(没有那行、没有那份参考):模型无从得知这个口子 → 「参考读到」与①红。
+  await scenario('plugininternals', 'plugininternals 插件技能:公开接口没有时指向 ctx.internals(声明、读与订阅、只在桌面)', async () => {
+    const MARKER = 'Unstable on purpose';
+    const ev = await run(`live-plugininternals-${Date.now()}`, '我在写一个 Forsion 桌面插件:要知道用户主区当前打开的是哪一页,并在用户切换时跟着变。公开的 ctx 里我没找到对应接口。先装载你的 Forsion 扩展开发技能把这件事查清楚(技能正文指到的参考文件也读),再回答,不要改任何文件。只回三行:①开头写 manifest 要怎么声明(写出确切的字段和值);②开头写读当前值和订阅变化分别调什么(写出确切的方法名);③开头写在 Forsion 手机端能不能用,并说一句该怎么兜底。', 300_000, { enabledSkillIds: ['local:forsion-plugin'], skillsConfigured: true });
+    const read = ev.toolResults.some((r) => r.name === 'read_file' && !r.isError && String(r.full || '').includes(MARKER));
+    const c = ev.content || '';
+    const line = (n) => (c.split('\n').find((l) => l.includes(n)) || '');
+    const facts = {
+      declare: /capabilities/.test(line('①')) && /["'`]internals["'`]/.test(line('①')),
+      api: /\bread\b/.test(line('②')) && /\bsubscribe\b/.test(line('②')),
+      mobile: /不能|不可|无法|不行|没有|undefined|只在.*桌面|仅.*桌面/.test(line('③')),
+    };
+    return { ok: !ev.error && ev.done && read && facts.declare && facts.api && facts.mobile,
+      detail: ev.error || `参考 internals.md ${read ? '读到' : '没读到'};①声明 internals ${facts.declare ? '有' : '无'};②read + subscribe ${facts.api ? '有' : '无'};③手机端没有 ${facts.mobile ? '答对' : '没答对'};工具 ${ev.toolCalls.join(',') || '无'}`,
       output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
   });
 
@@ -8406,6 +8549,51 @@ Then reply with only the command output.`,
       const edited = ev.toolCalls.some((n) => /edit_file|write_file|apply_patch/.test(n));
       return { ok: !ev.error && !!typed && !!clicked && !cu.length && relays && !edited,
         detail: ev.error || `${sum(ev)};${typed ? '填了 Dune' : '✗ 没 type Dune'};${clicked ? `点了 ${clicked.args.target}` : '✗ 没点 Add book'};${relays ? '转述了报错' : '✗ 没提报错'}${cu.length ? `;✗ 用了 computer use(${cu.join(',')})` : ''}${edited ? ';✗ 动了代码' : ''};动作序列 ${ops.join('→')}`, ...base(ev) };
+    });
+    // ⑥(11-15):插件的设置页在独立的设置窗口里。判据:用 settings 打开,再在那扇窗里(window "settings" 或 [sN] 引用)填字、点保存。
+    await scenario('pluginsandbox', 'pluginsandbox ⑥ 插件设置页:settings 打开设置窗口,在那扇窗里填字、点保存', async () => {
+      const MAIN = '[e1] button "Reading log"\nheading "Shelf"\n[e2] input "Book title"\n[e3] button "Add book"';
+      const SETTINGS = 'heading "Reading log"\n[s1] input "Default shelf"\n[s2] button "Save"';
+      const inSettings = (a) => a.window === 'settings' || /^s\d+$/.test(String(a.target || ''));
+      const act = (op, a) => {
+        const where = inSettings(a) ? ' in the settings window' : '';
+        const saved = op === 'click' && inSettings(a) && /s2|Save/i.test(String(a.target || ''));
+        const did = op === 'settings' ? 'opened Settings > Plugins > this plugin in the settings window and read 2 element(s)' : op === 'read' ? `read 3 element(s)${where}` : op === 'type' ? `typed ${String(a.text || '').length} character(s)${where}` : `${op}${where}`;
+        return { ok: true, text: JSON.stringify({ ...status(), action: { did, target: a.target ? `target ${a.target}` : '', outline: op === 'settings' || (op === 'read' && inSettings(a)) ? SETTINGS : op === 'read' ? MAIN : '', newLogs: saved ? [{ level: 'log', text: 'default shelf saved: Sci-fi' }] : [], newNotices: [] } }), ...(op === 'settings' ? { image: 'data:image/jpeg;base64,AAAA' } : {}) };
+      };
+      const ev = await run(`live-sbx-settings-${Date.now()}`, 'reading-log 插件已经在沙箱里跑着了。它的设置里有「Default shelf」一栏。帮我在沙箱里打开这个插件的设置,把 Default shelf 填成「Sci-fi」再保存,看看控制台说了什么。先别改代码。', 240_000, {}, 'desktop/live-harness', undefined, undefined, undefined, {
+        clientCapabilities: ['plugin.sandbox', 'plugin.sandbox-v2'],
+        phone: { ns: 'plugin', respond: (b) => (['read', 'type', 'click', 'press', 'scroll', 'space', 'files', 'settings'].includes(b.op) ? act(b.op, b.args || {}) : b.op === 'stop' ? { ok: true, text: '{"stopped":true}' } : { ok: true, text: JSON.stringify(status()) }) },
+      });
+      const claimed = ev.clientCmds.filter((c) => c.claimed);
+      const opened = claimed.some((c) => c.op === 'settings' && !c.args?.close);
+      const typed = claimed.find((c) => c.op === 'type' && /Sci-fi/.test(String(c.args?.text || '')) && inSettings(c.args || {}));
+      const saved = claimed.find((c) => c.op === 'click' && inSettings(c.args || {}) && /s2|Save/i.test(String(c.args?.target || '')));
+      const cu = ev.toolCalls.filter((n) => /^computer|^mcp__computer|screenshot_app/.test(n));
+      const relays = /saved|Sci-fi|保存/i.test(ev.content);
+      const edited = ev.toolCalls.some((n) => /edit_file|write_file|apply_patch/.test(n));
+      return { ok: !ev.error && opened && !!typed && !!saved && !cu.length && relays && !edited,
+        detail: ev.error || `${sum(ev)};${opened ? '开了设置窗口' : '✗ 没用 settings'};${typed ? '在设置窗口填了 Sci-fi' : '✗ 没在设置窗口 type Sci-fi'};${saved ? `在设置窗口点了 ${saved.args.target}` : '✗ 没在设置窗口点保存'};${relays ? '转述了结果' : '✗ 没转述'}${cu.length ? `;✗ 用了 computer use(${cu.join(',')})` : ''}${edited ? ';✗ 动了代码' : ''}`, ...base(ev) };
+    });
+    // ⑦(11-15):命令弹了自己的选择框在等人点。判据:命令只发一次(不当成「没起来」去重跑),接着 read / 点「Goodreads」,转述导入结果。
+    await scenario('pluginsandbox', 'pluginsandbox ⑦ 命令在等自己弹的框:不重跑,读窗口、在框里选,转述结果', async () => {
+      const OUTLINE = 'heading "Shelf"\n[e2] input "Book title"\n[e3] button "Add book"\nheading "Import from"\n[e4] button "Goodreads"\n[e5] button "CSV file"';
+      const act = (op, a) => {
+        const picked = op === 'click' && /e4|Goodreads/i.test(String(a.target || ''));
+        return { ok: true, text: JSON.stringify({ ...status(), action: { did: op === 'read' ? 'read 4 element(s)' : op === 'click' ? 'clicked' : op, target: a.target ? `target ${a.target}` : '', outline: op === 'read' ? OUTLINE : '', newLogs: picked ? [{ level: 'log', text: 'imported 12 books from Goodreads' }] : [], newNotices: [] } }) };
+      };
+      const ev = await run(`live-sbx-pending-${Date.now()}`, 'reading-log 插件已经在沙箱里跑着了。在沙箱里跑一下它的 import-books 命令,它会弹一个选来源的框,选 Goodreads,然后告诉我导入了多少本。先别改代码。', 240_000, {}, 'desktop/live-harness', undefined, undefined, undefined, {
+        clientCapabilities: ['plugin.sandbox', 'plugin.sandbox-v2'],
+        phone: { ns: 'plugin', respond: (b) => (b.op === 'command' ? { ok: true, text: JSON.stringify({ ...status(), command: { pending: true } }) } : ['read', 'type', 'click', 'press', 'scroll', 'space', 'files', 'settings'].includes(b.op) ? act(b.op, b.args || {}) : b.op === 'stop' ? { ok: true, text: '{"stopped":true}' } : { ok: true, text: JSON.stringify(status()) }) },
+      });
+      const claimed = ev.clientCmds.filter((c) => c.claimed);
+      const runs = claimed.filter((c) => c.op === 'command' && /import-books/.test(String(c.args?.command || ''))).length;
+      const picked = claimed.find((c) => c.op === 'click' && /e4|Goodreads/i.test(String(c.args?.target || '')));
+      const cu = ev.toolCalls.filter((n) => /^computer|^mcp__computer|screenshot_app/.test(n));
+      const relays = /12/.test(ev.content);
+      const edited = ev.toolCalls.some((n) => /edit_file|write_file|apply_patch/.test(n));
+      return { ok: !ev.error && runs === 1 && !!picked && !cu.length && relays && !edited,
+        detail: ev.error || `${sum(ev)};命令发了 ${runs} 次${runs > 1 ? '(✗ 重跑了)' : ''};${picked ? `点了 ${picked.args.target}` : '✗ 没在框里选 Goodreads'};${relays ? '说了 12 本' : '✗ 没说导入了多少'}${cu.length ? `;✗ 用了 computer use(${cu.join(',')})` : ''}${edited ? ';✗ 动了代码' : ''}`, ...base(ev) };
     });
     await scenario('pluginsandbox', 'pluginsandbox ③ 负对照:没声明能力 → 零 plugin_sandbox,不谎称在沙箱里跑过', async () => {
       const ev = await sbxRun(MSG, { caps: null });

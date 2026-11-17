@@ -181,6 +181,24 @@ export const createSession = (
     body: JSON.stringify({ app_id: AGENT_APP_ID, ...(init || {}) }),
   }).then((r) => r.session)
 
+/** 批量导入外部聊天记录成会话(2026-11-16,引擎 POST /agent/sessions/import):追加不覆盖,同一条再导回 exists。 */
+export interface SessionImportBody {
+  source: string
+  agent_config: AgentConfig
+  model_id?: string
+  conversations: Array<{
+    external_id: string; title?: string; created_at?: number; updated_at?: number
+    messages: Array<{ role: 'user' | 'assistant'; content: string; reasoning?: string; timestamp?: number; model_id?: string }>
+  }>
+}
+export type SessionImportRow = { external_id: string; status: 'created' | 'exists' | 'error'; session_id?: string; messages?: number; error?: string }
+export const importSessions = (t: EngineTarget, body: SessionImportBody, signal?: AbortSignal) =>
+  request<{ results: SessionImportRow[] }>(t, '/agent/sessions/import', {
+    method: 'POST',
+    body: JSON.stringify({ app_id: AGENT_APP_ID, projectless: true, ...body }),
+    ...(signal ? { signal } : {}),
+  }, { timeoutMs: 120_000 }).then((r) => r.results)
+
 /** 私聊(Agent 轨道):该 Agent / 外部引擎的活动私聊会话,没有就建(引擎侧单点,多窗口同击只得一条)。host-only:云端 404。 */
 export const soloOpen = (t: EngineTarget, kind: 'agent' | 'engine', id: string) =>
   request<{ session: SessionRecord; created: boolean }>(t, `/agent/solo/${kind}/${encodeURIComponent(id)}/open`, { method: 'POST', body: '{}' })
@@ -1001,13 +1019,15 @@ export interface AgentMemoryLayers {
   organize: MemoryOrganizeView
 }
 export const getPortraitOrganize = (t: EngineTarget) => request<MemoryOrganizeView>(t, '/agent/human/SOUL.md/organize')
-export const runPortraitOrganize = (t: EngineTarget) => request<MemoryOrganizeOutcome>(t, '/agent/human/SOUL.md/organize', { method: 'POST' }, { timeoutMs: 150_000 })
+/** 手点整理要等后台模型:时限 = 引擎一次整理调用的截止(memoryOrganize 的 ORGANIZE_CALL_DEADLINE_MS,300 秒)+ 10 秒,两边一起改。 */
+const ORGANIZE_TIMEOUT_MS = 310_000;
+export const runPortraitOrganize = (t: EngineTarget) => request<MemoryOrganizeOutcome>(t, '/agent/human/SOUL.md/organize', { method: 'POST' }, { timeoutMs: ORGANIZE_TIMEOUT_MS })
 export const undoPortraitOrganize = (t: EngineTarget, id: string) => request<{ id: string; undoneAt: number }>(t, `/agent/human/SOUL.md/organize/${encodeURIComponent(id)}/undo`, { method: 'POST' })
 /** 按原句钉住 / 取消;详情里的那条钉住 = 挪回常驻。回来的是整份画像。 */
 export const pinPortraitEntry = (t: EngineTarget, body: { fact: string; pinned: boolean; expectedVersion: string }) =>
   request<{ content: string; version: string }>(t, '/agent/human/SOUL.md/pin', { method: 'POST', body: JSON.stringify(body) })
 export const getAgentMemoryLayers = (t: EngineTarget, slug: string) => request<AgentMemoryLayers>(t, `${agentMemoryPath(slug)}/layers`)
-export const runAgentMemoryOrganize = (t: EngineTarget, slug: string) => request<MemoryOrganizeOutcome>(t, `${agentMemoryPath(slug)}/organize`, { method: 'POST' }, { timeoutMs: 150_000 })
+export const runAgentMemoryOrganize = (t: EngineTarget, slug: string) => request<MemoryOrganizeOutcome>(t, `${agentMemoryPath(slug)}/organize`, { method: 'POST' }, { timeoutMs: ORGANIZE_TIMEOUT_MS })
 export const undoAgentMemoryOrganize = (t: EngineTarget, slug: string, id: string) =>
   request<{ id: string; undoneAt: number; changed: string[] }>(t, `${agentMemoryPath(slug)}/organize/${encodeURIComponent(id)}/undo`, { method: 'POST' })
 export const pinAgentMemoryEntry = (t: EngineTarget, slug: string, body: { id: string; pinned: boolean; expectedVersion?: string }) =>
@@ -1853,9 +1873,10 @@ export const resolveProjectCandidate = (t: EngineTarget, sessionId: string, id: 
 /** 把写满压缩时合并 / 去掉的一句原样记回项目记忆。404 = 那一句已经不在记录里;放不下 → err.code 'MEMORY_FULL'。 */
 export const restoreProjectMemoryFact = (t: EngineTarget, sessionId: string, id: string) =>
   request<{ memory: ProjectMemoryView }>(t, '/agent/project-context/memory/restore', { method: 'POST', body: JSON.stringify({ sessionId, id }) }).then((r) => r.memory)
-/** 项目记忆分层(11-09 2b):手点「整理」(先挪进详情,再丢过时的;要等后台模型,给长一点的时限)、整次撤销、钉住。只在宿主本机。 */
+/** 项目记忆分层(11-09 2b):手点「整理」(先挪进详情,再丢过时的;要等后台模型,给长一点的时限)、整次撤销、钉住。只在宿主本机。
+ *  时限 = 引擎整理一整次的截止(projectMemoryCompact 的 ORGANIZE_DEADLINE_MS,610 秒)+ 10 秒,两边一起改。 */
 export const organizeProjectMemory = (t: EngineTarget, sessionId: string) =>
-  request<ProjectMemoryOrganizeOutcome>(t, '/agent/project-context/memory/organize', { method: 'POST', body: JSON.stringify({ sessionId }) }, { timeoutMs: 200_000 })
+  request<ProjectMemoryOrganizeOutcome>(t, '/agent/project-context/memory/organize', { method: 'POST', body: JSON.stringify({ sessionId }) }, { timeoutMs: 620_000 })
 export const undoProjectMemoryOrganize = (t: EngineTarget, sessionId: string, id: string) =>
   request<{ memory: ProjectMemoryView; changed: string[] }>(t, '/agent/project-context/memory/organize/undo', { method: 'POST', body: JSON.stringify({ sessionId, id }) })
 export const pinProjectMemoryEntry = (t: EngineTarget, sessionId: string, body: { id: string; pinned: boolean; expectedVersion?: string }) =>

@@ -1,6 +1,6 @@
 /** Amadeus 插件 manifest 门禁单测:cmpVersion 排序 + gatePluginManifest 四种情形 + sanitizeOnboarding 消毒。 */
 import { describe, it, expect } from 'vitest'
-import { cmpVersion, gatePluginManifest, sanitizeOnboarding, requirementKey, AMADEUS_PLUGIN_API } from './ipc'
+import { cmpVersion, gatePluginManifest, sanitizeOnboarding, sanitizeRequiresPlugins, requirementKey, AMADEUS_PLUGIN_API } from './ipc'
 import { compareReleaseVersions, parseReleaseVersion } from '../releaseVersion.mjs'
 
 describe('cmpVersion', () => {
@@ -141,5 +141,13 @@ describe('sanitizeOnboarding · requires(2026-09-21:可实测的前置条件)', 
     expect(requirementKey({ kind: 'setting', key: 'x' })).toBe('setting:x')
     expect(requirementKey({ kind: 'check', id: 'x' })).toBe('check:x')
     expect(requirementKey({ kind: 'permission', id: 'camera' })).toBe('permission:camera')
+  })
+})
+
+describe('sanitizeRequiresPlugins minVersion', () => {
+  it('预发布号 / +build.N 的最低版本保留(引擎 loader 同口径),写坏的只丢 minVersion', () => {
+    expect(sanitizeRequiresPlugins([
+      { id: 'a', minVersion: '2.13.8-beta.3' }, { id: 'b', minVersion: '2.13.8+build.1' }, { id: 'c', minVersion: 'v1.0' }, { id: 'd', minVersion: '1.x' },
+    ])).toEqual([{ id: 'a', minVersion: '2.13.8-beta.3' }, { id: 'b', minVersion: '2.13.8+build.1' }, { id: 'c', minVersion: 'v1.0' }, { id: 'd' }])
   })
 })

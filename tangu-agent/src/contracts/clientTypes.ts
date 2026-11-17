@@ -934,6 +934,20 @@ export interface ToolEvent {
   parked?: boolean
   /** 发给模型前会被遮住的值(引擎 llm/outboundMask.ts):在 arguments / result 里的位置 + 类型 + 模型收到的占位符,不含原值。 */
   masked?: Array<{ kind: string; ph: string; s: number; e: number; at: 'args' | 'result'; warn?: true }>
+  /** web_search 的结果 / web_fetch 读到的那一页(工具结果 metadata.sources,渲染层只从这两个工具上认)。旧消息没有。 */
+  sources?: WebSource[]
+}
+
+/** 一条网页来源:引擎在工具结果上另存的结构化一份(metadata.sources),**不进模型上下文** —— 模型那份仍是工具返回的文字,
+ *  回放逐字不变。渲染层拿它给正文里指向它的链接编号、出来源卡、在右栏「来源」里列结果。 */
+export interface WebSource {
+  url: string
+  title?: string
+  /** 主机名,去掉 www.。 */
+  site?: string
+  /** 发布日期 YYYY-MM-DD:搜索服务或网页 meta 给了才有。 */
+  date?: string
+  snippet?: string
 }
 
 /** 助手一条消息的「顺序段」(直播归约期填充;新历史消息也可由工具锚点重建):

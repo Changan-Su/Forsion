@@ -596,8 +596,9 @@ declare global {
       /** 本机已配对的来访设备(T1)与回收。 */
       unitsPairedList?(): Promise<UnitPairedDevice[]>
       unitsPairedRemove?(id: string): Promise<{ ok: boolean }>
-      /** LAN 直连探针(主进程发,免 CORS):是台 unitWeb 就回 meta,否则 null。 */
-      unitsProbeLan?(lanUrl: string): Promise<{ instanceId: string; name: string } | null>
+      /** LAN 直连探针(主进程发,免 CORS):是台 unitWeb 就回 meta,否则 null。unitId = 对方报的名册 id(旧版不报);
+       *  self = 应答的就是本机。判「是不是名册里那一行」用 unitPanelModel.lanProbeMatches,别只看非 null。 */
+      unitsProbeLan?(lanUrl: string): Promise<{ instanceId: string; name: string; unitId?: string; self?: true } | null>
       /** P2P 直连打开设备:成了回本机代理地址;失败 reject(UI 回落中转)。 */
       unitsP2pOpen?(id: string): Promise<{ url: string }>
       /** 桌面作为调用方(新会话建到账号下另一台电脑上):主进程本机中转口的地址 + 本次启动的口令(electron/unitRelay.ts)。
@@ -1012,9 +1013,13 @@ declare global {
       spacesDelete?(slug: string): Promise<{ ok: boolean }>
       /** 收件箱:系统通知(点击回跳 Inbox Space)/ dock 角标(仅 mac 生效)/ 通知点击订阅。 */
       notifyInbox?(title: string, body: string): Promise<void>
-      /** 通用系统通知(所有应用内通知同步发);web 下 undefined。meta.event = 哪类通知(NOTIFY_EVENTS 的 id):
-       *  桌面不看;安卓(mobile/src/liveIsland.ts)据此给每类只留一条,并略过由灵动岛报的「跑完了」。 */
-      notify?(title: string, body: string, meta?: { event?: string }): Promise<void>
+      /** 通用系统通知(所有应用内通知同步发);web 下 undefined。meta.event = 哪类通知(NOTIFY_EVENTS 的 id / plugin:<id>),
+       *  meta.key = 这条的 dedupeKey(只有有人在等的 urgent 卡才带,见 notificationStore 的 postOs):桌面都不看;
+       *  安卓(mobile/src/liveIsland.ts)带 key 的按「来源 + key」、
+       *  不带的按来源各只留一条,并略过由 Agent 运行状态通知报的「跑完了」。
+       *  回话:安卓回 `{ posted }`(这一条真贴出去了没有:没通知权限、渠道被关、App 在前台 → false),拒绝也算没投;
+       *  桌面和老安卓壳回 undefined,按投了算(notificationStore 的 osDelivered)。 */
+      notify?(title: string, body: string, meta?: { event?: string; key?: string }): Promise<void | { posted: boolean }>
       setInboxBadge?(count: number): Promise<void>
       onInboxOpen?(cb: () => void): () => void
       // P1-K3
@@ -1329,6 +1334,12 @@ export interface MarketCard {
   updatedAt?: string | null
   /** 来自商店来源(第三方目录)的条目:哪个来源。Forsion 商店的条目没有这一项。 */
   origin?: { sourceId: string; sourceTitle: string }
+  /** 包的 manifest `network`(ctx.net 能访问的域名,2026-11-16+)—— 目录给了才有;装好之后以本机 manifest 为准。 */
+  network?: string[] | null
+  /** 包的 manifest `capabilities`(服务端审核时从包里读的,2026-11-16+);客户端只认白名单里的。 */
+  capabilities?: string[] | null
+  /** 过了第二级内部接口(internals-raw)审核的那一版;没过或没声明为 null。官方商店安装时客户端按它再核一次。 */
+  rawApprovedVersion?: string | null
 }
 
 /** market:installProgress:resolve=向服务端要下载地址;download=在试第 attempt/attempts 个地址、已收 received 字节

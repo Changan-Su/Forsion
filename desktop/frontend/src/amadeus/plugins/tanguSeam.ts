@@ -174,7 +174,56 @@ export interface TanguChatMount {
   dispose(): void
 }
 
+/** `ctx.tangu.createAgent` 的入参(2026-11-16+,声明 `"agentImport"` 才有):在本端新建一个 Agent。 */
+export interface TanguCreateAgentInput {
+  /** 显示名;全中文的名字要同时给 `slug`(或 `nameEn`),引擎不转拼音 */
+  name: string
+  nameEn?: string
+  /** Agent id(文件夹名,kebab-case);不给由名字推,撞了自动加后缀,不会盖掉已有的 Agent */
+  slug?: string
+  description?: string
+  /** 系统提示主体(必填) */
+  systemPrompt: string
+  /** 人设(SOUL.md) */
+  soul?: string
+  /** 这个 Agent 缺省用的模型 id(模型目录里的);不给 = 跟随会话 */
+  model?: string
+}
+export type TanguCreateAgentResult = { ok: true; slug: string } | { ok: false; error: string }
+
+/** 一条外部对话。`id` 是来源那边的会话 id:同一来源、同一 id 再导入会被认成「已有」,原会话不动。 */
+export interface TanguImportConversation {
+  id: string
+  title?: string
+  /** 毫秒时间戳;秒级时间戳会被拒(先乘 1000) */
+  createdAt?: number
+  updatedAt?: number
+  messages: Array<{ role: 'user' | 'assistant'; content: string; reasoning?: string; timestamp?: number; model?: string }>
+}
+export interface TanguImportSessionsInput {
+  /** 挂到哪个 Agent 名下(slug) */
+  agent: string
+  /** 来源标识,如 `deepseek`(`^[a-z0-9][a-z0-9-]{0,31}$`) */
+  source: string
+  conversations: TanguImportConversation[]
+  /** 这批会话用的模型;缺省 = 主区聊天此刻用的那个 */
+  modelId?: string
+  /** 每写完一批回调一次(已处理条数 / 总条数) */
+  onProgress?(done: number, total: number): void
+  signal?: AbortSignal
+}
+export interface TanguImportSessionResult {
+  id: string
+  status: 'created' | 'exists' | 'error'
+  sessionId?: string
+  error?: string
+}
+export type TanguImportSessionsResult = { ok: true; results: TanguImportSessionResult[] } | { ok: false; error: string; results: TanguImportSessionResult[] }
+
 export interface TanguProbe {
+  /** 建 Agent / 导入会话(2026-11-16+):写进**本端**的引擎(桌面 = 本机引擎,手机 / 网页 = 云端)。 */
+  createAgent?(input: TanguCreateAgentInput, alive: () => boolean): Promise<TanguCreateAgentResult>
+  importSessions?(input: TanguImportSessionsInput, alive: () => boolean): Promise<TanguImportSessionsResult>
   openSession?(sessionId: string, alive?: () => boolean): Promise<void> | void
   /** True only when the active engine executes against this host filesystem. */
   hostExecution?(): boolean
@@ -625,3 +674,8 @@ export function subscribeComposerPrefill(l: () => void): () => void {
 export function claimComposerPrefill(t: ComposerPrefillTarget): ComposerPrefill[] {
   return [...prefillSources].flatMap((src) => src.claim(t) ?? [])
 }
+
+// 外部引擎的 Harness 行与对话右键菜单项(ctx.registerEngineHarness,2026-11-15,DSH 融合插件第 1 档):登记表留在宿主,
+// Tangu 界面(Agent 配置页、对话侧栏)经这条缝读 —— 它在 check:tanguboundary 的基线里,不另开新的宿主依赖。
+export { collectHarnessRows, engineRailViewType, engineSessionActions, subscribeEngineHarness, useEngineHarnessVersion, type HostEngineHarness } from './engineHarness'
+export { pluginText } from './pluginText'

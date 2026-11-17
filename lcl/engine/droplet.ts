@@ -3,6 +3,8 @@
  *  ① 源控件先鼓一下 ② 一滴液体从源朝面板的那条边冒出来,胀成面板 ③ 中间连着的丝在液体快长好时被拉断
  *  ④ 内容浮在液体上、按液体当前轮廓露出来(不等液体长完)⑤ 液体停稳那一刻真面板一帧接手(同色、不叠淡)。
  *  收起 = 倒放(0.7 倍时长):内容先淡掉,液体缩回一滴、被源吸回去。打断(开到一半就收)从当前帧接着倒放;
+ *  倒放时液体那段的曲线换成两头缓的 --droplet-retract-ease(2026-11-16 Chat Box 水滴方案):展开曲线直接倒着放是
+ *  前慢后快,前 130ms 几乎不动、最后一下冲完,用户说「抽搐不连贯」。换曲线时按「此刻长到几成」换算播放头,不跳帧;
  *  倒放途中又要开(再点源 / 指针回来),调用方先试 `reopen()`:从这一帧掉头往前放,不撤掉从一滴重来。
  *  ⑥ 接手后 1px 描边从透明淡进来(--duration-fast):底色、投影接得住,只有描边会整条一帧出现(11-06 动效第三轮,用户选)。
  *
@@ -101,6 +103,35 @@ function holeMask(W: number, H: number, b: Box): string {
 const inset = (b: Box, p: Box, z: number): string =>
   `inset(${(b.y - p.y) / z}px ${(p.x + p.w - b.x - b.w) / z}px ${(p.y + p.h - b.y - b.h) / z}px ${(b.x - p.x) / z}px round ${b.r / z}px)`
 
+/** cubic-bezier(x1, y1, x2, y2) → 进度函数;认不出(steps、linear(…)、关键字)返回 null。 */
+export function bezierProgress(css: string): ((x: number) => number) | null {
+  const m = /^cubic-bezier\(([^)]+)\)$/.exec(css.trim())
+  if (!m) return null
+  const [x1, y1, x2, y2] = m[1].split(',').map(Number)
+  if (![x1, y1, x2, y2].every(Number.isFinite)) return null
+  const at = (a: number, b: number, t: number): number => 3 * (1 - t) * (1 - t) * t * a + 3 * (1 - t) * t * t * b + t * t * t
+  return (x) => {
+    if (x <= 0) return 0
+    if (x >= 1) return 1
+    let lo = 0, hi = 1
+    for (let i = 0; i < 32; i++) { const mid = (lo + hi) / 2; if (at(x1, x2, mid) < x) lo = mid; else hi = mid }
+    return at(y1, y2, (lo + hi) / 2)
+  }
+}
+
+/** 同一段关键帧(offset 0.05 → 1)换曲线时的播放头换算:找新曲线上「长到同样几成」的那一刻,换完那一帧形状不变。
+ *  0.05 之前是停在一滴的那段,原样;曲线认不出就不换算。 */
+export function remapPlayhead(t: number, D: number, from: string, to: string): number {
+  const f = bezierProgress(from), g = bezierProgress(to)
+  const u = (t / D - 0.05) / 0.95
+  if (!f || !g || !(u > 0)) return t
+  if (u >= 1) return t
+  const p = f(u)
+  let lo = 0, hi = 1
+  for (let i = 0; i < 32; i++) { const mid = (lo + hi) / 2; if (g(mid) < p) lo = mid; else hi = mid }
+  return D * (0.05 + 0.95 * (lo + hi) / 2)
+}
+
 export function motionRectChanged(a: DOMRect, b: DOMRect): boolean {
   return Math.max(Math.abs(a.left - b.left), Math.abs(a.top - b.top), Math.abs(a.width - b.width), Math.abs(a.height - b.height)) > 0.5
 }
@@ -186,6 +217,8 @@ export function emergeDroplet(source: HTMLElement, panel: HTMLElement, opts: Dro
   const surface = curve('--ease-surface', 'cubic-bezier(0.22, 1, 0.36, 1)')
   const calm = curve('--ease-calm', 'cubic-bezier(0.33, 1, 0.68, 1)')
   const exit = curve('--ease-exit', 'cubic-bezier(0.4, 0, 1, 1)')
+  const back = curve('--droplet-retract-ease', 'cubic-bezier(0.65, 0, 0.35, 1)')
+  let ease = surface // 液体那段此刻用的曲线:展开 / 掉头 = surface,倒放 = back
   let s = source.getBoundingClientRect()
   let pr = panel.getBoundingClientRect()
   const pcs = getComputedStyle(panel)
@@ -256,7 +289,7 @@ export function emergeDroplet(source: HTMLElement, panel: HTMLElement, opts: Dro
     const ex = right ? s.right : left ? s.left : s.left + s.width / 2
     const ey = right || left ? s.top + s.height / 2 : pr.top >= s.bottom - 1 ? s.bottom : s.top
     const start = inset({ x: ex - d / 2, y: ey - d / 2, w: d, h: d, r: d / 2 }, p, z)
-    return [{ clipPath: start, offset: 0 }, { clipPath: start, offset: 0.05, easing: surface }, { clipPath: inset(p, p, z), offset: 1 }]
+    return [{ clipPath: start, offset: 0 }, { clipPath: start, offset: 0.05, easing: ease }, { clipPath: inset(p, p, z), offset: 1 }]
   }
   const pour = (el: HTMLElement, z: number): Animation => el.animate(frames(z), { duration: D, fill: 'both' })
   const swell = srcBlob.animate(
@@ -296,6 +329,24 @@ export function emergeDroplet(source: HTMLElement, panel: HTMLElement, opts: Dro
     clip = null
     layer.style.display = 'none'
     if (edge) panel.animate([{ borderColor: 'transparent' }, {}], { duration: ms('--duration-fast', 150), easing: calm })
+  }
+  /** 液体那段换曲线(倒放 ↔ 掉头):播放头按「长到几成」换算(形状不跳)。源的鼓起是另一套关键帧,不跟着换算播放头
+   *  (直接对齐会让它从 0.5 一下鼓到 1.1,Codex 评审 P2):保留它自己的播放头,只改速率,让它和液体同一刻到头。 */
+  const setEase = (next: string, rate: number): number => {
+    const t = Math.min(D, Number(grow.currentTime ?? D))
+    const t2 = next === ease ? t : remapPlayhead(t, D, ease, next)
+    if (next !== ease) {
+      ease = next
+      const z = zoomOf(layer)
+      ;(grow.effect as KeyframeEffect).setKeyframes(frames(z))
+      grow.currentTime = t2
+      if (clip) { (clip.effect as KeyframeEffect).setKeyframes(frames(pz)); clip.currentTime = t2 }
+    }
+    const ts = Math.min(D, Math.max(0, Number(swell.currentTime ?? t)))
+    // 液体还要走多久 = 剩下的路 / |rate|;鼓起按同样的时长走完自己剩下的路
+    const liquidLeft = rate < 0 ? t2 : D - t2, swellLeft = rate < 0 ? ts : D - ts
+    swell.playbackRate = liquidLeft > 1 && swellLeft > 0 ? rate * (swellLeft / liquidLeft) : rate
+    return t2
   }
   /** 接手的计时器:液体走到 0.9D 那一刻接手;t = 此刻在时间轴上的位置(掉头时从中途接着计)。 */
   const handoffAt = (t: number): Animation => {
@@ -341,10 +392,14 @@ export function emergeDroplet(source: HTMLElement, panel: HTMLElement, opts: Dro
       clip = pour(panel, pz)
       clip.currentTime = t
       const rate = -1 / 0.7
+      setEase(back, rate)
       // 别用 fill: forwards:面板不卸载时,取消填充动画和隐藏面板撞在同一帧,Chromium 会把内容的透明度留在 0,
       // 元素上已没有动画,再展开就是空屏(10-30 用户报,连开 33 次空 16 次)。所以写成保持到结束,收完由下面藏起面板
       outs = fadePanelContentOut(kids(), from, t, D)
-      for (const a of [swell, grow, clip]) { a.updatePlaybackRate(rate); a.play() }
+      // 直接赋 playbackRate(同步生效):updatePlaybackRate 要等下一帧才换向,掉头 / 中途收那一帧会先朝原方向多走一步,
+      // 曲线陡的地方就是肉眼可见的一跳(droplet-retract.probe.cjs 量到 5–8%)
+      for (const a of [grow, clip]) { a.playbackRate = rate; a.play() }
+      swell.play()
       // 掉头(reopen)后 grow 往前放到底,grow.finished 照样 resolve:按 gen 认出这次收起已作废 —— 不藏面板、不收尾、不 resolve
       const g = ++gen
       closing = new Promise<void>((resolve) => {
@@ -367,14 +422,16 @@ export function emergeDroplet(source: HTMLElement, panel: HTMLElement, opts: Dro
       if (!closing || !clip || grow.playState !== 'running') return false
       gen++
       closing = null
-      const t = Math.min(D, Number(grow.currentTime ?? 0))
+      // 曲线换回展开那条,播放头按形状换算(不跳帧)
+      const t = setEase(surface, 1)
       // 内容从此刻的透明度回到 1,不早于 0.22D 露出(同流出)
       const from = kids().map((k) => +getComputedStyle(k).opacity)
       outs.forEach((a) => a.cancel())
       outs = []
       shows = kids().map((k, i) => k.animate([{ opacity: from[i] ?? 0 }, { opacity: 1 }], { delay: Math.max(0, D * 0.22 - t), duration: D * 0.3, easing: surface, fill: 'backwards' }))
       // 只改速率、不 play():刚调完 retract() 的同一帧里它们还停在终点,play() 遇到「正向 + 在终点」会倒回 0 重放(Codex 评审 P3)
-      for (const a of [swell, grow, clip]) { a.updatePlaybackRate(1); if (a.playState === 'paused') a.play() }
+      for (const a of [grow, clip]) { a.playbackRate = 1; if (a.playState === 'paused') a.play() }
+      if (swell.playState === 'paused') swell.play() // 速率 setEase 已按剩下的路配好
       handoff = handoffAt(t)
       return true
     },

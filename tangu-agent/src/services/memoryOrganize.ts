@@ -33,7 +33,13 @@ export interface OrganizeItem { id: string; text: string; by: EntryAuthor; pinne
 export interface OrganizeTopic { key: string; title: string; about: string; count: number }
 export interface OrganizePlan { moves: Array<{ id: string; topic: string }>; topics: Array<{ key: string; title: string; about: string }>; ignored: string[] }
 
-const DEADLINE_MS = 90_000;
+/**
+ * 一次整理调用的截止。不能比输出上限先撞墙:托管 Claude 5 的上限是 12,288 + 16,384 = 28,672,按约 100 tok/s 要 290 秒左右写完。
+ * 原来的 90 秒在思考略超 12k 时就先到(2026-11-15 反馈那次是撞上限,换个慢点的模型就是撞截止)。卡住的流另有空闲看门狗
+ * (托管 360 秒无进展、server 上游 300 秒无字节),截止只管「一直在出字但太慢」。
+ * 桌面手点整理的请求超时跟着它(desktop backendService 的 runPortraitOrganize / runAgentMemoryOrganize),改这里要一起改。
+ */
+export const ORGANIZE_CALL_DEADLINE_MS = 300_000;
 /** 正文上限。思考的 token 另由 thinkingHeadroom 留(托管 Claude 5 不发思考字段也会想,只给这个数会被吃光,11-15 反馈)。 */
 const MAX_OUTPUT_TOKENS = 12_288;
 const THINKING = 'medium';
@@ -124,7 +130,7 @@ export async function organizeAvailable(): Promise<boolean> {
 export async function proposeOrganize(userId: string, kind: OrganizeKind, input: object, items: OrganizeItem[], existing: OrganizeTopic[], fallbackModelId?: string): Promise<OrganizePlan | OrganizeOutcome> {
   const modelId = (await resolveBackgroundModelId(loadSpecialAgentsConfig().historian.modelId).catch(() => '')) || fallbackModelId || '';
   if (!modelId) return { status: 'skipped', reason: 'no_model' };
-  const signal = AbortSignal.timeout(DEADLINE_MS);
+  const signal = AbortSignal.timeout(ORGANIZE_CALL_DEADLINE_MS);
   const llm = deps().brain.llm;
   const model = await llm.resolveModelAndKey(modelId);
   const payload = await llm.buildProviderPayload({ model: model.model, apiModelId: model.apiModelId,

@@ -10,7 +10,7 @@
 import { registerClientSurface } from './clientSurfaces'
 import { postClientAction } from './agentRunService'
 import { targetForSession } from './engine/targets'
-import { PLUGIN_SANDBOX_CAPABILITY, PLUGIN_SANDBOX_NS, isSandboxOp } from '../../../../tangu-agent/src/contracts/pluginSandbox'
+import { PLUGIN_SANDBOX_CAPABILITY, PLUGIN_SANDBOX_NS, PLUGIN_SANDBOX_V2_CAPABILITY, isSandboxOp } from '../../../../tangu-agent/src/contracts/pluginSandbox'
 import { registerMessages, translate } from '../i18n'
 
 registerMessages({
@@ -46,7 +46,8 @@ export function installPluginSandboxSurface(): void {
     })
   })
   registerClientSurface(PLUGIN_SANDBOX_NS, {
-    capabilities: () => [PLUGIN_SANDBOX_CAPABILITY],
+    // v2(11-15):settings 动作、window 参数、command 的 allowPending;引擎看到它才发这几样
+    capabilities: () => [PLUGIN_SANDBOX_CAPABILITY, PLUGIN_SANDBOX_V2_CAPABILITY],
     async exec({ runId, ackId, body }) {
       let cmd: { runId?: unknown; sessionId?: unknown; ackId?: unknown; ns?: unknown; op?: unknown; args?: unknown }
       try { cmd = JSON.parse(body) } catch { return }

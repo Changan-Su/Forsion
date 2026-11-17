@@ -164,7 +164,7 @@ const api = {
     ipcRenderer.invoke('units:hostStatus'),
   unitsPairedList: (): Promise<Array<{ id: string; name: string; createdAt: number }>> => ipcRenderer.invoke('units:pairedList'),
   unitsPairedRemove: (id: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('units:pairedRemove', id),
-  unitsProbeLan: (lanUrl: string): Promise<{ instanceId: string; name: string } | null> => ipcRenderer.invoke('units:probeLan', lanUrl),
+  unitsProbeLan: (lanUrl: string): Promise<{ instanceId: string; name: string; unitId?: string; self?: true } | null> => ipcRenderer.invoke('units:probeLan', lanUrl),
   /** 设备的 Unit 窗(只主窗):一台设备一扇,再开 = 叫到前面。 */
   unitsOpenWindow: (id: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('units:openWindow', id),
   /** 设备页 webview 绑定到一台设备(主窗,或这台的 Unit 窗):主进程核名册后,只给这张 webview、只给这台设备自己的路径补登录头。

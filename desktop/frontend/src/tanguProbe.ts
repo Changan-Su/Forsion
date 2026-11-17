@@ -43,6 +43,7 @@ import { hasNativeFeature } from './features/runtime'
 import { completeInline, fimInline, FIM_UNAVAILABLE } from './services/inlineAi'
 import { submitDocumentTask } from './services/documentTasks'
 import { openSession } from './sessionNav'
+import { createAgentForPlugin, importSessionsForPlugin, type AgentImportDeps } from './services/pluginAgentImport'
 import { connectionTarget } from './services/engine/targets'
 import { CATALOG_TTL_MS, catalogFor, ensureCatalog, ensureCatalogModels } from './services/engine/catalog'
 import { getCallVoice, subscribeCallVoice } from './services/callVoice'
@@ -524,6 +525,26 @@ function museSelf(): TanguAgentSelf {
   }
 }
 
+/** 导入用的「后端在不在」:只等配置加载好。设置 / 商店浮窗不维护 connState(恒不是 ok),按 waitBackend 等会白等 15 秒再报没连上;
+ *  这里直接发请求,真连不上由请求本身报错。 */
+function waitConfigLoaded(timeoutMs: number): Promise<TanguDesktopConfig | null> {
+  const loaded = (): TanguDesktopConfig | null => { const s = useApp.getState(); return s.cfgLoaded && s.cfg ? s.cfg : null }
+  const now = loaded()
+  if (now) return Promise.resolve(now)
+  return new Promise((resolve) => {
+    const off = useApp.subscribe(() => { const c = loaded(); if (c) { off(); clearTimeout(timer); resolve(c) } })
+    const timer = setTimeout(() => { off(); resolve(null) }, Math.max(0, timeoutMs))
+  })
+}
+
+const agentImportDeps: AgentImportDeps = {
+  waitBackend: () => waitConfigLoaded(15_000),
+  activeModelId: () => readActiveModel()?.id ?? null,
+  // 浮窗(设置里插件的详情页)各握一份 store:自己刷完再请主窗也刷(主窗才有会话列表与 Agent 名册)
+  refreshAgents: () => { useApp.getState().refreshAgents?.(); window.tangu?.requestMainAction?.('agents-changed') },
+  refreshSessions: () => { const s = useApp.getState(); if (s.cfg) void s.refreshSessions?.(s.cfg)?.catch?.(() => {}); window.tangu?.requestMainAction?.('sessions-changed') },
+}
+
 export function installTanguProbe(fromTangu: Pick<TanguProbe, 'askInChat'> = {}): void {
   // Computer Use 悬浮小画面(?window=pip)里:这一轮跑在别的窗口,停止 / 状态经主进程转过去(computerUsePipAgent.ts)
   const pip = pipAgentClient()
@@ -550,6 +571,11 @@ export function installTanguProbe(fromTangu: Pick<TanguProbe, 'askInChat'> = {})
     // 停止(2026-11-13+):store 的 stop 在 Tangu 的 store 半身里,没有对话能力的档案不给
     ...(hasNativeFeature('tangu') ? { stop: pip ? pip.stop : stopAgentRun } : {}),
     startChat,
+    // 建 Agent / 导入会话(2026-11-16,ctx.tangu.createAgent / importSessions):写进本端引擎(桌面本机、手机 / 网页云端)。
+    ...(hasNativeFeature('tangu') ? {
+      createAgent: (input: Parameters<typeof createAgentForPlugin>[0], alive: () => boolean) => createAgentForPlugin(input, alive, agentImportDeps),
+      importSessions: (input: Parameters<typeof importSessionsForPlugin>[0], alive: () => boolean) => importSessionsForPlugin(input, alive, agentImportDeps),
+    } : {}),
     ...(hasNativeFeature('tangu') ? { openSession: async (id: string, alive: () => boolean = () => true) => {
       const cfg = await waitBackend(15_000);
       if (!cfg) throw new Error('Local engine is unavailable');

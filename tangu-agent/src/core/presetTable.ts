@@ -101,6 +101,7 @@ export const CHAT_PRESET_DEFERRED: ReadonlySet<string> = new Set([
   // Agent 起草反馈(官方 Forsion Extend 捆绑包的引擎插件 agent-feedback):碰到 Forsion 自己的问题时起草一张反馈卡,发不发由用户在卡上定。
   'feedback_draft',
   'manage_widget', // 小组件:可见性由 widget.v1 握手管(见 manageWidget.ts)
+  'forsion_guide', // 只读:Forsion 自家产品速查(用户问「Forsion Git 是什么」多半就在聊天里;D23 关的是技能体系,首方只读工具照放)
 ]);
 
 /** chat 面里由官方插件(而不是核心)提供的工具。第三方插件注册同名工具照旧被 chat 面拒。 */

@@ -17,10 +17,11 @@ import os from 'node:os'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import type { ExternalPluginSource } from '@amadeus-shared/ipc'
 
-const env = vi.hoisted(() => ({ root: '', handlers: new Map<string, (...args: any[]) => any>(), seq: 0 }))
+const env = vi.hoisted(() => ({ root: '', handlers: new Map<string, (...args: any[]) => any>(), seq: 0, shell: [] as string[] }))
 vi.mock('electron', () => ({
   app: { getPath: () => env.root, getVersion: () => '9.9.9', once: vi.fn(), removeListener: vi.fn() },
-  BrowserWindow: { getAllWindows: () => [] }, dialog: {}, shell: {},
+  BrowserWindow: { getAllWindows: () => [], fromWebContents: () => ({}) }, dialog: {},
+  shell: { showItemInFolder: (p: string) => { env.shell.push(`show ${p}`) }, openPath: async (p: string) => { env.shell.push(`open ${p}`); return '' } },
   ipcMain: { handle: (channel: string, fn: (...args: any[]) => any) => env.handlers.set(channel, fn) },
 }))
 vi.mock('../forsionHome', () => ({
@@ -81,6 +82,7 @@ beforeEach(async () => {
   vi.resetModules()
   env.root = await fs.mkdtemp(path.join(os.tmpdir(), 'amadeus-devplugins-'))
   env.handlers.clear()
+  env.shell = []
   const local = path.join(env.root, 'notes')
   await fs.mkdir(local)
   const { writeConfig } = await import('./settings')
@@ -249,4 +251,171 @@ it('⚠️清单写坏期间沿用授权当时的插件 id:身份不漂到目录
   expect(sources.filter((s) => s.id === 'demo')).toHaveLength(1)
   expect(sources.find((s) => s.id === 'demo')).toMatchObject({ dev: true, blocked: 'invalid', code: '' })
   expect(sources.some((s) => s.id === 'cool-project')).toBe(false)
+})
+
+// ctx.net(2026-11-16):白名单读的是装载器**实际选中**的那份 manifest(Codex 评审:另写一套选法会和界面上列的那份对不上)。
+// `*.localhost` 解析在本机就结束(要么回环 → net_blocked_address,要么解析失败 → net_failed),不碰外网;
+// 只要不是 net_domain_not_declared,就说明白名单放行了。
+const frame = {}
+const trusted = { sender: { id: 1, isDestroyed: () => false, getType: () => 'window', mainFrame: frame }, senderFrame: frame }
+const net = (id: string, url: string) => env.handlers.get('plugins:net-request')!(trusted, id, url, { timeoutMs: 3000 }) as Promise<{ ok: boolean; code?: string }>
+const allowed = async (id: string, host: string) => (await net(id, `https://${host}/`)).code !== 'net_domain_not_declared'
+
+it('ctx.net 白名单:开发副本遮住安装版;入口读不到的安装目录被跳过、后面同 id 的那份生效;拒载的一份都不给', async () => {
+  await installed('demo', { ...DEV_MANIFEST, network: ['installed.localhost'] })
+  await project('demo-dev', { devLoad: true, manifest: { ...DEV_MANIFEST, network: ['dev.localhost'] } })
+  const first = await installed('a-first', { id: 'twin', name: 'Twin A', version: '1.0.0', apiVersion: 1, main: 'missing.js', network: ['first.localhost'] })
+  await fs.rm(path.join(first, 'main.js'))
+  await installed('b-second', { id: 'twin', name: 'Twin B', version: '1.0.0', apiVersion: 1, main: 'main.js', network: ['second.localhost'] })
+  await installed('gated', { id: 'gated', name: 'Gated', version: '1.0.0', apiVersion: 99, main: 'main.js', network: ['gated.localhost'] })
+  await boot()
+  const sources = await list()
+  expect(sources.find((s) => s.id === 'demo')?.network).toEqual(['dev.localhost'])
+  expect(sources.find((s) => s.id === 'twin')?.network).toEqual(['second.localhost'])
+  expect(await allowed('demo', 'dev.localhost')).toBe(true)
+  expect(await allowed('demo', 'installed.localhost')).toBe(false)
+  expect(await allowed('twin', 'second.localhost')).toBe(true)
+  expect(await allowed('twin', 'first.localhost')).toBe(false)
+  expect(await allowed('gated', 'gated.localhost')).toBe(false)
+  expect(await allowed('nobody', 'dev.localhost')).toBe(false)
+  // 不是我们窗口顶层页面发来的(webview 访客页)→ 拒
+  const guest = { ...trusted, sender: { ...trusted.sender, getType: () => 'webview' } }
+  expect(await env.handlers.get('plugins:net-request')!(guest, 'demo', 'https://dev.localhost/')).toMatchObject({ ok: false, message: 'untrusted sender' })
+}, 30_000)
+
+it('⚠️同一个包的普通目录 + 商店安装(market-<uuid>):只列商店那份,旧副本不再同时运行', async () => {
+  // 普通目录按名排在前面:以前两份都列、各占一个运行身份,旧副本的同名 Space 先注册,装了商店版看到的还是旧的
+  const store = 'market-00000000-0000-4000-8000-00000000000a'
+  await installed('demo-suite', { id: 'demo-suite', name: 'Demo', version: '0.1.0', apiVersion: 1, main: 'main.js' }, 'ctx.old = 1')
+  await installed(store, { id: 'demo-suite', name: 'Demo', version: '0.5.0', apiVersion: 1, main: 'main.js' }, 'ctx.store = 1')
+  await installed('other', { id: 'other', name: 'Other', version: '1.0.0', apiVersion: 1, main: 'main.js' })
+  await boot()
+  const sources = await list()
+  expect(sources.map((s) => s.id).sort()).toEqual([store, 'other'])
+  expect(sources.find((s) => s.id === store)).toMatchObject({ packageId: 'demo-suite', version: '0.5.0', code: 'ctx.store = 1' })
+})
+
+it('开发副本的 id 等于商店安装的包 id:同样遮住商店那份(插件作者开发自己已上架的插件)', async () => {
+  const store = 'market-00000000-0000-4000-8000-00000000000b'
+  await installed(store, { ...DEV_MANIFEST, version: '0.5.0' }, 'ctx.store = 1')
+  await project('demo-dev', { devLoad: true, manifest: DEV_MANIFEST, code: 'ctx.fromDev = 1' })
+  await boot()
+  const sources = await list()
+  expect(sources.map((s) => s.id)).toEqual(['demo'])
+  expect(sources[0]).toMatchObject({ dev: true, code: 'ctx.fromDev = 1', shadowsInstalled: true })
+})
+
+it('⚠️某个插件目录的清单写坏:其余插件照常列出(预扫商店取代关系时不能整份失败)', async () => {
+  const broken = path.join(env.root, 'app-data', 'plugins', 'broken')
+  await fs.mkdir(broken, { recursive: true })
+  await fs.writeFile(path.join(broken, 'manifest.json'), '{oops')
+  await installed('fine', { id: 'fine', name: 'Fine', version: '1.0.0', apiVersion: 1, main: 'main.js' })
+  await boot()
+  expect((await list()).map((s) => s.id)).toEqual(['fine'])
+})
+
+// ---- 旧副本(方案 B,2026-11-17):设置页的注记 / 清理,卸载商店版时一起带走 ----
+const STORE = 'market-00000000-0000-4000-8000-00000000000c'
+const pluginsRoot = (): string => path.join(env.root, 'app-data', 'plugins')
+const dataFile = (id: string): string => path.join(env.root, 'app-data', 'plugins-data', `${id}.json`)
+const exists = (p: string): Promise<boolean> => fs.access(p).then(() => true, () => false)
+async function pair(): Promise<{ plain: string; store: string }> {
+  const plain = await installed('demo-suite', { id: 'demo-suite', name: 'Demo', nameEn: 'Demo EN', version: '0.1.0', apiVersion: 1, main: 'main.js' }, 'ctx.old = 1')
+  const store = await installed(STORE, { id: 'demo-suite', name: 'Demo', version: '0.5.0', apiVersion: 1, main: 'main.js' }, 'ctx.store = 1')
+  await fs.mkdir(path.dirname(dataFile('x')), { recursive: true })
+  await fs.writeFile(dataFile('demo-suite'), '{"old":1}')
+  await fs.writeFile(dataFile(STORE), '{"store":1}')
+  return { plain, store }
+}
+
+it('商店那份带上它取代的旧副本(supersedes);没有旧副本的插件不带', async () => {
+  await pair()
+  await installed('other', { id: 'other', name: 'Other', version: '1.0.0', apiVersion: 1, main: 'main.js' })
+  await boot()
+  const sources = await list()
+  expect(sources.find((s) => s.id === STORE)?.supersedes).toEqual({ id: 'demo-suite', dir: 'demo-suite', version: '0.1.0', name: 'Demo', nameEn: 'Demo EN' })
+  expect(sources.find((s) => s.id === 'other')?.supersedes).toBeUndefined()
+})
+
+it('⚠️卸载商店版 + withSuperseded:旧副本同进一条回收站条目(不再复活),撤销一次两份都回来', async () => {
+  const { plain, store } = await pair()
+  await boot()
+  const r = await invoke('plugins:uninstall-forsion', STORE, { withSuperseded: true }) as { trashId: string; superseded?: string[] }
+  expect(r.superseded).toEqual(['demo-suite'])
+  expect(await exists(store)).toBe(false)
+  expect(await exists(plain)).toBe(false)
+  expect(await exists(dataFile('demo-suite'))).toBe(false) // 不留设置:旧副本的设置跟着走
+  expect(await list()).toEqual([]) // 卸完什么都不剩,旧副本没有回来运行
+  await invoke('trash:restore-desktop', r.trashId)
+  expect(await exists(store)).toBe(true)
+  expect(await exists(plain)).toBe(true)
+  expect(await fs.readFile(dataFile('demo-suite'), 'utf8')).toBe('{"old":1}')
+  const back = await list()
+  expect(back.map((s) => s.id)).toEqual([STORE])
+  expect(back[0].supersedes?.dir).toBe('demo-suite')
+})
+
+it('卸载商店版 + withSuperseded + 保留设置:两份的设置都原地留着', async () => {
+  const { plain } = await pair()
+  await boot()
+  await invoke('plugins:uninstall-forsion', STORE, { withSuperseded: true, keepSettings: true })
+  expect(await exists(plain)).toBe(false)
+  expect(await exists(dataFile('demo-suite'))).toBe(true)
+  expect(await exists(dataFile(STORE))).toBe(true)
+})
+
+it('卸载商店版不带 withSuperseded(用户勾了「保留旧副本」):旧副本留下并重新运行', async () => {
+  const { plain } = await pair()
+  await boot()
+  const r = await invoke('plugins:uninstall-forsion', STORE) as { superseded?: string[] }
+  expect(r.superseded).toBeUndefined()
+  expect(await exists(plain)).toBe(true)
+  expect((await list()).map((s) => s.id)).toEqual(['demo-suite'])
+})
+
+it('按旧副本的 id 清理:只挪普通目录,商店那份原地不动、不再带注记', async () => {
+  const { plain, store } = await pair()
+  await boot()
+  const r = await invoke('plugins:uninstall-forsion', 'demo-suite', { keepSettings: true }) as { trashId: string; dirName: string }
+  expect(r.dirName).toBe('demo-suite')
+  expect(await exists(plain)).toBe(false)
+  expect(await exists(store)).toBe(true)
+  const sources = await list()
+  expect(sources.map((s) => s.id)).toEqual([STORE])
+  expect(sources[0].supersedes).toBeUndefined()
+})
+
+it('⚠️恢复时旧副本原处又装了一份普通目录:拒绝(否则落成 -2,同一个 id 两份)', async () => {
+  await pair()
+  await boot()
+  const r = await invoke('plugins:uninstall-forsion', STORE, { withSuperseded: true }) as { trashId: string }
+  await installed('demo-suite', { id: 'demo-suite', name: 'Demo', version: '0.2.0', apiVersion: 1, main: 'main.js' })
+  await expect(invoke('trash:restore-desktop', r.trashId)).rejects.toThrow(/plugin-reinstalled/)
+  expect(await exists(path.join(pluginsRoot(), 'demo-suite-2'))).toBe(false)
+})
+
+it('打开插件文件夹:指名一个插件目录就在访达里选中它;不是根下一层的真目录就退回打开根目录', async () => {
+  await pair()
+  await boot()
+  await invoke('plugins:open-folder', 'demo-suite')
+  await invoke('plugins:open-folder', '../demo-suite')
+  await invoke('plugins:open-folder', 'missing')
+  await invoke('plugins:open-folder')
+  expect(env.shell).toEqual([`show ${path.join(pluginsRoot(), 'demo-suite')}`, `open ${pluginsRoot()}`, `open ${pluginsRoot()}`, `open ${pluginsRoot()}`])
+})
+
+it('⚠️同一个 id 有两份普通目录:卸商店版不留设置时设置文件只挪一次(否则整次回滚);清理按指名的目录走', async () => {
+  await pair()
+  await installed('Demo-copy', { id: 'demo-suite', name: 'Demo', version: '0.0.9', apiVersion: 1, main: 'main.js' })
+  await boot()
+  // 指名目录:清的就是界面上显示的那份,不按 readdir 顺序挑
+  const shown = (await list()).find((s) => s.id === STORE)!.supersedes!.dir
+  const r = await invoke('plugins:uninstall-forsion', 'demo-suite', { keepSettings: true, dir: shown }) as { dirName: string }
+  expect(r.dirName).toBe(shown)
+  await expect(invoke('plugins:uninstall-forsion', 'demo-suite', { dir: STORE })).rejects.toThrow(/plugin-not-found/) // 指名的目录生效 id 对不上 = 没找到
+  await installed(shown, { id: 'demo-suite', name: 'Demo', version: '0.1.0', apiVersion: 1, main: 'main.js' })
+  const all = await invoke('plugins:uninstall-forsion', STORE, { withSuperseded: true }) as { superseded: string[] }
+  expect(all.superseded.sort()).toEqual(['Demo-copy', 'demo-suite'])
+  expect(await fs.readdir(pluginsRoot())).toEqual([])
+  expect(await exists(dataFile('demo-suite'))).toBe(false)
 })

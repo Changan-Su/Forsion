@@ -64,6 +64,7 @@ import { sessionStatusProvider } from './builtin/sessionStatus.js';
 import { forsionAccountProvider } from './builtin/forsionAccount.js';
 import { webPublishProvider } from './builtin/webPublish.js';
 import { gitToolsProvider } from './builtin/git.js';
+import { forsionGuideProvider } from './builtin/forsionGuide.js';
 import { intelligentUiProvider } from './builtin/intelligentUi.js';
 import { sketchProvider } from './builtin/sketch.js';
 import { manageWidgetProvider } from './builtin/manageWidget.js';
@@ -83,6 +84,8 @@ import { WRITE_TOOLS, writeTargetsOf } from './writeTargets.js';
 import { withWriteLock } from './writeLock.js';
 import path from 'node:path';
 import type { ToolContext, ToolResult, ToolImpl, ToolCapabilities } from './toolTypes.js';
+import type { WebSource } from '../contracts/clientTypes.js';
+import { WEB_SOURCE_TOOLS } from './webSources.js';
 import { usableToolDefinition } from './toolDefinitionValidation.js';
 
 // 类型 re-export:保持既有 `from './registry.js'` 的 import 路径不变。
@@ -232,6 +235,7 @@ registerToolProvider(museMessageProvider); // 仅 Muse 周期(ctx.muse,子代理
 registerToolProvider(webPublishProvider); // both 前台 run、且 brain 有账号面(cloud)时:publish_web_page 把工作区的网页 / 静态文件夹发成 Forsion Connect 链接或下线(每次都问;deferred,append 末尾,快照不变)
 registerToolProvider(pluginSandboxProvider); // 桌面端限定(clientCapability 'plugin.sandbox' 中央闸,host-only):plugin_sandbox 起停 / 重置隔离的插件沙箱(审批同 run_bash)、plugin_sandbox_inspect 截图 / 控制台 / 状态 / 在沙箱里执行命令(全 deferred,append 末尾;无能力的 run 不可见,快照不变)
 registerToolProvider(gitToolsProvider); // host-only、会话属于本机项目时:git_status / git_commit / git_push / git_pull / git_publish 与项目详情 › Git 页同一套动作(都可带 repo 指项目碰得到的某个仓;commit 同写文件档,push / pull 同跑命令档,publish 每次都问;全 deferred 同组,append 末尾,快照不变)
+registerToolProvider(forsionGuideProvider); // both、只读:Forsion 自家产品速查(Forsion Git / 蓬洲云 / 商店…),正文按 host / 项目 / 沙盒改说法(knowledge/forsionProducts.ts;deferred,append 末尾,快照不变)
 // 插件(表情包/分段等)现为文件夹插件(plugins/),经 activateAllPlugins→ctx.registerPlugin 注册其工具,不在此处。
 
 /** ctx 自带 profile(loop 按 run.app_id 解析)优先;缺省回退本进程装配的 profile。 */
@@ -274,6 +278,12 @@ function logAgentEdit(name: string, args: Record<string, any>, ctx: ToolContext,
 // 本文件会成环:registry → loadTools → registry)。
 
 /** 返回喂给 LLM 的工具定义（OpenAI function 格式）：按模式/profile 过滤的内置 + 本 run 的自定义工具 + MCP 工具（按名去重，内置 > 自定义 > MCP）。 */
+/** 本会话里这个工具是否存在(过了 profile / 预设工具面 / 宿主沙箱 / 计划模式 / isEnabledFor 各道闸;不管是否 deferred、是否已解锁)。
+ *  forsion_guide 按它决定说「你能做」还是「去哪做」,别让说明许诺一件这里根本没有的工具。 */
+export function toolAvailable(name: string, ctx: ToolContext): boolean {
+  return resolveTools(currentProfile(ctx), ctx).has(name);
+}
+
 export function getToolDefinitions(ctx: ToolContext): Tool[] {
   const hasSkills = !!(ctx.enabledSkillIds && ctx.enabledSkillIds.length);
   const tools = resolveTools(currentProfile(ctx), ctx);
@@ -466,7 +476,10 @@ export async function executeTool(call: ToolCall, ctx: ToolContext): Promise<Too
     const cleanup = timed.cleanup;
     // 客户端原生动作按工具收窄:没声明 clientCapability 的工具拿不到 requestClientAction,声明了的只能发自己的 ns
     // (否则任何插件工具都能直调它绕过中央闸)。⚠️ 这一行被 clientCapabilityGate.test.ts 的执行侧用例覆盖。
-    const scopedCtx = bindClientActionToTool(timed.scopedCtx, impl);
+    // 结构化来源(web_search / web_fetch):收集器每次调用一份、只挂给这两个内置工具 —— 并行搜索互不串,别的工具(含插件)看不到它。
+    let webSources: WebSource[] | undefined;
+    const boundCtx = bindClientActionToTool(timed.scopedCtx, impl);
+    const scopedCtx: ToolContext = WEB_SOURCE_TOOLS.has(name) ? { ...boundCtx, noteWebSources: (s) => { webSources = s; } } : boundCtx;
     // ⚠️「拍 pre-image → 执行 → 取写后指纹 / 撤销」必须整段在**同一把写锁**里(codex 2026-08-17 P1)。
     // 原来快照在锁外拍:两个子代理/会话同时写同一个文件时,双方都会在任一方进锁之前拍完快照 ——
     // 后写的那个拍到的是**前写者改动之前**的字节,回退它就把前者的改动一起抹掉。
@@ -501,7 +514,9 @@ export async function executeTool(call: ToolCall, ctx: ToolContext): Promise<Too
       logAgentEdit(name, args, ctx, text);
       // 内置工具**用返回串表达失败**(不抛),此前一律标 isError:false —— 于是真失败在 SSE/hooks/
       // 持久化里都是「成功」。与下面自定义工具分支(早就按 'Error:' 判)口径统一。
-      return { toolCallId: call.id, name, result: text, isError: text.startsWith('Error:') };
+      const isError = text.startsWith('Error:');
+      // 来源只随成功结果走(metadata 落库、发事件,不进模型那份文字)
+      return { toolCallId: call.id, name, result: text, isError, ...(!isError && webSources?.length ? { metadata: { sources: webSources } } : {}) };
     } catch (e: any) {
       if (e instanceof DockerCleanupError) throw e;
       if (undoSnapshot) await (undoSnapshot as () => Promise<void>)();

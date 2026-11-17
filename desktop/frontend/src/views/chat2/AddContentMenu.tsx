@@ -9,8 +9,9 @@ import {
   Camera, ChevronDown, ChevronRight, FileText, Image as ImageIcon, MessageSquarePlus, MessagesSquare,
   AppWindow, PanelsTopLeft, Paperclip, Plus, Search, UserPlus,
 } from 'lucide-react'
-import { allViews, getView, label, nestedPanelPlacement, openNativeSheetMenu, UI_ZOOM_EVENT, useEdgeNudge, useExitGhost, useWorkspace, zoomOf, type SheetMenu, type SheetMenuItem } from '@lcl/engine'
+import { allViews, getView, label, nestedPanelPlacement, openNativeSheetMenu, UI_ZOOM_EVENT, useEdgeNudge, useExitGhost, useSubPanelFlow, useWorkspace, zoomOf, type SheetMenu, type SheetMenuItem } from '@lcl/engine'
 import { ComposerMenuSurface, ComposerMenuHeader, composerMenuHasFocus, useComposerLayout } from '../../components/ComposerMenuSurface'
+import type { CapsuleControl } from './useCapsuleDroplet'
 import { registerMessages, useI18n } from '../../i18n'
 import { usePageStore } from '../../amadeus/store/pageStore'
 import { useRecentViews } from '../../recentViews'
@@ -96,10 +97,13 @@ export const AddContentMenu: React.FC<{
   onAddReference: (ref: AddContentReference) => void
   overflowControls?: React.ReactNode
   triggerRef?: React.RefObject<HTMLSpanElement | null>
+  /** Chat Box 底排的水滴开合(useCapsuleDroplet):胶囊撑宽 / 倒放 / 再点同一颗。不传 = 开着就撑宽、关就直接收。 */
+  capsule?: CapsuleControl
 }> = ({
   open, disabled, activeSessionId, canUsePathPicker, onOpenChange, onNewSession, onAddAgent,
-  onPickPaths, onPickFiles, onAddReference, overflowControls, triggerRef,
+  onPickPaths, onPickFiles, onAddReference, overflowControls, triggerRef, capsule,
 }) => {
+  const expanded = capsule ? capsule.expanded : open
   const { t } = useI18n()
   const localRef = useRef<HTMLSpanElement>(null)
   const anchorRef = triggerRef ?? localRef
@@ -180,8 +184,11 @@ export const AddContentMenu: React.FC<{
       ro.disconnect()
     }
   }, [pane, compact])
+  // 二级面板从那一行渗出来(水滴开合时;放在定位那个 layout effect 之后,拿到的是改过的 placement)
+  useSubPanelFlow(!!capsule && expanded && !compact, pane, placement, () => menuRef.current?.querySelector<HTMLElement>(`[data-add-pane="${pane}"]`) ?? null, subRef, menuRef)
 
-  const close = (): void => { onOpenChange(false); anchorRef.current?.querySelector('button')?.focus({ preventScroll: true }) }
+  // 标题栏的 × / Esc:倒放收起(水滴开合);焦点回到 ＋
+  const close = (): void => { if (capsule) capsule.dismiss(); else onOpenChange(false); anchorRef.current?.querySelector('button')?.focus({ preventScroll: true }) }
   const back = (): void => {
     returnPaneFocus.current = pane
     setPane(null)
@@ -513,16 +520,16 @@ export const AddContentMenu: React.FC<{
   </>
 
   return (
-    <span ref={anchorRef} data-compact={compact || undefined} className={`add-pill-wrap t2c-capsule-peer${open ? ' is-open' : ''}`} data-cmenu>
+    <span ref={anchorRef} data-compact={compact || undefined} className={`add-pill-wrap t2c-capsule-peer${expanded ? ' is-open' : ''}${open ? ' t2c-capsule-held' : ''}`} data-cmenu>
       <button
-        className={`t2c-pill add-pill-btn${open ? ' is-open' : ''}`}
+        className={`t2c-pill add-pill-btn${expanded ? ' is-open' : ''}${capsule?.retracting ? ' is-retracting' : ''}`}
         title={t('input.addContent')}
-        aria-expanded={open}
+        aria-expanded={expanded}
         disabled={disabled}
         onClick={() => {
           // Android:原生半屏;没有原生宿主(桌面 / 网页)照旧展开 Web 菜单,宿主呈现失败也回落 Web。
           if (!open && openNativeSheetMenu(nativeMenu, { onFallback: () => onOpenChange(true) })) return
-          onOpenChange(!open)
+          if (capsule) capsule.toggle(); else onOpenChange(!open)
         }}
       >
         <Plus size={16} className="add-pill-plus" />
@@ -532,15 +539,15 @@ export const AddContentMenu: React.FC<{
 
       {open && (
         <ComposerMenuSurface portal={compact} anchorRef={anchorRef}
-          innerRef={el => { menuRef.current = el; menuFix.ref.current = el }}
-          className="composer-menu composer-menu--add" style={menuFix.style}>
+          innerRef={el => { menuRef.current = el; menuFix.ref.current = el; if (capsule) capsule.panelRef.current = el }}
+          className={`composer-menu composer-menu--add${capsule ? ' t2c-pour' : ''}`} style={menuFix.style}>
           {compact && <ComposerMenuHeader title={pane ? t(pane === 'conversation' ? 'addMenu.conversation' : pane === 'app' ? 'addMenu.app' : 'addMenu.view') : t('addMenu.label')} onBack={pane ? back : undefined} onClose={close} />}
           {compact && pane ? paneContent : mainContent}
         </ComposerMenuSurface>
       )}
-      {open && pane && !compact && (
+      {open && expanded && pane && !compact && (
         <div ref={el => { subRef.current = el; subFix.ref.current = el }}
-          className={`composer-menu add-menu-sub ${placement}`} data-pane={pane}
+          className={`composer-menu add-menu-sub ${placement}${capsule ? ' t2c-pour' : ''}`} data-pane={pane}
           style={{ ...subFix.style, bottom: placement === 'stacked' ? `calc(100% + ${stackOffset}px)` : undefined }}>
           {paneContent}
         </div>

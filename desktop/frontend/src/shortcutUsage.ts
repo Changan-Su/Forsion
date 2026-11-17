@@ -91,3 +91,63 @@ export function conflictGroups<R>(rows: readonly R[], hotkeyOf: (r: R) => string
   for (const [k, list] of byKey) if (list.length < 2) byKey.delete(k)
   return byKey
 }
+
+/** 插件命令 `hotkey` 声明 → 规范形(2026-11-16+);不合格 → ''。必须带 mod、恰好一个主键:热键分发没有输入焦点闸,
+ *  裸键 / 只带 Shift 会在打字时触发;只带 Alt 在 mac 上是 ⌥ 出特殊字符(⌥E 打重音),同样会抢走打字。左右修饰键同按不收。 */
+export function pluginDefaultHotkey(raw: unknown): string {
+  if (typeof raw !== 'string' || raw.length > 64) return ''
+  const hk = normalizeHotkey(raw)
+  const parts = hk.split('+')
+  const keys = parts.filter((p) => !(MODS as readonly string[]).includes(p))
+  if (keys.length !== 1 || !parts.includes('mod')) return ''
+  return canFire(keys[0], parts.includes('shift')) ? hk : ''
+}
+
+/** 热键分发按 e.key 认主键:带 Shift 时数字 / 标点给的是上档字符(⇧1 是 '!'),`space` 对不上 e.key 的 ' ' ——
+ *  这些写进默认键永远按不出来,设置页却显示「已生效」,干脆不收。字母、具名键、[ ](分发里有别名)不受 Shift 影响。 */
+const NAMED_KEYS = /^(arrow(up|down|left|right)|f([1-9]|1[0-9]|2[0-4])|enter|escape|tab|backspace|delete|insert|home|end|pageup|pagedown)$/
+function canFire(key: string, shift: boolean): boolean {
+  if (/^[a-z]$/.test(key) || NAMED_KEYS.test(key) || key === '[' || key === ']') return true
+  return !shift && /^([0-9]|[-=\\;',./`])$/.test(key)
+}
+
+/** 插件默认键为什么没生效:撞上某条命令(id;命令面板伪命令是 'command-palette'),或撞上系统 / 编辑器那两层(i18n key)。 */
+export type PluginHotkeyConflict = { kind: 'command'; id: string } | { kind: 'layer'; key: string }
+export interface PluginHotkeyState { hotkey: string; active: boolean; conflict?: PluginHotkeyConflict }
+
+/**
+ * 插件命令默认键的生效判定(2026-11-16 用户定)。用户给这条命令设过键(含解绑)→ 用户的赢,那是 effectiveHotkey 的事,
+ * 这里不管。否则默认键只在**没有任何别的东西用着这个键**时生效,撞上了就不生效(设置 → 快捷键里列成「未设置」+ 一行说明):
+ *  ① 系统 / 应用菜单保留的键,以及笔记编辑器正文里会先吃掉的键 —— 用户自己能绑编辑器键(只给提示),插件默认不行:
+ *    同一个键在编辑器里是加粗、出了编辑器是某个插件命令,用户没选过这件事;
+ *  ② 任一非插件命令(内置命令、命令面板)的生效键 —— 包括用户给它们设的键;
+ *  ③ 任一别的插件命令:它有用户设的键就看那个键,没有就看它声明的默认键(不管它自己生没生效)。两个插件默认同一个键 →
+ *    两个都不生效,谁先装载都一样(不按加载顺序定胜负,不然每次启动可能换人)。
+ * 键一空出来(用户把冲突那条改了 / 插件卸了)下一次判定就自动生效。
+ * `plugins` = 全部插件命令(id 已带 amadeus: 前缀;没声明默认键的传 ''),`others` = 其余命令的生效键(已含用户覆盖)。
+ */
+export function resolvePluginHotkeys(
+  plugins: ReadonlyArray<{ id: string; hotkey: string }>,
+  others: ReadonlyArray<{ id: string; hotkey: string }>,
+  overrides: Readonly<Record<string, string>>,
+  mac: boolean,
+): Map<string, PluginHotkeyState> {
+  const overridden = (id: string): boolean => Object.prototype.hasOwnProperty.call(overrides, id)
+  const used = new Map<string, string>()
+  for (const o of others) {
+    if (!o.hotkey) continue
+    const k = normalizeHotkey(o.hotkey)
+    if (!used.has(k)) used.set(k, o.id)
+  }
+  const claimOf = (p: { id: string; hotkey: string }): string => (overridden(p.id) ? normalizeHotkey(overrides[p.id] || '') : p.hotkey)
+  const out = new Map<string, PluginHotkeyState>()
+  for (const p of plugins) {
+    if (!p.hotkey) continue
+    const k = p.hotkey
+    const layer = systemReservedOf(k, mac) ?? editorUseOf(k)
+    const cmd = used.get(k) ?? plugins.find((q) => q.id !== p.id && claimOf(q) === k)?.id
+    const conflict: PluginHotkeyConflict | undefined = layer ? { kind: 'layer', key: layer } : cmd ? { kind: 'command', id: cmd } : undefined
+    out.set(p.id, conflict ? { hotkey: k, active: false, conflict } : { hotkey: k, active: true })
+  }
+  return out
+}
