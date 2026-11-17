@@ -14,6 +14,8 @@ process.env.ELECTRON_BUILDER_7Z_FILTER = 'BCJ'
 const builtinBundles = require('./electron/builtinBundles.json')
 const { bundleExtend, artifactSuffix, updateChannel } = require('./build/distribution.cjs')
 const bundledDirName = (pkg) => pkg.replace(/^@[^/]+\//, '')
+// A Developer ID certificate was handed to electron-builder → sign + notarize the mac app (see `mac` below).
+const macDeveloperId = Boolean(process.env.CSC_LINK || process.env.CSC_NAME)
 
 const id = process.env.FORSION_PRODUCT || 'forsion'
 const product = JSON.parse(readFileSync(join(__dirname, 'products', `${id}.json`), 'utf8'))
@@ -154,7 +156,14 @@ module.exports = {
   mac: {
     target: 'dmg',
     icon: 'build/icon.icns',
-    identity: null,
+    // Developer ID signing + notarization only when a signing certificate is supplied (CI: CSC_LINK from the
+    // MAC_CSC_LINK secret; local: CSC_LINK or CSC_NAME). Without one, identity stays null and afterPack's ad-hoc
+    // signature is what ships, exactly as before. Notarization credentials: APPLE_API_KEY / _KEY_ID / _ISSUER.
+    identity: macDeveloperId ? undefined : null,
+    hardenedRuntime: true,
+    entitlements: 'build/entitlements.mac.plist',
+    entitlementsInherit: 'build/entitlements.mac.plist',
+    notarize: macDeveloperId,
     // 三条 TCC 用途说明。缺了对应那条 = 首次请求权限时**直接崩**(不是弹窗被拒,是进程挂掉)。
     // NSCamera 不写的话 Electron 基础 plist 里那句英文默认文案会顶上来,英文出现在中文界面里。
     extendInfo: {

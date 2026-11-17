@@ -10,6 +10,9 @@
  *     只能 xattr 去隔离);带一个 ad-hoc 签名后会降级为「未识别开发者」——用户即可在
  *     系统设置 → 隐私与安全性 里点「仍要打开」。彻底无提示仍需 Developer ID + 公证(notarize)。
  *     配合 package.json 的 build.mac.identity=null(electron-builder 跳过自身签名,签名全交本钩子)。
+ *     有 Developer ID 时(CSC_LINK / CSC_NAME,见 electron-builder.config.cjs)这一步照做:后面的 ⑤ 要在 arm64 上
+ *     真跑打包产物,得先有签名;electron-builder 在 afterPack 之后用 Developer ID + hardened runtime 逐个重签并公证,
+ *     ad-hoc 签名被整体覆盖,不会留在发出去的包里。
  */
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');

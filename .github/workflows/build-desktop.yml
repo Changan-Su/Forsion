@@ -63,7 +63,8 @@ jobs:
     name: ${{ matrix.os }} (${{ matrix.distribution }})
     runs-on: ${{ matrix.os }}
     # 正常最慢的 Windows 默认版 ~15 分钟。不设就是 GitHub 缺省 360 分钟:11-08 fetch-git 卡死时两个 Windows job 一直挂着。
-    timeout-minutes: 45
+    # macOS 多出公证(上传 + 苹果排队,常见 5–15 分钟)。
+    timeout-minutes: ${{ matrix.os == 'macos-latest' && 75 || 45 }}
     env:
       FORSION_RELEASE_BUILD: '1'
       TANGU_REQUIRE_NODE: '1'
@@ -180,13 +181,51 @@ jobs:
       - name: Verify frozen release inputs
         run: git diff --exit-code -- desktop/package.json desktop/package-lock.json tangu-agent/package.json tangu-agent/package-lock.json
 
+      # mac 正式签名 + 公证的凭据。只在 macOS job 准备、只交给下面打包那一步:CSC_LINK 在 Windows 上会被
+      # electron-builder 当成 Authenticode 证书。没配 Secrets(fork、新仓)时什么都不做,打出来照旧是 ad-hoc 包。
+      - name: Prepare macOS Developer ID signing
+        id: macsign
+        if: runner.os == 'macOS'
+        env:
+          MAC_CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+        run: |
+          if [ -z "$MAC_CSC_LINK" ] || [ -z "$APPLE_API_KEY_P8" ] || [ -z "$APPLE_API_KEY_ID" ]; then
+            echo "::warning::No Developer ID secrets: this macOS build ships ad-hoc signed and not notarized"
+            exit 0
+          fi
+          key="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID}.p8"
+          printf '%s\n' "$APPLE_API_KEY_P8" > "$key"
+          chmod 600 "$key"
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+          echo "signed=1" >> "$GITHUB_OUTPUT"
+
       - name: Package installer
         working-directory: desktop
         # 正常 2–7 分钟(Windows 慢机器 ~7 分钟)。11-08 卡死在解 tar.bz2 上:单步封顶,卡住 20 分钟内就红,不等整个 job。
-        timeout-minutes: 20
+        # macOS 签名后要等公证,放宽到 50 分钟。
+        timeout-minutes: ${{ matrix.os == 'macos-latest' && 50 || 20 }}
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          CSC_LINK: ${{ steps.macsign.outputs.signed == '1' && secrets.MAC_CSC_LINK || '' }}
+          CSC_KEY_PASSWORD: ${{ steps.macsign.outputs.signed == '1' && secrets.MAC_CSC_KEY_PASSWORD || '' }}
+          APPLE_API_KEY: ${{ steps.macsign.outputs.key }}
+          APPLE_API_KEY_ID: ${{ steps.macsign.outputs.signed == '1' && secrets.APPLE_API_KEY_ID || '' }}
+          APPLE_API_ISSUER: ${{ steps.macsign.outputs.signed == '1' && secrets.APPLE_API_ISSUER || '' }}
         run: npx electron-builder --config electron-builder.config.cjs ${{ matrix.ebargs }} --publish never
+
+      # 签了 Developer ID 的包:签名链完整、Gatekeeper 认、公证票据已钉进 .app(离线也能过)。
+      - name: Verify macOS Developer ID signature and notarization
+        if: steps.macsign.outputs.signed == '1'
+        working-directory: desktop
+        run: |
+          app=$(find dist -maxdepth 2 -name '*.app' -type d | head -1)
+          test -n "$app" || { echo "no .app under dist/"; exit 1; }
+          codesign --verify --deep --strict --verbose=2 "$app"
+          codesign -dv --verbose=2 "$app" 2>&1 | grep -E '^(Authority|TeamIdentifier|Runtime Version|flags)'
+          spctl --assess --type execute --verbose=4 "$app"
+          xcrun stapler validate "$app"
 
       - name: Verify permission and Computer Use delivery
         working-directory: desktop
