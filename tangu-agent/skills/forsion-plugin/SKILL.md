@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.122.0
+  version: 1.123.0
   author: Forsion
   category: Forsion
 ---
@@ -559,6 +559,7 @@ ctx.registerCommand({
 | `ctx.home` | 主页宿主件:卡里的内容由宿主画进插件的格子(`mount` / `mountPart`)、主页摆放读写(`layout`)、「编辑主页」命令(`onEditRequest`)、官方计数(`track`) | 2026-11-09 起;⚠️**只给接管宿主主页的那个核心插件**(`HOST_VIEW_CLAIMS.homepage`),普通插件没有、manifest 也申请不到 —— 做普通插件用不到;见下「主页宿主件」 |
 | `ctx.spaces` | Space 列表 / 打开 / 图标 / 近况那一行 + 商店、成就两格 + Ribbon 上区的收纳架(顺序、收纳夹) | 2026-10-18 起;⚠️**声明 `"spaces"` 才存在**(收纳架改的是用户的 Ribbon);见下「Space 与 Ribbon 收纳架」 |
 | `ctx.databases` | 全库多维表的实时聚合(`subscribe`)+ 按行按格读写(`setCell` / `addRow` / `duplicateRow` / `deleteRow`) | 2026-10-16 起;⚠️**manifest `capabilities` 声明 `"databases"` 才存在**;见下「全库多维表与笔记任务」 |
+| `ctx.tangu.createAgent` / `ctx.tangu.importSessions` | 新建 Agent;把外部聊天记录(导出文件)写成这个 Agent 名下**能接着聊**的会话 | 2026-11-16 起;⚠️**声明 `"agentImport"` 才存在**;写进**本端**引擎(桌面 = 本机,手机 / 网页 = 云端,不跨端);会话追加不覆盖(同 `source` + 同对话 `id` 再导回 `exists`,原会话不动)、保留原时间、不出未读点、不触发起标题 / 记忆后台;时间一律毫秒;宿主自己切批,`onProgress` 每批一次;不抛,失败回 `{ ok: false, error, results }`(已写的那几批在 results 里) |
 | `ctx.noteTasks` | 笔记正文里的 `@` 时间任务(`subscribe`)+ 就地勾选 / 改日期(`update`) | 2026-10-16 起;⚠️**声明 `"noteTasks"` 才存在**;同上节 |
 | manifest `events[]` | 自动化(Automation)可订阅的事件 | 纯声明无代码;⚠️目前只有中文 `label`,英文界面下也显示中文 |
 | manifest `onboarding` | 有 `requires` = **闸**(宿主实测,未满足才弹检查卡);没有 = 详情页里折叠的使用说明 | 见下「前置条件:onboarding.requires」;**别 recommends 自家已内嵌的 agent/skill**(会引导去商店重复装);⚠ `recommends` 只在闸的检查卡里渲染,没有 `requires` 就一个字都不显示 |

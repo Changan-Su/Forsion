@@ -65,7 +65,7 @@ import {
 } from './contextBudget.js';
 import {
   getLatestSummary, compactWorkingMessages, compactSession, summaryMessage, rowCoverage, idleCompactionDue,
-  tagMessageSource, messageSource, persistCheckpoint, messageTimestamp, type CompactBoundary, type CompactWorkingResult,
+  tagMessageSource, messageSource, persistCheckpoint, messageTimestamp, summaryChunkBudget, type CompactBoundary, type CompactWorkingResult,
 } from './compaction.js';
 import { compactionSettingsFor, type CompactionSettings } from './compactionSettings.js';
 import { releaseRunCompaction, runCompactionOperation, type CompactionCommitResult } from './runCompaction.js';
@@ -1086,6 +1086,55 @@ export async function checkpointRowsOutsideWindow(
   else if (r.reason !== 'nothing to compact' && r.reason !== 'load messages failed') console.warn(`[agent-core] session=${sessionId} 窗口外老行压缩未成: ${r.reason}`);
 }
 
+/** 导入会话的首份摘要一段最多喂这么多(估算 token):一次塞几百条进摘要,超出摘要模型预算的最早那截会被
+ *  buildTranscript 从头丢掉、检查点却照样推进到末尾 —— 那截就再也回不来了(Codex 11-16 #1)。 */
+const IMPORT_CHECKPOINT_CHUNK_TOKENS = 24_000;
+
+/**
+ * 导入的会话(agent_config.imported)第一次接着聊之前:把回放窗口外、还没被检查点覆盖的老行**分段**做成持久摘要,
+ * 一段一个增量检查点(compactSession 带上一份摘要往前推)。窗口算术与 checkpointRowsOutsideWindow 同一套(按 n+1 算,
+ * 起点只会比 hydrate 的靠后,不会留缝)。signal = 这一轮的停止:按停就不再往下压。
+ */
+export async function checkpointImportedHistory(
+  sessionId: string, modelId: string, appId: string, settings: CompactionSettings, runThinking: ThinkingLevel, signal?: AbortSignal,
+): Promise<void> {
+  if (!settings.enabled || !modelId) return;
+  const n = await deps().state.countSessionMessages(sessionId);
+  const next = n + 1;
+  if (next <= HYDRATE_MAX) return;
+  const start = Math.ceil((next - HYDRATE_MAX) / HYDRATE_BLOCK) * HYDRATE_BLOCK;
+  const outside = await deps().state.listSessionMessagesWindow(sessionId, start, 0);
+  const covered = (await getLatestSummary(sessionId))?.throughTimestamp || 0;
+  // 一段的上限跟着摘要模型走:小窗口模型上固定 2.4 万也会超预算(Codex 11-16 第二轮复核);留两成给角色前缀与估算误差
+  const chunkTokens = Math.min(IMPORT_CHECKPOINT_CHUNK_TOKENS, Math.floor((await summaryChunkBudget(modelId, settings, signal)) * 0.8));
+  const bounds: number[] = [];
+  let acc = 0;
+  let rows = 0;
+  let lastTs = 0;
+  for (const r of outside) {
+    const ts = Number(r.timestamp) || 0;
+    if (!ts || ts <= covered) continue;
+    const cost = estimateTokensRough(String(r.content || '')) + 8;
+    // 一段至少两条:compactSession 对单条返回 nothing to compact(长消息在小窗口摘要模型上会一条一段)
+    if (rows >= 2 && acc + cost > chunkTokens) { bounds.push(lastTs); acc = 0; rows = 0; }
+    acc += cost;
+    rows++;
+    lastTs = ts;
+  }
+  if (lastTs) bounds.push(lastTs);
+  for (const throughTs of bounds) {
+    signal?.throwIfAborted();
+    const r = await compactSession(sessionId, modelId, appId, signal, { throughTs, settings, runThinking });
+    if (!r.ok) {
+      // 这一段没东西可压就并进下一段(下一段从上个检查点算起),别整个停掉
+      if (r.reason === 'nothing to compact') continue;
+      console.warn(`[agent-core] session=${sessionId} 导入会话老行分段压缩未成: ${r.reason}`);
+      return;
+    }
+  }
+  if (bounds.length) console.info(`[agent-core] session=${sessionId} 导入会话窗口外老行分 ${bounds.length} 段做了持久检查点`);
+}
+
 /**
  * 载入近期会话历史(时间正序),跳过空内容的 assistant 行避免 provider 拒绝。
  *  - 窗口起点按 HYDRATE_BLOCK 对齐(替代逐条滑动的 LIMIT 50——那会让长会话每个新 run 前缀必断);
@@ -1271,6 +1320,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   let preset: Preset | undefined = parsePreset(agentConfig.preset);
   let pluginReadOnly = agentConfig.pluginReadOnly === true;
   let storedAgentSlug: string | undefined; // 分身:这次之前会话存的是谁(换身份的会话不接着用旧历史,见下)
+  let importedSession = false; // 外部聊天记录导入的会话(agent_config.imported):回放前要先给窗口外老行补摘要,见 hydrate 前
   try {
     const rawStored = await deps().state.getAgentConfig(sessionId);
     ac.signal.throwIfAborted();
@@ -1278,6 +1328,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     if (stored !== null && (typeof stored !== 'object' || Array.isArray(stored))) throw new Error('Invalid stored session Agent configuration');
     pluginReadOnly ||= stored?.pluginReadOnly === true;
     if (typeof stored?.agentSlug === 'string') storedAgentSlug = stored.agentSlug;
+    importedSession = !!(stored?.imported && typeof stored.imported === 'object');
     // 轨道身份先于 agentSlug 纠偏:私聊会话的 agentSlug 由 soloAgentSlug 钉死,下面的写穿会把存值也顺手纠回来。
     bindSessionFacts(agentConfig, pickSessionFacts(stored));
     if (stored?.delegatedFrom) {
@@ -1794,6 +1845,18 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         return null;
       }
     };
+    // 导入的旧对话(11-16,POST /agent/sessions/import):正常会话靠每轮收尾的惰性检查点给窗口外老行做摘要,
+    // 导入的会话一上来就几十上百条、一份摘要都没有 → 第一次接着聊时窗口(最近 HYDRATE_MAX 行)外的旧内容整段不进上下文
+    // (live dsimport 抓到:开头那首诗被切掉,模型说「查不到」)。所以在回放前同步补一份;已覆盖时这里只是几条查询。
+    // 有在飞的惰性检查点就交给 hydrate 去等,别并发压两份。用这一轮的模型与思考档,计费照常记在这一轮上。
+    if (importedSession && !lazyCheckpoints.get(sessionId)) {
+      const task: Promise<void> = checkpointImportedHistory(sessionId, callModelId, appId, compactionCfg, thinkingLevel, ac.signal)
+        .catch((e) => { if (!ac.signal.aborted) console.warn(`[agent-core] session=${sessionId} 导入会话窗口外老行压缩失败:`, e?.message || e) })
+        .finally(() => { if (lazyCheckpoints.get(sessionId) === task) lazyCheckpoints.delete(sessionId); });
+      lazyCheckpoints.set(sessionId, task);
+      await task; // 不走 hydrate 那道 45 秒的等待上限:导入的历史可能很长,宁可第一句慢一点,也别缺一截上下文就开口
+      ac.signal.throwIfAborted(); // 压摘要时按了停:这一轮到此为止(摘要请求已随 signal 取消)
+    }
     const { messages: history, currentUserIndex, checkpointThrough, contextImages } = await hydrateHistory(
       sessionId, run.assistant_message_id || '', describeUserImages,
       typeof input.userMessageId === 'string' ? input.userMessageId : undefined,

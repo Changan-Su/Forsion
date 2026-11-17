@@ -281,6 +281,18 @@ Three smaller pieces: plugins can read the signed-in name (`ctx.app.watchAccount
 
 The core plugin that takes over Home gets a set of Home-only APIs (`ctx.home`: the host draws card contents into the plugin's slots, reads and writes the Home layout, and passes on the Edit Home command). Other plugins don't get it and can't ask for it.
 
+## Creating agents and importing chats (2026-11-16+)
+
+A "move from another AI" plugin can create an agent for you and write the old chats from an export file as sessions under it: opening one shows the original chat, and you can keep talking. The plugin must declare `agentImport` in its manifest to get `ctx.tangu.createAgent` / `ctx.tangu.importSessions`; the plugin's detail page then lists "create agents and import chats".
+
+- **Which device**: on desktop they go into the local engine, on phone and web into the cloud. Nothing syncs across devices: chats imported on the desktop do not show up on the phone, so import again on the phone to use them there.
+- **Append only**: the same chat from the same source a second time comes back as "exists" and the session is left as it is, so anything you added by continuing it is never overwritten.
+- **Kept as they were**: original titles and times; they sort by their own dates instead of jumping to the top, show no unread dot, and no background job (titles, memory tidying) runs on them.
+- **Session shape**: the same as a new Chat (no project), under the given agent, not in its private chat.
+- Times are milliseconds. Pass as many chats as you like; the host batches them and reports progress after each batch. Errors are returned, not thrown: `{ ok: false, error, results }`, with the batches already written listed in `results`.
+
+See the capability table of the plugin development skill (the `ctx.tangu.createAgent` / `ctx.tangu.importSessions` row) for the details.
+
 ## Bundled MCP servers, hooks and file events
 
 A plugin can ship its own MCP servers (only ones that run on this computer). Once it is installed and enabled, Tangu gains those tools; disabling the plugin stops them. Settings → MCP lists them with the plugin they come from; to turn them off, disable the plugin in plugin settings. Like MCP servers the user adds, these tools load on demand by default: each request carries one catalog line per tool (its name and the first line of its description), and the AI loads a tool before calling it. Make the first line of each description say on its own what the tool does. For a server needed on every turn, set `"deferLoading": false` in its declaration to keep its tools loaded. A plugin can also ship hooks that are notified when a session starts, when a tool has run and when an answer ends, for auditing or archiving. These hooks only watch: they cannot block anything or add to the conversation. Settings → Hooks lists them too, marked "Observe only".

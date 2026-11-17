@@ -13,6 +13,7 @@ registerMessages({
     zh: '读取 Agent 日程、.ics 订阅和另一侧库里的日历，管理 .ics 订阅并改日历设置',
     en: 'read Agent schedules, .ics subscriptions and calendars in your other vault, manage .ics subscriptions and change calendar settings',
   },
+  'settings.amadeusPlugins.capAgentImport': { zh: '新建 Agent、导入聊天记录', en: 'create agents and import chats' },
   'settings.amadeusPlugins.capActiveWindow': { zh: '读取前台窗口', en: 'see which window is in front' },
   // 内部口子(2026-11-16+,amadeus/plugins/pluginInternals.ts):两级轻重不同,用户启用前有权知道
   'settings.amadeusPlugins.capInternals': { zh: '读取 Forsion 的内部状态', en: 'read Forsion internals' },
@@ -25,6 +26,7 @@ export const CAP_LABELS: Array<[PluginCapability, string]> = [
   ['noteTasks', 'settings.amadeusPlugins.capNoteTasks'],
   ['calendar', 'settings.amadeusPlugins.capCalendar'],
   ['spaces', 'settings.amadeusPlugins.capSpaces'],
+  ['agentImport', 'settings.amadeusPlugins.capAgentImport'],
   ['activeWindow', 'settings.amadeusPlugins.capActiveWindow'],
   ['internals', 'settings.amadeusPlugins.capInternals'],
   ['internals-raw', 'settings.amadeusPlugins.capInternalsRaw'],

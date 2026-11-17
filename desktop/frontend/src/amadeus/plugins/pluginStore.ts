@@ -2941,10 +2941,31 @@ export const usePluginStore = create<PluginState>((set, get) => {
                 } catch (e) { return { ok: false as const, error: String((e as Error)?.message || e) } }
               },
             } : {}),
+            // 建 Agent / 导入会话(2026-11-16+):声明 "agentImport" 且探针给得出才注入。写进本端引擎(桌面本机、手机 / 网页云端),
+            // 会话追加不覆盖;活性由探针在每一批之间复查,停用后不再往下写。
+            ...(readTangu()?.importSessions && get().plugins.find((p) => p.id === pluginId)?.capabilities?.includes('agentImport') ? {
+              createAgent: async (input: import('./tanguSeam').TanguCreateAgentInput): Promise<import('./tanguSeam').TanguCreateAgentResult> => {
+                if (!ctxAlive()) return { ok: false, error: 'plugin disabled' }
+                const probe = readTangu()
+                if (!probe?.createAgent) return { ok: false, error: 'createAgent is not available on this host' }
+                return probe.createAgent(input, ctxAlive)
+              },
+              importSessions: async (input: import('./tanguSeam').TanguImportSessionsInput): Promise<import('./tanguSeam').TanguImportSessionsResult> => {
+                if (!ctxAlive()) return { ok: false, error: 'plugin disabled', results: [] }
+                const probe = readTangu()
+                if (!probe?.importSessions) return { ok: false, error: 'importSessions is not available on this host', results: [] }
+                return probe.importSessions(input, ctxAlive)
+              },
+            } : {}),
             ...(readTangu()?.openSession ? {
               openSession: async (sessionId: string): Promise<void> => {
                 if (!ctxAlive()) return
                 if (!/^[a-zA-Z0-9_-]{1,128}$/.test(sessionId)) throw new Error('Invalid session ID')
+                // 浮窗(设置 / 商店里插件的详情页)没有对话区:交给主窗开,与 ctx.app.openLink 同一条通道(2026-11-16)。
+                if (windowKind() !== 'main' && hostTangu()?.requestMainAction) {
+                  hostTangu()?.requestMainAction?.('open-link', `forsion://session/${sessionId}`)
+                  return
+                }
                 await readTangu()?.openSession?.(sessionId, ctxAlive)
               },
             } : {}),
