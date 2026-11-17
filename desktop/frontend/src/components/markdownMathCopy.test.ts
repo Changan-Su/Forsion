@@ -28,4 +28,17 @@ describe('Markdown × 块公式复制键', () => {
     expect(wrote).toBe('E = mc^2')
     act(() => root.unmount())
   })
+  // 11-17:\( \[ 由解析器直接认(remarkLlmMath),不再先用正则改写源文
+  it('\\[ 块公式同样带复制键,\\( 渲染成行内公式', () => {
+    const h = renderToStaticMarkup(md('a\n\n\\[\nT = \\frac{a}{b}\n\\]\n\n行内 \\(x^2\\) 结束'))
+    expect(h.match(/class="md-math"/g)?.length).toBe(1)
+    expect(h.match(/class="katex"/g)?.length).toBe(2)
+    expect(h).not.toContain('\\(')
+  })
+  it('代码里和 \\\\( 转义的不当公式', () => {
+    const h = renderToStaticMarkup(md('a \\\\(x\\\\) b\n\n~~~\n\\(y\\)\n~~~'))
+    expect(h).not.toContain('katex')
+    expect(h).toContain('\\(x\\)')
+    expect(h).toContain('\\(y\\)')
+  })
 })
