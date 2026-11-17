@@ -14,7 +14,7 @@ import { ArrowLeft, Bot, CalendarDays, Cloud, Info, NotebookText, type LucideIco
 import { useSpaceStore } from '@lcl/engine'
 import { pluginFootprint, pluginVaultFolder, pluginWanted, runningDependents, unmetPluginDeps, usePluginStore } from '@amadeus/plugins/pluginStore'
 import { PluginUninstallDialog, SupersededCleanupDialog } from './UninstallDialog'
-import { cleanupSupersededCopy, uninstallForsionPlugin } from './pluginUninstall'
+import { cleanupSupersededCopy, supersededVaultFolder, uninstallForsionPlugin } from './pluginUninstall'
 import { amadeus } from '@amadeus/api'
 import { installAmadeusPlugins, reloadPluginsAndAnnounce } from '../amadeusPlugins'
 import { usePluginOnboarding, needsOnboarding, promptIfPending, isGate } from '../stores/pluginOnboardingStore'
@@ -711,7 +711,7 @@ const SupersededSection: React.FC<{ p: AmadeusPlugin }> = ({ p }) => {
   const mobile = !!window.tangu?.mobile
   const remote = !!window.tangu?.unitPage
   const hasTrash = typeof amadeus?.trashRestore === 'function'
-  const folder = pluginVaultFolder(old.id, old.name)
+  const folder = supersededVaultFolder(p) // 和商店那份同一个文件夹时不算它的(那是正在用的数据)
   const name = pluginDisplayName(p, locale)
   const canReveal = !remote && !mobile && canOpenPluginsFolder() && canRevealInFileManager()
   const canRemove = !remote && !!amadeus?.uninstallPlugin

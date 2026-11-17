@@ -77,6 +77,14 @@ export async function uninstallForsionPlugin(p: AmadeusPlugin, name: string, opt
   return true
 }
 
+/** 旧副本自己的工作文件夹(库里)。和商店那份落在同一个文件夹(两份同名,都认旧式的 Plugins/<显示名>)时不算它的:
+ *  那是正在跑的商店版的数据,既不能说「没带过来」,更不能跟着旧副本进回收站。 */
+export function supersededVaultFolder(store: AmadeusPlugin): string | null {
+  const old = store.supersedes
+  const mine = old ? pluginVaultFolder(old.id, old.name) : null
+  return mine && mine !== pluginVaultFolder(store.id, store.name) ? mine : null
+}
+
 /** 清掉被商店安装取代的旧普通目录(设置页「旧的本地安装」一节)。它已停用,商店那份不动:按旧副本的生效 id(= manifest id)卸载,
  *  主进程只会找到普通目录。有回收站的宿主(桌面)进回收站、6 秒内可撤销;没有的(手机)直接删、设置留在本机(调用方先问过)。 */
 export async function cleanupSupersededCopy(store: AmadeusPlugin, name: string, opts: { keepSettings: boolean; moveVault: boolean }): Promise<boolean> {
@@ -85,10 +93,10 @@ export async function cleanupSupersededCopy(store: AmadeusPlugin, name: string, 
   const hasTrash = typeof amadeus.trashRestore === 'function'
   const keepSettings = opts.keepSettings || !hasTrash
   const prefs = keepSettings ? {} : pluginPrefs(old.id)
-  const vaultFolder = hasTrash && opts.moveVault ? pluginVaultFolder(old.id, old.name) : null
+  const vaultFolder = hasTrash && opts.moveVault ? supersededVaultFolder(store) : null
   let r: { trashId?: string } | void
   try {
-    r = await amadeus.uninstallPlugin?.(old.id, { keepSettings, ...(vaultFolder ? { vaultFolder } : {}), ...(Object.keys(prefs).length ? { prefs } : {}) })
+    r = await amadeus.uninstallPlugin?.(old.id, { keepSettings, dir: old.dir, ...(vaultFolder ? { vaultFolder } : {}), ...(Object.keys(prefs).length ? { prefs } : {}) })
   } catch (e: any) {
     const text = ipcErrorText(e)
     panelToast(text.startsWith('dev-shadowed') ? translate('settings.amadeusPlugins.devShadowedUninstall') : text, true)

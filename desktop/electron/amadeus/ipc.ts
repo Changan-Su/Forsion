@@ -976,7 +976,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
   // 卸载 Forsion 插件:按 manifest id 定位目录(id 可与目录名不同;与 listPlugins 同一 pluginIdOf 门禁)整删。
   // 只动 ~/.forsion/plugins;内嵌 agent 已播种进引擎的按「播种一次」语义保留(活体),
   // 内嵌引擎插件需重启引擎后消失(调用方负责提示/重启)。
-  handle(IPC.uninstallPlugin, async (_e, id: string, opts?: { keepSettings?: boolean; vaultFolder?: string; prefs?: Record<string, string>; engineTrash?: string[]; withSuperseded?: boolean }) => {
+  handle(IPC.uninstallPlugin, async (_e, id: string, opts?: { keepSettings?: boolean; vaultFolder?: string; prefs?: Record<string, string>; engineTrash?: string[]; withSuperseded?: boolean; dir?: string }) => {
     if (typeof id !== 'string' || !SAFE_PLUGIN_ID.test(id)) throw new Error('invalid-plugin-id') // 原因码,渲染层 ipcErrorText 译
     // ⚠️开发副本正遮蔽同 id 的安装版时必须拒绝:这里只扫全局目录,删掉的是**安装版**,而跑着的是开发副本 ——
     // 用户看到「已卸载」,插件却还在;等哪天撤下开发副本,它才凭空消失(且没有任何提示)。先撤开发副本再卸载。
@@ -990,8 +990,12 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
     try {
       entries = await fs.readdir(root, { withFileTypes: true })
     } catch { /* 目录不存在 → 下面按未找到报错 */ }
+    // dir:调用方指名哪一个目录(清理旧副本:同一个 id 可能有两份普通目录,界面上显示的是哪份就清哪份)。
+    // 只是在同 id 的目录里挑一个 —— 生效 id 对不上照样找不到,渲染层借它挪不动别的插件。
+    const wantDir = typeof opts?.dir === 'string' && opts.dir ? opts.dir : null
     for (const e of entries) {
       if (!e.isDirectory() || e.name.startsWith('.')) continue
+      if (wantDir && e.name !== wantDir) continue
       let manifestId: unknown
       try {
         manifestId = (JSON.parse(await fs.readFile(path.join(root, e.name, 'manifest.json'), 'utf8')) as { id?: string }).id
@@ -1030,7 +1034,9 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
     // 旧副本:文件(role superseded,恢复时同 files 一样查「原处是否又装了」)+ 它自己的设置(跟着 keepSettings)
     for (const x of superseded) {
       paths.push({ path: path.join(root, x.dir), role: 'superseded' })
-      if (!opts?.keepSettings && x.id !== id) paths.push({ path: path.join(forsionHomeDir(), 'plugins-data', `${x.id}.json`), role: 'settings' })
+      // 两份普通目录可能同一个 id:设置文件只记一次(同一路径挪两遍,第二遍 ENOENT 会让整次卸载回滚)
+      const settings = path.join(forsionHomeDir(), 'plugins-data', `${x.id}.json`)
+      if (!opts?.keepSettings && x.id !== id && !paths.some((p) => p.path === settings)) paths.push({ path: settings, role: 'settings' })
     }
     const vaultRoot = vault.getRoot()
     const rel = typeof opts?.vaultFolder === 'string' ? opts.vaultFolder.replace(/^\/+|\/+$/g, '') : ''

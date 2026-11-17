@@ -8,12 +8,13 @@ vi.mock('@amadeus/api', () => ({ amadeus: api }))
 vi.mock('@amadeus/plugins/pluginStore', () => ({
   dropPluginPrefs: vi.fn(),
   pluginPrefs: (id: string) => (id === 'demo-suite' ? { 'plugin.demo-suite.k': 'old' } : id === 'market-x' ? { 'plugin.market-x.k': 'store' } : {}),
-  pluginVaultFolder: (id: string) => (id === 'demo-suite' ? 'Plugins/demo-suite' : null),
+  pluginVaultFolder: (id: string) => folders[id] ?? null,
 }))
 vi.mock('@amadeus/plugins/pluginDataSync', () => ({ dropPluginCloudData: vi.fn(), pluginDataSyncOn: () => false }))
 vi.mock('../amadeusPlugins', () => ({ reloadPluginsAndAnnounce: vi.fn(async () => {}) }))
 vi.mock('../userSpaces', () => ({ loadUserSpaces: vi.fn() }))
 vi.mock('../services/engine/targets', () => ({ homeTarget: () => ({}) }))
+const folders: Record<string, string> = {}
 const notes = vi.hoisted(() => ({ toast: [] as string[], receipts: [] as unknown[] }))
 vi.mock('./PanelNotice', () => ({ panelToast: (text: string) => { notes.toast.push(text) } }))
 vi.mock('./UninstallDialog', () => ({ notifyUninstalled: (...a: unknown[]) => { notes.receipts.push(a) } }))
@@ -31,6 +32,8 @@ beforeEach(() => {
   main.mockClear(); main.mockImplementation(async () => ({ trashId: 'desktop-1' }))
   notes.toast = []; notes.receipts = []
   delete api.trashRestore
+  for (const k of Object.keys(folders)) delete folders[k]
+  folders['demo-suite'] = 'Plugins/demo-suite'
   vi.stubGlobal('window', { tangu: { marketForget: async () => ({ ok: true }) } })
 })
 
@@ -83,7 +86,7 @@ describe('商店版取代了旧副本(方案 B)', () => {
     main.mockImplementation(async () => ({ trashId: 'old-1' }))
     const { cleanupSupersededCopy } = await import('./pluginUninstall')
     expect(await cleanupSupersededCopy(store, 'Demo', { keepSettings: false, moveVault: true })).toBe(true)
-    expect(main.mock.calls[0]).toEqual(['demo-suite', { keepSettings: false, vaultFolder: 'Plugins/demo-suite', prefs: { 'plugin.demo-suite.k': 'old' } }])
+    expect(main.mock.calls[0]).toEqual(['demo-suite', { keepSettings: false, dir: 'demo-suite', vaultFolder: 'Plugins/demo-suite', prefs: { 'plugin.demo-suite.k': 'old' } }])
     expect(notes.receipts).toEqual([['settings.amadeusPlugins.superseded.done', 'Demo', { id: 'old-1', kind: 'plugin', restorer: 'desktop' }]])
   })
 
@@ -91,7 +94,7 @@ describe('商店版取代了旧副本(方案 B)', () => {
     main.mockImplementation(async () => undefined as never)
     const { cleanupSupersededCopy } = await import('./pluginUninstall')
     expect(await cleanupSupersededCopy(store, 'Demo', { keepSettings: false, moveVault: true })).toBe(true)
-    expect(main.mock.calls[0]).toEqual(['demo-suite', { keepSettings: true }])
+    expect(main.mock.calls[0]).toEqual(['demo-suite', { keepSettings: true, dir: 'demo-suite' }])
     expect(notes.toast).toEqual(['settings.amadeusPlugins.superseded.doneMobile'])
   })
 
@@ -103,4 +106,14 @@ describe('商店版取代了旧副本(方案 B)', () => {
     expect(notes.receipts).toEqual([])
     expect(notes.toast).toHaveLength(1)
   })
+})
+
+it('⚠️旧副本和商店那份落在同一个工作文件夹(旧式的 Plugins/<显示名>):那是商店版正在用的数据,清理旧副本绝不带走', async () => {
+  api.trashRestore = () => ({})
+  folders['demo-suite'] = 'Plugins/Demo'
+  folders['market-x'] = 'Plugins/Demo'
+  const { cleanupSupersededCopy, supersededVaultFolder } = await import('./pluginUninstall')
+  expect(supersededVaultFolder(store)).toBeNull()
+  await cleanupSupersededCopy(store, 'Demo', { keepSettings: true, moveVault: true })
+  expect(main.mock.calls[0]).toEqual(['demo-suite', { keepSettings: true, dir: 'demo-suite' }])
 })

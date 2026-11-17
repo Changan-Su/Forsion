@@ -41,7 +41,7 @@ export interface MobilePluginHost {
    *  来源 = 每个已安装插件 manifest 的 fileExtensions(**不看**门禁 / 仅桌面 / 用户关没关)+ 已卸载插件留下的墓碑。 */
   fileExtensions(): Promise<string[]>
   /** withSuperseded:目标是商店安装时,被它取代的旧普通目录一起删(桌面同名选项;否则卸完旧副本立刻重新运行)。 */
-  uninstallPlugin(id: string, opts?: { withSuperseded?: boolean }): Promise<void>
+  uninstallPlugin(id: string, opts?: { withSuperseded?: boolean; dir?: string }): Promise<void>
   readPluginData(pluginId: string): Promise<string | null>
   writePluginData(pluginId: string, text: string): Promise<void>
 }
@@ -389,6 +389,7 @@ export function createPluginHost(fs: PluginFs, opts: { appVersion: () => string 
         await recoverPluginDirs(fs) // 先恢复:否则卸掉的可能是半截新版,备份里的旧版下次启动又被挪回来
         const names = await pluginDirNames(fs)
         for (const name of names) {
+          if (opts?.dir && name !== opts.dir) continue // 同 id 多份时指名卸哪一份(桌面同名选项);生效 id 照样要对上
           const m = await readManifest(fs, `${PLUGINS_DIR}/${name}`)
           if (effectivePluginId(name, m?.id) === id) {
             // 被这份商店安装取代的旧普通目录:宿主自己按 supersededPlainInstalls 判,不收调用方递来的目录名

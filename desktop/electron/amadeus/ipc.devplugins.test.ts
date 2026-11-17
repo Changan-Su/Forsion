@@ -403,3 +403,19 @@ it('打开插件文件夹:指名一个插件目录就在访达里选中它;不�
   await invoke('plugins:open-folder')
   expect(env.shell).toEqual([`show ${path.join(pluginsRoot(), 'demo-suite')}`, `open ${pluginsRoot()}`, `open ${pluginsRoot()}`, `open ${pluginsRoot()}`])
 })
+
+it('⚠️同一个 id 有两份普通目录:卸商店版不留设置时设置文件只挪一次(否则整次回滚);清理按指名的目录走', async () => {
+  await pair()
+  await installed('Demo-copy', { id: 'demo-suite', name: 'Demo', version: '0.0.9', apiVersion: 1, main: 'main.js' })
+  await boot()
+  // 指名目录:清的就是界面上显示的那份,不按 readdir 顺序挑
+  const shown = (await list()).find((s) => s.id === STORE)!.supersedes!.dir
+  const r = await invoke('plugins:uninstall-forsion', 'demo-suite', { keepSettings: true, dir: shown }) as { dirName: string }
+  expect(r.dirName).toBe(shown)
+  await expect(invoke('plugins:uninstall-forsion', 'demo-suite', { dir: STORE })).rejects.toThrow(/plugin-not-found/) // 指名的目录生效 id 对不上 = 没找到
+  await installed(shown, { id: 'demo-suite', name: 'Demo', version: '0.1.0', apiVersion: 1, main: 'main.js' })
+  const all = await invoke('plugins:uninstall-forsion', STORE, { withSuperseded: true }) as { superseded: string[] }
+  expect(all.superseded.sort()).toEqual(['Demo-copy', 'demo-suite'])
+  expect(await fs.readdir(pluginsRoot())).toEqual([])
+  expect(await exists(dataFile('demo-suite'))).toBe(false)
+})
