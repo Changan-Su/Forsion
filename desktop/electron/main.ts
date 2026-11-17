@@ -1219,7 +1219,7 @@ async function readSpacesList(opts: { dev?: boolean } = {}): Promise<Array<{ slu
     const dirs = (await readdir(proot, { withFileTypes: true })).filter((x) => x.isDirectory() && !x.name.startsWith('.'))
     // 同一个包的普通目录 + 商店安装:旧副本的 Space 不列(插件列表同一条规则)。以前两份都列、同 Space id 先到先得,
     // 普通目录排在前 —— 装了商店版,看到的还是旧副本的 Space。
-    const replaced = await supersededPluginDirs(proot, dirs.map((x) => x.name), builtinPluginIds())
+    const replaced = await supersededPluginDirs(proot, dirs.map((x) => x.name))
     for (const p of dirs.filter((x) => !replaced.has(x.name))) {
       let pid: string
       let manifestId: unknown

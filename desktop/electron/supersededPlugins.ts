@@ -9,12 +9,13 @@ import { join } from 'node:path'
 import { supersededPlainInstalls } from '../shared/pluginAliases'
 
 /** names = 插件根下的子目录名(调用方已滤掉点目录 / 非目录)。返回 普通目录名 → 取代它的商店目录名。 */
-export async function supersededPluginDirs(root: string, names: readonly string[], keep?: ReadonlySet<string>): Promise<Map<string, string>> {
+export async function supersededPluginDirs(root: string, names: readonly string[]): Promise<Map<string, string>> {
   const entries = await Promise.all(names.map(async (dir) => ({
     dir,
-    manifestId: await readFile(join(root, dir, 'manifest.json'), 'utf8').then((s) => (JSON.parse(s) as { id?: unknown })?.id, () => undefined),
+    // 读不到 / 解析不了都当「没有 id」:一个目录的清单写坏不能拖垮整份插件列表(.then 的第二个参数接不住 JSON.parse 抛的错)
+    manifestId: await readFile(join(root, dir, 'manifest.json'), 'utf8').then((s) => (JSON.parse(s) as { id?: unknown } | null)?.id).catch(() => undefined),
   })))
-  const replaced = supersededPlainInstalls(entries, keep)
+  const replaced = supersededPlainInstalls(entries)
   for (const [plain, store] of replaced) console.warn(`[plugins] ${plain} 与商店安装的 ${store} 是同一个插件,只装载商店那份`)
   return replaced
 }

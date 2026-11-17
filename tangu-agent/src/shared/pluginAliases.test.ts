@@ -19,9 +19,8 @@ it('lets a store install replace the plain install of the same package', () => {
   expect([...supersededPlainInstalls([{ dir: 'demo-suite', manifestId: 'Not Valid' }, { dir: A, manifestId: 'demo-suite' }])]).toEqual([['demo-suite', A]]);
 });
 
-it('replaces nothing when the store claim is ambiguous, protected or absent', () => {
+it('replaces nothing when the store claim is ambiguous or absent', () => {
   expect(supersededPlainInstalls([{ dir: 'demo-suite', manifestId: 'demo-suite' }, { dir: A, manifestId: 'demo-suite' }, { dir: B, manifestId: 'demo-suite' }]).size).toBe(0);
-  expect(supersededPlainInstalls([{ dir: 'demo-suite', manifestId: 'demo-suite' }, { dir: A, manifestId: 'demo-suite' }], new Set(['demo-suite'])).size).toBe(0);
   expect(supersededPlainInstalls([{ dir: 'demo-suite', manifestId: 'demo-suite' }, { dir: A, manifestId: 'other' }]).size).toBe(0);
   // Two store installs never replace each other.
   expect(supersededPlainInstalls([{ dir: A, manifestId: 'demo-suite' }, { dir: B, manifestId: A }]).size).toBe(0);

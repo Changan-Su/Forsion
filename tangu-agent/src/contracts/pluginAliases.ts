@@ -22,13 +22,11 @@ const SAFE_ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
  *
  * Same narrow rule as the package-id alias above: exactly one store install may claim the id. Two store items
  * declaring the same manifest id say nothing about which one the plain copy came from, so nothing is replaced.
- * `keep` lists runtime ids that are never replaced (packages that ship with the app).
- * Every scan of the shared plugins directory must apply this rule, or the host and the engine load different copies.
+ * Every scan of the shared plugins directory (desktop list, bundled Spaces, engine bundles, mobile host) must apply
+ * exactly this rule, or they load different copies — so there is deliberately no per-host exemption list. Packages
+ * that ship with the app cannot meet the condition: both stores refuse a package whose manifest id is a built-in one.
  */
-export function supersededPlainInstalls(
-  entries: ReadonlyArray<{ dir: string; manifestId: unknown }>,
-  keep: ReadonlySet<string> = new Set(),
-): Map<string, string> {
+export function supersededPlainInstalls(entries: ReadonlyArray<{ dir: string; manifestId: unknown }>): Map<string, string> {
   const store = new Map<string, string[]>();
   for (const e of entries) {
     if (MARKET_INSTALL_DIR.test(e.dir) && typeof e.manifestId === 'string' && SAFE_ID.test(e.manifestId)) {
@@ -40,7 +38,7 @@ export function supersededPlainInstalls(
     if (MARKET_INSTALL_DIR.test(e.dir)) continue;
     const id = typeof e.manifestId === 'string' && SAFE_ID.test(e.manifestId) ? e.manifestId : SAFE_ID.test(e.dir) ? e.dir : null;
     const claim = id ? store.get(id) : undefined;
-    if (id && !keep.has(id) && claim?.length === 1) out.set(e.dir, claim[0]);
+    if (id && claim?.length === 1) out.set(e.dir, claim[0]);
   }
   return out;
 }

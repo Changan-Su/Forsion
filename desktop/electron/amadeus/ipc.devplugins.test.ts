@@ -302,3 +302,12 @@ it('开发副本的 id 等于商店安装的包 id:同样遮住商店那份(插�
   expect(sources.map((s) => s.id)).toEqual(['demo'])
   expect(sources[0]).toMatchObject({ dev: true, code: 'ctx.fromDev = 1', shadowsInstalled: true })
 })
+
+it('⚠️某个插件目录的清单写坏:其余插件照常列出(预扫商店取代关系时不能整份失败)', async () => {
+  const broken = path.join(env.root, 'app-data', 'plugins', 'broken')
+  await fs.mkdir(broken, { recursive: true })
+  await fs.writeFile(path.join(broken, 'manifest.json'), '{oops')
+  await installed('fine', { id: 'fine', name: 'Fine', version: '1.0.0', apiVersion: 1, main: 'main.js' })
+  await boot()
+  expect((await list()).map((s) => s.id)).toEqual(['fine'])
+})
