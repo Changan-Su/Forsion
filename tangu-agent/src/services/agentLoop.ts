@@ -4153,9 +4153,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // 收尾才追加的停止说明/耗尽提示反而看不见(09-15 用户截图)。
     await markIfAsked(sessionId, userId, input, finalContent).catch(() => {}); // 父子会话:收尾问句 → 列表「等你」(要在 done 之前)
     await publish(runId, 'done', {
+      ...(safetyStopped ? { refused: true } : {}),
       content: finalContent,
       toolOffsets: allToolCalls.map((c) => ({ id: c.id, offset: c.ui_content_offset })),
-      ...(safetyStopped ? { refused: true } : {}),
     });
     await updateRunStatus(runId, 'done', { result: { content: finalContent }, tokensTotal });
     // 本地 Historian（Special Agent）：本「轮」完成 → 按 X/Y 轮触发标题/记忆维护。
