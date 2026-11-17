@@ -64,14 +64,15 @@ export function processTimeZone(): string | undefined {
 /**
  * 系统提示里的「当前日期 + 界面语言」两段(借鉴 chat-demo ③)。
  * 只到「天」粒度、刻意不含时刻 —— 同一天内字节恒定,护前缀缓存;精确时刻仍走 get_datetime。
- * 时区名 + UTC 偏移与日期、get_datetime 同一个口径(引擎进程的本地时钟);偏移只在夏令时切换那天变一次。
+ * 时区名 + UTC 偏移与日期、get_datetime 同一个口径(引擎进程的本地时钟);偏移取当天正午的,切换夏令时那天也整天不变。
  * 只有 host run(引擎和用户在同一台机器上)才传时区名;云端 / 沙箱的钟是服务器的(同 amadeus.ts pastStartNote 的口径)。
  * 界面语言来自渲染端 ui_settings 快照的 locale(zh / en);渠道会话等没有快照的 run 不写这段。
  */
 export function currentDateSection(now: Date, opts: { timeZone?: string; uiLocale?: string } = {}): string {
   const weekday = WEEKDAYS[now.getDay()];
   const ymd = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-  const off = -now.getTimezoneOffset();
+  // 偏移取当天本地正午的:按此刻取,夏令时切换那天凌晨前后会变,同一天的系统提示就不再一字不差(Codex 11-17)。
+  const off = -new Date(now.getFullYear(), now.getMonth(), now.getDate(), 12).getTimezoneOffset();
   const utc = `UTC${off < 0 ? '-' : '+'}${String(Math.floor(Math.abs(off) / 60)).padStart(2, '0')}:${String(Math.abs(off) % 60).padStart(2, '0')}`;
   // 没给时区名(非 host run:进程的钟是服务器的,不代表用户)→ 原样保留旧措辞,不把服务器时区当成用户的写进提示。
   const zone = opts.timeZone ? `time zone ${opts.timeZone}, ${utc}` : 'local timezone';

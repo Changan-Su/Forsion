@@ -86,6 +86,17 @@ describe('currentDateSection(借鉴 chat-demo ③)', () => {
     expect(a).not.toMatch(/09:30|9:30/);
   });
 
+  it('夏令时切换那天整天字节不变(偏移取当天正午的)', () => {
+    const tz = process.env.TZ
+    process.env.TZ = 'Europe/London'
+    try {
+      const before = currentDateSection(new Date('2026-10-25T00:30:00Z'), { timeZone: 'Europe/London' })
+      const after = currentDateSection(new Date('2026-10-25T02:30:00Z'), { timeZone: 'Europe/London' })
+      expect(after).toBe(before)
+      expect(before).toContain('Sunday, 2026-10-25 (time zone Europe/London, UTC+00:00)')
+    } finally { if (tz === undefined) delete process.env.TZ; else process.env.TZ = tz }
+  });
+
   it('没给时区名(非 host run / 取不到)时与旧措辞逐字一致', () => {
     expect(currentDateSection(sat)).toBe('## Current Date\nToday is Sunday, 2026-11-15 (local timezone). For the precise current time, call get_datetime.');
   });
