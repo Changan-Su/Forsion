@@ -11,8 +11,9 @@ export const nodeLocation = (n: LayoutNode): string => {
   const locs = new Set(n.children.map(nodeLocation))
   return locs.size === 1 ? [...locs][0] : 'mixed'
 }
+/** Always a fresh box: callers grow it (requested shell sizes), which must never leak into the tree's minimums. */
 export function minimum(n: LayoutNode): LayoutBox {
-  if ('id' in n) return n.visible ? n.min : { width: 0, height: 0 }
+  if ('id' in n) return n.visible ? { ...n.min } : { width: 0, height: 0 }
   const c = n.children.map(minimum)
   return { width: n.axis === 'width' ? c.reduce((s, v) => s + v.width, 0) : Math.max(0, ...c.map(v => v.width)),
     height: n.axis === 'height' ? c.reduce((s, v) => s + v.height, 0) : Math.max(0, ...c.map(v => v.height)) }
@@ -29,6 +30,18 @@ export function allocate(total: number, weights: number[], mins: number[]): numb
     for (const i of clamped) { out[i] = mins[i]; remaining -= mins[i]; pending.delete(i) }
   }
   return out
+}
+/** Minimum extent once preferred shell sizes are included: what the canvas must hold before Main shares the rest. */
+export function requestedMinimum(n: LayoutNode, sides: Record<string, number>): LayoutBox {
+  if ('id' in n) return minimum(n)
+  const m = n.children.map(c => {
+    // Copy: writing a sidebar's requested size into its own minimum made every side region grow-only.
+    const v = { ...requestedMinimum(c, sides) }, loc = nodeLocation(c)
+    if (nodeLocation(n) !== loc && v[n.axis] && ((n.axis === 'width' && (loc === 'left' || loc === 'right')) || (n.axis === 'height' && loc === 'bottom'))) v[n.axis] = Math.max(v[n.axis], sides[loc] || 0)
+    return v
+  })
+  return { width: n.axis === 'width' ? m.reduce((s, v) => s + v.width, 0) : Math.max(0, ...m.map(v => v.width)),
+    height: n.axis === 'height' ? m.reduce((s, v) => s + v.height, 0) : Math.max(0, ...m.map(v => v.height)) }
 }
 export function solveLayout(tree: LayoutNode, viewport: LayoutBox, ratios: LayoutRatios, sides: Record<string, number>): { size: LayoutBox; boxes: Map<string, LayoutRect> } {
   const min = minimum(tree), size = { width: Math.max(viewport.width, min.width), height: Math.max(viewport.height, min.height) }
@@ -61,18 +74,7 @@ export function solveLayout(tree: LayoutNode, viewport: LayoutBox, ratios: Layou
       offset += sizes[i]
     })
   }
-  // Preferred shell sizes are part of the workspace's minimum extent.
-  const requestedMinimum = (n: LayoutNode): LayoutBox => {
-    if ('id' in n) return minimum(n)
-    const m = n.children.map(c => {
-      const v = requestedMinimum(c), loc = nodeLocation(c)
-      if (nodeLocation(n) !== loc && v[n.axis] && ((n.axis === 'width' && (loc === 'left' || loc === 'right')) || (n.axis === 'height' && loc === 'bottom'))) v[n.axis] = Math.max(v[n.axis], sides[loc] || 0)
-      return v
-    })
-    return { width: n.axis === 'width' ? m.reduce((s, v) => s + v.width, 0) : Math.max(0, ...m.map(v => v.width)),
-      height: n.axis === 'height' ? m.reduce((s, v) => s + v.height, 0) : Math.max(0, ...m.map(v => v.height)) }
-  }
-  const requested = requestedMinimum(tree)
+  const requested = requestedMinimum(tree, sides)
   size.width = Math.max(size.width, requested.width); size.height = Math.max(size.height, requested.height)
   walk(tree, { x: 0, y: 0, ...size })
   return { size, boxes }

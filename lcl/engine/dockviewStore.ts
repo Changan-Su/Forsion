@@ -2082,14 +2082,16 @@ export const presentDockedExtension: ExtendViewPresenter = (options, dismiss) =>
 /** Install once per real workspace, before restore/build. Mock stores keep their legacy sizing adapter. */
 export function attachLayoutCoordinator(api: DockviewApi, viewport: HTMLElement, canvas: HTMLElement): LayoutCoordinator {
   return new LayoutCoordinator(api, viewport, canvas, {
-    sideSize: (side, size) => {
+    // requested = a size the person is dragging to: clamped exactly as it will be once remembered, so release never snaps.
+    sideSize: (side, size, requested) => {
       const st = useWorkspace.getState()
+      const saved = requested ?? st.sideWidths[side]
       const key = side === 'bottom' ? 'preferredHeight' : 'preferredWidth'
       const preferred = Math.max(0, ...api.panels.filter(p => locOfPanel(p) === side).map(p => getView(panelType(p))?.layout?.[key] ?? 0).filter(n => Number.isFinite(n) && n > 0 && n <= 4096))
-      if (st.sideWidths[side] == null && preferred) return preferred
-      if (side === 'bottom') return computeBottomHeight(size.height, st.sideWidths.bottom)
-      return st.sideWidths[side] == null && extensions[side]?.defaultWidth != null ? extensions[side]!.defaultWidth!
-        : computeSideWidth(size.width, side, { free: st.sideFree[side], saved: st.sideWidths[side], scale: st.sideScale[side] })
+      if (saved == null && preferred) return preferred
+      if (side === 'bottom') return computeBottomHeight(size.height, saved)
+      return saved == null && extensions[side]?.defaultWidth != null ? extensions[side]!.defaultWidth!
+        : computeSideWidth(size.width, side, { free: st.sideFree[side], saved, scale: st.sideScale[side] })
     },
     didResize: (side) => { if (side) captureSideWidths(api, true, side) },
     settled: () => { useWorkspace.getState().syncPanelState(); scheduleWorkspaceSave() },
