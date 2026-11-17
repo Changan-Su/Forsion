@@ -91,6 +91,7 @@ import { useDbStore } from '../store/dbStore'
 import { HUMAN_CAL } from '../store/humanCalendarIo'
 import { createDatabasesApi, createNoteTasksApi, pluginDatabasePath } from './pluginData'
 import { loadSyncedPluginData, notePluginDataEdit, pluginDataSyncOn, pluginSyncSnapshot, pushPluginData, type LocalData } from './pluginDataSync'
+import { isJsonText, isPluginDataUnreadable, PluginDataUnreadableError, readLocalPluginData } from './pluginLocalData'
 import { createCalendarApi } from './pluginCalendar'
 import { createCalendarEventsApi } from './pluginCalendarEvents'
 import { createSpacesApi } from './pluginSpaces'
@@ -1937,7 +1938,11 @@ export const usePluginStore = create<PluginState>((set, get) => {
     }
     // 本机那份插件数据(主进程 / 手机宿主各自落盘);两样都有才谈得上同步
     const localData: LocalData | null = amadeus?.readPluginData && amadeus?.writePluginData
-      ? { read: () => Promise.resolve(amadeus.readPluginData!(pluginId)).catch(() => null), write: (text) => amadeus.writePluginData!(pluginId, text) }
+      ? {
+          read: () => readLocalPluginData(pluginId, () => amadeus.readPluginData!(pluginId)),
+          // 同步拉下来的云端那份不是合法 JSON(老版本可能把读坏的本机文件推上去过)→ 不写,本机这份不被它盖掉
+          write: (text) => isJsonText(text) ? amadeus.writePluginData!(pluginId, text) : Promise.reject(new Error(`Refusing to store non-JSON data for plugin "${pluginId}"`)),
+        }
       : null
     const hostAccount = hostTangu()?.account ?? desktopAccount(hostTangu())
     const scopedAccount: PluginContext['account'] = hostAccount ? {
@@ -2315,22 +2320,23 @@ export const usePluginStore = create<PluginState>((set, get) => {
       addEditorExtension(pluginId, factory, opts, () => get().plugins.find((p) => p.id === pluginId)?.name || pluginId)
       scope.ownOnce('editorExtension', () => clearEditorExtensions(pluginId))
     },
-    // 插件私有 JSON blob(~/.forsion/plugins-data/<id>.json)。宿主缺位 → 读 null / 写 no-op,
-    // 插件侧一律 `await ctx.loadData?.() ?? 默认值`。坏 JSON 当没写过(用户手改文件改坏了不该让插件起不来)。
-    // manifest `syncData: true` 的插件:本地优先,云端在旁边对账(pluginDataSync.ts)。
+    // 插件私有 JSON blob(~/.forsion/plugins-data/<id>.json)。宿主缺位 → 读 null / 写 no-op。
+    // 没写过 → null(插件 `?? 默认值`);读不出来(读错误、零字节、写到一半、被手改坏)→ reject PluginDataUnreadableError,
+    // err.code === 'plugin-data-unreadable'(2026-11-17 起。以前当没写过回 null:插件按默认值起来,下一次 saveData
+    // 把用户原来那份整个盖掉。读失败 ≠ 空)。原件不动;插件接住错误仍要写时,桌面 / 手机宿主先把原件另存一份。
+    // manifest `syncData: true` 的插件:本地优先,云端在旁边对账(pluginDataSync.ts),本机读不出来时不拉云端盖它。
     loadData: async () => {
-      // ⚠️`amadeus?.readPluginData?.(id).catch(…)` 是错的:方法缺席时 `?.()` 求值成 undefined,
-      //   紧跟着的 `.catch` 就是在 undefined 上取属性 → 同步 TypeError。非桌面宿主必炸。
-      const readLocal = () => Promise.resolve(amadeus?.readPluginData?.(pluginId)).catch(() => null)
+      if (!amadeus?.readPluginData) return null
+      const readLocal = () => readLocalPluginData(pluginId, () => amadeus.readPluginData!(pluginId))
       const raw = pluginDataSyncOn(get().plugins.find((p) => p.id === pluginId)) && localData
-        ? await loadSyncedPluginData(pluginId, localData).catch(readLocal)
+        // 同步那边出别的错(云端、状态)→ 退回只读本机;本机读不出来 → 照实抛,不再读一遍
+        ? await loadSyncedPluginData(pluginId, localData).catch((e) => (isPluginDataUnreadable(e) ? Promise.reject(e) : readLocal()))
         : await readLocal()
       if (raw == null) return null
       try {
         return JSON.parse(raw)
       } catch (e) {
-        console.error(`[amadeus] 插件 ${pluginId} 的数据文件不是合法 JSON,已当作空`, e)
-        return null
+        throw new PluginDataUnreadableError(pluginId, 'invalid-json', e)
       }
     },
     saveData: async (value) => {

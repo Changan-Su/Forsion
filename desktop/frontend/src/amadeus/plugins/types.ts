@@ -2297,8 +2297,12 @@ export interface PluginContext {
    *  旧宿主没有:`ctx.registerEditorExtension?.(…)`。 */
   registerEditorExtension?(factory: EditorExtensionFactory, opts?: EditorExtensionOptions): void
   /** 读本插件的私有 JSON blob(`~/.forsion/plugins-data/<id>.json`)。没写过 / 宿主缺位 → null。
+   *  **存过却读不出来**(读错误、零字节、写到一半、被手改坏)→ reject,`err.code === 'plugin-data-unreadable'`,
+   *  `err.reason` 为 `'read-failed' | 'invalid-json'`(2026-11-17 起;之前宿主把这些也当没写过回 null)。
+   *  接到它别按默认值往下走再 saveData —— 那会把用户原来那份整个盖掉;停用相关功能、提示用户、等下次重试。
+   *  原件宿主不动;插件接住错误后仍然 saveData 时,桌面 / 手机宿主先把原件另存一份(`<id>.json.unreadable-<时间>`)。
    *  registerSetting 是「一键一个字符串」,存不下片段库这类大块数据,也没有原子性。
-   *  旧宿主没有:`await ctx.loadData?.() ?? 默认值`。 */
+   *  旧宿主没有:`await ctx.loadData?.() ?? 默认值`(旧宿主读不出来时仍回 null)。 */
   loadData?<T = unknown>(): Promise<T | null>
   /** 原子写本插件的私有 JSON blob(整体覆盖)。宿主缺位时静默 no-op。
    *  manifest 写 `"syncData": true` → 登录后这份随账号跨设备同步(本地优先,整份取较新的;单份 ≤512KB)。 */

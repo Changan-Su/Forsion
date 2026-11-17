@@ -481,6 +481,12 @@ You can only register inside your own namespace: `id` is a key, and the host bui
 - `urgent: true` (since 2026-11-15): someone, a person or an agent, is stopped and waiting for the person (an approval, for example). On a phone it is never throttled and goes ahead of cards that can wait. It is not sticky; it stays as long as any other card.
 - Both only count when they are `true`, and older hosts ignore them, so you can pass them without checking the host version. Give a card that skips the throttle its own `key` (such as `approval:<id>`) instead of sharing one with ordinary cards; otherwise it replaces them.
 
+## When plugin data can't be read
+
+Since 2026-11-17, `ctx.loadData()` tells "never saved" apart from "saved but unreadable". It returns `null` when nothing was ever saved. When the data exists but can't be read (a read error, an empty file, a write cut off halfway, a hand edit that broke it), it rejects with an error whose `code` is `plugin-data-unreadable`. Before, the host treated that case as never saved too, so the plugin started from defaults and its next `saveData` overwrote everything the user had.
+
+When you get this error, don't carry on with defaults and save. Turn off the feature that needs the data, tell the user, and try again on the next load. The host never changes the original file. If a plugin catches the error and saves anyway, the desktop and phone apps first copy the original to `<id>.json.unreadable-<time>`. If you `await` it in `setup` without catching it, the plugin fails to load and the plugin list shows "Failed to load". Older hosts still return `null` when the data can't be read.
+
 ## Plugin data sync across devices
 
 A plugin that sets `"syncData": true` in its manifest has the data it saves with `ctx.saveData` synced to your other computers and phones through your Forsion account. When you are signed out or offline, the data stays on this device as before and is uploaded once you are back online. If two devices both changed it, the later change wins. The plugin's detail page has a "Sync plugin data across devices" switch to turn it off on one device. If someone uninstalls the plugin without ticking "Keep settings", the copy in the cloud is cleared too; restoring from the Trash uploads this device's copy again, and any other device that still has the plugin uploads its copy as well. The web version does not sync yet. For the API, see the `loadData/saveData` notes in the editor section of the plugin development skill.

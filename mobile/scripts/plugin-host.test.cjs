@@ -466,6 +466,50 @@ const test = async (name, fn) => {
     assert.equal(await h.readPluginData('p'), '9')
   })
 
+  // 读失败 ≠ 没写过(2026-11-17):以前两槽都坏也回 null,插件按默认值起来,下一次写把原件盖掉。
+  await test('两槽都坏 = 读失败(抛出,不是 null);写时先另存要盖的那槽,新写的序号盖得过以后读得出来的残留槽', async () => {
+    const fs = memFs()
+    const h = host(fs)
+    await h.writePluginData('p', '{"n":1}') // 槽 0,seq 1
+    await h.writePluginData('p', '{"n":2}') // 槽 1,seq 2
+    const keepAlt = fs.files.get('plugins-data/p.json.alt')
+    const bad0 = enc('{"forsionPluginData":1,"se')
+    fs.files.set('plugins-data/p.json', bad0)
+    fs.files.set('plugins-data/p.json.alt', enc('not json'))
+    await assert.rejects(host(fs).readPluginData('p'), /plugin-data-unreadable/)
+    await h.writePluginData('p', '{"n":9}')
+    const backups = [...fs.files.keys()].filter((k) => k.startsWith('plugins-data/p.json.unreadable-'))
+    assert.equal(backups.length, 1, '要盖的槽 0 原样另存了一份')
+    assert.deepEqual([...fs.files.get(backups[0])], [...bad0])
+    assert.equal(await host(fs).readPluginData('p'), '{"n":9}')
+    fs.files.set('plugins-data/p.json.alt', keepAlt) // 残留槽(seq 2)又读得出来了
+    assert.equal(await host(fs).readPluginData('p'), '{"n":9}')
+  })
+
+  await test('一槽在却读不出字节 = 读失败(哪怕另一槽有效);写时拷不出原件就不写,原件不动', async () => {
+    const fs = memFs()
+    const h = host(fs)
+    await h.writePluginData('p', '{"n":1}') // 槽 0
+    await h.writePluginData('p', '{"n":2}') // 槽 1(最新)
+    const before = fs.files.get('plugins-data/p.json.alt')
+    fs.failReadOf = 'plugins-data/p.json.alt'
+    await assert.rejects(h.readPluginData('p'), /plugin-data-unreadable/)
+    await assert.rejects(h.writePluginData('p', '{"n":3}'), /EIO/)
+    assert.equal(fs.files.get('plugins-data/p.json.alt'), before)
+    fs.failReadOf = null
+    assert.equal(await h.readPluginData('p'), '{"n":2}')
+  })
+
+  await test('只有槽 0、读不出字节 = 读失败;只有槽 0、是半截 = 第一次写被杀,仍当没写过', async () => {
+    const fs = memFs()
+    await host(fs).writePluginData('p', '{"n":1}')
+    fs.failReadOf = 'plugins-data/p.json'
+    await assert.rejects(host(fs).readPluginData('p'), /plugin-data-unreadable/)
+    fs.failReadOf = null
+    fs.files.set('plugins-data/p.json', enc(''))
+    assert.equal(await host(fs).readPluginData('p'), null)
+  })
+
   // ── 市场 ────────────────────────────────────────────────────────────────
   const API = 'https://cloud.test/api'
   /** 假云端 + 假下载。install = 每个市场 id 的解析结果;blobs = 下载地址 → 字节 / Error。 */

@@ -96,6 +96,8 @@ function remoteIndex(): Promise<Index | null> {
   return within(index, LOAD_WAIT_MS)
 }
 
+/** 本机那份。read:没写过 → null;读不出来 → 抛 PluginDataUnreadableError(pluginLocalData.ts),
+ *  同步绝不把读不出来当「本机没有」去拉云端盖它,也不把它推上去。 */
 export interface LocalData { read(): Promise<string | null>; write(text: string): Promise<void> }
 
 const chains = new Map<string, Promise<void>>()
@@ -106,7 +108,10 @@ export function pushPluginData(id: string, local: LocalData): Promise<void> {
     for (let attempt = 0; attempt < 2; attempt++) {
       const st = readState(id)
       if (st.dirty === undefined) return // 没有待推的编辑(已对上;或换了账号,本机这份不归这个账号)
-      const text = await local.read()
+      // 本机读不出来(坏文件 / 读错误,local.read 抛 PluginDataUnreadableError):不推半截内容、不改状态,dirty 留着。
+      // 调用方都是 `void pushPluginData(…)`,这里绝不能 reject。
+      let text: string | null
+      try { text = await local.read() } catch { return }
       if (text == null) return
       const r = await cloud(itemPath(id), 'PUT', {
         value: text, base: st.v, editedAt: st.dirty ?? Date.now(), ...(st.owner ? { owner: st.owner } : {}),
@@ -160,6 +165,7 @@ export function notePluginDataEdit(id: string): void {
 
 /** ctx.loadData 用:返回本机内容,云端有更新的那份时先拉下来写进本机再返回。等云端最多 LOAD_WAIT_MS。 */
 export async function loadSyncedPluginData(id: string, local: LocalData): Promise<string | null> {
+  // 本机读不出来就整个抛出去(不往下对账):否则 mine 落成 null,下面会当「本机没有」拉云端那份写盘盖掉它。
   const mine = await local.read()
   const idx = await remoteIndex()
   if (!idx) return mine
