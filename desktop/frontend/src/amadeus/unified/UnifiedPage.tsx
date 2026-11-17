@@ -29,7 +29,7 @@ import { awaitTypingQuiet, installTypingGuard, isComposing } from '../store/typi
 import { COMPOSE_SAVE_POLL_MS, createTypingDraftPacer, saveTickAction, typingDraftPlugin, type TypingDraftPacer } from './typingDraft'
 import {
   DbLinkPicker, MilkdownInner, normalizeSerializedMd, serializeUnified, stampedFileName,
-  PREFIX_TRIGGERS, SLASH_SENTINELS, slashTurnFailed, getFocusedBlockApply, setFocusedBlockApply, type SlashItem, type SlashOps,
+  PREFIX_TRIGGERS, SLASH_SENTINELS, blockColorFromScaffold, slashTurnFailed, getFocusedBlockApply, setFocusedBlockApply, type SlashItem, type SlashOps,
   copySelectedImage, selectedImage,
 } from '../blocks/markdown/MarkdownBlock'
 import { emptyDb, emptyNoteView, serializeDb } from '@amadeus-shared/db/schema'
@@ -111,6 +111,7 @@ import { LinkHoverCard } from './linkCard'
 import { TableMenuSection, isTableSelected, tableCellAtPoint } from './tableMenu'
 import { ColumnWidthMenu } from './ColumnWidthMenu'
 import { BlockColorMenu } from './BlockColorMenu'
+import { blockColorTr, colorTargetAtCursor } from './blockColorCommands'
 import { ListNumberingMenu } from './ListNumberingMenu'
 import { hrefKind, normalizeHref, noteLinkTarget } from '../blocks/markdown/linkHref'
 import { ReadingSurface, type ReadingModeControl } from './ReadingSurface'
@@ -890,6 +891,19 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
       return
     }
     ops.consume() // 返回值是「整篇是否空」,统一实例用不着:空块判定在 insertMd 里按当前顶层块算
+    // 整块颜色(Notion 对齐 A1):光标所在的块上色,一个撤销步;标注 / 表格 / 代码里没有目标 → 一句提示
+    const color = blockColorFromScaffold(item.scaffold)
+    if (color) {
+      getInstance()?.action((ctx) => {
+        const view = ctx.get(editorViewCtx)
+        const target = colorTargetAtCursor(view.state)
+        const tr = target ? blockColorTr(view.state, [target], color) : null
+        if (tr) view.dispatch(tr)
+        else if (!target) slashTurnFailed(item.label)
+        view.focus()
+      })
+      return
+    }
     if (item.scaffold === S.event) {
       typeAt()
       return
@@ -4128,7 +4142,7 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
             {isTableSelected(layer.getView()) && (
               <TableMenuSection view={layer.getView()!} cell={blockMenu.cell ?? null} onDone={() => setBlockMenu(null)} />
             )}
-            {layer.getView() && <BlockColorMenu view={layer.getView()!} restore={() => restoreMenuTarget(layer.getView()!)} onDone={() => setBlockMenu(null)} />}
+            {layer.getView() && <BlockColorMenu view={layer.getView()!} restore={() => restoreMenuTarget(layer.getView()!)} onDone={() => setBlockMenu(null)} rangeOf={(v) => layer.topRangeOf(v)} />}
             {layer.getView() && <ListNumberingMenu view={layer.getView()!} restore={() => restoreMenuTarget(layer.getView()!)} onDone={() => setBlockMenu(null)} />}
             <div className="ubm-sep" role="separator" />
             {/* 多块选中:置灰 + 说明(B-05:此前点了静默无效)。aria-disabled 而不是 disabled —— 禁用的按钮不出 title 提示。 */}

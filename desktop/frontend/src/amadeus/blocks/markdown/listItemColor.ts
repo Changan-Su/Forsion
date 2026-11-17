@@ -4,7 +4,7 @@
 import { extendListItemSchemaForTask } from '@milkdown/kit/preset/gfm'
 import { COLOR_ATTR_SPEC, colorDomAttrs, colorFromDom, liftContainerColor, withColorOnFirstChild } from './blockColor'
 
-type MdListItem = { type: string; children?: unknown[]; label?: unknown; spread?: unknown; checked?: unknown }
+type MdListItem = { type: string; value?: string; children?: MdListItem[]; label?: unknown; spread?: unknown; checked?: unknown }
 
 export const coloredListItemSchema = extendListItemSchemaForTask.extendSchema((prev) => (ctx) => {
   const base = prev(ctx)

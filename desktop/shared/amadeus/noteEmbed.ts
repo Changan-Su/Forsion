@@ -49,6 +49,8 @@ const tidy = (lines: string[]): string => lines.join('\n').replace(/^\n+|\s+$/g,
  *  两侧都粗暴剥 `_` 会把 foo_bar 与 foobar 并成同 key —— 所以这里只拆成对的行内标记,不动孤立的 `_`)。 */
 function plainHeading(s: string): string {
   return s
+    // 段首块标记(对齐 / 整块颜色,`<span data-amadeus-align|bg|fg>`)不算标题文字:编辑器里看不到它
+    .replace(/<span(?:\s+data-amadeus-(?:align|bg|fg)="[^"]*")+\s*><\/span>/g, '')
     .replace(/`([^`]*)`/g, '$1')
     .replace(/!?\[\[([^\]|]*\|)?([^\]]*)\]\]/g, '$2')
     .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')

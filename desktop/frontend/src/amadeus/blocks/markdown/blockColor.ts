@@ -118,6 +118,9 @@ export const colorDomAttrs = (attrs: { bg?: unknown; fg?: unknown }): Record<str
   const bg = normalizeBlockColor(attrs.bg), fg = normalizeBlockColor(attrs.fg)
   if (bg) out['data-bg'] = bg
   if (fg) out['data-fg'] = fg
+  // 「更多颜色」的 hex:CSS 按语义名查不到,直接给变量(不随暗色换,同划词的自定义色)
+  const style = [HEX.test(bg) ? `--amx-blk-bg: ${bg}` : '', HEX.test(fg) ? `--amx-blk-fg: ${fg}` : ''].filter(Boolean).join('; ')
+  if (style) out.style = style
   return out
 }
 export const colorFromDom = (dom: HTMLElement): BlockColor => ({

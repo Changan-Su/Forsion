@@ -35,3 +35,9 @@ export const CARD_COLORS = [
   { nameKey: 'itb.color.yellow', v: '3' }, { nameKey: 'itb.color.green', v: '4' },
   { nameKey: 'itb.color.teal', v: '5' }, { nameKey: 'itb.color.purple', v: '6' },
 ]
+
+/** 整块颜色(./blockColor):值存语义名(暗色 / 配色由 CSS 换),swatch 是色板上那一格的样色。
+ *  底色那组的「粉」与暗色 CSS 的 magenta 同一档,存成 magenta。 */
+const semanticName = (nameKey: string): string => { const n = nameKey.slice('itb.color.'.length); return n === 'pink' ? 'magenta' : n }
+export const BLOCK_TEXT_COLORS = TEXT_COLORS.filter((c) => c.v).map((c) => ({ nameKey: c.nameKey, v: semanticName(c.nameKey), swatch: c.v }))
+export const BLOCK_BG_COLORS = BG_COLORS.filter((c) => c.v).map((c) => ({ nameKey: c.nameKey, v: semanticName(c.nameKey), swatch: c.v }))
