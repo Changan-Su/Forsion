@@ -1,10 +1,11 @@
 /**
  * 被模型的安全审核拦下的回答(借鉴 DeepSeek chat-demo ④,contracts/safetyStop.ts)。
  *   ① refusal:这一发流出的正文换成固定文案(落库的就是这句)、origin 记 refused、done 带 refused,不续写、不带 truncated。
- *   ② 拦下的原文不进 agent_steps,下一轮的上下文里也没有它(只有那句固定文案)。
+ *   ② 拦下的原文不进 agent_steps、不留在 agent_run_events 的流式帧里,下一轮的上下文里也没有它(只有那句固定文案)。
  *   ③ content_filter 带着工具调用:工具一个不执行、只发一次。
  *   ④ 先说话调过工具、收尾那发被拦:此前的正文留着,后面接固定文案。
  *   ⑤ 文案跟界面语言(ui_settings.locale),没有快照时看用户那句话。
+ *   ⑥ 被拦的那一发在跑时用户插了话:这一段以固定文案定稿(refused),插的话落库并接着回答(Codex 11-17)。
  * 真内存 SQLite + 真 agentLoop + 脚本化 fake llm(套路同 agentLoop.inflightPersist.test.ts)。
  * 负对照:删掉 agentLoop 里 `if (isSafetyStop(res.finishReason))` 那段 → ①–④ 都红。
  */
@@ -21,7 +22,7 @@ import { runMigration } from '../db/migrate.js';
 import { query } from '../core/db.js';
 import { createRun, getRun } from './runStore.js';
 import { subscribe } from './eventBus.js';
-import { enqueueRun } from './agentLoop.js';
+import { enqueueRun, enqueueSteer } from './agentLoop.js';
 
 const USER = 'u1';
 let home: string;
@@ -124,6 +125,9 @@ describe('replies blocked by the model safety check', () => {
     const steps = await query<any[]>('SELECT llm_response FROM agent_steps WHERE run_id = ?', [r.runId]);
     expect(steps.length).toBeGreaterThan(0);
     expect(JSON.stringify(steps), 'agent_steps 也是回放源,原文不能在里面').not.toContain(REFUSED);
+    const frames = await query<any[]>('SELECT type, payload FROM agent_run_events WHERE run_id = ?', [r.runId]);
+    expect(frames.length, '其余事件照留').toBeGreaterThan(0);
+    expect(frames.filter((f) => f.type === 'token' || f.type === 'reasoning'), '续播录像里不留流式正文帧').toEqual([]);
 
     // 下一轮:上下文里没有原文,只有那句固定文案
     script = [say('好的。', 'stop')];
@@ -163,5 +167,25 @@ describe('replies blocked by the model safety check', () => {
     script = [say(REFUSED, 'refusal')];
     const r = await runToEnd({ uiSettings: { locale: { value: 'en' } } });
     expect(r.done?.content).toBe(EN);
+  });
+
+  it('a steer message sent during the refused response is persisted and answered', async () => {
+    const nextRun = `SS${runSeq + 1}`;
+    script = [
+      async (o: any) => { o.onToken(REFUSED); enqueueSteer(nextRun, { id: 'steer-1', content: '换个话题:今天天气怎么样?' }); return { content: REFUSED, reasoning: '', toolCalls: [], usage: { prompt_tokens: 5, completion_tokens: 5 }, finishReason: 'refusal' }; },
+      say('今天晴。', 'stop'),
+    ];
+    const r = await runToEnd();
+    expect(r.runId).toBe(nextRun);
+    expect(r.status).toBe('done');
+    expect(streamCalls, '插的话要被回答').toBe(2);
+    const calls = finalizeSpy.mock.calls.map((c: any[]) => c[0]);
+    const refusedSeg = calls.find((c: any) => c.origin === 'refused');
+    expect(refusedSeg?.content).toBe(ZH);
+    expect(r.done?.content).toBe('今天晴。');
+    expect(r.done?.refused).toBeUndefined();
+    const rows = await query<any[]>('SELECT id FROM chat_messages WHERE id = ?', ['steer-1']);
+    expect(rows.length, '插的话落库').toBe(1);
+    expect(JSON.stringify(seenMessages[1])).not.toContain(REFUSED);
   });
 });

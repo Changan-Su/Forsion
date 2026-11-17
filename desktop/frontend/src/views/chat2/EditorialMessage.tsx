@@ -920,7 +920,8 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
             const headEvents = firstParts[0]?.t === 'tools' ? firstParts[0].events : undefined
             const nodes = msg.segments.map((seg, i) => {
               if (seg.t === 'text') {
-                const parsed = splitSuggestions(seg.text, { streaming: streaming || i !== lastTextIdx, state: fenceState, kinds: fenceKinds })
+                // 安全审核拦下:固定文案在终稿末尾 = 最后一个文本段,摘掉改画灰字(同上面无段那支的 refusedBody)
+                const parsed = splitSuggestions(i === lastTextIdx ? refusedBody(seg.text, msg.refused) : seg.text, { streaming: streaming || i !== lastTextIdx, state: fenceState, kinds: fenceKinds })
                 fenceState = parsed.state
                 const segBody = parsed.text
                 return segBody

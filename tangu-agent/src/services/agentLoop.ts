@@ -1623,6 +1623,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   // 正文只进 finalContent 不进数组)。Historian fork 判官快照靠它补上「最后的回答」,不重复 preamble。
   let finalTurnText = '';
   let finalTurnNoTools = false; // 收尾那一发请求没带工具头(步数用尽 / 重复工具失败的强制收尾)
+  let refusedInRun = false; // 本 run 有过被拦下的一发(插话续跑后 safetyStopped 会复位,这个不复位):收尾时清流式帧
   let safetyStopped = false; // 收尾那一发被模型的安全审核拦下(contracts/safetyStop.ts):终稿是固定文案,origin 记 refused
   let finalReasoning = '';
   // 在飞那次模型调用已流给用户的正文(尝试循环里 partialText 的影子)。成功收下 / 段切分回灌时清空;
@@ -2644,7 +2645,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       const finalizedContent = finalContent;
       if (finalContent.trim() || allToolCalls.length) {
         const files = pendingDisplayFiles.splice(0);
-        await finalizeAssistantMessage(finalizedId, sessionId, modelId, finalContent, finalReasoning, allToolCalls, allToolResults, files);
+        await finalizeAssistantMessage(finalizedId, sessionId, modelId, finalContent, finalReasoning, allToolCalls, allToolResults, files, safetyStopped ? SAFETY_STOP_ORIGIN : undefined);
         await settleCheckpointAfterFinalize(finalizedId);
         if (allToolResults.some((r) => r?.parked)) {
           finalizedWithParked.set(finalizedId, { content: finalContent, reasoning: finalReasoning, toolCalls: [...allToolCalls], toolResults: [...allToolResults], displayFiles: files });
@@ -3776,15 +3777,27 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       // 放在所有续跑闸(纠错重试、插话、审批、Stop hook、审计、验证)之前:拦下的回答不续写、不重答。
       if (isSafetyStop(res.finishReason)) {
         safetyStopped = true;
+        refusedInRun = true;
         appendFinal(safetyStopNotice(uiSettings?.locale?.value, String(input.message || '')));
         finalTurnText = '';
         finalReasoning = '';
-        finalTurnNoTools = lastIter;
         void publish(runId, 'status', { phase: 'safety_stop', iteration, reason: res.finishReason });
-        await appendStep({
-          id: uuidv4(), runId, stepNo: iteration,
-          llmResponse: responseForStep({ content: '', usage: res.usage }),
-        });
+        // 这一发在跑的时候用户插了话:那几句已经回执过,不能随 run 结束丢掉(Codex 11-17)。把这一段(以固定文案收尾、记 refused)
+        // 定稿、换回合接着答新消息 —— 拦下的回答本身照旧不续写。末轮回退轮号时不记这一步:agent_steps 撞号会静默丢掉后一步。
+        const steeredAtRefusal = drainSteer(runId);
+        if (!(steeredAtRefusal.length && lastIter)) {
+          await appendStep({
+            id: uuidv4(), runId, stepNo: iteration,
+            llmResponse: responseForStep({ content: '', usage: res.usage }),
+          });
+        }
+        if (steeredAtRefusal.length) {
+          await applySteering(steeredAtRefusal); // 定稿时按 safetyStopped 记 origin=refused
+          safetyStopped = false;
+          if (lastIter) iteration -= 1;
+          continue;
+        }
+        finalTurnNoTools = lastIter;
         break;
       }
       if (!res.toolCalls || res.toolCalls.length === 0 || lastIter) {
@@ -4126,6 +4139,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     await settleCheckpointAfterFinalize(currentAssistantId); // 本 run 压缩覆盖到的助手段刚落库 → 检查点补落
     await flush(); // 先把会话工作区改动回写 Penzor，再发 done，保证客户端收到 done 时云端文件已就绪
     await drain(runId); // 确保 token 等事件全部落库后再发 done
+    // 这个 run 里有一发被安全审核拦下:流式帧里还有原文,落库完就删掉(续播只剩终稿;别的回合的帧一并删,终稿已在 chat_messages)
+    if (refusedInRun) await deps().state.purgeStreamFrames?.(runId).catch((e) => console.warn('[agent-core] purge refused frames failed:', e));
     // forkSeed:fork 判官模式的快照接缝(惰性 getter,非 fork 模式零拷贝)。收尾轮正文不在
     // workingMessages 里(只进 finalContent),用 finalTurnText 补上——纯聊天 run 整条回复都靠它;
     // 配额/截断等异常出口 finalTurnText 为空,快照就不补尾(那些收尾语不是模型正文)。
