@@ -24,6 +24,7 @@ import { defaultWorkspaceDir, forsionHomeDir, isDevMode, tanguDataDir } from '..
 import { getProduct } from '../productsRegistry'
 import { externalCreations } from '../productTrust'
 import { effectivePluginId } from '../../shared/products'
+import { supersededPluginDirs } from '../supersededPlugins'
 import { isDevLoaded, readDevLoads } from '../devLoadStore'
 import { builtinPluginIds, bundleOff, bundleRestartPending, lockedPluginIds } from '../builtinPlugins'
 import { logActivity, logNoteEdit } from '../activityLog'
@@ -807,8 +808,10 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
     } catch {
       // 全局插件目录还不存在(一个插件都没装):开发态来源照样要发出去,不能在这里整条返回。
     }
+    // 同一个包的普通目录 + 商店安装:只列商店那份(引擎扫捆绑包、readSpacesList 同一条规则)。内置包不参与。
+    const replaced = await supersededPluginDirs(globalPluginsDir(), entries.filter((e) => e.isDirectory() && !e.name.startsWith('.')).map((e) => e.name), builtinPluginIds())
     for (const e of entries) {
-      if (!e.isDirectory() || e.name.startsWith('.')) continue
+      if (!e.isDirectory() || e.name.startsWith('.') || replaced.has(e.name)) continue
       const pdir = path.join(globalPluginsDir(), e.name)
       try {
         const m = JSON.parse(await fs.readFile(path.join(pdir, 'manifest.json'), 'utf8')) as InstalledPluginManifest & {

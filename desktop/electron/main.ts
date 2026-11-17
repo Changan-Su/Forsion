@@ -143,6 +143,7 @@ import { logActivity, setActivityLogEnabled, pruneActivity, exportActivity, flus
 import { createSampler, nativeProbe } from './activeWindow'
 import { KNOWN_APPS } from '../shared/knownApps'
 import { bindRecipeToPlugin, effectivePluginId } from '../shared/products'
+import { supersededPluginDirs } from './supersededPlugins'
 import { BROWSER_PARTITION, GUEST_ALLOWED_PERMISSIONS } from '../shared/browser'
 import { acceptPluginSurface, PLUGIN_SURFACE_PERMISSIONS, surfaceNavigationAllowed } from '../shared/pluginSurface'
 import { registerPtyIpc } from './pty'
@@ -1213,7 +1214,11 @@ async function readSpacesList(opts: { dev?: boolean } = {}): Promise<Array<{ slu
   }
   try {
     const proot = join(tanguHomeDir(), 'plugins')
-    for (const p of (await readdir(proot, { withFileTypes: true })).filter((x) => x.isDirectory() && !x.name.startsWith('.'))) {
+    const dirs = (await readdir(proot, { withFileTypes: true })).filter((x) => x.isDirectory() && !x.name.startsWith('.'))
+    // 同一个包的普通目录 + 商店安装:旧副本的 Space 不列(插件列表同一条规则)。以前两份都列、同 Space id 先到先得,
+    // 普通目录排在前 —— 装了商店版,看到的还是旧副本的 Space。
+    const replaced = await supersededPluginDirs(proot, dirs.map((x) => x.name), builtinPluginIds())
+    for (const p of dirs.filter((x) => !replaced.has(x.name))) {
       let pid: string
       let manifestId: unknown
       try {

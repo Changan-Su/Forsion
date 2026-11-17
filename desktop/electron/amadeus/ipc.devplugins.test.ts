@@ -280,3 +280,15 @@ it('ctx.net 白名单:开发副本遮住安装版;入口读不到的安装目录
   const guest = { ...trusted, sender: { ...trusted.sender, getType: () => 'webview' } }
   expect(await env.handlers.get('plugins:net-request')!(guest, 'demo', 'https://dev.localhost/')).toMatchObject({ ok: false, message: 'untrusted sender' })
 }, 30_000)
+
+it('⚠️同一个包的普通目录 + 商店安装(market-<uuid>):只列商店那份,旧副本不再同时运行', async () => {
+  // 普通目录按名排在前面:以前两份都列、各占一个运行身份,旧副本的同名 Space 先注册,装了商店版看到的还是旧的
+  const store = 'market-00000000-0000-4000-8000-00000000000a'
+  await installed('demo-suite', { id: 'demo-suite', name: 'Demo', version: '0.1.0', apiVersion: 1, main: 'main.js' }, 'ctx.old = 1')
+  await installed(store, { id: 'demo-suite', name: 'Demo', version: '0.5.0', apiVersion: 1, main: 'main.js' }, 'ctx.store = 1')
+  await installed('other', { id: 'other', name: 'Other', version: '1.0.0', apiVersion: 1, main: 'main.js' })
+  await boot()
+  const sources = await list()
+  expect(sources.map((s) => s.id).sort()).toEqual([store, 'other'])
+  expect(sources.find((s) => s.id === store)).toMatchObject({ packageId: 'demo-suite', version: '0.5.0', code: 'ctx.store = 1' })
+})

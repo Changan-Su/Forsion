@@ -20,6 +20,7 @@
 import { gatePluginManifest, type ExternalPluginSource } from '../../../desktop/shared/amadeus/ipc'
 import { installedPluginFields, type InstalledPluginManifest } from '../../../desktop/shared/amadeus/pluginSource'
 import { effectivePluginId } from '../../../desktop/shared/products'
+import { supersededPlainInstalls } from '../../../desktop/shared/pluginAliases'
 import { isSafeSlug, safeEntryPath } from '../../../desktop/shared/marketPackage'
 import { isSafePluginExt } from '../../../desktop/shared/amadeus/pluginFiles'
 import { PLUGIN_ICON_MAX_BYTES, isValidPluginIconPng } from '../../../desktop/shared/pluginIcon'
@@ -59,6 +60,14 @@ export async function readManifest(fs: PluginFs, dir: string): Promise<Installed
   } catch {
     return null
   }
+}
+
+/** 要装载的插件目录:pluginDirNames 去掉被商店安装取代的普通目录(同一个包装了两份时只认商店那份;
+ *  桌面 readExternalPlugins / readSpacesList 与引擎扫捆绑包同一条规则 supersededPlainInstalls)。卸载仍按全部目录找。 */
+export async function loadablePluginDirNames(fs: PluginFs): Promise<string[]> {
+  const names = await pluginDirNames(fs)
+  const replaced = supersededPlainInstalls(await Promise.all(names.map(async (dir) => ({ dir, manifestId: (await readManifest(fs, `${PLUGINS_DIR}/${dir}`))?.id }))))
+  return names.filter((name) => !replaced.has(name))
 }
 
 /** 插件目录下的子目录名(跳过点目录;根不存在 = 一个都没装)。按名排序:同 id 两份时先到先得要确定。 */
@@ -274,7 +283,7 @@ export function createPluginHost(fs: PluginFs, opts: { appVersion: () => string 
       await recoverPluginDirs(fs)
       const out: ExternalPluginSource[] = []
       const seen = new Set<string>()
-      for (const name of await pluginDirNames(fs)) {
+      for (const name of await loadablePluginDirNames(fs)) {
         const dir = `${PLUGINS_DIR}/${name}`
         try {
           const m = await readManifest(fs, dir)
@@ -315,7 +324,7 @@ export function createPluginHost(fs: PluginFs, opts: { appVersion: () => string 
       await recoverPluginDirs(fs)
       const out: PluginSpaceRecipe[] = []
       const seen = new Set<string>()
-      for (const name of await pluginDirNames(fs)) {
+      for (const name of await loadablePluginDirNames(fs)) {
         const dir = `${PLUGINS_DIR}/${name}`
         const m = await readManifest(fs, dir)
         const id = m ? effectivePluginId(name, m.id) : null

@@ -21,9 +21,10 @@
  * (用户插件目录 ~/.tangu/plugins 里的符号链接是 --link 开发流,归 loader 管,不受此限。)
  */
 import { promises as fs } from 'node:fs';
-import { existsSync, lstatSync, readdirSync } from 'node:fs';
+import { existsSync, lstatSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { agentsDir, forsionSharedDir } from '../core/tanguHome.js';
+import { supersededPlainInstalls } from '../contracts/pluginAliases.js';
 
 const SAFE_SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/;
 /** 播种归属标记:agentsDir()/<slug>/.bundle-origin = 播种它的 bundle 目录名。桌面 electron/amadeus/ipc.ts
@@ -68,7 +69,15 @@ export function bundleDirs(): string[] {
     const dir = path.join(root, name);
     if (isRealDir(dir) && existsSync(path.join(dir, 'manifest.json'))) dirs.push(dir);
   }
-  return dirs.sort(); // 确定性顺序(与 loader 的排序纪律一致)
+  // 同一个包既有普通目录、又有商店装的 market-<uuid>:只认商店那份(桌面装载器同一条规则,见 supersededPlainInstalls)。
+  // 不剔的话两份内嵌的引擎插件同 id、按目录名排序先到先得 —— 普通目录排在前,跑的一直是旧的那份。
+  const replaced = supersededPlainInstalls(dirs.map((dir) => ({ dir: path.basename(dir), manifestId: manifestIdOf(dir) })));
+  for (const [plain, store] of replaced) console.warn(`[tangu] bundle ${plain} 与商店安装的 ${store} 是同一个包,只装载商店那份`);
+  return dirs.filter((dir) => !replaced.has(path.basename(dir))).sort(); // 确定性顺序(与 loader 的排序纪律一致)
+}
+
+function manifestIdOf(dir: string): unknown {
+  try { return (JSON.parse(readFileSync(path.join(dir, 'manifest.json'), 'utf8')) as { id?: unknown })?.id; } catch { return undefined; }
 }
 
 /** 各 bundle 的内嵌引擎插件根(<bundle>/tangu-plugins),供 resolvePluginsDirs 追加。 */
