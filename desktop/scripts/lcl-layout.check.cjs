@@ -64,7 +64,23 @@ async function run(){
    assert(r.frames.some(f=>Math.abs(f[r.id][k]-r.before[r.id][k])>5&&Math.abs(f[r.id][k]-r.after[r.id][k])>5),`${loc} drag resizes live, not only on release`,r.frames.map(f=>f[r.id][k]))
    assert(Object.keys(r.after).every(id=>Math.abs(r.after[id].w-last[id].w)<=1&&Math.abs(r.after[id].h-last[id].h)<=1),`${loc} release keeps the dragged layout`,{last,after:r.after})
   }
+  // A taller left column runs beside the bottom panel, not above it: it must not cap how tall the bottom can get (Codex review).
+  await page.evaluate(()=>probe.ws.getState().openView('tall',{},'left'));await page.waitForTimeout(400)
+  {const r=await dragSide('bottom',0,-420),k='h',vh=await page.evaluate(()=>document.querySelector('.wb-workspace-viewport').clientHeight)
+   assert(r.after[r.id][k]>vh-560+140,'bottom panel room ignores a parallel taller sidebar',{after:r.after[r.id],vh})}
+  await page.evaluate(()=>{const p=probe.ws.getState().api.panels.find(p=>p.params.__type==='tall');p?.api.close()});await page.waitForTimeout(400)
   await page.evaluate(()=>{const ws=probe.ws.getState();ws.toggleSidebar('bottom');ws.api.groups.find(g=>g.panels[0]?.params.__loc==='main').api.setActive()});await page.waitForTimeout(400)
+  // The window changes while a sidebar sash is held (the shell squeezes the grid): release must not save the squeezed size.
+  {const before=await page.evaluate(()=>probe.ws.getState().sideWidths.left),s=await sashAt('left')
+   await page.mouse.move(s.x,s.y);await page.mouse.down();await page.mouse.move(s.x+30,s.y,{steps:3});await page.evaluate(()=>new Promise(r=>requestAnimationFrame(r)))
+   const held=(await snap())[s.id].w
+   await page.setViewportSize({width:760,height:900});await page.waitForTimeout(350)
+   const squeezed=(await snap())[s.id].w
+   await page.mouse.up();await page.waitForTimeout(300)
+   const saved=await page.evaluate(()=>probe.ws.getState().sideWidths.left)
+   // No room left for the dragged-out part, but never the shell's squeeze to the minimum (220) saved over the remembered size.
+   assert(squeezed>=before-1&&squeezed>220&&Math.abs(saved-squeezed)<=1,'a held sidebar is not squeezed when the window shrinks, and release saves what is on screen',{before,held,squeezed,saved})
+   await page.setViewportSize({width:1440,height:900});await page.waitForTimeout(400)}
   // Opening the bottom panel adds its own branch keys; the Main row that the person dragged keeps its proportion.
   const preferred=await page.evaluate(()=>probe.coordinator().exportRatios())
   assert(Object.keys(ratios).every(k=>JSON.stringify(preferred[k])===JSON.stringify(ratios[k])),'sidebar drags leave the Main proportion alone',{ratios,preferred})

@@ -18,6 +18,8 @@ type LayoutGroup = NonNullable<ReturnType<DockviewApi['getGroup']>>
 const location = (g: LayoutGroup): string => g.panels[0]?.params?.__loc ?? 'main'
 const box = (g: LayoutGroup): LayoutRect => ({ x: 0, y: 0, width: g.api.width, height: g.api.height })
 const mix = (a: number, b: number, t: number): number => a + (b - a) * t
+type LayoutBranch = Exclude<LayoutNode, { id: string }>
+const leafIds = (n: LayoutNode): string[] => 'id' in n ? [n.id] : n.children.flatMap(leafIds)
 
 /** One clock for the entire workspace. Dockview remains the geometry/hit-testing authority:
  * every frame sizes its real grid, with exact frame constraints, then releases them for sash input.
@@ -44,7 +46,8 @@ export class LayoutCoordinator {
   private dragKey: string | null = null
   private dragStart = new Map<string, LayoutRect>()
   /** A sidebar sash drag owned here: every pointer move re-solves the whole workspace, so Views follow live and release changes nothing. */
-  private sideDrag: { side: DockSide; axis: 'width' | 'height'; sign: 1 | -1; origin: number; start: number; min: number; zoom: number; tree: LayoutNode; sash: HTMLElement; pointerId: number } | null = null
+  private sideDrag: { side: DockSide; axis: 'width' | 'height'; sign: 1 | -1; origin: number; pos: number; start: number; min: number; zoom: number
+    tree: LayoutNode; branch: LayoutBranch; sash: HTMLElement; pointerId: number } | null = null
   private overlayFrame = 0
   private reassertFrame = 0
   private targetSignature = ''
@@ -54,7 +57,8 @@ export class LayoutCoordinator {
     private options: { sideSize(side: DockSide, viewport: LayoutBox, requested?: number): number; didResize(side: DockSide | null): void; settled(): void }) {
     coordinators.set(api, this)
     this.observer = new ResizeObserver(() => {
-      if (this.ready && !this.applying) this.refresh(false)
+      if (this.sideDrag) this.dragTo(this.sideDrag.pos) // A held sidebar keeps its requested size in the new window.
+      else if (this.ready && !this.applying) this.refresh(false)
       // Dockview 7's shell re-lays the grid at the shell's own (window) size on the next frame. When the requested
       // layout is wider than the window that squeezes every region to its minimum under our content layer. This
       // observer is created after the shell's, so the frame requested here runs right after that re-layout.
@@ -87,15 +91,19 @@ export class LayoutCoordinator {
   private cancel(): void { ++this.generation; cancelAnimationFrame(this.frame); this.frame = 0; this.targetSignature = '' }
   private pointerDown = (e: PointerEvent): void => {
     if (!(e.target instanceof Element) || !e.target.closest('.dv-sash')) return
+    if (this.sideDrag) {
+      // One sidebar gesture at a time: a second finger never takes over (or orphans) the held sash.
+      if (e.pointerId !== this.sideDrag.pointerId) { e.stopPropagation(); return }
+      this.endSideDrag() // Same pointer pressing again: the earlier gesture lost its release.
+    }
     this.cancel(); this.dragging = true
     this.clippedContent.clear() // An interrupted open/close no longer owns any content size.
     this.dragStart = new Map(this.api.groups.map(g => [g.id, box(g)]))
     const split = e.target.closest('.dv-split-view-container')
     const ids = this.api.groups.filter(g => g.panels.length && split?.contains(g.element)).map(g => g.id).sort().join(',')
     const tree = this.readTree()
-    const leafIds = (n: LayoutNode): string[] => 'id' in n ? [n.id] : n.children.flatMap(leafIds)
     const axis = split?.classList.contains('dv-horizontal') ? 'width' : 'height'
-    const find = (n: LayoutNode): Exclude<LayoutNode, { id: string }> | null => 'id' in n ? null : n.axis === axis && leafIds(n).sort().join(',') === ids ? n : n.children.map(find).find(Boolean) ?? null
+    const find = (n: LayoutNode): LayoutBranch | null => 'id' in n ? null : n.axis === axis && leafIds(n).sort().join(',') === ids ? n : n.children.map(find).find(Boolean) ?? null
     const branch = tree ? find(tree) : null
     this.dragKey = branch?.key ?? null
     const sash = e.target.closest<HTMLElement>('.dv-sash')!
@@ -104,13 +112,14 @@ export class LayoutCoordinator {
     this.dragSide = sides.find(side => adjacent.some(c => nodeLocation(c) === side) && branch && nodeLocation(branch) !== side && (side === 'bottom' ? axis === 'height' : axis === 'width')) ?? null
     this.viewport.dataset.layoutPhase = 'transition' // Expensive Views refit once the drag settles (viewLayout contract).
     const node = this.dragSide ? adjacent.find(c => nodeLocation(c) === this.dragSide) : undefined
-    if (tree && node && this.dragSide && e.button === 0 && this.visible(this.dragSide)) {
+    if (tree && branch && node && this.dragSide && e.button === 0 && this.visible(this.dragSide)) {
       // A sidebar sash requests that sidebar's size; it is not a trade with one neighbour. Dockview would hand the whole
       // delta to the adjacent Main View and release would then re-split Main, so the gesture stays here and each frame is final.
       e.stopPropagation()
       const rect = this.viewport.getBoundingClientRect()
-      this.sideDrag = { side: this.dragSide, axis, sign: adjacent.indexOf(node) === 0 ? 1 : -1, origin: axis === 'width' ? e.clientX : e.clientY,
-        start: node.size[axis], min: minimum(node)[axis], zoom: (this.viewport.offsetWidth && rect.width / this.viewport.offsetWidth) || 1, tree, sash, pointerId: e.pointerId }
+      const origin = axis === 'width' ? e.clientX : e.clientY
+      this.sideDrag = { side: this.dragSide, axis, sign: adjacent.indexOf(node) === 0 ? 1 : -1, origin, pos: origin,
+        start: node.size[axis], min: minimum(node)[axis], zoom: (this.viewport.offsetWidth && rect.width / this.viewport.offsetWidth) || 1, tree, branch, sash, pointerId: e.pointerId }
       try { sash.setPointerCapture(e.pointerId) } catch { /* synthetic pointer */ }
       sash.dataset.lclDragging = ''
       document.documentElement.dataset.lclSashDrag = axis === 'width' ? 'col' : 'row'
@@ -125,15 +134,23 @@ export class LayoutCoordinator {
   }
   private sideMove = (e: PointerEvent): void => {
     const d = this.sideDrag
-    if (!d || e.pointerId !== d.pointerId) return
-    const delta = ((d.axis === 'width' ? e.clientX : e.clientY) - d.origin) * d.sign / d.zoom
+    if (d && e.pointerId === d.pointerId) this.dragTo(d.axis === 'width' ? e.clientX : e.clientY)
+  }
+  private dragTo(pos: number): void {
+    const d = this.sideDrag
+    if (!d) return
+    d.pos = pos
     const viewport = { width: this.viewport.clientWidth, height: this.viewport.clientHeight }
     if (!viewport.width || !viewport.height) return
     const others = Object.fromEntries(sides.map(s => [s, s === d.side ? 0 : this.options.sideSize(s, viewport)]))
-    // Room left once everything else holds its minimum and the other sidebars keep their sizes. A canvas that already
-    // scrolls keeps the current size reachable instead of jumping to the floor on the first move.
-    const ceiling = Math.max(d.start, d.min + viewport[d.axis] - requestedMinimum(d.tree, others)[d.axis])
-    const requested = Math.round(Math.min(ceiling, Math.max(d.min, d.start + delta)))
+    // Room inside the branch holding this sash once its other regions keep their minimums and the other sidebars their
+    // sizes; parallel branches (a stacked sidebar beside a bottom panel) don't count. A canvas that already scrolls keeps
+    // the current size reachable instead of jumping to the floor on the first move.
+    const floor = solveLayout(d.tree, viewport, this.ratios, { ...others, [d.side]: d.min })
+    const spans = leafIds(d.branch).map(id => floor.boxes.get(id)).filter((r): r is LayoutRect => !!r)
+    const lo = Math.min(...spans.map(r => d.axis === 'width' ? r.x : r.y)), hi = Math.max(...spans.map(r => d.axis === 'width' ? r.x + r.width : r.y + r.height))
+    const ceiling = Math.max(d.start, d.min + hi - lo - requestedMinimum(d.branch, others)[d.axis])
+    const requested = Math.round(Math.min(ceiling, Math.max(d.min, d.start + (pos - d.origin) * d.sign / d.zoom)))
     // The host clamps exactly as it will once the size is remembered, so release cannot snap.
     const target = solveLayout(d.tree, viewport, this.ratios, { ...others, [d.side]: this.options.sideSize(d.side, viewport, requested) })
     this.apply(d.tree, target.boxes, target.size)
@@ -148,8 +165,9 @@ export class LayoutCoordinator {
     delete d.sash.dataset.lclDragging
     delete document.documentElement.dataset.lclSashDrag
   }
-  private pointerUp = (): void => {
+  private pointerUp = (e?: Event): void => {
     if (!this.dragging) return
+    if (this.sideDrag && e instanceof PointerEvent && e.pointerId !== this.sideDrag.pointerId) return // another finger lifted
     this.dragging = false
     this.endSideDrag()
     cancelAnimationFrame(this.overlayFrame); this.overlayFrame = 0
@@ -168,6 +186,7 @@ export class LayoutCoordinator {
   }
   private reassert = (): void => {
     this.reassertFrame = 0
+    if (this.sideDrag) { this.dragTo(this.sideDrag.pos); return } // The shell's squeeze must never reach release as a user size.
     if (!this.ready || this.disposed || this.applying || this.dragging || this.frame || !this.rendered.size) return
     if (Math.abs(this.api.width - this.extent.width) < 0.5 && Math.abs(this.api.height - this.extent.height) < 0.5) return
     const tree = this.readTree()
