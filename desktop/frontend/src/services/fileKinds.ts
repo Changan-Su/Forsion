@@ -40,7 +40,7 @@ export function b64ToBytes(b64: string): Uint8Array {
 // 媒体直接喂进 <video>/<audio> 会因 type 错而拒播,故按扩展名兜底。
 const MIME_BY_EXT: Record<string, string> = {
   png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp',
-  svg: 'image/svg+xml', bmp: 'image/bmp', ico: 'image/x-icon', avif: 'image/avif',
+  svg: 'image/svg+xml', bmp: 'image/bmp', ico: 'image/x-icon', avif: 'image/avif', heic: 'image/heic', heif: 'image/heif',
   mp4: 'video/mp4', webm: 'video/webm', mov: 'video/quicktime', mkv: 'video/x-matroska', m4v: 'video/mp4', avi: 'video/x-msvideo',
   mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg', flac: 'audio/flac', m4a: 'audio/mp4', aac: 'audio/aac',
   pdf: 'application/pdf',
@@ -49,7 +49,13 @@ const MIME_BY_EXT: Record<string, string> = {
 export function mimeForExt(path: string): string | null {
   return MIME_BY_EXT[extOf(path)] ?? null
 }
-const IMG_EXT = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'ico', 'avif']
+/** Some OS pickers return an empty/generic type for AirDropped photos. */
+export function imageMimeForFile(file: { type: string; name?: string }): string | null {
+  if (file.type.startsWith('image/')) return file.type
+  const inferred = mimeForExt(file.name || '')
+  return inferred?.startsWith('image/') ? inferred : null
+}
+const IMG_EXT = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'ico', 'avif', 'heic', 'heif']
 const VID_EXT = ['mp4', 'webm', 'mov', 'mkv', 'm4v', 'avi']
 const AUD_EXT = ['mp3', 'wav', 'ogg', 'flac', 'm4a', 'aac']
 

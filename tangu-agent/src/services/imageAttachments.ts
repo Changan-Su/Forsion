@@ -11,6 +11,7 @@
  */
 
 import { fitImageUrlForModel } from './imageShrink.js';
+import { prepareInlineImage } from './heicImages.js';
 
 export interface NormalizedImage {
   url: string; // data: URL 或 http(s) URL
@@ -54,8 +55,10 @@ export function normalizeImageAttachments(raw: any): NormalizedImage[] {
 }
 
 /** 用户附件进上下文前先缩(大照片 / 高分屏截图,见 imageShrink.ts);http(s) 的和够小的原样。 */
-export function fitUserImages(images: NormalizedImage[]): NormalizedImage[] {
-  return images.map((i) => ({ url: fitImageUrlForModel(i.url) }));
+export async function fitUserImages(images: NormalizedImage[]): Promise<NormalizedImage[]> {
+  const out: NormalizedImage[] = [];
+  for (const image of images) out.push({ url: fitImageUrlForModel(await prepareInlineImage(image.url)) });
+  return out;
 }
 
 /** 把纯文本 user content 转成 OpenAI 形态的 parts 数组(text + image_url...)。 */

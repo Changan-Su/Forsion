@@ -9,6 +9,7 @@
 import type { Attachment } from '../../../../../tangu-agent/src/contracts/clientTypes'
 import { deleteWorkspaceFile, uploadWorkspaceFiles } from '../../services/backendService'
 import { targetForSession } from '../../services/engine/targets'
+import { imageMimeForFile } from '../../services/fileKinds'
 import { cancelUpload, forgetUpload, readAsBase64, startUpload } from '../../services/uploads'
 import { setDraftField, useComposerDrafts } from './composerDrafts'
 
@@ -30,7 +31,7 @@ export function addDraftFile(key: string, field: Field, src: File | Attachment, 
   if (field === 'wsFiles' && useComposerDrafts.getState()[key]?.wsFiles.some((x) => x.name === src.name)) return false
   const file = src instanceof File ? src : null
   const a: Attachment = file
-    ? { name: file.name, mimeType: file.type || 'application/octet-stream', data: '', size: file.size }
+    ? { name: file.name, mimeType: imageMimeForFile(file) || file.type || 'application/octet-stream', data: '', size: file.size }
     : src as Attachment
   if (file && a.mimeType.startsWith('image/')) previews.set(a, URL.createObjectURL(file))
   // 读好之后原地写进这个对象再让草稿重渲:磁贴按对象认(tileKey),换个对象它会当成新磁贴重新入场。

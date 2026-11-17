@@ -252,7 +252,7 @@ export async function prepareAsideAttachments(atts: AsideAttachment[], ctx: {
   const out: PreparedAttachments = { images: [], files: [] };
   const raw = normalizeImageAttachments(atts.filter(isImage));
   if (raw.length) {
-    const images = fitUserImages(raw);
+    const images = await fitUserImages(raw);
     let described: string | null = null;
     if (await shouldDescribeImages(ctx.modelId, ctx.appId, ctx.visionMode).catch(() => false)) {
       ctx.onStatus?.({ phase: 'describing_images', stage: 'start', count: images.length });

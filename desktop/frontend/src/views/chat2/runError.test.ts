@@ -13,6 +13,10 @@ import { humanizeRunError, subLoginProvider } from './EditorialMessage'
 const UPSTREAM = 'Provided authentication token is expired. Please try signing in again.'
 const t = (k: string) => k // 只关心命中了哪个 key,不关心译文本身
 
+it('explains HEIC conversion failures with a localized recovery action', () => {
+  expect(humanizeRunError('image_attachment_conversion_failed', t)).toContain('chat.err.imageConversion')
+})
+
 describe('订阅登录过期', () => {
   it('上游原句命中 chat.err.subExpired,而不是笼统的 chat.err.auth', () => {
     expect(humanizeRunError(UPSTREAM, t)).toContain('chat.err.subExpired')

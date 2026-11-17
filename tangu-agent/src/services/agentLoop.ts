@@ -1224,7 +1224,7 @@ export async function hydrateHistory(
   if (lastUserWithImages >= 0) {
     const m = out[lastUserWithImages] as any;
     // 这条消息的图此后每一轮请求都带着:大图先缩(imageShrink.ts)。只缩上 wire 的这份,库里的附件原样留着。
-    lastUserImages = fitUserImages(lastUserImages);
+    lastUserImages = await fitUserImages(lastUserImages);
     // 转写失败 / 未配槽 → 退回原样送图(宁可让 provider 报错也不静默丢内容,同工具产图那条路)。
     const described = describe ? await describe(lastUserImages) : null;
     m.content = described
@@ -2654,7 +2654,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         });
         const originals = normalizeImageAttachments(m.attachments);
         if (originals.length) { imageInputs = originals; imageInputsSentAt = undefined; } // 改图工具要原图,不缩
-        const images = fitUserImages(originals);
+        const images = await fitUserImages(originals);
         const described = images.length ? await describeUserImages(images) : null;
         const pushed = { role: 'user', content: described
           ? `${m.content}\n\n[Attached images transcribed by the vision assistant]\n${described}`
