@@ -5,13 +5,14 @@
  * 现在由解析器按 CommonMark 规则认:代码里的原样、\\( 是字面的「\(」、流式时没闭合的公式先按普通文字显示。
  * 不用 README 里的 vite alias:那会连带改掉编辑器那边的 micromark-extension-math。
  *
- * ⚠️ 只用分叉的行内(text)那半,不用它的块级 \[(flow,字符码 92):那半有三处毛病(Codex 11-17 评审)——
- *   收尾判断先吞一个字符再看是不是 `]`(公式里一行以 `]` 结尾就被当成收尾,内容丢掉)、`\[x\] 后面还有字` 会把后面整段吞进公式、
- *   没闭合的 `\[` 流式时一路渲染成公式报错。行内那半没有这些问题:跨行的 `\[ … \]` 也认,没闭合就是普通文字。
- *   单独成段的 `\[ … \]` 由 promoteDisplayMath(markdownParse 解析后)升成块公式,和 $$ 块一样居中、带复制键。
+ * ⚠️ 只用分叉的行内(text)那半;它的块级 \[(flow,字符码 92)有三处毛病(Codex 11-17 评审)——收尾判断先吞一个字符再看是不是 `]`
+ *   (公式里一行以 `]` 结尾就被当成收尾,内容丢掉)、`\[x\] 后面还有字` 会把后面整段吞进公式、没闭合的 `\[` 流式时一路渲染成报错 ——
+ *   换成自己的严格版 texMathFlow.ts:`\[`、`\]` 各自独占一行才算块公式,中间的列表 / 标题样的行都是公式内容。
+ *   单行的 `\[x\]` 独占一段时由 promoteDisplayMath(markdownParse 解析后)升成块公式,和 $$ 块一样居中、带复制键。
  */
 import { mathFromMarkdown, mathToMarkdown, type ToOptions } from 'mdast-util-math'
 import { math } from 'micromark-extension-llm-math'
+import { texMathFlow } from './texMathFlow'
 import type { Processor } from 'unified'
 import type { Paragraph, Parent, Root, RootContent } from 'mdast'
 
@@ -19,7 +20,7 @@ export default function remarkLlmMath(this: Processor, options?: Readonly<ToOpti
   const settings = options || {}
   const data = this.data() as Record<string, unknown[] | undefined>
   const ext = math(settings) as { flow?: Record<number, unknown> }
-  if (ext.flow) delete ext.flow[92] // 见文件头:块级 \[ 交给行内 + promoteDisplayMath
+  if (ext.flow) ext.flow[92] = texMathFlow // 见文件头:块级 \[ 换成自己的严格版(texMathFlow.ts)
   ;(data.micromarkExtensions ||= []).push(ext)
   ;(data.fromMarkdownExtensions ||= []).push(mathFromMarkdown())
   ;(data.toMarkdownExtensions ||= []).push(mathToMarkdown(settings))

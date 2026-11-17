@@ -52,4 +52,14 @@ describe('Markdown × 块公式复制键', () => {
     const partial = renderToStaticMarkup(md('\\[\n\\frac{1'))
     expect(partial).not.toContain('katex')
   })
+  it('块公式里以 - + 1. # > 开头的行、空行都还是公式,不被拆成列表 / 引用(Codex 11-17 复核)', () => {
+    for (const src of ['\\[\na\n+ b\n\\]', '\\[\nx =\n- y\n\\]', '\\[\n1. x\n\\]', '\\[\n> x\n\\]', '\\[\na\n\nb\n\\]', 'para\n\\[\nx\n\\]\nmore', '- item\n\n  \\[\n  - y\n  \\]']) {
+      const h = renderToStaticMarkup(md(src))
+      expect(h.match(/class="md-math"/g)?.length, src).toBe(1)
+      expect(h, src).not.toMatch(/<li>[^<]*y|<blockquote/)
+    }
+  })
+  it('块公式没收尾(流式写到一半)按普通文字显示', () => {
+    for (const src of ['\\[\nx =\n- y', '\\[']) expect(renderToStaticMarkup(md(src)), src).not.toContain('katex')
+  })
 })
