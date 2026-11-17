@@ -18,7 +18,7 @@ import { Fragment } from '@milkdown/kit/prose/model'
 import type { Node as ProseNode } from '@milkdown/kit/prose/model'
 import type { EditorView } from '@milkdown/kit/prose/view'
 import { undo as pmUndo, redo as pmRedo, closeHistory } from '@milkdown/kit/prose/history'
-import { Pilcrow, Heading1, Heading2, Heading3, List, ListOrdered, ListTodo, TextQuote, ChevronsDown, Copy, Columns2, Rows2, Trash2, Undo2, StickyNote, MessageSquarePlus, Code2, Info, Link2, FileInput, Check, ChevronRight } from 'lucide-react'
+import { Pilcrow, Heading1, Heading2, Heading3, List, ListOrdered, ListTodo, TextQuote, ChevronsDown, Copy, Columns2, Rows2, Trash2, Undo2, StickyNote, MessageCircle, Code2, Info, Link2, FileInput, Check, ChevronRight } from 'lucide-react'
 import { isCoarsePointer } from '../../touch'
 import { joinRel, toAssetUrl, toDisplayMarkdown, toStoredMarkdown } from '@amadeus-shared/assets'
 import { amadeus } from '../api'
@@ -4100,7 +4100,7 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
                   if (r) askTangu(view, r.from, r.to)
                   else if (sel instanceof NodeSelection) askTangu(view, sel.from, sel.to)
                 }}>
-                  <MessageSquarePlus size={13} /> {t('unipage.menu.askTangu')}
+                  <MessageCircle size={13} /> {t('unipage.menu.askTangu')}
                 </button>
                 <div className="ubm-sep" role="separator" />
               </>

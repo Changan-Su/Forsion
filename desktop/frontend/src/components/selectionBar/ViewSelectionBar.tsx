@@ -13,7 +13,7 @@
  */
 import { useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode, type RefObject } from 'react'
 import { createPortal } from 'react-dom'
-import { Languages, MessageSquareQuote } from 'lucide-react'
+import { Languages, MessageCircle } from 'lucide-react'
 import { OverlayAt, mountLineSelection, rangeAnchor, rectAnchor, type TextAnchor } from '@lcl/engine'
 import { SelectionBar, type SelectionBarAction, type SelectionBarTool } from '@lcl/components'
 import { registerMessages, translate, useI18n } from '../../i18n'
@@ -221,7 +221,7 @@ export function ViewSelectionBar(p: ViewSelectionBarProps): ReactElement | null 
       ? p.lead(sel, done)
       : ask === false || (!ask && !probe?.askInChat)
         ? []
-        : [{ id: 'ask', label: t('selbar.ask'), title: t('selbar.askTitle'), icon: <MessageSquareQuote size={14} />, lead: true, testId: 'selection-ask', onRun: () => { done(); if (ask) ask(sel); else probe?.askInChat?.(quoteOf(sel, source)) } }]
+        : [{ id: 'ask', label: t('selbar.ask'), title: t('selbar.askTitle'), icon: <MessageCircle size={14} />, lead: true, testId: 'selection-ask', onRun: () => { done(); if (ask) ask(sel); else probe?.askInChat?.(quoteOf(sel, source)) } }]
     const actions: SelectionBarAction[] = [
       ...lead,
       ...(probe?.complete ? [{ id: 'translate', label: t('inlineai.action.translate'), icon: <Languages size={14} />, testId: 'selection-translate', onRun: () => openCard(t('inlineai.action.translate'), { language: translateTargetOf(sel.text) }) }] : []),

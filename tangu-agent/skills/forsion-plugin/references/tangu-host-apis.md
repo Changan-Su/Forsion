@@ -174,6 +174,19 @@ ctx.openView('chat', { location: 'right' }); chat?.prefill('Write an original sc
   `dispose()` 之后 `el` 立刻还给你(宿主只动自己挂进去的那一层,见「dispose 契约」):换一个 `folder` 时先 `dispose()`,再在同一个 `el` 上挂新的即可。
   **只在有对话能力的宿主上存在**:`ctx.tangu?.mountChat`,缺席时退回 `startChat`。
 
+### 把引文交给侧栏对话:askInChat(2026-11-15 起)
+
+「问 Tangu」类入口(划线、批注卡)先走这条,别自己开一个对话面板:
+
+```js
+const ok = ctx.tangu?.askInChat?.(`${text}\n— [[${path}#page=${page}|${label}]]`)
+if (!ok) { /* 这个窗口没有侧栏对话:退回 file.extendView + mountChat,或复制到剪贴板 */ }
+```
+
+- 引文挂进**原生侧栏对话**(笔记划线「问 Tangu」那一个)的输入框上方并揭开右栏;不发送、不动草稿。
+- 回 `false`:独立窗 / Mini / 浮窗、没有对话能力的宿主、空引文。插件被禁用后同样回 `false`。
+- 宿主的划线条(`ui.mountSelectionBar`)不传 `ask` 时,缺省的「问 Tangu」走的就是这条。
+
 ### 新对话输入区:mountComposer(2026-10-18 起)
 
 要一个「在这里打字、按发送就去 Tangu 开新对话」的输入区(主页就是这么用的),别自己拼 `mountChatBox` + `startChat`:
