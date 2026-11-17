@@ -16,6 +16,11 @@ export async function supersededPluginDirs(root: string, names: readonly string[
     manifestId: await readFile(join(root, dir, 'manifest.json'), 'utf8').then((s) => (JSON.parse(s) as { id?: unknown } | null)?.id).catch(() => undefined),
   })))
   const replaced = supersededPlainInstalls(entries)
-  for (const [plain, store] of replaced) console.warn(`[plugins] ${plain} 与商店安装的 ${store} 是同一个插件,只装载商店那份`)
+  for (const [plain, store] of replaced) {
+    if (warned.has(`${plain}>${store}`)) continue // 列插件 / 列 Space / 设备页都会扫一遍,同一对只说一次
+    warned.add(`${plain}>${store}`)
+    console.warn(`[plugins] ${plain} 与商店安装的 ${store} 是同一个插件,只装载商店那份`)
+  }
   return replaced
 }
+const warned = new Set<string>()

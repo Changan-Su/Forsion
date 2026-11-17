@@ -72,9 +72,15 @@ export function bundleDirs(): string[] {
   // 同一个包既有普通目录、又有商店装的 market-<uuid>:只认商店那份(桌面装载器同一条规则,见 supersededPlainInstalls)。
   // 不剔的话两份内嵌的引擎插件同 id、按目录名排序先到先得 —— 普通目录排在前,跑的一直是旧的那份。
   const replaced = supersededPlainInstalls(dirs.map((dir) => ({ dir: path.basename(dir), manifestId: manifestIdOf(dir) })));
-  for (const [plain, store] of replaced) console.warn(`[tangu] bundle ${plain} 与商店安装的 ${store} 是同一个包,只装载商店那份`);
+  for (const [plain, store] of replaced) {
+    if (warnedSuperseded.has(`${plain}>${store}`)) continue; // 插件根 / 技能根 / agent 播种各扫一遍,同一对只说一次
+    warnedSuperseded.add(`${plain}>${store}`);
+    console.warn(`[tangu] bundle ${plain} 与商店安装的 ${store} 是同一个包,只装载商店那份`);
+  }
   return dirs.filter((dir) => !replaced.has(path.basename(dir))).sort(); // 确定性顺序(与 loader 的排序纪律一致)
 }
+
+const warnedSuperseded = new Set<string>();
 
 function manifestIdOf(dir: string): unknown {
   try { return (JSON.parse(readFileSync(path.join(dir, 'manifest.json'), 'utf8')) as { id?: unknown })?.id; } catch { return undefined; }
