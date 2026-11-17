@@ -1,7 +1,7 @@
 import { unified, type Processor } from 'unified'
 import remarkParse from 'remark-parse'
 import remarkGfm from 'remark-gfm'
-import remarkLlmMath from './remarkLlmMath'
+import remarkLlmMath, { promoteDisplayMath } from './remarkLlmMath'
 import remarkCjkFriendly from 'remark-cjk-friendly/parseOnly'
 import remarkCjkFriendlyStrikethrough from 'remark-cjk-friendly-gfm-strikethrough/parseOnly'
 import type { Root } from 'mdast'
@@ -22,6 +22,7 @@ export function parseMarkdown(source: string): Root {
     return structuredClone(hit)
   }
   const tree = parser.parse(source) as Root
+  promoteDisplayMath(tree, source) // 单独成段的 \[ … \] → 块公式(见 remarkLlmMath 文件头)
   if (source.length <= MAX_CHARS) {
     while (cache.size && (chars + source.length > MAX_CHARS || cache.size >= MAX_ENTRIES)) {
       const oldest = cache.keys().next().value!

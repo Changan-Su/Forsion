@@ -37,4 +37,14 @@ describe('normalizeMath 跟解析器同口径', () => {
   it('没闭合的公式原样留着', () => {
     expect(normalizeMath('a \\(x^2 + ')).toBe('a \\(x^2 + ')
   })
+  // Codex 11-17 评审抓到的几种(分叉块级 \[ 的毛病 + 收尾空白)
+  it('公式里以 ] 结尾的行、单行 \\[x\\] 后接文字、两个单行公式、收尾后带空白', () => {
+    expect(normalizeMath('\\[\nE[X]\n\\]')).toBe('$$\nE[X]\n$$')
+    expect(normalizeMath('\\[x\\] tail')).toBe('$$x$$ tail')
+    expect(normalizeMath('\\[x\\] \\[y\\]')).toBe('$$x$$ $$y$$')
+    expect(normalizeMath('\\[\nx\n\\]  ')).toBe('$$\nx\n$$  ')
+  })
+  it('流式写到一半、没闭合的 \\[ 原样留着', () => {
+    expect(normalizeMath('\\[\n\\frac{1')).toBe('\\[\n\\frac{1')
+  })
 })

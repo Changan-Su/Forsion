@@ -16,9 +16,11 @@ export function normalizeMath(src: string): string {
     if ((n.type === 'inlineMath' || n.type === 'math') && n.position) {
       const a = n.position.start.offset, b = n.position.end.offset
       if (a !== undefined && b !== undefined) {
-        const open = src.slice(a, a + 2), close = src.slice(b - 2, b)
+        let e = b
+        while (e > a && (src[e - 1] === ' ' || src[e - 1] === '\t')) e-- // 块节点的终点可能带着 \] 后面的空白
+        const open = src.slice(a, a + 2), close = src.slice(e - 2, e)
         const pair = open === '\\(' && close === '\\)' ? '$' : open === '\\[' && close === '\\]' ? '$$' : ''
-        if (pair && b - a >= 4) edits.push({ at: a, len: 2, text: pair }, { at: b - 2, len: 2, text: pair })
+        if (pair && e - a >= 4) edits.push({ at: a, len: 2, text: pair }, { at: e - 2, len: 2, text: pair })
       }
     }
     for (const c of n.children || []) walk(c)
