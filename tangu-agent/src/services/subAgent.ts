@@ -18,6 +18,7 @@
  * 注册表——engines 管理器本来就是「一 run 一进程」的 provider 目录,这里只是把它接到子代理位上。
  */
 import { createDelegateTranscript, delegateHandle, openDelegateTurn } from './delegateTranscript.js';
+import { isSafetyStop, SAFETY_STOP_NOTICE } from '../contracts/safetyStop.js';
 import { v4 as uuidv4 } from 'uuid';
 import { deps } from '../seams/runtime.js';
 import { query } from '../core/db.js';
@@ -553,6 +554,11 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
       parentCtx.chargeRunCost?.(cost);
     }
 
+    // 被模型的安全审核拦下(contracts/safetyStop.ts):半截正文不交给父代理、工具不执行,交回一句固定说明(给模型看,英文)。
+    if (isSafetyStop(res.finishReason)) {
+      finalContent = SAFETY_STOP_NOTICE.en;
+      break;
+    }
     if (!res.toolCalls?.length || lastIter) {
       finalContent = res.content || finalContent;
       // 触顶那轮不发 tools,但模型仍可能吐出工具调用(文本兜底会解析出来)且正文为空 ——

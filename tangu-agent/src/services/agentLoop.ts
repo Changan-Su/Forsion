@@ -114,6 +114,7 @@ import { computerHistoryDigest, computerHistoryRecallHide } from './computerHist
 import { takeWorkspaceUploads, withUploadRefs } from './workspaceUploads.js';
 import './remoteTaint.js'; // 首次远程染色 → 落进 run 行(input.remoteTainted),会话级污点判据据此跨重启认得(P1 · M1A)
 import { buildProbe, formatCwdListing, type ProbeSegment } from './promptHead.js';
+import { isSafetyStop, safetyStopNotice, SAFETY_STOP_ORIGIN } from '../contracts/safetyStop.js';
 import { channelHub } from '../channels/hub.js';
 import { markIfAsked, onRunSettled as onChildRunSettled, onRunStart as onChildRunStart } from './childSessions.js';
 
@@ -1622,6 +1623,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   // 正文只进 finalContent 不进数组)。Historian fork 判官快照靠它补上「最后的回答」,不重复 preamble。
   let finalTurnText = '';
   let finalTurnNoTools = false; // 收尾那一发请求没带工具头(步数用尽 / 重复工具失败的强制收尾)
+  let safetyStopped = false; // 收尾那一发被模型的安全审核拦下(contracts/safetyStop.ts):终稿是固定文案,origin 记 refused
   let finalReasoning = '';
   // 在飞那次模型调用已流给用户的正文(尝试循环里 partialText 的影子)。成功收下 / 段切分回灌时清空;
   // run 以失败或中止收尾时并进终稿 —— 否则屏上看过的最后一截不落库,「继续生成」时模型看不到,只能重写或跳过。
@@ -3769,6 +3771,22 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         if (res.content || res.toolCalls?.length) finalContent = uiLeakRollback;
         uiLeakRollback = null;
       }
+      // 被模型的安全审核拦下(借鉴 chat-demo ④,contracts/safetyStop.ts):这一发流出的正文 / 思考丢掉、工具调用不执行,
+      // 终稿在此前各轮已成形的正文后面接一句固定文案;不进 workingMessages / Historian 尾巴,步骤只记用量(agent_steps 也是回放源)。
+      // 放在所有续跑闸(纠错重试、插话、审批、Stop hook、审计、验证)之前:拦下的回答不续写、不重答。
+      if (isSafetyStop(res.finishReason)) {
+        safetyStopped = true;
+        appendFinal(safetyStopNotice(uiSettings?.locale?.value, String(input.message || '')));
+        finalTurnText = '';
+        finalReasoning = '';
+        finalTurnNoTools = lastIter;
+        void publish(runId, 'status', { phase: 'safety_stop', iteration, reason: res.finishReason });
+        await appendStep({
+          id: uuidv4(), runId, stepNo: iteration,
+          llmResponse: responseForStep({ content: '', usage: res.usage }),
+        });
+        break;
+      }
       if (!res.toolCalls || res.toolCalls.length === 0 || lastIter) {
         // 安全网:模型把工具调用当正文吐(原生 tool_calls 空且文本兜底没解出来),但正文带工具
         // 调用标记 —— 别静默收尾。回灌一次纠正提示让它改用原生函数调用重试(预算内、非最后一轮)。
@@ -4103,6 +4121,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     await finalizeAssistantMessage(
       currentAssistantId,
       sessionId, modelId, finalContent, finalReasoning, allToolCalls, allToolResults, pendingDisplayFiles.splice(0),
+      safetyStopped ? SAFETY_STOP_ORIGIN : undefined,
     );
     await settleCheckpointAfterFinalize(currentAssistantId); // 本 run 压缩覆盖到的助手段刚落库 → 检查点补落
     await flush(); // 先把会话工作区改动回写 Penzor，再发 done，保证客户端收到 done 时云端文件已就绪
@@ -4128,7 +4147,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // 输入建议(services/promptSuggestion.ts):快照要在 done 发出**之前**就位 —— 客户端收到 done 立刻来拉,晚一步就是空。
     // 只存引用、不发请求;团队成员的会话没有人在里面打字,不存。强制收尾的那一轮也不存:那一发请求没带工具头、
     // 多了一条收尾说明,而快照恒带工具头 —— 前缀对不上那一发写下的缓存,这句建议就不止「多读一次缓存」的价了。
-    if (!isTeamMember && !finalTurnNoTools) stashSuggestionSeed(sessionId, runId, historianSeed);
+    if (!isTeamMember && !finalTurnNoTools && !safetyStopped) stashSuggestionSeed(sessionId, runId, historianSeed);
     // toolOffsets = 本条落库消息的工具锚点(同 ui_content_offset)。客户端在 done 时据此按终稿重排直播段,
     // 与重开会话一致:否则引擎丢掉的流式正文(末轮手写成 DSML 的工具调用)一直挂在屏上,
     // 收尾才追加的停止说明/耗尽提示反而看不见(09-15 用户截图)。
@@ -4136,6 +4155,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     await publish(runId, 'done', {
       content: finalContent,
       toolOffsets: allToolCalls.map((c) => ({ id: c.id, offset: c.ui_content_offset })),
+      ...(safetyStopped ? { refused: true } : {}),
     });
     await updateRunStatus(runId, 'done', { result: { content: finalContent }, tokensTotal });
     // 本地 Historian（Special Agent）：本「轮」完成 → 按 X/Y 轮触发标题/记忆维护。
@@ -4228,13 +4248,16 @@ async function finalizeAssistantMessage(
   toolCalls: ToolCall[],
   toolResults: any[],
   displayFiles?: DisplayFileItem[],
+  /** 覆盖 origin(安全审核拦下 = 'refused')。和额度后备同用一列:拦下优先,那一轮的「改用了」行重载后不再显示。 */
+  originOverride?: string,
 ): Promise<void> {
   // 额度用完换了后备:这一轮的回答记实际用的模型,并标 origin(重开会话时界面据此还原「改用了」那一行)
   const swap = modelSwaps.get(currentRunId() || '');
+  const origin = originOverride ?? swap?.origin;
   await deps().state.finalizeAssistantMessage({
     messageId, sessionId, modelId: swap?.modelId ?? modelId, content, reasoning, toolCalls, toolResults, displayFiles,
     agentSlug: currentDisplayAgentSlug(),
-    ...(swap ? { origin: swap.origin } : {}),
+    ...(origin ? { origin } : {}),
   });
 }
 
