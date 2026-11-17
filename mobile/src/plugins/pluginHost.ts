@@ -202,8 +202,8 @@ async function readSpaceIcon(fs: PluginFs, json: string, dirs: string[]): Promis
 // 一个有效槽都没有时(2026-11-17 起,读失败 ≠ 没写过):
 //   · 两槽都不存在,或只有槽 0 且是半截(第一次写到一半被杀:从没成功存过)→ 没写过,null,与桌面同一出口;
 //   · 其余(文件在却读不出来、两槽都坏)→ 读失败,抛出去,ctx.loadData 跟着 reject,插件不该按默认值往下走;
-//     这时插件若仍要写:写进不存在的那槽,两槽都在就先把要盖的那槽原样另存成 .unreadable-<时间>;
-//     序号用当前毫秒数,比任何残留槽的写入计数都大,残留槽以后读得出来也盖不住这次写。
+//     这时插件若仍要写:先把每个坏槽原样另存成 .unreadable-<时间>(有槽连字节都读不出来就拒写),
+//     再写(优先写进不存在的那槽);序号用当前毫秒数,比任何残留槽的写入计数都大,残留槽以后读得出来也盖不住这次写。
 interface DataEnvelope { forsionPluginData: 1; seq: number; text: string }
 const slotPaths = (id: string): [string, string] => [`${PLUGIN_DATA_DIR}/${id}.json`, `${PLUGIN_DATA_DIR}/${id}.json.alt`]
 
@@ -239,6 +239,13 @@ interface DataSlots {
    *  或者没有有效槽、又不是「没写过」 */
   unreadable: boolean
 }
+
+/** 读失败的错误:code 与渲染层 pluginLocalData 同名,reason 区分「字节读不出来」和「信封坏了」(插件可按它分支)。 */
+const unreadableError = (r: DataSlots): Error =>
+  Object.assign(new Error('plugin-data-unreadable'), {
+    code: 'plugin-data-unreadable',
+    reason: r.states.some((s) => s.kind === 'unreadable') ? 'read-failed' : 'invalid-json',
+  })
 
 async function readDataSlots(fs: PluginFs, id: string): Promise<DataSlots> {
   const [a, b] = slotPaths(id)
@@ -441,7 +448,7 @@ export function createPluginHost(fs: PluginFs, opts: { appVersion: () => string 
       if (!isSafeSlug(pluginId)) return null // id 直接拼进文件名:`../` 就是任意读
       return serial(pluginId, async () => {
         const r = await readDataSlots(fs, pluginId)
-        if (r.unreadable) throw new Error('plugin-data-unreadable') // 读失败 ≠ 没写过(见上)
+        if (r.unreadable) throw unreadableError(r) // 读失败 ≠ 没写过(见上)
         return r.latest?.env.text ?? null
       })
     },
@@ -455,13 +462,18 @@ export function createPluginHost(fs: PluginFs, opts: { appVersion: () => string 
         let target: 0 | 1 = r.latest ? (r.latest.slot === 0 ? 1 : 0) : 0
         let seq = (r.latest?.env.seq ?? 0) + 1
         if (r.unreadable) {
-          // 读失败:原件不能被这次写盖掉(见上)。有有效槽时要盖的就是另一槽(读不出来的那槽);
-          // 没有有效槽时优先写进不存在的那槽
-          if (!r.latest) target = r.states[0].kind === 'missing' ? 0 : r.states[1].kind === 'missing' ? 1 : 0
-          if (r.states[target].kind !== 'missing') {
-            const original = await fs.readBytes(paths[target]) // 连字节都读不出来:不写,抛出去
-            await fs.writeBytes(`${paths[target]}.unreadable-${new Date().toISOString().replace(/[:.]/g, '-')}`, original)
+          // 读失败:原件不能被这次或以后的写盖掉(见上)。**每一个**坏槽(半截 / 读不出字节)都先原样另存 ——
+          // 只存要盖的那槽的话,下一次普通写会落到另一个坏槽上,而那槽可能才是较新的原件。
+          // 有槽连字节都读不出来:不写,抛出去(同桌面拷不出原件就拒写)。
+          const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+          for (const i of [0, 1] as const) {
+            const k = r.states[i].kind
+            if (k !== 'partial' && k !== 'unreadable') continue
+            const original = await fs.readBytes(paths[i])
+            await fs.writeBytes(`${paths[i]}.unreadable-${stamp}`, original)
           }
+          // 没有有效槽时优先写进不存在的那槽;有有效槽时照常写另一槽(已另存过)
+          if (!r.latest) target = r.states[0].kind === 'missing' ? 0 : r.states[1].kind === 'missing' ? 1 : 0
           seq = Math.max(seq, Date.now())
         }
         const env: DataEnvelope = { forsionPluginData: 1, seq, text: body }

@@ -3,8 +3,10 @@
  *  ① 文件不存在 → null;② 读出错(这里用「同名的是个目录」造 EISDIR,root 跑也造得出来)→ 抛,不再回 null;
  *  ③ 零字节 / 半截 JSON → 原文照回(由渲染层 pluginLocalData 判成读失败),但记下来;
  *  ④ 读到坏内容之后插件仍要写 → 先把原件另存成 <id>.json.unreadable-<时间>,再写;读成功过的不另存;
- *  ⑤ 读出错之后连原件都拷不出来 → 拒绝这次写,原件不动。
- * 负对照:把 pluginDataRead 改回 catch 一律 null → ② 红;去掉写之前的另存 → ④ 红;另存失败照写 → ⑤ 红。
+ *  ⑤ 读出错之后连原件都拷不出来 → 拒绝这次写,原件不动;
+ *  ⑥ 记号不被之后别处的成功读取清掉(拿到读失败的插件手里仍是默认值);⑦⑧ 同一个文件的并发写排队,临时文件 / 备份名不撞。
+ * 负对照:把 pluginDataRead 改回 catch 一律 null → ② 红;去掉写之前的另存 → ④ 红;另存失败照写 → ⑤ 红;
+ *  成功读取清记号 → ⑥ 红;写不排队 → ⑦ 或 ⑧ 红(看是否撞在同一毫秒)。
  */
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
@@ -83,10 +85,43 @@ it('④ 读到坏内容后插件仍要写 → 先另存原件再写;读成功过
 
 it('⑤ 读出错之后原件拷不出来 → 拒绝这次写,原件不动', async () => {
   const target = path.join(dataDir(), 'demo.json')
-  await fs.mkdir(target)
-  await fs.writeFile(path.join(target, 'inside'), 'x')
-  await expect(read('demo')).rejects.toThrow()
-  await expect(write('demo', '{"fresh":true}')).rejects.toThrow(/not overwriting/)
-  expect((await fs.stat(target)).isDirectory()).toBe(true)
-  expect(await fs.readFile(path.join(target, 'inside'), 'utf8')).toBe('x')
+  await fs.writeFile(target, '{"user":"data"}')
+  const eio = Object.assign(new Error('EIO: i/o error'), { code: 'EIO' })
+  const readSpy = vi.spyOn(fs, 'readFile').mockRejectedValueOnce(eio)
+  const copySpy = vi.spyOn(fs, 'copyFile').mockRejectedValueOnce(eio)
+  try {
+    await expect(read('demo')).rejects.toThrow(/EIO/)
+    await expect(write('demo', '{"defaults":true}')).rejects.toThrow(/not overwriting/)
+  } finally {
+    readSpy.mockRestore(); copySpy.mockRestore()
+  }
+  expect(await fs.readFile(target, 'utf8')).toBe('{"user":"data"}')
+})
+
+it('⑥ 读出错过一次,之后别处读成功了,拿到读失败的那个插件再写 → 照样先另存原件', async () => {
+  const target = path.join(dataDir(), 'demo.json')
+  await fs.writeFile(target, '{"user":"data"}')
+  const spy = vi.spyOn(fs, 'readFile').mockRejectedValueOnce(Object.assign(new Error('EBUSY: resource busy'), { code: 'EBUSY' }))
+  try { await expect(read('demo')).rejects.toThrow(/EBUSY/) } finally { spy.mockRestore() }
+  expect(await read('demo')).toBe('{"user":"data"}') // 另一个窗口 / 设备页读成功
+  await write('demo', '{"defaults":true}') // 拿到读失败的插件按默认值存
+  const saved = await backups('demo')
+  expect(saved).toHaveLength(1)
+  expect(await fs.readFile(path.join(dataDir(), saved[0]), 'utf8')).toBe('{"user":"data"}')
+})
+
+it('⑦ 同一个文件并发写(挤在同一毫秒):逐个写完,不撞临时文件,最后是最后一次的内容', async () => {
+  await Promise.all(Array.from({ length: 12 }, (_, i) => write('demo', JSON.stringify({ n: i }))))
+  expect(JSON.parse(await fs.readFile(path.join(dataDir(), 'demo.json'), 'utf8'))).toEqual({ n: 11 })
+  expect((await fs.readdir(dataDir())).filter((n) => n.includes('.tmp-'))).toEqual([])
+})
+
+it('⑧ 读到坏内容后并发写两次:两次都写成(备份名不撞),原件留着', async () => {
+  await fs.writeFile(path.join(dataDir(), 'demo.json'), '{"half":')
+  await read('demo')
+  await Promise.all([write('demo', '{"a":1}'), write('demo', '{"a":2}')])
+  const saved = await backups('demo')
+  expect(saved).toHaveLength(1)
+  expect(await fs.readFile(path.join(dataDir(), saved[0]), 'utf8')).toBe('{"half":')
+  expect(await read('demo')).toBe('{"a":2}')
 })

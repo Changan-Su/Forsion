@@ -90,7 +90,7 @@ import { MUTATE_DB_RETRIES, mutateDbCas, mutateHumanCalendar } from './pluginDb'
 import { useDbStore } from '../store/dbStore'
 import { HUMAN_CAL } from '../store/humanCalendarIo'
 import { createDatabasesApi, createNoteTasksApi, pluginDatabasePath } from './pluginData'
-import { loadSyncedPluginData, notePluginDataEdit, pluginDataSyncOn, pluginSyncSnapshot, pushPluginData, type LocalData } from './pluginDataSync'
+import { loadSyncedPluginData, notePluginDataEdit, notePluginDataUnverifiedWrite, pluginDataSyncOn, pluginSyncSnapshot, pushPluginData, type LocalData } from './pluginDataSync'
 import { isJsonText, isPluginDataUnreadable, PluginDataUnreadableError, readLocalPluginData } from './pluginLocalData'
 import { createCalendarApi } from './pluginCalendar'
 import { createCalendarEventsApi } from './pluginCalendarEvents'
@@ -1937,6 +1937,8 @@ export const usePluginStore = create<PluginState>((set, get) => {
       }
     }
     // 本机那份插件数据(主进程 / 手机宿主各自落盘);两样都有才谈得上同步
+    /** 这个插件上一次 ctx.loadData 是不是读不出来(下一次读成功就清)。见 saveData。 */
+    let lastLoadUnreadable = false
     const localData: LocalData | null = amadeus?.readPluginData && amadeus?.writePluginData
       ? {
           read: () => readLocalPluginData(pluginId, () => amadeus.readPluginData!(pluginId)),
@@ -2328,24 +2330,38 @@ export const usePluginStore = create<PluginState>((set, get) => {
     loadData: async () => {
       if (!amadeus?.readPluginData) return null
       const readLocal = () => readLocalPluginData(pluginId, () => amadeus.readPluginData!(pluginId))
-      const raw = pluginDataSyncOn(get().plugins.find((p) => p.id === pluginId)) && localData
-        // 同步那边出别的错(云端、状态)→ 退回只读本机;本机读不出来 → 照实抛,不再读一遍
-        ? await loadSyncedPluginData(pluginId, localData).catch((e) => (isPluginDataUnreadable(e) ? Promise.reject(e) : readLocal()))
-        : await readLocal()
-      if (raw == null) return null
+      let raw: string | null
       try {
-        return JSON.parse(raw)
+        raw = pluginDataSyncOn(get().plugins.find((p) => p.id === pluginId)) && localData
+          // 同步那边出别的错(云端、状态)→ 退回只读本机;本机读不出来 → 照实抛,不再读一遍
+          ? await loadSyncedPluginData(pluginId, localData).catch((e) => (isPluginDataUnreadable(e) ? Promise.reject(e) : readLocal()))
+          : await readLocal()
+        if (raw != null) JSON.parse(raw)
       } catch (e) {
-        throw new PluginDataUnreadableError(pluginId, 'invalid-json', e)
+        lastLoadUnreadable = true
+        throw isPluginDataUnreadable(e) ? e : new PluginDataUnreadableError(pluginId, 'invalid-json', e)
       }
+      lastLoadUnreadable = false
+      return raw == null ? null : JSON.parse(raw)
     },
     saveData: async (value) => {
       if (!amadeus?.writePluginData) return
       const p = get().plugins.find((o) => o.id === pluginId)
+      // 上一次 loadData 读不出来(插件接住错误照样存):这次写不算本机的编辑,不推、不在冲突里赢过云端(见 notePluginDataUnverifiedWrite)
+      const unverified = lastLoadUnreadable
       // 先记这次编辑、再写本机(拉取落盘前核对代号);声明了 syncData 就记,同步关着也记 —— 重新打开时认得出本机更新
-      if (p?.syncData) notePluginDataEdit(pluginId)
-      await amadeus.writePluginData(pluginId, JSON.stringify(value ?? null))
-      if (localData && pluginDataSyncOn(p)) void pushPluginData(pluginId, localData)
+      let undoEdit: (() => void) | undefined
+      if (p?.syncData) {
+        if (unverified) notePluginDataUnverifiedWrite(pluginId)
+        else undoEdit = notePluginDataEdit(pluginId)
+      }
+      try {
+        await amadeus.writePluginData(pluginId, JSON.stringify(value ?? null))
+      } catch (e) {
+        undoEdit?.() // 没写成:撤掉「本机更新」的记号
+        throw e
+      }
+      if (!unverified && localData && pluginDataSyncOn(p)) void pushPluginData(pluginId, localData)
     },
     // 通用宿主 UI 原语。Floating TOC 是非接管式挂载:插件继续拥有正文 DOM,宿主只在 shell 上叠一层。
     // 与 table/dashboard 一样动态 import 破环;形态错误同步抛,让插件能当场走自己的降级 UI。

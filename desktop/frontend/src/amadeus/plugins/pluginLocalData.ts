@@ -42,7 +42,9 @@ export async function readLocalPluginData(
   try {
     raw = await read()
   } catch (e) {
-    throw new PluginDataUnreadableError(pluginId, 'read-failed', e)
+    // 宿主自己已经分好类(手机双槽:信封坏了 = invalid-json、字节读不出来 = read-failed)→ 沿用它的原因
+    const reason = isPluginDataUnreadable(e) && (e.reason === 'invalid-json' || e.reason === 'read-failed') ? e.reason : 'read-failed'
+    throw new PluginDataUnreadableError(pluginId, reason, e)
   }
   if (raw == null) return null
   if (typeof raw !== 'string') throw new PluginDataUnreadableError(pluginId, 'read-failed')

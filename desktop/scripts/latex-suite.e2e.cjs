@@ -618,16 +618,21 @@ async function unreadableSettings(browser, code) {
     const colored = await page.evaluate(() => !!document.querySelector('.md-block .ProseMirror [class*="bracket"]'))
     check(`设置${label}:括号着色没开(自动输入确实停着)`, !colored)
     // 碰一下设置开关:以前这一下就把默认值整份写回去
-    const wrote = await page.evaluate(async () => {
+    const { clicked, wrote } = await page.evaluate(async () => {
       const host = document.createElement('div')
       document.body.appendChild(host)
       const off = window.__ep.settingsViews()[0].mount(host)
-      host.querySelector('button.ls-switch')?.click()
+      const sw = host.querySelector('button.ls-switch')
+      let dispatched = 0
+      sw?.addEventListener('click', () => { dispatched++ })
+      sw?.click()
       await new Promise((r) => setTimeout(r, 1000))
       if (typeof off === 'function') off()
       host.remove()
-      return window.__lsWrites.filter(([id]) => id === 'latex-suite').length
+      // 开关真的点到了(插件的点击处理和这里的计数挂在同一个按钮上):点不到的话下面「不写盘」恒过
+      return { clicked: dispatched === 1, wrote: window.__lsWrites.filter(([id]) => id === 'latex-suite').length }
     })
+    check(`设置${label}:点到了设置开关`, clicked)
     check(`设置${label}:点设置开关后不写盘(原件不被盖掉)`, wrote === 0, { writes: wrote })
     check(`设置${label}:无未捕获错误`, errors.length === 0, errors.slice(0, 3))
     await page.close()

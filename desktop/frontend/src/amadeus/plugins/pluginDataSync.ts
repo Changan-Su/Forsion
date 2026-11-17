@@ -9,6 +9,8 @@
  * 服务端只存不读(server microserver/plugin-data),这份内容不进任何模型上下文。
  */
 
+import { isPluginDataUnreadable } from './pluginLocalData'
+
 const LOAD_WAIT_MS = 3000
 const INDEX_TTL_MS = 60_000
 const stateKey = (id: string) => `forsion.pluginSync.${id}`
@@ -158,15 +160,64 @@ export function dropPluginCloudData(id: string): Promise<void> {
  * ctx.saveData **写本机之前**调(插件声明了 syncData 就调,不管这台设备开没开同步 —— 关着期间的修改重新打开后
  * 也要认得出是本机更新的):记下这次编辑。拉取在落盘前会核对代号,所以必须先记、后写。
  */
-export function notePluginDataEdit(id: string): void {
+export function notePluginDataEdit(id: string): () => void {
   const st = readState(id)
-  writeState(id, { ...st, gen: st.gen + 1, dirty: Date.now() })
+  const stamp = Date.now()
+  writeState(id, { ...st, gen: st.gen + 1, dirty: stamp })
+  // 撤回:本机这次没写成(宿主拒写 / 写失败)→ 不能留着一个「本机更新」的记号,否则文件恢复后它会把旧内容推上去盖掉云端。
+  // 只撤自己记的那一下(之后又有别的保存就不动)。
+  return () => {
+    const cur = readState(id)
+    if (cur.gen !== st.gen + 1 || cur.dirty !== stamp) return
+    const { dirty: _mine, ...rest } = cur
+    writeState(id, st.dirty !== undefined ? { ...rest, dirty: st.dirty } : rest)
+  }
+}
+
+/**
+ * 本机那份读不出来(且没能从云端恢复)之后,插件仍然 saveData:这次写**不算本机的编辑** —— 不记 dirty、不推,
+ * 对上的云端版本清零。这样下次连得上云端时云端那份赢(拉下来盖掉这份按默认值起来的数据),云端没有就按第一次上传。
+ * 否则这次写会在 409 里以「本机编辑更晚」赢过云端,把云端唯一完好的那份盖掉(服务端只留一版)。
+ */
+export function notePluginDataUnverifiedWrite(id: string): void {
+  const st = readState(id)
+  writeState(id, { v: 0, gen: st.gen + 1, ...(st.owner ? { owner: st.owner } : {}) })
+}
+
+/**
+ * 本机内容坏了(读得出字节、不是合法 JSON)且云端有一份:拉云端那份写回本机。写之前宿主先把坏的本机原件另存
+ * (桌面 <id>.json.unreadable-<时间>、手机同名槽备份;拷不出原件就拒写)。本机没推的那次编辑在坏文件里,
+ * 已经读不出来了,云端那份是现存最好的;dirty 一并清掉。拉不到 / 换了账号 / 写不进去 → null,调用方照实报读失败。
+ */
+async function restoreFromCloud(id: string, local: LocalData): Promise<string | null> {
+  const idx = await remoteIndex()
+  if (!idx) return null
+  const st = readState(id)
+  if (st.owner && st.owner !== idx.owner) return null // 云端那份属于另一个账号
+  const r = idx.items[id]
+  if (!r || !Number.isInteger(r.version)) return null
+  const got = await within(cloud(itemPath(id)), LOAD_WAIT_MS)
+  if (got?.status !== 200 || typeof got.json?.value !== 'string' || !Number.isInteger(got.json?.version)) return null
+  if (readState(id).gen !== st.gen) return null // 等云端时插件又存了:不拿云端的盖它
+  try { await local.write(got.json.value) } catch { return null }
+  writeState(id, { v: got.json.version, owner: idx.owner, gen: st.gen })
+  return got.json.value
 }
 
 /** ctx.loadData 用:返回本机内容,云端有更新的那份时先拉下来写进本机再返回。等云端最多 LOAD_WAIT_MS。 */
 export async function loadSyncedPluginData(id: string, local: LocalData): Promise<string | null> {
-  // 本机读不出来就整个抛出去(不往下对账):否则 mine 落成 null,下面会当「本机没有」拉云端那份写盘盖掉它。
-  const mine = await local.read()
+  // 本机读不出来绝不当「本机没有」往下对账。内容坏了(invalid-json)且云端有完好的一份 → 拉下来恢复;
+  // 读出错(read-failed:本机那份可能是好的、还比云端新)或恢复不成 → 照实抛。
+  let mine: string | null
+  try {
+    mine = await local.read()
+  } catch (e) {
+    if (isPluginDataUnreadable(e) && e.reason === 'invalid-json') {
+      const restored = await restoreFromCloud(id, local)
+      if (restored != null) return restored
+    }
+    throw e
+  }
   const idx = await remoteIndex()
   if (!idx) return mine
   let st = readState(id)

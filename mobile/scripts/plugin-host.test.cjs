@@ -467,23 +467,53 @@ const test = async (name, fn) => {
   })
 
   // 读失败 ≠ 没写过(2026-11-17):以前两槽都坏也回 null,插件按默认值起来,下一次写把原件盖掉。
-  await test('两槽都坏 = 读失败(抛出,不是 null);写时先另存要盖的那槽,新写的序号盖得过以后读得出来的残留槽', async () => {
+  await test('两槽都坏 = 读失败(reason invalid-json);写前两个坏槽都原样另存,下一次普通写盖坏槽时原件仍在;新写的序号盖得过残留槽', async () => {
     const fs = memFs()
     const h = host(fs)
     await h.writePluginData('p', '{"n":1}') // 槽 0,seq 1
     await h.writePluginData('p', '{"n":2}') // 槽 1,seq 2
     const keepAlt = fs.files.get('plugins-data/p.json.alt')
     const bad0 = enc('{"forsionPluginData":1,"se')
+    const bad1 = enc('not json')
     fs.files.set('plugins-data/p.json', bad0)
-    fs.files.set('plugins-data/p.json.alt', enc('not json'))
-    await assert.rejects(host(fs).readPluginData('p'), /plugin-data-unreadable/)
+    fs.files.set('plugins-data/p.json.alt', bad1)
+    await assert.rejects(host(fs).readPluginData('p'), (e) => e.code === 'plugin-data-unreadable' && e.reason === 'invalid-json')
     await h.writePluginData('p', '{"n":9}')
-    const backups = [...fs.files.keys()].filter((k) => k.startsWith('plugins-data/p.json.unreadable-'))
-    assert.equal(backups.length, 1, '要盖的槽 0 原样另存了一份')
-    assert.deepEqual([...fs.files.get(backups[0])], [...bad0])
+    const originals = () => [...fs.files.entries()].filter(([k]) => k.includes('.unreadable-')).map(([k, v]) => [k.replace(/\.unreadable-.*/, ''), dec(v)]).sort()
+    assert.deepEqual(originals(), [['plugins-data/p.json', dec(bad0)], ['plugins-data/p.json.alt', dec(bad1)]], '两个坏槽都原样另存')
     assert.equal(await host(fs).readPluginData('p'), '{"n":9}')
-    fs.files.set('plugins-data/p.json.alt', keepAlt) // 残留槽(seq 2)又读得出来了
+    await h.writePluginData('p', '{"n":10}') // 下一次普通写落到另一个坏槽:原件早已另存
+    assert.deepEqual(originals(), [['plugins-data/p.json', dec(bad0)], ['plugins-data/p.json.alt', dec(bad1)]])
+    assert.equal(await host(fs).readPluginData('p'), '{"n":10}')
+    fs.files.set('plugins-data/p.json.alt', keepAlt) // 旧的 seq 2 信封又出现在槽 1:盖不住槽 0 的恢复写(seq = 毫秒数)
     assert.equal(await host(fs).readPluginData('p'), '{"n":9}')
+  })
+
+  await test('只有槽 0、读不出字节(暂时的 I/O 错误)→ reason read-failed;插件硬要写 → 拒写,好了以后原件还在', async () => {
+    const fs = memFs()
+    await host(fs).writePluginData('p', '{"user":"data"}') // 只写过一次:只有槽 0
+    fs.failReadOf = 'plugins-data/p.json'
+    await assert.rejects(host(fs).readPluginData('p'), (e) => e.code === 'plugin-data-unreadable' && e.reason === 'read-failed')
+    await assert.rejects(host(fs).writePluginData('p', '{"defaults":true}'), /EIO/)
+    assert.equal(fs.files.has('plugins-data/p.json.alt'), false, '没有绕开原件写进另一槽')
+    fs.failReadOf = null
+    assert.equal(await host(fs).readPluginData('p'), '{"user":"data"}')
+  })
+
+  await test('槽 0 不在、槽 1 是半截 → 读失败;写先另存槽 1,之后的普通写盖它时原件已在', async () => {
+    const fs = memFs()
+    const h = host(fs)
+    await h.writePluginData('p', '{"n":1}')
+    await h.writePluginData('p', '{"n":2}')
+    fs.files.delete('plugins-data/p.json')
+    const bad1 = enc('{"forsionPluginData":1,"seq":2,"te')
+    fs.files.set('plugins-data/p.json.alt', bad1)
+    await assert.rejects(host(fs).readPluginData('p'), (e) => e.reason === 'invalid-json')
+    await h.writePluginData('p', '{"n":3}') // → 槽 0(不存在的那槽)
+    await h.writePluginData('p', '{"n":4}') // → 槽 1(坏槽)
+    const kept = [...fs.files.entries()].filter(([k]) => k.startsWith('plugins-data/p.json.alt.unreadable-')).map(([, v]) => dec(v))
+    assert.deepEqual(kept, [dec(bad1)])
+    assert.equal(await h.readPluginData('p'), '{"n":4}')
   })
 
   await test('一槽在却读不出字节 = 读失败(哪怕另一槽有效);写时拷不出原件就不写,原件不动', async () => {
