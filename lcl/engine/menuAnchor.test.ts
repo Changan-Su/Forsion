@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { clampMenu, edgeNudge, fitAnchored, keptPlacement, nestedPanelPlacement, nestedPanelTop } from './menuAnchor'
+import { clampMenu, edgeNudge, edgeVertical, fitAnchored, keptPlacement, nestedPanelPlacement, nestedPanelTop } from './menuAnchor'
 
 // 视口 1000x800,菜单 200x300,margin 8
 describe('clampMenu', () => {
@@ -154,5 +154,39 @@ describe('keptPlacement', () => {
   it('行被挤到选区下方:往下长', () => {
     // 选区贴着顶,行翻到选区下方 300,anchorTop = 选区上沿 - gap = 280
     expect(keptPlacement(300, 38, 104, 280)).toEqual({ top: 300, grow: 'down' })
+  })
+})
+
+// 可见区 0..800(margin 8 → 8..792);锚点 = 触发按钮 [600, 630],菜单贴上沿、间距 8
+describe('edgeVertical(useEdgeNudge 纵向:用户 11-17「列表会被边界挡住」)', () => {
+  const btn = { top: 600, bottom: 630 }
+  it('首选侧(上方)放得下:不动', () => {
+    expect(edgeVertical(600 - 8 - 300, 300, 0, 800, btn)).toEqual({ dy: 0 })
+  })
+  it('上方放不下、下方放得下:翻到下方,间距照原样', () => {
+    const b = { top: 200, bottom: 230 }
+    expect(edgeVertical(200 - 8 - 300, 300, 0, 800, b)).toEqual({ dy: 0, side: 'down', gap: 8 })
+  })
+  it('两侧都放不下:留在空间大的一侧并封顶(矮窗口里的项目菜单)', () => {
+    // 窗口高 340,按钮在 [214, 242]:上方 214-8-8=198,下方 340-8-250=82 → 留上方,封到 198
+    expect(edgeVertical(214 - 8 - 400, 400, 0, 340, { top: 214, bottom: 242 })).toEqual({ dy: 0, gap: 8, maxHeight: 198 })
+    // 反过来下方更大:翻下去并封顶
+    expect(edgeVertical(60 - 8 - 400, 400, 0, 340, { top: 60, bottom: 90 })).toEqual({ dy: 0, side: 'down', gap: 8, maxHeight: 234 })
+  })
+  it('裁切边界是祖先而不是视口:按祖先算可用高度', () => {
+    // 祖先可见区 [150, 800]:上方只剩 600-8-158=434
+    expect(edgeVertical(600 - 8 - 450, 450, 150, 800, btn)).toEqual({ dy: 0, gap: 8, maxHeight: 434 })
+  })
+  it('向下开的菜单同理:下方不够就翻上去', () => {
+    expect(edgeVertical(630 + 6, 250, 0, 800, btn)).toEqual({ dy: 0, side: 'up', gap: 6 })
+  })
+  it('不贴锚点的(右键菜单 / 二级面板):平移回可见区,比可见区还高就贴顶封顶', () => {
+    expect(edgeVertical(700, 200, 0, 800, null)).toEqual({ dy: -108 })
+    expect(edgeVertical(-20, 100, 0, 800, null)).toEqual({ dy: 28 })
+    expect(edgeVertical(100, 900, 0, 800, null)).toEqual({ dy: -92, maxHeight: 784 })
+    expect(edgeVertical(100, 200, 0, 800, null)).toEqual({ dy: 0 })
+  })
+  it('隐藏中的(高 0)原样返回', () => {
+    expect(edgeVertical(0, 0, 0, 800, btn)).toEqual({ dy: 0 })
   })
 })

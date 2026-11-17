@@ -244,6 +244,7 @@
     "check:boot": "node scripts/boot-replay.check.cjs",
     "shot:dashgrid": "node scripts/e2e-editor.cjs --check=dashgrid --shot",
     "check:overlay": "node scripts/overlay-zoom.check.cjs",
+    "check:menuedge": "node scripts/e2e-editor.cjs --check=menu-edge",
     "check:followanchor": "node scripts/follow-anchor.check.cjs",
     "check:anchoredoverlay": "node scripts/anchored-overlay.check.cjs",
     "check:leadicon": "node scripts/t2s-lead-icon.check.cjs",

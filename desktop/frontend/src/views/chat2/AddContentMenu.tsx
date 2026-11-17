@@ -125,7 +125,7 @@ export const AddContentMenu: React.FC<{
     menuRef.current?.querySelector<HTMLElement>(`[data-add-pane="${previous}"]`)?.focus()
   }, [pane])
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const menuFix = useEdgeNudge(open && !compact, { boundary: '.t2-chat-view' })
+  const menuFix = useEdgeNudge(open && !compact, { boundary: '.t2-chat-view', subPanels: true })
   const subFix = useEdgeNudge(pane && !compact ? `${pane}:${placement}` : '', { boundary: '.t2-chat-view' })
   // 一级菜单的退场替身由 ComposerMenuSurface 留(这里再挂一份会叠两张,11-02 实测);二级面板不经它,自己留。
   useExitGhost(subRef, open && !!pane)
@@ -441,7 +441,7 @@ export const AddContentMenu: React.FC<{
           {overflowControls}
   </>
   const paneContent = <>
-          <label className="add-menu-search">
+          <label className="add-menu-search" data-edge-pin>
             <Search size={13} />
             <input
               ref={searchRef}
