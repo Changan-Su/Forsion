@@ -82,7 +82,7 @@ export function ColorPalettePopover(p: ColorPaletteProps) {
   const r = p.anchor?.getBoundingClientRect()
   const right = p.side === 'right' && r
   return createPortal(<OverlayAt className="ui-popover amx-color-popover" role="dialog" aria-label={t('palette.custom')}
-    x={right ? r.right + 4 : r?.left ?? p.fallback?.x ?? 8} y={right ? r.top - 5 : (r?.bottom ?? p.fallback?.y ?? 8) + 6} anchorTop={right ? r.bottom + 5 : (r?.top ?? 8) - 6} anchor={anchor}
+    x={right ? r.right + 4 : r?.left ?? p.fallback?.x ?? 8} y={right ? r.top - 5 : (r?.bottom ?? p.fallback?.y ?? 8) + 6} anchorTop={right ? r.bottom + 5 : (r?.top ?? 8) - 6} anchor={right ? undefined : anchor /* 跟随锚点时 x/y 不用;右侧摆法按行的位置一次摆定(块菜单本身不随滚动走) */}
     innerRef={(el) => { root.current = el }} onMouseDown={(e) => { if (!(e.target instanceof HTMLInputElement)) e.preventDefault() }}
     onKeyDown={(e) => {
       if (e.target instanceof HTMLInputElement) return

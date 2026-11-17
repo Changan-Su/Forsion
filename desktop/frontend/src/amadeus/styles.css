@@ -4655,16 +4655,16 @@ body.amx-marquee-active * {
    往两侧各出 10px 用零模糊的左右平移阴影画(不动 margin / padding):段落缩进档写的是 margin-left、块把手按边框盒定位,
    改盒子会和缩进档打架、把手跟着歪。阴影跟着 border-radius 走,两端仍是圆角。标注(.callout)的底色归它自己的类型色,A5 再接。 */
 .am-app .milkdown .ProseMirror :is(p, h1, h2, h3, h4, h5, h6, li, blockquote)[data-bg]:not(.callout) {
-  --amx-blk-bleed: 10px;
   background: var(--amx-blk-bg);
   border-radius: 6px;
   padding-block: 2px;
-  box-shadow: calc(0px - var(--amx-blk-bleed)) 0 0 0 var(--amx-blk-bg), var(--amx-blk-bleed) 0 0 0 var(--amx-blk-bg);
+  /* 出血量缺省 10px;列表项要盖住项目符号 / 方框,在下面单独给(这里别写声明:这条特异性更高,会把它压掉) */
+  box-shadow: calc(0px - var(--amx-blk-bleed, 10px)) 0 0 0 var(--amx-blk-bg), 10px 0 0 0 var(--amx-blk-bg);
   box-decoration-break: clone;
   -webkit-box-decoration-break: clone;
 }
 /* 列表项:左侧要盖住项目符号 / 待办方框(都在 li 盒外的槽里) */
-.am-app .milkdown .ProseMirror li[data-bg] { --amx-blk-bleed: calc(1.4em + 4px); }
+.am-app .milkdown .ProseMirror li[data-bg]:not(.callout) { --amx-blk-bleed: calc(1.4em + 4px); padding-block: 0; }
 .am-app .milkdown .ProseMirror li[data-item-type='task'][data-bg] { --amx-blk-bleed: calc(var(--amx-task-size) + var(--amx-task-gap) + 6px); }
 .am-app .milkdown .ProseMirror :is(p, h1, h2, h3, h4, h5, h6, li, blockquote)[data-fg]:not(.callout) { color: var(--amx-blk-fg); }
 .am-app .milkdown .ProseMirror li[data-fg]::marker { color: var(--amx-blk-fg); }

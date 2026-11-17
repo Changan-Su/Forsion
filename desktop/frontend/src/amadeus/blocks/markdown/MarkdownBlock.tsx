@@ -2909,7 +2909,13 @@ function SlashMenu({ query, onQuery, left, top, anchorTop, hideKeys, ctx, unifie
   editorDomRef.current = editorDom
   const all = useAllSlashItems({ unified })
   // 多词条目名交给 slashSuggestPlugin:`/blue background` 打空格时菜单不关(见 setSpacedSlashLabels)
-  useEffect(() => { setSpacedSlashLabels(all.filter((it) => /\s/.test(it.label)).map((it) => it.label.toLowerCase())) }, [all])
+  // 多词名 = 带空格的条目名 + 关键词里带连字符的(`blue-background` → `blue background`:中文界面下英文也能带空格搜)
+  useEffect(() => {
+    setSpacedSlashLabels(all.flatMap((it) => [
+      ...(/\s/.test(it.label) ? [it.label.toLowerCase()] : []),
+      ...it.kw.split(/\s+/).filter((k) => /\w-\w/.test(k)).map((k) => k.toLowerCase().replace(/-/g, ' ')),
+    ]))
+  }, [all])
   const allItems = useMemo(
     () => all.filter((it) => !hideKeys?.has(it.key) && (!ctx || slashItemApplies(it.key, ctx))),
     [all, hideKeys, ctx],
