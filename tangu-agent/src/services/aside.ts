@@ -252,7 +252,7 @@ export async function prepareAsideAttachments(atts: AsideAttachment[], ctx: {
   const out: PreparedAttachments = { images: [], files: [] };
   const raw = normalizeImageAttachments(atts.filter(isImage));
   if (raw.length) {
-    const images = await fitUserImages(raw);
+    const images = await fitUserImages(raw, ctx.signal);
     let described: string | null = null;
     if (await shouldDescribeImages(ctx.modelId, ctx.appId, ctx.visionMode).catch(() => false)) {
       ctx.onStatus?.({ phase: 'describing_images', stage: 'start', count: images.length });
@@ -337,7 +337,7 @@ export async function answerAside(opts: {
     visionMode: opts.visionMode, visionModelId: opts.visionModelId, signal: opts.signal, onStatus: opts.onStatus,
   });
   opts.signal.throwIfAborted();
-  const { messages } = await hydrateHistory(opts.sessionId, '', undefined, undefined, undefined, false);
+  const { messages } = await hydrateHistory(opts.sessionId, '', undefined, undefined, undefined, false, opts.signal);
   // 转写预算:模型窗口 − 回答上限 − 规则开销 − 转写以外的那几条(规则 + 旁聊往返 + 本问;图按每张固定数估);
   // 超了由 buildTranscript 从最旧处丢(摘要块永不截)。别拿 JSON.stringify(input) 估:附件的 base64 会把预算估成负数,主会话被整段丢掉。
   const windowTokens = modelContextWindow(opts.modelId, model);

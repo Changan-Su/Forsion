@@ -41,7 +41,8 @@ const PROGRAM = String.raw`
 })().catch(async () => { (await import('node:worker_threads')).parentPort.postMessage({ error: true }); });
 `;
 
-function decode(bytes: Buffer): Promise<{ data: Uint8Array; width: number; height: number }> {
+function decode(bytes: Buffer, signal?: AbortSignal): Promise<{ data: Uint8Array; width: number; height: number }> {
+  signal?.throwIfAborted();
   return new Promise((resolve, reject) => {
     const worker = new Worker(PROGRAM, { eval: true, workerData: {
       module: require.resolve('libheif-js/wasm-bundle'), bytes, maxPixels: MAX_PIXELS,
@@ -51,10 +52,13 @@ function decode(bytes: Buffer): Promise<{ data: Uint8Array; width: number; heigh
       if (finished) return;
       finished = true;
       clearTimeout(timer);
+      signal?.removeEventListener('abort', abort);
       // Release decoder/WASM memory before allowing the next queued photo to start.
       void worker.terminate().finally(() => error ? reject(error) : resolve(result!));
     };
+    const abort = () => finish(signal?.reason || new Error('Aborted'));
     const timer = setTimeout(() => finish(new Error(ERROR)), 30_000);
+    signal?.addEventListener('abort', abort, { once: true });
     worker.once('message', (m) => {
       if (m.error || !(m.data instanceof ArrayBuffer)) finish(new Error(ERROR));
       else finish(undefined, { data: new Uint8Array(m.data), width: m.width, height: m.height });
@@ -82,7 +86,8 @@ export function inlineImageMime(bytes: Buffer): string | undefined {
 }
 
 /** Convert only the model's copy; stored attachments retain the original bytes. */
-export async function prepareInlineImage(url: string): Promise<string> {
+export async function prepareInlineImage(url: string, signal?: AbortSignal): Promise<string> {
+  signal?.throwIfAborted();
   const match = /^data:([^;,]+);base64,/i.exec(url);
   if (!match) return url;
   const bytes = Buffer.from(url.slice(match[0].length), 'base64');
@@ -92,10 +97,12 @@ export async function prepareInlineImage(url: string): Promise<string> {
   if (bytes.length > 6_000_000) throw new Error(ERROR);
   const key = createHash('sha256').update(bytes).digest('hex');
   const convert = async () => {
+    signal?.throwIfAborted();
     const hit = cache.get(key);
     if (hit) return hit;
     try {
-      const decoded = await decode(bytes);
+      const decoded = await decode(bytes, signal);
+      signal?.throwIfAborted();
       const result = `data:image/jpeg;base64,${encodePhotoForModel(decoded.data, decoded.width, decoded.height).toString('base64')}`;
       while (cache.size && cacheBytes + result.length > CACHE_BYTES) {
         const [oldKey, old] = cache.entries().next().value!;
@@ -103,9 +110,16 @@ export async function prepareInlineImage(url: string): Promise<string> {
       }
       if (result.length <= CACHE_BYTES) { cache.set(key, result); cacheBytes += result.length; }
       return result;
-    } catch { throw new Error(ERROR); }
+    } catch { signal?.throwIfAborted(); throw new Error(ERROR); }
   };
   const result = pending.then(convert);
   pending = result.catch(() => {});
-  return result;
+  if (!signal) return result;
+  // A queued caller need not wait for someone else's decoder before observing Stop.
+  return new Promise((resolve, reject) => {
+    const abort = () => reject(signal.reason);
+    signal.addEventListener('abort', abort, { once: true });
+    const cleanup = () => signal.removeEventListener('abort', abort);
+    result.then((value) => { cleanup(); resolve(value); }, (error) => { cleanup(); reject(error); });
+  });
 }

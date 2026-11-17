@@ -55,9 +55,13 @@ export function normalizeImageAttachments(raw: any): NormalizedImage[] {
 }
 
 /** 用户附件进上下文前先缩(大照片 / 高分屏截图,见 imageShrink.ts);http(s) 的和够小的原样。 */
-export async function fitUserImages(images: NormalizedImage[]): Promise<NormalizedImage[]> {
+export async function fitUserImages(images: NormalizedImage[], signal?: AbortSignal): Promise<NormalizedImage[]> {
   const out: NormalizedImage[] = [];
-  for (const image of images) out.push({ url: fitImageUrlForModel(await prepareInlineImage(image.url)) });
+  for (const image of images) {
+    const url = await prepareInlineImage(image.url, signal);
+    signal?.throwIfAborted();
+    out.push({ url: fitImageUrlForModel(url) });
+  }
   return out;
 }
 

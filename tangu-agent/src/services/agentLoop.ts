@@ -1155,6 +1155,7 @@ export async function hydrateHistory(
   replayFor?: { apiModelId?: string; protocol?: string; account?: string },
   /** false = 不等在飞的惰性检查点(旁聊 /btw:一句题外话不值得最多 45s 的等待,窗口外老行少一截可接受)。 */
   waitCheckpoint = true,
+  signal?: AbortSignal,
 ): Promise<{
   messages: ChatMessage[]; currentUserIndex: number; checkpointThrough: { ts: number; rowId?: string; partial: boolean };
   /** 发给模型的那条带图消息的**原图**(缩图之前):本轮没附件时 edit_image 用它 —— 模型看得见什么就能改什么。 */
@@ -1224,7 +1225,7 @@ export async function hydrateHistory(
   if (lastUserWithImages >= 0) {
     const m = out[lastUserWithImages] as any;
     // 这条消息的图此后每一轮请求都带着:大图先缩(imageShrink.ts)。只缩上 wire 的这份,库里的附件原样留着。
-    lastUserImages = await fitUserImages(lastUserImages);
+    lastUserImages = await fitUserImages(lastUserImages, signal);
     // 转写失败 / 未配槽 → 退回原样送图(宁可让 provider 报错也不静默丢内容,同工具产图那条路)。
     const described = describe ? await describe(lastUserImages) : null;
     m.content = described
@@ -1861,6 +1862,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       sessionId, run.assistant_message_id || '', describeUserImages,
       typeof input.userMessageId === 'string' ? input.userMessageId : undefined,
       { apiModelId: replayModelKey, protocol: stepItemBinding.protocol, account: stepItemBinding.account },
+      true, ac.signal,
     );
     // 本轮没附件(「坚持合成」这类跟进):edit_image 用模型此刻看得见的那批图 —— hydrate 每轮都把它发给对话模型。
     if (!imageInputs.length && contextImages?.images.length) {
@@ -2658,7 +2660,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       for (const m of msgs) {
         const originals = normalizeImageAttachments(m.attachments);
         if (originals.length) { imageInputs = originals; imageInputsSentAt = undefined; } // 改图工具要原图,不缩
-        const images = await fitUserImages(originals);
+        const images = await fitUserImages(originals, ac.signal);
         const described = images.length ? await describeUserImages(images) : null;
         const pushed = { role: 'user', content: described
           ? `${m.content}\n\n[Attached images transcribed by the vision assistant]\n${described}`
