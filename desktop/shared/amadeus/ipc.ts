@@ -1,4 +1,5 @@
 // The IPC contract shared by main (handlers), preload (bridge), and renderer (consumer).
+import { cmpVersion } from '../../../tangu-agent/src/contracts/lenientVersion'
 import type { LoadedPage, PageManifest } from './compiler/types'
 import type { DbFile } from './db/schema'
 import type { MdMark } from './mdMarks'
@@ -424,7 +425,8 @@ export function sanitizeRequiresPlugins(raw: unknown, selfId?: string): PluginDe
     seen.add(id)
     const dep: PluginDependency = { id }
     const minVersion = str(o?.minVersion, 32)
-    if (minVersion && /^v?\d+(\.\d+){0,3}$/.test(minVersion)) dep.minVersion = minVersion
+    // 可带预发布号与 +build.N(2.13.8-beta.3 / 2.13.8+build.1;比较用 cmpVersion,引擎 loader 同口径)。以前只认点分数字,带后缀的最低版本被悄悄丢掉
+    if (minVersion && /^v?\d+(\.\d+){0,3}(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$/.test(minVersion)) dep.minVersion = minVersion
     const market = str(o?.market, 64)
     if (market && /^[a-z0-9][a-z0-9-]*$/.test(market)) dep.market = market
     const name = str(o?.name, 80)
@@ -578,44 +580,22 @@ export interface ExternalPluginSource {
   devProductId?: string
   /** dev 来源正遮蔽全局 plugins 目录里的同 id 安装版(撤下开发副本后安装版会回来)。 */
   shadowsInstalled?: boolean
+  /** 只在商店安装(market-<uuid>)上:同一个包另有一份普通目录的旧安装,被这份取代、已停用(supersededPlainInstalls)。
+   *  设置页据此给一行注记 + 「旧的本地安装」一节;卸载商店版时对话框带上它(uninstallPlugin 的 withSuperseded)。 */
+  supersedes?: SupersededInstall
 }
 
-/** Release-version order of docs/reference/release-versions.md (contracts/releaseVersion.mjs), but lenient: numeric core
- *  (missing parts = 0, leading v ignored), a prerelease sorts below its release, +build.N breaks ties, other metadata ignored:
- *  2.13.8-beta.1 < 2.13.8-beta.2 < 2.13.8 < 2.13.8+build.1. Copied from lcl/spaces/userSpaces.core.ts (main process has no @lcl alias); change both. */
-export function cmpVersion(a: string, b: string): number {
-  // 数字段按字符串比长度再比字典序:合法 semver 的数字段可以超出 Number 精度
-  const numCmp = (x: string, y: string) => {
-    const [u, w] = [x.replace(/^0+(?=\d)/, ''), y.replace(/^0+(?=\d)/, '')]
-    return u === w ? 0 : u.length !== w.length ? (u.length < w.length ? -1 : 1) : u < w ? -1 : 1
-  }
-  const parse = (v: string) => {
-    const [main, meta = ''] = String(v).trim().replace(/^v/i, '').split(/\+(.*)/s)
-    const [core, pre] = main.split(/-(.*)/s)
-    // 元数据里只有 +build.N 有序(安装包修订号),其余不参与比较
-    const rev = /^build\.(\d+)$/.exec(meta)?.[1] ?? '0'
-    return { core: core.split('.').map((x) => parseInt(x, 10) || 0), pre: pre ? pre.split('.') : [], rev }
-  }
-  const pa = parse(a)
-  const pb = parse(b)
-  for (let i = 0; i < Math.max(pa.core.length, pb.core.length); i++) {
-    const d = (pa.core[i] || 0) - (pb.core[i] || 0)
-    if (d) return d < 0 ? -1 : 1
-  }
-  // 同号:带预发布的排在正式版之前(旧版只认数字段,把 2.13.8-beta.1 当成 2.13.8.1、排到 2.13.8 之上)
-  if (!pa.pre.length !== !pb.pre.length) return pa.pre.length ? -1 : 1
-  for (let i = 0; i < Math.max(pa.pre.length, pb.pre.length); i++) {
-    const x = pa.pre[i]
-    const y = pb.pre[i]
-    if (x === undefined || y === undefined) return x === undefined ? -1 : 1 // 前缀相同,段少的在前
-    const nx = /^\d+$/.test(x)
-    const ny = /^\d+$/.test(y)
-    if (nx && ny) { if (numCmp(x, y)) return numCmp(x, y); continue }
-    if (nx !== ny) return nx ? -1 : 1 // 纯数字段排在字母段之前
-    if (x !== y) return x < y ? -1 : 1
-  }
-  return numCmp(pa.rev, pb.rev) // 2.13.7 < 2.13.7+build.1 < 2.13.7+build.10
+/** 被商店安装取代的那份普通目录(旧的本地安装)。id = 它的生效 id(= manifest id),按它卸载只会动普通目录。 */
+export interface SupersededInstall {
+  id: string
+  dir: string
+  version: string
+  name: string
+  nameEn?: string
 }
+
+/** 宽松的版本序(预发布排在正式版之前、+build.N 有序):本体在引擎契约 contracts/lenientVersion.ts,引擎的插件依赖检查用同一份。 */
+export { cmpVersion }
 
 /** Gate a plugin manifest: apiVersion mismatch → 'api'; app older than minAppVersion → 'minApp'; ok → null. */
 export function gatePluginManifest(
@@ -1013,14 +993,18 @@ export interface AmadeusApi {
   writePluginData?(pluginId: string, text: string): Promise<void>
   /** Discover user plugins under the vault's .amadeus/plugins/ folder. */
   listPlugins(): Promise<ExternalPluginSource[]>
-  /** Open the vault's plugins folder in the OS file manager (creating it if needed). */
-  openPluginsFolder(): Promise<void>
+  /** Open the plugins folder in the OS file manager (creating it if needed). dir = one plugin's directory name:
+   *  select that folder instead (ignored unless it is a plain child directory of the plugins folder). */
+  openPluginsFolder(dir?: string): Promise<void>
   /** Write a runnable sample plugin into the plugins folder. */
   scaffoldSamplePlugin(): Promise<void>
   /** 卸载 ~/.forsion/plugins 下的一个 Forsion 插件(按 manifest id 定位目录),挪进回收站(30 天可恢复;可选:桌面实现)。
    *  keepSettings:插件设置原地留着;vaultFolder:库里的工作文件夹(相对库根)一起进回收站;prefs:渲染层摘下的 localStorage 偏好,
-   *  恢复时原样交回。旧调用只传 id = 文件 + 设置进回收站。 */
-  uninstallPlugin?(id: string, opts?: { keepSettings?: boolean; vaultFolder?: string; prefs?: Record<string, string>; engineTrash?: string[] }): Promise<{ trashId?: string; dirName?: string } | void>
+   *  恢复时原样交回。旧调用只传 id = 文件 + 设置进回收站。
+   *  withSuperseded:目标是商店安装时,被它取代的旧普通目录(主进程自己判定,渲染层不递目录名)一起进同一条回收站条目,
+   *  否则卸掉商店版后旧副本立刻重新运行。旧副本的设置跟着 keepSettings 走。
+   *  dir:同一个 id 有多份目录时指名卸哪一份(清理旧副本按界面显示的那份);生效 id 对不上就是没找到。 */
+  uninstallPlugin?(id: string, opts?: { keepSettings?: boolean; vaultFolder?: string; prefs?: Record<string, string>; engineTrash?: string[]; withSuperseded?: boolean; dir?: string }): Promise<{ trashId?: string; dirName?: string; superseded?: string[] } | void>
   /** 恢复主进程写的回收站条目(Forsion 插件);extra.prefs 由渲染层写回 localStorage。 */
   trashRestore?(id: string): Promise<{ kind: string; ref: string; extra?: Record<string, unknown> }>
   /** 该 Agent 是不是**这个插件的捆绑包播种的**(引擎新播种时写 agents/<slug>/.bundle-origin = bundle 目录名)。

@@ -375,6 +375,10 @@ async function loadUserSpacesOnce(): Promise<void> {
   for (const [id, owner] of [...pluginSpaceOwner]) {
     const w = wanted.get(id)
     if (!w || w.plugin !== owner || pluginSpaceJson.get(id) !== w.raw) removePluginSpace(id)
+    // 同一个 Space 换了主人(同一个包从本地安装换成商店安装,或开发副本接管 / 交还):旧主人的视图在换代时已被关掉,
+    // 存着的布局只剩空占位 —— 照配方升版本那样丢掉它,下次进来按新主人的配方重建。重启后才换的那条路不走这里,
+    // 存档里的旧名字由布局别名接过去(pluginViews.tsx 的 setLayoutViewAlias),用户的摆法留着。
+    if (w?.plugin && w.plugin !== owner && windowKind() !== 'mini') deleteNamedLayout(spaceLayoutName(id))
   }
 
   const taken = new Set(useSpaceStore.getState().spaces.map((s) => s.id))

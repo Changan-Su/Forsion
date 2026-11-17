@@ -10,11 +10,11 @@ import { NativeFeaturesSection } from '../features/NativeFeaturesSection'
  * 数据源是 vendored 的 usePluginStore(与 Amadeus Space 同一单例);样式照 PluginsTab 的 hint/btn 约定。
  */
 import React, { useEffect, useRef, useState } from 'react'
-import { ArrowLeft, Bot, CalendarDays, Cloud, NotebookText, type LucideIcon } from 'lucide-react'
+import { ArrowLeft, Bot, CalendarDays, Cloud, Info, NotebookText, type LucideIcon } from 'lucide-react'
 import { useSpaceStore } from '@lcl/engine'
 import { pluginFootprint, pluginVaultFolder, pluginWanted, runningDependents, unmetPluginDeps, usePluginStore } from '@amadeus/plugins/pluginStore'
-import { PluginUninstallDialog } from './UninstallDialog'
-import { uninstallForsionPlugin } from './pluginUninstall'
+import { PluginUninstallDialog, SupersededCleanupDialog } from './UninstallDialog'
+import { cleanupSupersededCopy, supersededVaultFolder, uninstallForsionPlugin } from './pluginUninstall'
 import { amadeus } from '@amadeus/api'
 import { installAmadeusPlugins, reloadPluginsAndAnnounce } from '../amadeusPlugins'
 import { usePluginOnboarding, needsOnboarding, promptIfPending, isGate } from '../stores/pluginOnboardingStore'
@@ -41,7 +41,7 @@ import type { AmadeusPlugin, SettingContribution, SettingsViewContribution } fro
 import type { PluginDependency } from '@amadeus-shared/ipc'
 import type { UnmetDependency } from '../amadeus/plugins/pluginDeps'
 import { PluginLogo } from './PluginLogo'
-import { canOpenPluginsFolder } from '../amadeus/lib/hostCaps'
+import { canOpenPluginsFolder, canRevealInFileManager } from '../amadeus/lib/hostCaps'
 import { FileOpenersPanel } from './FileOpenersPanel'
 import { homeTarget } from '../services/engine/targets'
 import { internalsAvailable } from '../amadeus/plugins/pluginInternals'
@@ -159,6 +159,31 @@ registerMessages({
   'settings.amadeusPlugins.effect.request': { zh: '进行中的请求', en: 'Requests in flight' },
   'settings.amadeusPlugins.effect.deskCompanion': { zh: 'Agent Desk 伴随面', en: 'Agent Desk companions' },
   'settings.amadeusPlugins.effect.viewSurface': { zh: '视图文件通道', en: 'View file access' },
+  // 商店安装取代了同一个包的旧普通目录(方案 B,2026-11-17):列表卡一行注记 + 详情「旧的本地安装」一节
+  'settings.amadeusPlugins.superseded.note': { zh: '本机另有一份旧的本地安装 v{version}，已停用', en: 'An older local install (v{version}) is also on this device, turned off' },
+  'settings.amadeusPlugins.superseded.noteMobile': { zh: '这台手机上另有一份旧的安装 v{version}，已停用', en: 'An older install (v{version}) is also on this phone, turned off' },
+  'settings.amadeusPlugins.superseded.head': { zh: '旧的本地安装', en: 'Older local install' },
+  'settings.amadeusPlugins.superseded.headMobile': { zh: '旧的安装', en: 'Older install' },
+  'settings.amadeusPlugins.superseded.title': { zh: 'v{version} · 已停用', en: 'v{version} · Turned off' },
+  'settings.amadeusPlugins.superseded.sub': {
+    zh: '和商店安装的是同一个插件，现在只运行商店那份。它的设置和智库里 {folder} 的资料没有带过来，仍留在原处。',
+    en: "It's the same plugin as the store install, and only the store install runs now. Its settings and the files in {folder} in your vault were not carried over. They're still where they were.",
+  },
+  'settings.amadeusPlugins.superseded.subNoFolder': {
+    zh: '和商店安装的是同一个插件，现在只运行商店那份。它的设置没有带过来，仍留在原处。',
+    en: "It's the same plugin as the store install, and only the store install runs now. Its settings were not carried over. They're still where they were.",
+  },
+  'settings.amadeusPlugins.superseded.subMobile': {
+    zh: '和商店安装的是同一个插件，现在只运行商店那份。它的设置没有带过来，仍留在这台手机上。',
+    en: "It's the same plugin as the store install, and only the store install runs now. Its settings were not carried over. They're still on this phone.",
+  },
+  'settings.amadeusPlugins.superseded.reveal': { zh: '在访达中显示', en: 'Show in Finder' },
+  'settings.amadeusPlugins.superseded.revealWin': { zh: '在文件资源管理器中显示', en: 'Show in File Explorer' },
+  'settings.amadeusPlugins.superseded.trash': { zh: '移到回收站', en: 'Move to Trash' },
+  'settings.amadeusPlugins.superseded.delete': { zh: '删除旧副本', en: 'Delete old copy' },
+  'settings.amadeusPlugins.superseded.deleteConfirm': { zh: '删除后不能恢复，它的设置仍留在这台手机上。', en: "This can't be undone. Its settings stay on this phone." },
+  'settings.amadeusPlugins.superseded.done': { zh: '已把旧的本地安装「{name} v{version}」移到回收站', en: 'Moved the older local install of “{name}” (v{version}) to the Trash' },
+  'settings.amadeusPlugins.superseded.doneMobile': { zh: '已删除旧副本「{name} v{version}」', en: 'Deleted the old copy of “{name}” (v{version})' },
 })
 
 /** 启停后的捆绑包级联:内嵌 Space 显隐同步 + 刷新引擎插件列表。内嵌引擎插件的开关**不在这里写** —— 这里多半是设置浮窗,
@@ -662,6 +687,74 @@ const InternalsDetail: React.FC<{ t: (k: string, vars?: Record<string, string | 
   )
 }
 
+/** 列表卡上那行注记:这份商店安装取代了同一个包的旧普通目录(已停用)。灰字 + 信息图标,不是警告 —— 旧副本已经不跑了。 */
+const SupersededNote: React.FC<{ p: AmadeusPlugin; t: T }> = ({ p, t }) => {
+  if (!p.supersedes) return null
+  return (
+    <div className="plugin-card-note" data-plugin-superseded-note={p.supersedes.dir}>
+      <Info size={12} strokeWidth={2} aria-hidden />
+      <span>{t(window.tangu?.mobile ? 'settings.amadeusPlugins.superseded.noteMobile' : 'settings.amadeusPlugins.superseded.note', { version: p.supersedes.version })}</span>
+    </div>
+  )
+}
+
+const IS_MAC = typeof navigator !== 'undefined' && /Mac/.test(navigator.platform)
+
+/** 详情页「旧的本地安装」一节(方案 B):是哪一份、为什么停用、哪些数据没带过来,给「在访达中显示」和「移到回收站」。
+ *  样式同详情页其他「左说明、右按钮」的卡;设备页(Unit)只说明不给按钮,手机没有回收站 → 「删除旧副本」+ 系统确认。 */
+const SupersededSection: React.FC<{ p: AmadeusPlugin }> = ({ p }) => {
+  const { t, locale } = useI18n()
+  const [asking, setAsking] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const old = p.supersedes
+  if (!old) return null
+  const mobile = !!window.tangu?.mobile
+  const remote = !!window.tangu?.unitPage
+  const hasTrash = typeof amadeus?.trashRestore === 'function'
+  const folder = supersededVaultFolder(p) // 和商店那份同一个文件夹时不算它的(那是正在用的数据)
+  const name = pluginDisplayName(p, locale)
+  const canReveal = !remote && !mobile && canOpenPluginsFolder() && canRevealInFileManager()
+  const canRemove = !remote && !!amadeus?.uninstallPlugin
+  const run = (opts: { keepSettings: boolean; moveVault: boolean }): void => {
+    setBusy(true)
+    void cleanupSupersededCopy(p, name, opts).finally(() => setBusy(false))
+  }
+  const remove = (): void => {
+    if (hasTrash) { setAsking(true); return }
+    // 没有回收站(手机):删了就回不来,先问一句;它的设置(plugins-data)本来就不随卸载删
+    if (window.confirm(t('settings.amadeusPlugins.superseded.deleteConfirm'))) run({ keepSettings: true, moveVault: false })
+  }
+  return (
+    <>
+      <div className="hint">{t(mobile ? 'settings.amadeusPlugins.superseded.headMobile' : 'settings.amadeusPlugins.superseded.head')}</div>
+      <div className="plugin-card" data-plugin-superseded={old.dir} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <div style={{ flex: '1 1 220px', minWidth: 0 }}>
+            <div style={{ fontSize: 'var(--ui-font-meta, 12px)' }}>{t('settings.amadeusPlugins.superseded.title', { version: old.version })}</div>
+            <div style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)', marginTop: 2, lineHeight: 1.5 }}>
+              {mobile ? t('settings.amadeusPlugins.superseded.subMobile')
+                : folder ? t('settings.amadeusPlugins.superseded.sub', { folder })
+                  : t('settings.amadeusPlugins.superseded.subNoFolder')}
+            </div>
+          </div>
+          {canReveal && (
+            <button className="btn ghost sm" data-plugin-superseded-reveal onClick={() => void amadeus.openPluginsFolder(old.dir)}>
+              {t(IS_MAC ? 'settings.amadeusPlugins.superseded.reveal' : 'settings.amadeusPlugins.superseded.revealWin')}
+            </button>
+          )}
+          {canRemove && (
+            <button className="btn ghost sm" data-plugin-superseded-remove disabled={busy} onClick={remove}>
+              {t(hasTrash ? 'settings.amadeusPlugins.superseded.trash' : 'settings.amadeusPlugins.superseded.delete')}
+            </button>
+          )}
+        </div>
+      </div>
+      {asking && <SupersededCleanupDialog name={name} version={old.version} storeVersion={p.version} vaultFolder={folder}
+        onConfirm={run} onClose={() => setAsking(false)} />}
+    </>
+  )
+}
+
 const PluginDetail: React.FC<{
   plugin: AmadeusPlugin
   onBack: () => void
@@ -686,7 +779,7 @@ const PluginDetail: React.FC<{
   // 卸载走统一确认框(components/UninstallDialog,10-28 手动卸载规范):插件文件与设置进回收站(可勾「保留设置」),
   // 库里的工作文件夹缺省留着(可勾「一并移到回收站」);删完 6 秒内可撤销。
   const [askUninstall, setAskUninstall] = useState(false)
-  const uninstall = (opts: { keepSettings: boolean; moveVault: boolean }): Promise<boolean> =>
+  const uninstall = (opts: { keepSettings: boolean; moveVault: boolean; keepOld: boolean }): Promise<boolean> =>
     uninstallForsionPlugin(p, pluginDisplayName(p, locale), opts, { engine: !!cfg, onGone: onBack, onEngineReload })
 
   /** 撤下开发副本:关掉产物的 devLoad 开关,再只重载这一个 id —— 有安装版的话它会在同一拍回来。
@@ -758,6 +851,7 @@ const PluginDetail: React.FC<{
           cloudData={pluginDataSyncOn(p)}
           skills={p.bundle?.skills.length ?? 0}
           agents={p.bundle?.agents ?? []}
+          superseded={p.supersedes}
           onConfirm={(opts) => void uninstall(opts)}
           onClose={() => setAskUninstall(false)} />}
         {/* 带主进程半身的内置包(Forsion Extend):开关管下次开机装不装那一半;没有这座桥(设备页 / 旧壳)就不给开关 */}
@@ -794,6 +888,7 @@ const PluginDetail: React.FC<{
           {p.shadowsInstalled && <div style={{ color: 'var(--warn, #b8860b)', fontSize: 'var(--ui-font-caption, 11px)' }}>{t('settings.amadeusPlugins.devShadows')}</div>}
         </div>
       )}
+      <SupersededSection p={p} />
       {p.bundle && (
         <>
           <div className="hint">{t('settings.amadeusPlugins.bundleTitle')}</div>
@@ -945,6 +1040,7 @@ export const AmadeusPluginsTab: React.FC<{
               <BundleChips p={p} />
             </div>
             {pluginDisplayDescription(p, locale) && <div className="plugin-card-description">{isCorePlugin(p) ? t(CORE_DESCRIPTIONS[p.id] ?? 'plugins.core.computerUse') : pluginDisplayDescription(p, locale)}</div>}
+            <SupersededNote p={p} t={t} />
             {p.locked && <RestartPending p={p} />}
           </div>
           {/* 带主进程半身的内置包:同详情页,开关管下次开机装不装那一半 */}

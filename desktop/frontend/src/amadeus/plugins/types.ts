@@ -3329,6 +3329,8 @@ export interface AmadeusPlugin {
   devProductId?: string
   /** 开发副本正遮蔽同 id 的安装版(撤下后安装版会回来)。 */
   shadowsInstalled?: boolean
+  /** 商店安装取代了同一个包的旧普通目录(已停用):设置页的注记与「旧的本地安装」一节。 */
+  supersedes?: import('@amadeus-shared/ipc').SupersededInstall
   /** Wire up contributions; optionally return a disposer for teardown on disable.
    *  May be async: the plugin counts as active once the synchronous part returns; a disposer the promise
    *  resolves to is installed then (or run at once if the plugin was stopped meanwhile), and a rejection

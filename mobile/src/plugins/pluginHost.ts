@@ -17,9 +17,10 @@
  *
  * 本模块不 import Capacitor(经 PluginFs 接缝),单测见 mobile/scripts/plugin-host.test.cjs。
  */
-import { gatePluginManifest, type ExternalPluginSource } from '../../../desktop/shared/amadeus/ipc'
+import { gatePluginManifest, type ExternalPluginSource, type SupersededInstall } from '../../../desktop/shared/amadeus/ipc'
 import { installedPluginFields, type InstalledPluginManifest } from '../../../desktop/shared/amadeus/pluginSource'
-import { effectivePluginId } from '../../../desktop/shared/products'
+import { bindRecipeToPlugin, effectivePluginId } from '../../../desktop/shared/products'
+import { supersededPlainInstalls } from '../../../desktop/shared/pluginAliases'
 import { isSafeSlug, safeEntryPath } from '../../../desktop/shared/marketPackage'
 import { isSafePluginExt } from '../../../desktop/shared/amadeus/pluginFiles'
 import { PLUGIN_ICON_MAX_BYTES, isValidPluginIconPng } from '../../../desktop/shared/pluginIcon'
@@ -39,7 +40,8 @@ export interface MobilePluginHost {
   /** 「磁盘上是 .md、内容归插件管」的文件后缀(小写、排好序):库这一层据此把它们排出笔记列表。
    *  来源 = 每个已安装插件 manifest 的 fileExtensions(**不看**门禁 / 仅桌面 / 用户关没关)+ 已卸载插件留下的墓碑。 */
   fileExtensions(): Promise<string[]>
-  uninstallPlugin(id: string): Promise<void>
+  /** withSuperseded:目标是商店安装时,被它取代的旧普通目录一起删(桌面同名选项;否则卸完旧副本立刻重新运行)。 */
+  uninstallPlugin(id: string, opts?: { withSuperseded?: boolean; dir?: string }): Promise<void>
   readPluginData(pluginId: string): Promise<string | null>
   writePluginData(pluginId: string, text: string): Promise<void>
 }
@@ -59,6 +61,14 @@ export async function readManifest(fs: PluginFs, dir: string): Promise<Installed
   } catch {
     return null
   }
+}
+
+/** 要装载的插件目录:pluginDirNames 去掉被商店安装取代的普通目录(同一个包装了两份时只认商店那份;
+ *  桌面 readExternalPlugins / readSpacesList 与引擎扫捆绑包同一条规则 supersededPlainInstalls)。卸载仍按全部目录找。 */
+export async function loadablePluginDirNames(fs: PluginFs): Promise<string[]> {
+  const names = await pluginDirNames(fs)
+  const replaced = supersededPlainInstalls(await Promise.all(names.map(async (dir) => ({ dir, manifestId: (await readManifest(fs, `${PLUGINS_DIR}/${dir}`))?.id }))))
+  return names.filter((name) => !replaced.has(name))
 }
 
 /** 插件目录下的子目录名(跳过点目录;根不存在 = 一个都没装)。按名排序:同 id 两份时先到先得要确定。 */
@@ -274,7 +284,20 @@ export function createPluginHost(fs: PluginFs, opts: { appVersion: () => string 
       await recoverPluginDirs(fs)
       const out: ExternalPluginSource[] = []
       const seen = new Set<string>()
-      for (const name of await pluginDirNames(fs)) {
+      // 商店目录 → 它取代的旧普通目录(设置页注记 / 「旧的安装」一节;桌面 readExternalPlugins 同口径,取排在前面的那份)
+      const all = await pluginDirNames(fs)
+      const replaced = supersededPlainInstalls(await Promise.all(all.map(async (dir) => ({ dir, manifestId: (await readManifest(fs, `${PLUGINS_DIR}/${dir}`))?.id }))))
+      const supersededBy = new Map<string, string>()
+      for (const [plain, store] of replaced) if (!supersededBy.has(store)) supersededBy.set(store, plain) // all 已按名排序
+      const supersededInfo = async (store: string): Promise<SupersededInstall | undefined> => {
+        const plain = supersededBy.get(store)
+        const om = plain ? await readManifest(fs, `${PLUGINS_DIR}/${plain}`) : null
+        const oid = plain && om ? effectivePluginId(plain, om.id) : null
+        if (!plain || !om || !oid) return undefined
+        const text = (v: unknown, n: number): string | undefined => (typeof v === 'string' && v.trim() ? v.trim().slice(0, n) : undefined)
+        return { id: oid, dir: plain, version: text(om.version, 40) ?? '0.0.0', name: text(om.name, 120) ?? oid, ...(text(om.nameEn, 120) ? { nameEn: text(om.nameEn, 120) } : {}) }
+      }
+      for (const name of all.filter((n) => !replaced.has(n))) { // = loadablePluginDirNames,这里顺手要用到取代对照
         const dir = `${PLUGINS_DIR}/${name}`
         try {
           const m = await readManifest(fs, dir)
@@ -300,7 +323,8 @@ export function createPluginHost(fs: PluginFs, opts: { appVersion: () => string 
             readIcon(fs, dir),
           ])
           seen.add(id)
-          out.push({ id, ...installedPluginFields(m, name, id), iconUrl, code, readme, changelog, blocked: blocked ?? undefined })
+          const supersedes = await supersededInfo(name)
+          out.push({ id, ...installedPluginFields(m, name, id), iconUrl, code, readme, changelog, blocked: blocked ?? undefined, ...(supersedes ? { supersedes } : {}) })
         } catch {
           /* skip malformed plugin */
         }
@@ -315,7 +339,7 @@ export function createPluginHost(fs: PluginFs, opts: { appVersion: () => string 
       await recoverPluginDirs(fs)
       const out: PluginSpaceRecipe[] = []
       const seen = new Set<string>()
-      for (const name of await pluginDirNames(fs)) {
+      for (const name of await loadablePluginDirNames(fs)) {
         const dir = `${PLUGINS_DIR}/${name}`
         const m = await readManifest(fs, dir)
         const id = m ? effectivePluginId(name, m.id) : null
@@ -334,8 +358,11 @@ export function createPluginHost(fs: PluginFs, opts: { appVersion: () => string 
           // 先看大小:配方每次启动都经 base64 桥整份读进内存,包里塞一份几十 MB 的 space.json 会把启动拖垮。
           const st = await fs.stat(`${sdir}/space.json`).catch(() => null)
           if (!st || st.type !== 'file' || st.size > SPACE_RECIPE_MAX_BYTES) continue
-          const json = await readTextOr(fs, `${sdir}/space.json`)
-          if (json === undefined) continue
+          const raw = await readTextOr(fs, `${sdir}/space.json`)
+          if (raw === undefined) continue
+          // 商店装的插件按 market-<UUID> 注册视图,配方却写的是 manifest id:改到运行身份(桌面 readSpacesList 同一步),
+          // 否则配方要的视图一个都对不上,这个 Space 在手机上永远不出现。
+          const json = bindRecipeToPlugin(raw, m.id, id)
           const iconUrl = await readSpaceIcon(fs, json, [sdir, dir])
           out.push({ slug, json, plugin: id, ...(iconUrl ? { iconUrl } : {}) })
         }
@@ -356,15 +383,23 @@ export function createPluginHost(fs: PluginFs, opts: { appVersion: () => string 
 
     // 按**生效 id** 定位目录(市场的 installSlug 可以 ≠ manifest id,与桌面 uninstallPlugin 同一条扫描规则)。
     // 插件私有数据(plugins-data)刻意保留:与桌面一致,重装后设置还在。原因码由渲染层 ipcErrorText 译。
-    async uninstallPlugin(id) {
+    async uninstallPlugin(id, opts) {
       if (!isSafeSlug(id)) throw new Error('invalid-plugin-id')
       await withPluginDirLock(fs, async () => {
         await recoverPluginDirs(fs) // 先恢复:否则卸掉的可能是半截新版,备份里的旧版下次启动又被挪回来
-        for (const name of await pluginDirNames(fs)) {
+        const names = await pluginDirNames(fs)
+        for (const name of names) {
+          if (opts?.dir && name !== opts.dir) continue // 同 id 多份时指名卸哪一份(桌面同名选项);生效 id 照样要对上
           const m = await readManifest(fs, `${PLUGINS_DIR}/${name}`)
           if (effectivePluginId(name, m?.id) === id) {
-            await tombstoneExtensions(fs, `${PLUGINS_DIR}/${name}`) // 先记墓碑再删:记不下来就不删(抛出去)
+            // 被这份商店安装取代的旧普通目录:宿主自己按 supersededPlainInstalls 判,不收调用方递来的目录名
+            const old = opts?.withSuperseded === true
+              ? [...supersededPlainInstalls(await Promise.all(names.map(async (dir) => ({ dir, manifestId: (await readManifest(fs, `${PLUGINS_DIR}/${dir}`))?.id }))))]
+                .filter(([, store]) => store === name).map(([plain]) => plain)
+              : []
+            for (const dir of [name, ...old]) await tombstoneExtensions(fs, `${PLUGINS_DIR}/${dir}`) // 先记墓碑再删:记不下来就不删(抛出去)
             await fs.removeDir(`${PLUGINS_DIR}/${name}`)
+            for (const dir of old) await fs.removeDir(`${PLUGINS_DIR}/${dir}`)
             return
           }
         }
