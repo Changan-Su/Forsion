@@ -26,6 +26,12 @@ describe('resolveModelCapability — 路由矩阵', () => {
     ['OpenAI GPT-6.1 Sol', { baseUrl: 'https://api.openai.com/v1', modelId: 'gpt-6.1-sol' }, 'openai-gpt61-sol'],
     ['Codex GPT-6.1 Sol 请求', { protocol: 'openai-responses', modelId: 'gpt-6.1-sol' }, 'codex-gpt61-sol'],
     ['Codex GPT-6.1 Sol 目录', { provider: 'codex', baseUrl: 'https://chatgpt.com/backend-api/codex', modelId: 'gpt-6.1-sol' }, 'codex-gpt61-sol'],
+    // 6.2 Sol / Astra 与 6.1 Sol 同表(11-17 后端 400 原文:low…max,none / minimal 均拒)
+    ['OpenAI GPT-6.2 Sol', { baseUrl: 'https://api.openai.com/v1', modelId: 'gpt-6.2-sol' }, 'openai-gpt61-sol'],
+    ['OpenAI GPT-6.2 Astra', { baseUrl: 'https://api.openai.com/v1', modelId: 'gpt-6.2-astra' }, 'openai-gpt61-sol'],
+    ['Codex GPT-6.2 Sol 请求', { protocol: 'openai-responses', modelId: 'gpt-6.2-sol' }, 'codex-gpt61-sol'],
+    ['Codex GPT-6.2 Astra 目录', { provider: 'codex', baseUrl: 'https://chatgpt.com/backend-api/codex', modelId: 'gpt-6.2-astra' }, 'codex-gpt61-sol'],
+    ['未知 GPT-6.2 变体不预支档位', { baseUrl: 'https://api.openai.com/v1', modelId: 'gpt-6.2-luna' }, 'openai-nonreasoning'],
     // ⚠️ 判别式:6.1 Terra 认 none(10-27 后端 400 原文),必须落 Sol/Luna 表,不能跟 6.1 Sol 进 Astra 表
     ['OpenAI GPT-6.1 Terra', { baseUrl: 'https://api.openai.com/v1', modelId: 'gpt-6.1-terra' }, 'openai-gpt6'],
     ['Codex GPT-6.1 Terra 请求', { protocol: 'openai-responses', modelId: 'gpt-6.1-terra' }, 'codex-gpt6'],
@@ -202,7 +208,7 @@ describe('applyThinking — 各家线上形态', () => {
     expect(viaResponses).toBe(true);
   });
 
-  it.each(['gpt-6-astra', 'gpt-6.1-sol'])('%s 的目录与请求都只允许 low 起步,保留 max 真档', (modelId) => {
+  it.each(['gpt-6-astra', 'gpt-6.1-sol', 'gpt-6.2-sol', 'gpt-6.2-astra'])('%s 的目录与请求都只允许 low 起步,保留 max 真档', (modelId) => {
     for (const q of [
       { baseUrl: 'https://api.openai.com/v1', modelId },
       { protocol: 'openai-responses', modelId },
