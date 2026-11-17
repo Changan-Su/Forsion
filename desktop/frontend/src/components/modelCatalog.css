@@ -134,4 +134,6 @@
 .model-lock-name > span:first-child { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 .model-lock-note { flex: none; display: inline-flex; align-items: center; gap: 3px; color: var(--text-muted); font-size: var(--ui-font-caption, 11px); white-space: nowrap; }
 .cm-lock-tip .cm-foot { margin-top: 2px; }
+/* 限时开放(2026-11-15):后台临时开给这一档的模型,名字下面一行「[限时] 至 11/30」—— 和锁注同位置,琥珀小标签读作「现在能用、限时」 */
+.model-trial-note .model-tag { padding: 0 5px; }
 .pill-lock { flex: none; color: var(--text-muted); }

@@ -26,6 +26,7 @@ import { getAttachmentPrefs } from '../lib/attachments'
 import { useMobileBackClose } from '../lib/mobileBack'
 import { touchScrollMarginPlugin } from './touchScroll'
 import { awaitTypingQuiet, installTypingGuard, isComposing } from '../store/typingGuard'
+import { COMPOSE_SAVE_POLL_MS, createTypingDraftPacer, saveTickAction, typingDraftPlugin, type TypingDraftPacer } from './typingDraft'
 import {
   DbLinkPicker, MilkdownInner, normalizeSerializedMd, serializeUnified, stampedFileName,
   PREFIX_TRIGGERS, SLASH_SENTINELS, slashTurnFailed, getFocusedBlockApply, setFocusedBlockApply, type SlashItem, type SlashOps,
@@ -38,7 +39,7 @@ import { askString } from '../components/askString'
 import { resolvePageName } from '@amadeus-shared/links'
 import { resolveFileLink } from '../lib/vaultFiles'
 import { wikiFilesEnabled } from '../lib/wikiFiles'
-import { usePageStore, useScopedPageStore, flushAllScopes, remapScopePaths, cascadeFdAfterRename, claimTitleFocus, PageScopeCtx, useActivePageScope, hasPageScope, activePageScope } from '../store/pageStore'
+import { usePageStore, useScopedPageStore, flushAllScopes, remapScopePaths, cascadeFdAfterRename, claimTitleFocus, PageScopeCtx, useActivePageScope, hasPageScope, activePageScope, birthNavGuard } from '../store/pageStore'
 // 模式胶囊复用 `.t2s-vaultseg`(见渲染处):样式真源是侧栏那张表。App 里 amadeusViews 已显式引过,
 // 这里再引是给**独立挂载**兜底(harness / 只挂 UnifiedPage 的场景,不引就是一排裸按钮)。
 import '../../styles/sidebar2.css'
@@ -50,7 +51,7 @@ import { unfoldCalloutsForInsert } from '../blocks/markdown/callout'
 import type { TextWriteResult } from '@amadeus-shared/ipc'
 import { textFingerprint } from '@amadeus-shared/writeConflict'
 import { formatDateTime } from '../../format/time'
-import { SAVE_RETRY_MS, clearDraft, isElectronHost, mergeMovedText, mergeUnsavedEdits, readDraft, stashDraft, toastConflictCopy, toastGoneUnsaved, toastMergedRemote, toastRenameCopy, toastRescued, toastSaveFailed, writeConflictCopy, type UnsavedDraft } from './writeSafety'
+import { SAVE_RETRY_MS, clearDraft, createCanonicalMemo, isElectronHost, mergeMovedText, mergeUnsavedEdits, peekDraftText, readDraft, stashDraft, toastConflictCopy, toastGoneUnsaved, toastMergedRemote, toastRenameCopy, toastRescued, toastSaveFailed, writeConflictCopy, type UnsavedDraft } from './writeSafety'
 import { docHeadings } from './outline'
 import { revealBlockAtTop } from './revealScroll'
 import { createStatsReader, createStatsTicker } from './noteStats'
@@ -72,6 +73,7 @@ import { blockKindOf, turnBlocksInto, turnCalloutInto, turnIntoCallout, turnRang
 import { columnRowOf, columnSplitApplies } from '../blocks/markdown/menuContext'
 import { NotePicker, blockLinkOf, canMove, copyLink, moveBlocksTo } from './blockLinks'
 import { withFoldedSections } from './foldCarry'
+import { caretMarkUsable, inlineAtCaret, landOnCaretMark, markCaret, sameShape, withoutCaretMark } from './insertAt'
 import { hardBreakRemark } from '../blocks/markdown/softBreak'
 import { adoptOrigins } from '../blocks/markdown/verbatim'
 import { createBlockLayer } from './blockLayer'
@@ -363,7 +365,12 @@ interface InsertMdOpts {
   quiet?: boolean
   after?: ReplyAnchor | null
   caretless?: boolean
+  /** 插件 insertMarkdownAt 的 cursorMarker:光标落在标记处、标记不落盘(见 insertAt.ts)。 */
+  marker?: string
+  /** 单独一步撤销(closeHistory):插件 insertMarkdownAt 的插入不和此前的打字并成一步。 */
+  ownStep?: boolean
 }
+type InsertMdWhere = 'caret' | 'cursor' | 'start' | 'end'
 
 interface HostApi {
   /** 外部回灌正文(stored md)→ 同实例最小差异事务;编辑器未挂载返回 false。
@@ -380,6 +387,8 @@ interface HostApi {
   insertFiles: (files: File[]) => void
   /** 插一段 markdown(插件块表面的 v4 写口;经 lifecycle.unifiedInsertMarkdown 递入)。编辑器未挂载 = false。 */
   insertMarkdown: (md: string, where: 'cursor' | 'start' | 'end', opts?: InsertMdOpts) => boolean
+  /** 同一条插入,外加 'caret' 档与 cursorMarker,并说出没插进去的原因(插件 insertMarkdownAt;经 lifecycle.unifiedInsertMarkdownAt 递入)。 */
+  insertMarkdownAt: (md: string, where: InsertMdWhere, marker?: string) => 'ok' | 'empty' | 'no-editor'
   /** markdown → 块内容(画布粘贴/拖入用)。解析不出东西 = null。 */
   parseMd: (md: string) => Fragment | null
   /** 块内容 → markdown(parseMd 的反向;画布跨实例复制卡用)。编辑器未挂载 = null。
@@ -485,6 +494,7 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
         void saveFiles(files)
       },
       insertMarkdown: (md, where, opts) => insertMd(md, where, opts),
+      insertMarkdownAt: (md, where, marker) => insertMdAt(md, where, { marker, ownStep: true }),
       parseMd: (md) => {
         let out: Fragment | null = null
         getInstance()?.action((ctx) => {
@@ -648,22 +658,70 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
    *    插件按钮/浮层,用户此刻的光标可能正在别处,PM 会把选区随事务映射过去。
    *  卡片文档也安全:插的是普通顶层节点,`canvasIntegrityGuard` 那道 filterTransaction 只拒
    *  「卡不在 doc 顶层」,不拒卡前后的正文(闭合锚 2026-08-19 之后卡外顶层正文完全合法)。
-   *  v3 走的是 store 的 onChange/onInsertAfter(块世界);统一实例没有块 id,一切都是本 doc 的事务。 */
-  const insertMd = (md: string, where: 'cursor' | 'start' | 'end' = 'cursor', opts?: InsertMdOpts): boolean => {
+   *  v3 走的是 store 的 onChange/onInsertAfter(块世界);统一实例没有块 id,一切都是本 doc 的事务。
+   *  插件 insertMarkdownAt 另加两样(insertAt.ts):`'caret'` = 解析成单个段落时把行内内容插在光标处(否则同 'cursor');
+   *  opts.marker = 光标落在标记处,标记与占位字在同一事务里删掉(一步撤销、不落盘)。返回 'ok' / 'empty'(解析成空)/ 'no-editor'。 */
+  const insertMdAt = (md: string, where: InsertMdWhere = 'cursor', opts?: InsertMdOpts): 'ok' | 'empty' | 'no-editor' => {
     let done = false
+    let empty = false as boolean
+    let retry = null as string | null
+    const asked = where
+    const mk = markCaret(md, opts?.marker)
+    if (mk.marked && !mk.plain.trim()) return 'empty' // 只有一个标记:没东西可插
     getInstance()?.action((ctx) => {
       const view = ctx.get(editorViewCtx)
-      const parsed = ctx.get(parserCtx)(toDisplayMarkdown(md, pageDir)) as ProseNode | undefined
-      if (!parsed?.childCount) return
+      const parse = (text: string): ProseNode | undefined => ctx.get(parserCtx)(toDisplayMarkdown(text, pageDir)) as ProseNode | undefined
+      let marked = mk.marked
+      let parsed = parse(mk.md)
+      // 占位字没落进正文文字(进了链接地址之类),或它改了结构(顶在行首把 `# 标题` 挤成段落 —— 与去掉标记的原文序列化对不上)
+      // → 落不了光标:改用去掉标记的原文,光标照旧落在插入内容末尾。
+      if (marked) {
+        const plain = parse(mk.plain)
+        let same = false
+        try {
+          same = !!parsed && !!plain && caretMarkUsable(parsed) && sameShape(serializeUnified(ctx, withoutCaretMark(parsed)), serializeUnified(ctx, plain))
+        } catch { /* 序列化不了 = 判不了,按不一样处理 */ }
+        if (!same) {
+          parsed = plain
+          marked = false
+        }
+      }
+      if (!parsed?.childCount) {
+        empty = true
+        return
+      }
       const content = parsed.content
       const quiet = !!opts?.quiet
+      const own = (tr: Transaction): Transaction => (opts?.ownStep ? closeHistory(tr) : tr)
+      /** 派发前收尾(cursorMarker):删占位字、光标落那里。落不了 → 整笔不派发,改插去掉标记的原文(占位字绝不写盘)。 */
+      const settle = (tr: Transaction): boolean => {
+        if (!marked || landOnCaretMark(tr)) return true
+        retry = mk.plain
+        return false
+      }
+      if (where === 'caret') {
+        const inl = quiet ? null : inlineAtCaret(view.state, content)
+        if (inl) {
+          if (!settle(inl.tr)) return
+          view.dispatch(own(inl.tr).scrollIntoView())
+          view.focus()
+          done = true
+          return
+        }
+        where = 'cursor' // 不是单个段落 / 光标处放不下:同 'cursor'
+      }
       const anchorAt = quiet ? replyAnchorPos(view.state.doc, opts?.after) : null
       if (quiet && anchorAt == null && opts?.caretless) where = 'end'
       if (where !== 'cursor' || anchorAt != null) {
         const at = anchorAt ?? (where === 'start' ? 0 : view.state.doc.content.size)
         const tr = view.state.tr.insert(at, content)
+        if (!settle(tr)) return
         if (quiet) dispatchQuiet(view, tr, at)
-        else view.dispatch(tr)
+        else if (marked) {
+          // 插件点名了光标位:落过去并聚焦(不带标记的 start / end 照旧不动选区、不抢焦点)
+          view.dispatch(own(tr).scrollIntoView())
+          view.focus()
+        } else view.dispatch(own(tr))
         done = true
         return
       }
@@ -703,9 +761,10 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
           tr.replaceWith(from, $p.after(), content)
           unfoldCalloutsForInsert(tr, from, from + content.size)
           land(tr, from + content.size)
+          if (!settle(tr)) return
           if (quiet) dispatchQuiet(view, tr, from)
           else {
-            view.dispatch(tr.scrollIntoView())
+            view.dispatch(own(tr).scrollIntoView())
             view.focus()
           }
           done = true
@@ -719,15 +778,18 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
       unfoldCalloutsForInsert(tr, blank ? from : to, (blank ? from : to) + content.size)
       // quiet 也挪选区(不聚焦):连着插几条回答时一条接一条往下排,而不是每条都插回同一块之后、倒着排。
       land(tr, (blank ? from : to) + content.size)
+      if (!settle(tr)) return
       if (quiet) dispatchQuiet(view, tr, blank ? from : to)
       else {
-        view.dispatch(tr.scrollIntoView())
+        view.dispatch(own(tr).scrollIntoView())
         view.focus()
       }
       done = true
     })
-    return done
+    if (retry != null) return insertMdAt(retry, asked, { ...opts, marker: undefined })
+    return done ? 'ok' : empty ? 'empty' : 'no-editor'
   }
+  const insertMd = (md: string, where: 'cursor' | 'start' | 'end' = 'cursor', opts?: InsertMdOpts): boolean => insertMdAt(md, where, opts) === 'ok'
   /** quiet 插入(G3-08)的落定:独立一步撤销、不聚焦;落点藏在会话折叠里先展开,不在视野里才滚,闪一下。 */
   const dispatchQuiet = (view: EditorView, tr: Transaction, at: number): void => {
     view.dispatch(closeHistory(tr))
@@ -809,8 +871,29 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
       if (!ops.transform(prefix)) slashTurnFailed(item.label)
       return
     }
-    ops.consume() // 返回值是「整篇是否空」,统一实例用不着:空块判定在 insertMd 里按当前顶层块算
     const S = SLASH_SENTINELS
+    // 方案 2026-11-15 ⑤:写一个 `@`,让编辑器自己的 @ 面板接着弹(日期 / 「不设日期」= @todo)。前面紧贴着字就先补个空格,
+    // 否则 `字@` 不满足 @ 的触发条件(AT_BLOCKED_BEFORE),面板不出、标记也不认。
+    const typeAt = (): void => {
+      getInstance()?.action((ctx) => {
+        const view = ctx.get(editorViewCtx)
+        const { $from } = view.state.selection
+        const before = $from.parent.textBetween(0, $from.parentOffset, undefined, '\ufffc')
+        view.dispatch(view.state.tr.insertText(before && !/\s$/.test(before) ? ' @' : '@').scrollIntoView())
+        view.focus()
+      })
+    }
+    if (item.scaffold === S.taskList) {
+      // 先转成方框行(单事务,和「待办」同一条路),再写 @
+      if (!ops.transform(PREFIX_TRIGGERS['- [ ] '])) { slashTurnFailed(item.label); return }
+      typeAt()
+      return
+    }
+    ops.consume() // 返回值是「整篇是否空」,统一实例用不着:空块判定在 insertMd 里按当前顶层块算
+    if (item.scaffold === S.event) {
+      typeAt()
+      return
+    }
     if (item.scaffold === S.template) {
       // 模板库住在宿主壳里(vault 的 templates/),编辑器不认识它 —— 照 v3 的老规矩发事件,
       // 由 amadeusOverlays 的 TemplatePicker 接。**必须带上本篇 path**:v4 没有块 id,选择器
@@ -897,9 +980,10 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
       void (async () => {
         try {
           const st = store.getState()
+          const stay = birthNavGuard() // 出生可能先问插件、等很久:等完用户已去了别处就不跳(链接照插)
           const newPath = await st.createChildNote(path, translate('amadeus.default.note'))
           insertAsync(`[[${newPath.split('/').pop()!.replace(/\.md$/i, '')}]]`, a)
-          void st.loadPage(newPath) // 本实例随之退休,onFinalFlush 把刚插的链接一并落盘
+          if (stay()) void st.loadPage(newPath) // 本实例随之退休,onFinalFlush 把刚插的链接一并落盘
         } catch {
           dropPending(a) // 创建失败静默跳过
         }
@@ -1732,6 +1816,8 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
   }
   // 分栏列节点 schema + per-page fold(闭包现读 pipe.fm,多页并发不串,Codex 终审 P1)+ 嵌入层。
   // ⚠️ 稳定引用:MilkdownInner 只建一次编辑器。
+  const typingDraft = useRef<TypingDraftPacer | null>(null) // 连打期间的草稿节拍(见 typingDraft.ts),装在下面 G2-08 那条 effect 里
+  const recoveryOpen = useRef(false) // 「恢复草稿」条还在等用户决定:那份草稿和本实例同一格,连打节拍不许盖掉它
   const editorPlugins = useMemo(
     () => [
       ...layer.plugins,
@@ -1764,6 +1850,7 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
         },
       }),
       touchScrollMarginPlugin(), // 触屏:光标行不滚到悬浮胶囊底下(G2-11)
+      typingDraftPlugin(() => typingDraft.current?.edit()), // 每个改文档的事务都给草稿节拍报一声
       ...createPendingInsert(), // 异步 slash 项的锚与「进行中」占位(G3-06)
       // 画布模式的两个编辑器侧插件(2026-08-18):跨卡选区夹断 + 统一撤销时间线的 PM 记账。
       // 都经闭包/共享对象现读状态,文档模式下零行为(夹断有 inCanvas 闸,记账在文档模式照记 ——
@@ -2206,14 +2293,16 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
   /** 本实例相对基线(lastSaved)**有没有用户自己的改动**:fm 逐字相同,且正文 = 编辑器对基线的规范化结果 → 没有。
    *  用途:CAS 拒写时「让位回灌」还是「本地胜 + 保全」、卸载冲洗要不要写、押后回灌时 pending 是不是只因规范化。
    *  判不出来(编辑器不在 / 有分栏画布结构键 —— 那两类的 parse 带折叠副作用,不拿来空跑)一律按「有改动」:
-   *  宁可多出一份冲突副本,也不把用户的字当规范化噪音让掉。 */
+   *  宁可多出一份冲突副本,也不把用户的字当规范化噪音让掉。
+   *  基线的规范化结果按「编辑器实例 + 基线原文」缓存一格:连打期间每一跳草稿都会问到这里,大笔记整篇重解析一次要几百毫秒起。 */
+  const [canonMemo] = useState(createCanonicalMemo)
   const isPristine = (): boolean => {
     const base = splitFm(pipe.lastSaved)
     // 同篇另一个实例正替两边写的 fm 补丁不算本实例的改动(G1-02 返修,见 Pipe.peerPatch)—— 只豁免那一份补丁。
     if (base.fmText !== pipe.fm && (pipe.peerPatch == null || patchFm(base.fmText, pipe.peerPatch) !== pipe.fm)) return false
     if (base.body === pipe.body) return true
     if (layoutLineOf(pipe.fm) != null || canvasLineOf(pipe.fm) != null) return false
-    const canon = hostApi.current?.canonical(base.body)
+    const canon = canonMemo.get(hostApi.current, base.body)
     return canon != null && canon === pipe.body
   }
   /** 回灌入口(住在下面的回灌 effect 里,按路径重装);CAS 让位与同窗通知从这里进。 */
@@ -2720,13 +2809,38 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
     // 有写盘在跑时 lastSaved 马上会变(见 Pipe.writing):撤回到旧基线的这一击照样排上,ack 后链上再判。
     if (!pipe.writing && composeFm(pipe.fm, pipe.body) === pipe.lastSaved) return
     pipe.pending = true
+    armSave()
+  }
+
+  /** 此刻在输入法组字中(正文编辑器或源码 textarea;后者靠 document 上的组字闸)。 */
+  const composingNow = (): boolean => isComposing() || !!layer.getView()?.composing
+  /** 防抖写因组字被推后的起点(null = 没在推后)。跨 schedule 保留:组字中每报一次正文都会重起计时,
+   *  起点不能跟着重置 —— 否则组字状态卡住时 30 秒上限永远到不了。 */
+  const composeHold = useRef<number | null>(null)
+  /** (重新)起防抖写的计时。组字中起的计时算「已推后」:组字若在到点前结束,编辑器监听器可能还没把提交后的正文
+   *  报上来(pipe.body 仍是拼音),到点时要再等一整个防抖窗,不能照写。组字结束后再起的计时(提交后的正文已报上来)
+   *  就不再推后 —— 写的正是提交后的内容,照原来的防抖节奏。 */
+  const armSave = (): void => {
     if (pipe.timer) clearTimeout(pipe.timer)
-    pipe.timer = setTimeout(() => {
-      pipe.timer = null
-      // 回灌进行中冻结保存(押后回灌×冻结 save 的互斥契约):回灌完成后统一补一发。
-      if (pipe.reconcileBusy) return
-      void writeNow()
-    }, SAVE_DEBOUNCE_MS)
+    composeHold.current = composingNow() ? (composeHold.current ?? Date.now()) : null
+    pipe.timer = setTimeout(saveTick, SAVE_DEBOUNCE_MS)
+  }
+  /** 防抖写到点。组字中不写(否则盘上 / 云同步 / 历史快照拿到半截拼音),推后到组字结束再等一整个防抖窗
+   *  (见 saveTickAction);计时器始终挂在 pipe.timer 上,卸载 / 立即冲洗照旧能清掉它。 */
+  const saveTick = (): void => {
+    pipe.timer = null
+    const now = Date.now()
+    const step = saveTickAction(composingNow(), composeHold.current, now)
+    if (step === 'poll') {
+      composeHold.current ??= now
+      pipe.timer = setTimeout(saveTick, COMPOSE_SAVE_POLL_MS)
+      return
+    }
+    composeHold.current = null
+    if (step === 'rearm') { armSave(); return }
+    // 回灌进行中冻结保存(押后回灌×冻结 save 的互斥契约):回灌完成后统一补一发。
+    if (pipe.reconcileBusy) return
+    void writeNow()
   }
 
   /** 编辑器监听器(Milkdown,防抖 200ms)报来的正文(stored md)。 */
@@ -2930,6 +3044,9 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
       // 写下去就是拿旧全文盖掉别的实例 / 窗口刚写的新版。
       if (!pipe.writing && isPristine()) {
         pipe.pending = false
+        // 连打期间存过草稿、随后又撤回成「没有用户改动」:那份草稿已过时,留着会在下次打开时误弹恢复。
+        if (pipe.stashed != null) clearDraft(vaultRoot, path, pipe.stashed, pipe.slot)
+        pipe.stashed = null
         return
       }
       // D-04:写是异步的,切走 / 关窗后未必来得及完成,也可能失败 —— 先同步把草稿存进本机,写成功再删
@@ -3018,8 +3135,15 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
       stashDraft(vaultRoot, path, text, pipe.lastSaved, pipe.slot)
       return true
     }
-    const flushNow = (props: boolean): void => {
+    const flushNow = (props: boolean, holdWhileComposing = false): void => {
       if (!stashNow(props)) return
+      // 组字中窗口失焦:此刻的全文(含已上屏的字)上一行已同步存进本机草稿,盘上先不写半截拼音;留一发防抖写,
+      // 组字结束后照常落盘。只给失焦用 —— 页面还活着,计时器一定会到点。隐藏 / pagehide / freeze / pause 之后进程
+      // 随时可能没了、计时器未必再跑,那几条照旧马上写(宁可盘上暂时带着拼音,也不让已上屏的字只剩一份草稿)。
+      if (holdWhileComposing && composingNow()) {
+        if (!pipe.timer) armSave()
+        return
+      }
       if (pipe.timer) {
         clearTimeout(pipe.timer)
         pipe.timer = null
@@ -3027,6 +3151,35 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
       if (pipe.reconcileBusy) return
       void writeNow()
     }
+    // 连续打字期间的本机草稿(max-wait,见 typingDraft.ts):两级防抖在连打时一直被重置,崩溃会丢整段。只存草稿、不写盘,
+    // 写盘节奏照旧等停手。和上面 stashNow 的差别:后面没有一发 writeNow 来收尾,所以不碰 pending,且「没有待写」时要
+    // 主动收掉本实例存过的草稿 —— 不然打了字又撤回到盘上那版,这份过时草稿会在下次打开时误弹「恢复」。
+    const typingStash = (): void => {
+      if (pipe.readOnly || pipe.retired || pipe.dead) return
+      // 窗口没焦点:用户不在这里打字,停手后的正常写盘(及失焦那条)会接手;也省一次整篇序列化。
+      if (!document.hasFocus()) return
+      syncFromEditor()
+      const text = composeFm(pipe.fm, pipe.body)
+      if (!pipe.writing && text === pipe.lastSaved) { settleUnsaved(); return }
+      if (!pipe.writing && isPristine()) {
+        if (pipe.stashed != null) clearDraft(vaultRoot, path, pipe.stashed, pipe.slot)
+        pipe.stashed = null
+        return
+      }
+      // 这一格里是别人存的(另一个窗口槽位号相同、或同篇别处刚失焦存下的更新的字;读不出也算):不盖,跳过这一跳。
+      // 只有空格、或里面正是本实例上次存的那份,才轮得到节拍写。
+      const held = peekDraftText(vaultRoot, path, pipe.slot)
+      if (held !== null && held !== pipe.stashed) return
+      pipe.stashed = text
+      stashDraft(vaultRoot, path, text, pipe.lastSaved, pipe.slot)
+    }
+    const pacer = createTypingDraftPacer({
+      stash: typingStash,
+      composing: () => isComposing() || !!layer.getView()?.composing,
+      // 挪动在途:旧路径随时会没,这时存草稿就是孤儿(N-5)。恢复条还开着:同一格里是用户还没决定的旧草稿,不能被盖掉。
+      blocked: () => !!pipe.held || !!pipe.moveHandoff || recoveryOpen.current,
+    })
+    typingDraft.current = pacer
     const onHidden = (): void => { if (document.visibilityState === 'hidden') flushNow(true) }
     const onLeave = (): void => flushNow(true)
     // 窗口失焦要节流:在几个窗口间来回切是常态,每切一次都整篇写一遍没必要。属性框的草稿不在这里提交 ——
@@ -3038,11 +3191,11 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
       const wait = lastBlur + 1000 - Date.now()
       if (wait > 0) {
         stashNow(false)
-        if (!trail) trail = setTimeout(() => { trail = null; lastBlur = Date.now(); flushNow(false) }, wait)
+        if (!trail) trail = setTimeout(() => { trail = null; lastBlur = Date.now(); flushNow(false, true) }, wait)
         return
       }
       lastBlur = Date.now()
-      flushNow(false)
+      flushNow(false, true)
     }
     document.addEventListener('visibilitychange', onHidden)
     window.addEventListener('pagehide', onLeave)
@@ -3056,6 +3209,8 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
       document.removeEventListener('pause', onLeave)
       window.removeEventListener('blur', onBlur)
       if (trail) clearTimeout(trail)
+      pacer.dispose()
+      if (typingDraft.current === pacer) typingDraft.current = null
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [path])
@@ -3132,6 +3287,14 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
       // ── 插件块表面的接缝(读 fm / 插 markdown):v4 没有块模型,插件对「当前这篇」的读写走这里。 ──
       fmNow: () => foreignFmText(pipe.fm),
       insertMarkdown: (md, where) => (readingRef.current || pipe.retired || pipe.readOnly ? false : (hostApi.current?.insertMarkdown(md, where) ?? false)),
+      // 插件 insertMarkdownAt:同一道闸,但说出原因。阅读模式(含切过去的途中)与只读 / 锁定实例 = read-only,绝不往里插;
+      // 已退休 / 源码模式(编辑器不在,hostApi 为 null)= no-editor。
+      insertMarkdownAt: (md, where, marker) => {
+        if (pipe.retired || pipe.dead) return { ok: false, reason: 'no-editor' }
+        if (readingRef.current || pipe.readOnly) return { ok: false, reason: 'read-only' }
+        const r = hostApi.current?.insertMarkdownAt(md, where, marker) ?? 'no-editor'
+        return r === 'ok' ? { ok: true } : { ok: false, reason: r }
+      },
       // 助手回答插回(评审 G3-08):只读 / 锁定实例不登记(聊天那边据此判「没有可插的笔记」);源码模式下 hostApi 为 null → 不接。
       // 撤销只在「插入这一笔仍是撤销栈顶」时做:文档仍是插入后那一版,**且**统一撤销时间线(画布舞台的形状 / 连线 / Frame
       // 颜色这类只在 frontmatter 的操作也记在这里)自插入起没动过 —— 否则撤的会是别人的改动(Codex 复核 P1:插入后改了形状
@@ -3319,6 +3482,7 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
     if (draft) clearDraft(vaultRoot, path, undefined, draft.slot)
     setDraft(null)
   }
+  recoveryOpen.current = draft != null
   const restoreDraft = (): void => {
     const d = draft
     setDraft(null)
@@ -3364,6 +3528,7 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
     probe.setFm = (patch: Record<string, unknown>) => setFm(patch, false) // 仪器造「本实例有未落盘的 fm 改动」(防抖写)
     probe.view = () => layer.getView() // 仪器直驱 PM 事务(分栏 spike/检查用)
     probe.serializeNow = () => hostApi.current?.serializeNow() ?? null // 与 200ms 监听同一条落盘序列化链(check:editorperf 计时)
+    probe.canonicalCalls = () => canonMemo.calls // isPristine 实际重算基线规范化的次数(check:unifiedcas T1)
     probe.setReading = (next: boolean) => switchReading(next)
     probe.isReading = () => readingRef.current
     probe.readingPosition = () => readingPosition.current
@@ -3758,6 +3923,7 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
             pipe.fm = fixStructKeys(fmText)
             pipe.body = body
             schedule()
+            typingDraft.current?.edit()
           }}
         />
       ) : null}

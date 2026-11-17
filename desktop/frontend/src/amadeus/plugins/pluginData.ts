@@ -223,7 +223,8 @@ export function createNoteTasksApi(scope: DataScope): NonNullable<PluginContext[
         p.checked = patch.checked
       }
       if (patch.due !== undefined) {
-        if (typeof patch.due !== 'string' || !isDue(patch.due)) return false
+        // 空串 = 清日期:只给任务行,回写时日期换成 @todo(还在待办清单「未排期」里,撤销排期靠它);普通行清了就哪都不在了。
+        if (typeof patch.due !== 'string' || (patch.due === '' ? !m.isTask : !isDue(patch.due))) return false
         p.due = patch.due
       }
       if (p.checked === undefined && p.due === undefined) return false

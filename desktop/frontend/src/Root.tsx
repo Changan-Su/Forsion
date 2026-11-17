@@ -86,6 +86,8 @@ export function Root() {
       void useApp.getState().refreshAgents()
       window.dispatchEvent(new Event('forsion:agents-changed'))
     }
+    // 浮窗里导入了会话(插件 ctx.tangu.importSessions,2026-11-16):主窗的会话列表各握一份,由主窗自己重拉
+    if (action === 'sessions-changed') { const s = useApp.getState(); if (s.cfg) void s.refreshSessions(s.cfg).catch(() => {}) }
     if (action === 'skills-changed') {
       void listSkills(homeTarget()).then((skillsList) => useApp.setState({ skillsList })).catch(() => {})
       window.dispatchEvent(new Event('forsion:skills-changed'))

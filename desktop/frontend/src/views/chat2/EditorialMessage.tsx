@@ -15,10 +15,10 @@ import { ChangeReceipt } from './ChangeReceipt'
 import { Fragment, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type Ref } from 'react'
 import { useStreamReveal } from './streamReveal'
 import { Copy, RotateCcw, GitBranch, MessageCircleQuestion, CornerUpLeft, Pencil, Volume2, Square, Loader2, LogIn, Zap, History as HistoryIcon, FileCode2, MessageSquare, ShieldQuestion, CircleCheck, CircleX, CircleHelp, Clock, Undo2 } from 'lucide-react'
-import { ArrowUpRight, FileInput, StepForward } from 'lucide-react'
+import { ArrowUpRight, FileInput, Gauge, StepForward } from 'lucide-react'
 import { turnHasOutput } from './continueTurn'
-import { isModelTierLocked, isTierLockedError, tierLockedText } from '../../services/accountQuota'
-import { useQuotaMultiplierCap } from '../../tangu/quotaCap'
+import { isModelTierLocked, isTierLockedError, recentlyEndedTrial, tierLockedText, trialEndedAtOf } from '../../services/accountQuota'
+import { useQuotaTierLock } from '../../tangu/quotaCap'
 import { TURN_RESUME_OPEN } from '../../../../../tangu-agent/src/contracts/turnResume'
 import { isEngineModelNoApiKey, parseEngineModelNoApiKey } from '../../../../../tangu-agent/src/contracts/engineModelError'
 import { useNoteInsertState } from './insertToNote'
@@ -41,6 +41,9 @@ import { sketchFence } from '../../amadeus/blocks/sketch/format'
 import { streamingArgString } from '../streamingWrite'
 import { SystemPromptBlock } from '../../components/SystemPromptBlock'
 import './chatAvatars' // 「聊天头像」开关落 <html data-chat-avatars>,见该文件
+
+import { citeIndexOf } from '../../../../../tangu-agent/src/contracts/citeSources'
+import { CITE_HOVER } from './citeHover'
 
 registerMessages({
   'chat.team.working': { zh: '工作中 · {activity}', en: 'Working · {activity}' },
@@ -73,6 +76,7 @@ import { playSendFlight } from './sendFlight'
 import { InquiryCard, PlanCard, TodoList } from '../../components/InquiryCard'
 import { registerMessages, useI18n } from '../../i18n'
 import { useApp } from '../../stores/appStore'
+import { usePluginStore } from '../../amadeus/plugins/pluginStore'
 import { agentName, agentNames } from '../../agentName'
 import { isHtmlCardTool } from '../../tangu/store/tanguSlice'
 import { runResultText, type RunResult } from '../../builtins/runCommand'
@@ -81,7 +85,7 @@ import { UI_MODE, nativeSheetPresenter, runNativeCtxMenu, runNativeSheetMenu, us
 import { splitSuggestions, type FenceKind, type SuggestState, type TaskCard } from './suggest'
 import { replyText } from './replyText'
 import { CreationCards } from './CreationCards'
-import { formatDateTime, formatMessageTime } from '../../format/time'
+import { formatDate, formatDateTime, formatMessageTime } from '../../format/time'
 
 import { TaskCards, TaskTraces, type TaskLanding } from './TaskCards'
 import { MuseApprovalLine, MuseTodoCards, MuseTodoTraces, ProactiveMark, isProactive } from './MuseDm'
@@ -95,6 +99,7 @@ import { refForSession, targetForSession, useSessionHostName } from '../../servi
 import { AttachmentTile } from '../../components/AttachmentTile'
 import { ImageStack, stackable } from '../../components/ImageStack'
 import { UserFold } from './UserFold'
+import { agentEngineErrorText } from '../../tangu/agentEngine'
 export type { TaskLanding }
 import './chat2.css'
 import '../../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
@@ -219,13 +224,26 @@ const ERR_RULES: Array<[RegExp, string]> = [
   [/(^|\D)429(\D|$)|rate[ _-]?limit|per ?minute|allocated quota exceeded/i, 'chat.err.rate'],
   [/(^|\D)5\d\d(\D|$)|bad gateway|overloaded/i, 'chat.err.server'],
 ]
-export function humanizeRunError(raw: string | undefined, t: (k: string, v?: Record<string, unknown>) => string, modelName = ''): string {
+/** 服务端 quotaExceededMessage 的两句提示,只认英文半句(中文那半措辞可以改):
+ *  enable =「开关没开,开了就能用积分接着用」;topup =「开着,积分也用完了」 */
+const QUOTA_POINTS_ENABLE_RE = /Turn on "Continue with points"/i
+const QUOTA_POINTS_OUT_RE = /points have run out/i
+export function humanizeRunError(raw: string | undefined, t: (k: string, v?: Record<string, unknown>) => string, modelName = '', trialEndedDate = ''): string {
+  const engineAgent = agentEngineErrorText(raw, t) // 跑在 DSH 上的 Agent 没跑起来(引擎发的 agent_engine_* 码,带引擎名)
+  if (engineAgent) return `${engineAgent}(${raw})`
   if (!raw) return t('chat.error')
   raw = stripQuotaAsk(raw)
   if (isEngineModelNoApiKey(raw)) return engineModelNoApiKeyText(raw, t)
   const hit = ERR_RULES.find(([re, key]) => re.test(raw) && (key !== 'chat.err.quotaUsed' || isQuotaText(raw)))
   // 这一句自己就说清了,不再把机器码 / JSON 回包挂在括号里(「复制错误」照样拿得到原文)
-  if (hit?.[1] === 'chat.err.tierLocked') return tierLockedText(raw, t, modelName)
+  if (hit?.[1] === 'chat.err.tierLocked') return tierLockedText(raw, t, modelName, trialEndedDate)
+  // Forsion 额度用完:服务端在机器码后面补了一句积分提示(给不认识积分的旧客户端看,见 server quotaExceededMessage),
+  // 只在积分帮得上时才补。这里按它选自己的说法,括号里只留机器码;裸码 = 积分帮不上(后台任务、组织账号、已到预支硬顶)
+  // 或老服务端,就不提积分(Codex 11-15)
+  if (hit?.[1] === 'chat.err.quota') {
+    const key = QUOTA_POINTS_OUT_RE.test(raw) ? 'chat.err.quotaPointsOut' : QUOTA_POINTS_ENABLE_RE.test(raw) ? 'chat.err.quotaPoints' : 'chat.err.quota'
+    return `${t(key)}(token_quota_exceeded)`
+  }
   if (hit?.[1] === 'chat.err.quotaUsed') {
     const time = quotaResetFromError(raw)
     return `${t(time ? 'chat.err.quotaUsedAt' : 'chat.err.quotaUsed', { time })}(${raw})`
@@ -249,6 +267,15 @@ registerMessages({
     en: 'Your direct-connection sign-in has expired — please sign in again',
   },
   'chat.err.relogin': { zh: '重新登录 {provider}', en: 'Sign in to {provider} again' },
+  'chat.err.quotaPage': { zh: '额度与积分', en: 'Quota & points' },
+  'chat.err.quotaPoints': {
+    zh: 'AI 额度已用尽：可以在「额度与积分」里开启「用积分继续」，用积分接着用；也可以使用重置卡立即恢复，或升级会员提高上限',
+    en: 'AI quota used up — turn on "Continue with points" in Quota & points to keep going with your points, use a reset card to restore it now, or upgrade your plan',
+  },
+  'chat.err.quotaPointsOut': {
+    zh: 'AI 额度用完了，积分也用完了：可以充值积分、使用重置卡立即恢复，或升级会员提高上限',
+    en: 'Your AI quota and points are both used up — top up points, use a reset card to restore it now, or upgrade your plan',
+  },
   'chat.retry': { zh: '重试', en: 'Retry' },
   'chat.continue': { zh: '继续生成', en: 'Continue' },
   'chat.continueTip': { zh: '保留已生成的内容，从断开处接着写', en: 'Keep what was generated and pick up where it stopped' },
@@ -303,6 +330,21 @@ export function UpgradeChip({ error }: { error?: string }) {
   )
 }
 
+/** 额度用尽那条错误后面的「额度与积分」:打开云账号扩展画的那一页(「用积分继续」开关、重置卡、积分余额都在那)。
+ *  扩展没注册这一页(没装 / 旧宿主 / 没登录云账号)就不给。 */
+export function QuotaPageChip({ error }: { error?: string }) {
+  const { t } = useI18n()
+  const hasPage = usePluginStore((s) => s.activeIds.includes('forsion-extend') &&
+    s.settingsViews.some((v) => v.pluginId === 'forsion-extend' && v.item.id === 'quota' && v.item.category === 'forsion'))
+  if (!error || !/token_quota_exceeded/i.test(error) || !hasPage) return null
+  return (
+    <button type="button" className="t2-relogin" data-testid="msg-quota-page"
+      onClick={() => useApp.getState().openSettings('forsion/fx:forsion-extend:quota' as Parameters<ReturnType<typeof useApp.getState>['openSettings']>[0])}>
+      <Gauge size={12} /> {t('chat.err.quotaPage')}
+    </button>
+  )
+}
+
 /** 内联文件渲染所需上下文(displayFiles 用)。 */
 export interface FileCtx {
   cfg: TanguDesktopConfig
@@ -352,20 +394,26 @@ export interface MessageHandlers {
 
 /** 失败那一行 + 下面「重试 · 复制错误」(走查续六 6.3)。只在会话最后一条、且没在跑时给重试:重试后新一轮接上,按钮自然消失。 */
 function RunErrorRow({ msg, sessionId, modelId, handlers }: { msg: UiMessage; sessionId?: string; modelId?: string; handlers?: MessageHandlers }) {
-  const { t } = useI18n()
+  const { t, locale } = useI18n()
   const canRetry = useApp((s) => !!handlers?.onRetry && !!sessionId && !s.runningBySession[sessionId] && s.messagesBySession[sessionId]?.at(-1)?.id === msg.id)
   // 这一轮已有产出(正文 / 工具调用):「重试」会把它们删掉重来 —— 拆成「继续生成」(主)与「重新生成」两条路
   const canContinue = useApp((s) => canRetry && !!handlers?.onContinue && turnHasOutput(s.messagesBySession[sessionId!]))
   // 模型被会员档位拦下:modelId 是会话「现在」选着的模型,不一定是当时那个 —— 只有它确实还锁着才点名,否则说「这个模型」
   const tierLocked = isTierLockedError(msg.error)
-  const multiplierCap = useQuotaMultiplierCap(tierLocked)
+  const { cap: multiplierCap, trials } = useQuotaTierLock(tierLocked)
   const sessionModel = useApp((s) => (tierLocked && modelId ? s.modelsResp?.models.find((m) => m.id === modelId) : undefined))
-  const modelName = sessionModel && isModelTierLocked(sessionModel, multiplierCap) ? sessionModel.name : ''
+  const stillLocked = !!sessionModel && isModelTierLocked(sessionModel, multiplierCap, trials)
+  const modelName = stillLocked ? sessionModel!.name : ''
+  // 限时开放刚结束(7 天内)被拦:说「限时体验已于 {date} 结束」,不说倍率
+  // 服务端回包里的结束时刻优先(后台提前结束时,本机记着的到期还在以后);没有再看本机见过的
+  const trialEnded = stillLocked ? (trialEndedAtOf(msg.error) ?? recentlyEndedTrial(sessionModel!.id)) : null
+  const trialEndedDate = trialEnded != null ? formatDate(trialEnded, { locale }) : ''
   return (
     <>
       <div className="t2-tool err">
-        <span className="t2-status-err">✕ {humanizeRunError(msg.error, t, modelName)}</span>
+        <span className="t2-status-err">✕ {humanizeRunError(msg.error, t, modelName, trialEndedDate)}</span>
         <ReloginChip error={msg.error} modelId={modelId} />
+        <QuotaPageChip error={msg.error} />
         <UpgradeChip error={msg.error} />
         <QuotaRemindChip error={msg.error} sessionId={sessionId} modelId={modelId} />
         <QuotaChips error={msg.error} messageId={msg.id} sessionId={sessionId} modelId={modelId} />
@@ -543,6 +591,9 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
   // 会话在别的电脑上(桌面作为调用方):代码块的「运行」是这台电脑的终端、内联嵌入读的是这台电脑的盘 —— 都不是那台的,关掉。
   const elsewhere = !!runSid && refForSession(runSid).kind === 'unit'
   const embeds = useMemo(() => (runSid && !elsewhere && UI_MODE !== 'mobile' && window.tangu?.readHostFile ? { execMode: embedExec } : undefined), [runSid, embedExec, elsewhere])
+  // 搜索来源编号:正文里指向这一轮搜索 / 读过的网页的链接补编号(没有搜索 / 读网页的回答是 null)
+  const citeIndex = useMemo(() => citeIndexOf(msg), [msg.id, msg.content, msg.toolEvents])
+  const cites = useMemo(() => (citeIndex ? { index: citeIndex, ...CITE_HOVER } : null), [citeIndex])
   const { t } = useI18n()
   // 插件结果卡片的认领(订阅渲染器 / 名单:插件晚加载或被停用时这条消息跟着重渲)
   const cardOf = useToolCardOf()
@@ -866,7 +917,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
                 fenceState = parsed.state
                 const segBody = parsed.text
                 return segBody
-                  ? <div key={i} className="t2-content" data-streaming-tail={streaming && i === lastTextIdx || undefined}><Markdown content={segBody} anchorPrefix={`toc-${msg.id}`} run={runCtx} allowRun={!elsewhere} embeds={embeds} linkCards codeHead streaming={streaming} /></div>
+                  ? <div key={i} className="t2-content" data-streaming-tail={streaming && i === lastTextIdx || undefined}><Markdown content={segBody} anchorPrefix={`toc-${msg.id}`} run={runCtx} allowRun={!elsewhere} embeds={embeds} linkCards cites={cites} codeHead streaming={streaming} /></div>
                   : null
               }
               const skip = i === firstIdx && headEvents ? 1 : 0
@@ -874,7 +925,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
               return parts.length ? (
                 <Fragment key={i}>
                   {parts.map((part, k) => part.t === 'tools'
-                    ? <ToolGroup key={`tools-${part.events.map((ev) => ev.id).join('-')}-${k + skip}`} events={part.events} running={msg.status === 'streaming'} approvals={msg.approvals} awaitingAnswer={awaitingAnswer} sessionId={runSid} />
+                    ? <ToolGroup key={`tools-${part.events.map((ev) => ev.id).join('-')}-${k + skip}`} events={part.events} running={msg.status === 'streaming'} approvals={msg.approvals} awaitingAnswer={awaitingAnswer} sessionId={runSid} context={msg.toolEvents} />
                     : part.t === 'marketplace'
                       ? <MarketPluginCards key={`market-${part.event.id}`} event={part.event} />
                     : part.t === 'pluginSettings'
@@ -886,18 +937,18 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
                     : part.t === 'git'
                       ? (gitStatusSuperseded(part.events, msg.toolEvents) ? null : <GitToolCard key={`git-${part.events[0].id}`} events={part.events} sessionId={runSid} />)
                     : part.t === 'pluginCard'
-                      ? <PluginToolCard key={`ptc-${part.event.id}`} event={part.event} claim={part.claim} onQuote={handlers?.onQuote} fallback={<ToolGroup events={[part.event]} />} />
+                      ? <PluginToolCard key={`ptc-${part.event.id}`} event={part.event} claim={part.claim} onQuote={handlers?.onQuote} fallback={<ToolGroup events={[part.event]} context={msg.toolEvents} />} />
                     : part.t === 'intelligent'
                       ? <RunContext.Provider key={`intelligent-${part.event.id}`} value={{ cwd: runCtx?.cwd, allowRun: false }}><ChatIntelligentUi event={part.event} live={streaming} stateScope={runSid ? `${runSid}:${msg.id}` : undefined} onAsk={handlers?.onSuggest} sessionId={runSid} /></RunContext.Provider>
                     : <SketchCards key={`sketch-${part.item.callId}`} items={[part.item]} actions={sketchActions} stateScope={runSid ? `${runSid}:${msg.id}` : undefined} onAsk={handlers?.onSuggest} />)}
                 </Fragment>
               ) : null
             })
-            const head = (!!msg.reasoning || !!headEvents) && <ToolGroup key="proc-head" events={headEvents || []} running={streaming} approvals={msg.approvals} awaitingAnswer={awaitingAnswer} sessionId={runSid} {...think(nodes.every((n) => n == null))} />
+            const head = (!!msg.reasoning || !!headEvents) && <ToolGroup key="proc-head" events={headEvents || []} running={streaming} approvals={msg.approvals} awaitingAnswer={awaitingAnswer} sessionId={runSid} context={msg.toolEvents} {...think(nodes.every((n) => n == null))} />
             return <>{head}{handoff}{nodes}</>
           }
           // 老序:插件卡片挪到尾部(trailingCards),不在这一行里再列一遍
-          const head = (!!msg.reasoning || !!msg.toolEvents?.length) && <ToolGroup key="proc-head" events={(msg.toolEvents || []).filter((ev) => !cardOf(ev) && !pluginSettingsReport(ev))} running={streaming} approvals={msg.approvals} awaitingAnswer={awaitingAnswer} sessionId={runSid} {...think(!body)} />
+          const head = (!!msg.reasoning || !!msg.toolEvents?.length) && <ToolGroup key="proc-head" events={(msg.toolEvents || []).filter((ev) => !cardOf(ev) && !pluginSettingsReport(ev))} running={streaming} approvals={msg.approvals} awaitingAnswer={awaitingAnswer} sessionId={runSid} context={msg.toolEvents} {...think(!body)} />
           return (
             <>
               {head}
@@ -905,7 +956,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
               {body && (
                 voiceMode
                   ? <VoiceBubble text={body} stored={voice!.stored} anchorPrefix={`toc-${msg.id}`} />
-                  : <div className="t2-content" data-streaming-tail={streaming || undefined}><Markdown content={body} anchorPrefix={`toc-${msg.id}`} run={runCtx} allowRun={!elsewhere} embeds={embeds} linkCards codeHead streaming={streaming} /></div>
+                  : <div className="t2-content" data-streaming-tail={streaming || undefined}><Markdown content={body} anchorPrefix={`toc-${msg.id}`} run={runCtx} allowRun={!elsewhere} embeds={embeds} linkCards cites={cites} codeHead streaming={streaming} /></div>
               )}
             </>
           )
@@ -998,7 +1049,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
         {trailingIntelligent.map(ev => <RunContext.Provider key={ev.id} value={{ cwd: runCtx?.cwd, allowRun: false }}><ChatIntelligentUi event={ev} live={streaming} stateScope={runSid ? `${runSid}:${msg.id}` : undefined} onAsk={handlers?.onSuggest} sessionId={runSid} /></RunContext.Provider>)}
         {!!trailingSketches.length && <SketchCards items={trailingSketches} actions={sketchActions} stateScope={runSid ? `${runSid}:${msg.id}` : undefined} onAsk={handlers?.onSuggest} />}
         {(msg.toolEvents || []).filter(ev => pluginSettingsReport(ev) && !inlineToolIds.has(ev.id)).map(ev => <PluginSettingsCard key={`ps-${ev.id}`} event={ev} sessionId={runSid} />)}
-        {trailingCards.map(({ ev, claim }) => <PluginToolCard key={`ptc-${ev.id}`} event={ev} claim={claim} onQuote={handlers?.onQuote} fallback={<ToolGroup events={[ev]} />} />)}
+        {trailingCards.map(({ ev, claim }) => <PluginToolCard key={`ptc-${ev.id}`} event={ev} claim={claim} onQuote={handlers?.onQuote} fallback={<ToolGroup events={[ev]} context={msg.toolEvents} />} />)}
         {/* 审批卡在托盘里批(ApprovalTray);托盘在输入框上方的视图(预览 / 画布)流里留一行指路,对话末尾有卡片堆的不留(卡就在下面)。已兑现的不留痕 —— 结局看工具卡。
             团队成员的占位气泡已有「等待你的审批」那行,不重复。 */}
         {!msg.work && !handlers?.onJumpDeck && pendingApv.length > 0 && (

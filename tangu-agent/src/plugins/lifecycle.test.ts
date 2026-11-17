@@ -747,10 +747,11 @@ describe('启动顺序', () => {
 
     const { discoverPlugins } = await import('./loader.js');
     // 与桌面 sanitizeRequiresPlugins 同口径:依赖自己 / 非 kebab / 重复丢弃;minVersion 非点分数字只丢 minVersion
-    writePlugin('lc-a', { requires: ['lc-c', { id: 'lc-b', minVersion: 'v1.0', name: 'B', market: 'x' }, 'Bad_Id', 'lc-a', 'lc-c', 42, { id: 'lc-d', minVersion: '1.x' }] });
+    writePlugin('lc-a', { requires: ['lc-c', { id: 'lc-b', minVersion: 'v1.0', name: 'B', market: 'x' }, 'Bad_Id', 'lc-a', 'lc-c', 42, { id: 'lc-d', minVersion: '1.x' }, { id: 'lc-e', minVersion: '2.13.8-beta.3' }, { id: 'lc-f', minVersion: '2.13.8+build.1' }] });
     const found = discoverPlugins();
     expect(found.map((d) => d.manifest.id)).toEqual(['lc-b', 'lc-c', 'lc-a']);
-    expect(found.find((d) => d.manifest.id === 'lc-a')!.requiresPlugins).toEqual([{ id: 'lc-c' }, { id: 'lc-b', minVersion: 'v1.0' }, { id: 'lc-d' }]);
+    // 预发布号 / +build.N 的最低版本保留(以前被当成「非点分数字」悄悄丢掉,依赖就不再有版本闸)
+    expect(found.find((d) => d.manifest.id === 'lc-a')!.requiresPlugins).toEqual([{ id: 'lc-c' }, { id: 'lc-b', minVersion: 'v1.0' }, { id: 'lc-d' }, { id: 'lc-e', minVersion: '2.13.8-beta.3' }, { id: 'lc-f', minVersion: '2.13.8+build.1' }]);
   });
 
   it('compareVersions:前导 v 忽略、缺段按 0', async () => {
@@ -758,6 +759,11 @@ describe('启动顺序', () => {
     expect(compareVersions('1.2', '1.2.0')).toBe(0);
     expect(compareVersions('v1.10.0', '1.9.9')).toBe(1);
     expect(compareVersions('1.5.0', '2.0.0')).toBe(-1);
+    // 预发布排在正式版之前(以前只比数字段:装着 2.13.8-beta.3 的依赖被当成满足 minVersion 2.13.8);+build.N 有序
+    expect(compareVersions('2.13.8-beta.3', '2.13.8')).toBe(-1);
+    expect(compareVersions('2.13.8', '2.13.8-beta.3')).toBe(1);
+    expect(compareVersions('2.13.8-beta.10', '2.13.8-beta.9')).toBe(1);
+    expect(compareVersions('2.13.8+build.1', '2.13.8')).toBe(1);
   });
 });
 

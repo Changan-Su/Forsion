@@ -234,7 +234,12 @@ export interface TanguSdk {
     subscribe(runId: string, userId: string, onChange: () => void): Promise<() => void>;
     stop(runId: string, userId: string): Promise<void>;
   };
-  engines: { list(): Array<{ id: string; name: string; available: boolean; reason?: string }> };
+  engines: {
+    list(): Array<{ id: string; name: string; available: boolean; reason?: string }>;
+    /** 2026-11-15+:让常驻进程把一场 Forsion 对话的引擎会话接上(工作台打开它之前)。userId 用 req.user.userId。
+     *  老宿主没有这个成员,先判 `typeof ctx.sdk.engines.hold === 'function'`。 */
+    hold?(engineId: string, sessionId: string, userId: string): Promise<ResidentHoldResult>;
+  };
   pluginStore: PluginStore;
   sendWechatMedia(
     userId: string,
@@ -439,6 +444,33 @@ export interface AgentSettingsContribution {
   read(context: AgentSettingsReadContext): Record<string, AgentSettingValue> | Promise<Record<string, AgentSettingValue>>;
 }
 
+/** ctx.sdk.engines.hold 的结果。 */
+export type ResidentHoldResult =
+  | { ok: true; engineSessionId: string; state: 'open' | 'resumed' }
+  | { ok: false; status: number; detail: string; code?: 'no_engine_session' | 'not_running' | 'busy' | 'gone' | 'failed' };
+
+/** ctx.registerResidentEngine 的连接:进程的 stdin、只剩 JSON 行的 stdout(不是 JSON 的行插件自己滤掉)、进程没了就 resolve。
+ *  引擎可以在 stdout 上发 ACP 扩展通知 `_forsion/notice`,给 Forsion 正在这场会话上跑的那一轮一条提示(进审批托盘,这一轮结束就清掉;
+ *  没有 Forsion 的轮在等这一场就不上屏):`{ sessionId, id, text: { zh, en }, action?: { id, label: { zh, en } } }` 显示,
+ *  `{ sessionId, id, clear: true }` 撤掉。`action.id` 只认插件用 ctx.registerEngineHarness 给这个引擎登记的对话菜单项
+ *  (sessionActions,按钮就是跑它);认不到(网页 / 手机、插件停用)只显示那句话。DSH 融合插件用它报「DSH 在工作台里等你批准」。 */
+export interface ResidentConnection {
+  /** 这个进程这一次启动的标识;变了 = 重启过。 */
+  id: string;
+  input: import('node:stream').Writable;
+  output: import('node:stream').Readable;
+  closed: Promise<void>;
+}
+/** 宿主关掉重接(reopened)/ 替工作台接上(held)一场会话时告诉插件。 */
+export interface ResidentSessionEvent { type: 'reopened' | 'held'; engineSessionId: string; sessionId?: string }
+export interface ResidentEngineHost {
+  /** 引擎清单里的 id,如 'dsh'。 */
+  engineId: string;
+  /** 回在跑的那个进程;只在进程确实没在跑时回 null(这一轮照旧每轮起一个进程)。 */
+  connect(signal?: AbortSignal): Promise<ResidentConnection | null>;
+  onSession?(event: ResidentSessionEvent): void;
+}
+
 export interface TanguPluginContext {
   /** Explicit read-only fields; secret read values must be boolean configured flags. */
   registerAgentSettings(contribution: AgentSettingsContribution): void;
@@ -450,6 +482,11 @@ export interface TanguPluginContext {
   /** Local single-inference source. Full IDs: plugin:<engineId>/<providerId>/<encodedModelId>.
    * Automatically revoked, including in-flight requests, when this activation is disposed. */
   registerModelProvider(provider: PluginModelProvider): void;
+  /**
+   * 2026-11-15+,本机引擎:替一个外部引擎提供一个已经在跑的进程,这个引擎的普通对话改连它、不再每轮起一个(DSH 融合插件)。
+   * 老宿主没有:`ctx.registerResidentEngine?.(…)`。停用时撤销。
+   */
+  registerResidentEngine?(host: ResidentEngineHost): void;
   /** 注册 `tangu <name>` 子命令(如 computer-use 的 doctor/setup)。 */
   registerCommand(cmd: PluginCommand): void;
   registerScopedRoutes(mount: (router: ScopedPluginRouter) => void): void;

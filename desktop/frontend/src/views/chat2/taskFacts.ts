@@ -5,6 +5,7 @@
  * 渲染在 TaskSummary.tsx。
  */
 import type { DisplayFile, TodoItem, ToolEvent, UiMessage } from '../../../../../tangu-agent/src/contracts/clientTypes'
+import { citeEntryOf, citeHoverKey, citeIndexOf, type CiteIndex } from '../../../../../tangu-agent/src/contracts/citeSources'
 
 /** 一条「用过的来源」:agent 实际读到/搜到/取到的东西。用户给的附件不算(§7.4 两者不能混)。 */
 export interface TaskSource {
@@ -15,6 +16,48 @@ export interface TaskSource {
   label: string
   /** 命中次数 —— 同一来源访问多次只占一行,次数放这(§17.3)。 */
   hits: number
+  /** web_search 这次搜到的结果(搜索来源编号):编号与正文一致(citeIndexOf),正文引用过的排前面;后来又读过的标 read。 */
+  results?: TaskSourceResult[]
+  /** web_fetch 读过的页:正文里的编号与悬停联动键(这一页被引用过才有号)。 */
+  n?: number
+  hoverKey?: string
+}
+
+/** 「来源」卡里挂在搜索词下面的一条结果。 */
+export interface TaskSourceResult {
+  key: string
+  url: string
+  /** 站点 · 标题;老会话没有标题 → 主机 + 路径。 */
+  label: string
+  /** 正文里的编号;正文没引用的没有。 */
+  n?: number
+  /** 也被 web_fetch 读过(并成这一行,不另出一行)。 */
+  read: boolean
+  /** 正文编号 ↔ 这一行的悬停联动键(citeHover)。 */
+  hoverKey: string
+}
+
+const resultLabel = (url: string, title?: string, site?: string): string => {
+  const host = site || hostOf(url)
+  if (title) return `${host} · ${title}`
+  try { const p = decodeURI(new URL(url).pathname).replace(/\/+$/, ''); return p ? `${host}${p}` : host } catch { return host }
+}
+
+/** 同一搜索词又搜了一次:新结果在前,旧结果里网址没重复的接在后面。 */
+function mergeResults(next: TaskSourceResult[] | undefined, prev: TaskSourceResult[] | undefined): TaskSourceResult[] | undefined {
+  if (!prev?.length) return next
+  if (!next?.length) return prev
+  const seen = new Set(next.map((r) => r.key))
+  return [...next, ...prev.filter((r) => !seen.has(r.key))]
+}
+
+/** 一次 web_search 调用搜到的结果:正文引用过的按编号排前,其余照搜索顺序。 */
+function resultsOf(idx: CiteIndex, callId: string): TaskSourceResult[] {
+  const rows = idx.entries.filter((e) => e.searchCalls.includes(callId)).map((e): TaskSourceResult => ({
+    key: e.key, url: e.url, label: resultLabel(e.url, e.src?.title, e.src?.site), n: e.n,
+    read: e.fetchCalls.length > 0, hoverKey: citeHoverKey(idx.msgId, e.key),
+  }))
+  return rows.sort((a, b) => (a.n ?? Infinity) - (b.n ?? Infinity))
 }
 
 /** 哪些工具产出「来源」。写/改/执行类不算来源,它们是动作。 */
@@ -111,6 +154,7 @@ export function summarizeTask(messages: UiMessage[], running: boolean, cwd?: str
   let stopped = false
 
   for (const m of messages) {
+    const cites = m.role === 'assistant' ? citeIndexOf(m) : null
     // 新一轮开始:上一轮摁停留下的「未结束」工具不属于这一轮,必须清掉,
     // 否则新 run 刚起步(还没发工具)时会把上一轮那个残留动作重新显示成「正在做」。
     if (m.role === 'user') { startedAt = m.timestamp; action = null }
@@ -130,15 +174,40 @@ export function summarizeTask(messages: UiMessage[], running: boolean, cwd?: str
       }
       const src = sourceOf(ev, cwd)
       if (!src) continue
+      // 搜索来源编号:搜索词下挂这次的结果;读过的页带上正文编号。同一行再次命中时换成最近那一次的
+      if (cites && ev.name === 'web_search') src.results = resultsOf(cites, ev.id)
+      if (cites && ev.name === 'web_fetch') {
+        const e = citeEntryOf(cites, src.id)
+        if (e) { src.n = e.n; src.hoverKey = citeHoverKey(cites.msgId, e.key) }
+      }
       const key = `${src.kind}:${src.id}`
       const cur = sources.get(key)
       // 再次命中 = 又用了一次:先 delete 再 set,把它重新排到 Map 队尾(下面整体倒序 → 顶回最上面)。
-      if (cur) { cur.hits++; sources.delete(key) }
+      if (cur) {
+        cur.hits++
+        // 同一搜索词再搜:这次的结果在前,之前那几轮的(别处已引用、编号照旧)接在后面,不丢
+        if (src.kind === 'search') cur.results = mergeResults(src.results, cur.results)
+        if (src.kind === 'web') { cur.n = src.n; cur.hoverKey = src.hoverKey }
+        sources.delete(key)
+      }
       sources.set(key, cur || src)
     }
     if (m.role === 'assistant') {
       error = m.status === 'error' ? (m.error || '') : null
       stopped = m.status === 'stopped'
+    }
+  }
+
+  // 搜索结果在同一条回答里又被 web_fetch 读过:并进结果那一行(已标「读过」),读网页那行不再单出。
+  // 按悬停键认 = 同一条回答 + 编号表里同一条(跳转前后的网址都已并好);别的回答里读的那页各有各的号,照旧单出一行
+  const webRows = new Map<string, string>()
+  for (const [k, sc] of sources) if (sc.kind === 'web' && sc.hoverKey) webRows.set(sc.hoverKey, k)
+  if (webRows.size) {
+    for (const sc of [...sources.values()]) {
+      for (const r of sc.results || []) {
+        const row = webRows.get(r.hoverKey)
+        if (row && sources.get(row)?.kind === 'web') { r.read = true; sources.delete(row) }
+      }
     }
   }
 

@@ -15,7 +15,7 @@ import { runMigration } from '../src/db/migrate.js';
 import { memoryLogProvider } from '../src/tools/builtin/memoryLog.js';
 import type { MemorySource } from '../src/services/memoryRepository.js';
 import { openProjectMemory, projectMemoryView, recordProjectCompaction, resolveProjectMemory, restoreCompactedFact, PROJECT_MEMORY_CHAR_BUDGET, PROJECT_MEMORY_STORE_CAP, type ProjectMemoryRef } from '../src/services/projectMemory.js';
-import { compactProjectMemory, projectOrganizeStatus, resetProjectMemoryCompactionForTests, resetProjectMemoryOrganizeForTests, validateCompaction, COMPACT_ACCEPT_CHARS, COMPACT_ASK_CHARS } from '../src/services/projectMemoryCompact.js';
+import { compactProjectMemory, projectOrganizeStatus, resetProjectMemoryCompactionForTests, resetProjectMemoryOrganizeForTests, validateCompaction, COMPACT_ACCEPT_CHARS, COMPACT_ASK_CHARS, COMPACT_DEADLINE_MS } from '../src/services/projectMemoryCompact.js';
 import { saveSpecialAgentsConfig } from '../src/services/specialAgentsConfig.js';
 import { autoAdoptable } from '../src/agents/harnessStore.js';
 import { redactSecrets } from '../src/core/redact.js';
@@ -375,7 +375,7 @@ describe('压一遍(compactProjectMemory)', () => {
     try {
       const first = compactProjectMemory('owner', ref, { fallbackModelId: 'run-model' });
       await asked; // 先等它真的走到模型那一步(之前是真实的磁盘读写,不归假时钟管),再拨表
-      await vi.advanceTimersByTimeAsync(66_000);
+      await vi.advanceTimersByTimeAsync(COMPACT_DEADLINE_MS + 6_000); // 截止 + 外层多给的 5 秒
       expect(await first).toMatchObject({ status: 'skipped', reason: 'failed', detail: 'timed out' });
     } finally { vi.useRealTimers(); }
     // 槽放开了:下一次拿到的是冷却,不是挂在那一次上

@@ -349,7 +349,7 @@ async function main() {
   check('经典:损坏的开屏素材回落到树标', await page.locator('#tangu-splash img, #tangu-splash .fts').count() === 0)
 
   // ── ⑩ 卫星窗口由已运行的主窗口创建,不属于 Forsion 启动流程,首帧就不应挂 Splash ──
-  for (const kind of ['floating', 'detached', 'mini']) {
+  for (const kind of ['floating', 'detached', 'mini', 'pip']) {
     await open(html(), `?window=${kind}`)
     check(`${kind} 卫星窗口从未挂载启动闪屏`, await page.locator('#tangu-splash').count() === 0)
   }

@@ -28,9 +28,9 @@ import {
 } from '@agentclientprotocol/sdk';
 import type { ToolCall } from '../core/types.js';
 import type { ApprovalDecision } from '../services/approvals.js';
-import { envWithFullPath, type EngineDef } from './config.js';
+import type { EngineDef } from './config.js';
 import type { EngineRunCtx, EngineResult, EngineCapabilities } from './manager.js';
-import { toolSubprocessEnv } from '../sandbox/credentialEnv.js';
+import { engineSubprocessEnv } from './engineEnv.js';
 import { killProcessTree } from '../utils/boundedProcess.js';
 import { formatEngineModelNoApiKey } from '../contracts/engineModelError.js';
 
@@ -40,25 +40,36 @@ export interface AcpClientCtx {
   signal: AbortSignal;
   publish: (type: string, payload: any) => void;
   requestApproval: (preview: string, toolCall: ToolCall) => Promise<ApprovalDecision>;
+  /** 宿主工具桥的工具名前缀(`mcp__<服务名>__`,见 engines/toolServer.ts)。这些调用由桥按 Forsion 的原名自己画卡、自己落库,
+   *  引擎这边的 tool_call / tool_call_update 不再上屏、不进结果 —— 否则同一次调用两张卡。 */
+  hideToolPrefix?: string;
+  /** 有引擎活动但没上屏时续命(空闲看门狗只在上屏时重新起表;藏起来的桥调用在等审批时一来一回全是这种)。 */
+  touch?: () => void;
+  /** 引擎说「在别处等你批准」(`_forsion/notice`)还没撤掉期间为 true:这一轮在等用户去别处批,空闲看门狗停表(否则等满五分钟就把它取消掉)。 */
+  waitingElsewhere?: (waiting: boolean) => void;
+  /** 引擎在一轮中途报了新的模型选项(`config_option_update`):把这时的当前模型告诉宿主;报了模型这一项却没写当前值 → undefined(当作不知道)。 */
+  onModel?: (modelId: string | undefined) => void;
 }
 
 /** 引擎握手上限:spawn + initialize + newSession 若在此窗口内没完成(子进程卡死/Windows 上 .cmd shim spawn
  *  失败永不吐 stdout)就放弃,避免切换引擎时 UI 无限转圈。冷启 `npx -y` 首次下载较慢 → 给足 30s,可经 env 调。 */
-const HANDSHAKE_TIMEOUT_MS = Number(process.env.TANGU_ENGINE_HANDSHAKE_TIMEOUT_MS) || 30_000;
+export const HANDSHAKE_TIMEOUT_MS = Number(process.env.TANGU_ENGINE_HANDSHAKE_TIMEOUT_MS) || 30_000;
 
 /** 跨平台起引擎子进程。Windows 上 npx/claude/codex 等是 .cmd 批处理 shim,spawn 不带 shell 无法执行
  *  (Node CVE-2024-27980 后更是硬拒 .cmd)→ win32 必须 shell:true 交 cmd.exe 解析,这正是「切换外部 CLI 在
  *  Windows 卡死」的根因。args:内置引擎为常量;自定义引擎取自用户本机 engines.json(host-only,等价用户自己
  *  在终端敲命令),非远程注入面。windowsHide 避免弹控制台窗口。POSIX 上 shell=false、detached 组杀行为照旧。
- *  env:PATH 先补全(envWithFullPath)——GUI 启动的 Electron 只有 launchd 精简 PATH,`openclaw`/`pi` 这类全局 bin
- *  在终端跑得起、装成 App 就 ENOENT;检测端 binOnPath 早就扫这些目录了,spawn 端不补就是「检测说有、跑起来没有」。 */
-export function spawnEngine(def: EngineDef, opts?: { cwd?: string; detached?: boolean }) {
+ *  env:走白名单(engineSubprocessEnv,见 engineEnv.ts);PATH 先补全(envWithFullPath)——GUI 启动的 Electron 只有
+ *  launchd 精简 PATH,`openclaw`/`pi` 这类全局 bin 在终端跑得起、装成 App 就 ENOENT;检测端 binOnPath 早就扫这些目录了,
+ *  spawn 端不补就是「检测说有、跑起来没有」。 */
+export function spawnEngine(def: EngineDef, opts?: { cwd?: string; detached?: boolean; env?: Record<string, string> }) {
   return spawn(def.command, def.args ?? [], {
     cwd: opts?.cwd,
     stdio: ['pipe', 'pipe', 'pipe'] as ['pipe', 'pipe', 'pipe'], // 元组字面量 → 非空 stdin/stdout 流类型
-    // 剥引擎凭据(C2):外部 CLI 跑模型驱动的命令,拿到 forsion_token / 本机令牌就能绕过本引擎直调云端与本机端点。
-    // 在**合成之后**再剥:引擎清单的 def.env 也不许把这些键加回来。
-    env: toolSubprocessEnv({ ...envWithFullPath(process.env), ...(def.env ?? {}) }),
+    // 环境走白名单(engineEnv.ts):外部 CLI 跑模型驱动的命令,本进程环境里只给系统运转要的和这个引擎自己的变量,
+    // FORSION_* / TANGU_* 和别家的 key 一律不给。def.env、opts.env(这一轮专用的,如交接的指令目录)叠在过滤之后;
+    // 合成之后再剥 C2 凭据 —— 清单也不许把 forsion_token / 本机令牌加回来。
+    env: engineSubprocessEnv(def, opts?.env ?? {}),
     shell: process.platform === 'win32',
     windowsHide: true,
     // DETACHED_PROCESS cancels windowsHide and loses grandchild stdout on Windows.
@@ -295,17 +306,40 @@ export function pickPermissionOption(options: PermissionOption[], action: Approv
   return (same ?? options[0]).optionId;
 }
 
+/**
+ * 常驻引擎给正在跑的这一轮的提示(ACP 扩展通知,融合插件第 1 档 · 审批 B 的退回 A):
+ * `{ sessionId, id, text: { zh, en }, action?: { id, label: { zh, en } } }` 显示,`{ sessionId, id, clear: true }` 撤掉。
+ * DSH 的审批进了工作台(自检没过、或这一问是子代理 / 工作台那一轮的)时,DSH2Forsion 的桥发「DSH 在工作台里等你批准」+「打开工作台」;
+ * action.id 只能指插件给这个引擎登记的对话菜单项(ctx.registerEngineHarness 的 sessionActions),别的一律不认。
+ */
+export const ENGINE_NOTICE_METHOD = '_forsion/notice';
+export interface EngineNotice { id: string; clear?: true; text?: { zh?: string; en?: string }; action?: { id: string; label: { zh?: string; en?: string } } }
+const noticeText = (v: unknown, max: number): string | undefined => (typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : undefined);
+/** 清洗(事件会持久化回放,同 approval_request 的纪律):形状不对的整条丢掉。 */
+export function sanitizeEngineNotice(p: any): EngineNotice | null {
+  if (!p || typeof p !== 'object' || typeof p.id !== 'string' || !/^[A-Za-z0-9._:-]{1,128}$/.test(p.id)) return null;
+  if (p.clear === true) return { id: p.id, clear: true };
+  const text = { zh: noticeText(p.text?.zh, 160), en: noticeText(p.text?.en, 160) };
+  if (!text.zh && !text.en) return null;
+  const a = p.action;
+  const action = a && typeof a === 'object' && typeof a.id === 'string' && /^[A-Za-z0-9._-]{1,64}$/.test(a.id)
+    ? { id: a.id, label: { zh: noticeText(a.label?.zh, 40), en: noticeText(a.label?.en, 40) } } : undefined;
+  return { id: p.id, text, ...(action ? { action } : {}) };
+}
+
 /** 纯翻译器：返回实现了 ACP Client 的对象 + 取累积结果。无进程、无 SDK 连接，可单测。 */
 export function createAcpClient(
   engineName: string,
   ctx: AcpClientCtx,
-): { client: Client; result(): EngineResult } {
+): { client: Client; result(): EngineResult; contentLength(): number } {
   let content = '';
   let reasoning = '';
   let tokensTotal: number | undefined;
   const toolCalls: ToolCall[] = [];
   const toolResults: any[] = [];
   const toolNames = new Map<string, string>(); // toolCallId -> name（给 tool_result 补名）
+  const hidden = new Set<string>(); // 桥里的调用(hideToolPrefix):卡片和结果归桥
+  const waitingElsewhere = new Set<string>(); // 还没撤掉的「在别处等你批准」提示 id(_forsion/notice)
   // toolCallId -> 最新的 rawInput / 标题(审批请求只带 id 时拿来补,见 requestPermission)。**必须跟着 tool_call_update 更新**:
   // 引擎可以先发一条参数不全(或还是别的参数)的 tool_call,再用 update 改成真正要跑的;卡上要是还显示头一条,
   // 用户看到的是一条命令、批准的是另一条。
@@ -334,17 +368,24 @@ export function createAcpClient(
           break;
         }
         case 'tool_call': {
+          if (ctx.hideToolPrefix && typeof u.title === 'string' && u.title.startsWith(ctx.hideToolPrefix)) {
+            hidden.add(u.toolCallId);
+            ctx.touch?.();
+            break;
+          }
           const name = u.title || u.kind || 'tool';
           toolNames.set(u.toolCallId, name);
           if (u.rawInput != null) toolInputs.set(u.toolCallId, u.rawInput);
           if (typeof u.title === 'string' && u.title) toolTitles.set(u.toolCallId, u.title);
           const args = u.rawInput ? JSON.stringify(u.rawInput) : '{}';
-          toolCalls.push({ id: u.toolCallId, type: 'function', function: { name, arguments: args } });
+          // ui_content_offset:卡片在回答正文里的位置(同 runLoop),重开对话时据此把卡片排回原处。
+          toolCalls.push({ id: u.toolCallId, type: 'function', function: { name, arguments: args }, ui_content_offset: content.length } as ToolCall);
           // source(遥测契约 §7):外部引擎自己的工具名不归 Tangu,按 plugin 记 —— Extend 不外发 plugin 的工具名
           ctx.publish('tool_call', { id: u.toolCallId, name, arguments: args, startedAt: Date.now(), source: 'plugin' });
           break;
         }
         case 'tool_call_update': {
+          if (hidden.has(u.toolCallId)) { ctx.touch?.(); break; }
           // 规范:update 里出现的字段整个替换原值。只更新审批用的这两份;已经发给界面的 tool_call 事件和结果里的工具名不动。
           if (u.rawInput != null) toolInputs.set(u.toolCallId, u.rawInput);
           if (typeof u.title === 'string' && u.title) toolTitles.set(u.toolCallId, u.title);
@@ -352,7 +393,8 @@ export function createAcpClient(
             const name = toolNames.get(u.toolCallId) || '';
             const result = toolUpdateText(u.content);
             const isError = u.status === 'failed';
-            toolResults.push({ id: u.toolCallId, name, result, isError });
+            // 落库形状同 runLoop(tool_call_id / content):重开对话时前端按 tool_call_id 配对,换回 Tangu 时回放也认这个形状。
+            toolResults.push({ tool_call_id: u.toolCallId, name, content: result, isError });
             ctx.publish('tool_result', { id: u.toolCallId, name, result, isError, source: 'plugin' });
           }
           break;
@@ -369,9 +411,25 @@ export function createAcpClient(
           });
           break;
         }
+        case 'config_option_update': {
+          // 一轮中途换了模型(引擎自己换,或别处改了这个会话的设置):宿主按新的当前模型判断能不能看图等
+          const sel = mapAcpConfigOptions(u.configOptions);
+          if (sel.modelConfigId) { try { ctx.onModel?.(sel.currentModelId); } catch { /* 只是告知 */ } }
+          break;
+        }
         default:
           break; // plan / available_commands_update / mode 等：spike 忽略
       }
+    },
+    async extNotification(method: string, params: Record<string, unknown>): Promise<void> {
+      if (method !== ENGINE_NOTICE_METHOD || ctx.replaying?.()) return;
+      const notice = sanitizeEngineNotice(params);
+      if (!notice) return;
+      // 先改看门狗再发(发会续表):有没撤掉的提示时停表,最后一件撤掉时重新起表
+      const before = waitingElsewhere.size > 0;
+      if (notice.clear) waitingElsewhere.delete(notice.id); else waitingElsewhere.add(notice.id);
+      if (before !== waitingElsewhere.size > 0) ctx.waitingElsewhere?.(waitingElsewhere.size > 0);
+      ctx.publish('status', { phase: 'engine_notice', notice });
     },
     async requestPermission(params: RequestPermissionRequest): Promise<RequestPermissionResponse> {
       if (ctx.signal.aborted) return { outcome: { outcome: 'cancelled' } };
@@ -402,7 +460,45 @@ export function createAcpClient(
   return {
     client,
     result: () => ({ content, reasoning, toolCalls, toolResults, tokensTotal }),
+    contentLength: () => content.length,
   };
+}
+
+/**
+ * 把用户为这个引擎选的模型应用到这场会话上(与当前不同才换);失败不阻断,用引擎当前的继续。返回这场会话此刻的模型清单和当前模型
+ * (这一轮因为缺 API key 失败时,拿它告诉用户能换成什么)。
+ * 引擎给 `models` 的走 session/set_model;没有 `models`、模型在 configOptions 里的(DSH)走 session/set_config_option。
+ * 续接的会话记着上次选的模型,所以每轮都对一下「当前值」而不是只在新建时设。(DSH 实测:换模型会把思考档重置成那个模型的缺省值。这里不碰思考档。)
+ * s = 这一轮 session/new / resume / load 的回包;常驻进程上会话本来就开着、这一轮没有回包时传 null,并给 known(上次记下的那份)。
+ */
+export async function applyEngineModel(
+  conn: Pick<ClientSideConnection, 'setSessionConfigOption' | 'unstable_setSessionModel'>,
+  sessionId: string, s: any, engineModelId: string | undefined, engineId: string,
+  guard: <T>(p: Promise<T>, label: string) => Promise<T>, known?: AcpConfigSelection,
+): Promise<AcpConfigSelection> {
+  let sel = s ? mapAcpConfigOptions(s?.configOptions) : (known ?? mapAcpConfigOptions(undefined));
+  if (s && !sel.modelConfigId && s?.models) sel = { ...sel, ...mapAcpModels(s.models) }; // 模型走 `models` 的引擎:清单和当前模型在那边
+  if (!engineModelId) return sel;
+  try {
+    if (!s?.models && sel.modelConfigId) {
+      if (engineModelId !== sel.currentModelId) {
+        // 存着的选择不在这次的清单里(引擎那边换了目录 / 下架)→ 不发,照引擎当前的跑
+        if (!sel.models.some((m) => m.id === engineModelId)) console.warn(`[engine] model ${engineModelId} is not offered by ${engineId} any more; keeping ${sel.currentModelId ?? 'the engine default'}`);
+        else {
+          const changed: any = await guard(conn.setSessionConfigOption({ sessionId, configId: sel.modelConfigId, value: engineModelId }), 'setSessionConfigOption');
+          // 回包里是换完之后的整份选项;没带(老实现)就只把当前模型记成刚选的那个
+          const after = mapAcpConfigOptions(changed?.configOptions);
+          sel = after.modelConfigId ? after : { ...sel, currentModelId: engineModelId };
+        }
+      }
+    } else if (s && engineModelId !== s?.models?.currentModelId) { // 同改动前:有回包、模型不在 configOptions 里就走 set_model
+      await conn.unstable_setSessionModel({ sessionId, modelId: engineModelId });
+      sel = { ...sel, currentModelId: engineModelId };
+    }
+  } catch (e: any) {
+    console.warn(`[engine] set model(${engineModelId}) failed: ${acpErrorText(e)}`);
+  }
+  return sel;
 }
 
 /** 引擎会话 id → 上一轮那个进程「真的退了」的 promise。一 run 一进程:下一轮要在新进程里续接同一个会话,而上一轮的进程
@@ -440,10 +536,11 @@ async function settleAfterLoad(lastAt: () => number, signal: AbortSignal): Promi
 
 export async function runAcpEngine(def: EngineDef, ctx: EngineRunCtx): Promise<EngineResult> {
   const cwd = ctx.cwd || process.cwd();
-  // host 能力下运行：继承父 env（等价于用户自己在终端跑 claude），叠加 def.env。适配器据此读 ANTHROPIC_API_KEY/~/.claude。
+  // host 能力下运行:环境走白名单(系统变量 + 这个引擎自己的,见 engineEnv.ts),叠加 def.env。适配器据此读 ANTHROPIC_API_KEY/~/.claude。
   // detached:true → 子进程自成进程组(pgid=child.pid);kill 时杀「整组」，连带 npx 衍生的真子进程(claude-code-acp)，
   // 否则只杀外层 npx、孙进程残留成孤儿。范本 ../tools/hostExec.ts。
-  const child = spawnEngine(def, { cwd, detached: true });
+  const runEnv = { ...(ctx.env ?? {}), ...(def.agentsHomeEnv && ctx.agentsHome ? { [def.agentsHomeEnv]: ctx.agentsHome } : {}) };
+  const child = spawnEngine(def, { cwd, detached: true, env: runEnv });
   // 起不来必须让握手立刻失败(spawn 报错 / 握手前自退),否则 initialize 会一路 await 到 30s 超时。
   // 适配器的 stderr 只做诊断,不进协议流;watchEngineStartup 顺带留末尾几行进错误信息。
   const startup = watchEngineStartup(child, def.id);
@@ -477,8 +574,9 @@ export async function runAcpEngine(def: EngineDef, ctx: EngineRunCtx): Promise<E
   // 阈值比直连流(120s)宽:外部 agent(Claude Code/Codex)可能长时间静默思考。审批期间停表(等用户不能误杀)。
   const ENGINE_IDLE_MS = Number(process.env.TANGU_ENGINE_IDLE_TIMEOUT_MS) || 300_000;
   let engineIdle: ReturnType<typeof setTimeout> | null = null;
+  let idlePaused = false; // 引擎说在别处等用户批准(engine notice)期间停表
   const armEngineIdle = (): void => {
-    if (ctx.signal.aborted) return;
+    if (ctx.signal.aborted || idlePaused) return;
     if (engineIdle) clearTimeout(engineIdle);
     engineIdle = setTimeout(() => { try { onAbort(); } catch { /* ignore */ } }, ENGINE_IDLE_MS);
   };
@@ -500,6 +598,13 @@ export async function runAcpEngine(def: EngineDef, ctx: EngineRunCtx): Promise<E
     },
     signal: ctx.signal,
     publish: (type, payload) => { armEngineIdle(); ctx.publish(type, payload); },
+    onModel: ctx.onModel,
+    hideToolPrefix: ctx.hideToolPrefix,
+    touch: armEngineIdle,
+    waitingElsewhere: (waiting) => {
+      idlePaused = waiting;
+      if (waiting) { if (engineIdle) { clearTimeout(engineIdle); engineIdle = null; } } else armEngineIdle();
+    },
     requestApproval: async (preview, toolCall) => {
       // Read-only ACP modes remain host-enforced at permission boundaries.
       // The scoped MCP bridge gates its own tools independently.
@@ -604,29 +709,8 @@ export async function runAcpEngine(def: EngineDef, ctx: EngineRunCtx): Promise<E
     // 续接的会话记着上次选的模型,所以每轮都对一下「当前值」而不是只在新建时设。
     // (DSH 实测:换模型会把思考档重置成那个模型的缺省值。这里不碰思考档。)
     // sel = 这场会话此刻的模型清单和当前模型(下面换了模型就跟着换):这一轮因为缺 API key 失败时,拿它告诉用户能换成什么。
-    let sel = mapAcpConfigOptions((s as any)?.configOptions);
-    if (!sel.modelConfigId && (s as any)?.models) sel = { ...sel, ...mapAcpModels((s as any).models) }; // 模型走 `models` 的引擎:清单和当前模型在那边
-    if (ctx.engineModelId) {
-      try {
-        if (!(s as any)?.models && sel.modelConfigId) {
-          if (ctx.engineModelId !== sel.currentModelId) {
-            // 存着的选择不在这次的清单里(引擎那边换了目录 / 下架)→ 不发,照引擎当前的跑
-            if (!sel.models.some((m) => m.id === ctx.engineModelId)) console.warn(`[engine] model ${ctx.engineModelId} is not offered by ${def.id} any more; keeping ${sel.currentModelId ?? 'the engine default'}`);
-            else {
-              const changed: any = await guard(conn.setSessionConfigOption({ sessionId, configId: sel.modelConfigId, value: ctx.engineModelId }), 'setSessionConfigOption');
-              // 回包里是换完之后的整份选项;没带(老实现)就只把当前模型记成刚选的那个
-              const after = mapAcpConfigOptions(changed?.configOptions);
-              sel = after.modelConfigId ? after : { ...sel, currentModelId: ctx.engineModelId };
-            }
-          }
-        } else if (ctx.engineModelId !== (s as any)?.models?.currentModelId) {
-          await conn.unstable_setSessionModel({ sessionId, modelId: ctx.engineModelId });
-          sel = { ...sel, currentModelId: ctx.engineModelId };
-        }
-      } catch (e: any) {
-        console.warn(`[engine] set model(${ctx.engineModelId}) failed: ${acpErrorText(e)}`);
-      }
-    }
+    const sel = await applyEngineModel(conn, sessionId, s, ctx.engineModelId, def.id, guard);
+    try { ctx.onModel?.(sel.currentModelId); } catch { /* 只是告知 */ }
     if (replaying) {
       await settleAfterLoad(() => dropped.lastAt, ctx.signal);
       ctx.signal.throwIfAborted();

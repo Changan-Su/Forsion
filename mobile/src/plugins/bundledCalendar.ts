@@ -32,6 +32,6 @@ export function withBundledCalendar(host: MobilePluginHost, appVersion: () => st
       return [...recipes.filter((r) => r.plugin !== manifest.id),
         { slug: 'calendar', plugin: manifest.id, json: calendar }, { slug: 'todo', plugin: manifest.id, json: todo }]
     },
-    uninstallPlugin: (id) => id === manifest.id ? Promise.reject(new Error('Core plugins can be disabled in settings')) : host.uninstallPlugin(id),
+    uninstallPlugin: (id, opts) => id === manifest.id ? Promise.reject(new Error('Core plugins can be disabled in settings')) : host.uninstallPlugin(id, opts),
   }
 }

@@ -463,6 +463,8 @@ export function useExitGhost(ref: RefObject<HTMLElement | null>, open = true): v
       ghost.removeAttribute('id')
       ghost.setAttribute('aria-hidden', 'true')
       ghost.setAttribute('data-lcl-exit', '')
+      // 液滴 / 拉伸还在流出时就关掉(点了一行):克隆不带裁切动画,pouring 留着就是一张没底色的卡在淡出
+      ghost.classList.remove('lcl-droplet-pouring')
       ghost.inert = true
       ghost.style.pointerEvents = 'none'
       queueMicrotask(() => {

@@ -13,6 +13,7 @@
  *  笔还是白板那七支(pens.ts),套笔用的是白板笔排的同一个函数。
  */
 import { useEffect, useRef } from 'react'
+import { flushSync } from 'react-dom'
 import { mountHostReact } from '@lcl/components'
 import { UI_ZOOM_EVENT } from '@lcl/engine'
 import { CaptureUpdateAction, Excalidraw, exportToSvg, getCommonBounds, restoreElements } from '../blocks/excalidraw/forkRuntime'
@@ -94,11 +95,18 @@ export function mountPluginBoard(el: HTMLElement, initial: PluginBoardOptions): 
   const readZoom = (): number => (el as HTMLElement & { currentCSSZoom?: number }).currentCSSZoom || 1
   let uiz = readZoom()
 
-  const pushViewport = (): void => {
-    api?.updateScene({
+  /** sync:调用方在自己的事件里推的视口(跟着页面滚 / 缩放)—— 当场渲染完,和页面同一帧上屏。
+   *  不 sync 的话引擎的重画排在 React 的下一个任务里,画面总比页面晚一帧(快划时差几十像素,插件探针量过)。
+   *  引擎自己装好 / 自己漂了之后拉回来那两处在 React 的生命周期里,不能 flushSync,走普通的。 */
+  const pushViewport = (sync = false): void => {
+    if (!api) return
+    const a = api
+    const run = (): void => a.updateScene({
       appState: { scrollX: o.viewport.scrollX, scrollY: o.viewport.scrollY, zoom: { value: clampZoom(o.viewport.zoom * uiz) } } as unknown as AppPatch,
       captureUpdate: CaptureUpdateAction.NEVER,
     })
+    if (sync) flushSync(run)
+    else run()
   }
   /** 套笔:先套这支笔自己的参数,调用方点名的颜色 / 粗细再盖上去。带填充色的笔(荧光笔、马克笔)填充跟着颜色走。 */
   const pushStyle = (): void => {
@@ -166,7 +174,7 @@ export function mountPluginBoard(el: HTMLElement, initial: PluginBoardOptions): 
       if (patch.scene) pushScene()
       if (!api) return // 笔和视口:引擎好了的那一刻按 o 里最新的套(见 bind)
       if ('pen' in patch || 'strokeColor' in patch || 'strokeWidth' in patch || 'roundness' in patch) pushStyle()
-      if (patch.viewport) pushViewport()
+      if (patch.viewport) pushViewport(true)
     },
     getScene: () => (api ? { elements: api.getSceneElements(), files: api.getFiles() } : o.scene),
     undo() { api?.history.undo() },

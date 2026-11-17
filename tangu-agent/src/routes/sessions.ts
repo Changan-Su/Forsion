@@ -17,6 +17,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { authMiddleware, AuthRequest } from '../core/http.js';
 import { query } from '../core/db.js';
 import { liveRunStatus } from '../services/runStatus.js';
+import { failedRunsFor } from '../services/failedRuns.js';
 import { normalizeSessionEmoji } from '../core/sessionEmoji.js';
 import { resolveProfile } from '../seams/appProfile.js';
 import { compactSession, getLatestSummary, rowCoverage, type Checkpoint } from '../services/compaction.js';
@@ -29,6 +30,7 @@ import { resolveChildModel, startChildSession } from '../services/childSessions.
 import { museDmSessionId } from '../services/museDm.js';
 import { getAgent, MUSE_AGENT_SLUG } from '../agents/agentRegistry.js';
 import { branchSession } from '../services/sessionBranch.js';
+import { importConversations, validateImportBody } from '../services/sessionImport.js';
 import { listCheckpoints, restoreCodeSince, restoreCodeCheckpoint, CheckpointNotFoundError, listChanges, type ChangeWindow } from '../services/checkpoints.js';
 import { listGitChangesMulti } from '../services/gitChanges.js';
 import { extraRootsOf, listProjectRepos, repoCwd } from '../services/gitRepos.js';
@@ -240,6 +242,39 @@ router.post('/agent/sessions', authMiddleware, async (req: AuthRequest, res) => 
     res.json({ session: rowToSession(rows[0]) });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'create session failed' });
+  }
+});
+
+// 导入别处的聊天记录(2026-11-16,DeepSeek 网页导出等):每条外部对话建成一个能接着聊的会话。
+// 初始配置与 POST /agent/sessions 同口径校验;追加不覆盖(同一条再导回 exists)。细节见 services/sessionImport.ts。
+// 远端设备不能往这台导:导入是「把我自己的记录放进我这端」,不是替别的设备写历史。
+router.post('/agent/sessions/import', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    if (parseRemoteOrigin(req.headers)) return res.status(403).json({ detail: 'Import is not available from a remote device', code: 'LOCAL_ONLY' });
+    const userId = req.user!.userId;
+    const { app_id, source, agent_config, model_id, projectless, conversations } = req.body || {};
+    const profile = resolveProfile(app_id);
+    if (!profile) return res.status(400).json({ detail: `unknown app_id: ${app_id}` });
+    const bad = validateImportBody(source, conversations);
+    if (bad) return res.status(400).json({ detail: bad });
+    const rawCfg = agent_config && typeof agent_config === 'object' && !Array.isArray(agent_config) ? agent_config : null;
+    if (rawCfg && Object.prototype.hasOwnProperty.call(rawCfg, 'imported')) return res.status(400).json({ detail: 'agent_config.imported is set by the engine' });
+    const initCfg = rawCfg && settleTeamPlanMode(rawCfg);
+    const factErr = validSessionFacts(initCfg);
+    if (factErr) return res.status(400).json({ detail: factErr });
+    // 私聊轨道是「每个 Agent 一条活动会话」:导入的一批不能都塞进去,挂成普通的 Agent 会话(agentSlug)。
+    if (initCfg && (initCfg.soloAgentSlug != null || initCfg.soloEngineId != null || initCfg.teamSlug != null)) {
+      return res.status(400).json({ detail: 'Imported chats cannot join a private or team track; use agentSlug' });
+    }
+    if (model_id != null && (typeof model_id !== 'string' || model_id.length > 128)) return res.status(400).json({ detail: 'model_id must be a string' });
+    const results = await importConversations({
+      userId, appId: profile.appId, source,
+      agentConfig: initCfg, modelId: (typeof model_id === 'string' && model_id) || profile.defaultModelId || null,
+      projectless: projectless !== false, conversations,
+    });
+    res.json({ results });
+  } catch (e: any) {
+    res.status(500).json({ detail: e?.message || 'import failed' });
   }
 });
 
@@ -458,6 +493,7 @@ router.get('/agent/sessions/:id/messages', authMiddleware, async (req: AuthReque
     );
     rows.reverse(); // 时间正序
     res.json({
+      failed_runs: await failedRunsFor(req.params.id, rows),
       messages: rows.map((r) => ({
         ...r,
         tool_calls: parseMaybeJson(r.tool_calls),

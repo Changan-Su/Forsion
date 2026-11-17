@@ -8,6 +8,7 @@ import { CORE_BUNDLE_IDS } from '../desktop/shared/corePlugins'
 import bundles from '../desktop/electron/builtinBundles.json'
 import { verifyBundleSignature } from '../desktop/electron/bundleSignature'
 import { createHash } from 'node:crypto'
+import { cmpVersion } from '../tangu-agent/src/contracts/lenientVersion'
 
 export interface CloudServices {
   amadeus?: { adapter: 'forsion-cloud-v1'; apiBase: string; collaboration?: boolean }
@@ -45,12 +46,12 @@ export interface InstalledPackage {
   spaceIds: Set<string>
 }
 export const validId = (id: unknown): id is string => typeof id === 'string' && /^[a-z][a-z0-9-]*$/.test(id)
+/** 版本序与桌面插件门禁同一份(contracts/lenientVersion.ts):预发布排在正式版之前,2.13.8-beta.3 不满足 2.13.8;+build.N 有序。
+ *  写法仍要是完整的三段(可带前导 v、预发布号、构建号),否则抛错。以前只比前三个数字,beta 版宿主照样放行要正式版的插件。 */
 export function versionAtLeast(actual: string, minimum: string): boolean {
-  const parse = (v: string) => /^\d+\.\d+\.\d+(?:[-+][\w.-]+)?$/.test(v) ? v.split(/[.+-]/).slice(0, 3).map(Number) : null
-  const a = parse(actual), b = parse(minimum)
-  if (!a || !b) throw new Error('Invalid semantic version')
-  for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] > b[i]
-  return true
+  const valid = (v: string) => typeof v === 'string' && /^v?\d+\.\d+\.\d+(?:-[\w.-]+)?(?:\+[\w.-]+)?$/.test(v)
+  if (!valid(actual) || !valid(minimum)) throw new Error('Invalid semantic version')
+  return cmpVersion(actual, minimum) >= 0
 }
 export async function packagePath(root: string, relative: string): Promise<string> {
   if (typeof relative !== 'string' || !relative || isAbsolute(relative) || relative.split(/[\\/]/).includes('..')) throw new Error('Plugin file escapes its package')

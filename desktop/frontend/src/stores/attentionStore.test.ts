@@ -171,6 +171,7 @@ describe('私聊 attention(Muse 主动发来 / 等你)', () => {
     await useAttention.getState().refresh(); await flush()
     expect(state.notify).toHaveBeenCalledTimes(1)
     expect(state.notify.mock.calls[0][0]).toMatchObject({ event: 'dm.message', title: 'Muse' })
+    expect(state.notify.mock.calls[0][0].urgent, '新消息不算在等人').toBeUndefined()
     await useAttention.getState().refresh(); await flush()
     expect(state.notify).toHaveBeenCalledTimes(1)
     at = 200
@@ -212,6 +213,7 @@ describe('私聊 attention(Muse 主动发来 / 等你)', () => {
     state.dm.mockImplementation(async (path: string) => json(path.endsWith('/read') ? { ok: true, unread: false, awaiting: true } : { sessions: [{ id: 'dm1', unread: true, awaiting: true, count: 1, at: 300 }] }))
     await useAttention.getState().refresh(); await flush()
     expect(state.notify.mock.calls[0][0].event).toBe('dm.waiting')
+    expect(state.notify.mock.calls[0][0].urgent, '它停着在等人:手机上不受节流').toBe(true)
     useApp.setState({ sessions: [{ ...solo, awaiting_user: true }] } as any)
     useAttention.getState().markRead('dm1', 'pending'); await flush()
     useAttention.getState().markRead('dm1', 'pending'); await flush()

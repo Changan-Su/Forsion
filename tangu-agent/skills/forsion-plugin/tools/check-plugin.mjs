@@ -57,7 +57,8 @@ const BOOT = String.raw`(function () {
       },
     });
   };
-  var app = new Proxy({}, { get: function (_, k) { return /^(watch|subscribe|on[A-Z])/.test(text(k)) ? function () { return noop; } : function () { return Promise.resolve(null); }; } });
+  // insertMarkdownAt answers synchronously like the host does with no note open; every other app method resolves null.
+  var app = new Proxy({}, { get: function (_, k) { k = text(k); return k === 'insertMarkdownAt' ? function () { return { ok: false, reason: 'no-note' }; } : /^(watch|subscribe|on[A-Z])/.test(k) ? function () { return noop; } : function () { return Promise.resolve(null); }; } });
   var ctx = new Proxy({}, { get: function (_, k) {
     if (typeof k !== 'string') return undefined;
     if (k === 'app') return app;
@@ -241,6 +242,36 @@ if (!existsSync(mainFile) && !bundleOnly) { problem(`"main" points at ${mainName
 const src = bundleOnly ? '' : readFileSync(mainFile, 'utf8');
 const lineOf = (offset) => src.slice(0, Math.max(0, offset)).split('\n').length;
 
+// ── 1b. internal APIs (ctx.internals, 2026-11-16+): declared before used; no reaching around the host ──────────
+// Static, on the source text: a mention in a comment or a string counts too.
+{
+  const caps = Array.isArray(manifest.capabilities) ? manifest.capabilities : [];
+  const reads = caps.includes('internals');
+  const raw = caps.includes('internals-raw');
+  const usesInternals = /\bctx\s*\??\.\s*internals\b|\binternals\s*[,}][^=]*=\s*ctx\b/.test(src);
+  const rawCalls = [...src.matchAll(/\braw\s*\??\.\s*import\s*\(\s*(?:(['"`])([^'"`$]+)\1\s*\))?/g)];
+  const fiber = /__reactFiber\$|__reactProps\$|__reactContainer\$|_reactRootContainer|__reactInternalInstance/.exec(src);
+  if (reads || raw || usesInternals || rawCalls.length || fiber) {
+    say();
+    say('internal APIs (ctx.internals)');
+    if (raw && !reads) problem('"capabilities" has "internals-raw" without "internals": the host gives the second level only together with the first, so ctx.internals stays undefined. Add "internals".');
+    if (usesInternals && !reads) problem(`${mainName} uses ctx.internals but "capabilities" does not declare "internals": the host only injects it when declared, so it is undefined here.`);
+    if (rawCalls.length && !raw) problem(`${mainName} calls ctx.internals.raw.import but "capabilities" does not declare "internals-raw": raw is undefined without it.`);
+    if (fiber && !raw) problem(`${mainName} reaches into the host's React internals (${fiber[0]}…) without declaring "internals-raw". Read host state through ctx.internals.read, or declare "internals-raw" and take the module with ctx.internals.raw.import. Plugins that reach around the host this way do not pass store review.`);
+    else if (fiber) say(`  ! ${mainName} reaches into the host's React internals (${fiber[0]}…). Even with "internals-raw" that is not supported: take host modules with ctx.internals.raw.import.`);
+    if (reads) ok(`declares "internals"${raw ? ' and "internals-raw"' : ''}: desktop only, and the plugin must check \`if (!ctx.internals)\` before use (web, phone and older hosts do not have it)`);
+    if (raw) {
+      const ids = [...new Set(rawCalls.map((m) => m[2]).filter(Boolean))].sort();
+      const computed = rawCalls.some((m) => !m[2]);
+      say(`  · second-level modules it asks for: ${ids.length ? ids.join(', ') : '(none written out)'}${computed ? '; also ids computed at run time' : ''}`);
+      say('    The store reviews "internals-raw" plugins per version: say in the submission which of these it needs and why the public APIs are not enough.');
+    }
+    if (reads && !(Array.isArray(manifest.internalsVerified) ? manifest.internalsVerified.length : typeof manifest.internalsVerified === 'string')) {
+      say('  · no "internalsVerified": Settings → Plugins will say it was not checked on the running Forsion version. List the versions you checked, e.g. "internalsVerified": ["2.14"].');
+    }
+  }
+}
+
 // ── 2. load main.js like the host does ─────────────────────────────────────────────────────────────────────────────
 say();
 let run = { loadError: null, returned: 'undefined', registered: [], late: [], timers: 0, dead: null };
@@ -342,7 +373,7 @@ for (const slug of slugs) {
 // ── 4. registration code that exists but did not run ───────────────────────────────────────────────────────────────
 // Reported only when it explains something: a Space is missing one of this plugin's views, or nothing was registered at
 // all. A registration that is skipped on purpose (platform check, optional host API) is normal and stays unmentioned.
-const HOST_REGISTER = /\.\s*(register(?:View|Command|Setting|SettingsView|StatusItem|SlashItem|Panel|Theme|FileType|EmbedRenderer|FileCreator|ListSource|PropertyType|SelectionAction|Readiness|StoreView|Appearance|Font|EditorExtension|Companion|Series))\s*(?:\?\.)?\s*\(/g;
+const HOST_REGISTER = /\.\s*(register(?:View|Command|Setting|SettingsView|StatusItem|SlashItem|Panel|Theme|FileType|EmbedRenderer|FileCreator|ListSource|PropertyType|SelectionAction|Readiness|StoreView|Appearance|Font|EditorExtension|Companion|Series|TemplateProcessor|NoteBirth))\s*(?:\?\.)?\s*\(/g;
 const sites = [...src.matchAll(HOST_REGISTER)].map((m) => ({ kind: m[1], offset: m.index, line: lineOf(m.index), after: src.slice(m.index, m.index + 400), dead: deadRegionAt(m.index) }));
 const total = src.split('\n').length;
 const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

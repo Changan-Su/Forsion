@@ -92,6 +92,24 @@ describe('classifyResumeFailure', () => {
   });
 });
 
+describe('一轮中途换模型(config_option_update)', () => {
+  it('报了模型这一项 → 把当前模型告诉宿主;没写当前值 → undefined;只改思考档 / 回放中 → 不告诉', async () => {
+    const seen: Array<string | undefined> = [];
+    let replaying = false;
+    const { client } = createAcpClient('DeepSeek Harness', {
+      signal: new AbortController().signal, publish: () => {}, replaying: () => replaying,
+      requestApproval: async () => ({ action: 'approve' }), onModel: (id) => { seen.push(id); },
+    });
+    const send = (configOptions: unknown) => client.sessionUpdate({ sessionId: 's', update: { sessionUpdate: 'config_option_update', configOptions } as any });
+    const pro = '["deepseek-official","deepseek-v4-pro"]';
+    await send([{ ...DSH_OPTIONS[0], currentValue: pro }, DSH_OPTIONS[1]]);
+    await send([{ ...DSH_OPTIONS[0], currentValue: undefined }]);
+    await send([DSH_OPTIONS[1]]);
+    replaying = true; await send(DSH_OPTIONS);
+    expect(seen).toEqual([pro, undefined]);
+  });
+});
+
 describe('审批请求只带 toolCallId(DSH)', () => {
   const setup = () => {
     const asked: Array<{ preview: string; name: string; args: string }> = [];
@@ -163,6 +181,16 @@ describe('DSH 引擎定义与检测', () => {
     expect(def.models).toBeUndefined();
     expect(def.commands).toBeUndefined();
     expect(loadEngines(path.join(tmp(), 'no-such-engines.json')).find((e) => e.id === 'dsh')?.command).toBe('dsh');
+  });
+
+  it('按 id 覆盖内置的 dsh(换一份装在别处的):没写 agentsHomeEnv 就沿用内置的,写了以写的为准', () => {
+    const file = path.join(tmp(), 'engines.json');
+    writeFileSync(file, JSON.stringify({ engines: [{ id: 'dsh', name: 'DSH', command: '/opt/dsh/bin/dsh', args: ['--profile', 'acp'] }, { id: 'other', name: 'O', command: 'o' }] }));
+    const list = loadEngines(file);
+    expect(list.find((e) => e.id === 'dsh')).toMatchObject({ command: '/opt/dsh/bin/dsh', agentsHomeEnv: 'DSH_AGENTS_HOME' });
+    expect(list.find((e) => e.id === 'other')?.agentsHomeEnv).toBeUndefined();
+    writeFileSync(file, JSON.stringify({ engines: [{ id: 'dsh', name: 'DSH', command: 'dsh', agentsHomeEnv: null }] }));
+    expect(loadEngines(file).find((e) => e.id === 'dsh')?.agentsHomeEnv).toBeNull();
   });
 
   // 用例只对「dsh 不在 PATH / 常见安装目录上」的机器有判别力;开发机装了 dsh 时第一条会跳过

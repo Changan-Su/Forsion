@@ -1,6 +1,7 @@
 import { TextSelection } from '@milkdown/kit/prose/state'
 import type { EditorView } from '@milkdown/kit/prose/view'
 import { buildBlockString, scanMath } from './mathLivePreview'
+import { bracketAutoPairEnabled } from './autoPairPrefs'
 
 function context(view: EditorView, from: number, to: number) {
   if (!view.editable || view.composing || from !== to) return null
@@ -63,12 +64,26 @@ export function mathPairBackspace(view: EditorView, event: KeyboardEvent): boole
   return true
 }
 
+/** 块内偏移 offset 是否落在公式源码里(含刚配出来的空公式 `$|$`;同 mathBracketContext 的探针法)。
+ *  text = buildBlockString(块)。正文配对(bodyAutoPair)据此整段让位:公式里的括号由下面的 mathBracketInput 管,
+ *  引号在公式里是撇号(`f'`),一律不配。 */
+export function caretInMath(text: string, offset: number): boolean {
+  if (text.indexOf('$') === -1) return false
+  const probe = text.slice(0, offset) + 'x' + text.slice(offset)
+  return scanMath(probe).some((s) => {
+    const delimiter = s.display ? 2 : 1
+    return offset >= s.from + delimiter && offset < s.to - delimiter
+  })
+}
+
 const BRACKET_PAIRS: Record<string, string> = { '(': ')', '[': ']', '{': '}' }
 const BRACKET_CLOSERS = new Set(Object.values(BRACKET_PAIRS))
 
 /** Insert a harmless probe character to recognize empty paired math as well as
  * populated formulas. Closed delimiters keep ordinary prose out of this path. */
 function mathBracketContext(view: EditorView, from: number, to: number) {
+  // 公式里的括号成对与正文 / 代码块共用「自动补全括号和引号」开关(`$` 的配对是公式自己的,不受它管)。
+  if (!bracketAutoPairEnabled()) return null
   const c = context(view, from, to)
   if (!c || /(?:^|[^\\])(?:\\\\)*\\$/.test(c.left)) return null
   const probe = c.text.slice(0, c.offset) + 'x' + c.text.slice(c.offset)

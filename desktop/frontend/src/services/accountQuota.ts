@@ -20,6 +20,8 @@ export interface AccountQuotaView {
   pointsBalance?: number
   /** 这个账号能用的模型倍率上限,-1 = 不限(2026-11-13 起;旧服务端没有 = 不知道,不标任何模型)。 */
   modelMultiplierCap?: number
+  /** 限时开放中、开放给的档位含这个账号的模型(2026-11-15 起;旧服务端没有 = 没有开放)。 */
+  modelTrials?: ModelTrialView[]
   /** 后台额度(Muse / 自动化;2026-09-24 起服务端才下发,旧服务端无此字段)。 */
   background?: BackgroundQuotaView
 }
@@ -201,6 +203,7 @@ export function accountQuotaEpoch(): number { return accountEpoch }
 export function resetAccountQuotaScope(): void {
   accountEpoch++
   resetPointsWriteState()
+  seenTrials = {}
   if (typeof window === 'undefined') return
   window.dispatchEvent(new CustomEvent(ACCOUNT_QUOTA_SCOPE_EVENT))
   publishAccountQuota(null)
@@ -222,13 +225,61 @@ export function modelMultiplierCapOf(quota: AccountQuotaView | null | undefined)
   return typeof cap === 'number' && Number.isFinite(cap) && cap >= 0 ? cap : null
 }
 
+/**
+ * 限时开放(2026-11-15):后台把倍率超上限的模型临时开给某档及以上,服务端在额度视图里列出「对这个账号正开放着的」。
+ * 模型 id → 到期时间(毫秒)。没下发 / 读失败 = 没有开放,照常按上限锁(收紧那侧)。到点由界面自己翻回锁住(见 useModelTrialClock)。
+ */
+export interface ModelTrialView { modelId: string; endsAt: string }
+export type ModelTrials = Readonly<Record<string, number>>
+const NO_TRIALS: ModelTrials = Object.freeze({})
+/** 见过的开放(模型 id → 到期毫秒):开放刚结束时报错卡要说「限时体验已于 … 结束」,那时额度视图里已经没有它了。换号清空。 */
+let seenTrials: Record<string, number> = {}
+export function modelTrialsOf(quota: AccountQuotaView | null | undefined): ModelTrials {
+  const list = quota?.modelTrials
+  if (!Array.isArray(list) || !list.length) return NO_TRIALS
+  const out: Record<string, number> = {}
+  for (const x of list) {
+    const at = typeof x?.endsAt === 'string' ? Date.parse(x.endsAt) : NaN
+    if (typeof x?.modelId === 'string' && x.modelId && Number.isFinite(at)) { out[x.modelId] = at; seenTrials[x.modelId] = at }
+  }
+  return out
+}
+/** 这个模型的限时开放结束了几天以内(默认 7 天)就给结束时间,否则 null。只认这台机器这次登录里见过的开放。 */
+export function recentlyEndedTrial(modelId: string | null | undefined, now = Date.now(), withinMs = 7 * 86_400_000): number | null {
+  const at = modelId ? seenTrials[modelId] : undefined
+  return typeof at === 'number' && at <= now && now - at <= withinMs ? at : null
+}
+
+/** 倍率超过上限、而且没有正开放着的限时体验 = 用不了。服务端同一口径(modelTierGate:严格大于、开放中放行)。 */
 export function isModelTierLocked(
-  model: { multiplier?: number | null; source?: string } | null | undefined,
+  model: { id?: string; multiplier?: number | null; source?: string } | null | undefined,
   cap: number | null | undefined,
+  trials: ModelTrials = NO_TRIALS,
+  now = Date.now(),
 ): boolean {
   if (!model || typeof cap !== 'number' || !Number.isFinite(cap) || cap < 0) return false
   if (model.source && model.source !== 'forsion') return false
-  return typeof model.multiplier === 'number' && Number.isFinite(model.multiplier) && model.multiplier > cap
+  if (!(typeof model.multiplier === 'number' && Number.isFinite(model.multiplier) && model.multiplier > cap)) return false
+  return trialEndsAt(model, cap, trials, now) == null
+}
+
+/** 限时开放真把这个模型解锁了(倍率 > 上限、正开放着)→ 到期毫秒;否则 null。选择器据它在第二行标「[限时] 至 …」。 */
+export function trialEndsAt(
+  model: { id?: string; multiplier?: number | null; source?: string } | null | undefined,
+  cap: number | null | undefined,
+  trials: ModelTrials = NO_TRIALS,
+  now = Date.now(),
+): number | null {
+  if (!model?.id || typeof cap !== 'number' || !Number.isFinite(cap) || cap < 0) return null
+  if (model.source && model.source !== 'forsion') return null
+  if (!(typeof model.multiplier === 'number' && Number.isFinite(model.multiplier) && model.multiplier > cap)) return null
+  const at = trials[model.id]
+  return typeof at === 'number' && now < at ? at : null
+}
+
+/** 旧版客户端看的「限时 Trial」标签(服务端补在 /brain/models 的 tags 里,kind: 'trial'):新版自己在第二行画,不显示它。 */
+export function visibleModelTags<T extends { text: string }>(tags: readonly T[] | null | undefined): T[] {
+  return (tags || []).filter((tag) => (tag as { kind?: unknown }).kind !== 'trial')
 }
 
 /**
@@ -253,8 +304,27 @@ export function tierLockedModelName(raw: string): string {
   } catch { return '' }
 }
 
-/** 人话:有模型名说名字,没有就说「这个模型」。fallbackName = 调用方确认过「确实还锁着」的那个模型的显示名。 */
-export function tierLockedText(raw: string, t: (key: string, vars?: Record<string, string>) => string, fallbackName = ''): string {
+/** 服务端那句「限时体验已结束」(SSE 的人话,中英两半都认):提前结束时客户端记着的到期还在以后,只能靠它认出来 */
+const TRIAL_ENDED_RE = /限时体验已结束|free trial of .+ has ended/i
+
+/** HTTP 403 的 JSON 回包里服务端给的开放结束时刻(毫秒);没有 = null。比本机见过的到期准(后台可能提前结束了) */
+export function trialEndedAtOf(raw: string | null | undefined): number | null {
+  const start = raw ? raw.indexOf('{') : -1
+  if (start < 0) return null
+  try {
+    const body = JSON.parse(raw!.slice(start))
+    const at = Date.parse(body?.trialEndedAt ?? body?.detail?.trialEndedAt)
+    return Number.isFinite(at) ? at : null
+  } catch { return null }
+}
+
+/**
+ * 人话:有模型名说名字,没有就说「这个模型」。fallbackName = 调用方确认过「确实还锁着」的那个模型的显示名。
+ * trialEndedDate = 这个模型的限时开放刚结束(recentlyEndedTrial, 日期走 format/time 的 formatDate):有名字时改说「限时体验已于 {date} 结束」。
+ */
+export function tierLockedText(raw: string, t: (key: string, vars?: Record<string, string>) => string, fallbackName = '', trialEndedDate = ''): string {
   const model = tierLockedModelName(raw) || fallbackName
+  if (model && trialEndedDate) return t('chat.err.trialEnded', { model, date: trialEndedDate })
+  if (model && TRIAL_ENDED_RE.test(raw)) return t('chat.err.trialEndedBare', { model }) // 服务端说结束了,但不知道哪天
   return model ? t('chat.err.tierLocked', { model }) : t('chat.err.tierLockedBare')
 }

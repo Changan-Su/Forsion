@@ -1,5 +1,6 @@
 /** Local, plugin-owned task sessions. Never borrow an Agent's private-session identity. */
 import { randomUUID } from 'node:crypto';
+import { holdEngineConversation } from '../engines/residentHold.js';
 import { realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { query, getDbType } from '../core/db.js';
@@ -182,4 +183,8 @@ export function createPluginRuns(owner: string, alive: () => boolean, own: (off:
 
 export const pluginEngines = { list: () => (deps().engines?.list() || []).map(e => ({ ...e,
   available: e.available && !isHostSandboxRestricted(), ...(isHostSandboxRestricted() ? { reason: 'Local sandbox is enabled' } : {}),
-})) };
+})),
+  /** 让常驻进程把一场 Forsion 对话的引擎会话接上(工作台打开它之前,见 engines/residentHold.ts)。userId = 这场对话的主人
+   *  (插件路由里是 req.user.userId)。 */
+  hold: (engineId: string, sessionId: string, userId: string) => holdEngineConversation(engineId, sessionId, userId),
+};

@@ -196,8 +196,27 @@ function buildDecorations(
       const img = imageEmbed(m[1], bang)
       const embedFrom = cs + m.index - 1
       const embedTo = cs + m.index + m[0].length
-      if (bang && !img && embedSourceKey.getState(state)?.decos.find(embedFrom, embedTo,
-        (spec) => spec.embedSource === true).some((d) => d.from <= embedFrom && d.to >= embedTo)) continue
+      // 块级嵌入那一段的源码归嵌入层管:藏着时这里不画部件。光标走进那一行、源码露出来(revealed)时照普通双链在编辑时的样子
+      // 着色、右键出这份文件的菜单(11-15 用户实报:不带 `!` 的已经这样了,`![[…]]` 露出来却是白色裸文本)。
+      // 只着色不画部件:那一行露源码本身就是嵌入层的编辑态,光标停在 `]]` 后面也不收成链接。
+      if (bang && !img) {
+        const owned = embedSourceKey.getState(state)?.decos.find(embedFrom, embedTo, (spec) => spec.embedSource === true)
+          .find((d) => d.from <= embedFrom && d.to >= embedTo)
+        if (owned) {
+          const spec = owned.spec as { revealed?: boolean; attachment?: boolean }
+          if (spec.revealed && !parseAppRefInner(m[1])) {
+            const fileLink = isPdfLinkInner(m[1]) || !!parseMediaLinkInner(m[1])
+            const sp = fileLink ? null : splitLinkInner(m[1])
+            const ok = sp?.subpath && !sp.target ? true : isResolved(linkTarget(m[1]))
+            // 右键菜单同嵌入体那份(embed / attachment):附件丢了不给「创建笔记」(否则 `![[data.zip]]` 会生出 data.zip.md)
+            decos.push(Decoration.inline(embedFrom, embedTo, {
+              class: ok ? 'wikilink-src' : 'wikilink-src wikilink-unresolved', 'data-wiki-open': wikiOpenArg(m[1]), spellcheck: 'false',
+              'data-wiki-embed': spec.attachment ? 'attachment' : 'note',
+            }))
+          }
+          continue
+        }
+      }
       const spFrom = img ? m.index - 1 : m.index
       const spTo = m.index + m[0].length
       const from = cs + spFrom
@@ -223,7 +242,7 @@ function buildDecorations(
           const fileLink = isPdfLinkInner(m[1]) || !!parseMediaLinkInner(m[1])
           const sp = fileLink ? null : splitLinkInner(m[1])
           const ok = sp?.subpath && !sp.target ? true : isResolved(linkTarget(m[1]))
-          decos.push(Decoration.inline(from, to, { class: ok ? 'wikilink-src' : 'wikilink-src wikilink-unresolved', 'data-wiki-open': wikiOpenArg(m[1]) }))
+          decos.push(Decoration.inline(from, to, { class: ok ? 'wikilink-src' : 'wikilink-src wikilink-unresolved', 'data-wiki-open': wikiOpenArg(m[1]), spellcheck: 'false' }))
         }
         continue
       }
@@ -560,7 +579,10 @@ export function wikilinkPlugin(
               const src = (e.target as HTMLElement | null)?.closest?.<HTMLElement>('.wikilink-src[data-wiki-open]')
               if (!src) return false
               e.stopPropagation()
-              const taken = !src.dispatchEvent(new CustomEvent('amadeus:wikilink-menu', { bubbles: true, cancelable: true, detail: { inner: src.dataset.wikiOpen, x: e.clientX, y: e.clientY } }))
+              const taken = !src.dispatchEvent(new CustomEvent('amadeus:wikilink-menu', { bubbles: true, cancelable: true, detail: {
+                inner: src.dataset.wikiOpen, x: e.clientX, y: e.clientY,
+                ...(src.dataset.wikiEmbed ? { embed: true, attachment: src.dataset.wikiEmbed === 'attachment' } : {}),
+              } }))
               if (taken) e.preventDefault()
               return taken
             },

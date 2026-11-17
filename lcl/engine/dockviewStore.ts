@@ -17,13 +17,14 @@ import { alignWorkspaceRegions, captureRegionTree, restoreRegionProportions, typ
 import type { DockviewApi, IDockviewPanel } from 'dockview-react'
 import type { DockSide, Leaf, SidebarDefaults, ViewLocation } from './types'
 import { getView } from './viewRegistry'
+import { aliasViewType } from './viewAlias'
 import { identitySig, label, panelFilePath } from './types'
 import { settleReplayedAnimations } from './keepScroll'
 import { computeSideWidth, computeBottomHeight, computeTransientSideWidth } from './sideWidth'
 import { shouldRecordSideWidth } from './sideCapture'
 import { locOf, type DropTarget } from './dropModel'
 import { isLastPinned, isPinned, missingPinned, type PanelRef, type PinnedViews } from './pinnedViews'
-import { arrangeRight, planRight, rightGroupFor, RULE_PARAM, RULE_TAG, type RightRef } from './rightRules'
+import { arrangeRight, baseKeyOf, planRight, rightExtrasFrom, rightGroupFor, RULE_PARAM, RULE_TAG, type RightRef } from './rightRules'
 import { IS_MAIN_WINDOW, IS_MINI_PANEL, IS_VIEW_WINDOW, WINDOW_SPACE_ID } from './uiMode'
 import { mainOpensBeside, noteBesideTarget } from './openBeside'
 import { useNav } from './navStore'
@@ -33,7 +34,7 @@ import { floatPersistence, setFloatLayoutHost } from './floatPersistSeam'
 import { reducedMotion } from './spring'
 import {
   LAYOUT_KEY, saveLayout, loadLayout, clearLayout, saveNamedLayout, loadNamedLayout, listNamedLayouts, layoutIsBlank,
-  type LayoutEnvelopeV4, type PersistedPanel,
+  type LayoutEnvelopeV4, type PersistedPanel, type PersistedFloat,
 } from './layoutPersist'
 
 /** Dockview panel.params 里引擎私有字段(双下划线避免与视图 params 撞名)。 */
@@ -528,7 +529,7 @@ function rightGroupNow(api: DockviewApi, defaults: readonly Stashed[]): ReturnTy
   // 主视图还是占位(它的插件没就位 / 已关掉):不对账。按缺省组对的话,会把它带 __by:'rule' 的伴随视图当成
   // 「不属于本组」关掉、随即存盘 —— 参数一丢,插件回来也复原不了(Codex 3a 评审)。注册上来后下一次 refreshTabs 再对。
   if (type && !getView(type)) return null
-  return rightGroupFor(type, type ? getView(type)?.rightCompanions : undefined, defaults, usableRight)
+  return rightGroupFor(type, type ? getView(type)?.rightCompanions : undefined, defaults, usableRight, rightExtrasFrom(type ? getView(type)?.rightExtras : undefined, main?.params))
 }
 /** refreshTabs 里发现组变了:推一拍再对账 —— 它本身就在开 / 关 / 激活的半路上,当场再开关面板会重入。 */
 function queueRightRules(): void {
@@ -663,6 +664,7 @@ function envelope(api: DockviewApi, state: Pick<WorkspaceState, 'leftVisible' | 
  *  settleUntil = 重置自身的布局沉降窗口(这段里的回调只刷新 metrics 基线,不判作废),dismiss = 收回那条「撤销」提示。 */
 let layoutUndo: {
   env: LayoutEnvelopeV4; api: DockviewApi; profile: string | null; owner: typeof restoredOwner; stashActive: WorkspaceState['stashActive']
+  sideWidths: WorkspaceState['sideWidths']
   shape: string; metrics: LayoutMetrics; settleUntil: number; dismiss?: () => void
 } | null = null
 /** 重置后多久内的布局回调算「重置自己在沉降」(默认布局建完后 Dockview 异步派发的那批 + 双 raf 钉侧栏宽)。 */
@@ -815,6 +817,9 @@ interface WorkspaceState {
    *  `from` 是固定 View(区内最后一个)时不顶掉它:`to` 作为新标签开在它旁边(收起的侧栏则排进 stash,照旧
    *  保持收起),`from` 原先在前台就让 `to` 顶到前台;计数只算新开出来的 —— `to` 已经在那儿就是 0。 */
   replaceViewsOfType(from: string, to: string, params?: Record<string, unknown>): number
+  /** 屏上还摆着旧名字的视图(宿主的别名规则认得它,见 viewAlias.ts)→ 原样接到新名字上:参数、分栏、收起的侧栏条目、浮层卡
+   *  都不动。新名字至少有一个已注册才动手(否则换了也还是占位);返回接过去的条目数,0 = 什么都没做。 */
+  adoptViewAliases(): number
   /** 按参数改写 / 关掉 leaf,**含没挂载的**:折叠侧栏序列化进 stash 的条目(无 id → 就地改写或摘掉)。
    *  fn 返回 undefined = 不动;null = 关掉(走 closeLeaf 的收尾,不是裸 panel.api.close());对象 = 合并进参数。
    *  引擎不懂参数语义,改哪个键由调用方定(文件改名 / 删除跟随见 frontend views/followPathGone.ts)。 */
@@ -984,7 +989,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     const defaults = get().sidebarDefaults.right
     const g = rightGroupNow(api, defaults)
     if (!g || g.key === rightKey) return
-    const changed = rightKey !== null
+    // 只有基本组变了才算换组(新组第一项顶到前台);只是补项变了(换到 / 换走跑在引擎上的对话)只开 / 关那一项,前台不动
+    const changed = rightKey !== null && baseKeyOf(rightKey) !== g.base
     rightKey = g.key
     const pinned = get().pinned.right ?? []
     // 单例开在了别的区(用户把侧栏对话拖进主区):不在右栏再开一份。非单例(工作区:左栏会话、右栏文件)两边各一份是常态,不算。
@@ -1236,6 +1242,21 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     get().refreshTabs()
   },
 
+  adoptViewAliases() {
+    const api = get().api
+    if (!api) return 0
+    // 先看活的:一个要改名、且新名字已注册的都没有 → 不碰(插件逐个装载,这里每装一个都会被叫一次)
+    const live = [...api.panels.map((p) => panelType(p)), ...(['left', 'right', 'bottom'] as const).flatMap((s) => get().stash[s].map((v) => v.type))]
+    if (!live.some((t) => { const to = t ? aliasViewType(t) : null; return !!to && !!getView(to) })) return 0
+    // 走载入存档的同一条路:拍下这份布局 → 迁移(改名)→ 整份套回去。逐个 leaf 换的 replaceViewsOfType 会拿同一份参数盖掉每个实例。
+    const blob = envelope(api, get())
+    const n = migrateLayoutBlob(blob)
+    if (!n || !get().applyLayout(blob)) return 0
+    get().ensurePinned()
+    get().saveCurrent()
+    return n
+  },
+
   replaceViewsOfType(from, to, params = {}) {
     const api = get().api
     if (!api || from === to || !getView(to)) return 0
@@ -1348,7 +1369,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     // 只有用户亲手重置才拍;拍不下来就不给撤销,重置照做。自动重置同时作废旧快照。
     let snap: Omit<NonNullable<typeof layoutUndo>, 'shape' | 'metrics' | 'settleUntil' | 'dismiss'> | null = null
     if (opts?.undoable) {
-      try { snap = { env: envelope(api, get()), api, profile: get().sideProfileKey, owner: restoredOwner, stashActive: { ...get().stashActive } } } catch { snap = null }
+      try { snap = { env: envelope(api, get()), api, profile: get().sideProfileKey, owner: restoredOwner, stashActive: { ...get().stashActive }, sideWidths: { ...get().sideWidths } } } catch { snap = null }
     }
     dropLayoutUndo() // 旧快照(连同它的提示)先作废:自动重置不给撤销,手动重置换一份新的
     // 用户亲手「恢复默认布局」:这个 Space 浮着的卡也是布局的一部分,一起收(快照里记着,撤销会开回来)。自动重置不碰卡
@@ -1356,6 +1377,13 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     dismissExtensions()
     try { api.clear() } catch { /* ignore */ }
     clearLayout()
+    // A person's explicit reset includes the remembered sidebar widths / bottom height.
+    // Automatic rebuilds preserve preferences; clearing before the builder also covers setSideProfile reloads.
+    if (opts?.undoable) {
+      const profile = get().sideProfileKey
+      if (profile) { try { localStorage.removeItem(`lcl.sideWidth2.${profile}`) } catch { /* private mode */ } }
+      set({ sideWidths: { left: null, right: null, bottom: null } })
+    }
     if (floatOwner) { try { floatPersistence()?.clear(floatOwner) } catch (e) { console.error('[lcl] clear floats failed', e) } }
     restoredOwner = undefined // 默认布局是按当前画像的 Space 建的,不再是启动时还原出来的那份
     useNav.getState().reset() // 布局重建,旧 leaf id 全失效
@@ -1390,12 +1418,21 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     // 快照只对拍它的那份 api、那个 Space 有效:切过 Space 再点通知里的「撤销」= 静默作废,不把别的 Space 的布局灌进来。
     // 重置后布局结构 / 分屏尺寸已被用户改过(布局回调还没来得及作废它时)同样作废;只拖侧栏宽不算(Codex 第三轮 H1-3)。
     if (!u || !api || u.profile !== get().sideProfileKey || !undoStillMatches(u, api)) return false
+    const currentWidths = get().sideWidths
+    set({ sideWidths: { ...u.sideWidths } }) // Restore targets before applyLayout asks the coordinator to size the groups.
     const ok = get().applyLayout(u.env)
     if (ok) {
+      if (u.profile) {
+        try {
+          const { left, right, bottom } = u.sideWidths
+          if (left == null && right == null && bottom == null) localStorage.removeItem(`lcl.sideWidth2.${u.profile}`)
+          else localStorage.setItem(`lcl.sideWidth2.${u.profile}`, JSON.stringify({ left, right, bottomH: bottom }))
+        } catch { /* private mode */ }
+      }
       restoredOwner = u.owner // 撤回来的是重置前那份:归属也回到拍快照那一刻的(画像没变过,上面刚核过)
       set({ stashActive: u.stashActive }) // 信封不带它:不还原的话,展开收起的侧栏会落到第一个视图而不是原来选中的那个
       scheduleWorkspaceSave()
-    }
+    } else set({ sideWidths: currentWidths })
     return ok
   },
 
@@ -1767,7 +1804,8 @@ function retiredTarget(t: string | undefined): { type: string; params: Record<st
 /** 历史布局就地迁移(幂等,载入时跑):①退役视图改名(dockview panels + 侧栏 stash;同侧重复由
  *  openView 的「同侧同类型复用」自然合并);②主区 panel 组件统一为 '__frame' 宿主(params.__type
  *  早已持久化,v3→v4 迁移即为此铺垫)。新代码保存的布局天然已是终态。 */
-export function migrateLayoutBlob(layout: Pick<LayoutEnvelopeV4, 'dockview' | 'sidebars'>): void {
+export function migrateLayoutBlob(layout: Pick<LayoutEnvelopeV4, 'dockview' | 'sidebars'> & { floats?: PersistedFloat[] }): number {
+  let aliased = 0
   const panels = (layout.dockview as { panels?: Record<string, { contentComponent?: string; params?: { __loc?: string; __type?: string } }> } | null)?.panels
   if (panels) {
     for (const p of Object.values(panels)) {
@@ -1780,17 +1818,39 @@ export function migrateLayoutBlob(layout: Pick<LayoutEnvelopeV4, 'dockview' | 's
         const bag = params as Record<string, unknown>
         for (const [k, v] of Object.entries(next.params)) if (bag[k] === undefined) bag[k] = v
       }
+      // ③宿主给的别名(插件换了运行身份,见 viewAlias.ts):参数原样带着。侧栏 / 底部的组件名就是类型名,一起改;
+      // panel id 不动(单例复用按 __type 认,不按 id)。
+      const renamed = params.__type ? aliasViewType(params.__type) : null
+      if (renamed) { params.__type = renamed; p.contentComponent = renamed; aliased++ }
       if ((params.__loc ?? 'main') === 'main') p.contentComponent = '__frame'
     }
+  }
+  const renameStashed = (v: PersistedPanel): PersistedPanel => {
+    const renamed = aliasViewType(v.type)
+    if (!renamed) return v
+    aliased++
+    return { ...v, type: renamed }
   }
   for (const side of ['left', 'right', 'bottom'] as const) {
     const sb = layout.sidebars?.[side]
     if (!sb) continue
     sb.stash = sb.stash.map((v) => {
       const next = retiredTarget(v.type)
-      return next ? { ...v, type: next.type, params: { ...next.params, ...(v.params ?? {}) } } : v
+      return renameStashed(next ? { ...v, type: next.type, params: { ...next.params, ...(v.params ?? {}) } } : v)
     })
   }
+  // 浮层卡(信封可选字段):卡的身份 type、卡里画的 view、「在主面板显示」去的 mainView 各改各的
+  if (Array.isArray(layout.floats)) {
+    layout.floats = layout.floats.map((f) => {
+      if (!f || typeof f !== 'object') return f
+      const type = typeof f.type === 'string' ? aliasViewType(f.type) : null
+      const view = f.view && typeof f.view.type === 'string' ? renameStashed(f.view) : f.view
+      const mainView = f.mainView && typeof f.mainView.type === 'string' ? renameStashed(f.mainView) : f.mainView
+      if (type) aliased++
+      return type || view !== f.view || mainView !== f.mainView ? { ...f, ...(type ? { type } : {}), view, mainView } : f
+    })
+  }
+  return aliased
 }
 
 /** onReady 那次还原的结局:null = 还没跑;false = 落空(没有存档 / 存档引用了当时尚未注册的视图),屏上摆的是默认布局。 */

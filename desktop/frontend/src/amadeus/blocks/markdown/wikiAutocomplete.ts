@@ -12,6 +12,7 @@ import { editContextAt, editContextOf, slashAvailable, toolbarShape, type EditCo
 import { registerMessages, translate } from '../../../i18n'
 import { AT_BLOCKED_BEFORE } from '@amadeus-shared/mdMarks'
 import { mountLineSelection } from '@lcl/engine/lineSelection'
+import { formulaAtSelection } from './mathLivePreview'
 
 registerMessages({
   'wikiac.multiBlocks': { zh: '多个块', en: 'Multiple blocks' },
@@ -105,7 +106,9 @@ export function wikiSuggestPlugin(report: SuggestReport) {
             if (closed && (!prevState || prevState.doc.eq(view.state.doc))) return report(null)
             // 已闭合链接里光标已越过目标名(在 `#锚点` / `|别名` 里打字)→ 不给目标候选,
             // 否则选中会拿页面名盖掉用户正在改的锚点/别名(L-02)。
-            if (closed && /[#|]/.test(q)) return report(null)
+            // 例外:光标正挨着 `]]`(正文括号成对刚补上的那对,见 bodyAutoPair)时在 `#` 后打字照样列标题(L-13)——
+            // 选中只替换 [from, closeAt) 这一整段,后面没有锚点尾巴可盖。别名 `|` 后面仍一律不弹。
+            if (closed && (q.includes('|') || (q.includes('#') && close > 0))) return report(null)
             const from = $head.start() + open + 2
             const to = selection.head
             let coords: { left: number; top: number; bottom: number }
@@ -368,6 +371,9 @@ export function selectionToolbarPlugin(report: (r: SelRect | null) => void) {
             // 选中的是一张图片(md 图片节点 / `![[pic.png|200]]` 整段源码)→ 让位:B/I/U 对图片
             // 没有意义,浮条还正好盖住上一段正文(2026-08-27 观感自查揪出来的)。
             if (isImageSelection(view.state)) return report(null)
+            // 选区整个落在一个公式的源码里(选中占位、改下标):公式里没有粗体斜体可言,浮条只会挡住公式和预览
+            // (同 Obsidian:公式里选字不出格式条)。选区跨出公式照旧弹。
+            if (formulaAtSelection(view.state)) return report(null)
             const { from, to } = selection
             const $from = doc.resolve(from)
             if (!$from.parent.isTextblock) return report(null) // 节点选区不服务行内格式化

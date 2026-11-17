@@ -154,6 +154,12 @@ export async function subtreeZip(buf: Buffer, path: string): Promise<Buffer> {
  * would keep the last, the check might read the first.
  */
 export async function packageManifestId(buf: Buffer, type: string): Promise<string | null> {
+  const id = (await packageManifest(buf, type))?.id
+  return typeof id === 'string' ? id : null
+}
+
+/** The package's manifest object, read the same way as `packageManifestId` (null when absent or not JSON). */
+export async function packageManifest(buf: Buffer, type: string): Promise<Record<string, unknown> | null> {
   const names = MARKET_MANIFEST[type]
   const manifest = names?.[0]
   if (!manifest?.endsWith('.json')) return null
@@ -165,10 +171,15 @@ export async function packageManifestId(buf: Buffer, type: string): Promise<stri
     if (seen.has(key)) throw new Error('install: duplicate path in archive')
     seen.add(key)
   }
-  const entry = plan.find((p) => p.rel === manifest)
+  // 按不分大小写找:mac / Windows 的盘不分大小写,包里叫 `Manifest.json` 装下去照样被当成 manifest.json 读(Codex 11-16)。
+  // 上面已拒了只差大小写的重名,所以最多一条。
+  const entry = plan.find((p) => p.rel.toLowerCase() === manifest.toLowerCase())
   const file = entry && zip.file(entry.name)
   if (!file) return null
-  try { const id = JSON.parse(await file.async('string'))?.id; return typeof id === 'string' ? id : null } catch { return null }
+  try {
+    const m = JSON.parse(await file.async('string'))
+    return m && typeof m === 'object' && !Array.isArray(m) ? m as Record<string, unknown> : null
+  } catch { return null }
 }
 
 export function createStoreSources(o: {

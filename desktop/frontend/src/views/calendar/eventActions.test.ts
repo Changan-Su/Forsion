@@ -40,7 +40,7 @@ describe('calendar action safety', () => {
     expect(rows()[0].cells.date).toBe('2026-11-12')
     expect(h.notify).not.toHaveBeenCalled()
     deleteCalendarRow(db(), event().row, e.title)
-    expect(h.notify).toHaveBeenCalledWith(expect.objectContaining({ action: expect.any(Object) }))
+    expect(h.notify).toHaveBeenCalledWith(expect.objectContaining({ action: expect.any(Object), undo: true }))
   })
   it('silent rescheduling removes the now-stale deletion undo notice', () => {
     useDbStore.getState().mutate('Events.db', d => ({ ...d, rows: [...d.rows, { id: 'r2', cells: { name: 'Other', date: '2026-11-12' } }] }))

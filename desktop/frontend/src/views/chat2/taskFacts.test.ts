@@ -199,3 +199,74 @@ describe('summarizeTask', () => {
     expect(summarizeTask([msg({ role: 'user', timestamp: 100 }), msg({ id: '2', role: 'user', timestamp: 300 })], true).startedAt).toBe(300)
   })
 })
+
+describe('来源 × 搜索来源编号', () => {
+  const A = 'https://www.hokkaido-ski.jp/niseko/beginner'
+  const B = 'https://www.rusutsu-resort.com/winter/lessons'
+  const C = 'https://travel.example-hokkaido.cn/furano-2026'
+  const srcs = [A, B, C].map((url, i) => ({ url, site: new URL(url).hostname.replace(/^www\./, ''), title: `T${i + 1}` }))
+  const search = (id: string, query: string, sources = srcs) => ({ id, name: 'web_search', arguments: JSON.stringify({ query }), done: true, result: '', sources })
+  const fetchEv = (id: string, url: string) => ({ id, name: 'web_fetch', arguments: JSON.stringify({ url }), done: true, result: `[${url}]\n…` })
+
+  it('搜索词下挂这次的结果:正文引用过的带号、排前面;读过的并成一行标 read,读网页那行不再单出;数字把结果算进去', () => {
+    const f = summarizeTask([msg({ id: 'a1', content: `[x](${C}) [y](${A})`, toolEvents: [search('s1', 'hokkaido'), fetchEv('f1', A)] })], false)
+    expect(f.sources.map((s) => s.kind)).toEqual(['search'])
+    const rs = f.sources[0].results!
+    expect(rs.map((r) => [r.url, r.n, r.read, r.label])).toEqual([
+      [C, 1, false, 'travel.example-hokkaido.cn · T3'],
+      [A, 2, true, 'hokkaido-ski.jp · T1'],
+      [B, undefined, false, 'rusutsu-resort.com · T2'],
+    ])
+    expect(rs[0].hoverKey).toBe(`a1\u0000${'travel.example-hokkaido.cn/furano-2026'}`)
+  })
+
+  it('读过但没搜到的页:单出一行,带正文编号', () => {
+    const page = 'https://docs.example.com/guide'
+    const f = summarizeTask([msg({ id: 'a1', content: `[g](${page})`, toolEvents: [fetchEv('f1', page)] })], false)
+    expect(f.sources).toHaveLength(1)
+    expect(f.sources[0]).toMatchObject({ kind: 'web', n: 1, hoverKey: 'a1\u0000docs.example.com/guide' })
+  })
+
+  it('两轮都搜到同一页:各按各的回答编号,悬停键带消息 id;同一搜索词再搜换成最近那次的结果', () => {
+    const f = summarizeTask([
+      msg({ id: 'a1', content: `[b](${B}) [a](${A})`, toolEvents: [search('s1', 'first')] }),
+      msg({ id: 'u2', role: 'user' }),
+      msg({ id: 'a2', content: `[a](${A})`, toolEvents: [search('s2', 'second', [srcs[0]])] }),
+    ], false)
+    const [second, first] = f.sources
+    expect(second.results!.map((r) => [r.n, r.hoverKey.split('\u0000')[0]])).toEqual([[1, 'a2']])
+    expect(first.results!.find((r) => r.url === A)).toMatchObject({ n: 2, hoverKey: `a1\u0000hokkaido-ski.jp/niseko/beginner` })
+    const again = summarizeTask([
+      msg({ id: 'a1', content: '', toolEvents: [search('s1', 'same')] }),
+      msg({ id: 'a2', content: `[a](${A})`, toolEvents: [search('s2', 'same', [srcs[0]])] }),
+    ], false)
+    expect(again.sources).toHaveLength(1)
+    expect(again.sources[0]).toMatchObject({ hits: 2 })
+    // 这次的结果在前,上一次搜到、这次没出现的接在后面(不丢)
+    expect(again.sources[0].results!.map((r) => [r.url, r.hoverKey.split('\u0000')[0]])).toEqual([[A, 'a2'], [B, 'a1'], [C, 'a1']])
+  })
+
+  it('别的回答里读的那页:各有各的号,单出一行,不并进上一轮的结果', () => {
+    const f = summarizeTask([
+      msg({ id: 'a1', content: `[c](${C}) [b](${B}) [a](${A})`, toolEvents: [search('s1', 'q')] }),
+      msg({ id: 'a2', content: `[a](${A})`, toolEvents: [fetchEv('f2', A)] }),
+    ], false)
+    expect(f.sources.map((s) => s.kind)).toEqual(['web', 'search'])
+    expect(f.sources[0]).toMatchObject({ n: 1, hoverKey: 'a2\u0000hokkaido-ski.jp/niseko/beginner' })
+    expect(f.sources[1].results!.find((r) => r.url === A)).toMatchObject({ n: 3, read: false })
+  })
+
+  it('读的网址跳转到搜到的那页:并进结果行,不重复', () => {
+    const final = B
+    const ev = { ...fetchEv('f1', 'https://short.example/b'), result: `[${final}]\n…` }
+    const f = summarizeTask([msg({ id: 'a1', content: `[b](${final})`, toolEvents: [search('s1', 'q'), ev] })], false)
+    expect(f.sources.map((s) => s.kind)).toEqual(['search'])
+    expect(f.sources[0].results!.find((r) => r.url === B)).toMatchObject({ n: 1, read: true })
+  })
+
+  it('老会话:没有结构化来源 → 结果从文字里认,标签是主机 + 路径', () => {
+    const text = `Search results:\n1. 二世谷\n  ${A}\n  缓坡。`
+    const f = summarizeTask([msg({ id: 'a1', content: `[a](${A})`, toolEvents: [{ ...search('s1', 'q'), sources: undefined, result: text }] })], false)
+    expect(f.sources[0].results).toEqual([expect.objectContaining({ url: A, n: 1, label: 'hokkaido-ski.jp/niseko/beginner' })])
+  })
+})

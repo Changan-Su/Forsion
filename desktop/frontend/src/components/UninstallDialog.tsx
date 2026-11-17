@@ -5,7 +5,7 @@
  */
 import { useEffect, useId, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { Bot, Box, Clock, Cloud, FolderClosed, Loader2, MessageCircle, Pause, SlidersHorizontal, Sparkles, Users } from 'lucide-react'
+import { Bot, Box, Clock, Cloud, FolderClosed, Loader2, MessageCircle, Package, Pause, SlidersHorizontal, Sparkles, Users } from 'lucide-react'
 import { DialogOverlay } from '@amadeus/components/DialogOverlay'
 import { useEscape } from '@amadeus/components/Dialogs'
 import { registerMessages, translate, useI18n } from '../i18n'
@@ -88,6 +88,17 @@ registerMessages({
   'uninstall.plugin.agent': { zh: '它带来的 Agent「{name}」', en: 'Agent it added: “{name}”' },
   'uninstall.plugin.agentSub': { zh: '你和它的私聊还在', en: 'Your chats with it are still there' },
   'uninstall.plugin.done': { zh: '已卸载插件「{name}」', en: 'Plugin “{name}” uninstalled' },
+  // 商店版取代了同一个包的旧普通目录:卸商店版时那一行 / 单独清理旧副本的对话框
+  'uninstall.plugin.superseded': { zh: '本机旧的本地安装 v{version}', en: 'Older local install v{version} on this device' },
+  'uninstall.plugin.supersededSub': { zh: '已停用。不一起移走的话，卸掉商店版后它会重新运行', en: 'Turned off. If you keep it, it starts running again once you uninstall the store version' },
+  'uninstall.plugin.keepOld': { zh: '保留旧副本', en: 'Keep the old copy' },
+  'uninstall.superseded.title': { zh: '把旧的本地安装「{name} v{version}」移到回收站？', en: 'Move the older local install of “{name}” (v{version}) to the Trash?' },
+  'uninstall.superseded.msg': { zh: '它现在已停用，商店安装的 v{storeVersion} 不受影响。它留下的东西各自去哪：', en: "It's already turned off, and the store install (v{storeVersion}) isn't affected. Here is where everything it leaves behind goes:" },
+  'uninstall.superseded.files': { zh: '插件文件（v{version}）', en: 'Plugin files (v{version})' },
+  'uninstall.superseded.settings': { zh: '旧副本的设置与偏好', en: 'Settings and preferences of the old copy' },
+  'uninstall.superseded.keepSettings': { zh: '保留设置，留在原处', en: 'Keep its settings where they are' },
+  'uninstall.superseded.vaultSub': { zh: '旧副本存的资料', en: 'Files the old copy saved' },
+  'uninstall.superseded.confirm': { zh: '移到回收站', en: 'Move to Trash' },
 })
 
 export const fmtSize = (b: number): string => (b < 1024 ? `${b} B` : b < 1048576 ? `${(b / 1024).toFixed(1)} KB` : `${(b / 1048576).toFixed(1)} MB`)
@@ -306,7 +317,7 @@ export function SkillUninstallDialog({ skillKey, agentSlug, name: fallbackName, 
 
 /** 卸载插件(Forsion 插件与引擎插件;设置页与商店共用)。框只收集选择,真正的卸载(停内嵌引擎插件、重载、重扫)由调用方做。
  *  vaultFolder:库里的工作文件夹(pluginStore.pluginVaultFolder 算出,库里没有就不传);skills / agents:捆绑包里带的。 */
-export function PluginUninstallDialog({ name, warning, vaultFolder, cloudData, skills = 0, agents = [], onConfirm, onClose }: {
+export function PluginUninstallDialog({ name, warning, vaultFolder, cloudData, skills = 0, agents = [], superseded, onConfirm, onClose }: {
   name: string
   /** 还有别的插件依赖它时的提醒,排在正文前面。 */
   warning?: string
@@ -315,7 +326,9 @@ export function PluginUninstallDialog({ name, warning, vaultFolder, cloudData, s
   cloudData?: boolean
   skills?: number
   agents?: string[]
-  onConfirm: (opts: { keepSettings: boolean; moveVault: boolean }) => void
+  /** 这份商店安装取代的旧普通目录(AmadeusPlugin.supersedes):缺省一起进回收站,勾「保留旧副本」才留下(留下就是重新运行它)。 */
+  superseded?: { version: string } | null
+  onConfirm: (opts: { keepSettings: boolean; moveVault: boolean; keepOld: boolean }) => void
   onClose: () => void
 }) {
   const { t } = useI18n()
@@ -326,10 +339,36 @@ export function PluginUninstallDialog({ name, warning, vaultFolder, cloudData, s
     ...(vaultFolder ? [{ icon: <FolderClosed {...ic} />, title: t('uninstall.plugin.vault', { folder: vaultFolder }), sub: t('uninstall.plugin.vaultSub'), dest: t('uninstall.keep'), tone: 'keep' as const, check: { key: 'moveVault', label: t('uninstall.plugin.moveVault'), checkedDest: t('uninstall.trash30') } }] : []),
     ...(skills ? [{ icon: <Sparkles {...ic} />, title: t('uninstall.plugin.skills', { n: skills }), dest: t('uninstall.plugin.skillsGo') }] : []),
     ...agents.map((a) => ({ icon: <Bot {...ic} />, title: t('uninstall.plugin.agent', { name: a }), sub: t('uninstall.plugin.agentSub'), dest: t('uninstall.keep'), tone: 'keep' as const })),
+    ...(superseded ? [{ icon: <Package {...ic} />, title: t('uninstall.plugin.superseded', { version: superseded.version }), sub: t('uninstall.plugin.supersededSub'), dest: t('uninstall.trash30'), check: { key: 'keepOld', label: t('uninstall.plugin.keepOld'), checkedDest: t('uninstall.keep'), checkedTone: 'keep' as const } }] : []),
   ]
   return <UninstallDialog
     title={t('uninstall.plugin.title', { name })} message={warning ? `${warning} ${t('uninstall.plugin.msg')}` : t('uninstall.plugin.msg')} rows={rows}
     confirmLabel={t('uninstall.plugin.confirm')} note={t('uninstall.note')}
+    onConfirm={(checks) => onConfirm({ keepSettings: !!checks.keepSettings, moveVault: !!checks.moveVault, keepOld: !!checks.keepOld })}
+    onClose={onClose}
+  />
+}
+
+/** 把被商店安装取代的旧普通目录(已停用)移到回收站:设置页「旧的本地安装」一节。去向同卸载插件(10-28 规范),
+ *  只是标题 / 正文说清这是旧副本、商店那份不受影响。框只收集选择,真正去挪的是 pluginUninstall.cleanupSupersededCopy。 */
+export function SupersededCleanupDialog({ name, version, storeVersion, vaultFolder, onConfirm, onClose }: {
+  name: string
+  version: string
+  storeVersion: string
+  vaultFolder?: string | null
+  onConfirm: (opts: { keepSettings: boolean; moveVault: boolean }) => void
+  onClose: () => void
+}) {
+  const { t } = useI18n()
+  const ic = { size: 15, strokeWidth: 1.8 }
+  const rows: UninstallRow[] = [
+    { icon: <Box {...ic} />, title: t('uninstall.superseded.files', { version }), dest: t('uninstall.trash30') },
+    { icon: <SlidersHorizontal {...ic} />, title: t('uninstall.superseded.settings'), dest: t('uninstall.trash30'), check: { key: 'keepSettings', label: t('uninstall.superseded.keepSettings'), checkedDest: t('uninstall.keep'), checkedTone: 'keep' } },
+    ...(vaultFolder ? [{ icon: <FolderClosed {...ic} />, title: t('uninstall.plugin.vault', { folder: vaultFolder }), sub: t('uninstall.superseded.vaultSub'), dest: t('uninstall.keep'), tone: 'keep' as const, check: { key: 'moveVault', label: t('uninstall.plugin.moveVault'), checkedDest: t('uninstall.trash30') } }] : []),
+  ]
+  return <UninstallDialog
+    title={t('uninstall.superseded.title', { name, version })} message={t('uninstall.superseded.msg', { storeVersion })} rows={rows}
+    confirmLabel={t('uninstall.superseded.confirm')} note={t('uninstall.note')}
     onConfirm={(checks) => onConfirm({ keepSettings: !!checks.keepSettings, moveVault: !!checks.moveVault })}
     onClose={onClose}
   />

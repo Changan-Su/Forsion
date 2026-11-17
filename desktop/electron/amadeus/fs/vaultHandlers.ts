@@ -287,6 +287,9 @@ export function registerVaultHandlers(deps: VaultHandlerDependencies): void {
   })
 
   handle(IPC.readVaultBytes, (_e, filePath: string) => vault.readVaultBytes(filePath))
+  // ctx.app.stat(2026-11-16):无库 = null(同 readTextFile);越界 / 别的 IO 错照抛。只读,不进 VAULT_WRITE_EVENTS;
+  // 也没进 Unit 远程白名单(unitWeb VAULT_RPC_ALLOW)—— 网页端连 Unit 时 ctx.app.stat 缺席。
+  handle(IPC.statPath, (_e, filePath: string) => (vault.getRoot() ? vault.statEntry(filePath) : null))
 
   handle(
     IPC.saveAttachment,

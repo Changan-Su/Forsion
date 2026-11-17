@@ -1,10 +1,23 @@
 /**
- * 右上角通知系统(升级自旧 appStore.toast):小卡片从右侧滑入、按序向下堆叠、hover 暂停、
+ * 右上角通知系统(升级自旧 appStore.toast):小卡片从右侧滑入、按序向下堆叠、鼠标悬停暂停、
  * error 常驻手动关;事件级开关 + 插件来源开关在设置「通知与状态栏」里管理(localStorage)。
  * 纯逻辑 store(无 DOM/i18n 依赖):文案由调用方(wiring / appStore.tr / 插件)传入;
  * 渲染在 components/NotificationHost(仅主窗 Root 挂载,与旧 toast-wrap 同决策)。
+ *
+ * 手机横幅(`banner`,窄屏手机壳由 NotificationHost 打开;桌面 / Pad 不变):一次只显示一条、其余排队(前一条走后
+ * PHONE.gap 再出下一条,不显示 +N);停留 5 秒,撤销回执 8 秒,读屏开着 10 秒,常驻 / error 一直留着;同 key 原地换
+ * 文案和按钮、不出 ×N、停留从第一次出现起算不顺延;同一来源(event:一个插件 / 宿主的一类提示)一张卡收起后
+ * 冷却一段时间不出卡(到点走的 30 秒,用户自己收的 2 分钟),插件照常调、不报错。见 PHONE 与 throttleFree。
+ * 一切「不出卡」都不挡系统通知(App 在后台时的横幅):sendOs 先于节流。
+ * App 在后台(页面不可见)时不上横幅、不开冷却,来的卡排着(屏上那张在后台被同 key 换了内容,也算新来的、排着);
+ * 回到前台按 replayQueue 收拾一遍再照队列出(节流照常)。原生半屏盖着页面时同样不上屏、不开冷却,排着等它收起(sheetChanged),
+ * 只是不收拾。遮挡(退到后台 / 半屏盖上)那一刻屏上那张不常驻的卡撤回队首、停表(见 holdShown):用户看不见它,不能在底下到点走掉。
+ * 系统通知:有人在等的(urgent)带 key 的按「来源 + key」各占一条,其余按来源一条(见 postOs);桥回话说没投递的一直欠着(osOwed)。
+ * 回话最多等 PHONE.osWait,过了算没确认、下次需要时补发(没回话的补发最多 PHONE.osRetry 次);卡换了内容,旧内容那一发的回话一律不算(见 recontent)。
  */
 import { create } from 'zustand'
+import { inUserGesture } from '@lcl/engine/userGesture'
+import { nativeSheetUp, watchNativeSheet } from '@lcl/engine/nativeSheet'
 import { translate } from '../i18n'
 
 export type NotifyLevel = 'info' | 'success' | 'warning' | 'error'
@@ -34,11 +47,23 @@ export interface NotifyInput {
    *  Codex 第一轮 C-2)。隐含 inAppOnly。别拿它给自动事件绕开用户的开关。 */
   receipt?: boolean
   /** 这条提示离开屏幕(到期、点 ×、点动作钮、全部清除)时调一次。撤销型回执靠它决定「到点才真做」:
-   *  停留从真正上屏才开始计、悬停会暂停,都跟着这条提示走(排队中 / 悬停时不会提前落定)。去重合并时新值覆盖旧值。 */
+   *  停留从真正上屏才开始计、悬停会暂停,都跟着这条提示走(排队中 / 悬停时不会提前落定)。去重合并时新值覆盖旧值。
+   *  手机横幅:App 退到后台 / 原生半屏盖上时屏上那张撤回队列、不算离开,回来重新上屏、停满再调;所以 App 在后台被系统杀掉时
+   *  它**永远不会被调** —— 只拿它做「到点才真做」的那一步(做了才落定,没做等于没删),别拿它做必须执行的收尾。 */
   onClose?: () => void
   /** 收尾:把同 dedupeKey 的那条原地换成操作的结果(如日历撤销后的「已撤销」)—— 不算重复(计数回 1),
    *  到点淡出而不是滑走。动作钮要拿掉就同时显式给 `action: undefined`。 */
   settle?: boolean
+  /** 顶替:同 dedupeKey 的后一条整条顶掉前一条 —— 计数回 1(不出 ×N),标题、文案、按钮、级别、常驻与停留都换成这一条的,
+   *  不沿用前一条;停留从这一刻重新算。插件 `ctx.notify` 带 key 时用它(插件手册承诺「同 key 的后一张顶掉前一张」:
+   *  插件自己数件数,比如「(3) 张三：…」,宿主再叠 ×3 就重了;key 也可能管着内容不同的卡,比如手机上合成的那一张)。
+   *  顶替的是新的一件事,窗口在后台时照常跟发系统通知(门控同新弹的一条)。宿主自己的去重(防轰炸计数)不带它,照旧累计、不重发。 */
+  replace?: boolean
+  /** 撤销回执(删了 / 改了之后的「撤销」):手机横幅停 8 秒(缺省 5 秒),也不受手机节流 —— 那是用户刚做的一件事的退路。
+   *  插件经 `ctx.notify(msg, { undo: true })` 传进来;宿主的 receipt + action 视同。桌面不看它(桌面按 durationMs / level)。 */
+  undo?: boolean
+  /** 有人 / Agent 正停着等用户(待批、在问):手机上不受节流。不等于常驻,停留照常。 */
+  urgent?: boolean
 }
 
 export interface AppNotification {
@@ -57,7 +82,29 @@ export interface AppNotification {
   durationMs?: number
   onClose?: () => void
   settle?: boolean
+  undo?: boolean
+  urgent?: boolean
+  /** 手机节流管不着它(见 throttleFree);同 key 换内容时重算。 */
+  free?: boolean
+  /** 手机横幅:这张卡上屏的时刻。同 key 换内容时停留从它算起,不顺延。 */
+  shownAt?: number
+  /** 够格发系统通知、但来的时候 App 在前台没发:排着队等到 App 退到后台才上屏、或在后台被节流丢下时补发一次(见 payOs)。 */
+  osOwed?: boolean
+  /** 手机横幅:App 在后台时来的(或在后台被同 key 换了内容)。回到前台时屏上的常驻卡只给有这一项的让位,随后清掉(见 visibilityChanged)。 */
+  bg?: boolean
+  /** 只在应用内(inAppOnly / receipt):不跟发系统通知,回到前台时不能丢(见 replayQueue)。 */
+  inApp?: boolean
+  /** 手机横幅:上着屏时被遮挡(App 退到后台 / 原生半屏盖上)撤回了队首(见 holdShown)。用户没看完它:回到前台时不能丢,
+   *  也不吃同来源的冷却;重新上屏时清掉、停留给满。 */
+  held?: boolean
+  /** 手机横幅:离开期间哪儿都没送到 —— 回到前台重放时系统通知还没确认投了(没给通知权限、渠道关了、桥没回话)或系统通知开关
+   *  关着。横幅是它唯一的机会:上屏不吃同来源的冷却(不然同来源的几张只出第一张,其余前台丢下时也不补系统通知,哪儿都看不到)。
+   *  只在回到前台那一下打(见 visibilityChanged),前台来的卡不打,前台节流照旧;上屏时清掉。 */
+  missed?: boolean
 }
+
+/** 卡怎么离开的:到点 / 用户点 × 或上滑 / 用户点了卡上的动作。程序自己撤(调用方 dismiss(id))不带。 */
+export type DismissReason = 'timeout' | 'user' | 'action'
 
 /** 内置事件注册表(设置页开关列表的数据源;插件事件 plugin:<id> 动态出现,默认开)。 */
 export const NOTIFY_EVENTS: Array<{ id: string; labelKey: string; defaultOn: boolean }> = [
@@ -93,6 +140,82 @@ const DURATION: Record<NotifyLevel, number> = { success: 3200, info: 5000, warni
 const customDuration = (ms: unknown): number | undefined => (typeof ms === 'number' && Number.isFinite(ms) && ms > 0 ? Math.min(ms, 120_000) : undefined)
 const durationOf = (n: Pick<AppNotification, 'level' | 'durationMs'>): number => n.durationMs ?? DURATION[n.level]
 
+/** 手机横幅的几个数(方案定稿):停留 5 秒,撤销 8 秒,读屏开着 10 秒;前一条走后隔 300ms 出下一条;
+ *  同一来源一张卡到点走后冷却 30 秒,用户自己收(上滑 / 点 ×)的冷却 2 分钟。
+ *  lateTap:到点收掉的那一刻,原生层可能正把一次点按往回报(一次桥往返);这么久之内报回来的动作照样执行(见 activate)。
+ *  平常一次往返几十毫秒,但手机忙的时候(真壳在高负载下 23 次里有 1 次)超过 500ms,所以留 1.5 秒。
+ *  replay:回到前台时,一律留着的那些(撤销、onClose、常驻、error、系统通知没发出去的、上着屏被遮挡撤下的)以外,排着的卡最多留几张(见 replayQueue)。
+ *  osWait:系统通知交给桥(安卓回 Promise)后等回话的时限;过了还没回话算没确认,下一次需要补发时(退到后台 / payOs)照样发。
+ *  osRetry:同一张卡同一份内容,因为没等到回话而补发的次数上限(那一发可能其实投了、只是没回话,再发会再响一次);
+ *  回话明确说没投(posted: false)的补发不算在内 —— 没出现过,再发不会重复。见 payOs。 */
+export const PHONE = { dwell: 5000, undo: 8000, reader: 10_000, gap: 300, coolTimeout: 30_000, coolUser: 120_000, lateTap: 1500, replay: 3, osWait: 15_000, osRetry: 3 } as const
+/** 同 key 换内容时停留不顺延,但剩下的不足这么多就补到这么多(刚换上的字至少露一下,和 resume 的下限同一个数)。 */
+const MIN_LEFT = 800
+
+/** 不受手机节流的卡:常驻、出错、有人在等(urgent),以及用户自己动作的回执(撤销、receipt、inAppOnly、带 onClose 的、
+ *  测试通知 force、用户手势里弹出的带按钮的卡)—— 节流管的是没人要、自己找上门的那些。`system.generic` 是宿主各处即时反馈的缺省类
+ *  (「已复制」「保存失败」),不是「一类提示」,不按来源节流。这些卡收起也不开始冷却。 */
+function throttleFree(input: NotifyInput, sticky: boolean, level: NotifyLevel, event: string, gestured: boolean): boolean {
+  return sticky || level === 'error' || !!input.urgent || isUndo(input) || !!input.receipt || !!input.inAppOnly || !!input.force
+    || typeof input.onClose === 'function' || event === 'system.generic' || gestured
+}
+/** 用户刚做的手势里(同一个任务内)同步弹出、带按钮的卡:那是这次操作的退路,当撤销回执对待 —— 手机上停 8 秒、同 key 重新计时、
+ *  不受节流也不开始冷却。给不带 `undo` 的旧插件兜底:比如手机随包的日历插件勾完待办的「撤销」,不带它的话,30 秒内勾第二件
+ *  那张卡就被同一来源的冷却吞掉、退路没了。普通消息一般不在这个窗口里:消息、同步、Agent 的提示都从网络回调 / 定时器里弹,
+ *  不在用户输入事件那个任务里;例外是主线程被占着的时候,那段时间里到期的定时器排在清标记之前,弹出的带按钮卡也会被当成这一类
+ *  (见 @lcl/engine/userGesture)—— 方向是多弹(停 8 秒、不受节流),不会少弹。 */
+const gesturedCard = (input: NotifyInput): boolean => !!input.action && inUserGesture()
+const isUndo = (input: NotifyInput): boolean => input.undo === true || (input.receipt === true && !!input.action)
+
+/** 读屏(TalkBack 一类)开着:原生外壳把它写在 <html data-reader>(mobile/src/nativeChrome.ts applyChromeLayout)。 */
+function readerOn(): boolean {
+  try { return typeof document !== 'undefined' && !!document.documentElement?.hasAttribute('data-reader') } catch { return false }
+}
+/** 页面看不见(App 在后台、网页版手机切走了标签):手机横幅不上屏、不开冷却。判不出就当看得见(照常出卡)。 */
+function pageHidden(): boolean {
+  try { return typeof document !== 'undefined' && document.visibilityState === 'hidden' } catch { return false }
+}
+/** 原生半屏(安卓 Compose 画的菜单 / 输入 / 确认 / 模型面板,@lcl/engine/nativeSheet)盖着页面:原生横幅被它盖住(展开到全屏的整个盖住,
+ *  短的压在遮罩下),手机横幅不上屏、不开冷却,排着等它收起(sheetChanged)。网页 DOM 版的半屏(browserSheet)不经这里,不受影响。 */
+function sheetUp(): boolean {
+  try { return nativeSheetUp() } catch { return false }
+}
+
+/** 排队:有人在等的(urgent)排到不急的前面,其余先来后到。 */
+function enqueue(queue: readonly AppNotification[], n: AppNotification): AppNotification[] {
+  const at = n.urgent ? queue.findIndex((q) => !q.urgent) : -1
+  return at < 0 ? [...queue, n] : [...queue.slice(0, at), n, ...queue.slice(at)]
+}
+
+/** 手机横幅回到前台时,排着的卡留哪些(补一串旧横幅没有用,但退路、和丢了就哪儿都看不到的不能丢):
+ *  - 一律留着:撤销回执(`undo`,含手势里弹的带按钮卡;系统通知上没有「撤销」)、带 `onClose` 的(要等它收起才落定)、常驻的、
+ *    error 级的,上着屏被遮挡撤下的(`held`:用户没看完,系统通知也没替它说过),以及系统通知没真发出去的 —— inAppOnly / receipt、
+ *    来时在前台欠着又没补上的、桥回话说没投递或还没回话的(都记在 osOwed),系统通知开关关着时(`osOn` 为 false)全部。
+ *  - 其余:有人在等的(urgent)按「来源 + key」各留最新一张(不同的审批各自留着;和系统通知的分条同一口径,见 postOs),**全留、不封顶**:
+ *    安卓外壳回到前台时(handleOnResume)会把通知栏里的插件通知一并收掉,封顶丢下的审批就哪儿都看不到了。
+ *    不急的每个来源(event)留最新一张,补满剩下的名额(PHONE.replay 减去有人在等的张数,不足为 0),留新的、丢最早的;
+ *    丢下的不急的卡在后台都跟发过系统通知,页签角标也还在。
+ *  返回留下的(有人在等的在前,其余保持原来的先后)与丢下的。 */
+export function replayQueue(queue: readonly AppNotification[], osOn = true): { queue: AppNotification[]; dropped: AppNotification[] } {
+  const keeps = (n: AppNotification): boolean =>
+    !osOn || !!n.undo || typeof n.onClose === 'function' || n.sticky || n.level === 'error' || !!n.inApp || !!n.osOwed || !!n.held
+  const slot = (n: AppNotification): string => (n.urgent ? `urgent\u0000${n.event}\u0000${n.dedupeKey ?? ''}` : `plain\u0000${n.event}`)
+  const pick = new Map<string, AppNotification>()
+  for (const n of queue) {
+    if (keeps(n)) continue
+    const cur = pick.get(slot(n))
+    if (!cur || n.createdAt >= cur.createdAt) pick.set(slot(n), n) // 取晚的(一样晚取排在后面的)
+  }
+  const picked = queue.filter((n) => !keeps(n) && pick.get(slot(n)) === n)
+  // 封顶只管不急的:有人在等的全留;不急的补满剩下的名额,新的先留(一样新取排在后面的),丢的是最早的
+  const urgent = picked.filter((n) => n.urgent)
+  const plain = [...picked.keys()].filter((i) => !picked[i].urgent).sort((a, b) => picked[b].createdAt - picked[a].createdAt || b - a)
+  const room = Math.max(0, PHONE.replay - urgent.length)
+  const capped = new Set([...urgent, ...plain.slice(0, room).map((i) => picked[i])])
+  const kept = queue.filter((n) => keeps(n) || capped.has(n))
+  return { queue: [...kept.filter((n) => n.urgent), ...kept.filter((n) => !n.urgent)], dropped: queue.filter((n) => !kept.includes(n)) }
+}
+
 const PREFS_KEY = 'forsion.ntf.prefs'
 interface NtfPrefs {
   enabled: boolean
@@ -113,18 +236,28 @@ function writePrefs(p: NtfPrefs): void {
 }
 
 interface NtfState {
-  /** 可见堆叠(时间序:最旧在上,新的排下面;最上面的先到期消失,下面自动上移补位)。 */
+  /** 可见堆叠(时间序:最旧在上,新的排下面;最上面的先到期消失,下面自动上移补位)。手机横幅下最多一条。 */
   items: AppNotification[]
   /** 溢出队列(同屏超过 MAX_VISIBLE 条时排队,腾位后按序顶上)。 */
   queue: AppNotification[]
   prefs: NtfPrefs
   paused: boolean
+  /** 手机横幅(窄屏手机壳;NotificationHost 打开 / 关上):一次一条、手机停留、同 key 不顺延、同一来源节流。 */
+  banner: boolean
   notify(input: NotifyInput): string | null
-  dismiss(id: string): void
+  dismiss(id: string, reason?: DismissReason): void
+  /** 点了卡上的动作(按钮 / 手机横幅的正文):跑动作;动作没把这条换成别的(settle)就收起。 */
+  activate(id: string): void
   dismissAll(): void
   setEnabled(on: boolean): void
   setOsEnabled(on: boolean): void
   setEventOn(event: string, on: boolean): void
+  setBanner(on: boolean): void
+  /** 手机横幅:页面可见性变了(NotificationHost 监听 visibilitychange)。退到后台:排着的卡补发欠着的系统通知;
+   *  回到前台:排着的按 replayQueue 收拾后照队列出,后台来了卡屏上的常驻卡才让位。 */
+  visibilityChanged(): void
+  /** 手机横幅:原生半屏开了 / 收了(本模块订阅 @lcl/engine/nativeSheet 的 watchNativeSheet)。最后一个收起后,排着的照队列出。 */
+  sheetChanged(): void
   pause(): void
   resume(): void
 }
@@ -146,6 +279,42 @@ function clearTimer(id: string): void {
 }
 let seq = 0
 
+// 手机横幅的簿记:来源 → 冷却到哪一刻;前一条走后的间隔(到点才出下一条)。
+const cooldown = new Map<string, number>()
+let gapTimer: ReturnType<typeof setTimeout> | null = null
+let gapUntil = 0
+const cooling = (event: string): boolean => (cooldown.get(event) ?? 0) > Date.now()
+/** 刚到点收掉、没有 onClose 的卡的动作:id → 动作与截止时刻(PHONE.lateTap)。见 activate。 */
+const lateTaps = new Map<string, { run: () => void; until: number }>()
+/** 手机横幅模式下页面退到过后台、还没回来:回到前台那一下才收拾队列(replayQueue),多报一次「看得见」不动它。 */
+let wentHidden = false
+/** 系统通知交给了桥(回的是 Promise)、还没确认投递的卡,按卡上**当前这份内容**记(换内容时整条作废,见 recontent):
+ *  first = 这份内容第一发的序号(更早的序号说的是旧内容,回什么都不理);seq = 最近一发的序号;
+ *  until = 最近一发等回话等到哪一刻(PHONE.osWait;回话说没投后为 0:不在路上了);again = 在路上时有没有人要它补发(payOs);
+ *  retries = 因为没等到回话而补发了几次(PHONE.osRetry 封顶)。投了就删。见 postOs / osSettled / payOs。 */
+interface OsPost { first: number; seq: number; until: number; again: boolean; retries: number }
+const osPosts = new Map<string, OsPost>()
+let osSeq = 0
+
+/** 系统通知桥的回话算不算投递了:`{ posted: false }` / `false` = 没投(安卓:没通知权限、渠道被关、App 在前台、原生出错);
+ *  `{ posted: true }` = 投了。旧外壳(热更新后新页面配老安卓壳)和桌面的桥回 undefined、没有 posted 这一项:按投了算,保持原来的行为。 */
+export function osDelivered(r: unknown): boolean {
+  if (r === false) return false
+  if (r && typeof r === 'object' && 'posted' in r) return (r as { posted: unknown }).posted === true
+  return true
+}
+
+/** 测试用:清掉冷却与间隔(模块级簿记,store 的 setState 碰不到)。 */
+export function resetNotificationThrottle(): void {
+  cooldown.clear()
+  lateTaps.clear()
+  osPosts.clear()
+  wentHidden = false
+  if (gapTimer) clearTimeout(gapTimer)
+  gapTimer = null
+  gapUntil = 0
+}
+
 export const useNotifications = create<NtfState>((set, get) => {
   const startTimer = (id: string, ms: number): void => {
     clearTimer(id)
@@ -154,11 +323,155 @@ export const useNotifications = create<NtfState>((set, get) => {
       timers.set(id, { handle: null, deadline: 0, remaining: ms })
       return
     }
-    timers.set(id, { handle: setTimeout(() => get().dismiss(id), ms), deadline: Date.now() + ms, remaining: 0 })
+    timers.set(id, { handle: setTimeout(() => get().dismiss(id, 'timeout'), ms), deadline: Date.now() + ms, remaining: 0 })
+  }
+
+  /** 停留多久。桌面:按 durationMs / level。手机横幅:读屏 10 秒 > 收尾(settle)按调用方给的 > 撤销 8 秒 > 5 秒。 */
+  const dwellOf = (n: AppNotification): number => {
+    if (!get().banner) return durationOf(n)
+    if (readerOn()) return PHONE.reader
+    if (n.settle && n.durationMs) return n.durationMs
+    return n.undo ? PHONE.undo : PHONE.dwell
   }
 
   const closed = (n: AppNotification | undefined): void => {
     try { n?.onClose?.() } catch { /* 回调抛错不砸通知栈 */ }
+  }
+
+  /** 手机横幅:一条上屏(记下上屏时刻,非常驻的开始计时)。 */
+  const showBanner = (n: AppNotification, queue: AppNotification[]): void => {
+    payOs(n)
+    // 上了屏就不再欠:用户在前台看到了,或者刚补发过。常驻那张让位后再回来、宽屏的卡收进队列,都不再发第二次。
+    // 被遮挡撤下的那张重新上屏:停留从这一刻给满
+    const shown = { ...n, shownAt: Date.now(), osOwed: undefined, bg: undefined, held: undefined, missed: undefined }
+    set({ items: [shown], queue })
+    if (!shown.sticky) startTimer(shown.id, dwellOf(shown))
+  }
+
+  /** 手机横幅:遮挡开始(App 退到后台 / 原生半屏盖上)。屏上那张不常驻的卡撤回队首、停表,内容原样留着(`held`):
+   *  不调 onClose、不开冷却 —— 用户看不见它,不能在底下到点走掉、把撤销卡的「到点才真做」落定。遮挡结束后照队列重新上屏、停留给满
+   *  (showBanner)。常驻的没有表,照旧留在屏上(回到前台让不让位见 visibilityChanged)。 */
+  const holdShown = (): void => {
+    const s = get()
+    const vis = s.items[0]
+    if (!s.banner || !vis || vis.sticky) return
+    clearTimer(vis.id)
+    set({ items: [], queue: [{ ...vis, shownAt: undefined, held: true }, ...s.queue] })
+  }
+
+  /** 手机横幅:屏上空着、间隔已过 → 下一条上屏;冷却中的(节流管得着的)直接丢掉(onClose 照调,在后台就补发系统通知)。
+   *  常驻的排在所有不常驻的后面:让过位的常驻一回来就不走了,它后面排着的会永远出不来。 */
+  const promoteBanner = (): void => {
+    gapTimer = null
+    const s = get()
+    // 在后台 / 原生半屏盖着不上屏:回到前台由 visibilityChanged、半屏收起由 sheetChanged 接着出
+    if (!s.banner || s.items.length || pageHidden() || sheetUp()) return
+    const dropped: AppNotification[] = []
+    let next: AppNotification | undefined
+    for (const nx of s.queue) {
+      if (nx.sticky) continue
+      if (!nx.free && !nx.held && !nx.missed && cooling(nx.event)) dropped.push(nx) // 被遮挡撤下的、离开期间哪儿都没送到的,不吃冷却
+      else { next = nx; break }
+    }
+    next ??= s.queue.find((nx) => nx.sticky)
+    const queue = s.queue.filter((nx) => nx !== next && !dropped.includes(nx))
+    if (next) showBanner(next, queue)
+    else if (queue.length !== s.queue.length) set({ queue })
+    for (const d of dropped) { payOs(d); closed(d) }
+  }
+
+  /** 前一条刚走:隔 PHONE.gap 再出下一条(原生横幅的退场 160ms 走完,两张不叠)。 */
+  const scheduleGap = (): void => {
+    gapUntil = Date.now() + PHONE.gap
+    if (gapTimer) clearTimeout(gapTimer)
+    gapTimer = setTimeout(promoteBanner, PHONE.gap)
+  }
+
+  // 系统通知:与应用内通知同步发(所有事件,不止收件箱);仅窗口在后台时(前台已有卡片,免重复横幅);
+  // osEnabled 门控。web 无 window.tangu.notify → 可选链忽略(安卓有:mobile/src/liveIsland.ts)。
+  // inAppOnly / receipt:调用方声明这是应用内即时反馈(见 NotifyInput.inAppOnly),不跟发。
+  // 「在后台」:桌面 = 窗口失焦。安卓 WebView 退到后台后 hasFocus() 仍是 true(模拟器实测),那里只有可见性说真话;
+  // 桌面上看不见的窗口本来就没有焦点,多看这一项不改变它的行为。
+  // 谁调:新弹的一条;以及 replace 顶掉同 key 的前一条(那是新的一件事,只是借同一张卡显示 —— 比如手机上插件把几件合成一张、
+  // 上一张还停着时又来一件,不发的话 App 在后台时这一件就没有横幅)。宿主自己的去重合并(防轰炸计数)不重发。
+  // 手机节流挡的只是应用内的卡:被节流的这一条照样走到这里(调用在节流判断之前)。
+  // 交给桥的 meta:event = 来源;有人在等的(urgent)且有 dedupeKey 才带 key。安卓按「来源 + key」分条(同一条只留最新的),
+  // 没有 key 按来源一条 —— 有人在等的审批各有自己的键,不会被后来的普通通知顶掉;其余照旧每个来源一条:宿主不少键是逐条的
+  // (Agent 私聊的键带最新一条消息的时刻),都带上的话每条消息各占一条系统通知。
+  const away = (): boolean => typeof document !== 'undefined' && (!document.hasFocus() || document.visibilityState === 'hidden')
+  type OsCard = Pick<AppNotification, 'id' | 'title' | 'sourceLabel' | 'text' | 'dedupeKey' | 'urgent'>
+  /** 返回这一刻能确定投递了:桥同步回来、回话算投了(旧外壳 / 桌面回 undefined,见 osDelivered)。网页版没有系统通知,那里「发了」不算数。
+   *  桥回 Promise(安卓)的,这一刻还不知道:返回 false,调用方照「没发出去」记 osOwed;回话说投了再清掉那张卡(按 id + 这一发的序号,
+   *  见 osSettled),没投 / 拒绝就一直欠着(replayQueue 留它);一直不回话的,过了 PHONE.osWait 算没确认(见 payOs)。 */
+  const postOs = (n: OsCard, event: string): boolean => {
+    try {
+      const fn = typeof window === 'undefined' ? undefined : window.tangu?.notify
+      if (typeof fn !== 'function') return false
+      const r: unknown = fn(n.title || n.sourceLabel || 'Forsion', n.text, n.urgent && n.dedupeKey ? { event, key: n.dedupeKey } : { event })
+      if (!r || typeof (r as PromiseLike<unknown>).then !== 'function') return osDelivered(r)
+      const seq = ++osSeq
+      const f = osPosts.get(n.id) // 同一份内容又发一次(payOs 补发):沿用这份内容的第一发与补发次数
+      // 簿记只留还在的卡(走了的卡回什么都不用管;桥一直不回话的话,不清就一直攒着)。正在发的这张不算:新卡还没进 store,丢下的卡刚出队
+      const s = get()
+      for (const id of osPosts.keys()) if (id !== n.id && !s.items.some((q) => q.id === id) && !s.queue.some((q) => q.id === id)) osPosts.delete(id)
+      osPosts.set(n.id, { first: f?.first ?? seq, seq, until: Date.now() + PHONE.osWait, again: false, retries: f?.retries ?? 0 })
+      ;(r as PromiseLike<unknown>).then((v) => osSettled(n.id, seq, osDelivered(v)), () => osSettled(n.id, seq, false))
+      return false
+    } catch { return false }
+  }
+  /** 一发系统通知回话了。卡换内容之前发的(没有记录,或序号早于这份内容的第一发):说的是旧内容,回什么都不理。
+   *  投了:这份内容的任何一发投了都算(包括早已过了时限、后面又补发过的),那张卡不再欠(还在的话)。
+   *  没投:只认最近一发、且还在时限内的 —— 不在路上了;在路上时又有人要它补发(payOs:比如这一发是在前台被原生挡掉的,
+   *  回话前 App 退到了后台)就补一次。过了时限才到的「没投」不动:超时那一刻起它已经按没确认算,下一次需要时照常补发。 */
+  const osSettled = (id: string, seq: number, ok: boolean): void => {
+    const f = osPosts.get(id)
+    if (!f || seq < f.first) return
+    if (ok) {
+      osPosts.delete(id)
+      const paid = (q: AppNotification): AppNotification => (q.id === id && q.osOwed ? { ...q, osOwed: undefined } : q)
+      const s = get()
+      if (s.items.some((q) => q.id === id && q.osOwed) || s.queue.some((q) => q.id === id && q.osOwed)) set({ items: s.items.map(paid), queue: s.queue.map(paid) })
+      return
+    }
+    if (seq !== f.seq || !f.until || Date.now() > f.until) return
+    f.until = 0
+    if (!f.again) return
+    f.again = false
+    const n = get().queue.find((q) => q.id === id)
+    if (n?.osOwed) payOs(n)
+  }
+  /** 返回这次有没有发出去;够格(不是 inAppOnly / receipt)却因为 App 在前台没发的,由调用方记成 osOwed。 */
+  const sendOs = (input: NotifyInput, n: OsCard, event: string): boolean => {
+    if (input.inAppOnly || input.receipt || !get().prefs.osEnabled) return false
+    if (!away()) return false
+    return postOs(n, event)
+  }
+  const owesOs = (input: NotifyInput): boolean => !input.inAppOnly && !input.receipt
+  /** 手机横幅一次一条:排在队里的卡,来时 App 在前台(没发系统通知),等它上屏或被节流丢下时 App 已经在后台 ——
+   *  用户两边都看不到它。这时补发一次(门控同 sendOs:系统通知开关 + 在后台)。返回补发了没有。 */
+  const payOs = (n: AppNotification): boolean => {
+    if (!n.osOwed || !get().prefs.osEnabled || !away()) return false
+    const f = osPosts.get(n.id)
+    if (f?.until) {
+      // 这张卡的一发还在路上(时限内):不再发(同一条会再响一次),记下;那一发回话说没投再补(osSettled)。
+      // 那一发随后一直没回话的话,这次补发要等下一次需要时(退到后台 / 被丢下)才兑现 —— 有意的:不为它另起定时器
+      if (Date.now() <= f.until) { f.again = true; return false }
+      // 过了时限还没回话:算没确认,补发;这类补发封顶(那一发可能其实投了、只是没回话:再发会再响一次)。封顶后照旧欠着,回到前台留着(replayQueue)
+      if (f.retries >= PHONE.osRetry) return false
+      f.retries++
+    }
+    return postOs(n, n.event)
+  }
+  /** 卡换了内容(同 key 顶替 / 合并,收尾 settle 也是):系统通知的账按换上去的这份内容重算,返回它欠不欠(新的 osOwed)。
+   *  先作废这张卡的旧记录 —— 那一发投的是旧内容:晚到的「投了」不能清新内容的账,「没投」也不替旧内容补发,没回话的补发次数从零算;
+   *  再看这次有没有新的一发(有的话 postOs 给新内容另起一份记录)。顺序不能反:先发再作废会把刚发的这一发也作废。
+   *  顶替是新的一件事:跟发系统通知,没确认投递、又不是在前台留在屏上(用户正看着它换字)的,欠着。
+   *  宿主自己的合并不重发:看不见的卡(排着的、在后台 / 半屏底下撤回队列的)换上去的内容哪儿都没出现过,欠着;其余沿用原来的。 */
+  const recontent = (id: string, upd: AppNotification, input: NotifyInput, event: string, onScreen: boolean): boolean | undefined => {
+    osPosts.delete(id)
+    if (input.replace) return (!sendOs(input, upd, event) && owesOs(input) && !onScreen) || undefined
+    if (!onScreen && owesOs(input) && !upd.inApp) return true
+    return upd.osOwed
   }
 
   return {
@@ -166,6 +479,7 @@ export const useNotifications = create<NtfState>((set, get) => {
     queue: [],
     prefs: readPrefs(),
     paused: false,
+    banner: false,
 
     notify: (input) => {
       const level: NotifyLevel = input.level && ['info', 'success', 'warning', 'error'].includes(input.level) ? input.level : 'info'
@@ -179,16 +493,48 @@ export const useNotifications = create<NtfState>((set, get) => {
       const durationMs = customDuration(input.durationMs)
       const text = plainNetworkError(String(input.text ?? '')).slice(0, 500) // 防插件超长字符串撑爆卡片
       const title = input.title ? String(input.title).slice(0, 120) : undefined
+      const gestured = gesturedCard(input)
+      const undo = isUndo(input) || gestured || undefined
+      const urgent = input.urgent === true || undefined
 
-      // 去重合并:同 dedupeKey 更新原条(计数 + 文案 + 重置停留),可见或排队中皆然。
+      // 去重合并:同 dedupeKey 更新原条(计数 + 文案 + 重置停留),可见或排队中皆然。replace:整条换成这一条,计数回 1。
       if (input.dedupeKey) {
         const found = st.items.find((n) => n.dedupeKey === input.dedupeKey) || st.queue.find((n) => n.dedupeKey === input.dedupeKey)
         if (found) {
           const visible = st.items.some((n) => n.id === found.id)
-          const upd: AppNotification = {
-            ...found, text, title: title ?? found.title, level, count: input.settle ? 1 : found.count + 1, settle: input.settle,
-            createdAt: Date.now(), sticky: input.sticky ?? (input.settle || level !== found.level ? sticky : found.sticky), action: 'action' in input ? input.action : found.action, // 显式给了(含 undefined)就换,没给才沿用
-            durationMs: durationMs ?? found.durationMs, onClose: input.onClose ?? found.onClose,
+          const upd: AppNotification = input.replace
+            ? {
+                ...found, text, title, level, sourceLabel: input.sourceLabel ?? found.sourceLabel, count: 1, settle: input.settle,
+                createdAt: Date.now(), sticky, action: input.action, durationMs, onClose: input.onClose ?? found.onClose,
+              }
+            : {
+                ...found, text, title: title ?? found.title, level, count: input.settle ? 1 : found.count + 1, settle: input.settle,
+                createdAt: Date.now(), sticky: input.sticky ?? (input.settle || level !== found.level ? sticky : found.sticky), action: 'action' in input ? input.action : found.action, // 显式给了(含 undefined)就换,没给才沿用
+                durationMs: durationMs ?? found.durationMs, onClose: input.onClose ?? found.onClose,
+              }
+          upd.undo = undo
+          upd.urgent = urgent
+          upd.inApp = (!!input.inAppOnly || !!input.receipt || (!input.replace && !!found.inApp)) || undefined
+          upd.free = throttleFree({ ...input, onClose: upd.onClose }, upd.sticky, upd.level, upd.event, gestured)
+          if (st.banner) upd.count = 1 // 手机:同 key 直接换文案和按钮,不出 ×N
+          // 手机在后台,或原生半屏盖着:屏上那张换了内容用户也看不见(见下),不算「留在屏上」
+          const hidden = st.banner && pageHidden()
+          const offscreen = hidden || (st.banner && sheetUp())
+          // 欠账按换上去的这份内容实际投递了没有重算(见 recontent;在前台、留在屏上的那张除外:用户正看着它换字)。
+          // 欠着的若还排着队、等到后台才上屏 / 被丢下时补发,回到前台时也不丢(见 replayQueue)
+          const onScreen = visible && !offscreen
+          upd.osOwed = recontent(found.id, upd, input, event, onScreen)
+          if (offscreen) {
+            // 换了内容就是新来的。屏上那张不在后台 / 半屏底下原地换字、到点走掉(回来哪都看不到:系统通知回前台时被外壳清掉),
+            // 撤下来当新来的排着,回到前台 / 半屏收起再出、停留从那时重新算;在后台时排着的那张同理记成后台来的
+            // (半屏底下的不记:那不是「从后台回来」,回来时的收拾管不着它们)
+            if (hidden) upd.bg = true
+            if (visible) {
+              clearTimer(found.id)
+              const moved = { ...upd, shownAt: undefined }
+              set((s) => ({ items: s.items.filter((n) => n.id !== found.id), queue: enqueue(s.queue, moved) }))
+              return found.id
+            }
           }
           set((s) => ({
             items: s.items.map((n) => (n.id === found.id ? upd : n)),
@@ -196,7 +542,14 @@ export const useNotifications = create<NtfState>((set, get) => {
           }))
           if (visible) {
             if (upd.sticky) clearTimer(found.id)
-            else startTimer(found.id, durationOf(upd))
+            else if (!st.banner) startTimer(found.id, durationOf(upd))
+            // 手机:停留从第一次上屏起算、不顺延。例外:收尾(settle,用户点撤销后的结果)与撤销回执(又删了一个,新的退路)
+            // 重新计满;原来常驻的变成不常驻也计满(它本来没有到点)。
+            else if (input.settle || upd.undo || found.sticky || !found.shownAt) {
+              upd.shownAt = Date.now()
+              set((s) => ({ items: s.items.map((n) => (n.id === found.id ? { ...n, shownAt: upd.shownAt } : n)) }))
+              startTimer(found.id, dwellOf(upd))
+            } else startTimer(found.id, Math.max(MIN_LEFT, found.shownAt + dwellOf(upd) - Date.now()))
           }
           return found.id
         }
@@ -206,17 +559,34 @@ export const useNotifications = create<NtfState>((set, get) => {
         id: `ntf-${++seq}-${Date.now()}`, text, title, level, event,
         sourceLabel: input.sourceLabel, createdAt: Date.now(), sticky, count: 1,
         dedupeKey: input.dedupeKey, action: input.action, durationMs, onClose: input.onClose, settle: input.settle,
+        undo, urgent, free: throttleFree(input, sticky, level, event, gestured), inApp: (!!input.inAppOnly || !!input.receipt) || undefined,
       }
-      // 系统通知:与应用内通知同步发(所有事件,不止收件箱);仅窗口在后台时(前台已有卡片,免重复横幅);
-      // osEnabled 门控。web 无 window.tangu.notify → 可选链忽略(安卓有:mobile/src/liveIsland.ts)。dedupe 合并不重发(上面已 return)。
-      // inAppOnly:调用方声明这是应用内即时反馈(见 NotifyInput.inAppOnly),不跟发。
-      // 「在后台」:桌面 = 窗口失焦。安卓 WebView 退到后台后 hasFocus() 仍是 true(模拟器实测),那里只有可见性说真话;
-      // 桌面上看不见的窗口本来就没有焦点,多看这一项不改变它的行为。
-      const away = typeof document !== 'undefined' && (!document.hasFocus() || document.visibilityState === 'hidden')
-      if (!input.inAppOnly && !input.receipt && st.prefs.osEnabled && away) {
-        const osTitle = title || input.sourceLabel || 'Forsion'
-        try { window.tangu?.notify?.(osTitle, text, { event }) } catch { /* 无桥/web 忽略 */ }
+      // 系统通知(见 sendOs);非 replace 的去重合并上面已经 return,不重发。先于手机节流:后台的横幅不受它管
+      if (!sendOs(input, n, event) && owesOs(input)) n.osOwed = true
+
+      if (st.banner) {
+        // 手机节流:同一来源刚收起过一张,冷却期间不出卡(插件照常调,不报错;不该出的卡也就没有 onClose 可等:它们都 free)
+        if (!n.free && cooling(event)) return null
+        const vis = st.items[0]
+        if (pageHidden()) {
+          // 在后台:不上屏、不让位(上了屏用户也看不见,却开始计时、走了还开冷却),排着等回到前台(visibilityChanged)
+          set({ queue: enqueue(st.queue, { ...n, bg: true }) })
+        } else if (vis?.sticky) {
+          // 常驻的那张让一让:新来的先上,它排回新来的后面,等新来的走了再回来(不然一张常驻就把后面的全堵住)
+          clearTimer(vis.id)
+          set({ items: [], queue: [n, vis, ...st.queue] })
+          scheduleGap()
+        } else if (!vis && Date.now() >= gapUntil && !st.queue.length && !sheetUp()) {
+          showBanner(n, st.queue)
+        } else {
+          // 排着:屏上有一张、间隔没过,或原生半屏盖着(promoteBanner 也不出,半屏收起由 sheetChanged 接着出)。
+          // 常驻的那张照上面那支先让位:半屏收起时屏上已经空了,不会堵在常驻后面
+          set({ queue: enqueue(st.queue, n) })
+          if (!vis && !gapTimer) scheduleGap()
+        }
+        return n.id
       }
+
       if (st.items.length < MAX_VISIBLE) {
         set((s) => ({ items: [...s.items, n] }))
         if (!sticky) startTimer(n.id, durationOf(n))
@@ -226,13 +596,32 @@ export const useNotifications = create<NtfState>((set, get) => {
       return n.id
     },
 
-    dismiss: (id) => {
+    dismiss: (id, reason) => {
       clearTimer(id)
       const s = get()
       const gone = s.items.find((n) => n.id === id) || s.queue.find((n) => n.id === id)
       let items = s.items.filter((n) => n.id !== id)
       let queue = s.queue.filter((n) => n.id !== id)
       if (items.length === s.items.length && queue.length === s.queue.length) return
+      if (s.banner) {
+        const wasShown = items.length !== s.items.length
+        set({ items, queue })
+        if (wasShown) {
+          // 同一来源冷却:到点 / 点了动作 30 秒,用户自己收的 2 分钟。程序自己撤的(没有 reason)与节流管不着的卡不算;
+          // App 在后台、原生半屏盖着时走的也不算(用户没看见它,回来 / 收起半屏后不该因为它 30 秒内什么都不出)。
+          if (reason && gone && !gone.free && !pageHidden() && !sheetUp()) cooldown.set(gone.event, Date.now() + (reason === 'user' ? PHONE.coolUser : PHONE.coolTimeout))
+          // 到点收掉的那一刻,原生层可能正把用户的一次点按往回报:动作留一次桥往返(见 activate)。带 onClose 的不留 ——
+          // onClose 刚在下面调过,撤销回执一类就此落定(真删了 / 真提交了),这时再跑「撤销」会撤一件已经落定的事。
+          if (reason === 'timeout' && gone?.action && !gone.onClose) {
+            const now = Date.now()
+            for (const [k, v] of lateTaps) if (v.until < now) lateTaps.delete(k)
+            lateTaps.set(id, { run: gone.action.run, until: now + PHONE.lateTap })
+          }
+          scheduleGap()
+        }
+        closed(gone)
+        return
+      }
       // 补位:队列头按序顶上(保持时间序,最上面的仍是最旧)。
       const promoted: AppNotification[] = []
       while (items.length < MAX_VISIBLE && queue.length) {
@@ -246,8 +635,31 @@ export const useNotifications = create<NtfState>((set, get) => {
       closed(gone)
     },
 
+    activate: (id) => {
+      // 也找队列:手机上常驻的那张可能刚被新来的顶回队列(点按还在路上,或它的动作自己弹了一条新的)
+      const find = (): AppNotification | undefined => get().items.find((x) => x.id === id) ?? get().queue.find((x) => x.id === id)
+      const n = find()
+      if (!n) {
+        // 手机横幅刚到点收掉的那条(PHONE.lateTap 之内,只一次):用户在它退场前点的,点按晚到了一次桥往返,照样执行
+        const late = lateTaps.get(id)
+        lateTaps.delete(id)
+        if (late && late.until >= Date.now()) { try { late.run() } catch { /* 插件 action 抛错不砸宿主 */ } }
+        return
+      }
+      if (!n.action) return
+      const before = n.action
+      try { n.action.run() } catch { /* 插件 action 抛错不砸宿主 */ }
+      // 动作自己把这条换成了结果(日历撤销 → 「已撤销」,settle):留着,到点淡出
+      if (find()?.action === before) get().dismiss(id, 'action')
+    },
+
     dismissAll: () => {
       for (const id of [...timers.keys()]) clearTimer(id)
+      lateTaps.clear()
+      osPosts.clear()
+      if (gapTimer) clearTimeout(gapTimer)
+      gapTimer = null
+      gapUntil = 0
       const { items, queue } = get()
       set({ items: [], queue: [] })
       for (const n of [...items, ...queue]) closed(n)
@@ -271,7 +683,91 @@ export const useNotifications = create<NtfState>((set, get) => {
       writePrefs(prefs)
     },
 
-    // hover 暂停:冻结全部在飞定时器记剩余;移出后续走剩余(下限 800ms,防恢复即消失)。
+    // 横幅 ↔ 堆叠(旋转、分屏把窗口拉宽 / 收窄):横幅只留最早那条,其余按序回到队首;回到堆叠时队列按序补满。
+    setBanner: (on) => {
+      const s = get()
+      if (on === s.banner) return
+      if (on) {
+        const [first, ...rest] = s.items
+        for (const r of rest) clearTimer(r.id)
+        // 宽屏时已经在屏上的那几张用户看过了:收回队列也不再欠系统通知
+        const seen = rest.map((r) => ({ ...r, osOwed: undefined }))
+        set({ banner: true, items: first ? [{ ...first, shownAt: first.shownAt ?? Date.now(), osOwed: undefined }] : [], queue: [...seen, ...s.queue] })
+        if (!first && s.queue.length) scheduleGap()
+        return
+      }
+      if (gapTimer) clearTimeout(gapTimer)
+      gapTimer = null
+      gapUntil = 0
+      let items = s.items
+      let queue = s.queue
+      const promoted: AppNotification[] = []
+      while (items.length < MAX_VISIBLE && queue.length) {
+        promoted.push(queue[0])
+        items = [...items, queue[0]]
+        queue = queue.slice(1)
+      }
+      set({ banner: false, items, queue })
+      for (const nx of promoted) if (!nx.sticky) startTimer(nx.id, durationOf(nx))
+    },
+
+    visibilityChanged: () => {
+      const s = get()
+      if (!s.banner) return
+      if (pageHidden()) {
+        wentHidden = true
+        // 屏上那张撤回队首、停表(用户看不见它;它在前台上过屏,不补发系统通知,回来重新上屏)
+        holdShown()
+        // 退到后台:排着的卡在后台不会上屏 —— 来时在前台没发系统通知的,现在补发(上屏那一刻补的那条路走不到了)
+        const q0 = get().queue
+        if (!q0.some((q) => q.osOwed)) return
+        set({ queue: q0.map((q) => (q.osOwed && payOs(q) ? { ...q, osOwed: undefined } : q)) })
+        return
+      }
+      // 没退到过后台(多报了一次「看得见」)就只接着出;冷启动时在后台、没收到过 hidden 的,看排着的有没有后台来的
+      if (!wentHidden && !s.queue.some((q) => q.bg)) {
+        if (!s.items.length && s.queue.length && !gapTimer) scheduleGap()
+        return
+      }
+      wentHidden = false
+      // 回到前台:排着的先按 replayQueue 收拾 —— 撤销、onClose、常驻、error、上着屏被撤下的、系统通知没发出去的都留,其余有人在等的按
+      // 「来源 + key」、不急的按来源各留一张,最多 PHONE.replay 张;丢下的 onClose 照调(按规则它们都没有 onClose,照调是为了语义和
+      // promoteBanner 丢卡一致)。留下的照队列出,节流照常;原生半屏还盖着就等它收起(promoteBanner 不出)。
+      // 不按「系统通知替它响过、早该走了」整批丢:系统通知可能根本没出(没给通知权限、关了渠道 —— 新外壳回 posted: false、记成欠着,
+      // 老外壳照样回成功;手机上 agent.done 不走系统通知),回到前台时手机外壳还会把这类系统通知清掉;撤销卡更不能丢 —— 系统通知上没有撤销。
+      const { queue: replay, dropped } = replayQueue(s.queue, s.prefs.osEnabled)
+      const fresh = replay.some((q) => q.bg)
+      // 离开期间哪儿都没送到的(系统通知没确认投了,或开关关着):横幅是唯一的机会,打上 missed、上屏不吃冷却(见 promoteBanner)
+      const osOn = s.prefs.osEnabled
+      const missedOut = (q: AppNotification): boolean => !q.free && !q.held && !q.missed && (!osOn || !!q.osOwed)
+      const queue = fresh || replay.some(missedOut)
+        ? replay.map((q) => (q.bg || missedOut(q) ? { ...q, bg: undefined, ...(missedOut(q) ? { missed: true } : {}) } : q))
+        : replay
+      // 屏上是常驻的那张:在后台没让位,后台真来了卡才让 —— 和 notify 里一样对谁都让,常驻的(错误缺省也是常驻)也让;它排到
+      // 后台来的那些后面,promoteBanner 先出不常驻的,再按先来后到出常驻的。后台什么都没来就不动(不然两张常驻每次前后台来回都轮换)
+      const vis = s.items[0]
+      if (vis?.sticky && fresh) {
+        clearTimer(vis.id)
+        set({ items: [], queue: [...queue, vis] })
+        scheduleGap()
+      } else {
+        if (queue.length !== s.queue.length || queue.some((q, i) => q !== s.queue[i])) set({ queue })
+        if (!s.items.length && queue.length && !gapTimer) scheduleGap()
+      }
+      for (const d of dropped) closed(d)
+    },
+
+    sheetChanged: () => {
+      if (!get().banner) return
+      // 盖上:屏上那张撤回队首、停表(见 holdShown);再叠一层时屏上已经空了,什么都不做
+      if (sheetUp()) { holdShown(); return }
+      // 半屏期间排着的卡不收拾(那不是从后台回来),收起后照队列出;在后台收起的,等回到前台
+      const s = get()
+      if (pageHidden()) return
+      if (!s.items.length && s.queue.length && !gapTimer) scheduleGap()
+    },
+
+    // 鼠标悬停暂停(NotificationHost 只在 pointerType === 'mouse' 时调;触屏点按不暂停):冻结全部在飞定时器记剩余;移出后续走剩余(下限 800ms,防恢复即消失)。
     pause: () => {
       if (get().paused) return
       set({ paused: true })
@@ -288,12 +784,15 @@ export const useNotifications = create<NtfState>((set, get) => {
       for (const [id, t] of timers) {
         if (!t.handle) {
           const ms = t.remaining || 1500
-          timers.set(id, { handle: setTimeout(() => get().dismiss(id), ms), deadline: Date.now() + ms, remaining: 0 })
+          timers.set(id, { handle: setTimeout(() => get().dismiss(id, 'timeout'), ms), deadline: Date.now() + ms, remaining: 0 })
         }
       }
     },
   }
 })
+
+// 原生半屏开合(只有安卓外壳会有):store 只有一份、随页面一起走,在模块里订阅一次,不挂在哪个组件上
+watchNativeSheet(() => useNotifications.getState().sheetChanged())
 
 /** 便捷入口(store 外调用:appStore.toast 垫片 / wiring / 插件宿主)。 */
 export const notifyApp = (input: NotifyInput): string | null => useNotifications.getState().notify(input)

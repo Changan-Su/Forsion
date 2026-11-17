@@ -504,7 +504,7 @@ list.addEventListener('drop', async (e) => {
 | `ctx.ui.confirm(opts)` / `ctx.ui.openDialog(opts)` | 原生 `<dialog>` + `showModal`,外观同笔记的 ConfirmDialog(420 / 560px、`--radius-lg`、卡片底、`--card-shadow`);Android 确认走 `presentNativeConfirm` | 主按钮在右,`danger` 时红、焦点落「取消」;Enter = 主按钮;Esc / 遮罩 = 取消;`run` 返回 `false` 不关;`mount(el)` 的清理在关闭时跑。 |
 | `ctx.ui.mountControl(el, { type, size: 'toolbar', … })` | 分段 = `ViewModeSwitch`(看法胶囊);下拉 = 28px 文字钮 + `.ctx-menu` listbox(Android 原生抽屉) | 分段 2–5 项;下拉 6 项起带搜索;点了先挪过去再回调 `onChange`,`update({ value })` 以插件为准。 |
 | `ctx.ui.popover(anchor, { mount, side, align })` | `.ui-popover` 外壳,`clampMenu` + `zoomOf` 落位 | 锚定、夹边、界面缩放、Esc / 点外面 / 失焦关;同一时刻一个。 |
-| `ctx.ui.icon(name, { size })` | `PLUGIN_ICONS` 词表(Space 那 30 个名字已并入) | 返回新 `<svg>`;词表外 → null + 控制台警告一次(插件 id + 名字,带近似名);Space / 列表照旧回落(方块堆 / 文件)。 |
+| `ctx.ui.icon(name, { size })` | `PLUGIN_ICONS` 词表(Space 那 30 个名字已并入) | 返回新 `<svg>`;词表外 → null + 控制台警告一次(插件 id + 名字,带近似名);Space / 列表照旧回落(方块堆 / 文件)。某个名字第一次用时返回的是尺寸已对的空壳,字形在微任务里补上(下一次绘制之前,2026-11-15 起):照常 append;要多份就再调一次,别在同一拍里 `cloneNode` / 读 `outerHTML`。 |
 | `ctx.ui.mountEmptyState(el, …)`、`ListSourceContribution.empty` | `components/EmptyState`;列表源经 `views/hostListEmpty.ts` 登记 | 桌面:插件自己的 Space 里侧栏不写「暂无内容」;手机整屏列表画同一份空态。 |
 | `ctx.ui.mountWebCard(el, …)` | `components/WebCard`(宿主自己的本地网页卡 / 服务卡 `views/chat2/WebCards.tsx` 也用它);缩略图走主进程 `electron/pageThumb.ts` | 只收 http(s) 缩略图,按 url + version 缓存;`layout: 'row'` 是列表一行;update 带了键、值为 undefined / [] / null = 清掉。 |
 | `ctx.ui.setViewHead(el, { title, actions })` | `ViewHead`(`title` 插槽)+ `plugin-viewhead-actions` | 与 `setViewModes` 并存:胶囊、标题、两份按钮。 |

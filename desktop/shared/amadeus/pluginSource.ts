@@ -4,11 +4,14 @@
  * 应用私有目录 plugins/(mobile/src/plugins/pluginHost.ts)共用这一份 —— 两端列出来的插件长同一个样,
  * 新加 manifest 字段只改这里。I/O(读 main / README / 图标、bundle 清点、门禁所需的宿主版本)各端自理。
  */
-import { PLUGIN_CAPABILITIES, sanitizeEvents, sanitizeGuide, sanitizeOnboarding, sanitizeRequiresPlugins, type ExternalPluginSource } from './ipc'
+import { PLUGIN_CAPABILITIES, sanitizeEvents, sanitizeGuide, sanitizeInternalsVerified, sanitizeOnboarding, sanitizeRequiresPlugins,type ExternalPluginSource } from './ipc'
 import { parseManifestRequires } from './manifestRequires'
 import { declaredSourcesOf } from '../storeSources'
+import { sanitizeNetworkPatterns } from '../pluginNetwork'
 
 const storeSourcesOf = (pluginId: string, raw: unknown) => { const list = declaredSourcesOf(pluginId, raw); return list.length ? list : undefined }
+/** 列表展示用;主进程每次代请求时另从磁盘重读,不信这份。 */
+export const networkOf = (raw: unknown): string[] | undefined => { const { patterns } = sanitizeNetworkPatterns(raw); return patterns.length ? patterns : undefined }
 
 /** manifest.json 里宿主会读的字段(全按 unknown 收:第三方写什么都可能)。 */
 export interface InstalledPluginManifest {
@@ -36,13 +39,17 @@ export interface InstalledPluginManifest {
   syncData?: unknown
   /** 商店来源(2026-11-08+):插件往商店左栏加的第三方目录,见 shared/storeSources.ts。 */
   storeSources?: unknown
+  /** ctx.net 能访问的主机名模式(2026-11-16+),见 shared/pluginNetwork.ts。 */
+  network?: unknown
+  /** 作者验过内部接口的 Forsion 次版本(2026-11-16+),见 ipc.ts 的 sanitizeInternalsVerified。只用于标注。 */
+  internalsVerified?: unknown
 }
 
 /** manifest 推导出的展示 / 门禁字段(id、code、文档、图标、blocked 由调用方补)。
  *  ⚠️ name / version / description 沿用桌面原有的宽松取值(`m.name || 目录名`),别在这里顺手收紧 —— 两端同时变。 */
 export type InstalledPluginFields = Pick<ExternalPluginSource,
   'name' | 'version' | 'description' | 'nameEn' | 'descriptionEn' | 'apiVersion' | 'minAppVersion' | 'requiresApp' | 'packageId'
-  | 'requiresPlugins' | 'entitlement' | 'capabilities' | 'onboarding' | 'guide' | 'events' | 'fileExtensions' | 'isDesktopOnly' | 'syncData' | 'storeSources'>
+  | 'requiresPlugins' | 'entitlement' | 'capabilities' | 'internalsVerified' | 'onboarding' | 'guide' | 'events' | 'fileExtensions' | 'isDesktopOnly' | 'syncData' | 'storeSources' | 'network'>
 
 export function installedPluginFields(m: InstalledPluginManifest, dirName: string, id?: string): InstalledPluginFields {
   return {
@@ -62,6 +69,7 @@ export function installedPluginFields(m: InstalledPluginManifest, dirName: strin
     capabilities: Array.isArray(m.capabilities)
       ? PLUGIN_CAPABILITIES.filter((c) => (m.capabilities as unknown[]).includes(c))
       : undefined,
+    internalsVerified: sanitizeInternalsVerified(m.internalsVerified),
     onboarding: sanitizeOnboarding(m.onboarding),
     guide: sanitizeGuide(m.guide),
     events: sanitizeEvents(m.events),
@@ -72,5 +80,6 @@ export function installedPluginFields(m: InstalledPluginManifest, dirName: strin
     isDesktopOnly: m.isDesktopOnly === true ? true : undefined,
     syncData: m.syncData === true ? true : undefined,
     storeSources: storeSourcesOf(id ?? ((m as any).id as string | undefined) ?? dirName, m.storeSources),
+    network: networkOf(m.network),
   }
 }

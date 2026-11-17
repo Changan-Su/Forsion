@@ -87,6 +87,20 @@ describe('presenter slot', () => {
     uninstall = m.installNativeSheetPresenter(async () => ({ id: 'injected' }))
     expect(await m.presentNativeMenu({ sections })).toEqual({ handled: true, value: null })
   })
+  it("a choice made on the sheet counts as the user's own doing for what the caller runs next; a cancel does not", async () => {
+    const g = await import('./userGesture')
+    await new Promise((r) => setTimeout(r, 0)) // nothing left over from an earlier mark
+    uninstall = m.installNativeSheetPresenter(async () => null)
+    let during = true
+    await m.runNativeCtxMenu([{ label: 'Delete', run: () => { during = g.inUserGesture() } }])
+    expect(g.inUserGesture(), 'a cancel is not a gesture').toBe(false)
+    uninstall()
+    uninstall = m.installNativeSheetPresenter(async () => ({ id: '0' }))
+    await m.runNativeCtxMenu([{ label: 'Delete', run: () => { during = g.inUserGesture() } }])
+    expect(during, 'the picked item ran outside the gesture: its Undo would be throttled on a phone').toBe(true)
+    await new Promise((r) => setTimeout(r, 0))
+    expect(g.inUserGesture(), 'the mark ends with the task').toBe(false)
+  })
   it('duplicate ids fall back to web instead of guessing', async () => {
     const spy = vi.fn(async () => ({ id: 'x' }))
     uninstall = m.installNativeSheetPresenter(spy)
@@ -242,5 +256,99 @@ describe('theme', () => {
     expect(light.dark).toBe(false)
     expect(light.background).toBe('#FF123456')
     expect(light.warning).toBe('#FF806000')
+    // the phone's notification banner: no --surface-float / --accent-ink declared → the card surface and the accent
+    expect(light.float).toBe(light.surface)
+    expect(light.accentInk).toBe(light.accent)
+    // declared: the floating surface (a translucent one composited over the page, so the native fill is opaque) and the ink
+    document.documentElement.style.setProperty('--surface-float', 'rgba(255, 255, 255, 0.5)')
+    document.documentElement.style.setProperty('--accent-ink', '#1F5E6B')
+    const banner = m.readNativeTheme()
+    expect(banner.float).toBe('#FF899AAB') // 50% white over #123456
+    expect(banner.accentInk).toBe('#FF1F5E6B')
+    document.documentElement.style.removeProperty('--surface-float')
+    document.documentElement.style.removeProperty('--accent-ink')
+  })
+  it('reads through a probe that cannot transition (reduce motion gives every element a colour transition)', () => {
+    // happy-dom has no transitions, so this only pins the inline guard; Chromium proves it: desktop `npm run check:nativetheme`.
+    const added: Element[] = []
+    const spy = vi.spyOn(document.documentElement, 'appendChild').mockImplementation(function (this: Element, node) {
+      added.push(node as Element)
+      return Element.prototype.appendChild.call(this, node) as never
+    })
+    try { m.readNativeTheme() } finally { spy.mockRestore() }
+    const style = (added[0]?.getAttribute('style') ?? '').replace(/\s+/g, '')
+    expect(style).toContain('transition:none!important')
+    expect(style).toContain('animation:none!important')
+  })
+})
+
+// 原生半屏盖着页面时,壳上的 data-native-sheet="open"(DOM 里看不到 Compose 画的那层,判「用户正看着」的代码靠它)。
+describe('native sheet up mark (.mb-shell[data-native-sheet])', () => {
+  const mark = (el: Element): string | null => el.getAttribute('data-native-sheet')
+
+  it('on while the native call is pending; off when it is answered, and off when it rejects (native unavailable, web UI falls back)', async () => {
+    const shell = document.createElement('div')
+    const unbind = m.bindNativeSheetMark(shell)
+    expect(mark(shell)).toBeNull()
+    let answer!: (v: unknown) => void
+    const shown = m.whileNativeSheetUp(() => new Promise((res) => { answer = res }))
+    expect(mark(shell), 'the sheet is up').toBe('open')
+    expect(m.nativeSheetUp()).toBe(true)
+    answer({ id: 'a' })
+    await shown
+    expect(mark(shell), 'answered: gone').toBeNull()
+    await expect(m.whileNativeSheetUp(() => Promise.reject(new Error('INVALID_REQUEST')))).rejects.toThrow()
+    expect(mark(shell), 'rejected: gone').toBeNull()
+    expect(m.nativeSheetUp()).toBe(false)
+    unbind()
+  })
+
+  it('two sheets up at once (a sheet opened from a sheet): off only after both are gone; a release runs once', () => {
+    const shell = document.createElement('div')
+    const unbind = m.bindNativeSheetMark(shell)
+    const a = m.holdNativeSheetUp()
+    const b = m.holdNativeSheetUp()
+    a()
+    a()
+    expect(mark(shell), 'the second one is still up (a double release must not count twice)').toBe('open')
+    b()
+    expect(mark(shell)).toBeNull()
+    unbind()
+  })
+
+  it('a shell mounted while a sheet is up gets the mark at once; unmounting the shell takes it off and stops following', () => {
+    const release = m.holdNativeSheetUp()
+    const shell = document.createElement('div')
+    const unbind = m.bindNativeSheetMark(shell)
+    expect(mark(shell), 'remounted shell under an open sheet').toBe('open')
+    unbind()
+    expect(mark(shell), 'unmounted: no stale mark').toBeNull()
+    release()
+    const again = m.holdNativeSheetUp()
+    expect(mark(shell), 'an unbound shell no longer follows').toBeNull()
+    again()
+  })
+
+  it('watchNativeSheet: told after each change (up, and down again), not after a repeated release; stops after unwatch', () => {
+    const seen: boolean[] = []
+    const unwatch = m.watchNativeSheet(() => { seen.push(m.nativeSheetUp()) })
+    const release = m.holdNativeSheetUp()
+    release()
+    release()
+    unwatch()
+    m.holdNativeSheetUp()()
+    expect(seen).toEqual([true, false])
+  })
+
+  it('wiring: the Android presenters (menus / prompts / selects, model picker) hold it around the native call; the shell binds it', async () => {
+    const { readFileSync } = await import('node:fs')
+    const { resolve } = await import('node:path')
+    for (const f of ['nativeSheet.ts', 'nativeModelPicker.ts']) {
+      const src = readFileSync(resolve(__dirname, '../../mobile/src', f), 'utf8')
+      expect(src, f).toMatch(/whileNativeSheetUp\(\(\) => plugin\.present\(/)
+    }
+    const host = readFileSync(resolve(__dirname, 'SingleColumnHost.tsx'), 'utf8')
+    expect(host).toMatch(/<div ref=\{shellRef\} className="mb-shell"/)
+    expect(host).toMatch(/el \? bindNativeSheetMark\(el\) : null/)
   })
 })

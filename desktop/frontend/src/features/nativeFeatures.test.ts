@@ -13,7 +13,7 @@ vi.mock('@lcl/engine', () => ({
   setActiveSpace: vi.fn(), useSpaceStore: { getState: () => ({ spaces: [] }) }, useWorkspace: { getState: () => ({}) },
   Skeleton: () => null,
 }))
-vi.mock('../stores/appStore', () => ({ useApp: { getState: () => ({ tr: (key: string) => key }) } }))
+vi.mock('../stores/appStore', () => ({ useApp: { getState: () => ({ tr: (key: string) => key }), subscribe: () => () => {} } }))
 vi.mock('../components/SpaceButton', () => ({ SpaceButton: () => null }))
 vi.mock('../views/DashboardCompactViews', () => ({ CalendarDashboardCard: () => null, TodoDashboardCard: () => null }))
 vi.mock('../views/ChatView', () => ({ ChatView: () => null }))

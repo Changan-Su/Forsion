@@ -2,6 +2,30 @@
 
 <!-- English edition of CHANGELOG.md: same "## <version> (<date>)" headings, one bullet per Chinese bullet. Add both when releasing. -->
 
+## 2.14.2 (2026-11-16)
+
+This release includes everything in 2.14.2-beta.1 through beta.4; see the sections below. New since beta.4:
+
+- **Chat**: Sources from a web search are numbered in the reply, open as source cards, and the right sidebar lists every result of that search. Menus on the Chat Box bottom row now unfold from their buttons. The Agent picker no longer jumps on hover, and its descriptions follow the interface language. Tangu can answer questions about Forsion Git, Penzor Cloud, the Store and other Forsion products.
+- **DSH**: Conversations on the DSH engine get their own page in the right sidebar, and screenshot tools handed to DSH include the image.
+- **Note editing**: Brackets and quotes close automatically, and typing one with text selected wraps the selection. Math source uses monospace coloring with a preview above the line; fixed spaces after `$$` and formulas splitting a table. Exposed `![[…]]` embed source is colored like a link and right-click opens the file menu.
+- **Mobile**: Notices appear as a banner below the status bar. View back / forward on Home and Chat no longer sits under the status bar. Native colors are correct again with Reduce motion on.
+- **Other**: Sidebar widths can be reset to their defaults, with undo. Plugin whiteboards render the viewport in the same frame. Plugin icons no longer interrupt the host interface, which fixes system Back getting stuck on mobile. When the same computer is registered more than once, the LAN direct connection picks the right device. Project memory organizing and compaction get enough time to finish. External engine processes only receive allowlisted environment variables.
+- Bundles Tangu engine 2.14.5 and Calendar 0.1.13; the default desktop distribution includes Forsion Extend 0.10.5.
+
+## 2.14.2-beta.4 (2026-11-15)
+
+Preview build: available to people who chose the preview channel.
+
+- **Note editing**: Pausing mid-composition in an input method no longer writes half-typed text into notes or database records. While you type, a local draft is saved at least every 2 seconds, so a crash no longer loses a whole passage. If the cloud copy changed elsewhere, saving first tries to merge both sides and only creates a conflict copy when they cannot be merged. Backslashes in inline code, code blocks and link addresses are no longer removed on save.
+- **Calendar and tasks**: Task lists hold tasks only; dated note lines without a checkbox appear on the calendar. Note tasks marked `@todo` appear under Unscheduled, and the slash menu can add a line to the task list or make it an event. Imported calendars show location, description and link. The now line and today use your accent color.
+- **Quota and models**: When your quota runs out, you can use a reset card or continue with points. The model picker marks models your plan cannot use with the lowest plan that can, and shows models open for a limited time.
+- **Devices (Unit)**: Switch devices from the account panel and the whole window shows that device. Devices can open in a new window or be added to the desktop. Devices shared with you are grouped separately.
+- **External engines**: Agents can run on DSH with Forsion's tools, persona, memory and skills. External engine sessions keep what you said, and a failed turn still shows its reason after reopening. A missing API key now names the current model and the models you can switch to.
+- **Mobile**: New first-run guide with a welcome before sign-in, where to run, appearance and what you want help with, plus starter suggestions on Home. Fixed system Back occasionally stopping half-way and leaving the screen unresponsive. Tapping a notification card on a touch screen no longer keeps it from closing.
+- **Other**: Database gallery cards without a cover use the first image in the row body. Channel runs use the strictest approval level among the channel, the binding and the agent. Background tasks on Claude 5 models leave room for thinking, so project memory organizing no longer fails on the output limit. A plugin notification with the same key replaces the previous one.
+- Bundles Tangu engine 2.14.4 and Calendar 0.1.13; the default desktop distribution includes Forsion Extend 0.10.5.
+
 ## 2.14.2-beta.3 (2026-11-13)
 
 Preview build: available to people who chose the preview channel.

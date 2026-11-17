@@ -87,7 +87,8 @@ button { font:inherit; border:0; }
 
   const closedW = (await box('.add-pill-btn')).w
   const trace = await page.evaluate(() => new Promise((resolve) => {
-    document.querySelector('.add-pill-wrap').classList.add('is-open')
+    // 菜单挂着 = .t2c-capsule-held(窄排让位认它,倒放那段也算);撑宽 = .is-open(11-16 Chat Box 水滴方案)
+    document.querySelector('.add-pill-wrap').classList.add('is-open', 't2c-capsule-held')
     document.querySelector('.add-pill-btn').classList.add('is-open')
     const out = []
     const t0 = performance.now()
@@ -162,17 +163,34 @@ button { font:inherit; border:0; }
     document.querySelector('.stage').style.width = '480px'
     document.querySelector('.stage').classList.add('menus-hidden')
   })
+  await page.waitForTimeout(220) // ＋ / 麦克风的淡出是 150ms 过渡
   const narrow = await page.evaluate(() => {
     const shown = (s) => getComputedStyle(document.querySelector(s)).display !== 'none'
     const row = document.querySelector('.t2c-row')
     return {
       add: shown('.add-pill-wrap'), label: shown('.add-pill-label'), mode: shown('.mode-pill-wrap'),
       ctx: shown('.t2c-ctxring'), model: shown('.model-pill-wrap'), mic: shown('.t2c-mic-control'), send: shown('.t2c-send'),
+      micO: +getComputedStyle(document.querySelector('.t2c-mic-control')).opacity,
       overflow: row.scrollWidth - row.clientWidth,
     }
   })
-  check('旧版 / 原生回落布局仍可排他展开，紧凑桌面另跑真实组件台架', narrow.add && narrow.label && !narrow.mode && !narrow.ctx && !narrow.model && !narrow.mic && narrow.send, JSON.stringify(narrow))
+  // 麦克风不退出布局、只原地淡出(紧挨着向左长的模型胶囊,退出布局会让它跳 34px;11-16 Chat Box 水滴方案)
+  check('旧版 / 原生回落布局仍可排他展开，紧凑桌面另跑真实组件台架', narrow.add && narrow.label && !narrow.mode && !narrow.ctx && !narrow.model && narrow.mic && narrow.micO < 0.05 && narrow.send, JSON.stringify(narrow))
   check('窄宽度底排不再堆叠或横向溢出', narrow.overflow <= 1, `溢出 ${narrow.overflow}px`)
+  // 模式胶囊开着(窄排):＋ 不退出布局,只原地淡出、位置留着 —— 退出布局会让模式胶囊开时左跳、收完右跳(11-16 第三轮)
+  const addLeft = await page.evaluate(() => document.querySelector('.add-pill-wrap').getBoundingClientRect().left)
+  await page.evaluate(() => {
+    document.querySelector('.add-pill-wrap').classList.remove('is-open', 't2c-capsule-held')
+    document.querySelector('.add-pill-btn').classList.remove('is-open')
+    document.querySelector('.mode-pill-wrap').classList.add('t2c-capsule-held')
+  })
+  await page.waitForTimeout(260)
+  const modeHeld = await page.evaluate(() => {
+    const add = document.querySelector('.add-pill-wrap'), cs = getComputedStyle(add)
+    return { display: cs.display, opacity: +cs.opacity, left: add.getBoundingClientRect().left, model: getComputedStyle(document.querySelector('.model-pill-wrap')).display, pe: cs.pointerEvents }
+  })
+  check('窄排开着模式胶囊:＋ 原地淡出、位置留着,其余让位', modeHeld.display !== 'none' && modeHeld.opacity < 0.05 && Math.abs(modeHeld.left - addLeft) < 1 && modeHeld.model === 'none' && modeHeld.pe === 'none', JSON.stringify({ ...modeHeld, addLeft }))
+  await page.evaluate(() => document.querySelector('.mode-pill-wrap').classList.remove('t2c-capsule-held'))
 
   await page.evaluate(() => {
     document.querySelector('.stage').style.width = '700px'

@@ -137,6 +137,7 @@ export const CLASSIFICATION = {
   'POST /agent/sessions': [A, 'create a session'],
   'GET /agent/sessions/search': [A, 'session search'],
   'POST /agent/sessions/:id/branch': [A, 'branch a session (remote taint propagates, C5)'],
+  'POST /agent/sessions/import': [D, 'plugin import of external chat history (route itself refuses remote origin)'],
   'GET /agent/sessions/:id/background': [A, 'background child sessions'],
   // processes.ts:摘要栏「后台」卡(2026-10-25)。归属按 chat_sessions.user_id 过滤;停止 = 用户点的、只会停(同 runs/:id/abort,基础档)
   'GET /agent/processes': [A, 'list own background processes (read; ownership-filtered)'],
@@ -185,6 +186,7 @@ export const CLASSIFICATION = {
   'PUT /agent/engines/:id': [D, 'external engine config'],
   'GET /agent/engines/:id/assets': [D, 'reads host assets of an external engine'],
   'POST /agent/engines/:id/import': [D, 'imports external engine assets'],
+  'POST /agent/engines/:id/hold': [D, 'hands a conversation to the resident engine process for the plugin workbench (local only)'],
 
   // ── providers.ts(provider / 联网搜索配置)—— 整组本机 ──
   'GET /agent/providers': [D, 'provider config (device page uses /unit/providers, keys stripped)'],

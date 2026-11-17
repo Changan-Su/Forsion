@@ -17,6 +17,8 @@
 //  S11 图片 `![[pic.png]]` 不变:上一段按 ↓ 不露它的源码
 //  S12 「难源码」类别不变:上一段按 ↓ 撞书签卡 / 分割线 = 整块选中
 //  S13 整块选中(块尾 Delete 撞上)不露源码
+//  S14 露出的源码照普通双链着色(目标在 → 主题色,不在 → 黯淡)、右键 = 这份文件的菜单(11-15 用户实报:
+//      不带 `!` 的双链编辑时已是带颜色、能右键的链接,`![[…]]` 那行露出来却是白色裸文本、右键只有系统菜单)
 //
 // 用法:npm run check:embedsource(= node scripts/e2e-editor.cjs --check=embed-source;worktree 里设 HARNESS_URL)
 const fs = require('fs'), os = require('os'), path = require('path')
@@ -203,6 +205,55 @@ async function main() {
     await caret(p, '上一段。'); await press(p, 'Delete')
     s = await look(p)
     record('S13 整块选中(块尾 Delete 撞上)不露源码', s.selType === 'node' && !s.srcVisible && s.embed, JSON.stringify({ sel: s.selType, src: s.srcVisible }))
+
+    await p.close()
+
+    // S14
+    p = await open(browser, '# T\n\n上一段。\n\n![[Embedded]]\n\n![[Missing note]]\n\n![[gone.zip]]\n\n下一段。\n\n对照 [[Embedded]] 与 [[Missing note]]\n')
+    const paint = (src) => p.evaluate((src) => {
+      const v = window.__upage.probe.view()
+      let pos = -1
+      v.state.doc.forEach((n, off) => { if (pos < 0 && n.textContent === src) pos = off })
+      const el = pos < 0 ? null : v.nodeDOM(pos)?.querySelector('.wikilink-src')
+      if (!el) return { el: false }
+      // 着色口径 = 同一处一枚普通双链源码会算出的颜色(夹具浅色主题的 --signal 就是近黑,跟正文比不出来):
+      // 量的是露源码那行自己的样式(unified-embed-line-src)没把双链色盖掉
+      const ref = document.createElement('span')
+      ref.className = el.className.split(' ').filter((c) => c.startsWith('wikilink')).join(' ')
+      v.nodeDOM(pos).parentElement.appendChild(ref)
+      const want = getComputedStyle(ref).color
+      ref.remove()
+      const r = el.getBoundingClientRect()
+      let menu = null
+      let attachment = null
+      const on = (e) => { menu = e.detail.inner; attachment = !!e.detail.attachment; e.preventDefault() }
+      document.addEventListener('amadeus:wikilink-menu', on)
+      el.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: r.left + 4, clientY: r.top + 4 }))
+      document.removeEventListener('amadeus:wikilink-menu', on)
+      return { el: true, text: el.textContent, unresolved: el.classList.contains('wikilink-unresolved'), colored: getComputedStyle(el).color === want, menu, attachment, spell: el.getAttribute('spellcheck') }
+    }, src)
+    // 夹具的页面表缺省是空的(什么都判成不存在):补上 Embedded,让主题色那支也被量到
+    await p.evaluate(() => { const ps = window.__upage.pageStore; ps.setState({ pages: [...new Set([...(ps.getState().pages || []), 'Embedded.md'])] }) })
+    await caret(p, '上一段。'); await press(p, 'ArrowDown')
+    const k1 = await paint('![[Embedded]]')
+    await press(p, 'End')
+    const k2 = await paint('![[Embedded]]')
+    await caret(p, '![[Missing note]]')
+    const k3 = await paint('![[Missing note]]')
+    await caret(p, '![[gone.zip]]')
+    const k5 = await paint('![[gone.zip]]')
+    await caret(p, '下一段。')
+    const k4 = await p.evaluate(() => document.querySelectorAll('.unified-body .ProseMirror .wikilink-src').length)
+    // 解析态口径 = 同一篇里不带 `!` 的双链(夹具的解析表认不认 Embedded 不归这里管,要的是两种写法一致)
+    const plain = await p.evaluate(() => Object.fromEntries([...document.querySelectorAll('.unified-body .ProseMirror .wikilink[data-wiki]')]
+      .map((e) => [e.dataset.wiki, e.classList.contains('wikilink-unresolved')])))
+    record('S14 露出的 `![[…]]` 着色、右键是文件菜单;解析态跟同名普通双链一致;光标走开不留着色',
+      k1.el && k1.text === '![[Embedded]]' && k1.colored && !k1.unresolved && k1.menu === 'Embedded' && k1.spell === 'false' &&
+      k2.el && k2.menu === 'Embedded' && k3.el && k3.menu === 'Missing note' && k3.unresolved && k4 === 0 &&
+      plain['Embedded'] === false && plain['Missing note'] === true &&
+      // 附件丢了:右键带 attachment(宿主菜单据此不给「创建笔记」,同嵌入体那份;Codex 评审 P2),笔记嵌入不带
+      k1.attachment === false && k3.attachment === false && k5.el && k5.attachment === true,
+      JSON.stringify({ 行首: k1, 行尾: k2, 不存在: k3, 丢了的附件: k5, 走开后着色段数: k4, 普通双链未解析: plain }))
 
     if (process.argv.some((x) => x.startsWith('--shot'))) {
       const dir = (process.argv.find((x) => x.startsWith('--shot=')) || '').slice(7) || os.tmpdir()

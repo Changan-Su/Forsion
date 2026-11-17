@@ -1,3 +1,4 @@
+import { capabilityLabels } from './pluginCapabilityLabels'
 import { marketplaceCompatibility } from '../../../shared/marketplace'
 import { MarketRequirements, marketPlatform, requirementsText, useMarketVersion } from './MarketRequirements'
 import { MarketDiscussion, MarketVersions } from './MarketDiscussion'
@@ -50,8 +51,12 @@ import { connectorsSupported } from '../services/connectorService'
 import { SkillAgentPicker, applySkillAgentChoice, skillAgentsSupported, useSkillAgents, type SkillAgentChoice } from './MarketSkillAgents'
 import { CODE_TYPES, needsSignIn, SourceConfirm, SourceInfoRow, SourceNavGroup, SourceState, SourceTrustRow, sourceErrorText, useStoreSources } from './MarketSources'
 import type { StoreSourceCatalog } from '../../../shared/storeSources'
+import { sanitizeNetworkPatterns } from '../../../shared/pluginNetwork'
 
 registerMessages({
+  // 插件声明的 ctx.net 域名(manifest network,2026-11-16+):装好的按本机 manifest 列,目录里带了的也列
+  'market.network': { zh: '会访问', en: 'Accesses' },
+  'market.capabilities': { zh: '可以', en: 'Can' },
   'market.submissionsDescription': { zh: '投稿内容，查看审核结果并管理版本更新。', en: 'Submit your work, view review results and manage version updates.' },
   'market.group.more': { zh: '更多', en: 'More' },
   // 卡片与详情页上的类型字样:一张卡是一个东西，英文用单数(左栏分类仍是复数的 market.tab.*)
@@ -643,6 +648,10 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
     const name = itemEntitlement(c)
     return !name ? null : name === 'business' ? t('market.requiresBusiness') : t('market.requiresEntitlement', { name })
   }
+  /** 这个条目会让插件联网访问哪些域名:装好了以本机那份 manifest 为准(主进程放行认的就是它),否则看目录给没给。 */
+  const networkOf = (c: MarketCard): string[] => installedPlugin(c)?.network ?? sanitizeNetworkPatterns(c.network).patterns
+  /** 这个条目声明的能力(能读写哪些用户数据、要不要内部接口):装好了以本机 manifest 为准,否则看服务端从包里读到的(2026-11-16+)。 */
+  const capsOf = (c: MarketCard): string[] => capabilityLabels(installedPlugin(c)?.capabilities ?? c.capabilities, t)
   const entitlementBadge = (c: MarketCard) => {
     const label = entitlementLabel(c)
     return label ? <span className="mk-desktop-badge" data-market-entitlement={c.id} title={t('market.requiresHint')}><KeyRound size={11} />{label}</span> : null
@@ -961,7 +970,7 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
         {asking?.kind === 'plugin' && <PluginUninstallDialog name={asking.c.name} warning={asking.warning} onClose={() => setAsking(null)}
           onConfirm={(opts) => { const a = asking; void uninstallEnginePlugin(a.id, a.c.name, opts, a.c.id).then((ok) => { if (ok) return afterDialogUninstall(a.c, 'plugin', a.c.installSlug) }) }} />}
         {asking?.kind === 'amadeus-plugin' && <PluginUninstallDialog name={asking.c.name} warning={asking.warning} vaultFolder={pluginVaultFolder(asking.plugin.id, asking.plugin.name)} cloudData={pluginDataSyncOn(asking.plugin)}
-          skills={asking.plugin.bundle?.skills.length ?? 0} agents={asking.plugin.bundle?.agents ?? []} onClose={() => setAsking(null)}
+          skills={asking.plugin.bundle?.skills.length ?? 0} agents={asking.plugin.bundle?.agents ?? []} superseded={asking.plugin.supersedes} onClose={() => setAsking(null)}
           onConfirm={(opts) => { const a = asking; void uninstallForsionPlugin(a.plugin, a.c.name, opts, { engine: true, storeItemId: a.c.id }).then((ok) => { if (ok) return afterDialogUninstall(a.c, 'amadeus-plugin', a.c.installSlug) }) }} />}
 
         {!storeOnly && !detail && !detailLoading && !storeView && (!!activeSource || tab !== 'connector') && <div className="mk-upgrade-filters">
@@ -987,7 +996,7 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
                   {detailPlugin && <RequiredPlugins p={detailPlugin} store={depsStore(detailPlugin)} />}
                   {detail.type === 'skill' && !isInstalled(detail) && <SkillAgentPicker hint agents={skillAgents} choice={skillChoice[detail.id] ?? null} disabled={!!installing[detail.id]} onChange={(next) => setSkillChoice((m) => ({ ...m, [detail.id]: next }))} />}
                   {detail.origin ? <SourceTrustRow sourceTitle={detail.origin.sourceTitle} /> : <div className="mk-trust-row"><ShieldCheck size={17} /><div><strong>{t('market.reviewed')}</strong><span>{t('market.reviewedHint')}</span></div></div>}
-                  <MarketRequirements item={detail} version={appVersion} /><dl className="mk-facts"><div><dt>{t('market.forsionVersion')}</dt><dd>{requirementsText(detail)}</dd></div><div><dt>ID</dt><dd className="mk-id-value">{detail.id}<button className="btn sm ghost" onClick={() => void navigator.clipboard.writeText(detail.id)}>{t('market.copyId')}</button></dd></div>{!!detail.platforms?.length && <div><dt>{t('market.platform')}</dt><dd>{detail.platforms.join(' · ')}</dd></div>}<div><dt>{t('market.type')}</dt><dd>{kindLabel[detail.type]}</dd></div><div><dt>{t('market.version')}</dt><dd>{detail.latestVersion ? `v${detail.latestVersion}` : t('market.unknown')}</dd></div>{isDesktopOnlyItem(detail) && <div><dt>{t('market.platform')}</dt><dd>{t('market.desktopOnly')}</dd></div>}{!!entitlementLabel(detail) && <div data-market-entitlement-fact={detail.id}><dt>{t('market.access')}</dt><dd title={t('market.requiresHint')}>{entitlementLabel(detail)}</dd></div>}<div><dt>{t('market.source')}</dt><dd>{detail.origin ? t('market.sources.factSource', { name: detail.origin.sourceTitle, kind: detail.source === 'github' ? 'GitHub' : detail.source === 'npm' ? 'npm' : t('market.sources.kind.url') }) : detail.source === 'github' ? 'GitHub' : detail.source === 'npm' ? 'npm' : t('market.sourceUpload')}</dd></div>{detailSource && <div data-store-source-address><dt>{t('market.sources.factAddress')}</dt><dd className="mk-id-value">{detailSource.uri.replace(/^https?:\/\//, '')}</dd></div>}{!!formatDate(detail.updatedAt || detail.createdAt) && <div><dt>{t('market.updated')}</dt><dd>{formatDate(detail.updatedAt || detail.createdAt)}</dd></div>}</dl>
+                  <MarketRequirements item={detail} version={appVersion} /><dl className="mk-facts"><div><dt>{t('market.forsionVersion')}</dt><dd>{requirementsText(detail)}</dd></div><div><dt>ID</dt><dd className="mk-id-value">{detail.id}<button className="btn sm ghost" onClick={() => void navigator.clipboard.writeText(detail.id)}>{t('market.copyId')}</button></dd></div>{!!detail.platforms?.length && <div><dt>{t('market.platform')}</dt><dd>{detail.platforms.join(' · ')}</dd></div>}<div><dt>{t('market.type')}</dt><dd>{kindLabel[detail.type]}</dd></div><div><dt>{t('market.version')}</dt><dd>{detail.latestVersion ? `v${detail.latestVersion}` : t('market.unknown')}</dd></div>{isDesktopOnlyItem(detail) && <div><dt>{t('market.platform')}</dt><dd>{t('market.desktopOnly')}</dd></div>}{!!entitlementLabel(detail) && <div data-market-entitlement-fact={detail.id}><dt>{t('market.access')}</dt><dd title={t('market.requiresHint')}>{entitlementLabel(detail)}</dd></div>}{networkOf(detail).length > 0 && <div data-market-network={detail.id}><dt>{t('market.network')}</dt><dd className="mk-id-value">{networkOf(detail).join(t('common.listSep'))}</dd></div>}{capsOf(detail).length > 0 && <div data-market-capabilities={detail.id}><dt>{t('market.capabilities')}</dt><dd>{capsOf(detail).join(t('common.listSep'))}</dd></div>}<div><dt>{t('market.source')}</dt><dd>{detail.origin ? t('market.sources.factSource', { name: detail.origin.sourceTitle, kind: detail.source === 'github' ? 'GitHub' : detail.source === 'npm' ? 'npm' : t('market.sources.kind.url') }) : detail.source === 'github' ? 'GitHub' : detail.source === 'npm' ? 'npm' : t('market.sourceUpload')}</dd></div>{detailSource && <div data-store-source-address><dt>{t('market.sources.factAddress')}</dt><dd className="mk-id-value">{detailSource.uri.replace(/^https?:\/\//, '')}</dd></div>}{!!formatDate(detail.updatedAt || detail.createdAt) && <div><dt>{t('market.updated')}</dt><dd>{formatDate(detail.updatedAt || detail.createdAt)}</dd></div>}</dl>
                   {detail.npmPackage && <a className="mk-repo-link" href={`https://www.npmjs.com/package/${encodeURIComponent(detail.npmPackage)}`} target="_blank" rel="noreferrer"><Package size={14} />{detail.npmPackage}<ExternalLink size={12} /></a>}
                   {detail.githubRepoUrl && <a className="mk-repo-link" href={detail.githubRepoUrl} target="_blank" rel="noreferrer"><GitBranch size={14} />{t('market.openRepo')}<ExternalLink size={12} /></a>}
                 </aside>

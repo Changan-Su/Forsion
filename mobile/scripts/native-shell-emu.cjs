@@ -924,6 +924,11 @@ const tabCountText = (list) => {
     const first = await elRect("document.querySelector('.mb-main .t2-stream > *')")
     assert.ok(stream && stream.top <= 1, `the stream does not reach the top (${stream && fmt(stream)})`)
     assert.ok(first && first.top >= capL.rect.bottom - 2, `the first message starts under a capsule (${first && first.top} < ${capL.rect.bottom})`)
+    // the back / forward row floats under the capsules (2026-11-16: in flow at y=0, hidden under the scrim, it pushed the
+    // stream 40px down) and the first message clears it
+    const navRow = await elRect("document.querySelector('.mb-main > .mb-view[data-view=\"chat\"] > .lcl-viewnav-fallback')")
+    assert.ok(navRow && navRow.top >= capL.rect.bottom - 2, `chat view navigation over the status bar / capsules (${navRow && fmt(navRow)}, capsule ${fmt(capL.rect)})`)
+    assert.ok(first.top >= navRow.bottom - 2, `the first message starts under the back / forward row (${first.top} < ${navRow.bottom})`)
     shot('03-floating-detail')
   })
 
@@ -967,6 +972,11 @@ const tabCountText = (list) => {
     const nativeDock = h.byId(list, 'nativeChrome.dock')
     assert.ok(root && root.top <= 1 && near(root.bottom, screen.h, 2), `the homepage does not span the screen (${root && fmt(root)})`)
     assert.ok(lowest && lowest.bottom <= nativeDock.rect.top + 1, `homepage content under the dock (${lowest && lowest.bottom} > ${nativeDock.rect.top})`)
+    // the back / forward row (LeafHost's .lcl-viewnav-fallback): Home has no scrim, so it must sit under the capsules' row,
+    // never on the clock (2026-11-16: it sat at y=0, arrows over the status bar)
+    const navRow = await elRect("document.querySelector('.mb-main > .mb-view[data-view=\"homepage\"] > .lcl-viewnav-fallback')")
+    const homeCapL = h.byId(list, 'nativeChrome.capLeft')
+    assert.ok(navRow && homeCapL && navRow.top >= homeCapL.rect.bottom - 2, `homepage view navigation over the status bar / capsules (${navRow && fmt(navRow)}, capsule ${homeCapL && fmt(homeCapL.rect)})`)
     shot('03c-floating-home')
   })
 
@@ -2953,40 +2963,49 @@ const tabCountText = (list) => {
     }
   })
 
-  // The notification stack is mounted outside the shell: until 2026-10-13 it kept the desktop's place (46 px from the
-  // top), which on the phone is under the right capsule — and the capsules are native, drawn over the page and taking
-  // the touches. In the calendar the cards sat at the bottom, under the dock. Measured against the real capsules here.
-  await check('notification card: below the capsules on a first level, in the calendar (not under the dock) and on a detail page; its close key takes a touch', async () => {
-    const cardE = "document.querySelector('.ntf-wrap .ntf')"
+  // Notifications on the phone (2026-11-15): a native banner under the status bar, over the capsule row and the detail
+  // level's top strip — both native, the page could not draw over them (until then the card hung under the right capsule
+  // and covered the page's tabs). The page draws nothing. Measured against the real capsules; the × takes a real touch.
+  await check('notification banner: native, 4dp under the status bar over the capsule row (first level, calendar, detail page), 10dp sides, 54dp high; the page draws no card; × closes it', async () => {
     const raise = (text) => cdp.eval(`(window.dispatchEvent(new CustomEvent('amadeus:toast', { detail: { text: ${JSON.stringify(text)}, level: 'error' } })), true)`)
-    const look = async (where, withDock) => {
-      await raise(`E2E card (${where})`)
-      assert.ok(await h.waitPage(cdp, `!!${cardE}`, 4000), `${where}: no notification card`)
-      await h.pause(900) // it slides in from the right
-      const list = ui()
-      const [capL, capR, dock] = ['nativeChrome.capLeft', 'nativeChrome.capRight', 'nativeChrome.dock'].map((id) => h.byId(list, id))
-      const card = await elRect(cardE)
-      assert.ok(capL && capR, `${where}: capsules missing`)
-      assert.ok(card.top >= capR.rect.bottom - 2 && card.top <= capR.rect.bottom + 24 * density, `${where}: the card ${fmt(card)} does not start right below the capsules (${fmt(capR.rect)})`)
-      assert.ok(card.left >= 0 && card.right <= screen.w, `${where}: the card runs off the screen (${fmt(card)})`)
-      if (withDock) assert.ok(dock && card.bottom <= dock.rect.top, `${where}: the card ${fmt(card)} reaches the dock (${dock && fmt(dock.rect)})`)
-      else assert.ok(!dock, `${where}: the dock is up`)
+    const closeBanners = async () => {
+      for (let i = 0; i < 8; i++) { const x = h.byId(ui(), 'nativeBanner.close'); if (!x) break; h.tapNode(x); await h.pause(600) }
     }
-    await closeCards()
+    const look = async (where) => {
+      await raise(`E2E card (${where})`)
+      let card = null
+      for (let i = 0; i < 24 && !card; i++) { await h.pause(250); card = h.byId(ui(), 'nativeBanner.card') }
+      assert.ok(card, `${where}: no native banner`)
+      assert.equal(await cdp.eval("!!document.querySelector('.ntf-banner, .ntf-wrap .ntf')"), false, `${where}: the page drew a card as well`)
+      const list = ui()
+      const cap = h.byId(list, 'nativeChrome.capRight') || h.byId(list, 'nativeChrome.capLeft')
+      const r = card.rect
+      assert.ok(near(r.left, 10 * density, 2) && near(screen.w - r.right, 10 * density, 2), `${where}: sides ${fmt(r)} (10dp each)`)
+      assert.ok(near(r.bottom - r.top, 54 * density, 2), `${where}: height ${r.bottom - r.top}px (54dp)`)
+      assert.ok(cap, `${where}: capsules missing`)
+      // the capsules start 6dp under the status bar, the banner 4dp: it covers their row
+      assert.ok(near(r.top, cap.rect.top - 2 * density, 2) && r.bottom >= cap.rect.bottom, `${where}: the banner ${fmt(r)} does not cover the capsule row (${fmt(cap.rect)})`)
+      return card
+    }
+    await closeBanners()
     try {
       await tanguDrawer()
-      await look('first level', true)
-      shot('17m-notify-card')
-      // the close key is the corner the right capsule used to cover: a real touch has to reach it
-      await tapEl("document.querySelector('.ntf-wrap .ntf .ntf-close')")
-      assert.ok(await h.waitPage(cdp, `!${cardE}`, 4000), 'a touch on the card\'s close key did not close it')
+      await look('first level')
+      shot('17m-notify-banner')
+      const x = h.byId(ui(), 'nativeBanner.close')
+      assert.ok(x, 'the banner has no ×')
+      h.tapNode(x)
+      let gone = false
+      for (let i = 0; i < 12 && !gone; i++) { await h.pause(250); gone = !h.byId(ui(), 'nativeBanner.card') }
+      assert.ok(gone, 'a touch on the banner\'s × did not close it')
       await toSpace('calendar')
-      await look('calendar', true)
-      shot('17n-notify-card-calendar')
-      await closeCards()
+      await look('calendar')
+      shot('17n-notify-banner-calendar')
+      await closeBanners()
       await openChat('E2E Session One')
-      await look('detail page', false)
-    } finally { await closeCards().catch(() => {}) }
+      await look('detail page')
+      shot('17o-notify-banner-detail')
+    } finally { await closeBanners().catch(() => {}) }
   })
 
   // The phone's input card (2026-10-10): the send key beside the text; below it + / model / microphone. The mode key is

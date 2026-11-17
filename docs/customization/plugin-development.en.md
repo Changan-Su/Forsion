@@ -44,6 +44,8 @@ Trying a plugin in the sandbox (2026-10-23+, desktop): when you ask the agent to
 
 Since 2026-11-03 the sandbox also works like this: only this plugin is loaded, and of the built-in plugins only those it lists in `requiresPlugins` (list Forsion Extend there if you depend on it). The ribbon shows only this plugin's Spaces and the window opens on its first Space; the window title reads "Forsion sandbox · plugin name". The agent can use the plugin the way a person does: read which buttons and fields are on screen, click, type, press keys, scroll and switch Spaces, looking at a screenshot and at the console lines and toasts after each step. When something needs a file, it prepares test files from the plugin folder first, so clicking **Choose file** does not open the system picker. The chat that started the sandbox also gets a sandbox card in the summary panel on the right: the thumbnail is the agent's latest screenshot (click it to open the sandbox window), with the number of views, the Space, console errors and the last step below it. When the sandbox stops the card turns grey; **Start again** brings it back.
 
+Since 2026-11-15 (with a desktop from the same release): when the agent reads the sandbox window it sees whether a toggle is pressed and whether a field or note is read-only (a note in reading mode, for example), and checks a toggle's state before clicking it; when a notification covers what it wants to click, the notifications are closed first; when a plugin command opens its own dialog and is still running, the agent doesn't run it again but reads the window and carries on in the dialog; and the agent can open this plugin's page in Settings → Plugins (a separate settings window in the sandbox) to fill in settings and press Save.
+
 An engine plugin tool declares whether the user is asked first with `capabilities.approval`. Leave it out for read-only tools (never asked). `'command'` puts the tool in the same class as running a command: asked every time in "ask me to approve" mode, and no longer asked once the user picks "always allow" or turns on full access. `'always'` means the user confirms every single call on the approval card themselves: full access, "always allow" and the user's own allow rules cannot skip it, chat and cloud sessions show the card as well, and automations, Muse background runs and remote sessions are refused outright. Use `'always'` for actions that spend something the user owns or send something out on their behalf. Split reading and writing into two tool names and declare it only on the writing one. The card shows the arguments of that call, so keep one call to one action.
 
 Three things are for official plugins only (2026-10-27+): `ctx.cloud` (calls Forsion with the user's Forsion account, limited to two endpoints: the Store's "my listings" and submitting an update), a tool's `capabilities.approvalPreview` (the plugin writes the text on its own approval card), and the tool surface of Chat sessions. Official means the plugin sits in a bundle signed by Forsion: the bundle's root `SIGNATURE` verifies against a public key built into the engine, and the plugin's manifest and entry file are covered by it. For third-party plugins `ctx.cloud` is `undefined`, `approvalPreview` is ignored (the card shows the call's arguments as before), and their tools stay out of Chat sessions.
@@ -71,7 +73,7 @@ ctx.ui.mountControl(el, { type: 'segmented' | 'select', value, options, onChange
 
 - Rows of `ctx.ui.contextMenu` take an `icon` and a `shortcut`, the list takes `{ separator: true }` and `{ section: 'Heading' }`, the first argument can be `{ anchor: button, align: 'end' }`, and on Android the same entries open as the native bottom drawer; older hosts silently drop these fields.
 - For a small panel under a button use `ctx.ui.popover(button, { mount(el) })`.
-- Icons come from one vocabulary: `space.json`'s `icon`, lists, menus, settings, view tabs, controls and empty states all take the same names, and `ctx.ui.icon(name, { size })` gives your own buttons an `<svg>`; a wrong name is reported once in the console with the closest match.
+- Icons come from one vocabulary: `space.json`'s `icon`, lists, menus, settings, view tabs, controls and empty states all take the same names, and `ctx.ui.icon(name, { size })` gives your own buttons an `<svg>` (on a name's first use its paths arrive in a microtask, so call it again for each copy rather than cloning); a wrong name is reported once in the console with the closest match.
 - A list source can declare `empty: { icon, title, line, action }`: inside your own Space the sidebar then stops saying "Nothing here yet", and the full-screen phone list draws that empty state directly; draw the same one in the main area with `ctx.ui.mountEmptyState(el, …)`.
 - A card about a web page (a published link, a local file, a running service) uses `ctx.ui.mountWebCard` (2026-10-28+): the host takes the thumbnail, and the card is the same one the host draws for HTML files and local services.
 
@@ -79,6 +81,8 @@ ctx.ui.mountControl(el, { type: 'segmented' | 'select', value, options, onChange
 ctx.ui.mountWebCard(el, { name, status, address, note, thumbnail, actions, menu })
 ```
 
+- When your plugin runs a local service with its own web UI (the DSH fusion plugin's workbench), `ctx.ui.mountWebSurface(el, { url })` (2026-11-15+, desktop only) puts that page in your view: a top-level page Forsion owns, so the service's own sign-in cookie works. It loads only loopback addresses, keeps cookies in your plugin's own partition, moves only within its own origin and gets no Forsion API. The returned `navigate('#…')` only changes the fragment of the page's current address (same page, no reload).
+- For agents that run on an external engine, `ctx.registerEngineHarness?.({ engineId, rows, sessionActions })` (2026-11-15+, desktop) adds rows to the Harness card (runtime, update channel and so on) and items to those conversations' right-click menu; Forsion itself draws only "Runs on". Those menu items can also be the button of an engine notice: when a resident engine (`ctx.registerResidentEngine`) sends the `_forsion/notice` ACP extension notification, Forsion puts the sentence in the conversation's approval tray and the item whose id matches `action.id` becomes its button (the DSH fusion plugin's "DSH is waiting for your approval in the workbench" + "Open the workbench"). A resident engine can also provide `modelSeesImages(model)` (2026-11-16+): it answers whether the session's current model takes images, and computer control handed to the engine runs only when it answers `true`; otherwise Forsion tells the model that this model cannot see the screen. `registerEngineHarness` can also take `railView` (2026-11-16+): the id of a view you register. While the conversation in the main area runs on that engine, Forsion adds the view to the right sidebar after Details, Files and Outline; it does not take the front tab and closes when the user moves to a conversation that runs elsewhere. The view follows the active conversation with `ctx.tangu.subscribeAgentStatus`, so a main tab pinned to another conversation does not get it (the DSH fusion plugin's DSH page in the right sidebar).
 - `ctx.ui.setViewHead(el, { title })` gives a view its head row (title on the left, buttons on the right) without needing view modes first.
 - Add stylesheets with `ctx.addStyle(css)`; the host removes them on disable and reload.
 - `ctx.i18n.define({ zh, en })` returns `t(key, vars)`, and list-source titles, action names, view titles, menus, dialogs, controls and empty states take `() => t('key')` or `{ zh, en }`, so what the host draws for you is recomputed when the user switches language (a plain string is still frozen when you register it).
@@ -265,11 +269,11 @@ For something that floats (a transfer progress card, an "export finished" strip,
 
 ## Tables and note tasks
 
-Calendar, to-do and habit plugins need to read and edit the tables in your vault and the dated tasks in your notes (`- [ ] Send report @2026-10-20`). A plugin gets them only if its manifest declares `databases` (tables) or `noteTasks` (note tasks); plugins that do not declare them cannot see this data. Once granted, a plugin changing a cell or ticking a task goes the same way as your own edit in the table or the note: open tables update at once, and note-view properties are written into that note. A plugin can undo deleting a row from a classic table; a note-view row is a note, so a plugin can only move it to the recycle bin. The plugin's detail page lists what it declared in one line, "This plugin can: …" (reading the front window through `activeWindow` is listed there too). Since 2026-11-02, `- [ ]` lines indented under a task with an `@` date reach plugins as its subtasks (up to two levels; a subtask without its own `@` never shows up as a separate task), and every task carries the `#tags` on its line. Plugins can also read and write a table row's record body (the same text as "Open record", checked against what is there before writing) and add a column to a table (for example a multi-select "Tags" column the first time tags are used). Since 2026-11-04 a plugin can also change a whole table in one go (rename columns, add options, reorder rows, create views) through the same write path the table itself uses: open tables update at once and edits not yet saved are kept. The first column, autonumbers and created / edited times stay with the host, and a change that breaks the rules is refused as a whole. API details are in the `ctx.databases` / `ctx.noteTasks` section of the plugin development skill.
+Calendar, to-do and habit plugins need to read and edit the tables in your vault and the dated tasks in your notes (`- [ ] Send report @2026-10-20`). A plugin gets them only if its manifest declares `databases` (tables) or `noteTasks` (note tasks); plugins that do not declare them cannot see this data. Once granted, a plugin changing a cell or ticking a task goes the same way as your own edit in the table or the note: open tables update at once, and note-view properties are written into that note. A plugin can undo deleting a row from a classic table; a note-view row is a note, so a plugin can only move it to the recycle bin. The plugin's detail page lists what it declared in one line, "This plugin can: …" (reading the front window through `activeWindow` is listed there too). Since 2026-11-02, `- [ ]` lines indented under a task with an `@` date reach plugins as its subtasks (up to two levels; a subtask without its own `@` never shows up as a separate task), and every task carries the `#tags` on its line. Plugins can also read and write a table row's record body (the same text as "Open record", checked against what is there before writing) and add a column to a table (for example a multi-select "Tags" column the first time tags are used). Since 2026-11-04 a plugin can also change a whole table in one go (rename columns, add options, reorder rows, create views) through the same write path the table itself uses: open tables update at once and edits not yet saved are kept. The first column, autonumbers and created / edited times stay with the host, and a change that breaks the rules is refused as a whole. Since 2026-11-15, tasks written as `- [ ] Buy groceries @todo` in a note reach plugins too: they have no date (`due` is an empty string and there is no `parentId`), meaning the task belongs in the task list but is not scheduled yet. When a plugin gives one a date, the host replaces `@todo` with it; clearing a task's date (`due` set to an empty string) puts `@todo` back, so it stays in the task list. Dated callout and fold titles no longer carry the leading `[!fold]-` marker in the text plugins receive. API details are in the `ctx.databases` / `ctx.noteTasks` section of the plugin development skill.
 
 ### Calendar overlays and calendar settings
 
-A calendar plugin also needs the read-only sources the host calendar layers in: Agent schedules, the .ics subscriptions you added, and tables in the vault on the other side (Local↔Cloud), plus your calendar settings (which tables are in the calendar and which columns they use for the date and the done checkbox, colours, hidden sources, and the table new events go into by default). A plugin gets them only if its manifest declares `calendar`; plugins that do not declare it can still only add their own table to the calendar. Once granted, a plugin changing a colour or adding or removing a table in the calendar changes the same settings as the "Calendars" list in the calendar's left panel, for the current vault only; overlays can be read but not changed. While a plugin is subscribed, the host refreshes these sources on schedule for it (.ics subscriptions go online; the timer is shared with an open calendar, so nothing is fetched twice). The same capability lets a plugin add, remove, rename and immediately refresh .ics subscriptions or import a local .ics text; it is the same list as "Subscriptions" in the calendar settings. The detail page line gains "read Agent schedules, .ics subscriptions and calendars in the vault on the other side, manage .ics subscriptions and change calendar settings". Plugins can also open a note and jump straight to a heading (`ctx.app.openNote(path, { heading })`), put one button (such as Undo) on a notification, and, if they declare `databases`, mount the field list from the host's event card (title, time, properties) into their own card with `ctx.ui.mountRecord`; edits go straight back to the table. Dashboard cards and a plugin's own scheduled reminders are not open yet. API details are in the section on the `calendar` tier of `ctx.calendar` in the plugin development skill.
+A calendar plugin also needs the read-only sources the host calendar layers in: Agent schedules, the .ics subscriptions you added, and tables in the vault on the other side (Local↔Cloud), plus your calendar settings (which tables are in the calendar and which columns they use for the date and the done checkbox, colours, hidden sources, and the table new events go into by default). A plugin gets them only if its manifest declares `calendar`; plugins that do not declare it can still only add their own table to the calendar. Once granted, a plugin changing a colour or adding or removing a table in the calendar changes the same settings as the "Calendars" list in the calendar's left panel, for the current vault only; overlays can be read but not changed. While a plugin is subscribed, the host refreshes these sources on schedule for it (.ics subscriptions go online; the timer is shared with an open calendar, so nothing is fetched twice). The same capability lets a plugin add, remove, rename and immediately refresh .ics subscriptions or import a local .ics text; it is the same list as "Subscriptions" in the calendar settings. The detail page line gains "read Agent schedules, .ics subscriptions and calendars in the vault on the other side, manage .ics subscriptions and change calendar settings". Plugins can also open a note and jump straight to a heading (`ctx.app.openNote(path, { heading })`), put one button (such as Undo) on a notification, and, if they declare `databases`, mount the field list from the host's event card (title, time, properties) into their own card with `ctx.ui.mountRecord`; edits go straight back to the table. Dashboard cards and a plugin's own scheduled reminders are not open yet. Since 2026-11-15, an .ics subscription or imported calendar whose events have a location, description or link gains `location`, `description` and `url` columns (named in the interface language); an event without that item leaves the cell empty. Older hosts only have the name and date columns. API details are in the section on the `calendar` tier of `ctx.calendar` in the plugin development skill.
 
 ### Spaces and the Ribbon shelf
 
@@ -279,11 +283,172 @@ Three smaller pieces: plugins can read the signed-in name (`ctx.app.watchAccount
 
 The core plugin that takes over Home gets a set of Home-only APIs (`ctx.home`: the host draws card contents into the plugin's slots, reads and writes the Home layout, and passes on the Edit Home command). Other plugins don't get it and can't ask for it.
 
+## Creating agents and importing chats (2026-11-16+)
+
+A "move from another AI" plugin can create an agent for you and write the old chats from an export file as sessions under it: opening one shows the original chat, and you can keep talking. The plugin must declare `agentImport` in its manifest to get `ctx.tangu.createAgent` / `ctx.tangu.importSessions`; the plugin's detail page then lists "create agents and import chats".
+
+- **Which device**: on desktop they go into the local engine, on phone and web into the cloud. Nothing syncs across devices: chats imported on the desktop do not show up on the phone, so import again on the phone to use them there.
+- **Append only**: the same chat from the same source a second time comes back as "exists" and the session is left as it is, so anything you added by continuing it is never overwritten.
+- **Kept as they were**: original titles and times; they sort by their own dates instead of jumping to the top, show no unread dot, and no background job (titles, memory tidying) runs on them.
+- **Session shape**: the same as a new Chat (no project), under the given agent, not in its private chat.
+- Times are milliseconds. Pass as many chats as you like; the host batches them and reports progress after each batch. Errors are returned, not thrown: `{ ok: false, error, results }`, with the batches already written listed in `results`.
+
+See the capability table of the plugin development skill (the `ctx.tangu.createAgent` / `ctx.tangu.importSessions` row) for the details.
+
 ## Bundled MCP servers, hooks and file events
 
 A plugin can ship its own MCP servers (only ones that run on this computer). Once it is installed and enabled, Tangu gains those tools; disabling the plugin stops them. Settings → MCP lists them with the plugin they come from; to turn them off, disable the plugin in plugin settings. Like MCP servers the user adds, these tools load on demand by default: each request carries one catalog line per tool (its name and the first line of its description), and the AI loads a tool before calling it. Make the first line of each description say on its own what the tool does. For a server needed on every turn, set `"deferLoading": false` in its declaration to keep its tools loaded. A plugin can also ship hooks that are notified when a session starts, when a tool has run and when an answer ends, for auditing or archiving. These hooks only watch: they cannot block anything or add to the conversation. Settings → Hooks lists them too, marked "Observe only".
 
 Plugins can also receive file events in your vault: files created, deleted, renamed or moved in Forsion, changed by another program or by Tangu, and switching vaults. Backlink and tidy-up plugins use this to keep up with changes without rescanning the vault again and again. For the API, see the plugin development skill's sections on bundled MCP servers and hooks and on vault file events (`ctx.app.onVaultEvent`); how a plugin command hands query results back to Tangu is in the "`invoke`" section.
+
+## Folders, file times, renaming and moving in the vault (2026-11-16+)
+
+Plugins can create folders, read a file's size and times, and rename or move files in the vault, the same way you do it in the file tree: renaming or moving a note rewrites the `[[links]]` to it across the vault, editors that have it open follow, and its subnotes move with it. All of these need an open vault; older hosts don't have them, so check with optional chaining.
+
+```js
+await ctx.app.createFolder?.('Plugins/my-plugin/Archive')
+const info = await ctx.app.stat?.('Notes/Idea.md')        // { kind, size, mtime, ctime } or null
+const moved = await ctx.app.movePath?.('Notes/Idea.md', 'Plugins/my-plugin/Archive')
+const renamed = await ctx.app.renamePath?.(moved, 'Idea (done)')
+```
+
+- `stat` tells you whether the path is a file or a folder, its size in bytes, and when it was modified and created (milliseconds; `ctime` is `null` where the file system doesn't record it). A missing path, or no open vault, gives `null`. The web version has no file times, so the method is absent there.
+- `renamePath` takes the new name without a folder; a missing suffix such as `.md` or `.db` is added back, and a rename can't change the file type. The destination folder of `movePath` must already exist; an empty string means the vault root. Both return the new path.
+- A plugin's own things are changed directly: files in its work folder, and files and folders the plugin itself created during this run (new files written with `writeFile` or `writeBytes`, folders made with `createFolder`). Before changing any other file, Forsion asks you once (Allow / Cancel, with Cancel focused); if you cancel, the plugin gets a `user_declined` error and nothing changes.
+- Not done: moving a table (`.db`) or a folder that contains one, renames that change the file type, renaming images and PDFs, moving a note's subnote folder (`.fd`) on its own, and moving into a folder that doesn't exist. If the file was moved but the links could not all be updated, the error says where the file is now.
+
+## Templates and new notes (2026-11-16+)
+
+Forsion has templates of its own: the notes in the vault's `templates/` folder, with `{{date}}`, `{{date:format}}`, `{{time}}` and `{{title}}` filled in on insert (formats from `.obsidian/templates.json`); the daily note's folder, name and template come from Settings or `.obsidian/daily-notes.json`. A Templater-style plugin, or one that gives new notes in a folder a template, should plug into these rather than ship a second template picker.
+
+A template processor gets the template's raw text before Forsion fills in its variables; processors run one after another in registration order. Returning `null` leaves the text unchanged; throwing cancels that insert, and the notice names the plugin; if the plugin is disabled or reloaded halfway, that processor counts as unchanged and the next ones still run. If the library, the pane or the note changed while waiting, nothing is inserted. `folders()` adds folders to the template picker. It covers two flows: inserting a template picked in the template picker (`kind` is `'insert'`), and creating a daily note (`'daily'`).
+
+```js
+const off = ctx.registerTemplateProcessor?.({
+  id: 'tp',
+  name: 'Templater',
+  folders: () => ['Templates'],
+  process: async (source, { templatePath, targetPath, kind }) => render(source, targetPath),
+})
+```
+
+A new note's first content: when someone creates an empty note, Forsion asks plugins for its content before writing it. The first plugin that answers with something other than `null` has its content written together with the new note, so the editor opens on it. It is asked for every "New note" entry point (including a plugin calling `ctx.app.createPage()`, whose own provider is asked too), a new note in a folder, child notes, creating a note from the quick switcher, opening a `[[link]]` to a note that doesn't exist yet, and a new daily note when no daily-note template is set. It is only not asked for files plugins write themselves with `writeFile`, `writeBytes` or a file creator, rows added to a table, and files that arrive through sync. A plugin may ask the user something; if it takes a while, Forsion shows "<plugin> is preparing this note…" with Cancel. On Cancel, or with no answer after 10 minutes, the note is created empty as before.
+
+- `signal` aborts when Forsion stops waiting for the plugin: Cancel, the 10-minute limit, a library switch, the plugin being disabled or reloaded, or the note having been created. When it fires, the plugin should close its prompt; an answer that arrives later is ignored.
+- A library switch while waiting: the note is not created, and a notice says why.
+- If you moved to another pane or note while waiting, the note is still created but you are not taken back to it: "New note" shows a "Created …" notice with an Open button, and a child note's link is still inserted into its parent.
+
+```js
+ctx.registerNoteBirth?.({
+  id: 'folder-templates',
+  initial: async ({ path, folder, signal }) => (folder.startsWith('Journal') ? render(journalTemplate, path) : null),
+})
+```
+
+Both methods return a function that removes the registration, and Forsion removes it too when the plugin is disabled. Older hosts don't have them. Don't replace them with "wait for the file-created event, then `writeFile` into the note": measured, the open editor never sees that write, and once the user types and saves, the template is moved into a "conflict" copy.
+
+## Inserting into a note (2026-11-16+)
+
+`ctx.app.insertMarkdownAt` inserts Markdown into the current note and does three things the older `insertMarkdown` can't: `where: 'caret'` inserts inside the line the caret is on (when the content is a single paragraph; selected text is replaced, as typing would); `cursorMarker` is a marker string you put in the content, which Forsion removes after inserting and puts the caret there; and when nothing could be inserted, it tells you why. Every insert is its own undo step.
+
+```js
+const page = ctx.app.getPage()
+const r = ctx.app.insertMarkdownAt?.(page.token, 'Hello {{cursor}}', { where: 'caret', cursorMarker: '{{cursor}}' })
+// r = { ok: true } or { ok: false, reason: 'stale-token' | 'no-note' | 'empty' | 'read-only' | 'no-editor' }
+```
+
+- `read-only`: the note is in reading mode or locked, and nothing was inserted; you can ask the user to switch back to editing. `no-editor`: the editor isn't ready yet, or it is in source mode. `stale-token`: the user has switched to another note, or the plugin was disabled or reloaded.
+- A marker in front of syntax at the start of a line, such as `#` or `-`, would change the Markdown structure; then the content is inserted as written and the caret is not placed.
+- Older block notes have no caret, so `'caret'` falls back to the end of the note. On hosts without the method, fall back to `insertMarkdown`.
+
+Editor extensions (`ctx.registerEditorExtension`) receive the Forsion editor's own ProseMirror, so besides handling keys and adding decorations they can change text and move the caret (the LaTeX Suite plugin jumps the caret between placeholders this way). But if all you need is "insert a template at the caret and put the caret on a marker", use `insertMarkdownAt` above first: parsing, undo and the read-only check are handled for you.
+
+## Network access and third-party libraries
+
+The desktop app's Content Security Policy (CSP) blocks loading **scripts** from other sites, so bundle third-party libraries into the plugin's own `main.js` (there is no size limit). **Network requests are not limited by the CSP**: it allows `https:` and `wss:`, and when an API sends cross-origin headers (`Access-Control-Allow-Origin`) the plugin can call it with `fetch` directly. When an API doesn't send that header, the request fails (`TypeError: Failed to fetch`) because of the browser's cross-origin rules (CORS), not the CSP.
+
+For those APIs use `ctx.net.request`, which Forsion's main process sends on the plugin's behalf (2026-11-16+, desktop only; web, mobile and older hosts have no `ctx.net`, so check before using it). The plugin first lists the hosts it will reach in the manifest's `network` array:
+
+```json
+{ "network": ["api.example.com", "*.cdn.example.com"] }
+```
+
+```js
+const res = await ctx.net.request('https://api.example.com/v1/items', { method: 'POST', headers: { Authorization: `Bearer ${key}` }, body: JSON.stringify(query) })
+if (res.status === 200) render(res.json())
+```
+
+- Write host names only, with no scheme, port or path. `*.example.com` covers subdomains at any depth but not `example.com` itself; list both if you need both. The main process reads this list from the manifest on disk for every request. The plugin's detail page, the store facts of an installed plugin and the sandbox install confirmation show "Accesses: …"; it is not shown before a store install yet.
+- Only https on the default port (443). Hosts written as IP addresses, or that resolve at connect time to local, private or reserved addresses, are refused; at most 5 redirects, and every hop is checked against the list again. Forsion's cookies and sign-in are never attached: send your own `Authorization` header if the API needs one.
+- The response is at most 10 MB after decompression; `timeoutMs` defaults to 30 seconds and is capped at 60; each plugin can have at most 8 requests in flight; requests still pending when the plugin is disabled fail.
+- `res` has `status`, `headers` (lower-case names), `bytes`, `url` (the final URL after redirects), `text()` and `json()`. 4xx and 5xx responses resolve normally; only transport problems reject, with an error whose `code` is `net_domain_not_declared` (not in your list), `net_blocked_address`, `net_timeout`, `net_too_large`, `net_bad_url`, `net_bad_request` or `net_failed`.
+- https APIs that send cross-origin headers can still be called with plain `fetch`.
+
+The web and mobile versions have different CSPs; test there separately.
+
+## Internal APIs: `ctx.internals` (2026-11-16+)
+
+When the public APIs are missing something and you don't want to wait for a Forsion release, internal APIs let you read Forsion's own state or take its internal modules directly. **They are not stable**: everything in them follows Forsion's internals and can be renamed, reshaped or removed in any version, without notice and without counting as a breaking change. Desktop only: on web, mobile and older hosts `ctx.internals` is `undefined`, so always check before use.
+
+There are two levels, both declared in the manifest's `capabilities`:
+
+```json
+{ "capabilities": ["internals"], "internalsVerified": ["2.14"] }
+```
+
+**Level one, `internals`**: read only. You get frozen copies of the data with no functions in them, so they can't change Forsion.
+
+```js
+const k = ctx.internals
+if (!k) return
+k.stores()                                            // what you can read: page, app, workspace, spaces, commands, ui…
+const path = k.read('page', (s) => s.activePage)      // page is the active panel
+const off = k.subscribe('page', (s) => s.activePage, (now, prev) => { /* … */ })
+k.host.mainWindow                                      // each window runs its own copy of the plugin; do your own vault writes in the main window only
+```
+
+- Copies drop functions and class instances; a `Date` becomes milliseconds, a `Map` an array of `[key, value]` pairs, a `Set` an array. The `selector` gets a copy too.
+- `subscribe` handles several changes in one turn once, and only calls you when the selected data changed. The host unsubscribes when the plugin is turned off.
+- To write, use the public APIs: renaming, moving, folders and file writes are in "Folders, file times, renaming and moving in the vault" above, which ask the user before touching files your plugin didn't create.
+
+**Level two, `internals-raw`**: the real objects of Forsion's internal modules, for reading and writing. Declare it together with `internals`.
+
+```json
+{ "capabilities": ["internals", "internals-raw"] }
+```
+
+```js
+const ids = await ctx.internals.raw.modules()          // which modules you can take
+const { usePageStore } = await ctx.internals.raw.import('host:desktop/frontend/src/amadeus/store/pageStore.ts')
+```
+
+- Only modules registered in Forsion's shared module table are available (page state, chat state, the layout engine, React and others); unregistered modules and variables private to a function are not.
+- **At your own risk**: writing something wrong may not throw; objects you took can't be taken back when the plugin is turned off, so the user is asked to save and reload the window. If you change one of Forsion's own actions, undo it yourself when the plugin is turned off.
+- For note files, still prefer the public APIs: Forsion's writes check for conflicts, rewrite links and record deletions for sync, and going around them loses data.
+
+**How the plugin page and the store show it**: plugins that declare internal APIs carry a badge in Settings → Plugins (a stronger one for level two), and the detail page states the risk. Use `internalsVerified` to list the Forsion versions you checked (minor versions only, such as `"2.14"`). When the user's version isn't listed, the detail page says it wasn't checked on this version. That is a label, not a block.
+
+**When it fails**: errors that a plugin declaring internal APIs doesn't catch are counted against it. Three within a minute and Forsion turns it off and tells the user, who can turn it back on in the plugin page. A copy loaded for development in the sandbox is never turned off this way; its errors go to the console as usual.
+
+**Store listing**: level one is reviewed as usual. Level two needs an application: in the submission's internal APIs reason field, say which modules you need and why the public APIs are not enough. Review is per version, so each new version is reviewed again before users get it. The desktop app won't install an unapproved version from the official store. Development loads, manual installs and third-party store sources aren't affected.
+
+Check it with `node check-plugin.mjs <plugin folder>`: it reports use without declaring, declaring level two alone and reaching into React's internals, and lists the level-two modules the plugin takes.
+
+## Removing commands and default shortcuts
+
+`ctx.registerCommand` returns a function that removes exactly this registration (2026-11-16+). Registering the same `id` again from the same plugin replaces the earlier command in place (title, action and shortcut all updated), and the replaced registration's remover no longer does anything. So a plugin can add and remove commands while it runs (one per enabled template, say) without being reloaded. Disabling the plugin still removes all of its commands. Older hosts return `undefined` and add a duplicate when an `id` is registered again, so write `off?.()` and register each `id` only once there.
+
+```js
+const off = ctx.registerCommand({ id: 'my-plugin-insert-daily', title: 'Insert daily template', hotkey: 'Mod+Shift+Y', run: insertDaily })
+off?.()
+```
+
+`hotkey` is the command's default shortcut, and only a suggestion:
+
+- It must include `Mod` (⌘ on macOS, Ctrl elsewhere). With `Shift`, pair it with a letter, `[`, `]` or a named key such as `ArrowUp`, `F5` or `Enter` (Shift with a digit or punctuation types a different character and never matches); `Space` is not supported. Anything else is ignored with a console warning.
+- It takes effect only while nothing else uses the key: Forsion's own commands, system and editor shortcuts, a key you set for another command, or another plugin's default for the same key (then neither plugin gets it). A key you set for this command always wins.
+- An inactive default is marked in Settings → Shortcuts with "Plugin default {key} conflicts with “{other}” — not active", and switches on by itself once the key is free. You can always set a key for the command there yourself.
+- Older hosts ignore `hotkey`.
 
 ## IM channels
 
@@ -300,6 +465,21 @@ When a driver implements `sendApproval`, approvals stop being text cards: the dr
 A plugin can add its own "when" to automations: register it with `ctx.automation.registerTrigger`, then call `ctx.automation.emit` when the event happens. Once registered it appears in the "External and plugins" group of the automation canvas trigger node. Users write the rules themselves and can restrict them by hours, weekdays, cooldown and a daily limit. "Remind me directly" costs no budget; "Wake Muse" goes through the usual budget checks.
 
 You can only register inside your own namespace: `id` is a key, and the host builds `plugin:<plugin id>:<key>`. Names need both zh and en. When the plugin is disabled or uninstalled the trigger is unregistered; its rules are kept, paused with a stated reason, and resume once it is back. Events are not saved to disk, so an engine restart loses any a rule has not seen yet. Engine plugins use the same methods on `ctx.sdk.automation`. See `references/tangu-host-apis.md` in the plugin development skill for the code.
+
+## Notifications (`ctx.notify`)
+
+`ctx.notify(message, { level, title, action, key, undo, urgent })` shows a card in the top-right corner on desktop. On a phone (a window narrower than 640) it is a banner under the status bar: it covers the row of capsules at the top, never the page's content, and shows one card at a time while the rest wait. The source and the message take one line each and are cut at the end when they do not fit; the button and × sit on the same line at the right. On a phone, tapping the message does what the button does, and swiping up or tapping × dismisses it.
+
+- How long it stays: on desktop, 8 seconds with a button, otherwise by level. On a phone, 5 seconds, 10 seconds while a screen reader is on; `error` and `sticky: true` stay until dismissed.
+- `key`: a later card with the same key replaces the earlier one. On a phone the words and the button change in place, and the time counts from when the card first appeared, without starting again.
+- Throttling on a phone: after a card from your plugin goes away, the host shows no more of your cards for a while (30 seconds when it timed out, 2 minutes when the person swiped it away or tapped ×). `ctx.notify` still returns normally and does not throw, so keep counts or state in your own interface (numbers in a list, a badge on a tab) for when the person comes back. System notifications while the app is in the background are never throttled.
+- `undo: true` (since 2026-11-15): this card is the way back from something the person just did (Undo after a delete). On a phone it stays 8 seconds and is never throttled.
+- A card with a button that you show synchronously while handling the person's tap or key press (an Undo right after a delete) is treated the same way on a phone, even without `undo`: 8 seconds, never throttled. If you show it from a callback, after waiting for a file or the network, the host cannot tell it came from what the person just did, so pass `undo: true` yourself.
+- While the app is in the background, a phone shows no banner, only the system notification. The cards wait and come one at a time once the person is back, with the same throttling, but not as a whole backlog. The card on screen when the app goes to the background (unless it is sticky) is taken back too: it comes first once the person is back (waiting `urgent` cards still go before it), for its full time, and never times out in the background. These always stay: cards with `undo`, sticky cards, `error` cards, the card that was on screen, and cards whose system notification could not be posted (for example when the person turned system notifications off or never allowed them; these come one by one once the person is back, without the per-plugin cooldown). Of the rest, `urgent` cards keep the newest one per plugin and key, and all of them stay (separate approvals all stay; the system notifications are cleared from the shade once the person is back, so none are dropped). Other cards keep the newest one per plugin and fill whatever is left of 3 slots, newest first; when there are already 3 or more `urgent` cards, none of them stay. The system notifications for the ones left out have already been posted; keep the numbers in your own interface.
+- While a native sheet from the bottom of a phone's screen (a menu, a text prompt, a confirmation) is open, no banner shows either: the cards wait, without counting down, the card on screen (unless it is sticky) is taken back as well, and they come once it closes, each for its full time.
+- System notifications: a plugin keeps only its latest one, except cards with both `urgent: true` and a `key`, which get their own notification per plugin and key (a later one with the same key replaces it). So give cards like approvals `urgent: true` and their own key, and your later ordinary cards will not replace them.
+- `urgent: true` (since 2026-11-15): someone, a person or an agent, is stopped and waiting for the person (an approval, for example). On a phone it is never throttled and goes ahead of cards that can wait. It is not sticky; it stays as long as any other card.
+- Both only count when they are `true`, and older hosts ignore them, so you can pass them without checking the host version. Give a card that skips the throttle its own `key` (such as `approval:<id>`) instead of sharing one with ordinary cards; otherwise it replaces them.
 
 ## Plugin data sync across devices
 
@@ -322,6 +502,28 @@ Plugin tasks, read-only external engines, isolated Git workspaces, native schedu
 A plugin with an engine half can give the tools it registers a result card: after Tangu calls such a tool successfully, the chat shows the plugin's card instead of the generic one-line tool record. The card is drawn right in the Forsion interface and follows the theme and text size. Only tools the plugin's own engine half registered can get a card; built-in tools and other plugins' tools cannot (the one exception is hard-coded in the host: the signed Forsion Extend can draw cards for the two built-in tools that publish web pages and list my web pages). From 2026-10-28 a `match` can take only some of a tool's calls (for example when one argument has a certain value). While the tool is still running, when it failed or is waiting for your approval, and while the plugin is disabled or reloading, the generic record shows as before. Cards are still there when you reopen an old conversation.
 
 A card sits in the chat by default, with "Open in Desk" at its top right. A plugin can also declare that a card goes straight into the Agent Desk (for whiteboards and boards that need room); the chat then keeps a placeholder card that says "Showing in Desk", and "Back to chat" moves it back. The ⋯ menu at the top of the Desk has "Move back to chat" too. The plugin keeps state such as zoom and scroll position across moves. On phones, with the Agent Desk turned off, or when the window is too narrow for the Desk, cards always show in the chat. A card can quote part of its content above the chat input, the same as selecting text in a reply and quoting it, and you decide whether to send it; cards cannot write files or send messages for you. For the API, see the "Tool result cards" section of the plugin development skill.
+
+## Process-row sentences
+
+Tangu folds a reply's tool calls into one process row; expanded, each call is one line. A plugin tool's line reads "plugin name · tool name" plus its first argument by default. A plugin with an engine half can call `ctx.registerToolLabel?.(…)` to describe its own tools in plain language instead, such as "Clicking “Send” in Chatter" or "Typed “See you tomorrow” in Chatter", optionally with the icon of the app being worked on. Claiming works like tool result cards: only tools the plugin's own engine half registered are handed to it.
+
+The host calls the plugin's `describe` whenever it draws that line, passing the call's arguments, its result, its phase (running, done or error), the interface language, and the plugin's own earlier calls in the same reply (up to 40, so app and button names from earlier results can be reused). While the tool runs, the folded process row rolls through each step's sentence; once everything finished, the folded row keeps its summary and each line of the expanded list shows the "done" sentence. The current-step line in the Tangu summary panel uses the same sentence. Lines are rebuilt when you reopen an old conversation or switch the interface language. If `describe` throws or gives no sentence, the line shows as before; the sentences go away when the plugin is disabled or reloaded. App icons show only in the desktop app on macOS; elsewhere the usual tool icon shows. Only this line for people changes: what the model sees (tool descriptions and results) stays the same.
+
+The host remembers each sentence: it asks again only when the call itself, its phase, the interface language or the earlier calls change. Write `describe` as a function of the data passed in, with no side effects. If a sentence or icon also depends on something else (an app icon you only learn later, for example), add `revision()` returning a number or string that changes along with it; the host asks again when it differs.
+
+```js
+ctx.registerToolLabel?.({ tool: ['act_ui', 'observe_ui'], describe(call) { return { text, icon: { appBundleId } } } })
+```
+
+## Stopping a run and following a run's status
+
+`ctx.tangu.agentStatus` / `subscribeAgentStatus` take a session. From 2026-11-13 they also take `{ runId }`, which means the session that is running that run right now. That suits views that know a `runId` but not the session (such as the Computer Use live view). When no session is running it, the status is idle with an empty `runId`.
+
+`ctx.tangu.stop?.(…)` stops a run the same way the stop button in the chat input does: with no argument it stops the current session in the main area, with a session id that session, and with `{ runId }` the session running that run. If the run cannot be found or the session is not running, nothing is stopped and it returns `false`; it never stops another session instead. Older versions and setups without chat do not have it, so do not show a stop button there. For the API, see the "Agent status" section of the plugin development skill.
+
+```js
+const ok = await ctx.tangu?.stop?.({ runId })
+```
 
 ## Summary panel cards
 
@@ -583,6 +785,25 @@ Cloud settings pages can accept optional `mount(el, { anchor })` context. A `for
 ### Note reading renderers
 
 Use `ctx.registerNoteRenderer` to replace the read-only note surface while the host retains document and persistence ownership. See [Note reading renderers](./note-renderers.en.md) for the contract, failure fallback and lifecycle.
+
+### Styling hooks for formula source in notes (since 2026-11-15)
+
+While the caret is inside a formula (inline `$…$` or display `$$…$$`, single or multi-line), its source is shown and the host adds the
+`math-source` class to the whole source, `$` included. It looks like Obsidian: monospace, italic, inline-code size. Each token also gets
+a kind class: `math-source-dollar` (`$` / `$$`), `math-source-command` (commands such as `\frac` and escaped symbols such as `\{`),
+`math-source-script` (`_ ^ &`), `math-source-letter`, `math-source-number` and `math-source-bracket` (`( ) [ ] { }`). Spaces,
+operators and `%` comments keep the text color. Formulas the caret is not in, rendered output and the preview never carry these classes.
+
+- **The classes sit on the same span**, not on a wrapper: write `.math-source.math-source-bracket`, not `.math-source .math-source-bracket`.
+- **The host's token colors have zero specificity** (the selectors are wrapped in `:where()`), so a plain class selector on the class your
+  plugin adds to a bracket, `$` or placeholder wins, whatever the stylesheet order. Host colors come from the `--math-src-*` variables
+  and follow light/dark; give your own colors a light and a dark value too.
+- Selected characters drop their token classes (the native selection color wins); `math-source` stays, so the font does not jump.
+- `math-source-delimiter` is the older umbrella class (`$`, brackets, `_ ^`), kept for compatibility; the host no longer colors it.
+- **A selection inside a formula** (both ends between the `$` signs, such as a placeholder selected with Tab) keeps the preview (the
+  floating bubble above the line for inline formulas, with the caret mark at the selection end; below the source for display formulas)
+  and gets no formatting toolbar, so selection actions listed under "⋯ → Plugins" on that toolbar do not appear there. A selection that
+  crosses out of the formula, or takes the whole formula with its `$` signs, still gets the toolbar and no preview.
 
 ### Official cloud inbox channel
 

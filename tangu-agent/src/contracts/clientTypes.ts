@@ -326,6 +326,11 @@ export interface NormalAgentDef {
   standInLibrary?: string[]
   /** 本体这边:分身能不能读 human/AGENT.md(缺省不能)。 */
   standInAgentMd?: boolean
+  /** 由谁来跑(11-14):缺席 = Tangu;'dsh' = 交给本机的 DeepSeek Harness 跑,身份仍在 Forsion。只有本机设置页能改。
+   *  可能是本版本不认识的值(新版本写的):界面照样标「不是 Tangu」,发消息会明确失败。 */
+  engine?: string
+  /** 跑在外部引擎上时缺省用它的哪个模型(引擎自己的模型 id,原样存);会话里在输入框另选的优先。 */
+  engineModel?: string
 }
 
 /** GET /agent/stand-ins、/agent/agents/:slug/stand-ins 的一行。 */
@@ -492,6 +497,17 @@ export interface MessageRecord {
   is_error: boolean
   /** Muse 主动发进私聊的消息:proactive / proactive:todo / proactive:approval / proactive:card;其余为空。 */
   origin?: string | null
+}
+
+/** 消息接口一并带出的失败轮(services/failedRuns.ts):用户那一句还在、run 以 failed 收尾的那几轮。老引擎不带这一项。 */
+export interface FailedRunRecord {
+  /** 这一轮回答的行 id(与在线时的气泡同一个);可能有半截回答落了库,也可能没有。 */
+  assistant_message_id: string
+  user_message_id: string
+  /** agent_runs.error 原样(与在线 error 事件同一串,界面照旧翻译)。 */
+  error: string
+  /** 没有回答行时这一行的排序时间:用户那一句的时间 + 1。 */
+  timestamp: number
 }
 
 export interface ModelInfo {
@@ -918,6 +934,20 @@ export interface ToolEvent {
   parked?: boolean
   /** 发给模型前会被遮住的值(引擎 llm/outboundMask.ts):在 arguments / result 里的位置 + 类型 + 模型收到的占位符,不含原值。 */
   masked?: Array<{ kind: string; ph: string; s: number; e: number; at: 'args' | 'result'; warn?: true }>
+  /** web_search 的结果 / web_fetch 读到的那一页(工具结果 metadata.sources,渲染层只从这两个工具上认)。旧消息没有。 */
+  sources?: WebSource[]
+}
+
+/** 一条网页来源:引擎在工具结果上另存的结构化一份(metadata.sources),**不进模型上下文** —— 模型那份仍是工具返回的文字,
+ *  回放逐字不变。渲染层拿它给正文里指向它的链接编号、出来源卡、在右栏「来源」里列结果。 */
+export interface WebSource {
+  url: string
+  title?: string
+  /** 主机名,去掉 www.。 */
+  site?: string
+  /** 发布日期 YYYY-MM-DD:搜索服务或网页 meta 给了才有。 */
+  date?: string
+  snippet?: string
 }
 
 /** 助手一条消息的「顺序段」(直播归约期填充;新历史消息也可由工具锚点重建):
