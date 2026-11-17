@@ -970,7 +970,7 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
         {asking?.kind === 'plugin' && <PluginUninstallDialog name={asking.c.name} warning={asking.warning} onClose={() => setAsking(null)}
           onConfirm={(opts) => { const a = asking; void uninstallEnginePlugin(a.id, a.c.name, opts, a.c.id).then((ok) => { if (ok) return afterDialogUninstall(a.c, 'plugin', a.c.installSlug) }) }} />}
         {asking?.kind === 'amadeus-plugin' && <PluginUninstallDialog name={asking.c.name} warning={asking.warning} vaultFolder={pluginVaultFolder(asking.plugin.id, asking.plugin.name)} cloudData={pluginDataSyncOn(asking.plugin)}
-          skills={asking.plugin.bundle?.skills.length ?? 0} agents={asking.plugin.bundle?.agents ?? []} onClose={() => setAsking(null)}
+          skills={asking.plugin.bundle?.skills.length ?? 0} agents={asking.plugin.bundle?.agents ?? []} superseded={asking.plugin.supersedes} onClose={() => setAsking(null)}
           onConfirm={(opts) => { const a = asking; void uninstallForsionPlugin(a.plugin, a.c.name, opts, { engine: true, storeItemId: a.c.id }).then((ok) => { if (ok) return afterDialogUninstall(a.c, 'amadeus-plugin', a.c.installSlug) }) }} />}
 
         {!storeOnly && !detail && !detailLoading && !storeView && (!!activeSource || tab !== 'connector') && <div className="mk-upgrade-filters">

@@ -975,6 +975,7 @@ function pluginMeta(src: ExternalPluginSource): Omit<AmadeusPlugin, 'setup'> {
     devRoot: src.devRoot,
     devProductId: src.devProductId,
     shadowsInstalled: src.shadowsInstalled,
+    supersedes: src.supersedes,
   }
 }
 

@@ -17,10 +17,11 @@ import os from 'node:os'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import type { ExternalPluginSource } from '@amadeus-shared/ipc'
 
-const env = vi.hoisted(() => ({ root: '', handlers: new Map<string, (...args: any[]) => any>(), seq: 0 }))
+const env = vi.hoisted(() => ({ root: '', handlers: new Map<string, (...args: any[]) => any>(), seq: 0, shell: [] as string[] }))
 vi.mock('electron', () => ({
   app: { getPath: () => env.root, getVersion: () => '9.9.9', once: vi.fn(), removeListener: vi.fn() },
-  BrowserWindow: { getAllWindows: () => [], fromWebContents: () => ({}) }, dialog: {}, shell: {},
+  BrowserWindow: { getAllWindows: () => [], fromWebContents: () => ({}) }, dialog: {},
+  shell: { showItemInFolder: (p: string) => { env.shell.push(`show ${p}`) }, openPath: async (p: string) => { env.shell.push(`open ${p}`); return '' } },
   ipcMain: { handle: (channel: string, fn: (...args: any[]) => any) => env.handlers.set(channel, fn) },
 }))
 vi.mock('../forsionHome', () => ({
@@ -81,6 +82,7 @@ beforeEach(async () => {
   vi.resetModules()
   env.root = await fs.mkdtemp(path.join(os.tmpdir(), 'amadeus-devplugins-'))
   env.handlers.clear()
+  env.shell = []
   const local = path.join(env.root, 'notes')
   await fs.mkdir(local)
   const { writeConfig } = await import('./settings')
@@ -310,4 +312,94 @@ it('⚠️某个插件目录的清单写坏:其余插件照常列出(预扫商�
   await installed('fine', { id: 'fine', name: 'Fine', version: '1.0.0', apiVersion: 1, main: 'main.js' })
   await boot()
   expect((await list()).map((s) => s.id)).toEqual(['fine'])
+})
+
+// ---- 旧副本(方案 B,2026-11-17):设置页的注记 / 清理,卸载商店版时一起带走 ----
+const STORE = 'market-00000000-0000-4000-8000-00000000000c'
+const pluginsRoot = (): string => path.join(env.root, 'app-data', 'plugins')
+const dataFile = (id: string): string => path.join(env.root, 'app-data', 'plugins-data', `${id}.json`)
+const exists = (p: string): Promise<boolean> => fs.access(p).then(() => true, () => false)
+async function pair(): Promise<{ plain: string; store: string }> {
+  const plain = await installed('demo-suite', { id: 'demo-suite', name: 'Demo', nameEn: 'Demo EN', version: '0.1.0', apiVersion: 1, main: 'main.js' }, 'ctx.old = 1')
+  const store = await installed(STORE, { id: 'demo-suite', name: 'Demo', version: '0.5.0', apiVersion: 1, main: 'main.js' }, 'ctx.store = 1')
+  await fs.mkdir(path.dirname(dataFile('x')), { recursive: true })
+  await fs.writeFile(dataFile('demo-suite'), '{"old":1}')
+  await fs.writeFile(dataFile(STORE), '{"store":1}')
+  return { plain, store }
+}
+
+it('商店那份带上它取代的旧副本(supersedes);没有旧副本的插件不带', async () => {
+  await pair()
+  await installed('other', { id: 'other', name: 'Other', version: '1.0.0', apiVersion: 1, main: 'main.js' })
+  await boot()
+  const sources = await list()
+  expect(sources.find((s) => s.id === STORE)?.supersedes).toEqual({ id: 'demo-suite', dir: 'demo-suite', version: '0.1.0', name: 'Demo', nameEn: 'Demo EN' })
+  expect(sources.find((s) => s.id === 'other')?.supersedes).toBeUndefined()
+})
+
+it('⚠️卸载商店版 + withSuperseded:旧副本同进一条回收站条目(不再复活),撤销一次两份都回来', async () => {
+  const { plain, store } = await pair()
+  await boot()
+  const r = await invoke('plugins:uninstall-forsion', STORE, { withSuperseded: true }) as { trashId: string; superseded?: string[] }
+  expect(r.superseded).toEqual(['demo-suite'])
+  expect(await exists(store)).toBe(false)
+  expect(await exists(plain)).toBe(false)
+  expect(await exists(dataFile('demo-suite'))).toBe(false) // 不留设置:旧副本的设置跟着走
+  expect(await list()).toEqual([]) // 卸完什么都不剩,旧副本没有回来运行
+  await invoke('trash:restore-desktop', r.trashId)
+  expect(await exists(store)).toBe(true)
+  expect(await exists(plain)).toBe(true)
+  expect(await fs.readFile(dataFile('demo-suite'), 'utf8')).toBe('{"old":1}')
+  const back = await list()
+  expect(back.map((s) => s.id)).toEqual([STORE])
+  expect(back[0].supersedes?.dir).toBe('demo-suite')
+})
+
+it('卸载商店版 + withSuperseded + 保留设置:两份的设置都原地留着', async () => {
+  const { plain } = await pair()
+  await boot()
+  await invoke('plugins:uninstall-forsion', STORE, { withSuperseded: true, keepSettings: true })
+  expect(await exists(plain)).toBe(false)
+  expect(await exists(dataFile('demo-suite'))).toBe(true)
+  expect(await exists(dataFile(STORE))).toBe(true)
+})
+
+it('卸载商店版不带 withSuperseded(用户勾了「保留旧副本」):旧副本留下并重新运行', async () => {
+  const { plain } = await pair()
+  await boot()
+  const r = await invoke('plugins:uninstall-forsion', STORE) as { superseded?: string[] }
+  expect(r.superseded).toBeUndefined()
+  expect(await exists(plain)).toBe(true)
+  expect((await list()).map((s) => s.id)).toEqual(['demo-suite'])
+})
+
+it('按旧副本的 id 清理:只挪普通目录,商店那份原地不动、不再带注记', async () => {
+  const { plain, store } = await pair()
+  await boot()
+  const r = await invoke('plugins:uninstall-forsion', 'demo-suite', { keepSettings: true }) as { trashId: string; dirName: string }
+  expect(r.dirName).toBe('demo-suite')
+  expect(await exists(plain)).toBe(false)
+  expect(await exists(store)).toBe(true)
+  const sources = await list()
+  expect(sources.map((s) => s.id)).toEqual([STORE])
+  expect(sources[0].supersedes).toBeUndefined()
+})
+
+it('⚠️恢复时旧副本原处又装了一份普通目录:拒绝(否则落成 -2,同一个 id 两份)', async () => {
+  await pair()
+  await boot()
+  const r = await invoke('plugins:uninstall-forsion', STORE, { withSuperseded: true }) as { trashId: string }
+  await installed('demo-suite', { id: 'demo-suite', name: 'Demo', version: '0.2.0', apiVersion: 1, main: 'main.js' })
+  await expect(invoke('trash:restore-desktop', r.trashId)).rejects.toThrow(/plugin-reinstalled/)
+  expect(await exists(path.join(pluginsRoot(), 'demo-suite-2'))).toBe(false)
+})
+
+it('打开插件文件夹:指名一个插件目录就在访达里选中它;不是根下一层的真目录就退回打开根目录', async () => {
+  await pair()
+  await boot()
+  await invoke('plugins:open-folder', 'demo-suite')
+  await invoke('plugins:open-folder', '../demo-suite')
+  await invoke('plugins:open-folder', 'missing')
+  await invoke('plugins:open-folder')
+  expect(env.shell).toEqual([`show ${path.join(pluginsRoot(), 'demo-suite')}`, `open ${pluginsRoot()}`, `open ${pluginsRoot()}`, `open ${pluginsRoot()}`])
 })

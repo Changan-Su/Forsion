@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, shell } from 'electron'
 import { declaredSourcesOf } from '../../shared/storeSources'
-import { IPC, gatePluginManifest, sanitizeGuide, sanitizeOnboarding, sanitizeEvents, sanitizeRequiresPlugins, sanitizeInternalsVerified, PLUGIN_CAPABILITIES,type ExternalPluginSource, type PluginBundleInfo } from '@amadeus-shared/ipc'
+import { IPC, gatePluginManifest, sanitizeGuide, sanitizeOnboarding, sanitizeEvents, sanitizeRequiresPlugins, sanitizeInternalsVerified, PLUGIN_CAPABILITIES,type ExternalPluginSource, type PluginBundleInfo, type SupersededInstall } from '@amadeus-shared/ipc'
 import { installedPluginFields, type InstalledPluginManifest } from '@amadeus-shared/pluginSource'
 import { readPluginWidgets } from './pluginWidgets'
 import { isSafePluginExt } from '@amadeus-shared/pluginFiles'
@@ -811,6 +811,23 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
     }
     // 同一个包的普通目录 + 商店安装:只列商店那份(引擎扫捆绑包、readSpacesList、手机同一条规则)。
     const replaced = await supersededPluginDirs(globalPluginsDir(), entries.filter((e) => e.isDirectory() && !e.name.startsWith('.')).map((e) => e.name))
+    // 反过来:商店目录 → 它取代的旧普通目录(设置页的注记 / 「旧的本地安装」一节)。同一个包有两份普通目录时取排在前面的那份,
+    // 清掉它下一份才露出来 —— 和按 id 卸载找目录的顺序一致。
+    const supersededBy = new Map<string, string>()
+    for (const [plain, store] of [...replaced].sort(([a], [b]) => a.localeCompare(b))) if (!supersededBy.has(store)) supersededBy.set(store, plain)
+    const supersededInfo = async (store: string): Promise<SupersededInstall | undefined> => {
+      const plain = supersededBy.get(store)
+      if (!plain) return undefined
+      try {
+        const om = JSON.parse(await fs.readFile(path.join(globalPluginsDir(), plain, 'manifest.json'), 'utf8')) as { id?: unknown; version?: unknown; name?: unknown; nameEn?: unknown }
+        const oid = pluginIdOf(plain, om.id)
+        if (!oid) return undefined
+        const text = (v: unknown, n: number): string | undefined => (typeof v === 'string' && v.trim() ? v.trim().slice(0, n) : undefined)
+        return { id: oid, dir: plain, version: text(om.version, 40) ?? '0.0.0', name: text(om.name, 120) ?? oid, ...(text(om.nameEn, 120) ? { nameEn: text(om.nameEn, 120) } : {}) }
+      } catch {
+        return undefined // 判得出取代就说明读得到 id;这里再读失败只是不给注记
+      }
+    }
     for (const e of entries) {
       if (!e.isDirectory() || e.name.startsWith('.') || replaced.has(e.name)) continue
       const pdir = path.join(globalPluginsDir(), e.name)
@@ -867,6 +884,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
           blocked: blocked ?? undefined,
           bundle,
           preinstalled: builtinPluginIds().has(id) || undefined, // 随 App 播种的捆绑包(electron/builtinPlugins.ts)
+          supersedes: await supersededInfo(e.name),
           // 其中带主进程半身的(Forsion Extend):开关管的是下次开机装不装那一半(桌面配置 disabledBundles),拨了要重启
           ...(lockedPluginIds().has(id) ? { locked: true, bundleOff: bundleOff(id), restartPending: bundleRestartPending(id) } : {}),
         })
@@ -887,9 +905,14 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
   }
   handle(IPC.listPlugins, () => readExternalPlugins({ agents: true, dev: true }))
 
-  handle(IPC.openPluginsFolder, async () => {
+  handle(IPC.openPluginsFolder, async (_e, sub?: unknown) => {
     const dir = globalPluginsDir()
     await fs.mkdir(dir, { recursive: true })
+    // 指名一个插件目录(设置页「旧的本地安装」的「在访达中显示」):只认插件根下一层的真目录,别的一律退回打开根目录
+    if (typeof sub === 'string' && sub && !sub.startsWith('.') && path.basename(sub) === sub && (await fs.lstat(path.join(dir, sub)).catch(() => null))?.isDirectory()) {
+      shell.showItemInFolder(path.join(dir, sub))
+      return
+    }
     await shell.openPath(dir)
   })
 
@@ -953,7 +976,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
   // 卸载 Forsion 插件:按 manifest id 定位目录(id 可与目录名不同;与 listPlugins 同一 pluginIdOf 门禁)整删。
   // 只动 ~/.forsion/plugins;内嵌 agent 已播种进引擎的按「播种一次」语义保留(活体),
   // 内嵌引擎插件需重启引擎后消失(调用方负责提示/重启)。
-  handle(IPC.uninstallPlugin, async (_e, id: string, opts?: { keepSettings?: boolean; vaultFolder?: string; prefs?: Record<string, string>; engineTrash?: string[] }) => {
+  handle(IPC.uninstallPlugin, async (_e, id: string, opts?: { keepSettings?: boolean; vaultFolder?: string; prefs?: Record<string, string>; engineTrash?: string[]; withSuperseded?: boolean }) => {
     if (typeof id !== 'string' || !SAFE_PLUGIN_ID.test(id)) throw new Error('invalid-plugin-id') // 原因码,渲染层 ipcErrorText 译
     // ⚠️开发副本正遮蔽同 id 的安装版时必须拒绝:这里只扫全局目录,删掉的是**安装版**,而跑着的是开发副本 ——
     // 用户看到「已卸载」,插件却还在;等哪天撤下开发副本,它才凭空消失(且没有任何提示)。先撤开发副本再卸载。
@@ -976,21 +999,39 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
       if (pluginIdOf(e.name, manifestId) === id) { target = path.join(root, e.name); break }
     }
     if (!target) throw new Error('plugin-not-found')
-    // 墓碑:声明过的扩展名永久保留豁免(库里数据文件还在,掉回笔记=毁档),再删目录。
-    try {
-      const m = JSON.parse(await fs.readFile(path.join(target, 'manifest.json'), 'utf8')) as { fileExtensions?: unknown }
-      const claimed = Array.isArray(m.fileExtensions)
-        ? m.fileExtensions.filter(isSafePluginExt).map((x) => x.trim().toLowerCase())
-        : []
-      if (claimed.length) {
-        const merged = [...new Set([...readExtTombstones(), ...claimed])].sort()
-        await fs.writeFile(extTombstonesFile(), JSON.stringify(merged, null, 2), 'utf8')
+    // 被这份商店安装取代的旧普通目录(只在 withSuperseded 时):主进程按 supersededPlainInstalls 自己判,不收渲染层递来的目录名。
+    // 不一起挪走的话,卸掉商店版后它不再被取代,下一次列插件就重新运行(方案页 A ③ 实拍过)。
+    const superseded: Array<{ dir: string; id: string }> = []
+    if (opts?.withSuperseded === true) {
+      const names = entries.filter((e) => e.isDirectory() && !e.name.startsWith('.')).map((e) => e.name)
+      for (const [plain, store] of await supersededPluginDirs(root, names)) {
+        if (store !== path.basename(target)) continue
+        const pid = pluginIdOf(plain, await fs.readFile(path.join(root, plain, 'manifest.json'), 'utf8').then((x) => (JSON.parse(x) as { id?: unknown } | null)?.id, () => undefined))
+        if (pid) superseded.push({ dir: plain, id: pid })
       }
-    } catch { /* manifest 坏/缺 → 无可声明 */ }
+    }
+    // 墓碑:声明过的扩展名永久保留豁免(库里数据文件还在,掉回笔记=毁档),再删目录。旧副本声明的一样记。
+    for (const dir of [target, ...superseded.map((x) => path.join(root, x.dir))]) {
+      try {
+        const m = JSON.parse(await fs.readFile(path.join(dir, 'manifest.json'), 'utf8')) as { fileExtensions?: unknown }
+        const claimed = Array.isArray(m.fileExtensions)
+          ? m.fileExtensions.filter(isSafePluginExt).map((x) => x.trim().toLowerCase())
+          : []
+        if (claimed.length) {
+          const merged = [...new Set([...readExtTombstones(), ...claimed])].sort()
+          await fs.writeFile(extTombstonesFile(), JSON.stringify(merged, null, 2), 'utf8')
+        }
+      } catch { /* manifest 坏/缺 → 无可声明 */ }
+    }
     // 进回收站(10-28 手动卸载规范,electron/trashWriter):插件文件 + 设置(勾了「保留设置」就不挪)+ 勾了才挪的库里工作文件夹,
     // 一条恢复。工作文件夹由渲染层按 ctx.app.workFolder() 同口径算出(相对库根),这里只认库里、不是库根的真目录。
     const paths: Array<{ path: string; role: string }> = [{ path: target, role: 'files' }]
     if (!opts?.keepSettings) paths.push({ path: path.join(forsionHomeDir(), 'plugins-data', `${id}.json`), role: 'settings' })
+    // 旧副本:文件(role superseded,恢复时同 files 一样查「原处是否又装了」)+ 它自己的设置(跟着 keepSettings)
+    for (const x of superseded) {
+      paths.push({ path: path.join(root, x.dir), role: 'superseded' })
+      if (!opts?.keepSettings && x.id !== id) paths.push({ path: path.join(forsionHomeDir(), 'plugins-data', `${x.id}.json`), role: 'settings' })
+    }
     const vaultRoot = vault.getRoot()
     const rel = typeof opts?.vaultFolder === 'string' ? opts.vaultFolder.replace(/^\/+|\/+$/g, '') : ''
     if (vaultRoot && rel && !rel.split('/').some((seg) => !seg || seg === '.' || seg === '..')) {
@@ -1006,9 +1047,9 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
     try { name = String((JSON.parse(await fs.readFile(path.join(target, 'manifest.json'), 'utf8')) as { name?: unknown }).name || id) } catch { /* 用 id */ }
     // engineTrash:内嵌引擎插件的设置在引擎那边的回收站条目,恢复时渲染层连带放回
     const engineTrash = Array.isArray(opts?.engineTrash) ? opts.engineTrash.filter((x): x is string => typeof x === 'string').slice(0, 50) : []
-    const entry = await moveToDesktopTrash({ ref: id, name, paths, extra: { pluginId: id, dirName: path.basename(target), ...(prefs && Object.keys(prefs).length ? { prefs } : {}), ...(engineTrash.length ? { engineTrash } : {}) } })
+    const entry = await moveToDesktopTrash({ ref: id, name, paths, extra: { pluginId: id, dirName: path.basename(target), ...(superseded.length ? { superseded: superseded.map((x) => x.dir) } : {}), ...(prefs && Object.keys(prefs).length ? { prefs } : {}), ...(engineTrash.length ? { engineTrash } : {}) } })
     vault.setPluginFileExtensions(collectPluginExts()) // 重算(含墓碑):保护不随卸载失效
-    return { ...(entry ? { trashId: entry.id } : {}), dirName: path.basename(target) }
+    return { ...(entry ? { trashId: entry.id } : {}), dirName: path.basename(target), ...(superseded.length ? { superseded: superseded.map((x) => x.dir) } : {}) }
   })
 
   // 恢复主进程写的回收站条目(Forsion 插件):文件放回原处,重算扩展名保护;偏好交回渲染层写 localStorage、重载插件。

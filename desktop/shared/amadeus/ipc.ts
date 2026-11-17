@@ -580,6 +580,18 @@ export interface ExternalPluginSource {
   devProductId?: string
   /** dev 来源正遮蔽全局 plugins 目录里的同 id 安装版(撤下开发副本后安装版会回来)。 */
   shadowsInstalled?: boolean
+  /** 只在商店安装(market-<uuid>)上:同一个包另有一份普通目录的旧安装,被这份取代、已停用(supersededPlainInstalls)。
+   *  设置页据此给一行注记 + 「旧的本地安装」一节;卸载商店版时对话框带上它(uninstallPlugin 的 withSuperseded)。 */
+  supersedes?: SupersededInstall
+}
+
+/** 被商店安装取代的那份普通目录(旧的本地安装)。id = 它的生效 id(= manifest id),按它卸载只会动普通目录。 */
+export interface SupersededInstall {
+  id: string
+  dir: string
+  version: string
+  name: string
+  nameEn?: string
 }
 
 /** 宽松的版本序(预发布排在正式版之前、+build.N 有序):本体在引擎契约 contracts/lenientVersion.ts,引擎的插件依赖检查用同一份。 */
@@ -981,14 +993,17 @@ export interface AmadeusApi {
   writePluginData?(pluginId: string, text: string): Promise<void>
   /** Discover user plugins under the vault's .amadeus/plugins/ folder. */
   listPlugins(): Promise<ExternalPluginSource[]>
-  /** Open the vault's plugins folder in the OS file manager (creating it if needed). */
-  openPluginsFolder(): Promise<void>
+  /** Open the plugins folder in the OS file manager (creating it if needed). dir = one plugin's directory name:
+   *  select that folder instead (ignored unless it is a plain child directory of the plugins folder). */
+  openPluginsFolder(dir?: string): Promise<void>
   /** Write a runnable sample plugin into the plugins folder. */
   scaffoldSamplePlugin(): Promise<void>
   /** 卸载 ~/.forsion/plugins 下的一个 Forsion 插件(按 manifest id 定位目录),挪进回收站(30 天可恢复;可选:桌面实现)。
    *  keepSettings:插件设置原地留着;vaultFolder:库里的工作文件夹(相对库根)一起进回收站;prefs:渲染层摘下的 localStorage 偏好,
-   *  恢复时原样交回。旧调用只传 id = 文件 + 设置进回收站。 */
-  uninstallPlugin?(id: string, opts?: { keepSettings?: boolean; vaultFolder?: string; prefs?: Record<string, string>; engineTrash?: string[] }): Promise<{ trashId?: string; dirName?: string } | void>
+   *  恢复时原样交回。旧调用只传 id = 文件 + 设置进回收站。
+   *  withSuperseded:目标是商店安装时,被它取代的旧普通目录(主进程自己判定,渲染层不递目录名)一起进同一条回收站条目,
+   *  否则卸掉商店版后旧副本立刻重新运行。旧副本的设置跟着 keepSettings 走。 */
+  uninstallPlugin?(id: string, opts?: { keepSettings?: boolean; vaultFolder?: string; prefs?: Record<string, string>; engineTrash?: string[]; withSuperseded?: boolean }): Promise<{ trashId?: string; dirName?: string; superseded?: string[] } | void>
   /** 恢复主进程写的回收站条目(Forsion 插件);extra.prefs 由渲染层写回 localStorage。 */
   trashRestore?(id: string): Promise<{ kind: string; ref: string; extra?: Record<string, unknown> }>
   /** 该 Agent 是不是**这个插件的捆绑包播种的**(引擎新播种时写 agents/<slug>/.bundle-origin = bundle 目录名)。

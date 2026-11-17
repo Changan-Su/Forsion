@@ -237,6 +237,31 @@ const test = async (name, fn) => {
     }
     assert.deepEqual((await host(fs).listPlugins()).map((p) => [p.id, p.version]), [[store, '0.5.0']])
     assert.deepEqual((await host(fs).listSpaces()).map((s) => s.plugin), [store])
+    // 设置页的注记 / 「旧的安装」一节:商店那份带上它取代的旧副本(桌面 readExternalPlugins 同口径)
+    assert.deepEqual((await host(fs).listPlugins())[0].supersedes, { id: 'demo-suite', dir: 'demo-suite', version: '0.1.0', name: 'Demo' })
+  })
+
+  await test('⚠️卸载商店版 + withSuperseded:旧普通目录一起删(否则卸完它立刻重新运行);不带就只删商店那份', async () => {
+    const store = 'market-00000000-0000-4000-8000-00000000000a'
+    const two = () => {
+      const fs = memFs()
+      for (const [dir, version] of [['demo-suite', '0.1.0'], [store, '0.5.0']]) { put(fs, `plugins/${dir}/manifest.json`, manifest({ id: 'demo-suite', version })); put(fs, `plugins/${dir}/main.js`, '') }
+      put(fs, 'plugins/other/manifest.json', manifest({ id: 'other' })); put(fs, 'plugins/other/main.js', '')
+      return fs
+    }
+    const dirs = (fs) => [...new Set([...fs.files.keys()].filter((k) => k.startsWith('plugins/')).map((k) => k.split('/')[1]))].sort()
+    const a = two()
+    await host(a).uninstallPlugin(store, { withSuperseded: true })
+    assert.deepEqual(dirs(a), ['other'])
+    const b = two()
+    await host(b).uninstallPlugin(store)
+    assert.deepEqual(dirs(b), ['demo-suite', 'other'])
+    assert.deepEqual((await host(b).listPlugins()).map((p) => p.id).sort(), ['demo-suite', 'other']) // 旧副本回来运行 = 用户勾了「保留旧副本」
+    // 清理旧副本 = 按它的 id 卸载:只删普通目录,商店那份不动、不再带注记
+    const c = two()
+    await host(c).uninstallPlugin('demo-suite')
+    assert.deepEqual(dirs(c), [store, 'other'].sort())
+    assert.equal((await host(c).listPlugins()).find((p) => p.id === store).supersedes, undefined)
   })
 
   await test('listSpaces 图标:iconFile 先找 Space 自己的目录、再找插件包根;不合规 / 越界的名字 / 没写 → 没有 iconUrl,配方照给', async () => {

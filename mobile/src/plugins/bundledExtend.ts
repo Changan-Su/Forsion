@@ -36,6 +36,6 @@ export function withBundledExtend(host: MobilePluginHost, appVersion: () => stri
       const { manifest, recipes } = await source()
       return [...(await host.listSpaces()).filter((p) => p.plugin !== id), ...(gatePluginManifest(manifest, appVersion()) ? [] : recipes)]
     },
-    uninstallPlugin: (pid) => pid === id ? Promise.reject(new Error('Core plugins cannot be uninstalled')) : host.uninstallPlugin(pid),
+    uninstallPlugin: (pid, opts) => pid === id ? Promise.reject(new Error('Core plugins cannot be uninstalled')) : host.uninstallPlugin(pid, opts),
   }
 }
