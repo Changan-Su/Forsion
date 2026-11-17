@@ -135,6 +135,7 @@ import { REMOTE_LOCK_FILE } from '../shared/remoteSafety' // P1-K2
 import { attachHostChannel, startP2pProxy, type P2pProxyHandle } from './unitP2p'
 import { P2pManager, DEFAULT_STUN } from './p2pWindow'
 import type { ExternalPluginSource } from '@amadeus-shared/ipc'
+import { gatePluginManifest } from '@amadeus-shared/ipc'
 import { readConfig as readAmadeusConfig } from './amadeus/settings'
 import { syncVaultRoot } from './amadeus/vaultList'
 import { registerRemoteSync } from './remotesyncIpc'
@@ -1223,10 +1224,14 @@ async function readSpacesList(opts: { dev?: boolean } = {}): Promise<Array<{ slu
       let pid: string
       let manifestId: unknown
       try {
-        manifestId = (JSON.parse(await readFile(join(proot, p.name, 'manifest.json'), 'utf8')) as { id?: unknown }).id
+        const m = JSON.parse(await readFile(join(proot, p.name, 'manifest.json'), 'utf8')) as { id?: unknown; apiVersion?: unknown; minAppVersion?: unknown }
+        manifestId = m.id
         // 归属 id 与插件装载器(amadeus/ipc.ts pluginIdOf)同一条规则:商店目录 market-<uuid> 就是运行身份
         const cand = effectivePluginId(p.name, manifestId)
         if (!cand) continue // manifest id 与目录名皆非法 → 与拒载口径一致
+        // 版本门禁挡住的插件(接口版本不符 / 应用太旧)不跑,它的 Space 也不列:只摆内置视图的配方照样过得了渲染层的校验,
+        // 插件没在跑、Space 却冒出来(手机 listSpaces 同口径)。
+        if (gatePluginManifest(m, app.getVersion())) continue
         pid = cand
       } catch { continue } // 无 manifest.json = 非插件目录,跳过
       // 开发副本遮住同 id 的安装版;商店安装按包 id 认(插件列表同口径,见 amadeus/ipc.ts readExternalPlugins)

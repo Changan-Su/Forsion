@@ -19,7 +19,7 @@
  */
 import { gatePluginManifest, type ExternalPluginSource } from '../../../desktop/shared/amadeus/ipc'
 import { installedPluginFields, type InstalledPluginManifest } from '../../../desktop/shared/amadeus/pluginSource'
-import { effectivePluginId } from '../../../desktop/shared/products'
+import { bindRecipeToPlugin, effectivePluginId } from '../../../desktop/shared/products'
 import { supersededPlainInstalls } from '../../../desktop/shared/pluginAliases'
 import { isSafeSlug, safeEntryPath } from '../../../desktop/shared/marketPackage'
 import { isSafePluginExt } from '../../../desktop/shared/amadeus/pluginFiles'
@@ -343,8 +343,11 @@ export function createPluginHost(fs: PluginFs, opts: { appVersion: () => string 
           // 先看大小:配方每次启动都经 base64 桥整份读进内存,包里塞一份几十 MB 的 space.json 会把启动拖垮。
           const st = await fs.stat(`${sdir}/space.json`).catch(() => null)
           if (!st || st.type !== 'file' || st.size > SPACE_RECIPE_MAX_BYTES) continue
-          const json = await readTextOr(fs, `${sdir}/space.json`)
-          if (json === undefined) continue
+          const raw = await readTextOr(fs, `${sdir}/space.json`)
+          if (raw === undefined) continue
+          // 商店装的插件按 market-<UUID> 注册视图,配方却写的是 manifest id:改到运行身份(桌面 readSpacesList 同一步),
+          // 否则配方要的视图一个都对不上,这个 Space 在手机上永远不出现。
+          const json = bindRecipeToPlugin(raw, m.id, id)
           const iconUrl = await readSpaceIcon(fs, json, [sdir, dir])
           out.push({ slug, json, plugin: id, ...(iconUrl ? { iconUrl } : {}) })
         }

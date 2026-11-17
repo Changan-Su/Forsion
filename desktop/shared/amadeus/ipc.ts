@@ -1,4 +1,5 @@
 // The IPC contract shared by main (handlers), preload (bridge), and renderer (consumer).
+import { cmpVersion } from '../../../tangu-agent/src/contracts/lenientVersion'
 import type { LoadedPage, PageManifest } from './compiler/types'
 import type { DbFile } from './db/schema'
 import type { MdMark } from './mdMarks'
@@ -424,7 +425,8 @@ export function sanitizeRequiresPlugins(raw: unknown, selfId?: string): PluginDe
     seen.add(id)
     const dep: PluginDependency = { id }
     const minVersion = str(o?.minVersion, 32)
-    if (minVersion && /^v?\d+(\.\d+){0,3}$/.test(minVersion)) dep.minVersion = minVersion
+    // 可带预发布号与 +build.N(2.13.8-beta.3 / 2.13.8+build.1;比较用 cmpVersion,引擎 loader 同口径)。以前只认点分数字,带后缀的最低版本被悄悄丢掉
+    if (minVersion && /^v?\d+(\.\d+){0,3}(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$/.test(minVersion)) dep.minVersion = minVersion
     const market = str(o?.market, 64)
     if (market && /^[a-z0-9][a-z0-9-]*$/.test(market)) dep.market = market
     const name = str(o?.name, 80)
@@ -580,42 +582,8 @@ export interface ExternalPluginSource {
   shadowsInstalled?: boolean
 }
 
-/** Release-version order of docs/reference/release-versions.md (contracts/releaseVersion.mjs), but lenient: numeric core
- *  (missing parts = 0, leading v ignored), a prerelease sorts below its release, +build.N breaks ties, other metadata ignored:
- *  2.13.8-beta.1 < 2.13.8-beta.2 < 2.13.8 < 2.13.8+build.1. Copied from lcl/spaces/userSpaces.core.ts (main process has no @lcl alias); change both. */
-export function cmpVersion(a: string, b: string): number {
-  // 数字段按字符串比长度再比字典序:合法 semver 的数字段可以超出 Number 精度
-  const numCmp = (x: string, y: string) => {
-    const [u, w] = [x.replace(/^0+(?=\d)/, ''), y.replace(/^0+(?=\d)/, '')]
-    return u === w ? 0 : u.length !== w.length ? (u.length < w.length ? -1 : 1) : u < w ? -1 : 1
-  }
-  const parse = (v: string) => {
-    const [main, meta = ''] = String(v).trim().replace(/^v/i, '').split(/\+(.*)/s)
-    const [core, pre] = main.split(/-(.*)/s)
-    // 元数据里只有 +build.N 有序(安装包修订号),其余不参与比较
-    const rev = /^build\.(\d+)$/.exec(meta)?.[1] ?? '0'
-    return { core: core.split('.').map((x) => parseInt(x, 10) || 0), pre: pre ? pre.split('.') : [], rev }
-  }
-  const pa = parse(a)
-  const pb = parse(b)
-  for (let i = 0; i < Math.max(pa.core.length, pb.core.length); i++) {
-    const d = (pa.core[i] || 0) - (pb.core[i] || 0)
-    if (d) return d < 0 ? -1 : 1
-  }
-  // 同号:带预发布的排在正式版之前(旧版只认数字段,把 2.13.8-beta.1 当成 2.13.8.1、排到 2.13.8 之上)
-  if (!pa.pre.length !== !pb.pre.length) return pa.pre.length ? -1 : 1
-  for (let i = 0; i < Math.max(pa.pre.length, pb.pre.length); i++) {
-    const x = pa.pre[i]
-    const y = pb.pre[i]
-    if (x === undefined || y === undefined) return x === undefined ? -1 : 1 // 前缀相同,段少的在前
-    const nx = /^\d+$/.test(x)
-    const ny = /^\d+$/.test(y)
-    if (nx && ny) { if (numCmp(x, y)) return numCmp(x, y); continue }
-    if (nx !== ny) return nx ? -1 : 1 // 纯数字段排在字母段之前
-    if (x !== y) return x < y ? -1 : 1
-  }
-  return numCmp(pa.rev, pb.rev) // 2.13.7 < 2.13.7+build.1 < 2.13.7+build.10
-}
+/** 宽松的版本序(预发布排在正式版之前、+build.N 有序):本体在引擎契约 contracts/lenientVersion.ts,引擎的插件依赖检查用同一份。 */
+export { cmpVersion }
 
 /** Gate a plugin manifest: apiVersion mismatch → 'api'; app older than minAppVersion → 'minApp'; ok → null. */
 export function gatePluginManifest(

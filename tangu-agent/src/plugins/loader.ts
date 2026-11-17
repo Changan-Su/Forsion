@@ -1,4 +1,5 @@
 import { pluginDependencyIndex } from '../shared/pluginAliases.js';
+import { cmpVersion } from '../contracts/lenientVersion.js';
 import { isHostSandboxRestricted } from '../sandbox/hostSandboxPolicy.js';
 /**
  * 插件发现 + 加载。仅扫描仓库内 `./plugins/`（相对**安装根**解析:`dist/plugins/loader.js`
@@ -50,6 +51,8 @@ export function resolvePluginsDirs(bundleRoots = bundleEnginePluginRoots()): str
 
 /** 插件 id 字符集(kebab)。settings 存储(sanitizeId)与桌面卸载(isSafeSlug)都只认它;requiresPlugins 同口径。 */
 const PLUGIN_ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
+/** minVersion 的写法(与桌面 sanitizeRequiresPlugins 同口径):点分数字,可带预发布号与 +build.N(2.13.8-beta.3、2.13.8+build.1)。 */
+const MIN_VERSION_RE = /^v?\d+(\.\d+){0,3}(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$/;
 /** 单个插件最多声明的前置插件数(与桌面 UI 插件同上限)。 */
 const MAX_REQUIRES = 8;
 
@@ -90,22 +93,15 @@ function sanitizeRequires(raw: unknown, selfId: string): PluginRequirement[] {
     const id = typeof o?.id === 'string' ? o.id.trim() : '';
     if (!PLUGIN_ID_RE.test(id) || id === selfId || out.some((x) => x.id === id)) continue;
     const mv = typeof o?.minVersion === 'string' ? o.minVersion.trim().slice(0, 32) : '';
-    out.push(/^v?\d+(\.\d+){0,3}$/.test(mv) ? { id, minVersion: mv } : { id });
+    out.push(MIN_VERSION_RE.test(mv) ? { id, minVersion: mv } : { id });
   }
   return out;
 }
 
-/** 简单点分数字比较(与桌面同口径):前导 v 忽略、缺的段按 0、非数字段按 0。返回 -1 / 0 / 1。 */
+/** 版本比较(与桌面同一份,contracts/lenientVersion.ts):前导 v 忽略、缺的段按 0、预发布排在正式版之前、+build.N 有序。
+ *  以前只比数字段:装着 2.13.8-beta.3 的依赖被当成满足 minVersion 2.13.8。返回 -1 / 0 / 1。 */
 export function compareVersions(a: string, b: string): number {
-  const parts = (v: string): number[] => String(v ?? '').trim().replace(/^v/i, '').split('.').map((s) => parseInt(s, 10) || 0);
-  const pa = parts(a);
-  const pb = parts(b);
-  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-    const x = pa[i] ?? 0;
-    const y = pb[i] ?? 0;
-    if (x !== y) return x < y ? -1 : 1;
-  }
-  return 0;
+  return cmpVersion(String(a ?? ''), String(b ?? ''));
 }
 
 const CODE_EXT = new Set(['.js', '.mjs', '.cjs', '.node', '.wasm']);

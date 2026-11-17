@@ -217,6 +217,28 @@ const test = async (name, fn) => {
     ])
   })
 
+  await test('商店装的插件(market-<UUID>):配方里的视图改到运行身份,否则这个 Space 在手机上永远不出现', async () => {
+    const fs = memFs()
+    const store = 'market-00000000-0000-4000-8000-00000000000a'
+    put(fs, `plugins/${store}/manifest.json`, manifest({ id: 'demo-suite' })); put(fs, `plugins/${store}/main.js`, '')
+    put(fs, `plugins/${store}/spaces/demo/space.json`, JSON.stringify({ id: 'demo', layout: { main: [{ type: 'plugin:demo-suite:chat' }], left: [], right: [] }, requires: { views: ['plugin:demo-suite:chat', 'chat'] } }))
+    const [space] = await host(fs).listSpaces()
+    assert.equal(space.plugin, store)
+    assert.deepEqual(JSON.parse(space.json).requires.views, [`plugin:${store}:chat`, 'chat'])
+    assert.equal(JSON.parse(space.json).layout.main[0].type, `plugin:${store}:chat`)
+  })
+
+  await test('同一个包的普通目录 + 商店安装:只列商店那份的插件与 Space(桌面 / 引擎同一条规则)', async () => {
+    const fs = memFs()
+    const store = 'market-00000000-0000-4000-8000-00000000000a'
+    for (const [dir, version] of [['demo-suite', '0.1.0'], [store, '0.5.0']]) {
+      put(fs, `plugins/${dir}/manifest.json`, manifest({ id: 'demo-suite', version })); put(fs, `plugins/${dir}/main.js`, '')
+      put(fs, `plugins/${dir}/spaces/demo/space.json`, '{"id":"demo"}')
+    }
+    assert.deepEqual((await host(fs).listPlugins()).map((p) => [p.id, p.version]), [[store, '0.5.0']])
+    assert.deepEqual((await host(fs).listSpaces()).map((s) => s.plugin), [store])
+  })
+
   await test('listSpaces 图标:iconFile 先找 Space 自己的目录、再找插件包根;不合规 / 越界的名字 / 没写 → 没有 iconUrl,配方照给', async () => {
     const fs = memFs()
     const spec = (iconFile) => JSON.stringify({ id: 'x', icon: 'video', iconFile })
