@@ -1,0 +1,61 @@
+/* Computer Use 悬浮小画面(?window=pip)----------------------------------------
+ * 透明系统窗(desktopFloat):卡片自己画圆角与面,页面和原生窗口都不填四角。高度随内容:根不撑满视口,
+ * 渲染层量 .pip-root 的高报给主进程。只消费 skin / language token;不写字号(没有文字),不写滚动条样式。 */
+html[data-window='pip'], html[data-window='pip'] body, html[data-window='pip'] #root {
+  background: transparent !important;
+}
+html[data-window='pip'] body { overflow: hidden; }
+
+.pip-root {
+  width: calc(100vw / var(--uiz, 1));
+  display: block;
+}
+
+.pip-card {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: var(--radius-lg, 14px);
+  background: var(--bg-card, var(--bg, #fff));
+  color: var(--text, #111);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--border, rgba(0, 0, 0, 0.08)) 74%, transparent);
+}
+
+/* 可拖区:整条 drag,只有「放回去」no-drag(drag 区里的点击会被系统吞掉)。插件视图在它下面,不在 drag 区里。 */
+.pip-drag {
+  position: relative;
+  flex: 0 0 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  -webkit-app-region: drag;
+  user-select: none;
+}
+.pip-grip {
+  width: 28px;
+  height: 4px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--text-muted, #888) 38%, transparent);
+}
+.pip-close {
+  position: absolute;
+  top: 1px;
+  right: 4px;
+  width: 16px;
+  height: 16px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm, 6px);
+  background: transparent;
+  color: var(--text-muted, #888);
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+.pip-close:hover { background: color-mix(in srgb, var(--text, #111) 8%, transparent); color: var(--text, #111); }
+.pip-close:focus-visible { outline: 2px solid var(--signal, var(--accent, #2c5f9e)); outline-offset: 1px; }
+
+/* 插件视图高度跟内容走(FloatingViewSurface 缺省 height:100% / overflow:auto 是给可缩放面板的) */
+.pip-card > .floating-plugin-view { height: auto; overflow: hidden; -webkit-app-region: no-drag; }
+.pip-card > .floating-panel-empty { padding: 12px; }

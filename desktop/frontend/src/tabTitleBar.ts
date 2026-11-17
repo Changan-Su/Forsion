@@ -21,7 +21,9 @@ export function installTabTitleBar(): void {
     frame = 0
     const tabs = [...document.querySelectorAll<HTMLElement>('.dv-tabs-and-actions-container')]
       .find((el) => { const r = el.getBoundingClientRect(); return !el.classList.contains('dv-edge-stacked') && r.width > 0 && r.top < 2 && r.height > 0 })
-    const height = Math.max(16, Math.min(128, Math.round(tabs?.getBoundingClientRect().bottom ?? 32)))
+    // 设备页整窗形态(UnitSwitcher UNIT_SURFACE_WHOLE):标签栏被盖住,原生按钮区对齐宿主画的那条标题条
+    const frameBar = root.dataset.unitFrame ? document.querySelector<HTMLElement>('.unitrs--whole .unitfr-bar') : null
+    const height = Math.max(16, Math.min(128, Math.round((frameBar ?? tabs)?.getBoundingClientRect().bottom ?? 32)))
     const symbolColor = root.dataset.mode === 'dark' ? '#ecebea' : '#383837'
     const key = `${height}:${symbolColor}`
     if (key !== last) {
@@ -38,7 +40,7 @@ export function installTabTitleBar(): void {
   }
   const schedule = (): void => { if (!frame) frame = requestAnimationFrame(update) }
   const attributes = new MutationObserver(schedule)
-  attributes.observe(root, { attributes: true, attributeFilter: ['data-mode', 'data-theme', 'style'] })
+  attributes.observe(root, { attributes: true, attributeFilter: ['data-mode', 'data-theme', 'style', 'data-unit-frame'] })
   const resize = new ResizeObserver(schedule)
   // Observe the shell after React has mounted, then stop watching child mutations.
   const mount = new MutationObserver(() => {

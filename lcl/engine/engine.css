@@ -47,21 +47,23 @@
 @media (prefers-reduced-motion: reduce) { .main-enter { animation: none; } }
 
 /* ===== Ribbon(左固定竖条) ===== */
+/* --rb-w / --rb-pad-y / --rb-mac-top:Ribbon 折叠态的宽、上下内距、mac 红绿灯留白。设备页的框(desktop unitSwitcher.css)
+   按同一组量画左下角头像和标题条,改这里两边一起跟。 */
 .rb {
-  width: 44px;
+  width: var(--rb-w, 44px);
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
   justify-content: flex-start;
   align-items: center;
-  padding: 8px 0;
+  padding: var(--rb-pad-y, 8px) 0;
   background: var(--sidebar-bg);
   position: relative; /* 收纳夹/「…」浮层、右键菜单以 ribbon 为定位参照(fixed 定位读其 rect) */
   /* 与侧栏之间刻意无分割线(用户拍板):两侧同为 --sidebar-bg,连成一片背景。 */
   /* 顶部交通灯避让:mac 下只在 ribbon 顶部留空(交通灯落此),中间 tab 栏 / 右栏直接顶到最上,免中/右留白。 */
   -webkit-app-region: drag;
 }
-[data-platform='mac'] .rb { padding-top: 30px; }
+[data-platform='mac'] .rb { padding-top: var(--rb-mac-top, 30px); }
 /* mac:交通灯落在 ribbon 左上角,会越过 44px ribbon 约 20px → 仅把紧邻 ribbon 的「左」侧栏图标 tab 右移避让
  * (右栏远离交通灯,不动 → 用 .wb-tab--left 精确只命中左栏组)。 */
 [data-platform='mac'] .dockview-theme-lcl .dv-groupview:has(.wb-tab--left) .dv-tabs-and-actions-container { padding-left: 26px; }

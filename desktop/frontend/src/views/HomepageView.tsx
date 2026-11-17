@@ -20,7 +20,7 @@
  * IndexedDB 自定义原图是三个可切换来源;没有图片时也由 Genesis 主题 token 生成可取样的简约舞台。
  * 旧版窗口管理器与账号角仍不搬;浏览器搜索也不再回来。
  */
-import { Fragment, useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useMotionPrefs } from '../theme/motionTheme'
 import { flushSync } from 'react-dom'
 import {
@@ -32,9 +32,9 @@ import { SortableContext, rectSortingStrategy, sortableKeyboardCoordinates, useS
 import { CSS as DndCSS } from '@dnd-kit/utilities'
 import {
   ArrowUp, Check, FolderMinus, Grid2X2, Image,
-  Mic, Pencil, Plus, RefreshCw, Upload, X,
+  Mic, Pencil, Plus, RefreshCw, Sparkles, Upload, X,
 } from 'lucide-react'
-import { commandHotkeyText, useSpaceStore, useRibbonStore, label, OverlayAt, useNativeChromeSpaces, useNativeSheetMenu, presentNativeChecklist, openObject, objectContextMenuHandler, type SheetMenuItem, type SheetMenuSection, type Place } from '@lcl/engine'
+import { commandHotkeyText, useSpaceStore, useRibbonStore, label, OverlayAt, useNativeChromeSpaces, useNativeSheetMenu, presentNativeChecklist, presentNativeConfirm, openObject, objectContextMenuHandler, type SheetMenuItem, type SheetMenuSection, type Place } from '@lcl/engine'
 import { CtxMenuButtons } from '../components/CtxMenuButtons'
 import { SortableTile, SpaceOrganizer, SWITCH_SPACE_COMMAND, TileVisual, dockCollision, moveOutItem, setHomeOrganizerToggle } from './SpaceOrganizer'
 import { spaceOpensElsewhere, spaceRef } from '../objects/space'
@@ -43,7 +43,7 @@ import type { SpaceDefinition, RibbonItem, ViewProps } from '@lcl/engine'
 import { RIBBON_ACTION_PREFIX } from '../amadeus/plugins/ribbonAction'
 import { askString } from '@amadeus/components/askString'
 import { readTanguDrafts, readTanguNewChat, type TanguNewChatDispatch } from '../amadeus/plugins/tanguSeam'
-import { registerMessages, useI18n, type Locale } from '../i18n'
+import { registerMessages, translationValues, useI18n, type Locale } from '../i18n'
 import { formatLongDate, formatTime } from '../format/time'
 import {
   clearCustomWallpaper, fetchBingWallpapers, loadHomepageWallpaperPrefs, onHomepageWallpaperPrefsChange, readCustomWallpaper,
@@ -58,7 +58,10 @@ import { HOME_PARTS, setHomeEditHandler, useHomeLayout, type HomePart } from './
 import { HOME_GUIDE_OWNER, HomeRail, HomeRow, PartFrame, PartsLibrary, RAIL_GEOMETRY, WidgetLibrary, centerShift, dragPart, dragWidget, railModes, removePart } from './HomeWidgetParts'
 import { cancelLibraryDrag, forgetLibraryDrop, startLibraryDrag, undoLibraryDrop, type LibItem } from './homeLibraryDrag'
 import { HomeWidgetEnv, useShowableIds } from './homeWidgetKinds'
-import { track } from '../achievements/store'
+import { track, useAchievements } from '../achievements/store'
+import { useApp } from '../stores/appStore'
+import { clearPhoneSuggest, phoneGuide, phoneSuggestPending } from '../components/onboarding/phoneGuide'
+import { HOME_SUGGEST_KEYS, showHomeSuggest, suggestNeedsConfirm, SUGGEST_FITS } from './homeSuggest'
 import type { OrganizerTab } from './SpaceOrganizer'
 import { ComputerHistoryAsk } from '../components/ComputerHistoryAsk'
 import './homepage.css'
@@ -224,12 +227,38 @@ registerMessages({
   'home.cards.editTitle': { zh: '主页卡片', en: 'Home cards' },
   'home.cards.editHint': { zh: '勾选的显示在主页，1 到 {max} 张，按勾选的先后排。', en: 'Checked ones show on Home (1 to {max}), in the order you check them.' },
   'home.cards.done': { zh: '完成', en: 'Done' },
+  // 手机:走完手机引导后问候下面那四条起步建议(只填不发,发出第一条消息后收起;views/homeSuggest.ts)
+  'home.suggest.title': { zh: '试试这些 · 点了只填进输入框，不会直接发', en: 'Try these · tap to fill, nothing is sent' },
+  'home.suggest.today': { zh: '理一理今天要做的事', en: 'Sort out what I need to do today' },
+  'home.suggest.remind': { zh: '明早 8 点提醒我开会', en: 'Remind me of my 8 a.m. meeting' },
+  'home.suggest.summarize': { zh: '总结我粘贴的文章', en: 'Summarize the article I paste' },
+  'home.suggest.help': { zh: '你能帮我做什么？', en: 'What can you help me with?' },
+  'home.suggest.replaceTitle': { zh: '替换输入框里的内容？', en: "Replace what's in the input?" },
+  'home.suggest.replace': { zh: '替换', en: 'Replace' },
+  'home.suggest.cancel': { zh: '取消', en: 'Cancel' },
 })
 
 interface HomeCard { id: string; name: string; statusId: string; spaceId?: string; icon?: SpaceDefinition['icon'] | RibbonItem['icon']; open: () => void }
 
 /** 手机主页的大卡片。单独成组件:近况要订阅会话 / 笔记 / 成就 / 插件四份状态,桌面的主页不该为它们多重画。
  *  放哪几张由用户定(长按任意一张,见 homeCards.ts);没改过 = 架子上头两个 Space + 商店、成就。 */
+/** 手机主页的四条起步建议,放在大卡片上面(homepage.css 文末 .hp-suggest)。点哪条由外面接(填草稿 + 展开输入区)。 */
+function HomeSuggest({ onPick }: { onPick: (key: string) => void }) {
+  const { t } = useI18n()
+  return (
+    <section className="hp-suggest">
+      <div className="hp-suggest-title"><Sparkles aria-hidden />{t('home.suggest.title')}</div>
+      <div className="hp-suggest-grid">
+        {HOME_SUGGEST_KEYS.map((key) => (
+          <button key={key} type="button" className="hp-suggest-chip" data-suggest={key.slice('home.suggest.'.length)} onClick={(event) => { event.stopPropagation(); onPick(key) }}>
+            <span className="hp-suggest-text">{t(key)}</span>
+          </button>
+        ))}
+      </div>
+    </section>
+  )
+}
+
 function HomeCards({ tiles, actions, onLaunch }: { tiles: Tile[]; actions: RibbonItem[]; onLaunch: (spaceId: string) => void }) {
   const { t } = useI18n()
   const status = useCardStatus()
@@ -635,6 +664,82 @@ export function HomepageView(_props: ViewProps) {
     if (phone && !composerFocused) setPillDraft(rootRef.current?.querySelector<HTMLTextAreaElement>('.hp-composer .t2c-ta')?.value.trim() ?? '')
   }, [phone, composerFocused])
 
+  // 手机 App 走完完整的手机引导后,问候下面四条起步建议(条件见 homeSuggest.ts)。
+  // 记号是向导关上那一刻写的,主页那时已经挂在浮层底下:引导一收起就重读一次。
+  const onboarding = useApp((s) => s.onboarding)
+  const sentOnce = useAchievements((s) => (s.counters['chat.send'] || 0) > 0)
+  const phoneApp = phoneGuide() !== null
+  const [suggestPending, setSuggestPending] = useState(() => phoneApp && phoneSuggestPending())
+  useEffect(() => {
+    if (phoneApp && !onboarding) setSuggestPending(phoneSuggestPending())
+  }, [phoneApp, onboarding])
+  // 发出过第一条消息:清掉记号,以后不再出
+  useEffect(() => {
+    if (!phoneApp || !sentOnce) return
+    clearPhoneSuggest()
+    setSuggestPending(false)
+  }, [phoneApp, sentOnce])
+  // 放不下就逐级让:四条 + 全部卡片 → 四条 + 两行卡片 → 两条 + 两行卡片 → 不出(SUGGEST_FITS;样式在 homepage.css 文末)。
+  // 每次都从头判:屏高变了(转屏、分屏)、问候折行、换语言、长按改了卡片都重判,变宽裕了能放回来。
+  // 档位直接写在根的 data-suggest-fit 上、不走 state:同一拍里试完几档才落定,中间不出一帧挤着的样子;
+  // 卡片只在画的时候藏第三行(CSS :nth-child),HomeCards 手里那份清单不动,长按改卡片存下的还是全部。
+  const suggestShown = showHomeSuggest({ phone, tangu: hasTangu, phoneApp, pending: suggestPending, onboarding, sent: sentOnce, composerFocused })
+  useLayoutEffect(() => {
+    if (!suggestShown) return
+    const root = rootRef.current
+    const stack = root?.querySelector<HTMLElement>('.hp-stack')
+    const title = stack?.querySelector<HTMLElement>('.hp-title')
+    const block = stack?.querySelector<HTMLElement>('.hp-suggest')
+    const pill = stack?.querySelector<HTMLElement>('.hp-pill')
+    if (!root || !stack || !title || !block || !pill) return
+    // 放得下 = 输入条没被挤出主页底边,并且问候和这一块之间除了固定间距还剩半个间距(刚好塞满时条和卡会被压扁,不算放得下)
+    const fits = (): boolean => {
+      const box = stack.getBoundingClientRect()
+      // rowGap 是没算缩放的布局 px,外接矩形是画出来的坐标(手机壳的 body zoom、界面缩放):折到同一种坐标再比
+      const zoom = stack.offsetHeight ? box.height / stack.offsetHeight : 1
+      const gap = (parseFloat(getComputedStyle(stack).rowGap) || 0) * zoom
+      return pill.getBoundingClientRect().bottom <= box.bottom + 1
+        && block.getBoundingClientRect().top - title.getBoundingClientRect().bottom >= gap * 1.5 - 0.5
+    }
+    const decide = (): void => {
+      for (const fit of SUGGEST_FITS) {
+        root.dataset.suggestFit = fit
+        if (fit === 'none' || fits()) break
+      }
+    }
+    decide()
+    const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(decide)
+    ro?.observe(root)
+    ro?.observe(title)
+    // 卡片张数变了(长按改卡片)也重判;看子节点增减,不看卡片区的尺寸 —— 那是档位自己会改的
+    const cards = stack.querySelector('.hp-cards')
+    const mo = cards && typeof MutationObserver !== 'undefined' ? new MutationObserver(decide) : null
+    if (cards) mo?.observe(cards, { childList: true })
+    // 字体晚到会让建议从一行变两行:这一块自己的尺寸不拿来观察(档位会改它),改听字体装完
+    const fonts = typeof document !== 'undefined' ? document.fonts : undefined
+    fonts?.addEventListener?.('loadingdone', decide)
+    return () => { ro?.disconnect(); mo?.disconnect(); fonts?.removeEventListener?.('loadingdone', decide); delete root.dataset.suggestFit }
+  }, [suggestShown, locale])
+  /** 点一条建议 = 填进主页输入框并展开、放光标,不发。输入框里有用户自己写的东西时先问要不要替换。 */
+  const pickSuggest = (key: string): void => {
+    const seam = readTanguDrafts()
+    if (!seam) return
+    const text = t(key)
+    const fill = (): void => { seam.replace('new', { text, pastes: [] }); openComposer(false) }
+    if (!suggestNeedsConfirm(seam.read()['new'], HOME_SUGGEST_KEYS.flatMap((k) => translationValues(k)))) {
+      fill() // 同一次点击里同步做完:键盘只认用户的这一下
+      return
+    }
+    void (async () => {
+      const title = t('home.suggest.replaceTitle')
+      const out = await presentNativeConfirm({ title, confirm: t('home.suggest.replace'), cancel: t('home.suggest.cancel') })
+      // 原生半屏不在(或画不出来)回落系统确认框,同设置页
+      const ok = out.handled ? out.value != null : window.confirm(title)
+      // 确认之后才放光标:这时已经不在用户那一下里了,Android 上键盘可能不自己弹,点一下输入框即可
+      if (ok) fill()
+    })()
+  }
+
   const showOrganizer = (byKey = false, tab: OrganizerTab = 'spaces'): void => {
     setOrganizerTab(tab)
     setOrganizerByKey(byKey)
@@ -769,6 +874,7 @@ export function HomepageView(_props: ViewProps) {
 
         {/* 手机:大卡片,各带一行近况。默认 = 架子上的头两个 Space + 商店、成就;长按任意一张改成自己要的那几张(见 HomeCards)。
             其余 Space 在 Dock 上,收纳层照旧长按空白处进。 */}
+        {suggestShown && <HomeSuggest onPick={pickSuggest} />}
         {phone && <HomeCards tiles={tiles} actions={fixedHomeActions} onLaunch={launchSpace} />}
     </>
   )

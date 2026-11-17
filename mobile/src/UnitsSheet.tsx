@@ -28,7 +28,8 @@ import { cloudApiBase, focusRef, onFocusChange } from '@/services/engine/targets
 import { installRunLocationChooser, setDraftLocation } from '@/stores/runLocationStore' // P1-K7a
 import { clearDeviceSticky, noteDeviceProbe, noteDeviceSticky } from '@/services/deviceMarks' // P1-K7a
 import { HOME_REF, type TargetRef } from '@/services/engine/target'
-import { beginAttempt, endAttempts, isRunnableUnit, noteAttempt, NO_MARKS, removeThisPhone, rosterNameOf, rowTone, runOn, runRows, statusKey, type PhoneIssue, type RowMarks, type RunRow } from './unitsSheetModel'
+import type { ProbeResult, StickyRefusal } from '@/services/deviceStatus'
+import { beginAttempt, endAttempts, isRunnableUnit, noteAttempt, NO_MARKS, removeThisPhone, rosterNameOf, rowTone, runOn, runRows, statusKey, type PhoneIssue, type RowMarks, type RunOnOutcome, type RunRow } from './unitsSheetModel'
 import './unitsSheet.css'
 
 /**
@@ -44,6 +45,53 @@ export function selectRunLocation(ref: TargetRef): Promise<void> {
 
 /** 最近一次拉到的名册(只给 selectRunLocation 取展示名;弹层关掉后仍留着 —— 「移除本机」切回云端不需要它)。 */
 let lastRoster: UnitInfo[] = []
+
+/** 手机引导「在哪运行」那屏读的是共享名册(stores/deviceSessionsStore),由它把名册交过来,切到电脑时焦点也带得上名字。
+ *  只收读到的名册:读不到(null)不清掉上一份。 */
+export function setRunRoster(units: UnitInfo[]): void {
+  lastRoster = units
+}
+
+export interface RunOnUnitHooks {
+  /** runOn 的过程(「请在 X 上允许」等)落到调用方自己那一行的标记上。 */
+  progress(p: { probe?: ProbeResult; sticky?: StickyRefusal }): void
+  /** 懒登记刚完成(调用方据此刷新「本机」一行)。 */
+  onSelfRegistered?(): void
+}
+
+/**
+ * 点一台电脑之后的整段流程:懒登记本机 → 问那台电脑认不认这台手机 → 探一次引擎 → 经唯一出口 selectRunLocation 生效;
+ * 结果同步进共享的设备状态表(侧栏「我的电脑」分组与「在哪运行」药丸读它)。
+ * 本弹层和手机引导「在哪运行」那屏共用这一份,两处点电脑的结果不会各走各的(引导那屏不许只切焦点、跳过确认与探针)。
+ * 每行的标记(探针 / 粘滞)仍由调用方自己经 beginAttempt / noteAttempt / endAttempts 管。
+ */
+export function runOnUnit(unitId: string, signal: AbortSignal, hooks: RunOnUnitHooks): Promise<RunOnOutcome> {
+  return runOn(cloudApiBase(), unitId, {
+    // 懒登记一完成就刷新「本机」一行(M1B):runOn 接下来可能在「请在那台电脑上允许」里等上几十秒,
+    // 等它整个结束才刷新 = 这段时间一直写着「尚未登记」,而本机其实已经登记好了
+    ensureSelf: async () => {
+      const r = await (window.tangu?.unitEnsureSelf?.() ?? Promise.resolve({ ok: false as const, code: 'native_only' }))
+      if (r.ok && !signal.aborted) hooks.onSelfRegistered?.()
+      return r
+    },
+    fetchJson: async (url, init) => {
+      const r = await fetch(url, init)
+      let json: unknown = null
+      try { json = await r.json() } catch { /* 空体 / 非 JSON */ }
+      return { status: r.status, json }
+    },
+    select: selectRunLocation,
+    sleep: (ms) => new Promise((res) => setTimeout(res, ms)),
+    now: () => Date.now(),
+    progress: hooks.progress,
+  }, signal).then((out) => {
+    if (signal.aborted || out.kind === 'cancelled') return out
+    // P1-K7a:结果同步进共享的设备状态表
+    if (out.kind === 'selected') { noteDeviceProbe(unitId, { ok: true }); clearDeviceSticky(unitId) }
+    else if (out.kind === 'device') { if (out.probe) noteDeviceProbe(unitId, out.probe); if (out.sticky) noteDeviceSticky(unitId, out.sticky) }
+    return out
+  })
+}
 
 /** 当前运行位置 = 整端焦点(K6-S2)。 */
 function currentRunLocation(): TargetRef {
@@ -246,29 +294,9 @@ export function MobileUnitsSheet(): React.ReactElement | null {
       if (ac.signal.aborted) return
       setMarks((m) => noteAttempt(m, row.id, p))
     }
-    void runOn(cloudApiBase(), row.id, {
-      // 懒登记一完成就刷新「本机」一行(M1B):runOn 接下来可能在「请在那台电脑上允许」里等上几十秒,
-      // 等它整个结束才刷新 = 这段时间一直写着「尚未登记」,而本机其实已经登记好了
-      ensureSelf: async () => {
-        const r = await (window.tangu?.unitEnsureSelf?.() ?? Promise.resolve({ ok: false as const, code: 'native_only' }))
-        if (r.ok && !ac.signal.aborted) loadSelf()
-        return r
-      },
-      fetchJson: async (url, init) => {
-        const r = await fetch(url, init)
-        let json: unknown = null
-        try { json = await r.json() } catch { /* 空体 / 非 JSON */ }
-        return { status: r.status, json }
-      },
-      select: selectRunLocation,
-      sleep: (ms) => new Promise((res) => setTimeout(res, ms)),
-      now: () => Date.now(),
-      progress: note,
-    }, ac.signal).then((out) => {
+    // 流程本体(含共享设备状态表的同步)在 runOnUnit,手机引导那屏也走它
+    void runOnUnit(row.id, ac.signal, { progress: note, onSelfRegistered: loadSelf }).then((out) => {
       if (ac.signal.aborted || out.kind === 'cancelled') return
-      // P1-K7a:结果同步进共享的设备状态表(侧栏「我的电脑」分组与「在哪运行」药丸读它)
-      if (out.kind === 'selected') { noteDeviceProbe(row.id, { ok: true }); clearDeviceSticky(row.id) }
-      else if (out.kind === 'device') { if (out.probe) noteDeviceProbe(row.id, out.probe); if (out.sticky) noteDeviceSticky(row.id, out.sticky) }
       if (out.kind === 'phone') setIssue(out.issue)
       else if (out.kind === 'device') note(out)
       loadSelf() // 首次选电脑会顺带登记本机:「本机」段跟着刷新

@@ -12,6 +12,7 @@ import { Markdown } from './Markdown'
 import { EmptyState } from './EmptyState'
 import './globalSkillsLibrary.css'
 import { homeTarget } from '../services/engine/targets'
+import { isDelegatedAdmin } from '../services/delegatedAdmin'
 import { SkillUninstallDialog } from './UninstallDialog'
 import { agentName } from '../agentName'
 
@@ -140,6 +141,8 @@ export function GlobalSkillsLibrary({ cfg, localHost, initialSkillKey, onImportC
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
   const [deleting, setDeleting] = useState<SkillCatalogEntry | null>(null)
+  // 委托管理员:全局技能只能看清单 —— 详情、新建、改、复制、发布、暂停全局都在那台设备的白名单外;按 Agent 启停在 Agent 的技能页。
+  const delegated = isDelegatedAdmin()
 
   const refresh = useCallback(async () => {
     setLoading(true)
@@ -180,7 +183,7 @@ export function GlobalSkillsLibrary({ cfg, localHost, initialSkillKey, onImportC
     return () => window.removeEventListener('forsion:settings-skill-focus', focus)
   }, [])
   useEffect(() => {
-    if (!selected || selected.kind !== 'catalog') { setDetail(null); return }
+    if (!selected || selected.kind !== 'catalog' || delegated) { setDetail(null); return }
     let active = true
     setDetail(null)
     setDetailError('')
@@ -272,7 +275,11 @@ export function GlobalSkillsLibrary({ cfg, localHost, initialSkillKey, onImportC
   }
   const provenanceLabel = (skill: SkillCatalogEntry): string => t(skill.provenance === 'user' ? 'globalSkills.fromUser' : skill.provenance === 'bundle' ? 'globalSkills.fromBundle' : 'globalSkills.fromBuiltin')
   const statusLabel = (skill: SkillCatalogEntry): string => t(skill.availability === 'disabled' ? 'globalSkills.disabled' : skill.availability === 'shadowed' ? 'globalSkills.shadowed' : 'globalSkills.available')
-  const catalogRow = (skill: SkillCatalogEntry) => <button type="button" key={skill.key} className={`gsk-row${selected?.kind === 'catalog' && selected.key === skill.key ? ' selected' : ''}`} onClick={() => choose({ kind: 'catalog', key: skill.key })} aria-pressed={selected?.kind === 'catalog' && selected.key === skill.key}>
+  const catalogRow = (skill: SkillCatalogEntry) => delegated ? <div key={skill.key} className="gsk-row" data-skill-key={skill.key}>
+    <span className="gsk-row-icon"><Sparkles size={15} /></span>
+    <span className="gsk-row-copy"><strong>{skill.name}</strong><small>{skill.description || skill.slug}</small></span>
+    <span className={`gsk-state${skill.disabled ? ' paused' : ''}`}>{statusLabel(skill)}</span>
+  </div> : <button type="button" key={skill.key} className={`gsk-row${selected?.kind === 'catalog' && selected.key === skill.key ? ' selected' : ''}`} onClick={() => choose({ kind: 'catalog', key: skill.key })} aria-pressed={selected?.kind === 'catalog' && selected.key === skill.key}>
     <span className="gsk-row-icon"><Sparkles size={15} /></span>
     <span className="gsk-row-copy"><strong>{skill.name}</strong><small>{skill.description || skill.slug}</small></span>
     <span className={`gsk-state${skill.disabled ? ' paused' : ''}`}>{statusLabel(skill)}</span>
@@ -289,7 +296,7 @@ export function GlobalSkillsLibrary({ cfg, localHost, initialSkillKey, onImportC
       ] as const).filter(([id]) => CLOUD_SKILLS_ENABLED || id !== 'cloud').map(([id, key]) => ({ id, label: t(key), selected: filter === id, onSelect: () => setFilter(id) }))}>
         <span>{t(({ all: 'globalSkills.allSources', user: 'globalSkills.mine', builtin: 'globalSkills.fromBuiltin', bundle: 'globalSkills.fromBundle', cloud: 'globalSkills.cloud' } as const)[filter])}</span><ChevronDown size={13} />
       </CapabilityMenu>
-      {catalog !== null && <CapabilityMenu label={t('globalSkills.add')} className="btn primary sm" items={[
+      {catalog !== null && !delegated && <CapabilityMenu label={t('globalSkills.add')} className="btn primary sm" items={[
         { id: 'create', label: t('globalSkills.create'), icon: <FileText size={14} />, onSelect: () => setEditor({ kind: 'create', name: '', slug: '', slugEdited: false, description: '', content: '' }) },
         ...(localHost && !!window.tangu?.pickDirectory ? [{ id: 'import', label: t('globalSkills.import'), icon: <FolderInput size={14} />, onSelect: () => void startImport() }] : []),
         ...(onImportCli ? [{ id: 'cli', label: t('globalSkills.importCli'), icon: <FolderInput size={14} />, onSelect: onImportCli }] : []),
@@ -297,7 +304,8 @@ export function GlobalSkillsLibrary({ cfg, localHost, initialSkillKey, onImportC
       ]}><Plus size={13} />{t('globalSkills.add')}<ChevronDown size={12} /></CapabilityMenu>}
       <button className="icon-btn" type="button" onClick={() => void refresh()} title={t('globalSkills.refresh')} aria-label={t('globalSkills.refresh')}><RefreshCw size={14} className={loading ? 'spin' : ''} /></button>
     </div>
-    {catalog !== null && <p className="gsk-host-note">{t(localHost ? 'globalSkills.localHost' : 'globalSkills.remoteHost')}{localHost && !!window.tangu?.openSkillsDir && <button type="button" onClick={() => void window.tangu?.openSkillsDir?.()}><FolderOpen size={13} />{t('globalSkills.openFolder')}</button>}</p>}
+    {catalog !== null && delegated && <p className="gsk-host-note" data-delegated-admin>{t('delegatedAdmin.skillsReadOnly')}</p>}
+    {catalog !== null && !delegated && <p className="gsk-host-note">{t(localHost ? 'globalSkills.localHost' : 'globalSkills.remoteHost')}{localHost && !!window.tangu?.openSkillsDir && <button type="button" onClick={() => void window.tangu?.openSkillsDir?.()}><FolderOpen size={13} />{t('globalSkills.openFolder')}</button>}</p>}
     <div className="gsk-columns">
       <div className="gsk-list">
         {catalog === null && <p className="gsk-list-message">{loading ? t('globalSkills.loading') : catalogError || t('globalSkills.unavailable')}</p>}

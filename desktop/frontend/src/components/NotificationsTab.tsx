@@ -38,6 +38,8 @@ export function sendTestNotification(): void {
 export function NotificationsTab({ onOpenInbox }: { onOpenInbox?: () => void } = {}) {
   const { t } = useI18n()
   const prefs = useNotifications((s) => s.prefs)
+  // 手机窄屏上提示是状态栏下的一条横幅(NotificationHost 打开 banner 模式),说明照实说;Pad / 横屏 / 桌面是右上角的卡
+  const phoneBanner = useNotifications((s) => s.banner)
   const setEnabled = useNotifications((s) => s.setEnabled)
   const setOsEnabled = useNotifications((s) => s.setOsEnabled)
   const setEventOn = useNotifications((s) => s.setEventOn)
@@ -54,7 +56,7 @@ export function NotificationsTab({ onOpenInbox }: { onOpenInbox?: () => void } =
 
   const groups: PluginSettingsGroup[] = [
     {
-      id: 'delivery', icon: 'bell', title: t('ntf.delivery'), desc: t('ntf.enableHint'),
+      id: 'delivery', icon: 'bell', title: t('ntf.delivery'), desc: t(phoneBanner ? 'ntf.enableHintPhone' : 'ntf.enableHint'),
       actions: [{ label: t('ntf.sendTest'), onClick: () => { window.tangu?.requestMainAction ? window.tangu.requestMainAction('test-notification') : sendTestNotification() } }],
       items: [
         { type: 'switch', id: 'enabled', title: t('ntf.enable'), value: prefs.enabled, onChange: setEnabled },

@@ -1009,6 +1009,16 @@
 /* 同一来源访问多次:次数缀在行尾,不另起一行 */
 .t2-tsum-hits { flex-shrink: 0; font-size: var(--ui-font-caption, 11px); color: var(--text-faint, var(--text-muted)); }
 .t2-tsum-row-tx { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 搜索来源编号(借鉴 DeepSeek chat-demo 方案 ②A):搜索词下面挂的结果缩进一档;编号方块与正文同一画法(主题色 12% 底,联动 26%,不画框)。
+   悬停正文编号 → 这一行垫底色(data-cite-hot,同悬停色);悬停这一行 → 正文里出自它的链接垫底色(chatLinkCard.css)。 */
+.t2-tsum-row.t2-tsum-sub { padding-left: 22px; }
+.t2-tsum-row.act[data-cite-hot] { background: var(--overlay-light, rgba(127, 127, 127, 0.1)); }
+.t2-tsum-n {
+  flex-shrink: 0; display: inline-grid; place-items: center; box-sizing: border-box; min-width: 16px; height: 16px; padding: 0 3px;
+  border-radius: 4px; font-size: var(--ui-font-caption, 11px); font-weight: 600; line-height: 1; font-variant-numeric: tabular-nums;
+  color: var(--accent-ink); background: color-mix(in srgb, var(--accent-ink) 12%, transparent);
+}
+.t2-tsum-row[data-cite-hot] .t2-tsum-n { background: color-mix(in srgb, var(--accent-ink) 26%, transparent); }
 /* 工作范围:额外文件夹行的「移出」叉,悬停才露(常驻会把窄卡挤得很吵) */
 .t2-tsum-root .t2-tsum-x {
   flex-shrink: 0; margin-left: auto; display: inline-flex; align-items: center; justify-content: center;
@@ -1400,6 +1410,9 @@ button.t2-bg-url:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.
 }
 .t2-quota-advisory-copy > svg { flex: 0 0 auto; color: var(--warning); }
 .t2-quota-advisory[data-level='critical'] .t2-quota-advisory-copy > svg { color: var(--danger); }
+/* 正在用积分继续:普通告知,不是警告 —— 图标退成弱信息色 */
+.t2-quota-advisory[data-level='info'] .t2-quota-advisory-copy > svg { color: var(--text-muted); }
+.t2-quota-advisory-sub { flex: none; color: var(--text-muted); font-weight: 450; white-space: nowrap; }
 .t2-quota-advisory-actions { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 2px; }
 .t2-quota-action,
 .t2-quota-dismiss {
@@ -1414,6 +1427,7 @@ button.t2-bg-url:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.
 .t2-quota-action.reset { color: var(--text-muted); }
 .t2-quota-action.convert { color: var(--accent-ink); }
 .t2-quota-action.settings { color: var(--text-muted); }
+.t2-quota-action.points, .t2-quota-action.recharge { color: var(--accent-ink); }
 .t2-quota-action:hover:not(:disabled), .t2-quota-dismiss:hover { background: var(--overlay-medium); }
 .t2-quota-action:disabled { color: var(--text-faint); cursor: default; }
 .t2-quota-dismiss {
@@ -1426,7 +1440,7 @@ button.t2-bg-url:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.
 @container (max-width: 520px) {
   .t2-quota-advisory { align-items: flex-start; flex-wrap: wrap; gap: 3px 6px; padding-block: 7px; }
   .t2-quota-advisory-copy { flex-basis: calc(100% - 30px); min-height: 24px; }
-  .t2-quota-advisory-actions { order: 2; flex: 1 1 auto; padding-left: 21px; }
+  .t2-quota-advisory-actions { order: 2; flex: 1 1 auto; flex-wrap: wrap; padding-left: 21px; }
   .t2-quota-dismiss { order: 1; }
 }
 @container (max-width: 360px) {

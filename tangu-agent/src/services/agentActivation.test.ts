@@ -54,3 +54,25 @@ describe('applyAgentActivation · 当前名字 / 简介进身份段', () => {
     expect(agentIdentitySection({ name: 'Orion', description: '' })).not.toContain('Description');
   });
 });
+
+// 通道 run 按 Agent 自己的档收紧(channels/runApproval.ts):读定义抛错 ≠ 没设档 —— 读不到 = 不知道,调用方按只读。
+describe('applyAgentActivation · Agent 自己的审批档与读失败', () => {
+  it('定义里设了档 → 原值带回;没设 → 不带', async () => {
+    expect((await applyAgentActivation({ agentSlug: 'xyra' }, 'u1', async () => ({ ...defWith(null), approvalMode: 'readonly' }) as NormalAgentDef)).agentApprovalMode).toBe('readonly');
+    const unset = await applyAgentActivation({ agentSlug: 'xyra' }, 'u1', async () => defWith(null));
+    expect(unset.agentApprovalMode).toBeUndefined();
+    expect(unset.agentReadFailed).toBeUndefined();
+  });
+
+  it('没有这个 Agent(null)→ 不算读失败', async () => {
+    const r = await applyAgentActivation({ agentSlug: 'xyra' }, 'u1', async () => null);
+    expect(r.agentReadFailed).toBeUndefined();
+    expect(r.agentApprovalMode).toBeUndefined();
+  });
+
+  it('读定义抛错 → agentReadFailed,run 照旧不中断(兜底到缺省身份)', async () => {
+    const r = await applyAgentActivation({ agentSlug: 'xyra' }, 'u1', async () => { throw new Error('EIO'); });
+    expect(r.agentReadFailed).toBe(true);
+    expect(r.agentApprovalMode).toBeUndefined();
+  });
+});

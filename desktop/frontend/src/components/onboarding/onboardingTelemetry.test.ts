@@ -46,6 +46,14 @@ describe('createOnboardingTracker', () => {
     b.errorSkipped()
     expect(b.finish('finish', { sync: null })?.outcome).toBe('error-skip')
   })
+  it('手机引导的两屏有自己的字段', () => {
+    let t = 0
+    const tr = createOnboardingTracker('full', () => t, () => {})
+    tr.enter('where', 0); t = 400
+    tr.enter('theme', 1); t = 500
+    tr.enter('perms', 2); t = 900
+    expect(tr.finish('finish', {})).toEqual({ mode: 'full', outcome: 'finish', screens: 3, backJumps: 0, msWhere: 400, msTheme: 100, msPerms: 400 })
+  })
   it('发送抛错不影响收尾', () => {
     const tr = createOnboardingTracker('full', () => 0, () => { throw new Error('ipc gone') })
     expect(() => tr.finish('finish', {})).not.toThrow()

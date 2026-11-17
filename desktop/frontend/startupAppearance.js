@@ -3,7 +3,7 @@
   var splash = document.getElementById('tangu-splash');
   if (!splash) return;
   var kind = new URLSearchParams(location.search).get('window');
-  if (['mini', 'floating', 'detached'].indexOf(kind) !== -1) { splash.remove(); return; }
+  if (['mini', 'floating', 'detached', 'pip'].indexOf(kind) !== -1) { splash.remove(); return; }
   var value = {};
   try {
     var saved = window.tangu && window.tangu.startupAppearance

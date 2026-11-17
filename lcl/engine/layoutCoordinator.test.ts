@@ -187,5 +187,27 @@ describe('LCL real Dockview coordination', () => {
     api.getPanel(right.id)!.api.close(); c.refresh(false)
     expect(a.group.api.width / b.group.api.width).toBeCloseTo(latest, 2)
   })
+  it('reveals a View that was rebuilt under the same panel id before the first frame', async () => {
+    // Dockview's always-renderer hides a new overlay until its next-frame placement. Rebuilding the panel
+    // inside that frame leaves the pending placement bound to the removed element, so nothing reveals the new one.
+    const { b } = host()
+    const params = { __loc: 'main', __type: 'probe' }
+    api.removePanel(b)
+    const again = api.addPanel({ id: 'b', component: 'probe', params, position: { referencePanel: 'a', direction: 'right' } })
+    const overlay = () => again.view.content.element.closest<HTMLElement>('.dv-render-overlay')!
+    await new Promise<void>(done => requestAnimationFrame(() => requestAnimationFrame(() => done())))
+    c.refresh(false)
+    expect(again.api.isVisible).toBe(true)
+    expect(overlay().dataset.lclVisible).toBe('true')
+    expect(overlay().style.visibility).toBe('')
+    expect(overlay().style.pointerEvents).toBe('')
+    // A panel that is not showing stays hidden: only the visible tab of a group is revealed.
+    const tab = api.addPanel({ id: 'tab', component: 'probe', params, position: { referencePanel: 'b' }, inactive: true })
+    await new Promise<void>(done => requestAnimationFrame(() => requestAnimationFrame(() => done())))
+    c.refresh(false)
+    expect(tab.api.isVisible).toBe(false)
+    expect(tab.view.content.element.closest<HTMLElement>('.dv-render-overlay')!.style.visibility).toBe('hidden')
+    expect(overlay().style.visibility).toBe('')
+  })
 
 })

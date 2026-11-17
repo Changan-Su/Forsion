@@ -8,6 +8,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import { CalendarClock, CalendarDays, ExternalLink, Loader2, Trash2, Zap } from 'lucide-react'
 import { setActiveSpace, useSpaceStore } from '@lcl/engine'
 import { deleteAgentScheduleEntry, getAgentSchedules, getMuseTriggers } from '../services/backendService'
+import { tanguDelegatedAdmin } from '../tangu/delegatedRole'
 import { useApp } from '../stores/appStore'
 import { useI18n } from '../i18n'
 import { formatRepeat } from '../format/repeat'
@@ -29,6 +30,7 @@ const AgentScheduleBody: React.FC<Props> = ({ cfg, slug, running }) => {
   const [rules, setRules] = useState<MuseTriggerInfo[]>([])
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const delegated = tanguDelegatedAdmin()
   const alive = useRef(true)
   const seq = useRef(0)
   useEffect(() => { alive.current = true; return () => { alive.current = false } }, [])
@@ -36,7 +38,8 @@ const AgentScheduleBody: React.FC<Props> = ({ cfg, slug, running }) => {
   const load = async (): Promise<void> => {
     const mine = ++seq.current
     // 两个接口各自失败各自算:规则读不到不该把日程也抹掉。日程那半的 404 = 云端引擎(本地限定),换成本地化文案。
-    const [sched, trig] = await Promise.allSettled([getAgentSchedules(homeTarget()), getMuseTriggers(homeTarget())])
+    // 委托管理员:自动化规则(Muse 触发器)在白名单外 —— 只读日程这一半。
+    const [sched, trig] = await Promise.allSettled([getAgentSchedules(homeTarget()), delegated ? Promise.resolve([] as MuseTriggerInfo[]) : getMuseTriggers(homeTarget())])
     if (!alive.current || mine !== seq.current) return
     if (sched.status === 'fulfilled') { setEntries((Array.isArray(sched.value) ? sched.value : []).find((s) => s.slug === slug)?.entries || []); setError('') }
     else { setEntries([]); setError((sched.reason as any)?.status === 404 ? t('agentProfile.scheduleLocalOnly') : String((sched.reason as any)?.message || sched.reason)) }

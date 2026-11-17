@@ -1,6 +1,7 @@
-/** 卫星窗口种类:主窗(缺省)/ 独立窗(拖出的 dockview,无 ribbon)/ mini 悬浮卡片 / floating 面板。
+/** 卫星窗口种类:主窗(缺省)/ 独立窗(拖出的 dockview,无 ribbon)/ mini 悬浮卡片 / floating 面板 /
+ *  pip = Computer Use 悬浮小画面(只挂插件的实时画面视图,见 electron/computerUsePip.ts)。
  *  由 main 进程开窗时经 URL query 注入(?window=…&id=…),渲染入口 main.tsx 据此分流到不同根组件。 */
-export type WindowKind = 'main' | 'detached' | 'mini' | 'floating'
+export type WindowKind = 'main' | 'detached' | 'mini' | 'floating' | 'pip'
 
 function params(): URLSearchParams {
   try { return new URLSearchParams(location.search) } catch { return new URLSearchParams() }
@@ -8,7 +9,7 @@ function params(): URLSearchParams {
 
 export function windowKind(): WindowKind {
   const w = params().get('window')
-  return w === 'detached' || w === 'mini' || w === 'floating' ? w : 'main'
+  return w === 'detached' || w === 'mini' || w === 'floating' || w === 'pip' ? w : 'main'
 }
 
 /** 独立窗的稳定 id(布局持久化键 tangu2_layout_detached_<id> + 主进程注册表用)。 */
@@ -29,4 +30,13 @@ export function floatingId(): string {
 export function miniSessionId(): string | null {
   const id = params().get('sessionId')?.trim()
   return id || null
+}
+
+/** 设备的 Unit 窗(主进程 createDetachedWindow({ unit }) 开的独立窗,?unit=<设备 id>):只画设备页的框,见 UnitWindowRoot。
+ *  id 过同一条白名单(同服务端 UNIT_ID_PATH);不是 / 不合法 = null。
+ *  只认桌面:要有 Unit 窗用得到的那座桥(unitsShowMain,preload 才给)。web 复用同一个入口,手拼 `?window=detached&unit=…` 照常走普通入口。 */
+export function unitWindowId(): string | null {
+  if (windowKind() !== 'detached' || typeof window === 'undefined' || !window.tangu?.unitsShowMain) return null
+  const id = params().get('unit')
+  return id && /^[0-9a-zA-Z-]{8,64}$/.test(id) ? id : null
 }

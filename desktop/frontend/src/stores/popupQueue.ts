@@ -4,7 +4,7 @@
  *
  * 规则:轮到谁谁才渲染;关掉(release)后按优先级(数字小先出)、同级按先来后到放下一个。
  * 不抢占:已经在显示的那张不会被后来的高优先级挤掉,等它关了才轮到。
- * 全屏引导(onboarding)开着时谁都不出(setPopupsBlocked),引导结束再按顺序出。
+ * 全屏引导(onboarding)开着、或正切到另一台设备时谁都不出(setPopupsBlocked,按原因计),都结束了再按顺序出。
  * 用户自己点开的弹窗也走这里:前面没人就立刻出,不影响手感。
  */
 import { useEffect } from 'react'
@@ -43,10 +43,15 @@ export function releasePopup(id: string): void {
   pump()
 }
 
-/** 全屏引导开 / 关。开着时不放新的出来(已经在显示的不收)。 */
-export function setPopupsBlocked(blocked: boolean): void {
-  if (usePopupQueue.getState().blocked === blocked) return
-  usePopupQueue.setState({ blocked })
+const blockers = new Set<string>()
+/** 按原因挡住 / 放开:全屏引导(onboarding,Root)、切到另一台设备(unit-remote,UnitSwitcher 的远程面)。
+ *  任一原因在就不放新的出来(已经在显示的不收);上手提示(guideTips)也认 blocked 让路。各原因各管各的,互不覆盖。 */
+export function setPopupsBlocked(blocked: boolean, reason = 'onboarding'): void {
+  if (blocked) blockers.add(reason)
+  else blockers.delete(reason)
+  const next = blockers.size > 0
+  if (usePopupQueue.getState().blocked === next) return
+  usePopupQueue.setState({ blocked: next })
   pump()
 }
 

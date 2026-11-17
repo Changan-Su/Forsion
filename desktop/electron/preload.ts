@@ -148,7 +148,9 @@ const api = {
     return () => ipcRenderer.removeListener(APPROVAL_OPEN_CHANNEL, listener)
   },
   // ── 设备互联(Forsion Unit):名册 + 本机 host 状态(token 留主进程)──
-  unitsList: (): Promise<{ status: number; json: any }> => ipcRenderer.invoke('units:list'),
+  /** opts.shared = 连同别人共享给当前账号的 Unit 一起要(只在严格为 true 时才往下带参数;旧版 Extend 忽略它)。 */
+  unitsList: (opts?: { shared?: boolean }): Promise<{ status: number; json: any }> =>
+    opts?.shared === true ? ipcRenderer.invoke('units:list', { shared: true }) : ipcRenderer.invoke('units:list'),
   /** 系统浏览器开中转引导页:main 代拼 `#token=` 登录态递交(token 不进渲染层)。 */
   unitsOpenInBrowser: (id: string): Promise<void> => ipcRenderer.invoke('units:openInBrowser', id),
   /** P2P 直连打开设备:成了回本机代理地址(webview 当 lanUrl 用);失败 reject 可读错误,UI 回落中转。 */
@@ -158,11 +160,28 @@ const api = {
   unitsUpdate: (id: string, patch: { name?: string; icon?: string }): Promise<{ status: number; json: any }> =>
     ipcRenderer.invoke('units:update', id, patch),
   unitsRemove: (id: string): Promise<{ status: number; json: any }> => ipcRenderer.invoke('units:remove', id),
-  unitHostStatus: (): Promise<{ running: boolean; connected: boolean; unitId: string | null; lastError: string | null; webPort: number | null; lanUrl: string | null }> =>
+  unitHostStatus: (): Promise<{ running: boolean; connected: boolean; unitId: string | null; selfUnitId?: string | null; lastError: string | null; webPort: number | null; lanUrl: string | null }> =>
     ipcRenderer.invoke('units:hostStatus'),
   unitsPairedList: (): Promise<Array<{ id: string; name: string; createdAt: number }>> => ipcRenderer.invoke('units:pairedList'),
   unitsPairedRemove: (id: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('units:pairedRemove', id),
-  unitsProbeLan: (lanUrl: string): Promise<{ instanceId: string; name: string } | null> => ipcRenderer.invoke('units:probeLan', lanUrl),
+  unitsProbeLan: (lanUrl: string): Promise<{ instanceId: string; name: string; unitId?: string; self?: true } | null> => ipcRenderer.invoke('units:probeLan', lanUrl),
+  /** 设备的 Unit 窗(只主窗):一台设备一扇,再开 = 叫到前面。 */
+  unitsOpenWindow: (id: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('units:openWindow', id),
+  /** 设备页 webview 绑定到一台设备(主窗,或这台的 Unit 窗):主进程核名册后,只给这张 webview、只给这台设备自己的路径补登录头。
+   *  url = 主进程按名册定下的加载地址(共享过来的 Unit 只能用它,渲染层不自己拼)。 */
+  unitsBindFrame: (input: { webContentsId: number; unitId: string }): Promise<{ ok: true; url?: string } | { ok: false; code: string }> =>
+    ipcRenderer.invoke('units:bindFrame', input),
+  /** 这扇窗口重新拿到焦点(主进程 browser-window-focus 转告;webview 占着焦点时宿主页自己的 focus 事件不可靠)。 */
+  onWindowFocused: (cb: () => void): (() => void) => {
+    const listener = (): void => cb()
+    ipcRenderer.on('window:focused', listener)
+    return () => ipcRenderer.removeListener('window:focused', listener)
+  },
+  /** Unit 窗里的「打开 Forsion」:把主窗叫出来。 */
+  unitsShowMain: (): void => ipcRenderer.send('units:showMain'),
+  /** 设备「添加到桌面」(只主窗):主进程按名册核对 id、取名册里的名字;快捷方式里只有 id(electron/unitShortcut.ts)。 */
+  unitsAddToDesktop: (input: { id: string; fallbackName?: string; iconPng?: string }): Promise<{ ok: true; path: string } | { ok: false; code: string; detail?: string }> =>
+    ipcRenderer.invoke('units:addToDesktop', input),
   // P1-K5 ── 设备凭据存储状态(降级 / 锁定提示;重试与重新登记只在本机,主进程校验发送方)──
   secretStorageStatus: (): Promise<SecretStorageStatus> => ipcRenderer.invoke('secrets:status'),
   secretStorageRetry: (): Promise<SecretStorageStatus> => ipcRenderer.invoke('secrets:retry'),
@@ -600,7 +619,46 @@ const api = {
     unchanged?: boolean
     ageMs?: number
     error?: string
+    // helper 协议 20 起的可选字段,见 electron/computerUse.ts 的 CuLiveFrame
+    cursor?: { x: number; y: number }
+    lastAction?: { kind: string; seq: number; ageMs: number; x?: number; y?: number; label?: string }
+    actionCount?: number
+    runId?: string
+    turnActive?: boolean
   }> => ipcRenderer.invoke('computerUse:liveView', opts),
+  // Computer Use 悬浮小画面:宿主私有桥(只有 Electron 桌面有;网页 / 手机没有 → 插件不画「移到悬浮窗」)。
+  // 不是公开插件 API,不写进插件作者手册;契约见 electron/computerUsePip.ts。open() 只在用户点了「移到悬浮窗」时调:
+  // 已开着就叫到原处回 true;插件没装 / 没启用回 false、不开窗。
+  computerUsePip: {
+    open: (): Promise<boolean> => ipcRenderer.invoke('computerUsePip:open'),
+    close: (): Promise<void> => ipcRenderer.invoke('computerUsePip:close'),
+    isOpen: (): Promise<boolean> => ipcRenderer.invoke('computerUsePip:isOpen'),
+  },
+  /** pip 窗自己用:视图挂上了(ok + 内容高)/ 插件不在;之后内容高变了再报。 */
+  pipReady: (ok: boolean, height?: number): void => ipcRenderer.send('computerUsePip:ready', ok, height),
+  pipResize: (height: number): void => ipcRenderer.send('computerUsePip:resize', height),
+  /** pip 窗里的 ctx.tangu.stop / agentStatus 经主进程转给跑着这一轮的窗口(见 frontend/src/computerUsePipAgent.ts)。 */
+  pipAgent: {
+    stop: (target: unknown): Promise<boolean> => ipcRenderer.invoke('pipAgent:stop', target),
+    watch: (key: string, target: unknown): void => ipcRenderer.send('pipAgent:watch', key, target),
+    unwatch: (key: string): void => ipcRenderer.send('pipAgent:unwatch', key),
+    onStatus: (cb: (key: string, status: unknown) => void): (() => void) => {
+      const listener = (_e: unknown, msg: { key?: unknown; status?: unknown }): void => { if (msg && typeof msg.key === 'string') cb(msg.key, msg.status) }
+      ipcRenderer.on('pipAgent:status', listener)
+      return () => ipcRenderer.removeListener('pipAgent:status', listener)
+    },
+  },
+  /** 其余窗口的应答方:主进程转来 pip 的请求,这边用本窗的 store 回答。 */
+  pipAgentHost: {
+    ready: (): void => ipcRenderer.send('pipAgent:hostReady'),
+    onRequest: (cb: (req: { id?: number; op: string; key?: string; target?: unknown }) => void): (() => void) => {
+      const listener = (_e: unknown, req: { id?: number; op: string; key?: string; target?: unknown }): void => cb(req)
+      ipcRenderer.on('pipAgent:request', listener)
+      return () => ipcRenderer.removeListener('pipAgent:request', listener)
+    },
+    reply: (id: number, value: unknown): void => ipcRenderer.send('pipAgent:reply', id, value),
+    status: (key: string, status: unknown): void => ipcRenderer.send('pipAgent:hostStatus', key, status),
+  },
   // 本地语音模型(SenseVoice)下载 / 状态 / 删除 + 下载进度订阅。
   asrLocalStatus: (): Promise<{ ready: boolean; sizeBytes: number }> => ipcRenderer.invoke('asr:localStatus'),
   asrLocalDownload: (): Promise<{ ok: boolean; ready: boolean }> => ipcRenderer.invoke('asr:localDownload'),
@@ -799,7 +857,7 @@ const AGENT_KEYS = [
   'openAgentDir', 'openSkillsDir',
   'envCheck', 'envRun', 'onEnvOutput',
   'pluginsUserInstalled', 'pluginsUninstall',
-  'unitsList', 'unitsOpenInBrowser', 'unitsUpdate', 'unitsRemove', 'unitHostStatus', 'unitsPairedList', 'unitsPairedRemove', 'unitsProbeLan', 'unitsP2pOpen', 'unitRelay', // 设备互联依赖 agent 后端
+  'unitsList', 'unitsOpenInBrowser', 'unitsUpdate', 'unitsRemove', 'unitHostStatus', 'unitsPairedList', 'unitsPairedRemove', 'unitsProbeLan', 'unitsP2pOpen', 'unitRelay', 'unitsAddToDesktop', 'unitsOpenWindow', 'unitsShowMain', 'unitsBindFrame', // 设备互联依赖 agent 后端
   // P1-K5
   'secretStorageStatus', 'secretStorageRetry', 'secretStorageResetUnitPairing', 'secretStorageRelaunch', // 设备凭据提示挂在设备互联脚部,同属 agent 后端
   // P1-K4
@@ -829,6 +887,8 @@ const CLOUD_KEYS: Record<string, string> = {
   connectListingApply: 'connect:listingApply', connectListingWithdraw: 'connect:listingWithdraw', connectStore: 'connect:store',
   // 设备名册(0.6 起):没有 Extend 就不列账号名下的其他设备;unitHostStatus / 局域网探针 / 已配对设备 / P2P 留宿主,局域网直连照常。
   unitsList: 'units:list', unitsUpdate: 'units:update', unitsRemove: 'units:remove', unitsOpenInBrowser: 'units:openInBrowser',
+  // 设备页 webview 的绑定要现读名册(通道在宿主,但名册在 Extend):没名册就没有中转设备页,键一起删
+  unitsBindFrame: 'units:list',
   // 帮助改进(2.13.8 起):通道是宿主自己的 host-telemetry:report,但只在 Extend 接得住(注册了 telemetry:get)时才留
   telemetryReport: 'telemetry:get',
 }

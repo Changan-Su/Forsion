@@ -43,6 +43,9 @@ const rk = (p: string, t: string): string => `${p}\n${t}`
 let current: { pluginId: string; tip: PluginGuideTip } | null = null
 let lastInput = 0
 let timer: ReturnType<typeof setInterval> | null = null
+/** 起表时的那个页面:表只为它走,它没了 / 换了就停(tick 开头)。起过一次就不再起(started)。 */
+let home: Document | null = null
+let started = false
 const shownHosts = new WeakSet<Element>() // 一个 View 打开一次最多出一条:View 重新挂载就是新的宿主元素
 const firstSeen = new Map<string, { el: Element; t: number }>() // 锚点连续看得见的起点;看不见了 / 换了元素就重新计
 
@@ -206,6 +209,9 @@ function dayCount(): number | undefined {
 const isMobile = (): boolean => !!(typeof window !== 'undefined' && (window.tangu as { mobile?: boolean } | undefined)?.mobile)
 
 function tick(): void {
+  // 页面没了或者换了一个:这只表不该再走,停掉,也不去读别人的页面。
+  // 测试环境拆掉全局之后它再响一下就是 `document is not defined` —— 全量 vitest「全部通过却退出码 1」的来源(guideTipsTimer.test.ts)。
+  if (typeof document === 'undefined' || document !== home) { stopTimer(); return }
   if (document.hidden) { firstSeen.clear(); return }
   if (!tipsOf.size) return
   const q = usePopupQueue.getState()
@@ -266,8 +272,15 @@ function present(c: GuideCandidate): void {
   })
 }
 
+function stopTimer(): void {
+  if (timer) clearInterval(timer)
+  timer = null
+}
+
 function ensureRunning(): void {
-  if (timer || typeof window === 'undefined') return
+  if (started || typeof window === 'undefined' || typeof document === 'undefined') return
+  started = true
+  home = document
   const touch = (): void => { lastInput = Date.now() }
   for (const ev of ['keydown', 'input', 'pointerdown', 'wheel', 'dragover']) window.addEventListener(ev, touch, { capture: true, passive: true })
   window.addEventListener('pointermove', (e) => { if (e.buttons) touch() }, { capture: true, passive: true }) // 按着拖

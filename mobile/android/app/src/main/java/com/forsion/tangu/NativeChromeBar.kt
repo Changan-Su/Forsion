@@ -509,7 +509,7 @@ private fun activeKey(cells: List<ChromeSpace>, more: List<ChromeSpace>): String
 
 /** The system's "remove animations" (Android: accessibility → remove animations), and the page's "Fade only". */
 @Composable
-private fun motionOn(theme: SheetTheme?): Boolean {
+internal fun motionOn(theme: SheetTheme?): Boolean {
     val resolver = LocalContext.current.contentResolver
     val system = remember(resolver) { Settings.Global.getFloat(resolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f) != 0f }
     return system && theme?.motionFade != true

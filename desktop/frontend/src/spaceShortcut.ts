@@ -63,10 +63,28 @@ function svgMarkupOf(Icon: NonNullable<SpaceDefinition['icon']>): string | null 
   }
 }
 
+/** App 图标的字形来源:原色 PNG(铺满底板)/ 单色 SVG 蒙版 / 线条图标组件 / 一个 emoji(设备图标)。 */
+export type AppIconGlyph =
+  | { kind: 'png'; url: string }
+  | { kind: 'mask'; url: string }
+  | { kind: 'component'; Icon: NonNullable<SpaceDefinition['icon']> }
+  | { kind: 'emoji'; text: string }
+
 /** 画好的图标(PNG data URL);画不出来返回 undefined。 */
 export async function renderSpaceIconPng(space: SpaceDefinition, platform = window.tangu?.platform): Promise<string | undefined> {
   const Icon = space.icon
   if (!Icon) return undefined
+  const imageUrl = Icon.imageUrl
+  return renderAppIconPng(
+    imageUrl?.startsWith('data:image/png') ? { kind: 'png', url: imageUrl }
+      : imageUrl?.startsWith('data:image/svg+xml') ? { kind: 'mask', url: imageUrl }
+        : { kind: 'component', Icon },
+    platform,
+  )
+}
+
+/** 纸色圆角底板 + 字形,1024px,桌面快捷方式用(Space / 设备共用)。 */
+export async function renderAppIconPng(glyphSrc: AppIconGlyph, platform = window.tangu?.platform): Promise<string | undefined> {
   const canvas = document.createElement('canvas')
   canvas.width = SIZE
   canvas.height = SIZE
@@ -88,11 +106,10 @@ export async function renderSpaceIconPng(space: SpaceDefinition, platform = wind
   ctx.fill()
   ctx.restore()
 
-  const imageUrl = Icon.imageUrl
   try {
-    if (imageUrl?.startsWith('data:image/png')) {
+    if (glyphSrc.kind === 'png') {
       // 原色小图:铺满底板(按底板圆角裁)。
-      const img = await loadImage(imageUrl)
+      const img = await loadImage(glyphSrc.url)
       ctx.save()
       plate()
       ctx.clip()
@@ -101,9 +118,15 @@ export async function renderSpaceIconPng(space: SpaceDefinition, platform = wind
     } else {
       const glyph = Math.round(size * 0.56)
       const at = Math.round(x + (size - glyph) / 2)
-      if (imageUrl?.startsWith('data:image/svg+xml')) {
+      if (glyphSrc.kind === 'emoji') {
+        // 设备图标是用户设的一个 emoji:系统彩色 emoji 字体画在底板正中。
+        ctx.font = `${glyph}px "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif`
+        ctx.textAlign = 'center'
+        ctx.textBaseline = 'middle'
+        ctx.fillText(glyphSrc.text, x + size / 2, x + size / 2 + glyph * 0.04)
+      } else if (glyphSrc.kind === 'mask') {
         // 单色蒙版:先把轮廓画进离屏画布,再按轮廓填墨色。
-        const img = await loadImage(imageUrl)
+        const img = await loadImage(glyphSrc.url)
         const mask = document.createElement('canvas')
         mask.width = glyph
         mask.height = glyph
@@ -115,7 +138,7 @@ export async function renderSpaceIconPng(space: SpaceDefinition, platform = wind
         m.fillRect(0, 0, glyph, glyph)
         ctx.drawImage(mask, at, at)
       } else {
-        const markup = svgMarkupOf(Icon)
+        const markup = svgMarkupOf(glyphSrc.Icon)
         if (!markup) return undefined
         const img = await loadImage(`data:image/svg+xml;charset=utf-8,${encodeURIComponent(markup)}`)
         ctx.drawImage(img, at, at, glyph, glyph)

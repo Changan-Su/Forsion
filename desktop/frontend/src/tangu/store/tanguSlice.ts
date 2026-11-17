@@ -8,8 +8,9 @@
  */
 import { useChildChat } from '../../stores/childChatStore'
 import { createRunEventBatch } from './runEventBatch'
-import type { ProjectSettings, AgentConfig, AgentRunEvent, Attachment, CtxInfo, ModelsResponse, NormalAgentDef, MsgSeg, SessionRecord, SketchItem, SubChat, TanguDesktopConfig, ToolEvent, UiMessage, WorkspaceDescriptor, StoredDesktopConfig, TeamDef, ThinkingLevel } from '../../../../../tangu-agent/src/contracts/clientTypes'
+import type { ProjectSettings, AgentConfig, AgentRunEvent, Attachment, CtxInfo, FailedRunRecord, ModelsResponse, NormalAgentDef, MsgSeg, SessionRecord, SketchItem, SubChat, TanguDesktopConfig, ToolEvent, UiMessage, WorkspaceDescriptor, StoredDesktopConfig, TeamDef, ThinkingLevel } from '../../../../../tangu-agent/src/contracts/clientTypes'
 import { clearDeviceSticky, noteDeviceRefusal } from '../../services/deviceMarks' // P1-K7a
+import { tanguDelegatedAdmin } from '../delegatedRole'
 import { DEFAULT_CLOUD_PROJECT, DEFAULT_LOCAL_WORKSPACE_KEY, ROOTLESS_WORKSPACE_KEY, cloudProjectKey, isHomeSession, isIndependentOrbitConfig, isTeamImageAvatar, sessionWorkspaceKey, SHOW_SYSTEM_PROMPT_KEY, THINKING_LEVELS } from '../../../../../tangu-agent/src/contracts/clientTypes'
 import * as api from '../../services/backendService'
 import { bindSession, focusRef, focusTarget, forgetSession, homeTarget, inheritBinding, inheritChildRows, refForSession, sameRef, setFocusTarget, targetForRef, targetForSession, targetKeyOf, withLocation, yieldToHomeListing, HOME_REF, type EngineTarget, type TargetKey, type TargetRef } from '../../services/engine/targets'
@@ -31,10 +32,11 @@ import { AGENT_WRITE_TOOLS, DESK_EDIT_TOOLS, DESK_PERSIST_KEY, agentWriteChecks,
 import { deskAcceptsFiles } from '../../amadeus/plugins/deskCompanion'
 import { usePageStore } from '../../amadeus/store/pageStore'
 import { registerMessages, translate, translationValues } from '../../i18n'
-import { publishAccountQuota } from '../../services/accountQuota'
+import { pointsReadToken, publishAccountQuota, reconcilePointsRead } from '../../services/accountQuota'
 import { sanitizeAnswerBy, sanitizeApprovalPreviewI18n, sanitizeApprovalReason, sanitizeApprovalRemote } from '../../approvalReason'
 import { normalizeSessionEmoji } from '../../../../../tangu-agent/src/contracts/sessionEmoji'
 import { TURN_RESUME_MARKER, isContinuationRow } from '../../../../../tangu-agent/src/contracts/turnResume'
+import { isEngineModelNoApiKey } from '../../../../../tangu-agent/src/contracts/engineModelError'
 import { DEFAULT_APPROVAL, applyPreset, stickyDefaults, withAmadeusWorkspace } from '../../../../../tangu-agent/src/contracts/sessionDefaults'
 export { DEFAULT_APPROVAL, DEFAULT_THINKING, applyPreset, stickyDefaults, withAmadeusWorkspace } from '../../../../../tangu-agent/src/contracts/sessionDefaults'
 import type { StoreApi } from 'zustand'
@@ -42,6 +44,8 @@ import { defaultModelOf, newChatModelId, rememberedModelId, reloadDesktopConfig,
 import '../messages' // Tangu 自己的文案片段(核心插件化 2c)
 import { failReason, landedAnyway, type FailedSend } from './failedSend'
 import { cancelQuotaReminder } from './quotaReminders'
+import { sourcesFromMetadata } from '../../../../../tangu-agent/src/contracts/citeSources'
+import type { WebSource } from '../../../../../tangu-agent/src/contracts/clientTypes'
 import { agentName, agentNames } from '../../agentName'
 
 
@@ -110,6 +114,12 @@ export function sketchFromToolEvent(ev: ToolEvent): SketchItem | undefined {
   } catch { return undefined }
 }
 
+/** 落库的工具结果上的结构化来源(搜索来源编号):只认 web_search / web_fetch,老消息没有。 */
+const sourcesOfResult = (name: string | undefined, res: any): { sources: WebSource[] } | undefined => {
+  const sources = sourcesFromMetadata(name, res?.metadata)
+  return sources ? { sources } : undefined
+}
+
 /** 历史行 → UI 消息(tool_calls/tool_results 配对成 toolEvents)。 */
 export function recordToUi(r: any, resolveGroup?: (name: string, slug?: string) => { slug?: string; name?: string; color: string }, resolveSlug?: (slug: string) => string | undefined): UiMessage {
   const role = r.role === 'model' || r.role === 'assistant' ? 'assistant' : 'user'
@@ -160,6 +170,7 @@ export function recordToUi(r: any, resolveGroup?: (name: string, slug?: string) 
         id: c.id, name: c.function?.name || c.name || 'tool', arguments: c.function?.arguments,
         result: res ? String(res.content ?? '') : undefined, isError: res?.isError || false,
         ...(Array.isArray(res?.masked) && res.masked.length ? { masked: res.masked } : {}),
+        ...(sourcesOfResult(c.function?.name || c.name, res) ?? {}),
         startedAt: res?.startedAt, elapsedMs: res?.elapsedMs, outputChars: res?.outputChars,
         parallelGroup: res?.parallelGroup, artifactPath: res?.artifactPath, done: true,
         ...(res?.parked === true ? { parked: true } : {}),
@@ -185,6 +196,27 @@ export function recordToUi(r: any, resolveGroup?: (name: string, slug?: string) 
   }
   if (r.is_error) msg.status = 'error'
   return msg
+}
+
+/**
+ * 重开对话时补回失败的那几轮(引擎 services/failedRuns.ts 随消息一起带来)。失败而没有正文的一轮不落回答行,
+ * 原因只在 run 上:有半截回答落了库的,在那一行上补失败状态与原因;没有的,按在线时那个气泡的 id 补一行(排在用户那一句后面)。
+ * 原因是 run 上记的原串,与在线 error 事件同一串,渲染层照旧翻译。已是失败 / 停止状态的不动。
+ */
+export function withFailedRuns(ui: UiMessage[], failed: FailedRunRecord[], stamp: { agentId?: string; agentName?: string } = {}): UiMessage[] {
+  if (!failed.length) return ui
+  const out = [...ui]
+  for (const f of failed) {
+    if (!f?.assistant_message_id) continue
+    const error = f.error || 'error'
+    const i = out.findIndex((m) => m.id === f.assistant_message_id)
+    if (i >= 0) {
+      if (out[i].role === 'assistant' && out[i].status !== 'error' && out[i].status !== 'stopped') out[i] = { ...out[i], status: 'error', error }
+      continue
+    }
+    out.push({ id: f.assistant_message_id, role: 'assistant', content: '', status: 'error', error, timestamp: Number(f.timestamp) || Date.now(), ...stamp })
+  }
+  return out
 }
 
 type GroupRef = { current: string; groupSeen?: boolean; group?: boolean; groupEnded?: boolean; reuseNext?: boolean }
@@ -360,9 +392,11 @@ function checkQuotaExhausted(toast: (m: string, err?: boolean) => void, tr: (k: 
   if (quotaCheckBusy) return
   quotaCheckBusy = true
   const generation = host.authGen()
+  const pointsToken = pointsReadToken()
   void window.tangu.accountQuota().then((r) => {
     if (generation !== host.authGen()) return
-    const j = r?.status === 200 ? r.json : null
+    // 发出之后「用积分继续」被写过:这份是旧读取,开关以已确认的值为准(别把开着的显示回关)
+    const j = reconcilePointsRead(r?.status === 200 ? r.json : null, pointsToken)
     if (!j) return
     // Chat View 的内联额度提示与 run 收尾共用这份刚拉到的真值，避免结束瞬间再打一遍额度请求。
     publishAccountQuota(j)
@@ -370,7 +404,10 @@ function checkQuotaExhausted(toast: (m: string, err?: boolean) => void, tr: (k: 
     const daily = j.dailyLimit >= 0 && Number(j.dailyRemaining) <= 0
     const state = weekly ? 'weekly' : daily ? 'daily' : ''
     if (state && state !== lastQuotaExhaustState) {
-      toast(tr(state === 'weekly' ? 'quota.exhausted.weekly' : 'quota.exhausted.daily'), true)
+      // 开着「用积分继续」且还有积分:额度虽尽,下一轮照样能跑 —— 只是告知,不是错误(积分为 0 / 读不到照旧报已用尽)
+      const pointsOn = j.pointsAutoDeduct === true && typeof j.pointsBalance === 'number' && j.pointsBalance > 0
+      if (pointsOn) toast(tr('quota.exhausted.pointsOn'))
+      else toast(tr(state === 'weekly' ? 'quota.exhausted.weekly' : 'quota.exhausted.daily'), true)
     }
     lastQuotaExhaustState = state
   }).catch(() => {}).finally(() => { if (generation === host.authGen()) quotaCheckBusy = false })
@@ -581,6 +618,25 @@ function sessionModelOf(s: Pick<AppState, 'sessions' | 'archivedSessions'>, sid:
   return s.sessions.find((x) => x.id === sid)?.model_id || s.archivedSessions.find((x) => x.id === sid)?.model_id
     || useChildChat.getState().sessions[sid]?.model_id || ''
 }
+/** 外部引擎的提示(status/engine_notice):文案 zh/en 由引擎给,按钮只能指插件给这个引擎登记的对话菜单项(见 ApprovalTray)。 */
+export interface EngineNoticeUi { id: string; text: { zh?: string; en?: string }; action?: { id: string; label: { zh?: string; en?: string } } }
+const noticeStr = (v: unknown, max: number): string | undefined => (typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : undefined)
+function cleanEngineNotice(n: any): EngineNoticeUi | null {
+  if (!/^[A-Za-z0-9._:-]{1,128}$/.test(n.id)) return null
+  const text = { zh: noticeStr(n.text?.zh, 160), en: noticeStr(n.text?.en, 160) }
+  if (!text.zh && !text.en) return null
+  const a = n.action
+  const action = a && typeof a.id === 'string' && /^[A-Za-z0-9._-]{1,64}$/.test(a.id) ? { id: a.id, label: { zh: noticeStr(a.label?.zh, 40), en: noticeStr(a.label?.en, 40) } } : undefined
+  return { id: n.id, text, ...(action ? { action } : {}) }
+}
+function clearEngineNotices(set: (fn: (s: AppState) => Partial<AppState>) => void, sessionId: string): void {
+  set((s) => {
+    if (!s.engineNoticesBySession[sessionId]) return {}
+    const { [sessionId]: _done, ...rest } = s.engineNoticesBySession
+    return { engineNoticesBySession: rest }
+  })
+}
+
 /** 会话模型的**本地**改写:列表 / 归档 / 子聊天缓存 + 作废 ctx 环。不落库、不动全局默认 ——
  *  setSessionModel(用户在药丸上换)与 session_config_changed(agent 在引擎侧已写库)共用,两处别各写各的。 */
 function patchSessionModelLocal(sid: string, modelId: string): void {
@@ -918,6 +974,8 @@ export interface TanguState {
   usageBySession: Record<string, { ctx: number; base: number; live: number; runCost?: number; costLimit?: number }>
   /** 引擎 context_info 事件(每 run 一条):窗口值+来源、注入段分解、指令文件、历史规模。ctx 环弹层消费。 */
   ctxInfoBySession: Record<string, CtxInfo>
+  /** 外部引擎给正在跑的这一轮的提示(status/engine_notice,如「DSH 在工作台里等你批准」);进审批托盘,这一轮结束就清掉。 */
+  engineNoticesBySession: Record<string, EngineNoticeUi[]>
   /** Agent Desk:聊天右侧演出面板的 per-session 状态。 */
   deskBySession: Record<string, DeskState>
   /** 语音消息:按 agent 的生效开关(voice-message 插件启用 + 该 agent apply)。缓存,首次进会话惰性拉取。 */
@@ -1167,6 +1225,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
   runStatsBySession: {},
   usageBySession: {},
   ctxInfoBySession: {},
+  engineNoticesBySession: {},
   unread: loadUnread(),
   detailWsKey: null,
   activeSpecial: null,
@@ -1311,6 +1370,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
               parallelGroup: pl.parallelGroup ?? evs[i].parallelGroup, artifactPath: pl.artifactPath,
               parked: pl.parked === true || undefined,
               masked: Array.isArray(pl.masked) && pl.masked.length ? pl.masked : undefined,
+              sources: sourcesFromMetadata(evs[i].name || pl.name, pl.metadata),
             }
             // sketch 完成即上卡(挂 tool_result 不挂 tool_call:引擎尺寸闸拒掉的不画;callId 去重防 SSE 重放双画)
             const sk = sketchFromToolEvent(evs[i])
@@ -1725,6 +1785,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
         break
       }
       case 'done':
+        clearEngineNotices(set, sessionId)
         set((s) => ({ messagesBySession: { ...s.messagesBySession, [sessionId]: (s.messagesBySession[sessionId] || []).map((m) =>
           m.compaction?.runId === runId && m.compaction.status === 'running'
             ? { ...m, content: get().tr('ctx.compaction.failed'), compaction: { ...m.compaction, status: 'failed' as const, skippable: false } } : m) } }))
@@ -1780,6 +1841,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
         else clearSuggestion(sessionId)
         break
       case 'error':
+        clearEngineNotices(set, sessionId)
         set((s) => ({ messagesBySession: { ...s.messagesBySession, [sessionId]: (s.messagesBySession[sessionId] || []).map((m) =>
           m.compaction?.runId === runId && m.compaction.status === 'running'
             ? { ...m, content: get().tr(pl.aborted ? 'ctx.compaction.aborted' : 'ctx.compaction.failed'), compaction: { ...m.compaction, status: pl.aborted ? 'aborted' as const : 'failed' as const, skippable: false } } : m) } }))
@@ -1793,6 +1855,12 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
         expireRunPrompts(set, sessionId, runId)
         endRun(set, get, sessionId, runId) // planAutoStart 的作废清理在 endRun 里统一做(含 stop/看门狗路径)
         clearSuggestion(sessionId)
+        // 外部引擎的当前模型缺 API key:提示叫用户去模型菜单里换一个(或先去引擎那边登录)。菜单里那份清单启动后只取一次,
+        // 记下它可能过时了:用户登录之后再打开模型菜单,就让引擎重新探测(这时当场取没用:多半还没登录)。
+        if (!pl.aborted && isEngineModelNoApiKey(pl.error)) {
+          const cfg = sessionConfigBaseOf(get(), sessionId)
+          get().ensureEngineCaps(cfg?.engineId || cfg?.soloEngineId, 'stale') // 私聊会话两样都存着,以防只剩身份键
+        }
         // 托管模式下 token 过期不会让本地端点 401,而是表现为 run 出错(后端→云端 401)。做一次真实 whoami 复检,
         // 仅确认凭证已失效才提示重登录(避免把模型/网络错误误判为过期)。
         if (!pl.aborted && get().authInfo?.loggedIn) {
@@ -1844,6 +1912,18 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
         break
       }
       case 'status':
+        // 外部引擎的提示(融合插件:DSH 的审批在工作台里等着):进审批托盘;clear 撤掉。事件会回放,入口再洗一遍
+        if (pl.phase === 'engine_notice') {
+          const notice = pl.notice && typeof pl.notice.id === 'string' ? pl.notice : null
+          if (!notice) break
+          set((s) => {
+            const rest = (s.engineNoticesBySession[sessionId] || []).filter((x) => x.id !== notice.id)
+            const clean = notice.clear === true ? null : cleanEngineNotice(notice)
+            const next = clean ? [...rest, clean] : rest
+            return { engineNoticesBySession: { ...s.engineNoticesBySession, [sessionId]: next } }
+          })
+          break
+        }
         // context 视图数据(H5/H8/B2):整包存下,ctx 环弹层渲染
         if (pl.phase === 'context_info') {
           set((s) => ({ ctxInfoBySession: { ...s.ctxInfoBySession, [sessionId]: {
@@ -2047,6 +2127,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
 
   refreshSessions: async (c) => {
     void c // 请求走 homeTarget()(活目标现读 store.cfg);c 只是历史签名
+    if (tanguDelegatedAdmin()) return [] // 委托管理员:会话与消息不归它管,那台设备也不放(删 Agent 后的刷新等调用点一并不发)
     const generation = host.authGen()
     // P1-K6 S4(INTEGRATION R-17):列表**只拉本端**,并保留已注入的 unit 记录(在那台电脑上建的 / K7 打开的那一条)。
     // 不把整台电脑的会话列表并进 appStore.sessions —— 22 个读者(workspaces() 等)会把 Mac 的路径当成本机项目;设备分组归 K7。
@@ -2187,8 +2268,8 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     set((s) => ({ historyLoading: { ...s.historyLoading, [sessionId]: true } }))
     try {
       const c = get().cfg
-      const [records, config, active] = await Promise.all([
-        api.listMessages(targetForSession(sessionId), sessionId),
+      const [{ messages: records, failedRuns }, config, active] = await Promise.all([
+        api.listHistory(targetForSession(sessionId), sessionId),
         api.getSessionConfig(targetForSession(sessionId), sessionId).catch(() => ({} as AgentConfig)),
         listActiveRuns(targetForSession(sessionId), sessionId),
       ])
@@ -2209,6 +2290,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
       void api.getSessionUsage(targetForSession(sessionId), sessionId)
         .then(({ base, ctx }) => set((s) => ({ usageBySession: { ...s.usageBySession, [sessionId]: { ...s.usageBySession[sessionId], ctx: s.usageBySession[sessionId]?.ctx || ctx, base, live: 0 } } })))
         .catch(() => {})
+      const stamp = agentStamp(get(), config)
       set((s) => {
         const existing = s.messagesBySession[sessionId] || []
         const resolveGroup = groupSpeakerResolver(s.agentDefs, t('group.host'))
@@ -2216,9 +2298,10 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
         const ui = records.map((r) => recordToUi(r, resolveGroup, resolveSlug))
         const byId = new Map(ui.map((m) => [m.id, m] as const))
         for (const m of existing) byId.set(m.id, m)
-        return { messagesBySession: { ...s.messagesBySession, [sessionId]: [...byId.values()].sort((a, b) => a.timestamp - b.timestamp) } }
+        // 失败轮在本地已有那一行之后再补:本地那一行可能被看门狗收成了 done(终态事件丢了),以引擎记的失败为准
+        const merged = withFailedRuns([...byId.values()], failedRuns, stamp)
+        return { messagesBySession: { ...s.messagesBySession, [sessionId]: merged.sort((a, b) => a.timestamp - b.timestamp) } }
       })
-      const stamp = agentStamp(get(), config)
       for (const run of active) {
         if ((run.status === 'running' || run.status === 'queued') && run.assistant_message_id) {
           const amid = run.assistant_message_id
@@ -2273,11 +2356,12 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     }
     try {
       const c = get().cfg
-      const [records, active] = await Promise.all([
-        api.listMessages(targetForSession(sessionId), sessionId),
+      const [{ messages: records, failedRuns }, active] = await Promise.all([
+        api.listHistory(targetForSession(sessionId), sessionId),
         listActiveRuns(targetForSession(sessionId), sessionId).catch(() => []),
       ])
       if (get().activeId !== sessionId || get().runningBySession[sessionId]) return
+      const failStamp = agentStamp(get(), get().configBySession[sessionId])
       set((s) => {
         const existing = s.messagesBySession[sessionId] || []
         const resolveGroup = groupSpeakerResolver(s.agentDefs, get().tr('group.host'))
@@ -2285,7 +2369,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
         const ui = records.map((r) => recordToUi(r, resolveGroup, resolveSlug))
         const byId = new Map(ui.map((m) => [m.id, m] as const))
         for (const m of existing) byId.set(m.id, m)
-        const merged = [...byId.values()].sort((a, b) => a.timestamp - b.timestamp)
+        const merged = withFailedRuns([...byId.values()], failedRuns, failStamp).sort((a, b) => a.timestamp - b.timestamp) // 同 loadHistory:合并后再补
         if (merged.length === existing.length && merged.every((m, i) => m === existing[i])) return s
         return { messagesBySession: { ...s.messagesBySession, [sessionId]: merged } }
       })
@@ -2499,6 +2583,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
   },
 
   refreshCloudProjects: async (c) => {
+    if (tanguDelegatedAdmin()) return // 项目列表在委托管理员的白名单外
     const generation = host.catalogToken()
     try {
       const names = await api.listProjects(focusTarget())
@@ -3494,6 +3579,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
   teams: [],
   teamAvatars: {},
   refreshTeams: async () => {
+    if (tanguDelegatedAdmin()) return // 团队在委托管理员的白名单外
     const c = focusTarget() // S2:团队目录随焦点
     const generation = host.catalogToken()
     const listed = await api.listTeams(c)
@@ -3608,13 +3694,15 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     // extraPatch 与 agentSlug 同一笔 PUT(选择条降回单人时要连团队字段一起写,拆成两笔会互相冲掉)。
     get().patchSessionConfig({ ...(extraPatch || {}), agentSlug: slug || undefined }, sid)
     // remember=false:这是 agent 预设强加的,不该把用户的「新会话默认模型/思考档」也一并改掉。
-    if (def?.model) get().setSessionModel(def.model, sid, false)
-    if (def?.thinkingLevel) get().setSessionThinking(def.thinkingLevel, sid, false)
+    // 跑在外部引擎上的 Agent(def.engine):它的 model / 思考档是换回 Tangu 时用的,这时不套(模型按它的 engineModel,见引擎 agentLoop)
+    if (def?.model && !def.engine) get().setSessionModel(def.model, sid, false)
+    if (def?.thinkingLevel && !def.engine) get().setSessionThinking(def.thinkingLevel, sid, false)
     get().pushNotice(def ? t('input.agentActive', { name: agentName(def) }) : t('input.agentCleared'))
   },
 
   selectNewChatAgent: (slug) => {
-    const def = slug ? get().agentDefs.find((a) => a.slug === slug) : null
+    const found = slug ? get().agentDefs.find((a) => a.slug === slug) : null
+    const def = found?.engine ? null : found // 跑在外部引擎上的 Agent 不套它的 Tangu 模型 / 思考档(同 selectSessionAgent)
     set((s) => ({ newChatCfg: { ...s.newChatCfg, agentSlug: slug || undefined, ...(def?.thinkingLevel ? { thinkingLevel: def.thinkingLevel, ...(def.thinkingLevel !== 'max' ? { ultra: false } : {}) } : {}) } }))
     if (def?.model) set({ newChatModel: def.model })
   },
@@ -3798,6 +3886,8 @@ function endRun(set: (fn: (s: AppState) => Partial<AppState>) => void, get: () =
   // 排队项不看本轮怎么结束的(完成 / 出错 / 用户停止)都照跑:它们是用户显式排的、在等待区可见可删;
   // 停下当前 run 往往正是为了让排着的 /compact 早点跑。只在本次真的收了这条 run 时取:重复 / 迟到的终结
   // 不取,否则上一条排队消息的 startRun 还在途(running 未置),会再弹出一条并发起跑。
+  // 引擎说「在别处等你批准」的提示随这一轮收尾撤掉:停止 / 看门狗 / 断流这些路径不经 done / error
+  if (ended) clearEngineNotices(set, sessionId)
   if (ended) drainQueued(get, set, sessionId)
 }
 

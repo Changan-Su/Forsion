@@ -37,6 +37,31 @@ export interface CuLiveFrame {
   ageMs?: number
   /** 机器可读的失败原因:unsupported_platform / helper_not_running / unsupported_helper / 或 helper 的错误码。 */
   error?: string
+  // ── helper 协议 20 起(只在按窗口截图那条路上给;旧 helper / 整屏旧路径不给)──
+  /** Agent 光标当前位置,相对这一帧的比例 0..1,原点左上。 */
+  cursor?: CuLivePoint
+  /** 最近一次动作。 */
+  lastAction?: CuLiveAction
+  /** helper 启动以来的动作总数,单调递增。 */
+  actionCount?: number
+  /** 最近一次 act 带来的 runId。 */
+  runId?: string
+  /** 这一轮是否还在进行中。 */
+  turnActive?: boolean
+}
+
+export interface CuLivePoint { x: number; y: number }
+
+export interface CuLiveAction {
+  /** click / doubleClick / rightClick / press / scroll / drag / move / type / key / setText(不认识的种类也原样放行,截到 24 字) */
+  kind: string
+  /** 单调递增 */
+  seq: number
+  ageMs: number
+  x?: number
+  y?: number
+  /** 被操作元素的可读名,最长 80 字 */
+  label?: string
 }
 
 /** helper 的 socket 路径。与 vendor 的 HELPER_SOCKET_PATH 同源(同一个 env 覆盖 + 同一个默认值)。 */
@@ -64,7 +89,58 @@ export function normalizeLiveView(raw: unknown): CuLiveFrame {
     unchanged: r.unchanged === true ? true : undefined,
     ageMs: num(r.ageMs),
     error: str(r.error),
+    ...liveViewExtras(r),
   }
+}
+
+/** 0..1 夹值;不是有限数就丢。 */
+const ratio = (v: unknown): number | undefined =>
+  typeof v === 'number' && Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : undefined
+/** 非空字符串,去首尾空白后截长;空就丢。 */
+const clip = (v: unknown, max: number): string | undefined => {
+  if (typeof v !== 'string') return undefined
+  const t = v.trim()
+  return t ? t.slice(0, max) : undefined
+}
+const count = (v: unknown): number | undefined =>
+  typeof v === 'number' && Number.isFinite(v) && v >= 0 ? Math.trunc(v) : undefined
+
+/**
+ * 协议 20 的五个可选字段(cursor / lastAction / actionCount / runId / turnActive)。
+ * 逐项校验,坏的单项丢掉不连坐;缺的不出键,旧回包得到的对象与以前完全一样。
+ */
+function liveViewExtras(r: Record<string, unknown>): Partial<CuLiveFrame> {
+  const out: Partial<CuLiveFrame> = {}
+  const c = r.cursor as Record<string, unknown> | null | undefined
+  if (c && typeof c === 'object') {
+    const x = ratio(c.x)
+    const y = ratio(c.y)
+    if (x !== undefined && y !== undefined) out.cursor = { x, y }
+  }
+  const a = r.lastAction as Record<string, unknown> | null | undefined
+  if (a && typeof a === 'object') {
+    const kind = clip(a.kind, 24)
+    const seq = count(a.seq)
+    const ageMs = count(a.ageMs)
+    if (kind && seq !== undefined && ageMs !== undefined) {
+      const act: CuLiveAction = { kind, seq, ageMs }
+      const x = ratio(a.x)
+      const y = ratio(a.y)
+      if (x !== undefined && y !== undefined) {
+        act.x = x
+        act.y = y
+      }
+      const label = clip(a.label, 80)
+      if (label) act.label = label
+      out.lastAction = act
+    }
+  }
+  const n = count(r.actionCount)
+  if (n !== undefined) out.actionCount = n
+  const runId = clip(r.runId, 128)
+  if (runId) out.runId = runId
+  if (typeof r.turnActive === 'boolean') out.turnActive = r.turnActive
+  return out
 }
 
 /** 「最近被操控」的最长有效期上限(毫秒)。见 computerUseLiveView 里的说明。 */

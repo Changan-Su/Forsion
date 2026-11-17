@@ -3,7 +3,7 @@
  * 统一 Bearer + JSON 错误,错误信息抛 Error(detail)。
  */
 import type {
-  AgentConfig, AgentScheduleEntry, AgentScheduleEntryUpsert, AgentScheduleInfo, AgentsMeta, AutomationActionCatalogItem, AutomationExecutionInfo, AutomationRunInfo, AutomationSessionInfo, ChannelKind, HistorianActivityItem, MessageRecord, ModelsResponse, ProviderQuota, MuseLibraryEntry, MuseStarter, MuseRoundInfo, MuseSpaceView, MusePlacementOp, MuseStatusInfo, MuseTodo, MuseTriggerInfo, MuseTriggerUpsert, PendingApprovalInfo, TriggerSourceInfo,
+  AgentConfig, AgentScheduleEntry, AgentScheduleEntryUpsert, AgentScheduleInfo, AgentsMeta, AutomationActionCatalogItem, AutomationExecutionInfo, AutomationRunInfo, AutomationSessionInfo, ChannelKind, FailedRunRecord, HistorianActivityItem, MessageRecord, ModelsResponse, ProviderQuota, MuseLibraryEntry, MuseStarter, MuseRoundInfo, MuseSpaceView, MusePlacementOp, MuseStatusInfo, MuseTodo, MuseTriggerInfo, MuseTriggerUpsert, PendingApprovalInfo, TriggerSourceInfo,
   GitIdentity, GitSettings, GitSummary, NormalAgentDef, ProjectContext, ProjectRepoInfo, ProjectMemoryView, ProjectMemoryOrganizeOutcome, ProjectSettings, ProjectSkillInfo, SessionRecord, SkillInfo, SkillCatalogEntry, SpecialAgentsConfig, StandInInfo,
   ToolsResponse, WorkspaceFileMeta, TeamDef } from '../types'
 import { authFetch } from './http'
@@ -17,6 +17,7 @@ import { readInboxChannel, type InboxChannel } from './inboxChannel'
 import { localInbox, localizeInboxMessage } from './localInbox' // Web/mobile 的云端来信走客户端收件箱
 import { registerMessages, translate } from '../i18n'
 import { LOCAL_ONLY_CODE, localOnlyMessage, remoteRefusalMessage } from './localOnly'
+import { noteApprovalCap } from './delegatedAdmin'
 import { saveResponseAs } from './nativeDownload'
 import type { MuseCardInfo, RelinkInfo, RelinkResult } from '../../../../tangu-agent/src/contracts/clientTypes'
 import { countTelemetry } from '../telemetrySend'
@@ -143,7 +144,7 @@ export async function realtimeSocket(t: EngineTarget): Promise<{ url: string; pr
   const u = new URL(`${t.base}/agent/realtime`, location.href)
   u.protocol = u.protocol === 'https:' ? 'wss:' : 'ws:'
   if (t.via === 'cloud') return { url: u.href, protocols: [REALTIME_BEARER_PROTOCOL, token] }
-  u.searchParams.set('token', token)
+  if (token) u.searchParams.set('token', token) // 设备页没有本页令牌时不带(凭据走壳注入 / Cookie)
   return { url: u.href }
 }
 
@@ -179,6 +180,24 @@ export const createSession = (
     method: 'POST',
     body: JSON.stringify({ app_id: AGENT_APP_ID, ...(init || {}) }),
   }).then((r) => r.session)
+
+/** 批量导入外部聊天记录成会话(2026-11-16,引擎 POST /agent/sessions/import):追加不覆盖,同一条再导回 exists。 */
+export interface SessionImportBody {
+  source: string
+  agent_config: AgentConfig
+  model_id?: string
+  conversations: Array<{
+    external_id: string; title?: string; created_at?: number; updated_at?: number
+    messages: Array<{ role: 'user' | 'assistant'; content: string; reasoning?: string; timestamp?: number; model_id?: string }>
+  }>
+}
+export type SessionImportRow = { external_id: string; status: 'created' | 'exists' | 'error'; session_id?: string; messages?: number; error?: string }
+export const importSessions = (t: EngineTarget, body: SessionImportBody, signal?: AbortSignal) =>
+  request<{ results: SessionImportRow[] }>(t, '/agent/sessions/import', {
+    method: 'POST',
+    body: JSON.stringify({ app_id: AGENT_APP_ID, projectless: true, ...body }),
+    ...(signal ? { signal } : {}),
+  }, { timeoutMs: 120_000 }).then((r) => r.results)
 
 /** 私聊(Agent 轨道):该 Agent / 外部引擎的活动私聊会话,没有就建(引擎侧单点,多窗口同击只得一条)。host-only:云端 404。 */
 export const soloOpen = (t: EngineTarget, kind: 'agent' | 'engine', id: string) =>
@@ -279,9 +298,13 @@ export const startChildSession = (t: EngineTarget, parentId: string, body: { tit
   request<{ sessionId: string; runId: string; title: string }>(t, `/agent/sessions/${encodeURIComponent(parentId)}/children`, { method: 'POST', body: JSON.stringify(body) })
 
 export const listMessages = (t: EngineTarget, sessionId: string, limit = 200, before?: number) =>
-  request<{ messages: MessageRecord[] }>(
+  listHistory(t, sessionId, limit, before).then((r) => r.messages)
+
+/** 同一个接口,连同失败的那几轮一起(引擎 services/failedRuns.ts):重开对话时据此补回失败行。老引擎不带 = 空,不是「没有失败」以外的意思。 */
+export const listHistory = (t: EngineTarget, sessionId: string, limit = 200, before?: number) =>
+  request<{ messages: MessageRecord[]; failed_runs?: FailedRunRecord[] }>(
     t, `/agent/sessions/${encodeURIComponent(sessionId)}/messages?limit=${limit}${before ? `&before=${before}` : ''}`,
-  ).then((r) => r.messages)
+  ).then((r) => ({ messages: r.messages, failedRuns: Array.isArray(r.failed_runs) ? r.failed_runs : [] }))
 
 /**
  * 整段对话:接口单页硬限 500 且只回最近一页,必须用 before 游标向前翻页,否则早期内容静默丢失。
@@ -561,13 +584,13 @@ export const importEngineAsset = (t: EngineTarget, engineId: string, kind: 'skil
     body: JSON.stringify({ kind, name }),
   })
 
-/** 懒探测某引擎能力(模型 + slash 命令);首次会 spawn(慢),后端缓存。失败 → 空。 */
-export const getEngineCapabilities = (t: EngineTarget, engineId: string) =>
+/** 懒探测某引擎能力(模型 + slash 命令);首次会 spawn(慢),后端缓存。fresh = 让后端不用缓存、重新探测。失败 → 空。 */
+export const getEngineCapabilities = (t: EngineTarget, engineId: string, fresh = false) =>
   request<{
     models?: Array<{ id: string; name: string; description?: string }>
     currentModelId?: string
     commands?: Array<{ name: string; description: string; hint?: string }>
-  }>(t, `/agent/engines/${encodeURIComponent(engineId)}/capabilities`, undefined, { timeoutMs: 45000 })
+  }>(t, `/agent/engines/${encodeURIComponent(engineId)}/capabilities${fresh ? '?fresh=1' : ''}`, undefined, { timeoutMs: 45000 })
     .then((r) => ({ models: r.models || [], currentModelId: r.currentModelId, commands: r.commands || [] }))
     .catch(() => ({
       models: [] as Array<{ id: string; name: string; description?: string }>,
@@ -863,7 +886,7 @@ export const setChannelConnectedSession = (t: EngineTarget, kind: ChannelKind, s
 
 // ── Normal Agent（本地自定义人格;仅本地后端可用,云端返回 404 → 调用方降级空列表）──
 export const listAgents = (t: EngineTarget) =>
-  request<{ agents: NormalAgentDef[] }>(t, '/agent/agents').then((r) => r.agents).catch(() => [] as NormalAgentDef[])
+  request<{ agents: NormalAgentDef[]; approvalCap?: string }>(t, '/agent/agents').then((r) => { noteApprovalCap(r.approvalCap); return r.agents }).catch(() => [] as NormalAgentDef[])
 
 /** 分身清单(本机引擎;旧引擎 / 云端 → 空)。不带 slug = 全部。 */
 export const listStandIns = (t: EngineTarget, slug?: string) =>
@@ -996,13 +1019,15 @@ export interface AgentMemoryLayers {
   organize: MemoryOrganizeView
 }
 export const getPortraitOrganize = (t: EngineTarget) => request<MemoryOrganizeView>(t, '/agent/human/SOUL.md/organize')
-export const runPortraitOrganize = (t: EngineTarget) => request<MemoryOrganizeOutcome>(t, '/agent/human/SOUL.md/organize', { method: 'POST' }, { timeoutMs: 150_000 })
+/** 手点整理要等后台模型:时限 = 引擎一次整理调用的截止(memoryOrganize 的 ORGANIZE_CALL_DEADLINE_MS,300 秒)+ 10 秒,两边一起改。 */
+const ORGANIZE_TIMEOUT_MS = 310_000;
+export const runPortraitOrganize = (t: EngineTarget) => request<MemoryOrganizeOutcome>(t, '/agent/human/SOUL.md/organize', { method: 'POST' }, { timeoutMs: ORGANIZE_TIMEOUT_MS })
 export const undoPortraitOrganize = (t: EngineTarget, id: string) => request<{ id: string; undoneAt: number }>(t, `/agent/human/SOUL.md/organize/${encodeURIComponent(id)}/undo`, { method: 'POST' })
 /** 按原句钉住 / 取消;详情里的那条钉住 = 挪回常驻。回来的是整份画像。 */
 export const pinPortraitEntry = (t: EngineTarget, body: { fact: string; pinned: boolean; expectedVersion: string }) =>
   request<{ content: string; version: string }>(t, '/agent/human/SOUL.md/pin', { method: 'POST', body: JSON.stringify(body) })
 export const getAgentMemoryLayers = (t: EngineTarget, slug: string) => request<AgentMemoryLayers>(t, `${agentMemoryPath(slug)}/layers`)
-export const runAgentMemoryOrganize = (t: EngineTarget, slug: string) => request<MemoryOrganizeOutcome>(t, `${agentMemoryPath(slug)}/organize`, { method: 'POST' }, { timeoutMs: 150_000 })
+export const runAgentMemoryOrganize = (t: EngineTarget, slug: string) => request<MemoryOrganizeOutcome>(t, `${agentMemoryPath(slug)}/organize`, { method: 'POST' }, { timeoutMs: ORGANIZE_TIMEOUT_MS })
 export const undoAgentMemoryOrganize = (t: EngineTarget, slug: string, id: string) =>
   request<{ id: string; undoneAt: number; changed: string[] }>(t, `${agentMemoryPath(slug)}/organize/${encodeURIComponent(id)}/undo`, { method: 'POST' })
 export const pinAgentMemoryEntry = (t: EngineTarget, slug: string, body: { id: string; pinned: boolean; expectedVersion?: string }) =>
@@ -1848,9 +1873,10 @@ export const resolveProjectCandidate = (t: EngineTarget, sessionId: string, id: 
 /** 把写满压缩时合并 / 去掉的一句原样记回项目记忆。404 = 那一句已经不在记录里;放不下 → err.code 'MEMORY_FULL'。 */
 export const restoreProjectMemoryFact = (t: EngineTarget, sessionId: string, id: string) =>
   request<{ memory: ProjectMemoryView }>(t, '/agent/project-context/memory/restore', { method: 'POST', body: JSON.stringify({ sessionId, id }) }).then((r) => r.memory)
-/** 项目记忆分层(11-09 2b):手点「整理」(先挪进详情,再丢过时的;要等后台模型,给长一点的时限)、整次撤销、钉住。只在宿主本机。 */
+/** 项目记忆分层(11-09 2b):手点「整理」(先挪进详情,再丢过时的;要等后台模型,给长一点的时限)、整次撤销、钉住。只在宿主本机。
+ *  时限 = 引擎整理一整次的截止(projectMemoryCompact 的 ORGANIZE_DEADLINE_MS,610 秒)+ 10 秒,两边一起改。 */
 export const organizeProjectMemory = (t: EngineTarget, sessionId: string) =>
-  request<ProjectMemoryOrganizeOutcome>(t, '/agent/project-context/memory/organize', { method: 'POST', body: JSON.stringify({ sessionId }) }, { timeoutMs: 200_000 })
+  request<ProjectMemoryOrganizeOutcome>(t, '/agent/project-context/memory/organize', { method: 'POST', body: JSON.stringify({ sessionId }) }, { timeoutMs: 620_000 })
 export const undoProjectMemoryOrganize = (t: EngineTarget, sessionId: string, id: string) =>
   request<{ memory: ProjectMemoryView; changed: string[] }>(t, '/agent/project-context/memory/organize/undo', { method: 'POST', body: JSON.stringify({ sessionId, id }) })
 export const pinProjectMemoryEntry = (t: EngineTarget, sessionId: string, body: { id: string; pinned: boolean; expectedVersion?: string }) =>

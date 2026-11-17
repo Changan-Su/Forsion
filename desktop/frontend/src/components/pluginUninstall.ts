@@ -33,16 +33,18 @@ async function trashBundleEngineSettings(p: AmadeusPlugin): Promise<string[]> {
 
 /** Forsion 插件:文件 + 设置(可留)+ 库里的工作文件夹(勾了才挪)进回收站(主进程挪,restorer=desktop)。
  *  engine = 引擎连着(内嵌引擎插件要先关、卸完重扫);onGone 在文件已经挪走后调(详情页据此退回列表)。返回 false = 没卸成(已提示)。 */
-export async function uninstallForsionPlugin(p: AmadeusPlugin, name: string, opts: { keepSettings: boolean; moveVault: boolean }, hooks: { engine: boolean; onGone?: () => void; onEngineReload?: () => void; storeItemId?: string }): Promise<boolean> {
+export async function uninstallForsionPlugin(p: AmadeusPlugin, name: string, opts: { keepSettings: boolean; moveVault: boolean; keepOld?: boolean }, hooks: { engine: boolean; onGone?: () => void; onEngineReload?: () => void; storeItemId?: string }): Promise<boolean> {
   const ids = p.bundle?.enginePlugins ?? []
   const tele = hooks.storeItemId ? { pluginId: hooks.storeItemId, pluginOfficial: true } : telemetryPluginRef(p) // 卸之前算:卸完商店记录就撤了
   // ⚠️这里别写 enabled:false:写进 config.json 的「关」不随目录走,重装后内嵌引擎插件就一直关着。工具靠下面的重扫撤。
   const engineTrash = hooks.engine && !opts.keepSettings ? await trashBundleEngineSettings(p) : []
-  const prefs = opts.keepSettings ? {} : pluginPrefs(p.id)
+  // 商店版取代着一份旧普通目录:缺省一起走(主进程自己认是哪个目录),否则卸完它就重新运行;它的偏好跟着「保留设置」走
+  const withOld = !!p.supersedes && !opts.keepOld
+  const prefs = opts.keepSettings ? {} : { ...pluginPrefs(p.id), ...(withOld && p.supersedes ? pluginPrefs(p.supersedes.id) : {}) }
   const vaultFolder = opts.moveVault ? pluginVaultFolder(p.id, p.name) : null
   let r: { trashId?: string; dirName?: string } | void
   try {
-    r = await amadeus.uninstallPlugin?.(p.id, { keepSettings: opts.keepSettings, ...(vaultFolder ? { vaultFolder } : {}), ...(Object.keys(prefs).length ? { prefs } : {}), ...(engineTrash.length ? { engineTrash } : {}) })
+    r = await amadeus.uninstallPlugin?.(p.id, { keepSettings: opts.keepSettings, ...(vaultFolder ? { vaultFolder } : {}), ...(Object.keys(prefs).length ? { prefs } : {}), ...(engineTrash.length ? { engineTrash } : {}), ...(withOld ? { withSuperseded: true } : {}) })
   } catch (e: any) {
     for (const id of engineTrash) await restoreTrashEntry(homeTarget(), id).catch(() => {}) // 没卸成:设置接回去(接不回的留在回收站里)
     // 主进程的开发副本守卫用机器码开头(见 electron/amadeus/ipc.ts 的 uninstallPlugin):用户真会撞上(开发副本可能是别的窗口 /
@@ -72,6 +74,39 @@ export async function uninstallForsionPlugin(p: AmadeusPlugin, name: string, opt
     } else hooks.onEngineReload?.()
   }
   notifyUninstalled(translate('settings.amadeusPlugins.uninstalled', { name }), name, r?.trashId ? { id: r.trashId, kind: 'plugin', restorer: 'desktop' } : null)
+  return true
+}
+
+/** 旧副本自己的工作文件夹(库里)。和商店那份落在同一个文件夹(两份同名,都认旧式的 Plugins/<显示名>)时不算它的:
+ *  那是正在跑的商店版的数据,既不能说「没带过来」,更不能跟着旧副本进回收站。 */
+export function supersededVaultFolder(store: AmadeusPlugin): string | null {
+  const old = store.supersedes
+  const mine = old ? pluginVaultFolder(old.id, old.name) : null
+  return mine && mine !== pluginVaultFolder(store.id, store.name) ? mine : null
+}
+
+/** 清掉被商店安装取代的旧普通目录(设置页「旧的本地安装」一节)。它已停用,商店那份不动:按旧副本的生效 id(= manifest id)卸载,
+ *  主进程只会找到普通目录。有回收站的宿主(桌面)进回收站、6 秒内可撤销;没有的(手机)直接删、设置留在本机(调用方先问过)。 */
+export async function cleanupSupersededCopy(store: AmadeusPlugin, name: string, opts: { keepSettings: boolean; moveVault: boolean }): Promise<boolean> {
+  const old = store.supersedes
+  if (!old) return false
+  const hasTrash = typeof amadeus.trashRestore === 'function'
+  const keepSettings = opts.keepSettings || !hasTrash
+  const prefs = keepSettings ? {} : pluginPrefs(old.id)
+  const vaultFolder = hasTrash && opts.moveVault ? supersededVaultFolder(store) : null
+  let r: { trashId?: string } | void
+  try {
+    r = await amadeus.uninstallPlugin?.(old.id, { keepSettings, dir: old.dir, ...(vaultFolder ? { vaultFolder } : {}), ...(Object.keys(prefs).length ? { prefs } : {}) })
+  } catch (e: any) {
+    const text = ipcErrorText(e)
+    panelToast(text.startsWith('dev-shadowed') ? translate('settings.amadeusPlugins.devShadowedUninstall') : text, true)
+    return false
+  }
+  dropPluginPrefs(prefs)
+  await reloadPluginsAndAnnounce() // 只刷元数据(supersedes 没了):商店那份照跑,不拆不装
+  const label = { name, version: old.version }
+  if (hasTrash) notifyUninstalled(translate('settings.amadeusPlugins.superseded.done', label), name, r?.trashId ? { id: r.trashId, kind: 'plugin', restorer: 'desktop' } : null)
+  else panelToast(translate('settings.amadeusPlugins.superseded.doneMobile', label))
   return true
 }
 

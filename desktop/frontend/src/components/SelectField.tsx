@@ -13,7 +13,8 @@ export function moveOptionFocus(e: KeyboardEvent<HTMLDivElement>): void {
   buttons[next]?.focus()
 }
 
-export interface SelectOption { value: string; label: string }
+/** disabled:只作展示、不可选(如当前值超出了调用方允许的范围)。 */
+export interface SelectOption { value: string; label: string; disabled?: boolean }
 
 /**
  * 普通下拉(思考档位、审批模式、图像工作室参数、自动化执行者…):触发器 + 就地展开的选项,不浮层、不带搜索
@@ -58,7 +59,7 @@ export function SelectField({ label, ariaLabel, value, options, onChange, disabl
       moveOptionFocus(e)
     }}>
       <div className="profile-model-results">
-        {options.map((o) => <button key={o.value} type="button" role="option" data-value={o.value} aria-selected={o.value === value} onClick={() => choose(o.value)}><span>{o.label}</span>{o.value === value && <Check size={14} />}</button>)}
+        {options.map((o) => <button key={o.value} type="button" role="option" data-value={o.value} aria-selected={o.value === value} disabled={o.disabled} aria-disabled={o.disabled || undefined} onClick={() => { if (!o.disabled) choose(o.value) }}><span>{o.label}</span>{o.value === value && <Check size={14} />}</button>)}
       </div>
     </div>}
   </div>

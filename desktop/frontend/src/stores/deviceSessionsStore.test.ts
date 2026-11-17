@@ -99,6 +99,33 @@ describe('roster', () => {
     await S.useDeviceSessions.getState().refresh()
     expect(S.useDeviceSessions.getState().units!.map((u) => u.id)).toEqual([MAC, PC])
   })
+
+  it('an older request that answers late does not overwrite a newer answer; it still counts when the newer one failed', async () => {
+    const pending: Array<(r: unknown) => void> = []
+    const tangu = { mobile: true, cloudWeb: true, unitsList: () => new Promise((res) => { pending.push(res) }), unitSelf: async () => ({ registered: true, unitId: PHONE, name: 'Pixel' }) }
+    vi.stubGlobal('window', { tangu })
+    const ok = (units: unknown[]) => ({ status: 200, json: { units } })
+    // A 先发、卡住;B 后发、先回(有一台电脑);A 晚到(空名册)→ 不盖
+    const a = S.useDeviceSessions.getState().refreshRoster()
+    const b = S.useDeviceSessions.getState().refreshRoster()
+    pending[1]!(ok([unit(MAC)]))
+    await b
+    expect(S.useDeviceSessions.getState().units!.map((u) => u.id)).toEqual([MAC])
+    pending[0]!(ok([]))
+    expect((await a)!.map((u) => u.id)).toEqual([MAC])
+    expect(S.useDeviceSessions.getState().units!.map((u) => u.id)).toEqual([MAC])
+    // 反过来:晚发的那次没读到 → 早发的晚到照样写(读失败不算数,不能连带把读到的也丢了)
+    S.useDeviceSessions.getState().reset()
+    pending.length = 0
+    const c = S.useDeviceSessions.getState().refreshRoster()
+    const d = S.useDeviceSessions.getState().refreshRoster()
+    pending[1]!({ status: 500 })
+    await d
+    expect(S.useDeviceSessions.getState().units).toBeNull()
+    pending[0]!(ok([unit(PC)]))
+    await c
+    expect(S.useDeviceSessions.getState().units!.map((u) => u.id)).toEqual([PC])
+  })
 })
 
 describe('phone not registered yet (K8: registration only happens when you first pick a computer)', () => {

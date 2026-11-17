@@ -28,6 +28,12 @@
 - 原生思考的端点（能力表里的 effort / 预算 / 开关各形态）：正文上限之外另留 4096。
 - 档位只是一句系统提示的端点（`prefix`）和模型自带思考、不可调的端点（`none`）：不留。它们的推理量没有因为给了档位而变；其中的老模型输出上限往往只有 4096，多给会让原来能跑的调用直接被拒。
 - 托管模型按 `model.defaultBaseUrl` 认端点（`resolveModelAndKey` 给的 `baseUrl` 是网关占位），和主循环算「实际生效档位」是同一个口径。
+- **Claude 自适应族**（模型 id 命中能力表的 `CLAUDE_ADAPTIVE`：Claude 5 家族、Opus 4.7+）：不看端点格式、不看档位，一律另留 `CLAUDE_THINKING_HEADROOM` = 16384（2026-11-15 起）。托管 Claude 行在服务端是 `reasoning_mode: prefix`，请求里没有 thinking 字段，Claude 5 照样自己想、想多长模型自己定；引擎侧拿不到 `reasoning_mode`，只认得出模型 id。实测吃光过：主循环 max 档约 85 秒思考吃光 8192，项目记忆整理的 12288 也被吃光（服务端 422「Upstream output limit reached before any reply was produced」）。上界：后台调用最大的正文上限 12288 加上它是 28672，不超过 `CLAUDE_MAX_TOKENS_CEILING`（32000，服务端缺省同值）。
+- 原来不留余量的小调用（标题、改写、判官、团队摘要、关着思考的旁问）只加 `claudeThinkingHeadroom`：Claude 自适应族 16384，别的模型 0、一字不变。别给它们接整个 `thinkingHeadroom`：OpenRouter 上的老款输出上限只有 4096，600 → 4696 会被直接拒（2026-11-15 Codex 评审）。
+
+下表「+ 余量」= 正文上限 + `thinkingHeadroom`；「+ Claude 余量」= 只有 Claude 自适应族另加 16384。
+
+本来就接了 `thinkingHeadroom` 的几处（输入建议、Historian 独立判官、Dream、外部导入、画像搬移）在 Claude 自适应族上也从 +4096 变成 +16384。按实际产出计费，上限大了不多花钱；只是思考真那么长时，这些调用会多等一会儿才出结果，而不是截断后报错。
 
 落到这两处：
 
@@ -61,24 +67,27 @@ GPT 6 Luna 中档实测：判官一次调用的输出（含推理）最多 344 t
 | 主循环 | `services/agentLoop.ts` | 会话 / agent 的档位（缺省 medium） | 不设 | 参照行 |
 | 子代理 | `services/subAgent.ts` | agent 定义的档 → 父 run 的档 → medium | 不设 | 同上 |
 | 自我脑暴的分身 | `services/selfBrainstorm.ts` | 跟父 run 同档（缺省 medium）。档位不同前缀缓存就对不上。缓存路由键也照主循环给（`cacheKey` 会话 + `agentId` 本 run 的 agent），见表后「接在主循环上下文后面的调用」 | 固定值 | 只是给主循环的参考意见 |
-| Historian 分身判官（`fork` 模式） | `services/localHistorian.ts` `forkJudge` | 跟父 run 同档（缺省 medium），理由同上；缓存路由键同上（`agentId` 由主循环收尾时放进快照） | 1600 | 同下一行；失败时回落到独立判官 |
-| 输入建议（客户端开了才调；一轮最多一次） | `services/promptSuggestion.ts` `suggestNextPrompt` ← `POST /agent/sessions/:id/suggest` | 跟父 run 同档（缺省 medium），理由同上：这功能的成本只有「多读一次缓存」，前提就是前缀对得上 | 120，原生思考的模型另加 4096 | 输入框里一句灰字，用户看得见、不按 Tab 就不生效；不合规（多行 / 太长 / 被截断 / `NONE`）一律当没有 |
-| **Historian 独立判官**（缺省模式；辅助模式下也由它出标题 / 摘要 / 进化记录提名） | `services/historianSession.ts` ← `localHistorian.ts` `runHistorianForSession` | **medium**（2026-10-06 起；此前没传 = 关） | 1600，原生思考的模型另加 4096 | 记忆候选进收件箱（Dream 还要对来源）；**项目级候选和进化记录提名里不带风险字眼的直接写进长期内容**；日志、摘要、标题 |
-| 团队讨论的收尾总结 | 同一个函数，`task: 'team-summary'` ← `services/groupChat.ts` | 关（没传） | 1200 | 只是给用户看的一段总结，失败不影响团队那一轮 |
-| 首帧标题 | `localHistorian.ts` `onUserRunStart` | low | 600 | 标题不贴切 |
-| **Dream 提议** | `services/memoryDream.ts` `complete(PROPOSE)` | **medium**（2026-10-06 起；此前没传 = 关） | 3072，原生思考的模型另加 4096 | 校验不过 → 整轮失败、候选留到下次；过了校验但归并时丢了限定条件 → 靠下一行拦；该记的被当成噪音丢掉 → 这条候选就没了 |
-| **Dream 核验** | `memoryDream.ts` `complete(VERIFY)` | **medium**（同上） | 1024，原生思考的模型另加 4096 | 误放 → 错的归并写进 MEMORY.md（有版本可回退）；误拒 → 这一轮白跑 |
-| 项目记忆写满时的压缩 | `services/projectMemoryCompact.ts` | medium（2026-10-05 起；头两版没传，前台 19 次只对 8 次） | 12288 | 压错了会丢项目记忆里的现行规矩；去掉的原句进 `COMPACTED.json`、能逐句恢复 |
-| 云端 Historian（web / 安卓的 tangu 会话，网关上跑） | `services/historian.ts` `judgeAndWrite` | low | 800 | 直接追加进长期记忆（云端没有 Dream），每趟最多 3 条 |
-| 云端 Historian（AI Studio 空闲复盘） | `historian.ts` `summarizeSession` | 关（没传） | 300 | 一行日志 |
+| Historian 分身判官（`fork` 模式） | `services/localHistorian.ts` `forkJudge` | 跟父 run 同档（缺省 medium），理由同上；缓存路由键同上（`agentId` 由主循环收尾时放进快照） | 1600 + Claude 余量（上限不在前缀里，不影响缓存） | 同下一行；失败时回落到独立判官 |
+| 输入建议（客户端开了才调；一轮最多一次） | `services/promptSuggestion.ts` `suggestNextPrompt` ← `POST /agent/sessions/:id/suggest` | 跟父 run 同档（缺省 medium），理由同上：这功能的成本只有「多读一次缓存」，前提就是前缀对得上 | 120 + 余量（Claude 自适应族上是 16504） | 输入框里一句灰字，用户看得见、不按 Tab 就不生效；不合规（多行 / 太长 / 被截断 / `NONE`）一律当没有 |
+| **Historian 独立判官**（缺省模式；辅助模式下也由它出标题 / 摘要 / 进化记录提名） | `services/historianSession.ts` ← `localHistorian.ts` `runHistorianForSession` | **medium**（2026-10-06 起；此前没传 = 关） | 1600 + 余量 | 记忆候选进收件箱（Dream 还要对来源）；**项目级候选和进化记录提名里不带风险字眼的直接写进长期内容**；日志、摘要、标题 |
+| 团队讨论的收尾总结 | 同一个函数，`task: 'team-summary'` ← `services/groupChat.ts` | 关（没传） | 1200 + Claude 余量 | 只是给用户看的一段总结，失败不影响团队那一轮 |
+| 首帧标题（及标题 / 摘要不是对话语言时的改写） | `localHistorian.ts` `onUserRunStart` / `inConversationLanguage` | low | 600 + Claude 余量 | 标题不贴切 |
+| **Dream 提议** | `services/memoryDream.ts` `complete(PROPOSE)` | **medium**（2026-10-06 起；此前没传 = 关） | 3072 + 余量 | 校验不过 → 整轮失败、候选留到下次；过了校验但归并时丢了限定条件 → 靠下一行拦；该记的被当成噪音丢掉 → 这条候选就没了 |
+| **Dream 核验** | `memoryDream.ts` `complete(VERIFY)` | **medium**（同上） | 1024 + 余量 | 误放 → 错的归并写进 MEMORY.md（有版本可回退）；误拒 → 这一轮白跑 |
+| 项目记忆写满时的压缩 | `services/projectMemoryCompact.ts` | medium（2026-10-05 起；头两版没传，前台 19 次只对 8 次） | 12288 + 余量（2026-11-15 前不加，托管 Claude 5 上被思考吃光） | 压错了会丢项目记忆里的现行规矩；去掉的原句进 `COMPACTED.json`、能逐句恢复 |
+| 记忆整理（个人画像 / Agent 记忆 / 项目记忆分层） | `services/memoryOrganize.ts` `proposeOrganize` | medium | 12288 + 余量（同上） | 方案过不了 `validateOrganizePlan` 就不动；过了是挪层 / 归档，原句可找回 |
+| 云端 Historian（web / 安卓的 tangu 会话，网关上跑） | `services/historian.ts` `judgeAndWrite` | low | 800 + Claude 余量 | 直接追加进长期记忆（云端没有 Dream），每趟最多 3 条 |
+| 云端 Historian（AI Studio 空闲复盘） | `historian.ts` `summarizeSession` | 关（没传） | 300 + Claude 余量 | 一行日志 |
 | 会话压缩的摘要 | `services/compaction.ts` `summarizeWith` | 设置项 `compaction.thinking`，缺省 `off`；`inherit` = 跟本 run | 6144，另受窗口约束 | 摘要漏了东西，之后每个 run 都从这份摘要接着跑。档位是用户可调的，见 `docs/compaction.md` |
-| Muse 代批判官 | `services/pendingApprovals.ts` `judgeApproval` | low | 300 | 误批 = 后台 agent 的一个动作在用户不在时被执行；没给出裁决一律按否决（转排队等用户） |
-| `/btw` 旁问 | `services/aside.ts` | 关（没传） | min(4096, 窗口 / 4) | 用户当场看到回答 |
+| Muse 代批判官 | `services/pendingApprovals.ts` `judgeApproval` | low | 300 + Claude 余量 | 误批 = 后台 agent 的一个动作在用户不在时被执行；没给出裁决一律按否决（转排队等用户） |
+| `/btw` 旁问 | `services/aside.ts` | 关（没传） | min(4096, 窗口 / 4) + Claude 余量（开了档是 + 余量），连回答不超过窗口一半 | 用户当场看到回答 |
 | 正文里的生成式 AI | `services/inlineAi.ts` | 关（没传） | 同上 | 用户当场看到，自己决定用不用 |
 | 提交说明 | `services/gitActions.ts` `generateCommitMessage` | 关（没传） | 400 | 用户提交前看得到、能改 |
 | 图像识别（辅助视觉模型） | `services/visionService.ts` `describeImages` | 关（没传） | 1500 | 主模型拿到一段不准的图片描述 |
 
-三处 `low` 是能力表之前定的：那时不传档位、DeepSeek 类端点按自己的缺省（high）思考，推理吃光了输出上限、只剩空正文，所以压到 low。现在不传就是关（DeepSeek V4 发的是 `thinking: {type: 'disabled'}`），这三处的 `low` 实际是「比不传多想一点」。它们的输出上限（300 / 600 / 800）都按 low 的推理量给的，要往上调档得连上限一起调。
+三处 `low` 是能力表之前定的：那时不传档位、DeepSeek 类端点按自己的缺省（high）思考，推理吃光了输出上限、只剩空正文，所以压到 low。现在不传就是关（DeepSeek V4 发的是 `thinking: {type: 'disabled'}`），这三处的 `low` 实际是「比不传多想一点」。它们的输出上限（300 / 600 / 800）都按 low 的推理量给的，要往上调档得连上限一起调。2026-11-15 起这几处在正文之外加 `claudeThinkingHeadroom`：托管 Claude 5 不发思考字段也会想，只给几百 token 就是一句正文都没有的 422；别的模型不变。
+
+还没加余量的同类小上限（Claude 5 当后台 / 视觉模型时同样可能被吃光，待另修）：正文生成 `inlineAi.ts`、提交说明 `gitActions.ts`（400）、图像识别 `visionService.ts`（1500）、自我脑暴 `selfBrainstorm.ts`（2000）、压缩摘要 `compaction.ts`（撞上限会放宽重试一次）。
 
 没改的几处为什么不改：旁问、正文生成、提交说明是用户当场看着的，等待时间比多想一步要紧，结果也不落进长期内容；图像识别用的是辅助视觉模型，多数不支持调档；压缩摘要的档位本来就是用户设置；云端两处在网关上跑，改了要重新打包部署 server，而且云端判官的提示里没有「进化记录提名」那一项（这次量出差别的正是它）。这几处都没有用真模型量过开与不开的差别。
 

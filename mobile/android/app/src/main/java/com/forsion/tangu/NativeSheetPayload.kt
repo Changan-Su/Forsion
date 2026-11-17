@@ -29,6 +29,10 @@ internal data class SheetTheme(
     val motion: String = "genesis",
     /** "Fade only" on the page: the dock moves nothing, as with the system's "remove animations". */
     val motionFade: Boolean = false,
+    /** The page's floating surface (`--surface-float`, opaque): the notification banner's fill. Older pages = [surface]. */
+    val float: Int = surface,
+    /** The theme colour for text (`--accent-ink`): the banner's button. Older pages = [accent]. */
+    val accentInk: Int = accent,
 )
 
 internal data class MenuTrailingSpec(val id: String, val label: String, val icon: NativeIconSpec?)
@@ -278,6 +282,8 @@ internal object NativeJson {
         warning = color(obj, if (obj.has("warning")) "warning" else "danger"),
         motion = obj.optString("motionTheme", "genesis").takeIf { it in MOTION_THEMES } ?: "genesis",
         motionFade = obj.optBoolean("motionFade", false),
+        float = color(obj, if (obj.has("float")) "float" else "surface"),
+        accentInk = color(obj, if (obj.has("accentInk")) "accentInk" else "accent"),
     )
 
     private val MOTION_THEMES = setOf("genesis", "droplet", "stretch", "glide")

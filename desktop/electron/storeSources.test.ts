@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import JSZip from 'jszip'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { createStoreSources, packageManifestId, subtreeZip } from './storeSources'
+import { createStoreSources, packageManifest, packageManifestId, subtreeZip } from './storeSources'
 
 const json = (v: unknown) => new Response(JSON.stringify(v), { status: 200 })
 async function zipOf(files: Record<string, string>): Promise<Buffer> {
@@ -385,5 +385,11 @@ describe('package helpers', () => {
     // A Windows-style separator is laid out by the installer as `manifest.json` at the root.
     expect(await packageManifestId(await zipOf({ 'pkg\\manifest.json': JSON.stringify({ id: 'victim', version: '1.0.0' }), 'pkg\\main.js': 'x' }), 'amadeus-plugin')).toBe('victim')
     await expect(packageManifestId(await zipOf({ 'manifest.json': JSON.stringify({ id: 'a' }), 'Manifest.json': JSON.stringify({ id: 'b' }) }), 'amadeus-plugin')).rejects.toThrow('install: duplicate path in archive')
+  })
+
+  it('reads a manifest whose name differs only in case (a case-insensitive disk installs it as manifest.json)', async () => {
+    // 负对照(已实跑红):packageManifest 改回按原样大小写找 → 读不到,internals-raw 审核被绕过
+    const m = await packageManifest(await zipOf({ 'Manifest.JSON': JSON.stringify({ id: 'p', version: '1.0.0', capabilities: ['internals', 'internals-raw'] }), 'main.js': 'x' }), 'amadeus-plugin')
+    expect(m?.capabilities).toEqual(['internals', 'internals-raw'])
   })
 })

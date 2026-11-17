@@ -7,7 +7,9 @@ import { ListFab } from '../components/phoneList'
 import type { ViewProps } from '@lcl/engine/types'
 import { useApp } from '../stores/appStore'
 import { useI18n } from '../i18n'
-import { deleteAgentAvatar, fetchAgentAvatar, getAgentHarness, listAgents, listSkills, listTools, putAgentsMeta, renameAgentDef, saveAgentDef, uploadAgentAvatar } from '../services/backendService'
+import { deleteAgentAvatar, fetchAgentAvatar, fetchToolCatalog, getAgentHarness, listAgents, listSkills, listTools, putAgentsMeta, renameAgentDef, saveAgentDef, uploadAgentAvatar } from '../services/backendService'
+import { MODE_KEY } from '../approvalReason'
+import { delegatedApprovalField, tanguDelegatedAdmin as isDelegatedAdmin, tanguDelegatedAdminName as delegatedAdminName } from '../tangu/delegatedRole'
 import { openAgentCreation, openAgentProfile, openHumanProfile } from './agentProfileNav'
 import { HumanProfile, useMeIdentity } from './HumanProfile'
 import { AgentMemoryPanel } from '../components/AgentMemoryPanel'
@@ -16,6 +18,7 @@ import { AgentMemoryModal } from '../components/AgentMemoryModal'
 import { HumanCollaborationPanel } from '../components/HumanCollaborationPanel'
 import { humanRewritable, type HumanJump } from '../services/humanCollaboration'
 import { AgentHarnessPanel } from '../components/AgentHarnessPanel'
+import { EngineHarnessRows } from './EngineHarnessRows'
 import { AgentSchedulePanel } from '../components/AgentSchedulePanel'
 import type { AgentConfig, NormalAgentDef, SessionRecord, SkillInfo, ToolsResponse } from '../../../../tangu-agent/src/contracts/clientTypes'
 import { ProfileGroup, ProfileModelField, ProfileSelectField, ProfileTextEditor, approvalOptions, thinkingOptions, useSectionNavSlide } from './profileControls'
@@ -35,6 +38,7 @@ import { track } from '../achievements/store'
 import { agentName, hasHan } from '../agentName'
 import '../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
 import { tanguCount } from '../tangu/telemetry'
+import { agentEngineLabel, agentEngineOf, agentEngineState, AGENT_ENGINE_IDS } from '../tangu/agentEngine'
 
 type Section = 'config' | 'skills' | 'mcp' | 'growth' | 'schedule' | 'human'
 // 成长 = Agent 随时间积累的两层:记忆(它知道什么)+ 进化(HARNESS 工作笔记:它怎么做事)。09-19 从两个一级标签并成一个,
@@ -44,6 +48,9 @@ const GROWTH_ICON = { memory: BookOpen, log: ScrollText, evolution: Sprout } as 
 const SECTIONS: Array<{ id: Section; icon: typeof Bot }> = [
   { id: 'config', icon: Settings2 }, { id: 'skills', icon: Sparkles }, { id: 'mcp', icon: Plug }, { id: 'human', icon: BookOpen }, { id: 'growth', icon: Sprout }, { id: 'schedule', icon: CalendarClock },
 ]
+/** 委托管理员只看得到这三页:MCP / 协作(human/)/ 成长(记忆、日志、工作笔记)的数据面都在那台设备的白名单外。 */
+const DELEGATED_SECTIONS = new Set<Section>(['config', 'skills', 'schedule'])
+const sectionsFor = (): typeof SECTIONS => (isDelegatedAdmin() ? SECTIONS.filter((x) => DELEGATED_SECTIONS.has(x.id)) : SECTIONS)
 const EMPTY_CONFIG: AgentConfig = {}
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,63}$/ // 与引擎 agentRegistry 同
 const slugOf = (name: string): string => name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64)
@@ -177,6 +184,7 @@ export function AgentsSpaceView({ leaf, params, extendView }: ViewProps) {
 export function AgentsRosterView() {
   const { t } = useI18n()
   const agents = useApp((s) => s.agentDefs)
+  const engines = useApp((s) => s.engines)
   const avatars = useApp((s) => s.agentAvatars)
   const defaultSlug = useApp((s) => s.defaultAgentSlug)
   const selected = useWorkspace(useShallow((s) => {
@@ -230,24 +238,34 @@ export function AgentsRosterView() {
   // 删除走与侧栏同一个卸载确认框(逐项写去向、进回收站);删掉的是正在看的那个 → 换到名册第一个
   const [removing, setRemoving] = useState<NormalAgentDef | null>(null)
   const standIns = useStandInsByBody() // 分身挂在本体下(不进名册、不能拖排序)
+  // 委托管理员:名册顺序与默认 Agent 存在 agents-meta 的写里(白名单外),「我」(human/)也不归它看 —— 这几样不出。
+  const delegated = isDelegatedAdmin()
   return <aside className="agents-roster">
       {/* 创建入口只留底部那一个(评审 U-25:标题行的 ＋ 与底部链接重复)。 */}
       <div className="agents-roster-heading"><span>{t('agentProfile.roster')} <small>{agents.length}</small></span></div>
+      {delegated && <p className="agent-profile-muted" data-delegated-admin>{delegatedAdminName() ? t('delegatedAdmin.signedInAs', { name: delegatedAdminName() }) : t('delegatedAdmin.role')}</p>}
       {/* 「我」置顶(human/ 文件夹),不进搜索、不能拖排序 */}
-      <div className="agents-roster-row" data-roster-me><button type="button" className={`agents-roster-item${!creating && selected.me ? ' selected' : ''}`} aria-pressed={!creating && selected.me} onClick={() => { setRosterError(''); openHumanProfile() }}>
+      {!delegated && <div className="agents-roster-row" data-roster-me><button type="button" className={`agents-roster-item${!creating && selected.me ? ' selected' : ''}`} aria-pressed={!creating && selected.me} onClick={() => { setRosterError(''); openHumanProfile() }}>
         <span className="agent-portrait small"><AgentAvatar name={meIdentity.name} url={meIdentity.avatar} fill /></span><span><strong>{meIdentity.name}</strong><small>{t('human.me.rowHint')}</small></span>
-      </button></div>
+      </button></div>}
       <label className="agents-search"><Search size={14} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t('agentProfile.search')} aria-label={t('agentProfile.search')} /></label>
-      <div className={`agents-roster-list${phone ? ' pl-fab-room' : ''}`}>{filtered.map((a) => <Fragment key={a.slug}><div className={`agents-roster-row${dragSlug === a.slug ? ' dragging' : ''}`} draggable={!rosterBusy && !query}
+      <div className={`agents-roster-list${phone ? ' pl-fab-room' : ''}`}>{filtered.map((a) => <Fragment key={a.slug}><div className={`agents-roster-row${dragSlug === a.slug ? ' dragging' : ''}`} draggable={!rosterBusy && !query && !delegated}
         onDragStart={(e) => { setDragSlug(a.slug); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', a.slug); startOpenDrag(e.dataTransfer, { open: () => selectAgent(a.slug) }) }} onDragEnd={() => setDragSlug(null)}
         onDragOver={(e) => { if (dragSlug && dragSlug !== a.slug) e.preventDefault() }} onDrop={(e) => { e.preventDefault(); if (dragSlug) void reorder(dragSlug, a.slug) }}>
         <button type="button" className={`agents-roster-item${viewing(a.slug) ? ' selected' : ''}`} onClick={() => selectAgent(a.slug)} aria-pressed={viewing(a.slug)}>
-          <span className="agent-portrait small"><AgentAvatar name={agentName(a)} url={avatars[a.slug]} siblings={rosterNames} fill /></span><span><strong>{agentName(a)}{a.slug === defaultSlug && <Star size={12} aria-label={t('agentProfile.isDefault')} fill="currentColor" />}{a.disabled && <em className="agents-roster-off">{t('agentProfile.disabledTag')}</em>}</strong><small>{agentDescription(a, t) || a.slug}</small></span>
+          <span className="agent-portrait small"><AgentAvatar name={agentName(a)} url={avatars[a.slug]} siblings={rosterNames} fill /></span><span>{(() => {
+            const name = <strong>{agentName(a)}{a.slug === defaultSlug && <Star size={12} aria-label={t('agentProfile.isDefault')} fill="currentColor" />}{a.disabled && <em className="agents-roster-off">{t('agentProfile.disabledTag')}</em>}</strong>
+            const engine = agentEngineOf(a)
+            // 跑在别的 harness 上的行尾小标(Tangu 上的不标);这台电脑上没装的再标「未安装」
+            return engine ? <span className="agents-roster-name">{name}{agentEngineState(engine, engines) === 'not-installed' && <em className="agents-roster-off" data-engine-missing>{t('agentEngine.notInstalled')}</em>}<em className="agents-roster-off agents-roster-engine" data-agent-engine={engine}>{agentEngineLabel(engine)}</em></span> : name
+          })()}<small>{agentDescription(a, t) || a.slug}</small></span>
         </button>
         <CapabilityMenu label={t('agentProfile.actionsFor', { name: agentName(a) })} className="agents-roster-more" items={[
+          ...(delegated ? [] : [
           { id: 'up', label: t('agentProfile.moveUp'), icon: <ArrowUp size={14} />, disabled: rosterBusy || agents[0]?.slug === a.slug, onSelect: () => void reorder(a.slug, agents[agents.indexOf(a) - 1]?.slug || a.slug) },
           { id: 'down', label: t('agentProfile.moveDown'), icon: <ArrowDown size={14} />, disabled: rosterBusy || agents.at(-1)?.slug === a.slug, onSelect: () => void reorder(a.slug, agents[agents.indexOf(a) + 1]?.slug || a.slug, true) },
           { id: 'default', label: t('agentProfile.makeDefault'), icon: <Star size={14} />, disabled: rosterBusy || a.slug === defaultSlug || !!a.disabled, onSelect: () => void setDefault(a.slug) },
+          ]),
           { id: 'disable', label: t(a.disabled ? 'agentProfile.enable' : 'agentProfile.disable'), icon: a.disabled ? <Eye size={14} /> : <EyeOff size={14} />, disabled: rosterBusy || (!a.disabled && (a.slug === 'xyra' || a.slug === defaultSlug || a.slug === 'muse')), onSelect: () => void toggleDisabled(a) },
           { id: 'delete', label: t('agentProfile.delete'), icon: <Trash2 size={14} />, danger: true, disabled: rosterBusy || a.slug === 'xyra' || a.slug === defaultSlug, onSelect: () => { setRosterError(''); setRemoving(a) } },
         ]}><MoreHorizontal size={15} /></CapabilityMenu>
@@ -283,17 +301,29 @@ function AgentProfile({ agent, compact = false, sessionId, rewriteSessionId, evo
     running: sessionId ? !!a.runningBySession[sessionId] : Object.entries(a.runningBySession).some(([id, run]) => !!run && a.configBySession[id]?.agentSlug === agent.slug),
     connected: a.connState === 'ok', usage: sessionId ? a.usageBySession[sessionId] : undefined,
     rewriteConfig: (sessionId || rewriteSessionId) ? a.configBySession[(sessionId || rewriteSessionId)!] : undefined, rewriteRunning: !!(rewriteSessionId && a.runningBySession[rewriteSessionId]), defaultSlug: a.defaultAgentSlug,
+    engines: a.engines, engineCaps: a.engineCaps,
   })))
   // 「重写」和 /refine 同一道门(manage_human 只在本机直连、非计划模式的会话里有),另加一条:那个会话的 Agent 就是这一页的 Agent,否则它改的是别人的那份
   const rewriteSid = sessionId || rewriteSessionId
   const rewriteHuman = rewriteSid && humanRewritable(s.rewriteConfig) && (s.rewriteConfig!.agentSlug || s.rewriteConfig!.soloAgentSlug || s.defaultSlug) === agent.slug
     ? () => { void useApp.getState().send(t('human.rewrite.agentPrompt'), [], undefined, undefined, undefined, rewriteSid) } : null
-  const [section, setSection] = useState<Section>(humanJump ? 'human' : evolutionJumpAt ? 'growth' : 'config')
+  const delegated = isDelegatedAdmin()
+  const sections = sectionsFor()
+  const approvalCap = useApp((x) => x.delegatedApprovalCap ?? null)
+  const [section, setSection] = useState<Section>(!delegated && humanJump ? 'human' : !delegated && evolutionJumpAt ? 'growth' : 'config')
   const navRef = useSectionNavSlide(section)
   const [growth, setGrowth] = useState<Growth>(evolutionJumpAt ? 'evolution' : 'memory')
   const [visitedMemory, setVisitedMemory] = useState(false)
   const [visitedLog, setVisitedLog] = useState(false)
   const [draft, setDraft] = useState(storedDraft?.draft || agent)
+  // 由谁来跑(11-14):以存下的为准判「这是不是跑在外部引擎上的 Agent」(草稿里换了还没保存时,下面的运行设置先照草稿显示)
+  const savedEngine = agentEngineOf(agent)
+  const draftEngine = agentEngineOf(draft)
+  const engineHere = agentEngineState(draftEngine, s.engines)
+  // 能换到哪些:Tangu + 这台电脑上检测得到(或已在用)的那几个。都没有、又不是已经跑在别处 → 不出 Harness 卡(第二轮页:Tangu 上不显示)。
+  const engineChoices = AGENT_ENGINE_IDS.filter((id) => id === savedEngine || s.engines.some((e) => e.id === id && e.status !== 'not-installed'))
+  const showHarness = agent.slug !== 'muse' && !agent.standInOf && (!!savedEngine || (engineChoices.length > 0 && !delegated))
+  useEffect(() => { if (draftEngine && engineHere === 'ready') useApp.getState().ensureEngineCaps(draftEngine) }, [draftEngine, engineHere])
   const [slugDraft, setSlugDraft] = useState(agent.slug) // 两处挂载点都 key={agent.slug},改名后随重挂归零
   const [dirty, setDirty] = useState(!!storedDraft)
   const dirtyFields = useRef(new Set<keyof NormalAgentDef>(storedDraft?.fields || []))
@@ -327,7 +357,9 @@ function AgentProfile({ agent, compact = false, sessionId, rewriteSessionId, evo
   useEffect(() => {
     let active = true
     setLoading(true); setLoadError('')
-    void Promise.allSettled([listSkills(homeTarget(), agent.slug), listTools(homeTarget())]).then(([skillResult, toolResult]) => {
+    // 委托管理员:工具名单只读 tool-catalog(/agent/tools 带 MCP 服务器明细,在白名单外);MCP 那页本来就不出。
+    const tools = delegated ? fetchToolCatalog(homeTarget()).then((tools) => ({ builtins: tools.map((x) => ({ ...x, mode: 'both' as const })), mcp: [] })) : listTools(homeTarget())
+    void Promise.allSettled([listSkills(homeTarget(), agent.slug), tools]).then(([skillResult, toolResult]) => {
       if (!active) return
       if (skillResult.status === 'fulfilled') setSkills(skillResult.value)
       if (toolResult.status === 'fulfilled') { setMcp(toolResult.value.mcp || []); setBuiltins(toolResult.value.builtins || []) }
@@ -340,19 +372,20 @@ function AgentProfile({ agent, compact = false, sessionId, rewriteSessionId, evo
   // 工作笔记面板挂着时(成长 › 进化)不读:面板自己在读同一个接口并经 onCandidates 报数,两边都读 = 每个沿两次同样的请求。
   const harnessOpen = section === 'growth' && growth === 'evolution'
   useEffect(() => {
-    if (harnessOpen) return
+    if (harnessOpen || delegated) return // 工作笔记(成长 › 进化)在委托管理员的白名单外,角标也不读
     let active = true
     getAgentHarness(homeTarget(), agent.slug).then((r) => { if (active) setCandidates(r.candidates?.length ?? 0) }).catch(() => { if (active) setCandidates(0) })
     return () => { active = false }
   }, [s.cfg, agent.slug, s.running, retry, harnessOpen])
+  useEffect(() => { if (savedEngine && growth === 'evolution') setGrowth('memory') }, [savedEngine, growth]) // 进化不显示时别停在空页上
   const navigate = (next: Section) => {
     setSection(next); setQuery(''); setEnabledOnly(false)
     scrollRef.current?.scrollTo({ top: 0 })
   }
   // 记忆面板和日志面板各有自己的草稿:第一次看到它才挂,之后一直留着(切标签 / 切分段都不卸)。
   useEffect(() => { if (section === 'growth' && growth === 'memory') setVisitedMemory(true); if (section === 'growth' && growth === 'log') setVisitedLog(true) }, [section, growth])
-  useEffect(() => { if (evolutionJumpAt) { navigate('growth'); setGrowth('evolution') } }, [evolutionJumpAt]) // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { if (humanJump?.at) navigate('human') }, [humanJump?.at]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (evolutionJumpAt && !delegated) { navigate('growth'); setGrowth('evolution') } }, [evolutionJumpAt]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (humanJump?.at && !delegated) navigate('human') }, [humanJump?.at]) // eslint-disable-line react-hooks/exhaustive-deps
   const patch = (p: Partial<NormalAgentDef>) => {
     Object.keys(p).forEach((key) => dirtyFields.current.add(key as keyof NormalAgentDef))
     setDraft((d) => {
@@ -406,7 +439,7 @@ function AgentProfile({ agent, compact = false, sessionId, rewriteSessionId, evo
   // 文件夹名 = slug = 主键。改名走引擎的 renameAgent(搬目录 + 改会话 / 消息 / 团队 / 自动化 / 通道里的引用);
   // 这里只把本地 store 里已加载的会话配置一并改掉,免得头像 / 昵称在重拉会话前按「已删 agent」渲染。
   // 详情栏(compact)不开放:那里连「在 Agents 中打开」都要一跳,改主键这种事放在全页。
-  const canRename = !compact && !dirty && !!agent.libraryDir && !isStockAgent(agent.slug)
+  const canRename = !compact && !dirty && !!agent.libraryDir && !isStockAgent(agent.slug) && !delegated // 改名路由在委托管理员的白名单外
   const rename = async () => {
     const old = agent.slug
     const next = slugDraft.trim()
@@ -536,13 +569,40 @@ function AgentProfile({ agent, compact = false, sessionId, rewriteSessionId, evo
       <button className="agent-profile-link" onClick={() => useApp.getState().openSettings(kind === 'skills' ? 'skills' : 'mcp')}>{t(kind === 'skills' ? 'agentProfile.manageSkills' : 'agentProfile.manageMcp')}<ExternalLink size={13} /></button>
     </>
   }
+  // Harness 卡(11-14,第二轮 C2-1):底层只有「运行在」一行;运行时 / 更新通道 / DSH 插件三行归融合插件(11-15 起经
+  // ctx.registerEngineHarness 由插件给数据、EngineHarnessRows 画),插件没装就没有。
+  const engineName = (id: string): string => s.engines.find((e) => e.id === id)?.name || agentEngineLabel(id)
+  const engineOptions = [{ value: '', label: 'Tangu' }, ...[...new Set([...engineChoices, ...(draftEngine ? [draftEngine] : [])])].map((id) => ({ value: id, label: engineName(id) }))]
+  const harnessGroup = showHarness ? <ProfileGroup title={t('agentEngine.harness')} hint={t('agentEngine.harnessHint', { name: agentEngineLabel(draftEngine || savedEngine || engineChoices[0] || 'dsh') })}>
+    {/* 手机 / 网页 / 委托管理员:引擎不收远端改这一项(它决定之后每一轮交给哪个本机程序),这里只读 */}
+    <ProfileSelectField field="engine" label={t('agentEngine.runsOn')} value={draftEngine} options={engineOptions} disabled={delegated || (!!savedEngine && engineHere === 'elsewhere')} onChange={(engine) => patch({ engine })} />
+    {/* 运行时 / 更新通道 / DSH 插件 / 打开工作台:跑这个引擎的插件给(ctx.registerEngineHarness),没装就没有。只在存下的引擎上画 */}
+    {savedEngine && savedEngine === draftEngine && engineHere === 'ready' && !delegated && <EngineHarnessRows engineId={savedEngine} agentSlug={agent.slug} />}
+    {draftEngine && engineHere === 'not-installed' && <p className="agent-profile-muted" data-engine-missing>{t('agentEngine.notInstalledHint', { name: agentEngineLabel(draftEngine) })}</p>}
+    {draftEngine && engineHere === 'not-installed' && !delegated && <button type="button" className="agent-profile-link" data-act="engine-install" onClick={() => useApp.getState().openSettings('agents/ag-clis')}>{t('agentEngine.howToInstall')}<ExternalLink size={13} /></button>}
+    {draftEngine && engineHere === 'elsewhere' && <p className="agent-profile-muted" data-engine-elsewhere>{t('agentEngine.elsewhereHint', { name: agentEngineLabel(draftEngine) })}</p>}
+    {draftEngine && engineHere === 'unsupported' && <p className="agent-profile-muted">{t('agentEngine.unsupportedHint', { name: draftEngine })}</p>}
+    {draftEngine && <p className="agent-profile-muted" data-engine-handoff>{t('agentEngine.handoff', { name: agentEngineLabel(draftEngine) })}</p>}
+    {draftEngine && <p className="agent-profile-muted" data-engine-handoff-limits>{t('agentEngine.handoffLimits', { name: agentEngineLabel(draftEngine) })}</p>}
+  </ProfileGroup> : null
+  // 跑在外部引擎上时:模型一格列引擎自己的模型(存进 engineModel,不动 Tangu 的 model,换回来还在);思考档引擎这边只读不改,先不出。
+  const engineModels = draftEngine ? (s.engineCaps[draftEngine]?.models ?? []) : []
+  const engineModelOptions = [{ value: '', label: t('agentEngine.engineDefault', { name: agentEngineLabel(draftEngine) }) },
+    ...engineModels.map((m) => ({ value: m.id, label: m.name })),
+    ...(draft.engineModel && !engineModels.some((m) => m.id === draft.engineModel) ? [{ value: draft.engineModel, label: draft.engineModel }] : [])]
   const runSettings = <>
-    <ProfileModelField field="model" models={s.models || []} value={draft.model || ''} label={t('agentProfile.model')} onChange={(model) => patch({ model })} />
+    {draftEngine
+      ? <><ProfileSelectField field="engineModel" label={t('agentProfile.model')} value={draft.engineModel || ''} options={engineModelOptions} disabled={delegated} onChange={(engineModel) => patch({ engineModel })} />
+        <p className="agent-profile-muted">{t('agentEngine.modelHint', { name: agentEngineLabel(draftEngine) })}</p></>
+      : <><ProfileModelField field="model" models={s.models || []} value={draft.model || ''} label={t('agentProfile.model')} onChange={(model) => patch({ model })} />
     {/* 三个同级下拉一种控件(10-25 第四轮 4.3):模型那颗触发器 + 就地展开;审批档的名字与输入框模式菜单同一套。 */}
-    <ProfileSelectField field="thinking" label={t('agentProfile.thinking')} value={draft.thinkingLevel || ''} options={thinkingOptions(t)} onChange={(v) => patch({ thinkingLevel: v as NormalAgentDef['thinkingLevel'] })} />
-    <ProfileSelectField field="approval" label={t('agentProfile.approval')} value={draft.approvalMode || ''} options={approvalOptions(t)} onChange={(v) => patch({ approvalMode: v as NormalAgentDef['approvalMode'] })} />
+    <ProfileSelectField field="thinking" label={t('agentProfile.thinking')} value={draft.thinkingLevel || ''} options={thinkingOptions(t)} onChange={(v) => patch({ thinkingLevel: v as NormalAgentDef['thinkingLevel'] })} /></>}
+    {/* 委托管理员:只列不超过那台设备远程上限的三档,不给「跟随会话」(远端写空值会被钳成上限本身);存值为空时显示成上限那档(不写回);存着「自定义」时只读。 */}
+    {delegated ? (() => { const f = delegatedApprovalField(draft.approvalMode, approvalCap, approvalOptions(t)); return <ProfileSelectField field="approval" label={t('agentProfile.approval')} value={f.value} disabled={f.disabled} options={f.options} onChange={(v) => patch({ approvalMode: v as NormalAgentDef['approvalMode'] })} /> })()
+      : <ProfileSelectField field="approval" label={t('agentProfile.approval')} value={draft.approvalMode || ''} options={approvalOptions(t)} onChange={(v) => patch({ approvalMode: v as NormalAgentDef['approvalMode'] })} />}
+    {delegated && <p className="agent-profile-muted" data-approval-cap={approvalCap || ''}>{t('delegatedAdmin.approvalCapHint', { mode: t(MODE_KEY[approvalCap || 'readonly']) })}</p>}
     {/* Muse 有两个档:这里的只管和它聊天时;后台周期按「权限档」(设置 › Agent › 后台 Agent)。两处互相指路(10-13 用户反馈「放权了还要批」)。 */}
-    {agent.slug === 'muse' && <button type="button" className="agent-profile-link" data-act="muse-tier-link" onClick={() => useApp.getState().openSettings('agents/ag-special/muse')}>{t('agentProfile.museApprovalScope')}<ExternalLink size={13} /></button>}
+    {agent.slug === 'muse' && !delegated && <button type="button" className="agent-profile-link" data-act="muse-tier-link" onClick={() => useApp.getState().openSettings('agents/ag-special/muse')}>{t('agentProfile.museApprovalScope')}<ExternalLink size={13} /></button>}
   </>
   const agentConfiguration = <>
     <ProfileGroup title={t('agentProfile.instructions')} hint={t('agentProfile.instructionsHint')}>
@@ -554,11 +614,13 @@ function AgentProfile({ agent, compact = false, sessionId, rewriteSessionId, evo
       {loadError && <p className="agent-profile-error">{loadError}<button onClick={() => setRetry((v) => v + 1)}>{t('agentProfile.retry')}</button></p>}
       {draft.toolsMode && <div className="agent-equipment-list">{builtins.map((tool) => <EquipmentRow key={tool.name} name={tool.name} description={tool.description} checked={(draft.toolsList || []).includes(tool.name)}
         onChange={(checked) => patch({ toolsList: checked ? [...(draft.toolsList || []), tool.name] : (draft.toolsList || []).filter((n) => n !== tool.name) })} />)}</div>}
-      <label className="agent-equipment-item"><input type="checkbox" checked={!!draft.activityAccess} onChange={(e) => patch({ activityAccess: e.target.checked })} />{t('agentProfile.activityAccess')}</label>
+      {/* 电脑历史 / 云同步:引擎不收远端写这两样(委托管理员),开关不出 */}
+      {!delegated && <label className="agent-equipment-item" data-field="activityAccess"><input type="checkbox" checked={!!draft.activityAccess} onChange={(e) => patch({ activityAccess: e.target.checked })} />{t('agentProfile.activityAccess')}</label>}
     </div></details>
     <details className="profile-disclosure"><summary>{t('agentProfile.advanced')}</summary><div className="agent-config-fields">
-      <label className="agent-field">{t('agentProfile.maxIterations')}<input type="number" min="1" placeholder={t('agentProfile.default')} value={draft.maxIterations ?? ''} onChange={(e) => patch({ maxIterations: e.target.value ? Math.max(1, Math.floor(Number(e.target.value))) : null })} /></label>
-      {!!window.tangu?.authStatus && <label className="agent-equipment-item"><input type="checkbox" checked={!!draft.cloudSync} onChange={(e) => patch({ cloudSync: e.target.checked })} />{t('agentProfile.cloudSync')}</label>}
+      {/* 跑在外部引擎上:轮数由引擎自己管(第二轮 C2-1 方案图:置灰 + 一句说明) */}
+      <label className="agent-field" data-engine-managed={draftEngine || undefined}>{t('agentProfile.maxIterations')}<span className="agent-field-inline"><input type="number" min="1" placeholder={t('agentProfile.default')} disabled={!!draftEngine} value={draftEngine ? '' : draft.maxIterations ?? ''} onChange={(e) => patch({ maxIterations: e.target.value ? Math.max(1, Math.floor(Number(e.target.value))) : null })} />{draftEngine && <small className="agent-profile-muted">{t('agentEngine.selfManaged', { name: agentEngineLabel(draftEngine) })}</small>}</span></label>
+      {!!window.tangu?.authStatus && !delegated && <label className="agent-equipment-item" data-field="cloudSync"><input type="checkbox" checked={!!draft.cloudSync} onChange={(e) => patch({ cloudSync: e.target.checked })} />{t('agentProfile.cloudSync')}</label>}
     </div></details>
   </>
   return <div className={`agent-profile${compact ? ' compact' : ''}`} data-agent-profile={agent.slug} onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === 's') { e.preventDefault(); e.stopPropagation(); if (dirty) void save() } }}>
@@ -592,12 +654,12 @@ function AgentProfile({ agent, compact = false, sessionId, rewriteSessionId, evo
     <nav ref={navRef} className="agent-section-nav" aria-label={t('agentProfile.currentSection')} role="tablist" onKeyDown={(e) => {
       if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return
       e.preventDefault()
-      const index = SECTIONS.findIndex((x) => x.id === section)
-      const next = e.key === 'Home' ? 0 : e.key === 'End' ? SECTIONS.length - 1 : (index + (e.key === 'ArrowRight' ? 1 : -1) + SECTIONS.length) % SECTIONS.length
-      navigate(SECTIONS[next].id); (e.currentTarget.children[next] as HTMLElement).focus()
-    }}>{SECTIONS.map(({ id: tab, icon: Icon }) => {
+      const index = sections.findIndex((x) => x.id === section)
+      const next = e.key === 'Home' ? 0 : e.key === 'End' ? sections.length - 1 : (index + (e.key === 'ArrowRight' ? 1 : -1) + sections.length) % sections.length
+      navigate(sections[next].id); (e.currentTarget.children[next] as HTMLElement).focus()
+    }}>{sections.map(({ id: tab, icon: Icon }) => {
       // 待复盘候选角标:aria-hidden 不改标签的可访问名(台架与读屏都按「进化」找),数字进 title。
-      const badge = tab === 'growth' && candidates > 0 ? t('settings.agents.harnessCandidates', { count: candidates }) : ''
+      const badge = tab === 'growth' && candidates > 0 && !savedEngine ? t('settings.agents.harnessCandidates', { count: candidates }) : ''
       return <button key={tab} id={`${id}-${tab}`} role="tab" title={badge ? `${t(`agentProfile.${tab}`)} · ${badge}` : t(`agentProfile.${tab}`)} aria-selected={section === tab} aria-controls={`${id}-content`} tabIndex={section === tab ? 0 : -1} onClick={() => navigate(tab)} className={section === tab ? 'selected' : ''}><Icon size={15} /><span>{t(`agentProfile.${tab}`)}</span>{badge && <i className="profile-tab-badge" aria-hidden="true">{candidates}</i>}</button>
     })}</nav>
     <div ref={scrollRef} className="agent-profile-content" id={`${id}-content`} role="tabpanel" aria-labelledby={`${id}-${section}`} tabIndex={0}>
@@ -607,10 +669,13 @@ function AgentProfile({ agent, compact = false, sessionId, rewriteSessionId, evo
       <div className="profile-section-enter">
       {section === 'config' && <>
         {s.session && <section className="agent-current-session"><small>{t('agentProfile.session')}</small><strong>{s.session.title}</strong>{(s.session.project_name || s.config?.cwd) && <span>{s.session.project_name || s.config?.cwd}</span>}
-          <ProfileModelField models={s.models || []} value={s.session.model_id || ''} label={t('agentProfile.sessionModel')} onChange={(model) => { tanguCount('modelSwitchUser'); useApp.getState().setSessionModel(model, sessionId, false) }} />
-          <small>{t('agentProfile.sessionModelHint')}</small>
+          {/* 跑在外部引擎上的:这场对话的模型在输入框的模型药丸里换(引擎的模型),这里的 Tangu 会话模型不起作用,不出 */}
+          {!savedEngine && <><ProfileModelField models={s.models || []} value={s.session.model_id || ''} label={t('agentProfile.sessionModel')} onChange={(model) => { tanguCount('modelSwitchUser'); useApp.getState().setSessionModel(model, sessionId, false) }} />
+          <small>{t('agentProfile.sessionModelHint')}</small></>}
         </section>}
-        {agent.libraryDir && !agent.standInOf && agent.slug !== 'muse' && <AgentStandInGroup agent={agent} draft={draft} patch={patch} cfg={s.cfg} />}
+        {harnessGroup}
+        {/* 分身在聊天通道里替它回话,通道消息算远程发起、不交给外部引擎:跑在别处的 Agent 先不显示(第二轮表) */}
+        {agent.libraryDir && !agent.standInOf && agent.slug !== 'muse' && !delegated && !savedEngine && <AgentStandInGroup agent={agent} draft={draft} patch={patch} cfg={s.cfg} />}
         <ProfileGroup title={t('agentProfile.quickSettings')} hint={t('agentProfile.defaultsHint')}>{runSettings}</ProfileGroup>
         {agentConfiguration}
         {s.usage && <p className="agent-profile-muted">{t('agentProfile.context')} · {s.usage.ctx.toLocaleString()} tokens</p>}
@@ -621,13 +686,14 @@ function AgentProfile({ agent, compact = false, sessionId, rewriteSessionId, evo
         <button type="button" className="agent-profile-link" data-act="open-me" onClick={() => openHumanProfile()}>{t('human.me.openFromAgent')}<ChevronRight size={13} /></button></>}
       {section === 'growth' && <>
         {/* 三层各一张分段卡:标题 + 一句话说清它是什么(记忆 = 现在成立的事,日志 = 发生过的事,进化 = 做法)。待复盘候选的角标跟着「进化」走。 */}
-        <div className="profile-segment" role="group" aria-label={t('agentProfile.growth')}>{(['memory', 'log', 'evolution'] as const).map((g) => { const Icon = GROWTH_ICON[g]; return (
+        {/* 进化(HARNESS 工作笔记)是 Tangu 循环里的东西:跑在外部引擎上的先不显示(第二轮表) */}
+        <div className="profile-segment" role="group" aria-label={t('agentProfile.growth')}>{(savedEngine ? ['memory', 'log'] as const : ['memory', 'log', 'evolution'] as const).map((g) => { const Icon = GROWTH_ICON[g]; return (
           <button key={g} type="button" aria-pressed={growth === g} onClick={() => { setGrowth(g); scrollRef.current?.scrollTo({ top: 0 }) }}>
             <strong><Icon size={13} />{t(`agentProfile.${g}`)}{g === 'evolution' && candidates > 0 && <i className="profile-tab-badge" aria-hidden="true">{candidates}</i>}</strong>
             <small>{t(`agentProfile.${g}Caption`)}</small>
           </button>) })}</div>
         {/* /refine 只有 host 且非 plan 模式的会话引擎才注入指令(agentLoop 注入门);其余会话不给按钮,发出去只是一条裸 /refine */}
-        {growth === 'evolution' && <AgentHarnessPanel cfg={s.cfg} slug={agent.slug} running={s.running} jump={recordJump} onCandidates={setCandidates} onRefine={sessionId && s.config?.execMode === 'host' && !s.config?.planMode ? () => useApp.getState().send('/refine', [], undefined, undefined, undefined, sessionId) : undefined} />}
+        {growth === 'evolution' && !savedEngine && <AgentHarnessPanel cfg={s.cfg} slug={agent.slug} running={s.running} jump={recordJump} onCandidates={setCandidates} onRefine={sessionId && s.config?.execMode === 'host' && !s.config?.planMode ? () => useApp.getState().send('/refine', [], undefined, undefined, undefined, sessionId) : undefined} />}
       </>}
       {section === 'schedule' && <AgentSchedulePanel cfg={s.cfg} slug={agent.slug} running={s.running} />}
       </div>

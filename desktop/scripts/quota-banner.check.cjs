@@ -70,7 +70,26 @@ async function main() {
 
   await page.evaluate(() => window.__quotaHarness.setQuota({ dailyRemaining: 0, weeklyRemaining: 40, resetCards: 0 }))
   await banner.waitFor()
-  check('耗尽状态与无卡状态正确', (await banner.textContent()).includes('今日 AI 额度已用尽') && (await banner.textContent()).includes('暂无额度重置卡'))
+  // 2026-11-13:重置卡不能再买 / 兑换,没卡就不挂那颗灰按钮;旧服务端(没有积分字段)也不给积分那条路
+  check('耗尽状态与无卡状态正确', (await banner.textContent()).includes('今日 AI 额度已用尽') && !(await banner.textContent()).includes('重置卡') && !(await banner.textContent()).includes('积分'))
+
+  // 用积分继续(?points=off 起步:本周额度用尽、有卡、有积分、有扩展通道):两击确认 → 普通提示带余额
+  {
+    const p2 = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1000, height: 720 } })
+    const u = new URL(base.toString()); u.search = '?points=off'
+    await p2.goto(u.toString())
+    const b2 = p2.locator('.t2-quota-advisory'); await b2.waitFor()
+    check('两条路都在', await b2.getByText('使用额度重置卡（2）', { exact: true }).isVisible() && await b2.getByText('用积分继续', { exact: true }).isVisible())
+    await b2.getByText('用积分继续', { exact: true }).click()
+    check('用积分继续要再点一次确认', await b2.getByText('确认用积分继续', { exact: true }).isVisible())
+    await b2.getByText('确认用积分继续', { exact: true }).click()
+    await p2.locator('.t2-quota-advisory[data-level="info"]').waitFor()
+    check('打开后是普通提示并带余额', (await b2.textContent()).includes('正在用积分继续') && (await b2.textContent()).includes('积分余额 1,280'))
+    u.search = '?points=out&cards=0'
+    await p2.goto(u.toString()); await b2.waitFor()
+    check('积分也用完了 → 充值积分', (await b2.textContent()).includes('积分也用完了') && await b2.getByText('充值积分', { exact: true }).isVisible())
+    await p2.close()
+  }
 
   if (process.argv.some((arg) => arg.startsWith('--shot'))) {
     const out = path.join(os.tmpdir(), 'forsion-quota-banner')

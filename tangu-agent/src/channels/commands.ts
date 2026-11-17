@@ -128,8 +128,10 @@ export interface ChannelUsage { tokens: number; runs: number; cost: number | nul
 export interface ChannelCommandRuntime {
   kind: ChannelKind;
   locale: ChannelLocale;
-  /** 通道 run 实际用的审批档(通道设置与绑定取更严的一档,见 service.channelRunApprovalMode)。 */
+  /** 通道设置与绑定取更严的一档(见 service.channelRunApprovalMode),还没算 Agent 自己的档。 */
   approvalMode: ApprovalMode;
+  /** 通道 run 实际会用的档:再按这个 Agent 自己设的档收紧(与 agentLoop 同一口径)。缺席 = 只报 approvalMode。 */
+  approvalModeFor?(agentSlug: string): Promise<ApprovalMode>;
   /** 通道设置里的默认 Agent / 模型('' = 未设)。 */
   channelDefaults(): { agentSlug: string; modelId: string };
   /** 用户全局默认 Agent(通道默认也没设时兜底)。 */
@@ -256,7 +258,9 @@ export class ChannelCommandCenter {
         case '/model': return this.cmdModel(rt, key, cmd.arg);
         case '/think': return this.cmdThink(rt, cmd.arg);
         case '/approval': {
-          const a = approvalLine(L, rt.approvalMode);
+          // 读不到当前会话 = 不知道它选的是哪个 Agent:只报通道 × 绑定的基础档,不套任何 Agent(套通道默认 Agent 的档可能报得比实际严)
+          const s = await rt.readSession().catch(() => null);
+          const a = approvalLine(L, s ? await this.effectiveApproval(rt, s.agentConfig) : rt.approvalMode);
           return channelMsg(L, 'approvalShow', { label: a.label, desc: a.desc });
         }
         case '/loop': return this.cmdLoop(rt, cmd.arg);
@@ -321,7 +325,7 @@ export class ChannelCommandCenter {
     const m = models.find((x) => x.id === modelId);
     const req = requestedThinking(cfg, def);
     const eff = m?.thinkingLevels?.length ? effectiveThinkingOn(req, m.thinkingLevels) : req;
-    const a = approvalLine(L, rt.approvalMode);
+    const a = approvalLine(L, await this.effectiveApproval(rt, cfg));
     const loop = this.loopInfo(rt, cfg, def);
     const usage = await rt.usage().catch(() => null);
     const ps = rt.pendingState();
@@ -454,6 +458,12 @@ export class ChannelCommandCenter {
   // ── /loop ──
 
   /** v = 显示用的上限(「50 轮」/「不限」)。默认不限轮数,与 agentLoop 同口径。 */
+  /** 报给用户的审批档 = 下一次 run 真会用的:再按当前 Agent 自己的档收紧;算不出来就报通道 × 绑定那档。 */
+  private async effectiveApproval(rt: ChannelCommandRuntime, cfg: Record<string, unknown>): Promise<ApprovalMode> {
+    if (!rt.approvalModeFor) return rt.approvalMode;
+    return rt.approvalModeFor(currentAgentSlug(rt, cfg)).catch(() => rt.approvalMode);
+  }
+
   private loopInfo(rt: ChannelCommandRuntime, cfg: Record<string, unknown>, def: NormalAgentDef | null): { v: string; source: string } {
     const L = rt.locale;
     const v = (n: number) => channelMsg(L, 'loopRounds', { n });

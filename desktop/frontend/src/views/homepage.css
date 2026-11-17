@@ -1668,3 +1668,30 @@ body.hp-lib-nodrop * { cursor: not-allowed !important; }
 .hp-lib-note-pill > svg { flex: none; color: var(--text-muted); }
 /* 落点框的圆角跟格子走(LCL 框缺省 --radius-sm) */
 .lcl-drop-ind.hp-drop-ind.lcl-drop-ind--zone { border-radius: var(--radius-lg); }
+
+/* ── 手机主页:走完手机引导后的四条起步建议(HomepageView 的 HomeSuggest;方案在仓根 docs/ToBeImproved/手机首次引导方案_2026-11-13)。
+ *    放在四张大卡片上面(order 同卡片,DOM 在前);卡色实底、不描边、低阴影,字用正文角色,最多两行(英文长句不截成半句)。
+ *    尺寸照上面 .hp-phone 那段按 dp 写;输入区展开时和卡片一起让位。
+ *    一屏放不下时逐级让(HomepageView 量过后写在根的 data-suggest-fit 上,档位见 homeSuggest.ts 的 SUGGEST_FITS):
+ *    卡片只画前两行 → 建议只留前两条 → 这一块不出;不把输入条往 Dock 底下挤(台架钉着「输入条底边在 Dock 之上、在最后一张画出来的卡之下」)。
+ *    主页一列 = 问候约 80 + 卡片(两行 220 / 三行 336)+ 输入条 54 + 间距 14×2,外加胶囊、Dock 与上下留白约 270;
+ *    这一块约 113–161(中文一行 / 英文两行)+ 间距 14。不按屏高写媒体查询:卡片张数、问候折行、导航条高度都算不准,一律实量。 ── */
+.hp-phone .hp-suggest { order: 2; display: flex; flex-direction: column; gap: calc(8 * var(--hp-dp)); }
+.hp-phone .hp-suggest-title { display: flex; align-items: center; gap: calc(6 * var(--hp-dp)); color: var(--text-faint, var(--text-muted)); font-size: var(--ui-font-meta, 12px); line-height: 1.4; }
+.hp-phone .hp-suggest-title > svg { flex: none; width: calc(14 * var(--hp-dp)); height: calc(14 * var(--hp-dp)); }
+.hp-phone .hp-suggest-grid { display: grid; grid-template-columns: 1fr 1fr; gap: calc(8 * var(--hp-dp)); }
+.hp-phone .hp-suggest-chip {
+  display: flex; align-items: center; min-width: 0;
+  padding: calc(11 * var(--hp-dp)) calc(12 * var(--hp-dp));
+  border: 0; border-radius: var(--radius-lg, 16px);
+  background: var(--bg-card); box-shadow: var(--card-shadow-low);
+  color: var(--text); font-family: var(--font-ui); font-size: var(--ui-font-body, 13px); line-height: 1.35; text-align: left;
+}
+.hp-phone .hp-suggest-chip:active { transform: scale(0.98); }
+/* 折成两行时两行差不多长(不留一个字的尾巴);四条文案都按 360 宽两行以内写,截断只是兜底 */
+.hp-phone .hp-suggest-text { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; min-width: 0; text-wrap: balance; }
+.hp-root.hp-phone.hp-composer-focused .hp-suggest { display: none; }
+.hp-root.hp-phone[data-suggest-fit='rows'] .hp-cards > .hp-card:nth-child(n + 5),
+.hp-root.hp-phone[data-suggest-fit='two'] .hp-cards > .hp-card:nth-child(n + 5) { display: none; }
+.hp-root.hp-phone[data-suggest-fit='two'] .hp-suggest-chip:nth-child(n + 3) { display: none; }
+.hp-root.hp-phone[data-suggest-fit='none'] .hp-suggest { display: none; }

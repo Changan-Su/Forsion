@@ -65,3 +65,12 @@ describe('popupQueue', () => {
     expect(usePopupQueue.getState().waiting).toEqual([])
   })
 })
+
+it('blocks per reason: the device surface and onboarding do not release each other', () => {
+  setPopupsBlocked(true, 'onboarding')
+  setPopupsBlocked(true, 'unit-remote')
+  setPopupsBlocked(false, 'onboarding')
+  expect(usePopupQueue.getState().blocked).toBe(true)
+  setPopupsBlocked(false, 'unit-remote')
+  expect(usePopupQueue.getState().blocked).toBe(false)
+})

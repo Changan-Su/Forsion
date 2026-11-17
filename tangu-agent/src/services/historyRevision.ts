@@ -6,6 +6,10 @@
  */
 const revisions = new Map<string, number>();
 
+/** 本进程的标记。版本号只在同一个进程里可比(重启后从 0 重数):把版本号记到盘上的调用方连它一起记,
+ *  读回来时先比它 —— 不是同一个进程记的就当「不知道改没改过」,不能拿两个数字硬比。 */
+export const historyEpoch = `${process.pid}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+
 export function historyRevision(sessionId: string): number {
   return revisions.get(sessionId) ?? 0;
 }

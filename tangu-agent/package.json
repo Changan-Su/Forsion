@@ -1,6 +1,6 @@
 {
   "name": "@forsion/tangu-agent",
-  "version": "2.14.3",
+  "version": "2.14.5",
   "license": "Apache-2.0",
   "description": "Tangu Agent — 与宿主无关的服务端 agent runtime;可作为 Forsion 微后端插件,也可独立运行(云端大脑客户端)。",
   "type": "module",
@@ -37,6 +37,8 @@
     "live:harness": "node scripts/live-harness.mjs",
     "probe:hotswap": "node scripts/hotswap-probe.mjs",
     "check:realtime": "node scripts/realtime-relay.check.mjs",
+    "check:dsh": "node scripts/dsh-engine.check.mjs",
+    "check:engine-resume": "node scripts/engine-resume.check.mjs",
     "smoke:tuiqueue": "bash scripts/tui-queue.smoke.sh",
     "pack:engine": "node scripts/pack-engine.mjs",
     "e2e:overlay": "node scripts/engine-overlay.e2e.mjs",

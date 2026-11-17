@@ -1,0 +1,19 @@
+/* 手机引导「在哪运行」:单选卡沿用 onboarding3.css 的 .ob3-card / .pick / .ob3-choice / .ob3-sub,这里只补按钮化与窄屏换行。
+   选择器都带 .pg-where 前缀并比 .ob3-* 多一级,不依赖两份样式表的加载先后。 */
+.pg-where .pg-where-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+.pg-where .pg-where-card { width: 100%; text-align: left; font: inherit; color: var(--text); cursor: pointer; gap: 8px;
+  outline: .5px solid transparent; transition: border-color var(--duration-fast) var(--ease-calm), outline-color var(--duration-fast) var(--ease-calm); }
+.pg-where .pg-where-card.pick { outline-color: var(--accent-ink); }
+.pg-where .pg-where-card[aria-busy='true'] { cursor: progress; }
+.pg-where .pg-where-h { flex-wrap: wrap; min-width: 0; row-gap: 4px; }
+.pg-where .pg-where-h > svg, .pg-where .pg-where-emoji { flex: none; color: var(--text); }
+.pg-where .pg-where-emoji { font-size: var(--ui-font-heading, 14px); line-height: 1; }
+/* 右侧强调词:名字 · 状态点 状态。状态可能是一整句(「请在 X 上允许这台手机」),放不下就整块换到下一行、句子自己折行 */
+.pg-where .pg-where-em { min-width: 0; max-width: 100%; display: inline-flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 0 4px; text-align: right; overflow-wrap: anywhere; }
+.pg-where .pg-where-name { max-width: 14em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pg-where .pg-where-em .settings-status-dot { flex: none; }
+.pg-where .pg-where-card .ob3-sub { line-height: 1.5; }
+.pg-where .pg-where-fold { justify-self: start; gap: 4px; }
+.pg-where .pg-where-fold[aria-expanded='true'] .pg-where-chev { transform: rotate(180deg); }
+.pg-where .pg-where-line { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
+.pg-where .pg-where-line .ob3-link:disabled { cursor: default; opacity: .6; }

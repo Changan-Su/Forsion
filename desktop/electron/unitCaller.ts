@@ -5,7 +5,8 @@
  * 逐跳(K1 §3.7):
  *   手机 → hub          X-Forsion-Caller: fuc1…(hub 验票、查库,票本身不转发)
  *   hub → 本机 unitHost 信封字段 proxyCaller(ProxyCaller JSON)
- *   unitHost → unitWeb  头 x-unit-caller: v1.<b64url {pur:'proxy', d, m, t, c, iat}>.<mac>,钥 = unitWeb 的 per-boot proxyCallerKey
+ *   unitHost → unitWeb  头 x-unit-caller: v1.<b64url {pur:'proxy', d, m, t, c?, o?, iat}>.<mac>,钥 = unitWeb 的 per-boot proxyCallerKey
+ *                        (c = 调用方设备,o = 操作者声明;二者至少一个,同一枚 MAC 盖住两者)
  *                        (≠ internalSecret ≠ p2pSecret ≠ 将来 /unit/mcp 的钥);/unit/mcp* 永不签(§6.2-7)
  *   unitWeb → 引擎      头 x-forsion-remote-caller: b64url({u,k,n,p,r}),只在 via==='tunnel' 且验签通过时盖,头表从零重建
  *
@@ -27,6 +28,18 @@ export interface ProxyCaller {
   name: string
   platform: string | null
   registeredAt: string | null
+}
+
+/**
+ * 操作者声明(信封字段 proxyOperator,只有 hub 能写):这次请求背后是哪个账号、以什么身份在操作这台 Unit。
+ * role 目前只有 'admin'(委托管理员);unitWeb 只在本机打开了委托管理员且来路为隧道时才据它升档(见 unitWeb.ts)。
+ */
+export interface ProxyOperator {
+  /** hub 的用户 id(≤64,不截断:超长 = 不合格) */
+  uid: string
+  role: 'admin'
+  /** 显示名(不可信串:去控制符、截 120;只作留痕) */
+  name: string
 }
 
 /** unitHost → unitWeb(loopback)。 */
@@ -61,17 +74,30 @@ export function sanitizeProxyCaller(raw: unknown): ProxyCaller | null {
   }
 }
 
+/** 信封里的 proxyOperator 不信形状:uid 是 1–64 字符的字符串(去控制符后),role 只认 'admin',name 去控制符截 120。不合格 → null(当没有)。 */
+export function sanitizeProxyOperator(raw: unknown): ProxyOperator | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const r = raw as Record<string, unknown>
+  if (typeof r.uid !== 'string' || r.uid.length > 64) return null
+  const uid = cleanText(r.uid, 64)
+  if (!uid || uid !== r.uid) return null
+  if (r.role !== 'admin') return null
+  return { uid, role: 'admin', name: cleanText(r.name, 120) ?? '' }
+}
+
 const b64 = (s: string): string => Buffer.from(s, 'utf8').toString('base64url')
 const macOf = (key: string, body: string): Buffer => createHmac('sha256', key).update('v1.' + body).digest()
 
-/** 签 x-unit-caller。target = unitHost **实际发出**的 pathname+search(不是信封原始 path —— URL 解析会规整点段 / 转义空格)。 */
-export function signProxyCaller(key: string, a: { dispatchId: string; method: string; target: string; caller: ProxyCaller; nowMs?: number }): string {
-  const body = b64(JSON.stringify({ pur: 'proxy', d: a.dispatchId, m: a.method, t: a.target, c: a.caller, iat: a.nowMs ?? Date.now() }))
+/** 签 x-unit-caller。target = unitHost **实际发出**的 pathname+search(不是信封原始 path —— URL 解析会规整点段 / 转义空格)。
+ *  caller / operator 至少给一个;缺的那个不进载荷(不写 null),只有调用方的载荷与改版前逐字节一致。 */
+export function signProxyCaller(key: string, a: { dispatchId: string; method: string; target: string; caller?: ProxyCaller | null; operator?: ProxyOperator | null; nowMs?: number }): string {
+  if (!a.caller && !a.operator) throw new Error('signProxyCaller needs a caller or an operator')
+  const body = b64(JSON.stringify({ pur: 'proxy', d: a.dispatchId, m: a.method, t: a.target, ...(a.caller ? { c: a.caller } : {}), ...(a.operator ? { o: a.operator } : {}), iat: a.nowMs ?? Date.now() }))
   return `v1.${body}.${macOf(key, body).toString('base64url')}`
 }
 
 export type CallerCheck =
-  | { ok: true; caller: ProxyCaller; dispatchId: string }
+  | { ok: true; caller: ProxyCaller | null; operator: ProxyOperator | null; dispatchId: string }
   | { ok: false; reason: 'malformed' | 'bad-mac' | 'purpose' | 'method' | 'target' | 'stale' | 'replay' }
 
 /**
@@ -94,12 +120,16 @@ export function verifyProxyCaller(key: string, header: string, req: { method: st
   if (typeof p.iat !== 'number' || !Number.isFinite(p.iat) || Math.abs(nowMs - p.iat) > ASSERTION_WINDOW_MS) return { ok: false, reason: 'stale' }
   const d = p.d
   if (typeof d !== 'string' || !d || d.length > 128) return { ok: false, reason: 'malformed' }
-  const caller = sanitizeProxyCaller(p.c)
-  if (!caller) return { ok: false, reason: 'malformed' }
+  // 签方只签清洗过的字段:MAC 对了而字段不合格 = 签方有毛病,整条按畸形拒,不挑能用的那半。
+  const caller = p.c === undefined ? null : sanitizeProxyCaller(p.c)
+  if (p.c !== undefined && !caller) return { ok: false, reason: 'malformed' }
+  const operator = p.o === undefined ? null : sanitizeProxyOperator(p.o)
+  if (p.o !== undefined && !operator) return { ok: false, reason: 'malformed' }
+  if (!caller && !operator) return { ok: false, reason: 'malformed' }
   const exp = seen.get(d)
   if (exp !== undefined && exp > nowMs) return { ok: false, reason: 'replay' }
   seen.set(d, nowMs + SEEN_TTL_MS)
-  return { ok: true, caller, dispatchId: d }
+  return { ok: true, caller, operator, dispatchId: d }
 }
 
 /** 重放表清理(unitWeb 的 gc() 每请求调)。 */
@@ -118,20 +148,21 @@ export function proxyAssertionAllowed(pathname: string): boolean {
 
 /** 隧道信封 → 发往本机 unitWeb 的调用方断言头。隧道客户端 UnitHost 自 2026-09-28 住在 Forsion Extend(unitHubSeam.ts),
  *  它每个信封调一次这里产出的函数,只递信封字段与**实际发出**的目标 URL;钥、「哪些路径签」与验签(unitWeb)留在这一个文件里。
- *  没有 / 畸形 proxyCaller(畸形只记一次日志:版本错配时每个请求都会带)、钥未就绪、/unit/mcp* → {}(按账号级未识别调用方转发)。
+ *  proxyCaller 与 proxyOperator 各自清洗,合格的才进载荷(一枚 MAC 盖住两者);两个都没有 / 都畸形(畸形各只记一次日志:
+ *  版本错配时每个请求都会带)、钥未就绪、/unit/mcp* → {}(按账号级未识别调用方转发)。
  *  每次重建设备互联造一个(与搬迁前「每个 UnitHost 实例记一次」同口径)。 */
-export function makeCallerHeaders(getKey: () => string, log: (m: string) => void): (e: { dispatchId: string; method: string; target: URL; proxyCaller: unknown }) => Record<string, string> {
+export function makeCallerHeaders(getKey: () => string, log: (m: string) => void): (e: { dispatchId: string; method: string; target: URL; proxyCaller: unknown; proxyOperator?: unknown }) => Record<string, string> {
   let warnedBadCaller = false
-  return ({ dispatchId, method, target, proxyCaller }): Record<string, string> => {
-    if (proxyCaller == null) return {}
-    const caller = sanitizeProxyCaller(proxyCaller)
-    if (!caller) {
-      if (!warnedBadCaller) { warnedBadCaller = true; log('[unit-host] 信封里的调用方字段不合法,已丢弃(按账号级未识别调用方转发)') }
-      return {}
-    }
+  let warnedBadOperator = false
+  return ({ dispatchId, method, target, proxyCaller, proxyOperator }): Record<string, string> => {
+    const caller = proxyCaller == null ? null : sanitizeProxyCaller(proxyCaller)
+    if (proxyCaller != null && !caller && !warnedBadCaller) { warnedBadCaller = true; log('[unit-host] 信封里的调用方字段不合法,已丢弃(按账号级未识别调用方转发)') }
+    const operator = proxyOperator == null ? null : sanitizeProxyOperator(proxyOperator)
+    if (proxyOperator != null && !operator && !warnedBadOperator) { warnedBadOperator = true; log('[unit-host] 信封里的操作者声明不合法,已丢弃') }
+    if (!caller && !operator) return {}
     const key = getKey()
     if (!key || !proxyAssertionAllowed(target.pathname)) return {}
-    return { [UNIT_CALLER_HEADER]: signProxyCaller(key, { dispatchId, method, target: target.pathname + target.search, caller }) }
+    return { [UNIT_CALLER_HEADER]: signProxyCaller(key, { dispatchId, method, target: target.pathname + target.search, caller, operator }) }
   }
 }
 

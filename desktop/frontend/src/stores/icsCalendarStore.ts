@@ -21,6 +21,9 @@ import { icsCalendarName, looksLikeIcs, parseIcs, type IcsEvent } from '../views
 registerMessages({
   'ics.colEvent': { zh: '事件', en: 'Event' },
   'ics.colDate': { zh: '日期', en: 'Date' },
+  'ics.colLocation': { zh: '地点', en: 'Location' },
+  'ics.colDescription': { zh: '说明', en: 'Description' },
+  'ics.colUrl': { zh: '链接', en: 'Link' },
   'ics.importedCalendar': { zh: '导入的日历', en: 'Imported calendar' },
   'ics.externalCalendar': { zh: '外部日历', en: 'External calendar' },
   'ics.errUnsupported': { zh: '当前端不支持订阅外部日历', en: 'This client cannot subscribe to external calendars' },
@@ -42,9 +45,17 @@ export interface IcsSub {
  */
 export const ICS_NAME_COL = 'name'
 export const ICS_DATE_COL = 'date'
-const icsColumns = (): DbColumn[] => [
+/** 2026-11-15:地点 / 说明 / 链接三列(日历插件的只读卡片按这三个 id 画图标、空值不显示;块上第二行写地点)。
+ *  只在这本日历里**有事件带这一项**时才加这一列 —— 没有的列不出现在卡片里。⚠️ id 是插件契约,别改。 */
+export const ICS_LOCATION_COL = 'location'
+export const ICS_DESCRIPTION_COL = 'description'
+export const ICS_URL_COL = 'url'
+const icsColumns = (events: IcsEvent[] = []): DbColumn[] => [
   { id: ICS_NAME_COL, name: translate('ics.colEvent'), type: 'text' },
   { id: ICS_DATE_COL, name: translate('ics.colDate'), type: 'date' },
+  ...(events.some((e) => e.location) ? [{ id: ICS_LOCATION_COL, name: translate('ics.colLocation'), type: 'text' } as DbColumn] : []),
+  ...(events.some((e) => e.description) ? [{ id: ICS_DESCRIPTION_COL, name: translate('ics.colDescription'), type: 'text' } as DbColumn] : []),
+  ...(events.some((e) => e.url) ? [{ id: ICS_URL_COL, name: translate('ics.colUrl'), type: 'url' } as DbColumn] : []),
 ]
 
 const KEY = 'amadeus.calendar.ics'
@@ -199,7 +210,7 @@ export function icsToAggDb(sub: IcsSub, events: IcsEvent[]): AggDb {
     name: displayName(sub),
     isNoteView: false,
     readonly: true,
-    columns: icsColumns(),
+    columns: icsColumns(events),
     rows: events.map((e, i) => {
       const base = e.uid || `e${i}`
       let rowId = base
@@ -211,6 +222,9 @@ export function icsToAggDb(sub: IcsSub, events: IcsEvent[]): AggDb {
         cells: {
           [ICS_NAME_COL]: e.summary as CellValue,
           [ICS_DATE_COL]: (e.end ? `${e.start}/${e.end}` : e.start) as CellValue,
+          ...(e.location ? { [ICS_LOCATION_COL]: e.location as CellValue } : {}),
+          ...(e.description ? { [ICS_DESCRIPTION_COL]: e.description as CellValue } : {}),
+          ...(e.url ? { [ICS_URL_COL]: e.url as CellValue } : {}),
         },
       }
     }),

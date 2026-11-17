@@ -16,6 +16,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.service.notification.StatusBarNotification;
 
+import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.ContextCompat;
 import androidx.lifecycle.Lifecycle;
 
@@ -54,7 +55,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 public class LiveIslandPlugin extends Plugin {
     static final int ID = 7201;
     private static final String CHANNEL = "agent_live";
-    /** 普通系统通知(notice):每类事件一个 tag,共用这一个 id。 */
+    /** 普通系统通知(notice):每条一个 tag(来源,或来源 + key,见 NoticeTag),共用这一个 id。 */
     private static final int EVENT_ID = 7202;
     /** 「已完成 / 运行出错 / 已停止」那条:自己一个 id,不借常驻那条的(原因见 post 的收尾分支)。 */
     private static final int DONE_ID = 7203;
@@ -145,7 +146,9 @@ public class LiveIslandPlugin extends Plugin {
     public void show(PluginCall call) {
         // Android 13+ 通知是运行时权限:先贴后问 = 第一轮被系统静默丢掉。首次用到时问一次,答完再贴;
         // 拒了也照走 —— 前台服务照样保活 run,只是通知不显示。
-        if (Build.VERSION.SDK_INT >= 33 && !askedPermission && getPermissionState("notifications") != PermissionState.GRANTED) {
+        // 手机首次引导里已经弹过这个框(PhonePermissionsPlugin 记的那笔):不再问第二次,没开就照「拒了」走。
+        if (Build.VERSION.SDK_INT >= 33 && !askedPermission && getPermissionState("notifications") != PermissionState.GRANTED
+            && !PhonePermissionsPlugin.notificationsAsked(getContext())) {
             askedPermission = true;
             askedAt = epoch.get();
             requestPermissionForAlias("notifications", call, "afterPermission");
@@ -178,36 +181,61 @@ public class LiveIslandPlugin extends Plugin {
     }
 
     /**
-     * 应用内通知的系统通知出口(JS:window.tangu.notify)。入参:title、text、tag(哪类事件,同类只留最新一条)、channelName。
+     * 应用内通知的系统通知出口(JS:window.tangu.notify)。入参:title、text、tag(哪类事件)、key(那条通知的 dedupeKey,可无)、
+     * channelName。带 key 的按「来源 + key」、不带的按来源各只留最新一条(NoticeTag):有人在等的审批不被同一来源后来的普通通知顶掉。
      * 只在 App 不在前台时贴:页面那侧的「失焦」在原生半屏盖着时也成立,而那时用户正看着 App。点通知 = 回到 App。
-     * ponytail: 通知权限只在第一次上岛(agent 开跑)时问,这里不问(后台问不了);没权限时系统自己丢掉。
+     * 回 `{ posted }`:这一条真贴出去了没有(NoticeDelivery:App 在前台、通知被关 / 没权限、渠道被关、出错 → false)。
+     * 页面据此把没贴出去的卡记成还欠着,回到前台时不丢;老页面不看回话,照旧。
+     * ponytail: 通知权限只在 Agent 第一次开跑(贴运行状态那条通知)时问,这里不问(后台问不了);没权限时回 posted: false。
      *   从不跑 agent 的用户因此收不到这类通知,真有人要,再在设置 → 通知里加一个去申请权限的入口。
      */
     @PluginMethod
     public void notice(PluginCall call) {
-        call.resolve();
         String channelName = call.getString("channelName", "Forsion");
         String title = call.getString("title", "");
         String text = call.getString("text", "");
-        String tag = call.getString("tag", "app");
+        String tag = NoticeTag.of(call.getString("tag", "app"), call.getString("key"));
+        AppCompatActivity activity = getActivity();
+        if (activity == null) { resolvePosted(call, false); return; }
         // 在主线程判前后台并贴:与 handleOnResume 的清理排在同一条线上,不会出现「刚判完在后台 → 回到前台清过了 → 这条才贴上」
-        getActivity().runOnUiThread(() -> {
-            if (getActivity().getLifecycle().getCurrentState().isAtLeast(Lifecycle.State.RESUMED)) return;
-            Context ctx = getContext();
-            NotificationManager nm = ctx.getSystemService(NotificationManager.class);
-            nm.createNotificationChannel(new NotificationChannel(EVENTS, channelName, NotificationManager.IMPORTANCE_DEFAULT));
-            Intent open = ctx.getPackageManager().getLaunchIntentForPackage(ctx.getPackageName());
-            Notification.Builder b = new Notification.Builder(ctx, EVENTS)
-                .setSmallIcon(R.drawable.ic_stat_forsion)
-                .setContentTitle(title == null || title.isEmpty() ? "Forsion" : title)
-                .setContentText(text)
-                .setStyle(new Notification.BigTextStyle().bigText(text))
-                // 自己一组:系统只把「没分组」的通知自动叠成一摞,这几条不进去,岛就不会被叠进组里(叠进去之后「拒绝 / 允许」要多点两下才看得到)
-                .setGroup(EVENTS)
-                .setAutoCancel(true);
-            if (open != null) b.setContentIntent(PendingIntent.getActivity(ctx, 2, open, PendingIntent.FLAG_IMMUTABLE));
-            nm.notify(tag, EVENT_ID, b.build());
+        activity.runOnUiThread(() -> {
+            try {
+                boolean foreground = activity.getLifecycle().getCurrentState().isAtLeast(Lifecycle.State.RESUMED);
+                if (foreground) { resolvePosted(call, false); return; }
+                Context ctx = getContext();
+                NotificationManager nm = ctx.getSystemService(NotificationManager.class);
+                nm.createNotificationChannel(new NotificationChannel(EVENTS, channelName, NotificationManager.IMPORTANCE_DEFAULT));
+                NotificationChannel ch = nm.getNotificationChannel(EVENTS); // 用户改过的重要性以系统里的为准(create 不覆盖)
+                if (!NoticeDelivery.posts(false, nm.areNotificationsEnabled(), ch == null ? null : ch.getImportance())) {
+                    resolvePosted(call, false);
+                    return;
+                }
+                postNotice(ctx, nm, tag, title, text);
+                resolvePosted(call, true);
+            } catch (RuntimeException e) {
+                resolvePosted(call, false);
+            }
         });
+    }
+
+    private static void resolvePosted(PluginCall call, boolean posted) {
+        JSObject r = new JSObject();
+        r.put("posted", posted);
+        call.resolve(r);
+    }
+
+    private static void postNotice(Context ctx, NotificationManager nm, String tag, String title, String text) {
+        Intent open = ctx.getPackageManager().getLaunchIntentForPackage(ctx.getPackageName());
+        Notification.Builder b = new Notification.Builder(ctx, EVENTS)
+            .setSmallIcon(R.drawable.ic_stat_forsion)
+            .setContentTitle(title == null || title.isEmpty() ? "Forsion" : title)
+            .setContentText(text)
+            .setStyle(new Notification.BigTextStyle().bigText(text))
+            // 自己一组:系统只把「没分组」的通知自动叠成一摞,这几条不进去,Agent 运行状态那条就不会被叠进组里(叠进去之后「拒绝 / 允许」要多点两下才看得到)
+            .setGroup(EVENTS)
+            .setAutoCancel(true);
+        if (open != null) b.setContentIntent(PendingIntent.getActivity(ctx, 2, open, PendingIntent.FLAG_IMMUTABLE));
+        nm.notify(tag, EVENT_ID, b.build());
     }
 
     /**

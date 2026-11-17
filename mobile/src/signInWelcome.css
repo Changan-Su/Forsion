@@ -1,0 +1,5 @@
+/* 登录前欢迎屏(signInWelcome.tsx):外壳全用 onboarding3.css 的类,这里只补「登录后再选几样」那张卡的竖排间距。 */
+.ob3-card.ob3-signin-todo { display: grid; gap: 14px; }
+/* 卡头「登录后再选几样 … 约 1 分钟」:右边那枚不折行、不被标题挤窄(英文窄屏上曾折成两行)。 */
+.ob3-signin-todo > .ob3-choice-h { align-items: baseline; }
+.ob3-signin-todo > .ob3-choice-h em { flex: none; white-space: nowrap; }

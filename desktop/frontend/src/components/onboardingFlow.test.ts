@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { FULL_GUIDE_BEFORE, STEP_SINCE, needsFullGuide, stepOrder, updateOrder } from './onboardingFlow'
+import { FULL_GUIDE_BEFORE, STEP_SINCE, needsFullGuide, stepOrder, updateOrder, type Step } from './onboardingFlow'
 
 describe('stepOrder', () => {
   it('桌面四屏:开始 → 外观 → 关于你 → 团队', () => {
@@ -30,7 +30,7 @@ describe('updateOrder', () => {
     expect(updateOrder(full, '2.14.0')).toEqual(['welcome'])
   })
   it('以后新加的屏:记了版本才在短引导里出现,本机没有这一屏的内容就不列', () => {
-    const later = (seen: string, available?: (s: 'welcome' | 'start' | 'theme' | 'you' | 'team') => boolean) => {
+    const later = (seen: string, available?: (s: Step) => boolean) => {
       const since = { ...STEP_SINCE }
       try { STEP_SINCE.team = '2.14.0'; return updateOrder(full, seen, available) } finally { Object.assign(STEP_SINCE, since) }
     }

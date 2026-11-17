@@ -102,6 +102,27 @@ describe('accountCore', () => {
     expect(h4.creds()).toEqual(a)
   })
 
+  it('onWillChange:握手一开始(渲染层收到 auth:will-change 之前)同步调一次;commit / clear / 外部变化三条都走;它抛错不挡切换', async () => {
+    for (const run of ['commit', 'clear'] as const) {
+      const h = harness()
+      h.deps.onWillChange = vi.fn(() => { h.order.push('will') })
+      await h.core.transition(() => (run === 'commit' ? h.core.commit({ cloudUrl: b.cloudUrl!, token: b.token! }) : h.core.clear()))
+      expect(h.order[0]).toBe('will')
+      expect(h.order[1]).toBe('flush')
+      expect(h.deps.onWillChange).toHaveBeenCalledTimes(1)
+    }
+    const h = harness()
+    h.deps.onWillChange = vi.fn(() => { h.order.push('will') })
+    h.setFile(b)
+    h.core.onAuthFileMaybeChanged()
+    await vi.advanceTimersByTimeAsync(400)
+    expect(h.order.slice(0, 2)).toEqual(['will', 'flush'])
+    const h2 = harness()
+    h2.deps.onWillChange = () => { throw new Error('boom') }
+    await h2.core.transition(() => h2.core.clear())
+    expect(h2.creds().token).toBeUndefined()
+  })
+
   it('clear:只删 token(留 cloudUrl / model),链同 commit(没有 config 写)', async () => {
     const h = harness()
     await h.core.transition(() => h.core.clear())

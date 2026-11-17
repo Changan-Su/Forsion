@@ -16,6 +16,7 @@ import { registerMessages, translate } from '../../../i18n'
 import { mathDollarInput, mathPairBackspace, mathBracketInput, mathBracketBackspace } from './mathTyping'
 import { inlinePreviewCaret, inlinePreviewEdgeClick, inlinePreviewEdgeKeyDown } from './inlinePreviewCaret'
 import { mathSourceHighlights } from './mathSourceHighlight'
+import { UI_ZOOM_EVENT } from '../../lib/clampMenu'
 
 registerMessages({
   'mathlive.renderFailedTitle': { zh: 'LaTeX 无法渲染', en: 'LaTeX could not be rendered' },
@@ -147,26 +148,714 @@ function renderMath(view: EditorView, latex: string, display: boolean, srcFrom: 
   return el
 }
 
-/** 围栏代码块切分:偶数下标 = 正文,奇数下标 = 围栏代码块(块内的 $…$ 不是公式,原样保留)。 */
-const FENCE_SPLIT = /(^```[\s\S]*?^```[^\n]*$)/m
+/** 预览里光标的记号:同 Obsidian LaTeX Suite 的缺省 ▶。包一层 `{}`,后面紧跟字母也不会粘成别的命令。 */
+const CARET_MARK = '{\\blacktriangleright}'
+
+/** `latex[k]` 这个反斜杠是不是一条命令的开头(前面连着偶数个反斜杠;`\\` 换行的第二个不算)。 */
+function startsCommand(latex: string, k: number): boolean {
+  let n = 0
+  for (let i = k; i >= 0 && latex[i] === '\\'; i--) n++
+  return n % 2 === 1
+}
+
+/** 在公式正文的光标处插 ▶(at = 光标在 latex 里的偏移)。光标落在命令名上(`\fr|ac`、`\sqrt|`、`\{|`、`\|`)时挪到
+ *  反斜杠前 —— 同 LaTeX Suite:不把命令拆坏,▶ 也不会被当成命令的参数。导出供单测。 */
+export function markCaret(latex: string, at: number): string {
+  let i = Math.max(0, Math.min(at, latex.length))
+  let j = i
+  while (j > 0 && /[A-Za-z]/.test(latex[j - 1])) j--
+  if (j < i && j > 0 && latex[j - 1] === '\\' && startsCommand(latex, j - 1)) i = j - 1
+  else if (i > 0 && latex[i - 1] === '\\' && startsCommand(latex, i - 1)) i -= 1
+  else if (i > 1 && latex[i - 2] === '\\' && !/[A-Za-z]/.test(latex[i - 1]) && startsCommand(latex, i - 2)) i -= 2
+  return latex.slice(0, i) + CARET_MARK + latex.slice(i)
+}
+
+/** 选区落在这个公式里(start / end = 含两头 `$` 的源码范围)。空选区 = 光标在公式源码里(右边界不算,同「正在编辑」
+ *  的口径);非空选区要两头都在两头的 `$` 之间(同 LaTeX Suite 判「在公式里」的口径)。连 `$` 一起选中整个公式、或选区
+ *  跨出公式都不算 —— 那是对整个公式 / 正文动手,格式浮条照旧。 */
+function selectionInside(from: number, to: number, start: number, end: number, display: boolean): boolean {
+  if (from === to) return from >= start && from < end
+  const d = display ? 2 : 1
+  return from >= start + d && to <= end - d
+}
+
+/** 选区所在的那个公式(口径同 selectionInside):不在公式里 / 跨出公式 / 代码块里 → null。
+ *  格式浮条据此让位(公式源码里没有粗体斜体可言,同 Obsidian)。 */
+export function formulaAtSelection(state: EditorState): { from: number; to: number; latex: string; display: boolean } | null {
+  const { $from, $to, from, to } = state.selection
+  if (!$from.parent.isTextblock || $from.parent.type.spec.code || !$from.sameParent($to)) return null
+  const s = buildBlockString($from.parent)
+  if (s.indexOf('$') === -1) return null
+  const cs = $from.start()
+  const sp = scanMath(s).find((x) => selectionInside(from, to, cs + x.from, cs + x.to, x.display))
+  return sp ? { from: cs + sp.from, to: cs + sp.to, latex: sp.latex, display: sp.display } : null
+}
+
+/** 正在编辑的行内公式(光标或选区在它里面,口径同 selectionInside):给浮层预览用。没焦点 / 不在行内公式里 /
+ *  选区跨出公式 → null。▶ 标在选区末端(空选区就是光标),同 LaTeX Suite —— 选中占位时也看得出在哪。 */
+function activeInlineFormula(state: EditorState): { from: number; to: number; latex: string; caretAt: number } | null {
+  if (!editorFocused(state)) return null
+  const hit = formulaAtSelection(state)
+  if (!hit || hit.display) return null
+  const { to } = state.selection
+  return { from: hit.from, to: hit.to, latex: hit.latex, caretAt: Math.min(Math.max(to - (hit.from + 1), 0), hit.latex.length) }
+}
+
+const FLOAT_GAP = 4 // 气泡与这一行之间的空隙(视觉 px)
+
+/** 行内公式编辑中的预览:浮在这一行上方的小气泡(放不下翻到下方),▶ 标出光标位置;不占文档流、不推挤正文。
+ *  气泡由插件视图自己挂在编辑器 DOM 的**外面**(view.dom 的父节点里),不进 contentDOM:段尾不多任何节点,
+ *  coordsAtPos / 方向键 / 输入法量到的都还是正文本身。块公式的预览照旧是源码下方的装饰。 */
+class InlineMathFloat {
+  private el: HTMLElement | null = null
+  private key = ''
+  private raf = 0
+  private armed = false
+  private resize: ResizeObserver | null = null
+
+  constructor(private view: EditorView) {
+    this.update(view)
+  }
+
+  update(view: EditorView, prev?: EditorState): void {
+    this.view = view
+    // 纯 meta 事务(文档、选区、焦点都没变):位置与内容都不变,不量。
+    if (prev && this.el && prev.doc === view.state.doc && prev.selection.eq(view.state.selection) &&
+        editorFocused(prev) === editorFocused(view.state)) return
+    const hit = activeInlineFormula(view.state)
+    const host = view.dom.parentElement
+    if (!hit || !host) return this.hide()
+    if (!this.el) {
+      this.el = document.createElement('div')
+      this.el.className = 'math-preview math-preview--inline math-preview--float'
+      this.el.setAttribute('aria-hidden', 'true') // 纯视觉辅助,读屏读源码本身
+    }
+    if (this.el.parentElement !== host) host.appendChild(this.el)
+    const key = `${hit.caretAt}:${hit.latex}`
+    if (key !== this.key) {
+      this.key = key
+      const inner = document.createElement('span')
+      inner.className = 'math-preview-inner'
+      katexInto(inner, markCaret(hit.latex, hit.caretAt), false)
+      // 插了记号反而渲染不了(半截命令之类):退回不带记号的版本,预览照常有。
+      if (inner.querySelector('.math-error')) katexInto(inner, hit.latex, false)
+      this.el.replaceChildren(inner)
+    }
+    this.place(hit)
+    this.arm(true)
+  }
+
+  private later = (): void => {
+    if (this.raf) return
+    this.raf = requestAnimationFrame(() => {
+      this.raf = 0
+      const hit = this.el && activeInlineFormula(this.view.state)
+      if (hit) this.place(hit)
+    })
+  }
+
+  /** 只在气泡开着时监听:滚动(翻上 / 翻下)、窗口与界面缩放、编辑区改宽(分栏拖动会让公式换行)。 */
+  private arm(on: boolean): void {
+    if (on === this.armed) return
+    this.armed = on
+    if (on) {
+      window.addEventListener('scroll', this.later, true)
+      window.addEventListener('resize', this.later)
+      window.addEventListener(UI_ZOOM_EVENT, this.later)
+      if (typeof ResizeObserver !== 'undefined') {
+        this.resize = new ResizeObserver(this.later)
+        this.resize.observe(this.view.dom)
+      }
+    } else {
+      window.removeEventListener('scroll', this.later, true)
+      window.removeEventListener('resize', this.later)
+      window.removeEventListener(UI_ZOOM_EVENT, this.later)
+      this.resize?.disconnect()
+      this.resize = null
+    }
+  }
+
+  /** 左缘让预览里的字对齐源码的 `$`,底边落在这一行上方;上方被裁切的祖先 / 吸顶工具栏挡住就翻到下方;左右夹在编辑区里。
+   *  先归零再量、按「布局 px / 视觉 px」换算(computed width ÷ 量到的宽,带小数;界面缩放与画布缩放都算进去)。 */
+  private place(hit: { from: number; to: number }): void {
+    const el = this.el, view = this.view
+    if (!el) return
+    let start: { left: number; top: number }
+    let end: { bottom: number }
+    try {
+      start = view.coordsAtPos(hit.from, 1)
+      end = view.coordsAtPos(hit.to, -1)
+    } catch { return }
+    el.classList.remove('is-below')
+    el.style.left = '0px'
+    el.style.top = '0px'
+    el.style.maxWidth = ''
+    const area = view.dom.getBoundingClientRect()
+    let left = area.left, right = area.right, top = 0
+    for (let a = el.parentElement; a; a = a.parentElement) {
+      const st = getComputedStyle(a)
+      // display: contents 的壳(.amx-stage-off 这类)没有盒子,overflow 不生效,量出来是 0×0,别拿它裁。
+      if (st.display !== 'contents' && (st.overflowX !== 'visible' || st.overflowY !== 'visible')) {
+        const r = a.getBoundingClientRect()
+        left = Math.max(left, r.left); right = Math.min(right, r.right); top = Math.max(top, r.top)
+      }
+    }
+    const bar = view.dom.closest('.amx-pane')?.querySelector('.amx-toolbar')
+    if (bar) top = Math.max(top, bar.getBoundingClientRect().bottom)
+    right = Math.min(right, document.documentElement.clientWidth)
+    const r0 = el.getBoundingClientRect()
+    if (!r0.width) return // 视图藏起来了(换到后台的标签)
+    const k = parseFloat(getComputedStyle(el).width) / r0.width || 1
+    if (r0.width > right - left) el.style.maxWidth = `${Math.max(0, (right - left) * k)}px`
+    const r = el.getBoundingClientRect()
+    const inset = (el.firstElementChild?.getBoundingClientRect().left ?? r.left) - r.left
+    const x = Math.max(left, Math.min(start.left - inset, right - r.width))
+    let y = start.top - FLOAT_GAP - r.height
+    if (y < top) {
+      y = end.bottom + FLOAT_GAP
+      el.classList.add('is-below')
+    }
+    el.style.left = `${(x - r.left) * k}px`
+    el.style.top = `${(y - r.top) * k}px`
+  }
+
+  hide(): void {
+    this.arm(false)
+    cancelAnimationFrame(this.raf)
+    this.raf = 0
+    this.el?.remove()
+    this.key = ''
+  }
+
+  destroy(): void {
+    this.hide()
+    this.el = null
+  }
+}
+
+// ── 「哪些地方不算公式」:按 Markdown 解析的口径把代码 / 地址抹成空格 ──────────────────────────────────
+// 抹掉的区域:围栏代码(开 / 闭栏行与栏内)、缩进代码块、行内代码(任意长度反引号)、行内链接 / 图片的地址与标题、
+// 合法引用定义的地址与标题(含标题在下一行)。抹成等长空格(换行保留)→ 偏移不变,`$` 贴着代码时的开闭判据与显示侧
+// buildBlockString(code 文本抹成空格)一致。
+// 读写两侧都在「原文」上调它:读侧是磁盘原文,写侧是序列化结果。序列化器对代码 / 地址不加转义、对正文里的反引号
+// 加 `\`,用户写的转义在写侧是 ESCAPE_SENTINEL(NUL,见 ./literalEscape)—— 所以「被转义」认 奇数个反斜杠 或 NUL。
+// ⚠️ 抹错的代价不对称:抹多了 = 真公式读侧不补反斜杠(编辑器里公式渲染错,回归);抹少了 = 代码 / 地址里的 `\_`
+//    存盘时被当公式反转义删掉(老毛病)。拿不准一律少抹。结构按 CommonMark + GFM 走两遍:
+//    ① 块级(scanBlocks):引用层数、列表项 / 脚注定义的内容列(容器)、围栏(相对容器缩进 ≤3)、缩进代码(不能打断段落)、
+//       HTML 块(里面不做行内解析)、引用定义(不能打断段落;整行剩余恰好是「地址 + 可选标题」才算)→ 段落 / 标题的行内区间;
+//    ② 行内(scanInline):每个段落一遍向前扫 —— 反引号串配对、`<…>` 自动链接 / 行内 HTML 跳过、方括号栈配链接(链接成立后
+//       外层 `[` 失效,同 CommonMark),整体线性。
+//    尖括号自动链接 `<…>` 只跳过、不抹:序列化器会把其中的反斜杠翻倍,抹掉就反转义不回来,越存越多(公式里写 `<ab:x\{y\}>`)。
+// 仪器:mathLivePreview.test.ts「maskNonMath 对拍 remark 解析器」—— 拿编辑器同一套 remark 解析出的 mdast 量抹多 / 抹少。
+const isAsciiPunct = (c: string | undefined): boolean => c !== undefined && /[!-/:-@[-`{-~]/.test(c)
+
+function escapedAt(s: string, i: number): boolean {
+  if (s[i - 1] === '\u0000') return true
+  let k = 0
+  while (s[i - 1 - k] === '\\') k++
+  // 写侧 `NUL\` = 用户转义过的反斜杠(字面 `\`),它吃掉这串里的第一个反斜杠。
+  if (k && s[i - 1 - k] === '\u0000') k--
+  return k % 2 === 1
+}
+
+/** 地址:`<…>`(不跨行、不含未转义的 `<` `>`)或一串不含空白的字符(括号配平,不超过 32 层;遇到未配对的 `)` 停)。
+ *  返回地址之后的下标,不合法 -1。 */
+function destEnd(v: string, p: number): number {
+  const n = v.length
+  if (v[p] === '<') {
+    let q = p + 1
+    for (; q < n; q++) {
+      const c = v[q]
+      if (c === '>') return q + 1
+      if (c === '\n' || c === '<') return -1
+      if ((c === '\\' || c === '\u0000') && q + 1 < n && v[q + 1] !== '\n') q++
+    }
+    return -1
+  }
+  let q = p
+  let depth = 0
+  for (; q < n; q++) {
+    const c = v[q]
+    if ((c === '\\' || c === '\u0000') && isAsciiPunct(v[q + 1])) { q++; continue }
+    if (c <= ' ' || c === '\u007f') break
+    if (c === '(') { if (++depth > 32) return -1 }
+    else if (c === ')') { if (!depth) break; depth-- }
+  }
+  return q === p || depth ? -1 : q
+}
+
+/** 标题:`"…"` `'…'` `(…)`(转义的引号不算闭合;括号标题里不许有未转义的 `(`)。返回闭合之后的下标,不合法 -1。 */
+function titleEnd(v: string, p: number): number {
+  const open = v[p]
+  if (open !== '"' && open !== "'" && open !== '(') return -1
+  const close = open === '(' ? ')' : open
+  for (let q = p + 1; q < v.length; q++) {
+    const c = v[q]
+    if ((c === '\\' || c === '\u0000') && isAsciiPunct(v[q + 1])) { q++; continue }
+    if (c === close) return q + 1
+    if (open === '(' && c === '(') return -1
+  }
+  return -1
+}
+
+/** 空格 / Tab,最多再跨一个换行。 */
+function skipWs(v: string, p: number, newline: boolean): number {
+  let nl = !newline
+  while (p < v.length) {
+    const c = v[p]
+    if (c === ' ' || c === '\t') p++
+    else if (c === '\n' && !nl) { nl = true; p++ }
+    else break
+  }
+  return p
+}
+
+/** 行内链接 `](` 之后的部分:返回收尾 `)` 的下标,不成链接 -1。标题前必须有空白(地址里的撇号 / 引号是地址的一部分)。 */
+function linkTailEnd(v: string, p: number): number {
+  let q = skipWs(v, p, true)
+  if (v[q] === ')') return q
+  const d = destEnd(v, q)
+  if (d === -1) return -1
+  q = skipWs(v, d, true)
+  if (v[q] === ')') return q
+  if (q === d) return -1
+  const t = titleEnd(v, q)
+  if (t === -1) return -1
+  q = skipWs(v, t, true)
+  return v[q] === ')' ? q : -1
+}
+
+const normLabel = (s: string): string => s.trim().replace(/\s+/g, ' ').toLowerCase().toUpperCase()
+
+const HTML_BLOCK_TAGS = new Set(('address article aside base basefont blockquote body caption center col colgroup dd details dialog dir div dl dt '
+  + 'fieldset figcaption figure footer form frame frameset h1 h2 h3 h4 h5 h6 head header hr html iframe legend li link main menu menuitem '
+  + 'nav noframes ol optgroup option p param search section summary table tbody td tfoot th thead title tr track ul').split(' '))
+const TAG_ATTR = `(?:\\s+[A-Za-z_:][A-Za-z0-9_.:-]*(?:\\s*=\\s*(?:[^\\s"'=<>\`]+|'[^']*'|"[^"]*"))?)`
+const OPEN_TAG = `<[A-Za-z][A-Za-z0-9-]*${TAG_ATTR}*\\s*\\/?>`
+const CLOSE_TAG = `<\\/[A-Za-z][A-Za-z0-9-]*\\s*>`
+const INLINE_TAG = new RegExp(`${OPEN_TAG}|${CLOSE_TAG}`, 'y')
+const HTML7_LINE = new RegExp(`^(?:${OPEN_TAG}|${CLOSE_TAG})[ \\t]*$`)
+const AUTOLINK = /<[A-Za-z][A-Za-z0-9+.-]{1,31}:[^\s<>]*>|<[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*>/y
+
+/** 行首是不是新起一块(按 CommonMark 能否打断段落):返回块类型或 null。content 已去掉引用前缀与缩进。 */
+type BlockKind = 'fence' | 'atx' | 'setext' | 'hr' | 'list' | 'footnote' | 'html' | null
+function blockStart(content: string, paraOpen: boolean, lazy = false, listInterrupt = paraOpen): BlockKind {
+  const c0 = content[0]
+  if ((c0 === '`' || c0 === '~') && /^(`{3,}|~{3,})/.test(content)) {
+    const m = /^(`{3,}|~{3,})(.*)$/.exec(content)!
+    if (!(m[1][0] === '`' && m[2].includes('`'))) return 'fence'
+  }
+  if (c0 === '#' && /^#{1,6}(?:[ \t]|$)/.test(content)) return 'atx'
+  if (paraOpen && !lazy && /^(?:=+|-+)[ \t]*$/.test(content)) return 'setext' // 懒续行当不了 setext 底线
+  if (/^(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,})$/.test(content)) return 'hr'
+  const li = /^(?:[-+*]|(\d{1,9})[.)])(?=[ \t]|$)/.exec(content)
+  if (li && !(listInterrupt && (!content.slice(li[0].length).trim() || (li[1] !== undefined && li[1] !== '1')))) return 'list'
+  if (c0 === '[' && /^\[\^[^\]\s]+\]:/.test(content)) return 'footnote'
+  if (c0 === '<') {
+    if (/^<(?:script|pre|style|textarea)(?:[ \t>]|$)/i.test(content) || /^<(?:!--|\?|![A-Za-z]|!\[CDATA\[)/.test(content)) return 'html'
+    const tag = /^<\/?([A-Za-z][A-Za-z0-9-]*)(?:[ \t>]|\/>|$)/.exec(content)
+    if (tag && HTML_BLOCK_TAGS.has(tag[1].toLowerCase())) return 'html'
+    if (!paraOpen && HTML7_LINE.test(content)) return 'html'
+  }
+  return null
+}
+/** HTML 块的结束条件:null = 到空行为止,否则这一行命中即结束(含该行)。 */
+function htmlBlockEnd(content: string): RegExp | null {
+  if (/^<(?:script|pre|style|textarea)/i.test(content)) return /<\/(?:script|pre|style|textarea)>/i
+  if (content.startsWith('<!--')) return /-->/
+  if (content.startsWith('<?')) return /\?>/
+  if (content.startsWith('<![CDATA[')) return /\]\]>/
+  if (content.startsWith('<!')) return />/
+  return null
+}
+
+/** `s` 从 p 起恰好是「地址 + 可选标题」(标题前要有空白,后面不许再有字)。返回 0 = 不是,1 = 只有地址,2 = 地址 + 标题。 */
+function destTitleOnly(s: string, p: number): 0 | 1 | 2 {
+  const d = destEnd(s, p)
+  if (d === -1) return 0
+  let q = skipWs(s, d, false)
+  if (q >= s.length) return 1
+  if (q === d) return 0
+  const t = titleEnd(s, q)
+  if (t === -1) return 0
+  q = skipWs(s, t, false)
+  return q >= s.length ? 2 : 0
+}
+
+/** 引用定义的头一行 `[label]: 地址 [标题]`:整行剩余恰好是这些才算(多行标题不认 —— 少抹)。
+ *  返回 { label, from(冒号之后), rest: 0 = 冒号后空着(地址在下一行) / 1 = 只有地址 / 2 = 地址 + 标题 },不是定义返回 null。 */
+function parseDefinition(content: string): { label: string; from: number; rest: 0 | 1 | 2 } | null {
+  const m = /^\[((?:[^\\[\]\u0000]|[\\\u0000][\s\S]){1,999})\]:/.exec(content)
+  if (!m || !/\S/.test(m[1]) || m[1][0] === '^') return null
+  const from = m[0].length
+  const p = skipWs(content, from, false)
+  if (p >= content.length) return { label: m[1], from, rest: 0 }
+  const rest = destTitleOnly(content, p)
+  return rest ? { label: m[1], from, rest } : null
+}
+
+interface Line { start: number; end: number }
+/** 一行的引用前缀:层数、正文起点(`>` 后的一个可选空格算前缀)、正文缩进列数与首个非空白字符的位置。 */
+function quoteOf(md: string, ln: Line, firstLead: number, maxDepth = Infinity): { depth: number; body: number; cols: number; text: number } {
+  let p = ln.start
+  let depth = 0
+  for (;;) {
+    if (depth >= maxDepth) {
+      let q = p
+      let cols = 0
+      while (q < ln.end && (md[q] === ' ' || md[q] === '\t')) { cols += md[q] === '\t' ? 4 - (cols % 4) : 1; q++ }
+      return { depth, body: p, cols, text: q }
+    }
+    let q = p
+    let cols = 0
+    while (q < ln.end && (md[q] === ' ' || md[q] === '\t')) { cols += md[q] === '\t' ? 4 - (cols % 4) : 1; q++ }
+    if (q < ln.end && md[q] === '>' && cols <= (depth ? 3 : firstLead)) {
+      depth++
+      p = q + 1
+      if (md[p] === ' ') p++
+      continue
+    }
+    return { depth, body: p, cols, text: q }
+  }
+}
+
+/** 块级:围栏 / 缩进代码整行抹空、引用定义的地址与标题抹空;返回各段落 / 标题的行内字符下标(跨行时含换行)与定义过的标签。 */
+function scanBlocks(md: string, a: string[]): { segs: number[][]; labels: Set<string>; notes: Set<string> } {
+  const lines: Line[] = []
+  for (let s = 0; s <= md.length;) {
+    let e = md.indexOf('\n', s)
+    if (e === -1) e = md.length
+    lines.push({ start: s, end: e > s && md[e - 1] === '\r' ? e - 1 : e })
+    s = e + 1
+  }
+  const blankLine = (ln: Line): void => { for (let x = ln.start; x < ln.end; x++) a[x] = ' ' }
+  const segs: number[][] = []
+  const labels = new Set<string>()
+  const notes = new Set<string>() // 脚注定义的标签:`[^x]` 有定义时是脚注引用,不是链接的 `[`
+  let seg: number[] | null = null
+  const addToSeg = (from: number, ln: Line): void => {
+    if (seg) seg.push(ln.start - 1) // 段落里的换行(上一行与这一行连续:空行 / 代码 / HTML 都会先把 seg 清掉)
+    else segs.push(seg = [])
+    for (let x = from; x < ln.end; x++) seg.push(x)
+  }
+  let fence: { ch: string; len: number; depth: number; base: number } | null = null
+  let html: { end: RegExp | null; depth: number } | null = null
+  let containers: number[] = [] // 列表项 / 脚注定义的内容列(相对引用前缀之后)
+  let lastDepth = 0
+  let para = false
+  // 段落到目前为止全是引用定义(定义是从段落开头剥出来的:块级上段落照样开着,后面的缩进行是续行不是代码;
+  // 下一条定义照样能接上;一旦有了普通文字,后面的 `[x]: …` 就只是文字)
+  let defOnly = false
+  let table = null as { depth: number; base: number } | null
+  /** 表格一行按未转义的 `|` 切格(首尾的 `|` 不算一格)。 */
+  const cellsOf = (from: number, to: number): Array<[number, number]> => {
+    while (to > from && (md[to - 1] === ' ' || md[to - 1] === '\t')) to--
+    let start = md[from] === '|' ? from + 1 : from
+    const cells: Array<[number, number]> = []
+    for (let x = start; x < to; x++) if (md[x] === '|' && !escapedAt(md, x)) { cells.push([start, x]); start = x + 1 }
+    if (start < to) cells.push([start, to])
+    return cells
+  }
+  const tableRow = (ln: Line, text: number): void => {
+    for (const [from, to] of cellsOf(text, ln.end)) { seg = null; addToSeg(from, { start: ln.start, end: to }) }
+    seg = null
+  }
+  /** 段落里的一行(新段落开头或续行):段落到目前全是定义时先试定义,不是就当文字。返回多吃掉的行数(地址 / 标题在下一行)。 */
+  const paraLine = (li: number, text: number, ln: Line, depth: number, base: number): number => {
+    if ((!para || defOnly) && md[text] === '[') {
+      const def = parseDefinition(md.slice(text, ln.end))
+      if (def) {
+        // 下一行(同一引用层、是段落续行而不新起一块)可能接着地址 / 标题
+        const next = lines[li + 1]
+        const nq = next ? quoteOf(md, next, 3 + base) : null
+        const body = next && nq && nq.depth === depth && nq.text < next.end ? md.slice(nq.text, next.end) : null
+        const cont = body !== null && !(nq!.cols - base <= 3 && blockStart(body, true))
+        let used = 0
+        if (def.rest === 0) used = cont && destTitleOnly(body!, 0) ? 1 : -1
+        else if (def.rest === 1 && cont && /^["'(]/.test(body!) && titleEnd(body!, 0) !== -1 && skipWs(body!, titleEnd(body!, 0), false) >= body!.length) used = 1
+        if (used !== -1) {
+          labels.add(normLabel(def.label))
+          for (let x = text + def.from; x < ln.end; x++) a[x] = ' '
+          if (used) for (let x = nq!.text; x < next!.end; x++) a[x] = ' '
+          seg = null
+          para = true
+          defOnly = true
+          return used
+        }
+      }
+    }
+    // GFM 表格:这一行是表头、下一行是分隔行(列数一致)→ 打断段落;各单元格单独做行内解析(`|` 在行内代码里照样分格)
+    const next = lines[li + 1]
+    if (next && md.slice(text, ln.end).includes('|')) {
+      const nq = quoteOf(md, next, 3 + base)
+      const delim = md.slice(nq.text, next.end)
+      if (nq.depth === depth && nq.cols - base <= 3 && /^\|?[ \t]*:?-+:?[ \t]*(?:\|[ \t]*:?-+:?[ \t]*)*\|?[ \t]*$/.test(delim) && delim.includes('|')
+        && cellsOf(nq.text, next.end).length === cellsOf(text, ln.end).length) {
+        seg = null
+        tableRow(ln, text)
+        table = { depth, base }
+        para = false
+        defOnly = false
+        return 1
+      }
+    }
+    if (para && defOnly) seg = null // 定义之后的第一行文字:新起行内区间(定义行不参与行内解析)
+    addToSeg(text, ln)
+    para = true
+    defOnly = false
+    return 0
+  }
+  for (let li = 0; li < lines.length; li++) {
+    const ln = lines[li]
+    const top = containers.length ? containers[containers.length - 1] : 0
+    const qd = quoteOf(md, ln, 3 + top)
+    let { cols } = qd
+    const { depth } = qd
+    let text = qd.text
+    const isBlank = text >= ln.end
+    if (fence) {
+      // 栏内不再认新的引用 / 列表:只剥开栏那几层 `>`
+      const fq = quoteOf(md, ln, 3 + top, fence.depth)
+      const fBlank = fq.text >= ln.end
+      if (fq.depth < fence.depth || (!fBlank && fq.cols < fence.base)) fence = null
+      else {
+        const m = /^(`{3,}|~{3,})[ \t]*$/.exec(md.slice(fq.text, ln.end))
+        if (!fBlank && fq.cols - fence.base <= 3 && m && m[1][0] === fence.ch && m[1].length >= fence.len) fence = null
+        blankLine(ln)
+        continue
+      }
+    }
+    if (html) {
+      const hq = quoteOf(md, ln, 3 + top, html.depth)
+      if (hq.depth < html.depth || (html.end === null && hq.text >= ln.end)) html = null
+      else {
+        if (html.end && html.end.test(md.slice(ln.start, ln.end))) html = null
+        continue
+      }
+    }
+    if (isBlank) { para = false; seg = null; table = null; continue }
+    // 上一行段落还开着、且原有容器这一行都接上了:这一行新开的列表项(哪怕套在新开的引用里)都按「打断段落」判 ——
+    // 空项、非 1 起头的有序项不算(micromark 只在原有容器全接上时按子 flow 里有没有进行中的段落定 interrupt;
+    // 有容器没接上时不限制,`> a\n- ` 的 `- ` 照样是空列表项)
+    let lineInterrupt = para && depth >= lastDepth
+    if (table) {
+      if (depth === table.depth && !isBlank && cols >= table.base && !(cols - table.base <= 3 && blockStart(md.slice(text, ln.end), true))) {
+        tableRow(ln, text)
+        continue
+      }
+      table = null
+    }
+    if (depth !== lastDepth) {
+      // 引用层数变了:层数变少且段落开着、这行又不新起一块 = 懒续行(仍属那个段落)
+      if (para && depth < lastDepth && (cols >= 4 || !blockStart(md.slice(text, ln.end), true, true, false))) { li += paraLine(li, text, ln, lastDepth, 0); continue }
+      containers = []
+      para = false
+      seg = null
+      lastDepth = depth
+    }
+    // 容器:缩进不够当前内容列的,要么是懒续行,要么退出容器
+    let keep = containers.length
+    while (keep && cols < containers[keep - 1]) keep--
+    let base = keep ? containers[keep - 1] : 0
+    let content = md.slice(text, ln.end)
+    if (keep < containers.length) {
+      if (para && !(cols - base <= 3 && blockStart(content, true, true, false))) { li += paraLine(li, text, ln, depth, base); continue }
+      containers = containers.slice(0, keep)
+      lineInterrupt = false
+      para = false // 不是懒续行:原段落随容器一起结束
+      seg = null
+    }
+    // 一行可以连开几层容器(`- - x`、`1. [^1]: …` 很少见,照样一层层剥)
+    for (;;) {
+      const rel = cols - base
+      if (rel >= 4) {
+        if (para) li += paraLine(li, text, ln, depth, base)
+        else { blankLine(ln); seg = null }
+        break
+      }
+      const kind = blockStart(content, para, false, para || lineInterrupt)
+      if (kind === 'fence') {
+        const m = /^(`{3,}|~{3,})/.exec(content)!
+        fence = { ch: m[1][0], len: m[1].length, depth, base }
+        blankLine(ln)
+        para = false; seg = null
+        break
+      }
+      if (kind === 'list' || kind === 'footnote') {
+        const mk = kind === 'list' ? /^(?:[-+*]|\d{1,9}[.)])/.exec(content)![0] : /^\[\^[^\]\s]+\]:/.exec(content)![0]
+        let q = text + mk.length
+        let sp = 0
+        while (q < ln.end && (md[q] === ' ' || md[q] === '\t')) { sp += md[q] === '\t' ? 4 - ((cols + mk.length + sp) % 4) : 1; q++ }
+        const col = kind === 'footnote' ? cols + 4 : cols + mk.length + (q >= ln.end || sp > 4 ? 1 : sp)
+        if (kind === 'footnote') notes.add(normLabel(mk.slice(2, -2)))
+        containers.push(col)
+        para = false; seg = null
+        if (q >= ln.end) break
+        // 记号后 ≥5 格:内容列 = 记号 + 1,余下按相对缩进 ≥4 走缩进代码
+        cols += mk.length + sp
+        base = col
+        text = q
+        content = md.slice(text, ln.end)
+        continue
+      }
+      if (kind === 'atx') {
+        const h = /^#{1,6}[ \t]*/.exec(content)![0]
+        seg = null
+        addToSeg(text + h.length, ln)
+        seg = null
+        para = false
+        break
+      }
+      if (kind === 'setext' || kind === 'hr') { para = false; seg = null; break }
+      if (kind === 'html') {
+        const end = htmlBlockEnd(content)
+        html = end && end.test(content.slice(2)) ? null : { end, depth }
+        para = false; seg = null
+        break
+      }
+      li += paraLine(li, text, ln, depth, base)
+      break
+    }
+  }
+  return { segs, labels, notes }
+}
+
+/** 行内:一个段落(下标序列 idx,跨行处是换行)一遍向前扫。 */
+function scanInline(md: string, idx: number[], a: string[], labels: Set<string>, notes: Set<string>): void {
+  const n = idx.length
+  let v = ''
+  for (const i of idx) v += md[i]
+  const esc = (x: number): boolean => escapedAt(md, idx[x])
+  const maskV = (from: number, to: number): void => { for (let y = from; y < to; y++) if (v[y] !== '\n') a[idx[y]] = ' ' }
+  // 反引号串:按长度登记起点;配对 = 之后第一个同长度的串(指针只前进 → 线性)
+  const runs = new Map<number, number[]>()
+  for (let x = 0; x < n;) {
+    if (v[x] !== '`') { x++; continue }
+    let e = x
+    while (v[e] === '`') e++
+    const list = runs.get(e - x)
+    if (list) list.push(x)
+    else runs.set(e - x, [x])
+    x = e
+  }
+  const ptr = new Map<number, number>()
+  const closerOf = (len: number, from: number): number => {
+    const list = runs.get(len)
+    if (!list) return -1
+    let k = ptr.get(len) ?? 0
+    while (k < list.length && list[k] < from) k++
+    ptr.set(len, k)
+    return k < list.length ? list[k] : -1
+  }
+  const miss: Record<string, number> = {} // 某种 HTML 收尾在 x 之后已找不到:之后的同类起手不再重扫
+  const findFrom = (key: string, needle: string, from: number): number => {
+    if (miss[key] !== undefined && from >= miss[key]) return -1
+    const e = v.indexOf(needle, from)
+    if (e === -1) miss[key] = from
+    return e
+  }
+  const htmlEnd = (x: number): number => {
+    if (v.startsWith('<!--', x)) {
+      if (v.startsWith('<!-->', x)) return x + 5
+      if (v.startsWith('<!--->', x)) return x + 6
+      const e = findFrom('c', '-->', x + 4)
+      return e === -1 ? -1 : e + 3
+    }
+    if (v.startsWith('<?', x)) { const e = findFrom('p', '?>', x + 2); return e === -1 ? -1 : e + 2 }
+    if (v.startsWith('<![CDATA[', x)) { const e = findFrom('d', ']]>', x + 9); return e === -1 ? -1 : e + 3 }
+    if (v[x + 1] === '!' && /[A-Za-z]/.test(v[x + 2] ?? '')) { const e = findFrom('b', '>', x + 2); return e === -1 ? -1 : e + 1 }
+    AUTOLINK.lastIndex = x
+    if (AUTOLINK.test(v)) return AUTOLINK.lastIndex
+    INLINE_TAG.lastIndex = x
+    if (INLINE_TAG.test(v)) return INLINE_TAG.lastIndex
+    return -1
+  }
+  const stack: Array<{ x: number; image: boolean }> = []
+  let inactiveBelow = 0 // 栈里下标 < 它的 `[` 已失效(里面成了链接;`![` 不失效,同 CommonMark)
+  for (let x = 0; x < n;) {
+    const c = v[x]
+    if (c === '`') {
+      let s = x
+      if (esc(x)) s = x + 1 // 转义只吃掉第一个反引号,剩下的照常成串
+      let e = x
+      while (v[e] === '`') e++
+      if (e - s > 0) {
+        const close = closerOf(e - s, e)
+        if (close !== -1) { maskV(s, close + (e - s)); x = close + (e - s); continue }
+      }
+      x = e
+      continue
+    }
+    if (c === '<' && !esc(x)) {
+      const e = htmlEnd(x)
+      x = e === -1 ? x + 1 : e
+      continue
+    }
+    if (c === '[' && !esc(x)) {
+      if (v[x + 1] === '^' && notes.size) {
+        const fn = /^\[\^([^\]\s]{1,999})\]/.exec(v.slice(x, x + 1004))
+        if (fn && notes.has(normLabel(fn[1]))) { x += fn[0].length; continue } // 脚注引用
+      }
+      stack.push({ x, image: x > 0 && v[x - 1] === '!' && !esc(x - 1) })
+      x++
+      continue
+    }
+    if (c === ']' && !esc(x) && stack.length) {
+      const k = stack.length - 1
+      const op = stack.pop()!
+      const inactive = k < inactiveBelow && !op.image
+      inactiveBelow = Math.min(inactiveBelow, stack.length)
+      if (inactive) { x++; continue }
+      let end = -1
+      if (v[x + 1] === '(') {
+        const close = linkTailEnd(v, x + 2)
+        if (close !== -1) { maskV(x + 2, close); end = close + 1 }
+      }
+      if (end === -1 && labels.size) {
+        // 链接文字当标签(collapsed `[t][]` / shortcut `[t]`):标签最长 999 字、不含未转义的方括号 —— 先按长度挡,
+        // 别对整段文字切片(成串的 `[` + `][]` 会变成平方级)
+        const textLabel = (): string | null => {
+          if (x - op.x - 1 > 999) return null
+          const text = v.slice(op.x + 1, x)
+          return /(^|[^\\\u0000])[[\]]/.test(text) ? null : text
+        }
+        const lab = v[x + 1] === '[' ? /^\[((?:[^\\[\]\u0000]|[\\\u0000][\s\S]){0,999})\]/.exec(v.slice(x + 1, x + 1003)) : null
+        if (lab) {
+          const key = lab[1].trim() ? lab[1] : textLabel()
+          if (key !== null && labels.has(normLabel(key))) end = x + 1 + lab[0].length
+        } else {
+          const key = textLabel()
+          if (key !== null && labels.has(normLabel(key))) end = x + 1
+        }
+      }
+      if (end === -1) { x++; continue }
+      if (!op.image) inactiveBelow = stack.length
+      x = end
+      continue
+    }
+    x++
+  }
+}
+
+/** md 里「不算公式」的区域抹成等长空格(偏移不变)。导出供单测。 */
+export function maskNonMath(md: string): string {
+  const a = md.split('')
+  const { segs, labels, notes } = scanBlocks(md, a)
+  for (const seg of segs) scanInline(md, seg, a, labels, notes)
+  return a.join('')
+}
 
 /** 一段 markdown **原文**里的公式跨度(偏移相对 md)—— 落盘反转义与解析补反斜杠**共用这一份**,别再各写一套。
  *  R-01 返修(评审 2026-09-27):读侧曾按 PM 视图认公式(行内代码抹空、链接地址不计、mark 定界符不计),写侧按原文认;
  *  `` `$HOME` `` / `[a](http://x/?$b)` 里的 `$` 让两侧配出不同的对 —— 读侧补了反斜杠、写侧不还原,每存一次翻一倍。
  *  两侧都在「原文」上用这一个函数,认出的跨度就一致(写侧的原文 = 序列化结果,与打开时的原文逐字相同)。
- *  ponytail: 行内代码 / 链接地址里的 `$` 照旧参与配对(与返修前的落盘侧同一口径)—— 这类段落里的公式可能认不出、
- *  反斜杠一次性丢掉(同 R-01 修前),但不会越存越多。 */
+ *  代码 / 链接地址按 Markdown 解析的口径排除(maskNonMath):两侧照样同一口径,而且代码里的 `\_` 不再被当公式反转义删掉。
+ *  ponytail: 公式旁的 `\$` 仍按 `$` 参与配对(读侧见 restoreMathEscapes 的 view;写侧看到的是序列化器翻倍后的形态,
+ *  两侧对「被转义」的判据对不齐,改了反而让 `$a\\$` 这类合法公式认不出)。 */
 export function mdMathSpans(md: string): MathSpan[] {
   if (md.indexOf('$') === -1) return []
-  const out: MathSpan[] = []
-  let base = 0
-  md.split(FENCE_SPLIT).forEach((part, idx) => {
-    if (idx % 2 === 0 && part.indexOf('$') !== -1) {
-      for (const sp of scanMath(part)) out.push({ ...sp, from: sp.from + base, to: sp.to + base })
-    }
-    base += part.length
-  })
-  return out
+  const masked = maskNonMath(md)
+  return scanMath(masked).map((sp) => (sp.display ? { ...sp, latex: md.slice(sp.from + 2, sp.to - 2).trim() } : { ...sp, latex: md.slice(sp.from + 1, sp.to - 1) }))
 }
 
 /** 落盘前把 remark 在 $…$/$$…$$ 里加的反斜杠转义抹掉,让公式按原文持久化(对齐 Obsidian/remark-math)。
@@ -176,12 +865,16 @@ export function mdMathSpans(md: string): MathSpan[] {
  *  命令名和 \\ 换行全丢 → 矩阵/数组(\begin{array}…\hline)当场炸。字符类同 mdast escapeBackslashes 的 [!-/:-@[-`{-~]。
  *  跨度由 mdMathSpans 给(围栏代码块跳过——块内的 $…$ 不是公式,反转义会破坏代码里的 \n 等序列)。 */
 export function unescapeMathSource(md: string): string {
-  const spans = mdMathSpans(md)
+  if (md.indexOf('$') === -1) return md
+  const masked = maskNonMath(md)
+  const spans = scanMath(masked)
   if (!spans.length) return md
   let out = ''
   let last = 0
   for (const sp of spans) {
-    out += md.slice(last, sp.from) + md.slice(sp.from, sp.to).replace(/\\([!-/:-@[-`{-~])/g, '$1')
+    // 公式跨度里夹着的行内代码 / 地址(已被抹空)原样保留:只反转义未被抹掉的「\标点」。
+    out += md.slice(last, sp.from) + md.slice(sp.from, sp.to).replace(/\\([!-/:-@[-`{-~])/g, (all, ch: string, off: number) =>
+      masked[sp.from + off] === '\\' ? ch : all)
     last = sp.to
   }
   return out + md.slice(last)
@@ -312,21 +1005,23 @@ function buildDecorations(state: EditorState): DecorationSet {
     const spans = scanMath(s)
     if (!spans.length) return false
     for (const sp of spans) {
-      const editing = focus && (selFrom === selTo
-        ? selFrom >= cs + sp.from && selFrom < cs + sp.to
-        : selFrom < cs + sp.to && selTo > cs + sp.from)
+      const inside = selectionInside(selFrom, selTo, cs + sp.from, cs + sp.to, sp.display)
+      const editing = focus && (inside || (selFrom !== selTo && selFrom < cs + sp.to && selTo > cs + sp.from))
       if (editing) {
+        // Whole source, `$` included: the public styling hook (monospace, italic, code size). PM merges it
+        // into every text span of the formula, so selectors are `.math-source.math-source-x`, not descendants.
+        // Never cut around the selection: the font must not jump while dragging a selection.
+        decos.push(Decoration.inline(cs + sp.from, cs + sp.to, { class: 'math-source' }))
         for (const token of mathSourceHighlights(s.slice(sp.from, sp.to), cs + sp.from, { from: selFrom, to: selTo })) {
           decos.push(Decoration.inline(token.from, token.to, { class: token.className }))
         }
-        // Only the formula containing the caret gets a preview. Inline previews
-        // occupy a row after the paragraph, so neither source nor adjacent text is covered.
-        if (selFrom !== selTo) continue
-        const anchor = sp.display ? cs + sp.to : cs + node.content.size
-        decos.push(Decoration.widget(anchor, (v, getPos) => renderMath(v, sp.latex, sp.display, getPos, true), {
+        // 只有光标 / 选区整个落在里面的那个公式出预览(选中占位时照常出,同 Obsidian);选区跨出公式不出。
+        // 块公式的预览在源码下方;行内公式的预览是插件视图自己摆的浮层(InlineMathFloat),不走装饰。
+        if (!inside || !sp.display) continue
+        decos.push(Decoration.widget(cs + sp.to, (v, getPos) => renderMath(v, sp.latex, true, getPos, true), {
           side: 1,
           ignoreSelection: true,
-          key: `p:${sp.display ? 'b' : 'i'}:${sp.latex}`, // 不带位置(P-04):预览不读位置,内容相同即可复用
+          key: `p:b:${sp.latex}`, // 不带位置(P-04):预览不读位置,内容相同即可复用
         }))
         continue
       }
@@ -360,6 +1055,7 @@ export function mathLivePreviewPlugin() {
           // 失焦 → 全部渲染(每个 Amadeus 块独立编辑器:点别的块 = 本块失焦,公式即渲染)。焦点态读 editorFocus。
           decorations: (state) => buildDecorations(state),
         },
+        view: (view) => new InlineMathFloat(view),
       }),
   )
 }

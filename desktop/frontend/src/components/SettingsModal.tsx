@@ -89,9 +89,11 @@ import { AgentClisTab } from './AgentClisTab'
 import { likelyMainlandChina } from './OnboardingWizard'
 import { EnvProbeSection } from './EnvProbeSection'
 import { DesktopPermissions, hasDesktopPermissions } from './DesktopPermissions'
+import { phoneGuide } from './onboarding/phoneGuide'
 import { ComputerHistorySettings, computerHistoryApi } from './ComputerHistorySettings'
 import { TrashSettings } from './TrashSettings'
 import { RemoteSessionsSettings, remoteSessionsApi } from './RemoteSessionsSettings' // P1-K4
+import { DELEGATED_SETTINGS_TABS, isDelegatedAdmin } from '../services/delegatedAdmin'
 import { UnitSettings } from './UnitSwitcher'
 import { debugFireToast } from '../achievements/store'
 import { useTheme } from '../stores/themeStore'
@@ -107,7 +109,7 @@ import { setActiveWindowCommand } from '../activeWindowCommand'
 import { requestDevCommandsSync } from '../devCommands'
 import { setWikiFilesEnabled } from '@amadeus/lib/wikiFiles'
 import { setNotesSpellcheckEnabled, useNotesSpellcheck } from '@amadeus/blocks/markdown/spellcheck'
-import { setCodeAutoPairEnabled, useCodeAutoPair } from '@amadeus/blocks/markdown/codeAutoPair'
+import { setBracketAutoPairEnabled, setMarkdownAutoPairEnabled, useBracketAutoPair, useMarkdownAutoPair } from '@amadeus/blocks/markdown/autoPairPrefs'
 import { setUpgradeV4Enabled } from '@amadeus/lib/upgradeV4'
 import { deleteAssetsPref, setDeleteAssetsPref } from '@amadeus/components/askDeleteAssets'
 import { canvasDoubleClickFocusEnabled, canvasOverviewZoom, setCanvasDoubleClickFocusEnabled, setCanvasOverviewZoom } from '@amadeus/unified/canvasPrefs'
@@ -501,7 +503,8 @@ export const SettingsModal: React.FC<{
   const [canvasDoubleClickFocus, setCanvasDoubleClickFocus] = useState<boolean>(canvasDoubleClickFocusEnabled)
   const [aiSpaceTrigger, setAiSpaceTrigger] = useState<boolean>(aiSpaceTriggerEnabled) // 正文 AI 空行空格唤起(G3-07,缺省关,本机)
   const notesSpellcheck = useNotesSpellcheck() // 笔记拼写检查(本机偏好,G4-07)
-  const codeAutoPair = useCodeAutoPair() // 代码块括号自动配对(本机偏好,R-27)
+  const bracketAutoPair = useBracketAutoPair() // 正文 + 代码块括号 / 引号自动成对(本机偏好,R-27 的 key)
+  const markdownAutoPair = useMarkdownAutoPair() // 选中文字后敲 * _ ~ = $ % 包裹(本机偏好)
   const [canvasOverviewZ, setCanvasOverviewZ] = useState<number>(canvasOverviewZoom)
   // 界面字体三档(空 = 跟随主题;uiFont.ts 注入 <style> 即刻生效)。
   const [fonts, setFonts] = useState<Record<FontSlot, string>>(() => ({
@@ -569,7 +572,9 @@ export const SettingsModal: React.FC<{
   // 引擎插件清单(异步到);「电脑操作」的一级页跟着它在不在。
   const [plugins, setPlugins] = useState<PluginInfo[] | null>(null)
   const computerUse = (plugins || []).find((pl) => pl.id === COMPUTER_USE_PLUGIN && pl.enabled && pl.settings)
-  const tabItems = [
+  // 委托管理员只管 Agent:设置里只留 Agent 与技能两页(别的页的数据面全在那台设备的白名单外;见 services/delegatedAdmin.ts)。
+  const delegatedTabs = DELEGATED_SETTINGS_TABS.map((id) => [id, t(`settings.tab.${id}`)] as [Tab, string])
+  const tabItems = isDelegatedAdmin() ? delegatedTabs : [
     // = 连接 + Forsion 合并。⚠️ 云端 Web / 移动端(webShim、mobileShim 都是 cloudWeb:true 且不给
     // backendStatus)下这一页**每个块都是 false**——连接项全是桌面/自建后端专属——列出来点进去是白板,
     // 而它还是默认落点。整页无正文就别列。
@@ -597,7 +602,8 @@ export const SettingsModal: React.FC<{
     ['advanced', t('settings.tab.advanced')],
     // 回收站(卸载的 Agent / 技能 / 插件放 30 天):只在本机引擎有,手机原生外壳同一页;放「系统」组、设备权限上面。
     ...(isDesktop || window.tangu?.mobile ? ([['trash', t('trash.tab')]] as Array<[Tab, string]>) : []),
-    ...(hasDesktopPermissions() ? ([['permissions', t('desktopPermissions.title')]] as Array<[Tab, string]>) : []),
+    // 手机 App 的同名页(通知 / 操作这台手机 / 麦克风)由手机入口登记(phoneGuide().PermissionsPanel);两者不会同时成立(桌面那份排除了 mobile)。
+    ...(hasDesktopPermissions() || phoneGuide()?.PermissionsPanel ? ([['permissions', t('desktopPermissions.title')]] as Array<[Tab, string]>) : []),
     // 设置 › 设备(原 Ribbon 胶囊菜单,10-17 搬进来):只在有 Unit 主进程桥的真桌面列。
     ...(window.tangu?.unitHostStatus || window.tangu?.unitsList ? ([['units', t('unit.tab')]] as Array<[Tab, string]>) : []),
     // P1-K4:只在执行设备本机(有主进程 API)列;设备页 / web / 手机没有 —— 开关只能在本机改。
@@ -1227,7 +1233,7 @@ export const SettingsModal: React.FC<{
     notifications: 'settings.page.notificationsDescription',
     statusbar: 'settings.page.statusbarDescription',
     model: 'settings.page.modelDescription',
-    agents: 'settings.page.agentsDescription',
+    agents: isDelegatedAdmin() ? 'delegatedAdmin.agentsDescription' : 'settings.page.agentsDescription',
     skills: 'globalSkills.intro',
     connectors: 'connectors.pageHint',
     mcp: 'settings.page.mcpDescription',
@@ -1238,7 +1244,8 @@ export const SettingsModal: React.FC<{
     'amadeus-plugins': PRODUCT.nativeFeatures !== undefined ? 'settings.amadeusPlugins.unitIntro' : 'settings.page.pluginsDescription',
     advanced: 'settings.page.advancedDescription',
     trash: 'trash.page',
-    permissions: 'desktopPermissions.description',
+    // 手机 App 的同名页是通知 / 操作这台手机 / 麦克风三项,不是电脑的那几项权限
+    permissions: hasDesktopPermissions() ? 'desktopPermissions.description' : 'phonePerms.pageDescription',
     units: 'unit.page',
     'remote-sessions': 'remoteSessions.page', // P1-K4
     'computer-history': 'settingsmodal.page.computerHistory',
@@ -1280,7 +1287,8 @@ export const SettingsModal: React.FC<{
     ],
     // 主题**刻意不设中分类**(用户拍板):设计语言/配色/明暗/界面大小/阴影/玻璃/光标 各自一张小卡就够,
     // 硬分成三栏反而把「换个主题顺手调下明暗」拆成两次点击。别再加回来。
-    agents: [
+    // 委托管理员:后台 Agent(special/config)与本机 Agent CLI(engines)都在那台设备的白名单外,只留名册
+    agents: isDelegatedAdmin() ? [['ag-roster', t('agentSettings.rosterTitle')]] : [
       ['ag-roster', t('agentSettings.rosterTitle')],
       ['ag-special', t('settings.sub.specialAgents')],
       ['ag-clis', t('settings.tab.agentClis')],
@@ -1732,7 +1740,9 @@ export const SettingsModal: React.FC<{
           <ErrorBoundary key={`${tab}:${activeSub}`}>
           <div key={`${tab}:${activeSub}`} className={`settings-sub settings-sub--${tab}`} id={cloudTabs.length ? 'settings-cloud-panel' : undefined} role={cloudTabs.length ? 'tabpanel' : undefined} aria-labelledby={cloudTabs.length ? `settings-cloud-tab-${activeSub}` : undefined} data-dir={subDir} data-settings-sub={activeSub || undefined}>
                 {tab === 'trash' && <TrashSettings />}
-                {tab === 'permissions' && hasDesktopPermissions() && <DesktopPermissions mode={p.themeMode} />}
+                {tab === 'permissions' && (hasDesktopPermissions()
+                  ? <DesktopPermissions mode={p.themeMode} />
+                  : (() => { const Panel = phoneGuide()?.PermissionsPanel; return Panel ? <Panel /> : null })())}
                 {tab === 'computer-history' && <ComputerHistorySettings mode={p.themeMode} anchor="computer-history" />}
                 {tab === 'units' && <UnitSettings />}
                 {tab === 'remote-sessions' && <RemoteSessionsSettings />}
@@ -2136,7 +2146,8 @@ export const SettingsModal: React.FC<{
                         <SettingsRow label={t('settings.notes.wikiFilesLabel')} description={t('settings.notes.wikiFilesHint')} control={<SettingsSwitch checked={stored.notesWikiIncludeFiles !== false} onChange={(on) => { setWikiFilesEnabled(on); void window.tangu!.setConfig({ notesWikiIncludeFiles: on }).then(setStored) }} label={t('settings.notes.wikiFilesLabel')} />} />
                         <SettingsRow label={t('settings.notes.aiSpaceLabel')} description={t('settings.notes.aiSpaceHint')} control={<SettingsSwitch checked={aiSpaceTrigger} onChange={(on) => { setAiSpaceTrigger(on); setAiSpaceTriggerEnabled(on) }} label={t('settings.notes.aiSpaceLabel')} />} />
                         <SettingsRow label={t('settings.notes.spellcheckLabel')} description={t('settings.notes.spellcheckHint')} control={<SettingsSwitch checked={notesSpellcheck} onChange={setNotesSpellcheckEnabled} label={t('settings.notes.spellcheckLabel')} />} />
-                        <SettingsRow label={t('settings.notes.codeAutoPairLabel')} description={t('settings.notes.codeAutoPairHint')} control={<SettingsSwitch checked={codeAutoPair} onChange={setCodeAutoPairEnabled} label={t('settings.notes.codeAutoPairLabel')} />} />
+                        <SettingsRow label={t('settings.notes.autoPairBracketsLabel')} description={t('settings.notes.autoPairBracketsHint')} control={<SettingsSwitch checked={bracketAutoPair} onChange={setBracketAutoPairEnabled} label={t('settings.notes.autoPairBracketsLabel')} />} />
+                        <SettingsRow label={t('settings.notes.autoPairMarkdownLabel')} description={t('settings.notes.autoPairMarkdownHint')} control={<SettingsSwitch checked={markdownAutoPair} onChange={setMarkdownAutoPairEnabled} label={t('settings.notes.autoPairMarkdownLabel')} />} />
                         <SettingsRow
                           label={t('settings.notes.canvasDoubleClickFocusLabel')}
                           description={t('settings.notes.canvasDoubleClickFocusHint')}

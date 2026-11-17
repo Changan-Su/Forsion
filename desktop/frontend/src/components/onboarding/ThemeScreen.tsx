@@ -2,6 +2,8 @@
  * ② 外观:风格 / 明暗 / 主题色 / 背景色,右边实时预览(ThemePreview,和设置 › 外观同一个)。即选即生效,后面几屏就是这个样子。
  * 两根颜色轴独立(主题色只换 accent 家族,背景色只换底 / 文字 / 边线族;别退回 2026-08-29 前的耦合写法)。字体留在设置里。
  * 明暗三选一用 LCL 的看法胶囊(ViewModeSwitch spec,滑块会动、跟动效主题走;11-08 换掉手写的 .ob3-seg)。
+ * variant 'phone'(手机引导,11-13):没有风格那一栏和右边的预览 —— 窄屏上它们会把明暗 / 颜色挤到下面去;改了马上就能在整个 App 上看到,
+ * 不需要另画一个小预览。窄栏一列。设置 › 外观不用这个组件,不受影响。
  */
 import React from 'react'
 import { Moon, MonitorCog, Sun } from 'lucide-react'
@@ -15,6 +17,8 @@ export interface ThemeProps {
   themeLang: string; themeSkin: string; themeMode: 'light' | 'dark'; themeModePref: 'light' | 'dark' | 'system'; themeSeed: string
   onThemeChange: (lang: string, skin: string, pref: 'light' | 'dark' | 'system') => void
   onSeedChange: (hex: string) => void
+  /** 手机引导用的那版:不出风格、不出预览,窄栏。 */
+  variant?: 'phone'
 }
 
 export function ThemeScreen(p: ThemeProps): React.ReactNode {
@@ -27,11 +31,12 @@ export function ThemeScreen(p: ThemeProps): React.ReactNode {
   const forced = forcedSchemeForLanguage(p.themeLang)
   const mode = forced ?? p.themeModePref
   const skins = listSkins()
-  return <div className="ob3-col mid">
-    <div className="ob3-head"><h1 tabIndex={-1} data-ob-title="">{t('ob3.theme.title')}</h1><p>{t('ob3.theme.desc')}</p></div>
-    <div className="ob3-theme">
+  const phone = p.variant === 'phone'
+  return <div className={`ob3-col ${phone ? 'narrow' : 'mid'}`}>
+    <div className="ob3-head"><h1 tabIndex={-1} data-ob-title="">{t('ob3.theme.title')}</h1><p>{t(phone ? 'ob3.theme.descPhone' : 'ob3.theme.desc')}</p></div>
+    <div className={`ob3-theme${phone ? ' phone' : ''}`}>
       <section className="ob3-card ob3-ctrl">
-        <div className="ob3-field"><span>{t('ob3.theme.style')}</span>
+        {!phone && <div className="ob3-field"><span>{t('ob3.theme.style')}</span>
           <div className="ob3-styles" role="radiogroup" aria-label={t('ob3.theme.style')}>
             {listLanguages().map((th) => {
               const on = th.manifest.id === p.themeLang
@@ -41,7 +46,7 @@ export function ThemeScreen(p: ThemeProps): React.ReactNode {
                 <strong>{th.manifest.name}</strong>{desc && <small>{desc}</small>}
               </button>
             })}
-          </div></div>
+          </div></div>}
         <div className="ob3-field"><span>{t('onboarding.theme.modeLabel')}</span>
           <div className={`ob3-mode${forced ? ' locked' : ''}`} data-ob-mode="" title={forced ? t('settings.theme.modeLocked') : undefined}>
             {/* 锁住时整颗 inert:点不到、Tab 不进、读屏器也不当成能用的控件(下面那行说明照读) */}
@@ -67,7 +72,7 @@ export function ThemeScreen(p: ThemeProps): React.ReactNode {
             {themeBg === 'custom' && <input type="color" value={bgSeed || '#f8f7f6'} aria-label={t('settings.theme.customBgLabel')} onChange={(e) => setBgSeed(e.target.value)} />}
           </div></div>
       </section>
-      <section className="ob3-card ob3-preview"><ThemePreview tabLabel={t('ob3.theme.title')} /></section>
+      {!phone && <section className="ob3-card ob3-preview"><ThemePreview tabLabel={t('ob3.theme.title')} /></section>}
     </div>
   </div>
 }

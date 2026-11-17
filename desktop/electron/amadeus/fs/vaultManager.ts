@@ -271,6 +271,23 @@ export class VaultManager {
     return fs.readFile(abs)
   }
 
+  /** Kind / size / times of a vault-relative path (ctx.app.stat). Missing (ENOENT / ENOTDIR) → null; escaping the
+   *  vault and every other IO error throw — "could not read" must not look like "not there". ctime = birthtime
+   *  (Node's ctimeMs is the inode-change time, not creation); 0 = the file system doesn't record it → null. */
+  async statEntry(rel: string): Promise<{ kind: 'file' | 'folder'; size: number; mtime: number; ctime: number | null } | null> {
+    const abs = this.resolveInVault(rel) // 越界即抛
+    let st: import('node:fs').Stats
+    try {
+      st = await fs.stat(abs)
+    } catch (e: any) {
+      if (e?.code === 'ENOENT' || e?.code === 'ENOTDIR') return null
+      throw e
+    }
+    const folder = st.isDirectory()
+    const born = Number.isFinite(st.birthtimeMs) && st.birthtimeMs > 0 ? st.birthtimeMs : null
+    return { kind: folder ? 'folder' : 'file', size: folder ? 0 : st.size, mtime: st.mtimeMs, ctime: born }
+  }
+
   /** Write a binary asset under the page's .amadeus/ folder; returns its page-relative path. */
   async writeAsset(pagePath: string, fileName: string, bytes: Uint8Array): Promise<string> {
     const root = this.requireRoot()

@@ -261,6 +261,13 @@ describe('ctx.noteTasks.update', () => {
     expect(useMdMarkStore.getState().overlay['n.md:3']).toEqual({ checked: true, due: '2026-10-21T09:00' })
   })
 
+  it('空日期 = 清日期:任务行收(回写成 @todo),普通行不收', () => {
+    const api = createNoteTasksApi(scope)
+    expect(api.update('n.md:5', { due: '' })).toBe(false)
+    expect(api.update('n.md:3', { due: '' })).toBe(true)
+    expect(useMdMarkStore.getState().overlay['n.md:3']).toEqual({ due: '' })
+  })
+
   it('子任务:给 parentId 与 tags,没写 @ 的子任务也能勾', () => {
     useMdMarkStore.setState({ marks: [mark({ tags: ['工作'] }), mark({ line: 4, text: '子项', due: '', parentId: 'n.md:3', raw: '  - [ ] 子项' })], overlay: {}, ready: true })
     let tasks: Array<{ id: string; parentId?: string; tags?: string[] }> = []

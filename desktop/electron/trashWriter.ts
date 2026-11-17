@@ -78,9 +78,11 @@ export async function restoreDesktopTrash(id: string): Promise<DesktopTrashEntry
   const dir = path.join(trashDir(), id)
   const entry = JSON.parse(await fs.readFile(path.join(dir, 'meta.json'), 'utf8')) as DesktopTrashEntry
   if (entry.id !== id || entry.restorer !== 'desktop' || !Array.isArray(entry.items)) throw new Error('not a desktop trash entry')
-  // 重装过(原处又有插件文件夹):文件会落到 -2 成两份同 id,设置还会盖掉新装那份的 —— 先卸掉新装的再恢复
-  const files = entry.items.find((i) => i.role === 'files')
-  if (files && await exists(path.join(dir, files.stored)) && await exists(files.from)) throw new Error('plugin-reinstalled')
+  // 重装过(原处又有插件文件夹):文件会落到 -2 成两份同 id,设置还会盖掉新装那份的 —— 先卸掉新装的再恢复。
+  // 卸商店版时一起带走的旧副本(role superseded)同理:原处又装了一份普通目录,放回去就是两份。
+  for (const files of entry.items.filter((i) => i.role === 'files' || i.role === 'superseded')) {
+    if (await exists(path.join(dir, files.stored)) && await exists(files.from)) throw new Error('plugin-reinstalled')
+  }
   for (const it of entry.items) {
     if (!/^items\/\d+$/.test(it.stored)) throw new Error('invalid trash item')
     const st = await fs.lstat(path.join(dir, it.stored)).catch(() => null)

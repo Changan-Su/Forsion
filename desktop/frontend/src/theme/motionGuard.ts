@@ -29,7 +29,7 @@
 export const MOTION_TOKEN_RE = new RegExp('^--(?:' + [
   'duration-[a-z]+', 'dur-[a-z]+', 'ease-[a-z-]+',
   'menu-(?:enter|exit)-(?:duration|ease)', 'palette-enter-duration',
-  'droplet-duration', 'stretch-open-duration',
+  'droplet-(?:duration|retract-ease)', 'stretch-open-duration', 'cap-(?:open|close)',
   'collapse-(?:duration|ease)',
   'tip-(?:delay|handoff|enter|exit)', 'hovercard-(?:delay|enter|exit)',
   'press-(?:travel|recoil)-duration', 'flash-duration', 'roll-(?:enter|exit)-duration', 'reader-(?:step|close)-duration',

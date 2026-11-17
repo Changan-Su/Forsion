@@ -8,7 +8,7 @@ import type { DesktopPermissionId, DesktopPermissionRequestOptions, DesktopPermi
 import type { ComputerHistoryApi } from '../../shared/computerHistory'
 export type { DesktopPermissionId, DesktopPermissionRequestOptions, DesktopPermissionsSnapshot, DesktopPermissionState } from '../../shared/desktopPermissions'
 // 核心插件化第 2b 步:与 Tangu 共用的数据形状搬进了契约(tangu-agent/src/contracts/clientTypes.ts),这里原样转出,宿主的 import 方不动。
-export type { ThinkingLevel, DefaultModelSlot, VisionMode, TanguDesktopConfig, AgentRunEvent, SubChatSeg, SubChat, SessionRecord, PendingApprovalInfo, HistorianActivityItem, AutomationActionSpec, AutomationWhere, MuseTriggerInfo, AgentScheduleEntry, TeamDef, NormalAgentDef, StandInInfo, AgentConfig, ChannelKind, WorkspaceDescriptor, MessageRecord, ModelInfo, ModelsResponse, ProviderQuota, ProjectSettings, ProjectDocInfo, ProjectSkillInfo, ProjectPlanInfo, GitRemoteInfo, GitCommitInfo, GitChangeInfo, GitSummary, GitIdentity, ProjectContext, ProjectRepoInfo, ProjectMemoryView, ProjectMemoryOrganizeOutcome, SkillInfo, SkillCatalogEntry, ToolsResponse, WorkspaceFileMeta, Attachment, DisplayFile, CtxInfo, ToolEvent, MsgSeg, ApprovalRequest, AnswerBy, ApprovalRemote, ApprovalReason, ApprovalPreviewI18n, InquiryRequest, SketchItem, TodoItem, TeamWork, LiveWait, UiMessage, BackendStatusInfo, StoredDesktopConfig, UnitInfo } from '../../../tangu-agent/src/contracts/clientTypes'
+export type { ThinkingLevel, DefaultModelSlot, VisionMode, TanguDesktopConfig, AgentRunEvent, SubChatSeg, SubChat, SessionRecord, PendingApprovalInfo, HistorianActivityItem, AutomationActionSpec, AutomationWhere, MuseTriggerInfo, AgentScheduleEntry, TeamDef, NormalAgentDef, StandInInfo, AgentConfig, ChannelKind, WorkspaceDescriptor, MessageRecord, FailedRunRecord, ModelInfo, ModelsResponse, ProviderQuota, ProjectSettings, ProjectDocInfo, ProjectSkillInfo, ProjectPlanInfo, GitRemoteInfo, GitCommitInfo, GitChangeInfo, GitSummary, GitIdentity, ProjectContext, ProjectRepoInfo, ProjectMemoryView, ProjectMemoryOrganizeOutcome, SkillInfo, SkillCatalogEntry, ToolsResponse, WorkspaceFileMeta, Attachment, DisplayFile, CtxInfo, ToolEvent, MsgSeg, ApprovalRequest, AnswerBy, ApprovalRemote, ApprovalReason, ApprovalPreviewI18n, InquiryRequest, SketchItem, TodoItem, TeamWork, LiveWait, UiMessage, BackendStatusInfo, StoredDesktopConfig, UnitInfo } from '../../../tangu-agent/src/contracts/clientTypes'
 export { THINKING_LEVELS, isHomeSession, SHOW_SYSTEM_PROMPT_KEY, isTeamImageAvatar, isIndependentOrbitConfig, CLOUD_WORKSPACE_KEY, ROOTLESS_WORKSPACE_KEY, DEFAULT_LOCAL_WORKSPACE_KEY, DEFAULT_CLOUD_PROJECT, cloudProjectKey, sessionWorkspaceKey, isProjectIconFile } from '../../../tangu-agent/src/contracts/clientTypes'
 import type { AgentScheduleEntry, AutomationActionSpec, AutomationWhere, BackendStatusInfo, MuseTriggerInfo, StoredDesktopConfig, UnitInfo } from '../../../tangu-agent/src/contracts/clientTypes'
 
@@ -33,6 +33,17 @@ export interface CuLiveFrame {
   unchanged?: boolean
   ageMs?: number
   error?: string
+  // ── helper 协议 20 起(旧 helper / 整屏旧路径不给)──
+  /** Agent 光标位置,相对这一帧的比例 0..1,原点左上。 */
+  cursor?: { x: number; y: number }
+  /** 最近一次动作;kind 如 click / doubleClick / scroll / type …,seq 单调递增,label 最长 80 字。 */
+  lastAction?: { kind: string; seq: number; ageMs: number; x?: number; y?: number; label?: string }
+  /** helper 启动以来的动作总数,单调递增。 */
+  actionCount?: number
+  /** 最近一次 act 带来的 runId。 */
+  runId?: string
+  /** 这一轮是否还在进行中。 */
+  turnActive?: boolean
 }
 
 export interface StartRunResult {
@@ -543,6 +554,9 @@ declare global {
       /** 设备页以**远端身份**驱动对方的引擎(unitShim 注入;便携 Unit 的工作区主人 projection=local 不算):
        *  引擎按远程钳制 —— 审批改参数被拒(REMOTE_ARGS_OVERRIDE_FORBIDDEN)、「总允许」降成单次,界面据此收起这两样。 */
       remoteCaller?: boolean
+      /** 委托管理员角色(unitShim 按 unit/whoami 的 role 注入,只在 Unit 网页的这一种来路出现):壳只做 Agent 管理,
+       *  白名单外的请求不发、入口收起。判断一律走 services/delegatedAdmin.ts 的 isDelegatedAdmin()。 */
+      delegatedAdmin?: { name: string }
       /** A local engine sharing the active vault filesystem. Cloud/virtual vaults never qualify. */
       executionCapabilities?: { host: boolean }
       /** Explicit host filesystem availability; published cloud Units set false. */
@@ -564,17 +578,27 @@ declare global {
       onBackendStatus?(cb: (st: BackendStatusInfo) => void): () => void
       onConfigChanged?(cb: () => void): () => void
       // ── 设备互联(Forsion Unit):名册 + 本机 host 状态(token 留主进程,渲染层只拿结果)──
-      unitsList?(): Promise<{ status: number; json: { units?: UnitInfo[] } | null }>
+      /** shared = 连同别人共享给当前账号的 Unit 一起要(旧版 Extend 忽略这个参数,回包里就没有 `shared`)。 */
+      unitsList?(opts?: { shared?: boolean }): Promise<{ status: number; json: { units?: UnitInfo[]; shared?: unknown } | null }>
       /** 系统浏览器开中转引导页:main 代拼 `#token=` 登录态递交(forsion_token 不下发渲染层)。 */
       unitsOpenInBrowser?(unitId: string): Promise<void>
       unitsUpdate?(id: string, patch: { name?: string; icon?: string }): Promise<{ status: number; json: any }>
       unitsRemove?(id: string): Promise<{ status: number; json: any }>
-      unitHostStatus?(): Promise<{ running: boolean; connected: boolean; unitId: string | null; lastError: string | null; webPort: number | null; lanUrl: string | null }>
+      /** selfUnitId:本机在名册里的 id(互联关着时 unitId 为 null,它还可能认得;null / 缺 = 不知道,不滤)。 */
+      unitHostStatus?(): Promise<{ running: boolean; connected: boolean; unitId: string | null; selfUnitId?: string | null; lastError: string | null; webPort: number | null; lanUrl: string | null }>
+      unitsOpenWindow?(id: string): Promise<{ ok: boolean }>
+      /** 设备页 webview 绑定到一台设备(主进程核名册;之后只给这张 webview、只给这台自己的路径补登录头)。 */
+      unitsBindFrame?(input: { webContentsId: number; unitId: string }): Promise<{ ok: true; url?: string } | { ok: false; code: string }>
+      /** 这扇窗口重新拿到焦点(主进程 browser-window-focus;webview 占着焦点时渲染层自己的 focus 事件不可靠)。 */
+      onWindowFocused?(cb: () => void): () => void
+      unitsShowMain?(): void
+      unitsAddToDesktop?(input: { id: string; fallbackName?: string; iconPng?: string }): Promise<{ ok: true; path: string } | { ok: false; code: string; detail?: string }>
       /** 本机已配对的来访设备(T1)与回收。 */
       unitsPairedList?(): Promise<UnitPairedDevice[]>
       unitsPairedRemove?(id: string): Promise<{ ok: boolean }>
-      /** LAN 直连探针(主进程发,免 CORS):是台 unitWeb 就回 meta,否则 null。 */
-      unitsProbeLan?(lanUrl: string): Promise<{ instanceId: string; name: string } | null>
+      /** LAN 直连探针(主进程发,免 CORS):是台 unitWeb 就回 meta,否则 null。unitId = 对方报的名册 id(旧版不报);
+       *  self = 应答的就是本机。判「是不是名册里那一行」用 unitPanelModel.lanProbeMatches,别只看非 null。 */
+      unitsProbeLan?(lanUrl: string): Promise<{ instanceId: string; name: string; unitId?: string; self?: true } | null>
       /** P2P 直连打开设备:成了回本机代理地址;失败 reject(UI 回落中转)。 */
       unitsP2pOpen?(id: string): Promise<{ url: string }>
       /** 桌面作为调用方(新会话建到账号下另一台电脑上):主进程本机中转口的地址 + 本次启动的口令(electron/unitRelay.ts)。
@@ -643,6 +667,8 @@ declare global {
       termsStatus?(): Promise<{ status: number; json?: any }>
       /** 网页版:公开会员方案列表(会员徽章的配色与中英文名);桌面 / Android 走 cloudFetch */
       membershipPlans?(): Promise<{ status: number; json?: any }>
+      /** 网页版:公开的可购买方案(含各方案 perks.modelMultiplierCap,模型选择器据此写「X 起可用」);桌面 / Android 走 cloudFetch('/payment/offerings') */
+      membershipOfferings?(): Promise<{ status: number; json?: any }>
       termsAgree?(version: string): Promise<{ status: number; json?: any }>
       /** Forsion Extend 渲染半身调它自己主进程半身注册的通道;宿主通道一律拒。没装载 Extend 就没有这个键。 */
       cloudInvoke?(channel: string, ...args: unknown[]): Promise<unknown>
@@ -878,6 +904,26 @@ declare global {
       /** Computer Use:最近被操控窗口的一帧画面。只读——helper 没跑就 active:false,绝不因此拉起它。
        *  仅 macOS(Windows helper 是 stdio 子进程,桌面够不着);拿不到图会带 error 而不是伪造画面。 */
       computerUseLiveView?(opts?: { maxDimension?: number; quality?: number; activeWithinMs?: number; image?: boolean; sinceFrame?: string }): Promise<CuLiveFrame>
+      /** Computer Use 悬浮小画面(宿主私有桥,不是公开插件 API;只有 Electron 桌面有)。
+       *  open() 只在用户点「移到悬浮窗」时调:已开着就叫到原处回 true,插件没装 / 没启用回 false 且不开窗。 */
+      computerUsePip?: { open(): Promise<boolean>; close(): Promise<void>; isOpen(): Promise<boolean> }
+      /** pip 窗自己用:视图挂上了(带内容高)/ 插件不在;之后内容高变了再报。 */
+      pipReady?(ok: boolean, height?: number): void
+      pipResize?(height: number): void
+      /** pip 窗里的停止 / 状态经主进程转给跑着这一轮的窗口(computerUsePipAgent.ts)。 */
+      pipAgent?: {
+        stop(target: unknown): Promise<boolean>
+        watch(key: string, target: unknown): void
+        unwatch(key: string): void
+        onStatus(cb: (key: string, status: unknown) => void): () => void
+      }
+      /** 非 pip 窗口的应答方(computerUsePipHost.ts)。 */
+      pipAgentHost?: {
+        ready(): void
+        onRequest(cb: (req: { id?: number; op: string; key?: string; target?: unknown }) => void): () => void
+        reply(id: number, value: unknown): void
+        status(key: string, status: unknown): void
+      }
       /** 侧边拼接(App Dock,仅 macOS):对话面板贴在别的 App 窗口旁边。open 任何窗口可调(打开面板,先挑窗口);
        *  其余只在面板窗口自己里调得通,别处调回空结果。 */
       appDockOpen?(): Promise<{ ok: boolean; error?: string }>
@@ -967,9 +1013,13 @@ declare global {
       spacesDelete?(slug: string): Promise<{ ok: boolean }>
       /** 收件箱:系统通知(点击回跳 Inbox Space)/ dock 角标(仅 mac 生效)/ 通知点击订阅。 */
       notifyInbox?(title: string, body: string): Promise<void>
-      /** 通用系统通知(所有应用内通知同步发);web 下 undefined。meta.event = 哪类通知(NOTIFY_EVENTS 的 id):
-       *  桌面不看;安卓(mobile/src/liveIsland.ts)据此给每类只留一条,并略过由灵动岛报的「跑完了」。 */
-      notify?(title: string, body: string, meta?: { event?: string }): Promise<void>
+      /** 通用系统通知(所有应用内通知同步发);web 下 undefined。meta.event = 哪类通知(NOTIFY_EVENTS 的 id / plugin:<id>),
+       *  meta.key = 这条的 dedupeKey(只有有人在等的 urgent 卡才带,见 notificationStore 的 postOs):桌面都不看;
+       *  安卓(mobile/src/liveIsland.ts)带 key 的按「来源 + key」、
+       *  不带的按来源各只留一条,并略过由 Agent 运行状态通知报的「跑完了」。
+       *  回话:安卓回 `{ posted }`(这一条真贴出去了没有:没通知权限、渠道被关、App 在前台 → false),拒绝也算没投;
+       *  桌面和老安卓壳回 undefined,按投了算(notificationStore 的 osDelivered)。 */
+      notify?(title: string, body: string, meta?: { event?: string; key?: string }): Promise<void | { posted: boolean }>
       setInboxBadge?(count: number): Promise<void>
       onInboxOpen?(cb: () => void): () => void
       // P1-K3
@@ -1284,6 +1334,12 @@ export interface MarketCard {
   updatedAt?: string | null
   /** 来自商店来源(第三方目录)的条目:哪个来源。Forsion 商店的条目没有这一项。 */
   origin?: { sourceId: string; sourceTitle: string }
+  /** 包的 manifest `network`(ctx.net 能访问的域名,2026-11-16+)—— 目录给了才有;装好之后以本机 manifest 为准。 */
+  network?: string[] | null
+  /** 包的 manifest `capabilities`(服务端审核时从包里读的,2026-11-16+);客户端只认白名单里的。 */
+  capabilities?: string[] | null
+  /** 过了第二级内部接口(internals-raw)审核的那一版;没过或没声明为 null。官方商店安装时客户端按它再核一次。 */
+  rawApprovedVersion?: string | null
 }
 
 /** market:installProgress:resolve=向服务端要下载地址;download=在试第 attempt/attempts 个地址、已收 received 字节

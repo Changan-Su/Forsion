@@ -86,6 +86,11 @@ export interface TanguAgentStatus {
 /** Agent 名册的一条(2026-09-20+)。 */
 export interface TanguAgentInfo { slug: string; name: string }
 
+/** `agentStatus` / `subscribeAgentStatus` / `stop` 的会话参数(2026-11-13+ 起可传对象)。
+ *  字符串 / null / 不传 = 会话 id(不传 = 主区活动会话,null = 草稿);
+ *  对象里**只要有 `runId` 这个键**就按 run 找:当前正在跑这个 run 的会话,找不到就当没有(绝不回落到活动会话)。 */
+export type TanguSessionTarget = string | null | undefined | { sessionId?: string | null; runId?: string | null }
+
 /** 「什么都不知道」时的状态:草稿、没有探针的宿主、探针缺 agentStatus 的旧台架都回它。 */
 export const idleAgentStatus = (sessionId: string | null): TanguAgentStatus =>
   ({ phase: 'idle', sessionId, runId: null, since: 0, textChars: 0, reasoningChars: 0 })
@@ -169,7 +174,56 @@ export interface TanguChatMount {
   dispose(): void
 }
 
+/** `ctx.tangu.createAgent` 的入参(2026-11-16+,声明 `"agentImport"` 才有):在本端新建一个 Agent。 */
+export interface TanguCreateAgentInput {
+  /** 显示名;全中文的名字要同时给 `slug`(或 `nameEn`),引擎不转拼音 */
+  name: string
+  nameEn?: string
+  /** Agent id(文件夹名,kebab-case);不给由名字推,撞了自动加后缀,不会盖掉已有的 Agent */
+  slug?: string
+  description?: string
+  /** 系统提示主体(必填) */
+  systemPrompt: string
+  /** 人设(SOUL.md) */
+  soul?: string
+  /** 这个 Agent 缺省用的模型 id(模型目录里的);不给 = 跟随会话 */
+  model?: string
+}
+export type TanguCreateAgentResult = { ok: true; slug: string } | { ok: false; error: string }
+
+/** 一条外部对话。`id` 是来源那边的会话 id:同一来源、同一 id 再导入会被认成「已有」,原会话不动。 */
+export interface TanguImportConversation {
+  id: string
+  title?: string
+  /** 毫秒时间戳;秒级时间戳会被拒(先乘 1000) */
+  createdAt?: number
+  updatedAt?: number
+  messages: Array<{ role: 'user' | 'assistant'; content: string; reasoning?: string; timestamp?: number; model?: string }>
+}
+export interface TanguImportSessionsInput {
+  /** 挂到哪个 Agent 名下(slug) */
+  agent: string
+  /** 来源标识,如 `deepseek`(`^[a-z0-9][a-z0-9-]{0,31}$`) */
+  source: string
+  conversations: TanguImportConversation[]
+  /** 这批会话用的模型;缺省 = 主区聊天此刻用的那个 */
+  modelId?: string
+  /** 每写完一批回调一次(已处理条数 / 总条数) */
+  onProgress?(done: number, total: number): void
+  signal?: AbortSignal
+}
+export interface TanguImportSessionResult {
+  id: string
+  status: 'created' | 'exists' | 'error'
+  sessionId?: string
+  error?: string
+}
+export type TanguImportSessionsResult = { ok: true; results: TanguImportSessionResult[] } | { ok: false; error: string; results: TanguImportSessionResult[] }
+
 export interface TanguProbe {
+  /** 建 Agent / 导入会话(2026-11-16+):写进**本端**的引擎(桌面 = 本机引擎,手机 / 网页 = 云端)。 */
+  createAgent?(input: TanguCreateAgentInput, alive: () => boolean): Promise<TanguCreateAgentResult>
+  importSessions?(input: TanguImportSessionsInput, alive: () => boolean): Promise<TanguImportSessionsResult>
   openSession?(sessionId: string, alive?: () => boolean): Promise<void> | void
   /** True only when the active engine executes against this host filesystem. */
   hostExecution?(): boolean
@@ -203,11 +257,14 @@ export interface TanguProbe {
   subscribeReady?(cb: () => void): () => void
   /** 某会话的 agent 状态快照(2026-09-19+)。sessionId 省略 = 全局活动会话(`activeId`);null = 草稿(恒 idle)。
    *  可选:台架假探针 / 旧宿主不给 = 插件那边拿不到状态(按 idle 处理)。 */
-  agentStatus?(sessionId?: string | null): TanguAgentStatus
+  agentStatus?(sessionId?: TanguSessionTarget): TanguAgentStatus
   /** 同一会话口径的**变更过滤**订阅:只在 phase / tool / toolStage / waitingFor / sessionId / agentSlug
    *  变了时回调,done/error 余韵到期那一刻再回调一次(回 idle)。token / 推理增量、改 Agent 展示名**不**回调。
    *  返回退订。 */
-  subscribeAgentStatus?(cb: (s: TanguAgentStatus) => void, sessionId?: string | null): () => void
+  subscribeAgentStatus?(cb: (s: TanguAgentStatus) => void, sessionId?: TanguSessionTarget): () => void
+  /** 停掉某会话正在跑的 run(2026-11-13+),走输入框停止按钮同一条路(appStore.stop)。
+   *  true = 确实对一个在跑的 run 发出了停止且引擎确认;没有在跑的 / `{ runId }` 找不到 → false。 */
+  stop?(target?: TanguSessionTarget): Promise<boolean>
   /** 用指定 Agent 开一个新对话(离开主页 Space → 新对话草稿 → 选 Agent → 预填或送出)。
    *  放行规则(send 只给自家捆绑 Agent、cwd 钳在库内)在 pluginStore 那层,这里只执行。 */
   startChat?(o: TanguStartChatOptions): Promise<TanguStartChatResult>
@@ -387,6 +444,8 @@ export interface TanguDrafts {
   read(): Record<string, TanguDraftText>
   /** 只填空着的那份:那个会话里已经有字 / 长粘贴就不动。 */
   fill(key: string, d: TanguDraftText): void
+  /** 整份换掉文字和长粘贴(附件、引用芯片不动)。只给调用方自己先问过用户、或确认里面是它自己填的那句时用;fill 照旧不覆盖。 */
+  replace(key: string, d: TanguDraftText): void
   subscribe(fn: () => void): () => void
 }
 
@@ -615,3 +674,8 @@ export function subscribeComposerPrefill(l: () => void): () => void {
 export function claimComposerPrefill(t: ComposerPrefillTarget): ComposerPrefill[] {
   return [...prefillSources].flatMap((src) => src.claim(t) ?? [])
 }
+
+// 外部引擎的 Harness 行与对话右键菜单项(ctx.registerEngineHarness,2026-11-15,DSH 融合插件第 1 档):登记表留在宿主,
+// Tangu 界面(Agent 配置页、对话侧栏)经这条缝读 —— 它在 check:tanguboundary 的基线里,不另开新的宿主依赖。
+export { collectHarnessRows, engineRailViewType, engineSessionActions, subscribeEngineHarness, useEngineHarnessVersion, type HostEngineHarness } from './engineHarness'
+export { pluginText } from './pluginText'

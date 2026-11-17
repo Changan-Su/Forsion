@@ -15,6 +15,7 @@ import { catalogFor } from '../services/engine/catalog'
 import { useApp } from './appStore'
 import { notifyApp } from './notificationStore'
 import type { ProviderQuota, QuotaWindow } from '../../../../tangu-agent/src/contracts/clientTypes'
+import { isDelegatedAdmin } from '../services/delegatedAdmin'
 
 registerMessages({
   'ntf.quota.group': { zh: '额度', en: 'Quota' },
@@ -101,6 +102,8 @@ let lastCheck = 0
 let inFlight = false
 /** 判一次本机直连 / 订阅来源的额度。60s 内重复调用只算一次(引擎那边本来就按来源缓存 5 分钟)。 */
 export async function checkQuotaAlerts(now = Date.now()): Promise<void> {
+  // 委托管理员:额度接口(/agent/models/quota)在白名单外,提醒偏好也不是它的
+  if (isDelegatedAdmin()) return
   const prefs0 = readQuotaPrefs()
   if (!prefs0.threshold && !prefs0.weeklyLeft) return
   if (inFlight || now - lastCheck < MIN) return

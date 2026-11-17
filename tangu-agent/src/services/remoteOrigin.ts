@@ -89,6 +89,18 @@ export function parseRemoteOrigin(headers: HeaderBag | undefined): RemoteInfo | 
   return info.marked && info.via === 'tunnel' ? { ...info, ...parseCallerHeader(headerOf(headers, 'x-forsion-remote-caller')) } : info;
 }
 
+/**
+ * 委托管理员档(独立 Unit 的本机开关打开时,hub 签发的操作者声明 role=admin、经 unitWeb 验签的隧道请求)。
+ * unitWeb 在头表从零重建时盖 `x-forsion-remote-role: delegated-admin`;引擎只在 marked && via==='tunnel' 时认它(同调用方头的口径),
+ * 其它一律 undefined。它只用于 Agent 路由的投影(不藏人设),**不放宽任何审批 / 钳制**,也不进 run 记录(remoteOf 不重建它)。
+ */
+export type RemoteRole = 'delegated-admin';
+export function remoteRole(headers: HeaderBag | undefined): RemoteRole | undefined {
+  const info = parseRemoteOrigin(headers);
+  if (!info?.marked || info.via !== 'tunnel') return undefined;
+  return String(headerOf(headers, 'x-forsion-remote-role') ?? '').trim().toLowerCase() === 'delegated-admin' ? 'delegated-admin' : undefined;
+}
+
 /** run.input.remote → RemoteInfo(只认对象形状;来自库里,字段按契约重建,不透传多余键)。
  *  调用方三字段按同一规则重建:via!=='tunnel' 或 !marked 时丢;callerUnit / callerKind 不合法则三者都丢。 */
 export function remoteOf(input: any): RemoteInfo | undefined {

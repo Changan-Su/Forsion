@@ -117,3 +117,33 @@ export function deriveIsland(
   const { attention: _attention, ask, ...top } = items[0]
   return { ...top, more: items.length - 1, ...(ask ? { ask } : {}) }
 }
+
+/** 应用内通知的系统通知(window.tangu.notify → 原生 notice)要交给原生的那份。「跑完了」(agent.done)不发:
+ *  手机上由 Agent 运行状态那条通知报(见 liveIsland.ts),再发一条就是重复 → null。tag = 来源(event);key = 这条的
+ *  dedupeKey(页面只给有人在等的 urgent 卡带,见 notificationStore 的 postOs;这里有就转交),原生按「来源 + key」分条
+ *  (NoticeTag.java:有人在等的审批各占一条,不被后来的普通通知顶掉),
+ *  旧的原生不认 key、照旧按来源一条。 */
+export function noticeRequest(title: string, text: string, meta: { event?: string; key?: string } | undefined, channelName: string):
+  { title: string; text: string; tag: string; key?: string; channelName: string } | null {
+  if (meta?.event === 'agent.done') return null
+  const key = typeof meta?.key === 'string' && meta.key ? meta.key : undefined
+  return { title, text, tag: meta?.event || 'app', ...(key ? { key } : {}), channelName }
+}
+
+/** 原生 notice 交回的那份:这一条真贴出去了没有(原生插件的 notice;没通知权限、渠道被关、App 在前台、原生出错 → false)。 */
+export type NoticeResult = { posted: boolean }
+
+/** window.tangu.notify 的手机实现:交给原生 notice,把它的投递结果原样交回页面(notificationStore 据此判这张卡还欠不欠系统通知)。
+ *  - 原生回 `{ posted }` → 照交;原生拒绝 → 不吞,页面当没投递。
+ *  - 老外壳(热更新换了页面、安卓壳还是旧的)回的没有 posted 这一项 → undefined,页面照旧当投了。
+ *  - 「跑完了」(agent.done)不交给原生(见 noticeRequest)→ undefined,照旧当投了:Agent 运行状态那条通知替它报。 */
+export async function postNotice(
+  notice: (req: NonNullable<ReturnType<typeof noticeRequest>>) => Promise<unknown>,
+  title: string, text: string, meta: { event?: string; key?: string } | undefined, channelName: string,
+): Promise<NoticeResult | undefined> {
+  const req = noticeRequest(title, text, meta, channelName)
+  if (!req) return undefined
+  const r = await notice(req)
+  const posted = r && typeof r === 'object' ? (r as { posted?: unknown }).posted : undefined
+  return typeof posted === 'boolean' ? { posted } : undefined
+}

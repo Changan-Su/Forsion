@@ -10,7 +10,9 @@ export interface AccountChip {
   initial: string
   /** 头像图(data: 或 https:);没有、或宿主加载不了时画首字母。 */
   avatar?: string
-  activate(): void
+  /** anchor:把账号入口画在别处的宿主(设备页的框,UnitSwitcher 的 UnitFrameAvatar)传自己的元素,菜单锚在它上面;缺省锚在账号卡。
+   *  菜单开着时再调 = 收起(同点头像)。 */
+  activate(anchor?: HTMLElement): void
 }
 
 let chip: AccountChip | null = null

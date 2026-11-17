@@ -3,7 +3,7 @@
  * 文件区是一个迷你文件管理器:单击选中(cmd/shift 多选)、双击打开/预览、右键菜单、
  * 拖行进文件夹移动、拖 OS 文件进来复制(host)。预览走 App 的工作区文件浮层面板。
  */
-import React, { useCallback, useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import {
   FolderOpen, Folder, List, BookOpen, Download, Trash2, Upload, RefreshCw, FileText, Image as ImageIcon, Loader2, CornerLeftUp,
@@ -17,7 +17,7 @@ import * as api from '../services/backendService'
 import { Markdown } from './Markdown'
 import { logForReading } from './AgentLogPanel'
 import { ChatToc } from './ChatToc'
-import { OverlayAt, nativeSheetPresenter, pickNativeCtxItem } from '@lcl/engine'
+import { OverlayAt, nativeSheetPresenter, openPanel, pickNativeCtxItem, type Droplet } from '@lcl/engine'
 import { SubChatsTab } from './SubChatsTab'
 import type { PreviewTarget } from './WorkspaceFilePreview'
 import { fmtSize, b64ToBytes } from '../services/fileKinds'
@@ -155,8 +155,10 @@ export interface CtxItem {
   detail?: string; checked?: boolean; onSecondary?: (at: { x: number; y: number }) => void
 }
 /** anchorTop:从一颗按钮弹出时给按钮上沿 —— 下面放不下就翻到它上面(而不是盖住按钮);右键菜单不用给。
- *  prefer / alignEnd 原样交给 OverlayAt(贴在底部按钮上、往上开且右缘对齐按钮的那种);className 加在 .ctx-menu 旁边。 */
-export type CtxMenu = { x: number; y: number; anchorTop?: number; prefer?: 'below' | 'above'; alignEnd?: boolean; className?: string; items: CtxItem[] } | null
+ *  prefer / alignEnd 原样交给 OverlayAt(贴在底部按钮上、往上开且右缘对齐按钮的那种);className 加在 .ctx-menu 旁边。
+ *  source:菜单从这颗按钮里流出来(openPanel,跟动效主题;11-16 Chat Box 水滴方案的运行中发送键)。点空白 / Esc = 倒放缩回,
+ *  点了一行照旧直接收。缝要 ≤ 12px。右键菜单(没有源)不给。 */
+export type CtxMenu = { x: number; y: number; anchorTop?: number; prefer?: 'below' | 'above'; alignEnd?: boolean; className?: string; source?: HTMLElement | null; items: CtxItem[] } | null
 
 /** 右键浮层菜单(portal 到 body;任意点击/右键/Esc/失焦关闭)。
  *  Android 装了原生半屏宿主(lcl nativeSheet)时改由原生菜单呈现,本组件不渲染 DOM;宿主缺席或呈现失败
@@ -179,14 +181,36 @@ export const ContextMenu: React.FC<{ menu: NonNullable<CtxMenu>; onClose: () => 
   }, [web, menu.x, menu.y])
   const firstItem = useRef<HTMLButtonElement>(null)
   useEffect(() => { if (web && autoFocus) firstItem.current?.focus({ preventScroll: true }) }, [web, autoFocus, menu.x, menu.y])
+  // 从按钮流出(menu.source):挂上、定好位之后开流;倒放完再交给调用方卸载
+  const panelRef = useRef<HTMLDivElement | null>(null)
+  const drop = useRef<Droplet | null>(null)
+  const closing = useRef(false)
+  useLayoutEffect(() => {
+    const el = panelRef.current
+    if (!web || !menu.source || !el) return
+    const d = openPanel(menu.source, el)
+    drop.current = d
+    closing.current = false
+    return () => { d.cancel(); if (drop.current === d) drop.current = null }
+  }, [web, menu.source])
+  const dismiss = (): void => {
+    const d = drop.current
+    if (!d) { onClose(); return }
+    if (closing.current) return
+    closing.current = true
+    if (panelRef.current) panelRef.current.inert = true
+    void d.retract().then(() => { if (drop.current === d) latest.current.onClose() })
+  }
+  const dismissRef = useRef(dismiss)
+  dismissRef.current = dismiss
   useEffect(() => {
     // 原生菜单是独立窗口:WebView 失焦(blur)是它弹出的必然结果,不能当「点外面」把它关掉。
     if (!web) return
     // 只认菜单出来之后的事件:右键是离散事件,React 可能在这次 contextmenu 还没冒泡到 window 时就把菜单挂上、跑到这里,
     // 不比时间就被打开它的那一下当场关掉(canvasKit 的右键走原生监听,不 stopPropagation)
     const armed = performance.now()
-    const close = (e: Event) => { if (e.timeStamp >= armed) onClose() }
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    const close = (e: Event) => { if (e.timeStamp >= armed) dismissRef.current() }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') dismissRef.current() }
     window.addEventListener('pointerdown', close)
     window.addEventListener('contextmenu', close)
     window.addEventListener('keydown', onKey)
@@ -201,7 +225,8 @@ export const ContextMenu: React.FC<{ menu: NonNullable<CtxMenu>; onClose: () => 
   if (!web) return null
   return createPortal(
     <OverlayAt
-      className={menu.className ? `ctx-menu ${menu.className}` : 'ctx-menu'}
+      innerRef={(el) => { panelRef.current = el }}
+      className={`ctx-menu${menu.className ? ` ${menu.className}` : ''}${menu.source ? ' t2c-pour' : ''}`}
       role="menu"
       x={menu.x}
       y={menu.y}
@@ -211,7 +236,8 @@ export const ContextMenu: React.FC<{ menu: NonNullable<CtxMenu>; onClose: () => 
       onPointerDown={(e) => e.stopPropagation()}
       onContextMenu={(e) => { e.preventDefault(); e.stopPropagation() }}
       onKeyDown={(e) => {
-        if (e.key === 'Escape' || e.key === 'Tab') { e.preventDefault(); e.stopPropagation(); onClose(); return }
+        if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); dismiss(); return }
+        if (e.key === 'Tab') { e.preventDefault(); e.stopPropagation(); onClose(); return }
         if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key)) return
         e.preventDefault(); e.stopPropagation()
         const buttons = Array.from(e.currentTarget.querySelectorAll<HTMLButtonElement>('button:not(:disabled)'))

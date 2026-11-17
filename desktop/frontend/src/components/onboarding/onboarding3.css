@@ -282,3 +282,6 @@ html.dark .ob3-paper { --hpw-grain-blend: screen; --hpw-halo: 16%; --hpw-halo-mi
   .ob3-card { padding: 14px 16px; }
 }
 @media (prefers-reduced-motion: reduce) { .ob3-dots button { transition: none; } }
+
+/* 手机引导的外观屏(ThemeScreen variant phone):没有预览,控件一列(宽屏 / 平板横屏上也不留空的右栏) */
+.ob3-theme.phone { grid-template-columns: minmax(0, 1fr); }

@@ -16,17 +16,26 @@ export interface EngineDef {
   /** 拉起命令（如 'npx' 或本机 'claude-code-acp' 绝对路径）。 */
   command: string;
   args?: string[];
-  /** 追加/覆盖子进程 env（默认继承父进程 env，详见 acpEngine）。 */
+  /** 追加/覆盖子进程 env:原样给到引擎(在白名单过滤之后叠上去,只剥本引擎的令牌),见 engineEnv.ts。 */
   env?: Record<string, string>;
+  /** 本进程环境里这个引擎还要的变量(白名单之外):精确名或 `FOO_*` 前缀,不分大小写;单独一个 `*` = 整份继承
+   *  (FORSION_* / TANGU_* 和令牌仍不给)。
+   *  内置引擎写的是各自的配置目录变量和凭据变量;engines.json 按 id 覆盖内置条目时与内置的取并集。detect.env 自动算在内。 */
+  passEnv?: string[];
   /** 透传给 ACP newSession 的默认模型（可空，空则用适配器默认）。 */
   defaultModel?: string;
   /** 静态声明模型/命令(配了则跳过运行时探测——留旋钮;一般留空走懒探测)。 */
   models?: Array<{ id: string; name: string; description?: string }>;
   commands?: Array<{ name: string; description: string; hint?: string }>;
-  /** 检测提示(快速判断该 agent 是否已装/已登录;任一命中即「detected」)。无则默认可用。 */
-  detect?: { dirs?: string[]; env?: string[]; bin?: string };
+  /** 检测提示(快速判断该 agent 是否已装/已登录;任一命中即「detected」)。无则默认可用。
+   *  requireBin:启动命令就是 `bin` 本身(不经 npx 拉适配器)的引擎用 —— bin 不在 PATH 上一律「未安装」,
+   *  哪怕配置目录还在(卸载后目录会留下);否则会报成可用、到 spawn 才失败。 */
+  detect?: { dirs?: string[]; env?: string[]; bin?: string; requireBin?: boolean };
   /** 未检测到时给用户看的一行安装命令(设置页「Agent CLIs」显示)。语言中立,不进 i18n。 */
   setup?: string;
+  /** 交接(底层第 3 步):引擎从哪个环境变量读「共用指令目录」(AGENTS.md + skills/)。设了,跑在这个引擎上的 Agent
+   *  每轮把人设、协作说明、记忆、技能写进 Forsion 备的目录,经这个变量交给引擎(DSH = DSH_AGENTS_HOME)。 */
+  agentsHomeEnv?: string;
 }
 
 // 内置：Claude Code 经官方 ACP 适配器。需用户已装/已登录 Claude Code（适配器读 ANTHROPIC_API_KEY 或 ~/.claude）。
@@ -36,6 +45,9 @@ const BUILTIN: EngineDef[] = [
     name: 'Claude Code',
     command: 'npx',
     args: ['-y', '@zed-industries/claude-code-acp'],
+    // 适配器 + Claude Agent SDK 读的:ANTHROPIC_*(key / 中转地址 / token)、CLAUDE_*(CLAUDE_CONFIG_DIR、CLAUDE_CODE_USE_BEDROCK 等)。
+    // 开了 Bedrock / Vertex / Foundry 开关时那家云的凭据变量由 engineEnv 按开关另放。
+    passEnv: ['ANTHROPIC_*', 'CLAUDE_*', 'MAX_THINKING_TOKENS'],
     detect: { dirs: ['~/.claude'], env: ['ANTHROPIC_API_KEY'], bin: 'claude' },
     setup: 'npm i -g @anthropic-ai/claude-code',
   },
@@ -45,6 +57,8 @@ const BUILTIN: EngineDef[] = [
     name: 'Codex',
     command: 'npx',
     args: ['-y', '@agentclientprotocol/codex-acp@latest'],
+    // CODEX_HOME / CODEX_API_KEY / OPENAI_API_KEY / OPENAI_BASE_URL;config.toml 里服务商点名的(env_key / env_http_headers)另由 engineEnv 读
+    passEnv: ['CODEX_*', 'OPENAI_*'],
     detect: { dirs: ['~/.codex'], env: ['OPENAI_API_KEY', 'CODEX_API_KEY'], bin: 'codex' },
     setup: 'npm i -g @openai/codex',
   },
@@ -55,6 +69,7 @@ const BUILTIN: EngineDef[] = [
     name: 'OpenClaw',
     command: 'openclaw',
     args: ['acp'],
+    passEnv: ['OPENCLAW_*'],
     detect: { dirs: ['~/.openclaw'], env: ['OPENCLAW_GATEWAY_TOKEN'], bin: 'openclaw' },
     setup: 'npm i -g openclaw && openclaw gateway start',
   },
@@ -65,6 +80,9 @@ const BUILTIN: EngineDef[] = [
     name: 'Pi',
     command: 'npx',
     args: ['-y', 'pi-acp@0.0.33'],
+    // pi-acp 读 PI_CODING_AGENT_DIR / PI_ACP_*。Pi 本身认几十家服务商的 *_API_KEY,不整片放行(那正是要挡的):
+    // 登录(/login)或 ~/.pi 里的 auth.json 照常用;非要用环境变量给 key,在 engines.json 给 pi 加 passEnv。
+    passEnv: ['PI_*'],
     detect: { dirs: ['~/.pi'], bin: 'pi' },
     setup: 'npm i -g @earendil-works/pi-coding-agent',
   },
@@ -90,9 +108,22 @@ export function loadEngines(configFile?: string): EngineDef[] {
     else fromFile(enginesFile());
   }
   const byId = new Map<string, EngineDef>();
-  // dsh 的启动命令含绝对路径(随 TANGU_HOME),故按调用时求值,不能进模块级 BUILTIN 常量。
-  for (const e of [...BUILTIN, dshEngineDef()]) byId.set(e.id, e);
-  for (const e of custom) if (e?.id && e?.command) byId.set(e.id, e); // 校验 id+command 才纳入
+  // dsh 的检测目录随 $DSH_HOME,故按调用时求值,不进模块级 BUILTIN 常量。
+  const builtins = [...BUILTIN, dshEngineDef()];
+  for (const e of builtins) byId.set(e.id, e);
+  const builtinById = new Map(builtins.map((e) => [e.id, e]));
+  for (const e of custom) {
+    if (!e?.id || !e?.command) continue; // 校验 id+command 才纳入
+    // 按 id 覆盖内置条目(多半是换一份装在别处的同一个程序):没写 agentsHomeEnv 就沿用内置的 —— 不然交接的指令目录
+    // 悄悄交不过去,DSH 照常跑,只是人设、记忆、技能都没了(11-15 台架踩过)。
+    // passEnv 同理和**内置那条**取并集:覆盖条目多半只是换了命令,引擎还是那个引擎,它自己的配置目录 / 凭据变量照样要放行。
+    // 只并内置的,不并先前的自定义条目 —— 同一 id 写了两条时,前一条的 `*` 不能被后一条继承下来。
+    const prev = byId.get(e.id);
+    let merged = prev?.agentsHomeEnv && !('agentsHomeEnv' in e) ? { ...e, agentsHomeEnv: prev.agentsHomeEnv } : e;
+    const base = builtinById.get(e.id)?.passEnv;
+    if (base?.length) merged = { ...merged, passEnv: [...new Set([...base, ...(Array.isArray(e.passEnv) ? e.passEnv : [])])] };
+    byId.set(e.id, merged);
+  }
   return [...byId.values()];
 }
 
@@ -154,10 +185,12 @@ export type EngineStatus = 'available' | 'needs-signin' | 'not-installed';
  * - `not-installed` — 三者全不命中。
  * 依据:claude-code/codex 运行走 `npx @…-acp`,`bin` 只是「装了」的探测提示;有 ~/.claude / API key 即真正可用,
  * 故「有 auth 无 bin」并入 available、不设独立 unavailable 态(三态够用)。
+ * 例外:detect.requireBin 的引擎(DSH)跑的就是 bin 本身,bin 不在即 not-installed。
  */
 export function engineStatus(def: EngineDef): EngineStatus {
   const d = def.detect;
   if (!d) return 'available';
+  if (d.requireBin && !(d.bin && binOnPath(d.bin))) return 'not-installed';
   const hasAuth = !!(d.dirs?.some((p) => existsSync(expandHome(p))) || d.env?.some((k) => !!process.env[k]));
   if (hasAuth) return 'available';
   if (d.bin && binOnPath(d.bin)) return 'needs-signin';
@@ -170,7 +203,8 @@ export function isEngineAvailable(def: EngineDef): boolean {
 }
 
 export interface EnginePrefs {
-  [id: string]: { defaultModel?: string };
+  /** probeSessionId:探测模型清单时复用的那个引擎会话(见 acpEngine.probeAcpEngine),不是用户的选择。 */
+  [id: string]: { defaultModel?: string; probeSessionId?: string };
 }
 
 /** 读引擎偏好:config.json 的 enginePrefs 段优先,缺失回落 ~/.tangu/engine-prefs.json;损坏 → {}。 */
@@ -192,6 +226,18 @@ export function saveEngineDefaultModel(id: string, modelId: string): void {
     updateSection('enginePrefs', (sec) => { // 锁内读改写
       const prefs = enginePrefsFrom(sec);
       return { ...prefs, [id]: { ...(prefs[id] || {}), defaultModel: modelId || undefined } };
+    });
+  } catch (e: any) {
+    console.warn('[engines] 保存 engine-prefs 失败:', e?.message || e);
+  }
+}
+
+/** 记下某引擎的探测会话(同一段 enginePrefs;只动这一个键,defaultModel 原样留着)。 */
+export function saveEngineProbeSession(id: string, sessionId: string): void {
+  try {
+    updateSection('enginePrefs', (sec) => {
+      const prefs = enginePrefsFrom(sec);
+      return { ...prefs, [id]: { ...(prefs[id] || {}), probeSessionId: sessionId } };
     });
   } catch (e: any) {
     console.warn('[engines] 保存 engine-prefs 失败:', e?.message || e);

@@ -11,7 +11,8 @@ import { amadeusAvailable } from './features/runtime'
  */
 import React, { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState, useSyncExternalStore } from 'react'
 import { Puzzle, RotateCw, TriangleAlert, type LucideIcon } from 'lucide-react'
-import { registerView, unregisterView, useWorkspace, getActiveSpace, getView, showInMainPanel, createViewLayout, useViewModes, ViewHead, type ViewForms, type ViewProps, type ViewModeOption } from '@lcl/engine'
+import { registerView, unregisterView, useWorkspace, getActiveSpace, getView, showInMainPanel, createViewLayout, useViewModes, ViewHead, setLayoutViewAlias, type ViewForms, type ViewProps, type ViewModeOption } from '@lcl/engine'
+import { pluginViewAlias } from '../../shared/pluginAliases'
 import { notePluginGesture, onPluginSetupSettled, pluginSetupSettled, usePluginStore } from '@amadeus/plugins/pluginStore'
 import { recordDevMountError } from '@amadeus/plugins/devRecords'
 import { setDevViewBridge } from '@amadeus/plugins/devSandbox'
@@ -135,7 +136,8 @@ export const PluginViewHost: React.FC<ViewProps & { def: ViewContribution; plugi
       const mounted = def.mount(el, {
         getLayout: () => { check(); return geometry.getSnapshot() },
         onLayout: (listener) => { check(); const off = geometry.subscribe(value => { if (alive) listener(value) }); layoutSubscriptions.add(off); return () => { off(); layoutSubscriptions.delete(off) } },
-        extendView, surface: isMini ? 'mini' : isFloating ? 'floating' : 'main',
+        // pip(Computer Use 悬浮小画面)排第一:那扇窗也算卫星窗,但视图要画紧凑卡
+        extendView, surface: kind === 'pip' ? 'pip' : isMini ? 'mini' : isFloating ? 'floating' : 'main',
         getParams: () => { check(); return { ...(useWorkspace.getState().leafById(current.current.leaf.id)?.params ?? current.current.params) } },
         setParams: (patch) => { check(); current.current.leaf.setParams({ ...(useWorkspace.getState().leafById(current.current.leaf.id)?.params ?? current.current.params), ...patch }) },
         setCompanionsVisible: (visible) => { check(); if (kind === 'main' && !isFloating && !isMini) setPluginCompanions(pluginId, current.current.leaf.id, def, visible) },
@@ -336,6 +338,18 @@ export function syncPluginViews(): void {
     },
   })
 
+  // 布局里记着插件旧身份的视图(同一个包从普通安装换成商店安装:`plugin:<包 id>:x` → `plugin:market-<UUID>:x`):
+  // 存档载入时 LCL 按这条规则改名,已摆在屏上的在新视图注册后接过去。口径 = pluginDependencyIndex:旧身份还被列着(哪怕停用)就不动,
+  // 包 id 只对上一个插件才认。三端同一份(手机 / 网页也经 installAmadeusPlugins 走到这里)。
+  setLayoutViewAlias((type) => pluginViewAlias(type, usePluginStore.getState().plugins))
+  let adoptQueued = false
+  const adoptRenamed = (): void => {
+    if (adoptQueued) return
+    adoptQueued = true
+    // 排到这一拍之后:sync 跑在插件 store 的订阅回调里,别在别人的 set() 当中整份换布局
+    queueMicrotask(() => { adoptQueued = false; useWorkspace.getState().adoptViewAliases() })
+  }
+
   const registered = new Map<string, ViewContribution>()
   const sync = (): void => {
     const next = new Map<string, ViewContribution>()
@@ -373,6 +387,7 @@ export function syncPluginViews(): void {
         layout: def.layout,
         forms: pluginForms(type.split(':')[1], def.forms),
       })
+      adoptRenamed()
     }
   }
   sync()

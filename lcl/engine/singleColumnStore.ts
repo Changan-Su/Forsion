@@ -18,11 +18,12 @@ import { nativeExtendTargets } from './nativeExtendView'
 import type { Leaf, ViewLocation, SidebarDefaults } from './types'
 import { identitySig, label } from './types'
 import { getView } from './viewRegistry'
+import { aliasViewType } from './viewAlias'
 import { useNav } from './navStore'
 import type { PersistedPanel } from './layoutPersist'
 import { contentStorageKey } from './contentStorageScope'
 import { isLastPinned, isPinned, missingPinned, type PinnedViews } from './pinnedViews'
-import { arrangeRight, planRight, rightGroupFor, type RightRef } from './rightRules'
+import { arrangeRight, baseKeyOf, planRight, rightExtrasFrom, rightGroupFor, type RightRef } from './rightRules'
 
 /** 主区 leaf 快照(供顶栏/读者)。字段与桌面同名以兼容读者 —— ⚠️ 桌面 dockviewStore 那份加字段时
  *  这里必须同步:移动构建把整个 workspaceStore 换成本文件,漏一个字段就是静默少功能(typecheck 也不红,
@@ -170,7 +171,7 @@ let rightQueued = false
 const usableRight = (type: string): boolean => { const def = getView(type); return !!def && def.kind !== 'entity' }
 function rightGroupNow(s: { mainLeaves: LeafRec[]; activeMainId: string | null; sidebarDefaults: Record<'left' | 'right', PersistedPanel[]> }): ReturnType<typeof rightGroupFor> {
   const main = s.mainLeaves.find((r) => r.id === s.activeMainId)
-  return rightGroupFor(main?.type, main ? getView(main.type)?.rightCompanions : undefined, s.sidebarDefaults.right, usableRight)
+  return rightGroupFor(main?.type, main ? getView(main.type)?.rightCompanions : undefined, s.sidebarDefaults.right, usableRight, rightExtrasFrom(main ? getView(main.type)?.rightExtras : undefined, main?.params))
 }
 let restoredOwner: string | null | undefined
 /** 壳还没还原(发令枪没响)、店里也还是空的:这一程的现场只在在用的键里。挂载之前有人切 Space / 补定位时据此
@@ -210,8 +211,22 @@ export function adoptSingleColumnLayoutCold(fromId: string, toId: string, active
   else try { localStorage.removeItem(SC_LAYOUT_KEY) } catch { /* 私密模式 */ }
 }
 
-function applySCBlob(raw: unknown): boolean {
-  if (!isBlob(raw)) return false
+/** 存档里还记着旧名字的 leaf 改成现在的名字(宿主的别名规则,见 viewAlias.ts)。改了的计数;坏条目原样交给 knownLeaves 剔。 */
+function renameLeaves(arr: LeafRec[], count: { n: number; live: number }): LeafRec[] {
+  return arr.map((r) => {
+    const to = r && typeof r === 'object' && typeof r.type === 'string' ? aliasViewType(r.type) : null
+    if (!to) return r
+    count.n++
+    const def = getView(to)
+    if (def) count.live++
+    return { ...r, type: to, ...(def ? { title: label(def.displayName) } : {}) }
+  })
+}
+
+function applySCBlob(stored: unknown): boolean {
+  if (!isBlob(stored)) return false
+  const renamed = { n: 0, live: 0 }
+  const raw: SCBlob = { ...stored, main: renameLeaves(stored.main, renamed), left: renameLeaves(stored.left, renamed), right: renameLeaves(stored.right, renamed) }
   const main = knownLeaves(raw.main)
   // 主区空、或只剩 `home` 空态占位 = 没什么可还原的,交回 buildDefault(= 该 Space 的落地页)。
   // ⚠️ 占位也要算「空」:主页 Space 的落地页被关掉后就地变成占位,存盘再还原 = 每次开机都是
@@ -357,6 +372,8 @@ interface WS {
   closeViewsOfType(type: string, force?: boolean): void
   /** 同桌面版:原地换类型(抽屉里的视图收着也照换,不替用户打开抽屉),sidebarDefaults 跟着换;返回换掉的个数。 */
   replaceViewsOfType(from: string, to: string, params?: Record<string, unknown>): number
+  /** 同桌面版(viewAlias.ts):还记着旧名字的 leaf 就地改名,参数与位置不动;返回改了几个。 */
+  adoptViewAliases(): number
   /** 同桌面版:三桶里的 leaf 一个不漏(单列壳只渲染当前那个,后台的视图没挂载、自己收不到任何广播)。 */
   remapLeaves(fn: (type: string, params: Record<string, unknown>) => Record<string, unknown> | null | undefined): void
   resetLayout(): void
@@ -486,7 +503,7 @@ export const useWorkspace = create<WS>((set, get) => {
       const s = get()
       const g = rightGroupNow(s)
       if (!g || g.key === rightKey) return
-      const changed = rightKey !== null
+      const changed = rightKey !== null && baseKeyOf(rightKey) !== g.base // 同桌面版:只是补项变了不算换组
       rightKey = g.key
       const defaults = s.sidebarDefaults.right
       const extras = s.rightLeaves.filter((r) => r.type === '__extend') // 抽屉里的临时 View 跟它的主人走,不归规则
@@ -748,6 +765,16 @@ export const useWorkspace = create<WS>((set, get) => {
       const d = get().sidebarDefaults
       set({ sidebarDefaults: { left: swap('left', d.left), right: swap('right', d.right) } })
       return n
+    },
+
+    adoptViewAliases() {
+      const renamed = { n: 0, live: 0 }
+      const next = { mainLeaves: renameLeaves(get().mainLeaves, renamed), leftLeaves: renameLeaves(get().leftLeaves, renamed), rightLeaves: renameLeaves(get().rightLeaves, renamed) }
+      // 新名字一个都没注册 = 改了也还是看不见,先不动(插件逐个装载,这里每装一个都会被叫一次)
+      if (!renamed.live) return 0
+      set(next)
+      get().refreshTabs()
+      return renamed.n
     },
 
     remapLeaves(fn) {

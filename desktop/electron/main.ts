@@ -19,7 +19,9 @@ import { createMiniResizeQueue } from './miniResizeQueue'
 import { miniResizeShape } from './miniResizeShape'
 import { protectWindowsAudioClock } from './windowsAudioClock'
 import { startMiniAutoPanel } from './miniAutoPanel'
-import { createPluginSandbox, sandboxRequiredPlugins, type PluginSandboxUiSeed } from './pluginSandbox'
+import { createDesktopFloat } from './desktopFloat'
+import { createComputerUsePip, createPipAgentRelay, PIP_AGENT_CHANNELS, PIP_MARGIN, PIP_WIDTH, type PipAgentHost } from './computerUsePip'
+import { createPluginSandbox, readSandboxManifest, sandboxRequiredPlugins, type PluginSandboxUiSeed } from './pluginSandbox'
 import { sandboxSelf, startSandboxChild, sandboxForward, SANDBOX_SWITCHES } from './sandboxChild'
 import { MINI_WINDOW_LIMIT, VOICE_CALL_VIEW, miniEntityKey, normalizeMiniOpenOptions, normalizeMiniSessionContext, type MiniSessionContext, type MiniOpenOptions, type MiniOpenResult, type MainPanelTarget } from '../shared/miniPanel'
 import { miniSessionState, type MiniSessionEntry } from './miniSessionState'
@@ -56,7 +58,7 @@ import { findGit } from './gitHistory'
 import { downloadUrlFor, installCommandFor, requiredProgram } from './envInstall'
 import { createKeepAwake } from './keepAwake'
 import { createMcpLifecycle, startForsionMcp } from './mcpServer'
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { loadTanguCreds, saveTanguCreds, assertTanguCredsWritable, forsionAccountId, loadAccountCloudSettings, saveAccountCloudSettings } from './forsionAuth'
 import { createAccountCore } from './accountCore'
 import { importMcp, scanAll } from './discovery'
@@ -83,8 +85,9 @@ import { migrateDiskSoft } from './themeMigrations'
 import { builtinBundleSources, builtinPluginIds, bundleOff, bundleRestartPending, initBundleSwitches, lockedPluginIds, seedBuiltinBundles, setBundleOff } from './builtinPlugins'
 import { createCorePluginUpdater, prefetchOnFirstBoot } from './corePluginUpdates'
 import { createMarketPluginUpdater, type MarketUpdateItem } from './marketPluginUpdates'
-import { createStoreSources, packageManifestId, type StoreSources } from './storeSources'
+import { createStoreSources, packageManifest, packageManifestId, type StoreSources } from './storeSources'
 import { isSourceCardId } from '../shared/storeSources'
+import { assertInternalsRawApproved } from './marketInternals'
 import { compareMarketVersions } from '../shared/marketPluginUpdates'
 import { BUILTIN_BUNDLES } from './builtinPlugins'
 import { checkBuiltinUpdates, NPM_OFFICIAL, registryOrder } from './builtinUpdates'
@@ -115,7 +118,10 @@ import { COMPUTER_HISTORY_DESKTOP_CONFIG_FILE } from '../shared/computerHistory'
 // Amadeus Space:vendored 笔记后端(vault IPC + 资产协议)。renderImport 别名后保持 verbatim。
 import { registerIpc as registerAmadeusIpc } from './amadeus/ipc'
 import type { AmadeusSyncFactory } from './amadeus/cloudSeam'
-import { engineCapsState, pairingWriters, type UnitHubFactory, type UnitHubInstance } from './unitHubSeam' // 设备互联云端通道的接缝(Forsion Extend 0.6 起)
+import { adoptFromOpenGrant, createUnitFrameScope, createUnitOpenGrants, handleUnitFrameBind, normalizeCloudBase, replaceAuthorization, shouldInjectUnitAuth, type UnitFrameRosterRead } from './unitAuthScope' // 设备页补登录头的范围
+import { parseSharedUnits } from '../shared/sharedUnits'
+import { engineCapsState, pairingWriters, selfUnitIdMemo, type UnitHubFactory, type UnitHubInstance } from './unitHubSeam' // 设备互联云端通道的接缝(Forsion Extend 0.6 起)
+import { probeUnitLan } from './unitLanProbe'
 import { makeCallerHeaders } from './unitCaller'
 import { newPairStore, startUnitWeb, type UnitWebHandle, type PairedDevice, startClipEntrance, CLIP_ENTRANCE_PORTS, type ClipEntranceHandle } from './unitWeb'
 import { createRemoteSessions, lookupRosterUnit, registerRemoteSessionsIpc, REMOTE_SESSIONS_FILE, withRemoteCap } from './remoteSessions' // P1-K4
@@ -129,6 +135,7 @@ import { REMOTE_LOCK_FILE } from '../shared/remoteSafety' // P1-K2
 import { attachHostChannel, startP2pProxy, type P2pProxyHandle } from './unitP2p'
 import { P2pManager, DEFAULT_STUN } from './p2pWindow'
 import type { ExternalPluginSource } from '@amadeus-shared/ipc'
+import { gatePluginManifest } from '@amadeus-shared/ipc'
 import { readConfig as readAmadeusConfig } from './amadeus/settings'
 import { syncVaultRoot } from './amadeus/vaultList'
 import { registerRemoteSync } from './remotesyncIpc'
@@ -137,7 +144,10 @@ import { logActivity, setActivityLogEnabled, pruneActivity, exportActivity, flus
 import { createSampler, nativeProbe } from './activeWindow'
 import { KNOWN_APPS } from '../shared/knownApps'
 import { bindRecipeToPlugin, effectivePluginId } from '../shared/products'
+import { supersededPluginDirs } from './supersededPlugins'
+import { MARKET_INSTALL_DIR } from '../shared/pluginAliases'
 import { BROWSER_PARTITION, GUEST_ALLOWED_PERMISSIONS } from '../shared/browser'
+import { acceptPluginSurface, PLUGIN_SURFACE_PERMISSIONS, surfaceNavigationAllowed } from '../shared/pluginSurface'
 import { registerPtyIpc } from './pty'
 import { registerAssetSchemes as registerAmadeusAssetSchemes, registerAssetProtocol as registerAmadeusAssetProtocol } from './amadeus/assetProtocol'
 import { registerIuiLibProtocol } from './iuiLibProtocol'
@@ -146,7 +156,8 @@ import { applyWindowMaterial, parseWindowMaterialRequest } from './windowMateria
 import { tabTitleBarOptions, parseTabTitleBar, watchTabTitleBar } from './tabTitleBar'
 import { createMiniDockMotion, miniDockFrame } from './miniDockMotion'
 import { isForsionUrl, pushDeepLink, drainDeepLinks, filesFromArgv, pushOpenFile, drainOpenFiles } from './deepLink'
-import { createSpaceShortcut, isSpaceId, spaceAppUserModelId, spaceIconFile, spaceShortcutMetaFile, spaceWindowIdFromUrl, spaceWindowLink } from './spaceShortcut'
+import { SPACE_SHORTCUT, createSpaceShortcut, createWindowShortcut, iconPngFromDataUrl, isSpaceId, spaceIconFile, spaceShortcutMetaFile, spaceWindowIdFromUrl, windowShortcutAppUserModelId, windowShortcutLink, type WindowShortcutKind } from './spaceShortcut'
+import { UNIT_SHORTCUT, handleUnitAddToDesktop, isUnitId, parseRosterResponse, parseUnitWindowState, unitWindowIdFromUrl, type RosterRead, type UnitShortcutResult, type UnitWindowEntry } from './unitShortcut'
 
 /** ~/.tangu(与包内 core/tanguHome.ts 同约定;TANGU_HOME 可整体重定向)。 */
 setDevMode(!app.isPackaged) // dev 数据目录 ~/.forsion-dev,与正式版隔离(模块装载即定,先于一切路径解析)
@@ -169,7 +180,7 @@ const themesDir = (): string => join(tanguHomeDir(), 'themes')
 if (!app.requestSingleInstanceLock()) app.exit(0)
 app.on('second-instance', (_e, argv, cwd) => {
   // Space 桌面快捷方式(win/linux 带着 forsion://space/<id>?window=standalone 二启):只开那个 Space 的窗,主窗不出来。
-  if (!argv.some((a) => spaceWindowIdFromUrl(a))) showMainWindow()
+  if (!argv.some((a) => spaceWindowIdFromUrl(a) || unitWindowIdFromUrl(a))) showMainWindow()
   for (const a of argv) if (isForsionUrl(a) && !routeSpaceWindowLink(a)) deliverDeepLink(a) // win/linux:二启的 forsion:// 在 argv 里
   for (const f of filesFromArgv(argv.slice(1), cwd)) deliverOpenFile(f) // win/linux:已开着时双击文件
 })
@@ -184,11 +195,19 @@ let deepLinkReady = false
 // 不进 deep link 队列:那条路会 showMainWindow 并让主窗渲染层切 Space,用户要的恰恰是「不露出 Forsion 本体」。
 // 启动还没走到恢复独立窗那一步(IPC 没注册全、主窗还没建)之前先排着;冷启动因它而起时,主窗建好也不显示(hideMainOnLaunch)。
 const pendingSpaceWindows: string[] = []
+/** 同上,设备快捷方式 forsion://unit/<id>?window=standalone(unitShortcut.ts):直接开那台设备的 Unit 窗。 */
+const pendingUnitWindows: string[] = []
 let spaceWindowsLive = false
 let hideMainOnLaunch = false
 /** 启动以来有没有人明确要过主窗(showMainWindow 置位)。 */
 let mainRequested = false
 function routeSpaceWindowLink(url: string): boolean {
+  const unit = unitWindowIdFromUrl(url)
+  if (unit) {
+    if (!spaceWindowsLive) { if (!pendingUnitWindows.includes(unit)) pendingUnitWindows.push(unit) }
+    else createDetachedWindow({ unit })
+    return true
+  }
   const id = spaceWindowIdFromUrl(url)
   if (!id) return false
   if (!spaceWindowsLive) { if (!pendingSpaceWindows.includes(id)) pendingSpaceWindows.push(id) }
@@ -1076,6 +1095,12 @@ let stopAmadeusSync: (() => Promise<void>) | null = null
 let amadeusSyncFactory: AmadeusSyncFactory | null = null
 let unitHostCloudUrl = DEFAULT_CLOUD_URL
 let unitHostPairing: { unitId: string; secret: string } | null = null
+/** 本机名册 id 的记忆(units:hostStatus.selfUnitId;互联关着时 unitHub.status().unitId 是 null)。 */
+const selfUnitId = selfUnitIdMemo()
+/** 本机在名册里的 id:units:hostStatus.selfUnitId 与 /unit/meta 的 unitId 同用这一个(渲染层拿前者认本机、拿后者核对直连应答)。 */
+const selfRosterUnitId = (): string | null => unitHub?.status().unitId ?? selfUnitId.get()
+/** 本机安装实例 id(/unit/meta 的 instanceId);LAN 探针据此认出「应答的就是本机自己」。互联与门铃都没开过 = 存的值或 null。 */
+let unitSelfInstanceId: string | null = null
 // P1-KF:主进程文案(mt)的界面语言 = 渲染层报来的生效语言(ui:locale),上次的值落 userData/ui-locale.json 供窗口载入前用。
 const uiLocale = createUiLocaleSync({ file: () => join(app.getPath('userData'), UI_LOCALE_FILE), log: (m) => console.log(m) })
 /** 渲染层报来的本机外观(主题色 / 背景色 / 明暗),给已配对的 Forsion Clip 跟随;语言另取 mainLocale()。 */
@@ -1103,8 +1128,20 @@ const approvalDelivery = createApprovalDelivery({
   log: (m) => console.log(m),
 })
 if (approvalE2E) (globalThis as Record<string, unknown>).__forsionE2E = { approvalDelivery, notifications: approvalE2E.notifications }
-/** 内置浏览器注入 Authorization 的隧道前缀(effectiveConfig 刷新)。 */
-let unitTunnelPrefix = ''
+/** 内置浏览器给设备页补 Authorization 的云端地址(effectiveConfig 刷新;normalizeCloudBase 之后,不知道 = null)。
+ *  补不补、补给谁由 unitAuthScope.ts 判:只给主进程绑定过的那张 webview、只给那台设备自己的路径。 */
+let unitCloudBase: string | null = null
+/** 设备页 webview 的绑定(units:bindFrame 建,webview 销毁 / 换账号清)。 */
+const unitFrames = createUnitFrameScope()
+/** 设备页自己 window.open 自己中转地址时的一次性许可(unitAuthScope.ts;换号时随绑定一起清)。 */
+const unitOpenGrants = createUnitOpenGrants()
+/** 发过主框架请求的 webview(只有「第一次主框架请求」能消费开窗许可)。 */
+const unitGuestNavigated = new WeakSet<Electron.WebContents>()
+/** 当前账号标识(同「添加到桌面」那份:forsionAccountId,解不出用户时退回令牌哈希;没登录 = null)。 */
+function unitAccountKey(c: { cloudUrl?: string; token?: string } = loadTanguCreds()): string | null {
+  const token = c.token || ''
+  return forsionAccountId(c.cloudUrl || '', token) ?? (token ? `token:${createHash('sha256').update(token).digest('hex')}` : null)
+}
 /** P2P 直连(方案 §12):隐藏窗 WebRTC 宿主,懒建;身份变化点 closeAll(站着的已鉴权信道,
  *  不像 T2 逐请求重验 owner)。 */
 let p2pMgr: P2pManager | null = null
@@ -1179,17 +1216,26 @@ async function readSpacesList(opts: { dev?: boolean } = {}): Promise<Array<{ slu
   }
   try {
     const proot = join(tanguHomeDir(), 'plugins')
-    for (const p of (await readdir(proot, { withFileTypes: true })).filter((x) => x.isDirectory() && !x.name.startsWith('.'))) {
+    const dirs = (await readdir(proot, { withFileTypes: true })).filter((x) => x.isDirectory() && !x.name.startsWith('.'))
+    // 同一个包的普通目录 + 商店安装:旧副本的 Space 不列(插件列表同一条规则)。以前两份都列、同 Space id 先到先得,
+    // 普通目录排在前 —— 装了商店版,看到的还是旧副本的 Space。
+    const replaced = await supersededPluginDirs(proot, dirs.map((x) => x.name))
+    for (const p of dirs.filter((x) => !replaced.has(x.name))) {
       let pid: string
       let manifestId: unknown
       try {
-        manifestId = (JSON.parse(await readFile(join(proot, p.name, 'manifest.json'), 'utf8')) as { id?: unknown }).id
+        const m = JSON.parse(await readFile(join(proot, p.name, 'manifest.json'), 'utf8')) as { id?: unknown; apiVersion?: unknown; minAppVersion?: unknown }
+        manifestId = m.id
         // 归属 id 与插件装载器(amadeus/ipc.ts pluginIdOf)同一条规则:商店目录 market-<uuid> 就是运行身份
         const cand = effectivePluginId(p.name, manifestId)
         if (!cand) continue // manifest id 与目录名皆非法 → 与拒载口径一致
+        // 版本门禁挡住的插件(接口版本不符 / 应用太旧)不跑,它的 Space 也不列:只摆内置视图的配方照样过得了渲染层的校验,
+        // 插件没在跑、Space 却冒出来(手机 listSpaces 同口径)。
+        if (gatePluginManifest(m, app.getVersion())) continue
         pid = cand
       } catch { continue } // 无 manifest.json = 非插件目录,跳过
-      if (shadowed.has(pid)) continue
+      // 开发副本遮住同 id 的安装版;商店安装按包 id 认(插件列表同口径,见 amadeus/ipc.ts readExternalPlugins)
+      if (shadowed.has(pid) || (MARKET_INSTALL_DIR.test(p.name) && typeof manifestId === 'string' && shadowed.has(manifestId))) continue
       await bundled(pid, join(proot, p.name), manifestId)
     }
   } catch { /* plugins 目录不存在 = 无捆绑包 */ }
@@ -1345,6 +1391,7 @@ async function doRefreshUnitHost(): Promise<void> {
   // P1-K5:配对从 device-secrets.json 读,只在互联开着时读(读 = 可能解密 = macOS 可能弹钥匙串)。
   const pairing: deviceSecrets.PairingRead = stored.unitHostEnabled ? await deviceSecrets.unitPairing() : { state: 'ok', value: null }
   unitHostPairing = pairing.state === 'ok' ? pairing.value : null
+  selfUnitId.note(unitHostPairing)
   if (unitHub) { unitHub.stop(); unitHub = null } // stop() 也让 caps 上报器停报(onChannelDown)
   if (unitWeb) { const w = unitWeb; unitWeb = null; await w.close() } // 必须等旧服务真放掉端口,否则新起撞自己
   if (unitDoorbell) { const d = unitDoorbell; unitDoorbell = null; await d.close() }
@@ -1354,6 +1401,7 @@ async function doRefreshUnitHost(): Promise<void> {
   // 门铃开在 Clip 的固定口上:安装版 8791 / 8793、开发版 8792 / 8794,两份同开互不挤占(以前 dev 门铃占 8791 把安装版挤到了随机口)。
   // 台架起的隔离实例缺省关(launch-electron 设 FORSION_CLIP_ENTRANCE=0),别让用户真浏览器里的 Clip 找到它们。
   const doorbell = !stored.unitHostEnabled && clipEntranceOn()
+  unitSelfInstanceId = stored.unitInstanceId || null
   if (!stored.unitHostEnabled && !doorbell) return
   // 实例 id:首次开启生成并回写(/unit/meta 自证身份,防 DHCP 换主誊错设备)。
   let instanceId = stored.unitInstanceId
@@ -1361,6 +1409,7 @@ async function doRefreshUnitHost(): Promise<void> {
     instanceId = randomUUID()
     await saveConfig({ unitInstanceId: instanceId })
   }
+  unitSelfInstanceId = instanceId
   // 端口保持稳定(便于手输 IP 直连;Clip 也只找这个口):首选已存端口/8791
   const want = stored.unitWebPort || clipEntrancePorts()[0]
   // 本机项目根种子没做完之前,远端的 /engine 一律 503(seedGatedEngine):远端没有窗口抢在种子之前改 project_path。
@@ -1470,6 +1519,7 @@ async function doRefreshUnitHost(): Promise<void> {
       return sdp
     },
     meta: { instanceId, name: hostname(), version: app.getVersion(), build: (app.isPackaged ? 'packaged' : 'dev') as 'packaged' | 'dev' },
+    rosterUnitId: selfRosterUnitId,
     appearance: () => (uiAppearance ? { ...uiAppearance, locale: mainLocale() } : null),
     webDistDir: (): string | null => {
       const env = process.env.TANGU_UNIT_WEB_DIST
@@ -1532,7 +1582,7 @@ async function doRefreshUnitHost(): Promise<void> {
     getPairing: () => unitHostPairing,
     // 入册回包到达时这个通道已被 refreshUnitHost 换掉(停用 / 换账号):旧那一轮的配对不许落盘(Codex 评审 P1)。
     // 残余窗口(检查通过后才换号)由通道 403/404 → clearPairing → 重新入册自愈。
-    ...pairingWriters(() => unitHub === hub, async (p) => { unitHostPairing = p; await deviceSecrets.setUnitPairing(p) }),
+    ...pairingWriters(() => unitHub === hub, async (p) => { unitHostPairing = p; selfUnitId.note(p); await deviceSecrets.setUnitPairing(p) }),
     // caps 上报器每次现算(通道 ready 之后报一次,backend.onStatus / 种子做完再报变化)
     engineCaps: () => engineCapsState({ agentBackend: PRODUCT.agentBackend, backend: backend.getStatus().state, seeded: unitSessionRootsSource().seeded() }),
     log: (m) => console.log(m),
@@ -1560,7 +1610,7 @@ async function effectiveConfig(): Promise<
   // 默认工作区目录折算为有效绝对路径(并确保存在),renderer 用它建「Tangu 默认工作区」会话。
   const defaultWorkspaceDir = await ensureDefaultWorkspaceDir(stored)
   // 内置浏览器给隧道设备页注入 Authorization 的前缀(effectiveConfig 被 boot/配置变更高频调用,借道刷新)。
-  unitTunnelPrefix = `${stored.cloudUrl.replace(/\/+$/, '')}/api/units/`
+  unitCloudBase = normalizeCloudBase(stored.cloudUrl)
   const externalConnection = { backendUrl: stored.backendUrl, token: stored.token }
   if (stored.mode === 'managed' && st.state === 'ready' && st.url) {
     return { ...stored, backendUrl: st.url, token: backend.getToken(), backendState: st, homeDir, defaultWorkspaceDir, forsionMcp, externalConnection }
@@ -1781,8 +1831,22 @@ function hardenNav(wc: Electron.WebContents): void {
 //    属性也拿不到 window.tangu(否则等于把 PTY/文件读写送给任意站点);
 //  - did-attach-webview:站点里的 target=_blank 回投**宿主**渲染层(带 fromGuest)→ 开成新的内置浏览器标签,不产生游离窗。
 // guest 不套 hardenNav:本地 .html 预览要允许 file: 内的相对跳转。
+//  - 插件网页表面(ctx.ui.mountWebSurface,shared/pluginSurface.ts):分区名对、首个地址是本机时给它自己的分区(不和内置浏览器
+//    混 cookie),权限只给写剪贴板;页面自己只能在同源里跳,别的地址回投渲染层照普通链接开。其余加固和内置浏览器完全一样。
+const pluginSurfaceSessions = new WeakSet<Electron.Session>()
+function pluginSurfaceSession(partition: string): void {
+  const ses = session.fromPartition(partition)
+  if (pluginSurfaceSessions.has(ses)) return
+  pluginSurfaceSessions.add(ses)
+  const allow = (p: string): boolean => PLUGIN_SURFACE_PERMISSIONS.includes(p)
+  ses.setPermissionRequestHandler((_wc, permission, callback) => callback(allow(permission)))
+  ses.setPermissionCheckHandler((_wc, permission) => allow(permission))
+  ses.setDevicePermissionHandler(() => false)
+}
 app.on('web-contents-created', (_e, contents) => {
   contents.on('will-attach-webview', (_ev, webPreferences, params) => {
+    const surface = acceptPluginSurface(params.partition, params.src)
+    if (surface) pluginSurfaceSession(surface)
     // 全部写死,不是「删掉危险的」——渲染层能塞进来的键太多(sandbox/webSecurity/…),
     // 白名单式覆写才封得住;partition 也钉死,否则空 partition 会落回权限全放行的 defaultSession。
     delete webPreferences.preload
@@ -1796,15 +1860,30 @@ app.on('web-contents-created', (_e, contents) => {
     webPreferences.experimentalFeatures = false
     webPreferences.webviewTag = false
     ;(webPreferences as Record<string, unknown>).allowFileAccessFromFiles = false // 本地 .html 不许读同盘其它文件
-    webPreferences.partition = BROWSER_PARTITION
-    params.partition = BROWSER_PARTITION
+    webPreferences.partition = surface ?? BROWSER_PARTITION
+    params.partition = surface ?? BROWSER_PARTITION
     delete params.nodeintegration
     delete params.nodeintegrationinsubframes
     delete params.disablewebsecurity
     delete params.webpreferences
   })
   contents.on('did-attach-webview', (_ev, guest) => {
-    guest.setWindowOpenHandler(openUrlHandler(contents, true))
+    const open = openUrlHandler(contents, true)
+    if (pluginSurfaceSessions.has(guest.session)) {
+      const keep = (e: Electron.Event, url: string, outside: boolean): void => {
+        if (surfaceNavigationAllowed(guest.getURL(), url)) return
+        e.preventDefault()
+        if (outside) open({ url })
+      }
+      guest.on('will-navigate', (e, url) => keep(e, url, true))
+      guest.on('will-redirect', (e, url) => keep(e, url, false))
+    }
+    guest.setWindowOpenHandler((d) => {
+      // 已绑定的设备页开**它自己**中转下的地址(撕出视图 / 同源 window.open):给回投后新开的那张页发一次性许可
+      const b = unitFrames.get(guest.id)
+      if (b && !guest.isDestroyed()) unitOpenGrants.issue(b, d.url, unitAccountKey(), unitCloudBase, { pageUrl: guest.getURL(), referrerUrl: d.referrer?.url })
+      return open(d)
+    })
   })
 })
 
@@ -1984,6 +2063,51 @@ function removeDetachedState(id: string): void {
   scheduleSaveDetachedState()
 }
 
+// Unit 窗(一台设备一扇,id = un_<设备 id>)的重启恢复单独存一份:只有设备 id + 位置大小(unitShortcut.parseUnitWindowState)。
+// 读坏了 = 不知道:这次运行不写回,免得把上次的清单覆盖成空的。
+let persistedUnitWindows: UnitWindowEntry[] = []
+let unitWindowStateWritable = false
+const unitWindowStatePath = (): string => join(app.getPath('userData'), 'unit-windows.json')
+async function loadUnitWindowState(): Promise<void> {
+  let raw: string
+  try { raw = await readFile(unitWindowStatePath(), 'utf8') } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') unitWindowStateWritable = true
+    return
+  }
+  const parsed = parseUnitWindowState(raw)
+  if (!parsed) { console.warn('[win] unit-windows.json unreadable; not restoring and not overwriting it this run'); return }
+  persistedUnitWindows = parsed.entries
+  // 有不认识的条目:合法的照样恢复,但这次运行不写回(否则就把那份文件覆盖了)
+  unitWindowStateWritable = parsed.clean
+  if (!parsed.clean) console.warn('[win] unit-windows.json has entries this version does not recognise; restoring the valid ones, not overwriting it this run')
+}
+let saveUnitWindowsTimer: NodeJS.Timeout | null = null
+function saveUnitWindowState(): void {
+  if (saveUnitWindowsTimer) clearTimeout(saveUnitWindowsTimer)
+  saveUnitWindowsTimer = null
+  if (!unitWindowStateWritable) return
+  const file = unitWindowStatePath(), tmp = `${file}.${process.pid}.tmp`
+  try {
+    writeFileSync(tmp, JSON.stringify(persistedUnitWindows), { encoding: 'utf8', mode: 0o600 })
+    renameSync(tmp, file)
+  } catch (error) {
+    try { rmSync(tmp, { force: true }) } catch { /* best effort */ }
+    console.error('[win] could not save unit window state:', error)
+  }
+}
+function upsertUnitWindow(unit: string, bounds: Electron.Rectangle): void {
+  const i = persistedUnitWindows.findIndex((x) => x.unit === unit)
+  if (i >= 0) persistedUnitWindows[i].bounds = bounds
+  else persistedUnitWindows.push({ unit, bounds })
+  if (saveUnitWindowsTimer) clearTimeout(saveUnitWindowsTimer)
+  saveUnitWindowsTimer = setTimeout(saveUnitWindowState, 400)
+}
+function removeUnitWindow(unit: string): void {
+  persistedUnitWindows = persistedUnitWindows.filter((x) => x.unit !== unit)
+  if (saveUnitWindowsTimer) clearTimeout(saveUnitWindowsTimer)
+  saveUnitWindowsTimer = setTimeout(saveUnitWindowState, 400)
+}
+
 function nextDetachedId(): string { detachedSeq += 1; return `d${Date.now().toString(36)}_${detachedSeq}` }
 
 /** Space id 的形状(同 shared/spaceAppearance 的 ID):进 URL 参数与布局键之前先过一遍。 */
@@ -1991,21 +2115,24 @@ const SPACE_ID = /^[A-Za-z0-9._-]{1,128}$/
 
 /** space = 把整个 Space 开在这扇窗里(渲染层据 ?space= 进入该 Space 并锁在里面)。一个 Space 一扇:id 由 Space id 定,
  *  已开着就叫到前面;布局键跟着 id 走,所以关了再开还是这扇窗上次的样子。 */
-function createDetachedWindow(opts: { id?: string; views?: ViewDesc[]; bounds?: Partial<Electron.Rectangle>; space?: string }): string {
-  const space = opts.space
-  const id = opts.id || (space ? `sp_${space}` : nextDetachedId())
+function createDetachedWindow(opts: { id?: string; views?: ViewDesc[]; bounds?: Partial<Electron.Rectangle>; space?: string; unit?: string }): string {
+  // unit = 设备的 Unit 窗(渲染层据 ?unit= 只画设备页的框,UnitWindowRoot):一台设备一扇,id = un_<设备 id>,不进独立窗清单。
+  const unit = !opts.space && isUnitId(opts.unit) ? opts.unit : undefined
+  const space = unit ? undefined : opts.space
+  const id = unit ? `un_${unit}` : opts.id || (space ? `sp_${space}` : nextDetachedId())
   const open = detachedWindows.get(id)
   if (open && !open.isDestroyed()) {
     // 先开着窗、后加的快捷方式:从快捷方式再叫它时补上任务栏身份(Codex 评审)。
     if (space && process.platform === 'win32') applySpaceTaskbarIdentity(open, space)
+    if (unit && process.platform === 'win32') applyShortcutTaskbarIdentity(open, UNIT_SHORTCUT, unit)
     if (open.isMinimized()) open.restore()
     if (readyDetachedWindows.has(open)) present(open)
     return id
   }
   if (opts.views?.length) pendingDetachedViews.set(id, opts.views)
   const win = new BrowserWindow({
-    width: opts.bounds?.width ?? (space ? 1100 : 900),
-    height: opts.bounds?.height ?? (space ? 760 : 680),
+    width: opts.bounds?.width ?? (space || unit ? 1100 : 900),
+    height: opts.bounds?.height ?? (space || unit ? 760 : 680),
     x: opts.bounds?.x,
     y: opts.bounds?.y,
     minWidth: 480,
@@ -2020,6 +2147,7 @@ function createDetachedWindow(opts: { id?: string; views?: ViewDesc[]; bounds?: 
   watchTabTitleBar(win)
   sinkForHarness(win)
   if (space && process.platform === 'win32') applySpaceTaskbarIdentity(win, space)
+  if (unit && process.platform === 'win32') applyShortcutTaskbarIdentity(win, UNIT_SHORTCUT, unit)
   win.once('ready-to-show', () => {
     if (win.isDestroyed()) return
     if (process.platform === 'win32' && opts.bounds) {
@@ -2044,49 +2172,89 @@ function createDetachedWindow(opts: { id?: string; views?: ViewDesc[]; bounds?: 
   win.webContents.setWindowOpenHandler(openUrlHandler(win.webContents))
   hardenNav(win.webContents)
   let closing = false
-  const persist = (): void => { if (!closing && !win.isDestroyed()) upsertDetachedBounds(id, win.getBounds()) }
+  const persist = (): void => {
+    if (closing || win.isDestroyed()) return
+    if (unit) upsertUnitWindow(unit, win.getBounds())
+    else upsertDetachedBounds(id, win.getBounds())
+  }
   // move/resize cover programmatic bounds changes too; Windows resized fires only for a manual resize.
   win.on('move', persist)
   win.on('resize', persist)
+  const forget = (): void => { if (unit) removeUnitWindow(unit); else removeDetachedState(id) }
   win.on('close', () => {
     closing = true
-    if (!isQuitting) removeDetachedState(id) // Record the close intent before a subsequent app quit.
+    if (!isQuitting) forget() // Record the close intent before a subsequent app quit.
   })
   win.on('closed', () => {
     console.log('[win] detached closed', id)
     detachedWindows.delete(id)
     pendingDetachedViews.delete(id)
-    if (!isQuitting) removeDetachedState(id) // Also handles webContents being closed directly by a harness.
+    if (!isQuitting) forget() // Also handles webContents being closed directly by a harness.
   })
-  upsertDetachedBounds(id, win.getBounds(), space) // 立即登记(拖出后崩溃也能恢复)
-  console.log('[win] detached open', id, space ? `space=${space}` : `views=${opts.views?.map((v) => v.type).join(',')}`)
-  loadRendererWith(win, { window: 'detached', id, ui: 'desktop', ...(space ? { space } : {}) })
+  if (unit) upsertUnitWindow(unit, win.getBounds())
+  else upsertDetachedBounds(id, win.getBounds(), space) // 立即登记(拖出后崩溃也能恢复)
+  console.log('[win] detached open', id, unit ? `unit=${unit}` : space ? `space=${space}` : `views=${opts.views?.map((v) => v.type).join(',')}`)
+  loadRendererWith(win, { window: 'detached', id, ui: 'desktop', ...(space ? { space } : {}), ...(unit ? { unit } : {}) })
   return id
 }
 
 /** Space 快捷方式的图标 / 名字存放处(userData,随安装走;dev 是 -dev 那份)。 */
 const spaceShortcutDir = (): string => join(app.getPath('userData'), 'space-shortcuts')
+/** 设备快捷方式的那份:和 Space 分开放 —— 文件名只按 id 算,Space id 和设备 id 可能长得一样。 */
+const unitShortcutDir = (): string => join(app.getPath('userData'), 'unit-shortcuts')
+
+/** Extend 登记的 units:list 处理器(名册住在 Extend)。主进程校验「添加到桌面」要现读一次名册;没装 Extend = null。 */
+let unitsListHandler: ((e: Electron.IpcMainInvokeEvent, ...args: any[]) => unknown) | null = null
+/** 以这次 IPC 的发送方身份现读名册(Extend 自己验发送方)。读不到 = 不知道,不是空名册。 */
+async function readUnitRoster(e: Electron.IpcMainInvokeEvent): Promise<RosterRead> {
+  if (!unitsListHandler) return { ok: false, code: 'roster_unavailable', detail: 'no roster bridge' }
+  return parseRosterResponse(await unitsListHandler(e))
+}
+/** 同上,连同别人共享给当前账号的 Unit 一起读(Extend 把 `{ shared: true }` 转成 ?shared=1;旧版忽略 → 没有 shared,当没有这一组)。
+ *  自己名下的 units 照 parseRosterResponse 那份读;共享行另放 shared,绝不混进 units。 */
+async function readUnitRosterWithShared(e: Electron.IpcMainInvokeEvent): Promise<UnitFrameRosterRead> {
+  if (!unitsListHandler) return { ok: false, code: 'roster_unavailable', detail: 'no roster bridge' }
+  const res = await unitsListHandler(e, { shared: true })
+  const own = parseRosterResponse(res)
+  if (!own.ok) return own
+  const shared = parseSharedUnits((res as { json?: unknown } | null)?.json)
+  return { ok: true, units: own.units, ...(shared ? { shared } : {}) }
+}
+
+/** 渲染层画好的 PNG 图标 → 按尺寸缩放的取图函数(nativeImage);没有 / 不合格就 undefined(快捷方式照建,只是没自定义图标)。 */
+function shortcutIconSource(raw: unknown): ((size: number) => Buffer | undefined) | undefined {
+  const buf = iconPngFromDataUrl(raw)
+  const src = buf ? nativeImage.createFromBuffer(buf) : null
+  return src && !src.isEmpty() ? (size: number): Buffer | undefined => src.resize({ width: size, height: size, quality: 'best' }).toPNG() : undefined
+}
 
 /** Windows:给加过桌面快捷方式的 Space 窗换上它自己的任务栏身份 —— 与 .lnk 同一个 AppUserModelID,任务栏上单独一格、
- *  显示 Space 图标、固定到任务栏后点开还是这个 Space 窗。没加过快捷方式的 Space 窗照旧归在 Forsion 那一格里。 */
+ *  显示 Space 图标、固定到任务栏后点开还是这个 Space 窗。没加过快捷方式的 Space 窗照旧归在 Forsion 那一格里。
+ *  Unit 窗同一套(UNIT_SHORTCUT,图标 / 名字记录在 unit-shortcuts)。 */
 function applySpaceTaskbarIdentity(win: BrowserWindow, space: string): void {
+  applyShortcutTaskbarIdentity(win, SPACE_SHORTCUT, space)
+}
+function applyShortcutTaskbarIdentity(win: BrowserWindow, kind: WindowShortcutKind, id: string): void {
+  const dir = kind === UNIT_SHORTCUT ? unitShortcutDir() : spaceShortcutDir()
   let name: unknown
-  try { name = JSON.parse(readFileSync(spaceShortcutMetaFile(spaceShortcutDir(), space), 'utf8'))?.name } catch { return }
+  try { name = JSON.parse(readFileSync(spaceShortcutMetaFile(dir, id), 'utf8'))?.name } catch { return }
   if (typeof name !== 'string' || !name) return
-  const ico = spaceIconFile(spaceShortcutDir(), space, 'win32')
+  const ico = spaceIconFile(dir, id, 'win32', kind)
   const hasIcon = !!ico && existsSync(ico)
   try {
     win.setAppDetails({
-      appId: spaceAppUserModelId(space),
-      relaunchCommand: `"${process.execPath}" "${spaceWindowLink(space)}"`,
+      appId: windowShortcutAppUserModelId(kind, id),
+      relaunchCommand: `"${process.execPath}" "${windowShortcutLink(kind, id)}"`,
       relaunchDisplayName: name,
       ...(hasIcon && ico ? { appIconPath: ico, appIconIndex: 0 } : {}),
     })
     if (hasIcon && ico) win.setIcon(ico)
-  } catch (e) { console.warn('[win] space taskbar identity failed:', e) }
+  } catch (e) { console.warn('[win] shortcut taskbar identity failed:', e) }
 }
 
 async function restoreDetachedWindows(): Promise<void> {
+  await loadUnitWindowState()
+  for (const { unit, bounds } of [...persistedUnitWindows]) createDetachedWindow({ unit, bounds })
   await loadDetachedState()
   for (const { id, bounds, space } of [...persistedDetached]) {
     createDetachedWindow({ id, bounds, space: typeof space === 'string' && SPACE_ID.test(space) ? space : undefined })
@@ -2422,6 +2590,56 @@ function openAutoMini(sessionId: string): void {
   })
   loadRendererWith(win, { window: 'mini', transient: '1', sessionId })
 }
+
+// ══ Computer Use 悬浮小画面(宿主私有桥 window.tangu.computerUsePip;纯逻辑与契约见 electron/computerUsePip.ts)══
+// 不进 minis 名册:不随启动恢复(saveOpenMiniWindows 只看 minis)、不占 MINI_WINDOW_LIMIT、不算 manualMiniVisible
+// (自动 Mini 照旧出没)、托盘「全部 Mini」里也没有它。无父窗:子窗跨屏会让 Electron 40 在第一下按键 SIGSEGV。
+/** 已报过「我能回答停止 / 状态」的渲染窗口(main.tsx 里非 pip 的窗口都装了应答方)。 */
+const pipAgentHostIds = new Set<number>()
+function pipAgentHosts(): PipAgentHost[] {
+  const out: PipAgentHost[] = []
+  const mainId = mainWindow && !mainWindow.isDestroyed() ? mainWindow.webContents.id : -1
+  for (const id of pipAgentHostIds) {
+    const wc = webContents.fromId(id)
+    if (!wc || wc.isDestroyed() || computerUsePip.owns(id)) { pipAgentHostIds.delete(id); continue }
+    out.push({ id, main: id === mainId, send: (channel, payload) => { if (!wc.isDestroyed()) wc.send(channel, payload) } })
+  }
+  return out.sort((a, b) => Number(b.main) - Number(a.main))
+}
+let pipWindow: BrowserWindow | null = null
+const pipAgentRelay = createPipAgentRelay({
+  hosts: pipAgentHosts,
+  toPip: (key, status) => { if (pipWindow && !pipWindow.isDestroyed()) pipWindow.webContents.send(PIP_AGENT_CHANNELS.status, { key, status }) },
+})
+const computerUsePip = createComputerUsePip({
+  primaryWorkArea: () => screen.getPrimaryDisplay().workArea,
+  create: (bounds, onClosed) => {
+    // focus 'keep':出现、更新都不抢焦点(mac = panel 型窗 + focusable:false + showInactive;点它照样会激活 Forsion,见 desktopFloat.ts)
+    const win = createDesktopFloat({
+      anchor: 'top-end', role: 'panel', focus: 'keep', pin: true, movable: true,
+      width: PIP_WIDTH, height: bounds.height, margin: PIP_MARGIN, workArea: screen.getPrimaryDisplay().workArea,
+      title: 'Computer Use', webPreferences: satelliteWebPreferences(),
+    })
+    win.setBounds(bounds)
+    // 系统阴影照 Mini:卡片整块铺满透明窗(没有给页面阴影留边),浮在别的 App 上要有一圈轮廓
+    if (process.platform === 'darwin') win.setHasShadow(true)
+    // 台架里压到普通窗口之下(Mini 那条「台架自己压」的坑:置顶小窗会浮在用户所有 App 上面)
+    if (QUIET_WINDOWS && process.platform === 'darwin') win.setAlwaysOnTop(true, 'normal', -1)
+    pipWindow = win
+    win.on('closed', () => {
+      if (pipWindow === win) pipWindow = null
+      onClosed()
+    })
+    // 整窗重载 / 渲染进程崩了重起:新一代 client 缓存是空的,撤掉旧一代的转发订阅与挂起的停止,让它重订、重新拿首份快照
+    win.webContents.on('did-start-navigation', (_e, _url, isInPlace, isMainFrame) => {
+      if (isMainFrame && !isInPlace && pipWindow === win) pipAgentRelay.clear()
+    })
+    win.webContents.on('render-process-gone', () => { if (pipWindow === win) pipAgentRelay.clear() })
+    loadRendererWith(win, { window: 'pip' })
+    return win
+  },
+  onGone: () => pipAgentRelay.clear(),
+})
 
 function createMiniWindow(opts: MiniOpenOptions | undefined, key: string, restored?: MiniSessionEntry): MiniEntry {
   const wa = screen.getPrimaryDisplay().workArea
@@ -2964,7 +3182,16 @@ async function downloadMarketPackage(id: string, report: (phase: 'resolve' | 'do
   const archive = await downloadZip(candidates, (u, init) => github || u.startsWith(NPM_OFFICIAL) ? net.fetch(u, init) : fetch(u, init), (p) => report('download', p), npm ? GZIP_MAGIC : ZIP_MAGIC)
   const buf = npm ? await npmTarballToZip(archive, info, info.type) : archive
   assertMarketplaceRequirements(info, app.getVersion(), marketPlatform())
-  await checkMarketPackage(buf, await detectMarketType(buf, info.type), app.getVersion(), marketPlatform(), builtinPluginIds())
+  const effType = await detectMarketType(buf, info.type)
+  await checkMarketPackage(buf, effType, app.getVersion(), marketPlatform(), builtinPluginIds())
+  // 第二级内部接口(internals-raw)要这一版过了商店审核才装:手动装和自动更新都经这里(marketInternals.ts)。
+  // 装指定的旧版本时问那一版的详情(服务端按版本快照回 rawApprovedVersion),不拿最新版的放行比。
+  if (effType === 'amadeus-plugin') {
+    await assertInternalsRawApproved(await packageManifest(buf, effType), async () => {
+      const r = await fetch(`${base}/api/market/items/${encodeURIComponent(id)}${version ? `?version=${encodeURIComponent(version)}` : ''}`, { headers: { 'User-Agent': MARKET_UA }, signal: AbortSignal.timeout(30_000) })
+      return r.ok ? ((await r.json()) as { rawApprovedVersion?: string | null }).rawApprovedVersion : null
+    })
+  }
   return { info, buf }
 }
 
@@ -3085,8 +3312,8 @@ app.whenReady().then(async () => {
       })
     })
     // 设备互联 T2(方案 §11.2):内置浏览器打开「经 server 隧道的设备页」时,webview 的文档与子资源
-    // 请求无法自带 Bearer —— 在分区层对**当前云端的隧道前缀**注入 Authorization。绝不走 URL query
-    // (隐私铁律);前缀随 effectiveConfig 刷新,其余站点请求原样放行。
+    // 请求无法自带 Bearer —— 在分区层给**主进程绑定过的那张 webview、那台设备自己的路径**注入 Authorization
+    // (unitAuthScope.ts)。绝不走 URL query(隐私铁律);其余站点 / 没绑定的标签页 / 名册接口原样放行。
     bs.webRequest.onBeforeSendHeaders((details, cb) => {
       const h = details.requestHeaders
       // ⚠️ BROWSER_PARTITION 同时承载内置浏览器的任意第三方页面——按 URL 前缀盲注 = 把凭据发给
@@ -3095,9 +3322,31 @@ app.whenReady().then(async () => {
       // 第三方页发起的一律 cross-site/same-site → 不注入。P2P 代理侧还有同规的 403 兜底。
       const sfs = String(h['Sec-Fetch-Site'] || h['sec-fetch-site'] || '')
       const trustedInitiator = !sfs || sfs === 'none' || sfs === 'same-origin'
-      if (unitTunnelPrefix && details.url.startsWith(unitTunnelPrefix)) {
-        const token = loadTanguCreds().token
-        if (token && trustedInitiator) h.Authorization = `Bearer ${token}`
+      // 设备页:只给主进程绑定过的那张 webview、只给那台设备自己的路径(unitAuthScope.ts;名册接口一概不补)。
+      // 凭据文件每条请求最多读一次,且只在要判的时候读。
+      let creds: ReturnType<typeof loadTanguCreds> | null = null
+      const cr = (): ReturnType<typeof loadTanguCreds> => (creds ??= loadTanguCreds())
+      const wc = details.webContents
+      const isMainFrame = details.resourceType === 'mainFrame'
+      const isGuest = !!wc && !wc.isDestroyed() && wc.getType() === 'webview'
+      const firstMainFrame = isMainFrame && isGuest && !unitGuestNavigated.has(wc!)
+      if (firstMainFrame) unitGuestNavigated.add(wc!)
+      let binding = unitFrames.get(details.webContentsId)
+      // 设备页自己开的窗口:还没绑定的新 webview 第一次主框架请求恰好是许可里的地址 → 绑到同一台
+      if (!binding && firstMainFrame && unitOpenGrants.size()) {
+        const adopted = adoptFromOpenGrant(unitOpenGrants, { url: details.url, isMainFrame, isGuest, alreadyBound: false, firstMainFrame, accountKey: unitAccountKey(cr()), cloudBase: unitCloudBase })
+        if (adopted) {
+          const g = wc!
+          unitFrames.bind(g.id, adopted)
+          g.once('destroyed', () => unitFrames.unbind(g.id))
+          binding = adopted
+        }
+      }
+      if (binding && shouldInjectUnitAuth({ url: details.url, binding, accountKey: unitAccountKey(cr()), cloudBase: unitCloudBase, secFetchSite: sfs })) {
+        const token = cr().token
+        // **替换**页面自己带的(设备网页壳没有主人口令时会自带一枚占位的 `Bearer tunnel`;大小写不同的同名键先删干净)——
+        // 只加不删会让服务端认了占位值回 401,壳收到 401 整页重载,死循环。
+        if (token) replaceAuthorization(h, `Bearer ${token}`)
       } else if (trustedInitiator) {
         // P2P 本机代理(方案 §12):同机制注入 per-proxy 秘密 —— loopback 上别的进程没有它,
         // 打不动对端;表极小(同时开着的 P2P 设备数),线性查无所谓。
@@ -3224,6 +3473,7 @@ app.whenReady().then(async () => {
     broadcast: (channel, payload) => { for (const w of BrowserWindow.getAllWindows()) w.webContents.send(channel, payload) },
     stopSync: () => stopAmadeusSync?.(),
     restartSync: () => restartAmadeusSync?.(),
+    onWillChange: () => { unitFrames.clear(); unitOpenGrants.clear() }, // 换号 / 登出的握手一开始:设备页的绑定与开窗许可全清(之后要看得重新绑)
     log: (m) => console.error(m),
   })
   // Manual checks and background checks share state and a single in-flight run.
@@ -3288,7 +3538,7 @@ app.whenReady().then(async () => {
         const creds = loadTanguCreds()
         return { base: (stored.cloudUrl || creds.cloudUrl || DEFAULT_CLOUD_URL).replace(/\/+$/, ''), token: creds.token || '' }
       },
-      handle: (channel, fn) => { ipcMain.handle(channel, fn); cloudChannels.add(channel) },
+      handle: (channel, fn) => { ipcMain.handle(channel, fn); cloudChannels.add(channel); if (channel === 'units:list') unitsListHandler = fn },
       openExternal: (url) => shell.openExternal(url),
       isTrustedSender,
       log: (m) => console.log(m),
@@ -3354,7 +3604,7 @@ app.whenReady().then(async () => {
     initBundleSwitches(Array.isArray(off) ? off.filter((x): x is string => typeof x === 'string') : [])
     for (const s of bundleSources) if (s.desktop && bundleOff(s.id)) console.log(`[cloud-host] ${s.id} 已在插件页停用,不装载主进程半身`)
     const loaded = await loadBuiltinDesktopEntries({ pluginsRoot: join(forsionHomeDir(), 'plugins'), sources: bundleSources.filter((s) => !bundleOff(s.id)), appVersion: app.getVersion(), host, tempRoot: app.getPath('userData') })
-    if (!loaded.includes('forsion-extend')) cloudChannels.clear()
+    if (!loaded.includes('forsion-extend')) { cloudChannels.clear(); unitsListHandler = null }
   }
   ipcMain.on('cloud:present', (e) => { e.returnValue = [...cloudChannels] })
   // 插件页拨带主进程半身的内置包(Forsion Extend):只改下次开机装不装,回「是否待重启」。别的 id 一律拒(开关名单不收杂项)。
@@ -3680,29 +3930,14 @@ app.whenReady().then(async () => {
   })
   ipcMain.handle('units:hostStatus', () => ({
     ...(unitHub ? unitHub.status() : { running: false, connected: false, unitId: null, lastError: null }),
+    // 新增字段,不改 unitId 的语义:互联关着也尽量认得出本机(这次运行里读到过配对才有;没有 = 不知道)
+    selfUnitId: selfRosterUnitId(),
     webPort: unitWeb?.port ?? null,
     lanUrl: unitLanUrl(),
   }))
-  // LAN 直连探针(v2.1 自动择路):主进程发(渲染层跨源 fetch 会被 CORS 拦),1.2s 封顶。
-  // 只判「是台 unitWeb 且响应 meta」,身份最终由配对流的 6 位码人工比对把关(防 DHCP 换主)。
-  ipcMain.handle('units:probeLan', async (_e, lanUrl: string) => {
-    try {
-      const u = new URL(String(lanUrl))
-      if (u.protocol !== 'http:' && u.protocol !== 'https:') return null
-      const ctrl = new AbortController()
-      const timer = setTimeout(() => ctrl.abort(), 1200)
-      try {
-        const r = await fetch(new URL('/unit/meta', u), { signal: ctrl.signal })
-        if (!r.ok) return null
-        const meta = (await r.json()) as { instanceId?: unknown; name?: unknown }
-        return typeof meta?.instanceId === 'string' ? { instanceId: meta.instanceId, name: String(meta.name || '') } : null
-      } finally {
-        clearTimeout(timer)
-      }
-    } catch {
-      return null
-    }
-  })
+  // LAN 直连探针(v2.1 自动择路;本体在 unitLanProbe.ts):回包带对方报的名册 id 与「是不是本机自己」,
+  // 渲染层据此判「应答的是不是名册里那一行」(unitPanelModel.lanProbeMatches)—— 同一台电脑的旧登记直连地址都一样。
+  ipcMain.handle('units:probeLan', (_e, lanUrl: string) => probeUnitLan(lanUrl, { selfInstanceId: unitSelfInstanceId }))
   // T1 配对设备的回收面(B 侧自己的 UI;无回收的配对不许上线——方案 §11.3)。
   ipcMain.handle('units:pairedList', async () => (await loadConfig()).unitPairedDevices || [])
   ipcMain.handle('units:pairedRemove', async (_e, id: string) => {
@@ -4516,6 +4751,8 @@ app.whenReady().then(async () => {
   // 新同步:切走 1 秒后才冲刷(1 秒内回到本应用任一窗口就不算)
   app.on('browser-window-blur', () => contentFlush.blur())
   app.on('browser-window-focus', () => contentFlush.focus())
+  // 窗口重新拿到焦点转告它的渲染层(设备页的 webview 占着焦点时,宿主页自己的 focus 事件等不来;共享 Unit 的名册复核用)
+  app.on('browser-window-focus', (_e, w) => { if (!w.isDestroyed() && !w.webContents.isDestroyed()) w.webContents.send('window:focused') })
   // 按下快捷键时那扇窗口的截图(附进输入框,同 ChatGPT)。只截这次运行里经手过的窗口(按快捷键 / 列候选时记下的);
   // macOS 由助手截(屏幕录制权限在它身上;没授权就没有图,绝不为此弹框),Windows 用系统自带的窗口截图。截不到 → null,只挂引用。
   ipcMain.handle('appRefs:snapshot', async (e, raw: unknown) => {
@@ -4978,15 +5215,7 @@ app.whenReady().then(async () => {
     const input = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
     if (!isSpaceId(input.id)) return { ok: false, code: 'not_found' }
     const text = (v: unknown, max: number): string => (typeof v === 'string' ? v.slice(0, max) : '')
-    const iconUrl = text(input.iconPng, 8 * 1024 * 1024)
-    // 解码前先读 PNG 头里的宽高:压缩后 1 MB 的图可以解出上 GB 的像素,主进程会被拖死(Codex 评审)。渲染层只画 1024。
-    const iconBuf = iconUrl.startsWith('data:image/png;base64,') ? Buffer.from(iconUrl.slice('data:image/png;base64,'.length), 'base64') : null
-    const sane = !!iconBuf && iconBuf.length > 24 && iconBuf.readUInt32BE(0) === 0x89504e47 && iconBuf.toString('ascii', 12, 16) === 'IHDR'
-      && iconBuf.readUInt32BE(16) <= 2048 && iconBuf.readUInt32BE(20) <= 2048
-    const src = sane && iconBuf ? nativeImage.createFromBuffer(iconBuf) : null
-    const iconPng = src && !src.isEmpty()
-      ? (size: number): Buffer | undefined => src.resize({ width: size, height: size, quality: 'best' }).toPNG()
-      : undefined
+    const iconPng = shortcutIconSource(input.iconPng)
     const result = await createSpaceShortcut({ id: input.id, name: text(input.name, 200) }, {
       isPackaged: app.isPackaged, desktopDir: app.getPath('desktop'), execPath: process.execPath,
       appImage: process.env.APPIMAGE, fallbackName: text(input.fallbackName, 200),
@@ -4996,6 +5225,68 @@ app.whenReady().then(async () => {
     // 这个 Space 的窗此刻开着的话,当场换上任务栏身份(Windows)。
     const live = detachedWindows.get(`sp_${input.id}`)
     if (result.ok && live && !live.isDestroyed() && process.platform === 'win32') applySpaceTaskbarIdentity(live, input.id)
+    return result
+  })
+  // 设备「添加到桌面」(账号面板 Unit 段的右键)。渲染层只给:设备 id、名字洗空时的本地化兜底名、画好的图标;
+  // id 过正则且必须在此刻读到的名册里,**名字取名册的**(unitShortcut.resolveUnitShortcutTarget)。快捷方式里只有 id。
+  // 设备的 Unit 窗:账号面板 Unit 段的「在新窗口打开」(只主窗)。一台设备一扇,再开 = 叫到前面;离线 / 不在名册由窗里自己画。
+  // 共享过来的 Unit 在面板里没有开窗入口;万一拿它的 id 开了,窗里只按自己名下的名册核 → 画「不在当前账号名下」、不挂页面(e2e:unitwindow SH9 钉着)。
+  ipcMain.handle('units:openWindow', (e, raw: unknown): { ok: boolean } => {
+    if (!isTrustedSender(e) || e.sender !== mainWindow?.webContents || !isUnitId(raw)) return { ok: false }
+    createDetachedWindow({ unit: raw })
+    return { ok: true }
+  })
+  // Unit 窗里的「打开 Forsion」(没登录 / 设备不在名下):把主窗叫出来,不带参数。
+  ipcMain.on('units:showMain', (e) => { if (isTrustedSender(e)) showMainWindow() })
+  // 设备页 webview 的绑定(unitAuthScope.ts):渲染层先挂一张空白 webview,报上它的 webContentsId 和要看的设备 id;
+  // 主进程核发起方(主窗,或这台设备自己的 Unit 窗)、核 webview 确实挂在发起方下面且在设备页分区里、
+  // id 过正则且在此刻读到的名册里 —— 都过了才绑,之后这张 webview 只有这台设备自己的路径会被补登录头。
+  ipcMain.handle('units:bindFrame', async (e, raw: unknown) => {
+    const input = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
+    const unitId = input.unitId
+    const wcId = typeof input.webContentsId === 'number' && Number.isSafeInteger(input.webContentsId) ? input.webContentsId : -1
+    const guest = wcId >= 0 ? webContents.fromId(wcId) : undefined
+    const owner = typeof unitId === 'string' ? detachedWindows.get(`un_${unitId}`) : undefined
+    const fromMain = !!mainWindow && e.sender === mainWindow.webContents
+    const fromOwner = fromMain || (!!owner && !owner.isDestroyed() && e.sender === owner.webContents)
+    const guestOk = (): boolean => !!guest && !guest.isDestroyed() && guest.getType() === 'webview'
+      && guest.hostWebContents === e.sender && guest.session === session.fromPartition(BROWSER_PARTITION)
+    return handleUnitFrameBind(unitId, {
+      generation: () => unitFrames.generation(),
+      trusted: isTrustedSender(e) && fromOwner && guestOk(),
+      fromMain,
+      guestAlive: guestOk,
+      accountKey: unitAccountKey,
+      cloudBase: () => unitCloudBase,
+      readRoster: () => readUnitRosterWithShared(e),
+      bind: (b) => {
+        const g = guest!
+        if (!unitFrames.get(g.id)) g.once('destroyed', () => unitFrames.unbind(g.id))
+        unitFrames.bind(g.id, b)
+      },
+    })
+  })
+  ipcMain.handle('units:addToDesktop', async (e, raw: unknown): Promise<UnitShortcutResult> => {
+    const input = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
+    const result = await handleUnitAddToDesktop(raw, {
+      trusted: isTrustedSender(e) && e.sender === mainWindow?.webContents,
+      // 账号身份(同 forsionAccountId);令牌不是 JWT 形状解不出用户时,退回按令牌本身认(登出 = 没令牌 = null)
+      accountKey: () => {
+        const c = loadTanguCreds()
+        const token = c.token || ''
+        return forsionAccountId(c.cloudUrl || '', token) ?? (token ? `token:${createHash('sha256').update(token).digest('hex')}` : null)
+      },
+      readRoster: () => readUnitRoster(e),
+      create: (unit, stillCurrent) => createWindowShortcut(UNIT_SHORTCUT, { id: unit.id, name: unit.name }, {
+        isPackaged: app.isPackaged, desktopDir: app.getPath('desktop'), execPath: process.execPath,
+        appImage: process.env.APPIMAGE, fallbackName: typeof input.fallbackName === 'string' ? input.fallbackName.slice(0, 200) : '',
+        iconDir: unitShortcutDir(), iconPng: shortcutIconSource(input.iconPng), stillCurrent,
+        writeShortcutLink: process.platform === 'win32' ? (p, o) => shell.writeShortcutLink(p, 'create', o) : undefined,
+      }),
+    })
+    const id = typeof input.id === 'string' ? input.id : ''
+    const live = result.ok ? detachedWindows.get(`un_${id}`) : undefined
+    if (live && !live.isDestroyed() && process.platform === 'win32') applyShortcutTaskbarIdentity(live, UNIT_SHORTCUT, id)
     return result
   })
   // invoke:结果交回调用方(满了由它提示用户,不静默失败)。
@@ -5164,6 +5455,27 @@ app.whenReady().then(async () => {
     if (a) uiAppearance = a
   })
   ipcMain.on('window:closeSelf', (e) => BrowserWindow.fromWebContents(e.sender)?.close())
+  // Computer Use 悬浮小画面(宿主私有桥;插件作者手册里没有它):只响应 open(),插件不在 → false、不上屏
+  ipcMain.handle('computerUsePip:open', (e) => (isTrustedSender(e) && !computerUsePip.owns(e.sender.id) ? computerUsePip.open() : false))
+  ipcMain.handle('computerUsePip:close', (e) => { if (isTrustedSender(e)) computerUsePip.close() })
+  ipcMain.handle('computerUsePip:isOpen', (e) => isTrustedSender(e) && computerUsePip.isOpen())
+  ipcMain.on('computerUsePip:ready', (e, ok: unknown, height: unknown) => { if (isTrustedSender(e)) computerUsePip.ready(e.sender.id, ok === true, height) })
+  ipcMain.on('computerUsePip:resize', (e, height: unknown) => { if (isTrustedSender(e)) computerUsePip.resize(e.sender.id, height) })
+  // pip 窗里的 ctx.tangu.stop / agentStatus:转给真正跑着这一轮的窗口(runningBySession 每个渲染进程一份)
+  ipcMain.handle('pipAgent:stop', (e, target: unknown) => (isTrustedSender(e) && computerUsePip.owns(e.sender.id) ? pipAgentRelay.stop(target) : false))
+  ipcMain.on('pipAgent:watch', (e, key: unknown, target: unknown) => { if (isTrustedSender(e) && computerUsePip.owns(e.sender.id)) pipAgentRelay.watch(key, target) })
+  ipcMain.on('pipAgent:unwatch', (e, key: unknown) => { if (isTrustedSender(e) && computerUsePip.owns(e.sender.id)) pipAgentRelay.unwatch(key) })
+  ipcMain.on('pipAgent:hostReady', (e) => {
+    if (!isTrustedSender(e) || computerUsePip.owns(e.sender.id)) return
+    const id = e.sender.id
+    if (!pipAgentHostIds.has(id)) {
+      pipAgentHostIds.add(id)
+      e.sender.once('destroyed', () => { pipAgentHostIds.delete(id); pipAgentRelay.hostGone(id) })
+    }
+    pipAgentRelay.hostReady(id)
+  })
+  ipcMain.on('pipAgent:reply', (e, id: unknown, value: unknown) => { if (pipAgentHostIds.has(e.sender.id)) pipAgentRelay.reply(e.sender.id, id, value) })
+  ipcMain.on('pipAgent:hostStatus', (e, key: unknown, status: unknown) => { if (pipAgentHostIds.has(e.sender.id)) pipAgentRelay.status(e.sender.id, key, status) })
   // 系统浏览器兜底(内置浏览器关掉 / mini 窗 / 用户点「用系统浏览器打开」);只放 http(s),
   // 别的 scheme 经 openExternal 等于让页面唤起任意本机协议处理器。scheme 用 URL 解析比对,
   // 不靠正则(`https:/\evil` 之类畸形串别指望正则拿捏)。
@@ -5332,15 +5644,24 @@ app.whenReady().then(async () => {
     app.on('browser-window-focus', (_e, w) => { if (w !== autoMiniWindow) lastFocusedWindow = w; miniAutoPanel?.refresh() })
   }
   startupWindowGate = false
-  hideMainOnLaunch = pendingSpaceWindows.length > 0 && !mainRequested
+  hideMainOnLaunch = (pendingSpaceWindows.length > 0 || pendingUnitWindows.length > 0) && !mainRequested
   createWindow()
   if (!SANDBOX) restoreMiniWindows()
-  if (SANDBOX) startSandboxChild(SANDBOX, { getWindow: () => mainWindow, quit: () => { isQuitting = true; app.quit() }, log: (m) => console.log(m) })
+  if (SANDBOX) {
+    startSandboxChild(SANDBOX, {
+      getWindow: () => mainWindow,
+      // 设置是独立的浮动面板(不是主窗的子窗):agent 的 settings 动作开它、按 window 选它动手
+      getSettingsWindow: () => floatingWindows.get('settings') ?? null,
+      quit: () => { isQuitting = true; app.quit() },
+      log: (m) => console.log(m),
+    })
+  }
   // 恢复上次退出时的独立窗(位置/尺寸 + 各窗自恢复布局);之后再开排着的 Space 快捷方式窗 —— 上次没关的同一扇
   // 已经按原位置恢复了,createDetachedWindow 按 sp_<id> 去重,只是叫到前面。
   void restoreDetachedWindows().catch((e) => console.error('[win] restore detached failed:', e)).finally(() => {
     spaceWindowsLive = true
     for (const id of pendingSpaceWindows.splice(0)) createDetachedWindow({ space: id })
+    for (const unit of pendingUnitWindows.splice(0)) createDetachedWindow({ unit })
   })
   // 系统托盘 / mac 菜单栏图标:显示窗口 / 检查更新 / 退出。
   const ch = computerHistory
@@ -5436,10 +5757,13 @@ async function installFromSandbox(): Promise<{ ok: boolean; pluginId?: string; e
   // ⚠️ 必须挂父窗(同 confirmPair):无父的 showMessageBox 在 mac 上冻住主循环;拿不到窗就不装
   const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null
   if (!win) return { ok: false, cancelled: true }
+  // 装好后 ctx.net 能连哪些域名:确认框里如实列出(读的是将要拷走的那份 manifest)
+  const network = st.dir ? (await readSandboxManifest(st.dir).catch(() => null))?.network : undefined
   const { response } = await dialog.showMessageBox(win, {
     type: 'question', title: mt('main.pluginSandbox.installTitle'),
     message: mt('main.pluginSandbox.installMessage', { name: st.name ?? '', version: st.version ?? '' }),
-    detail: mt('main.pluginSandbox.installDetail', { dir: st.dir ?? '' }),
+    detail: mt('main.pluginSandbox.installDetail', { dir: st.dir ?? '' })
+      + (network?.length ? `\n\n${mt('main.pluginSandbox.installNetwork', { domains: network.join(', ') })}` : ''),
     buttons: [mt('main.pluginSandbox.install'), mt('main.pluginSandbox.cancel')], defaultId: 0, cancelId: 1, noLink: true,
   })
   if (response !== 0) return { ok: false, cancelled: true }
@@ -5524,12 +5848,19 @@ app.on('before-quit', (e) => {
     if (win && !win.isDestroyed()) state.bounds = win.getBounds()
   }
   saveDetachedState()
+  // Unit 窗清单同理:同步记下此刻的位置大小再存一次(定时保存可能还没赶上;不可写就不写,见 saveUnitWindowState)
+  for (const state of persistedUnitWindows) {
+    const win = detachedWindows.get(`un_${state.unit}`)
+    if (win && !win.isDestroyed()) state.bounds = win.getBounds()
+  }
+  saveUnitWindowState()
   for (const m of minis.values()) rememberMiniLayout(m) // 开着的 Mini 也记下(关窗事件在退出时不一定赶得上落盘)
   saveMiniLayouts()
   saveOpenMiniWindows()
   void pluginSandbox?.dispose() // 沙箱跟着退(它那头也会因控制通道断开自己退)
   globalShortcut.unregisterAll() // 释放 mini 全局快捷键
   miniAutoPanel?.stop(); miniAutoPanel = null
+  computerUsePip.dispose() // 悬浮小画面跟着退,下次启动也不会回来(它从不落盘)
   approvalDelivery.stop() // P1-K3
   remoteSafety.dispose() // P1-K2:断活动流、注销急停热键、放掉强制防休眠(锁文件原样留着 = 锁跨重启)
   flushAllNoteEdits() // 活动日志:5 分钟合并窗口内未落盘的 note.edit 冲出去

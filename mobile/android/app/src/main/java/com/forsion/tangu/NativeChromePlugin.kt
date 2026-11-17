@@ -60,11 +60,20 @@ import kotlin.math.roundToInt
  * `setState` with one that sets the margins described above, so nothing is padded twice.
  * Actions are emitted as `action` events; JS owns all state. A page reload removes the chrome (the next page
  * pushes state again if it has a shell).
+ * Notification banner (2026-11-15, NativeBanner.kt): a third view at gravity TOP, raised above the bar and the dock, that
+ * draws the one card JS hands it (`setBanner`) under the status bar — over the capsule row and the detail level's solid
+ * strip, which the page cannot cover. Gestures come back as `banner` events ({ id, kind: "action" | "dismiss" }); the
+ * dwell, queue and throttle are JS's. Away from the card the view takes no touches (nothing there has a pointer input).
  */
+/** The banner's elevation (dp): above the bar and the dock, which stay at 0 and are drawn in the order they were added. */
+private const val BANNER_Z_DP = 16f
+
 @CapacitorPlugin(name = "NativeChrome")
 class NativeChromePlugin : Plugin() {
     private var bar: ComposeView? = null
     private var spaceBar: ComposeView? = null
+    private var bannerView: ComposeView? = null
+    private val banner = mutableStateOf<BannerSpec?>(null)
     private var imeVisible = false
     private var imeBottom = 0
     /** The keyboard is sliding (in, out, or to another height). While it is coming up or growing, the WebView's bottom
@@ -136,6 +145,19 @@ class NativeChromePlugin : Plugin() {
                 isAppearanceLightNavigationBars = !parsed.theme.dark
             }
             layout()
+            call.resolve()
+        }
+    }
+
+    /** `{ banner: {...} | null }`: the notification banner on screen (see NativeBanner.kt). */
+    @PluginMethod
+    fun setBanner(call: PluginCall) {
+        val parsed = try { BannerSpec.parse(call.data) } catch (e: Exception) {
+            call.reject("Invalid banner", "INVALID_BANNER"); return
+        }
+        activity.runOnUiThread {
+            if (parsed != null) attachBanner()
+            banner.value = parsed
             call.resolve()
         }
     }
@@ -233,6 +255,33 @@ class NativeChromePlugin : Plugin() {
             ViewCompat.requestApplyInsets(view)
         }
         if (!parentHooked) { parentHooked = true; (webView.parent as View).addOnLayoutChangeListener(parentListener) }
+    }
+
+    /**
+     * The banner's view: full width at the top, raised above the bar and the dock (both at z 0, added before or after it).
+     * attach() first: on Android 15 the status bar's height comes from the insets listener it installs.
+     */
+    private fun attachBanner() {
+        attach()
+        if (bannerView != null) return
+        val parent = bridge.webView.parent as ViewGroup
+        val view = ComposeView(activity)
+        view.setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnDetachedFromWindow)
+        view.setContent {
+            NativeBanner(
+                banner.value, insets.value.top,
+                onAction = { id -> emitBanner(id, "action") }, onDismiss = { id -> emitBanner(id, "dismiss") },
+            )
+        }
+        view.z = BANNER_Z_DP * activity.resources.displayMetrics.density
+        val params = CoordinatorLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        params.gravity = Gravity.TOP
+        parent.addView(view, params)
+        bannerView = view
+    }
+
+    private fun emitBanner(id: String, kind: String) {
+        notifyListeners("banner", JSObject().apply { put("id", id); put("kind", kind) })
     }
 
     /** Records the keyboard's state; true when it changed. */
@@ -430,6 +479,9 @@ class NativeChromePlugin : Plugin() {
     private fun teardown() {
         dockMotion = null
         state.value = null
+        banner.value = null
+        bannerView?.let { view -> (view.parent as? ViewGroup)?.removeView(view); view.disposeComposition() }
+        bannerView = null
         bar?.let { view -> (view.parent as? ViewGroup)?.removeView(view); view.disposeComposition() }
         bar = null
         spaceBar?.let { view -> (view.parent as? ViewGroup)?.removeView(view); view.disposeComposition() }
