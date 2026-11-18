@@ -989,8 +989,10 @@ export interface AmadeusApi {
   onFileExternalChange?(cb: (filePath: string) => void): () => void
   /** 读某插件的私有 JSON blob(不存在 → null)。可选:非桌面宿主缺位,ctx.loadData 降级 null。 */
   readPluginData?(pluginId: string): Promise<string | null>
-  /** 原子写某插件的私有 JSON blob。可选:非桌面宿主缺位,ctx.saveData 静默 no-op。 */
-  writePluginData?(pluginId: string, text: string): Promise<void>
+  /** 原子写某插件的私有 JSON blob。可选:非桌面宿主缺位,ctx.saveData 静默 no-op。
+   *  opts.backup:写之前先把现有那份另存成 <id>.json.replaced-<时间>(拷不出来就不写、抛出去);
+   *  同步拉云端那份盖「读失败后按默认值存下的」本机数据时用。 */
+  writePluginData?(pluginId: string, text: string, opts?: { backup?: boolean }): Promise<void>
   /** Discover user plugins under the vault's .amadeus/plugins/ folder. */
   listPlugins(): Promise<ExternalPluginSource[]>
   /** Open the plugins folder in the OS file manager (creating it if needed). dir = one plugin's directory name:

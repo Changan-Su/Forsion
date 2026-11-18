@@ -1943,7 +1943,9 @@ export const usePluginStore = create<PluginState>((set, get) => {
       ? {
           read: () => readLocalPluginData(pluginId, () => amadeus.readPluginData!(pluginId)),
           // 同步拉下来的云端那份不是合法 JSON(老版本可能把读坏的本机文件推上去过)→ 不写,本机这份不被它盖掉
-          write: (text) => isJsonText(text) ? amadeus.writePluginData!(pluginId, text) : Promise.reject(new Error(`Refusing to store non-JSON data for plugin "${pluginId}"`)),
+          write: (text, opts) => !isJsonText(text)
+            ? Promise.reject(new Error(`Refusing to store non-JSON data for plugin "${pluginId}"`))
+            : opts?.backup ? amadeus.writePluginData!(pluginId, text, { backup: true }) : amadeus.writePluginData!(pluginId, text),
         }
       : null
     const hostAccount = hostTangu()?.account ?? desktopAccount(hostTangu())
@@ -2347,21 +2349,18 @@ export const usePluginStore = create<PluginState>((set, get) => {
     saveData: async (value) => {
       if (!amadeus?.writePluginData) return
       const p = get().plugins.find((o) => o.id === pluginId)
-      // 上一次 loadData 读不出来(插件接住错误照样存):这次写不算本机的编辑,不推、不在冲突里赢过云端(见 notePluginDataUnverifiedWrite)
+      // 上一次 loadData 读不出来(插件接住错误照样存):这次写不算本机的编辑,不推、不在冲突里赢过云端(见 notePluginDataUnverifiedWrite);
+      // 这个记号落进同步状态,之后的保存(哪怕之后读成功了、重启了)在和云端对上之前都不推
       const unverified = lastLoadUnreadable
       // 先记这次编辑、再写本机(拉取落盘前核对代号);声明了 syncData 就记,同步关着也记 —— 重新打开时认得出本机更新
-      let undoEdit: (() => void) | undefined
-      if (p?.syncData) {
-        if (unverified) notePluginDataUnverifiedWrite(pluginId)
-        else undoEdit = notePluginDataEdit(pluginId)
-      }
+      const undoEdit = p?.syncData ? (unverified ? notePluginDataUnverifiedWrite(pluginId) : notePluginDataEdit(pluginId)) : undefined
       try {
         await amadeus.writePluginData(pluginId, JSON.stringify(value ?? null))
       } catch (e) {
-        undoEdit?.() // 没写成:撤掉「本机更新」的记号
+        undoEdit?.() // 没写成:撤掉这次记下的记号,放回原来的
         throw e
       }
-      if (!unverified && localData && pluginDataSyncOn(p)) void pushPluginData(pluginId, localData)
+      if (localData && pluginDataSyncOn(p)) void pushPluginData(pluginId, localData) // 本机还没和云端对过时推送自己不推
     },
     // 通用宿主 UI 原语。Floating TOC 是非接管式挂载:插件继续拥有正文 DOM,宿主只在 shell 上叠一层。
     // 与 table/dashboard 一样动态 import 破环;形态错误同步抛,让插件能当场走自己的降级 UI。

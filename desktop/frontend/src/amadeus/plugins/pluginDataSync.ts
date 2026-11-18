@@ -9,7 +9,7 @@
  * 服务端只存不读(server microserver/plugin-data),这份内容不进任何模型上下文。
  */
 
-import { isPluginDataUnreadable } from './pluginLocalData'
+import { isJsonText, isPluginDataUnreadable } from './pluginLocalData'
 
 const LOAD_WAIT_MS = 3000
 const INDEX_TTL_MS = 60_000
@@ -21,14 +21,20 @@ export const PLUGIN_SYNC_ALL_OFF_KEY = 'forsion.pluginSync.off'
 /**
  * v = 本机这份对应的云端版本(0 = 没对上过);owner = 对上的是哪个账号;
  * gen = 本机保存的代号(每存一次 +1,同一毫秒存两次也分得开);dirty = 最近一次还没推上去的保存的编辑时刻。
+ * unverified = 本机这份是读失败之后插件按默认值存下来的、还没和云端对过:之后的保存都不记 dirty、不推,
+ *   下一次连上云端时云端那份赢(宿主先另存本机这份),云端没有才按第一次上传。落在这里而不只在内存:
+ *   之后离线读成功、或者重启,都不能把这份默认值洗成「本机更新」在冲突里盖掉云端那份完好的。
  */
-interface SyncState { v: number; owner?: string; gen: number; dirty?: number }
+interface SyncState { v: number; owner?: string; gen: number; dirty?: number; unverified?: true }
 
 function readState(id: string): SyncState {
   try {
     const s = JSON.parse(localStorage.getItem(stateKey(id)) || 'null')
     if (s && Number.isInteger(s.v)) {
-      return { v: s.v, gen: Number.isInteger(s.gen) ? s.gen : 0, ...(typeof s.owner === 'string' ? { owner: s.owner } : {}), ...(typeof s.dirty === 'number' ? { dirty: s.dirty } : {}) }
+      return {
+        v: s.v, gen: Number.isInteger(s.gen) ? s.gen : 0, ...(typeof s.owner === 'string' ? { owner: s.owner } : {}),
+        ...(typeof s.dirty === 'number' ? { dirty: s.dirty } : {}), ...(s.unverified === true ? { unverified: true as const } : {}),
+      }
     }
   } catch { /* 坏了当没对过 */ }
   return { v: 0, gen: 0 }
@@ -99,8 +105,9 @@ function remoteIndex(): Promise<Index | null> {
 }
 
 /** 本机那份。read:没写过 → null;读不出来 → 抛 PluginDataUnreadableError(pluginLocalData.ts),
- *  同步绝不把读不出来当「本机没有」去拉云端盖它,也不把它推上去。 */
-export interface LocalData { read(): Promise<string | null>; write(text: string): Promise<void> }
+ *  同步绝不把读不出来当「本机没有」去拉云端盖它,也不把它推上去。
+ *  write 的 backup:宿主写之前先把本机现有那份另存(拷不出来就不写、抛出去);拉云端盖 unverified 的本机那份时用。 */
+export interface LocalData { read(): Promise<string | null>; write(text: string, opts?: { backup?: boolean }): Promise<void> }
 
 const chains = new Map<string, Promise<void>>()
 
@@ -110,6 +117,7 @@ export function pushPluginData(id: string, local: LocalData): Promise<void> {
     for (let attempt = 0; attempt < 2; attempt++) {
       const st = readState(id)
       if (st.dirty === undefined) return // 没有待推的编辑(已对上;或换了账号,本机这份不归这个账号)
+      if (st.unverified) return // 本机这份还没和云端对过(见 SyncState):只在 loadSyncedPluginData 里对上之后推
       // 本机读不出来(坏文件 / 读错误,local.read 抛 PluginDataUnreadableError):不推半截内容、不改状态,dirty 留着。
       // 调用方都是 `void pushPluginData(…)`,这里绝不能 reject。
       let text: string | null
@@ -162,10 +170,16 @@ export function dropPluginCloudData(id: string): Promise<void> {
  */
 export function notePluginDataEdit(id: string): () => void {
   const st = readState(id)
+  // 本机这份还没和云端对过(unverified):只记代号(拉取照样核对),不记「本机更新」—— 不推、不在冲突里赢过云端
+  if (st.unverified) {
+    writeState(id, { ...st, gen: st.gen + 1 })
+    return () => {}
+  }
   const stamp = Date.now()
   writeState(id, { ...st, gen: st.gen + 1, dirty: stamp })
   // 撤回:本机这次没写成(宿主拒写 / 写失败)→ 不能留着一个「本机更新」的记号,否则文件恢复后它会把旧内容推上去盖掉云端。
   // 只撤自己记的那一下(之后又有别的保存就不动)。
+  // ponytail: 两次重叠的保存都没写成时,后一次撤回会把前一次(同样没写成)的记号放回来;要精确得按次记,先不做
   return () => {
     const cur = readState(id)
     if (cur.gen !== st.gen + 1 || cur.dirty !== stamp) return
@@ -176,31 +190,41 @@ export function notePluginDataEdit(id: string): () => void {
 
 /**
  * 本机那份读不出来(且没能从云端恢复)之后,插件仍然 saveData:这次写**不算本机的编辑** —— 不记 dirty、不推,
- * 对上的云端版本清零。这样下次连得上云端时云端那份赢(拉下来盖掉这份按默认值起来的数据),云端没有就按第一次上传。
- * 否则这次写会在 409 里以「本机编辑更晚」赢过云端,把云端唯一完好的那份盖掉(服务端只留一版)。
+ * 对上的云端版本清零,记上 unverified(见 SyncState)。这样下次连得上云端时云端那份赢(宿主先另存这份按默认值起来的数据),
+ * 云端没有就按第一次上传。否则这次写会在 409 里以「本机编辑更晚」赢过云端,把云端唯一完好的那份盖掉(服务端只留一版)。
+ * 写之前调;返回撤回:宿主拒写(原件拷不出来)时原样放回之前的版本、dirty —— 原件还在,它没推的编辑不能就此作废。
  */
-export function notePluginDataUnverifiedWrite(id: string): void {
+export function notePluginDataUnverifiedWrite(id: string): () => void {
   const st = readState(id)
-  writeState(id, { v: 0, gen: st.gen + 1, ...(st.owner ? { owner: st.owner } : {}) })
+  const gen = st.gen + 1
+  writeState(id, { v: 0, gen, ...(st.owner ? { owner: st.owner } : {}), unverified: true })
+  return () => {
+    const cur = readState(id)
+    if (cur.gen !== gen || !cur.unverified) return // 之后又有别的保存 / 对账:不动
+    writeState(id, { ...st, gen })
+  }
 }
 
 /**
  * 本机内容坏了(读得出字节、不是合法 JSON)且云端有一份:拉云端那份写回本机。写之前宿主先把坏的本机原件另存
  * (桌面 <id>.json.unreadable-<时间>、手机同名槽备份;拷不出原件就拒写)。本机没推的那次编辑在坏文件里,
- * 已经读不出来了,云端那份是现存最好的;dirty 一并清掉。拉不到 / 换了账号 / 写不进去 → null,调用方照实报读失败。
+ * 已经读不出来了,云端那份是现存最好的;dirty 一并清掉。拉不到 / 换了账号 / 写不进去 → undefined,调用方照实报读失败。
+ * gen0 = 读本机**之前**的代号:读完到写云端那份之间插件又存过(别的视图),就不拿云端的盖它,重读本机。
  */
-async function restoreFromCloud(id: string, local: LocalData): Promise<string | null> {
+async function restoreFromCloud(id: string, local: LocalData, gen0: number): Promise<string | null | undefined> {
   const idx = await remoteIndex()
-  if (!idx) return null
+  if (!idx) return undefined
   const st = readState(id)
-  if (st.owner && st.owner !== idx.owner) return null // 云端那份属于另一个账号
+  if (st.owner && st.owner !== idx.owner) return undefined // 云端那份属于另一个账号
   const r = idx.items[id]
-  if (!r || !Number.isInteger(r.version)) return null
+  if (!r || !Number.isInteger(r.version)) return undefined
   const got = await within(cloud(itemPath(id)), LOAD_WAIT_MS)
-  if (got?.status !== 200 || typeof got.json?.value !== 'string' || !Number.isInteger(got.json?.version)) return null
-  if (readState(id).gen !== st.gen) return null // 等云端时插件又存了:不拿云端的盖它
-  try { await local.write(got.json.value) } catch { return null }
-  writeState(id, { v: got.json.version, owner: idx.owner, gen: st.gen })
+  if (got?.status !== 200 || typeof got.json?.value !== 'string' || !Number.isInteger(got.json?.version)) return undefined
+  // 等云端时插件又存了(那次写让本机读得出来了):不拿云端的盖它,回本机刚存的;还是读不出来就照实抛
+  if (readState(id).gen !== gen0) return local.read()
+  try { await local.write(got.json.value) } catch { return undefined }
+  const cur = readState(id) // 写盘这段时间里又存了一次:那次的记号留着(同拉取那条路)
+  writeState(id, cur.gen === gen0 ? { v: got.json.version, owner: idx.owner, gen: gen0 } : { ...cur, v: got.json.version, owner: idx.owner })
   return got.json.value
 }
 
@@ -208,19 +232,22 @@ async function restoreFromCloud(id: string, local: LocalData): Promise<string | 
 export async function loadSyncedPluginData(id: string, local: LocalData): Promise<string | null> {
   // 本机读不出来绝不当「本机没有」往下对账。内容坏了(invalid-json)且云端有完好的一份 → 拉下来恢复;
   // 读出错(read-failed:本机那份可能是好的、还比云端新)或恢复不成 → 照实抛。
+  const gen0 = readState(id).gen
   let mine: string | null
   try {
     mine = await local.read()
   } catch (e) {
     if (isPluginDataUnreadable(e) && e.reason === 'invalid-json') {
-      const restored = await restoreFromCloud(id, local)
-      if (restored != null) return restored
+      const restored = await restoreFromCloud(id, local, gen0)
+      if (restored !== undefined) return restored
     }
     throw e
   }
   const idx = await remoteIndex()
-  if (!idx) return mine
+  if (!idx) return mine // 连不上:unverified 记号留着,下次再对
   let st = readState(id)
+  // 本机这份还没和云端对过(见 SyncState):云端有就拉下来盖它(宿主先另存),没有才按第一次上传。换账号会清掉状态,先记下来
+  const tainted = st.unverified === true
   const r = idx.items[id]
   const push = () => { void pushPluginData(id, local) }
   let mustPull = false
@@ -236,19 +263,27 @@ export async function loadSyncedPluginData(id: string, local: LocalData): Promis
     st = { ...st, owner: idx.owner }
     writeState(id, st)
   }
+  // 云端还没有(或被清掉了):按第一次上传,本机这份记作一次待推的编辑。unverified 到这里就对上了(本机这份是仅有的一份)
+  const firstUpload = (): string | null => {
+    const { unverified, ...cur } = readState(id)
+    if (mine != null) { writeState(id, { ...cur, v: 0, dirty: cur.dirty ?? Date.now() }); push() } else if (unverified) writeState(id, cur)
+    return mine
+  }
   if (!mustPull) {
-    if (!r || !Number.isInteger(r.version)) { // 云端还没有(或被清掉了):按第一次上传,本机这份记作一次待推的编辑
-      if (mine != null) { writeState(id, { ...st, v: 0, dirty: st.dirty ?? Date.now() }); push() }
-      return mine
+    if (!r || !Number.isInteger(r.version)) return firstUpload()
+    if (!tainted) {
+      if (r.version <= st.v) { if (st.dirty !== undefined) push(); return mine } // 本机不比云端旧
+      if (mine != null && st.dirty !== undefined && st.dirty > editedAt(r)) { push(); return mine } // 本机没推的那次编辑更晚
     }
-    if (r.version <= st.v) { if (st.dirty !== undefined) push(); return mine } // 本机不比云端旧
-    if (mine != null && st.dirty !== undefined && st.dirty > editedAt(r)) { push(); return mine } // 本机没推的那次编辑更晚
   }
   const got = await within(cloud(itemPath(id)), LOAD_WAIT_MS)
   if (got?.status !== 200 || typeof got.json?.value !== 'string' || !Number.isInteger(got.json?.version)) return mine
   // 等云端的这段时间里插件又存了(代号变了):本机那次更新,不拿云端的盖它,交给推送去对账
   if (readState(id).gen !== st.gen) { push(); return local.read() }
-  await local.write(got.json.value)
+  // 本机还没对过、云端那份本身坏了(不是合法 JSON,写不进本机):当云端没有,推本机这份 —— 否则每次都拉不成、记号永远清不掉
+  // (换了账号时状态已经清过、没有记号:照旧,不把上一个账号的本机这份推进新账号)
+  if (readState(id).unverified && !isJsonText(got.json.value)) return firstUpload()
+  await (tainted ? local.write(got.json.value, { backup: true }) : local.write(got.json.value))
   const cur = readState(id) // 写盘这段时间里又存了一次:那次的 dirty 留着,以拉到的版本为基去推
   writeState(id, cur.gen === st.gen ? { v: got.json.version, owner: idx.owner, gen: st.gen } : { ...cur, v: got.json.version, owner: idx.owner })
   return got.json.value

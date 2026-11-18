@@ -4,7 +4,9 @@
  *  ③ 零字节 / 半截 JSON → 原文照回(由渲染层 pluginLocalData 判成读失败),但记下来;
  *  ④ 读到坏内容之后插件仍要写 → 先把原件另存成 <id>.json.unreadable-<时间>,再写;读成功过的不另存;
  *  ⑤ 读出错之后连原件都拷不出来 → 拒绝这次写,原件不动;
- *  ⑥ 记号不被之后别处的成功读取清掉(拿到读失败的插件手里仍是默认值);⑦⑧ 同一个文件的并发写排队,临时文件 / 备份名不撞。
+ *  ⑥ 记号不被之后别处的成功读取清掉(拿到读失败的插件手里仍是默认值);⑦⑧ 同一个文件的并发写排队,临时文件 / 备份名不撞;
+ *  ⑨ 渲染层要求先另存(同步拉云端那份盖「读失败后按默认值存下的」本机数据)→ 现有那份另存成 <id>.json.replaced-<时间>;
+ *     没有现有那份就直接写;拷不出来 → 拒写,原件不动。
  * 负对照:把 pluginDataRead 改回 catch 一律 null → ② 红;去掉写之前的另存 → ④ 红;另存失败照写 → ⑤ 红;
  *  成功读取清记号 → ⑥ 红;写不排队 → ⑦ 或 ⑧ 红(看是否撞在同一毫秒)。
  */
@@ -32,7 +34,7 @@ vi.mock('chokidar', () => ({ default: { watch: () => ({ on: vi.fn().mockReturnTh
 
 const invoke = (channel: string, ...args: unknown[]) => env.handlers.get(channel)!({ sender: { id: 1 } }, ...args)
 const read = (id: string) => invoke('plugins:data-read', id) as Promise<string | null>
-const write = (id: string, text: string) => invoke('plugins:data-write', id, text) as Promise<void>
+const write = (id: string, text: string, opts?: { backup?: boolean }) => invoke('plugins:data-write', id, text, opts) as Promise<void>
 const dataDir = () => path.join(env.root, 'app-data', 'plugins-data')
 const backups = async (id: string) => (await fs.readdir(dataDir())).filter((n) => n.startsWith(`${id}.json.unreadable-`))
 let stop: (() => Promise<void>) | undefined
@@ -124,4 +126,24 @@ it('⑧ 读到坏内容后并发写两次:两次都写成(备份名不撞),原�
   expect(saved).toHaveLength(1)
   expect(await fs.readFile(path.join(dataDir(), saved[0]), 'utf8')).toBe('{"half":')
   expect(await read('demo')).toBe('{"a":2}')
+})
+
+it('⑨ 要求先另存 → 现有那份另存成 .replaced-<时间> 再写;没有现有那份直接写;拷不出来就拒写', async () => {
+  const target = path.join(dataDir(), 'demo.json')
+  await fs.writeFile(target, '{"defaults":1}')
+  await write('demo', '{"from":"cloud"}', { backup: true })
+  const replaced = (await fs.readdir(dataDir())).filter((n) => n.startsWith('demo.json.replaced-'))
+  expect(replaced).toHaveLength(1)
+  expect(await fs.readFile(path.join(dataDir(), replaced[0]), 'utf8')).toBe('{"defaults":1}')
+  expect(await read('demo')).toBe('{"from":"cloud"}')
+
+  await write('fresh', '{"a":1}', { backup: true })
+  expect((await fs.readdir(dataDir())).filter((n) => n.startsWith('fresh.json.replaced-'))).toEqual([])
+  expect(await read('fresh')).toBe('{"a":1}')
+
+  const spy = vi.spyOn(fs, 'copyFile').mockRejectedValueOnce(Object.assign(new Error('EIO: i/o error'), { code: 'EIO' }))
+  try {
+    await expect(write('demo', '{"from":"cloud2"}', { backup: true })).rejects.toThrow(/not overwriting/)
+  } finally { spy.mockRestore() }
+  expect(await read('demo')).toBe('{"from":"cloud"}')
 })

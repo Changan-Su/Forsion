@@ -540,6 +540,25 @@ const test = async (name, fn) => {
     assert.equal(await host(fs).readPluginData('p'), null)
   })
 
+  await test('要求先另存(同步拉云端盖读失败后按默认值存下的那份):当前那槽另存成 .replaced-<时间> 再写;没写过直接写;另存失败不写', async () => {
+    const fs = memFs()
+    const h = host(fs)
+    await h.writePluginData('p', '{"n":1}') // 槽 0
+    await h.writePluginData('p', '{"defaults":1}') // 槽 1(最新)
+    await h.writePluginData('p', '{"from":"cloud"}', { backup: true })
+    const kept = [...fs.files.entries()].filter(([k]) => k.includes('.replaced-')).map(([k, v]) => [k.replace(/\.replaced-.*/, ''), JSON.parse(dec(v)).text])
+    assert.deepEqual(kept, [['plugins-data/p.json.alt', '{"defaults":1}']])
+    assert.equal(await h.readPluginData('p'), '{"from":"cloud"}')
+    await h.writePluginData('q', '{"a":1}', { backup: true })
+    assert.equal([...fs.files.keys()].some((k) => k.startsWith('plugins-data/q.json') && k.includes('.replaced-')), false)
+    const orig = fs.writeBytes
+    fs.writeBytes = async (p, b) => { if (p.includes('.replaced-')) throw new Error('ENOSPC'); return orig(p, b) }
+    try {
+      await assert.rejects(h.writePluginData('p', '{"from":"cloud2"}', { backup: true }), /ENOSPC/)
+    } finally { fs.writeBytes = orig }
+    assert.equal(await h.readPluginData('p'), '{"from":"cloud"}')
+  })
+
   // ── 市场 ────────────────────────────────────────────────────────────────
   const API = 'https://cloud.test/api'
   /** 假云端 + 假下载。install = 每个市场 id 的解析结果;blobs = 下载地址 → 字节 / Error。 */

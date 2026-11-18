@@ -2302,7 +2302,8 @@ export interface PluginContext {
    *  接到它别按默认值往下走再 saveData —— 那会把用户原来那份整个盖掉;停用相关功能、提示用户、等下次重试。
    *  原件宿主不动;插件接住错误后仍然 saveData 时,桌面 / 手机宿主先把原件另存一份(`<id>.json.unreadable-<时间>`),
    *  拷不出原件就拒绝这次写(saveData reject)。`syncData` 插件:本机内容坏了而云端有一份时,loadData 直接用云端那份恢复;
-   *  读失败后插件仍存的那次不推上云端,也不在冲突里盖掉云端那份。
+   *  读失败后插件仍存的数据,在和云端对上之前都不推、也不在冲突里盖掉云端那份(之后读成功了、重启了也一样);
+   *  下次连上云端:云端有一份就换成云端那份,被换掉的本机数据宿主先另存(`<id>.json.replaced-<时间>`),云端没有才推本机这份。
    *  registerSetting 是「一键一个字符串」,存不下片段库这类大块数据,也没有原子性。
    *  旧宿主没有:`await ctx.loadData?.() ?? 默认值`(旧宿主读不出来时仍回 null)。 */
   loadData?<T = unknown>(): Promise<T | null>

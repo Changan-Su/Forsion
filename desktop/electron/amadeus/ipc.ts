@@ -965,16 +965,20 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
     return text
   })
 
-  handle(IPC.pluginDataWrite, async (_e, id: string, text: string): Promise<void> => {
+  // opts.backup(渲染层同步拉云端那份、盖「读失败后插件按默认值存下的」本机数据时要):写之前把现有那份另存成
+  // <id>.json.replaced-<时间>,读失败之后用户在默认值上做的修改不随这次覆盖消失;拷不出来同样拒写。
+  handle(IPC.pluginDataWrite, async (_e, id: string, text: string, opts?: { backup?: boolean }): Promise<void> => {
     const f = pluginDataFile(id)
     if (!f) throw new Error('非法插件 id')
+    const backupFirst = opts?.backup === true
     const run = async (): Promise<void> => {
       await fs.mkdir(path.dirname(f), { recursive: true })
       const n = ++pluginDataSeq
-      if (unreadablePluginData.has(f)) {
+      const keep = unreadablePluginData.has(f) ? 'unreadable' : backupFirst ? 'replaced' : null
+      if (keep) {
         const stamp = new Date().toISOString().replace(/[:.]/g, '-')
         try {
-          await fs.copyFile(f, `${f}.unreadable-${stamp}-${n}`, fsConstants.COPYFILE_EXCL)
+          await fs.copyFile(f, `${f}.${keep}-${stamp}-${n}`, fsConstants.COPYFILE_EXCL)
         } catch (e) {
           // 原件已经不在了:没有可留的,照常写。其余(仍读不出来……)不写,原件不能被这次写盖掉。
           if ((e as NodeJS.ErrnoException)?.code !== 'ENOENT') throw new Error(`Saved data of plugin "${id}" could not be read or backed up; not overwriting it`)

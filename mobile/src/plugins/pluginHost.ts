@@ -43,7 +43,8 @@ export interface MobilePluginHost {
   /** withSuperseded:目标是商店安装时,被它取代的旧普通目录一起删(桌面同名选项;否则卸完旧副本立刻重新运行)。 */
   uninstallPlugin(id: string, opts?: { withSuperseded?: boolean; dir?: string }): Promise<void>
   readPluginData(pluginId: string): Promise<string | null>
-  writePluginData(pluginId: string, text: string): Promise<void>
+  /** opts.backup:写之前先把当前那槽另存成 <槽>.replaced-<时间>(另存失败就不写、抛出去)。同桌面同名选项。 */
+  writePluginData(pluginId: string, text: string, opts?: { backup?: boolean }): Promise<void>
 }
 
 /** 读 manifest.json(必须是 JSON 对象);读不到 / 坏 → null。 */
@@ -453,7 +454,7 @@ export function createPluginHost(fs: PluginFs, opts: { appVersion: () => string 
       })
     },
 
-    async writePluginData(pluginId, text) {
+    async writePluginData(pluginId, text, opts) {
       if (!isSafeSlug(pluginId)) throw new Error('invalid-plugin-id')
       const body = String(text ?? '')
       await serial(pluginId, async () => {
@@ -461,6 +462,13 @@ export function createPluginHost(fs: PluginFs, opts: { appVersion: () => string 
         const paths = slotPaths(pluginId)
         let target: 0 | 1 = r.latest ? (r.latest.slot === 0 ? 1 : 0) : 0
         let seq = (r.latest?.env.seq ?? 0) + 1
+        if (opts?.backup === true && !r.unreadable && r.latest) {
+          // 渲染层同步要拉云端那份盖「读失败后插件按默认值存下的」本机数据:当前那槽(最新的内容)先原样另存。
+          // 另一槽不算备份 —— 这次写不碰当前槽,但下一次写就轮到它。另存失败 → 抛出去,不写。
+          const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+          const at = paths[r.latest.slot]
+          await fs.writeBytes(`${at}.replaced-${stamp}`, await fs.readBytes(at))
+        }
         if (r.unreadable) {
           // 读失败:原件不能被这次或以后的写盖掉(见上)。**每一个**坏槽(半截 / 读不出字节)都先原样另存 ——
           // 只存要盖的那槽的话,下一次普通写会落到另一个坏槽上,而那槽可能才是较新的原件。
