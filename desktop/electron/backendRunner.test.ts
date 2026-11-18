@@ -5,8 +5,10 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { once } from 'node:events'
+import { MessageChannel } from 'node:worker_threads'
 import { build } from 'esbuild'
 import { startBackend, migrateBackend, type BackendHandle, type BackendOptions } from '../../unit/backendRunner'
+import { PortDuplex } from '../../unit/portDuplex'
 
 let root: string
 let workerFile: string
@@ -123,6 +125,18 @@ async function cleanDetachedFixture(options: BackendOptions): Promise<void> {
 }
 
 describe('Unit backend workers', () => {
+  it('does not count a write discarded before peer acknowledgement', async () => {
+    const { port1, port2 } = new MessageChannel()
+    const socket = new PortDuplex(port1)
+    const packet = once(port2, 'message')
+    const closed = once(socket, 'close').catch(() => [])
+    socket.write(Buffer.alloc(128 * 1024))
+    await packet
+    port2.close()
+    await closed
+    expect(socket.bytesWritten).toBe(0)
+  })
+
   it('exposes HTTP socket byte counters to the worker request monitor', async () => {
     const options = await fixture(`
       import { writeFile } from 'node:fs/promises';

@@ -2361,6 +2361,9 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     const generation = host.authGen()
     const target = targetForSession(sessionId)
     const base = target.base
+    // The device hub does not carry revalidation headers. Use its existing
+    // history protocol while applying the browser visibility and in-flight guards.
+    const conditional = web && target.via !== 'unit'
     const webKey = web ? JSON.stringify([generation, target.key, base, sessionId]) : undefined
     if (webKey && webPolls.has(webKey)) return
     if (webKey) webPolls.add(webKey)
@@ -2368,7 +2371,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
       const etag = webKey && webHistoryValidator?.key === webKey && get().messagesBySession[sessionId]
         ? webHistoryValidator?.etag : undefined
       const [history, active] = await Promise.all([
-        web ? api.pollHistory(target, sessionId, etag) : api.listHistory(target, sessionId),
+        conditional ? api.pollHistory(target, sessionId, etag) : api.listHistory(target, sessionId),
         listActiveRuns(target, sessionId).catch(() => []),
       ])
       const current = targetForSession(sessionId)

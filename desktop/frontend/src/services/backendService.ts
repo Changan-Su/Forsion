@@ -43,8 +43,7 @@ async function requestResponse(t: EngineTarget, path: string, init?: RequestInit
   const headers = await t.headers(true)
   const r = await authFetch(url, { ...init, headers: etag ? { ...headers, 'If-None-Match': etag } : headers },
     opts?.onUploadProgress && t.key !== 'home' ? { ...o, onUploadProgress: opts.onUploadProgress } : o)
-  if (etag && r.status === 304) return r
-  if (!r.ok) {
+  if (!r.ok && !(etag && r.status === 304)) {
     let detail = `HTTP ${r.status}`
     let code: string | undefined
     let info: string | undefined
