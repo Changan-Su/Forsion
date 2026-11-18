@@ -283,8 +283,8 @@ async function main() {
       checked: el.getAttribute('aria-checked'), hidden: el.querySelector('.theme-preview')?.getAttribute('aria-hidden'),
     })))
     check('F1 主题卡为 radiogroup/radio,恰一张选中,预览对读屏隐藏', radios.length >= 2 && radios.filter((r) => r.checked === 'true').length === 1 && radios.every((r) => r.hidden === 'true'), radios)
-    check('F2 明暗 / 玻璃分段钮带 aria-pressed', await fl.locator('[data-setting-anchor="color-mode"] button[aria-pressed="true"]').count() === 1
-      && await fl.locator('[data-setting-anchor="glass"] button[aria-pressed="true"]').count() === 1)
+    check('F2 明暗分段钮带 aria-pressed、毛玻璃是带 aria-checked 的开关(设置页规范 v1:二态用开关)', await fl.locator('[data-setting-anchor="color-mode"] button[aria-pressed="true"]').count() === 1
+      && await fl.locator('[data-setting-anchor="glass"] [role="switch"][aria-checked]').count() === 1)
     check('F3 丝滑光标开关有可访问名', !!(await fl.locator('[data-setting-anchor="smooth-caret"] [role="switch"]').getAttribute('aria-label')))
     check('F4 窄高窗体下左栏可滚时挂底部渐隐', await fl.evaluate(() => document.querySelector('.settings-nav-list')?.dataset.overflow === 'bottom'))
     await fl.screenshot({ path: path.join(shots, 'settings-theme-dark-1040x600.png') })
