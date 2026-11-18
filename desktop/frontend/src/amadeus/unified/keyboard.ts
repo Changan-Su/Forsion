@@ -22,8 +22,9 @@ import { $prose } from '@milkdown/kit/utils'
 import { keymap } from '@milkdown/kit/prose/keymap'
 import { Plugin } from '@milkdown/kit/prose/state'
 import { liftListItem, splitListItem } from '@milkdown/kit/prose/schema-list'
-import { NodeSelection, Selection, TextSelection } from '@milkdown/kit/prose/state'
-import type { Command, EditorState, Transaction } from '@milkdown/kit/prose/state'
+import { EditorState, NodeSelection, Selection, TextSelection } from '@milkdown/kit/prose/state'
+import type { Command, Transaction } from '@milkdown/kit/prose/state'
+import { joinBackward, joinForward } from '@milkdown/kit/prose/commands'
 import type { EditorView } from '@milkdown/kit/prose/view'
 import type { MarkType, Node as ProseNode, ResolvedPos } from '@milkdown/kit/prose/model'
 import type { MilkdownPlugin } from '@milkdown/kit/ctx'
@@ -42,6 +43,7 @@ import { bodyPairOpenPlugin, composingNow } from '../blocks/markdown/bodyAutoPai
 import { literalBoldEnabled } from '../blocks/markdown/literalBoldFlag'
 import { literalBoldAt, wrapLiteral } from '../blocks/markdown/literalBold'
 import { removeEmptyColumnTr } from './columns'
+import { isAnchorMarkPara } from './anchorMarks'
 import { calloutKey, calloutOf } from '../blocks/markdown/callout'
 
 /** 光标所在「顶层块」的深度:doc 或分栏 cell 的直接子节点(与 blockLayer / insertMd 同一判定)。 */
@@ -502,7 +504,84 @@ const deleteEmptyColumn = (dir: -1 | 1): Command => (state, dispatch) => {
   return true
 }
 
-const backspaceCmd: Command = chain(deleteEmptyColumn(-1), bsHeadingToParagraph, bsCallout, bsListToParagraph, bsOutdentParagraph, bsSelectPrevAtom)
+// ── 锚标记段(看不见的 `<!-- a id -->`,见 anchorMarks.ts)──────────────────────────────────
+
+/** 同一父节点里紧挨着光标所在块、朝 dir 方向的一串锚标记段:这串的范围 [from, to) 与再过去那一块(没有 → null)。 */
+function anchorMarkRun($from: ResolvedPos, dir: -1 | 1): { from: number; to: number; other: ProseNode | null; otherPos: number } | null {
+  const d = $from.depth - 1
+  if (d < 0) return null
+  const container = $from.node(d)
+  const idx = $from.index(d)
+  let i = idx + dir
+  while (i >= 0 && i < container.childCount && isAnchorMarkPara(container.child(i))) i += dir
+  if (i === idx + dir) return null
+  if (dir < 0) {
+    const to = $from.before($from.depth)
+    let from = to
+    for (let k = idx - 1; k > i; k--) from -= container.child(k).nodeSize
+    const other = i >= 0 ? container.child(i) : null
+    return { from, to, other, otherPos: other ? from - other.nodeSize : -1 }
+  }
+  const from = $from.after($from.depth)
+  let to = from
+  for (let k = idx + 1; k < i; k++) to += container.child(k).nodeSize
+  const other = i < container.childCount ? container.child(i) : null
+  return { from, to, other, otherPos: other ? to : -1 }
+}
+
+/** 锚标记挪到 at 之后,在挪好的文档上跑 base 的合并命令;并不了 → null(锚标记也别挪)。
+ *  合并在不带插件的临时状态里算(state.apply 会顺带跑各插件的 appendTransaction,步骤就接不回来了)。 */
+function joinAcrossMarks(state: EditorState, run: { from: number; to: number }, at: number, caret: number, join: Command): Transaction | null {
+  const marks = state.doc.slice(run.from, run.to).content
+  const tr = state.tr.delete(run.from, run.to).insert(at, marks)
+  const tmp = EditorState.create({ doc: tr.doc, selection: TextSelection.create(tr.doc, caret) })
+  let joined = null as Transaction | null
+  join(tmp, (t) => { joined = t })
+  if (!joined || !joined.docChanged) return null
+  for (const step of joined.steps) tr.step(step)
+  return tr.setSelection(Selection.fromJSON(tr.doc, joined.selection.toJSON()))
+}
+
+/** 行首退格、前面隔着几枚看不见的锚标记段:跨过它们去并真正的上一块。交给 base 会把本段并进锚标记段
+ *  (落盘成 `<!-- a id -->正文`:锚失效、正文进了注释行 —— 锚标记可见时 main 上就会这样,探针 K1 / C1)。
+ *  这串锚标记(指着本段)挪到上一块前面:合并后那一块装着本段的字,`![[笔记#id]]` 仍指得到。
+ *  上一块是整块型(代码 / 表格 / 嵌入 / 分割线)→ 只选中它,锚标记不动;前面没有块 / 并不了 → 吞掉,什么都不动。 */
+export const bsOverAnchorMarks: Command = (state, dispatch) => {
+  const { $from, empty } = state.selection
+  if (!empty || $from.parentOffset !== 0 || !$from.parent.isTextblock) return false
+  const run = anchorMarkRun($from, -1)
+  if (!run) return false
+  const prev = run.other
+  if (!prev || hiddenAt(state, run.otherPos + 1)) return true
+  if (isAtomBlock(prev)) {
+    if (NodeSelection.isSelectable(prev)) dispatch?.(state.tr.setSelection(NodeSelection.create(state.doc, run.otherPos)).scrollIntoView())
+    return true
+  }
+  // 删掉 [from, to) 再在前面插回同样长的一串:本段段首的位置不变
+  const tr = joinAcrossMarks(state, run, run.otherPos, $from.pos, joinBackward)
+  if (tr) dispatch?.(tr.scrollIntoView())
+  return true
+}
+
+/** 块尾 Delete、后面隔着几枚看不见的锚标记段:跨过它们把真正的下一块并上来(base 会把锚标记段并进本块,探针 K2 / C2)。
+ *  那串锚标记(指着下一块)挪到本块前面,合并后的这一块装着下一块的字。下一块是整块型 → 只选中它;后面没有块 / 并不了 → 吞掉。 */
+export const deleteOverAnchorMarks: Command = (state, dispatch) => {
+  const { $from, empty } = state.selection
+  if (!empty || !$from.parent.isTextblock || $from.parentOffset !== $from.parent.content.size) return false
+  const run = anchorMarkRun($from, 1)
+  if (!run) return false
+  const next = run.other
+  if (!next || hiddenAt(state, run.otherPos + 1)) return true
+  if (isAtomBlock(next)) {
+    if (NodeSelection.isSelectable(next)) dispatch?.(state.tr.setSelection(NodeSelection.create(state.doc, run.otherPos)).scrollIntoView())
+    return true
+  }
+  const tr = joinAcrossMarks(state, run, $from.before($from.depth), $from.pos + (run.to - run.from), joinForward)
+  if (tr) dispatch?.(tr.scrollIntoView())
+  return true
+}
+
+const backspaceCmd: Command = chain(deleteEmptyColumn(-1), bsHeadingToParagraph, bsCallout, bsListToParagraph, bsOutdentParagraph, bsOverAnchorMarks, bsSelectPrevAtom)
 
 /** Mod+Backspace:光标在块首时一路反缩进到顶层。逐级经 view.dispatch 发 —— PM history 会把
  *  同一次按键内的相邻事务并进同一组,撤销仍是一下;整文替换那种写法会连带毁掉分栏派生与装饰,勿用。
@@ -963,10 +1042,10 @@ export const keyboardPlugins: MilkdownPlugin[] = [
       'Mod-Enter': modEnterCmd,
       Backspace: backspaceCmd,
       'Mod-Backspace': modBackspaceCmd,
-      Delete: chain(deleteEmptyColumn(1), deleteUnfoldHeading, deleteSelectNextAtom, deleteJoinNextText),
+      Delete: chain(deleteEmptyColumn(1), deleteUnfoldHeading, deleteOverAnchorMarks, deleteSelectNextAtom, deleteJoinNextText),
       // mac 的 emacs 习惯键,与 Delete 同一支。**只在 mac 上挂**(拍板 #8):其它平台 Ctrl 就是 Mod,
       // Ctrl+D 归「复制块」(blockLayer 的 Mod-d,对齐 Notion),不能在这里再被当成向前删除。
-      ...(IS_MAC ? { 'Ctrl-d': chain(deleteEmptyColumn(1), deleteUnfoldHeading, deleteSelectNextAtom, deleteJoinNextText) } : {}),
+      ...(IS_MAC ? { 'Ctrl-d': chain(deleteEmptyColumn(1), deleteUnfoldHeading, deleteOverAnchorMarks, deleteSelectNextAtom, deleteJoinNextText) } : {}),
       ArrowUp: chain(arrowEmbedSource('up'), arrowToAtom('up')),
       ArrowDown: chain(codeExit('down'), arrowEmbedSource('down'), arrowToAtom('down')),
       ArrowLeft: arrowEmbedSource('left'),
