@@ -24,28 +24,22 @@ import { listFormatPlugins } from './listFormat'
 import { verbatimDocSchema, verbatimPlugins } from './verbatim'
 import { literalEscapePlugins, literalEscapeRemark } from './literalEscape'
 import { literalBoldRemark } from './literalBoldRead'
+import { COLOR_ATTR_SPEC, colorDomAttrs, colorFromDom, colorMarker, hasBlockColor, takeBlockMarkers, type TextAlignment } from './blockColor'
 
 export const clampIndent = (n: number): number => Math.max(0, Math.min(MAX_INDENT, Math.floor(n) || 0))
 
 type MdNode = { type: string; value?: string; children?: MdNode[]; data?: { amadeusIndent?: number; amadeusRaw?: string } }
-export type TextAlignment = 'left' | 'center' | 'right'
+export type { TextAlignment }
 
-const ALIGN_MARK = /^<span data-amadeus-align="(left|center|right)"><\/span>$/
-const ALIGN_OPEN = /^<span data-amadeus-align="(left|center|right)">$/
 export const normalizeTextAlignment = (v: unknown): TextAlignment => v === 'center' || v === 'right' ? v : 'left'
 const alignMarker = (align: TextAlignment): string => `<span data-amadeus-align="${align}"></span>`
-const takeAlignMarker = (children: MdNode[] | undefined): { align: TextAlignment; children: MdNode[] | undefined } => {
-  const first = children?.[0]
-  if (first?.type !== 'html' || typeof first.value !== 'string') return { align: 'left', children }
-  const hit = ALIGN_MARK.exec(first.value.trim())
-  if (hit) return { align: normalizeTextAlignment(hit[1]), children: children!.slice(1) }
-  // remark 会把同一行的空 span 拆成两个相邻 html 节点；两种 AST 形态都要认。
-  const open = ALIGN_OPEN.exec(first.value.trim())
-  const close = children?.[1]
-  if (open && close?.type === 'html' && close.value?.trim() === '</span>') {
-    return { align: normalizeTextAlignment(open[1]), children: children!.slice(2) }
-  }
-  return { align: 'left', children }
+/** 段首块标记(对齐 + 整块颜色,./blockColor):两种 AST 形态(一个 html 节点 / remark 拆开的开闭两个)都认,读不懂的留在正文里。 */
+const takeAlignMarker = takeBlockMarkers
+/** 段首写标记:对齐在前、颜色在后(规范形)。 */
+function addBlockMarkers(state: { addNode(type: string, children?: unknown, value?: string): unknown }, align: TextAlignment, color: { bg?: unknown; fg?: unknown }): void {
+  if (align !== 'left') state.addNode('html', undefined, alignMarker(align))
+  const c = colorMarker(color)
+  if (c) state.addNode('html', undefined, c)
 }
 
 const paragraphIndentSchema = paragraphSchema.extendSchema((prev) => (ctx) => {
@@ -53,13 +47,14 @@ const paragraphIndentSchema = paragraphSchema.extendSchema((prev) => (ctx) => {
   return {
     ...base,
     // raw:D-12 的「定义行字面段落」原文(见 ./refDefinitions);没被动过就原样写回。
-    attrs: { ...(base.attrs ?? {}), indent: { default: 0 }, align: { default: 'left' }, raw: { default: null } },
+    attrs: { ...(base.attrs ?? {}), indent: { default: 0 }, align: { default: 'left' }, raw: { default: null }, ...COLOR_ATTR_SPEC },
     parseDOM: [{
       tag: 'p',
       getAttrs: (dom) => ({
         indent: clampIndent(Number((dom as HTMLElement).getAttribute('data-indent'))),
         align: normalizeTextAlignment((dom as HTMLElement).getAttribute('data-align') || (dom as HTMLElement).style.textAlign),
         raw: literalRawFromDom((dom as HTMLElement).getAttribute('data-md-raw')), // 粘贴链路(md → PM → DOM → parseSlice)靠它带回原文;外来值须是定义行
+        ...colorFromDom(dom as HTMLElement),
       }),
     }],
     toDOM: (node) => {
@@ -69,6 +64,7 @@ const paragraphIndentSchema = paragraphSchema.extendSchema((prev) => (ctx) => {
       if (indent) attrs['data-indent'] = String(indent)
       if (align !== 'left') attrs['data-align'] = align
       if (typeof node.attrs.raw === 'string') attrs['data-md-raw'] = node.attrs.raw
+      Object.assign(attrs, colorDomAttrs(node.attrs))
       return ['p', attrs, 0]
     },
     parseMarkdown: {
@@ -94,7 +90,8 @@ const paragraphIndentSchema = paragraphSchema.extendSchema((prev) => (ctx) => {
         // 列表项 / 引用里的段落不归缩进档管(见 indentable):旧版「先 Tab 再转列表」存下的 `* &#9;字` 打开即归零,下次存盘自愈。
         if (['list_item', 'blockquote'].includes((state as unknown as { top(): { type: { name: string } } | undefined }).top()?.type.name ?? '')) indent = 0
         const raw = (node as MdNode).data?.amadeusRaw ?? null
-        state.openNode(type, indent || align !== 'left' || raw != null ? { indent, align, raw } : undefined)
+        const color = { bg: marked.bg, fg: marked.fg }
+        state.openNode(type, indent || align !== 'left' || raw != null || color.bg || color.fg ? { indent, align, raw, ...color } : undefined)
         if (children?.length) state.next(children as never)
         else if (!children) state.addText(((node as MdNode).value || '') as string)
         state.closeNode()
@@ -123,9 +120,10 @@ const paragraphIndentSchema = paragraphSchema.extendSchema((prev) => (ctx) => {
         const align = normalizeTextAlignment(node.attrs.align)
         // 末尾是带原文的 `<br>`(D-06,见 ./inlineBr):不走 preset 的 serializeText,它会把尾随 hardbreak 掐掉。
         const keepBr = keepsTrailingBr(node)
-        if (((!indent && align === 'left') || node.content.size === 0 && align === 'left') && !keepBr) return void base.toMarkdown.runner(state, node)
+        const colored = hasBlockColor(node.attrs)
+        if (((!indent && align === 'left') || node.content.size === 0 && align === 'left') && !keepBr && !colored) return void base.toMarkdown.runner(state, node)
         state.openNode('paragraph')
-        if (align !== 'left') state.addNode('html', undefined, alignMarker(align))
+        addBlockMarkers(state as never, align, node.attrs)
         if (indent) state.addNode('html', undefined, '&#9;'.repeat(indent))
         // serializeText 内联:尾部 hardbreak 掐掉(与基座 preset 同款,内部函数拿不到)
         const lastIsBreak = node.lastChild?.type.name === 'hardbreak' && !keepBr
@@ -142,12 +140,12 @@ const headingAlignmentSchema = headingSchema.extendSchema((prev) => (ctx) => {
   const getId = ctx.get(headingIdGenerator.key)
   return {
     ...base,
-    attrs: { ...(base.attrs ?? {}), align: { default: 'left' }, indent: { default: 0 } },
+    attrs: { ...(base.attrs ?? {}), align: { default: 'left' }, indent: { default: 0 }, ...COLOR_ATTR_SPEC },
     parseDOM: [1, 2, 3, 4, 5, 6].map((level) => ({
       tag: `h${level}`,
       getAttrs: (dom: Node | string) => {
         const el = dom as HTMLElement
-        return { level, id: el.id, align: normalizeTextAlignment(el.getAttribute('data-align') || el.style.textAlign), indent: clampIndent(Number(el.dataset.indent)) }
+        return { level, id: el.id, align: normalizeTextAlignment(el.getAttribute('data-align') || el.style.textAlign), indent: clampIndent(Number(el.dataset.indent)), ...colorFromDom(el) }
       },
     })),
     toDOM: (node) => {
@@ -156,13 +154,14 @@ const headingAlignmentSchema = headingSchema.extendSchema((prev) => (ctx) => {
       if (align !== 'left') attrs['data-align'] = align
       const indent = clampIndent(node.attrs.indent as number)
       if (indent) attrs['data-indent'] = String(indent)
+      Object.assign(attrs, colorDomAttrs(node.attrs))
       return [`h${node.attrs.level}`, attrs, 0]
     },
     parseMarkdown: {
       match: base.parseMarkdown.match,
       runner: (state, node, type) => {
         const marked = takeAlignMarker(node.children as MdNode[] | undefined)
-        state.openNode(type, { level: node.depth as number, ...(marked.align !== 'left' ? { align: marked.align } : {}), indent: markdownBlockIndent(node as MdNode) })
+        state.openNode(type, { level: node.depth as number, ...(marked.align !== 'left' ? { align: marked.align } : {}), indent: markdownBlockIndent(node as MdNode), ...(marked.bg || marked.fg ? { bg: marked.bg, fg: marked.fg } : {}) })
         if (marked.children?.length) state.next(marked.children as never)
         state.closeNode()
       },
@@ -174,9 +173,9 @@ const headingAlignmentSchema = headingSchema.extendSchema((prev) => (ctx) => {
         if (indent) state.addNode('html', undefined, indentMarker(indent))
         const align = normalizeTextAlignment(node.attrs.align)
         const keepBr = keepsTrailingBr(node) // 同段落:带原文的尾随 `<br>` 不掐(D-06)
-        if (align === 'left' && !keepBr) return void base.toMarkdown.runner(state, node)
+        if (align === 'left' && !keepBr && !hasBlockColor(node.attrs)) return void base.toMarkdown.runner(state, node)
         state.openNode('heading', undefined, { depth: node.attrs.level })
-        if (align !== 'left') state.addNode('html', undefined, alignMarker(align))
+        addBlockMarkers(state as never, align, node.attrs)
         const lastIsBreak = node.lastChild?.type.name === 'hardbreak' && !keepBr
         state.next(lastIsBreak ? node.content.cut(0, node.content.size - node.lastChild!.nodeSize) : node.content)
         state.closeNode()

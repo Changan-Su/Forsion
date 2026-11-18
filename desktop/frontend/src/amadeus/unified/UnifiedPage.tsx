@@ -29,7 +29,7 @@ import { awaitTypingQuiet, installTypingGuard, isComposing } from '../store/typi
 import { COMPOSE_SAVE_POLL_MS, createTypingDraftPacer, saveTickAction, typingDraftPlugin, type TypingDraftPacer } from './typingDraft'
 import {
   DbLinkPicker, MilkdownInner, normalizeSerializedMd, serializeUnified, stampedFileName,
-  PREFIX_TRIGGERS, SLASH_SENTINELS, slashTurnFailed, getFocusedBlockApply, setFocusedBlockApply, type SlashItem, type SlashOps,
+  PREFIX_TRIGGERS, SLASH_SENTINELS, blockColorFromScaffold, slashTurnFailed, getFocusedBlockApply, setFocusedBlockApply, type SlashItem, type SlashOps,
   copySelectedImage, selectedImage,
 } from '../blocks/markdown/MarkdownBlock'
 import { emptyDb, emptyNoteView, serializeDb } from '@amadeus-shared/db/schema'
@@ -68,7 +68,7 @@ import { AmadeusPropertiesPanel, PropsDraftFlushContext } from '../../amadeusPro
 import { NoteCover, CoverPicker, IconPicker, randomEmoji, UNTITLED_RE } from '../chrome/pageChrome'
 import { OverlayPortal } from '../lib/overlayPortal'
 import { OverlayAt } from '../lib/clampMenu'
-import { applyTrigger, codeBlockTurnInto, liftOutOfWrappers, type Trigger } from '../blocks/markdown/blockTriggers'
+import { applyTrigger, codeBlockTurnInto, liftOutOfWrappers, slashRange, type Trigger } from '../blocks/markdown/blockTriggers'
 import { blockKindOf, turnBlocksInto, turnCalloutInto, turnIntoCallout, turnRangeIntoCode, type BlockKind } from './blockTurn'
 import { columnRowOf, columnSplitApplies } from '../blocks/markdown/menuContext'
 import { NotePicker, blockLinkOf, canMove, copyLink, moveBlocksTo } from './blockLinks'
@@ -111,6 +111,7 @@ import { LinkHoverCard } from './linkCard'
 import { TableMenuSection, isTableSelected, tableCellAtPoint } from './tableMenu'
 import { ColumnWidthMenu } from './ColumnWidthMenu'
 import { BlockColorMenu } from './BlockColorMenu'
+import { blockColorTr, colorTargetAtCursor, dispatchBlockColor } from './blockColorCommands'
 import { ListNumberingMenu } from './ListNumberingMenu'
 import { hrefKind, normalizeHref, noteLinkTarget } from '../blocks/markdown/linkHref'
 import { ReadingSurface, type ReadingModeControl } from './ReadingSurface'
@@ -887,6 +888,24 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
       // 先转成方框行(单事务,和「待办」同一条路),再写 @
       if (!ops.transform(PREFIX_TRIGGERS['- [ ] '])) { slashTurnFailed(item.label); return }
       typeAt()
+      return
+    }
+    // 整块颜色(Notion 对齐 A1):光标所在的块上色;标注 / 表格 / 代码里没有目标 → 一句提示。
+    // 删 `/查询` 与上色同一个事务、一个撤销步;只删查询本身,不连带前面原有的空格(行中上色,Codex 评审 #1)。
+    const color = blockColorFromScaffold(item.scaffold)
+    if (color) {
+      getInstance()?.action((ctx) => {
+        const view = ctx.get(editorViewCtx)
+        const target = colorTargetAtCursor(view.state)
+        const { $from, empty } = view.state.selection
+        // 行尾的 `字 /红色`:连空格一起删(同别的命令);后面还有字:留着空格,不让前后两个词粘在一起
+        const r = empty ? slashRange($from, { keepSpace: $from.parentOffset < $from.parent.content.size }) : null
+        const base = closeHistory(view.state.tr)
+        if (r) base.delete(r.from, r.to)
+        if (!target) slashTurnFailed(item.label)
+        dispatchBlockColor(view, (target && blockColorTr(view.state, [target], color, base)) || base)
+        view.focus()
+      })
       return
     }
     ops.consume() // 返回值是「整篇是否空」,统一实例用不着:空块判定在 insertMd 里按当前顶层块算
@@ -4128,7 +4147,7 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
             {isTableSelected(layer.getView()) && (
               <TableMenuSection view={layer.getView()!} cell={blockMenu.cell ?? null} onDone={() => setBlockMenu(null)} />
             )}
-            {layer.getView() && <BlockColorMenu view={layer.getView()!} restore={() => restoreMenuTarget(layer.getView()!)} onDone={() => setBlockMenu(null)} />}
+            {layer.getView() && <BlockColorMenu view={layer.getView()!} restore={() => restoreMenuTarget(layer.getView()!)} onDone={() => setBlockMenu(null)} rangeOf={(v) => layer.topRangeOf(v)} />}
             {layer.getView() && <ListNumberingMenu view={layer.getView()!} restore={() => restoreMenuTarget(layer.getView()!)} onDone={() => setBlockMenu(null)} />}
             <div className="ubm-sep" role="separator" />
             {/* 多块选中:置灰 + 说明(B-05:此前点了静默无效)。aria-disabled 而不是 disabled —— 禁用的按钮不出 title 提示。 */}

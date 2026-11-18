@@ -3262,7 +3262,8 @@ body.amx-marquee-active * {
   margin-left: auto;
   color: var(--accent-ink);
 }/* 「转换为 ›」那一行:当前类型灰字 + 箭头放末列;子菜单开着时该行保持悬停底(c2)。 */
-.am-app .unified-block-menu [data-sub] .ubm-sub-tail {
+.am-app .unified-block-menu [data-sub] .ubm-sub-tail,
+.am-app .unified-block-menu [data-act='blockColor'] .ubm-sub-tail {
   margin-left: auto;
   display: inline-flex;
   align-items: center;
@@ -3271,7 +3272,8 @@ body.amx-marquee-active * {
   color: var(--text-muted);
   font-size: var(--ui-font-meta, 12px);
 }
-.am-app .unified-block-menu [data-sub].is-open { background: var(--menu-hover); color: var(--text); }
+.am-app .unified-block-menu [data-sub].is-open,
+.am-app .unified-block-menu [data-act='blockColor'].is-open { background: var(--menu-hover); color: var(--text); }
 .am-app .unified-block-submenu .ubm-check { color: var(--text-muted); }
 
 
@@ -4648,3 +4650,109 @@ body.amx-marquee-active * {
 :where(.math-source-letter) { color: var(--math-src-letter); }
 :where(.math-source-number) { color: var(--math-src-number); }
 :where(.math-source-bracket) { color: var(--math-src-bracket); }
+
+/* ── 整块颜色(Notion 对齐 A1,blocks/markdown/blockColor.ts)──────────────────────────────────────
+   DOM:段落 / 标题 / 列表项 / 引用上的 data-bg / data-fg(语义名;「更多颜色」的 hex 走内联 --amx-blk-bg / --amx-blk-fg)。
+   底色比划词高亮淡一档(同色板 hex 按 65% 混透明),暗色换划词高亮的暗色值再往纸面靠;字色沿用划词字色的亮 / 暗两档。
+   往两侧各出 10px 用零模糊的左右平移阴影画(不动 margin / padding):段落缩进档写的是 margin-left、块把手按边框盒定位,
+   改盒子会和缩进档打架、把手跟着歪。阴影跟着 border-radius 走,两端仍是圆角。标注(.callout)的底色归它自己的类型色,A5 再接。 */
+.am-app .milkdown .ProseMirror :is(p, h1, h2, h3, h4, h5, h6, li, blockquote)[data-bg]:not(.callout) {
+  background: var(--amx-blk-bg);
+  border-radius: 6px;
+  padding-block: 2px;
+  /* 出血量缺省 10px;列表项要盖住项目符号 / 方框,在下面单独给(这里别写声明:这条特异性更高,会把它压掉) */
+  box-shadow: calc(0px - var(--amx-blk-bleed, 10px)) 0 0 0 var(--amx-blk-bg), 10px 0 0 0 var(--amx-blk-bg);
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+/* 列表项:左侧要盖住项目符号 / 待办方框(都在 li 盒外的槽里) */
+.am-app .milkdown .ProseMirror li[data-bg]:not(.callout) { --amx-blk-bleed: calc(1.4em + 4px); padding-block: 0; }
+.am-app .milkdown .ProseMirror li[data-item-type='task'][data-bg] { --amx-blk-bleed: calc(var(--amx-task-size) + var(--amx-task-gap) + 6px); }
+.am-app .milkdown .ProseMirror :is(p, h1, h2, h3, h4, h5, h6, li, blockquote)[data-fg]:not(.callout) { color: var(--amx-blk-fg); }
+.am-app .milkdown .ProseMirror li[data-fg]::marker { color: var(--amx-blk-fg); }
+.am-app .milkdown .ProseMirror :is(p, h1, h2, h3, h4, h5, h6, li, blockquote)[data-bg='accent'] { --amx-blk-bg: color-mix(in srgb, var(--signal) 12%, transparent); }
+.am-app .milkdown .ProseMirror :is(p, h1, h2, h3, h4, h5, h6, li, blockquote)[data-fg='accent'] { --amx-blk-fg: var(--signal); }
+.am-app .milkdown .ProseMirror :is(p, h1, h2, h3, h4, h5, h6, li, blockquote)[data-bg='red'] { --amx-blk-bg: color-mix(in srgb, #fed5d5 65%, transparent); }
+.am-app .milkdown .ProseMirror :is(p, h1, h2, h3, h4, h5, h6, li, blockquote)[data-bg='orange'] { --amx-blk-bg: color-mix(in srgb, #fedfbb 65%, transparent); }
+.am-app .milkdown .ProseMirror :is(p, h1, h2, h3, h4, h5, h6, li, blockquote)[data-bg='yellow'] { --amx-blk-bg: color-mix(in srgb, #fef3a1 65%, transparent); }
+.am-app .milkdown .ProseMirror :is(p, h1, h2, h3, h4, h5, h6, li, blockquote)[data-bg='green'] { --amx-blk-bg: color-mix(in srgb, #e1fab1 65%, transparent); }
+.am-app .milkdown .ProseMirror :is(p, h1, h2, h3, h4, h5, h6, li, blockquote)[data-bg='teal'] { --amx-blk-bg: color-mix(in srgb, #adf8e9 65%, transparent); }
+.am-app .milkdown .ProseMirror :is(p, h1, h2, h3, h4, h5, h6, li, blockquote)[data-bg='blue'] { --amx-blk-bg: color-mix(in srgb, #cce2fe 65%, transparent); }
+.am-app .milkdown .ProseMirror :is(p, h1, h2, h3, h4, h5, h6, li, blockquote)[data-bg='purple'] { --amx-blk-bg: color-mix(in srgb, #edddff 65%, transparent); }
+.am-app .milkdown .ProseMirror :is(p, h1, h2, h3, h4, h5, h6, li, blockquote)[data-bg='magenta'] { --amx-blk-bg: color-mix(in srgb, #ffcece 65%, transparent); }
+.am-app .milkdown .ProseMirror :is(p, h1, h2, h3, h4, h5, h6, li, blockquote)[data-bg='grey'] { --amx-blk-bg: color-mix(in srgb, #eaecef 65%, transparent); }
+.am-app .milkdown .ProseMirror :is(p, h1, h2, h3, h4, h5, h6, li, blockquote)[data-fg='red'] { --amx-blk-fg: #b61f1f; }
+.am-app .milkdown .ProseMirror :is(p, h1, h2, h3, h4, h5, h6, li, blockquote)[data-fg='orange'] { --amx-blk-fg: #a13c08; }
+.am-app .milkdown .ProseMirror :is(p, h1, h2, h3, h4, h5, h6, li, blockquote)[data-fg='yellow'] { --amx-blk-fg: #7d5603; }
+.am-app .milkdown .ProseMirror :is(p, h1, h2, h3, h4, h5, h6, li, blockquote)[data-fg='green'] { --amx-blk-fg: #0e6b31; }
+.am-app .milkdown .ProseMirror :is(p, h1, h2, h3, h4, h5, h6, li, blockquote)[data-fg='teal'] { --amx-blk-fg: #05657e; }
+.am-app .milkdown .ProseMirror :is(p, h1, h2, h3, h4, h5, h6, li, blockquote)[data-fg='blue'] { --amx-blk-fg: #1f54c8; }
+.am-app .milkdown .ProseMirror :is(p, h1, h2, h3, h4, h5, h6, li, blockquote)[data-fg='purple'] { --amx-blk-fg: #7c2bc7; }
+.am-app .milkdown .ProseMirror :is(p, h1, h2, h3, h4, h5, h6, li, blockquote)[data-fg='magenta'] { --amx-blk-fg: #941555; }
+.am-app .milkdown .ProseMirror :is(p, h1, h2, h3, h4, h5, h6, li, blockquote)[data-fg='grey'] { --amx-blk-fg: #5c5c5c; }
+[data-mode='dark'] .am-app .milkdown .ProseMirror :is(p, h1, h2, h3, h4, h5, h6, li, blockquote)[data-bg='red'], .am-app[data-mode='dark'] .milkdown .ProseMirror :is(p, h1, h2, h3, h4, h5, h6, li, blockquote)[data-bg='red'] { --amx-blk-bg: color-mix(in srgb, #6c2727 70%, transparent); }
+[data-mode='dark'] .am-app .milkdown .ProseMirror :is(p, h1, h2, h3, h4, h5, h6, li, blockquote)[data-bg='orange'], .am-app[data-mode='dark'] .milkdown .ProseMirror :is(p, h1, h2, h3, h4, h5, h6, li, blockquote)[data-bg='orange'] { --amx-blk-bg: color-mix(in srgb, #703a15 70%, transparent); }
+[data-mode='dark'] .am-app .milkdown .ProseMirror :is(p, h1, h2, h3, h4, h5, h6, li, blockquote)[data-bg='yellow'], .am-app[data-mode='dark'] .milkdown .ProseMirror :is(p, h1, h2, h3, h4, h5, h6, li, blockquote)[data-bg='yellow'] { --amx-blk-bg: color-mix(in srgb, #6a540f 70%, transparent); }
+[data-mode='dark'] .am-app .milkdown .ProseMirror :is(p, h1, h2, h3, h4, h5, h6, li, blockquote)[data-bg='green'], .am-app[data-mode='dark'] .milkdown .ProseMirror :is(p, h1, h2, h3, h4, h5, h6, li, blockquote)[data-bg='green'] { --amx-blk-bg: color-mix(in srgb, #1a5b32 70%, transparent); }
+[data-mode='dark'] .am-app .milkdown .ProseMirror :is(p, h1, h2, h3, h4, h5, h6, li, blockquote)[data-bg='teal'], .am-app[data-mode='dark'] .milkdown .ProseMirror :is(p, h1, h2, h3, h4, h5, h6, li, blockquote)[data-bg='teal'] { --amx-blk-bg: color-mix(in srgb, #0e5561 70%, transparent); }
+[data-mode='dark'] .am-app .milkdown .ProseMirror :is(p, h1, h2, h3, h4, h5, h6, li, blockquote)[data-bg='blue'], .am-app[data-mode='dark'] .milkdown .ProseMirror :is(p, h1, h2, h3, h4, h5, h6, li, blockquote)[data-bg='blue'] { --amx-blk-bg: color-mix(in srgb, #384b7a 70%, transparent); }
+[data-mode='dark'] .am-app .milkdown .ProseMirror :is(p, h1, h2, h3, h4, h5, h6, li, blockquote)[data-bg='purple'], .am-app[data-mode='dark'] .milkdown .ProseMirror :is(p, h1, h2, h3, h4, h5, h6, li, blockquote)[data-bg='purple'] { --amx-blk-bg: color-mix(in srgb, #502e6f 70%, transparent); }
+[data-mode='dark'] .am-app .milkdown .ProseMirror :is(p, h1, h2, h3, h4, h5, h6, li, blockquote)[data-bg='magenta'], .am-app[data-mode='dark'] .milkdown .ProseMirror :is(p, h1, h2, h3, h4, h5, h6, li, blockquote)[data-bg='magenta'] { --amx-blk-bg: color-mix(in srgb, #7f5d5d 70%, transparent); }
+[data-mode='dark'] .am-app .milkdown .ProseMirror :is(p, h1, h2, h3, h4, h5, h6, li, blockquote)[data-bg='grey'], .am-app[data-mode='dark'] .milkdown .ProseMirror :is(p, h1, h2, h3, h4, h5, h6, li, blockquote)[data-bg='grey'] { --amx-blk-bg: color-mix(in srgb, #40434a 70%, transparent); }
+[data-mode='dark'] .am-app .milkdown .ProseMirror :is(p, h1, h2, h3, h4, h5, h6, li, blockquote)[data-fg='red'], .am-app[data-mode='dark'] .milkdown .ProseMirror :is(p, h1, h2, h3, h4, h5, h6, li, blockquote)[data-fg='red'] { --amx-blk-fg: #f98d8d; }
+[data-mode='dark'] .am-app .milkdown .ProseMirror :is(p, h1, h2, h3, h4, h5, h6, li, blockquote)[data-fg='orange'], .am-app[data-mode='dark'] .milkdown .ProseMirror :is(p, h1, h2, h3, h4, h5, h6, li, blockquote)[data-fg='orange'] { --amx-blk-fg: #fca863; }
+[data-mode='dark'] .am-app .milkdown .ProseMirror :is(p, h1, h2, h3, h4, h5, h6, li, blockquote)[data-fg='yellow'], .am-app[data-mode='dark'] .milkdown .ProseMirror :is(p, h1, h2, h3, h4, h5, h6, li, blockquote)[data-fg='yellow'] { --amx-blk-fg: #fbd644; }
+[data-mode='dark'] .am-app .milkdown .ProseMirror :is(p, h1, h2, h3, h4, h5, h6, li, blockquote)[data-fg='green'], .am-app[data-mode='dark'] .milkdown .ProseMirror :is(p, h1, h2, h3, h4, h5, h6, li, blockquote)[data-fg='green'] { --amx-blk-fg: #6ee599; }
+[data-mode='dark'] .am-app .milkdown .ProseMirror :is(p, h1, h2, h3, h4, h5, h6, li, blockquote)[data-fg='teal'], .am-app[data-mode='dark'] .milkdown .ProseMirror :is(p, h1, h2, h3, h4, h5, h6, li, blockquote)[data-fg='teal'] { --amx-blk-fg: #57ddcc; }
+[data-mode='dark'] .am-app .milkdown .ProseMirror :is(p, h1, h2, h3, h4, h5, h6, li, blockquote)[data-fg='blue'], .am-app[data-mode='dark'] .milkdown .ProseMirror :is(p, h1, h2, h3, h4, h5, h6, li, blockquote)[data-fg='blue'] { --amx-blk-fg: #80b7fb; }
+[data-mode='dark'] .am-app .milkdown .ProseMirror :is(p, h1, h2, h3, h4, h5, h6, li, blockquote)[data-fg='purple'], .am-app[data-mode='dark'] .milkdown .ProseMirror :is(p, h1, h2, h3, h4, h5, h6, li, blockquote)[data-fg='purple'] { --amx-blk-fg: #cd9dfd; }
+[data-mode='dark'] .am-app .milkdown .ProseMirror :is(p, h1, h2, h3, h4, h5, h6, li, blockquote)[data-fg='magenta'], .am-app[data-mode='dark'] .milkdown .ProseMirror :is(p, h1, h2, h3, h4, h5, h6, li, blockquote)[data-fg='magenta'] { --amx-blk-fg: #f98dbb; }
+[data-mode='dark'] .am-app .milkdown .ProseMirror :is(p, h1, h2, h3, h4, h5, h6, li, blockquote)[data-fg='grey'], .am-app[data-mode='dark'] .milkdown .ProseMirror :is(p, h1, h2, h3, h4, h5, h6, li, blockquote)[data-fg='grey'] { --amx-blk-fg: #a8a8ad; }
+/* 块菜单「颜色 ›」行尾的当前颜色(BlockColorMenu)与斜杠颜色条目的「A」样字(MarkdownBlock 的 color-* / bg-* 项)。
+   都在浮层 portal 里,明暗照调色板的写法看 :root.dark。 */
+.ubm-color-chip { display: inline-block; flex: none; width: 12px; height: 12px; border-radius: 3px; margin-right: 2px; box-shadow: inset 0 0 0 1px var(--border); background: transparent; }
+.ubm-color-chip[data-chip-bg='accent'], .slash-color-glyph[data-bg='accent'] { background: color-mix(in srgb, var(--signal) 14%, transparent); }
+.ubm-color-chip[data-chip-fg='accent'] { background: var(--signal); }
+.slash-color-glyph[data-fg='accent'] { color: var(--signal); }
+.slash-color-glyph {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 1.3em; height: 1.3em; border-radius: 4px;
+  font-weight: 600; line-height: 1; color: var(--text);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+:root:not(.dark) .ubm-color-chip[data-chip-bg='red'], :root:not(.dark) .slash-color-glyph[data-bg='red'] { background: #fed5d5; }
+:root.dark .ubm-color-chip[data-chip-bg='red'], :root.dark .slash-color-glyph[data-bg='red'] { background: #6c2727; }
+:root:not(.dark) .ubm-color-chip[data-chip-fg='red'] { background: #b61f1f; } :root:not(.dark) .slash-color-glyph[data-fg='red'] { color: #b61f1f; }
+:root.dark .ubm-color-chip[data-chip-fg='red'] { background: #f98d8d; } :root.dark .slash-color-glyph[data-fg='red'] { color: #f98d8d; }
+:root:not(.dark) .ubm-color-chip[data-chip-bg='orange'], :root:not(.dark) .slash-color-glyph[data-bg='orange'] { background: #fedfbb; }
+:root.dark .ubm-color-chip[data-chip-bg='orange'], :root.dark .slash-color-glyph[data-bg='orange'] { background: #703a15; }
+:root:not(.dark) .ubm-color-chip[data-chip-fg='orange'] { background: #a13c08; } :root:not(.dark) .slash-color-glyph[data-fg='orange'] { color: #a13c08; }
+:root.dark .ubm-color-chip[data-chip-fg='orange'] { background: #fca863; } :root.dark .slash-color-glyph[data-fg='orange'] { color: #fca863; }
+:root:not(.dark) .ubm-color-chip[data-chip-bg='yellow'], :root:not(.dark) .slash-color-glyph[data-bg='yellow'] { background: #fef3a1; }
+:root.dark .ubm-color-chip[data-chip-bg='yellow'], :root.dark .slash-color-glyph[data-bg='yellow'] { background: #6a540f; }
+:root:not(.dark) .ubm-color-chip[data-chip-fg='yellow'] { background: #7d5603; } :root:not(.dark) .slash-color-glyph[data-fg='yellow'] { color: #7d5603; }
+:root.dark .ubm-color-chip[data-chip-fg='yellow'] { background: #fbd644; } :root.dark .slash-color-glyph[data-fg='yellow'] { color: #fbd644; }
+:root:not(.dark) .ubm-color-chip[data-chip-bg='green'], :root:not(.dark) .slash-color-glyph[data-bg='green'] { background: #e1fab1; }
+:root.dark .ubm-color-chip[data-chip-bg='green'], :root.dark .slash-color-glyph[data-bg='green'] { background: #1a5b32; }
+:root:not(.dark) .ubm-color-chip[data-chip-fg='green'] { background: #0e6b31; } :root:not(.dark) .slash-color-glyph[data-fg='green'] { color: #0e6b31; }
+:root.dark .ubm-color-chip[data-chip-fg='green'] { background: #6ee599; } :root.dark .slash-color-glyph[data-fg='green'] { color: #6ee599; }
+:root:not(.dark) .ubm-color-chip[data-chip-bg='teal'], :root:not(.dark) .slash-color-glyph[data-bg='teal'] { background: #adf8e9; }
+:root.dark .ubm-color-chip[data-chip-bg='teal'], :root.dark .slash-color-glyph[data-bg='teal'] { background: #0e5561; }
+:root:not(.dark) .ubm-color-chip[data-chip-fg='teal'] { background: #05657e; } :root:not(.dark) .slash-color-glyph[data-fg='teal'] { color: #05657e; }
+:root.dark .ubm-color-chip[data-chip-fg='teal'] { background: #57ddcc; } :root.dark .slash-color-glyph[data-fg='teal'] { color: #57ddcc; }
+:root:not(.dark) .ubm-color-chip[data-chip-bg='blue'], :root:not(.dark) .slash-color-glyph[data-bg='blue'] { background: #cce2fe; }
+:root.dark .ubm-color-chip[data-chip-bg='blue'], :root.dark .slash-color-glyph[data-bg='blue'] { background: #384b7a; }
+:root:not(.dark) .ubm-color-chip[data-chip-fg='blue'] { background: #1f54c8; } :root:not(.dark) .slash-color-glyph[data-fg='blue'] { color: #1f54c8; }
+:root.dark .ubm-color-chip[data-chip-fg='blue'] { background: #80b7fb; } :root.dark .slash-color-glyph[data-fg='blue'] { color: #80b7fb; }
+:root:not(.dark) .ubm-color-chip[data-chip-bg='purple'], :root:not(.dark) .slash-color-glyph[data-bg='purple'] { background: #edddff; }
+:root.dark .ubm-color-chip[data-chip-bg='purple'], :root.dark .slash-color-glyph[data-bg='purple'] { background: #502e6f; }
+:root:not(.dark) .ubm-color-chip[data-chip-fg='purple'] { background: #7c2bc7; } :root:not(.dark) .slash-color-glyph[data-fg='purple'] { color: #7c2bc7; }
+:root.dark .ubm-color-chip[data-chip-fg='purple'] { background: #cd9dfd; } :root.dark .slash-color-glyph[data-fg='purple'] { color: #cd9dfd; }
+:root:not(.dark) .ubm-color-chip[data-chip-bg='magenta'], :root:not(.dark) .slash-color-glyph[data-bg='magenta'] { background: #ffcece; }
+:root.dark .ubm-color-chip[data-chip-bg='magenta'], :root.dark .slash-color-glyph[data-bg='magenta'] { background: #7f5d5d; }
+:root:not(.dark) .ubm-color-chip[data-chip-fg='magenta'] { background: #941555; } :root:not(.dark) .slash-color-glyph[data-fg='magenta'] { color: #941555; }
+:root.dark .ubm-color-chip[data-chip-fg='magenta'] { background: #f98dbb; } :root.dark .slash-color-glyph[data-fg='magenta'] { color: #f98dbb; }
+:root:not(.dark) .ubm-color-chip[data-chip-bg='grey'], :root:not(.dark) .slash-color-glyph[data-bg='grey'] { background: #eaecef; }
+:root.dark .ubm-color-chip[data-chip-bg='grey'], :root.dark .slash-color-glyph[data-bg='grey'] { background: #40434a; }
+:root:not(.dark) .ubm-color-chip[data-chip-fg='grey'] { background: #5c5c5c; } :root:not(.dark) .slash-color-glyph[data-fg='grey'] { color: #5c5c5c; }
+:root.dark .ubm-color-chip[data-chip-fg='grey'] { background: #a8a8ad; } :root.dark .slash-color-glyph[data-fg='grey'] { color: #a8a8ad; }

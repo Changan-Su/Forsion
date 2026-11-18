@@ -8,6 +8,7 @@ import { NodeSelection, type EditorState, type Transaction } from '@milkdown/kit
 import type { ResolvedPos } from '@milkdown/kit/prose/model'
 import { MAX_INDENT } from '@amadeus-shared/indentIo'
 import { listBullet } from './listFormat'
+import { COLOR_ATTR_SPEC, colorDomAttrs, colorFromDom, liftContainerColor, withColorOnFirstChild } from './blockColor'
 
 const clampIndent = (n: number): number => Math.max(0, Math.min(MAX_INDENT, Math.floor(n) || 0))
 
@@ -51,16 +52,19 @@ export const indentedBlockquoteSchema = blockquoteSchema.extendSchema((prev) => 
   const base = prev(ctx)
   return {
     ...base,
-    attrs: { ...(base.attrs ?? {}), indent: { default: 0 } },
-    parseDOM: [{ tag: 'blockquote', getAttrs: (dom) => ({ indent: clampIndent(Number((dom as HTMLElement).dataset.indent)) }) }],
+    // bg / fg:整块颜色(./blockColor),挂在 blockquote 上,落盘写进第一段段首
+    attrs: { ...(base.attrs ?? {}), indent: { default: 0 }, ...COLOR_ATTR_SPEC },
+    parseDOM: [{ tag: 'blockquote', getAttrs: (dom) => ({ indent: clampIndent(Number((dom as HTMLElement).dataset.indent)), ...colorFromDom(dom as HTMLElement) }) }],
     toDOM: (node) => {
       const indent = clampIndent(node.attrs.indent as number)
-      return ['blockquote', { ...ctx.get(blockquoteAttr.key)(node), ...(indent ? { 'data-indent': indent } : {}) }, 0]
+      return ['blockquote', { ...ctx.get(blockquoteAttr.key)(node), ...(indent ? { 'data-indent': indent } : {}), ...colorDomAttrs(node.attrs) }, 0]
     },
     parseMarkdown: {
       match: base.parseMarkdown.match,
       runner: (state, node, type) => {
-        state.openNode(type, { indent: markdownBlockIndent(node as MdNode) }).next(node.children).closeNode()
+        const lifted = liftContainerColor(node as MdNode)
+        const color = lifted.bg || lifted.fg ? { bg: lifted.bg, fg: lifted.fg } : {}
+        state.openNode(type, { indent: markdownBlockIndent(node as MdNode), ...color }).next(lifted.node.children as never).closeNode()
       },
     },
     toMarkdown: {
@@ -68,7 +72,7 @@ export const indentedBlockquoteSchema = blockquoteSchema.extendSchema((prev) => 
       runner: (state, node) => {
         const indent = clampIndent(node.attrs.indent as number)
         if (indent) state.addNode('html', undefined, indentMarker(indent))
-        base.toMarkdown.runner(state, node)
+        base.toMarkdown.runner(state, withColorOnFirstChild(node as never))
       },
     },
   }

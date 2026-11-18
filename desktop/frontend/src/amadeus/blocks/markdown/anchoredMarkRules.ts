@@ -22,7 +22,8 @@ import {
   emphasisSchema, emphasisStarInputRule, emphasisUnderscoreInputRule, inlineCodeInputRule, inlineCodeSchema,
   strongInputRule, strongSchema,
 } from '@milkdown/kit/preset/commonmark'
-import { gfm, remarkGFMPlugin, strikethroughInputRule, strikethroughSchema } from '@milkdown/kit/preset/gfm'
+import { extendListItemSchemaForTask, gfm, remarkGFMPlugin, strikethroughInputRule, strikethroughSchema } from '@milkdown/kit/preset/gfm'
+import { coloredListItemSchema } from './listItemColor'
 import { literalBoldEnabled } from './literalBoldFlag'
 
 type Handler = (state: EditorState, match: RegExpMatchArray, start: number, end: number) => Transaction | null
@@ -119,6 +120,9 @@ export const commonmarkMarkRuleReplacements = new Map<unknown, unknown>([
  *  MarkdownBlock 里 `.use(gfmWithAnchoredRules)` 代替 `.use(gfm)`。 */
 export const gfmWithAnchoredRules = gfm.flatMap((p): MilkdownPlugin[] =>
   (p as unknown) === (strikethroughInputRule as unknown) ? [strikethrough as unknown as MilkdownPlugin]
+  // 列表项整块颜色(./listItemColor):原位替换 gfm 的待办扩展
+  : (p as unknown) === (extendListItemSchemaForTask.node as unknown) ? [coloredListItemSchema.node]
+  : (p as unknown) === (extendListItemSchemaForTask.ctx as unknown) ? [coloredListItemSchema.ctx]
   : (p as unknown) === (remarkGFMPlugin.options as unknown) ? [gfmOptionsNoSingleTilde]
   : (p as unknown) === (remarkGFMPlugin.plugin as unknown) ? [p, ...strictTildeUnsafe]
   : [p])

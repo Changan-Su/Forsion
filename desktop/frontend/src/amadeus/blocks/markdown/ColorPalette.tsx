@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { Check, ChevronLeft, X } from 'lucide-react'
 import { OverlayAt, rectAnchor } from '@lcl/engine'
 import { registerMessages, useI18n } from '../../../i18n'
-import { BG_COLORS, CARD_COLORS, TEXT_COLORS } from './colorPaletteValues'
+import { BG_COLORS, BLOCK_BG_COLORS, BLOCK_TEXT_COLORS, CARD_COLORS, TEXT_COLORS } from './colorPaletteValues'
 import './colorPalette.css'
 
 registerMessages({
@@ -21,6 +21,7 @@ registerMessages({
   'palette.selection': { zh: '应用于选中文字', en: 'Selected text' },
   'palette.block': { zh: '应用于整个分块', en: 'Entire block' },
   'palette.blockMenu': { zh: '分块颜色…', en: 'Block color…' },
+  'palette.blockRow': { zh: '颜色', en: 'Color' },
 })
 
 type Mode = 'text' | 'fill'
@@ -29,6 +30,11 @@ export interface ColorPaletteProps {
   text?: string
   fill?: string
   scope?: 'selection' | 'block'
+  /** 色值集合:mark = 划词(hex 落盘);card = 画布卡片(1–6);block = 整块颜色(语义名,./blockColor)。
+   *  缺省:scope 为 block 时 card(画布卡片的旧调用),否则 mark。 */
+  set?: 'mark' | 'card' | 'block'
+  /** 弹在锚点下方(缺省)还是右侧(块菜单里的「颜色 ›」那一行,与「转换为 ›」子菜单同向)。 */
+  side?: 'below' | 'right'
   onText?: (value: string) => void
   onFill: (value: string) => void
   onClose: () => void
@@ -49,9 +55,13 @@ export function ColorPalettePopover(p: ColorPaletteProps) {
     if (p.anchor === document.activeElement) root.current?.querySelector<HTMLElement>('[role="tab"]')?.focus()
   }, [p.anchor])
   const current = (mode === 'text' ? p.text : p.fill) || ''
-  const accent = mode === 'text' ? 'var(--signal)' : p.scope === 'block' ? 'accent' : 'var(--amx-accent-fill)'
-  const colors = mode === 'text' ? TEXT_COLORS : p.scope === 'block' ? CARD_COLORS : BG_COLORS
+  const set = p.set ?? (p.scope === 'block' ? 'card' : 'mark')
+  const accent = set === 'block' ? 'accent' : mode === 'text' ? 'var(--signal)' : set === 'card' ? 'accent' : 'var(--amx-accent-fill)'
+  const colors: Array<{ nameKey: string; v: string; swatch?: string }> = set === 'block'
+    ? (mode === 'text' ? BLOCK_TEXT_COLORS : BLOCK_BG_COLORS)
+    : mode === 'text' ? TEXT_COLORS : set === 'card' ? CARD_COLORS : BG_COLORS
   const customSelected = !!current && current !== accent && !colors.some((c) => c.v === current)
+  const swatchOf = (c: { v: string; swatch?: string }): string => c.swatch ?? (/^[1-6]$/.test(c.v) ? `var(--amx-cv-${c.v})` : c.v)
   const apply = (value: string): void => { if (mode === 'text') p.onText?.(value); else p.onFill(value) }
   useEffect(() => {
     const key = (e: KeyboardEvent): void => {
@@ -70,8 +80,10 @@ export function ColorPalettePopover(p: ColorPaletteProps) {
   // Keep the editor's selection when using the mouse; keyboard activation is native click.
   const pick = (value: string) => ({ onMouseDown: (e: React.MouseEvent) => { e.preventDefault(); apply(value) }, onClick: (e: React.MouseEvent) => { if (!e.detail) apply(value) } })
   const r = p.anchor?.getBoundingClientRect()
+  // 右侧放不下(手机宽度、菜单贴着右边)→ 退回到行下方,不让视口夹取把它压到菜单上
+  const right = p.side === 'right' && r && r.right + 4 + 280 <= window.innerWidth - 8
   return createPortal(<OverlayAt className="ui-popover amx-color-popover" role="dialog" aria-label={t('palette.custom')}
-    x={r?.left ?? p.fallback?.x ?? 8} y={(r?.bottom ?? p.fallback?.y ?? 8) + 6} anchorTop={(r?.top ?? 8) - 6} anchor={anchor}
+    x={right ? r.right + 4 : r?.left ?? p.fallback?.x ?? 8} y={right ? r.top - 5 : (r?.bottom ?? p.fallback?.y ?? 8) + 6} anchorTop={right ? r.bottom + 5 : (r?.top ?? 8) - 6} anchor={right ? undefined : anchor /* 跟随锚点时 x/y 不用;右侧摆法按行的位置一次摆定(块菜单本身不随滚动走) */}
     innerRef={(el) => { root.current = el }} onMouseDown={(e) => { if (!(e.target instanceof HTMLInputElement)) e.preventDefault() }}
     onKeyDown={(e) => {
       if (e.target instanceof HTMLInputElement) return
@@ -105,7 +117,7 @@ export function ColorPalettePopover(p: ColorPaletteProps) {
         {colors.filter((c) => c.v).map((c) => <button key={c.v} data-color-option data-color-value={c.v}
           data-fg={mode === 'text' ? c.v : undefined} data-bg={mode === 'fill' ? c.v : undefined}
           title={t(c.nameKey)} aria-label={t(c.nameKey)} aria-pressed={current === c.v} {...pick(c.v)}>
-          {mode === 'text' ? <span data-hlc={c.nameKey.slice('itb.color.'.length)} style={{ color: c.v }}>A</span> : <i style={{ background: /^[1-6]$/.test(c.v) ? `var(--amx-cv-${c.v})` : c.v }} />}{current === c.v && <Check size={12} />}
+          {mode === 'text' ? <span data-hlc={c.nameKey.slice('itb.color.'.length)} style={{ color: swatchOf(c) }}>A</span> : <i style={{ background: swatchOf(c) }} />}{current === c.v && <Check size={12} />}
         </button>)}
       </div>
       <button className="amx-palette-option" data-more data-color-option onClick={() => { if (/^#[0-9a-f]{6}$/i.test(current)) setHex(current); setCustom(true) }}><span>{t('palette.more')}</span>{customSelected && <Check size={14} />}</button>
