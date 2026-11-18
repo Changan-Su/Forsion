@@ -1,0 +1,104 @@
+/* 表格悬停层(unified/tableHover.ts;「页面编辑对齐 Notion」第 3 条,2026-11-17)。
+   全部是 `.milkdown` 容器里的绝对定位浮层;坐标由 JS 写(反补偿缩放),这里只管外观与显隐。
+   加号条:浅底实色、圆角 6、不画虚线(用户明确不要虚线边框)。把手:白底细边小胶囊。 */
+.amx-tbl-ui {
+  position: absolute;
+  z-index: 2;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  color: var(--text-muted);
+  font: 500 var(--ui-font-caption) / 1 var(--font-ui);
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: manipulation;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--duration-fast) var(--ease-calm), background-color var(--duration-fast) var(--ease-calm), color var(--duration-fast) var(--ease-calm);
+}
+.amx-tbl-ui[data-show] {
+  opacity: 1;
+  pointer-events: auto;
+}
+.amx-tbl-ui:is(.amx-tbl-band, .amx-tbl-drop) { pointer-events: none; }
+
+/* 加号条:悬停才浮出(粗指针常显,见 tableHover.ts layoutTouch)。 */
+.amx-tbl-add {
+  background: var(--overlay-light);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  overflow: hidden;
+}
+.amx-tbl-add:hover,
+.amx-tbl-add[data-active] {
+  background: var(--overlay-medium);
+  color: var(--text-muted);
+}
+.amx-tbl-add-glyph { display: flex; }
+.amx-tbl-add-count:empty { display: none; }
+/* 拖右下角时条上标 +N:数字替掉加号 */
+.amx-tbl-add[data-active] .amx-tbl-add-glyph { display: none; }
+.amx-tbl-add-count { font-variant-numeric: tabular-nums; }
+
+/* 右下角圆点(两条加号条交汇那一格的正中):按住拖 = 一次加多行多列。 */
+.amx-tbl-corner {
+  background: transparent;
+  cursor: nwse-resize;
+  align-items: flex-start;
+  justify-content: flex-start;
+}
+.amx-tbl-corner::after {
+  content: '';
+  width: 14px;
+  height: 14px;
+  margin: 2px;
+  border-radius: 50%;
+  background: var(--overlay-medium);
+  transition: background-color var(--duration-fast) var(--ease-calm);
+}
+.amx-tbl-corner:hover::after,
+.amx-tbl-corner[data-active]::after { background: var(--overlay-strong); }
+
+/* 行首 / 列首把手:点 = 菜单,按住拖 = 换序。 */
+.amx-tbl-grip {
+  background: var(--bg-card);
+  border: var(--border-width, 1px) solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: grab;
+}
+.amx-tbl-grip[data-axis='col'] svg { transform: rotate(90deg); }
+.amx-tbl-grip:hover,
+.amx-tbl-grip[data-active] {
+  color: var(--text);
+  background: var(--surface-2, var(--bg-card));
+}
+.amx-tbl-grip[data-fixed] { cursor: pointer; } /* 表头行:只有菜单,拖不动 */
+.amx-tbl-grip:active { cursor: grabbing; }
+.amx-tbl-grip[data-fixed]:active { cursor: pointer; }
+
+/* 把手指着的那一行 / 列:悬停把手、菜单开着、拖着时盖一层淡底。 */
+.amx-tbl-band {
+  background: color-mix(in srgb, var(--signal) 7%, transparent);
+  border: var(--border-width, 1px) solid color-mix(in srgb, var(--signal) 28%, transparent);
+  border-radius: 2px;
+}
+.amx-tbl-band[data-drag] { background: color-mix(in srgb, var(--signal) 12%, transparent); }
+/* 换序落点:实线,与块拖拽的落点线同色。 */
+.amx-tbl-drop {
+  background: var(--signal-line);
+  border-radius: 2px;
+}
+.amx-tbl-dragging,
+.amx-tbl-dragging * { cursor: grabbing !important; }
+
+/* 表下让出加号条的位置(GAP 6 + 条 18 + 2),悬停时它不盖住下一段的第一行 —— 盖住的话点那一行的上半截
+   就成了「加一行」。只在可编辑时让(只读 / 阅读排版不变)。粗指针的条更粗(24),让得更多。右侧那条落在页边距里。 */
+.am-app .unified-body .ProseMirror[contenteditable='true'] table { margin-bottom: calc(0.4em + 20px); }
+@media (pointer: coarse) {
+  .am-app .unified-body .ProseMirror[contenteditable='true'] table { margin-bottom: calc(0.4em + 26px); }
+}
