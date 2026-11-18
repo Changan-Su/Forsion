@@ -7,7 +7,8 @@ import {
   columnPlugins, createColumnsFold, deriveLayoutJson, parseLayoutJson, patchSection, removeEmptyColumnTr,
   sectionView, isSectionRow, executePair, type LayoutV4,
 } from './columns'
-import { NodeSelection, TextSelection } from '@milkdown/kit/prose/state'
+import { NodeSelection, Plugin, TextSelection } from '@milkdown/kit/prose/state'
+import { $prose } from '@milkdown/kit/utils'
 import { setSectionColumns } from './sections'
 
 const BODY = [
@@ -222,6 +223,20 @@ describe('版块:评审补的几条', () => {
     bb.view.dispatch(bb.view.state.tr.delete(first, first + node.nodeSize))
     bb.view.dispatch(bb.view.state.tr.insert(first, node).setMeta('history$', { redo: false }))
     expect(bb.saved()).toBe(body)
+  })
+
+  it('外部回灌后面又追加了别的插件的事务:按根事务算,回灌带进来的锚一个不改', async () => {
+    const appender = $prose(() => new Plugin({
+      appendTransaction: (trs, _o, st) => (trs.some((t) => t.getMeta('testAppend')) ? st.tr.insertText('!', 1) : null),
+    }))
+    const body = ['甲段。', '', '<!-- a x1 -->', '', '乙段。', ''].join('\n')
+    b = await bootEditor(body, { extra: [appender, ...columnPlugins, ...createColumnsFold(() => null)] })
+    const { state } = b.view
+    let first = -1
+    state.doc.forEach((n, off) => { if (first < 0 && n.type.name === 'paragraph' && n.childCount === 1 && n.firstChild!.type.name === 'html') first = off })
+    const node = state.doc.nodeAt(first)!
+    b.view.dispatch(state.tr.insert(state.doc.content.size, node).setMeta('addToHistory', false).setMeta('testAppend', true))
+    expect(b.saved().match(/<!-- a x1 -->/g)?.length).toBe(2)
   })
 
   it('Mod-D 那样不带粘贴标记的复制(普通编辑)照样换新锚', async () => {

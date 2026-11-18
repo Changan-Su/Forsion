@@ -424,7 +424,8 @@ export const columnsNormalizer = $prose(() =>
       // 锚撞号先修、在规范化**之前**:规范化会整行重建(Alt 拖复制带空栏的行,原件也被重建),原件的位置就映射不回来了,
       // 锚号会跑到副本上(Codex 复核)。只在「用户这一下编辑」时做(粘贴、拖放、Mod-D…):撤销重做是回放、
       // 外部回灌(reconcileDiff)是权威内容,都带着各自该有的锚,一个不改(撤销删掉的重复注释也不会被换号)。
-      if (trs.some((t) => t.docChanged && !t.getMeta('history$') && t.getMeta('addToHistory') !== false)) {
+      // 别的插件追加在它们后面的事务按根事务算(Codex 评审 #759:不然回灌带进来的锚会被换号)。
+      if (userEdits(trs)) {
         const mapping = new Mapping()
         for (const t of trs) mapping.appendMapping(t.mapping)
         tr = dedupeAnchors(tr, old.doc, mapping)
@@ -442,6 +443,17 @@ export const columnsNormalizer = $prose(() =>
     },
   }),
 )
+
+/** 这一组事务是不是用户这一下编辑:撤销重做(history$)是回放、外部回灌(addToHistory:false)是权威内容;
+ *  别的插件追加的事务(appendedTransaction)按它的根事务算 —— 同一次 applyTransaction 里,排在前面的插件追加的事务
+ *  会和根事务一起递进来,只看各自的标记就会把回灌当成用户编辑。 */
+function userEdits(trs: readonly Transaction[]): boolean {
+  const isUser = (t: Transaction): boolean => {
+    const root = (t.getMeta('appendedTransaction') as Transaction | undefined) ?? t
+    return !root.getMeta('history$') && root.getMeta('addToHistory') !== false
+  }
+  return trs.some((t) => t.docChanged) && trs.every(isUser)
+}
 
 type NormalizeJob = { from: number; to: number; content: ProseNode[] }
 
