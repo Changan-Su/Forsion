@@ -20,6 +20,7 @@
 //  PM 自己起的拖拽(块选中后按住正文拖,不经 ⠿;Codex 评审 11-18):
 //  S11 原生拖 + 途中补字 → 落下的那段带着新字(PM 改字后会换掉 view.dragging 对象,来源记录不能认它的身份)
 //  S12 原生拖 + 途中被删、后跟分隔线、松手在分隔线上 → 作废,分隔线还在(修前:PM 缺省 drop 删掉分隔线、旧字复活)
+//  S13 原生拖 + 途中补字、松手在它自己身上(落点插件不给目标 → 走 PM 缺省落点那条)→ 新字还在(修前:换回旧字)
 // 用法:node scripts/e2e-editor.cjs --check=unified-dragsource(或 npm run check:dragsource)
 //      5173 被别的检出占着时:HARNESS_URL=http://localhost:<port>/harness.html
 const fs = require('fs'), os = require('os'), path = require('path')
@@ -403,6 +404,21 @@ async function main() {
     const s = await snap(p)
     check('S12 前置:PM 自己起的拖、途中删除落进去了', /NodeSelection/.test(sel) && r.kind === 'native' && r.editRes === 'ok', JSON.stringify({ sel, ...r }))
     check('S12 分隔线还在、段2 没复活', JSON.stringify(s.shape) === JSON.stringify(['段1', 'hr', '段3', '段4', '段5', '段6']), JSON.stringify(s.shape))
+    await p.close()
+  }
+
+  // ── S13 原生拖 + 途中补字 + 松手在自己身上(落点插件无目标,走 PM 缺省落点)──────────────────
+  {
+    const p = await openPage(browser, SEED)
+    const sel = await selectNode(p, '段2')
+    const a = await rectOf(p, '段2')
+    const self = async () => { const r = await rectOf(p, '段2'); return { x: r.x + 160, y: r.y + r.h / 2 } }
+    // 先拖远(起拖),再回到段2 正中松手
+    const r = await nativeDragWithEdit(p, { x: a.x + 60, y: a.y + a.h / 2 }, async () => (await self()), () => remoteEdit(p, 'append', { of: '段2', text: ADD }))
+    const s = await snap(p)
+    const moved = s.full.filter((x) => x.startsWith('段2'))
+    check('S13 前置:PM 自己起的拖、途中改动落进去了', /NodeSelection/.test(sel) && r.kind === 'native' && r.editRes === 'ok', JSON.stringify({ sel, ...r }))
+    check('S13 段2 只有一份、新字还在、其余块次序不变', moved.length === 1 && moved[0].includes(ADD) && JSON.stringify(s.shape) === JSON.stringify(['段1', '段2', '段3', '段4', '段5', '段6', '段7', '段8']), JSON.stringify({ shape: s.shape, moved }))
     await p.close()
   }
 
