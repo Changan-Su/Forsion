@@ -56,9 +56,13 @@ export function captionOf(node: ProseNode): string {
   return t && t !== ((node.attrs.alt as string | null) ?? '') ? t : ''
 }
 
-/** 说明(title)在源码行里的写法:`\` 与 `"` 加反斜杠(与 markdown 标题同口径),读回时去掉。 */
+/** 说明(title)在源码行里的写法:`\` 与 `"` 加反斜杠(与 markdown 标题同口径)。读回只解 CommonMark 的
+ *  反斜杠转义(反斜杠 + ASCII 标点):`C:\folder\test` 里的 `\f` `\t` 是字面量,不许吃掉反斜杠。 */
 const escapeTitle = (t: string): string => t.replace(/[\\"]/g, (c) => `\\${c}`)
-const unescapeTitle = (t: string): string => t.replace(/\\([\s\S])/g, '$1')
+const unescapeTitle = (t: string): string => t.replace(/\\([!-/:-@[-`{-~])/g, '$1')
+/** 单行输入框放不下换行(浏览器还会把换行直接删掉):显示时换成空格。原 title 带换行时,
+ *  没改过的提交一律原样保留(见 openCaption / commitSource),不让单行框悄悄改写多行说明。 */
+const flatLine = (t: string): string => t.replace(/\r\n?|\n/g, ' ')
 
 /** 工具条 / 把手的一次动作 = 一步撤销:连点几下对齐、拖两次把手,不并进同一步(history 缺省 500ms 内相邻改动合并)。 */
 const ownStep = (tr: Transaction): Transaction => closeHistory(tr)
@@ -302,7 +306,8 @@ class MdImageView implements NodeView {
     const input = document.createElement('input')
     input.className = 'amx-img-capline'
     input.type = 'text'
-    input.value = old
+    input.value = flatLine(old)
+    const shown = input.value // 浏览器可能再规整一遍,以实际显示出来的为准
     input.placeholder = translate('imgtb.captionPlaceholder')
     input.setAttribute('aria-label', translate('imgtb.caption'))
     input.spellcheck = false
@@ -310,7 +315,9 @@ class MdImageView implements NodeView {
     const finish = (commit: boolean): void => {
       if (done) return
       done = true
-      const v = input.value.replace(/[\r\n]+/g, ' ').trim()
+      // 没改过 = 什么都不做:原 title 的换行、首尾空格都原样留着(不在「原样提交」时顺手规整)
+      const edited = input.value !== shown
+      const v = flatLine(input.value).trim()
       input.remove()
       this.capLine = null
       this.apply(this.node)
@@ -318,7 +325,7 @@ class MdImageView implements NodeView {
       this.tb?.refresh()
       this.sheet?.refresh()
       const pos = this.pos()
-      if (commit && v !== old && pos != null && this.view.editable) {
+      if (commit && edited && v !== old && pos != null && this.view.editable) {
         const node = this.view.state.doc.nodeAt(pos)
         if (node?.type.name === 'image') this.markup(pos, { ...node.attrs, title: v || null })
       }
@@ -397,17 +404,19 @@ class MdImageView implements NodeView {
     const title = String(this.node.attrs.title ?? '')
     const input = document.createElement('input')
     input.className = 'embed-src-input amx-img-srcline'
-    input.value = `![${String(this.node.attrs.alt ?? '')}](${fromAssetUrl(src) ?? src}${title ? ` "${escapeTitle(title)}"` : ''})`
+    input.value = `![${String(this.node.attrs.alt ?? '')}](${fromAssetUrl(src) ?? src}${title ? ` "${escapeTitle(flatLine(title))}"` : ''})`
+    const shown = input.value
     let done = false
     const finish = (commit: boolean): void => {
       if (done) return
       done = true
       const v = input.value.trim()
+      const edited = input.value !== shown
       input.remove()
       this.srcLine = null
       this.dom.removeAttribute('data-src-open')
       this.layout()
-      if (commit) this.commitSource(v)
+      if (commit && edited) this.commitSource(v)
       this.view.focus()
     }
     input.addEventListener('keydown', (e) => {
@@ -439,7 +448,10 @@ class MdImageView implements NodeView {
     // exact:框里填的是库内路径(openSource 给出去的就是它)。不带的话云端先按当前页的目录找,显示的和存下去的
     // (存盘按库内路径换成页相对 / `../`)可能不是同一张图(Codex 评审 2026-10-10)。
     const src = /^(https?:|data:|blob:)/i.test(p) ? p : toAssetUrl(p, true)
-    const title = m[3] == null ? null : unescapeTitle(m[3]) || null
+    let title = m[3] == null ? null : unescapeTitle(m[3]) || null
+    // 只改了宽度 / 地址:说明还是框里显示的那句(多行说明被摊成了一行)→ 保留原 title,换行不丢
+    const orig = (this.node.attrs.title as string | null) ?? null
+    if (title != null && orig != null && title === flatLine(orig)) title = orig
     const next = { ...this.node.attrs, alt: m[1], src, title }
     if (next.alt === this.node.attrs.alt && next.src === this.node.attrs.src && (next.title ?? null) === (this.node.attrs.title ?? null)) return
     this.markup(pos, next)

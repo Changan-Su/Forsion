@@ -7,7 +7,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { NodeSelection } from '@milkdown/kit/prose/state'
 import { DOMParser, DOMSerializer } from '@milkdown/kit/prose/model'
-import { selectedAttachment } from './MarkdownBlock'
+import { isAttachmentReferenceText, selectedAttachment } from './MarkdownBlock'
 import { bootEditor, roundTrip, type Booted } from './parseFidelity.testkit'
 import { mdImagePlugin } from './mdImage'
 import { setTextAlignment } from './paragraphIndent'
@@ -186,5 +186,83 @@ describe('粘贴 / 剪切过一趟 DOM:不再拿 alt 顶 title(imageCaptionSchem
     expect(selectedAttachment(b.view)).toEqual({ reference: '![|200](a.png "say \\"hi\\" (x)")', ref: 'a.png' })
     const re = await boot(selectedAttachment(b.view)!.reference + '\n')
     expect(titleOf(re)).toBe('say "hi" (x)')
+  })
+})
+
+describe('Codex 评审 2026-11-18:说明 / 源码行 / 复制引用的边角', () => {
+  const btn = (b: Booted, act: string): HTMLButtonElement => {
+    b.view.dom.querySelector('.wiki-inline-img-wrap')!.dispatchEvent(new PointerEvent('pointerenter'))
+    return b.view.dom.querySelector<HTMLButtonElement>(`.amx-img-tb [data-act="${act}"]`)!
+  }
+  const key = (el: HTMLElement, k: string): void => { el.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true })) }
+  const capLine = (b: Booted): HTMLInputElement => b.view.dom.querySelector<HTMLInputElement>('.amx-img-capline')!
+  const srcLine = (b: Booted): HTMLInputElement => b.view.dom.querySelector<HTMLInputElement>('.amx-img-srcline')!
+
+  it('① 多行 / 首尾带空格的说明:「说明」「源码」没改就回车或失焦,title 原样不动', async () => {
+    for (const md of ['![x](a.png "first\nsecond")\n', '![x](a.png "  spaced  ")\n']) {
+      const b = await boot(md, true)
+      const before = b.view.state.doc
+      btn(b, 'caption').click()
+      expect(capLine(b).value).not.toContain('\n')
+      key(capLine(b), 'Enter')
+      btn(b, 'caption').click()
+      capLine(b).dispatchEvent(new FocusEvent('blur'))
+      btn(b, 'source').click()
+      key(srcLine(b), 'Enter')
+      expect(b.view.state.doc).toBe(before) // 一笔事务都没派
+      expect(b.saved()).toBe(md)
+    }
+  })
+  it('① 源码行只改宽度:多行说明的换行保留', async () => {
+    const b = await boot('![x](a.png "first\nsecond")\n', true)
+    btn(b, 'source').click()
+    const input = srcLine(b)
+    expect(input.value).toBe('![x](a.png "first second")')
+    input.value = input.value.replace('![x]', '![x|300]')
+    key(input, 'Enter')
+    const n = b.view.state.doc.nodeAt(imagePos(b))!
+    expect([n.attrs.alt, n.attrs.title]).toEqual(['x|300', 'first\nsecond'])
+  })
+  it('② 源码行里的反斜杠:只解 CommonMark 转义(反斜杠 + ASCII 标点),`\\f` `\\t` 照字面', async () => {
+    const b = await boot('![x](a.png)\n', true)
+    btn(b, 'source').click()
+    srcLine(b).value = '![x](a.png "C:\\folder\\test")'
+    key(srcLine(b), 'Enter')
+    expect(titleOf(b)).toBe('C:\\folder\\test')
+    btn(b, 'source').click()
+    expect(srcLine(b).value).toBe('![x](a.png "C:\\\\folder\\\\test")') // 再开:显示成转义形态,提交回来还是同一句
+    key(srcLine(b), 'Enter')
+    expect(titleOf(b)).toBe('C:\\folder\\test')
+    btn(b, 'source').click()
+    srcLine(b).value = '![x](a.png "a \\"q\\" \\\\ b \\& c")'
+    key(srcLine(b), 'Enter')
+    expect(titleOf(b)).toBe('a "q" \\ b & c')
+  })
+  it('③ 复制引用:说明 / alt 里字面的 `&quot;` `&copy;` `&#169;` 与反斜杠,粘回来逐字不变', async () => {
+    const title = '&quot;x&quot; &copy; &#169; &#x26; & amp \\ "q"'
+    const alt = 'a\\*b &copy;|300'
+    const b = await boot('![a|300](a.png)\n')
+    const pos = imagePos(b)
+    b.view.dispatch(b.view.state.tr.setNodeMarkup(pos, undefined, { ...b.view.state.doc.nodeAt(pos)!.attrs, title, alt }))
+    b.view.dispatch(b.view.state.tr.setSelection(NodeSelection.create(b.view.state.doc, pos)))
+    const hit = selectedAttachment(b.view)!
+    expect(isAttachmentReferenceText(hit.reference)).toBe(true)
+    const re = await boot(hit.reference + '\n')
+    const n = re.view.state.doc.nodeAt(imagePos(re))!
+    expect([n.attrs.alt, n.attrs.title]).toEqual([alt, title])
+  })
+  it('④ 引用文字判定:没说明时路径可带 `"`;带说明时说明里可有 `)` 与转义引号', async () => {
+    expect(isAttachmentReferenceText('![|300](attachments/a"b.png)')).toBe(true)
+    expect(isAttachmentReferenceText('![|200](a.png "say \\"hi\\" (x)")')).toBe(true)
+    expect(isAttachmentReferenceText('![x](a.png "t")')).toBe(true)
+    expect(isAttachmentReferenceText('![[x.png|200]]')).toBe(true)
+    expect(isAttachmentReferenceText('![x](https://a.com/b.png)')).toBe(false)
+    expect(isAttachmentReferenceText('![x](a.png) 后面还有字')).toBe(false)
+    // 从编辑器复制出来的就是这句
+    const b = await boot('![|300](attachments/a"b.png)\n')
+    b.view.dispatch(b.view.state.tr.setSelection(NodeSelection.create(b.view.state.doc, imagePos(b))))
+    const hit = selectedAttachment(b.view)!
+    expect(hit).toEqual({ reference: '![|300](attachments/a"b.png)', ref: 'attachments/a"b.png' })
+    expect(isAttachmentReferenceText(hit.reference)).toBe(true)
   })
 })

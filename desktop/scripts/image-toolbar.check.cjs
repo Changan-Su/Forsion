@@ -244,6 +244,29 @@ async function main() {
     // 框里写 `\\` = 一个反斜杠;落盘时后面跟的是空格,CommonMark 不用转义,写回一个
     check('T5 源码行改说明 → title 跟着改', md.includes('![封面|300](home-w640-h360.png "新 \\ 说明")') && await p.evaluate((W) => document.querySelector(W + ' > .amx-img-cap')?.textContent, WRAP) === '新 \\ 说明', md)
 
+    // T5b 多行 / 首尾空格的说明:「说明」「源码」没改就回车,盘上原样(单行框不许悄悄改写)
+    // (多行 title 的图显示管线逐行换地址,本来就换不成显示地址 —— 既有限制;台架给裸路径也供一张图,免得是破图)
+    await p.route(`${ORIGIN}/home-w640-h360.png`, (r) => r.fulfill({ status: 200, contentType: 'image/png', body: png(640, 360) }))
+    for (const ML of ['![封面|300](home-w640-h360.png "first\nsecond")', '![封面|300](home-w640-h360.png "  spaced  ")']) {
+      await p.evaluate(({ text, file }) => window.__upage.switchFile(file, text), { text: `前文\n\n${ML}\n\n后文\n`, file: ML.includes('\n') ? 'Multi.md' : 'Spaced.md' })
+      await p.waitForFunction((s) => [...document.querySelectorAll(s + ' img.wiki-inline-img')].some((i) => i.complete && i.naturalWidth > 0), PM, { timeout: 15000 })
+      await p.mouse.move(2, 2)
+      await p.waitForTimeout(300)
+      await tb(p, 'caption')
+      const shown = await p.evaluate(() => document.querySelector('.amx-img-capline')?.value)
+      await p.keyboard.press('Enter')
+      await p.waitForTimeout(150)
+      await tb(p, 'source')
+      await p.keyboard.press('Enter')
+      await p.waitForTimeout(150)
+      const t = await p.locator(`${PM} > p`, { hasText: '后文' }).boundingBox()
+      await p.mouse.click(t.x + t.width - 2, t.y + t.height / 2)
+      await p.keyboard.press('End')
+      await p.keyboard.type('X')
+      md = await saved(p)
+      check(`T5 ${ML.includes('\n') ? '多行' : '首尾空格'}说明:输入行摊成一行显示;没改就回车,盘上原样`, shown === (ML.includes('\n') ? 'first second' : '  spaced  ') && md.includes(ML) && md.includes('后文X'), { shown, md })
+    }
+
     // ── T6 替换:同一个选图对话框,只换 src,宽度和说明留着 ──
     await reopen(p, '前文\n\n![封面|300](home-w640-h360.png "说明留着")\n\n后文\n', 'Rep.md')
     await p.evaluate(() => {

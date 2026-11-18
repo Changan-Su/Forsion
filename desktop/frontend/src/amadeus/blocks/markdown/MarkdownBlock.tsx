@@ -373,10 +373,13 @@ export function selectedAttachment(view: EditorView): { reference: string; ref: 
     const src = String(image.attrs.src ?? '')
     const ref = fromAssetUrl(src) ?? src
     if (!ref || /^(?:https?:|data:|blob:)/i.test(ref)) return null
-    // 图下说明(title)跟着引用走:库内粘回来说明还在(转义同 markdown 标题)。
+    // 图下说明(title)跟着引用走:库内粘回来说明还在。转义同序列化器:`\` `"` 加反斜杠;
+    // 能拼成字符引用的 `&`(`&quot;` `&copy;` `&#169;` …)写成 `\&`,否则粘回来被解码成 `"` `©`。alt 同理。
+    const amp = (t: string): string => t.replace(/&(?=[#A-Za-z])/g, '\\&')
     const cap = captionOf(image)
-    const title = cap ? ` "${cap.replace(/[\\"]/g, (c) => `\\${c}`)}"` : ''
-    return { reference: `![${String(image.attrs.alt ?? '')}](${ref}${title})`, ref }
+    const title = cap ? ` "${amp(cap.replace(/[\\"]/g, (c) => `\\${c}`))}"` : ''
+    const alt = amp(String(image.attrs.alt ?? '').replace(/\\/g, '\\\\'))
+    return { reference: `![${alt}](${ref}${title})`, ref }
   }
   const wiki = /^!\[\[([^\]\n]+)\]\]$/.exec(reference)
   if (!wiki) return null
@@ -438,9 +441,14 @@ function internalAttachmentReference(dt: DataTransfer | null, raw: string): stri
     file.name === recent.fileName || (/\.(?:png|jpe?g|gif|webp|svg|avif|bmp)$/i.test(recent.fileName) && file.type.startsWith('image/')))
   if (recent && (recent.reference === raw || (!raw && nativeFile && recentFileMatches))) return recent.reference
   if (!raw) return null
-  const attachmentSyntax = /^!\[\[[^\]\n]+\]\]$/.test(raw)
-    || /^!\[[^\]\n]*\]\((?!https?:|data:|blob:)[^)\n"]+(?:\s+"(?:[^"\\\n]|\\.)*")?\)$/i.test(raw) // 可带图下说明(title)
-  return nativeFile && attachmentSyntax ? raw : null
+  return nativeFile && isAttachmentReferenceText(raw) ? raw : null
+}
+
+/** 一整份库内附件引用的文字形态:`![[x.png|200]]`,或 `![alt](库内路径)` / `![alt](库内路径 "说明")`。
+ *  没说明时路径照旧可以带 `"`(`attachments/a"b.png`);带说明时说明里可以有 `)` 与转义引号。 */
+export function isAttachmentReferenceText(raw: string): boolean {
+  return /^!\[\[[^\]\n]+\]\]$/.test(raw)
+    || /^!\[[^\]\n]*\]\((?!https?:|data:|blob:)(?:[^)\n]+|[^)\n"]+\s+"(?:[^"\\\n]|\\.)*")\)$/i.test(raw)
 }
 
 // 光标是否在本块「首/末视觉行」——决定 ↑↓ 该在块内移行还是跳去邻块。
