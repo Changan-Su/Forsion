@@ -106,7 +106,7 @@ and pages with their own back semantics (such as Settings) use `mode: 'page'`.
 ```
 
 On Android, Space switching is a native bottom navigation bar (the host declares `spaces: true`): Spaces registered by plugins appear in it automatically with the icon from `SpaceDefinition.icon`, with no extra wiring.
-A Space with a left sidebar has two-level navigation on Android: you land on the sidebar (a full-screen list), tapping an item opens the main area, and Back returns to the list. A Space whose sidebar isn't that kind of list sets `listFirst: false` in its definition; the main area is then the first level and the sidebar stays a drawer.
+A Space with a left sidebar has two-level navigation on Android: you land on the sidebar (a full-screen list), tapping an item opens the main area, and Back returns to the list. A Space whose sidebar isn't that kind of list sets `listFirst: false` in its definition; the main area is then the first level and the sidebar stays a drawer. When the left sidebar holds several views, a switcher sits above the list; a Space whose first view already leads to the others sets `soleList: true`, and the list level draws only that first view, without the switcher (only what is drawn changes: no view is closed and the saved layout is untouched).
 A view can add two things to this native top bar: `useNativeChromeExtras` — a search button in the right capsule and a second part of the title (tappable when `run` is given). Without a declaration there is neither, and only the current level's declaration applies.
 
 ```js

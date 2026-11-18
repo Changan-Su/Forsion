@@ -174,3 +174,30 @@
   margin: 0; padding: calc(4 * var(--pl-dp)) calc(16 * var(--pl-dp)) calc(10 * var(--pl-dp)) calc(68 * var(--pl-dp));
   font-size: var(--ui-font-caption, 11px);
 }
+
+/* ══ 笔记列表的「标签」一档(amadeusPanels 的 AmadeusTagsView inList)和就地显示的全文检索(AmadeusSearchView onBack):
+ *    侧栏面板的那两套行放到触屏的尺寸 —— 一行 48dp,左缘和两行的行对齐(16dp),字号仍是 body / caption 两档。
+ *    检索面板在这里不自己滚(列表的滚动器在外面:让位 Dock、下拉搜索、主按钮让开都听它的)。 ══ */
+.mb-shell[data-list-first] .amx-tags-inlist { padding: 0 calc(8 * var(--pl-dp)); }
+.mb-shell[data-list-first] .amx-tags-inlist .amx-tagtree-row {
+  min-height: calc(48 * var(--pl-dp)); gap: 0;
+  padding-left: calc(var(--amx-tag-depth, 0) * 20 * var(--pl-dp));
+}
+.mb-shell[data-list-first] .amx-tags-inlist :is(.amx-tagtree-chev, .amx-tagtree-gap) {
+  flex-basis: calc(32 * var(--pl-dp)); width: calc(32 * var(--pl-dp)); height: calc(48 * var(--pl-dp));
+}
+.mb-shell[data-list-first] .amx-tags-inlist .amx-tagtree-chev > svg { width: calc(16 * var(--pl-dp)); height: calc(16 * var(--pl-dp)); }
+.mb-shell[data-list-first] .amx-tags-inlist .amx-list-item {
+  min-height: calc(48 * var(--pl-dp)); padding: 0 calc(8 * var(--pl-dp)) 0 0; border-radius: 0; color: var(--text);
+}
+.mb-shell[data-list-first] .amx-tags-inlist .amx-panel-empty { padding: calc(14 * var(--pl-dp)) calc(12 * var(--pl-dp)); }
+/* 触屏上 :hover 会粘在最后点过的那一行上:只留按下的反馈 */
+.mb-shell[data-list-first] :is(.amx-tags-inlist, .amx-panel--inlist) :is(.amx-list-item, .amx-tagtree-chev):hover { background: transparent; }
+.mb-shell[data-list-first] :is(.amx-tags-inlist, .amx-panel--inlist) :is(.amx-list-item, .amx-tagtree-chev):active { background: var(--overlay-light, rgba(127, 127, 127, 0.08)); }
+.mb-shell[data-list-first] .amx-panel--inlist { height: auto; overflow: visible; padding: 0 calc(10 * var(--pl-dp)) calc(12 * var(--pl-dp)); }
+.mb-shell[data-list-first] .amx-panel--inlist .amx-panel-back {
+  display: flex; align-items: center; gap: calc(4 * var(--pl-dp)); width: 100%; min-height: calc(44 * var(--pl-dp));
+  padding: 0 calc(4 * var(--pl-dp)); border: 0; background: none; font-family: var(--font-ui); text-align: left;
+}
+.mb-shell[data-list-first] .amx-panel--inlist .amx-panel-back > svg { flex: none; width: calc(18 * var(--pl-dp)); height: calc(18 * var(--pl-dp)); }
+.mb-shell[data-list-first] .amx-panel--inlist .amx-list-item { padding-block: calc(10 * var(--pl-dp)); }
