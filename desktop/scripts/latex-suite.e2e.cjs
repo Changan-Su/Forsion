@@ -76,6 +76,7 @@ async function main() {
     await v3Smoke(browser, code)
     for (const dark of [false, true]) await v4Styles(browser, code, dark)
     await v4Sequences(browser, code)
+    await unreadableSettings(browser, code)
   } finally {
     await browser.close()
   }
@@ -562,6 +563,78 @@ async function v4Styles(browser, code, dark) {
     const filled = await page.evaluate(() => window.__ls.placeholders())
     const boxOk = !!filled.box && filled.box.text === 'b' && filled.box.bg === 'rgba(135, 206, 250, 0.18)' && filled.box.outline === `solid ${C.phOutline}`
     check(`v4 ${mode}:填了字的占位按组上底色、1px 描边`, ready && boxOk && errors.length === 0, filled.box)
+    await page.close()
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 三、存过的设置读不出来(2026-11-17,宿主「读失败 ≠ 没写过」)
+// ─────────────────────────────────────────────────────────────────────────────
+// 插件 store 早就写好了「loadData 抛错 → 暂停自动输入、不写盘」,但宿主以前把读错误和坏 JSON 都当没写过回 null,
+// 这条保护在真宿主里永远走不到:插件按默认值起来,用户一碰设置就把默认值整份写回,盖掉原来的片段库。
+// 这里把三种读不出来的情况经真宿主的 ctx.loadData(pluginStore → pluginLocalData)交给插件,看:
+// 插件报「已暂停」、括号着色不开(没按默认值起来)、点一下设置开关也不写盘。
+// 负对照:宿主改回旧的 loadData(读错误 / 坏 JSON 一律 null)→ 三种都红。
+async function unreadableSettings(browser, code) {
+  const cases = [
+    ['零字节', ''],
+    ['写到一半', '{"snippetsEnabled":true,"snippetsSourceText":"[{trigger: \\"mk\\", replacement: \\"$$0$'],
+    ['读出错', null],
+  ]
+  for (const [label, raw] of cases) {
+    const page = await browser.newPage({ locale: 'zh-CN' })
+    const errors = []
+    page.on('pageerror', (e) => errors.push(e.message))
+    await page.goto(`${URL}?seed=${encodeURIComponent('$(r)$')}`, { waitUntil: 'domcontentloaded', timeout: 90000 })
+    await page.waitForSelector('.md-block .ProseMirror', { timeout: 20000 })
+    await page.evaluate(([c, text]) => {
+      window.__lsReads = 0
+      window.__lsWrites = []
+      window.amadeus.readPluginData = async (id) => {
+        if (id !== 'latex-suite') return null
+        window.__lsReads++
+        if (text === null) throw new Error('EIO: i/o error, read')
+        return text
+      }
+      window.amadeus.writePluginData = async (id, t) => { window.__lsWrites.push([id, t]) }
+      window.__ep.loadPlugin(c, { id: 'latex-suite', name: 'LaTeX 套件' })
+    }, [code, raw])
+    // 等插件读过设置、设置页里报出「暂停」(每轮挂一次设置页,读完错误再摘掉)
+    const paused = await page.waitForFunction(() => {
+      const views = window.__ep.settingsViews()
+      if (!views.length || !window.__lsReads) return null
+      const host = document.createElement('div')
+      document.body.appendChild(host)
+      try {
+        const off = views[0].mount(host)
+        const text = [...host.querySelectorAll('.ls-errors-item')].map((n) => n.textContent).join(' | ')
+        if (typeof off === 'function') off()
+        return /自动输入功能已暂停|Automatic input is paused/.test(text) ? text : null
+      } finally {
+        host.remove()
+      }
+    }, null, { timeout: 15000 }).then((h) => h.jsonValue(), () => null)
+    check(`设置${label}:插件报「已暂停」,不按默认值起来`, !!paused, paused || undefined)
+    const colored = await page.evaluate(() => !!document.querySelector('.md-block .ProseMirror [class*="bracket"]'))
+    check(`设置${label}:括号着色没开(自动输入确实停着)`, !colored)
+    // 碰一下设置开关:以前这一下就把默认值整份写回去
+    const { clicked, wrote } = await page.evaluate(async () => {
+      const host = document.createElement('div')
+      document.body.appendChild(host)
+      const off = window.__ep.settingsViews()[0].mount(host)
+      const sw = host.querySelector('button.ls-switch')
+      let dispatched = 0
+      sw?.addEventListener('click', () => { dispatched++ })
+      sw?.click()
+      await new Promise((r) => setTimeout(r, 1000))
+      if (typeof off === 'function') off()
+      host.remove()
+      // 开关真的点到了(插件的点击处理和这里的计数挂在同一个按钮上):点不到的话下面「不写盘」恒过
+      return { clicked: dispatched === 1, wrote: window.__lsWrites.filter(([id]) => id === 'latex-suite').length }
+    })
+    check(`设置${label}:点到了设置开关`, clicked)
+    check(`设置${label}:点设置开关后不写盘(原件不被盖掉)`, wrote === 0, { writes: wrote })
+    check(`设置${label}:无未捕获错误`, errors.length === 0, errors.slice(0, 3))
     await page.close()
   }
 }
