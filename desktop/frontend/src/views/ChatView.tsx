@@ -60,7 +60,7 @@ import { newSessionPreset, amadeusLandingRoot, type QueueItem } from '../tangu/s
 import { settleModes } from '../stores/projectSettings'
 import { currentPlatform } from '../services/agentRunService'
 import { hasChatRef, readChatRefs } from '../components/chatDragRef'
-import { useWorkspace, useSpaceStore, UI_MODE, Skeleton, scrollToElement, cancelScrollToElement, SCROLL_TO_ELEMENT_EVENT, useViewModes, ViewHead, inSingleColumnShell } from '@lcl/engine'
+import { useWorkspace, useSpaceStore, UI_MODE, Skeleton, scrollToElement, cancelScrollToElement, SCROLL_TO_ELEMENT_EVENT, useViewModes, ViewHead, inSingleColumnShell, useWideLayout } from '@lcl/engine'
 import { useTailFirst } from './chat2/useTailFirst'
 import { AgentDesk, DeskCard, useDeskHome } from './chat2/AgentDesk'
 import { HistorianStatus } from './chat2/HistorianStatus'
@@ -296,8 +296,11 @@ export function ChatView({ leaf, params }: ViewProps) {
   // 数据层的判断一律仍看 activeMessages。要跳到某条消息(搜索命中)时整段挂。
   const readingKey = activeId ? chatReadingKey(ownerSpace, leaf.id, activeId, s.execConfig.engineId) : ''
   const restoringEarlierMessages = !!readingKey && readChatPosition(readingKey)?.follow === false
-  const shownMessages = useTailFirst(activeMessages, activeId || null, !restoringEarlierMessages && s.jumpTarget?.sessionId !== activeId)
-  const waitingForTail = activeMessages.length > 0 && shownMessages.length === 0
+  const singleColumnShell = inSingleColumnShell()
+  const wideLayout = useWideLayout(singleColumnShell)
+  const deferFirstBatch = singleColumnShell && !wideLayout
+  const shownMessages = useTailFirst(activeMessages, activeId || null, !restoringEarlierMessages && s.jumpTarget?.sessionId !== activeId, deferFirstBatch)
+  const waitingForTail = deferFirstBatch && activeMessages.length > 0 && shownMessages.length === 0
   // 运行中发出、Agent 还没读到的插话:按下 Enter 就画进对话末尾(像 Codex / Claude 那样「发出去了」),不再挂在输入框上方排队。
   // 引擎读到时 turn_boundary 带回**同一个 id** 的用户消息,插在收尾那段之后 —— 和这里的位置一样,同 key 原地转正、不重挂。
   // 画布模式没有这条流,等待区照旧留在输入框上方(Composer2 steerInline)。
@@ -733,7 +736,7 @@ export function ChatView({ leaf, params }: ViewProps) {
     ? s.sessions.find((x) => x.id === activeSession.parent_session_id) : undefined))
   const kidRoot = kidParent ? (kidParent.fork_message_id ? kidParent.parent_session_id : kidParent.parent_session_id ? undefined : kidParent.id) : undefined
   const treeRoot = activeSession?.fork_message_id ? (activeSession.parent_session_id || activeId) : kidRoot || activeId
-  const canvasAllowed = !!activeId && followActive && leaf.loc === 'main' && !inSingleColumnShell() && !params.childSurface && !params.miniSurface && !params.readOnly && !studioChat
+  const canvasAllowed = !!activeId && followActive && leaf.loc === 'main' && !singleColumnShell && !params.childSurface && !params.miniSurface && !params.readOnly && !studioChat
     && !mvCfg.groupChat && !mvCfg.teamSlug && !mvCfg.teamMember && !mvCfg.soloAgentSlug && !mvCfg.soloEngineId && !mvCfg.engineId
   const [canvasPref, setCanvasPref] = useChatCanvasPref(treeRoot)
   const canvasOn = canvasAllowed && canvasPref.on
