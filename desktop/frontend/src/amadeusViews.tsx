@@ -995,6 +995,10 @@ export function AmadeusPagesView() {
     setListSearch(true)
   }, [searchSeed])
   const inListSearch = phone && !!vaultRoot && listSearch
+  // 系统返回先收掉这层结果、回到列表,再按才是离开这一层。只在列表层在屏上时接:进了某篇笔记之后这张列表还挂着
+  // (滑到屏外),那时的返回是「回列表」,不该被一层看不见的结果吃掉。
+  const listShown = useWorkspace((s) => s.leftVisible)
+  useMobileBackClose(inListSearch && listShown, () => setListSearch(false))
   const pickPhoneTab = (tab: NotesPhoneTab): void => { setListSearch(false); setSavedTab(tab); saveNotesPhoneTab(tab) }
   const openSearch = (): void => useQuickFind.getState().openPalette()
   usePullToSearch(scrollRef, phone ? openSearch : undefined)
