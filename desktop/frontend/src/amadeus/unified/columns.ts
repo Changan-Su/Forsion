@@ -86,7 +86,8 @@ function rowDomAttrs(node: ProseNode): Record<string, string> {
     'data-sec-cards': v.cards ? '1' : '0',
     'data-sec-valign': v.valign,
     'data-sec-stack': v.stack ? '1' : '0',
-    'data-cols': String(Math.min(node.childCount, SECTION_MAX_COLUMNS)),
+    // data-cols(窄屏竖排的门槛按栏数分)不在这里写:加减栏不改行的 attrs,PM 不会重跑 toDOM,
+    // 写在这里就停在建行时的栏数。由 sections.ts 的节点装饰随文档现算。
   }
 }
 

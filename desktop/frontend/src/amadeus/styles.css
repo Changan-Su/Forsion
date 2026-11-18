@@ -3293,6 +3293,10 @@ body.amx-marquee-active * {
   background: var(--bg-card);
   box-shadow: var(--card-shadow);
 }
+/* 栏是一个小版面:首个块不顶着自己的上边距、末块不拖下边距(标题的上边距在卡片里就是顶上空一截)。
+   (0,6,0) 压过 .am-app .milkdown .ProseMirror 的标题 / 段落边距。 */
+.am-app .unified-body .milkdown .ProseMirror .amx-usection > .amx-ucolcell > :first-child { margin-top: 0; }
+.am-app .unified-body .milkdown .ProseMirror .amx-usection > .amx-ucolcell > :last-child { margin-bottom: 0; }
 .am-app .amx-pane[data-page-wide] .unified-body .amx-ucolrow.amx-usection { margin-inline: 0; }
 /* 窄屏竖排:按版块自己的内容宽度判(2 栏 < 416 / 3 栏 < 632 / 4 栏 < 848,即每栏不到约 200px)。
    版块是 container,样式只能落在子元素上 → 行常年 flex-wrap,竖排 = 每栏占满一行。 */

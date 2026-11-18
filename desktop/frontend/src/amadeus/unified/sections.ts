@@ -204,12 +204,17 @@ export function createSectionToolbar(): { plugin: ReturnType<typeof $prose>; sto
     key: KEY,
     props: {
       decorations(state) {
+        const decos: Decoration[] = []
+        // 每个版块行的栏数(窄屏竖排按栏数分门槛)。行的 attrs 不随加减栏变,toDOM 不会重跑,只能装饰现算。
+        state.doc.forEach((node, offset) => {
+          if (isSectionRow(node)) decos.push(Decoration.node(offset, offset + node.nodeSize, { 'data-cols': String(Math.min(node.childCount, SECTION_MAX_COLUMNS)) }))
+        })
         const rowPos = sectionRowAt(state)
-        if (rowPos == null) return null
+        if (rowPos == null) return decos.length ? DecorationSet.create(state.doc, decos) : null
         const row = state.doc.nodeAt(rowPos)!
         // 行尾(最后一栏之后)挂 widget:不当第一个子元素,免得 :first-child 一类的栏样式错位
         const at = rowPos + row.nodeSize - 1
-        return DecorationSet.create(state.doc, [Decoration.widget(at, () => {
+        return DecorationSet.create(state.doc, [...decos, Decoration.widget(at, () => {
           const host = document.createElement('div')
           host.className = 'amx-sec-tb-host'
           host.setAttribute('contenteditable', 'false')
