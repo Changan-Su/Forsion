@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { startTransition, useDeferredValue, useEffect, useRef, useState } from 'react'
 
 export const TAIL_FIRST = 12
 const TAIL_STEP = 12
@@ -11,18 +11,27 @@ const TAIL_STEP = 12
  *     否则新来一条消息、或者跳转目标一清,前面已经显示的消息会被卸掉再挂回 —— 选区、展开状态、开着的菜单跟着丢。
  *     记在 ref 里而不是 state 里:它只在下一次渲染时被读,为它多渲一轮整段对话不值。
  *  ponytail: 不是虚拟列表 —— 补完之后整段都在页面上;对话长到补完也嫌重时再换成窗口化。 */
-export function useTailFirst<T>(items: T[], sessionId: string | null, enabled: boolean): T[] {
+export function useTailFirst<T>(items: T[], sessionId: string | null, enabled: boolean, deferFirstBatch: boolean): T[] {
   const [shown, setShown] = useState({ sessionId, count: TAIL_FIRST })
   const wholeFor = useRef<string | null | undefined>(undefined)
+  const synchronousTailFor = useRef<string | null>(null)
   const count = shown.sessionId === sessionId ? shown.count : TAIL_FIRST // 换了会话:从头来,不多渲一轮
   const whole = !enabled || wholeFor.current === sessionId || (items.length > 0 && count >= items.length)
+  // 单列壳把首批长消息放进可让路的渲染，列表点按可以先提交滑页导航。
+  // 只延期首批的会话标识。已经显示的消息、短会话和明确的跳转继续读取当前数据。
+  const requestedTail = deferFirstBatch && synchronousTailFor.current !== sessionId && !whole && items.length > count ? sessionId : null
+  const readyTail = useDeferredValue(requestedTail, null)
+  const waitingForTail = requestedTail !== null && readyTail !== requestedTail
   useEffect(() => {
+    if (synchronousTailFor.current !== sessionId) synchronousTailFor.current = null
     if (whole) { wholeFor.current = sessionId; return }
-    if (!items.length) return // 历史还没到:没有可补的
-    const grow = (): void => setShown({ sessionId, count: count + TAIL_STEP })
+    if (!items.length || waitingForTail) return
+    // 宽屏已经同步画出的首批，旋转到窄屏时继续显示。
+    if (!deferFirstBatch) synchronousTailFor.current = sessionId
+    const grow = (): void => startTransition(() => setShown({ sessionId, count: count + TAIL_STEP }))
     if (typeof requestIdleCallback !== 'function') { const timer = window.setTimeout(grow, 32); return () => window.clearTimeout(timer) }
     const idle = requestIdleCallback(grow, { timeout: 200 })
     return () => cancelIdleCallback(idle)
-  }, [whole, count, sessionId, items.length])
-  return whole ? items : items.slice(items.length - count)
+  }, [whole, count, sessionId, items.length, waitingForTail, deferFirstBatch])
+  return waitingForTail ? [] : whole ? items : items.slice(items.length - count)
 }

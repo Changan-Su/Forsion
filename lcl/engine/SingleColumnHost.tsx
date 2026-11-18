@@ -980,9 +980,9 @@ function useWideAspect(enabled: boolean): boolean {
   return enabled && wide
 }
 
-/** React: the shell's wide layout (docked left column; on Android the Space rail), the same line the shell itself follows —
- *  for a chrome host drawn in the page (the browser's, mobile/src/browserChrome.tsx), which has no window of its own to judge. */
-export function useWideLayout(): boolean { return useWideAspect(true) }
+/** React: the shell's wide layout (docked left column; on Android the Space rail). Shared views can opt out of
+ *  watching layout changes when they are outside this shell. */
+export function useWideLayout(enabled = true): boolean { return useWideAspect(enabled) }
 
 export const SingleColumnHost: React.FC<{ dark?: boolean; soft?: boolean; buildDefault?: () => void }> = ({ buildDefault }) => {
   useEffect(() => {
