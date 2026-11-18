@@ -43,7 +43,7 @@ import { registerMessages, useI18n } from '../i18n'
 import { isHomeSession, isIndependentOrbitConfig, isTeamImageAvatar, sessionWorkspaceKey, type NormalAgentDef, type SessionRecord, type TeamDef } from '../../../../tangu-agent/src/contracts/clientTypes'
 import { runLocationsAvailable } from '../features/runtime'
 import { DeviceSessionSections, attentionBadge } from './chat2/DeviceSessionSections' // P1-K7a
-import { isOrbitPinned, readOrbitPins, toggleOrbitPin, touchOrbitPin, writeOrbitPins, type OrbitPinTimes } from './chat2/orbitPins'
+import { isOrbitPinned, onOrbitPinsChanged, readOrbitPins, toggleOrbitPin, touchOrbitPin, writeOrbitPins, type OrbitPinTimes } from './chat2/orbitPins'
 import { onProjectRelinked } from './chat2/ProjectRelink'
 import './chat2/orbits.css'
 import { homeTarget, useRemoteCapability } from '../services/engine/targets'
@@ -184,6 +184,8 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
     })
   }
   const togglePinned = (entryKey: string): void => updatePins((prev) => toggleOrbitPin(prev, entryKey))
+  // 对话页自己的菜单也能切 Pin(手机的「⋯」,chat2/chatPageMenu):它改的是存的那一份,这里跟着重读
+  useEffect(() => onOrbitPinsChanged(() => setPinnedEntries(readOrbitPins())), [])
   // 项目重新指向了新文件夹:置顶按分组键存,跟着换键(新键已置顶 = 合并进了一个置顶的项目,留它的)
   useEffect(() => onProjectRelinked((from, to) => updatePins((prev) => {
     const was = prev[`ws:${from}`]

@@ -164,6 +164,35 @@ class NativeChromeStateTest {
         assertNull(ChromeState.parse(page).moreDot)
     }
 
+    /** On a phone "more" is the page's own menu: only an explicit `false` takes the button away. An older page never
+     *  sends the field and keeps the button; a value that is not a boolean keeps it too (never a refused bar). */
+    @Test fun moreButtonStaysUnlessThePageSaysFalse() {
+        assertTrue(ChromeState.parse(shell(null)).moreButton)
+        assertTrue(ChromeState.parse(shell(null).put("more", true)).moreButton)
+        assertTrue(ChromeState.parse(shell(null).put("more", "no")).moreButton)
+        assertFalse(ChromeState.parse(shell(null).put("more", false)).moreButton)
+        // the right capsule is drawn only while something is in it; the shell fixture has two tabs
+        assertTrue(ChromeState.parse(shell(null).put("more", false)).rightCapsule(rail = false))
+        val bare = ChromeState.parse(shell(null).put("more", false).put("tabCount", 1))
+        assertFalse(bare.rightCapsule(rail = false))
+        assertTrue(ChromeState.parse(shell(null).put("more", false).put("tabCount", 1).put("search", "Search")).rightCapsule(rail = false))
+        val withAccount = ChromeState.parse(shell(null).put("more", false).put("tabCount", 1).put("account", JSONObject("""{"label":"Me"}""")))
+        assertTrue(withAccount.rightCapsule(rail = false))
+        assertFalse(withAccount.rightCapsule(rail = true)) // the avatar stands in the rail there
+    }
+
+    /** `allDot`: the dot of the dock's "all" cell when no Space behind it shows one; a Space's own dot wins. */
+    @Test fun allCellShowsAllDotUnlessASpaceBehindItIsMorePressing() {
+        fun nine(extra: (Int) -> String) = (0 until 9).joinToString(",", "[", "]") { """{"id":"s$it","label":"S$it"${extra(it)}}""" }
+        assertNull(ChromeState.parse(shell(nine { "" })).moreBadge)
+        val dotted = ChromeState.parse(shell(nine { "" }).put("allDot", JSONObject().put("label", "1 to claim")))
+        assertEquals(ChromeBadge(ChromeBadge.Kind.UNREAD, "1 to claim"), dotted.moreBadge)
+        assertEquals("", ChromeState.parse(shell(nine { "" }).put("allDot", JSONObject())).allDot)
+        assertNull(ChromeState.parse(shell(nine { "" }).put("allDot", true)).allDot)
+        val pressing = ChromeState.parse(shell(nine { if (it == 7) ""","badge":{"kind":"attention","label":"waiting"}""" else "" }).put("allDot", JSONObject().put("label", "x")))
+        assertEquals(ChromeBadge.Kind.ATTENTION, pressing.moreBadge!!.kind)
+    }
+
     @Test fun warningColourFallsBackToDangerWhenThePageDoesNotSendOne() {
         val plain = ChromeState.parse(shell(null))
         assertEquals(plain.theme.danger, plain.theme.warning)

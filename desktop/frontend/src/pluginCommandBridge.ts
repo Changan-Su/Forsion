@@ -6,7 +6,7 @@
  * (CommandContribution.hotkey)的生效与否取决于别的命令和用户覆盖 —— 那两样一变就得重判。重判的结果没变就不碰命令表;
  * 变了才整块按插件表顺序重加。监听别的命令时把插件这一块排除在外,桥自己写命令表不会再触发重判(不会转个不停)。
  */
-import { addCommand, effectiveHotkey, isMacPlatform, removeCommand, useCommandStore, useShortcuts } from '@lcl/engine'
+import { addCommand, effectiveHotkey, isMacPlatform, removeCommand, useCommandStore, useShortcuts, useSpaceStore, useWorkspace } from '@lcl/engine'
 import type { Command } from '@lcl/engine'
 import { usePluginStore } from '@amadeus/plugins/pluginStore'
 import type { AmadeusPlugin, CommandContribution } from '@amadeus/plugins/types'
@@ -14,8 +14,18 @@ import { pluginDisplayName } from '@amadeus/plugins/display'
 import { currentLocale } from './i18n'
 import { pluginDefaultHotkey, resolvePluginHotkeys, type PluginHotkeyState } from './shortcutUsage'
 import { usePluginHotkeys } from './pluginHotkeyStore'
+import { pluginSpaceOwner } from './stores/spaceProgress'
 
 const engineId = (pluginId: string, id: string): string => `amadeus:${pluginId}:${id}`
+
+/** 屏上是不是这个插件自己的页面:当前 Space 是它带的,或主区当前的视图是它注册的(`plugin:<插件 id>:<视图 id>`,
+ *  pluginViews.tsx)。手机的「⋯」只装这一页的事 —— 插件的命令只在它自己的页面上列出来(命令面板照旧处处搜得到)。
+ *  插件 id 用生效的那个(商店安装是 `market-<UUID>`),和 Space / 视图登记时用的是同一个。 */
+export function pluginOwnsPage(pluginId: string): boolean {
+  if (pluginSpaceOwner.get(useSpaceStore.getState().activeSpaceId) === pluginId) return true
+  const ws = useWorkspace.getState() as { getActiveLeaf?: () => { type: string } | null }
+  return !!ws.getActiveLeaf?.()?.type.startsWith(`plugin:${pluginId}:`)
+}
 
 /** 装上桥并做第一次同步;返回卸载函数(测试用,应用里装一次不卸)。 */
 export function installPluginCommandBridge(): () => void {
@@ -64,8 +74,10 @@ export function installPluginCommandBridge(): () => void {
       for (const { id, o, owner, hotkey } of next) {
         // 外置插件没有 ribbon 图标、手机上也没有命令区可钉 → 声明 moreGroup,手机「⋯」按插件分节直接列出
         // (节标题 = 插件展示名,渲染期按当前语言求值)。内置插件(callout / 字数)的命令各有入口,不进「⋯」。
+        // when:手机竖屏上只在这个插件自己的页面列(别的页面的「⋯」不装它的事);平板横屏、抽屉形态不看它,照旧全列。
+        const pluginId = o.pluginId
         const moreGroup = owner && !owner.builtin
-          ? { id: `amadeus:${o.pluginId}`, title: () => pluginDisplayName(owner, currentLocale()) }
+          ? { id: `amadeus:${pluginId}`, title: () => pluginDisplayName(owner, currentLocale()), when: () => pluginOwnsPage(pluginId) }
           : undefined
         // ⚠️ 这里是**逐字段重建**,不是透传 —— 给 CommandContribution 加字段必须同步加到这一行,
         //    否则插件声明了也永远到不了命令表(2026-09-04 加 invoke 时踩点)。hotkey 只在判定生效时才给:

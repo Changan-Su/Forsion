@@ -75,6 +75,17 @@ internal data class ChromeState(
      */
     val moreDot: String? = null,
     /**
+     * Shell mode: false = no "more" button. On a phone "more" is the menu of the page on screen, and a page with nothing
+     * of its own has none (JS decides). True is also what an older page, which never sends the field, gets.
+     */
+    val moreButton: Boolean = true,
+    /**
+     * Shell mode: an entry of the all-Spaces sheet wants a look (the app-wide launchers live there on a phone): the
+     * dock's "all" cell carries a dot unless a Space behind it already shows a more pressing one. The text is what a
+     * screen reader says (may be blank); null = no dot.
+     */
+    val allDot: String? = null,
+    /**
      * Shell mode, wide layout: dp the page's docked left column takes from the WebView's left edge (0 = none). The left
      * capsule starts after it, so the column's own top is not under a capsule (2026-10-20, mock-up A2). Cosmetic: a
      * value that is not a sane number is 0.
@@ -104,8 +115,11 @@ internal data class ChromeState(
     }
     /** The Spaces behind the "all" cell. */
     val more: List<ChromeSpace> by lazy { val shown = dock.map { it.id }.toSet(); spaces.filterNot { it.id in shown } }
-    /** What the "all" cell shows for them (see [pressing]). */
-    val moreBadge: ChromeBadge? by lazy { pressing(more) }
+    /** What the "all" cell shows: the most pressing dot of the Spaces behind it (see [pressing]), else [allDot] as an unread dot. */
+    fun allBadge(behind: List<ChromeSpace>): ChromeBadge? = pressing(behind) ?: allDot?.let { ChromeBadge(ChromeBadge.Kind.UNREAD, it) }
+    val moreBadge: ChromeBadge? by lazy { allBadge(more) }
+    /** Shell mode: whether the right capsule has anything in it ([rail] = the avatar stands in the rail, not here). */
+    fun rightCapsule(rail: Boolean): Boolean = search.isNotBlank() || right || tabCount > 1 || moreButton || (!rail && account != null)
 
     /**
      * The rail's cells (wide windows) for [fit] places: every Space while they fit; past that the pinned ones (Home is
@@ -166,8 +180,8 @@ internal data class ChromeState(
         }
 
         /** Cosmetic, never a reason to refuse the bar: a label that is not a short string still draws the dot, only unannounced. */
-        private fun moreDot(json: JSONObject): String? {
-            val o = json.optJSONObject("moreDot") ?: return null
+        private fun dot(json: JSONObject, key: String): String? {
+            val o = json.optJSONObject(key) ?: return null
             return (o.opt("label") as? String)?.takeIf { it.length <= 128 } ?: ""
         }
 
@@ -215,7 +229,9 @@ internal data class ChromeState(
                         frosted = NativeJson.optBool(json, "floating") && NativeJson.optBool(json, "frosted"),
                         allLabel = NativeJson.optStr(json, "allLabel", 128), search = NativeJson.optStr(json, "search", 128),
                         titleSub = NativeJson.optStr(json, "titleSub", 128), titleTap = NativeJson.optBool(json, "titleTap"),
-                        moreDot = moreDot(json),
+                        moreDot = dot(json, "moreDot"),
+                        // Only an explicit `false` takes the button away: anything else (absent, not a boolean) keeps it.
+                        moreButton = json.opt("more") != false, allDot = dot(json, "allDot"),
                         leftInset = dpField(json, "leftInset"), capLeftMax = dpField(json, "capLeftMax"),
                     )
                 }

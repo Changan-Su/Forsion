@@ -117,6 +117,21 @@ class NativeChromeBarLayoutTest {
         assertEquals("1 to claim", said())
     }
 
+    /** A phone page with nothing of its own sends `more: false`: no button; and a right capsule with nothing left in it is not drawn. */
+    @Test fun noMoreButtonWhenThePageHasNothingOfItsOwn() {
+        var state by mutableStateOf(shell(extra = ""","more":false"""))
+        compose.setContent { Box(Modifier.width(400.dp).height(NATIVE_CHROME_HEIGHT)) { NativeChromeBar(state, Insets.NONE, { _, _ -> }, {}) } }
+        compose.onNodeWithTag("nativeChrome.more").assertDoesNotExist()
+        compose.onNodeWithTag("nativeChrome.right").assertExists() // the fixture has a right panel and two tabs: the capsule stays
+        compose.onNodeWithTag("nativeChrome.capRight").assertExists()
+        state = ChromeState.parse(JSONObject("""{
+          "mode":"shell","title":"Chat","left":true,"right":false,"tabCount":1,"floating":true,"more":false,
+          "labels":{"left":"Left","right":"Right","tabs":"Tabs","more":"More"},"theme":$theme
+        }"""))
+        compose.onNodeWithTag("nativeChrome.capRight").assertDoesNotExist()
+        compose.onNodeWithTag("nativeChrome.capLeft").assertExists()
+    }
+
     @Test fun oneTabNeedsNoCountButton() {
         top(shell(tabCount = 1))
         compose.onNodeWithTag("nativeChrome.tabs").assertDoesNotExist()

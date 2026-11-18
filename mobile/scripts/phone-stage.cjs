@@ -28,7 +28,7 @@ const { chromium } = (() => {
 })()
 
 const ROOT = path.resolve(__dirname, '..')
-const PORT = 5296 // clear of dev 5274 / boot 5279 / noteopen 5283 / editorbar 5285 / drawerdrag 5289 / spacetrap 5291
+const PORT = Number(process.env.STAGE_PORT || 5296) // clear of dev 5274 / boot 5279 / noteopen 5283 / editorbar 5285 / drawerdrag 5289 / spacetrap 5291
 const URL_ = `http://localhost:${PORT}/`
 const OUT = path.resolve(ROOT, process.env.OUT || 'outputs/phone-stage')
 const ONLY = (process.env.ONLY || '').split(',').map((s) => s.trim()).filter(Boolean)
@@ -601,6 +601,99 @@ const SCENES = {
   'chat-leave': async (page) => {
     await stage.action(page, 'left')
     return [['back on the list', (await stage.nav(page)) === 'list', await stage.nav(page)]]
+  },
+  // On a phone "more" holds only what belongs to the page on screen. First-level pages (Home, a Space's list) have no
+  // button; a conversation has its own rows (pin, rename, archive, find) and nothing app-wide. The app-wide entries are in
+  // the avatar's menu (settings, theme mode, command palette) and in the all-Spaces sheet (store, achievements…), once
+  // each. No back / forward row on top of a page: system Back walks the same history. The menus are native — a stand-in
+  // presenter records what is asked for and answers, as in chat-card.
+  'page-more': async (page) => {
+    const rows = []
+    if ((await stage.nav(page)) === 'detail') await stage.action(page, 'left')
+    await page.evaluate(async (url) => {
+      const st = window.__stage; st.menus = []; st.answer = null
+      st.offSheet = (await import(/* @vite-ignore */ url)).installNativeSheetPresenter(async (payload) => { st.menus.push(payload); const a = st.answer; st.answer = null; return a })
+    }, moduleUrl('../lcl/engine/nativeSheet.ts'))
+    const ask = async (action, answer = null) => {
+      await page.evaluate((a) => { window.__stage.answer = a }, answer)
+      const before = await page.evaluate(() => window.__stage.menus.length)
+      await stage.action(page, action)
+      await page.waitForFunction((n) => window.__stage.menus.length > n, before, { timeout: 5000 }).catch(() => {})
+      await page.waitForTimeout(400)
+      return page.evaluate((n) => window.__stage.menus[n] || null, before)
+    }
+    const sections = (menu) => (menu?.sections || []).map((x) => x.items.map((i) => i.id))
+    const navRows = () => page.evaluate(() => document.querySelectorAll('.lcl-viewnav-fallback').length)
+    const TITLE = '发版说明草稿'
+
+    // first level: Home, then a Space's list
+    await stage.space(page, 'home')
+    const home = await stage.state(page)
+    rows.push(['Home: no "more" button and no back / forward row', home.more === false && (await navRows()) === 0, JSON.stringify({ more: home.more, navRows: await navRows() })])
+    await stage.space(page, 'tangu'); await chip(page, 'all')
+    const list = await stage.state(page)
+    rows.push(["a Space's list: no \"more\" button", list.more === false, `more=${list.more}`])
+
+    // where the app-wide entries went
+    const all = await ask('spacesAll')
+    const groups = (all?.sections || []).map((x) => ({ title: x.title || '', grid: !!x.grid, ids: x.items.map((i) => i.id) }))
+    const go = groups.findIndex((g) => g.ids.some((id) => id.startsWith('go:')))
+    rows.push(['all Spaces: the launchers are one group of tiles after the Spaces, before the dock row',
+      go > 0 && groups[go].grid && groups[go].ids.every((id) => id.startsWith('go:')) && groups[go].ids.includes('go:rb-achievements') && groups[go + 1]?.ids.join() === 'dock:edit',
+      JSON.stringify(groups.map((g) => [g.title, g.grid, g.ids.filter((id) => !id.startsWith('space:'))]))])
+    const avatar = await page.evaluate(async (url) => (await import(/* @vite-ignore */ url)).accountMenuRows().map((r) => r.id), moduleUrl('../lcl/engine/SingleColumnHost.tsx'))
+    rows.push(['the avatar menu: settings first, then theme mode and the command palette', avatar[0] === 'rb-settings' && avatar.slice(-2).join() === 'rb-mode,rb-cmd', avatar.join()])
+
+    // a conversation: its own rows only
+    await openChat(page, TITLE)
+    const chat = await stage.state(page)
+    const menu = await ask('more')
+    rows.push(['a conversation: "more" is there, titled with the conversation', chat.more !== false && menu?.title === TITLE, JSON.stringify({ more: chat.more, title: menu?.title })])
+    rows.push(['its rows: pin, rename, archive, then find — nothing app-wide, no "new tab"', JSON.stringify(sections(menu)) === JSON.stringify([['page:pin', 'page:rename', 'page:archive'], ['page:find']]), JSON.stringify(sections(menu))])
+    const top = await page.evaluate((q) => {
+      const stream = document.querySelector(`${q} .t2-stream`)
+      const probe = document.createElement('div'); probe.style.cssText = 'position:absolute;visibility:hidden;height:var(--mb-top)'
+      stream.parentElement.appendChild(probe)
+      const out = { pad: parseFloat(getComputedStyle(stream).paddingTop), mbTop: probe.getBoundingClientRect().height / (stream.getBoundingClientRect().width / stream.offsetWidth || 1), navrow: stream.closest('.mb-view').hasAttribute('data-navrow') }
+      probe.remove()
+      return out
+    }, CHAT)
+    rows.push(['no back / forward row: the stream starts right under the capsule row (no 40 kept for it)', (await navRows()) === 0 && !top.navrow && near(top.pad, top.mbTop, 1), JSON.stringify(top)])
+    await page.screenshot({ path: path.join(OUT, `page-more-chat${DARK ? '-dark' : ''}.png`) })
+
+    // pin from the page: stored, the list re-reads, the row turns into "unpin"
+    await ask('more', { id: 'page:pin' })
+    const pinned = sections(await ask('more'))[0]?.[0]
+    const stored = await page.evaluate(() => localStorage.getItem('forsion_orbits_pinned_entries_v1'))
+    await stage.action(page, 'left')
+    const first = (await texts(page, `${LIST} [data-timeline] .t2s-srow-title`))[0]
+    const secs = await texts(page, `${LIST} [data-timeline] .pl-sec`)
+    rows.push(['pinning from the page: the row reads "unpin" next time and the list shows it pinned without a reload', pinned === 'page:unpin' && first === TITLE && secs[0] === '置顶', JSON.stringify({ pinned, stored, first, secs: secs.slice(0, 2) })])
+    await openChat(page, TITLE)
+    await ask('more', { id: 'page:unpin' })
+
+    // rename asks for the new name with the current one filled in (closed without a change here)
+    const prompt = await (async () => {
+      await page.evaluate(() => { window.__stage.answer = { id: 'page:rename' } })
+      const before = await page.evaluate(() => window.__stage.menus.length)
+      await stage.action(page, 'more')
+      await page.waitForFunction((n) => window.__stage.menus.length > n + 1, before, { timeout: 5000 }).catch(() => {})
+      return page.evaluate((n) => window.__stage.menus[n + 1] || null, before)
+    })()
+    rows.push(['rename: a prompt with the current name', prompt?.kind === 'prompt' && prompt.initial === TITLE, JSON.stringify({ kind: prompt?.kind, initial: prompt?.initial })])
+
+    // find opens the find bar on this page
+    await ask('more', { id: 'page:find' })
+    const bar = await rect(page, '.amx-findbar')
+    rows.push(['find: the find bar opens, below the capsule row and inside the screen', !!bar && bar.y >= LAYOUT.top - 2 && bar.right <= SCREEN.width && bar.x >= 0, JSON.stringify(bar)])
+    await page.screenshot({ path: path.join(OUT, `page-more-find${DARK ? '-dark' : ''}.png`) })
+    await page.keyboard.press('Escape')
+    await page.waitForTimeout(200)
+    if (await rect(page, '.amx-findbar')) await page.evaluate(async (url) => { (await import(/* @vite-ignore */ url)).closeFindBar() }, moduleUrl('../desktop/frontend/src/findInPage.tsx'))
+
+    await page.evaluate(() => { window.__stage.offSheet(); delete window.__stage.offSheet })
+    await stage.action(page, 'left')
+    return rows
   },
   'notes-list': async (page) => {
     await stage.space(page, 'tangu'); await chip(page, 'all')

@@ -53,6 +53,24 @@ export function writeOrbitPins(pins: Readonly<OrbitPinTimes>, storage: Pick<Stor
   try { storage?.setItem(ORBIT_PINS_KEY, JSON.stringify(pins)) } catch { /* private mode / quota:当前会话内仍然可用 */ }
 }
 
+const PINS_CHANGED = 'forsion:orbit-pins-changed'
+
+/** 列表之外的地方切一个条目的 Pin(对话页自己的菜单):读存的那一份、改、写回,再喊一声 —— 挂着的列表把 Pin 放在自己的
+ *  状态里,不重读的话它下一次写会拿旧的那份盖回来。返回切完之后是不是 Pin 着。 */
+export function toggleStoredOrbitPin(key: string): boolean {
+  const next = toggleOrbitPin(readOrbitPins(), key)
+  writeOrbitPins(next)
+  if (typeof window !== 'undefined') window.dispatchEvent(new Event(PINS_CHANGED))
+  return isOrbitPinned(next, key)
+}
+
+/** 存的那一份被列表之外的地方改了(toggleStoredOrbitPin):回调里重读。返回退订。 */
+export function onOrbitPinsChanged(fn: () => void): () => void {
+  if (typeof window === 'undefined') return () => {}
+  window.addEventListener(PINS_CHANGED, fn)
+  return () => window.removeEventListener(PINS_CHANGED, fn)
+}
+
 /** Pin 条目先组成连续区域并按最近激活降序;其余条目保持原来的消息 activity 降序。 */
 export function orderOrbitEntries<T extends { key: string; at: number }>(entries: readonly T[], pins: Readonly<OrbitPinTimes>): T[] {
   return entries

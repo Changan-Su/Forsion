@@ -193,8 +193,10 @@ export interface Command {
   checked?: () => boolean
   /** 手机单列壳「⋯」菜单里的分组:声明了 = 这条命令也直接列进「⋯」(同 id 的命令归一节,节标题 = title,
    *  渲染期求值、跟随语言)。给**没有 ribbon 图标**的来源用 —— 外置插件只贡献命令,手机上又没有命令区可钉。
-   *  桌面 Ribbon / 命令面板不读这个字段。 */
-  moreGroup?: { id: string; title: string | (() => string) }
+   *  桌面 Ribbon / 命令面板不读这个字段。
+   *  `when`:手机(宿主画底部导航栏 × 竖屏单列)上「⋯」只装这一页的事 —— 声明了就只在它答 true 时列出这一组
+   *  (外置插件:屏上是这个插件自己的 Space 或视图)。同组以第一条命令的为准;别的壳不看它。 */
+  moreGroup?: { id: string; title: string | (() => string); when?: () => boolean }
 }
 
 /** ribbon 竖条上的一个图标(≈ Obsidian addRibbonIcon)。 */

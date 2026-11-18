@@ -14,8 +14,11 @@
  *  `listFirstNow`): the Space list is sent only on a Space's first level, so the bar is gone one level down.
  *  The bar holds a handful of Spaces (`pinned`, see spaceDock.ts); the rest are behind its "all" cell (`spacesAll`).
  *  A view on screen may add to the shell's bar (`useNativeChromeExtras`): a search button, a second title part, a cap on
- *  the left capsule's width. */
+ *  the left capsule's width, and the rows of the page's own "more" menu.
+ *  On a phone (a host that draws the Space bar, narrow layout) "more" holds only what belongs to the page on screen; a
+ *  page with nothing of its own has no button (`more: false`). See moreSheet.ts for where the app-wide entries went. */
 import { useEffect, useRef, useSyncExternalStore } from 'react'
+import type { NativeIconSource } from './nativeIcon'
 
 export type NativeChromeAction = 'left' | 'right' | 'tabs' | 'more' | 'back' | 'close' | 'search' | 'title' | 'spacesAll'
 export interface NativeChromeShellLabels { left: string; right: string; tabs: string; more: string }
@@ -61,6 +64,12 @@ export interface NativeChromeShellState {
   titleTap?: boolean
   /** Something behind "more" wants a look (a `RibbonItem.dot` is lit): hosts put a dot on the button. `label` = what a screen reader says. */
   moreDot?: { label: string }
+  /** `false` = no "more" button: on a phone it is the page's own menu and this page has nothing to put in it.
+   *  Absent = the button is there (every other layout, and what an older host draws regardless). */
+  more?: false
+  /** With `spaces`: an entry behind the bar's "all" cell wants a look (a launcher that lives in the all-Spaces sheet has
+   *  its dot lit): hosts put a dot on that cell unless a Space behind it already shows one. `label` = for a screen reader. */
+  allDot?: { label: string }
   /** dp the docked left column (wide layout) takes from the shell's left edge: hosts start the left capsule after it (and
    *  after their Space rail), so the column's own top is not under a capsule. Absent = no docked column. */
   leftInset?: number
@@ -225,6 +234,12 @@ export function nativeChromeState(): NativeChromeState { return effective() }
 
 /** `where` = the level the view lives on in two-level navigation: a Space's list (the left panel) or its main area.
  *  The shell shows the additions of the level that is on screen; the last view to ask wins. */
+/** One row of the page's own "more" menu (see `NativeChromeExtras.more`). `section` groups rows (rows of one number
+ *  stand together, a rule between numbers); `on` = a toggle that is on (drawn checked). */
+export interface NativeChromePageAction {
+  id: string; label: string; run: () => void
+  icon?: NativeIconSource; detail?: string; on?: boolean; danger?: boolean; section?: number
+}
 export interface NativeChromeExtras {
   where: 'list' | 'main'
   search?: { label: string; run: () => void }
@@ -232,6 +247,9 @@ export interface NativeChromeExtras {
   title?: { sub: string; run?: () => void }
   /** See `NativeChromeShellState.capLeftMax`. */
   capLeftMax?: number
+  /** What "more" offers for the page on screen (this conversation: pin, rename, archive…). Read when the menu opens;
+   *  whether there are any decides if a phone shows the button at all. */
+  more?: NativeChromePageAction[]
 }
 const extras: Array<{ value: NativeChromeExtras }> = []
 const extrasSubscribers = new Set<() => void>()
@@ -247,16 +265,22 @@ export function subscribeNativeChromeExtras(fn: () => void): () => void {
 export function useNativeChromeExtras(value: NativeChromeExtras | null): void {
   const latest = useRef(value)
   latest.current = value
-  const key = value ? JSON.stringify({ w: value.where, s: value.search?.label ?? null, t: value.title?.sub ?? null, r: !!value.title?.run, c: value.capLeftMax ?? 0 }) : ''
+  // What a host is told about: labels and whether there is anything. Handlers, icons and the rows' own state are read
+  // from `latest` when the menu opens, so they may change between renders without the bar being re-sent.
+  const key = value ? JSON.stringify({ w: value.where, s: value.search?.label ?? null, t: value.title?.sub ?? null, r: !!value.title?.run, c: value.capLeftMax ?? 0, m: !!value.more?.length }) : ''
   useEffect(() => {
     if (!key) return
-    const parsed = JSON.parse(key) as { w: NativeChromeExtras['where']; s: string | null; t: string | null; r: boolean; c: number }
-    const entry = { value: {
+    const parsed = JSON.parse(key) as { w: NativeChromeExtras['where']; s: string | null; t: string | null; r: boolean; c: number; m: boolean }
+    const value: NativeChromeExtras = {
       where: parsed.w,
       ...(parsed.s !== null ? { search: { label: parsed.s, run: () => latest.current?.search?.run() } } : {}),
       ...(parsed.t !== null ? { title: { sub: parsed.t, ...(parsed.r ? { run: () => latest.current?.title?.run?.() } : {}) } } : {}),
       ...(parsed.c > 0 ? { capLeftMax: parsed.c } : {}),
-    } satisfies NativeChromeExtras }
+    }
+    // A getter, defined on the object itself (a spread would read it once and copy the rows of that moment): the rows
+    // are the view's latest ones every time the shell asks — a pin toggled from the menu reads "unpin" the next time.
+    if (parsed.m) Object.defineProperty(value, 'more', { enumerable: true, get: () => latest.current?.more ?? [] })
+    const entry = { value }
     extras.push(entry)
     extrasSubscribers.forEach((fn) => fn())
     return () => {
