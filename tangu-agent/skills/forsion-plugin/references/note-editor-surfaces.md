@@ -109,7 +109,7 @@ ctx.registerEditorExtension?.((pm) => [
   }),
 ], { priority: 'high' })   // 'high' = 排在宿主全部插件之前(要抢 Tab 这类已占用的键才用)
 
-// ② 自绘设置面板:宿主给裸容器,里面画什么全归你
+// ② 自绘设置面板:宿主给裸容器,里面画什么全归你(2026-11-18 起画在「设置 › 插件设置 › 你的插件」上;能用零件描述的先用 ctx.registerSettingsPage)
 ctx.registerSettingsView?.({ id: 'main', title: '高级', mount(el) { /* … */ return () => {} } })
 
 // ③ 每插件一份 JSON blob(<Forsion 家目录>/plugins-data/<id>.json,dev 与安装版各一份,原子写)
@@ -132,9 +132,9 @@ const off = ctx.app.watchFile?.('Snippets/latex.js', () => reload())
 - **No schema, no serialization**: you can't add node types or change what is saved. You can intercept keys, add decorations, and **change text and the selection**: `pm` is the host's own ProseMirror, so inserting or deleting text in `view.dispatch(view.state.tr…)` and moving the caret with `TextSelection.create(…)` work (latex-suite jumps the caret between tabstops this way). But for "insert a template at the caret and land the caret on a marker", use `ctx.app.insertMarkdownAt` first (previous section): markdown parsing, a single undo step and the read-only check are already handled there.
 - **Style hooks for math source (since 2026-11-15)**: when the caret is inside a formula and its source shows, the host adds `math-source` to the whole source (including `$`: monospace, italic, inline-code size), and each token also gets `math-source-dollar / -command / -script / -letter / -number / -bracket`. The classes sit **on the same span**, so write `.math-source.math-source-bracket`. The host's token colors are wrapped in `:where()` (zero specificity), so one plain class selector from your plugin on a bracket, `$` or placeholder wins without specificity games. Color variables are `--math-src-*` (light and dark). When both ends of the selection are between the `$` (Tab selecting a placeholder), the preview stays and the format bar does not open (nor do plugin selection actions on it); selections that leave the formula or select it with its `$` behave as before. See the plugin manual section on math source style hooks.
 - **`props.*` 宿主包了 try/catch,`state.apply` 没包** —— 后者吞异常等于放任状态损坏。状态迁移自己写稳。
-- **设置类页面先用 `ctx.ui.mountSettingsPage`**(2026-10-17 起,见 references/host-ui-mounts.md):开关、按钮、输入、额度条都有宿主零件,手机排法由宿主管;
-  只有清单外的内容才自己画(放进 `custom` 块)。
-- **设置面板会被反复挂载卸载**(用户来回进出详情页):状态别放模块级单例,dispose 要真收干净
+- **插件的设置页先用 `ctx.registerSettingsPage`**(2026-11-18 起;老宿主 `ctx.ui.mountSettingsPage`,见 references/host-ui-mounts.md):开关、按钮、输入、额度条都有宿主零件,手机排法由宿主管;
+  只有清单外的内容才自己画(放进 `custom` 块)。不许仿宿主 `.settings-*` 样式。
+- **设置面板会被反复挂载卸载**(用户来回进出插件设置页):状态别放模块级单例,dispose 要真收干净
   (定时器、DOM 监听、内嵌的 CodeMirror 实例)。容器上有宿主主题变量但**没有样式重置**,自己带样式、深浅色都要过。
 - **大块数据用 `loadData/saveData`,别塞 localStorage**:`registerSetting` 是每键一个字符串,没有原子性。
   用户手改坏了 JSON,宿主返回 `null` 当没写过 —— 插件要能靠默认值起来。

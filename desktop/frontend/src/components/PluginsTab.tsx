@@ -1,6 +1,6 @@
 /**
  * 设置 → 插件管理(Obsidian 风):列出所有插件(内置 + 文件夹)+ 启用开关。
- * 启用且有 settings 的插件,其设置页移到左栏「扩展」组下的一级 nav 项(见 SettingsModal),此处给「设置」直达按钮。
+ * 有 settings 的插件(开着关着都算),设置页在左栏「扩展 › 插件设置」下(见 SettingsModal,方案 P4),此处给「设置」直达按钮。
  * 插件清单与 agents 由 SettingsModal 统一持有并下传(避免双拉,启用态变更即时反映到 nav)。仅本地后端可用。
  */
 import React, { useEffect, useMemo, useState } from 'react'
@@ -173,7 +173,7 @@ export const PluginsTab: React.FC<{
               </div>
               <div style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)', marginTop: 2 }}>{ds(p)}</div>
             </div>
-            {p.settings && p.enabled && (
+            {p.settings && (
               <button className="btn ghost sm" onClick={() => onOpenSettings(p.id)}>{t('settings.plugins.openSettings')}</button>
             )}
             {p.source === 'folder' && userIds.has(p.id) && (

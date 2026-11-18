@@ -14,7 +14,7 @@ import { BrowserExtensionPanel } from './BrowserExtensionPanel'
  * 在 Desktop 主界面内替换 Chat/Inspector 区域，而不是覆盖式弹窗。
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { X, Droplets, Shapes, ArrowLeft, Undo2, ChevronRight, Loader2, RefreshCw, Sun, Moon, MonitorCog, RotateCcw, LogIn, LogOut, KeyRound, Plus, Trash2, Plug, Search, Download, Sparkles, Wrench, Check, Copy, Globe2, FolderOpen, Trophy, FileDown, Settings2, NotebookPen, Puzzle, LayoutGrid, Palette, Keyboard, Bug, Info, Brain, Bot, Webhook, MessageCircle, Blocks, Bell, PanelBottom, Image as ImageIcon, Server, Type, Layers3, MousePointer2, CircleUserRound, Scaling, Coffee, MonitorCheck, History, MonitorSmartphone, Laptop, Cloud, SunDim, AlignLeft, Wind, TextSelect, MousePointerClick, FolderInput } from 'lucide-react'
+import { X, Droplets, Shapes, ArrowLeft, Undo2, ChevronRight, Loader2, RefreshCw, Sun, Moon, MonitorCog, RotateCcw, LogIn, LogOut, KeyRound, Plus, Trash2, Plug, Search, Download, Sparkles, Wrench, Check, Copy, Globe2, FolderOpen, Trophy, FileDown, Settings2, NotebookPen, Puzzle, LayoutGrid, Palette, Keyboard, Bug, Info, Brain, Bot, Webhook, MessageCircle, Blocks, Bell, PanelBottom, Image as ImageIcon, Server, Type, Layers3, MousePointer2, CircleUserRound, Scaling, Coffee, MonitorCheck, History, MonitorSmartphone, Laptop, Cloud, SunDim, AlignLeft, Wind, TextSelect, MousePointerClick, FolderInput, SlidersHorizontal } from 'lucide-react'
 import { ThemeCard } from './ThemeCard'
 import { ThemeSettingsPanel } from './ThemeSettingsPanel'
 import { StartupAppearanceSettings } from './StartupAppearanceSettings'
@@ -76,8 +76,14 @@ import { PluginsTab } from './PluginsTab'
 import { CorePluginUpdates } from './CorePluginUpdates'
 import { AmadeusPluginsTab, PluginSettingsView, pluginListDetailBack } from './AmadeusPluginsTab'
 import { cloudViewKey, cloudViewTitle, cloudTabTitle, resolveCloudSettingsKey, cloudSettingsParent, cloudSettingsTabs, cloudAccountSearchKey } from './settingsCloudNavigation'
-import { usePluginStore } from '@amadeus/plugins/pluginStore'
+import { pluginWanted, usePluginStore } from '@amadeus/plugins/pluginStore'
 import { isPlacedSettingsView, pluginDisplayName, pluginsWithSettingsPanel } from '../amadeus/plugins/display'
+import type { AmadeusPlugin } from '@amadeus/plugins/types'
+import { EnginePluginSettingsHostPage, ForsionPluginSettingsPage, PluginSettingsDirectory, enginePluginSource, forsionPluginSource, pluginMetaLine } from './PluginSettingsHost'
+import {
+  forsionPluginHasSettings, isPluginSettingsTab, matchPluginSettingsEntry, pluginSettingsNavEntries, readKnownPluginSettings,
+  readRecentPluginSettings, sortPluginSettingsEntries, syncKnownPluginSettings, touchRecentPluginSettings, type PluginSettingsEntry,
+} from './pluginSettingsNav'
 import { readTanguPrefs } from '../amadeus/plugins/tanguSeam'
 import { SpacesTab } from './SpacesTab'
 import { PanelNotice } from './PanelNotice'
@@ -298,6 +304,10 @@ registerMessages({
   'settingsmodal.navLabel': { zh: '设置导航', en: 'Settings navigation' },
   'settingsmodal.search.label': { zh: '搜索设置', en: 'Search settings' },
   'settingsmodal.search.results': { zh: '设置项', en: 'Settings' },
+  // 「扩展 › 插件设置」折叠组与它的列表页(方案 P4,2026-11-18)
+  'settings.tab.pluginSettings': { zh: '插件设置', en: 'Plugin settings' },
+  'plugsettings.page.description': { zh: '装了的插件里有设置的都在这里，开着的、关着的都算。', en: 'Every installed plugin that has settings, whether it is on or off.' },
+  'plugsettings.more': { zh: '另外 {n} 个…', en: '{n} more…' },
   'settingsmodal.search.empty': { zh: '没有匹配的设置', en: 'No matching settings' },
   'settingsmodal.backend.change': { zh: '更改', en: 'Change' },
   'settingsmodal.backend.current': { zh: '当前：{mode}', en: 'Current: {mode}' },
@@ -325,7 +335,7 @@ const UPDATE_ERROR_KEYS: Record<string, string> = {
 type StaticTab = typeof SETTINGS_TABS[number]
 // 动态插件设置页用 `plugin:<id>`(Tangu 引擎插件)/ `fplugin:<id>`(Forsion 插件),都是 Obsidian 式一级入口。
 // ⚠️ 两套 id 空间会重名(deutschland-reiseglueck 引擎侧与 Forsion 侧各有一份),前缀必须分开。
-export type Tab = StaticTab | `plugin:${string}` | `fplugin:${string}`
+export type Tab = StaticTab | 'plugin-settings' | `plugin:${string}` | `fplugin:${string}`
 /**
  * openSettings 的深链目标:一级页、旧别名(见 settingsTarget.ts)或 `${tab}/${sub}` 二级落点
  * (如 'model/m-providers')。解析只在 resolveSettingsTarget 一处。
@@ -354,6 +364,7 @@ const TAB_ICONS: Partial<Record<Tab, React.ReactNode>> = {
   notes: <NotebookPen size={14} />,
   sync: <RefreshCw size={14} />,
   'amadeus-plugins': <Puzzle size={14} />,
+  'plugin-settings': <SlidersHorizontal size={14} />,
   advanced: <Wrench size={14} />,
   trash: <Trash2 size={14} />,
   permissions: <MonitorCog size={14} />,
@@ -562,7 +573,7 @@ export const SettingsModal: React.FC<{
   const mobileExtend = !!window.tangu?.mobile && !!window.tangu?.extendMobile
   const extendPages = usePluginStore((s) => (publicEntry || mobileExtend) && s.settingsViews.some((o) => o.pluginId === 'forsion-extend' && s.activeIds.includes(o.pluginId)))
   // 插件页(amadeus-plugins)与左栏 fplugin:<id> 直达项的**同一道闸**:桌面 / 设备页 / Android App(2026-10-02 起
-  // 市场能装 Forsion 插件,插件宿主在 mobile/src/plugins)。三处(tabItems、tab 推导、forsionNavItems)必须一致,
+  // 市场能装 Forsion 插件,插件宿主在 mobile/src/plugins)。三处(tabItems、tab 推导、「插件设置」的 Forsion 条目)必须一致,
   // 否则 fplugin: 深链在手机上被推导弹回首页。web 云壳没有插件宿主(listPlugins 恒空),照旧不列。
   const pluginsPage = isDesktop || unitPage || (!!window.tangu?.mobile && !!window.amadeus)
   // 捆绑包级联(内嵌引擎插件随父插件启停)只给本机桌面:设备页的 cfg 指向对方引擎,手机的 cfg 指向云端网关 —— 都不能 PUT。
@@ -572,6 +583,45 @@ export const SettingsModal: React.FC<{
   // 引擎插件清单(异步到);「电脑操作」的一级页跟着它在不在。
   const [plugins, setPlugins] = useState<PluginInfo[] | null>(null)
   const computerUse = (plugins || []).find((pl) => pl.id === COMPUTER_USE_PLUGIN && pl.enabled && pl.settings)
+  const pluginNm = (pl: PluginInfo): string => (locale === 'en' && pl.nameEn ? pl.nameEn : pl.name)
+
+  // ── 「扩展 › 插件设置」折叠组(方案 P4,2026-11-18 用户定)。原来每个有设置的插件各占一个一级项,几十个插件会把左栏冲垮;
+  // 现在收进一个父项:引擎插件 `plugin:<id>` + Forsion 插件 `fplugin:<id>`,开着关着都列(关着的灰),按显示名排;
+  // 超过 8 个只列最近打开的 5 个 + 「另外 N 个…」(列表页 `plugin-settings`)。条目与排序在 pluginSettingsNav.ts。
+  // ⚠️ Forsion 插件那半的闸必须与「插件」页(amadeus-plugins,pluginsPage)一致:window.amadeus 在、那一页却不在(web 云壳),
+  // 只按 amadeus 放行会列出一批点「返回」就被推导弹回首页的条目。
+  // ⚠️ pluginStore.enable() 给每个启用插件自动塞一行 `workFolder`,那行人人都有,不算「有设置」(pluginsWithSettingsPanel)。
+  const asList = <T,>(x: unknown): T[] => (Array.isArray(x) ? x as T[] : [])
+  const amxPlugins = asList<AmadeusPlugin>(usePluginStore((s) => s.plugins))
+  const amxActiveIds = asList<string>(usePluginStore((s) => s.activeIds))
+  const amxDisabledIds = asList<string>(usePluginStore((s) => s.disabledIds))
+  const amxSettings = asList<{ pluginId: string; item: { key: string } }>(usePluginStore((s) => s.settings))
+  const amxSettingsViews = usePluginStore((s) => s.settingsViews)
+  const amxSettingsPages = asList<{ pluginId: string; item: { title: string | (() => string); keywords?: string } }>(usePluginStore((s) => s.settingsPages))
+  const forsionPluginHost = pluginsPage && !!window.amadeus
+  const forsionLive = new Set(forsionPluginHost
+    ? pluginsWithSettingsPanel(amxPlugins, amxActiveIds, amxSettings, asList(amxSettingsViews), amxSettingsPages).map((pl) => pl.id) : [])
+  const forsionLiveSig = [...forsionLive].sort().join('\n')
+  const [knownPluginSettings, setKnownPluginSettings] = useState(readKnownPluginSettings)
+  // 在跑的插件有没有设置记一笔:关掉以后照样列在「插件设置」里(灰的)。读不出原来那份就不写(syncKnown 自己判)。
+  useEffect(() => {
+    if (!forsionPluginHost) return
+    const next = syncKnownPluginSettings(amxActiveIds, forsionLive)
+    if (next) setKnownPluginSettings((prev) => (prev === next ? prev : next))
+  }, [forsionPluginHost, forsionLiveSig, amxActiveIds.join('\n')])
+  const pageTitleOf = (title: string | (() => string)): string => { try { return typeof title === 'function' ? String(title() ?? '') : String(title ?? '') } catch { return '' } }
+  const pluginSettingsEntries: PluginSettingsEntry[] = sortPluginSettingsEntries([
+    ...(isDesktop ? (plugins || []).filter((pl) => pl.settings && pl.id !== COMPUTER_USE_PLUGIN).map((pl): PluginSettingsEntry => ({
+      tab: `plugin:${pl.id}`, kind: 'engine', id: pl.id, name: pluginNm(pl), enabled: !!pl.enabled,
+      keywords: `${pl.id} ${pl.name} ${pl.nameEn ?? ''}`, meta: pluginMetaLine(t, pl.version, enginePluginSource(pl)),
+    })) : []),
+    ...(forsionPluginHost ? amxPlugins.filter((pl) => forsionPluginHasSettings(pl.id, amxActiveIds.includes(pl.id), forsionLive, knownPluginSettings)).map((pl): PluginSettingsEntry => ({
+      tab: `fplugin:${pl.id}`, kind: 'forsion', id: pl.id, name: pluginDisplayName(pl, locale), enabled: pluginWanted(pl, amxDisabledIds),
+      keywords: [pl.id, pl.name, pl.nameEn ?? '', ...amxSettingsPages.filter((o) => o.pluginId === pl.id).map((o) => `${pageTitleOf(o.item.title)} ${o.item.keywords ?? ''}`)].join(' '),
+      meta: pluginMetaLine(t, pl.version, forsionPluginSource(pl)),
+    })) : []),
+  ], locale === 'en' ? 'en' : 'zh')
+  const [recentPluginSettings, setRecentPluginSettings] = useState(readRecentPluginSettings)
   // 委托管理员只管 Agent:设置里只留 Agent 与技能两页(别的页的数据面全在那台设备的白名单外;见 services/delegatedAdmin.ts)。
   const delegatedTabs = DELEGATED_SETTINGS_TABS.map((id) => [id, t(`settings.tab.${id}`)] as [Tab, string])
   const tabItems = isDelegatedAdmin() ? delegatedTabs : [
@@ -590,6 +640,8 @@ export const SettingsModal: React.FC<{
     ...(isDesktop && computerUse ? ([['computer-use', t('settings.tab.computerUse')]] as Array<[Tab, string]>) : []),
     // 插件页设备页也给(插件在 B 端真的装载运行,列表/启停是本页 runtime 行为,不碰对方设备)。
     ...(pluginsPage ? ([['amadeus-plugins', t('settings.tab.amadeusPlugins')]] as Array<[Tab, string]>) : []),
+    // 插件设置(折叠父项 + 列表页):有一个带设置的插件才列
+    ...(pluginSettingsEntries.length ? ([['plugin-settings', t('settings.tab.pluginSettings')]] as Array<[Tab, string]>) : []),
     // Forsion 云端(账号 / 云端地址 / 记忆同步 / 笔记在线同步)整页住在 Extend 的桥键后面:停用或没装 Extend 就没有这一页
     ...(cloudAccount && (isDesktop || extendPages) ? ([['forsion', t('settings.tab.forsionCloud')]] as Array<[Tab, string]>) : []),
     ...(isDesktop && !!window.amadeus ? ([['notes', t('settings.tab.notes')]] as Array<[Tab, string]>) : []),
@@ -622,9 +674,12 @@ export const SettingsModal: React.FC<{
     ? rawTab
     : (tabItems[0]?.[0] ?? rawTab)
   const isPluginTab = tab.startsWith('plugin:') || tab.startsWith('fplugin:')
+  // 记最近打开的插件设置页(折叠时列哪 5 个)
+  useEffect(() => { if (isPluginSettingsTab(tab)) setRecentPluginSettings(touchRecentPluginSettings(tab)) }, [tab])
   // 有天然子页面的设置项改成折叠导航。桌面初次打开时展开当前项；移动端首页从总项开始。
+  // 「插件设置」父项缺省展开(P4)。
   const [expandedTabs, setExpandedTabs] = useState<Set<Tab>>(() => (
-    mobileSettings ? new Set() : new Set([tab])
+    mobileSettings ? new Set<Tab>(['plugin-settings']) : new Set<Tab>([tab, 'plugin-settings'])
   ))
 
   // 桌面正文里的直达入口也要把对应总项带开；移动端返回首页时保留用户刚才的折叠状态。
@@ -811,12 +866,12 @@ export const SettingsModal: React.FC<{
     reloadPlugins()
     void listAgents(homeTarget()).then(setPluginAgents).catch(() => { /* ignore */ })
   }, [p.open, isDesktop, reloadPlugins, p.cfg])
-  // `plugin:<id>` 只有「启用且声明了设置项」的引擎插件才有页(与引擎插件列表里那颗「打开设置」同一道闸)。
+  // `plugin:<id>` 只有「声明了设置项」的引擎插件才有页(P4 起关着的也有,页上是「已停用 · 启用」);「电脑操作」一级页仍要开着。
   // 商店的「打开设置」、agent 的 open-settings 都可能带来别的 id:清单到了再判,落到引擎插件列表(那一行上有它的开关)。
   useEffect(() => {
     if (!(rawTab.startsWith('plugin:') || rawTab === 'computer-use') || !plugins) return
     const pl = plugins.find((x) => x.id === (rawTab === 'computer-use' ? COMPUTER_USE_PLUGIN : rawTab.slice('plugin:'.length)))
-    if (!(pl?.enabled && pl.settings)) { goTab('amadeus-plugins'); setSub('pl-engine') }
+    if (!(pl?.settings && (pl.enabled || rawTab !== 'computer-use'))) { goTab('amadeus-plugins'); setSub('pl-engine') }
   }, [rawTab, plugins])
 
   // 本地联网搜索配置:进模型 tab 拉取;云端/旧后端 404 → wsRed=null 整段隐藏。
@@ -826,22 +881,8 @@ export const SettingsModal: React.FC<{
       .then(setWsRed)
       .catch(() => setWsRed(null))
   }, [p.open, tab, isDesktop, p.cfg])
-  const pluginNm = (pl: PluginInfo): string => (locale === 'en' && pl.nameEn ? pl.nameEn : pl.name)
-  const pluginNavItems = (plugins || [])
-    .filter((pl) => pl.enabled && pl.settings && pl.id !== COMPUTER_USE_PLUGIN)
-    .map((pl) => [`plugin:${pl.id}`, pluginNm(pl)] as [Tab, string])
-
-  // Forsion 插件同款待遇:有真设置的各成左栏一级项,免得几十个插件全靠进插件页逐张卡点开找。
-  // ⚠️ pluginStore.enable() 给每个启用插件自动塞一行 `workFolder`,那行人人都有,不算「有设置」。
-  const amxPlugins = usePluginStore((s) => s.plugins)
-  const amxActiveIds = usePluginStore((s) => s.activeIds)
-  const amxSettings = usePluginStore((s) => s.settings)
-  const amxSettingsViews = usePluginStore((s) => s.settingsViews)
-  // ⚠️ 闸必须与「插件」页(amadeus-plugins,pluginsPage)一致:window.amadeus 在、那一页却不在(web 云壳),
-  // 只按 amadeus 放行会列出一批点「返回」就被推导弹回首页的条目。
-  const forsionNavItems: Array<[Tab, string]> = !(pluginsPage && window.amadeus) ? []
-    : pluginsWithSettingsPanel(amxPlugins, amxActiveIds, amxSettings, amxSettingsViews)
-      .map((pl) => [`fplugin:${pl.id}`, pluginDisplayName(pl, locale)] as [Tab, string])
+  /** 详情页 / 插件列表里的「设置」直达:落到它在「插件设置」里的那一页。 */
+  const openForsionSettings = (id: string): void => goTab(`fplugin:${id}` as Tab)
   // 首方内置包(Forsion Extend)挂进「Forsion 云端」的自绘子页:插件启用、面板声明了 category。设备页不挂(那边不是本机账号)。
   const cloudViews = cloudAccount && ((isDesktop && !unitPage) || publicEntry || mobileExtend)
     ? amxSettingsViews.filter((o) => amxActiveIds.includes(o.pluginId) && isPlacedSettingsView(amxPlugins.find((pl) => pl.id === o.pluginId), o.item))
@@ -1219,10 +1260,18 @@ export const SettingsModal: React.FC<{
     p.onReconnect(patch)
   }
 
+  /** 插件设置页的标题 = 插件名(不在「插件设置」里的,比如深链到一个没有设置的插件,也按名字)。 */
+  const pluginTabName = (id: Tab): string | undefined => {
+    const hit = pluginSettingsEntries.find((e) => e.tab === id)?.name
+    if (hit) return hit
+    if (id.startsWith('fplugin:')) { const pl = amxPlugins.find((x) => x.id === id.slice('fplugin:'.length)); return pl ? pluginDisplayName(pl, locale) : undefined }
+    if (id.startsWith('plugin:')) { const pl = (plugins || []).find((x) => x.id === id.slice('plugin:'.length)); return pl ? pluginNm(pl) : undefined }
+    return undefined
+  }
   const activeTabLabel = isPluginTab
-    ? ([...forsionNavItems, ...pluginNavItems].find(([id]) => id === tab)?.[1] || t('settings.tab.plugins'))
+    ? (pluginTabName(tab) || t('settings.tab.plugins'))
     : (tabItems.find(([id]) => id === tab)?.[1] || (tab === 'computer-use' ? t('settings.tab.computerUse') : t('settings.title')))
-  const pageDescriptionKey: Partial<Record<StaticTab, string>> = {
+  const pageDescriptionKey: Partial<Record<StaticTab | 'plugin-settings', string>> = {
     forsion: 'settings.page.forsionCloudDescription',
     general: 'settings.page.generalDescription',
     spaces: 'settings.page.spacesDescription',
@@ -1242,6 +1291,7 @@ export const SettingsModal: React.FC<{
     browser: 'settings.page.browserDescription',
     'computer-use': 'settings.page.computerUseDescription',
     'amadeus-plugins': PRODUCT.nativeFeatures !== undefined ? 'settings.amadeusPlugins.unitIntro' : 'settings.page.pluginsDescription',
+    'plugin-settings': 'plugsettings.page.description',
     advanced: 'settings.page.advancedDescription',
     trash: 'trash.page',
     // 手机 App 的同名页是通知 / 操作这台手机 / 麦克风三项,不是电脑的那几项权限
@@ -1369,17 +1419,33 @@ export const SettingsModal: React.FC<{
       { key: 'workspace', label: t('settings.group.workspace'), tabs: ['forsion', 'general', 'spaces', 'notes', 'sync'] },
       { key: 'appearance', label: t('settings.group.appearance'), tabs: ['theme', 'shortcuts', 'notifications', 'statusbar'] },
       { key: 'ai', label: t('settings.group.ai'), tabs: ['model', 'agents', 'skills', 'connectors', 'mcp', 'hooks', 'channels', 'browser', 'computer-use'] },
-      { key: 'extensions', label: t('settings.group.extensions'), tabs: ['amadeus-plugins'] },
+      { key: 'extensions', label: t('settings.group.extensions'), tabs: ['amadeus-plugins', 'plugin-settings'] },
       { key: 'system', label: t('settings.group.system'), tabs: ['trash', 'permissions', 'units', 'remote-sessions', 'computer-history', 'advanced', 'developer', 'about'] },
     ] },
   ]
   const navItemsForGroup = (grp: { key: string; tabs: Tab[] }): Array<[Tab, string]> => {
-    const base = grp.tabs
+    // 插件不再各占一级项:都收在「插件设置」父项下面(navChildrenFor),手机一级列表同一份。
+    return grp.tabs
       .map((id) => tabItems.find(([tid]) => tid === id))
       .filter((x): x is [Tab, string] => !!x)
-    // 「社区插件」组末尾追加已启用且有设置的外置插件,动态项同样进入移动端一级列表。
-    return grp.key === 'extensions' ? [...base, ...forsionNavItems, ...pluginNavItems] : base
   }
+  /** 左栏 / 手机一级列表里一个父项下面的子项。普通父项 = 它的子页;「插件设置」= 各插件的设置页(各是一个一级 tab)。 */
+  type NavChild = { key: string; label: string; active: boolean; open(): void; off?: boolean; more?: boolean }
+  const pluginNavChildren = (ql: string): NavChild[] => {
+    const child = (e: PluginSettingsEntry): NavChild => ({ key: e.tab, label: e.name, active: tab === e.tab, open: () => goTab(e.tab), off: !e.enabled })
+    // 搜索时:父项名本身命中 → 全列;否则只列命中的插件(名字或别名),不折叠
+    if (ql) return t('settings.tab.pluginSettings').toLowerCase().includes(ql) ? pluginSettingsEntries.map(child) : pluginSettingsEntries.filter((e) => matchPluginSettingsEntry(e, ql)).map(child)
+    const { shown, more } = pluginSettingsNavEntries(pluginSettingsEntries, recentPluginSettings, isPluginSettingsTab(tab) ? tab : undefined)
+    return [
+      ...shown.map(child),
+      ...(more ? [{ key: 'plugin-settings', label: t('plugsettings.more', { n: more }), active: tab === 'plugin-settings', open: () => goTab('plugin-settings'), more: true }] : []),
+    ]
+  }
+  const navChildrenFor = (id: Tab, ql = ''): NavChild[] => id === 'plugin-settings'
+    ? pluginNavChildren(ql)
+    : navSubItemsForTab(id).map(([key, label]) => ({ key, label, active: tab === id && (id === 'forsion' ? cloudNavKey : activeSub) === key, open: () => openSubPage(id, key) }))
+  /** 父项「在这一支上」:插件设置父项在任一插件设置页或列表页时都算。 */
+  const navOwns = (id: Tab): boolean => (id === 'plugin-settings' ? isPluginTab || tab === 'plugin-settings' : tab === id)
   const toggleTab = (id: Tab): void => {
     setExpandedTabs((previous) => {
       const next = new Set(previous)
@@ -1388,11 +1454,11 @@ export const SettingsModal: React.FC<{
       return next
     })
   }
-  const toggleDesktopTab = (id: Tab, items: Array<[string, string]>): void => {
+  const toggleDesktopTab = (id: Tab, items: NavChild[]): void => {
     const opening = !expandedTabs.has(id)
     toggleTab(id)
-    // 桌面端总项与右侧内容区联动：展开时默认展示它的第一个具体子页面。
-    if (opening && items[0]) openSubPage(id, items[0][0])
+    // 桌面端总项与右侧内容区联动：展开时默认展示它的第一个具体子页面(「插件设置」只开合:第一个插件不比别的特殊)。
+    if (opening && items[0] && id !== 'plugin-settings') items[0].open()
   }
   const toggleMobileTab = (id: Tab): void => {
     // 移动端仍停留在设置首页；只有点下面的具体子项才进入二级界面。
@@ -1449,7 +1515,9 @@ export const SettingsModal: React.FC<{
         const items = secHit || grp.label.toLowerCase().includes(navQl)
           ? all
           : all.filter(([id, label]) => label.toLowerCase().includes(navQl)
-            || subItemsForTab(id).some(([, childLabel]) => childLabel.toLowerCase().includes(navQl)))
+            || (id === 'plugin-settings'
+              ? pluginSettingsEntries.some((e) => matchPluginSettingsEntry(e, navQl))
+              : subItemsForTab(id).some(([, childLabel]) => childLabel.toLowerCase().includes(navQl))))
         return { key: grp.key, label: grp.label, items }
       })
       .filter((g) => g.items.length > 0)
@@ -1547,7 +1615,7 @@ export const SettingsModal: React.FC<{
                 <h2>{grp.label}</h2>
                 <div className="settings-mobile-group-card">
                   {items.map(([id, label]) => {
-                    const children = navSubItemsForTab(id)
+                    const children = navChildrenFor(id)
                     const expandable = children.length > 0
                     const expanded = expandable && expandedTabs.has(id)
                     const childrenId = `settings-mobile-subitems-${id.replace(':', '-')}`
@@ -1574,16 +1642,16 @@ export const SettingsModal: React.FC<{
                         </button>
                         {expanded && (
                           <div className="settings-mobile-subitems" id={childrenId}>
-                            {children.map(([key, childLabel]) => (
+                            {children.map((c) => (
                               <button
                                 type="button"
-                                className="settings-mobile-subrow"
-                                data-settings-sub={key}
-                                key={key}
-                                onClick={() => { openSubPage(id, key); setMobileMenuOpen(false) }}
+                                className={`settings-mobile-subrow${c.off ? ' settings-nav-subitem--off' : ''}${c.more ? ' settings-nav-subitem--more' : ''}`}
+                                data-settings-sub={c.key}
+                                key={c.key}
+                                onClick={() => { c.open(); setMobileMenuOpen(false) }}
                               >
                                 <span className="settings-mobile-subrow-mark" aria-hidden="true" />
-                                <span>{childLabel}</span>
+                                <span>{c.label}</span>
                                 <ChevronRight size={16} aria-hidden="true" />
                               </button>
                             ))}
@@ -1656,7 +1724,7 @@ export const SettingsModal: React.FC<{
                   <div key={grp.key} className="settings-nav-group">
                     <div className="settings-nav-grouphead">{grp.label}</div>
                     {grp.items.map(([id, label]) => {
-                      const children = navSubItemsForTab(id)
+                      const children = navChildrenFor(id, ql)
                       const expandable = children.length > 0
                       // 搜索临时展开命中总项，但不篡改用户原本的折叠选择。
                       const expanded = expandable && (!!ql || expandedTabs.has(id))
@@ -1665,7 +1733,7 @@ export const SettingsModal: React.FC<{
                         <div className="settings-nav-parent" key={id}>
                           <button
                             type="button"
-                            className={tab === id ? (expandable ? 'has-active' : 'active') : ''}
+                            className={navOwns(id) ? (expandable ? 'has-active' : 'active') : ''}
                             aria-current={tab === id ? 'page' : undefined}
                             aria-expanded={expandable ? expanded : undefined}
                             aria-controls={expandable ? childrenId : undefined}
@@ -1676,16 +1744,17 @@ export const SettingsModal: React.FC<{
                           </button>
                           {expanded && (
                             <div className="settings-nav-subitems" id={childrenId}>
-                              {children.map(([key, childLabel]) => (
+                              {children.map((c) => (
                                 <button
                                   type="button"
-                                  className={`settings-nav-subitem${tab === id && (id === 'forsion' ? cloudNavKey : activeSub) === key ? ' active' : ''}`}
-                                  aria-current={tab === id && (id === 'forsion' ? cloudNavKey : activeSub) === key ? 'page' : undefined}
-                                  key={key}
-                                  onClick={() => openSubPage(id, key)}
+                                  className={`settings-nav-subitem${c.active ? ' active' : ''}${c.off ? ' settings-nav-subitem--off' : ''}${c.more ? ' settings-nav-subitem--more' : ''}`}
+                                  aria-current={c.active ? 'page' : undefined}
+                                  data-settings-nav-child={c.key}
+                                  key={c.key}
+                                  onClick={c.open}
                                 >
                                   <span className="settings-nav-subitem-mark" aria-hidden="true" />
-                                  <span>{childLabel}</span>
+                                  <span>{c.label}</span>
                                 </button>
                               ))}
                             </div>
@@ -2832,10 +2901,10 @@ export const SettingsModal: React.FC<{
                     设备页(unitPage)与 Android App 不传级联三件套:cfg 缺省=cascadeAfterToggle 不级联 —— 否则捆绑包
                     启停会经代理持久改对方引擎插件(Codex P1)/ 打到云端网关;引擎插件区同因整块桌面专属。 */}
                 {tab === 'amadeus-plugins' && activeSub === 'pl-core' && !!window.amadeus && (
-                  <AmadeusPluginsTab key="core" section="core" {...(pluginCascade ? { cfg: p.cfg, onEngineReload: reloadPlugins, enginePlugins: plugins } : {})} />
+                  <AmadeusPluginsTab key="core" section="core" onOpenSettings={openForsionSettings} {...(pluginCascade ? { cfg: p.cfg, onEngineReload: reloadPlugins, enginePlugins: plugins } : {})} />
                 )}
                 {tab === 'amadeus-plugins' && activeSub === 'pl-forsion' && !!window.amadeus && (
-                  <AmadeusPluginsTab key="installed" section="installed" {...(pluginCascade ? { cfg: p.cfg, onEngineReload: reloadPlugins, enginePlugins: plugins } : {})} />
+                  <AmadeusPluginsTab key="installed" section="installed" onOpenSettings={openForsionSettings} {...(pluginCascade ? { cfg: p.cfg, onEngineReload: reloadPlugins, enginePlugins: plugins } : {})} />
                 )}
                 {tab === 'amadeus-plugins' && activeSub === 'pl-engine' && isDesktop && (
                   <>
@@ -2850,13 +2919,19 @@ export const SettingsModal: React.FC<{
                 {tab === 'spaces' && <SpacesTab phone={phoneShell} />}
                 {tab === 'notifications' && <NotificationsTab onOpenInbox={isDesktop && stored ? () => openSubPage('general', 'g-inbox') : undefined} />}
                 {tab === 'statusbar' && <StatusBarTab />}
-                {/* 左栏点进来的 Forsion 插件设置页 = 插件页的详情面,受控于 tab(不再是卡片列表的内部 state)。 */}
-                {tab.startsWith('fplugin:') && (
-                  <AmadeusPluginsTab
-                    {...(pluginCascade ? { cfg: p.cfg, onEngineReload: reloadPlugins, enginePlugins: plugins } : {})}
-                    controlledDetail={{ id: tab.slice('fplugin:'.length), onBack: () => goTab('amadeus-plugins') }}
-                  />
-                )}
+                {/* Forsion 插件的设置页(P4):身份卡 + 宿主零件画的设置。深链到一个没有设置的插件(商店「打开」、沙箱)= 照旧落它的详情面。 */}
+                {tab.startsWith('fplugin:') && (() => {
+                  const id = tab.slice('fplugin:'.length)
+                  const pl = amxPlugins.find((x) => x.id === id)
+                  return pl && pluginSettingsEntries.some((e) => e.tab === tab)
+                    ? <ForsionPluginSettingsPage plugin={pl} onClose={p.onClose} {...(pluginCascade ? { onEngineReload: reloadPlugins } : {})} />
+                    : <AmadeusPluginsTab
+                      {...(pluginCascade ? { cfg: p.cfg, onEngineReload: reloadPlugins, enginePlugins: plugins } : {})}
+                      controlledDetail={{ id, onBack: () => goTab('amadeus-plugins') }}
+                      onOpenSettings={openForsionSettings}
+                    />
+                })()}
+                {tab === 'plugin-settings' && <PluginSettingsDirectory entries={pluginSettingsEntries} onOpen={(x) => goTab(x)} />}
                 {tab === 'computer-use' && (
                   <div data-setting-anchor="computer-use">
                     {computerUse
@@ -2868,8 +2943,8 @@ export const SettingsModal: React.FC<{
                   const pid = tab.slice('plugin:'.length)
                   const pl = (plugins || []).find((x) => x.id === pid)
                   // 桌面上落不到的 id 由上面那个 effect 转去引擎插件列表:清单没到 / 转之前的那一帧都只显示「加载中」。
-                  return pl?.enabled && pl.settings
-                    ? <PluginSettingsPage cfg={p.cfg} plugin={pl} agents={pluginAgents} />
+                  return pl?.settings
+                    ? <EnginePluginSettingsHostPage plugin={pl} plugins={plugins || []} agents={pluginAgents} cfg={p.cfg} onReload={reloadPlugins} />
                     : <div className="hint">{t(isDesktop ? 'common.loading' : 'settings.plugins.empty')}</div>
                 })()}
                 {tab === 'agents' && activeSub === 'ag-clis' && <AgentClisTab cfg={p.cfg} />}
