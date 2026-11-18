@@ -111,7 +111,9 @@ import { LinkHoverCard } from './linkCard'
 import { TableMenuSection, isTableSelected, tableCellAtPoint } from './tableMenu'
 import { ColumnWidthMenu } from './ColumnWidthMenu'
 import { BlockColorMenu } from './BlockColorMenu'
-import { blockColorTr, colorTargetAtCursor, dispatchBlockColor } from './blockColorCommands'
+import { blockColorTr, calloutTokenEditable, colorTargetAtCursor, dispatchBlockColor, setCalloutMeta } from './blockColorCommands'
+import { isCalloutQuote } from '../blocks/markdown/blockColor'
+import { isCalloutIcon } from '../../../../shared/amadeus/calloutToken'
 import { ListNumberingMenu } from './ListNumberingMenu'
 import { hrefKind, normalizeHref, noteLinkTarget } from '../blocks/markdown/linkHref'
 import { ReadingSurface, type ReadingModeControl } from './ReadingSurface'
@@ -902,8 +904,10 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
         const r = empty ? slashRange($from, { keepSpace: $from.parentOffset < $from.parent.content.size }) : null
         const base = closeHistory(view.state.tr)
         if (r) base.delete(r.from, r.to)
-        if (!target) slashTurnFailed(item.label)
-        dispatchBlockColor(view, (target && blockColorTr(view.state, [target], color, base)) || base)
+        // 标注只有底色(元数据位,A5):在标注标题行打 /红色(字色)= 做不成,同样给一句提示
+        const calloutFg = !!target && isCalloutQuote(target.node) && !('bg' in color)
+        if (!target || calloutFg) slashTurnFailed(item.label)
+        dispatchBlockColor(view, (target && !calloutFg && blockColorTr(view.state, [target], color, base)) || base)
         view.focus()
       })
       return
@@ -3837,6 +3841,36 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
     return el ? registerFindProvider(pmFindProvider(el, () => layer.getView())) : undefined
   }, [readOnly, reading, mode, layer])
 
+  // 标注换图标(Notion 对齐 A5):点标注左上角的图标 → 页面图标那个选择器(.amx-iconpick)→ 写进令牌元数据位 `[!tip|🚀 …]`。
+  // 图标挂件(blocks/markdown/callout.ts)只发事件;这里记下当时的节点,选完时文档变过(节点不是同一个)就不改。
+  const [calloutIconPick, setCalloutIconPick] = useState<{ bqPos: number; node: ProseNode; x: number; y: number; current: string | null } | null>(null)
+  useEffect(() => {
+    const el = bodyRef.current
+    if (!el || readOnly || reading || mode === 'source') return
+    const on = (e: Event): void => {
+      const d = (e as CustomEvent<{ bqPos: number; rect: DOMRect; current: string | null }>).detail
+      // 只认本页主编辑器发的:画布卡片 / 嵌入的编辑器也在 bodyRef 里,它们的 bqPos 是另一份文档的位置
+      const view = layer.getView()
+      if (!view || e.target !== view.dom) return
+      const node = view.state.doc.nodeAt(d.bqPos)
+      // 令牌前有 HTML 原子的标注改不了令牌(见 calloutTokenEditable),不开选择器
+      if (node && isCalloutQuote(node) && calloutTokenEditable(node)) setCalloutIconPick({ bqPos: d.bqPos, node, x: d.rect.left, y: d.rect.bottom + 4, current: d.current })
+    }
+    el.addEventListener('amadeus:callout-icon', on)
+    return () => el.removeEventListener('amadeus:callout-icon', on)
+  }, [readOnly, reading, mode, layer])
+  const pickCalloutIcon = (icon: string | null): void => {
+    const pick = calloutIconPick
+    setCalloutIconPick(null)
+    const view = layer.getView()
+    if (!pick || !view?.editable || view.state.doc.nodeAt(pick.bqPos) !== pick.node) return
+    // 只收 emoji(ASCII 词在元数据位里是 Obsidian 的 CSS 片段名);null = 去掉图标、回到按类型的缺省图标
+    if (icon && !isCalloutIcon(icon)) { view.focus(); return }
+    const tr = closeHistory(view.state.tr)
+    if (setCalloutMeta(tr, pick.bqPos, { icon: icon ?? '' })) dispatchBlockColor(view, tr)
+    view.focus()
+  }
+
   return (
     <>
       {/* 顶栏胶囊的锚:恒在场(源码模式也在),只用来 `closest('.amx-pane')` 找本 pane 的插槽。
@@ -4100,6 +4134,10 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
               view.focus()
             }}
           />
+      )}
+      {calloutIconPick && !readOnly && (
+        <IconPicker x={calloutIconPick.x} y={calloutIconPick.y} current={calloutIconPick.current}
+          onPick={pickCalloutIcon} onClose={() => { setCalloutIconPick(null); layer.getView()?.focus() }} />
       )}
       {/* 只读兜底(B-02):交互层已不在只读下开菜单,这里再挡一层 —— 菜单项全是改文档的动作。 */}
       {blockMenu && !readOnly && (

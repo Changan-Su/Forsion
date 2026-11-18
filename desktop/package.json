@@ -527,7 +527,8 @@
     "check:replycopy": "node scripts/reply-copy.check.cjs",
     "check:inline-preview-edges": "node scripts/e2e-editor.cjs --check=editor-inline-edges",
     "check:calendar-nov12": "node scripts/calendar-nov12.check.cjs",
-    "check:blockcolor": "node scripts/e2e-editor.cjs --check=block-color"
+    "check:blockcolor": "node scripts/e2e-editor.cjs --check=block-color",
+    "check:calloutmeta": "node scripts/e2e-editor.cjs --check=callout-meta"
   },
   "dependencies": {
     "@astryxdesign/core": "^0.1.4",

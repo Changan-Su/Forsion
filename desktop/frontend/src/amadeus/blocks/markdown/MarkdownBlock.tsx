@@ -65,7 +65,7 @@ import { listener, listenerCtx } from '@milkdown/kit/plugin/listener'
 import { $prose } from '@milkdown/kit/utils'
 import type { Ctx, MilkdownPlugin } from '@milkdown/kit/ctx'
 import { DOMParser as PmDOMParser, DOMSerializer, Fragment, Slice, type MarkType, type Node as ProseNode } from '@milkdown/kit/prose/model'
-import { NodeSelection, Plugin, PluginKey, Selection, TextSelection } from '@milkdown/kit/prose/state'
+import { NodeSelection, Plugin, PluginKey, Selection, TextSelection, type EditorState } from '@milkdown/kit/prose/state'
 import { splitBlock } from '@milkdown/kit/prose/commands'
 import { keymap } from '@milkdown/kit/prose/keymap'
 import { Decoration, DecorationSet, type EditorView } from '@milkdown/kit/prose/view'
@@ -1134,6 +1134,14 @@ export function MilkdownInner({
         ctx.set(defaultValueCtx, initial)
         ctx.update(editorViewOptionsCtx, (prev) => ({
           ...prev,
+          // 统一页面的主编辑器接管「点标注图标换图标」(Notion 对齐 A5,UnifiedPage 监听 amadeus:callout-icon)。
+          // 只给它打这个标记:画布卡片、嵌入、行预览、v3 宿主没人接,图标在那里照旧是不可点的装饰(callout.ts)。
+          ...(unified ? {
+            attributes: (state: EditorState) => ({
+              ...(typeof prev.attributes === 'function' ? prev.attributes(state) : prev.attributes ?? {}),
+              'data-callout-icon-pick': '',
+            }),
+          } : {}),
           editable: () => !readOnly,
           handleKeyDown: readOnly ? undefined : handleKeyDown,
           handlePaste: readOnly ? undefined : handlePaste,

@@ -8,6 +8,10 @@ import remarkFrontmatter from 'remark-frontmatter'
 import remarkCjkFriendly from 'remark-cjk-friendly/parseOnly'
 import remarkCjkStrike from 'remark-cjk-friendly-gfm-strikethrough/parseOnly'
 import { platformPlayer } from './platformVideo'
+import { CALLOUT_TOKEN_SRC, parseCalloutMeta } from '../calloutToken'
+
+/** 标注首行:令牌(可带元数据位)+ 折叠符 + 标题。分组 1 = 类型,2 = 元数据,3 = 折叠符,4 = 标题。 */
+const CALLOUT_LINE_RE = new RegExp(`^${CALLOUT_TOKEN_SRC}([+-])?\\s*(.*)`)
 
 type MdNode = {
   type: string
@@ -208,14 +212,17 @@ export function renderPublicMarkdown(
         const first = n.children?.[0],
           match =
             first?.type === 'paragraph'
-              ? /^\[!([\w-]+)\]([+-])?\s*(.*)/.exec(text(first))
+              ? CALLOUT_LINE_RE.exec(text(first))
               : null
         if (!match) return `<blockquote>${inner()}</blockquote>`
+        // 元数据位(A5):`[!tip|🚀 blue]` 的图标放进标题、底色挂 data-bg(值只会是固定的颜色名);认不得的词不显示
+        const meta = parseCalloutMeta(match[2])
         const body = (n.children ?? []).slice(1).map(render).join(''),
-          title = escapeHtml(match[3] || match[1])
-        return match[2]
-          ? `<details class="md-callout md-fold"${match[2] === '+' ? ' open' : ''}><summary>${title}</summary><div>${body}</div></details>`
-          : `<aside class="md-callout"><p class="md-callout-title">${title}</p>${body}</aside>`
+          title = `${meta.icon ? `${escapeHtml(meta.icon)} ` : ''}${escapeHtml(match[4] || match[1])}`,
+          bg = meta.color ? ` data-bg="${meta.color}"` : ''
+        return match[3]
+          ? `<details class="md-callout md-fold"${bg}${match[3] === '+' ? ' open' : ''}><summary>${title}</summary><div>${body}</div></details>`
+          : `<aside class="md-callout"${bg}><p class="md-callout-title">${title}</p>${body}</aside>`
       }
       case 'table':
         return `<div class="md-table-wrap"><table>${(n.children ?? []).map((row, i) => `<${i ? 'tbody' : 'thead'}><tr>${(row.children ?? []).map((cell) => `<${i ? 'td' : 'th'}>${renderChildren(cell)}</${i ? 'td' : 'th'}>`).join('')}</tr></${i ? 'tbody' : 'thead'}>`).join('')}</table></div>`

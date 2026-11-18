@@ -12,6 +12,7 @@
  *    handleDrop 用精确落点替换 PM 默认 dropPoint(默认那个会诡异重嵌套);同文档移动=删+插一个事务。
  *  - AFFiNE 行为基准:块内打字藏把手 / callout(blockquote)整只一个把手 / 表格内部不出把手 /
  *    Esc 两段(文字 → 块选中 → 回文字)。多选/框选归 Phase B。 */
+import { CALLOUT_HEAD_RE } from '../../../../shared/amadeus/calloutToken'
 import { $prose } from '@milkdown/kit/utils'
 import type { MilkdownPlugin } from '@milkdown/kit/ctx'
 import { findParent } from '@milkdown/kit/prose'
@@ -758,7 +759,7 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
     let forbidden = false
     content.descendants((n) => { if (['amadeusCanvasCard', 'amadeusColumnRow', 'amadeusColumnCell'].includes(n.type.name)) forbidden = true })
     if (forbidden) return null
-    const head = !!node.firstChild?.isTextblock && /^\[![\w-]+\]/.test(node.firstChild.textContent)
+    const head = !!node.firstChild?.isTextblock && CALLOUT_HEAD_RE.test(node.firstChild.textContent)
     const titleEl = view.nodeDOM(pos + 1)
     if (head && boxed(titleEl)) {
       const r = titleEl.getBoundingClientRect()
