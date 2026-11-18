@@ -25,7 +25,7 @@ import { Decoration, DecorationSet } from '@milkdown/kit/prose/view'
 import type { EditorView } from '@milkdown/kit/prose/view'
 import { Fragment } from '@milkdown/kit/prose/model'
 import type { Node as ProseNode, ResolvedPos } from '@milkdown/kit/prose/model'
-import { createDropTargets, performDrop } from './dropTargets'
+import { clearDragSource, createDropTargets, dragToken, liveDragSource, performDrop, recordDragSource } from './dropTargets'
 import { calloutOf, unfoldCalloutsForInsert } from '../blocks/markdown/callout'
 import { zoomOf, dropRetarget, dropHide, createsFixedContainingBlock, landOffset, releasePoint, reducedMotion, LAND_MS } from '@lcl/engine'
 import { runEndOf } from './canvasEdit'
@@ -373,6 +373,9 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
 
   /** 折起的标题正在整节拖(B-04,beginBlockDrag 换成了盖住整节的块选区):标题的原位置;否则 null。 */
   let foldDragHead: number | null = null
+  /** 本层(beginBlockDrag)起的这次拖动的切片对象 = 它的身份(dropTargets 的 DragSource.token):window 捕获期那道
+   *  来源闸只管它。别的拖动(PM 自己起的、外部拖入)不归那道闸,哪怕 dataset.dragging 残留成 'true'。 */
+  let blockDragSlice: object | null = null
   /** 整批拖落下的善后:区间里的折叠锚跟着内容走(否则删除点上的邻居标题会「继承」折叠),
    *  折叠标题整节拖的选区还原成新位置上标题的块选中。 */
   const settleFoldedDrag = (state: EditorState, tr: Transaction, range: { from: number; to: number }, insertAt: number, copy: boolean): void => {
@@ -1278,7 +1281,13 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
             else if (dragImage) event.dataTransfer.setDragImage(dragImage, 0, 0)
             const top = els.length ? els.map((el) => el.getBoundingClientRect()).reduce((m, r) => ({ x: Math.min(m.x, r.left), y: Math.min(m.y, r.top) }), { x: Infinity, y: Infinity }) : null
             dragGrabPt = top ? { x: event.clientX - top.x, y: event.clientY - top.y } : null
-            view.dragging = { slice, move: true } as EditorView['dragging']
+            const dragging = { slice, move: true } as NonNullable<EditorView['dragging']>
+            view.dragging = dragging
+            // 来源区间随事务映射(dropTargets 的 DragSource):松手时按它取现内容、删现位置;途中被删 / 换类型 = 作废。
+            // 跨块选区取整块边界(与落点执行同一份 topRangeOf);两端不在同一容器(topRangeOf 为 null)本来就没有路由接,记空。
+            const range = multi ? topRangeOf(view) : null
+            blockDragSlice = slice
+            recordDragSource(view, slice, multi ? (range && { kind: 'range', ...range }) : { kind: 'node', from: sel.from, to: sel.to })
           }
         }
         content.addEventListener('dragstart', (event) => {
@@ -1339,7 +1348,9 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
           if (view) {
             view.dom.dataset.dragging = 'false'
             view.dragging = null
+            clearDragSource(view)
           }
+          blockDragSlice = null
         }
         content.addEventListener('dragend', endBlockDrag)
 
@@ -1896,6 +1907,21 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
          *  (指针出了窗口)就停滚。 */
         let dragPt: { x: number; y: number; t: number; types: string[]; alt: boolean; ctrl: boolean } | null = null
         const blockDragging = (): boolean => editorView.dom.dataset.dragging === 'true' && !!editorView.dragging
+        /** 这次 ⠿ 拖动的来源还活着、而且选区正是它(映射到此刻的位置)。落点路由(页边、root 捕获期的 execute* 全家、
+         *  落点插件的 performDrop、画布舞台)全按选区取被拖的块、按现文档取内容,所以这一条成立 = 每条路由搬的都是现内容、
+         *  删的都是现位置。来源被删 / 换了类型 / 选区被别的事务挪走 → null,整次拖动作废(dragover 起就不出线、不接落点,
+         *  松手什么都不做)。块选区被整块替换而退化的那种,落点插件的 appendTransaction 已经放回来源上了。 */
+        const settledDragSource = (view: EditorView): ReturnType<typeof liveDragSource> => {
+          const src = liveDragSource(view.state, dragToken(view))
+          if (!src) return null
+          const sel = view.state.selection
+          if (src.kind === 'node') return sel instanceof NodeSelection && sel.from === src.from && sel.to === src.to ? src : null
+          const r = topRangeOf(view)
+          return r && r.from === src.from && r.to === src.to ? src : null
+        }
+        /** 本层起的这次拖动、来源已作废(或选区不再是它;没记到来源 —— 比如拖动途中整份 state 被换掉 —— 也算)。 */
+        const deadBlockDrag = (view: EditorView): boolean =>
+          !!blockDragSlice && dragToken(view) === blockDragSlice && !settledDragSource(view)
         /** 这个 dragover 已由页边接管:root 捕获期那条路由跳过它(页边在 .unified-body 里的那 48px 两边都收得到)。 */
         const marginHandled = new WeakSet<object>()
         /** 页边路由上一轮画过线 / 设过落点:指针离开页边、又不在 pane 里时由这里收拾。 */
@@ -2092,7 +2118,7 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
          *  线和松手都跟着新位置走。判定用的事件是造的:preventDefault 空转(放不放得下由系统照常补发的真 dragover 定)。 */
         const reevaluateDrop = (): void => {
           const p = dragPt
-          if (!p || !blockDragging()) return
+          if (!p || !blockDragging() || deadBlockDrag(editorView)) return
           const target = document.elementFromPoint(p.x, p.y)
           const fake = {
             type: 'dragover', clientX: p.x, clientY: p.y, target, altKey: p.alt, ctrlKey: p.ctrl, metaKey: false, shiftKey: false,
@@ -2135,8 +2161,21 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
         }
         // window 捕获期:记指针、起自动滚动、接管页边(页边在 view.dom 之外,落点插件收不到;
         // 大半还在 .unified-body 之外,root 也收不到)。
+        /** 来源作废后的收尾:线、落点、自动滚动全收,这次拖动不再归任何路由(dragend 照常走 endBlockDrag)。 */
+        const dropDeadDrag = (): void => {
+          dragPt = null
+          stopAutoScroll()
+          resetDropState()
+        }
         const onWindowDragOver = (e: DragEvent): void => {
           if (!blockDragging()) return
+          // 来源作废(途中被删 / 换了类型):window 捕获期就截住 —— 后面的页边 / root / 落点插件 / 舞台都收不到,
+          // 不出线;没有谁 preventDefault,浏览器也就不发 drop。
+          if (deadBlockDrag(editorView)) {
+            dropDeadDrag()
+            e.stopPropagation()
+            return
+          }
           dragPt = { x: e.clientX, y: e.clientY, t: performance.now(), types: e.dataTransfer ? Array.from(e.dataTransfer.types) : [], alt: e.altKey, ctrl: e.ctrlKey }
           if (!scrollRaf) {
             scrollT = performance.now()
@@ -2162,6 +2201,20 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
         const onWindowDrop = (e: DragEvent): void => {
           if (!blockDragging()) return
           const view = editorView
+          // 一道闸管全部落点路由(window 捕获期最先跑):来源还活着、选区正是它 → 照常;否则整次作废 ——
+          // 吞掉 drop(preventDefault:contenteditable 不许浏览器自己插;stopPropagation:root 捕获期的 execute* /
+          // 落点插件 / 画布舞台都不再接),线全收,不播落位。
+          if (deadBlockDrag(view)) {
+            e.preventDefault()
+            e.stopPropagation()
+            dropDeadDrag()
+            view.dom.dataset.dragging = 'false'
+            view.dragging = null
+            clearDragSource(view)
+            return
+          }
+          const src = settledDragSource(view)
+          if (src?.kind === 'range' && foldDragHead != null) foldDragHead = src.from // 起拖时记的位置 → 映射后的
           armLanding(e)
           const side = marginSideOf(e)
           // 页边松手:按松手这一刻重判(不吃上一次 dragover 的旧状态),再执行。
@@ -2181,10 +2234,8 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
             } finally {
               marginEval = null
             }
-            if (at != null) {
-              performDrop(view, at, view.dragging.slice, !copy)
-              done = true
-            }
+            // performDrop 按映射后的来源取现内容(闸刚核过,它不会作废;万一作废也什么都不做)。
+            if (at != null) done = performDrop(view, at, !copy)
           }
           resetDropState()
           if (done) {
