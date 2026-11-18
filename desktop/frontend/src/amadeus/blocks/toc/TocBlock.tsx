@@ -28,6 +28,7 @@ export interface TocDocSource {
   /** 编辑器还没就绪 / 已拆 = null(当「不知道」,不画「没有标题」)。 */
   doc(): ProseNode | null
   subscribe(onChange: () => void): () => void
+  /** 标题的 DOM;它藏在折起的小节 / 列表子项里时先展开(会话装饰,不改文档)。 */
   nodeDom(pos: number): Node | null
   flash?(rect: DOMRect): void
 }

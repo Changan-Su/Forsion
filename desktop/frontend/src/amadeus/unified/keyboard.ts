@@ -887,7 +887,8 @@ function typingTargetTr(state: EditorState): Transaction | null {
   if (!(sel instanceof NodeSelection) || !sel.node.isBlock) return null
   const node = sel.node
   const tr = state.tr
-  if (node.type.name === 'code_block') return tr.setSelection(TextSelection.create(tr.doc, sel.to - 1))
+  // 嵌入层接手的代码块(按钮 / 目录 / 文档 Agent / 交互块)源码是藏着的:进块尾 = 字写进看不见的源码并落盘。按整块型走(后面新起一段)。
+  if (node.type.name === 'code_block' && !classifyEmbed(node)) return tr.setSelection(TextSelection.create(tr.doc, sel.to - 1))
   if (node.type.name === 'table') {
     const first = Selection.near(tr.doc.resolve(sel.from + 1), 1)
     if (!(first instanceof TextSelection) || first.from >= sel.to) return null

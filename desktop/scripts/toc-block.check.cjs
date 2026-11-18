@@ -225,8 +225,39 @@ async function main() {
     ok('the first heading replaces the hint', (await texts(p))[0] === 'First heading' && await p.locator(`${PM} .amx-toc-empty`).count() === 0)
     await p.close()
 
-    // ── 只读页:照样显示、能点跳转,没有 `</>` ──────────────────────────
     const tocSeed = seed.replace('本页汇总 2.15 发布前要对齐的事项。\n\n', `本页汇总 2.15 发布前要对齐的事项。\n\n${FENCE}\n\n`)
+
+    // ── 整块选中目录块再打字:字落在下面新起的一段,不进藏着的源码 ──────────────
+    p = await open(browser, `# 选中\n\n${FENCE}\n\n正文。\n`)
+    await p.waitForSelector(`${PM} .amx-toc-item`)
+    await caretAfterParagraph(p, 0)
+    await p.evaluate(() => { const v = window.__upage.probe.view(); const s = v.state.selection; v.dispatch(v.state.tr.setSelection(s.constructor.create(v.state.doc, s.$from.start()))) })
+    await p.keyboard.press('ArrowUp')
+    ok('ArrowUp from the paragraph below selects the whole toc block', await p.evaluate(() => { const s = window.__upage.probe.view().state.selection; return !!s.node && s.node.attrs.language === 'toc' }))
+    await p.keyboard.type('abc')
+    await flush(p)
+    saved = await disk(p)
+    ok('typing on a selected toc block starts a new line below, source untouched', saved.includes(`${FENCE}\n\nabc\n\n正文。`), saved)
+    await p.close()
+
+    // ── 折起的小节里的标题:点了先展开再跳 ──────────────────────────────
+    p = await open(browser, tocSeed)
+    await p.waitForSelector(`${PM} .amx-toc-item`)
+    await p.evaluate(async () => {
+      const url = performance.getEntriesByType('resource').map((e) => e.name).find((n) => /\/src\/amadeus\/unified\/headingFold\.ts(\?|$)/.test(n))
+      const { toggleFoldAt } = await import(url || '/src/amadeus/unified/headingFold.ts')
+      const v = window.__upage.probe.view()
+      let at = null
+      v.state.doc.descendants((n, pos) => { if (at == null && n.type.name === 'heading' && n.textContent === '三方分工') at = pos; return at == null })
+      toggleFoldAt(v, at)
+    })
+    await frames(p)
+    ok('folding a section keeps its child headings listed', (await texts(p)).includes('研发') && await p.evaluate(() => [...document.querySelectorAll('.unified-body h3')].find((e) => e.textContent === '研发').getBoundingClientRect().height === 0))
+    j = await jump(p, '研发')
+    ok('clicking a heading inside a folded section unfolds it and jumps', Math.abs(j.off - 12) <= 4, j)
+    await p.close()
+
+    // ── 只读页:照样显示、能点跳转,没有 `</>` ──────────────────────────
     p = await open(browser, tocSeed, '&uro')
     await p.waitForSelector(`${PM} .amx-toc-item`)
     ok('read-only page lists the headings', (await texts(p)).length === 6)

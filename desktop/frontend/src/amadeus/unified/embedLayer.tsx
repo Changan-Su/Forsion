@@ -45,6 +45,7 @@ import { DocumentAgentBlock } from '../blocks/documentAgent/DocumentAgentBlock'
 import { parseDocAgentSpec, serializeDocAgentSpec, type DocAgentSpec, type DocumentAgentKind } from '../blocks/documentAgent/format'
 import { readTangu } from '../plugins/tanguSeam'
 import { instructionsOf, pageInstructionContext } from './pageInstructions'
+import { unfoldToReveal } from './revealText'
 import { isSketchLang } from '../blocks/sketch/format'
 import { SketchCards } from '../../components/SketchCard'
 import { parseButtonBlock, serializeButtonBlock, type ButtonSpec } from '../blocks/button/format'
@@ -569,7 +570,14 @@ export function createEmbedLayer(opts: {
         docListeners.add(fn)
         return () => { docListeners.delete(fn) }
       },
-      nodeDom: (pos) => viewRef?.nodeDOM(pos) ?? null,
+      // 标题在折起的小节 / 列表子项里:先逐层展开(纯会话装饰,不改文档),不然取到的是 0 尺寸的节点、点了没反应。
+      // pos + 1:标题本身是隐藏区的第一块时,它的前位恰好等于区间起点,isHiddenAt 只认区间内部。
+      nodeDom: (pos) => {
+        const v = viewRef
+        if (!v) return null
+        unfoldToReveal(v, pos + 1)
+        return v.nodeDOM(pos)
+      },
       flash: (rect) => opts.flash?.(rect),
     }
 
