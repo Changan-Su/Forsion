@@ -6254,8 +6254,9 @@ async function main() {
   await p72.waitForTimeout(1000)
   const stage72 = await p72.evaluate(() => {
     const r = document.querySelector('.amx-stage').getBoundingClientRect()
-    // 落点比别格靠左:图片工具条(11-18)约 260px 宽,窄图 / 加载失败的占位上它摆在图片上方、从左缘往右伸,卡贴着舞台右缘时会伸出窗口
-    return { drop: { x: Math.round(r.right - 520), y: Math.round(r.top + r.height * 0.55) }, blank: { x: Math.round(r.right - 120), y: Math.round(r.top + 110) } }
+    // 卡片**贴着舞台右缘**(卡片右半截在窗口外):图片工具条(11-18)约 290px 宽,窄图 / 加载失败的占位上它从图片左缘往右伸,
+    // 修前伸出窗口、`</>` 和 ⋯ 点不到 —— 别靠把落点往左挪来过,要的就是这个贴边的形态(C72b 钉住)
+    return { drop: { x: Math.round(r.right - 220), y: Math.round(r.top + r.height * 0.55) }, blank: { x: Math.round(r.right - 120), y: Math.round(r.top + 110) } }
   })
   await dragBlockToStage(p72, 'pic.png', stage72.drop)
   await p72.waitForTimeout(700)
@@ -6288,8 +6289,29 @@ async function main() {
       const clip = []
       for (let el = w; el && el !== document.body; el = el.parentElement) { const cs = getComputedStyle(el); if (cs.overflow !== 'visible' || cs.clipPath !== 'none' || cs.contain.includes('paint')) clip.push(`${el.className.toString().split(' ')[0]}:${cs.overflow}/${cs.contain}`) }
       const hit = document.elementFromPoint(x, y)
-      return { out: w?.getAttribute('data-tb-out'), hover: w?.matches(':hover'), op: tb && getComputedStyle(tb).opacity, tb: rr(tb), wrap: rr(w), card: rr(card), hit: hit?.className?.toString().split(' ')[0] ?? hit?.tagName, clip }
+      const hits = tb ? [...tb.querySelectorAll('button')].filter((b) => !b.hidden).map((b) => { const q = b.getBoundingClientRect(); return document.elementFromPoint(q.x + q.width / 2, q.y + q.height / 2)?.closest('[data-act]') === b }) : []
+      return { vw: innerWidth, out: w?.getAttribute('data-tb-out'), over: w?.getAttribute('data-tb-over'), hover: w?.matches(':hover'), op: tb && getComputedStyle(tb).opacity, tb: rr(tb), wrap: rr(w), card: rr(card), hit: hit?.className?.toString().split(' ')[0] ?? hit?.tagName, hits, clip }
     }, btn72)
+    // ⋯ 菜单:挂在 body 下贴着工具条,不被卡片(overflow:auto)裁掉 —— 修前图矮时整个菜单被卡片裁掉、两项都点不到
+    const more72 = await p72.evaluate(() => { const r = document.querySelector('.amx-ucard .amx-img-tb [data-act="more"]')?.getBoundingClientRect(); return r ? { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) } : null })
+    if (more72) {
+      await p72.mouse.move(more72.x, more72.y)
+      await p72.mouse.click(more72.x, more72.y)
+      await p72.waitForTimeout(250)
+      diag72.menu = await p72.evaluate(() => {
+        const m = document.querySelector('.amx-img-more--hover')
+        if (!m) return null
+        const r = m.getBoundingClientRect()
+        return { r: [Math.round(r.x), Math.round(r.y), Math.round(r.right), Math.round(r.bottom)], items: [...m.querySelectorAll('button')].map((b) => { const q = b.getBoundingClientRect(); return [b.dataset.act, document.elementFromPoint(q.x + q.width / 2, q.y + q.height / 2)?.closest('button') === b] }) }
+      })
+      await p72.keyboard.press('Escape')
+      await p72.mouse.move(btn72.x, btn72.y)
+      await p72.waitForTimeout(200)
+    }
+    record('C72b 卡片贴舞台右缘:图片工具条收在窗口里、每颗都点得到;⋯ 菜单不被卡片裁掉、两项都点得到',
+      diag72.tb && diag72.tb[0] >= 0 && diag72.tb[2] <= diag72.vw && diag72.card[2] > diag72.vw && diag72.hits.length >= 7 && diag72.hits.every(Boolean)
+        && !!diag72.menu && diag72.menu.r[2] <= diag72.vw && diag72.menu.items.length >= 1 && diag72.menu.items.every(([, ok]) => ok),
+      JSON.stringify({ vw: diag72.vw, tb: diag72.tb, card: diag72.card, hits: diag72.hits, menu: diag72.menu }))
     if (process.env.SHOT_DIR) await p72.screenshot({ path: require('node:path').join(process.env.SHOT_DIR, 'canvas-card-image-toolbar.png'), clip: { x: Math.max(0, diag72.card[0] - 40), y: Math.max(0, diag72.card[1] - 60), width: 520, height: 200 } })
     await p72.mouse.click(btn72.x, btn72.y)
     await p72.waitForTimeout(400)

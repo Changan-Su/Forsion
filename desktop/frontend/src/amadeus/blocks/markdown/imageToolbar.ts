@@ -1,5 +1,7 @@
 /** 图片工具条(2026-11-17「页面编辑对齐 Notion」第 4 条,方案 docs/ToBeImproved/Notion页面编辑对齐方案_2026-11-17 §4):
- *  左 / 中 / 右 · 说明 · 替换 · 全屏 · 下载 · `</>` · ⋯(复制图片、删除)。
+ *  左 / 中 / 右 · 说明 · 替换 · 打开 · 全屏 · 下载 · `</>` · ⋯(复制图片、删除)。
+ *  「打开」只有 `![[…]]` 形态给,单独一颗、↗ 图标(11-18 用户定:11-07 起它常驻在图片右上角、图标是 ⤢,
+ *  和「全屏」撞了图标,习惯点 ⤢ 打开的人会点成全屏 —— 所以换 ↗,也不收进 ⋯)。
  *
  *  两种摆法,同一排按钮、同一组动作:
  *   · hover —— 桌面:挂在图片包裹层(`.wiki-inline-img-wrap`)里,悬停浮在图片右上角;图比工具条窄时挪到图片上方。
@@ -10,6 +12,7 @@
  *  文案在露出时现取(refresh):切过语言,下次悬停就是新文案。 */
 import type { EditorView } from '@milkdown/kit/prose/view'
 import { fromAssetUrl } from '@amadeus-shared/assets'
+import { edgeNudge, followAnchor } from '@lcl/engine'
 import { registerMessages, subscribeLocale, translate } from '../../../i18n'
 import type { TextAlignment } from './paragraphIndent'
 
@@ -65,7 +68,7 @@ export interface ImageToolbarActions {
   fullscreen(): void
   download(): void
   source(): void
-  /** ⋯ →「打开」:应用内打开这张图(⌘/Ctrl+点击 = 新标签页)。只有 `![[…]]` 形态给(11-07 起它右上角就有这颗键)。 */
+  /** 「打开」:应用内打开这张图(⌘/Ctrl+点击 = 新标签页)。只有 `![[…]]` 形态给;工具条上单独一颗,不进 ⋯。 */
   open?: (newTab: boolean) => void
   copy?: () => void
   remove(): void
@@ -81,7 +84,7 @@ export interface ImageToolbar {
   destroy(): void
 }
 
-type Act = 'alignLeft' | 'alignCenter' | 'alignRight' | 'caption' | 'replace' | 'fullscreen' | 'download' | 'source' | 'more'
+type Act = 'alignLeft' | 'alignCenter' | 'alignRight' | 'caption' | 'replace' | 'open' | 'fullscreen' | 'download' | 'source' | 'more'
 const ALIGN_OF: Partial<Record<Act, TextAlignment>> = { alignLeft: 'left', alignCenter: 'center', alignRight: 'right' }
 /** 会改文档的键:只读时不出。 */
 const EDITS = new Set<Act>(['alignLeft', 'alignCenter', 'alignRight', 'caption', 'replace', 'source'])
@@ -104,7 +107,7 @@ export function buildImageToolbar(a: ImageToolbarActions, host: HTMLElement, var
   const seps: HTMLElement[] = []
   const groups: Act[][] = [
     ['alignLeft', 'alignCenter', 'alignRight'],
-    ['caption', 'replace', 'fullscreen', 'download'],
+    ['caption', 'replace', 'open', 'fullscreen', 'download'],
     ['source', 'more'],
   ]
   for (const [gi, group] of groups.entries()) {
@@ -117,6 +120,7 @@ export function buildImageToolbar(a: ImageToolbarActions, host: HTMLElement, var
     for (const act of group) {
       if (act === 'caption' && !a.caption) continue
       if (act === 'replace' && !a.replace) continue
+      if (act === 'open' && !a.open) continue
       const b = document.createElement('button')
       b.type = 'button'
       b.className = 'amx-img-tb-btn'
@@ -128,6 +132,12 @@ export function buildImageToolbar(a: ImageToolbarActions, host: HTMLElement, var
       b.addEventListener('click', (e) => {
         e.preventDefault()
         e.stopPropagation()
+        if (act === 'open') {
+          closeMenu()
+          return a.open?.(e.metaKey || e.ctrlKey)
+        }
+        // 键盘 Enter / 空格激活按钮时 click 的 detail 是 0:菜单挂在 body 末尾,Tab 走不进去 —— 打开就把焦点放到第一项
+        if (act === 'more') return void (menu ? closeMenu() : openMenu(e.detail === 0))
         run(act)
       })
       btns.set(act, b)
@@ -136,6 +146,11 @@ export function buildImageToolbar(a: ImageToolbarActions, host: HTMLElement, var
   }
 
   let menu: HTMLElement | null = null
+  let stopFollow: (() => void) | null = null
+  /** 工具条此刻还在用:连在文档里、没被藏起、所在编辑器没 inert。切阅读模式 = 编辑器藏起 + inert,但 view 仍是可编辑的 ——
+   *  挂在 body 下的 ⋯ 菜单不会跟着藏,不判这一下,点「删除」照样改文档(Codex 评审 P1)。 */
+  const live = (): boolean =>
+    el.isConnected && !el.closest('[inert]') && (el as HTMLElement & { checkVisibility?: () => boolean }).checkVisibility?.() !== false
   const onOutside = (e: Event): void => {
     const t = e.target as Node | null
     if (menu && t && (menu.contains(t) || btns.get('more')?.contains(t))) return
@@ -145,10 +160,18 @@ export function buildImageToolbar(a: ImageToolbarActions, host: HTMLElement, var
     if (e.key !== 'Escape' || !menu) return
     e.preventDefault()
     e.stopPropagation()
+    const focused = menu.contains(document.activeElement)
     closeMenu()
+    if (focused) btns.get('more')?.focus() // 键盘进去的,Esc 回到 ⋯
+  }
+  // 画布平移 / 缩放(触控板、滚轮、Mod+滚轮)走的是 transform,不触发 scroll:fixed 的菜单会留在原处 —— 滚轮一动就收起
+  const onWheel = (e: WheelEvent): void => {
+    if (menu && !menu.contains(e.target as Node | null)) closeMenu()
   }
   function closeMenu(): void {
     if (!menu) return
+    stopFollow?.()
+    stopFollow = null
     menu.remove()
     menu = null
     host.removeAttribute('data-tb-menu')
@@ -156,44 +179,52 @@ export function buildImageToolbar(a: ImageToolbarActions, host: HTMLElement, var
     document.removeEventListener('pointerdown', onOutside, true)
     document.removeEventListener('keydown', onEsc, true)
   }
-  function openMenu(): void {
+  function openMenu(keyboard = false): void {
     const m = document.createElement('div')
     m.className = `ctx-menu amx-img-more amx-img-more--${variant}`
     m.setAttribute('role', 'menu')
     m.contentEditable = 'false'
     shield(m)
-    const item = (key: 'open' | 'copy' | 'delete', icon: string, run: (e: MouseEvent) => void, danger = false): void => {
+    const item = (key: 'copy' | 'delete', icon: string, run: () => void, danger = false): void => {
       const b = document.createElement('button')
       b.type = 'button'
       b.setAttribute('role', 'menuitem')
       b.dataset.act = key
       if (danger) b.className = 'danger'
-      if (key === 'open') b.title = translate('imgtb.openHint')
       b.innerHTML = icon
-      b.append(translate(key === 'open' ? 'imgtb.open' : key === 'copy' ? 'imgtb.copy' : 'imgtb.delete'))
+      b.append(translate(key === 'copy' ? 'imgtb.copy' : 'imgtb.delete'))
       b.addEventListener('click', (e) => {
         e.preventDefault()
         e.stopPropagation()
         closeMenu()
-        run(e)
+        if (live()) run()
       })
       m.appendChild(b)
     }
-    if (a.open) item('open', ICON.open, (e) => a.open!(e.metaKey || e.ctrlKey))
     if (a.copy) item('copy', ICON.copy, () => a.copy!())
     if (a.view.editable) item('delete', ICON.trash, () => a.remove(), true)
     if (!m.childElementCount) return
     if (variant === 'hover') {
-      // 定位父级是图片包裹层;偏移量是布局 px(offset*),不受界面缩放 / 画布 scale 影响。
-      m.style.top = `${el.offsetTop + el.offsetHeight + 4}px`
-      m.style.right = `${Math.max(0, host.clientWidth - (el.offsetLeft + el.offsetWidth))}px`
-      host.appendChild(m)
+      // 挂到 body、fixed 贴在工具条下沿、右缘对齐(followAnchor:下面放不下翻到上面,恒在窗口里)。
+      // 不挂在图片包裹层里:画布卡片是 overflow:auto,图矮 / 在卡片底部时菜单整个被裁掉、点不到(11-18 画布台架实测)。
+      // 跟着的三件:落位(followAnchor)、工具条被藏起就收(ResizeObserver:藏起 = 尺寸归零)、滚轮收起(画布平移 / 缩放)。
+      document.body.appendChild(m)
+      const stop = followAnchor(m, el, { alignEnd: true })
+      const ro = new ResizeObserver(() => { if (!live()) closeMenu() })
+      ro.observe(el)
+      document.addEventListener('wheel', onWheel, { capture: true, passive: true })
+      stopFollow = () => {
+        stop()
+        ro.disconnect()
+        document.removeEventListener('wheel', onWheel, { capture: true })
+      }
     } else host.insertBefore(m, host.firstChild) // sheet:排在工具条上方
     menu = m
     host.setAttribute('data-tb-menu', '')
     btns.get('more')?.setAttribute('aria-expanded', 'true')
     document.addEventListener('pointerdown', onOutside, true)
     document.addEventListener('keydown', onEsc, true)
+    if (keyboard) m.querySelector<HTMLButtonElement>('button')?.focus()
   }
 
   function run(act: Act): void {
@@ -213,7 +244,7 @@ export function buildImageToolbar(a: ImageToolbarActions, host: HTMLElement, var
 
   const TITLES: Record<Act, string> = {
     alignLeft: 'imgtb.alignLeft', alignCenter: 'imgtb.alignCenter', alignRight: 'imgtb.alignRight', caption: 'imgtb.caption',
-    replace: 'imgtb.replace', fullscreen: 'imgtb.fullscreen', download: 'imgtb.download', source: 'imgtb.source', more: 'imgtb.more',
+    replace: 'imgtb.replace', open: 'imgtb.open', fullscreen: 'imgtb.fullscreen', download: 'imgtb.download', source: 'imgtb.source', more: 'imgtb.more',
   }
   function refresh(): void {
     const editable = a.view.editable
@@ -221,8 +252,10 @@ export function buildImageToolbar(a: ImageToolbarActions, host: HTMLElement, var
     const cur = a.align()
     for (const [act, b] of btns) {
       const label = translate(TITLES[act])
-      if (b.title !== label) {
-        b.title = label
+      // 「打开」的悬停提示多一行 ⌘/Ctrl+点击;读屏只读「打开」
+      const tip = act === 'open' ? `${label}\n${translate('imgtb.openHint')}` : label
+      if (b.title !== tip) {
+        b.title = tip
         b.setAttribute('aria-label', label)
       }
       b.hidden = EDITS.has(act) && !editable
@@ -232,7 +265,7 @@ export function buildImageToolbar(a: ImageToolbarActions, host: HTMLElement, var
     }
     if (!btns.has('more')) return
     // ⋯ 里只剩「删除」时只读下没东西可放:整颗收起
-    btns.get('more')!.hidden = !a.copy && !a.open && !editable
+    btns.get('more')!.hidden = !a.copy && !editable
     // 分隔线:两侧都有露出的键才画
     const vis = groups.map((g) => g.some((act) => btns.get(act) && !btns.get(act)!.hidden))
     seps.forEach((s, i) => { s.hidden = !(vis.slice(0, i + 1).some(Boolean) && vis[i + 1]) })
@@ -279,21 +312,70 @@ export const toolbarHeld = (host: HTMLElement): boolean => holds.has(host)
  *     11-18 台架实测)→ 叠在图片顶上,同样按对齐靠边(`data-tb-over`)。
  *  加载失败的图 `<img>` 藏着(宽 0),量包裹层(露出的是「图片无法加载」占位)。 */
 export function placeHoverToolbar(wrap: HTMLElement, img: HTMLElement, tb: HTMLElement, align: TextAlignment): void {
+  // 上一次收进可见区留下的推移 / 封顶先撤掉:下面按工具条的自然宽判摆法(Codex 评审 P1:封顶留着会判错摆法、再叠一次推移)
+  tb.style.removeProperty('--amx-tb-dx')
+  tb.style.maxWidth = ''
   const shown = img.offsetWidth ? img : wrap
+  const clip = clipBox(wrap)
   let mode: 'out' | 'over' | null = null
   if (shown.offsetWidth < tb.offsetWidth + 16) {
-    // 所有裁切祖先(与视口)可视区的上沿取最低的那条:卡片自己有地方、外层舞台没有,一样会被裁掉
-    let clipTop = 0
-    for (let el = wrap.parentElement; el && el !== document.body; el = el.parentElement) {
-      if (getComputedStyle(el).overflowY === 'visible') continue
-      clipTop = Math.max(clipTop, el.getBoundingClientRect().top)
-    }
-    mode = shown.getBoundingClientRect().top - clipTop >= tb.getBoundingClientRect().height + 6 ? 'out' : 'over'
+    // 裁切层(与视口)可视区的上沿取最低的那条:卡片自己有地方、外层舞台没有,一样会被裁掉
+    mode = shown.getBoundingClientRect().top - clip.top >= tb.getBoundingClientRect().height + 6 ? 'out' : 'over'
   }
   if (mode === 'out') wrap.setAttribute('data-tb-out', align)
   else wrap.removeAttribute('data-tb-out')
   if (mode === 'over') wrap.setAttribute('data-tb-over', align)
   else wrap.removeAttribute('data-tb-over')
+  nudgeIntoView(tb, clip)
+}
+
+/** 真会裁到这张图的那几层与窗口求交(视口 px)。沿**包含块链**走:绝对定位的画布卡片跳过它和定位祖先之间的静态元素 ——
+ *  编辑器 .ProseMirror 是 overflow:auto,可画布卡片不在它的裁切范围里(只按「和图片相交」判,主卡与别的卡重叠时会误算,Codex 评审 P2)。 */
+function clipBox(wrap: HTMLElement): { left: number; top: number; right: number } {
+  let left = 0
+  let top = 0
+  let right = document.documentElement.clientWidth
+  const own = getComputedStyle(wrap).position
+  // 往上找的是谁:absolute 找最近的定位祖先,fixed 找最近的 transform / filter / contain 祖先(都没有就是视口)
+  let need: 'positioned' | 'fixedCb' | null = own === 'absolute' ? 'positioned' : own === 'fixed' ? 'fixedCb' : null
+  for (let el = wrap.parentElement; el && el !== document.body; el = el.parentElement) {
+    const cs = getComputedStyle(el)
+    const on = (v: string | undefined): boolean => !!v && v !== 'none'
+    const fixedCb = on(cs.transform) || on(cs.filter) || on(cs.backdropFilter) || on(cs.perspective)
+      || /paint|layout|strict|content/.test(cs.contain || '') || (cs.willChange || '').includes('transform')
+    if (need === 'fixedCb' && !fixedCb) continue
+    if (need === 'positioned' && cs.position === 'static' && !fixedCb) continue
+    need = cs.position === 'absolute' ? 'positioned' : cs.position === 'fixed' ? 'fixedCb' : null
+    if (cs.overflowX === 'visible' && cs.overflowY === 'visible') continue
+    const b = el.getBoundingClientRect()
+    if (cs.overflowX !== 'visible') {
+      left = Math.max(left, b.left)
+      right = Math.min(right, b.right)
+    }
+    if (cs.overflowY !== 'visible') top = Math.max(top, b.top)
+  }
+  return { left, top, right }
+}
+
+/** 工具条横向收进看得见的地方(11-18:画布里贴窗口右缘的窄图,工具条从图片左缘往右伸、伸出窗口,右半截点不到)。
+ *  看得见的地方 = clipBox(窗口 ∩ 真会裁到这张图的那几层;画布卡片是 overflow:auto,推出卡片一样被裁)。
+ *  算术走 menuAnchor 的 edgeNudge(和 useEdgeNudge 同一份);推移写进 --amx-tb-dx,CSS 的 translate 读它 ——
+ *  居中摆法自己就有 translate:-50%,不能直接覆盖 inline translate。
+ *  放不下就先封顶 max-width(按钮跟着收窄)、**再量一次**才算推移:工具条多是按右缘定位的,收窄后左缘会右移,
+ *  拿收窄前的左缘算推移会多推一截、把 ⋯ 推出卡片(Codex 评审 P1)。 */
+function nudgeIntoView(tb: HTMLElement, clip: { left: number; right: number }): void {
+  const room = clip.right - clip.left
+  if (room <= 0) return
+  let r = tb.getBoundingClientRect()
+  if (!r.width || !tb.offsetWidth) return
+  const scale = r.width / tb.offsetWidth // 视口 px / 局部 px:界面缩放 × 画布 scale
+  const cap = edgeNudge(r.left - clip.left, r.width, room, scale).maxWidth
+  if (cap !== undefined) {
+    tb.style.maxWidth = `${cap}px`
+    r = tb.getBoundingClientRect()
+  }
+  const { dx } = edgeNudge(r.left - clip.left, r.width, room, scale)
+  if (dx) tb.style.setProperty('--amx-tb-dx', `${dx}px`)
 }
 
 /** 两种形态共用的几样动作(mdImage.ts / wikiImageToolbar.ts)。 */

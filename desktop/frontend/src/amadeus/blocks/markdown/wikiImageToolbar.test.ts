@@ -34,34 +34,46 @@ function hover(b: Booted, i = 0): HTMLElement {
 }
 const shownActs = (tb: HTMLElement): string[] => [...tb.querySelectorAll<HTMLButtonElement>('button')].filter((x) => !x.hidden).map((x) => x.dataset.act!)
 const click = (tb: HTMLElement, act: string): void => tb.querySelector<HTMLButtonElement>(`[data-act="${act}"]`)!.click()
-const menuItems = (b: Booted): string[] => [...b.view.dom.querySelectorAll<HTMLButtonElement>('.amx-img-more [role="menuitem"]')].map((x) => x.dataset.act!)
+/** ⋯ 菜单挂在 body 下(followAnchor 贴着 ⋯ 键,画布卡片裁不到它);取最新开的那个。 */
+const menuEl = (): HTMLElement => [...document.querySelectorAll<HTMLElement>('.amx-img-more')].pop()!
+const menuItems = (_b?: Booted): string[] => [...menuEl().querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].map((x) => x.dataset.act!)
 
 describe('同一排工具条,没有「说明」', () => {
-  it('独占一段的图:对齐 · 替换 · 全屏 · 下载 · `</>` · ⋯;没有说明键', async () => {
+  it('独占一段的图:对齐 · 替换 · 打开 · 全屏 · 下载 · `</>` · ⋯;没有说明键', async () => {
     const b = await boot('前文\n\n![[pic.png|200]]\n\n后文\n', { saveEmbed: async () => 'x.png', copyImage: async () => true })
     expect(wrapOf(b).querySelector('.amx-img-tb')).toBeNull() // 没悬停过:还没建
     expect(wrapOf(b).classList.contains('amx-img-wiki')).toBe(true)
     const tb = hover(b)
-    expect(shownActs(tb)).toEqual(['alignLeft', 'alignCenter', 'alignRight', 'replace', 'fullscreen', 'download', 'source', 'more'])
+    expect(shownActs(tb)).toEqual(['alignLeft', 'alignCenter', 'alignRight', 'replace', 'open', 'fullscreen', 'download', 'source', 'more'])
     expect(tb.querySelector('[data-act="caption"]')).toBeNull()
-    expect(wrapOf(b).querySelector('.amx-open-btn')).toBeNull() // 「打开」收进 ⋯,不再单挂
+    expect(wrapOf(b).querySelector('.amx-open-btn')).toBeNull() // 「打开」在工具条上,图片右上角不再单挂
+    // 「打开」与「全屏」不同图标(11-18:旧「打开」是 ⤢,和全屏撞了)
+    expect(tb.querySelector('[data-act="open"]')!.innerHTML).not.toBe(tb.querySelector('[data-act="fullscreen"]')!.innerHTML)
+    click(tb, 'more')
+    expect(menuItems(b)).toEqual(['copy', 'delete'])
   })
 
-  it('宿主不给存图 / 复制(整篇宿主):没有替换;⋯ 里只有打开 · 删除', async () => {
+  it('宿主不给存图 / 复制(整篇宿主):没有替换;⋯ 里只有删除', async () => {
     const b = await boot('前文\n\n![[pic.png|200]]\n\n后文\n')
     const tb = hover(b)
-    expect(shownActs(tb)).toEqual(['alignLeft', 'alignCenter', 'alignRight', 'fullscreen', 'download', 'source', 'more'])
+    expect(shownActs(tb)).toEqual(['alignLeft', 'alignCenter', 'alignRight', 'open', 'fullscreen', 'download', 'source', 'more'])
     click(tb, 'more')
-    expect(menuItems(b)).toEqual(['open', 'delete'])
+    expect(menuItems(b)).toEqual(['delete'])
   })
 
-  it('只读:不出会改文档的键;⋯ 里只剩打开', async () => {
+  it('只读:不出会改文档的键,「打开」照常;⋯ 里没东西可放就整颗收起', async () => {
     const b = await boot('前文\n\n![[pic.png|200]]\n\n后文\n', { saveEmbed: async () => 'x.png' })
     b.view.setProps({ editable: () => false })
+    expect(shownActs(hover(b))).toEqual(['open', 'fullscreen', 'download'])
+  })
+
+  it('只读但能复制:⋯ 里只剩复制图片', async () => {
+    const b = await boot('前文\n\n![[pic.png|200]]\n\n后文\n', { copyImage: async () => true })
+    b.view.setProps({ editable: () => false })
     const tb = hover(b)
-    expect(shownActs(tb)).toEqual(['fullscreen', 'download', 'more'])
+    expect(shownActs(tb)).toEqual(['open', 'fullscreen', 'download', 'more'])
     click(tb, 'more')
-    expect(menuItems(b)).toEqual(['open'])
+    expect(menuItems(b)).toEqual(['copy'])
   })
 
   it('没有 vault(canOpen = false)又只读:⋯ 整颗收起', async () => {
@@ -79,15 +91,46 @@ describe('同一排工具条,没有「说明」', () => {
   })
 })
 
-describe('⋯ →「打开」', () => {
+describe('⋯ 菜单挂在 body 下', () => {
+  it('编辑器切成阅读模式(藏起 + inert)后,还开着的菜单点「删除」不改文档', async () => {
+    const b = await boot('前文\n\n![[pic.png|200]]\n\n后文\n')
+    const before = b.view.state.doc.toJSON()
+    click(hover(b), 'more')
+    b.view.dom.setAttribute('inert', '')
+    menuEl().querySelector<HTMLButtonElement>('[data-act="delete"]')!.click()
+    expect(b.view.state.doc.toJSON()).toEqual(before)
+    expect(document.querySelector('.amx-img-more')).toBeNull()
+    b.view.dom.removeAttribute('inert')
+  })
+
+  it('键盘打开 ⋯:焦点落在第一项;Esc 收起后回到 ⋯', async () => {
+    const b = await boot('前文\n\n![[pic.png|200]]\n\n后文\n', { copyImage: async () => true })
+    const tb = hover(b)
+    const more = tb.querySelector<HTMLButtonElement>('[data-act="more"]')!
+    more.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 0 }))
+    expect((document.activeElement as HTMLElement | null)?.dataset.act).toBe('copy')
+    document.activeElement!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+    expect(document.querySelector('.amx-img-more')).toBeNull()
+    expect(document.activeElement).toBe(more)
+  })
+
+  it('鼠标打开不抢焦点;滚轮(画布平移 / 缩放)一动就收起', async () => {
+    const b = await boot('前文\n\n![[pic.png|200]]\n\n后文\n')
+    const tb = hover(b)
+    tb.querySelector<HTMLButtonElement>('[data-act="more"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }))
+    expect(menuEl().contains(document.activeElement)).toBe(false)
+    document.body.dispatchEvent(new WheelEvent('wheel', { bubbles: true, deltaY: 40 }))
+    expect(document.querySelector('.amx-img-more')).toBeNull()
+  })
+})
+
+describe('工具条上的「打开」', () => {
   it('点 = 原地打开;⌘/Ctrl+点 = 新标签页', async () => {
     const b = await boot('前文\n\n![[pic.png|200]]\n\n后文\n')
     const tb = hover(b)
-    click(tb, 'more')
-    b.view.dom.querySelector<HTMLButtonElement>('.amx-img-more [data-act="open"]')!.click()
+    click(tb, 'open')
     expect(onOpen).toHaveBeenLastCalledWith('pic.png', undefined)
-    click(tb, 'more')
-    b.view.dom.querySelector<HTMLButtonElement>('.amx-img-more [data-act="open"]')!
+    tb.querySelector<HTMLButtonElement>('[data-act="open"]')!
       .dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, metaKey: true }))
     expect(onOpen).toHaveBeenLastCalledWith('pic.png', { newTab: true })
   })
@@ -237,13 +280,13 @@ describe('⋯ →「删除」', () => {
   it('独占一段:连段落一起删,不留空段', async () => {
     const b = await boot('前文\n\n![[pic.png|200]]\n\n后文\n')
     click(hover(b), 'more')
-    b.view.dom.querySelector<HTMLButtonElement>('.amx-img-more [data-act="delete"]')!.click()
+    menuEl().querySelector<HTMLButtonElement>('[data-act="delete"]')!.click()
     expect(b.saved()).toBe('前文\n\n后文\n')
   })
   it('混在文字里:只删这段源码', async () => {
     const b = await boot('文字 ![[pic.png|120]] 更多文字\n\n最后一行\n')
     click(hover(b), 'more')
-    b.view.dom.querySelector<HTMLButtonElement>('.amx-img-more [data-act="delete"]')!.click()
+    menuEl().querySelector<HTMLButtonElement>('[data-act="delete"]')!.click()
     expect(b.saved()).toBe('文字  更多文字\n\n最后一行\n')
   })
 })

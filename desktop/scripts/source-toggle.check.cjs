@@ -97,7 +97,8 @@ async function main() {
   check('S4 行内图片渲染成 <img>', (await p.locator('.wiki-inline-img').count()) === 1)
   // 11-18 起 `![[…]]` 图片的 `</>` 收进悬停工具条(与 `![](…)` 同一排,image-toolbar.check W*);第一次悬停才建
   check('S4 没悬停过:工具条还没建', (await p.locator('.wiki-inline-img-wrap > .amx-img-tb').count()) === 0)
-  await p.hover('.wiki-inline-img')
+  // 悬停包裹层而不是 <img>:台架里这张图加载失败,<img> 藏起来(尺寸 0),露出的是「图片无法加载」占位 —— hover <img> 会等它可见等到超时
+  await p.hover('.wiki-inline-img-wrap')
   await p.waitForTimeout(300)
   b = await btnState(p, '.wiki-inline-img-wrap > .amx-img-tb [data-act="source"]')
   check('S4 行内图片的工具条里有 `</>`', !!b && b.text === '</>', JSON.stringify(b))
@@ -201,19 +202,17 @@ async function main() {
   const stay = await p.evaluate(() => ({ text: document.querySelector('.unified-body .ProseMirror')?.innerText ?? '' }))
   check('S8 点「打开」不露源码、不改选区', !stay.text.includes('![[report.pdf]]'), JSON.stringify(stay))
   await p.evaluate(() => { window.__opened = [] })
-  // 图片的「打开」11-18 起收进悬停工具条的 ⋯(`</>` 也在工具条里),包裹层上不再单挂
+  // 图片的「打开」11-18 起在悬停工具条上单独一颗(↗,和「全屏」⤢ 分开;`</>` 也在工具条里),包裹层上不再单挂
   await p.hover('.wiki-inline-img-wrap')
   await p.waitForTimeout(300)
-  const imgBtns = await p.evaluate(() => ({ loose: document.querySelectorAll('.wiki-inline-img-wrap > .amx-open-btn').length, src: !!document.querySelector('.wiki-inline-img-wrap > .amx-img-tb [data-act="source"]') }))
-  check('S8 图片:「打开」不再单挂,`</>` 在工具条里', imgBtns.loose === 0 && imgBtns.src, JSON.stringify(imgBtns))
-  await p.click('.wiki-inline-img-wrap > .amx-img-tb [data-act="more"]')
-  await p.click('.wiki-inline-img-wrap > .amx-img-more [data-act="open"]')
+  const imgBtns = await p.evaluate(() => ({ loose: document.querySelectorAll('.wiki-inline-img-wrap > .amx-open-btn').length, open: !!document.querySelector('.wiki-inline-img-wrap > .amx-img-tb [data-act="open"]'), src: !!document.querySelector('.wiki-inline-img-wrap > .amx-img-tb [data-act="source"]') }))
+  check('S8 图片:「打开」与 `</>` 都在工具条里,不再单挂', imgBtns.loose === 0 && imgBtns.open && imgBtns.src, JSON.stringify(imgBtns))
+  await p.click('.wiki-inline-img-wrap > .amx-img-tb [data-act="open"]')
   await p.hover('.wiki-inline-img-wrap')
   await p.waitForTimeout(200)
-  await p.click('.wiki-inline-img-wrap > .amx-img-tb [data-act="more"]')
-  await p.click('.wiki-inline-img-wrap > .amx-img-more [data-act="open"]', { modifiers: [process.platform === 'darwin' ? 'Meta' : 'Control'] })
+  await p.click('.wiki-inline-img-wrap > .amx-img-tb [data-act="open"]', { modifiers: [process.platform === 'darwin' ? 'Meta' : 'Control'] })
   opened8 = await p.evaluate(() => window.__opened)
-  check('S8 ⋯ →「打开」→ openWikiLink(pic.png);⌘/Ctrl+点 = 新标签页', opened8.length === 2 && opened8[0].name === 'pic.png' && !opened8[0].o?.newTab && opened8[1].o?.newTab === true, JSON.stringify(opened8))
+  check('S8 工具条「打开」→ openWikiLink(pic.png);⌘/Ctrl+点 = 新标签页', opened8.length === 2 && opened8[0].name === 'pic.png' && !opened8[0].o?.newTab && opened8[1].o?.newTab === true, JSON.stringify(opened8))
   await p.close()
 
   // 只读(分享页形态):没有 `</>`,「打开」独占右上角
@@ -305,15 +304,23 @@ async function main() {
     const m3 = await pg.evaluate(() => [...document.querySelectorAll('.amx-link-menu button')].map((b) => b.dataset.act))
     check('S13b 附件丢了:嵌入菜单只有「编辑链接」,没有「创建笔记」', m3.join(',') === 'edit', JSON.stringify(m3))
     await pg.keyboard.press('Escape')
-    // 5A:显示宽 < 80px 的图只留缩小版 `</>`;大图两颗都在
-    const tiny = await pg.evaluate(() => [...document.querySelectorAll('.wiki-inline-img-wrap')].map((w) => ({
-      w: Math.round(w.querySelector('img').getBoundingClientRect().width),
-      tiny: w.classList.contains('amx-img-tiny'),
-      open: getComputedStyle(w.querySelector('.amx-open-btn')).display,
-      srcH: Math.round(w.querySelector('.amx-src-btn:not(.amx-open-btn)').getBoundingClientRect().height),
-    })))
+    // 5A:显示宽 < 80px 的图只留缩小版 `</>`(11-07);大图 11-18 起 `</>` 与「打开」都在悬停工具条里(单挂的那颗 `</>` 藏起,「打开」不再单挂)
+    const tiny = await pg.evaluate(() => [...document.querySelectorAll('.wiki-inline-img-wrap')].map((w) => {
+      const src = w.querySelector(':scope > .amx-src-btn')
+      return {
+        w: Math.round(w.querySelector('img').getBoundingClientRect().width),
+        tiny: w.classList.contains('amx-img-tiny'),
+        loose: w.querySelectorAll(':scope > .amx-open-btn').length,
+        srcD: src ? getComputedStyle(src).display : null,
+        srcH: src ? Math.round(src.getBoundingClientRect().height) : null,
+      }
+    }))
     const small = tiny.find((x) => x.w === 22), big = tiny.find((x) => x.w === 200)
-    check('S14 22px 图只留 16px 高的 `</>`,200px 图两颗都在', !!small && small.tiny && small.open === 'none' && small.srcH === 16 && !!big && !big.tiny && big.open !== 'none', JSON.stringify(tiny))
+    check('S14 22px 图只留 16px 高的 `</>`;200px 图单挂的 `</>` 藏起;两张都不再单挂「打开」', !!small && small.tiny && small.srcD !== 'none' && small.srcH === 16 && !!big && !big.tiny && big.srcD === 'none' && small.loose === 0 && big.loose === 0, JSON.stringify(tiny))
+    const bigBox = await pg.evaluate(() => { const w = [...document.querySelectorAll('.wiki-inline-img-wrap')].find((x) => Math.round(x.querySelector('img').getBoundingClientRect().width) === 200); const r = w?.getBoundingClientRect(); return r ? { x: r.x + 30, y: r.y + r.height / 2 } : null })
+    if (bigBox) { await pg.mouse.move(bigBox.x, bigBox.y); await pg.waitForTimeout(300) }
+    const bigActs = await pg.evaluate(() => { const w = [...document.querySelectorAll('.wiki-inline-img-wrap')].find((x) => Math.round(x.querySelector('img').getBoundingClientRect().width) === 200); return [...(w?.querySelectorAll(':scope > .amx-img-tb button') ?? [])].filter((b) => !b.hidden).map((b) => b.dataset.act) })
+    check('S14 200px 图悬停:工具条里有「打开」和 `</>`', bigActs.includes('open') && bigActs.includes('source'), JSON.stringify(bigActs))
     await pg.close()
   }
 

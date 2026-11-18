@@ -700,6 +700,8 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
   opacity: 0;
   pointer-events: none;
   transition: opacity var(--duration-fast, 0.14s) ease;
+  /* --amx-tb-dx:贴着窗口 / 画布卡片边缘时 placeHoverToolbar 算出来往里收的那一段(imageToolbar.ts nudgeIntoView) */
+  translate: var(--amx-tb-dx, 0px) 0;
 }
 .am-app .wiki-inline-img-wrap:hover > .amx-img-tb,
 .am-app .wiki-inline-img-wrap[data-tb-hold] > .amx-img-tb,
@@ -712,11 +714,11 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
    (画布舞台上实测)。工具条下沿垫一条透明的桥盖住这道缝 —— 桥是工具条的子元素,压在上面时包裹层仍算悬停。 */
 .am-app .wiki-inline-img-wrap[data-tb-out] > .amx-img-tb::after { content: ''; position: absolute; left: 0; right: 0; top: 100%; height: 8px; }
 .am-app .wiki-inline-img-wrap[data-tb-out='left'] > .amx-img-tb { right: auto; left: 0; }
-.am-app .wiki-inline-img-wrap[data-tb-out='center'] > .amx-img-tb { right: auto; left: 50%; translate: -50% 0; }
+.am-app .wiki-inline-img-wrap[data-tb-out='center'] > .amx-img-tb { right: auto; left: 50%; translate: calc(-50% + var(--amx-tb-dx, 0px)) 0; }
 .am-app .wiki-inline-img-wrap[data-tb-out='right'] > .amx-img-tb { right: 0; }
 /* 窄图上方没地方(被画布卡片 / 滚动容器裁掉,placeHoverToolbar 判):叠在图片顶上,同样按对齐靠边 */
 .am-app .wiki-inline-img-wrap[data-tb-over='left'] > .amx-img-tb { right: auto; left: 0; }
-.am-app .wiki-inline-img-wrap[data-tb-over='center'] > .amx-img-tb { right: auto; left: 50%; translate: -50% 0; }
+.am-app .wiki-inline-img-wrap[data-tb-over='center'] > .amx-img-tb { right: auto; left: 50%; translate: calc(-50% + var(--amx-tb-dx, 0px)) 0; }
 .am-app .wiki-inline-img-wrap[data-tb-over='right'] > .amx-img-tb { right: 0; }
 :is(.am-app, .amx-img-sheet) .amx-img-tb-btn {
   display: inline-flex;
@@ -740,14 +742,13 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 :is(.am-app, .amx-img-sheet) .amx-img-tb-sep[hidden] { display: none; }
 :is(.am-app, .amx-img-sheet) .amx-img-tb-src { width: auto; min-width: 28px; padding: 0 6px; font-family: var(--font-mono, ui-monospace, monospace); font-size: var(--ui-font-meta, 12px); }
 :is(.am-app, .amx-img-sheet) .amx-img-tb-sep { flex: none; width: 1px; height: 16px; margin: 0 3px; background: var(--border); }
-/* ⋯ 菜单(.ctx-menu 外壳):hover 摆法挂在包裹层里、absolute 贴工具条下沿(mdImage 算 top / right);
-   不做工具条的后代 —— 工具条读了 --surface-blur,会成为后代的包含块 / backdrop 根。 */
-.am-app .wiki-inline-img-wrap > .amx-img-more--hover { position: absolute; z-index: var(--z-menu); }
+/* ⋯ 菜单(.ctx-menu 外壳,fixed + --z-menu):hover 摆法挂在 body 下、followAnchor 贴着 ⋯ 键(imageToolbar.ts);
+   不挂在包裹层里 —— 画布卡片 overflow:auto 会把它裁掉;也不做工具条的后代(工具条读了 --surface-blur,会成为包含块 / backdrop 根)。 */
 /* `![[x.png]]` 图片(.amx-img-wiki,wikiImageToolbar.ts)也走这一排工具条:`</>` 收进工具条,包裹层上那颗单挂的藏起。
    小图(< 80px,amx-img-tiny)例外 —— 11-07 定只留一颗缩小版 `</>`(整排按钮会压到旁边的字),工具条不出。 */
 .am-app .amx-img-wiki:not(.amx-img-tiny) > .amx-src-btn { display: none; }
 .am-app .amx-img-wiki.amx-img-tiny > .amx-img-tb { display: none; }
-:is(.am-app, .amx-img-sheet) .amx-img-more { font-family: var(--font-ui); line-height: var(--menu-line-height, 1.4); white-space: nowrap; }
+.amx-img-more { font-family: var(--font-ui); line-height: var(--menu-line-height, 1.4); white-space: nowrap; }
 /* 粗指针没有悬停:包裹层里那条不出,改由选中时贴底的 .amx-img-sheet(挂在 body 下,所以选择器不带 .am-app)。 */
 @media (pointer: coarse) {
   .am-app .wiki-inline-img-wrap > .amx-img-tb { display: none; }

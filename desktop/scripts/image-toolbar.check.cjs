@@ -297,12 +297,12 @@ async function main() {
 
     // ── T8 ⋯:复制图片 / 删除(撤销回来) ──
     await tb(p, 'more')
-    const items = await p.evaluate((W) => [...document.querySelectorAll(W + ' > .amx-img-more button')].map((b) => [b.dataset.act, b.textContent]), WRAP)
+    const items = await p.evaluate((W) => [...document.querySelectorAll('.amx-img-more--hover button')].map((b) => [b.dataset.act, b.textContent]), WRAP)
     check('T8 ⋯ 里只有「复制图片」「删除」', JSON.stringify(items) === JSON.stringify([['copy', '复制图片'], ['delete', '删除']]), items)
-    const mr = await box(p, `${WRAP} > .amx-img-more`), tr8 = await box(p, `${WRAP} > .amx-img-tb`)
+    const mr = await box(p, `.amx-img-more--hover`), tr8 = await box(p, `${WRAP} > .amx-img-tb`)
     check('T8 菜单贴在工具条下沿、右缘对齐', mr && Math.abs(mr.y - tr8.b - 4) < 3 && Math.abs(mr.r - tr8.r) < 3, { mr, tr8 })
     if (SHOT) await p.screenshot({ path: path.join(SHOT, 'more.png') })
-    await p.click(`${WRAP} > .amx-img-more [data-act="copy"]`)
+    await p.click(`.amx-img-more--hover [data-act="copy"]`)
     let clip = null
     for (let i = 0; i < 30 && !clip?.png; i++) {
       await p.waitForTimeout(100)
@@ -310,7 +310,7 @@ async function main() {
     }
     check('T8 复制图片 = 剪贴板里是真图片', clip?.png, clip)
     await tb(p, 'more')
-    await p.click(`${WRAP} > .amx-img-more [data-act="delete"]`)
+    await p.click(`.amx-img-more--hover [data-act="delete"]`)
     md = await saved(p)
     check('T8 删除:独占一段的图连段落一起删', !md.includes('home-w640') && md.includes('上周的数据如下。\n\n## 风险'), md)
     await p.evaluate(() => window.__upage.probe.view().focus())
@@ -419,7 +419,7 @@ async function main() {
     await p.mouse.move(2, 2)
     await p.waitForTimeout(150)
     await tb(p, 'more')
-    await p.click(`${WRAP} > .amx-img-more [data-act="copy"]`)
+    await p.click(`.amx-img-more--hover [data-act="copy"]`)
     await p.waitForTimeout(600)
     md = await pasteAfterTail()
     check('T15 ⋯「复制图片」→ 粘贴:说明逐字跟过来', JSON.stringify(lines(md, 'sub/a-w300')) === JSON.stringify([A15, A15, A15]), lines(md, 'sub/a-w300'))
@@ -439,10 +439,15 @@ async function main() {
     await hover(p)
     s = await tbState(p)
     check('W1 悬停:工具条浮现', s && s.op === 1 && s.pe === 'auto', s)
-    check('W1 一排按钮:左 / 中 / 右 · 替换 · 全屏 · 下载 · </> · ⋯(没有「说明」)', JSON.stringify(s?.acts) === JSON.stringify(['alignLeft', 'alignCenter', 'alignRight', 'replace', 'fullscreen', 'download', 'source', 'more']), s?.acts)
+    check('W1 一排按钮:左 / 中 / 右 · 替换 · 打开 · 全屏 · 下载 · </> · ⋯(没有「说明」)', JSON.stringify(s?.acts) === JSON.stringify(['alignLeft', 'alignCenter', 'alignRight', 'replace', 'open', 'fullscreen', 'download', 'source', 'more']), s?.acts)
+    {
+      // 11-18 用户定:「打开」单独一颗、图标和「全屏」不同(旧「打开」是 ⤢,和全屏撞了)
+      const ic = await p.evaluate((W) => { const q = (a) => document.querySelector(`${W} > .amx-img-tb [data-act="${a}"] svg`)?.innerHTML ?? null; return { open: q('open'), full: q('fullscreen') } }, WRAP)
+      check('W1 「打开」与「全屏」图标不同', ic.open && ic.full && ic.open !== ic.full, ic)
+    }
     {
       const loose = await p.evaluate((W) => ({ open: document.querySelectorAll(W + ' > .amx-open-btn').length, src: [...document.querySelectorAll(W + ' > .amx-src-btn')].map((b) => getComputedStyle(b).display) }), WRAP)
-      check('W1 旧的单颗 `</>` / 「打开」不再露出', loose.open === 0 && loose.src.every((d) => d === 'none'), loose)
+      check('W1 旧的单颗 `</>` / 「打开」不再挂在图片上', loose.open === 0 && loose.src.every((d) => d === 'none'), loose)
       const tbr = await box(p, `${WRAP} > .amx-img-tb`), ir = await box(p, `${WRAP} > img`)
       check('W1 工具条在图片右上角里面', tbr && Math.abs(tbr.r - (ir.r - 8)) < 3 && tbr.y >= ir.y && tbr.y - ir.y < 14, { tbr, ir })
     }
@@ -528,23 +533,24 @@ async function main() {
       check('W5 下载:文件名取库内名', dl && dl.suggestedFilename() === 'home-w640-h360.png', dl?.suggestedFilename())
     }
 
-    // W6 ⋯:打开(⌘/Ctrl+点 = 新标签页)· 复制图片 · 删除
-    await tb(p, 'more')
+    // W6 工具条上的「打开」(⌘/Ctrl+点 = 新标签页);⋯:复制图片 · 删除
+    await tb(p, 'open')
+    await hover(p)
+    await p.click(`${WRAP} > .amx-img-tb [data-act="open"]`, { modifiers: [process.platform === 'darwin' ? 'Meta' : 'Control'] })
     {
-      const items = await p.evaluate((W) => [...document.querySelectorAll(W + ' > .amx-img-more button')].map((b) => [b.dataset.act, b.textContent]), WRAP)
-      check('W6 ⋯ 里是「打开」「复制图片」「删除」', JSON.stringify(items) === JSON.stringify([['open', '打开'], ['copy', '复制图片'], ['delete', '删除']]), items)
-      await p.click(`${WRAP} > .amx-img-more [data-act="open"]`)
-      await tb(p, 'more')
-      await p.click(`${WRAP} > .amx-img-more [data-act="open"]`, { modifiers: [process.platform === 'darwin' ? 'Meta' : 'Control'] })
       const op = await p.evaluate(() => window.__opened)
       check('W6 「打开」= openWikiLink(库内名);⌘/Ctrl+点 = 新标签页', op.length === 2 && op[0].name === 'home-w640-h360.png' && !op[0].o?.newTab && op[1].o?.newTab === true, op)
       await tb(p, 'more')
-      await p.click(`${WRAP} > .amx-img-more [data-act="copy"]`)
+      const items = await p.evaluate((W) => [...document.querySelectorAll('.amx-img-more--hover button')].map((b) => [b.dataset.act, b.textContent]), WRAP)
+      check('W6 ⋯ 里只剩「复制图片」「删除」', JSON.stringify(items) === JSON.stringify([['copy', '复制图片'], ['delete', '删除']]), items)
+      await p.keyboard.press('Escape')
+      await tb(p, 'more')
+      await p.click(`.amx-img-more--hover [data-act="copy"]`)
       await p.waitForTimeout(500)
       const clip = await p.evaluate(async () => { try { const it = await navigator.clipboard.read(); return { png: it.some((x) => x.types.includes('image/png')) } } catch (e) { return { err: String(e) } } })
       check('W6 复制图片 = 剪贴板里是真图片', clip?.png, clip)
       await tb(p, 'more')
-      await p.click(`${WRAP} > .amx-img-more [data-act="delete"]`)
+      await p.click(`.amx-img-more--hover [data-act="delete"]`)
       await p.waitForTimeout(200)
       md = await saved(p)
       check('W6 删除:独占一段的图连段落一起删', !md.includes('home-w640') && md.includes('前文。\n\n后文。'), md)
@@ -583,14 +589,14 @@ async function main() {
       check('W11 窄图在第一行:工具条叠在图上(没被裁掉),每颗按钮都点得到', st && st.op === 1 && (st.over || st.out) && st.hits.every(Boolean), st)
     }
 
-    // W9 只读:不出会改文档的键,也没有把手;⋯ 里只剩打开 / 复制
+    // W9 只读:不出会改文档的键,也没有把手;「打开」照常,⋯ 里只剩复制
     await reopen(p, WSEED, 'WikiRo.md')
     await p.evaluate(() => window.__upage.probe.view().setProps({ editable: () => false }))
     await hover(p)
     s = await tbState(p)
-    check('W9 只读:只剩全屏 / 下载 / ⋯', JSON.stringify(s?.acts) === JSON.stringify(['fullscreen', 'download', 'more']), s?.acts)
+    check('W9 只读:只剩打开 / 全屏 / 下载 / ⋯', JSON.stringify(s?.acts) === JSON.stringify(['open', 'fullscreen', 'download', 'more']), s?.acts)
     await tb(p, 'more')
-    check('W9 只读 ⋯:打开 · 复制图片(没有删除)', JSON.stringify(await p.evaluate((W) => [...document.querySelectorAll(W + ' > .amx-img-more button')].map((b) => b.dataset.act), WRAP)) === '["open","copy"]')
+    check('W9 只读 ⋯:只有复制图片(没有删除)', JSON.stringify(await p.evaluate((W) => [...document.querySelectorAll('.amx-img-more--hover button')].map((b) => b.dataset.act), WRAP)) === '["copy"]')
     await p.keyboard.press('Escape')
     await p.evaluate(() => window.__upage.probe.view().setProps({ editable: () => true }))
 
@@ -661,8 +667,9 @@ async function main() {
       const ib3 = await box(pw.p, `${WRAP} > img`)
       await pw.p.touchscreen.tap(ib3.cx, ib3.cy)
       await pw.p.waitForTimeout(400)
-      const sh = await pw.p.evaluate(() => { const tb = document.querySelector('.amx-img-sheet .amx-img-tb'); return tb ? [...tb.querySelectorAll('button')].filter((b) => !b.hidden).map((b) => b.dataset.act) : null })
-      check('W10 手机:点 `![[…]]` 图,底部出同一排(没有说明)', JSON.stringify(sh) === JSON.stringify(['alignLeft', 'alignCenter', 'alignRight', 'replace', 'fullscreen', 'download', 'source', 'more']), sh)
+      const sh = await pw.p.evaluate(() => { const tb = document.querySelector('.amx-img-sheet .amx-img-tb'); return tb ? { acts: [...tb.querySelectorAll('button')].filter((b) => !b.hidden).map((b) => b.dataset.act), r: Math.round(tb.getBoundingClientRect().right), l: Math.round(tb.getBoundingClientRect().left) } : null })
+      check('W10 手机:点 `![[…]]` 图,底部出同一排(没有说明,有「打开」)', JSON.stringify(sh?.acts) === JSON.stringify(['alignLeft', 'alignCenter', 'alignRight', 'replace', 'open', 'fullscreen', 'download', 'source', 'more']), sh)
+      check('W10 手机:多了「打开」一排仍在屏内', sh && sh.l >= 0 && sh.r <= 390, sh)
       await pw.p.click('.amx-img-sheet [data-act="alignCenter"]')
       await pw.p.waitForTimeout(300)
       md = await saved(pw.p)
