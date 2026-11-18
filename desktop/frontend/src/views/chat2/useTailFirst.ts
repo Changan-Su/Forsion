@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { startTransition, useDeferredValue, useEffect, useRef, useState } from 'react'
 
 export const TAIL_FIRST = 12
 const TAIL_STEP = 12
@@ -16,13 +16,18 @@ export function useTailFirst<T>(items: T[], sessionId: string | null, enabled: b
   const wholeFor = useRef<string | null | undefined>(undefined)
   const count = shown.sessionId === sessionId ? shown.count : TAIL_FIRST // 换了会话:从头来,不多渲一轮
   const whole = !enabled || wholeFor.current === sessionId || (items.length > 0 && count >= items.length)
+  // 外部 store 的历史更新是同步的。首批长消息放进可让路的渲染，列表点按可以先提交导航。
+  // 只延期首批的会话标识。已经显示的消息、短会话和明确的跳转继续读取当前数据。
+  const requestedTail = !whole && items.length > count ? sessionId : null
+  const readyTail = useDeferredValue(requestedTail, null)
+  const waitingForTail = requestedTail !== null && readyTail !== requestedTail
   useEffect(() => {
     if (whole) { wholeFor.current = sessionId; return }
-    if (!items.length) return // 历史还没到:没有可补的
-    const grow = (): void => setShown({ sessionId, count: count + TAIL_STEP })
+    if (!items.length || waitingForTail) return
+    const grow = (): void => startTransition(() => setShown({ sessionId, count: count + TAIL_STEP }))
     if (typeof requestIdleCallback !== 'function') { const timer = window.setTimeout(grow, 32); return () => window.clearTimeout(timer) }
     const idle = requestIdleCallback(grow, { timeout: 200 })
     return () => cancelIdleCallback(idle)
-  }, [whole, count, sessionId, items.length])
-  return whole ? items : items.slice(items.length - count)
+  }, [whole, count, sessionId, items.length, waitingForTail])
+  return waitingForTail ? [] : whole ? items : items.slice(items.length - count)
 }

@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createElement, act } from 'react'
+import { flushSync } from 'react-dom'
 import { createRoot, type Root } from 'react-dom/client'
 import { TAIL_FIRST, useTailFirst } from './useTailFirst'
 
@@ -56,5 +57,15 @@ describe('useTailFirst', () => {
     await render([], 'a', true)
     await render(msgs(60), 'a', true)
     expect(seen).toHaveLength(TAIL_FIRST)
+  })
+
+  it('同步打开长会话时让路给导航提交，下一次提交才挂新会话首批', async () => {
+    await render(msgs(6), 'a', true)
+    const history = msgs(60)
+    await act(async () => {
+      flushSync(() => root.render(createElement(Probe, { items: history, sessionId: 'b', enabled: true })))
+      expect(seen).toEqual([])
+    })
+    expect(seen).toEqual(history.slice(-TAIL_FIRST))
   })
 })
