@@ -1507,6 +1507,65 @@ body.amx-marquee-active * {
   animation: pop-in 120ms var(--ease-apple);
 }
 
+/* 斜杠菜单的悬停预览卡(Notion 对齐 A2,blocks/markdown/slashSuggested.tsx):鼠标停在一项上,菜单旁边出「小样 + 一句话」。
+   外壳与斜杠菜单同一套(读 --surface-*,Genesis 材质表照样接管);不吃指针,不挡菜单。小样是示意,不是正文排版。 */
+.am-app .slash-preview {
+  position: fixed;
+  z-index: 50;
+  width: 264px;
+  box-sizing: border-box;
+  padding: 8px 8px 10px;
+  background: var(--surface-menu, var(--surface-2)); backdrop-filter: var(--surface-blur, none);
+  border: var(--border-width, 1px) solid var(--surface-edge, var(--border));
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-panel);
+  pointer-events: none;
+  user-select: none;
+  animation: pop-in 120ms var(--ease-apple);
+}
+.am-app .slash-preview-sample {
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--overlay-light);
+  color: var(--text);
+  font-size: var(--ui-font-body);
+  line-height: 1.55;
+  overflow: hidden;
+}
+.am-app .slash-preview-title { margin: 10px 4px 2px; color: var(--text); font-size: var(--ui-font-heading); font-weight: 600; }
+.am-app .slash-preview-desc { margin: 0 4px; color: var(--text-muted); font-size: var(--ui-font-meta); line-height: 1.5; }
+.am-app .slash-preview-tip { margin: 6px 4px 0; color: var(--text-faint); font-size: var(--ui-font-meta); line-height: 1.5; }
+.am-app .slash-preview .sp-p { margin: 0; }
+.am-app .slash-preview .sp-row { display: flex; align-items: center; gap: 8px; }
+.am-app .slash-preview .sp-box { flex: none; width: 12px; height: 12px; border-radius: 3px; box-shadow: inset 0 0 0 1.5px var(--text-faint); }
+.am-app .slash-preview .sp-box[data-on] { background: var(--signal, var(--accent)); box-shadow: none; }
+.am-app .slash-preview [data-done] { color: var(--text-faint); text-decoration: line-through; }
+.am-app .slash-preview .sp-ul, .am-app .slash-preview .sp-ol { margin: 0; padding-left: 18px; }
+.am-app .slash-preview .sp-h { font-weight: 650; line-height: 1.3; }
+.am-app .slash-preview .sp-h[data-level='h1'] { font-size: var(--ui-font-display); }
+.am-app .slash-preview .sp-h[data-level='h2'] { font-size: var(--ui-font-title); }
+.am-app .slash-preview .sp-h[data-level='h3'] { font-size: var(--ui-font-heading); }
+.am-app .slash-preview .sp-h[data-level='hn'] { font-size: var(--ui-font-body); }
+.am-app .slash-preview .sp-callout { margin: -2px -4px; padding: 8px 10px; border-radius: var(--radius-sm); background: color-mix(in srgb, #448aff 10%, var(--surface-menu, var(--surface-2))); }
+.am-app .slash-preview .sp-callout-title { display: flex; align-items: center; gap: 6px; font-weight: 600; }
+.am-app .slash-preview .sp-callout-icon { display: inline-flex; color: #448aff; }
+.am-app .slash-preview .sp-table { width: 100%; border-collapse: collapse; }
+.am-app .slash-preview .sp-table :is(th, td) { padding: 3px 6px; border: 1px solid var(--border); text-align: left; font-weight: 400; }
+.am-app .slash-preview .sp-table th { background: var(--overlay-light); font-weight: 600; color: var(--text-muted); }
+.am-app .slash-preview .sp-image { display: grid; place-items: center; height: 64px; border-radius: var(--radius-sm); background: var(--overlay-light); color: var(--text-faint); }
+.am-app .slash-preview .sp-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.am-app .slash-preview .sp-cols > div { display: grid; gap: 5px; }
+.am-app .slash-preview .sp-cols i { display: block; height: 6px; border-radius: 3px; background: var(--border); }
+.am-app .slash-preview .sp-cols i + i { width: 70%; }
+.am-app .slash-preview .sp-toc > div { color: var(--text-muted); text-decoration: underline; text-decoration-color: var(--border); text-underline-offset: 3px; }
+.am-app .slash-preview .sp-toc > div[data-d='2'] { padding-left: 14px; }
+.am-app .slash-preview .sp-quote { margin: 0; padding-left: 10px; border-left: 3px solid var(--text); }
+.am-app .slash-preview .sp-fold-body { padding-left: 16px; color: var(--text-muted); }
+.am-app .slash-preview .sp-fold span { display: inline-block; width: 16px; color: var(--text-faint); }
+.am-app .slash-preview .sp-code { margin: 0; font-family: var(--font-mono); font-size: var(--ui-font-meta); white-space: pre; }
+.am-app .slash-preview .sp-divider hr { margin: 6px 0; border: none; border-top: 1px solid var(--border); }
+.am-app .slash-preview .sp-math { text-align: center; font-family: 'Latin Modern Math', 'STIX Two Math', serif; font-size: var(--ui-font-title); font-style: italic; }
+
 /* 「粘贴为」菜单(粘贴一条 URL 之后弹,AFFiNE Paste as 对位)。摆位与 slash 同一套:
    fixed + coordsAtPos 内联坐标,复用 .slash-backdrop 接点空白关闭。 */
 .am-app .paste-as-menu {

@@ -105,6 +105,7 @@ import { InlineToolbar, TURN_LABEL_KEYS, type ToolbarAction, type ToolbarAiItem 
 import { Sparkles, Bot, BookOpen, MessageSquare, ListTodo, CalendarDays } from 'lucide-react'
 import { defaultSlashCategory, moveSlash, moveSlashCategory, slashCategory, SLASH_CATEGORIES, type SlashCategory } from './slashNavigation'
 import './slashCategories.css'
+import { hasSlashPreview, SlashPreviewBody, withSuggestedGroup } from './slashSuggested'
 import { useCapsuleSlide } from '../../../components/capsuleTabs'
 import { openAppRef } from '../../../components/appRefs'
 import { readTangu } from '../../plugins/tanguSeam'
@@ -2860,6 +2861,8 @@ function SlashMenu({ query, onQuery, left, top, anchorTop, hideKeys, ctx, unifie
   )
 
   const q = query.trim().toLowerCase()
+  // 浏览(没打字)时「常用」一组排最前(A2,slashSuggested.ts);打字搜索照旧只看 allItems 的匹配分。
+  const browseItems = useMemo(() => withSuggestedGroup(allItems, t('mdblock.group.suggested'), true), [allItems, t])
   // 有输入 → 按匹配度排序(label 与各关键词取最佳 fuzzy 分,降序);无输入 → 保持分组固定顺序。
   // 修掉「text 恒第一」:此前只 includes 过滤不排序,SLASH_ITEMS 首项 text 永远最靠前。
   const matches = q
@@ -2868,7 +2871,7 @@ function SlashMenu({ query, onQuery, left, top, anchorTop, hideKeys, ctx, unifie
         .filter((x): x is { it: SlashItem; s: number } => x.s !== null)
         .sort((a, b) => b.s - a.s)
         .map((x) => x.it)
-    : allItems
+    : browseItems
   const category = categoryChoice?.query === q ? categoryChoice.category : defaultSlashCategory(matches, q)
   const categoryItems = matches.filter((it) => slashCategory(it) === category)
   // Browsing groups share one visual/keyboard order, including late-added built-in and plugin items.
@@ -2884,6 +2887,11 @@ function SlashMenu({ query, onQuery, left, top, anchorTop, hideKeys, ctx, unifie
     setActive(0)
     setCategoryChoice(null)
   }, [query])
+
+  // 悬停预览卡(A2):只认真鼠标悬停;键盘上下、换页、滚动、打字都收起。手机块面板 / 带搜索框的选择器不出。
+  const [preview, setPreview] = useState<{ key: string; top: number; menu: DOMRect } | null>(null)
+  useEffect(() => { setPreview(null) }, [query, category])
+  const colorTip = all.some((it) => it.key === 'bg-blue') // 整块颜色的斜杠命令在才提(A1)
 
   // 切类别不许挪菜单:同一个 query 内只长不缩。菜单开在光标上方时底边贴着光标,一缩顶上的类别胶囊
   // 就从鼠标底下滑走(基本 → AI 实测下移 206px)。按 query 记账(同 categoryChoice),换 query 当帧解锁。
@@ -2927,6 +2935,7 @@ function SlashMenu({ query, onQuery, left, top, anchorTop, hideKeys, ctx, unifie
         stop(e)
         onClose()
       } else if (bareArrow && e.key.startsWith('Arrow')) {
+        setPreview(null)
         const nextCategory = moveSlashCategory(category, e.key)
         if (nextCategory !== null) { stop(e); chooseCategory(nextCategory) }
         else {
@@ -2957,6 +2966,10 @@ function SlashMenu({ query, onQuery, left, top, anchorTop, hideKeys, ctx, unifie
       // ↑↓ 走到可视区外的选项要跟着滚(block:'nearest' 已可见时是空操作,鼠标 hover 不会乱跳)。
       ref={i === activeIdx ? (el) => el?.scrollIntoView({ block: 'nearest' }) : undefined}
       onMouseEnter={() => setActive(i)}
+      onPointerEnter={(e) => {
+        const menu = menuEl.current?.getBoundingClientRect()
+        setPreview(!onQuery && e.pointerType === 'mouse' && menu && hasSlashPreview(it.key) ? { key: it.key, top: e.currentTarget.getBoundingClientRect().top, menu } : null)
+      }}
       // onMouseDown+preventDefault:选项按下时不夺走编辑器焦点(否则 consume/transform 前编辑器已 blur),同 WikiSuggest。
       onMouseDown={(e) => { e.preventDefault(); onPick(it) }}
       role="menuitem"
@@ -2969,6 +2982,7 @@ function SlashMenu({ query, onQuery, left, top, anchorTop, hideKeys, ctx, unifie
     </button>
   )
 
+  const previewItem = preview ? items.find((x) => x.key === preview.key) : undefined
   // Browsing (no query) → grouped with section labels; filtering → flat list.
   const grouped: Array<{ name: string; rows: Array<{ it: SlashItem; idx: number }> }> = []
   items.forEach((it, idx) => {
@@ -2985,6 +2999,7 @@ function SlashMenu({ query, onQuery, left, top, anchorTop, hideKeys, ctx, unifie
       <div className="slash-backdrop" onMouseDown={onClose} />
       {/* 按下菜单空白/分组标签/滚动条不夺编辑器焦点:失焦即关(L-04)后,不拦这一下菜单会自己关掉。 */}
       <OverlayAt id={menuId} className={`slash-menu${onQuery ? ' slash-menu--picker' : ''}`} x={left} y={top} anchorTop={anchorTop} style={{ minHeight }}
+        onPointerLeave={() => setPreview(null)}
         innerRef={(el) => { menuEl.current = el }} onMouseDown={(e) => { if (!(e.target instanceof HTMLInputElement)) e.preventDefault() }}>
         {onQuery && <input className="slash-query" autoFocus value={query} onChange={(e) => onQuery(e.target.value)} aria-label={t('mdblock.picker.query')} placeholder={t('mdblock.picker.query')} />}
         <div className="slash-category-tabs cap-tabs" role="tablist" aria-label={t('mdblock.category.label')} ref={tabsRef}>
@@ -2998,7 +3013,7 @@ function SlashMenu({ query, onQuery, left, top, anchorTop, hideKeys, ctx, unifie
         </div>
         <div className="slash-list" id={`${menuId}-panel`} role="tabpanel" data-category={category} aria-labelledby={`${menuId}-tab-${category}`}>
         {items.length === 0 && <div className="slash-empty">{t(q ? 'mdblock.menu.noMatch' : 'mdblock.category.empty')}</div>}
-        <div className="slash-scroll" id={`${menuId}-commands`} role="menu" aria-labelledby={`${menuId}-tab-${category}`}>
+        <div className="slash-scroll" id={`${menuId}-commands`} role="menu" aria-labelledby={`${menuId}-tab-${category}`} onScroll={() => setPreview(null)}>
           {q || grouped.length <= 1
             ? items.map(renderItem)
             : grouped.map((g) => (
@@ -3016,9 +3031,18 @@ function SlashMenu({ query, onQuery, left, top, anchorTop, hideKeys, ctx, unifie
             <span>{t('mdblock.foot.close')}</span>
         </div>
       </OverlayAt>
+      {previewItem && preview && (
+        // 卡片宽 264:右边放得下放右边,放不下翻到菜单左边;纵向由 OverlayAt 夹进视口。不吃指针,不挡菜单。
+        <OverlayAt className="slash-preview" aria-hidden y={preview.top - 6}
+          x={preview.menu.right + 8 + PREVIEW_W <= window.innerWidth - 8 ? preview.menu.right + 8 : Math.max(8, preview.menu.left - 8 - PREVIEW_W)}>
+          <SlashPreviewBody item={previewItem} t={t} colorTip={colorTip} />
+        </OverlayAt>
+      )}
     </>
   )
 }
+
+const PREVIEW_W = 264
 
 /** 「链接数据库」选择器(slash 唤起):列出 vault 全部 .db,可打字过滤;
  *  选中插入 ![[..]] 嵌入 —— 唯一裸名即最短,重名给全 vault 相对路径(resolveAttachment 根回退可解析)。 */
