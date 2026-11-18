@@ -186,9 +186,15 @@ async function main() {
     await p.keyboard.press('Enter')
     await p.waitForSelector(`${PM} .amx-toc-item`)
     ok('inserted once', await docHasToc(p) === 1)
+    // 插完不打字直接存:光标落脚的空行按 v4 的空段落口径存成空行,重开逐字不变
+    await flush(p)
+    saved = await disk(p)
+    ok('insert without typing saves the fence plus a blank line', saved === `# 撤销\n\n正文。\n\n${FENCE}\n\n`, saved)
     await p.keyboard.press('Meta+z')
     await frames(p)
     ok('one undo removes the toc block', await docHasToc(p) === 0 && await p.locator(`${PM} .amx-toc`).count() === 0)
+    await flush(p)
+    ok('after undo the saved note is back to the original bytes', await disk(p) === '# 撤销\n\n正文。\n', await disk(p))
     await p.close()
 
     // ── 斜杠搜索别名 ─────────────────────────────────────────────────
@@ -261,6 +267,15 @@ async function main() {
     ok('folding a section keeps its child headings listed', (await texts(p)).includes('研发') && await p.evaluate(() => [...document.querySelectorAll('.unified-body h3')].find((e) => e.textContent === '研发').getBoundingClientRect().height === 0))
     j = await jump(p, '研发')
     ok('clicking a heading inside a folded section unfolds it and jumps', Math.abs(j.off - 12) <= 4, j)
+    await p.close()
+
+    // ── 110% 缩放(用户 dev 的缩放):落点与闪光片仍对得上 ─────────────────
+    p = await open(browser, tocSeed)
+    await p.waitForSelector(`${PM} .amx-toc-item`)
+    await p.evaluate(() => { document.documentElement.style.zoom = '1.1' })
+    await frames(p)
+    j = await jump(p, '风险')
+    ok('110% zoom: jump lands at the reading position and the flash covers the heading', j.scrolled > 200 && Math.abs(j.off - 12) <= 4 && Math.abs(j.flashTop - j.headTop) <= 6, j)
     await p.close()
 
     // ── 只读页:照样显示、能点跳转,没有 `</>` ──────────────────────────
