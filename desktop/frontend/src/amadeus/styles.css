@@ -3262,7 +3262,8 @@ body.amx-marquee-active * {
   margin-left: auto;
   color: var(--accent-ink);
 }/* 「转换为 ›」那一行:当前类型灰字 + 箭头放末列;子菜单开着时该行保持悬停底(c2)。 */
-.am-app .unified-block-menu [data-sub] .ubm-sub-tail {
+.am-app .unified-block-menu [data-sub] .ubm-sub-tail,
+.am-app .unified-block-menu [data-act='blockColor'] .ubm-sub-tail {
   margin-left: auto;
   display: inline-flex;
   align-items: center;
@@ -3271,7 +3272,8 @@ body.amx-marquee-active * {
   color: var(--text-muted);
   font-size: var(--ui-font-meta, 12px);
 }
-.am-app .unified-block-menu [data-sub].is-open { background: var(--menu-hover); color: var(--text); }
+.am-app .unified-block-menu [data-sub].is-open,
+.am-app .unified-block-menu [data-act='blockColor'].is-open { background: var(--menu-hover); color: var(--text); }
 .am-app .unified-block-submenu .ubm-check { color: var(--text-muted); }
 
 
@@ -4708,7 +4710,7 @@ body.amx-marquee-active * {
 [data-mode='dark'] .am-app .milkdown .ProseMirror :is(p, h1, h2, h3, h4, h5, h6, li, blockquote)[data-fg='grey'], .am-app[data-mode='dark'] .milkdown .ProseMirror :is(p, h1, h2, h3, h4, h5, h6, li, blockquote)[data-fg='grey'] { --amx-blk-fg: #a8a8ad; }
 /* 块菜单「颜色 ›」行尾的当前颜色(BlockColorMenu)与斜杠颜色条目的「A」样字(MarkdownBlock 的 color-* / bg-* 项)。
    都在浮层 portal 里,明暗照调色板的写法看 :root.dark。 */
-.ubm-color-chip { width: 12px; height: 12px; border-radius: 3px; margin-right: 2px; box-shadow: inset 0 0 0 1px var(--border); background: transparent; }
+.ubm-color-chip { display: inline-block; flex: none; width: 12px; height: 12px; border-radius: 3px; margin-right: 2px; box-shadow: inset 0 0 0 1px var(--border); background: transparent; }
 .ubm-color-chip[data-chip-bg='accent'], .slash-color-glyph[data-bg='accent'] { background: color-mix(in srgb, var(--signal) 14%, transparent); }
 .ubm-color-chip[data-chip-fg='accent'] { background: var(--signal); }
 .slash-color-glyph[data-fg='accent'] { color: var(--signal); }

@@ -79,6 +79,13 @@ async function main() {
     ok('字色红:data-fg 与计算后的颜色', a.fg === 'red' && a.color === 'rgb(182, 31, 31)', a)
     await openMenu(p, 'BETA')
     ok('再开菜单:行尾小方块是当前颜色', await p.locator('[data-act="blockColor"] .ubm-color-chip[data-chip-fg="red"]').count() === 1)
+    // 截图里抓到过:<i> 是行内元素,宽高不生效 → 小方块看不见、箭头贴着字。要求它有尺寸且和「转换为」的尾巴一样靠右
+    const geo = await p.evaluate(() => {
+      const r = (q) => document.querySelector(q)?.getBoundingClientRect()
+      const row = r('[data-act="blockColor"]'), chip = r('[data-act="blockColor"] .ubm-color-chip'), turn = r('[data-sub="turnInto"] .ubm-sub-tail')
+      return row && chip && turn ? { w: chip.width, gap: Math.round(row.right - chip.right), tailRight: Math.round(turn.right), colorTailRight: Math.round(r('[data-act="blockColor"] .ubm-sub-tail').right) } : null
+    })
+    ok('小方块有尺寸、尾巴和「转换为」同一右边', !!geo && geo.w >= 10 && geo.gap < 40 && Math.abs(geo.tailRight - geo.colorTailRight) <= 1, geo)
     await p.keyboard.press('Escape'); await sleep(p)
 
     // 列表项 / 引用
