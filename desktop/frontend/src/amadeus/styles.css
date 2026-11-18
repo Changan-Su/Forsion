@@ -3222,6 +3222,48 @@ body.amx-marquee-active * {
 }
 .am-app .unified-body .ProseMirror[data-dragging='true'] :is(.ProseMirror-selectednode, .amx-block-selected) {
   animation: amx-drag-source-fade 85ms cubic-bezier(0.2, 0, 0, 1) both;
+  /* 拖动期间原位只淡到 0.58、不叠选中底色(页面编辑手感方案第 3 条);落下后块照旧选中。 */
+  background: transparent;
+}
+/* 原生文字选区的蓝底同理收掉(灰底撤了以后它就露出来了)。只在整块拖动期间、只在被拖的块里。 */
+.am-app .unified-body .ProseMirror[data-dragging='true'] :is(.ProseMirror-selectednode, .amx-block-selected)::selection,
+.am-app .unified-body .ProseMirror[data-dragging='true'] :is(.ProseMirror-selectednode, .amx-block-selected) *::selection {
+  background: transparent;
+}
+/* 块拖拽的拖影(blockLayer makeDragGhost):块的副本,去选中底色、字 52% 正文色、不加阴影。
+   放在视口外只给 setDragImage 拍一张,下一帧就摘掉;包装的左 / 上补白 = 指针在块外那一截。 */
+.am-app .unified-drag-ghost {
+  position: fixed;
+  left: -100000px;
+  top: 0;
+  pointer-events: none;
+  background: transparent;
+}
+.am-app .unified-drag-ghost-page {
+  position: relative;
+  margin: 0;
+  padding: 0;
+  min-height: 0;
+  background: transparent;
+  outline: none;
+}
+.am-app .unified-drag-ghost-blk {
+  background: transparent !important;
+  color: color-mix(in srgb, var(--text) 52%, transparent) !important;
+  animation: none !important;
+  opacity: 1 !important;
+}
+.am-app .unified-drag-ghost-blk * {
+  color: inherit !important;
+}
+.am-app .unified-drag-ghost-blk :is(img, svg, .unified-drag-ghost-media),
+.am-app .unified-drag-ghost-blk::before,
+.am-app .unified-drag-ghost-blk ::marker {
+  opacity: 0.52;
+}
+.am-app .unified-drag-ghost-media {
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--text) 8%, transparent);
 }
 /* 把手菜单的小节标签/分隔线(菜单壳与按钮吃 .ctx-menu 现成样式)。 */
 .am-app /* 分栏(v4 单实例列节点,columns.ts):行=flex,列宽走 flex-grow(cell attrs.width)。
