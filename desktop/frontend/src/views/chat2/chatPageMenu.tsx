@@ -3,12 +3,12 @@
  *  只是把行交给外壳(useNativeChromeExtras 的 more):画不画「⋯」、怎么呈现由外壳定,别的形态(桌面、平板横屏)不认这些行。 */
 import { useEffect, useState } from 'react'
 import { Archive, ArchiveRestore, Pencil, Pin, PinOff, Search } from 'lucide-react'
-import { dispatchNativeChromeAction, listFirstNow, useNativeChromeExtras, type NativeChromePageAction } from '@lcl/engine'
+import { dispatchNativeChromeAction, listFirstNow, useNativeChromeExtras, useWorkspace, type NativeChromePageAction } from '@lcl/engine'
 import { useApp } from '../../stores/appStore'
 import { registerMessages, useI18n } from '../../i18n'
 import { displaySessionTitle } from '../../sessionTitle'
 import { askString } from '../../amadeus/components/askString'
-import { findSupported, openFindBar } from '../../findInPage'
+import { closeFindBar, findSupported, openFindBar, pickRoot, useFind } from '../../findInPage'
 import { isOrbitPinned, onOrbitPinsChanged, readOrbitPins, toggleStoredOrbitPin } from './orbitPins'
 
 registerMessages({
@@ -31,25 +31,37 @@ export function useChatPageMenu(sessionId: string | null): void {
     return onOrbitPinsChanged(read)
   }, [pinKey])
 
+  // 和会话列表里那一行的动作同一套规矩:归档了的不给置顶、不给改名,只给「取消归档」。
   const rows: NativeChromePageAction[] | null = !sessionId || !known ? null : [
-    { id: pinned ? 'unpin' : 'pin', label: t(pinned ? 'sidebar.unpin' : 'sidebar.pin'), icon: pinned ? PinOff : Pin, run: () => { toggleStoredOrbitPin(pinKey) } },
-    {
-      id: 'rename', label: t('sidebar.rename'), icon: Pencil,
-      run: () => {
-        void askString(t('sidebar.rename'), displaySessionTitle(title, t)).then((next) => {
-          if (next && next !== title) void useApp.getState().renameSession(sessionId, next)
-        })
+    ...(archived ? [] : [
+      { id: pinned ? 'unpin' : 'pin', label: t(pinned ? 'sidebar.unpin' : 'sidebar.pin'), icon: pinned ? PinOff : Pin, run: () => { toggleStoredOrbitPin(pinKey) } },
+      {
+        id: 'rename', label: t('sidebar.rename'), icon: Pencil,
+        run: () => {
+          // 没起过题的会话,框里先填的是「新会话」这几个字(落库的是引擎的占位标题):原样点确定不算改名,别把占位写成用户起的题。
+          const shown = displaySessionTitle(title, t)
+          void askString(t('sidebar.rename'), shown).then((next) => {
+            if (next && next !== shown) void useApp.getState().renameSession(sessionId, next)
+          })
+        },
       },
-    },
+    ]),
     {
       id: archived ? 'unarchive' : 'archive', label: t(archived ? 'sidebar.unarchive' : 'sidebar.archive'), icon: archived ? ArchiveRestore : Archive,
       run: () => {
-        void useApp.getState().archiveSession(sessionId, !archived)
-        // 归档完这一页就没什么可做的了:两级导航里退回列表(和点左上的返回是同一个动作)。取消归档留在原地。
-        if (!archived && listFirstNow()) dispatchNativeChromeAction('left')
+        void useApp.getState().archiveSession(sessionId, !archived).then(() => {
+          // 归档完这一页就没什么可做的了:两级导航里退回列表(和点左上的返回是同一个动作)。取消归档留在原地。
+          // 存上了(活动列表里没有它了)、人也还在详情层才退;没存上(断网)留在这条对话里,提示由 store 给。
+          if (archived || !listFirstNow() || useWorkspace.getState().leftVisible) return
+          if (!useApp.getState().sessions.some((x) => x.id === sessionId)) dispatchNativeChromeAction('left')
+        })
       },
     },
-    ...(findSupported ? [{ id: 'find', label: t('chat.pageMenu.find'), icon: Search, section: 1, run: () => openFindBar() }] : []),
+    ...(findSupported ? [{
+      id: 'find', label: t('chat.pageMenu.find'), icon: Search, section: 1,
+      // 查找条已经开着、找的却是别的面(在列表层开的,列表还挂着):先收掉,再对着屏上这一面开。
+      run: () => { const f = useFind.getState(); if (f.open && f.root !== pickRoot()) closeFindBar(); openFindBar() },
+    }] : []),
   ]
   useNativeChromeExtras(rows ? { where: 'main', more: rows } : null)
 }

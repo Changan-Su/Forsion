@@ -186,7 +186,7 @@ class NativeChromeStateTest {
         fun nine(extra: (Int) -> String) = (0 until 9).joinToString(",", "[", "]") { """{"id":"s$it","label":"S$it"${extra(it)}}""" }
         assertNull(ChromeState.parse(shell(nine { "" })).moreBadge)
         val dotted = ChromeState.parse(shell(nine { "" }).put("allDot", JSONObject().put("label", "1 to claim")))
-        assertEquals(ChromeBadge(ChromeBadge.Kind.UNREAD, "1 to claim"), dotted.moreBadge)
+        assertEquals(ChromeBadge(ChromeBadge.Kind.NOTICE, "1 to claim"), dotted.moreBadge)
         assertEquals("", ChromeState.parse(shell(nine { "" }).put("allDot", JSONObject())).allDot)
         assertNull(ChromeState.parse(shell(nine { "" }).put("allDot", true)).allDot)
         val pressing = ChromeState.parse(shell(nine { if (it == 7) ""","badge":{"kind":"attention","label":"waiting"}""" else "" }).put("allDot", JSONObject().put("label", "x")))

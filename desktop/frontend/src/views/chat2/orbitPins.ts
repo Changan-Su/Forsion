@@ -60,11 +60,24 @@ const PINS_CHANGED = 'forsion:orbit-pins-changed'
 export function toggleStoredOrbitPin(key: string): boolean {
   const next = toggleOrbitPin(readOrbitPins(), key)
   writeOrbitPins(next)
-  if (typeof window !== 'undefined') window.dispatchEvent(new Event(PINS_CHANGED))
+  announceOrbitPins()
   return isOrbitPinned(next, key)
 }
 
-/** 存的那一份被列表之外的地方改了(toggleStoredOrbitPin):回调里重读。返回退订。 */
+/** 存的那一份刚被写过:喊一声,别处挂着的读者(列表、对话页的菜单)各自重读。放到下一个微任务 —— 列表是在 setState 的
+ *  回调里写的,当场喊会让听的人在 React 渲染半路 setState。 */
+export function announceOrbitPins(): void {
+  if (typeof window === 'undefined') return
+  queueMicrotask(() => window.dispatchEvent(new Event(PINS_CHANGED)))
+}
+
+/** 两份 Pin 是不是同一批条目、同样的时间(重读回来没变就不必换状态)。 */
+export function sameOrbitPins(a: Readonly<OrbitPinTimes>, b: Readonly<OrbitPinTimes>): boolean {
+  const keys = Object.keys(a)
+  return keys.length === Object.keys(b).length && keys.every((k) => a[k] === b[k])
+}
+
+/** 存的那一份被改了(toggleStoredOrbitPin / announceOrbitPins):回调里重读。返回退订。 */
 export function onOrbitPinsChanged(fn: () => void): () => void {
   if (typeof window === 'undefined') return () => {}
   window.addEventListener(PINS_CHANGED, fn)

@@ -160,6 +160,13 @@ describe('on a phone ⋯ holds only the page\'s own things: where the app-wide e
     expect(ids(moreItems(odd, true, PHONE))).toEqual(['rb-card', 'rb-widget'])
   })
 
+  it('a switch that carries a component stays in ⋯: the avatar menu draws an icon and a name, the component would be dropped', () => {
+    const list = ALL.map((i) => (i.id === 'rb-mode' ? rb('rb-mode', { component: () => null }) : i))
+    expect(ids(accountMenuItems(list, true, true))).toEqual(['rb-settings', 'rb-units', 'rb-cmd'])
+    expect(ids(allSheetItems(list, PHONE))).not.toContain('rb-mode')
+    expect(ids(moreItems(list, true, PHONE))).toEqual(['rb-mode'])
+  })
+
   it('command groups: on a phone a group with `when` is listed only while it answers true; elsewhere `when` is not asked', () => {
     let here = false
     let asked = 0

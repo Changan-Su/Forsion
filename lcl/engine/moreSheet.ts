@@ -26,11 +26,12 @@ const NO_SEATS: MoreSeats = { phone: false, allCell: false }
 const ACCOUNT_SWITCHES: ReadonlySet<string> = new Set(['rb-mode', 'rb-cmd'])
 const isAccountSwitch = (i: RibbonItem): boolean => i.side === 'bottom' && ACCOUNT_SWITCHES.has(i.id)
 
-/** 头像菜单替左栏底部那一排收下的 ribbon 项(原生底栏 × 有账号项);其余宿主形态为空。手机上再带两个全局开关,排在后面。 */
+/** 头像菜单替左栏底部那一排收下的 ribbon 项(原生底栏 × 有账号项);其余宿主形态为空。手机上再带两个全局开关,排在后面
+ *  (带 component 的不收:头像菜单只画图标和名字,组件里的东西会丢 —— 留在「⋯」)。 */
 export function accountMenuItems(all: readonly RibbonItem[], nativeSpaces: boolean, phone = false): RibbonItem[] {
   if (!nativeSpaces || !all.some((i) => i.id === 'rb-account')) return []
   const usable = all.filter((i) => !!i.onClick)
-  return [...usable.filter(isFootItem), ...(phone ? usable.filter((i) => !isFootItem(i) && isAccountSwitch(i)) : [])]
+  return [...usable.filter(isFootItem), ...(phone ? usable.filter((i) => !isFootItem(i) && isAccountSwitch(i) && !i.component) : [])]
 }
 
 /** 手机上从「⋯」挪进「全部」半屏最后一组的入口(见 MoreSeats 上方);不是手机或 Dock 没有「全部」格时为空。 */

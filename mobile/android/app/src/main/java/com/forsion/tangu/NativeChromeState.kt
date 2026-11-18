@@ -18,7 +18,8 @@ internal data class ChromeIcons(
  * (running / waiting for the user / unread); JS decides which one applies. `label` (translated by JS) is what a
  * screen reader announces — the dot itself says nothing.
  */
-internal data class ChromeBadge(val kind: Kind, val label: String) { enum class Kind { RUNNING, ATTENTION, UNREAD } }
+/** NOTICE = not a Space's own state: something reached through the "all" cell wants a look ([ChromeState.allDot]); drawn danger red, like the dot "More" carries. */
+internal data class ChromeBadge(val kind: Kind, val label: String) { enum class Kind { RUNNING, ATTENTION, UNREAD, NOTICE } }
 
 /**
  * One destination of the bottom navigation bar (a Space). Label translated by JS; icon serialized by JS.
@@ -115,8 +116,8 @@ internal data class ChromeState(
     }
     /** The Spaces behind the "all" cell. */
     val more: List<ChromeSpace> by lazy { val shown = dock.map { it.id }.toSet(); spaces.filterNot { it.id in shown } }
-    /** What the "all" cell shows: the most pressing dot of the Spaces behind it (see [pressing]), else [allDot] as an unread dot. */
-    fun allBadge(behind: List<ChromeSpace>): ChromeBadge? = pressing(behind) ?: allDot?.let { ChromeBadge(ChromeBadge.Kind.UNREAD, it) }
+    /** What the "all" cell shows: the most pressing dot of the Spaces behind it (see [pressing]), else [allDot] as a notice dot. */
+    fun allBadge(behind: List<ChromeSpace>): ChromeBadge? = pressing(behind) ?: allDot?.let { ChromeBadge(ChromeBadge.Kind.NOTICE, it) }
     val moreBadge: ChromeBadge? by lazy { allBadge(more) }
     /** Shell mode: whether the right capsule has anything in it ([rail] = the avatar stands in the rail, not here). */
     fun rightCapsule(rail: Boolean): Boolean = search.isNotBlank() || right || tabCount > 1 || moreButton || (!rail && account != null)
@@ -140,7 +141,7 @@ internal data class ChromeState(
 
         /** What an "all" cell shows for the Spaces behind it: the most pressing dot of any (waiting for the user > running > unread). */
         fun pressing(spaces: List<ChromeSpace>): ChromeBadge? =
-            spaces.mapNotNull { it.badge }.minByOrNull { listOf(ChromeBadge.Kind.ATTENTION, ChromeBadge.Kind.RUNNING, ChromeBadge.Kind.UNREAD).indexOf(it.kind) }
+            spaces.mapNotNull { it.badge }.minByOrNull { listOf(ChromeBadge.Kind.ATTENTION, ChromeBadge.Kind.RUNNING, ChromeBadge.Kind.UNREAD, ChromeBadge.Kind.NOTICE).indexOf(it.kind) }
         const val MAX_SPACES = 64 // = MAX_SPACES in mobile/src/nativeChrome.ts, which trims the list before sending
         const val MAX_AVATAR_CHARS = 131_072 // = MAX_AVATAR_CHARS in mobile/src/nativeChrome.ts (a 96px PNG stays far below)
         /** Largest picture side the bar decodes (JS sends 96px). A few KB of PNG can declare a canvas of gigabytes. */

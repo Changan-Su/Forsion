@@ -363,7 +363,7 @@ internal fun NativeSpaceBar(
     val view = LocalView.current
     val scheme = remember(theme) { theme.colorScheme() }
     val look = remember(theme, state.frosted) { CapsuleLook(theme, state.frosted) }
-    val cell = CellColors(Color(theme.accent), Color(theme.muted), Color(theme.warning), Color(theme.surface))
+    val cell = CellColors(Color(theme.accent), Color(theme.muted), Color(theme.warning), Color(theme.danger), Color(theme.surface))
     val motion = motionOn(theme)
     // the gesture below is started once (pointerInput(Unit)): it reads this, so Fade only turned on mid-session holds at once
     val motionNow by rememberUpdatedState(motion)
@@ -703,7 +703,7 @@ internal fun NativeSpaceRail(state: ChromeState, insets: Insets, onAll: () -> Un
     val density = LocalDensity.current
     val scheme = remember(theme) { theme.colorScheme() }
     val bg = Color(theme.background)
-    val cell = CellColors(Color(theme.accent), Color(theme.muted), Color(theme.warning), bg)
+    val cell = CellColors(Color(theme.accent), Color(theme.muted), Color(theme.warning), Color(theme.danger), bg)
     MaterialTheme(colorScheme = scheme) { Row(
         Modifier.fillMaxSize().background(bg).semantics { testTagsAsResourceId = true }.testTag("nativeChrome.rail"),
     ) {
@@ -772,7 +772,7 @@ private fun SpaceCells(
 }
 
 /** `bar` = what the dock is filled with (the ring around a badge dot is that colour). */
-private class CellColors(val accent: Color, val muted: Color, val warning: Color, val bar: Color)
+private class CellColors(val accent: Color, val muted: Color, val warning: Color, val danger: Color, val bar: Color)
 
 /** One cell of the dock / the rail: [icon] over [label]. The name is on screen for every cell, so it is also what a screen reader says. */
 @OptIn(ExperimentalFoundationApi::class)
@@ -836,9 +836,13 @@ private fun BadgeDot(kind: ChromeBadge.Kind, colors: CellColors, ring: Color, mo
             pulse
         }
         ChromeBadge.Kind.UNREAD -> 0.6f
-        ChromeBadge.Kind.ATTENTION -> 1f
+        ChromeBadge.Kind.ATTENTION, ChromeBadge.Kind.NOTICE -> 1f
     }
-    val color = if (kind == ChromeBadge.Kind.ATTENTION) colors.warning else colors.accent
+    val color = when (kind) {
+        ChromeBadge.Kind.ATTENTION -> colors.warning
+        ChromeBadge.Kind.NOTICE -> colors.danger
+        else -> colors.accent
+    }
     Dot(color.copy(alpha = alpha), ring, modifier.testTag("nativeChrome.badge"))
 }
 

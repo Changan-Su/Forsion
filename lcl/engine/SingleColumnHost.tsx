@@ -830,7 +830,7 @@ async function presentAllSpaces(tr: Tr): Promise<void> {
     id: `space:${sp.id}`, label: label(sp.name), icon: spaceTileIcon(sp), ...(sp.id === activeSpaceId ? { checked: true } : {}),
   })
   // 手机:原来「⋯」里的入口(商店、成就、反馈、首方的 Ribbon 入口…)在这里各出现一次,排在 Space 后面一组。
-  // 原生格子画不了红点:亮着的那格把红点的意思写成名字下面的一行(同「⋯」里那一行的做法)。
+  // 亮着红点的那格带上红点的意思(detail):原生格子在图标角上画一个点、读屏时念出来;网页那张写成名字下面的一行。
   const launchers = allSheetItems(useRibbonStore.getState().items, seatsNow())
   const out = await presentNativeMenu({
     title: tr(launchers.length ? 'lcl.mobile.allSpaces' : 'lcl.mobile.allSpacesTitle'),
@@ -902,7 +902,12 @@ async function presentNativeMore(tr: Tr): Promise<boolean> {
   if (!id) return true
   if (id === NEW_TAB) { newMainTab(); return true }
   // 页面自己的项:只跑呈现时的那一行(半屏开着期间人不会换页;视图重渲换了一份同 id 的行,呈现的这份仍是它当时的处理器)。
-  if (id.startsWith(PAGE_ROW)) { page.find((a) => a.id === id.slice(PAGE_ROW.length))?.run(); return true }
+  // 找不到就往下走:没处去的 ribbon 项也在这张半屏里,它的 id 是注册方起的,可能恰好以同样的前缀开头。
+  const row = id.startsWith(PAGE_ROW) ? page.find((a) => a.id === id.slice(PAGE_ROW.length)) : undefined
+  if (row) {
+    try { row.run() } catch (e) { console.error('[lcl] page action failed:', row.id, e) }
+    return true
+  }
   if (id.startsWith('cmd:')) {
     // 只执行呈现时的那条命令:半屏开着期间同 id 被重注册成别的处理器(插件重载)→ 不执行(见 presentedCommand)。
     const cmdId = id.slice('cmd:'.length)
@@ -1120,6 +1125,8 @@ export const SingleColumnHost: React.FC<{ dark?: boolean; soft?: boolean; buildD
     void presentNativeTabs(trRef.current).then((ok) => { if (!ok) setTabsOpen(true) })
   }
   const openMore = (): void => {
+    // 这一页没有东西可列(状态里是 more:false):新宿主不画这颗钮;不认这个字段的旧宿主照旧画着,点了不开一张空半屏。
+    if (!moreShown()) return
     if (!nativeSheetPresenter()) { setMoreOpen(true); return }
     void presentNativeMore(trRef.current).then((ok) => { if (!ok) setMoreOpen(true) })
   }

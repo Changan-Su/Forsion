@@ -6,7 +6,7 @@
  * (CommandContribution.hotkey)的生效与否取决于别的命令和用户覆盖 —— 那两样一变就得重判。重判的结果没变就不碰命令表;
  * 变了才整块按插件表顺序重加。监听别的命令时把插件这一块排除在外,桥自己写命令表不会再触发重判(不会转个不停)。
  */
-import { addCommand, effectiveHotkey, isMacPlatform, removeCommand, useCommandStore, useShortcuts, useSpaceStore, useWorkspace } from '@lcl/engine'
+import { addCommand, effectiveHotkey, isMacPlatform, listFirstNow, removeCommand, useCommandStore, useShortcuts, useSpaceStore, useWorkspace } from '@lcl/engine'
 import type { Command } from '@lcl/engine'
 import { usePluginStore } from '@amadeus/plugins/pluginStore'
 import type { AmadeusPlugin, CommandContribution } from '@amadeus/plugins/types'
@@ -23,7 +23,10 @@ const engineId = (pluginId: string, id: string): string => `amadeus:${pluginId}:
  *  插件 id 用生效的那个(商店安装是 `market-<UUID>`),和 Space / 视图登记时用的是同一个。 */
 export function pluginOwnsPage(pluginId: string): boolean {
   if (pluginSpaceOwner.get(useSpaceStore.getState().activeSpaceId) === pluginId) return true
-  const ws = useWorkspace.getState() as { getActiveLeaf?: () => { type: string } | null }
+  const ws = useWorkspace.getState() as { getActiveLeaf?: () => { type: string } | null; leftVisible?: boolean }
+  // 两级导航停在列表层:屏上是那张列表,主区的视图压在它后面看不见 —— 别人 Space 的列表不算这个插件的页面
+  // (和外壳取「这一页自己的项」用的是同一个判断,见 SingleColumnHost 的 moreModel)。
+  if (listFirstNow() && ws.leftVisible) return false
   return !!ws.getActiveLeaf?.()?.type.startsWith(`plugin:${pluginId}:`)
 }
 
