@@ -8,7 +8,7 @@
  *    GitHub = 该 tag 的 latest*.yml(generic);官网 = WebsiteUpdateProvider(Windows 标准包、官网记录带 sha512 才有)。
  *    一边下不动(出错 / 30 秒没进度)自动换另一边一次;下载中也能手动换。electron-updater 现在只管下载和安装,不再决定有没有新版。
  *  - macOS:当前运行的包是 Developer ID 签名、且 .app 所在目录可写(macSelfUpdate.ts 探一次)→ 和 Windows / Linux 一样
- *    electron-updater 下 zip(latest-mac.yml,只从 GitHub:官网只收 .dmg)→「重启并安装」时先让 Squirrel.Mac 取包验签
+ *    electron-updater 下 zip(latest-mac.yml,只在 GitHub 上;官网只收 .dmg,所以该先走官网的大陆用户照旧从官网开 .dmg)→「重启并安装」时先让 Squirrel.Mac 取包验签
  *    (prepareInstall),成了才停后端、quitAndInstall。ad-hoc 签名的旧包 / 从 .dmg 里直接跑 / 任何一步失败 →
  *    退回老路:「下载安装包」在浏览器里直接开这一版 .dmg 的链接,装由用户自己拖。
  *
@@ -359,7 +359,9 @@ async function runCheck(): Promise<UpdaterStatus> {
       return lastStatus
     }
     target = { version: latest.version, site: latest.site, order: sourceOrder(source, source === 'auto' ? await detectMainland() : null) }
-    if (!(await selfInstallable())) { // mac 只能手动装(ad-hoc 旧包等)
+    // mac 只能手动装(ad-hoc 旧包等);或者这次该先走官网(大陆 / 选了官网 / 地区没探出来)而官网给不了 zip ——
+    // 官网只收 .dmg,那就照旧从官网开 .dmg,不为了自装绕去 GitHub(下载源按地区是 10-19 定的口径)。
+    if (!(await selfInstallable()) || (process.platform === 'darwin' && target.order[0] === 'website' && !feedFor('website'))) {
       announceAvailable(latest.version, latest.notes, { ...manualMacSource(latest.version), manualInstall: true })
       return lastStatus
     }

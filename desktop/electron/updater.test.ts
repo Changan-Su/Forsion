@@ -17,6 +17,7 @@ const updater = vi.hoisted(() => ({
   /** 钉过去拉 yml 失败(例:这一版 GitHub 上没有 latest-mac.yml) */
   checkFails: false,
   relaunched: 0,
+  sourcePref: 'auto',
 }))
 const emitNative = (name: string, ...args: any[]) => { for (const cb of [...(updater.native.get(name) ?? [])]) cb(...args) }
 vi.mock('electron', () => ({
@@ -54,7 +55,7 @@ vi.mock('./websiteUpdateProvider', () => ({ WebsiteUpdateProvider: class {} }))
 vi.mock('./forsionHome', () => ({ forsionHomeDir: () => '/nonexistent-forsion-updater-test' }))
 vi.mock('node:fs/promises', async importOriginal => ({
   ...await importOriginal<typeof import('node:fs/promises')>(),
-  readFile: async () => JSON.stringify({ updater: { beta: updater.beta } }),
+  readFile: async () => JSON.stringify({ updater: { beta: updater.beta, source: updater.sourcePref } }),
 }))
 
 const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
@@ -66,7 +67,7 @@ beforeEach(() => {
   updater.events.clear(); updater.feeds.length = 0; updater.sent.length = 0; updater.download.length = 0; updater.reject = false; answers.clear()
   updater.beta = false; updater.current = '2.13.3'
   updater.macSelf = { ok: false, reason: 'not-developer-id' }; updater.quitAndInstall.mockClear(); updater.native.clear()
-  updater.squirrel = 'update-downloaded'; updater.opened.length = 0; updater.checkFails = false; updater.relaunched = 0
+  updater.squirrel = 'update-downloaded'; updater.opened.length = 0; updater.checkFails = false; updater.relaunched = 0; updater.sourcePref = 'auto'
   Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
   vi.stubGlobal('fetch', vi.fn(async (url: string) => {
     for (const [k, v] of answers) if (url.includes(k)) return json(v)
@@ -247,11 +248,11 @@ it('ad-hoc mac: offers the .dmg in the browser and never pins electron-updater',
   expect(updater.opened).toEqual(['https://forsion.net/api/website/download/macos'])
 })
 
-it('Developer ID mac: downloads the zip feed from GitHub (never the website dmg), stages Squirrel, then quits and installs', async () => {
+it('Developer ID mac abroad: downloads the zip feed from GitHub, stages Squirrel, then quits and installs', async () => {
   onMac()
   updater.macSelf = { ok: true, reason: 'developer-id' }
   answers.set('/website/config', mac({ sha512: 'abc==' }))
-  answers.set('/auth/region', { country: 'CN', mainland_china: true })
+  answers.set('/auth/region', { country: 'GB', mainland_china: false })
   const { checkForUpdates, downloadUpdate, canInstallUpdate, prepareInstall, installUpdate, openUpdateInstaller, getUpdaterStatus } = await import('./updater')
   expect(await checkForUpdates()).toMatchObject({ phase: 'available', source: 'github', manualInstall: false })
   expect(updater.feeds).toEqual([{ provider: 'generic', url: 'https://github.com/Changan-Su/Forsion/releases/download/v2.13.4' }])
@@ -288,16 +289,35 @@ it('Developer ID mac: a Squirrel signature rejection falls back to the .dmg befo
   expect(await checkForUpdates()).toMatchObject({ phase: 'available', manualInstall: true })
 })
 
-it('Developer ID mac: a stalled GitHub download falls back to the website .dmg in mainland instead of a dead error', async () => {
+it.each([
+  ['mainland', { country: 'CN', mainland_china: true }, 'auto'],
+  ['unknown region', undefined, 'auto'],
+  ['website chosen abroad', { country: 'GB', mainland_china: false }, 'website'],
+])('Developer ID mac, %s: follows the website, which only has the .dmg, and never detours to GitHub', async (_name, region, source) => {
+  onMac()
+  updater.macSelf = { ok: true, reason: 'developer-id' }
+  updater.sourcePref = source
+  answers.set('/website/config', mac({ sha512: 'abc==' }))
+  if (region) answers.set('/auth/region', region)
+  const { checkForUpdates, downloadUpdate, openUpdateInstaller } = await import('./updater')
+  expect(await checkForUpdates()).toMatchObject({ phase: 'available', source: 'website', size: 200, manualInstall: true })
+  expect(updater.feeds).toEqual([])
+  await downloadUpdate()
+  expect(updater.feeds).toEqual([])
+  expect(await openUpdateInstaller()).toBe(true)
+  expect(updater.opened).toEqual(['https://forsion.net/api/website/download/macos'])
+})
+
+it('Developer ID mac abroad: a stalled GitHub download falls back to the .dmg instead of a dead error', async () => {
   onMac()
   updater.macSelf = { ok: true, reason: 'developer-id' }
   answers.set('/website/config', mac())
-  answers.set('/auth/region', { country: 'CN', mainland_china: true })
+  answers.set('/auth/region', { country: 'GB', mainland_china: false })
   updater.download.push(async () => { throw new Error('ECONNRESET') })
   const { checkForUpdates, downloadUpdate, getUpdaterStatus } = await import('./updater')
   await checkForUpdates()
   await downloadUpdate()
-  expect(getUpdaterStatus()).toMatchObject({ phase: 'available', source: 'website', manualInstall: true, selfInstallFailed: true })
+  expect(getUpdaterStatus()).toMatchObject({ phase: 'available', source: 'github', manualInstall: true, selfInstallFailed: true })
 })
 
 it('Developer ID mac: a release without latest-mac.yml on GitHub still offers the .dmg', async () => {
