@@ -1,0 +1,54 @@
+/* 页内目录块(```toc,TocBlock.tsx,挂在嵌入层的 widget 里)。
+   宿主 <pre> 退回正文排版:代码块的等宽字、0.86em、底色、内边距都不要。只认嵌入层接手时才有的 unified-embed-host ——
+   `</>` 露源码时它不在,块照常是一个代码块。按属性认语言,不用 :has()(DESIGN §7.10)。 */
+.am-app .milkdown .ProseMirror pre.unified-embed-host[data-language="toc"] {
+  padding: 0;
+  background: transparent;
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+  overflow: visible;
+}
+.am-app .milkdown .ProseMirror pre.unified-embed-host[data-language="toc"] > code {
+  font-family: inherit;
+  font-size: inherit;
+  white-space: normal;
+  overflow: visible;
+}
+
+.amx-toc {
+  display: block;
+  padding: 2px 0;
+}
+/* 一条一行:字号随正文,次级字色 + 一道细下划线(只画在字下面),缩进一级 1.5em。整行可点、悬停整行浅底。
+   (0,4,1) 压过正文链接的 `.am-app .milkdown .ProseMirror a`(强调色 + 下划线)。 */
+.am-app .milkdown .ProseMirror a.amx-toc-item {
+  display: block;
+  padding-block: 5px;
+  padding-inline: calc(var(--toc-depth, 0) * 1.5em + 2px) 2px;
+  border-radius: var(--radius-sm, 6px);
+  color: var(--text-muted);
+  line-height: 1.5;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background-color var(--dur-fast, 120ms) ease, color var(--dur-fast, 120ms) ease;
+}
+.am-app .milkdown .ProseMirror a.amx-toc-item:hover {
+  background: var(--overlay-subtle);
+  color: var(--text);
+}
+.am-app .milkdown .ProseMirror a.amx-toc-item:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
+}
+.amx-toc-text {
+  border-bottom: 1px solid var(--border);
+}
+.amx-toc-empty {
+  padding: 5px 2px;
+  color: var(--text-faint);
+  line-height: 1.5;
+}
+@media (prefers-reduced-motion: reduce) {
+  .am-app .milkdown .ProseMirror a.amx-toc-item { transition: none; }
+}

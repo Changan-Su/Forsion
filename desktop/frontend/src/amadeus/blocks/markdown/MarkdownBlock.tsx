@@ -121,6 +121,8 @@ import { tagPillPlugin } from './tagPill'
 import { editorFocusPlugin, editorFocused } from './editorFocus'
 import { retargetWikiInner } from './wikiRetarget'
 import { BLANK_BUTTON_BLOCK } from '../button/format'
+import { TOC_FENCE } from '@amadeus-shared/tocBlock'
+import { TableOfContents } from 'lucide-react'
 import { newDocAgentSpec, serializeDocAgentSpec } from '../documentAgent/format'
 import { emptyTaskRemark, taskCheckboxPlugin } from './taskList'
 import { calloutPlugin, calloutTitleRemark, handleFoldKeyDown, unescapeCalloutToken } from './callout'
@@ -190,6 +192,7 @@ registerMessages({
   'mdblock.slash.code': { zh: '代码块', en: 'Code block' },
   'mdblock.slash.table': { zh: '表格', en: 'Table' },
   'mdblock.slash.divider': { zh: '分割线', en: 'Divider' },
+  'mdblock.slash.toc': { zh: '目录', en: 'Table of contents' },
   'mdblock.slash.math': { zh: '数学公式', en: 'Equation' },
   'mdblock.slash.wikilink': { zh: '链接笔记', en: 'Link to note' },
   'mdblock.slash.image': { zh: '图片', en: 'Image' },
@@ -2605,6 +2608,9 @@ export const SLASH_ITEMS: SlashSeed[] = [
   { key: 'code', labelKey: 'mdblock.slash.code', hint: '```', icon: <CodeBlockIcon />, groupKey: 'mdblock.group.advanced', scaffold: '```\n\n```', kw: 'code 代码 daima codeblock' },
   { key: 'table', labelKey: 'mdblock.slash.table', hint: '⊞', icon: <TableIcon />, groupKey: 'mdblock.group.advanced', scaffold: tableScaffold, kw: 'table 表格 biaoge grid 网格' },
   { key: 'divider', labelKey: 'mdblock.slash.divider', hint: '---', icon: <DividerIcon />, groupKey: 'mdblock.group.advanced', scaffold: '---\n\n', kw: 'divider hr 分割线 分隔 fenge' },
+  // 页内目录块:整块型,插入的就是 ```toc + 两行范围(Obsidian Dynamic Table of Contents 认的写法),嵌入层渲染成本页标题列表。
+  // v3 宿主没有嵌入层(插进去只是一段代码)→ 只给 v4。kw 的 `tableofcontents` 让中文界面打 /table of contents 也能搜到(查询里的空格会被去掉)。
+  { key: 'toc', labelKey: 'mdblock.slash.toc', hint: '```toc', icon: <TableOfContents size="1em" strokeWidth={1.6} />, groupKey: 'mdblock.group.advanced', scaffold: TOC_FENCE, kw: 'toc tableofcontents table-of-contents contents 目录 mulu ml', unifiedOnly: true },
   // 单行 $$  $$(两 delimiter 同处一个 textblock,填内容即渲染为居中块公式)。旧的 '$$\n\n$$' 会被 commonmark
   // 拆成两个段落、每段只剩一个 $$ → 实况预览永远扫不到成对公式(见 mathLivePreview.scanMath)。
   { key: 'math', labelKey: 'mdblock.slash.math', hint: '$$', icon: <TeXIcon />, groupKey: 'mdblock.group.advanced', scaffold: '$$  $$', kw: 'math latex katex formula 数学 公式 gongshi' },

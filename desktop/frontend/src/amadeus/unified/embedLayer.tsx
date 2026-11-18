@@ -2,7 +2,7 @@
 // v3 的八类块级嵌入全部住在 BlockHost(React/每块一宿主),unified 一类都没有 —— 本层用
 // **装饰 widget + createRoot** 把 v3 组件原样桥进单实例:
 //   整段只有一条 `![[…]]` 的段落(db/画板/插件/文件/PDF/跨笔记)、裸 URL 段落(书签卡)、
-//   ```forsion-button``` 代码块(按钮块)。图片形态**不在本层**(wikilink.ts 行内 widget 已渲染,
+//   ```forsion-button``` 代码块(按钮块)、```toc``` 代码块(页内目录块)。图片形态**不在本层**(wikilink.ts 行内 widget 已渲染,
 //   段落独占时由 CSS 放大成块级观感,见 styles.css)。
 // 交互契约(advisor 判别面):节点仍是普通段落/代码块 —— ⠿ 把手/拖拽/删除/撤销全部原生。源码怎么露,分两类:
 //  · **文件引用** `![[…]]`(文件 / PDF / 音视频 / 多维表 / 白板 / 插件文件 / 跨笔记;图片不在本层)= Obsidian 的光标逻辑
@@ -39,6 +39,8 @@ import { BookmarkCard } from '../components/BookmarkCard'
 import { MediaPlayer } from '../components/MediaPlayer'
 import { WebEmbed } from '../components/WebEmbed'
 import { ButtonBlock } from '../blocks/button/ButtonBlock'
+import { TocBlock, type TocDocSource } from '../blocks/toc/TocBlock'
+import { TOC_LANG } from '@amadeus-shared/tocBlock'
 import { DocumentAgentBlock } from '../blocks/documentAgent/DocumentAgentBlock'
 import { parseDocAgentSpec, serializeDocAgentSpec, type DocAgentSpec, type DocumentAgentKind } from '../blocks/documentAgent/format'
 import { readTangu } from '../plugins/tanguSeam'
@@ -118,6 +120,8 @@ export type EmbedKind =
   | { k: 'document-agent'; type: DocumentAgentKind; src: string; activeInstructions?: boolean }
   /** ```forsion-intelligent-ui-html(旧名 forsion-sketch)交互块:HTML 交给对话 sketch 卡同一沙箱(blocks/sketch/format.ts)。 */
   | { k: 'sketch'; src: string }
+  /** ```toc 页内目录块(选项见 @amadeus-shared/tocBlock):列本页标题,跟着别处的标题变(订阅文档,不靠本块重渲染)。 */
+  | { k: 'toc'; src: string }
 
 /** 段落/代码块 → 嵌入类别(不是嵌入 → null)。图片形态刻意返回 null(wikilink 行内层负责)。 */
 export function classifyEmbed(node: ProseNode): EmbedKind | null {
@@ -126,6 +130,8 @@ export function classifyEmbed(node: ProseNode): EmbedKind | null {
     if (type && (type === 'instructions' || parseDocAgentSpec(node.textContent))) return { k: 'document-agent', type, src: node.textContent }
     // 空的交互块不认领:源码还露着,才写得进去(和按钮块坏 JSON 回落同理)。
     if (isSketchLang(node.attrs.language)) return node.textContent.trim() ? { k: 'sketch', src: node.textContent } : null
+    // 目录块任何内文都有效(不认识的行忽略、没写范围按 H1–H3),所以恒认领 —— 空块也渲染成目录。
+    if (node.attrs.language === TOC_LANG) return { k: 'toc', src: node.textContent }
     if (node.attrs.language !== 'forsion-button') return null
     // JSON 写坏了 = 不归按钮(R-13):回落成普通代码块,源码原样露出、照常可改(button/format.ts 的契约)。
     // 此前照样认领,渲染期解析失败只给一个空 <span/> —— 整块高 0、源码被藏、`</>` 浮不出来,只剩撤销能救。
@@ -179,6 +185,23 @@ export function classifyEmbed(node: ProseNode): EmbedKind | null {
     return { k: 'file', name: t, fileKind: PDF_EXT_RE.test(t) ? 'pdf' : 'other', w: embedWidthOf(target) }
   }
   return { k: 'note', target }
+}
+
+/** 刚插进来的块级嵌入(`/目录` 这类整块型)把光标留在了它**藏着的源码**里:接着打的字要么进源码(落盘却看不见),
+ *  要么被方向键 / 输入层推进下一块的开头(并进下面那个标题)。挪到紧随其后的空段落里 —— 没有就补一个(Notion 插完目录块同样另起一行)。
+ *  光标不在难源码嵌入块里 = 什么都不做。 */
+export function caretBelowEmbed(view: EditorView): void {
+  const { $from } = view.state.selection
+  if ($from.depth < 1 || !$from.parent.isTextblock || !classifyEmbed($from.parent) || isSoftSourceEmbed($from.parent)) return
+  const after = $from.after()
+  const next = view.state.doc.nodeAt(after)
+  const para = view.state.schema.nodes.paragraph
+  const tr = view.state.tr
+  if (!(next?.type === para && next.content.size === 0)) {
+    if (!para || !$from.node(-1).canReplaceWith($from.index(-1) + 1, $from.index(-1) + 1, para)) return
+    tr.insert(after, para.create())
+  }
+  view.dispatch(tr.setSelection(TextSelection.create(tr.doc, after + 1)).scrollIntoView())
 }
 
 /** 源码按 Obsidian 的光标逻辑显隐的类别:`![[…]]` 形态的文件引用。要收窄 / 放宽只改这一张表。 */
@@ -353,9 +376,11 @@ function CrossNoteEmbed({ target, pagePath, readOnly }: { target: string; pagePa
   )
 }
 
-function EmbedBody({ kind, pagePath, replaceText, insertAfter, startTask, onOpen, readOnly = false }: {
+function EmbedBody({ kind, pagePath, replaceText, insertAfter, startTask, onOpen, toc, readOnly = false }: {
   kind: EmbedKind
   pagePath: string
+  /** 目录块读文档 / 订阅变化 / 跳转那一面(只有 toc 用)。 */
+  toc: TocDocSource
   /** 与右上角「打开」键同一个动作(文件卡整张点击用);缺 = 这类嵌入不给打开。 */
   onOpen?: (newTab: boolean) => void
   startTask: (spec: DocAgentSpec, mode: 'task' | 'prompt') => Promise<{ sessionId?: string }>
@@ -411,6 +436,9 @@ function EmbedBody({ kind, pagePath, replaceText, insertAfter, startTask, onOpen
     }
     case 'sketch':
       return <SketchCards items={[{ callId: 'note-sketch', html: kind.src }]} />
+    case 'toc':
+      // 只读页照样列、照样能点跳转(跳转不改文档)。
+      return <TocBlock src={kind.src} source={toc} />
   }
 }
 
@@ -524,12 +552,26 @@ export function createEmbedLayer(opts: {
   alive?: () => boolean
   /** 右上角「打开」键的落点(newTab = ⌘/Ctrl+点击)。宿主传本面板 store 的 openWikiLink,与点双链同一口径;缺省走活动面板。 */
   open?: (target: string, o?: { newTab?: boolean }) => void
+  /** 跳转落点闪一下(目录块点条目后;宿主传 flashCiteTip,与大纲 / 引用跳转同一片覆盖层)。 */
+  flash?: (rect: DOMRect) => void
 }): MilkdownPlugin[] {
   const plugin = $prose(() => {
     const key = embedSourceKey
     const roots = new Map<string, WidgetEntry>() // key → 活 widget(同 key 复用,PM 不重建 DOM)
     // Async tasks follow the original node, never a later copy with the same persisted ID.
     const taskSources = new Set<{ from: number; to: number; deleted: boolean }>()
+    // 目录块订阅「文档变了」:装饰快路径下 widget 不重渲染(别处标题改了,本块文字没变),它得自己知道。
+    // 和 roots 同寿命:插件视图原地重配(拆了又建)时订阅不断。
+    const docListeners = new Set<() => void>()
+    const tocSource: TocDocSource = {
+      doc: () => viewRef?.state.doc ?? null,
+      subscribe: (fn) => {
+        docListeners.add(fn)
+        return () => { docListeners.delete(fn) }
+      },
+      nodeDom: (pos) => viewRef?.nodeDOM(pos) ?? null,
+      flash: (rect) => opts.flash?.(rect),
+    }
 
     // 插件后注册的嵌入渲染器只在下一次整篇重建时生效;快路径看到表换了就不走捷径。
     let builtWith = usePluginStore.getState().embedRenderers
@@ -745,6 +787,7 @@ export function createEmbedLayer(opts: {
                     } finally { taskSources.delete(source) }
                   }}
                   replaceText={replaceText}
+                  toc={tocSource}
                 />
                 </HostLocaleProvider>,
               )
@@ -835,6 +878,9 @@ export function createEmbedLayer(opts: {
       view: (v) => {
         viewRef = v
         return {
+          update: (view, prev) => {
+            if (view.state.doc !== prev.doc) for (const fn of docListeners) fn()
+          },
           destroy: () => {
             for (const source of taskSources) source.deleted = true
             viewRef = null
