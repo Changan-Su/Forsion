@@ -628,6 +628,138 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
   transform: scaleY(1.08);
 }
 
+/* ── 图片工具条 · 说明 · 两侧把手(2026-11-17 Notion 对齐第 4 条;imageToolbar.ts / mdImage.ts) ──
+   `![](…)` 图片的包裹层带 .amx-img-md。图片在包裹层里的位置由 mdImage.layout 写成 --amx-img-top / -mid / -h:
+   说明行、源码行会把包裹层撑高,把手与工具条要按**图片**定位,不按包裹层。 */
+.am-app .amx-img-resize--left { right: auto; left: -7px; }
+.am-app .amx-img-md > .amx-img-resize {
+  top: var(--amx-img-mid, 50%);
+  max-height: calc(var(--amx-img-h, 100%) * 0.58);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--duration-fast, 0.14s) ease;
+}
+.am-app .amx-img-md:hover > .amx-img-resize,
+.am-app .amx-img-md[data-selected] > .amx-img-resize,
+.am-app .amx-img-md[data-resizing] > .amx-img-resize { opacity: 1; pointer-events: auto; }
+.am-app .amx-img-md[data-ro] > .amx-img-resize { display: none; }
+/* 说明:图下灰字。width:0 + min-width:100% —— 不把 inline-block 包裹层撑得比图宽(撑宽了右把手就离开图片边缘);
+   左 / 中 / 右跟着这一段的对齐走(text-align 继承)。为空 hidden,不占位。 */
+.am-app .wiki-inline-img-wrap > .amx-img-cap,
+.am-app .wiki-inline-img-wrap > .amx-img-capline {
+  display: block;
+  box-sizing: border-box;
+  width: 0;
+  min-width: 100%;
+  margin: 6px 0 0;
+  padding: 0;
+  font-size: 0.875em;
+  line-height: 1.5;
+  color: var(--text-muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.am-app .wiki-inline-img-wrap > .amx-img-cap[hidden] { display: none; }
+.am-app .wiki-inline-img-wrap > .amx-img-capline {
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font-family: inherit;
+  text-align: inherit;
+  caret-color: var(--primary, var(--accent, currentColor));
+}
+.am-app .wiki-inline-img-wrap > .amx-img-capline::placeholder { color: var(--text-faint); }
+/* 悬停工具条:浮在图片右上角(图窄于工具条时 mdImage 打 data-tb-out,挪到图片上方,按段落对齐靠边)。
+   表面读浮层 token(DESIGN §3「浮层表面」);包裹层 line-height:0,这里要回来。 */
+.am-app .wiki-inline-img-wrap > .amx-img-tb {
+  position: absolute;
+  top: calc(var(--amx-img-top, 0px) + 8px);
+  right: 8px;
+  z-index: var(--z-view-float);
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  padding: 3px;
+  line-height: var(--ui-line-body, 1.4);
+  white-space: nowrap;
+  color: var(--text-muted);
+  background: var(--surface-menu, var(--bg-card)); backdrop-filter: var(--surface-blur, none);
+  border: var(--border-width) solid var(--surface-edge, var(--border));
+  border-radius: var(--radius-md);
+  box-shadow: var(--card-shadow);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--duration-fast, 0.14s) ease;
+}
+.am-app .wiki-inline-img-wrap:hover > .amx-img-tb,
+.am-app .wiki-inline-img-wrap[data-tb-menu] > .amx-img-tb,
+.am-app .wiki-inline-img-wrap > .amx-img-tb:focus-within { opacity: 1; pointer-events: auto; }
+.am-app .wiki-inline-img-wrap[data-resizing] > .amx-img-tb { opacity: 0; pointer-events: none; }
+.am-app .wiki-inline-img-wrap[data-tb-out] > .amx-img-tb { top: auto; bottom: calc(100% - var(--amx-img-top, 0px) + 6px); }
+.am-app .wiki-inline-img-wrap[data-tb-out='left'] > .amx-img-tb { right: auto; left: 0; }
+.am-app .wiki-inline-img-wrap[data-tb-out='center'] > .amx-img-tb { right: auto; left: 50%; translate: -50% 0; }
+.am-app .wiki-inline-img-wrap[data-tb-out='right'] > .amx-img-tb { right: 0; }
+:is(.am-app, .amx-img-sheet) .amx-img-tb-btn {
+  display: inline-flex;
+  flex: 0 1 auto;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+:is(.am-app, .amx-img-sheet) .amx-img-tb-btn:hover { background: var(--menu-hover); color: var(--text); }
+:is(.am-app, .amx-img-sheet) .amx-img-tb-btn[aria-pressed='true'] { background: var(--overlay-medium); color: var(--text); }
+:is(.am-app, .amx-img-sheet) .amx-img-tb-btn:focus-visible { outline: calc(2 * var(--focus-ring, 1px)) solid var(--sel-line, var(--primary)); outline-offset: -1px; }
+:is(.am-app, .amx-img-sheet) .amx-img-tb-btn[hidden],
+:is(.am-app, .amx-img-sheet) .amx-img-tb-sep[hidden] { display: none; }
+:is(.am-app, .amx-img-sheet) .amx-img-tb-src { width: auto; min-width: 28px; padding: 0 6px; font-family: var(--font-mono, ui-monospace, monospace); font-size: var(--ui-font-meta, 12px); }
+:is(.am-app, .amx-img-sheet) .amx-img-tb-sep { flex: none; width: 1px; height: 16px; margin: 0 3px; background: var(--border); }
+/* ⋯ 菜单(.ctx-menu 外壳):hover 摆法挂在包裹层里、absolute 贴工具条下沿(mdImage 算 top / right);
+   不做工具条的后代 —— 工具条读了 --surface-blur,会成为后代的包含块 / backdrop 根。 */
+.am-app .wiki-inline-img-wrap > .amx-img-more--hover { position: absolute; z-index: var(--z-menu); }
+:is(.am-app, .amx-img-sheet) .amx-img-more { font-family: var(--font-ui); line-height: var(--menu-line-height, 1.4); white-space: nowrap; }
+/* 粗指针没有悬停:包裹层里那条不出,改由选中时贴底的 .amx-img-sheet(挂在 body 下,所以选择器不带 .am-app)。 */
+@media (pointer: coarse) {
+  .am-app .wiki-inline-img-wrap > .amx-img-tb { display: none; }
+}
+.amx-img-sheet {
+  position: fixed;
+  left: 12px;
+  right: 12px;
+  bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+  z-index: var(--z-window-float);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  pointer-events: none;
+}
+.amx-img-sheet > * { pointer-events: auto; }
+.amx-img-sheet > .amx-img-tb {
+  display: flex;
+  align-items: center;
+  max-width: 100%;
+  box-sizing: border-box;
+  gap: 1px;
+  padding: 3px;
+  color: var(--text-muted);
+  background: var(--surface-menu, var(--bg-card)); backdrop-filter: var(--surface-blur, none);
+  border: var(--border-width) solid var(--surface-edge, var(--border));
+  border-radius: var(--radius-pill, 999px);
+  box-shadow: var(--card-shadow);
+}
+.amx-img-sheet .amx-img-tb-btn { width: 40px; min-width: 30px; height: 40px; border-radius: var(--radius-pill, 999px); }
+.amx-img-sheet .amx-img-more--sheet { position: static; }
+.amx-img-sheet .amx-img-more--sheet button { min-height: 44px; }
+
 /* 折叠块 `[!fold]`(`>` 空格触发):Notion 手感 —— 不做成有色标注框,只留 chevron + 标题,
    内容左缩进一个层级。落盘仍是标准的 Obsidian 折叠 callout,Obsidian 里能原生折叠。 */
 .am-app .milkdown .ProseMirror blockquote.callout-fold {

@@ -1215,7 +1215,12 @@ export function MilkdownInner({
         },
       })))
       .use(tagPillPlugin()) // 正文 #标签 → 可点胶囊(光标行露源码;零 schema,L-14)
-      .use(mdImagePlugin()) // `![](path)` 图片(粘贴/上传形态)= 可选中 + 右缘缩放把手,与 `![[x|200]]` 同手感
+      // `![](path)` 图片(粘贴/上传形态)= 可选中 + 两侧缩放把手 + 悬停工具条(对齐 / 说明 / 替换 / 全屏 / 下载 / `</>` / ⋯)。
+      // 替换走与粘贴同一条 saveImage;复制图片 = 块菜单那份 copySelectedImage。都读 ref:换笔记不重建编辑器。
+      .use(mdImagePlugin({
+        saveImage: (f) => saveImageRef.current(f),
+        copyImage: (v) => (pagePathRef.current ? copySelectedImage(v, pagePathRef.current) : Promise.resolve(false)),
+      }))
       .use(wikiSuggestPlugin((q, blurred) => {
         if (!q) {
           if (!blurred) wikiDismissedFrom.current = null // 失焦只藏面板,Esc 闩锁留着(同 @,L-04)
