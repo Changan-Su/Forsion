@@ -125,7 +125,7 @@ const EFFORT_PRO: LevelMap = {
 /** gpt-5.6 起的公开 API:'max' 是真档(5.5 的档表到 xhigh 为止)。 */
 const EFFORT_FULL_MAX: LevelMap = { ...EFFORT_FULL, max: 'max' };
 
-/** GPT-6 Astra / GPT-6.1 Sol 只支持 low/medium/high/xhigh/max,不可关闭思考,也不支持 minimal(6.1 Terra 不在此列,见 EFFORT_GPT6)。 */
+/** GPT-6 Astra / GPT-6.1 Sol / GPT-6.2 Sol·Astra 只支持 low/medium/high/xhigh/max,不可关闭思考,也不支持 minimal(6.1 Terra 不在此列,见 EFFORT_GPT6)。 */
 const EFFORT_ASTRA: LevelMap = { ...EFFORT_FULL_MAX, off: null, minimal: null };
 
 /**
@@ -349,7 +349,8 @@ const CLAUDE_ALWAYS_ON_CAP: Omit<ModelCapability, 'rule'> = { ...CLAUDE_ADAPTIVE
  * 不收(normalizeThinkingLevel 把 ultra 归到 max)。
  */
 const GPT6_ASTRA = /^gpt-6-astra$/i;
-const GPT61_SOL = /^gpt-6\.1-sol$/i;
+// 6.2 Sol / Astra 同表(11-17 后端 400 原文:二者都只认 low/medium/high/xhigh/max,none 与 minimal 均拒;官方模型页也写明拒 none)。
+const GPT61_SOL = /^gpt-6\.(1-sol|2-(sol|astra))$/i;
 const GPT6_SOL_LUNA = /^gpt-6(-(sol|luna)|\.1-terra)$/i; // 含 6.1 Terra:档位与 Sol/Luna 同,不随 6.1 Sol
 
 // 官方迁移指南要求带工具时走 Responses,并移除 temperature/top_p/top_logprobs。

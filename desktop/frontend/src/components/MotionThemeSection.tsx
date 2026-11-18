@@ -36,21 +36,29 @@ function MotionThemeCard({ id, active, tabIndex, onSelect }: { id: MotionThemeId
   )
 }
 
-/** anchor 由 SettingsModal 传字面量(设置搜索的落点测试只认 SettingsModal 里的字面量);最后一行「只淡入淡出」作为 children 传进来。 */
-export function MotionThemeSection({ anchor, children }: { anchor: string; children?: React.ReactNode }): React.ReactElement {
+/** 四张动效主题卡(单选组)。设置 → 外观的「动效」面板把它当一块 block 放进去(AppearanceSettings.tsx)。 */
+export function MotionThemeGrid(): React.ReactElement {
   const { t } = useI18n()
   const { theme } = useMotionPrefs()
+  return (
+    <div className="theme-grid motion-theme-grid" role="radiogroup" aria-label={t('settings.motionTheme.title')} onKeyDown={onRadioGroupKeyDown}>
+      {MOTION_THEME_IDS.map((id, i) => (
+        <MotionThemeCard key={id} id={id} active={theme === id} tabIndex={radioTabIndex(theme === id, i, true)} onSelect={() => setMotionTheme(id)} />
+      ))}
+    </div>
+  )
+}
+
+/** 独立的一整块(动效台架 harness.tsx 用);设置页本身走 AppearanceSettings 的描述。最后一行「只淡入淡出」作为 children 传进来。 */
+export function MotionThemeSection({ anchor, children }: { anchor: string; children?: React.ReactNode }): React.ReactElement {
+  const { t } = useI18n()
   return (
     <section className="settings-panel settings-motion-theme" data-setting-anchor={anchor}>
       <div className="settings-panel-head">
         <span className="settings-panel-icon"><Wind size={16} /></span>
         <div><strong>{t('settings.motionTheme.title')}</strong><p>{t('settings.motionTheme.description')}</p></div>
       </div>
-      <div className="theme-grid motion-theme-grid" role="radiogroup" aria-label={t('settings.motionTheme.title')} onKeyDown={onRadioGroupKeyDown}>
-        {MOTION_THEME_IDS.map((id, i) => (
-          <MotionThemeCard key={id} id={id} active={theme === id} tabIndex={radioTabIndex(theme === id, i, true)} onSelect={() => setMotionTheme(id)} />
-        ))}
-      </div>
+      <MotionThemeGrid />
       {children}
     </section>
   )

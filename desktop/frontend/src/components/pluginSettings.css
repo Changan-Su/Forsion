@@ -1,0 +1,54 @@
+/* 「设置 › 插件设置」(方案 P4,2026-11-18):左栏折叠组的子项状态 + 插件设置页的身份卡、状态卡、自定义块。
+ * 颜色只取宿主变量,字号只用六档角色。插件自己的界面不许仿这里与 .settings-* 的样子(作者手册写明)。 */
+
+/* 左栏 / 手机一级列表:关着的插件灰一档;「另外 N 个…」不画圆点、字更淡 */
+.settings-nav-list .settings-nav-subitem.settings-nav-subitem--off:not(.active) { color: var(--text-faint); }
+.settings-nav-list .settings-nav-subitem.settings-nav-subitem--more:not(.active) { color: var(--text-faint); }
+.settings-nav-subitem--more .settings-nav-subitem-mark { visibility: hidden; }
+.settings-mobile-subrow.settings-nav-subitem--off > span:nth-child(2),
+.settings-mobile-subrow.settings-nav-subitem--more > span:nth-child(2) { color: var(--text-faint); }
+.settings-mobile-subrow.settings-nav-subitem--more .settings-mobile-subrow-mark { visibility: hidden; }
+
+/* 身份卡:分组面板只用卡头;图标是插件 logo(不套强调色底),名字比组标题高一档 */
+.plugin-settings-identity > .settings-panel-head { min-height: 68px; border-bottom: 0; }
+.plugin-settings-identity .settings-panel-icon { width: auto; height: auto; background: none; }
+.plugin-settings-identity .settings-panel-head strong { font-size: var(--ui-font-heading, 14px); }
+.plugin-settings-identity .settings-panel-actions { gap: 10px; }
+.plugin-settings-identity .settings-panel-actions .btn { gap: 4px; }
+
+/* 整页状态卡(已停用 / 没在运行) */
+.plugin-settings-statecard {
+  margin-bottom: 12px;
+  border: var(--border-width) solid var(--overlay-medium, rgba(127, 127, 127, 0.12));
+  border-radius: var(--radius-lg);
+  background: var(--bg-card);
+}
+.plugin-settings-statecard > .settings-state { min-height: 180px; }
+
+/* 说明行(引擎插件的 note 字段):没有标题,只有灰字 */
+.plugin-settings-host .settings-control-copy strong:empty,
+.plugin-settings-engine .settings-control-copy strong:empty { display: none; }
+.plugin-settings-host .settings-control-copy strong:empty + small,
+.plugin-settings-engine .settings-control-copy strong:empty + small { margin-top: 0; max-width: none; }
+
+/* 自绘面板(registerSettingsView)里挂的是宿主整页零件(ctx.ui.mountSettingsPage)时:外层那组不再套一层卡片和卡头 */
+.plugin-settings-views .settings-panel:has(.settings-parts-custom .settings-panel) { overflow: visible; border: 0; border-radius: 0; background: none; }
+.plugin-settings-views .settings-panel:has(.settings-parts-custom .settings-panel) > .settings-panel-head { display: none; }
+.plugin-settings-views .settings-parts-custom:has(.settings-panel) { padding: 0; }
+
+/* 自定义块里的多行文本 / 图片列表(引擎插件的 textarea / image-list 字段):行贴着块的内衬 */
+.plugin-settings-textarea > .settings-control-row,
+.plugin-settings-images > .settings-control-row { min-height: 0; padding: 0 0 8px; }
+.plugin-settings-textarea > textarea { width: 100%; box-sizing: border-box; resize: vertical; font-size: var(--ui-font-body, 13px); }
+.plugin-settings-images-empty { color: var(--text-faint); font-size: var(--ui-font-meta, 12px); }
+.plugin-settings-images-list { display: flex; flex-direction: column; gap: 8px; }
+.plugin-settings-image { display: flex; align-items: flex-start; gap: 10px; padding: 8px; border: var(--border-width) solid var(--border); border-radius: var(--radius-sm); }
+.plugin-settings-image > img,
+.plugin-settings-image-ph { width: 52px; height: 52px; flex: 0 0 52px; border-radius: var(--radius-sm); object-fit: cover; }
+.plugin-settings-image-ph { display: inline-flex; align-items: center; justify-content: center; background: var(--overlay-light); color: var(--text-faint); }
+.plugin-settings-image-body { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 4px; }
+.plugin-settings-image-head { display: flex; align-items: center; gap: 6px; }
+.plugin-settings-image-head > .file-name { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--ui-font-meta, 12px); }
+
+/* 列表页:关着的插件名字灰一档 */
+.plugin-settings-directory .plugin-settings-off .settings-control-copy strong { color: var(--text-muted); }

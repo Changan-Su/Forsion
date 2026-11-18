@@ -90,7 +90,8 @@ import { MUTATE_DB_RETRIES, mutateDbCas, mutateHumanCalendar } from './pluginDb'
 import { useDbStore } from '../store/dbStore'
 import { HUMAN_CAL } from '../store/humanCalendarIo'
 import { createDatabasesApi, createNoteTasksApi, pluginDatabasePath } from './pluginData'
-import { loadSyncedPluginData, notePluginDataEdit, pluginDataSyncOn, pluginSyncSnapshot, pushPluginData, type LocalData } from './pluginDataSync'
+import { loadSyncedPluginData, notePluginDataEdit, notePluginDataUnverifiedWrite, pluginDataSyncOn, pluginSyncSnapshot, pushPluginData, type LocalData } from './pluginDataSync'
+import { isJsonText, isPluginDataUnreadable, PluginDataUnreadableError, readLocalPluginData } from './pluginLocalData'
 import { createCalendarApi } from './pluginCalendar'
 import { createCalendarEventsApi } from './pluginCalendarEvents'
 import { createSpacesApi } from './pluginSpaces'
@@ -125,6 +126,7 @@ import type {
   PropertyTypeContribution,
   SettingContribution,
   SettingsViewContribution,
+  SettingsPageContribution,
   StoreViewContribution,
   ReadinessContribution,
   SlashContribution,
@@ -231,6 +233,12 @@ interface Owned<T> {
   token?: object
 }
 
+/** 登记进宿主的插件设置页:id 补齐了,alive = 注册它的那一代插件上下文还活着。 */
+export interface HostSettingsPage extends Omit<SettingsPageContribution, 'id'> {
+  id: string
+  alive(): boolean
+}
+
 interface PluginState {
   plugins: AmadeusPlugin[]
   /** Persisted preference: ids the user has explicitly turned off (default = enabled). */
@@ -247,6 +255,8 @@ interface PluginState {
   propertyTypes: Owned<PropertyTypeContribution>[]
   settings: Owned<SettingContribution>[]
   settingsViews: Owned<SettingsViewContribution>[]
+  /** ctx.registerSettingsPage(2026-11-18):插件设置页的数据描述;宿主在「设置 › 插件设置」里挂、关页 / 停用 / 重载时收。 */
+  settingsPages: Owned<HostSettingsPage>[]
   /** 商店左栏里由插件提供的页(ctx.registerStoreView)。 */
   storeViews: Owned<StoreViewContribution>[]
   /** 插件自报的就绪检查(manifest onboarding.requires 的 check 那类)。 */
@@ -1407,7 +1417,7 @@ function afterReconcile(): void {
 type OwnedKey = { [K in keyof PluginState]: PluginState[K] extends Owned<unknown>[] ? K : never }[keyof PluginState]
 const SLICE_KEYS = Object.keys({
   slashItems: 1, selectionActions: 1, commands: 1, themes: 1, panels: 1, statusItems: 1, propertyTypes: 1, settings: 1,
-  settingsViews: 1, storeViews: 1, readiness: 1, views: 1, listSources: 1, fileTypes: 1, embedRenderers: 1, toolResultRenderers: 1, toolLabels: 1, fileCreators: 1,
+  settingsViews: 1, settingsPages: 1, storeViews: 1, readiness: 1, views: 1, listSources: 1, fileTypes: 1, embedRenderers: 1, toolResultRenderers: 1, toolLabels: 1, fileCreators: 1,
 } satisfies Record<OwnedKey, 1>) as OwnedKey[]
 
 /** 摘掉 id 的全部切片贡献;没有它的切片保持原数组身份(订阅者不白白重渲)。 */
@@ -1936,8 +1946,17 @@ export const usePluginStore = create<PluginState>((set, get) => {
       }
     }
     // 本机那份插件数据(主进程 / 手机宿主各自落盘);两样都有才谈得上同步
+    /** 这个插件实例的 ctx.loadData 读不出来过(之后读成功了也不清,到插件重新加载为止):读失败的那个视图手里
+     *  可能仍是默认值,它之后的保存不能当「本机更新」同步。见 saveData。 */
+    let lastLoadUnreadable = false
     const localData: LocalData | null = amadeus?.readPluginData && amadeus?.writePluginData
-      ? { read: () => Promise.resolve(amadeus.readPluginData!(pluginId)).catch(() => null), write: (text) => amadeus.writePluginData!(pluginId, text) }
+      ? {
+          read: () => readLocalPluginData(pluginId, () => amadeus.readPluginData!(pluginId)),
+          // 同步拉下来的云端那份不是合法 JSON(老版本可能把读坏的本机文件推上去过)→ 不写,本机这份不被它盖掉
+          write: (text, opts) => !isJsonText(text)
+            ? Promise.reject(new Error(`Refusing to store non-JSON data for plugin "${pluginId}"`))
+            : opts?.backup ? amadeus.writePluginData!(pluginId, text, { backup: true }) : amadeus.writePluginData!(pluginId, text),
+        }
       : null
     const hostAccount = hostTangu()?.account ?? desktopAccount(hostTangu())
     const scopedAccount: PluginContext['account'] = hostAccount ? {
@@ -2270,7 +2289,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
     // 同 key 重注册即覆盖:宿主自动注册的标准行(如 workFolder)插件可用自己的定义顶掉。
     registerSetting: (def) =>
       set((s) => ({ settings: [...s.settings.filter((o) => !(o.pluginId === pluginId && o.item.key === def.key)), { pluginId, item: def }] })),
-    // 自绘设置面板(Obsidian PluginSettingTab 的对位):同 id 重注册即覆盖,渲染在详情页声明式表单下方。
+    // 自绘设置面板(Obsidian PluginSettingTab 的对位):同 id 重注册即覆盖,画在插件设置页「通用」组之后(自定义块)。
     registerSettingsView: (def) => {
       if (!def?.id || typeof def.mount !== 'function') {
         console.warn(`[plugin:${pluginId}] registerSettingsView 需要 { id, mount }`)
@@ -2282,6 +2301,25 @@ export const usePluginStore = create<PluginState>((set, get) => {
           { pluginId, item: def },
         ],
       }))
+    },
+    // 插件设置页(2026-11-18):数据描述、宿主画。同 id 重注册即覆盖;拆插件时随切片一起摘(dropSlices),页面组件跟着卸、调收尾。
+    // alive 绑这一代上下文:停用 / 重载之后页面里残留的回调一律不再调(SettingsPage 的 Live 闸)。
+    registerSettingsPage: (def) => {
+      if (!ctxAlive()) return
+      const title = def?.title
+      if (!def || typeof def.mount !== 'function' || !(typeof title === 'string' || typeof title === 'function')) {
+        console.warn(`[plugin:${pluginId}] registerSettingsPage 需要 { title, mount }`)
+        return
+      }
+      const id = typeof def.id === 'string' && def.id.trim() ? def.id.trim() : 'main'
+      const item: HostSettingsPage = {
+        id,
+        title,
+        ...(typeof def.keywords === 'string' ? { keywords: def.keywords } : {}),
+        mount: (page) => def.mount(page),
+        alive: ctxAlive,
+      }
+      set((s) => ({ settingsPages: [...s.settingsPages.filter((o) => !(o.pluginId === pluginId && o.item.id === id)), { pluginId, item }] }))
     },
     // 商店左栏的插件页:同 id 重注册即覆盖。显示与否(首方内置包、非设备页)由 MarketModal 把关。
     registerStoreView: (def) => {
@@ -2315,31 +2353,45 @@ export const usePluginStore = create<PluginState>((set, get) => {
       addEditorExtension(pluginId, factory, opts, () => get().plugins.find((p) => p.id === pluginId)?.name || pluginId)
       scope.ownOnce('editorExtension', () => clearEditorExtensions(pluginId))
     },
-    // 插件私有 JSON blob(~/.forsion/plugins-data/<id>.json)。宿主缺位 → 读 null / 写 no-op,
-    // 插件侧一律 `await ctx.loadData?.() ?? 默认值`。坏 JSON 当没写过(用户手改文件改坏了不该让插件起不来)。
-    // manifest `syncData: true` 的插件:本地优先,云端在旁边对账(pluginDataSync.ts)。
+    // 插件私有 JSON blob(~/.forsion/plugins-data/<id>.json)。宿主缺位 → 读 null / 写 no-op。
+    // 没写过 → null(插件 `?? 默认值`);读不出来(读错误、零字节、写到一半、被手改坏)→ reject PluginDataUnreadableError,
+    // err.code === 'plugin-data-unreadable'(2026-11-17 起。以前当没写过回 null:插件按默认值起来,下一次 saveData
+    // 把用户原来那份整个盖掉。读失败 ≠ 空)。原件不动;插件接住错误仍要写时,桌面 / 手机宿主先把原件另存一份。
+    // manifest `syncData: true` 的插件:本地优先,云端在旁边对账(pluginDataSync.ts),本机读不出来时不拉云端盖它。
     loadData: async () => {
-      // ⚠️`amadeus?.readPluginData?.(id).catch(…)` 是错的:方法缺席时 `?.()` 求值成 undefined,
-      //   紧跟着的 `.catch` 就是在 undefined 上取属性 → 同步 TypeError。非桌面宿主必炸。
-      const readLocal = () => Promise.resolve(amadeus?.readPluginData?.(pluginId)).catch(() => null)
-      const raw = pluginDataSyncOn(get().plugins.find((p) => p.id === pluginId)) && localData
-        ? await loadSyncedPluginData(pluginId, localData).catch(readLocal)
-        : await readLocal()
-      if (raw == null) return null
+      if (!amadeus?.readPluginData) return null
+      const readLocal = () => readLocalPluginData(pluginId, () => amadeus.readPluginData!(pluginId))
+      let raw: string | null
       try {
-        return JSON.parse(raw)
+        raw = pluginDataSyncOn(get().plugins.find((p) => p.id === pluginId)) && localData
+          // 同步那边出别的错(云端、状态)→ 退回只读本机;本机读不出来 → 照实抛,不再读一遍
+          ? await loadSyncedPluginData(pluginId, localData).catch((e) => (isPluginDataUnreadable(e) ? Promise.reject(e) : readLocal()))
+          : await readLocal()
+        if (raw != null) JSON.parse(raw)
       } catch (e) {
-        console.error(`[amadeus] 插件 ${pluginId} 的数据文件不是合法 JSON,已当作空`, e)
-        return null
+        lastLoadUnreadable = true
+        throw isPluginDataUnreadable(e) ? e : new PluginDataUnreadableError(pluginId, 'invalid-json', e)
       }
+      return raw == null ? null : JSON.parse(raw)
     },
     saveData: async (value) => {
       if (!amadeus?.writePluginData) return
+      // 先序列化:存不成 JSON 的值(函数、toJSON 回 undefined)以前会写进空内容,下次读就成了「读不出来」
+      const text = JSON.stringify(value ?? null)
+      if (typeof text !== 'string') throw new TypeError(`Plugin "${pluginId}" saveData: the value can't be stored as JSON`)
       const p = get().plugins.find((o) => o.id === pluginId)
+      // 这个实例的 loadData 读不出来过(插件接住错误照样存):这次写不算本机的编辑,不推、不在冲突里赢过云端(见 notePluginDataUnverifiedWrite);
+      // 这个记号落进同步状态,之后的保存(哪怕之后读成功了、重启了)在和云端对上之前都不推
+      const unverified = lastLoadUnreadable
       // 先记这次编辑、再写本机(拉取落盘前核对代号);声明了 syncData 就记,同步关着也记 —— 重新打开时认得出本机更新
-      if (p?.syncData) notePluginDataEdit(pluginId)
-      await amadeus.writePluginData(pluginId, JSON.stringify(value ?? null))
-      if (localData && pluginDataSyncOn(p)) void pushPluginData(pluginId, localData)
+      const undoEdit = p?.syncData ? (unverified ? notePluginDataUnverifiedWrite(pluginId) : notePluginDataEdit(pluginId)) : undefined
+      try {
+        await amadeus.writePluginData(pluginId, text)
+      } catch (e) {
+        undoEdit?.() // 没写成:撤掉这次记下的记号,放回原来的
+        throw e
+      }
+      if (localData && pluginDataSyncOn(p)) void pushPluginData(pluginId, localData) // 本机还没和云端对过时推送自己不推
     },
     // 通用宿主 UI 原语。Floating TOC 是非接管式挂载:插件继续拥有正文 DOM,宿主只在 shell 上叠一层。
     // 与 table/dashboard 一样动态 import 破环;形态错误同步抛,让插件能当场走自己的降级 UI。
@@ -3505,6 +3557,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
     propertyTypes: [],
     settings: [],
     settingsViews: [],
+    settingsPages: [],
     storeViews: [],
     readiness: [],
     views: [],

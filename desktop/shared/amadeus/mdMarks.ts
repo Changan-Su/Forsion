@@ -28,6 +28,7 @@
  */
 
 /** 一条带 `@` 标记的行。 */
+import { CALLOUT_TOKEN_SRC } from './calloutToken'
 import { isRealDate } from './db/calDate'
 import { parseTags } from './links'
 
@@ -113,7 +114,7 @@ function todoHits(s: string): Array<{ index: number; len: number }> {
   return out
 }
 /** 标注框 / 折叠块标题行开头的 `[!type]` / `[!type]-` / `[!type]+` 记号:只是容器语法,不是标题文字。 */
-const CALLOUT_RE = /^\[![\w-]+\][+-]?\s*/
+const CALLOUT_RE = new RegExp(`^${CALLOUT_TOKEN_SRC}[+-]?\\s*`) // 可带元数据位 `[!tip|🚀 blue]`(A5)
 
 /** 文本去掉 HTML 标签与空白后还剩东西吗 —— `* [ ] <br /> @2026-09-01` 这种占位行不算。 */
 const hasContent = (s: string): boolean => s.replace(/<[^>]*>/g, '').trim().length > 0

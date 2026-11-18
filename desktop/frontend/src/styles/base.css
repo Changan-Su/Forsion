@@ -3294,19 +3294,15 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   .settings-choice-card:hover { transform: none; }
 }
 
-/* 外观页:上方是由当前 token 驱动的真实小界面,下方按「语言/颜色/行为/字体」组织。 */
+/* 外观页:上方是由当前 token 驱动的真实小界面,下方是 AppearanceSettings 的分组面板。
+ * 设置页规范 v1(2026-11-17):面板一律全宽单列。原来是两列网格 + 「占满整行」白名单,新面板默认半宽
+ * (动效主题就是这么只占了左半边);单列就没有白名单可漏。 */
 .settings-sub--theme {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  display: flex;
+  flex-direction: column;
   gap: 12px;
 }
 .settings-sub--theme > .field { margin-bottom: 0; }
-.settings-sub--theme > .settings-theme-language,
-.settings-sub--theme > .settings-theme-palette,
-.settings-sub--theme > .settings-theme-behavior,
-.settings-sub--theme > .settings-theme-fonts,
-.settings-sub--theme > .hint,
-.settings-theme-live { grid-column: 1 / -1; }
 .settings-sub--theme > .field {
   border-color: transparent;
   background: var(--overlay-subtle);
@@ -3348,6 +3344,9 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 .settings-theme-live-composer { min-height: 35px; display: flex; align-items: center; gap: 10px; margin-top: auto; padding: 5px 6px 5px 11px; border: var(--border-width) solid var(--overlay-medium); border-radius: var(--radius-md); background: var(--bg-card); color: var(--text-faint); font-size: var(--ui-font-caption, 11px); box-shadow: var(--card-shadow); }
 .settings-theme-live-composer > span { flex: 1; }
 .settings-theme-live-composer button { width: 23px; height: 23px; display: inline-flex; align-items: center; justify-content: center; border-radius: var(--radius-sm); color: var(--on-action, #fff); background: var(--action-fill); }
+/* 设置面板里的选择卡(设计语言、动效主题…):同一宽度 184、靠左,一行放得下几张就几张,不撑满(设置页规范 v1 第 3 条)。
+ * 撑满(minmax(…, 1fr))会让卡宽随张数和面板宽变,两组卡永远对不齐。184 在设置窗最大内容宽里正好四张一行;窄屏两张一行(本文件末尾)。 */
+.settings-panel .theme-grid { grid-template-columns: repeat(auto-fill, 184px); }
 .settings-theme-language > .theme-grid { padding: 14px 15px 4px; }
 .settings-theme-language > .theme-opts { margin: 8px 15px 0; }
 .settings-theme-language > .hint { padding: 4px 15px 13px; }
@@ -3459,6 +3458,19 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 /* ── 设置零件(components/SettingsPage → 宿主设置页与插件的 ctx.ui.mountSettingsPage,2026-10-17):面板、行、开关、按钮之外
  *    新加的几样。颜色只取宿主变量(插件不传颜色),字号只用六档角色。窄屏排法见 ≤820 断点里的 [data-fit]。 */
 .settings-parts-list > * + * { border-top: var(--border-width) solid var(--border); }
+/* 依赖上一行的设置(宿主描述的 child,如「外壳随内容取色」挂在毛玻璃下):缩进、不和父行隔线,前面一个实线小拐角。
+ * 父项关着时调用方给 disabled → .is-disabled 灰掉,行不藏(设置页规范 v1 第 4 条)。 */
+.settings-parts-list > .settings-control-row.settings-row--child { border-top: 0; padding-top: 0; min-height: 0; padding-left: 26px; }
+.settings-row--child > .settings-control-copy::before {
+  content: '';
+  flex: 0 0 auto;
+  width: 9px;
+  height: 9px;
+  margin-top: 1px;
+  border-left: var(--border-width) solid var(--overlay-strong);
+  border-bottom: var(--border-width) solid var(--overlay-strong);
+  border-bottom-left-radius: 4px;
+}
 .settings-parts-inline { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
 .settings-parts-inline > input { width: 200px; min-width: 0; height: 30px; padding-block: 0; font-size: var(--ui-font-body, 13px); }
 .settings-parts-inline > .btn,
@@ -3604,8 +3616,6 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   .settings-overview { grid-template-columns: 1fr; }
   .settings-overview-copy { border-right: 0; border-bottom: var(--border-width) solid var(--border); }
   .settings-choice-grid { grid-template-columns: 1fr; }
-  .settings-sub--theme { grid-template-columns: 1fr; }
-  .settings-sub--theme > * { grid-column: 1; }
   .settings-control-row { align-items: flex-start; flex-direction: column; }
   .settings-row-control,
   .settings-row-wide-control { width: 100%; flex-basis: auto; justify-content: flex-start; min-width: 0; }
@@ -5976,3 +5986,8 @@ html:root :is(.ctx-menu, .ui-popover, .amx-db-pop, .slash-menu, .wiki-suggest, .
 .composer-menu--compact .approval-item:focus-visible .approval-hover-desc { display: block; transform: none; }
 .mode-normal-row[data-inline] { flex-wrap: wrap; }
 .mode-normal-row[data-inline] > .cm-sub--inline { flex-basis: 100%; }
+
+/* 设置面板里的选择卡在窄屏(手机设置、窄窗)两张一行,撑满。放文件末尾:同特异性覆盖块必须在基础规则之后(DESIGN §7)。 */
+@media (max-width: 480px) {
+  .settings-panel .theme-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

@@ -24,7 +24,7 @@ When the sandbox can't answer, the result says which: the window is not open, it
 
 ## The plugin's settings page (2026-11-15+)
 
-Plugin settings are not in the sandbox's main window: `registerSetting` rows and `registerSettingsView` panels are drawn in Settings → Plugins → this plugin, which is a **separate settings window**.
+Plugin settings are not in the sandbox's main window: `registerSettingsPage` pages, `registerSetting` rows and `registerSettingsView` panels are drawn in Settings → Plugin settings → this plugin (2026-11-18+; before that Settings → Plugins → this plugin), which is a **separate settings window**. A plugin with no settings opens on its detail page there instead.
 
 - `{"action":"settings"}` opens it there and returns that window's outline and a screenshot; `{"action":"settings","close":true}` closes it.
 - `read` / `click` / `type` / `press` / `scroll` / `screenshot` take `window: "main" | "settings"` (default `"main"`). `space` is main-window only.

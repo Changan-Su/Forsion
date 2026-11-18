@@ -143,7 +143,7 @@ const displayForm = (s: string): string => s.replace(/[\t ]+(?=\n|$)/g, '')
 /** 段落是「没被动过的定义原文」→ 返回要原样写回的原文;否则 null(按普通段落写)。 */
 export function pristineRaw(node: PMNode): string | null {
   const raw = node.attrs.raw
-  if (typeof raw !== 'string' || node.attrs.indent || (node.attrs.align && node.attrs.align !== 'left')) return null
+  if (typeof raw !== 'string' || node.attrs.indent || (node.attrs.align && node.attrs.align !== 'left') || node.attrs.bg || node.attrs.fg) return null
   let plain = true
   node.forEach((c) => {
     if (c.marks.length) plain = false

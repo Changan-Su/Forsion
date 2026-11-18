@@ -109,11 +109,14 @@ ctx.registerEditorExtension?.((pm) => [
   }),
 ], { priority: 'high' })   // 'high' = 排在宿主全部插件之前(要抢 Tab 这类已占用的键才用)
 
-// ② 自绘设置面板:宿主给裸容器,里面画什么全归你
+// ② 自绘设置面板:宿主给裸容器,里面画什么全归你(2026-11-18 起画在「设置 › 插件设置 › 你的插件」上;能用零件描述的先用 ctx.registerSettingsPage)
 ctx.registerSettingsView?.({ id: 'main', title: '高级', mount(el) { /* … */ return () => {} } })
 
 // ③ 每插件一份 JSON blob(<Forsion 家目录>/plugins-data/<id>.json,dev 与安装版各一份,原子写)
-const data = (await ctx.loadData?.()) ?? { rules: [] }
+//    never saved → null; saved but unreadable → rejects (code 'plugin-data-unreadable'): don't save defaults over it
+let data
+try { data = (await ctx.loadData?.()) ?? { rules: [] } }
+catch (e) { if (e?.code === 'plugin-data-unreadable') { /* pause the feature, tell the user, retry later */ return } throw e }
 await ctx.saveData?.(data)
 
 // ④ 库内文件的外部改动订阅(热重载用户手写的配置文件)
@@ -132,12 +135,12 @@ const off = ctx.app.watchFile?.('Snippets/latex.js', () => reload())
 - **No schema, no serialization**: you can't add node types or change what is saved. You can intercept keys, add decorations, and **change text and the selection**: `pm` is the host's own ProseMirror, so inserting or deleting text in `view.dispatch(view.state.tr…)` and moving the caret with `TextSelection.create(…)` work (latex-suite jumps the caret between tabstops this way). But for "insert a template at the caret and land the caret on a marker", use `ctx.app.insertMarkdownAt` first (previous section): markdown parsing, a single undo step and the read-only check are already handled there.
 - **Style hooks for math source (since 2026-11-15)**: when the caret is inside a formula and its source shows, the host adds `math-source` to the whole source (including `$`: monospace, italic, inline-code size), and each token also gets `math-source-dollar / -command / -script / -letter / -number / -bracket`. The classes sit **on the same span**, so write `.math-source.math-source-bracket`. The host's token colors are wrapped in `:where()` (zero specificity), so one plain class selector from your plugin on a bracket, `$` or placeholder wins without specificity games. Color variables are `--math-src-*` (light and dark). When both ends of the selection are between the `$` (Tab selecting a placeholder), the preview stays and the format bar does not open (nor do plugin selection actions on it); selections that leave the formula or select it with its `$` behave as before. See the plugin manual section on math source style hooks.
 - **`props.*` 宿主包了 try/catch,`state.apply` 没包** —— 后者吞异常等于放任状态损坏。状态迁移自己写稳。
-- **设置类页面先用 `ctx.ui.mountSettingsPage`**(2026-10-17 起,见 references/host-ui-mounts.md):开关、按钮、输入、额度条都有宿主零件,手机排法由宿主管;
-  只有清单外的内容才自己画(放进 `custom` 块)。
-- **设置面板会被反复挂载卸载**(用户来回进出详情页):状态别放模块级单例,dispose 要真收干净
+- **插件的设置页先用 `ctx.registerSettingsPage`**(2026-11-18 起;老宿主 `ctx.ui.mountSettingsPage`,见 references/host-ui-mounts.md):开关、按钮、输入、额度条都有宿主零件,手机排法由宿主管;
+  只有清单外的内容才自己画(放进 `custom` 块)。不许仿宿主 `.settings-*` 样式。
+- **设置面板会被反复挂载卸载**(用户来回进出插件设置页):状态别放模块级单例,dispose 要真收干净
   (定时器、DOM 监听、内嵌的 CodeMirror 实例)。容器上有宿主主题变量但**没有样式重置**,自己带样式、深浅色都要过。
 - **大块数据用 `loadData/saveData`,别塞 localStorage**:`registerSetting` 是每键一个字符串,没有原子性。
-  用户手改坏了 JSON,宿主返回 `null` 当没写过 —— 插件要能靠默认值起来。
+- **Saved but unreadable is not "never saved" (since 2026-11-17)**: `loadData()` resolves `null` only when nothing was ever saved, the saved value is JSON `null`, or the host has no data bridge. If the data exists but cannot be read (I/O or permission error, zero bytes, a truncated write, a hand-edit that broke the JSON), it **rejects** with `err.code === 'plugin-data-unreadable'` and `err.reason` `'read-failed' | 'invalid-json'`. Before this date the host returned `null` here, so a plugin started from defaults and its next `saveData` overwrote the user's real data. On this error, do not fall back to defaults and save: pause the feature that needs the data, tell the user, and retry on the next load. The host never modifies the original; if a plugin catches the error and saves anyway, the desktop and phone hosts first copy the original aside as `<id>.json.unreadable-<time>`, and refuse the write (`saveData` rejects) when the original can't even be copied. With `"syncData": true`, a local file whose content is broken is restored from the cloud copy when there is one (`loadData` then resolves normally), and data saved after an unreadable load is neither pushed nor allowed to win over the cloud copy until the host has checked with the cloud (later successful loads and restarts don't change that, and once a load has failed every save of that plugin run counts): when the cloud is next reachable its copy replaces the local data, which the host first copies aside as `<id>.json.replaced-<time>`; with no cloud copy, the local data is uploaded, yielding if another device uploads first. Since 2026-11-18 `saveData` also rejects values that serialize to nothing (functions, a `toJSON` returning `undefined`) instead of writing empty content; BigInt and cycles already rejected. A rejection you let escape from an awaited `setup` makes the plugin fail to load ("Failed to load" in the plugin list); a detached `ctx.loadData().then(…)` without `.catch` only reaches the console. Older hosts still return `null` for unreadable data.
 - **想让这份数据跟着账号走,manifest 写 `"syncData": true`**(2026-10-17 起,桌面 / 手机;网页版不同步):
   登录后 `saveData` 先写本机、后台推上云端,换设备时 `loadData` 先拉到较新的那份再返回(最多等 3 秒,
   没登录 / 断网照旧只用本机)。**整份取较新的,不做字段合并** —— 两台设备都改过,**编辑**得较晚的那次赢(离线改、晚上传的照样按编辑时刻比),

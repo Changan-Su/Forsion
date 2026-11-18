@@ -108,7 +108,7 @@ const api: AmadeusApi = {
     }
   },
   readPluginData: (pluginId) => ipcRenderer.invoke(IPC.pluginDataRead, pluginId),
-  writePluginData: (pluginId, text) => ipcRenderer.invoke(IPC.pluginDataWrite, pluginId, text),
+  writePluginData: (pluginId, text, opts) => ipcRenderer.invoke(IPC.pluginDataWrite, pluginId, text, opts?.backup === true ? { backup: true } : undefined),
   listPlugins: () => ipcRenderer.invoke(IPC.listPlugins),
   openPluginsFolder: (dir) => ipcRenderer.invoke(IPC.openPluginsFolder, dir),
   scaffoldSamplePlugin: () => ipcRenderer.invoke(IPC.scaffoldPlugin),

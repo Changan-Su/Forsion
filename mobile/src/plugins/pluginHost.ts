@@ -43,7 +43,8 @@ export interface MobilePluginHost {
   /** withSuperseded:目标是商店安装时,被它取代的旧普通目录一起删(桌面同名选项;否则卸完旧副本立刻重新运行)。 */
   uninstallPlugin(id: string, opts?: { withSuperseded?: boolean; dir?: string }): Promise<void>
   readPluginData(pluginId: string): Promise<string | null>
-  writePluginData(pluginId: string, text: string): Promise<void>
+  /** opts.backup:写之前先把当前那槽另存成 <槽>.replaced-<时间>(另存失败就不写、抛出去)。同桌面同名选项。 */
+  writePluginData(pluginId: string, text: string, opts?: { backup?: boolean }): Promise<void>
 }
 
 /** 读 manifest.json(必须是 JSON 对象);读不到 / 坏 → null。 */
@@ -197,28 +198,72 @@ async function readSpaceIcon(fs: PluginFs, json: string, dirs: string[]): Promis
 //   · 两个槽 <id>.json / <id>.json.alt,每次写**较旧(或坏)的那一槽**,最新的有效槽永远不碰;
 //   · 槽内容是信封 {"forsionPluginData":1,"seq":N,"text":"…"} —— JSON 对象的任何真前缀都不是合法 JSON,
 //     写到一半被杀 = 那一槽解析失败,读取方自动落到另一槽(上一次成功写入的版本);
-//   · 读 = 两槽里 seq 最大的有效信封;两槽都无效 = 从没写过(null),与桌面「没写过 = null」同一出口。
+//   · 读 = 两槽里 seq 最大的有效信封。
 // 不需要 rename、不依赖覆盖语义,也不存在「两份都不在」的瞬间。
+// 一个有效槽都没有时(2026-11-17 起,读失败 ≠ 没写过):
+//   · 两槽都不存在,或只有槽 0 且是半截(第一次写到一半被杀:从没成功存过)→ 没写过,null,与桌面同一出口;
+//   · 其余(文件在却读不出来、两槽都坏)→ 读失败,抛出去,ctx.loadData 跟着 reject,插件不该按默认值往下走;
+//     这时插件若仍要写:先把每个坏槽原样另存成 .unreadable-<时间>(有槽连字节都读不出来就拒写),
+//     再写(优先写进不存在的那槽);序号用当前毫秒数,比任何残留槽的写入计数都大,残留槽以后读得出来也盖不住这次写。
 interface DataEnvelope { forsionPluginData: 1; seq: number; text: string }
 const slotPaths = (id: string): [string, string] => [`${PLUGIN_DATA_DIR}/${id}.json`, `${PLUGIN_DATA_DIR}/${id}.json.alt`]
 
-async function readSlot(fs: PluginFs, path: string): Promise<DataEnvelope | null> {
-  const raw = await readTextOr(fs, path)
-  if (raw === undefined) return null
+const parseEnvelope = (raw: string): DataEnvelope | null => {
   try {
     const v = JSON.parse(raw) as Partial<DataEnvelope> | null
     if (v && v.forsionPluginData === 1 && Number.isSafeInteger(v.seq) && typeof v.text === 'string') return v as DataEnvelope
-  } catch { /* 写到一半的槽:当它不存在 */ }
+  } catch { /* 写到一半 */ }
   return null
 }
 
-/** 当前最新的有效槽:{ slot 下标, 信封 };两槽都无效 → null。 */
-async function latestSlot(fs: PluginFs, id: string): Promise<{ slot: 0 | 1; env: DataEnvelope } | null> {
+/** 另存原件的文件名:<槽>.<unreadable|replaced>-<时间>-<序号>。写按插件串行,序号在本进程里递增 ——
+ *  同一毫秒里同一槽另存两次(连着几次要求另存,槽轮回来)也不撞名、不互相盖掉。 */
+let dataBackupSeq = 0
+const dataBackupPath = (slot: string, kind: 'unreadable' | 'replaced'): string =>
+  `${slot}.${kind}-${new Date().toISOString().replace(/[:.]/g, '-')}-${++dataBackupSeq}`
+const isJsonText = (t: string): boolean => { try { JSON.parse(t); return true } catch { return false } }
+
+/** 一槽的状态:不存在 / 半截(信封解析不了)/ 读出错(在,但读不出字节)/ 有效。 */
+type SlotState = { kind: 'missing' } | { kind: 'partial' } | { kind: 'unreadable' } | { kind: 'ok'; env: DataEnvelope }
+
+async function readSlotState(fs: PluginFs, path: string): Promise<SlotState> {
+  let raw: string
+  try {
+    raw = await readText(fs, path)
+  } catch {
+    // readBytes 不存在也抛:用 stat 分开「不存在」和「读出错」(stat 自己出错也算读出错)
+    const st = await fs.stat(path).catch(() => undefined)
+    return st === null ? { kind: 'missing' } : { kind: 'unreadable' }
+  }
+  const env = parseEnvelope(raw)
+  return env ? { kind: 'ok', env } : { kind: 'partial' }
+}
+
+interface DataSlots {
+  states: [SlotState, SlotState]
+  /** 最新的有效槽;一个都没有 → null */
+  latest: { slot: 0 | 1; env: DataEnvelope } | null
+  /** 读失败:有一槽在却读不出字节(哪怕另一槽有效 —— 读不出来的那槽可能才是最新的),
+   *  或者没有有效槽、又不是「没写过」 */
+  unreadable: boolean
+}
+
+/** 读失败的错误:code 与渲染层 pluginLocalData 同名,reason 区分「字节读不出来」和「信封坏了」(插件可按它分支)。 */
+const unreadableError = (r: DataSlots): Error =>
+  Object.assign(new Error('plugin-data-unreadable'), {
+    code: 'plugin-data-unreadable',
+    reason: r.states.some((s) => s.kind === 'unreadable') ? 'read-failed' : 'invalid-json',
+  })
+
+async function readDataSlots(fs: PluginFs, id: string): Promise<DataSlots> {
   const [a, b] = slotPaths(id)
-  const [ea, eb] = await Promise.all([readSlot(fs, a), readSlot(fs, b)])
-  if (ea && (!eb || ea.seq >= eb.seq)) return { slot: 0, env: ea }
-  if (eb) return { slot: 1, env: eb }
-  return null
+  const states = await Promise.all([readSlotState(fs, a), readSlotState(fs, b)]) as [SlotState, SlotState]
+  const [sa, sb] = states
+  const ea = sa.kind === 'ok' ? sa.env : null
+  const eb = sb.kind === 'ok' ? sb.env : null
+  const latest = ea && (!eb || ea.seq >= eb.seq) ? { slot: 0 as const, env: ea } : eb ? { slot: 1 as const, env: eb } : null
+  const neverSaved = sb.kind === 'missing' && (sa.kind === 'missing' || sa.kind === 'partial')
+  return { states, latest, unreadable: states.some((s) => s.kind === 'unreadable') || (!latest && !neverSaved) }
 }
 
 // ── 文件后缀的墓碑 ────────────────────────────────────────────────────────────────────────
@@ -233,7 +278,7 @@ const safeExtsOf = (m: InstalledPluginManifest | null): string[] =>
 
 /** 墓碑的一槽。「没写过」与「写到一半的坏槽」= null(读取方落到另一槽);**文件在却读不出来** = 抛出去 ——
  *  把读失败当成「没有墓碑」的话,下一次卸载会拿一份缩水的名单盖上去,之前记下的后缀永久丢保护(Codex 评审 P1)。
- *  (插件私有数据的 readSlot 不这么严:那边读不到 = 这个插件回到默认设置,不牵连别的文件。) */
+ *  (插件私有数据 2026-11-17 起同一个口径,见 readDataSlots。) */
 async function readTombstoneSlot(fs: PluginFs, path: string): Promise<DataEnvelope | null> {
   if (!(await fs.stat(path))) return null
   const raw = await readText(fs, path)
@@ -409,17 +454,52 @@ export function createPluginHost(fs: PluginFs, opts: { appVersion: () => string 
 
     async readPluginData(pluginId) {
       if (!isSafeSlug(pluginId)) return null // id 直接拼进文件名:`../` 就是任意读
-      return serial(pluginId, async () => (await latestSlot(fs, pluginId))?.env.text ?? null)
+      return serial(pluginId, async () => {
+        const r = await readDataSlots(fs, pluginId)
+        if (r.unreadable) throw unreadableError(r) // 读失败 ≠ 没写过(见上)
+        return r.latest?.env.text ?? null
+      })
     },
 
-    async writePluginData(pluginId, text) {
+    async writePluginData(pluginId, text, opts) {
       if (!isSafeSlug(pluginId)) throw new Error('invalid-plugin-id')
       const body = String(text ?? '')
       await serial(pluginId, async () => {
-        const cur = await latestSlot(fs, pluginId)
-        const target = cur ? (cur.slot === 0 ? 1 : 0) : 0
-        const env: DataEnvelope = { forsionPluginData: 1, seq: (cur?.env.seq ?? 0) + 1, text: body }
-        await writeText(fs, slotPaths(pluginId)[target], JSON.stringify(env))
+        const r = await readDataSlots(fs, pluginId)
+        const paths = slotPaths(pluginId)
+        let target: 0 | 1 = r.latest ? (r.latest.slot === 0 ? 1 : 0) : 0
+        let seq = (r.latest?.env.seq ?? 0) + 1
+        // 写之前要原样另存的槽。另存失败(读不出字节 / 写不进去)→ 抛出去,不写
+        const keep: Array<[0 | 1, 'unreadable' | 'replaced']> = []
+        if (opts?.backup === true && r.latest) {
+          // 渲染层同步要拉云端那份盖「读失败后插件按默认值存下的」本机数据:当前那槽(最新的内容)先原样另存。
+          // 另一槽不算备份 —— 这次写不碰当前槽,但下一次写就轮到它。和有没有坏槽无关:另一槽恰好读出错、走下面那条路时也照样存。
+          keep.push([r.latest.slot, 'replaced'])
+        }
+        if (r.unreadable) {
+          // 读失败:原件不能被这次或以后的写盖掉(见上)。**每一个**坏槽(半截 / 读不出字节)都先原样另存 ——
+          // 只存要盖的那槽的话,下一次普通写会落到另一个坏槽上,而那槽可能才是较新的原件。
+          // 有槽连字节都读不出来:不写,抛出去(同桌面拷不出原件就拒写)。
+          for (const i of [0, 1] as const) {
+            const k = r.states[i].kind
+            if (k === 'partial' || k === 'unreadable') keep.push([i, 'unreadable'])
+          }
+          // 没有有效槽时优先写进不存在的那槽;有有效槽时照常写另一槽(已另存过)
+          if (!r.latest) target = r.states[0].kind === 'missing' ? 0 : r.states[1].kind === 'missing' ? 1 : 0
+          seq = Math.max(seq, Date.now())
+        }
+        // 要盖的那槽里有东西、却不算一份可用的内容,盖之前也先另存:只有槽 0 且是半截(按没写过处理,但也可能是
+        // 唯一一份写坏的原件);信封完好、里面不是合法 JSON(宿主当有效槽、渲染层判读失败,不另存的话两次写就轮掉了)
+        const t = r.states[target]
+        if (!keep.some(([i]) => i === target) && ((t.kind === 'partial' && !r.latest) || (t.kind === 'ok' && !isJsonText(t.env.text)))) {
+          keep.push([target, 'unreadable'])
+        }
+        // 先把要另存的原件全读出来,有一份读不出字节就整次不写;读齐了再写备份 —— 重试不会攒下一堆一样的备份
+        const originals: Array<[0 | 1, 'unreadable' | 'replaced', Uint8Array]> = []
+        for (const [i, kind] of keep) originals.push([i, kind, await fs.readBytes(paths[i])])
+        for (const [i, kind, bytes] of originals) await fs.writeBytes(dataBackupPath(paths[i], kind), bytes)
+        const env: DataEnvelope = { forsionPluginData: 1, seq, text: body }
+        await writeText(fs, paths[target], JSON.stringify(env))
       })
     },
   }
