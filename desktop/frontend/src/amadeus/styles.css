@@ -1521,7 +1521,7 @@ body.amx-marquee-active * {
   box-shadow: var(--shadow-panel);
   pointer-events: none;
   user-select: none;
-  animation: pop-in 120ms var(--ease-apple);
+  /* 不加入场动画:悬停换项时卡片原地换内容,一动反而晃(Notion 的预览也是直接出现);菜单本身的进场在 base.css 的名单里。 */
 }
 .am-app .slash-preview-sample {
   padding: 10px 12px;

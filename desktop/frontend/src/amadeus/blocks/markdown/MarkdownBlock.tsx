@@ -106,6 +106,7 @@ import { Sparkles, Bot, BookOpen, MessageSquare, ListTodo, CalendarDays } from '
 import { defaultSlashCategory, moveSlash, moveSlashCategory, slashCategory, SLASH_CATEGORIES, type SlashCategory } from './slashNavigation'
 import './slashCategories.css'
 import { hasSlashPreview, SlashPreviewBody, withSuggestedGroup } from './slashSuggested'
+import { zoomOf } from '@lcl/engine'
 import { useCapsuleSlide } from '../../../components/capsuleTabs'
 import { openAppRef } from '../../../components/appRefs'
 import { readTangu } from '../../plugins/tanguSeam'
@@ -2889,7 +2890,7 @@ function SlashMenu({ query, onQuery, left, top, anchorTop, hideKeys, ctx, unifie
   }, [query])
 
   // 悬停预览卡(A2):只认真鼠标悬停;键盘上下、换页、滚动、打字都收起。手机块面板 / 带搜索框的选择器不出。
-  const [preview, setPreview] = useState<{ key: string; top: number; menu: DOMRect } | null>(null)
+  const [preview, setPreview] = useState<{ key: string; top: number; menu: DOMRect; w: number } | null>(null)
   useEffect(() => { setPreview(null) }, [query, category])
   const colorTip = all.some((it) => it.key === 'bg-blue') // 整块颜色的斜杠命令在才提(A1)
 
@@ -2968,7 +2969,8 @@ function SlashMenu({ query, onQuery, left, top, anchorTop, hideKeys, ctx, unifie
       onMouseEnter={() => setActive(i)}
       onPointerEnter={(e) => {
         const menu = menuEl.current?.getBoundingClientRect()
-        setPreview(!onQuery && e.pointerType === 'mouse' && menu && hasSlashPreview(it.key) ? { key: it.key, top: e.currentTarget.getBoundingClientRect().top, menu } : null)
+        setPreview(!onQuery && e.pointerType === 'mouse' && menu && hasSlashPreview(it.key)
+          ? { key: it.key, top: e.currentTarget.getBoundingClientRect().top, menu, w: PREVIEW_W * zoomOf(e.currentTarget) } : null)
       }}
       // onMouseDown+preventDefault:选项按下时不夺走编辑器焦点(否则 consume/transform 前编辑器已 blur),同 WikiSuggest。
       onMouseDown={(e) => { e.preventDefault(); onPick(it) }}
@@ -3032,9 +3034,10 @@ function SlashMenu({ query, onQuery, left, top, anchorTop, hideKeys, ctx, unifie
         </div>
       </OverlayAt>
       {previewItem && preview && (
-        // 卡片宽 264:右边放得下放右边,放不下翻到菜单左边;纵向由 OverlayAt 夹进视口。不吃指针,不挡菜单。
+        // 卡片宽 264(CSS px,乘上 body zoom 才是视口宽):右边放得下放右边,放不下翻到菜单左边;纵向由 OverlayAt 夹进视口。
+        // 不吃指针,不挡菜单。
         <OverlayAt className="slash-preview" aria-hidden y={preview.top - 6}
-          x={preview.menu.right + 8 + PREVIEW_W <= window.innerWidth - 8 ? preview.menu.right + 8 : Math.max(8, preview.menu.left - 8 - PREVIEW_W)}>
+          x={preview.menu.right + 8 + preview.w <= window.innerWidth - 8 ? preview.menu.right + 8 : Math.max(8, preview.menu.left - 8 - preview.w)}>
           <SlashPreviewBody item={previewItem} t={t} colorTip={colorTip} />
         </OverlayAt>
       )}
